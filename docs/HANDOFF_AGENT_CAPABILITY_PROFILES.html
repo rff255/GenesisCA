@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Implementation Handoff — Agent Capability Profiles (pressure-tested)</title>
+<style>
+  :root{
+    --bg:#0c0d10; --panel:#15171c; --panel2:#1b1e25; --border:#2a2e37; --border2:#363b46;
+    --tx:#d9dde5; --mut:#8b929e; --dim:#6b7280;
+    --acc:#e8a13a; --acc-soft:rgba(232,161,58,.13); --acc-line:rgba(232,161,58,.35);
+    --red:#e5644e; --red-soft:rgba(229,100,78,.14);
+    --amb:#e0b64a; --amb-soft:rgba(224,182,74,.14);
+    --grn:#4fbf8b; --grn-soft:rgba(79,191,139,.14);
+    --blu:#5aa9e6; --blu-soft:rgba(90,169,230,.14);
+    --vio:#a488f2; --vio-soft:rgba(164,136,242,.14);
+    --radius:14px;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:radial-gradient(1200px 700px at 78% -8%,#16181f 0%,var(--bg) 60%) no-repeat,var(--bg);
+    color:var(--tx);font:16px/1.62 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased;letter-spacing:.1px}
+  .wrap{max-width:1080px;margin:0 auto;padding:0 22px 90px}
+  a{color:var(--acc);text-decoration:none} a:hover{text-decoration:underline}
+  h1,h2,h3{line-height:1.22;letter-spacing:-.2px}
+  h2{font-size:1.5rem;margin:2.6em 0 .1em;padding-top:.4em}
+  h2 .n{color:var(--acc);font-variant-numeric:tabular-nums;margin-right:.5rem;font-weight:800}
+  h3{font-size:1.1rem;margin:1.5em 0 .3em;color:#eef1f6}
+  p{margin:.7em 0} .lead{color:#c3c9d4} .muted{color:var(--mut)}
+  code{font-family:"SF Mono",ui-monospace,Menlo,Consolas,monospace;font-size:.88em;background:#0f1116;border:1px solid var(--border);border-radius:6px;padding:.06em .38em;color:#e7cfa2}
+  .kicker{display:inline-block;font-size:.72rem;letter-spacing:.22em;text-transform:uppercase;color:var(--acc);background:var(--acc-soft);border:1px solid var(--acc-line);border-radius:999px;padding:.3em .95em;font-weight:700}
+  header{padding:60px 0 8px}
+  .title{font-size:2.3rem;font-weight:820;margin:.5rem 0 .15rem;letter-spacing:-.5px}
+  .sub{font-size:1.1rem;color:var(--mut);max-width:82ch;margin:.2rem 0 0}
+  .metabar{display:flex;flex-wrap:wrap;gap:8px 10px;margin-top:18px}
+  .chip{font-size:.78rem;color:var(--mut);background:var(--panel);border:1px solid var(--border);border-radius:999px;padding:.32em .8em}
+  .chip b{color:var(--tx)}
+  .verdict{display:inline-flex;align-items:center;gap:.5em;font-size:.82rem;font-weight:800;letter-spacing:.05em;text-transform:uppercase;color:var(--amb);background:var(--amb-soft);border:1px solid var(--amb);border-radius:8px;padding:.4em .9em}
+  .panel{background:linear-gradient(180deg,var(--panel2),var(--panel));border:1px solid var(--border);border-radius:var(--radius);padding:20px 24px;margin:20px 0}
+  .tblwrap{overflow-x:auto;border:1px solid var(--border);border-radius:var(--radius);margin:18px 0;background:var(--panel)}
+  table{border-collapse:collapse;width:100%;min-width:640px;font-size:.9rem}
+  th,td{text-align:left;padding:10px 13px;border-bottom:1px solid var(--border);vertical-align:top}
+  thead th{background:#12141a;color:#aeb5c2;font-size:.72rem;text-transform:uppercase;letter-spacing:.08em}
+  tbody tr:last-child td{border-bottom:0}
+  tbody tr:hover{background:rgba(255,255,255,.018)}
+  td b{color:#eef1f6}
+  .cid{font-family:ui-monospace,monospace;font-weight:800;color:var(--red)}
+  figure{margin:22px 0}
+  .svgbox{overflow-x:auto;background:#0e1015;border:1px solid var(--border);border-radius:var(--radius);padding:10px}
+  svg{display:block;max-width:100%;height:auto;margin:0 auto}
+  figcaption{color:var(--mut);font-size:.85rem;margin-top:10px;text-align:center}
+  .b{display:inline-flex;align-items:center;gap:.4em;font-size:.72rem;font-weight:700;border-radius:6px;padding:.16em .5em;text-transform:uppercase;white-space:nowrap}
+  .b::before{content:"";width:7px;height:7px;border-radius:50%;background:currentColor}
+  .rdy{color:var(--grn);background:var(--grn-soft)} .nd{color:var(--amb);background:var(--amb-soft)} .rk{color:var(--red);background:var(--red-soft)} .df{color:var(--dim);background:rgba(107,114,128,.14)}
+  .note{border-left:3px solid var(--acc);background:var(--acc-soft);border-radius:0 10px 10px 0;padding:12px 16px;margin:16px 0;font-size:.93rem} .note b{color:#fff}
+  .note.warn{border-color:var(--red);background:var(--red-soft)}
+  ul.check{list-style:none;padding-left:0;margin:.5em 0}
+  ul.check li{position:relative;padding-left:1.8em;margin:.5em 0;font-size:.94rem}
+  ul.check li::before{content:"☐";position:absolute;left:0;color:var(--mut);font-size:1.05em;top:-.05em}
+  ul.check li b{color:#eef1f6}
+  .steps{position:relative;margin:8px 0}
+  .step{display:flex;gap:16px;align-items:flex-start;padding:14px 0;border-bottom:1px solid var(--border)}
+  .step:last-child{border-bottom:0}
+  .step .tag{flex:0 0 auto;width:64px;height:34px;border-radius:9px;display:grid;place-items:center;font-weight:800;font-size:.82rem;letter-spacing:.03em}
+  .t-pre{background:var(--blu-soft);color:var(--blu);border:1px solid rgba(90,169,230,.4)}
+  .t-safe{background:var(--grn-soft);color:var(--grn);border:1px solid rgba(79,191,139,.4)}
+  .t-mid{background:var(--amb-soft);color:var(--amb);border:1px solid rgba(224,182,74,.4)}
+  .t-def{background:rgba(107,114,128,.14);color:var(--dim);border:1px solid var(--border2)}
+  .step .body{flex:1}
+  .step h3{margin:.05em 0 .2em;font-size:1.02rem}
+  .gate{font-size:.8rem;color:var(--grn);margin-top:4px} .gate b{color:var(--grn)}
+  footer{margin-top:48px;padding-top:22px;border-top:1px solid var(--border);color:var(--dim);font-size:.85rem}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <span class="kicker">Implementation handoff · v1.1 · twice-audited</span>
+  <h1 class="title">Agent Capability Profiles</h1>
+  <p class="sub">Two adversarial source audits (30 agents) stress-tested the architecture <em>and</em> the implementation plan. This <b>v1.1</b> encodes the verdict, the corrections, the de-risked build order, and — new in v1.1 — the <b>concrete drafted specs</b> (types, presets, dependency graph, migration, field order, ABI audit, Spawn Event) an implementer works from directly. <b>The full specs live in the <a href="HANDOFF_AGENT_CAPABILITY_PROFILES.md">.md §3</a>;</b> this page is the map.</p>
+  <div class="metabar">
+    <span class="verdict">✓ Go with fixes</span>
+    <span class="chip"><b>Pass 1 (feasibility):</b> 14 audits + red-team → 2 overclaims, 4 blockers</span>
+    <span class="chip"><b>Pass 2 (plan hardening):</b> 8 reviews + synthesis → footprint/terminology/sequencing fixes + 8 drafted specs</span>
+  </div>
+</header>
+
+<div class="panel">
+  <p class="lead" style="margin-top:2px">The architecture is <b>sound and is the codebase's own trajectory</b> (the <code>type</code>-removal, <code>maxBonds=0</code>, <code>useBondingPhysics</code>, <code>hasLookupTables</code>, <code>agentAccess</code>, <code>gridCells</code> gates are real precedents). But the design plan <b>materially overclaimed two load-bearing things</b>, and every capability audit independently confirmed the same core defect: <b>the ~203-byte intrinsic core is not freely gate-able</b> — position, velocity, force and radius are read <em>unconditionally</em> by the integrator, the render snapshot, serialization, and the compiled behaviour preamble. The fix: <b style="color:var(--grn)">ship the editor-surface clarity win now</b> (near-zero risk), <b>redraw the honest core</b>, <b>build one shared ABI derivation first</b>, then gate only the <b>genuinely-appendable</b> capabilities — Motion/Body SoA-gating is a separate XL milestone.</p>
+</div>
+
+<h2><span class="n">1</span>The five corrections that change the design</h2>
+<div class="tblwrap">
+<table>
+<thead><tr><th>#</th><th>The plan said…</th><th>The source says…</th><th>So…</th></tr></thead>
+<tbody>
+<tr><td class="cid">C1</td><td><code>hasAgentSprites</code> conditionally ABI-mirrors its block</td><td>Sprites are <b>unconditionally</b> threaded — the code comment literally says <em>"Always threaded"</em></td><td>The "mechanism already exists" example is counterfeit. Cite the <b>real</b> template: <code>hasLookupTables</code>, the <code>is3d</code> trailing block, <code>agentAccess</code></td></tr>
+<tr><td class="cid">C2</td><td>Core = id+alive+position+attrs; Motion &amp; Body are gate-able</td><td>position <b>+ velocity + force + radius</b> are read <b>unconditionally</b> (integrator, snapshot <code>store.vx.slice()</code>, serialize, preamble). <b>No <code>Static</code> path exists</b></td><td>Redraw the core to include them; <b>palette-gate only</b>. SoA-gating Motion/Body is an XL multi-target rewrite (STEP 6)</td></tr>
+<tr><td class="cid">C3</td><td>Omitting a capability keeps offsets byte-identical ("append-only")</td><td>Fields are <b>interleaved</b>; omitting one shifts all downstream offsets. Layout is <b>recomputed</b> per profile. CPU &amp; GPU are <b>separate lists</b></td><td>Byte-identical <b>only when profile is constant</b>. Gate template = <b>append-at-a-stable-slot</b>, driving CPU <em>and</em> GPU together</td></tr>
+<tr><td class="cid">C4</td><td>The three mirrors stay in lockstep "because all read the profile"</td><td>The parity harness is a <b>third hand-written</b> ABI copy; ~10 capabilities × 3 hand-maintained gates → desync near-certain</td><td>Build one <code>deriveAgentAbi(profile)</code> source consumed by <b>all four</b> sites <b>first</b></td></tr>
+<tr><td class="cid">C5</td><td>Migration: absent profile ⇒ "Full"</td><td>New models ship <code>maxBonds:0</code> + <code>useBondingPhysics:false</code> — can't allocate a bond store</td><td>Config-aware: <code>maxBonds:0 ⇒ Particle</code>, else Full. "Full" only for true legacy files</td></tr>
+</tbody>
+</table>
+</div>
+<p class="muted" style="font-size:.9rem">Minor corrections also folded in: <code>colors</code> is always allocated (not "only if written"); no <code>Get Age</code> node exists yet; the <code>Spawn Event</code> root is <em>net-new</em>, not a gate of existing fields.</p>
+
+<h2><span class="n">2</span>The honest core vs. the gate-able set</h2>
+<figure>
+  <div class="svgbox">
+  <svg viewBox="0 0 900 250" role="img" aria-label="Always-allocated core versus gate-able capabilities">
+    <defs><style>.l{font:600 12px system-ui;fill:#eef1f6}.s{font:11px ui-monospace,monospace}</style></defs>
+    <!-- core -->
+    <rect x="20" y="30" width="360" height="200" rx="13" fill="#15171c" stroke="#e8a13a" stroke-opacity=".55"/>
+    <text x="36" y="54" class="l" fill="#e8a13a">ALWAYS-ALLOCATED CORE — palette-gate only</text>
+    <text x="36" y="74" class="s" fill="#8b929e">read every step: integrator · snapshot · serialize · preamble</text>
+    <g class="s" fill="#c8cdd7">
+      <rect x="36" y="88" width="100" height="24" rx="5" fill="rgba(232,161,58,.1)" stroke="#7a6330"/><text x="46" y="104">id · alive</text>
+      <rect x="146" y="88" width="120" height="24" rx="5" fill="rgba(232,161,58,.1)" stroke="#7a6330"/><text x="156" y="104">position + Next</text>
+      <rect x="276" y="88" width="90" height="24" rx="5" fill="rgba(232,161,58,.1)" stroke="#7a6330"/><text x="286" y="104">velocity</text>
+      <rect x="36" y="118" width="90" height="24" rx="5" fill="rgba(232,161,58,.1)" stroke="#7a6330"/><text x="46" y="134">force</text>
+      <rect x="136" y="118" width="80" height="24" rx="5" fill="rgba(232,161,58,.1)" stroke="#7a6330"/><text x="146" y="134">radius</text>
+      <rect x="226" y="118" width="140" height="24" rx="5" fill="rgba(232,161,58,.1)" stroke="#7a6330"/><text x="236" y="134">user attributes</text>
+    </g>
+    <text x="36" y="168" class="s" fill="#e5644e">✗ No Static path exists — SoA-gating these = XL (STEP 6)</text>
+    <text x="36" y="190" class="s" fill="#8b929e">Body=off, Motion=Static hide ports/nodes only;</text>
+    <text x="36" y="208" class="s" fill="#8b929e">the compiler + store stay unconditional in v1.</text>
+
+    <!-- gate-able -->
+    <rect x="420" y="30" width="460" height="200" rx="13" fill="#15171c" stroke="#4fbf8b" stroke-opacity=".5"/>
+    <text x="436" y="54" class="l" fill="#4fbf8b">GENUINELY GATE-ABLE — the real Phase-2/3 targets</text>
+    <g class="s">
+      <rect x="436" y="70" width="120" height="26" rx="6" fill="rgba(79,191,139,.14)" stroke="#3d6b58"/><text x="446" y="87" fill="#7fe0b4">Field coupling ✓</text>
+      <rect x="566" y="70" width="90" height="26" rx="6" fill="rgba(79,191,139,.14)" stroke="#3d6b58"/><text x="576" y="87" fill="#7fe0b4">Bonds ✓</text>
+      <rect x="666" y="70" width="200" height="26" rx="6" fill="#0f1116" stroke="#4a4030"/><text x="676" y="87" fill="#8b929e">easiest — do these first</text>
+      <rect x="436" y="104" width="110" height="26" rx="6" fill="rgba(224,182,74,.12)" stroke="#6a5a2a"/><text x="446" y="121" fill="#e0b64a">Sprite-block</text>
+      <rect x="556" y="104" width="90" height="26" rx="6" fill="rgba(224,182,74,.12)" stroke="#6a5a2a"/><text x="566" y="121" fill="#e0b64a">Lifespan</text>
+      <rect x="656" y="104" width="90" height="26" rx="6" fill="rgba(224,182,74,.12)" stroke="#6a5a2a"/><text x="666" y="121" fill="#e0b64a">Growth</text>
+      <rect x="756" y="104" width="110" height="26" rx="6" fill="rgba(224,182,74,.12)" stroke="#6a5a2a"/><text x="766" y="121" fill="#e0b64a">Collision/dens.</text>
+      <rect x="436" y="138" width="90" height="26" rx="6" fill="rgba(229,100,78,.12)" stroke="#6a3830"/><text x="446" y="155" fill="#e5644e">Division</text>
+      <rect x="536" y="138" width="110" height="26" rx="6" fill="rgba(229,100,78,.12)" stroke="#6a3830"/><text x="546" y="155" fill="#e5644e">Sensing hash</text>
+      <rect x="656" y="138" width="110" height="26" rx="6" fill="rgba(229,100,78,.12)" stroke="#6a3830"/><text x="666" y="155" fill="#e5644e">Orientation</text>
+    </g>
+    <text x="436" y="186" class="s" fill="#a488f2">NET-NEW (features, not gates): Spawn · FOV cone · Orientation-decoupled</text>
+    <text x="436" y="208" class="s" fill="#8b929e">green ready · amber needs-design · red risky (unconditional structural reads)</text>
+  </svg>
+  </div>
+  <figcaption>The audit's core finding: velocity/force/radius are not "parasites" — they're read every step, so they stay in the always-allocated core. Only bonds/field/lifespan/growth/division/sprites are genuinely SoA-gate-able.</figcaption>
+</figure>
+
+<h2><span class="n">3</span>Shared infrastructure — build FIRST (STEP 0)</h2>
+<div class="panel">
+  <h3 style="margin-top:0">S1 · One <code>deriveAgentAbi(profile, model) → OrderedDescriptor[]</code></h3>
+  <p class="muted">The single ABI source of truth: <code>{ name, resolve:(store,model,ctx)=&gt;value, gate?:(profile)=&gt;bool, comment? }</code>. Consumed by <b>all four</b> sites — <code>buildAgentLoopParams</code> (names) ↔ <code>buildAgentLoopArgs</code> (values) ↔ the parity harness <code>buildArgs</code> (re-derives, no 4th copy) — plus the division/init(/spawn) pairs. One gate-predicate evaluation per capability. <b>Acceptance:</b> Full profile reproduces today's params/args byte-for-byte; parity harness 0 mismatches.</p>
+  <h3>S2 · One profile-driven <code>computeAgentMemoryLayout</code></h3>
+  <p class="muted">Gates <b>both</b> the CPU/WASM <code>AGENT_F64_FIELDS</code> baked offsets <b>and</b> the WebGPU <code>AGENT_GPU_F32_FIELDS</code> strided SoA from the same capability set, via append-at-a-stable-slot. Add a cross-target layout audit.</p>
+  <h3>S3 · One <code>AgentCapabilities</code> profile, read everywhere</h3>
+  <p class="muted">On <code>model.centerBased</code>, carried into the store, consulted by <code>snapshotAgentsForRender</code>, the Edit-panel row filter, <code>getAgentState</code>, and serialize/deserialize — so no consumer diverges.</p>
+  <h3>S4 · Explicit dependency graph, auto-enforced &nbsp;·&nbsp; S5 · Config-aware migration + versioned payload</h3>
+  <p class="muted"><code>Collision=Soft⇒Motion=Force</code> · <code>Growth⇒Body</code> · <code>Division⇒Body(+Bonds)</code> · <code>Bonds=Physics⇒Motion=Force</code>. Migration: <code>maxBonds:0⇒Particle</code>, else Full. <code>AgentStatePayload</code> versioned (v1 legacy→Full, v2 profile-aware) — reject incompatible loads loudly.</p>
+</div>
+
+<h2><span class="n">4</span>Capability readiness</h2>
+<div class="tblwrap">
+<table>
+<thead><tr><th>Capability</th><th>Readiness</th><th>Note</th></tr></thead>
+<tbody>
+<tr><td><b>Position</b> (core)</td><td><span class="b rdy">ready</span></td><td>irreducible base; always allocated</td></tr>
+<tr><td><b>Field coupling</b></td><td><span class="b rdy">ready</span></td><td>already gated via <code>agentAccess</code> — a working template to cite</td></tr>
+<tr><td><b>Bonds</b></td><td><span class="b rdy">ready</span></td><td>best-positioned: <code>maxBonds=0</code> already zeroes the store; Data/Physics split is clean. Keep <code>epoch</code>/<code>bondCount</code> intrinsic</td></tr>
+<tr><td><b>Sprite block</b></td><td><span class="b nd">needs-design</span></td><td>snapshot-gated but ABI-always-threaded — convert to the real conditional template</td></tr>
+<tr><td><b>Lifespan</b> (age)</td><td><span class="b nd">needs-design</span></td><td>interleaved atom + unconditional increment; no <code>Get Age</code> node yet</td></tr>
+<tr><td><b>Growth</b></td><td><span class="b nd">needs-design</span></td><td>conflated with bonding (<code>growthRate→0</code>); needs a decoupled flag</td></tr>
+<tr><td><b>Collision / density</b></td><td><span class="b nd">needs-design</span></td><td><code>density</code> written unconditionally; <code>NeighbourDensityNode</code> mis-tagged; positional mode is net-new</td></tr>
+<tr><td><b>Sensing</b></td><td><span class="b nd">needs-design</span></td><td>hash built unconditionally today — gate it (the plan had this backwards)</td></tr>
+<tr><td><b>Orientation</b></td><td><span class="b nd">needs-design</span></td><td>reuses <code>spriteRotations</code> — must split the sprite ABI monolith</td></tr>
+<tr><td><b>Division</b></td><td><span class="b rk">risky</span></td><td>structural <code>divideRequest</code> + <code>radius</code>/<code>bondCount</code> reads are unconditional; guard reads + allocation together; deps Body(+Bonds)</td></tr>
+<tr><td><b>Population</b></td><td><span class="b rk">risky</span></td><td><code>killRequest</code> effectively always-on; <b>Spawn is net-new</b> (STEP 5)</td></tr>
+<tr><td><b>Motion</b> / <b>Body</b> (SoA)</td><td><span class="b df">deferred</span></td><td>interleaved core, no <code>Static</code> path — XL milestone (STEP 6); palette-gate only until then</td></tr>
+</tbody>
+</table>
+</div>
+
+<h2><span class="n">5</span>De-risked build order</h2>
+<div class="steps">
+  <div class="step"><div class="tag t-pre">STEP 0</div><div class="body">
+    <h3>Shared <em>layout-agnostic</em> ABI derivation (prerequisite) — lands no capability</h3>
+    <p class="muted">Build S1 (a descriptor <b>set</b> + <code>deriveAgentLayouts</code> re-ordering per target — CPU and GPU differ in order); refactor the loop/division/init mirrors + harness to consume it.</p>
+    <div class="gate">GATE · the <b>4-site FIELD-ORDER audit</b> (not arity — that misses order shifts) passes for Full, byte-identical to today; parity <b>0 mismatches</b></div></div></div>
+  <div class="step"><div class="tag t-safe">STEP 1</div><div class="body">
+    <h3>Editor-surface gating &nbsp;<span style="color:var(--grn);font-size:.8rem">◆ SAFE · ship it</span></h3>
+    <p class="muted">Schema + <b>S4 dependency graph (moved forward)</b> + presets + <b>usage-aware migration</b> + Properties panel (footprint bound to <code>computeAgentMemoryLayout</code>) + <code>requirements</code> tags + <code>hiddenPorts</code> + Edit-panel/inspector filter + <b>linked-agent-mapping gate</b> + <b>macro-internals re-validation</b> (informational). <b>No SoA/engine change.</b></p>
+    <div class="gate">GATE · every preset shows only its nodes/ports/rows; Full deep-equals Morphogenesis; all <code>.gcaproj</code> byte-identical. <b>The whole clarity win at near-zero risk.</b></div></div></div>
+  <div class="step"><div class="tag t-safe">STEP 2</div><div class="body">
+    <h3>Honest-core doc commit + badge-severity contract (no SoA code)</h3>
+    <p class="muted">Commit §2; version the docs; informational→blocking badge contract. <em>(S4 already shipped in STEP 1.)</em></p></div></div>
+  <div class="step"><div class="tag t-mid">STEP 3</div><div class="body">
+    <h3>First real SoA gate — Bonds + Field coupling (pipeline proof)</h3>
+    <p class="muted">Gate the bond group (90% there via <code>maxBonds=0</code>); <b>refactor <code>runAgentStructuralPhase</code> into capability-gated sub-steps (B2)</b>; <code>_agentBondCount</code> stays in the ABI (B1a); macro-internals badge becomes <b>blocking</b>.</p>
+    <div class="gate">GATE · parity + <b>layout audit for Particle/Social-Graph/Vivarium</b> + <code>test-bonds-allocation</code> + <code>test-structural-guards</code> + WebGPU L∞</div></div></div>
+  <div class="step"><div class="tag t-mid">STEP 4</div><div class="body">
+    <h3>Append-<em>at-stable-slot</em> gates — Sprite-block · Lifespan · Growth · Division</h3>
+    <p class="muted"><b>First: reorder <code>AGENT_*_FIELDS</code></b> to core-first append-at-stable-slot (the interleaved order blocks gating). Then gate each; Sprite-block converts the first <em>unconditional</em> ABI block; add <code>Get Age</code>; decouple Growth; Division fallback table (Bonds→tension vs spread axis).</p>
+    <div class="gate">GATE · reorder passes Full byte-identity first; then parity <b>+ layout audit after EACH</b>, all presets</div></div></div>
+  <div class="step"><div class="tag t-mid">STEP 5</div><div class="body">
+    <h3>Net-new — split <b>5a Spawn</b> · <b>5b FOV+Sensing</b> · <b>5c Orientation</b></h3>
+    <p class="muted">Independent fail-fast gates. 5a: Spawn Event root + <code>deriveSpawnAbi</code> + <code>spawn*</code> fields + free-list/overflow/leak-sweep (highest-risk). 5b: Get Agents In View / Sense Hemifield. 5c: split the sprite ABI so facing threads under <code>hasSprites OR hasOrientation</code>.</p>
+    <div class="gate">GATE (each) · parity + layout audit + WebGPU L∞ + browser end-to-end, 2D+3D</div></div></div>
+  <div class="step"><div class="tag t-def">STEP 6</div><div class="body">
+    <h3>Deferred XL — Motion=Static + Body SoA-gate</h3>
+    <p class="muted">Only after 0–5. Explicit Static integrator/force-pass branches on all 3 targets + snapshot/serialize guards. <b>No <code>.gcaproj</code> breakage:</b> a Motion=Static file saved in STEP 1–5 (toggle a no-op saved as intent) loads Static; the integrator branch replicates the always-on-but-unused velocity.</p></div></div>
+</div>
+
+<h2><span class="n">6</span>Blocker &amp; major-risk checklist</h2>
+<ul class="check">
+  <li><b>B1</b> · <b>Field-order</b> audit before any field gate — arity parity misses order shifts under matched arity.</li>
+  <li><b>B1a</b> · <code>_agentBondCount</code> stays in all 3 CPU ABI mirrors even when Bonds=off (a core reduction; deleting it shifts every downstream param).</li>
+  <li><b>B2</b> · <code>runAgentStructuralPhase</code> refactored into capability-gated sub-steps — <code>killRequest</code>/<code>divideRequest</code>/<code>bondFormReq</code> reads go OOB the moment allocation is gated.</li>
+  <li><b>B3</b> · CPU and GPU layouts driven by the same predicates — separate ordered lists; audit checks field <b>sets</b> match.</li>
+  <li><b>B4</b> · Motion/Body stay always-allocated in v1 — no <code>Static</code> path exists.</li>
+  <li><b>B5</b> · Macro internals re-validated after <code>expandMacros</code> — a <code>Divide</code>/<code>Form Bond</code> in a macro bypasses palette gating (badge STEP 1, error STEP 3).</li>
+  <li><b>B6</b> · Linked agent output mappings on gated attributes gated — a mapping on <code>radius</code>/<code>age</code> dangles (<code>_undef</code>).</li>
+  <li><b>M1</b> · Versioned <code>AgentStatePayload</code> · <b>M2</b> Retag+gate <code>density</code> · <b>M3</b> Decouple Growth from bonding · <b>M4</b> Gate the spatial hash · <b>M5</b> One dependency graph at 3 gates · <b>M6</b> Migration usage-<em>widened</em> (never narrowed) · <b>M7</b> <code>detectCapabilityRequirements</code> covers macro/division/init/spawn nodes · <b>M8</b> Footprint bound to <code>computeAgentMemoryLayout</code>.</li>
+</ul>
+
+<div class="note warn"><b>STEP-1 caution (must be explicit):</b> because STEP 1 changes no engine behaviour, <code>hiddenPorts</code> is <b>purely cosmetic</b> — the compiler still emits the <code>myRadius</code> preamble, so an existing wire into <code>myRadius</code> under Body=off <b>keeps compiling</b>. The amber badge is <b>informational</b> (non-blocking) in v1 and becomes <b>blocking</b> only from STEP 3. Do not remove any emit until Phase 2.</p></div>
+
+<h2><span class="n">7</span>What ships when</h2>
+<div class="tblwrap">
+<table>
+<thead><tr><th>Milestone</th><th>Delivers</th><th>Risk</th></tr></thead>
+<tbody>
+<tr><td><b>STEP 0</b></td><td>shared ABI derivation</td><td><span class="b rdy">low</span></td></tr>
+<tr><td><b>STEP 1</b></td><td>schema + presets + panel + palette/port/Edit gating → <b>the whole clarity win</b></td><td><span class="b rdy">near-zero</span></td></tr>
+<tr><td><b>STEP 2</b></td><td>honest core + dependency enforcement + badges</td><td><span class="b rdy">low</span></td></tr>
+<tr><td><b>STEP 3</b></td><td>Bonds + Field-coupling SoA gate (pipeline proof)</td><td><span class="b nd">medium</span></td></tr>
+<tr><td><b>STEP 4</b></td><td><code>AGENT_*_FIELDS</code> reorder + Sprite-block · Lifespan · Growth · Division gates</td><td><span class="b nd">medium–high</span></td></tr>
+<tr><td><b>STEP 5a/b/c</b></td><td>Spawn · FOV · Orientation (net-new, split)</td><td><span class="b rk">5a high</span> <span class="b nd">5b/c med</span></td></tr>
+<tr><td><b>STEP 6</b></td><td>Motion=Static · Body SoA-gate</td><td><span class="b rk">high (XL)</span></td></tr>
+</tbody>
+</table>
+</div>
+<p class="lead"><b>The headline:</b> ship <b>STEP 0 + STEP 1</b> to deliver the entire "generic &amp; universal" clarity win — a social-graph or particle author never sees morphogenesis machinery — at near-zero engine risk, <em>before</em> touching a single SoA byte. Everything heavier is gated behind the shared ABI derivation and the honest core.</p>
+
+<footer>
+  <p>Pressure-tested by a 15-agent adversarial source audit; verdict <b>GO-WITH-FIXES</b>. The two design-plan overclaims (the sprite ABI example; Motion/Body as freely gate-able) and the append-only offset claim are corrected here and in the plan. Full detail: <a href="HANDOFF_AGENT_CAPABILITY_PROFILES.md">HANDOFF_AGENT_CAPABILITY_PROFILES.md</a> · architecture: <a href="PLAN_AGENT_CAPABILITY_PROFILES.md">PLAN_AGENT_CAPABILITY_PROFILES.md</a> · origin: <a href="ANALYSIS_AUTOMATOSGT_AGENTS.md">ANALYSIS_AUTOMATOSGT_AGENTS.md</a>.</p>
+</footer>
+
+</div>
+</body>
+</html>

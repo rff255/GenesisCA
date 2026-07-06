@@ -31,6 +31,7 @@ import type {
 } from './types';
 import { DEFAULT_MODEL, EMPTY_MODEL } from './defaultModel';
 import { defaultCenterBasedConfig } from './centerBased';
+import { defaultAgentCapabilities, migrateAgentCapabilities } from './agentCapabilities';
 import { defaultTagColor } from '../modeler/vpl/compiler/linkedOutputMappings';
 import { cloneMacroWithFreshIds } from './macroImport';
 import { migrateColorInterpolationNodes } from './colorScaleMigration';
@@ -1213,6 +1214,11 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
       // Move agent-referenced cell variables into the agent variable set (so the
       // agent loop's Get/Set Variable resolve). No-op for non-agent + already-split.
       m = migrateVariableScopeSplit(m);
+      // Agent Capability Profiles: seed an explicit profile on an agent model that
+      // has none, via the usage-widened inference (legacy files load with an honest,
+      // behaviour-preserving profile). MUST run AFTER the agent-attribute/variable
+      // splits (the inference scans the agent graph node types). No-op otherwise.
+      m = migrateAgentCapabilities(m);
       // 3D model with 2D-authored neighbourhoods (e.g. a file whose dimension was
       // hand-edited, or saved mid-flip by an older build): seed coords3d = coords
       // with dl=0 so the slice editor + the NI codec pre-pass see the same cells
@@ -1436,6 +1442,12 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
       if (next.agents) {
         if (!model.centerBased) model.centerBased = defaultCenterBasedConfig();
         else if (!model.centerBased.enabled) model.centerBased = { ...model.centerBased, enabled: true };
+        // Agent Capability Profile — seed a friendly paradigm default (Boids) the
+        // first time Agents is enabled, so the editor surface + Properties preset
+        // row have an explicit profile to reflect (the user re-picks from there).
+        if (!model.centerBased.agentCapabilities) {
+          model.centerBased = { ...model.centerBased, agentCapabilities: defaultAgentCapabilities() };
+        }
         if (!model.agentGraphNodes) model.agentGraphNodes = [];
         if (!model.agentGraphEdges) model.agentGraphEdges = [];
       } else if (model.centerBased?.enabled) {

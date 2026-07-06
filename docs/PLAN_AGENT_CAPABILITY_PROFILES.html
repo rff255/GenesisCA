@@ -1,0 +1,316 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Agent Capability Profiles — a universal agent engine for GenesisCA</title>
+<style>
+  :root{
+    --bg:#0c0d10; --panel:#15171c; --panel2:#1b1e25; --border:#2a2e37; --border2:#363b46;
+    --tx:#d9dde5; --mut:#8b929e; --dim:#6b7280;
+    --acc:#e8a13a; --acc-soft:rgba(232,161,58,.13); --acc-line:rgba(232,161,58,.35);
+    --gap:#e5644e; --gap-soft:rgba(229,100,78,.14);
+    --conv:#a488f2; --conv-soft:rgba(164,136,242,.14);
+    --now:#4fbf8b; --now-soft:rgba(79,191,139,.14);
+    --sup:#5aa9e6; --sup-soft:rgba(90,169,230,.14);
+    --radius:14px;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{margin:0;background:radial-gradient(1200px 700px at 78% -8%,#16181f 0%,var(--bg) 60%) no-repeat,var(--bg);
+    color:var(--tx);font:16px/1.62 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    -webkit-font-smoothing:antialiased;letter-spacing:.1px}
+  .wrap{max-width:1080px;margin:0 auto;padding:0 22px 90px}
+  a{color:var(--acc);text-decoration:none} a:hover{text-decoration:underline}
+  h1,h2,h3{line-height:1.22;letter-spacing:-.2px}
+  h2{font-size:1.55rem;margin:2.6em 0 .1em;padding-top:.4em}
+  h2 .n{color:var(--acc);font-variant-numeric:tabular-nums;margin-right:.5rem;font-weight:800}
+  h3{font-size:1.12rem;margin:1.7em 0 .3em;color:#eef1f6}
+  p{margin:.7em 0} .lead{color:#c3c9d4} .muted{color:var(--mut)}
+  code,.mono{font-family:"SF Mono",ui-monospace,"Cascadia Code",Menlo,Consolas,monospace;font-size:.9em}
+  code{background:#0f1116;border:1px solid var(--border);border-radius:6px;padding:.08em .4em;color:#e7cfa2}
+  hr{border:0;border-top:1px solid var(--border);margin:2.4em 0}
+  .kicker{display:inline-block;font-size:.72rem;letter-spacing:.22em;text-transform:uppercase;color:var(--acc);
+    background:var(--acc-soft);border:1px solid var(--acc-line);border-radius:999px;padding:.3em .95em;font-weight:700}
+  header{padding:64px 0 8px}
+  .title{font-size:2.4rem;font-weight:820;margin:.5rem 0 .15rem;letter-spacing:-.6px}
+  .title .k{color:var(--acc)}
+  .sub{font-size:1.12rem;color:var(--mut);max-width:82ch;margin:.2rem 0 0}
+  .metabar{display:flex;flex-wrap:wrap;gap:8px 10px;margin-top:20px}
+  .chip{font-size:.78rem;color:var(--mut);background:var(--panel);border:1px solid var(--border);border-radius:999px;padding:.32em .8em}
+  .chip b{color:var(--tx);font-weight:600}
+  .panel{background:linear-gradient(180deg,var(--panel2),var(--panel));border:1px solid var(--border);border-radius:var(--radius);padding:22px 24px;margin:20px 0}
+  .grid{display:grid;gap:16px}
+  @media(min-width:720px){.g2{grid-template-columns:1fr 1fr}.g3{grid-template-columns:1fr 1fr 1fr}}
+  .card{background:var(--panel);border:1px solid var(--border);border-radius:var(--radius);padding:18px 20px}
+  .card h3{margin-top:.1em}
+  .tblwrap{overflow-x:auto;border:1px solid var(--border);border-radius:var(--radius);margin:18px 0;background:var(--panel)}
+  table{border-collapse:collapse;width:100%;min-width:640px;font-size:.92rem}
+  th,td{text-align:left;padding:10px 13px;border-bottom:1px solid var(--border);vertical-align:top}
+  thead th{background:#12141a;color:#aeb5c2;font-size:.72rem;text-transform:uppercase;letter-spacing:.08em}
+  tbody tr:last-child td{border-bottom:0}
+  tbody tr:hover{background:rgba(255,255,255,.018)}
+  td b{color:#eef1f6;font-weight:600}
+  figure{margin:22px 0}
+  .svgbox{overflow-x:auto;background:#0e1015;border:1px solid var(--border);border-radius:var(--radius);padding:10px}
+  svg{display:block;max-width:100%;height:auto;margin:0 auto}
+  figcaption{color:var(--mut);font-size:.85rem;margin-top:10px;text-align:center}
+  ul.clean{list-style:none;padding-left:0;margin:.6em 0}
+  ul.clean li{position:relative;padding-left:1.5em;margin:.5em 0}
+  ul.clean li::before{content:"▸";position:absolute;left:0;color:var(--acc);font-size:.9em;top:.05em}
+  .note{border-left:3px solid var(--acc);background:var(--acc-soft);border-radius:0 10px 10px 0;padding:12px 16px;margin:16px 0;font-size:.94rem}
+  .note b{color:#fff}
+  .b{display:inline-flex;align-items:center;gap:.4em;font-size:.72rem;font-weight:700;border-radius:6px;padding:.16em .5em;text-transform:uppercase;white-space:nowrap}
+  .b::before{content:"";width:7px;height:7px;border-radius:50%;background:currentColor}
+  .b-core{color:var(--acc);background:var(--acc-soft)}
+  .b-state{color:var(--now);background:var(--now-soft)}
+  .b-beh{color:var(--sup);background:var(--sup-soft)}
+  /* preset matrix */
+  .matrix{overflow-x:auto;border:1px solid var(--border);border-radius:var(--radius);margin:18px 0;background:var(--panel)}
+  .matrix table{min-width:760px;font-size:.86rem}
+  .matrix th,.matrix td{text-align:center;padding:9px 8px}
+  .matrix th:first-child,.matrix td:first-child{text-align:left;font-weight:600;color:#eef1f6;white-space:nowrap}
+  .matrix thead th{font-size:.68rem;writing-mode:horizontal-tb}
+  .on{color:var(--now);font-weight:800} .opt{color:var(--dim)} .off{color:#2f343d}
+  .preset-name{color:var(--acc)!important}
+  /* mock */
+  .mock{background:#101217;border:1px solid var(--border2);border-radius:12px;padding:16px 18px;font-size:.9rem}
+  .mock .mh{font-size:.72rem;letter-spacing:.14em;text-transform:uppercase;color:var(--mut);margin-bottom:10px}
+  .chips{display:flex;flex-wrap:wrap;gap:7px;margin:0 0 14px}
+  .pchip{font-size:.78rem;border:1px solid var(--border2);border-radius:999px;padding:.28em .8em;color:#c3c9d4;background:#0f1116;cursor:default}
+  .pchip.sel{border-color:var(--acc-line);background:var(--acc-soft);color:var(--acc);font-weight:700}
+  .row{display:flex;align-items:center;justify-content:space-between;padding:9px 0;border-top:1px solid var(--border)}
+  .row .l{display:flex;align-items:center;gap:9px}
+  .tog{width:34px;height:19px;border-radius:999px;position:relative;flex:0 0 auto}
+  .tog.on{background:var(--now-soft);border:1px solid var(--now)} .tog.on::after{content:"";position:absolute;right:2px;top:1.5px;width:14px;height:14px;border-radius:50%;background:var(--now)}
+  .tog.off{background:#0f1116;border:1px solid var(--border2)} .tog.off::after{content:"";position:absolute;left:2px;top:1.5px;width:14px;height:14px;border-radius:50%;background:#3a3f4a}
+  .rlab{color:#e7eaf0} .rhint{color:var(--dim);font-size:.78rem}
+  .seg{display:inline-flex;border:1px solid var(--border2);border-radius:8px;overflow:hidden;font-size:.76rem}
+  .seg span{padding:.25em .7em;color:var(--mut)} .seg span.a{background:var(--acc-soft);color:var(--acc);font-weight:700}
+  .foot{margin-top:12px;padding-top:10px;border-top:1px dashed var(--border2);color:var(--mut);font-size:.82rem}
+  .foot b{color:var(--acc)}
+  .phase{display:flex;gap:16px;align-items:flex-start;padding:16px 0;border-bottom:1px solid var(--border)}
+  .phase:last-child{border-bottom:0}
+  .phase .let{flex:0 0 auto;width:40px;height:40px;border-radius:11px;display:grid;place-items:center;font-weight:800;font-size:1.05rem;background:var(--acc-soft);color:var(--acc);border:1px solid var(--acc-line)}
+  .phase h3{margin:.1em 0 .2em} .eff{font-size:.72rem;font-weight:700;color:var(--dim);border:1px solid var(--border);border-radius:6px;padding:.1em .5em;margin-left:.5em}
+  footer{margin-top:56px;padding-top:22px;border-top:1px solid var(--border);color:var(--dim);font-size:.85rem}
+  .legend{display:flex;flex-wrap:wrap;gap:12px;margin-top:8px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <span class="kicker">Agent engine · architecture proposal</span>
+  <h1 class="title">Agent Capability <span class="k">Profiles</span></h1>
+  <p class="sub">Stop baking one paradigm into every agent. Compose the agent from opt-in capabilities so a model carries only what it uses — and GenesisCA's agents become as generic as its grid: particle physics, morphogenesis, vivarium ecologies, and social-network graphs, all from one substrate.</p>
+  <div class="metabar">
+    <span class="chip"><b>Problem:</b> a center-based soft-body cell is hard-coded into "the agent"</span>
+    <span class="chip"><b>Fix:</b> generalize four gating patterns already in the codebase</span>
+    <span class="chip"><b>Predecessor:</b> the AutomatosGT plan (FOV + spawn re-slot as capabilities)</span>
+  </div>
+</header>
+
+<div class="note" style="border-color:var(--amb);background:var(--amb-soft)"><b>⚠️ Pressure-tested — the handoff is authoritative.</b> A 15-agent adversarial audit returned <b>GO-WITH-FIXES</b> and corrected two overclaims inline below: (1) sprites are <em>not</em> conditionally ABI-mirrored (they're always threaded — the real template is <code>hasLookupTables</code> / <code>is3d</code> / <code>agentAccess</code>); (2) the true core is id+alive+position+<b>velocity+force+radius</b> (read every step), so Motion &amp; Body are <b>palette-gated only in v1</b>, and layout is <b>recomputed per profile</b>, not append-only. Build order + shared-infra prerequisite + corrected migration: <a href="HANDOFF_AGENT_CAPABILITY_PROFILES.html">HANDOFF_AGENT_CAPABILITY_PROFILES.html</a>.</div>
+
+<div class="panel">
+  <span class="kicker" style="color:var(--tx);background:#0f1116;border-color:var(--border)">The critique, in one line</span>
+  <p class="lead" style="margin-top:12px"><b>The grid is generic; the agent is not.</b> Every agent — in every model — hard-codes <code>velocity · force · radius · age · division axes · bond store · density · lineage</code> whether or not the model uses them, and those intrinsic fields leak into node ports (<code>Behaviour Step</code> always emits <code>myRadius · myArea · myBondDegree · myAge</code>) and the palette (<code>Divide Agent</code>, the whole bond family). A social-network or particle model is handed morphogenesis machinery it will never use. This proposal makes every intrinsic attribute and every engine physics an <b style="color:var(--now)">opt-in capability</b>, driven by a <b style="color:var(--acc)">profile</b> the model declares — so universality comes from <em>composition</em>, not from piling every feature onto one fixed agent.</p>
+</div>
+
+<h2><span class="n">1</span>What's baked in today</h2>
+<p>Verified in <code>agentEngine.ts</code>: every agent unconditionally carries <b>~22&nbsp;Float64 + 5&nbsp;Int32 + 3&nbsp;Uint8</b> intrinsic fields plus the bond store — ~203 bytes before a single user attribute. Even the 3D fields (<code>z, zNext, vz, forceZ, divideAxisZ</code>) sit in the CPU store for <b>2D</b> models.</p>
+
+<figure>
+  <div class="svgbox">
+  <svg viewBox="0 0 940 380" role="img" aria-label="Monolithic agent versus composed agents">
+    <defs><style>.lbl{font:600 12px system-ui;fill:#eef1f6}.sm{font:11px ui-monospace,monospace}.ttl{font:700 13px system-ui}</style></defs>
+
+    <!-- LEFT: monolith -->
+    <text x="20" y="26" class="ttl" fill="#e5644e">TODAY · one fixed agent, everything on</text>
+    <rect x="20" y="40" width="300" height="320" rx="14" fill="#15171c" stroke="#e5644e" stroke-opacity=".5"/>
+    <!-- field chips: green=used, grey=dead (for a social graph) -->
+    <g class="sm">
+      <!-- used -->
+      <rect x="36" y="58" width="126" height="26" rx="6" fill="rgba(79,191,139,.14)" stroke="#4fbf8b"/><text x="46" y="75" fill="#4fbf8b">position x,y,z</text>
+      <rect x="170" y="58" width="134" height="26" rx="6" fill="rgba(79,191,139,.14)" stroke="#4fbf8b"/><text x="180" y="75" fill="#4fbf8b">bond store (edges)</text>
+      <rect x="36" y="90" width="268" height="26" rx="6" fill="rgba(79,191,139,.14)" stroke="#4fbf8b"/><text x="46" y="107" fill="#4fbf8b">user attributes</text>
+      <!-- dead -->
+      <rect x="36" y="126" width="86" height="26" rx="6" fill="#0f1116" stroke="#33383f"/><text x="46" y="143" fill="#565c66">vx,vy,vz</text>
+      <rect x="130" y="126" width="98" height="26" rx="6" fill="#0f1116" stroke="#33383f"/><text x="140" y="143" fill="#565c66">forceX/Y/Z</text>
+      <rect x="236" y="126" width="68" height="26" rx="6" fill="#0f1116" stroke="#33383f"/><text x="246" y="143" fill="#565c66">radius</text>
+      <rect x="36" y="158" width="120" height="26" rx="6" fill="#0f1116" stroke="#33383f"/><text x="46" y="175" fill="#565c66">targetRadius</text>
+      <rect x="164" y="158" width="60" height="26" rx="6" fill="#0f1116" stroke="#33383f"/><text x="174" y="175" fill="#565c66">age</text>
+      <rect x="232" y="158" width="72" height="26" rx="6" fill="#0f1116" stroke="#33383f"/><text x="242" y="175" fill="#565c66">density</text>
+      <rect x="36" y="190" width="150" height="26" rx="6" fill="#0f1116" stroke="#33383f"/><text x="46" y="207" fill="#565c66">divideAxis x/y/z</text>
+      <rect x="194" y="190" width="110" height="26" rx="6" fill="#0f1116" stroke="#33383f"/><text x="204" y="207" fill="#565c66">divideAsym</text>
+      <rect x="36" y="222" width="130" height="26" rx="6" fill="#0f1116" stroke="#33383f"/><text x="46" y="239" fill="#565c66">bondForm L/K</text>
+      <rect x="174" y="222" width="130" height="26" rx="6" fill="#0f1116" stroke="#33383f"/><text x="184" y="239" fill="#565c66">xNext/yNext…</text>
+      <rect x="36" y="254" width="90" height="26" rx="6" fill="#0f1116" stroke="#33383f"/><text x="46" y="271" fill="#565c66">lineage</text>
+      <rect x="134" y="254" width="80" height="26" rx="6" fill="#0f1116" stroke="#33383f"/><text x="144" y="271" fill="#565c66">epoch</text>
+      <rect x="222" y="254" width="82" height="26" rx="6" fill="#0f1116" stroke="#33383f"/><text x="232" y="271" fill="#565c66">bondCount</text>
+    </g>
+    <text x="36" y="300" class="sm" fill="#e5644e">ports leak: myRadius · myArea · myBondDegree · myAge</text>
+    <text x="36" y="320" class="sm" fill="#e5644e">palette: Divide, Grow, Get Radius… all present</text>
+    <text x="36" y="344" class="sm" fill="#8b929e">grey = dead weight for a social-network model</text>
+
+    <!-- arrow -->
+    <text x="360" y="205" fill="#e8a13a" font-size="30">→</text>
+
+    <!-- RIGHT: composed -->
+    <text x="410" y="26" class="ttl" fill="#4fbf8b">COMPOSED · each model carries only its capabilities</text>
+
+    <!-- social graph -->
+    <rect x="410" y="40" width="240" height="96" rx="12" fill="#15171c" stroke="#5aa9e6" stroke-opacity=".55"/>
+    <text x="424" y="62" class="lbl" fill="#5aa9e6">Social Network</text>
+    <g class="sm" fill="#c8cdd7">
+      <rect x="424" y="72" width="86" height="22" rx="5" fill="rgba(79,191,139,.12)" stroke="#3d6b58"/><text x="432" y="87">position</text>
+      <rect x="518" y="72" width="118" height="22" rx="5" fill="rgba(79,191,139,.12)" stroke="#3d6b58"/><text x="526" y="87">bonds = data</text>
+      <rect x="424" y="100" width="150" height="22" rx="5" fill="rgba(79,191,139,.12)" stroke="#3d6b58"/><text x="432" y="115">user attributes</text>
+    </g>
+
+    <!-- particle -->
+    <rect x="670" y="40" width="250" height="96" rx="12" fill="#15171c" stroke="#a488f2" stroke-opacity=".55"/>
+    <text x="684" y="62" class="lbl" fill="#a488f2">Particle System</text>
+    <g class="sm" fill="#c8cdd7">
+      <rect x="684" y="72" width="78" height="22" rx="5" fill="rgba(164,136,242,.12)" stroke="#5b4d86"/><text x="692" y="87">position</text>
+      <rect x="770" y="72" width="64" height="22" rx="5" fill="rgba(164,136,242,.12)" stroke="#5b4d86"/><text x="778" y="87">velocity</text>
+      <rect x="842" y="72" width="64" height="22" rx="5" fill="rgba(164,136,242,.12)" stroke="#5b4d86"/><text x="850" y="87">force</text>
+      <rect x="684" y="100" width="150" height="22" rx="5" fill="rgba(164,136,242,.12)" stroke="#5b4d86"/><text x="692" y="115">inertia · drag · maxSpeed</text>
+    </g>
+
+    <!-- morphogenesis -->
+    <rect x="410" y="150" width="510" height="120" rx="12" fill="#15171c" stroke="#4fbf8b" stroke-opacity=".55"/>
+    <text x="424" y="172" class="lbl" fill="#4fbf8b">Morphogenesis / Cells  (= today's "everything on" preset)</text>
+    <g class="sm" fill="#c8cdd7">
+      <rect x="424" y="182" width="70" height="22" rx="5" fill="rgba(79,191,139,.1)" stroke="#3d6b58"/><text x="432" y="197">position</text>
+      <rect x="502" y="182" width="94" height="22" rx="5" fill="rgba(79,191,139,.1)" stroke="#3d6b58"/><text x="510" y="197">force + body</text>
+      <rect x="604" y="182" width="120" height="22" rx="5" fill="rgba(79,191,139,.1)" stroke="#3d6b58"/><text x="612" y="197">soft collision</text>
+      <rect x="732" y="182" width="120" height="22" rx="5" fill="rgba(79,191,139,.1)" stroke="#3d6b58"/><text x="740" y="197">bonds + springs</text>
+      <rect x="424" y="210" width="90" height="22" rx="5" fill="rgba(79,191,139,.1)" stroke="#3d6b58"/><text x="432" y="225">growth</text>
+      <rect x="522" y="210" width="90" height="22" rx="5" fill="rgba(79,191,139,.1)" stroke="#3d6b58"/><text x="530" y="225">division</text>
+      <rect x="620" y="210" width="90" height="22" rx="5" fill="rgba(79,191,139,.1)" stroke="#3d6b58"/><text x="628" y="225">lifespan</text>
+      <rect x="718" y="210" width="134" height="22" rx="5" fill="rgba(79,191,139,.1)" stroke="#3d6b58"/><text x="726" y="225">population + field</text>
+    </g>
+    <text x="424" y="252" class="sm" fill="#8b929e">nothing greyed out — every capability is actually used</text>
+
+    <text x="410" y="300" class="sm" fill="#8b929e">the graph editor shows each model only its relevant ports &amp; palette nodes</text>
+    <text x="410" y="322" class="sm" fill="#8b929e">→ generality by composition; a social-graph author never sees "radius" or "Divide"</text>
+  </svg>
+  </div>
+  <figcaption>Today: one fat agent, most of it dead for any non-morphogenesis model. Composed: each model's agent (and its palette + ports) is exactly its capability set.</figcaption>
+</figure>
+
+<div class="note"><b>The codebase already agrees with the critique.</b> This is its own half-finished trajectory: the built-in agent <code>type</code> was <em>already removed</em>; <code>maxBonds=0</code> already zeroes the bond store; <code>useBondingPhysics</code> already gates soft-sphere+springs+growth+auto-bond; <code>hasLookupTables</code> / the <code>is3d</code> trailing block / <code>agentAccess</code> already conditionally append params to all three ABI mirrors; <code>hiddenPorts</code> already hides <code>myZ</code> in 2D. The fix <b>generalizes these gates into one profile</b> — no new mechanism. <b>(Pressure-test correction:</b> sprites are <em>not</em> an example — they're <em>unconditionally</em> ABI-threaded; and velocity/force/radius are always-read core, not gate-able in v1. See the <a href="HANDOFF_AGENT_CAPABILITY_PROFILES.html">handoff</a>.)</p></div>
+
+<h2><span class="n">2</span>The principle</h2>
+<p>A model's <b>Agent Capability Profile</b> is the single source of truth. From it derive: which <b>SoA fields</b> allocate, which <b>engine steps</b> run, which <b>palette nodes</b> appear, which <b>ports</b> show, and which <b>Properties panels</b> render. The <b>irreducible core</b> is just: a slot id, an <code>alive</code> flag, a <b>position</b>, and the user's <b>attributes</b>. Everything else is a capability. <b>Presets snap the paradigms</b>; module toggles are progressive disclosure.</p>
+
+<h2><span class="n">3</span>The capability modules</h2>
+<p><span class="b b-core">core</span> always present · <span class="b b-state">state</span> adds fields + nodes + ports · <span class="b b-beh">behaviour</span> adds an engine step (usually needs a state capability)</p>
+<div class="tblwrap">
+<table>
+<thead><tr><th>Capability</th><th>Kind</th><th>Provides · engine contribution</th><th>Needs</th></tr></thead>
+<tbody>
+<tr><td><b>Position</b></td><td><span class="b b-core">core</span></td><td><code>x,y[,z]</code>; Set/Get Position, Offset — rendered &amp; spatial-hashed</td><td>—</td></tr>
+<tr><td><b>Motion</b></td><td><span class="b b-beh">state+beh</span></td><td>mode <b>Static / Velocity / Force</b>; Apply Force, Set Velocity, Get Velocity · the integrator (Static skips it entirely)</td><td>Position</td></tr>
+<tr><td class="muted">↳ inertia · drag · maxSpeed</td><td class="muted">params</td><td class="muted">momentum, η, speed cap</td><td class="muted">Motion=Force</td></tr>
+<tr><td><b>Body / Extent</b></td><td><span class="b b-state">state</span></td><td><code>radius</code>; Get/Set Radius; <code>myRadius,myArea</code> ports — render as disc/sphere (else a point)</td><td>Position</td></tr>
+<tr><td><b>Collision</b></td><td><span class="b b-beh">beh</span></td><td>mode <b>Soft-sphere / Positional</b> (AutomatosGT-style hard correction); <code>density</code></td><td>Body</td></tr>
+<tr><td><b>Bonds</b></td><td><span class="b b-beh">state+beh</span></td><td>mode <b>Data</b> (edges only, connectivity — <em>the social-graph case</em>) <b>/ Physics</b> (springs); Form/Break/Iterate, edge rendering; <code>myBondDegree</code></td><td>Position</td></tr>
+<tr><td class="muted">↳ auto-bond</td><td class="muted">beh</td><td class="muted">form/break by proximity</td><td class="muted">Bonds</td></tr>
+<tr><td><b>Growth</b></td><td><span class="b b-beh">beh</span></td><td><code>targetRadius</code>; Set Target Radius · radius→target each step</td><td>Body</td></tr>
+<tr><td><b>Division</b></td><td><span class="b b-beh">state+beh</span></td><td><code>divideAxis*</code>; Divide Agent; <b>Division Event</b> root · tension-axis split</td><td>Position</td></tr>
+<tr><td><b>Lifespan</b></td><td><span class="b b-beh">state+beh</span></td><td><code>age</code>; Get Age; <code>myAge</code> · auto-increment</td><td>—</td></tr>
+<tr><td><b>Population</b></td><td><span class="b b-beh">state+beh</span></td><td>birth: <b>Spawn Agent</b> + <b>Spawn Event</b>; death: <b>Kill Agent</b> · structural spawn/free-list</td><td>Position</td></tr>
+<tr><td><b>Orientation</b></td><td><span class="b b-state">state</span></td><td><code>facing</code> (reuse <code>spriteRotations</code>) — FOV heading, sprite rotation, rigid-carry</td><td>Position</td></tr>
+<tr><td><b>Sensing</b></td><td><span class="b b-beh">beh</span></td><td>spatial hash; Get Nearby Agents; <b>Get Agents In View</b>, <b>Sense Hemifield</b> (directional FOV)</td><td>Position</td></tr>
+<tr><td><b>Field coupling</b></td><td><span class="b b-beh">beh</span></td><td>Sample/Gradient/Read/Affect/Secrete — agent⇄grid morphogen (already gated by <code>agentAccess</code>)</td><td>a field attr</td></tr>
+</tbody>
+</table>
+</div>
+<div class="note"><b>The AutomatosGT features re-slot cleanly:</b> <b>Directional FOV</b> → the <b>Sensing</b> module (+ <b>Orientation</b> for heading). <b>Runtime spawn</b> → the <b>Population</b> module. <b>Carrying</b> → <b>Bonds = Data</b> + Set Agent Position (the <em>same</em> mechanism the social-network preset uses). They stop being bolt-ons and become capability members.</p></div>
+
+<h2><span class="n">4</span>Paradigm presets</h2>
+<p class="muted"><span class="on">●</span> default-on&nbsp;&nbsp;<span class="opt">○</span> optional/available&nbsp;&nbsp;<span class="off">—</span> off. A preset sets the toggles; editing one → <b>Custom</b>.</p>
+<div class="matrix">
+<table>
+<thead><tr><th>Preset</th><th>Motion</th><th>Body</th><th>Collis.</th><th>Bonds</th><th>Growth</th><th>Divis.</th><th>Lifesp.</th><th>Popul.</th><th>Sensing</th><th>Orient.</th></tr></thead>
+<tbody>
+<tr><td class="preset-name">Particle System</td><td>Force</td><td class="opt">○</td><td class="opt">○</td><td class="off">—</td><td class="off">—</td><td class="off">—</td><td class="off">—</td><td class="off">—</td><td class="opt">○</td><td class="off">—</td></tr>
+<tr><td class="preset-name">Boids / Flocking</td><td>Force</td><td class="opt">○</td><td class="off">—</td><td class="off">—</td><td class="off">—</td><td class="off">—</td><td class="off">—</td><td class="off">—</td><td class="on">● FOV</td><td class="on">●</td></tr>
+<tr><td class="preset-name">Vivarium / Ecology</td><td>Force</td><td class="opt">○</td><td class="opt">○</td><td class="off">—</td><td class="off">—</td><td class="opt">○</td><td class="on">●</td><td class="on">●</td><td class="on">● FOV</td><td class="on">●</td></tr>
+<tr><td class="preset-name">Morphogenesis <span style="color:var(--dim);font-weight:400">(= Full)</span></td><td>Force</td><td class="on">●</td><td class="on">●</td><td class="on">● Phys</td><td class="on">●</td><td class="on">●</td><td class="on">●</td><td class="on">●</td><td class="on">●</td><td class="opt">○</td></tr>
+<tr><td class="preset-name">Social Network</td><td>Static</td><td class="off">—</td><td class="off">—</td><td class="on">● Data</td><td class="off">—</td><td class="off">—</td><td class="off">—</td><td class="off">—</td><td class="opt">○</td><td class="off">—</td></tr>
+<tr><td class="preset-name">CA-on-Agents</td><td>Static</td><td class="opt">○</td><td class="off">—</td><td class="opt">○</td><td class="off">—</td><td class="off">—</td><td class="off">—</td><td class="off">—</td><td class="on">●</td><td class="off">—</td></tr>
+<tr><td class="preset-name">Blank / Custom</td><td class="off">—</td><td class="off">—</td><td class="off">—</td><td class="off">—</td><td class="off">—</td><td class="off">—</td><td class="off">—</td><td class="off">—</td><td class="off">—</td><td class="off">—</td></tr>
+</tbody>
+</table>
+</div>
+<p class="muted" style="font-size:.9rem"><b>Social Network is the proof:</b> bonds as pure <em>data</em> (visualize + traverse edges, no springs), static/computed layout, and radius/force/division/age simply don't exist — the editor shows only Position, Bonds, attributes, and Sensing. The engine currently can't express this cleanly; capability profiles make it a preset.</p>
+
+<h2><span class="n">5</span>How it gates — extending four proven mechanisms</h2>
+<div class="tblwrap">
+<table>
+<thead><tr><th>Concern</th><th>Already in the codebase</th><th>Generalization</th></tr></thead>
+<tbody>
+<tr><td><b>SoA allocation</b></td><td><code>maxBonds=0</code> drops the bond store; <code>cellFieldAttrsOf</code> drops the field block; <code>computeMemoryLayout(gridCells)</code> drops cell regions</td><td><code>computeAgentMemoryLayout(profile)</code> <b>recomputes</b> the layout per profile, appending a group at a stable slot when its capability is on. <em>(Not "append-only byte-identical" — interleaved fields shift; byte-identity holds only at a constant profile. CPU + GPU lists gated together.)</em></td></tr>
+<tr><td><b>Engine step</b></td><td><code>usesBondingPhysics(cfg)</code> skips soft-sphere/springs/growth/auto-bond</td><td>each step contribution guarded by its flag; Motion=Static skips the integrator; no-Bonds skips springs/auto-bond</td></tr>
+<tr><td><b>Palette</b></td><td><code>requirements:{bondGraph,variegated,lattice2d,async}</code> + <code>isNodeAvailable</code></td><td>capability tags (<code>{body}</code>,<code>{motion:'force'}</code>,<code>{bonds}</code>,<code>{division}</code>,<code>{lifespan}</code>,<code>{population}</code>) on the same gate</td></tr>
+<tr><td><b>Ports</b></td><td><code>hiddenPorts(config,model)</code> hides <code>myZ</code> in 2D</td><td>hides <code>myRadius/myArea</code> (no Body), <code>myBondDegree</code> (no Bonds), <code>myAge</code> (no Lifespan)</td></tr>
+<tr><td><b>ABI mirrors</b></td><td><code>hasLookupTables</code> / <code>is3d</code> trailing block conditionally append to the mirrors</td><td>one shared <code>deriveAgentAbi(profile)</code> descriptor source consumed by all four sites (3 mirrors + parity harness) — built FIRST (STEP 0) so the harness stops being a hand-written copy that can desync</td></tr>
+</tbody>
+</table>
+</div>
+<div class="note"><b>The one discipline:</b> gate a field group and its engine-step contribution <em>together</em> (omit <code>forceX/Y</code> ⇒ skip the force integrate) — exactly what <code>gridCells:false</code> and <code>useBondingPhysics:false</code> already do. Re-run the parity harness (0 mismatches) after each capability.</p></div>
+
+<h2><span class="n">6</span>UI — the Properties panel</h2>
+<p>A new <b>Agent Capabilities</b> section (only when the model has agents), preset-picker first, progressive-disclosure toggles, live footprint. Sketch:</p>
+<div class="mock">
+  <div class="mh">Model Properties · Agent Capabilities</div>
+  <div class="chips">
+    <span class="pchip">Particle</span><span class="pchip">Boids</span><span class="pchip sel">Vivarium</span><span class="pchip">Morphogenesis</span><span class="pchip">Social Graph</span><span class="pchip">CA-on-Agents</span><span class="pchip">Custom</span>
+  </div>
+  <div class="row"><div class="l"><span class="tog on"></span><span class="rlab">Motion</span></div><span class="seg"><span>Static</span><span>Velocity</span><span class="a">Force</span></span></div>
+  <div class="row"><div class="l"><span class="tog on"></span><span class="rlab">&nbsp;&nbsp;↳ inertia · drag · max-speed</span></div><span class="rhint">momentum 0.9 · η 1.0 · cap 8</span></div>
+  <div class="row"><div class="l"><span class="tog on"></span><span class="rlab">Body / Extent</span></div><span class="rhint">radius · disc render</span></div>
+  <div class="row"><div class="l"><span class="tog on"></span><span class="rlab">Lifespan</span></div><span class="rhint">adds <code>age</code> · <code>myAge</code></span></div>
+  <div class="row"><div class="l"><span class="tog on"></span><span class="rlab">Population (birth + death)</span></div><span class="rhint">Spawn Agent · Kill Agent · max 20k</span></div>
+  <div class="row"><div class="l"><span class="tog on"></span><span class="rlab">Sensing + directional FOV</span></div><span class="rhint">Get Nearby · Get Agents In View</span></div>
+  <div class="row"><div class="l"><span class="tog on"></span><span class="rlab">Orientation (facing)</span></div><span class="rhint">FOV heading · sprite rotation</span></div>
+  <div class="row"><div class="l"><span class="tog off"></span><span class="rlab">Bonds</span></div><span class="rhint">off — no edges, no bond store</span></div>
+  <div class="foot"><b>≈ 97 B/agent</b> <span style="color:var(--dim)">(2D core ≈89 + age; bound to <code>computeAgentMemoryLayout</code>)</span> · Behaviour Step exposes X Y · Radius · Area · Age (no Bond Degree) &nbsp;—&nbsp; vs Morphogenesis ≈ 203 B <b>+ 28·maxBonds</b>. <span style="color:var(--dim)">In v1 the byte savings come from gating Bonds/Division/Growth (STEP 3–4); Motion/Body toggles are palette-only until STEP 6.</span></div>
+</div>
+<p class="muted" style="font-size:.9rem">Because the palette, quick-add menu, and <code>Behaviour Step</code> ports all filter to enabled capabilities, the graph a user builds is <b>scoped to their paradigm</b> — the compounding clarity win. The footprint readout makes the cost of generality legible in real time.</p>
+
+<h2><span class="n">7</span>Migration — legacy stays byte-identical</h2>
+<ul class="clean">
+  <li><b>Absent profile ⇒ a config-aware inference</b> <em>(corrected: flat "always Full" mis-allocates a bond store for the <code>maxBonds:0</code> default new models ship)</em>: absent + <code>maxBonds:0</code> ⇒ <b>Particle</b>; absent + <code>maxBonds&gt;0</code>/<code>useBondingPhysics</code> ⇒ <b>Full</b>. Every existing <code>.gcaproj</code> + shipped sample loads unchanged.</li>
+  <li><b>New models</b> start from a chosen preset (a lean default, not the heavyweight Full).</li>
+  <li><b>Optional smarter migration</b>: infer a tighter profile by scanning which intrinsic nodes/ports a legacy graph actually wires — only when provably behaviour-preserving; else fall back to Full.</li>
+  <li>The existing <code>customForcesOnly</code> / <code>useBondingPhysics</code> / <code>topologyMode</code> / <code>agentTarget</code> fields fold into (or derive from) the profile with no semantic loss.</li>
+</ul>
+
+<h2><span class="n">8</span>Roadmap</h2>
+<div class="panel">
+  <div class="phase"><div class="let">1</div><div class="body">
+    <h3>Profile schema + presets + port/palette gating <span class="eff">effort M · clarity win, low risk</span></h3>
+    <p class="muted">Add the schema + "legacy ⇒ Full" migration; wire capability tags on existing nodes + <code>hiddenPorts</code> on the event roots; build the Properties panel + preset picker + footprint. <b>No engine/SoA change</b> — this alone delivers the "generic &amp; universal" feel: each paradigm shows only its relevant nodes/ports.</p></div></div>
+  <div class="phase"><div class="let">2</div><div class="body">
+    <h3>Conditional SoA + engine-step composition <span class="eff">effort L · memory/compute</span></h3>
+    <p class="muted">Extend <code>computeAgentMemoryLayout</code> + the three ABI mirrors per the profile; compose <code>runAgentStep</code> + the structural phase from enabled behaviours. Parity-harness after each capability.</p></div></div>
+  <div class="phase"><div class="let">3</div><div class="body">
+    <h3>New capabilities: Directional FOV (Sensing) + Runtime Spawn (Population) + the AutomatosGT gallery <span class="eff">effort M</span></h3>
+    <p class="muted">The predecessor plan's build items, landing as capability members.</p></div></div>
+  <div class="phase"><div class="let" style="background:var(--sup-soft);color:var(--sup);border-color:rgba(90,169,230,.4)">4</div><div class="body">
+    <h3>First-class Social-Graph &amp; Particle-System support <span class="eff">effort M</span></h3>
+    <p class="muted">The two paradigms the current engine serves worst: Bonds=Data edge rendering + a force-directed layout Motion mode (social networks); a tuned Motion=Force particle preset (N-body / SPH-lite). Mostly a preset + a small render/layout add once Phases 1–2 exist. Ship sample models alongside the vivarium gallery.</p></div></div>
+</div>
+
+<footer>
+  <p>Reframes the agent platform from "one fixed cell that does everything" to "compose the agent you need." Resolves the generality critique at its root — intrinsic attributes and engine physics become opt-in — makes the AutomatosGT features clean capability members, and unlocks paradigms the current engine can't express (social-network graphs, pure particle systems, abstract agent-CA), with morphogenesis as simply the "everything on" preset. Every step extends a gating mechanism already in the codebase; legacy models stay byte-identical. Full write-up: <a href="PLAN_AGENT_CAPABILITY_PROFILES.md">PLAN_AGENT_CAPABILITY_PROFILES.md</a> · predecessor: <a href="ANALYSIS_AUTOMATOSGT_AGENTS.md">ANALYSIS_AUTOMATOSGT_AGENTS.md</a>.</p>
+</footer>
+
+</div>
+</body>
+</html>

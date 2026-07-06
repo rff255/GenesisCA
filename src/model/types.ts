@@ -697,6 +697,71 @@ export interface TopologyMode {
   agents: boolean;
 }
 
+// ===========================================================================
+// Agent Capability Profiles — an opt-in decomposition of the agent engine so a
+// model declares only the capabilities it needs. The profile is the single
+// source of truth from which the editor surface derives: which palette nodes /
+// Behaviour-Step ports / Edit-panel rows appear, and (Phase 2+) which SoA field
+// groups + engine-step passes are allocated. See `model/agentCapabilities.ts`
+// for the presets, dependency graph, migration inference, and footprint helper.
+//
+// v1 (STEP 0/1) is EDITOR-SURFACE ONLY: `motion`/`body` are always-allocated in
+// the engine regardless of their toggle (there is no `Static` integrator path
+// yet — SoA-gating them is a later XL milestone), so toggling them only
+// palette-/port-gates. Everything above the honest core (Bonds, Collision,
+// Growth, Division, Lifespan, Population, Orientation, Sensing, Field coupling,
+// Appearance) is a genuine capability.
+// ===========================================================================
+
+/** How an agent moves. `static` = writes go direct (no integrator); `velocity`
+ *  = `pos += v·dt`; `force` = `v = inertia·v + (dt/η)·F; pos += v`. v1 always
+ *  allocates the velocity/force fields regardless — this is a palette/port gate. */
+export type MotionMode = 'static' | 'velocity' | 'force';
+/** Collision handling. `soft` = the engine soft-sphere repulsion/adhesion force
+ *  (requires Motion=Force); `positional` = hard penetration correction (works
+ *  under any Motion); `off` = none. */
+export type CollisionMode = 'off' | 'soft' | 'positional';
+/** Bond handling. `data` = connectivity edges only (traverse / render, no
+ *  springs); `physics` = spring forces (requires Motion=Force); `off` = none. */
+export type BondsMode = 'off' | 'data' | 'physics';
+
+/** The declared capability set for a model's agents — the Agent Capability
+ *  Profile. Additive on `CenterBasedConfig.agentCapabilities`; absent ⇒ a
+ *  config-aware, usage-widened inference (`inferAgentProfile`) that reproduces
+ *  the file's current behaviour, so legacy `.gcaproj` load byte-identically. */
+export interface AgentCapabilities {
+  /** Motion mode. v1: always-allocated; toggle = palette/port gate only. */
+  motion: MotionMode;
+  /** Body / extent — a radius surface + disc/sphere render. v1: always-allocated. */
+  body: boolean;
+  /** Collision handling (needs Body; `soft` needs Motion=Force). */
+  collision: CollisionMode;
+  /** Bonds (needs Position; `physics` needs Motion=Force). */
+  bonds: BondsMode;
+  /** Engine auto-forms/breaks bonds by proximity (requires bonds='physics'). */
+  autoBond: boolean;
+  /** Radius ramps toward a target radius each step (requires Body). */
+  growth: boolean;
+  /** Structural-phase division (requires Body; Bonds enhances the tension axis). */
+  division: boolean;
+  /** Per-agent `age` auto-increment. */
+  lifespan: boolean;
+  /** Population birth — the Spawn Agent node + Spawn Event root (net-new). */
+  populationBirth: boolean;
+  /** Population death — the Kill Agent node (effectively always-on in v1). */
+  populationDeath: boolean;
+  /** Spatial hash + Get Nearby Agents + the directional-FOV nodes. */
+  sensing: boolean;
+  /** Heading source for the FOV nodes. `facing` requires Orientation. */
+  sensingHeadingSource: 'velocity' | 'facing' | 'wired';
+  /** Per-agent facing (reuses `spriteRotations`) — FOV heading / sprite rotation. */
+  orientation: boolean;
+  /** Agent ⇄ cell-grid morphogen field bridge (needs ≥1 cell attr with agentAccess). */
+  fieldCoupling: boolean;
+  /** Per-agent appearance — `colors` (always allocated) + optional sprites. */
+  appearance: boolean;
+}
+
 /** Bond-Graph Agents (center-based off-lattice cells) configuration.
  *
  *  Present on a model whose `topologyMode.agents` is on (seeded by the reducer
@@ -813,6 +878,16 @@ export interface CenterBasedConfig {
    *    are snapshot-integrated in BOTH modes (the force law reads one position
    *    snapshot); this flag governs the ATTRIBUTE read/write visibility. */
   agentUpdateMode?: 'sync' | 'async';
+  /** Agent Capability Profile — the declared set of enabled capabilities (Motion,
+   *  Body, Collision, Bonds, Growth, Division, Lifespan, Population, Sensing,
+   *  Orientation, Field coupling, Appearance). Drives the editor surface (palette
+   *  nodes / Behaviour-Step ports / Edit-panel rows) and, from Phase 2, the SoA
+   *  layout + engine-step composition. Absent ⇒ a config-aware, usage-widened
+   *  inference (`inferAgentProfile` in `model/agentCapabilities.ts`) that
+   *  reproduces the file's current behaviour — so legacy `.gcaproj` load
+   *  byte-identically. Seeded to a friendly default when the Agents topology is
+   *  first enabled. */
+  agentCapabilities?: AgentCapabilities;
 }
 
 /** Complete CA model definition */
