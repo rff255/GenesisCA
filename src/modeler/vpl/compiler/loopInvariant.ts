@@ -121,6 +121,7 @@ const NEVER_INVARIANT = new Set<string>([
   // Handle feeds a by-id node (e.g. Get Agent Position's Reference / Form Bond).
   'getSelfHandle',
   'getRadius',
+  'getAge',
   'getBondDegree',
   'neighbourDensity',
   'getCurvature',

@@ -1,0 +1,34 @@
+import { build } from 'esbuild';
+import { writeFileSync, rmSync, mkdtempSync } from 'fs';
+import { tmpdir } from 'os'; import { join, dirname, resolve } from 'path';
+import { fileURLToPath, pathToFileURL } from 'url';
+const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const dir = mkdtempSync(join(tmpdir(),'ga-'));
+const ep = join(ROOT,'scripts','__gae.ts');
+writeFileSync(ep, `
+export { compileAgentGraph } from '../src/modeler/vpl/compiler/compile.ts';
+export { compileAgentGraphWasmForModel, isAgentGraphWasmSupported } from '../src/modeler/vpl/compiler/agentWasm/compile.ts';
+export { compileAgentGraphWebGPUForModel, isAgentGraphWebGPUSupported } from '../src/modeler/vpl/compiler/agentWebgpu/compile.ts';
+export { migrateForHarness } from '../src/dev/compileHarness.ts';
+`);
+const out = join(dir,'b.mjs');
+await build({entryPoints:[ep],bundle:true,format:'esm',platform:'node',outfile:out,logLevel:'error',absWorkingDir:process.cwd()});
+const m = await import(pathToFileURL(out).href);
+// tiny agent model: behaviourStep → setTargetRadius( getAge * 0.01 ) so getAge flows into a real write.
+const nid = (p)=>p+Math.random().toString(36).slice(2,7);
+const bs={id:nid('n'),type:'caNode',position:{x:0,y:0},data:{nodeType:'behaviourStep',config:{}}};
+const ga={id:nid('n'),type:'caNode',position:{x:0,y:0},data:{nodeType:'getAge',config:{}}};
+const ex={id:nid('n'),type:'caNode',position:{x:0,y:0},data:{nodeType:'expression',config:{expression:'a*0.01',visibleCount:1}}};
+const st={id:nid('n'),type:'caNode',position:{x:0,y:0},data:{nodeType:'setTargetRadius',config:{}}};
+const E=(s,sp,t,tp,c)=>({id:nid('e'),source:s.id,target:t.id,sourceHandle:`output_${c}_${sp}`,targetHandle:`input_${c}_${tp}`});
+const nodes=[bs,ga,ex,st];
+const edges=[E(bs,'do',st,'do','flow'), E(ga,'value',ex,'a','value'), E(ex,'result',st,'radius','value')];
+const raw={schemaVersion:1,properties:{name:'ga',dimension:'2d',gridWidth:8,gridHeight:8,boundaryTreatment:'torus'},topologyMode:{gridCells:false,agents:true},centerBased:{enabled:true,maxAgents:16,maxBonds:0,agentTarget:'wasm'},attributes:[],agentAttributes:[],neighborhoods:[],mappings:[],indicators:[],variables:[],agentVariables:[],graphNodes:[],graphEdges:[],agentGraphNodes:nodes,agentGraphEdges:edges,macroDefs:[]};
+const model=m.migrateForHarness(raw);
+const js=m.compileAgentGraph(model.agentGraphNodes,model.agentGraphEdges,model,0);
+const wasm=m.compileAgentGraphWasmForModel(model);
+const wgpu=m.compileAgentGraphWebGPUForModel(model);
+console.log('JS   :', js.error? 'ERR '+js.error : ('ok, references _agentAge: '+js.behaviourCode.includes('_agentAge')));
+console.log('WASM :', 'supported='+m.isAgentGraphWasmSupported(model), wasm.error? 'ERR '+wasm.error : ('ok, bytes='+wasm.bytes.length));
+console.log('WGPU :', 'supported='+m.isAgentGraphWebGPUSupported(model), wgpu.error? 'ERR '+wgpu.error : ('ok, refs age: '+wgpu.behaviourShader.includes('.age[')));
+rmSync(ep,{force:true}); rmSync(dir,{recursive:true,force:true});

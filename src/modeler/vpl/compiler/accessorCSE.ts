@@ -116,6 +116,7 @@ const NEVER_PURE_TYPES = new Set<string>([
   'getAgentOffset',
   'getAgentRadius',
   'getRadius',
+  'getAge',
   'getNearbyAgents',
   'getCurvature',
   'sampleField',

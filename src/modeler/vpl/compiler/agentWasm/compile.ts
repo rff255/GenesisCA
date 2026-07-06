@@ -123,7 +123,7 @@ export const AGENT_WASM_SUPPORTED_TYPES: ReadonlySet<string> = new Set<string>([
   // event roots (divisionEvent + agentInit are CPU/JS — see AGENT_WASM_CPU_ROOT_TYPES)
   'behaviourStep',
   // self reads (SoA geometry + engine reductions)
-  'getSelfPosition', 'getRadius', 'getBondDegree', 'neighbourDensity', 'getCurvature',
+  'getSelfPosition', 'getRadius', 'getAge', 'getBondDegree', 'neighbourDensity', 'getCurvature',
   // neighbour access
   'getSelfHandle',
   'getNearbyAgents', 'forEachInArray', 'getAgentOffset', 'getVelocity',
@@ -574,6 +574,10 @@ function compileValueNode(ctx: AgentWasmCtx, nodeId: string, portId: string): Va
     }
     case 'getRadius': {
       result = f64Result(() => pushF64Elem(em, ctx.layout.f64['radius']!, ctx.idxLocal));
+      break;
+    }
+    case 'getAge': {
+      result = f64Result(() => pushF64Elem(em, ctx.layout.f64['age']!, ctx.idxLocal));
       break;
     }
     case 'getConstant': {
