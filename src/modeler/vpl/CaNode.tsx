@@ -14,7 +14,7 @@ import type { MacroPort } from '../../model/types';
 import { useModel } from '../../model/ModelContext';
 import { countMacroInstances } from '../../model/macroImport';
 import { typeDisplayName } from '../../model/typeLabels';
-import { cellFieldAttrsOf } from '../../model/attributeScope';
+import { cellAttrsOf, cellFieldAttrsOf } from '../../model/attributeScope';
 import {
   isConnectingGlobal,
   showPortLabelsGlobal,
@@ -750,6 +750,12 @@ function CaNodeComponent({ id, data }: NodeProps) {
       const attr = model.attributes.find(a => a.id === nodeData.config.attributeId);
       const nbr = model.neighborhoods.find(n => n.id === nodeData.config.neighborhoodId);
       collapsedLabel = attr && nbr ? `Set ${nbr.name}[${attr.name}]` : displayNodeLabel(def);
+    } else if (nodeData.nodeType === 'sampleField' || nodeData.nodeType === 'fieldGradient'
+      || nodeData.nodeType === 'readCellsUnder' || nodeData.nodeType === 'affectCellsUnder'
+      || nodeData.nodeType === 'secreteToField') {
+      // Field-bridge nodes target a CELL (field) attribute.
+      const attr = cellAttrsOf(model).find(a => a.id === nodeData.config.attributeId);
+      collapsedLabel = attr ? `${displayNodeLabel(def)} · ${attr.name}` : displayNodeLabel(def);
     } else if (nodeData.nodeType === 'setCellLooks') {
       const glyphTag = nodeData.config.useGlyph ? ' + glyph' : '';
       if (nodeData.config.mappingId === CURRENT_VIEWER_SENTINEL) {
@@ -1134,6 +1140,56 @@ function CaNodeComponent({ id, data }: NodeProps) {
             <option value="absolute">Absolute (position)</option>
             <option value="relative">Relative (from reference)</option>
           </select>
+        )}
+
+        {/* Field-bridge nodes (Bond-Graph Agents) reference a CELL attribute — the
+            morphogen field. They live on the Agents graph, where the Attributes
+            panel lists AGENT attributes, so the field attribute is picked HERE
+            (all cell attributes; the validation badge guides granting Agent access
+            when the chosen attr isn't yet accessible). Read Cells Under adds a
+            reduce op; Affect Cells Under adds a write op. */}
+        {(nodeData.nodeType === 'sampleField'
+          || nodeData.nodeType === 'fieldGradient'
+          || nodeData.nodeType === 'readCellsUnder'
+          || nodeData.nodeType === 'affectCellsUnder'
+          || nodeData.nodeType === 'secreteToField') && (
+          <>
+            <select
+              className={styles.select}
+              value={(nodeData.config.attributeId as string) || ''}
+              onChange={e => updateConfig('attributeId', e.target.value)}
+            >
+              <option value="">Field (cell) attribute...</option>
+              {cellAttrsOf(model).map(a => (
+                <option key={a.id} value={a.id}>{a.name}</option>
+              ))}
+            </select>
+            {nodeData.nodeType === 'readCellsUnder' && (
+              <select
+                className={styles.select}
+                value={(nodeData.config.reduce as string) || 'mean'}
+                onChange={e => updateConfig('reduce', e.target.value)}
+              >
+                <option value="mean">Mean</option>
+                <option value="sum">Sum</option>
+                <option value="max">Max</option>
+                <option value="min">Min</option>
+              </select>
+            )}
+            {nodeData.nodeType === 'affectCellsUnder' && (
+              <select
+                className={styles.select}
+                value={(nodeData.config.op as string) || 'add'}
+                onChange={e => updateConfig('op', e.target.value)}
+              >
+                <option value="set">Set</option>
+                <option value="add">Add</option>
+                <option value="subtract">Subtract</option>
+                <option value="max">Max</option>
+                <option value="min">Min</option>
+              </select>
+            )}
+          </>
         )}
 
         {/* Wave A.6: nodes that walk a configured neighborhood (getNeighborsAttribute,
