@@ -1,5 +1,6 @@
 ﻿import type { GraphNode, GraphEdge, CAModel } from '../../../model/types';
 import { agentAttrsOf, cellFieldAttrsOf } from '../../../model/attributeScope';
+import { buildAgentAbiParams, type AgentAbiShape } from './agentAbi';
 import { getAllNodeDefs, getNodeDef } from '../nodes/registry';
 import { CURRENT_VIEWER_SENTINEL } from '../nodes/SetCellLooksNode';
 import { parseHandleId, type CompileContext } from '../types';
@@ -2130,53 +2131,23 @@ export interface AgentCompileResult {
  *  mirror args ONLY when `s.worldDepth > 1`. These are the SAME condition
  *  (`is3dModel(model) ⟺ s.worldDepth > 1`), so the 2D arg/param lists stay
  *  byte-identical — edit BOTH together or every value shifts one slot. */
-function buildDivisionParams(model: CAModel): string {
-  const is3d = is3dModel(model);
-  // Generic Agent Platform: r_/w_ ← agent attributes; _field_ ← agent-accessible
-  // cell attributes (mirrors buildAgentLoopParams; ABI-mirrored in buildDivisionArgs).
-  const agentAttrs = agentAttrsOf(model);
-  const fieldAttrs = cellFieldAttrsOf(model);
-  const parts: string[] = [
-    'idx', '__daughterIndex', '__axisDefaultX', '__axisDefaultY',
-    // engine buffers any agent READ node may touch — division is single-agent
-    // (non-loop), so the loop-control / request / hash buffers are intentionally
-    // OMITTED, but `_alive`/`highWater` (bonded-partner liveness scan) + velocity
-    // + the bond store + the field block ARE included so getAgentOffset /
-    // getCurvature / fieldGradient / getVelocity / the neighbour-access reads are
-    // division-safe (C-T1). These MIRROR buildAgentLoopParams's positions.
-    '_alive', 'highWater',
-    '_agentX', '_agentY', '_agentRadius', '_agentTargetRadius', '_agentAge',
-    '_agentLineage', '_agentBondCount', '_agentDensity',
-    '_agentVX', '_agentVY',
-    // bond store incl. rest lengths + epochs so For Each Bond is division-safe
-    // ("inspect the inherited bonds per daughter" is a natural division shape).
-    '_bondPartner', '_bondRestLength', '_bondPartnerEpoch', 'maxBonds',
-  ];
-  for (const a of agentAttrs) parts.push(`r_${a.id}`);
-  // NB the worker aliases the w_ block onto attrRead (buildDivisionArgs): the
-  // division event runs AFTER swapAgentAttrs, so sync-mode writes into the
-  // distinct attrWrite buffer would be clobbered by the next step's prime.
-  for (const a of agentAttrs) parts.push(`w_${a.id}`);
-  parts.push('modelAttrs', 'colors', 'activeViewer', '_indicators', '_rngState', '_stopFlag', 'glyphCodes', 'glyphColors');
-  // Agent sprites — persistent per-agent display state written by Set Agent
-  // Sprite (0 = no sprite / >=1 = 1-based sprite slot; spriteFrames = current
-  // frame; spriteSpeeds = frames/step, negative = reverse). The engine advances
-  // spriteFrames += spriteSpeeds each step; the render blits the floored frame.
-  // Always threaded (the store always allocates them); ABI-mirrored in the
-  // worker's buildAgentLoopArgs / buildDivisionArgs / buildAgentInitArgs.
-  parts.push('spriteIds', 'spriteFrames', 'spriteSpeeds', 'spriteRotations', 'spriteScales');
-  // PR3 FIX 1 — Lookup Tables (pinned slot, mirrors buildAgentLoopParams).
-  if (model.attributes.some(a => a.isModelAttribute && a.type === 'lookupTable')) parts.push('_lookupTables');
-  // Closed feedback: the agent-accessible CELL field arrays + grid dims (same as
-  // buildAgentLoopParams) so fieldGradient/sampleField/readCellsUnder are
-  // division-safe too.
-  parts.push('_fieldW', '_fieldH', '_fieldTotal', '_fieldBoundaryTorus');
-  for (const a of fieldAttrs) parts.push(`_field_${a.id}`);
-  // Trailing 3D block (B1) — pushed ONLY when 3D so the 2D param list is
-  // byte-identical. NO `_agentForceZ` (division reads forces, never writes them).
-  // `_fieldD` is the world depth (= worldDepth = gridDepth, 1:1).
-  if (is3d) parts.push('_agentZ', '_agentVZ', '_divideAxisZ', '_fieldD');
-  return parts.join(', ');
+export function buildDivisionParams(model: CAModel): string {
+  // Derived from the shared layout-agnostic descriptor (agentAbi.ts) — the ONE
+  // source the param names, the worker's `buildDivisionArgs`, and the parity
+  // harness all consume, so they can never desync in order.
+  return buildAgentAbiParams('division', agentAbiShapeOf(model));
+}
+
+/** The lightweight ABI shape (primitives) the shared descriptor needs. compile.ts
+ *  derives it from the model; the worker + harness from their own state — all
+ *  producing the SAME ordered field list. */
+export function agentAbiShapeOf(model: CAModel): AgentAbiShape {
+  return {
+    is3d: is3dModel(model),
+    agentAttrs: agentAttrsOf(model),
+    fieldAttrs: cellFieldAttrsOf(model),
+    hasLookupTables: model.attributes.some(a => a.isModelAttribute && a.type === 'lookupTable'),
+  };
 }
 
 /** The behaviourStep function signature. The worker's `buildAgentLoopArgs`
@@ -2200,98 +2171,18 @@ function buildDivisionParams(model: CAModel): string {
  *  block, and `_agentSeedBase` (highWater before the Init Event = the
  *  seedIndexBase value-out). A trailing `_agentZ` rides only in 3D (Set Agent
  *  Position's z write) — MIRROR invariant with buildAgentInitArgs (B1/B2). */
-function buildAgentInitParams(model: CAModel): string {
-  const is3d = is3dModel(model);
-  const agentAttrs = agentAttrsOf(model);
-  const fieldAttrs = cellFieldAttrsOf(model);
-  const parts: string[] = [
-    '_agentCreate', '_agentAddToWorld', '_agentMaxAgents',
-    '_agentX', '_agentY', '_agentRadius', '_agentTargetRadius', '_agentAge', '_agentLineage', '_agentVX', '_agentVY',
-  ];
-  for (const a of agentAttrs) parts.push(`r_${a.id}`);
-  for (const a of agentAttrs) parts.push(`w_${a.id}`);
-  parts.push('modelAttrs', 'colors', 'activeViewer', '_indicators', '_rngState', '_stopFlag', 'glyphCodes', 'glyphColors');
-  // Agent sprites — persistent per-agent display state written by Set Agent
-  // Sprite (0 = no sprite / >=1 = 1-based sprite slot; spriteFrames = current
-  // frame; spriteSpeeds = frames/step, negative = reverse). The engine advances
-  // spriteFrames += spriteSpeeds each step; the render blits the floored frame.
-  // Always threaded (the store always allocates them); ABI-mirrored in the
-  // worker's buildAgentLoopArgs / buildDivisionArgs / buildAgentInitArgs.
-  parts.push('spriteIds', 'spriteFrames', 'spriteSpeeds', 'spriteRotations', 'spriteScales');
-  if (model.attributes.some(a => a.isModelAttribute && a.type === 'lookupTable')) parts.push('_lookupTables');
-  parts.push('_fieldW', '_fieldH', '_fieldTotal', '_fieldBoundaryTorus');
-  for (const a of fieldAttrs) parts.push(`_field_${a.id}`);
-  parts.push('_agentSeedBase');
-  // Trailing 3D block (B1) — Set Agent Position's z write targets `_agentZ`; the
-  // canonical spawn recipe (Create → Set Agent Position → Add To World) threw
-  // `_agentZ is not defined` in 3D without it. Mirrors buildAgentInitArgs.
-  if (is3d) parts.push('_agentZ');
-  return parts.join(', ');
+export function buildAgentInitParams(model: CAModel): string {
+  return buildAgentAbiParams('init', agentAbiShapeOf(model));
 }
 
 export function buildAgentLoopParams(model: CAModel): { params: string; agentAttrs: Array<{ id: string; type: string }> } {
-  const is3d = is3dModel(model);
-  // Generic Agent Platform: the own-agent channel (r_/w_) is the AGENT attribute
-  // set; the field channel (_field_) is the agent-ACCESSIBLE CELL attribute set.
-  // Disjoint id-spaces (D-AGENT-ATTRS / D-CELL-AGENT-ACCESS) — both ends of the
-  // ABI mirror derive from attributeScope so they cannot drift in order.
+  // Derived from the shared layout-agnostic descriptor (agentAbi.ts). The
+  // behaviourStep signature — mirrored by the worker's `buildAgentLoopArgs` + the
+  // parity harness's `buildArgs`, all iterating the same source so they can't
+  // desync in order (the 3D `dimsModel` / `total` desync class the mirrors warned
+  // about). `agentAttrs` is returned separately for the caller's r_/w_ typing.
   const agentAttrs = agentAttrsOf(model).map(a => ({ id: a.id, type: a.type }));
-  const fieldAttrs = cellFieldAttrsOf(model);
-  const parts: string[] = [
-    '_alive', 'highWater',
-    // engine geometry / identity / reductions (read by behaviourStep preamble +
-    // the agent read nodes)
-    '_agentX', '_agentY', '_agentRadius', '_agentTargetRadius', '_agentAge',
-    '_agentLineage', '_agentBondCount', '_agentDensity',
-    // velocity (read by Get Velocity) + the per-step force accumulator (Apply
-    // Force adds in; the engine adds its soft-sphere + bond springs after)
-    '_agentVX', '_agentVY', '_agentForceX', '_agentForceY',
-    // the uniform spatial hash (Get Nearby Agents queries it); _fieldW/_fieldH/
-    // _fieldBoundaryTorus (below) double as the agent world bounds (1:1)
-    '_hashValid', '_hashBinStart', '_hashBinAgents', '_hashNBinsX', '_hashNBinsY', '_hashBinSizeX', '_hashBinSizeY',
-    // the hash grid ORIGIN (bbox-anchored on a bounded world, 0 on a torus) — a
-    // query bins as floor((pos - origin) / binSize). 0 on a torus → byte-identical.
-    '_hashOriginX', '_hashOriginY',
-    // request buffers written by DivideAgent / KillAgent (Phase C)
-    '_divideRequest', '_divideAxisX', '_divideAxisY', '_divideAsym', '_killRequest',
-    // ragged bond store + stride (ForEachBond / the spring force)
-    '_bondPartner', '_bondPartnerEpoch', '_bondRestLength', '_bondStiffness', '_bondTypeLabel', 'maxBonds',
-    // bond form/break request buffers written by FormBond / BreakBond
-    '_bondFormReq', '_bondFormL', '_bondFormK', '_bondBreakReq',
-  ];
-  for (const a of agentAttrs) parts.push(`r_${a.id}`);
-  for (const a of agentAttrs) parts.push(`w_${a.id}`);
-  parts.push('modelAttrs', 'colors', 'activeViewer', '_indicators', '_rngState', '_stopFlag', 'glyphCodes', 'glyphColors');
-  // Agent sprites — persistent per-agent display state written by Set Agent
-  // Sprite (0 = no sprite / >=1 = 1-based sprite slot; spriteFrames = current
-  // frame; spriteSpeeds = frames/step, negative = reverse). The engine advances
-  // spriteFrames += spriteSpeeds each step; the render blits the floored frame.
-  // Always threaded (the store always allocates them); ABI-mirrored in the
-  // worker's buildAgentLoopArgs / buildDivisionArgs / buildAgentInitArgs.
-  parts.push('spriteIds', 'spriteFrames', 'spriteSpeeds', 'spriteRotations', 'spriteScales');
-  // PR3 FIX 1 — Lookup Tables in the agent loop (pinned slot: after glyphColors,
-  // before the _field_ block), gated on the model having any lookupTable model
-  // attr so a no-table model's signature is unchanged. ABI-mirrored in
-  // buildAgentLoopArgs (worker pushes cachedInteractionTables in this slot).
-  if (model.attributes.some(a => a.isModelAttribute && a.type === 'lookupTable')) parts.push('_lookupTables');
-  // Closed feedback (Phase D): the CELL field arrays (`_field_<id>` = the cell
-  // read buffer, sized W*H — DISTINCT from the agent `r_<id>` sized maxAgents)
-  // + the field grid dims. Only the agent-ACCESSIBLE cell attrs are threaded
-  // (cellFieldAttrsOf) — the agentAccess permission prunes the signature.
-  // AffectCellsUnder / SecreteToField write into them (deposit before the cell
-  // step); SampleField / FieldGradient / ReadCellsUnder read them (gather after).
-  parts.push('_fieldW', '_fieldH', '_fieldTotal', '_fieldBoundaryTorus');
-  for (const a of fieldAttrs) parts.push(`_field_${a.id}`);
-  // Trailing 3D block (B1) — pushed ONLY when 3D so the 2D param list is
-  // byte-identical. `_agentForceZ` (Apply Force z arm) + `_divideAxisZ` (request
-  // write) + `_fieldD` (world depth). No redundant `_fieldWH` param: the 3D field
-  // nodes emit `_fieldW*_fieldH` inline (D1) rather than threading a fifth dim.
-  // The Z hash dims (`_hashNBinsZ`/`_hashBinSizeZ`) join the 3D block so Get
-  // Nearby Agents can do a 3×3×3 stencil + the 3D bin index in 3D (the 2D hash
-  // dims above are always present). ABI-mirrored at the END of buildAgentLoopArgs's
-  // 3D block. 2D omits them (the node's 2D branch never references them).
-  if (is3d) parts.push('_agentZ', '_agentVZ', '_agentForceZ', '_divideAxisZ', '_fieldD', '_hashNBinsZ', '_hashBinSizeZ', '_hashOriginZ');
-  return { params: parts.join(', '), agentAttrs };
+  return { params: buildAgentAbiParams('loop', agentAbiShapeOf(model)), agentAttrs };
 }
 
 export function compileAgentGraph(

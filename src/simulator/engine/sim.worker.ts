@@ -34,6 +34,7 @@ import {
   type AgentLayoutExtras,
 } from './agentEngine';
 import { instantiateAgentWasm } from '../../modeler/vpl/compiler/agentWasm/compile';
+import { buildAgentAbiArgs, type AgentAbiShape, type AgentAbiRuntime } from '../../modeler/vpl/compiler/agentAbi';
 import { computeAgentWebGPULayout, type AgentWebGPULayout } from '../../modeler/vpl/compiler/agentWebgpu/layout';
 import {
   createAgentWebGPURuntime, destroyAgentWebGPURuntime, uploadAgentSoA, uploadAgentHash,
@@ -879,27 +880,39 @@ function applyAgentSets(store: AgentStore, id: number, sets: Array<{ attrId: str
  *  SETUP function — NOT loop-wrapped). MIRRORS `buildAgentInitParams` in compile.ts
  *  EXACTLY: the host closures + maxAgents, the writable geometry buffers, the agent
  *  attr buffers, the global/rng/field block, then `_agentSeedBase`. */
+/** The ABI shape (primitives) for the shared agent-ABI descriptor — the worker
+ *  analogue of compile.ts's `agentAbiShapeOf(model)`. `s.attrSpecs` mirrors
+ *  `agentAttrsOf(model)` and `fieldSpecs` mirrors `cellFieldAttrsOf(model)` in
+ *  the SAME order, and `s.worldDepth > 1 ⟺ is3dModel(model)`, so this produces
+ *  the identical ordered field list. */
+function agentAbiShapeOfStore(s: AgentStore): AgentAbiShape {
+  return { is3d: s.worldDepth > 1, agentAttrs: s.attrSpecs, fieldAttrs: fieldSpecs, hasLookupTables };
+}
+
+/** The shared runtime values (external caches) every kind resolves from — pulled
+ *  live from the worker module globals. `hash` + `viewer` (+ the per-kind extras)
+ *  are set by the caller. */
+function agentAbiBaseRt(): Omit<AgentAbiRuntime, 'hash' | 'viewer'> {
+  return {
+    emptyI32: EMPTY_I32,
+    modelAttrs: cachedModelAttrs,
+    indicators: cachedIndicators,
+    rngState, stopFlag,
+    glyphCodes: GLYPH_NOOP_CODES, glyphColors: GLYPH_NOOP_COLORS,
+    lookupTables: cachedInteractionTables,
+    width, height, total, torus: boundaryTreatment === 'torus',
+    fieldArray: (id: string) => readAttrs[id],
+  };
+}
+
 function buildAgentInitArgs(
   s: AgentStore,
   agentCreate: (x: number, y: number, z: number, radius: number) => number,
   agentAddToWorld: (id: number) => void,
   seedBase: number,
 ): unknown[] {
-  const args: unknown[] = [
-    agentCreate, agentAddToWorld, s.maxAgents,
-    s.x, s.y, s.radius, s.targetRadius, s.age, s.lineage, s.vx, s.vy,
-  ];
-  for (const spec of s.attrSpecs) args.push(s.attrRead[spec.id]);
-  for (const spec of s.attrSpecs) args.push(s.attrWrite[spec.id]);
-  args.push(cachedModelAttrs, s.colors, activeViewer, cachedIndicators, rngState, stopFlag, GLYPH_NOOP_CODES, GLYPH_NOOP_COLORS, s.spriteIds, s.spriteFrames, s.spriteSpeeds, s.spriteRotations, s.spriteScales);
-  if (hasLookupTables) args.push(cachedInteractionTables);
-  args.push(width, height, total, boundaryTreatment === 'torus' ? 1 : 0);
-  for (const spec of fieldSpecs) args.push(readAttrs[spec.id]);
-  args.push(seedBase);
-  // Trailing 3D block (B1) — `_agentZ` for Set Agent Position's z write.
-  // MIRRORS buildAgentInitParams's `is3d` gate.
-  if (s.worldDepth > 1) args.push(s.z);
-  return args;
+  const rt: AgentAbiRuntime = { ...agentAbiBaseRt(), hash: null, viewer: activeViewer, agentCreate, agentAddToWorld, seedBase };
+  return buildAgentAbiArgs('init', agentAbiShapeOfStore(s), s, rt);
 }
 
 /** Run the Agent Init Event once on Reset (Generic Agent Platform). It runs on a
@@ -996,35 +1009,12 @@ function runDivisionEvent(events: Array<{ mother: number; a: number; b: number; 
  *  under `is3dModel(model)`. `is3dModel(model) ⟺ s.worldDepth > 1` — edit BOTH
  *  together or every arg shifts one slot. */
 function buildDivisionArgs(s: AgentStore, idx: number, daughterIndex: number, axisX: number, axisY: number): unknown[] {
-  const args: unknown[] = [
-    idx, daughterIndex, axisX, axisY,
-    // MIRRORS buildDivisionParams — engine buffers agent-read nodes need to be
-    // division-safe (C-T1): liveness + geometry + velocity + bond store + field.
-    s.alive, s.highWater,
-    s.x, s.y, s.radius, s.targetRadius, s.age, s.lineage, s.bondCount, s.density,
-    s.vx, s.vy,
-    s.bondPartner, s.bondRestLength, s.bondPartnerEpoch, s.maxBonds,
-  ];
-  for (const spec of s.attrSpecs) args.push(s.attrRead[spec.id]);
-  // The w_ block ALIASES attrRead on purpose: the division event runs in the
-  // structural phase AFTER swapAgentAttrs, so a write into the distinct sync-mode
-  // attrWrite buffer would be clobbered by the next step's primeAgentAttrWrite
-  // (read→write clone) — daughter reassignments silently vanished. The division
-  // event is a sequential single-agent function, so immediate (aliased) writes
-  // are the correct semantics; in async mode attrWrite === attrRead anyway.
-  for (const spec of s.attrSpecs) args.push(s.attrRead[spec.id]);
-  args.push(cachedModelAttrs, s.colors, activeViewer, cachedIndicators, rngState, stopFlag, GLYPH_NOOP_CODES, GLYPH_NOOP_COLORS, s.spriteIds, s.spriteFrames, s.spriteSpeeds, s.spriteRotations, s.spriteScales);
-  // PR3 FIX 1 — Lookup Tables (pinned slot, mirrors buildDivisionParams).
-  if (hasLookupTables) args.push(cachedInteractionTables);
-  // Closed feedback: the agent-accessible CELL field arrays (readAttrs[id], the
-  // CELL SoA — distinct from the agent s.attrRead) + grid dims. fieldSpecs mirrors
-  // the compiler's cellFieldAttrsOf (NOT s.attrSpecs, which is the AGENT set).
-  args.push(width, height, total, boundaryTreatment === 'torus' ? 1 : 0);
-  for (const spec of fieldSpecs) args.push(readAttrs[spec.id]);
-  // Trailing 3D block (B1) — pushed ONLY when 3D (NO forceZ; division reads
-  // forces, never writes them). MIRRORS buildDivisionParams's `is3d` block.
-  if (s.worldDepth > 1) args.push(s.z, s.vz, s.divideAxisZ, s.worldDepth);
-  return args;
+  // The division event's w_ block ALIASES attrRead (immediate writes in the
+  // sequential structural phase, which runs AFTER swapAgentAttrs) — the shared
+  // descriptor handles that per-kind (agentAbi.ts). NO forceZ in the 3D block
+  // (division reads forces, never writes them) — also in the descriptor.
+  const rt: AgentAbiRuntime = { ...agentAbiBaseRt(), hash: null, viewer: activeViewer, idx, daughterIndex, axisX, axisY };
+  return buildAgentAbiArgs('division', agentAbiShapeOfStore(s), s, rt);
 }
 
 /** Build the args for the compiled behaviourStep function. MIRRORS
@@ -1037,36 +1027,8 @@ function buildDivisionArgs(s: AgentStore, idx: number, daughterIndex: number, ax
  *  when `buildAgentLoopParams` pushes its 3D params under `is3dModel(model)`.
  *  `is3dModel(model) ⟺ s.worldDepth > 1` — edit BOTH together. */
 function buildAgentLoopArgs(s: AgentStore, viewerOverride?: string): unknown[] {
-  const hash = currentAgentHash;
-  const args: unknown[] = [
-    s.alive, s.highWater,
-    s.x, s.y, s.radius, s.targetRadius, s.age, s.lineage, s.bondCount, s.density,
-    s.vx, s.vy, s.forceX, s.forceY,
-    // spatial hash (null → _hashValid 0, the emit falls back to all-pairs)
-    hash ? 1 : 0,
-    hash ? hash.binStart : EMPTY_I32, hash ? hash.binAgents : EMPTY_I32,
-    hash ? hash.nBinsX : 0, hash ? hash.nBinsY : 0, hash ? hash.binSizeX : 1, hash ? hash.binSizeY : 1,
-    hash ? hash.originX : 0, hash ? hash.originY : 0,
-    s.divideRequest, s.divideAxisX, s.divideAxisY, s.divideAsym, s.killRequest,
-    s.bondPartner, s.bondPartnerEpoch, s.bondRestLength, s.bondStiffness, s.bondTypeLabel, s.maxBonds,
-    s.bondFormReq, s.bondFormL, s.bondFormK, s.bondBreakReq,
-  ];
-  for (const spec of s.attrSpecs) args.push(s.attrRead[spec.id]);
-  for (const spec of s.attrSpecs) args.push(s.attrWrite[spec.id]);
-  args.push(cachedModelAttrs, s.colors, viewerOverride ?? activeViewer, cachedIndicators, rngState, stopFlag, GLYPH_NOOP_CODES, GLYPH_NOOP_COLORS, s.spriteIds, s.spriteFrames, s.spriteSpeeds, s.spriteRotations, s.spriteScales);
-  // PR3 FIX 1 — Lookup Tables (pinned slot, mirrors buildAgentLoopParams).
-  if (hasLookupTables) args.push(cachedInteractionTables);
-  // Closed feedback (Phase D): the agent-accessible cell field arrays (readAttrs[id]
-  // = the CELL SoA sized total, distinct from the agent attrRead) + grid dims.
-  // fieldSpecs mirrors cellFieldAttrsOf (NOT s.attrSpecs, the AGENT set).
-  args.push(width, height, total, boundaryTreatment === 'torus' ? 1 : 0);
-  for (const spec of fieldSpecs) args.push(readAttrs[spec.id]);
-  // Trailing 3D block (B1) — pushed ONLY when 3D. MIRRORS buildAgentLoopParams's
-  // `is3d` block (z, vz, forceZ, divideAxisZ, worldDepth, then the Z hash dims so
-  // Get Nearby Agents can do a 3D query). When hash is null the 3D query is
-  // unreachable (_hashValid 0 → all-pairs), so the 1-fallbacks are unused.
-  if (s.worldDepth > 1) args.push(s.z, s.vz, s.forceZ, s.divideAxisZ, s.worldDepth, hash ? hash.nBinsZ : 1, hash ? hash.binSizeZ : 1, hash ? hash.originZ : 0);
-  return args;
+  const rt: AgentAbiRuntime = { ...agentAbiBaseRt(), hash: currentAgentHash, viewer: viewerOverride ?? activeViewer };
+  return buildAgentAbiArgs('loop', agentAbiShapeOfStore(s), s, rt);
 }
 
 /** Re-derive the clamped force-integration timestep from the live config.

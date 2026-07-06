@@ -18,6 +18,7 @@ const ENTRY = `
 export { createAgentStore, computeAgentMaxHashBins, buildSpatialHash, seedAgents } from '../src/simulator/engine/agentEngine.ts';
 export { compileAgentGraphWasmForModel, instantiateAgentWasm, buildAgentLayoutExtras, isAgentGraphWasmSupported } from '../src/modeler/vpl/compiler/agentWasm/compile.ts';
 export { compileAgentGraph } from '../src/modeler/vpl/compiler/compile.ts';
+export { buildAgentAbiArgs } from '../src/modeler/vpl/compiler/agentAbi.ts';
 export { migrateForHarness } from '../src/dev/compileHarness.ts';
 export { agentAttrsOf, cellFieldAttrsOf } from '../src/model/attributeScope.ts';
 export { resolveKeyLabels, normalizeLookupTable } from '../src/modeler/vpl/compiler/variegation.ts';
@@ -31,38 +32,28 @@ const m = await import(pathToFileURL(outPath).href);
 const {
   createAgentStore, computeAgentMaxHashBins, buildSpatialHash, seedAgents,
   compileAgentGraphWasmForModel, instantiateAgentWasm,
-  compileAgentGraph, migrateForHarness, agentAttrsOf, cellFieldAttrsOf,
+  compileAgentGraph, buildAgentAbiArgs, migrateForHarness, agentAttrsOf, cellFieldAttrsOf,
   resolveKeyLabels, normalizeLookupTable,
 } = m;
 
 const cbNum = (cfg, k, d) => { const v = cfg?.[k]; return typeof v === 'number' && Number.isFinite(v) ? v : d; };
 
-// Faithful copy of the worker's buildAgentLoopArgs (the ABI mirror).
+// STEP 0: the harness is now a CONSUMER of the shared ABI descriptor (agentAbi.ts)
+// — the SAME `buildAgentAbiArgs` the worker uses — instead of a 4th hand-copy that
+// could silently desync. So this parity run also verifies the descriptor-derived
+// loop args (the worker's `buildAgentLoopArgs` routes through the same function).
 function buildArgs(s, hash, ctx) {
-  const EMPTY_I32 = new Int32Array(0);
-  const args = [
-    s.alive, s.highWater,
-    s.x, s.y, s.radius, s.targetRadius, s.age, s.lineage, s.bondCount, s.density,
-    s.vx, s.vy, s.forceX, s.forceY,
-    hash ? 1 : 0,
-    hash ? hash.binStart : EMPTY_I32, hash ? hash.binAgents : EMPTY_I32,
-    hash ? hash.nBinsX : 0, hash ? hash.nBinsY : 0, hash ? hash.binSizeX : 1, hash ? hash.binSizeY : 1,
-    hash ? hash.originX : 0, hash ? hash.originY : 0,
-    s.divideRequest, s.divideAxisX, s.divideAxisY, s.divideAsym, s.killRequest,
-    s.bondPartner, s.bondPartnerEpoch, s.bondRestLength, s.bondStiffness, s.bondTypeLabel, s.maxBonds,
-    s.bondFormReq, s.bondFormL, s.bondFormK, s.bondBreakReq,
-  ];
-  for (const spec of s.attrSpecs) args.push(s.attrRead[spec.id]);
-  for (const spec of s.attrSpecs) args.push(s.attrWrite[spec.id]);
-  // NB spriteIds/Frames/Speeds/Rotations/Scales are ALWAYS threaded (the sprites
-  // milestone ABI) — omitting them shifts every trailing arg (_fieldW → height,
-  // the field arrays → undefined) and silently corrupts the JS side.
-  args.push(ctx.cachedModelAttrs, s.colors, ctx.activeViewer, ctx.cachedIndicators, ctx.rngState, ctx.stopFlag, ctx.GLYPH_NOOP_CODES, ctx.GLYPH_NOOP_COLORS, s.spriteIds, s.spriteFrames, s.spriteSpeeds, s.spriteRotations, s.spriteScales);
-  if (ctx.hasLookupTables) args.push(ctx.cachedInteractionTables);
-  args.push(ctx.width, ctx.height, ctx.total, ctx.torus ? 1 : 0);
-  for (const spec of ctx.fieldSpecs) args.push(ctx.readAttrs[spec.id]);
-  if (s.worldDepth > 1) args.push(s.z, s.vz, s.forceZ, s.divideAxisZ, s.worldDepth, hash ? hash.nBinsZ : 1, hash ? hash.binSizeZ : 1, hash ? hash.originZ : 0);
-  return args;
+  const shape = { is3d: s.worldDepth > 1, agentAttrs: s.attrSpecs, fieldAttrs: ctx.fieldSpecs, hasLookupTables: ctx.hasLookupTables };
+  const rt = {
+    hash, emptyI32: new Int32Array(0),
+    modelAttrs: ctx.cachedModelAttrs, viewer: ctx.activeViewer,
+    indicators: ctx.cachedIndicators, rngState: ctx.rngState, stopFlag: ctx.stopFlag,
+    glyphCodes: ctx.GLYPH_NOOP_CODES, glyphColors: ctx.GLYPH_NOOP_COLORS,
+    lookupTables: ctx.cachedInteractionTables,
+    width: ctx.width, height: ctx.height, total: ctx.total, torus: ctx.torus,
+    fieldArray: (id) => ctx.readAttrs[id],
+  };
+  return buildAgentAbiArgs('loop', shape, s, rt);
 }
 
 // Synthetic 3D-field parity vehicle — exercises ALL FIVE field-bridge nodes in 3D:
