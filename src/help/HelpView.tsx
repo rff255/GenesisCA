@@ -1195,6 +1195,28 @@ export function HelpView() {
             appears below, and a <strong>Cells / Agents</strong> tab strip appears above the
             graph canvas.
           </p>
+          <h3 className={styles.h3}>Agent Capability Profiles (show only what you use)</h3>
+          <p className={styles.p}>
+            The agent engine is <strong>composed from opt-in capability modules</strong>, so a
+            model shows only its paradigm&rsquo;s machinery instead of the whole morphogenesis
+            toolkit. In <strong>Properties &rarr; Agent Capabilities</strong> pick a{' '}
+            <strong>preset</strong> (Particle System, Boids, Vivarium, Morphogenesis, Social
+            Network, CA-on-Agents) or toggle individual capabilities &mdash; <strong>Motion</strong>{' '}
+            (Static / Velocity / Force), <strong>Body</strong>, <strong>Collision</strong>,{' '}
+            <strong>Bonds</strong> (Data edges / Physics springs), <strong>Growth</strong>,{' '}
+            <strong>Division</strong>, <strong>Lifespan</strong>, <strong>Population</strong>,{' '}
+            <strong>Sensing</strong>, <strong>Orientation</strong>, and{' '}
+            <strong>Field coupling</strong>. The palette, the <strong>Behaviour Step</strong>{' '}
+            output ports, and the agent Edit/inspector panels then filter to what&rsquo;s enabled &mdash;
+            a social-graph author never sees <code>radius</code>, <code>force</code>, or{' '}
+            <strong>Divide Agent</strong>. Dependencies resolve automatically (enabling
+            <strong> Collision</strong> auto-enables <strong>Body</strong>; <strong>Bonds =
+            Physics</strong> needs <strong>Motion = Force</strong>), and a live{' '}
+            <strong>per-agent footprint</strong> readout shows the memory cost of each choice.
+            Existing models load with a tight, honest profile inferred from what their graph
+            actually uses. <em>(In this release the profile drives the editor surface; it does
+            not yet change what the engine allocates at run time.)</em>
+          </p>
           <h3 className={styles.h3}>The Two-Graph Workflow (Cells vs Agents)</h3>
           <p className={styles.p}>
             With Agents on you author <strong>two rule graphs</strong> behind the same editor,
