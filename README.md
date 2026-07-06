@@ -1,4 +1,4 @@
-# GenesisCA <sup>v1.24.0</sup>
+# GenesisCA <sup>v1.25.0</sup>
 
 An IDE for modeling and simulating Cellular Automata, built as a self-contained browser application.
 
