@@ -95,7 +95,17 @@ export function resolveMaxBonds(cfg: CenterBasedConfig | undefined | null): numb
   // arrays are RAGGED (`maxAgents·maxBonds`), the compiled per-agent code loops
   // `b < bondCount[idx]` (= 0 when no bonds form) and never indexes the 0-length
   // store, so this is byte-identical output for any model that forms no bonds.
-  if (cfg?.agentCapabilities?.bonds === 'off') return 0;
+  //
+  // SAFETY NET (self-review): the store is dropped to 0 only when NO bonds are
+  // intended — the profile's Bonds is off AND the engine's auto-bond won't form
+  // any (`useBondingPhysics` + `autoBond`). Without the auto-bond clause a user who
+  // turns on the legacy "Use bonding physics" + "Auto-bond" checkboxes while the
+  // (separately-edited) profile still reads `bonds: 'off'` would get 0 → auto-bond
+  // SILENTLY never fires. A collision-only physics model (soft-sphere, no auto-bond,
+  // no bond nodes) still gets the memory win (bonds off + autoBond false).
+  const bondsIntended = cfg?.agentCapabilities?.bonds !== 'off'
+    || (usesBondingPhysics(cfg) && !!cfg?.autoBond);
+  if (!bondsIntended) return 0;
   return Math.max(0, Math.floor(cbNum(cfg, 'maxBonds')));
 }
 

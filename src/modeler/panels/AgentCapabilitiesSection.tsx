@@ -100,7 +100,15 @@ export function AgentCapabilitiesSection({
               <div key={k}>
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
                   <span style={{ fontSize: '0.72rem', color: '#ddd' }}>{row.label}</span>
-                  <select value={profile.bonds} onChange={e => edit('bonds', e.target.value as BondsMode)} style={selStyle}>
+                  <select value={profile.bonds} onChange={e => {
+                    const v = e.target.value as BondsMode;
+                    const next = applyCapabilityEdit(profile, 'bonds', v);
+                    // Bonds below Physics can't auto-bond (auto-bond forms physics
+                    // springs), so clear the legacy autoBond checkbox to keep the two
+                    // controls consistent AND let the memory gate (resolveMaxBonds)
+                    // actually drop the store.
+                    updateCenterBased(v === 'physics' ? { agentCapabilities: next } : { agentCapabilities: next, autoBond: false });
+                  }} style={selStyle}>
                     <option value="off">Off</option><option value="data">Data (edges)</option><option value="physics">Physics (springs)</option>
                   </select>
                 </div>{hint}
