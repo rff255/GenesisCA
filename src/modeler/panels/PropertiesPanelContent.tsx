@@ -12,6 +12,7 @@ import type { CenterBasedNumericKey } from '../../model/centerBased';
 import { isAgentGraphWasmSupported } from '../vpl/compiler/agentWasm/compile';
 import { isAgentGraphWebGPUSupported } from '../vpl/compiler/agentWebgpu/compile';
 import { AgentCapabilitiesSection } from './AgentCapabilitiesSection';
+import { resolveAgentProfile, applyCapabilityEdit } from '../../model/agentCapabilities';
 import styles from './PanelContent.module.css';
 
 function newCondId(): string {
@@ -577,7 +578,17 @@ export function PropertiesPanelContent({ mode = 'list' }: PanelContentProps = {}
                   {Row('Growth Rate', NF('growthRate', { min: 0, step: 0.01 }), 'Radius units/step toward the target radius.')}
                   <div style={{ fontSize: '0.6rem', color: '#888', textTransform: 'uppercase', letterSpacing: '0.05em', margin: '8px 0 4px' }}>Bonds</div>
                   <label style={{ display: 'flex', alignItems: 'flex-start', gap: 6, cursor: 'pointer', fontSize: '0.72rem', marginBottom: 6 }}>
-                    <input type="checkbox" checked={!!cb?.autoBond} onChange={e => updateCenterBased({ autoBond: e.target.checked })} style={{ marginTop: 2 }} />
+                    <input type="checkbox" checked={!!cb?.autoBond} onChange={e => {
+                      const on = e.target.checked;
+                      // Auto-bond FORMS bonds, so reconcile the Agent Capability
+                      // profile — turning it on sets Bonds = Physics so the profile
+                      // isn't left 'off' (which drops the bond store and would
+                      // SILENTLY disable auto-bonding, and would hide the bond palette
+                      // nodes). Keeps the two overlapping panel controls consistent.
+                      updateCenterBased(on
+                        ? { autoBond: true, agentCapabilities: applyCapabilityEdit(resolveAgentProfile(model), 'bonds', 'physics') }
+                        : { autoBond: false });
+                    }} style={{ marginTop: 2 }} />
                     <span><strong>Auto-bond by distance</strong><br /><span style={{ color: '#888', fontSize: '0.66rem' }}>Bond agents within the form distance; break past the break distance (hysteresis). The simplest path to a glued cluster.</span></span>
                   </label>
                   {Row('Bond Stiffness λ', NF('bondStiffness', { min: 0, step: 0.1 }))}

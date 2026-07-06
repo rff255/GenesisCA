@@ -39,6 +39,25 @@ for (const f of readdirSync(P).filter(x => x.endsWith('.gcaproj'))) {
   n++;
   if (!okEff || !okStore) { fail++; console.log(`  ✗ ${f}: bonds=${prof.bonds} cfgMB=${cfgMB} effMB=${effMB} bondBytes=${bondBytes}`); }
 }
-console.log(`\n${fail === 0 ? 'BOND-ALLOCATION GATE ✓' : `${fail} FAILED ✗`}  (${n} agent samples)`);
+
+// Safety-net regression (self-review): a profile that reads bonds='off' but whose
+// config turns on the legacy "Use bonding physics" + "Auto-bond" checkboxes must
+// STILL allocate the bond store (else auto-bonding silently never fires). A
+// collision-only physics config (no auto-bond) keeps the memory win.
+const R = m.resolveMaxBonds;
+const cases = [
+  { cfg: { agentCapabilities: { bonds: 'off' }, maxBonds: 8, useBondingPhysics: true, autoBond: true }, expect: 8, why: 'bonds=off + useBondingPhysics + autoBond => store allocated (no silent auto-bond failure)' },
+  { cfg: { agentCapabilities: { bonds: 'off' }, maxBonds: 8, useBondingPhysics: true, autoBond: false }, expect: 0, why: 'bonds=off + physics-collision-only (no autoBond) => memory win kept' },
+  { cfg: { agentCapabilities: { bonds: 'off' }, maxBonds: 8, customForcesOnly: true, autoBond: false }, expect: 0, why: 'bonds=off + pure custom forces => memory win kept' },
+  { cfg: { agentCapabilities: { bonds: 'physics' }, maxBonds: 8, useBondingPhysics: true, autoBond: true }, expect: 8, why: 'bonds=physics => store allocated' },
+  { cfg: { agentCapabilities: { bonds: 'data' }, maxBonds: 8 }, expect: 8, why: 'bonds=data (edges) => store allocated' },
+];
+for (const c of cases) {
+  const got = R(c.cfg);
+  n++;
+  if (got !== c.expect) { fail++; console.log(`  x ${c.why}: expected ${c.expect} got ${got}`); }
+}
+
+console.log(`\n${fail === 0 ? 'BOND-ALLOCATION GATE ✓' : `${fail} FAILED ✗`}  (${n} checks)`);
 rmSync(ep, { force: true }); rmSync(dir, { recursive: true, force: true });
 process.exit(fail === 0 ? 0 : 1);

@@ -1017,7 +1017,10 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       ...(model.agentAttributes ?? []).filter(a => a.type !== 'color' && a.type !== 'lookupTable'),
       ...geom,
     ];
-  }, [model.agentAttributes, model.centerBased, model.topologyMode, is3D]);
+    // agentGraphNodes/macroDefs are deps because resolveAgentProfile falls back to
+    // inferAgentProfile (which scans them) when the profile isn't explicit — keeps
+    // this in lockstep with the sibling `agentCapProfile` memo.
+  }, [model.agentAttributes, model.centerBased, model.topologyMode, model.agentGraphNodes, model.macroDefs, is3D]);
   // Resolved Agent Capability Profile (null for non-agent models) — used to gate
   // the inspector-popover geometry rows to the enabled capabilities.
   const agentCapProfile = useMemo(
