@@ -374,15 +374,14 @@ function CaNodeComponent({ id, data }: NodeProps) {
 
   // Vector stored attribute / variable: flip the value port to the composite
   // `vector` type so its HANDLE renders teal (portHandleClass) and the connection
-  // highlight/validation agree. Mirrors effectivePorts.getEffectivePorts (which the
-  // drag/drop + drop-menu layer reads) + isValidConnection — one rule via
-  // vectorPortDims. The inline number widget is dropped (a vector isn't a scalar).
-  if (nodeData.nodeType === 'getCellAttribute' || nodeData.nodeType === 'getVariable'
-    || nodeData.nodeType === 'setAttribute' || nodeData.nodeType === 'setVariable') {
-    if (vectorPortDims(nodeData.nodeType, nodeData.config, model)) {
-      inputPorts = inputPorts.map(p => (p.id === 'value' ? { ...p, dataType: 'vector' as const, inlineWidget: undefined } : p));
-      outputPorts = outputPorts.map(p => (p.id === 'value' ? { ...p, dataType: 'vector' as const } : p));
-    }
+  // highlight/validation agree. Covers the own Get/Set, the neighbour reads, the
+  // by-id agent read/write, the neighbour writes, and Get/Set Variable — one rule
+  // via vectorPortDims (null for every other node type, so calling it generically is
+  // precise). Mirrors effectivePorts.getEffectivePorts (drag/drop + drop-menu) +
+  // isValidConnection. The inline number widget is dropped (a vector isn't a scalar).
+  if (vectorPortDims(nodeData.nodeType, nodeData.config, model)) {
+    inputPorts = inputPorts.map(p => (p.id === 'value' ? { ...p, dataType: 'vector' as const, inlineWidget: undefined } : p));
+    outputPorts = outputPorts.map(p => (p.id === 'value' ? { ...p, dataType: 'vector' as const } : p));
   }
 
   // Switch: dynamic ports based on mode + caseCount
@@ -2919,11 +2918,12 @@ function CaNodeComponent({ id, data }: NodeProps) {
           }
         }
 
-        // Set Variable to a VECTOR variable: no inline scalar widget (the value is
-        // a composite `vector` wired from Make Vector). setAttribute is already
-        // covered by the attr-type swap above; setVariable resolves via variableId.
-        if (nodeData.nodeType === 'setVariable' && port.id === 'value'
-          && vectorPortDims('setVariable', nodeData.config, model)) {
+        // Any set node whose `value` port carries a VECTOR attr/var: no inline scalar
+        // widget (the value is a composite `vector` wired from Make Vector). Covers
+        // setVariable / setAgentAttribute (+ setAttribute / setNeighbor* which the
+        // attr-type swap above already drops for a vector). vectorPortDims is null for
+        // every non-vector case, so this is precise.
+        if (port.id === 'value' && vectorPortDims(nodeData.nodeType, nodeData.config, model)) {
           effectiveWidget = undefined;
         }
 

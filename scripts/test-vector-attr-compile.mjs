@@ -13,7 +13,9 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const ENTRY = `
 export { compileGraph, compileAgentGraph } from '../src/modeler/vpl/compiler/compile.ts';
 export { compileGraphWasm } from '../src/modeler/vpl/compiler/wasm/compile.ts';
+export { compileGraphWebGPU } from '../src/modeler/vpl/compiler/webgpu/compile.ts';
 export { computeLayoutFromModel, buildViewerIds } from '../src/modeler/vpl/compiler/wasm/layout.ts';
+export { lowerVectorAttrs, VECTOR_LOWERED } from '../src/modeler/vpl/compiler/vectorAttr.ts';
 export { migrateForHarness } from '../src/dev/compileHarness.ts';
 `;
 const dir = mkdtempSync(join(tmpdir(), 'gca-vac-'));
@@ -164,6 +166,168 @@ console.log(`${fail === 0 ? 'VECTOR-ATTR JS CELL COMPILE ✓' : `${fail} CELL FA
   console.log(`VECTOR-ATTR WASM CELL COMPILE ${fail === 0 ? '✓' : '✗'}${resW.error ? ' — ' + resW.error : ''}`);
 }
 
+// ── TIER A: neighbour READ of a vector cell attr (getNeighborAttributeByIndex) on
+// ALL THREE targets. The shared NI index fans out to BOTH component readers. ───────
+{
+  const NN = [], NE = [];
+  const nn = (t, c = {}) => { const n = { id: nid('nr'), type: 'caNode', position: { x: 0, y: 0 }, data: { nodeType: t, config: c } }; NN.push(n); return n; };
+  const ne = (s, sp, tt, tp, cat) => NE.push({ id: nid('e'), source: s.id, target: tt.id, sourceHandle: `output_${cat}_${sp}`, targetHandle: `input_${cat}_${tp}` });
+  const stp = nn('step');
+  const nifo = nn('neighborIndexFromOffset', { _port_dr: '0', _port_dc: '1' });
+  const getN = nn('getNeighborAttributeByIndex', { attributeId: 'flow' });
+  const bvN = nn('breakVector');
+  const setOut = nn('setAttribute', { attributeId: 'outX' });
+  ne(stp, 'do', setOut, 'do', 'flow');
+  ne(nifo, 'value', getN, 'index', 'value');
+  ne(getN, 'value', bvN, 'vector', 'value');
+  ne(bvN, 'x', setOut, 'value', 'value');
+  const rawN = {
+    schemaVersion: 1,
+    properties: { name: 'VecNbr', dimension: '2d', gridWidth: 8, gridHeight: 8, gridDepth: 1, topology: '2d-grid', boundaryTreatment: 'torus', updateMode: 'synchronous' },
+    attributes: [
+      { id: 'flow', name: 'Flow', type: 'vector', vectorDims: 2, description: '', isModelAttribute: false, defaultValue: '2,3' },
+      { id: 'outX', name: 'OutX', type: 'float', description: '', isModelAttribute: false, defaultValue: '0' },
+    ],
+    modelAttributes: [], neighborhoods: [], variables: [], indicators: [], mappings: [],
+    graphNodes: NN, graphEdges: NE, macroDefs: [],
+  };
+  const mN = m.migrateForHarness(rawN);
+  const rj = m.compileGraph(mN.graphNodes, mN.graphEdges, mN);
+  const nc = (n, c) => { if (!c) { fail++; console.log('FAIL nbr-read ' + n); } };
+  if (rj.error) { console.log('NBR-READ JS ERROR: ' + rj.error); fail++; }
+  const jc = rj.stepCode || '';
+  nc('reads r_flow_vx (component, not bare vector)', /r_flow_vx\[/.test(jc));
+  nc('no bare r_flow read', !/r_flow\[/.test(jc));
+  nc('no vector node name leak', !/getVectorAttribute|setVectorAttribute/.test(jc));
+  // WASM + WebGPU compile clean.
+  const lay = m.computeLayoutFromModel(mN), vids = m.buildViewerIds(mN);
+  const rw = m.compileGraphWasm(mN.graphNodes, mN.graphEdges, mN, lay, vids);
+  nc('WASM compiles', !rw.error && rw.bytes.length > 8);
+  nc('WASM layout has flow_vx/_vy, no bare flow', ('flow_vx' in lay.attrReadOffset) && ('flow_vy' in lay.attrReadOffset) && !('flow' in lay.attrReadOffset));
+  const rg = m.compileGraphWebGPU(mN.graphNodes, mN.graphEdges, mN);
+  nc('WebGPU compiles', !rg.error && (rg.shaderCode || '').length > 8);
+  console.log(`VECTOR NBR-READ (getNeighborAttributeByIndex) 3-TARGET ${fail === 0 ? '✓' : '✗'}${rw.error ? ' wasm:' + rw.error : ''}${rg.error ? ' webgpu:' + rg.error : ''}`);
+}
+
+// ── TIER A: neighbour WRITE of a vector cell attr (setNeighborAttributeByIndex),
+// ASYNC (JS + WASM; WebGPU rejects async). breakVector + a component-write chain. ──
+{
+  const WN = [], WE = [];
+  const wn = (t, c = {}) => { const n = { id: nid('nw'), type: 'caNode', position: { x: 0, y: 0 }, data: { nodeType: t, config: c } }; WN.push(n); return n; };
+  const we = (s, sp, tt, tp, cat) => WE.push({ id: nid('e'), source: s.id, target: tt.id, sourceHandle: `output_${cat}_${sp}`, targetHandle: `input_${cat}_${tp}` });
+  const stp = wn('step');
+  const nifo = wn('neighborIndexFromOffset', { _port_dr: '0', _port_dc: '1' });
+  const mkv = wn('makeVector', { _port_x: '5', _port_y: '6' });
+  const setN = wn('setNeighborAttributeByIndex', { attributeId: 'flow' });
+  we(stp, 'do', setN, 'do', 'flow');
+  we(nifo, 'value', setN, 'index', 'value');
+  we(mkv, 'vector', setN, 'value', 'value');
+  const rawW = {
+    schemaVersion: 1,
+    properties: { name: 'VecNbrW', dimension: '2d', gridWidth: 8, gridHeight: 8, gridDepth: 1, topology: '2d-grid', boundaryTreatment: 'torus', updateMode: 'asynchronous', asyncScheme: 'random-order' },
+    attributes: [{ id: 'flow', name: 'Flow', type: 'vector', vectorDims: 2, description: '', isModelAttribute: false, defaultValue: '0,0' }],
+    modelAttributes: [], neighborhoods: [], variables: [], indicators: [], mappings: [],
+    graphNodes: WN, graphEdges: WE, macroDefs: [],
+  };
+  const mW = m.migrateForHarness(rawW);
+  const rj = m.compileGraph(mW.graphNodes, mW.graphEdges, mW);
+  const wc = (n, c) => { if (!c) { fail++; console.log('FAIL nbr-write ' + n); } };
+  if (rj.error) { console.log('NBR-WRITE JS ERROR: ' + rj.error); fail++; }
+  const jc = rj.stepCode || '';
+  wc('writes w_flow_vx = 5', /w_flow_vx\[[^\]]*\]\s*=\s*5\b/.test(jc));
+  wc('writes w_flow_vy = 6', /w_flow_vy\[[^\]]*\]\s*=\s*6\b/.test(jc));
+  wc('no bare w_flow write', !/w_flow\[/.test(jc));
+  const lay = m.computeLayoutFromModel(mW), vids = m.buildViewerIds(mW);
+  const rw = m.compileGraphWasm(mW.graphNodes, mW.graphEdges, mW, lay, vids);
+  wc('WASM compiles', !rw.error && rw.bytes.length > 8);
+  console.log(`VECTOR NBR-WRITE (setNeighborAttributeByIndex) JS+WASM ${fail === 0 ? '✓' : '✗'}${rw.error ? ' wasm:' + rw.error : ''}`);
+}
+
+// ── TIER A: by-id AGENT read of a vector agent attr (getAgentAttribute), on the
+// agent behaviour graph. The shared agent id fans out to both component readers. ───
+{
+  const GN = [], GE = [];
+  const gn = (t, c = {}) => { const n = { id: nid('ag'), type: 'caNode', position: { x: 0, y: 0 }, data: { nodeType: t, config: c } }; GN.push(n); return n; };
+  const ge = (s, sp, tt, tp, cat) => GE.push({ id: nid('e'), source: s.id, target: tt.id, sourceHandle: `output_${cat}_${sp}`, targetHandle: `input_${cat}_${tp}` });
+  const bs = gn('behaviourStep');
+  const self = gn('getSelfHandle');
+  const getA = gn('getAgentAttribute', { attributeId: 'facing' });
+  const bvA = gn('breakVector');
+  const setA = gn('setAttribute', { attributeId: 'mag' });
+  ge(bs, 'do', setA, 'do', 'flow');
+  ge(self, 'value', getA, 'agentId', 'value');
+  ge(getA, 'value', bvA, 'vector', 'value');
+  ge(bvA, 'x', setA, 'value', 'value');
+  const rawG = {
+    schemaVersion: 1,
+    properties: { name: 'VecAgentById', dimension: '2d', gridWidth: 8, gridHeight: 8, gridDepth: 1, topology: '2d-grid', boundaryTreatment: 'torus' },
+    topologyMode: { gridCells: false, agents: true },
+    centerBased: { enabled: true, maxAgents: 50, maxBonds: 0, worldWidth: 8, worldHeight: 8, defaultRadius: 0.5, agentTarget: 'js', agentUpdateMode: 'async', agentCapabilities: { motion: 'force', body: true } },
+    attributes: [], modelAttributes: [], neighborhoods: [], variables: [], indicators: [], mappings: [],
+    agentAttributes: [
+      { id: 'facing', name: 'Facing', type: 'vector', vectorDims: 2, description: '', isModelAttribute: false, defaultValue: '1,0' },
+      { id: 'mag', name: 'Mag', type: 'float', description: '', isModelAttribute: false, defaultValue: '0' },
+    ],
+    agentVariables: [],
+    graphNodes: [], graphEdges: [], agentGraphNodes: GN, agentGraphEdges: GE, macroDefs: [],
+  };
+  const mG = m.migrateForHarness(rawG);
+  const rA = m.compileAgentGraph(mG.agentGraphNodes, mG.agentGraphEdges, mG);
+  const gc = (n, c) => { if (!c) { fail++; console.log('FAIL agent-by-id ' + n); } };
+  if (rA.error) { console.log('AGENT-BY-ID ERROR: ' + rA.error); fail++; }
+  const bc = rA.behaviourCode || '';
+  gc('reads r_facing_vx (component, not bare vector)', /r_facing_vx\[/.test(bc));
+  gc('no bare r_facing read', !/r_facing\[/.test(bc));
+  console.log(`VECTOR AGENT-BY-ID READ (getAgentAttribute) ${fail === 0 ? '✓' : '✗'}`);
+}
+
+// ── Direct transform unit tests: the getNeighborAttributeByTag _resolvedTagIndex
+// bake (WASM/WebGPU have no tag pre-pass) + moveSelfToNeighbor slot expansion. ──────
+{
+  const dc = (n, c) => { if (!c) { fail++; console.log('FAIL transform ' + n); } };
+  // getNeighborAttributeByTag → component readers with the tag index baked (index 1).
+  const tagModel = m.migrateForHarness({
+    schemaVersion: 1,
+    properties: { name: 'T', dimension: '2d', gridWidth: 8, gridHeight: 8, gridDepth: 1, topology: '2d-grid', boundaryTreatment: 'torus', updateMode: 'synchronous' },
+    attributes: [{ id: 'flow', name: 'F', type: 'vector', vectorDims: 2, description: '', isModelAttribute: false, defaultValue: '0,0' }],
+    modelAttributes: [],
+    neighborhoods: [{ id: 'nb', name: 'NB', description: '', margin: 2, includeCentralCell: false, coords: [[-1, 0], [0, 1]], tags: { 1: 'up' } }],
+    variables: [], indicators: [], mappings: [], graphNodes: [], graphEdges: [], macroDefs: [],
+  });
+  const tagNode = { id: 'gt1', type: 'caNode', position: { x: 0, y: 0 }, data: { nodeType: 'getNeighborAttributeByTag', config: { neighborhoodId: 'nb', attributeId: 'flow', tagName: 'up' } } };
+  const lo = m.lowerVectorAttrs([tagNode], [], tagModel);
+  const tagReaders = lo.nodes.filter(n => n.data.nodeType === 'getNeighborAttributeByTag');
+  dc('tag read lowered to 2 component readers', tagReaders.length === 2);
+  dc('component readers carry neighborhoodId + tagName', tagReaders.every(n => n.data.config.neighborhoodId === 'nb' && n.data.config.tagName === 'up'));
+  dc('_resolvedTagIndex baked (=1) on both readers', tagReaders.every(n => n.data.config._resolvedTagIndex === 1));
+  dc('readers reference flow_vx / flow_vy', tagReaders.map(n => n.data.config.attributeId).sort().join(',') === 'flow_vx,flow_vy');
+  dc('a makeVector was synthesized', lo.nodes.some(n => n.data.nodeType === 'makeVector'));
+
+  // moveSelfToNeighbor slot expansion: 1 vector slot → 2 component slots.
+  const mvModel = m.migrateForHarness({
+    schemaVersion: 1,
+    properties: { name: 'MV', dimension: '2d', gridWidth: 8, gridHeight: 8, gridDepth: 1, topology: '2d-grid', boundaryTreatment: 'torus', updateMode: 'asynchronous', asyncScheme: 'random-order' },
+    attributes: [
+      { id: 'flow', name: 'F', type: 'vector', vectorDims: 2, description: '', isModelAttribute: false, defaultValue: '4,9' },
+      { id: 'cnt', name: 'C', type: 'integer', description: '', isModelAttribute: false, defaultValue: '7' },
+    ],
+    modelAttributes: [], neighborhoods: [], variables: [], indicators: [], mappings: [], graphNodes: [], graphEdges: [], macroDefs: [],
+  });
+  const moveNode = { id: 'mv1', type: 'caNode', position: { x: 0, y: 0 }, data: { nodeType: 'moveSelfToNeighbor', config: { payloadCount: 2, attr_0: 'flow', attr_1: 'cnt', operation: 'copyTo', nonReceiving: 'defaults' } } };
+  const lm = m.lowerVectorAttrs([moveNode], [], mvModel);
+  const mvOut = lm.nodes.find(n => n.data.nodeType === 'moveSelfToNeighbor');
+  dc('moveSelfToNeighbor cloned (not the original object)', mvOut && mvOut !== moveNode);
+  dc('original move config unmutated (still payloadCount 2, attr_0 flow)', moveNode.data.config.payloadCount === 2 && moveNode.data.config.attr_0 === 'flow');
+  dc('expanded to payloadCount 3', mvOut.data.config.payloadCount === 3);
+  dc('slots = flow_vx, flow_vy, cnt', [mvOut.data.config.attr_0, mvOut.data.config.attr_1, mvOut.data.config.attr_2].join(',') === 'flow_vx,flow_vy,cnt');
+  dc('_attr defaults baked (4, 9, 7)', mvOut.data.config._attr_0_default === '4' && mvOut.data.config._attr_1_default === '9' && mvOut.data.config._attr_2_default === '7');
+
+  // The refined validation set: getCellAttribute lowered, getNeighborsAttribute NOT.
+  dc('VECTOR_LOWERED includes the newly-lowered nodes', ['getNeighborAttributeByIndex', 'getNeighborAttributeByTag', 'getAgentAttribute', 'setNeighborAttributeByIndex', 'setNeighborhoodAttribute', 'setAgentAttribute', 'moveSelfToNeighbor'].every(t => m.VECTOR_LOWERED.has(t)));
+  dc('VECTOR_LOWERED excludes array-of-vectors / updateAttribute', !m.VECTOR_LOWERED.has('getNeighborsAttribute') && !m.VECTOR_LOWERED.has('getAgentsAttribute') && !m.VECTOR_LOWERED.has('filterNeighbors') && !m.VECTOR_LOWERED.has('updateAttribute'));
+  console.log(`VECTOR TRANSFORM UNIT (tag-index bake + move slots + VECTOR_LOWERED) ${fail === 0 ? '✓' : '✗'}`);
+}
+
 rmSync(dir, { recursive: true, force: true });
-console.log(`\n${fail === 0 ? 'ALL JS+WASM VECTOR-ATTR COMPILE CHECKS ✓' : `${fail} FAILED`}`);
+console.log(`\n${fail === 0 ? 'ALL JS+WASM+WEBGPU VECTOR-ATTR COMPILE CHECKS ✓' : `${fail} FAILED`}`);
 process.exit(fail === 0 ? 0 : 1);

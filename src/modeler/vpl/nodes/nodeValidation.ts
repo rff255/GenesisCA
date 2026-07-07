@@ -7,6 +7,7 @@ import { getNodeDef } from './registry';
 import { CURRENT_VIEWER_SENTINEL } from './SetCellLooksNode';
 import { buildVarMap, parseExpression, clampVisibleCount } from '../compiler/expression/parser';
 import { getActiveGraphKind } from '../graphState';
+import { VECTOR_LOWERED } from '../compiler/vectorAttr';
 
 /** Return a list of human-readable issue strings for a node's configuration.
  *  Empty array = node is fully configured.
@@ -39,29 +40,27 @@ export function detectMissingConfig(
       || connectedHandles.has(`input_flow_${portId}`);
   };
 
-  // A stored `vector` attribute is lowered (the OWN cell/agent Get/Set) into
-  // per-component Make/Break Vector before compile — but ONLY for getCellAttribute /
-  // setAttribute (getVariable/setVariable go via variableId). Any OTHER node that
+  // A stored `vector` attribute is LOWERED (into per-component Make/Break Vector, or
+  // config-slot expansion for moveSelfToNeighbor) before compile for every node in
+  // `VECTOR_LOWERED` — the own Get/Set, the neighbour reads, the by-id agent
+  // read/write, the neighbour writes, and moveSelfToNeighbor. Any OTHER node that
   // references a vector attribute is NOT lowered: it emits `r_<id>[…]` / `w_<id>[…]`
   // against the component-expanded buffer that has no `<id>` array, so the step
   // crashes at run time with `r_<id>/w_<id> is not defined`. Surface it as a badge
-  // here so the user sees it in the modeler instead. (v1 limitation — read a vector
-  // via Get Cell Attribute + Break Vector, or extend lowerVectorAttrs.) The check
-  // covers both the common `config.attributeId` key (neighbour reads, updateAttribute,
-  // the by-id agent read/write/aggregate nodes) AND moveSelfToNeighbor's per-slot
-  // `attr_${i}` payload keys (Transfer Cell Attributes to Neighbor).
-  if (nodeType !== 'getCellAttribute' && nodeType !== 'setAttribute') {
+  // here so the user sees it in the modeler instead. These are the shapes with no
+  // vector representation: array-of-vectors reads (`getNeighborsAttribute` /
+  // `getAgentsAttribute` / `getNeighborsAttrByIndexes`), `filterNeighbors` (scalar
+  // comparison), `updateAttribute` (inc/dec/max/min undefined on a vector), and the
+  // field-bridge nodes — read this one via Get Cell Attribute + Break Vector instead.
+  // The check covers both the common `config.attributeId` key AND moveSelfToNeighbor's
+  // per-slot `attr_${i}` payload keys (but moveSelfToNeighbor IS lowered, so it's
+  // exempt via VECTOR_LOWERED).
+  if (!VECTOR_LOWERED.has(nodeType)) {
     const isVectorAttrId = (id: unknown): boolean =>
       typeof id === 'string' && !!id &&
       [...model.attributes, ...(model.agentAttributes ?? [])].some(x => x.id === id && x.type === 'vector');
-    // Collect every config key on this node that names an attribute.
-    const refIds: unknown[] = [config.attributeId];
-    if (nodeType === 'moveSelfToNeighbor') {
-      const slots = Math.max(0, Number(config.payloadCount) || 0);
-      for (let i = 0; i < slots; i++) refIds.push(config[`attr_${i}`]);
-    }
-    if (refIds.some(isVectorAttrId)) {
-      issues.push('Vector attributes are only readable/writable by Get/Set (Self) Attribute in v1 — read this one via Get Cell Attribute + Break Vector.');
+    if (isVectorAttrId(config.attributeId)) {
+      issues.push('This node can’t read/write a Vector attribute — read it via Get (Self) Attribute + Break Vector (or Get Neighbor Attr / Get Agent Attribute for a neighbour/agent), then wire the components.');
     }
   }
 
