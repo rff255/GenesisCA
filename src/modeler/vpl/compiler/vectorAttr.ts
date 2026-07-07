@@ -116,6 +116,31 @@ export function hasVectorAttrs(attrs: readonly Attribute[]): boolean {
   return attrs.some(a => a.type === 'vector');
 }
 
+/** The UNIFIED type-driven port rule: when an EXISTING Get/Set Attribute or Get/Set
+ *  Variable node has a VECTOR attr/var picked, its `value` port is a `vector` port
+ *  (and it lowers to Make/Break Vector). Returns the component count, or null for a
+ *  scalar (the port stays scalar). Shared by effectivePorts + isValidConnection +
+ *  CaNode so the editor + validator + render agree. Ids are globally unique, so the
+ *  cell/agent scope is looked up together. */
+export function vectorPortDims(
+  nodeType: string,
+  config: Record<string, unknown> | undefined,
+  model: Pick<CAModel, 'attributes' | 'agentAttributes' | 'variables' | 'agentVariables'> | undefined | null,
+): 2 | 3 | null {
+  if (!model || !config) return null;
+  if (nodeType === 'getCellAttribute' || nodeType === 'setAttribute') {
+    const id = config.attributeId;
+    const a = [...(model.attributes ?? []), ...(model.agentAttributes ?? [])].find(x => x.id === id && x.type === 'vector');
+    return a ? vectorDimsOf(a) : null;
+  }
+  if (nodeType === 'getVariable' || nodeType === 'setVariable') {
+    const id = config.variableId;
+    const v = [...(model.variables ?? []), ...(model.agentVariables ?? [])].find(x => x.id === id && x.dataType === 'vector');
+    return v ? vectorDimsOf(v) : null;
+  }
+  return null;
+}
+
 /** Lower each `vector` scalar VARIABLE into its `vectorDimsOf` scalar-`float`
  *  component variables (`<id>_vx/_vy[/_vz]`) — the Local-Variable analogue of
  *  `expandVectorAttributes`. `initialValue` ("x,y[,z]") splits per component. So a
@@ -169,13 +194,14 @@ const AXES = ['x', 'y', 'z'];
 export function lowerVectorAttrs(
   nodes: GraphNode[], edges: GraphEdge[], model: CAModel,
 ): { nodes: GraphNode[]; edges: GraphEdge[]; model: CAModel } {
-  const VEC_NODE_TYPES = new Set(['getVectorAttribute', 'setVectorAttribute', 'getVectorVariable', 'setVectorVariable']);
   const anyVecAttr = hasVectorAttrs(model.attributes ?? []) || hasVectorAttrs(model.agentAttributes ?? []);
   const anyVecVar = (model.variables ?? []).some(v => v.dataType === 'vector') || (model.agentVariables ?? []).some(v => v.dataType === 'vector');
-  const hasVecNodes = nodes.some(n => VEC_NODE_TYPES.has(n.data.nodeType));
-  if (!anyVecAttr && !anyVecVar && !hasVecNodes) return { nodes, edges, model };
+  if (!anyVecAttr && !anyVecVar) return { nodes, edges, model };
 
-  // Vector def dims by id (both scopes) — for a Get/Set Vector node's component ids.
+  // Vector def dims by id (both scopes). Unified design: the EXISTING Get/Set
+  // Attribute + Get/Set Variable nodes are vector-aware — when the picked attr/var
+  // is a vector, they lower here (and effectivePorts/isValidConnection make their
+  // value port a `vector` port). No dedicated Get/Set Vector node types.
   const vecAttrDims = new Map<string, number>();
   for (const a of model.attributes ?? []) if (a.type === 'vector') vecAttrDims.set(a.id, vectorDimsOf(a));
   for (const a of model.agentAttributes ?? []) if (a.type === 'vector') vecAttrDims.set(a.id, vectorDimsOf(a));
@@ -183,17 +209,15 @@ export function lowerVectorAttrs(
   for (const v of model.variables ?? []) if (v.dataType === 'vector') vecVarDims.set(v.id, vectorDimsOf(v));
   for (const v of model.agentVariables ?? []) if (v.dataType === 'vector') vecVarDims.set(v.id, vectorDimsOf(v));
 
-  // Per Get/Set-Vector node type: the config key holding the id, the scalar
-  // component accessor node type, and where its dims live. Attributes use
-  // getCellAttribute/setAttribute; variables use getVariable/setVariable —
-  // identical ports, so the lowering below is shared.
-  const GET_KIND: Record<string, { key: string; access: string; dims: Map<string, number> }> = {
-    getVectorAttribute: { key: 'attributeId', access: 'getCellAttribute', dims: vecAttrDims },
-    getVectorVariable: { key: 'variableId', access: 'getVariable', dims: vecVarDims },
+  // Which existing node types read / write a vector (the component accessor is the
+  // SAME node type — getCellAttribute components are getCellAttribute reads, etc.).
+  const GET_KIND: Record<string, { key: string; dims: Map<string, number> }> = {
+    getCellAttribute: { key: 'attributeId', dims: vecAttrDims },
+    getVariable: { key: 'variableId', dims: vecVarDims },
   };
-  const SET_KIND: Record<string, { key: string; access: string; dims: Map<string, number> }> = {
-    setVectorAttribute: { key: 'attributeId', access: 'setAttribute', dims: vecAttrDims },
-    setVectorVariable: { key: 'variableId', access: 'setVariable', dims: vecVarDims },
+  const SET_KIND: Record<string, { key: string; dims: Map<string, number> }> = {
+    setAttribute: { key: 'attributeId', dims: vecAttrDims },
+    setVariable: { key: 'variableId', dims: vecVarDims },
   };
 
   let seq = 0;
@@ -217,28 +241,31 @@ export function lowerVectorAttrs(
     const t = n.data.nodeType;
     const getK = GET_KIND[t];
     const setK = SET_KIND[t];
-    if (getK) {
-      // Get Vector Attribute/Variable (VALUE) → makeVector fed by N scalar reads.
-      const id = String(n.data.config?.[getK.key] ?? '');
-      const dims = getK.dims.get(id) ?? 2;
-      const compIds = vectorComponentIds(id, dims);
+    const getId = getK ? String(n.data.config?.[getK.key] ?? '') : '';
+    const setId = setK ? String(n.data.config?.[setK.key] ?? '') : '';
+    // Only lower when the referenced attr/var is a VECTOR; a scalar Get/Set is
+    // passed through unchanged (its value port stays scalar). The component
+    // accessor is the SAME node type (`t`) reading/writing the scalar `_vx/_vy` ids.
+    if (getK && getK.dims.has(getId)) {
+      // Get (VALUE) → makeVector fed by N scalar component reads.
+      const dims = getK.dims.get(getId)!;
+      const compIds = vectorComponentIds(getId, dims);
       const mv = mkNode('makeVector', {});
       for (let i = 0; i < dims; i++) {
-        const gn = mkNode(getK.access, { [getK.key]: compIds[i]! });
+        const gn = mkNode(t, { [getK.key]: compIds[i]! });
         mkEdge(gn.id, vOut('value'), mv.id, vIn(AXES[i]!));
       }
       // Consumers of this node's `value` (vector) output → the makeVector's `vector`.
       remapSrc.set(`${n.id} ${vOut('value')}`, { source: mv.id, sourceHandle: vOut('vector') });
       dropIds.add(n.id);
-    } else if (setK) {
-      // Set Vector Attribute/Variable (FLOW) → breakVector + a linear scalar-write chain.
-      const id = String(n.data.config?.[setK.key] ?? '');
-      const dims = setK.dims.get(id) ?? 2;
-      const compIds = vectorComponentIds(id, dims);
+    } else if (setK && setK.dims.has(setId)) {
+      // Set (FLOW) → breakVector + a linear scalar-write chain over the components.
+      const dims = setK.dims.get(setId)!;
+      const compIds = vectorComponentIds(setId, dims);
       const bv = mkNode('breakVector', {});
       const setNodes: GraphNode[] = [];
       for (let i = 0; i < dims; i++) {
-        const sn = mkNode(setK.access, { [setK.key]: compIds[i]! });
+        const sn = mkNode(t, { [setK.key]: compIds[i]! });
         mkEdge(bv.id, vOut(AXES[i]!), sn.id, vIn('value'));
         setNodes.push(sn);
       }

@@ -19,6 +19,7 @@ import type { PortDef, NodeTypeDef, NodeConfig } from './types';
 import type { CAModel } from '../../model/types';
 import { getNodeDef } from './nodes/registry';
 import { clampVisibleCount } from './compiler/expression/parser';
+import { vectorPortDims } from './compiler/vectorAttr';
 
 export interface EffectivePorts {
   inputs: PortDef[];
@@ -89,6 +90,19 @@ export function getEffectivePorts(
       const nm = cfg[`_varName_${p.id}`];
       return (typeof nm === 'string' && nm.trim()) ? { ...p, label: nm.trim() } : p;
     });
+  }
+
+  // Unified vector attribute / variable: Get/Set Attribute + Get/Set Variable get a
+  // `vector` VALUE port when the picked attr/var is a vector (they lower to
+  // Make/Break Vector before compile). The inline widget on the set nodes is dropped
+  // (a vector can't be an inline number). Shared with isValidConnection + CaNode via
+  // vectorPortDims so the editor + validator + render agree. See vectorAttr.ts.
+  if (model && (nodeType === 'getCellAttribute' || nodeType === 'getVariable'
+    || nodeType === 'setAttribute' || nodeType === 'setVariable')) {
+    if (vectorPortDims(nodeType, cfg, model)) {
+      inputs = inputs.map(p => (p.id === 'value' ? { ...p, dataType: 'vector' as const, inlineWidget: undefined } : p));
+      outputs = outputs.map(p => (p.id === 'value' ? { ...p, dataType: 'vector' as const } : p));
+    }
   }
 
   // Mode-dependent static-port hiding lives DECLARATIVELY on each node def

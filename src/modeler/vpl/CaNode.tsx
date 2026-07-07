@@ -1081,19 +1081,6 @@ function CaNodeComponent({ id, data }: NodeProps) {
           </select>
         )}
 
-        {/* Get / Set Vector Attribute — pick a VECTOR attribute of the active graph. */}
-        {(nodeData.nodeType === 'getVectorAttribute' || nodeData.nodeType === 'setVectorAttribute') && (
-          <select
-            className={styles.select}
-            value={(nodeData.config.attributeId as string) || ''}
-            onChange={e => updateConfig('attributeId', e.target.value)}
-          >
-            <option value="">Select vector...</option>
-            {ownAttrList.filter(a => a.type === 'vector').map(a => (
-              <option key={a.id} value={a.id}>{a.name}</option>
-            ))}
-          </select>
-        )}
 
         {/* Generic Agent Platform — the agent gather / filter / write-many nodes
             target the AGENT attribute set (by id). Filter Agents adds an op. */}
@@ -1695,22 +1682,6 @@ function CaNodeComponent({ id, data }: NodeProps) {
           );
         })()}
 
-        {/* Get / Set Vector Variable — pick a VECTOR Local Variable of the active graph. */}
-        {(nodeData.nodeType === 'getVectorVariable' || nodeData.nodeType === 'setVectorVariable') && (() => {
-          const varList = getActiveGraphKind() === 'agents' ? (model.agentVariables || []) : (model.variables || []);
-          return (
-            <select
-              className={styles.select}
-              value={(nodeData.config.variableId as string) || ''}
-              onChange={e => updateConfig('variableId', e.target.value)}
-            >
-              <option value="">Select vector variable...</option>
-              {varList.filter(v => v.dataType === 'vector').map(v => (
-                <option key={v.id} value={v.id}>{v.name}</option>
-              ))}
-            </select>
-          );
-        })()}
 
         {nodeData.nodeType === 'updateIndicator' && (() => {
           const selInd = (model.indicators || []).find(i => i.id === nodeData.config.indicatorId);
