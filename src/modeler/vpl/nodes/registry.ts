@@ -16,6 +16,8 @@ import { ForEachBondNode } from './ForEachBondNode';
 import { DivideAgentNode } from './DivideAgentNode';
 import { KillAgentNode } from './KillAgentNode';
 import { DivisionEventNode } from './DivisionEventNode';
+import { SpawnAgentNode } from './SpawnAgentNode';
+import { SpawnEventNode } from './SpawnEventNode';
 import { AgentOutputMappingNode } from './AgentOutputMappingNode';
 import { SampleFieldNode } from './SampleFieldNode';
 import { FieldGradientNode } from './FieldGradientNode';
@@ -132,6 +134,11 @@ const ALL_NODES: NodeTypeDef[] = [
   // (gated by requirements.bondGraph; visible only on the Agents sub-tab).
   BehaviourStepNode,
   DivisionEventNode,
+  // STEP 5a Population·Birth — mid-step graph-authored spawning (distinct from the
+  // init-time Create → Add). Spawn Agent requests a birth; Spawn Event roots the
+  // per-child init (the birth analogue of Division Event).
+  SpawnAgentNode,
+  SpawnEventNode,
   // Agent Output Mapping (A→C) — the agent analogue of OutputMapping; roots a
   // per-agent colour/exhibition pass (Standalone or the synthesized Linked one).
   AgentOutputMappingNode,

@@ -356,7 +356,7 @@ export function uploadAgentSoA(rt: AgentWebGPURuntime, s: AgentStore): void {
     // The structural-request runs (G4 — incl. the 3D divideAxisZ) are uploaded as
     // 0 — a fresh request slate each step (the shader sets the flag, the worker
     // reads it back). divideAxisZ has no CPU source array here, so it falls through.
-    if (REQUEST_FIELD_SET.has(field) || field === 'divideAxisZ') { for (let i = 0; i < ma; i++) f[base + i] = 0; continue; }
+    if (REQUEST_FIELD_SET.has(field) || field === 'divideAxisZ' || field === 'spawnZ') { for (let i = 0; i < ma; i++) f[base + i] = 0; continue; }
     const src = f32Src[field];
     if (!src) continue;
     for (let i = 0; i < hw; i++) f[base + i] = src[i]!;
@@ -760,6 +760,9 @@ export async function readbackAgentStep(rt: AgentWebGPURuntime, s: AgentStore): 
   const drB = L.f32Base['divideRequest']!, daxB = L.f32Base['divideAxisX']!, dayB = L.f32Base['divideAxisY']!;
   const dasymB = L.f32Base['divideAsym']!, bfrB = L.f32Base['bondFormReq']!, bflB = L.f32Base['bondFormL']!;
   const bfkB = L.f32Base['bondFormK']!, bbrB = L.f32Base['bondBreakReq']!, krB = L.f32Base['killRequest']!;
+  // STEP 5a spawn-request bases (Population·Birth).
+  const srqB = L.f32Base['spawnRequest']!, sxB = L.f32Base['spawnX']!, syB = L.f32Base['spawnY']!, srdB = L.f32Base['spawnRadius']!;
+  const szB = is3d ? L.f32Base['spawnZ']! : -1;
   for (let i = 0; i < hw; i++) {
     if (!s.alive[i]) continue;
     s.x[i] = f[xB + i]!; s.y[i] = f[yB + i]!;
@@ -777,6 +780,10 @@ export async function readbackAgentStep(rt: AgentWebGPURuntime, s: AgentStore): 
     s.bondFormL[i] = f[bflB + i]!; s.bondFormK[i] = f[bfkB + i]!;
     s.bondBreakReq[i] = Math.round(f[bbrB + i]!);
     s.killRequest[i] = f[krB + i]! >= 0.5 ? 1 : 0;
+    // STEP 5a — spawn request flag (0 = none, 1 = inherit, 2 = defaults) + geometry.
+    s.spawnRequest[i] = f[srqB + i]! >= 0.5 ? Math.round(f[srqB + i]!) : 0;
+    s.spawnX[i] = f[sxB + i]!; s.spawnY[i] = f[syB + i]!; s.spawnRadius[i] = f[srdB + i]!;
+    if (is3d) s.spawnZ[i] = f[szB + i]!;
     // Per-agent packed RGBA → the snapshot colour buffer (s.colors is Uint8 RGBA).
     const c = col[i]! >>> 0, ci = i * 4;
     s.colors[ci] = c & 0xff; s.colors[ci + 1] = (c >>> 8) & 0xff;

@@ -23,7 +23,7 @@
 import type { AgentStore } from '../../../simulator/engine/agentEngine';
 import type { AgentCapabilities } from '../../../model/types';
 
-export type AgentAbiKind = 'loop' | 'division' | 'init';
+export type AgentAbiKind = 'loop' | 'division' | 'init' | 'spawn';
 
 /** The primitives the descriptor needs — every site can produce these. Order of
  *  `agentAttrs` / `fieldAttrs` MUST match across sites (they all derive from
@@ -63,6 +63,8 @@ export interface AgentAbiRuntime {
   fieldArray: (id: string) => unknown;
   // --- division-event extras (leading positional args) ---
   idx?: number; daughterIndex?: number; axisX?: number; axisY?: number;
+  // --- spawn-event extra (STEP 5a): the spawner's id ---
+  parentHandle?: number;
   // --- init-event extras (leading host closures + trailing seed base) ---
   agentCreate?: unknown; agentAddToWorld?: unknown; seedBase?: number;
 }
@@ -90,13 +92,22 @@ export function deriveAgentAbi(kind: AgentAbiKind, shape: AgentAbiShape, profile
   const { is3d, agentAttrs, fieldAttrs, hasLookupTables } = shape;
   const fields: AgentAbiField[] = [];
 
-  // --- leading positional args (division / init) ---
+  // --- leading positional args (division / spawn / init) ---
   if (kind === 'division') {
     fields.push(
       F('idx', 'scalar', (_s, rt) => rt.idx),
       F('__daughterIndex', 'scalar', (_s, rt) => rt.daughterIndex),
       F('__axisDefaultX', 'scalar', (_s, rt) => rt.axisX),
       F('__axisDefaultY', 'scalar', (_s, rt) => rt.axisY),
+    );
+  } else if (kind === 'spawn') {
+    // STEP 5a: the spawned child slot `idx` + the SPAWNER's id (`__parentHandle`).
+    // The spawn event reads its own geometry at `idx` (myX/myRadius) and the
+    // parent's at `__parentHandle` (parentX/parentHandle) — no separate parent
+    // buffers, just the id (the SoA is shared). Otherwise ≡ division.
+    fields.push(
+      F('idx', 'scalar', (_s, rt) => rt.idx),
+      F('__parentHandle', 'scalar', (_s, rt) => rt.parentHandle),
     );
   } else if (kind === 'init') {
     fields.push(
@@ -106,8 +117,12 @@ export function deriveAgentAbi(kind: AgentAbiKind, shape: AgentAbiShape, profile
     );
   }
 
-  // --- liveness + loop control (loop / division carry it; init doesn't loop) ---
-  if (kind === 'loop' || kind === 'division') {
+  // spawn ≡ division for every block below the leading args (a single-agent
+  // event running in the sequential structural phase, reading the same buffers).
+  const divLike = kind === 'division' || kind === 'spawn';
+
+  // --- liveness + loop control (loop / division / spawn carry it; init doesn't loop) ---
+  if (kind === 'loop' || divLike) {
     fields.push(
       F('_alive', 'u8[]', s => s.alive),
       F('highWater', 'scalar', s => s.highWater),
@@ -124,7 +139,7 @@ export function deriveAgentAbi(kind: AgentAbiKind, shape: AgentAbiShape, profile
     F('_agentLineage', 'i32[]', s => s.lineage),
   );
   // init omits bondCount/density (its writable geometry set is smaller).
-  if (kind === 'loop' || kind === 'division') {
+  if (kind === 'loop' || divLike) {
     fields.push(
       F('_agentBondCount', 'i32[]', s => s.bondCount),
       F('_agentDensity', 'f64[]', s => s.density),
@@ -157,7 +172,8 @@ export function deriveAgentAbi(kind: AgentAbiKind, shape: AgentAbiShape, profile
     );
   }
 
-  // --- request buffers (loop only — DivideAgent / KillAgent write them) ---
+  // --- request buffers (loop only — DivideAgent / KillAgent / SpawnAgent write
+  //     them; the CPU structural phase reads them post-step) ---
   if (kind === 'loop') {
     fields.push(
       F('_divideRequest', 'u8[]', s => s.divideRequest),
@@ -165,6 +181,11 @@ export function deriveAgentAbi(kind: AgentAbiKind, shape: AgentAbiShape, profile
       F('_divideAxisY', 'f64[]', s => s.divideAxisY),
       F('_divideAsym', 'f64[]', s => s.divideAsym),
       F('_killRequest', 'u8[]', s => s.killRequest),
+      // STEP 5a spawn request (2D fields; _spawnZ rides the 3D block below).
+      F('_spawnRequest', 'u8[]', s => s.spawnRequest),
+      F('_spawnX', 'f64[]', s => s.spawnX),
+      F('_spawnY', 'f64[]', s => s.spawnY),
+      F('_spawnRadius', 'f64[]', s => s.spawnRadius),
     );
   }
 
@@ -182,8 +203,8 @@ export function deriveAgentAbi(kind: AgentAbiKind, shape: AgentAbiShape, profile
       F('_bondFormK', 'f64[]', s => s.bondFormK),
       F('_bondBreakReq', 'i32[]', s => s.bondBreakReq),
     );
-  } else if (kind === 'division') {
-    // Division's smaller bond slice (For Each Bond over inherited bonds).
+  } else if (divLike) {
+    // Division / spawn's smaller bond slice (For Each Bond over inherited bonds).
     fields.push(
       F('_bondPartner', 'i32[]', s => s.bondPartner),
       F('_bondRestLength', 'f64[]', s => s.bondRestLength),
@@ -199,9 +220,9 @@ export function deriveAgentAbi(kind: AgentAbiKind, shape: AgentAbiShape, profile
   }
   for (const a of agentAttrs) {
     const id = a.id;
-    // Division's w_ block ALIASES attrRead (immediate writes in the sequential
-    // structural phase); loop + init use attrWrite.
-    if (kind === 'division') fields.push(F(`w_${id}`, 'obj', s => s.attrRead[id]));
+    // Division / spawn's w_ block ALIASES attrRead (immediate writes in the
+    // sequential structural phase); loop + init use attrWrite.
+    if (divLike) fields.push(F(`w_${id}`, 'obj', s => s.attrRead[id]));
     else fields.push(F(`w_${id}`, 'obj', s => s.attrWrite[id]));
   }
 
@@ -248,13 +269,16 @@ export function deriveAgentAbi(kind: AgentAbiKind, shape: AgentAbiShape, profile
         F('_agentVZ', 'f64[]', s => s.vz),
         F('_agentForceZ', 'f64[]', s => s.forceZ),
         F('_divideAxisZ', 'f64[]', s => s.divideAxisZ),
+        F('_spawnZ', 'f64[]', s => s.spawnZ),   // STEP 5a — the child's z position
         F('_fieldD', 'scalar', s => s.worldDepth),
         F('_hashNBinsZ', 'scalar', (_s, rt) => (rt.hash ? rt.hash.nBinsZ : 1)),
         F('_hashBinSizeZ', 'scalar', (_s, rt) => (rt.hash ? rt.hash.binSizeZ : 1)),
         F('_hashOriginZ', 'scalar', (_s, rt) => (rt.hash ? rt.hash.originZ : 0)),
       );
-    } else if (kind === 'division') {
-      // NO forceZ (division reads forces, never writes them).
+    } else if (divLike) {
+      // NO forceZ (division/spawn read forces, never write them). spawn ≡ division
+      // here (it reads `_agentZ` for myZ/parentZ; the other z buffers are inert
+      // extras kept identical to division so the two share one 3D block).
       fields.push(
         F('_agentZ', 'f64[]', s => s.z),
         F('_agentVZ', 'f64[]', s => s.vz),

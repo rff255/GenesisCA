@@ -144,7 +144,7 @@ export const AGENT_WASM_SUPPORTED_TYPES: ReadonlySet<string> = new Set<string>([
   'getCellAttribute', 'setAttribute', 'updateAttribute', 'setAgentAttribute',
   'setVelocity', 'setAgentPosition', 'setAgentRadius',
   // structural writes (the post-step CPU structural phase reads the requests)
-  'divideAgent', 'formBond', 'breakBond', 'killAgent',
+  'divideAgent', 'formBond', 'breakBond', 'killAgent', 'spawnAgent',
   // field bridge (the closed agent↔grid morphogen feedback)
   'sampleField', 'fieldGradient', 'readCellsUnder', 'affectCellsUnder', 'secreteToField',
   // colour + tables + model attrs
@@ -170,6 +170,10 @@ export const AGENT_WASM_SUPPORTED_TYPES: ReadonlySet<string> = new Set<string>([
  *  BEHAVIOUR-reachable node set (the divisionEvent/agentInit subtrees). */
 export const AGENT_WASM_CPU_ROOT_TYPES: ReadonlySet<string> = new Set<string>([
   'divisionEvent', 'agentInit', 'createAgent', 'addAgentToWorld',
+  // STEP 5a: the Spawn Event root is CPU-on-JS (like divisionEvent) — it runs in
+  // the structural phase over the wasmBacked memory. Only the Spawn Agent REQUEST
+  // (behaviour-reachable) is emitted on WASM.
+  'spawnEvent',
 ]);
 
 export interface AgentWasmResult {
@@ -2348,6 +2352,18 @@ function compileFlowNode(ctx: AgentWasmCtx, nodeId: string): void {
     }
     case 'killAgent': {
       em.localGet(ctx.idxLocal); em.i32Const(ctx.layout.u8['killRequest']!); em.op(OP_I32_ADD); em.i32Const(1); em.i32Store8();
+      compileFlowChain(ctx, node.id, 'next');
+      break;
+    }
+    case 'spawnAgent': {
+      // STEP 5a — _spawnRequest[idx]=<1 inherit | 2 defaults>; _spawnX/Y[/Z]/Radius[idx]=inputs.
+      // The CPU structural phase reads the request + allocs the child.
+      const spawnFlag = node.data.config?.inheritAttributes === false ? 2 : 1;
+      em.localGet(ctx.idxLocal); em.i32Const(ctx.layout.u8['spawnRequest']!); em.op(OP_I32_ADD); em.i32Const(spawnFlag); em.i32Store8();
+      pushF64ElemAddr(em, ctx.layout.f64['spawnX']!, ctx.idxLocal); pushValueInputF64(ctx, node, 'x', 0); em.f64Store();
+      pushF64ElemAddr(em, ctx.layout.f64['spawnY']!, ctx.idxLocal); pushValueInputF64(ctx, node, 'y', 0); em.f64Store();
+      if (ctx.is3d) { pushF64ElemAddr(em, ctx.layout.f64['spawnZ']!, ctx.idxLocal); pushValueInputF64(ctx, node, 'z', 0); em.f64Store(); }
+      pushF64ElemAddr(em, ctx.layout.f64['spawnRadius']!, ctx.idxLocal); pushValueInputF64(ctx, node, 'radius', 1); em.f64Store();
       compileFlowChain(ctx, node.id, 'next');
       break;
     }
