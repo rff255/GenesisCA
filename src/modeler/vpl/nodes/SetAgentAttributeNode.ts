@@ -26,10 +26,11 @@ export const SetAgentAttributeNode: NodeTypeDef = {
   compile: (_nodeId, config, inputs, _boundary, ctx) => {
     const attr = config.attributeId as string || '_undef';
     const a = `((${inputs['agentId'] || '-1'}) | 0)`;
-    // Generic Agent Platform: in the Agent Init Event a Created agent is STAGED
-    // (alive=0) until Add Agent To World, so the live-agent guard is relaxed to
-    // range-only there; in behaviour/division it requires a live agent.
-    const guard = ctx?.agentRoot === 'init'
+    // Unified spawning: a Created agent is STAGED (alive=0) until Add Agent To World
+    // in BOTH the Init Event and the Behaviour graph, so the live-agent guard relaxes
+    // to range-only in either root (so a fresh handle can be configured; writing a
+    // dead slot is a harmless no-op). Division keeps the strict live-agent guard.
+    const guard = (ctx?.agentRoot === 'init' || ctx?.agentRoot === 'behaviour')
       ? `__sa>=0&&__sa<_agentMaxAgents`
       : `__sa>=0&&__sa<highWater&&_alive[__sa]`;
     return `{ const __sa=${a}; if(${guard}) w_${attr}[__sa] = ${inputs['value'] || '0'}; }\n`;

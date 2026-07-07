@@ -1366,18 +1366,25 @@ export function HelpView() {
               list. <strong>Set Velocity</strong> sets an agent&rsquo;s velocity directly (needs
               Momentum &gt; 0).</li>
           </ul>
-          <h3 className={styles.h3}>Spawning Agents (the Agent Init Event)</h3>
+          <h3 className={styles.h3}>Spawning Agents (Create &rarr; Add, in either event)</h3>
           <p className={styles.p}>
-            Beyond the <em>Seed Count</em> the engine lays down on Reset, you can spawn the population
-            <strong> from the graph</strong>. The <strong>Agent Init Event</strong> root runs
-            <strong> once</strong> (on first load and on Reset, before the first behaviour step). Loop
-            over its <code>DO</code> chain and, per iteration, build an agent with <strong>Create
-            Agent</strong> (position / radius &rarr; an agent <em>handle</em>; the position takes a
-            <em> Z</em> in a 3D model), set its initial attributes (<em>Set Agent Attribute</em> /
-            <em> Set Agent Position / Radius</em> on the handle), then commit it with
-            <strong> Add Agent To World</strong>. This is how you place an
-            exact grid of agents, a procedural pattern, or a randomised population &mdash; running past
-            <em> Max Agents</em> simply skips the extra Create (it never wraps).
+            Beyond the <em>Seed Count</em> the engine lays down on Reset, you spawn agents
+            <strong> from the graph</strong> with one idiom that works in <strong>both</strong> the Agent
+            Init Event <em>and</em> the Behaviour Step &mdash; just like <em>Set Attribute</em> works in
+            both events. Build an agent with <strong>Create Agent</strong> (position / radius &rarr; an
+            agent <em>handle</em>; the position takes a <em>Z</em> in a 3D model), set its initial state
+            on the handle (<em>Set Agent Attribute</em> / <em>Set Agent Position / Radius</em>), then
+            commit it with <strong>Add Agent To World</strong>. Running past <em>Max Agents</em> returns
+            a <code>-1</code> handle and the Set/Add no-op (it never wraps).
+          </p>
+          <p className={styles.p}>
+            In the <strong>Agent Init Event</strong> (runs once, on load + Reset) loop over its
+            <code> DO</code> chain to place an exact grid, a procedural pattern, or a randomised
+            population. In the <strong>Behaviour Step</strong> the SAME nodes spawn <strong>during the
+            run</strong> &mdash; e.g. a bird agent lays an egg agent: Create the egg at the bird&apos;s
+            position, set the egg&apos;s species / energy on the handle, and Add it, with full control
+            over the new instance. A mid-step newborn is fully configured the step it&apos;s created but
+            starts running its <em>own</em> behaviour the <em>next</em> step.
           </p>
           <h3 className={styles.h3}>The Cell CA as a Morphogen Field (Closed Feedback)</h3>
           <p className={styles.p}>

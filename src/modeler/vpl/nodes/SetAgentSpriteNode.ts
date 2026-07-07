@@ -63,13 +63,16 @@ export const SetAgentSpriteNode: NodeTypeDef = {
   },
   compile: (_nodeId, config, inputs, _boundary, ctx) => {
     const isInit = ctx?.agentRoot === 'init';
+    // Unified spawning: a Created agent is staged (alive=0) until Add To World in
+    // Init AND Behaviour, so a wired-handle write relaxes the guard in either root.
+    const staged = isInit || ctx?.agentRoot === 'behaviour';
     const wired = !!inputs['agentId'];
     // Target the wired agent id, else the current-loop agent (idx). The Init Event
     // has no per-agent loop, so an unwired node there is a safe no-op (no crash).
     if (isInit && !wired) return '';
     const target = wired ? `((${inputs['agentId']}) | 0)` : 'idx';
     const guard = wired
-      ? (isInit ? `_t >= 0 && _t < _agentMaxAgents` : `_t >= 0 && _t < highWater && _alive[_t]`)
+      ? (staged ? `_t >= 0 && _t < _agentMaxAgents` : `_t >= 0 && _t < highWater && _alive[_t]`)
       : null;
 
     const body: string[] = [];

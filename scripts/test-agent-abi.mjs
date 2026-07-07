@@ -35,6 +35,7 @@ function oldLoopArgs(s, hash, rt) {
     hash ? hash.nBinsX : 0, hash ? hash.nBinsY : 0, hash ? hash.binSizeX : 1, hash ? hash.binSizeY : 1,
     hash ? hash.originX : 0, hash ? hash.originY : 0,
     s.divideRequest, s.divideAxisX, s.divideAxisY, s.divideAsym, s.killRequest,
+    rt.agentCreate, rt.agentAddToWorld, s.maxAgents,   // unified spawning (Create/Add in behaviour)
     s.bondPartner, s.bondPartnerEpoch, s.bondRestLength, s.bondStiffness, s.bondTypeLabel, s.maxBonds,
     s.bondFormReq, s.bondFormL, s.bondFormK, s.bondBreakReq,
   ];
