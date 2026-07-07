@@ -5,6 +5,8 @@ import {
   resolveAgentProfile, matchAgentPreset, applyCapabilityEdit, estimateAgentFootprint,
   type AgentPresetKey, type BoolCapKey,
 } from '../../model/agentCapabilities';
+import { cbNum } from '../../model/centerBased';
+import { NumberField } from '../vpl/widgets/InlineWidgets';
 
 /** Model Properties → "Agent Capabilities" section. The preset picker + the
  *  progressive-disclosure capability toggles + the live per-agent footprint
@@ -88,10 +90,21 @@ export function AgentCapabilitiesSection({
               <div key={k}>
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
                   <span style={{ fontSize: '0.72rem', color: '#ddd' }}>{row.label}</span>
-                  <select value={profile.collision === 'off' ? 'off' : 'soft'} onChange={e => edit('collision', e.target.value as CollisionMode)} style={selStyle}>
-                    <option value="off">Off</option><option value="soft">Volume exclusion</option>
+                  <select value={profile.collision} onChange={e => edit('collision', e.target.value as CollisionMode)} style={selStyle}>
+                    <option value="off">Off</option><option value="soft">Soft-sphere (force)</option><option value="positional">Positional (hard)</option>
                   </select>
                 </div>{hint}
+                {profile.collision === 'positional' && (
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginTop: 4, paddingLeft: 12 }}>
+                    <span style={{ fontSize: '0.66rem', color: '#aaa' }} title="Jacobi projection sweeps per step — more = tighter no-overlap packing">Positional iterations</span>
+                    <NumberField
+                      value={cbNum(model.centerBased, 'positionalIterations')}
+                      onNumber={n => updateCenterBased({ positionalIterations: n })}
+                      min={1} max={16} integer step={1}
+                      style={{ background: 'var(--color-bg-panel, #1a1a1a)', color: '#ddd', border: '1px solid var(--color-widget-border, #444)', borderRadius: 4, width: 64, fontSize: '0.66rem' }}
+                    />
+                  </div>
+                )}
               </div>
             );
           }

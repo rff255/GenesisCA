@@ -717,12 +717,15 @@ export interface TopologyMode {
  *  = `pos += v·dt`; `force` = `v = inertia·v + (dt/η)·F; pos += v`. v1 always
  *  allocates the velocity/force fields regardless — this is a palette/port gate. */
 export type MotionMode = 'static' | 'velocity' | 'force';
-/** Collision handling. `soft` = the engine soft-sphere volume-exclusion force
- *  (overlapping agents repel; a stiff Repulsion Stiffness is non-penetrating in
- *  practice — requires Motion=Force so the integrator applies it); `off` = none.
- *  `positional` is a DEPRECATED alias for `soft` — the engine ships one collision
- *  model (the milestone plan deliberately did not add a separate hard/positional
- *  solver), so `computeCapabilityClosure` folds `positional`→`soft` everywhere. */
+/** Collision handling — two GENUINELY different models. `soft` = the soft-sphere
+ *  volume-exclusion FORCE (a penalty force `μ_R·(d−s)` added to the integrator;
+ *  overlap is transient, non-penetrating only in the stiff limit; springy; requires
+ *  Motion=Force). `positional` = a HARD, rigid no-overlap CONSTRAINT — after
+ *  integration, overlapping pairs are projected apart to exactly touching (a Jacobi
+ *  position-projection, `positionalIterations` sweeps); zero overlap; works under
+ *  any Motion (it edits positions directly). `off` = neither. Adhesion / springs /
+ *  growth are orthogonal. See `collisionMode`/`usesSoftCollision`/
+ *  `usesPositionalCollision` in centerBased.ts + docs/PLAN_POSITIONAL_COLLISION. */
 export type CollisionMode = 'off' | 'soft' | 'positional';
 /** Bond handling. `data` = connectivity edges only (traverse / render, carry NO
  *  force); `physics` = spring forces (requires Motion=Force); `off` = none. The
@@ -810,6 +813,11 @@ export interface CenterBasedConfig {
   /** Optional speed cap (per step). 0 / absent = uncapped. Boids use it to keep
    *  a roughly constant cruising speed. */
   maxSpeed?: number;
+  /** Jacobi sweeps for the HARD positional collision (`agentCapabilities.collision
+   *  === 'positional'`): more sweeps ⇒ tighter no-overlap packing (a single sweep
+   *  resolves an isolated pair exactly; dense packing converges over a few).
+   *  Absent ⇒ the engine default (2). Ignored for soft / off collision. */
+  positionalIterations?: number;
   /** When true, the engine's built-in soft-sphere repulsion/adhesion is OFF —
    *  ALL motion comes from the graph's Apply Force (pure custom-force models
    *  like boids). LEGACY: superseded by `useBondingPhysics` (the inverse master
