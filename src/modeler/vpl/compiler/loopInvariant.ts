@@ -130,6 +130,7 @@ const NEVER_INVARIANT = new Set<string>([
   'readCellsUnder',
   // Agent neighbour access — all read per-agent engine buffers / the hash.
   'getNearbyAgents',
+  'getAgentsInView',
   'getAgentPosition',
   'getAgentOffset',
   'getAgentAttribute',
