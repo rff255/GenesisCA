@@ -165,6 +165,12 @@ export function deriveAgentAbi(kind: AgentAbiKind, shape: AgentAbiShape, profile
       F('_divideAxisY', 'f64[]', s => s.divideAxisY),
       F('_divideAsym', 'f64[]', s => s.divideAsym),
       F('_killRequest', 'u8[]', s => s.killRequest),
+      // Unified spawning — the SAME host closures the Init Event uses, so
+      // Create Agent + Add Agent To World work in the Behaviour graph too
+      // (mid-step spawning). `_agentMaxAgents` is the by-id setters' range guard.
+      F('_agentCreate', 'fn', (_s, rt) => rt.agentCreate),
+      F('_agentAddToWorld', 'fn', (_s, rt) => rt.agentAddToWorld),
+      F('_agentMaxAgents', 'scalar', s => s.maxAgents),
     );
   }
 

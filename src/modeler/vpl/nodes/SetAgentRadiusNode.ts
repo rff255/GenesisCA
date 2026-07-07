@@ -20,7 +20,9 @@ export const SetAgentRadiusNode: NodeTypeDef = {
   defaultConfig: {},
   compile: (_nodeId, _config, inputs, _boundary, ctx) => {
     const id = `((${inputs['agentId'] || '-1'}) | 0)`;
-    const guard = ctx?.agentRoot === 'init'
+    // Unified spawning: a Created agent is staged (alive=0) until Add To World in
+    // Init AND Behaviour, so relax the guard to range-only in either root.
+    const guard = (ctx?.agentRoot === 'init' || ctx?.agentRoot === 'behaviour')
       ? `__sr >= 0 && __sr < _agentMaxAgents`
       : `__sr >= 0 && __sr < highWater && _alive[__sr]`;
     return `{ const __sr = ${id}; const __rv = ${inputs['radius'] || '1'}; if (${guard}) { _agentRadius[__sr] = __rv; _agentTargetRadius[__sr] = __rv; } }\n`;

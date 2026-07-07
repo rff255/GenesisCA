@@ -1027,8 +1027,17 @@ function buildDivisionArgs(s: AgentStore, idx: number, daughterIndex: number, ax
  *  s.divideAxisZ, s.worldDepth`) is pushed ONLY when `s.worldDepth > 1`, exactly
  *  when `buildAgentLoopParams` pushes its 3D params under `is3dModel(model)`.
  *  `is3dModel(model) ⟺ s.worldDepth > 1` — edit BOTH together. */
-function buildAgentLoopArgs(s: AgentStore, viewerOverride?: string): unknown[] {
-  const rt: AgentAbiRuntime = { ...agentAbiBaseRt(), hash: currentAgentHash, viewer: viewerOverride ?? activeViewer };
+/** Args for the compiled behaviour fn. `agentCreate`/`agentAddToWorld` are the
+ *  unified-spawn host closures (Create Agent + Add Agent To World in the Behaviour
+ *  graph, mid-step). They default to safe NO-OPS (create → -1, add → no-op) for the
+ *  colour-pass + arity-assert call sites, which never spawn; `runAgentStep` passes
+ *  the real grow-only closures. */
+function buildAgentLoopArgs(
+  s: AgentStore, viewerOverride?: string,
+  agentCreate: (x: number, y: number, z: number, radius: number) => number = () => -1,
+  agentAddToWorld: (id: number) => void = () => {},
+): unknown[] {
+  const rt: AgentAbiRuntime = { ...agentAbiBaseRt(), hash: currentAgentHash, viewer: viewerOverride ?? activeViewer, agentCreate, agentAddToWorld };
   return buildAgentAbiArgs('loop', agentAbiShapeOfStore(s), s, rt);
 }
 
@@ -1217,6 +1226,29 @@ function runAgentStep(): void {
   // into the reserved in-memory views (S10) when it fits the layout's reserve;
   // the hash DIMENSIONS ride the call args. If the hash overflows the reserve
   // (the fits-check), we fall back to JS for this step (never silently wrong).
+  // Unified spawning — the Create Agent + Add Agent To World host closures for the
+  // BEHAVIOUR graph (mid-step spawning, the same idiom as the Init Event). GROW-ONLY:
+  // a mid-step Create appends at highWater (never reuses a free-list hole, which
+  // could sit ahead of the loop cursor and be double-processed this step), so a
+  // newborn is beyond the fixed loop bound `hw` → it is fully configured this step
+  // but runs its own behaviour NEXT step. Staged (alive=0) until Add To World.
+  const spawnCreatedSet = new Set<number>();
+  const spawnCreatedList: number[] = [];
+  const behaviourAgentCreate = (bx: number, by: number, bz: number, br: number): number => {
+    if (s.highWater >= s.maxAgents) return -1;   // overflow → -1; downstream Set/Add no-op
+    const id = s.highWater++;
+    initAgentSlot(s, id, bx, by, bz || 0, br || cbNum(cfg!, 'defaultRadius'), id);
+    s.alive[id] = 0;                             // STAGE (un-committed until Add To World)
+    spawnCreatedSet.add(id); spawnCreatedList.push(id);
+    return id;
+  };
+  const behaviourAgentAddToWorld = (id: number): void => {
+    // Only commit ids THIS step's Create Agent staged (an arbitrary wired id must not
+    // ghost-commit a dead/uninitialised slot). Idempotent on already-live ids.
+    if (spawnCreatedSet.has(id) && !s.alive[id]) { s.alive[id] = 1; s.liveCount++; }
+  };
+  const runBehaviourJs = () => agentBehaviourFn!(...buildAgentLoopArgs(s, undefined, behaviourAgentCreate, behaviourAgentAddToWorld));
+
   let ranWasm = false;
   // W1 — force-pass eligibility + the hash dims it reuses. The WASM force pass can
   // only run when the WASM behaviour ran this step (so the in-memory hash was
@@ -1233,7 +1265,7 @@ function runAgentStep(): void {
         agentWasmHashOverflowWarned = true;
         self.postMessage({ type: 'error', message: `[agents] spatial hash (${hash!.nBinsX * hash!.nBinsY * hash!.nBinsZ} bins) exceeds the WASM reserve (${s.layout.maxHashBins}); this step runs on JS.` });
       }
-      if (agentBehaviourFn) { try { agentBehaviourFn(...buildAgentLoopArgs(s)); ranWasm = true; } catch { agentBehaviourFn = null; } }
+      if (agentBehaviourFn) { try { runBehaviourJs(); ranWasm = true; } catch { agentBehaviourFn = null; } }
     } else {
       try {
         const buf = s.memory.buffer;
@@ -1280,18 +1312,24 @@ function runAgentStep(): void {
         self.postMessage({ type: 'error', message: '[agents] WASM behaviour run failed, falling back to JS: ' + ((e as Error)?.message || e) });
         agentBehaviourWasmFn = null;
         agentForcePassWasmFn = null;  // W1 — drop the force pass too; this step runs fully on JS
-        if (agentBehaviourFn) { try { agentBehaviourFn(...buildAgentLoopArgs(s)); ranWasm = true; } catch { agentBehaviourFn = null; } }
+        if (agentBehaviourFn) { try { runBehaviourJs(); ranWasm = true; } catch { agentBehaviourFn = null; } }
       }
     }
   }
   if (!ranWasm && agentBehaviourFn) {
     try {
-      agentBehaviourFn(...buildAgentLoopArgs(s));
+      runBehaviourJs();
     } catch (e) {
       self.postMessage({ type: 'error', message: '[agents] behaviour run failed: ' + ((e as Error)?.message || e) });
       agentBehaviourFn = null;
     }
   }
+
+  // Unified spawning leak-sweep — free any Create Agent whose handle was never Added
+  // (still staged at alive=0). freeStagedSlot pushes it to the free-list, where the
+  // structural phase (division) or the next Reset reclaims it. The common
+  // Create → configure → Add sequence stages nothing, so this is usually a no-op.
+  for (const id of spawnCreatedList) if (!s.alive[id]) freeStagedSlot(s, id);
 
   // Sync update mode: swap the double-buffered attrs in, so the values the
   // behaviour just wrote become the live (read) buffer for the structural phase,

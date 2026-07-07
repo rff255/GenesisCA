@@ -25,7 +25,10 @@ export const SetAgentPositionNode: NodeTypeDef = {
   defaultConfig: {},
   compile: (_nodeId, _config, inputs, _boundary, ctx) => {
     const id = `((${inputs['agentId'] || '-1'}) | 0)`;
-    const guard = ctx?.agentRoot === 'init'
+    // Unified spawning: a freshly Created agent is STAGED (alive=0) until Add To
+    // World, in BOTH the Init Event and the Behaviour graph — so relax the guard to
+    // range-only in either root (writing a dead slot is a harmless no-op effect).
+    const guard = (ctx?.agentRoot === 'init' || ctx?.agentRoot === 'behaviour')
       ? `__sp >= 0 && __sp < _agentMaxAgents`
       : `__sp >= 0 && __sp < highWater && _alive[__sp]`;
     const zWrite = ctx?.is3d ? ` _agentZ[__sp] = ${inputs['z'] || '0'};` : '';
