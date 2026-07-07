@@ -15,8 +15,12 @@ export function viewCosHalf(config: Record<string, unknown>): { cosHalf: number;
 
 /** The heading (x,y[,z]) expressions in the AGENT behaviour loop for the two backed
  *  sources. `velocity` (default) = the agent's own velocity (zero-cost, matches
- *  boids); `wired` = the node's Heading X/Y/Z inputs. A `facing` source (reading the
- *  stored per-agent facing) lands with the Orientation work. Returns raw f64 exprs. */
+ *  boids); `wired` = the node's Heading X/Y/Z inputs. To steer by a stored FACING
+ *  vector, give the agent a `vector` agent-attribute and wire it into the Heading
+ *  inputs via Get Self Attribute → Break Vector (Wired source) — that lowers to the
+ *  facing components exactly as a dedicated `facing` source would, on all three
+ *  targets. A dedicated `facing` config is a possible future convenience only.
+ *  Returns raw f64 exprs. */
 export function viewHeadingExprs(
   config: Record<string, unknown>, inputs: Record<string, string>, is3d: boolean,
 ): { hx: string; hy: string; hz: string } {
@@ -40,7 +44,7 @@ export function viewHeadingExprs(
 export const GetAgentsInViewNode: NodeTypeDef = {
   type: 'getAgentsInView',
   label: 'Get Agents In View',
-  description: 'Nearby agents inside a heading-relative vision cone (set Half-angle°) — the directional Get Nearby Agents. Iterate with For Each In Array.',
+  description: 'Nearby agents inside a heading-relative vision cone (set Half-angle°) — the directional Get Nearby Agents. Iterate with For Each In Array. Heading = Velocity (default) or Wired; for a stored FACING, wire a vector agent-attribute via Get Self Attribute → Break Vector into the Heading inputs.',
   category: 'data',
   color: '#5e35b1',
   requirements: { bondGraph: true },

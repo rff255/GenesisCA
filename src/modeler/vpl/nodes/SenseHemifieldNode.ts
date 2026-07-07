@@ -24,7 +24,7 @@ import { viewCosHalf, viewHeadingExprs } from './GetAgentsInViewNode';
 export const SenseHemifieldNode: NodeTypeDef = {
   type: 'senseHemifield',
   label: 'Sense Hemifield',
-  description: 'Count nearby agents in the LEFT vs RIGHT half of a heading-relative vision cone — the Braitenberg L/R sensor. Steer by Left − Right.',
+  description: 'Count nearby agents in the LEFT vs RIGHT half of a heading-relative vision cone — the Braitenberg L/R sensor. Steer by Left − Right. Heading = Velocity or Wired; for a stored FACING, wire a vector agent-attribute via Get Self Attribute → Break Vector into the Heading inputs.',
   category: 'data',
   color: '#5e35b1',
   requirements: { bondGraph: true },
