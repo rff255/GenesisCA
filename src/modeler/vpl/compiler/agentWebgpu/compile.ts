@@ -71,7 +71,7 @@ export const AGENT_WEBGPU_SUPPORTED_TYPES: ReadonlySet<string> = new Set<string>
   // self reads
   'getSelfPosition', 'getSelfHandle', 'getRadius', 'getAge', 'getBondDegree', 'neighbourDensity', 'getCurvature',
   // neighbour access
-  'getNearbyAgents', 'getAgentsInView', 'forEachInArray', 'getAgentOffset', 'getVelocity',
+  'getNearbyAgents', 'getAgentsInView', 'senseHemifield', 'forEachInArray', 'getAgentOffset', 'getVelocity',
   'getAgentPosition', 'getAgentRadius', 'getAgentAttribute',
   // agent-array tier (id/value arrays + aggregate/group-reduce over them)
   'getAgentsAttribute', 'setAgentsAttribute', 'filterAgents', 'joinAgents',
@@ -571,6 +571,10 @@ function compileValueNode(ctx: AgentWgpuCtx, nodeId: string, portId: string): Va
     }
     case 'getAgentOffset': {
       result = compileAgentOffset(ctx, node, portId);
+      break;
+    }
+    case 'senseHemifield': {
+      result = emitSenseHemifield(ctx, node, portId);
       break;
     }
     case 'sampleField': {
@@ -2282,6 +2286,95 @@ function emitNearbyFill(ctx: AgentWgpuCtx, naNode: GraphNode): AgentArrayRef {
   emitAllPairs(ctx, test);
   ctx.lines.push(`  }`);
   return { arrName, lenName, elemType: 'i32' };
+}
+
+/** Sense Hemifield (the Braitenberg L/R sensor) — one gather pass into TWO i32
+ *  counters (no scratch array; a plain multi-output value node). Reuses the SAME
+ *  stencil + cone gate as emitNearbyFill; each in-view neighbour is split by the
+ *  sign of the heading-relative cross product (2D: hx·dy−hy·dx; 3D: the triple
+ *  product against a +Z up-reference, swapped to +Y for a near-vertical heading —
+ *  `select(+Z form, +Y form, upY)`). f32 ⇒ a boundary statistical difference vs
+ *  JS/WASM (the documented WebGPU stance). Multi-output: leftCount / rightCount. */
+function emitSenseHemifield(ctx: AgentWgpuCtx, node: GraphNode, portId: string): ValueRef {
+  const is3d = ctx.is3d;
+  const cached = ctx.valueCache.get(`${node.id}:leftCount`);
+  if (cached !== undefined) return ctx.valueCache.get(`${node.id}:${portId}`) ?? cached;
+
+  const left = fresh(ctx, 'shL'), right = fresh(ctx, 'shR'), cr = fresh(ctx, 'shCr');
+  ctx.lines.push(`  var ${left}: i32 = 0; var ${right}: i32 = 0;`);
+  const r2 = fresh(ctx, 'shR2'), xi = fresh(ctx, 'shXi'), yi = fresh(ctx, 'shYi'), zi = fresh(ctx, 'shZi');
+  const qr = castTo(resolveValueInput(ctx, node, 'radius', 5), 'f32');
+  ctx.lines.push(`  let ${r2}: f32 = (${qr}) * (${qr});`);
+  ctx.lines.push(`  let ${xi}: f32 = ${f32At(ctx, 'x', 'idx')};`);
+  ctx.lines.push(`  let ${yi}: f32 = ${f32At(ctx, 'y', 'idx')};`);
+  if (is3d) ctx.lines.push(`  let ${zi}: f32 = ${f32At(ctx, 'z', 'idx')};`);
+
+  // heading (hx,hy[,hz]) + |heading| — ALWAYS needed (the cross uses it), plus cosHalf.
+  const { cosHalf, omni } = viewCosHalf(node.data.config as Record<string, unknown>);
+  const cosHalfLit = Number.isInteger(cosHalf) ? cosHalf.toFixed(1) : String(cosHalf);
+  const wired = node.data.config.headingSource === 'wired';
+  const hx = fresh(ctx, 'shHx'), hy = fresh(ctx, 'shHy'), hz = fresh(ctx, 'shHz'), hm2 = fresh(ctx, 'shHm2'), hm = fresh(ctx, 'shHm'), upY = fresh(ctx, 'shUpY');
+  ctx.lines.push(`  let ${hx}: f32 = ${wired ? castTo(resolveValueInput(ctx, node, 'headingX', 0), 'f32') : f32At(ctx, 'vx', 'idx')};`);
+  ctx.lines.push(`  let ${hy}: f32 = ${wired ? castTo(resolveValueInput(ctx, node, 'headingY', 0), 'f32') : f32At(ctx, 'vy', 'idx')};`);
+  let hm2Expr = `${hx} * ${hx} + ${hy} * ${hy}`;
+  if (is3d) {
+    ctx.lines.push(`  let ${hz}: f32 = ${wired ? castTo(resolveValueInput(ctx, node, 'headingZ', 0), 'f32') : f32At(ctx, 'vz', 'idx')};`);
+    hm2Expr += ` + ${hz} * ${hz}`;
+  }
+  ctx.lines.push(`  let ${hm2}: f32 = ${hm2Expr};`);
+  ctx.lines.push(`  let ${hm}: f32 = sqrt(${hm2});`);
+  if (is3d) ctx.lines.push(`  let ${upY}: bool = ${hz} * ${hz} > 0.81 * ${hm2};`);
+
+  // cross ≥ 0 ⇒ Left, else Right. WGSL select(f, t, cond) → t if cond else f, so the
+  // +Y form is the true-arm and the +Z form the false-arm: select(+Z, +Y, upY). The
+  // per-neighbour offsets (dx/dy/dz) are fresh inside `test`, so cross is built there.
+  const test = (jExpr: string) => {
+    const j = fresh(ctx, 'shJ');
+    ctx.lines.push(`  { let ${j}: u32 = ${jExpr};`);
+    ctx.lines.push(`    if (${j} != idx && agentAlive[${j}] != 0u) {`);
+    const dx = fresh(ctx, 'shDx'), dy = fresh(ctx, 'shDy'), dz = fresh(ctx, 'shDz');
+    ctx.lines.push(`      var ${dx}: f32 = ${f32At(ctx, 'x', j)} - ${xi};`);
+    ctx.lines.push(`      var ${dy}: f32 = ${f32At(ctx, 'y', j)} - ${yi};`);
+    if (is3d) ctx.lines.push(`      var ${dz}: f32 = ${f32At(ctx, 'z', j)} - ${zi};`);
+    ctx.lines.push(`      if (control.fieldTorus != 0u) {`);
+    ctx.lines.push(`        let _hW = control.fieldW * 0.5; let _hH = control.fieldH * 0.5;`);
+    ctx.lines.push(`        if (${dx} > _hW) { ${dx} = ${dx} - control.fieldW; } else if (${dx} < -_hW) { ${dx} = ${dx} + control.fieldW; }`);
+    ctx.lines.push(`        if (${dy} > _hH) { ${dy} = ${dy} - control.fieldH; } else if (${dy} < -_hH) { ${dy} = ${dy} + control.fieldH; }`);
+    if (is3d) {
+      ctx.lines.push(`        let _hD = control.fieldD * 0.5;`);
+      ctx.lines.push(`        if (${dz} > _hD) { ${dz} = ${dz} - control.fieldD; } else if (${dz} < -_hD) { ${dz} = ${dz} + control.fieldD; }`);
+    }
+    ctx.lines.push(`      }`);
+    const d2 = is3d ? `${dx} * ${dx} + ${dy} * ${dy} + ${dz} * ${dz}` : `${dx} * ${dx} + ${dy} * ${dy}`;
+    const cross = is3d
+      ? `select(${hx} * ${dy} - ${hy} * ${dx}, ${hz} * ${dx} - ${hx} * ${dz}, ${upY})`
+      : `${hx} * ${dy} - ${hy} * ${dx}`;
+    const tally = `{ let ${cr}: f32 = ${cross}; if (${cr} >= 0.0) { ${left} = ${left} + 1; } else { ${right} = ${right} + 1; } }`;
+    ctx.lines.push(`      if (${d2} <= ${r2}) {`);
+    if (omni) {
+      ctx.lines.push(`        ${tally}`);
+    } else {
+      const dotE = is3d ? `${hx} * ${dx} + ${hy} * ${dy} + ${hz} * ${dz}` : `${hx} * ${dx} + ${hy} * ${dy}`;
+      ctx.lines.push(`        if (${hm2} == 0.0 || (${dotE}) >= (${cosHalfLit} * ${hm}) * sqrt(${d2})) {`);
+      ctx.lines.push(`          ${tally}`);
+      ctx.lines.push(`        }`);
+    }
+    ctx.lines.push(`      }`);
+    ctx.lines.push(`    } }`);
+  };
+
+  ctx.lines.push(`  if (control.hashValid != 0u) {`);
+  emitHashStencil(ctx, test, xi, yi, zi);
+  ctx.lines.push(`  } else {`);
+  emitAllPairs(ctx, test);
+  ctx.lines.push(`  }`);
+
+  const refs: Record<string, ValueRef> = {
+    leftCount: { expr: left, type: 'i32' },
+    rightCount: { expr: right, type: 'i32' },
+  };
+  for (const k of Object.keys(refs)) ctx.valueCache.set(`${node.id}:${k}`, refs[k]!);
+  return refs[portId] ?? refs['leftCount']!;
 }
 
 /** The 3×3 (2D) / 3×3×3 (3D) hash-bin stencil over the in-buffer binStart/binAgents

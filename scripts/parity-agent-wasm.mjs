@@ -148,6 +148,36 @@ function buildFOVModel() {
   };
 }
 
+// Sense Hemifield: the L/R Braitenberg reduction over the SAME cone gather. Stores
+// BOTH outputs in separate integer attrs so a left/right swap (or a per-target cross
+// divergence) is caught bit-for-bit. Wired heading (1,0) so the split is deterministic.
+function buildHemifieldModel() {
+  const used = new Set();
+  const nid = (p) => { let id; do { id = p + Math.random().toString(36).slice(2, 8); } while (used.has(id)); used.add(id); return id; };
+  const aN = [], aEd = [];
+  const an = (t, c) => { const n = { id: nid('a'), type: 'caNode', position: { x: 0, y: 0 }, data: { nodeType: t, config: c } }; aN.push(n); return n; };
+  const aE = (s, sp, tt, tp, cat) => aEd.push({ id: nid('e'), source: s.id, target: tt.id, sourceHandle: `output_${cat}_${sp}`, targetHandle: `input_${cat}_${tp}` });
+  const bs = an('behaviourStep', {});
+  const sh = an('senseHemifield', { halfAngle: '90', headingSource: 'wired', _port_radius: '6', _port_headingX: '1', _port_headingY: '0' });
+  const setL = an('setAttribute', { attributeId: 'countL' });
+  const setR = an('setAttribute', { attributeId: 'countR' });
+  aE(bs, 'do', setL, 'do', 'flow');
+  aE(setL, 'next', setR, 'do', 'flow');
+  aE(sh, 'leftCount', setL, 'value', 'value');
+  aE(sh, 'rightCount', setR, 'value', 'value');
+  return {
+    schemaVersion: 1,
+    properties: { name: 'Hemifield Parity Test', dimension: '2d', gridWidth: 24, gridHeight: 24, gridDepth: 1, topology: '2d-grid', boundaryTreatment: 'torus', useWasm: false, useWebGPU: false },
+    topologyMode: { gridCells: false, agents: true },
+    centerBased: { enabled: true, maxAgents: 100, maxBonds: 0, worldWidth: 24, worldHeight: 24, seedCount: 40, seedPattern: 'scatter', defaultRadius: 0.5, growthRate: 0, repulsionStiffness: 2, adhesionStiffness: 0, interactionRange: 1.5, drag: 1, timeStep: 0.1, momentum: 0, maxSpeed: 0, neighbourQueryRadius: 8, useBondingPhysics: false, autoBond: false, agentTarget: 'wasm', agentUpdateMode: 'async',
+      agentCapabilities: { motion: 'force', body: true, collision: 'off', bonds: 'off', autoBond: false, growth: false, division: false, lifespan: false, populationBirth: false, populationDeath: false, sensing: true, sensingHeadingSource: 'velocity', orientation: false, fieldCoupling: false, appearance: true } },
+    attributes: [], modelAttributes: [], neighborhoods: [],
+    agentAttributes: [{ id: 'countL', name: 'CountL', type: 'integer', defaultValue: '0' }, { id: 'countR', name: 'CountR', type: 'integer', defaultValue: '0' }],
+    variables: [], agentVariables: [], indicators: [], mappings: [],
+    graphNodes: [], graphEdges: [], agentGraphNodes: aN, agentGraphEdges: aEd, macroDefs: [],
+  };
+}
+
 const modelsDir = join(ROOT, 'public', 'models');
 const files = readdirSync(modelsDir).filter(f => f.endsWith('.gcaproj'));
 const SEED = 0x9e3779b1 >>> 0;
@@ -166,6 +196,7 @@ for (const f of files) {
 }
 entries.push({ name: '[synthetic] Field3D (all 5 field nodes, 3D)', raw: build3DFieldModel() });
 entries.push({ name: '[synthetic] FOV cone (Get Agents In View)', raw: buildFOVModel() });
+entries.push({ name: '[synthetic] Hemifield (Sense Hemifield L/R)', raw: buildHemifieldModel() });
 
 for (const { name: f, raw } of entries) {
   const model = migrateForHarness(raw);

@@ -127,7 +127,7 @@ export const AGENT_WASM_SUPPORTED_TYPES: ReadonlySet<string> = new Set<string>([
   'getSelfPosition', 'getRadius', 'getAge', 'getBondDegree', 'neighbourDensity', 'getCurvature',
   // neighbour access
   'getSelfHandle',
-  'getNearbyAgents', 'getAgentsInView', 'forEachInArray', 'getAgentOffset', 'getVelocity',
+  'getNearbyAgents', 'getAgentsInView', 'senseHemifield', 'forEachInArray', 'getAgentOffset', 'getVelocity',
   'getAgentPosition', 'getAgentRadius', 'getAgentAttribute',
   // agent-array tier
   'getAgentsAttribute', 'setAgentsAttribute', 'filterAgents', 'joinAgents',
@@ -646,6 +646,10 @@ function compileValueNode(ctx: AgentWasmCtx, nodeId: string, portId: string): Va
     }
     case 'getAgentOffset': {
       result = compileAgentOffset(ctx, node, portId);
+      break;
+    }
+    case 'senseHemifield': {
+      result = emitSenseHemifield(ctx, node, portId);
       break;
     }
     case 'getBondDegree': {
@@ -3222,6 +3226,141 @@ function emitNearbyFill(ctx: AgentWasmCtx, naNode: GraphNode): { baseLocal: numb
     () => emitAllPairs(ctx, test),
   );
   return { baseLocal, lenLocal };
+}
+
+/** Sense Hemifield (the Braitenberg L/R sensor) — one gather pass into TWO i32
+ *  counters (no scratch array; not an array producer). Reuses the SAME stencil +
+ *  cone gate as emitNearbyFill; each in-view neighbour is split by the sign of the
+ *  heading-relative cross product (2D: hx·dy−hy·dx; 3D: the triple product against a
+ *  +Z up-reference, swapped to +Y for a near-vertical heading). Mirrors
+ *  SenseHemifieldNode's JS emit EXACTLY (op order + the 0.81 up-swap literal) for
+ *  bit-parity. Multi-output: leftCount / rightCount cached under the valueCache. */
+function emitSenseHemifield(ctx: AgentWasmCtx, node: GraphNode, portId: string): ValueRef {
+  const em = ctx.em;
+  const L = ctx.layout;
+  const cached = ctx.valueCache.get(`${node.id}:leftCount`);
+  if (cached !== undefined) return ctx.valueCache.get(`${node.id}:${portId}`) ?? cached;
+
+  const leftL = em.allocLocal(I32); em.i32Const(0); em.localSet(leftL);
+  const rightL = em.allocLocal(I32); em.i32Const(0); em.localSet(rightL);
+  // query params (mirror emitNearbyFill)
+  const qr = resolveValueInput(ctx, node, 'radius', 5);
+  const r2L = em.allocLocal(F64); pushValueAs(em, qr, F64); em.localTee(r2L); em.localGet(r2L); em.op(OP_F64_MUL); em.localSet(r2L);
+  const xiL = em.allocLocal(F64); pushF64Elem(em, L.f64['x']!, ctx.idxLocal); em.localSet(xiL);
+  const yiL = em.allocLocal(F64); pushF64Elem(em, L.f64['y']!, ctx.idxLocal); em.localSet(yiL);
+  const ziL = em.allocLocal(F64); if (ctx.is3d) { pushF64Elem(em, L.f64['z']!, ctx.idxLocal); em.localSet(ziL); } else { em.f64Const(0); em.localSet(ziL); }
+
+  // heading (hx,hy[,hz]) + |heading| — ALWAYS needed (the cross uses it), plus cosHalf.
+  const { cosHalf, omni } = viewCosHalf(node.data.config as Record<string, unknown>);
+  const wired = node.data.config.headingSource === 'wired';
+  const hxL = em.allocLocal(F64), hyL = em.allocLocal(F64);
+  let hzL = -1;
+  if (wired) {
+    pushValueAs(em, resolveValueInput(ctx, node, 'headingX', 0), F64); em.localSet(hxL);
+    pushValueAs(em, resolveValueInput(ctx, node, 'headingY', 0), F64); em.localSet(hyL);
+    if (ctx.is3d) { hzL = em.allocLocal(F64); pushValueAs(em, resolveValueInput(ctx, node, 'headingZ', 0), F64); em.localSet(hzL); }
+  } else {
+    pushF64Elem(em, L.f64['vx']!, ctx.idxLocal); em.localSet(hxL);
+    pushF64Elem(em, L.f64['vy']!, ctx.idxLocal); em.localSet(hyL);
+    if (ctx.is3d) { hzL = em.allocLocal(F64); pushF64Elem(em, L.f64['vz']!, ctx.idxLocal); em.localSet(hzL); }
+  }
+  const hm2L = em.allocLocal(F64), hmL = em.allocLocal(F64);
+  em.localGet(hxL); em.localGet(hxL); em.op(OP_F64_MUL);
+  em.localGet(hyL); em.localGet(hyL); em.op(OP_F64_MUL); em.op(OP_F64_ADD);
+  if (ctx.is3d && hzL >= 0) { em.localGet(hzL); em.localGet(hzL); em.op(OP_F64_MUL); em.op(OP_F64_ADD); }
+  em.localTee(hm2L); em.op(OP_F64_SQRT); em.localSet(hmL);
+  // upY (3D): hz*hz > 0.81*hm2 (the near-vertical-heading up-swap; JS: __hz*__hz>0.81*__hm2).
+  let upYL = -1;
+  if (ctx.is3d && hzL >= 0) {
+    upYL = em.allocLocal(I32);
+    em.localGet(hzL); em.localGet(hzL); em.op(OP_F64_MUL);
+    em.f64Const(0.81); em.localGet(hm2L); em.op(OP_F64_MUL);
+    em.op(OP_F64_GT); em.localSet(upYL);
+  }
+
+  const aliveOff = L.u8['alive']!;
+  const test = (jL: number) => {
+    em.localGet(jL); em.localGet(ctx.idxLocal); em.op(OP_I32_NE);
+    em.ifThen(() => {
+      em.localGet(jL); em.i32Const(aliveOff); em.op(OP_I32_ADD); em.i32Load8U();
+      em.ifThen(() => {
+        const dxL = em.allocLocal(F64), dyL = em.allocLocal(F64);
+        pushF64Elem(em, L.f64['x']!, jL); em.localGet(xiL); em.op(OP_F64_SUB); em.localSet(dxL);
+        pushF64Elem(em, L.f64['y']!, jL); em.localGet(yiL); em.op(OP_F64_SUB); em.localSet(dyL);
+        let dzL = -1;
+        if (ctx.is3d) { dzL = em.allocLocal(F64); pushF64Elem(em, L.f64['z']!, jL); em.localGet(ziL); em.op(OP_F64_SUB); em.localSet(dzL); }
+        em.localGet(ctx.fieldTorusLocal);
+        em.ifThen(() => {
+          foldTorus(em, dxL, ctx.fieldWLocal);
+          foldTorus(em, dyL, ctx.fieldHLocal);
+          if (ctx.is3d && dzL >= 0) foldTorus(em, dzL, ctx.fieldDLocal);
+        });
+        const d2L = em.allocLocal(F64);
+        em.localGet(dxL); em.localGet(dxL); em.op(OP_F64_MUL);
+        em.localGet(dyL); em.localGet(dyL); em.op(OP_F64_MUL); em.op(OP_F64_ADD);
+        if (ctx.is3d && dzL >= 0) { em.localGet(dzL); em.localGet(dzL); em.op(OP_F64_MUL); em.op(OP_F64_ADD); }
+        em.localSet(d2L);
+        // tally: cross = 2D (hx*dy - hy*dx) | 3D select(hz*dx - hx*dz, hx*dy - hy*dx, upY);
+        // if (cross >= 0) left++ else right++.
+        const doTally = () => {
+          const crossL = em.allocLocal(F64);
+          if (ctx.is3d && dzL >= 0 && upYL >= 0) {
+            // OP_SELECT pops [a, b, cond] → a if cond!=0 else b. a = +Y form, b = +Z form.
+            em.localGet(hzL); em.localGet(dxL); em.op(OP_F64_MUL);
+            em.localGet(hxL); em.localGet(dzL); em.op(OP_F64_MUL); em.op(OP_F64_SUB);   // a = hz*dx - hx*dz
+            em.localGet(hxL); em.localGet(dyL); em.op(OP_F64_MUL);
+            em.localGet(hyL); em.localGet(dxL); em.op(OP_F64_MUL); em.op(OP_F64_SUB);   // b = hx*dy - hy*dx
+            em.localGet(upYL);
+            em.op(OP_SELECT);
+            em.localSet(crossL);
+          } else {
+            em.localGet(hxL); em.localGet(dyL); em.op(OP_F64_MUL);
+            em.localGet(hyL); em.localGet(dxL); em.op(OP_F64_MUL); em.op(OP_F64_SUB);   // hx*dy - hy*dx
+            em.localSet(crossL);
+          }
+          em.localGet(crossL); em.f64Const(0); em.op(OP_F64_GE);
+          em.ifThenElse(
+            () => { em.localGet(leftL); em.i32Const(1); em.op(OP_I32_ADD); em.localSet(leftL); },
+            () => { em.localGet(rightL); em.i32Const(1); em.op(OP_I32_ADD); em.localSet(rightL); },
+          );
+        };
+        // if (d2 <= r2) { cone gate → doTally }
+        em.localGet(d2L); em.localGet(r2L); em.op(OP_F64_LE);
+        em.ifThen(() => {
+          if (omni) { doTally(); return; }
+          em.localGet(hm2L); em.f64Const(0); em.op(OP_F64_EQ);
+          em.ifThenElse(
+            () => doTally(),
+            () => {
+              const dL = em.allocLocal(F64), dotL = em.allocLocal(F64);
+              em.localGet(d2L); em.op(OP_F64_SQRT); em.localSet(dL);
+              em.localGet(hxL); em.localGet(dxL); em.op(OP_F64_MUL);
+              em.localGet(hyL); em.localGet(dyL); em.op(OP_F64_MUL); em.op(OP_F64_ADD);
+              if (ctx.is3d && dzL >= 0) { em.localGet(hzL); em.localGet(dzL); em.op(OP_F64_MUL); em.op(OP_F64_ADD); }
+              em.localSet(dotL);
+              em.localGet(dotL);
+              em.f64Const(cosHalf); em.localGet(hmL); em.op(OP_F64_MUL); em.localGet(dL); em.op(OP_F64_MUL);
+              em.op(OP_F64_GE);
+              em.ifThen(() => doTally());
+            },
+          );
+        });
+      });
+    });
+  };
+
+  em.localGet(ctx.hashValidLocal);
+  em.ifThenElse(
+    () => emitHashStencil(ctx, test, xiL, yiL, ziL),
+    () => emitAllPairs(ctx, test),
+  );
+
+  const refs: Record<string, ValueRef> = {
+    leftCount: { localIdx: leftL, valtype: I32 },
+    rightCount: { localIdx: rightL, valtype: I32 },
+  };
+  for (const k of Object.keys(refs)) ctx.valueCache.set(`${node.id}:${k}`, refs[k]!);
+  return refs[portId] ?? refs['leftCount']!;
 }
 
 /** The 3×3[×3] hash-bin stencil over the in-memory binStart/binAgents, torus-
