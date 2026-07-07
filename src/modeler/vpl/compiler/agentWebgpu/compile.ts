@@ -56,6 +56,7 @@ import { getNodeDef } from '../../nodes/registry';
 import { cellFieldAttrsOf, cellFieldWriteAttrsOf, agentAttrsOf } from '../../../../model/attributeScope';
 import { readCategoricalEntries, readCategoricalDefault } from '../../nodes/CategoricalColorNode';
 import { readColorScaleStops } from '../../nodes/ColorScaleNode';
+import { viewCosHalf } from '../../nodes/GetAgentsInViewNode';
 import { resolveKeyLabels } from '../variegation';
 import { computeAgentWebGPULayout, type AgentWebGPULayout } from './layout';
 import { resolveMaxBonds } from '../../../../model/centerBased';
@@ -70,7 +71,7 @@ export const AGENT_WEBGPU_SUPPORTED_TYPES: ReadonlySet<string> = new Set<string>
   // self reads
   'getSelfPosition', 'getSelfHandle', 'getRadius', 'getAge', 'getBondDegree', 'neighbourDensity', 'getCurvature',
   // neighbour access
-  'getNearbyAgents', 'forEachInArray', 'getAgentOffset', 'getVelocity',
+  'getNearbyAgents', 'getAgentsInView', 'forEachInArray', 'getAgentOffset', 'getVelocity',
   'getAgentPosition', 'getAgentRadius', 'getAgentAttribute',
   // agent-array tier (id/value arrays + aggregate/group-reduce over them)
   'getAgentsAttribute', 'setAgentsAttribute', 'filterAgents', 'joinAgents',
@@ -1430,7 +1431,7 @@ function groupStatementElemCmp(op: string, e: string, v1: string): string {
 /** The set of node types that emit an `AgentArrayRef`. A `forEachInArray.array`
  *  / `aggregate.values` / `pickRandomAgent.agents` source MUST be one of these. */
 const AGENT_ARRAY_PRODUCERS: ReadonlySet<string> = new Set<string>([
-  'getNearbyAgents', 'getAgentsAttribute', 'filterAgents', 'joinAgents', 'pickNRandomAgents',
+  'getNearbyAgents', 'getAgentsInView', 'getAgentsAttribute', 'filterAgents', 'joinAgents', 'pickNRandomAgents',
   'getBondedAgents',
 ]);
 
@@ -1458,7 +1459,8 @@ function compileArrayNode(ctx: AgentWgpuCtx, nodeId: string, portId: string): Ag
 
   let ref: AgentArrayRef;
   switch (type) {
-    case 'getNearbyAgents': ref = emitNearbyFill(ctx, node); break;
+    case 'getNearbyAgents':
+    case 'getAgentsInView': ref = emitNearbyFill(ctx, node); break; // getAgentsInView injects the cone; getNearbyAgents WGSL is byte-identical
     case 'getAgentsAttribute': ref = emitGetAgentsAttribute(ctx, node); break;
     case 'filterAgents': ref = emitFilterAgents(ctx, node); break;
     case 'joinAgents': ref = emitJoinAgents(ctx, node); break;
@@ -2214,6 +2216,31 @@ function emitNearbyFill(ctx: AgentWgpuCtx, naNode: GraphNode): AgentArrayRef {
   ctx.lines.push(`  let ${yi}: f32 = ${f32At(ctx, 'y', 'idx')};`);
   if (is3d) ctx.lines.push(`  let ${zi}: f32 = ${f32At(ctx, 'z', 'idx')};`);
 
+  // FOV cone (getAgentsInView only) — the heading (hx,hy[,hz]) + |heading|, once per
+  // agent. Mirrors the JS/WASM preamble; cosHalf is the SAME compile-time literal
+  // (viewCosHalf, no runtime cos). getNearbyAgents (and the omni fast-path,
+  // halfAngle≥180) keep cone=null ⇒ the push below is byte-identical. f32 ⇒ a
+  // cone-boundary statistical difference vs JS/WASM (the documented WebGPU stance,
+  // same class as the distance-boundary difference), not a bug.
+  let cone: { cosHalfLit: string; hx: string; hy: string; hz: string; hm2: string; hm: string } | null = null;
+  if (naNode.data.nodeType === 'getAgentsInView') {
+    const { cosHalf, omni } = viewCosHalf(naNode.data.config as Record<string, unknown>);
+    if (!omni) {
+      const wired = naNode.data.config.headingSource === 'wired';
+      const hx = fresh(ctx, 'naHx'), hy = fresh(ctx, 'naHy'), hz = fresh(ctx, 'naHz'), hm2 = fresh(ctx, 'naHm2'), hm = fresh(ctx, 'naHm');
+      ctx.lines.push(`  let ${hx}: f32 = ${wired ? castTo(resolveValueInput(ctx, naNode, 'headingX', 0), 'f32') : f32At(ctx, 'vx', 'idx')};`);
+      ctx.lines.push(`  let ${hy}: f32 = ${wired ? castTo(resolveValueInput(ctx, naNode, 'headingY', 0), 'f32') : f32At(ctx, 'vy', 'idx')};`);
+      let hm2Expr = `${hx} * ${hx} + ${hy} * ${hy}`;
+      if (is3d) {
+        ctx.lines.push(`  let ${hz}: f32 = ${wired ? castTo(resolveValueInput(ctx, naNode, 'headingZ', 0), 'f32') : f32At(ctx, 'vz', 'idx')};`);
+        hm2Expr += ` + ${hz} * ${hz}`;
+      }
+      ctx.lines.push(`  let ${hm2}: f32 = ${hm2Expr};`);
+      ctx.lines.push(`  let ${hm}: f32 = sqrt(${hm2});`);
+      cone = { cosHalfLit: Number.isInteger(cosHalf) ? cosHalf.toFixed(1) : String(cosHalf), hx, hy, hz, hm2, hm };
+    }
+  }
+
   // The candidate test, applied to a candidate u32 id `j`. Pushes j into the
   // scratch array + bumps len when (j != idx && alive[j] && torus-folded d2 <= r2).
   const test = (jExpr: string) => {
@@ -2235,7 +2262,16 @@ function emitNearbyFill(ctx: AgentWgpuCtx, naNode: GraphNode): AgentArrayRef {
     ctx.lines.push(`      }`);
     const d2 = is3d ? `${dx} * ${dx} + ${dy} * ${dy} + ${dz} * ${dz}` : `${dx} * ${dx} + ${dy} * ${dy}`;
     ctx.lines.push(`      if (${d2} <= ${r2} && ${lenName} < i32(control.maxAgents)) {`);
-    ctx.lines.push(`        ${arrName}[${lenName}] = i32(${j}); ${lenName} = ${lenName} + 1;`);
+    if (cone) {
+      // Cone gate: hm2==0 ⇒ omnidirectional; else dot(h,offset) ≥ cosHalf·|h|·d
+      // (division-free `cosA ≥ cosHalf`). Mirrors the JS/WASM op order.
+      const dotE = is3d ? `${cone.hx} * ${dx} + ${cone.hy} * ${dy} + ${cone.hz} * ${dz}` : `${cone.hx} * ${dx} + ${cone.hy} * ${dy}`;
+      ctx.lines.push(`        if (${cone.hm2} == 0.0 || (${dotE}) >= (${cone.cosHalfLit} * ${cone.hm}) * sqrt(${d2})) {`);
+      ctx.lines.push(`          ${arrName}[${lenName}] = i32(${j}); ${lenName} = ${lenName} + 1;`);
+      ctx.lines.push(`        }`);
+    } else {
+      ctx.lines.push(`        ${arrName}[${lenName}] = i32(${j}); ${lenName} = ${lenName} + 1;`);
+    }
     ctx.lines.push(`      }`);
     ctx.lines.push(`    } }`);
   };
@@ -2516,7 +2552,7 @@ const AGENT_VALUE_NO_HOIST: ReadonlySet<string> = new Set<string>([
   'getIndicator',                           // mutable indicator storage
   'forEachInArray', 'forEachBond',          // per-iteration element refs
   // array producers (use scratch — emitted via compileArrayNode, not here)
-  'getNearbyAgents', 'getAgentsAttribute', 'filterAgents', 'joinAgents',
+  'getNearbyAgents', 'getAgentsInView', 'getAgentsAttribute', 'filterAgents', 'joinAgents',
   'pickNRandomAgents', 'pickRandomAgent', 'getBondedAgents',
   // aggregate/group* read array scratch (their fold is fine inline at use site)
   'aggregate', 'groupOperator', 'groupCounting', 'groupStatement',

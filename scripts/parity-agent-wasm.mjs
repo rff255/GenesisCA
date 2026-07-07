@@ -118,6 +118,36 @@ function build3DFieldModel() {
   };
 }
 
+// A synthetic FOV model — each agent counts the neighbours inside a heading-
+// relative vision cone (Get Agents In View → Array Length → Set Attribute). Wired
+// heading (1,0) so the cone is exercised regardless of velocity; halfAngle 60°.
+// Keeps permanent JS↔WASM bit-parity coverage for the cone-test emit.
+function buildFOVModel() {
+  const used = new Set();
+  const nid = (p) => { let id; do { id = p + Math.random().toString(36).slice(2, 8); } while (used.has(id)); used.add(id); return id; };
+  const aN = [], aEd = [];
+  const an = (t, c) => { const n = { id: nid('a'), type: 'caNode', position: { x: 0, y: 0 }, data: { nodeType: t, config: c } }; aN.push(n); return n; };
+  const aE = (s, sp, tt, tp, cat) => aEd.push({ id: nid('e'), source: s.id, target: tt.id, sourceHandle: `output_${cat}_${sp}`, targetHandle: `input_${cat}_${tp}` });
+  const bs = an('behaviourStep', {});
+  const giv = an('getAgentsInView', { halfAngle: '60', headingSource: 'wired', _port_radius: '6', _port_headingX: '1', _port_headingY: '0' });
+  const al = an('arrayLength', {});
+  const sa = an('setAttribute', { attributeId: 'count' });
+  aE(bs, 'do', sa, 'do', 'flow');
+  aE(giv, 'agents', al, 'array', 'value');
+  aE(al, 'length', sa, 'value', 'value');
+  return {
+    schemaVersion: 1,
+    properties: { name: 'FOV Parity Test', dimension: '2d', gridWidth: 24, gridHeight: 24, gridDepth: 1, topology: '2d-grid', boundaryTreatment: 'torus', useWasm: false, useWebGPU: false },
+    topologyMode: { gridCells: false, agents: true },
+    centerBased: { enabled: true, maxAgents: 100, maxBonds: 0, worldWidth: 24, worldHeight: 24, seedCount: 40, seedPattern: 'scatter', defaultRadius: 0.5, growthRate: 0, repulsionStiffness: 2, adhesionStiffness: 0, interactionRange: 1.5, drag: 1, timeStep: 0.1, momentum: 0, maxSpeed: 0, neighbourQueryRadius: 8, useBondingPhysics: false, autoBond: false, agentTarget: 'wasm', agentUpdateMode: 'async',
+      agentCapabilities: { motion: 'force', body: true, collision: 'off', bonds: 'off', autoBond: false, growth: false, division: false, lifespan: false, populationBirth: false, populationDeath: false, sensing: true, sensingHeadingSource: 'velocity', orientation: false, fieldCoupling: false, appearance: true } },
+    attributes: [], modelAttributes: [], neighborhoods: [],
+    agentAttributes: [{ id: 'count', name: 'Count', type: 'integer', defaultValue: '0' }],
+    variables: [], agentVariables: [], indicators: [], mappings: [],
+    graphNodes: [], graphEdges: [], agentGraphNodes: aN, agentGraphEdges: aEd, macroDefs: [],
+  };
+}
+
 const modelsDir = join(ROOT, 'public', 'models');
 const files = readdirSync(modelsDir).filter(f => f.endsWith('.gcaproj'));
 const SEED = 0x9e3779b1 >>> 0;
@@ -135,6 +165,7 @@ for (const f of files) {
   entries.push({ name: f, raw });
 }
 entries.push({ name: '[synthetic] Field3D (all 5 field nodes, 3D)', raw: build3DFieldModel() });
+entries.push({ name: '[synthetic] FOV cone (Get Agents In View)', raw: buildFOVModel() });
 
 for (const { name: f, raw } of entries) {
   const model = migrateForHarness(raw);

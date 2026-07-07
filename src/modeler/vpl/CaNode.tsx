@@ -1385,6 +1385,26 @@ function CaNodeComponent({ id, data }: NodeProps) {
           );
         })()}
 
+        {nodeData.nodeType === 'getAgentsInView' && (
+          <>
+            <label style={{ fontSize: '0.6rem', color: '#999' }}>Half-angle°</label>
+            <InlineNumberInput
+              className={styles.input}
+              value={(nodeData.config.halfAngle as string) ?? '60'}
+              onChange={v => updateConfig('halfAngle', v)}
+            />
+            <label style={{ fontSize: '0.6rem', color: '#999' }}>Heading</label>
+            <select
+              className={styles.select}
+              value={(nodeData.config.headingSource as string) ?? 'velocity'}
+              onChange={e => updateConfig('headingSource', e.target.value)}
+            >
+              <option value="velocity">Velocity</option>
+              <option value="wired">Wired (X/Y/Z)</option>
+            </select>
+          </>
+        )}
+
         {nodeData.nodeType === 'groupCounting' && (() => {
           const op = (nodeData.config.operation as string) || 'equals';
           const isBetween = op === 'between' || op === 'notBetween';

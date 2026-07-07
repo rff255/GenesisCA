@@ -103,6 +103,7 @@ import { canonicalizeAccessorEdges } from '../accessorCSE';
 import { resolveKeyLabels } from '../variegation';
 import { readColorScaleStops, type ColorScaleStop } from '../../nodes/ColorScaleNode';
 import { readCategoricalEntries, readCategoricalDefault } from '../../nodes/CategoricalColorNode';
+import { viewCosHalf } from '../../nodes/GetAgentsInViewNode';
 import { cellFieldAttrsOf } from '../../../../model/attributeScope';
 import {
   computeAgentMemoryLayout, computeAgentMaxHashBins, AGENT_NEARBY_SCRATCH_SLOTS,
@@ -126,7 +127,7 @@ export const AGENT_WASM_SUPPORTED_TYPES: ReadonlySet<string> = new Set<string>([
   'getSelfPosition', 'getRadius', 'getAge', 'getBondDegree', 'neighbourDensity', 'getCurvature',
   // neighbour access
   'getSelfHandle',
-  'getNearbyAgents', 'forEachInArray', 'getAgentOffset', 'getVelocity',
+  'getNearbyAgents', 'getAgentsInView', 'forEachInArray', 'getAgentOffset', 'getVelocity',
   'getAgentPosition', 'getAgentRadius', 'getAgentAttribute',
   // agent-array tier
   'getAgentsAttribute', 'setAgentsAttribute', 'filterAgents', 'joinAgents',
@@ -1470,7 +1471,7 @@ function emitCurvature(ctx: AgentWasmCtx): void {
 // ===========================================================================
 
 const AGENT_ARRAY_PRODUCERS = new Set<string>([
-  'getNearbyAgents', 'getBondedAgents', 'getAgentsAttribute',
+  'getNearbyAgents', 'getAgentsInView', 'getBondedAgents', 'getAgentsAttribute',
   'filterAgents', 'joinAgents', 'pickNRandomAgents', 'getVariable',
 ]);
 
@@ -1522,7 +1523,10 @@ function compileArrayNode(ctx: AgentWasmCtx, nodeId: string, portId: string): Ag
   const type = node.data.nodeType;
   let ref: AgentArrayRef;
   switch (type) {
-    case 'getNearbyAgents': {
+    case 'getNearbyAgents':
+    case 'getAgentsInView': {
+      // Get Agents In View reuses the SAME gather + injects a cone test (below);
+      // Get Nearby Agents (no cone) is byte-identical to before.
       const { baseLocal, lenLocal } = emitNearbyFill(ctx, node);
       ref = { offsetLocal: baseLocal, lenLocal, elemBytes: 4, isF64: false };
       break;
@@ -3117,6 +3121,37 @@ function emitNearbyFill(ctx: AgentWasmCtx, naNode: GraphNode): { baseLocal: numb
   const yiL = em.allocLocal(F64); pushF64Elem(em, L.f64['y']!, ctx.idxLocal); em.localSet(yiL);
   const ziL = em.allocLocal(F64); if (ctx.is3d) { pushF64Elem(em, L.f64['z']!, ctx.idxLocal); em.localSet(ziL); } else { em.f64Const(0); em.localSet(ziL); }
 
+  // FOV cone (getAgentsInView only) — the heading (hx,hy[,hz]) + |heading| + √|h|²,
+  // computed ONCE per agent (before the neighbour loop). Mirrors the JS emit's
+  // preamble EXACTLY (same op order) for bit-parity: cosHalf is the SAME compile-
+  // time literal (viewCosHalf, no runtime cos). getNearbyAgents (and the omni
+  // fast-path, halfAngle≥180) keep cone=null ⇒ the push below is byte-identical.
+  let cone: { cosHalf: number; hxL: number; hyL: number; hzL: number; hm2L: number; hmL: number } | null = null;
+  if (naNode.data.nodeType === 'getAgentsInView') {
+    const { cosHalf, omni } = viewCosHalf(naNode.data.config as Record<string, unknown>);
+    if (!omni) {
+      const wired = naNode.data.config.headingSource === 'wired';
+      const hxL = em.allocLocal(F64), hyL = em.allocLocal(F64);
+      let hzL = -1;
+      if (wired) {
+        pushValueAs(em, resolveValueInput(ctx, naNode, 'headingX', 0), F64); em.localSet(hxL);
+        pushValueAs(em, resolveValueInput(ctx, naNode, 'headingY', 0), F64); em.localSet(hyL);
+        if (ctx.is3d) { hzL = em.allocLocal(F64); pushValueAs(em, resolveValueInput(ctx, naNode, 'headingZ', 0), F64); em.localSet(hzL); }
+      } else {
+        pushF64Elem(em, L.f64['vx']!, ctx.idxLocal); em.localSet(hxL);
+        pushF64Elem(em, L.f64['vy']!, ctx.idxLocal); em.localSet(hyL);
+        if (ctx.is3d) { hzL = em.allocLocal(F64); pushF64Elem(em, L.f64['vz']!, ctx.idxLocal); em.localSet(hzL); }
+      }
+      // hm2 = hx*hx + hy*hy [+ hz*hz];  hm = sqrt(hm2)   (JS: __hx*__hx+__hy*__hy…)
+      const hm2L = em.allocLocal(F64), hmL = em.allocLocal(F64);
+      em.localGet(hxL); em.localGet(hxL); em.op(OP_F64_MUL);
+      em.localGet(hyL); em.localGet(hyL); em.op(OP_F64_MUL); em.op(OP_F64_ADD);
+      if (ctx.is3d && hzL >= 0) { em.localGet(hzL); em.localGet(hzL); em.op(OP_F64_MUL); em.op(OP_F64_ADD); }
+      em.localTee(hm2L); em.op(OP_F64_SQRT); em.localSet(hmL);
+      cone = { cosHalf, hxL, hyL, hzL, hm2L, hmL };
+    }
+  }
+
   // The candidate test, applied to a candidate agent id local jL. Pushes jL into
   // scratch + bumps len when (j != idx && alive[j] && torus-folded d2 <= r2).
   const aliveOff = L.u8['alive']!;
@@ -3144,14 +3179,37 @@ function emitNearbyFill(ctx: AgentWasmCtx, naNode: GraphNode): { baseLocal: numb
         em.localGet(dyL); em.localGet(dyL); em.op(OP_F64_MUL); em.op(OP_F64_ADD);
         if (ctx.is3d && dzL >= 0) { em.localGet(dzL); em.localGet(dzL); em.op(OP_F64_MUL); em.op(OP_F64_ADD); }
         em.localSet(d2L);
-        // if (d2 <= r2) scratch[len++] = j
-        em.localGet(d2L); em.localGet(r2L); em.op(OP_F64_LE);
-        em.ifThen(() => {
-          // addr = base + len*4
+        // scratch[len++] = j
+        const doPush = () => {
           em.localGet(baseLocal); em.localGet(lenLocal); em.i32Const(4); em.op(OP_I32_MUL); em.op(OP_I32_ADD);
           em.localGet(jL);
           em.i32Store();
           em.localGet(lenLocal); em.i32Const(1); em.op(OP_I32_ADD); em.localSet(lenLocal);
+        };
+        // if (d2 <= r2) { <cone gate> push }
+        em.localGet(d2L); em.localGet(r2L); em.op(OP_F64_LE);
+        em.ifThen(() => {
+          if (!cone) { doPush(); return; }
+          // Cone (getAgentsInView): if (hm2 == 0) omnidirectional push; else include
+          // when dot(h, offset) >= cosHalf·|h|·d  (division-free `cosA ≥ cosHalf`).
+          // EXACT JS op order for bit-parity: dot = hx*dx+hy*dy[+hz*dz]; d=√d2;
+          // rhs = (cosHalf*hm)*d.
+          em.localGet(cone.hm2L); em.f64Const(0); em.op(OP_F64_EQ);
+          em.ifThenElse(
+            () => doPush(),
+            () => {
+              const dL = em.allocLocal(F64), dotL = em.allocLocal(F64);
+              em.localGet(d2L); em.op(OP_F64_SQRT); em.localSet(dL);
+              em.localGet(cone!.hxL); em.localGet(dxL); em.op(OP_F64_MUL);
+              em.localGet(cone!.hyL); em.localGet(dyL); em.op(OP_F64_MUL); em.op(OP_F64_ADD);
+              if (ctx.is3d && dzL >= 0) { em.localGet(cone!.hzL); em.localGet(dzL); em.op(OP_F64_MUL); em.op(OP_F64_ADD); }
+              em.localSet(dotL);
+              em.localGet(dotL);
+              em.f64Const(cone!.cosHalf); em.localGet(cone!.hmL); em.op(OP_F64_MUL); em.localGet(dL); em.op(OP_F64_MUL);
+              em.op(OP_F64_GE);
+              em.ifThen(() => doPush());
+            },
+          );
         });
       });
     });
@@ -3394,7 +3452,7 @@ function computeVolatile(ctx: AgentWasmCtx, extraSeeds?: Set<string>): void {
 const AGENT_VALUE_NO_HOIST: ReadonlySet<string> = new Set<string>([
   'getRandom', 'getVariable', 'getAgentAttribute', 'getIndicator',
   'forEachInArray', 'forEachBond',
-  'getNearbyAgents', 'getAgentsAttribute', 'filterAgents', 'joinAgents',
+  'getNearbyAgents', 'getAgentsInView', 'getAgentsAttribute', 'filterAgents', 'joinAgents',
   'pickNRandomAgents', 'pickRandomAgent', 'getBondedAgents',
   'aggregate', 'groupOperator', 'groupCounting', 'groupStatement',
   'arrayElement', 'arrayLength',
@@ -4052,9 +4110,9 @@ export function isAgentGraphWasmSupported(model: CAModel | undefined | null): bo
     const t = n.data.nodeType;
     if (t === 'macroInput' || t === 'macroOutput' || t === 'macro') return false;
     if (!AGENT_WASM_SUPPORTED_TYPES.has(t)) return false;
-    if (t === 'getNearbyAgents') nearbyArrayProducers++;
+    if (t === 'getNearbyAgents' || t === 'getAgentsInView') nearbyArrayProducers++;
   }
-  // The per-node scratch-slot budget (only getNearbyAgents uses reserved slots).
+  // The per-node scratch-slot budget (getNearbyAgents + getAgentsInView share it).
   if (nearbyArrayProducers > AGENT_NEARBY_SCRATCH_SLOTS) return false;
   return true;
 }
@@ -4108,9 +4166,9 @@ export function compileAgentGraphWasm(
     const n = adj.nodeMap.get(id); if (!n) continue;
     seen.add(n.data.nodeType);
     if (!AGENT_WASM_SUPPORTED_TYPES.has(n.data.nodeType)) return empty(`agentWasm: unsupported node '${n.data.nodeType}' (falls back to JS).`);
-    if (n.data.nodeType === 'getNearbyAgents') nearbyCount++;
+    if (n.data.nodeType === 'getNearbyAgents' || n.data.nodeType === 'getAgentsInView') nearbyCount++;
   }
-  if (nearbyCount > agentLayout.nearbyScratchSlots) return empty(`agentWasm: too many getNearbyAgents (${nearbyCount} > ${agentLayout.nearbyScratchSlots} reserved slots).`);
+  if (nearbyCount > agentLayout.nearbyScratchSlots) return empty(`agentWasm: too many nearby/FOV gathers (${nearbyCount} > ${agentLayout.nearbyScratchSlots} reserved slots).`);
 
   // Viewer-guard table: the ordered non-sentinel setCellLooks mappingIds the
   // behaviour references. JS guards each such write with `_isV_` (activeViewer ===
@@ -4164,9 +4222,10 @@ export function compileAgentGraphWasm(
     hazardEmitBefore: new Map<string, string[]>(),
   };
 
-  // Assign getNearbyAgents scratch slots (reachable only).
+  // Assign getNearbyAgents + getAgentsInView scratch slots (reachable only) — both
+  // fill a per-node scratch id-array via emitNearbyFill.
   let slot = 0;
-  for (const id of reachable) { const n = adj.nodeMap.get(id); if (n?.data.nodeType === 'getNearbyAgents') ctx.nearbyScratchSlot.set(n.id, slot++); }
+  for (const id of reachable) { const n = adj.nodeMap.get(id); const t = n?.data.nodeType; if (t === 'getNearbyAgents' || t === 'getAgentsInView') ctx.nearbyScratchSlot.set(n!.id, slot++); }
 
   // Volatility analysis (don't cache element/index/getVariable-derived values).
   computeVolatile(ctx);

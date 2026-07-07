@@ -84,6 +84,7 @@ const DIRECT_READER_TYPES = new Set<string>([
   'getAgentOffset',
   'getCurvature',
   'getNearbyAgents',
+  'getAgentsInView',
   'getRadius',
   'getAgentRadius',
 ]);
@@ -119,6 +120,10 @@ function attrKeysRead(node: GraphNode): string[] {
     case 'getCurvature':
     case 'getNearbyAgents':
       return [POSITION_KEY];
+    case 'getAgentsInView':
+      // Reads neighbour POSITIONS (the cone offset) + the agent's own VELOCITY when
+      // the heading source is velocity (the default). Wired heading reads no attr.
+      return cfg.headingSource === 'wired' ? [POSITION_KEY] : [POSITION_KEY, VELOCITY_KEY];
     case 'getRadius':
     case 'getAgentRadius':
       return [RADIUS_KEY];

@@ -1302,6 +1302,11 @@ export function HelpView() {
               radius (the agent analogue of <em>Get All Neighbor Indexes</em>). Iterate it with
               <strong> For Each In Array</strong>, then read each with <strong>Get Agent Position /
               Offset / Attribute / Radius / Get Velocity</strong>, bond to it, or steer from it.</li>
+            <li><strong>Get Agents In View</strong> &mdash; the directional version: only the nearby
+              agents inside a heading-relative <strong>vision cone</strong> (set the <em>Half-angle°</em>
+              and a <em>Heading</em> source &mdash; the agent's Velocity, or a Wired direction). A
+              still agent (zero heading) sees all around; 180° is the full omnidirectional radius. Ideal
+              for predators/prey that only react to what's in front of them.</li>
             <li><strong>Get Agent Offset</strong> &mdash; the <em>torus-shortest</em> displacement
               (dX, dY) and Distance from this agent to a neighbour. Use this (or <em>Get Agent
               Position</em> in its Relative mode) &mdash; not hand-subtracting two raw positions

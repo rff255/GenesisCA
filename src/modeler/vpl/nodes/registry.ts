@@ -23,6 +23,7 @@ import { ReadCellsUnderNode } from './ReadCellsUnderNode';
 import { AffectCellsUnderNode } from './AffectCellsUnderNode';
 import { SecreteToFieldNode } from './SecreteToFieldNode';
 import { GetNearbyAgentsNode } from './GetNearbyAgentsNode';
+import { GetAgentsInViewNode } from './GetAgentsInViewNode';
 import { GetBondedAgentsNode } from './GetBondedAgentsNode';
 import { AgentInitNode } from './AgentInitNode';
 import { CreateAgentNode } from './CreateAgentNode';
@@ -150,6 +151,7 @@ const ALL_NODES: NodeTypeDef[] = [
   SetTargetRadiusNode,
   // Agent neighbour access + graph-authored forces (boids / flocking / signalling)
   GetNearbyAgentsNode,
+  GetAgentsInViewNode,
   GetBondedAgentsNode,
   GetAgentPositionNode,
   GetAgentOffsetNode,

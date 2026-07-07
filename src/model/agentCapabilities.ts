@@ -384,7 +384,7 @@ export const AGENT_CAPABILITY_ROWS: CapabilityRowMeta[] = [
   { key: 'lifespan', label: 'Lifespan', description: 'Per-agent age auto-increments. Unlocks Get Age.' },
   { key: 'populationBirth', label: 'Population — Birth', description: 'Spawn agents mid-step (eggs / projectiles / offspring). Unlocks Spawn Agent + the Spawn Event root.', requires: 'Motion' },
   { key: 'populationDeath', label: 'Population — Death', description: 'Kill agents mid-step. Unlocks Kill Agent.' },
-  { key: 'sensing', label: 'Sensing', description: 'The spatial hash + neighbour queries. Unlocks Get Nearby Agents.' },
+  { key: 'sensing', label: 'Sensing', description: 'The spatial hash + neighbour queries. Unlocks Get Nearby Agents + Get Agents In View (directional vision cone).' },
   { key: 'orientation', label: 'Orientation / Facing', description: 'A stored per-agent facing (heading source for FOV + sprite rotation).' },
   { key: 'fieldCoupling', label: 'Field Coupling', description: 'The agent ⇄ cell-grid morphogen bridge. Unlocks Sample Field, Field Gradient, Read / Affect Cells Under, Secrete To Field.', requires: 'a cell attribute with Agent access' },
 ];
