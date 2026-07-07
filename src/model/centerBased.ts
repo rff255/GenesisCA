@@ -71,6 +71,20 @@ export function usesBondingPhysics(cfg: CenterBasedConfig | undefined | null): b
   return cfg?.useBondingPhysics ?? !cfg?.customForcesOnly;
 }
 
+/** Resolve whether the engine runs its soft-sphere REPULSION — the volume-exclusion
+ *  collision — this model. Profile-aware: the Collision capability drives it
+ *  (`soft`/`positional` = on, `off` = off), INDEPENDENTLY of the bonding-physics
+ *  bundle. So a pure gas (Collision on, "Use bonding physics" off) gets
+ *  non-penetrating collision without cohesion or springs. Adhesion + springs +
+ *  growth + auto-bond stay under `usesBondingPhysics`. Legacy files without a
+ *  profile fall back to the engine-forces master toggle, so they're byte-identical.
+ *  (The shipped agent samples' inferred profile has `collision === 'soft' ⟺
+ *  usesBondingPhysics`, so their repulsion is byte-identical too.) */
+export function usesEngineCollision(cfg: CenterBasedConfig | undefined | null): boolean {
+  if (cfg?.agentCapabilities) return cfg.agentCapabilities.collision !== 'off';
+  return usesBondingPhysics(cfg);
+}
+
 /** Resolve a numeric config field to its value or the engine default. */
 export function cbNum(cfg: CenterBasedConfig | undefined | null, key: CenterBasedNumericKey): number {
   const v = cfg ? (cfg as unknown as Record<string, unknown>)[key] : undefined;

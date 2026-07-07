@@ -24,7 +24,7 @@ import { decodeReductions, gpuHandledIds, gpuHandledAttrIds } from './webgpuRedu
 import { encodeAttrValue } from '../../model/attrValueEncoding';
 import { subAttrInfo, parentValueToInt } from '../../modeler/vpl/compiler/subAttribute';
 import type { Attribute, CenterBasedConfig } from '../../model/types';
-import { cbNum, usesBondingPhysics } from '../../model/centerBased';
+import { cbNum, usesBondingPhysics, usesEngineCollision } from '../../model/centerBased';
 import {
   createAgentStore, seedAgents, clearAgents, allocAgentSlot, initAgentSlot, freeAgentSlot, freeStagedSlot,
   snapshotAgentsForRender, advanceAgentSprites, serializeAgentStore, deserializeAgentStore, buildSpatialHash,
@@ -1162,6 +1162,18 @@ function runAgentStep(): void {
   const momentum = Math.max(0, Math.min(0.999, cbNum(cfg, 'momentum')));
   const maxSpeed = Math.max(0, cbNum(cfg, 'maxSpeed'));
   const engineForces = bonding;
+  // Collision capability (Agent Capability Profiles): the soft-sphere REPULSION
+  // (volume exclusion) IS the collision — driven by the Collision capability
+  // independently of the bonding-physics bundle, so a pure gas (Collision on, "Use
+  // bonding physics" off) gets non-penetrating collision without cohesion/springs.
+  // `muRep` = repulsion coefficient (Collision on), `muAdh` = adhesion coefficient
+  // (bonding physics). `doForce` runs the neighbour force block when EITHER is on.
+  // For every shipped sample doCollision === engineForces, so muRep/muAdh reduce to
+  // muR/muA and this is byte-identical (verified by the force-pass parity harness).
+  const doCollision = usesEngineCollision(cfg);
+  const muRep = doCollision ? muR : 0;
+  const muAdh = engineForces ? muA : 0;
+  const doForce = doCollision || engineForces;
 
   // Reset the per-step force accumulator (Apply Force adds into it during
   // behaviour) BEFORE behaviour runs. forceZ is a memset of an always-zero-in-2D
@@ -1299,6 +1311,7 @@ function runAgentStep(): void {
         dtOverEta, muR, muA, range, momentum, maxSpeed, growthRate,
         W, H, D, bonding ? 1 : 0, torus ? 1 : 0,
         fpOriginX, fpOriginY, fpOriginZ,
+        doCollision ? 1 : 0,
       );
       ranForceWasm = true;
     } catch (e) {
@@ -1354,9 +1367,9 @@ function runAgentStep(): void {
                 const rmax = range * sij;
                 if (d2 === 0 || d2 >= rmax * rmax) continue;
                 dens++;
-                if (engineForces) {
+                if (doForce) {
                   const d = Math.sqrt(d2);
-                  const F = ((d < sij) ? muR : muA) * (d - sij);
+                  const F = ((d < sij) ? muRep : muAdh) * (d - sij);
                   const k = F / d;
                   fx += k * dx; fy += k * dy; fz += k * dz;
                 }
@@ -1378,9 +1391,9 @@ function runAgentStep(): void {
           const rmax = range * sij;
           if (d2 === 0 || d2 >= rmax * rmax) continue;
           dens++;
-          if (engineForces) {
+          if (doForce) {
             const d = Math.sqrt(d2);
-            const F = ((d < sij) ? muR : muA) * (d - sij);
+            const F = ((d < sij) ? muRep : muAdh) * (d - sij);
             const k = F / d;
             fx += k * dx; fy += k * dy; fz += k * dz;
           }
@@ -1466,9 +1479,9 @@ function runAgentStep(): void {
               const rmax = range * sij;
               if (d2 === 0 || d2 >= rmax * rmax) continue;
               dens++;
-              if (engineForces) {
+              if (doForce) {
                 const d = Math.sqrt(d2);
-                const F = ((d < sij) ? muR : muA) * (d - sij);
+                const F = ((d < sij) ? muRep : muAdh) * (d - sij);
                 const k = F / d;
                 fx += k * dx; fy += k * dy;
               }
@@ -1485,9 +1498,9 @@ function runAgentStep(): void {
           const rmax = range * sij;
           if (d2 === 0 || d2 >= rmax * rmax) continue;
           dens++;
-          if (engineForces) {
+          if (doForce) {
             const d = Math.sqrt(d2);
-            const F = ((d < sij) ? muR : muA) * (d - sij);
+            const F = ((d < sij) ? muRep : muAdh) * (d - sij);
             const k = F / d;
             fx += k * dx; fy += k * dy;
           }
@@ -1611,6 +1624,7 @@ async function runAgentStepWebGPUInner(): Promise<boolean> {
   const bonding = usesBondingPhysics(cfg);
   const muR = cbNum(cfg, 'repulsionStiffness');
   const muA = cbNum(cfg, 'adhesionStiffness');
+  const doCollision = usesEngineCollision(cfg);
   const range = cbNum(cfg, 'interactionRange');
   const eta = Math.max(1e-6, cbNum(cfg, 'drag'));
   const torus = boundaryTreatment === 'torus';
@@ -1681,7 +1695,7 @@ async function runAgentStepWebGPUInner(): Promise<boolean> {
     hashValid, nBinsX: hash ? hash.nBinsX : 0, nBinsY: hash ? hash.nBinsY : 0,
     binSizeX: hash ? hash.binSizeX : 1, binSizeY: hash ? hash.binSizeY : 1,
     dtOverEta: dt / eta, muR, muA, range, momentum, maxSpeed, growthRate,
-    fieldW: W, fieldH: H, bonding: bonding ? 1 : 0, torus: torus ? 1 : 0,
+    fieldW: W, fieldH: H, bonding: bonding ? 1 : 0, doCollision: doCollision ? 1 : 0, torus: torus ? 1 : 0,
     nBinsZ: hash ? hash.nBinsZ : 1, binSizeZ: hash ? hash.binSizeZ : 1, fieldD: s.worldDepth,
     originX: hash ? hash.originX : 0, originY: hash ? hash.originY : 0, originZ: hash ? hash.originZ : 0,
   });
