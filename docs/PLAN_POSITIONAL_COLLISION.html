@@ -147,11 +147,11 @@ Positional Iterations [ 2 ]
   <h2>Cross-target &amp; safety</h2>
   <div class="grid2">
     <div class="card">
-      <h3>All three targets</h3>
+      <h3>All three targets — ONE CPU post-step</h3>
+      <p class="note" style="margin-top:0">The projection is a CPU post-step constraint on the committed positions, exactly like the agent <b>structural phase</b> (bonds/division) — so there is ONE implementation, no WASM export and no GPU shader.</p>
       <ul>
-        <li><b>JS</b> — reference: <code>resolvePositionalCollisions</code> between the force loop and <code>swapPositions</code> (2D + 3D, hash + all-pairs).</li>
-        <li><b>WASM</b> — a <code>positionalPass</code> export, one sweep per call; <b>bit-parity</b> with JS (f64 + host <code>fmod</code> wrap).</li>
-        <li><b>WebGPU</b> — an <code>accumulate</code> + <code>apply</code> shader pair per sweep, reusing the force pass's hash + uniform; f32 statistical parity.</li>
+        <li><b>JS + WASM</b> — <code>resolvePositionalCollisions</code> runs in <code>runAgentStep</code> after <code>swapPositions</code>; the WASM target runs the SAME fn over the wasmBacked memory VIEWS ⇒ <b>bit-identical</b> (verified 0 mismatches).</li>
+        <li><b>WebGPU</b> — runs in <code>runAgentStepWebGPU</code> after <code>readbackAgentStep</code> (which already commits GPU positions to the CPU store — no extra readback); the next <code>uploadAgentSoA</code> returns them to the GPU. f32 force ⇒ statistical parity.</li>
       </ul>
     </div>
     <div class="card">
