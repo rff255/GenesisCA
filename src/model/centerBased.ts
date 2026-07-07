@@ -85,6 +85,31 @@ export function usesEngineCollision(cfg: CenterBasedConfig | undefined | null): 
   return usesBondingPhysics(cfg);
 }
 
+/** Resolve whether the engine runs its bond SPRINGS this model. Profile-aware:
+ *  the Bonds capability drives it (`physics` = springs on, `data`/`off` = no
+ *  springs — Data bonds are connectivity edges only), INDEPENDENTLY of the
+ *  bonding-physics bundle. So the Bonds dropdown's Data-vs-Physics choice is a
+ *  REAL behavioural distinction, not just a palette relabel. Legacy files without
+ *  a profile fall back to `usesBondingPhysics` (byte-identical); the migration
+ *  inference widens `bonds→physics` whenever the legacy bundle ran springs, so
+ *  migrated files reproduce their old spring behaviour exactly. */
+export function usesEngineSprings(cfg: CenterBasedConfig | undefined | null): boolean {
+  if (cfg?.agentCapabilities) return cfg.agentCapabilities.bonds === 'physics';
+  return usesBondingPhysics(cfg);
+}
+
+/** Resolve whether the engine runs its growth RAMP (radius → targetRadius) this
+ *  model. Profile-aware: the Growth capability drives it, INDEPENDENTLY of the
+ *  bonding-physics bundle — so ticking Growth + placing Set Target Radius actually
+ *  ramps (previously the ramp was gated on `usesBondingPhysics`, so the node was a
+ *  silent no-op without it). Legacy files without a profile fall back to
+ *  `usesBondingPhysics` (byte-identical); the migration inference sets `growth`
+ *  whenever the legacy bundle ramped (usesBondingPhysics ∧ growthRate>0). */
+export function usesEngineGrowth(cfg: CenterBasedConfig | undefined | null): boolean {
+  if (cfg?.agentCapabilities) return !!cfg.agentCapabilities.growth;
+  return usesBondingPhysics(cfg);
+}
+
 /** Resolve a numeric config field to its value or the engine default. */
 export function cbNum(cfg: CenterBasedConfig | undefined | null, key: CenterBasedNumericKey): number {
   const v = cfg ? (cfg as unknown as Record<string, unknown>)[key] : undefined;

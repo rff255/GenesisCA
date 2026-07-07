@@ -24,7 +24,7 @@ import { decodeReductions, gpuHandledIds, gpuHandledAttrIds } from './webgpuRedu
 import { encodeAttrValue } from '../../model/attrValueEncoding';
 import { subAttrInfo, parentValueToInt } from '../../modeler/vpl/compiler/subAttribute';
 import type { Attribute, CenterBasedConfig } from '../../model/types';
-import { cbNum, usesBondingPhysics, usesEngineCollision } from '../../model/centerBased';
+import { cbNum, usesBondingPhysics, usesEngineCollision, usesEngineSprings, usesEngineGrowth } from '../../model/centerBased';
 import {
   createAgentStore, seedAgents, clearAgents, allocAgentSlot, initAgentSlot, freeAgentSlot, freeStagedSlot,
   snapshotAgentsForRender, advanceAgentSprites, serializeAgentStore, deserializeAgentStore, buildSpatialHash,
@@ -1143,6 +1143,7 @@ function runAgentStep(): void {
   // files are byte-identical (their bonding-physics models keep all four; their
   // custom-force models never used springs/growth/auto-bond anyway).
   const bonding = usesBondingPhysics(cfg);
+  const springs = usesEngineSprings(cfg);   // bond springs — the Bonds=Physics capability (decoupled from the legacy bundle)
   const muR = cbNum(cfg, 'repulsionStiffness');
   const muA = cbNum(cfg, 'adhesionStiffness');
   const range = cbNum(cfg, 'interactionRange');
@@ -1152,10 +1153,11 @@ function runAgentStep(): void {
   const halfW = W / 2, halfH = H / 2;
   const is3d = s.worldDepth > 1, D = s.worldDepth, halfD = D / 2;
   const dt = s.dt;
-  // Growth ramps radius→targetRadius only under bonding physics (req 10). A rate of
-  // 0 makes the ramp a no-op (`cur + sign*0 === cur` for tr≠cur), so this freezes
-  // growth without touching the ramp blocks below.
-  const growthRate = bonding ? Math.max(0, cbNum(cfg, 'growthRate')) : 0;
+  // Growth ramps radius→targetRadius under the Growth capability (decoupled from
+  // the legacy bonding bundle — so ticking Growth + Set Target Radius actually
+  // ramps). A rate of 0 makes the ramp a no-op (`cur + sign*0 === cur` for tr≠cur),
+  // so this freezes growth without touching the ramp blocks below.
+  const growthRate = usesEngineGrowth(cfg) ? Math.max(0, cbNum(cfg, 'growthRate')) : 0;
   const hw = s.highWater;
   const x = s.x, y = s.y, z = s.z, rad = s.radius, alive = s.alive;
   const maxBonds = s.maxBonds;
@@ -1311,7 +1313,7 @@ function runAgentStep(): void {
         dtOverEta, muR, muA, range, momentum, maxSpeed, growthRate,
         W, H, D, bonding ? 1 : 0, torus ? 1 : 0,
         fpOriginX, fpOriginY, fpOriginZ,
-        doCollision ? 1 : 0,
+        doCollision ? 1 : 0, springs ? 1 : 0,
       );
       ranForceWasm = true;
     } catch (e) {
@@ -1402,9 +1404,10 @@ function runAgentStep(): void {
       s.density[i] = dens;
 
       // --- bond springs λ(l−L)·r̂ over the 3-vector (dangling-bond epoch ABI) ---
-      // Gated on bonding physics (req 10): with it off, formed bonds carry no force.
+      // Gated on the Bonds=Physics capability: Data bonds are connectivity edges
+      // that carry NO force (only Physics bonds are springs).
       const bc = s.bondCount[i]!;
-      if (bonding && bc > 0) {
+      if (springs && bc > 0) {
         const base = i * maxBonds;
         for (let bk = 0; bk < bc; bk++) {
           const p = s.bondPartner[base + bk]!;
@@ -1510,9 +1513,10 @@ function runAgentStep(): void {
 
       // --- bond springs λ(l−L)·r̂ (no-op until bonds exist). The partnerEpoch
       // check is the dangling-bond ABI — a recycled slot's stale bond reads
-      // epoch-mismatch and is skipped. Gated on bonding physics (req 10). ---
+      // epoch-mismatch and is skipped. Gated on the Bonds=Physics capability
+      // (Data bonds are force-free edges). ---
       const bc = s.bondCount[i]!;
-      if (bonding && bc > 0) {
+      if (springs && bc > 0) {
         const base = i * maxBonds;
         for (let bk = 0; bk < bc; bk++) {
           const p = s.bondPartner[base + bk]!;
@@ -1629,7 +1633,7 @@ async function runAgentStepWebGPUInner(): Promise<boolean> {
   const eta = Math.max(1e-6, cbNum(cfg, 'drag'));
   const torus = boundaryTreatment === 'torus';
   const W = s.worldWidth, H = s.worldHeight;
-  const growthRate = bonding ? Math.max(0, cbNum(cfg, 'growthRate')) : 0;
+  const growthRate = usesEngineGrowth(cfg) ? Math.max(0, cbNum(cfg, 'growthRate')) : 0;
   const hw = s.highWater;
   const alive = s.alive, rad = s.radius;
   const momentum = Math.max(0, Math.min(0.999, cbNum(cfg, 'momentum')));
@@ -1838,12 +1842,14 @@ function runAgentStructuralPhase(): void {
 
   // 2. Auto-bond by distance (opt-in, hysteresis): form a bond between any two
   //    unbonded agents within formDistance×contact; break bonds stretched past
-  //    breakDistance×contact. Uses the spatial hash → O(N). Gated on bonding
-  //    physics (req 10), its own autoBond flag, AND a non-empty bond store
-  //    (STEP 3 capability-gate: Bonds=off ⇒ s.maxBonds=0, so the scan is skipped
-  //    entirely rather than scanning + rejecting at the capacity check — the same
-  //    result, no bonds, minus the wasted O(N) work).
-  if (s.maxBonds > 0 && usesBondingPhysics(cfg) && cfg?.autoBond) {
+  //    breakDistance×contact. Uses the spatial hash → O(N). Gated on the
+  //    Bonds=Physics capability (usesEngineSprings — auto-bond forms SPRING bonds,
+  //    so it rides the same gate as the springs it creates; consistent with the
+  //    closure's `autoBond ⇒ bonds='physics'`), its own autoBond flag, AND a
+  //    non-empty bond store (STEP 3 capability-gate: Bonds=off ⇒ s.maxBonds=0, so
+  //    the scan is skipped entirely rather than scanning + rejecting at the
+  //    capacity check — the same result, no bonds, minus the wasted O(N) work).
+  if (s.maxBonds > 0 && usesEngineSprings(cfg) && cfg?.autoBond) {
     const fMul = cbNum(cfg, 'formDistance');
     const bMul = cbNum(cfg, 'breakDistance');
     // form pass — scan candidate pairs via the hash

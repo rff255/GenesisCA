@@ -1,7 +1,7 @@
 import type { CSSProperties } from 'react';
 import type { CAModel, CenterBasedConfig, AgentCapabilities, CollisionMode, BondsMode, MotionMode } from '../../model/types';
 import {
-  AGENT_PRESETS, AGENT_PRESET_META, AGENT_CAPABILITY_ROWS,
+  AGENT_PRESETS, AGENT_PRESET_META, AGENT_CAPABILITY_ROWS, HIDDEN_CAP_ROWS_V1,
   resolveAgentProfile, matchAgentPreset, applyCapabilityEdit, estimateAgentFootprint,
   type AgentPresetKey, type BoolCapKey,
 } from '../../model/agentCapabilities';
@@ -73,14 +73,14 @@ export function AgentCapabilitiesSection({
         ))}
       </div>
       <span style={{ color: '#888', fontSize: '0.6rem', display: 'block', marginBottom: 8 }}>
-        Static = direct position writes · Velocity = pos += v·dt · Force = the integrator (Apply Force, momentum, drag).
-        <em style={{ color: '#777' }}> v1: the velocity/force fields are always allocated — this gates the palette + ports.</em>
+        Which motion nodes are offered: Static = position setters only · Velocity = + Set Velocity · Force = + Apply Force.
+        <em style={{ color: '#777' }}> v1: this gates the palette + Behaviour-Step ports; the engine always integrates velocity into position (a dedicated Static/Velocity integrator is a later phase).</em>
       </span>
 
       {/* Capability rows — mode selects (Collision / Bonds) render a dropdown;
           the rest are boolean checkboxes. */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-        {AGENT_CAPABILITY_ROWS.map(row => {
+        {AGENT_CAPABILITY_ROWS.filter(row => !HIDDEN_CAP_ROWS_V1.has(row.key)).map(row => {
           const k = row.key;
           const hint = <span style={{ color: '#888', fontSize: '0.6rem', display: 'block' }}>{row.description}{row.requires && <em style={{ color: '#777' }}> · requires {row.requires}</em>}</span>;
           if (k === 'collision') {
@@ -88,8 +88,8 @@ export function AgentCapabilitiesSection({
               <div key={k}>
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
                   <span style={{ fontSize: '0.72rem', color: '#ddd' }}>{row.label}</span>
-                  <select value={profile.collision} onChange={e => edit('collision', e.target.value as CollisionMode)} style={selStyle}>
-                    <option value="off">Off</option><option value="soft">Soft-sphere</option><option value="positional">Positional</option>
+                  <select value={profile.collision === 'off' ? 'off' : 'soft'} onChange={e => edit('collision', e.target.value as CollisionMode)} style={selStyle}>
+                    <option value="off">Off</option><option value="soft">Volume exclusion</option>
                   </select>
                 </div>{hint}
               </div>

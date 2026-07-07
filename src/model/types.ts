@@ -717,12 +717,17 @@ export interface TopologyMode {
  *  = `pos += v·dt`; `force` = `v = inertia·v + (dt/η)·F; pos += v`. v1 always
  *  allocates the velocity/force fields regardless — this is a palette/port gate. */
 export type MotionMode = 'static' | 'velocity' | 'force';
-/** Collision handling. `soft` = the engine soft-sphere repulsion/adhesion force
- *  (requires Motion=Force); `positional` = hard penetration correction (works
- *  under any Motion); `off` = none. */
+/** Collision handling. `soft` = the engine soft-sphere volume-exclusion force
+ *  (overlapping agents repel; a stiff Repulsion Stiffness is non-penetrating in
+ *  practice — requires Motion=Force so the integrator applies it); `off` = none.
+ *  `positional` is a DEPRECATED alias for `soft` — the engine ships one collision
+ *  model (the milestone plan deliberately did not add a separate hard/positional
+ *  solver), so `computeCapabilityClosure` folds `positional`→`soft` everywhere. */
 export type CollisionMode = 'off' | 'soft' | 'positional';
-/** Bond handling. `data` = connectivity edges only (traverse / render, no
- *  springs); `physics` = spring forces (requires Motion=Force); `off` = none. */
+/** Bond handling. `data` = connectivity edges only (traverse / render, carry NO
+ *  force); `physics` = spring forces (requires Motion=Force); `off` = none. The
+ *  Data-vs-Physics choice is a real engine distinction — springs are gated on
+ *  `usesEngineSprings` (bonds==='physics'), NOT the legacy bonding bundle. */
 export type BondsMode = 'off' | 'data' | 'physics';
 
 /** The declared capability set for a model's agents — the Agent Capability
