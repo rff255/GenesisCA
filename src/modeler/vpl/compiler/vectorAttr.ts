@@ -176,7 +176,7 @@ export function vectorPortDims(
   }
   if (nodeType === 'getVariable' || nodeType === 'setVariable') {
     const id = config.variableId;
-    const v = [...(model.variables ?? []), ...(model.agentVariables ?? [])].find(x => x.id === id && x.dataType === 'vector');
+    const v = [...(model.variables ?? []), ...(model.agentVariables ?? [])].find(x => x.id === id && x.dataType === 'vector' && x.kind !== 'array');
     return v ? vectorDimsOf(v) : null;
   }
   return null;
@@ -187,12 +187,19 @@ export function vectorPortDims(
  *  `expandVectorAttributes`. `initialValue` ("x,y[,z]") splits per component. So a
  *  vector accumulator (summed forces) becomes N float scratch variables that
  *  `buildVariableJS` / the WASM/WebGPU variable storage already handle. Non-vector
- *  variables pass through untouched; identity when there are none. */
+ *  variables pass through untouched; identity when there are none.
+ *
+ *  Only SCALAR vectors are lowered — a vector is a scalar-only type (the UI blocks
+ *  Kind=Array on a vector). A hand-edited/legacy invalid `{kind:'array',
+ *  dataType:'vector'}` passes through untouched so `_var_<id>` still exists (a plain
+ *  array) rather than being expanded away, which would leave Set Array Element
+ *  referencing an undeclared `_var_<id>`. */
+const isScalarVectorVar = (v: Variable) => v.dataType === 'vector' && v.kind !== 'array';
 export function expandVectorVariables(vars: Variable[]): Variable[] {
-  if (!vars.some(v => v.dataType === 'vector')) return vars;
+  if (!vars.some(isScalarVectorVar)) return vars;
   const out: Variable[] = [];
   for (const v of vars) {
-    if (v.dataType !== 'vector') { out.push(v); continue; }
+    if (!isScalarVectorVar(v)) { out.push(v); continue; }
     const dims = vectorDimsOf(v);
     const ids = vectorComponentIds(v.id, dims);
     const labels = vectorComponentLabels(dims);
@@ -236,7 +243,7 @@ export function lowerVectorAttrs(
   nodes: GraphNode[], edges: GraphEdge[], model: CAModel,
 ): { nodes: GraphNode[]; edges: GraphEdge[]; model: CAModel } {
   const anyVecAttr = hasVectorAttrs(model.attributes ?? []) || hasVectorAttrs(model.agentAttributes ?? []);
-  const anyVecVar = (model.variables ?? []).some(v => v.dataType === 'vector') || (model.agentVariables ?? []).some(v => v.dataType === 'vector');
+  const anyVecVar = (model.variables ?? []).some(isScalarVectorVar) || (model.agentVariables ?? []).some(isScalarVectorVar);
   if (!anyVecAttr && !anyVecVar) return { nodes, edges, model };
 
   // Vector def dims by id (both scopes). Unified design: the EXISTING Get/Set
@@ -247,8 +254,8 @@ export function lowerVectorAttrs(
   for (const a of model.attributes ?? []) if (a.type === 'vector') vecAttrDims.set(a.id, vectorDimsOf(a));
   for (const a of model.agentAttributes ?? []) if (a.type === 'vector') vecAttrDims.set(a.id, vectorDimsOf(a));
   const vecVarDims = new Map<string, number>();
-  for (const v of model.variables ?? []) if (v.dataType === 'vector') vecVarDims.set(v.id, vectorDimsOf(v));
-  for (const v of model.agentVariables ?? []) if (v.dataType === 'vector') vecVarDims.set(v.id, vectorDimsOf(v));
+  for (const v of model.variables ?? []) if (isScalarVectorVar(v)) vecVarDims.set(v.id, vectorDimsOf(v));
+  for (const v of model.agentVariables ?? []) if (isScalarVectorVar(v)) vecVarDims.set(v.id, vectorDimsOf(v));
 
   // Which existing node types read / write a vector (the component accessor is the
   // SAME node type — getCellAttribute components are getCellAttribute reads, etc.).

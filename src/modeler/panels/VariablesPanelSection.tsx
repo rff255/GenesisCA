@@ -1,6 +1,6 @@
 import { useEffect, useRef, useSyncExternalStore } from 'react';
 import { useModel } from '../../model/ModelContext';
-import type { VariableDataType, VariableKind } from '../../model/types';
+import type { Variable, VariableDataType, VariableKind } from '../../model/types';
 import { useListReorder } from './useListReorder';
 import type { PanelMode } from '../ModelerDetailContext';
 import { MODEL_ELEMENT_DRAG_MIME } from '../vpl/modelElementDrag';
@@ -165,7 +165,21 @@ export function VariablesPanelSection({ mode = 'list', selectedId, onSelect }: {
               <select
                 className={styles.selectInput}
                 value={selected.kind}
-                onChange={e => updateVariable(selected.id, { kind: e.target.value as VariableKind })}
+                onChange={e => {
+                  const kind = e.target.value as VariableKind;
+                  // An array can't be a vector in v1 (vectors are scalar-only): switching
+                  // to Array while the type is vector would leave an invalid
+                  // {kind:'array', dataType:'vector'} that expands away yet still lists in
+                  // Set Array Element → runtime `_var_<id> is not defined`. Reset the type
+                  // to Decimal (+ clear vectorDims) on that transition.
+                  const patch: Partial<Variable> = { kind };
+                  if (kind === 'array' && selected.dataType === 'vector') {
+                    patch.dataType = 'float';
+                    patch.vectorDims = undefined;
+                    patch.initialValue = '0';
+                  }
+                  updateVariable(selected.id, patch);
+                }}
               >
                 <option value="scalar">Scalar</option>
                 <option value="array">Array</option>
@@ -197,9 +211,12 @@ export function VariablesPanelSection({ mode = 'list', selectedId, onSelect }: {
                 <option value="float">Decimal</option>
                 <option value="tag">Tag</option>
                 {/* Vector = a per-cell/agent transient direction (one accumulator
-                    instead of separate X/Y[/Z] floats). Scalar variables only. */}
+                    instead of separate X/Y[/Z] floats). Scalar variables only. The
+                    3D option also stays visible when this variable is ALREADY a 3D
+                    vector (e.g. authored in a 3D model, then switched to 2D) so the
+                    dropdown never misreports its real type. */}
                 {selected.kind === 'scalar' && <option value="vector2">Vector (2D)</option>}
-                {selected.kind === 'scalar' && vectorDimsForModel(model) === 3 && <option value="vector3">Vector (3D)</option>}
+                {selected.kind === 'scalar' && (vectorDimsForModel(model) === 3 || (selected.dataType === 'vector' && selected.vectorDims === 3)) && <option value="vector3">Vector (3D)</option>}
               </select>
             </div>
 
