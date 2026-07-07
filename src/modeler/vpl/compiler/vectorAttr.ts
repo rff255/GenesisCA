@@ -157,7 +157,34 @@ export function hasVectorAttrs(attrs: readonly Attribute[]): boolean {
   return attrs.some(a => a.type === 'vector');
 }
 
-/** The UNIFIED type-driven port rule: when an EXISTING Get/Set Attribute or Get/Set
+/** Node types whose `value` port carries a stored-attribute value keyed by
+ *  `config.attributeId` — the own-cell Get/Set PLUS the neighbour reads
+ *  (`getNeighborAttributeByIndex`/`getNeighborAttributeByTag`), the by-id agent
+ *  reads/writes (`getAgentAttribute`/`setAgentAttribute`), and the neighbour
+ *  writes (`setNeighborAttributeByIndex`/`setNeighborhoodAttribute`). When the
+ *  picked attribute is a `vector`, that port flips to the composite `vector` type
+ *  and the node lowers (see `lowerVectorAttrs`). */
+const VECTOR_ATTR_PORT_NODES: ReadonlySet<string> = new Set([
+  'getCellAttribute', 'setAttribute',
+  'getNeighborAttributeByIndex', 'getNeighborAttributeByTag', 'getAgentAttribute',
+  'setNeighborAttributeByIndex', 'setNeighborhoodAttribute', 'setAgentAttribute',
+]);
+
+/** Every node type whose reference to a `vector` attribute IS correctly lowered by
+ *  `lowerVectorAttrs` (so `nodeValidation` must NOT badge it). The `VECTOR_ATTR_PORT_NODES`
+ *  set (single vector VALUE on a `value` port) + `moveSelfToNeighbor` (config-slot
+ *  expansion of its per-payload `attr_${i}` slots) + the Local-Variable Get/Set
+ *  (keyed by `variableId`, so never badged by the attribute-id guard anyway).
+ *  Any node referencing a vector attribute NOT in this set has no vector
+ *  representation (array-of-vectors reads, `filterNeighbors`, `updateAttribute`,
+ *  the field-bridge nodes) and stays badged. */
+export const VECTOR_LOWERED: ReadonlySet<string> = new Set([
+  ...VECTOR_ATTR_PORT_NODES,
+  'getVariable', 'setVariable', 'moveSelfToNeighbor',
+]);
+
+/** The UNIFIED type-driven port rule: when an EXISTING Get/Set Attribute, a
+ *  neighbour read, a by-id agent read/write, a neighbour write, or a Get/Set
  *  Variable node has a VECTOR attr/var picked, its `value` port is a `vector` port
  *  (and it lowers to Make/Break Vector). Returns the component count, or null for a
  *  scalar (the port stays scalar). Shared by effectivePorts + isValidConnection +
@@ -169,7 +196,7 @@ export function vectorPortDims(
   model: Pick<CAModel, 'attributes' | 'agentAttributes' | 'variables' | 'agentVariables'> | undefined | null,
 ): 2 | 3 | null {
   if (!model || !config) return null;
-  if (nodeType === 'getCellAttribute' || nodeType === 'setAttribute') {
+  if (VECTOR_ATTR_PORT_NODES.has(nodeType)) {
     const id = config.attributeId;
     const a = [...(model.attributes ?? []), ...(model.agentAttributes ?? [])].find(x => x.id === id && x.type === 'vector');
     return a ? vectorDimsOf(a) : null;
@@ -225,20 +252,56 @@ const fIn = (p: string) => `input_flow_${p}`;
 const fOut = (p: string) => `output_flow_${p}`;
 const AXES = ['x', 'y', 'z'];
 
-/** The ONE compiler-facing transform: lowers `Get/Set Vector Attribute` nodes into
- *  Make/Break Vector over per-component `getCellAttribute`/`setAttribute` nodes AND
- *  expands the model's vector attributes into their scalar-float components — so the
- *  rest of the compiler (which then runs `expandComposites` on the synthesized
- *  Make/Break Vector) sees ONLY scalar floats + a scalar attribute list.
+/** Get nodes whose vector `value` OUTPUT lowers to a Make Vector over per-component
+ *  reads. `key` = the config key naming the attr/var; `fanout` = the shared VALUE
+ *  input ports duplicated onto every component reader (the NI / agent id — the
+ *  own-cell reads fan nothing). `copyConfig` = carry the original config forward
+ *  (neighborhoodId / tagName for the tag read). */
+const GET_LOWER: Record<string, { key: string; fanout: string[]; copyConfig: boolean }> = {
+  getCellAttribute: { key: 'attributeId', fanout: [], copyConfig: false },
+  getVariable: { key: 'variableId', fanout: [], copyConfig: false },
+  getNeighborAttributeByIndex: { key: 'attributeId', fanout: ['index'], copyConfig: true },
+  getNeighborAttributeByTag: { key: 'attributeId', fanout: [], copyConfig: true },
+  getAgentAttribute: { key: 'attributeId', fanout: ['agentId'], copyConfig: true },
+};
+/** Set nodes whose vector `value` INPUT lowers to a Break Vector + a linear
+ *  component-write chain. Same `key`/`fanout`/`copyConfig` semantics. */
+const SET_LOWER: Record<string, { key: string; fanout: string[]; copyConfig: boolean }> = {
+  setAttribute: { key: 'attributeId', fanout: [], copyConfig: false },
+  setVariable: { key: 'variableId', fanout: [], copyConfig: false },
+  setNeighborAttributeByIndex: { key: 'attributeId', fanout: ['index'], copyConfig: true },
+  setNeighborhoodAttribute: { key: 'attributeId', fanout: [], copyConfig: true },
+  setAgentAttribute: { key: 'attributeId', fanout: ['agentId'], copyConfig: true },
+};
+
+/** The ONE compiler-facing transform: lowers every node that reads/writes a stored
+ *  `vector` attribute/variable into per-component scalar nodes AND expands the model's
+ *  vector attributes/variables into their scalar-float components — so the rest of the
+ *  compiler (which then runs `expandComposites` on the synthesized Make/Break Vector)
+ *  sees ONLY scalar floats + a scalar attribute list. NO per-target emit: the whole
+ *  feature rides the already-verified scalar reads/writes + the `expandComposites`
+ *  Make/Break lowering, on JS / WASM / WebGPU (cell + agent), 2D + 3D.
  *
- *  Run AFTER macro expansion / reroute collapse (so a Get/Set Vector inside a macro
+ *  Run AFTER macro expansion / reroute collapse (so a vector Get/Set inside a macro
  *  is already flat) and BEFORE `expandComposites` (so the synthesized Make/Break
  *  Vector get lowered). Returns the SAME nodes/edges/model (identity) when there are
- *  no vector attrs AND no Get/Set Vector nodes — the hot-path no-op.
+ *  no vector attrs/vars — the hot-path no-op.
  *
- *  `Set Vector Attribute` (a FLOW node) lowers to a linear `setAttribute` chain
- *  (`do → set_vx → set_vy[ → set_vz] → next`) fed by a `breakVector`; `Get Vector
- *  Attribute` (a VALUE node) lowers to a `makeVector` fed by `getCellAttribute`s. */
+ *  Lowered nodes (all in `VECTOR_LOWERED`):
+ *   - VALUE reads (`GET_LOWER`): own `getCellAttribute`/`getVariable`, the neighbour
+ *     reads `getNeighborAttributeByIndex`/`getNeighborAttributeByTag`, the by-id agent
+ *     read `getAgentAttribute` — each → a `makeVector` fed by N same-type component
+ *     reads, with the shared value input (NI index / agent id) fanned out to every reader.
+ *   - FLOW writes (`SET_LOWER`): own `setAttribute`/`setVariable`, the neighbour writes
+ *     `setNeighborAttributeByIndex`/`setNeighborhoodAttribute`, the by-id agent write
+ *     `setAgentAttribute` — each → a `breakVector` + a linear `do → set_vx → set_vy[
+ *     → set_vz] → next` chain, with the shared value input fanned out to every setter.
+ *   - `moveSelfToNeighbor` — a config-slot expansion of each vector payload slot into
+ *     its scalar-component slots (NOT a Make/Break rewrite).
+ *
+ *  Array-of-vectors reads (`getNeighborsAttribute` / `getAgentsAttribute` / …),
+ *  `filterNeighbors`, and `updateAttribute` have NO vector representation and stay
+ *  badged by `detectMissingConfig` (they are NOT in `VECTOR_LOWERED`). */
 export function lowerVectorAttrs(
   nodes: GraphNode[], edges: GraphEdge[], model: CAModel,
 ): { nodes: GraphNode[]; edges: GraphEdge[]; model: CAModel } {
@@ -257,15 +320,29 @@ export function lowerVectorAttrs(
   for (const v of model.variables ?? []) if (isScalarVectorVar(v)) vecVarDims.set(v.id, vectorDimsOf(v));
   for (const v of model.agentVariables ?? []) if (isScalarVectorVar(v)) vecVarDims.set(v.id, vectorDimsOf(v));
 
-  // Which existing node types read / write a vector (the component accessor is the
-  // SAME node type — getCellAttribute components are getCellAttribute reads, etc.).
-  const GET_KIND: Record<string, { key: string; dims: Map<string, number> }> = {
-    getCellAttribute: { key: 'attributeId', dims: vecAttrDims },
-    getVariable: { key: 'variableId', dims: vecVarDims },
+  // The dims map for a node's config key (attributes vs variables).
+  const dimsFor = (key: string) => (key === 'variableId' ? vecVarDims : vecAttrDims);
+
+  // Cell-attribute lookup for moveSelfToNeighbor slot defaults (its slots are
+  // non-model cell attrs; the emit looks up `!isModelAttribute`).
+  const cellAttrById = new Map<string, Attribute>();
+  for (const a of model.attributes ?? []) cellAttrById.set(a.id, a);
+  const scalarDefaultString = (id: string): string => {
+    const raw = String(cellAttrById.get(id)?.defaultValue ?? '0');
+    return raw === 'true' ? '1' : raw === 'false' ? '0' : raw;
   };
-  const SET_KIND: Record<string, { key: string; dims: Map<string, number> }> = {
-    setAttribute: { key: 'attributeId', dims: vecAttrDims },
-    setVariable: { key: 'variableId', dims: vecVarDims },
+
+  // Resolve a neighbourhood tag NAME → its coord-index (mirrors the JS compiler's
+  // `_resolvedTagIndex` pre-pass). Baked HERE so synthesized `getNeighborAttributeByTag`
+  // component readers work on WASM/WebGPU too — those targets have no tag pre-pass and
+  // never see the JS-mutated config for the fresh readers this transform creates.
+  const resolveTagIndex = (nbrId: string, tagName: string): number => {
+    const nbr = model.neighborhoods?.find(nb => nb.id === nbrId);
+    if (nbr?.tags) {
+      const entry = Object.entries(nbr.tags).find(([, name]) => name === tagName);
+      if (entry) return Number(entry[0]);
+    }
+    return 0;
   };
 
   let seq = 0;
@@ -276,6 +353,9 @@ export function lowerVectorAttrs(
   // Redirect a (nodeId, handle) → a replacement (nodeId, handle) at edge-rewire time.
   const remapSrc = new Map<string, { source: string; sourceHandle: string }>();
   const remapTgt = new Map<string, { target: string; targetHandle: string }>();
+  // Duplicate a single incoming edge (the shared NI / agent id) onto EVERY component
+  // accessor — the fan-out the neighbour/by-id nodes need (the own-cell reads don't).
+  const fanoutTgt = new Map<string, Array<{ target: string; targetHandle: string }>>();
 
   const mkNode = (nodeType: string, config: Record<string, string | number | boolean>): GraphNode => {
     const n: GraphNode = { id: nid(), type: 'caNode', position: { x: 0, y: 0 }, data: { nodeType, config } };
@@ -285,36 +365,90 @@ export function lowerVectorAttrs(
   const mkEdge = (s: string, sh: string, t: string, th: string) =>
     outEdges.push({ id: nid() + 'e', source: s, sourceHandle: sh, target: t, targetHandle: th });
 
+  // The config a synthesized component accessor carries: swap the attr/var key to
+  // the component id, optionally carrying the ORIGINAL config forward (neighborhoodId
+  // / tagName for the tag read) + baking the tag index.
+  const compConfig = (orig: GraphNode, t: string, key: string, compId: string, copyConfig: boolean): Record<string, string | number | boolean> => {
+    const cfg: Record<string, string | number | boolean> = copyConfig ? { ...orig.data.config } : {};
+    cfg[key] = compId;
+    if (t === 'getNeighborAttributeByTag') {
+      cfg._resolvedTagIndex = resolveTagIndex(String(orig.data.config.neighborhoodId ?? ''), String(orig.data.config.tagName ?? ''));
+    }
+    return cfg;
+  };
+  const addFanout = (origId: string, port: string, target: string) => {
+    const k = `${origId} ${vIn(port)}`;
+    (fanoutTgt.get(k) ?? fanoutTgt.set(k, []).get(k)!).push({ target, targetHandle: vIn(port) });
+  };
+
   for (const n of nodes) {
     const t = n.data.nodeType;
-    const getK = GET_KIND[t];
-    const setK = SET_KIND[t];
+
+    // moveSelfToNeighbor: config-slot expansion (NOT a Make/Break rewrite). Each
+    // per-payload `attr_${i}` slot that names a vector attr is replaced by its
+    // `dims` scalar-component slots; `payloadCount` grows; the orientation transfer
+    // (a separate trailing slot, unaffected) keeps its position. `_attr_${i}_default`
+    // is baked for EVERY new slot so the WASM emit (which reads it, and never sees
+    // the JS `preResolveMoveNodes` bake for this freshly-cloned node) is correct.
+    if (t === 'moveSelfToNeighbor') {
+      const pc = Math.max(1, Number(n.data.config.payloadCount) || 1);
+      let hasVecSlot = false;
+      for (let i = 0; i < pc; i++) if (vecAttrDims.has(String(n.data.config[`attr_${i}`] ?? ''))) { hasVecSlot = true; break; }
+      if (!hasVecSlot) { outNodes.push(n); continue; }
+      const cfg: Record<string, string | number | boolean> = { ...n.data.config };
+      for (const k of Object.keys(cfg)) if (/^attr_\d+$/.test(k) || /^_attr_\d+_default$/.test(k)) delete cfg[k];
+      let w = 0;
+      for (let i = 0; i < pc; i++) {
+        const sid = String(n.data.config[`attr_${i}`] ?? '');
+        if (vecAttrDims.has(sid)) {
+          const dims = vecAttrDims.get(sid)!;
+          const compIds = vectorComponentIds(sid, dims);
+          const defs = parseVectorDefault(cellAttrById.get(sid)?.defaultValue, dims);
+          for (let k = 0; k < dims; k++) { cfg[`attr_${w}`] = compIds[k]!; cfg[`_attr_${w}_default`] = String(defs[k] ?? 0); w++; }
+        } else {
+          cfg[`attr_${w}`] = sid;
+          cfg[`_attr_${w}_default`] = scalarDefaultString(sid);
+          w++;
+        }
+      }
+      cfg.payloadCount = w;
+      // Clone (never mutate the live React node — this would show expanded slots in the editor).
+      outNodes.push({ ...n, data: { ...n.data, config: cfg } });
+      continue;
+    }
+
+    const getK = GET_LOWER[t];
+    const setK = SET_LOWER[t];
     const getId = getK ? String(n.data.config?.[getK.key] ?? '') : '';
     const setId = setK ? String(n.data.config?.[setK.key] ?? '') : '';
     // Only lower when the referenced attr/var is a VECTOR; a scalar Get/Set is
     // passed through unchanged (its value port stays scalar). The component
     // accessor is the SAME node type (`t`) reading/writing the scalar `_vx/_vy` ids.
-    if (getK && getK.dims.has(getId)) {
-      // Get (VALUE) → makeVector fed by N scalar component reads.
-      const dims = getK.dims.get(getId)!;
+    if (getK && dimsFor(getK.key).has(getId)) {
+      // Get (VALUE) → makeVector fed by N scalar component reads. The shared value
+      // inputs (NI / agent id) fan out to every component reader.
+      const dims = dimsFor(getK.key).get(getId)!;
       const compIds = vectorComponentIds(getId, dims);
       const mv = mkNode('makeVector', {});
       for (let i = 0; i < dims; i++) {
-        const gn = mkNode(t, { [getK.key]: compIds[i]! });
+        const gn = mkNode(t, compConfig(n, t, getK.key, compIds[i]!, getK.copyConfig));
         mkEdge(gn.id, vOut('value'), mv.id, vIn(AXES[i]!));
+        for (const fp of getK.fanout) addFanout(n.id, fp, gn.id);
       }
       // Consumers of this node's `value` (vector) output → the makeVector's `vector`.
       remapSrc.set(`${n.id} ${vOut('value')}`, { source: mv.id, sourceHandle: vOut('vector') });
       dropIds.add(n.id);
-    } else if (setK && setK.dims.has(setId)) {
+    } else if (setK && dimsFor(setK.key).has(setId)) {
       // Set (FLOW) → breakVector + a linear scalar-write chain over the components.
-      const dims = setK.dims.get(setId)!;
+      // The shared value inputs (NI / agent id) fan out to every component setter.
+      const dims = dimsFor(setK.key).get(setId)!;
       const compIds = vectorComponentIds(setId, dims);
       const bv = mkNode('breakVector', {});
       const setNodes: GraphNode[] = [];
       for (let i = 0; i < dims; i++) {
-        const sn = mkNode(t, { [setK.key]: compIds[i]! });
+        const sn = mkNode(t, compConfig(n, t, setK.key, compIds[i]!, setK.copyConfig));
         mkEdge(bv.id, vOut(AXES[i]!), sn.id, vIn('value'));
+        for (const fp of setK.fanout) addFanout(n.id, fp, sn.id);
         setNodes.push(sn);
       }
       for (let i = 0; i < dims - 1; i++) mkEdge(setNodes[i]!.id, fOut('next'), setNodes[i + 1]!.id, fIn('do'));
@@ -330,6 +464,16 @@ export function lowerVectorAttrs(
   }
 
   for (const e of edges) {
+    // Fan-out: a shared value input of a dropped read/write node → duplicate its
+    // source onto every component accessor (reusing the ONE source node; N edges).
+    const fans = fanoutTgt.get(`${e.target} ${e.targetHandle}`);
+    if (fans) {
+      const frs = remapSrc.get(`${e.source} ${e.sourceHandle}`);
+      const src = frs ? frs.source : e.source;
+      const srcH = frs ? frs.sourceHandle : e.sourceHandle;
+      for (const f of fans) mkEdge(src, srcH, f.target, f.targetHandle);
+      continue;
+    }
     const rs = remapSrc.get(`${e.source} ${e.sourceHandle}`);
     const rt = remapTgt.get(`${e.target} ${e.targetHandle}`);
     // An edge touching a dropped node on a handle we did NOT remap is stale — drop it.

@@ -107,14 +107,18 @@ a type name (see `typeDisplayName` in `src/model/typeLabels.ts`).
   the nodes in §3.4 / §3.7.
 - **`vector` is ALSO a stored attribute + Local-Variable type** (a per-cell / per-agent
   direction — flow field, facing, accumulated force). It has no dedicated nodes: the
-  ordinary **Get Cell Attribute / Set Attribute / Get Variable / Set Variable** nodes
-  flip their `value` port to `vector` when the picked attribute/variable is a vector
-  (Set drops its inline number widget), so a vector attr/var wires straight to Make /
-  Break Vector / Vector Op. `lowerVectorAttrs` (`src/modeler/vpl/compiler/vectorAttr.ts`)
-  rewrites those Get/Set into per-component Make/Break over scalar-float component
-  attributes before any target compiles — so storage runs natively on JS / WASM / WebGPU
-  with no new per-target emit. (Neighbour reads of a vector attribute are not lowered in
-  v1 — go through the scalar-component path.)
+  ordinary read/write nodes flip their `value` port to `vector` when the picked attribute/
+  variable is a vector (Set drops its inline number widget), so a vector attr/var wires
+  straight to Make / Break Vector / Vector Op. `lowerVectorAttrs`
+  (`src/modeler/vpl/compiler/vectorAttr.ts`) rewrites them into per-component Make/Break
+  over scalar-float component attributes before any target compiles — so storage runs
+  natively on JS / WASM / WebGPU with no new per-target emit. **Lowered** (can read/write a
+  vector): **Get/Set (Self) Attribute**, **Get/Set Variable**, **Get Neighbor Attr By
+  Index / By Tag**, **Set Neighbor Attr By Index**, **Set Neighborhood Attribute**,
+  **Get/Set Agent Attribute** (by id), and **Transfer Cell Attributes to Neighbor**
+  (config-slot expansion). **Not lowered** (no single-vector shape — badged in the modeler,
+  use a scalar node + Break Vector): array-of-neighbours reads (Get Neighbors Attribute /
+  By Indexes / Get Agents Attribute), Filter Neighbors, and Update Attribute.
 - Unconnected input ports fall back to an inline widget value when one is defined; if no
   inline widget is defined and the port is unconnected, the compiler uses a type-
   appropriate default (`0`, `false`, or an empty array).

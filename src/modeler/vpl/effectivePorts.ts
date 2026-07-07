@@ -92,17 +92,17 @@ export function getEffectivePorts(
     });
   }
 
-  // Unified vector attribute / variable: Get/Set Attribute + Get/Set Variable get a
-  // `vector` VALUE port when the picked attr/var is a vector (they lower to
-  // Make/Break Vector before compile). The inline widget on the set nodes is dropped
-  // (a vector can't be an inline number). Shared with isValidConnection + CaNode via
-  // vectorPortDims so the editor + validator + render agree. See vectorAttr.ts.
-  if (model && (nodeType === 'getCellAttribute' || nodeType === 'getVariable'
-    || nodeType === 'setAttribute' || nodeType === 'setVariable')) {
-    if (vectorPortDims(nodeType, cfg, model)) {
-      inputs = inputs.map(p => (p.id === 'value' ? { ...p, dataType: 'vector' as const, inlineWidget: undefined } : p));
-      outputs = outputs.map(p => (p.id === 'value' ? { ...p, dataType: 'vector' as const } : p));
-    }
+  // Unified vector attribute / variable: any node whose `value` port carries a
+  // vector attr/var (own Get/Set, the neighbour reads, the by-id agent read/write,
+  // the neighbour writes, Get/Set Variable) gets a `vector` VALUE port when the
+  // picked attr/var is a vector (they lower to Make/Break Vector before compile). The
+  // inline widget on the set nodes is dropped (a vector can't be an inline number).
+  // vectorPortDims returns null for every other node type, so calling it generically
+  // is precise. Shared with isValidConnection + CaNode so editor + validator + render
+  // agree. See vectorAttr.ts.
+  if (model && vectorPortDims(nodeType, cfg, model)) {
+    inputs = inputs.map(p => (p.id === 'value' ? { ...p, dataType: 'vector' as const, inlineWidget: undefined } : p));
+    outputs = outputs.map(p => (p.id === 'value' ? { ...p, dataType: 'vector' as const } : p));
   }
 
   // Mode-dependent static-port hiding lives DECLARATIVELY on each node def
