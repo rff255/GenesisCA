@@ -192,7 +192,7 @@ interface ResolvedDropCandidate {
  *  behaviourStep/divisionEvent/agentInit on the Agents graph — the sub-tab swap
  *  means nodesRef only ever holds ONE graph, so a plain presence check is
  *  correctly per-graph. */
-const SINGLETON_NODE_TYPES = new Set(['step', 'initEvent', 'behaviourStep', 'divisionEvent', 'agentInit', 'spawnEvent']);
+const SINGLETON_NODE_TYPES = new Set(['step', 'initEvent', 'behaviourStep', 'divisionEvent', 'agentInit']);
 
 function resolveDropCandidates(
   payload: ModelElementDragPayload,

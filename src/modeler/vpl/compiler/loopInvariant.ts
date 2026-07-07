@@ -111,7 +111,6 @@ const NEVER_INVARIANT = new Set<string>([
   // per-agent locals before they exist. Same reasoning as getCellPosition.
   'behaviourStep',
   'divisionEvent',
-  'spawnEvent',
   'bondContactEvent',
   'getSelfPosition',
   // getSelfHandle emits the agent's own id = the bare loop variable `idx`. It has

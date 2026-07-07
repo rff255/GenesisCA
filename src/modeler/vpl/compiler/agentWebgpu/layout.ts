@@ -68,9 +68,6 @@ export const AGENT_GPU_F32_FIELDS = [
   'divideRequest', 'divideAxisX', 'divideAxisY', 'divideAsym',
   'bondFormReq', 'bondFormL', 'bondFormK', 'bondBreakReq',
   'killRequest',
-  // STEP 5a spawn request (Population·Birth) — appended after the G4 requests so
-  // existing field bases stay stable. Flag (1/2) + x/y/radius as f32 (exact).
-  'spawnRequest', 'spawnX', 'spawnY', 'spawnRadius',
 ] as const;
 
 /** The structural-request f32 fields the worker round-trips (subset of
@@ -80,7 +77,6 @@ export const AGENT_GPU_REQUEST_FIELDS = [
   'divideRequest', 'divideAxisX', 'divideAxisY', 'divideAsym',
   'bondFormReq', 'bondFormL', 'bondFormK', 'bondBreakReq',
   'killRequest',
-  'spawnRequest', 'spawnX', 'spawnY', 'spawnRadius',
 ] as const;
 
 /** Per-agent i32 fields (identity / reductions the behaviour reads). */
@@ -240,7 +236,7 @@ export interface AgentWebGPUExtras {
  *  byte-identical). */
 /** The 3D-only per-agent f32 fields, appended AFTER the 2D fields + the request
  *  fields when gridDepth>1 (so the 2D field bases stay byte-identical). */
-export const AGENT_GPU_F32_FIELDS_3D = ['z', 'vz', 'forceZ', 'zNext', 'divideAxisZ', 'spawnZ'] as const;
+export const AGENT_GPU_F32_FIELDS_3D = ['z', 'vz', 'forceZ', 'zNext', 'divideAxisZ'] as const;
 
 export function computeAgentWebGPULayout(
   maxAgents: number,

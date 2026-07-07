@@ -178,42 +178,6 @@ function buildHemifieldModel() {
   };
 }
 
-// STEP 5a — a synthetic Spawn model: each agent with myX > 12 requests a spawn at
-// myX+3 (a per-agent-DIVERGENT branch, so the spawnRequest/spawnX buffers differ
-// per agent and the JS↔WASM parity is meaningful). The harness runs only the
-// behaviour fn, so it verifies the request WRITE emit; the alloc + spawn event are
-// CPU (target-independent). No Models-Library card — permanent regression coverage.
-function buildSpawnModel() {
-  const used = new Set();
-  const nid = (p) => { let id; do { id = p + Math.random().toString(36).slice(2, 8); } while (used.has(id)); used.add(id); return id; };
-  const aN = [], aEd = [];
-  const an = (t, c) => { const n = { id: nid('a'), type: 'caNode', position: { x: 0, y: 0 }, data: { nodeType: t, config: c } }; aN.push(n); return n; };
-  const aE = (s, sp, tt, tp, cat) => aEd.push({ id: nid('e'), source: s.id, target: tt.id, sourceHandle: `output_${cat}_${sp}`, targetHandle: `input_${cat}_${tp}` });
-  const bs = an('behaviourStep', {});
-  const cmp = an('statement', { compareType: 'numerical', operation: '>', _port_y: '12' });
-  const cond = an('conditional', {});
-  const spawn = an('spawnAgent', { inheritAttributes: true });
-  const addX = an('arithmeticOperator', { operation: '+', _port_y: '3' });
-  aE(bs, 'myX', cmp, 'x', 'value');
-  aE(cmp, 'result', cond, 'condition', 'value');
-  aE(bs, 'do', cond, 'do', 'flow');
-  aE(cond, 'then', spawn, 'do', 'flow');
-  aE(bs, 'myX', addX, 'x', 'value');
-  aE(addX, 'result', spawn, 'x', 'value');
-  aE(bs, 'myY', spawn, 'y', 'value');
-  return {
-    schemaVersion: 1,
-    properties: { name: 'Spawn Parity Test', dimension: '2d', gridWidth: 24, gridHeight: 24, gridDepth: 1, topology: '2d-grid', boundaryTreatment: 'torus', useWasm: false, useWebGPU: false },
-    topologyMode: { gridCells: false, agents: true },
-    centerBased: { enabled: true, maxAgents: 100, maxBonds: 0, worldWidth: 24, worldHeight: 24, seedCount: 40, seedPattern: 'scatter', defaultRadius: 0.5, growthRate: 0, repulsionStiffness: 2, adhesionStiffness: 0, interactionRange: 1.5, drag: 1, timeStep: 0.1, momentum: 0, maxSpeed: 0, neighbourQueryRadius: 8, useBondingPhysics: false, autoBond: false, agentTarget: 'wasm', agentUpdateMode: 'async',
-      agentCapabilities: { motion: 'force', body: true, collision: 'off', bonds: 'off', autoBond: false, growth: false, division: false, lifespan: false, populationBirth: true, populationDeath: false, sensing: false, orientation: false, fieldCoupling: false, appearance: true } },
-    attributes: [], modelAttributes: [], neighborhoods: [],
-    agentAttributes: [{ id: 'tag', name: 'Tag', type: 'integer', defaultValue: '0' }],
-    variables: [], agentVariables: [], indicators: [], mappings: [],
-    graphNodes: [], graphEdges: [], agentGraphNodes: aN, agentGraphEdges: aEd, macroDefs: [],
-  };
-}
-
 const modelsDir = join(ROOT, 'public', 'models');
 const files = readdirSync(modelsDir).filter(f => f.endsWith('.gcaproj'));
 const SEED = 0x9e3779b1 >>> 0;
@@ -233,7 +197,6 @@ for (const f of files) {
 entries.push({ name: '[synthetic] Field3D (all 5 field nodes, 3D)', raw: build3DFieldModel() });
 entries.push({ name: '[synthetic] FOV cone (Get Agents In View)', raw: buildFOVModel() });
 entries.push({ name: '[synthetic] Hemifield (Sense Hemifield L/R)', raw: buildHemifieldModel() });
-entries.push({ name: '[synthetic] Spawn (Spawn Agent request)', raw: buildSpawnModel() });
 
 for (const { name: f, raw } of entries) {
   const model = migrateForHarness(raw);
@@ -337,7 +300,7 @@ for (const { name: f, raw } of entries) {
     A.forceX.fill(0, 0, A.highWater); A.forceY.fill(0, 0, A.highWater); A.forceZ.fill(0, 0, A.highWater);
     B.forceX.fill(0, 0, B.highWater); B.forceY.fill(0, 0, B.highWater); B.forceZ.fill(0, 0, B.highWater);
     // reset request buffers (the worker zeroes them implicitly via the structural phase; for behaviour-only parity zero them here)
-    for (const s of [A, B]) { s.divideRequest.fill(0); s.killRequest.fill(0); s.bondFormReq.fill(0); s.bondBreakReq.fill(0); s.divideAxisX.fill(0); s.divideAxisY.fill(0); s.divideAsym.fill(0); s.bondFormL.fill(0); s.bondFormK.fill(0); s.spawnRequest.fill(0); s.spawnX.fill(0); s.spawnY.fill(0); s.spawnRadius.fill(0); }
+    for (const s of [A, B]) { s.divideRequest.fill(0); s.killRequest.fill(0); s.bondFormReq.fill(0); s.bondBreakReq.fill(0); s.divideAxisX.fill(0); s.divideAxisY.fill(0); s.divideAsym.fill(0); s.bondFormL.fill(0); s.bondFormK.fill(0); }
     // build the hash from A's positions (both stores share identical positions here).
     let maxR = r; for (let i = 0; i < A.highWater; i++) if (A.alive[i] && A.radius[i] > maxR) maxR = A.radius[i];
     const binEdge = Math.max(1e-3, cbNum(cfg, 'interactionRange', 1.5) * 2 * maxR, cbNum(cfg, 'neighbourQueryRadius', 5));
@@ -386,8 +349,6 @@ for (const { name: f, raw } of entries) {
     cmpArr('targetRadius', A.targetRadius, B.targetRadius, hw);
     cmpArr('divideRequest', A.divideRequest, B.divideRequest, hw);
     cmpArr('killRequest', A.killRequest, B.killRequest, hw);
-    cmpArr('spawnRequest', A.spawnRequest, B.spawnRequest, hw);
-    cmpArr('spawnX', A.spawnX, B.spawnX, hw); cmpArr('spawnY', A.spawnY, B.spawnY, hw); cmpArr('spawnRadius', A.spawnRadius, B.spawnRadius, hw);
     cmpArr('bondFormReq', A.bondFormReq, B.bondFormReq, hw);
     cmpArr('bondBreakReq', A.bondBreakReq, B.bondBreakReq, hw);
     cmpArr('divideAxisX', A.divideAxisX, B.divideAxisX, hw); cmpArr('divideAxisY', A.divideAxisY, B.divideAxisY, hw);

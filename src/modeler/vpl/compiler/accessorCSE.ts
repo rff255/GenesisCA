@@ -136,7 +136,6 @@ const NEVER_PURE_TYPES = new Set<string>([
   'outputMapping',
   'behaviourStep',
   'divisionEvent',
-  'spawnEvent',
   'agentInit',
   'agentOutputMapping',
   // Macro boundary / opaque container — v1 doesn't introspect macro internals.
