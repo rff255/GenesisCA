@@ -39,7 +39,7 @@ const baseCfg = {
   neighbourQueryRadius: 5.0, defaultRadius: 0.5, growthRate: 0.0,
 };
 
-// The FULL 24-param force-pass ABI (mirrors FORCE_PASS_PARAMS in agentWasm/compile.ts).
+// The FULL 25-param force-pass ABI (mirrors FORCE_PASS_PARAMS in agentWasm/compile.ts).
 const forceArgs = (s, hash, cfg, dtOverEta, bonding, doCollision, torus) => ([
   s.highWater, hash ? 1 : 0, hash ? hash.nBinsX : 0, hash ? hash.nBinsY : 0, 0,
   hash ? hash.binSizeX : 1, hash ? hash.binSizeY : 1, 1,
@@ -47,7 +47,7 @@ const forceArgs = (s, hash, cfg, dtOverEta, bonding, doCollision, torus) => ([
   cfg.momentum, cfg.maxSpeed, 0 /*growthRate — collision/gas never grows*/,
   W, H, 1, bonding ? 1 : 0, torus ? 1 : 0,
   hash ? hash.originX : 0, hash ? hash.originY : 0, 0,
-  doCollision ? 1 : 0,
+  doCollision ? 1 : 0, bonding ? 1 : 0 /*doSprings — no bonds in this harness (bc=0), so inert*/,
 ]);
 
 // Verbatim JS 2D force loop — matches the CURRENT sim.worker.ts runAgentStep

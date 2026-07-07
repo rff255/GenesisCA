@@ -131,15 +131,20 @@ export function nodeSatisfiesCapabilities(nodeType: string, profile: AgentCapabi
 
 export function computeCapabilityClosure(input: AgentCapabilities): AgentCapabilities {
   const p: AgentCapabilities = { ...input };
+  // The engine has ONE collision model — the soft-sphere volume-exclusion force
+  // (a stiff soft potential is non-penetrating in practice; the milestone plan
+  // deliberately did not ship a separate hard/positional solver). `positional` was
+  // a phantom second option that behaved IDENTICALLY to `soft`; fold it in here so
+  // every consumer (UI dropdown, engine gate, preset match) sees one honest value.
+  if (p.collision === 'positional') p.collision = 'soft';
   // Iterate to a small fixpoint (deps are shallow; two passes always converge).
   for (let i = 0; i < 3; i++) {
     // Auto-bond needs physics bonds.
     if (p.autoBond && p.bonds !== 'physics') p.bonds = 'physics';
     // Physics bonds need force motion.
     if (p.bonds === 'physics' && p.motion !== 'force') p.motion = 'force';
-    // Soft collision needs Body + Force motion; positional needs Body.
+    // Soft-sphere collision needs Body + Force motion (the integrator applies it).
     if (p.collision === 'soft') { p.body = true; if (p.motion !== 'force') p.motion = 'force'; }
-    if (p.collision === 'positional') p.body = true;
     // Growth + Division need Body.
     if (p.growth) p.body = true;
     if (p.division) p.body = true;
@@ -310,6 +315,18 @@ export function inferAgentProfile(model: CAModel): AgentCapabilities {
   }
   // (b) Node usage.
   for (const key of scanUsedRequirements(model)) CAP_REQS[key].widen(p);
+  // (c) Byte-identity for the DECOUPLED physics gates (usesEngineSprings /
+  //     usesEngineGrowth). The legacy `usesBondingPhysics` bundle ran bond SPRINGS
+  //     on ANY bond + the growth RAMP whenever growthRate>0. The decoupled engine
+  //     now gates springs on `bonds==='physics'` and the ramp on the `growth`
+  //     capability, so the inferred profile must widen those to true wherever the
+  //     old bundle was active — else a migrated bonding file would silently lose
+  //     springs (a manual Form-Bond graph infers bonds='data') or growth. Only
+  //     ADDS capabilities, so it stays behaviour-preserving.
+  if (usesBondingPhysics(cfg)) {
+    if (p.bonds !== 'off') p.bonds = 'physics';
+    if (cbNum(cfg, 'growthRate') > 0) p.growth = true;
+  }
   // A moving agent has physical extent (renders as a disc, collides) — keep Body
   // on so the Radius surface stays available. Only a truly static graph/data model
   // (Social Graph) drops it.
@@ -362,18 +379,32 @@ export interface CapabilityRowMeta {
 
 export const AGENT_CAPABILITY_ROWS: CapabilityRowMeta[] = [
   { key: 'body', label: 'Body / Extent', description: 'A radius surface, rendered as a disc/sphere. Unlocks Get / Set Agent Radius.' },
-  { key: 'collision', label: 'Collision', description: 'Soft-sphere repulsion/adhesion (needs Motion=Force) or hard positional correction. Unlocks Neighbour Density.', requires: 'Body' },
-  { key: 'bonds', label: 'Bonds', description: 'Connectivity edges (Data) or spring physics (needs Motion=Force). Unlocks Form/Break Bond, For Each Bond, Get Bonded Agents.' },
+  { key: 'collision', label: 'Collision', description: 'Soft-sphere volume exclusion — overlapping agents repel (tune with Repulsion Stiffness). Needs Motion=Force. Unlocks Neighbour Density.', requires: 'Body' },
+  { key: 'bonds', label: 'Bonds', description: 'Connectivity edges (Data — no forces) or spring physics (Physics — needs Motion=Force). Unlocks Form/Break Bond, For Each Bond, Get Bonded Agents.' },
   { key: 'autoBond', label: 'Auto-bond', description: 'Engine forms/breaks bonds by proximity (hysteresis).', requires: 'Bonds = Physics' },
   { key: 'growth', label: 'Growth', description: 'Radius ramps toward a target radius each step. Unlocks Set Target Radius.', requires: 'Body' },
   { key: 'division', label: 'Division', description: 'Structural-phase split along the tension (or spread) axis. Unlocks Divide Agent + the Division Event root.', requires: 'Body' },
   { key: 'lifespan', label: 'Lifespan', description: 'Per-agent age auto-increments. Unlocks Get Age.' },
   { key: 'populationBirth', label: 'Population — Birth', description: 'Spawn agents mid-step (eggs / projectiles / offspring). Unlocks Spawn Agent + the Spawn Event root.', requires: 'Motion' },
   { key: 'populationDeath', label: 'Population — Death', description: 'Kill agents mid-step. Unlocks Kill Agent.' },
-  { key: 'sensing', label: 'Sensing', description: 'The spatial hash + neighbour queries. Unlocks Get Nearby Agents + the directional-FOV nodes.' },
+  { key: 'sensing', label: 'Sensing', description: 'The spatial hash + neighbour queries. Unlocks Get Nearby Agents.' },
   { key: 'orientation', label: 'Orientation / Facing', description: 'A stored per-agent facing (heading source for FOV + sprite rotation).' },
   { key: 'fieldCoupling', label: 'Field Coupling', description: 'The agent ⇄ cell-grid morphogen bridge. Unlocks Sample Field, Field Gradient, Read / Affect Cells Under, Secrete To Field.', requires: 'a cell attribute with Agent access' },
 ];
+
+/** Capability rows HIDDEN from the Properties panel in v1 because the nodes /
+ *  engine effect they gate are not yet implemented (STEP 5 — Population birth's
+ *  Spawn Agent + Spawn Event nodes, and directional Orientation's FOV heading).
+ *  Exposing a toggle that unlocks nothing is exactly the "unfinished feature
+ *  exposed" the honest-core contract forbids. The rows/schema/presets stay intact
+ *  (so a preset that sets these matches + the footprint counts them); only the
+ *  Properties render is filtered. Remove a key here when its feature lands. NB:
+ *  `populationBirth` is unrelated to the ALWAYS-available init-time spawning
+ *  (Create Agent / Add To World in the Agent Init Event) — that is a core path. */
+export const HIDDEN_CAP_ROWS_V1: ReadonlySet<keyof AgentCapabilities> = new Set([
+  'populationBirth', // Spawn Agent / Spawn Event nodes are not registered yet.
+  'orientation',     // gates no registered node; only feeds the deferred FOV heading.
+]);
 
 // ---------------------------------------------------------------------------
 // Per-agent footprint estimate — the "cost of generality" readout. Enumerates

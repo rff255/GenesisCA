@@ -3487,15 +3487,18 @@ function preEmitAgentValues(ctx: AgentWasmCtx, rootId: string): void {
 //    binSizeX, binSizeY, binSizeZ : f64,
 //    dtOverEta, muR, muA, range, momentum, maxSpeed, growthRate : f64,
 //    W, H, D : f64, bonding, torus : i32, originX, originY, originZ : f64,
-//    doCollision : i32)
+//    doCollision, doSprings : i32)
 // `dtOverEta = dt / eta` is passed PRECOMPUTED (one division, bit-identical to JS's
-// per-iteration `(dt / eta)` since the operands are step-constant). `bonding` gates
-// the ADHESION half of the soft-sphere (d>=sij cohesion), the bond springs, AND the
-// growth ramp (JS passes `growthRate=0` when off, but the gate keeps it tidy).
-// `doCollision` (the Collision capability) gates the REPULSION half (d<sij volume
-// exclusion) INDEPENDENTLY, so a pure gas (Collision on, bonding off) collides
-// without cohesion/springs. Soft-sphere runs when `bonding || doCollision`; the
-// per-branch coefficient is muRep=doCollision?muR:0 / muAdh=bonding?muA:0.
+// per-iteration `(dt / eta)` since the operands are step-constant). The engine
+// physics is DECOUPLED into per-capability gates (v2 — the Agent Capability
+// Profiles): `bonding` (usesBondingPhysics) gates ONLY the ADHESION half of the
+// soft-sphere (d>=sij cohesion); `doCollision` (the Collision capability) gates the
+// REPULSION half (d<sij volume exclusion); `doSprings` (the Bonds=Physics
+// capability) gates the bond springs; growth rides the `growthRate` arg (the worker
+// zeroes it when the Growth capability is off). So a pure gas (Collision on,
+// bonding/springs off) collides without cohesion/springs. Soft-sphere runs when
+// `bonding || doCollision`; muRep=doCollision?muR:0 / muAdh=bonding?muA:0. Legacy
+// profileless files fall back to `usesBondingPhysics` for all three ⇒ byte-identical.
 // ===========================================================================
 
 /** The force-pass params (the worker mirrors this order exactly). */
@@ -3507,6 +3510,7 @@ const FORCE_PASS_PARAMS: ('i32' | 'f64')[] = [
   'i32', 'i32',                          // bonding, torus
   'f64', 'f64', 'f64',                   // originX, originY, originZ (the bbox-anchored hash grid origin)
   'i32',                                 // doCollision (soft-sphere repulsion — the Collision capability, independent of bonding physics)
+  'i32',                                 // doSprings (bond springs — the Bonds=Physics capability, independent of bonding physics)
 ];
 
 interface ForcePassParamIdx {
@@ -3518,6 +3522,7 @@ interface ForcePassParamIdx {
   bonding: number; torus: number;
   originX: number; originY: number; originZ: number;
   doCollision: number;
+  doSprings: number;
 }
 
 /** Emit the force-pass function body onto `em`. Reads the wasmBacked AgentStore at
@@ -3715,10 +3720,11 @@ function emitForcePass(em: WasmEmitter, layout: AgentMemoryLayout, is3d: boolean
     // density[i] = dens
     addr(off.dens, i); em.localGet(dens); em.f64Store();
 
-    // --- bond springs (gated on bonding && bondCount>0) ---
+    // --- bond springs (gated on the Bonds=Physics capability && bondCount>0;
+    //     Data bonds are force-free edges) ---
     // bc = bondCount[i]
     em.localGet(i); em.i32Const(4); em.op(OP_I32_MUL); em.i32Const(L.i32['bondCount']!); em.op(OP_I32_ADD); em.i32Load(); em.localSet(bc);
-    em.localGet(P.bonding);
+    em.localGet(P.doSprings);
     em.localGet(bc); em.i32Const(0); em.op(OP_I32_GT_S);
     em.op(OP_I32_AND);
     em.ifThen(() => emitBondSprings());
@@ -4329,7 +4335,7 @@ export function compileAgentGraphWasm(
     dtOverEta: 8, muR: 9, muA: 10, range: 11, momentum: 12, maxSpeed: 13, growthRate: 14,
     W: 15, H: 16, D: 17, bonding: 18, torus: 19,
     originX: 20, originY: 21, originZ: 22,
-    doCollision: 23,
+    doCollision: 23, doSprings: 24,
   };
   let forceBody: Uint8Array;
   try {
