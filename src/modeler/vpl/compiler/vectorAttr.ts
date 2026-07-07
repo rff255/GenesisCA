@@ -23,7 +23,7 @@
  * theoretical collision `color` carries.
  */
 
-import type { Attribute, AttributeType, CAModel, GraphNode, GraphEdge } from '../../../model/types';
+import type { Attribute, AttributeType, CAModel, GraphNode, GraphEdge, Variable } from '../../../model/types';
 import { is3dModelLike } from './niCodec';
 
 const VECTOR_SUFFIXES = ['_vx', '_vy', '_vz'] as const;
@@ -116,6 +116,35 @@ export function hasVectorAttrs(attrs: readonly Attribute[]): boolean {
   return attrs.some(a => a.type === 'vector');
 }
 
+/** Lower each `vector` scalar VARIABLE into its `vectorDimsOf` scalar-`float`
+ *  component variables (`<id>_vx/_vy[/_vz]`) — the Local-Variable analogue of
+ *  `expandVectorAttributes`. `initialValue` ("x,y[,z]") splits per component. So a
+ *  vector accumulator (summed forces) becomes N float scratch variables that
+ *  `buildVariableJS` / the WASM/WebGPU variable storage already handle. Non-vector
+ *  variables pass through untouched; identity when there are none. */
+export function expandVectorVariables(vars: Variable[]): Variable[] {
+  if (!vars.some(v => v.dataType === 'vector')) return vars;
+  const out: Variable[] = [];
+  for (const v of vars) {
+    if (v.dataType !== 'vector') { out.push(v); continue; }
+    const dims = vectorDimsOf(v);
+    const ids = vectorComponentIds(v.id, dims);
+    const labels = vectorComponentLabels(dims);
+    const inits = parseVectorDefault(v.initialValue, dims);
+    for (let i = 0; i < dims; i++) {
+      out.push({
+        id: ids[i]!,
+        name: `${v.name} ${labels[i]}`,
+        description: v.description,
+        kind: 'scalar',
+        dataType: 'float',
+        initialValue: String(inits[i]),
+      });
+    }
+  }
+  return out;
+}
+
 // ── The node-lowering + attr-expansion transform (one call per compiler) ──────
 const vIn = (p: string) => `input_value_${p}`;
 const vOut = (p: string) => `output_value_${p}`;
@@ -140,15 +169,32 @@ const AXES = ['x', 'y', 'z'];
 export function lowerVectorAttrs(
   nodes: GraphNode[], edges: GraphEdge[], model: CAModel,
 ): { nodes: GraphNode[]; edges: GraphEdge[]; model: CAModel } {
-  const cellVec = hasVectorAttrs(model.attributes ?? []);
-  const agentVec = hasVectorAttrs(model.agentAttributes ?? []);
-  const hasVecNodes = nodes.some(n => n.data.nodeType === 'getVectorAttribute' || n.data.nodeType === 'setVectorAttribute');
-  if (!cellVec && !agentVec && !hasVecNodes) return { nodes, edges, model };
+  const VEC_NODE_TYPES = new Set(['getVectorAttribute', 'setVectorAttribute', 'getVectorVariable', 'setVectorVariable']);
+  const anyVecAttr = hasVectorAttrs(model.attributes ?? []) || hasVectorAttrs(model.agentAttributes ?? []);
+  const anyVecVar = (model.variables ?? []).some(v => v.dataType === 'vector') || (model.agentVariables ?? []).some(v => v.dataType === 'vector');
+  const hasVecNodes = nodes.some(n => VEC_NODE_TYPES.has(n.data.nodeType));
+  if (!anyVecAttr && !anyVecVar && !hasVecNodes) return { nodes, edges, model };
 
-  // Vector-attr defs by id (both scopes) — a component-id + dims lookup.
-  const vecById = new Map<string, Attribute>();
-  for (const a of model.attributes ?? []) if (a.type === 'vector') vecById.set(a.id, a);
-  for (const a of model.agentAttributes ?? []) if (a.type === 'vector') vecById.set(a.id, a);
+  // Vector def dims by id (both scopes) — for a Get/Set Vector node's component ids.
+  const vecAttrDims = new Map<string, number>();
+  for (const a of model.attributes ?? []) if (a.type === 'vector') vecAttrDims.set(a.id, vectorDimsOf(a));
+  for (const a of model.agentAttributes ?? []) if (a.type === 'vector') vecAttrDims.set(a.id, vectorDimsOf(a));
+  const vecVarDims = new Map<string, number>();
+  for (const v of model.variables ?? []) if (v.dataType === 'vector') vecVarDims.set(v.id, vectorDimsOf(v));
+  for (const v of model.agentVariables ?? []) if (v.dataType === 'vector') vecVarDims.set(v.id, vectorDimsOf(v));
+
+  // Per Get/Set-Vector node type: the config key holding the id, the scalar
+  // component accessor node type, and where its dims live. Attributes use
+  // getCellAttribute/setAttribute; variables use getVariable/setVariable —
+  // identical ports, so the lowering below is shared.
+  const GET_KIND: Record<string, { key: string; access: string; dims: Map<string, number> }> = {
+    getVectorAttribute: { key: 'attributeId', access: 'getCellAttribute', dims: vecAttrDims },
+    getVectorVariable: { key: 'variableId', access: 'getVariable', dims: vecVarDims },
+  };
+  const SET_KIND: Record<string, { key: string; access: string; dims: Map<string, number> }> = {
+    setVectorAttribute: { key: 'attributeId', access: 'setAttribute', dims: vecAttrDims },
+    setVectorVariable: { key: 'variableId', access: 'setVariable', dims: vecVarDims },
+  };
 
   let seq = 0;
   const nid = () => `__va${seq++}`;
@@ -169,28 +215,32 @@ export function lowerVectorAttrs(
 
   for (const n of nodes) {
     const t = n.data.nodeType;
-    if (t === 'getVectorAttribute') {
-      const attrId = String(n.data.config?.attributeId ?? '');
-      const dims = vectorDimsOf(vecById.get(attrId));
-      const compIds = vectorComponentIds(attrId, dims);
+    const getK = GET_KIND[t];
+    const setK = SET_KIND[t];
+    if (getK) {
+      // Get Vector Attribute/Variable (VALUE) → makeVector fed by N scalar reads.
+      const id = String(n.data.config?.[getK.key] ?? '');
+      const dims = getK.dims.get(id) ?? 2;
+      const compIds = vectorComponentIds(id, dims);
       const mv = mkNode('makeVector', {});
       for (let i = 0; i < dims; i++) {
-        const gca = mkNode('getCellAttribute', { attributeId: compIds[i]! });
-        mkEdge(gca.id, vOut('value'), mv.id, vIn(AXES[i]!));
+        const gn = mkNode(getK.access, { [getK.key]: compIds[i]! });
+        mkEdge(gn.id, vOut('value'), mv.id, vIn(AXES[i]!));
       }
       // Consumers of this node's `value` (vector) output → the makeVector's `vector`.
       remapSrc.set(`${n.id} ${vOut('value')}`, { source: mv.id, sourceHandle: vOut('vector') });
       dropIds.add(n.id);
-    } else if (t === 'setVectorAttribute') {
-      const attrId = String(n.data.config?.attributeId ?? '');
-      const dims = vectorDimsOf(vecById.get(attrId));
-      const compIds = vectorComponentIds(attrId, dims);
+    } else if (setK) {
+      // Set Vector Attribute/Variable (FLOW) → breakVector + a linear scalar-write chain.
+      const id = String(n.data.config?.[setK.key] ?? '');
+      const dims = setK.dims.get(id) ?? 2;
+      const compIds = vectorComponentIds(id, dims);
       const bv = mkNode('breakVector', {});
       const setNodes: GraphNode[] = [];
       for (let i = 0; i < dims; i++) {
-        const sa = mkNode('setAttribute', { attributeId: compIds[i]! });
-        mkEdge(bv.id, vOut(AXES[i]!), sa.id, vIn('value'));
-        setNodes.push(sa);
+        const sn = mkNode(setK.access, { [setK.key]: compIds[i]! });
+        mkEdge(bv.id, vOut(AXES[i]!), sn.id, vIn('value'));
+        setNodes.push(sn);
       }
       for (let i = 0; i < dims - 1; i++) mkEdge(setNodes[i]!.id, fOut('next'), setNodes[i + 1]!.id, fIn('do'));
       // The vector value input source → breakVector.vector.
@@ -222,6 +272,8 @@ export function lowerVectorAttrs(
     ...model,
     attributes: expandVectorAttributes(model.attributes ?? []),
     agentAttributes: model.agentAttributes ? expandVectorAttributes(model.agentAttributes) : model.agentAttributes,
+    variables: model.variables ? expandVectorVariables(model.variables) : model.variables,
+    agentVariables: model.agentVariables ? expandVectorVariables(model.agentVariables) : model.agentVariables,
   };
   return { nodes: outNodes, edges: outEdges, model: model2 };
 }

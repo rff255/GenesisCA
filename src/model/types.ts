@@ -683,7 +683,13 @@ export interface VariegatedCellsConfig {
  *  `setArrayElement` (array). Defined globally on the model (Properties
  *  panel) so multiple graph nodes can reference the same variable by id. */
 export type VariableKind = 'scalar' | 'array';
-export type VariableDataType = 'bool' | 'integer' | 'float' | 'tag';
+/** `vector` (scalar kind only) is a per-cell / per-agent transient direction — the
+ *  variable analogue of the `vector` ATTRIBUTE type. Lowered by
+ *  [vectorAttr.ts](../modeler/vpl/compiler/vectorAttr.ts) into `vectorDims` scalar
+ *  `float` component variables (`<id>_vx/_vy[/_vz]`) before compile, so a vector
+ *  accumulator (e.g. summed forces) is ONE variable instead of two/three floats.
+ *  `Get/Set Vector Variable` carry it on one wire, lowered via Make/Break Vector. */
+export type VariableDataType = 'bool' | 'integer' | 'float' | 'tag' | 'vector';
 
 export interface Variable {
   id: string;
@@ -702,6 +708,10 @@ export interface Variable {
   /** Tag dataType only: tag attribute defining the tag space (its
    *  `tagOptions` provides the named values for the initialValue dropdown). */
   attributeId?: string;
+  /** Vector dataType only (scalar kind): component count — `2` = (x, y), `3` =
+   *  (x, y, z). Absent ⇒ 2. Chosen per variable (a 3D model offers both), like
+   *  `Attribute.vectorDims`. `initialValue` is the comma-joined `"x,y[,z]"`. */
+  vectorDims?: 2 | 3;
 }
 
 /** Bond-Graph Morphogenesis: which topology layer(s) the model uses. At least
