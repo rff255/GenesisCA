@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Plan — Vector Attribute Type + Orientation</title>
+<style>
+  :root{--bg:#0c0d10;--panel:#15171c;--panel2:#1b1e25;--ink:#e7e9ee;--dim:#98a0ad;--accent:#e8a13a;--cyan:#4cc9f0;--teal:#26a69a;--green:#66bb6a;--pink:#ec6ea6;--border:#2a2e37;--warn:#e06c5a;}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.55 -apple-system,Segoe UI,Roboto,sans-serif;padding:28px 20px 60px}
+  .wrap{max-width:1040px;margin:0 auto}
+  h1{font-size:24px;margin:0 0 4px} h2{font-size:17px;margin:34px 0 10px;color:var(--accent);border-bottom:1px solid var(--border);padding-bottom:6px}
+  .sub{color:var(--dim);margin:0 0 18px}
+  .card{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:16px 18px;margin:12px 0}
+  code{background:#23262e;padding:1px 5px;border-radius:4px;color:var(--cyan);font-size:12.5px}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  @media(max-width:760px){.grid{grid-template-columns:1fr}}
+  .tag{display:inline-block;font-size:11px;padding:1px 7px;border-radius:20px;border:1px solid var(--border);color:var(--dim);margin-left:6px}
+  .ok{color:var(--green)} .risk{color:var(--warn)}
+  ul{margin:6px 0 6px 2px;padding-left:18px} li{margin:3px 0}
+  .flow{overflow-x:auto} svg{display:block;max-width:100%}
+  .lead{font-weight:600}
+  .pill{fill:var(--panel2);stroke:var(--border)}
+  .txt{fill:var(--ink);font:12px -apple-system,Segoe UI,sans-serif}
+  .txtd{fill:var(--dim);font:11px -apple-system,Segoe UI,sans-serif}
+  .mono{fill:var(--cyan);font:11px ui-monospace,Menlo,monospace}
+  .arr{stroke:var(--dim);stroke-width:1.4;marker-end:url(#a)}
+  .fld{background:var(--panel2);border:1px solid var(--border);border-radius:6px;padding:6px 8px;margin:4px 0;display:flex;gap:8px;align-items:center}
+  .fld label{color:var(--dim);width:80px;font-size:12px} .fld .v{color:var(--ink);background:#0f1116;border:1px solid var(--border);border-radius:4px;padding:2px 8px;flex:1}
+  .badge{font-size:10.5px;border-radius:5px;padding:1px 6px} .b-cell{background:#213040;color:var(--cyan)} .b-agent{background:#2a2340;color:#b39ddb} .b-vec{background:#0f2e28;color:var(--teal)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Vector attribute type + Orientation <span class="tag">STEP 5c · branch absorb_old_automatosgt</span></h1>
+  <p class="sub">A first-class <b>stored <span style="color:var(--teal)">vector</span> attribute</b> (a per-cell / per-agent 2D–3D direction), then the FOV <b><code>facing</code></b> heading source that reads it. The elegant bit: a vector attribute is <b>lowered to scalar floats</b> before any target compiles — exactly like a vector <i>wire</i> is today.</p>
+
+  <div class="card">
+    <span class="lead">Principle.</span> <code>vector</code> is already a wire type that <code>expandComposites.ts</code> lowers to scalars pre-compile. We give the <b>stored</b> type the same treatment: one <code>vector</code> attribute becomes <b>N scalar <code>float</code> components</b> <code>&lt;id&gt;_vx</code>/<code>_vy</code>/<code>_vz</code> — mirroring how <code>color</code> stores <code>_r/_g/_b</code>. Every downstream layer (all 5 compilers, the worker SoA, save/load) then sees <b class="ok">only scalar floats</b> — already verified on every target, 2D+3D. <code>dims = is3d ? 3 : 2</code>.
+  </div>
+
+  <h2>1 · Authoring — the attribute editor</h2>
+  <div class="grid">
+    <div class="card">
+      <div style="color:var(--dim);font-size:12px;margin-bottom:6px">Attributes panel · new type <span class="badge b-agent">agent</span> <span class="badge b-cell">cell</span></div>
+      <div class="fld"><label>Name</label><span class="v">heading</span></div>
+      <div class="fld"><label>Type</label><span class="v" style="color:var(--teal)">Vector ▾</span></div>
+      <div class="fld"><label>Default X</label><span class="v">1</span></div>
+      <div class="fld"><label>Default Y</label><span class="v">0</span></div>
+      <div class="fld"><label>Default Z</label><span class="v" style="opacity:.5">— (3D only)</span></div>
+      <div style="color:var(--dim);font-size:11px;margin-top:6px">Default string <code>"1,0"</code> (2D) / <code>"1,0,0"</code> (3D)</div>
+    </div>
+    <div class="card">
+      <div style="color:var(--dim);font-size:12px;margin-bottom:6px">Read / write it in the graph</div>
+      <div style="font-size:12.5px">
+        <div style="margin:4px 0"><span class="badge b-vec">Get Vector Attribute</span> → <span class="badge" style="background:#1c2a1c;color:var(--green)">Break Vector</span> → x, y[, z]</div>
+        <div style="margin:4px 0">x, y[, z] → <span class="badge" style="background:#1c2a1c;color:var(--green)">Make Vector</span> → <span class="badge b-vec">Set Vector Attribute</span></div>
+      </div>
+      <div style="color:var(--dim);font-size:11px;margin-top:8px">Dedicated nodes carry the composite on <b>one wire</b>; the existing Make/Break Vector already lower it. <b>No overload</b> of scalar Get/Set Attribute.</div>
+    </div>
+  </div>
+
+  <h2>2 · Storage lowering — one vector attr → N scalar float buffers</h2>
+  <div class="card flow">
+    <svg viewBox="0 0 980 190" role="img" aria-label="storage lowering">
+      <defs><marker id="a" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto"><path d="M0,0 L9,4.5 L0,9 z" fill="#98a0ad"/></marker></defs>
+      <rect class="pill" x="20" y="66" width="180" height="58" rx="8"/>
+      <text class="txt" x="110" y="90" text-anchor="middle">agent attr</text>
+      <text class="mono" x="110" y="108" text-anchor="middle">heading : vector</text>
+      <text class="txtd" x="110" y="150" text-anchor="middle">model + UI (one entity)</text>
+
+      <line class="arr" x1="204" y1="95" x2="286" y2="95"/>
+      <text class="txtd" x="245" y="86" text-anchor="middle">expandVectorAttributes</text>
+
+      <rect class="pill" x="290" y="40" width="150" height="30" rx="6"/><text class="mono" x="365" y="60" text-anchor="middle">heading_vx : float</text>
+      <rect class="pill" x="290" y="80" width="150" height="30" rx="6"/><text class="mono" x="365" y="100" text-anchor="middle">heading_vy : float</text>
+      <rect class="pill" x="290" y="120" width="150" height="30" rx="6"/><text class="mono" x="365" y="140" text-anchor="middle">heading_vz : float</text>
+      <text class="txtd" x="365" y="172" text-anchor="middle">compiler + worker view (scalars only)</text>
+
+      <line class="arr" x1="444" y1="95" x2="536" y2="95"/>
+      <rect class="pill" x="540" y="52" width="200" height="86" rx="8"/>
+      <text class="txt" x="640" y="78" text-anchor="middle">SoA · 3 Float64Array</text>
+      <text class="txtd" x="640" y="98" text-anchor="middle">JS r_/w_ · WASM offsets</text>
+      <text class="txtd" x="640" y="115" text-anchor="middle">WebGPU 3 f32 words</text>
+
+      <line class="arr" x1="744" y1="95" x2="820" y2="95"/>
+      <rect class="pill" x="824" y="66" width="136" height="58" rx="8"/>
+      <text class="txt" x="892" y="90" text-anchor="middle">save / load</text>
+      <text class="txtd" x="892" y="108" text-anchor="middle">3× float64</text>
+      <text class="txtd" x="892" y="150" text-anchor="middle">ATTR_TYPE_MAP ok</text>
+    </svg>
+    <div style="color:var(--dim);font-size:12px">Because the components are plain <code>float</code> attributes, <b>no compiler/worker/fileOps layer needs a <code>vector</code> arm</b> — they only ever see scalar floats. The lowering is the <i>only</i> vector-aware code, plus the UI.</div>
+  </div>
+
+  <h2>3 · Node lowering — reuses the verified composite path</h2>
+  <div class="card flow">
+    <svg viewBox="0 0 980 150" role="img" aria-label="node lowering">
+      <defs><marker id="a2" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto"><path d="M0,0 L9,4.5 L0,9 z" fill="#98a0ad"/></marker></defs>
+      <rect class="pill" x="20" y="50" width="160" height="46" rx="8" style="stroke:var(--teal)"/>
+      <text class="txt" x="100" y="70" text-anchor="middle">Get Vector Attribute</text>
+      <text class="txtd" x="100" y="86" text-anchor="middle">→ vector wire</text>
+      <line class="arr" x1="184" y1="73" x2="250" y2="73" marker-end="url(#a2)"/>
+      <text class="txtd" x="217" y="64" text-anchor="middle">expandVectorAttrs</text>
+
+      <rect class="pill" x="256" y="34" width="150" height="24" rx="5"/><text class="mono" x="331" y="50" text-anchor="middle">getCellAttribute _vx</text>
+      <rect class="pill" x="256" y="62" width="150" height="24" rx="5"/><text class="mono" x="331" y="78" text-anchor="middle">getCellAttribute _vy</text>
+      <rect class="pill" x="256" y="90" width="150" height="24" rx="5"/><text class="mono" x="331" y="106" text-anchor="middle">getCellAttribute _vz</text>
+      <line class="arr" x1="410" y1="73" x2="470" y2="73" marker-end="url(#a2)"/>
+      <rect class="pill" x="476" y="50" width="130" height="46" rx="8" style="stroke:var(--green)"/>
+      <text class="txt" x="541" y="76" text-anchor="middle">Make Vector</text>
+      <line class="arr" x1="610" y1="73" x2="672" y2="73" marker-end="url(#a2)"/>
+      <text class="txtd" x="641" y="64" text-anchor="middle">expandComposites</text>
+      <rect class="pill" x="678" y="50" width="150" height="46" rx="8"/>
+      <text class="txt" x="753" y="70" text-anchor="middle">scalar arithmetic</text>
+      <text class="txtd" x="753" y="86" text-anchor="middle">(all 5 targets)</text>
+      <line class="arr" x1="832" y1="73" x2="892" y2="73" marker-end="url(#a2)"/>
+      <text class="txt ok" x="936" y="70" text-anchor="middle">✓ JS</text>
+      <text class="txt ok" x="936" y="86" text-anchor="middle">WASM · WebGPU</text>
+    </svg>
+    <div style="color:var(--dim);font-size:12px"><code>Set Vector Attribute</code> mirrors it: vector wire → <b>Break Vector</b> → <code>setAttribute(_vx/_vy/_vz)</code>. Two new nodes, <b>zero new per-target emit</b>.</div>
+  </div>
+
+  <h2>4 · Orientation — the FOV <code>facing</code> heading source</h2>
+  <div class="grid">
+    <div class="card">
+      <div style="color:var(--dim);font-size:12px;margin-bottom:6px">Get Agents In View / Sense Hemifield</div>
+      <div class="fld"><label>Heading</label><span class="v">facing ▾ <span style="color:var(--dim);font-size:11px">(velocity / wired / facing)</span></span></div>
+      <div class="fld"><label>Facing attr</label><span class="v" style="color:var(--teal)">heading (vector)</span></div>
+      <ul style="font-size:12.5px">
+        <li><b>vector</b> facing attr ⇒ heading = its components (<code>hx=r_heading_vx[idx]</code>…) — exact, no trig.</li>
+        <li><b>float</b> facing attr (compass°) ⇒ <code>hx=sin</code>, <code>hy=-cos</code>. WASM sin/cos = JS <code>Math.*</code> host imports ⇒ bit-identical.</li>
+      </ul>
+    </div>
+    <div class="card">
+      <div style="color:var(--dim);font-size:12px;margin-bottom:6px">Capability row (was hidden)</div>
+      <div class="fld"><label>Orientation</label><span class="v ok">● enabled — gates the <code>facing</code> source</span></div>
+      <div style="color:var(--dim);font-size:11.5px;margin-top:8px">Un-hides the previously-dead Orientation row (honest-controls). <code>facing</code> offered only when Orientation is on. A turn rule: read facing → rotate → <b>Set Vector Attribute</b>.</div>
+    </div>
+  </div>
+
+  <h2>5 · Risks &amp; verification</h2>
+  <div class="grid">
+    <div class="card">
+      <div class="lead risk">Top risks</div>
+      <ul>
+        <li><b>ATTR_TYPE_MAP silent float64</b> — a vector attr not expanded before save corrupts it. Mitigated: expand at the worker-init seam so file I/O only sees float components.</li>
+        <li><b>Cross-target divergence</b> — mitigated by the lowering (components are plain floats; no per-target vector arm).</li>
+        <li><b>UI-vs-compiler list split</b> — <code>agentAttrsOf</code>/<code>cellAttrsOf</code> feed BOTH; UI keeps the raw one-vector list, compilers/worker get the expanded list. Audit every caller.</li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="lead ok">Verification matrix</div>
+      <ul>
+        <li>tsc + build.</li>
+        <li>Dev-harness <code>compileAll</code> — cell + agent vector model, JS/WASM/WebGPU, 2D+3D.</li>
+        <li>Real worker run per target — store &amp; read back a vector via <code>getState</code>.</li>
+        <li>Save/load a <code>.gcaproj</code>/<code>.gcastate</code> with a vector attr.</li>
+        <li>JS↔WASM agent parity + a facing-vector → FOV heading synthetic.</li>
+        <li>Real-GPU WebGPU shader compile for the facing-vector FOV path.</li>
+        <li>Adversarial review workflow.</li>
+      </ul>
+    </div>
+  </div>
+
+  <p class="sub" style="margin-top:22px">Out of scope (v1): model vector attrs, vector as a sub-attribute <i>parent</i>, vector→color mappings / aggregation.</p>
+</div>
+</body>
+</html>

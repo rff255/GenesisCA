@@ -6,7 +6,17 @@
  *  neighborhood-anchored grid for default-value picking via
  *  `Attribute.neighborhoodHintId`, but the hint is purely UI; the runtime
  *  value is just the packed offset. */
-export type AttributeType = 'bool' | 'integer' | 'float' | 'tag' | 'color' | 'neighborIndex' | 'lookupTable';
+/** `vector` is a COMPOSITE stored type: a per-cell / per-agent 2D–3D direction
+ *  (`dims = is3dModel ? 3 : 2`). It is never stored as one array — a shared
+ *  pre-compile / pre-init transform ([vectorAttr.ts](../modeler/vpl/compiler/vectorAttr.ts)
+ *  `expandVectorAttributes`) LOWERS each vector attribute into `dims` scalar
+ *  `float` component attributes (`<id>_vx`/`_vy`/`_vz`), so every downstream layer
+ *  (all 5 compilers, the worker SoA, save/load) sees only scalar floats — the same
+ *  principle by which `expandComposites` lowers a vector *wire*. The `vector`
+ *  attribute exists only in `model.attributes`/`agentAttributes` (authoring) + the
+ *  transform; `Get/Set Vector Attribute` carry it on one wire, lowered via
+ *  Make/Break Vector. `Attribute.defaultValue` = comma-joined `"x,y"`/`"x,y,z"`. */
+export type AttributeType = 'bool' | 'integer' | 'float' | 'tag' | 'color' | 'neighborIndex' | 'lookupTable' | 'vector';
 
 /** A Lookup Table axis key source. Determines an axis' labels + dimension:
  *  - `facePalette`: labels = `['none', ...palette.labels]` (implicit `none` at 0).
