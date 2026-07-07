@@ -87,8 +87,8 @@ A complete GenesisCA model definition consists of:
    - 1.2. Structure (Topology, Boundary Treatment, Grid Size)
    - 1.3. Execution (Update Mode, optional End Conditions: max generations + indicator rules)
 
-2. **Attributes** — each has a name, type (binary, integer, decimal, tag, color, NeighborIndex), description, and a default value
-   - 2.1. Cell Attributes (per-cell state) — including NeighborIndex for cells that point at one of their neighbors (movement direction, leader-follower, etc.). Cell attributes can also be marked as **sub-attributes** — only well-defined when a parent (Tag or Binary) cell attribute is in a chosen value set, e.g. *charge* defined only on Wire (wireworld model). The compiler auto-injects parent-check guards at every read site so rules express "count head-charges around me" directly, with no manual filter-by-type chains
+2. **Attributes** — each has a name, type (binary, integer, decimal, tag, vector, color, NeighborIndex), description, and a default value
+   - 2.1. Cell Attributes (per-cell state) — including NeighborIndex for cells that point at one of their neighbors (movement direction, leader-follower, etc.) and **Vector** (a stored 2D/3D direction — a flow field, a facing, an accumulated force — read/written as one value via Make/Break Vector, and available for agent attributes and Local Variables too). Cell attributes can also be marked as **sub-attributes** — only well-defined when a parent (Tag or Binary) cell attribute is in a chosen value set, e.g. *charge* defined only on Wire (wireworld model). The compiler auto-injects parent-check guards at every read site so rules express "count head-charges around me" directly, with no manual filter-by-type chains
    - 2.2. Model Attributes (global parameters that all cells can read but not write; adjustable at runtime in the Simulator)
 
 3. **Neighborhoods** — a list of neighborhoods, each being a list of relative offsets from the central cell (margin up to 20), optionally including the central cell (`[0,0]`) itself

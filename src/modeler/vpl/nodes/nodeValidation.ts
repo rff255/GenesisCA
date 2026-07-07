@@ -39,6 +39,25 @@ export function detectMissingConfig(
       || connectedHandles.has(`input_flow_${portId}`);
   };
 
+  // A stored `vector` attribute is lowered (the OWN cell/agent Get/Set) into
+  // per-component Make/Break Vector before compile — but ONLY for getCellAttribute /
+  // setAttribute (getVariable/setVariable go via variableId). Any OTHER node that
+  // references a vector attribute through `attributeId` (neighbour reads,
+  // updateAttribute, the by-id agent read/write/aggregate nodes) is NOT lowered: it
+  // emits `r_<id>[…]` against the component-expanded buffer that has no `<id>` array,
+  // so the step crashes at run time with `r_<id> is not defined`. Surface it as a
+  // badge here so the user sees it in the modeler instead. (v1 limitation — read a
+  // vector via Get Cell Attribute + Break Vector, or extend lowerVectorAttrs.)
+  if (nodeType !== 'getCellAttribute' && nodeType !== 'setAttribute') {
+    const vId = config.attributeId;
+    if (typeof vId === 'string' && vId) {
+      const va = [...model.attributes, ...(model.agentAttributes ?? [])].find(x => x.id === vId);
+      if (va && va.type === 'vector') {
+        issues.push('Vector attributes are only readable/writable by Get/Set (Self) Attribute in v1 — read this one via Get Cell Attribute + Break Vector.');
+      }
+    }
+  }
+
   const hasCellAttr = (id: unknown) =>
     typeof id === 'string' && id.length > 0 &&
     model.attributes.some(a => a.id === id && !a.isModelAttribute);

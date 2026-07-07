@@ -15,6 +15,7 @@ import { useModel } from '../../model/ModelContext';
 import { countMacroInstances } from '../../model/macroImport';
 import { typeDisplayName } from '../../model/typeLabels';
 import { cellAttrsOf, cellFieldAttrsOf } from '../../model/attributeScope';
+import { vectorPortDims } from './compiler/vectorAttr';
 import {
   isConnectingGlobal,
   showPortLabelsGlobal,
@@ -368,6 +369,19 @@ function CaNodeComponent({ id, data }: NodeProps) {
         dataType: (p.dataType || 'any') as 'any',
       }));
       outputPorts = [];
+    }
+  }
+
+  // Vector stored attribute / variable: flip the value port to the composite
+  // `vector` type so its HANDLE renders teal (portHandleClass) and the connection
+  // highlight/validation agree. Mirrors effectivePorts.getEffectivePorts (which the
+  // drag/drop + drop-menu layer reads) + isValidConnection — one rule via
+  // vectorPortDims. The inline number widget is dropped (a vector isn't a scalar).
+  if (nodeData.nodeType === 'getCellAttribute' || nodeData.nodeType === 'getVariable'
+    || nodeData.nodeType === 'setAttribute' || nodeData.nodeType === 'setVariable') {
+    if (vectorPortDims(nodeData.nodeType, nodeData.config, model)) {
+      inputPorts = inputPorts.map(p => (p.id === 'value' ? { ...p, dataType: 'vector' as const, inlineWidget: undefined } : p));
+      outputPorts = outputPorts.map(p => (p.id === 'value' ? { ...p, dataType: 'vector' as const } : p));
     }
   }
 
@@ -2903,6 +2917,14 @@ function CaNodeComponent({ id, data }: NodeProps) {
           } else {
             effectiveWidget = undefined;
           }
+        }
+
+        // Set Variable to a VECTOR variable: no inline scalar widget (the value is
+        // a composite `vector` wired from Make Vector). setAttribute is already
+        // covered by the attr-type swap above; setVariable resolves via variableId.
+        if (nodeData.nodeType === 'setVariable' && port.id === 'value'
+          && vectorPortDims('setVariable', nodeData.config, model)) {
+          effectiveWidget = undefined;
         }
 
         // Compare (statement): swap the inline operand widgets by the chosen

@@ -916,6 +916,26 @@
   pointer-events: none;
 }
 
+/* Vector attribute: a row of small labelled X / Y [/ Z] number fields. */
+.manualBrushVector {
+  display: flex;
+  gap: 4px;
+  width: 100%;
+}
+
+.manualBrushVectorComp {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+.manualBrushVectorLabel {
+  font-size: var(--font-2xs);
+  color: var(--color-text-tertiary);
+}
+
 .manualBrushEmpty {
   font-size: var(--font-xs);
   color: var(--color-text-tertiary);

@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { Attribute } from '../model/types';
 import { unpackNI, unpackNI3, INVALID_NI } from '../modeler/vpl/compiler/niCodec';
+import { vectorComponentIds, vectorDimsOf } from '../modeler/vpl/compiler/vectorAttr';
 import styles from './InspectCellPopover.module.css';
 
 export type InspectPopoverState = {
@@ -75,6 +76,21 @@ function decodeAttrValue(v: number | undefined, attr: Attribute, is3d: boolean):
     }
     default: return formatFloat(v);
   }
+}
+
+// A stored `vector` attribute is lowered to scalar-float components (`<id>_vx`,
+// `_vy`[, `_vz`]) before compile, so the worker publishes the COMPONENTS in the
+// inspect values map, not the vector id. Recombine them into a `(x, y[, z])`
+// readout so the inspector reflects the user's named vector, not raw components.
+function decodeVector(values: Record<string, number> | null, attr: Attribute): string {
+  if (!values) return '—';
+  const dims = vectorDimsOf(attr);
+  const compIds = vectorComponentIds(attr.id, dims);
+  const parts = compIds.map(id => {
+    const v = values[id];
+    return v === undefined ? '?' : formatFloat(v);
+  });
+  return `(${parts.join(', ')})`;
 }
 
 function parentMatches(parent: Attribute, parentValue: number | undefined, parentValues: string[] | undefined): boolean {
@@ -231,7 +247,9 @@ export function InspectCellPopover({
         )}
         {cellAttrs.map(attr => {
           const rawValue = values?.[attr.id];
-          const rawText = decodeAttrValue(rawValue, attr, is3d);
+          const rawText = attr.type === 'vector'
+            ? decodeVector(values, attr)
+            : decodeAttrValue(rawValue, attr, is3d);
           let undefinedOverlay = false;
           if (attr.parentAttributeId) {
             const parent = attrById[attr.parentAttributeId];
