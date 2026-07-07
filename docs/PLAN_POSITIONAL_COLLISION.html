@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Plan — Real Positional (Hard) Collision</title>
+<style>
+  :root{
+    --bg:#0c0d10; --panel:#15171c; --panel2:#1b1e24; --border:#2a2e37;
+    --ink:#e7e9ee; --dim:#9aa0ac; --faint:#6b7280;
+    --accent:#e8a13a; --soft:#4cc9f0; --hard:#f0664c; --ok:#66bb6a; --off:#555b66;
+    --mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.55 -apple-system,Segoe UI,Roboto,sans-serif;padding:32px}
+  .wrap{max-width:1040px;margin:0 auto}
+  h1{font-size:26px;margin:0 0 4px}
+  h2{font-size:18px;margin:34px 0 12px;padding-bottom:6px;border-bottom:1px solid var(--border);color:#fff}
+  .sub{color:var(--dim);margin:0 0 8px}
+  .tag{display:inline-block;font:12px/1 var(--mono);color:var(--accent);border:1px solid var(--border);border-radius:999px;padding:5px 10px;margin-right:6px;background:var(--panel)}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  @media(max-width:760px){.grid2{grid-template-columns:1fr}}
+  .card{background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:16px}
+  .card h3{margin:0 0 4px;font-size:15px}
+  .card.soft h3{color:var(--soft)} .card.hard h3{color:var(--hard)}
+  .k{color:var(--faint);font:12px var(--mono)}
+  .pill{font:11px/1 var(--mono);border-radius:6px;padding:3px 7px;border:1px solid var(--border)}
+  .pill.soft{color:var(--soft);border-color:#264b58} .pill.hard{color:var(--hard);border-color:#5a2e26}
+  svg{display:block;width:100%;height:auto;background:var(--panel2);border-radius:10px;border:1px solid var(--border)}
+  table{width:100%;border-collapse:collapse;font-size:13.5px;margin-top:6px}
+  th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--border);vertical-align:top}
+  th{color:var(--dim);font-weight:600}
+  td.soft{color:var(--soft)} td.hard{color:var(--hard)}
+  code{font:12.5px var(--mono);background:#0f1115;border:1px solid var(--border);border-radius:5px;padding:1px 5px;color:#d7dbe3}
+  .flow{display:flex;flex-wrap:wrap;gap:10px;align-items:stretch;margin-top:6px}
+  .step{flex:1;min-width:150px;background:var(--panel2);border:1px solid var(--border);border-radius:10px;padding:12px}
+  .step .n{font:12px var(--mono);color:var(--accent)}
+  .arrow{align-self:center;color:var(--faint);font-size:20px}
+  .note{color:var(--dim);font-size:13px}
+  ul{margin:8px 0;padding-left:20px} li{margin:3px 0}
+  .before,.after{border-radius:8px;padding:10px 12px;font:13px var(--mono)}
+  .before{background:#1a1418;border:1px solid #3a2530}
+  .after{background:#121a14;border:1px solid #24402a}
+  .legend{display:flex;gap:16px;flex-wrap:wrap;font-size:12px;color:var(--dim);margin-top:8px}
+  .legend span{display:inline-flex;align-items:center;gap:6px}
+  .dot{width:11px;height:11px;border-radius:50%;display:inline-block}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1>Real Positional (Hard) Collision</h1>
+  <p class="sub">Bond-Graph Agents — a genuine second collision type, distinct from the soft-sphere, on JS / WASM / WebGPU · 2D + 3D.</p>
+  <div>
+    <span class="tag">branch absorb_old_automatosgt</span>
+    <span class="tag">all 3 targets</span>
+    <span class="tag">byte-identical for existing models</span>
+  </div>
+
+  <h2>The problem this fixes</h2>
+  <div class="grid2">
+    <div>
+      <div class="before"># BEFORE — a false choice
+Collision ▾ [ Off · Soft-sphere · <b>Positional</b> ]
+        ↑ both ran the SAME soft-sphere force.
+        "Positional" was a label promising a hard
+        solver that was never implemented.</div>
+    </div>
+    <div>
+      <div class="after"># AFTER — two real behaviours
+Collision ▾ [ Off · Soft-sphere · <b>Positional</b> ]
+Positional Iterations [ 2 ]
+        ↑ Soft = a springy repulsion force.
+          Positional = a rigid no-overlap constraint.
+          They now do genuinely different things.</div>
+    </div>
+  </div>
+
+  <h2>Soft vs Positional — the difference, drawn</h2>
+  <div class="grid2">
+    <div class="card soft">
+      <h3>Soft-sphere <span class="pill soft">force</span></h3>
+      <p class="note">A penalty force <code>F = μ_R·(d−s)</code> nudges overlapping agents apart. They <b>can still overlap</b> transiently; a stiffer μ_R only approaches non-penetration. Springy.</p>
+      <svg viewBox="0 0 320 160" role="img" aria-label="Two soft agents overlapping with a spring between centres">
+        <!-- overlap zone -->
+        <circle cx="135" cy="80" r="46" fill="#4cc9f022" stroke="#4cc9f0" stroke-width="1.5"/>
+        <circle cx="195" cy="80" r="46" fill="#4cc9f022" stroke="#4cc9f0" stroke-width="1.5"/>
+        <!-- overlap lens highlighted -->
+        <path d="M165,42 A46,46 0 0,1 165,118 A46,46 0 0,1 165,42 Z" fill="#f0664c33"/>
+        <!-- spring between centres -->
+        <polyline points="135,80 148,68 156,92 164,68 172,92 180,68 195,80" fill="none" stroke="#e8a13a" stroke-width="2"/>
+        <circle cx="135" cy="80" r="3" fill="#4cc9f0"/><circle cx="195" cy="80" r="3" fill="#4cc9f0"/>
+        <text x="135" y="140" fill="#9aa0ac" font-size="11" text-anchor="middle">d &lt; s</text>
+        <text x="255" y="80" fill="#f0664c" font-size="11">overlap</text>
+        <text x="255" y="94" fill="#f0664c" font-size="11">allowed</text>
+      </svg>
+    </div>
+    <div class="card hard">
+      <h3>Positional <span class="pill hard">constraint</span></h3>
+      <p class="note">After moving, overlapping pairs are <b>projected apart to exactly touching</b> — zero overlap. Rigid, like billiard balls (position-based dynamics).</p>
+      <svg viewBox="0 0 320 160" role="img" aria-label="Two hard agents pushed to just touching, no overlap">
+        <!-- ghost of pre-projection overlap -->
+        <circle cx="150" cy="80" r="46" fill="none" stroke="#3a2530" stroke-width="1.2" stroke-dasharray="3 3"/>
+        <circle cx="180" cy="80" r="46" fill="none" stroke="#3a2530" stroke-width="1.2" stroke-dasharray="3 3"/>
+        <!-- resolved: just touching -->
+        <circle cx="118" cy="80" r="46" fill="#f0664c22" stroke="#f0664c" stroke-width="1.5"/>
+        <circle cx="212" cy="80" r="46" fill="#f0664c22" stroke="#f0664c" stroke-width="1.5"/>
+        <circle cx="118" cy="80" r="3" fill="#f0664c"/><circle cx="212" cy="80" r="3" fill="#f0664c"/>
+        <!-- push arrows -->
+        <path d="M150,50 L120,50" stroke="#66bb6a" stroke-width="2" marker-end="url(#a)"/>
+        <path d="M180,50 L210,50" stroke="#66bb6a" stroke-width="2" marker-end="url(#a)"/>
+        <defs><marker id="a" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 Z" fill="#66bb6a"/></marker></defs>
+        <text x="165" y="16" fill="#66bb6a" font-size="11" text-anchor="middle">½ overlap each</text>
+        <text x="165" y="140" fill="#9aa0ac" font-size="11" text-anchor="middle">d = s (touching)</text>
+      </svg>
+    </div>
+  </div>
+  <div class="legend">
+    <span><span class="dot" style="background:#4cc9f0"></span>soft agent</span>
+    <span><span class="dot" style="background:#f0664c"></span>hard agent</span>
+    <span><span class="dot" style="background:#e8a13a"></span>spring force</span>
+    <span><span class="dot" style="background:#66bb6a"></span>position correction</span>
+    <span><span class="dot" style="background:#3a2530;border:1px dashed #f0664c"></span>pre-projection ghost</span>
+  </div>
+
+  <h2>Algorithm — Jacobi position projection (parallel-safe)</h2>
+  <div class="flow">
+    <div class="step"><div class="n">per step</div>force loop integrates velocity → writes tentative <code>xNext</code></div>
+    <div class="arrow">→</div>
+    <div class="step"><div class="n">×N iterations</div><b>Accumulate:</b> each agent sums <code>½(s−d)·(xᵢ−xⱼ)/d</code> over overlapping neighbours → into <code>forceX</code> (reused scratch)</div>
+    <div class="arrow">→</div>
+    <div class="step"><div class="n">×N iterations</div><b>Apply:</b> <code>xNext += corr</code>, re-wrap / clamp to world</div>
+    <div class="arrow">→</div>
+    <div class="step"><div class="n">commit</div><code>swapPositions</code> → the no-overlap positions</div>
+  </div>
+  <p class="note">Each sweep reads positions from the sweep's <i>start</i> and applies all corrections at once (<b>Jacobi</b>, order-independent) → identical on serial JS/WASM and parallel WebGPU. One pair resolves exactly in one sweep; dense packing converges over a few — hence the <b>Positional Iterations</b> knob. The correction reuses the dead <code>forceX/Y/Z</code> buffers, so <b>no new per-agent memory</b>.</p>
+
+  <h2>Semantics — the two are orthogonal to cohesion</h2>
+  <table>
+    <tr><th>collision</th><th>d &lt; s (overlapping)</th><th>d ≥ s, ≤ range (near)</th><th>Motion required</th></tr>
+    <tr><td class="soft">soft</td><td>soft repulsion force μ_R</td><td>adhesion μ_A (if bonding)</td><td>Force</td></tr>
+    <tr><td class="hard">positional</td><td><b>hard projection to touching</b></td><td>adhesion μ_A (if bonding)</td><td>any (edits position)</td></tr>
+    <tr><td style="color:#6b7280">off</td><td>—</td><td>adhesion μ_A (if bonding)</td><td>—</td></tr>
+  </table>
+  <p class="note">Adhesion (cohesion), bond springs and growth are unchanged and independent — so a <b>positional gas</b> is hard collisions with no cohesion, exactly as you'd expect for rigid particles.</p>
+
+  <h2>Cross-target &amp; safety</h2>
+  <div class="grid2">
+    <div class="card">
+      <h3>All three targets</h3>
+      <ul>
+        <li><b>JS</b> — reference: <code>resolvePositionalCollisions</code> between the force loop and <code>swapPositions</code> (2D + 3D, hash + all-pairs).</li>
+        <li><b>WASM</b> — a <code>positionalPass</code> export, one sweep per call; <b>bit-parity</b> with JS (f64 + host <code>fmod</code> wrap).</li>
+        <li><b>WebGPU</b> — an <code>accumulate</code> + <code>apply</code> shader pair per sweep, reusing the force pass's hash + uniform; f32 statistical parity.</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h3>Byte-identical for existing models</h3>
+      <ul>
+        <li>No shipped model uses <code>positional</code> (inference only ever produces <code>soft</code>/<code>off</code>).</li>
+        <li>Soft repulsion re-gated on <code>usesSoftCollision</code> (= true for soft, false for off) — identical to the old gate for every shipped/legacy file.</li>
+        <li>The projection runs <i>only</i> for <code>positional</code>.</li>
+        <li>Verified by the byte-identity audit + <code>parity-agent-wasm</code> + a new positional combo in <code>parity-agent-force</code> + a real-GPU no-overlap check + an adversarial-review workflow.</li>
+      </ul>
+    </div>
+  </div>
+
+</div>
+</body>
+</html>

@@ -35,6 +35,7 @@ export const CENTER_BASED_DEFAULTS = {
   bondRestLength: 1.0,       // L when no spring matrix (else = contact distance)
   formDistance: 1.1,         // d_form, × contact distance (auto-bond within)
   breakDistance: 1.6,        // d_break, × contact distance (> d_form — hysteresis)
+  positionalIterations: 2,   // Jacobi sweeps for the hard positional collision (more = tighter no-overlap packing)
 } as const;
 
 export type CenterBasedNumericKey = keyof typeof CENTER_BASED_DEFAULTS;
@@ -71,18 +72,32 @@ export function usesBondingPhysics(cfg: CenterBasedConfig | undefined | null): b
   return cfg?.useBondingPhysics ?? !cfg?.customForcesOnly;
 }
 
-/** Resolve whether the engine runs its soft-sphere REPULSION — the volume-exclusion
- *  collision — this model. Profile-aware: the Collision capability drives it
- *  (`soft`/`positional` = on, `off` = off), INDEPENDENTLY of the bonding-physics
- *  bundle. So a pure gas (Collision on, "Use bonding physics" off) gets
- *  non-penetrating collision without cohesion or springs. Adhesion + springs +
- *  growth + auto-bond stay under `usesBondingPhysics`. Legacy files without a
- *  profile fall back to the engine-forces master toggle, so they're byte-identical.
- *  (The shipped agent samples' inferred profile has `collision === 'soft' ⟺
- *  usesBondingPhysics`, so their repulsion is byte-identical too.) */
+/** Resolve the collision MODE this model runs — the SINGLE source of truth for the
+ *  Collision capability's engine effect. `'soft'` = the soft-sphere repulsion FORCE
+ *  (a penalty force added to the integrator); `'positional'` = a hard, no-overlap
+ *  POSITION-PROJECTION constraint applied after integration (rigid particles);
+ *  `'off'` = neither. Profile-aware, INDEPENDENT of the bonding-physics bundle (so a
+ *  pure gas collides without cohesion/springs). Legacy files without a profile fall
+ *  back to `usesBondingPhysics ? 'soft' : 'off'`, so they're byte-identical (the
+ *  shipped/inferred profiles are only ever `soft`/`off`, never `positional`). */
+export function collisionMode(cfg: CenterBasedConfig | undefined | null): 'off' | 'soft' | 'positional' {
+  const c = cfg?.agentCapabilities?.collision;
+  if (c === 'off' || c === 'soft' || c === 'positional') return c;
+  return usesBondingPhysics(cfg) ? 'soft' : 'off';
+}
+/** Any collision on (soft OR positional). */
 export function usesEngineCollision(cfg: CenterBasedConfig | undefined | null): boolean {
-  if (cfg?.agentCapabilities) return cfg.agentCapabilities.collision !== 'off';
-  return usesBondingPhysics(cfg);
+  return collisionMode(cfg) !== 'off';
+}
+/** The SOFT-sphere repulsion force runs (gates the force-pass `doCollision`). False
+ *  for `positional` — the projection replaces the soft force there. */
+export function usesSoftCollision(cfg: CenterBasedConfig | undefined | null): boolean {
+  return collisionMode(cfg) === 'soft';
+}
+/** The hard POSITIONAL projection pass runs (a rigid no-overlap constraint after
+ *  integration). Distinct from soft; runs under any Motion (it edits positions). */
+export function usesPositionalCollision(cfg: CenterBasedConfig | undefined | null): boolean {
+  return collisionMode(cfg) === 'positional';
 }
 
 /** Resolve whether the engine runs its bond SPRINGS this model. Profile-aware:

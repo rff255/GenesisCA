@@ -1522,6 +1522,151 @@ export function buildSpatialHash(
   return { nBinsX, nBinsY, nBinsZ, binSizeX, binSizeY, binSizeZ, originX: ox, originY: oy, originZ: oz, binStart, binAgents };
 }
 
+/** HARD positional collision — a Jacobi position-projection constraint (the rigid,
+ *  no-overlap alternative to the soft-sphere FORCE). Call AFTER the position commit
+ *  (`swapPositions`), on the COMMITTED x/y[/z]: it rebuilds the hash on those
+ *  positions, then for `iterations` sweeps pushes every overlapping pair
+ *  (`d < s_ij = r_i + r_j`) apart to exactly touching — each moves HALF the overlap
+ *  along the torus-shortest axis. **Jacobi**: each sweep reads the sweep-START
+ *  positions (accumulating into the reused `forceX/Y[/Z]` buffers) and applies all
+ *  corrections at once, so it is order-INDEPENDENT ⇒ identical on serial JS/WASM and
+ *  parallel WebGPU (the WASM/WebGPU ports mirror this exact math for parity). No new
+ *  per-agent SoA (reuses the dead force accumulator). The hash is rebuilt ONCE — the
+ *  per-sweep corrections are sub-contact, so agents rarely cross bins between sweeps
+ *  (the same locality the force pass relies on). A single sweep resolves an isolated
+ *  pair exactly; dense packing converges over a few (hence the iteration knob). */
+export function resolvePositionalCollisions(
+  s: AgentStore, iterations: number, binEdge: number, reserve: number,
+  W: number, H: number, D: number, is3d: boolean, torus: boolean,
+): void {
+  const hw = s.highWater, alive = s.alive, rad = s.radius;
+  const x = s.x, y = s.y, zz = s.z;
+  const corrX = s.forceX, corrY = s.forceY, corrZ = s.forceZ;
+  const halfW = W / 2, halfH = H / 2, halfD = D / 2;
+  const hash = buildSpatialHash(s, Math.max(1e-3, binEdge), W, H, D, torus, reserve);
+  const nBinsX = hash ? hash.nBinsX : 0, nBinsY = hash ? hash.nBinsY : 0, nBinsZ = hash ? hash.nBinsZ : 0;
+  const binStart = hash ? hash.binStart : null, binAgents = hash ? hash.binAgents : null;
+  const bsX = hash ? hash.binSizeX : 1, bsY = hash ? hash.binSizeY : 1, bsZ = hash ? hash.binSizeZ : 1;
+  const oX = hash ? hash.originX : 0, oY = hash ? hash.originY : 0, oZ = hash ? hash.originZ : 0;
+  for (let iter = 0; iter < iterations; iter++) {
+    // --- accumulate: corr[i] = Σ ½·overlap pushing i away from each overlapping j.
+    // Interaction is INLINED (no closure — V8-optimal, matches the force pass) and
+    // duplicated across 2D/3D × hash/all-pairs; identical float ops in every copy. ---
+    if (is3d) {
+      for (let i = 0; i < hw; i++) {
+        if (!alive[i]) { corrX[i] = 0; corrY[i] = 0; corrZ[i] = 0; continue; }
+        const xi = x[i]!, yi = y[i]!, zi = zz[i]!, ri = rad[i]!;
+        let cx = 0, cy = 0, cz = 0;
+        if (hash) {
+          let bx = ((xi - oX) / bsX) | 0; if (bx < 0) bx = 0; else if (bx >= nBinsX) bx = nBinsX - 1;
+          let by = ((yi - oY) / bsY) | 0; if (by < 0) by = 0; else if (by >= nBinsY) by = nBinsY - 1;
+          let bz = ((zi - oZ) / bsZ) | 0; if (bz < 0) bz = 0; else if (bz >= nBinsZ) bz = nBinsZ - 1;
+          for (let ddz = -1; ddz <= 1; ddz++) for (let ddy = -1; ddy <= 1; ddy++) for (let ddx = -1; ddx <= 1; ddx++) {
+            let nbx = bx + ddx, nby = by + ddy, nbz = bz + ddz;
+            if (torus) { nbx = ((nbx % nBinsX) + nBinsX) % nBinsX; nby = ((nby % nBinsY) + nBinsY) % nBinsY; nbz = ((nbz % nBinsZ) + nBinsZ) % nBinsZ; }
+            else { if (nbx < 0 || nbx >= nBinsX || nby < 0 || nby >= nBinsY || nbz < 0 || nbz >= nBinsZ) continue; }
+            const b = (nbz * nBinsY + nby) * nBinsX + nbx;
+            const end = binStart![b + 1]!;
+            for (let p = binStart![b]!; p < end; p++) {
+              const j = binAgents![p]!;
+              if (j === i || !alive[j]) continue;
+              let dx = x[j]! - xi, dy = y[j]! - yi, dz = zz[j]! - zi;
+              if (torus) {
+                if (dx > halfW) dx -= W; else if (dx < -halfW) dx += W;
+                if (dy > halfH) dy -= H; else if (dy < -halfH) dy += H;
+                if (dz > halfD) dz -= D; else if (dz < -halfD) dz += D;
+              }
+              const d2 = dx * dx + dy * dy + dz * dz;
+              const sij = ri + rad[j]!;
+              if (d2 > 0 && d2 < sij * sij) {
+                const d = Math.sqrt(d2);
+                const push = 0.5 * (sij - d) / d;
+                cx -= push * dx; cy -= push * dy; cz -= push * dz;
+              }
+            }
+          }
+        } else {
+          for (let j = 0; j < hw; j++) {
+            if (j === i || !alive[j]) continue;
+            let dx = x[j]! - xi, dy = y[j]! - yi, dz = zz[j]! - zi;
+            if (torus) {
+              if (dx > halfW) dx -= W; else if (dx < -halfW) dx += W;
+              if (dy > halfH) dy -= H; else if (dy < -halfH) dy += H;
+              if (dz > halfD) dz -= D; else if (dz < -halfD) dz += D;
+            }
+            const d2 = dx * dx + dy * dy + dz * dz;
+            const sij = ri + rad[j]!;
+            if (d2 > 0 && d2 < sij * sij) {
+              const d = Math.sqrt(d2);
+              const push = 0.5 * (sij - d) / d;
+              cx -= push * dx; cy -= push * dy; cz -= push * dz;
+            }
+          }
+        }
+        corrX[i] = cx; corrY[i] = cy; corrZ[i] = cz;
+      }
+    } else {
+      for (let i = 0; i < hw; i++) {
+        if (!alive[i]) { corrX[i] = 0; corrY[i] = 0; continue; }
+        const xi = x[i]!, yi = y[i]!, ri = rad[i]!;
+        let cx = 0, cy = 0;
+        if (hash) {
+          let bx = ((xi - oX) / bsX) | 0; if (bx < 0) bx = 0; else if (bx >= nBinsX) bx = nBinsX - 1;
+          let by = ((yi - oY) / bsY) | 0; if (by < 0) by = 0; else if (by >= nBinsY) by = nBinsY - 1;
+          for (let ddy = -1; ddy <= 1; ddy++) for (let ddx = -1; ddx <= 1; ddx++) {
+            let nbx = bx + ddx, nby = by + ddy;
+            if (torus) { nbx = ((nbx % nBinsX) + nBinsX) % nBinsX; nby = ((nby % nBinsY) + nBinsY) % nBinsY; }
+            else { if (nbx < 0 || nbx >= nBinsX || nby < 0 || nby >= nBinsY) continue; }
+            const b = nby * nBinsX + nbx;
+            const end = binStart![b + 1]!;
+            for (let p = binStart![b]!; p < end; p++) {
+              const j = binAgents![p]!;
+              if (j === i || !alive[j]) continue;
+              let dx = x[j]! - xi, dy = y[j]! - yi;
+              if (torus) { if (dx > halfW) dx -= W; else if (dx < -halfW) dx += W; if (dy > halfH) dy -= H; else if (dy < -halfH) dy += H; }
+              const d2 = dx * dx + dy * dy;
+              const sij = ri + rad[j]!;
+              if (d2 > 0 && d2 < sij * sij) {
+                const d = Math.sqrt(d2);
+                const push = 0.5 * (sij - d) / d;
+                cx -= push * dx; cy -= push * dy;
+              }
+            }
+          }
+        } else {
+          for (let j = 0; j < hw; j++) {
+            if (j === i || !alive[j]) continue;
+            let dx = x[j]! - xi, dy = y[j]! - yi;
+            if (torus) { if (dx > halfW) dx -= W; else if (dx < -halfW) dx += W; if (dy > halfH) dy -= H; else if (dy < -halfH) dy += H; }
+            const d2 = dx * dx + dy * dy;
+            const sij = ri + rad[j]!;
+            if (d2 > 0 && d2 < sij * sij) {
+              const d = Math.sqrt(d2);
+              const push = 0.5 * (sij - d) / d;
+              cx -= push * dx; cy -= push * dy;
+            }
+          }
+        }
+        corrX[i] = cx; corrY[i] = cy;
+      }
+    }
+    // --- apply: x += corr, re-wrap (torus) / clamp (bounded) ---
+    for (let i = 0; i < hw; i++) {
+      if (!alive[i]) continue;
+      let nx = x[i]! + corrX[i]!, ny = y[i]! + corrY[i]!;
+      if (torus) { nx = ((nx % W) + W) % W; ny = ((ny % H) + H) % H; }
+      else { nx = nx < 0 ? 0 : nx > W ? W : nx; ny = ny < 0 ? 0 : ny > H ? H : ny; }
+      x[i] = nx; y[i] = ny;
+      if (is3d) {
+        let nz = zz[i]! + corrZ[i]!;
+        if (torus) nz = ((nz % D) + D) % D;
+        else nz = nz < 0 ? 0 : nz > D ? D : nz;
+        zz[i] = nz;
+      }
+    }
+  }
+}
+
 export function snapshotAgentsForRender(store: AgentStore, includeSprites = false): AgentRenderSnapshot {
   const hw = store.highWater;
   // A1: gate z/vz on worldDepth > 1 so 2D models pay NO extra per-step alloc/

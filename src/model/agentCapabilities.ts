@@ -131,20 +131,17 @@ export function nodeSatisfiesCapabilities(nodeType: string, profile: AgentCapabi
 
 export function computeCapabilityClosure(input: AgentCapabilities): AgentCapabilities {
   const p: AgentCapabilities = { ...input };
-  // The engine has ONE collision model — the soft-sphere volume-exclusion force
-  // (a stiff soft potential is non-penetrating in practice; the milestone plan
-  // deliberately did not ship a separate hard/positional solver). `positional` was
-  // a phantom second option that behaved IDENTICALLY to `soft`; fold it in here so
-  // every consumer (UI dropdown, engine gate, preset match) sees one honest value.
-  if (p.collision === 'positional') p.collision = 'soft';
   // Iterate to a small fixpoint (deps are shallow; two passes always converge).
   for (let i = 0; i < 3; i++) {
     // Auto-bond needs physics bonds.
     if (p.autoBond && p.bonds !== 'physics') p.bonds = 'physics';
     // Physics bonds need force motion.
     if (p.bonds === 'physics' && p.motion !== 'force') p.motion = 'force';
-    // Soft-sphere collision needs Body + Force motion (the integrator applies it).
+    // SOFT collision is a penalty FORCE ⇒ needs Body + Force motion (the integrator
+    // applies it). POSITIONAL collision is a position CONSTRAINT applied after
+    // integration ⇒ needs only Body (it works under any Motion — it edits xNext).
     if (p.collision === 'soft') { p.body = true; if (p.motion !== 'force') p.motion = 'force'; }
+    if (p.collision === 'positional') p.body = true;
     // Growth + Division need Body.
     if (p.growth) p.body = true;
     if (p.division) p.body = true;
@@ -379,7 +376,7 @@ export interface CapabilityRowMeta {
 
 export const AGENT_CAPABILITY_ROWS: CapabilityRowMeta[] = [
   { key: 'body', label: 'Body / Extent', description: 'A radius surface, rendered as a disc/sphere. Unlocks Get / Set Agent Radius.' },
-  { key: 'collision', label: 'Collision', description: 'Soft-sphere volume exclusion — overlapping agents repel (tune with Repulsion Stiffness). Needs Motion=Force. Unlocks Neighbour Density.', requires: 'Body' },
+  { key: 'collision', label: 'Collision', description: 'Volume exclusion. Soft-sphere = a springy repulsion force (transient overlap; tune Repulsion Stiffness; needs Motion=Force). Positional = a rigid no-overlap constraint (billiard-ball; works under any Motion). Unlocks Neighbour Density.', requires: 'Body' },
   { key: 'bonds', label: 'Bonds', description: 'Connectivity edges (Data — no forces) or spring physics (Physics — needs Motion=Force). Unlocks Form/Break Bond, For Each Bond, Get Bonded Agents.' },
   { key: 'autoBond', label: 'Auto-bond', description: 'Engine forms/breaks bonds by proximity (hysteresis).', requires: 'Bonds = Physics' },
   { key: 'growth', label: 'Growth', description: 'Radius ramps toward a target radius each step. Unlocks Set Target Radius.', requires: 'Body' },

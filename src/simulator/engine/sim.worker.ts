@@ -24,10 +24,11 @@ import { decodeReductions, gpuHandledIds, gpuHandledAttrIds } from './webgpuRedu
 import { encodeAttrValue } from '../../model/attrValueEncoding';
 import { subAttrInfo, parentValueToInt } from '../../modeler/vpl/compiler/subAttribute';
 import type { Attribute, CenterBasedConfig } from '../../model/types';
-import { cbNum, usesBondingPhysics, usesEngineCollision, usesEngineSprings, usesEngineGrowth } from '../../model/centerBased';
+import { cbNum, usesBondingPhysics, usesSoftCollision, usesPositionalCollision, usesEngineSprings, usesEngineGrowth } from '../../model/centerBased';
 import {
   createAgentStore, seedAgents, clearAgents, allocAgentSlot, initAgentSlot, freeAgentSlot, freeStagedSlot,
   snapshotAgentsForRender, advanceAgentSprites, serializeAgentStore, deserializeAgentStore, buildSpatialHash,
+  resolvePositionalCollisions,
   formBond, breakBond, hasBond, sweepStaleBonds, divideAgent,
   primeAgentAttrWrite, swapAgentAttrs, computeAgentMaxHashBins, AGENT_HASH_BIN_CAP,
   type AgentStore, type AgentSeedSpec, type AgentStatePayload, type AgentAttrSpec, type SpatialHash,
@@ -1172,7 +1173,7 @@ function runAgentStep(): void {
   // (bonding physics). `doForce` runs the neighbour force block when EITHER is on.
   // For every shipped sample doCollision === engineForces, so muRep/muAdh reduce to
   // muR/muA and this is byte-identical (verified by the force-pass parity harness).
-  const doCollision = usesEngineCollision(cfg);
+  const doCollision = usesSoftCollision(cfg);   // SOFT-sphere repulsion force (positional collision runs a separate projection pass below)
   const muRep = doCollision ? muR : 0;
   const muAdh = engineForces ? muA : 0;
   const doForce = doCollision || engineForces;
@@ -1561,6 +1562,16 @@ function runAgentStep(): void {
   // Commit positions (synchronous double-buffer swap; S11 helper — z swapped in 3D).
   swapPositions(s, is3d);
 
+  // HARD positional collision (Collision capability = 'positional'): a rigid,
+  // no-overlap position-projection constraint on the just-committed positions —
+  // the alternative to the soft-sphere FORCE above (which is off for positional).
+  // Runs `positionalIterations` Jacobi sweeps; the structural phase below then
+  // sees the settled, non-overlapping positions.
+  if (usesPositionalCollision(cfg)) {
+    const iters = Math.max(1, Math.floor(cbNum(cfg, 'positionalIterations')));
+    resolvePositionalCollisions(s, iters, binEdge, agentHashReserve, W, H, D, is3d, torus);
+  }
+
   // Post-step structural phase: bond form/break (Phase B), division + growth +
   // death (Phase C). Mutates the bond/agent topology on the SETTLED state.
   runAgentStructuralPhase();
@@ -1628,7 +1639,7 @@ async function runAgentStepWebGPUInner(): Promise<boolean> {
   const bonding = usesBondingPhysics(cfg);
   const muR = cbNum(cfg, 'repulsionStiffness');
   const muA = cbNum(cfg, 'adhesionStiffness');
-  const doCollision = usesEngineCollision(cfg);
+  const doCollision = usesSoftCollision(cfg);   // SOFT-sphere repulsion force (positional collision runs a separate projection pass below)
   const range = cbNum(cfg, 'interactionRange');
   const eta = Math.max(1e-6, cbNum(cfg, 'drag'));
   const torus = boundaryTreatment === 'torus';
@@ -1765,6 +1776,21 @@ async function runAgentStepWebGPUInner(): Promise<boolean> {
       destroyAgentWebGPURuntime(agentWebgpuRuntime); agentWebgpuRuntime = null;
     }
     return false;
+  }
+
+  // HARD positional collision — a CPU post-step constraint on the just-read-back
+  // positions, exactly like the structural phase below (both target-independent
+  // CPU/JS, run on the settled state after the GPU force pass). No GPU shader +
+  // no extra readback: `readbackAgentStep` already committed x/y[/z] to the CPU
+  // store, so the projection runs here and the NEXT step's uploadAgentSoA sends
+  // the non-overlapping positions back to the GPU. (WebGPU's f32 force pass ⇒ the
+  // read-back positions are f32-precision, so this is statistical parity vs the
+  // f64 JS/WASM targets — the documented WebGPU-agent stance, no worse than the
+  // structural phase which is likewise CPU here.)
+  if (usesPositionalCollision(cfg)) {
+    const iters = Math.max(1, Math.floor(cbNum(cfg, 'positionalIterations')));
+    const is3dW = s.worldDepth > 1;
+    resolvePositionalCollisions(s, iters, binEdge, agentHashReserve, W, H, s.worldDepth, is3dW, boundaryTreatment === 'torus');
   }
 
   // The structural phase runs CPU-side on the settled state (G4). It reads the
