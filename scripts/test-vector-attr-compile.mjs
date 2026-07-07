@@ -31,8 +31,8 @@ const edge = (s, sp, tt, tp, cat) => E.push({ id: nid('e'), source: s.id, target
 
 const step = node('step');
 const mv = node('makeVector', { _port_x: '3', _port_y: '4' });
-const setVec = node('setVectorAttribute', { attributeId: 'heading' });
-const getVec = node('getVectorAttribute', { attributeId: 'heading' });
+const setVec = node('setAttribute', { attributeId: 'heading' });
+const getVec = node('getCellAttribute', { attributeId: 'heading' });
 const bv = node('breakVector');
 const setMag = node('setAttribute', { attributeId: 'mag' });
 edge(step, 'do', setVec, 'do', 'flow');
@@ -84,7 +84,7 @@ console.log(`${fail === 0 ? 'VECTOR-ATTR JS CELL COMPILE ✓' : `${fail} CELL FA
   const ae = (s, sp, tt, tp, cat) => AE.push({ id: nid('e'), source: s.id, target: tt.id, sourceHandle: `output_${cat}_${sp}`, targetHandle: `input_${cat}_${tp}` });
   const bs = an('behaviourStep');
   const mv2 = an('makeVector', { _port_x: '7', _port_y: '9' });
-  const setV = an('setVectorAttribute', { attributeId: 'facing' });
+  const setV = an('setAttribute', { attributeId: 'facing' });
   ae(bs, 'do', setV, 'do', 'flow');
   ae(mv2, 'vector', setV, 'value', 'value');
   const rawA = {
@@ -116,10 +116,10 @@ console.log(`${fail === 0 ? 'VECTOR-ATTR JS CELL COMPILE ✓' : `${fail} CELL FA
   const vn = (t, c = {}) => { const n = { id: nid('v'), type: 'caNode', position: { x: 0, y: 0 }, data: { nodeType: t, config: c } }; VN.push(n); return n; };
   const ve = (s, sp, tt, tp, cat) => VE.push({ id: nid('e'), source: s.id, target: tt.id, sourceHandle: `output_${cat}_${sp}`, targetHandle: `input_${cat}_${tp}` });
   const stp = vn('step');
-  const cur = vn('getVectorVariable', { variableId: 'acc' });          // read accumulator
+  const cur = vn('getVariable', { variableId: 'acc' });          // read accumulator
   const delta = vn('makeVector', { _port_x: '1', _port_y: '2' });      // a delta
   const add = vn('vectorOp', { op: 'add' });                          // acc + delta
-  const setAcc = vn('setVectorVariable', { variableId: 'acc' });       // write back
+  const setAcc = vn('setVariable', { variableId: 'acc' });       // write back
   ve(stp, 'do', setAcc, 'do', 'flow');
   ve(cur, 'value', add, 'a', 'value');
   ve(delta, 'vector', add, 'b', 'value');

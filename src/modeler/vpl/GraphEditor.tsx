@@ -27,6 +27,7 @@ import type { PortDef, NodeTypeDef } from './types';
 import { MODEL_ELEMENT_DRAG_MIME, RELATED_NODES, payloadElementId, relatedEntriesForPayload, computeCompatibleHandlesForDrag, findNearestCompatibleHandle } from './modelElementDrag';
 import type { ModelElementDragPayload } from './modelElementDrag';
 import { getEffectivePorts } from './effectivePorts';
+import { vectorPortDims } from './compiler/vectorAttr';
 import type { GraphNode, GraphEdge, CAModel } from '../../model/types';
 import type { MacroPort } from '../../model/types';
 import { computeAlignmentSnap, sameGuides } from './alignmentSnap';
@@ -1317,12 +1318,20 @@ export function GraphEditorInner() {
         const sourceNodeType = (sourceNode?.data as Record<string, unknown> | undefined)?.nodeType as string | undefined;
         const sourceDef = sourceNodeType ? getNodeDef(sourceNodeType) : undefined;
         const sourcePort = sourceDef?.ports.find(p => p.id === srcParsed.portId);
-        const tgtIsNI = targetPort?.dataType === 'neighborIndex';
-        const srcIsNI = sourcePort?.dataType === 'neighborIndex';
-        if (tgtIsNI && sourcePort && sourcePort.dataType !== 'neighborIndex' && sourcePort.dataType !== 'any') {
+        // Effective dataType — Get/Set Attribute + Get/Set Variable expose a `vector`
+        // value port when the picked attr/var is a vector (the unified type-driven
+        // port; shared with effectivePorts + CaNode via vectorPortDims). So a vector
+        // attr read wires straight into a vector input (e.g. Break Vector).
+        const srcCfg = (sourceNode?.data as { config?: Record<string, unknown> } | undefined)?.config;
+        const tgtCfg = (targetNode?.data as { config?: Record<string, unknown> } | undefined)?.config;
+        const srcType = (srcParsed.portId === 'value' && vectorPortDims(sourceNodeType ?? '', srcCfg, model)) ? 'vector' : sourcePort?.dataType;
+        const tgtType = (tgtParsed.portId === 'value' && vectorPortDims(targetNodeType ?? '', tgtCfg, model)) ? 'vector' : targetPort?.dataType;
+        const tgtIsNI = tgtType === 'neighborIndex';
+        const srcIsNI = srcType === 'neighborIndex';
+        if (tgtIsNI && sourcePort && srcType !== 'neighborIndex' && srcType !== 'any') {
           return false;
         }
-        if (srcIsNI && targetPort && targetPort.dataType !== 'neighborIndex' && targetPort.dataType !== 'any') {
+        if (srcIsNI && targetPort && tgtType !== 'neighborIndex' && tgtType !== 'any') {
           return false;
         }
         // Composite-type (vector / color) compatibility — a composite port may
@@ -1331,8 +1340,8 @@ export function GraphEditorInner() {
         // no meaning, and `expandComposites` can only lower vector→vector /
         // color→color wiring — so the editor must forbid the rest up front.
         for (const ct of ['vector', 'color'] as const) {
-          if (targetPort?.dataType === ct && sourcePort?.dataType !== ct) return false;
-          if (sourcePort?.dataType === ct && targetPort?.dataType !== ct) return false;
+          if (tgtType === ct && srcType !== ct) return false;
+          if (srcType === ct && tgtType !== ct) return false;
         }
       }
 
@@ -1360,7 +1369,7 @@ export function GraphEditorInner() {
 
       return true;
     },
-    [],
+    [model],  // model: vectorPortDims resolves a picked vector attr/var to a vector port
   );
 
   // --- Connection handler (no stealing — isValidConnection handles all checks) ---
