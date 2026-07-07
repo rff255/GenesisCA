@@ -17,6 +17,7 @@
 import type { CAModel } from '../../../../model/types';
 import { FACE_SLOT_COUNT, resolveKeyLabels } from '../variegation';
 import { hasGlyphsInModel } from '../glyphsUsage';
+import { expandVectorAttributes } from '../vectorAttr';
 
 export interface WebGPULayoutAttr {
   id: string;
@@ -167,7 +168,10 @@ export function computeWebGPULayout(model: CAModel): WebGPULayout {
   const sentinelIndex = isConstantBoundary ? total : -1;
   const boundaryTreatment: 'torus' | 'constant' = isConstantBoundary ? 'constant' : 'torus';
 
-  const cellAttrs = (model.attributes || []).filter(a => !a.isModelAttribute);
+  // Expand `vector` cell attrs into scalar-float components so the WebGPU SoA word
+  // offsets match the compiler's per-component reads/writes (ABI-mirror). Vector
+  // attrs are cell/agent-only, so model attrs are unaffected. No-op when none.
+  const cellAttrs = expandVectorAttributes(model.attributes || []).filter(a => !a.isModelAttribute);
   const modelAttrs = (model.attributes || []).filter(a => a.isModelAttribute);
 
   // Attrs partitioning. WGSL has no f64; floats are stored as f32. bool stays 1

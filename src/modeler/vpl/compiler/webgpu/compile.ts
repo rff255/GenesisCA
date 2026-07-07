@@ -39,6 +39,7 @@ import { canonicalizeAccessorEdges } from '../accessorCSE';
 import { injectLinkedOutputMappings } from '../linkedOutputMappings';
 import { collapseReroutes } from '../rerouteCollapse';
 import { expandComposites } from '../expandComposites';
+import { lowerVectorAttrs } from '../vectorAttr';
 import { expandMacros } from '../macroExpand';
 import { computeVolatileHoist, computeVolatileValueClosure } from '../volatileHoist';
 import { makeProducesArray } from '../arrayRelay';
@@ -3826,9 +3827,15 @@ export function compileGraphWebGPU(
   // expandMacros so in-macro reroutes collapse too, and before linked-OM / CSE /
   // adjacency so nothing downstream sees a reroute. See rerouteCollapse.ts.
   const collapsed = collapseReroutes(expanded.nodes, expanded.edges);
+  // Vector stored-attribute lowering — Get/Set Vector nodes → Make/Break Vector over
+  // per-component scalar reads/writes + reassign `model` to the component-expanded
+  // attrs/variables (computeWebGPULayout above expands identically). BEFORE
+  // expandComposites so the synthesized Make/Break Vector lower. See vectorAttr.ts.
+  const vlowered = lowerVectorAttrs(collapsed.nodes, collapsed.edges, model);
+  model = vlowered.model;
   // Composite-type lowering — vector / colour nodes become scalar nodes so the
   // WGSL emitters compile them natively (no JS-only clamp). See expandComposites.ts.
-  const lowered = expandComposites(collapsed.nodes, collapsed.edges, model);
+  const lowered = expandComposites(vlowered.nodes, vlowered.edges, model);
   // Linked Output Mappings — synthesize the auto color pass for `linked`
   // mappings (ephemeral; rebuilt from the live model each compile). MUST rebind
   // `nodes` so the output-mapping emission loop below sees the synthetic root —

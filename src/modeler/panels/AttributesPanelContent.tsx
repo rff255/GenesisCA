@@ -11,6 +11,7 @@ import { MODEL_ELEMENT_DRAG_MIME } from '../vpl/modelElementDrag';
 import type { ModelElementDragPayload } from '../vpl/modelElementDrag';
 import { setCurrentModelElementDrag, subscribeActiveGraphKind, getActiveGraphKind } from '../vpl/graphState';
 import { typeDisplayName } from '../../model/typeLabels';
+import { vectorDimsForModel, vectorComponentLabels } from '../vpl/compiler/vectorAttr';
 import { NumberField, InlineNumberInput } from '../vpl/widgets/InlineWidgets';
 import styles from './PanelContent.module.css';
 
@@ -376,16 +377,22 @@ export function AttributesPanelContent({ mode = 'list' }: PanelContentProps = {}
               <label className={styles.fieldLabel}>Type</label>
               <select
                 className={styles.selectInput}
-                value={selected.type}
+                value={selected.type === 'vector' ? (selected.vectorDims === 3 ? 'vector3' : 'vector2') : selected.type}
                 onChange={e => {
-                  const newType = e.target.value as AttributeType;
+                  const raw = e.target.value;
+                  // "Vector (2D)" / "Vector (3D)" are synthetic values → type='vector'
+                  // + the component count. Distinct from the composite `vector` WIRE.
+                  const isVec = raw === 'vector2' || raw === 'vector3';
+                  const newType = (isVec ? 'vector' : raw) as AttributeType;
+                  const vDims = raw === 'vector3' ? 3 : 2;
                   const resetDefaults: Record<string, string> = {
                     bool: 'false', integer: '0', float: '0', list: '', tag: '', color: '#808080',
                     neighborIndex: '0',
                   };
                   updateAttribute(selected.id, {
                     type: newType,
-                    defaultValue: resetDefaults[newType] ?? '',
+                    vectorDims: isVec ? vDims : undefined,
+                    defaultValue: isVec ? (vDims === 3 ? '0,0,0' : '0,0') : (resetDefaults[newType] ?? ''),
                   });
                 }}
               >
@@ -393,6 +400,10 @@ export function AttributesPanelContent({ mode = 'list' }: PanelContentProps = {}
                 <option value="integer">Integer</option>
                 <option value="float">Decimal</option>
                 <option value="tag">Tag</option>
+                {/* Vector = a stored 2D/3D direction (cell / agent only). "Vector (3D)"
+                    is offered only in a 3D model; both hold a per-cell / per-agent vector. */}
+                {!selected.isModelAttribute && <option value="vector2">Vector (2D)</option>}
+                {!selected.isModelAttribute && vectorDimsForModel(model) === 3 && <option value="vector3">Vector (3D)</option>}
                 {/* A packed lattice-offset type is meaningless for an off-lattice agent. */}
                 {!selectedIsAgent && <option value="neighborIndex">Neighbor Index</option>}
                 {selected.isModelAttribute && <option value="color">Color</option>}
@@ -511,7 +522,28 @@ export function AttributesPanelContent({ mode = 'list' }: PanelContentProps = {}
             {selected.type !== 'lookupTable' && (<>
             <div className={styles.field}>
               <label className={styles.fieldLabel}>Default Value</label>
-              {selected.type === 'bool' ? (
+              {selected.type === 'vector' ? (
+                <div style={{ display: 'flex', gap: 6 }}>
+                  {vectorComponentLabels(selected.vectorDims === 3 ? 3 : 2).map((lbl, i) => {
+                    const parts = String(selected.defaultValue ?? '').split(',');
+                    return (
+                      <div key={i} style={{ flex: 1 }}>
+                        <label style={{ fontSize: '0.6rem', color: '#999' }}>{lbl}</label>
+                        <InlineNumberInput
+                          className={styles.numberInput}
+                          value={(parts[i] ?? '0').trim()}
+                          onChange={next => {
+                            const dims = selected.vectorDims === 3 ? 3 : 2;
+                            const cur = String(selected.defaultValue ?? '').split(',');
+                            const out = Array.from({ length: dims }, (_, k) => (k === i ? next : (cur[k] ?? '0').trim()));
+                            updateAttribute(selected.id, { defaultValue: out.join(',') });
+                          }}
+                        />
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : selected.type === 'bool' ? (
                 <select
                   className={styles.selectInput}
                   value={selected.defaultValue === 'true' ? 'true' : 'false'}

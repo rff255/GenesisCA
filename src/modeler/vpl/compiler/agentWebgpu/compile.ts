@@ -49,6 +49,7 @@ import { is3dModel } from '../compile';
 import { expandMacros } from '../macroExpand';
 import { collapseReroutes } from '../rerouteCollapse';
 import { expandComposites } from '../expandComposites';
+import { lowerVectorAttrs, expandVectorAttributes } from '../vectorAttr';
 import { canonicalizeAccessorEdges } from '../accessorCSE';
 import { computeAsyncReadWriteHazards } from '../asyncWriteHazard';
 import { computeVolatileHoist } from '../volatileHoist';
@@ -2786,16 +2787,20 @@ function computeVolatile(ctx: AgentWgpuCtx, extraSeeds?: Set<string>): void {
 // ---------------------------------------------------------------------------
 
 function flattenAgentGraph(nodes: GraphNode[], edges: GraphEdge[], model: CAModel):
-  { nodes: GraphNode[]; edges: GraphEdge[]; error?: string } {
+  { nodes: GraphNode[]; edges: GraphEdge[]; model: CAModel; error?: string } {
   const expanded = expandMacros(nodes, edges, model);
-  if (expanded.error) return { nodes, edges, error: expanded.error };
+  if (expanded.error) return { nodes, edges, model, error: expanded.error };
   let n = expanded.nodes, e = expanded.edges;
   ({ nodes: n, edges: e } = collapseReroutes(n, e));
+  // Vector stored-attribute lowering — Get/Set Vector nodes → Make/Break Vector over
+  // per-component scalar reads/writes + reassign `model` to the component-expanded
+  // agent attrs/variables (the layout expands identically). See vectorAttr.ts.
+  ({ nodes: n, edges: e, model } = lowerVectorAttrs(n, e, model));
   // Composite-type lowering — vector / colour nodes become scalar nodes BEFORE
   // the gate + emitter see the graph, so a vector agent model runs on WebGPU.
   ({ nodes: n, edges: e } = expandComposites(n, e, model));
   e = canonicalizeAccessorEdges(n, e, model);
-  return { nodes: n, edges: e };
+  return { nodes: n, edges: e, model };
 }
 
 /** The set of node ids reachable from the `behaviourStep` root (its `do` flow
@@ -3092,6 +3097,7 @@ export function compileAgentGraphWebGPU(
   const flat = flattenAgentGraph(agentNodes, agentEdges, model);
   if (flat.error) return empty(flat.error);
   const nodes = flat.nodes, edges = flat.edges;
+  model = flat.model;  // component-expanded (vector agent attrs → scalar floats)
   // Bake the indicator slot + int-flag onto each indicator node (the WebGPU agent
   // compiler is self-sufficient — it does NOT rely on the JS agent pre-resolve).
   preResolveIndicators(nodes, model);
@@ -3380,7 +3386,9 @@ export function compileAgentGraphWebGPUForModel(model: CAModel): AgentWebGPUResu
     Math.max(1, Math.floor((cfg?.maxAgents as number) ?? 2000)),
     agentMaxHashBinsForModelGPU(model),
     agentWebGPUFieldSpecOf(model),
-    agentAttrsOf(model).map(a => a.id),
+    // Expand vector agent attrs into scalar-float components (the SoA runs must
+    // match the worker's + the compiler's per-component reads) — ABI-mirror.
+    expandVectorAttributes(agentAttrsOf(model)).map(a => a.id),
     agentWebGPUExtrasOf(model),
   );
   if (!cfg) return { shaderCode: '', layout, supportedTypes: [], error: 'No centerBased config.' };

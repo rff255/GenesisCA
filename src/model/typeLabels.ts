@@ -17,6 +17,7 @@ const TYPE_DISPLAY_NAMES: Record<string, string> = {
   color: 'Color',
   neighborIndex: 'NeighborIndex',
   lookupTable: 'Lookup Table',
+  vector: 'Vector',
 };
 
 /** Display name for a data-type id; unknown ids pass through unchanged. */

@@ -8,6 +8,7 @@ import type { ModelElementDragPayload } from '../vpl/modelElementDrag';
 import { setCurrentModelElementDrag, subscribeActiveGraphKind, getActiveGraphKind } from '../vpl/graphState';
 import { typeDisplayName } from '../../model/typeLabels';
 import { NumberField, InlineNumberInput } from '../vpl/widgets/InlineWidgets';
+import { vectorDimsForModel, vectorComponentLabels } from '../vpl/compiler/vectorAttr';
 import styles from './PanelContent.module.css';
 
 function handleRowDragStart(payload: ModelElementDragPayload) {
@@ -175,15 +176,19 @@ export function VariablesPanelSection({ mode = 'list', selectedId, onSelect }: {
               <label className={styles.fieldLabel}>Data Type</label>
               <select
                 className={styles.selectInput}
-                value={selected.dataType}
+                value={selected.dataType === 'vector' ? (selected.vectorDims === 3 ? 'vector3' : 'vector2') : selected.dataType}
                 onChange={e => {
-                  const dt = e.target.value as VariableDataType;
+                  const raw = e.target.value;
+                  const isVec = raw === 'vector2' || raw === 'vector3';
+                  const dt = (isVec ? 'vector' : raw) as VariableDataType;
+                  const vDims = raw === 'vector3' ? 3 : 2;
                   const defaults: Record<string, string> = {
                     bool: 'false', integer: '0', float: '0', tag: '0',
                   };
                   updateVariable(selected.id, {
                     dataType: dt,
-                    initialValue: defaults[dt] || '0',
+                    vectorDims: isVec ? vDims : undefined,
+                    initialValue: isVec ? (vDims === 3 ? '0,0,0' : '0,0') : (defaults[dt] || '0'),
                   });
                 }}
               >
@@ -191,6 +196,10 @@ export function VariablesPanelSection({ mode = 'list', selectedId, onSelect }: {
                 <option value="integer">Integer</option>
                 <option value="float">Decimal</option>
                 <option value="tag">Tag</option>
+                {/* Vector = a per-cell/agent transient direction (one accumulator
+                    instead of separate X/Y[/Z] floats). Scalar variables only. */}
+                {selected.kind === 'scalar' && <option value="vector2">Vector (2D)</option>}
+                {selected.kind === 'scalar' && vectorDimsForModel(model) === 3 && <option value="vector3">Vector (3D)</option>}
               </select>
             </div>
 
@@ -226,7 +235,28 @@ export function VariablesPanelSection({ mode = 'list', selectedId, onSelect }: {
 
             <div className={styles.field}>
               <label className={styles.fieldLabel}>Initial Value</label>
-              {selected.dataType === 'bool' ? (
+              {selected.dataType === 'vector' ? (
+                <div style={{ display: 'flex', gap: 6 }}>
+                  {vectorComponentLabels(selected.vectorDims === 3 ? 3 : 2).map((lbl, i) => {
+                    const parts = String(selected.initialValue ?? '').split(',');
+                    return (
+                      <div key={i} style={{ flex: 1 }}>
+                        <label style={{ fontSize: '0.6rem', color: '#999' }}>{lbl}</label>
+                        <InlineNumberInput
+                          className={styles.numberInput}
+                          value={(parts[i] ?? '0').trim()}
+                          onChange={next => {
+                            const dims = selected.vectorDims === 3 ? 3 : 2;
+                            const cur = String(selected.initialValue ?? '').split(',');
+                            const out = Array.from({ length: dims }, (_, k) => (k === i ? next : (cur[k] ?? '0').trim()));
+                            updateVariable(selected.id, { initialValue: out.join(',') });
+                          }}
+                        />
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : selected.dataType === 'bool' ? (
                 <select
                   className={styles.selectInput}
                   value={selected.initialValue === 'true' || selected.initialValue === '1' ? 'true' : 'false'}
