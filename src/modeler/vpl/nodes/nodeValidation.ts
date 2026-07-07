@@ -42,19 +42,26 @@ export function detectMissingConfig(
   // A stored `vector` attribute is lowered (the OWN cell/agent Get/Set) into
   // per-component Make/Break Vector before compile — but ONLY for getCellAttribute /
   // setAttribute (getVariable/setVariable go via variableId). Any OTHER node that
-  // references a vector attribute through `attributeId` (neighbour reads,
-  // updateAttribute, the by-id agent read/write/aggregate nodes) is NOT lowered: it
-  // emits `r_<id>[…]` against the component-expanded buffer that has no `<id>` array,
-  // so the step crashes at run time with `r_<id> is not defined`. Surface it as a
-  // badge here so the user sees it in the modeler instead. (v1 limitation — read a
-  // vector via Get Cell Attribute + Break Vector, or extend lowerVectorAttrs.)
+  // references a vector attribute is NOT lowered: it emits `r_<id>[…]` / `w_<id>[…]`
+  // against the component-expanded buffer that has no `<id>` array, so the step
+  // crashes at run time with `r_<id>/w_<id> is not defined`. Surface it as a badge
+  // here so the user sees it in the modeler instead. (v1 limitation — read a vector
+  // via Get Cell Attribute + Break Vector, or extend lowerVectorAttrs.) The check
+  // covers both the common `config.attributeId` key (neighbour reads, updateAttribute,
+  // the by-id agent read/write/aggregate nodes) AND moveSelfToNeighbor's per-slot
+  // `attr_${i}` payload keys (Transfer Cell Attributes to Neighbor).
   if (nodeType !== 'getCellAttribute' && nodeType !== 'setAttribute') {
-    const vId = config.attributeId;
-    if (typeof vId === 'string' && vId) {
-      const va = [...model.attributes, ...(model.agentAttributes ?? [])].find(x => x.id === vId);
-      if (va && va.type === 'vector') {
-        issues.push('Vector attributes are only readable/writable by Get/Set (Self) Attribute in v1 — read this one via Get Cell Attribute + Break Vector.');
-      }
+    const isVectorAttrId = (id: unknown): boolean =>
+      typeof id === 'string' && !!id &&
+      [...model.attributes, ...(model.agentAttributes ?? [])].some(x => x.id === id && x.type === 'vector');
+    // Collect every config key on this node that names an attribute.
+    const refIds: unknown[] = [config.attributeId];
+    if (nodeType === 'moveSelfToNeighbor') {
+      const slots = Math.max(0, Number(config.payloadCount) || 0);
+      for (let i = 0; i < slots; i++) refIds.push(config[`attr_${i}`]);
+    }
+    if (refIds.some(isVectorAttrId)) {
+      issues.push('Vector attributes are only readable/writable by Get/Set (Self) Attribute in v1 — read this one via Get Cell Attribute + Break Vector.');
     }
   }
 

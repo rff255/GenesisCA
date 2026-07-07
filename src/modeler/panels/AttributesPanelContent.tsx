@@ -401,9 +401,11 @@ export function AttributesPanelContent({ mode = 'list' }: PanelContentProps = {}
                 <option value="float">Decimal</option>
                 <option value="tag">Tag</option>
                 {/* Vector = a stored 2D/3D direction (cell / agent only). "Vector (3D)"
-                    is offered only in a 3D model; both hold a per-cell / per-agent vector. */}
+                    is offered only in a 3D model — OR when this attribute is ALREADY a
+                    3D vector (authored in a 3D model, then switched to 2D) so the
+                    dropdown never misreports its real type as "Binary". */}
                 {!selected.isModelAttribute && <option value="vector2">Vector (2D)</option>}
-                {!selected.isModelAttribute && vectorDimsForModel(model) === 3 && <option value="vector3">Vector (3D)</option>}
+                {!selected.isModelAttribute && (vectorDimsForModel(model) === 3 || (selected.type === 'vector' && selected.vectorDims === 3)) && <option value="vector3">Vector (3D)</option>}
                 {/* A packed lattice-offset type is meaningless for an off-lattice agent. */}
                 {!selectedIsAgent && <option value="neighborIndex">Neighbor Index</option>}
                 {selected.isModelAttribute && <option value="color">Color</option>}
@@ -765,8 +767,11 @@ export function AttributesPanelContent({ mode = 'list' }: PanelContentProps = {}
                 on cells whose parent attribute (tag or bool) holds one of the configured
                 parent values. Reads on non-matching cells return the undefinedValue. */}
             {/* Sub-attributes are a cell-only concept (agents have no parent-cell
-                relationship), so hide the editor for agent attributes. */}
-            {!selected.isModelAttribute && !selectedIsAgent && (() => {
+                relationship), so hide the editor for agent attributes. Also hidden for
+                a `vector` attr: its scalar-float component expansion doesn't carry the
+                parent-match fields (parentAttributeId/parentValues/undefinedValue), so a
+                sub-attribute constraint on a vector would be a silent no-op. */}
+            {!selected.isModelAttribute && !selectedIsAgent && selected.type !== 'vector' && (() => {
               const validParents = model.attributes.filter(a =>
                 !a.isModelAttribute &&
                 a.id !== selected.id &&
