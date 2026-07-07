@@ -107,6 +107,44 @@ console.log(`${fail === 0 ? 'VECTOR-ATTR JS CELL COMPILE ✓' : `${fail} CELL FA
   console.log(`VECTOR-ATTR JS AGENT COMPILE ${fail === 0 ? '✓' : '✗'}`);
 }
 
+// ── VECTOR LOCAL VARIABLE (the accumulated-force case): one vector variable
+// instead of separate X/Y floats. Read → add → write back.
+{
+  const VN = [], VE = [];
+  const vn = (t, c = {}) => { const n = { id: nid('v'), type: 'caNode', position: { x: 0, y: 0 }, data: { nodeType: t, config: c } }; VN.push(n); return n; };
+  const ve = (s, sp, tt, tp, cat) => VE.push({ id: nid('e'), source: s.id, target: tt.id, sourceHandle: `output_${cat}_${sp}`, targetHandle: `input_${cat}_${tp}` });
+  const stp = vn('step');
+  const cur = vn('getVectorVariable', { variableId: 'acc' });          // read accumulator
+  const delta = vn('makeVector', { _port_x: '1', _port_y: '2' });      // a delta
+  const add = vn('vectorOp', { op: 'add' });                          // acc + delta
+  const setAcc = vn('setVectorVariable', { variableId: 'acc' });       // write back
+  ve(stp, 'do', setAcc, 'do', 'flow');
+  ve(cur, 'value', add, 'a', 'value');
+  ve(delta, 'vector', add, 'b', 'value');
+  ve(add, 'result', setAcc, 'value', 'value');
+  const rawV = {
+    schemaVersion: 1,
+    properties: { name: 'VecVar', dimension: '2d', gridWidth: 8, gridHeight: 8, gridDepth: 1, topology: '2d-grid', boundaryTreatment: 'torus', updateMode: 'synchronous' },
+    attributes: [], modelAttributes: [], neighborhoods: [], indicators: [], mappings: [],
+    variables: [{ id: 'acc', name: 'Acc', kind: 'scalar', dataType: 'vector', vectorDims: 2, initialValue: '0,0' }],
+    graphNodes: VN, graphEdges: VE, macroDefs: [],
+  };
+  const modelV = m.migrateForHarness(rawV);
+  const resV = m.compileGraph(modelV.graphNodes, modelV.graphEdges, modelV);
+  const vc = (n, c) => { if (!c) { fail++; console.log('FAIL var ' + n); } };
+  if (resV.error) { console.log('VAR COMPILE ERROR: ' + resV.error); fail++; }
+  const sc = resV.stepCode || '';
+  // The vector variable expanded into two float scratch variables (allocated + written).
+  vc('declares _var_acc_vx', /_var_acc_vx/.test(sc));
+  vc('declares _var_acc_vy', /_var_acc_vy/.test(sc));
+  vc('reads _var_acc_vx in the add', /_var_acc_vx/.test(sc) && /\+/.test(sc));
+  vc('writes _var_acc_vx =', /_var_acc_vx\s*=/.test(sc));
+  vc('writes _var_acc_vy =', /_var_acc_vy\s*=/.test(sc));
+  vc('no vector-node leak', !/getVectorVariable|setVectorVariable/.test(sc));
+  vc('no bare _var_acc scalar (only components)', !/_var_acc\s*=/.test(sc) && !/_var_acc\b(?!_v)/.test(sc.replace(/_var_acc_v[xyz]/g, '')));
+  console.log(`VECTOR LOCAL VARIABLE COMPILE ${fail === 0 ? '✓' : '✗'}`);
+}
+
 rmSync(dir, { recursive: true, force: true });
 console.log(`\n${fail === 0 ? 'ALL JS VECTOR-ATTR COMPILE CHECKS ✓' : `${fail} FAILED`}`);
 process.exit(fail === 0 ? 0 : 1);

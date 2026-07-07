@@ -121,6 +121,8 @@ import { MoveSelfToNeighborNode } from './MoveSelfToNeighborNode';
 import { MarkCellUpdatedNode } from './MarkCellUpdatedNode';
 import { GetVariableNode } from './GetVariableNode';
 import { SetVariableNode } from './SetVariableNode';
+import { GetVectorVariableNode } from './GetVectorVariableNode';
+import { SetVectorVariableNode } from './SetVectorVariableNode';
 import { SetArrayElementNode } from './SetArrayElementNode';
 
 const ALL_NODES: NodeTypeDef[] = [
@@ -211,6 +213,7 @@ const ALL_NODES: NodeTypeDef[] = [
   GetRandomNode,
   // Local Variables — per-cell scratch storage referenced by id.
   GetVariableNode,
+  GetVectorVariableNode,
   // Variegated Cells — visible only when the feature is enabled (palette
   // filter via `requirements.variegated`).
   GetOrientationNode,
@@ -245,6 +248,7 @@ const ALL_NODES: NodeTypeDef[] = [
   SetVectorAttributeNode,
   UpdateAttributeNode,
   SetVariableNode,
+  SetVectorVariableNode,
   SetArrayElementNode,
   SetNeighborhoodAttributeNode,
   SetNeighborAttributeByIndexNode,
