@@ -75,10 +75,11 @@ export interface CompileContext {
   is3d?: boolean;
   /** Generic Agent Platform: which agent root the current compile is emitting
    *  (`'init'` = the once-per-reset Agent Init Event, `'behaviour'` = behaviourStep,
-   *  `'division'` = divisionEvent). Used by Set Agent Attribute / the by-id setters
-   *  to relax the live-agent guard in the init context (a freshly Created agent is
-   *  STAGED — alive=0 — until Add Agent To World commits it). Absent on cell roots. */
-  agentRoot?: 'init' | 'behaviour' | 'division';
+   *  `'division'` = divisionEvent, `'spawn'` = the STEP 5a per-spawned-agent Spawn
+   *  Event). Used by Set Agent Attribute / the by-id setters to relax the live-agent
+   *  guard in the init context (a freshly Created agent is STAGED — alive=0 — until
+   *  Add Agent To World commits it). Absent on cell roots. */
+  agentRoot?: 'init' | 'behaviour' | 'division' | 'spawn';
 }
 
 /** Capability requirements for a node type. A node whose requirements aren't

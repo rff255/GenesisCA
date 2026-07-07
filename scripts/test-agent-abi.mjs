@@ -35,6 +35,7 @@ function oldLoopArgs(s, hash, rt) {
     hash ? hash.nBinsX : 0, hash ? hash.nBinsY : 0, hash ? hash.binSizeX : 1, hash ? hash.binSizeY : 1,
     hash ? hash.originX : 0, hash ? hash.originY : 0,
     s.divideRequest, s.divideAxisX, s.divideAxisY, s.divideAsym, s.killRequest,
+    s.spawnRequest, s.spawnX, s.spawnY, s.spawnRadius,   // STEP 5a
     s.bondPartner, s.bondPartnerEpoch, s.bondRestLength, s.bondStiffness, s.bondTypeLabel, s.maxBonds,
     s.bondFormReq, s.bondFormL, s.bondFormK, s.bondBreakReq,
   ];
@@ -44,7 +45,26 @@ function oldLoopArgs(s, hash, rt) {
   if (rt.hasLookupTables) args.push(rt.lookupTables);
   args.push(rt.width, rt.height, rt.total, rt.torus ? 1 : 0);
   for (const spec of rt.fieldSpecs) args.push(rt.readAttrs[spec.id]);
-  if (s.worldDepth > 1) args.push(s.z, s.vz, s.forceZ, s.divideAxisZ, s.worldDepth, hash ? hash.nBinsZ : 1, hash ? hash.binSizeZ : 1, hash ? hash.originZ : 0);
+  if (s.worldDepth > 1) args.push(s.z, s.vz, s.forceZ, s.divideAxisZ, s.spawnZ, s.worldDepth, hash ? hash.nBinsZ : 1, hash ? hash.binSizeZ : 1, hash ? hash.originZ : 0);
+  return args;
+}
+// STEP 5a — the spawn event ABI (≡ division minus the axis defaults; leading
+// args are idx + __parentHandle).
+function oldSpawnArgs(s, idx, parentHandle, rt) {
+  const args = [
+    idx, parentHandle,
+    s.alive, s.highWater,
+    s.x, s.y, s.radius, s.targetRadius, s.age, s.lineage, s.bondCount, s.density,
+    s.vx, s.vy,
+    s.bondPartner, s.bondRestLength, s.bondPartnerEpoch, s.maxBonds,
+  ];
+  for (const spec of s.attrSpecs) args.push(s.attrRead[spec.id]);
+  for (const spec of s.attrSpecs) args.push(s.attrRead[spec.id]); // w_ aliases attrRead
+  args.push(rt.modelAttrs, s.colors, rt.viewer, rt.indicators, rt.rngState, rt.stopFlag, rt.glyphCodes, rt.glyphColors, s.spriteIds, s.spriteFrames, s.spriteSpeeds, s.spriteRotations, s.spriteScales);
+  if (rt.hasLookupTables) args.push(rt.lookupTables);
+  args.push(rt.width, rt.height, rt.total, rt.torus ? 1 : 0);
+  for (const spec of rt.fieldSpecs) args.push(rt.readAttrs[spec.id]);
+  if (s.worldDepth > 1) args.push(s.z, s.vz, s.divideAxisZ, s.worldDepth);
   return args;
 }
 function oldDivisionArgs(s, idx, di, ax, ay, rt) {
@@ -139,9 +159,15 @@ for (const is3d of [false, true]) {
       const newI = buildAgentAbiArgs('init', shape, s, { ...newRtBase, hash: null, agentCreate: create, agentAddToWorld: add, seedBase: 5 });
       cmp(`${tag} init`, oldI, newI);
     }
+    // spawn (STEP 5a) — idx + parentHandle leading, then ≡ division buffers.
+    {
+      const oldS = oldSpawnArgs(s, 3, 7, rtExternal);
+      const newS = buildAgentAbiArgs('spawn', shape, s, { ...newRtBase, hash: null, idx: 3, parentHandle: 7 });
+      cmp(`${tag} spawn`, oldS, newS);
+    }
     // Descriptor internal-consistency (audit-lite): 2D field list is a strict
     // PREFIX of the 3D list (append-only z-block), per kind.
-    for (const kind of ['loop', 'division', 'init']) {
+    for (const kind of ['loop', 'division', 'init', 'spawn']) {
       const names2d = deriveAgentAbi(kind, { ...shape, is3d: false }).map(f => f.name);
       const names3d = deriveAgentAbi(kind, { ...shape, is3d: true }).map(f => f.name);
       ok(names3d.slice(0, names2d.length).join(',') === names2d.join(','), `${tag} ${kind}: 2D is a prefix of 3D`);

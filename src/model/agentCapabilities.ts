@@ -399,7 +399,7 @@ export const AGENT_CAPABILITY_ROWS: CapabilityRowMeta[] = [
  *  `populationBirth` is unrelated to the ALWAYS-available init-time spawning
  *  (Create Agent / Add To World in the Agent Init Event) — that is a core path. */
 export const HIDDEN_CAP_ROWS_V1: ReadonlySet<keyof AgentCapabilities> = new Set([
-  'populationBirth', // Spawn Agent / Spawn Event nodes are not registered yet.
+  // STEP 5a: populationBirth is now LIVE — Spawn Agent + Spawn Event are registered.
   'orientation',     // gates no registered node; only feeds the deferred FOV heading.
 ]);
 

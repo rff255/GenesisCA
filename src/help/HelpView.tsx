@@ -1379,6 +1379,16 @@ export function HelpView() {
             exact grid of agents, a procedural pattern, or a randomised population &mdash; running past
             <em> Max Agents</em> simply skips the extra Create (it never wraps).
           </p>
+          <p className={styles.p}>
+            To spawn <strong>during the run</strong> (eggs, offspring, budding, projectiles), enable the
+            <strong> Population &mdash; Birth</strong> capability and drop <strong>Spawn Agent</strong> in
+            the Behaviour graph: it requests a new agent be born at a position this step (the child
+            inherits the parent's attributes by default). An optional <strong>Spawn Event</strong> root
+            runs once per new child &mdash; the birth analogue of the Division Event &mdash; so you can set
+            the child's attributes from where it was born (<em>My X/Y</em>) or who spawned it
+            (<em>Parent</em>). Spawning is applied after the step and works on all three agent targets;
+            one spawn per agent per step, and running past <em>Max Agents</em> skips the extra birth.
+          </p>
           <h3 className={styles.h3}>The Cell CA as a Morphogen Field (Closed Feedback)</h3>
           <p className={styles.p}>
             The two engines close a loop: <strong>every grid cell attribute doubles as a

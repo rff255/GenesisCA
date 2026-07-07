@@ -1354,7 +1354,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   // (Decision D-TARGET). PR-A2 returns a placeholder (agents seed + render but
   // don't behave); PR-A3 wires the real compileAgentGraph over
   // model.agentGraphNodes (the behaviourStep loop + value-outs + force hooks).
-  const compileAgentModel = useCallback((stopIdxBase = 0): { behaviourCode?: string; initCode?: string; divisionCode?: string; outputMappingCodes?: Array<{ mappingId: string; code: string }>; stopMessages: string[]; colorViewer: string; error?: string; agentTarget: 'js' | 'wasm' | 'webgpu'; agentWasmBytes?: Uint8Array; agentWasmViewerGuardIds?: string[]; agentLayoutExtras?: AgentLayoutExtras; agentWebgpuBehaviourShader?: string; agentWebgpuForceShader?: string; agentWebgpuMaxAgents?: number; agentWebgpuMaxHashBins?: number; agentWebgpuLayout?: AgentWebGPULayout; agentWebgpuUsesI32Write?: boolean; agentWebgpuUsage?: { usesBondStore?: boolean; usesIndicators?: boolean; usesAux?: boolean } } => {
+  const compileAgentModel = useCallback((stopIdxBase = 0): { behaviourCode?: string; initCode?: string; divisionCode?: string; spawnCode?: string; outputMappingCodes?: Array<{ mappingId: string; code: string }>; stopMessages: string[]; colorViewer: string; error?: string; agentTarget: 'js' | 'wasm' | 'webgpu'; agentWasmBytes?: Uint8Array; agentWasmViewerGuardIds?: string[]; agentLayoutExtras?: AgentLayoutExtras; agentWebgpuBehaviourShader?: string; agentWebgpuForceShader?: string; agentWebgpuMaxAgents?: number; agentWebgpuMaxHashBins?: number; agentWebgpuLayout?: AgentWebGPULayout; agentWebgpuUsesI32Write?: boolean; agentWebgpuUsage?: { usesBondStore?: boolean; usesIndicators?: boolean; usesAux?: boolean } } => {
     if (!model.topologyMode?.agents) return { colorViewer: '', agentTarget: 'js', stopMessages: [] };
     // The default AGENT viewer = the first agent A→C mapping (drives the agent
     // colour pass). Empty when the model has no agent mappings (agents are then
@@ -1440,7 +1440,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
         agentTarget = 'js';
       }
     }
-    return { behaviourCode: ag.behaviourCode || undefined, initCode: ag.initCode || undefined, divisionCode: ag.divisionCode || undefined, outputMappingCodes: ag.outputMappingCodes && ag.outputMappingCodes.length ? ag.outputMappingCodes : undefined, stopMessages: ag.stopMessages, colorViewer, error: ag.error || undefined, agentTarget, agentWasmBytes, agentWasmViewerGuardIds, agentLayoutExtras, agentWebgpuBehaviourShader, agentWebgpuForceShader, agentWebgpuMaxAgents, agentWebgpuMaxHashBins, agentWebgpuLayout, agentWebgpuUsesI32Write, agentWebgpuUsage };
+    return { behaviourCode: ag.behaviourCode || undefined, initCode: ag.initCode || undefined, divisionCode: ag.divisionCode || undefined, spawnCode: ag.spawnCode || undefined, outputMappingCodes: ag.outputMappingCodes && ag.outputMappingCodes.length ? ag.outputMappingCodes : undefined, stopMessages: ag.stopMessages, colorViewer, error: ag.error || undefined, agentTarget, agentWasmBytes, agentWasmViewerGuardIds, agentLayoutExtras, agentWebgpuBehaviourShader, agentWebgpuForceShader, agentWebgpuMaxAgents, agentWebgpuMaxHashBins, agentWebgpuLayout, agentWebgpuUsesI32Write, agentWebgpuUsage };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [model.agentGraphNodes, model.agentGraphEdges, model.topologyMode?.agents, model.attributes, model.agentAttributes, model.mappings, model.centerBased]);
 
@@ -3042,6 +3042,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       agentBehaviourCode: agentResult.behaviourCode,
       agentInitCode: agentResult.initCode,
       agentDivisionCode: agentResult.divisionCode,
+      agentSpawnCode: agentResult.spawnCode,
       agentColorViewer: activeAgentViewerRef.current || agentResult.colorViewer,
       agentOutputMappingCodes: agentResult.outputMappingCodes,
       agentHasSprites: (model.sprites?.length ?? 0) > 0,
@@ -3462,6 +3463,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
         agentBehaviourCode: agentResult.behaviourCode,
         agentInitCode: agentResult.initCode,
         agentDivisionCode: agentResult.divisionCode,
+        agentSpawnCode: agentResult.spawnCode,
         agentColorViewer: activeAgentViewerRef.current || agentResult.colorViewer,
         agentOutputMappingCodes: agentResult.outputMappingCodes,
         agentHasSprites: (model.sprites?.length ?? 0) > 0,

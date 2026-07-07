@@ -184,6 +184,7 @@ interface InitMsg {
   agentBehaviourCode?: string;
   agentInitCode?: string;
   agentDivisionCode?: string;
+  agentSpawnCode?: string;
   agentColorViewer?: string;
   /** Agent Output Mappings: one per-agent colour-pass fn source per linked agent
    *  mapping. `runAgentColorPass` runs the one matching `agentColorViewer`. */
@@ -264,7 +265,7 @@ interface PaintManualMsg {
   activeViewer: string;
 }
 interface ResetMsg { type: 'reset'; activeViewer: string }
-interface RecompileMsg { type: 'recompile'; stepCode: string; initCode?: string; inputColorCodes: Array<{ mappingId: string; code: string }>; outputMappingCodes: Array<{ mappingId: string; code: string }>; stopMessages?: string[]; updateMode: string; asyncScheme: string; wasmStepBytes?: Uint8Array; wasmStepError?: string; wasmExports?: string[]; viewerIds?: Record<string, number>; webgpuShaderCode?: string; webgpuShaderError?: string; webgpuEntryPoints?: WebGPUEntryPoints; webgpuLayout?: WebGPULayout; webgpuStopCheckInterval?: number; variegated?: VariegatedPayload; interactionTables?: InteractionTablePayload[]; agentBehaviourCode?: string; agentInitCode?: string; agentDivisionCode?: string; agentColorViewer?: string; agentOutputMappingCodes?: Array<{ mappingId: string; code: string }>; agentHasSprites?: boolean; centerBased?: CenterBasedConfig; agentUsesField?: boolean; agentTarget?: 'js' | 'wasm' | 'webgpu'; agentWasmBytes?: Uint8Array; agentWasmViewerGuardIds?: string[]; agentLayoutExtras?: AgentLayoutExtras; agentWebgpuBehaviourShader?: string; agentWebgpuForceShader?: string; agentWebgpuMaxAgents?: number; agentWebgpuMaxHashBins?: number; agentWebgpuLayout?: AgentWebGPULayout; agentWebgpuUsesI32Write?: boolean; agentWebgpuUsage?: { usesBondStore?: boolean; usesIndicators?: boolean; usesAux?: boolean } }
+interface RecompileMsg { type: 'recompile'; stepCode: string; initCode?: string; inputColorCodes: Array<{ mappingId: string; code: string }>; outputMappingCodes: Array<{ mappingId: string; code: string }>; stopMessages?: string[]; updateMode: string; asyncScheme: string; wasmStepBytes?: Uint8Array; wasmStepError?: string; wasmExports?: string[]; viewerIds?: Record<string, number>; webgpuShaderCode?: string; webgpuShaderError?: string; webgpuEntryPoints?: WebGPUEntryPoints; webgpuLayout?: WebGPULayout; webgpuStopCheckInterval?: number; variegated?: VariegatedPayload; interactionTables?: InteractionTablePayload[]; agentBehaviourCode?: string; agentInitCode?: string; agentDivisionCode?: string; agentSpawnCode?: string; agentColorViewer?: string; agentOutputMappingCodes?: Array<{ mappingId: string; code: string }>; agentHasSprites?: boolean; centerBased?: CenterBasedConfig; agentUsesField?: boolean; agentTarget?: 'js' | 'wasm' | 'webgpu'; agentWasmBytes?: Uint8Array; agentWasmViewerGuardIds?: string[]; agentLayoutExtras?: AgentLayoutExtras; agentWebgpuBehaviourShader?: string; agentWebgpuForceShader?: string; agentWebgpuMaxAgents?: number; agentWebgpuMaxHashBins?: number; agentWebgpuLayout?: AgentWebGPULayout; agentWebgpuUsesI32Write?: boolean; agentWebgpuUsage?: { usesBondStore?: boolean; usesIndicators?: boolean; usesAux?: boolean } }
 interface UpdateLookupTableMsg {
   type: 'updateLookupTable';
   attrId: string;
@@ -535,6 +536,9 @@ const EMPTY_I32 = new Int32Array(0);
 /** Compiled Division Event function (single-agent; runs per daughter after a
  *  division). Null when the agent graph has no divisionEvent root. */
 let agentDivisionFn: Function | null = null;
+/** STEP 5a — compiled Spawn Event function (single-agent; runs once per agent
+ *  born via Spawn Agent). Null when the agent graph has no spawnEvent root. */
+let agentSpawnFn: Function | null = null;
 /** Agent Output Mappings: one per-agent colour-pass fn per linked agent mapping.
  *  `runAgentColorPass` runs the one whose mappingId matches `agentColorViewer`. */
 let agentOutputMappingFns: Array<{ mappingId: string; fn: Function }> = [];
@@ -1016,6 +1020,34 @@ function buildDivisionArgs(s: AgentStore, idx: number, daughterIndex: number, ax
   // (division reads forces, never writes them) — also in the descriptor.
   const rt: AgentAbiRuntime = { ...agentAbiBaseRt(), hash: null, viewer: activeViewer, idx, daughterIndex, axisX, axisY };
   return buildAgentAbiArgs('division', agentAbiShapeOfStore(s), s, rt);
+}
+
+/** STEP 5a — run the compiled Spawn Event once per newly-spawned agent. Mirrors
+ *  runDivisionEvent: the child slot `child` + the spawner id `parent`. The child
+ *  is alive + already carries the inherited/default attrs; the event reassigns
+ *  them (immediate writes — the w_ block aliases attrRead, like division). */
+function runSpawnEvent(events: Array<{ child: number; parent: number }>): void {
+  if (!agentSpawnFn || !agentStore) return;
+  const fn = agentSpawnFn;
+  const s = agentStore;
+  for (const ev of events) {
+    try {
+      fn(...buildSpawnArgs(s, ev.child, ev.parent));
+    } catch (e) {
+      self.postMessage({ type: 'error', message: '[agents] spawn event failed: ' + ((e as Error)?.message || e) });
+      agentSpawnFn = null;
+      break;
+    }
+  }
+}
+
+/** Args for the compiled spawnEvent function — a SINGLE-agent function: the child
+ *  slot `idx` + the spawner id `__parentHandle`, then the same engine buffers +
+ *  user attrs division gets (the w_ block ALIASES attrRead — immediate writes in
+ *  the sequential structural phase). MIRRORS `buildSpawnParams` via agentAbi.ts. */
+function buildSpawnArgs(s: AgentStore, idx: number, parentHandle: number): unknown[] {
+  const rt: AgentAbiRuntime = { ...agentAbiBaseRt(), hash: null, viewer: activeViewer, idx, parentHandle };
+  return buildAgentAbiArgs('spawn', agentAbiShapeOfStore(s), s, rt);
 }
 
 /** Build the args for the compiled behaviourStep function. MIRRORS
@@ -1865,6 +1897,42 @@ function runAgentStructuralPhase(): void {
     self.postMessage({ type: 'agentOverflow', message: `Agent or bond capacity reached during division (maxAgents=${s.maxAgents}, maxBonds=${s.maxBonds}). Some divisions were skipped.` });
   }
   if (divideEvents.length > 0) runDivisionEvent(divideEvents);
+
+  // 1d. Spawn (STEP 5a Population·Birth) — the behaviour graph's Spawn Agent
+  //     requested a new agent be born at a position this step. Iterate only the
+  //     PRE-spawn population (children land beyond `hw` and don't spawn again this
+  //     step — bounded within one step). Overflow rejects the spawn + surfaces a
+  //     one-shot notice (never a partial spawn). The child inherits the parent's
+  //     attributes when the request flag is 1 (Inherit), or defaults when 2. A
+  //     spawnEvent graph (if any) reassigns the child's attributes.
+  const spawnEvents: Array<{ child: number; parent: number }> = [];
+  let spawnOverflow = false;
+  for (let i = 0; i < hw; i++) {
+    if (!alive[i] || !s.spawnRequest[i]) continue;
+    const inherit = s.spawnRequest[i] === 1;   // 1 = inherit parent attrs, 2 = defaults
+    s.spawnRequest[i] = 0;
+    const child = allocAgentSlot(s);           // free-list first, else grow, else -1
+    if (child < 0) { spawnOverflow = true; continue; }
+    const cz = is3d ? s.spawnZ[i]! : 0;
+    // The child inherits the parent's lineage (offspring share it); initAgentSlot
+    // sets alive (done in allocAgentSlot) + resets its geometry / attrs to defaults.
+    initAgentSlot(s, child, s.spawnX[i]!, s.spawnY[i]!, cz, s.spawnRadius[i]!, s.lineage[i]!);
+    if (inherit) {
+      // Verbatim inherit — attrs (read buffer), colour, sprite state, targetRadius
+      // (mirrors divideAgent's daughter-B inherit; the spawn event can override).
+      for (const spec of s.attrSpecs) s.attrRead[spec.id]![child] = s.attrRead[spec.id]![i]!;
+      s.targetRadius[child] = s.spawnRadius[i]!;
+      for (let c = 0; c < 4; c++) s.colors[child * 4 + c] = s.colors[i * 4 + c]!;
+      s.spriteIds[child] = s.spriteIds[i]!; s.spriteFrames[child] = s.spriteFrames[i]!;
+      s.spriteSpeeds[child] = s.spriteSpeeds[i]!; s.spriteRotations[child] = s.spriteRotations[i]!;
+      s.spriteScales[child] = s.spriteScales[i]!;
+    }
+    spawnEvents.push({ child, parent: i });
+  }
+  if (spawnOverflow) {
+    self.postMessage({ type: 'agentOverflow', message: `Agent capacity reached during spawn (maxAgents=${s.maxAgents}). Some spawns were skipped.` });
+  }
+  if (spawnEvents.length > 0) runSpawnEvent(spawnEvents);
 
   // 2. Auto-bond by distance (opt-in, hysteresis): form a bond between any two
   //    unbonded agents within formDistance×contact; break bonds stretched past
@@ -3495,7 +3563,7 @@ function compileFns(
  *  behaviour function runs once per LIVE agent each generation over `idx <
  *  highWater`. Absent code → null (agents seed + render but don't behave, the
  *  PR-A2 state). */
-function compileAgentFns(behaviourCode?: string, initCode?: string, divisionCode?: string, outputMappingCodes?: Array<{ mappingId: string; code: string }>): void {
+function compileAgentFns(behaviourCode?: string, initCode?: string, divisionCode?: string, outputMappingCodes?: Array<{ mappingId: string; code: string }>, spawnCode?: string): void {
   try {
     // eslint-disable-next-line no-eval
     agentBehaviourFn = behaviourCode ? (eval(behaviourCode) as Function) : null;
@@ -3516,6 +3584,10 @@ function compileAgentFns(behaviourCode?: string, initCode?: string, divisionCode
     // eslint-disable-next-line no-eval
     agentDivisionFn = divisionCode ? (eval(divisionCode) as Function) : null;
   } catch (e) { agentDivisionFn = null; self.postMessage({ type: 'error', message: '[agents] division compile failed: ' + ((e as Error)?.message || e) }); }
+  try {
+    // eslint-disable-next-line no-eval
+    agentSpawnFn = spawnCode ? (eval(spawnCode) as Function) : null;
+  } catch (e) { agentSpawnFn = null; self.postMessage({ type: 'error', message: '[agents] spawn compile failed: ' + ((e as Error)?.message || e) }); }
 
   // DEV ABI-arity assertion (E3, MANDATORY) — the single highest-value safety net
   // for the B1 desync class. A compiled agent fn's `.length` (its declared param
@@ -3545,6 +3617,13 @@ function compileAgentFns(behaviourCode?: string, initCode?: string, divisionCode
       const want = buildAgentInitArgs(s, () => 0, () => {}, 0).length;
       if (agentInitFn.length !== want) {
         self.postMessage({ type: 'error', message: `[agents] ABI ARITY DESYNC: init fn declares ${agentInitFn.length} params but buildAgentInitArgs passes ${want} (buildAgentInitParams↔buildAgentInitArgs out of lockstep — the B1 hazard).` });
+      }
+    }
+    if (agentSpawnFn) {
+      // STEP 5a — the fourth ABI pair (buildSpawnParams ↔ buildSpawnArgs).
+      const want = buildSpawnArgs(s, 0, 0).length;
+      if (agentSpawnFn.length !== want) {
+        self.postMessage({ type: 'error', message: `[agents] ABI ARITY DESYNC: spawn fn declares ${agentSpawnFn.length} params but buildSpawnArgs passes ${want} (buildSpawnParams↔buildSpawnArgs out of lockstep — the B1 hazard).` });
       }
     }
   }
@@ -4244,7 +4323,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       pendingAgentWebgpuUsesI32Write = msg.agentWebgpuUsesI32Write ?? false;
       pendingAgentWebgpuUsage = msg.agentWebgpuUsage ?? {};
       initAgents();
-      compileAgentFns(msg.agentBehaviourCode, msg.agentInitCode, msg.agentDivisionCode, (msg as InitMsg).agentOutputMappingCodes);
+      compileAgentFns(msg.agentBehaviourCode, msg.agentInitCode, msg.agentDivisionCode, (msg as InitMsg).agentOutputMappingCodes, msg.agentSpawnCode);
       instantiateAgentWasmIfNeeded();
       buildAgentWebGPUIfNeeded();
       // (The Agent Init Event runs BELOW, after the cell Init Event — a
@@ -4738,7 +4817,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
         if (rc.agentUsesField !== undefined) agentUsesField = !!rc.agentUsesField;
         if (rc.agentColorViewer !== undefined) agentColorViewer = rc.agentColorViewer || '';
         if (rc.agentHasSprites !== undefined) hasAgentSprites = !!rc.agentHasSprites;
-        compileAgentFns(rc.agentBehaviourCode, rc.agentInitCode, rc.agentDivisionCode, rc.agentOutputMappingCodes);
+        compileAgentFns(rc.agentBehaviourCode, rc.agentInitCode, rc.agentDivisionCode, rc.agentOutputMappingCodes, rc.agentSpawnCode);
         // PR6b-1 / PR7: re-resolve the agent target + stash the per-target payload.
         // If the WASM backing requirement changes (JS/WebGPU ↔ WASM, since wasm
         // needs the store on a WebAssembly.Memory), re-init the store so its arrays

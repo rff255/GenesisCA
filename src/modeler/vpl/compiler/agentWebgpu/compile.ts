@@ -96,7 +96,7 @@ export const AGENT_WEBGPU_SUPPORTED_TYPES: ReadonlySet<string> = new Set<string>
   // indicators
   'getIndicator', 'setIndicator', 'updateIndicator',
   // structural writes (G4 — the post-step CPU structural phase reads the requests)
-  'divideAgent', 'formBond', 'breakBond', 'killAgent',
+  'divideAgent', 'formBond', 'breakBond', 'killAgent', 'spawnAgent',
   // writes
   'applyForce', 'setTargetRadius',
   // value/flow utility
@@ -1962,6 +1962,18 @@ function compileFlowNode(ctx: AgentWgpuCtx, nodeId: string): void {
     }
     case 'killAgent': {
       ctx.lines.push(`  ${f32At(ctx, 'killRequest', 'idx')} = 1.0;`);
+      compileFlowChain(ctx, node.id, 'next');
+      break;
+    }
+    case 'spawnAgent': {
+      // STEP 5a — flag a spawn request (1 = inherit, 2 = defaults) + the child's
+      // geometry. The CPU structural phase reads it back + allocs the agent.
+      const spawnFlag = node.data.config?.inheritAttributes === false ? '2.0' : '1.0';
+      ctx.lines.push(`  ${f32At(ctx, 'spawnRequest', 'idx')} = ${spawnFlag};`);
+      ctx.lines.push(`  ${f32At(ctx, 'spawnX', 'idx')} = ${inF32(ctx, node, 'x', 0)};`);
+      ctx.lines.push(`  ${f32At(ctx, 'spawnY', 'idx')} = ${inF32(ctx, node, 'y', 0)};`);
+      if (ctx.is3d) ctx.lines.push(`  ${f32At(ctx, 'spawnZ', 'idx')} = ${inF32(ctx, node, 'z', 0)};`);
+      ctx.lines.push(`  ${f32At(ctx, 'spawnRadius', 'idx')} = ${inF32(ctx, node, 'radius', 1)};`);
       compileFlowChain(ctx, node.id, 'next');
       break;
     }

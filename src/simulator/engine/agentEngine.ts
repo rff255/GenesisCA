@@ -233,12 +233,17 @@ const AGENT_F64_FIELDS = [
   'divideAxisX', 'divideAxisY', 'divideAxisZ', 'divideAsym',
   'bondFormL', 'bondFormK',
   'density',
+  // STEP 5a spawn request (Population·Birth) — appended at the END of the f64
+  // block so every existing f64 offset is byte-stable (only the i32/u8/etc.
+  // blocks after it shift; the compiler + store recompute the layout from the
+  // SAME field list, so their offsets always agree — ABI-mirror).
+  'spawnX', 'spawnY', 'spawnZ', 'spawnRadius',
 ] as const;
 const AGENT_I32_FIELDS = [
   'lineage', 'epoch', 'bondCount',
   'bondFormReq', 'bondBreakReq',
 ] as const;
-const AGENT_U8_FIELDS = ['alive', 'divideRequest', 'killRequest'] as const;
+const AGENT_U8_FIELDS = ['alive', 'divideRequest', 'killRequest', 'spawnRequest'] as const;
 const AGENT_BOND_I32_FIELDS = ['bondPartner', 'bondPartnerEpoch', 'bondTypeLabel'] as const;
 const AGENT_BOND_F64_FIELDS = ['bondRestLength', 'bondStiffness'] as const;
 
@@ -486,6 +491,16 @@ export interface AgentStore {
   bondFormK: Float64Array;
   /** Break-bond request: partner id + 1 (0 = none). */
   bondBreakReq: Int32Array;
+  /** STEP 5a Spawn request (Population·Birth): the behaviour graph's Spawn Agent
+   *  node writes `spawnRequest[i]=1` + the child's `spawnX/Y[/Z]/spawnRadius`; the
+   *  post-step structural phase allocs a new agent per request (transient, reset
+   *  each step, NOT serialized — like `divideRequest`/`divideAxisX`; `spawnZ` is
+   *  2D-ZERO in 2D). One spawn per agent per step (v1). */
+  spawnRequest: Uint8Array;
+  spawnX: Float64Array;
+  spawnY: Float64Array;
+  spawnZ: Float64Array;
+  spawnRadius: Float64Array;
 
   // --- per-agent RGBA appearance (written by the agent colour pass; PR-A3) ---
   colors: Uint8ClampedArray;
@@ -714,6 +729,11 @@ export function createAgentStore(
     bondFormL: f64('bondFormL'),
     bondFormK: f64('bondFormK'),
     bondBreakReq: i32('bondBreakReq'),
+    spawnRequest: u8('spawnRequest'),
+    spawnX: f64('spawnX'),
+    spawnY: f64('spawnY'),
+    spawnZ: f64('spawnZ'),
+    spawnRadius: f64('spawnRadius'),
     colors: colorsArr(),
     // Persistent display sprite state — plain arrays regardless of backing (the JS
     // node + engine advance are the only writers). All 0: no sprite, frame 0, hold.
@@ -816,6 +836,7 @@ export function initAgentSlot(
   store.bondCount[id] = 0;
   store.density[id] = 0;
   store.divideRequest[id] = 0; store.killRequest[id] = 0;
+  store.spawnRequest[id] = 0;   // STEP 5a — a recycled slot must not inherit a stale spawn request
   for (const spec of store.attrSpecs) {
     store.attrRead[spec.id]![id] = spec.defaultValue;
     store.attrWrite[spec.id]![id] = spec.defaultValue;
@@ -845,6 +866,7 @@ export function freeAgentSlot(store: AgentStore, id: number): void {
   store.bondCount[id] = 0;
   store.divideRequest[id] = 0; store.killRequest[id] = 0;
   store.bondFormReq[id] = 0; store.bondBreakReq[id] = 0;
+  store.spawnRequest[id] = 0;   // STEP 5a
   store.freeList[store.freeTop++] = id;
   store.liveCount--;
 }
