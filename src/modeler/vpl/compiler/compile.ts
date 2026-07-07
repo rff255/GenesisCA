@@ -15,6 +15,7 @@ import { injectLinkedOutputMappings } from './linkedOutputMappings';
 import { injectAgentLinkedOutputMappings } from './agentLinkedOutputMappings';
 import { collapseReroutes } from './rerouteCollapse';
 import { expandComposites } from './expandComposites';
+import { lowerVectorAttrs } from './vectorAttr';
 import { computeAsyncReadWriteHazards } from './asyncWriteHazard';
 import { expandMacros } from './macroExpand';
 import { computeVolatileHoist } from './volatileHoist';
@@ -1464,6 +1465,15 @@ export function compileGraph(
   // emitter ever sees a reroute. `A → R → B` compiles byte-identically to `A → B`.
   ({ nodes: graphNodes, edges: graphEdges } = collapseReroutes(graphNodes, graphEdges));
 
+  // Vector stored-attribute lowering — rewrite Get/Set Vector Attribute into
+  // Make/Break Vector over per-component scalar-float reads/writes AND expand the
+  // model's `vector` attributes into their `<id>_vx/_vy[/_vz]` scalar-float
+  // components, so everything below (expandComposites, the SoA params, save/load)
+  // sees ONLY scalar floats. Runs AFTER macro/reroute flattening + BEFORE
+  // expandComposites (which lowers the synthesized Make/Break Vector). Reassigns
+  // `model` to the component-expanded model. Hot-path no-op. See vectorAttr.ts.
+  ({ nodes: graphNodes, edges: graphEdges, model } = lowerVectorAttrs(graphNodes, graphEdges, model));
+
   // Composite-type lowering — rewrite vector / colour Make / Break / Vector-Op
   // (+ Apply Force's vector mode) into plain scalar nodes so every target emits
   // them via the verified scalar emitters (no JS-only clamp). See expandComposites.ts.
@@ -2204,6 +2214,8 @@ export function compileAgentGraph(
     agentEdges = expanded.edges;
   }
   ({ nodes: agentNodes, edges: agentEdges } = collapseReroutes(agentNodes, agentEdges));
+  // Vector stored-attribute lowering (agent scope) — see the cell compiler + vectorAttr.ts.
+  ({ nodes: agentNodes, edges: agentEdges, model } = lowerVectorAttrs(agentNodes, agentEdges, model));
   ({ nodes: agentNodes, edges: agentEdges } = expandComposites(agentNodes, agentEdges, model));
   // Agent Output Mappings: synthesize the LINKED colour passes and sequence them
   // with any user agentOutputMapping roots (the agent analogue of the cell
