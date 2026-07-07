@@ -104,7 +104,12 @@ export function usesEngineSprings(cfg: CenterBasedConfig | undefined | null): bo
  *  ramps (previously the ramp was gated on `usesBondingPhysics`, so the node was a
  *  silent no-op without it). Legacy files without a profile fall back to
  *  `usesBondingPhysics` (byte-identical); the migration inference sets `growth`
- *  whenever the legacy bundle ramped (usesBondingPhysics ∧ growthRate>0). */
+ *  whenever the legacy bundle ramped (usesBondingPhysics ∧ growthRate>0).
+ *  NON-byte-identical edge case (intended, matches NO shipped model): a legacy
+ *  file with the engine OFF (`customForcesOnly`/`!useBondingPhysics`) BUT a
+ *  positive `growthRate` AND a Set Target Radius node used to FREEZE the ramp
+ *  (the node was a silent no-op); the inference now reads `growth=true` from the
+ *  node, so it ramps — i.e. the previously-dead node starts working (the fix). */
 export function usesEngineGrowth(cfg: CenterBasedConfig | undefined | null): boolean {
   if (cfg?.agentCapabilities) return !!cfg.agentCapabilities.growth;
   return usesBondingPhysics(cfg);
