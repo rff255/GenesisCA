@@ -69,7 +69,7 @@ function buildAdjacency(graphNodes: GraphNode[], graphEdges: GraphEdge[]) {
 // Compile a single root's subgraph (per-cell body)
 // ---------------------------------------------------------------------------
 
-const MULTI_OUTPUT_TYPES = new Set(['inputColor', 'initEvent', 'getColorConstant', 'macro', 'colorScale', 'categoricalColor', 'breakDownNeighborIndex', 'getFacingLabels', 'getAllFacingLabels', 'getCellPosition', 'behaviourStep', 'divisionEvent', 'spawnEvent', 'getSelfPosition', 'forEachBond', 'fieldGradient', 'getAgentPosition', 'getAgentOffset', 'getVelocity', 'senseHemifield',
+const MULTI_OUTPUT_TYPES = new Set(['inputColor', 'initEvent', 'getColorConstant', 'macro', 'colorScale', 'categoricalColor', 'breakDownNeighborIndex', 'getFacingLabels', 'getAllFacingLabels', 'getCellPosition', 'behaviourStep', 'divisionEvent', 'getSelfPosition', 'forEachBond', 'fieldGradient', 'getAgentPosition', 'getAgentOffset', 'getVelocity', 'senseHemifield',
   // Generic Agent Platform spawn/init: the Agent Init Event's value-outs
   // (worldWidth/worldHeight/seedIndexBase) + Create Agent's `handle` resolve via
   // the `_v<id>_<port>` convention.
@@ -433,7 +433,6 @@ function compileRoot(
     agentRoot: rootNode.data.nodeType === 'agentInit' ? 'init'
       : rootNode.data.nodeType === 'behaviourStep' ? 'behaviour'
       : rootNode.data.nodeType === 'divisionEvent' ? 'division'
-      : rootNode.data.nodeType === 'spawnEvent' ? 'spawn'
       : undefined,
   };
 
@@ -490,10 +489,7 @@ function compileRoot(
   const hazardEligible = (!!isAsyncRoot
     && (rootNode.data.nodeType === 'step' || rootNode.data.nodeType === 'initEvent'))
     || (rootNode.data.nodeType === 'behaviourStep' && agentAttrsAsync)
-    || rootNode.data.nodeType === 'divisionEvent'
-    // STEP 5a: the spawn event's w_ block aliases attrRead (runs in the sequential
-    // structural phase, like division), so it is always hazard-eligible.
-    || rootNode.data.nodeType === 'spawnEvent';
+    || rootNode.data.nodeType === 'divisionEvent';
   const hazardReads = computeAsyncReadWriteHazards({
     nodeMap, inputToSource, inputToSources, flowOutputToTargets,
     rootNodeId: rootNode.id, rootFlowPortId: rootFlowPort, isAsync: hazardEligible,
@@ -2121,10 +2117,6 @@ export interface AgentCompileResult {
   /** The single-agent Division Event function (runs per daughter). Empty when
    *  there's no divisionEvent root. */
   divisionCode: string;
-  /** STEP 5a Population·Birth: the compiled per-spawned-agent Spawn Event fn (a
-   *  single-agent function run once per child in the structural phase). Empty when
-   *  there's no spawnEvent root. */
-  spawnCode: string;
   /** Generic Agent Platform (FIX 4): per-stop-event-node messages from the AGENT
    *  graph (indexed by `_stopIdx - 1`). Merged into the worker's `stopMessages`
    *  alongside the cell graph's so an agent Stop Event surfaces its message. */
@@ -2154,14 +2146,6 @@ export function buildDivisionParams(model: CAModel): string {
   // source the param names, the worker's `buildDivisionArgs`, and the parity
   // harness all consume, so they can never desync in order.
   return buildAgentAbiParams('division', agentAbiShapeOf(model));
-}
-
-/** The spawnEvent function signature — a SINGLE-agent function (NOT loop-wrapped):
- *  the spawned child slot `idx` + the spawner's id `__parentHandle`, then the same
- *  engine buffers division gets (≡ division ABI minus the axis defaults). The
- *  worker's `buildSpawnArgs` MIRRORS this via the shared descriptor. STEP 5a. */
-export function buildSpawnParams(model: CAModel): string {
-  return buildAgentAbiParams('spawn', agentAbiShapeOf(model));
 }
 
 /** The lightweight ABI shape (primitives) the shared descriptor needs. compile.ts
@@ -2220,12 +2204,12 @@ export function compileAgentGraph(
    *  graph's stop-message count so `[...cellStops, ...agentStops]` aligns 1-based. */
   stopIdxBase = 0,
 ): AgentCompileResult {
-  if (!model) return { behaviourCode: '', initCode: '', divisionCode: '', spawnCode: '', stopMessages: [], outputMappingCodes: [], error: 'Model required.' };
+  if (!model) return { behaviourCode: '', initCode: '', divisionCode: '', stopMessages: [], outputMappingCodes: [], error: 'Model required.' };
 
   // Flatten macros, strip reroutes — same front-end pipeline the cell compiler runs.
   {
     const expanded = expandMacros(agentNodes, agentEdges, model);
-    if (expanded.error) return { behaviourCode: '', initCode: '', divisionCode: '', spawnCode: '', stopMessages: [], outputMappingCodes: [], error: expanded.error };
+    if (expanded.error) return { behaviourCode: '', initCode: '', divisionCode: '', stopMessages: [], outputMappingCodes: [], error: expanded.error };
     agentNodes = expanded.nodes;
     agentEdges = expanded.edges;
   }
@@ -2299,7 +2283,7 @@ export function compileAgentGraph(
 
   const behaviourNode = agentNodes.find(n => n.data.nodeType === 'behaviourStep');
   if (!behaviourNode) {
-    return { behaviourCode: '', initCode: '', divisionCode: '', spawnCode: '', stopMessages, outputMappingCodes: [], error: 'No Behaviour Step node in the agent graph.' };
+    return { behaviourCode: '', initCode: '', divisionCode: '', stopMessages, outputMappingCodes: [], error: 'No Behaviour Step node in the agent graph.' };
   }
 
   const { nodeMap, inputToSource, inputToSources, flowOutputToTargets } = buildAdjacency(agentNodes, agentEdges);
@@ -2382,51 +2366,6 @@ export function compileAgentGraph(
       ...dv.valueLines,
       '',
       ...dv.flowLines,
-      '  _rngState[0] = _rs;',
-      '})',
-    ].join('\n');
-  }
-
-  // --- Spawn Event (STEP 5a — single-agent function, runs per spawned child) ---
-  // The birth analogue of the Division Event. Mirrors the divisionCode wrapper: a
-  // single-agent fn with `idx` = the child slot + `__parentHandle` = the spawner.
-  // myX/myRadius read the SoA at `idx`; parentX/parentHandle read it at
-  // `__parentHandle` (both live in the shared SoA). Runs in the sequential
-  // structural phase after the child is alloc'd + inherited the parent's attrs.
-  let spawnCode = '';
-  const spawnNode = agentNodes.find(n => n.data.nodeType === 'spawnEvent');
-  if (spawnNode) {
-    const sv = compileRoot(
-      spawnNode, 'do', nodeMap, inputToSource, inputToSources, flowOutputToTargets,
-      loopInvariant, fusion, agentNodes, agentEdges, model,
-    );
-    const spawnScratch = sv.scratchNodes.map(s => buildScratchDecl(s, model));
-    const sId = spawnNode.id;
-    const spawnVars = buildVariableJS(model.agentVariables || []);
-    spawnCode = [
-      `(function(${buildSpawnParams(model)}) {`,
-      ...spawnScratch,
-      ...viewerHoistLines,   // Set Cell Looks _isV_ hoist in the spawn fn too
-      ...spawnVars.preLoop,
-      ...spawnVars.inLoopReset.map(l => l.trimStart()).map(l => '  ' + l),
-      '  const colorIdx = idx * 4;', // Set Cell Looks on the child (s.colors)
-      // value-out preamble — the child's geometry at `idx`, the parent's at `__parentHandle`.
-      `  const _v${sId}_myX = _agentX[idx];`,
-      `  const _v${sId}_myY = _agentY[idx];`,
-      `  const _v${sId}_myRadius = _agentRadius[idx];`,
-      `  const _v${sId}_parentHandle = __parentHandle;`,
-      `  const _v${sId}_parentX = _agentX[__parentHandle];`,
-      `  const _v${sId}_parentY = _agentY[__parentHandle];`,
-      // myZ / parentZ (3D only) — read the `_agentZ` buffer (the 3D-block param).
-      ...(is3d ? [
-        `  const _v${sId}_myZ = _agentZ[idx];`,
-        `  const _v${sId}_parentZ = _agentZ[__parentHandle];`,
-      ] : []),
-      '  let _rs = _rngState[0] || 0x12345678;',
-      ...sv.preLoopValueLines,
-      ...sv.valueLines,
-      '',
-      ...sv.flowLines,
       '  _rngState[0] = _rs;',
       '})',
     ].join('\n');
@@ -2515,7 +2454,7 @@ export function compileAgentGraph(
   }
 
   return {
-    behaviourCode, initCode, divisionCode, spawnCode, stopMessages, outputMappingCodes,
+    behaviourCode, initCode, divisionCode, stopMessages, outputMappingCodes,
     error: omErrors.length > 0 ? omErrors.join('\n') : undefined,
   };
 }
