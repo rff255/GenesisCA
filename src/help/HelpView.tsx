@@ -191,10 +191,11 @@ export function HelpView() {
             per-cell (e.g., &quot;alive&quot;, &quot;age&quot;).{' '}
             <strong>Model Attributes</strong> are global parameters all cells can read
             but not write (e.g., &quot;birth threshold&quot;). Each attribute has a type
-            (binary, integer, decimal, tag, color), a default value, and a description.
+            (binary, integer, decimal, tag, vector, color), a default value, and a description.
           </p>
           <ul className={styles.list}>
             <li><strong>Tag</strong> &mdash; An integer with named values (picklist). Define tag options in the editor, and use the Tag Constant node to reference them by name.</li>
+            <li><strong>Vector</strong> (cell &amp; agent attributes) &mdash; a 2D or 3D direction stored as one named value (a flow field, a facing/orientation, an accumulated force) instead of hand-maintaining separate X/Y/Z scalars. Get/Set Attribute expose a single <em>vector</em> port; wire it to Make Vector / Break Vector / Vector Op. Under the hood the vector is stored as its scalar float components, so it runs natively on all three compile targets. <strong>Local Variables</strong> can be vectors too (e.g. accumulate a force over neighbours with one variable). 3D vectors are offered only in a 3D model.</li>
             <li><strong>Color</strong> (model attributes only) &mdash; An RGB color value. Accessed via Get Model Attribute with separate R, G, B output ports. Adjustable live in the simulator.</li>
             <li><strong>Boundary Value</strong> (cell attributes only, constant boundary) &mdash; the value held by out-of-grid cells. Shown next to Default Value only when the model&apos;s boundary treatment is <em>constant</em>. Leave blank to inherit the default.</li>
             <li>

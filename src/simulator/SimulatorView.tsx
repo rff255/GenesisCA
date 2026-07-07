@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState, type CSSProperties } from 'react';
 import { useModel } from '../model/ModelContext';
 import { compileGraph, compileAgentGraph } from '../modeler/vpl/compiler/compile';
-import { expandVectorAttributes } from '../modeler/vpl/compiler/vectorAttr';
+import { expandVectorAttributes, encodeAttrSets, decodeVectorFromValues } from '../modeler/vpl/compiler/vectorAttr';
 import { hasGlyphsInModel } from '../modeler/vpl/compiler/glyphsUsage';
 import { CURRENT_VIEWER_SENTINEL } from '../modeler/vpl/nodes/SetCellLooksNode';
 import { compileGraphWasm } from '../modeler/vpl/compiler/wasm/compile';
@@ -35,7 +35,7 @@ import { PresetSaveDialog } from './PresetSaveDialog';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { serializeSimState, serializePreset, downloadStateFile, readStateFile, base64ToArrayBuffer, deserializeTypedArray, migrateSimulationStateV1toV2, deserializeAgentState } from '../model/fileOperations';
 import type { Attribute, CAModel, IndicatorChartSettings, Preset, SimulationState } from '../model/types';
-import { encodeAttrValue, decodeAttrValue } from '../model/attrValueEncoding';
+import { decodeAttrValue } from '../model/attrValueEncoding';
 import { cbNum } from '../model/centerBased';
 import { resolveAgentProfile } from '../model/agentCapabilities';
 import { useListReorder } from '../modeler/panels/useListReorder';
@@ -415,6 +415,11 @@ function attrsStructurallyEqual(prev: Attribute[], curr: Attribute[]): boolean {
     if (a.type !== b.type) return false;
     if (a.isModelAttribute !== b.isModelAttribute) return false;
     if (a.defaultValue !== b.defaultValue) return false;
+    // A `vector` attr's dims drive its component count (2 vs 3 float buffers) — a
+    // change re-lays out the SoA, so it needs a full reinit. defaultValue usually
+    // changes alongside (the dropdown resets it), but guard the dims directly so a
+    // hand-edited file / independent-dims edit can't desync compiler vs worker.
+    if ((a.vectorDims ?? 2) !== (b.vectorDims ?? 2)) return false;
     if (a.boundaryValue !== b.boundaryValue) return false;
     // Generic Agent Platform: the agent field-access permission drives fieldSpecs
     // (which cell attrs are threaded as `_field_` into the agent loop) — a change
@@ -1118,7 +1123,16 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
           const cur = next[id] ?? { enabled: false, value: '' };
           next[id] = { enabled: cur.enabled, value: attr ? decodeAttrValue(attr, v) : String(v) };
         };
-        for (const attr of (model.agentAttributes ?? [])) put(attr.id, r.attrs?.[attr.id], attr);
+        for (const attr of (model.agentAttributes ?? [])) {
+          if (attr.type === 'vector') {
+            // A vector agent attr is published as its scalar components (`<id>_vx`…);
+            // recombine into the "x,y[,z]" string the vector brush widget edits.
+            const cur = next[attr.id] ?? { enabled: false, value: '' };
+            next[attr.id] = { enabled: cur.enabled, value: decodeVectorFromValues(attr, r.attrs ?? null) };
+          } else {
+            put(attr.id, r.attrs?.[attr.id], attr);
+          }
+        }
         put(GEOM_RADIUS, r.radius); put(GEOM_VX, r.vx); put(GEOM_VY, r.vy); put(GEOM_VZ, r.vz);
         put(GEOM_X, r.x); put(GEOM_Y, r.y); put(GEOM_Z, r.z);
         return next;
@@ -4610,7 +4624,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     for (const attr of (model.agentAttributes ?? [])) {
       const entry = brush[attr.id];
       if (!entry || !entry.enabled) continue;
-      sets.push({ attrId: attr.id, value: encodeAttrValue(attr, entry.value) });
+      sets.push(...encodeAttrSets(attr, entry.value));
     }
     return sets;
   };
@@ -4876,7 +4890,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     const sets: Array<{ attrId: string; value: number }> = [];
     for (const attr of (model.agentAttributes ?? [])) {
       const e = st[attr.id];
-      if (e?.enabled) sets.push({ attrId: attr.id, value: encodeAttrValue(attr, e.value) });
+      if (e?.enabled) sets.push(...encodeAttrSets(attr, e.value));
     }
     const geom: { radius?: number; vx?: number; vy?: number; vz?: number; x?: number; y?: number; z?: number } = {};
     const num = (id: string): number | undefined => { const e = st[id]; if (!e?.enabled) return undefined; const n = parseFloat(e.value); return Number.isFinite(n) ? n : undefined; };
@@ -5098,7 +5112,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       for (const attr of cellAttrsRef.current) {
         const entry = brush[attr.id];
         if (!entry || !entry.enabled) continue;
-        sets.push({ attrId: attr.id, value: encodeAttrValue(attr, entry.value) });
+        sets.push(...encodeAttrSets(attr, entry.value));
       }
       if (sets.length === 0) return; // nothing enabled — a no-op stroke
       // Carry `layer` (3D Grid CA) so a 3D manual paint hits the right voxel.
@@ -6694,7 +6708,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       const sets: Array<{ attrId: string; value: number }> = [];
       for (const attr of cellAttrsRef.current) {
         const entry = manualState[attr.id];
-        if (entry?.enabled) sets.push({ attrId: attr.id, value: encodeAttrValue(attr, entry.value) });
+        if (entry?.enabled) sets.push(...encodeAttrSets(attr, entry.value));
       }
       return sets;
     };
@@ -7146,10 +7160,11 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
                 {(!agentCapProfile || agentCapProfile.collision !== 'off' || agentCapProfile.sensing) && <div>density {agentState.density!.toFixed(3)}</div>}
                 {agentState.attrs && Object.keys(agentState.attrs).length > 0 && (
                   <div style={{ marginTop: 4, borderTop: '1px solid var(--color-border-muted)', paddingTop: 4 }}>
-                    {(model.agentAttributes ?? []).filter(a => agentState!.attrs![a.id] !== undefined).map(a => (
+                    {(model.agentAttributes ?? []).filter(a => a.type === 'vector' || agentState!.attrs![a.id] !== undefined).map(a => (
                       <div key={a.id} style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
                         <span style={{ color: 'var(--color-text-muted)' }} title={a.description || undefined}>{a.name}</span>
-                        <span>{a.type === 'bool' ? (agentState!.attrs![a.id] ? 'true' : 'false')
+                        <span>{a.type === 'vector' ? decodeVectorFromValues(a, agentState!.attrs!)
+                          : a.type === 'bool' ? (agentState!.attrs![a.id] ? 'true' : 'false')
                           : a.type === 'tag' ? (a.tagOptions?.[agentState!.attrs![a.id]! | 0] ?? `(${agentState!.attrs![a.id]! | 0})`)
                           : a.type === 'integer' ? String(agentState!.attrs![a.id]! | 0)
                           : agentState!.attrs![a.id]!.toFixed(3)}</span>

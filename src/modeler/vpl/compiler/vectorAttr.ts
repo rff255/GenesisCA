@@ -12,19 +12,23 @@
  * on every target, 2D+3D. The vector attribute itself exists only in
  * `model.attributes`/`agentAttributes` (authoring) + this transform.
  *
- * `Get/Set Vector Attribute` carry the composite on ONE `vector` wire and are
- * lowered (in a sibling node transform) to Make/Break Vector over
- * getCellAttribute/setAttribute on these component ids — reusing the verified
- * `expandComposites` path, so there is ZERO new per-target emit.
+ * There are NO dedicated Get/Set Vector nodes: the ordinary
+ * `getCellAttribute`/`setAttribute`/`getVariable`/`setVariable` nodes flip their
+ * `value` port to the composite `vector` type when the picked attribute/variable
+ * is a vector (see `vectorPortDims`), and `lowerVectorAttrs` rewrites those Get/Set
+ * into Make/Break Vector over getCellAttribute/setAttribute on these component ids
+ * — reusing the verified `expandComposites` path, so there is ZERO new per-target
+ * emit.
  *
- * NB the suffix `_vx/_vy/_vz` mirrors `color`'s `_r/_g/_b` convention; a user
- * attribute id that already ends in one of those AND collides with a real vector
- * component id is rejected by validation (see nodeValidation) — the same
- * theoretical collision `color` carries.
+ * NB the suffix `_vx/_vy/_vz` mirrors `color`'s `_r/_g/_b` split. Attribute ids are
+ * random-generated (never user-typed), so a synthesized component id (`<randomId>_vx`)
+ * colliding with another attribute's random id is astronomically unlikely — the same
+ * theoretical, unguarded collision `color`'s `_r/_g/_b` split carries.
  */
 
 import type { Attribute, AttributeType, CAModel, GraphNode, GraphEdge, Variable } from '../../../model/types';
 import { is3dModelLike } from './niCodec';
+import { encodeAttrValue } from '../../../model/attrValueEncoding';
 
 const VECTOR_SUFFIXES = ['_vx', '_vy', '_vz'] as const;
 const VECTOR_LABELS = ['X', 'Y', 'Z'] as const;
@@ -74,6 +78,43 @@ export function parseVectorDefault(value: string | undefined, dims: number): num
 /** Join `dims` component numbers back into the "x,y[,z]" default-string encoding. */
 export function encodeVectorDefault(comps: number[], dims: number): string {
   return Array.from({ length: dims }, (_, i) => String(comps[i] ?? 0)).join(',');
+}
+
+/** Encode a manual / seed / edit-brush value STRING for `attr` into the flat
+ *  `{attrId, value}` sets the worker paints. A scalar attribute yields ONE set
+ *  (via `encodeAttrValue`); a `vector` attribute yields ONE set PER COMPONENT,
+ *  keyed by its `<id>_vx/_vy[/_vz]` ids — so painting a vector direction writes
+ *  the real component buffers the worker owns (the vector id itself never exists
+ *  there; the worker's paint guard would silently skip it). Value is the
+ *  "x,y[,z]" comma encoding. Shared by every brush set-builder in SimulatorView. */
+export function encodeAttrSets(
+  attr: { id: string; type: AttributeType; defaultValue?: string; vectorDims?: number },
+  raw?: string,
+): Array<{ attrId: string; value: number }> {
+  if (attr.type === 'vector') {
+    const dims = vectorDimsOf(attr);
+    const ids = vectorComponentIds(attr.id, dims);
+    const comps = parseVectorDefault(raw ?? attr.defaultValue ?? '', dims);
+    return ids.map((id, i) => ({ attrId: id, value: comps[i] ?? 0 }));
+  }
+  return [{ attrId: attr.id, value: encodeAttrValue(attr, raw) }];
+}
+
+/** Inverse of `encodeAttrSets` for prefilling the edit brush from a live agent /
+ *  inspected cell: read a vector attribute's components out of a worker-published
+ *  values map (keyed by the `<id>_vx…` component ids) and join them into the
+ *  "x,y[,z]" string the vector brush widget edits. Missing components → 0. */
+export function decodeVectorFromValues(
+  attr: { id: string; vectorDims?: number },
+  values: Record<string, number> | null | undefined,
+): string {
+  const dims = vectorDimsOf(attr);
+  const ids = vectorComponentIds(attr.id, dims);
+  const comps = ids.map(id => {
+    const v = values?.[id];
+    return Number.isFinite(v) ? (v as number) : 0;
+  });
+  return encodeVectorDefault(comps, dims);
 }
 
 /** Lower each `vector` attribute in `attrs` into its `vectorDimsOf` scalar-FLOAT

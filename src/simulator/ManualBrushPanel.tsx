@@ -3,6 +3,7 @@ import type { Attribute, Neighborhood } from '../model/types';
 import { subAttrInfo } from '../modeler/vpl/compiler/subAttribute';
 import { InlineBoolSelect, InlineNumberInput, InlineTagSelect } from '../modeler/vpl/widgets/InlineWidgets';
 import { NeighborIndexValuePicker } from '../modeler/panels/NeighborIndexDefaultEditor';
+import { vectorDimsOf, vectorComponentLabels, parseVectorDefault, encodeVectorDefault } from '../modeler/vpl/compiler/vectorAttr';
 import styles from './SimulatorView.module.css';
 import type { ManualBrushModelState } from './SimulatorView';
 
@@ -106,6 +107,30 @@ export function ManualBrushPanel({ cellAttributes, neighborhoods, state, onChang
                   onChange={v => setEntry(attr.id, { value: v })}
                 />
               )}
+              {attr.type === 'vector' && (() => {
+                const dims = vectorDimsOf(attr);
+                const labels = vectorComponentLabels(dims);
+                const comps = parseVectorDefault(entry.value ?? attr.defaultValue ?? '', dims);
+                return (
+                  <div className={styles.manualBrushVector}>
+                    {labels.map((lbl, i) => (
+                      <label key={lbl} className={styles.manualBrushVectorComp}>
+                        <span className={styles.manualBrushVectorLabel}>{lbl}</span>
+                        <InlineNumberInput
+                          value={String(comps[i] ?? 0)}
+                          step="any"
+                          onChange={v => {
+                            const next = comps.slice();
+                            const n = parseFloat(v);
+                            next[i] = Number.isFinite(n) ? n : 0;
+                            setEntry(attr.id, { value: encodeVectorDefault(next, dims) });
+                          }}
+                        />
+                      </label>
+                    ))}
+                  </div>
+                );
+              })()}
             </div>
           </div>
         );

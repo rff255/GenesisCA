@@ -81,6 +81,7 @@ a type name (see `typeDisplayName` in `src/model/typeLabels.ts`).
 | `float` | Decimal | decimal (`Float64Array` for attrs) | yes | yes | `number` |
 | `tag` | Tag | index into a named-values list (`Int32Array`) | yes | yes | `tag` (dropdown) |
 | `neighborIndex` | NeighborIndex | slot index into a neighborhood (`Int32Array`); typed-distinct from `integer` to catch the silent index-kind hazards in §7 | yes | yes | `number` |
+| `vector` | Vector | a 2D/3D direction bundled on one wire (composite PORT type) **and** a stored **attribute / Local-Variable** type; both are lowered to scalar `float` components before compile (see below) | yes | — | — |
 | `color-r/g/b` | Color | 3 integer channels — emitted as separate ports (a composite `color` port type also exists — see below) | yes | — | `color` (on triples) |
 | `any` | — | type-agnostic; most ports use this | yes | depends on `isArray` | varies |
 
@@ -104,6 +105,16 @@ a type name (see `typeDisplayName` in `src/model/typeLabels.ts`).
   (Make/Break Vector, Make/Break Color, Vector Op) — lowered to scalars by
   `expandComposites` before any target compiles. See the composite-types note in §1 and
   the nodes in §3.4 / §3.7.
+- **`vector` is ALSO a stored attribute + Local-Variable type** (a per-cell / per-agent
+  direction — flow field, facing, accumulated force). It has no dedicated nodes: the
+  ordinary **Get Cell Attribute / Set Attribute / Get Variable / Set Variable** nodes
+  flip their `value` port to `vector` when the picked attribute/variable is a vector
+  (Set drops its inline number widget), so a vector attr/var wires straight to Make /
+  Break Vector / Vector Op. `lowerVectorAttrs` (`src/modeler/vpl/compiler/vectorAttr.ts`)
+  rewrites those Get/Set into per-component Make/Break over scalar-float component
+  attributes before any target compiles — so storage runs natively on JS / WASM / WebGPU
+  with no new per-target emit. (Neighbour reads of a vector attribute are not lowered in
+  v1 — go through the scalar-component path.)
 - Unconnected input ports fall back to an inline widget value when one is defined; if no
   inline widget is defined and the port is unconnected, the compiler uses a type-
   appropriate default (`0`, `false`, or an empty array).
