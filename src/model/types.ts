@@ -131,6 +131,13 @@ export interface Attribute {
    *  attribute's `tagOptions` (like a tag-attribute axis key source). Absent →
    *  use `valueTagOptions`. */
   valueTagAttributeId?: string;
+  /** Vector attributes only: the component count — `2` = (x, y), `3` = (x, y, z).
+   *  Absent ⇒ `2`. Chosen PER ATTRIBUTE (not derived from the model): a 3D model
+   *  offers BOTH "Vector (2D)" and "Vector (3D)" (e.g. a horizontal heading vs a
+   *  full 3D direction); a 2D model offers only 2D. The lowering
+   *  ([vectorAttr.ts](../modeler/vpl/compiler/vectorAttr.ts)) synthesizes this many
+   *  scalar-float components (`<id>_vx/_vy`[/`_vz`]). */
+  vectorDims?: 2 | 3;
 }
 
 /** 3D Grid CA: parametric named-shape spec for a 3D neighbourhood. Materialized

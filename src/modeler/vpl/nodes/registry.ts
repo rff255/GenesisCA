@@ -56,6 +56,8 @@ import { GetAllFacingLabelsNode } from './GetAllFacingLabelsNode';
 import { LookupInteractionNode } from './LookupInteractionNode';
 import { InteractionTableMapNode } from './InteractionTableMapNode';
 import { GetCellAttributeNode } from './GetCellAttributeNode';
+import { GetVectorAttributeNode } from './GetVectorAttributeNode';
+import { SetVectorAttributeNode } from './SetVectorAttributeNode';
 import { GetCellPositionNode } from './GetCellPositionNode';
 import { GetNeighborsAttributeNode } from './GetNeighborsAttributeNode';
 import { GetConstantNode } from './GetConstantNode';
@@ -190,6 +192,7 @@ const ALL_NODES: NodeTypeDef[] = [
   SwitchNode,
   // Data
   GetCellAttributeNode,
+  GetVectorAttributeNode,
   GetCellPositionNode,
   GetModelAttributeNode,
   GetNeighborsAttributeNode,
@@ -239,6 +242,7 @@ const ALL_NODES: NodeTypeDef[] = [
   PickNRandomNeighborsNode,
   // Output
   SetAttributeNode,
+  SetVectorAttributeNode,
   UpdateAttributeNode,
   SetVariableNode,
   SetArrayElementNode,

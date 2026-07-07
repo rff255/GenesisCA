@@ -23,7 +23,7 @@
  * theoretical collision `color` carries.
  */
 
-import type { Attribute, AttributeType, CAModel } from '../../../model/types';
+import type { Attribute, AttributeType, CAModel, GraphNode, GraphEdge } from '../../../model/types';
 import { is3dModelLike } from './niCodec';
 
 const VECTOR_SUFFIXES = ['_vx', '_vy', '_vz'] as const;
@@ -33,9 +33,17 @@ export function isVectorAttr(attr: { type: AttributeType } | undefined | null): 
   return !!attr && attr.type === 'vector';
 }
 
-/** Vector dimensionality = the model's spatial dimension (2D → x,y; 3D → x,y,z),
- *  matching how the vector WIRE nodes hide the Z port in 2D. No explicit schema
- *  field — derived from the model, like every other 2D/3D distinction. */
+/** The component count of a vector attribute — chosen PER ATTRIBUTE via
+ *  `vectorDims` (2 = x,y; 3 = x,y,z), NOT derived from the model. A 3D model may
+ *  hold both 2D and 3D vector attrs (a horizontal heading vs a full direction);
+ *  a 2D model only ever has 2D vectors. Absent ⇒ 2. */
+export function vectorDimsOf(attr: { vectorDims?: number } | undefined | null): 2 | 3 {
+  return attr && attr.vectorDims === 3 ? 3 : 2;
+}
+
+/** The MAXIMUM vector dimensionality the model can offer — 3 in a 3D model, else 2.
+ *  Drives the UI: "Vector (2D)" is always available, "Vector (3D)" only when this
+ *  is 3 (a 3D model). NOT the dims of a given attr — that is `vectorDimsOf`. */
 export function vectorDimsForModel(model: CAModel | undefined | null): 2 | 3 {
   return is3dModelLike(model ?? undefined) ? 3 : 2;
 }
@@ -68,17 +76,19 @@ export function encodeVectorDefault(comps: number[], dims: number): string {
   return Array.from({ length: dims }, (_, i) => String(comps[i] ?? 0)).join(',');
 }
 
-/** Lower each `vector` attribute in `attrs` into its `dims` scalar-FLOAT component
- *  attributes (`<id>_vx/_vy/_vz`), preserving list order + the fields the storage /
- *  compiler layers read: `isModelAttribute`, `agentAccess` (a vector cell FIELD's
- *  components inherit the field access), and a per-component `boundaryValue` split.
- *  Non-vector attributes pass through untouched. Returns the SAME array (identity)
- *  when there are no vector attributes — the hot-path no-op. */
-export function expandVectorAttributes(attrs: Attribute[], dims: number): Attribute[] {
+/** Lower each `vector` attribute in `attrs` into its `vectorDimsOf` scalar-FLOAT
+ *  component attributes (`<id>_vx/_vy`[/`_vz`]), preserving list order + the fields
+ *  the storage / compiler layers read: `isModelAttribute`, `agentAccess` (a vector
+ *  cell FIELD's components inherit the field access), and a per-component
+ *  `boundaryValue` split. Each attr uses its OWN `vectorDims` (2 or 3). Non-vector
+ *  attributes pass through untouched. Returns the SAME array (identity) when there
+ *  are no vector attributes — the hot-path no-op. */
+export function expandVectorAttributes(attrs: Attribute[]): Attribute[] {
   if (!attrs.some(a => a.type === 'vector')) return attrs;
   const out: Attribute[] = [];
   for (const a of attrs) {
     if (a.type !== 'vector') { out.push(a); continue; }
+    const dims = vectorDimsOf(a);
     const ids = vectorComponentIds(a.id, dims);
     const labels = vectorComponentLabels(dims);
     const defaults = parseVectorDefault(a.defaultValue, dims);
@@ -104,4 +114,114 @@ export function expandVectorAttributes(attrs: Attribute[], dims: number): Attrib
  *  deciding whether to run the expansion / node lowering.) */
 export function hasVectorAttrs(attrs: readonly Attribute[]): boolean {
   return attrs.some(a => a.type === 'vector');
+}
+
+// ── The node-lowering + attr-expansion transform (one call per compiler) ──────
+const vIn = (p: string) => `input_value_${p}`;
+const vOut = (p: string) => `output_value_${p}`;
+const fIn = (p: string) => `input_flow_${p}`;
+const fOut = (p: string) => `output_flow_${p}`;
+const AXES = ['x', 'y', 'z'];
+
+/** The ONE compiler-facing transform: lowers `Get/Set Vector Attribute` nodes into
+ *  Make/Break Vector over per-component `getCellAttribute`/`setAttribute` nodes AND
+ *  expands the model's vector attributes into their scalar-float components — so the
+ *  rest of the compiler (which then runs `expandComposites` on the synthesized
+ *  Make/Break Vector) sees ONLY scalar floats + a scalar attribute list.
+ *
+ *  Run AFTER macro expansion / reroute collapse (so a Get/Set Vector inside a macro
+ *  is already flat) and BEFORE `expandComposites` (so the synthesized Make/Break
+ *  Vector get lowered). Returns the SAME nodes/edges/model (identity) when there are
+ *  no vector attrs AND no Get/Set Vector nodes — the hot-path no-op.
+ *
+ *  `Set Vector Attribute` (a FLOW node) lowers to a linear `setAttribute` chain
+ *  (`do → set_vx → set_vy[ → set_vz] → next`) fed by a `breakVector`; `Get Vector
+ *  Attribute` (a VALUE node) lowers to a `makeVector` fed by `getCellAttribute`s. */
+export function lowerVectorAttrs(
+  nodes: GraphNode[], edges: GraphEdge[], model: CAModel,
+): { nodes: GraphNode[]; edges: GraphEdge[]; model: CAModel } {
+  const cellVec = hasVectorAttrs(model.attributes ?? []);
+  const agentVec = hasVectorAttrs(model.agentAttributes ?? []);
+  const hasVecNodes = nodes.some(n => n.data.nodeType === 'getVectorAttribute' || n.data.nodeType === 'setVectorAttribute');
+  if (!cellVec && !agentVec && !hasVecNodes) return { nodes, edges, model };
+
+  // Vector-attr defs by id (both scopes) — a component-id + dims lookup.
+  const vecById = new Map<string, Attribute>();
+  for (const a of model.attributes ?? []) if (a.type === 'vector') vecById.set(a.id, a);
+  for (const a of model.agentAttributes ?? []) if (a.type === 'vector') vecById.set(a.id, a);
+
+  let seq = 0;
+  const nid = () => `__va${seq++}`;
+  const outNodes: GraphNode[] = [];
+  const outEdges: GraphEdge[] = [];
+  const dropIds = new Set<string>();
+  // Redirect a (nodeId, handle) → a replacement (nodeId, handle) at edge-rewire time.
+  const remapSrc = new Map<string, { source: string; sourceHandle: string }>();
+  const remapTgt = new Map<string, { target: string; targetHandle: string }>();
+
+  const mkNode = (nodeType: string, config: Record<string, string | number | boolean>): GraphNode => {
+    const n: GraphNode = { id: nid(), type: 'caNode', position: { x: 0, y: 0 }, data: { nodeType, config } };
+    outNodes.push(n);
+    return n;
+  };
+  const mkEdge = (s: string, sh: string, t: string, th: string) =>
+    outEdges.push({ id: nid() + 'e', source: s, sourceHandle: sh, target: t, targetHandle: th });
+
+  for (const n of nodes) {
+    const t = n.data.nodeType;
+    if (t === 'getVectorAttribute') {
+      const attrId = String(n.data.config?.attributeId ?? '');
+      const dims = vectorDimsOf(vecById.get(attrId));
+      const compIds = vectorComponentIds(attrId, dims);
+      const mv = mkNode('makeVector', {});
+      for (let i = 0; i < dims; i++) {
+        const gca = mkNode('getCellAttribute', { attributeId: compIds[i]! });
+        mkEdge(gca.id, vOut('value'), mv.id, vIn(AXES[i]!));
+      }
+      // Consumers of this node's `value` (vector) output → the makeVector's `vector`.
+      remapSrc.set(`${n.id} ${vOut('value')}`, { source: mv.id, sourceHandle: vOut('vector') });
+      dropIds.add(n.id);
+    } else if (t === 'setVectorAttribute') {
+      const attrId = String(n.data.config?.attributeId ?? '');
+      const dims = vectorDimsOf(vecById.get(attrId));
+      const compIds = vectorComponentIds(attrId, dims);
+      const bv = mkNode('breakVector', {});
+      const setNodes: GraphNode[] = [];
+      for (let i = 0; i < dims; i++) {
+        const sa = mkNode('setAttribute', { attributeId: compIds[i]! });
+        mkEdge(bv.id, vOut(AXES[i]!), sa.id, vIn('value'));
+        setNodes.push(sa);
+      }
+      for (let i = 0; i < dims - 1; i++) mkEdge(setNodes[i]!.id, fOut('next'), setNodes[i + 1]!.id, fIn('do'));
+      // The vector value input source → breakVector.vector.
+      remapTgt.set(`${n.id} ${vIn('value')}`, { target: bv.id, targetHandle: vIn('vector') });
+      // Flow in → first set's `do`; flow out ← last set's `next`.
+      remapTgt.set(`${n.id} ${fIn('do')}`, { target: setNodes[0]!.id, targetHandle: fIn('do') });
+      remapSrc.set(`${n.id} ${fOut('next')}`, { source: setNodes[dims - 1]!.id, sourceHandle: fOut('next') });
+      dropIds.add(n.id);
+    } else {
+      outNodes.push(n);
+    }
+  }
+
+  for (const e of edges) {
+    const rs = remapSrc.get(`${e.source} ${e.sourceHandle}`);
+    const rt = remapTgt.get(`${e.target} ${e.targetHandle}`);
+    // An edge touching a dropped node on a handle we did NOT remap is stale — drop it.
+    if ((dropIds.has(e.source) && !rs) || (dropIds.has(e.target) && !rt)) continue;
+    outEdges.push({
+      ...e,
+      source: rs ? rs.source : e.source,
+      sourceHandle: rs ? rs.sourceHandle : e.sourceHandle,
+      target: rt ? rt.target : e.target,
+      targetHandle: rt ? rt.targetHandle : e.targetHandle,
+    });
+  }
+
+  const model2: CAModel = {
+    ...model,
+    attributes: expandVectorAttributes(model.attributes ?? []),
+    agentAttributes: model.agentAttributes ? expandVectorAttributes(model.agentAttributes) : model.agentAttributes,
+  };
+  return { nodes: outNodes, edges: outEdges, model: model2 };
 }
