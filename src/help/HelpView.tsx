@@ -1313,6 +1313,13 @@ export function HelpView() {
               fall to the <em>left</em> of the heading versus the <em>right</em>. Steer by
               <em>Left &minus; Right</em> to turn toward (or away from) the crowded side &mdash;
               taxis and flocking asymmetry emerge from those two numbers alone.</li>
+            <li><strong>Facing / orientation</strong> &mdash; to have an agent look in a stored
+              direction rather than along its velocity, give it a <strong>Vector agent attribute</strong>
+              (e.g. &quot;facing&quot;), set the FOV node's Heading to <em>Wired</em>, and wire that
+              attribute into the Heading inputs through <em>Get Self Attribute</em> &rarr;
+              <em>Break Vector</em>. A stationary sentry can then still watch a fixed cone, and you can
+              rotate the facing over time with a normal Set Attribute + Vector Op. (Storing facing as a
+              vector avoids compass-angle trig entirely and runs on all three compile targets.)</li>
             <li><strong>Get Agent Offset</strong> &mdash; the <em>torus-shortest</em> displacement
               (dX, dY) and Distance from this agent to a neighbour. Use this (or <em>Get Agent
               Position</em> in its Relative mode) &mdash; not hand-subtracting two raw positions
