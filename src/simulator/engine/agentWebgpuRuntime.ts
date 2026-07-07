@@ -57,6 +57,9 @@ export interface AgentForceDispatchParams {
   fieldW: number;
   fieldH: number;
   bonding: number;
+  /** Collision capability (soft-sphere REPULSION / volume exclusion), gated
+   *  independently of bonding physics. Absent ⇒ falls back to `bonding`. */
+  doCollision?: number;
   torus: number;
   /** 3D extents (default 1 ⇒ 2D — the z stencil / integration is gated off). */
   nBinsZ?: number;
@@ -592,6 +595,7 @@ export function uploadAgentForceControl(rt: AgentWebGPURuntime, highWater: numbe
   fl[20] = fp.originX ?? 0;
   fl[21] = fp.originY ?? 0;
   fl[22] = fp.originZ ?? 0;
+  u[23] = (fp.doCollision ?? fp.bonding) >>> 0; // Collision capability (repulsion); fallback to bonding for older callers
   rt.device.queue.writeBuffer(rt.forceControlBuf, 0, ab);
 }
 

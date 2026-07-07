@@ -3486,11 +3486,16 @@ function preEmitAgentValues(ctx: AgentWasmCtx, rootId: string): void {
 //   (highWater, hashValid, nBinsX, nBinsY, nBinsZ : i32,
 //    binSizeX, binSizeY, binSizeZ : f64,
 //    dtOverEta, muR, muA, range, momentum, maxSpeed, growthRate : f64,
-//    W, H, D : f64, bonding, torus : i32)
+//    W, H, D : f64, bonding, torus : i32, originX, originY, originZ : f64,
+//    doCollision : i32)
 // `dtOverEta = dt / eta` is passed PRECOMPUTED (one division, bit-identical to JS's
-// per-iteration `(dt / eta)` since the operands are step-constant). `bonding`
-// gates BOTH the soft-sphere force (JS `engineForces`) AND the bond springs AND
-// the growth ramp (JS passes `growthRate=0` when off, but the gate keeps it tidy).
+// per-iteration `(dt / eta)` since the operands are step-constant). `bonding` gates
+// the ADHESION half of the soft-sphere (d>=sij cohesion), the bond springs, AND the
+// growth ramp (JS passes `growthRate=0` when off, but the gate keeps it tidy).
+// `doCollision` (the Collision capability) gates the REPULSION half (d<sij volume
+// exclusion) INDEPENDENTLY, so a pure gas (Collision on, bonding off) collides
+// without cohesion/springs. Soft-sphere runs when `bonding || doCollision`; the
+// per-branch coefficient is muRep=doCollision?muR:0 / muAdh=bonding?muA:0.
 // ===========================================================================
 
 /** The force-pass params (the worker mirrors this order exactly). */
@@ -3501,6 +3506,7 @@ const FORCE_PASS_PARAMS: ('i32' | 'f64')[] = [
   'f64', 'f64', 'f64',                   // W, H, D
   'i32', 'i32',                          // bonding, torus
   'f64', 'f64', 'f64',                   // originX, originY, originZ (the bbox-anchored hash grid origin)
+  'i32',                                 // doCollision (soft-sphere repulsion — the Collision capability, independent of bonding physics)
 ];
 
 interface ForcePassParamIdx {
@@ -3511,6 +3517,7 @@ interface ForcePassParamIdx {
   W: number; H: number; D: number;
   bonding: number; torus: number;
   originX: number; originY: number; originZ: number;
+  doCollision: number;
 }
 
 /** Emit the force-pass function body onto `em`. Reads the wasmBacked AgentStore at
@@ -3604,15 +3611,22 @@ function emitForcePass(em: WasmEmitter, layout: AgentMemoryLayout, is3d: boolean
         em.ifThen(() => {
           // dens++
           em.localGet(dens); em.f64Const(1); em.op(OP_F64_ADD); em.localSet(dens);
-          // if (engineForces=bonding) { d = sqrt(d2); F = ((d<sij)?muR:muA)*(d-sij); k=F/d; fx+=k*dx; ... }
-          em.localGet(P.bonding);
+          // Soft-sphere runs when EITHER bonding physics OR the Collision
+          // capability is on: repulsion (d<sij) IS the volume-exclusion collision,
+          // so it's gated on doCollision; adhesion (d>=sij) is cohesion, gated on
+          // bonding. doForce = bonding || doCollision. Mirrors the JS force pass.
+          //   if (doForce) { d = sqrt(d2); F = ((d<sij)?muRep:muAdh)*(d-sij); k=F/d; fx+=k*dx; ... }
+          //   muRep = doCollision ? muR : 0 ;  muAdh = bonding ? muA : 0
+          em.localGet(P.bonding); em.localGet(P.doCollision); em.op(OP_I32_OR);
           em.ifThen(() => {
             em.localGet(d2); em.op(OP_F64_SQRT); em.localSet(d);
-            // F = ((d < sij) ? muR : muA) * (d - sij)
+            // F = ((d < sij) ? muRep : muAdh) * (d - sij)
             em.localGet(d); em.localGet(sij); em.op(OP_F64_LT);
             em.ifThenElse(
-              () => { em.localGet(P.muR); em.localSet(Fl); },
-              () => { em.localGet(P.muA); em.localSet(Fl); },
+              // muRep = doCollision ? muR : 0
+              () => { em.localGet(P.muR); em.f64Const(0); em.localGet(P.doCollision); em.op(OP_SELECT); em.localSet(Fl); },
+              // muAdh = bonding ? muA : 0
+              () => { em.localGet(P.muA); em.f64Const(0); em.localGet(P.bonding); em.op(OP_SELECT); em.localSet(Fl); },
             );
             em.localGet(Fl); em.localGet(d); em.localGet(sij); em.op(OP_F64_SUB); em.op(OP_F64_MUL); em.localSet(Fl);
             // k = F / d
@@ -4315,6 +4329,7 @@ export function compileAgentGraphWasm(
     dtOverEta: 8, muR: 9, muA: 10, range: 11, momentum: 12, maxSpeed: 13, growthRate: 14,
     W: 15, H: 16, D: 17, bonding: 18, torus: 19,
     originX: 20, originY: 21, originZ: 22,
+    doCollision: 23,
   };
   let forceBody: Uint8Array;
   try {

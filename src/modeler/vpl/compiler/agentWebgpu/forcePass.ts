@@ -16,9 +16,11 @@
 //
 // 2D AND 3D aware (the z fields append when gridDepth > 1). f32 throughout —
 // statistical parity vs JS/WASM's f64, NOT bit-exact (the documented WebGPU
-// target constraint). The `bonding` flag (a control-uniform field) gates the
-// soft-sphere force + the growth ramp, exactly like the JS `engineForces` /
-// `growthRate` gates; density is always counted.
+// target constraint). The soft-sphere runs when `bonding || doCollision`: the
+// REPULSION half (d<sij volume exclusion = collision) is gated on the Collision
+// capability's `doCollision`, the ADHESION half (d>=sij cohesion) on `bonding`;
+// the growth ramp is gated on `growthRate > 0` (bonding-driven). density is always
+// counted. Mirrors the JS `engineForces`/`doCollision`/`growthRate` gates.
 //
 // HARD CONSTRAINT: like the behaviour compiler, this touches NO lattice/grid
 // WebGPU code + NO existing agent JS/WASM path → byte-identity holds BY
@@ -57,7 +59,7 @@ function emitForceControlStruct(): string {
   originX    : f32,
   originY    : f32,
   originZ    : f32,
-  _pad0      : f32,
+  doCollision : u32,
 };`;
 }
 
@@ -96,9 +98,15 @@ export function emitAgentForcePassWGSL(layout: AgentWebGPULayout): string {
       let rmax: f32 = fc.range * sij;
       if (d2 != 0.0 && d2 < rmax * rmax) {
         dens = dens + 1.0;
-        if (fc.bonding != 0u) {
+        // Soft-sphere runs when EITHER bonding physics OR the Collision capability
+        // is on: repulsion (d<sij) IS the volume-exclusion collision (gated on
+        // doCollision), adhesion (d>=sij) is cohesion (gated on bonding). Mirrors
+        // the JS/WASM force pass: muRep = doCollision?muR:0, muAdh = bonding?muA:0.
+        if (fc.bonding != 0u || fc.doCollision != 0u) {
           let d: f32 = sqrt(d2);
-          let mu: f32 = select(fc.muA, fc.muR, d < sij);
+          let muRep: f32 = select(0.0, fc.muR, fc.doCollision != 0u);
+          let muAdh: f32 = select(0.0, fc.muA, fc.bonding != 0u);
+          let mu: f32 = select(muAdh, muRep, d < sij);
           let F: f32 = mu * (d - sij);
           let k: f32 = F / d;
           fx = fx + k * dx; fy = fy + k * dy;${fz3}
