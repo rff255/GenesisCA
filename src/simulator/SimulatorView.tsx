@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState, type CSSProperties } from 'react';
 import { useModel } from '../model/ModelContext';
 import { compileGraph, compileAgentGraph } from '../modeler/vpl/compiler/compile';
+import { expandVectorAttributes } from '../modeler/vpl/compiler/vectorAttr';
 import { hasGlyphsInModel } from '../modeler/vpl/compiler/glyphsUsage';
 import { CURRENT_VIEWER_SENTINEL } from '../modeler/vpl/nodes/SetCellLooksNode';
 import { compileGraphWasm } from '../modeler/vpl/compiler/wasm/compile';
@@ -2945,9 +2946,12 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       width: w,
       height: h,
       depth: d,
-      attributes: model.attributes.map(toAttrDefMsg),
+      // Expand `vector` cell attributes into their scalar-float components so the
+      // worker SoA + computeMemoryLayout match the compiler's component reads/writes
+      // (ABI-mirror; the WASM layout expands identically). No-op when none.
+      attributes: expandVectorAttributes(model.attributes).map(toAttrDefMsg),
       // Generic Agent Platform: the AGENT attribute set (separate id-space).
-      agentAttributes: (model.agentAttributes ?? []).map(toAttrDefMsg),
+      agentAttributes: expandVectorAttributes(model.agentAttributes ?? []).map(toAttrDefMsg),
       neighborhoods: effModel.neighborhoods.map(n => ({ id: n.id, coords: n.coords, coords3d: n.coords3d })),
       boundaryTreatment: model.properties.boundaryTreatment,
       updateMode: model.properties.updateMode || 'synchronous',
@@ -3497,7 +3501,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
             trackedValues: i.trackedValues,
             watched: i.watched,
           })),
-          attributes: model.attributes.map(a => ({
+          attributes: expandVectorAttributes(model.attributes).map(a => ({
             id: a.id, type: a.type,
             isModelAttribute: a.isModelAttribute, defaultValue: a.defaultValue,
             tagOptions: a.tagOptions,

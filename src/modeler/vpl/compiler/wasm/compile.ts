@@ -46,6 +46,7 @@ import { canonicalizeAccessorEdges } from '../accessorCSE';
 import { injectLinkedOutputMappings } from '../linkedOutputMappings';
 import { collapseReroutes } from '../rerouteCollapse';
 import { expandComposites } from '../expandComposites';
+import { lowerVectorAttrs } from '../vectorAttr';
 import { expandMacros } from '../macroExpand';
 import { computeVolatileHoist } from '../volatileHoist';
 import { computeAsyncReadWriteHazards } from '../asyncWriteHazard';
@@ -7162,6 +7163,12 @@ export function compileGraphWasm(
   // nodes) collapse too, and before linked-OM / CSE / adjacency so nothing
   // downstream sees a reroute. See rerouteCollapse.ts.
   ({ nodes: graphNodes, edges: graphEdges } = collapseReroutes(graphNodes, graphEdges));
+
+  // Vector stored-attribute lowering — Get/Set Vector nodes → Make/Break Vector
+  // over per-component scalar reads/writes + reassign `model` to the
+  // component-expanded attrs/variables. The WASM layout (computeLayoutFromModel)
+  // expands identically, so offsets match (ABI-mirror). See vectorAttr.ts.
+  ({ nodes: graphNodes, edges: graphEdges, model } = lowerVectorAttrs(graphNodes, graphEdges, model));
 
   // Composite-type lowering — vector / colour nodes become scalar nodes so the
   // WASM emitters compile them natively (no JS-only clamp). See expandComposites.ts.
