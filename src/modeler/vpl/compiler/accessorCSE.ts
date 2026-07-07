@@ -119,6 +119,7 @@ const NEVER_PURE_TYPES = new Set<string>([
   'getAge',
   'getNearbyAgents',
   'getAgentsInView',
+  'senseHemifield',
   'getCurvature',
   'sampleField',
   'fieldGradient',

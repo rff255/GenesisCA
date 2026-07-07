@@ -1307,6 +1307,11 @@ export function HelpView() {
               and a <em>Heading</em> source &mdash; the agent's Velocity, or a Wired direction). A
               still agent (zero heading) sees all around; 180° is the full omnidirectional radius. Ideal
               for predators/prey that only react to what's in front of them.</li>
+            <li><strong>Sense Hemifield</strong> &mdash; the Braitenberg <strong>Left / Right</strong>
+              sensor: it runs the same vision cone but returns two counts &mdash; how many neighbours
+              fall to the <em>left</em> of the heading versus the <em>right</em>. Steer by
+              <em>Left &minus; Right</em> to turn toward (or away from) the crowded side &mdash;
+              taxis and flocking asymmetry emerge from those two numbers alone.</li>
             <li><strong>Get Agent Offset</strong> &mdash; the <em>torus-shortest</em> displacement
               (dX, dY) and Distance from this agent to a neighbour. Use this (or <em>Get Agent
               Position</em> in its Relative mode) &mdash; not hand-subtracting two raw positions
