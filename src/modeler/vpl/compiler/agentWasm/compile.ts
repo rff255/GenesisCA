@@ -99,6 +99,7 @@ import { is3dModel } from '../compile';
 import { expandMacros } from '../macroExpand';
 import { collapseReroutes } from '../rerouteCollapse';
 import { expandComposites } from '../expandComposites';
+import { lowerVectorAttrs, expandVectorAttributes } from '../vectorAttr';
 import { canonicalizeAccessorEdges } from '../accessorCSE';
 import { resolveKeyLabels } from '../variegation';
 import { readColorScaleStops, type ColorScaleStop } from '../../nodes/ColorScaleNode';
@@ -4168,17 +4169,22 @@ function emitForcePass(em: WasmEmitter, layout: AgentMemoryLayout, is3d: boolean
 // ---------------------------------------------------------------------------
 
 function flattenAgentGraph(nodes: GraphNode[], edges: GraphEdge[], model: CAModel):
-  { nodes: GraphNode[]; edges: GraphEdge[]; error?: string } {
+  { nodes: GraphNode[]; edges: GraphEdge[]; model: CAModel; error?: string } {
   const expanded = expandMacros(nodes, edges, model);
-  if (expanded.error) return { nodes, edges, error: expanded.error };
+  if (expanded.error) return { nodes, edges, model, error: expanded.error };
   let n = expanded.nodes, e = expanded.edges;
   ({ nodes: n, edges: e } = collapseReroutes(n, e));
+  // Vector stored-attribute lowering — Get/Set Vector nodes → Make/Break Vector over
+  // per-component scalar reads/writes + reassign `model` to the component-expanded
+  // agent attrs/variables (matching the layout, which expands identically). BEFORE
+  // expandComposites so the synthesized Make/Break Vector lower. See vectorAttr.ts.
+  ({ nodes: n, edges: e, model } = lowerVectorAttrs(n, e, model));
   // Composite-type lowering — vector / colour nodes become scalar nodes BEFORE
   // the gate + emitter see the graph, so a vector agent model runs on WASM (the
   // lowered arithmeticOperator/getConstant nodes are in the agent allowlist).
   ({ nodes: n, edges: e } = expandComposites(n, e, model));
   e = canonicalizeAccessorEdges(n, e, model);
-  return { nodes: n, edges: e };
+  return { nodes: n, edges: e, model };
 }
 
 /** The set of node ids reachable from the behaviourStep root (its `do` flow chain
@@ -4272,6 +4278,7 @@ export function compileAgentGraphWasm(
   const flat = flattenAgentGraph(agentNodes, agentEdges, model);
   if (flat.error) return empty(flat.error);
   const nodes = flat.nodes, edges = flat.edges;
+  model = flat.model;  // component-expanded (vector agent attrs → scalar floats)
 
   const behaviourNode = nodes.find(n => n.data.nodeType === 'behaviourStep');
   if (!behaviourNode) return empty('No Behaviour Step node in the agent graph.');
@@ -4671,7 +4678,10 @@ export function compileAgentGraphWasmForModel(model: CAModel): AgentWasmResult {
   // the AGENT attribute set (agentAttrsOf), the SAME ordered list the worker's
   // buildAgentAttrSpecs uses — they MUST match byte-for-byte or the WASM behaviour
   // reads/writes land on wrong-attribute bytes (the baked-offset lockstep).
-  const specs: AgentAttrSpec[] = agentAttrsOf(model)
+  // Expand vector agent attrs into their scalar-float components — the SAME
+  // expansion the worker applies to msg.agentAttributes (via SimulatorView) before
+  // buildAgentAttrSpecs, so the baked offsets stay in lockstep.
+  const specs: AgentAttrSpec[] = expandVectorAttributes(agentAttrsOf(model))
     .map(a => ({ id: a.id, type: a.type, defaultValue: 0 }));
   const maxAgents = Math.max(1, Math.floor((cfg.maxAgents as number) ?? 2000));
   // maxBonds may be 0 (pure-force models) — shared resolver keeps this byte-for-byte
