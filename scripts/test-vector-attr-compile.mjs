@@ -12,6 +12,8 @@ import { fileURLToPath, pathToFileURL } from 'url';
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const ENTRY = `
 export { compileGraph, compileAgentGraph } from '../src/modeler/vpl/compiler/compile.ts';
+export { compileGraphWasm } from '../src/modeler/vpl/compiler/wasm/compile.ts';
+export { computeLayoutFromModel, buildViewerIds } from '../src/modeler/vpl/compiler/wasm/layout.ts';
 export { migrateForHarness } from '../src/dev/compileHarness.ts';
 `;
 const dir = mkdtempSync(join(tmpdir(), 'gca-vac-'));
@@ -145,6 +147,23 @@ console.log(`${fail === 0 ? 'VECTOR-ATTR JS CELL COMPILE ✓' : `${fail} CELL FA
   console.log(`VECTOR LOCAL VARIABLE COMPILE ${fail === 0 ? '✓' : '✗'}`);
 }
 
+// ── WASM CELL: the same cell vector model must compile (compiler layout ≡ the
+// worker's, since both call computeLayoutFromModel/computeMemoryLayout which now
+// expand vector attrs). A byte-level "does it compile without error" check.
+{
+  const layout = m.computeLayoutFromModel(model);
+  const viewerIds = m.buildViewerIds(model);
+  const resW = m.compileGraphWasm(model.graphNodes, model.graphEdges, model, layout, viewerIds);
+  const wc = (n, c) => { if (!c) { fail++; console.log('FAIL wasm ' + n); } };
+  wc('no wasm compile error', !resW.error);
+  wc('wasm bytes emitted', resW.bytes && resW.bytes.length > 8);
+  // The layout must carry the component attr offsets (not the bare vector id).
+  wc('layout has heading_vx offset', layout.attrReadOffset && ('heading_vx' in layout.attrReadOffset));
+  wc('layout has heading_vy offset', layout.attrReadOffset && ('heading_vy' in layout.attrReadOffset));
+  wc('layout has NO bare heading offset', layout.attrReadOffset && !('heading' in layout.attrReadOffset));
+  console.log(`VECTOR-ATTR WASM CELL COMPILE ${fail === 0 ? '✓' : '✗'}${resW.error ? ' — ' + resW.error : ''}`);
+}
+
 rmSync(dir, { recursive: true, force: true });
-console.log(`\n${fail === 0 ? 'ALL JS VECTOR-ATTR COMPILE CHECKS ✓' : `${fail} FAILED`}`);
+console.log(`\n${fail === 0 ? 'ALL JS+WASM VECTOR-ATTR COMPILE CHECKS ✓' : `${fail} FAILED`}`);
 process.exit(fail === 0 ? 0 : 1);

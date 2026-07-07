@@ -27,6 +27,7 @@
 import type { CAModel } from '../../../../model/types';
 import { FACE_SLOT_COUNT, resolveKeyLabels } from '../variegation';
 import { hasGlyphsInModel } from '../glyphsUsage';
+import { expandVectorAttributes } from '../vectorAttr';
 
 export interface AttrDef {
   id: string;
@@ -419,7 +420,12 @@ export function computeMemoryLayout(
 export function computeLayoutFromModel(
   model: CAModel,
 ): MemoryLayout {
-  const cellAttrs = model.attributes.filter(a => !a.isModelAttribute);
+  // Lower any `vector` cell attribute into its scalar-float components BEFORE
+  // building the layout, so the WASM memory offsets match the compiler's
+  // component reads/writes (lowerVectorAttrs, run inside compileGraphWasm) — the
+  // ABI-mirror discipline. Vector attrs are cell/agent-only, so model attrs are
+  // unaffected. Identity no-op when there are none. See vectorAttr.ts.
+  const cellAttrs = expandVectorAttributes(model.attributes).filter(a => !a.isModelAttribute);
   const modelAttrs = model.attributes.filter(a => a.isModelAttribute);
   // 3D Grid CA: the nbr region is sized by neighbour COUNT (the stride). For a
   // 3D neighbourhood coords3d is the source of truth (coords stays a same-length
