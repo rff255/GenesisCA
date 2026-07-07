@@ -1214,8 +1214,12 @@ export function HelpView() {
             Physics</strong> needs <strong>Motion = Force</strong>), and a live{' '}
             <strong>per-agent footprint</strong> readout shows the memory cost of each choice.
             Existing models load with a tight, honest profile inferred from what their graph
-            actually uses. <em>(In this release the profile drives the editor surface; it does
-            not yet change what the engine allocates at run time.)</em>
+            actually uses. The physics capabilities also drive the ENGINE: <strong>Collision</strong>{' '}
+            turns on soft-sphere volume exclusion (overlapping agents repel), <strong>Bonds =
+            Physics</strong> makes bonds spring (Data bonds are force-free edges), and{' '}
+            <strong>Growth</strong> runs the radius ramp &mdash; each independently of the legacy
+            &ldquo;Use bonding physics&rdquo; master toggle. <em>(The profile does not yet shrink
+            the per-agent memory the engine allocates &mdash; that lands in a later phase.)</em>
           </p>
           <h3 className={styles.h3}>The Two-Graph Workflow (Cells vs Agents)</h3>
           <p className={styles.p}>
@@ -1465,14 +1469,18 @@ export function HelpView() {
               Query Radius</strong> (sizes the spatial hash so Get Nearby Agents within it stays
               fast), <strong>Time Step</strong> (auto-clamped for stability) and
               <strong> Drag</strong>.</li>
-            <li><strong>Use bonding physics</strong> &mdash; the master toggle for the built-in
-              engine, <strong>off by default</strong> when you enable Agents. Turn it on to reveal:
-              <strong> Forces</strong> (the soft-sphere law: <strong>Repulsion</strong>,
-              <strong> Adhesion</strong>, <strong>Interaction Range</strong>, <strong>Growth
-              Rate</strong>) and <strong>Bonds</strong> (<strong>Auto-bond by distance</strong>,
-              <strong> Bond Stiffness</strong>, and the <strong>Form / Break Distances</strong> &mdash;
-              a hysteresis band so bonds don't flicker). With it off, none of those engine forces
-              run &mdash; agents move only by your Apply Force / Set Velocity.</li>
+            <li><strong>Use bonding physics</strong> &mdash; the coarse legacy master toggle for the
+              built-in engine, <strong>off by default</strong> when you enable Agents. Turn it on to
+              reveal (and turn on together): <strong>Forces</strong> (the soft-sphere law:
+              <strong> Repulsion</strong>, <strong>Adhesion</strong>, <strong>Interaction Range</strong>,
+              <strong> Growth Rate</strong>) and <strong>Bonds</strong> (<strong>Auto-bond by
+              distance</strong>, <strong>Bond Stiffness</strong>, and the <strong>Form / Break
+              Distances</strong> &mdash; a hysteresis band so bonds don't flicker).{' '}
+              <em>For finer control the <strong>Agent Capabilities</strong> section drives these
+              individually and independently of this toggle: <strong>Collision</strong> runs the
+              repulsion on its own (a pure gas), <strong>Bonds = Physics</strong> the springs, and
+              <strong> Growth</strong> the radius ramp.</em> With both this toggle and the physics
+              capabilities off, agents move only by your Apply Force / Set Velocity.</li>
           </ul>
           <p className={styles.p}>
             In the Simulator, the <strong>Agents</strong> panel (docked in the right side panel)
