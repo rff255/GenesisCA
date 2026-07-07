@@ -1215,8 +1215,10 @@ export function HelpView() {
             <strong>per-agent footprint</strong> readout shows the memory cost of each choice.
             Existing models load with a tight, honest profile inferred from what their graph
             actually uses. The physics capabilities also drive the ENGINE: <strong>Collision</strong>{' '}
-            turns on soft-sphere volume exclusion (overlapping agents repel), <strong>Bonds =
-            Physics</strong> makes bonds spring (Data bonds are force-free edges), and{' '}
+            is volume exclusion &mdash; <em>Soft-sphere</em> is a springy repulsion force (agents may
+            transiently overlap) while <em>Positional</em> is a rigid no-overlap constraint (billiard
+            balls; tune with <em>Positional iterations</em>) &mdash; <strong>Bonds = Physics</strong>{' '}
+            makes bonds spring (Data bonds are force-free edges), and{' '}
             <strong>Growth</strong> runs the radius ramp &mdash; each independently of the legacy
             &ldquo;Use bonding physics&rdquo; master toggle. <em>(The profile does not yet shrink
             the per-agent memory the engine allocates &mdash; that lands in a later phase.)</em>
