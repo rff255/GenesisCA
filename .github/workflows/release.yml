@@ -122,16 +122,19 @@ jobs:
             if ($prev) { $notes += "`n`n**Full changelog:** https://github.com/$repo/compare/$prev...$tag" }
           }
 
-          # 3. Modernized download / browser footer (always appended).
-          $footer = @"
----
-
-### Download & run (Windows)
-Grab **``GenesisCA-$tag.exe``** from the Assets below and run it — no installer, no admin, runs from anywhere (even a USB stick). It's unsigned, so the first launch shows a Windows SmartScreen prompt: click **More info -> Run anyway**.
-
-### Or run it in your browser
-No download needed — open **https://genesisca.online** and (optionally) install it as an app from there via the **Install** button. Same version, always up to date.
-"@
+          # 3. Modernized download / browser footer (always appended). Built as an
+          # array joined by newlines (NOT a here-string): a PowerShell here-string
+          # terminator `"@` must sit at column 0, which the YAML block's indentation
+          # de-indent breaks — the array form is indentation-robust.
+          $footer = @(
+            '---',
+            '',
+            '### Download & run (Windows)',
+            "Grab **``GenesisCA-$tag.exe``** from the Assets below and run it — no installer, no admin, runs from anywhere (even a USB stick). It's unsigned, so the first launch shows a Windows SmartScreen prompt: click **More info -> Run anyway**.",
+            '',
+            '### Or run it in your browser',
+            'No download needed — open **https://genesisca.online** and (optionally) install it as an app from there via the **Install** button. Same version, always up to date.'
+          ) -join "`n"
 
           $full = "$notes`n`n$footer"
           $full | Out-File release-notes.md -Encoding utf8
