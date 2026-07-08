@@ -684,15 +684,30 @@ export const LATTICE_ONLY_TYPES = new Set<string>([
  *  undefined `idx` and fails at runtime with a cryptic "init compile failed: idx
  *  is not defined". In the Init Event you instead SPAWN + configure NEW agents by
  *  handle (Create Agent → Set Agent Position/Radius/Attribute → Add Agent To
- *  World). Excludes the by-id reader/writer nodes (getAgentPosition / getAgentOffset
- *  / getVelocity / setAgentAttribute / …): those address a specific agent via a
- *  wired handle and ARE valid in init, so badging them would be a false positive. */
+ *  World).
+ *
+ *  This flat set is the ALWAYS-invalid group (every instance emits `idx`, whatever
+ *  its config/wiring). The TWO WIRING-DEPENDENT nodes — `getVelocity` (falls back
+ *  to self `idx` only when its Agent input is UNWIRED) and `getAgentPosition`
+ *  (relative mode with an UNWIRED Reference falls back to `idx`) — are flagged
+ *  conditionally in `agentInitSelfOnlyNodeIds` (badging them unconditionally would
+ *  be a FALSE POSITIVE on a wired-to-a-handle instance, which IS valid in init).
+ *  `getAgentOffset` IS in this set: it computes an offset FROM self, so it emits
+ *  `_agentX[idx]` UNCONDITIONALLY (no wiring makes it init-safe).
+ *
+ *  NOT here (genuinely valid in init — highWater IS in the init ABI): the by-id
+ *  SETTERS (`setAgentAttribute`/`setAgentPosition`/… relax their range guard to
+ *  `_agentMaxAgents` under the init root) and the -1-fallback by-id READERS
+ *  (`getAgentRadius`/`getAgentAttribute`/`getAgentsAttribute`, absolute
+ *  `getAgentPosition`) — all address a specific handle, range-guarded, no `idx`. */
 const AGENT_SELF_ONLY_TYPES = new Set<string>([
   // self identity / geometry readers
   'getSelfPosition', 'getSelfHandle', 'getRadius', 'getAge', 'getBondDegree',
   'neighbourDensity', 'getCurvature',
   // self-centred neighbour access + the self bond loop
   'getNearbyAgents', 'getAgentsInView', 'senseHemifield', 'getBondedAgents', 'forEachBond',
+  // offset FROM self — always emits `_agentX[idx]` regardless of wiring
+  'getAgentOffset',
   // self writers
   'setVelocity', 'applyForce', 'setTargetRadius', 'divideAgent', 'formBond', 'breakBond', 'killAgent',
   // field bridge (sampled/deposited at the SELF position)
@@ -717,15 +732,19 @@ function agentInitSelfOnlyNodeIds(model: CAModel): Set<string> {
   const initNode = nodes.find(n => n.data?.nodeType === 'agentInit');
   if (initNode) {
     const nodeMap = new Map(nodes.map(n => [n.id, n] as const));
-    // flow-output adjacency (src → targets) + value-input adjacency (node → sources).
+    // flow-output adjacency (src → targets) + value-input adjacency (node → sources)
+    // + the set of WIRED value-input target handles per node (for the two
+    // wiring-dependent self-fallback nodes below).
     const flowOut = new Map<string, string[]>();
     const valIn = new Map<string, string[]>();
+    const wiredIn = new Map<string, Set<string>>();
     for (const e of edges) {
       const sh = e.sourceHandle || '', th = e.targetHandle || '';
       if (sh.startsWith('output_flow_') && th.startsWith('input_flow_')) {
         (flowOut.get(e.source) ?? (flowOut.set(e.source, []), flowOut.get(e.source)!)).push(e.target);
       } else if (sh.startsWith('output_value_') && th.startsWith('input_value_')) {
         (valIn.get(e.target) ?? (valIn.set(e.target, []), valIn.get(e.target)!)).push(e.source);
+        (wiredIn.get(e.target) ?? (wiredIn.set(e.target, new Set()), wiredIn.get(e.target)!)).add(th);
       }
     }
     // Flow-reachable from init (the nodes that RUN in the init function body).
@@ -746,7 +765,18 @@ function agentInitSelfOnlyNodeIds(model: CAModel): Set<string> {
     }
     for (const id of vseen) {
       const n = nodeMap.get(id);
-      if (n && AGENT_SELF_ONLY_TYPES.has(n.data?.nodeType)) result.add(id);
+      if (!n) continue;
+      const t = n.data?.nodeType;
+      if (AGENT_SELF_ONLY_TYPES.has(t)) { result.add(id); continue; }
+      // Wiring-dependent self-fallback: these emit `idx` (init-invalid) ONLY when
+      // the relevant id/reference input is UNWIRED; wired to a handle they read a
+      // specific agent (highWater-guarded, valid in init) → no badge.
+      const wired = wiredIn.get(id);
+      if (t === 'getVelocity' && !wired?.has('input_value_agentId')) {
+        result.add(id);
+      } else if (t === 'getAgentPosition' && n.data?.config?.mode === 'relative' && !wired?.has('input_value_refId')) {
+        result.add(id);
+      }
     }
   }
   _agentInitSelfCache = { nodes, edges, set: result };

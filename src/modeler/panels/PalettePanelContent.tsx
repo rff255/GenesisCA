@@ -200,9 +200,10 @@ export const PalettePanelContent = forwardRef<PaletteHandle, PalettePanelContent
       }
     };
     collect(model.graphNodes);
+    collect(model.agentGraphNodes ?? []); // Agents-graph instances count as "used"
     for (const md of (model.macroDefs || [])) collect(md.nodes);
     return ids;
-  }, [model.graphNodes, model.macroDefs]);
+  }, [model.graphNodes, model.agentGraphNodes, model.macroDefs]);
 
   const projectMacros = (model.macroDefs || [])
     .filter(m => usedMacroIds.has(m.id))
