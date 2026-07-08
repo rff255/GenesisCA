@@ -30,6 +30,7 @@
 // ===========================================================================
 
 import type { AgentStore } from './agentEngine';
+import { initAgentSlot, freeStagedSlot } from './agentEngine';
 import type { AgentWebGPULayout } from '../../modeler/vpl/compiler/agentWebgpu/layout';
 import { AGENT_GPU_F32_FIELDS, AGENT_GPU_F32_FIELDS_3D, AGENT_GPU_I32_FIELDS, AGENT_GPU_REQUEST_FIELDS } from '../../modeler/vpl/compiler/agentWebgpu/layout';
 
@@ -103,6 +104,14 @@ export interface AgentWebGPURuntime {
   auxF32Buf: GPUBuffer | null;
   indicatorsBuf: GPUBuffer | null;
   bondStoreBuf: GPUBuffer | null;
+  /** Mid-step spawning (binding 12) — a single-word atomic bump counter. null when
+   *  the behaviour graph never uses Create Agent / Add Agent To World. Init to
+   *  highWater before each dispatch; the shader allocates newborn slots by
+   *  `atomicAdd`; the readback reconciles the committed newborns into the CPU store. */
+  spawnCursorBuf: GPUBuffer | null;
+  /** True when spawnCursorBuf is live (agentAlive is bound read_write, and the
+   *  readback runs the spawn reconciliation). */
+  usesSpawn: boolean;
 
   // --- pipelines ---
   behaviourPipeline: GPUComputePipeline;
@@ -162,6 +171,7 @@ export interface AgentRuntimeUsage {
   usesBondStore?: boolean;
   usesIndicators?: boolean;
   usesAux?: boolean;
+  usesSpawn?: boolean;
 }
 
 export async function createAgentWebGPURuntime(
@@ -212,10 +222,16 @@ export async function createAgentWebGPURuntime(
   const STORAGE_RO = GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST;
   const UNIFORM = GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST;
 
+  // Mid-step spawning (Create Agent / Add To World): agentAlive is written on the
+  // GPU (Add To World marks a newborn live) + read back to reconcile, so it needs
+  // read_write storage + COPY_SRC; the spawnCursor atomic bump lives in its own tiny
+  // storage buffer (binding 12). Created only when the shader declared them (usage).
+  const hasSpawn = !!usage.usesSpawn;
   const agentF32Buf = mk('agentF32', f32Bytes(layout), STORAGE);
   // agentI32 needs COPY_SRC (readback) + read_write storage when setAgentType writes it.
   const agentI32Buf = mk('agentI32', i32Bytes(layout), usesI32Write ? STORAGE : STORAGE_RO);
-  const agentAliveBuf = mk('agentAlive', aliveBytes(layout), STORAGE_RO);
+  const agentAliveBuf = mk('agentAlive', aliveBytes(layout), hasSpawn ? STORAGE : STORAGE_RO);
+  const spawnCursorBuf = hasSpawn ? mk('agentSpawnCursor', 4, STORAGE) : null;
   const hashBinsBuf = mk('agentHashBins', hashBytes(layout), STORAGE_RO);
   const controlBuf = mk('agentControl', CONTROL_BYTES, UNIFORM);
   const rngStateBuf = mk('agentRngState', rngBytes(layout), STORAGE);
@@ -245,7 +261,7 @@ export async function createAgentWebGPURuntime(
   const behaviourEntries: GPUBindGroupLayoutEntry[] = [
     { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },
     { binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: i32WritesI32 ? 'storage' : 'read-only-storage' } },
-    { binding: 2, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },
+    { binding: 2, visibility: GPUShaderStage.COMPUTE, buffer: { type: hasSpawn ? 'storage' : 'read-only-storage' } },
     { binding: 3, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },
     { binding: 4, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'uniform' } },
     { binding: 5, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },
@@ -256,6 +272,7 @@ export async function createAgentWebGPURuntime(
   if (auxF32Buf) behaviourEntries.push({ binding: 9, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } });
   if (indicatorsBuf) behaviourEntries.push({ binding: 10, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } });
   if (bondStoreBuf) behaviourEntries.push({ binding: 11, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } });
+  if (spawnCursorBuf) behaviourEntries.push({ binding: 12, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } });
   const behaviourBGL = device.createBindGroupLayout({ label: 'agent-behaviour-bgl', entries: behaviourEntries });
   const behaviourPL = device.createPipelineLayout({ label: 'agent-behaviour-pl', bindGroupLayouts: [behaviourBGL] });
   const behaviourPipeline = await device.createComputePipelineAsync({
@@ -276,6 +293,7 @@ export async function createAgentWebGPURuntime(
   if (auxF32Buf) behaviourBgEntries.push({ binding: 9, resource: { buffer: auxF32Buf } });
   if (indicatorsBuf) behaviourBgEntries.push({ binding: 10, resource: { buffer: indicatorsBuf } });
   if (bondStoreBuf) behaviourBgEntries.push({ binding: 11, resource: { buffer: bondStoreBuf } });
+  if (spawnCursorBuf) behaviourBgEntries.push({ binding: 12, resource: { buffer: spawnCursorBuf } });
   const behaviourBindGroup = device.createBindGroup({
     label: 'agent-behaviour-bg', layout: behaviourBGL, entries: behaviourBgEntries,
   });
@@ -311,6 +329,7 @@ export async function createAgentWebGPURuntime(
     controlBuf, rngStateBuf, agentColorsBuf, forceControlBuf,
     fieldReadBuf, fieldDepositBuf,
     auxF32Buf, indicatorsBuf, bondStoreBuf,
+    spawnCursorBuf, usesSpawn: hasSpawn,
     behaviourPipeline, forcePipeline, behaviourBindGroup, forceBindGroup,
     stagingPool: new Map(),
     f32Upload: new Float32Array(layout.f32Len),
@@ -683,6 +702,14 @@ function dispatchAgents(pass: GPUComputePassEncoder, total: number): void {
 }
 
 /** Dispatch the behaviour shader then the force shader in one command buffer. */
+/** Seed the spawn cursor to `highWater` before a dispatch (the first newborn slot
+ *  the atomic bump hands out). No-op without a spawn buffer. */
+export function uploadAgentSpawnCursor(rt: AgentWebGPURuntime, highWater: number): void {
+  if (!rt.spawnCursorBuf) return;
+  const u = new Uint32Array([highWater >>> 0]);
+  rt.device.queue.writeBuffer(rt.spawnCursorBuf, 0, u.buffer, u.byteOffset, u.byteLength);
+}
+
 export function dispatchAgentStep(rt: AgentWebGPURuntime, highWater: number): void {
   const enc = rt.device.createCommandEncoder({ label: 'agent-step-enc' });
   const total = Math.max(1, highWater);
@@ -728,26 +755,40 @@ function acquireStaging(rt: AgentWebGPURuntime, byteSize: number): PooledBuffer 
  *  arrays (`divideRequest`/`bondFormReq`/`killRequest`/…) so `runAgentStructuralPhase`
  *  applies them CPU-side; (b) the user agent-attribute runs → `s.attrWrite[id]`
  *  (the "next" buffer — the caller swaps it in AFTER this readback); and (c) the
- *  packed `agentColors` → `s.colors` (per-agent RGBA for the render snapshot). */
-export async function readbackAgentStep(rt: AgentWebGPURuntime, s: AgentStore): Promise<void> {
+ *  packed `agentColors` → `s.colors` (per-agent RGBA for the render snapshot).
+ *
+ *  Unified spawning (usesSpawn): ALSO reads the atomic spawnCursor + the alive mask
+ *  and reconciles the GPU-allocated newborns in [oldHighWater, cursor) into the CPU
+ *  store — committed (alive) ones become live agents, staged-not-committed slots go
+ *  to the free-list, and highWater advances. Returns `spawnOverflow` when the cursor
+ *  ran past maxAgents (some Create Agent calls were dropped). */
+export async function readbackAgentStep(rt: AgentWebGPURuntime, s: AgentStore): Promise<{ spawnOverflow: boolean }> {
   const L = rt.layout, hw = s.highWater;
   const f32ByteLen = f32Bytes(L);
   const colByteLen = colorsBytes(L);
   const wantI32 = rt.usesI32Write;
   const i32ByteLen = i32Bytes(L);
+  const wantSpawn = rt.usesSpawn && !!rt.spawnCursorBuf;
+  const aliveByteLen = aliveBytes(L);
   const pooledF = acquireStaging(rt, f32ByteLen);
   const stagingF = pooledF.buffer;
   const pooledC = acquireStaging(rt, colByteLen);
   const stagingC = pooledC.buffer;
   const pooledI = wantI32 ? acquireStaging(rt, i32ByteLen) : null;
+  const pooledAlive = wantSpawn ? acquireStaging(rt, aliveByteLen) : null;
+  const pooledCursor = wantSpawn ? acquireStaging(rt, 4) : null;
   const enc = rt.device.createCommandEncoder({ label: 'agent-readback-enc' });
   enc.copyBufferToBuffer(rt.agentF32Buf, 0, stagingF, 0, f32ByteLen);
   enc.copyBufferToBuffer(rt.agentColorsBuf, 0, stagingC, 0, colByteLen);
   if (pooledI) enc.copyBufferToBuffer(rt.agentI32Buf, 0, pooledI.buffer, 0, i32ByteLen);
+  if (pooledAlive) enc.copyBufferToBuffer(rt.agentAliveBuf, 0, pooledAlive.buffer, 0, aliveByteLen);
+  if (pooledCursor && rt.spawnCursorBuf) enc.copyBufferToBuffer(rt.spawnCursorBuf, 0, pooledCursor.buffer, 0, 4);
   rt.device.queue.submit([enc.finish()]);
   await stagingF.mapAsync(GPUMapMode.READ, 0, f32ByteLen);
   await stagingC.mapAsync(GPUMapMode.READ, 0, colByteLen);
   if (pooledI) await pooledI.buffer.mapAsync(GPUMapMode.READ, 0, i32ByteLen);
+  if (pooledAlive) await pooledAlive.buffer.mapAsync(GPUMapMode.READ, 0, aliveByteLen);
+  if (pooledCursor) await pooledCursor.buffer.mapAsync(GPUMapMode.READ, 0, 4);
   const f = new Float32Array(stagingF.getMappedRange(0, f32ByteLen));
   const col = new Uint32Array(stagingC.getMappedRange(0, colByteLen));
   const xB = L.f32Base['xNext']!, yB = L.f32Base['yNext']!;
@@ -793,9 +834,57 @@ export async function readbackAgentStep(rt: AgentWebGPURuntime, s: AgentStore): 
   // (No i32 SoA readback: the agent i32 fields — lineage / bondCount — are
   // CPU-owned + uploaded read-only. There is no built-in agent "type" any more,
   // and no behaviour node writes the i32 SoA.)
+
+  // --- Unified spawning: reconcile the GPU-allocated newborns into the CPU store.
+  // The behaviour shader bump-allocated slots in [hw, cursor) (createAgent) and
+  // marked the committed ones alive (addAgentToWorld). Reconcile them here so the
+  // structural phase / snapshot see them as first-class agents from this step
+  // (they behave NEXT step — the next dispatch's highWater includes them). This is
+  // the GPU analogue of the JS/WASM grow-only `_agentCreate` + leak-sweep. */
+  let spawnOverflow = false;
+  if (pooledAlive && pooledCursor) {
+    const aliveArr = new Uint32Array(pooledAlive.buffer.getMappedRange(0, aliveByteLen));
+    const cursorArr = new Uint32Array(pooledCursor.buffer.getMappedRange(0, 4));
+    const ma = L.maxAgents;
+    const cursor = cursorArr[0]! >>> 0;
+    if (cursor > ma) spawnOverflow = true;   // some Create Agent calls got no slot
+    const end = Math.min(cursor, ma);
+    const x0 = L.f32Base['x']!, y0 = L.f32Base['y']!, z0 = is3d ? L.f32Base['z']! : -1;
+    const trB = L.f32Base['targetRadius']!;
+    for (let k = hw; k < end; k++) {
+      if (aliveArr[k] === 1) {
+        // A committed newborn — initialise the CPU slot's identity (initAgentSlot
+        // resets attrs→defaults + colour + sprites, the GPU analogue), then overlay
+        // the GPU-read attribute values (createAgent defaults + any setter overrides).
+        const nx = f[x0 + k]!, ny = f[y0 + k]!, nz = is3d ? f[z0 + k]! : 0, nr = f[radB + k]!;
+        initAgentSlot(s, k, nx, ny, nz, nr, k);
+        s.alive[k] = 1;
+        s.liveCount++;
+        s.targetRadius[k] = f[trB + k]!;   // a Set Agent Radius by handle may have changed it
+        for (const id of L.agentAttrIds) {
+          const base = L.agentAttrBase[id]!;
+          const dstR = s.attrRead[id] as { [i: number]: number } | undefined;
+          const dstW = s.attrWrite[id] as { [i: number]: number } | undefined;
+          if (!dstR) continue;
+          const isInt = s.attrKind[id] !== 'float64';
+          const v = isInt ? Math.round(f[base + k]!) : f[base + k]!;
+          dstR[k] = v; if (dstW) dstW[k] = v;
+        }
+      } else {
+        // Staged (Created) but never Added — a hole. Recycle its slot (bumps epoch,
+        // pushes to the free-list) so a later alloc reuses it. Mirrors the JS leak-sweep.
+        freeStagedSlot(s, k);
+      }
+    }
+    s.highWater = end;
+  }
+
   if (pooledI) { pooledI.buffer.unmap(); pooledI.inUse = false; }
+  if (pooledAlive) { pooledAlive.buffer.unmap(); pooledAlive.inUse = false; }
+  if (pooledCursor) { pooledCursor.buffer.unmap(); pooledCursor.inUse = false; }
   stagingF.unmap(); stagingC.unmap();
   pooledF.inUse = false; pooledC.inUse = false;
+  return { spawnOverflow };
 }
 
 // ---------------------------------------------------------------------------
@@ -808,7 +897,7 @@ export function destroyAgentWebGPURuntime(rt: AgentWebGPURuntime | null): void {
     rt.agentF32Buf, rt.agentI32Buf, rt.agentAliveBuf, rt.hashBinsBuf,
     rt.controlBuf, rt.rngStateBuf, rt.agentColorsBuf, rt.forceControlBuf,
     rt.fieldReadBuf, rt.fieldDepositBuf,
-    rt.auxF32Buf, rt.indicatorsBuf, rt.bondStoreBuf,
+    rt.auxF32Buf, rt.indicatorsBuf, rt.bondStoreBuf, rt.spawnCursorBuf,
   ];
   for (const b of bufs) { if (b) try { b.destroy(); } catch { /* non-fatal */ } }
   for (const bucket of rt.stagingPool.values()) for (const e of bucket) { try { e.buffer.destroy(); } catch { /* non-fatal */ } }
