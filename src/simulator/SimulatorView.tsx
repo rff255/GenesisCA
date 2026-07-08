@@ -7790,80 +7790,27 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
           </div>
           )}
 
-          {/* Splitter: drag to trade brush-section height for indicators height;
-              double-click resets to auto. Only when the cell brush is visible. */}
-          {(!isAgentModel || brushTarget === 'grid') && (model.indicators || []).length > 0 && (
-            <div
-              className={styles.rightSectionSplitter}
-              title="Drag to resize Input Mapping / Indicators split — double-click to reset"
-              onMouseDown={e => {
-                e.preventDefault();
-                const brushEl = brushSectionRef.current;
-                const panel = rightPanelRef.current;
-                if (!brushEl || !panel) return;
-                const startY = e.clientY;
-                const startH = brushEl.offsetHeight;
-                // Clamp the cap to >= the 60px floor so on a very short panel
-                // the min doesn't silently win over a sub-60 max (which would
-                // let the brush section eat the whole panel).
-                const maxH = Math.max(60, panel.offsetHeight - 140); // keep the indicators usable
-                const onMove = (ev: MouseEvent) => {
-                  setBrushSectionH(Math.max(60, Math.min(maxH, startH + (ev.clientY - startY))));
-                };
-                const onUp = () => {
-                  document.removeEventListener('mousemove', onMove);
-                  document.removeEventListener('mouseup', onUp);
-                };
-                document.addEventListener('mousemove', onMove);
-                document.addEventListener('mouseup', onUp);
-              }}
-              onDoubleClick={() => setBrushSectionH(null)}
-            />
-          )}
-
-          {/* Indicators Section (bottom, fills remaining space) */}
-          {(model.indicators || []).length > 0 && (
-            <div className={`${styles.rightPanelSection} ${styles.rightSectionIndicators}`}>
-              <div className={styles.panelHeader}>
-                <span className={styles.panelTitle}>Indicators</span>
-              </div>
-              <div className={styles.rightPanelSectionBody}>
-              <IndicatorDisplay
-                indicators={model.indicators || []}
-                values={indicatorValuesRef.current}
-                history={indicatorHistoryRef.current}
-                generation={generation}
-                gridWidth={gridWidth.current || simWidth}
-                gridHeight={gridHeight.current || simHeight}
-                gridDepth={gridDepth.current || 1}
-                vizModes={indicatorVizModes}
-                hiddenCategories={indicatorHiddenCategories}
-                chartOverrides={indicatorChartOverrides}
-                onToggleWatch={(id, watched) => updateIndicator(id, { watched })}
-                onChartToggle={(id, expanded) => {
-                  if (expanded) chartExpandedRef.current.add(id);
-                  else chartExpandedRef.current.delete(id);
-                }}
-                onCycleVizMode={cycleIndicatorVizMode}
-                onToggleCategory={toggleIndicatorCategory}
-                onChangeChartOverrides={changeIndicatorChartOverrides}
-                onClearHistory={clearIndicatorHistory}
-                categoryOrders={indicatorCategoryOrders}
-              />
-              </div>
-            </div>
-          )}
-
           {/* Agent Brush section — the target-specific brush details when the brush
               targets agents (parallel to the Input Mapping section for the CA Grid
               target). The shared Layers matrix + the Brush-affects switch moved to
               the common controls at the TOP of the panel. */}
           {isAgentModel && brushTarget === 'agents' && (
-            <div className={styles.rightPanelSection}>
+            <div
+              ref={brushSectionRef}
+              className={`${styles.rightPanelSection} ${styles.rightSectionBrush}`}
+              style={brushSectionH != null && (model.indicators || []).length > 0
+                ? { height: brushSectionH, flex: '0 0 auto' }
+                : (model.indicators || []).length > 0
+                  // Agent-brush content is tall — cap it by default so it doesn't
+                  // squeeze the indicators below (the splitter overrides this). The
+                  // body scrolls within the cap.
+                  ? { maxHeight: '55%', flex: '0 0 auto' }
+                  : undefined}
+            >
               <div className={styles.panelHeader}>
                 <span className={styles.panelTitle}>Agent Brush</span>
               </div>
-              <div className={styles.rightPanelSectionBody} style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: '0.66rem', maxHeight: 460, overflowY: 'auto' }}>
+              <div className={styles.rightPanelSectionBody} style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: '0.66rem' }}>
                   {/* Mode row — labels come from the id via textTransform:capitalize. */}
                   <div style={{ display: 'flex', gap: 3, flexWrap: 'wrap' }}>
                     {(['add', 'remove', 'move', 'edit', 'glue', 'cut', 'bond'] as const).map(m => (
@@ -8020,6 +7967,72 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
                     onClick={() => workerRef.current?.postMessage({ type: 'clearAgents', activeViewer: activeViewerRef.current })}
                     style={{ alignSelf: 'flex-start', padding: '3px 8px', borderRadius: 'var(--radius-sm)', cursor: 'pointer', border: '1px solid var(--color-widget-border)', background: 'transparent', color: 'var(--color-text-muted)', fontSize: '0.62rem' }}
                   >Clear all agents</button>
+              </div>
+            </div>
+          )}
+
+          {/* Splitter: drag to trade the ACTIVE brush section's height (Input
+              Mapping for the CA grid, Agent Brush for agents — both carry
+              brushSectionRef, and exactly one renders) for the indicators section
+              below. Double-click resets to auto (shrink-to-content). */}
+          {(model.indicators || []).length > 0 && (
+            <div
+              className={styles.rightSectionSplitter}
+              title="Drag to resize the brush / indicators split — double-click to reset"
+              onMouseDown={e => {
+                e.preventDefault();
+                const brushEl = brushSectionRef.current;
+                const panel = rightPanelRef.current;
+                if (!brushEl || !panel) return;
+                const startY = e.clientY;
+                const startH = brushEl.offsetHeight;
+                // Clamp the cap to >= the 60px floor so on a very short panel the
+                // min doesn't silently win over a sub-60 max (which would let the
+                // brush section eat the whole panel).
+                const maxH = Math.max(60, panel.offsetHeight - 140); // keep the indicators usable
+                const onMove = (ev: MouseEvent) => {
+                  setBrushSectionH(Math.max(60, Math.min(maxH, startH + (ev.clientY - startY))));
+                };
+                const onUp = () => {
+                  document.removeEventListener('mousemove', onMove);
+                  document.removeEventListener('mouseup', onUp);
+                };
+                document.addEventListener('mousemove', onMove);
+                document.addEventListener('mouseup', onUp);
+              }}
+              onDoubleClick={() => setBrushSectionH(null)}
+            />
+          )}
+
+          {/* Indicators Section (bottom, fills remaining space) */}
+          {(model.indicators || []).length > 0 && (
+            <div className={`${styles.rightPanelSection} ${styles.rightSectionIndicators}`}>
+              <div className={styles.panelHeader}>
+                <span className={styles.panelTitle}>Indicators</span>
+              </div>
+              <div className={styles.rightPanelSectionBody}>
+              <IndicatorDisplay
+                indicators={model.indicators || []}
+                values={indicatorValuesRef.current}
+                history={indicatorHistoryRef.current}
+                generation={generation}
+                gridWidth={gridWidth.current || simWidth}
+                gridHeight={gridHeight.current || simHeight}
+                gridDepth={gridDepth.current || 1}
+                vizModes={indicatorVizModes}
+                hiddenCategories={indicatorHiddenCategories}
+                chartOverrides={indicatorChartOverrides}
+                onToggleWatch={(id, watched) => updateIndicator(id, { watched })}
+                onChartToggle={(id, expanded) => {
+                  if (expanded) chartExpandedRef.current.add(id);
+                  else chartExpandedRef.current.delete(id);
+                }}
+                onCycleVizMode={cycleIndicatorVizMode}
+                onToggleCategory={toggleIndicatorCategory}
+                onChangeChartOverrides={changeIndicatorChartOverrides}
+                onClearHistory={clearIndicatorHistory}
+                categoryOrders={indicatorCategoryOrders}
+              />
               </div>
             </div>
           )}
