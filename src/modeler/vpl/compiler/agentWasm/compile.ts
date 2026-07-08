@@ -93,6 +93,12 @@ import { getNodeDef } from '../../nodes/registry';
  *  module (appended after pow..tanh at funcIdx 7). Used by the force pass's
  *  bit-exact torus wrap AND the Math node's `%` op. */
 const FMOD_FUNC_IDX = NUM_IMPORTED_FUNCS; // = 7
+/** Unified spawning host imports (appended after fmod): Create Agent + Add Agent To
+ *  World in the behaviour graph. `env.agentCreate(x,y,z,r) -> i32 handle` (grow-only
+ *  alloc over the shared memory) + `env.agentAddToWorld(id)`. Same JS closures the
+ *  Init Event uses, so JS↔WASM behaviour-Create is bit-identical. */
+const AGENT_CREATE_FUNC_IDX = NUM_IMPORTED_FUNCS + 1; // = 8
+const AGENT_ADD_FUNC_IDX = NUM_IMPORTED_FUNCS + 2;    // = 9
 import { emitWasm } from '../expression/emitWasm';
 import { buildVarMap, parseExpression, clampVisibleCount } from '../expression/parser';
 import { is3dModel } from '../compile';
@@ -145,6 +151,9 @@ export const AGENT_WASM_SUPPORTED_TYPES: ReadonlySet<string> = new Set<string>([
   'setVelocity', 'setAgentPosition', 'setAgentRadius',
   // structural writes (the post-step CPU structural phase reads the requests)
   'divideAgent', 'formBond', 'breakBond', 'killAgent',
+  // unified spawning — Create Agent + Add Agent To World in the behaviour graph
+  // (via env.agentCreate / env.agentAddToWorld host imports)
+  'createAgent', 'addAgentToWorld',
   // field bridge (the closed agent↔grid morphogen feedback)
   'sampleField', 'fieldGradient', 'readCellsUnder', 'affectCellsUnder', 'secreteToField',
   // colour + tables + model attrs
@@ -2351,6 +2360,29 @@ function compileFlowNode(ctx: AgentWasmCtx, nodeId: string): void {
       compileFlowChain(ctx, node.id, 'next');
       break;
     }
+    case 'createAgent': {
+      // Unified spawning — handle = env.agentCreate(x, y, z, radius) (a grow-only
+      // alloc host closure over the shared memory, staging the slot at alive=0). The
+      // handle is an i32 value output consumed by sibling flow nodes (Add / set-by-id).
+      pushValueInputF64(ctx, node, 'x', 0);
+      pushValueInputF64(ctx, node, 'y', 0);
+      if (ctx.is3d) pushValueInputF64(ctx, node, 'z', 0); else em.f64Const(0);
+      pushValueInputF64(ctx, node, 'radius', 1);
+      em.emit(opCall(AGENT_CREATE_FUNC_IDX));   // (f64,f64,f64,f64) -> i32 handle
+      const hLocal = em.allocLocal(I32);
+      em.localSet(hLocal);
+      setCachedPort(ctx, node.id, 'handle', { localIdx: hLocal, valtype: I32 });
+      compileFlowChain(ctx, node.id, 'next');
+      break;
+    }
+    case 'addAgentToWorld': {
+      // env.agentAddToWorld(handle) — commit the staged agent (alive=1). The host
+      // closure only commits ids this step's Create staged (ghost-commit guard).
+      pushValueAs(em, resolveValueInput(ctx, node, 'handle', -1), I32);
+      em.emit(opCall(AGENT_ADD_FUNC_IDX));
+      compileFlowChain(ctx, node.id, 'next');
+      break;
+    }
     case 'setIndicator': {
       const idxN = (node.data.config?.['_indicatorIdx'] as number) ?? -1;
       if (idxN >= 0) { em.i32Const(0); pushValueInputF64(ctx, node, 'value', 0); em.f64Store(ctx.layout.indicatorsOffset + idxN * 8, 3); }
@@ -2387,13 +2419,14 @@ function compileFlowNode(ctx: AgentWasmCtx, nodeId: string): void {
 function emitGuardedAgentWrite(ctx: AgentWasmCtx, node: GraphNode, portId: string, body: (aLocal: number) => void): void {
   const em = ctx.em;
   const a = em.allocLocal(I32); pushValueAs(em, resolveValueInput(ctx, node, portId, -1), I32); em.localSet(a);
-  // behaviour: a >= 0 && a < highWater && alive[a]
+  // Unified spawning: RANGE-ONLY guard `a >= 0 && a < maxAgents` (maxAgents baked
+  // from the layout), matching the JS behaviour-root relax — so a freshly Created
+  // agent (STAGED, alive=0, id >= the loop bound) can be configured on the handle.
+  // Writing a dead slot is a harmless no-op (dead slots aren't read/rendered), and
+  // Get Nearby Agents only returns live agents so real neighbour writes are unaffected.
   em.localGet(a); em.i32Const(0); em.op(OP_I32_GE_S);
-  em.localGet(a); em.localGet(ctx.highWaterLocal); em.op(OP_I32_LT_S); em.op(OP_I32_AND);
-  em.ifThen(() => {
-    em.localGet(a); em.i32Const(ctx.layout.u8['alive']!); em.op(OP_I32_ADD); em.i32Load8U();
-    em.ifThen(() => body(a));
-  });
+  em.localGet(a); em.i32Const(ctx.layout.maxAgents); em.op(OP_I32_LT_S); em.op(OP_I32_AND);
+  em.ifThen(() => body(a));
 }
 
 /** Divide-axis write: `_divideAxisX[idx] = <wired ? value : NaN>`. The engine
@@ -4532,7 +4565,9 @@ export function compileAgentGraphWasm(
   // are UNCHANGED. The two module-defined funcs then sit at funcIdx 8 (behaviour)
   // and 9 (forcePass).
   // FMOD_FUNC_IDX (module-scope const above) = NUM_IMPORTED_FUNCS = 7.
-  const NUM_IMPORTED_FUNCS_FORCE = NUM_IMPORTED_FUNCS + 1; // 8 (incl. fmod)
+  // +3 imported funcs after pow..tanh: fmod (7) + agentCreate (8) + agentAddToWorld
+  // (9). The two module-defined funcs then sit at funcIdx 10 (behaviour) + 11 (forcePass).
+  const NUM_IMPORTED_FUNCS_FORCE = NUM_IMPORTED_FUNCS + 3; // 10 (incl. fmod + agentCreate + agentAddToWorld)
   const fpEm = new WasmEmitter(FORCE_PASS_PARAMS.length);
   const FP: ForcePassParamIdx = {
     highWater: 0, hashValid: 1, nBinsX: 2, nBinsY: 3, nBinsZ: 4,
@@ -4556,15 +4591,20 @@ export function compileAgentGraphWasm(
   const typePow = funcType([F64, F64], [F64]);                                              // type 1 — pow / fmod
   const typeUnary = funcType([F64], [F64]);                                                 // type 2 — exp/log/sin/cos/tan/tanh
   const typeForce = funcType(FORCE_PASS_PARAMS.map(p => (p === 'i32' ? I32 : F64)), []);    // type 3 — forcePass
-  const TYPE_BEHAVIOUR = 0, TYPE_POW = 1, TYPE_UNARY = 2, TYPE_FORCE = 3;
+  const typeCreate = funcType([F64, F64, F64, F64], [I32]);                                 // type 4 — env.agentCreate
+  const typeAdd = funcType([I32], []);                                                      // type 5 — env.agentAddToWorld
+  const TYPE_BEHAVIOUR = 0, TYPE_POW = 1, TYPE_UNARY = 2, TYPE_FORCE = 3, TYPE_CREATE = 4, TYPE_ADD = 5;
   const powImport = importEntry('env', 'pow', importFuncDesc(TYPE_POW));
   const unaryNames = ['exp', 'log', 'sin', 'cos', 'tan', 'tanh'];
   const unaryImports = unaryNames.map(nm => importEntry('env', nm, importFuncDesc(TYPE_UNARY)));
   const fmodImport = importEntry('env', 'fmod', importFuncDesc(TYPE_POW)); // (f64,f64)->f64
+  // Unified spawning host imports — funcIdx AGENT_CREATE_FUNC_IDX (8) / AGENT_ADD_FUNC_IDX (9).
+  const agentCreateImport = importEntry('env', 'agentCreate', importFuncDesc(TYPE_CREATE));
+  const agentAddImport = importEntry('env', 'agentAddToWorld', importFuncDesc(TYPE_ADD));
 
   const bytes = buildModule({
-    types: [typeBehaviour, typePow, typeUnary, typeForce],
-    imports: [memImport, powImport, ...unaryImports, fmodImport],
+    types: [typeBehaviour, typePow, typeUnary, typeForce, typeCreate, typeAdd],
+    imports: [memImport, powImport, ...unaryImports, fmodImport, agentCreateImport, agentAddImport],
     funcs: [leb128u(TYPE_BEHAVIOUR), leb128u(TYPE_FORCE)],
     exports: [
       exportEntry('behaviour', EXPORT_FUNC, NUM_IMPORTED_FUNCS_FORCE + 0),
@@ -4593,6 +4633,11 @@ function variableInitNum(v: { dataType: string; initialValue?: string }): number
 export async function instantiateAgentWasm(
   bytes: Uint8Array,
   memory: WebAssembly.Memory,
+  /** Unified spawning: the grow-only Create Agent + Add Agent To World host closures
+   *  (the SAME ones the JS behaviour + the Init Event use, so behaviour-Create is
+   *  bit-identical across targets). Default no-ops when the worker doesn't pass them. */
+  agentCreate: (x: number, y: number, z: number, radius: number) => number = () => -1,
+  agentAddToWorld: (id: number) => void = () => {},
 ): Promise<{ behaviour: (...args: number[]) => void; forcePass: ((...args: number[]) => void) | null }> {
   const importObj = {
     env: {
@@ -4601,6 +4646,8 @@ export async function instantiateAgentWasm(
       sin: Math.sin, cos: Math.cos, tan: Math.tan, tanh: Math.tanh,
       // The force pass's torus position wrap uses JS native `%` (exact fmod).
       fmod: (a: number, b: number): number => a % b,
+      // Unified spawning host imports (funcIdx 8 / 9).
+      agentCreate, agentAddToWorld,
     },
   };
   const mod = await WebAssembly.instantiate(bytes, importObj);

@@ -523,6 +523,31 @@ let centerBasedConfig: CenterBasedConfig | null = null;
  *  Null until the agent compile path ships it (PR-A2.5/A3). */
 let agentBehaviourFn: Function | null = null;
 let agentInitFn: Function | null = null;
+/** Unified spawning — the STABLE grow-only Create Agent + Add Agent To World host
+ *  closures for the BEHAVIOUR graph (mid-step spawning, the same idiom as the Init
+ *  Event). They're module-level (not per-step) so the WASM `env.agentCreate` /
+ *  `env.agentAddToWorld` imports — bound ONCE at instantiate — share the EXACT same
+ *  logic as the JS behaviour → bit-identical. GROW-ONLY: a mid-step Create appends
+ *  at highWater (never reuses a free-list hole ahead of the loop cursor), so a
+ *  newborn is beyond the fixed loop bound → configured this step, behaves next step.
+ *  `runAgentStep` clears the per-step created list at the top + leak-sweeps it after. */
+const spawnCreatedSet = new Set<number>();
+const spawnCreatedList: number[] = [];
+const agentBehaviourCreate = (bx: number, by: number, bz: number, br: number): number => {
+  const s = agentStore; if (!s) return -1;
+  if (s.highWater >= s.maxAgents) return -1;   // overflow → -1; downstream Set/Add no-op
+  const id = s.highWater++;
+  initAgentSlot(s, id, bx, by, bz || 0, br || cbNum(centerBasedConfig!, 'defaultRadius'), id);
+  s.alive[id] = 0;                             // STAGE (un-committed until Add To World)
+  spawnCreatedSet.add(id); spawnCreatedList.push(id);
+  return id;
+};
+const agentBehaviourAddToWorld = (id: number): void => {
+  const s = agentStore; if (!s) return;
+  // Only commit ids THIS step's Create Agent staged (an arbitrary wired id must not
+  // ghost-commit a dead/uninitialised slot). Idempotent on already-live ids.
+  if (spawnCreatedSet.has(id) && !s.alive[id]) { s.alive[id] = 1; s.liveCount++; }
+};
 /** The current-step spatial hash, built BEFORE the behaviour fn so Get Nearby
  *  Agents can query it, then reused by the force pass. Null for a tiny world. */
 let currentAgentHash: SpatialHash | null = null;
@@ -775,7 +800,7 @@ function instantiateAgentWasmIfNeeded(): void {
   const mem = store.memory;
   void (async () => {
     try {
-      const inst = await instantiateAgentWasm(bytes, mem);
+      const inst = await instantiateAgentWasm(bytes, mem, agentBehaviourCreate, agentBehaviourAddToWorld);
       // Guard against a re-init that swapped the store out from under us.
       if (agentStore === store && agentTarget === 'wasm') {
         agentBehaviourWasmFn = inst.behaviour;
@@ -1226,28 +1251,13 @@ function runAgentStep(): void {
   // into the reserved in-memory views (S10) when it fits the layout's reserve;
   // the hash DIMENSIONS ride the call args. If the hash overflows the reserve
   // (the fits-check), we fall back to JS for this step (never silently wrong).
-  // Unified spawning — the Create Agent + Add Agent To World host closures for the
-  // BEHAVIOUR graph (mid-step spawning, the same idiom as the Init Event). GROW-ONLY:
-  // a mid-step Create appends at highWater (never reuses a free-list hole, which
-  // could sit ahead of the loop cursor and be double-processed this step), so a
-  // newborn is beyond the fixed loop bound `hw` → it is fully configured this step
-  // but runs its own behaviour NEXT step. Staged (alive=0) until Add To World.
-  const spawnCreatedSet = new Set<number>();
-  const spawnCreatedList: number[] = [];
-  const behaviourAgentCreate = (bx: number, by: number, bz: number, br: number): number => {
-    if (s.highWater >= s.maxAgents) return -1;   // overflow → -1; downstream Set/Add no-op
-    const id = s.highWater++;
-    initAgentSlot(s, id, bx, by, bz || 0, br || cbNum(cfg!, 'defaultRadius'), id);
-    s.alive[id] = 0;                             // STAGE (un-committed until Add To World)
-    spawnCreatedSet.add(id); spawnCreatedList.push(id);
-    return id;
-  };
-  const behaviourAgentAddToWorld = (id: number): void => {
-    // Only commit ids THIS step's Create Agent staged (an arbitrary wired id must not
-    // ghost-commit a dead/uninitialised slot). Idempotent on already-live ids.
-    if (spawnCreatedSet.has(id) && !s.alive[id]) { s.alive[id] = 1; s.liveCount++; }
-  };
-  const runBehaviourJs = () => agentBehaviourFn!(...buildAgentLoopArgs(s, undefined, behaviourAgentCreate, behaviourAgentAddToWorld));
+  // Unified spawning — RESET the per-step created-slot tracking. The grow-only
+  // Create Agent + Add Agent To World closures (module-level `agentBehaviourCreate` /
+  // `agentBehaviourAddToWorld`) are STABLE (so the WASM `env.agentCreate`/`env.agentAddToWorld`
+  // imports, bound once at instantiate, share the SAME logic as the JS behaviour →
+  // bit-identical). They read `agentStore` + this per-step list.
+  spawnCreatedList.length = 0; spawnCreatedSet.clear();
+  const runBehaviourJs = () => agentBehaviourFn!(...buildAgentLoopArgs(s, undefined, agentBehaviourCreate, agentBehaviourAddToWorld));
 
   let ranWasm = false;
   // W1 — force-pass eligibility + the hash dims it reuses. The WASM force pass can
@@ -1347,7 +1357,11 @@ function runAgentStep(): void {
     try {
       const dtOverEta = dt / eta;
       agentForcePassWasmFn(
-        s.highWater, fpHashValid, fpNBinsX, fpNBinsY, fpNBinsZ,
+        // `hw` (the PRE-behaviour bound), not the post-spawn `s.highWater`, so a
+        // mid-step-Created newborn (grow-allocated beyond `hw`) is NOT force-integrated
+        // the step it's born — it stays where Create placed it (matches the JS force
+        // loop, which also iterates `hw`). Identical for non-spawn (hw === s.highWater).
+        hw, fpHashValid, fpNBinsX, fpNBinsY, fpNBinsZ,
         fpBinSizeX, fpBinSizeY, fpBinSizeZ,
         dtOverEta, muR, muA, range, momentum, maxSpeed, growthRate,
         W, H, D, bonding ? 1 : 0, torus ? 1 : 0,
