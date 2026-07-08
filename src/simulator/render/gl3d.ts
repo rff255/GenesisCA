@@ -915,8 +915,12 @@ export class Gl3DRenderer {
       const c = i * 4;
       // A decoded, in-slot sprite-agent draws a billboard (below) instead of the
       // sphere; flag it via a NEGATIVE radius so the sphere FS discards it while
-      // pick + the buffer stride stay unchanged.
+      // pick + the buffer stride stay unchanged. The magnitude is the sprite's
+      // effective half-extent (not the raw radius) so the invisible pick-sphere
+      // covers the whole scaled/aspect-shaped billboard — clicking the sprite's
+      // edge to move/inspect/edit it registers.
       let isSprite = false;
+      let spritePickR = 0;
       if (sp && sids[i]! > 0) {
         const meta = this.spriteSlots.get(sids[i]!);
         if (meta) {
@@ -928,6 +932,7 @@ export class Gl3DRenderer {
           const aspect = meta.aspect;
           let halfW = diameter / 2, halfH = diameter / 2;
           if (aspect >= 1) halfH = diameter / (2 * aspect); else halfW = (diameter * aspect) / 2;
+          spritePickR = Math.max(halfW, halfH);  // pick-sphere covers the billboard
           // Facing: the per-agent rotation the node set (compass deg, 0 = up),
           // OR the world-XY velocity heading when the asset auto-orients (matches
           // the 2D atan2(vx,-vy) convention). Aligned to the art's default + offset.
@@ -947,7 +952,7 @@ export class Gl3DRenderer {
           isSprite = true;
         }
       }
-      d[o + 3] = isSprite ? -snap.radius[i]! : snap.radius[i]!;
+      d[o + 3] = isSprite ? -spritePickR : snap.radius[i]!;
       d[o + 4] = snap.colors[c]! / 255;
       d[o + 5] = snap.colors[c + 1]! / 255;
       d[o + 6] = snap.colors[c + 2]! / 255;
