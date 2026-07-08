@@ -16,6 +16,7 @@ import { injectAgentLinkedOutputMappings } from './agentLinkedOutputMappings';
 import { collapseReroutes } from './rerouteCollapse';
 import { expandComposites } from './expandComposites';
 import { lowerVectorAttrs } from './vectorAttr';
+import { lowerFacingSource } from './facingSource';
 import { computeAsyncReadWriteHazards } from './asyncWriteHazard';
 import { expandMacros } from './macroExpand';
 import { computeVolatileHoist } from './volatileHoist';
@@ -2214,6 +2215,10 @@ export function compileAgentGraph(
     agentEdges = expanded.edges;
   }
   ({ nodes: agentNodes, edges: agentEdges } = collapseReroutes(agentNodes, agentEdges));
+  // FOV `facing` heading source → Get Self Attribute [vector] → Break Vector → wired
+  // heading (BEFORE vector lowering, so the synthesized read is lowered). No-op unless
+  // a Get Agents In View / Sense Hemifield uses a resolvable facing source.
+  ({ nodes: agentNodes, edges: agentEdges } = lowerFacingSource(agentNodes, agentEdges, model));
   // Vector stored-attribute lowering (agent scope) — see the cell compiler + vectorAttr.ts.
   ({ nodes: agentNodes, edges: agentEdges, model } = lowerVectorAttrs(agentNodes, agentEdges, model));
   ({ nodes: agentNodes, edges: agentEdges } = expandComposites(agentNodes, agentEdges, model));

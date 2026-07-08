@@ -498,6 +498,23 @@ export function detectMissingConfig(
       }
       break;
     }
+    case 'getAgentsInView':
+    case 'senseHemifield': {
+      // The FOV `facing` heading source reads a stored VECTOR agent attribute (a
+      // direction). Requires a valid vector attr + the Orientation capability
+      // (which represents "this model uses a stored facing").
+      if (config.headingSource === 'facing') {
+        const attrId = config.facingAttributeId;
+        const attr = typeof attrId === 'string'
+          ? (model.agentAttributes ?? []).find(a => a.id === attrId) : undefined;
+        if (!attr || attr.type !== 'vector') {
+          issues.push('Facing heading source: select a vector agent attribute (the stored direction).');
+        } else if (!resolveAgentProfile(model).orientation) {
+          issues.push('The Facing heading source needs the Orientation capability. Enable it in Model Properties > Agent Capabilities.');
+        }
+      }
+      break;
+    }
   }
 
   return issues;

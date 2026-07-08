@@ -400,7 +400,8 @@ export const AGENT_CAPABILITY_ROWS: CapabilityRowMeta[] = [
  *  (Create Agent / Add To World in the Agent Init Event) — that is a core path. */
 export const HIDDEN_CAP_ROWS_V1: ReadonlySet<keyof AgentCapabilities> = new Set([
   'populationBirth', // Spawn Agent / Spawn Event nodes are not registered yet.
-  'orientation',     // gates no registered node; only feeds the deferred FOV heading.
+  // 'orientation' un-hidden: it now gates the FOV `facing` heading source (Get
+  // Agents In View / Sense Hemifield read a stored vector facing attribute).
 ]);
 
 // ---------------------------------------------------------------------------
