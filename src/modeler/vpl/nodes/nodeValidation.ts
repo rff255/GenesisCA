@@ -795,6 +795,42 @@ export function isNodeAvailable(def: NodeTypeDef, model: CAModel): boolean {
   return true;
 }
 
+/** True when a macro can be dropped on the ACTIVE graph — every internal node must
+ *  be compatible with the active graph kind. A CELL macro containing a lattice-only
+ *  node (neighbour access, cell event roots, …) can't run on the Agents graph, and
+ *  an AGENT macro containing a `bondGraph` node can't run on the Cells graph — either
+ *  would fail to compile after the drop. Recurses into nested macro instances (cycle
+ *  guarded). Universal-only macros are available on BOTH graphs (the common case).
+ *  Prevents the confusing "dropped a macro that silently won't compile" failure. */
+export function isMacroAvailableOnGraph(
+  macroNodes: ReadonlyArray<{ data?: { nodeType?: string; config?: Record<string, unknown> } }> | undefined,
+  model: CAModel,
+  seen: Set<string> = new Set(),
+): boolean {
+  const kind = getActiveGraphKind();
+  for (const n of macroNodes ?? []) {
+    const t = n.data?.nodeType;
+    if (!t || t === 'macroInput' || t === 'macroOutput') continue;
+    if (t === 'macro') {
+      const defId = n.data?.config?.macroDefId;
+      if (typeof defId === 'string' && !seen.has(defId)) {
+        seen.add(defId);
+        const nested = model.macroDefs?.find(d => d.id === defId);
+        if (nested && !isMacroAvailableOnGraph(nested.nodes, model, seen)) return false;
+      }
+      continue;
+    }
+    if (kind === 'agents') {
+      // Lattice-only nodes (neighbour family, cell roots, …) can't run on agents.
+      if (LATTICE_ONLY_TYPES.has(t) || getNodeDef(t)?.requirements?.lattice) return false;
+    } else if (kind === 'cells') {
+      // Bond-graph (agent-only) nodes can't run on the cell grid.
+      if (getNodeDef(t)?.requirements?.bondGraph) return false;
+    }
+  }
+  return true;
+}
+
 /** Wave 3 — return WebGPU-target-specific issues for a node configuration.
  *
  *  WebGPU runs cells in parallel on the GPU, so any rule whose result depends
