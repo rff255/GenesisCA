@@ -102,6 +102,8 @@ export const AGENT_WEBGPU_SUPPORTED_TYPES: ReadonlySet<string> = new Set<string>
   // exactly as in the Init Event — an atomic bump allocator gives the handle a real
   // slot id, so the by-id setters write the newborn directly; CPU-reconciled).
   'createAgent', 'addAgentToWorld',
+  // Stop Event — atomicCompareExchangeWeak into a stopFlag buffer (worker merges it)
+  'stopEvent',
   // writes
   'applyForce', 'setTargetRadius',
   // value/flow utility
@@ -136,6 +138,10 @@ export interface AgentWebGPUResult {
    *  spawning) — the runtime then binds a spawnCursor atomic buffer (binding 12) and
    *  makes agentAlive read_write so a newborn can be committed on the GPU. */
   usesSpawn?: boolean;
+  /** True when the behaviour graph uses a Stop Event — the runtime binds a
+   *  stopFlag atomic buffer (binding 13), seeds it to 0, and reads it back to
+   *  merge into the shared stopFlag. */
+  usesStop?: boolean;
   error?: string;
 }
 
@@ -259,6 +265,8 @@ interface AgentWgpuCtx {
   /** Set when a Create Agent / Add Agent To World emitter runs — declares the
    *  spawnCursor atomic binding + makes agentAlive read_write. */
   usesSpawn: boolean;
+  /** Set when a Stop Event emitter runs — declares the stopFlag atomic binding. */
+  usesStop: boolean;
   /** Active forEachBond iteration frames — the per-iteration value-output WGSL
    *  expressions (partnerId / restLength / currentLength / index). */
   forEachBondStack: Array<{ nodeId: string; partner: string; rest: string; cur: string; index: string }>;
@@ -1995,6 +2003,21 @@ function compileFlowNode(ctx: AgentWgpuCtx, nodeId: string): void {
       compileFlowChain(ctx, node.id, 'next');
       break;
     }
+    case 'stopEvent': {
+      // Mirrors the cell WebGPU stopEvent + the JS/WASM agent path: first-match
+      // atomicCompareExchangeWeak into the stopFlag buffer (parallel agents; the
+      // first writer wins). _stopIdx is baked by the JS compileAgentGraph (runs
+      // first, offset by the cell stop count). The worker reads the buffer back
+      // and merges it into the shared stopFlag.
+      const stopIdx = Number(node.data.config._stopIdx ?? 0);
+      if (stopIdx) {
+        ctx.usesStop = true;
+        const ce = fresh(ctx, 'stopCe');
+        ctx.lines.push(`  let ${ce} = atomicCompareExchangeWeak(&stopFlag, 0u, ${stopIdx}u);`);
+      }
+      compileFlowChain(ctx, node.id, 'next');
+      break;
+    }
     case 'createAgent': {
       // Mid-step spawning (Generic Agent Platform). The parallel GPU can't call the
       // CPU `_agentCreate` closure (like JS/WASM), so we allocate a REAL slot with an
@@ -3222,6 +3245,7 @@ export function compileAgentGraphWebGPU(
     usesI32Write: false,
     usesBondStore: false, usesIndicators: false, usesAux: false,
     usesSpawn: false,
+    usesStop: false,
   };
 
   // Assign array-producer scratch slots (separate i32 + f32 `var<function>` pools)
@@ -3366,6 +3390,10 @@ export function compileAgentGraphWebGPU(
   // strips it → a bind-group mismatch, like the other universal bindings).
   const hasSpawn = ctx.usesSpawn;
   if (hasSpawn) fieldBindingLines.push('@group(0) @binding(12) var<storage, read_write> spawnCursor : atomic<u32>;');
+  // Stop Event flag (binding 13) — a single-word atomic; declared ONLY when a Stop
+  // Event emitter ran (else Naga strips it → a bind-group mismatch).
+  const hasStop = ctx.usesStop;
+  if (hasStop) fieldBindingLines.push('@group(0) @binding(13) var<storage, read_write> stopFlag    : atomic<u32>;');
   // Each carries its OWN leading newline so the no-extra case inserts NOTHING (a
   // no-field Boids shader is then byte-identical to the pre-G5 template).
   const fieldBindings = fieldBindingLines.length > 0 ? '\n' + fieldBindingLines.join('\n') : '';
@@ -3401,7 +3429,7 @@ ${ctx.lines.join('\n')}
   return {
     shaderCode, layout, supportedTypes: [...seen], usesI32Write: ctx.usesI32Write,
     usesBondStore: hasBondStore, usesIndicators: hasIndicators, usesAux: hasAux,
-    usesSpawn: hasSpawn,
+    usesSpawn: hasSpawn, usesStop: hasStop,
   };
 }
 

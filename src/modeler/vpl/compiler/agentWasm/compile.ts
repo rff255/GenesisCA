@@ -151,6 +151,8 @@ export const AGENT_WASM_SUPPORTED_TYPES: ReadonlySet<string> = new Set<string>([
   'setVelocity', 'setAgentPosition', 'setAgentRadius',
   // structural writes (the post-step CPU structural phase reads the requests)
   'divideAgent', 'formBond', 'breakBond', 'killAgent',
+  // Stop Event — writes the agent stop cell (worker merges it into the shared flag)
+  'stopEvent',
   // unified spawning — Create Agent + Add Agent To World in the behaviour graph
   // (via env.agentCreate / env.agentAddToWorld host imports)
   'createAgent', 'addAgentToWorld',
@@ -2360,6 +2362,22 @@ function compileFlowNode(ctx: AgentWasmCtx, nodeId: string): void {
     }
     case 'killAgent': {
       em.localGet(ctx.idxLocal); em.i32Const(ctx.layout.u8['killRequest']!); em.op(OP_I32_ADD); em.i32Const(1); em.i32Store8();
+      compileFlowChain(ctx, node.id, 'next');
+      break;
+    }
+    case 'stopEvent': {
+      // Mirrors the cell WASM stopEvent (wasm/compile.ts) + the JS StopEventNode:
+      // if the agent stop cell is 0, write the 1-based _stopIdx (first-match-wins).
+      // The worker reads this cell back after the step and merges it into the
+      // shared stopFlag. _stopIdx is baked by the JS compileAgentGraph (runs first,
+      // offset by the cell stop count) — the WASM/WebGPU agent compilers read it.
+      const stopIdx = Number(node.data.config._stopIdx ?? 0);
+      if (stopIdx) {
+        const off = ctx.layout.stopFlagOffset;
+        em.i32Const(0); em.i32Load(off, 2);
+        em.op(OP_I32_EQZ);
+        em.ifThen(() => { em.i32Const(0); em.i32Const(stopIdx); em.i32Store(off, 2); });
+      }
       compileFlowChain(ctx, node.id, 'next');
       break;
     }
