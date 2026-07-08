@@ -61,6 +61,7 @@ import { viewCosHalf } from '../../nodes/GetAgentsInViewNode';
 import { resolveKeyLabels } from '../variegation';
 import { computeAgentWebGPULayout, type AgentWebGPULayout } from './layout';
 import { resolveMaxBonds } from '../../../../model/centerBased';
+import { encodeAttrValue } from '../../../../model/attrValueEncoding';
 
 /** The node types this compiler can emit to WGSL. A model whose agent graph uses
  *  ONLY these (after macro-expansion / reroute-collapse / CSE) runs on the WebGPU
@@ -97,6 +98,10 @@ export const AGENT_WEBGPU_SUPPORTED_TYPES: ReadonlySet<string> = new Set<string>
   'getIndicator', 'setIndicator', 'updateIndicator',
   // structural writes (G4 — the post-step CPU structural phase reads the requests)
   'divideAgent', 'formBond', 'breakBond', 'killAgent',
+  // mid-step graph-authored spawning (Create Agent → set-by-handle → Add To World,
+  // exactly as in the Init Event — an atomic bump allocator gives the handle a real
+  // slot id, so the by-id setters write the newborn directly; CPU-reconciled).
+  'createAgent', 'addAgentToWorld',
   // writes
   'applyForce', 'setTargetRadius',
   // value/flow utility
@@ -127,6 +132,10 @@ export interface AgentWebGPUResult {
   usesBondStore?: boolean;
   usesIndicators?: boolean;
   usesAux?: boolean;
+  /** True when the behaviour graph uses Create Agent / Add Agent To World (mid-step
+   *  spawning) — the runtime then binds a spawnCursor atomic buffer (binding 12) and
+   *  makes agentAlive read_write so a newborn can be committed on the GPU. */
+  usesSpawn?: boolean;
   error?: string;
 }
 
@@ -210,6 +219,9 @@ interface AgentWgpuCtx {
   /** Agent-attr id → its data type (bool/integer/float/tag), for int-rounding on
    *  a Set Attribute write (the GPU SoA is f32). */
   agentAttrType: Map<string, string>;
+  /** Agent-attr id → its numeric default value (initAgentSlot parity — a GPU
+   *  Create Agent resets the newborn's attrs to these, then setters override). */
+  agentAttrDefault: Map<string, number>;
   /** Scalar Local-Variable id → its WGSL var name (`var<function>`, reset per agent). */
   varNames: Map<string, string>;
   /** Array Local-Variable id → its WGSL var name + fixed length (`var<function>
@@ -244,6 +256,9 @@ interface AgentWgpuCtx {
   usesBondStore: boolean;
   usesIndicators: boolean;
   usesAux: boolean;
+  /** Set when a Create Agent / Add Agent To World emitter runs — declares the
+   *  spawnCursor atomic binding + makes agentAlive read_write. */
+  usesSpawn: boolean;
   /** Active forEachBond iteration frames — the per-iteration value-output WGSL
    *  expressions (partnerId / restLength / currentLength / index). */
   forEachBondStack: Array<{ nodeId: string; partner: string; rest: string; cur: string; index: string }>;
@@ -375,6 +390,14 @@ function compileValueNode(ctx: AgentWgpuCtx, nodeId: string, portId: string): Va
     }
     case 'behaviourStep': {
       result = emitBehaviourStep(ctx, portId);
+      break;
+    }
+    case 'createAgent': {
+      // The `handle` is emitted at the createAgent flow position (a `var<i32>`) and
+      // cached; the top-of-function cache check returns it for downstream setters.
+      // This fallback only runs if a consumer is resolved BEFORE the flow emitter —
+      // it shouldn't (createAgent is NO_HOIST + precedes its consumers) → -1.
+      result = ctx.valueCache.get(`${nodeId}:handle`) ?? { expr: '-1', type: 'i32' };
       break;
     }
     case 'getSelfPosition': {
@@ -1847,7 +1870,12 @@ function compileFlowNode(ctx: AgentWgpuCtx, nodeId: string): void {
         let v = inF32(ctx, node, 'value', 0);
         if (t !== 'float') v = `round(${v})`;
         const sa = fresh(ctx, 'saa');
-        ctx.lines.push(`  { let ${sa}: i32 = ${id}; if (${sa} >= 0 && ${sa} < i32(control.highWater) && agentAlive[${sa}] != 0u) { ${f32At(ctx, attr, `u32(${sa})`)} = ${v}; } }`);
+        // Range-only guard (NO alive check): unified spawning stages a Created agent
+        // at alive=0 until Add To World, so a fresh handle in [0, maxAgents) must be
+        // writable in the behaviour graph — the JS `< _agentMaxAgents` relaxation.
+        // (Writing a dead slot is a harmless no-op; the WebGPU compiler only ever
+        // emits the behaviour graph, so the strict-live division guard never applies.)
+        ctx.lines.push(`  { let ${sa}: i32 = ${id}; if (${sa} >= 0 && ${sa} < i32(control.maxAgents)) { ${f32At(ctx, attr, `u32(${sa})`)} = ${v}; } }`);
       }
       compileFlowChain(ctx, node.id, 'next');
       break;
@@ -1875,7 +1903,8 @@ function compileFlowNode(ctx: AgentWgpuCtx, nodeId: string): void {
     case 'setAgentPosition': {
       const id = castTo(resolveValueInput(ctx, node, 'agentId', -1), 'i32');
       const sp = fresh(ctx, 'sp');
-      ctx.lines.push(`  { let ${sp}: i32 = ${id}; if (${sp} >= 0 && ${sp} < i32(control.highWater) && agentAlive[${sp}] != 0u) {`);
+      // Range-only guard — see setAgentAttribute (a staged spawn handle must be settable).
+      ctx.lines.push(`  { let ${sp}: i32 = ${id}; if (${sp} >= 0 && ${sp} < i32(control.maxAgents)) {`);
       ctx.lines.push(`    ${f32At(ctx, 'x', `u32(${sp})`)} = ${inF32(ctx, node, 'x', 0)}; ${f32At(ctx, 'y', `u32(${sp})`)} = ${inF32(ctx, node, 'y', 0)};`);
       if (ctx.is3d) ctx.lines.push(`    ${f32At(ctx, 'z', `u32(${sp})`)} = ${inF32(ctx, node, 'z', 0)};`);
       ctx.lines.push(`  } }`);
@@ -1886,7 +1915,8 @@ function compileFlowNode(ctx: AgentWgpuCtx, nodeId: string): void {
       const id = castTo(resolveValueInput(ctx, node, 'agentId', -1), 'i32');
       const sr = fresh(ctx, 'sr'), rv = fresh(ctx, 'srV');
       ctx.lines.push(`  { let ${sr}: i32 = ${id}; let ${rv}: f32 = ${inF32(ctx, node, 'radius', 1)};`);
-      ctx.lines.push(`    if (${sr} >= 0 && ${sr} < i32(control.highWater) && agentAlive[${sr}] != 0u) { ${f32At(ctx, 'radius', `u32(${sr})`)} = ${rv}; ${f32At(ctx, 'targetRadius', `u32(${sr})`)} = ${rv}; } }`);
+      // Range-only guard — see setAgentAttribute (a staged spawn handle must be settable).
+      ctx.lines.push(`    if (${sr} >= 0 && ${sr} < i32(control.maxAgents)) { ${f32At(ctx, 'radius', `u32(${sr})`)} = ${rv}; ${f32At(ctx, 'targetRadius', `u32(${sr})`)} = ${rv}; } }`);
       compileFlowChain(ctx, node.id, 'next');
       break;
     }
@@ -1962,6 +1992,55 @@ function compileFlowNode(ctx: AgentWgpuCtx, nodeId: string): void {
     }
     case 'killAgent': {
       ctx.lines.push(`  ${f32At(ctx, 'killRequest', 'idx')} = 1.0;`);
+      compileFlowChain(ctx, node.id, 'next');
+      break;
+    }
+    case 'createAgent': {
+      // Mid-step spawning (Generic Agent Platform). The parallel GPU can't call the
+      // CPU `_agentCreate` closure (like JS/WASM), so we allocate a REAL slot with an
+      // atomic bump (`spawnCursor`), write the child directly on the GPU, and return
+      // that slot as the `handle` — so the by-id setters (Set Agent Position/Radius/
+      // Attribute) write the newborn exactly like an existing agent. The CPU
+      // reconciles the buffer after readback (see readbackAgentStep). A newborn stays
+      // STAGED (alive=0) until Add Agent To World, and beyond highWater ⇒ neither the
+      // behaviour nor the force pass touches it this step (configured now, behaves next).
+      ctx.usesSpawn = true;
+      const x = inF32(ctx, node, 'x', 0);
+      const y = inF32(ctx, node, 'y', 0);
+      const r = inF32(ctx, node, 'radius', 1);
+      const z = ctx.is3d ? inF32(ctx, node, 'z', 0) : null;
+      const raw = fresh(ctx, 'spRaw');
+      const h = fresh(ctx, 'spH');
+      ctx.lines.push(`  let ${raw}: u32 = atomicAdd(&spawnCursor, 1u);`);
+      ctx.lines.push(`  var ${h}: i32 = -1;`);
+      ctx.lines.push(`  if (${raw} < control.maxAgents) {`);
+      ctx.lines.push(`    ${f32At(ctx, 'x', raw)} = ${x}; ${f32At(ctx, 'xNext', raw)} = ${x};`);
+      ctx.lines.push(`    ${f32At(ctx, 'y', raw)} = ${y}; ${f32At(ctx, 'yNext', raw)} = ${y};`);
+      if (z) ctx.lines.push(`    ${f32At(ctx, 'z', raw)} = ${z}; ${f32At(ctx, 'zNext', raw)} = ${z};`);
+      ctx.lines.push(`    ${f32At(ctx, 'radius', raw)} = ${r}; ${f32At(ctx, 'targetRadius', raw)} = ${r};`);
+      ctx.lines.push(`    ${f32At(ctx, 'vx', raw)} = 0.0; ${f32At(ctx, 'vy', raw)} = 0.0;`);
+      if (z) ctx.lines.push(`    ${f32At(ctx, 'vz', raw)} = 0.0;`);
+      ctx.lines.push(`    ${f32At(ctx, 'age', raw)} = 0.0;`);
+      // Reset the child's agent attributes to their compile-time defaults (the
+      // GPU analogue of initAgentSlot's attr reset — the CPU never runs it here).
+      // A later Set Agent Attribute by handle overrides, exactly like the JS path.
+      for (const [attr, def] of ctx.agentAttrDefault) {
+        ctx.lines.push(`    ${f32At(ctx, attr, raw)} = ${wgslFloatLit(def)};`);
+      }
+      ctx.lines.push(`    ${h} = i32(${raw});`);
+      ctx.lines.push(`  }`);
+      ctx.valueCache.set(`${node.id}:handle`, { expr: h, type: 'i32' });
+      compileFlowChain(ctx, node.id, 'next');
+      break;
+    }
+    case 'addAgentToWorld': {
+      // Commit a staged newborn: mark it alive on the GPU (agentAlive is read_write
+      // when spawning). The CPU reconciliation (readbackAgentStep) reads the alive
+      // flag back to add committed newborns to the store + bump liveCount/highWater.
+      ctx.usesSpawn = true;
+      const h = castTo(resolveValueInput(ctx, node, 'handle', -1), 'i32');
+      const hn = fresh(ctx, 'addH');
+      ctx.lines.push(`  { let ${hn}: i32 = ${h}; if (${hn} >= 0 && ${hn} < i32(control.maxAgents)) { agentAlive[u32(${hn})] = 1u; } }`);
       compileFlowChain(ctx, node.id, 'next');
       break;
     }
@@ -2641,6 +2720,7 @@ function clearVolatileCache(ctx: AgentWgpuCtx): void {
  *  field reads / model attrs / SoA reads) is pure within a step and safe to hoist. */
 const AGENT_VALUE_NO_HOIST: ReadonlySet<string> = new Set<string>([
   'getRandom',                              // RNG side effect (per-branch draw)
+  'createAgent',                            // alloc side effect — handle emits at its flow position
   'getVariable',                            // mutable Local Variable storage
   'getAgentAttribute',                      // a neighbour write can mutate it
   'getIndicator',                           // mutable indicator storage
@@ -3121,11 +3201,12 @@ export function compileAgentGraphWebGPU(
 
   const adj = buildAdjacency(nodes, edges);
   const agentAttrType = new Map<string, string>();
-  for (const a of agentAttrsOf(model)) agentAttrType.set(a.id, a.type);
+  const agentAttrDefault = new Map<string, number>();
+  for (const a of agentAttrsOf(model)) { agentAttrType.set(a.id, a.type); agentAttrDefault.set(a.id, encodeAttrValue(a)); }
   const ctx: AgentWgpuCtx = {
     adj, layout, is3d: layout.gridDepth > 1,
     lines: [], uid: 0,
-    agentAttrType,
+    agentAttrType, agentAttrDefault,
     varNames: new Map<string, string>(),
     arrayVarNames: new Map<string, { name: string; len: number }>(),
     valueCache: new Map<string, ValueRef>(),
@@ -3138,6 +3219,7 @@ export function compileAgentGraphWebGPU(
     forEachBondStack: [],
     usesI32Write: false,
     usesBondStore: false, usesIndicators: false, usesAux: false,
+    usesSpawn: false,
   };
 
   // Assign array-producer scratch slots (separate i32 + f32 `var<function>` pools)
@@ -3277,6 +3359,11 @@ export function compileAgentGraphWebGPU(
   if (hasAux) fieldBindingLines.push('@group(0) @binding(9) var<storage, read>       auxF32      : array<f32>;');
   if (hasIndicators) fieldBindingLines.push('@group(0) @binding(10) var<storage, read_write> indicators : array<atomic<u32>>;');
   if (hasBondStore) fieldBindingLines.push('@group(0) @binding(11) var<storage, read>       bondStore   : array<i32>;');
+  // Mid-step spawning (Create Agent / Add To World): an atomic bump allocator into
+  // a single-word storage buffer. Declared ONLY when the graph spawns (else Naga
+  // strips it → a bind-group mismatch, like the other universal bindings).
+  const hasSpawn = ctx.usesSpawn;
+  if (hasSpawn) fieldBindingLines.push('@group(0) @binding(12) var<storage, read_write> spawnCursor : atomic<u32>;');
   // Each carries its OWN leading newline so the no-extra case inserts NOTHING (a
   // no-field Boids shader is then byte-identical to the pre-G5 template).
   const fieldBindings = fieldBindingLines.length > 0 ? '\n' + fieldBindingLines.join('\n') : '';
@@ -3289,7 +3376,7 @@ export function compileAgentGraphWebGPU(
 
 @group(0) @binding(0) var<storage, read_write> agentF32    : array<f32>;
 @group(0) @binding(1) var<storage, ${i32Access}> agentI32    : array<i32>;
-@group(0) @binding(2) var<storage, read>       agentAlive  : array<u32>;
+@group(0) @binding(2) var<storage, ${hasSpawn ? 'read_write' : 'read      '}> agentAlive  : array<u32>;
 @group(0) @binding(3) var<storage, read>       hashBins    : array<i32>;
 @group(0) @binding(4) var<uniform>             control     : Control;
 @group(0) @binding(5) var<storage, read_write> rngState    : array<u32>;
@@ -3312,6 +3399,7 @@ ${ctx.lines.join('\n')}
   return {
     shaderCode, layout, supportedTypes: [...seen], usesI32Write: ctx.usesI32Write,
     usesBondStore: hasBondStore, usesIndicators: hasIndicators, usesAux: hasAux,
+    usesSpawn: hasSpawn,
   };
 }
 

@@ -39,7 +39,7 @@ import { buildAgentAbiArgs, type AgentAbiShape, type AgentAbiRuntime } from '../
 import { computeAgentWebGPULayout, type AgentWebGPULayout } from '../../modeler/vpl/compiler/agentWebgpu/layout';
 import {
   createAgentWebGPURuntime, destroyAgentWebGPURuntime, uploadAgentSoA, uploadAgentHash,
-  uploadAgentControl, uploadAgentForceControl, dispatchAgentStep, readbackAgentStep,
+  uploadAgentControl, uploadAgentForceControl, dispatchAgentStep, readbackAgentStep, uploadAgentSpawnCursor,
   uploadAgentField, readbackAgentField,
   uploadAgentAux, uploadAgentIndicators, readbackAgentIndicators, uploadAgentBondStore,
   type AgentWebGPURuntime, type FieldArray,
@@ -237,7 +237,7 @@ interface InitMsg {
   agentWebgpuUsesI32Write?: boolean;
   /** Which universal bindings the shader actually declares (so the runtime binds
    *  matching entries — a declared-but-unused global is stripped → bind mismatch). */
-  agentWebgpuUsage?: { usesBondStore?: boolean; usesIndicators?: boolean; usesAux?: boolean };
+  agentWebgpuUsage?: { usesBondStore?: boolean; usesIndicators?: boolean; usesAux?: boolean; usesSpawn?: boolean };
 }
 
 interface StepMsg { type: 'step'; count: number; activeViewer: string; skipColorPass?: boolean }
@@ -264,7 +264,7 @@ interface PaintManualMsg {
   activeViewer: string;
 }
 interface ResetMsg { type: 'reset'; activeViewer: string }
-interface RecompileMsg { type: 'recompile'; stepCode: string; initCode?: string; inputColorCodes: Array<{ mappingId: string; code: string }>; outputMappingCodes: Array<{ mappingId: string; code: string }>; stopMessages?: string[]; updateMode: string; asyncScheme: string; wasmStepBytes?: Uint8Array; wasmStepError?: string; wasmExports?: string[]; viewerIds?: Record<string, number>; webgpuShaderCode?: string; webgpuShaderError?: string; webgpuEntryPoints?: WebGPUEntryPoints; webgpuLayout?: WebGPULayout; webgpuStopCheckInterval?: number; variegated?: VariegatedPayload; interactionTables?: InteractionTablePayload[]; agentBehaviourCode?: string; agentInitCode?: string; agentDivisionCode?: string; agentColorViewer?: string; agentOutputMappingCodes?: Array<{ mappingId: string; code: string }>; agentHasSprites?: boolean; centerBased?: CenterBasedConfig; agentUsesField?: boolean; agentTarget?: 'js' | 'wasm' | 'webgpu'; agentWasmBytes?: Uint8Array; agentWasmViewerGuardIds?: string[]; agentLayoutExtras?: AgentLayoutExtras; agentWebgpuBehaviourShader?: string; agentWebgpuForceShader?: string; agentWebgpuMaxAgents?: number; agentWebgpuMaxHashBins?: number; agentWebgpuLayout?: AgentWebGPULayout; agentWebgpuUsesI32Write?: boolean; agentWebgpuUsage?: { usesBondStore?: boolean; usesIndicators?: boolean; usesAux?: boolean } }
+interface RecompileMsg { type: 'recompile'; stepCode: string; initCode?: string; inputColorCodes: Array<{ mappingId: string; code: string }>; outputMappingCodes: Array<{ mappingId: string; code: string }>; stopMessages?: string[]; updateMode: string; asyncScheme: string; wasmStepBytes?: Uint8Array; wasmStepError?: string; wasmExports?: string[]; viewerIds?: Record<string, number>; webgpuShaderCode?: string; webgpuShaderError?: string; webgpuEntryPoints?: WebGPUEntryPoints; webgpuLayout?: WebGPULayout; webgpuStopCheckInterval?: number; variegated?: VariegatedPayload; interactionTables?: InteractionTablePayload[]; agentBehaviourCode?: string; agentInitCode?: string; agentDivisionCode?: string; agentColorViewer?: string; agentOutputMappingCodes?: Array<{ mappingId: string; code: string }>; agentHasSprites?: boolean; centerBased?: CenterBasedConfig; agentUsesField?: boolean; agentTarget?: 'js' | 'wasm' | 'webgpu'; agentWasmBytes?: Uint8Array; agentWasmViewerGuardIds?: string[]; agentLayoutExtras?: AgentLayoutExtras; agentWebgpuBehaviourShader?: string; agentWebgpuForceShader?: string; agentWebgpuMaxAgents?: number; agentWebgpuMaxHashBins?: number; agentWebgpuLayout?: AgentWebGPULayout; agentWebgpuUsesI32Write?: boolean; agentWebgpuUsage?: { usesBondStore?: boolean; usesIndicators?: boolean; usesAux?: boolean; usesSpawn?: boolean } }
 interface UpdateLookupTableMsg {
   type: 'updateLookupTable';
   attrId: string;
@@ -622,7 +622,7 @@ let pendingAgentWebgpuMaxAgents = 0;
 let pendingAgentWebgpuMaxHashBins = 0;
 let pendingAgentWebgpuLayout: AgentWebGPULayout | null = null;
 let pendingAgentWebgpuUsesI32Write = false;
-let pendingAgentWebgpuUsage: { usesBondStore?: boolean; usesIndicators?: boolean; usesAux?: boolean } = {};
+let pendingAgentWebgpuUsage: { usesBondStore?: boolean; usesIndicators?: boolean; usesAux?: boolean; usesSpawn?: boolean } = {};
 /** Warn once when the per-step hash overflows the GPU reserve (step runs on JS). */
 let agentWebgpuHashOverflowWarned = false;
 /** A monotonic build token: only the most-recent async runtime build commits (an
@@ -1792,8 +1792,13 @@ async function runAgentStepWebGPUInner(): Promise<boolean> {
   // structural-request runs (divide/bond/kill) into the engine's CPU arrays so the
   // structural phase below applies them, and the packed colours into `s.colors`.
   try {
+    // Unified spawning: seed the atomic spawn cursor to the pre-step highWater so
+    // createAgent bump-allocates newborns beyond the live range (the GPU analogue
+    // of the grow-only `_agentCreate`). readbackAgentStep reconciles them below.
+    if (rt.usesSpawn) uploadAgentSpawnCursor(rt, hw);
     dispatchAgentStep(rt, hw);
-    await readbackAgentStep(rt, s);   // x/y (from xNext/yNext) + vx/vy/radius/density/age + attrs→attrWrite + requests + colours
+    const rb = await readbackAgentStep(rt, s);   // x/y (from xNext/yNext) + vx/vy/radius/density/age + attrs→attrWrite + requests + colours + spawn reconcile
+    if (rb.spawnOverflow) self.postMessage({ type: 'agentOverflow', message: `Agent capacity reached during a Behaviour spawn (maxAgents=${s.maxAgents}). Some Create Agent calls were skipped.` });
     swapAgentAttrs(s);
     if (rt.layout.indicatorCount > 0) {
       // The behaviour shader mutated the indicators atomic buffer (Set/Update
