@@ -7,6 +7,84 @@ https://github.com/rff255/GenesisCA/releases
 The version at the top of `package.json` is the single source of truth; each
 entry below is cut when that version is tagged (see `.github/workflows/release.yml`).
 
+## [1.26.0] - 2026-07-08
+
+The Agent Capability Profiles milestone plus a large agent-platform push: opt-in
+capability modules, a stored vector attribute type, unified spawning, directional
+sensing, real positional collision, 3D agent sprites, and agent Stop Events on
+every target. Additive and gated throughout — the lattice (2D+3D, all three
+compile targets) and every non-agent model stay byte-identical.
+
+### Agent Capability Profiles
+- Agents are now composed from opt-in capability modules (Motion, Body, Collision,
+  Bonds, Growth, Division, Lifespan, Sensing, Orientation, Field coupling,
+  Appearance) via 7 presets (Particle, Boids, Vivarium, Morphogenesis, Social
+  Graph, CA-on-Agents). The editor surface — palette nodes, Behaviour-Step ports,
+  Edit-panel rows, inspector fields — shows only the capabilities a model uses, so
+  a social-graph author never sees morphogenesis nodes. Legacy files infer their
+  profile from usage and stay byte-identical.
+- The physics capabilities now drive the ENGINE, not just the palette: Collision
+  (Off / Soft-sphere / Positional), Bonds (Off / Data / Physics), and Growth each
+  gate real behaviour on all three targets — fixing "false choice" controls (e.g.
+  a positional-collision gas whose agents passed through each other).
+- Real **Positional (hard) collision** — a rigid no-overlap position-projection
+  constraint (billiard-ball), distinct from the springy soft-sphere force; a
+  target-independent CPU post-step, bit-identical on JS/WASM and statistical on WebGPU.
+- New Lifespan **Get Age** node.
+
+### Agents — sensing, spawning, orientation
+- **Directional sensing**: Get Agents In View (a heading-relative vision cone) and
+  Sense Hemifield (the Braitenberg Left/Right split of that cone — steer by
+  Left − Right). All three targets, 2D + 3D.
+- **Unified spawning**: Create Agent → set-by-handle → Add Agent To World now works
+  in BOTH the Agent Init Event AND the Behaviour Step (spawn during the run — e.g.
+  a bird lays an egg), with full instance control, on JS / WASM / WebGPU. Replaces
+  the earlier request-based Spawn Agent / Spawn Event idiom.
+- **Stored vector attribute type** for cell + agent attributes and Local Variables
+  (2D/3D), lowered to scalar-float components so every target runs it natively
+  (own / neighbour / by-id reads + writes + move); the FOV nodes can steer by a
+  stored **Facing** vector attribute (the Orientation capability).
+
+### Agents — 3D sprites + Stop Events
+- **3D agent sprites**: sprite-agents render as camera-facing textured billboards
+  in the voxel view (a texture-array atlas, per-agent frame / rotation / aspect /
+  scale), closing the last 3D-renderer gap. Non-sprite models are byte-identical.
+- **Agent Stop Event** now fires on the WASM and WebGPU agent behaviour (was
+  JS-only), with correct ordering across the cell + agent steps in every batch loop.
+
+### Simulator
+- The Agent Brush panel now sits ABOVE the Indicators (like the CA-grid brush),
+  with a shared draggable splitter between them and a sensible default height so
+  the indicators stay visible — fixing a layout where the indicators dominated the
+  panel and the brush was unreachable with no resize.
+- The agent brush Single/Area scope is now DERIVED from the brush size (radius 0 =
+  Single, > 0 = Area) with a live badge next to the size, replacing the toggle; the
+  Shape + size rows moved above the mode buttons.
+
+### Modeler
+- Macro-availability gate: a macro whose internals can't run on the active graph (a
+  lattice macro on the Agents graph, or a bond-graph macro on Cells) is hidden from
+  the palette.
+- Set / Set-Agents Agent Attribute adapt their inline value widget to the picked
+  attribute's type (bool → select, tag → named options, number).
+- Design-time badge for the Init-Event footgun: an agent node that reads agent
+  state placed in the Agent Init Event (where it would crash) is flagged, guiding
+  spawn-and-configure-by-handle instead.
+
+### Fixes
+- Two adversarial-review rounds hardened the agent work: the init-footgun badge was
+  corrected (every by-id agent reader is unconditionally invalid in the Init Event —
+  `highWater`/`_alive` aren't in the init ABI) and Set Agents Attribute relaxed to
+  match its sibling setters; an agents-only project macro now reaches the palette; a
+  scaled sprite's pick region and a shared stop-flag clear were fixed.
+- Vector-attribute adversarial fixes (guard gaps, UI validation, array-kind reset).
+- Capability / bonding reconciliation with the legacy checkboxes; a full reinit when
+  the effective bond stride changes.
+
+### CI / tooling
+- Changelog-driven GitHub Release notes; `/updateversion` auto-generates the
+  CHANGELOG section, supports a `commit` flag, and prints a ready-to-paste PR message.
+
 ## [1.25.0] - 2026-07-06
 
 Agent & CA-grid UX batch. Additive and gated throughout — the lattice (2D+3D,
