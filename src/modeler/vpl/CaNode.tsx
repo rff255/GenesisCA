@@ -2900,10 +2900,12 @@ function CaNodeComponent({ id, data }: NodeProps) {
         let effectiveWidget = portDef.inlineWidget;
         const setAttrId = nodeData.config.attributeId as string;
         // ownAttrList = the active graph's OWN attributes (agent attrs on the Agents
-        // graph). setNeighborhood*/setNeighbor* are lattice-only, so on the Cells
-        // graph ownAttrList (cell attrs) is correct for all four node types too.
+        // graph). setNeighborhood*/setNeighbor* are lattice-only; setAgentAttribute/
+        // setAgentsAttribute are bondGraph-only (only render on the Agents graph where
+        // ownAttrList == model.agentAttributes) — so ownAttrList resolves the right
+        // attribute for every node type here, on both graphs.
         const setAttr = setAttrId ? ownAttrList.find(a => a.id === setAttrId) : undefined;
-        if (effectiveWidget && (nodeData.nodeType === 'setAttribute' || nodeData.nodeType === 'updateAttribute' || nodeData.nodeType === 'setNeighborhoodAttribute' || nodeData.nodeType === 'setNeighborAttributeByIndex') && port.id === 'value') {
+        if (effectiveWidget && (nodeData.nodeType === 'setAttribute' || nodeData.nodeType === 'updateAttribute' || nodeData.nodeType === 'setNeighborhoodAttribute' || nodeData.nodeType === 'setNeighborAttributeByIndex' || nodeData.nodeType === 'setAgentAttribute' || nodeData.nodeType === 'setAgentsAttribute') && port.id === 'value') {
           const attr = setAttr;
           if (!attr) {
             effectiveWidget = undefined;
