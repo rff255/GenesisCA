@@ -140,6 +140,43 @@ export interface AgentSnapshot3D {
   colors: Uint8ClampedArray;
   /** Flat [a, b, a, b, …] live bond index pairs (empty when no bonds). */
   bonds: Int32Array;
+  /** Velocity — read only for a sprite whose asset has `orientToVelocity`. Length-0
+   *  in 2D / non-sprite models (then treated as 0). */
+  vx: Float64Array;
+  vy: Float64Array;
+  /** Per-agent sprite slot (1-based, 0 = none) + current frame (fractional) +
+   *  facing (compass degrees) + size override (0 = use the asset default). All are
+   *  length-0 for a non-sprite model → the renderer draws sphere impostors, exactly
+   *  as before this feature (the sprite pass never runs). */
+  spriteIds: Int32Array;
+  spriteFrames: Float64Array;
+  spriteRotations: Float64Array;
+  spriteScales: Float64Array;
+}
+
+/** One sprite's atlas contribution — the decoded frame bitmaps + the render meta
+ *  (mirrors the 2D `spriteMetaRef` entry). `slot` is the 1-based index into
+ *  `model.sprites` (= the per-agent `spriteIds` value). */
+export interface SpriteAtlasInput {
+  slot: number;
+  frames: ImageBitmap[];
+  loop: boolean;
+  defaultDirection: number;
+  rotationOffset: number;
+  orientToVelocity: boolean;
+  scale: number;
+}
+
+/** gl3d-internal per-slot sprite render meta (built by setSpriteAtlas). */
+interface SpriteSlotMeta {
+  baseLayer: number;   // first atlas layer of this sprite's frames
+  frameCount: number;
+  aspect: number;      // frame width / height (native)
+  loop: boolean;
+  defaultDirection: number;
+  rotationOffset: number;
+  orientToVelocity: boolean;
+  scale: number;
 }
 
 const WORLD_UP: [number, number, number] = [0, 0, 1];
@@ -332,16 +369,22 @@ out vec3 vCentre;                         // sphere centre (world, for the FS ra
 out float vRadius;
 out vec2 vUV;                             // quad-local coord in [-1,1]
 out vec4 vColor;
+out float vSkip;                          // sprite-agent flag (draws a billboard instead)
 void main() {
   // Z-up remap: a sphere at agent (ax,ay,az) sits in the voxel cube at cell
   // (layer=az,row=ay,col=ax) — col→+X, row→-Y, layer→-Z.
   vec3 centre = vec3(aPos.x - uHalf.x, uHalf.y - aPos.y, uHalf.z - aPos.z);
   vCentre = centre;
-  vRadius = aRadius;
+  // A NEGATIVE radius flags a SPRITE-agent (drawn by the billboard pass instead of
+  // a sphere). uploadAgents encodes it in the sign so the sphere buffer stays 8
+  // floats (non-sprite models keep a positive radius → byte-identical).
+  float ar = abs(aRadius);
+  vRadius = ar;
+  vSkip = aRadius < 0.0 ? 1.0 : 0.0;
   vUV = aCorner;
   vColor = aColor;
   // Billboard: expand the quad in the camera plane by the radius.
-  vec3 world = centre + (uCamRight * aCorner.x + uCamUp * aCorner.y) * aRadius;
+  vec3 world = centre + (uCamRight * aCorner.x + uCamUp * aCorner.y) * ar;
   gl_Position = uMVP * vec4(world, 1.0);
 }`;
 const SPHERE_FS = `#version 300 es
@@ -350,6 +393,7 @@ in vec3 vCentre;
 in float vRadius;
 in vec2 vUV;
 in vec4 vColor;
+in float vSkip;
 uniform mat4 uMVP;
 uniform vec3 uCamForward;                 // camera forward (world; -dir)
 uniform vec3 uCamRight;
@@ -361,6 +405,7 @@ uniform float uClipHi;
 uniform vec3 uClipForward;
 out vec4 outColor;
 void main() {
+  if (vSkip > 0.5) { discard; }           // sprite-agent → drawn by the billboard pass
   float r2 = dot(vUV, vUV);
   if (r2 > 1.0) { discard; }              // outside the unit disc → not on the sphere
   float zc = sqrt(1.0 - r2);              // height above the billboard plane (unit)
@@ -398,10 +443,11 @@ flat out float vPickId;
 void main() {
   vec3 centre = vec3(aPos.x - uHalf.x, uHalf.y - aPos.y, uHalf.z - aPos.z);
   vCentre = centre;
-  vRadius = aRadius;
+  float ar = abs(aRadius);                // sprite-agents carry -radius (still pickable)
+  vRadius = ar;
   vUV = aCorner;
   vPickId = float(gl_InstanceID + 1);
-  vec3 world = centre + (uCamRight * aCorner.x + uCamUp * aCorner.y) * aRadius;
+  vec3 world = centre + (uCamRight * aCorner.x + uCamUp * aCorner.y) * ar;
   gl_Position = uMVP * vec4(world, 1.0);
 }`;
 const SPHERE_PICK_FS = `#version 300 es
@@ -438,6 +484,72 @@ void main() {
   float g = mod(floor(idx / 256.0), 256.0);
   float b = mod(floor(idx / 65536.0), 256.0);
   outColor = vec4(r / 255.0, g / 255.0, b / 255.0, 1.0);
+}`;
+// ---------------------------------------------------------------------------
+// Bond-Graph Agent SPRITES (3D billboard pass). A sprite-agent draws a
+// camera-facing textured quad from the sprite atlas (a TEXTURE_2D_ARRAY, one layer
+// per (sprite, frame)) INSTEAD of the sphere impostor (which is skipped via the
+// sign-flag above). Per-instance: [x,y,z (world), halfW, halfH (cell units),
+// cosRot, sinRot, layer, alpha] × 9 floats (stride 36). The quad is ASPECT-shaped
+// (halfW/halfH) so the atlas frame — stored stretched-to-square in its cell —
+// renders at the sprite's native aspect with the longest side ≈ the agent
+// diameter, matching the 2D `drawImage` sizing. The rotation is clockwise-on-screen
+// (matches the 2D `ctx.rotate` compass convention). Depth uses the billboard-plane
+// projected depth (no gl_FragDepth) so sprites depth-interleave with spheres/voxels.
+const SPRITE_VS = `#version 300 es
+precision highp float;
+layout(location=0) in vec2 aCorner;      // unit quad corner in [-1,1]
+layout(location=1) in vec3 aPos;         // agent world position (col,row,layer space)
+layout(location=2) in vec2 aHalf;        // half-extent (w,h) in cell units
+layout(location=3) in vec2 aRot;         // cos,sin of the facing rotation
+layout(location=4) in float aLayer;      // atlas layer (baseLayer + resolved frame)
+layout(location=5) in float aAlpha;      // agent alpha 0..1
+uniform mat4 uMVP;
+uniform vec3 uHalf;
+uniform vec3 uCamRight;
+uniform vec3 uCamUp;
+out vec2 vTex;
+out float vLayer;
+out float vAlpha;
+out vec3 vSurf;
+void main() {
+  vec3 centre = vec3(aPos.x - uHalf.x, uHalf.y - aPos.y, uHalf.z - aPos.z);
+  // Texcoord from the UNROTATED corner (the image is fixed to the quad); the quad
+  // VERTICES rotate, so the image rotates with them. Flip V (image top = +V).
+  vTex = vec2((aCorner.x + 1.0) * 0.5, (1.0 - aCorner.y) * 0.5);
+  vLayer = aLayer;
+  vAlpha = aAlpha;
+  // Aspect-shaped local corner, then rotated clockwise-on-screen (matches
+  // ctx.rotate: x' = x·cos + y·sin, y' = -x·sin + y·cos, with uCamUp = screen-up).
+  vec2 local = vec2(aCorner.x * aHalf.x, aCorner.y * aHalf.y);
+  vec2 rot = vec2(local.x * aRot.x + local.y * aRot.y, -local.x * aRot.y + local.y * aRot.x);
+  vec3 world = centre + uCamRight * rot.x + uCamUp * rot.y;
+  vSurf = world;
+  gl_Position = uMVP * vec4(world, 1.0);
+}`;
+const SPRITE_FS = `#version 300 es
+precision highp float;
+precision highp sampler2DArray;
+in vec2 vTex;
+in float vLayer;
+in float vAlpha;
+in vec3 vSurf;
+uniform sampler2DArray uAtlas;
+uniform int uClipEnabled;
+uniform int uClipAxis;
+uniform float uClipLo;
+uniform float uClipHi;
+uniform vec3 uClipForward;
+out vec4 outColor;
+void main() {
+  vec4 t = texture(uAtlas, vec3(vTex, vLayer));
+  float a = t.a * vAlpha;
+  if (a < 0.02) { discard; }              // fully transparent → no fragment (chroma-key / pad)
+  if (uClipEnabled == 1) {
+    float w = uClipAxis == 0 ? vSurf.x : uClipAxis == 1 ? vSurf.y : uClipAxis == 2 ? vSurf.z : dot(vSurf, uClipForward);
+    if (w < uClipLo || w > uClipHi) { discard; }
+  }
+  outColor = vec4(t.rgb, a);
 }`;
 
 function compileProgram(gl: WebGL2RenderingContext, vsSrc: string, fsSrc: string): WebGLProgram {
@@ -516,6 +628,20 @@ export class Gl3DRenderer {
   private inspectAgents: ReadonlyArray<{ x: number; y: number; z: number; radius: number }> = [];
   /** Visible agent count (= ALIVE agents uploaded). DEV/verification. */
   agentInstanceCount = 0;
+  // --- Agent SPRITES (3D billboard pass). ---
+  private spriteProg: WebGLProgram;
+  private spriteVao: WebGLVertexArrayObject;
+  private spriteInstBuf: WebGLBuffer;      // [x,y,z,halfW,halfH,cos,sin,layer,alpha] × 9 floats
+  private spriteInstData: Float32Array = new Float32Array(0);
+  private spriteInstCapacity = 0;          // floats allocated in spriteInstBuf
+  /** Number of sprite billboards in the last uploadAgents. DEV/verification. */
+  spriteInstanceCount = 0;
+  private spriteAtlasTex: WebGLTexture | null = null;
+  private spriteAtlasLayers = 0;           // total layers currently allocated
+  private spriteSlots = new Map<number, SpriteSlotMeta>();  // slot (1-based) → meta
+  /** Fixed atlas cell size (each frame is drawn stretched to CELL×CELL; the
+   *  aspect-shaped billboard quad un-stretches it — see SPRITE_VS). */
+  private static readonly ATLAS_CELL = 128;
 
   constructor(canvas: HTMLCanvasElement) {
     const gl = canvas.getContext('webgl2', { antialias: true, alpha: true, preserveDrawingBuffer: true });
@@ -561,6 +687,21 @@ export class Gl3DRenderer {
     gl.enableVertexAttribArray(2); gl.vertexAttribPointer(2, 1, gl.FLOAT, false, 32, 12); gl.vertexAttribDivisor(2, 1);
     gl.enableVertexAttribArray(3); gl.vertexAttribPointer(3, 4, gl.FLOAT, false, 32, 16); gl.vertexAttribDivisor(3, 1);
     gl.bindVertexArray(null);
+    // Sprite billboard pipeline: the SAME static unit quad (attrib 0, from quadBuf)
+    // + a per-instance [x,y,z,halfW,halfH,cos,sin,layer,alpha] buffer (stride 36).
+    this.spriteProg = compileProgram(gl, SPRITE_VS, SPRITE_FS);
+    this.spriteVao = gl.createVertexArray()!;
+    this.spriteInstBuf = gl.createBuffer()!;
+    gl.bindVertexArray(this.spriteVao);
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.quadBuf);
+    gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 8, 0);
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.spriteInstBuf);
+    gl.enableVertexAttribArray(1); gl.vertexAttribPointer(1, 3, gl.FLOAT, false, 36, 0); gl.vertexAttribDivisor(1, 1);
+    gl.enableVertexAttribArray(2); gl.vertexAttribPointer(2, 2, gl.FLOAT, false, 36, 12); gl.vertexAttribDivisor(2, 1);
+    gl.enableVertexAttribArray(3); gl.vertexAttribPointer(3, 2, gl.FLOAT, false, 36, 20); gl.vertexAttribDivisor(3, 1);
+    gl.enableVertexAttribArray(4); gl.vertexAttribPointer(4, 1, gl.FLOAT, false, 36, 28); gl.vertexAttribDivisor(4, 1);
+    gl.enableVertexAttribArray(5); gl.vertexAttribPointer(5, 1, gl.FLOAT, false, 36, 32); gl.vertexAttribDivisor(5, 1);
+    gl.bindVertexArray(null);
     gl.enable(gl.DEPTH_TEST);
     gl.clearColor(0, 0, 0, 0);
   }
@@ -578,6 +719,65 @@ export class Gl3DRenderer {
   setInspectCells(cells: ReadonlyArray<{ layer: number; row: number; col: number }>): void { this.inspectCells = cells; }
   /** Canvas background. `null` → transparent (page shows through). */
   setBackgroundColor(c: [number, number, number, number] | null): void { this.bgColor = c ?? [0, 0, 0, 0]; }
+
+  /** (Re)build the sprite atlas from decoded sprite frames. Each (sprite, frame)
+   *  becomes one CELL×CELL layer of a TEXTURE_2D_ARRAY (frames drawn STRETCHED to
+   *  the square cell; the aspect-shaped billboard quad un-stretches them). The
+   *  per-slot meta drives the billboard frame/rotation/size. Pass [] to clear (a
+   *  non-sprite model). SimulatorView calls it only when the sprite set / decoded
+   *  frames change, so the resize + upload cost is one-off. */
+  setSpriteAtlas(sprites: ReadonlyArray<SpriteAtlasInput>): void {
+    const gl = this.gl;
+    this.spriteSlots.clear();
+    let totalLayers = 0;
+    for (const s of sprites) totalLayers += Math.max(0, s.frames.length);
+    if (totalLayers === 0) {
+      if (this.spriteAtlasTex) { gl.deleteTexture(this.spriteAtlasTex); this.spriteAtlasTex = null; }
+      this.spriteAtlasLayers = 0;
+      this.spriteInstanceCount = 0;
+      return;
+    }
+    const CELL = Gl3DRenderer.ATLAS_CELL;
+    if (!this.spriteAtlasTex || this.spriteAtlasLayers !== totalLayers) {
+      if (this.spriteAtlasTex) gl.deleteTexture(this.spriteAtlasTex);
+      this.spriteAtlasTex = gl.createTexture();
+      gl.bindTexture(gl.TEXTURE_2D_ARRAY, this.spriteAtlasTex);
+      gl.texImage3D(gl.TEXTURE_2D_ARRAY, 0, gl.RGBA8, CELL, CELL, totalLayers, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+      gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      this.spriteAtlasLayers = totalLayers;
+    } else {
+      gl.bindTexture(gl.TEXTURE_2D_ARRAY, this.spriteAtlasTex);
+    }
+    // Reusable CELL×CELL scratch canvas to stretch each native-size frame into a
+    // square layer (straight-alpha, no premultiply — the FS blends with SRC_ALPHA).
+    const scratch: OffscreenCanvas | HTMLCanvasElement = typeof OffscreenCanvas !== 'undefined'
+      ? new OffscreenCanvas(CELL, CELL)
+      : (() => { const c = document.createElement('canvas'); c.width = CELL; c.height = CELL; return c; })();
+    const sctx = scratch.getContext('2d') as CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
+    gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
+    let layer = 0;
+    for (const s of sprites) {
+      if (s.frames.length === 0) continue;
+      const f0 = s.frames[0]!;
+      this.spriteSlots.set(s.slot, {
+        baseLayer: layer, frameCount: s.frames.length,
+        aspect: f0.width / Math.max(1, f0.height),
+        loop: s.loop, defaultDirection: s.defaultDirection,
+        rotationOffset: s.rotationOffset, orientToVelocity: s.orientToVelocity,
+        scale: s.scale > 0 ? s.scale : 1,
+      });
+      for (const f of s.frames) {
+        sctx.clearRect(0, 0, CELL, CELL);
+        sctx.drawImage(f, 0, 0, CELL, CELL);
+        gl.texSubImage3D(gl.TEXTURE_2D_ARRAY, 0, 0, 0, layer, CELL, CELL, 1, gl.RGBA, gl.UNSIGNED_BYTE, scratch as TexImageSource);
+        layer++;
+      }
+    }
+    gl.bindTexture(gl.TEXTURE_2D_ARRAY, null);
+  }
 
   /** Compute the view-projection matrix from the Z-up orbit camera. */
   setCamera(cam: Camera3D, aspect: number): void {
@@ -677,7 +877,7 @@ export class Gl3DRenderer {
   /** Drop ALL agent geometry (spheres AND bond lines). Used when a non-agent /
    *  freshly-loaded model must not keep the previous model's agents lingering —
    *  zeroing agentInstanceCount alone leaves stale bondVerts drawing. */
-  clearAgents(): void { this.agentInstanceCount = 0; this.bondVerts = new Float32Array(0); }
+  clearAgents(): void { this.agentInstanceCount = 0; this.spriteInstanceCount = 0; this.bondVerts = new Float32Array(0); }
   /** True when the renderer holds any agent geometry (spheres OR bond lines). */
   get hasAgentGeometry(): boolean { return this.agentInstanceCount > 0 || this.bondVerts.length > 0; }
   /** Highlight rings for the hovered / inspected agents (world geometry).
@@ -696,15 +896,58 @@ export class Gl3DRenderer {
     if (this.agentInstData.length < need) this.agentInstData = new Float32Array(need);
     const d = this.agentInstData;
     const hasZ = snap.z.length > 0;
+    // Sprite pass inputs: active only when the model has decoded sprites AND the
+    // snapshot carries a per-agent slot for every agent (length-0 otherwise → every
+    // agent draws a sphere, byte-identical to a non-sprite model).
+    const sids = snap.spriteIds, sfr = snap.spriteFrames, srot = snap.spriteRotations, sscl = snap.spriteScales;
+    const svx = snap.vx, svy = snap.vy;
+    const spritesActive = this.spriteSlots.size > 0 && sids.length === hw;
+    const sp = spritesActive ? this.ensureSpriteCapacity(hw) : null;
+    let ns = 0;  // sprite billboard count
     let n = 0;
     for (let i = 0; i < hw; i++) {
       if (!snap.alive[i]) continue;
       const o = n * 8;
-      d[o] = snap.x[i]!;
-      d[o + 1] = snap.y[i]!;
-      d[o + 2] = hasZ ? snap.z[i]! : 0;
-      d[o + 3] = snap.radius[i]!;
+      const x = snap.x[i]!, y = snap.y[i]!, z = hasZ ? snap.z[i]! : 0;
+      d[o] = x;
+      d[o + 1] = y;
+      d[o + 2] = z;
       const c = i * 4;
+      // A decoded, in-slot sprite-agent draws a billboard (below) instead of the
+      // sphere; flag it via a NEGATIVE radius so the sphere FS discards it while
+      // pick + the buffer stride stay unchanged.
+      let isSprite = false;
+      if (sp && sids[i]! > 0) {
+        const meta = this.spriteSlots.get(sids[i]!);
+        if (meta) {
+          const fc = meta.frameCount;
+          const raw = Math.floor(sfr[i]!);
+          const frame = fc <= 1 ? 0 : meta.loop ? (((raw % fc) + fc) % fc) : (raw < 0 ? 0 : raw >= fc ? fc - 1 : raw);
+          const perScale = (sscl.length === hw && sscl[i]! > 0) ? sscl[i]! : meta.scale;
+          const diameter = snap.radius[i]! * 2 * perScale;
+          const aspect = meta.aspect;
+          let halfW = diameter / 2, halfH = diameter / 2;
+          if (aspect >= 1) halfH = diameter / (2 * aspect); else halfW = (diameter * aspect) / 2;
+          // Facing: the per-agent rotation the node set (compass deg, 0 = up),
+          // OR the world-XY velocity heading when the asset auto-orients (matches
+          // the 2D atan2(vx,-vy) convention). Aligned to the art's default + offset.
+          let facingDeg = srot.length === hw ? srot[i]! : 0;
+          if (meta.orientToVelocity && svx.length === hw) {
+            const vX = svx[i]!, vY = svy[i]!;
+            if (vX * vX + vY * vY > 1e-9) facingDeg = Math.atan2(vX, -vY) * 180 / Math.PI;
+          }
+          const rr = ((facingDeg - meta.defaultDirection) + meta.rotationOffset) * Math.PI / 180;
+          const so = ns * 9;
+          sp[so] = x; sp[so + 1] = y; sp[so + 2] = z;
+          sp[so + 3] = halfW; sp[so + 4] = halfH;
+          sp[so + 5] = Math.cos(rr); sp[so + 6] = Math.sin(rr);
+          sp[so + 7] = meta.baseLayer + frame;
+          sp[so + 8] = snap.colors[c + 3]! / 255;
+          ns++;
+          isSprite = true;
+        }
+      }
+      d[o + 3] = isSprite ? -snap.radius[i]! : snap.radius[i]!;
       d[o + 4] = snap.colors[c]! / 255;
       d[o + 5] = snap.colors[c + 1]! / 255;
       d[o + 6] = snap.colors[c + 2]! / 255;
@@ -712,6 +955,17 @@ export class Gl3DRenderer {
       n++;
     }
     this.agentInstanceCount = n;
+    this.spriteInstanceCount = ns;
+    if (sp && ns > 0) {
+      const gl2 = this.gl;
+      gl2.bindBuffer(gl2.ARRAY_BUFFER, this.spriteInstBuf);
+      if (this.spriteInstCapacity < ns * 9) {
+        gl2.bufferData(gl2.ARRAY_BUFFER, sp, gl2.DYNAMIC_DRAW);
+        this.spriteInstCapacity = sp.length;
+      } else {
+        gl2.bufferSubData(gl2.ARRAY_BUFFER, 0, sp.subarray(0, ns * 9));
+      }
+    }
     // Fresh upload = compacted order → identity permutation.
     if (this.agentInstOrder.length < n) this.agentInstOrder = new Int32Array(Math.max(n, 16));
     for (let k = 0; k < n; k++) this.agentInstOrder[k] = k;
@@ -749,6 +1003,47 @@ export class Gl3DRenderer {
       this.bondVerts = new Float32Array(0);
     }
     return n;
+  }
+
+  /** Grow + return the CPU-side sprite instance scratch to hold `hw` billboards
+   *  (9 floats each). Reused across frames. */
+  private ensureSpriteCapacity(hw: number): Float32Array {
+    const need = hw * 9;
+    if (this.spriteInstData.length < need) this.spriteInstData = new Float32Array(need);
+    return this.spriteInstData;
+  }
+
+  /** Draw the sprite billboards (camera-facing textured quads from the atlas) for
+   *  the sprite-agents. Runs AFTER the sphere pass in render(); the sprites depth-
+   *  interleave with spheres/voxels (depth-test on) and blend by their alpha. */
+  private renderSprites(): void {
+    if (this.spriteInstanceCount === 0 || !this.spriteAtlasTex) return;
+    const gl = this.gl;
+    gl.useProgram(this.spriteProg);
+    gl.bindVertexArray(this.spriteVao);
+    gl.uniformMatrix4fv(gl.getUniformLocation(this.spriteProg, 'uMVP'), false, this.mvp);
+    gl.uniform3f(gl.getUniformLocation(this.spriteProg, 'uHalf'), (this.W - 1) / 2, (this.H - 1) / 2, (this.D - 1) / 2);
+    gl.uniform3f(gl.getUniformLocation(this.spriteProg, 'uCamRight'), this.camRight[0], this.camRight[1], this.camRight[2]);
+    gl.uniform3f(gl.getUniformLocation(this.spriteProg, 'uCamUp'), this.camUp[0], this.camUp[1], this.camUp[2]);
+    gl.uniform1i(gl.getUniformLocation(this.spriteProg, 'uClipEnabled'), this.clip.enabled ? 1 : 0);
+    const axisN = this.clip.axis === 'x' ? 0 : this.clip.axis === 'y' ? 1 : this.clip.axis === 'z' ? 2 : 3;
+    gl.uniform1i(gl.getUniformLocation(this.spriteProg, 'uClipAxis'), axisN);
+    gl.uniform1f(gl.getUniformLocation(this.spriteProg, 'uClipLo'), this.clip.lo);
+    gl.uniform1f(gl.getUniformLocation(this.spriteProg, 'uClipHi'), this.clip.hi);
+    gl.uniform3f(gl.getUniformLocation(this.spriteProg, 'uClipForward'), this.camForward[0], this.camForward[1], this.camForward[2]);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D_ARRAY, this.spriteAtlasTex);
+    gl.uniform1i(gl.getUniformLocation(this.spriteProg, 'uAtlas'), 0);
+    // Transparent-agent-friendly: depth-test on (occlude behind spheres/voxels),
+    // depth-write off, alpha blend. Fully-transparent texels are discarded in the FS.
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+    gl.depthMask(false);
+    gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, this.spriteInstanceCount);
+    gl.depthMask(true);
+    gl.disable(gl.BLEND);
+    gl.bindTexture(gl.TEXTURE_2D_ARRAY, null);
+    gl.bindVertexArray(null);
   }
 
   /** Back-to-front sort of the agent instance buffer (alpha blend, Option A).
@@ -948,7 +1243,8 @@ export class Gl3DRenderer {
       if (this.agentInstanceCount > 0 || this.bondVerts.length > 0) {
         gl.clear(gl.DEPTH_BUFFER_BIT);
         this.renderBonds();    // bonds first (depth-tested UNDER the spheres)
-        this.renderAgents();   // sphere impostors
+        this.renderAgents();   // sphere impostors (non-sprite agents)
+        this.renderSprites();  // sprite billboards (sprite-agents; on top, blended)
       }
       this.renderAgentRings(); // hovered/inspected agent rings (depth OFF, on top)
     }
@@ -1340,14 +1636,18 @@ export class Gl3DRenderer {
     gl.deleteProgram(this.lineProg);
     gl.deleteProgram(this.sphereProg);
     gl.deleteProgram(this.spherePickProg);
+    gl.deleteProgram(this.spriteProg);
     gl.deleteVertexArray(this.vao);
     gl.deleteVertexArray(this.lineVao);
     gl.deleteVertexArray(this.sphereVao);
+    gl.deleteVertexArray(this.spriteVao);
     gl.deleteBuffer(this.cubeBuf);
     gl.deleteBuffer(this.instBuf);
     gl.deleteBuffer(this.lineBuf);
     gl.deleteBuffer(this.quadBuf);
     gl.deleteBuffer(this.agentInstBuf);
+    gl.deleteBuffer(this.spriteInstBuf);
+    if (this.spriteAtlasTex) gl.deleteTexture(this.spriteAtlasTex);
     if (this.pickFbo) { gl.deleteFramebuffer(this.pickFbo); gl.deleteTexture(this.pickTex!); gl.deleteRenderbuffer(this.pickDepth!); }
   }
 }

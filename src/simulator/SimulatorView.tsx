@@ -12,6 +12,7 @@ import { NeighborIndexValuePicker } from '../modeler/panels/NeighborIndexDefault
 import { LookupTableEditor } from '../modeler/panels/LookupTableEditor';
 import { compileGraphWebGPU } from '../modeler/vpl/compiler/webgpu/compile';
 import { Gl3DRenderer, panCamera } from './render/gl3d';
+import type { SpriteAtlasInput } from './render/gl3d';
 import { agentTargetOf, resolveMaxBonds } from '../model/centerBased';
 import { compileAgentGraphWasmForModel, isAgentGraphWasmSupported, buildAgentLayoutExtras } from '../modeler/vpl/compiler/agentWasm/compile';
 import type { AgentLayoutExtras } from './engine/agentEngine';
@@ -1060,6 +1061,11 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   // render just reads the per-agent frame from the snapshot.
   const spriteRegistryRef = useRef<SpriteRegistry | null>(null);
   const spriteMetaRef = useRef<Array<{ id: string; scale: number; loop: boolean; defaultDirection: number; orientToVelocity: boolean; rotationOffset: number }>>([]);
+  // 3D sprites: the gl3d sprite ATLAS is (re)built lazily in the 3D draw path (the
+  // only place the renderer exists) whenever this flag is set — by a sprite-set
+  // change, a decode completing (registry onReady), or a fresh renderer. The 2D
+  // path draws sprites straight from the registry (no atlas) — this is 3D-only.
+  const spriteAtlasDirtyRef = useRef(true);
   // Agent brush: the LMB action on the canvas for an agent model (only active
   // when brushTarget === 'agents'). Add/Remove/Move/Edit honour the Single/Area
   // scope + the shape footprint; Glue/Cut stage a first agent then bond/unbond to
@@ -1534,6 +1540,26 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       if (isAgentModelRef.current) {
         const snap = agentsRef.current;
         r.setAgentAlphaBlend(alpha3dRef.current);
+        // (Re)build the sprite atlas when the sprite set / decoded frames changed
+        // (registry onReady / sprite-set edit / fresh renderer). Must precede
+        // uploadAgents (which reads the atlas slot meta) and force a re-upload so
+        // the sprite buffer reflects the new atlas even without a new snapshot.
+        if (spriteAtlasDirtyRef.current) {
+          const reg = spriteRegistryRef.current, metas = spriteMetaRef.current;
+          const atlas: SpriteAtlasInput[] = [];
+          if (reg) {
+            for (let si = 0; si < metas.length; si++) {
+              const m = metas[si]!;
+              const dec = reg.get(m.id);
+              if (dec && dec.frames.length > 0) {
+                atlas.push({ slot: si + 1, frames: dec.frames, loop: m.loop, defaultDirection: m.defaultDirection, rotationOffset: m.rotationOffset, orientToVelocity: m.orientToVelocity, scale: m.scale });
+              }
+            }
+          }
+          r.setSpriteAtlas(atlas);
+          spriteAtlasDirtyRef.current = false;
+          lastUploadedAgentSnapRef.current = null; // force re-upload with the new atlas
+        }
         if (!snap || snap.highWater === 0) {
           r.clearAgents(); // spheres AND bond lines (a bare instanceCount=0 leaves stale bonds)
           lastUploadedAgentSnapRef.current = snap ?? null;
@@ -2178,13 +2204,15 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   useEffect(() => {
     const sprites = model.sprites ?? [];
     spriteMetaRef.current = sprites.map(s => ({ id: s.id, scale: s.scale ?? 1, loop: s.loop !== false, defaultDirection: s.defaultDirection ?? 0, orientToVelocity: !!s.orientToVelocity, rotationOffset: s.rotationOffset ?? 0 }));
+    spriteAtlasDirtyRef.current = true; // sprite set changed → rebuild the 3D atlas
     if (sprites.length === 0) {
       spriteRegistryRef.current?.dispose();
       spriteRegistryRef.current = null;
       return;
     }
     if (!spriteRegistryRef.current) {
-      spriteRegistryRef.current = new SpriteRegistry(() => drawRef.current());
+      // A decode completing marks the 3D atlas dirty (a new frame set) + redraws.
+      spriteRegistryRef.current = new SpriteRegistry(() => { spriteAtlasDirtyRef.current = true; drawRef.current(); });
     }
     spriteRegistryRef.current.sync(sprites);
   }, [model.sprites]);
@@ -3547,6 +3575,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       gl3dRef.current.setGrid(gridWidth.current, gridHeight.current, gridDepth.current);
       lastUploadedColors3dRef.current = null;  // fresh renderer → force the next upload
       lastUploadedAgentSnapRef.current = null; // fresh renderer → re-upload agents too
+      spriteAtlasDirtyRef.current = true;      // fresh renderer → rebuild the sprite atlas
       draw();
     } catch (e) {
       console.error('[gl3d] init failed', e);
