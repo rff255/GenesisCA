@@ -656,11 +656,30 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   const [agentBrushH, setAgentBrushH] = useState<number>((saved.current.agentBrushH as number) ?? 10);
   const [agentBrushRingWidth, setAgentBrushRingWidth] = useState<number>((saved.current.agentBrushRingWidth as number) ?? 3);
   const [agentBrushLineWidth, setAgentBrushLineWidth] = useState<number>((saved.current.agentBrushLineWidth as number) ?? 3);
-  // Single = the action affects exactly ONE agent (add-one / remove-nearest /
-  // move-one / edit-clicked); Area = the whole shape footprint. Default Area
-  // (preserves the historical seed/kill feel).
-  const [agentBrushScope, setAgentBrushScope] = useState<'single' | 'area'>(
-    saved.current.agentBrushScope === 'single' ? 'single' : 'area',
+  // Scope is DERIVED from the brush SIZE (no manual toggle): a zero-size footprint
+  // acts on exactly ONE agent (add-one / remove-nearest / move-one / edit-clicked),
+  // a sized footprint acts on ALL agents inside it. circle/ring → radius 0 = single;
+  // rect → 1×1 = single; line is inherently a drawn segment (always Area — the
+  // move+line single-agent case is a separate paint override). A small badge next to
+  // the size input shows the current Single/Area state.
+  const agentBrushScope: 'single' | 'area' =
+    agentBrushShape === 'rect' ? (agentBrushW > 1 || agentBrushH > 1 ? 'area' : 'single')
+    : agentBrushShape === 'line' ? 'area'
+    : (agentBrushRadius > 0 ? 'area' : 'single');
+  // The Single/Area indicator shown on the size row (replaces the old toggle). Only
+  // one size row renders at a time, so this element appears once in the tree.
+  const scopeBadge = (
+    <span
+      title={agentBrushScope === 'single'
+        ? 'Zero size → acts on exactly ONE agent (nearest to the cursor). Increase the size for an Area brush.'
+        : 'Sized footprint → acts on ALL agents inside it. Set the size to 0 for a Single-agent brush.'}
+      style={{
+        marginLeft: 'auto', padding: '1px 8px', borderRadius: 999, fontSize: '0.56rem',
+        fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em',
+        background: agentBrushScope === 'area' ? 'var(--color-accent-soft)' : 'var(--color-widget-border)',
+        color: agentBrushScope === 'area' ? 'var(--color-accent)' : 'var(--color-text-muted)',
+      }}
+    >{agentBrushScope}</span>
   );
   // Layer toggles (req 1 + 7): independently SHOW (render) and SIMULATE (run the
   // step) the CA grid + the agents. Show toggles are render-only (2D + 3D);
@@ -740,7 +759,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
           brushShape, brushRadius, brushRingWidth, brushLineWidth, brush3dVolume, brushBoxDepth,
           infinityCanvas, indicatorVizModes, recordFormat, brushSectionH,
           agentBrushRadius, agentSeedDensity, agentSeedSpacing,
-          agentBrushShape, agentBrushW, agentBrushH, agentBrushRingWidth, agentBrushLineWidth, agentBrushScope,
+          agentBrushShape, agentBrushW, agentBrushH, agentBrushRingWidth, agentBrushLineWidth,
           showCaGrid, showAgents, simulateCells, simulateAgents, brushTarget, bg2d,
           indicatorHiddenCategories: Object.fromEntries(
             Object.entries(indicatorHiddenCategories)
@@ -753,7 +772,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       } catch { /* localStorage full */ }
     }, 300);
     return () => clearTimeout(timer);
-  }, [targetFps, unlimitedFps, gensPerFrame, unlimitedGens, activeViewer, brushColor, brushW, brushH, brushMapping, showBrushCursor, showGridlines, brushShape, brushRadius, brushRingWidth, brushLineWidth, brush3dVolume, brushBoxDepth, infinityCanvas, indicatorVizModes, recordFormat, brushSectionH, agentBrushRadius, agentSeedDensity, agentSeedSpacing, agentBrushShape, agentBrushW, agentBrushH, agentBrushRingWidth, agentBrushLineWidth, agentBrushScope, showCaGrid, showAgents, simulateCells, simulateAgents, brushTarget, bg2d, indicatorHiddenCategories, indicatorChartOverrides]);
+  }, [targetFps, unlimitedFps, gensPerFrame, unlimitedGens, activeViewer, brushColor, brushW, brushH, brushMapping, showBrushCursor, showGridlines, brushShape, brushRadius, brushRingWidth, brushLineWidth, brush3dVolume, brushBoxDepth, infinityCanvas, indicatorVizModes, recordFormat, brushSectionH, agentBrushRadius, agentSeedDensity, agentSeedSpacing, agentBrushShape, agentBrushW, agentBrushH, agentBrushRingWidth, agentBrushLineWidth, showCaGrid, showAgents, simulateCells, simulateAgents, brushTarget, bg2d, indicatorHiddenCategories, indicatorChartOverrides]);
 
   // Manual Brush — signature-keyed merge effect. Re-derives `manualBrush`
   // whenever the cell attribute set (id+type) changes. Surviving attrs carry
@@ -7811,32 +7830,10 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
                 <span className={styles.panelTitle}>Agent Brush</span>
               </div>
               <div className={styles.rightPanelSectionBody} style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: '0.66rem' }}>
-                  {/* Mode row — labels come from the id via textTransform:capitalize. */}
-                  <div style={{ display: 'flex', gap: 3, flexWrap: 'wrap' }}>
-                    {(['add', 'remove', 'move', 'edit', 'glue', 'cut', 'bond'] as const).map(m => (
-                      <button
-                        key={m}
-                        onClick={() => { setAgentBrushMode(m); agentGlueAnchorRef.current = -1; agentLineAnchorRef.current = null; agentLine3dAnchorRef.current = null; draw(); }}
-                        title={
-                          m === 'add' ? 'Add agents — Single: one at the cursor; Area: fill the shape footprint' :
-                          m === 'remove' ? 'Remove agents — Single: the nearest; Area: all in the footprint' :
-                          m === 'move' ? 'Move — Single: drag one agent; Area: rigid-drag a footprint of agents (RMB cancels)' :
-                          m === 'edit' ? 'Edit agent properties — Single: click an agent, adjust, Apply; Area: stamp onto all in the footprint' :
-                          m === 'glue' ? 'Click two agents to bond them' :
-                          m === 'cut' ? 'Click two bonded agents to unbond them' :
-                          'Drag to bond agent pairs within the scan radius that are close enough to touch (needs Max Bonds ≥ 1 in Properties › Bond-Graph Agents)'
-                        }
-                        style={{
-                          padding: '3px 8px', borderRadius: 'var(--radius-sm)', cursor: 'pointer', textTransform: 'capitalize',
-                          border: '1px solid ' + (agentBrushMode === m ? 'var(--color-accent)' : 'var(--color-widget-border)'),
-                          background: agentBrushMode === m ? 'var(--color-accent-soft)' : 'transparent',
-                          color: agentBrushMode === m ? 'var(--color-accent)' : 'var(--color-text-muted)',
-                          fontWeight: 600, fontSize: '0.64rem',
-                        }}
-                      >{m}</button>
-                    ))}
-                  </div>
-                  {/* Shape + size + scope — the footprint modes (Add/Remove/Move/Edit). */}
+                  {/* Shape + size — placed BEFORE the mode buttons. Scope (Single vs
+                      Area) is DERIVED from the size and shown as a badge on the size
+                      row (no toggle): a zero-size footprint acts on ONE agent, a sized
+                      one on ALL agents inside it. Footprint modes only. */}
                   {(agentBrushMode === 'add' || agentBrushMode === 'remove' || agentBrushMode === 'move' || agentBrushMode === 'edit') && (<>
                     <div className={styles.fieldRow}>
                       <span className={styles.statLabel}>Shape</span>
@@ -7856,12 +7853,14 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
                         <NumberField className={styles.brushInput} min={1} max={(gridWidth.current || simWidth) * 2} integer value={agentBrushW} onNumber={setAgentBrushW} />
                         <span className={styles.statLabel}>H</span>
                         <NumberField className={styles.brushInput} min={1} max={(gridHeight.current || simHeight) * 2} integer value={agentBrushH} onNumber={setAgentBrushH} />
+                        {scopeBadge}
                       </div>
                     )}
                     {agentBrushShape === 'circle' && (
                       <div className={styles.fieldRow}>
                         <span className={styles.statLabel}>Radius</span>
                         <NumberField className={styles.brushInput} min={0} max={(gridWidth.current || simWidth) * 2} integer value={agentBrushRadius} onNumber={setAgentBrushRadius} />
+                        {scopeBadge}
                       </div>
                     )}
                     {agentBrushShape === 'ring' && (
@@ -7870,6 +7869,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
                         <NumberField className={styles.brushInput} min={0} max={(gridWidth.current || simWidth) * 2} integer value={agentBrushRadius} onNumber={setAgentBrushRadius} />
                         <span className={styles.statLabel}>Width</span>
                         <NumberField className={styles.brushInput} min={1} max={(gridWidth.current || simWidth) * 2} integer value={agentBrushRingWidth} onNumber={setAgentBrushRingWidth} />
+                        {scopeBadge}
                       </div>
                     )}
                     {agentBrushShape === 'line' && (
@@ -7879,17 +7879,32 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
                         <span className={styles.brushShapeHint}>{agentBrushMode === 'move' ? 'single-agent' : 'click 2 points'}</span>
                       </div>
                     )}
-                    <div className={styles.fieldRow}>
-                      <span className={styles.statLabel}>Scope</span>
-                      <div style={{ display: 'flex', border: '1px solid var(--color-widget-border)', borderRadius: 'var(--radius-sm)', overflow: 'hidden' }}>
-                        {(['single', 'area'] as const).map(sc => (
-                          <button key={sc} onClick={() => { setAgentBrushScope(sc); draw(); }}
-                            title={sc === 'single' ? 'Affect exactly one agent' : 'Affect all agents in the shape footprint'}
-                            style={{ padding: '3px 10px', cursor: 'pointer', border: 'none', borderRight: sc === 'single' ? '1px solid var(--color-widget-border)' : 'none', textTransform: 'capitalize', background: agentBrushScope === sc ? 'var(--color-accent-soft)' : 'transparent', color: agentBrushScope === sc ? 'var(--color-accent)' : 'var(--color-text-muted)', fontWeight: 600, fontSize: '0.62rem' }}>{sc}</button>
-                        ))}
-                      </div>
-                    </div>
                   </>)}
+                  {/* Mode row — the brush actions (labels via textTransform:capitalize). */}
+                  <div style={{ display: 'flex', gap: 3, flexWrap: 'wrap' }}>
+                    {(['add', 'remove', 'move', 'edit', 'glue', 'cut', 'bond'] as const).map(m => (
+                      <button
+                        key={m}
+                        onClick={() => { setAgentBrushMode(m); agentGlueAnchorRef.current = -1; agentLineAnchorRef.current = null; agentLine3dAnchorRef.current = null; draw(); }}
+                        title={
+                          m === 'add' ? 'Add agents — size 0: one at the cursor; sized: fill the shape footprint' :
+                          m === 'remove' ? 'Remove agents — size 0: the nearest; sized: all in the footprint' :
+                          m === 'move' ? 'Move — size 0: drag one agent; sized: rigid-drag a footprint of agents (RMB cancels)' :
+                          m === 'edit' ? 'Edit agent properties — size 0: click an agent, adjust, Apply; sized: stamp onto all in the footprint' :
+                          m === 'glue' ? 'Click two agents to bond them' :
+                          m === 'cut' ? 'Click two bonded agents to unbond them' :
+                          'Drag to bond agent pairs within the scan radius that are close enough to touch (needs Max Bonds ≥ 1 in Properties › Bond-Graph Agents)'
+                        }
+                        style={{
+                          padding: '3px 8px', borderRadius: 'var(--radius-sm)', cursor: 'pointer', textTransform: 'capitalize',
+                          border: '1px solid ' + (agentBrushMode === m ? 'var(--color-accent)' : 'var(--color-widget-border)'),
+                          background: agentBrushMode === m ? 'var(--color-accent-soft)' : 'transparent',
+                          color: agentBrushMode === m ? 'var(--color-accent)' : 'var(--color-text-muted)',
+                          fontWeight: 600, fontSize: '0.64rem',
+                        }}
+                      >{m}</button>
+                    ))}
+                  </div>
                   {/* Add: density + spacing (area scatter) + the initial-value config. */}
                   {agentBrushMode === 'add' && agentBrushScope === 'area' && (
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
