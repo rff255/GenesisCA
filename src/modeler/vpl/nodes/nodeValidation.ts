@@ -660,6 +660,93 @@ export const LATTICE_ONLY_TYPES = new Set<string>([
   'getFacingLabels', 'getAllFacingLabels', 'interactionTableMap',
 ]);
 
+/** Agent nodes that intrinsically read/write the CURRENT agent (they emit the
+ *  per-agent loop variable `idx`), so they are INVALID in the Agent Init Event —
+ *  which runs ONCE per Reset, NOT once per agent (there is no "current agent"
+ *  there). Dropping one under the agentInit root compiles to code referencing an
+ *  undefined `idx` and fails at runtime with a cryptic "init compile failed: idx
+ *  is not defined". In the Init Event you instead SPAWN + configure NEW agents by
+ *  handle (Create Agent → Set Agent Position/Radius/Attribute → Add Agent To
+ *  World). Excludes the by-id reader/writer nodes (getAgentPosition / getAgentOffset
+ *  / getVelocity / setAgentAttribute / …): those address a specific agent via a
+ *  wired handle and ARE valid in init, so badging them would be a false positive. */
+const AGENT_SELF_ONLY_TYPES = new Set<string>([
+  // self identity / geometry readers
+  'getSelfPosition', 'getSelfHandle', 'getRadius', 'getAge', 'getBondDegree',
+  'neighbourDensity', 'getCurvature',
+  // self-centred neighbour access + the self bond loop
+  'getNearbyAgents', 'getAgentsInView', 'senseHemifield', 'getBondedAgents', 'forEachBond',
+  // self writers
+  'setVelocity', 'applyForce', 'setTargetRadius', 'divideAgent', 'formBond', 'breakBond', 'killAgent',
+  // field bridge (sampled/deposited at the SELF position)
+  'sampleField', 'fieldGradient', 'readCellsUnder', 'affectCellsUnder', 'secreteToField',
+  // universal self-attribute nodes (on the agent SoA at idx) — valid in the
+  // Behaviour Step, invalid in the Init Event
+  'getCellAttribute', 'setAttribute', 'updateAttribute',
+]);
+
+/** Memoised "which nodes reachable from the agentInit root are self-only" set,
+ *  keyed on the agent graph arrays' identity (ModelContext hands fresh arrays on
+ *  every edit, so this invalidates naturally). */
+let _agentInitSelfCache: { nodes: unknown; edges: unknown; set: Set<string> } | null = null;
+
+function agentInitSelfOnlyNodeIds(model: CAModel): Set<string> {
+  const nodes = model.agentGraphNodes ?? [];
+  const edges = model.agentGraphEdges ?? [];
+  if (_agentInitSelfCache && _agentInitSelfCache.nodes === nodes && _agentInitSelfCache.edges === edges) {
+    return _agentInitSelfCache.set;
+  }
+  const result = new Set<string>();
+  const initNode = nodes.find(n => n.data?.nodeType === 'agentInit');
+  if (initNode) {
+    const nodeMap = new Map(nodes.map(n => [n.id, n] as const));
+    // flow-output adjacency (src → targets) + value-input adjacency (node → sources).
+    const flowOut = new Map<string, string[]>();
+    const valIn = new Map<string, string[]>();
+    for (const e of edges) {
+      const sh = e.sourceHandle || '', th = e.targetHandle || '';
+      if (sh.startsWith('output_flow_') && th.startsWith('input_flow_')) {
+        (flowOut.get(e.source) ?? (flowOut.set(e.source, []), flowOut.get(e.source)!)).push(e.target);
+      } else if (sh.startsWith('output_value_') && th.startsWith('input_value_')) {
+        (valIn.get(e.target) ?? (valIn.set(e.target, []), valIn.get(e.target)!)).push(e.source);
+      }
+    }
+    // Flow-reachable from init (the nodes that RUN in the init function body).
+    const reached = new Set<string>();
+    const stack = [initNode.id];
+    while (stack.length) {
+      const id = stack.pop()!;
+      if (reached.has(id)) continue;
+      reached.add(id);
+      for (const t of flowOut.get(id) ?? []) stack.push(t);
+    }
+    // + their transitive value cone (the value nodes they compile).
+    const vseen = new Set<string>(reached);
+    const vstack = [...reached];
+    while (vstack.length) {
+      const id = vstack.pop()!;
+      for (const s of valIn.get(id) ?? []) if (!vseen.has(s)) { vseen.add(s); vstack.push(s); }
+    }
+    for (const id of vseen) {
+      const n = nodeMap.get(id);
+      if (n && AGENT_SELF_ONLY_TYPES.has(n.data?.nodeType)) result.add(id);
+    }
+  }
+  _agentInitSelfCache = { nodes, edges, set: result };
+  return result;
+}
+
+/** Design-time badge for the Init-vs-Behaviour footgun: a per-agent (self) node
+ *  wired into the Agent Init Event. Returns an issue string ONLY for a node in
+ *  `AGENT_SELF_ONLY_TYPES` that is reachable (flow or value cone) from the
+ *  agentInit root on the Agents graph. Empty otherwise. */
+export function detectAgentInitContextIssue(nodeId: string, model: CAModel): string[] {
+  if (getActiveGraphKind() !== 'agents' || !model.topologyMode?.agents) return [];
+  return agentInitSelfOnlyNodeIds(model).has(nodeId)
+    ? ['Reads/writes the CURRENT agent — invalid in the Agent Init Event (it runs once, not per-agent). Spawn + configure new agents by handle instead: Create Agent → Set Agent Position/Radius/Attribute → Add Agent To World.']
+    : [];
+}
+
 /** True when a node type can be added to / kept in the current model. Used to
  *  hide unavailable nodes from the palette and Add-Node menu. Mirrors
  *  `detectCapabilityRequirements(...).length === 0`. */

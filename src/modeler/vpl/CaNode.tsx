@@ -4,7 +4,7 @@ import type { NodeProps } from '@xyflow/react';
 import { getNodeDef } from './nodes/registry';
 import { CURRENT_VIEWER_SENTINEL } from './nodes/SetCellLooksNode';
 import { ARITHMETIC_UNARY_OPS } from './nodes/ArithmeticOperatorNode';
-import { detectMissingConfig, detectCapabilityRequirements, detectWebGPUIncompatibilities, detectWasmIncompatibilities, countMacroSubgraphIssues } from './nodes/nodeValidation';
+import { detectMissingConfig, detectCapabilityRequirements, detectWebGPUIncompatibilities, detectWasmIncompatibilities, countMacroSubgraphIssues, detectAgentInitContextIssue } from './nodes/nodeValidation';
 import { INTERPOLATION_METHODS, INTERPOLATION_SHORT_LABELS, DEFAULT_INTERPOLATION_METHOD } from './nodes/interpolationMethods';
 import type { InterpolationMethod } from './nodes/interpolationMethods';
 import { buildVarMap, parseExpression, clampVisibleCount, VISIBLE_PORT_IDS, MAX_VISIBLE } from './compiler/expression/parser';
@@ -535,11 +535,15 @@ function CaNodeComponent({ id, data }: NodeProps) {
       const useWasm = !!model.properties.useWasm && !useWebGPU;
       const base = detectMissingConfig(nodeData.nodeType, nodeData.config, model, connectedInputHandles);
       const capability = detectCapabilityRequirements(nodeData.nodeType, model);
+      // Init-vs-Behaviour footgun: a per-agent (self) node wired into the Agent
+      // Init Event (which has no per-agent `idx` loop) — a design-time warning
+      // instead of the cryptic "init compile failed: idx is not defined" at runtime.
+      const initCtx = detectAgentInitContextIssue(id, model);
       const own = useWebGPU
-        ? [...base, ...capability, ...detectWebGPUIncompatibilities(nodeData.nodeType, nodeData.config, model)]
+        ? [...base, ...capability, ...initCtx, ...detectWebGPUIncompatibilities(nodeData.nodeType, nodeData.config, model)]
         : useWasm
-          ? [...base, ...capability, ...detectWasmIncompatibilities(nodeData.nodeType, nodeData.config, model)]
-          : [...base, ...capability];
+          ? [...base, ...capability, ...initCtx, ...detectWasmIncompatibilities(nodeData.nodeType, nodeData.config, model)]
+          : [...base, ...capability, ...initCtx];
       // Bubble up internal-node warnings on macro instances so they're visible
       // without expanding the macro (and recursively through nested macros).
       if (nodeData.nodeType === 'macro') {
@@ -578,6 +582,11 @@ function CaNodeComponent({ id, data }: NodeProps) {
       model.properties.updateMode,
       model.properties.dimension,
       model.variegatedCells?.enabled,
+      // detectAgentInitContextIssue walks the agent graph (flow + value cone from
+      // the agentInit root) — recompute the badge when the agent graph changes.
+      id,
+      model.agentGraphNodes,
+      model.agentGraphEdges,
       connectionHazards,
       connectedInputHandles,
     ],
