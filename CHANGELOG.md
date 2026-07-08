@@ -7,7 +7,7 @@ https://github.com/rff255/GenesisCA/releases
 The version at the top of `package.json` is the single source of truth; each
 entry below is cut when that version is tagged (see `.github/workflows/release.yml`).
 
-## [1.26.0] - 2026-07-08
+## [1.26.1] - 2026-07-08
 
 The Agent Capability Profiles milestone plus a large agent-platform push: opt-in
 capability modules, a stored vector attribute type, unified spawning, directional
