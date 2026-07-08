@@ -15,11 +15,12 @@ export function viewCosHalf(config: Record<string, unknown>): { cosHalf: number;
 
 /** The heading (x,y[,z]) expressions in the AGENT behaviour loop for the two backed
  *  sources. `velocity` (default) = the agent's own velocity (zero-cost, matches
- *  boids); `wired` = the node's Heading X/Y/Z inputs. To steer by a stored FACING
- *  vector, give the agent a `vector` agent-attribute and wire it into the Heading
- *  inputs via Get Self Attribute → Break Vector (Wired source) — that lowers to the
- *  facing components exactly as a dedicated `facing` source would, on all three
- *  targets. A dedicated `facing` config is a possible future convenience only.
+ *  boids); `wired` = the node's Heading X/Y/Z inputs. The third source, `facing`,
+ *  is NOT resolved here: `lowerFacingSource` ([facingSource.ts](../compiler/facingSource.ts))
+ *  rewrites a `facing` node into the `wired` composition (Get Self Attribute [the
+ *  chosen VECTOR facing attribute] → Break Vector → these Heading inputs) BEFORE
+ *  compile, so all three targets get it for free via the verified vector lowering.
+ *  An UNRESOLVED `facing` (no valid vector attr) falls through to `velocity` here.
  *  Returns raw f64 exprs. */
 export function viewHeadingExprs(
   config: Record<string, unknown>, inputs: Record<string, string>, is3d: boolean,
@@ -44,7 +45,7 @@ export function viewHeadingExprs(
 export const GetAgentsInViewNode: NodeTypeDef = {
   type: 'getAgentsInView',
   label: 'Get Agents In View',
-  description: 'Nearby agents inside a heading-relative vision cone (set Half-angle°) — the directional Get Nearby Agents. Iterate with For Each In Array. Heading = Velocity (default) or Wired; for a stored FACING, wire a vector agent-attribute via Get Self Attribute → Break Vector into the Heading inputs.',
+  description: 'Nearby agents inside a heading-relative vision cone (set Half-angle°) — the directional Get Nearby Agents. Iterate with For Each In Array. Heading = Velocity (default), Wired, or Facing (a stored vector agent-attribute — needs the Orientation capability).',
   category: 'data',
   color: '#5e35b1',
   requirements: { bondGraph: true },

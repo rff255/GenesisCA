@@ -50,6 +50,7 @@ import { expandMacros } from '../macroExpand';
 import { collapseReroutes } from '../rerouteCollapse';
 import { expandComposites } from '../expandComposites';
 import { lowerVectorAttrs, expandVectorAttributes } from '../vectorAttr';
+import { lowerFacingSource } from '../facingSource';
 import { canonicalizeAccessorEdges } from '../accessorCSE';
 import { computeAsyncReadWriteHazards } from '../asyncWriteHazard';
 import { computeVolatileHoist } from '../volatileHoist';
@@ -2895,6 +2896,9 @@ function flattenAgentGraph(nodes: GraphNode[], edges: GraphEdge[], model: CAMode
   if (expanded.error) return { nodes, edges, model, error: expanded.error };
   let n = expanded.nodes, e = expanded.edges;
   ({ nodes: n, edges: e } = collapseReroutes(n, e));
+  // FOV `facing` heading source → Get Self Attribute [vector] → Break Vector → wired
+  // heading (BEFORE vector lowering). No-op unless a facing FOV node is used.
+  ({ nodes: n, edges: e } = lowerFacingSource(n, e, model));
   // Vector stored-attribute lowering — Get/Set Vector nodes → Make/Break Vector over
   // per-component scalar reads/writes + reassign `model` to the component-expanded
   // agent attrs/variables (the layout expands identically). See vectorAttr.ts.

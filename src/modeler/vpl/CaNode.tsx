@@ -1424,7 +1424,23 @@ function CaNodeComponent({ id, data }: NodeProps) {
             >
               <option value="velocity">Velocity</option>
               <option value="wired">Wired (X/Y/Z)</option>
+              <option value="facing">Facing (vector attr)</option>
             </select>
+            {nodeData.config.headingSource === 'facing' && (
+              <>
+                <label style={{ fontSize: '0.6rem', color: '#999' }}>Facing attr</label>
+                <select
+                  className={styles.select}
+                  value={(nodeData.config.facingAttributeId as string) ?? ''}
+                  onChange={e => updateConfig('facingAttributeId', e.target.value)}
+                >
+                  <option value="">Vector attribute…</option>
+                  {(model.agentAttributes ?? []).filter(a => a.type === 'vector').map(a => (
+                    <option key={a.id} value={a.id}>{a.name}</option>
+                  ))}
+                </select>
+              </>
+            )}
           </>
         )}
 
@@ -1444,7 +1460,23 @@ function CaNodeComponent({ id, data }: NodeProps) {
             >
               <option value="velocity">Velocity</option>
               <option value="wired">Wired (X/Y/Z)</option>
+              <option value="facing">Facing (vector attr)</option>
             </select>
+            {nodeData.config.headingSource === 'facing' && (
+              <>
+                <label style={{ fontSize: '0.6rem', color: '#999' }}>Facing attr</label>
+                <select
+                  className={styles.select}
+                  value={(nodeData.config.facingAttributeId as string) ?? ''}
+                  onChange={e => updateConfig('facingAttributeId', e.target.value)}
+                >
+                  <option value="">Vector attribute…</option>
+                  {(model.agentAttributes ?? []).filter(a => a.type === 'vector').map(a => (
+                    <option key={a.id} value={a.id}>{a.name}</option>
+                  ))}
+                </select>
+              </>
+            )}
           </>
         )}
 
