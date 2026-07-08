@@ -1,7 +1,7 @@
 import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { useModel } from '../../model/ModelContext';
 import { getNodeDefsByCategory } from '../vpl/nodes/registry';
-import { isNodeAvailable } from '../vpl/nodes/nodeValidation';
+import { isNodeAvailable, isMacroAvailableOnGraph } from '../vpl/nodes/nodeValidation';
 import { subscribeActiveGraphKind, getActiveGraphKind, displayNodeLabel, displayNodeDescription } from '../vpl/graphState';
 import type { NodeTypeDef } from '../vpl/types';
 import type { GraphNode } from '../../model/types';
@@ -206,6 +206,10 @@ export const PalettePanelContent = forwardRef<PaletteHandle, PalettePanelContent
 
   const projectMacros = (model.macroDefs || [])
     .filter(m => usedMacroIds.has(m.id))
+    // Graph-kind gate: hide a macro whose internals can't run on the active graph
+    // (a cell macro with lattice nodes on the Agents graph, or vice-versa) — it
+    // would fail to compile after the drop.
+    .filter(m => isMacroAvailableOnGraph(m.nodes, model))
     .filter(m => itemMatches(m.name));
 
   const totalMacroMatches = defaultMacroMatches.length + projectMacros.length;
