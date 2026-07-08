@@ -2922,8 +2922,10 @@ function behaviourReachableNodeIds(nodes: GraphNode[], edges: GraphEdge[]): Set<
 }
 
 /** TRUE iff the (flattened) agent graph is entirely emittable to WGSL. Mirrors
- *  `isAgentGraphWasmSupported` but adds the WebGPU-specific rejections: 3D agents
- *  (worldDepth>1) are the 3D port (G-future) — clamp to JS for now. */
+ *  `isAgentGraphWasmSupported`; 3D agents (worldDepth>1) DO run on WebGPU (the
+ *  z fields + 3×3×3 hash + 3D force pass are emitted). The remaining WebGPU
+ *  rejects are the genuine parallelism fundamentals (median / uniform-random,
+ *  toggle/next/previous indicators) + the array-producer capacity gate. */
 export function isAgentGraphWebGPUSupported(model: CAModel | undefined | null): boolean {
   if (!model || !model.topologyMode?.agents) return false;
   const nodes = model.agentGraphNodes ?? [];

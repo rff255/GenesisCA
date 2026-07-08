@@ -158,7 +158,10 @@ export const AGENT_WASM_SUPPORTED_TYPES: ReadonlySet<string> = new Set<string>([
   'sampleField', 'fieldGradient', 'readCellsUnder', 'affectCellsUnder', 'secreteToField',
   // colour + tables + model attrs
   'categoricalColor', 'setCellLooks', 'getColorConstant', 'colorScale',
-  'getModelAttribute', 'lookupInteraction', 'interactionTableMap',
+  // NB: interactionTableMap is LATTICE_ONLY_TYPES (nodeValidation) — hidden on the
+  // Agents graph, so it can never reach an agent compiler. Not listed here (keeps
+  // WASM consistent with WebGPU, which likewise doesn't emit it for agents).
+  'getModelAttribute', 'lookupInteraction',
   'proportionMap', 'interpolation', 'valueSwitch',
   // indicators
   'getIndicator', 'setIndicator', 'updateIndicator',
