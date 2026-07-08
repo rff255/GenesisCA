@@ -162,6 +162,11 @@ export interface AgentMemoryLayout {
   fieldOffset: Record<string, number>;
   fieldTotal: number;
   fieldBytes: number;
+  /** Agent Stop Event flag (Uint32, length 1). The WASM agent behaviour writes a
+   *  1-based stop index here (first-match-wins); the worker reads it back after the
+   *  step and merges into the shared stopFlag. Always reserved (4 bytes) so the
+   *  offset is stable regardless of whether the graph has a Stop Event. */
+  stopFlagOffset: number;
 }
 
 /** Sizing inputs for the FULL-COVERAGE WASM agent layout regions — the compiler +
@@ -396,6 +401,12 @@ export function computeAgentMemoryLayout(
     }
   }
 
+  // Agent Stop Event flag (Uint32, length 1) — appended last so every existing
+  // region offset is byte-stable. Always reserved (4 bytes, negligible).
+  off = alignTo(off, 4);
+  const stopFlagOffset = off;
+  off += 4;
+
   const totalBytes = alignTo(off, 8);
   const pages = Math.max(1, Math.ceil(totalBytes / 65536));
   return {
@@ -409,6 +420,7 @@ export function computeAgentMemoryLayout(
     indicatorsOffset, indicatorCount,
     lookupTableOffset, lookupTableCols, lookupTableBytes,
     fieldOffset, fieldTotal, fieldBytes,
+    stopFlagOffset,
   };
 }
 

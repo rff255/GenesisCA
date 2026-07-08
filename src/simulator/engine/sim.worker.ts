@@ -39,7 +39,7 @@ import { buildAgentAbiArgs, type AgentAbiShape, type AgentAbiRuntime } from '../
 import { computeAgentWebGPULayout, type AgentWebGPULayout } from '../../modeler/vpl/compiler/agentWebgpu/layout';
 import {
   createAgentWebGPURuntime, destroyAgentWebGPURuntime, uploadAgentSoA, uploadAgentHash,
-  uploadAgentControl, uploadAgentForceControl, dispatchAgentStep, readbackAgentStep, uploadAgentSpawnCursor,
+  uploadAgentControl, uploadAgentForceControl, dispatchAgentStep, readbackAgentStep, uploadAgentSpawnCursor, resetAgentStopFlag,
   uploadAgentField, readbackAgentField,
   uploadAgentAux, uploadAgentIndicators, readbackAgentIndicators, uploadAgentBondStore,
   type AgentWebGPURuntime, type FieldArray,
@@ -237,7 +237,7 @@ interface InitMsg {
   agentWebgpuUsesI32Write?: boolean;
   /** Which universal bindings the shader actually declares (so the runtime binds
    *  matching entries — a declared-but-unused global is stripped → bind mismatch). */
-  agentWebgpuUsage?: { usesBondStore?: boolean; usesIndicators?: boolean; usesAux?: boolean; usesSpawn?: boolean };
+  agentWebgpuUsage?: { usesBondStore?: boolean; usesIndicators?: boolean; usesAux?: boolean; usesSpawn?: boolean; usesStop?: boolean };
 }
 
 interface StepMsg { type: 'step'; count: number; activeViewer: string; skipColorPass?: boolean }
@@ -264,7 +264,7 @@ interface PaintManualMsg {
   activeViewer: string;
 }
 interface ResetMsg { type: 'reset'; activeViewer: string }
-interface RecompileMsg { type: 'recompile'; stepCode: string; initCode?: string; inputColorCodes: Array<{ mappingId: string; code: string }>; outputMappingCodes: Array<{ mappingId: string; code: string }>; stopMessages?: string[]; updateMode: string; asyncScheme: string; wasmStepBytes?: Uint8Array; wasmStepError?: string; wasmExports?: string[]; viewerIds?: Record<string, number>; webgpuShaderCode?: string; webgpuShaderError?: string; webgpuEntryPoints?: WebGPUEntryPoints; webgpuLayout?: WebGPULayout; webgpuStopCheckInterval?: number; variegated?: VariegatedPayload; interactionTables?: InteractionTablePayload[]; agentBehaviourCode?: string; agentInitCode?: string; agentDivisionCode?: string; agentColorViewer?: string; agentOutputMappingCodes?: Array<{ mappingId: string; code: string }>; agentHasSprites?: boolean; centerBased?: CenterBasedConfig; agentUsesField?: boolean; agentTarget?: 'js' | 'wasm' | 'webgpu'; agentWasmBytes?: Uint8Array; agentWasmViewerGuardIds?: string[]; agentLayoutExtras?: AgentLayoutExtras; agentWebgpuBehaviourShader?: string; agentWebgpuForceShader?: string; agentWebgpuMaxAgents?: number; agentWebgpuMaxHashBins?: number; agentWebgpuLayout?: AgentWebGPULayout; agentWebgpuUsesI32Write?: boolean; agentWebgpuUsage?: { usesBondStore?: boolean; usesIndicators?: boolean; usesAux?: boolean; usesSpawn?: boolean } }
+interface RecompileMsg { type: 'recompile'; stepCode: string; initCode?: string; inputColorCodes: Array<{ mappingId: string; code: string }>; outputMappingCodes: Array<{ mappingId: string; code: string }>; stopMessages?: string[]; updateMode: string; asyncScheme: string; wasmStepBytes?: Uint8Array; wasmStepError?: string; wasmExports?: string[]; viewerIds?: Record<string, number>; webgpuShaderCode?: string; webgpuShaderError?: string; webgpuEntryPoints?: WebGPUEntryPoints; webgpuLayout?: WebGPULayout; webgpuStopCheckInterval?: number; variegated?: VariegatedPayload; interactionTables?: InteractionTablePayload[]; agentBehaviourCode?: string; agentInitCode?: string; agentDivisionCode?: string; agentColorViewer?: string; agentOutputMappingCodes?: Array<{ mappingId: string; code: string }>; agentHasSprites?: boolean; centerBased?: CenterBasedConfig; agentUsesField?: boolean; agentTarget?: 'js' | 'wasm' | 'webgpu'; agentWasmBytes?: Uint8Array; agentWasmViewerGuardIds?: string[]; agentLayoutExtras?: AgentLayoutExtras; agentWebgpuBehaviourShader?: string; agentWebgpuForceShader?: string; agentWebgpuMaxAgents?: number; agentWebgpuMaxHashBins?: number; agentWebgpuLayout?: AgentWebGPULayout; agentWebgpuUsesI32Write?: boolean; agentWebgpuUsage?: { usesBondStore?: boolean; usesIndicators?: boolean; usesAux?: boolean; usesSpawn?: boolean; usesStop?: boolean } }
 interface UpdateLookupTableMsg {
   type: 'updateLookupTable';
   attrId: string;
@@ -622,7 +622,7 @@ let pendingAgentWebgpuMaxAgents = 0;
 let pendingAgentWebgpuMaxHashBins = 0;
 let pendingAgentWebgpuLayout: AgentWebGPULayout | null = null;
 let pendingAgentWebgpuUsesI32Write = false;
-let pendingAgentWebgpuUsage: { usesBondStore?: boolean; usesIndicators?: boolean; usesAux?: boolean; usesSpawn?: boolean } = {};
+let pendingAgentWebgpuUsage: { usesBondStore?: boolean; usesIndicators?: boolean; usesAux?: boolean; usesSpawn?: boolean; usesStop?: boolean } = {};
 /** Warn once when the per-step hash overflows the GPU reserve (step runs on JS). */
 let agentWebgpuHashOverflowWarned = false;
 /** A monotonic build token: only the most-recent async runtime build commits (an
@@ -1796,9 +1796,13 @@ async function runAgentStepWebGPUInner(): Promise<boolean> {
     // createAgent bump-allocates newborns beyond the live range (the GPU analogue
     // of the grow-only `_agentCreate`). readbackAgentStep reconciles them below.
     if (rt.usesSpawn) uploadAgentSpawnCursor(rt, hw);
+    if (rt.usesStop) resetAgentStopFlag(rt);   // fresh first-match each step
     dispatchAgentStep(rt, hw);
-    const rb = await readbackAgentStep(rt, s);   // x/y (from xNext/yNext) + vx/vy/radius/density/age + attrs→attrWrite + requests + colours + spawn reconcile
+    const rb = await readbackAgentStep(rt, s);   // x/y (from xNext/yNext) + vx/vy/radius/density/age + attrs→attrWrite + requests + colours + spawn reconcile + stop
     if (rb.spawnOverflow) self.postMessage({ type: 'agentOverflow', message: `Agent capacity reached during a Behaviour spawn (maxAgents=${s.maxAgents}). Some Create Agent calls were skipped.` });
+    // Merge the GPU Stop Event into the shared stopFlag (first-match); drainAgentStop
+    // in the batch loop reads stopFlag[0] BEFORE the cell step resets it.
+    if (rb.agentStop !== 0 && (stopFlag[0] ?? 0) === 0) stopFlag[0] = rb.agentStop;
     swapAgentAttrs(s);
     if (rt.layout.indicatorCount > 0) {
       // The behaviour shader mutated the indicators atomic buffer (Set/Update
@@ -2426,6 +2430,26 @@ let linkedResults: Record<string, number | Record<string, number> | Record<strin
 // the layout.stopFlagOffset so JS and WASM share the same memory cell.
 let stopFlag: Uint32Array = new Uint32Array(1);
 let stopMessages: string[] = [];
+
+/** Drain the agent Stop Event source(s) after an agent step — the 1-based stop
+ *  index (0 = none). Called in the batch loops BETWEEN the agent step and the
+ *  cell step: the agent step always runs first, and runStep()/runStepWebGPU()
+ *  reset the shared stopFlag at their top (and finalizeStepWebGPU OVERWRITES it
+ *  from the GPU), which would otherwise clobber an agent stop. Sources: the JS +
+ *  WebGPU agents write the shared stopFlag[0]; the WASM agent writes its own
+ *  memory cell at layout.stopFlagOffset. Clears both so the next step is fresh. */
+function drainAgentStop(): number {
+  if (stopMessages.length === 0) return 0;
+  let v = stopFlag[0] ?? 0;      // JS + WebGPU agent source
+  stopFlag[0] = 0;
+  const s = agentStore;
+  if (s && s.wasmBacked && s.memory && s.layout) {   // WASM agent memory cell
+    const cell = new Uint32Array(s.memory.buffer, s.layout.stopFlagOffset, 1);
+    if (v === 0) v = cell[0]! >>> 0;
+    cell[0] = 0;                 // always clear — the WASM first-match needs a 0 start
+  }
+  return v;
+}
 // B4B — WebGPU stop-check interval. Default 1 (every step). >1 trades stop-event
 // timing precision for fewer per-step mapAsync stalls. The last step of any
 // batch is ALWAYS checked so the user sees the eventual stop within the batch.
@@ -4433,9 +4457,14 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
                 gpuOwnsAttrs = false;
               }
             }
+            // Agent Stop Event — CAPTURE before the cell step (runStepWebGPU resets +
+            // finalizeStepWebGPU overwrites the shared flag from the GPU control
+            // buffer), SURFACE after generation++.
+            const agentStopIdx = (agentStore && simulateAgents) ? drainAgentStop() : 0;
             if (simulateCells && gridCellsEnabled) runStepWebGPU();      // Layers panel / agents-only: freeze the cell step
             // agents-only / frozen grid: the agent step IS the generation.
             else if (agentStore && simulateAgents) generation++;
+            if (agentStopIdx !== 0) { stoppedByEvent = stopMessages[agentStopIdx - 1] ?? `Stop event #${agentStopIdx - 1}`; break; }
             const isLast = i === msg.count - 1;
             const shouldCheck = stopMessages.length > 0 && (k === 1 || isLast || (i % k) === (k - 1));
             if (shouldCheck) {
@@ -4486,9 +4515,13 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
               // runAgentStep advances sprites itself; the GPU path doesn't, so do it here.
               else if (hasAgentSprites && agentStore) advanceAgentSprites(agentStore);
             }
+            // Agent Stop Event — CAPTURE before the cell step (runStep resets the
+            // shared flag), SURFACE after generation++.
+            const agentStopIdx = (agentStore && simulateAgents) ? drainAgentStop() : 0;
             if (stepFn && simulateCells && gridCellsEnabled) runStep();
             // agents-only / frozen grid: the agent step IS the generation.
             else if (simulateAgents) generation++;
+            if (agentStopIdx !== 0) { stoppedByEvent = stopMessages[agentStopIdx - 1] ?? `Stop event #${agentStopIdx - 1}`; break; }
             const rawStop = stopFlag[0] ?? 0;
             if (rawStop !== 0) {
               const idx = rawStop - 1;
@@ -4519,11 +4552,16 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
         // Layers panel (req 1): freeze either layer at runtime. Freezing agents
         // also stops their cell-field deposit (it lives inside runAgentStep).
         if (agentStore && simulateAgents) runAgentStep();
+        // Agent Stop Event — CAPTURE it before the cell step (runStep resets the
+        // shared flag at its top, which would clobber it), but SURFACE it after
+        // generation++ so the paused generation matches the cell-stop semantics.
+        const agentStopIdx = (agentStore && simulateAgents) ? drainAgentStop() : 0;
         if (stepFn && simulateCells && gridCellsEnabled) runStep();
         // generation++ lives inside the CELL step — when the cell step didn't
         // run (agents-only model, or the Layers panel froze the grid) an agent
         // step still IS a generation, or the counter sits at 0 forever.
         else if (agentStore && simulateAgents) generation++;
+        if (agentStopIdx !== 0) { stoppedByEvent = stopMessages[agentStopIdx - 1] ?? `Stop event #${agentStopIdx - 1}`; break; }
         const rawStop = stopFlag[0] ?? 0;
         if (rawStop !== 0) {
           const idx = rawStop - 1;
