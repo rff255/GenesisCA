@@ -20,17 +20,24 @@ export const SetAgentsAttributeNode: NodeTypeDef = {
     { id: 'value', label: 'Value', kind: 'input', category: 'value', dataType: 'float', inlineWidget: 'number', defaultValue: '0' },
   ],
   defaultConfig: { attributeId: '' },
-  compile: (nodeId, config, inputs) => {
+  compile: (nodeId, config, inputs, _boundary, ctx) => {
     const attr = config.attributeId as string || '_undef';
     const agents = inputs['agents'] || '[]';
     const v = inputs['value'] || '0';
     const i = `_si${nodeId}`;
     const id = `_sa${nodeId}`;
+    // In the Agent Init Event `highWater`/`_alive` aren't in scope (loop/division
+    // ABI only), so — like the scalar by-id setters — guard against `_agentMaxAgents`
+    // there. Behaviour/loop keeps the `< highWater && _alive` guard byte-identical
+    // (WASM/WebGPU parity preserved).
+    const guard = ctx?.agentRoot === 'init'
+      ? `${id} >= 0 && ${id} < _agentMaxAgents`
+      : `${id} >= 0 && ${id} < highWater && _alive[${id}]`;
     return [
       `{ const __arr=${agents}; const __val=${v};`,
       `for (let ${i} = 0; ${i} < __arr.length; ${i}++) {`,
       `  const ${id} = (__arr[${i}]) | 0;`,
-      `  if (${id} >= 0 && ${id} < highWater && _alive[${id}]) w_${attr}[${id}] = __val;`,
+      `  if (${guard}) w_${attr}[${id}] = __val;`,
       `} }`,
     ].join(' ') + '\n';
   },

@@ -677,37 +677,39 @@ export const LATTICE_ONLY_TYPES = new Set<string>([
   'getFacingLabels', 'getAllFacingLabels', 'interactionTableMap',
 ]);
 
-/** Agent nodes that intrinsically read/write the CURRENT agent (they emit the
- *  per-agent loop variable `idx`), so they are INVALID in the Agent Init Event —
- *  which runs ONCE per Reset, NOT once per agent (there is no "current agent"
- *  there). Dropping one under the agentInit root compiles to code referencing an
- *  undefined `idx` and fails at runtime with a cryptic "init compile failed: idx
- *  is not defined". In the Init Event you instead SPAWN + configure NEW agents by
- *  handle (Create Agent → Set Agent Position/Radius/Attribute → Add Agent To
- *  World).
+/** Agent nodes that READ agent state — INVALID in the Agent Init Event, which runs
+ *  ONCE per Reset (there is no "current agent" and no live population to scan) and
+ *  is for SPAWNING + configuring NEW agents by handle (Create Agent → Set Agent
+ *  Position/Radius/Attribute → Add Agent To World). Two ways such a node breaks the
+ *  init closure:
+ *    • SELF readers emit the per-agent loop variable `idx` (e.g. `_agentX[idx]`);
+ *      `idx` doesn't exist in the non-looping init function.
+ *    • BY-ID readers emit a range guard `… < highWater` (and array readers also
+ *      `_alive[id]`). Per [agentAbi.ts](../compiler/agentAbi.ts) `deriveAgentAbi`,
+ *      `highWater` + `_alive` are in the loop/division ABI ONLY — NOT init — so the
+ *      compiled init closure references an undefined `highWater`/`_alive`.
+ *  Either way `runAgentInit` throws a cryptic `[agents] init … failed: <sym> is not
+ *  defined` and the whole init aborts (no agents spawn) — the footgun this badge
+ *  preempts. So EVERY agent-SoA reader is unconditionally init-invalid (wiring makes
+ *  no difference: a wired by-id read still emits `< highWater`).
  *
- *  This flat set is the ALWAYS-invalid group (every instance emits `idx`, whatever
- *  its config/wiring). The TWO WIRING-DEPENDENT nodes — `getVelocity` (falls back
- *  to self `idx` only when its Agent input is UNWIRED) and `getAgentPosition`
- *  (relative mode with an UNWIRED Reference falls back to `idx`) — are flagged
- *  conditionally in `agentInitSelfOnlyNodeIds` (badging them unconditionally would
- *  be a FALSE POSITIVE on a wired-to-a-handle instance, which IS valid in init).
- *  `getAgentOffset` IS in this set: it computes an offset FROM self, so it emits
- *  `_agentX[idx]` UNCONDITIONALLY (no wiring makes it init-safe).
- *
- *  NOT here (genuinely valid in init — highWater IS in the init ABI): the by-id
- *  SETTERS (`setAgentAttribute`/`setAgentPosition`/… relax their range guard to
- *  `_agentMaxAgents` under the init root) and the -1-fallback by-id READERS
- *  (`getAgentRadius`/`getAgentAttribute`/`getAgentsAttribute`, absolute
- *  `getAgentPosition`) — all address a specific handle, range-guarded, no `idx`. */
+ *  NOT here (genuinely valid in init): the by-id SETTERS — `setAgentAttribute` /
+ *  `setAgentPosition` / `setAgentRadius` / `setAgentSprite` / `setAgentsAttribute`
+ *  relax their range guard to `_agentMaxAgents` (which IS in the init ABI) under the
+ *  init/behaviour root; and the array ops that touch NO init-absent symbol
+ *  (`joinAgents` / `pickRandomAgent` / `pickNRandomAgents` — they only index their
+ *  input id array + `_rs`, so they run fine over a Local-Variable handle array). */
 const AGENT_SELF_ONLY_TYPES = new Set<string>([
-  // self identity / geometry readers
+  // self identity / geometry readers (emit bare `idx`)
   'getSelfPosition', 'getSelfHandle', 'getRadius', 'getAge', 'getBondDegree',
   'neighbourDensity', 'getCurvature',
   // self-centred neighbour access + the self bond loop
   'getNearbyAgents', 'getAgentsInView', 'senseHemifield', 'getBondedAgents', 'forEachBond',
-  // offset FROM self — always emits `_agentX[idx]` regardless of wiring
-  'getAgentOffset',
+  // by-id readers — emit `< highWater` (getAgentOffset also `_agentX[idx]`); array
+  // readers (getAgentsAttribute/filterAgents) also `_alive[id]`. None is in the
+  // init ABI, so all throw in init regardless of wiring.
+  'getAgentOffset', 'getAgentPosition', 'getVelocity', 'getAgentRadius',
+  'getAgentAttribute', 'getAgentsAttribute', 'filterAgents',
   // self writers
   'setVelocity', 'applyForce', 'setTargetRadius', 'divideAgent', 'formBond', 'breakBond', 'killAgent',
   // field bridge (sampled/deposited at the SELF position)
@@ -717,9 +719,9 @@ const AGENT_SELF_ONLY_TYPES = new Set<string>([
   'getCellAttribute', 'setAttribute', 'updateAttribute',
 ]);
 
-/** Memoised "which nodes reachable from the agentInit root are self-only" set,
- *  keyed on the agent graph arrays' identity (ModelContext hands fresh arrays on
- *  every edit, so this invalidates naturally). */
+/** Memoised "which nodes reachable from the agentInit root are init-invalid agent
+ *  readers" set, keyed on the agent graph arrays' identity (ModelContext hands
+ *  fresh arrays on every edit, so this invalidates naturally). */
 let _agentInitSelfCache: { nodes: unknown; edges: unknown; set: Set<string> } | null = null;
 
 function agentInitSelfOnlyNodeIds(model: CAModel): Set<string> {
@@ -732,19 +734,15 @@ function agentInitSelfOnlyNodeIds(model: CAModel): Set<string> {
   const initNode = nodes.find(n => n.data?.nodeType === 'agentInit');
   if (initNode) {
     const nodeMap = new Map(nodes.map(n => [n.id, n] as const));
-    // flow-output adjacency (src → targets) + value-input adjacency (node → sources)
-    // + the set of WIRED value-input target handles per node (for the two
-    // wiring-dependent self-fallback nodes below).
+    // flow-output adjacency (src → targets) + value-input adjacency (node → sources).
     const flowOut = new Map<string, string[]>();
     const valIn = new Map<string, string[]>();
-    const wiredIn = new Map<string, Set<string>>();
     for (const e of edges) {
       const sh = e.sourceHandle || '', th = e.targetHandle || '';
       if (sh.startsWith('output_flow_') && th.startsWith('input_flow_')) {
         (flowOut.get(e.source) ?? (flowOut.set(e.source, []), flowOut.get(e.source)!)).push(e.target);
       } else if (sh.startsWith('output_value_') && th.startsWith('input_value_')) {
         (valIn.get(e.target) ?? (valIn.set(e.target, []), valIn.get(e.target)!)).push(e.source);
-        (wiredIn.get(e.target) ?? (wiredIn.set(e.target, new Set()), wiredIn.get(e.target)!)).add(th);
       }
     }
     // Flow-reachable from init (the nodes that RUN in the init function body).
@@ -765,18 +763,7 @@ function agentInitSelfOnlyNodeIds(model: CAModel): Set<string> {
     }
     for (const id of vseen) {
       const n = nodeMap.get(id);
-      if (!n) continue;
-      const t = n.data?.nodeType;
-      if (AGENT_SELF_ONLY_TYPES.has(t)) { result.add(id); continue; }
-      // Wiring-dependent self-fallback: these emit `idx` (init-invalid) ONLY when
-      // the relevant id/reference input is UNWIRED; wired to a handle they read a
-      // specific agent (highWater-guarded, valid in init) → no badge.
-      const wired = wiredIn.get(id);
-      if (t === 'getVelocity' && !wired?.has('input_value_agentId')) {
-        result.add(id);
-      } else if (t === 'getAgentPosition' && n.data?.config?.mode === 'relative' && !wired?.has('input_value_refId')) {
-        result.add(id);
-      }
+      if (n && AGENT_SELF_ONLY_TYPES.has(n.data?.nodeType)) result.add(id);
     }
   }
   _agentInitSelfCache = { nodes, edges, set: result };
@@ -790,7 +777,7 @@ function agentInitSelfOnlyNodeIds(model: CAModel): Set<string> {
 export function detectAgentInitContextIssue(nodeId: string, model: CAModel): string[] {
   if (getActiveGraphKind() !== 'agents' || !model.topologyMode?.agents) return [];
   return agentInitSelfOnlyNodeIds(model).has(nodeId)
-    ? ['Reads/writes the CURRENT agent — invalid in the Agent Init Event (it runs once, not per-agent). Spawn + configure new agents by handle instead: Create Agent → Set Agent Position/Radius/Attribute → Add Agent To World.']
+    ? ['Reads agent state — unavailable in the Agent Init Event, which runs once (no current agent, no live population) to SPAWN + configure NEW agents by handle: Create Agent → Set Agent Position/Radius/Attribute → Add Agent To World.']
     : [];
 }
 

@@ -4464,7 +4464,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
             if (simulateCells && gridCellsEnabled) runStepWebGPU();      // Layers panel / agents-only: freeze the cell step
             // agents-only / frozen grid: the agent step IS the generation.
             else if (agentStore && simulateAgents) generation++;
-            if (agentStopIdx !== 0) { stoppedByEvent = stopMessages[agentStopIdx - 1] ?? `Stop event #${agentStopIdx - 1}`; break; }
+            if (agentStopIdx !== 0) { stoppedByEvent = stopMessages[agentStopIdx - 1] ?? `Stop event #${agentStopIdx - 1}`; stopFlag[0] = 0; break; }
             const isLast = i === msg.count - 1;
             const shouldCheck = stopMessages.length > 0 && (k === 1 || isLast || (i % k) === (k - 1));
             if (shouldCheck) {
@@ -4521,7 +4521,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
             if (stepFn && simulateCells && gridCellsEnabled) runStep();
             // agents-only / frozen grid: the agent step IS the generation.
             else if (simulateAgents) generation++;
-            if (agentStopIdx !== 0) { stoppedByEvent = stopMessages[agentStopIdx - 1] ?? `Stop event #${agentStopIdx - 1}`; break; }
+            if (agentStopIdx !== 0) { stoppedByEvent = stopMessages[agentStopIdx - 1] ?? `Stop event #${agentStopIdx - 1}`; stopFlag[0] = 0; break; }
             const rawStop = stopFlag[0] ?? 0;
             if (rawStop !== 0) {
               const idx = rawStop - 1;
@@ -4561,7 +4561,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
         // run (agents-only model, or the Layers panel froze the grid) an agent
         // step still IS a generation, or the counter sits at 0 forever.
         else if (agentStore && simulateAgents) generation++;
-        if (agentStopIdx !== 0) { stoppedByEvent = stopMessages[agentStopIdx - 1] ?? `Stop event #${agentStopIdx - 1}`; break; }
+        if (agentStopIdx !== 0) { stoppedByEvent = stopMessages[agentStopIdx - 1] ?? `Stop event #${agentStopIdx - 1}`; stopFlag[0] = 0; break; }
         const rawStop = stopFlag[0] ?? 0;
         if (rawStop !== 0) {
           const idx = rawStop - 1;
