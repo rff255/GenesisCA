@@ -14,6 +14,7 @@ import { canonicalizeAccessorEdges } from './accessorCSE';
 import { injectLinkedOutputMappings } from './linkedOutputMappings';
 import { injectAgentLinkedOutputMappings } from './agentLinkedOutputMappings';
 import { collapseReroutes } from './rerouteCollapse';
+import { expandMultiAttrs } from './multiAttrExpand';
 import { expandComposites } from './expandComposites';
 import { lowerVectorAttrs } from './vectorAttr';
 import { lowerFacingSource } from './facingSource';
@@ -1466,6 +1467,13 @@ export function compileGraph(
   // emitter ever sees a reroute. `A → R → B` compiles byte-identically to `A → B`.
   ({ nodes: graphNodes, edges: graphEdges } = collapseReroutes(graphNodes, graphEdges));
 
+  // Multi-attribute slot expansion — rewrite each multi-slot Get/Set Attribute
+  // (extra `attr_${i}` slots + `value_${i}` ports) into the single-slot
+  // primitives every target already emits (gets split per slot; sets become a
+  // linear flow splice). BEFORE lowerVectorAttrs so a vector attribute in an
+  // extra slot lowers normally. Hot-path no-op. See multiAttrExpand.ts.
+  ({ nodes: graphNodes, edges: graphEdges } = expandMultiAttrs(graphNodes, graphEdges, model));
+
   // Vector stored-attribute lowering — rewrite Get/Set Vector Attribute into
   // Make/Break Vector over per-component scalar-float reads/writes AND expand the
   // model's `vector` attributes into their `<id>_vx/_vy[/_vz]` scalar-float
@@ -2215,6 +2223,8 @@ export function compileAgentGraph(
     agentEdges = expanded.edges;
   }
   ({ nodes: agentNodes, edges: agentEdges } = collapseReroutes(agentNodes, agentEdges));
+  // Multi-attribute slot expansion (agent scope) — see the cell compiler + multiAttrExpand.ts.
+  ({ nodes: agentNodes, edges: agentEdges } = expandMultiAttrs(agentNodes, agentEdges, model));
   // FOV `facing` heading source → Get Self Attribute [vector] → Break Vector → wired
   // heading (BEFORE vector lowering, so the synthesized read is lowered). No-op unless
   // a Get Agents In View / Sense Hemifield uses a resolvable facing source.

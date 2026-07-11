@@ -28,6 +28,7 @@ import { MODEL_ELEMENT_DRAG_MIME, RELATED_NODES, payloadElementId, relatedEntrie
 import type { ModelElementDragPayload } from './modelElementDrag';
 import { getEffectivePorts } from './effectivePorts';
 import { vectorPortDims } from './compiler/vectorAttr';
+import { slotVectorDims } from './compiler/multiAttrExpand';
 import type { GraphNode, GraphEdge, CAModel } from '../../model/types';
 import type { MacroPort } from '../../model/types';
 import { computeAlignmentSnap, sameGuides } from './alignmentSnap';
@@ -1324,8 +1325,15 @@ export function GraphEditorInner() {
         // attr read wires straight into a vector input (e.g. Break Vector).
         const srcCfg = (sourceNode?.data as { config?: Record<string, unknown> } | undefined)?.config;
         const tgtCfg = (targetNode?.data as { config?: Record<string, unknown> } | undefined)?.config;
-        const srcType = (srcParsed.portId === 'value' && vectorPortDims(sourceNodeType ?? '', srcCfg, model)) ? 'vector' : sourcePort?.dataType;
-        const tgtType = (tgtParsed.portId === 'value' && vectorPortDims(targetNodeType ?? '', tgtCfg, model)) ? 'vector' : targetPort?.dataType;
+        // Multi-attribute extra slots (`value_${i}`) resolve their vector-ness per
+        // slot via slotVectorDims — the port-aware sibling of vectorPortDims — so a
+        // vector attribute in an extra slot wires vector↔vector like the primary.
+        const srcIsVec = (srcParsed.portId === 'value' && vectorPortDims(sourceNodeType ?? '', srcCfg, model))
+          || slotVectorDims(sourceNodeType ?? '', srcParsed.portId, srcCfg, model);
+        const tgtIsVec = (tgtParsed.portId === 'value' && vectorPortDims(targetNodeType ?? '', tgtCfg, model))
+          || slotVectorDims(targetNodeType ?? '', tgtParsed.portId, tgtCfg, model);
+        const srcType = srcIsVec ? 'vector' : sourcePort?.dataType;
+        const tgtType = tgtIsVec ? 'vector' : targetPort?.dataType;
         const tgtIsNI = tgtType === 'neighborIndex';
         const srcIsNI = srcType === 'neighborIndex';
         if (tgtIsNI && sourcePort && srcType !== 'neighborIndex' && srcType !== 'any') {

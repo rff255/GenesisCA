@@ -7,7 +7,7 @@ import type { NodeTypeDef } from '../types';
 export const GetAgentAttributeNode: NodeTypeDef = {
   type: 'getAgentAttribute',
   label: 'Get Agent Attribute',
-  description: "Read a specific agent's attribute by id (the partner from Get Nearby Agents / For Each Bond).",
+  description: "Read a specific agent's attribute by id (the partner from Get Nearby Agents / For Each Bond). Extra attribute slots (+ Attribute) read several of that agent's attributes through one shared Agent input.",
   category: 'data',
   color: '#5e35b1',
   requirements: { bondGraph: true },

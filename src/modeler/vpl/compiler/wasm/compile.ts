@@ -45,6 +45,7 @@ import { analyzeSinkScopes, CELL_TOP, type ScopeId, type SinkAnalysisResult } fr
 import { canonicalizeAccessorEdges } from '../accessorCSE';
 import { injectLinkedOutputMappings } from '../linkedOutputMappings';
 import { collapseReroutes } from '../rerouteCollapse';
+import { expandMultiAttrs } from '../multiAttrExpand';
 import { expandComposites } from '../expandComposites';
 import { lowerVectorAttrs } from '../vectorAttr';
 import { expandMacros } from '../macroExpand';
@@ -7163,6 +7164,12 @@ export function compileGraphWasm(
   // nodes) collapse too, and before linked-OM / CSE / adjacency so nothing
   // downstream sees a reroute. See rerouteCollapse.ts.
   ({ nodes: graphNodes, edges: graphEdges } = collapseReroutes(graphNodes, graphEdges));
+
+  // Multi-attribute slot expansion — multi-slot Get/Set Attribute nodes become
+  // the single-slot primitives the WASM emitters already compile. BEFORE
+  // lowerVectorAttrs so a vector attribute in an extra slot lowers normally.
+  // Hot-path no-op. See multiAttrExpand.ts.
+  ({ nodes: graphNodes, edges: graphEdges } = expandMultiAttrs(graphNodes, graphEdges, model));
 
   // Vector stored-attribute lowering — Get/Set Vector nodes → Make/Break Vector
   // over per-component scalar reads/writes + reassign `model` to the

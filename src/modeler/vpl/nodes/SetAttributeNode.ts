@@ -4,8 +4,8 @@ export const SetAttributeNode: NodeTypeDef = {
   type: 'setAttribute',
   label: 'Set Attribute',
   agentLabel: 'Set Self Attribute',
-  description: 'Writes a value to an attribute of the current cell.',
-  agentDescription: "Writes a value to one of the current agent's own attributes.",
+  description: 'Writes a value to an attribute of the current cell. Extra attribute slots (+ Attribute) write several attributes in slot order, each with its own input port.',
+  agentDescription: "Writes a value to one of the current agent's own attributes. Extra attribute slots (+ Attribute) write several attributes in slot order, each with its own input port.",
   category: 'output',
   color: '#4a148c',
   ports: [

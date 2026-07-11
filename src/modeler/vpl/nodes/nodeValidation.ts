@@ -8,6 +8,7 @@ import { CURRENT_VIEWER_SENTINEL } from './SetCellLooksNode';
 import { buildVarMap, parseExpression, clampVisibleCount } from '../compiler/expression/parser';
 import { getActiveGraphKind } from '../graphState';
 import { VECTOR_LOWERED } from '../compiler/vectorAttr';
+import { multiAttrSlotIndices, slotAttrKey } from '../compiler/multiAttrExpand';
 
 /** Return a list of human-readable issue strings for a node's configuration.
  *  Empty array = node is fully configured.
@@ -124,20 +125,31 @@ export function detectMissingConfig(
     typeof id === 'string' && id.length > 0 &&
     (model.macroDefs || []).some(m => m.id === id);
 
+  /** Multi-attribute slots: every EXTRA slot must resolve in the node's scope
+   *  (same rule per node type as the primary `attributeId` check). */
+  const checkSlots = (has: (id: unknown) => boolean, what: string): void => {
+    for (const i of multiAttrSlotIndices(config)) {
+      if (!has(config[slotAttrKey(i)])) issues.push(`Select ${what} (slot ${i})`);
+    }
+  };
+
   switch (nodeType) {
     case 'getCellAttribute':
       // Universal: a cell attr (Cells graph) OR an agent attr (Agents graph).
       if (!hasOwnAttr(config.attributeId)) issues.push('Select an attribute');
+      checkSlots(hasOwnAttr, 'an attribute');
       break;
 
     case 'getModelAttribute':
       if (!hasModelAttr(config.attributeId)) issues.push('Select a model attribute');
+      checkSlots(hasModelAttr, 'a model attribute');
       break;
 
     case 'setAttribute':
     case 'updateAttribute':
       // Universal: a cell attr (Cells graph) OR an agent attr (Agents graph).
       if (!hasOwnAttr(config.attributeId)) issues.push('Select an attribute');
+      if (nodeType === 'setAttribute') checkSlots(hasOwnAttr, 'an attribute');
       break;
 
     // Generic Agent Platform — field-bridge READ nodes: the cell attribute must
@@ -163,6 +175,7 @@ export function detectMissingConfig(
     case 'setAgentAttribute':
       // Single-agent (scalar agentId) — only the attribute is required.
       if (!hasAgentAttr(config.attributeId)) issues.push('Select an agent attribute');
+      checkSlots(hasAgentAttr, 'an agent attribute');
       break;
 
     case 'getAgentsAttribute':

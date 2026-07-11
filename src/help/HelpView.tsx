@@ -751,9 +751,9 @@ export function HelpView() {
           <table className={styles.table}>
             <thead><tr><th>Node</th><th>Description</th></tr></thead>
             <tbody>
-              <tr><td>Get Cell Attribute</td><td>Read the current cell&apos;s attribute value (e.g., &quot;alive&quot;).</td></tr>
+              <tr><td>Get Cell Attribute</td><td>Read the current cell&apos;s attribute value (e.g., &quot;alive&quot;). Supports multiple attribute <strong>slots</strong> (&quot;+ Attribute&quot;): one node reads several attributes, each through its own output port &mdash; no need for a separate Get node per attribute.</td></tr>
               <tr><td>Get Cell Position</td><td>Outputs the current cell&apos;s grid coordinates &mdash; <strong>Row</strong>, <strong>Col</strong>, and (in 3D) <strong>Layer</strong>. A controlled, own-cell-only break of locality so a cell can behave by where it is: spatial gradients, region-specific rules, or a coordinate-aware Output Mapping. Works in every event.</td></tr>
-              <tr><td>Get Model Attribute</td><td>Read a global model parameter.</td></tr>
+              <tr><td>Get Model Attribute</td><td>Read a global model parameter. Supports multiple attribute slots (&quot;+ Attribute&quot;) &mdash; one node exposes several model parameters as separate output ports (a color parameter in a slot exposes its own R/G/B trio).</td></tr>
               <tr><td>Get Neighbors Attribute</td><td>Collect an attribute from all neighbors as an array.</td></tr>
               <tr><td>Get Neighbor Attr By Index</td><td>Read a cell attribute from ONE specific neighbor by index. Works in both sync and async modes.</td></tr>
               <tr><td>Get Neighbor Attr By Tag</td><td>Read a cell attribute from a specific neighbor identified by a named tag (defined in the Neighborhoods panel). The tag is resolved to an index at compile time.</td></tr>
@@ -804,7 +804,7 @@ export function HelpView() {
           <table className={styles.table}>
             <thead><tr><th>Node</th><th>Description</th></tr></thead>
             <tbody>
-              <tr><td>Set Attribute</td><td>Write a value to the current cell&apos;s attribute for the next generation.</td></tr>
+              <tr><td>Set Attribute</td><td>Write a value to the current cell&apos;s attribute for the next generation. Supports multiple attribute <strong>slots</strong> (&quot;+ Attribute&quot;): one node writes several attributes, each with its own input port and type-adaptive inline widget, executed in slot order &mdash; no need to chain a Set node per attribute.</td></tr>
               <tr><td>Update Attribute</td><td>Modify the current cell&apos;s attribute in place: increment / decrement / max / min for numbers, toggle / or / and for binary, next / previous for tags. The unary operations (toggle, next, previous) need no Value input.</td></tr>
               <tr><td>Set Neighborhood Attribute</td><td><strong>(Async only)</strong> Set a cell attribute for ALL cells in a neighborhood to a given value.</td></tr>
               <tr><td>Set Neighbor Attr By Index</td><td><strong>(Async only)</strong> Set a cell attribute for ONE specific neighbor (by index 0..N&minus;1) to a given value.</td></tr>
@@ -1344,7 +1344,10 @@ export function HelpView() {
             <li><strong>Set Agent Attribute</strong> &mdash; write an attribute on another agent by
               id (signal a neighbour). And because Get Nearby Agents now supplies a target,
               <strong> Form Bond</strong> is fully graph-driven &mdash; bond to compatible
-              neighbours by their attributes/state.</li>
+              neighbours by their attributes/state. Like the own-attribute Get/Set, the by-id
+              Get / Set Agent Attribute support multiple attribute <strong>slots</strong>
+              (&quot;+ Attribute&quot;) sharing the one Agent id input &mdash; read or write several
+              of a neighbour&apos;s attributes with a single node.</li>
           </ul>
           <h3 className={styles.h3}>Working with Sets of Agents</h3>
           <p className={styles.p}>

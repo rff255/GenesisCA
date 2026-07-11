@@ -3,7 +3,7 @@ import type { NodeTypeDef } from '../types';
 export const GetModelAttributeNode: NodeTypeDef = {
   type: 'getModelAttribute',
   label: 'Get Model Attribute',
-  description: 'Reads a global (model-level) attribute. All cells see the same value.',
+  description: 'Reads a global (model-level) attribute. All cells see the same value. Extra attribute slots (+ Attribute) read several model attributes through per-slot output ports.',
   category: 'data',
   color: '#b71c1c',
   ports: [

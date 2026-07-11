@@ -20,6 +20,7 @@ import type { CAModel } from '../../model/types';
 import { getNodeDef } from './nodes/registry';
 import { clampVisibleCount } from './compiler/expression/parser';
 import { vectorPortDims } from './compiler/vectorAttr';
+import { MULTI_ATTR_TYPES, buildExtraSlotPorts } from './compiler/multiAttrExpand';
 
 export interface EffectivePorts {
   inputs: PortDef[];
@@ -79,6 +80,15 @@ export function getEffectivePorts(
     for (let i = 2; i < 2 + extraCount; i++) {
       outputs.push({ id: `then_${i}`, label: `Then ${i + 1}`, kind: 'output', category: 'flow' });
     }
+  }
+
+  // Multi-attribute slots: extra `value_${i}` ports on the five accessor nodes
+  // (get: outputs, set: inputs with type-adaptive inline widgets). Built by the
+  // shared helper so this file + CaNode can't drift. See multiAttrExpand.ts.
+  if (MULTI_ATTR_TYPES.has(nodeType)) {
+    const extra = buildExtraSlotPorts(nodeType, cfg, model);
+    inputs = [...inputs, ...extra.inputs];
+    outputs = [...outputs, ...extra.outputs];
   }
 
   // Expression: show only `visibleCount` of the 8 input ports, with the
