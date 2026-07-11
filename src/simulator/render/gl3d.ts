@@ -710,6 +710,15 @@ export class Gl3DRenderer {
     this.W = Math.max(1, w); this.H = Math.max(1, h); this.D = Math.max(1, d);
   }
   setAlphaBlend(on: boolean): void { this.alphaBlend = on; }
+
+  /** "Draw agents in front" (default ON — the historical behaviour): agents render
+   *  over the CA-grid VOXELS regardless of depth (the grid usually surrounds the
+   *  agents completely and would hide them). The helper overlays (axes / floor
+   *  grid / bounds / brush plane) keep NORMAL depth occlusion vs the agents either
+   *  way — see render(). OFF = full normal depth (useful when the grid field is
+   *  sparse enough to see both layers interleaved). */
+  setAgentsInFront(on: boolean): void { this.agentsInFront = on; }
+  private agentsInFront = true;
   setClipPlane(clip: ClipPlane3D): void { this.clip = clip; }
   setViz(viz: Viz3D): void { this.viz = viz; }
   setBrushPlane(p: { axis: 'x' | 'y' | 'z'; pos: number } | null): void { this.brushPlane = p; }
@@ -1237,16 +1246,27 @@ export class Gl3DRenderer {
       gl.disable(gl.BLEND);
       gl.bindVertexArray(null);
     }
-    // Bond-Graph Agents (gated by viz.agents, req 7). Agents are drawn ON TOP of
-    // the grid (req 8): clear the depth buffer after the voxels so the agent
-    // spheres + bonds always render over the CA-grid voxels — like the 2D view,
-    // where the grid is the static background the agents navigate — while still
-    // depth-sorting among THEMSELVES (gl_FragDepth) and clipping to the slab.
+    // Bond-Graph Agents (gated by viz.agents, req 7). With `agentsInFront` ON
+    // (default — the historical behaviour), agents draw ON TOP of the CA-grid
+    // VOXELS: the depth buffer is cleared after the voxel pass, then the HELPER
+    // overlays' depth (axes / floor grid / bounds / brush plane) is RESTORED with
+    // a colour-masked re-draw — so "in front" applies ONLY vs the voxels while
+    // the helpers keep normal depth occlusion vs the agents (a brush plane in
+    // front of the blob stays visible instead of being swallowed by spheres).
+    // Agents still depth-sort among THEMSELVES (gl_FragDepth) + clip to the slab.
+    // With `agentsInFront` OFF, no clear — full normal depth vs everything
+    // (useful when the grid field is sparse enough to see both interleaved).
     if (this.viz.agents) {
-      // Clear depth ONLY when there is agent/bond geometry to draw (a non-agent 3D
-      // model has none → no wasted clear, no behaviour change).
       if (this.agentInstanceCount > 0 || this.bondVerts.length > 0) {
-        gl.clear(gl.DEPTH_BUFFER_BIT);
+        if (this.agentsInFront) {
+          gl.clear(gl.DEPTH_BUFFER_BIT);
+          // Depth-only re-draw of the helper overlays (same viz gates as the
+          // colour pass above, so exactly what was drawn gets its depth back).
+          gl.colorMask(false, false, false, false);
+          this.renderOverlays();
+          this.renderBrushPlane();
+          gl.colorMask(true, true, true, true);
+        }
         this.renderBonds();    // bonds first (depth-tested UNDER the spheres)
         this.renderAgents();   // sphere impostors (non-sprite agents)
         this.renderSprites();  // sprite billboards (sprite-agents; on top, blended)

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useReducer, useRef, useState, type CSSProperties } from 'react';
+import { memo, useCallback, useEffect, useMemo, useReducer, useRef, useState, useSyncExternalStore, type CSSProperties } from 'react';
 import { useModel } from '../model/ModelContext';
 import { compileGraph, compileAgentGraph } from '../modeler/vpl/compiler/compile';
 import { expandVectorAttributes, encodeAttrSets, decodeVectorFromValues } from '../modeler/vpl/compiler/vectorAttr';
@@ -478,6 +478,36 @@ const ChevronDownIcon = () => (
   </svg>
 );
 
+// ── Hover-coords chip mini-store ────────────────────────────────────────────
+// The hovered-cell / brush-footprint readout changes on every cell crossing.
+// As React STATE it re-rendered the whole (huge) SimulatorView per crossing,
+// which measurably competed with the simulation's step→draw pipeline while
+// playing (part of the "moving the brush cursor slows the sim" bug). A
+// module-level external store + a tiny memoized subscriber keeps the chip live
+// while the parent never re-renders for it (the graphState pub/sub pattern).
+type HoverCellInfo = { col: number; row: number; x0: number; y0: number; x1: number; y1: number } | null;
+let hoverCellInfoVal: HoverCellInfo = null;
+const hoverCellInfoListeners = new Set<() => void>();
+function publishHoverCellInfo(v: HoverCellInfo): void {
+  const p = hoverCellInfoVal;
+  if (p === v || (p !== null && v !== null && p.col === v.col && p.row === v.row
+    && p.x0 === v.x0 && p.y0 === v.y0 && p.x1 === v.x1 && p.y1 === v.y1)) return;
+  hoverCellInfoVal = v;
+  for (const l of hoverCellInfoListeners) l();
+}
+const subscribeHoverCellInfo = (l: () => void): (() => void) => {
+  hoverCellInfoListeners.add(l);
+  return () => { hoverCellInfoListeners.delete(l); };
+};
+const getHoverCellInfoSnap = (): HoverCellInfo => hoverCellInfoVal;
+const HoverCoordsChip = memo(function HoverCoordsChip() {
+  const info = useSyncExternalStore(subscribeHoverCellInfo, getHoverCellInfoSnap);
+  if (!info) return null;
+  return (info.x0 === info.x1 && info.y0 === info.y1)
+    ? <span title="Hovered cell">Cell ({info.col}, {info.row})</span>
+    : <span title="Brush footprint at the hovered cell">Cells ({info.x0},{info.y0}) {'→'} ({info.x1},{info.y1})</span>;
+});
+
 export function SimulatorView({ visible = true }: { visible?: boolean }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const { model, modelVersion, updateIndicator, setSimulationState, addPreset, duplicatePreset, deletePreset, updatePreset, reorderPresets, updateProperties, updateAttribute } = useModel();
@@ -528,6 +558,11 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   // 3D Grid CA: when true, the brush shape is VOLUMETRIC (sphere/box/shell)
   // instead of a flat footprint on the interaction plane ("Extrapolate plane").
   const [brush3dVolume, setBrush3dVolume] = useState<boolean>(!!saved.current.brush3dVolume);
+  // 3D: draw agents in FRONT of the CA-grid voxels (the historical behaviour —
+  // the grid usually surrounds the agents and would hide them completely). OFF =
+  // normal depth occlusion between the two layers (useful for sparse grids).
+  // Helper overlays (axes/grid/bounds/brush plane) keep normal depth either way.
+  const [agentsFront3d, setAgentsFront3d] = useState<boolean>(saved.current.agentsFront3d !== false);
   // 3D Grid CA: depth (number of layers) of the VOLUMETRIC box brush — independent
   // of the row size (H), so a box can be e.g. wide+tall+shallow.
   const [brushBoxDepth, setBrushBoxDepth] = useState<number>((saved.current.brushBoxDepth as number) ?? 3);
@@ -757,7 +792,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
           targetFps, unlimitedFps, gensPerFrame, unlimitedGens,
           activeViewer, brushColor, brushW, brushH, brushMapping, showBrushCursor, showGridlines,
           brushShape, brushRadius, brushRingWidth, brushLineWidth, brush3dVolume, brushBoxDepth,
-          infinityCanvas, indicatorVizModes, recordFormat, brushSectionH,
+          infinityCanvas, indicatorVizModes, recordFormat, brushSectionH, agentsFront3d,
           agentBrushRadius, agentSeedDensity, agentSeedSpacing,
           agentBrushShape, agentBrushW, agentBrushH, agentBrushRingWidth, agentBrushLineWidth,
           showCaGrid, showAgents, simulateCells, simulateAgents, brushTarget, bg2d,
@@ -772,7 +807,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       } catch { /* localStorage full */ }
     }, 300);
     return () => clearTimeout(timer);
-  }, [targetFps, unlimitedFps, gensPerFrame, unlimitedGens, activeViewer, brushColor, brushW, brushH, brushMapping, showBrushCursor, showGridlines, brushShape, brushRadius, brushRingWidth, brushLineWidth, brush3dVolume, brushBoxDepth, infinityCanvas, indicatorVizModes, recordFormat, brushSectionH, agentBrushRadius, agentSeedDensity, agentSeedSpacing, agentBrushShape, agentBrushW, agentBrushH, agentBrushRingWidth, agentBrushLineWidth, showCaGrid, showAgents, simulateCells, simulateAgents, brushTarget, bg2d, indicatorHiddenCategories, indicatorChartOverrides]);
+  }, [targetFps, unlimitedFps, gensPerFrame, unlimitedGens, activeViewer, brushColor, brushW, brushH, brushMapping, showBrushCursor, showGridlines, brushShape, brushRadius, brushRingWidth, brushLineWidth, brush3dVolume, brushBoxDepth, infinityCanvas, indicatorVizModes, recordFormat, brushSectionH, agentsFront3d, agentBrushRadius, agentSeedDensity, agentSeedSpacing, agentBrushShape, agentBrushW, agentBrushH, agentBrushRingWidth, agentBrushLineWidth, showCaGrid, showAgents, simulateCells, simulateAgents, brushTarget, bg2d, indicatorHiddenCategories, indicatorChartOverrides]);
 
   // Manual Brush — signature-keyed merge effect. Re-derives `manualBrush`
   // whenever the cell attribute set (id+type) changes. Surviving attrs carry
@@ -1170,6 +1205,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   const cam3dRef = useRef<import('./render/gl3d').Camera3D>({ yaw: -0.9, pitch: 0.6, dist: 1.9, target: [0, 0, 0] });
   const clip3dRef = useRef<import('./render/gl3d').ClipPlane3D>({ enabled: false, axis: 'z', lo: 0, hi: 0 });
   const alpha3dRef = useRef(false);
+  const agentsFront3dRef = useRef(true);
   // voxels/agents are driven from showCaGrid/showAgents below (the render-layer
   // toggles); the panel only edits axes/grid/bounds/gizmo. draw() overrides the two.
   const viz3dRef = useRef<import('./render/gl3d').Viz3D>({ axes: false, grid: false, bounds: true, gizmo: true, voxels: true, agents: true });
@@ -1243,12 +1279,32 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   const isPanning = useRef(false);
   const lastMouse = useRef({ x: 0, y: 0 });
   const cursorGrid = useRef<{ row: number; col: number } | null>(null);
-  /** Cell coordinates / brush rect under the cursor. State (not a ref) so the
-   *  overlay re-renders, but only updated when the integer cell or brush
-   *  dimensions change to keep mousemove cheap. */
-  const [hoverCellInfo, setHoverCellInfo] = useState<{
-    col: number; row: number; x0: number; y0: number; x1: number; y1: number;
+  // The hovered cell / brush-footprint chip lives in the module-level
+  // HoverCoordsChip external store (see publishHoverCellInfo above) so per-cell
+  // crossings never re-render this component.
+  // ── Cursor overlay layer ──────────────────────────────────────────────────
+  // The brush cursor + agent-brush highlights draw on TWO dedicated overlay
+  // canvases ABOVE the scene canvas: `cursorNeg` carries the white silhouettes
+  // and is composited with CSS mix-blend-mode: difference (the negative-cursor
+  // trick, now done by the compositor instead of reading scene pixels), and
+  // `cursorHl` carries the coloured highlight rings with normal blending.
+  // Moving the cursor redraws ONLY these layers — never the scene canvas — so
+  // brush movement costs nothing on the play pipeline and the cursor stays
+  // fluid even when the simulation renders at 1 fps (the reported bug).
+  const cursorNegCanvasRef = useRef<HTMLCanvasElement>(null);
+  const cursorHlCanvasRef = useRef<HTMLCanvasElement>(null);
+  /** The scene transform draw() last rendered with — the cursor layer renders
+   *  from this stash (pan/zoom/step redraws refresh it, then re-sync the layer). */
+  const viewXformRef = useRef<{
+    parentW: number; parentH: number; w: number; h: number; scale: number;
+    scaledW: number; scaledH: number; ox: number; oy: number; infinity: boolean;
+    txMin: number; txMax: number; tyMin: number; tyMax: number;
   } | null>(null);
+  /** Idle hover tracking (cursor cell + chip + agent hover scans) is coalesced
+   *  to ONE rAF per frame — a 125–1000 Hz mouse must not run O(agents) scans or
+   *  React updates per raw event (the cursor-slows-the-sim bug). */
+  const hoverWorkRaf = useRef<number | null>(null);
+  const lastHoverClient = useRef({ x: 0, y: 0, buttons: 0 });
   const lastPaintGrid = useRef<{ row: number; col: number } | null>(null);
   // Paint coalescing: instead of posting a paint message per mouse-move event
   // (~50-200/sec on a fast brush drag), collect cells in a buffer and flush
@@ -1504,6 +1560,216 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   }, [model.agentGraphNodes, model.topologyMode?.agents, model.macroDefs]);
 
   // Draw using ImageData + zoom/pan transform
+  /** Render the CURSOR LAYER — the cell-brush silhouette, the agent-brush
+   *  footprint/scan-ring silhouettes (white, on the `cursorNeg` canvas whose CSS
+   *  mix-blend-mode: difference produces the negative-cursor look), and the
+   *  coloured agent highlight rings (on the `cursorHl` canvas). Extracted OUT of
+   *  the scene draw(): cursor movement redraws only these two small layers, so
+   *  it can never compete with the play pipeline, and the cursor stays fluid at
+   *  display rate even when the simulation steps at 1 fps. Reads the transform
+   *  draw() stashed in viewXformRef (scene renders re-call this to stay glued). */
+  const drawCursorLayer = useCallback(() => {
+    const neg = cursorNegCanvasRef.current;
+    const hl = cursorHlCanvasRef.current;
+    if (!neg || !hl) return;
+    const negCtx = neg.getContext('2d');
+    const hlCtx = hl.getContext('2d');
+    if (!negCtx || !hlCtx) return;
+    const xf = viewXformRef.current;
+    const pw = xf?.parentW ?? neg.width, ph = xf?.parentH ?? neg.height;
+    if (neg.width !== pw) neg.width = pw;
+    if (neg.height !== ph) neg.height = ph;
+    if (hl.width !== pw) hl.width = pw;
+    if (hl.height !== ph) hl.height = ph;
+    negCtx.clearRect(0, 0, pw, ph);
+    hlCtx.clearRect(0, 0, pw, ph);
+    if (!xf || is3dRef.current) return; // 3D draws its cursor in the GL scene
+    const { parentW, parentH, w, h, scale, scaledW, scaledH, ox, oy, infinity, txMin, txMax, tyMin, tyMax } = xf;
+
+    // ── Cell brush cursor — the exact cell-silhouette of the current stamp
+    // (rect / circle / ring / line preview), white on the difference layer so
+    // it shows as the NEGATIVE of whatever is behind it. One copy per visible
+    // tile in infinity mode. Hidden when the brush targets agents.
+    const cursor = cursorGrid.current;
+    if (cursor && showBrushCursorRef.current && (!isAgentModelRef.current || brushTargetRef.current === 'grid')) {
+      const lineAnchor = brushShapeRef.current === 'line' ? lineAnchorRef.current : null;
+      let edges: Array<[number, number, number, number]>;
+      let baseRow: number, baseCol: number;
+      let extentMinDc = 0, extentMaxDc = 0, extentMinDr = 0, extentMaxDr = 0;
+      if (lineAnchor) {
+        // Two-click line preview: anchor → cursor, torus-folded in infinity so
+        // the preview matches what paintLine will commit across a seam.
+        let previewEnd = cursor;
+        if (infinity && w > 0 && h > 0) {
+          let dR = cursor.row - lineAnchor.row;
+          let dC = cursor.col - lineAnchor.col;
+          if (dR > h / 2) dR -= h; else if (dR < -h / 2) dR += h;
+          if (dC > w / 2) dC -= w; else if (dC < -w / 2) dC += w;
+          previewEnd = { row: lineAnchor.row + dR, col: lineAnchor.col + dC };
+        }
+        const cells = lineStampCells(lineAnchor, previewEnd, brushLineWidthRef.current)
+          .map(c => [c.row, c.col] as [number, number]);
+        edges = cellSilhouetteEdges(cells);
+        baseRow = 0; baseCol = 0;
+        for (const c of cells) {
+          if (c[0] < extentMinDr) extentMinDr = c[0];
+          if (c[0] > extentMaxDr) extentMaxDr = c[0];
+          if (c[1] < extentMinDc) extentMinDc = c[1];
+          if (c[1] > extentMaxDc) extentMaxDc = c[1];
+        }
+      } else {
+        const offsets = currentStampOffsets();
+        edges = currentStampEdges();
+        baseRow = cursor.row; baseCol = cursor.col;
+        for (const o of offsets) {
+          if (o[0] < extentMinDr) extentMinDr = o[0];
+          if (o[0] > extentMaxDr) extentMaxDr = o[0];
+          if (o[1] < extentMinDc) extentMinDc = o[1];
+          if (o[1] > extentMaxDc) extentMaxDc = o[1];
+        }
+      }
+      const path = new Path2D();
+      for (const [ex0, ey0, ex1, ey1] of edges) {
+        path.moveTo(ox + (baseCol + ex0) * scale, oy + (baseRow + ey0) * scale);
+        path.lineTo(ox + (baseCol + ex1) * scale, oy + (baseRow + ey1) * scale);
+      }
+      negCtx.strokeStyle = '#ffffff';
+      negCtx.lineWidth = 1.5;
+      if (infinity) {
+        const stampW = extentMaxDc - extentMinDc + 1;
+        const stampH = extentMaxDr - extentMinDr + 1;
+        const spanX = Math.max(1, Math.ceil(stampW / w));
+        const spanY = Math.max(1, Math.ceil(stampH / h));
+        const bx = ox + (baseCol + extentMinDc) * scale;
+        const by = oy + (baseRow + extentMinDr) * scale;
+        for (let ty = tyMin - spanY; ty <= tyMax + spanY; ty++) {
+          for (let tx = txMin - spanX; tx <= txMax + spanX; tx++) {
+            const rx = bx + tx * scaledW;
+            const ry = by + ty * scaledH;
+            if (rx + stampW * scale < 0 || rx > parentW || ry + stampH * scale < 0 || ry > parentH) continue;
+            negCtx.save();
+            negCtx.translate(tx * scaledW, ty * scaledH);
+            negCtx.stroke(path);
+            negCtx.restore();
+          }
+        }
+      } else {
+        negCtx.stroke(path);
+      }
+    }
+
+    // ── Agent brush cursor + highlights ──
+    if (!isAgentModelRef.current) return;
+    const snap = agentsRef.current;
+    const hw = snap?.highWater ?? 0;
+    const ax = snap?.x, ay = snap?.y, ar = snap?.radius, aal = snap?.alive;
+    const cursorW = agentCursorWorldRef.current;
+    const mode = agentBrushModeRef.current;
+    const aShape = agentBrushShapeRef.current;
+    const aScope = (mode === 'move' && aShape === 'line') ? 'single' : agentBrushScopeRef.current;
+    const showAgentCursor = brushTargetRef.current === 'agents' && showBrushCursorRef.current;
+    // Hovered-agent highlight (Remove = warm/red, else accent).
+    const hover = agentHoverIdRef.current;
+    if (showAgentCursor && snap && hover >= 0 && hover < hw && aal![hover]) {
+      const cx = ox + ax![hover]! * scale, cy = oy + ay![hover]! * scale;
+      const rad = Math.max(2, ar![hover]! * scale) + 2;
+      hlCtx.beginPath(); hlCtx.arc(cx, cy, rad, 0, Math.PI * 2);
+      hlCtx.strokeStyle = mode === 'remove' ? 'rgba(240, 90, 90, 0.95)' : 'rgba(76, 201, 240, 0.95)';
+      hlCtx.lineWidth = 2; hlCtx.stroke();
+    }
+    // Edit target highlight (the single-scope agent picked for editing).
+    const editTgt = editTargetIdRef.current;
+    if (snap && brushTargetRef.current === 'agents' && mode === 'edit' && aScope === 'single' && editTgt >= 0 && editTgt < hw && aal![editTgt]) {
+      const cx = ox + ax![editTgt]! * scale, cy = oy + ay![editTgt]! * scale;
+      const rad = Math.max(2, ar![editTgt]! * scale) + 4;
+      hlCtx.beginPath(); hlCtx.arc(cx, cy, rad, 0, Math.PI * 2);
+      hlCtx.strokeStyle = 'rgba(171, 123, 255, 0.95)'; hlCtx.lineWidth = 2; hlCtx.setLineDash([3, 3]); hlCtx.stroke(); hlCtx.setLineDash([]);
+    }
+    // Area-affected agents — every agent the current footprint would touch
+    // (Remove/Move/Edit, Area scope; Bond's scan disc), colour-coded per mode.
+    if (showAgentCursor && snap && ((aScope === 'area' && (mode === 'remove' || mode === 'move' || mode === 'edit')) || mode === 'bond') && agentAreaHoverIdsRef.current.length) {
+      const rgb = mode === 'remove' ? '240, 90, 90' : mode === 'edit' ? '171, 123, 255' : mode === 'bond' ? '38, 198, 218' : '76, 201, 240';
+      hlCtx.save();
+      hlCtx.strokeStyle = `rgba(${rgb}, 0.95)`;
+      hlCtx.fillStyle = `rgba(${rgb}, 0.22)`;
+      hlCtx.lineWidth = 1.5;
+      for (const id of agentAreaHoverIdsRef.current) {
+        if (id < 0 || id >= hw || !aal![id]) continue;
+        const cx = ox + ax![id]! * scale, cy = oy + ay![id]! * scale;
+        const rad = Math.max(2, ar![id]! * scale) + 2;
+        hlCtx.beginPath(); hlCtx.arc(cx, cy, rad, 0, Math.PI * 2); hlCtx.fill(); hlCtx.stroke();
+      }
+      hlCtx.restore();
+    }
+    // Area footprint cursor — the shape outline at the cursor (negative layer).
+    const footprintMode = mode === 'add' || mode === 'remove' || mode === 'edit' || mode === 'move';
+    if (showAgentCursor && cursorW && aScope === 'area' && footprintMode) {
+      const R = agentBrushRadiusRef.current, ringW = Math.max(1, agentBrushRingWidthRef.current);
+      const hWd = agentBrushWRef.current / 2, hHt = agentBrushHRef.current / 2;
+      const lineAnchor = agentLineAnchorRef.current;
+      const drawShape = (tileOx: number, tileOy: number) => {
+        const cx = tileOx + cursorW.x * scale, cy = tileOy + cursorW.y * scale;
+        if (aShape === 'rect') {
+          negCtx.strokeRect(cx - hWd * scale, cy - hHt * scale, hWd * 2 * scale, hHt * 2 * scale);
+        } else if (aShape === 'line') {
+          if (lineAnchor) {
+            const ax0 = tileOx + lineAnchor.x * scale, ay0 = tileOy + lineAnchor.y * scale;
+            negCtx.save(); negCtx.lineCap = 'round'; negCtx.lineWidth = Math.max(1, agentBrushLineWidthRef.current * scale);
+            negCtx.beginPath(); negCtx.moveTo(ax0, ay0); negCtx.lineTo(cx, cy); negCtx.stroke(); negCtx.restore();
+          } else {
+            const rr = Math.max(1, agentBrushLineWidthRef.current / 2) * scale;
+            negCtx.beginPath(); negCtx.arc(cx, cy, rr, 0, Math.PI * 2); negCtx.stroke();
+          }
+        } else if (aShape === 'ring') {
+          negCtx.beginPath(); negCtx.arc(cx, cy, Math.max(0, R + ringW / 2) * scale, 0, Math.PI * 2); negCtx.stroke();
+          negCtx.beginPath(); negCtx.arc(cx, cy, Math.max(0, R - ringW / 2) * scale, 0, Math.PI * 2); negCtx.stroke();
+        } else if (R > 0) { // circle
+          negCtx.beginPath(); negCtx.arc(cx, cy, R * scale, 0, Math.PI * 2); negCtx.stroke();
+        }
+      };
+      negCtx.save();
+      negCtx.strokeStyle = '#ffffff';
+      negCtx.lineWidth = 1.5;
+      negCtx.setLineDash(mode === 'remove' ? [5, 4] : []);
+      if (infinity) {
+        for (let ty = tyMin; ty <= tyMax; ty++) for (let tx = txMin; tx <= txMax; tx++) drawShape(ox + tx * scaledW, oy + ty * scaledH);
+      } else { drawShape(ox, oy); }
+      negCtx.setLineDash([]);
+      negCtx.restore();
+    }
+    // Bond scan-radius cursor — a dashed circle of the scan radius (negative layer).
+    if (showAgentCursor && mode === 'bond' && cursorW && agentBrushRadiusRef.current > 0) {
+      const rr = agentBrushRadiusRef.current * scale;
+      negCtx.save();
+      negCtx.strokeStyle = '#ffffff';
+      negCtx.lineWidth = 1.5;
+      negCtx.setLineDash([2, 3]);
+      const drawRing = (tileOx: number, tileOy: number) => {
+        const cx = tileOx + cursorW.x * scale, cy = tileOy + cursorW.y * scale;
+        if (cx + rr < 0 || cx - rr > parentW || cy + rr < 0 || cy - rr > parentH) return;
+        negCtx.beginPath(); negCtx.arc(cx, cy, rr, 0, Math.PI * 2); negCtx.stroke();
+      };
+      if (infinity) {
+        for (let ty = tyMin; ty <= tyMax; ty++) for (let tx = txMin; tx <= txMax; tx++) drawRing(ox + tx * scaledW, oy + ty * scaledH);
+      } else { drawRing(ox, oy); }
+      negCtx.setLineDash([]);
+      negCtx.restore();
+    }
+    // Glue/Cut staged-anchor ring + a dashed line to the cursor (highlight layer).
+    const anchor = agentGlueAnchorRef.current;
+    if (snap && anchor >= 0 && anchor < hw && aal![anchor]) {
+      const cx = ox + ax![anchor]! * scale, cy = oy + ay![anchor]! * scale;
+      const rad = Math.max(2, ar![anchor]! * scale) + 3;
+      if (cursorW) {
+        hlCtx.beginPath(); hlCtx.moveTo(cx, cy);
+        hlCtx.lineTo(ox + cursorW.x * scale, oy + cursorW.y * scale);
+        hlCtx.strokeStyle = 'rgba(232, 161, 58, 0.6)'; hlCtx.lineWidth = 1.5; hlCtx.setLineDash([4, 3]); hlCtx.stroke(); hlCtx.setLineDash([]);
+      }
+      hlCtx.beginPath(); hlCtx.arc(cx, cy, rad, 0, Math.PI * 2);
+      hlCtx.strokeStyle = 'rgba(232, 161, 58, 0.95)'; hlCtx.lineWidth = 2; hlCtx.setLineDash([4, 3]); hlCtx.stroke(); hlCtx.setLineDash([]);
+    }
+  }, []);
+
   const draw = useCallback(() => {
     // 3D Grid CA: render the voxel volume via WebGL2 instead of the 2D blit.
     // Everything is read via refs (this callback has empty deps + ~20 call sites).
@@ -1521,6 +1787,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       r.resize(cssW, cssH, window.devicePixelRatio || 1);
       r.setGrid(w3, h3, d3);
       r.setAlphaBlend(alpha3dRef.current);
+      r.setAgentsInFront(agentsFront3dRef.current);
       r.setClipPlane(clip3dRef.current);
       // Render-layer toggles (req 7): voxels/agents come from the show refs, not
       // the panel's viz3d (which only edits axes/grid/bounds/gizmo). Gating the
@@ -1546,10 +1813,15 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
           r.uploadColors(colors3d, w3 * h3 * d3);
           lastUploadedColors3dRef.current = colors3d;
         }
-      } else if (lastUploadedColors3dRef.current) {
-        // Colors went away (e.g. reinit into an agents-only world) — drop the
-        // stale voxel instances instead of drawing the previous grid forever.
-        r.instanceCount = 0;
+      } else {
+        // No colours buffer — drop any stale voxel instances instead of drawing
+        // the previous grid forever. Keyed on the RENDERER's live instance count,
+        // NOT on lastUploadedColors3dRef: a model-load reinit clears BOTH refs
+        // (colorsRef + lastUploaded) before the new worker's first message, so a
+        // ref-keyed guard never fired and an agents-only model loaded after a
+        // voxel model kept rendering the previous model's grid (the reported
+        // cross-model state leak: Life3D's voxels under Morphogenesis's agents).
+        if (r.instanceCount > 0) r.instanceCount = 0;
         lastUploadedColors3dRef.current = null;
       }
       // Bond-Graph Agents (PR5): overlay the agent spheres + bonds via the
@@ -1679,6 +1951,11 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
         txMin = txMax = tyMin = tyMax = 0;
       }
     }
+
+    // Stash the scene transform for the cursor overlay layer (drawn on its own
+    // canvases — see drawCursorLayer). Every scene render refreshes it, so the
+    // layer is always consistent with the last-drawn pan/zoom/tiling.
+    viewXformRef.current = { parentW, parentH, w, h, scale, scaledW, scaledH, ox, oy, infinity, txMin, txMax, tyMin, tyMax };
 
     // Per-cell glyph overlay. Drawn AFTER the colour blit (so glyphs sit on
     // top of cell colours) but BEFORE gridlines and brush cursor (so those
@@ -1846,123 +2123,9 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       } else {
         stamp(ox, oy);
       }
-      const cursorW = agentCursorWorldRef.current;
-      const mode = agentBrushModeRef.current;
-      const aShape = agentBrushShapeRef.current;
-      const aScope = (mode === 'move' && aShape === 'line') ? 'single' : agentBrushScopeRef.current;
-      // Hovered-agent highlight (Remove = warm/red, else accent). On-change
-      // redraws keep this cheap; the pick is the live cursor's nearest agent.
-      const showAgentCursor = brushTargetRef.current === 'agents' && showBrushCursorRef.current;
-      const hover = agentHoverIdRef.current;
-      if (showAgentCursor && hover >= 0 && hover < hw && aal[hover]) {
-        const cx = ox + ax[hover]! * scale, cy = oy + ay[hover]! * scale;
-        const rad = Math.max(2, ar[hover]! * scale) + 2;
-        ctx.beginPath(); ctx.arc(cx, cy, rad, 0, Math.PI * 2);
-        ctx.strokeStyle = mode === 'remove' ? 'rgba(240, 90, 90, 0.95)' : 'rgba(76, 201, 240, 0.95)';
-        ctx.lineWidth = 2; ctx.stroke();
-      }
-      // Edit target highlight (the single-scope agent picked for editing).
-      const editTgt = editTargetIdRef.current;
-      if (brushTargetRef.current === 'agents' && mode === 'edit' && aScope === 'single' && editTgt >= 0 && editTgt < hw && aal[editTgt]) {
-        const cx = ox + ax[editTgt]! * scale, cy = oy + ay[editTgt]! * scale;
-        const rad = Math.max(2, ar[editTgt]! * scale) + 4;
-        ctx.beginPath(); ctx.arc(cx, cy, rad, 0, Math.PI * 2);
-        ctx.strokeStyle = 'rgba(171, 123, 255, 0.95)'; ctx.lineWidth = 2; ctx.setLineDash([3, 3]); ctx.stroke(); ctx.setLineDash([]);
-      }
-      // Area-affected agents — highlight every agent the current footprint would
-      // touch (Remove/Move/Edit, Area scope), so the effect is visible before and
-      // during the stroke. Add is excluded (it only spawns NEW agents, never
-      // touching the ones already there). Colour-coded per mode.
-      if (showAgentCursor && ((aScope === 'area' && (mode === 'remove' || mode === 'move' || mode === 'edit')) || mode === 'bond') && agentAreaHoverIdsRef.current.length) {
-        const rgb = mode === 'remove' ? '240, 90, 90' : mode === 'edit' ? '171, 123, 255' : mode === 'bond' ? '38, 198, 218' : '76, 201, 240';
-        ctx.save();
-        ctx.strokeStyle = `rgba(${rgb}, 0.95)`;
-        ctx.fillStyle = `rgba(${rgb}, 0.22)`;
-        ctx.lineWidth = 1.5;
-        for (const id of agentAreaHoverIdsRef.current) {
-          if (id < 0 || id >= hw || !aal[id]) continue;
-          const cx = ox + ax[id]! * scale, cy = oy + ay[id]! * scale;
-          const rad = Math.max(2, ar[id]! * scale) + 2;
-          ctx.beginPath(); ctx.arc(cx, cy, rad, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
-        }
-        ctx.restore();
-      }
-      // Area footprint cursor — the shape outline at the cursor, drawn as the
-      // negative silhouette ('difference' composite + white) so it's visible on
-      // any palette (the Windows-cursor trick). Tiled in infinity. Add/Remove/
-      // Edit/Move (area scope). Single scope shows only the hovered-agent ring above.
-      const footprintMode = mode === 'add' || mode === 'remove' || mode === 'edit' || mode === 'move';
-      if (showAgentCursor && cursorW && aScope === 'area' && footprintMode) {
-        const R = agentBrushRadiusRef.current, ringW = Math.max(1, agentBrushRingWidthRef.current);
-        const hW = agentBrushWRef.current / 2, hH = agentBrushHRef.current / 2;
-        const lineAnchor = agentLineAnchorRef.current;
-        const drawShape = (tileOx: number, tileOy: number) => {
-          const cx = tileOx + cursorW.x * scale, cy = tileOy + cursorW.y * scale;
-          if (aShape === 'rect') {
-            ctx.strokeRect(cx - hW * scale, cy - hH * scale, hW * 2 * scale, hH * 2 * scale);
-          } else if (aShape === 'line') {
-            if (lineAnchor) {
-              // Capsule preview from the staged anchor to the cursor.
-              const ax0 = tileOx + lineAnchor.x * scale, ay0 = tileOy + lineAnchor.y * scale;
-              ctx.save(); ctx.lineCap = 'round'; ctx.lineWidth = Math.max(1, agentBrushLineWidthRef.current * scale);
-              ctx.beginPath(); ctx.moveTo(ax0, ay0); ctx.lineTo(cx, cy); ctx.stroke(); ctx.restore();
-            } else {
-              const rr = Math.max(1, agentBrushLineWidthRef.current / 2) * scale;
-              ctx.beginPath(); ctx.arc(cx, cy, rr, 0, Math.PI * 2); ctx.stroke();
-            }
-          } else if (aShape === 'ring') {
-            ctx.beginPath(); ctx.arc(cx, cy, Math.max(0, R + ringW / 2) * scale, 0, Math.PI * 2); ctx.stroke();
-            ctx.beginPath(); ctx.arc(cx, cy, Math.max(0, R - ringW / 2) * scale, 0, Math.PI * 2); ctx.stroke();
-          } else if (R > 0) { // circle
-            ctx.beginPath(); ctx.arc(cx, cy, R * scale, 0, Math.PI * 2); ctx.stroke();
-          }
-        };
-        ctx.save();
-        ctx.globalCompositeOperation = 'difference';
-        ctx.strokeStyle = '#ffffff';
-        ctx.lineWidth = 1.5;
-        ctx.setLineDash(mode === 'remove' ? [5, 4] : []);
-        if (infinity) {
-          for (let ty = tyMin; ty <= tyMax; ty++) for (let tx = txMin; tx <= txMax; tx++) drawShape(ox + tx * scaledW, oy + ty * scaledH);
-        } else { drawShape(ox, oy); }
-        ctx.setLineDash([]);
-        ctx.restore();
-      }
-      // Bond scan-radius cursor — a plain circle of the scan radius (Bond auto-bonds
-      // near agent pairs within it), drawn as the negative silhouette. The affected
-      // agents in range are ringed above (teal). Tiled in infinity.
-      if (showAgentCursor && mode === 'bond' && cursorW && agentBrushRadiusRef.current > 0) {
-        const rr = agentBrushRadiusRef.current * scale;
-        ctx.save();
-        ctx.globalCompositeOperation = 'difference';
-        ctx.strokeStyle = '#ffffff';
-        ctx.lineWidth = 1.5;
-        ctx.setLineDash([2, 3]);
-        const drawRing = (tileOx: number, tileOy: number) => {
-          const cx = tileOx + cursorW.x * scale, cy = tileOy + cursorW.y * scale;
-          if (cx + rr < 0 || cx - rr > parentW || cy + rr < 0 || cy - rr > parentH) return;
-          ctx.beginPath(); ctx.arc(cx, cy, rr, 0, Math.PI * 2); ctx.stroke();
-        };
-        if (infinity) {
-          for (let ty = tyMin; ty <= tyMax; ty++) for (let tx = txMin; tx <= txMax; tx++) drawRing(ox + tx * scaledW, oy + ty * scaledH);
-        } else { drawRing(ox, oy); }
-        ctx.setLineDash([]);
-        ctx.restore();
-      }
-      // Glue/Cut staged-anchor ring (the first-clicked agent awaiting a second)
-      // + a dashed line to the cursor so the staging is visible.
-      const anchor = agentGlueAnchorRef.current;
-      if (anchor >= 0 && anchor < hw && aal[anchor]) {
-        const cx = ox + ax[anchor]! * scale, cy = oy + ay[anchor]! * scale;
-        const rad = Math.max(2, ar[anchor]! * scale) + 3;
-        if (cursorW) {
-          ctx.beginPath(); ctx.moveTo(cx, cy);
-          ctx.lineTo(ox + cursorW.x * scale, oy + cursorW.y * scale);
-          ctx.strokeStyle = 'rgba(232, 161, 58, 0.6)'; ctx.lineWidth = 1.5; ctx.setLineDash([4, 3]); ctx.stroke(); ctx.setLineDash([]);
-        }
-        ctx.beginPath(); ctx.arc(cx, cy, rad, 0, Math.PI * 2);
-        ctx.strokeStyle = 'rgba(232, 161, 58, 0.95)'; ctx.lineWidth = 2; ctx.setLineDash([4, 3]); ctx.stroke(); ctx.setLineDash([]);
-      }
+      // The agent-brush cursor + highlight visuals (hover/edit/area rings, the
+      // footprint + bond-ring silhouettes, the glue anchor) moved to the cursor
+      // overlay layer — see drawCursorLayer. The scene pass draws only agents+bonds.
     };
 
     // Zoomed-out glyph-color fallback: when cells are too small to draw glyphs
@@ -2092,86 +2255,10 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     // below the brush cursor. Render-layer toggle (req 7): skip when agents hidden.
     if (showAgentsRef.current) drawAgentsOverlay();
 
-    // Draw the brush cursor as the exact cell-silhouette of the current stamp
-    // (rect / circle / ring / line preview), stroked in 'difference' composite
-    // mode so the outline shows as the NEGATIVE of whatever colors are behind
-    // it (visible on any cell palette — the Windows-cursor trick). In infinity
-    // mode one copy is drawn per visible tile (same range logic as the old
-    // rect cursor), so a stamp straddling a seam shows every overhanging copy.
-    // Cell brush cursor — hidden on an agent model when the brush targets agents
-    // (the agent radius ring is shown instead), so the two cursors never overlap.
-    const cursor = cursorGrid.current;
-    if (cursor && showBrushCursorRef.current && (!isAgentModelRef.current || brushTargetRef.current === 'grid')) {
-      const lineAnchor = brushShapeRef.current === 'line' ? lineAnchorRef.current : null;
-      // Silhouette edges in CELL units + the base cell they're relative to.
-      let edges: Array<[number, number, number, number]>;
-      let baseRow: number, baseCol: number;
-      let extentMinDc = 0, extentMaxDc = 0, extentMinDr = 0, extentMaxDr = 0;
-      if (lineAnchor) {
-        // Two-click line preview: anchor → cursor, at the configured thickness.
-        // In infinity mode fold to the torus-shortest path so the preview
-        // matches what paintLine will actually commit across a seam.
-        let previewEnd = cursor;
-        if (infinity && w > 0 && h > 0) {
-          let dR = cursor.row - lineAnchor.row;
-          let dC = cursor.col - lineAnchor.col;
-          if (dR > h / 2) dR -= h; else if (dR < -h / 2) dR += h;
-          if (dC > w / 2) dC -= w; else if (dC < -w / 2) dC += w;
-          previewEnd = { row: lineAnchor.row + dR, col: lineAnchor.col + dC };
-        }
-        const cells = lineStampCells(lineAnchor, previewEnd, brushLineWidthRef.current)
-          .map(c => [c.row, c.col] as [number, number]);
-        edges = cellSilhouetteEdges(cells);
-        baseRow = 0; baseCol = 0;
-        for (const c of cells) {
-          if (c[0] < extentMinDr) extentMinDr = c[0];
-          if (c[0] > extentMaxDr) extentMaxDr = c[0];
-          if (c[1] < extentMinDc) extentMinDc = c[1];
-          if (c[1] > extentMaxDc) extentMaxDc = c[1];
-        }
-      } else {
-        const offsets = currentStampOffsets();
-        edges = currentStampEdges();
-        baseRow = cursor.row; baseCol = cursor.col;
-        for (const o of offsets) {
-          if (o[0] < extentMinDr) extentMinDr = o[0];
-          if (o[0] > extentMaxDr) extentMaxDr = o[0];
-          if (o[1] < extentMinDc) extentMinDc = o[1];
-          if (o[1] > extentMaxDc) extentMaxDc = o[1];
-        }
-      }
-      const path = new Path2D();
-      for (const [ex0, ey0, ex1, ey1] of edges) {
-        path.moveTo(ox + (baseCol + ex0) * scale, oy + (baseRow + ey0) * scale);
-        path.lineTo(ox + (baseCol + ex1) * scale, oy + (baseRow + ey1) * scale);
-      }
-      ctx.save();
-      ctx.globalCompositeOperation = 'difference';
-      ctx.strokeStyle = '#ffffff';
-      ctx.lineWidth = 1.5;
-      if (infinity) {
-        const stampW = extentMaxDc - extentMinDc + 1;
-        const stampH = extentMaxDr - extentMinDr + 1;
-        const spanX = Math.max(1, Math.ceil(stampW / w));
-        const spanY = Math.max(1, Math.ceil(stampH / h));
-        const bx = ox + (baseCol + extentMinDc) * scale;
-        const by = oy + (baseRow + extentMinDr) * scale;
-        for (let ty = tyMin - spanY; ty <= tyMax + spanY; ty++) {
-          for (let tx = txMin - spanX; tx <= txMax + spanX; tx++) {
-            const rx = bx + tx * scaledW;
-            const ry = by + ty * scaledH;
-            if (rx + stampW * scale < 0 || rx > parentW || ry + stampH * scale < 0 || ry > parentH) continue;
-            ctx.save();
-            ctx.translate(tx * scaledW, ty * scaledH);
-            ctx.stroke(path);
-            ctx.restore();
-          }
-        }
-      } else {
-        ctx.stroke(path);
-      }
-      ctx.restore();
-    }
+    // Brush cursor: drawn on the dedicated cursor overlay layer (drawCursorLayer)
+    // — the scene canvas no longer carries it, so cursor movement never forces a
+    // scene redraw. Re-sync the layer now that the transform stash is fresh.
+    drawCursorLayer();
 
     // Middle-click autoscroll indicator: small unfilled ring + centre dot at the
     // anchor, plus a faint direction line to the cursor. Kept low-contrast so it
@@ -2261,11 +2348,13 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   // no longer steals main-thread time from a running simulation (the FPS-halving
   // the user reported). Active gestures (pan / paint / resize) still draw eagerly.
   const cursorDrawRaf = useRef<number | null>(null);
+  // Cursor-only redraw — paints the dedicated overlay layers (never the scene),
+  // so it is safe (and cheap) at display rate even while playing: the cursor
+  // stays fluid at 60 fps when the simulation itself renders at 1 fps.
   const scheduleCursorDraw = useCallback(() => {
-    if (playingRef.current) return;
     if (cursorDrawRaf.current != null) return;
-    cursorDrawRaf.current = requestAnimationFrame(() => { cursorDrawRaf.current = null; draw(); });
-  }, [draw]);
+    cursorDrawRaf.current = requestAnimationFrame(() => { cursorDrawRaf.current = null; drawCursorLayer(); });
+  }, [drawCursorLayer]);
   useEffect(() => { gensPerFrameRef.current = unlimitedGens ? 100 : gensPerFrame; }, [gensPerFrame, unlimitedGens]);
   useEffect(() => { targetFpsRef.current = unlimitedFps ? 999999 : targetFps; }, [targetFps, unlimitedFps]);
   useEffect(() => { unlimitedFpsRef.current = unlimitedFps; }, [unlimitedFps]);
@@ -3984,6 +4073,12 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     // rAF throttle state for the idle hovered-agent pick (see onMove).
     let agentHoverPending: { x: number; y: number } | null = null;
     let agentHoverRaf = 0;
+    // Idle footprint-cursor hover — rAF-coalesced like the agent pick above:
+    // raw pointermove fires far above frame rate, and each hover update is a
+    // plane pick + footprint recompute + (on cell change) a full GL re-render,
+    // which measurably competed with the sim while playing.
+    let hover3dPending: { x: number; y: number } | null = null;
+    let hover3dRaf = 0;
     const onMove = (e: PointerEvent) => {
       // Track drag distance BEFORE the inspect-armed early-return, so onUp can
       // discard a Shift+LMB that turned into a drag (mirrors the 2D sweep
@@ -4006,8 +4101,25 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
             return;
           }
         }
-        // Idle / inspect-armed: update the footprint cursor (redraw on change).
-        let changed = updateHover(e.clientX, e.clientY);
+        // Inspect-armed drag → sweep the front voxel under the cursor (a
+        // deliberate drag — stays synchronous).
+        if (active === 'inspect') {
+          updateHover(e.clientX, e.clientY);
+          sweepPick3d(e.clientX, e.clientY, false);
+          draw();
+          return;
+        }
+        // Idle: update the footprint cursor — rAF-coalesced (redraw on change),
+        // so raw pointermove can't out-run the frame rate with per-move plane
+        // picks + footprint recomputes + GL renders.
+        hover3dPending = { x: e.clientX, y: e.clientY };
+        if (hover3dRaf === 0) {
+          hover3dRaf = requestAnimationFrame(() => {
+            hover3dRaf = 0;
+            const p = hover3dPending;
+            if (p && updateHover(p.x, p.y)) draw();
+          });
+        }
         // Agent model: also update the hovered-agent ring (kill/glue/cut/move) —
         // rAF-throttled: the sphere pick is a full render + FBO pass + a
         // synchronous readPixels GPU stall, and raw pointermove fires far above
@@ -4022,9 +4134,6 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
             });
           }
         }
-        // Inspect-armed drag → sweep the front voxel under the cursor.
-        if (active === 'inspect') { sweepPick3d(e.clientX, e.clientY, false); changed = true; }
-        if (changed) draw();
         return;
       }
       if (active === 'resize') {
@@ -4143,6 +4252,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     glc.addEventListener('pointerleave', onLeave);
     return () => {
       if (agentHoverRaf !== 0) cancelAnimationFrame(agentHoverRaf);
+      if (hover3dRaf !== 0) cancelAnimationFrame(hover3dRaf);
       glc.removeEventListener('pointerdown', onDown);
       window.removeEventListener('pointermove', onMove);
       window.removeEventListener('pointerup', onUp);
@@ -4189,6 +4299,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   // 3D Grid CA: mirror the control state into the renderer refs + redraw.
   useEffect(() => { clip3dRef.current = clip3d; draw(); }, [clip3d, draw]);
   useEffect(() => { alpha3dRef.current = alpha3d; draw(); }, [alpha3d, draw]);
+  useEffect(() => { agentsFront3dRef.current = agentsFront3d; draw(); }, [agentsFront3d, draw]);
   useEffect(() => { viz3dRef.current = viz3d; draw(); }, [viz3d, draw]);
   useEffect(() => {
     plane3dRef.current = { axis: plane3d.axis, pos: plane3d.pos };
@@ -5710,6 +5821,86 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       }
     };
 
+    // Idle hover tracking (cursor cell + hover-coords chip + agent hover /
+    // area-highlight scans) — COALESCED to at most one run per animation frame.
+    // A 125–1000 Hz mouse used to run O(agents) scans + a React state update
+    // per RAW event, competing with the step→draw pipeline while playing (the
+    // "moving the brush cursor slows the simulation" bug). The raw mousemove
+    // handler now only records the pointer + runs the active-drag actions.
+    const processHoverWork = () => {
+      hoverWorkRaf.current = null;
+      const { x: hx, y: hy, buttons } = lastHoverClient.current;
+      // The brush cursor + chip stop tracking once the pointer leaves the canvas
+      // area (in infinity mode screenToGrid WRAPS off-canvas coords instead of
+      // returning null). Active drags legitimately continue off-canvas.
+      if (!isPanning.current && !(buttons & 1) && !isResizingBrush.active) {
+        const rect = container.getBoundingClientRect();
+        const overCanvas = hx >= rect.left && hx < rect.right
+          && hy >= rect.top && hy < rect.bottom;
+        if (!overCanvas) {
+          let changed = cursorGrid.current !== null;
+          if (cursorGrid.current !== null) { cursorGrid.current = null; publishHoverCellInfo(null); }
+          if (agentCursorWorldRef.current !== null) { agentCursorWorldRef.current = null; changed = true; }
+          if (agentHoverIdRef.current !== -1) { agentHoverIdRef.current = -1; changed = true; }
+          if (agentAreaHoverIdsRef.current.length) { agentAreaHoverIdsRef.current = []; changed = true; }
+          if (changed) drawCursorLayer();
+          return;
+        }
+      }
+      // Cursor cell + the hover-coords chip (external store — the chip updates
+      // without re-rendering this component).
+      const gridPos = screenToGrid(hx, hy);
+      cursorGrid.current = gridPos;
+      if (gridPos) {
+        let minDr = 0, maxDr = 0, minDc = 0, maxDc = 0;
+        for (const [dr, dc] of currentStampOffsets()) {
+          if (dr < minDr) minDr = dr;
+          if (dr > maxDr) maxDr = dr;
+          if (dc < minDc) minDc = dc;
+          if (dc > maxDc) maxDc = dc;
+        }
+        publishHoverCellInfo({
+          col: gridPos.col, row: gridPos.row,
+          x0: gridPos.col + minDc, y0: gridPos.row + minDr,
+          x1: gridPos.col + maxDc, y1: gridPos.row + maxDr,
+        });
+      } else {
+        publishHoverCellInfo(null);
+      }
+      // Bond-Graph Agents — cursor world point, area-affected highlight and the
+      // hovered-agent pick (O(agents) scans — safe at ≤1/frame here).
+      if (isAgentModelRef.current && brushTargetRef.current === 'agents') {
+        const mode = agentBrushModeRef.current;
+        const shape = agentBrushShapeRef.current;
+        const scope = (mode === 'move' && shape === 'line') ? 'single' : agentBrushScopeRef.current;
+        const dragging = canvasAgentBrushActive.current && (buttons & 1) !== 0;
+        const wpt = screenToWorld(hx, hy);
+        agentCursorWorldRef.current = wpt ? { x: wpt.x, y: wpt.y } : null;
+        // Area-affected highlight — the agents the stroke WILL touch (Remove/Move/
+        // Edit; NOT Add, which only spawns new agents). During a group-move drag
+        // it's the grabbed group; otherwise the agents under the footprint.
+        if (scope === 'area' && (mode === 'remove' || mode === 'move' || mode === 'edit')) {
+          agentAreaHoverIdsRef.current = (mode === 'move' && agentGroupMoveRef.current)
+            ? agentGroupMoveRef.current.members.map(m => m.id)
+            : (wpt ? agentsInShapeAt(wpt.x, wpt.y) : []);
+        } else if (mode === 'bond') {
+          // Bond scans a plain radius disc (not the shape) for near pairs.
+          agentAreaHoverIdsRef.current = wpt ? agentsInRadiusAt(wpt.x, wpt.y, agentBrushRadiusRef.current) : [];
+        } else if (agentAreaHoverIdsRef.current.length) {
+          agentAreaHoverIdsRef.current = [];
+        }
+        const wantHover = mode === 'glue' || mode === 'cut'
+          || (scope === 'single' && (mode === 'remove' || mode === 'move' || mode === 'edit'));
+        if (!dragging) agentHoverIdRef.current = wantHover ? pickAgentAt(hx, hy) : -1;
+      }
+      // Cursor-layer-only redraw — never touches the scene canvas.
+      drawCursorLayer();
+    };
+    const scheduleHoverWork = () => {
+      if (hoverWorkRaf.current != null) return;
+      hoverWorkRaf.current = requestAnimationFrame(processHoverWork);
+    };
+
     const handleMouseMove = (e: MouseEvent) => {
       // 3D: the 2D screenToGrid mapping is meaningless (it reads the inert 2D
       // zoom/pan over the hidden 2D canvas but "succeeds" because both canvases
@@ -5719,7 +5910,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       if (is3dRef.current) {
         if (cursorGrid.current !== null) {
           cursorGrid.current = null;
-          setHoverCellInfo(prev => (prev === null ? prev : null));
+          publishHoverCellInfo(null);
         }
         return;
       }
@@ -5732,97 +5923,19 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
         return;
       }
 
-      // The brush rectangle + hover-coords chip are on-canvas indicators — they
-      // must stop tracking the pointer once it leaves the canvas area (top bar,
-      // side panels, etc.). This is a window-level listener so it keeps firing
-      // off-canvas, and in infinity-canvas mode screenToGrid WRAPS off-canvas
-      // coords instead of returning null — so without this guard both would
-      // persist with bogus wrapped values. Active drags (pan / paint / brush-
-      // resize) legitimately continue off-canvas, so only bail when idle.
-      if (!isPanning.current && !(e.buttons & 1) && !isResizingBrush.active) {
-        const rect = container.getBoundingClientRect();
-        const overCanvas = e.clientX >= rect.left && e.clientX < rect.right
-          && e.clientY >= rect.top && e.clientY < rect.bottom;
-        if (!overCanvas) {
-          let changed = cursorGrid.current !== null;
-          if (cursorGrid.current !== null) { cursorGrid.current = null; setHoverCellInfo(prev => (prev === null ? prev : null)); }
-          // Also drop the agent-brush cursor/highlight so the contour stops drawing
-          // once the pointer leaves the canvas (mirrors the cell brush).
-          if (agentCursorWorldRef.current !== null) { agentCursorWorldRef.current = null; changed = true; }
-          if (agentHoverIdRef.current !== -1) { agentHoverIdRef.current = -1; changed = true; }
-          if (agentAreaHoverIdsRef.current.length) { agentAreaHoverIdsRef.current = []; changed = true; }
-          if (changed) draw();
-          return;
-        }
-      }
+      // Record the pointer + coalesce ALL idle hover work to one rAF per frame.
+      lastHoverClient.current.x = e.clientX;
+      lastHoverClient.current.y = e.clientY;
+      lastHoverClient.current.buttons = e.buttons;
+      scheduleHoverWork();
 
-      // Update brush cursor position
-      const gridPos = screenToGrid(e.clientX, e.clientY);
-      cursorGrid.current = gridPos;
-      // Update the hover-coords chip — only when the integer cell or brush
-      // extents change, so React re-renders are coarse-grained. Extents come
-      // from the current stamp's offsets (shape-aware; cached).
-      if (gridPos) {
-        let minDr = 0, maxDr = 0, minDc = 0, maxDc = 0;
-        for (const [dr, dc] of currentStampOffsets()) {
-          if (dr < minDr) minDr = dr;
-          if (dr > maxDr) maxDr = dr;
-          if (dc < minDc) minDc = dc;
-          if (dc > maxDc) maxDc = dc;
-        }
-        const x0 = gridPos.col + minDc;
-        const y0 = gridPos.row + minDr;
-        const x1 = gridPos.col + maxDc;
-        const y1 = gridPos.row + maxDr;
-        setHoverCellInfo(prev =>
-          prev && prev.col === gridPos.col && prev.row === gridPos.row
-            && prev.x0 === x0 && prev.y0 === y0 && prev.x1 === x1 && prev.y1 === y1
-            ? prev
-            : { col: gridPos.col, row: gridPos.row, x0, y0, x1, y1 }
-        );
-      } else {
-        setHoverCellInfo(prev => (prev === null ? prev : null));
-      }
-      if (!isPanning.current && !(e.buttons & 1) && !isResizingBrush.active) scheduleCursorDraw();
-
-      // Bond-Graph Agents — track the cursor world point + hovered agent for the
-      // brush cursor (radius ring + agent highlight). Redraw ONLY when the
-      // hovered agent or cursor cell changes (the on-change pattern — never a
-      // full GL/canvas redraw per raw move). The cursor-cell change is already
-      // covered by setHoverCellInfo above; here we additionally redraw when the
-      // hovered AGENT changes so the highlight tracks.
+      // Agent-brush DRAG actions (LMB held) — these stay raw (each already
+      // batches its worker round-trips via its own rAF flusher).
       if (isAgentModelRef.current && brushTargetRef.current === 'agents') {
         const mode = agentBrushModeRef.current;
         const shape = agentBrushShapeRef.current;
         const scope = (mode === 'move' && shape === 'line') ? 'single' : agentBrushScopeRef.current;
         const dragging = canvasAgentBrushActive.current && (e.buttons & 1);
-        // Track the cursor world point (drives the footprint / radius cursor) and
-        // the hovered-agent highlight (single-scope Remove/Move/Edit + Glue/Cut).
-        {
-          const wpt = screenToWorld(e.clientX, e.clientY);
-          agentCursorWorldRef.current = wpt ? { x: wpt.x, y: wpt.y } : null;
-          // Area-affected highlight — the agents the stroke WILL touch (Remove/Move/
-          // Edit; NOT Add, which only spawns new agents). During a group-move drag
-          // it's the grabbed group; otherwise the agents under the footprint.
-          if (scope === 'area' && (mode === 'remove' || mode === 'move' || mode === 'edit')) {
-            agentAreaHoverIdsRef.current = (mode === 'move' && agentGroupMoveRef.current)
-              ? agentGroupMoveRef.current.members.map(m => m.id)
-              : (wpt ? agentsInShapeAt(wpt.x, wpt.y) : []);
-          } else if (mode === 'bond') {
-            // Bond scans a plain radius disc (not the shape) for near pairs.
-            agentAreaHoverIdsRef.current = wpt ? agentsInRadiusAt(wpt.x, wpt.y, agentBrushRadiusRef.current) : [];
-          } else if (agentAreaHoverIdsRef.current.length) {
-            agentAreaHoverIdsRef.current = [];
-          }
-          const wantHover = mode === 'glue' || mode === 'cut'
-            || (scope === 'single' && (mode === 'remove' || mode === 'move' || mode === 'edit'));
-          const prevHover = agentHoverIdRef.current;
-          let hover = agentHoverIdRef.current;
-          if (!dragging) hover = wantHover ? pickAgentAt(e.clientX, e.clientY) : -1;
-          agentHoverIdRef.current = hover;
-          if (hover !== prevHover) scheduleCursorDraw();
-          else if (!dragging && (mode === 'bond' || (scope === 'area' && (mode === 'add' || mode === 'remove' || mode === 'edit' || mode === 'move')))) scheduleCursorDraw();
-        }
         // Drags while the agent brush is active (LMB held).
         if (dragging) {
           const worker = workerRef.current;
@@ -5894,14 +6007,17 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
           setSweepInspector(null);
           return;
         }
-        if (gridPos && Number.isFinite(gridPos.row) && Number.isFinite(gridPos.col)) {
+        // (The idle hover pipeline is rAF-coalesced, so compute this drag's own
+        // cell — the sweep must track the cursor synchronously.)
+        const sweepPos = screenToGrid(e.clientX, e.clientY);
+        if (sweepPos && Number.isFinite(sweepPos.row) && Number.isFinite(sweepPos.col)) {
           const w = gridWidth.current;
           if (w > 0) {
-            const idx = gridPos.row * w + gridPos.col;
+            const idx = sweepPos.row * w + sweepPos.col;
             if (idx !== sweepStartCellRef.current) sweepMovedRef.current = true;
             const prior = sweepInspectorRef.current;
             if (prior && prior.cellIdx !== idx) {
-              const next = { ...prior, cellIdx: idx, row: gridPos.row, col: gridPos.col };
+              const next = { ...prior, cellIdx: idx, row: sweepPos.row, col: sweepPos.col };
               sweepInspectorRef.current = next;
               setSweepInspector(next);
             }
@@ -6004,12 +6120,12 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
 
     const handleMouseLeave = () => {
       cursorGrid.current = null;
-      setHoverCellInfo(prev => (prev === null ? prev : null));
+      publishHoverCellInfo(null);
       // Clear the agent-brush cursor/highlight state so nothing lingers off-canvas.
       agentCursorWorldRef.current = null;
       agentHoverIdRef.current = -1;
       if (agentAreaHoverIdsRef.current.length) agentAreaHoverIdsRef.current = [];
-      draw();
+      drawCursorLayer();
     };
 
     // Escape exits autoscroll. We attach at window level because the focus might
@@ -6044,6 +6160,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       autoscrollOriginRef.current = null;
       autoscrollCursorRef.current = null;
       if (cursorDrawRaf.current != null) { cancelAnimationFrame(cursorDrawRaf.current); cursorDrawRaf.current = null; }
+      if (hoverWorkRaf.current != null) { cancelAnimationFrame(hoverWorkRaf.current); hoverWorkRaf.current = null; }
     };
   }, [draw, scheduleCursorDraw, paintAt, paintLine, screenToGrid, flushPaintBatch, commitInspectPopover, screenToWorld, pickAgentAt, seedAgentsAt, agentSeedPoints, flushSeedBatch, killAgentsInRadius, openAgentInspector, flushMoveBatch, scanBondPairsAt, flushBondBatch, agentsInShapeAt, agentsInRadiusAt, agentSeedInShape, agentSeedInLine, agentLineMembers, applyAgentEditToIds]);
 
@@ -7162,17 +7279,23 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
             dedicated effect since draw() routes here via is3dRef. */}
         <canvas ref={glCanvasRef} className={styles.canvas} style={is3D ? undefined : { display: 'none' }} />
 
+        {/* Cursor overlay layer (2D) — two dedicated canvases above the scene:
+            `cursorHl` = coloured highlight rings (normal blending), `cursorNeg` =
+            white brush silhouettes composited with mix-blend-mode: difference
+            (the negative-cursor trick, done by the compositor). Cursor movement
+            redraws ONLY these, never the scene canvas — see drawCursorLayer. */}
+        <canvas ref={cursorHlCanvasRef} className={styles.canvas}
+          style={{ position: 'absolute', left: 0, top: 0, pointerEvents: 'none', display: is3D ? 'none' : undefined }} />
+        <canvas ref={cursorNegCanvasRef} className={styles.canvas}
+          style={{ position: 'absolute', left: 0, top: 0, pointerEvents: 'none', mixBlendMode: 'difference', display: is3D ? 'none' : undefined }} />
+
         {/* Top-left stats (discreet, no background) */}
         <div className={styles.statsOverlay} data-sim-overlay>
           <span>Gen {generation}</span>
           <span>{gridWidth.current || simWidth}&times;{gridHeight.current || simHeight}</span>
           <span>{actualFps} FPS</span>
           <span>{actualGps} g/s</span>
-          {hoverCellInfo && (
-            (hoverCellInfo.x0 === hoverCellInfo.x1 && hoverCellInfo.y0 === hoverCellInfo.y1)
-              ? <span title="Hovered cell">Cell ({hoverCellInfo.col}, {hoverCellInfo.row})</span>
-              : <span title="Brush footprint at the hovered cell">Cells ({hoverCellInfo.x0},{hoverCellInfo.y0}) {'\u2192'} ({hoverCellInfo.x1},{hoverCellInfo.y1})</span>
-          )}
+          <HoverCoordsChip />
           {recording && <span style={{ color: '#e05050' }}>{'\u23FA'} REC {recordFrameCount}f</span>}
           {isAgentModel && agentsRef.current && <span title="Live agents">{'\u25CF'} {agentsRef.current.liveCount} agents</span>}
         </div>
@@ -7527,6 +7650,13 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
                   <input type="checkbox" checked={alpha3d} onChange={e => setAlpha3d(e.target.checked)} />
                   Alpha blend
                 </label>
+                {/* Draw agents in front (agent models only) */}
+                {isAgentModel && (
+                  <label style={row} title="Draw agents over the CA-grid voxels regardless of depth (the grid usually surrounds them). Uncheck for normal depth occlusion between the two layers — useful when the grid field is sparse. Axes / grid / bounds / brush plane always occlude normally.">
+                    <input type="checkbox" checked={agentsFront3d} onChange={e => setAgentsFront3d(e.target.checked)} />
+                    Draw agents in front
+                  </label>
+                )}
                 {/* Background colour */}
                 <label style={row} title="Fill the 3D canvas with a solid colour (off = transparent)">
                   <input type="checkbox" checked={bg3d.enabled} onChange={e => setBg3d(b => ({ ...b, enabled: e.target.checked }))} />
