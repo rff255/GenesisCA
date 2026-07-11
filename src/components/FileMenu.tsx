@@ -24,6 +24,12 @@ type PendingConfirm =
  *  its description, then saving with the presets box unchecked because a PRIOR
  *  save of a different model had omitted them).
  *
+ *  Used only for the FIRST save of a loaded/new model: once the user confirms a
+ *  save, the chosen options are remembered on ModelState (lastSaveOptions, reset
+ *  on New/Load) and the dialog re-opens with THOSE — so repeated saves keep the
+ *  user's explicit choice (all boxes off stays all off) instead of re-deriving
+ *  from the file content each time.
+ *
  *  - Presets are a durable model property: check the box iff the model actually
  *    HAS presets, so a save never drops the presets a loaded model carries (and
  *    never offers "include presets" for a model that has none).
@@ -52,7 +58,7 @@ export function FileMenu({ onNew, onLoaded }: {
    *  Simulator tab and shows the load-confirmation toast). */
   onLoaded?: (modelName: string) => void;
 } = {}) {
-  const { model, isDirty, newModel, loadModel, markSaved } = useModel();
+  const { model, isDirty, newModel, loadModel, markSaved, lastSaveOptions } = useModel();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const modelRef = useRef(model);
   modelRef.current = model;
@@ -144,7 +150,11 @@ export function FileMenu({ onNew, onLoaded }: {
     // Native (Tauri) shows a Save As dialog; only mark saved if the user picked
     // a path (didn't cancel). Browser download always resolves true.
     const saved = await downloadJSON(json, filename);
-    if (saved) markSaved(filename);
+    // Remember the confirmed include-choices for THIS loaded model so the next
+    // save re-opens with them (repeated saves keep the user's choice — e.g. all
+    // boxes off STAYS all off, instead of the content-derived defaults
+    // re-checking grid+controls every time). Reset on New/Load.
+    if (saved) markSaved(filename, opts);
   };
 
   const handleLoad = () => {
@@ -201,7 +211,7 @@ export function FileMenu({ onNew, onLoaded }: {
       />
       {saveDialogOpen && (
         <SaveProjectDialog
-          initial={deriveSaveOptions(model)}
+          initial={lastSaveOptions ?? deriveSaveOptions(model)}
           onConfirm={doSave}
           onCancel={() => setSaveDialogOpen(false)}
         />

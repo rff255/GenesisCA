@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Plan — Simulator/agents fix batch</title>
+<style>
+  :root { --bg:#0c0d10; --panel:#16181d; --panel2:#1d2026; --border:#2c3038; --text:#d8dde4; --dim:#8a98a8; --accent:#e8a13a; --cyan:#4cc9f0; --green:#4caf50; --red:#e05050; }
+  body { background:var(--bg); color:var(--text); font:14px/1.55 "Segoe UI",system-ui,sans-serif; margin:0; padding:32px; }
+  main { max-width:1060px; margin:0 auto; }
+  h1 { font-size:1.4rem; color:var(--accent); margin:0 0 6px; }
+  h2 { font-size:1.02rem; color:var(--accent); border-bottom:1px solid var(--border); padding-bottom:6px; margin-top:34px; }
+  .row { display:flex; gap:22px; flex-wrap:wrap; align-items:stretch; }
+  .card { background:var(--panel); border:1px solid var(--border); border-radius:10px; padding:14px 16px; flex:1 1 380px; }
+  .card h3 { margin:0 0 8px; font-size:.8rem; letter-spacing:.06em; text-transform:uppercase; color:var(--dim); }
+  code { background:var(--panel2); border:1px solid var(--border); border-radius:4px; padding:0 5px; font-size:.85em; color:var(--cyan); }
+  .ok { color:var(--green); font-weight:600; }
+  .bad { color:var(--red); font-weight:600; }
+  svg text { font-family:"Segoe UI",system-ui,sans-serif; }
+  ul { margin:6px 0; padding-left:20px; }
+</style>
+</head>
+<body>
+<main>
+<h1>Simulator / agents fix batch <span style="color:var(--dim);font-size:.8rem">branch sim_agent_fixes</span></h1>
+
+<h2>A · 3D depth — "Draw agents in front" option + overlays with real depth</h2>
+<div class="row">
+  <div class="card">
+    <h3>Before</h3>
+    <svg viewBox="0 0 440 150" width="100%">
+      <rect x="30" y="30" width="120" height="90" fill="#4a2f2f" stroke="#7a4a3a"/>
+      <text x="38" y="24" font-size="10" fill="#8a98a8">voxel volume</text>
+      <line x1="200" y1="20" x2="200" y2="140" stroke="#4cc9f0" stroke-width="2"/>
+      <text x="206" y="30" font-size="10" fill="#4cc9f0">brush plane (in front)</text>
+      <circle cx="200" cy="80" r="18" fill="#4cc9f0" opacity="0.9"/>
+      <text x="228" y="84" font-size="10" fill="#e05050">agent drawn OVER the plane</text>
+      <text x="30" y="145" font-size="10" fill="#8a98a8">depth cleared → agents beat everything (always)</text>
+    </svg>
+  </div>
+  <div class="card">
+    <h3>After</h3>
+    <svg viewBox="0 0 440 150" width="100%">
+      <rect x="30" y="30" width="120" height="90" fill="#4a2f2f" stroke="#7a4a3a"/>
+      <circle cx="90" cy="80" r="16" fill="#4cc9f0" opacity="0.95"/>
+      <text x="30" y="24" font-size="10" fill="#4caf50">agents still show inside the volume (option ON)</text>
+      <line x1="200" y1="20" x2="200" y2="140" stroke="#4cc9f0" stroke-width="2"/>
+      <circle cx="205" cy="80" r="18" fill="#4cc9f0" opacity="0.9" clip-path="inset(0 0 0 12px)"/>
+      <text x="228" y="70" font-size="10" fill="#4caf50">plane occludes the agent behind it</text>
+      <text x="228" y="86" font-size="10" fill="#8a98a8">(depth-only overlay re-draw)</text>
+      <text x="30" y="145" font-size="10" fill="#8a98a8">☑ Draw agents in front — uncheck for full normal depth</text>
+    </svg>
+  </div>
+</div>
+
+<h2>B · Brush cursor on its own layer — zero cost on the play pipeline</h2>
+<div class="row">
+  <div class="card">
+    <h3>Layering</h3>
+    <svg viewBox="0 0 440 170" width="100%">
+      <rect x="20" y="110" width="400" height="40" rx="6" fill="#1d2026" stroke="#2c3038"/>
+      <text x="30" y="134" font-size="11" fill="#d8dde4">scene canvas — grid blit + agents (redrawn per SIM step)</text>
+      <rect x="20" y="62" width="400" height="40" rx="6" fill="#1d2026" stroke="#4cc9f0"/>
+      <text x="30" y="86" font-size="11" fill="#4cc9f0">cursorHl — coloured highlight rings (normal blend)</text>
+      <rect x="20" y="14" width="400" height="40" rx="6" fill="#1d2026" stroke="#e8a13a"/>
+      <text x="30" y="38" font-size="11" fill="#e8a13a">cursorNeg — white silhouettes · CSS mix-blend-mode: difference</text>
+    </svg>
+    <ul style="font-size:.85rem">
+      <li>Cursor moves redraw ONLY the two overlays (60 fps even at 1 sim-fps)</li>
+      <li>Idle hover work (chip + agent scans) coalesced to ≤1 run/frame (2D + 3D)</li>
+      <li>Hover chip = external store → no SimulatorView re-render per cell crossing</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h3>Measured</h3>
+    <ul style="font-size:.9rem">
+      <li>Paused, 60-move burst: <span class="bad">was: full scene redraw per frame</span> → <span class="ok">0 scene draws</span>, 31 overlay strokes</li>
+      <li>Playing, 234-move burst in 1 s: sim draw rate <span class="ok">80 → 78/s (unchanged)</span></li>
+      <li>Cursor visible on the overlay (difference blend) + chip live</li>
+      <li>Note: recordings no longer include the cursor (it sits above the captured canvas)</li>
+    </ul>
+  </div>
+</div>
+
+<h2>C · Division-only "phantom agents" — audit + hardening</h2>
+<div class="card">
+  <ul style="font-size:.9rem">
+    <li>Instrumented worker runs: 10k+ generations, 3 configs (incl. capacity-saturated, 5,942 overflow rejections) — <span class="ok">0 phantom births, 0 teleports, 0 isolated agents</span>; division is atomic on reject.</li>
+    <li>Hardened anyway: <code>initAgentSlot</code> zeroes forceX/Y (not just Z) + the divide/bond request payloads on recycled slots; <code>divideAgent</code> rejects a non-finite mother instead of minting NaN daughters.</li>
+    <li>The reported scatter is most consistent with growth pressure detaching agents at <em>bond-capacity saturation</em> (they can't re-attach when every neighbour's bond list is full) — emergent physics. A reproducing model file would pin it down further.</li>
+  </ul>
+</div>
+
+<h2>D · Cross-model state leak on load</h2>
+<div class="row">
+  <div class="card">
+    <h3>Repro (before)</h3>
+    <p style="font-size:.9rem">Life3D → Morphogenesis 3D Tissue: <span class="bad">1,112 stale voxels</span> kept rendering under the new agents-only model. The reinit clears <code>colorsRef</code> AND <code>lastUploadedColors3dRef</code>, so the stale-instance guard (keyed on the ref) never fired — and an agents-only worker never ships colours to overwrite them.</p>
+  </div>
+  <div class="card">
+    <h3>Fix (after)</h3>
+    <p style="font-size:.9rem">The guard keys on the renderer's live <code>instanceCount</code>: no colours buffer ⇒ stale voxel instances are dropped. Verified: <span class="ok">voxels 1120 → 0</span>, agents 5 render alone.</p>
+  </div>
+</div>
+
+<h2>E · Save dialog remembers the last choice for THIS model</h2>
+<div class="row">
+  <div class="card">
+    <h3>Flow</h3>
+    <svg viewBox="0 0 440 120" width="100%">
+      <g font-size="10" fill="#d8dde4">
+        <rect x="10" y="16" width="120" height="40" rx="7" fill="#1d2026" stroke="#2c3038"/>
+        <text x="20" y="33" fill="#e8a13a">Load / New</text><text x="20" y="48">lastSaveOptions = null</text>
+        <rect x="160" y="16" width="130" height="40" rx="7" fill="#1d2026" stroke="#2c3038"/>
+        <text x="170" y="33" fill="#e8a13a">First Save dialog</text><text x="170" y="48">derived from the file</text>
+        <rect x="318" y="16" width="112" height="40" rx="7" fill="#1d2026" stroke="#2c3038"/>
+        <text x="328" y="33" fill="#e8a13a">Save confirmed</text><text x="328" y="48">choice remembered</text>
+        <path d="M132 36 L156 36 M292 36 L314 36" stroke="#e8a13a" stroke-width="2"/>
+        <path d="M374 60 C 374 95 225 95 225 62" stroke="#4caf50" stroke-width="2" fill="none"/>
+        <text x="180" y="108" fill="#4caf50">every later save re-opens with the SAME boxes</text>
+      </g>
+    </svg>
+  </div>
+  <div class="card">
+    <h3>Verified</h3>
+    <ul style="font-size:.9rem">
+      <li>All boxes off → save → reopen: <span class="ok">stays all off</span> (was: grid+controls re-checked)</li>
+      <li>Load Amphiphile after: resets to ITS derivation (controls ✓, board ✗, presets ✓)</li>
+      <li>In-session only (ModelState) — never serialized; a cancelled native Save As records nothing</li>
+    </ul>
+  </div>
+</div>
+</main>
+</body>
+</html>

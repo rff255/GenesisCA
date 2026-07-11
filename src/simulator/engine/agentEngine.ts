@@ -821,13 +821,25 @@ export function initAgentSlot(
   store.x[id] = x; store.y[id] = y; store.z[id] = z;
   store.xNext[id] = x; store.yNext[id] = y; store.zNext[id] = z;
   store.vx[id] = 0; store.vy[id] = 0; store.vz[id] = 0;
-  store.forceZ[id] = 0;
+  // Zero the WHOLE force accumulator, not just Z: the per-step reset only fills
+  // 0..highWater at the TOP of a step, so a slot (re)allocated MID-step (a
+  // division daughter, a behaviour spawn) must not carry a stale force into any
+  // path that reads it before the next reset (defensive slot hygiene).
+  store.forceX[id] = 0; store.forceY[id] = 0; store.forceZ[id] = 0;
   store.radius[id] = radius; store.targetRadius[id] = radius;
   store.age[id] = 0;
   store.lineage[id] = lineage;
   store.bondCount[id] = 0;
   store.density[id] = 0;
   store.divideRequest[id] = 0; store.killRequest[id] = 0;
+  // Stale-request hygiene on recycled slots: the request PAYLOADS (division axis
+  // / asymmetry, bond form params) are only meaningful with their flag set, but
+  // clearing them keeps a recycled slot from ever pairing a fresh flag with a
+  // previous occupant's payload.
+  store.divideAxisX[id] = 0; store.divideAxisY[id] = 0; store.divideAxisZ[id] = 0;
+  store.divideAsym[id] = 0;
+  store.bondFormReq[id] = 0; store.bondBreakReq[id] = 0;
+  store.bondFormL[id] = 0; store.bondFormK[id] = 0;
   for (const spec of store.attrSpecs) {
     store.attrRead[spec.id]![id] = spec.defaultValue;
     store.attrWrite[spec.id]![id] = spec.defaultValue;
@@ -1286,6 +1298,10 @@ export function divideAgent(
   const is3d = D > 1;
   const mb = store.maxBonds;
   const cx = store.x[i]!, cy = store.y[i]!, cz = store.z[i]!;
+  // Defensive: a non-finite mother position/radius would place BOTH daughters at
+  // NaN (invisible spheres whose forces poison every neighbour they touch).
+  // Reject the division instead of multiplying the corruption.
+  if (!Number.isFinite(cx) || !Number.isFinite(cy) || !Number.isFinite(cz) || !Number.isFinite(store.radius[i]!)) return -1;
   const halfW = W / 2, halfH = H / 2, halfD = D / 2;
 
   // 1. axis — explicit override if wired (finite + non-zero), else the eigensolve

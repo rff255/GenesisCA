@@ -172,6 +172,15 @@ function migrateLegacyParentIds(model: CAModel): CAModel {
 // State & actions
 // ---------------------------------------------------------------------------
 
+/** The Save-Project dialog's include choices (mirrors SaveOptions in
+ *  SaveProjectDialog — kept structural here so the model layer doesn't import
+ *  from components). */
+export interface SaveOptionsState {
+  includeGrid: boolean;
+  includeControls: boolean;
+  includePresets: boolean;
+}
+
 interface ModelState {
   model: CAModel;
   isDirty: boolean;
@@ -180,6 +189,12 @@ interface ModelState {
    *  Display-only (shown in the top bar after the project name); never
    *  serialized into the model. Null for new/unsaved models. */
   loadedFileName: string | null;
+  /** The Save-dialog options the user last CONFIRMED for THIS loaded model —
+   *  the dialog re-opens with them, so repeated saves keep the user's choice
+   *  (e.g. all boxes off stays all off). Reset by NEW_MODEL / LOAD_MODEL (a
+   *  fresh model derives its defaults from its own content instead — see
+   *  FileMenu's deriveSaveOptions). In-session only; never serialized. */
+  lastSaveOptions: SaveOptionsState | null;
 }
 
 type ModelAction =
@@ -220,7 +235,7 @@ type ModelAction =
   | { type: 'UPDATE_INDICATOR'; id: string; changes: Partial<Indicator> }
   | { type: 'NEW_MODEL' }
   | { type: 'LOAD_MODEL'; model: CAModel; fileName?: string }
-  | { type: 'MARK_SAVED'; fileName?: string }
+  | { type: 'MARK_SAVED'; fileName?: string; saveOptions?: SaveOptionsState }
   | { type: 'SET_SIMULATION_STATE'; state: SimulationState | undefined }
   | { type: 'ADD_PRESET'; preset: Preset }
   | { type: 'DUPLICATE_PRESET'; sourceId: string }
@@ -1151,7 +1166,7 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
       };
 
     case 'NEW_MODEL':
-      return { model: EMPTY_MODEL, isDirty: false, modelVersion: state.modelVersion + 1, loadedFileName: null };
+      return { model: EMPTY_MODEL, isDirty: false, modelVersion: state.modelVersion + 1, loadedFileName: null, lastSaveOptions: null };
 
     case 'LOAD_MODEL': {
       let m = action.model;
@@ -1269,11 +1284,15 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
           };
         }
       }
-      return { model: m, isDirty: false, modelVersion: state.modelVersion + 1, loadedFileName: action.fileName ?? null };
+      return { model: m, isDirty: false, modelVersion: state.modelVersion + 1, loadedFileName: action.fileName ?? null, lastSaveOptions: null };
     }
 
     case 'MARK_SAVED':
-      return { ...state, isDirty: false, loadedFileName: action.fileName ?? state.loadedFileName };
+      return {
+        ...state, isDirty: false,
+        loadedFileName: action.fileName ?? state.loadedFileName,
+        lastSaveOptions: action.saveOptions ?? state.lastSaveOptions,
+      };
 
     case 'SET_SIMULATION_STATE':
       return {
@@ -1595,6 +1614,9 @@ export interface ModelContextValue {
   modelVersion: number;
   /** File the model was loaded from / last saved to (top-bar display only). */
   loadedFileName: string | null;
+  /** Save-dialog options the user last confirmed for THIS loaded model (null
+   *  until the first in-session save; reset on New/Load). */
+  lastSaveOptions: SaveOptionsState | null;
   updateProperties: (changes: Partial<ModelProperties>) => void;
   addAttribute: (isModelAttribute: boolean) => void;
   duplicateAttribute: (sourceId: string) => void;
@@ -1638,7 +1660,7 @@ export interface ModelContextValue {
   updateIndicator: (id: string, changes: Partial<Indicator>) => void;
   newModel: () => void;
   loadModel: (model: CAModel, fileName?: string) => void;
-  markSaved: (fileName?: string) => void;
+  markSaved: (fileName?: string, saveOptions?: SaveOptionsState) => void;
   setSimulationState: (state: SimulationState | undefined) => void;
   addPreset: (preset: Preset) => void;
   duplicatePreset: (sourceId: string) => void;
@@ -1677,7 +1699,7 @@ const ModelContext = createContext<ModelContextValue | null>(null);
 // ---------------------------------------------------------------------------
 
 function createInitialState(): ModelState {
-  return { model: DEFAULT_MODEL, isDirty: false, modelVersion: 0, loadedFileName: null };
+  return { model: DEFAULT_MODEL, isDirty: false, modelVersion: 0, loadedFileName: null, lastSaveOptions: null };
 }
 
 export function ModelProvider({ children }: { children: ReactNode }) {
@@ -1856,7 +1878,7 @@ export function ModelProvider({ children }: { children: ReactNode }) {
     [],
   );
   const markSaved = useCallback(
-    (fileName?: string) => dispatch({ type: 'MARK_SAVED', fileName }),
+    (fileName?: string, saveOptions?: SaveOptionsState) => dispatch({ type: 'MARK_SAVED', fileName, saveOptions }),
     [],
   );
   const setSimulationState = useCallback(
@@ -1953,6 +1975,7 @@ export function ModelProvider({ children }: { children: ReactNode }) {
       isDirty: state.isDirty,
       modelVersion: state.modelVersion,
       loadedFileName: state.loadedFileName,
+      lastSaveOptions: state.lastSaveOptions,
       updateProperties,
       addAttribute,
       duplicateAttribute,
@@ -2020,6 +2043,7 @@ export function ModelProvider({ children }: { children: ReactNode }) {
       state.isDirty,
       state.modelVersion,
       state.loadedFileName,
+      state.lastSaveOptions,
       updateProperties,
       addAttribute,
       duplicateAttribute,

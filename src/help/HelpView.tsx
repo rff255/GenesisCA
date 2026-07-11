@@ -1106,6 +1106,10 @@ export function HelpView() {
             &mdash; From and To &mdash; that cut from both sides, so you control exactly how thick a
             slab of the volume stays visible; clips voxels, agent spheres <em>and</em> bonds), an
             <strong>Alpha blend</strong> toggle for translucent cells, a
+            <strong>Draw agents in front</strong> toggle (agent models — ON draws the agents over
+            the CA-grid voxels regardless of depth, since the grid usually surrounds them; uncheck
+            for normal depth occlusion between the two layers when the grid field is sparse; the
+            axes / grid / bounds / brush plane always occlude normally either way), a
             <strong>Background</strong> colour (off = transparent), and
             <strong>Reset view</strong>. The left panel's <strong>Grid Dimensions</strong> gains
             a <strong>Depth</strong> field to resize the volume's layers. (Empty cells default to
