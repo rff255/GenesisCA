@@ -33,6 +33,7 @@ import { DEFAULT_MODEL, EMPTY_MODEL } from './defaultModel';
 import { defaultCenterBasedConfig } from './centerBased';
 import { defaultAgentCapabilities, migrateAgentCapabilities } from './agentCapabilities';
 import { defaultTagColor } from '../modeler/vpl/compiler/linkedOutputMappings';
+import { MULTI_ATTR_TYPES } from '../modeler/vpl/compiler/multiAttrExpand';
 import { cloneMacroWithFreshIds } from './macroImport';
 import { migrateColorInterpolationNodes } from './colorScaleMigration';
 import { migrateTagConstantNodes } from './tagConstantMigration';
@@ -103,6 +104,24 @@ function clearDeletedId(model: CAModel, field: string, deletedId: string) {
     model,
     cfg => cfg[field] === deletedId,
     cfg => { cfg[field] = ''; return cfg; },
+  );
+}
+
+/** Multi-attribute slots: clear any extra `attr_${i}` slot key that names a
+ *  deleted attribute on the multi-attr accessor nodes (Get/Set Attribute, Get
+ *  Model Attribute, the by-id agent pair). Scoped by node type so
+ *  moveSelfToNeighbor's `attr_${i}` payload slots are untouched. */
+function clearDeletedSlotIds(model: CAModel, deletedId: string) {
+  return patchAllNodes(
+    model,
+    (cfg, nodeType) => MULTI_ATTR_TYPES.has(nodeType)
+      && Object.keys(cfg).some(k => /^attr_\d+$/.test(k) && cfg[k] === deletedId),
+    cfg => {
+      for (const k of Object.keys(cfg)) {
+        if (/^attr_\d+$/.test(k) && cfg[k] === deletedId) cfg[k] = '';
+      }
+      return cfg;
+    },
   );
 }
 
@@ -364,10 +383,18 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
         cfg => cfg.tagAttributeId === action.id,
         cfg => { cfg.tagAttributeId = ''; return cfg; },
       );
+      // Multi-attribute slots: clear any extra `attr_${i}` slot key naming the
+      // deleted attribute on the five accessor nodes (the validation badge then
+      // guides re-picking). Scoped by node type so moveSelfToNeighbor's payload
+      // slots keep their existing (unchanged) delete behaviour.
+      const a3 = clearDeletedSlotIds(
+        { ...modelAfterFilter, graphNodes: a2.graphNodes, agentGraphNodes: a2.agentGraphNodes, macroDefs: a2.macroDefs },
+        action.id,
+      );
       return {
         ...state,
         isDirty: true,
-        model: { ...modelAfterFilter, graphNodes: a2.graphNodes, agentGraphNodes: a2.agentGraphNodes, macroDefs: a2.macroDefs },
+        model: { ...modelAfterFilter, graphNodes: a3.graphNodes, agentGraphNodes: a3.agentGraphNodes, macroDefs: a3.macroDefs },
       };
     }
 
@@ -697,9 +724,15 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
         cfg => cfg.tagAttributeId === action.id,
         cfg => { cfg.tagAttributeId = ''; return cfg; },
       );
+      // Multi-attribute slots: clear extra `attr_${i}` slot keys naming the
+      // deleted agent attribute (mirrors the cell REMOVE_ATTRIBUTE cascade).
+      const a3 = clearDeletedSlotIds(
+        { ...modelAfter, graphNodes: a2.graphNodes, agentGraphNodes: a2.agentGraphNodes, macroDefs: a2.macroDefs },
+        action.id,
+      );
       return {
         ...state, isDirty: true,
-        model: { ...modelAfter, graphNodes: a2.graphNodes, agentGraphNodes: a2.agentGraphNodes, macroDefs: a2.macroDefs },
+        model: { ...modelAfter, graphNodes: a3.graphNodes, agentGraphNodes: a3.agentGraphNodes, macroDefs: a3.macroDefs },
       };
     }
 

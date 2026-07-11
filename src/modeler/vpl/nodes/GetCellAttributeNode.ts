@@ -4,8 +4,8 @@ export const GetCellAttributeNode: NodeTypeDef = {
   type: 'getCellAttribute',
   label: 'Get Cell Attribute',
   agentLabel: 'Get Self Attribute',
-  description: 'Reads an attribute value from the current cell.',
-  agentDescription: "Reads one of the current agent's own attribute values.",
+  description: 'Reads an attribute value from the current cell. Extra attribute slots (+ Attribute) read several attributes through per-slot output ports.',
+  agentDescription: "Reads one of the current agent's own attribute values. Extra attribute slots (+ Attribute) read several attributes through per-slot output ports.",
   category: 'data',
   color: '#b71c1c',
   ports: [

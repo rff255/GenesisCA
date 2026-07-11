@@ -104,6 +104,7 @@ import { buildVarMap, parseExpression, clampVisibleCount } from '../expression/p
 import { is3dModel } from '../compile';
 import { expandMacros } from '../macroExpand';
 import { collapseReroutes } from '../rerouteCollapse';
+import { expandMultiAttrs } from '../multiAttrExpand';
 import { expandComposites } from '../expandComposites';
 import { lowerVectorAttrs, expandVectorAttributes } from '../vectorAttr';
 import { lowerFacingSource } from '../facingSource';
@@ -4229,6 +4230,9 @@ function flattenAgentGraph(nodes: GraphNode[], edges: GraphEdge[], model: CAMode
   if (expanded.error) return { nodes, edges, model, error: expanded.error };
   let n = expanded.nodes, e = expanded.edges;
   ({ nodes: n, edges: e } = collapseReroutes(n, e));
+  // Multi-attribute slot expansion — multi-slot Get/Set Attribute nodes become the
+  // single-slot primitives the gate + emitter already handle. See multiAttrExpand.ts.
+  ({ nodes: n, edges: e } = expandMultiAttrs(n, e, model));
   // FOV `facing` heading source → Get Self Attribute [vector] → Break Vector → wired
   // heading (BEFORE vector lowering). No-op unless a facing FOV node is used.
   ({ nodes: n, edges: e } = lowerFacingSource(n, e, model));

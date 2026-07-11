@@ -178,6 +178,67 @@ function buildHemifieldModel() {
   };
 }
 
+// Multi-attribute SLOTS parity vehicle (multiAttrExpand.ts): one multi-slot Set
+// writes a=myX / b=myY / c=3·myX+1 (distinct per attr so a wrong slot pairing
+// diverges), a multi-slot Get re-reads them POST-write (async read-after-write
+// through the expansion), an expression folds all three slots into o1, slot 2
+// copies b into o2 and slot 3 writes the INLINE 7.5 into o3; then the by-id pair
+// (Get/Set Agent Attribute) reads (a,b) of SELF through a shared fanned-out
+// handle and writes them to o4/o5. Keeps permanent JS↔WASM coverage for the
+// slot expansion (wired + inline slots, get + set, own + by-id).
+function buildMultiAttrModel() {
+  const used = new Set();
+  const nid = (p) => { let id; do { id = p + Math.random().toString(36).slice(2, 8); } while (used.has(id)); used.add(id); return id; };
+  const aN = [], aEd = [];
+  const an = (t, c) => { const n = { id: nid('a'), type: 'caNode', position: { x: 0, y: 0 }, data: { nodeType: t, config: c } }; aN.push(n); return n; };
+  const aE = (s, sp, tt, tp, cat) => aEd.push({ id: nid('e'), source: s.id, target: tt.id, sourceHandle: `output_${cat}_${sp}`, targetHandle: `input_${cat}_${tp}` });
+  const bs = an('behaviourStep', {});
+  const c3 = an('expression', { expression: 'a*3+1', visibleCount: 1 });
+  aE(bs, 'myX', c3, 'a', 'value');
+  const setInit = an('setAttribute', { attributeId: 'a', extraCount: 2, attr_2: 'b', attr_3: 'c' });
+  aE(bs, 'myX', setInit, 'value', 'value');
+  aE(bs, 'myY', setInit, 'value_2', 'value');
+  aE(c3, 'result', setInit, 'value_3', 'value');
+  const g = an('getCellAttribute', { attributeId: 'a', extraCount: 2, attr_2: 'b', attr_3: 'c' });
+  const ex = an('expression', { expression: 'a + b*10 + c*100', visibleCount: 3 });
+  aE(g, 'value', ex, 'a', 'value');
+  aE(g, 'value_2', ex, 'b', 'value');
+  aE(g, 'value_3', ex, 'c', 'value');
+  const set2 = an('setAttribute', { attributeId: 'o1', extraCount: 2, attr_2: 'o2', attr_3: 'o3', _port_value_3: '7.5' });
+  aE(ex, 'result', set2, 'value', 'value');
+  aE(g, 'value_2', set2, 'value_2', 'value');
+  const gsh = an('getSelfHandle', {});
+  const gaa = an('getAgentAttribute', { attributeId: 'a', extraCount: 1, attr_2: 'b' });
+  aE(gsh, 'handle', gaa, 'agentId', 'value');
+  const saa = an('setAgentAttribute', { attributeId: 'o4', extraCount: 1, attr_2: 'o5' });
+  aE(gsh, 'handle', saa, 'agentId', 'value');
+  aE(gaa, 'value', saa, 'value', 'value');
+  aE(gaa, 'value_2', saa, 'value_2', 'value');
+  aE(bs, 'do', setInit, 'do', 'flow');
+  aE(setInit, 'next', set2, 'do', 'flow');
+  aE(set2, 'next', saa, 'do', 'flow');
+  return {
+    schemaVersion: 1,
+    properties: { name: 'MultiAttr Slots Parity Test', dimension: '2d', gridWidth: 24, gridHeight: 24, gridDepth: 1, topology: '2d-grid', boundaryTreatment: 'torus', useWasm: false, useWebGPU: false },
+    topologyMode: { gridCells: false, agents: true },
+    centerBased: { enabled: true, maxAgents: 100, maxBonds: 0, worldWidth: 24, worldHeight: 24, seedCount: 40, seedPattern: 'scatter', defaultRadius: 0.5, growthRate: 0, repulsionStiffness: 2, adhesionStiffness: 0, interactionRange: 1.5, drag: 1, timeStep: 0.1, momentum: 0, maxSpeed: 0, neighbourQueryRadius: 8, useBondingPhysics: false, autoBond: false, agentTarget: 'wasm', agentUpdateMode: 'async',
+      agentCapabilities: { motion: 'force', body: true, collision: 'off', bonds: 'off', autoBond: false, growth: false, division: false, lifespan: false, populationBirth: false, populationDeath: false, sensing: false, sensingHeadingSource: 'velocity', orientation: false, fieldCoupling: false, appearance: true } },
+    attributes: [], modelAttributes: [], neighborhoods: [],
+    agentAttributes: [
+      { id: 'a', name: 'A', type: 'float', defaultValue: '0' },
+      { id: 'b', name: 'B', type: 'float', defaultValue: '0' },
+      { id: 'c', name: 'C', type: 'float', defaultValue: '0' },
+      { id: 'o1', name: 'O1', type: 'float', defaultValue: '0' },
+      { id: 'o2', name: 'O2', type: 'float', defaultValue: '0' },
+      { id: 'o3', name: 'O3', type: 'float', defaultValue: '0' },
+      { id: 'o4', name: 'O4', type: 'float', defaultValue: '0' },
+      { id: 'o5', name: 'O5', type: 'float', defaultValue: '0' },
+    ],
+    variables: [], agentVariables: [], indicators: [], mappings: [],
+    graphNodes: [], graphEdges: [], agentGraphNodes: aN, agentGraphEdges: aEd, macroDefs: [],
+  };
+}
+
 const modelsDir = join(ROOT, 'public', 'models');
 const files = readdirSync(modelsDir).filter(f => f.endsWith('.gcaproj'));
 const SEED = 0x9e3779b1 >>> 0;
@@ -197,6 +258,7 @@ for (const f of files) {
 entries.push({ name: '[synthetic] Field3D (all 5 field nodes, 3D)', raw: build3DFieldModel() });
 entries.push({ name: '[synthetic] FOV cone (Get Agents In View)', raw: buildFOVModel() });
 entries.push({ name: '[synthetic] Hemifield (Sense Hemifield L/R)', raw: buildHemifieldModel() });
+entries.push({ name: '[synthetic] Multi-attribute slots (Get/Set + by-id)', raw: buildMultiAttrModel() });
 
 for (const { name: f, raw } of entries) {
   const model = migrateForHarness(raw);

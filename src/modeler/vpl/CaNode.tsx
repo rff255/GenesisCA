@@ -16,6 +16,7 @@ import { countMacroInstances } from '../../model/macroImport';
 import { typeDisplayName } from '../../model/typeLabels';
 import { cellAttrsOf, cellFieldAttrsOf } from '../../model/attributeScope';
 import { vectorPortDims } from './compiler/vectorAttr';
+import { MULTI_ATTR_TYPES, MULTI_ATTR_SET_TYPES, multiAttrExtraCount, buildExtraSlotPorts, resolveSlotAttr } from './compiler/multiAttrExpand';
 import {
   isConnectingGlobal,
   showPortLabelsGlobal,
@@ -474,6 +475,16 @@ function CaNodeComponent({ id, data }: NodeProps) {
     }
   }
 
+  // Multi-attribute slots: extra `value_${i}` ports on the five accessor nodes
+  // (get: outputs, set: inputs with type-adaptive inline widgets). Built by the
+  // shared helper so this render + effectivePorts can't drift. See
+  // multiAttrExpand.ts (the compile-time expansion into single-slot primitives).
+  if (MULTI_ATTR_TYPES.has(nodeData.nodeType)) {
+    const extraSlots = buildExtraSlotPorts(nodeData.nodeType, nodeData.config, model);
+    inputPorts = [...inputPorts, ...extraSlots.inputs];
+    outputPorts = [...outputPorts, ...extraSlots.outputs];
+  }
+
   // Expression: show only `visibleCount` of the 8 input ports, relabelled with
   // the user's variable names. Mirrors effectivePorts.ts (UI-only — all 8 ports
   // stay in def.ports so the compilers resolve them).
@@ -733,10 +744,12 @@ function CaNodeComponent({ id, data }: NodeProps) {
       else collapsedLabel = cVal || '0';
     } else if (nodeData.nodeType === 'getCellAttribute') {
       const attr = ownAttrList.find(a => a.id === nodeData.config.attributeId);
-      collapsedLabel = attr ? `Cell - ${attr.name}` : displayNodeLabel(def);
+      const extra = multiAttrExtraCount(nodeData.config);
+      collapsedLabel = (attr ? `Cell - ${attr.name}` : displayNodeLabel(def)) + (extra > 0 ? ` +${extra}` : '');
     } else if (nodeData.nodeType === 'getModelAttribute') {
       const attr = model.attributes.find(a => a.id === nodeData.config.attributeId);
-      collapsedLabel = attr ? `Model - ${attr.name}` : displayNodeLabel(def);
+      const extra = multiAttrExtraCount(nodeData.config);
+      collapsedLabel = (attr ? `Model - ${attr.name}` : displayNodeLabel(def)) + (extra > 0 ? ` +${extra}` : '');
     } else if (nodeData.nodeType === 'setAttribute') {
       const attr = ownAttrList.find(a => a.id === nodeData.config.attributeId);
       if (attr) {
@@ -754,6 +767,8 @@ function CaNodeComponent({ id, data }: NodeProps) {
         } else {
           collapsedLabel = `Set - ${attr.name}`;
         }
+        const extra = multiAttrExtraCount(nodeData.config);
+        if (extra > 0) collapsedLabel += ` +${extra}`;
       } else { collapsedLabel = displayNodeLabel(def); }
     } else if (nodeData.nodeType === 'updateAttribute') {
       const attr = ownAttrList.find(a => a.id === nodeData.config.attributeId);
@@ -2880,6 +2895,69 @@ function CaNodeComponent({ id, data }: NodeProps) {
           </span>
         )}
 
+        {/* Multi-attribute slots — extra attribute pickers on the five accessor
+            nodes (Get/Set Attribute, Get Model Attribute, the by-id agent pair).
+            Each extra slot adds a `value_${i}` port (get: output, set: input);
+            removal takes the LAST slot (Sequence's rule) so a wired lower slot
+            can never silently re-pair with a different attribute. Compiles via
+            the shared expansion into single-slot primitives (multiAttrExpand.ts). */}
+        {MULTI_ATTR_TYPES.has(nodeData.nodeType) && (() => {
+          const extraCount = multiAttrExtraCount(nodeData.config);
+          // The slot dropdown mirrors the node's PRIMARY dropdown per type.
+          const slotList = nodeData.nodeType === 'getModelAttribute'
+            ? model.attributes.filter(a => a.isModelAttribute)
+            : (nodeData.nodeType === 'getAgentAttribute' || nodeData.nodeType === 'setAgentAttribute')
+              ? (model.agentAttributes ?? [])
+              : ownAttrList;
+          const addSlot = () => {
+            updateNodeData(id, { ...nodeData, config: { ...nodeData.config, extraCount: extraCount + 1 } });
+          };
+          const removeLast = () => {
+            if (extraCount === 0) return;
+            const last = extraCount + 1;
+            const next: NodeConfig = { ...nodeData.config, extraCount: extraCount - 1 };
+            delete next[`attr_${last}`];
+            delete next[`_port_value_${last}`];
+            updateNodeData(id, { ...nodeData, config: next });
+          };
+          return (
+            <>
+              {Array.from({ length: extraCount }, (_, k) => {
+                const i = k + 2;
+                return (
+                  <select
+                    key={`slot-${i}`}
+                    className={styles.select}
+                    value={(nodeData.config[`attr_${i}`] as string) || ''}
+                    onChange={e => updateConfig(`attr_${i}`, e.target.value)}
+                    title={`Attribute slot ${i}`}
+                  >
+                    <option value="">Attribute {i}...</option>
+                    {slotList.map(a => (
+                      <option key={a.id} value={a.id}>{a.name}</option>
+                    ))}
+                  </select>
+                );
+              })}
+              <div style={{ display: 'flex', gap: 4 }}>
+                <button
+                  onMouseDown={e => e.stopPropagation()}
+                  onClick={addSlot}
+                  style={{ fontSize: '0.7rem', padding: '2px 8px', cursor: 'pointer', flex: 1 }}
+                  title="Add another attribute slot (adds a port)"
+                >+ Attribute</button>
+                <button
+                  onMouseDown={e => e.stopPropagation()}
+                  onClick={removeLast}
+                  style={{ fontSize: '0.7rem', padding: '2px 8px', cursor: extraCount === 0 ? 'not-allowed' : 'pointer', opacity: extraCount === 0 ? 0.4 : 1 }}
+                  disabled={extraCount === 0}
+                  title="Remove the last attribute slot"
+                >−</button>
+              </div>
+            </>
+          );
+        })()}
+
         {(isMacroInput || isMacroOutput) && macroDefForBoundary && (() => {
           const ports = isMacroInput
             ? macroDefForBoundary.exposedInputs
@@ -2970,6 +3048,17 @@ function CaNodeComponent({ id, data }: NodeProps) {
           effectiveWidget = undefined;
         }
 
+        // Multi-attribute extra slot (`value_${i}`): the WIDGET is already carried
+        // on the constructed port (buildExtraSlotPorts adapts it to that slot's
+        // attribute type) — only the tag OPTIONS need resolving per slot here.
+        let slotTagOptions: string[] | undefined;
+        if (MULTI_ATTR_SET_TYPES.has(nodeData.nodeType) && effectiveWidget === 'tag' && port.id !== 'value') {
+          const slotM = /^value_(\d+)$/.exec(port.id);
+          if (slotM) {
+            slotTagOptions = resolveSlotAttr(nodeData.nodeType, model, nodeData.config[`attr_${slotM[1]}`])?.tagOptions || [];
+          }
+        }
+
         // Compare (statement): swap the inline operand widgets by the chosen
         // value type. Tag options come from the node's own tagAttributeId.
         // Neighbor Index has no inline editor, so the operands must be wired.
@@ -3036,7 +3125,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
                   <InlineTagSelect
                     className={styles.inlineWidget}
                     value={val}
-                    options={statementTagOptions ?? (setAttr?.tagOptions || [])}
+                    options={statementTagOptions ?? slotTagOptions ?? (setAttr?.tagOptions || [])}
                     onChange={next => updateConfig(configKey, next)}
                     onClick={e => e.stopPropagation()}
                     onMouseDown={stopDrag}

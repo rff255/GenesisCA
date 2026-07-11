@@ -38,6 +38,7 @@ import { analyzeSinkScopes, CELL_TOP, type ScopeId, type SinkAnalysisResult } fr
 import { canonicalizeAccessorEdges } from '../accessorCSE';
 import { injectLinkedOutputMappings } from '../linkedOutputMappings';
 import { collapseReroutes } from '../rerouteCollapse';
+import { expandMultiAttrs } from '../multiAttrExpand';
 import { expandComposites } from '../expandComposites';
 import { lowerVectorAttrs } from '../vectorAttr';
 import { expandMacros } from '../macroExpand';
@@ -3827,11 +3828,15 @@ export function compileGraphWebGPU(
   // expandMacros so in-macro reroutes collapse too, and before linked-OM / CSE /
   // adjacency so nothing downstream sees a reroute. See rerouteCollapse.ts.
   const collapsed = collapseReroutes(expanded.nodes, expanded.edges);
+  // Multi-attribute slot expansion — multi-slot Get/Set Attribute nodes become the
+  // single-slot primitives the WGSL emitters already compile. BEFORE lowerVectorAttrs
+  // so a vector attribute in an extra slot lowers normally. See multiAttrExpand.ts.
+  const maExpanded = expandMultiAttrs(collapsed.nodes, collapsed.edges, model);
   // Vector stored-attribute lowering — Get/Set Vector nodes → Make/Break Vector over
   // per-component scalar reads/writes + reassign `model` to the component-expanded
   // attrs/variables (computeWebGPULayout above expands identically). BEFORE
   // expandComposites so the synthesized Make/Break Vector lower. See vectorAttr.ts.
-  const vlowered = lowerVectorAttrs(collapsed.nodes, collapsed.edges, model);
+  const vlowered = lowerVectorAttrs(maExpanded.nodes, maExpanded.edges, model);
   model = vlowered.model;
   // Composite-type lowering — vector / colour nodes become scalar nodes so the
   // WGSL emitters compile them natively (no JS-only clamp). See expandComposites.ts.

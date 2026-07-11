@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Plan — Multi-Attribute Slots on Get/Set Attribute</title>
+<style>
+  :root {
+    --bg: #0c0d10; --panel: #16181d; --panel2: #1d2026; --border: #2c3038;
+    --text: #d8dde4; --dim: #8a98a8; --accent: #e8a13a; --accent-soft: rgba(232,161,58,.14);
+    --cyan: #4cc9f0; --green: #4caf50; --red: #b71c1c; --purple: #4a148c; --teal: #26a69a;
+  }
+  body { background: var(--bg); color: var(--text); font: 14px/1.55 "Segoe UI", system-ui, sans-serif; margin: 0; padding: 32px; }
+  main { max-width: 1080px; margin: 0 auto; }
+  h1 { font-size: 1.5rem; color: var(--accent); margin: 0 0 4px; }
+  h2 { font-size: 1.05rem; color: var(--accent); border-bottom: 1px solid var(--border); padding-bottom: 6px; margin-top: 40px; }
+  p, li { color: var(--text); } .dim { color: var(--dim); }
+  .row { display: flex; gap: 24px; flex-wrap: wrap; align-items: flex-start; }
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 16px 18px; flex: 1 1 380px; }
+  .card h3 { margin: 0 0 10px; font-size: .85rem; letter-spacing: .06em; text-transform: uppercase; color: var(--dim); }
+  .badge { display: inline-block; background: var(--accent-soft); color: var(--accent); border: 1px solid var(--accent); border-radius: 20px; font-size: .7rem; padding: 1px 10px; margin-left: 8px; vertical-align: middle; }
+  svg text { font-family: "Segoe UI", system-ui, sans-serif; }
+  code { background: var(--panel2); border: 1px solid var(--border); border-radius: 4px; padding: 0 5px; font-size: .85em; color: var(--cyan); }
+  .arrow { font-size: 1.6rem; color: var(--accent); align-self: center; }
+  table { border-collapse: collapse; width: 100%; font-size: .85rem; }
+  th, td { border: 1px solid var(--border); padding: 6px 10px; text-align: left; }
+  th { background: var(--panel2); color: var(--dim); }
+</style>
+</head>
+<body>
+<main>
+<h1>Multi-Attribute Slots <span class="badge">Get / Set Attribute · Model Attribute · by-id Agent pair</span></h1>
+<p class="dim">One node reads or writes N attributes via dynamic slots — the Transfer-Cell-Attributes / Switch / Sequence pattern applied to the accessor nodes. Slot&nbsp;1 is byte-compatible with every existing file.</p>
+
+<h2>Before → After (the clutter this removes)</h2>
+<div class="row">
+  <div class="card">
+    <h3>Before — one node per attribute</h3>
+    <svg viewBox="0 0 440 240" width="100%">
+      <!-- three get nodes -->
+      <g>
+        <rect x="10" y="10" width="150" height="44" rx="6" fill="#1d2026" stroke="#2c3038"/>
+        <rect x="10" y="10" width="150" height="16" rx="6" fill="#b71c1c"/>
+        <text x="18" y="22" font-size="9" fill="#fff">Get Cell Attribute</text>
+        <text x="18" y="44" font-size="9" fill="#8a98a8">energy</text>
+        <circle cx="160" cy="42" r="4" fill="#9aa7b5"/>
+        <rect x="10" y="90" width="150" height="44" rx="6" fill="#1d2026" stroke="#2c3038"/>
+        <rect x="10" y="90" width="150" height="16" rx="6" fill="#b71c1c"/>
+        <text x="18" y="102" font-size="9" fill="#fff">Get Cell Attribute</text>
+        <text x="18" y="124" font-size="9" fill="#8a98a8">state</text>
+        <circle cx="160" cy="122" r="4" fill="#9aa7b5"/>
+        <rect x="10" y="170" width="150" height="44" rx="6" fill="#1d2026" stroke="#2c3038"/>
+        <rect x="10" y="170" width="150" height="16" rx="6" fill="#b71c1c"/>
+        <text x="18" y="182" font-size="9" fill="#fff">Get Cell Attribute</text>
+        <text x="18" y="204" font-size="9" fill="#8a98a8">age</text>
+        <circle cx="160" cy="202" r="4" fill="#9aa7b5"/>
+      </g>
+      <!-- consumer -->
+      <rect x="300" y="80" width="130" height="90" rx="6" fill="#1d2026" stroke="#2c3038"/>
+      <rect x="300" y="80" width="130" height="16" rx="6" fill="#0d47a1"/>
+      <text x="308" y="92" font-size="9" fill="#fff">Rule logic…</text>
+      <circle cx="300" cy="112" r="4" fill="#9aa7b5"/>
+      <circle cx="300" cy="132" r="4" fill="#9aa7b5"/>
+      <circle cx="300" cy="152" r="4" fill="#9aa7b5"/>
+      <path d="M164 42 C 240 42 240 112 296 112" fill="none" stroke="#4cc9f0" stroke-width="2"/>
+      <path d="M164 122 C 230 122 240 132 296 132" fill="none" stroke="#4cc9f0" stroke-width="2"/>
+      <path d="M164 202 C 240 202 240 152 296 152" fill="none" stroke="#4cc9f0" stroke-width="2"/>
+      <text x="185" y="230" font-size="10" fill="#8a98a8">3 nodes + 3 long wires per read set</text>
+    </svg>
+  </div>
+  <div class="arrow">→</div>
+  <div class="card">
+    <h3>After — one node, three slots</h3>
+    <svg viewBox="0 0 440 240" width="100%">
+      <rect x="10" y="50" width="170" height="120" rx="6" fill="#1d2026" stroke="#e8a13a"/>
+      <rect x="10" y="50" width="170" height="16" rx="6" fill="#b71c1c"/>
+      <text x="18" y="62" font-size="9" fill="#fff">Get Cell Attribute</text>
+      <rect x="18" y="74" width="120" height="14" rx="3" fill="#23262c" stroke="#2c3038"/>
+      <text x="24" y="85" font-size="9" fill="#d8dde4">energy ▾</text>
+      <rect x="18" y="92" width="120" height="14" rx="3" fill="#23262c" stroke="#2c3038"/>
+      <text x="24" y="103" font-size="9" fill="#d8dde4">state ▾</text>
+      <rect x="18" y="110" width="120" height="14" rx="3" fill="#23262c" stroke="#2c3038"/>
+      <text x="24" y="121" font-size="9" fill="#d8dde4">age ▾</text>
+      <text x="18" y="140" font-size="9" fill="#e8a13a">+ Attribute   − last</text>
+      <circle cx="180" cy="81" r="4" fill="#9aa7b5"/><text x="188" y="84" font-size="8" fill="#8a98a8">energy</text>
+      <circle cx="180" cy="99" r="4" fill="#9aa7b5"/><text x="188" y="102" font-size="8" fill="#8a98a8">state</text>
+      <circle cx="180" cy="117" r="4" fill="#9aa7b5"/><text x="188" y="120" font-size="8" fill="#8a98a8">age</text>
+      <rect x="300" y="60" width="130" height="90" rx="6" fill="#1d2026" stroke="#2c3038"/>
+      <rect x="300" y="60" width="130" height="16" rx="6" fill="#0d47a1"/>
+      <text x="308" y="72" font-size="9" fill="#fff">Rule logic…</text>
+      <circle cx="300" cy="92" r="4" fill="#9aa7b5"/>
+      <circle cx="300" cy="112" r="4" fill="#9aa7b5"/>
+      <circle cx="300" cy="132" r="4" fill="#9aa7b5"/>
+      <path d="M184 81 C 245 81 245 92 296 92" fill="none" stroke="#4cc9f0" stroke-width="2"/>
+      <path d="M184 99 C 245 99 245 112 296 112" fill="none" stroke="#4cc9f0" stroke-width="2"/>
+      <path d="M184 117 C 245 117 245 132 296 132" fill="none" stroke="#4cc9f0" stroke-width="2"/>
+      <text x="130" y="225" font-size="10" fill="#8a98a8">ports value / value_2 / value_3 — slot 1 = the legacy port, old files untouched</text>
+    </svg>
+  </div>
+</div>
+
+<h2>Set Attribute — dynamic inputs with type-adaptive widgets + flow splice</h2>
+<div class="row">
+  <div class="card">
+    <h3>Editor — one Set node, 3 slots</h3>
+    <svg viewBox="0 0 440 210" width="100%">
+      <rect x="120" y="30" width="200" height="140" rx="6" fill="#1d2026" stroke="#e8a13a"/>
+      <rect x="120" y="30" width="200" height="16" rx="6" fill="#4a148c"/>
+      <text x="128" y="42" font-size="9" fill="#fff">Set Attribute</text>
+      <path d="M112 38 l 10 5 l -10 5 z" fill="#4caf50"/>
+      <path d="M320 38 l 10 5 l -10 5 z" fill="#4caf50"/>
+      <rect x="128" y="52" width="130" height="14" rx="3" fill="#23262c" stroke="#2c3038"/>
+      <text x="134" y="63" font-size="9" fill="#d8dde4">alive ▾ (Binary)</text>
+      <rect x="128" y="70" width="130" height="14" rx="3" fill="#23262c" stroke="#2c3038"/>
+      <text x="134" y="81" font-size="9" fill="#d8dde4">species ▾ (Tag)</text>
+      <rect x="128" y="88" width="130" height="14" rx="3" fill="#23262c" stroke="#2c3038"/>
+      <text x="134" y="99" font-size="9" fill="#d8dde4">energy ▾ (Decimal)</text>
+      <text x="128" y="118" font-size="9" fill="#e8a13a">+ Attribute   − last</text>
+      <!-- input handles + inline widgets -->
+      <circle cx="120" cy="132" r="4" fill="#9aa7b5"/>
+      <rect x="46" y="126" width="64" height="12" rx="3" fill="#23262c" stroke="#2c3038"/><text x="52" y="136" font-size="8" fill="#d8dde4">True ▾</text>
+      <circle cx="120" cy="148" r="4" fill="#9aa7b5"/>
+      <rect x="46" y="142" width="64" height="12" rx="3" fill="#23262c" stroke="#2c3038"/><text x="52" y="152" font-size="8" fill="#d8dde4">Wolf ▾</text>
+      <circle cx="120" cy="164" r="4" fill="#9aa7b5"/>
+      <rect x="46" y="158" width="64" height="12" rx="3" fill="#23262c" stroke="#2c3038"/><text x="52" y="168" font-size="8" fill="#d8dde4">1.5</text>
+      <text x="128" y="190" font-size="9" fill="#8a98a8">each slot's widget adapts to ITS attribute's type</text>
+    </svg>
+  </div>
+  <div class="arrow">→</div>
+  <div class="card">
+    <h3>Compile — expansion to the verified single-slot chain</h3>
+    <svg viewBox="0 0 440 210" width="100%">
+      <g font-size="9">
+        <rect x="10" y="70" width="110" height="40" rx="6" fill="#1d2026" stroke="#2c3038"/>
+        <rect x="10" y="70" width="110" height="14" rx="6" fill="#4a148c"/>
+        <text x="16" y="81" fill="#fff">Set alive</text><text x="16" y="102" fill="#8a98a8">= True</text>
+        <rect x="165" y="70" width="110" height="40" rx="6" fill="#1d2026" stroke="#2c3038"/>
+        <rect x="165" y="70" width="110" height="14" rx="6" fill="#4a148c"/>
+        <text x="171" y="81" fill="#fff">Set species</text><text x="171" y="102" fill="#8a98a8">= Wolf</text>
+        <rect x="320" y="70" width="110" height="40" rx="6" fill="#1d2026" stroke="#2c3038"/>
+        <rect x="320" y="70" width="110" height="14" rx="6" fill="#4a148c"/>
+        <text x="326" y="81" fill="#fff">Set energy</text><text x="326" y="102" fill="#8a98a8">= 1.5</text>
+        <path d="M120 77 L 161 77" stroke="#4caf50" stroke-width="2"/>
+        <path d="M275 77 L 316 77" stroke="#4caf50" stroke-width="2"/>
+        <path d="M157 72 l 8 5 l -8 5 z" fill="#4caf50"/>
+        <path d="M312 72 l 8 5 l -8 5 z" fill="#4caf50"/>
+      </g>
+      <text x="18" y="140" font-size="10" fill="#d8dde4"><tspan fill="#e8a13a">expandMultiAttrs</tspan> — a shared pre-compile transform (like macro /</text>
+      <text x="18" y="156" font-size="10" fill="#d8dde4">reroute / vector lowering): every compiler sees only classic single-slot</text>
+      <text x="18" y="172" font-size="10" fill="#d8dde4">nodes → JS + WASM + WebGPU, cell + agent, 2D + 3D by construction.</text>
+      <text x="18" y="195" font-size="10" fill="#8a98a8">Slots run in order — async read-after-write matches a hand-built chain.</text>
+    </svg>
+  </div>
+</div>
+
+<h2>Where each piece lands</h2>
+<div class="row">
+  <div class="card" style="flex: 1 1 100%">
+    <table>
+      <tr><th>Layer</th><th>Change</th></tr>
+      <tr><td><code>compiler/multiAttrExpand.ts</code> (new)</td><td>The expansion transform; wired into all 6 front-ends right after <code>collapseReroutes</code>, before <code>lowerVectorAttrs</code> (a vector attr in an extra slot lowers for free). Hot-path no-op — existing models byte-identical.</td></tr>
+      <tr><td><code>multiAttr.ts</code> (new, editor-shared)</td><td>Slot key helpers + <code>buildExtraSlotPorts</code> (labels = attr names; vector slots type as <code>vector</code>; color model attr slots expose R/G/B; set slots carry bool/tag/number inline widgets).</td></tr>
+      <tr><td>CaNode + effectivePorts</td><td>Push the dynamic slot ports; generic slot-row config UI (<code>+ Attribute</code> / <code>− last</code>); per-slot inline widgets; collapsed label <code>+N</code>.</td></tr>
+      <tr><td>isValidConnection</td><td><code>value_N</code> ports resolve vector-ness per slot (vector↔vector only, like the primary).</td></tr>
+      <tr><td>nodeValidation + ModelContext</td><td>Per-slot "Select an attribute" badges; attribute-delete cascade clears matching <code>attr_N</code> slot keys on the five node types.</td></tr>
+    </table>
+  </div>
+</div>
+
+<h2>Interaction sequence</h2>
+<div class="row">
+  <div class="card" style="flex: 1 1 100%">
+    <svg viewBox="0 0 1020 90" width="100%">
+      <g font-size="10" fill="#d8dde4">
+        <rect x="10" y="20" width="220" height="50" rx="8" fill="#1d2026" stroke="#2c3038"/>
+        <text x="22" y="40" fill="#e8a13a">1 · click “+ Attribute”</text>
+        <text x="22" y="56">extraCount++ → new slot row + port</text>
+        <rect x="270" y="20" width="220" height="50" rx="8" fill="#1d2026" stroke="#2c3038"/>
+        <text x="282" y="40" fill="#e8a13a">2 · pick the attribute</text>
+        <text x="282" y="56">port label + widget adapt to its type</text>
+        <rect x="530" y="20" width="220" height="50" rx="8" fill="#1d2026" stroke="#2c3038"/>
+        <text x="542" y="40" fill="#e8a13a">3 · wire or inline-edit</text>
+        <text x="542" y="56">value_N behaves like the classic port</text>
+        <rect x="790" y="20" width="220" height="50" rx="8" fill="#1d2026" stroke="#2c3038"/>
+        <text x="802" y="40" fill="#e8a13a">4 · compile (any target)</text>
+        <text x="802" y="56">expansion → N verified single nodes</text>
+        <path d="M232 45 L 266 45 M492 45 L 526 45 M752 45 L 786 45" stroke="#e8a13a" stroke-width="2"/>
+      </g>
+    </svg>
+  </div>
+</div>
+</main>
+</body>
+</html>
