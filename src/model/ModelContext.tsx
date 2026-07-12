@@ -28,6 +28,7 @@ import type {
   VariegatedCellsConfig,
   TopologyMode,
   CenterBasedConfig,
+  OverseerConfig,
 } from './types';
 import { DEFAULT_MODEL, EMPTY_MODEL } from './defaultModel';
 import { defaultCenterBasedConfig } from './centerBased';
@@ -58,7 +59,7 @@ function generateId(prefix: string): string {
 }
 
 // ---------------------------------------------------------------------------
-// Node config cleanup helpers — keep graph nodes in sync with model changes
+// Node config cleanup helpers Ã¢â‚¬â€ keep graph nodes in sync with model changes
 // ---------------------------------------------------------------------------
 
 /** Patch configs of graph nodes matching a predicate */
@@ -78,24 +79,27 @@ function patchNodes(
   return changed ? result : nodes;
 }
 
-/** Apply patchNodes to the Cells graph, the Agents graph, AND all macroDef
- *  subgraphs. Bond-Graph Agents: scanning `agentGraphNodes` too is what keeps a
- *  deleted attribute / neighbourhood / mapping from stranding a `_undef` config
- *  in the agent graph (the same cascade bug class the cells graph has). */
+/** Apply patchNodes to the Cells graph, the Agents graph, the Overseer graph,
+ *  AND all macroDef subgraphs. Scanning `agentGraphNodes` + `overseerGraphNodes`
+ *  too is what keeps a deleted attribute / neighbourhood / mapping / indicator /
+ *  preset from stranding a `_undef` config in the other graphs (the same
+ *  cascade bug class the cells graph has). Call sites spread the result
+ *  (`...patched`) so adding a graph here can never silently miss a site. */
 function patchAllNodes(
   model: CAModel,
   pred: (cfg: Record<string, string | number | boolean>, nodeType: string) => boolean,
   patch: (cfg: Record<string, string | number | boolean>, nodeType: string) => Record<string, string | number | boolean>,
-): { graphNodes: GraphNode[]; agentGraphNodes: GraphNode[]; macroDefs: MacroDef[] } {
+): { graphNodes: GraphNode[]; agentGraphNodes: GraphNode[]; overseerGraphNodes: GraphNode[]; macroDefs: MacroDef[] } {
   const graphNodes = patchNodes(model.graphNodes, pred, patch);
   const agentGraphNodes = patchNodes(model.agentGraphNodes ?? [], pred, patch);
+  const overseerGraphNodes = patchNodes(model.overseerGraphNodes ?? [], pred, patch);
   let macrosChanged = false;
   const macroDefs = (model.macroDefs || []).map(m => {
     const patched = patchNodes(m.nodes, pred, patch);
     if (patched !== m.nodes) { macrosChanged = true; return { ...m, nodes: patched }; }
     return m;
   });
-  return { graphNodes, agentGraphNodes, macroDefs: macrosChanged ? macroDefs : (model.macroDefs || []) };
+  return { graphNodes, agentGraphNodes, overseerGraphNodes, macroDefs: macrosChanged ? macroDefs : (model.macroDefs || []) };
 }
 
 /** Clear a config field to '' if it matches a deleted ID */
@@ -173,7 +177,7 @@ function migrateLegacyParentIds(model: CAModel): CAModel {
 // ---------------------------------------------------------------------------
 
 /** The Save-Project dialog's include choices (mirrors SaveOptions in
- *  SaveProjectDialog — kept structural here so the model layer doesn't import
+ *  SaveProjectDialog Ã¢â‚¬â€ kept structural here so the model layer doesn't import
  *  from components). */
 export interface SaveOptionsState {
   includeGrid: boolean;
@@ -189,10 +193,10 @@ interface ModelState {
    *  Display-only (shown in the top bar after the project name); never
    *  serialized into the model. Null for new/unsaved models. */
   loadedFileName: string | null;
-  /** The Save-dialog options the user last CONFIRMED for THIS loaded model —
+  /** The Save-dialog options the user last CONFIRMED for THIS loaded model Ã¢â‚¬â€
    *  the dialog re-opens with them, so repeated saves keep the user's choice
    *  (e.g. all boxes off stays all off). Reset by NEW_MODEL / LOAD_MODEL (a
-   *  fresh model derives its defaults from its own content instead — see
+   *  fresh model derives its defaults from its own content instead Ã¢â‚¬â€ see
    *  FileMenu's deriveSaveOptions). In-session only; never serialized. */
   lastSaveOptions: SaveOptionsState | null;
 }
@@ -225,6 +229,8 @@ type ModelAction =
   | { type: 'UPDATE_SPRITE'; id: string; changes: Partial<SpriteAsset> }
   | { type: 'SET_GRAPH'; nodes: GraphNode[]; edges: GraphEdge[] }
   | { type: 'SET_AGENT_GRAPH'; nodes: GraphNode[]; edges: GraphEdge[] }
+  | { type: 'SET_OVERSEER_GRAPH'; nodes: GraphNode[]; edges: GraphEdge[] }
+  | { type: 'UPDATE_OVERSEER_CONFIG'; changes: Partial<OverseerConfig> }
   | { type: 'UPDATE_CENTER_BASED'; changes: Partial<CenterBasedConfig> }
   | { type: 'ADD_MACRO'; macro: MacroDef }
   | { type: 'UPDATE_MACRO'; id: string; changes: Partial<MacroDef> }
@@ -313,7 +319,7 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
     case 'DUPLICATE_ATTRIBUTE': {
       const source = state.model.attributes.find(a => a.id === action.sourceId);
       if (!source) return state;
-      // Deep clone (JSON round-trip — the project convention, graphHistory.ts) so
+      // Deep clone (JSON round-trip Ã¢â‚¬â€ the project convention, graphHistory.ts) so
       // nested fields (tagOptions, parentValues, rowKeySource/colKeySource,
       // tableValues, facePatternAssignments) don't share references. Fresh id +
       // " (copy)" name; APPEND so the panel auto-select lands on the copy. A
@@ -351,7 +357,7 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
               };
             }
             // Tag-valued table sourcing its value labels from the removed tag
-            // attribute: detach → fall back to manual valueTagOptions.
+            // attribute: detach Ã¢â€ â€™ fall back to manual valueTagOptions.
             if (next.valueTagAttributeId === action.id) {
               next = { ...next, valueTagAttributeId: undefined };
             }
@@ -359,7 +365,7 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
           return next;
         });
       // Variegation cascade: if the removed attribute was the variegation
-      // source, clear sourceAttributeId. We do NOT disable variegatedCells —
+      // source, clear sourceAttributeId. We do NOT disable variegatedCells Ã¢â‚¬â€
       // the user might just be re-pointing the source; preserving facePatterns
       // and faceLabels avoids re-entry burden.
       let variegatedCells = state.model.variegatedCells;
@@ -367,14 +373,14 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
         variegatedCells = { ...variegatedCells, sourceAttributeId: '' };
       }
       // Variables cascade: tag variables referencing the removed attr lose
-      // their tag space — convert to integer (initialValue is already a
+      // their tag space Ã¢â‚¬â€ convert to integer (initialValue is already a
       // stringified number, no parsing needed) and drop attributeId.
       const variables = (state.model.variables || []).map(v =>
         v.attributeId === action.id
           ? { ...v, attributeId: undefined, dataType: 'integer' as const }
           : v,
       );
-      // Same cascade for AGENT variables — a tag-typed agent variable bound to
+      // Same cascade for AGENT variables Ã¢â‚¬â€ a tag-typed agent variable bound to
       // the removed attribute would otherwise keep a dangling attributeId.
       const agentVariables = (state.model.agentVariables || []).map(v =>
         v.attributeId === action.id
@@ -394,7 +400,7 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
       // Clear stale attributeId and tagAttributeId references in node configs
       const a1 = clearDeletedId(modelAfterFilter, 'attributeId', action.id);
       const a2 = patchAllNodes(
-        { ...modelAfterFilter, graphNodes: a1.graphNodes, agentGraphNodes: a1.agentGraphNodes, macroDefs: a1.macroDefs },
+        { ...modelAfterFilter, ...a1 },
         cfg => cfg.tagAttributeId === action.id,
         cfg => { cfg.tagAttributeId = ''; return cfg; },
       );
@@ -403,13 +409,13 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
       // guides re-picking). Scoped by node type so moveSelfToNeighbor's payload
       // slots keep their existing (unchanged) delete behaviour.
       const a3 = clearDeletedSlotIds(
-        { ...modelAfterFilter, graphNodes: a2.graphNodes, agentGraphNodes: a2.agentGraphNodes, macroDefs: a2.macroDefs },
+        { ...modelAfterFilter, ...a2 },
         action.id,
       );
       return {
         ...state,
         isDirty: true,
-        model: { ...modelAfterFilter, graphNodes: a3.graphNodes, agentGraphNodes: a3.agentGraphNodes, macroDefs: a3.macroDefs },
+        model: { ...modelAfterFilter, ...a3 },
       };
     }
 
@@ -418,7 +424,7 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
       // Lookup Table CUSTOM-axis rename: when this attribute's own row/col key
       // source is a `custom`-labels axis whose labels changed (a rename), remap
       // tableValues keys by the same index-paired name heuristic used for tag
-      // axes — otherwise renaming a custom label would orphan that row/column's
+      // axes Ã¢â‚¬â€ otherwise renaming a custom label would orphan that row/column's
       // values (they'd read back as 0 on every target). Added labels start empty;
       // removed labels' values drop.
       const remapCustomAxis = (oldSrc?: LookupKeySource, newSrc?: LookupKeySource): Map<string, string | null> | null => {
@@ -468,7 +474,7 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
       if (oldAttr && action.changes.tagOptions && oldAttr.tagOptions) {
         const oldOpts = oldAttr.tagOptions;
         const newOpts = action.changes.tagOptions;
-        // Build mapping: old index → new index (or 0 if deleted)
+        // Build mapping: old index Ã¢â€ â€™ new index (or 0 if deleted)
         const indexMap = new Map<number, number>();
         for (let oi = 0; oi < oldOpts.length; oi++) {
           const ni = newOpts.indexOf(oldOpts[oi]!);
@@ -489,7 +495,7 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
         // index-pairing rename heuristic survives reorderings cleanly.
         const variegationSourceId = state.model.variegatedCells?.sourceAttributeId;
         const newOptsSet = new Set(newOpts);
-        // Old tag-option NAME → new name (or null when deleted). Same index-pairing
+        // Old tag-option NAME Ã¢â€ â€™ new name (or null when deleted). Same index-pairing
         // rename heuristic as facePatternAssignments. Used to remap Lookup Table
         // tableValues keys when this tag attribute is a table's row/col key source.
         const tagNameRemap = new Map<string, string | null>();
@@ -523,7 +529,7 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
               if (newOptsSet.has(oldName)) {
                 nextAssign[oldName] = v;
               } else if (newOpts[oi] && !oldOpts.includes(newOpts[oi]!)) {
-                // Same index, new name not present in oldOpts → rename detected.
+                // Same index, new name not present in oldOpts Ã¢â€ â€™ rename detected.
                 nextAssign[newOpts[oi]!] = v;
               }
               // else: deleted tag, drop assignment.
@@ -531,7 +537,7 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
             next = { ...next, facePatternAssignments: nextAssign };
           }
           // Lookup Table tableValues: remap row/col keys when an axis is keyed
-          // by THIS tag attribute (rename → new name, deleted → drop).
+          // by THIS tag attribute (rename Ã¢â€ â€™ new name, deleted Ã¢â€ â€™ drop).
           if (sa.type === 'lookupTable' && sa.tableValues) {
             const rowIsTag = sa.rowKeySource?.kind === 'tagAttribute' && sa.rowKeySource.attributeId === attrId;
             const colIsTag = sa.colKeySource?.kind === 'tagAttribute' && sa.colKeySource.attributeId === attrId;
@@ -602,7 +608,7 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
             if ((nt === 'setAttribute' || nt === 'setNeighborhoodAttribute' || nt === 'setNeighborAttributeByIndex')
                 && cfg.attributeId === attrId) return true;
             // Compare (statement) in tag mode stores its operands as tag INDICES
-            // in _port_x/_port_y/_port_y2 — remap them too, else a tag reorder
+            // in _port_x/_port_y/_port_y2 Ã¢â‚¬â€ remap them too, else a tag reorder
             // silently compares the wrong option.
             if (nt === 'statement' && cfg.compareType === 'tag' && cfg.tagAttributeId === attrId) return true;
             return false;
@@ -626,18 +632,18 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
         );
         return {
           ...state, isDirty: true,
-          model: { ...remappedModel, graphNodes: patched.graphNodes, agentGraphNodes: patched.agentGraphNodes, macroDefs: patched.macroDefs },
+          model: { ...remappedModel, ...patched },
         };
       }
 
       // Parent-type change cascade. If the attribute was previously Tag or Bool
-      // and is being changed to anything else (including Tag→Bool or Bool→Tag),
+      // and is being changed to anything else (including TagÃ¢â€ â€™Bool or BoolÃ¢â€ â€™Tag),
       // any sub-attribute that referenced it as parent has stale parentValues
       // (tag indices vs bool 0/1 are encoded differently and don't carry over).
       // Two cases:
-      //   - new type is still Tag or Bool → keep the parent link, RESET
+      //   - new type is still Tag or Bool Ã¢â€ â€™ keep the parent link, RESET
       //     parentValues to [] so the user picks again under the new type.
-      //   - new type is something else (int/float/color/neighborIndex) → detach
+      //   - new type is something else (int/float/color/neighborIndex) Ã¢â€ â€™ detach
       //     entirely (clear parentAttributeId, parentValues, undefinedValue).
       if (oldAttr && action.changes.type
           && oldAttr.type !== action.changes.type
@@ -662,7 +668,7 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
             ? { ...v, attributeId: undefined, dataType: 'integer' as const }
             : v,
         );
-        // Linked Output Mappings: tag/bool → other type invalidates the palette;
+        // Linked Output Mappings: tag/bool Ã¢â€ â€™ other type invalidates the palette;
         // reset colors/domain but keep the link (transform regenerates defaults).
         const mappings = updatedModel.mappings.map(m =>
           m.linkedAttributeId === action.id
@@ -672,8 +678,8 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
         return { ...state, isDirty: true, model: { ...updatedModel, attributes: detached, variables, agentVariables, mappings } };
       }
 
-      // Linked Output Mappings: any other attribute type change (e.g. float↔integer)
-      // invalidates a linked palette / domain — reset so the transform regenerates
+      // Linked Output Mappings: any other attribute type change (e.g. floatÃ¢â€ â€integer)
+      // invalidates a linked palette / domain Ã¢â‚¬â€ reset so the transform regenerates
       // type-appropriate defaults (the link itself is preserved).
       if (oldAttr && action.changes.type && oldAttr.type !== action.changes.type) {
         const mappings = updatedModel.mappings.map(m =>
@@ -717,7 +723,7 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
     case 'REMOVE_AGENT_ATTRIBUTE': {
       const filtered = (state.model.agentAttributes || []).filter(a => a.id !== action.id);
       // Unlink any agent output mapping that pointed at the deleted attribute (the
-      // synthesis skips a stale link, but clearing it keeps the panel honest) —
+      // synthesis skips a stale link, but clearing it keeps the panel honest) Ã¢â‚¬â€
       // and drop its stale palette/range so a later re-link starts clean.
       const agentMappings = (state.model.agentMappings ?? []).map(m =>
         m.linkedAttributeId === action.id
@@ -735,19 +741,19 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
       // agent graph.
       const a1 = clearDeletedId(modelAfter, 'attributeId', action.id);
       const a2 = patchAllNodes(
-        { ...modelAfter, graphNodes: a1.graphNodes, agentGraphNodes: a1.agentGraphNodes, macroDefs: a1.macroDefs },
+        { ...modelAfter, ...a1 },
         cfg => cfg.tagAttributeId === action.id,
         cfg => { cfg.tagAttributeId = ''; return cfg; },
       );
       // Multi-attribute slots: clear extra `attr_${i}` slot keys naming the
       // deleted agent attribute (mirrors the cell REMOVE_ATTRIBUTE cascade).
       const a3 = clearDeletedSlotIds(
-        { ...modelAfter, graphNodes: a2.graphNodes, agentGraphNodes: a2.agentGraphNodes, macroDefs: a2.macroDefs },
+        { ...modelAfter, ...a2 },
         action.id,
       );
       return {
         ...state, isDirty: true,
-        model: { ...modelAfter, graphNodes: a3.graphNodes, agentGraphNodes: a3.agentGraphNodes, macroDefs: a3.macroDefs },
+        model: { ...modelAfter, ...a3 },
       };
     }
 
@@ -759,7 +765,7 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
           a.id === action.id ? { ...a, ...action.changes } : a),
       };
       // Type change: reset any LINKED agent mapping's palette/range (a stale tag
-      // palette can't describe the new type — mirrors the cell UPDATE_ATTRIBUTE
+      // palette can't describe the new type Ã¢â‚¬â€ mirrors the cell UPDATE_ATTRIBUTE
       // cascade), and detach agent tag variables when the type leaves 'tag'.
       if (oldAttr && action.changes.type && action.changes.type !== oldAttr.type) {
         updatedModel = {
@@ -800,7 +806,7 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
             (nt === 'getConstant' && cfg.constType === 'tag' && cfg.tagAttributeId === attrId) ||
             (nt === 'switch' && cfg.tagAttributeId === attrId && cfg.valueType === 'tag') ||
             // Compare in tag mode stores its operands as tag indices in
-            // _port_x/_port_y/_port_y2 — the cell path remaps them; so must we.
+            // _port_x/_port_y/_port_y2 Ã¢â‚¬â€ the cell path remaps them; so must we.
             (nt === 'statement' && cfg.compareType === 'tag' && cfg.tagAttributeId === attrId) ||
             ((nt === 'setAttribute' || nt === 'setAgentAttribute' || nt === 'setAgentsAttribute' || nt === 'updateAttribute') && cfg.attributeId === attrId),
           (cfg, nt) => {
@@ -822,7 +828,7 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
         );
         return {
           ...state, isDirty: true,
-          model: { ...updatedModel, graphNodes: patched.graphNodes, agentGraphNodes: patched.agentGraphNodes, macroDefs: patched.macroDefs },
+          model: { ...updatedModel, ...patched },
         };
       }
       return { ...state, isDirty: true, model: updatedModel };
@@ -879,7 +885,7 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
       const nbrPatch = clearDeletedId(mAfterNbr, 'neighborhoodId', action.id);
       return {
         ...state, isDirty: true,
-        model: { ...mAfterNbr, graphNodes: nbrPatch.graphNodes, agentGraphNodes: nbrPatch.agentGraphNodes, macroDefs: nbrPatch.macroDefs },
+        model: { ...mAfterNbr, ...nbrPatch },
       };
     }
 
@@ -919,7 +925,7 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
       const source = state.model.mappings.find(m => m.id === action.sourceId);
       if (!source) return state;
       // Definition-level duplicate (fresh id + " (copy)" name). For a LINKED
-      // mapping the copy carries linked*/linkedColors → the linked-OM synthesis
+      // mapping the copy carries linked*/linkedColors Ã¢â€ â€™ the linked-OM synthesis
       // regenerates its colour pass immediately. For a STANDALONE mapping the
       // hand-built graph nodes still reference the OLD id, so the copy renders a
       // Standalone empty pass until the user wires it (documented; matches the
@@ -939,7 +945,7 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
       const mapPatch = clearDeletedId(mAfterMap, 'mappingId', action.id);
       return {
         ...state, isDirty: true,
-        model: { ...mAfterMap, graphNodes: mapPatch.graphNodes, agentGraphNodes: mapPatch.agentGraphNodes, macroDefs: mapPatch.macroDefs },
+        model: { ...mAfterMap, ...mapPatch },
       };
     }
 
@@ -955,7 +961,7 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
         },
       };
 
-    // Agent Output Mappings — the agent-layer A→C views (linked over agent attrs).
+    // Agent Output Mappings Ã¢â‚¬â€ the agent-layer AÃ¢â€ â€™C views (linked over agent attrs).
     case 'ADD_AGENT_MAPPING': {
       const firstAgentAttr = (state.model.agentAttributes ?? []).find(a => a.type !== 'color' && a.type !== 'lookupTable');
       const newMap: Mapping = {
@@ -963,7 +969,7 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
         name: 'Agent View',
         description: '',
         isAttributeToColor: true,
-        // No eligible agent attribute → seed as STANDALONE (a linked mapping with
+        // No eligible agent attribute Ã¢â€ â€™ seed as STANDALONE (a linked mapping with
         // linkedAttributeId undefined would render a broken default view).
         linked: !!firstAgentAttr,
         linkedAttributeId: firstAgentAttr?.id,
@@ -987,7 +993,7 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
     case 'REMOVE_AGENT_MAPPING': {
       // Cascade like REMOVE_MAPPING: clear the deleted id from node configs
       // (agentOutputMapping roots + setCellLooks on the Agents graph keep
-      // `config.mappingId`) — otherwise a standalone agent view leaves a dead
+      // `config.mappingId`) Ã¢â‚¬â€ otherwise a standalone agent view leaves a dead
       // compiled pass + a dangling picker value in the saved file.
       const mAfterAgentMap = {
         ...state.model,
@@ -996,7 +1002,7 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
       const agentMapPatch = clearDeletedId(mAfterAgentMap, 'mappingId', action.id);
       return {
         ...state, isDirty: true,
-        model: { ...mAfterAgentMap, graphNodes: agentMapPatch.graphNodes, agentGraphNodes: agentMapPatch.agentGraphNodes, macroDefs: agentMapPatch.macroDefs },
+        model: { ...mAfterAgentMap, ...agentMapPatch },
       };
     }
     case 'UPDATE_AGENT_MAPPING':
@@ -1064,6 +1070,30 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
         },
       };
 
+    case 'SET_OVERSEER_GRAPH':
+      // Overseer: write-back for the THIRD (experiment orchestration) graph.
+      // The GraphEditor's scheduleSync forks to this when the Overseer sub-tab
+      // is active (mirrors SET_GRAPH / SET_AGENT_GRAPH).
+      return {
+        ...state,
+        isDirty: true,
+        model: {
+          ...state.model,
+          overseerGraphNodes: action.nodes,
+          overseerGraphEdges: action.edges,
+        },
+      };
+
+    case 'UPDATE_OVERSEER_CONFIG': {
+      // Overseer feature config. Seed a default when absent so the first edit
+      // (the Properties enable checkbox) lands on a full object.
+      const current: OverseerConfig = state.model.overseerConfig ?? { enabled: false };
+      return {
+        ...state, isDirty: true,
+        model: { ...state.model, overseerConfig: { ...current, ...action.changes } },
+      };
+    }
+
     case 'UPDATE_CENTER_BASED': {
       // Bond-Graph Agents config (force law, ceilings, world bounds, bonds).
       // Seed a default when absent so the first edit lands on a full object.
@@ -1129,8 +1159,8 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
     case 'DUPLICATE_INDICATOR': {
       const source = (state.model.indicators || []).find(i => i.id === action.sourceId);
       if (!source) return state;
-      // Definition-level duplicate (fresh id + " (copy)" name) — deep-clones every
-      // field (kind, dataType, linked*, trackedValues, chartSettings, …). A
+      // Definition-level duplicate (fresh id + " (copy)" name) Ã¢â‚¬â€ deep-clones every
+      // field (kind, dataType, linked*, trackedValues, chartSettings, Ã¢â‚¬Â¦). A
       // STANDALONE indicator's copy has a fresh id not referenced by any
       // Set/Get/Update-Indicator node, so it starts unwired (mirrors the
       // duplicate-mapping scope); a LINKED indicator's copy aggregates immediately.
@@ -1149,7 +1179,7 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
       const indPatch = clearDeletedId(mAfterInd, 'indicatorId', action.id);
       return {
         ...state, isDirty: true,
-        model: { ...mAfterInd, graphNodes: indPatch.graphNodes, agentGraphNodes: indPatch.agentGraphNodes, macroDefs: indPatch.macroDefs },
+        model: { ...mAfterInd, ...indPatch },
       };
     }
 
@@ -1181,7 +1211,7 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
       if (!m.properties.tags) m.properties.tags = [];
       if (!m.properties.updateMode) m.properties.updateMode = 'synchronous';
       if (!m.properties.asyncScheme) m.properties.asyncScheme = 'random-order';
-      // v1.8: rename/add — silently drop legacy `goal`, default new `modelAuthor` to ''.
+      // v1.8: rename/add Ã¢â‚¬â€ silently drop legacy `goal`, default new `modelAuthor` to ''.
       if ('goal' in m.properties) delete (m.properties as unknown as Record<string, unknown>).goal;
       if (m.properties.modelAuthor === undefined) m.properties.modelAuthor = '';
       // 3D Grid CA / Bond-Graph Morphogenesis (M0a): default the new mode fields
@@ -1194,6 +1224,11 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
       // Agents topology is on (a non-agent file leaves it absent).
       if (!m.agentGraphNodes) m.agentGraphNodes = [];
       if (!m.agentGraphEdges) m.agentGraphEdges = [];
+      // Overseer: default the third (experiment) graph so every legacy file
+      // loads with empty overseer arrays. overseerConfig stays absent (= off)
+      // unless the file carries it â€” the feature is invisible when off.
+      if (!m.overseerGraphNodes) m.overseerGraphNodes = [];
+      if (!m.overseerGraphEdges) m.overseerGraphEdges = [];
       if (!m.agentMappings) m.agentMappings = [];
       // Generic Agent Platform: the agent attribute set (separate id-space).
       // Absent in every legacy file; the split migration below populates it for
@@ -1204,11 +1239,11 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
       for (const a of m.attributes) {
         if (a.type === 'tag' && !a.tagOptions) a.tagOptions = [];
       }
-      // Groups are free-floating area markers now — translate any legacy
+      // Groups are free-floating area markers now Ã¢â‚¬â€ translate any legacy
       // child positions (relative to a group) back to absolute and drop
       // data.parentId. Visual layout is preserved.
       m = migrateLegacyParentIds(m);
-      // Bond-Graph Agents — migration scope decision: the 5 node-migrators below
+      // Bond-Graph Agents Ã¢â‚¬â€ migration scope decision: the 5 node-migrators below
       // (colorInterpolation, tagConstant, moveSelfToNeighbor, setCellLooks-merge,
       // lookupTables) operate on `graphNodes` + `macroDefs` only, NOT
       // `agentGraphNodes`. Rationale: every node type they upgrade is a LEGACY
@@ -1216,7 +1251,7 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
       // so an agent graph can never contain one from an old file, and a newly
       // authored agent graph already uses the current node shapes. If a FUTURE
       // migration ever targets a node type usable in agent graphs (e.g. a new
-      // setCellLooks revision — setCellLooks IS used for agent appearance), it
+      // setCellLooks revision Ã¢â‚¬â€ setCellLooks IS used for agent appearance), it
       // MUST also scan `agentGraphNodes`, or stale config strands there.
       // Color Scale migration: rewrite legacy colorInterpolation nodes to
       // the new colorScale shape (top-level + all macroDefs). Idempotent.
@@ -1246,8 +1281,8 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
         const r = migrateSetCellLooksNodes(m.graphNodes, m.graphEdges, m.macroDefs);
         m = { ...m, graphNodes: r.graphNodes, graphEdges: r.graphEdges, macroDefs: r.macroDefs };
       }
-      // Lookup Table migration: interactionTable→lookupTable attribute type +
-      // variegatedCells.faceLabels→facePalettes[0] + default square key sources.
+      // Lookup Table migration: interactionTableÃ¢â€ â€™lookupTable attribute type +
+      // variegatedCells.faceLabelsÃ¢â€ â€™facePalettes[0] + default square key sources.
       // Idempotent. Model-level (attributes + variegatedCells), so no macro pass.
       m = migrateLookupTables(m);
       // Drop the removed built-in agent `type`: setAgentType nodes, createAgent
@@ -1443,14 +1478,14 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
       const patch = clearDeletedId(mAfter, 'variableId', action.id);
       return {
         ...state, isDirty: true,
-        model: { ...mAfter, graphNodes: patch.graphNodes, agentGraphNodes: patch.agentGraphNodes, macroDefs: patch.macroDefs },
+        model: { ...mAfter, ...patch },
       };
     }
 
     case 'UPDATE_VARIABLE': {
       const key = action.target === 'agent' ? 'agentVariables' : 'variables';
       const current = state.model[key] || [];
-      // When kind changes from array→scalar, drop `length`. When dataType is no
+      // When kind changes from arrayÃ¢â€ â€™scalar, drop `length`. When dataType is no
       // longer tag, drop `attributeId`. Lets the inspector "settle" without the
       // user manually clearing now-irrelevant fields.
       const next = current.map(v => {
@@ -1489,12 +1524,12 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
       // Seed the agent config + the (empty) agent graph the first time Agents is
       // enabled, so the Properties config section + the Agents sub-tab have
       // something to bind to. Disabling Agents keeps the data (mirrors how
-      // variegated data persists) — re-enabling restores it.
+      // variegated data persists) Ã¢â‚¬â€ re-enabling restores it.
       const model = { ...state.model, topologyMode: next };
       if (next.agents) {
         if (!model.centerBased) model.centerBased = defaultCenterBasedConfig();
         else if (!model.centerBased.enabled) model.centerBased = { ...model.centerBased, enabled: true };
-        // Agent Capability Profile — seed a friendly paradigm default (Boids) the
+        // Agent Capability Profile Ã¢â‚¬â€ seed a friendly paradigm default (Boids) the
         // first time Agents is enabled, so the editor surface + Properties preset
         // row have an explicit profile to reflect (the user re-picks from there).
         if (!model.centerBased.agentCapabilities) {
@@ -1648,6 +1683,11 @@ export interface ModelContextValue {
   /** Bond-Graph Agents: partial update of the center-based config (force law,
    *  ceilings, world bounds, bond params). Seeds the object when absent. */
   updateCenterBased: (changes: Partial<CenterBasedConfig>) => void;
+  /** Overseer: write-back for the experiment orchestration graph (the third graph). */
+  setOverseerGraph: (nodes: GraphNode[], edges: GraphEdge[]) => void;
+  /** Overseer: partial update of the overseer config (the Properties enable
+   *  checkbox + seed policy). Seeds the object when absent. */
+  updateOverseerConfig: (changes: Partial<OverseerConfig>) => void;
   addMacro: (macro: MacroDef) => void;
   /** Deep-clones a MacroDef with fresh IDs and adds it to the project.
    *  Returns the new macroDef id (for referencing from a MacroNode). */
@@ -1673,7 +1713,7 @@ export interface ModelContextValue {
   reorderMappings: (newOrder: string[]) => void;
   reorderIndicators: (newOrder: string[]) => void;
   reorderEndConditions: (newOrder: string[]) => void;
-  /** Variegated Cells — partial update for top-level config (enabled,
+  /** Variegated Cells Ã¢â‚¬â€ partial update for top-level config (enabled,
    *  sourceAttributeId, faceLabels, facePatterns). Initializes the
    *  `variegatedCells` object on the model when absent. */
   updateVariegatedCells: (changes: Partial<VariegatedCellsConfig>) => void;
@@ -1681,13 +1721,13 @@ export interface ModelContextValue {
   duplicateFacePattern: (sourceId: string) => void;
   removeFacePattern: (id: string) => void;
   updateFacePattern: (id: string, changes: Partial<FacePattern>) => void;
-  /** Local Variables — per-cell scratch storage. */
+  /** Local Variables Ã¢â‚¬â€ per-cell scratch storage. */
   addVariable: (target?: 'cell' | 'agent') => void;
   duplicateVariable: (sourceId: string, target?: 'cell' | 'agent') => void;
   removeVariable: (id: string, target?: 'cell' | 'agent') => void;
   updateVariable: (id: string, changes: Partial<Variable>, target?: 'cell' | 'agent') => void;
   reorderVariables: (newOrder: string[], target?: 'cell' | 'agent') => void;
-  /** Bond-Graph Morphogenesis topology selection (Grid Cells / Agents). ≥1
+  /** Bond-Graph Morphogenesis topology selection (Grid Cells / Agents). Ã¢â€°Â¥1
    *  flag enforced by the reducer. */
   updateTopologyMode: (changes: Partial<TopologyMode>) => void;
 }
@@ -1706,7 +1746,7 @@ export function ModelProvider({ children }: { children: ReactNode }) {
   const [state, dispatch] = useReducer(modelReducer, undefined, createInitialState);
 
   // One-shot cleanup of legacy localStorage keys from older builds. The app no
-  // longer auto-persists the model — users save `.gcaproj` manually and are
+  // longer auto-persists the model Ã¢â‚¬â€ users save `.gcaproj` manually and are
   // warned on unload if there are unsaved changes. `genesisca_has_launched` was
   // briefly used to gate the default tab but is unused now that every visit
   // lands on the Library.
@@ -1819,6 +1859,16 @@ export function ModelProvider({ children }: { children: ReactNode }) {
   const updateCenterBased = useCallback(
     (changes: Partial<CenterBasedConfig>) =>
       dispatch({ type: 'UPDATE_CENTER_BASED', changes }),
+    [],
+  );
+  const setOverseerGraph = useCallback(
+    (nodes: GraphNode[], edges: GraphEdge[]) =>
+      dispatch({ type: 'SET_OVERSEER_GRAPH', nodes, edges }),
+    [],
+  );
+  const updateOverseerConfig = useCallback(
+    (changes: Partial<OverseerConfig>) =>
+      dispatch({ type: 'UPDATE_OVERSEER_CONFIG', changes }),
     [],
   );
   const addMacro = useCallback(
@@ -2003,6 +2053,8 @@ export function ModelProvider({ children }: { children: ReactNode }) {
       setGraph,
       setAgentGraph,
       updateCenterBased,
+      setOverseerGraph,
+      updateOverseerConfig,
       addMacro,
       importMacro,
       updateMacro,
@@ -2071,6 +2123,8 @@ export function ModelProvider({ children }: { children: ReactNode }) {
       setGraph,
       setAgentGraph,
       updateCenterBased,
+      setOverseerGraph,
+      updateOverseerConfig,
       addMacro,
       importMacro,
       updateMacro,

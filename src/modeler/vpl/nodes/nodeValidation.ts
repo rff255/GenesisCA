@@ -641,6 +641,11 @@ export function detectCapabilityRequirements(
   if (def.requirements.bondGraph && !model.topologyMode?.agents) {
     issues.push(`"${def.label}" requires the Bond-Graph Agents topology. Enable it in Model Properties > Execution > Topology.`);
   }
+  // Overseer: experiment-orchestration nodes need the Overseer enabled. Same
+  // split as bondGraph — the sub-tab half of the gate lives in isNodeAvailable.
+  if (def.requirements.overseer && !model.overseerConfig?.enabled) {
+    issues.push(`"${def.label}" requires the Overseer. Enable it in Model Properties > Execution.`);
+  }
   // Agent Capability Profiles: a bond-graph node whose capability is OFF in the
   // resolved profile gets an INFORMATIONAL badge (STEP 1 is editor-surface-only —
   // the compiler still emits unconditionally, so a placed violator keeps working;
@@ -688,6 +693,27 @@ export const LATTICE_ONLY_TYPES = new Set<string>([
   'getFacingOrientation', 'setFacingOrientation',
   'getNeighborOrientationByIndex', 'setNeighborOrientationByIndex',
   'getFacingLabels', 'getAllFacingLabels', 'interactionTableMap',
+]);
+
+/** Overseer: the EXPLICIT ALLOWLIST of shared (non-`requirements.overseer`)
+ *  node types available on the Overseer graph. The Overseer runs at EXPERIMENT
+ *  tempo on the main thread — there is no per-cell / per-agent context — so
+ *  almost every node in the catalogue is meaningless there (own-attribute
+ *  accessors, neighbour access, Set Cell Looks, indicator writers, the whole
+ *  bondGraph set). Only context-free value plumbing + the flow constructs make
+ *  sense. An allowlist (not a blocklist) is the safety boundary: a node type
+ *  NOT listed here and NOT `requirements.overseer` can never be placed on the
+ *  Overseer graph, and the overseer compiler independently rejects it
+ *  (defence-in-depth). Every listed node's JS `compile()` is context-free
+ *  (emits `const _v<id> = <expr>` over its inputs) or reads symbols the driver
+ *  preamble provides (`modelAttrs` for getModelAttribute, `_rs` for getRandom). */
+export const OVERSEER_UNIVERSAL_TYPES = new Set<string>([
+  // flow constructs (compiled by the overseer compiler's own flow walk)
+  'sequence', 'conditional', 'loop', 'forEachInArray', 'switch',
+  // context-free value plumbing (their def.compile() is reused verbatim)
+  'getConstant', 'arithmeticOperator', 'expression', 'statement',
+  'logicOperator', 'getRandom', 'valueSwitch', 'proportionMap',
+  'interpolation', 'arrayElement', 'arrayLength', 'getModelAttribute',
 ]);
 
 /** Agent nodes that READ agent state — INVALID in the Agent Init Event, which runs
@@ -804,6 +830,10 @@ export function isNodeAvailable(def: NodeTypeDef, model: CAModel): boolean {
   // `'cells'`), so a single-graph model is unaffected.
   const kind = getActiveGraphKind();
   if (kind === 'agents' && LATTICE_ONLY_TYPES.has(def.type)) return false;
+  // Overseer graph: an explicit ALLOWLIST — only overseer nodes (checked below)
+  // and the context-free universal subset exist there. Everything else (the
+  // whole per-cell/per-agent catalogue) is hidden.
+  if (kind === 'overseer' && !def.requirements?.overseer && !OVERSEER_UNIVERSAL_TYPES.has(def.type)) return false;
   if (!def.requirements) return true;
   if (def.requirements.async && model.properties.updateMode !== 'asynchronous') return false;
   if (def.requirements.variegated && !model.variegatedCells?.enabled) return false;
@@ -814,14 +844,20 @@ export function isNodeAvailable(def: NodeTypeDef, model: CAModel): boolean {
   // graph.
   if (def.requirements.bondGraph) {
     if (!model.topologyMode?.agents) return false;
-    if (kind === 'cells') return false;
+    if (kind !== 'agents') return false;
     // Agent Capability Profiles: hide a node whose capability is off in the
     // resolved profile from the palette / quick-add / connection-drop menus, so a
     // paradigm shows only its relevant nodes. Only reached on the Agents graph
     // with the topology on ⇒ the profile is explicit (O(1)).
     if (!nodeSatisfiesCapabilities(def.type, resolveAgentProfile(model))) return false;
   }
-  if (def.requirements.lattice && kind === 'agents') return false;
+  // Overseer nodes: need the feature enabled AND the Overseer sub-tab active.
+  // With the feature off (or on any other graph) they are invisible everywhere.
+  if (def.requirements.overseer) {
+    if (!model.overseerConfig?.enabled) return false;
+    if (kind !== 'overseer') return false;
+  }
+  if (def.requirements.lattice && kind !== 'cells') return false;
   return true;
 }
 
@@ -853,9 +889,16 @@ export function isMacroAvailableOnGraph(
     if (kind === 'agents') {
       // Lattice-only nodes (neighbour family, cell roots, …) can't run on agents.
       if (LATTICE_ONLY_TYPES.has(t) || getNodeDef(t)?.requirements?.lattice) return false;
+      // Overseer (experiment) nodes can't run inside a cell/agent rule either.
+      if (getNodeDef(t)?.requirements?.overseer) return false;
     } else if (kind === 'cells') {
-      // Bond-graph (agent-only) nodes can't run on the cell grid.
-      if (getNodeDef(t)?.requirements?.bondGraph) return false;
+      // Bond-graph (agent-only) + overseer nodes can't run on the cell grid.
+      const req = getNodeDef(t)?.requirements;
+      if (req?.bondGraph || req?.overseer) return false;
+    } else if (kind === 'overseer') {
+      // The Overseer graph is allowlist-only: every internal node must be an
+      // overseer node or in the universal subset.
+      if (!getNodeDef(t)?.requirements?.overseer && !OVERSEER_UNIVERSAL_TYPES.has(t)) return false;
     }
   }
   return true;

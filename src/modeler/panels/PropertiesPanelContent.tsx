@@ -20,7 +20,7 @@ function newCondId(): string {
 }
 
 export function PropertiesPanelContent({ mode = 'list' }: PanelContentProps = {}) {
-  const { model, updateProperties, reorderEndConditions, updateVariegatedCells, updateTopologyMode, updateCenterBased } = useModel();
+  const { model, updateProperties, reorderEndConditions, updateVariegatedCells, updateTopologyMode, updateCenterBased, updateOverseerConfig } = useModel();
   // Indicators are a master-detail sub-section: the list lives in this panel,
   // the selected indicator's editor opens in the shared second (detail) panel.
   // Selection rides Properties' single detail slot as an `indicator:<id>` key.
@@ -399,6 +399,62 @@ export function PropertiesPanelContent({ mode = 'list' }: PanelContentProps = {}
                 </span>
               </label>
             </div>
+          </div>
+
+          {/* Overseer — the experiment orchestration graph. This checkbox is the
+              ONLY place the feature is visible while off: enabling it reveals the
+              Overseer graph tab (modeler), its node catalogue, and the simulator
+              Experiments panel; disabling hides all of them again. */}
+          <div style={{ marginTop: 14, borderTop: '1px solid #333', paddingTop: 10 }}>
+            <label className={styles.fieldLabel} style={{ marginBottom: 4 }}>Overseer</label>
+            <label style={{ display: 'flex', alignItems: 'flex-start', gap: 6, cursor: 'pointer', fontSize: '0.72rem', marginTop: 2 }}>
+              <input
+                type="checkbox"
+                checked={!!model.overseerConfig?.enabled}
+                onChange={e => updateOverseerConfig({ enabled: e.target.checked })}
+                style={{ marginTop: 2 }}
+              />
+              <span>
+                <strong>Use Overseer (Experiment Orchestration)</strong>
+                <br />
+                <span style={{ color: '#888', fontSize: '0.66rem' }}>
+                  Adds a third <strong>Overseer</strong> graph that automates whole experiments AROUND the
+                  simulation: repeat seeded runs, sweep parameters, run until a Stop Event, collect indicator
+                  samples, aggregate statistics (mean ± std), and log/capture results — run it from the
+                  simulator's <strong>Experiments</strong> panel.
+                </span>
+              </span>
+            </label>
+            {model.overseerConfig?.enabled && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 8, marginLeft: 20 }}>
+                <div>
+                  <label className={styles.fieldLabel} style={{ marginBottom: 2 }}>Per-run seed policy</label>
+                  <select
+                    className={styles.select}
+                    value={model.overseerConfig?.seedPolicy ?? 'none'}
+                    onChange={e => updateOverseerConfig({ seedPolicy: e.target.value as 'none' | 'fixed' | 'sequential' })}
+                  >
+                    <option value="none">None (graph controls seeding)</option>
+                    <option value="fixed">Fixed (every Reset re-seeds with the base seed)</option>
+                    <option value="sequential">Sequential (base seed + reset count)</option>
+                  </select>
+                  <div style={{ color: '#888', fontSize: '0.66rem', marginTop: 2 }}>
+                    Auto-seed applied at each Reset Board unless the graph already ran a Set Random Seed this run.
+                  </div>
+                </div>
+                {(model.overseerConfig?.seedPolicy === 'fixed' || model.overseerConfig?.seedPolicy === 'sequential') && (
+                  <div>
+                    <label className={styles.fieldLabel} style={{ marginBottom: 2 }}>Base seed</label>
+                    <NumberField
+                      className={styles.numberInput}
+                      value={model.overseerConfig?.baseSeed ?? 12345}
+                      integer
+                      onNumber={v => updateOverseerConfig({ baseSeed: v })}
+                    />
+                  </div>
+                )}
+              </div>
+            )}
           </div>
 
           {/* Bond-Graph Agents config — shown when the Agents topology is on.

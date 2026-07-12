@@ -54,7 +54,7 @@ export function setIsConnecting(val: boolean) {
 // model (the overwhelming majority) behaves exactly as before.
 // ---------------------------------------------------------------------------
 
-export type ActiveGraphKind = 'cells' | 'agents';
+export type ActiveGraphKind = 'cells' | 'agents' | 'overseer';
 let activeGraphKindGlobal: ActiveGraphKind = 'cells';
 const activeGraphKindListeners = new Set<() => void>();
 

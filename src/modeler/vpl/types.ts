@@ -116,6 +116,12 @@ export interface NodeRequirements {
    *  with neither `bondGraph` nor `lattice` is available in both graphs (e.g.
    *  arithmetic, Get Constant — pure value plumbing). */
   lattice?: boolean;
+  /** Overseer: an EXPERIMENT-orchestration node (Run Generations, Reset Board,
+   *  Collect Sample, …). Available only when `model.overseerConfig?.enabled`
+   *  AND the user is editing the Overseer graph (active sub-tab `'overseer'`).
+   *  Hidden everywhere else — with the feature off, no sign of these nodes
+   *  exists anywhere in the UI. */
+  overseer?: boolean;
 }
 
 /** Definition of a node type */

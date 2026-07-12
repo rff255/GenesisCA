@@ -63,7 +63,7 @@ let clipboard: { nodes: GraphNode[]; edges: GraphEdge[] } | null = null;
 // into the other graph kind (a lattice node into the Agents graph, or vice
 // versa) is rejected — the node sets are disjoint and would carry a validation
 // badge / fail to compile.
-let clipboardGraphKind: 'cells' | 'agents' = 'cells';
+let clipboardGraphKind: 'cells' | 'agents' | 'overseer' = 'cells';
 
 import { setIsConnecting, setConnectingFrom, setShowPortLabels, showPortLabelsGlobal, showGridGlobal, setShowGrid as setShowGridGlobal, snapEnabledGlobal, setSnapEnabled as setSnapEnabledGlobal, setConnectedHandlesFromEdges, setConnectionHazards, getSavedGraphViewport, setSavedGraphViewport, savedCurrentScope, setSavedCurrentScope, subscribeCurrentModelElementDrag, setCompatibleHandlesForDrag, clearCompatibleHandlesForDrag, setCurrentModelElementDrag, compatibleHandlesForDrag, currentModelElementDrag, setQuickAddApi, setActiveGraphKind, displayNodeLabel, displayNodeDescription, type ActiveGraphKind } from './graphState';
 import { modelerUiState } from '../modelerUiState';
@@ -193,7 +193,7 @@ interface ResolvedDropCandidate {
  *  behaviourStep/divisionEvent/agentInit on the Agents graph — the sub-tab swap
  *  means nodesRef only ever holds ONE graph, so a plain presence check is
  *  correctly per-graph. */
-const SINGLETON_NODE_TYPES = new Set(['step', 'initEvent', 'behaviourStep', 'divisionEvent', 'agentInit']);
+const SINGLETON_NODE_TYPES = new Set(['step', 'initEvent', 'behaviourStep', 'divisionEvent', 'agentInit', 'experiment']);
 
 function resolveDropCandidates(
   payload: ModelElementDragPayload,
@@ -526,7 +526,7 @@ interface ContextMenuState {
 // ---------------------------------------------------------------------------
 
 export function GraphEditorInner() {
-  const { model, modelVersion, setGraph, setAgentGraph, addMacro, importMacro, updateMacro, removeMacro } = useModel();
+  const { model, modelVersion, setGraph, setAgentGraph, setOverseerGraph, addMacro, importMacro, updateMacro, removeMacro } = useModel();
   // Bond-Graph Agents: which rule graph is shown (Cells vs Agents). Seeded from
   // the persisted snapshot (GraphEditor unmounts on a Simulator round-trip), and
   // clamped to 'cells' if the Agents topology is off. The graph-swap effect +
@@ -534,12 +534,17 @@ export function GraphEditorInner() {
   // mirror drives the palette / quick-add gating + the 'Agent Attributes' label.
   const agentsTopo = !!model.topologyMode?.agents;
   const gridCellsTopo = model.topologyMode?.gridCells !== false;
+  // Overseer: the third graph exists only while the feature is enabled — with it
+  // off there is NO pill, NO graph, no sign of the feature in the editor.
+  const overseerOn = !!model.overseerConfig?.enabled;
   const [activeGraph, setActiveGraphState] = useState<ActiveGraphKind>(() => {
     // Agents-only model (Grid Cells disabled) → there is no Cells graph, so show
     // the Agents graph (the Cells pill is elided; defaulting to 'cells' would show
     // an empty CA-grid canvas + demand a Generation Step that the model can't use).
+    const saved = modelerUiState.activeGraph;
+    if (overseerOn && saved === 'overseer') return 'overseer';
     if (agentsTopo && !gridCellsTopo) return 'agents';
-    return (agentsTopo && modelerUiState.activeGraph === 'agents') ? 'agents' : 'cells';
+    return (agentsTopo && saved === 'agents') ? 'agents' : 'cells';
   });
   // Keep the module global + the persisted snapshot in lockstep with local state
   // (the palette + Attributes panel read the global without prop-drilling).
@@ -553,7 +558,9 @@ export function GraphEditorInner() {
   useEffect(() => { activeGraphRef.current = activeGraph; }, [activeGraph]);
   const initialGraph = (activeGraph === 'agents')
     ? { nodes: model.agentGraphNodes ?? [], edges: model.agentGraphEdges ?? [] }
-    : { nodes: model.graphNodes, edges: model.graphEdges };
+    : (activeGraph === 'overseer')
+      ? { nodes: model.overseerGraphNodes ?? [], edges: model.overseerGraphEdges ?? [] }
+      : { nodes: model.graphNodes, edges: model.graphEdges };
   const [nodes, setNodes, onNodesChange] = useNodesState(toRFNodes(initialGraph.nodes));
   const [edges, setEdges, onEdgesChange] = useEdgesState(toRFEdges(initialGraph.edges));
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
@@ -778,15 +785,17 @@ export function GraphEditorInner() {
       const gn = toGraphNodes(nodesRef.current);
       const ge = toGraphEdges(edgesRef.current);
       if (!scopeId || scopeId === 'root') {
-        // Root scope writes back to the ACTIVE graph (Cells vs Agents); macro
-        // scopes write to the shared macroDef regardless of which graph is active.
+        // Root scope writes back to the ACTIVE graph (Cells / Agents / Overseer);
+        // macro scopes write to the shared macroDef regardless of which graph is
+        // active.
         if (activeGraphRef.current === 'agents') setAgentGraph(gn, ge);
+        else if (activeGraphRef.current === 'overseer') setOverseerGraph(gn, ge);
         else setGraph(gn, ge);
       } else {
         updateMacro(scopeId, { nodes: gn, edges: ge });
       }
     }, 100);
-  }, [setGraph, setAgentGraph, updateMacro]);
+  }, [setGraph, setAgentGraph, setOverseerGraph, updateMacro]);
 
   // Bond-Graph Agents: flush any pending debounced write-back SYNCHRONOUSLY,
   // routed to the CURRENT active graph. Called before swapping the Cells/Agents
@@ -800,11 +809,12 @@ export function GraphEditorInner() {
       const gn = toGraphNodes(nodesRef.current);
       const ge = toGraphEdges(edgesRef.current);
       if (activeGraphRef.current === 'agents') setAgentGraph(gn, ge);
+      else if (activeGraphRef.current === 'overseer') setOverseerGraph(gn, ge);
       else setGraph(gn, ge);
     }
     // Macro scope: the shared macroDef is already debounce-written; no need to
     // flush on a graph swap (the swap stays within the macro until popped).
-  }, [setGraph, setAgentGraph]);
+  }, [setGraph, setAgentGraph, setOverseerGraph]);
 
   const setActiveGraph = useCallback((g: ActiveGraphKind) => {
     if (g === activeGraphRef.current) return;
@@ -1141,10 +1151,12 @@ export function GraphEditorInner() {
   useEffect(() => {
     const scopeId = currentScope[currentScope.length - 1] ?? 'root';
     if (!scopeId || scopeId === 'root') {
-      // Root scope shows the ACTIVE graph (Cells vs the Agents graph).
+      // Root scope shows the ACTIVE graph (Cells / Agents / Overseer).
       const [nds, eds] = activeGraph === 'agents'
         ? [model.agentGraphNodes ?? [], model.agentGraphEdges ?? []]
-        : [model.graphNodes, model.graphEdges];
+        : activeGraph === 'overseer'
+          ? [model.overseerGraphNodes ?? [], model.overseerGraphEdges ?? []]
+          : [model.graphNodes, model.graphEdges];
       setNodes(toRFNodes(nds));
       setEdges(toRFEdges(eds));
     } else {
@@ -1176,8 +1188,13 @@ export function GraphEditorInner() {
   // variegated V-tab auto-switch.
   useEffect(() => {
     if (activeGraph === 'agents' && !model.topologyMode?.agents) setActiveGraph('cells');
+    else if (activeGraph === 'overseer' && !model.overseerConfig?.enabled) {
+      // Overseer turned off while its tab was active → fall back to a graph
+      // that exists (Cells, or Agents for an agents-only model).
+      setActiveGraph(model.topologyMode?.gridCells === false && model.topologyMode?.agents ? 'agents' : 'cells');
+    }
     else if (activeGraph === 'cells' && model.topologyMode?.gridCells === false && model.topologyMode?.agents) setActiveGraph('agents');
-  }, [activeGraph, model.topologyMode?.agents, model.topologyMode?.gridCells, setActiveGraph]);
+  }, [activeGraph, model.topologyMode?.agents, model.topologyMode?.gridCells, model.overseerConfig?.enabled, setActiveGraph]);
 
   // Capture-phase mousedown on the viewport: snapshot the current multi-node
   // selection BEFORE React Flow's internal handlers run, so onNodeContextMenu
@@ -3793,7 +3810,7 @@ export function GraphEditorInner() {
           topology is on; pills shown only for CHECKED topologies. Switching at
           root scope swaps the edited graph; inside a macro it pops to root first
           (the macro is shared, but the swap targets the root graph). */}
-      {agentsTopo && currentScope.length <= 1 && (
+      {(agentsTopo || overseerOn) && currentScope.length <= 1 && (
         <div className={styles.graphTabs}>
           {model.topologyMode?.gridCells && (
             <button
@@ -3813,6 +3830,16 @@ export function GraphEditorInner() {
             >
               <span className={styles.graphTabDot} style={{ background: '#7e57c2' }} />
               Agents
+            </button>
+          )}
+          {overseerOn && (
+            <button
+              className={`${styles.graphTab} ${activeGraph === 'overseer' ? styles.graphTabActive : ''}`}
+              onClick={() => setActiveGraph('overseer')}
+              title="The experiment orchestration graph (loops over runs, parameter sweeps, statistics)"
+            >
+              <span className={styles.graphTabDot} style={{ background: '#e8a13a' }} />
+              Overseer
             </button>
           )}
         </div>
