@@ -21,6 +21,7 @@ import { getNodeDef } from './nodes/registry';
 import { clampVisibleCount } from './compiler/expression/parser';
 import { vectorPortDims } from './compiler/vectorAttr';
 import { MULTI_ATTR_TYPES, buildExtraSlotPorts } from './compiler/multiAttrExpand';
+import { applyLookupAxisPorts } from './nodes/LookupInteractionNode';
 
 export interface EffectivePorts {
   inputs: PortDef[];
@@ -89,6 +90,14 @@ export function getEffectivePorts(
     const extra = buildExtraSlotPorts(nodeType, cfg, model);
     inputs = [...inputs, ...extra.inputs];
     outputs = [...outputs, ...extra.outputs];
+  }
+
+  // Table Lookup: shape the index inputs per the referenced table — legacy
+  // 2-axis keeps Row/Col (axis_* dropped); a MULTI-AXIS table shows one input
+  // per axis, labeled with the axis names. ONE shared shaper with CaNode
+  // (applyLookupAxisPorts — the buildExtraSlotPorts dual-consumption pattern).
+  if (nodeType === 'lookupInteraction') {
+    inputs = applyLookupAxisPorts(inputs, cfg, model);
   }
 
   // Expression: show only `visibleCount` of the 8 input ports, with the

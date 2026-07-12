@@ -27,7 +27,7 @@ import {
   attrValueLiteralJS,
   parentMatchExprJS,
 } from './subAttribute';
-import { directionIndex, DIRECTION_TAGS, resolveKeyLabels } from './variegation';
+import { directionIndex, DIRECTION_TAGS, resolveKeyLabels, resolveAxes, isMultiAxisTable } from './variegation';
 import { buildVariableJS } from './variable';
 
 // ---------------------------------------------------------------------------
@@ -1720,11 +1720,32 @@ export function compileGraph(
         node.data.config._sourceAttrId = variegatedSourceAttrId;
       }
       if (node.data.nodeType === 'lookupInteraction' || node.data.nodeType === 'interactionTableMap') {
-        // Inject the per-table row count + col stride. The emit indexes the flat
-        // table as `row * _colCount + col`, so the column count is the stride.
-        const dims = lookupTableDims(String(node.data.config.tableId ?? ''));
-        node.data.config._rowCount = dims.rowCount;
-        node.data.config._colCount = dims.colCount;
+        const tableId = String(node.data.config.tableId ?? '');
+        const tableAttr = model!.attributes.find(
+          a => a.id === tableId && a.isModelAttribute && a.type === 'lookupTable',
+        );
+        if (tableAttr && isMultiAxisTable(tableAttr)) {
+          // MULTI-AXIS table: bake the full axis geometry (dims + intRange index
+          // offsets) as comma-joined strings (NodeConfig holds scalars only).
+          // The emit clamps per axis and indexes `Σ idxₖ·strideₖ`.
+          const r = resolveAxes(tableAttr, model!);
+          node.data.config._dims = r.dims.join(',');
+          node.data.config._mins = r.mins.join(',');
+          // Legacy keys kept coherent for anything that still reads them.
+          node.data.config._rowCount = r.dims[0] ?? 1;
+          node.data.config._colCount = r.dims[1] ?? 1;
+        } else {
+          // LEGACY 2-axis table: inject the per-table row count + col stride.
+          // The emit indexes the flat table as `row * _colCount + col`, so the
+          // column count is the stride. Scrub any stale multi-axis bake (the
+          // pre-resolve mutates the live node config, which persists across
+          // recompiles — a table converted back to 2-axis must not keep _dims).
+          const dims = lookupTableDims(tableId);
+          node.data.config._rowCount = dims.rowCount;
+          node.data.config._colCount = dims.colCount;
+          delete node.data.config._dims;
+          delete node.data.config._mins;
+        }
       }
       if (node.data.nodeType === 'getConstant' && node.data.config.constType === 'faceLabel') {
         // Resolve face-label NAME to its compile-time index within the chosen

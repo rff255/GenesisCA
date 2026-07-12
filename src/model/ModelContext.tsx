@@ -35,6 +35,7 @@ import { defaultCenterBasedConfig } from './centerBased';
 import { defaultAgentCapabilities, migrateAgentCapabilities } from './agentCapabilities';
 import { defaultTagColor } from '../modeler/vpl/compiler/linkedOutputMappings';
 import { MULTI_ATTR_TYPES } from '../modeler/vpl/compiler/multiAttrExpand';
+import { resolveAxes, remapTableDataAxis, remapTableDataForAxesChange } from '../modeler/vpl/compiler/variegation';
 import { cloneMacroWithFreshIds } from './macroImport';
 import { migrateColorInterpolationNodes } from './colorScaleMigration';
 import { migrateTagConstantNodes } from './tagConstantMigration';
@@ -361,6 +362,31 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
             if (next.valueTagAttributeId === action.id) {
               next = { ...next, valueTagAttributeId: undefined };
             }
+            // MULTI-AXIS: any axis keyed by the removed tag attribute collapses
+            // to `single` (dim 1, keeping the slice at old index 0) and the
+            // dense tableData is structurally remapped to match — the N-D
+            // analogue of the row/col detach above.
+            if (next.axes && next.axes.length > 0) {
+              const dangling = next.axes
+                .map((ax, i) => (ax.source?.kind === 'tagAttribute' && ax.source.attributeId === action.id ? i : -1))
+                .filter(i => i >= 0);
+              if (dangling.length > 0) {
+                // Resolve OLD dims against the pre-removal model (the removed
+                // attribute is still present on state.model here).
+                const rOld = resolveAxes(next, state.model);
+                let data = next.tableData ? [...next.tableData] : undefined;
+                const dims = rOld.dims.slice();
+                for (const axIdx of dangling) {
+                  if (data) data = remapTableDataAxis(data, dims, axIdx, [0]);
+                  dims[axIdx] = 1;
+                }
+                next = {
+                  ...next,
+                  axes: next.axes.map((ax, i) => (dangling.includes(i) ? { ...ax, source: { kind: 'single' as const } } : ax)),
+                  tableData: data,
+                };
+              }
+            }
           }
           return next;
         });
@@ -462,10 +488,27 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
         }
         return { ...attr, tableValues: nextTV };
       };
+      // MULTI-AXIS: when the table's own `axes` list changes (intRange resize,
+      // custom-label edit, source swap, append / remove-last), structurally
+      // remap the dense tableData to the new geometry — label-name matching
+      // (covers intRange shifts for free) + the custom rename heuristic.
+      // Skipped when the caller supplies explicit tableData in the same change
+      // (the Randomize button / an editor-side conversion own the data then).
+      const applyAxesRemap = (attr: Attribute): Attribute => {
+        if (!oldAttr || oldAttr.type !== 'lookupTable') return attr;
+        if (action.changes.axes === undefined || action.changes.tableData !== undefined) return attr;
+        if (!oldAttr.axes || oldAttr.axes.length === 0) return attr;   // legacy → axes conversion ships its own tableData
+        if (!attr.axes || attr.axes.length === 0) return attr;          // axes → legacy conversion leaves tableData inert
+        if (!oldAttr.tableData) return attr;
+        const rOld = resolveAxes(oldAttr, state.model);
+        const rNew = resolveAxes(attr, state.model);
+        const remapped = remapTableDataForAxesChange(oldAttr.tableData, rOld, rNew, oldAttr.axes, attr.axes);
+        return { ...attr, tableData: remapped };
+      };
       const updatedModel = {
         ...state.model,
         attributes: state.model.attributes.map(a =>
-          a.id === action.id ? applyCustomAxisRemap({ ...a, ...action.changes }) : a,
+          a.id === action.id ? applyAxesRemap(applyCustomAxisRemap({ ...a, ...action.changes })) : a,
         ),
       };
 
@@ -567,6 +610,38 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
                 remappedTV[rk] = nr;
               }
               next = { ...next, tableValues: remappedTV };
+            }
+          }
+          // MULTI-AXIS Lookup Table: axes keyed by THIS tag attribute remap the
+          // dense tableData along that axis (rename keeps values, reorder
+          // gathers, deleted drops, added zero-fills) — the N-D analogue of the
+          // tableValues key remap above.
+          if (sa.type === 'lookupTable' && sa.axes && sa.axes.length > 0) {
+            const axIdxs = sa.axes
+              .map((ax, i) => (ax.source?.kind === 'tagAttribute' && ax.source.attributeId === attrId ? i : -1))
+              .filter(i => i >= 0);
+            if (axIdxs.length > 0 && next.tableData) {
+              // Old dims resolve against the PRE-update model (labels = oldOpts).
+              const rOld = resolveAxes(sa, state.model);
+              // New label j → old index: name match, else the index-paired
+              // rename heuristic, else -1 (new option, zero-fill).
+              const axisIdxMap = newOpts.map((name, j) => {
+                const oi = oldOpts.indexOf(name);
+                if (oi >= 0) return oi;
+                if (oldOpts[j] !== undefined && !newOptsSet.has(oldOpts[j]!)) return j;
+                return -1;
+              });
+              let data = [...next.tableData];
+              const dims = rOld.dims.slice();
+              for (const ai of axIdxs) {
+                data = remapTableDataAxis(data, dims, ai, axisIdxMap);
+                dims[ai] = axisIdxMap.length;
+              }
+              next = { ...next, tableData: data };
+            }
+            // Tag-VALUED axes table: stored cell values are tag indices.
+            if (next.valueType === 'tag' && next.valueTagAttributeId === attrId && next.tableData) {
+              next = { ...next, tableData: next.tableData.map(v => Number(remap(v))) };
             }
           }
           return next;

@@ -2144,6 +2144,43 @@ const VALUE_NODE_EMITTERS: Record<string, NodeValueEmitter> = {
       ctx.emitter.f64Const(0);
       return storeResult(ctx.emitter, F64);
     }
+    if (slot.dims && slot.dims.length > 0) {
+      // MULTI-AXIS (N-D) table: flat = Σ clamp((axisₖ|0) − minₖ, 0, dimₖ−1)·strideₖ
+      // (per-axis saturating clamp — D-NDT-5; mirrors the JS + WGSL emits).
+      const em = ctx.emitter;
+      const dims = slot.dims;
+      const mins = slot.mins ?? [];
+      const strides = new Array<number>(dims.length).fill(1);
+      for (let i = dims.length - 2; i >= 0; i--) strides[i] = strides[i + 1]! * dims[i + 1]!;
+      const flat = em.allocLocal(I32);
+      em.i32Const(0); em.localSet(flat);
+      for (let k = 0; k < dims.length; k++) {
+        const min = Math.floor(mins[k] ?? 0) || 0;
+        const hi = Math.max(0, dims[k]! - 1);
+        const t = em.allocLocal(I32);
+        pushValueAs(em, inputs[`axis_${k}`] ?? { inline: true, value: 0, valtype: I32 }, I32);
+        if (min !== 0) { em.i32Const(min); em.op(OP_I32_SUB); }
+        em.localSet(t);
+        // t = max(t, 0): select(t, 0, t > 0)
+        em.localGet(t); em.i32Const(0);
+        em.localGet(t); em.i32Const(0); em.op(OP_I32_GT_S);
+        em.op(OP_SELECT); em.localSet(t);
+        // t = min(t, hi): select(t, hi, t < hi)
+        em.localGet(t); em.i32Const(hi);
+        em.localGet(t); em.i32Const(hi); em.op(OP_I32_LT_S);
+        em.op(OP_SELECT); em.localSet(t);
+        // flat += t * stride
+        em.localGet(flat);
+        em.localGet(t);
+        if (strides[k] !== 1) { em.i32Const(strides[k]!); em.op(OP_I32_MUL); }
+        em.op(OP_I32_ADD); em.localSet(flat);
+      }
+      em.localGet(flat);
+      em.i32Const(8); em.op(OP_I32_MUL);
+      em.f64Load(slot.offset, 3);
+      return storeResult(em, F64);
+    }
+    // LEGACY 2-axis — byte-identical to the pre-N-D emit (no clamp).
     const colCount = slot.colCount; // row-major stride
     const labelA = inputs['labelA'] ?? { inline: true, value: 0, valtype: I32 };
     const labelB = inputs['labelB'] ?? { inline: true, value: 0, valtype: I32 };
@@ -4724,11 +4761,17 @@ const ARRAY_NODE_EMITTERS: Record<string, NodeArrayEmitter> = {
     ctx.emitter.op(OP_I32_ADD);
     ctx.emitter.localSet(ctx.scratchTopLocal);
 
-    if (slot === undefined) {
-      // Tableless: output stays empty (len = 0).
+    if (slot === undefined || (slot.dims && slot.dims.length !== 2)) {
+      // Tableless — or a multi-axis table with N≠2 axes (the node's shape is
+      // two parallel index arrays; nodeValidation badges it): output stays
+      // empty (len = 0).
       return { kind: 'array', offsetLocal: outOff, lenLocal: outLen, elemValtype: F64, elemBytes: 8 };
     }
-    const colCount = slot.colCount; // row-major stride
+    // Multi-axis N=2 table: clamped indices + intRange offsets (D-NDT-5).
+    // Legacy 2-axis: raw indices, byte-identical to the pre-N-D emit.
+    const ndDims = slot.dims && slot.dims.length === 2 ? slot.dims : null;
+    const ndMins = ndDims ? (slot.mins ?? []) : [];
+    const colCount = ndDims ? ndDims[1]! : slot.colCount; // row-major stride
 
     const k = ctx.emitter.allocLocal(I32);
     ctx.emitter.i32Const(0); ctx.emitter.localSet(k);
@@ -4744,6 +4787,21 @@ const ARRAY_NODE_EMITTERS: Record<string, NodeArrayEmitter> = {
         ctx.emitter.localGet(k); emitArrayLoadElem(ctx.emitter, theirArr);
         if (theirArr.elemValtype === F64) ctx.emitter.f64ToI32();
         ctx.emitter.localSet(b);
+        if (ndDims) {
+          // a = clamp(a − min0, 0, d0−1); b = clamp(b − min1, 0, d1−1)
+          const em = ctx.emitter;
+          const clampLocal = (loc: number, min: number, hi: number) => {
+            if (min !== 0) { em.localGet(loc); em.i32Const(min); em.op(OP_I32_SUB); em.localSet(loc); }
+            em.localGet(loc); em.i32Const(0);
+            em.localGet(loc); em.i32Const(0); em.op(OP_I32_GT_S);
+            em.op(OP_SELECT); em.localSet(loc);
+            em.localGet(loc); em.i32Const(hi);
+            em.localGet(loc); em.i32Const(hi); em.op(OP_I32_LT_S);
+            em.op(OP_SELECT); em.localSet(loc);
+          };
+          clampLocal(a, Math.floor(ndMins[0] ?? 0) || 0, Math.max(0, ndDims[0]! - 1));
+          clampLocal(b, Math.floor(ndMins[1] ?? 0) || 0, Math.max(0, ndDims[1]! - 1));
+        }
 
         // out[k] (f64) = f64Load((a * colCount + b) * 8 + slot.offset)
         // Compute the byte offset into the OUTPUT scratch slot first.

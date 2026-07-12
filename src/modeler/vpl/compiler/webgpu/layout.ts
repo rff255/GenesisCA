@@ -15,7 +15,7 @@
  */
 
 import type { CAModel } from '../../../../model/types';
-import { FACE_SLOT_COUNT, resolveKeyLabels } from '../variegation';
+import { FACE_SLOT_COUNT, resolveKeyLabels, resolveAxes, isMultiAxisTable } from '../variegation';
 import { hasGlyphsInModel } from '../glyphsUsage';
 import { expandVectorAttributes } from '../vectorAttr';
 
@@ -54,12 +54,17 @@ export interface WebGPULayoutNbr {
 export interface WebGPUInteractionTableLayout {
   /** Word offset into the varAux array<u32> at which the f32 values start. */
   wordOffset: number;
-  /** Number of f32 entries — equals `rowCount * colCount`. */
+  /** Number of f32 entries — equals `rowCount * colCount` (or `Π dims`). */
   count: number;
   /** Row dimension (row key source label count). */
   rowCount: number;
   /** Column dimension (col key source label count) — the row-major stride. */
   colCount: number;
+  /** MULTI-AXIS (N-D) tables only: per-axis dims (declared order, row-major).
+   *  Present ⇔ multi-axis — the emitters branch on it. */
+  dims?: number[];
+  /** Multi-axis only: per-axis intRange index offsets (0 for label axes). */
+  mins?: number[];
 }
 
 export interface WebGPULayout {
@@ -297,13 +302,24 @@ export function computeWebGPULayout(model: CAModel): WebGPULayout {
   // each axis key source.
   for (const a of modelAttrs) {
     if (a.type !== 'lookupTable') continue;
-    const rowCount = resolveKeyLabels(a.rowKeySource, model).length || 1;
-    const colCount = resolveKeyLabels(a.colKeySource, model).length || 1;
-    const count = rowCount * colCount;
     // 16-byte alignment for storage struct safety / cache locality.
     varAuxCursor = Math.ceil(varAuxCursor / 16) * 16;
-    interactionTableOffsets[a.id] = { wordOffset: varAuxCursor / 4, count, rowCount, colCount };
-    varAuxCursor += count * 4;
+    if (isMultiAxisTable(a)) {
+      // Multi-axis: sized Π dims, geometry via resolveAxes (layout-lockstep).
+      const r = resolveAxes(a, model);
+      interactionTableOffsets[a.id] = {
+        wordOffset: varAuxCursor / 4, count: r.total,
+        rowCount: r.dims[0] ?? 1, colCount: r.dims[1] ?? 1,
+        dims: r.dims, mins: r.mins,
+      };
+      varAuxCursor += r.total * 4;
+    } else {
+      const rowCount = resolveKeyLabels(a.rowKeySource, model).length || 1;
+      const colCount = resolveKeyLabels(a.colKeySource, model).length || 1;
+      const count = rowCount * colCount;
+      interactionTableOffsets[a.id] = { wordOffset: varAuxCursor / 4, count, rowCount, colCount };
+      varAuxCursor += count * 4;
+    }
   }
   // Storage buffers must be at least 4 bytes — even when no variegation data
   // exists, the buffer is created with the stub size so binding 8 is bindable.

@@ -5,7 +5,7 @@
  */
 
 import { instantiateWasmModule } from '../../modeler/vpl/compiler/wasm/compile';
-import { buildFacePatternLookup, normalizeLookupTable } from '../../modeler/vpl/compiler/variegation';
+import { buildFacePatternLookup, normalizeLookupTablePayload } from '../../modeler/vpl/compiler/variegation';
 import { computeMemoryLayout, type MemoryLayout, type VariegatedLayoutInputs, type LookupTableLayoutInput } from '../../modeler/vpl/compiler/wasm/layout';
 import type { WebGPULayout } from '../../modeler/vpl/compiler/webgpu/layout';
 import type { WebGPUEntryPoints } from '../../modeler/vpl/compiler/webgpu/compile';
@@ -100,6 +100,11 @@ interface InteractionTablePayload {
   colLabels: string[];
   /** Sparse `[rowLabel][colLabel] ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ number`. Missing entries default to 0. */
   values: Record<string, Record<string, number>>;
+  /** MULTI-AXIS (N-D) tables: per-axis dims + the dense row-major data
+   *  (labels/values ride empty). Present ⇔ multi-axis. Normalized via
+   *  `normalizeLookupTablePayload` — the flat storage is `Π dims` f64. */
+  dims?: number[];
+  data?: number[];
 }
 
 interface InitMsg {
@@ -275,6 +280,10 @@ interface UpdateLookupTableMsg {
   rowLabels: string[];
   colLabels: string[];
   values: Record<string, Record<string, number>>;
+  /** MULTI-AXIS (N-D) tables: per-axis dims + the dense row-major data (the
+   *  legacy labels/values fields ride empty). Present ⇔ multi-axis. */
+  dims?: number[];
+  data?: number[];
 }
 interface UpdateModelAttrsMsg { type: 'updateModelAttrs'; attrs: Record<string, number> }
 interface ImportImageMsg { type: 'importImage'; pixels: Uint8ClampedArray; mappingId: string; activeViewer: string;
@@ -2191,11 +2200,17 @@ function initVariegation(
   if (wasmMemory && wasmLayout) {
     for (const t of lookupTablesPayload) {
       const slot = wasmLayout.interactionTableOffsets[t.id];
-      const normalized = normalizeLookupTable(t.values, t.rowLabels, t.colLabels);
+      const normalized = normalizeLookupTablePayload(t);
       if (slot !== undefined) {
-        const view = new Float64Array(wasmMemory.buffer, slot.offset, slot.rowCount * slot.colCount);
+        // Multi-axis slots reserve Π dims cells; legacy rowCount*colCount.
+        const cells = slot.dims && slot.dims.length > 0
+          ? slot.dims.reduce((a, b) => a * Math.max(1, b), 1)
+          : slot.rowCount * slot.colCount;
+        const view = new Float64Array(wasmMemory.buffer, slot.offset, cells);
         view.fill(0);
-        view.set(normalized);
+        // Defensive length clamp — a stale payload whose dims disagree with the
+        // layout must not throw (the next recompile re-ships both in lockstep).
+        view.set(normalized.length <= cells ? normalized : normalized.subarray(0, cells));
         cachedInteractionTables[t.id] = view;
       } else {
         // No layout slot (table attr added after init without recompile) ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â keep
@@ -5157,7 +5172,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       // (see initVariegation), so we must COPY into the existing view ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â never
       // reassign the JS reference ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â or WASM would lose its source of truth (it
       // reads via baked offsets, not the JS ref).
-      const normalized = normalizeLookupTable(msg.values, msg.rowLabels, msg.colLabels);
+      const normalized = normalizeLookupTablePayload(msg);
       const existing = cachedInteractionTables[msg.attrId];
       if (existing && existing.length === normalized.length) {
         existing.set(normalized);

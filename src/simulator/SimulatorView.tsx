@@ -7,7 +7,7 @@ import { CURRENT_VIEWER_SENTINEL } from '../modeler/vpl/nodes/SetCellLooksNode';
 import { compileGraphWasm } from '../modeler/vpl/compiler/wasm/compile';
 import { computeLayoutFromModel, buildViewerIds } from '../modeler/vpl/compiler/wasm/layout';
 import { unpackNI, unpackNI3, INVALID_NI } from '../modeler/vpl/compiler/niCodec';
-import { resolveKeyLabels, resolveValueTagOptions } from '../modeler/vpl/compiler/variegation';
+import { resolveKeyLabels, resolveValueTagOptions, buildLookupTablePayload, isMultiAxisTable } from '../modeler/vpl/compiler/variegation';
 import { NeighborIndexValuePicker } from '../modeler/panels/NeighborIndexDefaultEditor';
 import { LookupTableEditor } from '../modeler/panels/LookupTableEditor';
 import { compileGraphWebGPU } from '../modeler/vpl/compiler/webgpu/compile';
@@ -1066,7 +1066,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   // updateAttribute, so a plain re-read of `model.attributes` wouldn't be
   // "default" anymore). Per-cell edits don't bump modelVersion (only
   // load/new do), so the snapshot survives table edits within a session.
-  const interactionTableDefaultsRef = useRef<Record<string, Record<string, Record<string, number>>>>({});
+  const interactionTableDefaultsRef = useRef<Record<string, { tableValues?: Record<string, Record<string, number>>; tableData?: number[] }>>({});
   const lastSnapshottedVersionRef = useRef<number>(-1);
 
   // F5: Simulator dimension overrides
@@ -3060,10 +3060,13 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     // those edits to recover the as-loaded values on Reset to Default.
     if (lastSnapshottedVersionRef.current !== modelVersion) {
       lastSnapshottedVersionRef.current = modelVersion;
-      const snap: Record<string, Record<string, Record<string, number>>> = {};
+      const snap: Record<string, { tableValues?: Record<string, Record<string, number>>; tableData?: number[] }> = {};
       for (const a of model.attributes) {
-        if (a.type === 'lookupTable' && a.tableValues) {
-          snap[a.id] = JSON.parse(JSON.stringify(a.tableValues));
+        if (a.type !== 'lookupTable') continue;
+        if (isMultiAxisTable(a) && a.tableData) {
+          snap[a.id] = { tableData: [...a.tableData] };
+        } else if (a.tableValues) {
+          snap[a.id] = { tableValues: JSON.parse(JSON.stringify(a.tableValues)) };
         }
       }
       interactionTableDefaultsRef.current = snap;
@@ -3216,16 +3219,13 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
         })(),
       } : undefined,
       // Lookup tables — sent whenever the model has any (independent of
-      // variegation; tag×tag tables need no faces). Row/col labels resolved
-      // from each axis key source.
+      // variegation; tag×tag tables need no faces). Legacy tables ship
+      // labels + sparse values; multi-axis tables ship dims + dense data
+      // (ONE shared builder — buildLookupTablePayload — so the shape can't
+      // drift from the worker's normalizer / the compilers' layouts).
       interactionTables: model.attributes
         .filter(a => a.isModelAttribute && a.type === 'lookupTable')
-        .map(a => ({
-          id: a.id,
-          rowLabels: resolveKeyLabels(a.rowKeySource, model),
-          colLabels: resolveKeyLabels(a.colKeySource, model),
-          values: a.tableValues || {},
-        })),
+        .map(a => buildLookupTablePayload(a, model)),
       indicators: (model.indicators || []).map(i => ({
         id: i.id, kind: i.kind, dataType: i.dataType,
         defaultValue: i.defaultValue, accumulationMode: i.accumulationMode,
@@ -3670,12 +3670,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
         } : undefined,
         interactionTables: model.attributes
           .filter(a => a.isModelAttribute && a.type === 'lookupTable')
-          .map(a => ({
-            id: a.id,
-            rowLabels: resolveKeyLabels(a.rowKeySource, model),
-            colLabels: resolveKeyLabels(a.colKeySource, model),
-            values: a.tableValues || {},
-          })),
+          .map(a => buildLookupTablePayload(a, model)),
         stopMessages: [...result.stopMessages, ...agentResult.stopMessages],
         updateMode: model.properties.updateMode,
         asyncScheme: model.properties.asyncScheme,
@@ -6489,13 +6484,26 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     attrId: string,
     tableValues: Record<string, Record<string, number>> | undefined,
     symmetric: boolean | undefined,
+    tableData?: number[],
+    tableRoll?: { seed: number; density: number },
   ) => {
     const changes: Partial<Attribute> = {};
     if (tableValues !== undefined) changes.tableValues = tableValues;
     if (symmetric !== undefined) changes.symmetric = symmetric;
+    if (tableData !== undefined) changes.tableData = tableData;
+    if (tableRoll !== undefined) changes.tableRoll = tableRoll;
     updateAttribute(attrId, changes);
-    if (tableValues !== undefined) {
-      const a = model.attributes.find(x => x.id === attrId);
+    const a = model.attributes.find(x => x.id === attrId);
+    if (tableData !== undefined && a && isMultiAxisTable(a)) {
+      // Multi-axis: ship dims + the NEW dense data (the payload builder reads
+      // the pre-dispatch attr, so pass the fresh data explicitly).
+      const p = buildLookupTablePayload(a, model);
+      workerRef.current?.postMessage({
+        type: 'updateLookupTable', attrId,
+        rowLabels: [], colLabels: [], values: {},
+        dims: p.dims, data: tableData,
+      });
+    } else if (tableValues !== undefined) {
       workerRef.current?.postMessage({
         type: 'updateLookupTable',
         attrId,
@@ -6524,15 +6532,26 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       if (!def) continue;
       // Deep clone — keep the snapshot intact so subsequent resets still work
       // after future edits.
-      const restored = JSON.parse(JSON.stringify(def));
-      updateAttribute(a.id, { tableValues: restored });
-      workerRef.current?.postMessage({
-        type: 'updateLookupTable',
-        attrId: a.id,
-        rowLabels: resolveKeyLabels(a.rowKeySource, model),
-        colLabels: resolveKeyLabels(a.colKeySource, model),
-        values: restored,
-      });
+      if (def.tableData && isMultiAxisTable(a)) {
+        const restored = [...def.tableData];
+        updateAttribute(a.id, { tableData: restored });
+        const p = buildLookupTablePayload(a, model);
+        workerRef.current?.postMessage({
+          type: 'updateLookupTable', attrId: a.id,
+          rowLabels: [], colLabels: [], values: {},
+          dims: p.dims, data: restored,
+        });
+      } else if (def.tableValues) {
+        const restored = JSON.parse(JSON.stringify(def.tableValues));
+        updateAttribute(a.id, { tableValues: restored });
+        workerRef.current?.postMessage({
+          type: 'updateLookupTable',
+          attrId: a.id,
+          rowLabels: resolveKeyLabels(a.rowKeySource, model),
+          colLabels: resolveKeyLabels(a.colKeySource, model),
+          values: restored,
+        });
+      }
     }
   };
 
@@ -6662,8 +6681,21 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     const out: Record<string, Record<string, Record<string, number>>> = {};
     let any = false;
     for (const a of model.attributes) {
-      if (a.type !== 'lookupTable' || !a.tableValues) continue;
+      if (a.type !== 'lookupTable' || !a.tableValues || isMultiAxisTable(a)) continue;
       out[a.id] = JSON.parse(JSON.stringify(a.tableValues));
+      any = true;
+    }
+    return any ? out : undefined;
+  };
+
+  // The axes-mode sibling: multi-axis tables snapshot their dense tableData
+  // (presets carry it under SimulationState.lookupTableData).
+  const snapshotLookupTableData = (): Record<string, number[]> | undefined => {
+    const out: Record<string, number[]> = {};
+    let any = false;
+    for (const a of model.attributes) {
+      if (a.type !== 'lookupTable' || !isMultiAxisTable(a) || !a.tableData) continue;
+      out[a.id] = [...a.tableData];
       any = true;
     }
     return any ? out : undefined;
@@ -6679,6 +6711,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
         {
           boundaryTreatment: model.properties.boundaryTreatment,
           interactionTables: snapshotInteractionTables(),
+          lookupTableData: snapshotLookupTableData(),
         },
       );
       const id = 'preset_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5);
@@ -6726,6 +6759,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
         {
           boundaryTreatment: model.properties.boundaryTreatment,
           interactionTables: snapshotInteractionTables(),
+          lookupTableData: snapshotLookupTableData(),
         },
       );
       const patch: Partial<Omit<Preset, 'id'>> = { name, state };
@@ -6846,6 +6880,23 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
           rowLabels: resolveKeyLabels(a?.rowKeySource, model),
           colLabels: resolveKeyLabels(a?.colKeySource, model),
           values: cloned,
+        });
+      }
+    }
+
+    // Restore MULTI-AXIS lookup tables (the axes-mode sibling — dense flat
+    // tableData per attribute). Same dual-apply: model state + the worker.
+    if (state.lookupTableData) {
+      for (const [attrId, data] of Object.entries(state.lookupTableData)) {
+        const a = model.attributes.find(x => x.id === attrId);
+        if (!a || !isMultiAxisTable(a) || !Array.isArray(data)) continue;
+        const cloned = [...data];
+        updateAttribute(attrId, { tableData: cloned });
+        const p = buildLookupTablePayload(a, model);
+        workerRef.current?.postMessage({
+          type: 'updateLookupTable', attrId,
+          rowLabels: [], colLabels: [], values: {},
+          dims: p.dims, data: cloned,
         });
       }
     }

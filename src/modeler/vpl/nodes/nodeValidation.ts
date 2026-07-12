@@ -9,6 +9,7 @@ import { buildVarMap, parseExpression, clampVisibleCount } from '../compiler/exp
 import { getActiveGraphKind } from '../graphState';
 import { VECTOR_LOWERED } from '../compiler/vectorAttr';
 import { multiAttrSlotIndices, slotAttrKey } from '../compiler/multiAttrExpand';
+import { isMultiAxisTable, resolveAxes, MAX_LOOKUP_TABLE_ENTRIES } from '../compiler/variegation';
 
 /** Return a list of human-readable issue strings for a node's configuration.
  *  Empty array = node is fully configured.
@@ -512,6 +513,20 @@ export function detectMissingConfig(
         const attr = model.attributes.find(a => a.id === tableId);
         if (!attr) issues.push('Selected Lookup Table no longer exists');
         else if (attr.type !== 'lookupTable') issues.push('Selected attribute is not a Lookup Table');
+        else if (nodeType === 'interactionTableMap' && isMultiAxisTable(attr)) {
+          // Table Map's shape is two parallel index arrays — a multi-axis
+          // table fits only when it has exactly 2 axes (the compilers emit an
+          // empty output otherwise).
+          const r = resolveAxes(attr, model);
+          if (r.axes.length !== 2) {
+            issues.push(`Table Map needs a 2-axis table (this one has ${r.axes.length} axes) — use Table Lookup instead`);
+          }
+        } else if (isMultiAxisTable(attr)) {
+          const r = resolveAxes(attr, model);
+          if (r.total > MAX_LOOKUP_TABLE_ENTRIES) {
+            issues.push(`Lookup Table too large (${r.total.toLocaleString()} entries > ${MAX_LOOKUP_TABLE_ENTRIES.toLocaleString()})`);
+          }
+        }
       }
       break;
     }

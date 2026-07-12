@@ -1141,18 +1141,30 @@ const ARRAY_NODE_EMITTERS: Record<string, NodeArrayEmitter> = {
       return null;
     }
     const out = allocArray(ctx, 'f32', 'arrITM', Math.min(myArr.maxLen, theirArr.maxLen));
-    if (!tableLayout) {
+    if (!tableLayout || (tableLayout.dims && tableLayout.dims.length !== 2)) {
+      // Tableless — or a multi-axis table with N≠2 axes (the node's shape is
+      // two parallel index arrays; nodeValidation badges it): empty output.
       ctx.lines.push(`  ${out.lenName} = 0;`);
       return out;
     }
     const off = tableLayout.wordOffset;
-    const colCount = tableLayout.colCount; // row-major stride
+    // Multi-axis N=2: clamped indices + intRange offsets (D-NDT-5).
+    // Legacy 2-axis: raw indices, byte-identical to the pre-N-D emit.
+    const ndDims = tableLayout.dims && tableLayout.dims.length === 2 ? tableLayout.dims : null;
+    const ndMins = ndDims ? (tableLayout.mins ?? []) : [];
+    const colCount = ndDims ? ndDims[1]! : tableLayout.colCount; // row-major stride
     const k = fresh(ctx, 'itm');
     const n = fresh(ctx, 'itmN');
+    const clampWgsl = (raw: string, axis: number): string => {
+      if (!ndDims) return raw;
+      const min = Math.floor(ndMins[axis] ?? 0) || 0;
+      const hi = Math.max(0, ndDims[axis]! - 1);
+      return `clamp(${raw}${min !== 0 ? ` - ${min}` : ''}, 0, ${hi})`;
+    };
     ctx.lines.push(`  let ${n}: i32 = min(${myArr.lenName}, ${theirArr.lenName});`);
     ctx.lines.push(`  for (var ${k}: i32 = 0; ${k} < ${n}; ${k} = ${k} + 1) {`);
-    ctx.lines.push(`    let _itmA_${k}: i32 = ${arrLoad(myArr, k)};`);
-    ctx.lines.push(`    let _itmB_${k}: i32 = ${arrLoad(theirArr, k)};`);
+    ctx.lines.push(`    let _itmA_${k}: i32 = ${clampWgsl(arrLoad(myArr, k), 0)};`);
+    ctx.lines.push(`    let _itmB_${k}: i32 = ${clampWgsl(arrLoad(theirArr, k), 1)};`);
     ctx.lines.push(
       `    ${out.name}[${k}] = bitcast<f32>(varAux[u32(${off} + _itmA_${k} * ${colCount} + _itmB_${k})]);`,
     );
@@ -2184,12 +2196,32 @@ const VALUE_NODE_EMITTERS: Record<string, NodeValueEmitter> = {
     if (!tableLayout) {
       return emitLet(ctx, 'f32', '0.0', 'li');
     }
+    const off = tableLayout.wordOffset;
+    if (tableLayout.dims && tableLayout.dims.length > 0) {
+      // MULTI-AXIS (N-D): flat = Σ clamp((axisₖ) − minₖ, 0, dimₖ−1)·strideₖ
+      // (per-axis saturating clamp — D-NDT-5; mirrors the JS + WASM emits).
+      const dims = tableLayout.dims;
+      const mins = tableLayout.mins ?? [];
+      const strides = new Array<number>(dims.length).fill(1);
+      for (let i = dims.length - 2; i >= 0; i--) strides[i] = strides[i + 1]! * dims[i + 1]!;
+      const terms: string[] = [];
+      for (let k = 0; k < dims.length; k++) {
+        const src = inputs[`axis_${k}`] ?? { expr: '0', type: 'i32' as WgslType };
+        const min = Math.floor(mins[k] ?? 0) || 0;
+        const hi = Math.max(0, dims[k]! - 1);
+        const raw = min !== 0 ? `(${castTo(src, 'i32')}) - ${min}` : `(${castTo(src, 'i32')})`;
+        const idx = `clamp(${raw}, 0, ${hi})`;
+        terms.push(strides[k] === 1 ? idx : `${idx} * ${strides[k]}`);
+      }
+      return emitLet(ctx, 'f32',
+        `bitcast<f32>(varAux[u32(${off} + ${terms.join(' + ')})])`, 'li');
+    }
+    // LEGACY 2-axis — byte-identical to the pre-N-D emit.
     const colCount = tableLayout.colCount; // row-major stride
     const labelA = inputs['labelA'] ?? { expr: '0', type: 'i32' as WgslType };
     const labelB = inputs['labelB'] ?? { expr: '0', type: 'i32' as WgslType };
     const a = castTo(labelA, 'i32');
     const b = castTo(labelB, 'i32');
-    const off = tableLayout.wordOffset;
     // No bounds clamp — out-of-range indices would read adjacent table memory.
     // Practical models stay within [0, rowCount)×[0, colCount). The CPU side
     // clamps via the worker's normalizeLookupTable; the GPU trusts the inputs
