@@ -130,6 +130,7 @@ import { OvLoadPresetNode } from './OvLoadPresetNode';
 import { OvReadIndicatorNode } from './OvReadIndicatorNode';
 import { OvGetGenerationNode } from './OvGetGenerationNode';
 import { OvCollectSampleNode } from './OvCollectSampleNode';
+import { OvCollectSpatialNode } from './OvCollectSpatialNode';
 import { OvClearSeriesNode } from './OvClearSeriesNode';
 import { OvSeriesStatNode } from './OvSeriesStatNode';
 import { OvSweepValuesNode } from './OvSweepValuesNode';
@@ -157,6 +158,7 @@ const ALL_NODES: NodeTypeDef[] = [
   OvReadIndicatorNode,
   OvGetGenerationNode,
   OvCollectSampleNode,
+  OvCollectSpatialNode,
   OvClearSeriesNode,
   OvSeriesStatNode,
   OvSweepValuesNode,

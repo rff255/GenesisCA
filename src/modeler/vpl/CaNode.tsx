@@ -2106,6 +2106,74 @@ function CaNodeComponent({ id, data }: NodeProps) {
           );
         })()}
 
+        {nodeData.nodeType === 'ovCollectSpatial' && (() => {
+          // The inverse filter of ovReadIndicator: SPATIAL indicators only.
+          const eligible = (model.indicators || []).filter(i =>
+            i.kind === 'linked' && i.xAxis && i.xAxis !== 'generation');
+          const sel = eligible.find(i => i.id === nodeData.config.indicatorId);
+          const isFreq = sel && (sel.linkedAggregation ?? 'frequency') === 'frequency';
+          const srcAttr = isFreq ? model.attributes.find(a => a.id === sel?.linkedAttributeId) : undefined;
+          const knownCats = srcAttr?.type === 'bool' ? ['false', 'true']
+            : srcAttr?.type === 'tag'
+              ? (sel?.trackedValues?.length ? sel.trackedValues : (srcAttr.tagOptions ?? []))
+              : null;
+          return (
+            <>
+              <select
+                className={styles.select}
+                value={(nodeData.config.indicatorId as string) || ''}
+                onChange={e => updateConfig('indicatorId', e.target.value)}
+                title="A spatial indicator (rows / columns / layers X-axis) — its whole per-position curve is captured."
+              >
+                <option value="">Select spatial indicator...</option>
+                {eligible.map(i => (
+                  <option key={i.id} value={i.id}>{i.name}</option>
+                ))}
+              </select>
+              {isFreq && (knownCats ? (
+                <select
+                  className={styles.select}
+                  value={(nodeData.config.category as string) || ''}
+                  onChange={e => updateConfig('category', e.target.value)}
+                  title="Which category's curve to capture (e.g. one solute of the chromatogram)."
+                >
+                  <option value="">Select category...</option>
+                  {knownCats.map(c => (
+                    <option key={c} value={c}>{c}</option>
+                  ))}
+                </select>
+              ) : (
+                <input
+                  className={styles.input}
+                  placeholder="Category (bucket key)..."
+                  value={(nodeData.config.category as string) ?? ''}
+                  onChange={e => updateConfig('category', e.target.value)}
+                  onMouseDown={stopDrag}
+                  onDoubleClick={stopAll}
+                />
+              ))}
+              <input
+                className={styles.input}
+                placeholder="Series name..."
+                value={(nodeData.config.series as string) ?? ''}
+                onChange={e => updateConfig('series', e.target.value)}
+                onMouseDown={stopDrag}
+                onDoubleClick={stopAll}
+                title="The spatial series this node appends one run-curve to."
+              />
+              <input
+                className={styles.input}
+                placeholder="Chart (group)..."
+                value={(nodeData.config.chart as string) ?? ''}
+                onChange={e => updateConfig('chart', e.target.value)}
+                onMouseDown={stopDrag}
+                onDoubleClick={stopAll}
+                title="Series with the same Chart name overlay on one aggregate chart (blank = own chart named after the series)."
+              />
+            </>
+          );
+        })()}
+
         {nodeData.nodeType === 'ovLoadPreset' && (
           <select
             className={styles.select}

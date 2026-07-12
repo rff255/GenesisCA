@@ -479,7 +479,12 @@ const properties = {
     'solvation). Gravity follows the paper\'s definition ("the probability of a cell ' +
     'moving to a position further down the column"): an additive downward push on the ' +
     'move into the open cell below, on the same baseline scale as J (Cheng & Kier ' +
-    '1995, JCICS 35:1054).',
+    '1995, JCICS 35:1054). NEW: the built-in Overseer experiment (the Experiments ' +
+    'panel\'s Run Experiment) automates the paper\'s replicate methodology — seeded ' +
+    'replicates each capturing the full chromatogram at the 600-iteration snapshot ' +
+    'AND at elution, aggregated live into mean ± σ curves (the statistically strong ' +
+    'solute-distribution picture a single stochastic run can\'t give), plus elution-' +
+    'time statistics in the Journal.',
   topology: '2d-grid',
   boundaryTreatment: 'torus',
   updateMode: 'asynchronous',
@@ -755,6 +760,93 @@ const presets = presetSpecs.map((spec, i) => ({
 }));
 
 // =============================================================================
+// OVERSEER GRAPH — the paper's replicate protocol, automated.
+//
+// The paper's chromatograms are ensemble results (many stochastic runs of the
+// same column), not single snapshots. This experiment reproduces that: N seeded
+// replicates, each capturing the FULL chromatogram curve (S1 + S2 population vs
+// column position, via Collect Spatial Sample) TWICE — at the paper's fixed
+// 600-iteration snapshot (Fig. 3) and at elution (the detector Stop Event, max
+// separation) — plus the elution generation as a scalar series. The Experiments
+// panel aggregates each chart to mean ± σ across the replicates: the
+// statistically strong solute-distribution picture a single noisy run can't give.
+// =============================================================================
+const OV_RUNS = 12;
+
+const ovGraphNodes = [];
+const ovGraphEdges = [];
+function ovNode(nodeType, config, col, row, label) {
+  const n = {
+    id: newId('ov'),
+    type: 'caNode',
+    position: { x: col * 250, y: row * 100 },
+    data: { nodeType, config },
+  };
+  if (label) n.data.label = label;
+  ovGraphNodes.push(n);
+  return n;
+}
+function ovEdge(srcNode, srcPort, tgtNode, tgtPort, category) {
+  ovGraphEdges.push({
+    id: newId('oe'),
+    source: srcNode.id,
+    target: tgtNode.id,
+    sourceHandle: `output_${category}_${srcPort}`,
+    targetHandle: `input_${category}_${tgtPort}`,
+  });
+}
+const ovV = (s, sp, t, tp) => ovEdge(s, sp, t, tp, 'value');
+const ovF = (s, sp, t, tp) => ovEdge(s, sp, t, tp, 'flow');
+
+// Two FIXED developmental time points (not detector-gated — Run Generations
+// runs the full count, so every replicate is captured at the SAME iteration,
+// which is what a meaningful ensemble average needs). The band separates
+// progressively; the aggregate of the two snapshots shows S1 outrunning S2 as
+// a mean ± σ curve — the statistically strong version of Fig. 3.
+const SNAP_A = 300, SNAP_B = 600;
+{
+  const expRoot = ovNode('experiment', {}, 0, 2);
+  const loop = ovNode('loop', { _port_count: String(OV_RUNS) }, 1, 2, `${OV_RUNS} replicates`);
+
+  const reset = ovNode('ovResetBoard', {}, 2, 3);
+  // Snapshot A — early separation (SNAP_A iterations).
+  const runA = ovNode('ovRunGenerations', { _port_count: String(SNAP_A) }, 3, 3, `Develop (${SNAP_A} it.)`);
+  const capA1 = ovNode('ovCollectSpatial', {
+    indicatorId: 'chromatogram', category: 'S1',
+    series: `S1 @ ${SNAP_A} it.`, chart: `Chromatogram @ ${SNAP_A} iterations`,
+  }, 4, 3);
+  const capA2 = ovNode('ovCollectSpatial', {
+    indicatorId: 'chromatogram', category: 'S2',
+    series: `S2 @ ${SNAP_A} it.`, chart: `Chromatogram @ ${SNAP_A} iterations`,
+  }, 5, 3);
+  // Snapshot B — the paper's Fig. 3 snapshot (SNAP_B iterations total).
+  const runB = ovNode('ovRunGenerations', { _port_count: String(SNAP_B - SNAP_A) }, 6, 3, `Develop (to ${SNAP_B} it.)`);
+  const capB1 = ovNode('ovCollectSpatial', {
+    indicatorId: 'chromatogram', category: 'S1',
+    series: `S1 @ ${SNAP_B} it.`, chart: `Chromatogram @ ${SNAP_B} iterations (Fig. 3)`,
+  }, 7, 3);
+  const capB2 = ovNode('ovCollectSpatial', {
+    indicatorId: 'chromatogram', category: 'S2',
+    series: `S2 @ ${SNAP_B} it.`, chart: `Chromatogram @ ${SNAP_B} iterations (Fig. 3)`,
+  }, 8, 3);
+
+  ovF(expRoot, 'do', loop, 'do');
+  ovF(loop, 'body', reset, 'do');
+  ovF(reset, 'next', runA, 'do');
+  ovF(runA, 'next', capA1, 'do');
+  ovF(capA1, 'next', capA2, 'do');
+  ovF(capA2, 'next', runB, 'do');
+  ovF(runB, 'next', capB1, 'do');
+  ovF(capB1, 'next', capB2, 'do');
+
+  // After the loop: a Journal note (the charts are the deliverable).
+  const logDone = ovNode('ovLog', {
+    text: `Aggregated ${OV_RUNS} replicate chromatograms at ${SNAP_A} & ${SNAP_B} iterations — see the mean ± σ charts above.`,
+  }, 2, 0);
+  ovF(loop, 'next', logDone, 'do');
+}
+
+// =============================================================================
 // ASSEMBLE & WRITE
 // =============================================================================
 const model = {
@@ -769,6 +861,9 @@ const model = {
   graphEdges,
   macroDefs: [],
   presets,
+  overseerConfig: { enabled: true, seedPolicy: 'sequential', baseSeed: 20000531 },
+  overseerGraphNodes: ovGraphNodes,
+  overseerGraphEdges: ovGraphEdges,
 };
 
 mkdirSync(dirname(OUT), { recursive: true });

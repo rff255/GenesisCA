@@ -407,6 +407,19 @@ export function detectMissingConfig(
     case 'ovSeriesStat':
       if (!String(config.series ?? '').trim()) issues.push('Name the sample series');
       break;
+    case 'ovCollectSpatial': {
+      // The inverse of ovReadIndicator: this one requires a SPATIAL indicator.
+      if (!String(config.series ?? '').trim()) issues.push('Name the spatial series');
+      const sInd = (model.indicators ?? []).find(i => i.id === config.indicatorId);
+      if (!sInd) { issues.push('Select a spatial indicator'); break; }
+      const isSpatial = sInd.kind === 'linked' && sInd.xAxis && sInd.xAxis !== 'generation';
+      if (!isSpatial) { issues.push('The indicator must have a spatial X-axis (rows / columns / layers)'); break; }
+      const spatialFreq = (sInd.linkedAggregation ?? 'frequency') === 'frequency';
+      if (spatialFreq && !String(config.category ?? '')) {
+        issues.push('Pick the category (series) to capture');
+      }
+      break;
+    }
     case 'ovSweepValues':
       if (config.mode !== 'linspace') {
         const anyVal = String(config.list ?? '').split(',').some(s => Number.isFinite(parseFloat(s.trim())));

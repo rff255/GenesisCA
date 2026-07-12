@@ -49,8 +49,9 @@ export interface OverseerCompileResult {
 /** Action node types the flow walk emits itself (their def.compile is ''). */
 const OV_ACTION_TYPES = new Set<string>([
   'ovResetBoard', 'ovRunGenerations', 'ovRunUntilStop', 'ovSetSeed',
-  'ovSetModelAttribute', 'ovLoadPreset', 'ovCollectSample', 'ovClearSeries',
-  'ovLog', 'ovStopExperiment', 'ovScreenshot', 'ovStartRecording', 'ovStopRecording',
+  'ovSetModelAttribute', 'ovLoadPreset', 'ovCollectSample', 'ovCollectSpatial',
+  'ovClearSeries', 'ovLog', 'ovStopExperiment', 'ovScreenshot',
+  'ovStartRecording', 'ovStopRecording',
 ]);
 
 export function compileOverseerGraph(
@@ -431,6 +432,11 @@ export function compileOverseerGraph(
         case 'ovCollectSample': {
           const value = resolveFlowInput(nodeId, 'value', stmt, emitted, inner, { fallback: '0' });
           stmt.push(`${inner}O.sample(${JSON.stringify(cfgStr(node, 'series', 'samples'))}, ${value}, ${JSON.stringify(cfgStr(node, 'scope', 'experiment'))});`);
+          break;
+        }
+        case 'ovCollectSpatial': {
+          const series = cfgStr(node, 'series', 'profile');
+          stmt.push(`${inner}O.sampleSpatial(${JSON.stringify(series)}, ${JSON.stringify(cfgStr(node, 'indicatorId'))}, ${JSON.stringify(cfgStr(node, 'category'))}, ${JSON.stringify(cfgStr(node, 'chart') || series)});`);
           break;
         }
         case 'ovClearSeries':

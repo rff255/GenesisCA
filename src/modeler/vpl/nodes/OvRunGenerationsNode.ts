@@ -1,13 +1,14 @@
 import type { NodeTypeDef } from '../types';
 
-/** Overseer action — advance the simulation N generations (awaited; internally
- *  batched so Abort stays responsive). A Stop Event / End Condition firing
- *  mid-run ends the advance early (journal-logged); use Run Until Stop when
- *  the stop IS the protocol. */
+/** Overseer action — advance the simulation exactly N generations (awaited;
+ *  internally batched so Abort stays responsive). This is a FIXED-count run: a
+ *  Stop Event / End Condition does NOT halt it (that's what Run Until Stop is
+ *  for), so every replicate reaches the same iteration — the fixed developmental
+ *  time point an ensemble average needs. */
 export const OvRunGenerationsNode: NodeTypeDef = {
   type: 'ovRunGenerations',
   label: 'Run Generations',
-  description: 'Advances the simulation N generations, then continues the experiment flow. A Stop Event or End Condition ends the advance early.',
+  description: 'Advances the simulation exactly N generations (a fixed-count run — a Stop Event does not cut it short; use Run Until Stop for detector-gated running).',
   category: 'output',
   color: '#3949ab',
   requirements: { overseer: true },
