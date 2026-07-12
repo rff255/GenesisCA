@@ -1,4 +1,5 @@
 import type { NodeTypeDef } from '../types';
+import { lookupNodeDims, lookupNodeMins } from './LookupInteractionNode';
 
 /** Vectorised Table Lookup over parallel index arrays.
  *
@@ -32,8 +33,6 @@ export const InteractionTableMapNode: NodeTypeDef = {
     const tableId = (config.tableId as string) || '';
     const myFaces = inputs['myFaces'] || '[]';
     const theirFaces = inputs['theirFaces'] || '[]';
-    // colCount = column key source's label count (row-major stride).
-    const colCount = Number(config._colCount) || 1;
     const out = `_v${nodeId}_vals`;
     if (!tableId) {
       // No table → output stays empty but at least the variable exists.
@@ -44,6 +43,35 @@ export const InteractionTableMapNode: NodeTypeDef = {
     const tbl = `_itm${nodeId}_t`;
     const a = `_itm${nodeId}_a`;
     const b = `_itm${nodeId}_b`;
+    const dims = lookupNodeDims(config);
+    if (dims) {
+      // Multi-axis table: supported ONLY when it has exactly 2 axes (the node's
+      // shape is two parallel index arrays). N≠2 is rejected by nodeValidation +
+      // the compilers' pre-resolve; emit an empty array defensively here.
+      if (dims.length !== 2) return `${out}.length = 0;\n`;
+      const mins = lookupNodeMins(config);
+      const d0 = Math.max(1, Math.floor(Number(dims[0]) || 1));
+      const d1 = Math.max(1, Math.floor(Number(dims[1]) || 1));
+      const m0 = Math.floor(Number(mins[0]) || 0);
+      const m1 = Math.floor(Number(mins[1]) || 0);
+      const rawA = m0 !== 0 ? `((${myFaces}[${i}]) | 0) - ${m0}` : `(${myFaces}[${i}]) | 0`;
+      const rawB = m1 !== 0 ? `((${theirFaces}[${i}]) | 0) - ${m1}` : `(${theirFaces}[${i}]) | 0`;
+      return [
+        `${out}.length = 0;`,
+        `const ${tbl} = _lookupTables[${JSON.stringify(tableId)}];`,
+        `if (${tbl}) {`,
+        `  const ${n} = Math.min(${myFaces}.length, ${theirFaces}.length);`,
+        `  for (let ${i} = 0; ${i} < ${n}; ${i}++) {`,
+        `    const ${a} = Math.min(Math.max(${rawA}, 0), ${d0 - 1});`,
+        `    const ${b} = Math.min(Math.max(${rawB}, 0), ${d1 - 1});`,
+        `    ${out}[${i}] = ${tbl}[${a} * ${d1} + ${b}] || 0;`,
+        `  }`,
+        `}`,
+      ].join(' ') + '\n';
+    }
+    // Legacy 2-axis — BYTE-IDENTICAL to the pre-N-D emit (no clamp).
+    // colCount = column key source's label count (row-major stride).
+    const colCount = Number(config._colCount) || 1;
     return [
       `${out}.length = 0;`,
       `const ${tbl} = _lookupTables[${JSON.stringify(tableId)}];`,

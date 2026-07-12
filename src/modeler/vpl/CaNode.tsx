@@ -17,6 +17,7 @@ import { typeDisplayName } from '../../model/typeLabels';
 import { cellAttrsOf, cellFieldAttrsOf } from '../../model/attributeScope';
 import { vectorPortDims } from './compiler/vectorAttr';
 import { MULTI_ATTR_TYPES, MULTI_ATTR_SET_TYPES, multiAttrExtraCount, buildExtraSlotPorts, resolveSlotAttr } from './compiler/multiAttrExpand';
+import { applyLookupAxisPorts } from './nodes/LookupInteractionNode';
 import {
   isConnectingGlobal,
   showPortLabelsGlobal,
@@ -483,6 +484,14 @@ function CaNodeComponent({ id, data }: NodeProps) {
     const extraSlots = buildExtraSlotPorts(nodeData.nodeType, nodeData.config, model);
     inputPorts = [...inputPorts, ...extraSlots.inputs];
     outputPorts = [...outputPorts, ...extraSlots.outputs];
+  }
+
+  // Table Lookup: shape the index inputs per the referenced table — legacy
+  // 2-axis keeps Row/Col (axis_* dropped); a MULTI-AXIS table shows one input
+  // per axis, labeled with the axis names. ONE shared shaper with
+  // effectivePorts.ts (applyLookupAxisPorts) so the two can't drift.
+  if (nodeData.nodeType === 'lookupInteraction') {
+    inputPorts = applyLookupAxisPorts(inputPorts, nodeData.config, model);
   }
 
   // Expression: show only `visibleCount` of the 8 input ports, relabelled with

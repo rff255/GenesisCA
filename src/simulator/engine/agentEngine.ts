@@ -180,8 +180,10 @@ export interface AgentLayoutExtras {
   modelAttrKeys?: string[];
   /** Number of indicator cells. */
   indicatorCount?: number;
-  /** Lookup-table id → { rows, cols } (row-major, stride cols). */
-  lookupTables?: Record<string, { rows: number; cols: number }>;
+  /** Lookup-table id → { rows, cols } (row-major, stride cols). MULTI-AXIS
+   *  (N-D) tables additionally carry `dims`/`mins` — the region is then sized
+   *  `Π dims` (the emitter clamps per axis); `dims` present ⇔ multi-axis. */
+  lookupTables?: Record<string, { rows: number; cols: number; dims?: number[]; mins?: number[] }>;
   /** Ordered agent-accessible cell-field attr ids. */
   fieldIds?: string[];
   /** Cell field length = W*H*D. */
@@ -373,11 +375,12 @@ export function computeAgentMemoryLayout(
   let lookupTableBytes = 0;
   const lookupTables = extras.lookupTables ?? {};
   for (const id of Object.keys(lookupTables)) {
-    const { rows, cols } = lookupTables[id]!;
+    const { rows, cols, dims } = lookupTables[id]!;
     off = alignTo(off, 8);
     lookupTableOffset[id] = off;
     lookupTableCols[id] = cols;
-    const n = Math.max(0, rows * cols);
+    // Multi-axis tables reserve Π dims cells; legacy reserve rows*cols.
+    const n = Math.max(0, dims && dims.length > 0 ? dims.reduce((a, b) => a * Math.max(1, b), 1) : rows * cols);
     off += n * 8;
     lookupTableBytes += n * 8;
   }

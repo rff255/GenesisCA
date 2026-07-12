@@ -33,7 +33,21 @@ export type LookupKeySource =
   /** An arbitrary user-defined ordered set of axis labels, edited directly on
    *  the Lookup Table definition page — not tied to a tag attribute or face
    *  palette. `labels` are the row/column names used as keys in `tableValues`. */
-  | { kind: 'custom'; labels: string[] };
+  | { kind: 'custom'; labels: string[] }
+  /** An integer-range axis: labels = `String(min) … String(max)` (dimension =
+   *  `max − min + 1`). The natural axis kind for count-indexed rule tables
+   *  (e.g. Accretor's face/edge/corner neighbour counts 0..6 / 0..12 / 0..8).
+   *  At lookup time the wired index is offset by `min` and saturating-clamped
+   *  into the axis (axes-mode tables only). */
+  | { kind: 'intRange'; min: number; max: number };
+
+/** One axis of a MULTI-AXIS (N-D) Lookup Table — see `Attribute.axes`.
+ *  `name` is the display label (axis-port label on the Table Lookup node +
+ *  header in the table editor); absent → "Axis N". */
+export interface LookupAxis {
+  name?: string;
+  source: LookupKeySource;
+}
 
 /** A single attribute definition (per-cell or global model attribute) */
 export interface Attribute {
@@ -112,8 +126,27 @@ export interface Attribute {
    *  axis uses the user labels. Values are stored as numbers regardless of
    *  `valueType` (bool → 0/1, tag → tag index, integer/float → the number), so
    *  no compiler/worker change is needed — the value type only drives the
-   *  editor widget. */
+   *  editor widget. LEGACY 2-AXIS STORAGE — ignored when `axes` is present
+   *  (multi-axis tables store `tableData` instead). */
   tableValues?: Record<string, Record<string, number>>;
+  /** MULTI-AXIS (N-D) Lookup Table: when present (1..6 axes), supersedes
+   *  `rowKeySource`/`colKeySource` — the table is indexed by one integer per
+   *  axis and stored in `tableData`. Absent → the legacy 2-axis path runs
+   *  byte-identically (no migration; the editor offers an explicit one-shot
+   *  "Convert to multi-axis"). Axis list discipline mirrors multi-attr slots:
+   *  append / remove-LAST only, edit in place — never reorder (the storage
+   *  layout and the Table Lookup node's `axis_k` ports are positional). */
+  axes?: LookupAxis[];
+  /** Multi-axis tables only: DENSE row-major values over `axes` in declared
+   *  order — `flat = ((i0·d1 + i1)·d2 + i2)…`, length = Π dims. Same number
+   *  encoding as `tableValues` (bool 0/1, tag index, int/float). Missing /
+   *  short arrays read as 0 (the normalizer zero-fills). */
+  tableData?: number[];
+  /** Multi-axis tables only, informational: the last "Randomize table" roll's
+   *  seed + density (seeds the editor fields; journaled by the Overseer's
+   *  Randomize Table node). The DATA (`tableData`) stays authoritative — this
+   *  never regenerates implicitly. */
+  tableRoll?: { seed: number; density: number };
   /** Lookup Table model attributes only: the data TYPE of the table's cell
    *  values. Absent → `'float'` (Decimal), the historical behaviour. Restricted
    *  to the scalar-numeric types that fit one stored number exactly on all
@@ -598,6 +631,11 @@ export interface SimulationState {
    *  Field name retained as `interactionTables` for back-compat with presets
    *  saved before the Lookup Table rename. */
   interactionTables?: Record<string, Record<string, Record<string, number>>>;
+  /** MULTI-AXIS lookup-table overrides (the axes-mode sibling of
+   *  `interactionTables`): outer key = attribute id, value = the dense
+   *  row-major `tableData` flat array. Legacy 2-axis tables keep riding
+   *  `interactionTables`; old presets load unchanged. */
+  lookupTableData?: Record<string, number[]>;
 }
 
 /** A named snapshot of model-attribute values (always) and optionally the cell

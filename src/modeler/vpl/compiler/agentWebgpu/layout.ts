@@ -178,8 +178,10 @@ export interface AgentWebGPULayout {
   /** Model-attribute key → its element slot in the `auxF32` buffer (Get Model
    *  Attribute). Color attrs occupy 3 slots keyed `<id>_r`/`_g`/`_b`. */
   modelAttrSlot: Record<string, number>;
-  /** Lookup-table id → its base/dims within `auxF32` (Table Lookup). Row-major. */
-  lookupTables: Record<string, { base: number; rowCount: number; colCount: number }>;
+  /** Lookup-table id → its base/dims within `auxF32` (Table Lookup). Row-major.
+   *  MULTI-AXIS (N-D) tables carry `dims`/`mins` (region `Π dims`, indexed
+   *  `Σ idxₖ·strideₖ`); `dims` present ⇔ multi-axis. */
+  lookupTables: Record<string, { base: number; rowCount: number; colCount: number; dims?: number[]; mins?: number[] }>;
   /** Total f32 elements in the `auxF32` buffer (model attrs + lookup tables).
    *  0 ⇒ no aux buffer (no Get Model Attribute / Table Lookup). */
   auxF32Len: number;
@@ -218,8 +220,9 @@ export interface AgentWebGPUExtras {
   /** Ordered model-attribute keys (scalar attrs as `<id>`; color attrs as the
    *  three `<id>_r`/`_g`/`_b` keys). Each gets one f32 slot in `auxF32`. */
   modelAttrKeys?: string[];
-  /** Lookup tables (id → row/col dims). Appended to `auxF32` after the model attrs. */
-  lookupTables?: Array<{ id: string; rowCount: number; colCount: number }>;
+  /** Lookup tables (id → row/col dims; multi-axis tables carry `dims`/`mins`).
+   *  Appended to `auxF32` after the model attrs. */
+  lookupTables?: Array<{ id: string; rowCount: number; colCount: number; dims?: number[]; mins?: number[] }>;
   /** Number of standalone-indicator slots (the `indicators` atomic buffer). */
   indicatorCount?: number;
   /** Per-agent bond capacity (the ragged bond store stride). 0/absent ⇒ no store. */
@@ -288,12 +291,20 @@ export function computeAgentWebGPULayout(
   const modelAttrSlot: Record<string, number> = {};
   let auxOff = 0;
   for (const key of modelAttrKeys) { modelAttrSlot[key] = auxOff; auxOff += 1; }
-  const lookupTables: Record<string, { base: number; rowCount: number; colCount: number }> = {};
+  const lookupTables: Record<string, { base: number; rowCount: number; colCount: number; dims?: number[]; mins?: number[] }> = {};
   const lookupTableIds: string[] = [];
   for (const t of lookupTablesIn) {
-    lookupTables[t.id] = { base: auxOff, rowCount: t.rowCount, colCount: t.colCount };
-    lookupTableIds.push(t.id);
-    auxOff += t.rowCount * t.colCount;
+    if (t.dims && t.dims.length > 0) {
+      // Multi-axis: region sized Π dims (the emitter clamps per axis).
+      const dims = t.dims.map(d => Math.max(1, Math.floor(d) || 1));
+      lookupTables[t.id] = { base: auxOff, rowCount: t.rowCount, colCount: t.colCount, dims, mins: t.mins ?? dims.map(() => 0) };
+      lookupTableIds.push(t.id);
+      auxOff += dims.reduce((a, b) => a * b, 1);
+    } else {
+      lookupTables[t.id] = { base: auxOff, rowCount: t.rowCount, colCount: t.colCount };
+      lookupTableIds.push(t.id);
+      auxOff += t.rowCount * t.colCount;
+    }
   }
   const auxF32Len = auxOff;
 

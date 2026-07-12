@@ -60,7 +60,7 @@ import { cellFieldAttrsOf, cellFieldWriteAttrsOf, agentAttrsOf } from '../../../
 import { readCategoricalEntries, readCategoricalDefault } from '../../nodes/CategoricalColorNode';
 import { readColorScaleStops } from '../../nodes/ColorScaleNode';
 import { viewCosHalf } from '../../nodes/GetAgentsInViewNode';
-import { resolveKeyLabels } from '../variegation';
+import { resolveKeyLabels, resolveAxes, isMultiAxisTable } from '../variegation';
 import { computeAgentWebGPULayout, type AgentWebGPULayout } from './layout';
 import { resolveMaxBonds } from '../../../../model/centerBased';
 import { encodeAttrValue } from '../../../../model/attrValueEncoding';
@@ -1287,14 +1287,37 @@ function auxRead(ctx: AgentWgpuCtx, key: string): string {
 }
 
 /** Table Lookup — index a Lookup Table by (row, col) → a float from the auxF32
- *  table region. Row-major `tableBase + row*colCount + col`. */
+ *  table region. Row-major `tableBase + row*colCount + col`. MULTI-AXIS tables:
+ *  per-axis saturating clamp + `Σ idxₖ·strideₖ` (D-NDT-5).
+ *  NB the legacy ports are `labelA`/`labelB` (the node def's ids) — this
+ *  emitter used to read `'row'`/`'col'`, which never exist, so BOTH indices
+ *  resolved to the default 0 and the lookup always read the clamped [0,0]
+ *  cell on the agent-WebGPU target (pre-existing bug, fixed with the N-D
+ *  generalization; lattice + agentWasm always used the correct ids). */
 function emitLookupInteraction(ctx: AgentWgpuCtx, node: GraphNode): ValueRef {
   const tableId = (node.data.config?.['tableId'] as string) || (node.data.config?.['attributeId'] as string) || '';
   const tbl = ctx.layout.lookupTables?.[tableId];
   if (!tbl) return emitLet(ctx, 'f32', '0.0', 'li');
   ctx.usesAux = true;
-  const row = castTo(resolveValueInput(ctx, node, 'row', 0), 'i32');
-  const col = castTo(resolveValueInput(ctx, node, 'col', 0), 'i32');
+  if (tbl.dims && tbl.dims.length > 0) {
+    const dims = tbl.dims;
+    const mins = tbl.mins ?? [];
+    const strides = new Array<number>(dims.length).fill(1);
+    for (let i = dims.length - 2; i >= 0; i--) strides[i] = strides[i + 1]! * dims[i + 1]!;
+    const terms: string[] = [];
+    for (let k = 0; k < dims.length; k++) {
+      const src = castTo(resolveValueInput(ctx, node, `axis_${k}`, 0), 'i32');
+      const min = Math.floor(mins[k] ?? 0) || 0;
+      const hi = Math.max(0, dims[k]! - 1);
+      const idx = `clamp((${src})${min !== 0 ? ` - ${min}` : ''}, 0, ${hi})`;
+      terms.push(strides[k] === 1 ? `u32(${idx})` : `u32(${idx}) * ${strides[k]}u`);
+    }
+    const o = fresh(ctx, 'liO');
+    ctx.lines.push(`  let ${o}: u32 = ${tbl.base}u + ${terms.join(' + ')};`);
+    return emitLet(ctx, 'f32', `auxF32[${o}]`, 'li');
+  }
+  const row = castTo(resolveValueInput(ctx, node, 'labelA', 0), 'i32');
+  const col = castTo(resolveValueInput(ctx, node, 'labelB', 0), 'i32');
   const r = fresh(ctx, 'liR'), c = fresh(ctx, 'liC'), o = fresh(ctx, 'liO');
   ctx.lines.push(`  let ${r}: i32 = clamp(${row}, 0, ${tbl.rowCount - 1});`);
   ctx.lines.push(`  let ${c}: i32 = clamp(${col}, 0, ${tbl.colCount - 1});`);
@@ -3487,12 +3510,19 @@ export function agentWebGPUExtrasOf(model: CAModel) {
     if (a.type === 'color') { modelAttrKeys.push(`${a.id}_r`, `${a.id}_g`, `${a.id}_b`); }
     else modelAttrKeys.push(a.id);
   }
-  const lookupTables: Array<{ id: string; rowCount: number; colCount: number }> = [];
+  const lookupTables: Array<{ id: string; rowCount: number; colCount: number; dims?: number[]; mins?: number[] }> = [];
   for (const a of model.attributes ?? []) {
     if (a.type !== 'lookupTable') continue;
-    const rowCount = Math.max(1, resolveKeyLabels(a.rowKeySource, model).length);
-    const colCount = Math.max(1, resolveKeyLabels(a.colKeySource, model).length);
-    lookupTables.push({ id: a.id, rowCount, colCount });
+    if (isMultiAxisTable(a)) {
+      // Multi-axis: geometry via resolveAxes (layout-lockstep with the CPU
+      // store + the emitter — one resolution).
+      const r = resolveAxes(a, model);
+      lookupTables.push({ id: a.id, rowCount: r.dims[0] ?? 1, colCount: r.dims[1] ?? 1, dims: r.dims, mins: r.mins });
+    } else {
+      const rowCount = Math.max(1, resolveKeyLabels(a.rowKeySource, model).length);
+      const colCount = Math.max(1, resolveKeyLabels(a.colKeySource, model).length);
+      lookupTables.push({ id: a.id, rowCount, colCount });
+    }
   }
   const indicatorCount = (model.indicators ?? []).length;
   // STEP 3: use the PROFILE-AWARE resolver (Bonds=off ⇒ 0) so the GPU agent

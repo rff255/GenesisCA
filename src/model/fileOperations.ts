@@ -544,6 +544,9 @@ export function serializePreset(
      *  simulator, not just the model's defaults. Caller is responsible for the
      *  deep clone — we just store the reference into the SimulationState. */
     interactionTables?: Record<string, Record<string, Record<string, number>>>;
+    /** MULTI-AXIS lookup tables: attribute id → the dense row-major tableData
+     *  flat array (the axes-mode sibling of `interactionTables`). */
+    lookupTableData?: Record<string, number[]>;
   },
 ): SimulationState {
   const out: SimulationState = { schemaVersion: SCHEMA_VERSION, modelAttrs: { ...workerState.modelAttrs } };
@@ -555,6 +558,9 @@ export function serializePreset(
   out.gridDepth = workerState.depth ?? 1;   // 3D Grid CA
   if (modelStructure?.interactionTables && Object.keys(modelStructure.interactionTables).length > 0) {
     out.interactionTables = modelStructure.interactionTables;
+  }
+  if (modelStructure?.lookupTableData && Object.keys(modelStructure.lookupTableData).length > 0) {
+    out.lookupTableData = modelStructure.lookupTableData;
   }
   if (opts.includeGrid) {
     // Presets also store starting configurations — skip generation + indicators

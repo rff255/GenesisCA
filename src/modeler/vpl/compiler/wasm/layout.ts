@@ -25,7 +25,7 @@
  */
 
 import type { CAModel } from '../../../../model/types';
-import { FACE_SLOT_COUNT, resolveKeyLabels } from '../variegation';
+import { FACE_SLOT_COUNT, resolveKeyLabels, resolveAxes, isMultiAxisTable } from '../variegation';
 import { hasGlyphsInModel } from '../glyphsUsage';
 import { expandVectorAttributes } from '../vectorAttr';
 
@@ -60,11 +60,17 @@ export interface VariegatedLayoutInputs {
 /** Lookup Table memory-region inputs. Decoupled from variegation — a table can
  *  be keyed by tag attributes with no faces at all. Each table gets its own
  *  contiguous row-major f64 region sized `rowCount * colCount * 8` bytes,
- *  indexed `(row * colCount + col)`. */
+ *  indexed `(row * colCount + col)`. MULTI-AXIS (N-D) tables carry `dims` +
+ *  `mins` instead (region sized `Π dims * 8`, indexed `Σ idxₖ·strideₖ`);
+ *  `dims` present ⇔ multi-axis — the emitters branch on it. */
 export interface LookupTableLayoutInput {
   id: string;
   rowCount: number;
   colCount: number;
+  /** Multi-axis only: per-axis dimensions (declared axis order, row-major). */
+  dims?: number[];
+  /** Multi-axis only: per-axis intRange index offsets (0 for label axes). */
+  mins?: number[];
 }
 
 export interface MemoryLayout {
@@ -156,8 +162,10 @@ export interface MemoryLayout {
    *  plus its `rowCount`/`colCount` dimensions (region sized
    *  `rowCount * colCount * 8`, indexed `[row * colCount + col]`). Keyed by
    *  attribute id. Allocated for every lookupTable attr regardless of
-   *  variegation; empty map when the model has none. */
-  interactionTableOffsets: Record<string, { offset: number; rowCount: number; colCount: number }>;
+   *  variegation; empty map when the model has none. MULTI-AXIS tables carry
+   *  `dims`/`mins` (region `Π dims * 8`, indexed `Σ idxₖ·strideₖ`); `dims`
+   *  present ⇔ multi-axis. */
+  interactionTableOffsets: Record<string, { offset: number; rowCount: number; colCount: number; dims?: number[]; mins?: number[] }>;
 
   /** Per-cell-iteration scratch region (bump-pointer allocator).
    *  Used by array-producing emitters (filterNeighbors, joinNeighbors,
@@ -370,13 +378,21 @@ export function computeMemoryLayout(
   // variegation (tag×tag tables need no faces). Each is row-major f64, sized
   // rowCount*colCount*8, indexed (row*colCount + col). Stable per-table dims
   // baked at layout time; values are upload-only.
-  const interactionTableOffsets: Record<string, { offset: number; rowCount: number; colCount: number }> = {};
+  const interactionTableOffsets: Record<string, { offset: number; rowCount: number; colCount: number; dims?: number[]; mins?: number[] }> = {};
   for (const t of lookupTables) {
     const rowCount = Math.max(1, t.rowCount);
     const colCount = Math.max(1, t.colCount);
     off = alignTo(off, 8);
-    interactionTableOffsets[t.id] = { offset: off, rowCount, colCount };
-    off += rowCount * colCount * 8;
+    if (t.dims && t.dims.length > 0) {
+      // Multi-axis: region sized Π dims × 8 (dims floor at 1 like row/col).
+      const dims = t.dims.map(d => Math.max(1, Math.floor(d) || 1));
+      const mins = dims.map((_, i) => Math.floor(t.mins?.[i] ?? 0) || 0);
+      interactionTableOffsets[t.id] = { offset: off, rowCount, colCount, dims, mins };
+      off += dims.reduce((a, b) => a * b, 1) * 8;
+    } else {
+      interactionTableOffsets[t.id] = { offset: off, rowCount, colCount };
+      off += rowCount * colCount * 8;
+    }
   }
 
   // Scratch region for per-cell array allocation (bump-pointer reset per
@@ -452,13 +468,21 @@ export function computeLayoutFromModel(
   }
   // Lookup tables — every lookupTable model attr, dims resolved per axis key
   // source (face palette or tag attribute). Independent of variegation.
+  // Multi-axis tables resolve through resolveAxes (the single source of truth
+  // shared with every other layout/emit consumer — layout-lockstep).
   const lookupTables: LookupTableLayoutInput[] = model.attributes
     .filter(a => a.isModelAttribute && a.type === 'lookupTable')
-    .map(a => ({
-      id: a.id,
-      rowCount: resolveKeyLabels(a.rowKeySource, model).length || 1,
-      colCount: resolveKeyLabels(a.colKeySource, model).length || 1,
-    }));
+    .map(a => {
+      if (isMultiAxisTable(a)) {
+        const r = resolveAxes(a, model);
+        return { id: a.id, rowCount: r.dims[0] ?? 1, colCount: r.dims[1] ?? 1, dims: r.dims, mins: r.mins };
+      }
+      return {
+        id: a.id,
+        rowCount: resolveKeyLabels(a.rowKeySource, model).length || 1,
+        colCount: resolveKeyLabels(a.colKeySource, model).length || 1,
+      };
+    });
   return computeMemoryLayout(
     cellAttrs.map(a => ({ id: a.id, type: a.type, isModelAttribute: false, defaultValue: a.defaultValue, tagOptions: a.tagOptions })),
     modelAttrs.map(a => ({ id: a.id, type: a.type, isModelAttribute: true, defaultValue: a.defaultValue, tagOptions: a.tagOptions })),

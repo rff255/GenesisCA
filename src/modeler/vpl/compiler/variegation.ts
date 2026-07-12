@@ -9,7 +9,7 @@
  *  three compile targets. Per the parity contract in the implementation
  *  plan, every consumer imports from this module — never re-derives. */
 
-import type { CAModel, LookupKeySource, Neighborhood } from '../../../model/types';
+import type { Attribute, CAModel, LookupAxis, LookupKeySource, Neighborhood } from '../../../model/types';
 
 /** Canonical 8-slot face layout. Index = face slot ID; value = tag name.
  *  Face slot order is clockwise starting from N. The rotation arithmetic
@@ -173,6 +173,14 @@ export function resolveKeyLabels(
   if (!source) return [];
   if (source.kind === 'single') return ['value'];
   if (source.kind === 'custom') return dedupeCustomLabels(source.labels);
+  if (source.kind === 'intRange') {
+    const min = Number.isFinite(source.min) ? Math.floor(source.min) : 0;
+    const rawMax = Number.isFinite(source.max) ? Math.floor(source.max) : min;
+    const max = Math.max(min, Math.min(rawMax, min + MAX_INT_RANGE_SPAN - 1));
+    const out: string[] = [];
+    for (let v = min; v <= max; v++) out.push(String(v));
+    return out;
+  }
   if (source.kind === 'facePalette') {
     const pal = model.variegatedCells?.facePalettes.find(p => p.id === source.paletteId);
     return pal ? ['none', ...pal.labels] : [];
@@ -203,6 +211,271 @@ export function normalizeLookupTable(
     for (let j = 0; j < cols; j++) {
       const v = row[colLabels[j]!];
       if (typeof v === 'number') out[i * cols + j] = v;
+    }
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// MULTI-AXIS (N-D) Lookup Tables — see docs/PLAN_ND_LOOKUP_TABLES.md.
+// `resolveAxes` is the single source of truth for an N-D table's geometry
+// (dims / strides / mins / labels); EVERY consumer (all 5 compilers, the
+// worker payload builders, the editor, validation) derives from it — never
+// re-derives — so the baked emit offsets and the runtime buffer layout can't
+// desync (the layout-lockstep discipline). Legacy 2-axis tables (no `axes`)
+// resolve as N=2 with numbers identical to the historical
+// `resolveKeyLabels(rowKeySource)/resolveKeyLabels(colKeySource)` pair.
+// ---------------------------------------------------------------------------
+
+/** Hard cap on axis count (the Table Lookup node carries `axis_0..axis_5`
+ *  static ports — the expression-node sliced-static-ports pattern). */
+export const MAX_LOOKUP_AXES = 6;
+/** Hard cap on one `intRange` axis' label count (min..max span). */
+export const MAX_INT_RANGE_SPAN = 4096;
+/** Hard cap on a table's total entry count (8 MB as f64 in WASM memory /
+ *  4 MB as f32 in the GPU varAux buffer). The editor warns far earlier. */
+export const MAX_LOOKUP_TABLE_ENTRIES = 1048576;
+
+export interface ResolvedLookupAxis {
+  /** Display name (axis-port label + editor header). */
+  name: string;
+  /** Ordered labels (intRange axes: `String(min)..String(max)`). */
+  labels: string[];
+  /** Axis dimension (`labels.length || 1` — an unresolved axis degenerates to 1). */
+  dim: number;
+  /** Index offset: a wired lookup index is `value - min` (0 for label axes). */
+  min: number;
+}
+
+export interface ResolvedLookupAxes {
+  axes: ResolvedLookupAxis[];
+  dims: number[];
+  mins: number[];
+  /** Row-major strides over `axes` in declared order (last axis contiguous). */
+  strides: number[];
+  /** Π dims — the flat table length. */
+  total: number;
+  /** True when `attr.axes` drove the resolution (multi-axis mode); false =
+   *  the legacy rowKeySource/colKeySource pair resolved as N=2. */
+  isMultiAxis: boolean;
+}
+
+/** True when the attribute is a multi-axis (N-D) lookup table. */
+export function isMultiAxisTable(attr: Pick<Attribute, 'axes'> | undefined): boolean {
+  return !!attr?.axes && attr.axes.length > 0;
+}
+
+/** Resolve a Lookup Table's full axis geometry — multi-axis (`attr.axes`) or
+ *  legacy 2-axis (rowKeySource/colKeySource as N=2). */
+export function resolveAxes(
+  attr: Pick<Attribute, 'axes' | 'rowKeySource' | 'colKeySource'>,
+  model: CAModel,
+): ResolvedLookupAxes {
+  const multi = isMultiAxisTable(attr);
+  const list: Array<{ name?: string; source: LookupKeySource | undefined }> = multi
+    ? (attr.axes as LookupAxis[]).slice(0, MAX_LOOKUP_AXES)
+    : [{ source: attr.rowKeySource }, { source: attr.colKeySource }];
+  const axes: ResolvedLookupAxis[] = list.map((ax, i) => {
+    const labels = resolveKeyLabels(ax.source, model);
+    const src = ax.source;
+    const min = src?.kind === 'intRange' && Number.isFinite(src.min) ? Math.floor(src.min) : 0;
+    const fallback = multi ? `Axis ${i}` : (i === 0 ? 'Row' : 'Col');
+    return { name: ax.name || fallback, labels, dim: labels.length || 1, min };
+  });
+  const dims = axes.map(a => a.dim);
+  const strides = new Array<number>(dims.length).fill(1);
+  for (let i = dims.length - 2; i >= 0; i--) strides[i] = strides[i + 1]! * dims[i + 1]!;
+  const total = dims.reduce((a, b) => a * b, 1);
+  return { axes, dims, mins: axes.map(a => a.min), strides, total, isMultiAxis: multi };
+}
+
+/** The worker-facing table payload shape (mirrors the worker's
+ *  `InteractionTablePayload`): legacy tables ship labels + sparse values,
+ *  multi-axis tables ship `dims` + the dense `data`. */
+export interface LookupTablePayloadLike {
+  rowLabels?: readonly string[];
+  colLabels?: readonly string[];
+  values?: Record<string, Record<string, number>>;
+  dims?: readonly number[];
+  data?: readonly number[];
+}
+
+/** Payload-level normalizer — the N-D-aware sibling of `normalizeLookupTable`
+ *  (which stays verbatim for the legacy 2-axis shape). Dense multi-axis data is
+ *  length-clamped + zero-filled + non-finite-scrubbed so a short/hand-edited
+ *  `tableData` can never leak NaN into the sim. */
+export function normalizeLookupTablePayload(p: LookupTablePayloadLike): Float64Array {
+  if (p.dims && p.dims.length > 0) {
+    const total = p.dims.reduce((a, b) => a * Math.max(1, Math.floor(b) || 1), 1);
+    const out = new Float64Array(total);
+    const src = p.data;
+    if (src) {
+      const n = Math.min(total, src.length);
+      for (let i = 0; i < n; i++) {
+        const v = src[i];
+        if (typeof v === 'number' && Number.isFinite(v)) out[i] = v;
+      }
+    }
+    return out;
+  }
+  return normalizeLookupTable(p.values, p.rowLabels ?? [], p.colLabels ?? []);
+}
+
+/** Build the worker `interactionTables` payload entry for one lookup-table
+ *  model attribute (used by SimulatorView's init/recompile builders and the
+ *  updateLookupTable posts — ONE builder so the shipped shape can't drift). */
+export function buildLookupTablePayload(
+  attr: Attribute,
+  model: CAModel,
+): { id: string; rowLabels: string[]; colLabels: string[]; values: Record<string, Record<string, number>>; dims?: number[]; data?: number[] } {
+  if (isMultiAxisTable(attr)) {
+    const r = resolveAxes(attr, model);
+    return { id: attr.id, rowLabels: [], colLabels: [], values: {}, dims: r.dims, data: attr.tableData ? [...attr.tableData] : [] };
+  }
+  return {
+    id: attr.id,
+    rowLabels: resolveKeyLabels(attr.rowKeySource, model),
+    colLabels: resolveKeyLabels(attr.colKeySource, model),
+    values: attr.tableValues || {},
+  };
+}
+
+/** The seeded random-fill value policy: how a non-zero entry's value is drawn. */
+export interface TableFillPolicy {
+  /** The table's `valueType` (absent ⇒ 'float'). */
+  valueType: string;
+  /** integer/tag: the count of distinct NON-ZERO values (entries drawn
+   *  uniformly from 1..valueCount). tag ⇒ tagOptions.length − 1. */
+  valueCount: number;
+}
+
+/** Deterministic seeded random table fill — THE one implementation shared by
+ *  the editor's "Randomize table" button and the Overseer's Randomize Table
+ *  node (D-NDT-6). xorshift32 (13/17/5, the house PRNG), always exactly one
+ *  draw per entry plus one value draw per non-zero entry, so the output is a
+ *  pure function of (seed, density, total, policy) on any machine.
+ *  `density` = P(entry ≠ 0); values: bool → 1, integer/tag → uniform over
+ *  1..valueCount, float → uniform (0,1). */
+export function randomFillTableData(
+  total: number,
+  seed: number,
+  density: number,
+  policy: TableFillPolicy,
+): number[] {
+  let rs = (seed >>> 0) || 0x12345678;
+  const next = () => {
+    rs = (rs ^ (rs << 13)) >>> 0;
+    rs = (rs ^ (rs >>> 17)) >>> 0;
+    rs = (rs ^ (rs << 5)) >>> 0;
+    return rs / 4294967296;
+  };
+  const d = Math.min(1, Math.max(0, density));
+  const vt = policy.valueType || 'float';
+  const count = Math.max(1, Math.floor(policy.valueCount) || 1);
+  const out = new Array<number>(Math.max(0, total | 0));
+  for (let i = 0; i < out.length; i++) {
+    if (next() < d) {
+      if (vt === 'bool') { next(); out[i] = 1; }
+      else if (vt === 'float') out[i] = next();
+      else out[i] = 1 + Math.floor(next() * count);
+    } else out[i] = 0;
+  }
+  return out;
+}
+
+/** Structurally remap a dense `tableData` across an AXES-LIST change (the
+ *  reducer cascade for editing a multi-axis table's own axes): per-axis
+ *  label-NAME matching (which covers intRange grow/shrink/shift for free —
+ *  intRange labels are the stringified values) with the index-paired rename
+ *  heuristic for `custom` axes; appended axes place the old data at index 0;
+ *  removed (trailing — the remove-LAST discipline) axes keep the slice at
+ *  index 0. Deterministic; unmatched labels zero-fill. */
+export function remapTableDataForAxesChange(
+  data: readonly number[] | undefined,
+  oldResolved: ResolvedLookupAxes,
+  newResolved: ResolvedLookupAxes,
+  oldAxes: readonly LookupAxis[] | undefined,
+  newAxes: readonly LookupAxis[] | undefined,
+): number[] {
+  const oldN = oldResolved.axes.length;
+  const newN = newResolved.axes.length;
+  let work: number[] = data ? [...data] : new Array<number>(oldResolved.total).fill(0);
+  let dims = oldResolved.dims.slice();
+  // 1. Drop removed trailing axes (collapse each to dim 1 keeping index 0 —
+  //    trailing 1-dims don't change the flat layout, so they just fall off).
+  if (newN < oldN) {
+    for (let i = oldN - 1; i >= newN; i--) {
+      work = remapTableDataAxis(work, dims, i, [0]);
+      dims[i] = 1;
+    }
+    dims = dims.slice(0, newN);
+  }
+  // 2. Appended axes: trailing 1-dims leave the flat layout unchanged.
+  while (dims.length < newN) dims.push(1);
+  // 3. Per-axis remap to the new labels.
+  for (let i = 0; i < newN; i++) {
+    const newLabels = newResolved.axes[i]!.labels.length > 0 ? newResolved.axes[i]!.labels : ['value'];
+    let indexMap: number[];
+    if (i >= oldN) {
+      // Appended axis: old data lands at index 0, the rest zero-fills.
+      indexMap = newLabels.map((_, j) => (j === 0 ? 0 : -1));
+    } else {
+      const oldLabels = oldResolved.axes[i]!.labels.length > 0 ? oldResolved.axes[i]!.labels : ['value'];
+      const isCustom = oldAxes?.[i]?.source?.kind === 'custom' && newAxes?.[i]?.source?.kind === 'custom';
+      indexMap = newLabels.map((name, j) => {
+        const oi = oldLabels.indexOf(name);
+        if (oi >= 0) return oi;
+        // Custom axes: index-paired rename heuristic (same as the legacy
+        // tableValues cascade) — the label at the same position was renamed.
+        if (isCustom && oldLabels[j] !== undefined && !newLabels.includes(oldLabels[j]!)) return j;
+        return -1;
+      });
+    }
+    const identity = indexMap.length === dims[i] && indexMap.every((v, j) => v === j);
+    if (identity) continue;
+    work = remapTableDataAxis(work, dims, i, indexMap);
+    dims[i] = indexMap.length;
+  }
+  return work;
+}
+
+/** Structurally remap a dense `tableData` along ONE axis (the N-D analogue of
+ *  the label-keyed `tableValues` remap cascades): `indexMap[newIdx] = oldIdx`
+ *  (or -1/undefined ⇒ the new slot zero-fills). Powers tag rename/reorder on a
+ *  referenced tag attribute, custom-label edits, intRange grow/shrink/shift,
+ *  and axis-source detach (collapse to dim 1 keeping old index 0). */
+export function remapTableDataAxis(
+  data: readonly number[] | undefined,
+  dims: readonly number[],
+  axisIdx: number,
+  indexMap: readonly number[],
+): number[] {
+  const n = dims.length;
+  const newDims = dims.slice();
+  newDims[axisIdx] = indexMap.length;
+  const oldStrides = new Array<number>(n).fill(1);
+  const newStrides = new Array<number>(n).fill(1);
+  for (let i = n - 2; i >= 0; i--) {
+    oldStrides[i] = oldStrides[i + 1]! * dims[i + 1]!;
+    newStrides[i] = newStrides[i + 1]! * newDims[i + 1]!;
+  }
+  const totalNew = newDims.reduce((a, b) => a * b, 1);
+  const out = new Array<number>(totalNew).fill(0);
+  if (!data || totalNew === 0) return out;
+  for (let flat = 0; flat < totalNew; flat++) {
+    let rem = flat;
+    let oldFlat = 0;
+    let ok = true;
+    for (let a = 0; a < n; a++) {
+      const idx = Math.floor(rem / newStrides[a]!);
+      rem -= idx * newStrides[a]!;
+      const oldIdx = a === axisIdx ? indexMap[idx] : idx;
+      if (oldIdx === undefined || oldIdx < 0 || oldIdx >= dims[a]!) { ok = false; break; }
+      oldFlat += oldIdx * oldStrides[a]!;
+    }
+    if (ok) {
+      const v = data[oldFlat];
+      if (typeof v === 'number') out[flat] = v;
     }
   }
   return out;

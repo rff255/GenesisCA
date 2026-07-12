@@ -1,0 +1,289 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Plan — N-D Lookup Tables + Seeded Randomization (Accretor)</title>
+<style>
+  :root{
+    --bg:#0c0d10; --panel:#15171c; --panel2:#1b1e24; --border:#2a2e37; --border2:#3a3f4b;
+    --text:#d8dbe2; --dim:#8b909c; --accent:#e8a13a; --accent-soft:rgba(232,161,58,.14);
+    --cyan:#4cc9f0; --green:#66bb6a; --red:#e05561; --purple:#9b6bd4; --teal:#2ec4b6;
+    --mono:Consolas,'Cascadia Code',monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);font:14px/1.55 'Segoe UI',system-ui,sans-serif;padding:32px 4vw 80px}
+  h1{font-size:1.5rem;margin:0 0 4px}
+  h2{font-size:1.12rem;margin:44px 0 14px;color:var(--accent);border-bottom:1px solid var(--border);padding-bottom:6px}
+  h3{font-size:.95rem;margin:18px 0 8px;color:var(--text)}
+  p{max-width:900px;color:var(--dim)}
+  .badge{display:inline-block;background:var(--accent-soft);color:var(--accent);border:1px solid var(--accent);border-radius:12px;font-size:.68rem;padding:2px 10px;vertical-align:middle;margin-left:10px;letter-spacing:.4px}
+  .cols{display:flex;gap:20px;flex-wrap:wrap;align-items:flex-start}
+  .card{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:16px 18px;flex:1 1 380px;min-width:340px}
+  .card h3{margin-top:0}
+  .tag{font-size:.66rem;border-radius:9px;padding:1px 8px;border:1px solid;margin-left:8px;vertical-align:middle}
+  .tag.before{color:var(--red);border-color:var(--red)}
+  .tag.after{color:var(--green);border-color:var(--green)}
+  .tag.new{color:var(--cyan);border-color:var(--cyan)}
+  code,.mono{font-family:var(--mono);font-size:.82rem}
+  code{background:var(--panel2);border:1px solid var(--border);border-radius:4px;padding:1px 5px;color:#e8e2d0}
+  pre{background:var(--panel2);border:1px solid var(--border);border-radius:8px;padding:12px 14px;overflow-x:auto;font-family:var(--mono);font-size:.8rem;line-height:1.5;color:#cfd6c3}
+  table{border-collapse:collapse;width:100%;font-size:.82rem}
+  th,td{border:1px solid var(--border);padding:6px 10px;text-align:left;vertical-align:top}
+  th{background:var(--panel2);color:var(--accent);font-weight:600}
+  td{color:var(--dim)}
+  td b{color:var(--text)}
+  /* ---- fake UI widgets ---- */
+  .ui{background:var(--panel2);border:1px solid var(--border2);border-radius:8px;padding:12px;font-size:.8rem}
+  .ui .row{display:flex;align-items:center;gap:8px;margin:6px 0}
+  .ui label{color:var(--dim);min-width:86px;font-size:.75rem}
+  .sel,.inp{background:#101216;border:1px solid var(--border2);border-radius:5px;color:var(--text);padding:3px 8px;font-size:.76rem}
+  .inp{width:64px;font-family:var(--mono)}
+  .btn{background:var(--panel);border:1px solid var(--border2);border-radius:6px;color:var(--text);padding:3px 12px;font-size:.75rem;cursor:default}
+  .btn.acc{background:var(--accent-soft);border-color:var(--accent);color:var(--accent)}
+  .btn.small{padding:1px 8px;font-size:.72rem}
+  .axisrow{display:flex;align-items:center;gap:6px;background:#101216;border:1px solid var(--border);border-radius:6px;padding:5px 8px;margin:5px 0}
+  .axisrow .n{color:var(--accent);font-family:var(--mono);font-size:.72rem;min-width:14px}
+  .hint{font-size:.7rem;color:var(--dim);font-style:italic}
+  .grid-mock{display:grid;grid-template-columns:repeat(8,26px);gap:2px;margin-top:8px}
+  .cell{width:26px;height:20px;border:1px solid var(--border);border-radius:3px;background:#101216;font:italic .62rem var(--mono);color:#565b66;display:flex;align-items:center;justify-content:center}
+  .cell.on{background:rgba(76,201,240,.22);color:var(--cyan);border-color:rgba(76,201,240,.5)}
+  .cell.on2{background:rgba(155,107,212,.25);color:var(--purple);border-color:rgba(155,107,212,.55)}
+  .cell.hdr{background:transparent;border:none;color:var(--dim)}
+  .steps{counter-reset:s;max-width:900px}
+  .steps li{margin:10px 0;color:var(--dim)}
+  .steps li b{color:var(--text)}
+  .prstrip{display:flex;gap:12px;flex-wrap:wrap;margin-top:10px}
+  .pr{flex:1 1 210px;background:var(--panel);border:1px solid var(--border);border-top:3px solid var(--accent);border-radius:8px;padding:12px 14px;font-size:.8rem}
+  .pr b{color:var(--accent)}
+  .pr div{color:var(--dim);margin-top:6px}
+  svg text{font-family:'Segoe UI',sans-serif}
+  .flownote{font-size:.72rem;color:var(--dim);margin-top:6px}
+</style>
+</head>
+<body>
+
+<h1>N-Dimensional Lookup Tables + Seeded Randomization <span class="badge">Accretor enablement · all 3 targets</span></h1>
+<p>Companion to <span class="mono">PLAN_ND_LOOKUP_TABLES.md</span> / <span class="mono">IMPACT_MAP_ND_LOOKUP_TABLES.md</span>.
+Goal: reproduce the Accretor CA (Driessens &amp; Verstappen): a 3D accretion automaton driven by a randomly-filled 4-axis rule table
+<code>Rule[state, faces, edges, corners] → newState</code>. Two additions — <b>N-axis tables</b> (new axis kind: integer range) and a
+<b>seeded Randomize fill</b> — everything else Accretor needs already ships.</p>
+
+<h2>1 · The rule this unlocks</h2>
+<svg viewBox="0 0 960 150" style="max-width:960px;width:100%">
+  <defs>
+    <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#8b909c"/></marker>
+  </defs>
+  <g font-size="11">
+    <rect x="8" y="38" width="128" height="72" rx="8" fill="#15171c" stroke="#2a2e37"/>
+    <text x="72" y="60" fill="#d8dbe2" text-anchor="middle">empty cell</text>
+    <text x="72" y="76" fill="#8b909c" text-anchor="middle" font-size="10">state == 0</text>
+    <text x="72" y="90" fill="#8b909c" text-anchor="middle" font-size="10">(non-empty = frozen)</text>
+
+    <rect x="176" y="20" width="150" height="110" rx="8" fill="#15171c" stroke="#2a2e37"/>
+    <text x="251" y="40" fill="#d8dbe2" text-anchor="middle">count occupied</text>
+    <text x="251" y="60" fill="#4cc9f0" text-anchor="middle" font-size="10">faces (6) → f ∈ 0..6</text>
+    <text x="251" y="76" fill="#4cc9f0" text-anchor="middle" font-size="10">edges (12) → e ∈ 0..12</text>
+    <text x="251" y="92" fill="#4cc9f0" text-anchor="middle" font-size="10">corners (8) → c ∈ 0..8</text>
+    <text x="251" y="112" fill="#8b909c" text-anchor="middle" font-size="10">skip unless f ≥ 1</text>
+
+    <rect x="366" y="20" width="210" height="110" rx="8" fill="#1b1e24" stroke="#e8a13a"/>
+    <text x="471" y="42" fill="#e8a13a" text-anchor="middle" font-weight="bold">4-axis rule table</text>
+    <text x="471" y="62" fill="#d8dbe2" text-anchor="middle" font-size="10">Rule[state, f, e, c] → newState</text>
+    <text x="471" y="80" fill="#8b909c" text-anchor="middle" font-size="10">3 states ⇒ 3×7×13×9 = 2,457 entries</text>
+    <text x="471" y="96" fill="#8b909c" text-anchor="middle" font-size="10">filled randomly, seeded, ~20% density</text>
+    <text x="471" y="112" fill="#8b909c" text-anchor="middle" font-size="10">the seed IS the rule identity</text>
+
+    <rect x="616" y="38" width="128" height="72" rx="8" fill="#15171c" stroke="#2a2e37"/>
+    <text x="680" y="66" fill="#d8dbe2" text-anchor="middle">Set Attribute</text>
+    <text x="680" y="84" fill="#8b909c" text-anchor="middle" font-size="10">state ← result</text>
+
+    <rect x="784" y="38" width="168" height="72" rx="8" fill="#15171c" stroke="#2a2e37"/>
+    <text x="868" y="60" fill="#d8dbe2" text-anchor="middle">grow from 5×5×5 seed</text>
+    <text x="868" y="78" fill="#8b909c" text-anchor="middle" font-size="10">Init Event, center block</text>
+    <text x="868" y="94" fill="#8b909c" text-anchor="middle" font-size="10">Stop Event at grid edge</text>
+
+    <line x1="136" y1="74" x2="172" y2="74" stroke="#8b909c" marker-end="url(#ar)"/>
+    <line x1="326" y1="74" x2="362" y2="74" stroke="#8b909c" marker-end="url(#ar)"/>
+    <line x1="576" y1="74" x2="612" y2="74" stroke="#8b909c" marker-end="url(#ar)"/>
+    <line x1="744" y1="74" x2="780" y2="74" stroke="#8b909c" marker-end="url(#ar)"/>
+  </g>
+</svg>
+<p class="flownote">Green = exists today · <span style="color:var(--accent)">amber</span> = the gap this plan closes.</p>
+
+<h2>2 · Table definition — before → after</h2>
+<div class="cols">
+  <div class="card">
+    <h3>Attributes panel · Lookup Table detail <span class="tag before">today</span></h3>
+    <div class="ui">
+      <div class="row"><label>Rows</label><span class="sel">Tag attribute: cellType ▾</span></div>
+      <div class="row"><label>Columns</label><span class="sel">Tag attribute: cellType ▾</span></div>
+      <div class="row"><label>Value type</label><span class="sel">Decimal ▾</span></div>
+      <div class="hint">Exactly two axes, label-keyed. No integer-range axes, no way to express Rule[state, f, e, c].</div>
+    </div>
+  </div>
+  <div class="card">
+    <h3>Attributes panel · Lookup Table detail <span class="tag after">after</span></h3>
+    <div class="ui">
+      <div class="row"><label>Mode</label><span class="sel">Multi-axis ▾</span><span class="hint">legacy tables keep the Rows/Columns UI verbatim</span></div>
+      <div class="axisrow"><span class="n">0</span><span class="inp" style="width:70px">State</span><span class="sel">Tag attribute: state ▾</span><span class="hint">dim 3</span></div>
+      <div class="axisrow"><span class="n">1</span><span class="inp" style="width:70px">Faces</span><span class="sel">Integer range ▾</span><label style="min-width:0">min</label><span class="inp" style="width:34px">0</span><label style="min-width:0">max</label><span class="inp" style="width:34px">6</span><span class="hint">dim 7</span></div>
+      <div class="axisrow"><span class="n">2</span><span class="inp" style="width:70px">Edges</span><span class="sel">Integer range ▾</span><label style="min-width:0">min</label><span class="inp" style="width:34px">0</span><label style="min-width:0">max</label><span class="inp" style="width:34px">12</span><span class="hint">dim 13</span></div>
+      <div class="axisrow"><span class="n">3</span><span class="inp" style="width:70px">Corners</span><span class="sel">Integer range ▾</span><label style="min-width:0">min</label><span class="inp" style="width:34px">0</span><label style="min-width:0">max</label><span class="inp" style="width:34px">8</span><span class="hint">dim 9</span></div>
+      <div class="row"><span class="btn small">+ Axis</span><span class="btn small">− last</span><span class="hint">append / remove-last only — never reorders storage or wired ports (multi-attr-slots discipline)</span></div>
+      <div class="row"><label>Value type</label><span class="sel">Tag (state) ▾</span><span class="hint">2,457 entries · 20 KB</span></div>
+    </div>
+  </div>
+</div>
+
+<h2>3 · Table editor — N-D slice view + Randomize <span class="tag new">new</span></h2>
+<div class="cols">
+  <div class="card" style="flex:1.4 1 460px">
+    <h3>Slice view (last two axes span the grid; steppers for the rest)</h3>
+    <div class="ui">
+      <div class="row">
+        <label>State</label><span class="btn small">◂</span><span class="inp" style="width:70px;text-align:center">empty (0)</span><span class="btn small">▸</span>
+        <label style="min-width:44px">Faces</label><span class="btn small">◂</span><span class="inp" style="width:34px;text-align:center">3</span><span class="btn small">▸</span>
+      </div>
+      <div class="grid-mock">
+        <div class="cell hdr"></div><div class="cell hdr">c0</div><div class="cell hdr">c1</div><div class="cell hdr">c2</div><div class="cell hdr">c3</div><div class="cell hdr">c4</div><div class="cell hdr">c5</div><div class="cell hdr">…</div>
+        <div class="cell hdr">e0</div><div class="cell">0</div><div class="cell on">A</div><div class="cell">0</div><div class="cell">0</div><div class="cell on2">B</div><div class="cell">0</div><div class="cell hdr"></div>
+        <div class="cell hdr">e1</div><div class="cell">0</div><div class="cell">0</div><div class="cell on">A</div><div class="cell">0</div><div class="cell">0</div><div class="cell on">A</div><div class="cell hdr"></div>
+        <div class="cell hdr">e2</div><div class="cell on2">B</div><div class="cell">0</div><div class="cell">0</div><div class="cell">0</div><div class="cell on">A</div><div class="cell">0</div><div class="cell hdr"></div>
+        <div class="cell hdr">e3</div><div class="cell">0</div><div class="cell">0</div><div class="cell on">A</div><div class="cell on2">B</div><div class="cell">0</div><div class="cell">0</div><div class="cell hdr"></div>
+        <div class="cell hdr">…</div><div class="cell hdr"></div><div class="cell hdr"></div><div class="cell hdr"></div><div class="cell hdr"></div><div class="cell hdr"></div><div class="cell hdr"></div><div class="cell hdr"></div>
+      </div>
+      <div class="hint" style="margin-top:6px">Edges × Corners slice at State=empty, Faces=3 · cells reuse the existing per-value-type widgets (tag select shown)</div>
+    </div>
+  </div>
+  <div class="card">
+    <h3>Randomize block (modeler + simulator panel)</h3>
+    <div class="ui">
+      <div class="row"><label>Seed</label><span class="inp" style="width:96px">1834277</span><span class="btn small">🎲</span></div>
+      <div class="row"><label>Density</label><span class="inp" style="width:52px">0.20</span><span class="hint">P(entry ≠ 0)</span></div>
+      <div class="row"><label>Fill with</label><span class="sel">non-zero states, uniform ▾</span></div>
+      <div class="row"><span class="btn acc">Randomize table</span></div>
+      <div class="hint">Seeded xorshift32 → deterministic: same seed + density + shape ⇒ the identical table on any machine.
+      Writes <span class="mono">tableData</span> into the model (saved in .gcaproj, inspectable). In the simulator panel it also
+      live-updates the running worker — re-roll mid-session and Reset to explore rules.</div>
+    </div>
+  </div>
+</div>
+
+<h2>4 · Table Lookup node — ports before → after</h2>
+<div class="cols">
+  <div class="card">
+    <h3>Legacy 2-axis table <span class="tag before">unchanged</span></h3>
+    <svg viewBox="0 0 300 120" style="width:300px">
+      <rect x="30" y="8" width="240" height="104" rx="8" fill="#15171c" stroke="#2a2e37"/>
+      <rect x="30" y="8" width="240" height="26" rx="8" fill="#1976d2"/>
+      <text x="150" y="26" fill="#fff" font-size="12" text-anchor="middle" font-weight="bold">Table Lookup</text>
+      <circle cx="30" cy="56" r="5" fill="#4cc9f0"/><text x="42" y="60" fill="#8b909c" font-size="10">Row</text>
+      <circle cx="30" cy="80" r="5" fill="#4cc9f0"/><text x="42" y="84" fill="#8b909c" font-size="10">Col</text>
+      <circle cx="270" cy="68" r="5" fill="#4cc9f0"/><text x="258" y="72" fill="#8b909c" font-size="10" text-anchor="end">Value</text>
+      <text x="150" y="104" fill="#565b66" font-size="9" text-anchor="middle">emit byte-identical; wires never move</text>
+    </svg>
+  </div>
+  <div class="card">
+    <h3>Axes-mode table (Accretor's rule) <span class="tag after">after</span></h3>
+    <svg viewBox="0 0 300 168" style="width:300px">
+      <rect x="30" y="8" width="240" height="152" rx="8" fill="#15171c" stroke="#e8a13a"/>
+      <rect x="30" y="8" width="240" height="26" rx="8" fill="#1976d2"/>
+      <text x="150" y="26" fill="#fff" font-size="12" text-anchor="middle" font-weight="bold">Table Lookup · rule</text>
+      <circle cx="30" cy="54" r="5" fill="#4cc9f0"/><text x="42" y="58" fill="#8b909c" font-size="10">State</text>
+      <circle cx="30" cy="78" r="5" fill="#4cc9f0"/><text x="42" y="82" fill="#8b909c" font-size="10">Faces</text>
+      <circle cx="30" cy="102" r="5" fill="#4cc9f0"/><text x="42" y="106" fill="#8b909c" font-size="10">Edges</text>
+      <circle cx="30" cy="126" r="5" fill="#4cc9f0"/><text x="42" y="130" fill="#8b909c" font-size="10">Corners</text>
+      <circle cx="270" cy="90" r="5" fill="#4cc9f0"/><text x="258" y="94" fill="#8b909c" font-size="10" text-anchor="end">Value</text>
+      <text x="150" y="150" fill="#565b66" font-size="9" text-anchor="middle">one input per axis, labeled from the axis names</text>
+    </svg>
+    <div class="hint">Static <span class="mono">axis_0..axis_5</span> ports sliced/relabeled per the referenced table (the Expression-node pattern) —
+    so all six compile surfaces, CSE, and sink analysis work with zero dynamic-edge changes.</div>
+  </div>
+</div>
+
+<h2>5 · One emit story, six surfaces</h2>
+<pre>flat = Σₖ clamp((axisₖ | 0) − minₖ, 0, dimₖ−1) · strideₖ        // strides baked at compile (pre-resolve `_dims`/`_mins`)
+
+JS          _tbl[flat] || 0
+WASM        f64.load(slot.offset + flat·8)          (i32 clamp chain + multiply-add)
+WebGPU      bitcast&lt;f32&gt;(varAux[u32(off + flat)])   (values are small ints — exact in f32)
+agentWASM   guarded f64.load in agent memory        (extras carry dims; layout-lockstep via one resolveAxes)
+agentWebGPU auxF32[base + flat]                      (+ fixes the pre-existing row/col-vs-labelA/labelB port bug)</pre>
+<p>Legacy 2-axis tables keep today's exact emit (raw <code>row*colCount+col</code>, no clamp) — byte-identity for every existing model is the proof standard. Only axes-mode gets the unified saturating clamp.</p>
+
+<h2>6 · The Accretor sample graph (PR3)</h2>
+<svg viewBox="0 0 980 210" style="max-width:980px;width:100%">
+  <defs>
+    <marker id="ar2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#8b909c"/></marker>
+  </defs>
+  <g font-size="10">
+    <rect x="6" y="80" width="86" height="44" rx="7" fill="#fff"/><text x="49" y="99" fill="#1e2a3a" text-anchor="middle" font-weight="bold">Step</text><text x="49" y="113" fill="#5a6676" text-anchor="middle" font-size="8.5">event root</text>
+    <rect x="122" y="80" width="112" height="44" rx="7" fill="#15171c" stroke="#2a2e37"/><text x="178" y="99" fill="#d8dbe2" text-anchor="middle">If state == 0</text><text x="178" y="113" fill="#8b909c" text-anchor="middle" font-size="8.5">frozen once set</text>
+    <rect x="264" y="10" width="150" height="38" rx="7" fill="#15171c" stroke="#2a2e37"/><text x="339" y="26" fill="#d8dbe2" text-anchor="middle">faces → Count &gt; 0</text><text x="339" y="40" fill="#8b909c" text-anchor="middle" font-size="8.5">nbh: 6 face cells</text>
+    <rect x="264" y="58" width="150" height="38" rx="7" fill="#15171c" stroke="#2a2e37"/><text x="339" y="74" fill="#d8dbe2" text-anchor="middle">edges → Count &gt; 0</text><text x="339" y="88" fill="#8b909c" text-anchor="middle" font-size="8.5">nbh: 12 edge cells</text>
+    <rect x="264" y="106" width="150" height="38" rx="7" fill="#15171c" stroke="#2a2e37"/><text x="339" y="122" fill="#d8dbe2" text-anchor="middle">corners → Count &gt; 0</text><text x="339" y="136" fill="#8b909c" text-anchor="middle" font-size="8.5">nbh: 8 corner cells</text>
+    <rect x="264" y="156" width="150" height="38" rx="7" fill="#15171c" stroke="#2a2e37"/><text x="339" y="172" fill="#d8dbe2" text-anchor="middle">If faces ≥ 1</text><text x="339" y="186" fill="#8b909c" text-anchor="middle" font-size="8.5">connectivity gate</text>
+    <rect x="452" y="58" width="160" height="86" rx="7" fill="#1b1e24" stroke="#e8a13a"/><text x="532" y="80" fill="#e8a13a" text-anchor="middle" font-weight="bold">Table Lookup</text><text x="532" y="98" fill="#d8dbe2" text-anchor="middle" font-size="9">rule[state, f, e, c]</text><text x="532" y="114" fill="#8b909c" text-anchor="middle" font-size="8.5">axes-mode, 2457 entries</text><text x="532" y="128" fill="#8b909c" text-anchor="middle" font-size="8.5">seeded random fill</text>
+    <rect x="648" y="80" width="120" height="44" rx="7" fill="#15171c" stroke="#2a2e37"/><text x="708" y="99" fill="#d8dbe2" text-anchor="middle">Set Attribute</text><text x="708" y="113" fill="#8b909c" text-anchor="middle" font-size="8.5">state ← value</text>
+    <rect x="800" y="10" width="172" height="52" rx="7" fill="#15171c" stroke="#2a2e37"/><text x="886" y="30" fill="#d8dbe2" text-anchor="middle">Init Event</text><text x="886" y="46" fill="#8b909c" text-anchor="middle" font-size="8.5">center 5×5×5 random state</text>
+    <rect x="800" y="76" width="172" height="52" rx="7" fill="#15171c" stroke="#2a2e37"/><text x="886" y="96" fill="#d8dbe2" text-anchor="middle">Stop Event</text><text x="886" y="112" fill="#8b909c" text-anchor="middle" font-size="8.5">non-empty cell at border</text>
+    <rect x="800" y="142" width="172" height="52" rx="7" fill="#15171c" stroke="#2a2e37"/><text x="886" y="162" fill="#d8dbe2" text-anchor="middle">Output Mapping</text><text x="886" y="178" fill="#8b909c" text-anchor="middle" font-size="8.5">empty → alpha 0 (voxel cull)</text>
+    <line x1="92" y1="102" x2="118" y2="102" stroke="#66bb6a" marker-end="url(#ar2)"/>
+    <line x1="234" y1="102" x2="260" y2="175" stroke="#66bb6a" marker-end="url(#ar2)"/>
+    <line x1="414" y1="29" x2="448" y2="80" stroke="#4cc9f0" marker-end="url(#ar2)"/>
+    <line x1="414" y1="77" x2="448" y2="96" stroke="#4cc9f0" marker-end="url(#ar2)"/>
+    <line x1="414" y1="125" x2="448" y2="112" stroke="#4cc9f0" marker-end="url(#ar2)"/>
+    <line x1="414" y1="175" x2="448" y2="130" stroke="#66bb6a" marker-end="url(#ar2)"/>
+    <line x1="612" y1="101" x2="644" y2="101" stroke="#4cc9f0" marker-end="url(#ar2)"/>
+  </g>
+</svg>
+<p class="flownote">Green wires = flow · cyan = values. 60³ bounded grid, tag attr <span class="mono">state</span> (empty/A/B), three explicit
+<span class="mono">coords3d</span> neighborhoods, <span class="mono">useWasm: true</span>. Verified on JS + WASM (bit-identical) + WebGPU.</p>
+
+<h2>7 · Rule-space search — the Overseer protocol (PR4)</h2>
+<pre>Experiment
+└─ Loop × 50
+   ├─ Randomize Table (rule, seed = base + i, density 0.2)     ← new node: ovRandomizeTable (runtime-only)
+   ├─ Reset Board
+   ├─ Run Until Stop (max 2000)                                 ← stops when the structure hits the edge
+   ├─ Collect Sample ("filled" ← linked frequency indicator)
+   └─ Screenshot
+   → Journal lines carry {seed, density}: any interesting structure is reproduced
+     by typing that seed into the editor's Randomize block and Applying.</pre>
+
+<h2>8 · Where each piece lands</h2>
+<table>
+  <tr><th>Layer</th><th>File(s)</th><th>Change</th></tr>
+  <tr><td><b>Schema</b></td><td class="mono">model/types.ts</td><td><code>intRange</code> axis kind · <code>axes?: LookupAxis[]</code> · <code>tableData?: number[]</code> · <code>tableRoll?</code> · preset <code>lookupTableData?</code> — all additive, no migration</td></tr>
+  <tr><td><b>Resolution</b></td><td class="mono">compiler/variegation.ts</td><td><b>resolveAxes()</b> (new single source of truth; legacy = N=2) · <code>normalizeLookupTableND</code> · <b>randomFillTableData</b> (shared seeded xorshift32 fill) · <code>remapTableDataAxis</code></td></tr>
+  <tr><td><b>Nodes</b></td><td class="mono">nodes/LookupInteractionNode.ts · InteractionTableMapNode.ts</td><td>static <code>axis_0..5</code> ports + axes-mode emit (clamped Σ idx·stride); legacy emit byte-identical; Table Map allows N=2 only</td></tr>
+  <tr><td><b>Compilers ×5</b></td><td class="mono">compile.ts · wasm/* · webgpu/* · agentWasm/* · agentWebgpu/*</td><td>pre-resolve <code>_dims</code>/<code>_mins</code> · layout regions sized Π dims · per-target axes-mode emit branch · agentWebgpu <b>port-bug fix</b></td></tr>
+  <tr><td><b>Worker</b></td><td class="mono">engine/sim.worker.ts (+ webgpuRuntime, agentEngine)</td><td>payload gains <code>dims</code>/<code>data</code> · normalize-ND at both call sites · copy-into-view discipline unchanged</td></tr>
+  <tr><td><b>Editor</b></td><td class="mono">panels/AttributesPanelContent.tsx · LookupTableEditor.tsx · vpl/CaNode.tsx · effectivePorts.ts</td><td>axes editor (+ convert-to-multi-axis) · N-D slice view · <b>Randomize block</b> · axis-port slicing mirrored in both port sources</td></tr>
+  <tr><td><b>Cascades</b></td><td class="mono">model/ModelContext.tsx</td><td>structural tableData remaps: tag rename/reorder, custom-label edit, intRange resize, axis-source detach</td></tr>
+  <tr><td><b>Simulator</b></td><td class="mono">SimulatorView.tsx · fileOperations.ts</td><td>init/updateLookupTable payload · presets + reset-to-default snapshots for tableData · Overseer dep <code>randomizeTable</code></td></tr>
+  <tr><td><b>Overseer</b></td><td class="mono">nodes/OvRandomizeTableNode.ts · overseer/compile.ts · overseerRuntime.ts</td><td>PR4: the action node → <code>O.randomizeTable</code> → worker; counts 137→138 / 19→20</td></tr>
+  <tr><td><b>Sample</b></td><td class="mono">scripts/gen-accretor.mjs → public/models/Accretor.gcaproj</td><td>PR3: the flagship model (graph in §6) + curated pre-rolled table seed</td></tr>
+  <tr><td><b>Docs</b></td><td class="mono">CLAUDE.md · HelpView.tsx · README.md · NODES_REFERENCE.md</td><td>atomic with each PR (docs-consistency rule)</td></tr>
+</table>
+
+<h2>9 · Interaction sequence</h2>
+<ol class="steps">
+  <li><b>Author the table</b> — add a Lookup Table model attribute, switch to Multi-axis, declare State(tag) × Faces(0..6) × Edges(0..12) × Corners(0..8); value type Tag.</li>
+  <li><b>Roll a rule</b> — Randomize: seed 🎲, density 0.20 → 2,457 entries filled in one click; the data is IN the model (save = reproducible).</li>
+  <li><b>Wire the graph</b> — the Table Lookup node now shows State/Faces/Edges/Corners inputs, labeled from the axis names; feed it the three neighborhood counts.</li>
+  <li><b>Run</b> — the structure accretes from the 5×5×5 seed; Stop Event pauses at the grid edge; orbit/clip the voxel view.</li>
+  <li><b>Explore</b> — re-roll seeds live in the simulator panel + Reset; or run the Overseer protocol to sweep 50 seeds unattended and keep the journal of interesting ones.</li>
+</ol>
+
+<h2>10 · Phasing</h2>
+<div class="prstrip">
+  <div class="pr"><b>PR1 · Engine</b><div>schema + resolveAxes + all six emit paths + worker payload + validation + cascades. Proof: library-wide compile byte-identity, coded-index 3-axis parity on JS/WASM/WebGPU, agent parity harness clean.</div></div>
+  <div class="pr"><b>PR2 · Authoring</b><div>axes editor, N-D slice view, Randomize block (both mount points), presets/reset snapshots. Proof: same seed ⇒ identical tableData; live re-roll; cascade tests.</div></div>
+  <div class="pr"><b>PR3 · Accretor</b><div>gen-accretor.mjs sample + docs sweep. Proof: grows + stops at edge on all 3 targets, JS↔WASM bit-identical populations.</div></div>
+  <div class="pr"><b>PR4 · Overseer</b><div>ovRandomizeTable + the rule-explorer experiment. Proof: same base seed ⇒ identical journal/series; logged seed reproduces the structure.</div></div>
+</div>
+
+</body>
+</html>

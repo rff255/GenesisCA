@@ -109,7 +109,7 @@ import { expandComposites } from '../expandComposites';
 import { lowerVectorAttrs, expandVectorAttributes } from '../vectorAttr';
 import { lowerFacingSource } from '../facingSource';
 import { canonicalizeAccessorEdges } from '../accessorCSE';
-import { resolveKeyLabels } from '../variegation';
+import { resolveKeyLabels, resolveAxes, isMultiAxisTable } from '../variegation';
 import { readColorScaleStops, type ColorScaleStop } from '../../nodes/ColorScaleNode';
 import { readCategoricalEntries, readCategoricalDefault } from '../../nodes/CategoricalColorNode';
 import { viewCosHalf } from '../../nodes/GetAgentsInViewNode';
@@ -1265,13 +1265,46 @@ function emitGetModelAttribute(ctx: AgentWasmCtx, node: GraphNode, portId: strin
   return readKey(attr);
 }
 
-/** Table Lookup — `_lookupTables[id][row*colCount+col]` (0 when oob/unset). */
+/** Table Lookup — `_lookupTables[id][row*colCount+col]` (0 when oob/unset).
+ *  MULTI-AXIS tables: per-axis saturating clamp + `Σ idxₖ·strideₖ` (D-NDT-5 —
+ *  the clamp guarantees in-bounds, so no flat guard is needed). */
 function emitLookupInteraction(ctx: AgentWasmCtx, node: GraphNode): void {
   const em = ctx.em;
   const cfg = node.data.config as Record<string, unknown>;
   const tableId = (cfg['tableId'] as string) || '';
   const off = tableId ? ctx.layout.lookupTableOffset[tableId] : undefined;
   if (off === undefined) { em.f64Const(0); return; }
+  const geo = resolveLookupTableDims(ctx.model, tableId);
+  if (geo?.dims && geo.dims.length > 0) {
+    const dims = geo.dims;
+    const mins = geo.mins ?? [];
+    const strides = new Array<number>(dims.length).fill(1);
+    for (let i = dims.length - 2; i >= 0; i--) strides[i] = strides[i + 1]! * dims[i + 1]!;
+    const flat = em.allocLocal(I32);
+    em.i32Const(0); em.localSet(flat);
+    for (let k = 0; k < dims.length; k++) {
+      const min = Math.floor(mins[k] ?? 0) || 0;
+      const hi = Math.max(0, dims[k]! - 1);
+      const t = em.allocLocal(I32);
+      pushValueAs(em, resolveValueInput(ctx, node, `axis_${k}`, 0), I32);
+      if (min !== 0) { em.i32Const(min); em.op(OP_I32_SUB); }
+      em.localSet(t);
+      // t = max(t, 0): select(t, 0, t > 0)
+      em.localGet(t); em.i32Const(0);
+      em.localGet(t); em.i32Const(0); em.op(OP_I32_GT_S);
+      em.op(OP_SELECT); em.localSet(t);
+      // t = min(t, hi): select(t, hi, t < hi)
+      em.localGet(t); em.i32Const(hi);
+      em.localGet(t); em.i32Const(hi); em.op(OP_I32_LT_S);
+      em.op(OP_SELECT); em.localSet(t);
+      em.localGet(flat);
+      em.localGet(t);
+      if (strides[k] !== 1) { em.i32Const(strides[k]!); em.op(OP_I32_MUL); }
+      em.op(OP_I32_ADD); em.localSet(flat);
+    }
+    em.localGet(flat); em.i32Const(8); em.op(OP_I32_MUL); em.i32Const(off); em.op(OP_I32_ADD); em.f64Load();
+    return;
+  }
   const colCount = ctx.layout.lookupTableCols[tableId] || 1;
   const tableCells = lookupTableCells(ctx, tableId);
   const la = em.allocLocal(I32); pushValueAs(em, resolveValueInput(ctx, node, 'labelA', 0), I32); em.localSet(la);
@@ -1289,18 +1322,31 @@ function emitLookupInteraction(ctx: AgentWasmCtx, node: GraphNode): void {
   em.localGet(res);
 }
 
-/** The reserved cell count (rows*cols) of a lookup table — for the oob bound check
- *  (mirrors JS `|| 0` for an out-of-range index). Derived from the model's row/col
- *  key sources by the same `resolveLookupTableDims` the layout extras use. */
+/** The reserved cell count (rows*cols — or Π dims for a multi-axis table) of a
+ *  lookup table — for the oob bound check (mirrors JS `|| 0` for an out-of-range
+ *  index). Derived by the same `resolveLookupTableDims` the layout extras use. */
 function lookupTableCells(ctx: AgentWasmCtx, tableId: string): number {
   const dims = resolveLookupTableDims(ctx.model, tableId);
-  return dims ? dims.rows * dims.cols : 0;
+  if (!dims) return 0;
+  return dims.dims ? dims.dims.reduce((a, b) => a * b, 1) : dims.rows * dims.cols;
 }
 
-/** A lookupTable model attr's (rows, cols) from its row/col key sources. */
-function resolveLookupTableDims(model: CAModel, tableId: string): { rows: number; cols: number } | null {
+/** A lookupTable model attr's geometry: legacy (rows, cols) from the row/col key
+ *  sources, or — for a MULTI-AXIS (N-D) table — the full `dims`/`mins` via
+ *  `resolveAxes` (the shared single source of truth; `dims` present ⇔ multi-axis).
+ *  Consumed by BOTH the emitter and `buildAgentLayoutExtras`, so the compiled
+ *  offsets and the worker store's region sizes derive from ONE resolution
+ *  (the layout-lockstep invariant). */
+function resolveLookupTableDims(
+  model: CAModel,
+  tableId: string,
+): { rows: number; cols: number; dims?: number[]; mins?: number[] } | null {
   const attr = model.attributes.find(a => a.id === tableId && a.isModelAttribute && a.type === 'lookupTable');
   if (!attr) return null;
+  if (isMultiAxisTable(attr)) {
+    const r = resolveAxes(attr, model);
+    return { rows: r.dims[0] ?? 1, cols: r.dims[1] ?? 1, dims: r.dims, mins: r.mins };
+  }
   const a = attr as unknown as { rowKeySource?: unknown; colKeySource?: unknown };
   const rows = resolveKeyLabels(a.rowKeySource as Parameters<typeof resolveKeyLabels>[0], model).length;
   const cols = resolveKeyLabels(a.colKeySource as Parameters<typeof resolveKeyLabels>[0], model).length;
