@@ -327,10 +327,10 @@ export function normalizeLookupTablePayload(p: LookupTablePayloadLike): Float64A
 export function buildLookupTablePayload(
   attr: Attribute,
   model: CAModel,
-): { id: string; rowLabels: string[]; colLabels: string[]; values: Record<string, Record<string, number>>; dims?: number[]; data?: number[] } {
+): { id: string; rowLabels: string[]; colLabels: string[]; values: Record<string, Record<string, number>>; dims?: number[]; mins?: number[]; data?: number[] } {
   if (isMultiAxisTable(attr)) {
     const r = resolveAxes(attr, model);
-    return { id: attr.id, rowLabels: [], colLabels: [], values: {}, dims: r.dims, data: attr.tableData ? [...attr.tableData] : [] };
+    return { id: attr.id, rowLabels: [], colLabels: [], values: {}, dims: r.dims, mins: r.mins, data: attr.tableData ? [...attr.tableData] : [] };
   }
   return {
     id: attr.id,
