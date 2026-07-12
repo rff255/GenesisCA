@@ -7,7 +7,7 @@ import { CURRENT_VIEWER_SENTINEL } from '../modeler/vpl/nodes/SetCellLooksNode';
 import { compileGraphWasm } from '../modeler/vpl/compiler/wasm/compile';
 import { computeLayoutFromModel, buildViewerIds } from '../modeler/vpl/compiler/wasm/layout';
 import { unpackNI, unpackNI3, INVALID_NI } from '../modeler/vpl/compiler/niCodec';
-import { resolveKeyLabels, resolveValueTagOptions, buildLookupTablePayload, isMultiAxisTable } from '../modeler/vpl/compiler/variegation';
+import { resolveKeyLabels, resolveValueTagOptions, buildLookupTablePayload, isMultiAxisTable, resolveAxes } from '../modeler/vpl/compiler/variegation';
 import { NeighborIndexValuePicker } from '../modeler/panels/NeighborIndexDefaultEditor';
 import { LookupTableEditor } from '../modeler/panels/LookupTableEditor';
 import { compileGraphWebGPU } from '../modeler/vpl/compiler/webgpu/compile';
@@ -7355,16 +7355,18 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
                     // updateLookupTable worker message (live-tuned during sim).
                     <div style={{ flex: 2, minWidth: 0 }}>
                       {(() => {
-                        const rowLabels = resolveKeyLabels(a.rowKeySource, model);
-                        const colLabels = resolveKeyLabels(a.colKeySource, model);
-                        return rowLabels.length > 0 && colLabels.length > 0 ? (
+                        const multi = isMultiAxisTable(a);
+                        const rowLabels = multi ? [] : resolveKeyLabels(a.rowKeySource, model);
+                        const colLabels = multi ? [] : resolveKeyLabels(a.colKeySource, model);
+                        return multi || (rowLabels.length > 0 && colLabels.length > 0) ? (
                           <LookupTableEditor
                             attribute={a}
                             rowLabels={rowLabels}
                             colLabels={colLabels}
                             valueTagOptions={resolveValueTagOptions(a, model)}
+                            axesResolved={multi ? resolveAxes(a, model) : undefined}
                             compact
-                            onChange={changes => handleInteractionTableEdit(a.id, changes.tableValues, changes.symmetric)}
+                            onChange={changes => handleInteractionTableEdit(a.id, changes.tableValues, changes.symmetric, changes.tableData, changes.tableRoll)}
                           />
                         ) : (
                           <div style={{ color: '#888', fontSize: '0.62rem' }}>
