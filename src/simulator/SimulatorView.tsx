@@ -722,10 +722,15 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   // Persisted; refs for the draw() / worker hot paths. Default true → no change.
   const [showCaGrid, setShowCaGrid] = useState<boolean>((saved.current.showCaGrid as boolean) ?? true);
   const [showAgents, setShowAgents] = useState<boolean>((saved.current.showAgents as boolean) ?? true);
+  // Render the agent BOND lines (2D + 3D). Display-only — the bond springs keep
+  // simulating. The Layers row only shows for models whose Bonds capability isn't
+  // Off (resolveMaxBonds > 0), matching where bonds can exist at all.
+  const [showBonds, setShowBonds] = useState<boolean>((saved.current.showBonds as boolean) ?? true);
   const [simulateCells, setSimulateCells] = useState<boolean>((saved.current.simulateCells as boolean) ?? true);
   const [simulateAgents, setSimulateAgents] = useState<boolean>((saved.current.simulateAgents as boolean) ?? true);
   const showCaGridRef = useRef(showCaGrid); showCaGridRef.current = showCaGrid;
   const showAgentsRef = useRef(showAgents); showAgentsRef.current = showAgents;
+  const showBondsRef = useRef(showBonds); showBondsRef.current = showBonds;
   const simulateCellsRef = useRef(simulateCells); simulateCellsRef.current = simulateCells;
   const simulateAgentsRef = useRef(simulateAgents); simulateAgentsRef.current = simulateAgents;
   // Brush TARGET — does the LMB brush affect the CA grid or the agents? (Only
@@ -795,7 +800,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
           infinityCanvas, indicatorVizModes, recordFormat, brushSectionH, agentsFront3d,
           agentBrushRadius, agentSeedDensity, agentSeedSpacing,
           agentBrushShape, agentBrushW, agentBrushH, agentBrushRingWidth, agentBrushLineWidth,
-          showCaGrid, showAgents, simulateCells, simulateAgents, brushTarget, bg2d,
+          showCaGrid, showAgents, showBonds, simulateCells, simulateAgents, brushTarget, bg2d,
           indicatorHiddenCategories: Object.fromEntries(
             Object.entries(indicatorHiddenCategories)
               .filter(([, s]) => s.size > 0)
@@ -807,7 +812,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       } catch { /* localStorage full */ }
     }, 300);
     return () => clearTimeout(timer);
-  }, [targetFps, unlimitedFps, gensPerFrame, unlimitedGens, activeViewer, brushColor, brushW, brushH, brushMapping, showBrushCursor, showGridlines, brushShape, brushRadius, brushRingWidth, brushLineWidth, brush3dVolume, brushBoxDepth, infinityCanvas, indicatorVizModes, recordFormat, brushSectionH, agentsFront3d, agentBrushRadius, agentSeedDensity, agentSeedSpacing, agentBrushShape, agentBrushW, agentBrushH, agentBrushRingWidth, agentBrushLineWidth, showCaGrid, showAgents, simulateCells, simulateAgents, brushTarget, bg2d, indicatorHiddenCategories, indicatorChartOverrides]);
+  }, [targetFps, unlimitedFps, gensPerFrame, unlimitedGens, activeViewer, brushColor, brushW, brushH, brushMapping, showBrushCursor, showGridlines, brushShape, brushRadius, brushRingWidth, brushLineWidth, brush3dVolume, brushBoxDepth, infinityCanvas, indicatorVizModes, recordFormat, brushSectionH, agentsFront3d, agentBrushRadius, agentSeedDensity, agentSeedSpacing, agentBrushShape, agentBrushW, agentBrushH, agentBrushRingWidth, agentBrushLineWidth, showCaGrid, showAgents, showBonds, simulateCells, simulateAgents, brushTarget, bg2d, indicatorHiddenCategories, indicatorChartOverrides]);
 
   // Manual Brush — signature-keyed merge effect. Re-derives `manualBrush`
   // whenever the cell attribute set (id+type) changes. Surviving attrs carry
@@ -1208,7 +1213,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   const agentsFront3dRef = useRef(true);
   // voxels/agents are driven from showCaGrid/showAgents below (the render-layer
   // toggles); the panel only edits axes/grid/bounds/gizmo. draw() overrides the two.
-  const viz3dRef = useRef<import('./render/gl3d').Viz3D>({ axes: false, grid: false, bounds: true, gizmo: true, voxels: true, agents: true });
+  const viz3dRef = useRef<import('./render/gl3d').Viz3D>({ axes: false, grid: false, bounds: true, gizmo: true, voxels: true, agents: true, bonds: true });
   // Interaction plane: LMB-brush ray-traces onto this slicing plane.
   const plane3dRef = useRef<{ axis: 'x' | 'y' | 'z'; pos: number }>({ axis: 'z', pos: 0 });
   const plane3dEnabledRef = useRef(false);
@@ -1258,7 +1263,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     { enabled: false, axis: 'z', lo: 0, hi: 0 },
   );
   const [alpha3d, setAlpha3d] = useState(false);
-  const [viz3d, setViz3d] = useState<import('./render/gl3d').Viz3D>({ axes: false, grid: false, bounds: true, gizmo: true, voxels: true, agents: true });
+  const [viz3d, setViz3d] = useState<import('./render/gl3d').Viz3D>({ axes: false, grid: false, bounds: true, gizmo: true, voxels: true, agents: true, bonds: true });
   const [plane3d, setPlane3d] = useState<{ enabled: boolean; axis: 'x' | 'y' | 'z'; pos: number }>({ enabled: false, axis: 'z', pos: 0 });
   const [orbit3d, setOrbit3d] = useState<{ on: boolean; speed: number }>({ on: false, speed: 0.4 });
   // 3D canvas background. `enabled` false = transparent (page shows through);
@@ -1799,7 +1804,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       // agent instances from a PREVIOUSLY-loaded agent model keep rendering after
       // loading a non-agent model (the gl3d agent buffer is only refreshed inside
       // the `if (isAgentModelRef.current)` block below). Gate on the agent flag.
-      r.setViz({ ...viz3dRef.current, voxels: !isAgentModelRef.current || showCaGridRef.current, agents: isAgentModelRef.current && showAgentsRef.current });
+      r.setViz({ ...viz3dRef.current, voxels: !isAgentModelRef.current || showCaGridRef.current, agents: isAgentModelRef.current && showAgentsRef.current, bonds: showBondsRef.current });
       r.setBrushPlane(plane3dEnabledRef.current ? { axis: plane3dRef.current.axis, pos: plane3dRef.current.pos } : null);
       r.setHoverCells(plane3dEnabledRef.current ? hoverCells3dRef.current : EMPTY_HOVER_CELLS);
       r.setInspectCells(inspectHighlight3dRef.current);
@@ -2016,7 +2021,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       if (!snap || snap.highWater === 0) return;
       const { x: ax, y: ay, radius: ar, alive: aal, colors: acol, highWater: hw, bonds, vx: avx, vy: avy } = snap;
       // Bond layer — drawn UNDER the agent circles (one batched stroke path).
-      if (bonds && bonds.length > 0) {
+      if (showBondsRef.current && bonds && bonds.length > 0) {
         const torusB = boundaryTreatmentRef.current === 'torus';
         const drawBonds = (tileOx: number, tileOy: number) => {
           ctx.beginPath();
@@ -4323,7 +4328,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   // Layer SHOW toggles (req 7): repaint when render-layer visibility changes. The
   // refs (showCaGridRef/showAgentsRef) are updated at declaration; draw() reads them
   // (3D voxels/agents via viz override; 2D blit/overlay gating).
-  useEffect(() => { draw(); }, [showCaGrid, showAgents, draw]);
+  useEffect(() => { draw(); }, [showCaGrid, showAgents, showBonds, draw]);
   // Layer SIMULATE toggles (req 1): publish the freeze flags to the worker on
   // change (a worker reinit re-publishes via initWorkerWithDimensions). The toggles
   // are GLOBAL settings but only editable on an agent model's Layers panel — so for
@@ -7737,8 +7742,16 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
                     <span style={{ textAlign: 'center' }}><input type="checkbox" checked={simulateCells} onChange={e => setSimulateCells(e.target.checked)} title="Run the cell step (freeze the grid when off)" /></span>
                   </>)}
                   <span>Agents</span>
-                  <span style={{ textAlign: 'center' }}><input type="checkbox" checked={showAgents} onChange={e => setShowAgents(e.target.checked)} title="Render the agents + bonds" /></span>
+                  <span style={{ textAlign: 'center' }}><input type="checkbox" checked={showAgents} onChange={e => setShowAgents(e.target.checked)} title="Render the agents" /></span>
                   <span style={{ textAlign: 'center' }}><input type="checkbox" checked={simulateAgents} onChange={e => setSimulateAgents(e.target.checked)} title="Run the agent step (freeze agents — and their cell deposits — when off)" /></span>
+                  {/* Bonds row — only for models whose Bonds capability isn't Off
+                      (resolveMaxBonds > 0 — bonds can't exist otherwise). Show-only:
+                      hiding the lines is a display choice, the springs keep running. */}
+                  {resolveMaxBonds(model.centerBased) > 0 && (<>
+                    <span style={{ paddingLeft: 12 }}>Bonds</span>
+                    <span style={{ textAlign: 'center' }}><input type="checkbox" checked={showBonds} onChange={e => setShowBonds(e.target.checked)} title="Render the bond links between agents (display only — bond physics keeps simulating)" /></span>
+                    <span />
+                  </>)}
                 </div>
               </div>
               {/* Brush affects — which layer the LMB brush targets. Only meaningful

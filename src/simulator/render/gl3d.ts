@@ -124,7 +124,11 @@ export interface Camera3D { yaw: number; pitch: number; dist: number; target: [n
 export interface ClipPlane3D { enabled: boolean; axis: 'x' | 'y' | 'z' | 'camera'; lo: number; hi: number; }
 /** Toggleable scene overlays + render-layer visibility. `voxels`/`agents` gate the
  *  CA-grid voxel pass and the agent (bond + sphere) pass in render(). */
-export interface Viz3D { axes: boolean; grid: boolean; bounds: boolean; gizmo: boolean; voxels: boolean; agents: boolean; }
+export interface Viz3D { axes: boolean; grid: boolean; bounds: boolean; gizmo: boolean; voxels: boolean; agents: boolean;
+  /** Render the agent BOND lines (display-only — the bond springs keep simulating).
+   *  Only meaningful when `agents` is on; the panel toggle only shows for models
+   *  whose Bonds capability isn't Off (resolveMaxBonds > 0). */
+  bonds: boolean; }
 
 /** Bond-Graph Agents — the subset of the per-`stepped` render snapshot the 3D
  *  renderer needs. Positions are in continuous WORLD (cell) coordinates. `z` is a
@@ -585,7 +589,7 @@ export class Gl3DRenderer {
   // billboards face the camera (a stale basis points the impostors wrong).
   private camRight: [number, number, number] = [1, 0, 0];
   private camUp: [number, number, number] = [0, 1, 0];
-  private viz: Viz3D = { axes: false, grid: false, bounds: false, gizmo: true, voxels: true, agents: true };
+  private viz: Viz3D = { axes: false, grid: false, bounds: false, gizmo: true, voxels: true, agents: true, bonds: true };
   /** Brush interaction plane (bounds + grid indicator). null = not shown. */
   private brushPlane: { axis: 'x' | 'y' | 'z'; pos: number } | null = null;
   /** Hovered brush FOOTPRINT — every cell the brush would affect, drawn as
@@ -1267,7 +1271,7 @@ export class Gl3DRenderer {
           this.renderBrushPlane();
           gl.colorMask(true, true, true, true);
         }
-        this.renderBonds();    // bonds first (depth-tested UNDER the spheres)
+        if (this.viz.bonds) this.renderBonds(); // bonds first (depth-tested UNDER the spheres; display-toggleable)
         this.renderAgents();   // sphere impostors (non-sprite agents)
         this.renderSprites();  // sprite billboards (sprite-agents; on top, blended)
       }
