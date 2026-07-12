@@ -376,6 +376,44 @@ export function detectMissingConfig(
       if (!hasIndicator(config.indicatorId)) issues.push('Select an indicator');
       break;
 
+    // Overseer nodes — required configs. (Series names are free strings with
+    // defaults, so only the reference-typed configs badge.)
+    case 'ovSetModelAttribute':
+      if (!model.attributes.some(a => a.isModelAttribute && a.id === config.attributeId)) {
+        issues.push('Select a model attribute');
+      }
+      break;
+    case 'ovLoadPreset':
+      if (!(model.presets ?? []).some(p => p.id === config.presetId)) {
+        issues.push('Select a preset');
+      }
+      break;
+    case 'ovReadIndicator': {
+      const ind = (model.indicators ?? []).find(i => i.id === config.indicatorId);
+      if (!ind) { issues.push('Select an indicator'); break; }
+      // Spatial indicators are position-binned arrays, not scalars — excluded
+      // (same boundary as End Conditions).
+      if (ind.kind === 'linked' && ind.xAxis && ind.xAxis !== 'generation') {
+        issues.push('Spatial indicators (rows/columns/layers axis) cannot be read as a scalar');
+      }
+      const isFreq = ind.kind === 'linked' && (ind.linkedAggregation ?? 'frequency') === 'frequency';
+      if (isFreq && !String(config.category ?? '')) {
+        issues.push('Pick the frequency category to read');
+      }
+      break;
+    }
+    case 'ovCollectSample':
+    case 'ovClearSeries':
+    case 'ovSeriesStat':
+      if (!String(config.series ?? '').trim()) issues.push('Name the sample series');
+      break;
+    case 'ovSweepValues':
+      if (config.mode !== 'linspace') {
+        const anyVal = String(config.list ?? '').split(',').some(s => Number.isFinite(parseFloat(s.trim())));
+        if (!anyVal) issues.push('Enter at least one sweep value');
+      }
+      break;
+
     case 'getConstant':
       if (config.constType === 'tag') {
         if (!hasTagAttr(config.tagAttributeId)) {

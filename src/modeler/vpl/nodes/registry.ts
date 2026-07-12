@@ -120,6 +120,23 @@ import { MarkCellUpdatedNode } from './MarkCellUpdatedNode';
 import { GetVariableNode } from './GetVariableNode';
 import { SetVariableNode } from './SetVariableNode';
 import { SetArrayElementNode } from './SetArrayElementNode';
+import { ExperimentNode } from './ExperimentNode';
+import { OvResetBoardNode } from './OvResetBoardNode';
+import { OvRunGenerationsNode } from './OvRunGenerationsNode';
+import { OvRunUntilStopNode } from './OvRunUntilStopNode';
+import { OvSetSeedNode } from './OvSetSeedNode';
+import { OvSetModelAttributeNode } from './OvSetModelAttributeNode';
+import { OvLoadPresetNode } from './OvLoadPresetNode';
+import { OvReadIndicatorNode } from './OvReadIndicatorNode';
+import { OvGetGenerationNode } from './OvGetGenerationNode';
+import { OvCollectSampleNode } from './OvCollectSampleNode';
+import { OvClearSeriesNode } from './OvClearSeriesNode';
+import { OvSeriesStatNode } from './OvSeriesStatNode';
+import { OvSweepValuesNode } from './OvSweepValuesNode';
+import { OvLogNode } from './OvLogNode';
+import { OvStopExperimentNode } from './OvStopExperimentNode';
+import { OvScreenshotNode } from './OvScreenshotNode';
+import { OvStartRecordingNode, OvStopRecordingNode } from './OvRecordingNode';
 
 const ALL_NODES: NodeTypeDef[] = [
   // Event (entry points)
@@ -128,6 +145,26 @@ const ALL_NODES: NodeTypeDef[] = [
   InputColorNode,
   OutputMappingNode,
   StopEventNode,
+  // Overseer — experiment orchestration (gated by requirements.overseer;
+  // visible ONLY on the Overseer sub-tab of a model with the Overseer enabled).
+  ExperimentNode,
+  OvResetBoardNode,
+  OvRunGenerationsNode,
+  OvRunUntilStopNode,
+  OvSetSeedNode,
+  OvSetModelAttributeNode,
+  OvLoadPresetNode,
+  OvReadIndicatorNode,
+  OvGetGenerationNode,
+  OvCollectSampleNode,
+  OvClearSeriesNode,
+  OvSeriesStatNode,
+  OvSweepValuesNode,
+  OvLogNode,
+  OvStopExperimentNode,
+  OvScreenshotNode,
+  OvStartRecordingNode,
+  OvStopRecordingNode,
   // Bond-Graph Agents — agent rule-graph event roots + read/request nodes
   // (gated by requirements.bondGraph; visible only on the Agents sub-tab).
   BehaviourStepNode,

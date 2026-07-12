@@ -2042,6 +2042,207 @@ function CaNodeComponent({ id, data }: NodeProps) {
           />
         )}
 
+        {/* ---------- Overseer node configs (experiment orchestration) ---------- */}
+        {nodeData.nodeType === 'ovSetModelAttribute' && (
+          <select
+            className={styles.select}
+            value={(nodeData.config.attributeId as string) || ''}
+            onChange={e => updateConfig('attributeId', e.target.value)}
+          >
+            <option value="">Select model attribute...</option>
+            {model.attributes
+              .filter(a => a.isModelAttribute && a.type !== 'color' && a.type !== 'lookupTable' && a.type !== 'vector')
+              .map(a => (
+                <option key={a.id} value={a.id}>{a.name}</option>
+              ))}
+          </select>
+        )}
+
+        {nodeData.nodeType === 'ovReadIndicator' && (() => {
+          const eligible = (model.indicators || []).filter(i =>
+            !(i.kind === 'linked' && i.xAxis && i.xAxis !== 'generation'));
+          const sel = eligible.find(i => i.id === nodeData.config.indicatorId);
+          const isFreq = sel?.kind === 'linked' && (sel.linkedAggregation ?? 'frequency') === 'frequency';
+          const srcAttr = isFreq ? model.attributes.find(a => a.id === sel?.linkedAttributeId) : undefined;
+          const knownCats = srcAttr?.type === 'bool' ? ['false', 'true']
+            : srcAttr?.type === 'tag' ? (srcAttr.tagOptions ?? [])
+            : null;
+          return (
+            <>
+              <select
+                className={styles.select}
+                value={(nodeData.config.indicatorId as string) || ''}
+                onChange={e => updateConfig('indicatorId', e.target.value)}
+              >
+                <option value="">Select indicator...</option>
+                {eligible.map(i => (
+                  <option key={i.id} value={i.id}>{i.name}</option>
+                ))}
+              </select>
+              {isFreq && (knownCats ? (
+                <select
+                  className={styles.select}
+                  value={(nodeData.config.category as string) || ''}
+                  onChange={e => updateConfig('category', e.target.value)}
+                  title="Which frequency category (count) to read."
+                >
+                  <option value="">Select category...</option>
+                  {knownCats.map(c => (
+                    <option key={c} value={c}>{c}</option>
+                  ))}
+                </select>
+              ) : (
+                <input
+                  className={styles.input}
+                  placeholder="Category (bucket key)..."
+                  value={(nodeData.config.category as string) ?? ''}
+                  onChange={e => updateConfig('category', e.target.value)}
+                  onMouseDown={stopDrag}
+                  onDoubleClick={stopAll}
+                  title="Numeric frequency buckets are runtime-keyed — enter the bucket key to read."
+                />
+              ))}
+            </>
+          );
+        })()}
+
+        {nodeData.nodeType === 'ovLoadPreset' && (
+          <select
+            className={styles.select}
+            value={(nodeData.config.presetId as string) || ''}
+            onChange={e => updateConfig('presetId', e.target.value)}
+          >
+            <option value="">Select preset...</option>
+            {(model.presets || []).map(p => (
+              <option key={p.id} value={p.id}>{p.name}</option>
+            ))}
+          </select>
+        )}
+
+        {(nodeData.nodeType === 'ovCollectSample'
+          || nodeData.nodeType === 'ovClearSeries'
+          || nodeData.nodeType === 'ovSeriesStat') && (
+          <>
+            <input
+              className={styles.input}
+              placeholder="Series name..."
+              value={(nodeData.config.series as string) ?? ''}
+              onChange={e => updateConfig('series', e.target.value)}
+              onMouseDown={stopDrag}
+              onDoubleClick={stopAll}
+              title="The sample series this node targets (created on first sample)."
+            />
+            {nodeData.nodeType === 'ovCollectSample' && (
+              <select
+                className={styles.select}
+                value={(nodeData.config.scope as string) || 'experiment'}
+                onChange={e => updateConfig('scope', e.target.value)}
+                title="experiment = accumulate across the whole experiment; run = cleared at each Reset Board."
+              >
+                <option value="experiment">Scope: experiment</option>
+                <option value="run">Scope: run (clears on Reset)</option>
+              </select>
+            )}
+            {nodeData.nodeType === 'ovSeriesStat' && (
+              <select
+                className={styles.select}
+                value={(nodeData.config.op as string) || 'mean'}
+                onChange={e => updateConfig('op', e.target.value)}
+              >
+                <option value="mean">Mean</option>
+                <option value="std">Std (sample)</option>
+                <option value="min">Min</option>
+                <option value="max">Max</option>
+                <option value="median">Median</option>
+                <option value="sum">Sum</option>
+                <option value="count">Count</option>
+                <option value="ci95">95% CI half-width</option>
+              </select>
+            )}
+          </>
+        )}
+
+        {nodeData.nodeType === 'ovSweepValues' && (
+          <>
+            <select
+              className={styles.select}
+              value={(nodeData.config.mode as string) || 'list'}
+              onChange={e => updateConfig('mode', e.target.value)}
+            >
+              <option value="list">Explicit list</option>
+              <option value="linspace">Evenly spaced (linspace)</option>
+            </select>
+            {(nodeData.config.mode || 'list') === 'list' ? (
+              <input
+                className={styles.input}
+                placeholder="1, 2, 5, 10"
+                value={(nodeData.config.list as string) ?? ''}
+                onChange={e => updateConfig('list', e.target.value)}
+                onMouseDown={stopDrag}
+                onDoubleClick={stopAll}
+                title="Comma-separated parameter values to sweep."
+              />
+            ) : (
+              <>
+                <InlineNumberInput
+                  className={styles.input}
+                  placeholder="from"
+                  value={(nodeData.config.from as string) || '0'}
+                  onChange={v => updateConfig('from', v)}
+                />
+                <InlineNumberInput
+                  className={styles.input}
+                  placeholder="to"
+                  value={(nodeData.config.to as string) || '1'}
+                  onChange={v => updateConfig('to', v)}
+                />
+                <InlineNumberInput
+                  className={styles.input}
+                  placeholder="steps"
+                  value={(nodeData.config.steps as string) || '5'}
+                  onChange={v => updateConfig('steps', v)}
+                />
+              </>
+            )}
+          </>
+        )}
+
+        {nodeData.nodeType === 'ovLog' && (
+          <input
+            className={styles.input}
+            placeholder="value = {value} (gen {gen})"
+            value={(nodeData.config.text as string) ?? ''}
+            onChange={e => updateConfig('text', e.target.value)}
+            onMouseDown={stopDrag}
+            onDoubleClick={stopAll}
+            title="Journal line. Placeholders: {value} = the wired Value input, {gen} = the current generation."
+          />
+        )}
+
+        {nodeData.nodeType === 'ovStopExperiment' && (
+          <input
+            className={styles.input}
+            placeholder="Stop message..."
+            value={(nodeData.config.message as string) ?? ''}
+            onChange={e => updateConfig('message', e.target.value)}
+            onMouseDown={stopDrag}
+            onDoubleClick={stopAll}
+            title="Journal-logged when the experiment ends here."
+          />
+        )}
+
+        {nodeData.nodeType === 'ovScreenshot' && (
+          <input
+            className={styles.input}
+            placeholder="Label..."
+            value={(nodeData.config.label as string) ?? ''}
+            onChange={e => updateConfig('label', e.target.value)}
+            onMouseDown={stopDrag}
+            onDoubleClick={stopAll}
+            title="Used in the download filename + the journal entry."
+          />
+        )}
+
         {nodeData.nodeType === 'getRandom' && (
           <>
             <select
