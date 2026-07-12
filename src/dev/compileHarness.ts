@@ -25,6 +25,7 @@ import { computeLayoutFromModel, buildViewerIds } from '../modeler/vpl/compiler/
 import { compileGraphWebGPU } from '../modeler/vpl/compiler/webgpu/compile';
 import { compileAgentGraphWasmForModel, isAgentGraphWasmSupported } from '../modeler/vpl/compiler/agentWasm/compile';
 import { compileAgentGraphWebGPUForModel, isAgentGraphWebGPUSupported } from '../modeler/vpl/compiler/agentWebgpu/compile';
+import { compileOverseerGraph } from '../modeler/vpl/compiler/overseer/compile';
 
 export interface CompileAllResult {
   js: { stepCode: string; fullCode: string; error: string | null };
@@ -43,6 +44,10 @@ export interface CompileAllResult {
      *  WGSL module (empty for a non-agent / unsupported model). */
     webgpu: { supported: boolean; shaderCode: string; supportedTypes: string[]; error: string | null };
   };
+  /** Overseer — the async experiment DRIVER body (main-thread JS, not a compile
+   *  target; see compiler/overseer/compile.ts). `driverCode` is null when the
+   *  feature is off or the graph has no Experiment root. */
+  overseer: { driverCode: string | null; error: string | null };
 }
 
 export function compileAll(model: CAModel): CompileAllResult {
@@ -55,6 +60,7 @@ export function compileAll(model: CAModel): CompileAllResult {
       wasm: { supported: false, bytesLen: 0, bytesJoined: '', supportedTypes: [], error: null },
       webgpu: { supported: false, shaderCode: '', supportedTypes: [], error: null },
     },
+    overseer: { driverCode: null, error: null },
   };
   // JS — capture step + initCode + all inputColor + all outputMapping code so
   // OM/IC/init emits (e.g. setCellLooks colour writes) are searchable.
@@ -126,6 +132,16 @@ export function compileAll(model: CAModel): CompileAllResult {
   } catch (e) {
     out.agent.webgpu.error = String((e as Error)?.message || e);
   }
+  // Overseer — the async experiment driver (only when the feature is enabled).
+  try {
+    if (model.overseerConfig?.enabled) {
+      const r = compileOverseerGraph(model.overseerGraphNodes || [], model.overseerGraphEdges || [], model);
+      out.overseer.driverCode = r.driverCode;
+      out.overseer.error = r.error;
+    }
+  } catch (e) {
+    out.overseer.error = String((e as Error)?.message || e);
+  }
   return out;
 }
 
@@ -135,6 +151,8 @@ export function compileAll(model: CAModel): CompileAllResult {
 export function migrateForHarness(m: CAModel): CAModel {
   m.graphNodes ||= [];
   m.graphEdges ||= [];
+  m.overseerGraphNodes ||= [];
+  m.overseerGraphEdges ||= [];
   m.macroDefs ||= [];
   m.indicators ||= [];
   m.variables ||= [];

@@ -9,6 +9,7 @@ const sections = [
   { id: 'macros', label: 'The Macro System' },
   { id: '3dgridca', label: '3D Grid CA' },
   { id: 'agents', label: 'Bond-Graph Agents' },
+  { id: 'overseer', label: 'The Overseer (Experiments)' },
   { id: 'simulator', label: 'The Simulator' },
   { id: 'shortcuts', label: 'Keyboard Shortcuts' },
   { id: 'fileformat', label: 'File Format' },
@@ -1565,6 +1566,76 @@ export function HelpView() {
             <strong> Save Project</strong> with the grid option enabled, and are restored on
             load &mdash; so a grown tissue or an aggregated flock resumes exactly where you
             left it.
+          </p>
+        </section>
+
+        {/* ============================================================ */}
+        <section id="help-overseer" className={styles.section}>
+          <h2 className={styles.h2}>The Overseer (Experiment Orchestration)</h2>
+          <p className={styles.p}>
+            The <strong>Overseer</strong> is an opt-in third graph that automates whole
+            experiments <em>around</em> the simulation. Where the Cells and Agents graphs
+            define what happens <em>inside</em> a run, the Overseer graph is the
+            experiment protocol: repeat seeded runs, sweep parameters, run until a Stop
+            Event, read indicators, collect samples, aggregate statistics, and log or
+            capture the results &mdash; so a <em>set of executions</em> becomes one
+            reproducible, automated experiment (mean &plusmn; std across replicates, a
+            sweep response curve) instead of one anecdotal run.
+          </p>
+          <p className={styles.p}>
+            Enable it with <strong>Use Overseer</strong> in Model Properties &rarr;
+            Execution. That reveals an <strong>Overseer</strong> tab in the Modeler&apos;s
+            graph strip and an <strong>Experiments</strong> panel in the Simulator&apos;s
+            right panel. With the checkbox off the feature is completely invisible.
+          </p>
+          <h3 className={styles.h3}>Building an experiment</h3>
+          <p className={styles.p}>
+            Start from the <strong>Experiment</strong> node (the root &mdash; it runs when
+            you press <strong>Run Experiment</strong> in the Experiments panel) and chain
+            the protocol from its DO port using the familiar flow nodes (Loop, If/Then,
+            For Each In Array, Switch, Sequence) plus the Overseer actions:
+          </p>
+          <ul className={styles.ul}>
+            <li><strong>Reset Board / Run Generations / Run Until Stop</strong> &mdash; drive
+              the simulation (Run Until Stop ends on a Stop Event, an End Condition, or its
+              safety cap, and outputs the generation it stopped at and why).</li>
+            <li><strong>Set Random Seed</strong> + the per-run <strong>seed policy</strong>
+              (Model Properties &rarr; Overseer) &mdash; make runs reproducible. The
+              &quot;sequential&quot; policy re-seeds each Reset with base + run index, so
+              replicates differ from each other but the whole batch reproduces exactly.</li>
+            <li><strong>Set Model Attribute / Load Preset / Sweep Values</strong> &mdash; the
+              parameter-sweep primitives (Sweep Values feeds For Each In Array; Set Model
+              Attribute behaves like the simulator sliders &mdash; runtime-only, it never
+              edits the model definition).</li>
+            <li><strong>Read Indicator / Get Generation</strong> &mdash; measurements. The
+              Overseer reads what indicators already compute (for a frequency indicator,
+              pick the category to read); values are always the latest simulated state.</li>
+            <li><strong>Collect Sample / Series Statistic / Clear Series</strong> &mdash; the
+              statistics layer: append measurements to named series, then aggregate
+              (mean, std, min, max, median, sum, count, 95% CI).</li>
+            <li><strong>Log Message / Take Screenshot / Start &amp; Stop Recording /
+              Stop Experiment</strong> &mdash; journal lines (with {'{value}'} and {'{gen}'}
+              placeholders), captures, and an early exit.</li>
+          </ul>
+          <h3 className={styles.h3}>The Experiments panel</h3>
+          <p className={styles.p}>
+            <strong>Run Experiment</strong> executes the graph (the transport is disabled
+            while it runs; <strong>Abort</strong> stops it within one step batch). The
+            panel shows a live status line (run count, generation, elapsed), the scrolling
+            <strong> Journal</strong>, and a <strong>Series</strong> table with live
+            statistics &mdash; exportable as <strong>CSV</strong> (long format) or{' '}
+            <strong>JSON</strong> (journal + series). Results are runtime artifacts: they
+            are never saved into the model file.
+          </p>
+          <p className={styles.p}>
+            The Overseer is not a compile target &mdash; it orchestrates the worker from
+            the main thread, so the CA itself keeps running on whichever compile target
+            the model selects (JavaScript, WebAssembly, or WebGPU). Seeded experiments are
+            bit-reproducible on JS and WASM (which share the RNG stream) and
+            statistically reproducible on WebGPU (per-cell PCG &mdash; the documented
+            target difference). See the <strong>GoL Replicate Statistics</strong> library
+            sample for the canonical loop&nbsp;&rarr;&nbsp;collect&nbsp;&rarr;&nbsp;aggregate
+            idiom.
           </p>
         </section>
 
