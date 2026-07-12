@@ -105,6 +105,8 @@ interface InteractionTablePayload {
    *  `normalizeLookupTablePayload` — the flat storage is `Π dims` f64. */
   dims?: number[];
   data?: number[];
+  /** Multi-axis only: per-axis intRange index offsets (for the layout's slot). */
+  mins?: number[];
 }
 
 interface InitMsg {
@@ -2546,11 +2548,15 @@ function initGrid(): void {
   }
   // Lookup tables ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â sized from each table's resolved row/col label counts
   // (carried in the payload, stashed before initGrid). Independent of variegation.
-  const lookupTables: LookupTableLayoutInput[] = lookupTablesPayload.map(t => ({
-    id: t.id,
-    rowCount: t.rowLabels.length || 1,
-    colCount: t.colLabels.length || 1,
-  }));
+  // A MULTI-AXIS (N-D) table ships `dims` (its rowLabels/colLabels are empty),
+  // so it must be sized by Π dims — matching computeLayoutFromModel on the
+  // SimulatorView side, or the region collapses to 1 cell (truncating the table
+  // AND desyncing every offset baked into the WASM module).
+  const lookupTables: LookupTableLayoutInput[] = lookupTablesPayload.map(t =>
+    t.dims && t.dims.length > 0
+      ? { id: t.id, rowCount: t.dims[0] ?? 1, colCount: t.dims[1] ?? 1, dims: t.dims, mins: t.mins }
+      : { id: t.id, rowCount: t.rowLabels.length || 1, colCount: t.colLabels.length || 1 },
+  );
   // Agents-only (CA Grid off): reserve NO neighbour-index tables ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â nothing
   // queries them (buildNeighborIndices + the cell step are skipped), and at
   // agent-world scales they dominate the layout catastrophically: a 600ÃƒÆ’Ã¢â‚¬â€600ÃƒÆ’Ã¢â‚¬â€400
