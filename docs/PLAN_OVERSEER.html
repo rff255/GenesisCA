@@ -1,0 +1,636 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PLAN — The Overseer: experiment orchestration graph</title>
+<style>
+  :root {
+    --bg: #0c0d10; --panel: #14161b; --panel2: #1a1d24; --border: #2a2e38;
+    --text: #d7dae0; --muted: #8b93a1; --accent: #e8a13a; --accent-soft: rgba(232,161,58,.14);
+    --flow: #4caf50; --value: #4cc9f0; --danger: #e05d5d; --ok: #6fd08c; --purple: #9b7fd4;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 15px/1.6 "Segoe UI", system-ui, sans-serif; padding: 0 0 80px; }
+  .wrap { max-width: 1060px; margin: 0 auto; padding: 0 28px; }
+  header { border-bottom: 1px solid var(--border); background: linear-gradient(180deg, #15171c, #0c0d10);
+           padding: 42px 0 30px; margin-bottom: 36px; }
+  h1 { font-size: 30px; margin: 0 0 6px; color: #fff; letter-spacing: .3px; }
+  h1 .ov { color: var(--accent); }
+  .subtitle { color: var(--muted); font-size: 15px; max-width: 860px; }
+  .badge { display: inline-block; background: var(--accent-soft); color: var(--accent);
+           border: 1px solid var(--accent); border-radius: 20px; padding: 2px 14px;
+           font-size: 12px; font-weight: 600; letter-spacing: .8px; margin-bottom: 14px; }
+  h2 { font-size: 21px; color: var(--accent); margin: 46px 0 12px; border-bottom: 1px solid var(--border);
+       padding-bottom: 8px; }
+  h3 { font-size: 16px; color: #fff; margin: 26px 0 8px; }
+  p { margin: 10px 0; }
+  .muted { color: var(--muted); }
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+          padding: 18px 22px; margin: 18px 0; }
+  .fig { background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+         padding: 18px; margin: 20px 0; overflow-x: auto; }
+  .figcap { color: var(--muted); font-size: 13px; margin-top: 10px; text-align: center; }
+  table { border-collapse: collapse; width: 100%; margin: 14px 0; font-size: 13.5px; }
+  th, td { border: 1px solid var(--border); padding: 7px 11px; text-align: left; vertical-align: top; }
+  th { background: var(--panel2); color: var(--accent); font-weight: 600; }
+  td { background: rgba(255,255,255,.015); }
+  code { background: #21242c; color: #ffd28a; border-radius: 4px; padding: 1px 6px; font-size: 12.5px;
+         font-family: Consolas, "Cascadia Code", monospace; }
+  pre { background: #101216; border: 1px solid var(--border); border-radius: 8px; padding: 14px 16px;
+        overflow-x: auto; font-size: 12.5px; line-height: 1.5; }
+  pre code { background: none; padding: 0; color: #cfd6e4; }
+  .k { color: #c586c0; } .s { color: #ce9178; } .c { color: #6a9955; } .f { color: #dcdcaa; } .n { color: #9cdcfe; }
+  ul { margin: 8px 0; padding-left: 24px; }
+  li { margin: 4px 0; }
+  .pill { display: inline-block; border-radius: 12px; padding: 1px 10px; font-size: 11.5px; font-weight: 600; }
+  .pill.flow { background: rgba(76,175,80,.15); color: var(--flow); border: 1px solid var(--flow); }
+  .pill.value { background: rgba(76,201,240,.12); color: var(--value); border: 1px solid var(--value); }
+  .pill.event { background: rgba(255,255,255,.1); color: #fff; border: 1px solid #aaa; }
+  .pill.v2 { background: rgba(155,127,212,.14); color: var(--purple); border: 1px solid var(--purple); }
+  .cols { display: flex; gap: 20px; flex-wrap: wrap; }
+  .cols > div { flex: 1 1 320px; }
+  .decision { border-left: 3px solid var(--accent); padding: 8px 16px; margin: 14px 0;
+              background: rgba(232,161,58,.05); border-radius: 0 8px 8px 0; }
+  .decision b { color: var(--accent); }
+  .warn { border-left: 3px solid var(--danger); padding: 8px 16px; margin: 14px 0;
+          background: rgba(224,93,93,.06); border-radius: 0 8px 8px 0; }
+  .qa { border-left: 3px solid var(--value); padding: 8px 16px; margin: 10px 0;
+        background: rgba(76,201,240,.05); border-radius: 0 8px 8px 0; }
+  svg text { font-family: "Segoe UI", system-ui, sans-serif; }
+  .toc { columns: 2; column-gap: 40px; font-size: 14px; }
+  .toc a { color: var(--value); text-decoration: none; }
+  .toc a:hover { text-decoration: underline; }
+  /* panel mockup */
+  .mock { background: #101216; border: 1px solid var(--border); border-radius: 8px; width: 340px;
+          font-size: 12.5px; margin: 0 auto; }
+  .mock .mtitle { text-align: center; padding: 8px; border-bottom: 1px solid var(--border);
+                  color: var(--text); font-weight: 600; }
+  .mock .msec { padding: 10px 12px; border-bottom: 1px solid var(--border); }
+  .mock .btnrow { display: flex; gap: 8px; }
+  .mock .btn { flex: 1; text-align: center; border-radius: 6px; padding: 6px 0; font-weight: 600; }
+  .mock .btn.run { background: var(--accent); color: #14161b; }
+  .mock .btn.abort { background: transparent; border: 1px solid var(--danger); color: var(--danger); }
+  .mock .status { color: var(--muted); margin-top: 8px; font-size: 12px; }
+  .mock .jline { padding: 3px 6px; border-radius: 4px; margin: 3px 0; background: rgba(255,255,255,.03); }
+  .mock .jline.shot { display: flex; align-items: center; gap: 8px; }
+  .mock .thumb { width: 42px; height: 30px; background: linear-gradient(135deg,#20320f,#4cc9f0 80%);
+                 border-radius: 3px; border: 1px solid var(--border); }
+  .mock table { font-size: 11.5px; margin: 6px 0; }
+  .mock th, .mock td { padding: 3px 7px; }
+  .mock .exp { display: flex; gap: 8px; }
+  .mock .expbtn { flex: 1; text-align: center; border: 1px solid var(--border); border-radius: 6px;
+                  padding: 4px 0; color: var(--value); }
+</style>
+</head>
+<body>
+
+<header><div class="wrap">
+  <div class="badge">PROPOSAL — PLAN ONLY, NOTHING IMPLEMENTED · 2026-07-11</div>
+  <h1>The <span class="ov">Overseer</span> — a third graph for experiment orchestration</h1>
+  <div class="subtitle">
+    The Cells graph and the Agents graph define what happens <em>inside</em> a simulation.
+    The <b>Overseer</b> defines what happens <em>around and across</em> simulations: it is the experiment
+    protocol — reset &amp; prepare the board, set parameters, run, measure via indicators, collect samples,
+    aggregate statistics, capture media, loop. <b>The Cells/Agents graphs are the physics; the Overseer is
+    the scientist.</b> Full written plan: <code>docs/PLAN_OVERSEER.md</code>.
+  </div>
+</div></header>
+
+<div class="wrap">
+
+<div class="card">
+  <b>Contents</b>
+  <div class="toc" style="margin-top:8px">
+    <div><a href="#why">1 · Why — motivating scenarios</a></div>
+    <div><a href="#tiers">2 · The three-tier execution model</a></div>
+    <div><a href="#decisions">3 · Core architecture decisions</a></div>
+    <div><a href="#example">4 · A worked example graph</a></div>
+    <div><a href="#runtime">5 · Runtime — sequence &amp; UI</a></div>
+    <div><a href="#nodes">6 · Node catalogue</a></div>
+    <div><a href="#ea">7 · Evolutionary algorithms</a></div>
+    <div><a href="#phases">8 · Phased delivery (PR0–PR5)</a></div>
+    <div><a href="#risks">9 · Risks &amp; gotchas</a></div>
+    <div><a href="#questions">10 · Open decisions</a></div>
+  </div>
+</div>
+
+<h2 id="why">1 · Why — motivating scenarios</h2>
+<div class="cols">
+  <div class="card"><b style="color:var(--accent)">Statistical replication</b><br>
+    Stochastic models (Chromatography, Amphiphile) are only meaningful in aggregate: repeat 30× with
+    different seeds, report <i>elution generation = mean ± std</i>. Today: 30 manual runs + a spreadsheet.</div>
+  <div class="card"><b style="color:var(--accent)">Parameter sweeps</b><br>
+    "How does <code>gravity</code> affect separation?" — for each value in {1, 2, 5, 10} run K replicates,
+    chart the response curve. Compound/factorial sweeps (weather-model style) follow naturally.</div>
+  <div class="card"><b style="color:var(--accent)">Protocol automation</b><br>
+    Mid-run interventions: prepare the column, run 500 gens, <i>inject the solute band</i> (a board write at
+    gen 500), run until the detector Stop Event fires. InitEvent covers gen 0 only — this covers any time.</div>
+  <div class="card"><b style="color:var(--accent)">Evolutionary algorithms</b><br>
+    A parameter vector is a genome: evaluate fitness from indicators, select, mutate/crossover, repeat.
+    Loops + parameter writes + measurements are exactly the required primitives.</div>
+  <div class="card"><b style="color:var(--accent)">Unattended capture</b><br>
+    "Record a WebM of run 3", "screenshot every 100 generations" — part of the protocol, not a human on the
+    transport bar.</div>
+</div>
+
+<h2 id="tiers">2 · The three-tier execution model</h2>
+<p>The key structural insight: <b>the Overseer is not a compile target — it is the driver that CALLS the
+simulation</b>, sitting exactly where the transport-bar play pipeline sits today (post a step batch → await
+<code>stepped</code> → decide). The CA keeps running on whichever target the model selects; the ALL-TARGET
+rule is satisfied by construction because there is no per-cell work in the Overseer to port.</p>
+
+<div class="fig">
+<svg viewBox="0 0 1000 470" width="100%" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <marker id="arr" markerWidth="10" markerHeight="8" refX="8" refY="4" orient="auto">
+      <path d="M0,0 L9,4 L0,8 z" fill="#e8a13a"/></marker>
+    <marker id="arrc" markerWidth="10" markerHeight="8" refX="8" refY="4" orient="auto">
+      <path d="M0,0 L9,4 L0,8 z" fill="#4cc9f0"/></marker>
+  </defs>
+  <!-- Overseer tier -->
+  <rect x="60" y="26" width="620" height="128" rx="12" fill="#1a1d24" stroke="#e8a13a" stroke-width="2"/>
+  <text x="84" y="56" fill="#e8a13a" font-size="17" font-weight="700">OVERSEER  (main thread — async JS driver)</text>
+  <text x="84" y="82" fill="#d7dae0" font-size="13">Experiment graph → compiled async fn:  loop runs · set params · reset · run N gens ·</text>
+  <text x="84" y="102" fill="#d7dae0" font-size="13">read indicators · collect samples · stats · capture · journal</text>
+  <text x="84" y="132" fill="#8b93a1" font-size="12">tempo: a few node evaluations per run — performance is irrelevant here</text>
+  <!-- loop arrow on overseer -->
+  <path d="M 680 60 C 740 60 740 120 680 120" fill="none" stroke="#e8a13a" stroke-width="2" marker-end="url(#arr)"/>
+  <text x="700" y="95" fill="#e8a13a" font-size="12">repeat ×N</text>
+
+  <!-- protocol arrows -->
+  <path d="M 300 154 L 300 216" stroke="#e8a13a" stroke-width="2" marker-end="url(#arr)"/>
+  <path d="M 440 216 L 440 154" stroke="#4cc9f0" stroke-width="2" marker-end="url(#arrc)"/>
+  <text x="70" y="192" fill="#8b93a1" font-size="12.5">existing worker messages: reset · step{count} · updateModelAttrs ·</text>
+  <text x="70" y="208" fill="#8b93a1" font-size="12.5">setRngSeed · importImage · getState/loadState</text>
+  <text x="452" y="186" fill="#4cc9f0" font-size="12.5">stepped {indicators, gen} · stopEvent</text>
+
+  <!-- Worker tier -->
+  <rect x="60" y="216" width="880" height="170" rx="12" fill="#14161b" stroke="#2a2e38" stroke-width="2"/>
+  <text x="84" y="246" fill="#ffffff" font-size="16" font-weight="700">SIM WORKER  (unchanged hot paths)</text>
+  <!-- cells -->
+  <rect x="84" y="262" width="380" height="104" rx="8" fill="#1a1d24" stroke="#2a2e38"/>
+  <text x="100" y="288" fill="#d7dae0" font-size="13.5" font-weight="600">Cells graph — per-cell step</text>
+  <rect x="100" y="302" width="66" height="24" rx="12" fill="rgba(232,161,58,.14)" stroke="#e8a13a"/>
+  <text x="133" y="318" fill="#e8a13a" font-size="11.5" text-anchor="middle">WASM</text>
+  <rect x="174" y="302" width="76" height="24" rx="12" fill="rgba(76,201,240,.12)" stroke="#4cc9f0"/>
+  <text x="212" y="318" fill="#4cc9f0" font-size="11.5" text-anchor="middle">WebGPU</text>
+  <rect x="258" y="302" width="46" height="24" rx="12" fill="rgba(255,255,255,.08)" stroke="#8b93a1"/>
+  <text x="281" y="318" fill="#d7dae0" font-size="11.5" text-anchor="middle">JS</text>
+  <text x="100" y="352" fill="#8b93a1" font-size="11.5">tempo: up to 25M cells / generation</text>
+  <!-- agents -->
+  <rect x="486" y="262" width="300" height="104" rx="8" fill="#1a1d24" stroke="#2a2e38"/>
+  <text x="502" y="288" fill="#d7dae0" font-size="13.5" font-weight="600">Agents graph — per-agent step</text>
+  <text x="502" y="312" fill="#8b93a1" font-size="12">JS / WASM / WebGPU agent targets,</text>
+  <text x="502" y="330" fill="#8b93a1" font-size="12">force pass, structural phase, field bridge</text>
+  <text x="502" y="352" fill="#8b93a1" font-size="11.5">tempo: up to ~10k agents / generation</text>
+  <!-- indicators -->
+  <rect x="806" y="262" width="114" height="104" rx="8" fill="#1a1d24" stroke="#4cc9f0"/>
+  <text x="863" y="292" fill="#4cc9f0" font-size="13" font-weight="600" text-anchor="middle">Indicators</text>
+  <text x="863" y="314" fill="#8b93a1" font-size="11" text-anchor="middle">the measurement</text>
+  <text x="863" y="330" fill="#8b93a1" font-size="11" text-anchor="middle">layer — ride every</text>
+  <text x="863" y="346" fill="#8b93a1" font-size="11" text-anchor="middle">stepped message</text>
+
+  <!-- results tier -->
+  <path d="M 720 90 L 800 90" stroke="#6fd08c" stroke-width="2" marker-end="url(#arr)"/>
+  <rect x="804" y="40" width="136" height="112" rx="10" fill="#14161b" stroke="#6fd08c"/>
+  <text x="872" y="66" fill="#6fd08c" font-size="13.5" font-weight="700" text-anchor="middle">RESULTS</text>
+  <text x="872" y="88" fill="#d7dae0" font-size="11.5" text-anchor="middle">Journal + Series</text>
+  <text x="872" y="106" fill="#8b93a1" font-size="11" text-anchor="middle">mean ± std, CI, charts</text>
+  <text x="872" y="124" fill="#8b93a1" font-size="11" text-anchor="middle">CSV / JSON export</text>
+  <text x="872" y="142" fill="#8b93a1" font-size="11" text-anchor="middle">PNG / GIF / WebM</text>
+
+  <!-- tier labels -->
+  <text x="60" y="428" fill="#8b93a1" font-size="12.5">Tier table:  per-cell (ns–µs, 3 targets)  ·  per-agent (µs, 3 targets)  ·  per-experiment (ms–s, driver — dominated by awaited sim time)</text>
+  <text x="60" y="452" fill="#8b93a1" font-size="12.5">Same posture as the agent colour pass: orchestration executing a handful of times per second is not hot-path code.</text>
+</svg>
+<div class="figcap">Fig. 1 — The Overseer is an outer loop on the main thread, driving the untouched sim worker
+through the existing message protocol and feeding a results store.</div>
+</div>
+
+<h2 id="decisions">3 · Core architecture decisions (D-OV-1 … D-OV-9)</h2>
+<div class="decision"><b>D-OV-1 — Main-thread runtime, existing worker protocol.</b> Every action maps to a
+message that already exists (<code>reset</code>, <code>step{count}</code>, <code>updateModelAttrs</code>,
+<code>setRngSeed</code>, <code>importImage</code> (has <code>region</code>), <code>getState/loadState</code>,
+<code>stopEvent</code>). Capture stays on the main thread where it already lives. Rejected: in-worker
+overseer — duplicates capture plumbing, couples the experiment to one grid, kills parallel replicates.</div>
+<div class="decision"><b>D-OV-2 — Compile to an async JS driver; reuse per-node JS <code>compile()</code> for
+pure value nodes.</b> New small flow emitter (awaits actions, injects abort checks); value semantics stay in
+lockstep with the Cells/Agents compilers with zero duplication. Rejected: interpreter (semantic-drift risk
+across ~30 shared value nodes); it remains the documented fallback. Debug highlighting via optional
+<code>O.trace(nodeId)</code> emission.</div>
+<div class="decision"><b>D-OV-3 — Third <code>ActiveGraphKind</code>.</b> <code>'cells' | 'agents' |
+'overseer'</code>; the entire Agents-graph swap machinery is reused (SET_OVERSEER_GRAPH, pill strip,
+clipboard tag, palette gating, singleton root).</div>
+<div class="decision"><b>D-OV-4 — Measurements flow through INDICATORS.</b> The Overseer reads the existing,
+3-target-verified measurement layer; it never scans the grid. Raw-state escape hatch deferred (v3+, if
+ever).</div>
+<div class="decision"><b>D-OV-5 — First-class seeding.</b> Promote <code>setRngSeed</code> (exists today,
+DEV-only by convention) to supported; add a Set Random Seed node + per-run auto-seed policy
+(fixed / sequential / random). Within-target reproducibility is the guarantee (JS/WASM bit-reproducible;
+WebGPU statistically equivalent — existing documented stance).</div>
+<div class="decision"><b>D-OV-6 — Results are runtime artifacts.</b> Series (Welford stats, CI) + Journal
+(text/images/tables/video), exported as CSV/JSON — never embedded in <code>.gcaproj</code>.</div>
+<div class="decision"><b>D-OV-7 — Parameter writes are runtime-only.</b> <code>Set Model Attribute</code>
+behaves like the right-panel sliders (worker + panel UI), never dirties the model definition.</div>
+<div class="decision"><b>D-OV-8 — Parallelism is phased.</b> v1 sequential on the visible worker (watchable,
+capture works); PR4 adds a headless worker pool for replicates, with the visible worker as "watch run #k".</div>
+<div class="decision"><b>D-OV-9 — EA: primitives first.</b> Ship an EA sample + macro built from loops,
+variables, RNG, parameter writes and indicator fitness; dedicated EA nodes only if the sample proves
+primitives too clumsy (the SampleArrayByWeight lesson).</div>
+
+<h2 id="example">4 · A worked example — the Chromatography batch</h2>
+<p>Thirty replicates of the shipped Chromatography model, each run-until-detector (its Stop Event already
+exists), collecting the elution generation; then aggregate and log. This directly reproduces the paper's
+"average of 30 runs" methodology.</p>
+
+<div class="fig">
+<svg viewBox="0 0 1000 400" width="100%" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <marker id="fa" markerWidth="9" markerHeight="8" refX="7" refY="4" orient="auto">
+      <path d="M0,0 L8,4 L0,8 z" fill="#4caf50"/></marker>
+    <marker id="va" markerWidth="9" markerHeight="8" refX="7" refY="4" orient="auto">
+      <path d="M0,0 L8,4 L0,8 z" fill="#4cc9f0"/></marker>
+  </defs>
+  <!-- Experiment root -->
+  <g>
+    <rect x="20" y="40" width="120" height="52" rx="8" fill="#f5f5f5" stroke="#999"/>
+    <text x="80" y="62" fill="#1e2a3a" font-size="12.5" font-weight="700" text-anchor="middle">Experiment</text>
+    <text x="80" y="80" fill="#546073" font-size="10.5" text-anchor="middle">event root · DO ▶</text>
+  </g>
+  <path d="M 140 66 L 178 66" stroke="#4caf50" stroke-width="2.2" marker-end="url(#fa)"/>
+  <!-- Loop -->
+  <g>
+    <rect x="180" y="34" width="130" height="70" rx="8" fill="#1a1d24" stroke="#4caf50"/>
+    <text x="245" y="56" fill="#d7dae0" font-size="12.5" font-weight="700" text-anchor="middle">Loop ×30</text>
+    <text x="245" y="74" fill="#8b93a1" font-size="10.5" text-anchor="middle">BODY ▶   DONE ▶</text>
+    <text x="245" y="92" fill="#4cc9f0" font-size="10.5" text-anchor="middle">index → seed</text>
+  </g>
+  <!-- body chain -->
+  <path d="M 310 56 L 348 56" stroke="#4caf50" stroke-width="2.2" marker-end="url(#fa)"/>
+  <g>
+    <rect x="350" y="30" width="118" height="52" rx="8" fill="#1a1d24" stroke="#2a2e38"/>
+    <text x="409" y="52" fill="#d7dae0" font-size="12" font-weight="600" text-anchor="middle">Set Seed</text>
+    <text x="409" y="70" fill="#8b93a1" font-size="10.5" text-anchor="middle">1000 + index</text>
+  </g>
+  <path d="M 468 56 L 506 56" stroke="#4caf50" stroke-width="2.2" marker-end="url(#fa)"/>
+  <g>
+    <rect x="508" y="30" width="118" height="52" rx="8" fill="#1a1d24" stroke="#2a2e38"/>
+    <text x="567" y="52" fill="#d7dae0" font-size="12" font-weight="600" text-anchor="middle">Reset Board</text>
+    <text x="567" y="70" fill="#8b93a1" font-size="10.5" text-anchor="middle">defaults + InitEvent</text>
+  </g>
+  <path d="M 626 56 L 664 56" stroke="#4caf50" stroke-width="2.2" marker-end="url(#fa)"/>
+  <g>
+    <rect x="666" y="24" width="150" height="72" rx="8" fill="#1a1d24" stroke="#e8a13a"/>
+    <text x="741" y="46" fill="#e8a13a" font-size="12.5" font-weight="700" text-anchor="middle">Run Until Stop</text>
+    <text x="741" y="64" fill="#8b93a1" font-size="10.5" text-anchor="middle">maxGens 5000 · awaits the</text>
+    <text x="741" y="80" fill="#8b93a1" font-size="10.5" text-anchor="middle">detector Stop Event</text>
+  </g>
+  <path d="M 816 56 L 854 56" stroke="#4caf50" stroke-width="2.2" marker-end="url(#fa)"/>
+  <g>
+    <rect x="856" y="30" width="128" height="52" rx="8" fill="#1a1d24" stroke="#2a2e38"/>
+    <text x="920" y="52" fill="#d7dae0" font-size="12" font-weight="600" text-anchor="middle">Collect Sample</text>
+    <text x="920" y="70" fill="#8b93a1" font-size="10.5" text-anchor="middle">series “elutionGen”</text>
+  </g>
+  <!-- value wire from RunUntilStop.atGeneration to CollectSample.value -->
+  <path d="M 741 96 C 741 140 920 140 920 82" fill="none" stroke="#4cc9f0" stroke-width="1.8" marker-end="url(#va)"/>
+  <text x="820" y="132" fill="#4cc9f0" font-size="10.5">atGeneration</text>
+
+  <!-- DONE chain -->
+  <path d="M 245 104 L 245 210 L 348 210" fill="none" stroke="#4caf50" stroke-width="2.2" marker-end="url(#fa)"/>
+  <text x="252" y="170" fill="#4caf50" font-size="10.5">DONE</text>
+  <g>
+    <rect x="350" y="184" width="128" height="52" rx="8" fill="#1a1d24" stroke="#2a2e38"/>
+    <text x="414" y="206" fill="#d7dae0" font-size="12" font-weight="600" text-anchor="middle">Log Message</text>
+    <text x="414" y="224" fill="#8b93a1" font-size="10.5" text-anchor="middle">“elution: {0} ± {1} (n=30)”</text>
+  </g>
+  <!-- stats value nodes -->
+  <g>
+    <rect x="120" y="270" width="150" height="48" rx="8" fill="#14161b" stroke="#4cc9f0"/>
+    <text x="195" y="290" fill="#4cc9f0" font-size="11.5" font-weight="600" text-anchor="middle">Series Stat · mean</text>
+    <text x="195" y="306" fill="#8b93a1" font-size="10" text-anchor="middle">series “elutionGen”</text>
+  </g>
+  <g>
+    <rect x="300" y="270" width="150" height="48" rx="8" fill="#14161b" stroke="#4cc9f0"/>
+    <text x="375" y="290" fill="#4cc9f0" font-size="11.5" font-weight="600" text-anchor="middle">Series Stat · std</text>
+    <text x="375" y="306" fill="#8b93a1" font-size="10" text-anchor="middle">series “elutionGen”</text>
+  </g>
+  <path d="M 195 270 C 195 250 380 246 396 236" fill="none" stroke="#4cc9f0" stroke-width="1.8" marker-end="url(#va)"/>
+  <path d="M 375 270 C 375 256 414 252 424 236" fill="none" stroke="#4cc9f0" stroke-width="1.8" marker-end="url(#va)"/>
+
+  <!-- legend -->
+  <rect x="620" y="270" width="360" height="96" rx="8" fill="#101216" stroke="#2a2e38"/>
+  <text x="640" y="294" fill="#8b93a1" font-size="11.5" font-weight="600">Legend</text>
+  <path d="M 640 312 L 672 312" stroke="#4caf50" stroke-width="2.2" marker-end="url(#fa)"/>
+  <text x="682" y="316" fill="#d7dae0" font-size="11">flow (execution order — UE-style triangles)</text>
+  <path d="M 640 336 L 672 336" stroke="#4cc9f0" stroke-width="1.8" marker-end="url(#va)"/>
+  <text x="682" y="340" fill="#d7dae0" font-size="11">value (data)</text>
+  <text x="640" y="360" fill="#8b93a1" font-size="10.5">Loop / Conditional / Sequence / ForEach are the EXISTING universal nodes.</text>
+</svg>
+<div class="figcap">Fig. 2 — The Chromatography batch as an Overseer graph. Only the amber-bordered node and the
+white root are new node types in this picture; the rest reuses the existing catalogue.</div>
+</div>
+
+<h3>What the compiler emits (D-OV-2)</h3>
+<pre><code><span class="c">// Experiment → Loop(30) → [SetSeed, Reset, RunUntilStop, CollectSample] ; DONE → stats + log</span>
+(<span class="k">async function</span> <span class="f">experiment</span>(O) {
+  <span class="k">const</span> _modelAttrs = O.modelAttrs;              <span class="c">// live view for reused getModelAttribute emits</span>
+  <span class="k">for</span> (<span class="k">let</span> _l1 = 0; _l1 &lt; 30; _l1++) {
+    <span class="k">await</span> O.<span class="f">setSeed</span>(1000 + _l1);
+    <span class="k">await</span> O.<span class="f">reset</span>();
+    <span class="k">const</span> _v9 = <span class="k">await</span> O.<span class="f">runUntilStop</span>(5000);   <span class="c">// { atGeneration, stoppedBy, stopIndex }</span>
+    O.<span class="f">sample</span>(<span class="s">'elutionGen'</span>, _v9.atGeneration);
+    <span class="k">if</span> (O.aborted) <span class="k">return</span>;                       <span class="c">// injected after every await + loop back-edges</span>
+  }
+  O.<span class="f">log</span>(<span class="s">`elution: ${O.stat('elutionGen','mean').toFixed(1)} ± ${O.stat('elutionGen','std').toFixed(1)} (n=${O.stat('elutionGen','count')})`</span>);
+})</code></pre>
+
+<h2 id="runtime">5 · Runtime — sequence &amp; the Experiment panel</h2>
+<div class="fig">
+<svg viewBox="0 0 1000 430" width="100%" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <marker id="sa" markerWidth="9" markerHeight="8" refX="7" refY="4" orient="auto">
+      <path d="M0,0 L8,4 L0,8 z" fill="#e8a13a"/></marker>
+    <marker id="sb" markerWidth="9" markerHeight="8" refX="7" refY="4" orient="auto">
+      <path d="M0,0 L8,4 L0,8 z" fill="#4cc9f0"/></marker>
+  </defs>
+  <!-- lifelines -->
+  <text x="120" y="30" fill="#d7dae0" font-size="13.5" font-weight="700" text-anchor="middle">Experiment panel (UI)</text>
+  <text x="470" y="30" fill="#e8a13a" font-size="13.5" font-weight="700" text-anchor="middle">OverseerRuntime (main)</text>
+  <text x="840" y="30" fill="#d7dae0" font-size="13.5" font-weight="700" text-anchor="middle">Sim worker</text>
+  <line x1="120" y1="40" x2="120" y2="410" stroke="#2a2e38" stroke-width="2"/>
+  <line x1="470" y1="40" x2="470" y2="410" stroke="#e8a13a" stroke-width="1.5" stroke-dasharray="4 3"/>
+  <line x1="840" y1="40" x2="840" y2="410" stroke="#2a2e38" stroke-width="2"/>
+
+  <path d="M 124 62 L 462 62" stroke="#e8a13a" stroke-width="1.8" marker-end="url(#sa)"/>
+  <text x="150" y="56" fill="#d7dae0" font-size="11.5">Run Experiment → compile overseer graph, pause transport</text>
+
+  <path d="M 474 96 L 832 96" stroke="#e8a13a" stroke-width="1.8" marker-end="url(#sa)"/>
+  <text x="500" y="90" fill="#d7dae0" font-size="11.5">setRngSeed {seed}</text>
+  <path d="M 474 124 L 832 124" stroke="#e8a13a" stroke-width="1.8" marker-end="url(#sa)"/>
+  <text x="500" y="118" fill="#d7dae0" font-size="11.5">reset</text>
+  <path d="M 836 148 L 478 148" stroke="#4cc9f0" stroke-width="1.6" marker-end="url(#sb)"/>
+  <text x="560" y="142" fill="#4cc9f0" font-size="11">stepped (post-reset paint · indicators valid)</text>
+
+  <rect x="452" y="168" width="36" height="120" rx="6" fill="rgba(232,161,58,.12)" stroke="#e8a13a"/>
+  <text x="447" y="232" fill="#e8a13a" font-size="10.5" text-anchor="end" transform="rotate(-90 447 232)">batched run loop</text>
+  <path d="M 490 186 L 832 186" stroke="#e8a13a" stroke-width="1.8" marker-end="url(#sa)"/>
+  <text x="510" y="180" fill="#d7dae0" font-size="11.5">step {count ≤ batch, reqId: 17}</text>
+  <path d="M 836 214 L 494 214" stroke="#4cc9f0" stroke-width="1.6" marker-end="url(#sb)"/>
+  <text x="540" y="208" fill="#4cc9f0" font-size="11">stepped {reqId: 17, gen, indicators}</text>
+  <path d="M 836 244 L 494 244" stroke="#4cc9f0" stroke-width="1.6" marker-end="url(#sb)"/>
+  <text x="540" y="238" fill="#4cc9f0" font-size="11">stopEvent {message}  (Run Until Stop exits early)</text>
+  <path d="M 466 262 L 128 262" stroke="#e8a13a" stroke-width="1.6" marker-end="url(#sa)"/>
+  <text x="150" y="256" fill="#d7dae0" font-size="11.5">progress tick · journal/series updates (live)</text>
+
+  <path d="M 474 310 L 832 310" stroke="#e8a13a" stroke-width="1.8" marker-end="url(#sa)"/>
+  <text x="500" y="304" fill="#d7dae0" font-size="11.5">getState {reqId}  (Save Snapshot “prepared-column”)</text>
+  <path d="M 836 336 L 478 336" stroke="#4cc9f0" stroke-width="1.6" marker-end="url(#sb)"/>
+  <text x="560" y="330" fill="#4cc9f0" font-size="11">state payload → in-memory slot (budget-checked)</text>
+
+  <path d="M 124 372 L 462 372" stroke="#e05d5d" stroke-width="1.8" stroke-dasharray="5 4" marker-end="url(#sa)"/>
+  <text x="150" y="366" fill="#e05d5d" font-size="11.5">Abort → O.aborted = true (honoured ≤ one batch later)</text>
+  <text x="484" y="398" fill="#8b93a1" font-size="11">worker reinit / recompile / model load while running ⇒ experiment auto-aborts with a journal notice</text>
+</svg>
+<div class="figcap">Fig. 3 — Runtime sequence. <code>reqId</code> (a tiny additive worker echo) keeps overseer
+batch acks distinct from residual play-pipeline messages. Abort latency is bounded by the batch size.</div>
+</div>
+
+<div class="cols">
+<div>
+<h3>Experiment panel (v1 mock)</h3>
+<div class="mock">
+  <div class="mtitle">Experiments</div>
+  <div class="msec">
+    <div class="btnrow"><div class="btn run">▶ Run Experiment</div><div class="btn abort">■ Abort</div></div>
+    <div class="status">run 7/30 · gen 1 143 · elapsed 0:41 · seed policy: sequential (1000+)</div>
+  </div>
+  <div class="msec">
+    <div style="color:var(--muted);font-weight:600;margin-bottom:4px">Journal</div>
+    <div class="jline">run 5 · gen 1287 — stop: “S1 reached detector”</div>
+    <div class="jline shot"><div class="thumb"></div><div>run 6 · screenshot “at-elution”</div></div>
+    <div class="jline">run 6 · gen 1304 — stop: “S1 reached detector”</div>
+    <div class="jline" style="color:var(--accent)">▶ run 7 started (seed 1006)</div>
+  </div>
+  <div class="msec">
+    <div style="color:var(--muted);font-weight:600">Series</div>
+    <table><tr><th>name</th><th>n</th><th>mean</th><th>std</th></tr>
+      <tr><td>elutionGen</td><td>6</td><td>1296.5</td><td>38.2</td></tr>
+      <tr><td>separation</td><td>6</td><td>121.3</td><td>9.9</td></tr></table>
+  </div>
+  <div class="msec" style="border-bottom:none">
+    <div class="exp"><div class="expbtn">⤓ CSV</div><div class="expbtn">⤓ JSON</div><div class="expbtn">Clear</div></div>
+  </div>
+</div>
+<div class="figcap">Fig. 4 — Right-panel section, pattern-consistent with Layers/Agents sections.</div>
+</div>
+<div>
+<h3>Runtime rules that matter</h3>
+<ul>
+  <li><b>Tab-hidden:</b> experiments CONTINUE while the tab is hidden (the auto-pause only gates the play
+      loop; the Overseer drives steps itself). Draw work stays skipped; capture nodes force a frame.</li>
+  <li><b>Mutual exclusion:</b> transport controls disabled while an experiment runs; any worker reinit or
+      recompile aborts the experiment cleanly.</li>
+  <li><b>Indicator freshness:</b> reads are valid only after a run/reset ack (the graph wiring orders this
+      naturally; the runtime awaits the post-reset <code>stepped</code>).</li>
+  <li><b>Snapshot budget:</b> slots hold <code>getState</code> payloads; aggregate cap (~256&nbsp;MB) with a
+      journal warning instead of an OOM.</li>
+  <li><b>Seeding order:</b> <code>setRngSeed</code> is always posted BEFORE <code>reset</code> so InitEvent
+      randomization is governed by the run's seed.</li>
+  <li><b>Driver RNG:</b> Overseer-graph <code>Get Random</code> uses a separate seedable stream owned by the
+      runtime — experiment randomness never perturbs the simulation's stream.</li>
+</ul>
+</div>
+</div>
+
+<h2 id="nodes">6 · Node catalogue (~20 new; ~14 in v1)</h2>
+<p>New nodes carry <code>requirements: { overseer: true }</code>. Availability on the Overseer graph is an
+explicit <b>allowlist</b> (<code>OVERSEER_UNIVERSAL_TYPES</code>) — most universal nodes assume a
+per-cell/per-agent context and must not appear there.</p>
+
+<table>
+<tr><th>Group</th><th>Nodes</th><th>Notes</th></tr>
+<tr><td><span class="pill event">event</span> Root</td>
+    <td><b>Experiment</b></td>
+    <td>Singleton entry point; future hook roots (On Run End…) are v3+.</td></tr>
+<tr><td><span class="pill flow">flow</span> Run control</td>
+    <td><b>Reset Board</b> · <b>Run Generations</b> · <b>Run Until Stop</b> (outs: atGeneration, stoppedBy,
+        stopIndex) · <b>Load Preset</b> · <b>Save/Load Snapshot</b> · <b>Set Random Seed</b> ·
+        <b>Stop Experiment</b></td>
+    <td>All map to existing worker messages (Fig. 1). Snapshot slots are in-memory, budget-capped.</td></tr>
+<tr><td><span class="pill flow">flow</span> Board setup</td>
+    <td><b>Apply Image</b> · <span class="pill v2">v2</span> <b>Write Region</b></td>
+    <td>Apply Image reuses <code>gridifyImage</code> + <code>importImage{region}</code>; embedded data-URL
+        config (≤2 MB, thumbnail-style); 2D-only v1. Write Region = the "inject the solute band at gen 500"
+        primitive.</td></tr>
+<tr><td>Parameters</td>
+    <td><span class="pill flow">flow</span> <b>Set Model Attribute</b> ·
+        <span class="pill value">value</span> Get Model Attribute (reused) ·
+        <span class="pill v2">v2</span> <b>Set Lookup Table Cell</b></td>
+    <td>Runtime-only writes (D-OV-7) — never dirties the model definition.</td></tr>
+<tr><td><span class="pill value">value</span> Measurement</td>
+    <td><b>Read Indicator</b> (freq-category support) · <b>Get Generation</b> · <b>Get Run Index</b> ·
+        <span class="pill v2">v2</span> <b>Get Agent Count</b></td>
+    <td>Latest values from the last <code>stepped</code>; spatial indicators excluded v1 (as End Conditions
+        do).</td></tr>
+<tr><td>Data &amp; stats</td>
+    <td><span class="pill flow">flow</span> <b>Collect Sample</b> / <b>Clear Series</b> ·
+        <span class="pill value">value</span> <b>Series Statistic</b> (mean/std/min/max/median/sum/count/ci95)
+        · <b>Sweep Values</b> (linspace or list → array) ·
+        <span class="pill v2">v2</span> <b>Series Values</b> (array out)</td>
+    <td>Series are runtime stores keyed by config strings; scope run|experiment; Welford accumulation.</td></tr>
+<tr><td><span class="pill flow">flow</span> Capture &amp; journal</td>
+    <td><b>Log Message</b> · <b>Take Screenshot</b> · <b>Start/Stop Recording</b> (gif/webm)</td>
+    <td>Wrap the extracted SimulatorView capture paths; journal entries with downloads; watched-run-only
+        under PR4 pooling.</td></tr>
+<tr><td>Reused universal</td>
+    <td>sequence · conditional · loop · forEachInArray · switch · getConstant · arithmetic · expression ·
+        Compare · logic · getRandom (driver RNG) · valueSwitch · proportionMap · interpolation ·
+        arrayElement/Length · aggregate(array) · getModelAttribute · get/setVariable + setArrayElement
+        (over new <code>overseerVariables</code>)</td>
+    <td>The allowlist IS the safety boundary — per-cell/per-agent nodes (own attrs, neighbours,
+        setCellLooks, set/updateIndicator, bondGraph, Stop Event) are excluded.</td></tr>
+</table>
+
+<h2 id="ea">7 · Evolutionary algorithms (PR5 — primitives first)</h2>
+<div class="fig">
+<svg viewBox="0 0 1000 330" width="100%" xmlns="http://www.w3.org/2000/svg">
+  <defs><marker id="ea" markerWidth="9" markerHeight="8" refX="7" refY="4" orient="auto">
+    <path d="M0,0 L8,4 L0,8 z" fill="#9b7fd4"/></marker></defs>
+  <ellipse cx="500" cy="165" rx="330" ry="120" fill="none" stroke="#2a2e38" stroke-dasharray="4 4"/>
+  <!-- stages around the cycle -->
+  <g><rect x="400" y="20" width="200" height="52" rx="10" fill="#1a1d24" stroke="#9b7fd4"/>
+     <text x="500" y="42" fill="#9b7fd4" font-size="13" font-weight="700" text-anchor="middle">POPULATION</text>
+     <text x="500" y="60" fill="#8b93a1" font-size="10.5" text-anchor="middle">overseer array variables (genomes = param vectors)</text></g>
+  <g><rect x="740" y="110" width="220" height="72" rx="10" fill="#1a1d24" stroke="#e8a13a"/>
+     <text x="850" y="134" fill="#e8a13a" font-size="13" font-weight="700" text-anchor="middle">EVALUATE</text>
+     <text x="850" y="152" fill="#8b93a1" font-size="10.5" text-anchor="middle">per genome: Set Model Attr ×k → Seed →</text>
+     <text x="850" y="168" fill="#8b93a1" font-size="10.5" text-anchor="middle">Reset → Run Until Stop → fitness = indicator</text></g>
+  <g><rect x="620" y="240" width="180" height="52" rx="10" fill="#1a1d24" stroke="#9b7fd4"/>
+     <text x="710" y="262" fill="#9b7fd4" font-size="13" font-weight="700" text-anchor="middle">SELECT</text>
+     <text x="710" y="280" fill="#8b93a1" font-size="10.5" text-anchor="middle">tournament via driver RNG + Compare</text></g>
+  <g><rect x="220" y="240" width="200" height="52" rx="10" fill="#1a1d24" stroke="#9b7fd4"/>
+     <text x="320" y="262" fill="#9b7fd4" font-size="13" font-weight="700" text-anchor="middle">MUTATE / CROSSOVER</text>
+     <text x="320" y="280" fill="#8b93a1" font-size="10.5" text-anchor="middle">expression nodes + Get Random (gaussian-ish)</text></g>
+  <g><rect x="40" y="110" width="200" height="72" rx="10" fill="#1a1d24" stroke="#6fd08c"/>
+     <text x="140" y="134" fill="#6fd08c" font-size="13" font-weight="700" text-anchor="middle">TRACK &amp; STOP</text>
+     <text x="140" y="152" fill="#8b93a1" font-size="10.5" text-anchor="middle">Collect Sample best/mean fitness · journal</text>
+     <text x="140" y="168" fill="#8b93a1" font-size="10.5" text-anchor="middle">Conditional → Stop Experiment on plateau</text></g>
+  <!-- arrows around cycle -->
+  <path d="M 610 52 C 740 60 800 80 840 106" fill="none" stroke="#9b7fd4" stroke-width="2" marker-end="url(#ea)"/>
+  <path d="M 840 186 C 820 214 780 236 804 240" fill="none" stroke="#9b7fd4" stroke-width="2" marker-end="url(#ea)"/>
+  <path d="M 618 268 L 424 268" stroke="#9b7fd4" stroke-width="2" marker-end="url(#ea)"/>
+  <path d="M 218 262 C 160 240 140 210 140 186" fill="none" stroke="#9b7fd4" stroke-width="2" marker-end="url(#ea)"/>
+  <path d="M 160 108 C 220 60 300 40 396 40" fill="none" stroke="#9b7fd4" stroke-width="2" marker-end="url(#ea)"/>
+  <text x="500" y="160" fill="#8b93a1" font-size="11.5" text-anchor="middle">one “EA Generation” = a reusable macro</text>
+  <text x="500" y="178" fill="#8b93a1" font-size="11.5" text-anchor="middle">built ONLY from the primitives above</text>
+</svg>
+<div class="figcap">Fig. 5 — The EA loop maps 1:1 onto Overseer primitives. Dedicated EA nodes (Init
+Population / Select / Mutate / Crossover) are added only if the PR5 sample proves the macro too clumsy —
+the SampleArrayByWeight lesson (primitives beat single-purpose nodes unless demonstrated otherwise).</div>
+</div>
+
+<h2 id="phases">8 · Phased delivery</h2>
+<div class="fig">
+<svg viewBox="0 0 1000 210" width="100%" xmlns="http://www.w3.org/2000/svg">
+  <line x1="40" y1="105" x2="960" y2="105" stroke="#2a2e38" stroke-width="3"/>
+  <g>
+    <circle cx="90" cy="105" r="9" fill="#e8a13a"/>
+    <text x="90" y="70" fill="#e8a13a" font-size="13.5" font-weight="700" text-anchor="middle">PR0</text>
+    <text x="90" y="140" fill="#d7dae0" font-size="11" text-anchor="middle">Scaffolding</text>
+    <text x="90" y="156" fill="#8b93a1" font-size="10" text-anchor="middle">schema · 3rd tab</text>
+    <text x="90" y="170" fill="#8b93a1" font-size="10" text-anchor="middle">round-trip · gating</text>
+  </g>
+  <g>
+    <circle cx="260" cy="105" r="9" fill="#e8a13a"/>
+    <text x="260" y="70" fill="#e8a13a" font-size="13.5" font-weight="700" text-anchor="middle">PR1</text>
+    <text x="260" y="140" fill="#d7dae0" font-size="11" text-anchor="middle">Walking skeleton</text>
+    <text x="260" y="156" fill="#8b93a1" font-size="10" text-anchor="middle">compiler · runtime · panel</text>
+    <text x="260" y="170" fill="#8b93a1" font-size="10" text-anchor="middle">replicate stats end-to-end</text>
+  </g>
+  <g>
+    <circle cx="430" cy="105" r="9" fill="#e8a13a"/>
+    <text x="430" y="70" fill="#e8a13a" font-size="13.5" font-weight="700" text-anchor="middle">PR2</text>
+    <text x="430" y="140" fill="#d7dae0" font-size="11" text-anchor="middle">Protocol depth</text>
+    <text x="430" y="156" fill="#8b93a1" font-size="10" text-anchor="middle">until-stop · presets · image</text>
+    <text x="430" y="170" fill="#8b93a1" font-size="10" text-anchor="middle">snapshots · capture</text>
+  </g>
+  <g>
+    <circle cx="600" cy="105" r="9" fill="#e8a13a"/>
+    <text x="600" y="70" fill="#e8a13a" font-size="13.5" font-weight="700" text-anchor="middle">PR3</text>
+    <text x="600" y="140" fill="#d7dae0" font-size="11" text-anchor="middle">Sweeps &amp; charts</text>
+    <text x="600" y="156" fill="#8b93a1" font-size="10" text-anchor="middle">Sweep Values · grouped series</text>
+    <text x="600" y="170" fill="#8b93a1" font-size="10" text-anchor="middle">mean±CI chart · JSON</text>
+  </g>
+  <g>
+    <circle cx="770" cy="105" r="9" fill="#e8a13a"/>
+    <text x="770" y="70" fill="#e8a13a" font-size="13.5" font-weight="700" text-anchor="middle">PR4</text>
+    <text x="770" y="140" fill="#d7dae0" font-size="11" text-anchor="middle">Parallel replicates</text>
+    <text x="770" y="156" fill="#8b93a1" font-size="10" text-anchor="middle">headless worker pool</text>
+    <text x="770" y="170" fill="#8b93a1" font-size="10" text-anchor="middle">watch-run selector</text>
+  </g>
+  <g>
+    <circle cx="920" cy="105" r="9" fill="#9b7fd4"/>
+    <text x="920" y="70" fill="#9b7fd4" font-size="13.5" font-weight="700" text-anchor="middle">PR5</text>
+    <text x="920" y="140" fill="#d7dae0" font-size="11" text-anchor="middle">Evolutionary algs</text>
+    <text x="920" y="156" fill="#8b93a1" font-size="10" text-anchor="middle">EA sample + macro</text>
+    <text x="920" y="170" fill="#8b93a1" font-size="10" text-anchor="middle">nodes only if needed</text>
+  </g>
+  <text x="500" y="30" fill="#8b93a1" font-size="11.5" text-anchor="middle">Every PR: tsc + build green · dev-harness byte-identity for non-overseer models on all 3 targets · docs updated (CLAUDE.md / Help / README / NODES_REFERENCE)</text>
+</svg>
+<div class="figcap">Fig. 6 — Roadmap. Sample models: GoL Replicate Statistics (PR1) · Chromatography Batch (PR2) ·
+Gravity-vs-Separation Sweep (PR3) · EA — Evolve Separation (PR5).</div>
+</div>
+
+<h2 id="risks">9 · Risks &amp; gotchas (top of the list)</h2>
+<div class="warn"><b>SimulatorView sprawl.</b> The runtime is its own module
+(<code>overseerRuntime.ts</code>); the panel its own component. Do not add another 1000 lines to
+SimulatorView.</div>
+<div class="warn"><b>Binary graph-kind assumptions.</b> Sweep every <code>ActiveGraphKind</code> consumer for
+two-way branches before adding the third value (GraphEditor, palette, Attributes panel, NodeExplorer,
+modelerUiState, clipboard).</div>
+<div class="warn"><b>Cleanup cascades.</b> Every <code>patchAllNodes</code>/<code>clearDeletedId</code> site
+must scan <code>overseerGraphNodes</code> — deleting an indicator/preset/model-attr must clear overseer node
+configs (the Agents graph shipped this bug class once already).</div>
+<div class="warn"><b>Message correlation.</b> Add the <code>reqId</code> echo FIRST, not after the first
+heisenbug — a residual play-pipeline <code>stepped</code> must never be mistaken for an overseer batch ack.</div>
+<ul class="muted" style="font-size:13.5px">
+  <li>Abort latency bounded by batch size; WebGPU until-stop overshoot within <code>webgpuStopCheckInterval</code> — report the actual stop generation.</li>
+  <li>Capture: reuse the extracted paths verbatim; never <code>getImageData</code> a live canvas (documented 6× de-opt).</li>
+  <li>Snapshot memory budget on 5000² grids; journal-warn instead of OOM.</li>
+  <li>Seed BEFORE reset so InitEvent randomization is governed by the run's seed.</li>
+  <li>Allowlist correctness is the safety boundary; hand-edited files get validation badges.</li>
+  <li>Macros with non-allowlisted internals are un-placeable on the Overseer graph (existing macro-scan path).</li>
+  <li>Docs consistency (CLAUDE.md / HelpView / README / NODES_REFERENCE) is part of every PR's definition of done.</li>
+</ul>
+
+<h2 id="questions">10 · Open decisions (user input wanted at PR0)</h2>
+<div class="qa"><b>Q1 — Naming.</b> "Overseer" for the graph/fundamental; panel labeled "Experiments"?
+<span class="muted">(recommended)</span></div>
+<div class="qa"><b>Q2 — v1 catalogue trim</b> (~14 nodes, PR1 list) OK? <span class="muted">(recommended:
+yes — walking skeleton first)</span></div>
+<div class="qa"><b>Q3 — Compiler-with-reuse vs interpreter</b> (D-OV-2)? <span class="muted">(recommended:
+compiler; interpreter stays the fallback)</span></div>
+<div class="qa"><b>Q4 — Parameter writes runtime-only</b> (D-OV-7)? <span class="muted">(recommended: yes —
+slider semantics)</span></div>
+<div class="qa"><b>Q5 — Parallel pool priority</b> — PR4 as scheduled, or pull earlier?
+<span class="muted">(recommended: as scheduled; sequential v1 already delivers the statistics win)</span></div>
+<div class="qa"><b>Q6 — EA depth</b> — primitives-first (D-OV-9)? <span class="muted">(recommended: yes;
+dedicated nodes decided after the PR5 sample)</span></div>
+<div class="qa"><b>Q7 — Apply Image asset storage</b> — embed in node config (≤2 MB, thumbnail-style) vs a
+shared image-asset library? <span class="muted">(recommended: embed v1)</span></div>
+<div class="qa"><b>Q8 — Panel placement</b> — right-panel section vs its own simulator tab?
+<span class="muted">(recommended: right-panel section v1)</span></div>
+
+<p class="muted" style="margin-top:40px;border-top:1px solid var(--border);padding-top:16px">
+Handoff: this proposal + <code>docs/PLAN_OVERSEER.md</code> are the complete deliverable of this session —
+no implementation exists. Implementation starts with PR0 on a fresh feature branch off <code>master</code>
+once the open decisions are answered. Verified code anchors (line numbers drift — re-grep before relying):
+<code>graphState.ts:57</code>, <code>ModelContext.tsx:227/1053/1816</code>, <code>types.ts:947</code>,
+<code>sim.worker.ts:266–368</code> (message interfaces), <code>SimulatorView.tsx:2383/2710/6203/6452/6599</code>.
+</p>
+
+</div>
+</body>
+</html>
