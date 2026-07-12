@@ -1,0 +1,660 @@
+{
+  "schemaVersion": 2,
+  "properties": {
+    "name": "GoL Replicate Statistics",
+    "author": "John Conway (Game of Life)",
+    "modelAuthor": "Rodrigo F. Figueiredo",
+    "description": "The Overseer tutorial: Conway’s Game of Life plus an experiment graph that answers \"how many cells survive a random soup?\" PROPERLY — 20 seeded replicates of Reset → Run 200 generations → Collect the live-cell count, then mean ± std in the Journal. Open the simulator’s Experiments panel and press Run Experiment; the sequential seed policy makes the whole batch exactly reproducible. Switch to the Modeler’s Overseer tab to see the protocol as a graph.",
+    "ruleDescription": "The Cells graph is classic Conway GoL (survive on 2-3 live Moore neighbours, born on exactly 3) with an Init Event seeding a p=0.35 random soup from the current RNG seed.\n\nThe Overseer graph is the experiment protocol: Clear Series → Loop ×20 { Reset Board → Run Generations ×200 → Collect Sample ← Read Indicator(population, category true) } → Log mean → Log std. The per-run seed policy (Model Properties → Overseer) is \"sequential\" with base 4242, so run k re-seeds with 4242+k at its Reset — replicates differ from each other, but the whole experiment reproduces exactly on every press of Run Experiment (JS and WASM targets bit-identical).",
+    "topology": "2d-grid",
+    "boundaryTreatment": "torus",
+    "updateMode": "synchronous",
+    "asyncScheme": "random-order",
+    "gridWidth": 60,
+    "gridHeight": 60,
+    "maxIterations": 100000,
+    "tags": [
+      "Overseer",
+      "experiment",
+      "statistics",
+      "Life",
+      "tutorial"
+    ],
+    "useWasm": true
+  },
+  "attributes": [
+    {
+      "id": "alive",
+      "name": "Alive",
+      "type": "bool",
+      "description": "Whether the cell is alive (1) or dead (0).",
+      "isModelAttribute": false,
+      "defaultValue": "false"
+    }
+  ],
+  "neighborhoods": [
+    {
+      "id": "moore",
+      "name": "Moore (8)",
+      "description": "The 8 cells around the centre (classic Moore neighbourhood).",
+      "coords": [
+        [
+          -1,
+          -1
+        ],
+        [
+          -1,
+          0
+        ],
+        [
+          -1,
+          1
+        ],
+        [
+          0,
+          -1
+        ],
+        [
+          0,
+          1
+        ],
+        [
+          1,
+          -1
+        ],
+        [
+          1,
+          0
+        ],
+        [
+          1,
+          1
+        ]
+      ],
+      "margin": 1
+    }
+  ],
+  "mappings": [
+    {
+      "id": "life_view",
+      "name": "Alive / Dead",
+      "isAttributeToColor": true,
+      "description": "Live cells cyan, dead cells near-black (auto-generated linked colour pass).",
+      "linked": true,
+      "linkedAttributeId": "alive",
+      "linkedColors": {
+        "gradient": [
+          {
+            "position": 0,
+            "r": 13,
+            "g": 27,
+            "b": 43
+          },
+          {
+            "position": 1,
+            "r": 76,
+            "g": 201,
+            "b": 240
+          }
+        ]
+      }
+    }
+  ],
+  "indicators": [
+    {
+      "id": "population",
+      "name": "population",
+      "kind": "linked",
+      "dataType": "bool",
+      "defaultValue": "0",
+      "accumulationMode": "per-generation",
+      "watched": true,
+      "linkedAttributeId": "alive",
+      "linkedAggregation": "frequency",
+      "trackedValues": [
+        "true"
+      ]
+    }
+  ],
+  "graphNodes": [
+    {
+      "id": "nmrhf4wjwvn1w",
+      "type": "caNode",
+      "position": {
+        "x": 0,
+        "y": 0
+      },
+      "data": {
+        "nodeType": "step",
+        "config": {}
+      }
+    },
+    {
+      "id": "nmrhf4wjwuzyr",
+      "type": "caNode",
+      "position": {
+        "x": 0,
+        "y": 190
+      },
+      "data": {
+        "nodeType": "getCellAttribute",
+        "config": {
+          "attributeId": "alive"
+        }
+      }
+    },
+    {
+      "id": "nmrhf4wjw4qab",
+      "type": "caNode",
+      "position": {
+        "x": 0,
+        "y": 380
+      },
+      "data": {
+        "nodeType": "getNeighborsAttribute",
+        "config": {
+          "neighborhoodId": "moore",
+          "attributeId": "alive"
+        }
+      }
+    },
+    {
+      "id": "nmrhf4wjwphqi",
+      "type": "caNode",
+      "position": {
+        "x": 240,
+        "y": 380
+      },
+      "data": {
+        "nodeType": "aggregate",
+        "config": {
+          "operation": "sum"
+        }
+      }
+    },
+    {
+      "id": "nmrhf4wjwxi42",
+      "type": "caNode",
+      "position": {
+        "x": 480,
+        "y": 285
+      },
+      "data": {
+        "nodeType": "statement",
+        "config": {
+          "operation": "between",
+          "lowOp": ">=",
+          "highOp": "<=",
+          "compareType": "numerical",
+          "_port_y": "2",
+          "_port_y2": "3"
+        }
+      }
+    },
+    {
+      "id": "nmrhf4wjw8n7k",
+      "type": "caNode",
+      "position": {
+        "x": 480,
+        "y": 475
+      },
+      "data": {
+        "nodeType": "statement",
+        "config": {
+          "operation": "==",
+          "compareType": "numerical",
+          "_port_y": "3"
+        }
+      }
+    },
+    {
+      "id": "nmrhf4wjwm3pe",
+      "type": "caNode",
+      "position": {
+        "x": 720,
+        "y": 190
+      },
+      "data": {
+        "nodeType": "logicOperator",
+        "config": {
+          "operation": "AND"
+        }
+      }
+    },
+    {
+      "id": "nmrhf4wjwldjc",
+      "type": "caNode",
+      "position": {
+        "x": 720,
+        "y": 475
+      },
+      "data": {
+        "nodeType": "logicOperator",
+        "config": {
+          "operation": "NOT"
+        }
+      }
+    },
+    {
+      "id": "nmrhf4wjwkpl1",
+      "type": "caNode",
+      "position": {
+        "x": 960,
+        "y": 475
+      },
+      "data": {
+        "nodeType": "logicOperator",
+        "config": {
+          "operation": "AND"
+        }
+      }
+    },
+    {
+      "id": "nmrhf4wjwqe9h",
+      "type": "caNode",
+      "position": {
+        "x": 1200,
+        "y": 285
+      },
+      "data": {
+        "nodeType": "logicOperator",
+        "config": {
+          "operation": "OR"
+        }
+      }
+    },
+    {
+      "id": "nmrhf4wjwur7h",
+      "type": "caNode",
+      "position": {
+        "x": 1440,
+        "y": 285
+      },
+      "data": {
+        "nodeType": "setAttribute",
+        "config": {
+          "attributeId": "alive"
+        }
+      }
+    },
+    {
+      "id": "nmrhf4wjwn70j",
+      "type": "caNode",
+      "position": {
+        "x": 0,
+        "y": 760
+      },
+      "data": {
+        "nodeType": "initEvent",
+        "config": {}
+      }
+    },
+    {
+      "id": "nmrhf4wjwr8z4",
+      "type": "caNode",
+      "position": {
+        "x": 240,
+        "y": 855
+      },
+      "data": {
+        "nodeType": "getRandom",
+        "config": {
+          "randomType": "bool",
+          "_port_probability": "0.35"
+        }
+      }
+    },
+    {
+      "id": "nmrhf4wjwxsfq",
+      "type": "caNode",
+      "position": {
+        "x": 480,
+        "y": 760
+      },
+      "data": {
+        "nodeType": "setAttribute",
+        "config": {
+          "attributeId": "alive"
+        }
+      }
+    }
+  ],
+  "graphEdges": [
+    {
+      "id": "emrhf4wjwzygk",
+      "source": "nmrhf4wjw4qab",
+      "target": "nmrhf4wjwphqi",
+      "sourceHandle": "output_value_values",
+      "targetHandle": "input_value_values"
+    },
+    {
+      "id": "emrhf4wjwxqfz",
+      "source": "nmrhf4wjwphqi",
+      "target": "nmrhf4wjwxi42",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_x"
+    },
+    {
+      "id": "emrhf4wjwn7gl",
+      "source": "nmrhf4wjwphqi",
+      "target": "nmrhf4wjw8n7k",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_x"
+    },
+    {
+      "id": "emrhf4wjw98ri",
+      "source": "nmrhf4wjwuzyr",
+      "target": "nmrhf4wjwm3pe",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_a"
+    },
+    {
+      "id": "emrhf4wjwqh7j",
+      "source": "nmrhf4wjwxi42",
+      "target": "nmrhf4wjwm3pe",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_b"
+    },
+    {
+      "id": "emrhf4wjwtd87",
+      "source": "nmrhf4wjwuzyr",
+      "target": "nmrhf4wjwldjc",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_a"
+    },
+    {
+      "id": "emrhf4wjwchrd",
+      "source": "nmrhf4wjwldjc",
+      "target": "nmrhf4wjwkpl1",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_a"
+    },
+    {
+      "id": "emrhf4wjwwouy",
+      "source": "nmrhf4wjw8n7k",
+      "target": "nmrhf4wjwkpl1",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_b"
+    },
+    {
+      "id": "emrhf4wjw1qpc",
+      "source": "nmrhf4wjwm3pe",
+      "target": "nmrhf4wjwqe9h",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_a"
+    },
+    {
+      "id": "emrhf4wjwmpbr",
+      "source": "nmrhf4wjwkpl1",
+      "target": "nmrhf4wjwqe9h",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_b"
+    },
+    {
+      "id": "emrhf4wjwx2bq",
+      "source": "nmrhf4wjwvn1w",
+      "target": "nmrhf4wjwur7h",
+      "sourceHandle": "output_flow_do",
+      "targetHandle": "input_flow_do"
+    },
+    {
+      "id": "emrhf4wjwgmrx",
+      "source": "nmrhf4wjwqe9h",
+      "target": "nmrhf4wjwur7h",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_value"
+    },
+    {
+      "id": "emrhf4wjwbnw5",
+      "source": "nmrhf4wjwn70j",
+      "target": "nmrhf4wjwxsfq",
+      "sourceHandle": "output_flow_do",
+      "targetHandle": "input_flow_do"
+    },
+    {
+      "id": "emrhf4wjwnhj1",
+      "source": "nmrhf4wjwr8z4",
+      "target": "nmrhf4wjwxsfq",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_value"
+    }
+  ],
+  "macroDefs": [],
+  "topologyMode": {
+    "gridCells": true,
+    "agents": false
+  },
+  "overseerConfig": {
+    "enabled": true,
+    "seedPolicy": "sequential",
+    "baseSeed": 4242
+  },
+  "overseerGraphNodes": [
+    {
+      "id": "nmrhf4wjwvqv6",
+      "type": "caNode",
+      "position": {
+        "x": 0,
+        "y": 190
+      },
+      "data": {
+        "nodeType": "experiment",
+        "config": {}
+      }
+    },
+    {
+      "id": "nmrhf4wjwc38y",
+      "type": "caNode",
+      "position": {
+        "x": 240,
+        "y": 190
+      },
+      "data": {
+        "nodeType": "ovClearSeries",
+        "config": {
+          "series": "aliveAt200"
+        }
+      }
+    },
+    {
+      "id": "nmrhf4wjwc0f1",
+      "type": "caNode",
+      "position": {
+        "x": 480,
+        "y": 190
+      },
+      "data": {
+        "nodeType": "loop",
+        "config": {
+          "_port_count": "20"
+        }
+      }
+    },
+    {
+      "id": "nmrhf4wjww09q",
+      "type": "caNode",
+      "position": {
+        "x": 720,
+        "y": 285
+      },
+      "data": {
+        "nodeType": "ovResetBoard",
+        "config": {}
+      }
+    },
+    {
+      "id": "nmrhf4wjwe0js",
+      "type": "caNode",
+      "position": {
+        "x": 960,
+        "y": 285
+      },
+      "data": {
+        "nodeType": "ovRunGenerations",
+        "config": {
+          "_port_count": "200"
+        }
+      }
+    },
+    {
+      "id": "nmrhf4wjw38hb",
+      "type": "caNode",
+      "position": {
+        "x": 960,
+        "y": 475
+      },
+      "data": {
+        "nodeType": "ovReadIndicator",
+        "config": {
+          "indicatorId": "population",
+          "category": "true"
+        }
+      }
+    },
+    {
+      "id": "nmrhf4wjwz0ad",
+      "type": "caNode",
+      "position": {
+        "x": 1200,
+        "y": 285
+      },
+      "data": {
+        "nodeType": "ovCollectSample",
+        "config": {
+          "series": "aliveAt200",
+          "scope": "experiment"
+        }
+      }
+    },
+    {
+      "id": "nmrhf4wjws9p2",
+      "type": "caNode",
+      "position": {
+        "x": 480,
+        "y": 0
+      },
+      "data": {
+        "nodeType": "ovSeriesStat",
+        "config": {
+          "series": "aliveAt200",
+          "op": "mean"
+        }
+      }
+    },
+    {
+      "id": "nmrhf4wjwekxe",
+      "type": "caNode",
+      "position": {
+        "x": 720,
+        "y": 0
+      },
+      "data": {
+        "nodeType": "ovLog",
+        "config": {
+          "text": "survivors @200 gens: mean = {value}"
+        }
+      }
+    },
+    {
+      "id": "nmrhf4wjwry46",
+      "type": "caNode",
+      "position": {
+        "x": 960,
+        "y": 95
+      },
+      "data": {
+        "nodeType": "ovSeriesStat",
+        "config": {
+          "series": "aliveAt200",
+          "op": "std"
+        }
+      }
+    },
+    {
+      "id": "nmrhf4wjw2nkl",
+      "type": "caNode",
+      "position": {
+        "x": 1200,
+        "y": 0
+      },
+      "data": {
+        "nodeType": "ovLog",
+        "config": {
+          "text": "std = {value} (n = 20, seeds 4242..4261)"
+        }
+      }
+    }
+  ],
+  "overseerGraphEdges": [
+    {
+      "id": "emrhf4wjwh8mu",
+      "source": "nmrhf4wjwvqv6",
+      "target": "nmrhf4wjwc38y",
+      "sourceHandle": "output_flow_do",
+      "targetHandle": "input_flow_do"
+    },
+    {
+      "id": "emrhf4wjwalt1",
+      "source": "nmrhf4wjwc38y",
+      "target": "nmrhf4wjwc0f1",
+      "sourceHandle": "output_flow_next",
+      "targetHandle": "input_flow_do"
+    },
+    {
+      "id": "emrhf4wjwz1k8",
+      "source": "nmrhf4wjwc0f1",
+      "target": "nmrhf4wjww09q",
+      "sourceHandle": "output_flow_body",
+      "targetHandle": "input_flow_do"
+    },
+    {
+      "id": "emrhf4wjw4o1k",
+      "source": "nmrhf4wjww09q",
+      "target": "nmrhf4wjwe0js",
+      "sourceHandle": "output_flow_next",
+      "targetHandle": "input_flow_do"
+    },
+    {
+      "id": "emrhf4wjwheaq",
+      "source": "nmrhf4wjwe0js",
+      "target": "nmrhf4wjwz0ad",
+      "sourceHandle": "output_flow_next",
+      "targetHandle": "input_flow_do"
+    },
+    {
+      "id": "emrhf4wjwt4m3",
+      "source": "nmrhf4wjw38hb",
+      "target": "nmrhf4wjwz0ad",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_value"
+    },
+    {
+      "id": "emrhf4wjwrjy0",
+      "source": "nmrhf4wjwc0f1",
+      "target": "nmrhf4wjwekxe",
+      "sourceHandle": "output_flow_next",
+      "targetHandle": "input_flow_do"
+    },
+    {
+      "id": "emrhf4wjwnb4w",
+      "source": "nmrhf4wjws9p2",
+      "target": "nmrhf4wjwekxe",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_value"
+    },
+    {
+      "id": "emrhf4wjwbxen",
+      "source": "nmrhf4wjwekxe",
+      "target": "nmrhf4wjw2nkl",
+      "sourceHandle": "output_flow_next",
+      "targetHandle": "input_flow_do"
+    },
+    {
+      "id": "emrhf4wjwvhuh",
+      "source": "nmrhf4wjwry46",
+      "target": "nmrhf4wjw2nkl",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_value"
+    }
+  ]
+}
