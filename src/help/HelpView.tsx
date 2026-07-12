@@ -1521,7 +1521,10 @@ export function HelpView() {
             holds a <strong>Layers</strong> grid &mdash; independently <strong>Show</strong> (render)
             and <strong>Simulate</strong> (step) the <em>CA grid</em> and the <em>agents</em>, so you
             can freeze one layer and watch the other, or hide a layer to declutter (freezing agents
-            also stops their cell-field deposits) &mdash; and the <strong>Agent Brush</strong>,
+            also stops their cell-field deposits). Models whose <em>Bonds</em> capability isn&apos;t
+            Off also get a <strong>Bonds</strong> row (Show only, 2D and 3D) to toggle the bond-link
+            display &mdash; display-only, the bond physics keeps simulating &mdash; and the
+            <strong> Agent Brush</strong>,
             which mirrors the CA-grid brush: a <em>shape</em> (square / circle / ring / line, with a
             size row and <span className={styles.kbd}>Ctrl</span>+drag resize) and a
             <strong> Single / Area</strong> scope (Single acts on exactly one agent; Area on the whole
