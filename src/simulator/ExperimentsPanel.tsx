@@ -8,7 +8,7 @@
  */
 import { useEffect, useRef } from 'react';
 import styles from './SimulatorView.module.css';
-import type { OverseerRuntime } from './engine/overseerRuntime';
+import type { OverseerRuntime, OverseerSpatialSeries, SpatialAggregate, SpatialAxisMeta } from './engine/overseerRuntime';
 
 function fmt(n: number): string {
   if (!Number.isFinite(n)) return '—';
@@ -37,6 +37,8 @@ export interface ExperimentsPanelProps {
   /** True when the Overseer graph has an Experiment root to run. */
   hasExperiment: boolean;
   modelName: string;
+  /** Axis metadata for a spatial indicator (chart X labels). */
+  spatialMeta?: (indicatorId: string) => SpatialAxisMeta | null;
   onRun: () => void;
   onAbort: () => void;
 }
@@ -48,8 +50,129 @@ const KIND_COLOR: Record<string, string> = {
   error: '#e05d5d',
 };
 
+/** Series palette for the spatial aggregate charts (insertion order). */
+const SPATIAL_PALETTE = ['#6fd08c', '#e05d5d', '#4cc9f0', '#e8a13a', '#9b7fd4', '#f0a8d0'];
+
+interface SpatialChartEntry {
+  name: string;
+  series: OverseerSpatialSeries;
+  agg: SpatialAggregate;
+  color: string;
+}
+
+/** One aggregate chart: faint individual run-curves + a σ band + the bold mean
+ *  per series — the replicate-averaged chromatogram. */
+function SpatialAggregateChart({ chart, entries, meta, version }: {
+  chart: string;
+  entries: SpatialChartEntry[];
+  meta: SpatialAxisMeta | null;
+  version: number;
+}) {
+  const wrapRef = useRef<HTMLDivElement | null>(null);
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+
+  useEffect(() => {
+    const wrap = wrapRef.current, canvas = canvasRef.current;
+    if (!wrap || !canvas) return;
+    const cssW = Math.max(120, wrap.clientWidth);
+    const cssH = 130;
+    const dpr = window.devicePixelRatio || 1;
+    canvas.width = Math.round(cssW * dpr);
+    canvas.height = Math.round(cssH * dpr);
+    canvas.style.width = cssW + 'px';
+    canvas.style.height = cssH + 'px';
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, cssW, cssH);
+
+    const padL = 30, padR = 6, padT = 6, padB = 16;
+    const plotW = cssW - padL - padR, plotH = cssH - padT - padB;
+    const bins = entries.reduce((m, e) => Math.max(m, e.agg.mean.length), 0);
+    if (bins < 2) return;
+    // Y max over mean+σ AND the individual runs so nothing clips.
+    let yMax = 1;
+    for (const e of entries) {
+      for (let b = 0; b < e.agg.mean.length; b++) yMax = Math.max(yMax, e.agg.mean[b]! + e.agg.std[b]!);
+      for (const r of e.series.runs) for (const v of r) yMax = Math.max(yMax, v);
+    }
+    yMax *= 1.06;
+    const x = (b: number) => padL + (b / (bins - 1)) * plotW;
+    const y = (v: number) => padT + plotH - (v / yMax) * plotH;
+
+    // axes
+    ctx.strokeStyle = 'rgba(139,147,161,0.35)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(padL, padT); ctx.lineTo(padL, padT + plotH); ctx.lineTo(padL + plotW, padT + plotH);
+    ctx.stroke();
+    ctx.fillStyle = 'rgba(139,147,161,0.9)';
+    ctx.font = '9px sans-serif';
+    ctx.textAlign = 'right';
+    ctx.fillText(String(Math.round(yMax)), padL - 3, padT + 8);
+    ctx.fillText('0', padL - 3, padT + plotH);
+    // X labels: first + last position (bin × binSize when known).
+    const binSize = meta?.binSize ?? 1;
+    const axisName = meta?.axisName ?? 'bin';
+    ctx.textAlign = 'left';
+    ctx.fillText(`${axisName} 0`, padL, cssH - 4);
+    ctx.textAlign = 'right';
+    ctx.fillText(String((bins - 1) * binSize + (binSize > 1 ? binSize - 1 : 0)), padL + plotW, cssH - 4);
+
+    const drawCurve = (curve: number[], stroke: string, width: number, alpha: number) => {
+      ctx.globalAlpha = alpha;
+      ctx.strokeStyle = stroke;
+      ctx.lineWidth = width;
+      ctx.beginPath();
+      for (let b = 0; b < curve.length; b++) {
+        const px = x(b), py = y(curve[b]!);
+        if (b === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+      }
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+    };
+
+    for (const e of entries) {
+      // faint individual replicates
+      for (const r of e.series.runs) drawCurve(r, e.color, 1, 0.10);
+      // σ band
+      if (e.agg.n >= 2) {
+        ctx.globalAlpha = 0.16;
+        ctx.fillStyle = e.color;
+        ctx.beginPath();
+        for (let b = 0; b < e.agg.mean.length; b++) {
+          const px = x(b), py = y(e.agg.mean[b]! + e.agg.std[b]!);
+          if (b === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+        }
+        for (let b = e.agg.mean.length - 1; b >= 0; b--) {
+          ctx.lineTo(x(b), y(Math.max(0, e.agg.mean[b]! - e.agg.std[b]!)));
+        }
+        ctx.closePath();
+        ctx.fill();
+        ctx.globalAlpha = 1;
+      }
+      // bold mean
+      drawCurve(e.agg.mean, e.color, 2, 1);
+    }
+  }, [entries, meta, version]);
+
+  return (
+    <div ref={wrapRef} style={{ width: '100%' }}>
+      <div style={{ color: '#888', fontWeight: 600, marginTop: 2 }}>{chart}</div>
+      <canvas ref={canvasRef} />
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, fontSize: '0.62rem' }}>
+        {entries.map(e => (
+          <span key={e.name} style={{ color: e.color }}>
+            ━ {e.name} <span style={{ color: '#888' }}>(n={e.agg.n}, mean ± σ)</span>
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export function ExperimentsPanel(props: ExperimentsPanelProps) {
-  const { runtime, running, compileError, hasExperiment, modelName, onRun, onAbort } = props;
+  const { runtime, running, compileError, hasExperiment, modelName, spatialMeta, onRun, onAbort } = props;
   const journalRef = useRef<HTMLDivElement | null>(null);
 
   // Autoscroll the journal to the newest entry on every update.
@@ -59,6 +182,21 @@ export function ExperimentsPanel(props: ExperimentsPanelProps) {
   }, [props.version, runtime?.journal.length]);
 
   const seriesEntries = runtime ? [...runtime.series.entries()] : [];
+  // Spatial series grouped by chart name; palette assigned by insertion order.
+  const spatialCharts = new Map<string, SpatialChartEntry[]>();
+  if (runtime) {
+    let colorIdx = 0;
+    for (const [name, s] of runtime.spatialSeries) {
+      if (s.runs.length === 0) continue;
+      const entry: SpatialChartEntry = {
+        name, series: s, agg: runtime.spatialAggregate(name),
+        color: SPATIAL_PALETTE[colorIdx++ % SPATIAL_PALETTE.length]!,
+      };
+      const group = spatialCharts.get(s.chart) ?? [];
+      group.push(entry);
+      spatialCharts.set(s.chart, group);
+    }
+  }
   const journal = runtime?.journal ?? [];
   const shownJournal = journal.length > 200 ? journal.slice(journal.length - 200) : journal;
   const fname = (modelName || 'experiment').toLowerCase().replace(/\s+/g, '_').replace(/[^a-z0-9_]/g, '') || 'experiment';
@@ -158,13 +296,27 @@ export function ExperimentsPanel(props: ExperimentsPanelProps) {
           </>
         )}
 
-        {runtime && (journal.length > 0 || seriesEntries.length > 0) && (
+        {spatialCharts.size > 0 && runtime && (
+          <>
+            {[...spatialCharts.entries()].map(([chart, entries]) => (
+              <SpatialAggregateChart
+                key={chart}
+                chart={chart}
+                entries={entries}
+                meta={spatialMeta?.(entries[0]!.series.indicatorId) ?? null}
+                version={props.version}
+              />
+            ))}
+          </>
+        )}
+
+        {runtime && (journal.length > 0 || seriesEntries.length > 0 || spatialCharts.size > 0) && (
           <div style={{ display: 'flex', gap: 6 }}>
             <button
               className={styles.controlButton}
               style={{ flex: 1 }}
               onClick={() => download(runtime.exportSeriesCSV(), `${fname}_series.csv`, 'text/csv')}
-              disabled={seriesEntries.length === 0}
+              disabled={seriesEntries.length === 0 && spatialCharts.size === 0}
             >
               ⤓ CSV
             </button>

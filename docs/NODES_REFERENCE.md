@@ -4,11 +4,11 @@ This document catalogues every node in the GenesisCA Visual Programming Language
 describes the port type system, and flags redundancies or gaps. It is a working reference
 to inform future consolidation — it does **not** describe any committed refactoring.
 
-**Scope:** 139 registry node types across 7 categories (event, flow, data, logic, aggregation,
+**Scope:** 140 registry node types across 7 categories (event, flow, data, logic, aggregation,
 output, color) — 3 hidden from the Add Node menu (`macro` / `macroInput` / `macroOutput`),
-leaving **136 selectable** (Agent Capability Profiles added **Get Age** [Lifespan] + the two
+leaving **137 selectable** (Agent Capability Profiles added **Get Age** [Lifespan] + the two
 Sensing nodes **Get Agents In View** [the directional vision cone] + **Sense Hemifield** [the
-Braitenberg L/R split of that cone]; the **Overseer** milestone added the **18
+Braitenberg L/R split of that cone]; the **Overseer** milestone added the **19
 experiment-orchestration nodes** — see the dedicated section at the end of this document).
 Indicator
 nodes live within the `data` (readers) and `output` (writers) categories rather than a
@@ -16,7 +16,7 @@ category of their own. The variegated-cells, local-variable, and Bond-Graph-Agen
 appear in the editor only when their respective model feature is enabled (the 45 agent
 nodes — §3.8 — only in a Bond-Graph-Agents model, and only on its Agents sub-tab, and each
 further gated to its **Agent Capability** so a paradigm shows only its relevant nodes; the
-18 Overseer nodes only in a model with the Overseer enabled, and only on its Overseer
+19 Overseer nodes only in a model with the Overseer enabled, and only on its Overseer
 sub-tab).
 
 **Composite value types (`vector` / `color`):** Make Vector / Break Vector / Vector
@@ -773,7 +773,7 @@ Hidden-from-menu: `macro`, `macroInput`, `macroOutput`. Macro instances
 The **Overseer** milestone added a third graph — the experiment protocol AROUND the
 simulation — with its own node family, gated by `requirements.overseer` (visible ONLY in a
 model with the Overseer enabled, and only on its Overseer sub-tab). These nodes are kept in
-their own table (numbered O1-O18) rather than renumbering the main catalogue. The Overseer
+their own table (numbered O1-O19) rather than renumbering the main catalogue. The Overseer
 is NOT a compile target: the graph compiles to an async main-thread DRIVER
 (`compiler/overseer/compile.ts`) that commands the sim worker through the existing message
 protocol, so the CA keeps running on JS / WASM / WebGPU. Universal value/flow plumbing
@@ -786,7 +786,7 @@ every per-cell / per-agent node is excluded.
 |---|------|-------|--------------|------------------------|
 | O1 | `experiment` | Experiment | Entry point; runs on the Experiments panel''s Run Experiment. Singleton. | `O: DO` (flow) |
 | O2 | `ovResetBoard` | Reset Board | Full Reset semantics (defaults + Init Events, gen -> 0, indicators re-init). The per-run seed policy applies here. | — |
-| O3 | `ovRunGenerations` | Run Generations | Advance N generations (awaited, batch-bounded; a Stop Event / End Condition ends early). | `I: Count` (int, inline) |
+| O3 | `ovRunGenerations` | Run Generations | Advance EXACTLY N generations (awaited, batch-bounded; a fixed-count run — a Stop Event does NOT cut it short, so every replicate reaches the same iteration, the fixed developmental time point an ensemble average needs). | `I: Count` (int, inline) |
 | O4 | `ovRunUntilStop` | Run Until Stop | Run until a Stop Event / End Condition / the cap. | `I: Max Gens`; `O: At Generation`, `O: Stopped By` (0=cap, 1=stop event, 2=end condition) |
 | O5 | `ovSetSeed` | Set Random Seed | Seed the simulation RNG (+ the experiment RNG) — reproducible runs. | `I: Seed` (int, inline) |
 | O6 | `ovSetModelAttribute` | Set Model Attribute | Runtime-only model-attribute write (slider semantics; never edits the model). | `I: Value`; config `attributeId` |
@@ -794,6 +794,7 @@ every per-cell / per-agent node is excluded.
 | O8 | `ovReadIndicator` | Read Indicator | Latest indicator value (frequency indicators: pick the category). Spatial indicators excluded. | `O: Value`; config `indicatorId`, `category` |
 | O9 | `ovGetGeneration` | Get Generation | The current generation. | `O: Generation` |
 | O10 | `ovCollectSample` | Collect Sample | Append a value to a named sample series (scope: run / experiment). | `I: Value`; config `series`, `scope` |
+| O19 | `ovCollectSpatial` | Collect Spatial Sample | Capture a SPATIAL indicator''s whole per-position curve (one category) as one replicate of a named spatial series — aggregated to a mean ± σ chart in the Experiments panel (e.g. the run-averaged chromatogram). Series sharing a Chart name overlay. | config `indicatorId`, `category`, `series`, `chart` |
 | O11 | `ovClearSeries` | Clear Series | Empty a named series (e.g. between sweep groups). | config `series` |
 | O12 | `ovSeriesStat` | Series Statistic | mean / std / min / max / median / sum / count / ci95 over a series. | `O: Result`; config `series`, `op` |
 | O13 | `ovSweepValues` | Sweep Values | An array of parameter values (explicit list or linspace) — feed For Each In Array. | `O: Values` (float[]) |

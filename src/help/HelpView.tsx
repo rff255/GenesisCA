@@ -1613,6 +1613,12 @@ export function HelpView() {
             <li><strong>Collect Sample / Series Statistic / Clear Series</strong> &mdash; the
               statistics layer: append measurements to named series, then aggregate
               (mean, std, min, max, median, sum, count, 95% CI).</li>
+            <li><strong>Collect Spatial Sample</strong> &mdash; capture a <em>spatial</em>
+              indicator&apos;s whole per-position curve (e.g. one solute of a chromatogram)
+              as one replicate; the panel aggregates the replicates into a{' '}
+              <strong>mean &plusmn; &sigma; chart</strong> &mdash; the statistically strong
+              version of a single noisy spatial profile. Series sharing a Chart name overlay
+              on one chart.</li>
             <li><strong>Log Message / Take Screenshot / Start &amp; Stop Recording /
               Stop Experiment</strong> &mdash; journal lines (with {'{value}'} and {'{gen}'}
               placeholders), captures, and an early exit.</li>
@@ -1622,10 +1628,14 @@ export function HelpView() {
             <strong>Run Experiment</strong> executes the graph (the transport is disabled
             while it runs; <strong>Abort</strong> stops it within one step batch). The
             panel shows a live status line (run count, generation, elapsed), the scrolling
-            <strong> Journal</strong>, and a <strong>Series</strong> table with live
-            statistics &mdash; exportable as <strong>CSV</strong> (long format) or{' '}
-            <strong>JSON</strong> (journal + series). Results are runtime artifacts: they
-            are never saved into the model file.
+            <strong> Journal</strong>, a <strong>Series</strong> table with live statistics,
+            and any <strong>aggregate spatial charts</strong> (mean &plusmn; &sigma; curves
+            from Collect Spatial Sample) &mdash; all exportable as <strong>CSV</strong>
+            (long format) or <strong>JSON</strong> (journal + series + spatial aggregates).
+            Results are runtime artifacts: they are never saved into the model file. The{' '}
+            <strong>Chromatography</strong> sample ships a built-in experiment that
+            reproduces the paper&apos;s ensemble chromatogram (Fig. 3) as a run-averaged
+            mean &plusmn; &sigma; curve.
           </p>
           <p className={styles.p}>
             The Overseer is not a compile target &mdash; it orchestrates the worker from

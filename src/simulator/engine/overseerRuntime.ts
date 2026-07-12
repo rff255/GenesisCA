@@ -34,6 +34,35 @@ export interface OverseerSeries {
   values: number[];
 }
 
+/** A SPATIAL sample series — one number[] (per-position-bin curve) per run,
+ *  captured from a spatial indicator by Collect Spatial Sample. The panel
+ *  aggregates the runs into a mean ± σ curve (the replicate-averaged
+ *  chromatogram of the Kier papers). */
+export interface OverseerSpatialSeries {
+  /** Chart group — series sharing a chart overlay on the same axes
+   *  (e.g. S1 + S2 on one chromatogram). */
+  chart: string;
+  indicatorId: string;
+  category: string;
+  /** One captured curve per Collect Spatial Sample execution. */
+  runs: number[][];
+}
+
+/** Per-bin aggregate of a spatial series across its collected runs. */
+export interface SpatialAggregate {
+  n: number;
+  mean: number[];
+  /** Sample std per bin (0 when n < 2). */
+  std: number[];
+}
+
+/** Axis metadata for a spatial chart's X labels, resolved by the host
+ *  (SimulatorView) from the indicator definition + live grid dims. */
+export interface SpatialAxisMeta {
+  axisName: string;   // 'row' | 'column' | 'layer'
+  binSize: number;    // rows per bin (1 when unknown)
+}
+
 export type OverseerOutcome = 'completed' | 'stopped' | 'aborted' | 'error';
 
 export interface OverseerDeps {
@@ -72,6 +101,7 @@ interface PendingAck {
 export class OverseerRuntime {
   readonly journal: OverseerJournalEntry[] = [];
   readonly series = new Map<string, OverseerSeries>();
+  readonly spatialSeries = new Map<string, OverseerSpatialSeries>();
   running = false;
   outcome: OverseerOutcome | null = null;
   /** Reset Board count — the "run" counter shown in the status line. */
@@ -161,16 +191,45 @@ export class OverseerRuntime {
 
   generationNow(): number { return this.lastGen; }
 
-  /** CSV export of every series (long format: series,index,value). */
+  /** Per-bin mean ± sample-σ across a spatial series' collected runs. Bins are
+   *  aligned by index (same indicator + bin config ⇒ constant length; a
+   *  defensive max-length union treats short runs as absent from the tail). */
+  spatialAggregate(name: string): SpatialAggregate {
+    const s = this.spatialSeries.get(name);
+    const runs = s?.runs ?? [];
+    const bins = runs.reduce((m, r) => Math.max(m, r.length), 0);
+    const mean = new Array<number>(bins).fill(0);
+    const std = new Array<number>(bins).fill(0);
+    for (let b = 0; b < bins; b++) {
+      let n = 0, sum = 0;
+      for (const r of runs) if (b < r.length) { n++; sum += r[b]!; }
+      const m = n > 0 ? sum / n : 0;
+      mean[b] = m;
+      if (n >= 2) {
+        let sq = 0;
+        for (const r of runs) if (b < r.length) sq += (r[b]! - m) * (r[b]! - m);
+        std[b] = Math.sqrt(sq / (n - 1));
+      }
+    }
+    return { n: runs.length, mean, std };
+  }
+
+  /** CSV export: scalar series as (series,run,bin='',value); spatial series as
+   *  one row per (run, position bin). */
   exportSeriesCSV(): string {
-    const lines = ['series,index,value'];
+    const lines = ['series,run,bin,value'];
     for (const [name, s] of this.series) {
-      s.values.forEach((v, i) => lines.push(`${JSON.stringify(name)},${i},${v}`));
+      s.values.forEach((v, i) => lines.push(`${JSON.stringify(name)},${i},,${v}`));
+    }
+    for (const [name, s] of this.spatialSeries) {
+      s.runs.forEach((r, runIdx) => {
+        r.forEach((v, b) => lines.push(`${JSON.stringify(name)},${runIdx},${b},${v}`));
+      });
     }
     return lines.join('\n');
   }
 
-  /** JSON export of the full journal + series + stats. */
+  /** JSON export of the full journal + series + stats + spatial aggregates. */
   exportJSON(): string {
     const seriesOut: Record<string, { scope: string; values: number[]; mean: number; std: number; count: number }> = {};
     for (const [name, s] of this.series) {
@@ -179,12 +238,17 @@ export class OverseerRuntime {
         mean: this.statOf(s.values, 'mean'), std: this.statOf(s.values, 'std'), count: s.values.length,
       };
     }
+    const spatialOut: Record<string, { chart: string; indicatorId: string; category: string; runs: number[][]; aggregate: SpatialAggregate }> = {};
+    for (const [name, s] of this.spatialSeries) {
+      spatialOut[name] = { chart: s.chart, indicatorId: s.indicatorId, category: s.category, runs: s.runs, aggregate: this.spatialAggregate(name) };
+    }
     return JSON.stringify({
       finishedAt: new Date().toISOString(),
       outcome: this.outcome,
       resets: this.resets,
       journal: this.journal,
       series: seriesOut,
+      spatialSeries: spatialOut,
     }, null, 2);
   }
 
@@ -290,30 +354,39 @@ export class OverseerRuntime {
     }
   }
 
-  private async runBatches(total: number): Promise<{ stopped: 0 | 1 | 2; message?: string }> {
-    let remaining = total;
-    while (remaining > 0) {
+  /** Advance the simulation `total` generations. Generation-target-driven (not
+   *  batch-count-driven) so it is robust to the worker under-advancing a batch
+   *  when a Stop Event breaks the worker's internal loop early — the next batch
+   *  simply continues from `lastGen`. `haltOnStop` = Run Until Stop semantics
+   *  (return the moment the detector fires / an End Condition trips); when false
+   *  (a fixed-count Run Generations), a Stop Event does NOT halt the run — the
+   *  fixed count runs in full, which is what an ensemble average at a fixed time
+   *  point needs (Run Until Stop is the node for detector-gated running). */
+  private async runBatches(total: number, haltOnStop: boolean): Promise<{ stopped: 0 | 1 | 2; message?: string }> {
+    const targetGen = this.lastGen + total;
+    while (this.lastGen < targetGen) {
       if (this.abortedFlag || this.stopRequested) return { stopped: 0 };
-      const batch = Math.min(remaining, OV_BATCH);
+      const batch = Math.min(targetGen - this.lastGen, OV_BATCH);
       const reqId = ++this.reqCounter;
       const genBefore = this.lastGen;
       this.post({ type: 'step', count: batch, activeViewer: this.deps.getActiveViewer(), skipColorPass: false, reqId });
       await this.awaitAck(reqId);
       await this.nextTick();
       const stopMsg = this.consumeStopEvent();
-      if (stopMsg !== null) {
+      if (stopMsg !== null && haltOnStop) {
         this.pushJournal('text', `Stop event: “${stopMsg}” at gen ${this.lastGen}.`);
         return { stopped: 1, message: stopMsg };
       }
-      const endReason = this.deps.evalEndConditions(this.lastGen, this.lastIndicators);
-      if (endReason) {
-        this.pushJournal('text', `End condition: ${endReason} at gen ${this.lastGen}.`);
-        return { stopped: 2, message: endReason };
+      if (haltOnStop) {
+        const endReason = this.deps.evalEndConditions(this.lastGen, this.lastIndicators);
+        if (endReason) {
+          this.pushJournal('text', `End condition: ${endReason} at gen ${this.lastGen}.`);
+          return { stopped: 2, message: endReason };
+        }
       }
-      // The worker can under-advance only when a stop broke the batch; treat a
-      // stalled generation as completion of the request to avoid a spin.
-      const advanced = this.lastGen - genBefore;
-      remaining -= Math.max(advanced, batch);
+      // Stall guard: if a batch advances nothing (frozen grid / no step fn),
+      // stop rather than spin forever.
+      if (this.lastGen === genBefore) break;
       this.setStatus(`run ${this.resets || 1} · gen ${this.lastGen}`);
     }
     return { stopped: 0 };
@@ -356,7 +429,8 @@ export class OverseerRuntime {
       async run(gens: number): Promise<void> {
         const n = Math.max(0, Math.floor(gens));
         if (n === 0) return;
-        await rt.runBatches(n);
+        // Fixed-count run: a Stop Event does NOT halt it (that's Run Until Stop).
+        await rt.runBatches(n, false);
       },
 
       async runUntilStop(maxGens: number): Promise<{ atGeneration: number; stoppedBy: 0 | 1 | 2 }> {
@@ -365,8 +439,10 @@ export class OverseerRuntime {
         let stoppedBy: 0 | 1 | 2 = 0;
         while (rt.lastGen - startGen < cap && !rt.abortedFlag && !rt.stopRequested) {
           const batch = Math.min(cap - (rt.lastGen - startGen), OV_BATCH);
-          const r = await rt.runBatches(batch);
+          const before = rt.lastGen;
+          const r = await rt.runBatches(batch, true);
           if (r.stopped !== 0) { stoppedBy = r.stopped; break; }
+          if (rt.lastGen === before) break;  // stall guard
         }
         if (stoppedBy === 0) rt.pushJournal('text', `Run Until Stop hit the ${cap}-generation cap at gen ${rt.lastGen}.`);
         return { atGeneration: rt.lastGen, stoppedBy };
@@ -426,6 +502,40 @@ export class OverseerRuntime {
       clearSeries(name: string): void {
         const s = rt.series.get(name);
         if (s) { s.values.length = 0; rt.deps.onUpdate(); }
+        const sp = rt.spatialSeries.get(name);
+        if (sp) { sp.runs.length = 0; rt.deps.onUpdate(); }
+      },
+
+      /** Collect Spatial Sample — capture a spatial indicator's current
+       *  per-position-bin curve (one category) as ONE run of a spatial series.
+       *  Aggregated to mean ± σ in the Experiments panel + exports. */
+      sampleSpatial(name: string, indicatorId: string, category: string, chart: string): void {
+        if (!name) return;
+        const v = rt.lastIndicators[indicatorId];
+        if (!v || typeof v !== 'object') {
+          rt.pushJournal('warn', `Collect Spatial Sample: indicator has no spatial value yet (series “${name}”).`);
+          return;
+        }
+        const map = v as Record<string, number | number[]>;
+        let key = category;
+        if (!key) {
+          // Single-key maps (e.g. a Total spatial indicator's 'total') need no
+          // explicit category.
+          const keys = Object.keys(map).filter(k => Array.isArray(map[k]));
+          if (keys.length === 1) key = keys[0]!;
+        }
+        const curve = map[key];
+        if (!Array.isArray(curve)) {
+          rt.pushJournal('warn', `Collect Spatial Sample: category “${key || '(unset)'}” not found on the indicator (series “${name}”).`);
+          return;
+        }
+        let sp = rt.spatialSeries.get(name);
+        if (!sp) {
+          sp = { chart: chart || name, indicatorId, category: key, runs: [] };
+          rt.spatialSeries.set(name, sp);
+        }
+        sp.runs.push([...curve]);
+        rt.deps.onUpdate();
       },
 
       log(text: string): void { rt.pushJournal('text', text); },

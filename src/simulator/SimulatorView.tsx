@@ -8265,6 +8265,21 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
               compileError={overseerCompiled.error}
               hasExperiment={!!overseerCompiled.driverCode}
               modelName={model.properties.name}
+              spatialMeta={(indicatorId: string) => {
+                // Axis metadata for the spatial aggregate charts (X labels).
+                const ind = (model.indicators || []).find(i => i.id === indicatorId);
+                if (!ind || !ind.xAxis || ind.xAxis === 'generation') return null;
+                const axisLen = ind.xAxis === 'rows' ? (gridHeight.current || simHeight)
+                  : ind.xAxis === 'columns' ? (gridWidth.current || simWidth)
+                  : (gridDepth.current || 1);
+                const binSize = (ind.spatialBinMode ?? 'slices') === 'absolute'
+                  ? Math.max(1, ind.spatialBinSize ?? 1)
+                  : Math.max(1, Math.ceil(axisLen / Math.max(2, Math.min(ind.spatialBinCount ?? 50, axisLen))));
+                return {
+                  axisName: ind.xAxis === 'rows' ? 'row' : ind.xAxis === 'columns' ? 'column' : 'layer',
+                  binSize,
+                };
+              }}
               onRun={handleRunExperiment}
               onAbort={() => abortExperiment('user abort')}
             />

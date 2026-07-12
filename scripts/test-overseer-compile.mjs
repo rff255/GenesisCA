@@ -239,5 +239,54 @@ const assert = (cond, label) => {
   assert(a[0] !== a[1], `T5 two consuming statements → two draws (got ${JSON.stringify(a)})`);
 }
 
+// ---------------- Test 6: spatial capture + mean±σ aggregation across runs
+{
+  nid = 0;
+  const root = node('experiment');
+  const loop = node('loop', { _port_count: '3' });
+  const reset = node('ovResetBoard');
+  const run = node('ovRunGenerations', { _port_count: '5' });
+  const capS1 = node('ovCollectSpatial', { indicatorId: 'chromatogram', category: 'S1', series: 'S1', chart: 'Chromatogram' });
+  const nodes = [root, loop, reset, run, capS1];
+  const edges = [
+    fEdge(root, 'do', loop),
+    fEdge(loop, 'body', reset),
+    fEdge(reset, 'next', run),
+    fEdge(run, 'next', capS1),
+  ];
+  const r = compileOverseerGraph(nodes, edges, MODEL);
+  assert(!r.error, 'T6 compiles without error' + (r.error ? ` (${r.error})` : ''));
+  assert(/O\.sampleSpatial\("S1", "chromatogram", "S1", "Chromatogram"\)/.test(r.driverCode), `T6 emits sampleSpatial with (series, indicatorId, category, chart)`);
+
+  // Drive a mock O that stashes spatial runs + a per-bin mean/std aggregator.
+  const spatial = new Map();
+  const O = {
+    ...new MockO(),
+    // per run the "indicator" gives a curve that depends on the run index
+    _run: -1,
+    async reset() { this._run++; },
+    async run() {},
+    sampleSpatial(name, _ind, _cat, chart) {
+      const curve = [this._run, this._run + 10, this._run + 20]; // varies per run
+      const s = spatial.get(name) ?? { chart, runs: [] };
+      s.runs.push(curve); spatial.set(name, s);
+    },
+  };
+  await new AsyncFunction('O', r.driverCode)(O);
+  const s = spatial.get('S1');
+  assert(s && s.runs.length === 3, `T6 captured 3 replicate curves (got ${s?.runs.length})`);
+  // bin 0 across runs = [0,1,2] → mean 1, sample std 1; bin 2 = [20,21,22] → mean 21
+  const bins = s.runs[0].length;
+  const mean = [], std = [];
+  for (let b = 0; b < bins; b++) {
+    const col = s.runs.map(r => r[b]);
+    const m = col.reduce((a, x) => a + x, 0) / col.length;
+    mean[b] = m;
+    std[b] = Math.sqrt(col.reduce((a, x) => a + (x - m) * (x - m), 0) / (col.length - 1));
+  }
+  assert(JSON.stringify(mean) === JSON.stringify([1, 11, 21]), `T6 per-bin mean = [1,11,21] (got ${JSON.stringify(mean)})`);
+  assert(std.every(v => Math.abs(v - 1) < 1e-9), `T6 per-bin sample std = 1 (got ${JSON.stringify(std)})`);
+}
+
 console.log(failures === 0 ? '\nALL OVERSEER COMPILE TESTS PASSED' : `\n${failures} FAILURE(S)`);
 process.exit(failures === 0 ? 0 : 1);
