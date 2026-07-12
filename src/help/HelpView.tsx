@@ -449,6 +449,20 @@ export function HelpView() {
             other model attribute (matrix shown directly under the attribute name).
           </p>
           <p className={styles.p}>
+            A table can also be <strong>multi-axis</strong> (up to 6 axes) instead of just
+            rows&nbsp;&times;&nbsp;columns &mdash; switch the <em>Axes mode</em> to Multi-axis
+            and add one axis per index. A new axis kind, <strong>Integer range</strong>{' '}
+            (min&hellip;max), is the natural fit for count-indexed rule tables. The Table
+            Lookup node then shows one input per axis (labeled with your axis names), and the
+            editor shows the table as 2-D slices with steppers for the outer axes. This is
+            what makes rule-table CA families like the <strong>Accretor</strong> (a 3D
+            accretion automaton whose rule is indexed by
+            state&nbsp;&times;&nbsp;face/edge/corner neighbour counts) expressible. The{' '}
+            <strong>Randomize</strong> block fills the whole table from a seed at a chosen
+            density &mdash; the seed <em>is</em> the rule identity (same seed &rArr; same
+            structure), so re-roll it to grow an entirely different form.
+          </p>
+          <p className={styles.p}>
             You can define multiple face-label <strong>palettes</strong> in the Variegated
             Cells panel; each face pattern draws its slot labels from one palette.
           </p>
@@ -478,8 +492,9 @@ export function HelpView() {
               labels at each neighbour encounter (8-slot Moore, or 4-slot cardinal with
               &quot;Cardinals only&quot;). Pair with Aggregate or For Each In Array.</li>
             <li><strong>Table Lookup</strong> &mdash; indexes a Lookup Table model attribute
-              by a row index and a column index &rarr; decimal. (Indices come from face labels
-              or tag reads, depending on the table&apos;s key sources.)</li>
+              by a row index and a column index (or one index per axis for a multi-axis
+              table) &rarr; decimal. (Indices come from face labels, tag reads, or neighbour
+              counts, depending on the table&apos;s key sources.)</li>
             <li><strong>Table Map</strong> &mdash; vectorised Table Lookup over two parallel
               index arrays &rarr; decimal array (pair with Aggregate&nbsp;&times;&nbsp;product
               for a break-probability product).</li>
