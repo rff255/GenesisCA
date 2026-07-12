@@ -4,8 +4,8 @@
     "name": "GoL Replicate Statistics",
     "author": "John Conway (Game of Life)",
     "modelAuthor": "Rodrigo F. Figueiredo",
-    "description": "The Overseer tutorial: Conway’s Game of Life plus an experiment graph that answers \"how many cells survive a random soup?\" PROPERLY — 20 seeded replicates of Reset → Run 200 generations → Collect the live-cell count, then mean ± std in the Journal. Open the simulator’s Experiments panel and press Run Experiment; the sequential seed policy makes the whole batch exactly reproducible. Switch to the Modeler’s Overseer tab to see the protocol as a graph.",
-    "ruleDescription": "The Cells graph is classic Conway GoL (survive on 2-3 live Moore neighbours, born on exactly 3) with an Init Event seeding a p=0.35 random soup from the current RNG seed.\n\nThe Overseer graph is the experiment protocol: Clear Series → Loop ×20 { Reset Board → Run Generations ×200 → Collect Sample ← Read Indicator(population, category true) } → Log mean → Log std. The per-run seed policy (Model Properties → Overseer) is \"sequential\" with base 4242, so run k re-seeds with 4242+k at its Reset — replicates differ from each other, but the whole experiment reproduces exactly on every press of Run Experiment (JS and WASM targets bit-identical).",
+    "description": "The Overseer tutorial: Conway’s Game of Life plus an experiment graph that answers \"how many cells survive a random soup?\" PROPERLY — 30 seeded replicates of Reset → Run 200 generations → Collect the live-cell count, then mean ± std in the Journal AND a HISTOGRAM of the survivor-count distribution. Open the simulator’s Experiments panel and press Run Experiment; the sequential seed policy makes the whole batch exactly reproducible, and the auto-rendered histogram (toggle to a per-run view) turns the dry number into a real figure. Switch to the Modeler’s Overseer tab to see the protocol as a graph.",
+    "ruleDescription": "The Cells graph is classic Conway GoL (survive on 2-3 live Moore neighbours, born on exactly 3) with an Init Event seeding a p=0.35 random soup from the current RNG seed.\n\nThe Overseer graph is the experiment protocol: Clear Series → Loop ×30 { Reset Board → Run Generations ×200 → Collect Sample ← Read Indicator(population, category true) } → Log mean → Log std. The per-run seed policy (Model Properties → Overseer) is \"sequential\" with base 4242, so run k re-seeds with 4242+k at its Reset — replicates differ from each other, but the whole experiment reproduces exactly on every press of Run Experiment (JS and WASM targets bit-identical). The Experiments panel auto-renders the collected series as a histogram of the survivor-count distribution (with the mean marked) — the kind of figure a report needs.",
     "topology": "2d-grid",
     "boundaryTreatment": "torus",
     "updateMode": "synchronous",
@@ -118,7 +118,7 @@
   ],
   "graphNodes": [
     {
-      "id": "nmrhf4wjwvn1w",
+      "id": "nmri0j2zd1479",
       "type": "caNode",
       "position": {
         "x": 0,
@@ -130,7 +130,7 @@
       }
     },
     {
-      "id": "nmrhf4wjwuzyr",
+      "id": "nmri0j2zdoo8m",
       "type": "caNode",
       "position": {
         "x": 0,
@@ -144,7 +144,7 @@
       }
     },
     {
-      "id": "nmrhf4wjw4qab",
+      "id": "nmri0j2zd36ep",
       "type": "caNode",
       "position": {
         "x": 0,
@@ -159,7 +159,7 @@
       }
     },
     {
-      "id": "nmrhf4wjwphqi",
+      "id": "nmri0j2zd9z0e",
       "type": "caNode",
       "position": {
         "x": 240,
@@ -173,7 +173,7 @@
       }
     },
     {
-      "id": "nmrhf4wjwxi42",
+      "id": "nmri0j2zdtb72",
       "type": "caNode",
       "position": {
         "x": 480,
@@ -192,7 +192,7 @@
       }
     },
     {
-      "id": "nmrhf4wjw8n7k",
+      "id": "nmri0j2zdl8s7",
       "type": "caNode",
       "position": {
         "x": 480,
@@ -208,7 +208,7 @@
       }
     },
     {
-      "id": "nmrhf4wjwm3pe",
+      "id": "nmri0j2zdrc3r",
       "type": "caNode",
       "position": {
         "x": 720,
@@ -222,7 +222,7 @@
       }
     },
     {
-      "id": "nmrhf4wjwldjc",
+      "id": "nmri0j2zd85sg",
       "type": "caNode",
       "position": {
         "x": 720,
@@ -236,7 +236,7 @@
       }
     },
     {
-      "id": "nmrhf4wjwkpl1",
+      "id": "nmri0j2zd2uz9",
       "type": "caNode",
       "position": {
         "x": 960,
@@ -250,7 +250,7 @@
       }
     },
     {
-      "id": "nmrhf4wjwqe9h",
+      "id": "nmri0j2zd8kms",
       "type": "caNode",
       "position": {
         "x": 1200,
@@ -264,7 +264,7 @@
       }
     },
     {
-      "id": "nmrhf4wjwur7h",
+      "id": "nmri0j2zdvrps",
       "type": "caNode",
       "position": {
         "x": 1440,
@@ -278,7 +278,7 @@
       }
     },
     {
-      "id": "nmrhf4wjwn70j",
+      "id": "nmri0j2zdn9z5",
       "type": "caNode",
       "position": {
         "x": 0,
@@ -290,7 +290,7 @@
       }
     },
     {
-      "id": "nmrhf4wjwr8z4",
+      "id": "nmri0j2zduvqq",
       "type": "caNode",
       "position": {
         "x": 240,
@@ -305,7 +305,7 @@
       }
     },
     {
-      "id": "nmrhf4wjwxsfq",
+      "id": "nmri0j2zd2z1y",
       "type": "caNode",
       "position": {
         "x": 480,
@@ -321,100 +321,100 @@
   ],
   "graphEdges": [
     {
-      "id": "emrhf4wjwzygk",
-      "source": "nmrhf4wjw4qab",
-      "target": "nmrhf4wjwphqi",
+      "id": "emri0j2zdpt8i",
+      "source": "nmri0j2zd36ep",
+      "target": "nmri0j2zd9z0e",
       "sourceHandle": "output_value_values",
       "targetHandle": "input_value_values"
     },
     {
-      "id": "emrhf4wjwxqfz",
-      "source": "nmrhf4wjwphqi",
-      "target": "nmrhf4wjwxi42",
+      "id": "emri0j2zd58ag",
+      "source": "nmri0j2zd9z0e",
+      "target": "nmri0j2zdtb72",
       "sourceHandle": "output_value_result",
       "targetHandle": "input_value_x"
     },
     {
-      "id": "emrhf4wjwn7gl",
-      "source": "nmrhf4wjwphqi",
-      "target": "nmrhf4wjw8n7k",
+      "id": "emri0j2zdwv3q",
+      "source": "nmri0j2zd9z0e",
+      "target": "nmri0j2zdl8s7",
       "sourceHandle": "output_value_result",
       "targetHandle": "input_value_x"
     },
     {
-      "id": "emrhf4wjw98ri",
-      "source": "nmrhf4wjwuzyr",
-      "target": "nmrhf4wjwm3pe",
+      "id": "emri0j2zd9bho",
+      "source": "nmri0j2zdoo8m",
+      "target": "nmri0j2zdrc3r",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_a"
     },
     {
-      "id": "emrhf4wjwqh7j",
-      "source": "nmrhf4wjwxi42",
-      "target": "nmrhf4wjwm3pe",
+      "id": "emri0j2zdezps",
+      "source": "nmri0j2zdtb72",
+      "target": "nmri0j2zdrc3r",
       "sourceHandle": "output_value_result",
       "targetHandle": "input_value_b"
     },
     {
-      "id": "emrhf4wjwtd87",
-      "source": "nmrhf4wjwuzyr",
-      "target": "nmrhf4wjwldjc",
+      "id": "emri0j2zds002",
+      "source": "nmri0j2zdoo8m",
+      "target": "nmri0j2zd85sg",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_a"
     },
     {
-      "id": "emrhf4wjwchrd",
-      "source": "nmrhf4wjwldjc",
-      "target": "nmrhf4wjwkpl1",
+      "id": "emri0j2zd7h5c",
+      "source": "nmri0j2zd85sg",
+      "target": "nmri0j2zd2uz9",
       "sourceHandle": "output_value_result",
       "targetHandle": "input_value_a"
     },
     {
-      "id": "emrhf4wjwwouy",
-      "source": "nmrhf4wjw8n7k",
-      "target": "nmrhf4wjwkpl1",
+      "id": "emri0j2zdr6pc",
+      "source": "nmri0j2zdl8s7",
+      "target": "nmri0j2zd2uz9",
       "sourceHandle": "output_value_result",
       "targetHandle": "input_value_b"
     },
     {
-      "id": "emrhf4wjw1qpc",
-      "source": "nmrhf4wjwm3pe",
-      "target": "nmrhf4wjwqe9h",
+      "id": "emri0j2zdwwsf",
+      "source": "nmri0j2zdrc3r",
+      "target": "nmri0j2zd8kms",
       "sourceHandle": "output_value_result",
       "targetHandle": "input_value_a"
     },
     {
-      "id": "emrhf4wjwmpbr",
-      "source": "nmrhf4wjwkpl1",
-      "target": "nmrhf4wjwqe9h",
+      "id": "emri0j2zd9qpy",
+      "source": "nmri0j2zd2uz9",
+      "target": "nmri0j2zd8kms",
       "sourceHandle": "output_value_result",
       "targetHandle": "input_value_b"
     },
     {
-      "id": "emrhf4wjwx2bq",
-      "source": "nmrhf4wjwvn1w",
-      "target": "nmrhf4wjwur7h",
+      "id": "emri0j2zdp6da",
+      "source": "nmri0j2zd1479",
+      "target": "nmri0j2zdvrps",
       "sourceHandle": "output_flow_do",
       "targetHandle": "input_flow_do"
     },
     {
-      "id": "emrhf4wjwgmrx",
-      "source": "nmrhf4wjwqe9h",
-      "target": "nmrhf4wjwur7h",
+      "id": "emri0j2zdgnpo",
+      "source": "nmri0j2zd8kms",
+      "target": "nmri0j2zdvrps",
       "sourceHandle": "output_value_result",
       "targetHandle": "input_value_value"
     },
     {
-      "id": "emrhf4wjwbnw5",
-      "source": "nmrhf4wjwn70j",
-      "target": "nmrhf4wjwxsfq",
+      "id": "emri0j2zdv4z3",
+      "source": "nmri0j2zdn9z5",
+      "target": "nmri0j2zd2z1y",
       "sourceHandle": "output_flow_do",
       "targetHandle": "input_flow_do"
     },
     {
-      "id": "emrhf4wjwnhj1",
-      "source": "nmrhf4wjwr8z4",
-      "target": "nmrhf4wjwxsfq",
+      "id": "emri0j2zddxls",
+      "source": "nmri0j2zduvqq",
+      "target": "nmri0j2zd2z1y",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_value"
     }
@@ -431,7 +431,7 @@
   },
   "overseerGraphNodes": [
     {
-      "id": "nmrhf4wjwvqv6",
+      "id": "nmri0j2zdziss",
       "type": "caNode",
       "position": {
         "x": 0,
@@ -443,7 +443,7 @@
       }
     },
     {
-      "id": "nmrhf4wjwc38y",
+      "id": "nmri0j2zd6dxv",
       "type": "caNode",
       "position": {
         "x": 240,
@@ -457,7 +457,7 @@
       }
     },
     {
-      "id": "nmrhf4wjwc0f1",
+      "id": "nmri0j2zdtuzk",
       "type": "caNode",
       "position": {
         "x": 480,
@@ -466,12 +466,12 @@
       "data": {
         "nodeType": "loop",
         "config": {
-          "_port_count": "20"
+          "_port_count": "30"
         }
       }
     },
     {
-      "id": "nmrhf4wjww09q",
+      "id": "nmri0j2zdmrzm",
       "type": "caNode",
       "position": {
         "x": 720,
@@ -483,7 +483,7 @@
       }
     },
     {
-      "id": "nmrhf4wjwe0js",
+      "id": "nmri0j2zdbjxw",
       "type": "caNode",
       "position": {
         "x": 960,
@@ -497,7 +497,7 @@
       }
     },
     {
-      "id": "nmrhf4wjw38hb",
+      "id": "nmri0j2zdet9d",
       "type": "caNode",
       "position": {
         "x": 960,
@@ -512,7 +512,7 @@
       }
     },
     {
-      "id": "nmrhf4wjwz0ad",
+      "id": "nmri0j2zdct6w",
       "type": "caNode",
       "position": {
         "x": 1200,
@@ -527,7 +527,7 @@
       }
     },
     {
-      "id": "nmrhf4wjws9p2",
+      "id": "nmri0j2zdi4bm",
       "type": "caNode",
       "position": {
         "x": 480,
@@ -542,7 +542,7 @@
       }
     },
     {
-      "id": "nmrhf4wjwekxe",
+      "id": "nmri0j2zddo7t",
       "type": "caNode",
       "position": {
         "x": 720,
@@ -556,7 +556,7 @@
       }
     },
     {
-      "id": "nmrhf4wjwry46",
+      "id": "nmri0j2zdswyf",
       "type": "caNode",
       "position": {
         "x": 960,
@@ -571,7 +571,7 @@
       }
     },
     {
-      "id": "nmrhf4wjw2nkl",
+      "id": "nmri0j2zdg4td",
       "type": "caNode",
       "position": {
         "x": 1200,
@@ -580,79 +580,79 @@
       "data": {
         "nodeType": "ovLog",
         "config": {
-          "text": "std = {value} (n = 20, seeds 4242..4261)"
+          "text": "std = {value} (n = 30) — see the histogram below"
         }
       }
     }
   ],
   "overseerGraphEdges": [
     {
-      "id": "emrhf4wjwh8mu",
-      "source": "nmrhf4wjwvqv6",
-      "target": "nmrhf4wjwc38y",
+      "id": "emri0j2zd0hcr",
+      "source": "nmri0j2zdziss",
+      "target": "nmri0j2zd6dxv",
       "sourceHandle": "output_flow_do",
       "targetHandle": "input_flow_do"
     },
     {
-      "id": "emrhf4wjwalt1",
-      "source": "nmrhf4wjwc38y",
-      "target": "nmrhf4wjwc0f1",
+      "id": "emri0j2zd5q5d",
+      "source": "nmri0j2zd6dxv",
+      "target": "nmri0j2zdtuzk",
       "sourceHandle": "output_flow_next",
       "targetHandle": "input_flow_do"
     },
     {
-      "id": "emrhf4wjwz1k8",
-      "source": "nmrhf4wjwc0f1",
-      "target": "nmrhf4wjww09q",
+      "id": "emri0j2zdbzpp",
+      "source": "nmri0j2zdtuzk",
+      "target": "nmri0j2zdmrzm",
       "sourceHandle": "output_flow_body",
       "targetHandle": "input_flow_do"
     },
     {
-      "id": "emrhf4wjw4o1k",
-      "source": "nmrhf4wjww09q",
-      "target": "nmrhf4wjwe0js",
+      "id": "emri0j2zd0c0w",
+      "source": "nmri0j2zdmrzm",
+      "target": "nmri0j2zdbjxw",
       "sourceHandle": "output_flow_next",
       "targetHandle": "input_flow_do"
     },
     {
-      "id": "emrhf4wjwheaq",
-      "source": "nmrhf4wjwe0js",
-      "target": "nmrhf4wjwz0ad",
+      "id": "emri0j2zd5ds9",
+      "source": "nmri0j2zdbjxw",
+      "target": "nmri0j2zdct6w",
       "sourceHandle": "output_flow_next",
       "targetHandle": "input_flow_do"
     },
     {
-      "id": "emrhf4wjwt4m3",
-      "source": "nmrhf4wjw38hb",
-      "target": "nmrhf4wjwz0ad",
+      "id": "emri0j2zdaoyz",
+      "source": "nmri0j2zdet9d",
+      "target": "nmri0j2zdct6w",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_value"
     },
     {
-      "id": "emrhf4wjwrjy0",
-      "source": "nmrhf4wjwc0f1",
-      "target": "nmrhf4wjwekxe",
+      "id": "emri0j2zdhd6z",
+      "source": "nmri0j2zdtuzk",
+      "target": "nmri0j2zddo7t",
       "sourceHandle": "output_flow_next",
       "targetHandle": "input_flow_do"
     },
     {
-      "id": "emrhf4wjwnb4w",
-      "source": "nmrhf4wjws9p2",
-      "target": "nmrhf4wjwekxe",
+      "id": "emri0j2zdnsu7",
+      "source": "nmri0j2zdi4bm",
+      "target": "nmri0j2zddo7t",
       "sourceHandle": "output_value_result",
       "targetHandle": "input_value_value"
     },
     {
-      "id": "emrhf4wjwbxen",
-      "source": "nmrhf4wjwekxe",
-      "target": "nmrhf4wjw2nkl",
+      "id": "emri0j2zdoqef",
+      "source": "nmri0j2zddo7t",
+      "target": "nmri0j2zdg4td",
       "sourceHandle": "output_flow_next",
       "targetHandle": "input_flow_do"
     },
     {
-      "id": "emrhf4wjwvhuh",
-      "source": "nmrhf4wjwry46",
-      "target": "nmrhf4wjw2nkl",
+      "id": "emri0j2zdotn1",
+      "source": "nmri0j2zdswyf",
+      "target": "nmri0j2zdg4td",
       "sourceHandle": "output_value_result",
       "targetHandle": "input_value_value"
     }
