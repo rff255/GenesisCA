@@ -1,6 +1,6 @@
 /**
  * Web Worker for GenesisCA simulation.
- * Uses Structure of Arrays (SoA) for grid state — one typed array per attribute.
+ * Uses Structure of Arrays (SoA) for grid state ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â one typed array per attribute.
  * Pre-computes neighbor index tables for zero-cost boundary handling.
  */
 
@@ -60,7 +60,7 @@ interface AttrDef {
   parentAttributeId?: string;
   parentValues?: string[];
   undefinedValue?: string;
-  /** Generic Agent Platform: cell attributes only — the agent field-access
+  /** Generic Agent Platform: cell attributes only ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â the agent field-access
    *  permission. Drives `fieldSpecs` (which cell attrs are threaded as
    *  `_field_<id>` into the agent loop). Inert on agent attributes. */
   agentAccess?: 'none' | 'read' | 'readWrite';
@@ -69,7 +69,7 @@ interface AttrDef {
 interface NeighborhoodDef {
   id: string;
   coords: Array<[number, number]>;
-  /** 3D Grid CA: present on a 3D neighbourhood — entries are `[dr, dc, dl]`
+  /** 3D Grid CA: present on a 3D neighbourhood ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â entries are `[dr, dc, dl]`
    *  (row, col, layer offsets). When present it is the source of truth for the
    *  offset-table loop; `coords` stays populated (the 2D projection) so the
    *  stride (`coords.length`) and the 2D fallbacks still resolve. */
@@ -87,18 +87,18 @@ interface VariegatedPayload {
   sourceAttributeId: string;
   facePalettes: Array<{ id: string; labels: string[] }>;
   facePatterns: FacePatternDef[];
-  /** Map from tagOption name → FacePattern.id. */
+  /** Map from tagOption name ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ FacePattern.id. */
   facePatternAssignments: Record<string, string>;
 }
 interface InteractionTablePayload {
   id: string;
-  /** Resolved row / column label lists for THIS table (a face palette →
-   *  ['none', ...labels], or a tag attribute → its tagOptions). The flat
+  /** Resolved row / column label lists for THIS table (a face palette ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢
+   *  ['none', ...labels], or a tag attribute ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ its tagOptions). The flat
    *  storage is `rowLabels.length * colLabels.length` Float64Array, indexed
    *  `(rowIdx * colLabels.length + colIdx)`. Rectangular tables supported. */
   rowLabels: string[];
   colLabels: string[];
-  /** Sparse `[rowLabel][colLabel] → number`. Missing entries default to 0. */
+  /** Sparse `[rowLabel][colLabel] ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ number`. Missing entries default to 0. */
   values: Record<string, Record<string, number>>;
 }
 
@@ -106,12 +106,12 @@ interface InitMsg {
   type: 'init';
   width: number;
   height: number;
-  /** 3D Grid CA: layer count. Absent → 1 (a 2D grid, byte-identical). */
+  /** 3D Grid CA: layer count. Absent ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ 1 (a 2D grid, byte-identical). */
   depth?: number;
   attributes: AttrDef[];
   /** Generic Agent Platform: the AGENT attribute set (agent-only per-agent state,
    *  a separate id-space from `attributes`). Drives the agent SoA (buildAgentAttrSpecs
-   *  maps these) + the `r_`/`w_` channel. Absent → empty (no agent attrs). */
+   *  maps these) + the `r_`/`w_` channel. Absent ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ empty (no agent attrs). */
   agentAttributes?: AttrDef[];
   neighborhoods: NeighborhoodDef[];
   boundaryTreatment: string;
@@ -124,11 +124,11 @@ interface InitMsg {
   initCode?: string;
   inputColorCodes: Array<{ mappingId: string; code: string }>;
   outputMappingCodes: Array<{ mappingId: string; code: string }>;
-  /** Variegated Cells config. Undefined / absent ⇒ feature disabled, no
+  /** Variegated Cells config. Undefined / absent ÃƒÂ¢Ã¢â‚¬Â¡Ã¢â‚¬â„¢ feature disabled, no
    *  orientation buffer / face-pattern lookup allocated. */
   variegated?: VariegatedPayload;
-  /** Interaction Table model attributes. Empty array ⇒ no tables. Each table
-   *  is flattened to a Float64Array of length `(labelCount + 1)²` and stored
+  /** Interaction Table model attributes. Empty array ÃƒÂ¢Ã¢â‚¬Â¡Ã¢â‚¬â„¢ no tables. Each table
+   *  is flattened to a Float64Array of length `(labelCount + 1)Ãƒâ€šÃ‚Â²` and stored
    *  in `cachedInteractionTables[id]`. Live-tuned via updateInteractionTable. */
   interactionTables?: InteractionTablePayload[];
   /** Per-stop-event-node message, indexed by (_stopIdx - 1). */
@@ -138,7 +138,7 @@ interface InitMsg {
   /** Wave 2: optional pre-compiled WASM step bytes (compiled on main thread). */
   wasmStepBytes?: Uint8Array;
   wasmStepError?: string;
-  /** Names of every exported function in the WASM module — `step`,
+  /** Names of every exported function in the WASM module ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â `step`,
    *  `inputColor_<sanitisedMappingId>`, `outputMapping_<sanitisedMappingId>`. */
   wasmExports?: string[];
   /** Compile-time viewer id -> int mapping (matches the WASM module's setColorViewer constants). */
@@ -154,33 +154,33 @@ interface InitMsg {
   webgpuLayout?: WebGPULayout;
   /** Default useWebGPU flag (from model properties); flipped via setUseWebGPU later. */
   useWebGPU?: boolean;
-  /** B4B — WebGPU-only: how often (in generations) to read the GPU stop-flag
+  /** B4B ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â WebGPU-only: how often (in generations) to read the GPU stop-flag
    *  back to CPU during a step batch. Default 1 (every step). Higher values
    *  amortise the per-step mapAsync stall but a stop event may surface up to
    *  K-1 generations late. */
   webgpuStopCheckInterval?: number;
-  /** P7 — optional OffscreenCanvas (transferred from the main thread). When
+  /** P7 ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â optional OffscreenCanvas (transferred from the main thread). When
    *  present and WebGPU is enabled, the worker writes WebGPU output directly
    *  into the canvas via a present compute pipeline, eliminating the
    *  per-frame colors readback + sendColors round-trip. */
   webgpuCanvas?: OffscreenCanvas;
   webgpuCanvasWidth?: number;
   webgpuCanvasHeight?: number;
-  /** True when the model uses setCellGlyph anywhere — drives allocation of
+  /** True when the model uses setCellGlyph anywhere ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â drives allocation of
    *  the per-cell glyph overlay regions (codes + colours) in wasmMemory. */
   hasGlyphs?: boolean;
   /** Bond-Graph Agents: when true, the worker allocates the agent engine (the
    *  co-resident agent SoA + bond store) from `centerBased`. The lattice grid
-   *  is always allocated too (agents are additive on top — v1 requires a grid). */
+   *  is always allocated too (agents are additive on top ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â v1 requires a grid). */
   agents?: boolean;
-  /** CA-grid topology toggle. Absent → true. When false (an agents-only model)
+  /** CA-grid topology toggle. Absent ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ true. When false (an agents-only model)
    *  the worker skips the cell step + the neighbour-index tables so a large grid
    *  costs nothing (the agent loop is the only simulation). */
   gridCells?: boolean;
   centerBased?: CenterBasedConfig;
   /** Compiled agent rule-graph functions (Bond-Graph Agents, JS-only v1).
    *  `behaviourFn` runs once per agent each generation; division/bond fns land
-   *  in later PRs. Absent → agents are inert (seed + render only). */
+   *  in later PRs. Absent ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ agents are inert (seed + render only). */
   agentBehaviourCode?: string;
   agentInitCode?: string;
   agentDivisionCode?: string;
@@ -195,60 +195,64 @@ interface InitMsg {
   /** PR5 (C-D1): true when the agent graph reads/writes the cell field
    *  (sampleField / fieldGradient / readCellsUnder / affectCellsUnder /
    *  secreteToField). Drives the WebGPU-grid field bridge: only a field model
-   *  needs the per-generation attrs CPU↔GPU readback/upload around runAgentStep
+   *  needs the per-generation attrs CPUÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬ÂGPU readback/upload around runAgentStep
    *  (a no-field model's agent loop never touches `readAttrs`). */
   agentUsesField?: boolean;
   /** PR6b-1: the resolved agent compile target ('js' default). When 'wasm' the
    *  worker backs the AgentStore on a WebAssembly.Memory (views at baked offsets)
    *  and runs the compiled `agentWasmBytes` behaviour loop instead of the JS one.
-   *  The clamp lives in `agentTargetOf` (SimulatorView) — the worker trusts it. */
+   *  The clamp lives in `agentTargetOf` (SimulatorView) ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â the worker trusts it. */
   agentTarget?: 'js' | 'wasm' | 'webgpu';
   /** PR6b-1: the compiled agent-behaviour WASM module bytes (only when
    *  `agentTarget === 'wasm'`). Instantiated against the agent store's memory +
-   *  the host math funcs; absent → the JS behaviour fn runs. */
+   *  the host math funcs; absent ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ the JS behaviour fn runs. */
   agentWasmBytes?: Uint8Array;
-  /** Ordered non-sentinel setCellLooks mappingIds the WASM behaviour references —
+  /** Ordered non-sentinel setCellLooks mappingIds the WASM behaviour references ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â
    *  the worker passes `indexOf(activeViewer)` as the behaviour's trailing
    *  `activeViewerIdx` arg (JS `_isV_` guard parity). */
   agentWasmViewerGuardIds?: string[];
   /** FULL-COVERAGE WASM agent port: the extra-region sizing the wasmBacked store
    *  reserves (model attrs / indicators / lookup tables / cell fields / array
-   *  scratch) — the SAME extras the compiler built the module's layout from. The
+   *  scratch) ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â the SAME extras the compiler built the module's layout from. The
    *  worker copies the external regions in/out around the WASM behaviour call. */
   agentLayoutExtras?: AgentLayoutExtras;
   /** PR7 G3-runtime: the compiled WebGPU agent shaders (only when
    *  `agentTarget === 'webgpu'`). The behaviour shader is the per-agent loop; the
    *  force shader is the standalone integrator. The worker builds a dedicated
-   *  agent WebGPU runtime + dispatches both per step. Absent / any failure → the
+   *  agent WebGPU runtime + dispatches both per step. Absent / any failure ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ the
    *  JS behaviour fn + JS force loop run. */
   agentWebgpuBehaviourShader?: string;
   agentWebgpuForceShader?: string;
-  /** The GPU agent layout dims (maxAgents + the hash reserve) — the worker
+  /** The GPU agent layout dims (maxAgents + the hash reserve) ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â the worker
    *  re-derives the GPU SoA layout from these so the upload offsets match the
    *  compiled shaders. */
   agentWebgpuMaxAgents?: number;
   agentWebgpuMaxHashBins?: number;
   /** The FULL GPU agent layout the shaders compiled against (carries the
-   *  universal-node region bases — auxF32 / indicators / bondStore / 3D z fields).
+   *  universal-node region bases ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â auxF32 / indicators / bondStore / 3D z fields).
    *  The worker binds + uploads against this EXACT layout (no recompute mismatch). */
   agentWebgpuLayout?: AgentWebGPULayout;
-  /** True when the behaviour writes the i32 SoA (setAgentType) → the runtime binds
+  /** True when the behaviour writes the i32 SoA (setAgentType) ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ the runtime binds
    *  agentI32 read_write + reads the type run back. */
   agentWebgpuUsesI32Write?: boolean;
   /** Which universal bindings the shader actually declares (so the runtime binds
-   *  matching entries — a declared-but-unused global is stripped → bind mismatch). */
+   *  matching entries ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â a declared-but-unused global is stripped ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ bind mismatch). */
   agentWebgpuUsage?: { usesBondStore?: boolean; usesIndicators?: boolean; usesAux?: boolean; usesSpawn?: boolean; usesStop?: boolean };
 }
 
-interface StepMsg { type: 'step'; count: number; activeViewer: string; skipColorPass?: boolean }
+// reqId: optional Overseer correlation id ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â echoed on the resulting `stepped`
+// (and the step case's `stopEvent` posts) so the main-thread OverseerRuntime
+// can match its batch acks and never mistake a residual play-pipeline /
+// mutation `stepped` for one of its own.
+interface StepMsg { type: 'step'; count: number; activeViewer: string; skipColorPass?: boolean; reqId?: number }
 interface PaintMsg {
   type: 'paint';
-  /** `layer` (absent → 0) is the 3D Z coordinate; 2D paints omit it. */
+  /** `layer` (absent ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ 0) is the 3D Z coordinate; 2D paints omit it. */
   cells: Array<{ row: number; col: number; layer?: number; r: number; g: number; b: number }>;
   mappingId: string;
   activeViewer: string;
 }
-/** Manual Brush — runtime-only special Input Mapping. Bypasses any compiled
+/** Manual Brush ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â runtime-only special Input Mapping. Bypasses any compiled
  *  InputColor function and writes each `sets` entry directly into
  *  `readAttrs[attrId][idx]` for every painted cell. Sub-attributes honour
  *  per-cell skip: a sub-attr write is suppressed on a cell whose effective
@@ -259,11 +263,11 @@ interface PaintManualMsg {
   type: 'paintManual';
   cells: Array<{ row: number; col: number; layer?: number }>;
   /** Only attributes the user marked "Set". Pre-encoded by the UI using
-   *  encodeAttrValue() so the worker doesn't repeat the string→number switch. */
+   *  encodeAttrValue() so the worker doesn't repeat the stringÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢number switch. */
   sets: Array<{ attrId: string; value: number }>;
   activeViewer: string;
 }
-interface ResetMsg { type: 'reset'; activeViewer: string }
+interface ResetMsg { type: 'reset'; activeViewer: string; reqId?: number }
 interface RecompileMsg { type: 'recompile'; stepCode: string; initCode?: string; inputColorCodes: Array<{ mappingId: string; code: string }>; outputMappingCodes: Array<{ mappingId: string; code: string }>; stopMessages?: string[]; updateMode: string; asyncScheme: string; wasmStepBytes?: Uint8Array; wasmStepError?: string; wasmExports?: string[]; viewerIds?: Record<string, number>; webgpuShaderCode?: string; webgpuShaderError?: string; webgpuEntryPoints?: WebGPUEntryPoints; webgpuLayout?: WebGPULayout; webgpuStopCheckInterval?: number; variegated?: VariegatedPayload; interactionTables?: InteractionTablePayload[]; agentBehaviourCode?: string; agentInitCode?: string; agentDivisionCode?: string; agentColorViewer?: string; agentOutputMappingCodes?: Array<{ mappingId: string; code: string }>; agentHasSprites?: boolean; centerBased?: CenterBasedConfig; agentUsesField?: boolean; agentTarget?: 'js' | 'wasm' | 'webgpu'; agentWasmBytes?: Uint8Array; agentWasmViewerGuardIds?: string[]; agentLayoutExtras?: AgentLayoutExtras; agentWebgpuBehaviourShader?: string; agentWebgpuForceShader?: string; agentWebgpuMaxAgents?: number; agentWebgpuMaxHashBins?: number; agentWebgpuLayout?: AgentWebGPULayout; agentWebgpuUsesI32Write?: boolean; agentWebgpuUsage?: { usesBondStore?: boolean; usesIndicators?: boolean; usesAux?: boolean; usesSpawn?: boolean; usesStop?: boolean } }
 interface UpdateLookupTableMsg {
   type: 'updateLookupTable';
@@ -276,7 +280,7 @@ interface UpdateModelAttrsMsg { type: 'updateModelAttrs'; attrs: Record<string, 
 interface ImportImageMsg { type: 'importImage'; pixels: Uint8ClampedArray; mappingId: string; activeViewer: string;
   /** "Mapping Cells" paste-centered: write only this sub-region (cells outside
    *  are preserved). `pixels` is then sized region.w*region.h (row-major). Absent
-   *  → the classic full-grid import (pixels sized total). */
+   *  ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ the classic full-grid import (pixels sized total). */
   region?: { row: number; col: number; w: number; h: number } }
 
 interface IndicatorDef {
@@ -325,11 +329,11 @@ interface ReadRegionMsg {
 interface WriteRegionMsg {
   type: 'writeRegion';
   row: number; col: number; w: number; h: number;
-  /** 3D Grid CA: target layer for the 2D stamp (absent → 0). */
+  /** 3D Grid CA: target layer for the 2D stamp (absent ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ 0). */
   layer?: number;
   attributes: Record<string, { type: string; buffer: ArrayBuffer }>;
   /** Optional shape mask (Uint8 buffer, length w*h, row-major). When present,
-   *  only cells with mask !== 0 are written — so a non-rectangular brush
+   *  only cells with mask !== 0 are written ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â so a non-rectangular brush
    *  (circle/ring) pastes its shape and leaves the surrounding cells intact.
    *  Absent = full rectangle (the historical behaviour). */
   mask?: ArrayBuffer;
@@ -338,9 +342,9 @@ interface WriteRegionMsg {
 interface ClearRegionMsg {
   type: 'clearRegion';
   row: number; col: number; w: number; h: number;
-  /** 3D Grid CA: target layer for the 2D stamp (absent → 0). */
+  /** 3D Grid CA: target layer for the 2D stamp (absent ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ 0). */
   layer?: number;
-  /** Optional shape mask — see WriteRegionMsg. A masked clear (Ctrl+X cut)
+  /** Optional shape mask ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â see WriteRegionMsg. A masked clear (Ctrl+X cut)
    *  removes only the shape's cells, matching the masked copy. */
   mask?: ArrayBuffer;
   activeViewer: string;
@@ -353,7 +357,7 @@ interface SetUseWebGPUMsg {
   type: 'setUseWebGPU';
   enabled: boolean;
 }
-/** Dev-mode parity helper: trigger a GPU → CPU readback of attrsRead so the
+/** Dev-mode parity helper: trigger a GPU ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ CPU readback of attrsRead so the
  *  main thread can compare to a JS-target run. Exposed via the existing
  *  `window.__simWorker` console hook. The worker posts back a `webgpuReadback`
  *  message with the current cell-attribute typed arrays. */
@@ -413,7 +417,7 @@ interface FormBondBatchMsg { type: 'formBondBatch'; pairs: Array<[number, number
 /** Allocate a single agent (free-list first). REJECTS + surfaces on overflow. */
 interface CreateAgentMsg {
   type: 'createAgent';
-  x: number; y: number; z?: number; radius?: number;   // z: 3D layer (absent → 0)
+  x: number; y: number; z?: number; radius?: number;   // z: 3D layer (absent ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ 0)
   activeViewer: string;
 }
 /** Kill the agents at the given ids (the kill brush). */
@@ -434,7 +438,7 @@ interface PaintAgentsMsg {
 /** Remove ALL agents (Reset). */
 interface ClearAgentsMsg { type: 'clearAgents'; activeViewer: string }
 /** AW-MEM (PR6a) DEV-only: force the AgentStore onto a WebAssembly.Memory (views
- *  at baked offsets) even for the `js` target, then re-init agents — the
+ *  at baked offsets) even for the `js` target, then re-init agents ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â the
  *  JS-on-views proof. */
 interface SetAgentWasmBackedMsg { type: '__setAgentWasmBacked'; wasmBacked: boolean }
 /** Manual glue: bond two agents (the glue brush). */
@@ -444,7 +448,7 @@ interface BreakBondMsg { type: 'breakBond'; a: number; b: number; activeViewer: 
 /** Runtime per-layer "simulate" toggles (the simulator Layers panel). Gates the
  *  cell step (`runStep`/`runStepWebGPU`) and/or the agent step (`runAgentStep`) in
  *  the generation loop WITHOUT a recompile, so the user can freeze either layer and
- *  watch the other evolve. Both default true → byte-identical to no message. */
+ *  watch the other evolve. Both default true ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ byte-identical to no message. */
 interface SetSimLayersMsg { type: 'setSimLayers'; simulateCells: boolean; simulateAgents: boolean }
 
 type WorkerMsg = InitMsg | StepMsg | PaintMsg | PaintManualMsg | ResetMsg | RecompileMsg | UpdateModelAttrsMsg | UpdateLookupTableMsg | ImportImageMsg | UpdateIndicatorsMsg | GetStateMsg | LoadStateMsg | ReadRegionMsg | WriteRegionMsg | ClearRegionMsg | SetUseWasmMsg | SetUseWebGPUMsg | ReadbackWebGPUMsg | ColorPassMsg | SetRecordingMsg | AttachCanvasMsg | RequestColorsSnapshotMsg | SetInspectCellsMsg | RefreshDisplayMsg | SeedAgentsMsg | CreateAgentMsg | KillAgentsMsg | PaintAgentsMsg | ClearAgentsMsg | FormBondMsg | BreakBondMsg | GetAgentStateMsg | MoveAgentsMsg | FormBondBatchMsg | SetAgentWasmBackedMsg | SetRngSeedMsg | SetSimLayersMsg;
@@ -455,12 +459,12 @@ type WorkerMsg = InitMsg | StepMsg | PaintMsg | PaintManualMsg | ResetMsg | Reco
 
 let width = 0;
 let height = 0;
-/** 3D Grid CA: layer count along Z. 1 → a 2D grid (total = W*H, byte-identical). */
+/** 3D Grid CA: layer count along Z. 1 ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ a 2D grid (total = W*H, byte-identical). */
 let depth = 1;
 let total = 0;
 let cellAttrs: AttrDef[] = [];
 /** Generic Agent Platform: the AGENT attribute set (agent-only per-agent state).
- *  buildAgentAttrSpecs maps these → the agent SoA; the agent loop's r_/w_ channel
+ *  buildAgentAttrSpecs maps these ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ the agent SoA; the agent loop's r_/w_ channel
  *  is keyed by them. A SEPARATE id-space from cellAttrs. */
 let agentAttrs: AttrDef[] = [];
 /** Generic Agent Platform: the agent-ACCESSIBLE cell attributes (agentAccess !==
@@ -500,42 +504,42 @@ let orderArray: Int32Array | null = null;
 // --- Bond-Graph Agents (co-resident agent engine; JS-only v1) ---
 let agentStore: AgentStore | null = null;
 let agentsEnabled = false;
-/** CA-grid topology toggle (from the init message; absent → true). When false
+/** CA-grid topology toggle (from the init message; absent ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ true). When false
  *  the worker skips the cell step + neighbour-index build (agents-only model). */
 let gridCellsEnabled = true;
 /** Agents-only optimisation: with the CA grid OFF the colours buffer is static
  *  (no cell step / colour pass ever rewrites it), so `sendColors` ships it only
- *  while dirty instead of copying+transferring W·H·D·4 bytes EVERY step (576 MB
- *  per step at 600×600×400 — the "resize makes it crawl" cost). Set by anything
+ *  while dirty instead of copying+transferring WÃƒâ€šÃ‚Â·HÃƒâ€šÃ‚Â·DÃƒâ€šÃ‚Â·4 bytes EVERY step (576 MB
+ *  per step at 600ÃƒÆ’Ã¢â‚¬â€600ÃƒÆ’Ã¢â‚¬â€400 ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â the "resize makes it crawl" cost). Set by anything
  *  that rewrites `colors`; grid-ON models ship every step as before. */
 let colorsDirty = true;
 /** Runtime per-layer "simulate" toggles (the simulator Layers panel; setSimLayers
- *  message). Default true → the generation loop runs both the cell step and the
+ *  message). Default true ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ the generation loop runs both the cell step and the
  *  agent step exactly as before. The user can freeze either layer mid-run. */
 let simulateCells = true;
 let simulateAgents = true;
 /** PR5 (C-D1): true when the agent graph touches the cell field. Gates the
- *  WebGPU-grid field bridge (CPU↔GPU attrs readback/upload around runAgentStep).
- *  A no-field model leaves it false → 0 per-step readbacks. */
+ *  WebGPU-grid field bridge (CPUÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬ÂGPU attrs readback/upload around runAgentStep).
+ *  A no-field model leaves it false ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ 0 per-step readbacks. */
 let agentUsesField = false;
 let centerBasedConfig: CenterBasedConfig | null = null;
 /** Compiled agent behaviour function (runs once per agent each generation).
  *  Null until the agent compile path ships it (PR-A2.5/A3). */
 let agentBehaviourFn: Function | null = null;
 let agentInitFn: Function | null = null;
-/** Unified spawning — the STABLE grow-only Create Agent + Add Agent To World host
+/** Unified spawning ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â the STABLE grow-only Create Agent + Add Agent To World host
  *  closures for the BEHAVIOUR graph (mid-step spawning, the same idiom as the Init
  *  Event). They're module-level (not per-step) so the WASM `env.agentCreate` /
- *  `env.agentAddToWorld` imports — bound ONCE at instantiate — share the EXACT same
- *  logic as the JS behaviour → bit-identical. GROW-ONLY: a mid-step Create appends
+ *  `env.agentAddToWorld` imports ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â bound ONCE at instantiate ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â share the EXACT same
+ *  logic as the JS behaviour ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ bit-identical. GROW-ONLY: a mid-step Create appends
  *  at highWater (never reuses a free-list hole ahead of the loop cursor), so a
- *  newborn is beyond the fixed loop bound → configured this step, behaves next step.
+ *  newborn is beyond the fixed loop bound ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ configured this step, behaves next step.
  *  `runAgentStep` clears the per-step created list at the top + leak-sweeps it after. */
 const spawnCreatedSet = new Set<number>();
 const spawnCreatedList: number[] = [];
 const agentBehaviourCreate = (bx: number, by: number, bz: number, br: number): number => {
   const s = agentStore; if (!s) return -1;
-  if (s.highWater >= s.maxAgents) return -1;   // overflow → -1; downstream Set/Add no-op
+  if (s.highWater >= s.maxAgents) return -1;   // overflow ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ -1; downstream Set/Add no-op
   const id = s.highWater++;
   initAgentSlot(s, id, bx, by, bz || 0, br || cbNum(centerBasedConfig!, 'defaultRadius'), id);
   s.alive[id] = 0;                             // STAGE (un-committed until Add To World)
@@ -552,7 +556,7 @@ const agentBehaviourAddToWorld = (id: number): void => {
  *  Agents can query it, then reused by the force pass. Null for a tiny world. */
 let currentAgentHash: SpatialHash | null = null;
 /** The per-step spatial-hash bin budget (= the baked reserve for the wasmBacked
- *  store, so the per-step bin count never exceeds it → no fits-check fallback).
+ *  store, so the per-step bin count never exceeds it ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ no fits-check fallback).
  *  buildSpatialHash coarsens its bin edge to fit this, so the per-step hash cost
  *  is bounded regardless of the world size. Set in initAgents from the LIVE dims. */
 let agentHashReserve = AGENT_HASH_BIN_CAP;
@@ -566,25 +570,25 @@ let agentOutputMappingFns: Array<{ mappingId: string; fn: Function }> = [];
 /** The active AGENT viewer (an agent mapping id). Selects which agent colour pass
  *  paints. Independent of `activeViewer` (the active CELL viewer). */
 let agentColorViewer = '';
-/** True when the model has sprite assets — gates the per-agent sprite display
+/** True when the model has sprite assets ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â gates the per-agent sprite display
  *  buffers (reset before each colour pass + sliced into the render snapshot).
  *  Set from the init/recompile `agentHasSprites` flag. */
 let hasAgentSprites = false;
 
-/** AW-MEM (PR6a) — DEV-only override that forces the AgentStore onto a
+/** AW-MEM (PR6a) ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â DEV-only override that forces the AgentStore onto a
  *  WebAssembly.Memory (views at baked offsets) even for the `js` target, so the
  *  JS-on-views PROOF can run before any WASM emit (PR6b). Set via the
- *  `__setAgentWasmBacked` DEV message (then re-init). Off in production — the
+ *  `__setAgentWasmBacked` DEV message (then re-init). Off in production ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â the
  *  default JS-default path is plain typed arrays. PR6b sets `wasmBacked` from
  *  `agentTargetOf === 'wasm'` instead of this flag. */
 let agentWasmBackedDev = false;
 
-/** PR6b-1 — the resolved agent compile target. 'wasm' backs the AgentStore on a
+/** PR6b-1 ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â the resolved agent compile target. 'wasm' backs the AgentStore on a
  *  WebAssembly.Memory + runs the compiled WASM behaviour loop; otherwise the JS
  *  `agentBehaviourFn` runs. SimulatorView resolves this via `agentTargetOf` +
  *  the WASM-support gate, so the worker trusts it. */
 let agentTarget: 'js' | 'wasm' | 'webgpu' = 'js';
-/** PR6b-1 — the compiled agent WASM module bytes (pending instantiation against
+/** PR6b-1 ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â the compiled agent WASM module bytes (pending instantiation against
  *  the agent store's memory). Held so `initAgents` (which (re)allocates the
  *  store + its memory) can instantiate against the FRESH memory. */
 let pendingAgentWasmBytes: Uint8Array | null = null;
@@ -592,27 +596,27 @@ let pendingAgentWasmBytes: Uint8Array | null = null;
  *  memory layout from (model attrs / indicators / lookup tables / cell fields /
  *  array scratch + the sync-attr write region). The store layout MUST match. */
 let pendingAgentLayoutExtras: AgentLayoutExtras | null = null;
-/** PR6b-2 — the instantiated WASM `behaviour(...)` export (null on the JS target /
- *  before instantiation / on a failed instantiate → JS fallback). Signature:
+/** PR6b-2 ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â the instantiated WASM `behaviour(...)` export (null on the JS target /
+ *  before instantiation / on a failed instantiate ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ JS fallback). Signature:
  *  `(highWater, hashValid, nBinsX, nBinsY, nBinsZ, binSizeX, binSizeY, binSizeZ,
- *  fieldW, fieldH, fieldD, fieldTorus)` — mirrors `compileAgentGraphWasm`'s
+ *  fieldW, fieldH, fieldD, fieldTorus)` ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â mirrors `compileAgentGraphWasm`'s
  *  behaviour params. */
 let agentBehaviourWasmFn: ((...args: number[]) => void) | null = null;
 /** Viewer-guard table for the WASM behaviour's trailing `activeViewerIdx` arg. */
 let agentWasmViewerGuardIds: string[] = [];
-/** W1 — the WASM force-pass export (soft-sphere + bond springs + integration). Set
+/** W1 ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â the WASM force-pass export (soft-sphere + bond springs + integration). Set
  *  alongside agentBehaviourWasmFn; null on a behaviour-only module. When present
  *  (and the behaviour ran on WASM with the hash copied in this step), runAgentStep
- *  runs this INSTEAD of the JS force loop — the boost. */
+ *  runs this INSTEAD of the JS force loop ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â the boost. */
 let agentForcePassWasmFn: ((...args: number[]) => void) | null = null;
 /** AW-HASH fits-check: warn once when the per-step hash overflows the WASM reserve
- *  (the step then runs on JS — never silently wrong). */
+ *  (the step then runs on JS ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â never silently wrong). */
 let agentWasmHashOverflowWarned = false;
 
-/** PR7 G3-runtime — the dedicated agent WebGPU runtime (its own device, separate
+/** PR7 G3-runtime ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â the dedicated agent WebGPU runtime (its own device, separate
  *  from the grid's `webgpuRuntime`). When `agentTarget === 'webgpu'` AND this is
  *  non-null, runAgentStep dispatches the behaviour + force compute shaders on the
- *  GPU instead of the JS loop. Any device/compile failure nulls it → JS fallback. */
+ *  GPU instead of the JS loop. Any device/compile failure nulls it ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ JS fallback. */
 let agentWebgpuRuntime: AgentWebGPURuntime | null = null;
 /** The pending WebGPU agent shaders + layout dims (held so init/recompile can
  *  build the runtime asynchronously against the current store). */
@@ -632,7 +636,7 @@ let agentWebgpuBuildToken = 0;
 
 /** Resolve the incoming agent target to one whose required payload actually
  *  arrived. 'wasm' needs the module bytes; 'webgpu' needs both shaders. A target
- *  missing its payload demotes to 'js' (the always-runnable fallback) — the
+ *  missing its payload demotes to 'js' (the always-runnable fallback) ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â the
  *  worker-side safety net mirroring the grid's useWasm/useWebGPU demotion. */
 function resolveAgentTarget(
   t: 'js' | 'wasm' | 'webgpu' | undefined,
@@ -650,7 +654,7 @@ function resolveAgentTarget(
 function buildAgentAttrSpecs(): AgentAttrSpec[] {
   // Generic Agent Platform: the agent SoA is keyed by the AGENT attribute set
   // (a separate id-space), NOT the cell attributes. KEYSTONE of the attribute
-  // split — this drives createAgentStore + computeAgentMemoryLayout + the
+  // split ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â this drives createAgentStore + computeAgentMemoryLayout + the
   // agent-WASM spec, all of which must derive from the SAME ordered list.
   return agentAttrs.map(a => ({ id: a.id, type: a.type, defaultValue: defaultValue(a) }));
 }
@@ -660,9 +664,9 @@ function buildAgentAttrSpecs(): AgentAttrSpec[] {
  *  initial agent count. */
 function initAgents(): void {
   // Re-allocating the store invalidates any GPU agent runtime bound to the old
-  // store/dims — drop it (buildAgentWebGPUIfNeeded rebuilds against the fresh one).
+  // store/dims ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â drop it (buildAgentWebGPUIfNeeded rebuilds against the fresh one).
   if (agentWebgpuRuntime) { destroyAgentWebGPURuntime(agentWebgpuRuntime); agentWebgpuRuntime = null; }
-  // The per-step hash references the OLD store's scratch arrays — never hand it
+  // The per-step hash references the OLD store's scratch arrays ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â never hand it
   // to a colour pass built over the fresh store (stale ids up to the old maxAgents).
   currentAgentHash = null;
   if (!agentsEnabled || !centerBasedConfig) { agentStore = null; agentBehaviourWasmFn = null; agentForcePassWasmFn = null; return; }
@@ -673,23 +677,23 @@ function initAgents(): void {
   // bakes the offsets; the compiler emitted reads/writes against the same layout.
   const wantWasmBacked = agentTarget === 'wasm' || agentWasmBackedDev;
   // Re-allocating the store creates a FRESH WebAssembly.Memory; any previously
-  // instantiated WASM behaviour / force-pass fn pointed at the OLD memory → drop
+  // instantiated WASM behaviour / force-pass fn pointed at the OLD memory ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ drop
   // it. The caller (init / reset / recompile) re-instantiates via
   // instantiateAgentWasmIfNeeded against the fresh memory.
   agentBehaviourWasmFn = null;
   agentForcePassWasmFn = null;
   // Agent update synchronicity (INDEPENDENT of the grid's `updateMode`): 'sync'
   // double-buffers the agent attribute arrays (read previous / write next, swapped
-  // at step end — parallel/snapshot semantics, the WebGPU-agent prerequisite),
+  // at step end ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â parallel/snapshot semantics, the WebGPU-agent prerequisite),
   // 'async' (default) single-buffers them (immediate writes). Only honoured on the
   // non-wasmBacked JS path (createAgentStore gates `syncAttrs` on `!wasmBacked`).
   const wantSyncAttrs = centerBasedConfig.agentUpdateMode === 'sync';
   // AW-HASH (PR6b-2): reserve room in the agent memory for the per-step spatial
   // hash the WASM behaviour reads. The bound is derived from the ACTUAL grid (=
-  // agent world) dims + the force config — the SAME formula the compiler uses
+  // agent world) dims + the force config ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â the SAME formula the compiler uses
   // (agentMaxHashBinsForModel), so the worker's store layout matches the compiled
   // module's offsets. Only meaningful under wasmBacked; 0 otherwise.
-  // The hash bin budget — derived from the LIVE dims (= the model dims; a resize
+  // The hash bin budget ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â derived from the LIVE dims (= the model dims; a resize
   // reinits with new dims, recompiled the same way), so it equals the WASM-baked
   // reserve. Computed for ALL targets (the JS path also caps its per-step bin
   // count via buildSpatialHash, so a big grid never slows the JS agent loop).
@@ -702,7 +706,7 @@ function initAgents(): void {
   const agentMaxHashBins = wantWasmBacked ? agentHashReserve : 0;
   // FULL-COVERAGE: the layout extras the WASM module compiled against (model attrs
   // / indicators / lookup tables / cell fields / array scratch). MUST match the
-  // compiler's `buildAgentLayoutExtras(model)` — the worker's `fieldTotal` is
+  // compiler's `buildAgentLayoutExtras(model)` ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â the worker's `fieldTotal` is
   // re-derived here from the LIVE grid dims (= width*height*depth) so a resize is
   // consistent. Only meaningful under wasmBacked.
   const layoutExtras: AgentLayoutExtras | undefined = wantWasmBacked
@@ -715,10 +719,10 @@ function initAgents(): void {
   // for a future agents-only model where there's no grid to define the frame.)
   agentStore.worldWidth = width;
   agentStore.worldHeight = height;
-  // The agent world depth IS the grid `depth` (1:1, B2) — the SAME local the grid
+  // The agent world depth IS the grid `depth` (1:1, B2) ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â the SAME local the grid
   // derives (`= dimension==='3d' ? max(1,gridDepth) : 1`). This is the engine's
-  // single 3D predicate: `store.worldDepth > 1 ⟺ is3dModel(model)`. Do NOT read
-  // the dormant config.worldDepth (S6) — that would reintroduce the desync B2 warns of.
+  // single 3D predicate: `store.worldDepth > 1 ÃƒÂ¢Ã…Â¸Ã‚Âº is3dModel(model)`. Do NOT read
+  // the dormant config.worldDepth (S6) ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â that would reintroduce the desync B2 warns of.
   agentStore.worldDepth = depth;
   const seedCount = Math.max(0, Math.floor(cbNum(centerBasedConfig, 'seedCount')));
   if (seedCount > 0) {
@@ -728,7 +732,7 @@ function initAgents(): void {
     const specs: AgentSeedSpec[] = [];
     if (centerBasedConfig.seedPattern === 'scatter') {
       // Dispersed: uniformly random across the world (flocking, chemotaxis
-      // aggregation — populations that START spread and self-organize). Seeding
+      // aggregation ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â populations that START spread and self-organize). Seeding
       // is a one-time setup, not part of the replayable step, so Math.random is
       // fine here (unlike the deterministic per-step xorshift stream).
       const margin = 2 * r;
@@ -747,7 +751,7 @@ function initAgents(): void {
       // 3D compact = a sphere-clipped cubic lattice centred on the world (the
       // morphogenesis starting blob, the analog of the 2D centred square). Build
       // a cubic lattice (OVERSIZED to side+1 per F2 so the ball-clip still leaves
-      // ≥ seedCount candidates), clip to a ball, sort by distance-to-centre, take
+      // ÃƒÂ¢Ã¢â‚¬Â°Ã‚Â¥ seedCount candidates), clip to a ball, sort by distance-to-centre, take
       // the nearest seedCount.
       const spacing = 2.1 * r;
       const side = Math.max(1, Math.ceil(Math.cbrt(seedCount)) + 1); // F2 oversize
@@ -769,7 +773,7 @@ function initAgents(): void {
       }
     } else {
       // A compact, centred cluster (spacing just above contact, so the agents
-      // settle into a packed blob and auto-bond into a tissue) — the
+      // settle into a packed blob and auto-bond into a tissue) ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â the
       // morphogenesis starting point.
       const spacing = 2.1 * r;
       const cols = Math.max(1, Math.ceil(Math.sqrt(seedCount)));
@@ -786,8 +790,8 @@ function initAgents(): void {
   clampAgentDt();
 }
 
-/** PR6b-1 — instantiate the compiled agent WASM module against the FRESH agent
- *  store memory (allocated by `initAgents` → `createAgentStore({ wasmBacked })`).
+/** PR6b-1 ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â instantiate the compiled agent WASM module against the FRESH agent
+ *  store memory (allocated by `initAgents` ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ `createAgentStore({ wasmBacked })`).
  *  Async (WebAssembly.instantiate). On any failure the worker stays on the JS
  *  behaviour fn (the clamp keeps JS safe). Re-runs whenever the store / bytes
  *  change. Posts an error message on a hard failure for visibility. */
@@ -804,7 +808,7 @@ function instantiateAgentWasmIfNeeded(): void {
       // Guard against a re-init that swapped the store out from under us.
       if (agentStore === store && agentTarget === 'wasm') {
         agentBehaviourWasmFn = inst.behaviour;
-        agentForcePassWasmFn = inst.forcePass;  // W1 — null on a behaviour-only module
+        agentForcePassWasmFn = inst.forcePass;  // W1 ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â null on a behaviour-only module
       }
     } catch (e) {
       agentBehaviourWasmFn = null;
@@ -814,7 +818,7 @@ function instantiateAgentWasmIfNeeded(): void {
   })();
 }
 
-/** PR7 G3-runtime — (re)build the dedicated agent WebGPU runtime. Async (device
+/** PR7 G3-runtime ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â (re)build the dedicated agent WebGPU runtime. Async (device
  *  acquisition + pipeline compilation). On any failure the worker stays on the JS
  *  behaviour fn + JS force loop (the clamp keeps JS safe). A monotonic build token
  *  discards a stale in-flight build (the orphan-on-reinit discipline). Called from
@@ -826,17 +830,17 @@ function buildAgentWebGPUIfNeeded(): void {
   if (agentTarget !== 'webgpu' || !pendingAgentWebgpuBehaviour || !pendingAgentWebgpuForce || !store) return;
   const behaviour = pendingAgentWebgpuBehaviour;
   const force = pendingAgentWebgpuForce;
-  // G5 field bridge — the agent-accessible cell-attr id lists + grid dims. MUST
+  // G5 field bridge ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â the agent-accessible cell-attr id lists + grid dims. MUST
   // match the order the SHADER was compiled against (cellFieldAttrsOf /
   // cellFieldWriteAttrsOf): fieldSpecs IS cellFieldAttrsOf (same filter order),
   // and the readWrite subset preserves that order = cellFieldWriteAttrsOf.
   const fieldReadAttrs = fieldSpecs.map(s => s.id);
   const fieldWriteAttrs = fieldSpecs.filter(s => s.agentAccess === 'readWrite').map(s => s.id);
-  // G4 — the user AGENT attribute ids (the agent SoA runs Get/Set Attribute target).
+  // G4 ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â the user AGENT attribute ids (the agent SoA runs Get/Set Attribute target).
   // MUST match the order the SHADER compiled against (agentAttrsOf = store.attrSpecs).
   const agentAttrIds = store.attrSpecs.map(sp => sp.id);
   // Prefer the FULL layout shipped from SimulatorView (it carries the universal-node
-  // region bases the shader compiled to — auxF32 / indicators / bondStore / 3D z
+  // region bases the shader compiled to ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â auxF32 / indicators / bondStore / 3D z
   // fields). Fall back to a recompute (legacy path) if it's absent.
   const layout = pendingAgentWebgpuLayout ?? computeAgentWebGPULayout(
     pendingAgentWebgpuMaxAgents || store.maxAgents, pendingAgentWebgpuMaxHashBins,
@@ -867,7 +871,7 @@ function buildAgentWebGPUIfNeeded(): void {
 /** Refresh per-agent colours from the active AGENT output mapping (without
  *  advancing the simulation). When the model has agent mappings, the per-agent
  *  colour pass for `agentColorViewer` reads each agent's linked attribute and
- *  writes its colour — so switching the agent viewer, seeding, painting or
+ *  writes its colour ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â so switching the agent viewer, seeding, painting or
  *  killing recolours immediately. When there are no agent mappings this is a
  *  no-op: agents are coloured by the behaviourStep's Set Cell Looks during a
  *  step (running the behaviour fn here would advance the rule). */
@@ -883,7 +887,7 @@ function runAgentColorPass(): void {
     om.fn(...buildAgentLoopArgs(s, om.mappingId));
   } catch (e) {
     // Drop the failing pass (mirrors the behaviour/division fns nulling
-    // themselves) — runAgentColorPass runs on every sendColors, so a throwing fn
+    // themselves) ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â runAgentColorPass runs on every sendColors, so a throwing fn
     // would otherwise spam one error post per step of play.
     agentOutputMappingFns = agentOutputMappingFns.filter(f => f !== om);
     self.postMessage({ type: 'error', message: `[agents] colour pass "${om.mappingId}" failed (disabled until recompile): ` + ((e as Error)?.message || e) });
@@ -903,19 +907,19 @@ function applyAgentSets(store: AgentStore, id: number, sets: Array<{ attrId: str
 }
 
 /** Build the args for the compiled Agent Init Event function (a once-per-reset
- *  SETUP function — NOT loop-wrapped). MIRRORS `buildAgentInitParams` in compile.ts
+ *  SETUP function ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â NOT loop-wrapped). MIRRORS `buildAgentInitParams` in compile.ts
  *  EXACTLY: the host closures + maxAgents, the writable geometry buffers, the agent
  *  attr buffers, the global/rng/field block, then `_agentSeedBase`. */
-/** The ABI shape (primitives) for the shared agent-ABI descriptor — the worker
+/** The ABI shape (primitives) for the shared agent-ABI descriptor ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â the worker
  *  analogue of compile.ts's `agentAbiShapeOf(model)`. `s.attrSpecs` mirrors
  *  `agentAttrsOf(model)` and `fieldSpecs` mirrors `cellFieldAttrsOf(model)` in
- *  the SAME order, and `s.worldDepth > 1 ⟺ is3dModel(model)`, so this produces
+ *  the SAME order, and `s.worldDepth > 1 ÃƒÂ¢Ã…Â¸Ã‚Âº is3dModel(model)`, so this produces
  *  the identical ordered field list. */
 function agentAbiShapeOfStore(s: AgentStore): AgentAbiShape {
   return { is3d: s.worldDepth > 1, agentAttrs: s.attrSpecs, fieldAttrs: fieldSpecs, hasLookupTables };
 }
 
-/** The shared runtime values (external caches) every kind resolves from — pulled
+/** The shared runtime values (external caches) every kind resolves from ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â pulled
  *  live from the worker module globals. `hash` + `viewer` (+ the per-kind extras)
  *  are set by the caller. */
 function agentAbiBaseRt(): Omit<AgentAbiRuntime, 'hash' | 'viewer'> {
@@ -966,7 +970,7 @@ function runAgentInit(): void {
   const agentAddToWorld = (id: number): void => {
     // Only commit ids this Init Event actually staged via Create Agent. An
     // arbitrary graph-wired id could otherwise mark a never-initialised slot (or
-    // a free-listed one) alive — a ghost agent + a permanently wrong liveCount,
+    // a free-listed one) alive ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â a ghost agent + a permanently wrong liveCount,
     // or a slot later double-allocated by allocAgentSlot.
     if (createdSet.has(id) && !s.alive[id]) { s.alive[id] = 1; s.liveCount++; }
   };
@@ -979,14 +983,14 @@ function runAgentInit(): void {
   for (const id of created) if (!s.alive[id]) freeStagedSlot(s, id);
   // Sync xNext=x for live agents so a Set Agent Position override propagates
   // through the first integration step (initAgentSlot set xNext at Create time).
-  // zNext too in 3D — without it a z override is undone by the first swap.
+  // zNext too in 3D ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â without it a z override is undone by the first swap.
   const initIs3d = s.worldDepth > 1;
   for (let i = 0; i < s.highWater; i++) {
     if (s.alive[i]) { s.xNext[i] = s.x[i]!; s.yNext[i] = s.y[i]!; if (initIs3d) s.zNext[i] = s.z[i]!; }
   }
   // Sync agent mode double-buffers the attributes: the Init Event's Set Attribute
   // / Set Agent Attribute wrote the WRITE buffer, but the first behaviour step (and
-  // getState / the first colour pass) read the READ buffer. Copy write→read so the
+  // getState / the first colour pass) read the READ buffer. Copy writeÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢read so the
   // init-built state is the readable initial state. (No-op in async: r aliases w.)
   if (s.syncAttrs) {
     for (const spec of s.attrSpecs) {
@@ -1001,12 +1005,12 @@ function runAgentInit(): void {
  *  attributes (asymmetric inheritance). Daughters already inherited the mother's
  *  attributes VERBATIM in `divideAgent` (daughter A reuses the mother slot, so
  *  its attrs ARE the mother's; daughter B was copied), so a divisionEvent like
- *  "daughter 0: energy = energy·0.7" reads the inherited value and rewrites it.
+ *  "daughter 0: energy = energyÃƒâ€šÃ‚Â·0.7" reads the inherited value and rewrites it.
  *  daughterIndex 0 = A (the reused mother slot), 1 = B (the new slot).
  *
  *  ABI note (z-axis): the divisionEvent's `axisDefaultZ` value-out rides the
  *  `s.divideAxisZ` BUFFER arg (stamped onto both daughters at the division site,
- *  sim.worker.ts ~:1004), NOT a scalar — unlike `axisX`/`axisY`, which ARE passed
+ *  sim.worker.ts ~:1004), NOT a scalar ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â unlike `axisX`/`axisY`, which ARE passed
  *  as the scalar args below. Keep that asymmetry in mind when editing the ABI. */
 function runDivisionEvent(events: Array<{ mother: number; a: number; b: number; axisX: number; axisY: number }>): void {
   if (!agentDivisionFn || !agentStore) return;
@@ -1024,21 +1028,21 @@ function runDivisionEvent(events: Array<{ mother: number; a: number; b: number; 
   }
 }
 
-/** Args for the compiled divisionEvent function — a SINGLE-agent function (not
+/** Args for the compiled divisionEvent function ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â a SINGLE-agent function (not
  *  loop-wrapped): the daughter slot `idx`, its `daughterIndex` (0/1), the engine
  *  axis defaults, then the same engine buffers + user attrs the behaviour fn
  *  gets. MIRRORS `buildDivisionParams` in compile.ts.
  *
  *  MIRROR invariant (B1/B2): the trailing 3D block (`s.z, s.vz, s.divideAxisZ,
- *  s.worldDepth` — NO `forceZ`, division is force-read-only) is pushed ONLY when
+ *  s.worldDepth` ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â NO `forceZ`, division is force-read-only) is pushed ONLY when
  *  `s.worldDepth > 1`, exactly when `buildDivisionParams` pushes its 3D params
- *  under `is3dModel(model)`. `is3dModel(model) ⟺ s.worldDepth > 1` — edit BOTH
+ *  under `is3dModel(model)`. `is3dModel(model) ÃƒÂ¢Ã…Â¸Ã‚Âº s.worldDepth > 1` ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â edit BOTH
  *  together or every arg shifts one slot. */
 function buildDivisionArgs(s: AgentStore, idx: number, daughterIndex: number, axisX: number, axisY: number): unknown[] {
   // The division event's w_ block ALIASES attrRead (immediate writes in the
-  // sequential structural phase, which runs AFTER swapAgentAttrs) — the shared
+  // sequential structural phase, which runs AFTER swapAgentAttrs) ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â the shared
   // descriptor handles that per-kind (agentAbi.ts). NO forceZ in the 3D block
-  // (division reads forces, never writes them) — also in the descriptor.
+  // (division reads forces, never writes them) ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â also in the descriptor.
   const rt: AgentAbiRuntime = { ...agentAbiBaseRt(), hash: null, viewer: activeViewer, idx, daughterIndex, axisX, axisY };
   return buildAgentAbiArgs('division', agentAbiShapeOfStore(s), s, rt);
 }
@@ -1046,15 +1050,15 @@ function buildDivisionArgs(s: AgentStore, idx: number, daughterIndex: number, ax
 /** Build the args for the compiled behaviourStep function. MIRRORS
  *  `buildAgentLoopParams` in compile.ts EXACTLY (same order). Single-buffer
  *  agent attrs (attrWrite aliases attrRead). Called once per step (the spread
- *  is fine — the function is loop-wrapped, not per-agent).
+ *  is fine ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â the function is loop-wrapped, not per-agent).
  *
  *  MIRROR invariant (B1/B2): the trailing 3D block (`s.z, s.vz, s.forceZ,
  *  s.divideAxisZ, s.worldDepth`) is pushed ONLY when `s.worldDepth > 1`, exactly
  *  when `buildAgentLoopParams` pushes its 3D params under `is3dModel(model)`.
- *  `is3dModel(model) ⟺ s.worldDepth > 1` — edit BOTH together. */
+ *  `is3dModel(model) ÃƒÂ¢Ã…Â¸Ã‚Âº s.worldDepth > 1` ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â edit BOTH together. */
 /** Args for the compiled behaviour fn. `agentCreate`/`agentAddToWorld` are the
  *  unified-spawn host closures (Create Agent + Add Agent To World in the Behaviour
- *  graph, mid-step). They default to safe NO-OPS (create → -1, add → no-op) for the
+ *  graph, mid-step). They default to safe NO-OPS (create ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ -1, add ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ no-op) for the
  *  colour-pass + arity-assert call sites, which never spawn; `runAgentStep` passes
  *  the real grow-only closures. */
 function buildAgentLoopArgs(
@@ -1067,9 +1071,9 @@ function buildAgentLoopArgs(
 }
 
 /** Re-derive the clamped force-integration timestep from the live config.
- *  Mathias-2020 monotonicity bound: for a linear spring `F = μ(d−s)`,
- *  `Δt*_mono = 1/(2·μ_eff)`, so `Δt ← min(Δt_user, 0.4·Δt*_mono) = 0.2/μ_eff`
- *  with `μ_eff = μ_R + λ_max`. Must be re-evaluated on any force / bond-λ
+ *  Mathias-2020 monotonicity bound: for a linear spring `F = ÃƒÅ½Ã‚Â¼(dÃƒÂ¢Ã‹â€ Ã¢â‚¬â„¢s)`,
+ *  `ÃƒÅ½Ã¢â‚¬Ât*_mono = 1/(2Ãƒâ€šÃ‚Â·ÃƒÅ½Ã‚Â¼_eff)`, so `ÃƒÅ½Ã¢â‚¬Ât ÃƒÂ¢Ã¢â‚¬Â Ã‚Â min(ÃƒÅ½Ã¢â‚¬Ât_user, 0.4Ãƒâ€šÃ‚Â·ÃƒÅ½Ã¢â‚¬Ât*_mono) = 0.2/ÃƒÅ½Ã‚Â¼_eff`
+ *  with `ÃƒÅ½Ã‚Â¼_eff = ÃƒÅ½Ã‚Â¼_R + ÃƒÅ½Ã‚Â»_max`. Must be re-evaluated on any force / bond-ÃƒÅ½Ã‚Â»
  *  parameter change (the silent-drift hazard). */
 function clampAgentDt(): void {
   if (!agentStore || !centerBasedConfig) return;
@@ -1079,8 +1083,8 @@ function clampAgentDt(): void {
   agentStore.dt = Math.min(cbNum(centerBasedConfig, 'timeStep'), 0.2 / muEff);
 }
 
-/** Commit the position double-buffer (x ↔ xNext, y ↔ yNext, and z ↔ zNext in
- *  3D). ROUTED through this ONE helper (S11) so the reference-swap→copy-into
+/** Commit the position double-buffer (x ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬Â xNext, y ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬Â yNext, and z ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬Â zNext in
+ *  3D). ROUTED through this ONE helper (S11) so the reference-swapÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢copy-into
  *  conversion (B10/AW-SWAP) lives in a single function.
  *
  *  AW-SWAP (B10): under a wasmMemory-backed store the SoA arrays are VIEWS at
@@ -1124,7 +1128,7 @@ function copyAgentExternalRegionsIn(s: AgentStore): void {
     if (!tbl) continue;
     new Float64Array(buf, L.lookupTableOffset[id]!, tbl.length).set(tbl);
   }
-  // cell field arrays (readAttrs[id] → f64). The agent-accessible cell attrs.
+  // cell field arrays (readAttrs[id] ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ f64). The agent-accessible cell attrs.
   if (L.fieldTotal > 0) {
     for (const id of Object.keys(L.fieldOffset)) {
       const src = readAttrs[id]; if (!src) continue;
@@ -1136,8 +1140,8 @@ function copyAgentExternalRegionsIn(s: AgentStore): void {
 }
 
 /** Copy the WRITABLE external regions back OUT of agent memory after the WASM
- *  behaviour: the cell field deposit (→ `readAttrs[id]` so the cell CA step picks
- *  it up — Decision D-FIELD) + the indicators (→ `cachedIndicators` for the stepped
+ *  behaviour: the cell field deposit (ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ `readAttrs[id]` so the cell CA step picks
+ *  it up ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â Decision D-FIELD) + the indicators (ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ `cachedIndicators` for the stepped
  *  message). Only the agent-ACCESSIBLE-readWrite fields are deposited back. */
 function copyAgentExternalRegionsOut(s: AgentStore): void {
   const L = s.layout; if (!L || !s.memory) return;
@@ -1147,7 +1151,7 @@ function copyAgentExternalRegionsOut(s: AgentStore): void {
     const src = new Float64Array(buf, L.indicatorsOffset, L.indicatorCount);
     for (let i = 0; i < L.indicatorCount; i++) cachedIndicators[i] = src[i]!;
   }
-  // field deposit back (only the readWrite cell attrs — the deposit targets)
+  // field deposit back (only the readWrite cell attrs ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â the deposit targets)
   if (L.fieldTotal > 0) {
     const writeIds = new Set(fieldSpecs.filter(a => a.agentAccess === 'readWrite').map(a => a.id));
     for (const id of Object.keys(L.fieldOffset)) {
@@ -1160,9 +1164,9 @@ function copyAgentExternalRegionsOut(s: AgentStore): void {
   }
 }
 
-/** One agent generation: density reductions → compiled behaviour → engine force
+/** One agent generation: density reductions ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ compiled behaviour ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ engine force
  *  integration (soft-sphere repulsion + bond springs, overdamped Euler with a
- *  synchronous position double-buffer) → world-bounds wrap/clamp → age, then the
+ *  synchronous position double-buffer) ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ world-bounds wrap/clamp ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ age, then the
  *  structural phase (division / growth / death). Neighbour gathering is O(N) via a
  *  uniform CSR spatial hash (buildSpatialHash, built once below and reused by the
  *  force pass + Get Nearby Agents); the all-pairs loop is only a fallback for a
@@ -1172,25 +1176,25 @@ function runAgentStep(): void {
   if (!s) return;
   const cfg = centerBasedConfig;
   // "Use bonding physics" master toggle (req 10): when OFF, the engine applies NO
-  // built-in forces — no soft-sphere repulsion/adhesion, no bond springs, no growth
-  // ramp, no auto-bond — so agents move only by graph-authored Apply Force / Set
+  // built-in forces ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â no soft-sphere repulsion/adhesion, no bond springs, no growth
+  // ramp, no auto-bond ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â so agents move only by graph-authored Apply Force / Set
   // Velocity. Resolved with the customForcesOnly back-compat fallback so legacy
   // files are byte-identical (their bonding-physics models keep all four; their
   // custom-force models never used springs/growth/auto-bond anyway).
   const bonding = usesBondingPhysics(cfg);
-  const springs = usesEngineSprings(cfg);   // bond springs — the Bonds=Physics capability (decoupled from the legacy bundle)
+  const springs = usesEngineSprings(cfg);   // bond springs ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â the Bonds=Physics capability (decoupled from the legacy bundle)
   const muR = cbNum(cfg, 'repulsionStiffness');
   const muA = cbNum(cfg, 'adhesionStiffness');
   const range = cbNum(cfg, 'interactionRange');
   const eta = Math.max(1e-6, cbNum(cfg, 'drag'));
-  const torus = boundaryTreatment === 'torus';   // z wraps iff x/y wrap (B7/C1 — ONE flag, all 3 axes)
+  const torus = boundaryTreatment === 'torus';   // z wraps iff x/y wrap (B7/C1 ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â ONE flag, all 3 axes)
   const W = s.worldWidth, H = s.worldHeight;
   const halfW = W / 2, halfH = H / 2;
   const is3d = s.worldDepth > 1, D = s.worldDepth, halfD = D / 2;
   const dt = s.dt;
-  // Growth ramps radius→targetRadius under the Growth capability (decoupled from
-  // the legacy bonding bundle — so ticking Growth + Set Target Radius actually
-  // ramps). A rate of 0 makes the ramp a no-op (`cur + sign*0 === cur` for tr≠cur),
+  // Growth ramps radiusÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢targetRadius under the Growth capability (decoupled from
+  // the legacy bonding bundle ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â so ticking Growth + Set Target Radius actually
+  // ramps). A rate of 0 makes the ramp a no-op (`cur + sign*0 === cur` for trÃƒÂ¢Ã¢â‚¬Â°Ã‚Â cur),
   // so this freezes growth without touching the ramp blocks below.
   const growthRate = usesEngineGrowth(cfg) ? Math.max(0, cbNum(cfg, 'growthRate')) : 0;
   const hw = s.highWater;
@@ -1200,7 +1204,7 @@ function runAgentStep(): void {
   const maxSpeed = Math.max(0, cbNum(cfg, 'maxSpeed'));
   const engineForces = bonding;
   // Collision capability (Agent Capability Profiles): the soft-sphere REPULSION
-  // (volume exclusion) IS the collision — driven by the Collision capability
+  // (volume exclusion) IS the collision ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â driven by the Collision capability
   // independently of the bonding-physics bundle, so a pure gas (Collision on, "Use
   // bonding physics" off) gets non-penetrating collision without cohesion/springs.
   // `muRep` = repulsion coefficient (Collision on), `muAdh` = adhesion coefficient
@@ -1214,53 +1218,53 @@ function runAgentStep(): void {
 
   // Reset the per-step force accumulator (Apply Force adds into it during
   // behaviour) BEFORE behaviour runs. forceZ is a memset of an always-zero-in-2D
-  // array — byte-irrelevant for 2D, used by the 3D arm.
+  // array ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â byte-irrelevant for 2D, used by the 3D arm.
   s.forceX.fill(0, 0, hw); s.forceY.fill(0, 0, hw); s.forceZ.fill(0, 0, hw);
 
-  // Build the uniform spatial hash from current positions — O(N) neighbour
-  // lookups instead of O(N²). Built BEFORE behaviour so Get Nearby Agents can
+  // Build the uniform spatial hash from current positions ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â O(N) neighbour
+  // lookups instead of O(NÃƒâ€šÃ‚Â²). Built BEFORE behaviour so Get Nearby Agents can
   // query it, then reused by the force pass. null for a world too small to tile
-  // (≥3 bins/axis); the all-pairs fallback runs there. The interaction range OR
-  // a larger Get-Nearby query radius sets the bin edge — sized generously so the
-  // 3×3 stencil covers both the soft-sphere cutoff AND typical neighbour queries.
+  // (ÃƒÂ¢Ã¢â‚¬Â°Ã‚Â¥3 bins/axis); the all-pairs fallback runs there. The interaction range OR
+  // a larger Get-Nearby query radius sets the bin edge ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â sized generously so the
+  // 3ÃƒÆ’Ã¢â‚¬â€3 stencil covers both the soft-sphere cutoff AND typical neighbour queries.
   let maxR = cbNum(cfg, 'defaultRadius');
   for (let i = 0; i < hw; i++) { if (alive[i] && rad[i]! > maxR) maxR = rad[i]!; }
   const binEdge = Math.max(range * 2 * maxR, cbNum(cfg, 'neighbourQueryRadius'));
   const hash = buildSpatialHash(s, Math.max(1e-3, binEdge), W, H, D, boundaryTreatment === 'torus', agentHashReserve);
   currentAgentHash = hash;
 
-  // Compiled behaviour (reads positions + the PREVIOUS step's density — a
+  // Compiled behaviour (reads positions + the PREVIOUS step's density ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â a
   // one-step lag, the cost of fusing density into the single neighbour pass;
   // densities change slowly so it's a fine approximation; queries the hash via
   // Get Nearby Agents). Writes attrs / colours / forces / div+kill+bond requests.
   // Sync update mode (independent of the grid): prime the write buffer = a clone
   // of the read buffer, so attributes the behaviour doesn't touch carry over and
   // the behaviour reads the PREVIOUS step's attrs while writing the next. No-op in
-  // async mode (single buffer) — byte-identical to pre-feature.
+  // async mode (single buffer) ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â byte-identical to pre-feature.
   primeAgentAttrWrite(s);
 
   // PR6b-2: dispatch the behaviour loop on the agent target. The WASM loop reads/
   // writes the SAME store memory at the baked offsets (AW-MEM), so the force pass /
   // structural phase BELOW reads the same views. (W1: the force pass itself may now
-  // also run on WASM — see the forcePass dispatch after swapAgentAttrs; the
+  // also run on WASM ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â see the forcePass dispatch after swapAgentAttrs; the
   // structural phase + hash build always stay JS.)
   //
   // AW-RNG + AW-HASH: before the WASM call we (1) write the global `rngState[0]`
-  // into the in-memory RNG cell (the WASM loop advances it + writes it back — JS
+  // into the in-memory RNG cell (the WASM loop advances it + writes it back ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â JS
   // bit-parity, B13), and (2) COPY the per-step spatial hash (binStart/binAgents)
   // into the reserved in-memory views (S10) when it fits the layout's reserve;
   // the hash DIMENSIONS ride the call args. If the hash overflows the reserve
   // (the fits-check), we fall back to JS for this step (never silently wrong).
-  // Unified spawning — RESET the per-step created-slot tracking. The grow-only
+  // Unified spawning ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â RESET the per-step created-slot tracking. The grow-only
   // Create Agent + Add Agent To World closures (module-level `agentBehaviourCreate` /
   // `agentBehaviourAddToWorld`) are STABLE (so the WASM `env.agentCreate`/`env.agentAddToWorld`
-  // imports, bound once at instantiate, share the SAME logic as the JS behaviour →
+  // imports, bound once at instantiate, share the SAME logic as the JS behaviour ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢
   // bit-identical). They read `agentStore` + this per-step list.
   spawnCreatedList.length = 0; spawnCreatedSet.clear();
   const runBehaviourJs = () => agentBehaviourFn!(...buildAgentLoopArgs(s, undefined, agentBehaviourCreate, agentBehaviourAddToWorld));
 
   let ranWasm = false;
-  // W1 — force-pass eligibility + the hash dims it reuses. The WASM force pass can
+  // W1 ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â force-pass eligibility + the hash dims it reuses. The WASM force pass can
   // only run when the WASM behaviour ran this step (so the in-memory hash was
   // copied in + the store is wasmBacked). Captured in the success branch below.
   let forcePassReady = false;
@@ -1269,7 +1273,7 @@ function runAgentStep(): void {
   if (agentBehaviourWasmFn && s.wasmBacked && s.memory && s.layout) {
     const fits = !hash || (hash.nBinsX * hash.nBinsY * hash.nBinsZ + 1) <= (s.layout.maxHashBins + 1);
     if (!fits) {
-      // The hash exceeded the AW-HASH reserve — run this step on the JS fn (the
+      // The hash exceeded the AW-HASH reserve ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â run this step on the JS fn (the
       // WASM module's binStart view can't hold it). Loud once, then per-step quiet.
       if (!agentWasmHashOverflowWarned) {
         agentWasmHashOverflowWarned = true;
@@ -1312,7 +1316,7 @@ function runAgentStep(): void {
         // the deposit; the indicators surface in the stepped message).
         copyAgentExternalRegionsOut(s);
         ranWasm = true;
-        // W1 — the in-memory hash is now valid for the SAME step, so the WASM force
+        // W1 ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â the in-memory hash is now valid for the SAME step, so the WASM force
         // pass may reuse it. Stash the dims it needs (mirrors the behaviour's).
         forcePassReady = true;
         fpHashValid = hashValid; fpNBinsX = nBinsX; fpNBinsY = nBinsY; fpNBinsZ = nBinsZ;
@@ -1321,7 +1325,7 @@ function runAgentStep(): void {
       } catch (e) {
         self.postMessage({ type: 'error', message: '[agents] WASM behaviour run failed, falling back to JS: ' + ((e as Error)?.message || e) });
         agentBehaviourWasmFn = null;
-        agentForcePassWasmFn = null;  // W1 — drop the force pass too; this step runs fully on JS
+        agentForcePassWasmFn = null;  // W1 ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â drop the force pass too; this step runs fully on JS
         if (agentBehaviourFn) { try { runBehaviourJs(); ranWasm = true; } catch { agentBehaviourFn = null; } }
       }
     }
@@ -1335,10 +1339,10 @@ function runAgentStep(): void {
     }
   }
 
-  // Unified spawning leak-sweep — free any Create Agent whose handle was never Added
+  // Unified spawning leak-sweep ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â free any Create Agent whose handle was never Added
   // (still staged at alive=0). freeStagedSlot pushes it to the free-list, where the
   // structural phase (division) or the next Reset reclaims it. The common
-  // Create → configure → Add sequence stages nothing, so this is usually a no-op.
+  // Create ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ configure ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ Add sequence stages nothing, so this is usually a no-op.
   for (const id of spawnCreatedList) if (!s.alive[id]) freeStagedSlot(s, id);
 
   // Sync update mode: swap the double-buffered attrs in, so the values the
@@ -1346,11 +1350,11 @@ function runAgentStep(): void {
   // the render snapshot, and the next step. No-op in async mode.
   swapAgentAttrs(s);
 
-  // W1 — THE FORCE PASS (the boost). When the WASM behaviour ran this step AND a
+  // W1 ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â THE FORCE PASS (the boost). When the WASM behaviour ran this step AND a
   // force-pass export exists, run the WASM force integrator INSTEAD of the JS loop
-  // below — it reads/writes the SAME store memory (xNext/yNext[/zNext], vx/vy[/vz],
+  // below ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â it reads/writes the SAME store memory (xNext/yNext[/zNext], vx/vy[/vz],
   // density, radius) at the baked offsets, reusing the in-memory hash already
-  // copied in for the behaviour. f64 throughout ⇒ JS↔WASM bit-exact. Mirrored
+  // copied in for the behaviour. f64 throughout ÃƒÂ¢Ã¢â‚¬Â¡Ã¢â‚¬â„¢ JSÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬ÂWASM bit-exact. Mirrored
   // scalar-config ABI (see emitForcePass): the order here MUST match FORCE_PASS_PARAMS.
   let ranForceWasm = false;
   if (forcePassReady && agentForcePassWasmFn) {
@@ -1359,7 +1363,7 @@ function runAgentStep(): void {
       agentForcePassWasmFn(
         // `hw` (the PRE-behaviour bound), not the post-spawn `s.highWater`, so a
         // mid-step-Created newborn (grow-allocated beyond `hw`) is NOT force-integrated
-        // the step it's born — it stays where Create placed it (matches the JS force
+        // the step it's born ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â it stays where Create placed it (matches the JS force
         // loop, which also iterates `hw`). Identical for non-spawn (hw === s.highWater).
         hw, fpHashValid, fpNBinsX, fpNBinsY, fpNBinsZ,
         fpBinSizeX, fpBinSizeY, fpBinSizeZ,
@@ -1379,11 +1383,11 @@ function runAgentStep(): void {
   // soft-sphere repulsion/adhesion (unless customForcesOnly) + bond springs +
   // density (for next step), integrated into the xNext/yNext[/zNext] double-buffer.
   // Branched on `is3d` ONCE (not per-line): the 2D else-branch is the EXACT
-  // current code, verbatim (the grid's literal-verbatim-2D-fast-path lesson — a
+  // current code, verbatim (the grid's literal-verbatim-2D-fast-path lesson ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â a
   // branchless always-0-dz body would change the 2D arithmetic + stencil count).
   // SKIPPED when the WASM force pass ran this step (W1).
   if (ranForceWasm) {
-    // nothing — the WASM force pass already wrote xNext/yNext[/zNext], vx/vy[/vz],
+    // nothing ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â the WASM force pass already wrote xNext/yNext[/zNext], vx/vy[/vz],
     // density, radius, and age into the store memory. swapPositions commits below.
   } else if (is3d) {
     const xN = s.xNext, yN = s.yNext, zN = s.zNext;
@@ -1393,7 +1397,7 @@ function runAgentStep(): void {
       const xi = x[i]!, yi = y[i]!, zi = z[i]!, ri = rad[i]!;
       let fx = s.forceX[i]!, fy = s.forceY[i]!, fz = s.forceZ[i]!, dens = 0;
 
-      // --- neighbour pass: 3×3×3 stencil over the z-major hash, torus-wrapped ---
+      // --- neighbour pass: 3ÃƒÆ’Ã¢â‚¬â€3ÃƒÆ’Ã¢â‚¬â€3 stencil over the z-major hash, torus-wrapped ---
       if (hash) {
         const nBinsX = hash.nBinsX, nBinsY = hash.nBinsY, nBinsZ = hash.nBinsZ;
         const binStart = hash.binStart, binAgents = hash.binAgents;
@@ -1456,7 +1460,7 @@ function runAgentStep(): void {
       }
       s.density[i] = dens;
 
-      // --- bond springs λ(l−L)·r̂ over the 3-vector (dangling-bond epoch ABI) ---
+      // --- bond springs ÃƒÅ½Ã‚Â»(lÃƒÂ¢Ã‹â€ Ã¢â‚¬â„¢L)Ãƒâ€šÃ‚Â·rÃƒÅ’Ã¢â‚¬Å¡ over the 3-vector (dangling-bond epoch ABI) ---
       // Gated on the Bonds=Physics capability: Data bonds are connectivity edges
       // that carry NO force (only Physics bonds are springs).
       const bc = s.bondCount[i]!;
@@ -1481,7 +1485,7 @@ function runAgentStep(): void {
         }
       }
 
-      // Integrate (3-vector); momentum 0 ⇒ overdamped; optional 3D-speed cap.
+      // Integrate (3-vector); momentum 0 ÃƒÂ¢Ã¢â‚¬Â¡Ã¢â‚¬â„¢ overdamped; optional 3D-speed cap.
       let vxi = momentum * vxArr[i]! + (dt / eta) * fx;
       let vyi = momentum * vyArr[i]! + (dt / eta) * fy;
       let vzi = momentum * vzArr[i]! + (dt / eta) * fz;
@@ -1564,8 +1568,8 @@ function runAgentStep(): void {
       }
       s.density[i] = dens;
 
-      // --- bond springs λ(l−L)·r̂ (no-op until bonds exist). The partnerEpoch
-      // check is the dangling-bond ABI — a recycled slot's stale bond reads
+      // --- bond springs ÃƒÅ½Ã‚Â»(lÃƒÂ¢Ã‹â€ Ã¢â‚¬â„¢L)Ãƒâ€šÃ‚Â·rÃƒÅ’Ã¢â‚¬Å¡ (no-op until bonds exist). The partnerEpoch
+      // check is the dangling-bond ABI ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â a recycled slot's stale bond reads
       // epoch-mismatch and is skipped. Gated on the Bonds=Physics capability
       // (Data bonds are force-free edges). ---
       const bc = s.bondCount[i]!;
@@ -1586,8 +1590,8 @@ function runAgentStep(): void {
         }
       }
 
-      // Integrate: velocity = momentum·velocity + (Δt/η)·force; position += velocity.
-      // momentum 0 ⇒ vx = (Δt/η)·fx, the original overdamped step (byte-identical
+      // Integrate: velocity = momentumÃƒâ€šÃ‚Â·velocity + (ÃƒÅ½Ã¢â‚¬Ât/ÃƒÅ½Ã‚Â·)Ãƒâ€šÃ‚Â·force; position += velocity.
+      // momentum 0 ÃƒÂ¢Ã¢â‚¬Â¡Ã¢â‚¬â„¢ vx = (ÃƒÅ½Ã¢â‚¬Ât/ÃƒÅ½Ã‚Â·)Ãƒâ€šÃ‚Â·fx, the original overdamped step (byte-identical
       // for tissue); momentum > 0 carries inertia (flocking). Optional speed cap.
       let vxi = momentum * vxArr[i]! + (dt / eta) * fx;
       let vyi = momentum * vyArr[i]! + (dt / eta) * fy;
@@ -1611,11 +1615,11 @@ function runAgentStep(): void {
       }
     }
   }
-  // Commit positions (synchronous double-buffer swap; S11 helper — z swapped in 3D).
+  // Commit positions (synchronous double-buffer swap; S11 helper ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â z swapped in 3D).
   swapPositions(s, is3d);
 
   // HARD positional collision (Collision capability = 'positional'): a rigid,
-  // no-overlap position-projection constraint on the just-committed positions —
+  // no-overlap position-projection constraint on the just-committed positions ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â
   // the alternative to the soft-sphere FORCE above (which is off for positional).
   // Runs `positionalIterations` Jacobi sweeps; the structural phase below then
   // sees the settled, non-overlapping positions.
@@ -1629,20 +1633,20 @@ function runAgentStep(): void {
   runAgentStructuralPhase();
 
   // Sprite playback: advance each agent's sprite frame by its per-agent speed
-  // (logic-driven animation — Set Agent Sprite set the speed; the render floors +
+  // (logic-driven animation ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â Set Agent Sprite set the speed; the render floors +
   // wraps the frame). Per simulation step, so the animation only progresses while
   // the sim runs. Gated on the model having sprites.
   if (hasAgentSprites) advanceAgentSprites(s);
 }
 
-/** PR7 G3-runtime — one agent generation on the WebGPU agent target. The GPU
+/** PR7 G3-runtime ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â one agent generation on the WebGPU agent target. The GPU
  *  sibling of `runAgentStep`'s WASM dispatch: the CPU does the prep (reset forces,
  *  build the spatial hash, prime the sync attr buffer), uploads the SoA + hash,
  *  dispatches the behaviour then the force shader, and reads `x/y/vx/vy/radius/
- *  density/age` back into the CPU store — then the structural phase runs CPU-side
+ *  density/age` back into the CPU store ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â then the structural phase runs CPU-side
  *  on the settled state (a no-op for the Boids headline: no bonds / division).
  *  ASYNC (the readback awaits a `mapAsync`); the caller awaits it inside the step
- *  batch loop. Returns whether the GPU path actually ran (false → the caller runs
+ *  batch loop. Returns whether the GPU path actually ran (false ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ the caller runs
  *  the JS `runAgentStep()` for this step). The force pass + bond springs + the
  *  hash BUILD stay CPU-mirror with the JS path; the gate keeps bonds/division out
  *  of WebGPU-target graphs so the GPU force pass is exact for those models. */
@@ -1706,11 +1710,11 @@ async function runAgentStepWebGPUInner(): Promise<boolean> {
   // Reset the per-step force accumulator (Apply Force adds into it on the GPU).
   // forceZ too: a JS fallback step (startup while the runtime builds, hash
   // overflow) leaves the last JS behaviour's z-force in the CPU store, and
-  // uploadAgentSoA re-uploads it as the accumulator seed every GPU step — a
+  // uploadAgentSoA re-uploads it as the accumulator seed every GPU step ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â a
   // permanent phantom z-force in 3D without this reset.
   s.forceX.fill(0, 0, hw); s.forceY.fill(0, 0, hw); s.forceZ.fill(0, 0, hw);
 
-  // Build the uniform spatial hash CPU-side (same as the JS path) — the GPU
+  // Build the uniform spatial hash CPU-side (same as the JS path) ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â the GPU
   // behaviour + force passes query it (2D and 3D; the shaders carry the Z dims).
   let maxR = cbNum(cfg, 'defaultRadius');
   for (let i = 0; i < hw; i++) { if (alive[i] && rad[i]! > maxR) maxR = rad[i]!; }
@@ -1722,7 +1726,7 @@ async function runAgentStepWebGPUInner(): Promise<boolean> {
   // attr-buffer invariant the structural phase / snapshot read.
   primeAgentAttrWrite(s);
 
-  // Upload the hash + the SoA; bail (→ JS) if the hash overflows the GPU reserve.
+  // Upload the hash + the SoA; bail (ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ JS) if the hash overflows the GPU reserve.
   const hashFits = uploadAgentHash(rt, hash);
   const hashValid = hashFits && hash ? 1 : 0;
   if (hash && !hashFits) {
@@ -1733,7 +1737,7 @@ async function runAgentStepWebGPUInner(): Promise<boolean> {
     return false;
   }
   uploadAgentSoA(rt, s);
-  // Universal-node uploads (Generic Agent Platform) — present only when the layout
+  // Universal-node uploads (Generic Agent Platform) ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â present only when the layout
   // reserved their region (a no-extra Boids model uploads none).
   if (rt.layout.auxF32Len > 0) {
     const tables: Record<string, ArrayLike<number>> = {};
@@ -1749,7 +1753,7 @@ async function runAgentStepWebGPUInner(): Promise<boolean> {
   if (rt.layout.bondStoreLen > 0) uploadAgentBondStore(rt, s);
   // The agent world IS the grid coordinate frame 1:1, so fieldW/fieldH double as
   // BOTH the world bounds (getNearbyAgents / getAgentOffset torus wrap) AND the
-  // field grid dims (the field index = row·fieldW + col). W===width, H===height.
+  // field grid dims (the field index = rowÃƒâ€šÃ‚Â·fieldW + col). W===width, H===height.
   uploadAgentControl(rt, {
     highWater: hw, hashValid, nBinsX: hash ? hash.nBinsX : 0, nBinsY: hash ? hash.nBinsY : 0,
     fieldTorus: torus ? 1 : 0,
@@ -1767,7 +1771,7 @@ async function runAgentStepWebGPUInner(): Promise<boolean> {
     originX: hash ? hash.originX : 0, originY: hash ? hash.originY : 0, originZ: hash ? hash.originZ : 0,
   });
 
-  // G5 field bridge — upload the cell field snapshot + prime the atomic deposit
+  // G5 field bridge ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â upload the cell field snapshot + prime the atomic deposit
   // accumulator, run the GPU behaviour (which samples fieldRead + atomic-deposits
   // into fieldDeposit), then read the deposit back into the cell READ buffer
   // (readAttrs[id]) BEFORE the cell CA step incorporates it (Decision D-FIELD).
@@ -1785,7 +1789,7 @@ async function runAgentStepWebGPUInner(): Promise<boolean> {
     uploadAgentField(rt, readArrays, writeArrays);
   }
 
-  // Dispatch behaviour → force, then commit. `readbackAgentStep` reads the GPU's
+  // Dispatch behaviour ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ force, then commit. `readbackAgentStep` reads the GPU's
   // post-step user-agent-attribute runs back into `s.attrWrite` (the "next" buffer),
   // so the swap MUST follow it (sync mode: read previous / write next, then swap;
   // no-op in async where attrWrite aliases attrRead). It ALSO reads back the
@@ -1798,7 +1802,7 @@ async function runAgentStepWebGPUInner(): Promise<boolean> {
     if (rt.usesSpawn) uploadAgentSpawnCursor(rt, hw);
     if (rt.usesStop) resetAgentStopFlag(rt);   // fresh first-match each step
     dispatchAgentStep(rt, hw);
-    const rb = await readbackAgentStep(rt, s);   // x/y (from xNext/yNext) + vx/vy/radius/density/age + attrs→attrWrite + requests + colours + spawn reconcile + stop
+    const rb = await readbackAgentStep(rt, s);   // x/y (from xNext/yNext) + vx/vy/radius/density/age + attrsÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢attrWrite + requests + colours + spawn reconcile + stop
     if (rb.spawnOverflow) self.postMessage({ type: 'agentOverflow', message: `Agent capacity reached during a Behaviour spawn (maxAgents=${s.maxAgents}). Some Create Agent calls were skipped.` });
     // Merge the GPU Stop Event into the shared stopFlag (first-match); drainAgentStop
     // in the batch loop reads stopFlag[0] BEFORE the cell step resets it.
@@ -1806,13 +1810,13 @@ async function runAgentStepWebGPUInner(): Promise<boolean> {
     swapAgentAttrs(s);
     if (rt.layout.indicatorCount > 0) {
       // The behaviour shader mutated the indicators atomic buffer (Set/Update
-      // Indicator) — read them back into cachedIndicators so the sendColors path
+      // Indicator) ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â read them back into cachedIndicators so the sendColors path
       // ships the new values (the agent indicators ride the same buffer the cell
       // step uses; here the GPU owns them for the agent step).
       await readbackAgentIndicators(rt, cachedIndicators, agentWebgpuIndicatorIsInt());
     }
     if (hasFieldBridge && rt.layout.fieldWriteLen > 0) {
-      // The deposit accumulator holds the evolved field → copy into readAttrs so
+      // The deposit accumulator holds the evolved field ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ copy into readAttrs so
       // the cell step (runStep) reads it (its w.set(r) carries it; diffusion spreads).
       const writeArrays: Record<string, FieldArray & { [i: number]: number }> = {};
       for (const spec of fieldSpecs) {
@@ -1825,11 +1829,11 @@ async function runAgentStepWebGPUInner(): Promise<boolean> {
   } catch (e) {
     // A concurrent reinit (initAgents / rebuild / recompile processed during one of
     // the awaited readbacks) may have destroyed THIS runtime's buffers while our
-    // mapAsync was still pending → "Buffer was destroyed before mapping was
+    // mapAsync was still pending ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ "Buffer was destroyed before mapping was
     // resolved". That is EXPECTED during live editing, not a real GPU failure: fall
     // back to JS for this step SILENTLY and leave the (possibly already-rebuilt)
     // runtime alone. We detect it by the runtime reference no longer being current
-    // — which also fixes a latent bug where the old catch would destroy a FRESH
+    // ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â which also fixes a latent bug where the old catch would destroy a FRESH
     // runtime a reinit had just installed. Only a genuine failure of the runtime we
     // actually ran on surfaces an error + tears it down.
     if (agentWebgpuRuntime === rt) {
@@ -1839,14 +1843,14 @@ async function runAgentStepWebGPUInner(): Promise<boolean> {
     return false;
   }
 
-  // HARD positional collision — a CPU post-step constraint on the just-read-back
+  // HARD positional collision ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â a CPU post-step constraint on the just-read-back
   // positions, exactly like the structural phase below (both target-independent
   // CPU/JS, run on the settled state after the GPU force pass). No GPU shader +
   // no extra readback: `readbackAgentStep` already committed x/y[/z] to the CPU
   // store, so the projection runs here and the NEXT step's uploadAgentSoA sends
-  // the non-overlapping positions back to the GPU. (WebGPU's f32 force pass ⇒ the
+  // the non-overlapping positions back to the GPU. (WebGPU's f32 force pass ÃƒÂ¢Ã¢â‚¬Â¡Ã¢â‚¬â„¢ the
   // read-back positions are f32-precision, so this is statistical parity vs the
-  // f64 JS/WASM targets — the documented WebGPU-agent stance, no worse than the
+  // f64 JS/WASM targets ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â the documented WebGPU-agent stance, no worse than the
   // structural phase which is likewise CPU here.)
   if (usesPositionalCollision(cfg)) {
     const iters = Math.max(1, Math.floor(cbNum(cfg, 'positionalIterations')));
@@ -1863,10 +1867,10 @@ async function runAgentStepWebGPUInner(): Promise<boolean> {
   return true;
 }
 
-/** Post-step structural phase — the only place the bond / agent topology is
+/** Post-step structural phase ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â the only place the bond / agent topology is
  *  mutated (Decision: mutate on the settled state, never mid-force-loop). Bond
- *  form/break requests (FormBond / BreakBond) → auto-bond by distance (with
- *  hysteresis) → stale-bond sweep → [division + death land in Phase C]. */
+ *  form/break requests (FormBond / BreakBond) ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ auto-bond by distance (with
+ *  hysteresis) ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ stale-bond sweep ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ [division + death land in Phase C]. */
 function runAgentStructuralPhase(): void {
   const s = agentStore;
   if (!s) return;
@@ -1895,12 +1899,12 @@ function runAgentStructuralPhase(): void {
     if (br > 0) { breakBond(s, i, br - 1); s.bondBreakReq[i] = 0; }
   }
 
-  // 1b. Death — recycle killed agents (breaks all bonds + bumps the epoch).
+  // 1b. Death ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â recycle killed agents (breaks all bonds + bumps the epoch).
   for (let i = 0; i < hw; i++) {
     if (alive[i] && s.killRequest[i]) freeAgentSlot(s, i);
   }
 
-  // 1c. Division — split flagged agents along their tension axis. Iterate only
+  // 1c. Division ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â split flagged agents along their tension axis. Iterate only
   //     the pre-division population (the daughters land beyond `hw` and aren't
   //     re-divided this step). Overflow rejects the WHOLE division + surfaces a
   //     one-shot notice. The divisionEvent graph (if any) reassigns daughter
@@ -1911,7 +1915,7 @@ function runAgentStructuralPhase(): void {
   for (let i = 0; i < hw; i++) {
     if (!alive[i] || !s.divideRequest[i]) continue;
     const axisX = s.divideAxisX[i]!, axisY = s.divideAxisY[i]!;
-    // z component of the requested axis (0 in 2D — divideAxisZ is 2D-ZERO).
+    // z component of the requested axis (0 in 2D ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â divideAxisZ is 2D-ZERO).
     const axisZ = is3d ? s.divideAxisZ[i]! : 0;
     const asym = s.divideAsym[i]! || 0.5;
     s.divideRequest[i] = 0;
@@ -1928,25 +1932,25 @@ function runAgentStructuralPhase(): void {
   if (divideEvents.length > 0) runDivisionEvent(divideEvents);
 
   // 2. Auto-bond by distance (opt-in, hysteresis): form a bond between any two
-  //    unbonded agents within formDistance×contact; break bonds stretched past
-  //    breakDistance×contact. Uses the spatial hash → O(N). Gated on the
-  //    Bonds=Physics capability (usesEngineSprings — auto-bond forms SPRING bonds,
+  //    unbonded agents within formDistanceÃƒÆ’Ã¢â‚¬â€contact; break bonds stretched past
+  //    breakDistanceÃƒÆ’Ã¢â‚¬â€contact. Uses the spatial hash ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ O(N). Gated on the
+  //    Bonds=Physics capability (usesEngineSprings ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â auto-bond forms SPRING bonds,
   //    so it rides the same gate as the springs it creates; consistent with the
-  //    closure's `autoBond ⇒ bonds='physics'`), its own autoBond flag, AND a
-  //    non-empty bond store (STEP 3 capability-gate: Bonds=off ⇒ s.maxBonds=0, so
+  //    closure's `autoBond ÃƒÂ¢Ã¢â‚¬Â¡Ã¢â‚¬â„¢ bonds='physics'`), its own autoBond flag, AND a
+  //    non-empty bond store (STEP 3 capability-gate: Bonds=off ÃƒÂ¢Ã¢â‚¬Â¡Ã¢â‚¬â„¢ s.maxBonds=0, so
   //    the scan is skipped entirely rather than scanning + rejecting at the
-  //    capacity check — the same result, no bonds, minus the wasted O(N) work).
+  //    capacity check ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â the same result, no bonds, minus the wasted O(N) work).
   if (s.maxBonds > 0 && usesEngineSprings(cfg) && cfg?.autoBond) {
     const fMul = cbNum(cfg, 'formDistance');
     const bMul = cbNum(cfg, 'breakDistance');
-    // form pass — scan candidate pairs via the hash
+    // form pass ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â scan candidate pairs via the hash
     const z = s.z, halfD = D / 2;
     let maxR = cbNum(cfg, 'defaultRadius');
     for (let i = 0; i < hw; i++) { if (alive[i] && rad[i]! > maxR) maxR = rad[i]!; }
     const hash = buildSpatialHash(s, Math.max(1e-3, bMul * 2 * maxR), W, H, D, boundaryTreatment === 'torus', agentHashReserve);
     // buildSpatialHash reuses the per-store scratch arrays, so this rebuild (at a
     // DIFFERENT bin edge) just corrupted `currentAgentHash`'s contents while its
-    // dims still describe the step hash — invalidate so a later colour pass
+    // dims still describe the step hash ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â invalidate so a later colour pass
     // (Get Nearby Agents in an agent OM graph) falls back to all-pairs instead
     // of querying a dims/content-mismatched hash.
     currentAgentHash = null;
@@ -1972,7 +1976,7 @@ function runAgentStructuralPhase(): void {
     if (hash) {
       const { nBinsX, nBinsY, nBinsZ, binStart, binAgents, binSizeX, binSizeY, binSizeZ, originX, originY, originZ } = hash;
       if (nBinsZ > 1) {
-        // 3D form pass — 3×3×3 stencil over the z-major hash, torus-wrapped.
+        // 3D form pass ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â 3ÃƒÆ’Ã¢â‚¬â€3ÃƒÆ’Ã¢â‚¬â€3 stencil over the z-major hash, torus-wrapped.
         for (let i = 0; i < hw; i++) {
           if (!alive[i]) continue;
           let bx = ((x[i]! - originX) / binSizeX) | 0; if (bx < 0) bx = 0; else if (bx >= nBinsX) bx = nBinsX - 1;
@@ -2003,7 +2007,7 @@ function runAgentStructuralPhase(): void {
     } else {
       for (let i = 0; i < hw; i++) { if (!alive[i]) continue; for (let j = i + 1; j < hw; j++) tryForm(i, j); }
     }
-    // break pass — drop bonds stretched past breakDistance×contact
+    // break pass ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â drop bonds stretched past breakDistanceÃƒÆ’Ã¢â‚¬â€contact
     for (let i = 0; i < hw; i++) {
       if (!alive[i]) continue;
       const base = i * s.maxBonds;
@@ -2045,22 +2049,22 @@ let skippedArray: Uint8Array | null = null;
 let glyphCodes: Uint32Array | null = null;
 let glyphColors: Uint32Array | null = null;
 // Empty placeholders passed to compiled JS step/colour-pass functions when
-// the model has no setCellGlyph node — keeps the function arity stable
+// the model has no setCellGlyph node ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â keeps the function arity stable
 // without paying for a per-cell buffer. The compiled code never reads these
 // because no setCellGlyph emit landed in the function body.
 const GLYPH_NOOP_CODES: Uint32Array = new Uint32Array(0);
 const GLYPH_NOOP_COLORS: Uint32Array = new Uint32Array(0);
 
-// Inspect-cell subscriptions — flat cell indices the main thread is watching
+// Inspect-cell subscriptions ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â flat cell indices the main thread is watching
 // via the Shift+LMB popup. Worker emits `inspectCellsData` after every step
 // (piggy-backed onto sendColors) and immediately when the set is updated.
 // Cost when empty: a single empty-array length check per step. Cost when
-// non-empty: one read × cellAttrs.length per subscribed cell per step.
+// non-empty: one read ÃƒÆ’Ã¢â‚¬â€ cellAttrs.length per subscribed cell per step.
 let inspectCellIdxs: number[] = [];
 
 // WASM linear memory backs cell attributes and the color buffer so the future
 // WASM step function can address them directly. JS still uses typed-array views
-// over the same memory for paint, save/load, the legacy JS step, etc. — the
+// over the same memory for paint, save/load, the legacy JS step, etc. ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â the
 // views and the WASM module see the exact same bytes.
 //
 // Memory layout (computed by computeMemoryLayout):
@@ -2113,7 +2117,7 @@ let cachedInteractionTables: Record<string, Float64Array> = {};
 /** The current Lookup Table payloads (id + resolved row/col labels + values),
  *  stashed before initGrid so the layout can size each table region. */
 let lookupTablesPayload: InteractionTablePayload[] = [];
-/** True when the model has any Lookup Table model attr — gates emission of the
+/** True when the model has any Lookup Table model attr ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â gates emission of the
  *  `_lookupTables` arg bundle in buildLoopArgs/buildCellArgs (mirrors the JS
  *  compiler's `variegated || hasLookupTables` param gate). */
 let hasLookupTables = false;
@@ -2129,7 +2133,7 @@ let variegated: VariegatedPayload | null = null;
 let hasGlyphs = false;
 let orientationReadView: Int32Array | null = null;
 let orientationWriteView: Int32Array | null = null;
-/** Flat `[speciesIdx * 8 + faceIdx → labelIdx]` (0 = "none"). Built once by
+/** Flat `[speciesIdx * 8 + faceIdx ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ labelIdx]` (0 = "none"). Built once by
  *  `buildFacePatternLookup` from the variegation source attribute's
  *  facePatternAssignments. */
 let facePatternLookup: Int32Array | null = null;
@@ -2140,7 +2144,7 @@ let facePatternLookup: Int32Array | null = null;
  *  initGrid for the orientation views; this function fills the lookup +
  *  table regions). Per the typed-array-view discipline in CLAUDE.md, future
  *  live updates (e.g. updateInteractionTable) MUST copy into these views,
- *  never reassign the JS reference — WASM reads via baked offsets, not the
+ *  never reassign the JS reference ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â WASM reads via baked offsets, not the
  *  JS reference.
  *
  *  Called from the init/recompile handlers AFTER `initGrid()` (which sized
@@ -2155,7 +2159,7 @@ function initVariegation(
   lookupTablesPayload = interactionTablesPayload ?? [];
   hasLookupTables = lookupTablesPayload.length > 0;
 
-  // facePatternLookup region (variegation only) — view over wasmMemory at the
+  // facePatternLookup region (variegation only) ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â view over wasmMemory at the
   // layout offset. initGrid sized it from the source attribute's tagOptions
   // count; rebuild the values and `set()` them into the view so JS-target reads
   // and WASM reads both see the same bytes.
@@ -2180,10 +2184,10 @@ function initVariegation(
     }
   }
 
-  // Lookup tables — one Float64Array view per table at the per-attr offset
-  // reserved by computeMemoryLayout. INDEPENDENT of variegation (tag×tag tables
+  // Lookup tables ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â one Float64Array view per table at the per-attr offset
+  // reserved by computeMemoryLayout. INDEPENDENT of variegation (tagÃƒÆ’Ã¢â‚¬â€tag tables
   // need no faces). `set()` the normalised values in; updateLookupTable later
-  // writes through the same view (never reassign — WASM reads via baked offset).
+  // writes through the same view (never reassign ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â WASM reads via baked offset).
   if (wasmMemory && wasmLayout) {
     for (const t of lookupTablesPayload) {
       const slot = wasmLayout.interactionTableOffsets[t.id];
@@ -2194,7 +2198,7 @@ function initVariegation(
         view.set(normalized);
         cachedInteractionTables[t.id] = view;
       } else {
-        // No layout slot (table attr added after init without recompile) — keep
+        // No layout slot (table attr added after init without recompile) ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â keep
         // a standalone array so JS reads still work; WASM has no offset for it.
         cachedInteractionTables[t.id] = normalized;
       }
@@ -2218,12 +2222,12 @@ function syncVariegationToGPU(): void {
   for (const [id, view] of Object.entries(cachedInteractionTables)) {
     // The cached view is a Float64Array (over wasmMemory). The GPU stores f32,
     // so the upload helper down-converts via a fresh Float32Array. Negligible
-    // copy cost — tables are small ((labels+1)² entries).
+    // copy cost ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â tables are small ((labels+1)Ãƒâ€šÃ‚Â² entries).
     uploadInteractionTable(rt, id, view);
   }
 }
 
-// WASM step (Wave 2) — when useWasm is true, runStep() calls this instead of
+// WASM step (Wave 2) ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â when useWasm is true, runStep() calls this instead of
 // the JS stepFn. Default false; flipped via the 'setUseWasm' message. The WASM
 // module is rebuilt on every init/recompile because it imports the linear
 // memory and assumes the current attribute layout.
@@ -2233,7 +2237,7 @@ let wasmStepFn: ((total: number) => void) | null = null;
 let wasmInputColorFns: Record<string, (idx: number, r: number, g: number, b: number) => void> = {};
 let wasmOutputMappingFns: Record<string, (total: number) => void> = {};
 /** Variegated Cells: WASM Init Event entry point. Same signature as `step`
- *  — single `total` param, walks every cell sequentially. Called by `runInit`
+ *  ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â single `total` param, walks every cell sequentially. Called by `runInit`
  *  on Reset when the model has an Init Event node + WASM target. */
 let wasmInitFn: ((total: number) => void) | null = null;
 let useWasm = false;
@@ -2241,7 +2245,7 @@ let useWasm = false;
 // Wave 3: WebGPU runtime. `useWebGPU` is the user's intent; `webgpuRuntime` is
 // the actual handle (null until async init succeeds, or null after a failure).
 // `runStep()` only routes to the WebGPU path when both useWebGPU is true AND
-// `webgpuRuntime.stepReady` is true — step 1 leaves stepReady false so the
+// `webgpuRuntime.stepReady` is true ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â step 1 leaves stepReady false so the
 // step still runs on JS/WASM even when the user has WebGPU selected. This
 // validates the entire control plane without needing buffer/pipeline machinery.
 let useWebGPU = false;
@@ -2250,11 +2254,11 @@ let useWebGPU = false;
 // capture frames. Otherwise direct render skips the colors transfer.
 let recording = false;
 let webgpuRuntime: WebGPURuntime | null = null;
-// Monotonic counter — bumped at the start of every startWebGPUInit. The
+// Monotonic counter ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â bumped at the start of every startWebGPUInit. The
 // async init's `.then` captures the value at submit time and bails if it no
 // longer matches (a newer init landed, OR the worker is being torn down).
 // Without this, an old in-flight init can race the new one and clobber
-// `webgpuRuntime` with a now-orphaned runtime — racy and hard to repro.
+// `webgpuRuntime` with a now-orphaned runtime ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â racy and hard to repro.
 let webgpuInitSeq = 0;
 
 function startWebGPUInit(
@@ -2281,30 +2285,30 @@ function startWebGPUInit(
   // Pipeline cache: when the new shader is byte-identical to the running one,
   // the layout is identical too (the layout values are baked into the shader
   // source). We can keep the device + buffers + pipelines and skip the
-  // expensive async device + shaderModule + pipeline rebuild — saves hundreds
+  // expensive async device + shaderModule + pipeline rebuild ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â saves hundreds
   // of ms on graph-only edits where the user isn't actually changing the rule.
   if (shaderCode && webgpuRuntime?.stepReady && shaderHashOf(shaderCode) === webgpuRuntime.shaderHash) {
     self.postMessage({ type: 'useWebGPUStatus', enabled: useWebGPU, ready: true, directRender: webgpuRuntime.directRender });
     return;
   }
-  // P7 — salvage any direct-render canvas attached to the previous runtime.
+  // P7 ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â salvage any direct-render canvas attached to the previous runtime.
   // The OffscreenCanvas is tied to the worker's lifetime (not to a specific
   // device); reusing it after recompile keeps direct render alive instead of
   // falling back to readback-based rendering on every graph edit.
   const salvagedCanvas = canvas ?? webgpuRuntime?.canvas ?? undefined;
-  // Tear down any previous runtime — rebuilt against the new shader/layout.
+  // Tear down any previous runtime ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â rebuilt against the new shader/layout.
   destroyWebGPURuntime(webgpuRuntime);
   webgpuRuntime = null;
   if (!isWebGPUAvailable()) {
     self.postMessage({ type: 'error', message: '[webgpu] navigator.gpu unavailable in this worker context' });
     return;
   }
-  // The promise is intentionally not awaited here — init runs in the background
+  // The promise is intentionally not awaited here ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â init runs in the background
   // and runStep() falls through to JS/WASM until `webgpuRuntime.stepReady` is
   // true. Step 7 (Save/Load State) introduces the await path.
   void createWebGPURuntime({ shaderCode, entryPoints, layout, canvas: salvagedCanvas })
     .then(async rt => {
-      // A newer init started while we were awaiting — the orphaned `rt`
+      // A newer init started while we were awaiting ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â the orphaned `rt`
       // belongs to a stale sequence. Destroy it and bail without touching
       // webgpuRuntime, which now holds (or is about to hold) the newer one.
       if (mySeq !== webgpuInitSeq) {
@@ -2314,7 +2318,7 @@ function startWebGPUInit(
       webgpuRuntime = rt;
       // Build buffers + pipeline, upload initial CPU state, seed per-cell RNG.
       await setupBuffersAndPipelines(rt);
-      // Re-check after the second await — same race window.
+      // Re-check after the second await ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â same race window.
       if (mySeq !== webgpuInitSeq) {
         destroyWebGPURuntime(rt);
         if (webgpuRuntime === rt) webgpuRuntime = null;
@@ -2329,7 +2333,7 @@ function startWebGPUInit(
       // initial orientation. setupBuffersAndPipelines already flipped
       // `rt.stepReady = true` so syncVariegationToGPU's gate passes.
       syncVariegationToGPU();
-      // O5 — set up GPU-side reduction pipelines for any GPU-eligible
+      // O5 ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â set up GPU-side reduction pipelines for any GPU-eligible
       // watched linked indicators. Skipped indicators (float total, integer
       // /float frequency) keep using the existing CPU readback fallback.
       setupReductionPipelines(rt, linkedDefs);
@@ -2338,7 +2342,7 @@ function startWebGPUInit(
       for (const { idx, id } of standaloneIds) vals[id] = cachedIndicators[idx]!;
       uploadIndicators(rt, vals, isIntEncodedIndicator);
       // Run the active viewer's outputMapping + present (single encoder under
-      // direct render — P6) so the canvas shows the initial state from the
+      // direct render ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â P6) so the canvas shows the initial state from the
       // very first frame. Falls back to the plain dispatch under non-direct.
       if (rt.directRender) {
         dispatchColorPassAndPresent(rt, activeViewer);
@@ -2357,7 +2361,7 @@ function startWebGPUInit(
       self.postMessage({ type: 'useWebGPUStatus', enabled: useWebGPU, ready: rt.stepReady, directRender: rt.directRender });
     })
     .catch((e: unknown) => {
-      // Same staleness check on the failure path — don't clobber the newer
+      // Same staleness check on the failure path ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â don't clobber the newer
       // runtime's state with a stale error message.
       if (mySeq !== webgpuInitSeq) return;
       webgpuRuntime = null;
@@ -2377,14 +2381,14 @@ function sanitiseExportName(s: string | undefined | null): string {
 // Cached model attributes
 let cachedModelAttrs: Record<string, unknown> = {};
 
-// Indicators — typed-array-backed so the per-cell hot path uses _indicators[idx]
+// Indicators ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â typed-array-backed so the per-cell hot path uses _indicators[idx]
 // (typed-array index access) instead of _indicators["abc"] (object hash lookup).
 // The index space is parallel to model.indicators array order; compiler pre-resolves
 // each indicator node's _indicatorIdx via the same mapping.
 let cachedIndicators: Float64Array = new Float64Array(0);
 let standaloneDefaults: Float64Array = new Float64Array(0);
 let standalonePerGenIdx: number[] = [];
-// (idx, id) pairs for the standalone indicators only — used to build the outgoing
+// (idx, id) pairs for the standalone indicators only ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â used to build the outgoing
 // id-keyed payload that the UI consumes. Linked indicators come via linkedResults.
 let standaloneIds: Array<{ idx: number; id: string }> = [];
 let linkedDefs: Array<{
@@ -2424,14 +2428,14 @@ let linkedAccumulators: Record<string, number | Record<string, number>> = {};
 // all three; the UI branches on the indicator's xAxis.
 let linkedResults: Record<string, number | Record<string, number> | Record<string, number[]>> = {};
 
-// Stop-event flag — compiled step writes a 1-based index into stopFlag[0] when
+// Stop-event flag ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â compiled step writes a 1-based index into stopFlag[0] when
 // a Stop Event node's flow fires. Worker reads after each step/color/input pass
 // and surfaces the matching message from stopMessages. A Uint32Array view over
 // the layout.stopFlagOffset so JS and WASM share the same memory cell.
 let stopFlag: Uint32Array = new Uint32Array(1);
 let stopMessages: string[] = [];
 
-/** Drain the agent Stop Event source(s) after an agent step — the 1-based stop
+/** Drain the agent Stop Event source(s) after an agent step ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â the 1-based stop
  *  index (0 = none). Called in the batch loops BETWEEN the agent step and the
  *  cell step: the agent step always runs first, and runStep()/runStepWebGPU()
  *  reset the shared stopFlag at their top (and finalizeStepWebGPU OVERWRITES it
@@ -2446,11 +2450,11 @@ function drainAgentStop(): number {
   if (s && s.wasmBacked && s.memory && s.layout) {   // WASM agent memory cell
     const cell = new Uint32Array(s.memory.buffer, s.layout.stopFlagOffset, 1);
     if (v === 0) v = cell[0]! >>> 0;
-    cell[0] = 0;                 // always clear — the WASM first-match needs a 0 start
+    cell[0] = 0;                 // always clear ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â the WASM first-match needs a 0 start
   }
   return v;
 }
-// B4B — WebGPU stop-check interval. Default 1 (every step). >1 trades stop-event
+// B4B ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â WebGPU stop-check interval. Default 1 (every step). >1 trades stop-event
 // timing precision for fewer per-step mapAsync stalls. The last step of any
 // batch is ALWAYS checked so the user sees the eventual stop within the batch.
 let webgpuStopCheckInterval = 1;
@@ -2500,7 +2504,7 @@ function boundaryCellValue(attr: AttrDef): number {
 // ---------------------------------------------------------------------------
 
 function initGrid(): void {
-  total = width * height * depth;   // 3D Grid CA: depth===1 → W*H (2D byte-identical)
+  total = width * height * depth;   // 3D Grid CA: depth===1 ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ W*H (2D byte-identical)
   attrsA = {};
   attrsB = {};
   const isAsync = updateMode === 'asynchronous';
@@ -2509,7 +2513,7 @@ function initGrid(): void {
   // the WASM step might address: cell attrs, color buffer, neighbor index
   // tables, model attrs, indicators, RNG state, active viewer ID, and async
   // order array. JS-side variables (attrsA/B, nbrIndices, orderArray, etc.)
-  // become typed-array views over wasmMemory at the layout offsets — single
+  // become typed-array views over wasmMemory at the layout offsets ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â single
   // source of truth shared between JS step and WASM step.
   //
   // Variegated Cells: when the feature is enabled (`variegated` was set by the
@@ -2520,23 +2524,23 @@ function initGrid(): void {
   // regions are stable across live edits to the values themselves.
   let variegatedInputs: VariegatedLayoutInputs | undefined;
   if (variegated && gridCellsEnabled) {
-    // Variegation is a cell-grid feature — with the grid off its per-cell
+    // Variegation is a cell-grid feature ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â with the grid off its per-cell
     // orientation buffers would be dead weight at agent-world scales.
     const source = cellAttrs.find(a => a.id === variegated!.sourceAttributeId);
     variegatedInputs = { speciesCount: source?.tagOptions?.length ?? 0 };
   }
-  // Lookup tables — sized from each table's resolved row/col label counts
+  // Lookup tables ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â sized from each table's resolved row/col label counts
   // (carried in the payload, stashed before initGrid). Independent of variegation.
   const lookupTables: LookupTableLayoutInput[] = lookupTablesPayload.map(t => ({
     id: t.id,
     rowCount: t.rowLabels.length || 1,
     colCount: t.colLabels.length || 1,
   }));
-  // Agents-only (CA Grid off): reserve NO neighbour-index tables — nothing
+  // Agents-only (CA Grid off): reserve NO neighbour-index tables ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â nothing
   // queries them (buildNeighborIndices + the cell step are skipped), and at
-  // agent-world scales they dominate the layout catastrophically: a 600×600×400
-  // world with a Moore-3D neighbourhood would reserve total×26×4 ≈ 15 GB and
-  // blow the wasm32 4 GiB Memory limit — the "resize never completes" hang.
+  // agent-world scales they dominate the layout catastrophically: a 600ÃƒÆ’Ã¢â‚¬â€600ÃƒÆ’Ã¢â‚¬â€400
+  // world with a Moore-3D neighbourhood would reserve totalÃƒÆ’Ã¢â‚¬â€26ÃƒÆ’Ã¢â‚¬â€4 ÃƒÂ¢Ã¢â‚¬Â°Ã‹â€  15 GB and
+  // blow the wasm32 4 GiB Memory limit ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â the "resize never completes" hang.
   const layoutNeighborhoods = gridCellsEnabled ? neighborhoods : [];
   wasmLayout = computeMemoryLayout(
     cellAttrs, modelAttrsList, layoutNeighborhoods, indicatorsList,
@@ -2544,11 +2548,11 @@ function initGrid(): void {
     variegatedInputs,
     hasGlyphs,
     lookupTables,
-    gridCellsEnabled,   // grid off ⇒ no colors/glyphs/order/skipped/attr-write regions
+    gridCellsEnabled,   // grid off ÃƒÂ¢Ã¢â‚¬Â¡Ã¢â‚¬â„¢ no colors/glyphs/order/skipped/attr-write regions
   );
   wasmMemory = new WebAssembly.Memory({ initial: wasmLayout.pages });
   const buf = wasmMemory.buffer;
-  colorsDirty = gridCellsEnabled;   // fresh grid → ship colours on the next sendColors (never when the grid is off)
+  colorsDirty = gridCellsEnabled;   // fresh grid ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ ship colours on the next sendColors (never when the grid is off)
 
   // Constant boundary needs a sentinel cell at index `total` that neighbour
   // lookups for out-of-bounds positions point to. We always view total+1 cells
@@ -2562,7 +2566,7 @@ function initGrid(): void {
     attrsA[attr.id] = arrA;
 
     if (isAsync) {
-      // Async: single buffer — both read and write point to the same view (same offset)
+      // Async: single buffer ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â both read and write point to the same view (same offset)
       attrsB[attr.id] = arrA;
     } else {
       const arrB = viewOver(attr.type, buf, wasmLayout.attrWriteOffset[attr.id]!, viewLen);
@@ -2574,7 +2578,7 @@ function initGrid(): void {
   readAttrs = attrsA;
   writeAttrs = isAsync ? attrsA : attrsB;
   colors = new Uint8ClampedArray(buf, wasmLayout.colorsOffset, wasmLayout.colorsBytes);
-  // Glyph buffer views — only when the layout reserved regions (i.e. the
+  // Glyph buffer views ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â only when the layout reserved regions (i.e. the
   // model has at least one setCellGlyph node). Otherwise null, all readers
   // skip.
   if (wasmLayout.hasGlyphs) {
@@ -2586,9 +2590,9 @@ function initGrid(): void {
   }
   generation = 0;
 
-  // Variegated Cells — orientation views over wasmMemory. Same sentinel-aware
+  // Variegated Cells ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â orientation views over wasmMemory. Same sentinel-aware
   // length as cell attrs. Sentinel cell at index `total` stays at 0 per spec
-  // §6.3 (orientation boundary value is fixed at 0). In async mode the write
+  // Ãƒâ€šÃ‚Â§6.3 (orientation boundary value is fixed at 0). In async mode the write
   // view aliases the read view (single shared buffer, mirrors cell-attr
   // async discipline).
   if (wasmLayout.variegatedEnabled) {
@@ -2611,14 +2615,14 @@ function initGrid(): void {
   const rngView = new Uint32Array(buf, wasmLayout.rngStateOffset, 1);
   rngView[0] = rngState[0]!;
 
-  // Stop-event flag view — shared between JS step (writes via `_stopFlag[0]=idx`)
+  // Stop-event flag view ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â shared between JS step (writes via `_stopFlag[0]=idx`)
   // and WASM step (i32.store at stopFlagOffset). Reset to 0 on init.
   stopFlag = new Uint32Array(buf, wasmLayout.stopFlagOffset, 1);
   stopFlag[0] = 0;
 
-  // Order array — view over memory in BOTH modes (offset is reserved either way).
+  // Order array ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â view over memory in BOTH modes (offset is reserved either way).
   // Async mode populates it (sequential then maybe shuffled); sync mode leaves it 0.
-  // Grid off ⇒ the regions are 0-sized (no async cell loop) — a total-length view
+  // Grid off ÃƒÂ¢Ã¢â‚¬Â¡Ã¢â‚¬â„¢ the regions are 0-sized (no async cell loop) ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â a total-length view
   // over them would throw RangeError.
   if (isAsync && gridCellsEnabled) {
     orderArray = new Int32Array(buf, wasmLayout.orderOffset, total);
@@ -2650,7 +2654,7 @@ function buildNeighborIndices(): void {
     // arithmetic reduces to the historical `row*width+col` form.
     const coords3d = nbr.coords3d;
     const nbrSize = coords3d ? coords3d.length : nbr.coords.length;
-    // Index table is a view over wasmMemory at the layout offset — shared with WASM step.
+    // Index table is a view over wasmMemory at the layout offset ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â shared with WASM step.
     const indices = new Int32Array(buf, wasmLayout.nbrIndexOffset[nbr.id]!, total * nbrSize);
 
     for (let layer = 0; layer < depth; layer++) {
@@ -2720,7 +2724,7 @@ function buildLoopArgs(): unknown[] {
     args.push(nbr.coords3d ? nbr.coords3d.length : nbr.coords.length);
   }
   args.push(cachedModelAttrs, colors, activeViewer, cachedIndicators, linkedResults, rngState, stopFlag);
-  // Glyph buffers — always present in the param list to keep arity stable;
+  // Glyph buffers ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â always present in the param list to keep arity stable;
   // empty Uint32Arrays when the model has no glyphs (compiled writes never
   // execute in that case because no setCellGlyph node was compiled).
   args.push(glyphCodes ?? GLYPH_NOOP_CODES, glyphColors ?? GLYPH_NOOP_COLORS);
@@ -2750,7 +2754,7 @@ function buildCellArgs(idx: number): unknown[] {
     args.push(nbr.coords3d ? nbr.coords3d.length : nbr.coords.length);
   }
   args.push(cachedModelAttrs, colors, activeViewer, cachedIndicators, linkedResults, rngState, stopFlag);
-  // Glyph buffers — always present in the param list to keep arity stable;
+  // Glyph buffers ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â always present in the param list to keep arity stable;
   // empty Uint32Arrays when the model has no glyphs (compiled writes never
   // execute in that case because no setCellGlyph node was compiled).
   args.push(glyphCodes ?? GLYPH_NOOP_CODES, glyphColors ?? GLYPH_NOOP_COLORS);
@@ -2798,13 +2802,13 @@ function tryInstantiateWasmModule(bytes: Uint8Array | undefined, exportNames: st
 
 /** True iff GPU buffers are the source of truth (attrs may be stale on CPU).
  *  Flipped on by runStepWebGPU; flipped off by any code path that uploads
- *  CPU → GPU (mutation handlers in step 6) or readback handlers that sync
- *  GPU → CPU (step 7 save state, step 14 linked indicators). */
+ *  CPU ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ GPU (mutation handlers in step 6) or readback handlers that sync
+ *  GPU ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ CPU (step 7 save state, step 14 linked indicators). */
 let gpuOwnsAttrs = false;
 
-/** Pull GPU → CPU iff the GPU is currently authoritative. Use before any code
+/** Pull GPU ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ CPU iff the GPU is currently authoritative. Use before any code
  *  path that READS the CPU `readAttrs` mirror for outgoing data (clipboard,
- *  save state, JS-mode color pass, etc) — otherwise the read returns stale
+ *  save state, JS-mode color pass, etc) ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â otherwise the read returns stale
  *  pre-evolution data after Play under WebGPU. The `getState` and `paint`
  *  handlers were the only ones that did this manually; this helper makes the
  *  invariant uniform for all readers. */
@@ -2874,11 +2878,11 @@ function applySubAttributeAsyncScrub(): void {
 
 function runStep(): void {
   // Agents-only defence: the batch loops already gate on gridCellsEnabled, but
-  // mutation-handler tails (`else if (stepFn) runStep()`) can still reach here —
+  // mutation-handler tails (`else if (stepFn) runStep()`) can still reach here ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â
   // an empty cell step over a huge agent world would be a multi-second stall.
   if (!gridCellsEnabled) return;
   colorsDirty = true;   // the step (or its colour writes) may rewrite `colors`
-  // Wave 3: triple branch — WebGPU > WASM > JS. WebGPU only takes the
+  // Wave 3: triple branch ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â WebGPU > WASM > JS. WebGPU only takes the
   // dispatch when the runtime has finished its async buffer + pipeline setup.
   if (useWebGPU && webgpuRuntime?.stepReady) {
     runStepWebGPU();
@@ -2887,9 +2891,9 @@ function runStep(): void {
   // If the previous step ran on GPU, attrs on CPU are stale. Pull them back
   // before falling through to a JS/WASM step so we don't run on prev-prev gen.
   // (In practice this only fires when the user toggles target mid-run, which
-  // already triggers a full reinit — but the guard is cheap and defensive.)
+  // already triggers a full reinit ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â but the guard is cheap and defensive.)
   if (gpuOwnsAttrs && webgpuRuntime?.stepReady) {
-    // Synchronous-style fallback: just clear the flag — actual readback happens
+    // Synchronous-style fallback: just clear the flag ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â actual readback happens
     // in step 7's getState path. The first JS/WASM step after a target switch
     // may operate on stale data; documented limitation.
     gpuOwnsAttrs = false;
@@ -2898,12 +2902,12 @@ function runStep(): void {
   const callWasm = useWasm && wasmStepFn !== null;
   const isSync = updateMode !== 'asynchronous';
 
-  // Clear the stop-event flag before the step runs — otherwise a stop that
+  // Clear the stop-event flag before the step runs ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â otherwise a stop that
   // fired during an internal runStep call (reset/paint visualisation)
   // would persist and falsely pause the user's next Play.
   if (stopFlag) stopFlag[0] = 0;
 
-  // Clear glyph buffers — matches runColorPass behaviour. If the model uses
+  // Clear glyph buffers ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â matches runColorPass behaviour. If the model uses
   // setCellGlyph in step (no output mapping) the step-side writes are the
   // only source; if both step and an output mapping write glyphs, the
   // mapping's clear+write happens after this and wins (same semantics as
@@ -2921,7 +2925,7 @@ function runStep(): void {
 
   // Pre-step (WASM, sync mode): WASM uses baked-in attrReadOffset/attrWriteOffset
   // so it must always read from attrsA. JS-mode swap may have left readAttrs
-  // pointing at attrsB — sync the latest data back into attrsA before running.
+  // pointing at attrsB ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â sync the latest data back into attrsA before running.
   if (callWasm && isSync && readAttrs !== attrsA) {
     for (const attr of cellAttrs) {
       (attrsA[attr.id] as Uint8Array).set(readAttrs[attr.id] as Uint8Array);
@@ -2933,7 +2937,7 @@ function runStep(): void {
   // Async mode: shuffle/populate order array before each step
   if (updateMode === 'asynchronous' && orderArray) {
     if (asyncScheme === 'random-order') {
-      // Fisher-Yates shuffle — every cell updates exactly once in random order
+      // Fisher-Yates shuffle ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â every cell updates exactly once in random order
       for (let i = total - 1; i > 0; i--) {
         const j = (Math.random() * (i + 1)) | 0;
         const tmp = orderArray[i]!; orderArray[i] = orderArray[j]!; orderArray[j] = tmp;
@@ -2944,7 +2948,7 @@ function runStep(): void {
         orderArray[i] = (Math.random() * total) | 0;
       }
     }
-    // 'cyclic': orderArray stays as shuffled at init — no per-step work
+    // 'cyclic': orderArray stays as shuffled at init ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â no per-step work
 
     // Mark-Cell-Updated flag is per-step transient: every cell starts the
     // generation eligible for update. JS step reads `_skipped[idx]` at the
@@ -2961,7 +2965,7 @@ function runStep(): void {
     applySubAttributeAsyncScrub();
   }
 
-  // ONE call per step — the loop is inside the compiled function.
+  // ONE call per step ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â the loop is inside the compiled function.
   // WASM step has a different signature (just `total`) since attrs/colors
   // live in the imported memory and offsets are baked into the module.
   if (callWasm) {
@@ -2970,13 +2974,13 @@ function runStep(): void {
     fn(...buildLoopArgs());
   }
 
-  // Post-step buffer management (sync mode only — async uses single buffer).
-  // Done BEFORE the linked-indicator compute below: on WASM-sync the w→r copy
+  // Post-step buffer management (sync mode only ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â async uses single buffer).
+  // Done BEFORE the linked-indicator compute below: on WASM-sync the wÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢r copy
   // must land first so readAttrs holds the JUST-COMPUTED generation (it
   // otherwise held gen N-1, lagging the JS embed which reads the write buffer).
   if (isSync) {
     if (callWasm) {
-      // WASM wrote new gen to attrWriteOffset (= attrsB). Bulk-copy w → r so
+      // WASM wrote new gen to attrWriteOffset (= attrsB). Bulk-copy w ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ r so
       // the next step (whichever mode) sees the new gen at readAttrs = attrsA.
       // We cannot use the JS ref-swap trick because WASM's offsets are baked.
       for (const attr of cellAttrs) {
@@ -2991,7 +2995,7 @@ function runStep(): void {
     }
     // Variegated Cells: orientation views live at fixed offsets in wasmMemory,
     // so a JS-style ref swap can't bring writes into the read view. Same
-    // problem on WASM — the read/write offsets are baked. Bulk-copy w → r so
+    // problem on WASM ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â the read/write offsets are baked. Bulk-copy w ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ r so
     // the next step (and the output mapping) sees the new orientations.
     if (orientationReadView && orientationWriteView && orientationReadView !== orientationWriteView) {
       orientationReadView.set(orientationWriteView);
@@ -3000,16 +3004,16 @@ function runStep(): void {
 
   // WASM step doesn't emit the per-loop linked-indicator aggregation the JS step
   // does (the JS embed reads the write buffer = the new gen). Compute it from the
-  // shared buffer AFTER the w→r copy above, so readAttrs holds the new generation
-  // on both sync (post-copy) and async (single buffer) — matching the JS embed.
-  // (Was previously computed before the copy → read gen N-1 in WASM sync mode.)
+  // shared buffer AFTER the wÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢r copy above, so readAttrs holds the new generation
+  // on both sync (post-copy) and async (single buffer) ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â matching the JS embed.
+  // (Was previously computed before the copy ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ read gen N-1 in WASM sync mode.)
   if (callWasm && linkedDefs.length > 0) computeLinkedIndicatorsFromBuffer();
 
   // Handle linked indicator accumulation (skip when no linked indicators).
   // Runs AFTER the compute above so it accumulates the new generation's values.
   for (let _li = 0; _li < linkedDefs.length; _li++) {
     const def = linkedDefs[_li]!;
-    // Spatial indicators are always a live per-step snapshot — never
+    // Spatial indicators are always a live per-step snapshot ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â never
     // accumulated (their value is Record<key, number[]>, which the accumulate
     // branch can't sum). They're also written AFTER this loop (see
     // computeSpatialIndicators below), so they aren't in linkedResults yet; the
@@ -3033,7 +3037,7 @@ function runStep(): void {
   }
   // Spatial indicators (chromatogram): recompute the live per-position histogram
   // from the post-step buffer. readAttrs now holds the just-computed generation
-  // on JS (ref-swap above) AND on WASM (w→r bulk copy above) — the same buffer
+  // on JS (ref-swap above) AND on WASM (wÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢r bulk copy above) ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â the same buffer
   // a later getState reads, so the verification parity check holds. Independent
   // of the generation-axis linked path; written here (after accumulation) so it
   // is always a fresh per-step snapshot.
@@ -3043,7 +3047,7 @@ function runStep(): void {
 
 /**
  * Wave 3 step path. The compiled WGSL step shader runs on the GPU; attrs stay
- * GPU-resident across many steps (the headline win — no per-step CPU readback).
+ * GPU-resident across many steps (the headline win ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â no per-step CPU readback).
  *
  * Per-step sequence:
  *   1. Reset standalone-per-generation indicator slots on CPU mirror.
@@ -3067,7 +3071,7 @@ function runStepWebGPU(): void {
   if (linkedDefs.length > 0) linkedResults = {};
   // GPU-side: clear stop flag + reset per-gen indicator slots so atomics start
   // from defaults each step. Skip the stopFlag reset when the model has no
-  // stopEvent nodes (the flag never moves off zero) — saves a tiny queue
+  // stopEvent nodes (the flag never moves off zero) ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â saves a tiny queue
   // submission per step but more importantly avoids an unnecessary buffer
   // touch in the per-step hot path.
   if (stopMessages.length > 0) resetStopFlag(webgpuRuntime);
@@ -3096,20 +3100,20 @@ function runStepWebGPU(): void {
  *  P7 direct render: when the canvas was transferred at init time, also
  *  dispatch the present pipeline so the OffscreenCanvas's frame mirrors the
  *  colors buffer. The canvas auto-presents to the visible DOM canvas on the
- *  main thread — no readback or postMessage needed for display. */
+ *  main thread ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â no readback or postMessage needed for display. */
 function runColorPassWebGPU(): boolean {
   if (!webgpuRuntime || !webgpuRuntime.stepReady) return false;
   // Glyphs: clear before the colour pass so the OM shader's per-cell writes
   // see codepoint-0 sentinels everywhere. Mirrors the CPU runColorPass path.
   if (webgpuRuntime.layout.hasGlyphs) clearGlyphBuffersWebGPU(webgpuRuntime);
-  // P6 — combined color-pass + present in one encoder + submit. Saves a
+  // P6 ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â combined color-pass + present in one encoder + submit. Saves a
   // driver round-trip per frame compared to dispatching them separately.
   // When direct render is on but the active viewer has no Output Mapping
   // graph (e.g. MNCA "Case Colored" / "Decorated Trace"), the present pass
   // still runs and pushes whatever the step shader wrote via
   // SetColorViewer-in-step.
   const ok = dispatchColorPassAndPresent(webgpuRuntime, activeViewer);
-  // O5 — refresh the watched-linked-indicator histograms on GPU. Cheap (a
+  // O5 ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â refresh the watched-linked-indicator histograms on GPU. Cheap (a
   // handful of u32 atomics per cell) and the result rides the same
   // batched mapAsync as colors/indicators/stopFlag in the next finalize.
   if (webgpuRuntime.reductionPlan) dispatchReductions(webgpuRuntime);
@@ -3118,13 +3122,13 @@ function runColorPassWebGPU(): boolean {
 
 /** Refresh the GPU colors buffer after a user interaction (paint, image
  *  import, writeRegion, clearRegion). When the active viewer has a dedicated
- *  Output Mapping pipeline, dispatch it. Otherwise, run one Step — models that
+ *  Output Mapping pipeline, dispatch it. Otherwise, run one Step ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â models that
  *  emit colors via SetColorViewer-in-step (e.g. MNCA's "Case Colored") rely on
  *  the step to update colors. Generation advances by 1 in the fallback case,
  *  which is the documented behaviour for these models on user interaction.
  *
  *  CRITICAL ordering: for no-OM viewers we MUST dispatch the step BEFORE the
- *  present pass — otherwise the present blits the stale colors that were
+ *  present pass ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â otherwise the present blits the stale colors that were
  *  there before the mutation, then the step writes new colors that never
  *  reach the canvas. dispatchColorPassAndPresent runs OM (which writes
  *  colors) and present in one encoder, so ordering is correct for OM
@@ -3140,7 +3144,7 @@ function refreshColorsAfterInputWebGPU(): void {
     runColorPassWebGPU();
     return;
   }
-  // No OM pipeline → step shader populates colors via SetColorViewer-in-step.
+  // No OM pipeline ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ step shader populates colors via SetColorViewer-in-step.
   // Dispatch step FIRST so colorsBuf is fresh, THEN present so the canvas
   // texture picks it up.
   runStepWebGPU();
@@ -3153,7 +3157,7 @@ function refreshColorsAfterInputWebGPU(): void {
  *  pixels. Prefer the active viewer's Output Mapping (no generation advance);
  *  fall back to one Step (advances gen by 1; required for viewers like MNCA
  *  that emit colors via SetColorViewer-in-step); fall back to the bool-attr
- *  default coloring. ALL JS/WASM mutation handlers should call this — without
+ *  default coloring. ALL JS/WASM mutation handlers should call this ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â without
  *  it, no-OM viewers display pre-mutation colors after Ctrl+V / Ctrl+X. */
 function refreshColorsAfterInputJS(): void {
   if (outputMappingFns.some(f => f.mappingId === activeViewer)) {
@@ -3172,13 +3176,13 @@ function refreshColorsAfterInputJS(): void {
  *
  *  Two strategies, picked per attribute:
  *    - Batched: pack [minIdx..maxIdx] into one ArrayBuffer, single writeBuffer.
- *      Picked when the bounding range is at most 4× the touched-cell count
+ *      Picked when the bounding range is at most 4ÃƒÆ’Ã¢â‚¬â€ the touched-cell count
  *      (e.g. one rectangular brush stroke). Pays for some "in-between" cells
  *      but trades 4-byte queue submissions for one large one.
  *    - Per-cell: one writeBuffer per touched cell. Picked when the range is
  *      sparse (e.g. cells at opposite corners) so the batch would be wasteful.
  *
- *  We deliberately skip writing to `attrsWriteBuf` — the next step's per-cell
+ *  We deliberately skip writing to `attrsWriteBuf` ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â the next step's per-cell
  *  copy preamble (`attrsWrite[idx] = attrsRead[idx]`) overwrites it before any
  *  read, so the second writeBuffer is dead bandwidth. */
 function patchWebGPUCells(idxs: ArrayLike<number>): void {
@@ -3198,7 +3202,7 @@ function patchWebGPUCells(idxs: ArrayLike<number>): void {
   // The batched path uploads all cells in [minIdx, maxIdx], pulling the
   // "in-between" (not-touched) cells from CPU readAttrs. That's a no-op
   // when the mirror is current (post-reset / pre-step). After a step under
-  // WebGPU, gpuOwnsAttrs=true and the CPU mirror is stale — uploading
+  // WebGPU, gpuOwnsAttrs=true and the CPU mirror is stale ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â uploading
   // those in-between cells would overwrite the GPU's live post-step state
   // with stale CPU values. Symptom: pasting a brush-wide rectangle after
   // play produces a brush-tall "wipe" stripe across the entire row, where
@@ -3255,7 +3259,7 @@ function syncIndicatorsCpuToGpu(): void {
   if (!webgpuRuntime || !webgpuRuntime.stepReady) return;
   const vals: Record<string, number> = {};
   for (const { idx, id } of standaloneIds) vals[id] = cachedIndicators[idx]!;
-  // Linked indicator atomic slots stay 0 — linked aggregation runs CPU-side
+  // Linked indicator atomic slots stay 0 ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â linked aggregation runs CPU-side
   // post-step from the readback attrs.
   uploadIndicators(webgpuRuntime, vals, isIntEncodedIndicator);
 }
@@ -3264,12 +3268,12 @@ function syncIndicatorsCpuToGpu(): void {
  *  indicator UI all read. Called in the message handler after a WebGPU
  *  dispatch sequence has been queued.
  *
- *  - colors → `colors` (Uint8ClampedArray), used by sendColors().
- *  - indicators → `cachedIndicators`, decoded per-indicator type.
- *  - stopFlag → `stopFlag[0]` so the existing stop-event detection works.
- *  - linked indicators → CPU-side via readback of attrsRead, then run the
+ *  - colors ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ `colors` (Uint8ClampedArray), used by sendColors().
+ *  - indicators ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ `cachedIndicators`, decoded per-indicator type.
+ *  - stopFlag ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ `stopFlag[0]` so the existing stop-event detection works.
+ *  - linked indicators ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ CPU-side via readback of attrsRead, then run the
  *    existing `computeLinkedIndicatorsFromBuffer()`. Watched-only.
- *  - cell attrs → ONLY when a watched linked indicator needs them, OR when
+ *  - cell attrs ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ ONLY when a watched linked indicator needs them, OR when
  *    the caller explicitly asks (e.g. getState).
  */
 async function finalizeStepWebGPU(opts: { needAttrs?: boolean; needColors?: boolean } = {}): Promise<void> {
@@ -3278,14 +3282,14 @@ async function finalizeStepWebGPU(opts: { needAttrs?: boolean; needColors?: bool
   // Inspect-cell popups need fresh CPU attrs for their per-cell readout. Bump
   // needAttrs internally so callers don't have to thread the flag.
   const fullAttrs = !!opts.needAttrs || inspectCellIdxs.length > 0;
-  // O5 — figure out which watched indicators are handled by the GPU
-  // reduction plan; their attrs don't need a CPU readback. Empty plan →
+  // O5 ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â figure out which watched indicators are handled by the GPU
+  // reduction plan; their attrs don't need a CPU readback. Empty plan ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢
   // gpuHandled is empty and the existing CPU path handles everything.
   const gpuPlan = rt.reductionPlan;
   const gpuIds = gpuPlan ? gpuHandledIds(gpuPlan) : new Set<string>();
   const gpuAttrIds = gpuPlan ? gpuHandledAttrIds(gpuPlan, linkedDefs) : new Set<string>();
   // Watched linked indicators need only the source attr's bytes, not the whole
-  // attrs region. Build a deduped list of source attr ids — minus the ones
+  // attrs region. Build a deduped list of source attr ids ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â minus the ones
   // O5 covers on GPU.
   const watchedAttrIds = new Set<string>();
   if (!fullAttrs) {
@@ -3294,7 +3298,7 @@ async function finalizeStepWebGPU(opts: { needAttrs?: boolean; needColors?: bool
       const isSpatial = d.xAxis === 'rows' || d.xAxis === 'columns' || d.xAxis === 'layers';
       // Spatial indicators are CPU-only (excluded from buildReductionPlan), so
       // they always need their source attr (and parent, for sub-attrs) on the
-      // CPU — even if a sibling generation-axis indicator over the same attr is
+      // CPU ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â even if a sibling generation-axis indicator over the same attr is
       // GPU-reduced (which would otherwise short-circuit via gpuAttrIds below).
       if (isSpatial) {
         watchedAttrIds.add(d.attrId);
@@ -3307,14 +3311,14 @@ async function finalizeStepWebGPU(opts: { needAttrs?: boolean; needColors?: bool
       watchedAttrIds.add(d.attrId);
     }
   }
-  // P7 — direct render owns the canvas; we never need to readback colors for
+  // P7 ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â direct render owns the canvas; we never need to readback colors for
   // display. EXCEPT during GIF recording or inspect popups: both consume the
   // per-frame colors on the main thread (recording: into ImageData frames;
   // inspect: into the per-cell RGB readout in the popover). The readback is
   // the same cost as before P7, but only paid when at least one of those is
   // active.
   const wantColors = (opts.needColors !== false) && (!rt.directRender || recording || inspectCellIdxs.length > 0);
-  // P5 — only read back indicators that the UI/end-conditions actually
+  // P5 ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â only read back indicators that the UI/end-conditions actually
   // consume. A model can declare 10 indicators with `watched=false` and they
   // ALL stayed in the readback path before, paying the per-frame mapAsync
   // overhead for no observable effect. Now: standalone indicators always
@@ -3326,7 +3330,7 @@ async function finalizeStepWebGPU(opts: { needAttrs?: boolean; needColors?: bool
   const wantStopFlag = stopMessages.length > 0;
 
   // Pack all readbacks into ONE staging buffer + ONE mapAsync. Pre-batch this
-  // saves N-1 GPU↔CPU round trips per finalize compared to the old
+  // saves N-1 GPUÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬ÂCPU round trips per finalize compared to the old
   // one-buffer-per-source pattern. Particularly impactful on the per-step
   // stop-event path (was 2 mapAsyncs per step, now 1).
   const regions: ReadbackRegion[] = [];
@@ -3372,7 +3376,7 @@ async function finalizeStepWebGPU(opts: { needAttrs?: boolean; needColors?: bool
     regions.push({ src: rt.attrsReadBuf, srcOffset: 0, size: rt.layout.attrsBytes });
   } else if (watchedAttrIds.size > 0 && rt.attrsReadBuf) {
     // Selective: only watched linked indicators' source attrs. The other
-    // attrs stay GPU-resident — gpuOwnsAttrs remains true.
+    // attrs stay GPU-resident ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â gpuOwnsAttrs remains true.
     for (const attrId of watchedAttrIds) {
       const a = rt.layout.attrs.find(x => x.id === attrId);
       if (!a) continue;
@@ -3445,13 +3449,13 @@ async function finalizeStepWebGPU(opts: { needAttrs?: boolean; needColors?: bool
     for (const { attrId, slot } of attrSlots) {
       unpackAttrFromReadback(rt.layout, attrId, sliced[slot]!, readAttrs);
     }
-    // Only a subset of attrs were pulled — the rest remain GPU-only-fresh.
+    // Only a subset of attrs were pulled ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â the rest remain GPU-only-fresh.
     // Subsequent paint with `gpuOwnsAttrs && icEntry?.fn` will trigger a full
     // readback (B5 fix), so leaving gpuOwnsAttrs=true is safe.
     computeLinkedIndicatorsFromBuffer();
     if (hasSpatialIndicators) computeSpatialIndicators();
   }
-  // O5 — decode the reductions slice into linkedResults. Done AFTER the CPU
+  // O5 ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â decode the reductions slice into linkedResults. Done AFTER the CPU
   // computeLinkedIndicatorsFromBuffer above so GPU-handled ids overwrite any
   // partial CPU result for the same id (defensive: gpuAttrIds excludes them
   // already, but cheap to be safe).
@@ -3488,11 +3492,11 @@ async function finalizeStepWebGPU(opts: { needAttrs?: boolean; needColors?: bool
 
 function writeDefaultColors(): void {
   // Agents-only: no colors region exists (0 bytes) and nothing renders the
-  // grid — skip (also avoids a per-cell loop over a potentially huge total).
+  // grid ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â skip (also avoids a per-cell loop over a potentially huge total).
   if (!gridCellsEnabled) return;
   colorsDirty = true;
   // 3D Grid CA: the default/fallback coloring is FULLY TRANSPARENT (alpha 0) so
-  // the voxel renderer instances ZERO cells — a model with no explicit Output
+  // the voxel renderer instances ZERO cells ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â a model with no explicit Output
   // Mapping (or before its first colour pass) doesn't pay to build a full opaque
   // volume on every recompile/init that the simulation would just erase. 2D keeps
   // the visible fallback below (the flat canvas needs something to show).
@@ -3523,7 +3527,7 @@ function resetGrid(): void {
     const wArr = writeAttrs[attr.id]!;
     for (let i = 0; i < total; i++) { arr[i] = dv; wArr[i] = dv; }
   }
-  // Variegated Cells: orientation defaults to 0 (spec §6.3). Clear both views
+  // Variegated Cells: orientation defaults to 0 (spec Ãƒâ€šÃ‚Â§6.3). Clear both views
   // so init / step start from a clean state. Both views are over wasmMemory so
   // WASM sees the same zeros.
   if (orientationReadView) {
@@ -3536,8 +3540,8 @@ function resetGrid(): void {
   generation = 0;
   // Under WebGPU the message handler is solely responsible for the post-mutation
   // visual update (uploadAttrs + runColorPassWebGPU). Refreshing colors here
-  // would read the STALE GPU attrsRead — the CPU mutation hasn't been uploaded
-  // yet — so defer the visual update to the message handler.
+  // would read the STALE GPU attrsRead ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â the CPU mutation hasn't been uploaded
+  // yet ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â so defer the visual update to the message handler.
   if (useWebGPU && webgpuRuntime?.stepReady) return;
   refreshColorsAfterInputJS();
 }
@@ -3574,14 +3578,14 @@ function compileFns(
 
 /** Bond-Graph Agents: compile the agent rule-graph functions (JS-only v1). The
  *  behaviour function runs once per LIVE agent each generation over `idx <
- *  highWater`. Absent code → null (agents seed + render but don't behave, the
+ *  highWater`. Absent code ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ null (agents seed + render but don't behave, the
  *  PR-A2 state). */
 function compileAgentFns(behaviourCode?: string, initCode?: string, divisionCode?: string, outputMappingCodes?: Array<{ mappingId: string; code: string }>): void {
   try {
     // eslint-disable-next-line no-eval
     agentBehaviourFn = behaviourCode ? (eval(behaviourCode) as Function) : null;
   } catch (e) { agentBehaviourFn = null; self.postMessage({ type: 'error', message: '[agents] behaviour compile failed: ' + ((e as Error)?.message || e) }); }
-  // Agent Output Mappings — compile each linked agent mapping's per-agent colour pass.
+  // Agent Output Mappings ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â compile each linked agent mapping's per-agent colour pass.
   agentOutputMappingFns = [];
   for (const om of (outputMappingCodes || [])) {
     try {
@@ -3598,11 +3602,11 @@ function compileAgentFns(behaviourCode?: string, initCode?: string, divisionCode
     agentDivisionFn = divisionCode ? (eval(divisionCode) as Function) : null;
   } catch (e) { agentDivisionFn = null; self.postMessage({ type: 'error', message: '[agents] division compile failed: ' + ((e as Error)?.message || e) }); }
 
-  // DEV ABI-arity assertion (E3, MANDATORY) — the single highest-value safety net
+  // DEV ABI-arity assertion (E3, MANDATORY) ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â the single highest-value safety net
   // for the B1 desync class. A compiled agent fn's `.length` (its declared param
   // count, from buildAgentLoop/DivisionParams) MUST equal the arg count the worker
   // passes (buildAgentLoop/DivisionArgs). A one-sided 3D-block edit shifts every
-  // arg one slot WITHOUT a type error — only this arity check catches it. Division
+  // arg one slot WITHOUT a type error ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â only this arity check catches it. Division
   // takes 4 leading scalars (idx/daughterIndex/axisX/axisY) before the mirrored
   // buffers, so its arg count is built with placeholder scalars.
   if (import.meta.env?.DEV && agentStore) {
@@ -3610,22 +3614,22 @@ function compileAgentFns(behaviourCode?: string, initCode?: string, divisionCode
     if (agentBehaviourFn) {
       const want = buildAgentLoopArgs(s).length;
       if (agentBehaviourFn.length !== want) {
-        self.postMessage({ type: 'error', message: `[agents] ABI ARITY DESYNC: behaviour fn declares ${agentBehaviourFn.length} params but buildAgentLoopArgs passes ${want} (buildAgentLoopParams↔buildAgentLoopArgs out of lockstep — the B1 hazard).` });
+        self.postMessage({ type: 'error', message: `[agents] ABI ARITY DESYNC: behaviour fn declares ${agentBehaviourFn.length} params but buildAgentLoopArgs passes ${want} (buildAgentLoopParamsÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬ÂbuildAgentLoopArgs out of lockstep ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â the B1 hazard).` });
       }
     }
     if (agentDivisionFn) {
       const want = buildDivisionArgs(s, 0, 0, 0, 0).length;
       if (agentDivisionFn.length !== want) {
-        self.postMessage({ type: 'error', message: `[agents] ABI ARITY DESYNC: division fn declares ${agentDivisionFn.length} params but buildDivisionArgs passes ${want} (buildDivisionParams↔buildDivisionArgs out of lockstep — the B1 hazard).` });
+        self.postMessage({ type: 'error', message: `[agents] ABI ARITY DESYNC: division fn declares ${agentDivisionFn.length} params but buildDivisionArgs passes ${want} (buildDivisionParamsÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬ÂbuildDivisionArgs out of lockstep ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â the B1 hazard).` });
       }
     }
     if (agentInitFn) {
-      // The Agent Init Event is the third ABI pair (buildAgentInitParams ↔
-      // buildAgentInitArgs). Dummy closures/seedBase just count the arg array —
+      // The Agent Init Event is the third ABI pair (buildAgentInitParams ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬Â
+      // buildAgentInitArgs). Dummy closures/seedBase just count the arg array ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â
       // buildAgentInitArgs never calls them while building the list.
       const want = buildAgentInitArgs(s, () => 0, () => {}, 0).length;
       if (agentInitFn.length !== want) {
-        self.postMessage({ type: 'error', message: `[agents] ABI ARITY DESYNC: init fn declares ${agentInitFn.length} params but buildAgentInitArgs passes ${want} (buildAgentInitParams↔buildAgentInitArgs out of lockstep — the B1 hazard).` });
+        self.postMessage({ type: 'error', message: `[agents] ABI ARITY DESYNC: init fn declares ${agentInitFn.length} params but buildAgentInitArgs passes ${want} (buildAgentInitParamsÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬ÂbuildAgentInitArgs out of lockstep ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â the B1 hazard).` });
       }
     }
   }
@@ -3638,13 +3642,13 @@ function compileAgentFns(behaviourCode?: string, initCode?: string, divisionCode
  *  reset handler after `resetGrid()` and before sendColors / GPU upload.
  *
  *  Wave-2 (WASM): when `useWasm` and the WASM module exported `init`, call
- *  it instead of the JS function — both write through views over `wasmMemory`,
+ *  it instead of the JS function ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â both write through views over `wasmMemory`,
  *  so the post-run sync-mode swap below sees the right bytes regardless of
  *  which path wrote them. Same sync normalisation as runStep: when readAttrs
  *  != attrsA we copy back to attrsA first so WASM's baked-in offsets read the
  *  freshly-zeroed defaults instead of stale attrsB data.
  *
- *  WebGPU Init isn't supported in this phase — the worker falls back to the
+ *  WebGPU Init isn't supported in this phase ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â the worker falls back to the
  *  JS init function under WebGPU. The cell attribute buffers are TypedArray
  *  views over wasmMemory so writes still land in the right place; WebGPU
  *  uploads readAttrs after init in the reset handler. */
@@ -3681,7 +3685,7 @@ function runInit(): void {
     self.postMessage({ type: 'error', message: '[init] init function failed: ' + ((e instanceof Error) ? e.message : String(e)) });
     return;
   }
-  // Sync mode: copy writeAttrs → readAttrs so both buffers match (mirrors the
+  // Sync mode: copy writeAttrs ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ readAttrs so both buffers match (mirrors the
   // resetGrid invariant) and subsequent reads from readAttrs see init-time
   // writes. The copy (vs a ref swap) keeps the canonical orientation
   // readAttrs=attrsA / writeAttrs=attrsB unchanged, which the WASM step (and
@@ -3710,7 +3714,7 @@ function runColorPass(): void {
   if (!gridCellsEnabled) return;
   // Glyph buffers: zero before every colour pass so per-cell setCellGlyph
   // writes see a fresh canvas. "Codepoint 0" is the renderer's "skip this
-  // cell" signal. Cheap memset — at 5000² this is ~3–6ms; for typical grids
+  // cell" signal. Cheap memset ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â at 5000Ãƒâ€šÃ‚Â² this is ~3ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Å“6ms; for typical grids
   // negligible. Only allocated when the model uses setCellGlyph.
   if (glyphCodes) { glyphCodes.fill(0); colorsDirty = true; }
   if (glyphColors) glyphColors.fill(0);
@@ -3728,7 +3732,7 @@ function runColorPass(): void {
     return;
   }
   const omFn = outputMappingFns.find(f => f.mappingId === activeViewer);
-  // Dirty only when a mapping fn actually rewrote `colors` — an OM-less model
+  // Dirty only when a mapping fn actually rewrote `colors` ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â an OM-less model
   // (or a mismatched viewer) leaves the buffer untouched, and the agents-only
   // sendColors skip depends on that staying clean.
   if (omFn) { colorsDirty = true; omFn.fn(...buildLoopArgs()); }
@@ -3805,7 +3809,7 @@ function resetIndicators(): void {
  *  indicator and writes into `linkedResults`. The WASM step emits no such
  *  code, so we replicate the aggregation here, reading directly from the
  *  shared typed-array buffers. Mirrors `buildLinkedIndicatorCode` in
- *  `compiler/compile.ts` — keep the two in sync when that logic changes. */
+ *  `compiler/compile.ts` ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â keep the two in sync when that logic changes. */
 function computeLinkedIndicatorsFromBuffer(): void {
   for (const def of linkedDefs) {
     if (!def.watched) continue;
@@ -4054,7 +4058,7 @@ function computeSpatialIndicators(): void {
 /** Build and post the current attribute values for every cell index the main
  *  thread is inspecting. No-op when the subscription set is empty. Under
  *  WebGPU, callers MUST ensure `readAttrs` is fresh (via ensureCpuAttrsFresh)
- *  before invoking — otherwise the CPU mirror is stale. */
+ *  before invoking ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â otherwise the CPU mirror is stale. */
 function postInspectCellsData(): void {
   if (inspectCellIdxs.length === 0) return;
   const data: Record<number, Record<string, number>> = {};
@@ -4081,7 +4085,7 @@ function postInspectCellsData(): void {
     // Variegated cells: include the orientation so the popover can show it as
     // an extra row alongside user attributes. Lets users sanity-check that
     // rotation rules are firing and that face-pattern lookups are using the
-    // right slot. Absent (undefined) when variegation isn't enabled — the
+    // right slot. Absent (undefined) when variegation isn't enabled ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â the
     // main-thread receiver checks before adding to its map.
     if (orientationReadView) {
       orientationsByCell[idx] = orientationReadView[idx]!;
@@ -4090,7 +4094,14 @@ function postInspectCellsData(): void {
   self.postMessage({ type: 'inspectCellsData', data, colors: colorsByCell, orientations: orientationsByCell });
 }
 
+// Overseer correlation id for the NEXT stepped post ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â set by the step/reset
+// handlers from msg.reqId, consumed (and cleared) by sendColors. Module-level
+// because the WebGPU/agent step batches call sendColors from an async tail.
+let stepAckId: number | undefined;
+
 function sendColors(): void {
+  const ackId = stepAckId;
+  stepAckId = undefined;
   // Only build indicators payload when there are entries (avoids overhead when no indicators)
   const hasStandalone = standaloneIds.length > 0;
   const hasLinked = linkedDefs.length > 0;
@@ -4109,7 +4120,7 @@ function sendColors(): void {
         // Categorical (bool/tag) frequency: ship only the user-selected categories
         // so a dominant category (e.g. solvent) doesn't flatten the rest on a
         // shared Y-axis. Values are number (generation axis) or number[] (spatial);
-        // copy either through. Single filter point ⇒ covers JS / WASM / WebGPU.
+        // copy either through. Single filter point ÃƒÂ¢Ã¢â‚¬Â¡Ã¢â‚¬â„¢ covers JS / WASM / WebGPU.
         const src = result as Record<string, number | number[]>;
         const filtered: Record<string, number | number[]> = {};
         for (const k of def.trackedValues) { if (k in src) filtered[k] = src[k]!; }
@@ -4121,7 +4132,7 @@ function sendColors(): void {
   }
   // Build glyph payload when the model uses setCellGlyph AND there are any
   // non-zero entries. Quick-scan via a single-pass length-aware probe (cheap
-  // even at 5000²: ~5–10 ms typed-array scan worst case, often early-exits
+  // even at 5000Ãƒâ€šÃ‚Â²: ~5ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Å“10 ms typed-array scan worst case, often early-exits
   // on a small region of zeros). Sent as detached Uint32Array transfers.
   let glyphsPayload: { codes: Uint32Array; colors: Uint32Array } | undefined;
   if (glyphCodes && glyphColors) {
@@ -4137,14 +4148,14 @@ function sendColors(): void {
     }
   }
 
-  // Bond-Graph Agents — attach a render snapshot (copies of the live region)
+  // Bond-Graph Agents ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â attach a render snapshot (copies of the live region)
   // so the entity renderer + nearest-agent picker have current positions every
   // frame. Cheap (maxAgents is small); copies, so the engine keeps its SoA.
   let agentsPayload: ReturnType<typeof snapshotAgentsForRender> | undefined;
   const agentTransfers: ArrayBuffer[] = [];
   if (agentStore && agentStore.highWater > 0) {
     // Agent Output Mappings: recolour from the active agent viewer before
-    // snapshotting (no-op when the model has no agent mappings — agents are then
+    // snapshotting (no-op when the model has no agent mappings ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â agents are then
     // coloured by the behaviour's Set Cell Looks during the step).
     runAgentColorPass();
     agentsPayload = snapshotAgentsForRender(agentStore, hasAgentSprites);
@@ -4154,18 +4165,18 @@ function sendColors(): void {
       agentsPayload.alive.buffer, agentsPayload.colors.buffer,
       agentsPayload.bonds.buffer,
     );
-    // z/vz are length-0 placeholders in 2D (the A1 snapshot gate) — transfer them
+    // z/vz are length-0 placeholders in 2D (the A1 snapshot gate) ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â transfer them
     // only when 3D populated them, else an empty buffer is harmlessly cheap but
     // we skip it for symmetry with the gate.
     if (agentsPayload.z.length > 0) agentTransfers.push(agentsPayload.z.buffer, agentsPayload.vz.buffer);
-    // Sprites: same gate — only ship the per-agent buffers when the model has sprites.
+    // Sprites: same gate ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â only ship the per-agent buffers when the model has sprites.
     if (agentsPayload.spriteIds.length > 0) agentTransfers.push(agentsPayload.spriteIds.buffer, agentsPayload.spriteFrames.buffer, agentsPayload.spriteRotations.buffer, agentsPayload.spriteScales.buffer);
   } else if (agentStore) {
-    // Empty store — still tell the main thread so it clears any stale agents.
+    // Empty store ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â still tell the main thread so it clears any stale agents.
     agentsPayload = { highWater: 0, liveCount: 0, x: new Float64Array(0), y: new Float64Array(0), z: new Float64Array(0), vx: new Float64Array(0), vy: new Float64Array(0), vz: new Float64Array(0), radius: new Float64Array(0), alive: new Uint8Array(0), colors: new Uint8ClampedArray(0), bonds: new Int32Array(0), spriteIds: new Int32Array(0), spriteFrames: new Float64Array(0), spriteRotations: new Float64Array(0), spriteScales: new Float64Array(0) };
   }
 
-  // P7 — when WebGPU direct render is active, the OffscreenCanvas already
+  // P7 ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â when WebGPU direct render is active, the OffscreenCanvas already
   // holds the latest frame; skip the colors transfer entirely. Main-thread
   // draw() detects this and only does the zoom/pan composite. Exception:
   // when GIF recording is on, finalizeStepWebGPU populated the `colors`
@@ -4173,22 +4184,22 @@ function sendColors(): void {
   if (webgpuRuntime?.directRender && !recording) {
     if (glyphsPayload) {
       self.postMessage(
-        { type: 'stepped', generation, indicators, glyphCodes: glyphsPayload.codes, glyphColors: glyphsPayload.colors, agents: agentsPayload },
+        { type: 'stepped', generation, indicators, reqId: ackId, glyphCodes: glyphsPayload.codes, glyphColors: glyphsPayload.colors, agents: agentsPayload },
         { transfer: [glyphsPayload.codes.buffer, glyphsPayload.colors.buffer, ...agentTransfers] },
       );
     } else {
-      self.postMessage({ type: 'stepped', generation, indicators, agents: agentsPayload }, { transfer: agentTransfers });
+      self.postMessage({ type: 'stepped', generation, indicators, reqId: ackId, agents: agentsPayload }, { transfer: agentTransfers });
     }
     postInspectCellsData();
     return;
   }
-  // Agents-only (CA Grid off): the colours buffer is STATIC after init — no cell
-  // step / colour pass rewrites it — so copy+transfer it only while dirty (the
+  // Agents-only (CA Grid off): the colours buffer is STATIC after init ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â no cell
+  // step / colour pass rewrites it ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â so copy+transfer it only while dirty (the
   // main thread keeps its last colorsRef when `colors` is absent, exactly like
   // the WebGPU direct-render branch above). At agent-world scales this is the
-  // difference between a usable sim and copying W·H·D·4 bytes every step.
+  // difference between a usable sim and copying WÃƒâ€šÃ‚Â·HÃƒâ€šÃ‚Â·DÃƒâ€šÃ‚Â·4 bytes every step.
   if (!gridCellsEnabled && (!colorsDirty || colors.length === 0)) {
-    self.postMessage({ type: 'stepped', generation, indicators, agents: agentsPayload }, { transfer: agentTransfers });
+    self.postMessage({ type: 'stepped', generation, indicators, reqId: ackId, agents: agentsPayload }, { transfer: agentTransfers });
     postInspectCellsData();
     return;
   }
@@ -4196,12 +4207,12 @@ function sendColors(): void {
   colorsDirty = false;
   if (glyphsPayload) {
     self.postMessage(
-      { type: 'stepped', generation, colors: copy, indicators, glyphCodes: glyphsPayload.codes, glyphColors: glyphsPayload.colors, agents: agentsPayload },
+      { type: 'stepped', generation, colors: copy, indicators, reqId: ackId, glyphCodes: glyphsPayload.codes, glyphColors: glyphsPayload.colors, agents: agentsPayload },
       { transfer: [copy.buffer, glyphsPayload.codes.buffer, glyphsPayload.colors.buffer, ...agentTransfers] },
     );
   } else {
     self.postMessage(
-      { type: 'stepped', generation, colors: copy, indicators, agents: agentsPayload },
+      { type: 'stepped', generation, colors: copy, indicators, reqId: ackId, agents: agentsPayload },
       { transfer: [copy.buffer, ...agentTransfers] },
     );
   }
@@ -4215,7 +4226,7 @@ function sendColors(): void {
 self.onmessage = (e: MessageEvent<WorkerMsg>) => {
   const msg = e.data;
 
-  // A GPU agent step's awaited readback yields to this handler — defer mutation
+  // A GPU agent step's awaited readback yields to this handler ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â defer mutation
   // messages until the step settles so the readback can't clobber them.
   if (agentGpuStepInFlight && AGENT_GPU_DEFER_TYPES.has(msg.type)) {
     deferredDuringAgentGpuStep.push(msg);
@@ -4226,7 +4237,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
     case 'init': {
       width = msg.width;
       height = msg.height;
-      depth = msg.depth ?? 1;   // 3D Grid CA: absent → 1 (2D)
+      depth = msg.depth ?? 1;   // 3D Grid CA: absent ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ 1 (2D)
       cellAttrs = msg.attributes.filter(a => !a.isModelAttribute);
       // Generic Agent Platform: the AGENT attribute set (separate id-space) +
       // the agent-accessible cell attrs (the field channel). fieldSpecs mirrors
@@ -4273,22 +4284,22 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
         initGrid();
       } catch (e) {
         // Surface allocation failures LOUDLY (e.g. a grid so large the layout
-        // exceeds the wasm32 4 GiB Memory limit — dominated by the per-cell
-        // neighbour tables total×nSz×4 on big 3D grids). Without this the
+        // exceeds the wasm32 4 GiB Memory limit ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â dominated by the per-cell
+        // neighbour tables totalÃƒÆ’Ã¢â‚¬â€nSzÃƒÆ’Ã¢â‚¬â€4 on big 3D grids). Without this the
         // worker died silently mid-init and a resize appeared to "hang".
         self.postMessage({
           type: 'error',
-          message: `Grid allocation failed for ${width}×${height}×${depth} (${(width * height * depth).toLocaleString()} cells): `
+          message: `Grid allocation failed for ${width}ÃƒÆ’Ã¢â‚¬â€${height}ÃƒÆ’Ã¢â‚¬â€${depth} (${(width * height * depth).toLocaleString()} cells): `
             + ((e as Error)?.message || e)
             + '. The simulation memory is one WebAssembly.Memory backing store shared by ALL compile targets (hard cap 4 GiB). '
             + (gridCellsEnabled
-              ? 'Per-cell storage scales with W×H×D: cell attributes + colours + engine buffers, and neighbour tables add ×neighbourhood-size.'
-              : 'With the CA grid off, per-cell storage is the CELL ATTRIBUTES only (agents read/deposit fields through them) — delete unused cell attributes or reduce the world dimensions.'),
+              ? 'Per-cell storage scales with WÃƒÆ’Ã¢â‚¬â€HÃƒÆ’Ã¢â‚¬â€D: cell attributes + colours + engine buffers, and neighbour tables add ÃƒÆ’Ã¢â‚¬â€neighbourhood-size.'
+              : 'With the CA grid off, per-cell storage is the CELL ATTRIBUTES only (agents read/deposit fields through them) ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â delete unused cell attributes or reduce the world dimensions.'),
         });
         break;
       }
       // Skip the (potentially large) neighbour-index tables when the CA grid is
-      // off — no cell step queries them in an agents-only model.
+      // off ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â no cell step queries them in an agents-only model.
       if (gridCellsEnabled) buildNeighborIndices();
       initIndicators(msg.indicators || []);
       // After memory is allocated, sync model attrs + active viewer ID into it
@@ -4301,7 +4312,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       // Int32Array views (single source of truth).
       initVariegation(msg.variegated, msg.interactionTables);
       compileFns(msg.stepCode, msg.inputColorCodes, msg.outputMappingCodes || [], msg.initCode || '');
-      // Bond-Graph Agents — allocate the co-resident agent engine (additive on
+      // Bond-Graph Agents ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â allocate the co-resident agent engine (additive on
       // top of the always-present grid). The agent behaviour/init functions are
       // compiled by compileAgentFns; absent in PR-A2 (agents seed + render only).
       agentsEnabled = !!msg.agents;
@@ -4312,7 +4323,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       // PR6b-1 / PR7: resolve the agent target + stash the per-target payload
       // BEFORE initAgents (which reads agentTarget to decide whether to back the
       // store on WebAssembly.Memory). 'wasm' needs bytes; 'webgpu' needs the two
-      // shaders — a target missing its payload demotes to 'js'.
+      // shaders ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â a target missing its payload demotes to 'js'.
       agentTarget = resolveAgentTarget(msg.agentTarget, msg.agentWasmBytes, msg.agentWebgpuBehaviourShader, msg.agentWebgpuForceShader);
       pendingAgentWasmBytes = msg.agentWasmBytes ?? null;
       agentWasmViewerGuardIds = msg.agentWasmViewerGuardIds ?? [];
@@ -4328,7 +4339,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       compileAgentFns(msg.agentBehaviourCode, msg.agentInitCode, msg.agentDivisionCode, (msg as InitMsg).agentOutputMappingCodes);
       instantiateAgentWasmIfNeeded();
       buildAgentWebGPUIfNeeded();
-      // (The Agent Init Event runs BELOW, after the cell Init Event — a
+      // (The Agent Init Event runs BELOW, after the cell Init Event ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â a
       // Create-Agent rule that reads the field must see the seeded substrate,
       // Decision D-FIELD ordering.)
       stopMessages = msg.stopMessages || [];
@@ -4337,7 +4348,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       // arrive with both flags true. The model-properties UI prevents this for
       // any live edit, but worker-side enforcement keeps legacy inputs sane.
       // WebGPU wins (it's the newer, opt-in target); WASM is silently demoted.
-      // Agents-only (CA Grid off): never instantiate the LATTICE step targets —
+      // Agents-only (CA Grid off): never instantiate the LATTICE step targets ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â
       // the cell step never runs, and the compiler-side layout (which still
       // includes the model's neighbourhood tables) no longer matches the
       // worker's no-nbr layout, so instantiation would fail with a confusing
@@ -4346,7 +4357,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       const wantWasm = !wantWebGPU && !!msg.useWasm && gridCellsEnabled;
       if (msg.useWebGPU && msg.useWasm) {
         // eslint-disable-next-line no-console
-        console.warn('[init] both useWebGPU and useWasm true — preferring WebGPU, ignoring WASM flag');
+        console.warn('[init] both useWebGPU and useWasm true ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â preferring WebGPU, ignoring WASM flag');
       }
       useWasm = wantWasm && !!msg.wasmStepBytes && !msg.wasmStepError;
       useWebGPU = wantWebGPU;
@@ -4370,24 +4381,24 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       // so a model whose initial state is procedurally generated (e.g. a seeded
       // field, an orientation pattern) shows that state on load instead of a blank
       // default grid. Placed AFTER the compile-target resolution above (useWasm /
-      // wasmInitFn / webgpuRuntime) so it dispatches the CORRECT target's init —
+      // wasmInitFn / webgpuRuntime) so it dispatches the CORRECT target's init ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â
       // calling it earlier could fire a stale WASM init left over from a previous
       // model. initGrid() already applied the cell defaults, so the Init Event
       // seeds on top of them. An embedded simulationState still wins:
       // pendingSimStateRestore overwrites this after the first stepped message.
-      // (WebGPU init is async — stepReady is false here — so runInit takes the
+      // (WebGPU init is async ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â stepReady is false here ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â so runInit takes the
       // JS/WASM path; the WebGPU-ready handler uploads the seeded CPU attrs.)
       const loadHadInit = initFn !== null || (useWasm && wasmInitFn !== null);
       runInit();
       // Generic Agent Platform: run the Agent Init Event ONCE on this fresh store
       // (after the fns are compiled), so graph-authored seeding (Create Agent /
-      // Add Agent To World) lays down the initial population on first load too —
+      // Add Agent To World) lays down the initial population on first load too ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â
       // not only on Reset. initAgents() above laid the seedCount baseline first.
       // AFTER runInit() so an agent spawn rule that reads the cell field sees the
       // cell-Init-Event-seeded substrate (D-FIELD ordering).
       if (agentsEnabled) runAgentInit();
       // Recompute colors so the seeded state shows on load instead of the
-      // defaults. Run ONLY the Output Mapping colour pass (never a step — that
+      // defaults. Run ONLY the Output Mapping colour pass (never a step ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â that
       // would advance the generation on load) when the active viewer has one;
       // otherwise the default-colour fallback. WebGPU defers to its ready handler
       // (which uploads the seeded CPU attrs + dispatches its own colour pass).
@@ -4401,9 +4412,10 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
     }
 
     case 'step': {
+      stepAckId = msg.reqId;
       const webgpuActive = useWebGPU && webgpuRuntime?.stepReady;
       // Bond-Graph Agents: an agent model can step even with a trivial (or
-      // absent) cell step — the agent engine drives the generation.
+      // absent) cell step ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â the agent engine drives the generation.
       if (!stepFn && !webgpuActive && !agentStore) {
         self.postMessage({ type: 'error', message: 'No compiled step function.' });
         return;
@@ -4420,44 +4432,44 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
           let stoppedByEvent: string | null = null;
           let lastFinalize: Promise<void> = Promise.resolve();
           // B4B: opt-in K-step skipping. With K=1 (default), check every step
-          // — exact stop-event timing. With K>1, skip the readback on most
+          // ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â exact stop-event timing. With K>1, skip the readback on most
           // steps but ALWAYS check the last step of the batch so the user
           // sees any pending stop within this batch (otherwise the play loop
           // would advance past it).
           const k = Math.max(1, webgpuStopCheckInterval | 0);
           for (let i = 0; i < msg.count; i++) {
-            // Bond-Graph Agents on a WebGPU grid (PR5 — independent targets,
-            // C-D1). ONE generation = the closed agent↔grid loop, same ordering
+            // Bond-Graph Agents on a WebGPU grid (PR5 ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â independent targets,
+            // C-D1). ONE generation = the closed agentÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬Âgrid loop, same ordering
             // as the JS/WASM branch (agents step BEFORE the cell step), but with
             // the field RESIDENCY bridge: under WebGPU the cell attrs are
             // GPU-resident after a step (gpuOwnsAttrs), so a field model must
             // pull them down before the agents gather, then push the agents'
             // deposit back up before the GPU cell step consumes it.
-            //   field model:  GPU→CPU readback → runAgentStep (gather+deposit on
-            //                  readAttrs) → CPU→GPU upload → runStepWebGPU.
+            //   field model:  GPUÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢CPU readback ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ runAgentStep (gather+deposit on
+            //                  readAttrs) ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ CPUÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢GPU upload ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ runStepWebGPU.
             //   no-field model: just runAgentStep (writes only the agent SoA +
-            //                  colors) → runStepWebGPU. ZERO readbacks.
-            // The JS/WASM per-generation loop is left LITERALLY unchanged — the
+            //                  colors) ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ runStepWebGPU. ZERO readbacks.
+            // The JS/WASM per-generation loop is left LITERALLY unchanged ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â the
             // bridge lives ONLY here (the WebGPU branch is already async, so the
             // `await ensureCpuAttrsFresh()` fits; you cannot await in the sync
             // JS/WASM `for` loop). Two paths, never one.
             // GAP-2 (3D cost): readAttrs is now sized `total = W*H*D`, so for a
             // 3D-agent + WebGPU-grid FIELD model this readback + re-upload moves
-            // D× more bytes PER STEP than the 2D case (the whole W*H*D field down
-            // then up every generation). Field-heavy 3D-agent models pay a D×
-            // per-step residency tax on WebGPU — prefer JS/WASM agents there, or a
+            // DÃƒÆ’Ã¢â‚¬â€ more bytes PER STEP than the 2D case (the whole W*H*D field down
+            // then up every generation). Field-heavy 3D-agent models pay a DÃƒÆ’Ã¢â‚¬â€
+            // per-step residency tax on WebGPU ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â prefer JS/WASM agents there, or a
             // shallow depth, until a same-device zero-copy field lands (Phase F).
             if (agentStore && simulateAgents && webgpuRuntime) {
               if (agentUsesField && gpuOwnsAttrs) {
-                await ensureCpuAttrsFresh();        // GPU→CPU; flips gpuOwnsAttrs=false
+                await ensureCpuAttrsFresh();        // GPUÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢CPU; flips gpuOwnsAttrs=false
               }
               runAgentStep();                        // gather reads readAttrs (fresh); deposit writes readAttrs
               if (agentUsesField) {
-                uploadAttrs(webgpuRuntime, readAttrs); // CPU→GPU, before the cell step
+                uploadAttrs(webgpuRuntime, readAttrs); // CPUÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢GPU, before the cell step
                 gpuOwnsAttrs = false;
               }
             }
-            // Agent Stop Event — CAPTURE before the cell step (runStepWebGPU resets +
+            // Agent Stop Event ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â CAPTURE before the cell step (runStepWebGPU resets +
             // finalizeStepWebGPU overwrites the shared flag from the GPU control
             // buffer), SURFACE after generation++.
             const agentStopIdx = (agentStore && simulateAgents) ? drainAgentStop() : 0;
@@ -4484,12 +4496,12 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
           // pipeline exists. When it doesn't (no Output Mapping graph), the
           // step shader itself may have written to the colors buffer via
           // SetColorViewer-in-step (e.g. MNCA's "Case Colored"). Either way we
-          // read the GPU colors buffer back — that's the canonical source.
+          // read the GPU colors buffer back ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â that's the canonical source.
           if (!msg.skipColorPass) runColorPassWebGPU();
           await finalizeStepWebGPU({ needColors: !msg.skipColorPass });
           sendColors();
           if (stoppedByEvent !== null) {
-            self.postMessage({ type: 'stopEvent', message: stoppedByEvent });
+            self.postMessage({ type: 'stopEvent', message: stoppedByEvent, reqId: msg.reqId });
           }
         })().catch(e => {
           const m = (e instanceof Error) ? e.message : String(e);
@@ -4498,11 +4510,11 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
         break;
       }
 
-      // PR7 G3-runtime — JS/WASM grid + WebGPU agents (the Boids headline). The
+      // PR7 G3-runtime ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â JS/WASM grid + WebGPU agents (the Boids headline). The
       // agent step is ASYNC on the GPU (the readback awaits a mapAsync), which the
-      // synchronous `for` loop below cannot await — so route to an async copy of
+      // synchronous `for` loop below cannot await ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â so route to an async copy of
       // the batch loop here. The cell grid still steps synchronously (runStep,
-      // not runStepWebGPU — the grid target is JS/WASM in this branch). On any GPU
+      // not runStepWebGPU ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â the grid target is JS/WASM in this branch). On any GPU
       // failure the agent step returns false and the JS runAgentStep() runs for
       // that step (so this stays correct even mid-batch).
       if (agentStore && agentTarget === 'webgpu' && agentWebgpuRuntime) {
@@ -4511,11 +4523,11 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
           for (let i = 0; i < msg.count; i++) {
             if (simulateAgents) {
               const ran = await runAgentStepWebGPU();
-              if (!ran) runAgentStep();   // GPU bailed (hash overflow / failure) → JS this step
+              if (!ran) runAgentStep();   // GPU bailed (hash overflow / failure) ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ JS this step
               // runAgentStep advances sprites itself; the GPU path doesn't, so do it here.
               else if (hasAgentSprites && agentStore) advanceAgentSprites(agentStore);
             }
-            // Agent Stop Event — CAPTURE before the cell step (runStep resets the
+            // Agent Stop Event ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â CAPTURE before the cell step (runStep resets the
             // shared flag), SURFACE after generation++.
             const agentStopIdx = (agentStore && simulateAgents) ? drainAgentStop() : 0;
             if (stepFn && simulateCells && gridCellsEnabled) runStep();
@@ -4532,7 +4544,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
           }
           if (stepFn && gridCellsEnabled && !msg.skipColorPass) runColorPass();
           sendColors();
-          if (stoppedByEvent !== null) self.postMessage({ type: 'stopEvent', message: stoppedByEvent });
+          if (stoppedByEvent !== null) self.postMessage({ type: 'stopEvent', message: stoppedByEvent, reqId: msg.reqId });
         })().catch(e => {
           self.postMessage({ type: 'error', message: '[agents] WebGPU step batch failed: ' + ((e as Error)?.message || e) });
         });
@@ -4541,23 +4553,23 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
 
       let stoppedByEvent: string | null = null;
       for (let i = 0; i < msg.count; i++) {
-        // Bond-Graph Agents — one generation = the closed agent↔grid loop:
+        // Bond-Graph Agents ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â one generation = the closed agentÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬Âgrid loop:
         //  (gather) agents SampleField the grid as of the previous cell step,
         //  (behave) run behaviourStep + integrate forces + the structural phase,
         //  (deposit) AffectCellsUnder / SecreteToField write the cell READ
-        //   buffer — THEN the cell CA steps, incorporating the deposit (its
+        //   buffer ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â THEN the cell CA steps, incorporating the deposit (its
         //  w.set(r) copy carries it; a diffusion rule spreads it). So the agent
         //  step runs BEFORE the cell step (Decision D-FIELD: the field IS the
         //  lattice CA, only the scatter/gather bridge is new).
         // Layers panel (req 1): freeze either layer at runtime. Freezing agents
         // also stops their cell-field deposit (it lives inside runAgentStep).
         if (agentStore && simulateAgents) runAgentStep();
-        // Agent Stop Event — CAPTURE it before the cell step (runStep resets the
+        // Agent Stop Event ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â CAPTURE it before the cell step (runStep resets the
         // shared flag at its top, which would clobber it), but SURFACE it after
         // generation++ so the paused generation matches the cell-stop semantics.
         const agentStopIdx = (agentStore && simulateAgents) ? drainAgentStop() : 0;
         if (stepFn && simulateCells && gridCellsEnabled) runStep();
-        // generation++ lives inside the CELL step — when the cell step didn't
+        // generation++ lives inside the CELL step ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â when the cell step didn't
         // run (agents-only model, or the Layers panel froze the grid) an agent
         // step still IS a generation, or the counter sits at 0 forever.
         else if (agentStore && simulateAgents) generation++;
@@ -4573,7 +4585,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       if (stepFn && gridCellsEnabled && !msg.skipColorPass) runColorPass();
       sendColors();
       if (stoppedByEvent !== null) {
-        self.postMessage({ type: 'stopEvent', message: stoppedByEvent });
+        self.postMessage({ type: 'stopEvent', message: stoppedByEvent, reqId: msg.reqId });
       }
       break;
     }
@@ -4633,7 +4645,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
         // Update display.
         const webgpuPaint = useWebGPU && webgpuRuntime?.stepReady;
         if (webgpuPaint && webgpuRuntime) {
-          // Patch only the painted cells — the rest of the GPU buffer holds
+          // Patch only the painted cells ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â the rest of the GPU buffer holds
           // evolved state we mustn't clobber with the stale CPU mirror.
           const idxs: number[] = [];
           for (const c of msg.cells) {
@@ -4643,7 +4655,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
           }
           patchWebGPUCells(idxs);
           uploadActiveViewer(webgpuRuntime, viewerIdMap[activeViewer] ?? -1);
-          // gpuOwnsAttrs stays as-is — we only patched a few cells; the rest of
+          // gpuOwnsAttrs stays as-is ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â we only patched a few cells; the rest of
           // the CPU mirror is still stale w.r.t. the evolved GPU state.
           refreshColorsAfterInputWebGPU();
           finalizeStepWebGPU({ needColors: true }).then(() => sendColors())
@@ -4716,7 +4728,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
             const buf = readAttrs[s.attrId];
             if (!buf) continue;
             buf[idx] = s.value;
-            // In sync mode the step copies r→w at the top of the next step,
+            // In sync mode the step copies rÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢w at the top of the next step,
             // but a paint that lands between steps must keep both buffers
             // consistent so InputColor / step compiled functions see the new
             // value through w_<id>[idx] reads as well. Async shares one buffer.
@@ -4724,7 +4736,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
           }
         }
 
-        // Display refresh — mirror of `paint` tail.
+        // Display refresh ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â mirror of `paint` tail.
         const webgpuPaint = useWebGPU && webgpuRuntime?.stepReady;
         if (webgpuPaint && webgpuRuntime) {
           const idxs: number[] = [];
@@ -4764,13 +4776,14 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
     }
 
     case 'reset': {
+      stepAckId = msg.reqId;
       activeViewer = msg.activeViewer; syncActiveViewerToMemory();
       resetGrid();
-      // Bond-Graph Agents — Reset re-seeds the agent population (clear + re-seed
+      // Bond-Graph Agents ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â Reset re-seeds the agent population (clear + re-seed
       // the configured initial count + the agent Init Event, PR-A3). Re-allocates
-      // the store from the live config so a config edit (maxAgents/seedCount/…)
+      // the store from the live config so a config edit (maxAgents/seedCount/ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦)
       // takes effect on Reset. The agent Init Event itself runs AFTER runInit()
-      // below — a Create-Agent rule that reads the field must see the cell Init
+      // below ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â a Create-Agent rule that reads the field must see the cell Init
       // Event's seeded substrate (D-FIELD ordering).
       if (agentsEnabled) { initAgents(); instantiateAgentWasmIfNeeded(); buildAgentWebGPUIfNeeded(); }
       // Init Event runs once per cell on Reset only (not on Load State).
@@ -4787,17 +4800,17 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
         if (orientationReadView) uploadOrientation(webgpuRuntime, orientationReadView);
       }
       runInit();
-      // Agent Init Event + colour pass — after the cell Init Event (D-FIELD).
+      // Agent Init Event + colour pass ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â after the cell Init Event (D-FIELD).
       if (agentsEnabled) { runAgentInit(); runAgentColorPass(); }
       if (hadInit) {
-        // Init wrote to attrs after resetGrid's color refresh — recompute
+        // Init wrote to attrs after resetGrid's color refresh ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â recompute
         // colors so the user sees the post-init state, not the defaults.
         // WebGPU path skips this and recomputes via runColorPassWebGPU below.
         if (!(useWebGPU && webgpuRuntime?.stepReady)) refreshColorsAfterInputJS();
       }
       if (webgpuReset && webgpuRuntime) {
         // When the JS / WASM init ran (no GPU init pipeline), CPU readAttrs
-        // holds the post-init state — push it to GPU. When the GPU init ran,
+        // holds the post-init state ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â push it to GPU. When the GPU init ran,
         // the GPU already owns the post-init attrsReadBuf and uploading again
         // would clobber it.
         if (!useGPUInit) {
@@ -4826,7 +4839,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       compileFns(msg.stepCode, msg.inputColorCodes, (msg as RecompileMsg).outputMappingCodes || [], (msg as RecompileMsg).initCode || '');
       // Bond-Graph Agents: recompile the agent behaviour fn (graph-only edit, no
       // reinit). The store + populations persist (a maxAgents/maxBonds change
-      // forces a full reinit instead). Live force/bond params re-clamp Δt.
+      // forces a full reinit instead). Live force/bond params re-clamp ÃƒÅ½Ã¢â‚¬Ât.
       {
         const rc = msg as RecompileMsg;
         if (rc.centerBased) centerBasedConfig = rc.centerBased;
@@ -4835,12 +4848,12 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
         if (rc.agentHasSprites !== undefined) hasAgentSprites = !!rc.agentHasSprites;
         compileAgentFns(rc.agentBehaviourCode, rc.agentInitCode, rc.agentDivisionCode, rc.agentOutputMappingCodes);
         // PR6b-1 / PR7: re-resolve the agent target + stash the per-target payload.
-        // If the WASM backing requirement changes (JS/WebGPU ↔ WASM, since wasm
+        // If the WASM backing requirement changes (JS/WebGPU ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬Â WASM, since wasm
         // needs the store on a WebAssembly.Memory), re-init the store so its arrays
         // sit on (or off) the memory; otherwise a graph-only edit keeps the
         // population. Then (re-)instantiate the WASM loop or (re-)build the WebGPU
-        // runtime against the (possibly fresh) store. (JS↔WebGPU does NOT change
-        // the backing — the GPU has its own buffers — so the population persists.)
+        // runtime against the (possibly fresh) store. (JSÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬ÂWebGPU does NOT change
+        // the backing ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â the GPU has its own buffers ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â so the population persists.)
         const newTarget = resolveAgentTarget(rc.agentTarget, rc.agentWasmBytes, rc.agentWebgpuBehaviourShader, rc.agentWebgpuForceShader);
         pendingAgentWasmBytes = rc.agentWasmBytes ?? null;
         agentWasmViewerGuardIds = rc.agentWasmViewerGuardIds ?? [];
@@ -4861,7 +4874,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       }
       // Variegated Cells: re-fill the facePatternLookup + interaction-table
       // regions in wasmMemory. The regions themselves stay at the same
-      // offsets (no reallocation — initGrid sized them at init time from the
+      // offsets (no reallocation ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â initGrid sized them at init time from the
       // attribute schema, which a recompile doesn't change). Writes through
       // the existing typed-array views so WASM keeps the same source of truth.
       initVariegation((msg as RecompileMsg).variegated, (msg as RecompileMsg).interactionTables);
@@ -4874,7 +4887,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       if ((msg as RecompileMsg).webgpuStopCheckInterval !== undefined) {
         webgpuStopCheckInterval = Math.max(1, Math.floor((msg as RecompileMsg).webgpuStopCheckInterval!));
       }
-      // Agents-only: skip the lattice WASM instantiate (see the init handler —
+      // Agents-only: skip the lattice WASM instantiate (see the init handler ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â
       // the compiler layout carries nbr tables the worker layout omits).
       if (gridCellsEnabled) tryInstantiateWasmModule((msg as RecompileMsg).wasmStepBytes, (msg as RecompileMsg).wasmExports);
       if ((msg as RecompileMsg).wasmStepError && gridCellsEnabled) {
@@ -4890,7 +4903,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       } else if (useWebGPU && recompile.webgpuShaderError) {
         // Only surface WebGPU compile errors when the user has WebGPU selected.
         // Pre-Wave-A-PR1, the sender always speculatively compiled WebGPU and
-        // forwarded the error regardless of target — which spammed users with
+        // forwarded the error regardless of target ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â which spammed users with
         // async-only-node errors while running on JS/WASM. Sender now skips
         // the compile when !useWebGPU; this guard is a belt-and-suspenders
         // defence against any stale message that still carries the field.
@@ -4905,9 +4918,9 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       // lattice WASM module was never instantiated against this layout).
       const enableWasm = !!msg.enabled && gridCellsEnabled;
       // If the user just turned WASM on, drain GPU state to CPU before tearing
-      // down the runtime — otherwise gpuOwnsAttrs CPU mirror is stale and the
+      // down the runtime ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â otherwise gpuOwnsAttrs CPU mirror is stale and the
       // first JS/WASM step runs against pre-Play data. Then enforce mutual
-      // exclusion (WASM on → WebGPU off).
+      // exclusion (WASM on ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ WebGPU off).
       if (enableWasm && useWebGPU && webgpuRuntime?.stepReady) {
         const rt = webgpuRuntime;
         void (async () => {
@@ -4934,7 +4947,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       // Agents-only: never bring up the lattice GPU runtime (its buffers would
       // be sized for a grid the model doesn't simulate).
       const enableWebGPU = !!msg.enabled && gridCellsEnabled;
-      // Toggling WebGPU OFF: drain GPU → CPU AND mark the runtime's directRender
+      // Toggling WebGPU OFF: drain GPU ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ CPU AND mark the runtime's directRender
       // flag false so any subsequent sendColors falls through to the colors-
       // transfer path (otherwise sendColors keeps short-circuiting on the live
       // runtime's stale directRender bit and the canvas freezes silently).
@@ -5008,7 +5021,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
     }
 
     case 'setInspectCells': {
-      // Declarative — replace the subscription set. Filter out-of-range
+      // Declarative ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â replace the subscription set. Filter out-of-range
       // indices so a stale popup from before a grid resize doesn't keep
       // emitting garbage. Fire one immediate response so the popup opens
       // populated without waiting for the next step.
@@ -5038,11 +5051,11 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
     }
 
     case 'refreshDisplay': {
-      // Main thread requests a fresh present pass — sent on visibility-return
+      // Main thread requests a fresh present pass ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â sent on visibility-return
       // and after a soft recompile completes. Under WebGPU direct render, the
       // OffscreenCanvas can land in an unpresented state after the recompile's
-      // device-swap inside startWebGPUInit (unconfigure → configure with new
-      // device → dispatch present), and the next compositor frame may show
+      // device-swap inside startWebGPUInit (unconfigure ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ configure with new
+      // device ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ dispatch present), and the next compositor frame may show
       // blank until something forces a new dispatch. Re-running the color
       // pass + present here is cheap and idempotent. Posts a fresh `stepped`
       // so the main thread also runs draw() and updates the visible canvas.
@@ -5101,13 +5114,13 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
         self.postMessage({ type: 'webgpuReadback', ready: false, attrs: {}, reason: 'stepReady false' });
         break;
       }
-      // Async — copies attrsRead from GPU into the existing readAttrs typed
+      // Async ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â copies attrsRead from GPU into the existing readAttrs typed
       // arrays, then posts a snapshot back. Used by the parity-test harness.
       readbackAttrs(webgpuRuntime, readAttrs).then(() => {
         const snapshot: Record<string, { type: string; data: number[] }> = {};
         for (const a of cellAttrs) {
           const arr = readAttrs[a.id]!;
-          // Cap to 100 entries in the message — full grids would blow up
+          // Cap to 100 entries in the message ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â full grids would blow up
           // postMessage; the harness samples or compares first-N.
           const cap = Math.min(arr.length, 100);
           const out: number[] = new Array(cap);
@@ -5141,8 +5154,8 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
     case 'updateLookupTable': {
       // Live-tune a single Lookup Table model attribute. The cached Float64Array
       // is a typed-array view over `wasmMemory` at the layout's reserved offset
-      // (see initVariegation), so we must COPY into the existing view — never
-      // reassign the JS reference — or WASM would lose its source of truth (it
+      // (see initVariegation), so we must COPY into the existing view ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â never
+      // reassign the JS reference ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â or WASM would lose its source of truth (it
       // reads via baked offsets, not the JS ref).
       const normalized = normalizeLookupTable(msg.values, msg.rowLabels, msg.colLabels);
       const existing = cachedInteractionTables[msg.attrId];
@@ -5163,9 +5176,9 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
 
     case 'updateIndicators': {
       initIndicators(msg.indicators);
-      // O5 — refresh the GPU reduction plan whenever watched/linked status
+      // O5 ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â refresh the GPU reduction plan whenever watched/linked status
       // changes. Cheap (no buffer reallocation when the plan is unchanged at
-      // setupReductionPipelines's level — though the function does rebuild
+      // setupReductionPipelines's level ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â though the function does rebuild
       // on every call; acceptable since this fires only on user edit).
       if (webgpuRuntime?.stepReady) setupReductionPipelines(webgpuRuntime, linkedDefs);
       break;
@@ -5224,7 +5237,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
         if (webgpuImport && webgpuRuntime) {
           if (msg.region) {
             // Patch ONLY the pasted cells so the evolved (GPU-resident) cells outside
-            // the region are preserved — a full uploadAttrs would clobber them with a
+            // the region are preserved ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â a full uploadAttrs would clobber them with a
             // stale CPU mirror after a Play (mirrors the paint / writeRegion handlers).
             patchWebGPUCells(regionIdxs);
           } else {
@@ -5241,7 +5254,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
         sendColors();
       };
       // Paste-centered under WebGPU after a Play: the CPU mirror is stale
-      // (gpuOwnsAttrs), so a Colour→Attribute mapping that READS an existing cell
+      // (gpuOwnsAttrs), so a ColourÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢Attribute mapping that READS an existing cell
       // attribute would sample stale state. Read the GPU attrs back to CPU first
       // (mirrors the paint / paintManual handlers), then apply. The full-grid
       // import overwrites every cell so it never needs this.
@@ -5264,14 +5277,14 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
         uploadActiveViewer(webgpuRuntime, viewerIdMap[activeViewer] ?? -1);
         // For no-OM viewers (e.g. MNCA's "Case Colored") refreshColorsAfterInputWebGPU
         // falls back to a step shader dispatch so SetColorViewer-in-step writes land
-        // in the colors buffer before the present pass blits — otherwise the canvas
+        // in the colors buffer before the present pass blits ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â otherwise the canvas
         // freezes on the previous viewer's pixels.
         refreshColorsAfterInputWebGPU();
         finalizeStepWebGPU({ needColors: true }).then(() => sendColors())
           .catch(e => self.postMessage({ type: 'error', message: '[webgpu] colorPass failed: ' + ((e instanceof Error) ? e.message : String(e)) }));
         break;
       }
-      // JS fallback: pull GPU → CPU first if a stale runtime is hanging around
+      // JS fallback: pull GPU ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ CPU first if a stale runtime is hanging around
       // with gpuOwnsAttrs=true (e.g. WebGPU init succeeded, ran steps, then a
       // recompile error left useWebGPU=true but stepReady=false).
       void (async () => {
@@ -5298,7 +5311,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
           self.postMessage({ type: 'agentOverflow', message: `Agent capacity reached (maxAgents=${agentStore.maxAgents}). ${msg.agents.length - ids.length} agent(s) not created.` });
         }
         // PR3 seed config: write the per-attribute initial values onto each new
-        // agent (read + write buffers — single-buffer, so they alias, but mirror
+        // agent (read + write buffers ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â single-buffer, so they alias, but mirror
         // the paintAgents shape for clarity / future double-buffering).
         if (msg.sets && msg.sets.length > 0) {
           for (const id of ids) applyAgentSets(agentStore, id, msg.sets);
@@ -5362,7 +5375,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
     }
     case '__setAgentWasmBacked': {
       // AW-MEM (PR6a) DEV proof: toggle the WebAssembly.Memory backing and
-      // re-init agents (re-runs init/seed → fresh deterministic state). The
+      // re-init agents (re-runs init/seed ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ fresh deterministic state). The
       // caller then steps + getStates to compare bit-for-bit against the
       // plain-array backing. No-op in production (never sent).
       agentWasmBackedDev = !!msg.wasmBacked;
@@ -5386,8 +5399,8 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       break;
     }
     case 'getAgentState': {
-      // On-demand single-agent inspector read. NOT a fattened render snapshot —
-      // one tiny round-trip per inspect click (per §3 gotcha #7). A non-live id
+      // On-demand single-agent inspector read. NOT a fattened render snapshot ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â
+      // one tiny round-trip per inspect click (per Ãƒâ€šÃ‚Â§3 gotcha #7). A non-live id
       // replies with `live: false`.
       const id = msg.id;
       if (!agentStore || id < 0 || id >= agentStore.highWater || !agentStore.alive[id]) {
@@ -5429,7 +5442,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
           else { x = Math.max(0, Math.min(W, x)); y = Math.max(0, Math.min(H, y)); }
           s.x[id] = x; s.y[id] = y; s.xNext[id] = x; s.yNext[id] = y;
           // 3D move brush carries a z; wrap/clamp it on the depth axis (2D omits z
-          // → the always-0 z arm stays untouched, byte-identical to before).
+          // ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ the always-0 z arm stays untouched, byte-identical to before).
           if (is3d && m.z !== undefined) {
             let z = m.z;
             if (msg.torus) z = ((z % D) + D) % D; else z = Math.max(0, Math.min(D, z));
@@ -5443,7 +5456,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
     }
     case 'formBondBatch': {
       // Bond-paint brush: form many bonds at once. formBond is idempotent (it
-      // rejects a duplicate via hasBond internally) — re-batching the same pair
+      // rejects a duplicate via hasBond internally) ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â re-batching the same pair
       // does not double-bond.
       activeViewer = msg.activeViewer; syncActiveViewerToMemory();
       if (agentStore) {
@@ -5504,7 +5517,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       };
       if (useWebGPU && webgpuRuntime?.stepReady && (gpuOwnsAttrs || webgpuRuntime.directRender)) {
         // Pull live GPU state down before serialising. With direct render the
-        // CPU `colors` mirror is stale (no per-step readback) — pull it too
+        // CPU `colors` mirror is stale (no per-step readback) ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â pull it too
         // so the saved state contains the actual displayed colors.
         const rt = webgpuRuntime;
         const tasks: Array<Promise<void>> = [];
@@ -5524,7 +5537,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
     }
 
     case 'loadState': {
-      // State files restore the grid configuration, NOT the run history —
+      // State files restore the grid configuration, NOT the run history ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â
       // generation counter and indicator values reset to their init defaults
       // so the user can start fresh from a saved starting position.
       generation = 0;
@@ -5533,7 +5546,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       linkedResults = {};
       activeViewer = msg.activeViewer; syncActiveViewerToMemory();
 
-      // Restore cell attribute arrays — COPY INTO the existing views over WASM
+      // Restore cell attribute arrays ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â COPY INTO the existing views over WASM
       // memory rather than replacing them (replacement would orphan them from
       // the WASM module that addresses memory by offset).
       const isAsyncLoad = updateMode === 'asynchronous';
@@ -5576,14 +5589,14 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
         }
       }
 
-      // Restore order array — COPY INTO the existing view rather than
+      // Restore order array ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â COPY INTO the existing view rather than
       // replacing the reference. The initial `orderArray` is a typed-array
       // view over `wasmMemory` at `wasmLayout.orderOffset` (see initGrid).
       // Replacing the reference orphans WASM (which reads the order via the
       // baked-in offset, not via the JS reference): the per-step shuffle then
       // writes to the standalone array while WASM keeps reading the original
       // view's stale contents. Under random-order async this freezes cell
-      // iteration into the init-time sequential [0,1,2,...] order — the
+      // iteration into the init-time sequential [0,1,2,...] order ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â the
       // resulting top-left-first bias propagates directly into any rule that
       // writes per-cell during the step, e.g. Plantbox's "set neighbor's
       // Light direction toward this cell" macro emits biased NI values.
@@ -5596,7 +5609,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       }
 
       // Rebuild neighbor indices for constant boundary sentinel (skip when the
-      // CA grid is off — no cell step uses them).
+      // CA grid is off ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â no cell step uses them).
       if (gridCellsEnabled) buildNeighborIndices();
 
       // Bond-Graph Agents: restore the agent SoA + bond store. Reject LOUDLY on
@@ -5612,7 +5625,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       } else if (agentStore) {
         // The state file carries no agent payload (pre-agents save, or saved from
         // a non-agent model): re-seed the agent layer to its starting
-        // configuration instead of silently keeping the pre-load population —
+        // configuration instead of silently keeping the pre-load population ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â
         // a loaded state is a starting configuration, and mixing the old run's
         // agents with the restored grid is neither.
         initAgents(); instantiateAgentWasmIfNeeded(); buildAgentWebGPUIfNeeded();
@@ -5647,9 +5660,9 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
 
     case 'readRegion': {
       // Snapshot every cell attribute over the (row, col, w, h) rectangle.
-      // Cells outside [0, width) × [0, height) are replaced by the attribute's default value.
+      // Cells outside [0, width) ÃƒÆ’Ã¢â‚¬â€ [0, height) are replaced by the attribute's default value.
       // Under WebGPU after Play, `gpuOwnsAttrs` is true and the CPU mirror is
-      // stale — pull it back before reading or Ctrl+C / Ctrl+X copy pre-Play
+      // stale ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â pull it back before reading or Ctrl+C / Ctrl+X copy pre-Play
       // values instead of the visible state.
       void (async () => {
         const m = msg;
@@ -5685,7 +5698,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
     case 'writeRegion': {
       activeViewer = msg.activeViewer; syncActiveViewerToMemory();
       const isAsync = updateMode === 'asynchronous';
-      // 3D Grid CA: the 2D stamp lands on layer `msg.layer` (absent → 0).
+      // 3D Grid CA: the 2D stamp lands on layer `msg.layer` (absent ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ 0).
       const wLayer = msg.layer ?? 0;
       // Optional shape mask: only cells with mask !== 0 are written.
       const wMask = msg.mask ? new Uint8Array(msg.mask) : null;
@@ -5735,7 +5748,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
           .catch(e => self.postMessage({ type: 'error', message: '[webgpu] writeRegion colorPass failed: ' + ((e instanceof Error) ? e.message : String(e)) }));
         break;
       }
-      // JS / WASM fallback — without the runStep fallback for no-OM viewers,
+      // JS / WASM fallback ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â without the runStep fallback for no-OM viewers,
       // pasting on viewers like MNCA "Decorated Trace" leaves the canvas
       // showing pre-paste colors (the colors buffer is only refreshed by the
       // step shader on those viewers).
@@ -5747,7 +5760,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
     case 'clearRegion': {
       activeViewer = msg.activeViewer; syncActiveViewerToMemory();
       const isAsync = updateMode === 'asynchronous';
-      const cLayer = msg.layer ?? 0;   // 3D Grid CA: target layer (absent → 0)
+      const cLayer = msg.layer ?? 0;   // 3D Grid CA: target layer (absent ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ 0)
       const cMask = msg.mask ? new Uint8Array(msg.mask) : null;
       if (cLayer >= 0 && cLayer < depth) for (const attr of cellAttrs) {
         const dv = defaultValue(attr);
@@ -5787,7 +5800,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
           .catch(e => self.postMessage({ type: 'error', message: '[webgpu] clearRegion colorPass failed: ' + ((e instanceof Error) ? e.message : String(e)) }));
         break;
       }
-      // JS / WASM fallback — same shape as writeRegion above. No-OM viewers
+      // JS / WASM fallback ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â same shape as writeRegion above. No-OM viewers
       // rely on the step shader to repaint colors.
       refreshColorsAfterInputJS();
       sendColors();
