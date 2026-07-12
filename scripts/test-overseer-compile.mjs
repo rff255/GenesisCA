@@ -3,7 +3,7 @@
 // re-evaluation, action results, sweeps, conditionals) without a browser.
 // Run from the repo root:  node scripts/test-overseer-compile.mjs
 import { build } from 'esbuild';
-import { writeFileSync, mkdtempSync } from 'fs';
+import { writeFileSync, mkdtempSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join, dirname, resolve } from 'path';
 import { fileURLToPath, pathToFileURL } from 'url';
@@ -17,6 +17,7 @@ const entryPath = join(ROOT, 'scripts', '__ov_entry.ts');
 writeFileSync(entryPath, ENTRY);
 const outPath = join(dir, 'bundle.mjs');
 await build({ entryPoints: [entryPath], bundle: true, format: 'esm', platform: 'node', outfile: outPath, logLevel: 'error', absWorkingDir: process.cwd() });
+rmSync(entryPath, { force: true });
 const { compileOverseerGraph } = await import(pathToFileURL(outPath).href);
 
 // ---------------------------------------------------------------- scaffolding

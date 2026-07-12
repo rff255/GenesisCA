@@ -26,6 +26,9 @@ import { GIFEncoder, quantize, applyPalette } from 'gifenc';
 import { encodeFramesToWebM, isWebMSupported } from './recording/webmEncoder';
 import { getGlyphTile } from './recording/glyphAtlas';
 import { IndicatorDisplay } from './IndicatorDisplay';
+import { ExperimentsPanel } from './ExperimentsPanel';
+import { compileOverseerGraph } from '../modeler/vpl/compiler/overseer/compile';
+import { OverseerRuntime } from './engine/overseerRuntime';
 import { BrushColorPopover } from './BrushColorPopover';
 import { ManualBrushPanel } from './ManualBrushPanel';
 import { ClipIntervalSlider } from './ClipIntervalSlider';
@@ -982,6 +985,79 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
 
   // F3: Runtime model attribute values
   const [runtimeModelAttrs, setRuntimeModelAttrs] = useState<Record<string, number>>({});
+  // Render-phase mirror so non-React consumers (the OverseerRuntime) can
+  // snapshot the live values without a stale closure.
+  const runtimeModelAttrsLatest = useRef(runtimeModelAttrs);
+  runtimeModelAttrsLatest.current = runtimeModelAttrs;
+
+  // ------------------------------------------------------------------
+  // Overseer (experiment orchestration). Everything here is gated on
+  // model.overseerConfig?.enabled — with the feature off, no panel renders, no
+  // graph compiles, and the runtime is never created.
+  // ------------------------------------------------------------------
+  const overseerEnabled = !!model.overseerConfig?.enabled;
+  const overseerCompiled = useMemo(() => {
+    if (!overseerEnabled) return { driverCode: null as string | null, error: null as string | null };
+    return compileOverseerGraph(model.overseerGraphNodes ?? [], model.overseerGraphEdges ?? [], model);
+  }, [model, overseerEnabled]);
+  const overseerRuntimeRef = useRef<OverseerRuntime | null>(null);
+  const [overseerRunning, setOverseerRunning] = useState(false);
+  const overseerRunningRef = useRef(false);
+  const [overseerVersion, bumpOverseerVersion] = useReducer((v: number) => v + 1, 0);
+
+  /** Abort a running experiment (no-op otherwise). Called on Abort, any worker
+   *  reinit / recompile / model change, and unmount — the runtime journals the
+   *  reason and the driver returns within one batch. */
+  const abortExperiment = useCallback((reason?: string) => {
+    if (overseerRunningRef.current) overseerRuntimeRef.current?.abort(reason);
+  }, []);
+
+  const handleRunExperiment = () => {
+    if (overseerRunningRef.current || !overseerCompiled.driverCode || !workerRef.current) return;
+    setPlaying(false);
+    const rt = new OverseerRuntime({
+      getWorker: () => workerRef.current,
+      getActiveViewer: () => activeViewerRef.current,
+      evalEndConditions: (gen, ind) => evalEndConditions(gen, ind),
+      setModelAttr: (attrId, value) => handleModelAttrChange(attrId, value),
+      loadPresetLive: (presetId: string) => {
+        const p = (model.presets ?? []).find(x => x.id === presetId);
+        if (!p) return 'not-found' as const;
+        // Structural predicate — mirrors handleLoadPreset / applySimulationState:
+        // a preset that changes dims/boundary forces a worker reinit, which is
+        // not supported mid-experiment (v1) — the runtime journals + skips it.
+        const s = p.state;
+        const hasGrid = s.width != null && s.height != null && s.attributes != null && s.colors != null;
+        const boundaryChanged = !!s.boundaryTreatment && s.boundaryTreatment !== model.properties.boundaryTreatment;
+        const sD = s.gridDepth ?? s.depth ?? 1;
+        const dimsFromState = s.gridWidth != null && s.gridHeight != null
+          ? { w: s.gridWidth, h: s.gridHeight, d: sD }
+          : hasGrid ? { w: s.width!, h: s.height!, d: sD } : null;
+        const dimsChanged = dimsFromState != null
+          && (dimsFromState.w !== gridWidth.current || dimsFromState.h !== gridHeight.current || dimsFromState.d !== gridDepth.current);
+        if (boundaryChanged || dimsChanged) return 'needs-reinit' as const;
+        applySimulationState(p.state, { adaptDims: true });
+        return 'ok' as const;
+      },
+      screenshot: () => handleScreenshot(),
+      startRecording: () => startRecording(),
+      stopRecording: () => stopRecording(),
+      modelAttrsSnapshot: () => ({ ...runtimeModelAttrsLatest.current }),
+      seedPolicy: model.overseerConfig?.seedPolicy ?? 'none',
+      baseSeed: model.overseerConfig?.baseSeed ?? 12345,
+      onUpdate: () => bumpOverseerVersion(),
+      onFinished: () => {
+        overseerRunningRef.current = false;
+        setOverseerRunning(false);
+        bumpOverseerVersion();
+      },
+    });
+    overseerRuntimeRef.current = rt;
+    overseerRunningRef.current = true;
+    setOverseerRunning(true);
+    bumpOverseerVersion();
+    rt.start(overseerCompiled.driverCode);
+  };
 
   // F3b: Interaction-table defaults snapshot — captured the first time we see
   // a given `modelVersion` (= a fresh LOAD_MODEL / NEW_MODEL). Used by Reset
@@ -2433,6 +2509,9 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   }, [model.indicators, model.attributes]);
 
   const sendNextStep = useCallback(() => {
+    // Overseer: the experiment owns the step cadence — the play pipeline must
+    // never interleave its own batches with the runtime's reqId'd ones.
+    if (overseerRunningRef.current) return;
     if (!playingRef.current || pendingStep.current) return;
     pendingStep.current = true;
     lastStepSentTime.current = performance.now();
@@ -2710,6 +2789,9 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     } else if (msg.type === 'stopEvent') {
       // Compiled Stop Event node fired in the worker. Pause and surface the
       // user's message via the same blue notice used for end conditions.
+      // During an Overseer experiment the runtime consumes the stop (Run Until
+      // Stop semantics) and journals it — suppress the notice/pause here.
+      if (overseerRunningRef.current) return;
       playingRef.current = false;
       setPlaying(false);
       setEndConditionNotice(String(msg.message ?? 'Stop condition reached'));
@@ -2887,6 +2969,8 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
 
   // Reusable worker initializer (used by structural effect and dimension/image apply)
   const initWorkerWithDimensions = useCallback((w: number, h: number, dOverride?: number) => {
+    // Overseer: a worker reinit replaces the worker the runtime is attached to.
+    if (overseerRunningRef.current) overseerRuntimeRef.current?.abort('worker reinit');
     // If a recording is in progress, abandon it before tearing down the
     // worker. Otherwise the captured frames (sized to the OUTGOING worker's
     // grid) would mix with future captures (sized to the INCOMING worker's
@@ -3293,6 +3377,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   // Terminate worker on unmount only (not on re-renders)
   useEffect(() => {
     return () => {
+      overseerRuntimeRef.current?.abort('simulator unmounted');
       workerRef.current?.terminate();
       workerRef.current = null;
     };
@@ -3384,6 +3469,11 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   useEffect(() => {
     const prev = prevModelRef.current;
     prevModelRef.current = model;
+
+    // Overseer: any model change while an experiment runs invalidates the
+    // program (the driver was compiled from the old model; a reinit/recompile
+    // changes the worker under its feet) — abort cleanly with a journal note.
+    if (prev && overseerRunningRef.current) abortExperiment('model changed');
 
     const needsFullInit = !prev || !workerRef.current
       || prev.properties.gridWidth !== model.properties.gridWidth
@@ -6181,6 +6271,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
 
 
   const handleStep = () => {
+    if (overseerRunningRef.current) return;  // the experiment owns the transport
     if (playing) { setPlaying(false); return; }
     if (pendingStep.current) return;
     pendingStep.current = true;
@@ -6188,12 +6279,14 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   };
 
   const handleReset = () => {
+    if (overseerRunningRef.current) return;  // the experiment owns the transport
     setPlaying(false);
     pendingStep.current = true;
     workerRef.current?.postMessage({ type: 'reset', activeViewer });
   };
 
   const handleRecompile = () => {
+    abortExperiment('manual recompile');
     setPlaying(false);
     workerRef.current?.terminate();
     workerRef.current = null;
@@ -8159,6 +8252,21 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
                 document.addEventListener('mouseup', onUp);
               }}
               onDoubleClick={() => setBrushSectionH(null)}
+            />
+          )}
+
+          {/* Experiments (Overseer) — rendered ONLY when the feature is enabled;
+              with it off there is zero trace of the Overseer in the simulator. */}
+          {overseerEnabled && (
+            <ExperimentsPanel
+              runtime={overseerRuntimeRef.current}
+              running={overseerRunning}
+              version={overseerVersion}
+              compileError={overseerCompiled.error}
+              hasExperiment={!!overseerCompiled.driverCode}
+              modelName={model.properties.name}
+              onRun={handleRunExperiment}
+              onAbort={() => abortExperiment('user abort')}
             />
           )}
 
