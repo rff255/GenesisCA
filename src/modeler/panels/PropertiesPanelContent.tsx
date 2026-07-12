@@ -430,7 +430,7 @@ export function PropertiesPanelContent({ mode = 'list' }: PanelContentProps = {}
                 <div>
                   <label className={styles.fieldLabel} style={{ marginBottom: 2 }}>Per-run seed policy</label>
                   <select
-                    className={styles.select}
+                    className={styles.selectInput}
                     value={model.overseerConfig?.seedPolicy ?? 'none'}
                     onChange={e => updateOverseerConfig({ seedPolicy: e.target.value as 'none' | 'fixed' | 'sequential' })}
                   >

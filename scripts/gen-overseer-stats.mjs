@@ -102,7 +102,7 @@ const ov = makeGraph();
 
 const expRoot = ov.node('experiment', {}, 0, 2);
 const clear = ov.node('ovClearSeries', { series: 'aliveAt200' }, 1, 2);
-const loop = ov.node('loop', { _port_count: '20' }, 2, 2);
+const loop = ov.node('loop', { _port_count: '30' }, 2, 2);
 const reset = ov.node('ovResetBoard', {}, 3, 3);
 const run = ov.node('ovRunGenerations', { _port_count: '200' }, 4, 3);
 const read = ov.node('ovReadIndicator', { indicatorId: 'population', category: 'true' }, 4, 5);
@@ -120,7 +120,7 @@ ov.fEdge(loop, 'next', logMean, 'do');
 ov.vEdge(meanStat, 'result', logMean, 'value');
 
 const stdStat = ov.node('ovSeriesStat', { series: 'aliveAt200', op: 'std' }, 4, 1);
-const logStd = ov.node('ovLog', { text: 'std = {value} (n = 20, seeds 4242..4261)' }, 5, 0);
+const logStd = ov.node('ovLog', { text: 'std = {value} (n = 30) — see the histogram below' }, 5, 0);
 ov.fEdge(logMean, 'next', logStd, 'do');
 ov.vEdge(stdStat, 'result', logStd, 'value');
 
@@ -133,20 +133,24 @@ const properties = {
   modelAuthor: 'Rodrigo F. Figueiredo',
   description:
     'The Overseer tutorial: Conway’s Game of Life plus an experiment graph that ' +
-    'answers "how many cells survive a random soup?" PROPERLY — 20 seeded replicates ' +
+    'answers "how many cells survive a random soup?" PROPERLY — 30 seeded replicates ' +
     'of Reset → Run 200 generations → Collect the live-cell count, then mean ± std in ' +
-    'the Journal. Open the simulator’s Experiments panel and press Run Experiment; the ' +
-    'sequential seed policy makes the whole batch exactly reproducible. Switch to the ' +
-    'Modeler’s Overseer tab to see the protocol as a graph.',
+    'the Journal AND a HISTOGRAM of the survivor-count distribution. Open the simulator’s ' +
+    'Experiments panel and press Run Experiment; the sequential seed policy makes the ' +
+    'whole batch exactly reproducible, and the auto-rendered histogram (toggle to a ' +
+    'per-run view) turns the dry number into a real figure. Switch to the Modeler’s ' +
+    'Overseer tab to see the protocol as a graph.',
   ruleDescription:
     'The Cells graph is classic Conway GoL (survive on 2-3 live Moore neighbours, born on ' +
     'exactly 3) with an Init Event seeding a p=0.35 random soup from the current RNG seed.\n\n' +
-    'The Overseer graph is the experiment protocol: Clear Series → Loop ×20 { Reset Board ' +
+    'The Overseer graph is the experiment protocol: Clear Series → Loop ×30 { Reset Board ' +
     '→ Run Generations ×200 → Collect Sample ← Read Indicator(population, category true) } ' +
     '→ Log mean → Log std. The per-run seed policy (Model Properties → Overseer) is ' +
     '"sequential" with base 4242, so run k re-seeds with 4242+k at its Reset — replicates ' +
     'differ from each other, but the whole experiment reproduces exactly on every press of ' +
-    'Run Experiment (JS and WASM targets bit-identical).',
+    'Run Experiment (JS and WASM targets bit-identical). The Experiments panel auto-renders ' +
+    'the collected series as a histogram of the survivor-count distribution (with the mean ' +
+    'marked) — the kind of figure a report needs.',
   topology: '2d-grid',
   boundaryTreatment: 'torus',
   updateMode: 'synchronous',

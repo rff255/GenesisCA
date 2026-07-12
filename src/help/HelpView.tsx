@@ -1612,7 +1612,10 @@ export function HelpView() {
               pick the category to read); values are always the latest simulated state.</li>
             <li><strong>Collect Sample / Series Statistic / Clear Series</strong> &mdash; the
               statistics layer: append measurements to named series, then aggregate
-              (mean, std, min, max, median, sum, count, 95% CI).</li>
+              (mean, std, min, max, median, sum, count, 95% CI). Each scalar series is
+              auto-rendered in the panel as a <strong>histogram</strong> of its
+              distribution across the runs (with the mean marked) &mdash; toggle to a
+              per-run sequence view.</li>
             <li><strong>Collect Spatial Sample</strong> &mdash; capture a <em>spatial</em>
               indicator&apos;s whole per-position curve (e.g. one solute of a chromatogram)
               as one replicate; the panel aggregates the replicates into a{' '}
@@ -1629,8 +1632,10 @@ export function HelpView() {
             while it runs; <strong>Abort</strong> stops it within one step batch). The
             panel shows a live status line (run count, generation, elapsed), the scrolling
             <strong> Journal</strong>, a <strong>Series</strong> table with live statistics,
-            and any <strong>aggregate spatial charts</strong> (mean &plusmn; &sigma; curves
-            from Collect Spatial Sample) &mdash; all exportable as <strong>CSV</strong>
+            a <strong>histogram</strong> per scalar series (the replicate-distribution
+            figure), and any <strong>aggregate spatial charts</strong> (mean &plusmn;
+            &sigma; curves from Collect Spatial Sample) &mdash; all exportable as
+            <strong> CSV</strong>
             (long format) or <strong>JSON</strong> (journal + series + spatial aggregates).
             Results are runtime artifacts: they are never saved into the model file. The{' '}
             <strong>Chromatography</strong> sample ships a built-in experiment that
