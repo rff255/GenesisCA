@@ -170,6 +170,7 @@ function stringifyCompact(value: unknown, indent = 2, level = 0, parentKey: stri
       parentKey === 'graphEdges' || parentKey === 'edges'
       || parentKey === 'graphNodes' || parentKey === 'nodes'
       || parentKey === 'agentGraphEdges' || parentKey === 'agentGraphNodes'
+      || parentKey === 'overseerGraphEdges' || parentKey === 'overseerGraphNodes'
     ) {
       const items = value.map(v => JSON.stringify(v));
       return '[\n' + items.map(i => childPad + i).join(',\n') + '\n' + pad + ']';

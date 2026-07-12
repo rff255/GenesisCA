@@ -999,4 +999,31 @@ export interface CAModel {
    *  Seeded when `topologyMode.agents` is enabled; absent / `enabled: false` →
    *  the agent engine is dormant. See `CenterBasedConfig`. */
   centerBased?: CenterBasedConfig;
+  /** Overseer — the THIRD rule graph: experiment orchestration AROUND the
+   *  simulation (loops over runs, parameter sweeps, statistical aggregation,
+   *  capture). Absent / empty in every legacy file + any model with the
+   *  Overseer disabled. `macroDefs` is SHARED with the other two graphs. */
+  overseerGraphNodes?: GraphNode[];
+  overseerGraphEdges?: GraphEdge[];
+  /** Overseer feature config. Absent / `enabled: false` → the feature is
+   *  completely invisible (no graph tab, no palette nodes, no Experiments
+   *  panel) — the ONLY sign of it is the enable checkbox in Model Properties.
+   *  See `OverseerConfig`. */
+  overseerConfig?: OverseerConfig;
+}
+
+/** Overseer (experiment orchestration) feature config. All fields beyond
+ *  `enabled` are optional with safe defaults. */
+export interface OverseerConfig {
+  /** Master gate. Off → zero UI/compile/runtime footprint. */
+  enabled: boolean;
+  /** Per-run auto-seed applied by the runtime when a run starts WITHOUT an
+   *  explicit Set Random Seed node having run first this run:
+   *  - 'none' (default): never auto-seed — the graph is in full control.
+   *  - 'fixed': every Reset re-seeds with `baseSeed`.
+   *  - 'sequential': run k re-seeds with `baseSeed + k` (k = Reset count). */
+  seedPolicy?: 'none' | 'fixed' | 'sequential';
+  baseSeed?: number;
+  /** Ceiling for in-memory Save Snapshot slots (default 4). */
+  maxSnapshotSlots?: number;
 }
