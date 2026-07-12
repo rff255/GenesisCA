@@ -1,9 +1,12 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { useModel } from '../../model/ModelContext';
 import { useDetailSelection, type PanelContentProps } from '../ModelerDetailContext';
-import type { Attribute, AttributeType, CAModel, LookupKeySource } from '../../model/types';
+import type { Attribute, AttributeType, CAModel, LookupAxis, LookupKeySource } from '../../model/types';
 import { LookupTableEditor } from './LookupTableEditor';
-import { resolveKeyLabels, dedupeCustomLabels, resolveValueTagOptions } from '../vpl/compiler/variegation';
+import {
+  resolveKeyLabels, dedupeCustomLabels, resolveValueTagOptions,
+  resolveAxes, isMultiAxisTable, normalizeLookupTable, MAX_LOOKUP_AXES,
+} from '../vpl/compiler/variegation';
 import { useListReorder } from './useListReorder';
 import { NeighborIndexDefaultEditor } from './NeighborIndexDefaultEditor';
 import { VariablesPanelSection } from './VariablesPanelSection';
@@ -65,9 +68,11 @@ function KeySourceField({ label, value, model, onChange }: {
     ? value.kind === 'facePalette' ? `palette:${value.paletteId}`
       : value.kind === 'tagAttribute' ? `tag:${value.attributeId}`
       : value.kind === 'custom' ? 'custom'
+      : value.kind === 'intRange' ? 'intRange'
       : 'single'
     : '';
   const customLabels = value?.kind === 'custom' ? value.labels : null;
+  const intRange = value?.kind === 'intRange' ? value : null;
   // De-duplicate on every commit so the stored labels are ALWAYS unique — a
   // lookup table's tableValues is keyed by label name, so duplicates collide.
   const setLabels = (labels: string[]) => onChange({ kind: 'custom', labels: dedupeCustomLabels(labels) });
@@ -81,6 +86,7 @@ function KeySourceField({ label, value, model, onChange }: {
           const v = e.target.value;
           if (v === 'single') { onChange({ kind: 'single' }); return; }
           if (v === 'custom') { onChange({ kind: 'custom', labels: value?.kind === 'custom' ? value.labels : ['A', 'B'] }); return; }
+          if (v === 'intRange') { onChange(value?.kind === 'intRange' ? value : { kind: 'intRange', min: 0, max: 8 }); return; }
           const ci = v.indexOf(':');
           if (ci < 0) { onChange(undefined); return; }
           const kind = v.slice(0, ci);
@@ -91,6 +97,7 @@ function KeySourceField({ label, value, model, onChange }: {
         <option value="">— select —</option>
         <option value="single">Single value (map)</option>
         <option value="custom">Custom labels…</option>
+        <option value="intRange">Integer range…</option>
         {palettes.length > 0 && (
           <optgroup label="Face palettes">
             {palettes.map(p => <option key={p.id} value={`palette:${p.id}`}>{p.name}</option>)}
@@ -100,6 +107,21 @@ function KeySourceField({ label, value, model, onChange }: {
           {tagAttrs.map(a => <option key={a.id} value={`tag:${a.id}`}>{a.name}</option>)}
         </optgroup>
       </select>
+      {intRange && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginTop: 2 }}>
+          <span style={{ color: '#7a8a9a' }}>min</span>
+          <NumberField className={styles.numberInput} value={intRange.min} integer
+            onNumber={n => onChange({ kind: 'intRange', min: Math.floor(n), max: Math.max(Math.floor(n), intRange.max) })}
+            style={{ width: 52, height: 20 }} noSpinner />
+          <span style={{ color: '#7a8a9a' }}>max</span>
+          <NumberField className={styles.numberInput} value={intRange.max} integer
+            onNumber={n => onChange({ kind: 'intRange', min: Math.min(intRange.min, Math.floor(n)), max: Math.floor(n) })}
+            style={{ width: 52, height: 20 }} noSpinner />
+          <span style={{ color: '#556' }} title="Axis labels are the integers min..max — the natural axis for neighbour-count rule tables">
+            ({Math.max(0, intRange.max - intRange.min) + 1} values)
+          </span>
+        </div>
+      )}
       {customLabels && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 2, marginTop: 2 }}>
           {customLabels.map((lbl, i) => (
@@ -124,6 +146,58 @@ function KeySourceField({ label, value, model, onChange }: {
           >+ Label</button>
         </div>
       )}
+    </div>
+  );
+}
+
+/** MULTI-AXIS (N-D) Lookup Table axes editor: an ordered list of axes, each
+ *  with a display name + a key source (integer range / custom labels / tag
+ *  attribute / face palette / single). Discipline mirrors multi-attr slots:
+ *  APPEND / REMOVE-LAST only, edit in place — never reorder (the dense
+ *  tableData layout and the Table Lookup node's axis_k ports are positional).
+ *  Structural edits remap tableData in the reducer (applyAxesRemap). */
+function LookupAxesEditor({ attr, model, onUpdate }: {
+  attr: Attribute;
+  model: CAModel;
+  onUpdate: (changes: Partial<Attribute>) => void;
+}) {
+  const axes = attr.axes ?? [];
+  const resolved = resolveAxes(attr, model);
+  const setAxes = (next: LookupAxis[]) => onUpdate({ axes: next });
+  const setAxis = (i: number, ax: LookupAxis) => setAxes(axes.map((a, j) => (j === i ? ax : a)));
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginBottom: 6 }}>
+      {axes.map((ax, i) => (
+        <div key={i} style={{
+          display: 'flex', flexDirection: 'column', gap: 2, padding: '4px 6px',
+          border: '1px solid var(--color-border, #2a3548)', borderRadius: 5,
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.66rem' }}>
+            <span style={{ color: 'var(--color-accent, #e8a13a)', fontFamily: 'monospace' }}>{i}</span>
+            <CustomLabelInput
+              value={ax.name || `Axis ${i}`}
+              onCommit={v => setAxis(i, { ...ax, name: v || `Axis ${i}` })}
+            />
+            <span style={{ color: '#556', whiteSpace: 'nowrap' }}>dim {resolved.axes[i]?.dim ?? 1}</span>
+          </div>
+          <KeySourceField label="" value={ax.source} model={model}
+            onChange={src => setAxis(i, { ...ax, source: src ?? { kind: 'single' } })} />
+        </div>
+      ))}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+        <button className={styles.addButton} style={{ fontSize: '0.64rem', padding: '2px 8px' }}
+          disabled={axes.length >= MAX_LOOKUP_AXES}
+          onClick={() => setAxes([...axes, { name: `Axis ${axes.length}`, source: { kind: 'intRange', min: 0, max: 8 } }])}
+        >+ Axis</button>
+        <button className={styles.deleteButton} style={{ fontSize: '0.64rem', padding: '2px 8px' }}
+          disabled={axes.length <= 1}
+          onClick={() => setAxes(axes.slice(0, -1))}
+          title="Remove the LAST axis (axes never reorder — storage and node ports are positional)"
+        >− last</button>
+        <span style={{ color: '#556', fontSize: '0.62rem' }}>
+          {resolved.total.toLocaleString()} entries
+        </span>
+      </div>
     </div>
   );
 }
@@ -430,15 +504,73 @@ export function AttributesPanelContent({ mode = 'list' }: PanelContentProps = {}
                 </select>
               </div>
             )}
-            {selected.type === 'lookupTable' && (
+            {selected.type === 'lookupTable' && (() => {
+              const isMulti = isMultiAxisTable(selected);
+              // Explicit one-shot conversions between the two storage modes.
+              // legacy → multi: seed axes from the row/col sources and flatten
+              // tableValues into the dense tableData. multi → legacy (N=2
+              // only): carry the two sources back and rebuild the sparse map.
+              const convertToMulti = () => {
+                const rowL = resolveKeyLabels(selected.rowKeySource, model);
+                const colL = resolveKeyLabels(selected.colKeySource, model);
+                const axes: LookupAxis[] = [
+                  { name: 'Rows', source: selected.rowKeySource ?? { kind: 'single' } },
+                  { name: 'Columns', source: selected.colKeySource ?? { kind: 'single' } },
+                ];
+                const tableData = Array.from(normalizeLookupTable(selected.tableValues, rowL, colL));
+                updateAttribute(selected.id, { axes, tableData });
+              };
+              const convertToLegacy = () => {
+                const r = resolveAxes(selected, model);
+                if (r.axes.length !== 2) return;
+                const [rowAx, colAx] = [r.axes[0]!, r.axes[1]!];
+                const data = selected.tableData ?? [];
+                const tv: Record<string, Record<string, number>> = {};
+                rowAx.labels.forEach((rl, i) => {
+                  const row: Record<string, number> = {};
+                  colAx.labels.forEach((cl, j) => {
+                    const v = data[i * colAx.dim + j];
+                    if (typeof v === 'number' && v !== 0) row[cl] = v;
+                  });
+                  tv[rl] = row;
+                });
+                updateAttribute(selected.id, {
+                  axes: undefined, tableData: undefined,
+                  rowKeySource: selected.axes?.[0]?.source, colKeySource: selected.axes?.[1]?.source,
+                  tableValues: tv,
+                });
+              };
+              return (
               <div className={styles.field}>
                 <label className={styles.fieldLabel}>Lookup Table</label>
-                <div style={{ display: 'flex', gap: 8, marginBottom: 6, alignItems: 'flex-start' }}>
-                  <KeySourceField label="Rows" value={selected.rowKeySource} model={model}
-                    onChange={src => updateAttribute(selected.id, { rowKeySource: src })} />
-                  <KeySourceField label="Columns" value={selected.colKeySource} model={model}
-                    onChange={src => updateAttribute(selected.id, { colKeySource: src })} />
+                <div className={styles.field}>
+                  <label className={styles.fieldLabel}>Axes mode</label>
+                  <select
+                    className={styles.selectInput}
+                    value={isMulti ? 'multi' : 'legacy'}
+                    onChange={e => {
+                      if (e.target.value === 'multi' && !isMulti) convertToMulti();
+                      else if (e.target.value === 'legacy' && isMulti) convertToLegacy();
+                    }}
+                    title={isMulti && (selected.axes?.length ?? 0) !== 2
+                      ? 'Switching back to rows × columns needs exactly 2 axes'
+                      : 'Rows × columns (classic), or up to 6 positional axes (N-D rule tables — e.g. state × face/edge/corner neighbour counts)'}
+                  >
+                    <option value="legacy">Rows × columns (2-axis)</option>
+                    <option value="multi">Multi-axis (up to {MAX_LOOKUP_AXES})</option>
+                  </select>
                 </div>
+                {isMulti ? (
+                  <LookupAxesEditor attr={selected} model={model}
+                    onUpdate={changes => updateAttribute(selected.id, changes)} />
+                ) : (
+                  <div style={{ display: 'flex', gap: 8, marginBottom: 6, alignItems: 'flex-start' }}>
+                    <KeySourceField label="Rows" value={selected.rowKeySource} model={model}
+                      onChange={src => updateAttribute(selected.id, { rowKeySource: src })} />
+                    <KeySourceField label="Columns" value={selected.colKeySource} model={model}
+                      onChange={src => updateAttribute(selected.id, { colKeySource: src })} />
+                  </div>
+                )}
                 {/* Value type of the table cells (Decimal by default). bool/integer/
                     float/tag are stored as one number → no compiler change. Each
                     dropdown gets its own stacked field (like the attribute Type
@@ -517,10 +649,12 @@ export function AttributesPanelContent({ mode = 'list' }: PanelContentProps = {}
                   rowLabels={resolveKeyLabels(selected.rowKeySource, model)}
                   colLabels={resolveKeyLabels(selected.colKeySource, model)}
                   valueTagOptions={resolveValueTagOptions(selected, model)}
+                  axesResolved={isMulti ? resolveAxes(selected, model) : undefined}
                   onChange={changes => updateAttribute(selected.id, changes)}
                 />
               </div>
-            )}
+              );
+            })()}
             {selected.type !== 'lookupTable' && (<>
             <div className={styles.field}>
               <label className={styles.fieldLabel}>Default Value</label>
