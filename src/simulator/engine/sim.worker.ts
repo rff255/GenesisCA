@@ -5473,10 +5473,22 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
     }
 
     case 'setRngSeed': {
-      // DEV/test-only: force the shared xorshift32 seed so a JS-target run and a
-      // WASM-target run advance the identical stream (the PR6b-2 bit-parity test).
-      // Harmless in production (never sent by the app).
+      // Supported message (the Overseer's "Set Random Seed" / seed policy +
+      // the PR6b-2 bit-parity test): force the shared xorshift32 seed so a
+      // run is reproducible.
       rngState[0] = ((msg as { seed?: number }).seed ?? 0x12345678) >>> 0 || 0x12345678;
+      // The WASM step/init read the RNG from the in-memory cell (a view synced
+      // from rngState[0] only at initGrid) — write it too, or seeding is a
+      // silent no-op on the WASM target (the bug the Overseer E2E caught:
+      // an identical seed policy gave different WASM replicate statistics).
+      if (wasmMemory && wasmLayout) {
+        new Uint32Array(wasmMemory.buffer, wasmLayout.rngStateOffset, 1)[0] = rngState[0]!;
+      }
+      // WebGPU: re-derive the per-cell PCG streams from the new global seed
+      // (statistical reproducibility — the documented per-target RNG stance).
+      if (useWebGPU && webgpuRuntime?.stepReady) {
+        seedRngState(webgpuRuntime, rngState[0]!);
+      }
       break;
     }
 
