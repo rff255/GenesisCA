@@ -622,6 +622,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   // Scalar (standalone/linked-total) → number; linked-frequency → Record<cat,number>;
   // spatial (xAxis rows/columns) → Record<seriesKey, number[]> (per-position-bin
   // series). IndicatorDisplay branches on the indicator's xAxis to render.
+  const sieActiveRef = useRef<number | null>(null);
   const indicatorValuesRef = useRef<Record<string, number | Record<string, number> | Record<string, number[]>>>({});
   // For scalar indicators: number[] of samples over time.
   // For linked-frequency indicators: Record<category, number[]> so each category
@@ -2590,6 +2591,11 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       // radius / alive / colours) for drawAgents + nearest-agent picking. Sent
       // every frame for an agent model; absent for a lattice-only model.
       if (msg.agents !== undefined) agentsRef.current = msg.agents as AgentRenderSnapshot | null;
+      // "Skip Isolated Empty Cells" observability: the worker's live active-cell
+      // count (-1 = configured on but NOT engaged → the full loop is running;
+      // undefined = feature off). Rendered in the stats overlay; re-renders ride
+      // the existing per-stepped setGeneration.
+      sieActiveRef.current = (msg.sieActive as number | undefined) ?? null;
       // Glyph overlay buffers — undefined when the model has no setCellGlyph
       // OR when every cell's glyph code is 0 this frame. Clearing to null in
       // the latter case lets the overlay skip the loop entirely (no need to
@@ -7499,6 +7505,18 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
           <span>{gridWidth.current || simWidth}&times;{gridHeight.current || simHeight}</span>
           <span>{actualFps} FPS</span>
           <span>{actualGps} g/s</span>
+          {sieActiveRef.current !== null && (
+            sieActiveRef.current >= 0 ? (
+              <span title="Skip Isolated Empty Cells — cells processed per generation (active) out of the whole grid">
+                {'◩'} {sieActiveRef.current.toLocaleString()} active
+                {(() => { const t = (gridWidth.current || simWidth) * (gridHeight.current || simHeight) * (gridDepth.current || 1); return t > 0 ? ` (${((100 * sieActiveRef.current) / t).toFixed(1)}%)` : ''; })()}
+              </span>
+            ) : (
+              <span style={{ color: '#e0a050' }} title="Skip Isolated Empty Cells is enabled but NOT engaged (unsupported combination or incomplete config) — the full grid is being processed.">
+                {'◩'} skip-empty inactive
+              </span>
+            )
+          )}
           <HoverCoordsChip />
           {recording && <span style={{ color: '#e05050' }}>{'\u23FA'} REC {recordFrameCount}f</span>}
           {isAgentModel && agentsRef.current && <span title="Live agents">{'\u25CF'} {agentsRef.current.liveCount} agents</span>}
