@@ -384,6 +384,11 @@ export function detectMissingConfig(
         issues.push('Select a model attribute');
       }
       break;
+    case 'ovRandomizeTable':
+      if (!model.attributes.some(a => a.isModelAttribute && a.type === 'lookupTable' && a.id === config.tableId)) {
+        issues.push('Select a Lookup Table');
+      }
+      break;
     case 'ovLoadPreset':
       if (!(model.presets ?? []).some(p => p.id === config.presetId)) {
         issues.push('Select a preset');

@@ -7,7 +7,7 @@ import { CURRENT_VIEWER_SENTINEL } from '../modeler/vpl/nodes/SetCellLooksNode';
 import { compileGraphWasm } from '../modeler/vpl/compiler/wasm/compile';
 import { computeLayoutFromModel, buildViewerIds } from '../modeler/vpl/compiler/wasm/layout';
 import { unpackNI, unpackNI3, INVALID_NI } from '../modeler/vpl/compiler/niCodec';
-import { resolveKeyLabels, resolveValueTagOptions, buildLookupTablePayload, isMultiAxisTable, resolveAxes } from '../modeler/vpl/compiler/variegation';
+import { resolveKeyLabels, resolveValueTagOptions, buildLookupTablePayload, isMultiAxisTable, resolveAxes, randomFillTableData } from '../modeler/vpl/compiler/variegation';
 import { NeighborIndexValuePicker } from '../modeler/panels/NeighborIndexDefaultEditor';
 import { LookupTableEditor } from '../modeler/panels/LookupTableEditor';
 import { compileGraphWebGPU } from '../modeler/vpl/compiler/webgpu/compile';
@@ -1020,6 +1020,36 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       getActiveViewer: () => activeViewerRef.current,
       evalEndConditions: (gen, ind) => evalEndConditions(gen, ind),
       setModelAttr: (attrId, value) => handleModelAttrChange(attrId, value),
+      randomizeTable: (tableId, seed, density) => {
+        const attr = model.attributes.find(a => a.id === tableId && a.isModelAttribute && a.type === 'lookupTable');
+        if (!attr) return;
+        // Value policy mirrors the editor's Randomize: tag → uniform over the
+        // non-zero tag options, bool → 1, integer/float → 1 / uniform(0,1).
+        const valueType = attr.valueType ?? 'float';
+        const valueCount = valueType === 'tag'
+          ? Math.max(1, resolveValueTagOptions(attr, model).length - 1)
+          : 1;
+        if (isMultiAxisTable(attr)) {
+          const r = resolveAxes(attr, model);
+          const data = randomFillTableData(r.total, seed, density, { valueType, valueCount });
+          // Runtime-only (like a slider): post to the worker, do NOT updateAttribute.
+          workerRef.current?.postMessage({
+            type: 'updateLookupTable', attrId: tableId,
+            rowLabels: [], colLabels: [], values: {}, dims: r.dims, data,
+          });
+        } else {
+          const rowLabels = resolveKeyLabels(attr.rowKeySource, model);
+          const colLabels = resolveKeyLabels(attr.colKeySource, model);
+          const flat = randomFillTableData(rowLabels.length * colLabels.length, seed, density, { valueType, valueCount });
+          const values: Record<string, Record<string, number>> = {};
+          rowLabels.forEach((rl, i) => {
+            const row: Record<string, number> = {};
+            colLabels.forEach((cl, j) => { const v = flat[i * colLabels.length + j]!; if (v !== 0) row[cl] = v; });
+            values[rl] = row;
+          });
+          workerRef.current?.postMessage({ type: 'updateLookupTable', attrId: tableId, rowLabels, colLabels, values });
+        }
+      },
       loadPresetLive: (presetId: string) => {
         const p = (model.presets ?? []).find(x => x.id === presetId);
         if (!p) return 'not-found' as const;

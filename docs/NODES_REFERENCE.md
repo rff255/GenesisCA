@@ -4,19 +4,20 @@ This document catalogues every node in the GenesisCA Visual Programming Language
 describes the port type system, and flags redundancies or gaps. It is a working reference
 to inform future consolidation — it does **not** describe any committed refactoring.
 
-**Scope:** 140 registry node types across 7 categories (event, flow, data, logic, aggregation,
+**Scope:** 141 registry node types across 7 categories (event, flow, data, logic, aggregation,
 output, color) — 3 hidden from the Add Node menu (`macro` / `macroInput` / `macroOutput`),
-leaving **137 selectable** (Agent Capability Profiles added **Get Age** [Lifespan] + the two
+leaving **138 selectable** (Agent Capability Profiles added **Get Age** [Lifespan] + the two
 Sensing nodes **Get Agents In View** [the directional vision cone] + **Sense Hemifield** [the
-Braitenberg L/R split of that cone]; the **Overseer** milestone added the **19
-experiment-orchestration nodes** — see the dedicated section at the end of this document).
+Braitenberg L/R split of that cone]; the **Overseer** milestone added the **20
+experiment-orchestration nodes** [incl. **Randomize Table** — re-roll a Lookup Table's values
+from a seed for rule-space search] — see the dedicated section at the end of this document).
 Indicator
 nodes live within the `data` (readers) and `output` (writers) categories rather than a
 category of their own. The variegated-cells, local-variable, and Bond-Graph-Agent nodes
 appear in the editor only when their respective model feature is enabled (the 45 agent
 nodes — §3.8 — only in a Bond-Graph-Agents model, and only on its Agents sub-tab, and each
 further gated to its **Agent Capability** so a paradigm shows only its relevant nodes; the
-19 Overseer nodes only in a model with the Overseer enabled, and only on its Overseer
+20 Overseer nodes only in a model with the Overseer enabled, and only on its Overseer
 sub-tab).
 
 **Composite value types (`vector` / `color`):** Make Vector / Break Vector / Vector
@@ -773,7 +774,7 @@ Hidden-from-menu: `macro`, `macroInput`, `macroOutput`. Macro instances
 The **Overseer** milestone added a third graph — the experiment protocol AROUND the
 simulation — with its own node family, gated by `requirements.overseer` (visible ONLY in a
 model with the Overseer enabled, and only on its Overseer sub-tab). These nodes are kept in
-their own table (numbered O1-O19) rather than renumbering the main catalogue. The Overseer
+their own table (numbered O1-O20) rather than renumbering the main catalogue. The Overseer
 is NOT a compile target: the graph compiles to an async main-thread DRIVER
 (`compiler/overseer/compile.ts`) that commands the sim worker through the existing message
 protocol, so the CA keeps running on JS / WASM / WebGPU. Universal value/flow plumbing
@@ -790,6 +791,7 @@ every per-cell / per-agent node is excluded.
 | O4 | `ovRunUntilStop` | Run Until Stop | Run until a Stop Event / End Condition / the cap. | `I: Max Gens`; `O: At Generation`, `O: Stopped By` (0=cap, 1=stop event, 2=end condition) |
 | O5 | `ovSetSeed` | Set Random Seed | Seed the simulation RNG (+ the experiment RNG) — reproducible runs. | `I: Seed` (int, inline) |
 | O6 | `ovSetModelAttribute` | Set Model Attribute | Runtime-only model-attribute write (slider semantics; never edits the model). | `I: Value`; config `attributeId` |
+| O20 | `ovRandomizeTable` | Randomize Table | Runtime-only re-roll of a Lookup Table's values from a seed at a chosen density (same deterministic fill as the editor's Randomize block; never edits the model). The rule-space-search primitive — the journal records each {seed, density}. | `I: Seed` (int, inline), `I: Density` (float, inline); config `tableId` |
 | O7 | `ovLoadPreset` | Load Preset | Apply a model preset (live-apply only; a preset that would resize the grid is journal-logged + skipped). | config `presetId` |
 | O8 | `ovReadIndicator` | Read Indicator | Latest indicator value (frequency indicators: pick the category). Spatial indicators excluded. | `O: Value`; config `indicatorId`, `category` |
 | O9 | `ovGetGeneration` | Get Generation | The current generation. | `O: Generation` |

@@ -126,6 +126,7 @@ import { OvRunGenerationsNode } from './OvRunGenerationsNode';
 import { OvRunUntilStopNode } from './OvRunUntilStopNode';
 import { OvSetSeedNode } from './OvSetSeedNode';
 import { OvSetModelAttributeNode } from './OvSetModelAttributeNode';
+import { OvRandomizeTableNode } from './OvRandomizeTableNode';
 import { OvLoadPresetNode } from './OvLoadPresetNode';
 import { OvReadIndicatorNode } from './OvReadIndicatorNode';
 import { OvGetGenerationNode } from './OvGetGenerationNode';
@@ -154,6 +155,7 @@ const ALL_NODES: NodeTypeDef[] = [
   OvRunUntilStopNode,
   OvSetSeedNode,
   OvSetModelAttributeNode,
+  OvRandomizeTableNode,
   OvLoadPresetNode,
   OvReadIndicatorNode,
   OvGetGenerationNode,
