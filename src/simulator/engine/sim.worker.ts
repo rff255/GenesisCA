@@ -539,6 +539,99 @@ let activeSet: ActiveSet | null = null;
 // or lookup table changed (both are legitimate Output-Mapping inputs, so
 // inactive cells' colours may need recomputing). Cleared once a full pass runs.
 let sieColorDirtyAll = false;
+// --- Sparse incremental linked indicators (the 300^3 fix) -------------------
+// The per-gen full-grid indicator scan (computeLinkedIndicatorsFromBuffer) costs
+// ~775 ms/gen at 27M cells — it DWARFS the sparse step itself (~5 ms). When the
+// sparse invariant holds (inactive cells NEVER change), linked frequency/total
+// aggregates can be maintained INCREMENTALLY from the same O(active) diff loop
+// that maintains the active set: on each active cell whose value changed,
+// freq[old]--, freq[new]++ (or total += new - old). Exact per-generation values
+// at O(active) cost — works at any Gens/Frame setting.
+// Eligible when EVERY linked def is: a plain cell attr (not model attr, not
+// sub-attribute), non-spatial, and 'total' OR 'frequency' over bool/tag/integer
+// (float-frequency bins depend on the global min/max — genuinely non-incremental).
+// Ineligible → the classic per-gen scan (correct, slow) + batch-end deferral.
+let sieIncrementalActive = false;
+let sieLinkedBaselineValid = false;
+const sieLinkedFreq = new Map<string, Map<number, number>>();   // defId → rawValue → count
+const sieLinkedTotal = new Map<string, number>();               // defId → running sum
+// Batch-end deferral for the NON-incremental scan: with no 'accumulated' linked
+// indicator, per-gen values are never observed (the stepped message + end
+// conditions + the Overseer all read once per batch) — so the batch loops defer
+// the O(total) scan to the batch tail. `indicatorScanPending` marks a deferral.
+let linkedHasAccumulated = false;
+let indicatorScanPending = false;
+
+function sieIncrementalEligible(def: { attrId?: string; attrType?: string; aggregation?: string; isSubAttribute?: boolean; xAxis?: string; watched?: boolean }): boolean {
+  if (def.xAxis === 'rows' || def.xAxis === 'columns' || def.xAxis === 'layers') return false;
+  if (def.isSubAttribute) return false;
+  if (!def.attrId || !cellAttrs.some(a => a.id === def.attrId)) return false;  // model attrs → scan
+  if (def.aggregation === 'total') return true;
+  if (def.aggregation === 'frequency') return def.attrType === 'bool' || def.attrType === 'tag' || def.attrType === 'integer';
+  return false;
+}
+
+/** (Re)decide whether the incremental path applies — call whenever linkedDefs
+ *  OR the active set changes (initIndicators / updateIndicators / setupActiveSet). */
+function recomputeSieIncremental(): void {
+  sieIncrementalActive = sieParamsPresent && activeSet !== null
+    && linkedDefs.length > 0 && linkedDefs.every(sieIncrementalEligible);
+  if (!sieIncrementalActive) sieLinkedBaselineValid = false;
+}
+
+/** One O(total) recount per def — the incremental baseline. Called after every
+ *  active-set rebuild (init / reset / recompile / loadState / paint mutations),
+ *  i.e. exactly when grid content changes OUTSIDE the step. */
+function recountSieLinkedBaseline(): void {
+  sieLinkedFreq.clear();
+  sieLinkedTotal.clear();
+  if (!sieIncrementalActive) { sieLinkedBaselineValid = false; return; }
+  for (const def of linkedDefs) {
+    const arr = readAttrs[def.attrId ?? ''] as unknown as { [i: number]: number } | undefined;
+    if (!arr) { sieLinkedBaselineValid = false; return; }
+    if (def.aggregation === 'total') {
+      let sum = 0;
+      for (let i = 0; i < total; i++) sum += arr[i] ?? 0;
+      sieLinkedTotal.set(def.id, sum);
+    } else {
+      const m = new Map<number, number>();
+      for (let i = 0; i < total; i++) { const v = arr[i] ?? 0; m.set(v, (m.get(v) ?? 0) + 1); }
+      sieLinkedFreq.set(def.id, m);
+    }
+  }
+  sieLinkedBaselineValid = true;
+}
+
+/** Produce `linkedResults` from the incrementally-maintained aggregates —
+ *  byte-identical shape to computeLinkedIndicatorsFromBuffer's for the eligible
+ *  def kinds (tag: all options pre-seeded 0, unknown indices dropped; bool:
+ *  true/false; integer: present values only; total: the sum). O(#distinct values). */
+function emitSieLinkedResults(): void {
+  for (const def of linkedDefs) {
+    if (!def.watched) continue;
+    if (def.aggregation === 'total') {
+      linkedResults[def.id] = sieLinkedTotal.get(def.id) ?? 0;
+      continue;
+    }
+    const m = sieLinkedFreq.get(def.id);
+    if (!m) continue;
+    if (def.attrType === 'bool') {
+      const t = m.get(1) ?? 0;
+      let counted = 0; for (const c of m.values()) counted += c;
+      linkedResults[def.id] = { 'true': t, 'false': counted - t };
+    } else if (def.attrType === 'tag') {
+      const opts = def.tagOptions || [];
+      const freq: Record<string, number> = {};
+      for (const name of opts) freq[name] = 0;
+      for (const [v, c] of m) { const name = opts[v]; if (name !== undefined && c !== 0) freq[name] = c; }
+      linkedResults[def.id] = freq;
+    } else {
+      const freq: Record<string, number> = {};
+      for (const [v, c] of m) { if (c !== 0) freq[String(v)] = c; }
+      linkedResults[def.id] = freq;
+    }
+  }
+}
 /** Agents-only optimisation: with the CA grid OFF the colours buffer is static
  *  (no cell step / colour pass ever rewrites it), so `sendColors` ships it only
  *  while dirty instead of copying+transferring WÃƒâ€šÃ‚Â·HÃƒâ€šÃ‚Â·DÃƒâ€šÃ‚Â·4 bytes EVERY step (576 MB
@@ -2968,7 +3061,13 @@ function applySubAttributeAsyncScrub(): void {
   }
 }
 
-function runStep(): void {
+/** `deferIndicatorScan` — set by the step-batch loops: with no 'accumulated'
+ *  linked indicator (and no incremental path), the O(total) indicator scan can
+ *  run ONCE at the batch tail instead of per generation (per-gen values are
+ *  never observed: the stepped message, end conditions, and the Overseer all
+ *  read once per batch). runStep marks `indicatorScanPending`; the batch loop
+ *  finalizes after the loop (covers early stop-event breaks too). */
+function runStep(deferIndicatorScan: boolean = false): void {
   // Agents-only defence: the batch loops already gate on gridCellsEnabled, but
   // mutation-handler tails (`else if (stepFn) runStep()`) can still reach here ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â
   // an empty cell step over a huge agent world would be a multi-second stall.
@@ -3087,11 +3186,37 @@ function runStep(): void {
     const wArr = writeAttrs[sieEmptyAttrId] as unknown as { [i: number]: number } | undefined;
     if (rArr && wArr) {
       const ev = as.emptyVal, n = as.count, list = as.list;
+      // Incremental linked indicators: gather each def's r/w views once, then
+      // update the aggregates from the SAME O(active) pass (only active cells
+      // can change — the sparse invariant that makes this exact).
+      const incr = sieIncrementalActive && sieLinkedBaselineValid;
+      const incrDefs: Array<{ r: { [i: number]: number }; w: { [i: number]: number }; m: Map<number, number> | null; totalId: string | null }> = [];
+      if (incr) {
+        for (const def of linkedDefs) {
+          const r = readAttrs[def.attrId ?? ''] as unknown as { [i: number]: number } | undefined;
+          const wv = writeAttrs[def.attrId ?? ''] as unknown as { [i: number]: number } | undefined;
+          if (!r || !wv) { sieLinkedBaselineValid = false; break; }
+          incrDefs.push(def.aggregation === 'total'
+            ? { r, w: wv, m: null, totalId: def.id }
+            : { r, w: wv, m: sieLinkedFreq.get(def.id) ?? null, totalId: null });
+        }
+      }
+      const doIncr = incr && sieLinkedBaselineValid;
       for (let i = 0; i < n; i++) {
         const idx = list[i]!;
         const wasEmpty = rArr[idx] === ev;
         const isEmptyNow = wArr[idx] === ev;
         if (wasEmpty !== isEmptyNow) applyTransition(as, idx, wasEmpty, isEmptyNow);
+        if (doIncr) {
+          for (let d = 0; d < incrDefs.length; d++) {
+            const e = incrDefs[d]!;
+            const o = e.r[idx] ?? 0, nv = e.w[idx] ?? 0;
+            if (o !== nv) {
+              if (e.m) { e.m.set(o, (e.m.get(o) ?? 0) - 1); e.m.set(nv, (e.m.get(nv) ?? 0) + 1); }
+              else if (e.totalId !== null) sieLinkedTotal.set(e.totalId, (sieLinkedTotal.get(e.totalId) ?? 0) + nv - o);
+            }
+          }
+        }
       }
       if (as.staleCount > (as.count >> 2) + 64) {
         // Compaction removes just-emptied cells from the list BEFORE the batch
@@ -3138,11 +3263,22 @@ function runStep(): void {
   // "Skip Isolated Empty Cells" (sieParamsPresent): the sparse JS step also omits
   // the embedded linked aggregation (it would only see ACTIVE cells) — the full
   // grid scan below aggregates ALL cells, matching the non-sparse embed.
-  if ((callWasm || sieParamsPresent) && linkedDefs.length > 0) computeLinkedIndicatorsFromBuffer();
+  const sieIncrReady = sieIncrementalActive && sieLinkedBaselineValid;
+  // Defer only when the WORKER owns the scan (WASM target / sparse JS): the
+  // plain JS target embeds the aggregation in the compiled loop, so deferring
+  // there would just add a redundant batch-tail scan on top of the embed.
+  const deferScan = deferIndicatorScan && !linkedHasAccumulated && !sieIncrReady
+    && (callWasm || sieParamsPresent) && linkedDefs.length > 0;
+  if (deferScan) {
+    indicatorScanPending = true;   // batch tail runs the scan + spatial once
+  } else if ((callWasm || sieParamsPresent) && linkedDefs.length > 0) {
+    if (sieIncrReady) emitSieLinkedResults();
+    else computeLinkedIndicatorsFromBuffer();
+  }
 
   // Handle linked indicator accumulation (skip when no linked indicators).
   // Runs AFTER the compute above so it accumulates the new generation's values.
-  for (let _li = 0; _li < linkedDefs.length; _li++) {
+  for (let _li = 0; _li < (deferScan ? 0 : linkedDefs.length); _li++) {
     const def = linkedDefs[_li]!;
     // Spatial indicators are always a live per-step snapshot ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â never
     // accumulated (their value is Record<key, number[]>, which the accumulate
@@ -3172,7 +3308,7 @@ function runStep(): void {
   // a later getState reads, so the verification parity check holds. Independent
   // of the generation-axis linked path; written here (after accumulation) so it
   // is always a fresh per-step snapshot.
-  if (hasSpatialIndicators) computeSpatialIndicators();
+  if (hasSpatialIndicators && !deferScan) computeSpatialIndicators();
   generation++;
 }
 
@@ -3947,6 +4083,9 @@ function rebuildActiveSetFromGrid(): void {
   if (!activeSet) return;
   const attr = readAttrs[sieEmptyAttrId];
   if (attr) rebuildActiveSet(activeSet, attr as unknown as { [i: number]: number });
+  // The grid content changed outside the step — re-baseline the incremental
+  // linked-indicator aggregates from the same source of truth.
+  if (sieIncrementalActive) recountSieLinkedBaseline();
 }
 
 /** Run the Output Mapping color pass for the active viewer (if available).
@@ -4054,6 +4193,11 @@ function initIndicators(defs: IndicatorDef[]): void {
       if (ind.xAxis === 'rows' || ind.xAxis === 'columns' || ind.xAxis === 'layers') hasSpatialIndicators = true;
     }
   }
+  // Sparse incremental / batch-deferred indicator plumbing (defs changed).
+  linkedHasAccumulated = linkedDefs.some(d =>
+    d.accumulationMode === 'accumulated'
+    && !(d.xAxis === 'rows' || d.xAxis === 'columns' || d.xAxis === 'layers'));
+  recomputeSieIncremental();
 }
 
 function resetIndicators(): void {
@@ -4409,6 +4553,10 @@ function sendColors(): void {
   // Bond-Graph Agents ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â attach a render snapshot (copies of the live region)
   // so the entity renderer + nearest-agent picker have current positions every
   // frame. Cheap (maxAgents is small); copies, so the engine keeps its SoA.
+  // "Skip Isolated Empty Cells" observability: the live active-cell count
+  // (-1 = the feature is configured on but not engaged — invalid config /
+  // excluded combination — so the full loop is running). Undefined when off.
+  const sieActive = sieParamsPresent ? (activeSet ? activeSet.count : -1) : undefined;
   let agentsPayload: ReturnType<typeof snapshotAgentsForRender> | undefined;
   const agentTransfers: ArrayBuffer[] = [];
   if (agentStore && agentStore.highWater > 0) {
@@ -4442,11 +4590,11 @@ function sendColors(): void {
   if (webgpuRuntime?.directRender && !recording) {
     if (glyphsPayload) {
       self.postMessage(
-        { type: 'stepped', generation, indicators, reqId: ackId, glyphCodes: glyphsPayload.codes, glyphColors: glyphsPayload.colors, agents: agentsPayload },
+        { type: 'stepped', generation, indicators, sieActive, reqId: ackId, glyphCodes: glyphsPayload.codes, glyphColors: glyphsPayload.colors, agents: agentsPayload },
         { transfer: [glyphsPayload.codes.buffer, glyphsPayload.colors.buffer, ...agentTransfers] },
       );
     } else {
-      self.postMessage({ type: 'stepped', generation, indicators, reqId: ackId, agents: agentsPayload }, { transfer: agentTransfers });
+      self.postMessage({ type: 'stepped', generation, indicators, sieActive, reqId: ackId, agents: agentsPayload }, { transfer: agentTransfers });
     }
     postInspectCellsData();
     return;
@@ -4457,7 +4605,7 @@ function sendColors(): void {
   // the WebGPU direct-render branch above). At agent-world scales this is the
   // difference between a usable sim and copying WÃƒâ€šÃ‚Â·HÃƒâ€šÃ‚Â·DÃƒâ€šÃ‚Â·4 bytes every step.
   if (!gridCellsEnabled && (!colorsDirty || colors.length === 0)) {
-    self.postMessage({ type: 'stepped', generation, indicators, reqId: ackId, agents: agentsPayload }, { transfer: agentTransfers });
+    self.postMessage({ type: 'stepped', generation, indicators, sieActive, reqId: ackId, agents: agentsPayload }, { transfer: agentTransfers });
     postInspectCellsData();
     return;
   }
@@ -4465,12 +4613,12 @@ function sendColors(): void {
   colorsDirty = false;
   if (glyphsPayload) {
     self.postMessage(
-      { type: 'stepped', generation, colors: copy, indicators, reqId: ackId, glyphCodes: glyphsPayload.codes, glyphColors: glyphsPayload.colors, agents: agentsPayload },
+      { type: 'stepped', generation, colors: copy, indicators, sieActive, reqId: ackId, glyphCodes: glyphsPayload.codes, glyphColors: glyphsPayload.colors, agents: agentsPayload },
       { transfer: [copy.buffer, glyphsPayload.codes.buffer, glyphsPayload.colors.buffer, ...agentTransfers] },
     );
   } else {
     self.postMessage(
-      { type: 'stepped', generation, colors: copy, indicators, reqId: ackId, agents: agentsPayload },
+      { type: 'stepped', generation, colors: copy, indicators, sieActive, reqId: ackId, agents: agentsPayload },
       { transfer: [copy.buffer, ...agentTransfers] },
     );
   }
@@ -4806,7 +4954,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
             // Agent Stop Event ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â CAPTURE before the cell step (runStep resets the
             // shared flag), SURFACE after generation++.
             const agentStopIdx = (agentStore && simulateAgents) ? drainAgentStop() : 0;
-            if (stepFn && simulateCells && gridCellsEnabled) runStep();
+            if (stepFn && simulateCells && gridCellsEnabled) runStep(true);
             // agents-only / frozen grid: the agent step IS the generation.
             else if (simulateAgents) generation++;
             if (agentStopIdx !== 0) { stoppedByEvent = stopMessages[agentStopIdx - 1] ?? `Stop event #${agentStopIdx - 1}`; stopFlag[0] = 0; break; }
@@ -4817,6 +4965,15 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
               stopFlag[0] = 0;
               break;
             }
+          }
+          // Deferred indicator scan (see runStep's deferIndicatorScan): one O(total)
+          // scan at the batch tail instead of per generation — runs on the FINAL
+          // post-batch state, identical to what per-gen scanning would have
+          // shipped (only the last gen's values are ever observed).
+          if (indicatorScanPending) {
+            if (linkedDefs.length > 0) computeLinkedIndicatorsFromBuffer();
+            if (hasSpatialIndicators) computeSpatialIndicators();
+            indicatorScanPending = false;
           }
           // Post-step-batch colour pass: sparse-safe ("Skip Isolated Empty Cells") —
           // only steps ran since the last pass, so inactive cells' colours are
@@ -4847,7 +5004,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
         // shared flag at its top, which would clobber it), but SURFACE it after
         // generation++ so the paused generation matches the cell-stop semantics.
         const agentStopIdx = (agentStore && simulateAgents) ? drainAgentStop() : 0;
-        if (stepFn && simulateCells && gridCellsEnabled) runStep();
+        if (stepFn && simulateCells && gridCellsEnabled) runStep(true);
         // generation++ lives inside the CELL step ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â when the cell step didn't
         // run (agents-only model, or the Layers panel froze the grid) an agent
         // step still IS a generation, or the counter sits at 0 forever.
@@ -4861,10 +5018,18 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
           break;
         }
       }
+      // Deferred indicator scan (see runStep's deferIndicatorScan): one O(total)
+      // scan at the batch tail instead of per generation — runs on the FINAL
+      // post-batch state, identical to what per-gen scanning would have shipped.
+      if (indicatorScanPending) {
+        if (linkedDefs.length > 0) computeLinkedIndicatorsFromBuffer();
+        if (hasSpatialIndicators) computeSpatialIndicators();
+        indicatorScanPending = false;
+      }
       // Post-step-batch colour pass: sparse-safe ("Skip Isolated Empty Cells") —
-          // only steps ran since the last pass, so inactive cells' colours are
-          // provably unchanged. Every other runColorPass call site stays FULL.
-          if (stepFn && gridCellsEnabled && !msg.skipColorPass) runColorPass(true);
+      // only steps ran since the last pass, so inactive cells' colours are
+      // provably unchanged. Every other runColorPass call site stays FULL.
+      if (stepFn && gridCellsEnabled && !msg.skipColorPass) runColorPass(true);
       sendColors();
       if (stoppedByEvent !== null) {
         self.postMessage({ type: 'stopEvent', message: stoppedByEvent, reqId: msg.reqId });
@@ -5133,6 +5298,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       // the active-set params/args stay consistent with the just-recompiled step.
       sieConfig = (msg as RecompileMsg).skipIsolatedEmpty ?? null;
       setupActiveSet();
+      recomputeSieIncremental();
       rebuildActiveSetFromGrid();
       // Bond-Graph Agents: recompile the agent behaviour fn (graph-only edit, no
       // reinit). The store + populations persist (a maxAgents/maxBonds change
