@@ -1,6 +1,8 @@
 import type { NodeTypeDef } from '../types';
 import { StepNode } from './StepNode';
 import { InitEventNode } from './InitEventNode';
+import { GridInitEventNode } from './GridInitEventNode';
+import { SetCellAtPositionNode } from './SetCellAtPositionNode';
 import { BehaviourStepNode } from './BehaviourStepNode';
 import { GetSelfPositionNode } from './GetSelfPositionNode';
 import { GetSelfHandleNode } from './GetSelfHandleNode';
@@ -144,6 +146,9 @@ const ALL_NODES: NodeTypeDef[] = [
   // Event (entry points)
   StepNode,
   InitEventNode,
+  // Grid Init Event — the global, once-per-Reset counterpart to the per-cell
+  // Init Event (free-form seeding: loop + Set Cell (at Position)).
+  GridInitEventNode,
   InputColorNode,
   OutputMappingNode,
   StopEventNode,
@@ -280,6 +285,9 @@ const ALL_NODES: NodeTypeDef[] = [
   PickNRandomNeighborsNode,
   // Output
   SetAttributeNode,
+  // Set Cell (at Position) — absolute-position cell write; the Grid Init Event's
+  // seeding primitive (JS-only emit; runs once in the worker on every target).
+  SetCellAtPositionNode,
   UpdateAttributeNode,
   SetVariableNode,
   SetArrayElementNode,

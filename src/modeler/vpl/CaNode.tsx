@@ -1658,7 +1658,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
           </select>
         )}
 
-        {nodeData.nodeType === 'setAttribute' && (
+        {(nodeData.nodeType === 'setAttribute' || nodeData.nodeType === 'setCellAtPosition') && (
           <select
             className={styles.select}
             value={(nodeData.config.attributeId as string) || ''}
@@ -3316,7 +3316,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
         // ownAttrList == model.agentAttributes) — so ownAttrList resolves the right
         // attribute for every node type here, on both graphs.
         const setAttr = setAttrId ? ownAttrList.find(a => a.id === setAttrId) : undefined;
-        if (effectiveWidget && (nodeData.nodeType === 'setAttribute' || nodeData.nodeType === 'updateAttribute' || nodeData.nodeType === 'setNeighborhoodAttribute' || nodeData.nodeType === 'setNeighborAttributeByIndex' || nodeData.nodeType === 'setAgentAttribute' || nodeData.nodeType === 'setAgentsAttribute') && port.id === 'value') {
+        if (effectiveWidget && (nodeData.nodeType === 'setAttribute' || nodeData.nodeType === 'updateAttribute' || nodeData.nodeType === 'setNeighborhoodAttribute' || nodeData.nodeType === 'setNeighborAttributeByIndex' || nodeData.nodeType === 'setAgentAttribute' || nodeData.nodeType === 'setAgentsAttribute' || nodeData.nodeType === 'setCellAtPosition') && port.id === 'value') {
           const attr = setAttr;
           if (!attr) {
             effectiveWidget = undefined;

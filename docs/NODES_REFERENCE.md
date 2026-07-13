@@ -4,9 +4,10 @@ This document catalogues every node in the GenesisCA Visual Programming Language
 describes the port type system, and flags redundancies or gaps. It is a working reference
 to inform future consolidation — it does **not** describe any committed refactoring.
 
-**Scope:** 141 registry node types across 7 categories (event, flow, data, logic, aggregation,
+**Scope:** 143 registry node types across 7 categories (event, flow, data, logic, aggregation,
 output, color) — 3 hidden from the Add Node menu (`macro` / `macroInput` / `macroOutput`),
-leaving **138 selectable** (Agent Capability Profiles added **Get Age** [Lifespan] + the two
+leaving **140 selectable** (the **Grid Init Event** [`gridInit`] + **Set Cell (at Position)**
+[`setCellAtPosition`] added the global procedural-seeding pair; Agent Capability Profiles added **Get Age** [Lifespan] + the two
 Sensing nodes **Get Agents In View** [the directional vision cone] + **Sense Hemifield** [the
 Braitenberg L/R split of that cone]; the **Overseer** milestone added the **20
 experiment-orchestration nodes** [incl. **Randomize Table** — re-roll a Lookup Table's values
@@ -340,6 +341,8 @@ exists purely to keep graphs readable without Sequence nodes. See
 | 108 | `getSelfHandle` | Get Self Handle | `data` | The CURRENT agent's own handle (its id = the loop `idx`) — pass it to the by-id nodes (Get/Set Agent Attribute, Get Agent Position/Offset/Radius, Form/Break Bond) so a neighbour can reference back to me, or to compare a Get Nearby Agents id against self. | `O: Handle` (int) | Emits `idx`. Runs on all three agent targets (JS / WASM / WebGPU) |
 | 114 | `agentOutputMapping` | Agent Output Mapping (A→C) | `event` | The agent analogue of `outputMapping` — roots a per-agent colour / exhibition pass over an entry in `model.agentMappings` (Standalone graph). Runs after behaviour/division for the active agent viewer; ends in Set Cell Looks (colour) and/or Set Agent Sprite. | `O: DO` (flow) | Requires an agent `mappingId`. A Linked agent mapping synthesizes one automatically; a user root for a Linked id runs after the auto background (override-after-background). The colour pass is JS on every agent target |
 | 115 | `setAgentSprite` | Set Agent Sprite | `color` | Control the agent's sprite exhibition: independently-tickable facets — **Change sprite** (`spriteId`), **Set frame** (the `Frame` input — jump/reset), **Set speed** (the `Speed` input — frames per step, **negative = reverse**, 0 = hold). Tick only what you want to change. The per-agent state is persistent; the engine advances `frame += speed` each step; the render floors + wraps (loop) / clamps (once). | `I: DO` `I: Frame` (int, when Set frame) `I: Speed` (float, when Set speed) / `O: NEXT` (flow) | Writes the JS-engine display buffers `spriteIds`/`spriteFrames`/`spriteSpeeds` → no WASM/WebGPU emit (in an Output Mapping graph it's all-target-clean; in the Behaviour graph it clamps that behaviour to JS). Manage sprites in the Mappings panel → Sprites. 2D-billboard render |
+| 116 | `gridInit` | Grid Init Event | `event` | Runs ONCE GLOBALLY on Reset (+ first load) — the free-form counterpart to the per-cell Init Event, mirroring the Agent Init Event. Wire a Loop inside DO and write arbitrary cells with Set Cell (at Position) to seed the grid procedurally (a middle box, N random seeds, drawn shapes). | `O: DO` (flow), `O: width` `O: height` (int); 3D adds `O: depth` | Singleton. NO current cell — per-cell reads (Get Cell Attribute / Position) don't apply. Runs as a JS function in the worker on EVERY compile target (JS/WASM/WebGPU) after the per-cell Init Event. `depth` hidden in 2D. Lattice-only (hidden on the Agents graph) |
+| 117 | `setCellAtPosition` | Set Cell (at Position) | `output` | Write a value to a cell attribute at an ABSOLUTE grid position (bounds-checked; out-of-range skipped; coordinates truncate to int). The seeding primitive of the Grid Init Event; type-adaptive value widget like Set Attribute. | `I: DO` `I: X` `I: Y` (int, inline) `I: Value` (type-adaptive inline) `I: Z` (int, inline, 3D) / `O: NEXT` (flow) | For the Grid Init Event — breaks CA locality (writes an arbitrary cell), so NOT for the per-cell Step; use Set Attribute there. JS-only emit (the Grid Init runs in JS on every target). `Z` hidden in 2D. Lattice-only |
 
 ### Hidden / auto-generated
 

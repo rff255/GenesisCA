@@ -524,6 +524,29 @@ export function HelpView() {
             Trigger downstream initialization via its <code>DO</code> flow port.
           </p>
 
+          <h3 className={styles.h3}>Grid Init Event Node</h3>
+          <p className={styles.p}>
+            The <strong>Grid Init Event</strong> is the <em>global</em>, free-form counterpart
+            to the per-cell Init Event &mdash; it runs <strong>exactly once</strong> on Reset (and
+            first load), the same way the <em>Agent Init Event</em> runs once to spawn agents.
+            Because the per-cell Init Event runs for every cell, it can only answer &quot;should
+            <em> this</em> cell be seeded?&quot;; the Grid Init Event instead lets you <strong>loop
+            and write arbitrary cells</strong>, so you can express imperative seeding it can&apos;t
+            &mdash; place N random seeds, draw a line or shape, or seed a box in the middle.
+          </p>
+          <p className={styles.p}>
+            It outputs the grid dimensions &mdash; <code>width</code>, <code>height</code>, and
+            (in 3D) <code>depth</code> &mdash; so your seeding stays grid-size-independent (seed
+            the middle at <code>width/2</code>). Inside its <code>DO</code> chain, wire a
+            <strong> Loop</strong> (or nested Loops) and use the new <strong>Set Cell (at
+            Position)</strong> node to write a cell attribute at an absolute <code>X</code>,
+            <code>Y</code> (and <code>Z</code> in 3D) position (out-of-range positions are
+            skipped). A Local Variable makes a handy loop counter. It has <em>no current
+            cell</em>, so Get Cell Attribute / Get Cell Position don&apos;t apply here &mdash;
+            write with Set Cell (at Position). Singleton; runs on every compile target
+            (WebAssembly / WebGPU / JS).
+          </p>
+
           <h3 className={styles.h3}>Local Variables</h3>
           <p className={styles.p}>
             <strong>Local Variables</strong> are per-cell mutable scratch storage you
@@ -740,6 +763,7 @@ export function HelpView() {
             <tbody>
               <tr><td>Generation Step</td><td>Entry point for per-generation cell update logic. Connect &quot;DO&quot; to start the flow chain. Singleton.</td></tr>
               <tr><td>Init Event</td><td>Runs once per cell on simulator <strong>Reset</strong> (after defaults, before the first color pass; not on Load State). Outputs <code>x</code>, <code>y</code>, <code>maxX</code>, <code>maxY</code> (plus <code>z</code>, <code>maxZ</code> in 3D models). Singleton. Useful for procedural initial state (gradients, noise, random orientations).</td></tr>
+              <tr><td>Grid Init Event</td><td>Runs <strong>once globally</strong> on Reset (and first load) &mdash; the free-form counterpart to the per-cell Init Event. Loop inside <code>DO</code> and write arbitrary cells with <strong>Set Cell (at Position)</strong> to seed procedurally (random seeds, shapes, a middle box). Outputs <code>width</code>, <code>height</code> (plus <code>depth</code> in 3D). Singleton; no current cell.</td></tr>
               <tr><td>Input Mapping (C&rarr;A)</td><td>Entry point for Color-to-Attribute mapping (brush/image import). Outputs R, G, B values.</td></tr>
               <tr><td>Output Mapping (A&rarr;C)</td><td>Entry point for Attribute-to-Color visualization. Runs as a separate sequential pass after the Generation Step, ensuring colors reflect the final cell state. A mapping can instead be marked <strong>Linked</strong> in the Mappings panel (pick an attribute and the color pass is auto-generated &mdash; see &ldquo;Linked Output Mappings&rdquo; below); if you also add this node for a linked mapping, the auto pass runs first as a background and your graph overrides the cells it paints.</td></tr>
               <tr><td>Stop Event</td><td>Terminates the simulation run with a user-defined message when its DO flow input fires. Use for end conditions that need graph-level logic (complex spatial patterns, multi-attribute combinations). The text widget on the node body holds the message. First triggered stop in a step wins.</td></tr>
@@ -1600,13 +1624,14 @@ export function HelpView() {
           <p className={styles.p}>
             Enable it with <strong>Use Overseer</strong> in Model Properties &rarr;
             Execution. That reveals an <strong>Overseer</strong> tab in the Modeler&apos;s
-            graph strip and an <strong>Experiments</strong> panel in the Simulator&apos;s
-            right panel. With the checkbox off the feature is completely invisible.
+            graph strip and an <strong>Overseer Experiments</strong> tab in the
+            Simulator&apos;s right panel (alongside the Controls tab). With the checkbox
+            off the feature is completely invisible.
           </p>
           <h3 className={styles.h3}>Building an experiment</h3>
           <p className={styles.p}>
             Start from the <strong>Experiment</strong> node (the root &mdash; it runs when
-            you press <strong>Run Experiment</strong> in the Experiments panel) and chain
+            you press <strong>Run Experiment</strong> on the Overseer Experiments tab) and chain
             the protocol from its DO port using the familiar flow nodes (Loop, If/Then,
             For Each In Array, Switch, Sequence) plus the Overseer actions:
           </p>
@@ -1641,7 +1666,7 @@ export function HelpView() {
               Stop Experiment</strong> &mdash; journal lines (with {'{value}'} and {'{gen}'}
               placeholders), captures, and an early exit.</li>
           </ul>
-          <h3 className={styles.h3}>The Experiments panel</h3>
+          <h3 className={styles.h3}>The Overseer Experiments tab</h3>
           <p className={styles.p}>
             <strong>Run Experiment</strong> executes the graph (the transport is disabled
             while it runs; <strong>Abort</strong> stops it within one step batch). The

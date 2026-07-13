@@ -1,7 +1,11 @@
 /**
- * Experiments panel — the simulator UI for the Overseer (experiment
+ * Overseer Experiments panel — the simulator UI for the Overseer (experiment
  * orchestration) graph. Rendered ONLY when `model.overseerConfig?.enabled`
- * (with the feature off there is no trace of it in the simulator).
+ * (with the feature off there is no trace of it in the simulator). When enabled
+ * it lives on its own "Overseer Experiments" tab of the shared right panel
+ * (SimulatorView's `rightPanelTab`), alongside the "Controls" tab — so it fills
+ * the panel (root carries the `rightSectionIndicators` grow class) rather than
+ * stacking above the indicators.
  *
  * Pure view over the OverseerRuntime's Journal + Series stores (the parent
  * bumps `version` on every runtime update). Run/Abort + CSV/JSON export.
@@ -334,9 +338,9 @@ export function ExperimentsPanel(props: ExperimentsPanelProps) {
   const fname = (modelName || 'experiment').toLowerCase().replace(/\s+/g, '_').replace(/[^a-z0-9_]/g, '') || 'experiment';
 
   return (
-    <div className={styles.rightPanelSection} data-sim-overlay>
+    <div className={`${styles.rightPanelSection} ${styles.rightSectionIndicators}`} data-sim-overlay>
       <div className={styles.panelHeader}>
-        <span className={styles.panelTitle}>Experiments</span>
+        <span className={styles.panelTitle}>Overseer Experiments</span>
       </div>
       <div className={styles.rightPanelSectionBody} style={{ display: 'flex', flexDirection: 'column', gap: 6, fontSize: '0.7rem' }}>
         {!hasExperiment && !compileError && (
