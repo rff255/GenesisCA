@@ -23,7 +23,8 @@ import {
 import { decodeReductions, gpuHandledIds, gpuHandledAttrIds } from './webgpuReduce';
 import { encodeAttrValue } from '../../model/attrValueEncoding';
 import { subAttrInfo, parentValueToInt } from '../../modeler/vpl/compiler/subAttribute';
-import type { Attribute, CenterBasedConfig } from '../../model/types';
+import { buildActiveOffsets, createActiveSet, rebuildActiveSet, applyTransition, compactActiveSet, type ActiveSet } from './activeSet';
+import type { Attribute, CenterBasedConfig, SkipIsolatedEmptyConfig } from '../../model/types';
 import { cbNum, usesBondingPhysics, usesSoftCollision, usesPositionalCollision, usesEngineSprings, usesEngineGrowth } from '../../model/centerBased';
 import {
   createAgentStore, seedAgents, clearAgents, allocAgentSlot, initAgentSlot, freeAgentSlot, freeStagedSlot,
@@ -132,6 +133,9 @@ interface InitMsg {
   /** Optional GLOBAL Grid Init Event function source (NOT loop-wrapped). Runs
    *  once on Reset + first load, after the per-cell init, to seed the grid. */
   gridInitCode?: string;
+  /** "Skip Isolated Empty Cells" config (docs/PLAN_LARGE_GRID_PERF.md). Absent /
+   *  disabled → the worker maintains no active set + the step runs the full loop. */
+  skipIsolatedEmpty?: SkipIsolatedEmptyConfig;
   inputColorCodes: Array<{ mappingId: string; code: string }>;
   outputMappingCodes: Array<{ mappingId: string; code: string }>;
   /** Variegated Cells config. Undefined / absent ÃƒÂ¢Ã¢â‚¬Â¡Ã¢â‚¬â„¢ feature disabled, no
@@ -278,7 +282,7 @@ interface PaintManualMsg {
   activeViewer: string;
 }
 interface ResetMsg { type: 'reset'; activeViewer: string; reqId?: number }
-interface RecompileMsg { type: 'recompile'; stepCode: string; initCode?: string; gridInitCode?: string; inputColorCodes: Array<{ mappingId: string; code: string }>; outputMappingCodes: Array<{ mappingId: string; code: string }>; stopMessages?: string[]; updateMode: string; asyncScheme: string; wasmStepBytes?: Uint8Array; wasmStepError?: string; wasmExports?: string[]; viewerIds?: Record<string, number>; webgpuShaderCode?: string; webgpuShaderError?: string; webgpuEntryPoints?: WebGPUEntryPoints; webgpuLayout?: WebGPULayout; webgpuStopCheckInterval?: number; variegated?: VariegatedPayload; interactionTables?: InteractionTablePayload[]; agentBehaviourCode?: string; agentInitCode?: string; agentDivisionCode?: string; agentColorViewer?: string; agentOutputMappingCodes?: Array<{ mappingId: string; code: string }>; agentHasSprites?: boolean; centerBased?: CenterBasedConfig; agentUsesField?: boolean; agentTarget?: 'js' | 'wasm' | 'webgpu'; agentWasmBytes?: Uint8Array; agentWasmViewerGuardIds?: string[]; agentLayoutExtras?: AgentLayoutExtras; agentWebgpuBehaviourShader?: string; agentWebgpuForceShader?: string; agentWebgpuMaxAgents?: number; agentWebgpuMaxHashBins?: number; agentWebgpuLayout?: AgentWebGPULayout; agentWebgpuUsesI32Write?: boolean; agentWebgpuUsage?: { usesBondStore?: boolean; usesIndicators?: boolean; usesAux?: boolean; usesSpawn?: boolean; usesStop?: boolean } }
+interface RecompileMsg { type: 'recompile'; stepCode: string; initCode?: string; gridInitCode?: string; skipIsolatedEmpty?: SkipIsolatedEmptyConfig; inputColorCodes: Array<{ mappingId: string; code: string }>; outputMappingCodes: Array<{ mappingId: string; code: string }>; stopMessages?: string[]; updateMode: string; asyncScheme: string; wasmStepBytes?: Uint8Array; wasmStepError?: string; wasmExports?: string[]; viewerIds?: Record<string, number>; webgpuShaderCode?: string; webgpuShaderError?: string; webgpuEntryPoints?: WebGPUEntryPoints; webgpuLayout?: WebGPULayout; webgpuStopCheckInterval?: number; variegated?: VariegatedPayload; interactionTables?: InteractionTablePayload[]; agentBehaviourCode?: string; agentInitCode?: string; agentDivisionCode?: string; agentColorViewer?: string; agentOutputMappingCodes?: Array<{ mappingId: string; code: string }>; agentHasSprites?: boolean; centerBased?: CenterBasedConfig; agentUsesField?: boolean; agentTarget?: 'js' | 'wasm' | 'webgpu'; agentWasmBytes?: Uint8Array; agentWasmViewerGuardIds?: string[]; agentLayoutExtras?: AgentLayoutExtras; agentWebgpuBehaviourShader?: string; agentWebgpuForceShader?: string; agentWebgpuMaxAgents?: number; agentWebgpuMaxHashBins?: number; agentWebgpuLayout?: AgentWebGPULayout; agentWebgpuUsesI32Write?: boolean; agentWebgpuUsage?: { usesBondStore?: boolean; usesIndicators?: boolean; usesAux?: boolean; usesSpawn?: boolean; usesStop?: boolean } }
 interface UpdateLookupTableMsg {
   type: 'updateLookupTable';
   attrId: string;
@@ -521,6 +525,13 @@ let agentsEnabled = false;
 /** CA-grid topology toggle (from the init message; absent ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ true). When false
  *  the worker skips the cell step + neighbour-index build (agents-only model). */
 let gridCellsEnabled = true;
+// "Skip Isolated Empty Cells" (docs/PLAN_LARGE_GRID_PERF.md, Feature A). The
+// active-cell list; only these cells run the (sparse) Generation Step. `activeSet`
+// is null when the feature is off / invalid → the step runs the full loop.
+let sieConfig: SkipIsolatedEmptyConfig | null = null;
+let sieParamsPresent = false;   // = enabled && sync && gridCells (mirrors compile.ts sparseSteppingEnabled)
+let sieEmptyAttrId = '';
+let activeSet: ActiveSet | null = null;
 /** Agents-only optimisation: with the CA grid OFF the colours buffer is static
  *  (no cell step / colour pass ever rewrites it), so `sendColors` ships it only
  *  while dirty instead of copying+transferring WÃƒâ€šÃ‚Â·HÃƒâ€šÃ‚Â·DÃƒâ€šÃ‚Â·4 bytes EVERY step (576 MB
@@ -2770,6 +2781,14 @@ function buildLoopArgs(): unknown[] {
     // this arg (it reads via `i32.load8_u` at the baked-in offset).
     args.push(skippedArray);
   }
+  // "Skip Isolated Empty Cells": the active-cell list + count. Appended LAST,
+  // mirroring compile.ts buildLoopParams (gated on the SAME sieParamsPresent =
+  // enabled + sync + gridCells). A null list makes the step run the full loop
+  // (feature enabled but the config didn't resolve / not yet built).
+  if (sieParamsPresent) {
+    args.push(activeSet ? activeSet.list : null);
+    args.push(activeSet ? activeSet.count : 0);
+  }
   return args;
 }
 
@@ -3004,6 +3023,28 @@ function runStep(): void {
     fn(...buildLoopArgs());
   }
 
+  // "Skip Isolated Empty Cells": update the active set from this step's
+  // empty<->non-empty transitions BEFORE the buffer swap — readAttrs is the
+  // pre-step state, writeAttrs the post-step state. Only ACTIVE cells were
+  // stepped, so only they can transition; a snapshot of the pre-step count
+  // means newly-activated cells (appended) are processed NEXT step. JS sparse
+  // path only in Phase 1 (WASM sparse is Phase 2).
+  if (isSync && activeSet && sieParamsPresent && !callWasm) {
+    const as = activeSet;
+    const rArr = readAttrs[sieEmptyAttrId] as unknown as { [i: number]: number } | undefined;
+    const wArr = writeAttrs[sieEmptyAttrId] as unknown as { [i: number]: number } | undefined;
+    if (rArr && wArr) {
+      const ev = as.emptyVal, n = as.count, list = as.list;
+      for (let i = 0; i < n; i++) {
+        const idx = list[i]!;
+        const wasEmpty = rArr[idx] === ev;
+        const isEmptyNow = wArr[idx] === ev;
+        if (wasEmpty !== isEmptyNow) applyTransition(as, idx, wasEmpty, isEmptyNow);
+      }
+      if (as.staleCount > (as.count >> 2) + 64) compactActiveSet(as);
+    }
+  }
+
   // Post-step buffer management (sync mode only ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â async uses single buffer).
   // Done BEFORE the linked-indicator compute below: on WASM-sync the wÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢r copy
   // must land first so readAttrs holds the JUST-COMPUTED generation (it
@@ -3037,7 +3078,10 @@ function runStep(): void {
   // shared buffer AFTER the wÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢r copy above, so readAttrs holds the new generation
   // on both sync (post-copy) and async (single buffer) ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â matching the JS embed.
   // (Was previously computed before the copy ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ read gen N-1 in WASM sync mode.)
-  if (callWasm && linkedDefs.length > 0) computeLinkedIndicatorsFromBuffer();
+  // "Skip Isolated Empty Cells" (sieParamsPresent): the sparse JS step also omits
+  // the embedded linked aggregation (it would only see ACTIVE cells) — the full
+  // grid scan below aggregates ALL cells, matching the non-sparse embed.
+  if ((callWasm || sieParamsPresent) && linkedDefs.length > 0) computeLinkedIndicatorsFromBuffer();
 
   // Handle linked indicator accumulation (skip when no linked indicators).
   // Runs AFTER the compute above so it accumulates the new generation's values.
@@ -3190,6 +3234,12 @@ function refreshColorsAfterInputWebGPU(): void {
  *  default coloring. ALL JS/WASM mutation handlers should call this ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â without
  *  it, no-OM viewers display pre-mutation colors after Ctrl+V / Ctrl+X. */
 function refreshColorsAfterInputJS(): void {
+  // "Skip Isolated Empty Cells": any CPU mutation (paint / paste / clear / image
+  // import) may have changed which cells are non-empty, so rebuild the active set
+  // from the current grid BEFORE any refresh step. Painting is never gated by the
+  // active set (writes go direct); this just re-derives the surface so newly
+  // non-empty cells + their range become active next step. No-op when off.
+  rebuildActiveSetFromGrid();
   if (outputMappingFns.some(f => f.mappingId === activeViewer)) {
     runColorPass();
   } else if (stepFn) {
@@ -3773,6 +3823,47 @@ function runGridInit(): boolean {
     }
   }
   return true;
+}
+
+/** "Skip Isolated Empty Cells": (re)build the active-set STRUCTURE from the model
+ *  config + grid dims. Sets sieParamsPresent (mirrors the compiler's
+ *  sparseSteppingEnabled: enabled + sync + gridCells) + allocates `activeSet` when
+ *  the config resolves. Does NOT populate it — call rebuildActiveSetFromGrid()
+ *  after the grid is seeded. Called on init/recompile. */
+function setupActiveSet(): void {
+  activeSet = null;
+  sieEmptyAttrId = '';
+  sieParamsPresent = !!sieConfig?.enabled && updateMode !== 'asynchronous' && gridCellsEnabled;
+  if (!sieParamsPresent || !sieConfig) return;
+  const cfg = sieConfig;
+  const emptyAttr = cellAttrs.find(a => a.id === cfg.emptyAttributeId);
+  if (!emptyAttr) return;   // invalid config → activeSet stays null → step runs full
+  const emptyVal = encodeAttrValue(emptyAttr, cfg.emptyValue);
+  const is3d = depth > 1;
+  let built: { offsets: Int32Array; offCount: number } | null = null;
+  if (cfg.rangeKind === 'radius') {
+    built = buildActiveOffsets({ kind: 'radius', radius: Math.max(1, cfg.radius ?? 1), metric: cfg.radiusMetric ?? 'chebyshev', is3d });
+  } else {
+    const nbr = neighborhoods.find(n => n.id === cfg.neighborhoodId);
+    if (nbr) {
+      const coords = (nbr.coords3d && nbr.coords3d.length) ? nbr.coords3d : nbr.coords.map(c => [c[0], c[1], 0]);
+      built = buildActiveOffsets({ kind: 'neighborhood', coords });
+    }
+  }
+  if (!built || built.offCount === 0) return;   // invalid range → step runs full
+  sieEmptyAttrId = cfg.emptyAttributeId;
+  activeSet = createActiveSet(
+    { width, height, depth, total, is3d, torus: boundaryTreatment === 'torus' },
+    built.offsets, built.offCount, emptyVal,
+  );
+}
+
+/** Populate the active set from the current READ buffer (after init / reset /
+ *  gridInit / loadState / a paint mutation). No-op when the feature is off. */
+function rebuildActiveSetFromGrid(): void {
+  if (!activeSet) return;
+  const attr = readAttrs[sieEmptyAttrId];
+  if (attr) rebuildActiveSet(activeSet, attr as unknown as { [i: number]: number });
 }
 
 /** Run the Output Mapping color pass for the active viewer (if available).
@@ -4372,6 +4463,10 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       // Skip the (potentially large) neighbour-index tables when the CA grid is
       // off ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â no cell step queries them in an agents-only model.
       if (gridCellsEnabled) buildNeighborIndices();
+      // "Skip Isolated Empty Cells": resolve the active-set structure (populated
+      // below, after the grid is seeded by runInit/runGridInit).
+      sieConfig = msg.skipIsolatedEmpty ?? null;
+      setupActiveSet();
       initIndicators(msg.indicators || []);
       // After memory is allocated, sync model attrs + active viewer ID into it
       // so WASM emitters that read those regions see meaningful values.
@@ -4472,6 +4567,8 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       // AFTER runInit() so an agent spawn rule that reads the cell field sees the
       // cell-Init-Event-seeded substrate (D-FIELD ordering).
       if (agentsEnabled) runAgentInit();
+      // "Skip Isolated Empty Cells": populate the active set from the seeded grid.
+      rebuildActiveSetFromGrid();
       // Recompute colors so the seeded state shows on load instead of the
       // defaults. Run ONLY the Output Mapping colour pass (never a step ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â that
       // would advance the generation on load) when the active viewer has one;
@@ -4884,6 +4981,8 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       runGridInit();
       // Agent Init Event + colour pass ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â after the cell Init Event (D-FIELD).
       if (agentsEnabled) { runAgentInit(); runAgentColorPass(); }
+      // "Skip Isolated Empty Cells": rebuild the active set from the re-seeded grid.
+      rebuildActiveSetFromGrid();
       if (hadInit) {
         // Init wrote to attrs after resetGrid's color refresh ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â recompute
         // colors so the user sees the post-init state, not the defaults.
@@ -4919,6 +5018,12 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
         syncActiveViewerToMemory();
       }
       compileFns(msg.stepCode, msg.inputColorCodes, (msg as RecompileMsg).outputMappingCodes || [], (msg as RecompileMsg).initCode || '', (msg as RecompileMsg).gridInitCode || '');
+      // "Skip Isolated Empty Cells": re-resolve from the (possibly changed) config
+      // + rebuild from the CURRENT grid (a soft recompile keeps the grid state), so
+      // the active-set params/args stay consistent with the just-recompiled step.
+      sieConfig = (msg as RecompileMsg).skipIsolatedEmpty ?? null;
+      setupActiveSet();
+      rebuildActiveSetFromGrid();
       // Bond-Graph Agents: recompile the agent behaviour fn (graph-only edit, no
       // reinit). The store + populations persist (a maxAgents/maxBonds change
       // forces a full reinit instead). Live force/bond params re-clamp ÃƒÅ½Ã¢â‚¬Ât.
@@ -5705,6 +5810,8 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       // Rebuild neighbor indices for constant boundary sentinel (skip when the
       // CA grid is off ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â no cell step uses them).
       if (gridCellsEnabled) buildNeighborIndices();
+      // "Skip Isolated Empty Cells": rebuild the active set from the restored grid.
+      rebuildActiveSetFromGrid();
 
       // Bond-Graph Agents: restore the agent SoA + bond store. Reject LOUDLY on
       // a structural mismatch (the holey/ragged store can't be silently

@@ -3234,6 +3234,9 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       stepCode: result.stepCode,
       initCode: result.initCode,
       gridInitCode: result.gridInitCode,
+      // "Skip Isolated Empty Cells" (docs/PLAN_LARGE_GRID_PERF.md) — the worker
+      // resolves the active-set spec from it. Absent/off → full loop.
+      skipIsolatedEmpty: dimsModel.properties.skipIsolatedEmpty,
       inputColorCodes: result.inputColorCodes,
       outputMappingCodes: result.outputMappingCodes,
       // FIX 4: cell + agent stop messages share one array (the agent indices were
@@ -3692,6 +3695,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
         stepCode: result.stepCode,
         initCode: result.initCode,
         gridInitCode: result.gridInitCode,
+        skipIsolatedEmpty: dimsModel.properties.skipIsolatedEmpty,
         inputColorCodes: result.inputColorCodes,
         outputMappingCodes: result.outputMappingCodes || [],
         variegated: model.variegatedCells?.enabled ? {
