@@ -26,9 +26,12 @@
  * Randomize block. The whole point of this CA family is to re-roll seeds and
  * watch what grows.
  *
- * Start: the InitEvent seeds a random 5×5×5 block in the centre; the structure
- * accretes outward. A Stop Event pauses the run when the structure reaches any
- * grid border (constant boundary = empty, so it grows into open space).
+ * Start: a Grid Init Event (runs ONCE) scatters random seed points in the centre;
+ * the structure accretes outward. A per-cell Init Event flags the border cells so
+ * a Stop Event can pause the run when the structure reaches any grid border
+ * (constant boundary = empty, so it grows into open space). Toggling the
+ * `symmetricSeed` model attribute mirrors each seed point octahedrally (draw once
+ * → 8 mirror cells), so the seed is BOTH random and symmetric.
  *
  * Compile target: WASM (default). Runs identically on JS, WASM, and WebGPU
  * (verified at cross-target parity — the multi-axis lookup emits the same
@@ -182,27 +185,32 @@ const stopNode = node('stopEvent', { message: 'Structure reached the grid edge.'
 fEdge(gateStop, 'then', stopNode, 'do');
 
 // =============================================================================
-// INIT GRAPH — GRID-VOLUME-INDEPENDENT (runs once per cell on Reset):
-//   • Seeds a small central box (~5-6 cells/axis) whose centre is computed from
-//     the LIVE grid dimensions (maxX/maxY/maxZ), so it re-centres if the grid is
-//     resized in the simulator (no baked centre).
-//   • The seed is RANDOM ASYMMETRIC or SYMMETRIC per the `symmetricSeed` model
-//     attribute (a live toggle): asymmetric = a uniform random state per cell;
-//     symmetric = concentric shells state = (dblX + dblY + dblZ) mod 3, which is
-//     mirror-symmetric across all three centre planes → the structure grows
-//     symmetric (Softology: "symmetric seeds produce symmetric structures").
-//   • Writes the `border` flag (dblₖ >= maxₖ on any axis = an outer face) for
-//     the edge-stop — also grid-independent.
-// The folded coord dblₖ = |2·coord − maxₖ| is an INTEGER (no floor node needed),
-// 0 at the centre, and EQUAL for mirrored cells — the key to symmetry.
+// INIT GRAPH — two roots, both GRID-VOLUME-INDEPENDENT:
+//
+//  1. Per-cell Init Event: sets the `border` flag (dblₖ >= maxₖ on any axis = an
+//     outer face) for the edge-stop. This is naturally per-cell ("am I on the
+//     border?"). The folded coord dblₖ = |2·coord − maxₖ| is an INTEGER (no floor
+//     node needed), 0 at the centre and EQUAL for mirrored cells.
+//
+//  2. Grid Init Event (runs ONCE): seeds a central cluster of random points. In
+//     SYMMETRIC mode each point is also written to its 7 other octahedral mirror
+//     cells with the SAME value (draw once → mirror), so the seed is BOTH random
+//     (re-rolls every Reset — the RNG stream advances across Resets) AND
+//     mirror-symmetric → the structure grows symmetric. In ASYMMETRIC mode only
+//     the primary point is written. The centre is computed from the live
+//     width/height/depth outs, so a Resize re-centres the seed. This is the
+//     "proper" seeding: a once-run event can draw ONE random value and mirror it
+//     — which a per-cell event fundamentally cannot (mirrored cells run at
+//     different points in the per-cell RNG stream, so they'd never match).
 // =============================================================================
+
+// --- 1. per-cell Init Event: the `border` flag -------------------------------
 const initNode = node('initEvent', {}, 0, 17);
 function foldedAxis(coordPort, maxPort, row) {
   const two = node('arithmeticOperator', { operation: '*', _port_y: '2' }, 1, row);
   vEdge(initNode, coordPort, two, 'x');
   const sub = node('arithmeticOperator', { operation: '-' }, 2, row);
-  vEdge(two, 'result', sub, 'x');
-  vEdge(initNode, maxPort, sub, 'y');
+  vEdge(two, 'result', sub, 'x'); vEdge(initNode, maxPort, sub, 'y');
   const abs = node('arithmeticOperator', { operation: 'abs' }, 3, row);
   vEdge(sub, 'result', abs, 'x');
   return abs;
@@ -210,63 +218,68 @@ function foldedAxis(coordPort, maxPort, row) {
 const dblX = foldedAxis('x', 'maxX', 15);
 const dblY = foldedAxis('y', 'maxY', 17);
 const dblZ = foldedAxis('z', 'maxZ', 19);
-
-// Central box: dbl <= 5  ⟺  |coord − max/2| <= 2.5.
-const inX = node('statement', { operation: '<=', compareType: 'numerical', _port_y: '5' }, 4, 15);
-vEdge(dblX, 'result', inX, 'x');
-const inY = node('statement', { operation: '<=', compareType: 'numerical', _port_y: '5' }, 4, 17);
-vEdge(dblY, 'result', inY, 'x');
-const inZ = node('statement', { operation: '<=', compareType: 'numerical', _port_y: '5' }, 4, 19);
-vEdge(dblZ, 'result', inZ, 'x');
-const inBox1 = node('logicOperator', { operation: 'AND' }, 5, 15);
-vEdge(inX, 'result', inBox1, 'a');
-vEdge(inY, 'result', inBox1, 'b');
-const inBox = node('logicOperator', { operation: 'AND' }, 6, 16);
-vEdge(inBox1, 'result', inBox, 'a');
-vEdge(inZ, 'result', inBox, 'b');
-
-// Seed value: asymmetric (random) vs symmetric, selected by the `symmetricSeed`
-// model attribute.
-const asymVal = node('getRandom', { randomType: 'integer', min: '0', max: '2' }, 5, 20);
-// Symmetric value: concentric shells state = (dblX + dblY + dblZ) mod 3. EQUAL
-// for mirrored cells (same folded coords) → a connected, mirror-symmetric seed
-// across all three centre planes, so the structure grows perfectly symmetric.
-const symSum1 = node('arithmeticOperator', { operation: '+' }, 5, 22);
-vEdge(dblX, 'result', symSum1, 'x');
-vEdge(dblY, 'result', symSum1, 'y');
-const symSum2 = node('arithmeticOperator', { operation: '+' }, 6, 22);
-vEdge(symSum1, 'result', symSum2, 'x');
-vEdge(dblZ, 'result', symSum2, 'y');
-const symVal = node('arithmeticOperator', { operation: '%', _port_y: '3' }, 7, 22);
-vEdge(symSum2, 'result', symVal, 'x');
-const symMode = node('getModelAttribute', { attributeId: 'symmetricSeed', isColorAttr: false }, 5, 24);
-const seedVal = node('valueSwitch', {}, 8, 22);
-vEdge(symMode, 'value', seedVal, 'condition');
-vEdge(symVal, 'result', seedVal, 'ifValue');
-vEdge(asymVal, 'value', seedVal, 'elseValue');
-
-const gateSeed = node('conditional', {}, 7, 16);
-fEdge(initNode, 'do', gateSeed, 'check');
-vEdge(inBox, 'result', gateSeed, 'condition');
-const writeSeed = node('setAttribute', { attributeId: 'state' }, 9, 16);
-fEdge(gateSeed, 'then', writeSeed, 'do');
-vEdge(seedVal, 'result', writeSeed, 'value');
-
-// Border flag (grid-independent): dbl >= max on any axis = the cell sits on an
-// outer face (dblₖ = maxₖ only at coord 0 or coord maxₖ).
-const bX = node('statement', { operation: '>=', compareType: 'numerical' }, 4, 24);
+// Border flag: dblₖ >= maxₖ on any axis (dblₖ = maxₖ only at coord 0 or maxₖ).
+const bX = node('statement', { operation: '>=', compareType: 'numerical' }, 4, 15);
 vEdge(dblX, 'result', bX, 'x'); vEdge(initNode, 'maxX', bX, 'y');
-const bY = node('statement', { operation: '>=', compareType: 'numerical' }, 4, 26);
+const bY = node('statement', { operation: '>=', compareType: 'numerical' }, 4, 17);
 vEdge(dblY, 'result', bY, 'x'); vEdge(initNode, 'maxY', bY, 'y');
-const bZ = node('statement', { operation: '>=', compareType: 'numerical' }, 4, 28);
+const bZ = node('statement', { operation: '>=', compareType: 'numerical' }, 4, 19);
 vEdge(dblZ, 'result', bZ, 'x'); vEdge(initNode, 'maxZ', bZ, 'y');
-const bOr1 = node('logicOperator', { operation: 'OR' }, 5, 25);
+const bOr1 = node('logicOperator', { operation: 'OR' }, 5, 15);
 vEdge(bX, 'result', bOr1, 'a'); vEdge(bY, 'result', bOr1, 'b');
-const isBorder = node('logicOperator', { operation: 'OR' }, 6, 26);
+const isBorder = node('logicOperator', { operation: 'OR' }, 6, 16);
 vEdge(bOr1, 'result', isBorder, 'a'); vEdge(bZ, 'result', isBorder, 'b');
-const writeBorder = node('setAttribute', { attributeId: 'border' }, 7, 26);
+const writeBorder = node('setAttribute', { attributeId: 'border' }, 7, 16);
 fEdge(initNode, 'do', writeBorder, 'do');
 vEdge(isBorder, 'result', writeBorder, 'value');
+
+// --- 2. Grid Init Event: the random (optionally symmetric) central seed -------
+const SEED_R = 3;    // scatter radius (cells) around the centre
+const SEED_N = 60;   // random points drawn
+const gInit = node('gridInit', {}, 0, 33);
+const halfDim = (dimPort, row) => {
+  const h = node('arithmeticOperator', { operation: '/', _port_y: '2' }, 1, row);
+  vEdge(gInit, dimPort, h, 'x');
+  return h;
+};
+const cxN = halfDim('width', 33), cyN = halfDim('height', 34), czN = halfDim('depth', 35);
+const gSym = node('getModelAttribute', { attributeId: 'symmetricSeed', isColorAttr: false }, 1, 37);
+const gLoop = node('loop', { _port_count: String(SEED_N) }, 2, 34);
+fEdge(gInit, 'do', gLoop, 'do');
+// Per-iteration random offset + value. RNG-using nodes are loop-pinned, so each
+// of the SEED_N iterations draws a FRESH point; the value is reused by all 8
+// mirror writes (same value → octahedral symmetry).
+const rdx = node('getRandom', { randomType: 'integer', min: String(-SEED_R), max: String(SEED_R) }, 3, 31);
+const rdy = node('getRandom', { randomType: 'integer', min: String(-SEED_R), max: String(SEED_R) }, 3, 32);
+const rdz = node('getRandom', { randomType: 'integer', min: String(-SEED_R), max: String(SEED_R) }, 3, 33);
+const rv = node('getRandom', { randomType: 'integer', min: '1', max: '2' }, 3, 34);  // A or B (non-empty)
+const addN = (a, b, row) => { const n = node('arithmeticOperator', { operation: '+' }, 4, row); vEdge(a, 'result', n, 'x'); vEdge(b, 'value', n, 'y'); return n; };
+const pxN = addN(cxN, rdx, 31), pyN = addN(cyN, rdy, 32), pzN = addN(czN, rdz, 33);  // centre + offset
+// Mirror coords: reflect the PRIMARY across the TRUE grid centre (W-1)/2 — i.e.
+// mirror = (dim-1) - primary — so the grown structure is symmetric under the
+// grid's own reflection (W-1-c). (Mirroring across W/2 instead is off by ½ and
+// only ~37% symmetric.)
+const dimM1 = (dimPort, row) => { const n = node('arithmeticOperator', { operation: '-', _port_y: '1' }, 1, row); vEdge(gInit, dimPort, n, 'x'); return n; };
+const wm1 = dimM1('width', 38), hm1 = dimM1('height', 39), dm1 = dimM1('depth', 40);
+const reflN = (m1, p, row) => { const n = node('arithmeticOperator', { operation: '-' }, 5, row); vEdge(m1, 'result', n, 'x'); vEdge(p, 'result', n, 'y'); return n; };
+const mxN = reflN(wm1, pxN, 34), myN = reflN(hm1, pyN, 35), mzN = reflN(dm1, pzN, 36);  // (dim-1) - primary
+// Primary point — always written.
+const w0 = node('setCellAtPosition', { attributeId: 'state' }, 5, 32);
+fEdge(gLoop, 'body', w0, 'do');
+vEdge(pxN, 'result', w0, 'x'); vEdge(pyN, 'result', w0, 'y'); vEdge(pzN, 'result', w0, 'z'); vEdge(rv, 'value', w0, 'value');
+// Symmetric mode: the 7 remaining octahedral mirror cells (same value), gated by
+// the `symmetricSeed` model attribute.
+const gSymGate = node('conditional', {}, 6, 34);
+fEdge(w0, 'next', gSymGate, 'check');
+vEdge(gSym, 'value', gSymGate, 'condition');
+const mirrorCombos = [[mxN, pyN, pzN], [pxN, myN, pzN], [pxN, pyN, mzN], [mxN, myN, pzN], [mxN, pyN, mzN], [pxN, myN, mzN], [mxN, myN, mzN]];
+let prevMirror = { n: gSymGate, p: 'then' };
+mirrorCombos.forEach(([X, Y, Z], i) => {
+  const wN = node('setCellAtPosition', { attributeId: 'state' }, 7 + i, 34);
+  fEdge(prevMirror.n, prevMirror.p, wN, 'do');
+  vEdge(X, 'result', wN, 'x'); vEdge(Y, 'result', wN, 'y'); vEdge(Z, 'result', wN, 'z'); vEdge(rv, 'value', wN, 'value');
+  prevMirror = { n: wN, p: 'next' };
+});
 
 // =============================================================================
 // OUTPUT MAPPING — standalone, so empty cells get alpha 0 (culled by the voxel
