@@ -24,6 +24,7 @@ export { compileAll, migrateForHarness } from '../src/dev/compileHarness.ts';
 export { buildActiveOffsets, createActiveSet, rebuildActiveSet, applyTransition, compactActiveSet } from '../src/simulator/engine/activeSet.ts';
 export { compileGraphWasm, instantiateWasmModule } from '../src/modeler/vpl/compiler/wasm/compile.ts';
 export { computeLayoutFromModel, buildViewerIds } from '../src/modeler/vpl/compiler/wasm/layout.ts';
+export { packNI, packNI3 } from '../src/modeler/vpl/compiler/niCodec.ts';
 `;
 const dir = mkdtempSync(join(tmpdir(), 'gca-sparse-'));
 const entryPath = join(ROOT, 'scripts', '__sparse_entry.ts');
@@ -32,7 +33,26 @@ const outPath = join(dir, 'bundle.mjs');
 await build({ entryPoints: [entryPath], bundle: true, format: 'esm', platform: 'node', outfile: outPath, logLevel: 'error', absWorkingDir: process.cwd() });
 const M = await import(pathToFileURL(outPath).href);
 const { compileAll, migrateForHarness, buildActiveOffsets, createActiveSet, rebuildActiveSet, applyTransition, compactActiveSet,
-  compileGraphWasm, instantiateWasmModule, computeLayoutFromModel, buildViewerIds } = M;
+  compileGraphWasm, instantiateWasmModule, computeLayoutFromModel, buildViewerIds, packNI, packNI3 } = M;
+
+/** The compact packed-offset table (inline-neighbour mode) — mirrors the
+ *  worker's buildNeighborIndices sparse branch. */
+function buildPackedTable(coords3d, is3d) {
+  const out = new Int32Array(coords3d.length);
+  for (let n = 0; n < coords3d.length; n++) {
+    const c = coords3d[n];
+    out[n] = is3d ? packNI3(c[0], c[1], c[2] ?? 0) : packNI(c[0], c[1]);
+  }
+  return out;
+}
+
+/** A feature-OFF clone of the model — the classic-table REFERENCE compile. */
+function offClone(model) {
+  return migrateForHarness(JSON.parse(JSON.stringify({
+    ...model,
+    properties: { ...model.properties, skipIsolatedEmpty: undefined },
+  })));
+}
 
 const wantWasm = process.argv.includes('--wasm');
 
@@ -118,29 +138,39 @@ function args(is3d, W, H, D, rState, wState, nIdx, nSz, activeList, activeCount,
   return a;
 }
 
-function compareRun(label, stepFn, is3d, W, H, D, coords3d, steps) {
+/** Three JS arms in lockstep:
+ *   REF    — the feature-OFF compile (classic per-cell table)         [stepOff + nIdx]
+ *   SPARSE — the feature-ON compile, active list + packed offsets      [stepOn + packed + list]
+ *   ONFULL — the feature-ON compile, null list (its inline FULL loop)  [stepOn + packed]
+ *  Byte-identical grids after every step prove both the sparse gating AND the
+ *  inline-neighbour decode against the classic table. */
+function compareRun(label, stepOff, stepOn, is3d, W, H, D, coords3d, steps) {
   const total = W * H * D, torus = false, sz = coords3d.length;
   const nIdx = buildNbrTable(coords3d, W, H, D, torus);
+  const packed = buildPackedTable(coords3d, is3d);
   let rF = new Int32Array(total + 1), wF = new Int32Array(total + 1);
   let rS = new Int32Array(total + 1), wS = new Int32Array(total + 1);
-  seedGrid(rF, W, H, D); rS.set(rF);
+  let rG = new Int32Array(total + 1), wG = new Int32Array(total + 1);
+  seedGrid(rF, W, H, D); rS.set(rF); rG.set(rF);
   const { offsets, offCount } = buildActiveOffsets({ kind: 'neighborhood', coords: coords3d });
   const as = createActiveSet({ width: W, height: H, depth: D, total, is3d, torus }, offsets, offCount, 0);
   rebuildActiveSet(as, rS);
-  const rngF = new Uint32Array([12345]), rngS = new Uint32Array([12345]);
+  const rngF = new Uint32Array([12345]), rngS = new Uint32Array([12345]), rngG = new Uint32Array([12345]);
   let maxActive = 0, finalFilled = 0;
   for (let s = 0; s < steps; s++) {
-    stepFn(...args(is3d, W, H, D, rF, wF, nIdx, sz, null, 0, rngF));
+    stepOff(...args(is3d, W, H, D, rF, wF, nIdx, sz, undefined, undefined, rngF));
     maxActive = Math.max(maxActive, as.count);
-    stepFn(...args(is3d, W, H, D, rS, wS, nIdx, sz, as.list, as.count, rngS));
+    stepOn(...args(is3d, W, H, D, rS, wS, packed, sz, as.list, as.count, rngS));
+    stepOn(...args(is3d, W, H, D, rG, wG, packed, sz, null, 0, rngG));
     // sparse maintenance BEFORE swap (r = pre-step, w = post-step)
     const n = as.count;
     for (let i = 0; i < n; i++) { const idx = as.list[i]; const wasE = rS[idx] === 0, isE = wS[idx] === 0; if (wasE !== isE) applyTransition(as, idx, wasE, isE); }
     if (as.staleCount > (as.count >> 2) + 64) compactActiveSet(as);
-    // swap both
-    let t = rF; rF = wF; wF = t; t = rS; rS = wS; wS = t;
-    for (let i = 0; i < total; i++) if (rF[i] !== rS[i]) {
-      return { ok: false, label, step: s, idx: i, full: rF[i], sparse: rS[i] };
+    // swap all three
+    let t = rF; rF = wF; wF = t; t = rS; rS = wS; wS = t; t = rG; rG = wG; wG = t;
+    for (let i = 0; i < total; i++) {
+      if (rF[i] !== rS[i]) return { ok: false, label, step: s, idx: i, arm: 'sparse', full: rF[i], sparse: rS[i] };
+      if (rF[i] !== rG[i]) return { ok: false, label, step: s, idx: i, arm: 'inline-full', full: rF[i], sparse: rG[i] };
     }
   }
   for (let i = 0; i < total; i++) if (rF[i] !== 0) finalFilled++;
@@ -150,12 +180,16 @@ function compareRun(label, stepFn, is3d, W, H, D, coords3d, steps) {
 let failed = false;
 for (const is3d of [false, true]) {
   const { model, W, H, D, coords3d } = buildModel(is3d);
+  const modelOff = offClone(model);
   const dimLabel = is3d ? '3D' : '2D';
-  const r = compileAll(model);
-  if (r.js.error) { console.error(`[${dimLabel}] JS compile error: ${r.js.error}`); failed = true; continue; }
+  const r = compileAll(model);        // feature ON  (sparse + inline neighbours)
+  const rOff = compileAll(modelOff);  // feature OFF (the classic-table REFERENCE)
+  if (r.js.error) { console.error(`[${dimLabel}] JS (ON) compile error: ${r.js.error}`); failed = true; continue; }
+  if (rOff.js.error) { console.error(`[${dimLabel}] JS (OFF) compile error: ${rOff.js.error}`); failed = true; continue; }
   const stepFn = eval(r.js.stepCode);
+  const stepFnOff = eval(rOff.js.stepCode);
   const steps = is3d ? 18 : 45;
-  const res = compareRun(`${dimLabel} JS`, stepFn, is3d, W, H, D, coords3d, steps);
+  const res = compareRun(`${dimLabel} JS`, stepFnOff, stepFn, is3d, W, H, D, coords3d, steps);
   if (res.ok) {
     console.log(`OK  ${res.label}: sparse==full over ${res.steps} steps (grid ${W}x${H}x${D}=${res.total}, maxActive ${res.maxActive} = ${(res.ratio * 100).toFixed(1)}% of grid, final ${res.finalFilled} filled)`);
     if (res.maxActive >= res.total) { console.error(`FAIL ${res.label}: active set covered the WHOLE grid — the sparse path was not exercised (test scenario too dense).`); failed = true; }
@@ -168,50 +202,62 @@ for (const is3d of [false, true]) {
     // VIEW over the wasm memory region, exactly like the worker), and the JS
     // full reference. Assert byte-identical grids after every step.
     const res2 = await (async () => {
+      // Feature-ON module (sparse loop + inline neighbours, compact packed table)
       const layout = computeLayoutFromModel(model);
       if (!layout.sparseStepping || layout.activeListBytes <= 0) return { ok: false, why: 'layout did not reserve the active-list region' };
       const wres = compileGraphWasm(model.graphNodes, model.graphEdges, model, layout, buildViewerIds(model));
-      if (wres.error) return { ok: false, why: 'WASM compile error: ' + wres.error };
+      if (wres.error) return { ok: false, why: 'WASM (ON) compile error: ' + wres.error };
+      // Feature-OFF module (classic full loop + the per-cell table) — the REFERENCE
+      const layoutOff = computeLayoutFromModel(modelOff);
+      const wresOff = compileGraphWasm(modelOff.graphNodes, modelOff.graphEdges, modelOff, layoutOff, buildViewerIds(modelOff));
+      if (wresOff.error) return { ok: false, why: 'WASM (OFF) compile error: ' + wresOff.error };
       const total = W * H * D, torus = false, sz = coords3d.length;
       const viewLen = total + 1;  // constant boundary sentinel
-      const mkInst = async () => {
+      // Sanity: the inline layout must have dropped the huge per-cell table —
+      // ON totalBytes ≈ OFF totalBytes − total×sz×4 (table gone) + total×4
+      // (active list added). Assert the net shrink within a page of slack.
+      const expectedOn = layoutOff.totalBytes - total * sz * 4 + sz * 4 + total * 4;
+      if (layout.totalBytes > expectedOn + 65536) return { ok: false, why: `inline layout did not drop the big nbr table (ON ${layout.totalBytes} vs OFF ${layoutOff.totalBytes} bytes)` };
+      const mkOn = async () => {
         const memory = new WebAssembly.Memory({ initial: layout.pages });
         const inst = await instantiateWasmModule(wres, memory);
         const rV = new Int32Array(memory.buffer, layout.attrReadOffset['state'], viewLen);
         const wV = new Int32Array(memory.buffer, layout.attrWriteOffset['state'], viewLen);
-        // Fill the per-cell neighbour table (Phase 2 keeps the full table).
-        const nIdx = new Int32Array(memory.buffer, layout.nbrIndexOffset['moore'], total * sz);
-        nIdx.set(buildNbrTable(coords3d, W, H, D, torus));
+        // COMPACT packed-offset table (the worker's sparse buildNeighborIndices).
+        new Int32Array(memory.buffer, layout.nbrIndexOffset['moore'], sz).set(buildPackedTable(coords3d, is3d));
         const listV = new Int32Array(memory.buffer, layout.activeListOffset, total);
         return { step: inst.exports.step, rV, wV, listV };
       };
-      const full = await mkInst();
-      const spar = await mkInst();
-      seedGrid(full.rV, W, H, D); spar.rV.set(full.rV);
+      const mkOff = async () => {
+        const memory = new WebAssembly.Memory({ initial: layoutOff.pages });
+        const inst = await instantiateWasmModule(wresOff, memory);
+        const rV = new Int32Array(memory.buffer, layoutOff.attrReadOffset['state'], viewLen);
+        const wV = new Int32Array(memory.buffer, layoutOff.attrWriteOffset['state'], viewLen);
+        new Int32Array(memory.buffer, layoutOff.nbrIndexOffset['moore'], total * sz).set(buildNbrTable(coords3d, W, H, D, torus));
+        return { step: inst.exports.step, rV, wV };
+      };
+      const ref = await mkOff();      // classic-table reference
+      const spar = await mkOn();      // sparse + inline, active list
+      const onFull = await mkOn();    // inline, full loop (-1)
+      seedGrid(ref.rV, W, H, D); spar.rV.set(ref.rV); onFull.rV.set(ref.rV);
       const { offsets, offCount } = buildActiveOffsets({ kind: 'neighborhood', coords: coords3d });
       const as = createActiveSet({ width: W, height: H, depth: D, total, is3d, torus }, offsets, offCount, 0, spar.listV);
       rebuildActiveSet(as, spar.rV);
-      // JS full reference (fresh copies, same seed).
-      let rJ = new Int32Array(viewLen), wJ = new Int32Array(viewLen);
-      rJ.set(full.rV);
-      const nIdxJ = buildNbrTable(coords3d, W, H, D, torus);
-      const rngJ = new Uint32Array([12345]);
       let maxActive = 0;
       for (let s = 0; s < steps; s++) {
-        full.step(total, -1);                       // WASM full arm
+        ref.step(total);                            // OFF module: classic (i32)->()
         maxActive = Math.max(maxActive, as.count);
-        spar.step(total, as.count);                 // WASM sparse arm
-        stepFn(...args(is3d, W, H, D, rJ, wJ, nIdxJ, sz, null, 0, rngJ));  // JS reference
+        spar.step(total, as.count);                 // ON module: sparse arm
+        onFull.step(total, -1);                     // ON module: inline full arm
         // sparse maintenance BEFORE the w->r copy (r = pre-step, w = post-step)
         const n = as.count;
         for (let i = 0; i < n; i++) { const idx = as.list[i]; const wasE = spar.rV[idx] === 0, isE = spar.wV[idx] === 0; if (wasE !== isE) applyTransition(as, idx, wasE, isE); }
         if (as.staleCount > (as.count >> 2) + 64) compactActiveSet(as);
-        // the worker's WASM post-step w->r copy + the JS ref swap
-        full.rV.set(full.wV); spar.rV.set(spar.wV);
-        const t = rJ; rJ = wJ; wJ = t;
+        // the worker's WASM post-step w->r copy
+        ref.rV.set(ref.wV); spar.rV.set(spar.wV); onFull.rV.set(onFull.wV);
         for (let i = 0; i < total; i++) {
-          if (full.rV[i] !== spar.rV[i]) return { ok: false, why: `step ${s} cell ${i}: WASM full=${full.rV[i]} vs WASM sparse=${spar.rV[i]}` };
-          if (full.rV[i] !== rJ[i]) return { ok: false, why: `step ${s} cell ${i}: WASM=${full.rV[i]} vs JS=${rJ[i]}` };
+          if (ref.rV[i] !== spar.rV[i]) return { ok: false, why: `step ${s} cell ${i}: WASM table-ref=${ref.rV[i]} vs sparse-inline=${spar.rV[i]}` };
+          if (ref.rV[i] !== onFull.rV[i]) return { ok: false, why: `step ${s} cell ${i}: WASM table-ref=${ref.rV[i]} vs inline-full=${onFull.rV[i]}` };
         }
       }
       return { ok: true, maxActive };

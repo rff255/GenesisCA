@@ -321,14 +321,19 @@ export function computeMemoryLayout(
     off += glyphColorsBytes;
   }
 
-  // Neighbor index tables (Int32Array per neighborhood, length = total * coords.length)
+  // Neighbor index tables (Int32Array per neighborhood, length = total * coords.length).
+  // "Skip Isolated Empty Cells" (inline-neighbour mode): COMPACT tables instead —
+  // `coords.length` PACKED NIs per neighbourhood (a few dozen bytes vs
+  // total×nSz×4, the 2.8 GB memory hog at 300³). The JS/WASM emitters decode
+  // each slot inline (niCellExprStmts / pushNiCellIdx), reproducing the exact
+  // torus-wrap / constant-sentinel indices the big table precomputed.
   const nbrIndexOffset: Record<string, number> = {};
   const nbrSize: Record<string, number> = {};
   for (const n of neighborhoods) {
     nbrSize[n.id] = n.coords.length;
     off = alignTo(off, 8);
     nbrIndexOffset[n.id] = off;
-    off += total * n.coords.length * 4;
+    off += (sparseStepping && gridCells ? 1 : total) * n.coords.length * 4;
   }
 
   // Model attrs region — one f64 slot per scalar (or per color channel for color attrs)
