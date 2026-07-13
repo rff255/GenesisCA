@@ -1,7 +1,7 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import { VitePWA } from 'vite-plugin-pwa'
-import { readdirSync, readFileSync, writeFileSync, existsSync, mkdirSync, unlinkSync } from 'fs'
+import { readdirSync, readFileSync, writeFileSync, existsSync, mkdirSync, unlinkSync, statSync } from 'fs'
 import { join, resolve, dirname } from 'path'
 import { fileURLToPath } from 'url'
 import type { Plugin } from 'vite'
@@ -61,6 +61,9 @@ function modelsLibraryPlugin(): Plugin {
         const model = JSON.parse(raw);
         const props = model.properties || {};
         const thumbnail = extractThumbnail(file, props.thumbnail, outModelsDir);
+        // 3D iff the model USES the depth axis (mirrors is3dModel in the app —
+        // a 1-layer "3d" file runs the 2D fast path, so it lists as 2D here too).
+        const is3d = props.dimension === '3d' && (props.gridDepth ?? 1) > 1;
         return {
           id: file.replace('.gcaproj', ''),
           name: props.name || file,
@@ -69,7 +72,12 @@ function modelsLibraryPlugin(): Plugin {
           description: props.description || '',
           file,
           tags: props.tags || [],
-          gridSize: `${props.gridWidth || '?'}x${props.gridHeight || '?'}`,
+          gridSize: `${props.gridWidth || '?'}x${props.gridHeight || '?'}${is3d ? `x${props.gridDepth}` : ''}`,
+          dimension: is3d ? '3d' : '2d',
+          // File mtime (epoch ms) — powers the library's Newest/Oldest sort +
+          // the card date stamp. The .gcaproj files are committed, so this is
+          // the last-edited date of the shipped model.
+          modified: (() => { try { return statSync(join(modelsDir, file)).mtimeMs; } catch { return 0; } })(),
           ...(thumbnail ? { thumbnail } : {}),
         };
       } catch {

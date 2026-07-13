@@ -11,8 +11,9 @@ import { resolveKeyLabels, resolveValueTagOptions, buildLookupTablePayload, isMu
 import { NeighborIndexValuePicker } from '../modeler/panels/NeighborIndexDefaultEditor';
 import { LookupTableEditor } from '../modeler/panels/LookupTableEditor';
 import { compileGraphWebGPU } from '../modeler/vpl/compiler/webgpu/compile';
-import { Gl3DRenderer, panCamera } from './render/gl3d';
-import type { SpriteAtlasInput } from './render/gl3d';
+import { Gl3DRenderer, panCamera, cameraBasis, DEFAULT_LIGHT3D } from './render/gl3d';
+import type { SpriteAtlasInput, Light3D } from './render/gl3d';
+import { LightBallWidget } from './LightBallWidget';
 import { agentTargetOf, resolveMaxBonds } from '../model/centerBased';
 import { compileAgentGraphWasmForModel, isAgentGraphWasmSupported, buildAgentLayoutExtras } from '../modeler/vpl/compiler/agentWasm/compile';
 import type { AgentLayoutExtras } from './engine/agentEngine';
@@ -53,6 +54,28 @@ function loadSimSettings(): Record<string, unknown> {
     if (raw) return JSON.parse(raw);
   } catch { /* ignore */ }
   return {};
+}
+
+/** Validate a persisted 3D lighting config (genesisca_sim_settings.light3d) —
+ *  every field range-clamped, anything malformed falls back to the default
+ *  (which reproduces the historical hardcoded shade exactly). */
+function sanitizeLight3d(raw: unknown): Light3D {
+  const d = DEFAULT_LIGHT3D;
+  if (!raw || typeof raw !== 'object') return { ...d };
+  const r = raw as Partial<Light3D>;
+  const num = (v: unknown, dv: number, lo: number, hi: number) =>
+    typeof v === 'number' && Number.isFinite(v) ? Math.max(lo, Math.min(hi, v)) : dv;
+  return {
+    mode: r.mode === 'camera' ? 'camera' : 'world',
+    bx: num(r.bx, d.bx, -1, 1),
+    by: num(r.by, d.by, -1, 1),
+    wx: num(r.wx, d.wx, -1, 1),
+    wy: num(r.wy, d.wy, -1, 1),
+    wz: num(r.wz, d.wz, -1, 1),
+    ambient: num(r.ambient, d.ambient, 0, 1),
+    diffuse: num(r.diffuse, d.diffuse, 0, 1.5),
+    specular: num(r.specular, d.specular, 0, 1),
+  };
 }
 
 /** Force every pixel of a captured recording frame to full opacity (alpha=255),
@@ -566,6 +589,14 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   // normal depth occlusion between the two layers (useful for sparse grids).
   // Helper overlays (axes/grid/bounds/brush plane) keep normal depth either way.
   const [agentsFront3d, setAgentsFront3d] = useState<boolean>(saved.current.agentsFront3d !== false);
+  // 3D lighting (light ball + ambient/diffuse/specular + camera/world anchor)
+  // and the cell-gaps toggle — declared HERE (before the settings-persist
+  // effect below) with the rest of the persisted view options; the 3D-only
+  // helpers that consume them live with the other 3D control state further down.
+  const [light3d, setLight3d] = useState<Light3D>(() => sanitizeLight3d(saved.current.light3d));
+  // Gaps between adjacent 3D cells — the 3D analogue of the 2D gridlines
+  // toggle. ON (default) = the historical 0.92 cube scale; OFF = flush cubes.
+  const [cellGaps3d, setCellGaps3d] = useState<boolean>(saved.current.cellGaps3d !== false);
   // 3D Grid CA: depth (number of layers) of the VOLUMETRIC box brush — independent
   // of the row size (H), so a box can be e.g. wide+tall+shallow.
   const [brushBoxDepth, setBrushBoxDepth] = useState<number>((saved.current.brushBoxDepth as number) ?? 3);
@@ -802,6 +833,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
           activeViewer, brushColor, brushW, brushH, brushMapping, showBrushCursor, showGridlines,
           brushShape, brushRadius, brushRingWidth, brushLineWidth, brush3dVolume, brushBoxDepth,
           infinityCanvas, indicatorVizModes, recordFormat, brushSectionH, agentsFront3d,
+          light3d, cellGaps3d,
           agentBrushRadius, agentSeedDensity, agentSeedSpacing,
           agentBrushShape, agentBrushW, agentBrushH, agentBrushRingWidth, agentBrushLineWidth,
           showCaGrid, showAgents, showBonds, simulateCells, simulateAgents, brushTarget, bg2d,
@@ -816,7 +848,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       } catch { /* localStorage full */ }
     }, 300);
     return () => clearTimeout(timer);
-  }, [targetFps, unlimitedFps, gensPerFrame, unlimitedGens, activeViewer, brushColor, brushW, brushH, brushMapping, showBrushCursor, showGridlines, brushShape, brushRadius, brushRingWidth, brushLineWidth, brush3dVolume, brushBoxDepth, infinityCanvas, indicatorVizModes, recordFormat, brushSectionH, agentsFront3d, agentBrushRadius, agentSeedDensity, agentSeedSpacing, agentBrushShape, agentBrushW, agentBrushH, agentBrushRingWidth, agentBrushLineWidth, showCaGrid, showAgents, showBonds, simulateCells, simulateAgents, brushTarget, bg2d, indicatorHiddenCategories, indicatorChartOverrides]);
+  }, [targetFps, unlimitedFps, gensPerFrame, unlimitedGens, activeViewer, brushColor, brushW, brushH, brushMapping, showBrushCursor, showGridlines, brushShape, brushRadius, brushRingWidth, brushLineWidth, brush3dVolume, brushBoxDepth, infinityCanvas, indicatorVizModes, recordFormat, brushSectionH, agentsFront3d, light3d, cellGaps3d, agentBrushRadius, agentSeedDensity, agentSeedSpacing, agentBrushShape, agentBrushW, agentBrushH, agentBrushRingWidth, agentBrushLineWidth, showCaGrid, showAgents, showBonds, simulateCells, simulateAgents, brushTarget, bg2d, indicatorHiddenCategories, indicatorChartOverrides]);
 
   // Manual Brush — signature-keyed merge effect. Re-derives `manualBrush`
   // whenever the cell attribute set (id+type) changes. Surviving attrs carry
@@ -1318,6 +1350,10 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   const clip3dRef = useRef<import('./render/gl3d').ClipPlane3D>({ enabled: false, axis: 'z', lo: 0, hi: 0 });
   const alpha3dRef = useRef(false);
   const agentsFront3dRef = useRef(true);
+  // 3D scene lighting + the cell-gaps toggle, mirrored into the renderer each
+  // draw (both persisted in genesisca_sim_settings; defaults = historical look).
+  const light3dRef = useRef<Light3D>({ ...DEFAULT_LIGHT3D });
+  const cellGaps3dRef = useRef(true);
   // voxels/agents are driven from showCaGrid/showAgents below (the render-layer
   // toggles); the panel only edits axes/grid/bounds/gizmo. draw() overrides the two.
   const viz3dRef = useRef<import('./render/gl3d').Viz3D>({ axes: false, grid: false, bounds: true, gizmo: true, voxels: true, agents: true, bonds: true });
@@ -1377,6 +1413,44 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   // when enabled, `color` (hex) fills the canvas opaquely.
   const [bg3d, setBg3d] = useState<{ enabled: boolean; color: string }>({ enabled: false, color: '#0c0d10' });
   const [controls3dOpen, setControls3dOpen] = useState(true);
+
+  /** Light-ball drag: store the ball position; in world mode ALSO convert it
+   *  through the CURRENT camera basis so the light lands where the user aimed
+   *  it "as seen from here", then stays fixed in the scene. */
+  const applyLightBall = useCallback((bx: number, by: number) => {
+    setLight3d(l => {
+      const next: Light3D = { ...l, bx, by };
+      if (l.mode === 'world') {
+        const bz = Math.sqrt(Math.max(0, 1 - bx * bx - by * by));
+        const basis = cameraBasis(cam3dRef.current);
+        // basis.dir = target→eye = toward the viewer (the ball's implied +z).
+        const x = basis.right[0] * bx + basis.up[0] * by + basis.dir[0] * bz;
+        const y = basis.right[1] * bx + basis.up[1] * by + basis.dir[1] * bz;
+        const z = basis.right[2] * bx + basis.up[2] * by + basis.dir[2] * bz;
+        const n = Math.hypot(x, y, z) || 1;
+        next.wx = x / n; next.wy = y / n; next.wz = z / n;
+      }
+      return next;
+    });
+  }, []);
+
+  /** Switch the light anchor. camera→world freezes the current view-relative
+   *  light into world coords (no visual jump at the moment of switching). */
+  const setLightMode = useCallback((mode: 'camera' | 'world') => {
+    setLight3d(l => {
+      if (l.mode === mode) return l;
+      if (mode === 'world') {
+        const bz = Math.sqrt(Math.max(0, 1 - l.bx * l.bx - l.by * l.by));
+        const basis = cameraBasis(cam3dRef.current);
+        const x = basis.right[0] * l.bx + basis.up[0] * l.by + basis.dir[0] * bz;
+        const y = basis.right[1] * l.bx + basis.up[1] * l.by + basis.dir[1] * bz;
+        const z = basis.right[2] * l.bx + basis.up[2] * l.by + basis.dir[2] * bz;
+        const n = Math.hypot(x, y, z) || 1;
+        return { ...l, mode, wx: x / n, wy: y / n, wz: z / n };
+      }
+      return { ...l, mode };
+    });
+  }, []);
   // Which viewers want the zoomed-out glyph-color fallback (Set Cell Looks with
   // useGlyph + fallbackToGlyphColor). `all` = a node used the Current-Selected
   // sentinel (applies to every viewer). Scanned from the model below.
@@ -1919,6 +1993,8 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       r.setHoverCells(plane3dEnabledRef.current ? hoverCells3dRef.current : EMPTY_HOVER_CELLS);
       r.setInspectCells(inspectHighlight3dRef.current);
       r.setBackgroundColor(bg3dRef.current);
+      r.setLight(light3dRef.current);
+      r.setCellGaps(cellGaps3dRef.current);
       r.setCamera(cam3dRef.current, r.canvasWidth / (r.canvasHeight || 1));
       // 3D perf: only re-scan + re-upload the (potentially millions of) cells when
       // the colours actually changed (a new buffer from a `stepped` message).
@@ -4441,6 +4517,8 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   useEffect(() => { clip3dRef.current = clip3d; draw(); }, [clip3d, draw]);
   useEffect(() => { alpha3dRef.current = alpha3d; draw(); }, [alpha3d, draw]);
   useEffect(() => { agentsFront3dRef.current = agentsFront3d; draw(); }, [agentsFront3d, draw]);
+  useEffect(() => { light3dRef.current = light3d; draw(); }, [light3d, draw]);
+  useEffect(() => { cellGaps3dRef.current = cellGaps3d; draw(); }, [cellGaps3d, draw]);
   useEffect(() => { viz3dRef.current = viz3d; draw(); }, [viz3d, draw]);
   useEffect(() => {
     plane3dRef.current = { axis: plane3d.axis, pos: plane3d.pos };
@@ -7872,6 +7950,12 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
                   <input type="checkbox" checked={alpha3d} onChange={e => setAlpha3d(e.target.checked)} />
                   Alpha blend
                 </label>
+                {/* Cell gaps — the 3D analogue of the 2D gridlines toggle. Off =
+                    adjacent cells render flush (a seamless solid volume). */}
+                <label style={row} title="Leave a small gap between adjacent cells (like 2D gridlines). Uncheck to render cells flush against each other as one solid volume.">
+                  <input type="checkbox" checked={cellGaps3d} onChange={e => setCellGaps3d(e.target.checked)} />
+                  Cell gaps
+                </label>
                 {/* Draw agents in front (agent models only) */}
                 {isAgentModel && (
                   <label style={row} title="Draw agents over the CA-grid voxels regardless of depth (the grid usually surrounds them). Uncheck for normal depth occlusion between the two layers — useful when the grid field is sparse. Axes / grid / bounds / brush plane always occlude normally.">
@@ -7887,6 +7971,44 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
                     onChange={e => setBg3d({ enabled: true, color: e.target.value })}
                     style={{ width: 28, height: 18, marginLeft: 'auto', cursor: 'pointer', border: 'none', background: 'none', padding: 0, opacity: bg3d.enabled ? 1 : 0.5 }} />
                 </label>
+
+                {/* Lighting — light ball (direction) + ambient/diffuse/specular +
+                    the camera/world anchor. Defaults = the historical shade. */}
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 2 }}>
+                  <span style={{ fontSize: '0.66rem', color: '#aaa', fontWeight: 600 }}>Lighting</span>
+                  <button className={styles.panelToggle} title="Reset lighting to the default"
+                    onClick={() => setLight3d({ ...DEFAULT_LIGHT3D })}>Reset</button>
+                </div>
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                  <div title="Drag the bright dot to aim the light (the light comes FROM the dot's direction)">
+                    <LightBallWidget bx={light3d.bx} by={light3d.by} size={64} onChange={applyLightBall} />
+                  </div>
+                  <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 5 }}>
+                    <label style={row} title="Ambient fill — base brightness reaching every face">
+                      <span style={{ fontSize: '0.6rem', color: '#999', width: 44, flex: '0 0 auto' }}>Ambient</span>
+                      <input type="range" min={0} max={1} step={0.01} value={light3d.ambient} style={{ flex: 1, minWidth: 0 }}
+                        onChange={e => setLight3d(l => ({ ...l, ambient: Number(e.target.value) }))} />
+                    </label>
+                    <label style={row} title="Directional light strength (shapes the volume)">
+                      <span style={{ fontSize: '0.6rem', color: '#999', width: 44, flex: '0 0 auto' }}>Light</span>
+                      <input type="range" min={0} max={1.5} step={0.01} value={light3d.diffuse} style={{ flex: 1, minWidth: 0 }}
+                        onChange={e => setLight3d(l => ({ ...l, diffuse: Number(e.target.value) }))} />
+                    </label>
+                    <label style={row} title="Specular shine — a white highlight on faces angled toward the light">
+                      <span style={{ fontSize: '0.6rem', color: '#999', width: 44, flex: '0 0 auto' }}>Shine</span>
+                      <input type="range" min={0} max={1} step={0.01} value={light3d.specular} style={{ flex: 1, minWidth: 0 }}
+                        onChange={e => setLight3d(l => ({ ...l, specular: Number(e.target.value) }))} />
+                    </label>
+                  </div>
+                </div>
+                <div style={grid2}>
+                  <button className={tbtn(light3d.mode === 'camera')}
+                    title="The light follows the camera — shading stays constant while orbiting (headlight style)"
+                    onClick={() => setLightMode('camera')}>View</button>
+                  <button className={tbtn(light3d.mode === 'world')}
+                    title="The light is fixed in the scene — orbiting sweeps the lit side (sun style)"
+                    onClick={() => setLightMode('world')}>World</button>
+                </div>
               </>)}
             </div>
           );

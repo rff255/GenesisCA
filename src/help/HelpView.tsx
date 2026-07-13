@@ -1147,14 +1147,30 @@ export function HelpView() {
             &mdash; From and To &mdash; that cut from both sides, so you control exactly how thick a
             slab of the volume stays visible; clips voxels, agent spheres <em>and</em> bonds), an
             <strong>Alpha blend</strong> toggle for translucent cells, a
+            <strong>Cell gaps</strong> toggle (the 3D analogue of the 2D gridlines: ON — the
+            default — leaves a small gap between adjacent cells so the lattice reads; OFF renders
+            cells flush against each other as one seamless solid volume), a
             <strong>Draw agents in front</strong> toggle (agent models — ON draws the agents over
             the CA-grid voxels regardless of depth, since the grid usually surrounds them; uncheck
             for normal depth occlusion between the two layers when the grid field is sparse; the
             axes / grid / bounds / brush plane always occlude normally either way), a
-            <strong>Background</strong> colour (off = transparent), and
+            <strong>Background</strong> colour (off = transparent), a
+            <strong>Lighting</strong> block, and
             <strong>Reset view</strong>. The left panel's <strong>Grid Dimensions</strong> gains
             a <strong>Depth</strong> field to resize the volume's layers. (Empty cells default to
             transparent, so an in-progress model doesn't fill the whole volume with voxels.)
+          </p>
+          <p className={styles.p}>
+            <strong>Lighting</strong> shades the voxels (and agent spheres) with one directional
+            key light plus an ambient fill. Drag the bright dot on the <strong>light ball</strong>
+            to aim the light &mdash; the light comes <em>from</em> the dot's direction. The
+            <strong> Ambient</strong> slider sets the base brightness reaching every face,
+            <strong> Light</strong> sets the directional strength that shapes the volume, and
+            <strong> Shine</strong> adds a white specular highlight (off by default).
+            <strong> View</strong> anchors the light to the camera, so shading stays constant
+            while you orbit (headlight style); <strong>World</strong> fixes it in the scene, so
+            orbiting sweeps the lit side (sun style) &mdash; switching modes never jumps the
+            current shading. <strong>Reset</strong> restores the default light.
           </p>
           <p className={styles.p}>
             <strong>Painting in 3D</strong> uses an <strong>interaction plane</strong>: enable
@@ -1998,6 +2014,22 @@ export function HelpView() {
             confirmation that the model loaded. The top bar then shows the project name
             with the source file name in parentheses &mdash; handy when you keep several
             versions of the same project in different files.
+          </p>
+
+          <h3 className={styles.h3}>Browsing the Models Library</h3>
+          <p className={styles.p}>
+            The <strong>Library</strong> tab has a toolbar for finding models:
+            a <strong>search</strong> box (matches name, description, authors and tags), a
+            <strong> category</strong> dropdown (every tag, with usage counts &mdash; clicking a
+            tag chip on a card filters by it too), an <strong>All / 2D / 3D</strong> dimension
+            filter, a <strong>sort</strong> order (name, newest / oldest by the model file's
+            last-updated date, or largest grid), and a <strong>Group by category</strong> view
+            that sections the cards by each model's primary tag. Your choices persist across
+            sessions. Cards are uniform-sized; when a long description doesn't fit, rest the
+            pointer on the card and the text <strong>slowly auto-scrolls</strong> so you can read
+            it in place (models with a thumbnail also show it in a floating preview beside the
+            card). 3D models carry a <strong>3D</strong> badge and show their grid as
+            W&times;H&times;D.
           </p>
 
           <h3 className={styles.h3}>State Files (.gcastate)</h3>

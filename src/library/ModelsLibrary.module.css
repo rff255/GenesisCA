@@ -14,19 +14,136 @@
 .subtitle {
   font-size: var(--font-base);
   color: var(--color-text-subtle);
-  margin: 0 0 var(--space-12);
+  margin: 0 0 var(--space-8);
 }
+
+/* --- Browse toolbar (search / category / dimension / sort / grouping) ------ */
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-6);
+  flex-wrap: wrap;
+  margin: 0 0 var(--space-10);
+}
+
+.searchInput {
+  background: var(--color-bg-panel);
+  border: 1px solid var(--color-widget-border);
+  border-radius: var(--radius-md);
+  color: var(--color-text-primary);
+  font-size: var(--font-sm);
+  padding: var(--space-3) var(--space-6);
+  width: 200px;
+}
+
+.searchInput:focus {
+  outline: none;
+  border-color: var(--color-accent);
+}
+
+.toolbarSelect {
+  background: var(--color-bg-panel);
+  border: 1px solid var(--color-widget-border);
+  border-radius: var(--radius-md);
+  color: var(--color-text-primary);
+  font-size: var(--font-sm);
+  padding: var(--space-3) var(--space-4);
+  max-width: 200px;
+  cursor: pointer;
+}
+
+.dimSeg {
+  display: flex;
+  border: 1px solid var(--color-widget-border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
+.dimSegBtn {
+  background: var(--color-bg-panel);
+  border: none;
+  color: var(--color-text-muted);
+  font-size: var(--font-sm);
+  padding: var(--space-3) var(--space-6);
+  cursor: pointer;
+}
+
+.dimSegBtn + .dimSegBtn {
+  border-left: 1px solid var(--color-widget-border);
+}
+
+.dimSegBtnActive {
+  background: var(--color-accent-soft);
+  color: var(--color-accent);
+}
+
+.groupToggle {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  font-size: var(--font-sm);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  user-select: none;
+}
+
+.resultCount {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  margin-left: auto;
+  font-size: var(--font-sm);
+  color: var(--color-text-muted);
+  white-space: nowrap;
+}
+
+.clearFilters {
+  background: none;
+  border: 1px solid var(--color-widget-border);
+  border-radius: var(--radius-pill);
+  color: var(--color-text-secondary);
+  font-size: 0.66rem;
+  padding: 0 var(--space-5);
+  cursor: pointer;
+}
+
+.clearFilters:hover {
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+}
+
+/* --- Group-by-category sections ------------------------------------------- */
+
+.groupHeader {
+  font-size: var(--font-md);
+  font-weight: 600;
+  color: var(--color-accent);
+  border-bottom: 1px solid var(--color-border-muted);
+  padding: var(--space-6) 0 var(--space-2);
+  margin: var(--space-4) 0 var(--space-6);
+}
+
+.groupCount {
+  font-weight: 400;
+  font-size: var(--font-sm);
+  color: var(--color-text-muted);
+  margin-left: var(--space-3);
+}
+
+/* --- Card grid -------------------------------------------------------------- */
 
 .grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
   gap: var(--space-8);
-  /* Cards take their natural height instead of stretching to match the tallest
-   * card in the row — a long description no longer leaves blank space in its
-   * shorter row-mates. */
-  align-items: start;
+  margin-bottom: var(--space-8);
 }
 
+/* Uniform cards: every card is the SAME fixed height (flex column — the
+ * description absorbs whatever space the name/author lines leave), so rows
+ * read as a tidy grid regardless of content length. Long descriptions are
+ * clipped and auto-scroll on hover (see .cardDescInner / ScrollingDesc). */
 .card {
   background: var(--color-bg-panel);
   border: 1px solid var(--color-widget-border);
@@ -34,6 +151,10 @@
   padding: var(--space-10);
   cursor: pointer;
   transition: border-color var(--duration-base), transform var(--duration-base);
+  height: 172px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 
 .card:hover {
@@ -46,32 +167,73 @@
   font-weight: 600;
   color: var(--color-text-primary);
   margin: 0 0 var(--space-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 0 0 auto;
 }
 
 .cardAuthor {
   font-size: var(--font-sm);
   color: var(--color-text-muted);
-  margin: 0 0 var(--space-5);
+  margin: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 0 0 auto;
 }
 
+/* Clipped description viewport. The inner div is translated upward by the
+ * hover auto-scroll; the fade hints that more text exists and lifts while
+ * hovered so the scrolling text reads unobstructed. */
 .cardDesc {
   font-size: var(--font-md);
   color: var(--color-text-secondary);
   line-height: 1.5;
-  margin: 0 0 var(--space-6);
-  overflow-wrap: anywhere;
-  /* Clamp to 3 lines so a long description can't balloon the card. The full
-   * text is shown in the hover preview popover. */
-  display: -webkit-box;
-  -webkit-line-clamp: 3;
-  -webkit-box-orient: vertical;
+  margin: var(--space-3) 0 var(--space-5);
   overflow: hidden;
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.cardDescInner {
+  overflow-wrap: anywhere;
+  will-change: transform;
+}
+
+.cardDescFade {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 16px;
+  background: linear-gradient(transparent, var(--color-bg-panel));
+  pointer-events: none;
+  transition: opacity var(--duration-base);
+}
+
+.card:hover .cardDescFade {
+  opacity: 0;
 }
 
 .cardMeta {
   display: flex;
+  align-items: center;
   gap: var(--space-4);
-  flex-wrap: wrap;
+  flex: 0 0 auto;
+}
+
+/* Single-row tag strip — overflowing tags clip instead of wrapping (uniform
+ * card height); the grid size + date stay pinned on the right. */
+.cardTags {
+  display: flex;
+  gap: var(--space-4);
+  align-items: center;
+  overflow: hidden;
+  white-space: nowrap;
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
 .tag {
@@ -82,11 +244,36 @@
   border-radius: var(--radius-pill);
   font-size: 0.68rem;
   color: var(--color-emphasis);
+  flex: 0 0 auto;
+}
+
+.tag:hover {
+  border-color: var(--color-accent);
+}
+
+.tagActive {
+  background: var(--color-accent-soft);
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+}
+
+.dimBadge {
+  display: inline-block;
+  padding: var(--space-1) var(--space-4);
+  border: 1px solid var(--color-accent);
+  border-radius: var(--radius-pill);
+  font-size: 0.68rem;
+  font-weight: 600;
+  color: var(--color-accent);
+  flex: 0 0 auto;
 }
 
 .gridSize {
   font-size: 0.68rem;
   color: var(--color-text-muted);
+  flex: 0 0 auto;
+  margin-left: auto;
+  white-space: nowrap;
 }
 
 .loading {
@@ -101,10 +288,10 @@
   padding: var(--space-16) 0;
 }
 
-/* Hover preview: thumbnail (when the model has one) stacked above the full,
- * un-clamped description. `pointer-events: none` keeps the card's hover intact
- * if the popover overlaps the card near a viewport edge. Height is
- * content-driven, capped at the viewport. */
+/* Hover preview: the model's thumbnail, positioned BESIDE the hovered card
+ * (right, flipping left near the viewport edge) so it never covers the card's
+ * auto-scrolling description. `pointer-events: none` keeps the card's hover
+ * intact if it ever overlaps near an edge. */
 .previewPopover {
   position: fixed;
   width: 320px;
@@ -116,8 +303,6 @@
   z-index: 1000;
   pointer-events: none;
   overflow: hidden;
-  display: flex;
-  flex-direction: column;
 }
 
 .previewThumb {
@@ -126,18 +311,8 @@
   /* Fixed height (not max-height) so the popover's total height is known the
    * moment it renders — before the image loads — which lets the measure-then-
    * position layout effect place it correctly without a post-load reflow. */
-  height: 200px;
+  height: 240px;
   object-fit: contain;
   image-rendering: pixelated;
   background: var(--color-bg-canvas);
-  border-bottom: 1px solid var(--color-border);
-}
-
-.previewDesc {
-  margin: 0;
-  padding: var(--space-6);
-  font-size: var(--font-sm);
-  line-height: 1.5;
-  color: var(--color-text-secondary);
-  overflow-wrap: anywhere;
 }
