@@ -521,7 +521,13 @@ export function uploadAgentAux(
     const tl = L.lookupTables[id];
     if (!tl) continue;
     const data = tables[id];
-    const n = tl.rowCount * tl.colCount;
+    // A MULTI-AXIS (N-D) table reserves Π dims f32 slots (rowCount*colCount only
+    // covers dims[0]*dims[1]) — the N-D emitter indexes the full Π-dims region,
+    // so upload all of it or entries past dims[0]*dims[1] stay 0 (and this target
+    // diverges from JS/WASM, which copy the whole tbl.length).
+    const n = tl.dims && tl.dims.length > 0
+      ? tl.dims.reduce((a, b) => a * Math.max(1, b), 1)
+      : tl.rowCount * tl.colCount;
     for (let i = 0; i < n; i++) f[tl.base + i] = data ? (data[i] ?? 0) : 0;
   }
   rt.device.queue.writeBuffer(rt.auxF32Buf, 0, f.buffer, f.byteOffset, f.byteLength);
