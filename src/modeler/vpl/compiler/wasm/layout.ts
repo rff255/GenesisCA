@@ -28,6 +28,7 @@ import type { CAModel } from '../../../../model/types';
 import { FACE_SLOT_COUNT, resolveKeyLabels, resolveAxes, isMultiAxisTable } from '../variegation';
 import { hasGlyphsInModel } from '../glyphsUsage';
 import { expandVectorAttributes } from '../vectorAttr';
+import { sparseSteppingEnabled } from '../sparseStepping';
 
 export interface AttrDef {
   id: string;
@@ -178,6 +179,21 @@ export interface MemoryLayout {
 
   /** Sentinel cell index used by constant boundary (-1 if torus). */
   sentinelIndex: number;
+
+  // ---- "Skip Isolated Empty Cells" (docs/PLAN_LARGE_GRID_PERF.md) ----
+
+  /** True when the layout was computed with sparse stepping on (the feature
+   *  enabled + sync + gridCells — `sparseSteppingEnabled`). Reserves the
+   *  active-list region AND switches the nbr tables to the compact
+   *  packed-offset form (inline neighbour computation). */
+  sparseStepping: boolean;
+  /** Byte offset of the active-cell list (Int32Array, `total` capacity). The
+   *  worker's ActiveSet.list is a VIEW over this region, so the sparse step
+   *  (JS param / WASM baked offset) reads the live list with zero copies.
+   *  Appended LAST so a non-sparse module's offsets are byte-identical. */
+  activeListOffset: number;
+  /** Bytes reserved for the active list (`total × 4`; 0 when off). */
+  activeListBytes: number;
 }
 
 export function alignTo(off: number, align: number): number {
@@ -216,6 +232,11 @@ export function computeMemoryLayout(
   // Callers that compile the lattice step never pass false (the lattice
   // targets are gated off entirely when the grid is off).
   gridCells: boolean = true,
+  // "Skip Isolated Empty Cells": reserve the active-list region (appended LAST
+  // so a non-sparse layout is byte-identical) + (Phase 3) compact nbr tables.
+  // MUST equal `sparseSteppingEnabled(model)` on the compile side and the
+  // worker's mirror predicate — layout-lockstep.
+  sparseStepping: boolean = false,
 ): MemoryLayout {
   let off = 0;
   const glyphsOn = hasGlyphs && gridCells;
@@ -409,6 +430,13 @@ export function computeMemoryLayout(
 
   const sentinelIndex = boundaryTreatment === 'constant' ? total : -1;
 
+  // "Skip Isolated Empty Cells": the active-cell list region. Appended LAST so
+  // every offset above is byte-identical whether or not the feature is on.
+  off = alignTo(off, 8);
+  const activeListOffset = off;
+  const activeListBytes = (sparseStepping && gridCells) ? total * 4 : 0;
+  off += activeListBytes;
+
   const totalBytes = off;
   const pages = Math.max(1, Math.ceil(totalBytes / 65536));
   return {
@@ -430,6 +458,8 @@ export function computeMemoryLayout(
     interactionTableOffsets,
     scratchOffset, scratchBytes,
     sentinelIndex,
+    sparseStepping: sparseStepping && gridCells,
+    activeListOffset, activeListBytes,
   };
 }
 
@@ -494,6 +524,8 @@ export function computeLayoutFromModel(
     variegated,
     hasGlyphsInModel(model),
     lookupTables,
+    true,
+    sparseSteppingEnabled(model),
   );
 }
 

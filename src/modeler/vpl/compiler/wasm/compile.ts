@@ -6566,6 +6566,12 @@ interface EntryPointOpts {
   useOrderArrayInAsync: boolean;
   /** For InputColor: maps the entry node's r/g/b output ports to param indices 1, 2, 3. */
   paramOutputs?: Record<string, number>;
+  /** "Skip Isolated Empty Cells": emit the sparse loop variant. The entry gains
+   *  a 2nd i32 param `activeCount` — `>= 0` iterates the active-list region
+   *  (`layout.activeListOffset`), `< 0` (the worker's -1 sentinel) runs the
+   *  classic full 0..total loop. Mirrors the JS step's `if (_activeList)`.
+   *  Only set on loop entries (step / outputMapping), never init/inputColor. */
+  sparse?: boolean;
 }
 
 function compileEntry(
@@ -7070,54 +7076,87 @@ function compileEntry(
     // layout.scratchOffset, so the snapshot is a no-op in that case.
     emitter.localGet(scratchTopLocal);
     emitter.localSet(perCellScratchBase);
-    emitter.i32Const(0);
-    emitter.localSet(outerCounter);
-    emitter.block(() => {
-      emitter.loop(() => {
-        // _i >= total -> exit
-        emitter.localGet(outerCounter);
-        emitter.localGet(0);
-        emitter.op(OP_I32_GE_S);
-        emitter.brIf(1);
-
-        // i := _i (sync OR sequential async) or i := orderArray[_i] (async + step)
-        if (layout.isAsync && opts.useOrderArrayInAsync) {
+    // The per-cell loop, parameterised over its bound + index source so the
+    // sparse variant ("Skip Isolated Empty Cells") can reuse it verbatim:
+    //   boundParam  — the param index holding the iteration count
+    //   fromActiveList — i := activeList[_i] instead of i := _i / orderArray[_i]
+    // The non-sparse call (boundParam 0, false) emits BYTE-IDENTICAL code to the
+    // historical inline loop.
+    const emitCellLoop = (boundParam: number, fromActiveList: boolean) => {
+      emitter.i32Const(0);
+      emitter.localSet(outerCounter);
+      emitter.block(() => {
+        emitter.loop(() => {
+          // _i >= bound -> exit
           emitter.localGet(outerCounter);
-          emitter.i32Const(4);
-          emitter.op(OP_I32_MUL);
-          emitter.i32Load(layout.orderOffset, 2);
-          emitter.localSet(iLocal);
+          emitter.localGet(boundParam);
+          emitter.op(OP_I32_GE_S);
+          emitter.brIf(1);
 
-          // Mark Cell Updated: if `_skipped[i] != 0`, advance the outer counter
-          // and continue to the next iteration without running the body. JS
-          // mirror is `if (_skipped[idx] !== 0) continue;` at the top of the
-          // async loop. `br 1` inside the `ifThen` re-enters the loop (skipping
-          // the body + the post-body increment), so increment outerCounter
-          // here first.
-          emitter.localGet(iLocal);
-          emitter.i32Load8U(layout.skippedOffset, 0);
-          emitter.ifThen(() => {
+          // i := _i (sync OR sequential async) or i := orderArray[_i] (async +
+          // step) or i := activeList[_i] (sparse)
+          if (fromActiveList) {
             emitter.localGet(outerCounter);
-            emitter.i32Const(1);
-            emitter.op(OP_I32_ADD);
-            emitter.localSet(outerCounter);
-            emitter.br(1); // continue loop
-          });
-        } else {
+            emitter.i32Const(4);
+            emitter.op(OP_I32_MUL);
+            emitter.i32Load(layout.activeListOffset, 2);
+            emitter.localSet(iLocal);
+          } else if (layout.isAsync && opts.useOrderArrayInAsync) {
+            emitter.localGet(outerCounter);
+            emitter.i32Const(4);
+            emitter.op(OP_I32_MUL);
+            emitter.i32Load(layout.orderOffset, 2);
+            emitter.localSet(iLocal);
+
+            // Mark Cell Updated: if `_skipped[i] != 0`, advance the outer counter
+            // and continue to the next iteration without running the body. JS
+            // mirror is `if (_skipped[idx] !== 0) continue;` at the top of the
+            // async loop. `br 1` inside the `ifThen` re-enters the loop (skipping
+            // the body + the post-body increment), so increment outerCounter
+            // here first.
+            emitter.localGet(iLocal);
+            emitter.i32Load8U(layout.skippedOffset, 0);
+            emitter.ifThen(() => {
+              emitter.localGet(outerCounter);
+              emitter.i32Const(1);
+              emitter.op(OP_I32_ADD);
+              emitter.localSet(outerCounter);
+              emitter.br(1); // continue loop
+            });
+          } else {
+            emitter.localGet(outerCounter);
+            emitter.localSet(iLocal);
+          }
+
+          emitBody();
+
+          // _i += 1; continue
           emitter.localGet(outerCounter);
-          emitter.localSet(iLocal);
-        }
-
-        emitBody();
-
-        // _i += 1; continue
-        emitter.localGet(outerCounter);
-        emitter.i32Const(1);
-        emitter.op(OP_I32_ADD);
-        emitter.localSet(outerCounter);
-        emitter.br(0);
+          emitter.i32Const(1);
+          emitter.op(OP_I32_ADD);
+          emitter.localSet(outerCounter);
+          emitter.br(0);
+        });
       });
-    });
+    };
+    if (opts.sparse) {
+      // "Skip Isolated Empty Cells": select the loop at runtime by the
+      // activeCount param (param 1) — `>= 0` iterates the active list, `< 0`
+      // (the worker's -1 sentinel: no active set resolved / a forced full
+      // colour pass) runs the classic full loop. Mirrors the JS emit's
+      // `if (_activeList) … else …`. The body is emitted twice (once per
+      // branch) — emitBody is re-entrant (it clears the per-cell caches and
+      // allocates fresh locals each call).
+      emitter.localGet(1);
+      emitter.i32Const(0);
+      emitter.op(OP_I32_GE_S);
+      emitter.ifThenElse(
+        () => emitCellLoop(1, true),
+        () => emitCellLoop(0, false),
+      );
+    } else {
+      emitCellLoop(0, false);
+    }
   } else {
     // Single-shot (InputColor): idx is param 0 directly. Viewer hoist still
     // emits in case the brush flow contains a SetColorViewer (uncommon but
@@ -7292,6 +7331,11 @@ export function compileGraphWasm(
   const exportEntries: Array<{ name: string; typeIdx: number; body: Uint8Array }> = [];
   const allErrors: string[] = [];
 
+  // "Skip Isolated Empty Cells": the loop entries (step + outputMapping) gain a
+  // 2nd `activeCount` param + the runtime-selected sparse/full loop. Init +
+  // InputColor stay full/per-cell always. OFF → byte-identical modules.
+  const sparse = layout.sparseStepping;
+
   // Step
   const stepSink = analyzeSinkScopes({
     nodes: graphNodes, edges: graphEdges, rootNodeId: stepNode.id, rootFlowPortId: 'do',
@@ -7299,16 +7343,17 @@ export function compileGraphWasm(
   const stepRes = compileEntry(
     {
       entry: stepNode,
-      numParams: 1,
+      numParams: sparse ? 2 : 1,
       iLocalSource: 'param0WithLoop',
       hasLoop: true,
       emitCopyLines: true,
       useOrderArrayInAsync: true,
+      sparse,
     },
     layout, viewerIds, model, nodeMap, inputToSource, inputToSources, flowOutputToTargets, loopInvariant, stepSink,
   );
   allErrors.push(...stepRes.errors);
-  exportEntries.push({ name: 'step', typeIdx: TYPE_IDX_TOTAL, body: stepRes.body });
+  exportEntries.push({ name: 'step', typeIdx: sparse ? TYPE_IDX_TOTAL_COUNT : TYPE_IDX_TOTAL, body: stepRes.body });
 
   // OutputMapping (one per mapping) — always sequential, no copy lines.
   for (const om of outputMappingNodes) {
@@ -7319,16 +7364,17 @@ export function compileGraphWasm(
     const omRes = compileEntry(
       {
         entry: om,
-        numParams: 1,
+        numParams: sparse ? 2 : 1,
         iLocalSource: 'param0WithLoop',
         hasLoop: true,
         emitCopyLines: false,
         useOrderArrayInAsync: false,
+        sparse,
       },
       layout, viewerIds, model, nodeMap, inputToSource, inputToSources, flowOutputToTargets, loopInvariant, omSink,
     );
     allErrors.push(...omRes.errors);
-    exportEntries.push({ name: `outputMapping_${sanitiseExportName(mappingId)}`, typeIdx: TYPE_IDX_TOTAL, body: omRes.body });
+    exportEntries.push({ name: `outputMapping_${sanitiseExportName(mappingId)}`, typeIdx: sparse ? TYPE_IDX_TOTAL_COUNT : TYPE_IDX_TOTAL, body: omRes.body });
   }
 
   // Init Event entry-point (optional, one per model). Runs once per cell on
@@ -7400,6 +7446,9 @@ export function compileGraphWasm(
   const typeIdxRgb = funcType([I32, I32, I32, I32], []);
   const typeUnary = funcType([F64], [F64]);
   const TYPE_IDX_UNARY = 3;
+  // Sparse entries: (total, activeCount) -> (). Appended ONLY when sparse so a
+  // non-sparse module's type section is byte-identical.
+  const typeTotalCount = funcType([I32, I32], []);
 
   // Imports: env.mem (memory) + the host math functions WASM can't synthesise.
   // The func imports MUST appear in funcIdx order (pow, exp, log, sin, cos, tan,
@@ -7425,7 +7474,9 @@ export function compileGraphWasm(
   const codes = exportEntries.map(e => e.body);
 
   const bytes = buildModule({
-    types: [typePow, typeTotal, typeIdxRgb, typeUnary],
+    types: sparse
+      ? [typePow, typeTotal, typeIdxRgb, typeUnary, typeTotalCount]
+      : [typePow, typeTotal, typeIdxRgb, typeUnary],
     imports: [memImport, powImport, ...unaryImports],
     funcs,
     exports,
@@ -7443,6 +7494,8 @@ export function compileGraphWasm(
 // Type indices (relative to the order in the types section above)
 const TYPE_IDX_TOTAL = 1;
 const TYPE_IDX_IDX_RGB = 2;
+/** Sparse loop entries — (total, activeCount) -> (). Present only in sparse modules. */
+const TYPE_IDX_TOTAL_COUNT = 4;
 
 /** Sanitise mapping ids into something WASM exports can handle. The export
  *  name is just bytes, but our worker uses these as JS object keys, so we

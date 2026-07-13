@@ -3569,7 +3569,13 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       // overrun into rngState/order and the new module's baked offsets desync. So
       // a change in the indicator COUNT forces a full reinit (rebuilds the layout
       // + memory); same-count edits still ride the soft recompile + updateIndicators.
-      || (prev.indicators?.length ?? 0) !== (model.indicators?.length ?? 0);
+      || (prev.indicators?.length ?? 0) !== (model.indicators?.length ?? 0)
+      // "Skip Isolated Empty Cells": the config drives the baked wasmMemory
+      // layout (the active-list region + the compact nbr tables) AND the step
+      // fn's signature — ANY change forces a full reinit so the module, memory,
+      // and worker active-set can never desync (a soft recompile would re-bake
+      // the module against a layout the live memory doesn't have).
+      || JSON.stringify(prev.properties.skipIsolatedEmpty ?? null) !== JSON.stringify(model.properties.skipIsolatedEmpty ?? null);
 
     if (needsFullInit) {
       workerRef.current?.terminate();
