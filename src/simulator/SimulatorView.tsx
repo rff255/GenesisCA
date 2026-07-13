@@ -1491,6 +1491,9 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     if (result.initCode) {
       parts.push('// === Init Event (per-cell, runs once on Reset) ===\n' + result.initCode);
     }
+    if (result.gridInitCode) {
+      parts.push('// === Grid Init Event (global, runs once on Reset) ===\n' + result.gridInitCode);
+    }
     for (const ic of result.inputColorCodes) {
       const m = model.mappings.find(mp => mp.id === ic.mappingId);
       parts.push(`// === Input Mapping: ${m?.name || ic.mappingId} ===\n${ic.code}`);
@@ -3230,6 +3233,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       asyncScheme: model.properties.asyncScheme || 'random-order',
       stepCode: result.stepCode,
       initCode: result.initCode,
+      gridInitCode: result.gridInitCode,
       inputColorCodes: result.inputColorCodes,
       outputMappingCodes: result.outputMappingCodes,
       // FIX 4: cell + agent stop messages share one array (the agent indices were
@@ -3687,6 +3691,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
         type: 'recompile',
         stepCode: result.stepCode,
         initCode: result.initCode,
+        gridInitCode: result.gridInitCode,
         inputColorCodes: result.inputColorCodes,
         outputMappingCodes: result.outputMappingCodes || [],
         variegated: model.variegatedCells?.enabled ? {
@@ -7117,6 +7122,14 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
 
   const [leftPanelOpen, setLeftPanelOpen] = useState(true);
   const [rightPanelOpen, setRightPanelOpen] = useState(true);
+  // Which tab the shared right panel shows. 'controls' = the sim controls
+  // (brush + layers + indicators); 'experiments' = the Overseer Experiments
+  // view. The tab strip is only shown when the Overseer feature is enabled;
+  // otherwise the panel is the controls view (as before).
+  const [rightPanelTab, setRightPanelTab] = useState<'controls' | 'experiments'>('controls');
+  // If the Overseer feature is turned off, fall back to the controls tab so a
+  // stale 'experiments' selection can't strand the panel on a hidden view.
+  useEffect(() => { if (!overseerEnabled) setRightPanelTab('controls'); }, [overseerEnabled]);
   const [topBarOpen, setTopBarOpen] = useState(true);
   const [bottomBarOpen, setBottomBarOpen] = useState(true);
   const leftPanelRef = useRef<HTMLDivElement>(null);
@@ -7896,6 +7909,28 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
             }}
           />
 
+          {/* Panel tabs — switch the shared right panel between the sim Controls
+              (brush + layers + indicators) and the Overseer Experiments view.
+              Only shown when the Overseer feature is enabled; with it off the
+              panel is just the controls (as before). Mirrors the modeler's
+              per-panel tabs. */}
+          {overseerEnabled && (
+            <div className={styles.rightPanelTabs} data-sim-overlay>
+              {([['controls', 'Controls'], ['experiments', 'Overseer Experiments']] as const).map(([id, label]) => (
+                <button
+                  key={id}
+                  className={`${styles.rightPanelTab} ${rightPanelTab === id ? styles.rightPanelTabActive : ''}`}
+                  onClick={() => setRightPanelTab(id)}
+                  title={label}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          )}
+
+          {/* === Controls tab === */}
+          {(!overseerEnabled || rightPanelTab === 'controls') && (<>
           {/* Common controls (agent models) — at the TOP of the panel, ABOVE the
               "Brush affects" switch, because they apply to BOTH targets. The Layers
               matrix governs rendering + simulation of the CA grid AND the agents;
@@ -8338,36 +8373,6 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
             />
           )}
 
-          {/* Experiments (Overseer) — rendered ONLY when the feature is enabled;
-              with it off there is zero trace of the Overseer in the simulator. */}
-          {overseerEnabled && (
-            <ExperimentsPanel
-              runtime={overseerRuntimeRef.current}
-              running={overseerRunning}
-              version={overseerVersion}
-              compileError={overseerCompiled.error}
-              hasExperiment={!!overseerCompiled.driverCode}
-              modelName={model.properties.name}
-              spatialMeta={(indicatorId: string) => {
-                // Axis metadata for the spatial aggregate charts (X labels).
-                const ind = (model.indicators || []).find(i => i.id === indicatorId);
-                if (!ind || !ind.xAxis || ind.xAxis === 'generation') return null;
-                const axisLen = ind.xAxis === 'rows' ? (gridHeight.current || simHeight)
-                  : ind.xAxis === 'columns' ? (gridWidth.current || simWidth)
-                  : (gridDepth.current || 1);
-                const binSize = (ind.spatialBinMode ?? 'slices') === 'absolute'
-                  ? Math.max(1, ind.spatialBinSize ?? 1)
-                  : Math.max(1, Math.ceil(axisLen / Math.max(2, Math.min(ind.spatialBinCount ?? 50, axisLen))));
-                return {
-                  axisName: ind.xAxis === 'rows' ? 'row' : ind.xAxis === 'columns' ? 'column' : 'layer',
-                  binSize,
-                };
-              }}
-              onRun={handleRunExperiment}
-              onAbort={() => abortExperiment('user abort')}
-            />
-          )}
-
           {/* Indicators Section (bottom, fills remaining space) */}
           {(model.indicators || []).length > 0 && (
             <div className={`${styles.rightPanelSection} ${styles.rightSectionIndicators}`}>
@@ -8399,6 +8404,36 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
               />
               </div>
             </div>
+          )}
+          </>)}
+
+          {/* === Overseer Experiments tab === */}
+          {overseerEnabled && rightPanelTab === 'experiments' && (
+            <ExperimentsPanel
+              runtime={overseerRuntimeRef.current}
+              running={overseerRunning}
+              version={overseerVersion}
+              compileError={overseerCompiled.error}
+              hasExperiment={!!overseerCompiled.driverCode}
+              modelName={model.properties.name}
+              spatialMeta={(indicatorId: string) => {
+                // Axis metadata for the spatial aggregate charts (X labels).
+                const ind = (model.indicators || []).find(i => i.id === indicatorId);
+                if (!ind || !ind.xAxis || ind.xAxis === 'generation') return null;
+                const axisLen = ind.xAxis === 'rows' ? (gridHeight.current || simHeight)
+                  : ind.xAxis === 'columns' ? (gridWidth.current || simWidth)
+                  : (gridDepth.current || 1);
+                const binSize = (ind.spatialBinMode ?? 'slices') === 'absolute'
+                  ? Math.max(1, ind.spatialBinSize ?? 1)
+                  : Math.max(1, Math.ceil(axisLen / Math.max(2, Math.min(ind.spatialBinCount ?? 50, axisLen))));
+                return {
+                  axisName: ind.xAxis === 'rows' ? 'row' : ind.xAxis === 'columns' ? 'column' : 'layer',
+                  binSize,
+                };
+              }}
+              onRun={handleRunExperiment}
+              onAbort={() => abortExperiment('user abort')}
+            />
           )}
         </div>
       )}

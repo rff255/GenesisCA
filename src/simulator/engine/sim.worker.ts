@@ -129,6 +129,9 @@ interface InitMsg {
    *  reset handler runs it once after default values are applied and before
    *  the first color pass. */
   initCode?: string;
+  /** Optional GLOBAL Grid Init Event function source (NOT loop-wrapped). Runs
+   *  once on Reset + first load, after the per-cell init, to seed the grid. */
+  gridInitCode?: string;
   inputColorCodes: Array<{ mappingId: string; code: string }>;
   outputMappingCodes: Array<{ mappingId: string; code: string }>;
   /** Variegated Cells config. Undefined / absent ÃƒÂ¢Ã¢â‚¬Â¡Ã¢â‚¬â„¢ feature disabled, no
@@ -275,7 +278,7 @@ interface PaintManualMsg {
   activeViewer: string;
 }
 interface ResetMsg { type: 'reset'; activeViewer: string; reqId?: number }
-interface RecompileMsg { type: 'recompile'; stepCode: string; initCode?: string; inputColorCodes: Array<{ mappingId: string; code: string }>; outputMappingCodes: Array<{ mappingId: string; code: string }>; stopMessages?: string[]; updateMode: string; asyncScheme: string; wasmStepBytes?: Uint8Array; wasmStepError?: string; wasmExports?: string[]; viewerIds?: Record<string, number>; webgpuShaderCode?: string; webgpuShaderError?: string; webgpuEntryPoints?: WebGPUEntryPoints; webgpuLayout?: WebGPULayout; webgpuStopCheckInterval?: number; variegated?: VariegatedPayload; interactionTables?: InteractionTablePayload[]; agentBehaviourCode?: string; agentInitCode?: string; agentDivisionCode?: string; agentColorViewer?: string; agentOutputMappingCodes?: Array<{ mappingId: string; code: string }>; agentHasSprites?: boolean; centerBased?: CenterBasedConfig; agentUsesField?: boolean; agentTarget?: 'js' | 'wasm' | 'webgpu'; agentWasmBytes?: Uint8Array; agentWasmViewerGuardIds?: string[]; agentLayoutExtras?: AgentLayoutExtras; agentWebgpuBehaviourShader?: string; agentWebgpuForceShader?: string; agentWebgpuMaxAgents?: number; agentWebgpuMaxHashBins?: number; agentWebgpuLayout?: AgentWebGPULayout; agentWebgpuUsesI32Write?: boolean; agentWebgpuUsage?: { usesBondStore?: boolean; usesIndicators?: boolean; usesAux?: boolean; usesSpawn?: boolean; usesStop?: boolean } }
+interface RecompileMsg { type: 'recompile'; stepCode: string; initCode?: string; gridInitCode?: string; inputColorCodes: Array<{ mappingId: string; code: string }>; outputMappingCodes: Array<{ mappingId: string; code: string }>; stopMessages?: string[]; updateMode: string; asyncScheme: string; wasmStepBytes?: Uint8Array; wasmStepError?: string; wasmExports?: string[]; viewerIds?: Record<string, number>; webgpuShaderCode?: string; webgpuShaderError?: string; webgpuEntryPoints?: WebGPUEntryPoints; webgpuLayout?: WebGPULayout; webgpuStopCheckInterval?: number; variegated?: VariegatedPayload; interactionTables?: InteractionTablePayload[]; agentBehaviourCode?: string; agentInitCode?: string; agentDivisionCode?: string; agentColorViewer?: string; agentOutputMappingCodes?: Array<{ mappingId: string; code: string }>; agentHasSprites?: boolean; centerBased?: CenterBasedConfig; agentUsesField?: boolean; agentTarget?: 'js' | 'wasm' | 'webgpu'; agentWasmBytes?: Uint8Array; agentWasmViewerGuardIds?: string[]; agentLayoutExtras?: AgentLayoutExtras; agentWebgpuBehaviourShader?: string; agentWebgpuForceShader?: string; agentWebgpuMaxAgents?: number; agentWebgpuMaxHashBins?: number; agentWebgpuLayout?: AgentWebGPULayout; agentWebgpuUsesI32Write?: boolean; agentWebgpuUsage?: { usesBondStore?: boolean; usesIndicators?: boolean; usesAux?: boolean; usesSpawn?: boolean; usesStop?: boolean } }
 interface UpdateLookupTableMsg {
   type: 'updateLookupTable';
   attrId: string;
@@ -2121,6 +2124,12 @@ let outputMappingFns: Array<{ mappingId: string; fn: Function }> = [];
  *  Reset (NOT on Load State), after default values are
  *  applied and before the first color pass. */
 let initFn: Function | null = null;
+/** Optional GLOBAL Grid Init Event function compiled from the Grid Init Event
+ *  node. Null when the graph contains no Grid Init Event. Runs ONCE (not per
+ *  cell) on Reset + first load, after defaults + the per-cell Init Event and
+ *  before the first colour pass. Executed on every compile target (it writes the
+ *  CPU/wasm attribute buffers; the worker then syncs / uploads). See runGridInit. */
+let gridInitFn: Function | null = null;
 
 /** Per-table Float64Array of length `rowCount * colCount` (row-major). Keyed by
  *  attribute id. Rebuilt on init / recompile / updateLookupTable. */
@@ -3572,6 +3581,7 @@ function compileFns(
   icCodes: Array<{ mappingId: string; code: string }>,
   omCodes: Array<{ mappingId: string; code: string }> = [],
   initCode: string = '',
+  gridInitCode: string = '',
 ): void {
   try {
     // eslint-disable-next-line no-eval
@@ -3581,6 +3591,10 @@ function compileFns(
     // eslint-disable-next-line no-eval
     initFn = initCode ? (eval(initCode) as Function) : null;
   } catch { initFn = null; }
+  try {
+    // eslint-disable-next-line no-eval
+    gridInitFn = gridInitCode ? (eval(gridInitCode) as Function) : null;
+  } catch { gridInitFn = null; }
   inputColorFns = [];
   for (const ic of icCodes) {
     try {
@@ -3723,6 +3737,42 @@ function runInit(): void {
       orientationReadView.set(orientationWriteView);
     }
   }
+}
+
+/** Grid Init Event — the GLOBAL once-per-Reset seeding function (NOT loop-wrapped,
+ *  no per-cell `idx`). Runs on Reset + first load, AFTER the per-cell runInit (so a
+ *  global seed is the final word), writing arbitrary cells via Set Cell (at
+ *  Position). Executes on EVERY compile target: it writes the CPU/wasm attribute
+ *  buffers (which are views over wasmMemory under WASM), then the sync-mode buffer
+ *  copy below + the caller's WebGPU upload push the seeded state to the target.
+ *
+ *  Buffer discipline (mirrors runInit): it runs right after resetGrid / initGrid,
+ *  so readAttrs === attrsA (the WASM baked read offset) and writeAttrs === attrsB.
+ *  Sync mode: seed the write buffer with the current read state (so cells the user
+ *  doesn't touch persist), run the fn (it writes specific w_<attr> cells), then
+ *  copy write -> read. Async mode shares one buffer (no copies). Returns true when
+ *  it ran (so the caller recomputes colours / uploads); false + no-op when there's
+ *  no Grid Init fn or no grid. */
+function runGridInit(): boolean {
+  if (!gridInitFn || !gridCellsEnabled) return false;
+  const isSync = updateMode !== 'asynchronous';
+  if (isSync) {
+    for (const attr of cellAttrs) {
+      (writeAttrs[attr.id] as Uint8Array).set(readAttrs[attr.id] as Uint8Array);
+    }
+  }
+  try {
+    (gridInitFn as (...a: unknown[]) => void)(...buildLoopArgs());
+  } catch (e) {
+    self.postMessage({ type: 'error', message: '[gridInit] Grid Init Event failed: ' + ((e instanceof Error) ? e.message : String(e)) });
+    return false;
+  }
+  if (isSync) {
+    for (const attr of cellAttrs) {
+      (readAttrs[attr.id] as Uint8Array).set(writeAttrs[attr.id] as Uint8Array);
+    }
+  }
+  return true;
 }
 
 /** Run the Output Mapping color pass for the active viewer (if available).
@@ -4332,7 +4382,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       // offsets; JS-target step also reads through the same Float64Array /
       // Int32Array views (single source of truth).
       initVariegation(msg.variegated, msg.interactionTables);
-      compileFns(msg.stepCode, msg.inputColorCodes, msg.outputMappingCodes || [], msg.initCode || '');
+      compileFns(msg.stepCode, msg.inputColorCodes, msg.outputMappingCodes || [], msg.initCode || '', msg.gridInitCode || '');
       // Bond-Graph Agents ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â allocate the co-resident agent engine (additive on
       // top of the always-present grid). The agent behaviour/init functions are
       // compiled by compileAgentFns; absent in PR-A2 (agents seed + render only).
@@ -4409,8 +4459,12 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       // pendingSimStateRestore overwrites this after the first stepped message.
       // (WebGPU init is async ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â stepReady is false here ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â so runInit takes the
       // JS/WASM path; the WebGPU-ready handler uploads the seeded CPU attrs.)
-      const loadHadInit = initFn !== null || (useWasm && wasmInitFn !== null);
+      const loadHadInit = initFn !== null || (useWasm && wasmInitFn !== null) || gridInitFn !== null;
       runInit();
+      // Grid Init Event — the GLOBAL seeding pass, AFTER the per-cell Init Event
+      // (so a global seed is the final word). Writes the CPU/wasm attrs; the
+      // colour-refresh + WebGPU-ready upload below carry the seeded state to GPU.
+      runGridInit();
       // Generic Agent Platform: run the Agent Init Event ONCE on this fresh store
       // (after the fns are compiled), so graph-authored seeding (Create Agent /
       // Add Agent To World) lays down the initial population on first load too ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â
@@ -4812,7 +4866,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       // have been applied and BEFORE the color pass / GPU upload.
       const webgpuReset = useWebGPU && webgpuRuntime?.stepReady;
       const useGPUInit = !!(webgpuReset && webgpuRuntime?.initPipeline);
-      const hadInit = initFn !== null || (useWasm && wasmInitFn !== null) || useGPUInit;
+      const hadInit = initFn !== null || (useWasm && wasmInitFn !== null) || useGPUInit || gridInitFn !== null;
       // GPU init path: push the CPU defaults to GPU BEFORE dispatching init so
       // the init shader reads from a known-good attrsReadBuf. dispatchInit then
       // writes + swaps; the GPU owns the post-init state.
@@ -4821,6 +4875,13 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
         if (orientationReadView) uploadOrientation(webgpuRuntime, orientationReadView);
       }
       runInit();
+      // Grid Init Event — the GLOBAL seeding pass, AFTER the per-cell Init Event
+      // (so a global seed is the final word). Writes CPU readAttrs; the WebGPU
+      // block below re-uploads them when the GPU init pipeline didn't run (the
+      // common gridInit-only case has no GPU init pipeline → useGPUInit false →
+      // readAttrs is uploaded). On WebGPU prefer EITHER a per-cell Init Event OR a
+      // Grid Init Event, not both (a GPU per-cell init owns the GPU buffers).
+      runGridInit();
       // Agent Init Event + colour pass ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â after the cell Init Event (D-FIELD).
       if (agentsEnabled) { runAgentInit(); runAgentColorPass(); }
       if (hadInit) {
@@ -4857,7 +4918,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
         viewerIdMap = (msg as RecompileMsg).viewerIds!;
         syncActiveViewerToMemory();
       }
-      compileFns(msg.stepCode, msg.inputColorCodes, (msg as RecompileMsg).outputMappingCodes || [], (msg as RecompileMsg).initCode || '');
+      compileFns(msg.stepCode, msg.inputColorCodes, (msg as RecompileMsg).outputMappingCodes || [], (msg as RecompileMsg).initCode || '', (msg as RecompileMsg).gridInitCode || '');
       // Bond-Graph Agents: recompile the agent behaviour fn (graph-only edit, no
       // reinit). The store + populations persist (a maxAgents/maxBonds change
       // forces a full reinit instead). Live force/bond params re-clamp ÃƒÅ½Ã¢â‚¬Ât.

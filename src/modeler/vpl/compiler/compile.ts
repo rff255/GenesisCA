@@ -72,6 +72,8 @@ function buildAdjacency(graphNodes: GraphNode[], graphEdges: GraphEdge[]) {
 // ---------------------------------------------------------------------------
 
 const MULTI_OUTPUT_TYPES = new Set(['inputColor', 'initEvent', 'getColorConstant', 'macro', 'colorScale', 'categoricalColor', 'breakDownNeighborIndex', 'getFacingLabels', 'getAllFacingLabels', 'getCellPosition', 'behaviourStep', 'divisionEvent', 'getSelfPosition', 'forEachBond', 'fieldGradient', 'getAgentPosition', 'getAgentOffset', 'getVelocity', 'senseHemifield',
+  // Grid Init Event's value-outs (width/height/depth) resolve via `_v<id>_<port>`.
+  'gridInit',
   // Generic Agent Platform spawn/init: the Agent Init Event's value-outs
   // (worldWidth/worldHeight/seedIndexBase) + Create Agent's `handle` resolve via
   // the `_v<id>_<port>` convention.
@@ -1428,6 +1430,12 @@ export interface CompileResult {
    *  (not on Load State). Empty string when no Init Event
    *  Node is present. */
   initCode: string;
+  /** Grid Init Event function code — the GLOBAL once-per-Reset seeding function
+   *  (NOT loop-wrapped; no per-cell `idx`). Emitted when the graph contains a
+   *  Grid Init Event node. Runs once in the worker on every compile target (it
+   *  writes the CPU/wasm attribute buffers, then the worker syncs / uploads).
+   *  Empty string when no Grid Init Event node is present. */
+  gridInitCode: string;
   inputColorCodes: Array<{ mappingId: string; code: string }>;
   outputMappingCodes: Array<{ mappingId: string; code: string }>;
   /** Parallel to stop-event-node index. When `_stopFlag[0] === n+1`, the
@@ -1443,7 +1451,7 @@ export function compileGraph(
   model?: CAModel,
 ): CompileResult {
   if (!model) {
-    return { stepCode: '', initCode: '', inputColorCodes: [], outputMappingCodes: [], stopMessages: [], error: 'Model required for SoA compilation.' };
+    return { stepCode: '', initCode: '', gridInitCode: '', inputColorCodes: [], outputMappingCodes: [], stopMessages: [], error: 'Model required for SoA compilation.' };
   }
 
   // Expand macro instances up front so everything downstream sees one FLAT
@@ -1454,7 +1462,7 @@ export function compileGraph(
   {
     const expanded = expandMacros(graphNodes, graphEdges, model);
     if (expanded.error) {
-      return { stepCode: '', initCode: '', inputColorCodes: [], outputMappingCodes: [], stopMessages: [], error: expanded.error };
+      return { stepCode: '', initCode: '', gridInitCode: '', inputColorCodes: [], outputMappingCodes: [], stopMessages: [], error: expanded.error };
     }
     graphNodes = expanded.nodes;
     graphEdges = expanded.edges;
@@ -1497,7 +1505,7 @@ export function compileGraph(
   ({ nodes: graphNodes, edges: graphEdges } = injectLinkedOutputMappings(graphNodes, graphEdges, model));
 
   if (graphNodes.length === 0) {
-    return { stepCode: '', initCode: '', inputColorCodes: [], outputMappingCodes: [], stopMessages: [], error: 'No nodes in graph.' };
+    return { stepCode: '', initCode: '', gridInitCode: '', inputColorCodes: [], outputMappingCodes: [], stopMessages: [], error: 'No nodes in graph.' };
   }
 
   const isAsync = model.properties.updateMode === 'asynchronous';
@@ -2116,11 +2124,49 @@ export function compileGraph(
     ].join('\n');
   }
 
+  // --- Grid Init Event (GLOBAL once-per-Reset SETUP function — NOT loop-wrapped,
+  //     NO per-cell `idx`). The free-form counterpart to the per-cell Init Event:
+  //     the user loops (Loop / For Each) inside DO and writes arbitrary cells with
+  //     Set Cell (at Position). Its value-outs expose the grid dims (W/H/D). Runs
+  //     as a JS function in the worker on EVERY compile target (see runGridInit) —
+  //     the seeding is a one-time pass, so there's no per-target emit. ---
+  const gridInitNode = graphNodes.find(n => n.data.nodeType === 'gridInit');
+  let gridInitCode = '';
+  if (gridInitNode) {
+    const { valueLines, preLoopValueLines, flowLines, scratchNodes } = compileRoot(
+      gridInitNode, 'do', nodeMap, inputToSource, inputToSources, flowOutputToTargets, loopInvariant, fusion, graphNodes, graphEdges, model,
+    );
+    const scratchDecls = scratchNodes.map(s => buildScratchDecl(s, model));
+    const gId = gridInitNode.id;
+    // Local Variables (cell scope) are available as global scratch here (counters
+    // / accumulators for "place N seeds", etc.). Not loop-wrapped, so the scalar
+    // `let`s + array fills run ONCE.
+    const gv = buildVariableJS(model.variables || []);
+    gridInitCode = [
+      `(function(${omParams}) {`,
+      ...scratchDecls,
+      ...gv.preLoop,
+      ...gv.inLoopReset.map(l => '  ' + l.trimStart()),
+      // Grid-dimension value-outs — emitted BEFORE the (loop-invariant)
+      // preLoopValueLines so a hoisted `width / 2` sees them defined.
+      `  const _v${gId}_width = W;`,
+      `  const _v${gId}_height = H;`,
+      ...(is3d ? [`  const _v${gId}_depth = D;`] : []),
+      '  let _rs = _rngState[0] || 0x12345678;',
+      ...preLoopValueLines,
+      ...valueLines,
+      '',
+      ...flowLines,
+      '  _rngState[0] = _rs;',
+      '})',
+    ].join('\n');
+  }
+
   const error = asyncValidationError
     ?? variegatedValidationError
     ?? (!stepNode ? 'No Step node found. Add a Step node as the entry point.' : undefined);
 
-  return { stepCode, initCode, inputColorCodes, outputMappingCodes, stopMessages, error };
+  return { stepCode, initCode, gridInitCode, inputColorCodes, outputMappingCodes, stopMessages, error };
 }
 
 // ===========================================================================

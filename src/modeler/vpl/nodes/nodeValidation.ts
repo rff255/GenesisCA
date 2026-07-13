@@ -153,6 +153,11 @@ export function detectMissingConfig(
       if (nodeType === 'setAttribute') checkSlots(hasOwnAttr, 'an attribute');
       break;
 
+    // Grid Init Event write primitive — always writes a CELL attribute.
+    case 'setCellAtPosition':
+      if (!hasCellAttr(config.attributeId)) issues.push('Select an attribute');
+      break;
+
     // Generic Agent Platform — field-bridge READ nodes: the cell attribute must
     // be agent-readable (agentAccess read|readWrite), or the field channel param
     // isn't threaded and the emit references `_field__undef`.
@@ -742,6 +747,9 @@ export function detectCapabilityRequirements(
 export const LATTICE_ONLY_TYPES = new Set<string>([
   // cell event roots (the agent graph is rooted at behaviourStep)
   'step', 'initEvent', 'inputColor', 'outputMapping',
+  // Grid Init Event + its write primitive — seed the LATTICE grid (agents use the
+  // Agent Init Event + Create Agent).
+  'gridInit', 'setCellAtPosition',
   // neighbour + neighbour-index access (agents have no lattice neighbourhood)
   'getNeighborsAttribute', 'getNeighborAttributeByIndex', 'getNeighborAttributeByTag',
   'getNeighborIndexesByTags', 'getNeighborsAttrByIndexes', 'getAllNeighborIndexes',
