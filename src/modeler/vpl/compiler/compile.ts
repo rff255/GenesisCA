@@ -19,7 +19,9 @@ import { expandComposites } from './expandComposites';
 import { lowerVectorAttrs } from './vectorAttr';
 import { lowerFacingSource } from './facingSource';
 import { computeAsyncReadWriteHazards } from './asyncWriteHazard';
+import { sparseSteppingEnabled } from './sparseStepping';
 import { expandMacros } from './macroExpand';
+export { sparseSteppingEnabled } from './sparseStepping';
 import { computeVolatileHoist } from './volatileHoist';
 import {
   isSubAttribute,
@@ -1282,21 +1284,6 @@ function decodeCoordLines(is3d: boolean, indent: string): string[] {
   ];
 }
 
-/** "Skip Isolated Empty Cells" (docs/PLAN_LARGE_GRID_PERF.md, Feature A) is
- *  active for a compile when it's enabled + synchronous + the model uses the CA
- *  grid. Sync-only (async's single-buffer + shuffle order is incompatible with a
- *  list-iteration active set). When true, the step + colour-pass emit a sparse
- *  loop variant (iterate `_activeList`) selected at runtime by the `_activeList`
- *  param, and linked-indicator aggregation is routed to the worker's full-grid
- *  scan (so it stays correct over ALL cells, not just active ones). Feature OFF →
- *  byte-identical to today. */
-export function sparseSteppingEnabled(model: CAModel): boolean {
-  const sie = model.properties.skipIsolatedEmpty;
-  return !!sie?.enabled
-    && model.properties.updateMode !== 'asynchronous'
-    && model.topologyMode?.gridCells !== false;
-}
-
 function buildLoopParams(model: CAModel): {
   params: string;
   cellAttrs: Array<{ id: string; type: string }>;
@@ -2094,6 +2081,14 @@ export function compileGraph(
   if (model.variegatedCells?.enabled || model.attributes.some(a => a.isModelAttribute && a.type === 'lookupTable')) {
     omParamParts.push('r_orientation', 'w_orientation', '_facePatternLookup', '_lookupTables');
   }
+  // "Skip Isolated Empty Cells": the colour pass gets the same sparse loop
+  // variant as the step (recolour only ACTIVE cells — inactive cells never step,
+  // so their colour inputs are frozen and their last-painted colour stays
+  // correct). The worker passes a null list to force a FULL pass on the rare
+  // events where an inactive cell's colour COULD change (model-attr edit,
+  // viewer switch, paint, reset/load). Appended LAST — OFF byte-identical.
+  const omSparse = sparseSteppingEnabled(model);
+  if (omSparse) omParamParts.push('_activeList', '_activeCount');
   const omParams = omParamParts.join(', ');
 
   for (const omNode of outputMappingNodes) {
@@ -2102,20 +2097,39 @@ export function compileGraph(
       omNode, 'do', nodeMap, inputToSource, inputToSources, flowOutputToTargets, loopInvariant, fusion, graphNodes, graphEdges, model,
     );
     const scratchDecls = scratchNodes.map(s => buildScratchDecl(s, model));
-    const code = [
-      `(function(${omParams}) {`,
-      ...scratchDecls,
-      ...viewerHoistLines,
-      ...preLoopValueLines,
-      '  let _rs = _rngState[0] || 0x12345678;',
-      '  for (let idx = 0; idx < total; idx++) {',
+    const omPerCell = [
       '    const colorIdx = idx * 4;',
       // Wave A.6: per-cell (row, col) decoded from idx for NI access helpers.
       ...decodeCoordLines(is3d, '    '),
       ...valueLines,
       '',
       ...flowLines,
-      '  }',
+    ];
+    const omLoop = omSparse
+      ? [
+          '  if (_activeList) {',
+          '    for (let _si = 0; _si < _activeCount; _si++) {',
+          '      const idx = _activeList[_si];',
+          ...omPerCell.map(l => '  ' + l),
+          '    }',
+          '  } else {',
+          '    for (let idx = 0; idx < total; idx++) {',
+          ...omPerCell.map(l => '  ' + l),
+          '    }',
+          '  }',
+        ]
+      : [
+          '  for (let idx = 0; idx < total; idx++) {',
+          ...omPerCell,
+          '  }',
+        ];
+    const code = [
+      `(function(${omParams}) {`,
+      ...scratchDecls,
+      ...viewerHoistLines,
+      ...preLoopValueLines,
+      '  let _rs = _rngState[0] || 0x12345678;',
+      ...omLoop,
       '  _rngState[0] = _rs;',
       '})',
     ].join('\n');

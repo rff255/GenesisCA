@@ -2590,6 +2590,11 @@ function initGrid(): void {
     hasGlyphs,
     lookupTables,
     gridCellsEnabled,   // grid off ÃƒÂ¢Ã¢â‚¬Â¡Ã¢â‚¬â„¢ no colors/glyphs/order/skipped/attr-write regions
+    // "Skip Isolated Empty Cells": MUST equal the compile side's
+    // sparseSteppingEnabled(model) (enabled + sync + gridCells) or the baked
+    // activeListOffset desyncs — layout-lockstep. sieConfig is set from the
+    // init message BEFORE initGrid runs.
+    !!sieConfig?.enabled && !isAsync && gridCellsEnabled,
   );
   wasmMemory = new WebAssembly.Memory({ initial: wasmLayout.pages });
   const buf = wasmMemory.buffer;
@@ -2753,7 +2758,7 @@ function buildNeighborIndices(): void {
 let activeViewer = '';
 
 /** Build args for the loop-wrapped step function (called once per step, not per cell) */
-function buildLoopArgs(): unknown[] {
+function buildLoopArgs(useActiveList: boolean = true): unknown[] {
   // 3D Grid CA: `depth` + `WH` follow W/H ONLY for a 3D grid (depth > 1),
   // matching the compiler's buildLoopParams (gated on is3dModel === dimension
   // 3d && gridDepth > 1, which is exactly depth > 1 here). 2D args byte-identical.
@@ -2783,11 +2788,13 @@ function buildLoopArgs(): unknown[] {
   }
   // "Skip Isolated Empty Cells": the active-cell list + count. Appended LAST,
   // mirroring compile.ts buildLoopParams (gated on the SAME sieParamsPresent =
-  // enabled + sync + gridCells). A null list makes the step run the full loop
-  // (feature enabled but the config didn't resolve / not yet built).
+  // enabled + sync + gridCells). A null list makes the fn run the full loop —
+  // used when the config didn't resolve AND for forced-full colour passes
+  // (`useActiveList` false: paint / reset / model-attr / viewer events).
   if (sieParamsPresent) {
-    args.push(activeSet ? activeSet.list : null);
-    args.push(activeSet ? activeSet.count : 0);
+    const useList = useActiveList && activeSet !== null;
+    args.push(useList ? activeSet!.list : null);
+    args.push(useList ? activeSet!.count : 0);
   }
   return args;
 }
@@ -3018,18 +3025,27 @@ function runStep(): void {
   // WASM step has a different signature (just `total`) since attrs/colors
   // live in the imported memory and offsets are baked into the module.
   if (callWasm) {
-    (fn as (t: number) => void)(total);
+    // "Skip Isolated Empty Cells": a sparse module's step is (total, activeCount)
+    // — activeCount >= 0 iterates the active-list region, -1 runs the full loop
+    // (mirrors the JS `if (_activeList)`). The list itself is already in wasm
+    // memory (ActiveSet.list is a view over layout.activeListOffset).
+    if (sieParamsPresent) {
+      (fn as (t: number, c: number) => void)(total, activeSet ? activeSet.count : -1);
+    } else {
+      (fn as (t: number) => void)(total);
+    }
   } else {
     fn(...buildLoopArgs());
   }
 
   // "Skip Isolated Empty Cells": update the active set from this step's
   // empty<->non-empty transitions BEFORE the buffer swap — readAttrs is the
-  // pre-step state, writeAttrs the post-step state. Only ACTIVE cells were
-  // stepped, so only they can transition; a snapshot of the pre-step count
-  // means newly-activated cells (appended) are processed NEXT step. JS sparse
-  // path only in Phase 1 (WASM sparse is Phase 2).
-  if (isSync && activeSet && sieParamsPresent && !callWasm) {
+  // pre-step state, writeAttrs the post-step state (on WASM sync too: the
+  // pre-step normalization pinned readAttrs=attrsA and WASM wrote attrsB; the
+  // w->r bulk copy below hasn't run yet). Only ACTIVE cells were stepped, so
+  // only they can transition; a snapshot of the pre-step count means
+  // newly-activated cells (appended) are processed NEXT step.
+  if (isSync && activeSet && sieParamsPresent) {
     const as = activeSet;
     const rArr = readAttrs[sieEmptyAttrId] as unknown as { [i: number]: number } | undefined;
     const wArr = writeAttrs[sieEmptyAttrId] as unknown as { [i: number]: number } | undefined;
@@ -3852,9 +3868,16 @@ function setupActiveSet(): void {
   }
   if (!built || built.offCount === 0) return;   // invalid range → step runs full
   sieEmptyAttrId = cfg.emptyAttributeId;
+  // Back the active LIST with the wasmMemory region when the layout reserved it
+  // (it does whenever the feature resolved at init) — the sparse WASM step reads
+  // the list via the baked activeListOffset, and the JS step reads the SAME view
+  // through its `_activeList` arg. Zero per-step copies.
+  const listView = (wasmMemory && wasmLayout && wasmLayout.activeListBytes >= total * 4)
+    ? new Int32Array(wasmMemory.buffer, wasmLayout.activeListOffset, total)
+    : undefined;
   activeSet = createActiveSet(
     { width, height, depth, total, is3d, torus: boundaryTreatment === 'torus' },
-    built.offsets, built.offCount, emptyVal,
+    built.offsets, built.offCount, emptyVal, listView,
   );
 }
 
@@ -3870,7 +3893,7 @@ function rebuildActiveSetFromGrid(): void {
  *  WASM mode: uses wasmOutputMappingFns. Sync mode + WASM also requires the
  *  same readAttrs->attrsA pre-step normalisation as runStep does, because the
  *  output mapping reads from the baked-in attrReadOffset. */
-function runColorPass(): void {
+function runColorPass(sparseOk: boolean = false): void {
   // Agents-only: no colors region + nothing renders the grid (agent views go
   // through runAgentColorPass instead).
   if (!gridCellsEnabled) return;
@@ -3880,6 +3903,13 @@ function runColorPass(): void {
   // negligible. Only allocated when the model uses setCellGlyph.
   if (glyphCodes) { glyphCodes.fill(0); colorsDirty = true; }
   if (glyphColors) glyphColors.fill(0);
+  // "Skip Isolated Empty Cells": recolour only ACTIVE cells when the caller says
+  // it's safe (`sparseOk` — the post-step-batch pass, where inactive cells'
+  // colour inputs are provably frozen: inactive cells never step). Every OTHER
+  // caller (paint / reset / model-attr edit / viewer switch / load) runs FULL so
+  // any cell's colour can refresh. Glyph models always run full — the glyph
+  // buffers were just zero-filled, so a sparse pass would erase inactive glyphs.
+  const omSparse = sparseOk && sieParamsPresent && activeSet !== null && !glyphCodes;
   const sanitised = sanitiseExportName(activeViewer);
   if (useWasm && wasmOutputMappingFns[sanitised]) {
     if (updateMode !== 'asynchronous' && readAttrs !== attrsA) {
@@ -3890,14 +3920,19 @@ function runColorPass(): void {
       writeAttrs = attrsB;
     }
     colorsDirty = true;
-    wasmOutputMappingFns[sanitised]!(total);
+    if (sieParamsPresent) {
+      // Sparse module: OM export is (total, activeCount); -1 = full pass.
+      (wasmOutputMappingFns[sanitised] as unknown as (t: number, c: number) => void)(total, omSparse ? activeSet!.count : -1);
+    } else {
+      wasmOutputMappingFns[sanitised]!(total);
+    }
     return;
   }
   const omFn = outputMappingFns.find(f => f.mappingId === activeViewer);
   // Dirty only when a mapping fn actually rewrote `colors` ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â an OM-less model
   // (or a mismatched viewer) leaves the buffer untouched, and the agents-only
   // sendColors skip depends on that staying clean.
-  if (omFn) { colorsDirty = true; omFn.fn(...buildLoopArgs()); }
+  if (omFn) { colorsDirty = true; omFn.fn(...buildLoopArgs(omSparse)); }
 }
 
 function initIndicators(defs: IndicatorDef[]): void {
@@ -4442,6 +4477,10 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       // initGrid first because it allocates wasmMemory + computes layout that
       // initIndicators / buildNeighborIndices need to create their views over.
       gridCellsEnabled = (msg as InitMsg).gridCells !== false;
+      // "Skip Isolated Empty Cells": stash the config BEFORE initGrid — the
+      // layout reserves the active-list region from it (layout-lockstep with
+      // the compile side's sparseSteppingEnabled).
+      sieConfig = msg.skipIsolatedEmpty ?? null;
       try {
         initGrid();
       } catch (e) {
@@ -4464,8 +4503,8 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       // off ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â no cell step queries them in an agents-only model.
       if (gridCellsEnabled) buildNeighborIndices();
       // "Skip Isolated Empty Cells": resolve the active-set structure (populated
-      // below, after the grid is seeded by runInit/runGridInit).
-      sieConfig = msg.skipIsolatedEmpty ?? null;
+      // below, after the grid is seeded by runInit/runGridInit). sieConfig was
+      // stashed before initGrid (the layout depends on it).
       setupActiveSet();
       initIndicators(msg.indicators || []);
       // After memory is allocated, sync model attrs + active viewer ID into it
@@ -4714,7 +4753,10 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
               break;
             }
           }
-          if (stepFn && gridCellsEnabled && !msg.skipColorPass) runColorPass();
+          // Post-step-batch colour pass: sparse-safe ("Skip Isolated Empty Cells") —
+          // only steps ran since the last pass, so inactive cells' colours are
+          // provably unchanged. Every other runColorPass call site stays FULL.
+          if (stepFn && gridCellsEnabled && !msg.skipColorPass) runColorPass(true);
           sendColors();
           if (stoppedByEvent !== null) self.postMessage({ type: 'stopEvent', message: stoppedByEvent, reqId: msg.reqId });
         })().catch(e => {
@@ -4754,7 +4796,10 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
           break;
         }
       }
-      if (stepFn && gridCellsEnabled && !msg.skipColorPass) runColorPass();
+      // Post-step-batch colour pass: sparse-safe ("Skip Isolated Empty Cells") —
+          // only steps ran since the last pass, so inactive cells' colours are
+          // provably unchanged. Every other runColorPass call site stays FULL.
+          if (stepFn && gridCellsEnabled && !msg.skipColorPass) runColorPass(true);
       sendColors();
       if (stoppedByEvent !== null) {
         self.postMessage({ type: 'stopEvent', message: stoppedByEvent, reqId: msg.reqId });

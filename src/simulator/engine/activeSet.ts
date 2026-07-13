@@ -85,11 +85,15 @@ export function buildActiveOffsets(spec: ActiveRangeSpec): { offsets: Int32Array
   return { offsets: Int32Array.from(out), offCount: out.length / 3 };
 }
 
-export function createActiveSet(dims: ActiveDims, offsets: Int32Array, offCount: number, emptyVal: number): ActiveSet {
+/** `listBuffer` (optional): a pre-allocated Int32Array of capacity `total` to
+ *  use as the active list — the worker passes a VIEW over wasmMemory at
+ *  `layout.activeListOffset` so the sparse WASM step reads the live list with
+ *  zero copies (the JS step reads the same view through its `_activeList` arg). */
+export function createActiveSet(dims: ActiveDims, offsets: Int32Array, offCount: number, emptyVal: number, listBuffer?: Int32Array): ActiveSet {
   return {
     dims, offsets, offCount, emptyVal,
     nearCount: new Uint16Array(dims.total),
-    list: new Int32Array(dims.total),
+    list: listBuffer && listBuffer.length >= dims.total ? listBuffer : new Int32Array(dims.total),
     member: new Uint8Array(dims.total),
     count: 0,
     staleCount: 0,

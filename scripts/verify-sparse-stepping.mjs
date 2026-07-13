@@ -22,8 +22,8 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const ENTRY = `
 export { compileAll, migrateForHarness } from '../src/dev/compileHarness.ts';
 export { buildActiveOffsets, createActiveSet, rebuildActiveSet, applyTransition, compactActiveSet } from '../src/simulator/engine/activeSet.ts';
-export { compileGraphWasm } from '../src/modeler/vpl/compiler/wasm/compile.ts';
-export { computeLayoutFromModel } from '../src/modeler/vpl/compiler/wasm/layout.ts';
+export { compileGraphWasm, instantiateWasmModule } from '../src/modeler/vpl/compiler/wasm/compile.ts';
+export { computeLayoutFromModel, buildViewerIds } from '../src/modeler/vpl/compiler/wasm/layout.ts';
 `;
 const dir = mkdtempSync(join(tmpdir(), 'gca-sparse-'));
 const entryPath = join(ROOT, 'scripts', '__sparse_entry.ts');
@@ -31,7 +31,8 @@ writeFileSync(entryPath, ENTRY);
 const outPath = join(dir, 'bundle.mjs');
 await build({ entryPoints: [entryPath], bundle: true, format: 'esm', platform: 'node', outfile: outPath, logLevel: 'error', absWorkingDir: process.cwd() });
 const M = await import(pathToFileURL(outPath).href);
-const { compileAll, migrateForHarness, buildActiveOffsets, createActiveSet, rebuildActiveSet, applyTransition, compactActiveSet } = M;
+const { compileAll, migrateForHarness, buildActiveOffsets, createActiveSet, rebuildActiveSet, applyTransition, compactActiveSet,
+  compileGraphWasm, instantiateWasmModule, computeLayoutFromModel, buildViewerIds } = M;
 
 const wantWasm = process.argv.includes('--wasm');
 
@@ -161,10 +162,62 @@ for (const is3d of [false, true]) {
   } else { console.error(`FAIL ${res.label}: step ${res.step} cell ${res.idx} full=${res.full} sparse=${res.sparse}`); failed = true; }
 
   if (wantWasm) {
-    // Phase 2: WASM target. Compiled WASM step is `step(total)` over shared
-    // wasm memory — instantiate + drive it. (Wired in Phase 2.)
-    if (r.wasm.error) { console.error(`[${dimLabel}] WASM compile error: ${r.wasm.error}`); failed = true; }
-    else console.log(`(WASM ${dimLabel} target harness — Phase 2 pending)`);
+    // Phase 2: the REAL WASM sparse step. Compile the module against the sparse
+    // layout, instantiate over a real WebAssembly.Memory, and run three arms in
+    // lockstep: WASM-full (activeCount -1), WASM-sparse (the active list — a
+    // VIEW over the wasm memory region, exactly like the worker), and the JS
+    // full reference. Assert byte-identical grids after every step.
+    const res2 = await (async () => {
+      const layout = computeLayoutFromModel(model);
+      if (!layout.sparseStepping || layout.activeListBytes <= 0) return { ok: false, why: 'layout did not reserve the active-list region' };
+      const wres = compileGraphWasm(model.graphNodes, model.graphEdges, model, layout, buildViewerIds(model));
+      if (wres.error) return { ok: false, why: 'WASM compile error: ' + wres.error };
+      const total = W * H * D, torus = false, sz = coords3d.length;
+      const viewLen = total + 1;  // constant boundary sentinel
+      const mkInst = async () => {
+        const memory = new WebAssembly.Memory({ initial: layout.pages });
+        const inst = await instantiateWasmModule(wres, memory);
+        const rV = new Int32Array(memory.buffer, layout.attrReadOffset['state'], viewLen);
+        const wV = new Int32Array(memory.buffer, layout.attrWriteOffset['state'], viewLen);
+        // Fill the per-cell neighbour table (Phase 2 keeps the full table).
+        const nIdx = new Int32Array(memory.buffer, layout.nbrIndexOffset['moore'], total * sz);
+        nIdx.set(buildNbrTable(coords3d, W, H, D, torus));
+        const listV = new Int32Array(memory.buffer, layout.activeListOffset, total);
+        return { step: inst.exports.step, rV, wV, listV };
+      };
+      const full = await mkInst();
+      const spar = await mkInst();
+      seedGrid(full.rV, W, H, D); spar.rV.set(full.rV);
+      const { offsets, offCount } = buildActiveOffsets({ kind: 'neighborhood', coords: coords3d });
+      const as = createActiveSet({ width: W, height: H, depth: D, total, is3d, torus }, offsets, offCount, 0, spar.listV);
+      rebuildActiveSet(as, spar.rV);
+      // JS full reference (fresh copies, same seed).
+      let rJ = new Int32Array(viewLen), wJ = new Int32Array(viewLen);
+      rJ.set(full.rV);
+      const nIdxJ = buildNbrTable(coords3d, W, H, D, torus);
+      const rngJ = new Uint32Array([12345]);
+      let maxActive = 0;
+      for (let s = 0; s < steps; s++) {
+        full.step(total, -1);                       // WASM full arm
+        maxActive = Math.max(maxActive, as.count);
+        spar.step(total, as.count);                 // WASM sparse arm
+        stepFn(...args(is3d, W, H, D, rJ, wJ, nIdxJ, sz, null, 0, rngJ));  // JS reference
+        // sparse maintenance BEFORE the w->r copy (r = pre-step, w = post-step)
+        const n = as.count;
+        for (let i = 0; i < n; i++) { const idx = as.list[i]; const wasE = spar.rV[idx] === 0, isE = spar.wV[idx] === 0; if (wasE !== isE) applyTransition(as, idx, wasE, isE); }
+        if (as.staleCount > (as.count >> 2) + 64) compactActiveSet(as);
+        // the worker's WASM post-step w->r copy + the JS ref swap
+        full.rV.set(full.wV); spar.rV.set(spar.wV);
+        const t = rJ; rJ = wJ; wJ = t;
+        for (let i = 0; i < total; i++) {
+          if (full.rV[i] !== spar.rV[i]) return { ok: false, why: `step ${s} cell ${i}: WASM full=${full.rV[i]} vs WASM sparse=${spar.rV[i]}` };
+          if (full.rV[i] !== rJ[i]) return { ok: false, why: `step ${s} cell ${i}: WASM=${full.rV[i]} vs JS=${rJ[i]}` };
+        }
+      }
+      return { ok: true, maxActive };
+    })();
+    if (res2.ok) console.log(`OK  ${dimLabel} WASM: sparse==full==JS over ${steps} steps (maxActive ${res2.maxActive})`);
+    else { console.error(`FAIL ${dimLabel} WASM: ${res2.why}`); failed = true; }
   }
 }
 
