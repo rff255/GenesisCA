@@ -50,12 +50,13 @@ const OUT = resolve(__dirname, '..', 'public', 'models', 'Accretor.gcaproj');
 // --- tunables ---------------------------------------------------------------
 const W = 40, H = 40, D = 40;
 const STATES = ['empty', 'A', 'B'];          // 3 states (0 = empty)
-// The shipped rule. Chosen by a seed search (scripts/__accretor_search.mjs) for
-// a POROUS, dendritic structure with a near-even A/B mix that accretes over
-// ~130 generations before reaching the grid edge. Re-roll it in the editor's
-// Randomize block to grow an entirely different form (density is user-tunable
-// — the blog's default is ~0.2; 0.13 gives more delicate, coral-like growth).
-const RULE_SEED = Number(process.env.GCA_SEED ?? 25);
+// The shipped rule. Chosen by a seed search for a rule where BOTH the random
+// asymmetric seed AND the mirror-symmetric seed grow a substantial structure to
+// the grid edge (~50 gens), so both `symmetricSeed` modes are impressive out of
+// the box. Re-roll it in the editor's Randomize block to grow an entirely
+// different form (density is user-tunable — the blog's default is ~0.2; 0.13
+// gives more delicate, coral-like growth).
+const RULE_SEED = Number(process.env.GCA_SEED ?? 318);
 const RULE_DENSITY = Number(process.env.GCA_DENSITY ?? 0.13);
 
 // --- id + node/edge helpers (mirror gen-life3d.mjs) -------------------------
@@ -165,59 +166,107 @@ const writeState = node('setAttribute', { attributeId: 'state' }, 5, 3);
 fEdge(gateWrite, 'then', writeState, 'do');
 vEdge(lookup, 'value', writeState, 'value');
 
-// --- edge-stop: fire a Stop Event when a BORDER cell is occupied ------------
-const pos = node('getCellPosition', {}, 0, 11);
-const colInt = node('statement', { operation: 'between', lowOp: '>=', highOp: '<=', compareType: 'numerical', _port_y: '1', _port_y2: String(W - 2) }, 1, 10);
-vEdge(pos, 'col', colInt, 'x');
-const rowInt = node('statement', { operation: 'between', lowOp: '>=', highOp: '<=', compareType: 'numerical', _port_y: '1', _port_y2: String(H - 2) }, 1, 12);
-vEdge(pos, 'row', rowInt, 'x');
-const layInt = node('statement', { operation: 'between', lowOp: '>=', highOp: '<=', compareType: 'numerical', _port_y: '1', _port_y2: String(D - 2) }, 1, 14);
-vEdge(pos, 'layer', layInt, 'x');
-const interior = node('logicOperator', { operation: 'AND' }, 2, 11);
-vEdge(colInt, 'result', interior, 'a');
-vEdge(rowInt, 'result', interior, 'b');
-const interior2 = node('logicOperator', { operation: 'AND' }, 3, 11);
-vEdge(interior, 'result', interior2, 'a');
-vEdge(layInt, 'result', interior2, 'b');
-const onBorder = node('logicOperator', { operation: 'NOT' }, 4, 11);
-vEdge(interior2, 'result', onBorder, 'a');
+// --- edge-stop: fire a Stop Event when a BORDER cell is occupied. The `border`
+// flag is computed GRID-INDEPENDENTLY by the Init Event (below) from the live
+// grid dims, so this works at any grid size (no baked W/H/D bounds).
 const occupied = node('logicOperator', { operation: 'NOT' }, 2, 2);   // occupied = NOT isEmpty
 vEdge(isEmpty, 'result', occupied, 'a');
-const reachedEdge = node('logicOperator', { operation: 'AND' }, 5, 11);
-vEdge(onBorder, 'result', reachedEdge, 'a');
+const readBorder = node('getCellAttribute', { attributeId: 'border' }, 0, 11);
+const reachedEdge = node('logicOperator', { operation: 'AND' }, 1, 11);
+vEdge(readBorder, 'value', reachedEdge, 'a');
 vEdge(occupied, 'result', reachedEdge, 'b');
-const gateStop = node('conditional', {}, 6, 11);
+const gateStop = node('conditional', {}, 2, 11);
 fEdge(stepNode, 'do', gateStop, 'check');
 vEdge(reachedEdge, 'result', gateStop, 'condition');
-const stopNode = node('stopEvent', { message: 'Structure reached the grid edge.' }, 7, 11);
+const stopNode = node('stopEvent', { message: 'Structure reached the grid edge.' }, 3, 11);
 fEdge(gateStop, 'then', stopNode, 'do');
 
 // =============================================================================
-// INIT GRAPH — seed a random 5×5×5 block in the centre. Each box cell gets a
-// uniform random state (empty/A/B); cells outside the box stay at their default
-// (empty). Runs once per cell on Reset.
+// INIT GRAPH — GRID-VOLUME-INDEPENDENT (runs once per cell on Reset):
+//   • Seeds a small central box (~5-6 cells/axis) whose centre is computed from
+//     the LIVE grid dimensions (maxX/maxY/maxZ), so it re-centres if the grid is
+//     resized in the simulator (no baked centre).
+//   • The seed is RANDOM ASYMMETRIC or SYMMETRIC per the `symmetricSeed` model
+//     attribute (a live toggle): asymmetric = a uniform random state per cell;
+//     symmetric = concentric shells state = (dblX + dblY + dblZ) mod 3, which is
+//     mirror-symmetric across all three centre planes → the structure grows
+//     symmetric (Softology: "symmetric seeds produce symmetric structures").
+//   • Writes the `border` flag (dblₖ >= maxₖ on any axis = an outer face) for
+//     the edge-stop — also grid-independent.
+// The folded coord dblₖ = |2·coord − maxₖ| is an INTEGER (no floor node needed),
+// 0 at the centre, and EQUAL for mirrored cells — the key to symmetry.
 // =============================================================================
-const cx = Math.floor(W / 2), cy = Math.floor(H / 2), cz = Math.floor(D / 2);
 const initNode = node('initEvent', {}, 0, 17);
-const xIn = node('statement', { operation: 'between', lowOp: '>=', highOp: '<=', compareType: 'numerical', _port_y: String(cx - 2), _port_y2: String(cx + 2) }, 1, 16);
-vEdge(initNode, 'x', xIn, 'x');
-const yIn = node('statement', { operation: 'between', lowOp: '>=', highOp: '<=', compareType: 'numerical', _port_y: String(cy - 2), _port_y2: String(cy + 2) }, 1, 18);
-vEdge(initNode, 'y', yIn, 'x');
-const zIn = node('statement', { operation: 'between', lowOp: '>=', highOp: '<=', compareType: 'numerical', _port_y: String(cz - 2), _port_y2: String(cz + 2) }, 1, 20);
-vEdge(initNode, 'z', zIn, 'x');
-const inBox1 = node('logicOperator', { operation: 'AND' }, 2, 17);
-vEdge(xIn, 'result', inBox1, 'a');
-vEdge(yIn, 'result', inBox1, 'b');
-const inBox = node('logicOperator', { operation: 'AND' }, 3, 18);
+function foldedAxis(coordPort, maxPort, row) {
+  const two = node('arithmeticOperator', { operation: '*', _port_y: '2' }, 1, row);
+  vEdge(initNode, coordPort, two, 'x');
+  const sub = node('arithmeticOperator', { operation: '-' }, 2, row);
+  vEdge(two, 'result', sub, 'x');
+  vEdge(initNode, maxPort, sub, 'y');
+  const abs = node('arithmeticOperator', { operation: 'abs' }, 3, row);
+  vEdge(sub, 'result', abs, 'x');
+  return abs;
+}
+const dblX = foldedAxis('x', 'maxX', 15);
+const dblY = foldedAxis('y', 'maxY', 17);
+const dblZ = foldedAxis('z', 'maxZ', 19);
+
+// Central box: dbl <= 5  ⟺  |coord − max/2| <= 2.5.
+const inX = node('statement', { operation: '<=', compareType: 'numerical', _port_y: '5' }, 4, 15);
+vEdge(dblX, 'result', inX, 'x');
+const inY = node('statement', { operation: '<=', compareType: 'numerical', _port_y: '5' }, 4, 17);
+vEdge(dblY, 'result', inY, 'x');
+const inZ = node('statement', { operation: '<=', compareType: 'numerical', _port_y: '5' }, 4, 19);
+vEdge(dblZ, 'result', inZ, 'x');
+const inBox1 = node('logicOperator', { operation: 'AND' }, 5, 15);
+vEdge(inX, 'result', inBox1, 'a');
+vEdge(inY, 'result', inBox1, 'b');
+const inBox = node('logicOperator', { operation: 'AND' }, 6, 16);
 vEdge(inBox1, 'result', inBox, 'a');
-vEdge(zIn, 'result', inBox, 'b');
-const seedRand = node('getRandom', { randomType: 'integer', min: '0', max: '2' }, 3, 20);
-const gateSeed = node('conditional', {}, 4, 18);
+vEdge(inZ, 'result', inBox, 'b');
+
+// Seed value: asymmetric (random) vs symmetric, selected by the `symmetricSeed`
+// model attribute.
+const asymVal = node('getRandom', { randomType: 'integer', min: '0', max: '2' }, 5, 20);
+// Symmetric value: concentric shells state = (dblX + dblY + dblZ) mod 3. EQUAL
+// for mirrored cells (same folded coords) → a connected, mirror-symmetric seed
+// across all three centre planes, so the structure grows perfectly symmetric.
+const symSum1 = node('arithmeticOperator', { operation: '+' }, 5, 22);
+vEdge(dblX, 'result', symSum1, 'x');
+vEdge(dblY, 'result', symSum1, 'y');
+const symSum2 = node('arithmeticOperator', { operation: '+' }, 6, 22);
+vEdge(symSum1, 'result', symSum2, 'x');
+vEdge(dblZ, 'result', symSum2, 'y');
+const symVal = node('arithmeticOperator', { operation: '%', _port_y: '3' }, 7, 22);
+vEdge(symSum2, 'result', symVal, 'x');
+const symMode = node('getModelAttribute', { attributeId: 'symmetricSeed', isColorAttr: false }, 5, 24);
+const seedVal = node('valueSwitch', {}, 8, 22);
+vEdge(symMode, 'value', seedVal, 'condition');
+vEdge(symVal, 'result', seedVal, 'ifValue');
+vEdge(asymVal, 'value', seedVal, 'elseValue');
+
+const gateSeed = node('conditional', {}, 7, 16);
 fEdge(initNode, 'do', gateSeed, 'check');
 vEdge(inBox, 'result', gateSeed, 'condition');
-const writeSeed = node('setAttribute', { attributeId: 'state' }, 5, 18);
+const writeSeed = node('setAttribute', { attributeId: 'state' }, 9, 16);
 fEdge(gateSeed, 'then', writeSeed, 'do');
-vEdge(seedRand, 'value', writeSeed, 'value');
+vEdge(seedVal, 'result', writeSeed, 'value');
+
+// Border flag (grid-independent): dbl >= max on any axis = the cell sits on an
+// outer face (dblₖ = maxₖ only at coord 0 or coord maxₖ).
+const bX = node('statement', { operation: '>=', compareType: 'numerical' }, 4, 24);
+vEdge(dblX, 'result', bX, 'x'); vEdge(initNode, 'maxX', bX, 'y');
+const bY = node('statement', { operation: '>=', compareType: 'numerical' }, 4, 26);
+vEdge(dblY, 'result', bY, 'x'); vEdge(initNode, 'maxY', bY, 'y');
+const bZ = node('statement', { operation: '>=', compareType: 'numerical' }, 4, 28);
+vEdge(dblZ, 'result', bZ, 'x'); vEdge(initNode, 'maxZ', bZ, 'y');
+const bOr1 = node('logicOperator', { operation: 'OR' }, 5, 25);
+vEdge(bX, 'result', bOr1, 'a'); vEdge(bY, 'result', bOr1, 'b');
+const isBorder = node('logicOperator', { operation: 'OR' }, 6, 26);
+vEdge(bOr1, 'result', isBorder, 'a'); vEdge(bZ, 'result', isBorder, 'b');
+const writeBorder = node('setAttribute', { attributeId: 'border' }, 7, 26);
+fEdge(initNode, 'do', writeBorder, 'do');
+vEdge(isBorder, 'result', writeBorder, 'value');
 
 // =============================================================================
 // OUTPUT MAPPING — standalone, so empty cells get alpha 0 (culled by the voxel
@@ -321,10 +370,12 @@ const properties = {
     "A 3D accretion automaton (Driessens & Verstappen). Empty cells crystallise " +
     "into A or B according to a RANDOMLY-FILLED rule table indexed by how many of " +
     "their 6 face, 12 edge, and 8 corner neighbours are occupied. Occupied cells " +
-    "freeze forever. From a random 5×5×5 seed in the centre the structure accretes " +
-    "outward until it reaches a grid edge. The rule is one 4-axis (state × face × " +
-    "edge × corner count) Lookup Table filled by a seed — re-roll the seed in the " +
-    "table's Randomize block (Attributes ▸ rule) to grow an entirely different form. " +
+    "freeze forever. From a small central seed the structure accretes outward until " +
+    "it reaches a grid edge (the seed + edge detection are grid-independent, so a " +
+    "Resize re-centres them). Toggle the `Symmetric seed` model attribute + Reset to " +
+    "grow a mirror-symmetric structure instead of a random one. The rule is one 4-axis " +
+    "(state × face × edge × corner count) Lookup Table filled by a seed — re-roll the " +
+    "seed in the table's Randomize block (Attributes ▸ rule) to grow an entirely different form. " +
     "Orbit the camera and pull the clip plane to see inside. The Experiments panel " +
     "runs a Rule Explorer that sweeps a list of seeds and charts how big each rule's " +
     "structure grows — the automated version of re-rolling until something interesting appears.",
@@ -347,6 +398,16 @@ const attributes = [
     description: 'The cell\'s crystallised state: empty (0, still growable), or one of the accreted species A / B (frozen once set).',
     isModelAttribute: false, defaultValue: '0', boundaryValue: '0',
     tagOptions: STATES,
+  },
+  {
+    id: 'border', name: 'Border', type: 'bool',
+    description: 'Whether the cell sits on an outer face of the grid — computed once by the Init Event from the LIVE grid dimensions (so the edge-stop stays correct at any grid size). The Stop Event fires when a Border cell becomes occupied.',
+    isModelAttribute: false, defaultValue: 'false', boundaryValue: 'false',
+  },
+  {
+    id: 'symmetricSeed', name: 'Symmetric seed', type: 'bool',
+    description: 'When ON, the central seed is mirror-symmetric (concentric shells) so the structure grows symmetric; when OFF, the seed is a uniform random asymmetric block. Toggle it and press Reset to compare. (Softology: "symmetric seeds produce symmetric structures".)',
+    isModelAttribute: true, defaultValue: 'false',
   },
   {
     id: 'rule', name: 'rule', type: 'lookupTable',
