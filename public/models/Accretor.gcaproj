@@ -4,7 +4,7 @@
     "name": "Accretor",
     "author": "Erwin Driessens & Maria Verstappen (Accretor); via Softology (2018)",
     "modelAuthor": "Rodrigo F. Figueiredo",
-    "description": "A 3D accretion automaton (Driessens & Verstappen). Empty cells crystallise into A or B according to a RANDOMLY-FILLED rule table indexed by how many of their 6 face, 12 edge, and 8 corner neighbours are occupied. Occupied cells freeze forever. From a random 5×5×5 seed in the centre the structure accretes outward until it reaches a grid edge. The rule is one 4-axis (state × face × edge × corner count) Lookup Table filled by a seed — re-roll the seed in the table's Randomize block (Attributes ▸ rule) to grow an entirely different form. Orbit the camera and pull the clip plane to see inside.",
+    "description": "A 3D accretion automaton (Driessens & Verstappen). Empty cells crystallise into A or B according to a RANDOMLY-FILLED rule table indexed by how many of their 6 face, 12 edge, and 8 corner neighbours are occupied. Occupied cells freeze forever. From a random 5×5×5 seed in the centre the structure accretes outward until it reaches a grid edge. The rule is one 4-axis (state × face × edge × corner count) Lookup Table filled by a seed — re-roll the seed in the table's Randomize block (Attributes ▸ rule) to grow an entirely different form. Orbit the camera and pull the clip plane to see inside. The Experiments panel runs a Rule Explorer that sweeps a list of seeds and charts how big each rule's structure grows — the automated version of re-rolling until something interesting appears.",
     "topology": "2d-grid",
     "boundaryTreatment": "constant",
     "updateMode": "synchronous",
@@ -2843,7 +2843,7 @@
   ],
   "graphNodes": [
     {
-      "id": "nmriez6em8i71",
+      "id": "nmriiszq0e73p",
       "type": "caNode",
       "position": {
         "x": 0,
@@ -2855,7 +2855,7 @@
       }
     },
     {
-      "id": "nmriez6emu384",
+      "id": "nmriiszq0fuqy",
       "type": "caNode",
       "position": {
         "x": 0,
@@ -2869,7 +2869,7 @@
       }
     },
     {
-      "id": "nmriez6ema4mn",
+      "id": "nmriiszq0x16m",
       "type": "caNode",
       "position": {
         "x": 0,
@@ -2884,7 +2884,7 @@
       }
     },
     {
-      "id": "nmriez6emyn4v",
+      "id": "nmriiszq0f6gm",
       "type": "caNode",
       "position": {
         "x": 0,
@@ -2899,7 +2899,7 @@
       }
     },
     {
-      "id": "nmriez6emlo3l",
+      "id": "nmriiszq0de0i",
       "type": "caNode",
       "position": {
         "x": 0,
@@ -2914,7 +2914,7 @@
       }
     },
     {
-      "id": "nmriez6em58fg",
+      "id": "nmriiszq0l3bh",
       "type": "caNode",
       "position": {
         "x": 230,
@@ -2928,7 +2928,7 @@
       }
     },
     {
-      "id": "nmriez6emov15",
+      "id": "nmriiszq0k3qx",
       "type": "caNode",
       "position": {
         "x": 230,
@@ -2942,7 +2942,7 @@
       }
     },
     {
-      "id": "nmriez6em4up9",
+      "id": "nmriiszq0kadv",
       "type": "caNode",
       "position": {
         "x": 230,
@@ -2956,7 +2956,7 @@
       }
     },
     {
-      "id": "nmriez6emxo4i",
+      "id": "nmriiszq0q00q",
       "type": "caNode",
       "position": {
         "x": 460,
@@ -2970,7 +2970,7 @@
       }
     },
     {
-      "id": "nmriez6emp1cx",
+      "id": "nmriiszq0cb4y",
       "type": "caNode",
       "position": {
         "x": 230,
@@ -2986,7 +2986,7 @@
       }
     },
     {
-      "id": "nmriez6em0ke0",
+      "id": "nmriiszq00er5",
       "type": "caNode",
       "position": {
         "x": 460,
@@ -3002,7 +3002,7 @@
       }
     },
     {
-      "id": "nmriez6emvoha",
+      "id": "nmriiszq0fszm",
       "type": "caNode",
       "position": {
         "x": 690,
@@ -3016,7 +3016,7 @@
       }
     },
     {
-      "id": "nmriez6emod6r",
+      "id": "nmriiszq04czd",
       "type": "caNode",
       "position": {
         "x": 920,
@@ -3028,7 +3028,7 @@
       }
     },
     {
-      "id": "nmriez6emq3l5",
+      "id": "nmriiszq05nba",
       "type": "caNode",
       "position": {
         "x": 1150,
@@ -3042,7 +3042,7 @@
       }
     },
     {
-      "id": "nmriez6em6s0b",
+      "id": "nmriiszq0xssw",
       "type": "caNode",
       "position": {
         "x": 0,
@@ -3054,7 +3054,7 @@
       }
     },
     {
-      "id": "nmriez6emf81y",
+      "id": "nmriiszq0c4ne",
       "type": "caNode",
       "position": {
         "x": 230,
@@ -3073,7 +3073,7 @@
       }
     },
     {
-      "id": "nmriez6emuhs0",
+      "id": "nmriiszq0sq79",
       "type": "caNode",
       "position": {
         "x": 230,
@@ -3092,7 +3092,7 @@
       }
     },
     {
-      "id": "nmriez6em5jy1",
+      "id": "nmriiszq0kfb8",
       "type": "caNode",
       "position": {
         "x": 230,
@@ -3111,7 +3111,7 @@
       }
     },
     {
-      "id": "nmriez6emle18",
+      "id": "nmriiszq00pyy",
       "type": "caNode",
       "position": {
         "x": 460,
@@ -3125,7 +3125,7 @@
       }
     },
     {
-      "id": "nmriez6emahoj",
+      "id": "nmriiszq03rg9",
       "type": "caNode",
       "position": {
         "x": 690,
@@ -3139,7 +3139,7 @@
       }
     },
     {
-      "id": "nmriez6em79zo",
+      "id": "nmriiszq02t5k",
       "type": "caNode",
       "position": {
         "x": 920,
@@ -3153,7 +3153,7 @@
       }
     },
     {
-      "id": "nmriez6emhg9m",
+      "id": "nmriiszq0l7rc",
       "type": "caNode",
       "position": {
         "x": 460,
@@ -3167,7 +3167,7 @@
       }
     },
     {
-      "id": "nmriez6emqrqf",
+      "id": "nmriiszq01n10",
       "type": "caNode",
       "position": {
         "x": 1150,
@@ -3181,7 +3181,7 @@
       }
     },
     {
-      "id": "nmriez6emhbcr",
+      "id": "nmriiszq0jp78",
       "type": "caNode",
       "position": {
         "x": 1380,
@@ -3193,7 +3193,7 @@
       }
     },
     {
-      "id": "nmriez6emlmwa",
+      "id": "nmriiszq0z57t",
       "type": "caNode",
       "position": {
         "x": 1610,
@@ -3207,7 +3207,7 @@
       }
     },
     {
-      "id": "nmriez6em2tvf",
+      "id": "nmriiszq0jf98",
       "type": "caNode",
       "position": {
         "x": 0,
@@ -3219,7 +3219,7 @@
       }
     },
     {
-      "id": "nmriez6emvg4f",
+      "id": "nmriiszq0e00j",
       "type": "caNode",
       "position": {
         "x": 230,
@@ -3238,7 +3238,7 @@
       }
     },
     {
-      "id": "nmriez6em1ryz",
+      "id": "nmriiszq0v5ae",
       "type": "caNode",
       "position": {
         "x": 230,
@@ -3257,7 +3257,7 @@
       }
     },
     {
-      "id": "nmriez6emv68w",
+      "id": "nmriiszq0ryzs",
       "type": "caNode",
       "position": {
         "x": 230,
@@ -3276,7 +3276,7 @@
       }
     },
     {
-      "id": "nmriez6ems0x2",
+      "id": "nmriiszq0850c",
       "type": "caNode",
       "position": {
         "x": 460,
@@ -3290,7 +3290,7 @@
       }
     },
     {
-      "id": "nmriez6emkonm",
+      "id": "nmriiszq00cfw",
       "type": "caNode",
       "position": {
         "x": 690,
@@ -3304,7 +3304,7 @@
       }
     },
     {
-      "id": "nmriez6emthqu",
+      "id": "nmriiszq0flxh",
       "type": "caNode",
       "position": {
         "x": 690,
@@ -3320,7 +3320,7 @@
       }
     },
     {
-      "id": "nmriez6emb179",
+      "id": "nmriiszq0d3kx",
       "type": "caNode",
       "position": {
         "x": 920,
@@ -3332,7 +3332,7 @@
       }
     },
     {
-      "id": "nmriez6em1h1y",
+      "id": "nmriiszq00m0w",
       "type": "caNode",
       "position": {
         "x": 1150,
@@ -3346,7 +3346,7 @@
       }
     },
     {
-      "id": "nmriez6emb7uh",
+      "id": "nmriiszq0dz17",
       "type": "caNode",
       "position": {
         "x": 0,
@@ -3360,7 +3360,7 @@
       }
     },
     {
-      "id": "nmriez6emcyqd",
+      "id": "nmriiszq09tye",
       "type": "caNode",
       "position": {
         "x": 0,
@@ -3374,7 +3374,7 @@
       }
     },
     {
-      "id": "nmriez6emfyl6",
+      "id": "nmriiszq01ofj",
       "type": "caNode",
       "position": {
         "x": 230,
@@ -3400,7 +3400,7 @@
       }
     },
     {
-      "id": "nmriez6emm918",
+      "id": "nmriiszq03k03",
       "type": "caNode",
       "position": {
         "x": 230,
@@ -3416,7 +3416,7 @@
       }
     },
     {
-      "id": "nmriez6emowhb",
+      "id": "nmriiszq0wtzf",
       "type": "caNode",
       "position": {
         "x": 460,
@@ -3431,7 +3431,7 @@
       }
     },
     {
-      "id": "nmriez6emosse",
+      "id": "nmriiszq0sdpn",
       "type": "caNode",
       "position": {
         "x": 690,
@@ -3450,338 +3450,338 @@
   ],
   "graphEdges": [
     {
-      "id": "emriez6emte4b",
-      "source": "nmriez6ema4mn",
-      "target": "nmriez6em58fg",
+      "id": "emriiszq07ujd",
+      "source": "nmriiszq0x16m",
+      "target": "nmriiszq0l3bh",
       "sourceHandle": "output_value_values",
       "targetHandle": "input_value_values"
     },
     {
-      "id": "emriez6em4aux",
-      "source": "nmriez6emyn4v",
-      "target": "nmriez6emov15",
+      "id": "emriiszq0lurq",
+      "source": "nmriiszq0f6gm",
+      "target": "nmriiszq0k3qx",
       "sourceHandle": "output_value_values",
       "targetHandle": "input_value_values"
     },
     {
-      "id": "emriez6emy4bu",
-      "source": "nmriez6emlo3l",
-      "target": "nmriez6em4up9",
+      "id": "emriiszq0ia85",
+      "source": "nmriiszq0de0i",
+      "target": "nmriiszq0kadv",
       "sourceHandle": "output_value_values",
       "targetHandle": "input_value_values"
     },
     {
-      "id": "emriez6em46mb",
-      "source": "nmriez6emu384",
-      "target": "nmriez6emxo4i",
+      "id": "emriiszq0ssqs",
+      "source": "nmriiszq0fuqy",
+      "target": "nmriiszq0q00q",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_axis_0"
     },
     {
-      "id": "emriez6emnyck",
-      "source": "nmriez6em58fg",
-      "target": "nmriez6emxo4i",
+      "id": "emriiszq0noxq",
+      "source": "nmriiszq0l3bh",
+      "target": "nmriiszq0q00q",
       "sourceHandle": "output_value_count",
       "targetHandle": "input_value_axis_1"
     },
     {
-      "id": "emriez6emktpy",
-      "source": "nmriez6emov15",
-      "target": "nmriez6emxo4i",
+      "id": "emriiszq0pue2",
+      "source": "nmriiszq0k3qx",
+      "target": "nmriiszq0q00q",
       "sourceHandle": "output_value_count",
       "targetHandle": "input_value_axis_2"
     },
     {
-      "id": "emriez6emprey",
-      "source": "nmriez6em4up9",
-      "target": "nmriez6emxo4i",
+      "id": "emriiszq0uqgl",
+      "source": "nmriiszq0kadv",
+      "target": "nmriiszq0q00q",
       "sourceHandle": "output_value_count",
       "targetHandle": "input_value_axis_3"
     },
     {
-      "id": "emriez6emayyd",
-      "source": "nmriez6emu384",
-      "target": "nmriez6emp1cx",
+      "id": "emriiszq0bo84",
+      "source": "nmriiszq0fuqy",
+      "target": "nmriiszq0cb4y",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_x"
     },
     {
-      "id": "emriez6em87fj",
-      "source": "nmriez6em58fg",
-      "target": "nmriez6em0ke0",
+      "id": "emriiszq0mlhz",
+      "source": "nmriiszq0l3bh",
+      "target": "nmriiszq00er5",
       "sourceHandle": "output_value_count",
       "targetHandle": "input_value_x"
     },
     {
-      "id": "emriez6em0ahc",
-      "source": "nmriez6emp1cx",
-      "target": "nmriez6emvoha",
+      "id": "emriiszq0m1yc",
+      "source": "nmriiszq0cb4y",
+      "target": "nmriiszq0fszm",
       "sourceHandle": "output_value_result",
       "targetHandle": "input_value_a"
     },
     {
-      "id": "emriez6ema5gr",
-      "source": "nmriez6em0ke0",
-      "target": "nmriez6emvoha",
+      "id": "emriiszq0lmcy",
+      "source": "nmriiszq00er5",
+      "target": "nmriiszq0fszm",
       "sourceHandle": "output_value_result",
       "targetHandle": "input_value_b"
     },
     {
-      "id": "emriez6emewjf",
-      "source": "nmriez6em8i71",
-      "target": "nmriez6emod6r",
+      "id": "emriiszq0cjm6",
+      "source": "nmriiszq0e73p",
+      "target": "nmriiszq04czd",
       "sourceHandle": "output_flow_do",
       "targetHandle": "input_flow_check"
     },
     {
-      "id": "emriez6em2cpl",
-      "source": "nmriez6emvoha",
-      "target": "nmriez6emod6r",
+      "id": "emriiszq064g7",
+      "source": "nmriiszq0fszm",
+      "target": "nmriiszq04czd",
       "sourceHandle": "output_value_result",
       "targetHandle": "input_value_condition"
     },
     {
-      "id": "emriez6emruw3",
-      "source": "nmriez6emod6r",
-      "target": "nmriez6emq3l5",
+      "id": "emriiszq0m0t4",
+      "source": "nmriiszq04czd",
+      "target": "nmriiszq05nba",
       "sourceHandle": "output_flow_then",
       "targetHandle": "input_flow_do"
     },
     {
-      "id": "emriez6emk3bz",
-      "source": "nmriez6emxo4i",
-      "target": "nmriez6emq3l5",
+      "id": "emriiszq05r8s",
+      "source": "nmriiszq0q00q",
+      "target": "nmriiszq05nba",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_value"
     },
     {
-      "id": "emriez6em52l1",
-      "source": "nmriez6em6s0b",
-      "target": "nmriez6emf81y",
+      "id": "emriiszq0mekp",
+      "source": "nmriiszq0xssw",
+      "target": "nmriiszq0c4ne",
       "sourceHandle": "output_value_col",
       "targetHandle": "input_value_x"
     },
     {
-      "id": "emriez6emu6ov",
-      "source": "nmriez6em6s0b",
-      "target": "nmriez6emuhs0",
+      "id": "emriiszq0kt9z",
+      "source": "nmriiszq0xssw",
+      "target": "nmriiszq0sq79",
       "sourceHandle": "output_value_row",
       "targetHandle": "input_value_x"
     },
     {
-      "id": "emriez6em1cgv",
-      "source": "nmriez6em6s0b",
-      "target": "nmriez6em5jy1",
+      "id": "emriiszq0ubkb",
+      "source": "nmriiszq0xssw",
+      "target": "nmriiszq0kfb8",
       "sourceHandle": "output_value_layer",
       "targetHandle": "input_value_x"
     },
     {
-      "id": "emriez6emce5d",
-      "source": "nmriez6emf81y",
-      "target": "nmriez6emle18",
+      "id": "emriiszq0zri7",
+      "source": "nmriiszq0c4ne",
+      "target": "nmriiszq00pyy",
       "sourceHandle": "output_value_result",
       "targetHandle": "input_value_a"
     },
     {
-      "id": "emriez6em0t1a",
-      "source": "nmriez6emuhs0",
-      "target": "nmriez6emle18",
+      "id": "emriiszq03bjk",
+      "source": "nmriiszq0sq79",
+      "target": "nmriiszq00pyy",
       "sourceHandle": "output_value_result",
       "targetHandle": "input_value_b"
     },
     {
-      "id": "emriez6em1093",
-      "source": "nmriez6emle18",
-      "target": "nmriez6emahoj",
+      "id": "emriiszq0m3vv",
+      "source": "nmriiszq00pyy",
+      "target": "nmriiszq03rg9",
       "sourceHandle": "output_value_result",
       "targetHandle": "input_value_a"
     },
     {
-      "id": "emriez6em746p",
-      "source": "nmriez6em5jy1",
-      "target": "nmriez6emahoj",
+      "id": "emriiszq0scv5",
+      "source": "nmriiszq0kfb8",
+      "target": "nmriiszq03rg9",
       "sourceHandle": "output_value_result",
       "targetHandle": "input_value_b"
     },
     {
-      "id": "emriez6emvh3c",
-      "source": "nmriez6emahoj",
-      "target": "nmriez6em79zo",
+      "id": "emriiszq0m1xv",
+      "source": "nmriiszq03rg9",
+      "target": "nmriiszq02t5k",
       "sourceHandle": "output_value_result",
       "targetHandle": "input_value_a"
     },
     {
-      "id": "emriez6emwill",
-      "source": "nmriez6emp1cx",
-      "target": "nmriez6emhg9m",
+      "id": "emriiszq0xy1h",
+      "source": "nmriiszq0cb4y",
+      "target": "nmriiszq0l7rc",
       "sourceHandle": "output_value_result",
       "targetHandle": "input_value_a"
     },
     {
-      "id": "emriez6emdfgw",
-      "source": "nmriez6em79zo",
-      "target": "nmriez6emqrqf",
+      "id": "emriiszq0g26x",
+      "source": "nmriiszq02t5k",
+      "target": "nmriiszq01n10",
       "sourceHandle": "output_value_result",
       "targetHandle": "input_value_a"
     },
     {
-      "id": "emriez6emooge",
-      "source": "nmriez6emhg9m",
-      "target": "nmriez6emqrqf",
+      "id": "emriiszq0k5zv",
+      "source": "nmriiszq0l7rc",
+      "target": "nmriiszq01n10",
       "sourceHandle": "output_value_result",
       "targetHandle": "input_value_b"
     },
     {
-      "id": "emriez6em23kv",
-      "source": "nmriez6em8i71",
-      "target": "nmriez6emhbcr",
+      "id": "emriiszq0yd9a",
+      "source": "nmriiszq0e73p",
+      "target": "nmriiszq0jp78",
       "sourceHandle": "output_flow_do",
       "targetHandle": "input_flow_check"
     },
     {
-      "id": "emriez6emjbum",
-      "source": "nmriez6emqrqf",
-      "target": "nmriez6emhbcr",
+      "id": "emriiszq0yhb7",
+      "source": "nmriiszq01n10",
+      "target": "nmriiszq0jp78",
       "sourceHandle": "output_value_result",
       "targetHandle": "input_value_condition"
     },
     {
-      "id": "emriez6emdro9",
-      "source": "nmriez6emhbcr",
-      "target": "nmriez6emlmwa",
+      "id": "emriiszq0mqwo",
+      "source": "nmriiszq0jp78",
+      "target": "nmriiszq0z57t",
       "sourceHandle": "output_flow_then",
       "targetHandle": "input_flow_do"
     },
     {
-      "id": "emriez6em0lv2",
-      "source": "nmriez6em2tvf",
-      "target": "nmriez6emvg4f",
+      "id": "emriiszq0ab4r",
+      "source": "nmriiszq0jf98",
+      "target": "nmriiszq0e00j",
       "sourceHandle": "output_value_x",
       "targetHandle": "input_value_x"
     },
     {
-      "id": "emriez6emllsf",
-      "source": "nmriez6em2tvf",
-      "target": "nmriez6em1ryz",
+      "id": "emriiszq0x6xv",
+      "source": "nmriiszq0jf98",
+      "target": "nmriiszq0v5ae",
       "sourceHandle": "output_value_y",
       "targetHandle": "input_value_x"
     },
     {
-      "id": "emriez6em3xzq",
-      "source": "nmriez6em2tvf",
-      "target": "nmriez6emv68w",
+      "id": "emriiszq0s1iy",
+      "source": "nmriiszq0jf98",
+      "target": "nmriiszq0ryzs",
       "sourceHandle": "output_value_z",
       "targetHandle": "input_value_x"
     },
     {
-      "id": "emriez6eme69e",
-      "source": "nmriez6emvg4f",
-      "target": "nmriez6ems0x2",
+      "id": "emriiszq0gt8o",
+      "source": "nmriiszq0e00j",
+      "target": "nmriiszq0850c",
       "sourceHandle": "output_value_result",
       "targetHandle": "input_value_a"
     },
     {
-      "id": "emriez6emsxa6",
-      "source": "nmriez6em1ryz",
-      "target": "nmriez6ems0x2",
+      "id": "emriiszq0fdgw",
+      "source": "nmriiszq0v5ae",
+      "target": "nmriiszq0850c",
       "sourceHandle": "output_value_result",
       "targetHandle": "input_value_b"
     },
     {
-      "id": "emriez6emniml",
-      "source": "nmriez6ems0x2",
-      "target": "nmriez6emkonm",
+      "id": "emriiszq0f4b5",
+      "source": "nmriiszq0850c",
+      "target": "nmriiszq00cfw",
       "sourceHandle": "output_value_result",
       "targetHandle": "input_value_a"
     },
     {
-      "id": "emriez6emfdqo",
-      "source": "nmriez6emv68w",
-      "target": "nmriez6emkonm",
+      "id": "emriiszq0aucs",
+      "source": "nmriiszq0ryzs",
+      "target": "nmriiszq00cfw",
       "sourceHandle": "output_value_result",
       "targetHandle": "input_value_b"
     },
     {
-      "id": "emriez6emkguf",
-      "source": "nmriez6em2tvf",
-      "target": "nmriez6emb179",
+      "id": "emriiszq0gsn7",
+      "source": "nmriiszq0jf98",
+      "target": "nmriiszq0d3kx",
       "sourceHandle": "output_flow_do",
       "targetHandle": "input_flow_check"
     },
     {
-      "id": "emriez6emoqe4",
-      "source": "nmriez6emkonm",
-      "target": "nmriez6emb179",
+      "id": "emriiszq0zqrf",
+      "source": "nmriiszq00cfw",
+      "target": "nmriiszq0d3kx",
       "sourceHandle": "output_value_result",
       "targetHandle": "input_value_condition"
     },
     {
-      "id": "emriez6emnncz",
-      "source": "nmriez6emb179",
-      "target": "nmriez6em1h1y",
+      "id": "emriiszq00nyb",
+      "source": "nmriiszq0d3kx",
+      "target": "nmriiszq00m0w",
       "sourceHandle": "output_flow_then",
       "targetHandle": "input_flow_do"
     },
     {
-      "id": "emriez6emeuly",
-      "source": "nmriez6emthqu",
-      "target": "nmriez6em1h1y",
+      "id": "emriiszq04z1x",
+      "source": "nmriiszq0flxh",
+      "target": "nmriiszq00m0w",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_value"
     },
     {
-      "id": "emriez6eml56s",
-      "source": "nmriez6emcyqd",
-      "target": "nmriez6emfyl6",
+      "id": "emriiszq0nj3f",
+      "source": "nmriiszq09tye",
+      "target": "nmriiszq01ofj",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_index"
     },
     {
-      "id": "emriez6emwxp6",
-      "source": "nmriez6emcyqd",
-      "target": "nmriez6emm918",
+      "id": "emriiszq01u38",
+      "source": "nmriiszq09tye",
+      "target": "nmriiszq03k03",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_x"
     },
     {
-      "id": "emriez6emdgo2",
-      "source": "nmriez6emm918",
-      "target": "nmriez6emowhb",
+      "id": "emriiszq0u2ga",
+      "source": "nmriiszq03k03",
+      "target": "nmriiszq0wtzf",
       "sourceHandle": "output_value_result",
       "targetHandle": "input_value_x"
     },
     {
-      "id": "emriez6emi7es",
-      "source": "nmriez6emb7uh",
-      "target": "nmriez6emosse",
+      "id": "emriiszq0pvme",
+      "source": "nmriiszq0dz17",
+      "target": "nmriiszq0sdpn",
       "sourceHandle": "output_flow_do",
       "targetHandle": "input_flow_do"
     },
     {
-      "id": "emriez6em6614",
-      "source": "nmriez6emfyl6",
-      "target": "nmriez6emosse",
+      "id": "emriiszq0ebwt",
+      "source": "nmriiszq01ofj",
+      "target": "nmriiszq0sdpn",
       "sourceHandle": "output_value_r",
       "targetHandle": "input_value_r"
     },
     {
-      "id": "emriez6emjxbt",
-      "source": "nmriez6emfyl6",
-      "target": "nmriez6emosse",
+      "id": "emriiszq0seu7",
+      "source": "nmriiszq01ofj",
+      "target": "nmriiszq0sdpn",
       "sourceHandle": "output_value_g",
       "targetHandle": "input_value_g"
     },
     {
-      "id": "emriez6emst8j",
-      "source": "nmriez6emfyl6",
-      "target": "nmriez6emosse",
+      "id": "emriiszq0qwp1",
+      "source": "nmriiszq01ofj",
+      "target": "nmriiszq0sdpn",
       "sourceHandle": "output_value_b",
       "targetHandle": "input_value_b"
     },
     {
-      "id": "emriez6em8w7s",
-      "source": "nmriez6emowhb",
-      "target": "nmriez6emosse",
+      "id": "emriiszq0m1wd",
+      "source": "nmriiszq0wtzf",
+      "target": "nmriiszq0sdpn",
       "sourceHandle": "output_value_result",
       "targetHandle": "input_value_a"
     }
@@ -3790,5 +3790,272 @@
   "topologyMode": {
     "gridCells": true,
     "agents": false
-  }
+  },
+  "overseerConfig": {
+    "enabled": true,
+    "seedPolicy": "fixed",
+    "baseSeed": 12345
+  },
+  "overseerGraphNodes": [
+    {
+      "id": "omriiszq0p5ph",
+      "type": "caNode",
+      "position": {
+        "x": 0,
+        "y": 0
+      },
+      "data": {
+        "nodeType": "experiment",
+        "config": {}
+      }
+    },
+    {
+      "id": "omriiszq0vo4n",
+      "type": "caNode",
+      "position": {
+        "x": 230,
+        "y": 0
+      },
+      "data": {
+        "nodeType": "ovClearSeries",
+        "config": {
+          "series": "accreted"
+        }
+      }
+    },
+    {
+      "id": "omriiszq08gtc",
+      "type": "caNode",
+      "position": {
+        "x": 0,
+        "y": 180
+      },
+      "data": {
+        "nodeType": "ovSweepValues",
+        "config": {
+          "mode": "list",
+          "list": "25, 162, 85, 294, 93, 154, 62, 34"
+        }
+      }
+    },
+    {
+      "id": "omriiszq0vgxd",
+      "type": "caNode",
+      "position": {
+        "x": 460,
+        "y": 90
+      },
+      "data": {
+        "nodeType": "forEachInArray",
+        "config": {}
+      }
+    },
+    {
+      "id": "omriiszq0phwg",
+      "type": "caNode",
+      "position": {
+        "x": 690,
+        "y": 90
+      },
+      "data": {
+        "nodeType": "ovRandomizeTable",
+        "config": {
+          "tableId": "rule",
+          "_port_density": "0.13"
+        }
+      }
+    },
+    {
+      "id": "omriiszq160a0",
+      "type": "caNode",
+      "position": {
+        "x": 920,
+        "y": 90
+      },
+      "data": {
+        "nodeType": "ovResetBoard",
+        "config": {}
+      }
+    },
+    {
+      "id": "omriiszq1or7q",
+      "type": "caNode",
+      "position": {
+        "x": 1150,
+        "y": 90
+      },
+      "data": {
+        "nodeType": "ovRunUntilStop",
+        "config": {
+          "_port_maxGens": "600"
+        }
+      }
+    },
+    {
+      "id": "omriiszq1re7r",
+      "type": "caNode",
+      "position": {
+        "x": 920,
+        "y": 270
+      },
+      "data": {
+        "nodeType": "ovReadIndicator",
+        "config": {
+          "indicatorId": "filled",
+          "category": "A"
+        }
+      }
+    },
+    {
+      "id": "omriiszq1afij",
+      "type": "caNode",
+      "position": {
+        "x": 920,
+        "y": 360
+      },
+      "data": {
+        "nodeType": "ovReadIndicator",
+        "config": {
+          "indicatorId": "filled",
+          "category": "B"
+        }
+      }
+    },
+    {
+      "id": "omriiszq1yu4c",
+      "type": "caNode",
+      "position": {
+        "x": 1150,
+        "y": 270
+      },
+      "data": {
+        "nodeType": "arithmeticOperator",
+        "config": {
+          "operation": "+"
+        }
+      }
+    },
+    {
+      "id": "omriiszq1w5g2",
+      "type": "caNode",
+      "position": {
+        "x": 1380,
+        "y": 90
+      },
+      "data": {
+        "nodeType": "ovCollectSample",
+        "config": {
+          "series": "accreted",
+          "scope": "experiment"
+        }
+      }
+    },
+    {
+      "id": "omriiszq157su",
+      "type": "caNode",
+      "position": {
+        "x": 1610,
+        "y": 90
+      },
+      "data": {
+        "nodeType": "ovLog",
+        "config": {
+          "text": "accreted {value} cells"
+        }
+      }
+    }
+  ],
+  "overseerGraphEdges": [
+    {
+      "id": "emriiszq0ibtg",
+      "source": "omriiszq08gtc",
+      "target": "omriiszq0vgxd",
+      "sourceHandle": "output_value_values",
+      "targetHandle": "input_value_array"
+    },
+    {
+      "id": "emriiszq009us",
+      "source": "omriiszq0p5ph",
+      "target": "omriiszq0vo4n",
+      "sourceHandle": "output_flow_do",
+      "targetHandle": "input_flow_do"
+    },
+    {
+      "id": "emriiszq0h42m",
+      "source": "omriiszq0vo4n",
+      "target": "omriiszq0vgxd",
+      "sourceHandle": "output_flow_next",
+      "targetHandle": "input_flow_do"
+    },
+    {
+      "id": "emriiszq05ci4",
+      "source": "omriiszq0vgxd",
+      "target": "omriiszq0phwg",
+      "sourceHandle": "output_flow_body",
+      "targetHandle": "input_flow_do"
+    },
+    {
+      "id": "emriiszq1petr",
+      "source": "omriiszq0vgxd",
+      "target": "omriiszq0phwg",
+      "sourceHandle": "output_value_element",
+      "targetHandle": "input_value_seed"
+    },
+    {
+      "id": "emriiszq1dk25",
+      "source": "omriiszq0phwg",
+      "target": "omriiszq160a0",
+      "sourceHandle": "output_flow_next",
+      "targetHandle": "input_flow_do"
+    },
+    {
+      "id": "emriiszq19235",
+      "source": "omriiszq160a0",
+      "target": "omriiszq1or7q",
+      "sourceHandle": "output_flow_next",
+      "targetHandle": "input_flow_do"
+    },
+    {
+      "id": "emriiszq1goql",
+      "source": "omriiszq1re7r",
+      "target": "omriiszq1yu4c",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_x"
+    },
+    {
+      "id": "emriiszq1pwnz",
+      "source": "omriiszq1afij",
+      "target": "omriiszq1yu4c",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_y"
+    },
+    {
+      "id": "emriiszq1wp8a",
+      "source": "omriiszq1or7q",
+      "target": "omriiszq1w5g2",
+      "sourceHandle": "output_flow_next",
+      "targetHandle": "input_flow_do"
+    },
+    {
+      "id": "emriiszq172in",
+      "source": "omriiszq1yu4c",
+      "target": "omriiszq1w5g2",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_value"
+    },
+    {
+      "id": "emriiszq1a3dp",
+      "source": "omriiszq1w5g2",
+      "target": "omriiszq157su",
+      "sourceHandle": "output_flow_next",
+      "targetHandle": "input_flow_do"
+    },
+    {
+      "id": "emriiszq1a9uz",
+      "source": "omriiszq1yu4c",
+      "target": "omriiszq157su",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_value"
+    }
+  ]
 }
