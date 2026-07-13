@@ -2052,6 +2052,20 @@ function CaNodeComponent({ id, data }: NodeProps) {
         )}
 
         {/* ---------- Overseer node configs (experiment orchestration) ---------- */}
+        {nodeData.nodeType === 'ovRandomizeTable' && (
+          <select
+            className={styles.select}
+            value={(nodeData.config.tableId as string) || ''}
+            onChange={e => updateConfig('tableId', e.target.value)}
+          >
+            <option value="">Select Lookup Table...</option>
+            {model.attributes
+              .filter(a => a.isModelAttribute && a.type === 'lookupTable')
+              .map(a => (
+                <option key={a.id} value={a.id}>{a.name}</option>
+              ))}
+          </select>
+        )}
         {nodeData.nodeType === 'ovSetModelAttribute' && (
           <select
             className={styles.select}

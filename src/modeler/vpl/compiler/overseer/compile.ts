@@ -49,7 +49,7 @@ export interface OverseerCompileResult {
 /** Action node types the flow walk emits itself (their def.compile is ''). */
 const OV_ACTION_TYPES = new Set<string>([
   'ovResetBoard', 'ovRunGenerations', 'ovRunUntilStop', 'ovSetSeed',
-  'ovSetModelAttribute', 'ovLoadPreset', 'ovCollectSample', 'ovCollectSpatial',
+  'ovSetModelAttribute', 'ovRandomizeTable', 'ovLoadPreset', 'ovCollectSample', 'ovCollectSpatial',
   'ovClearSeries', 'ovLog', 'ovStopExperiment', 'ovScreenshot',
   'ovStartRecording', 'ovStopRecording',
 ]);
@@ -424,6 +424,12 @@ export function compileOverseerGraph(
         case 'ovSetModelAttribute': {
           const value = resolveFlowInput(nodeId, 'value', stmt, emitted, inner, { fallback: '0' });
           stmt.push(`${inner}await O.setAttr(${JSON.stringify(cfgStr(node, 'attributeId'))}, ${value});`);
+          break;
+        }
+        case 'ovRandomizeTable': {
+          const seed = resolveFlowInput(nodeId, 'seed', stmt, emitted, inner, { fallback: '1' });
+          const density = resolveFlowInput(nodeId, 'density', stmt, emitted, inner, { fallback: '0.2' });
+          stmt.push(`${inner}await O.randomizeTable(${JSON.stringify(cfgStr(node, 'tableId'))}, ${seed}, ${density});`);
           break;
         }
         case 'ovLoadPreset':

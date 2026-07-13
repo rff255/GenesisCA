@@ -215,7 +215,7 @@ A complete GenesisCA model definition consists of:
 
 ## Documentation
 
-- [Node Reference](docs/NODES_REFERENCE.md) — full catalogue of all 137 node types (including the Bond-Graph Agents and Overseer families), port schemas, and compile-time semantics, with Mermaid diagrams of common patterns.
+- [Node Reference](docs/NODES_REFERENCE.md) — full catalogue of all 138 node types (including the Bond-Graph Agents and Overseer families), port schemas, and compile-time semantics, with Mermaid diagrams of common patterns.
 - [CA Literature Review](docs/CA_LITERATURE_REVIEW.md) — a survey of ~70 canonical cellular-automata models across physics, chemistry, biology, ecology, sociology, transport, earth sciences, CS theory and cryptography, with a shortlist driving GenesisCA's feature roadmap.
 
 ---

@@ -72,6 +72,10 @@ export interface OverseerDeps {
   evalEndConditions: (gen: number, indicators: IndicatorMap) => string | null;
   /** Runtime-only model-attribute write (worker + panel UI — never the model). */
   setModelAttr: (attrId: string, value: number) => void;
+  /** Runtime-only Lookup Table re-roll from a seed (worker only — never the
+   *  model). Resolves the table's axes + value policy and posts updateLookupTable
+   *  with the seeded fill. No-op for an unknown/non-lookupTable id. */
+  randomizeTable: (tableId: string, seed: number, density: number) => void;
   /** Live-apply a preset. 'needs-reinit' = the preset would force a structural
    *  worker reinit (grid dims / boundary) — v1 journals + skips those. */
   loadPresetLive: (presetId: string) => 'ok' | 'needs-reinit' | 'not-found';
@@ -457,6 +461,14 @@ export class OverseerRuntime {
         if (!attrId) return;
         rt.deps.setModelAttr(attrId, value);
         rt.modelAttrs[attrId] = value;
+      },
+
+      async randomizeTable(tableId: string, seed: number, density: number): Promise<void> {
+        if (!tableId) return;
+        const s = (seed | 0) >>> 0;
+        const d = Math.min(1, Math.max(0, Number(density) || 0));
+        rt.deps.randomizeTable(tableId, s, d);
+        rt.pushJournal('text', `Randomize table "${tableId}" — seed ${s}, density ${d}.`);
       },
 
       async loadPreset(presetId: string): Promise<void> {
