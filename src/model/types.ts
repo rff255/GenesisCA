@@ -419,6 +419,36 @@ export interface ModelProperties {
    *  existing file). When `'3d'`, the grid is `gridWidth × gridHeight × gridDepth`
    *  and the simulator uses the WebGL2 voxel renderer. */
   dimension?: Dimension;
+  /** Opt-in large-grid optimization ("Skip Isolated Empty Cells"): the worker
+   *  processes the Generation Step + Output Mapping ONLY for cells within the
+   *  active range of a non-empty cell, skipping isolated empty cells (the growing
+   *  SURFACE, not the whole volume). Only meaningful when the model uses the CA
+   *  grid (`topologyMode.gridCells !== false`) + synchronous update mode. Absent
+   *  / `enabled:false` → every cell processed (byte-identical). Painting is never
+   *  gated by this. See docs/PLAN_LARGE_GRID_PERF.md. */
+  skipIsolatedEmpty?: SkipIsolatedEmptyConfig;
+}
+
+/** Config for the "Skip Isolated Empty Cells" optimization (all fields required
+ *  when `enabled`). "Empty" is defined by (emptyAttributeId, emptyValue); the
+ *  active range (within which empty cells near a non-empty cell are still
+ *  processed) is a neighbourhood or a radius. Additive/optional on
+ *  ModelProperties — old files load unchanged. */
+export interface SkipIsolatedEmptyConfig {
+  enabled: boolean;
+  /** Which cell attribute defines "empty". */
+  emptyAttributeId: string;
+  /** The value that means "empty", encoded like `Attribute.defaultValue`
+   *  (tag index string / "true"|"false" / a number string). */
+  emptyValue: string;
+  /** How the active range is defined. */
+  rangeKind: 'neighborhood' | 'radius';
+  /** rangeKind==='neighborhood': the neighbourhood whose offsets are the range. */
+  neighborhoodId?: string;
+  /** rangeKind==='radius': the radius in cells (default 1). */
+  radius?: number;
+  /** rangeKind==='radius': the distance metric (default 'chebyshev' = Moore box). */
+  radiusMetric?: 'chebyshev' | 'manhattan' | 'euclidean';
 }
 
 /** A serialized node in the update rules graph */

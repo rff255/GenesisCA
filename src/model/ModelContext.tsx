@@ -398,6 +398,13 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
       if (variegatedCells && variegatedCells.sourceAttributeId === action.id) {
         variegatedCells = { ...variegatedCells, sourceAttributeId: '' };
       }
+      // Skip-Isolated-Empty cascade: if the removed attribute defined "empty",
+      // clear the reference (the UI validates it + the worker ignores an invalid
+      // config until re-pointed — mirrors the variegation source handling).
+      let sieProperties = state.model.properties;
+      if (sieProperties.skipIsolatedEmpty && sieProperties.skipIsolatedEmpty.emptyAttributeId === action.id) {
+        sieProperties = { ...sieProperties, skipIsolatedEmpty: { ...sieProperties.skipIsolatedEmpty, emptyAttributeId: '' } };
+      }
       // Variables cascade: tag variables referencing the removed attr lose
       // their tag space Ã¢â‚¬â€ convert to integer (initialValue is already a
       // stringified number, no parsing needed) and drop attributeId.
@@ -422,7 +429,7 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
           ? { ...m, linked: false, linkedAttributeId: undefined, linkedColors: undefined, linkedMin: undefined, linkedMax: undefined }
           : m,
       );
-      const modelAfterFilter = { ...state.model, attributes: filteredAttrs, variegatedCells, variables, agentVariables, mappings: mappingsAfterRemove };
+      const modelAfterFilter = { ...state.model, properties: sieProperties, attributes: filteredAttrs, variegatedCells, variables, agentVariables, mappings: mappingsAfterRemove };
       // Clear stale attributeId and tagAttributeId references in node configs
       const a1 = clearDeletedId(modelAfterFilter, 'attributeId', action.id);
       const a2 = patchAllNodes(
@@ -705,9 +712,15 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
             return cfg;
           },
         );
+        // Skip-Isolated-Empty: remap emptyValue if this IS the empty (tag) attr
+        // and its options were reordered/removed (index-stable rename is a no-op).
+        let sieRemapProps = remappedModel.properties;
+        if (sieRemapProps.skipIsolatedEmpty?.emptyAttributeId === attrId) {
+          sieRemapProps = { ...sieRemapProps, skipIsolatedEmpty: { ...sieRemapProps.skipIsolatedEmpty, emptyValue: remap(sieRemapProps.skipIsolatedEmpty.emptyValue) } };
+        }
         return {
           ...state, isDirty: true,
-          model: { ...remappedModel, ...patched },
+          model: { ...remappedModel, ...patched, properties: sieRemapProps },
         };
       }
 
@@ -953,8 +966,16 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
     }
 
     case 'REMOVE_NEIGHBORHOOD': {
+      // Skip-Isolated-Empty cascade: if the removed neighbourhood defined the
+      // active range, drop the reference (the config validates as incomplete
+      // until re-pointed / switched to a radius).
+      let sieProps = state.model.properties;
+      if (sieProps.skipIsolatedEmpty?.rangeKind === 'neighborhood' && sieProps.skipIsolatedEmpty.neighborhoodId === action.id) {
+        sieProps = { ...sieProps, skipIsolatedEmpty: { ...sieProps.skipIsolatedEmpty, neighborhoodId: undefined } };
+      }
       const mAfterNbr = {
         ...state.model,
+        properties: sieProps,
         neighborhoods: state.model.neighborhoods.filter(n => n.id !== action.id),
       };
       const nbrPatch = clearDeletedId(mAfterNbr, 'neighborhoodId', action.id);
