@@ -247,6 +247,61 @@ vEdge(omColor, 'b', looks, 'b');
 vEdge(omAlpha, 'result', looks, 'a');
 
 // =============================================================================
+// OVERSEER GRAPH — the RULE EXPLORER (the automated "re-roll until something
+// interesting grows" workflow, Softology's core loop). Sweeps a list of rule
+// seeds; for each: re-roll the rule table, Reset (a FIXED centre seed so the
+// comparison isolates the RULE), run until the structure reaches the edge, then
+// collect the total accreted-cell count into a series (the panel plots a
+// histogram of rule → size). The RandomizeTable node journals every seed, so a
+// standout rule reproduces by typing that seed into the editor's Randomize block.
+// Uses a SEPARATE node/edge list (overseerGraphNodes / overseerGraphEdges).
+// =============================================================================
+const ovNodes = [], ovEdges = [];
+function ovN(nodeType, config, col, row) {
+  const n = { id: newId('o'), type: 'caNode', position: { x: col * 230, y: row * 90 }, data: { nodeType, config } };
+  ovNodes.push(n);
+  return n;
+}
+function ovE(s, sp, t, tp, category) {
+  ovEdges.push({ id: newId('e'), source: s.id, target: t.id, sourceHandle: `output_${category}_${sp}`, targetHandle: `input_${category}_${tp}` });
+}
+const ovV = (s, sp, t, tp) => ovE(s, sp, t, tp, 'value');
+const ovF = (s, sp, t, tp) => ovE(s, sp, t, tp, 'flow');
+
+// Known-good rule seeds (from the density-0.13 seed search) — each grows a
+// porous structure to the edge, so the sweep always shows interesting variety.
+const EXPLORE_SEEDS = [25, 162, 85, 294, 93, 154, 62, 34];
+
+const exp = ovN('experiment', {}, 0, 0);
+const clear = ovN('ovClearSeries', { series: 'accreted' }, 1, 0);
+const seeds = ovN('ovSweepValues', { mode: 'list', list: EXPLORE_SEEDS.join(', ') }, 0, 2);
+const forEach = ovN('forEachInArray', {}, 2, 1);
+ovV(seeds, 'values', forEach, 'array');
+ovF(exp, 'do', clear, 'do');
+ovF(clear, 'next', forEach, 'do');
+
+// Per-seed body.
+const roll = ovN('ovRandomizeTable', { tableId: 'rule', _port_density: String(RULE_DENSITY) }, 3, 1);
+ovF(forEach, 'body', roll, 'do');
+ovV(forEach, 'element', roll, 'seed');          // seed = the swept value
+const reset = ovN('ovResetBoard', {}, 4, 1);
+ovF(roll, 'next', reset, 'do');
+const run = ovN('ovRunUntilStop', { _port_maxGens: '600' }, 5, 1);
+ovF(reset, 'next', run, 'do');
+// Measure the total accreted cells (A + B) at the moment it stops.
+const readA = ovN('ovReadIndicator', { indicatorId: 'filled', category: 'A' }, 4, 3);
+const readB = ovN('ovReadIndicator', { indicatorId: 'filled', category: 'B' }, 4, 4);
+const total = ovN('arithmeticOperator', { operation: '+' }, 5, 3);
+ovV(readA, 'value', total, 'x');
+ovV(readB, 'value', total, 'y');
+const collect = ovN('ovCollectSample', { series: 'accreted', scope: 'experiment' }, 6, 1);
+ovF(run, 'next', collect, 'do');
+ovV(total, 'result', collect, 'value');
+const log = ovN('ovLog', { text: 'accreted {value} cells' }, 7, 1);
+ovF(collect, 'next', log, 'do');
+ovV(total, 'result', log, 'value');
+
+// =============================================================================
 // MODEL PARTS
 // =============================================================================
 const ruleAxes = [
@@ -270,7 +325,9 @@ const properties = {
     "outward until it reaches a grid edge. The rule is one 4-axis (state × face × " +
     "edge × corner count) Lookup Table filled by a seed — re-roll the seed in the " +
     "table's Randomize block (Attributes ▸ rule) to grow an entirely different form. " +
-    "Orbit the camera and pull the clip plane to see inside.",
+    "Orbit the camera and pull the clip plane to see inside. The Experiments panel " +
+    "runs a Rule Explorer that sweeps a list of seeds and charts how big each rule's " +
+    "structure grows — the automated version of re-rolling until something interesting appears.",
   topology: '2d-grid',
   boundaryTreatment: 'constant',
   updateMode: 'synchronous',
@@ -346,6 +403,11 @@ const model = {
   graphEdges,
   macroDefs: [],
   topologyMode: { gridCells: true, agents: false },
+  // The Rule Explorer experiment (Overseer). seedPolicy 'fixed' holds the centre
+  // 5×5×5 seed constant across the sweep so the series isolates the RULE's effect.
+  overseerConfig: { enabled: true, seedPolicy: 'fixed', baseSeed: 12345 },
+  overseerGraphNodes: ovNodes,
+  overseerGraphEdges: ovEdges,
 };
 
 mkdirSync(dirname(OUT), { recursive: true });
@@ -361,5 +423,6 @@ writeFileSync(OUT, JSON.stringify(model, null, 2) + '\n', 'utf-8');
 console.log(
   `Wrote ${OUT}\n  ${graphNodes.length} nodes, ${graphEdges.length} edges, ` +
   `grid ${W}x${H}x${D}, rule seed ${RULE_SEED >>> 0} density ${RULE_DENSITY} ` +
-  `(${RULE_TOTAL} entries, ${ruleData.filter(v => v !== 0).length} non-zero)${preserved}`,
+  `(${RULE_TOTAL} entries, ${ruleData.filter(v => v !== 0).length} non-zero), ` +
+  `Overseer Rule Explorer (${ovNodes.length} nodes, ${EXPLORE_SEEDS.length} seeds)${preserved}`,
 );
