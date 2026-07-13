@@ -2,6 +2,7 @@ import { useModel } from '../../model/ModelContext';
 import type {
   BoundaryTreatment, UpdateMode, AsyncScheme,
   EndConditions, EndConditionOp, IndicatorEndCondition,
+  SkipIsolatedEmptyConfig,
 } from '../../model/types';
 import { IndicatorsPanelSection } from './IndicatorsPanelSection';
 import { useDetailSelection, type PanelContentProps } from '../ModelerDetailContext';
@@ -350,6 +351,110 @@ export function PropertiesPanelContent({ mode = 'list' }: PanelContentProps = {}
               </span>
             </div>
           </div>
+
+          {/* Skip Isolated Empty Cells — opt-in large-grid optimization (CA-grid
+              only). Only cells within the active range of a non-empty cell run the
+              Generation Step + Output Mapping; isolated empty cells are skipped.
+              Synchronous mode only; painting stays ungated. */}
+          {(() => {
+            const cellAttrs = model.attributes.filter(a => !a.isModelAttribute);
+            const sie = properties.skipIsolatedEmpty;
+            const emptyAttr = sie ? cellAttrs.find(a => a.id === sie.emptyAttributeId) : undefined;
+            const defaultEmptyValue = (t?: string) => (t === 'bool' ? 'false' : '0');
+            const patchSie = (changes: Partial<SkipIsolatedEmptyConfig>) => {
+              const base: SkipIsolatedEmptyConfig = sie ?? { enabled: false, emptyAttributeId: '', emptyValue: '0', rangeKind: 'neighborhood' };
+              updateProperties({ skipIsolatedEmpty: { ...base, ...changes } });
+            };
+            const rangeKind = sie?.rangeKind ?? 'neighborhood';
+            return (
+              <div style={{ marginTop: 14, borderTop: '1px solid #333', paddingTop: 10 }}>
+                <label style={{ display: 'flex', alignItems: 'flex-start', gap: 6, cursor: 'pointer', fontSize: '0.72rem' }}>
+                  <input type="checkbox" checked={!!sie?.enabled} style={{ marginTop: 2 }}
+                    onChange={e => patchSie({ enabled: e.target.checked })} />
+                  <span>
+                    <strong>Skip Isolated Empty Cells</strong>
+                    <span style={{ color: '#888', fontSize: '0.66rem', display: 'block' }}>
+                      Large-grid speedup: only cells within a range of a non-empty cell run the Generation Step + Output Mapping; isolated empty cells are skipped. Synchronous mode only; you can still paint any cell.
+                    </span>
+                  </span>
+                </label>
+                {sie?.enabled && (
+                  <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 8, paddingLeft: 22 }}>
+                    <div className={styles.field}>
+                      <label className={styles.fieldLabel}>Empty attribute</label>
+                      <select className={styles.selectInput} value={sie.emptyAttributeId}
+                        onChange={e => { const a = cellAttrs.find(x => x.id === e.target.value); patchSie({ emptyAttributeId: e.target.value, emptyValue: defaultEmptyValue(a?.type) }); }}>
+                        <option value="">— select —</option>
+                        {cellAttrs.filter(a => a.type === 'tag' || a.type === 'bool' || a.type === 'integer' || a.type === 'float').map(a =>
+                          <option key={a.id} value={a.id}>{a.name}</option>)}
+                      </select>
+                    </div>
+                    {emptyAttr && (
+                      <div className={styles.field}>
+                        <label className={styles.fieldLabel}>Empty value</label>
+                        {emptyAttr.type === 'tag' ? (
+                          <select className={styles.selectInput} value={sie.emptyValue}
+                            onChange={e => patchSie({ emptyValue: e.target.value })}>
+                            {(emptyAttr.tagOptions ?? []).map((o, i) => <option key={i} value={String(i)}>{o}</option>)}
+                          </select>
+                        ) : emptyAttr.type === 'bool' ? (
+                          <select className={styles.selectInput} value={sie.emptyValue}
+                            onChange={e => patchSie({ emptyValue: e.target.value })}>
+                            <option value="false">False</option>
+                            <option value="true">True</option>
+                          </select>
+                        ) : (
+                          <NumberField className={styles.numberInput} integer={emptyAttr.type === 'integer'}
+                            value={Number(sie.emptyValue) || 0} onNumber={n => patchSie({ emptyValue: String(n) })} />
+                        )}
+                      </div>
+                    )}
+                    <div className={styles.field}>
+                      <label className={styles.fieldLabel}>Processing range</label>
+                      <div style={{ display: 'flex', gap: 12, fontSize: '0.72rem', marginTop: 2 }}>
+                        <label style={{ display: 'flex', gap: 4, cursor: 'pointer' }}>
+                          <input type="radio" checked={rangeKind === 'neighborhood'} onChange={() => patchSie({ rangeKind: 'neighborhood' })} /> Neighbourhood
+                        </label>
+                        <label style={{ display: 'flex', gap: 4, cursor: 'pointer' }}>
+                          <input type="radio" checked={rangeKind === 'radius'} onChange={() => patchSie({ rangeKind: 'radius' })} /> Distance
+                        </label>
+                      </div>
+                    </div>
+                    {rangeKind === 'neighborhood' ? (
+                      <div className={styles.field}>
+                        <label className={styles.fieldLabel}>Range neighbourhood</label>
+                        <select className={styles.selectInput} value={sie.neighborhoodId ?? ''}
+                          onChange={e => patchSie({ neighborhoodId: e.target.value })}>
+                          <option value="">— select —</option>
+                          {model.neighborhoods.map(n => <option key={n.id} value={n.id}>{n.name}</option>)}
+                        </select>
+                      </div>
+                    ) : (
+                      <div className={styles.fieldRow}>
+                        <div className={styles.field}>
+                          <label className={styles.fieldLabel}>Radius</label>
+                          <NumberField className={styles.numberInput} min={1} integer
+                            value={sie.radius ?? 1} onNumber={n => patchSie({ radius: n })} />
+                        </div>
+                        <div className={styles.field}>
+                          <label className={styles.fieldLabel}>Metric</label>
+                          <select className={styles.selectInput} value={sie.radiusMetric ?? 'chebyshev'}
+                            onChange={e => patchSie({ radiusMetric: e.target.value as SkipIsolatedEmptyConfig['radiusMetric'] })}>
+                            <option value="chebyshev">Box (Chebyshev)</option>
+                            <option value="manhattan">Diamond (Manhattan)</option>
+                            <option value="euclidean">Sphere (Euclidean)</option>
+                          </select>
+                        </div>
+                      </div>
+                    )}
+                    <span style={{ color: '#888', fontSize: '0.62rem' }}>
+                      Effective in synchronous mode only. Empty cells with no non-empty cell within the range keep their state + colour and are not processed each generation.
+                    </span>
+                  </div>
+                )}
+              </div>
+            );
+          })()}
           </>)}
 
           {/* Topology — which layer(s) the model uses. Grid Cells is the classic
