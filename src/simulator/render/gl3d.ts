@@ -231,19 +231,25 @@ const VS = `#version 300 es
 precision highp float;
 layout(location=0) in vec3 aPos;
 layout(location=1) in vec3 aNormal;
-layout(location=2) in float aCellIndex;  // flat SoA index of this instance
+layout(location=2) in uint aCellIndex;   // flat SoA index of this instance (u32 —
+                                         // a FLOAT attribute rounds indices >= 2^24
+                                         // to even, shifting voxels onto the wrong
+                                         // column on grids past ~16.7M cells)
 layout(location=3) in vec4 aColor;       // rgba 0..1
 uniform mat4 uMVP;
-uniform float uW; uniform float uWH; uniform vec3 uHalf; // half-extents (W-1)/2 etc.
+uniform uint uWu; uniform uint uWHu;     // grid W and W*H (integer — exact decode)
+uniform vec3 uHalf;                      // half-extents (W-1)/2 etc.
 uniform float uCubeScale;
 out vec4 vColor;
 out vec3 vNormal;
 out vec3 vWorld;     // world-space cell-centre (for the clip plane)
 void main() {
-  float layer = floor(aCellIndex / uWH);
-  float rem = aCellIndex - layer * uWH;
-  float row = floor(rem / uW);
-  float col = rem - row * uW;
+  uint layerU = aCellIndex / uWHu;
+  uint remU = aCellIndex - layerU * uWHu;
+  uint rowU = remU / uWu;
+  float layer = float(layerU);
+  float row = float(rowU);
+  float col = float(remU - rowU * uWu);
   // Z-up. col→+X (right); row→-Y so a top-down view matches the 2D CA (row
   // increases DOWN the screen); layer/depth→-Z (into the screen / downward,
   // layer 0 on top).
@@ -276,10 +282,12 @@ void main() {
   outColor = vec4(vColor.rgb * lum, vColor.a);
 }`;
 
-// Pick pass: encode the instance's cell index as RGB; nearest cube wins via depth.
+// Pick pass: encode the instance's cell index + 1 across the FULL RGBA (32 bits —
+// RGB alone caps at 2^24-1, truncating picks on grids past ~16.7M cells); the
+// cleared background stays 0 = miss. Nearest cube wins via depth.
 const PICK_FS = `#version 300 es
 precision highp float;
-flat in float vPickIdx;
+flat in uint vPickIdx;
 in vec3 vWorldP;
 uniform int uClipEnabled;
 uniform int uClipAxis;
@@ -292,25 +300,24 @@ void main() {
     float w = uClipAxis == 0 ? vWorldP.x : uClipAxis == 1 ? vWorldP.y : uClipAxis == 2 ? vWorldP.z : dot(vWorldP, uClipForward);
     if (w < uClipLo || w > uClipHi) { discard; }
   }
-  float idx = vPickIdx;
-  float r = mod(idx, 256.0);
-  float g = mod(floor(idx / 256.0), 256.0);
-  float b = mod(floor(idx / 65536.0), 256.0);
-  outColor = vec4(r / 255.0, g / 255.0, b / 255.0, 1.0);
+  uint id = vPickIdx + 1u;
+  outColor = vec4(float(id & 255u), float((id >> 8) & 255u), float((id >> 16) & 255u), float((id >> 24) & 255u)) / 255.0;
 }`;
 const PICK_VS = `#version 300 es
 precision highp float;
 layout(location=0) in vec3 aPos;
-layout(location=2) in float aCellIndex;
+layout(location=2) in uint aCellIndex;
 uniform mat4 uMVP;
-uniform float uW; uniform float uWH; uniform vec3 uHalf; uniform float uCubeScale;
-flat out float vPickIdx;
+uniform uint uWu; uniform uint uWHu; uniform vec3 uHalf; uniform float uCubeScale;
+flat out uint vPickIdx;
 out vec3 vWorldP;
 void main() {
-  float layer = floor(aCellIndex / uWH);
-  float rem = aCellIndex - layer * uWH;
-  float row = floor(rem / uW);
-  float col = rem - row * uW;
+  uint layerU = aCellIndex / uWHu;
+  uint remU = aCellIndex - layerU * uWHu;
+  uint rowU = remU / uWu;
+  float layer = float(layerU);
+  float row = float(rowU);
+  float col = float(remU - rowU * uWu);
   vec3 centre = vec3(col - uHalf.x, uHalf.y - row, uHalf.z - layer);
   vWorldP = centre;
   vPickIdx = aCellIndex;
@@ -579,6 +586,10 @@ export class Gl3DRenderer {
   private instBuf: WebGLBuffer;
   private instCapacity = 0;     // floats allocated in instBuf
   private instData: Float32Array = new Float32Array(0);
+  /** Uint32 view over instData.buffer — the cellIndex lane (slot 0 of each 5-lane
+   *  record) is written/read through THIS view so indices stay exact past 2^24
+   *  (a Float32 write silently rounds odd indices to even on >16.7M-cell grids). */
+  private instDataU32: Uint32Array = new Uint32Array(0);
   private W = 1; private H = 1; private D = 1;
   private alphaBlend = false;
   private clip: ClipPlane3D = { enabled: false, axis: 'z', lo: 0, hi: 0 };
@@ -661,9 +672,11 @@ export class Gl3DRenderer {
     gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(CUBE), gl.STATIC_DRAW);
     gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 24, 0);
     gl.enableVertexAttribArray(1); gl.vertexAttribPointer(1, 3, gl.FLOAT, false, 24, 12);
-    // instance buffer: [cellIndex, r, g, b, a] × 5 floats, stride 20.
+    // instance buffer: [cellIndex(u32), r, g, b, a(f32)] × 5 lanes, stride 20. The
+    // index lane is an INTEGER attribute (vertexAttribIPointer) — a float lane
+    // cannot represent odd indices >= 2^24 (grids past ~16.7M cells).
     gl.bindBuffer(gl.ARRAY_BUFFER, this.instBuf);
-    gl.enableVertexAttribArray(2); gl.vertexAttribPointer(2, 1, gl.FLOAT, false, 20, 0); gl.vertexAttribDivisor(2, 1);
+    gl.enableVertexAttribArray(2); gl.vertexAttribIPointer(2, 1, gl.UNSIGNED_INT, 20, 0); gl.vertexAttribDivisor(2, 1);
     gl.enableVertexAttribArray(3); gl.vertexAttribPointer(3, 4, gl.FLOAT, false, 20, 4); gl.vertexAttribDivisor(3, 1);
     gl.bindVertexArray(null);
     // Line pipeline (axes/grid/bounds/gizmo): pos(3) + color(3), stride 24.
@@ -823,14 +836,18 @@ export class Gl3DRenderer {
    *  buffer. NEVER instances the full volume. Returns the visible count. */
   uploadColors(colors: Uint8ClampedArray, total: number): number {
     const need = total * 5;
-    if (this.instData.length < need) this.instData = new Float32Array(need);
+    if (this.instData.length < need) {
+      this.instData = new Float32Array(need);
+      this.instDataU32 = new Uint32Array(this.instData.buffer);
+    }
     const d = this.instData;
+    const u = this.instDataU32;
     let n = 0;
     for (let i = 0; i < total; i++) {
       const a = colors[i * 4 + 3]!;
       if (a === 0) continue;
       const o = n * 5;
-      d[o] = i;
+      u[o] = i;  // u32 lane — exact for any grid size (f32 rounds past 2^24)
       d[o + 1] = colors[i * 4]! / 255;
       d[o + 2] = colors[i * 4 + 1]! / 255;
       d[o + 3] = colors[i * 4 + 2]! / 255;
@@ -854,7 +871,7 @@ export class Gl3DRenderer {
   private sortBackToFront(): void {
     const n = this.instanceCount;
     if (n < 2) return;
-    const d = this.instData;
+    const u = this.instDataU32;
     const W = this.W, WH = this.W * this.H;
     const hx = (W - 1) / 2, hy = (this.H - 1) / 2, hz = (this.D - 1) / 2;
     // eye direction approximated from the MVP isn't trivial; sort by -z of the
@@ -862,7 +879,7 @@ export class Gl3DRenderer {
     const m = this.mvp;
     const keys = new Float32Array(n);
     for (let k = 0; k < n; k++) {
-      const idx = d[k * 5]!;
+      const idx = u[k * 5]!;  // u32 lane (see instDataU32)
       const layer = Math.floor(idx / WH);
       const rem = idx - layer * WH;
       const row = Math.floor(rem / W);
@@ -872,12 +889,14 @@ export class Gl3DRenderer {
       keys[k] = m[2]! * cx + m[6]! * cy + m[10]! * cz + m[14]!;
     }
     const order = Array.from({ length: n }, (_, k) => k).sort((a, b) => keys[b]! - keys[a]!);
-    const sorted = new Float32Array(n * 5);
+    // Copy the mixed u32/f32 records through the u32 view — a bit-exact lane copy
+    // (reading the u32 index lane through the FLOAT view would reinterpret it).
+    const sorted = new Uint32Array(n * 5);
     for (let k = 0; k < n; k++) {
       const s = order[k]! * 5;
-      sorted.set(d.subarray(s, s + 5), k * 5);
+      sorted.set(u.subarray(s, s + 5), k * 5);
     }
-    d.set(sorted.subarray(0, n * 5));
+    u.set(sorted);
     const gl = this.gl;
     gl.bindBuffer(gl.ARRAY_BUFFER, this.instBuf);
     gl.bufferSubData(gl.ARRAY_BUFFER, 0, sorted);
@@ -1203,8 +1222,10 @@ export class Gl3DRenderer {
 
   private setCommonUniforms(gl: WebGL2RenderingContext, prog: WebGLProgram): void {
     gl.uniformMatrix4fv(gl.getUniformLocation(prog, 'uMVP'), false, this.mvp);
-    gl.uniform1f(gl.getUniformLocation(prog, 'uW'), this.W);
-    gl.uniform1f(gl.getUniformLocation(prog, 'uWH'), this.W * this.H);
+    // Integer grid dims for the u32 index decode (float uniforms lose exactness
+    // for W*H past 2^24 — e.g. 5001×5001).
+    gl.uniform1ui(gl.getUniformLocation(prog, 'uWu'), this.W);
+    gl.uniform1ui(gl.getUniformLocation(prog, 'uWHu'), this.W * this.H);
     gl.uniform3f(gl.getUniformLocation(prog, 'uHalf'), (this.W - 1) / 2, (this.H - 1) / 2, (this.D - 1) / 2);
     gl.uniform1f(gl.getUniformLocation(prog, 'uCubeScale'), 0.92);
     gl.uniform1i(gl.getUniformLocation(prog, 'uClipEnabled'), this.clip.enabled ? 1 : 0);
@@ -1634,8 +1655,11 @@ export class Gl3DRenderer {
     const out = new Uint8Array(4);
     gl.readPixels(Math.max(0, Math.min(w - 1, bx)), Math.max(0, Math.min(h - 1, by)), 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, out);
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-    if (out[3] === 0) return -1;  // background (cleared alpha 0)
-    return out[0]! | (out[1]! << 8) | (out[2]! << 16);
+    // Full 32-bit decode (the shader encodes cellIndex+1 across RGBA; the cleared
+    // background reads 0). RGB-only decoding capped picks at 2^24-1 — wrong cell
+    // returned on grids past ~16.7M cells.
+    const raw = (out[0]! | (out[1]! << 8) | (out[2]! << 16) | (out[3]! << 24)) >>> 0;
+    return raw === 0 ? -1 : raw - 1;
   }
 
   /** Read the rendered display buffer as RGBA pixels (for screenshot/recording).
