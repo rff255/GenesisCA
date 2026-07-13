@@ -434,6 +434,9 @@ function compileRoot(
       return attrValueLiteralJS(attr, attr.defaultValue);
     },
     is3d: model ? is3dModel(model) : false,  // 3D Grid CA: NI-codec nodes pick the 3-axis codec
+    // "Skip Isolated Empty Cells": nIdx_<nbr> carries the COMPACT packed
+    // per-slot offsets — neighbour readers decode inline (see CompileContext).
+    inlineNbr: model ? sparseSteppingEnabled(model) : false,
     // Generic Agent Platform: tag the agent root so the by-id setters relax the
     // live-agent guard in the init context (staged agents are alive=0 until Add).
     agentRoot: rootNode.data.nodeType === 'agentInit' ? 'init'
@@ -1841,7 +1844,15 @@ export function compileGraph(
         rootNodeId: stepNodeForFusion.id, rootFlowPortId: 'do', isAsync,
       })
     : new Set<string>();
-  const fusion = detectFusableConsumers(graphNodes, graphEdges, inputToSources, inputToSource, model, fusionHazards);
+  // "Skip Isolated Empty Cells" (inline-neighbour mode): disable aggregate
+  // fusion — the fused builders read the per-cell nIdx table inline, which no
+  // longer exists (nIdx carries the compact packed offsets). Unfused, the
+  // gather materialises through GetNeighborsAttribute's inline-aware scratch
+  // fill and the reducer consumes the scratch array — correct on both modes.
+  // Sparse cells are few, so the lost fusion micro-opt is negligible there.
+  const fusion = sparseSteppingEnabled(model)
+    ? detectFusableConsumers([], [], inputToSources, inputToSource, model, fusionHazards)
+    : detectFusableConsumers(graphNodes, graphEdges, inputToSources, inputToSource, model, fusionHazards);
 
   const { params: loopParams, cellAttrs } = buildLoopParams(model);
   const cellParams = buildCellParams(model);

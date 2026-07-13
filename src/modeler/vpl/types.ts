@@ -73,6 +73,13 @@ export interface CompileContext {
    *  NI-codec nodes use it to pick the 3-axis pack/unpack + the `_layer`/`WH`
    *  cell-resolution. Absent/false → the 2D 16-bit codec (byte-identical). */
   is3d?: boolean;
+  /** "Skip Isolated Empty Cells" (inline-neighbour mode): true when the sparse
+   *  feature is on, so the `nIdx_<nbr>` param carries the COMPACT packed
+   *  per-slot offset table (length nSz — packNI/packNI3 values) instead of the
+   *  huge `total × nSz` per-cell index table. Neighbour-reading node emitters
+   *  decode each slot inline via `niCellExprStmts` (same torus/constant
+   *  semantics). Absent/false → the classic table read (byte-identical). */
+  inlineNbr?: boolean;
   /** Generic Agent Platform: which agent root the current compile is emitting
    *  (`'init'` = the once-per-reset Agent Init Event, `'behaviour'` = behaviourStep,
    *  `'division'` = divisionEvent). Used by Set Agent Attribute / the by-id setters

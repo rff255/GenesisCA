@@ -24,6 +24,7 @@ import { decodeReductions, gpuHandledIds, gpuHandledAttrIds } from './webgpuRedu
 import { encodeAttrValue } from '../../model/attrValueEncoding';
 import { subAttrInfo, parentValueToInt } from '../../modeler/vpl/compiler/subAttribute';
 import { buildActiveOffsets, createActiveSet, rebuildActiveSet, applyTransition, compactActiveSet, type ActiveSet } from './activeSet';
+import { packNI, packNI3 } from '../../modeler/vpl/compiler/niCodec';
 import type { Attribute, CenterBasedConfig, SkipIsolatedEmptyConfig } from '../../model/types';
 import { cbNum, usesBondingPhysics, usesSoftCollision, usesPositionalCollision, usesEngineSprings, usesEngineGrowth } from '../../model/centerBased';
 import {
@@ -2692,6 +2693,35 @@ function buildNeighborIndices(): void {
   nbrIndices = {};
   if (!wasmMemory || !wasmLayout) return;
   const buf = wasmMemory.buffer;
+  // "Skip Isolated Empty Cells" (inline-neighbour mode): the layout reserved
+  // COMPACT per-neighbourhood tables — `size` PACKED NIs (packNI/packNI3), not
+  // `total × size` per-cell indices. Fill them once; the JS emit decodes each
+  // slot inline via the NI codec and the WASM emit via pushNiCellIdx — the
+  // exact torus-wrap / constant-sentinel math the big loops below bake in.
+  // This is what makes 300³ loadable: the big table was total×nSz×4 ≈ 2.8 GB.
+  if (wasmLayout.sparseStepping) {
+    const is3dGrid = depth > 1;
+    for (const nbr of neighborhoods) {
+      const coords3d = nbr.coords3d;
+      const nbrSize = coords3d ? coords3d.length : nbr.coords.length;
+      const packed = new Int32Array(buf, wasmLayout.nbrIndexOffset[nbr.id]!, nbrSize);
+      for (let n = 0; n < nbrSize; n++) {
+        const c = coords3d ? coords3d[n]! : nbr.coords[n]!;
+        const dr = c[0]!, dc = c[1]!, dl = (c as number[])[2] ?? 0;
+        packed[n] = is3dGrid ? packNI3(dr, dc, dl) : packNI(dr, dc);
+      }
+      nbrIndices[nbr.id] = packed;
+    }
+    // Sentinel fill (constant boundary) — same as the table path below.
+    if (boundaryTreatment !== 'torus') {
+      for (const attr of cellAttrs) {
+        const bv = boundaryCellValue(attr);
+        attrsA[attr.id]![total] = bv;
+        if (attrsB[attr.id] !== attrsA[attr.id]) attrsB[attr.id]![total] = bv;
+      }
+    }
+    return;
+  }
   for (const nbr of neighborhoods) {
     // 3D Grid CA: the offset table gains a `layer` dimension and reads 3-tuple
     // offsets when present. The STRIDE stays `coords.length` (=== coords3d.length

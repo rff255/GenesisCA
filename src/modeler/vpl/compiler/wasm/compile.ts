@@ -189,6 +189,12 @@ interface WasmCompileCtx {
    *  groupOperator dispatch, setNeighbor*ByIndex index arrays). See
    *  `compiler/arrayRelay.ts`. */
   producesArray: (node: GraphNode) => boolean;
+  /** "Skip Isolated Empty Cells" (inline-neighbour mode): the nbr region holds
+   *  COMPACT packed per-slot offsets (`size` i32 NIs), not `total × size`
+   *  per-cell indices. Every table-read site branches on this: inline mode
+   *  loads the slot's packed NI + resolves via pushNiCellIdx (identical
+   *  torus/constant semantics). False → the classic table read (byte-identical). */
+  inlineNbr: boolean;
   /** Errors encountered (unsupported nodes, etc.) — non-empty means compile failed. */
   errors: string[];
   /** Bump-pointer local for the per-cell scratch region. Reset to
@@ -462,6 +468,26 @@ function pushNiCellIdx(ctx: WasmCompileCtx, niLocal: number): void {
     em.op(OP_I32_AND);
     em.op(OP_SELECT);
   }
+}
+
+/** "Skip Isolated Empty Cells" (inline-neighbour mode): push the neighbour CELL
+ *  index for a slot of neighbourhood `nbr` when the nbr region holds COMPACT
+ *  packed per-slot NIs (no per-cell table). `pushSlot` must push the slot index
+ *  (i32) onto the stack. Loads the slot's packed NI, then resolves it to a cell
+ *  index via pushNiCellIdx — the same torus-wrap / constant-sentinel math the
+ *  big table precomputed, so the result equals the old `i32.load` exactly.
+ *  Stack effect: pushes one i32 (the neighbour cell index; `total` sentinel for
+ *  constant-boundary OOB). ONLY call when ctx.inlineNbr — the table-mode paths
+ *  at every site are left verbatim for byte-identity. */
+function pushInlineNbrCellIdx(ctx: WasmCompileCtx, nbr: NbrInfo, pushSlot: () => void): void {
+  const em = ctx.emitter;
+  const tmp = em.allocLocal(I32);
+  pushSlot();
+  em.i32Const(4);
+  em.op(OP_I32_MUL);
+  em.i32Load(nbr.offset, 2);   // the slot's PACKED NI
+  em.localSet(tmp);
+  pushNiCellIdx(ctx, tmp);
 }
 
 /** Push `i * itemBytes` onto the stack. The cache local is pre-initialised at
@@ -1752,15 +1778,20 @@ const VALUE_NODE_EMITTERS: Record<string, NodeValueEmitter> = {
     const attr = getAttr(ctx.layout, attrId);
     if (!nbr || !attr) { ctx.errors.push(`getNeighborAttributeByTag: unknown nbr/attr`); return null; }
     const tagIndex = Number((node.data.config as Record<string, unknown>)._resolvedTagIndex ?? 0);
-    // Load neighbor cell idx into a local: nIdx[i*nbrSize + tagIndex]
-    ctx.emitter.localGet(ctx.iLocalIdx);
-    ctx.emitter.i32Const(nbr.size);
-    ctx.emitter.op(OP_I32_MUL);
-    ctx.emitter.i32Const(tagIndex);
-    ctx.emitter.op(OP_I32_ADD);
-    ctx.emitter.i32Const(4);
-    ctx.emitter.op(OP_I32_MUL);
-    ctx.emitter.i32Load(nbr.offset, 2);
+    // Load neighbor cell idx into a local: nIdx[i*nbrSize + tagIndex] — or, in
+    // inline-neighbour mode, resolve slot tagIndex's packed offset inline.
+    if (ctx.inlineNbr) {
+      pushInlineNbrCellIdx(ctx, nbr, () => ctx.emitter.i32Const(tagIndex));
+    } else {
+      ctx.emitter.localGet(ctx.iLocalIdx);
+      ctx.emitter.i32Const(nbr.size);
+      ctx.emitter.op(OP_I32_MUL);
+      ctx.emitter.i32Const(tagIndex);
+      ctx.emitter.op(OP_I32_ADD);
+      ctx.emitter.i32Const(4);
+      ctx.emitter.op(OP_I32_MUL);
+      ctx.emitter.i32Load(nbr.offset, 2);
+    }
     const cellIdxLocal = ctx.emitter.allocLocal(I32);
     ctx.emitter.localSet(cellIdxLocal);
     // Load value at that cell
@@ -2596,15 +2627,20 @@ function emitGroupStatement(
         ctx.emitter.i32Const(nbr.size);
         ctx.emitter.op(OP_I32_GE_S);
         ctx.emitter.brIf(1);
-        // Compute neighbor cell idx, stash in local.
-        ctx.emitter.localGet(ctx.iLocalIdx);
-        ctx.emitter.i32Const(nbr.size);
-        ctx.emitter.op(OP_I32_MUL);
-        ctx.emitter.localGet(nLocal);
-        ctx.emitter.op(OP_I32_ADD);
-        ctx.emitter.i32Const(4);
-        ctx.emitter.op(OP_I32_MUL);
-        ctx.emitter.i32Load(nbr.offset, 2);
+        // Compute neighbor cell idx, stash in local. Inline-neighbour mode
+        // resolves slot nLocal's packed offset instead of the per-cell table.
+        if (ctx.inlineNbr) {
+          pushInlineNbrCellIdx(ctx, nbr, () => ctx.emitter.localGet(nLocal));
+        } else {
+          ctx.emitter.localGet(ctx.iLocalIdx);
+          ctx.emitter.i32Const(nbr.size);
+          ctx.emitter.op(OP_I32_MUL);
+          ctx.emitter.localGet(nLocal);
+          ctx.emitter.op(OP_I32_ADD);
+          ctx.emitter.i32Const(4);
+          ctx.emitter.op(OP_I32_MUL);
+          ctx.emitter.i32Load(nbr.offset, 2);
+        }
         const cellIdxLocal = ctx.emitter.allocLocal(I32);
         ctx.emitter.localSet(cellIdxLocal);
 
@@ -2794,15 +2830,20 @@ function emitAggregateOrCount(
         return emitRandomViaScratchFromSubAttrNbr(ctx, node, nbr, attr, subRand);
       }
       const indexLocal = pickRandomIndex(ctx, nbr.size);
-      // Load element at that index from neighborhood
-      ctx.emitter.localGet(ctx.iLocalIdx);
-      ctx.emitter.i32Const(nbr.size);
-      ctx.emitter.op(OP_I32_MUL);
-      ctx.emitter.localGet(indexLocal);
-      ctx.emitter.op(OP_I32_ADD);
-      ctx.emitter.i32Const(4);
-      ctx.emitter.op(OP_I32_MUL);
-      ctx.emitter.i32Load(nbr.offset, 2);
+      // Load element at that index from neighborhood (inline-neighbour mode
+      // resolves the slot's packed offset instead of the per-cell table).
+      if (ctx.inlineNbr) {
+        pushInlineNbrCellIdx(ctx, nbr, () => ctx.emitter.localGet(indexLocal));
+      } else {
+        ctx.emitter.localGet(ctx.iLocalIdx);
+        ctx.emitter.i32Const(nbr.size);
+        ctx.emitter.op(OP_I32_MUL);
+        ctx.emitter.localGet(indexLocal);
+        ctx.emitter.op(OP_I32_ADD);
+        ctx.emitter.i32Const(4);
+        ctx.emitter.op(OP_I32_MUL);
+        ctx.emitter.i32Load(nbr.offset, 2);
+      }
       ctx.emitter.i32Const(attr.itemBytes);
       ctx.emitter.op(OP_I32_MUL);
       if (attr.type === 'bool') ctx.emitter.i32Load8U(attr.readOffset, 0);
@@ -2887,15 +2928,20 @@ function emitAggregateOrCount(
       ctx.emitter.brIf(1);
 
       // Compute neighbor cell index: nIdx[i*nbrSize + n] from memory at nbrOffset
-      // Address = nbrOffset + (i*nbrSize + n) * 4
-      ctx.emitter.localGet(ctx.iLocalIdx);
-      ctx.emitter.i32Const(nbr.size);
-      ctx.emitter.op(OP_I32_MUL);
-      ctx.emitter.localGet(nLocal);
-      ctx.emitter.op(OP_I32_ADD);
-      ctx.emitter.i32Const(4);
-      ctx.emitter.op(OP_I32_MUL);
-      ctx.emitter.i32Load(nbr.offset, 2); // load i32 neighbor idx
+      // Address = nbrOffset + (i*nbrSize + n) * 4. Inline-neighbour mode
+      // resolves slot n's packed offset instead (no per-cell table).
+      if (ctx.inlineNbr) {
+        pushInlineNbrCellIdx(ctx, nbr, () => ctx.emitter.localGet(nLocal));
+      } else {
+        ctx.emitter.localGet(ctx.iLocalIdx);
+        ctx.emitter.i32Const(nbr.size);
+        ctx.emitter.op(OP_I32_MUL);
+        ctx.emitter.localGet(nLocal);
+        ctx.emitter.op(OP_I32_ADD);
+        ctx.emitter.i32Const(4);
+        ctx.emitter.op(OP_I32_MUL);
+        ctx.emitter.i32Load(nbr.offset, 2); // load i32 neighbor idx
+      }
       // Stash cell idx — used for both parent_match (sub-attr) and value load.
       const cellIdxLocal = ctx.emitter.allocLocal(I32);
       ctx.emitter.localSet(cellIdxLocal);
@@ -3162,10 +3208,15 @@ function emitMedianViaScratchFromNbr(
     em.loop(() => {
       em.localGet(kLoc); em.i32Const(nbr.size); em.op(OP_I32_GE_S); em.brIf(1);
       // Resolve neighbor cell idx and stash (used for parent_match + value load).
-      em.localGet(ctx.iLocalIdx); em.i32Const(nbr.size); em.op(OP_I32_MUL);
-      em.localGet(kLoc); em.op(OP_I32_ADD);
-      em.i32Const(4); em.op(OP_I32_MUL);
-      em.i32Load(nbr.offset, 2);
+      // Inline-neighbour mode resolves slot kLoc's packed offset (no per-cell table).
+      if (ctx.inlineNbr) {
+        pushInlineNbrCellIdx(ctx, nbr, () => em.localGet(kLoc));
+      } else {
+        em.localGet(ctx.iLocalIdx); em.i32Const(nbr.size); em.op(OP_I32_MUL);
+        em.localGet(kLoc); em.op(OP_I32_ADD);
+        em.i32Const(4); em.op(OP_I32_MUL);
+        em.i32Load(nbr.offset, 2);
+      }
       const cellIdxLocal = em.allocLocal(I32);
       em.localSet(cellIdxLocal);
 
@@ -3293,10 +3344,15 @@ function emitRandomViaScratchFromSubAttrNbr(
     em.loop(() => {
       em.localGet(kLoc); em.i32Const(nbr.size); em.op(OP_I32_GE_S); em.brIf(1);
 
-      em.localGet(ctx.iLocalIdx); em.i32Const(nbr.size); em.op(OP_I32_MUL);
-      em.localGet(kLoc); em.op(OP_I32_ADD);
-      em.i32Const(4); em.op(OP_I32_MUL);
-      em.i32Load(nbr.offset, 2);
+      // Inline-neighbour mode: resolve slot kLoc's packed offset (no per-cell table).
+      if (ctx.inlineNbr) {
+        pushInlineNbrCellIdx(ctx, nbr, () => em.localGet(kLoc));
+      } else {
+        em.localGet(ctx.iLocalIdx); em.i32Const(nbr.size); em.op(OP_I32_MUL);
+        em.localGet(kLoc); em.op(OP_I32_ADD);
+        em.i32Const(4); em.op(OP_I32_MUL);
+        em.i32Load(nbr.offset, 2);
+      }
       const cellIdxLocal = em.allocLocal(I32);
       em.localSet(cellIdxLocal);
 
@@ -4560,10 +4616,15 @@ const ARRAY_NODE_EMITTERS: Record<string, NodeArrayEmitter> = {
       em.loop(() => {
         em.localGet(n); em.i32Const(nbr.size); em.op(OP_I32_GE_S); em.brIf(1);
         // Compute neighbor cell idx, stash for parent_match + value load.
-        em.localGet(ctx.iLocalIdx); em.i32Const(nbr.size); em.op(OP_I32_MUL);
-        em.localGet(n); em.op(OP_I32_ADD);
-        em.i32Const(4); em.op(OP_I32_MUL);
-        em.i32Load(nbr.offset, 2);
+        // Inline-neighbour mode resolves slot n's packed offset (no per-cell table).
+        if (ctx.inlineNbr) {
+          pushInlineNbrCellIdx(ctx, nbr, () => em.localGet(n));
+        } else {
+          em.localGet(ctx.iLocalIdx); em.i32Const(nbr.size); em.op(OP_I32_MUL);
+          em.localGet(n); em.op(OP_I32_ADD);
+          em.i32Const(4); em.op(OP_I32_MUL);
+          em.i32Load(nbr.offset, 2);
+        }
         const cellIdxLocal = em.allocLocal(I32);
         em.localSet(cellIdxLocal);
         // Load value at cellIdx
@@ -6654,6 +6715,9 @@ function compileEntry(
     inputToSources,
     flowOutputToTargets,
     producesArray: makeProducesArray({ isArrayProducer, inputToSource, nodeMap }),
+    // "Skip Isolated Empty Cells": the layout carries the mode — nbr regions
+    // hold compact packed offsets, table-read sites branch to pushInlineNbrCellIdx.
+    inlineNbr: layout.sparseStepping,
     errors: [],
     scratchTopLocal,
     paramRefs,
