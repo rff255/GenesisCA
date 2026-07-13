@@ -183,10 +183,47 @@ interface SpriteSlotMeta {
   scale: number;
 }
 
+/** 3D scene lighting. One directional key light + ambient fill (+ an optional
+ *  white Blinn-Phong highlight), shared by the voxel cubes and the agent
+ *  sphere impostors (sprites are unlit textured billboards).
+ *  - `mode: 'camera'` anchors the light to the VIEW: the ball position
+ *    (bx, by, implied +z toward the viewer) is combined with the camera basis
+ *    every frame, so shading stays constant while orbiting (headlight/matcap).
+ *  - `mode: 'world'` uses the stored world-space unit vector (wx, wy, wz): the
+ *    light is fixed in the SCENE, so orbiting sweeps the lit side (sun-style).
+ *  The DEFAULT reproduces the historical hardcoded shade exactly (world light
+ *  normalize(0.4, 0.8, 0.6), lum = 0.45 + 0.55·max(0, n·L), no specular). */
+export interface Light3D {
+  mode: 'camera' | 'world';
+  /** Light-ball widget position (unit disc, view space: +x right, +y up).
+   *  Drives the light in camera mode; drives the widget dot in both modes. */
+  bx: number;
+  by: number;
+  /** World-space light direction (unit, toward the light) — used in world
+   *  mode; refreshed from the ball + camera basis at drag time. */
+  wx: number;
+  wy: number;
+  wz: number;
+  ambient: number;   // base fill 0..1
+  diffuse: number;   // directional strength 0..~1.5
+  specular: number;  // white Blinn-Phong highlight strength 0..1 (default 0)
+}
+
+/** norm(0.4, 0.8, 0.6) — the exact light the shaders used to hardcode. */
+const DEF_L = Math.hypot(0.4, 0.8, 0.6);
+export const DEFAULT_LIGHT3D: Readonly<Light3D> = Object.freeze({
+  mode: 'world' as const,
+  bx: -0.2, by: 0.55,
+  wx: 0.4 / DEF_L, wy: 0.8 / DEF_L, wz: 0.6 / DEF_L,
+  ambient: 0.45, diffuse: 0.55, specular: 0,
+});
+
 const WORLD_UP: [number, number, number] = [0, 0, 1];
 
-/** Camera basis (forward/right/up) from yaw/pitch in the Z-up convention. */
-function cameraBasis(cam: Camera3D): { dir: [number, number, number]; right: [number, number, number]; up: [number, number, number] } {
+/** Camera basis (forward/right/up) from yaw/pitch in the Z-up convention.
+ *  Exported for SimulatorView's light-ball widget (world-mode drags convert
+ *  the view-space ball position through the CURRENT camera basis). */
+export function cameraBasis(cam: Camera3D): { dir: [number, number, number]; right: [number, number, number]; up: [number, number, number] } {
   const cp = Math.cos(cam.pitch), sp = Math.sin(cam.pitch);
   const cy = Math.cos(cam.yaw), sy = Math.sin(cam.yaw);
   // Direction from target → eye.
@@ -270,6 +307,11 @@ uniform int uClipAxis;      // 0=x 1=y 2=z 3=camera-view-axis
 uniform float uClipLo;      // slab near bound (cells outside [lo,hi] are hidden)
 uniform float uClipHi;      // slab far bound
 uniform vec3 uClipForward;  // camera forward (for axis 3)
+uniform vec3 uLightDir;     // world-space dir TOWARD the light (unit)
+uniform float uAmbient;     // base fill
+uniform float uDiffuse;     // directional strength
+uniform float uSpecular;    // white Blinn-Phong highlight strength (0 = off)
+uniform vec3 uViewDir;      // world-space dir toward the viewer (target→eye)
 out vec4 outColor;
 void main() {
   if (uClipEnabled == 1) {
@@ -277,9 +319,16 @@ void main() {
     if (w < uClipLo || w > uClipHi) { discard; }
   }
   // Flat directional shade by face normal so the cubes read as solid volume.
-  vec3 L = normalize(vec3(0.4, 0.8, 0.6));
-  float lum = 0.45 + 0.55 * max(0.0, dot(normalize(vNormal), L));
-  outColor = vec4(vColor.rgb * lum, vColor.a);
+  // Light dir + ambient/diffuse/specular come from the Lighting controls
+  // (defaults reproduce the historical 0.45 + 0.55·n·L shade exactly).
+  vec3 N = normalize(vNormal);
+  float lum = uAmbient + uDiffuse * max(0.0, dot(N, uLightDir));
+  vec3 col = vColor.rgb * lum;
+  if (uSpecular > 0.0) {
+    vec3 H = normalize(uLightDir + uViewDir);
+    col += uSpecular * pow(max(0.0, dot(N, H)), 32.0);
+  }
+  outColor = vec4(col, vColor.a);
 }`;
 
 // Pick pass: encode the instance's cell index + 1 across the FULL RGBA (32 bits —
@@ -414,6 +463,10 @@ uniform int uClipAxis;
 uniform float uClipLo;
 uniform float uClipHi;
 uniform vec3 uClipForward;
+uniform vec3 uLightDir;     // world-space dir TOWARD the light (unit)
+uniform float uAmbient;
+uniform float uDiffuse;
+uniform float uSpecular;
 out vec4 outColor;
 void main() {
   if (vSkip > 0.5) { discard; }           // sprite-agent → drawn by the billboard pass
@@ -431,9 +484,14 @@ void main() {
   // Re-project the surface point so the impostor depth-interleaves with cubes.
   vec4 clip = uMVP * vec4(surf, 1.0);
   gl_FragDepth = (clip.z / clip.w) * 0.5 + 0.5;
-  vec3 L = normalize(vec3(0.4, 0.8, 0.6));
-  float lum = 0.45 + 0.55 * max(0.0, dot(n, L));
-  outColor = vec4(vColor.rgb * lum, vColor.a);
+  // Same Lighting-controls shade as the voxel FS (view dir = -uCamForward).
+  float lum = uAmbient + uDiffuse * max(0.0, dot(n, uLightDir));
+  vec3 col = vColor.rgb * lum;
+  if (uSpecular > 0.0) {
+    vec3 H = normalize(uLightDir - uCamForward);
+    col += uSpecular * pow(max(0.0, dot(n, H)), 32.0);
+  }
+  outColor = vec4(col, vColor.a);
 }`;
 // Agent pick pass: encode gl_InstanceID+1 into RGB (the COMPACTED instance index,
 // NOT the slot id — SimulatorView maps it back via instanceToSlot). Raycast disc
@@ -592,6 +650,14 @@ export class Gl3DRenderer {
   private instDataU32: Uint32Array = new Uint32Array(0);
   private W = 1; private H = 1; private D = 1;
   private alphaBlend = false;
+  /** Scene lighting (see Light3D). Defaults = the historical hardcoded shade. */
+  private light: Light3D = { ...DEFAULT_LIGHT3D };
+  /** Voxel cube scale. 0.92 = the historical gapped lattice look; 1.001 when
+   *  cell gaps are toggled OFF — deliberately NOT 1.0: exactly-coplanar shared
+   *  faces of adjacent cubes z-fight along seam edges, while the hair of
+   *  overlap keeps every interior face strictly behind a neighbour's outer
+   *  face, so the volume renders seamless. */
+  private cubeScale = 0.92;
   private clip: ClipPlane3D = { enabled: false, axis: 'z', lo: 0, hi: 0 };
   private mvp: Mat4 = mat4Identity();
   private camForward: [number, number, number] = [0, 0, -1];
@@ -727,6 +793,42 @@ export class Gl3DRenderer {
     this.W = Math.max(1, w); this.H = Math.max(1, h); this.D = Math.max(1, d);
   }
   setAlphaBlend(on: boolean): void { this.alphaBlend = on; }
+  /** Scene lighting (voxels + agent spheres). See Light3D / DEFAULT_LIGHT3D. */
+  setLight(l: Light3D): void { this.light = l; }
+  /** Gaps between adjacent voxel cells (the 3D analogue of the 2D gridlines
+   *  toggle). ON = the historical 0.92 cube scale; OFF = flush cubes (1.001 —
+   *  see the cubeScale field for why not exactly 1.0). The pick pass shares
+   *  the uniform, so clicking "between" cells matches what's drawn. */
+  setCellGaps(on: boolean): void { this.cubeScale = on ? 0.92 : 1.001; }
+
+  /** Resolve the light's WORLD direction for this frame: camera mode combines
+   *  the ball position with the current camera basis (light rides the view);
+   *  world mode returns the stored scene-fixed vector. */
+  private lightWorldDir(): [number, number, number] {
+    const l = this.light;
+    if (l.mode === 'world') {
+      const n = Math.hypot(l.wx, l.wy, l.wz) || 1;
+      return [l.wx / n, l.wy / n, l.wz / n];
+    }
+    const bz = Math.sqrt(Math.max(0, 1 - l.bx * l.bx - l.by * l.by));
+    const r = this.camRight, u = this.camUp, d = this.camDir;  // camDir = toward viewer
+    const x = r[0] * l.bx + u[0] * l.by + d[0] * bz;
+    const y = r[1] * l.bx + u[1] * l.by + d[1] * bz;
+    const z = r[2] * l.bx + u[2] * l.by + d[2] * bz;
+    const n = Math.hypot(x, y, z) || 1;
+    return [x / n, y / n, z / n];
+  }
+
+  /** Upload the shared lighting uniforms (null locations — e.g. on the pick
+   *  programs, which don't declare them — are silent no-ops per the GL spec). */
+  private setLightUniforms(gl: WebGL2RenderingContext, prog: WebGLProgram): void {
+    const L = this.lightWorldDir();
+    gl.uniform3f(gl.getUniformLocation(prog, 'uLightDir'), L[0], L[1], L[2]);
+    gl.uniform1f(gl.getUniformLocation(prog, 'uAmbient'), this.light.ambient);
+    gl.uniform1f(gl.getUniformLocation(prog, 'uDiffuse'), this.light.diffuse);
+    gl.uniform1f(gl.getUniformLocation(prog, 'uSpecular'), this.light.specular);
+    gl.uniform3f(gl.getUniformLocation(prog, 'uViewDir'), this.camDir[0], this.camDir[1], this.camDir[2]);
+  }
 
   /** "Draw agents in front" (default ON — the historical behaviour): agents render
    *  over the CA-grid VOXELS regardless of depth (the grid usually surrounds the
@@ -1117,6 +1219,7 @@ export class Gl3DRenderer {
     gl.uniform3f(gl.getUniformLocation(prog, 'uCamRight'), this.camRight[0], this.camRight[1], this.camRight[2]);
     gl.uniform3f(gl.getUniformLocation(prog, 'uCamUp'), this.camUp[0], this.camUp[1], this.camUp[2]);
     gl.uniform3f(gl.getUniformLocation(prog, 'uCamForward'), this.camForward[0], this.camForward[1], this.camForward[2]);
+    this.setLightUniforms(gl, prog);
     gl.uniform1i(gl.getUniformLocation(prog, 'uClipEnabled'), this.clip.enabled ? 1 : 0);
     const axisN = this.clip.axis === 'x' ? 0 : this.clip.axis === 'y' ? 1 : this.clip.axis === 'z' ? 2 : 3;
     gl.uniform1i(gl.getUniformLocation(prog, 'uClipAxis'), axisN);
@@ -1227,7 +1330,8 @@ export class Gl3DRenderer {
     gl.uniform1ui(gl.getUniformLocation(prog, 'uWu'), this.W);
     gl.uniform1ui(gl.getUniformLocation(prog, 'uWHu'), this.W * this.H);
     gl.uniform3f(gl.getUniformLocation(prog, 'uHalf'), (this.W - 1) / 2, (this.H - 1) / 2, (this.D - 1) / 2);
-    gl.uniform1f(gl.getUniformLocation(prog, 'uCubeScale'), 0.92);
+    gl.uniform1f(gl.getUniformLocation(prog, 'uCubeScale'), this.cubeScale);
+    this.setLightUniforms(gl, prog);
     gl.uniform1i(gl.getUniformLocation(prog, 'uClipEnabled'), this.clip.enabled ? 1 : 0);
     const axisN = this.clip.axis === 'x' ? 0 : this.clip.axis === 'y' ? 1 : this.clip.axis === 'z' ? 2 : 3;
     gl.uniform1i(gl.getUniformLocation(prog, 'uClipAxis'), axisN);
