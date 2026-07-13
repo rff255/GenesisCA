@@ -1875,9 +1875,18 @@ export function compileGraph(
   // Sub-attributes can't use the bulk .set() — non-matching cells need to be
   // scrubbed to defaultValue, so they get a conditional per-cell copy at the
   // top of the loop body instead (see subAttrSyncCopyLines below).
+  // "Skip Isolated Empty Cells": sub-attrs MUST join the bulk copy — the
+  // per-cell conditional copy only runs for ACTIVE cells, so without the bulk
+  // copy an inactive cell's w-buffer would hold two-generations-old data after
+  // the swap. Active cells still get the scrub (their conditional copy runs on
+  // top of the bulk copy — identical result); inactive non-matching cells
+  // carry storage forward instead of being scrubbed, which is INVISIBLE to
+  // every read (the parent-match guard returns undefinedValue) and to linked
+  // indicators / iteration (both apply the guard).
+  const sparseBulk = sparseSteppingEnabled(model);
   const bulkCopyLines = isAsync
     ? []
-    : cellAttrs.filter(a => !subAttrInfoById.get(a.id)).map(a => `  w_${a.id}.set(r_${a.id});`);
+    : cellAttrs.filter(a => sparseBulk || !subAttrInfoById.get(a.id)).map(a => `  w_${a.id}.set(r_${a.id});`);
   // Variegated Cells: orientation has the same sync-mode discipline as the
   // cell attrs — bulk-copy r→w before the loop body so SetOrientation writes
   // overlay onto a fresh copy of the read buffer. Async mode shares one
