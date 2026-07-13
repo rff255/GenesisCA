@@ -513,16 +513,16 @@ export function detectMissingConfig(
         const attr = model.attributes.find(a => a.id === tableId);
         if (!attr) issues.push('Selected Lookup Table no longer exists');
         else if (attr.type !== 'lookupTable') issues.push('Selected attribute is not a Lookup Table');
-        else if (nodeType === 'interactionTableMap' && isMultiAxisTable(attr)) {
-          // Table Map's shape is two parallel index arrays — a multi-axis
-          // table fits only when it has exactly 2 axes (the compilers emit an
-          // empty output otherwise).
+        else if (isMultiAxisTable(attr)) {
+          // BOTH checks run for a multi-axis table (they are independent — the
+          // size check must NOT sit in a sibling else-if the Table Map branch
+          // shadows, or an oversized 2-axis Table Map is never size-badged).
           const r = resolveAxes(attr, model);
-          if (r.axes.length !== 2) {
+          // Table Map's shape is two parallel index arrays — a multi-axis table
+          // fits only when it has exactly 2 axes (else the compilers emit empty).
+          if (nodeType === 'interactionTableMap' && r.axes.length !== 2) {
             issues.push(`Table Map needs a 2-axis table (this one has ${r.axes.length} axes) — use Table Lookup instead`);
           }
-        } else if (isMultiAxisTable(attr)) {
-          const r = resolveAxes(attr, model);
           if (r.total > MAX_LOOKUP_TABLE_ENTRIES) {
             issues.push(`Lookup Table too large (${r.total.toLocaleString()} entries > ${MAX_LOOKUP_TABLE_ENTRIES.toLocaleString()})`);
           }
