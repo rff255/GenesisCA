@@ -1282,6 +1282,21 @@ function decodeCoordLines(is3d: boolean, indent: string): string[] {
   ];
 }
 
+/** "Skip Isolated Empty Cells" (docs/PLAN_LARGE_GRID_PERF.md, Feature A) is
+ *  active for a compile when it's enabled + synchronous + the model uses the CA
+ *  grid. Sync-only (async's single-buffer + shuffle order is incompatible with a
+ *  list-iteration active set). When true, the step + colour-pass emit a sparse
+ *  loop variant (iterate `_activeList`) selected at runtime by the `_activeList`
+ *  param, and linked-indicator aggregation is routed to the worker's full-grid
+ *  scan (so it stays correct over ALL cells, not just active ones). Feature OFF →
+ *  byte-identical to today. */
+export function sparseSteppingEnabled(model: CAModel): boolean {
+  const sie = model.properties.skipIsolatedEmpty;
+  return !!sie?.enabled
+    && model.properties.updateMode !== 'asynchronous'
+    && model.topologyMode?.gridCells !== false;
+}
+
 function buildLoopParams(model: CAModel): {
   params: string;
   cellAttrs: Array<{ id: string; type: string }>;
@@ -1314,6 +1329,11 @@ function buildLoopParams(model: CAModel): {
   // Async-only: per-cell Uint8Array, set by `markCellUpdated` and tested at
   // the top of every cell iteration. Worker resets it before each step.
   if (isAsync) parts.push('order', '_skipped');
+  // "Skip Isolated Empty Cells": the active-cell list + count. Appended LAST so
+  // the OFF-path signature is byte-identical; the worker's buildLoopArgs mirrors
+  // this. When the list is null (feature off / not built), the step runs the
+  // full 0..total loop.
+  if (sparseSteppingEnabled(model)) parts.push('_activeList', '_activeCount');
 
   return { params: parts.join(', '), cellAttrs, neighborhoods };
 }
@@ -1959,17 +1979,16 @@ export function compileGraph(
         '})',
       ].join('\n');
     } else {
-      // Sync mode: sequential iteration
-      stepCode = [
-        `(function(${loopParams}) {`,
-        ...scratchDecls,
-        ...variableBlocks.preLoop,
-        ...bulkCopyLines,
-        ...viewerHoistLines,
-        ...preLoopValueLines,
-        ...linked.preLoopDecls,
-        '  let _rs = _rngState[0] || 0x12345678;',
-        '  for (let idx = 0; idx < total; idx++) {',
+      // Sync mode: sequential iteration. When "Skip Isolated Empty Cells" is on,
+      // emit a sparse loop variant selected at runtime by `_activeList`: iterate
+      // the active-cell list instead of 0..total. The bulk copy (all cells) +
+      // buffer swap are unchanged, so inactive cells carry forward correctly; only
+      // the expensive per-cell RULE is skipped for isolated empty cells. Linked
+      // indicators are NOT embedded in the sparse build (they must aggregate ALL
+      // cells) — the worker runs the full-grid `computeLinkedIndicatorsFromBuffer`
+      // instead, exactly like the WASM path.
+      const sparse = sparseSteppingEnabled(model);
+      const perCellBody = [
         '    const colorIdx = idx * 4;',
         // Wave A.6: per-cell (row, col) decoded from idx — see async branch comment.
         ...decodeCoordLines(is3d, '    '),
@@ -1981,10 +2000,38 @@ export function compileGraph(
         ...valueLines,
         '',
         ...flowLines,
-        ...linked.inLoopLines,
-        '  }',
+        ...(sparse ? [] : linked.inLoopLines),
+      ];
+      const loopLines = sparse
+        ? [
+            '  if (_activeList) {',
+            '    for (let _si = 0; _si < _activeCount; _si++) {',
+            '      const idx = _activeList[_si];',
+            ...perCellBody.map(l => '  ' + l),
+            '    }',
+            '  } else {',
+            '    for (let idx = 0; idx < total; idx++) {',
+            ...perCellBody.map(l => '  ' + l),
+            '    }',
+            '  }',
+          ]
+        : [
+            '  for (let idx = 0; idx < total; idx++) {',
+            ...perCellBody,
+            '  }',
+          ];
+      stepCode = [
+        `(function(${loopParams}) {`,
+        ...scratchDecls,
+        ...variableBlocks.preLoop,
+        ...bulkCopyLines,
+        ...viewerHoistLines,
+        ...preLoopValueLines,
+        ...(sparse ? [] : linked.preLoopDecls),
+        '  let _rs = _rngState[0] || 0x12345678;',
+        ...loopLines,
         '  _rngState[0] = _rs;',
-        ...linked.postLoopLines,
+        ...(sparse ? [] : linked.postLoopLines),
         '})',
       ].join('\n');
     }
