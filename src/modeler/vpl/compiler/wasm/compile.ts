@@ -6984,7 +6984,13 @@ function compileEntry(
     for (const id of Object.keys(layout.attrType)) {
       // Sub-attributes get per-cell conditional copy in emitBody — the bulk
       // memcpy can't express the parent-check guard, so we skip it here.
-      if (getSubAttrWasm(ctx, id)) continue;
+      // EXCEPT in sparse mode ("Skip Isolated Empty Cells"): the per-cell copy
+      // only runs for ACTIVE cells, so sub-attrs MUST also bulk-copy or an
+      // inactive cell's w-buffer holds two-generations-old data after the
+      // swap. Active cells' conditional copy overwrites on top (identical
+      // result); inactive carry-forward is invisible behind the parent guard.
+      // Mirrors the JS compiler's `sparseBulk` gate.
+      if (!layout.sparseStepping && getSubAttrWasm(ctx, id)) continue;
       const a = getAttr(layout, id)!;
       // memory.copy stack signature: [dst, src, n]
       emitter.i32Const(a.writeOffset);

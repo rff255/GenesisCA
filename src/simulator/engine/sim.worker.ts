@@ -533,6 +533,12 @@ let sieConfig: SkipIsolatedEmptyConfig | null = null;
 let sieParamsPresent = false;   // = enabled && sync && gridCells (mirrors compile.ts sparseSteppingEnabled)
 let sieEmptyAttrId = '';
 let activeSet: ActiveSet | null = null;
+// Forces the NEXT colour pass to run FULL even from the sparse-safe batch
+// tail. Set when (a) compactActiveSet removed emptied cells (their pixels
+// would otherwise keep the pre-transition colour) and (b) a model attribute
+// or lookup table changed (both are legitimate Output-Mapping inputs, so
+// inactive cells' colours may need recomputing). Cleared once a full pass runs.
+let sieColorDirtyAll = false;
 /** Agents-only optimisation: with the CA grid OFF the colours buffer is static
  *  (no cell step / colour pass ever rewrites it), so `sendColors` ships it only
  *  while dirty instead of copying+transferring WÃƒâ€šÃ‚Â·HÃƒâ€šÃ‚Â·DÃƒâ€šÃ‚Â·4 bytes EVERY step (576 MB
@@ -2592,10 +2598,10 @@ function initGrid(): void {
     lookupTables,
     gridCellsEnabled,   // grid off ÃƒÂ¢Ã¢â‚¬Â¡Ã¢â‚¬â„¢ no colors/glyphs/order/skipped/attr-write regions
     // "Skip Isolated Empty Cells": MUST equal the compile side's
-    // sparseSteppingEnabled(model) (enabled + sync + gridCells) or the baked
-    // activeListOffset desyncs — layout-lockstep. sieConfig is set from the
-    // init message BEFORE initGrid runs.
-    !!sieConfig?.enabled && !isAsync && gridCellsEnabled,
+    // sparseSteppingEnabled(model) (enabled + sync + gridCells + no glyphs) or
+    // the baked activeListOffset desyncs — layout-lockstep. sieConfig + hasGlyphs
+    // are set from the init message BEFORE initGrid runs.
+    !!sieConfig?.enabled && !isAsync && gridCellsEnabled && !agentsEnabled && !hasGlyphs,
   );
   wasmMemory = new WebAssembly.Memory({ initial: wasmLayout.pages });
   const buf = wasmMemory.buffer;
@@ -3087,7 +3093,12 @@ function runStep(): void {
         const isEmptyNow = wArr[idx] === ev;
         if (wasEmpty !== isEmptyNow) applyTransition(as, idx, wasEmpty, isEmptyNow);
       }
-      if (as.staleCount > (as.count >> 2) + 64) compactActiveSet(as);
+      if (as.staleCount > (as.count >> 2) + 64) {
+        // Compaction removes just-emptied cells from the list BEFORE the batch
+        // colour pass could repaint them — force that pass to run full once.
+        compactActiveSet(as);
+        sieColorDirtyAll = true;
+      }
     }
   }
 
@@ -3879,12 +3890,25 @@ function runGridInit(): boolean {
 function setupActiveSet(): void {
   activeSet = null;
   sieEmptyAttrId = '';
-  sieParamsPresent = !!sieConfig?.enabled && updateMode !== 'asynchronous' && gridCellsEnabled;
+  // Mirrors compile.ts sparseSteppingEnabled EXACTLY: enabled + sync + gridCells
+  // + NO agents (field-bridge deposits bypass the active set) + NO glyphs
+  // (glyph zero-fills assume a full repaint — see sparseStepping.ts).
+  sieParamsPresent = !!sieConfig?.enabled && updateMode !== 'asynchronous' && gridCellsEnabled && !agentsEnabled && !hasGlyphs;
   if (!sieParamsPresent || !sieConfig) return;
   const cfg = sieConfig;
   const emptyAttr = cellAttrs.find(a => a.id === cfg.emptyAttributeId);
   if (!emptyAttr) return;   // invalid config → activeSet stays null → step runs full
   const emptyVal = encodeAttrValue(emptyAttr, cfg.emptyValue);
+  // Constant boundary with a NON-EMPTY boundary value on the empty-defining
+  // attribute: OOB reads resolve to the always-non-empty sentinel cell, so
+  // EVERY border-adjacent empty cell can transition — a state the active set
+  // (which never models the sentinel) can't cover with ANY range. Fall back to
+  // the full loop (activeSet null → the compiled fn's full branch). The common
+  // configuration (empty boundary, e.g. the Accretor) is unaffected.
+  if (boundaryTreatment !== 'torus') {
+    const arr = readAttrs[cfg.emptyAttributeId] as unknown as { [i: number]: number } | undefined;
+    if (arr && arr[total] !== emptyVal) return;
+  }
   const is3d = depth > 1;
   let built: { offsets: Int32Array; offCount: number } | null = null;
   if (cfg.rangeKind === 'radius') {
@@ -3897,6 +3921,12 @@ function setupActiveSet(): void {
     }
   }
   if (!built || built.offCount === 0) return;   // invalid range → step runs full
+  // Range-size cap: nearCount is Uint16 (max 65535 non-empty cells within range
+  // of one cell). A range of > 30000 offsets could overflow it in dense regions
+  // (a wrap would silently drop genuinely-active cells at the next compaction),
+  // so oversized ranges fall back to the full loop. Sensible ranges (the point
+  // of the feature) are tiny — the Accretor's is 27 offsets.
+  if (built.offCount > 30000) return;
   sieEmptyAttrId = cfg.emptyAttributeId;
   // Back the active LIST with the wasmMemory region when the layout reserved it
   // (it does whenever the feature resolved at init) — the sparse WASM step reads
@@ -3939,7 +3969,8 @@ function runColorPass(sparseOk: boolean = false): void {
   // caller (paint / reset / model-attr edit / viewer switch / load) runs FULL so
   // any cell's colour can refresh. Glyph models always run full — the glyph
   // buffers were just zero-filled, so a sparse pass would erase inactive glyphs.
-  const omSparse = sparseOk && sieParamsPresent && activeSet !== null && !glyphCodes;
+  const omSparse = sparseOk && sieParamsPresent && activeSet !== null && !glyphCodes && !sieColorDirtyAll;
+  if (sieParamsPresent && !omSparse) sieColorDirtyAll = false;   // a full pass satisfies the dirty-all request
   const sanitised = sanitiseExportName(activeViewer);
   if (useWasm && wasmOutputMappingFns[sanitised]) {
     if (updateMode !== 'asynchronous' && readAttrs !== attrsA) {
@@ -4507,10 +4538,14 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       // initGrid first because it allocates wasmMemory + computes layout that
       // initIndicators / buildNeighborIndices need to create their views over.
       gridCellsEnabled = (msg as InitMsg).gridCells !== false;
-      // "Skip Isolated Empty Cells": stash the config BEFORE initGrid — the
-      // layout reserves the active-list region from it (layout-lockstep with
-      // the compile side's sparseSteppingEnabled).
+      // "Skip Isolated Empty Cells": stash the config + the agents flag BEFORE
+      // initGrid — the layout reserves the active-list region from them
+      // (layout-lockstep with the compile side's sparseSteppingEnabled, which
+      // also excludes agent models: field-bridge deposits bypass the active set).
+      // agentsEnabled is (re-)assigned identically further down with the rest of
+      // the agent payload — this early assignment only feeds the layout flag.
       sieConfig = msg.skipIsolatedEmpty ?? null;
+      agentsEnabled = !!msg.agents;
       try {
         initGrid();
       } catch (e) {
@@ -5404,6 +5439,11 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
         cachedModelAttrs[key] = val;
       }
       syncModelAttrsToMemory();
+      // "Skip Isolated Empty Cells": model attrs are legitimate Output-Mapping
+      // inputs — inactive cells' colours may need recomputing, so the next
+      // colour pass must run FULL (matches full-loop behaviour, where the next
+      // pass repaints every cell with the new value).
+      sieColorDirtyAll = true;
       // Mirror the change into the GPU uniform buffer so the next step shader
       // sees the updated values (without this, WebGPU silently runs against
       // the stale modelAttrs frozen at init time).
@@ -5414,6 +5454,9 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
     }
 
     case 'updateLookupTable': {
+      // "Skip Isolated Empty Cells": lookup tables are Output-Mapping inputs too
+      // — force the next colour pass full (see updateModelAttrs).
+      sieColorDirtyAll = true;
       // Live-tune a single Lookup Table model attribute. The cached Float64Array
       // is a typed-array view over `wasmMemory` at the layout's reserved offset
       // (see initVariegation), so we must COPY into the existing view ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â never

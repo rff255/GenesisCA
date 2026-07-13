@@ -433,7 +433,10 @@ export function PropertiesPanelContent({ mode = 'list' }: PanelContentProps = {}
                       <div className={styles.fieldRow}>
                         <div className={styles.field}>
                           <label className={styles.fieldLabel}>Radius</label>
-                          <NumberField className={styles.numberInput} min={1} integer
+                          {/* max 15: keeps the worst-case (3D chebyshev, 31³) offset
+                              set under the engine's 30000-offset cap (nearCount is
+                              Uint16 — see setupActiveSet). Sensible ranges are tiny. */}
+                          <NumberField className={styles.numberInput} min={1} max={15} integer
                             value={sie.radius ?? 1} onNumber={n => patchSie({ radius: n })} />
                         </div>
                         <div className={styles.field}>
@@ -448,7 +451,7 @@ export function PropertiesPanelContent({ mode = 'list' }: PanelContentProps = {}
                       </div>
                     )}
                     <span style={{ color: '#888', fontSize: '0.62rem' }}>
-                      Effective in synchronous mode only. Empty cells with no non-empty cell within the range keep their state + colour and are not processed each generation.
+                      Effective in synchronous CA-grid-only mode (agent-topology and glyph-drawing models keep the full loop). Empty cells with no non-empty cell within the range keep their state + colour and are not processed each generation. Make sure the range covers your rule's neighbourhood reads.
                     </span>
                   </div>
                 )}
