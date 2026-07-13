@@ -1,12 +1,12 @@
 {
   "Accretor.gcaproj": {
-    "js.stepCode": "e0d0d61801dda698",
-    "js.fullCode": "632b1be9a6379518",
+    "js.stepCode": "94b3e362fd75b296",
+    "js.fullCode": "5ad7e70b2b80a031",
     "js.error": null,
-    "wasm.bytes": "34998c4622a10eac",
-    "wasm.bytesLen": 1713,
+    "wasm.bytes": "1539dd4fdeef6da4",
+    "wasm.bytesLen": 4202,
     "wasm.error": null,
-    "webgpu.shader": "97e944b93393ba50",
+    "webgpu.shader": "b193ef837967a2d3",
     "webgpu.error": null,
     "agent.behaviourCode": "e3b0c44298fc1c14",
     "agent.error": "No Behaviour Step node in the agent graph.",
@@ -14,7 +14,7 @@
     "agent.wasm.error": null,
     "agent.webgpu.shader": "e3b0c44298fc1c14",
     "agent.webgpu.error": null,
-    "overseer.driver": "ccf7bb6ab52ec578",
+    "overseer.driver": "2e6dda7b4b823e8a",
     "overseer.error": null
   },
   "Agent WASM Drift Test.gcaproj": {

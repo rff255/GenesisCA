@@ -51,7 +51,12 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const OUT = resolve(__dirname, '..', 'public', 'models', 'Accretor.gcaproj');
 
 // --- tunables ---------------------------------------------------------------
-const W = 40, H = 40, D = 40;
+// 300³ = 27M cells — practical because the model ships with "Skip Isolated
+// Empty Cells" ON (docs/PLAN_LARGE_GRID_PERF.md): only cells within radius 1
+// of the structure run the rule (the growing SURFACE, not the volume), and the
+// per-cell neighbour tables are replaced by inline computation (the table
+// alone would be 27e6×26×4 ≈ 2.8 GB). Init ~2 s; ~10 gens/s measured.
+const W = 300, H = 300, D = 300;
 const STATES = ['empty', 'A', 'B'];          // 3 states (0 = empty)
 // The shipped rule. Chosen by a seed search for a rule where BOTH the random
 // asymmetric seed AND the mirror-symmetric seed grow a substantial structure to
@@ -385,7 +390,10 @@ const properties = {
     "their 6 face, 12 edge, and 8 corner neighbours are occupied. Occupied cells " +
     "freeze forever. From a small central seed the structure accretes outward until " +
     "it reaches a grid edge (the seed + edge detection are grid-independent, so a " +
-    "Resize re-centres them). Toggle the `Symmetric seed` model attribute + Reset to " +
+    "Resize re-centres them). The 300×300×300 volume (27M cells) is practical because " +
+    "'Skip Isolated Empty Cells' is ON (Properties ▸ Execution): only cells near the " +
+    "growing surface run the rule each generation. Toggle the `Symmetric seed` model " +
+    "attribute + Reset to " +
     "grow a mirror-symmetric structure instead of a random one. The rule is one 4-axis " +
     "(state × face × edge × corner count) Lookup Table filled by a seed — re-roll the " +
     "seed in the table's Randomize block (Attributes ▸ rule) to grow an entirely different form. " +
@@ -403,6 +411,19 @@ const properties = {
   maxIterations: 100000,
   tags: ['3D', 'accretion', 'growth', 'rule-table', 'Driessens-Verstappen', 'voxel'],
   useWasm: true,
+  // "Skip Isolated Empty Cells" — the large-grid optimization that makes 300³
+  // practical. "Empty" = state 0; the processing range is the radius-1 Moore
+  // box (covers the rule's face/edge/corner reads — a cell can only change if
+  // a Moore neighbour is occupied, since growth requires faceCount >= 1).
+  // Verified byte-identical to the full loop at a fixed RNG seed.
+  skipIsolatedEmpty: {
+    enabled: true,
+    emptyAttributeId: 'state',
+    emptyValue: '0',
+    rangeKind: 'radius',
+    radius: 1,
+    radiusMetric: 'chebyshev',
+  },
 };
 
 const attributes = [
