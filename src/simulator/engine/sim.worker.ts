@@ -4555,8 +4555,13 @@ function sendColors(): void {
   // frame. Cheap (maxAgents is small); copies, so the engine keeps its SoA.
   // "Skip Isolated Empty Cells" observability: the live active-cell count
   // (-1 = the feature is configured on but not engaged — invalid config /
-  // excluded combination — so the full loop is running). Undefined when off.
-  const sieActive = sieParamsPresent ? (activeSet ? activeSet.count : -1) : undefined;
+  // excluded combination / the WebGPU target, whose GPU dispatch runs the full
+  // grid and never maintains the CPU active set — so the full loop is running).
+  // Undefined when off. Without the WebGPU arm this showed a STALE init-time
+  // count while the GPU evolved the grid.
+  const sieActive = sieParamsPresent
+    ? ((activeSet && !(useWebGPU && webgpuRuntime?.stepReady)) ? activeSet.count : -1)
+    : undefined;
   let agentsPayload: ReturnType<typeof snapshotAgentsForRender> | undefined;
   const agentTransfers: ArrayBuffer[] = [];
   if (agentStore && agentStore.highWater > 0) {
