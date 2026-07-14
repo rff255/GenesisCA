@@ -49,11 +49,17 @@ Additive fields per entry (index.json is regenerated on every dev start / build)
   loops while hovered (rAF, direct style writes — no React re-render). Leaving
   the card resets it. Cards whose description fits do nothing.
 - *(Feedback round)* The hover **preview popover is TWO same-size 320×240
-  panes side by side** — [title + full description | thumbnail] — centered
-  horizontally on the card and placed just ABOVE it (flips below at the
-  viewport top). The description pane follows the SAME auto-scroll rule when
-  too long for the pane (shared `useAutoScrollOverflow` hook). No thumbnail →
-  the description pane alone; neither thumbnail nor description → no popover.
+  panes side by side** — [title + full description | thumbnail] — **centered
+  ON the hovered card (both axes, literally on top of it)**, viewport-clamped
+  near edges ("to the best of the available space"); `pointer-events: none`
+  passes hover + clicks through to the card beneath. The description pane
+  follows the SAME auto-scroll rule when too long for the pane (shared
+  `useAutoScrollOverflow` hook). No thumbnail → the description pane alone;
+  neither thumbnail nor description → no popover.
+- *(Feedback round)* The card's bottom meta block **wraps so every tag stays
+  visible** — tags take layout priority over the clipped description (shown
+  in full by the popover anyway); the grid size/date right-aligns on the
+  last row.
 
 ---
 

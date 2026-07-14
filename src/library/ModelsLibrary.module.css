@@ -218,23 +218,16 @@
   opacity: 0;
 }
 
+/* Bottom meta block: the 3D badge + EVERY tag + the grid size/date, WRAPPING
+ * across as many rows as the tags need — tags take layout priority over the
+ * description above (which shrinks; the hover preview shows it in full). The
+ * grid size's auto left margin right-aligns it on the last row. */
 .cardMeta {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: var(--space-4);
+  gap: var(--space-2) var(--space-3);
   flex: 0 0 auto;
-}
-
-/* Single-row tag strip — overflowing tags clip instead of wrapping (uniform
- * card height); the grid size + date stay pinned on the right. */
-.cardTags {
-  display: flex;
-  gap: var(--space-4);
-  align-items: center;
-  overflow: hidden;
-  white-space: nowrap;
-  flex: 1 1 auto;
-  min-width: 0;
 }
 
 .tag {
