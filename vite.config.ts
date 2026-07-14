@@ -210,10 +210,19 @@ export default defineConfig(({ command }) => {
       // Keep VitePWA LAST: the library plugins generate models/macros index.json
       // + thumbnails in closeBundle(); the SW precache glob must run after them.
       VitePWA({
-        // Silent auto-update: a new deploy is applied on the next load with no
-        // prompt. There's no in-app "check for updates" channel and the app does
-        // no online processing, so an "update available" toast would be noise.
-        registerType: 'autoUpdate',
+        // Silent DEFERRED update — 'prompt', NOT 'autoUpdate'. 'autoUpdate'
+        // (skipWaiting + clientsClaim + a `controlling` → window.location.reload)
+        // force-reloads EVERY open tab the moment a new deploy's SW activates in
+        // the background — a few seconds after load — which wipes whatever the
+        // user was doing (open model, mid-simulation). Since Pages redeploys on
+        // every push to master, users hit that constantly. 'prompt' installs the
+        // new SW but leaves it WAITING (no skipWaiting): the old version keeps
+        // serving this session with NO surprise reload, and the update applies on
+        // the next natural launch (all tabs closed → the waiting SW activates).
+        // App.tsx registers with `immediate:true` and NO onNeedRefresh handler,
+        // so there's no toast either — exactly the "applied on the next load, no
+        // prompt" behaviour this comment always claimed (autoUpdate never gave it).
+        registerType: 'prompt',
         manifest: buildManifest(base),
         includeAssets: ['favicon.ico', 'apple-touch-icon-180x180.png', 'icon.svg'],
         workbox: {

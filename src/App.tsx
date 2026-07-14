@@ -41,11 +41,14 @@ function AppInner() {
   };
   useEffect(() => () => { if (toastTimer.current != null) clearTimeout(toastTimer.current); }, []);
 
-  // Register the offline service worker + request durable storage. The SW
-  // auto-updates silently (registerType 'autoUpdate' in vite.config) — no
-  // "update available" prompt (there's no in-app update channel, and the app
-  // does no online processing) and no "offline ready" toast (it ALWAYS works
-  // offline, so announcing it is noise).
+  // Register the offline service worker + request durable storage. Update
+  // strategy is 'prompt' (vite.config) — the new SW installs but WAITS, so a
+  // fresh deploy NEVER force-reloads a live session (autoUpdate's mid-session
+  // page reload was wiping the user's open model); it applies on the next
+  // natural launch. We pass NO onNeedRefresh handler, so there's no prompt
+  // (there's no in-app update channel, and the app does no online processing)
+  // and no "offline ready" toast (it ALWAYS works offline, so announcing it is
+  // noise) — the update is silent + deferred.
   useEffect(() => {
     // The service worker is for the WEB PWA ONLY. Inside the Tauri native shell
     // (WebView2) the app's assets are already embedded + offline, and a SW there
