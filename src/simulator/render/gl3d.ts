@@ -226,6 +226,33 @@ export const DEFAULT_LIGHT3D: Readonly<Light3D> = Object.freeze({
   shadows: false, shadowStrength: 0.6, ao: false, aoStrength: 0.7,
 });
 
+/** Agent METABALLS — render the (non-sprite) agent population as ONE implicit
+ *  surface instead of discrete sphere impostors: each agent contributes a
+ *  Wyvill-style falloff over an influence radius (`influence` × its own radius),
+ *  the fields SUM, and the surface is the isosurface at `threshold` — so agents
+ *  whose influence radii overlap bulge toward each other and FUSE (Blender
+ *  metaball semantics). Purely a RENDER mode: picking, brushing, bonds, physics
+ *  and the compilers are untouched (agents stay spheres logically). */
+export interface Metaballs3D {
+  enabled: boolean;
+  /** Falloff (influence) radius as a multiple of the agent radius. 1.0–3.0. */
+  influence: number;
+  /** The isovalue the surface sits at. Lower = fatter/more fused. 0.02–0.9. */
+  threshold: number;
+  /** Field voxels per cell (1 | 2 | 4) — the bake resolution. */
+  resolution: number;
+}
+/** The threshold at which a LONE agent's metaball surface sits at exactly its
+ *  own sphere radius (so enabling metaballs doesn't resize isolated agents):
+ *  solve (1 − (r/R)²)³ = T with R = influence·r  ⇒  T = (1 − 1/influence²)³. */
+export function metaballAutoThreshold(influence: number): number {
+  const s = 1 - 1 / Math.max(1.0001, influence * influence);
+  return Math.max(0.02, Math.min(0.9, s * s * s));
+}
+export const DEFAULT_METABALLS3D: Readonly<Metaballs3D> = Object.freeze({
+  enabled: false, influence: 1.6, threshold: metaballAutoThreshold(1.6), resolution: 2,
+});
+
 const WORLD_UP: [number, number, number] = [0, 0, 1];
 
 /** Camera basis (forward/right/up) from yaw/pitch in the Z-up convention.
@@ -758,6 +785,123 @@ void main() {
   gl_FragDepth = clip.z / clip.w * 0.5 + 0.5;
 }`;
 
+// ---------------------------------------------------------------------------
+// Agent METABALLS — implicit-surface pass. The agents' summed density field is
+// BAKED on the CPU into a small RGBA8 3D texture over the agents' bounding box
+// (A = density / F_MAX, RGB = density-weighted agent colour), then RAYMARCHED
+// per pixel from a fullscreen quad: reconstruct the world ray from inv(MVP),
+// intersect the field box, march to the first threshold crossing, bisect,
+// shade with the SAME lighting model as the voxel/sphere shaders (incl. cast
+// shadows via SHADOW_GLSL) and write gl_FragDepth with the SAME formula as
+// SPHERE_FS so the blob depth-interleaves with voxels / bonds / sprites.
+// NB uFieldA/uFieldB are the world coords of the field's CELL-MIN / CELL-MAX
+// corners — NOT component-wise min/max: the Z-up remap NEGATES row and layer,
+// so per-axis (p−A)/(B−A) with a negative span is exactly what keeps the
+// texture (stored in ascending cell order) sampling un-mirrored, and the slab
+// test below is order-robust via min/max.
+// ---------------------------------------------------------------------------
+const META_VS = `#version 300 es
+precision highp float;
+layout(location=0) in vec2 aCorner;   // unit quad [-1,1]
+out vec2 vNdc;
+void main() { vNdc = aCorner; gl_Position = vec4(aCorner, 0.0, 1.0); }`;
+const META_FS = `#version 300 es
+precision highp float;
+${SHADOW_GLSL}
+precision highp sampler3D;
+in vec2 vNdc;
+uniform mat4 uMVP;         // for gl_FragDepth
+uniform mat4 uInvMVP;      // NDC → world ray
+uniform sampler3D uField;
+uniform vec3 uFieldA;      // world coords of the field's cell-min corner
+uniform vec3 uFieldB;      // world coords of the field's cell-max corner
+uniform float uThreshold;  // the isovalue
+uniform float uFMax;       // density scale (texture A × uFMax = density)
+uniform float uStepWorld;  // march step (≈ half a field voxel, world units)
+uniform int   uMaxSteps;
+uniform vec3 uLightDir;    // same lighting uniforms as FS / SPHERE_FS
+uniform float uAmbient;
+uniform float uDiffuse;
+uniform float uSpecular;
+uniform int uClipEnabled;  // same clip-interval uniforms as FS / SPHERE_FS
+uniform int uClipAxis;
+uniform float uClipLo;
+uniform float uClipHi;
+uniform vec3 uClipForward;
+out vec4 outColor;
+
+vec4 sampleField(vec3 p) {                       // p in world space
+  return texture(uField, (p - uFieldA) / (uFieldB - uFieldA));
+}
+float density(vec3 p) { return sampleField(p).a * uFMax; }
+
+bool clipped(vec3 p) {
+  if (uClipEnabled == 0) return false;
+  float w = uClipAxis == 0 ? p.x : uClipAxis == 1 ? p.y : uClipAxis == 2 ? p.z : dot(p, uClipForward);
+  return (w < uClipLo || w > uClipHi);
+}
+
+void main() {
+  // 1. World ray through this pixel (near → far plane).
+  vec4 pn = uInvMVP * vec4(vNdc, -1.0, 1.0);
+  vec4 pf = uInvMVP * vec4(vNdc, 1.0, 1.0);
+  vec3 ro = pn.xyz / pn.w;
+  vec3 rd = normalize(pf.xyz / pf.w - ro);
+  // 2. Ray ∩ field box (slab test — robust to A/B being swapped per axis).
+  vec3 inv = 1.0 / rd;
+  vec3 t0 = (uFieldA - ro) * inv, t1 = (uFieldB - ro) * inv;
+  vec3 tmn = min(t0, t1), tmx = max(t0, t1);
+  float tn = max(max(tmn.x, tmn.y), tmn.z);
+  float tf = min(min(tmx.x, tmx.y), tmx.z);
+  tn = max(tn, 0.0);
+  if (tn >= tf) discard;                         // ray misses the field
+  // 3. March for the first threshold crossing (clipped space reads empty →
+  //    the clip interval cuts the blob open, matching the voxel/sphere cut).
+  float t = tn, prevT = tn;
+  bool hit = false;
+  for (int i = 0; i < 512; i++) {
+    if (i >= uMaxSteps || t > tf) break;
+    vec3 p = ro + rd * t;
+    float d = clipped(p) ? 0.0 : density(p);
+    if (d >= uThreshold) { hit = true; break; }
+    prevT = t;
+    t += uStepWorld;
+  }
+  if (!hit) discard;
+  // 4. Bisection refine between prevT (below) and t (above).
+  float lo = prevT, hi = min(t, tf);
+  for (int i = 0; i < 5; i++) {
+    float m = 0.5 * (lo + hi);
+    vec3 p = ro + rd * m;
+    float d = clipped(p) ? 0.0 : density(p);
+    if (d >= uThreshold) hi = m; else lo = m;
+  }
+  vec3 hitP = ro + rd * hi;
+  // 5. Normal from the field gradient (central differences; grad points INWARD).
+  float e = uStepWorld;
+  vec3 g = vec3(
+    density(hitP + vec3(e, 0, 0)) - density(hitP - vec3(e, 0, 0)),
+    density(hitP + vec3(0, e, 0)) - density(hitP - vec3(0, e, 0)),
+    density(hitP + vec3(0, 0, e)) - density(hitP - vec3(0, 0, e)));
+  vec3 N = dot(g, g) < 1e-12 ? -rd : normalize(-g);
+  // 6. Shade with the SAME model as FS / SPHERE_FS (+ cast shadows). View dir
+  //    for the highlight = the actual per-pixel eye direction (-rd).
+  vec3 base = sampleField(hitP).rgb;
+  float ndl = max(0.0, dot(N, uLightDir));
+  float sh = shadowFactor(hitP, ndl);
+  float lum = uAmbient + uDiffuse * ndl * sh;
+  vec3 col = base * lum;
+  if (uSpecular > 0.0) {
+    vec3 H = normalize(uLightDir - rd);
+    col += uSpecular * pow(max(0.0, dot(N, H)), 32.0) * sh;
+  }
+  // 7. Depth — the SAME formula as SPHERE_FS so the blob interleaves with
+  //    voxels / bonds / sprites.
+  vec4 cpos = uMVP * vec4(hitP, 1.0);
+  gl_FragDepth = (cpos.z / cpos.w) * 0.5 + 0.5;
+  outColor = vec4(col, 1.0);
+}`;
+
 function compileProgram(gl: WebGL2RenderingContext, vsSrc: string, fsSrc: string): WebGLProgram {
   const vs = gl.createShader(gl.VERTEX_SHADER)!;
   gl.shaderSource(vs, vsSrc); gl.compileShader(vs);
@@ -872,6 +1016,32 @@ export class Gl3DRenderer {
   /** Fixed atlas cell size (each frame is drawn stretched to CELL×CELL; the
    *  aspect-shaped billboard quad un-stretches it — see SPRITE_VS). */
   private static readonly ATLAS_CELL = 128;
+  // --- Agent METABALLS (implicit-surface agent render mode). The density field
+  //     is baked LAZILY in render() from the packed agentInstData (which already
+  //     carries alive-compacted positions/radii/colours + the negative-radius
+  //     sprite flag), so toggling params re-bakes without a fresh snapshot. ---
+  private metaballs: Metaballs3D = { ...DEFAULT_METABALLS3D };
+  private metaProg: WebGLProgram;
+  private metaVao: WebGLVertexArrayObject;
+  private metaTex: WebGLTexture | null = null;   // TEXTURE_3D, RGBA8, LINEAR, CLAMP×3
+  private metaFW = 0; private metaFH = 0; private metaFD = 0;
+  /** World coords of the field's CELL-MIN / CELL-MAX corners (per-axis signs may
+   *  invert vs a numeric min/max — deliberate, see the META_FS header comment). */
+  private metaCornerA: [number, number, number] = [0, 0, 0];
+  private metaCornerB: [number, number, number] = [0, 0, 0];
+  private metaStepWorld = 0.25;
+  private metaMaxSteps = 64;
+  /** Params or agent data changed → re-bake before the next metaball pass. */
+  private metaDirty = true;
+  private metaTorus = false;                     // stashed by uploadAgents
+  private metaWsum: Float32Array = new Float32Array(0);   // CPU bake scratch
+  private metaCsum: Float32Array = new Float32Array(0);
+  private metaBytes: Uint8Array = new Uint8Array(0);
+  private static readonly META_TEX_UNIT = 2;     // 0 = sprite atlas, 1 = shadow map
+  private static readonly META_F_MAX = 2.0;
+  /** Cap on FW·FH·FD (≈128³) — bounds the per-step CPU bake + texture upload;
+   *  past it the effective resolution is reduced (continuously, per axis). */
+  private static readonly META_MAX_VOXELS = 1 << 21;
   // --- Cast shadows (global lighting). Depth-only light-space passes + a shadow
   //     depth texture the main voxel/sphere shaders PCF-sample. Created lazily
   //     the first time shadows are enabled; a 1×1 dummy keeps the sampler valid
@@ -954,6 +1124,15 @@ export class Gl3DRenderer {
     gl.enableVertexAttribArray(3); gl.vertexAttribPointer(3, 2, gl.FLOAT, false, 36, 20); gl.vertexAttribDivisor(3, 1);
     gl.enableVertexAttribArray(4); gl.vertexAttribPointer(4, 1, gl.FLOAT, false, 36, 28); gl.vertexAttribDivisor(4, 1);
     gl.enableVertexAttribArray(5); gl.vertexAttribPointer(5, 1, gl.FLOAT, false, 36, 32); gl.vertexAttribDivisor(5, 1);
+    gl.bindVertexArray(null);
+    // Metaball raymarch pipeline: the SAME static unit quad (attrib 0, from
+    // quadBuf) on its own tiny VAO (keeps instanced-attrib divisors out of the
+    // fullscreen pass).
+    this.metaProg = compileProgram(gl, META_VS, META_FS);
+    this.metaVao = gl.createVertexArray()!;
+    gl.bindVertexArray(this.metaVao);
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.quadBuf);
+    gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 8, 0);
     gl.bindVertexArray(null);
     // Cast-shadow depth programs (reuse the cube VAO + sphere VAO — they read only
     // aPos/aCellIndex resp. aCorner/aPos/aRadius; the extra attribs are ignored).
@@ -1359,10 +1538,17 @@ export class Gl3DRenderer {
   // Bond-Graph Agents (PR5): sphere-impostor + bond-line upload / render / pick.
   // ------------------------------------------------------------------------
   setAgentAlphaBlend(on: boolean): void { this.agentAlphaBlend = on; }
+  /** Agent metaballs config. `threshold` is a pure shader uniform (no re-bake);
+   *  the other fields invalidate the baked field. */
+  setMetaballs(cfg: Metaballs3D): void {
+    const p = this.metaballs;
+    if (p.enabled !== cfg.enabled || p.influence !== cfg.influence || p.resolution !== cfg.resolution) this.metaDirty = true;
+    this.metaballs = { ...cfg };
+  }
   /** Drop ALL agent geometry (spheres AND bond lines). Used when a non-agent /
    *  freshly-loaded model must not keep the previous model's agents lingering —
    *  zeroing agentInstanceCount alone leaves stale bondVerts drawing. */
-  clearAgents(): void { this.agentInstanceCount = 0; this.spriteInstanceCount = 0; this.bondVerts = new Float32Array(0); }
+  clearAgents(): void { this.agentInstanceCount = 0; this.spriteInstanceCount = 0; this.bondVerts = new Float32Array(0); this.metaDirty = true; }
   /** True when the renderer holds any agent geometry (spheres OR bond lines). */
   get hasAgentGeometry(): boolean { return this.agentInstanceCount > 0 || this.bondVerts.length > 0; }
   /** Highlight rings for the hovered / inspected agents (world geometry).
@@ -1446,6 +1632,10 @@ export class Gl3DRenderer {
     }
     this.agentInstanceCount = n;
     this.spriteInstanceCount = ns;
+    // Fresh agent data → the metaball field (baked lazily from agentInstData in
+    // render()) is stale. Camera-only frames never re-upload, so never re-bake.
+    this.metaDirty = true;
+    this.metaTorus = torus;
     if (sp && ns > 0) {
       const gl2 = this.gl;
       gl2.bindBuffer(gl2.ARRAY_BUFFER, this.spriteInstBuf);
@@ -1610,6 +1800,184 @@ export class Gl3DRenderer {
     gl.bindVertexArray(null);
   }
 
+  /** Bake the agents' summed density field into the RGBA8 3D texture (CPU splat).
+   *  Reads the packed agentInstData — alive-compacted, colours 0..1, sprite-agents
+   *  flagged by a NEGATIVE radius (excluded: they draw as billboards). The field
+   *  covers the agents' influence bounding box (torus worlds bake the FULL world
+   *  with wrapped splats, since agents can span the seam). Per voxel:
+   *  A = clamp(Σw / F_MAX), RGB = Σ(w·colour)/Σw (density-weighted colour). */
+  private bakeMetaballField(): void {
+    this.metaDirty = false;
+    const n = this.agentInstanceCount;
+    const d = this.agentInstData;
+    const influence = Math.max(1, this.metaballs.influence);
+    // Pass 1 — collect the non-sprite agents' cell-space influence AABB.
+    let count = 0, maxR = 0;
+    let minX = Infinity, minY = Infinity, minZ = Infinity;
+    let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
+    for (let k = 0; k < n; k++) {
+      const o = k * 8;
+      const r = d[o + 3]!;
+      if (r <= 0) continue;                     // sprite-agent flag / degenerate
+      count++;
+      const R = influence * r;
+      if (R > maxR) maxR = R;
+      const x = d[o]!, y = d[o + 1]!, z = d[o + 2]!;
+      if (x < minX) minX = x; if (x > maxX) maxX = x;
+      if (y < minY) minY = y; if (y > maxY) maxY = y;
+      if (z < minZ) minZ = z; if (z > maxZ) maxZ = z;
+    }
+    if (count === 0) { this.metaFW = 0; return; }
+    // Field box in CELL coords. Torus → the full world (agents wrap across the
+    // seam, so a tight bbox is meaningless AND the splat must wrap — see below).
+    const torus = this.metaTorus;
+    const pad = maxR + 1;
+    const bx0 = torus ? -0.5 : minX - pad, bx1 = torus ? this.W - 0.5 : maxX + pad;
+    const by0 = torus ? -0.5 : minY - pad, by1 = torus ? this.H - 0.5 : maxY + pad;
+    const bz0 = torus ? -0.5 : minZ - pad, bz1 = torus ? this.D - 0.5 : maxZ + pad;
+    const sx = Math.max(1e-3, bx1 - bx0), sy = Math.max(1e-3, by1 - by0), sz = Math.max(1e-3, bz1 - bz0);
+    // Effective resolution: the user's setting, reduced CONTINUOUSLY when the
+    // box would exceed the voxel cap (per-axis so the torus wrap stays exact).
+    let effRes = Math.max(0.05, this.metaballs.resolution);
+    if (sx * effRes * sy * effRes * sz * effRes > Gl3DRenderer.META_MAX_VOXELS) {
+      effRes = Math.cbrt(Gl3DRenderer.META_MAX_VOXELS / (sx * sy * sz));
+    }
+    const FW = Math.max(1, Math.round(sx * effRes));
+    const FH = Math.max(1, Math.round(sy * effRes));
+    const FD = Math.max(1, Math.round(sz * effRes));
+    // Per-axis resolution from the ROUNDED dims, so voxel (f + 0.5)/res spans the
+    // box exactly — on a torus the modulo wrap then lands bit-exactly.
+    const rx = FW / sx, ry = FH / sy, rz = FD / sz;
+    const total = FW * FH * FD;
+    if (this.metaWsum.length < total) {
+      this.metaWsum = new Float32Array(total);
+      this.metaCsum = new Float32Array(total * 3);
+      this.metaBytes = new Uint8Array(total * 4);
+    }
+    const wsum = this.metaWsum, csum = this.metaCsum, bytes = this.metaBytes;
+    wsum.fill(0, 0, total);
+    csum.fill(0, 0, total * 3);
+    // Pass 2 — splat each agent's falloff over its influence box:
+    // w = (1 − (d/R)²)³ inside R (Wyvill soft-object kernel).
+    for (let k = 0; k < n; k++) {
+      const o = k * 8;
+      const r = d[o + 3]!;
+      if (r <= 0) continue;
+      const R = influence * r;
+      const R2 = R * R, invR2 = 1 / R2;
+      const cx = d[o]!, cy = d[o + 1]!, cz = d[o + 2]!;
+      const cr = d[o + 4]!, cg = d[o + 5]!, cb = d[o + 6]!;
+      const fx0 = Math.floor((cx - R - bx0) * rx - 0.5), fx1 = Math.ceil((cx + R - bx0) * rx - 0.5);
+      const fy0 = Math.floor((cy - R - by0) * ry - 0.5), fy1 = Math.ceil((cy + R - by0) * ry - 0.5);
+      const fz0 = Math.floor((cz - R - bz0) * rz - 0.5), fz1 = Math.ceil((cz + R - bz0) * rz - 0.5);
+      for (let fz = fz0; fz <= fz1; fz++) {
+        let iz = fz;
+        if (torus) { iz = fz % FD; if (iz < 0) iz += FD; }
+        else if (fz < 0 || fz >= FD) continue;
+        const dz = bz0 + (fz + 0.5) / rz - cz;
+        const dz2 = dz * dz;
+        if (dz2 >= R2) continue;
+        for (let fy = fy0; fy <= fy1; fy++) {
+          let iy = fy;
+          if (torus) { iy = fy % FH; if (iy < 0) iy += FH; }
+          else if (fy < 0 || fy >= FH) continue;
+          const dy = by0 + (fy + 0.5) / ry - cy;
+          const dyz2 = dz2 + dy * dy;
+          if (dyz2 >= R2) continue;
+          const rowBase = (iz * FH + iy) * FW;
+          for (let fx = fx0; fx <= fx1; fx++) {
+            let ix = fx;
+            if (torus) { ix = fx % FW; if (ix < 0) ix += FW; }
+            else if (fx < 0 || fx >= FW) continue;
+            const dx = bx0 + (fx + 0.5) / rx - cx;
+            const q = (dx * dx + dyz2) * invR2;
+            if (q >= 1) continue;
+            const tq = 1 - q;
+            const w = tq * tq * tq;
+            const idx = rowBase + ix;
+            wsum[idx]! += w;
+            const ci = idx * 3;
+            csum[ci]! += w * cr; csum[ci + 1]! += w * cg; csum[ci + 2]! += w * cb;
+          }
+        }
+      }
+    }
+    // Pass 3 — pack RGBA8: A = density / F_MAX, RGB = weighted-average colour.
+    const invFMax = 255 / Gl3DRenderer.META_F_MAX;
+    for (let i = 0; i < total; i++) {
+      const wv = wsum[i]!;
+      const bi = i * 4;
+      if (wv <= 0) { bytes[bi] = 0; bytes[bi + 1] = 0; bytes[bi + 2] = 0; bytes[bi + 3] = 0; continue; }
+      const ci = i * 3, inv = 255 / wv;
+      bytes[bi] = Math.min(255, csum[ci]! * inv);
+      bytes[bi + 1] = Math.min(255, csum[ci + 1]! * inv);
+      bytes[bi + 2] = Math.min(255, csum[ci + 2]! * inv);
+      bytes[bi + 3] = Math.min(255, wv * invFMax);
+    }
+    // Pass 4 — upload. Reallocate on a dims change, else subimage in place.
+    const gl = this.gl;
+    gl.activeTexture(gl.TEXTURE0 + Gl3DRenderer.META_TEX_UNIT);
+    if (!this.metaTex) this.metaTex = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_3D, this.metaTex);
+    const view = bytes.subarray(0, total * 4);
+    if (FW !== this.metaFW || FH !== this.metaFH || FD !== this.metaFD) {
+      gl.texImage3D(gl.TEXTURE_3D, 0, gl.RGBA8, FW, FH, FD, 0, gl.RGBA, gl.UNSIGNED_BYTE, view);
+      // Trilinear filtering is what smooths the quantised field between texels;
+      // CLAMP on all three axes so the march can't wrap at the field edge.
+      gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_WRAP_R, gl.CLAMP_TO_EDGE);
+    } else {
+      gl.texSubImage3D(gl.TEXTURE_3D, 0, 0, 0, 0, FW, FH, FD, gl.RGBA, gl.UNSIGNED_BYTE, view);
+    }
+    gl.bindTexture(gl.TEXTURE_3D, null);
+    gl.activeTexture(gl.TEXTURE0);
+    this.metaFW = FW; this.metaFH = FH; this.metaFD = FD;
+    // World-space corners of the field (Z-up remap NEGATES row/layer — pass the
+    // SIGNED cell-min/cell-max corners, see the META_FS header comment).
+    const hx = (this.W - 1) / 2, hy = (this.H - 1) / 2, hz = (this.D - 1) / 2;
+    const ex = bx0 + FW / rx, ey = by0 + FH / ry, ez = bz0 + FD / rz;
+    this.metaCornerA = [bx0 - hx, hy - by0, hz - bz0];
+    this.metaCornerB = [ex - hx, hy - ey, hz - ez];
+    // March step = half the smallest voxel edge; step count covers the diagonal.
+    this.metaStepWorld = 0.5 / Math.max(rx, ry, rz);
+    const diag = Math.hypot(FW / rx, FH / ry, FD / rz);
+    this.metaMaxSteps = Math.min(512, Math.ceil(diag / this.metaStepWorld) + 4);
+  }
+
+  /** Raymarch the baked metaball field from a fullscreen quad (replaces the
+   *  sphere-impostor pass while metaballs are enabled). Opaque; writes depth. */
+  private renderMetaballs(): void {
+    if (!this.metaTex || this.metaFW === 0) return;
+    const inv = mat4Invert(this.mvp);
+    if (!inv) return;
+    const gl = this.gl;
+    gl.useProgram(this.metaProg);
+    gl.bindVertexArray(this.metaVao);
+    gl.disable(gl.BLEND);
+    gl.depthMask(true);
+    gl.enable(gl.DEPTH_TEST);
+    gl.uniformMatrix4fv(gl.getUniformLocation(this.metaProg, 'uMVP'), false, this.mvp);
+    gl.uniformMatrix4fv(gl.getUniformLocation(this.metaProg, 'uInvMVP'), false, inv);
+    gl.uniform3f(gl.getUniformLocation(this.metaProg, 'uFieldA'), this.metaCornerA[0], this.metaCornerA[1], this.metaCornerA[2]);
+    gl.uniform3f(gl.getUniformLocation(this.metaProg, 'uFieldB'), this.metaCornerB[0], this.metaCornerB[1], this.metaCornerB[2]);
+    gl.uniform1f(gl.getUniformLocation(this.metaProg, 'uThreshold'), Math.max(0.02, this.metaballs.threshold));
+    gl.uniform1f(gl.getUniformLocation(this.metaProg, 'uFMax'), Gl3DRenderer.META_F_MAX);
+    gl.uniform1f(gl.getUniformLocation(this.metaProg, 'uStepWorld'), this.metaStepWorld);
+    gl.uniform1i(gl.getUniformLocation(this.metaProg, 'uMaxSteps'), this.metaMaxSteps);
+    this.setLightUniforms(gl, this.metaProg);   // binds the shadow map (unit 1)…
+    this.setClipUniforms(gl, this.metaProg);
+    gl.activeTexture(gl.TEXTURE0 + Gl3DRenderer.META_TEX_UNIT);  // …and resets the
+    gl.bindTexture(gl.TEXTURE_3D, this.metaTex);                 // active unit to 0,
+    gl.uniform1i(gl.getUniformLocation(this.metaProg, 'uField'), Gl3DRenderer.META_TEX_UNIT);  // so bind AFTER it
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+    gl.bindTexture(gl.TEXTURE_3D, null);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindVertexArray(null);
+  }
+
   /** Wireframe rings for hovered (amber) / inspected (white) agents, billboarded
    *  in the camera plane, drawn with depth OFF so they read as an always-visible
    *  cursor / highlight (mirrors renderHoverCells for voxels). */
@@ -1752,7 +2120,15 @@ export class Gl3DRenderer {
           gl.colorMask(true, true, true, true);
         }
         if (this.viz.bonds) this.renderBonds(); // bonds first (depth-tested UNDER the spheres; display-toggleable)
-        this.renderAgents();   // sphere impostors (non-sprite agents)
+        // Agent metaballs (opt-in) REPLACE the sphere impostors with one fused
+        // implicit surface; sprites always draw (excluded from the field). The
+        // field bakes lazily — camera-only frames reuse the 3D texture.
+        if (this.metaballs.enabled) {
+          if (this.metaDirty) this.bakeMetaballField();
+          this.renderMetaballs();
+        } else {
+          this.renderAgents(); // sphere impostors (non-sprite agents)
+        }
         this.renderSprites();  // sprite billboards (sprite-agents; on top, blended)
       }
       this.renderAgentRings(); // hovered/inspected agent rings (depth OFF, on top)
@@ -2172,12 +2548,15 @@ export class Gl3DRenderer {
     gl.deleteProgram(this.sphereProg);
     gl.deleteProgram(this.spherePickProg);
     gl.deleteProgram(this.spriteProg);
+    gl.deleteProgram(this.metaProg);
     gl.deleteProgram(this.cubeShadowProg);
     gl.deleteProgram(this.sphereShadowProg);
     gl.deleteVertexArray(this.vao);
     gl.deleteVertexArray(this.lineVao);
     gl.deleteVertexArray(this.sphereVao);
     gl.deleteVertexArray(this.spriteVao);
+    gl.deleteVertexArray(this.metaVao);
+    if (this.metaTex) gl.deleteTexture(this.metaTex);
     gl.deleteBuffer(this.cubeBuf);
     gl.deleteBuffer(this.instBuf);
     gl.deleteBuffer(this.aoBuf);

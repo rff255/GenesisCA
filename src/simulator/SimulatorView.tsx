@@ -11,8 +11,8 @@ import { resolveKeyLabels, resolveValueTagOptions, buildLookupTablePayload, isMu
 import { NeighborIndexValuePicker } from '../modeler/panels/NeighborIndexDefaultEditor';
 import { LookupTableEditor } from '../modeler/panels/LookupTableEditor';
 import { compileGraphWebGPU } from '../modeler/vpl/compiler/webgpu/compile';
-import { Gl3DRenderer, panCamera, cameraBasis, DEFAULT_LIGHT3D } from './render/gl3d';
-import type { SpriteAtlasInput, Light3D } from './render/gl3d';
+import { Gl3DRenderer, panCamera, cameraBasis, DEFAULT_LIGHT3D, DEFAULT_METABALLS3D, metaballAutoThreshold } from './render/gl3d';
+import type { SpriteAtlasInput, Light3D, Metaballs3D } from './render/gl3d';
 import { LightBallWidget } from './LightBallWidget';
 import { agentTargetOf, resolveMaxBonds } from '../model/centerBased';
 import { compileAgentGraphWasmForModel, isAgentGraphWasmSupported, buildAgentLayoutExtras } from '../modeler/vpl/compiler/agentWasm/compile';
@@ -80,6 +80,69 @@ function sanitizeLight3d(raw: unknown): Light3D {
     ao: typeof r.ao === 'boolean' ? r.ao : d.ao,
     aoStrength: num(r.aoStrength, d.aoStrength, 0, 1),
   };
+}
+
+/** Validate a persisted agent-metaballs config (genesisca_sim_settings.agentMetaballs)
+ *  — every field range-clamped, anything malformed falls back to the default (off). */
+function sanitizeAgentMetaballs(raw: unknown): Metaballs3D {
+  const d = DEFAULT_METABALLS3D;
+  if (!raw || typeof raw !== 'object') return { ...d };
+  const r = raw as Partial<Metaballs3D>;
+  const num = (v: unknown, dv: number, lo: number, hi: number) =>
+    typeof v === 'number' && Number.isFinite(v) ? Math.max(lo, Math.min(hi, v)) : dv;
+  return {
+    enabled: typeof r.enabled === 'boolean' ? r.enabled : d.enabled,
+    influence: num(r.influence, d.influence, 1, 3),
+    threshold: num(r.threshold, d.threshold, 0.02, 0.9),
+    resolution: r.resolution === 1 || r.resolution === 4 ? r.resolution : 2,
+  };
+}
+
+/** The 2D metaball ("gooey") SVG filter — blur + a steep alpha threshold applied
+ *  to the agent discs, so nearby agents visually fuse (the classic goo trick; an
+ *  APPROXIMATION of the 3D implicit surface, view-resolution based). Injected
+ *  once, module-singleton; drawAgentsOverlay updates the blur radius + threshold
+ *  per frame and references it via ctx.filter = 'url(#…)'. */
+const GOO_FILTER_ID = 'genesisca-agent-goo';
+let gooFilterEls: { blur: SVGFEGaussianBlurElement; matrix: SVGFEColorMatrixElement } | null = null;
+function ensureGooFilter(): NonNullable<typeof gooFilterEls> {
+  if (gooFilterEls) return gooFilterEls;
+  // Adopt an already-injected filter (a re-evaluated module — e.g. Vite HMR —
+  // must not append a DUPLICATE id: url(#…) resolves the FIRST match, so the
+  // duplicate's params would never reach the canvas).
+  const existing = document.getElementById(GOO_FILTER_ID);
+  if (existing) {
+    gooFilterEls = {
+      blur: existing.querySelector('feGaussianBlur') as SVGFEGaussianBlurElement,
+      matrix: existing.querySelector('feColorMatrix') as SVGFEColorMatrixElement,
+    };
+    return gooFilterEls;
+  }
+  const NS = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(NS, 'svg');
+  svg.setAttribute('width', '0');
+  svg.setAttribute('height', '0');
+  svg.setAttribute('aria-hidden', 'true');
+  svg.style.position = 'absolute';
+  const filter = document.createElementNS(NS, 'filter');
+  filter.setAttribute('id', GOO_FILTER_ID);
+  filter.setAttribute('x', '-20%'); filter.setAttribute('y', '-20%');
+  filter.setAttribute('width', '140%'); filter.setAttribute('height', '140%');
+  filter.setAttribute('color-interpolation-filters', 'sRGB');
+  const blur = document.createElementNS(NS, 'feGaussianBlur');
+  blur.setAttribute('in', 'SourceGraphic');
+  blur.setAttribute('stdDeviation', '4');
+  const matrix = document.createElementNS(NS, 'feColorMatrix');
+  matrix.setAttribute('type', 'matrix');
+  matrix.setAttribute('values', '1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 20 -9.5');
+  filter.appendChild(blur);
+  filter.appendChild(matrix);
+  const defs = document.createElementNS(NS, 'defs');
+  defs.appendChild(filter);
+  svg.appendChild(defs);
+  document.body.appendChild(svg);
+  gooFilterEls = { blur, matrix };
+  return gooFilterEls;
 }
 
 /** Force every pixel of a captured recording frame to full opacity (alpha=255),
@@ -677,6 +740,12 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   // Gaps between adjacent 3D cells — the 3D analogue of the 2D gridlines
   // toggle. ON (default) = the historical 0.92 cube scale; OFF = flush cubes.
   const [cellGaps3d, setCellGaps3d] = useState<boolean>(saved.current.cellGaps3d !== false);
+  // Agent METABALLS (2D + 3D): render the agents as a fused implicit surface
+  // instead of discrete circles / spheres. 3D = a baked density field raymarched
+  // in gl3d; 2D = an approximate gooey filter (blur + alpha threshold). One
+  // shared, persisted preference for both views (declared HERE, before the
+  // settings-persist effect, like light3d — see its comment).
+  const [agentMetaballs, setAgentMetaballs] = useState<Metaballs3D>(() => sanitizeAgentMetaballs(saved.current.agentMetaballs));
   // 3D Grid CA: depth (number of layers) of the VOLUMETRIC box brush — independent
   // of the row size (H), so a box can be e.g. wide+tall+shallow.
   const [brushBoxDepth, setBrushBoxDepth] = useState<number>((saved.current.brushBoxDepth as number) ?? 3);
@@ -913,7 +982,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
           activeViewer, brushColor, brushW, brushH, brushMapping, showBrushCursor, showGridlines,
           brushShape, brushRadius, brushRingWidth, brushLineWidth, brush3dVolume, brushBoxDepth,
           infinityCanvas, indicatorVizModes, recordFormat, brushSectionH, agentsFront3d,
-          light3d, cellGaps3d,
+          light3d, cellGaps3d, agentMetaballs,
           agentBrushRadius, agentSeedDensity, agentSeedSpacing,
           agentBrushShape, agentBrushW, agentBrushH, agentBrushRingWidth, agentBrushLineWidth,
           showCaGrid, showAgents, showBonds, simulateCells, simulateAgents, brushTarget, bg2d,
@@ -928,7 +997,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       } catch { /* localStorage full */ }
     }, 300);
     return () => clearTimeout(timer);
-  }, [targetFps, unlimitedFps, gensPerFrame, unlimitedGens, activeViewer, brushColor, brushW, brushH, brushMapping, showBrushCursor, showGridlines, brushShape, brushRadius, brushRingWidth, brushLineWidth, brush3dVolume, brushBoxDepth, infinityCanvas, indicatorVizModes, recordFormat, brushSectionH, agentsFront3d, light3d, cellGaps3d, agentBrushRadius, agentSeedDensity, agentSeedSpacing, agentBrushShape, agentBrushW, agentBrushH, agentBrushRingWidth, agentBrushLineWidth, showCaGrid, showAgents, showBonds, simulateCells, simulateAgents, brushTarget, bg2d, indicatorHiddenCategories, indicatorChartOverrides]);
+  }, [targetFps, unlimitedFps, gensPerFrame, unlimitedGens, activeViewer, brushColor, brushW, brushH, brushMapping, showBrushCursor, showGridlines, brushShape, brushRadius, brushRingWidth, brushLineWidth, brush3dVolume, brushBoxDepth, infinityCanvas, indicatorVizModes, recordFormat, brushSectionH, agentsFront3d, light3d, cellGaps3d, agentMetaballs, agentBrushRadius, agentSeedDensity, agentSeedSpacing, agentBrushShape, agentBrushW, agentBrushH, agentBrushRingWidth, agentBrushLineWidth, showCaGrid, showAgents, showBonds, simulateCells, simulateAgents, brushTarget, bg2d, indicatorHiddenCategories, indicatorChartOverrides]);
 
   // Manual Brush — signature-keyed merge effect. Re-derives `manualBrush`
   // whenever the cell attribute set (id+type) changes. Surviving attrs carry
@@ -1434,6 +1503,10 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   // draw (both persisted in genesisca_sim_settings; defaults = historical look).
   const light3dRef = useRef<Light3D>({ ...DEFAULT_LIGHT3D });
   const cellGaps3dRef = useRef(true);
+  const agentMetaballsRef = useRef<Metaballs3D>({ ...DEFAULT_METABALLS3D });
+  // 2D metaballs — the offscreen scratch the agent discs draw into before the
+  // gooey-filtered blit (reused across frames; never getImageData'd).
+  const gooScratchRef = useRef<HTMLCanvasElement | null>(null);
   // voxels/agents are driven from showCaGrid/showAgents below (the render-layer
   // toggles); the panel only edits axes/grid/bounds/gizmo. draw() overrides the two.
   const viz3dRef = useRef<import('./render/gl3d').Viz3D>({ axes: false, grid: false, bounds: true, gizmo: true, voxels: true, agents: true, bonds: true });
@@ -2108,6 +2181,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       r.setBackgroundColor(bg3dRef.current);
       r.setLight(light3dRef.current);
       r.setCellGaps(cellGaps3dRef.current);
+      r.setMetaballs(agentMetaballsRef.current);
       r.setCamera(cam3dRef.current, r.canvasWidth / (r.canvasHeight || 1));
       // 3D perf: only re-scan + re-upload the (potentially millions of) cells when
       // the colours actually changed (a new buffer from a `stepped` message).
@@ -2360,7 +2434,25 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       const spriteMeta = spriteMetaRef.current;
       const reg = spriteRegistryRef.current;
       const spritesActive = !!reg && spriteMeta.length > 0 && sids.length === hw;
-      const stamp = (tileOx: number, tileOy: number) => {
+      // Agent metaballs (2D): draw the NON-sprite agents as solid discs into an
+      // offscreen scratch, blit it through the gooey SVG filter (blur + a steep
+      // alpha threshold) so nearby agents FUSE — a view-space approximation of
+      // the 3D implicit surface — then draw sprite-agents on top. Falls back to
+      // plain circles when ctx.filter is unsupported. The scratch is drawn-to
+      // only (never getImageData'd — no willReadFrequently de-opt).
+      const mbCfg = agentMetaballsRef.current;
+      let gooCtx: CanvasRenderingContext2D | null = null;
+      if (mbCfg.enabled && typeof ctx.filter === 'string') {
+        let sc = gooScratchRef.current;
+        if (!sc) { sc = document.createElement('canvas'); gooScratchRef.current = sc; }
+        if (sc.width !== parentW) sc.width = parentW;
+        if (sc.height !== parentH) sc.height = parentH;
+        gooCtx = sc.getContext('2d');
+        gooCtx?.clearRect(0, 0, parentW, parentH);
+      }
+      // pass 'all' = the classic path (circles + sprites straight to ctx);
+      // 'goo' = circles only, into the goo scratch; 'sprites' = sprites only.
+      const stamp = (tileOx: number, tileOy: number, pass: 'all' | 'goo' | 'sprites') => {
         for (let i = 0; i < hw; i++) {
           if (!aal[i]) continue;
           const cx = tileOx + ax[i]! * scale;
@@ -2374,6 +2466,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
             const meta = slot > 0 ? spriteMeta[slot - 1] : undefined;
             const dec = meta ? reg!.get(meta.id) : undefined;
             if (dec && dec.frames.length > 0) {
+              if (pass === 'goo') continue; // sprite-agents are excluded from the goo field
               const fc = dec.frames.length;
               // The per-agent frame is persistent + engine-advanced (Set Agent
               // Sprite drove the speed). Floor + wrap (loop) or clamp (once).
@@ -2415,23 +2508,59 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
             }
             // slot set but not yet decoded (or deleted) → fall through to the circle
           }
-          ctx.beginPath();
-          ctx.arc(cx, cy, rad, 0, Math.PI * 2);
-          ctx.fillStyle = `rgba(${acol[c]},${acol[c + 1]},${acol[c + 2]},${acol[c + 3]! / 255})`;
-          ctx.fill();
-          if (rad >= 2) {
-            ctx.lineWidth = Math.max(0.5, rad * 0.14);
-            ctx.strokeStyle = 'rgba(0,0,0,0.40)';
-            ctx.stroke();
+          if (pass === 'sprites') continue;  // circles already drawn in the goo pass
+          const tc = pass === 'goo' ? gooCtx! : ctx;
+          tc.beginPath();
+          tc.arc(cx, cy, rad, 0, Math.PI * 2);
+          tc.fillStyle = `rgba(${acol[c]},${acol[c + 1]},${acol[c + 2]},${acol[c + 3]! / 255})`;
+          tc.fill();
+          if (pass !== 'goo' && rad >= 2) {  // no outline inside the goo field
+            tc.lineWidth = Math.max(0.5, rad * 0.14);
+            tc.strokeStyle = 'rgba(0,0,0,0.40)';
+            tc.stroke();
           }
         }
       };
-      if (infinity) {
-        for (let ty = tyMin; ty <= tyMax; ty++)
-          for (let tx = txMin; tx <= txMax; tx++)
-            stamp(ox + tx * scaledW, oy + ty * scaledH);
+      const forTiles = (pass: 'all' | 'goo' | 'sprites') => {
+        if (infinity) {
+          for (let ty = tyMin; ty <= tyMax; ty++)
+            for (let tx = txMin; tx <= txMax; tx++)
+              stamp(ox + tx * scaledW, oy + ty * scaledH, pass);
+        } else {
+          stamp(ox, oy, pass);
+        }
+      };
+      if (gooCtx) {
+        forTiles('goo');
+        // Fusion range: the blur σ scales with the mean agent pixel radius ×
+        // (influence − 1); the alpha threshold is centred at 0.5 (which keeps a
+        // LONE agent at roughly its drawn size — the 2D analogue of the 3D auto
+        // threshold) and shifts with the user's threshold relative to that auto
+        // value, so both knobs mirror the 3D semantics (approximately).
+        let radSum = 0, radN = 0;
+        for (let i = 0; i < hw; i++) if (aal[i]) { radSum += ar[i]!; radN++; }
+        const avgRadPx = radN > 0 ? Math.max(1.2, (radSum / radN) * scale) : 4;
+        const sigma = Math.max(0.6, (mbCfg.influence - 1) * avgRadPx * 0.85);
+        // An isolated blurred disc's PEAK alpha decays as σ grows (the blur
+        // redistributes its mass), so a fixed alpha threshold would make lone
+        // agents vanish at high influence. Anchor the threshold to that peak —
+        // the 2D analogue of the 3D auto-threshold: at the auto value a lone
+        // agent stays ≈ its own size at ANY influence, while clusters (whose
+        // blurred alphas SUM past the anchor in the gaps) fuse.
+        const peak = 1 - Math.exp(-(avgRadPx * avgRadPx) / (2 * sigma * sigma));
+        const anchor = 0.5 * peak;
+        const tSvg = Math.min(0.92, Math.max(0.03, anchor + (mbCfg.threshold - metaballAutoThreshold(mbCfg.influence)) * 0.55 * peak));
+        const S = Math.min(60, Math.max(14, 8 / Math.max(0.02, anchor)));  // slope (edge sharpness) — steeper for small anchors
+        const goo = ensureGooFilter();
+        goo.blur.setAttribute('stdDeviation', sigma.toFixed(2));
+        goo.matrix.setAttribute('values', `1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 ${S.toFixed(1)} ${(0.5 - S * tSvg).toFixed(3)}`);
+        ctx.save();
+        ctx.filter = `url(#${GOO_FILTER_ID})`;
+        ctx.drawImage(gooScratchRef.current!, 0, 0);
+        ctx.restore();
+        if (spritesActive) forTiles('sprites');
       } else {
-        stamp(ox, oy);
+        forTiles('all');
       }
       // The agent-brush cursor + highlight visuals (hover/edit/area rings, the
       // footprint + bond-ring silhouettes, the glue anchor) moved to the cursor
@@ -4685,6 +4814,10 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     draw();
   }, [light3d, draw]);
   useEffect(() => { cellGaps3dRef.current = cellGaps3d; draw(); }, [cellGaps3d, draw]);
+  // Metaballs: no snapshot invalidation needed — the renderer bakes its field
+  // lazily from its own cached agent instance data (setMetaballs marks it dirty
+  // on an enabled/influence/resolution change; threshold is a pure uniform).
+  useEffect(() => { agentMetaballsRef.current = agentMetaballs; draw(); }, [agentMetaballs, draw]);
   useEffect(() => { viz3dRef.current = viz3d; draw(); }, [viz3d, draw]);
   useEffect(() => {
     plane3dRef.current = { axis: plane3d.axis, pos: plane3d.pos };
@@ -8191,6 +8324,37 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
                     Draw agents in front
                   </label>
                 )}
+                {/* Agent metaballs — render the agents as one fused implicit
+                    surface (Blender-metaball semantics) instead of discrete
+                    spheres. Each agent's own radius drives its field element. */}
+                {isAgentModel && (<>
+                  <label style={row} title="Render the agents as a fused implicit surface (metaballs): each agent contributes a field over Influence × its radius, and agents whose fields overlap merge into one organic blob — the natural look for tissues. Picking / brushing still target the underlying agents.">
+                    <input type="checkbox" checked={agentMetaballs.enabled}
+                      onChange={e => setAgentMetaballs(m => ({ ...m, enabled: e.target.checked }))} />
+                    Metaballs
+                  </label>
+                  {agentMetaballs.enabled && (<>
+                    <label style={row} title="Influence — how far each agent's field reaches, as a multiple of its radius. Higher = agents fuse from further apart (and a lone agent renders slightly fatter unless the threshold is re-derived).">
+                      <span style={{ fontSize: '0.6rem', color: '#999', width: 44, flex: '0 0 auto' }}>Influence</span>
+                      <input type="range" min={1} max={3} step={0.05} value={agentMetaballs.influence} style={{ flex: 1, minWidth: 0 }}
+                        onChange={e => setAgentMetaballs(m => ({ ...m, influence: Number(e.target.value) }))} />
+                    </label>
+                    <label style={row} title="Threshold — the field isovalue the surface sits at. Lower = fatter / more fused; higher = thinner / more separated. At the auto value (⟲) a lone agent renders at exactly its own radius.">
+                      <span style={{ fontSize: '0.6rem', color: '#999', width: 44, flex: '0 0 auto' }}>Threshold</span>
+                      <input type="range" min={0.02} max={0.9} step={0.005} value={agentMetaballs.threshold} style={{ flex: 1, minWidth: 0 }}
+                        onChange={e => setAgentMetaballs(m => ({ ...m, threshold: Number(e.target.value) }))} />
+                      <button className={styles.panelToggle} title="Auto threshold — re-derive from Influence so a lone agent renders at exactly its own radius"
+                        onClick={() => setAgentMetaballs(m => ({ ...m, threshold: metaballAutoThreshold(m.influence) }))}>⟲</button>
+                    </label>
+                    <div style={row} title="Field detail — density-field voxels per grid cell. Higher = a smoother surface, at more bake cost per step.">
+                      <span style={{ fontSize: '0.6rem', color: '#999', width: 44, flex: '0 0 auto' }}>Detail</span>
+                      {([1, 2, 4] as const).map(rv => (
+                        <button key={rv} className={tbtn(agentMetaballs.resolution === rv)} style={{ flex: 1 }}
+                          onClick={() => setAgentMetaballs(m => ({ ...m, resolution: rv }))}>{rv}×</button>
+                      ))}
+                    </div>
+                  </>)}
+                </>)}
                 {/* Background colour */}
                 <label style={row} title="Fill the 3D canvas with a solid colour (off = transparent)">
                   <input type="checkbox" checked={bg3d.enabled} onChange={e => setBg3d(b => ({ ...b, enabled: e.target.checked }))} />
@@ -8393,6 +8557,36 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
                     style={{ width: 34, height: 20, padding: 0, border: 'none', background: 'none', opacity: bg2d.enabled ? 1 : 0.4, cursor: bg2d.enabled ? 'pointer' : 'default' }} />
                   <span style={{ color: 'var(--color-text-muted)' }}>Agents-only backdrop</span>
                 </label>
+              </div>
+              )}
+              {/* Agent metaballs (2D) — the same shared preference as the 3D View
+                  panel's Metaballs block; in 2D it's an approximate gooey filter
+                  (blur + alpha threshold) fusing the agent discs. */}
+              {!is3D && (
+              <div>
+                <div style={{ fontSize: '0.6rem', color: 'var(--color-text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 4 }}>Metaballs</div>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.66rem' }}
+                  title="Render nearby agents fused into one organic blob (a gooey blur + threshold filter — an approximation of the 3D metaball surface). Sprite-agents stay crisp on top.">
+                  <input type="checkbox" checked={agentMetaballs.enabled}
+                    onChange={e => setAgentMetaballs(m => ({ ...m, enabled: e.target.checked }))} />
+                  <span style={{ color: 'var(--color-text-muted)' }}>Fuse agents into blobs</span>
+                </label>
+                {agentMetaballs.enabled && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 4 }}>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.66rem' }}
+                      title="Influence — how far each agent's field reaches (× its radius). Higher = agents fuse from further apart.">
+                      <span style={{ fontSize: '0.6rem', color: 'var(--color-text-muted)', width: 48, flex: '0 0 auto' }}>Influence</span>
+                      <input type="range" min={1} max={3} step={0.05} value={agentMetaballs.influence} style={{ flex: 1, minWidth: 0 }}
+                        onChange={e => setAgentMetaballs(m => ({ ...m, influence: Number(e.target.value) }))} />
+                    </label>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.66rem' }}
+                      title="Threshold — higher = thinner / more separated, lower = fatter / more fused.">
+                      <span style={{ fontSize: '0.6rem', color: 'var(--color-text-muted)', width: 48, flex: '0 0 auto' }}>Threshold</span>
+                      <input type="range" min={0.02} max={0.9} step={0.005} value={agentMetaballs.threshold} style={{ flex: 1, minWidth: 0 }}
+                        onChange={e => setAgentMetaballs(m => ({ ...m, threshold: Number(e.target.value) }))} />
+                    </label>
+                  </div>
+                )}
               </div>
               )}
               {/* No sprite transport here — sprite playback (which sprite, frame,

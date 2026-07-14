@@ -1,6 +1,13 @@
 # PLAN — Agent Metaballs (implicit-surface rendering for 3D agents)
 
-**Status:** proposed / not started. Written as a HANDOFF: everything a fresh session needs.
+**Status: IMPLEMENTED** (branch `sim_agent_fixes`) — with these deviations from the plan as written:
+- **§5.4 step 1 was wrong as specified**: `snap.radius` is ALWAYS positive (the negative-radius sprite flag exists only in the packed `agentInstData`). The bake therefore reads `agentInstData` (already alive-compacted, colours 0..1, sprite-flagged by sign), **lazily at render time on a `metaDirty` flag** — which also made §6.2's `lastUploadedAgentSnapRef = null` invalidation trick unnecessary (the renderer self-invalidates in `setMetaballs`/`uploadAgents`/`clearAgents`).
+- **§5.6's "component-wise min/max of 8 corners" would MIRROR the field on Y/Z** (the Z-up remap negates row/layer). Instead the shader gets the SIGNED cell-min/cell-max corners (`uFieldA`/`uFieldB`); the slab test is order-robust via min/max and per-axis `(p−A)/(B−A)` then samples un-mirrored automatically.
+- **§4's 256³ cap was too big** for a per-step CPU bake (csum alone ≈ 200 MB) — capped at ~2M voxels (≈128³) with a CONTINUOUS per-axis effective resolution (which also makes the torus modulo-wrap bit-exact).
+- **§9 decision 5 (2D) was brought IN scope**: 2D renders an approximate gooey filter (offscreen agent discs → SVG feGaussianBlur + a steep feColorMatrix alpha threshold), with the threshold anchored to the blurred-disc peak so lone agents survive at any influence. Same shared `agentMetaballs` setting drives both views.
+- Verified per §11 (readPixels): off = exact baseline; lone agent at the auto threshold = EXACTLY its sphere silhouette; fusion real (5 comps → 1) in 3D and 2D; threshold monotonic; clip cuts + restores; shadows received; pick identical on/off; torus wrap splats across the seam; bake 9–37 ms @1500 agents, camera-only frames 0.3 ms.
+
+Original handoff text below (kept for reference).
 **Illustrated mockup:** [PLAN_AGENT_METABALLS.html](PLAN_AGENT_METABALLS.html) (panel UI, before/after, the field math, the pass pipeline).
 **Branch to build on:** `sim_agent_fixes` (or a fresh branch off it). The 3D global-lighting work it leans on landed in `6eb6d28`.
 
