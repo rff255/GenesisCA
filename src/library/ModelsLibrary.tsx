@@ -123,13 +123,14 @@ function computePopoverPosition(
 ): { top: number; left: number } {
   const viewportW = window.innerWidth;
   const viewportH = window.innerHeight;
-  // Horizontally centered on the card, clamped to the viewport.
+  // Centered ON the hovered card — both axes — so the panel literally sits on
+  // top of it (`pointer-events: none` lets hover + clicks pass through to the
+  // card beneath). Clamped to the viewport for cards near an edge, so the
+  // centring is "to the best of the available space".
   let left = (card.left + card.right) / 2 - popoverWidth / 2;
   left = Math.max(POPOVER_GAP, Math.min(viewportW - popoverWidth - POPOVER_GAP, left));
-  // On top of (above) the card; flip below when it would clip the viewport top.
-  let top = card.top - popoverHeight - POPOVER_GAP;
-  if (top < POPOVER_GAP) top = Math.min(card.bottom + POPOVER_GAP, viewportH - popoverHeight - POPOVER_GAP);
-  top = Math.max(POPOVER_GAP, top);
+  let top = (card.top + card.bottom) / 2 - popoverHeight / 2;
+  top = Math.max(POPOVER_GAP, Math.min(viewportH - popoverHeight - POPOVER_GAP, top));
   return { top, left };
 }
 
@@ -366,18 +367,20 @@ export function ModelsLibrary({ onLoadModel }: Props) {
         <div className={styles.cardAuthor} title={`Project by: ${entry.modelAuthor}`}>Project by: {entry.modelAuthor}</div>
       )}
       <ScrollingDesc text={entry.description} hovered={hoveredId === entry.id} />
+      {/* The meta block WRAPS so every tag stays visible — tags take layout
+          priority over the description (which is clipped anyway and shown in
+          full by the hover preview); the description viewport above absorbs
+          whatever height the wrapped tag rows leave. */}
       <div className={styles.cardMeta}>
-        <div className={styles.cardTags}>
-          {(entry.dimension ?? '2d') === '3d' && <span className={styles.dimBadge}>3D</span>}
-          {entry.tags.map(tag => (
-            <span
-              key={tag}
-              className={`${styles.tag} ${prefs.tag === tag.trim().toLowerCase() ? styles.tagActive : ''}`}
-              title={`Filter by "${tag}"`}
-              onClick={e => { e.stopPropagation(); toggleTagFilter(tag); }}
-            >{tag}</span>
-          ))}
-        </div>
+        {(entry.dimension ?? '2d') === '3d' && <span className={styles.dimBadge}>3D</span>}
+        {entry.tags.map(tag => (
+          <span
+            key={tag}
+            className={`${styles.tag} ${prefs.tag === tag.trim().toLowerCase() ? styles.tagActive : ''}`}
+            title={`Filter by "${tag}"`}
+            onClick={e => { e.stopPropagation(); toggleTagFilter(tag); }}
+          >{tag}</span>
+        ))}
         <span className={styles.gridSize} title={entry.modified ? `Last updated ${fmtDate(entry.modified, true)}` : undefined}>
           {entry.gridSize.replace(/x/g, '×')}
           {entry.modified ? ` · ${fmtDate(entry.modified, false)}` : ''}

@@ -2028,11 +2028,13 @@ export function HelpView() {
             agents), a <strong>sort</strong> order (name, newest / oldest by the model file's
             last-updated date, or largest grid), and a <strong>Group by category</strong> view
             that sections the cards by each model's primary tag. Your choices persist across
-            sessions. Cards are uniform-sized; when a long description doesn't fit, rest the
-            pointer on the card and the text <strong>slowly auto-scrolls</strong> so you can read
-            it in place. Hovering also opens a <strong>preview panel above the card</strong>:
-            the title + full description on the left (it follows the same auto-scroll rule when
-            too long) and the model's thumbnail on the right, side by side. 3D models carry a
+            sessions. Cards are uniform-sized and always show <strong>all of a model's
+            tags</strong> (the tag rows wrap; the clipped description yields the space, since
+            hovering reveals it anyway). Hovering opens a <strong>preview panel centered right
+            on the card</strong>: the title + full description on the left (when too long for
+            the panel it <strong>slowly auto-scrolls</strong>, holds, and loops) and the model's
+            thumbnail on the right, side by side &mdash; clicks pass straight through it, so the
+            card stays clickable. 3D models carry a
             <strong> 3D</strong> badge and show their grid as W&times;H&times;D.
           </p>
 
