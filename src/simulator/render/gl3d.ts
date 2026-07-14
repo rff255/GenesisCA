@@ -116,6 +116,35 @@ function mat4Mul(a: Mat4, b: Mat4): Mat4 {
 // is the orbit pivot (moved by screen-space pan); `dist` is a multiple of the
 // largest grid dimension.
 export interface Camera3D { yaw: number; pitch: number; dist: number; target: [number, number, number]; }
+
+/** Camera-distance bounds. `dist` is a MULTIPLE of the largest grid dimension (see
+ *  setCamera), so these are grid-size independent: 0.2 is inside the volume, 40 is
+ *  far out. The wheel zoom AND auto-zoom both clamp to this range — keep them here
+ *  so the two can't drift apart. */
+export const MIN_CAM_DIST = 0.2;
+export const MAX_CAM_DIST = 40;
+/** The default 3/4 view (also what "Reset view" restores). A FACTORY, not a shared
+ *  const — `cam3dRef` mutates the camera in place, so handing out one object would
+ *  let a reset alias the default. */
+export const defaultCamera3d = (): Camera3D => ({ yaw: -0.9, pitch: 0.6, dist: 1.9, target: [0, 0, 0] });
+
+/** Auto-zoom — the dolly sibling of auto-orbit. A one-way dolly would just fly into
+ *  or away from the volume, so this OSCILLATES: the camera distance breathes around
+ *  a BASE distance, `dist = base * (1 + amount * sin(phase))`, `phase` advancing at
+ *  `speed` cycles/second. Because `dist` is a multiple of the largest grid dimension,
+ *  the motion is grid-size independent for free. `amount` is a FRACTION of the base
+ *  (0.35 = ±35%), never ≥ 1, so the multiplier can't reach 0. Session state (like
+ *  auto-orbit) — a camera animation that resumed itself on every load would surprise. */
+export interface AutoZoom3D { on: boolean; speed: number; amount: number; }
+export const DEFAULT_AUTOZOOM3D: AutoZoom3D = { on: false, speed: 0.12, amount: 0.35 };
+/** The base distance a given (dist, phase, amount) implies — the inverse of the
+ *  oscillation. Used to RE-BASELINE when the user wheel-zooms (or resets the view)
+ *  while auto-zoom is running, so their zoom sticks instead of being stomped on the
+ *  next frame. Guards the (impossible for amount<1, but cheap) near-zero multiplier. */
+export function autoZoomBaseFrom(dist: number, phase: number, amount: number): number {
+  const mul = 1 + amount * Math.sin(phase);
+  return mul > 0.05 ? dist / mul : dist;
+}
 // Clip/slice INTERVAL (slab). `axis` 'x'|'y'|'z' cuts along a grid axis; 'camera'
 // cuts along the current view direction (peel toward the viewer). A fragment at
 // world-coord `w` along the axis is kept iff `lo <= w <= hi` — two cuts (one from
