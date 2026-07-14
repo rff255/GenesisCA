@@ -135,7 +135,7 @@
 
 .grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(308px, 1fr));
   gap: var(--space-8);
   margin-bottom: var(--space-8);
 }
@@ -143,15 +143,16 @@
 /* Uniform cards: every card is the SAME fixed height (flex column — the
  * description absorbs whatever space the name/author lines leave), so rows
  * read as a tidy grid regardless of content length. Long descriptions are
- * clipped and auto-scroll on hover (see .cardDescInner / ScrollingDesc). */
+ * clipped and auto-scroll on hover (see .cardDescInner / ScrollingDesc).
+ * Tight internal padding/margins — the space goes to content, not chrome. */
 .card {
   background: var(--color-bg-panel);
   border: 1px solid var(--color-widget-border);
   border-radius: var(--radius-xl);
-  padding: var(--space-10);
+  padding: var(--space-5) var(--space-6);
   cursor: pointer;
   transition: border-color var(--duration-base), transform var(--duration-base);
-  height: 172px;
+  height: 224px;
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -165,8 +166,8 @@
 .cardName {
   font-size: var(--font-lg);
   font-weight: 600;
-  color: var(--color-text-primary);
-  margin: 0 0 var(--space-2);
+  color: var(--color-accent);
+  margin: 0 0 var(--space-1);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -190,7 +191,7 @@
   font-size: var(--font-md);
   color: var(--color-text-secondary);
   line-height: 1.5;
-  margin: var(--space-3) 0 var(--space-5);
+  margin: var(--space-2) 0 var(--space-3);
   overflow: hidden;
   position: relative;
   flex: 1 1 auto;
@@ -288,13 +289,17 @@
   padding: var(--space-16) 0;
 }
 
-/* Hover preview: the model's thumbnail, positioned BESIDE the hovered card
- * (right, flipping left near the viewport edge) so it never covers the card's
- * auto-scrolling description. `pointer-events: none` keeps the card's hover
+/* Hover preview: TWO same-size panes side by side — [title + description]
+ * on the left (auto-scrolls when too long for the pane) and the thumbnail on
+ * the right — centered horizontally on the card and placed just ABOVE it
+ * (flips below near the viewport top). Models without a thumbnail show the
+ * description pane alone. `pointer-events: none` keeps the card's hover
  * intact if it ever overlaps near an edge. */
 .previewPopover {
   position: fixed;
-  width: 320px;
+  display: flex;
+  align-items: stretch;
+  max-width: calc(100vw - 16px);
   max-height: calc(100vh - 16px);
   background: var(--color-bg-canvas);
   border: 1px solid var(--color-accent);
@@ -305,14 +310,56 @@
   overflow: hidden;
 }
 
+/* Both panes are the SAME fixed size so the pair reads as one balanced panel
+ * (and the popover's total size is known the moment it renders — before the
+ * image loads — for the measure-then-position layout effect). */
+.previewDescPane {
+  width: 320px;
+  height: 240px;
+  box-sizing: border-box;
+  padding: var(--space-6) var(--space-8);
+  display: flex;
+  flex-direction: column;
+  flex: 0 0 auto;
+}
+
+.previewTitle {
+  font-size: var(--font-lg);
+  font-weight: 600;
+  color: var(--color-accent);
+  margin: 0 0 var(--space-3);
+  flex: 0 0 auto;
+}
+
+/* The description's clipped viewport inside the pane — same auto-scroll rule
+ * as the card (useAutoScrollOverflow translates the inner div). */
+.previewDescScroll {
+  font-size: var(--font-sm);
+  color: var(--color-text-secondary);
+  line-height: 1.5;
+  overflow: hidden;
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.previewDescFade {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 16px;
+  background: linear-gradient(transparent, var(--color-bg-canvas));
+  pointer-events: none;
+}
+
 .previewThumb {
   display: block;
-  width: 100%;
-  /* Fixed height (not max-height) so the popover's total height is known the
-   * moment it renders — before the image loads — which lets the measure-then-
-   * position layout effect place it correctly without a post-load reflow. */
+  width: 320px;
   height: 240px;
+  flex: 0 0 auto;
   object-fit: contain;
   image-rendering: pixelated;
   background: var(--color-bg-canvas);
+  border-left: 1px solid var(--color-border);
 }
