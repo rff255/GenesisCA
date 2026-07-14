@@ -1170,14 +1170,20 @@ export function HelpView() {
             <strong> View</strong> anchors the light to the camera, so shading stays constant
             while you orbit (headlight style); <strong>World</strong> fixes it in the scene, so
             orbiting sweeps the lit side (sun style) &mdash; switching modes never jumps the
-            current shading. <strong>Reset</strong> restores the default light.
+            current shading. <strong>Reset</strong> restores the default light. Two optional
+            <strong> global lighting</strong> toggles make cells and agents shade each other
+            instead of each surface being lit only on its own: <strong>Shadows</strong> casts real
+            shadows (voxels and agents shadow each other) and <strong>Occlusion</strong> darkens
+            the crevices of a packed voxel volume so it reads as one solid form. Each has a
+            strength slider; both are off by default.
           </p>
           <p className={styles.p}>
             <strong>Painting in 3D</strong> uses an <strong>interaction plane</strong>: enable
             <strong>Brush plane</strong> in the 3D View panel and pick its axis + position. The
             plane shows its <strong>bounds and a grid</strong> so you can see exactly where it
-            sits, and the hovered cells are outlined by a <strong>cube cursor matching the full
-            brush footprint</strong>. A plain <strong>left-drag</strong> then ray-traces onto
+            sits, and the hovered brush is shown by a bounded <strong>wireframe outline of the
+            brush shape</strong> (a circle / box / sphere, so even a large volumetric brush stays
+            light). A plain <strong>left-drag</strong> then ray-traces onto
             that slice and stamps the current brush <strong>shape and size</strong> (Rectangle /
             Circle / Ring) flat in the plane &mdash; exactly like the 2D brush, including drag
             interpolation and torus wrap. The <strong>Line</strong> tool takes two clicks on the
