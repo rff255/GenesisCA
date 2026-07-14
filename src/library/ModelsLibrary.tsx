@@ -95,6 +95,49 @@ function fmtDate(ms: number | undefined, long: boolean): string {
 }
 
 // ---------------------------------------------------------------------------
+// Effective tags — the tag set the card / filter / group / category-dropdown
+// machinery sees: the model's authored tags PLUS synthetic "mode" tags (3D,
+// Agents) derived from its dimension + topology, so those two badges filter,
+// group, and list in the category dropdown exactly like a real tag. The
+// synthetic ones come FIRST (so grouping keys a 3D / Agents model under that
+// mode) and REPLACE any redundant hand-authored tag of the same name (the
+// de-dup — a 3D model that also carries a literal "3D" tag shows it once, as
+// the badge). Only the NON-default modes get a synthetic tag — 2D and CA-Grid
+// are the norm on nearly every model, so badging them would be noise.
+type TagKind = 'dim3d' | 'agents' | null;
+interface EffTag { key: string; label: string; kind: TagKind; }
+
+// Authored-tag spellings a present synthetic tag subsumes (dropped from the
+// grey chips, shown once as the badge instead).
+const SYNTH_ALIASES: Record<'dim3d' | 'agents', string[]> = {
+  dim3d: ['3d'],
+  agents: ['agents', 'agent'],
+};
+
+function effectiveTags(e: LibraryEntry): EffTag[] {
+  const synth: EffTag[] = [];
+  const drop = new Set<string>();
+  if ((e.dimension ?? '2d') === '3d') {
+    synth.push({ key: '3d', label: '3D', kind: 'dim3d' });
+    SYNTH_ALIASES.dim3d.forEach(a => drop.add(a));
+  }
+  if (e.hasAgents) {
+    synth.push({ key: 'agents', label: 'Agents', kind: 'agents' });
+    SYNTH_ALIASES.agents.forEach(a => drop.add(a));
+  }
+  const seen = new Set(drop);          // seeded with the stripped synthetic dups
+  const authored: EffTag[] = [];
+  for (const t of e.tags) {
+    const label = t.trim();
+    const key = label.toLowerCase();
+    if (!key || seen.has(key)) continue;  // strip synthetic dups + repeated tags
+    seen.add(key);
+    authored.push({ key, label, kind: null });
+  }
+  return [...synth, ...authored];
+}
+
+// ---------------------------------------------------------------------------
 // Hover preview popover: a two-pane panel — [title + description | thumbnail]
 // side by side, SAME size — centered horizontally on the card and placed just
 // ABOVE it (flips below when there's no room). Models without a thumbnail get
@@ -252,36 +295,46 @@ export function ModelsLibrary({ onLoadModel }: Props) {
     try { localStorage.setItem(PREFS_KEY, JSON.stringify(prefs)); } catch { /* full */ }
   }, [prefs]);
 
-  // Category catalogue: case-insensitive canonical tags with usage counts,
-  // sorted by frequency then name (first-seen spelling is the display label).
+  // Effective tags per entry (authored + the synthetic 3D / Agents mode tags),
+  // computed once — every downstream consumer (catalogue, filter, group, card)
+  // reads from here so the synthetic tags behave uniformly.
+  const effTagsById = useMemo(() => {
+    const m = new Map<string, EffTag[]>();
+    for (const e of entries) m.set(e.id, effectiveTags(e));
+    return m;
+  }, [entries]);
+
+  // Category catalogue: case-insensitive canonical tags (incl. the synthetic
+  // 3D / Agents) with usage counts, sorted by frequency then name.
   const tagCatalog = useMemo(() => {
     const map = new Map<string, { label: string; count: number }>();
     for (const e of entries) {
-      for (const t of e.tags) {
-        const key = t.trim().toLowerCase();
-        if (!key) continue;
-        const cur = map.get(key);
+      for (const t of effTagsById.get(e.id) ?? []) {
+        const cur = map.get(t.key);
         if (cur) cur.count++;
-        else map.set(key, { label: t.trim(), count: 1 });
+        else map.set(t.key, { label: t.label, count: 1 });
       }
     }
     return [...map.entries()]
       .map(([key, v]) => ({ key, ...v }))
       .sort((a, b) => b.count - a.count || a.label.localeCompare(b.label, undefined, { sensitivity: 'base' }));
-  }, [entries]);
+  }, [entries, effTagsById]);
 
   // Filter + sort pipeline.
   const visible = useMemo(() => {
     const q = prefs.q.trim().toLowerCase();
     const out = entries.filter(e => {
+      const eff = effTagsById.get(e.id) ?? [];
       if (prefs.dim !== 'all' && (e.dimension ?? '2d') !== prefs.dim) return false;
       // Topology toggles: each one, when on, REQUIRES that layer (independent
       // toggles — both on means "runs the grid AND agents together").
       if (prefs.grid && !(e.hasGrid ?? true)) return false;
       if (prefs.agents && !(e.hasAgents ?? false)) return false;
-      if (prefs.tag && !e.tags.some(t => t.trim().toLowerCase() === prefs.tag)) return false;
+      // Category filter matches EFFECTIVE tags, so selecting "3D" / "Agents"
+      // (badge or dropdown) filters like any authored tag.
+      if (prefs.tag && !eff.some(t => t.key === prefs.tag)) return false;
       if (q) {
-        const hay = `${e.name} ${e.description} ${e.author} ${e.modelAuthor ?? ''} ${e.tags.join(' ')}`.toLowerCase();
+        const hay = `${e.name} ${e.description} ${e.author} ${e.modelAuthor ?? ''} ${eff.map(t => t.label).join(' ')}`.toLowerCase();
         if (!hay.includes(q)) return false;
       }
       return true;
@@ -296,7 +349,7 @@ export function ModelsLibrary({ onLoadModel }: Props) {
       default: out.sort(byName);
     }
     return out;
-  }, [entries, prefs]);
+  }, [entries, prefs, effTagsById]);
 
   // Group-by-category view: sections keyed by each model's FIRST tag (its
   // primary category); untagged models fall into "Other". Groups sort by size.
@@ -304,15 +357,15 @@ export function ModelsLibrary({ onLoadModel }: Props) {
     if (!prefs.group) return null;
     const map = new Map<string, { label: string; items: LibraryEntry[] }>();
     for (const e of visible) {
-      const first = e.tags[0]?.trim();
-      const key = first ? first.toLowerCase() : ' other';
+      const first = (effTagsById.get(e.id) ?? [])[0];
+      const key = first ? first.key : '__other';
       const g = map.get(key);
       if (g) g.items.push(e);
-      else map.set(key, { label: first || 'Other', items: [e] });
+      else map.set(key, { label: first ? first.label : 'Other', items: [e] });
     }
     return [...map.values()].sort((a, b) =>
       b.items.length - a.items.length || a.label.localeCompare(b.label, undefined, { sensitivity: 'base' }));
-  }, [visible, prefs.group]);
+  }, [visible, prefs.group, effTagsById]);
 
   const handleClick = async (entry: LibraryEntry) => {
     try {
@@ -370,17 +423,27 @@ export function ModelsLibrary({ onLoadModel }: Props) {
       {/* The meta block WRAPS so every tag stays visible — tags take layout
           priority over the description (which is clipped anyway and shown in
           full by the hover preview); the description viewport above absorbs
-          whatever height the wrapped tag rows leave. */}
+          whatever height the wrapped tag rows leave. The synthetic 3D / Agents
+          mode tags render as coloured BADGES; authored tags as grey chips. All
+          are clickable and toggle the SAME category filter, and highlight when
+          they're the active one — so a badge behaves exactly like a tag. */}
       <div className={styles.cardMeta}>
-        {(entry.dimension ?? '2d') === '3d' && <span className={styles.dimBadge}>3D</span>}
-        {entry.tags.map(tag => (
-          <span
-            key={tag}
-            className={`${styles.tag} ${prefs.tag === tag.trim().toLowerCase() ? styles.tagActive : ''}`}
-            title={`Filter by "${tag}"`}
-            onClick={e => { e.stopPropagation(); toggleTagFilter(tag); }}
-          >{tag}</span>
-        ))}
+        {(effTagsById.get(entry.id) ?? []).map(t => {
+          const active = prefs.tag === t.key;
+          const cls = t.kind === 'dim3d'
+            ? `${styles.dimBadge} ${active ? styles.dimBadgeActive : ''}`
+            : t.kind === 'agents'
+              ? `${styles.agentBadge} ${active ? styles.agentBadgeActive : ''}`
+              : `${styles.tag} ${active ? styles.tagActive : ''}`;
+          return (
+            <span
+              key={t.key}
+              className={cls}
+              title={`Filter by "${t.label}"`}
+              onClick={e => { e.stopPropagation(); toggleTagFilter(t.key); }}
+            >{t.label}</span>
+          );
+        })}
         <span className={styles.gridSize} title={entry.modified ? `Last updated ${fmtDate(entry.modified, true)}` : undefined}>
           {entry.gridSize.replace(/x/g, '×')}
           {entry.modified ? ` · ${fmtDate(entry.modified, false)}` : ''}
