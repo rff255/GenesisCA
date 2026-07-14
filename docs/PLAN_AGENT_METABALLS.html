@@ -1,0 +1,481 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>PLAN — Agent Metaballs (implicit-surface rendering for 3D agents)</title>
+<style>
+  :root {
+    --bg: #0c0d10; --panel: #16181d; --panel2: #1c1f26; --border: #2a2e37;
+    --text: #d8dbe0; --muted: #8b9098; --accent: #e8a13a; --accent-soft: #e8a13a22;
+    --green: #4caf50; --cyan: #4cc9f0; --pink: #e06c9f; --red: #f0564a;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 32px 20px 80px; background: var(--bg); color: var(--text);
+    font: 15px/1.65 -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  .wrap { max-width: 1120px; margin: 0 auto; }
+  h1 { font-size: 1.9rem; margin: 0 0 6px; letter-spacing: -0.01em; }
+  h1 .sub { color: var(--accent); }
+  h2 {
+    font-size: 1.15rem; margin: 44px 0 14px; padding-bottom: 8px;
+    border-bottom: 1px solid var(--border); color: var(--accent);
+  }
+  h3 { font-size: 0.95rem; margin: 22px 0 8px; color: var(--text); }
+  p { margin: 10px 0; }
+  .lede { color: var(--muted); margin-bottom: 20px; }
+  code {
+    background: var(--panel2); border: 1px solid var(--border); border-radius: 4px;
+    padding: 1px 5px; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 0.86em;
+  }
+  .card {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+    padding: 18px 20px; margin: 16px 0;
+  }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .grid3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 14px; }
+  @media (max-width: 860px) { .grid2, .grid3 { grid-template-columns: 1fr; } }
+  .cap { color: var(--muted); font-size: 0.82rem; margin-top: 8px; text-align: center; }
+  .tag {
+    display: inline-block; font-size: 0.7rem; font-weight: 700; letter-spacing: .04em;
+    text-transform: uppercase; padding: 2px 8px; border-radius: 20px; vertical-align: middle;
+  }
+  .tag.now { background: #3a3f4a; color: #b9bec7; }
+  .tag.new { background: var(--accent-soft); color: var(--accent); border: 1px solid #e8a13a55; }
+  svg { display: block; width: 100%; height: auto; }
+  ul { margin: 8px 0; padding-left: 20px; }
+  li { margin: 5px 0; }
+  .note {
+    border-left: 3px solid var(--accent); background: var(--accent-soft);
+    padding: 10px 14px; border-radius: 0 6px 6px 0; margin: 14px 0; font-size: 0.92rem;
+  }
+  .warn { border-left-color: var(--red); background: #f0564a18; }
+  table { width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 0.9rem; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th { color: var(--muted); font-weight: 600; font-size: 0.78rem; text-transform: uppercase; letter-spacing: .04em; }
+
+  /* --- mock simulator panel --- */
+  .panel-mock {
+    width: 260px; background: var(--panel2); border: 1px solid var(--border);
+    border-radius: 8px; padding: 10px 11px; font-size: 12px;
+  }
+  .panel-mock .ttl {
+    font-size: 10px; font-weight: 700; color: var(--muted); letter-spacing: .05em;
+    text-transform: uppercase; margin: 10px 0 6px; display: flex; justify-content: space-between;
+  }
+  .panel-mock .r { display: flex; align-items: center; gap: 6px; margin: 6px 0; }
+  .panel-mock .lbl { color: #999; font-size: 10.5px; width: 62px; flex: 0 0 auto; }
+  .panel-mock .cb {
+    width: 12px; height: 12px; border: 1px solid #5a6070; border-radius: 3px;
+    flex: 0 0 auto; background: var(--bg);
+  }
+  .panel-mock .cb.on { background: var(--accent); border-color: var(--accent); position: relative; }
+  .panel-mock .cb.on::after {
+    content: ""; position: absolute; left: 3px; top: 0px; width: 4px; height: 8px;
+    border: solid #14161a; border-width: 0 2px 2px 0; transform: rotate(43deg);
+  }
+  .track { flex: 1; height: 4px; border-radius: 3px; background: #343945; position: relative; }
+  .track .fill { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 3px; background: var(--accent); }
+  .track .knob {
+    position: absolute; top: -4px; width: 12px; height: 12px; border-radius: 50%;
+    background: var(--accent); transform: translateX(-50%);
+  }
+  .track.off { opacity: .38; }
+  .track.off .fill, .track.off .knob { background: #7a8090; }
+  .seg { display: flex; gap: 3px; flex: 1; }
+  .seg span {
+    flex: 1; text-align: center; padding: 2px 0; border-radius: 4px; font-size: 10px;
+    border: 1px solid #3a404c; color: #9aa0aa;
+  }
+  .seg span.on { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); font-weight: 600; }
+  .divider { height: 1px; background: var(--border); margin: 9px 0; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>Agent Metaballs <span class="sub">— implicit-surface rendering for 3D agents</span></h1>
+<p class="lede">
+  Illustrated companion to <code>docs/PLAN_AGENT_METABALLS.md</code>. Status: <strong>proposed</strong>.
+  Render the agent population as a Blender-style metaball isosurface so nearby agents <strong>fuse into
+  organic tissue</strong> instead of reading as a bag of marbles.
+</p>
+
+<!-- ==================================================================== -->
+<h2>1 · The problem, and the goal</h2>
+
+<div class="grid2">
+  <div class="card">
+    <h3><span class="tag now">Today</span> &nbsp;discrete sphere impostors</h3>
+    <svg viewBox="0 0 340 220" role="img" aria-label="Discrete spheres — a bag of marbles">
+      <defs>
+        <radialGradient id="sph" cx="35%" cy="30%">
+          <stop offset="0%" stop-color="#9fe0a6"/>
+          <stop offset="55%" stop-color="#4caf50"/>
+          <stop offset="100%" stop-color="#1e5c25"/>
+        </radialGradient>
+      </defs>
+      <rect width="340" height="220" fill="#0e1014"/>
+      <g>
+        <circle cx="120" cy="90"  r="30" fill="url(#sph)"/>
+        <circle cx="178" cy="96"  r="28" fill="url(#sph)"/>
+        <circle cx="150" cy="142" r="31" fill="url(#sph)"/>
+        <circle cx="206" cy="146" r="26" fill="url(#sph)"/>
+        <circle cx="96"  cy="140" r="25" fill="url(#sph)"/>
+        <circle cx="150" cy="52"  r="23" fill="url(#sph)"/>
+        <circle cx="216" cy="98"  r="21" fill="url(#sph)"/>
+      </g>
+      <text x="170" y="199" fill="#8b9098" font-size="11" text-anchor="middle">
+        each cell lit independently · hard silhouettes · reads as separate balls
+      </text>
+    </svg>
+  </div>
+
+  <div class="card">
+    <h3><span class="tag new">Proposed</span> &nbsp;metaball isosurface</h3>
+    <svg viewBox="0 0 340 220" role="img" aria-label="Fused metaball surface — organic tissue">
+      <defs>
+        <filter id="goo-hi" x="-30%" y="-30%" width="160%" height="160%">
+          <feGaussianBlur in="SourceGraphic" stdDeviation="11" result="b"/>
+          <feColorMatrix in="b" type="matrix"
+            values="1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 22 -9"/>
+        </filter>
+        <linearGradient id="tis" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stop-color="#8ad891"/>
+          <stop offset="100%" stop-color="#2f7a37"/>
+        </linearGradient>
+      </defs>
+      <rect width="340" height="220" fill="#0e1014"/>
+      <g filter="url(#goo-hi)">
+        <circle cx="120" cy="90"  r="30" fill="url(#tis)"/>
+        <circle cx="178" cy="96"  r="28" fill="url(#tis)"/>
+        <circle cx="150" cy="142" r="31" fill="url(#tis)"/>
+        <circle cx="206" cy="146" r="26" fill="url(#tis)"/>
+        <circle cx="96"  cy="140" r="25" fill="url(#tis)"/>
+        <circle cx="150" cy="52"  r="23" fill="url(#tis)"/>
+        <circle cx="216" cy="98"  r="21" fill="url(#tis)"/>
+      </g>
+      <text x="170" y="199" fill="#8b9098" font-size="11" text-anchor="middle">
+        one continuous surface · smooth necks between neighbours · reads as tissue
+      </text>
+    </svg>
+  </div>
+</div>
+<p class="cap">
+  The “after” panel is itself a real 2D metaball (an SVG blur + alpha-threshold filter) — the same
+  <em>blur&nbsp;→&nbsp;isovalue</em> idea the 3D implementation does properly with a scalar field.
+</p>
+
+<!-- ==================================================================== -->
+<h2>2 · The one knob that matters: Influence</h2>
+<p>
+  <strong>Influence</strong> scales each agent’s falloff radius as a multiple of its own radius
+  (<code>R&nbsp;=&nbsp;influence&nbsp;·&nbsp;r</code>). Turn it up and neighbours’ fields overlap further,
+  so the surface bridges the gaps — exactly Blender’s behaviour.
+</p>
+
+<div class="grid3">
+  <div class="card">
+    <svg viewBox="0 0 240 170" role="img" aria-label="Influence 1.0 — barely merging">
+      <defs>
+        <filter id="goo-lo" x="-30%" y="-30%" width="160%" height="160%">
+          <feGaussianBlur in="SourceGraphic" stdDeviation="2.5" result="b"/>
+          <feColorMatrix in="b" type="matrix" values="1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 26 -11"/>
+        </filter>
+      </defs>
+      <rect width="240" height="170" fill="#0e1014"/>
+      <g filter="url(#goo-lo)" fill="#4caf50">
+        <circle cx="80"  cy="62"  r="24"/><circle cx="134" cy="70"  r="22"/>
+        <circle cx="106" cy="110" r="25"/><circle cx="158" cy="112" r="20"/>
+        <circle cx="62"  cy="108" r="19"/>
+      </g>
+      <text x="120" y="152" fill="var(--accent)" font-size="12" text-anchor="middle" font-weight="700">Influence 1.0</text>
+      <text x="120" y="165" fill="#8b9098" font-size="10" text-anchor="middle">separate cells</text>
+    </svg>
+  </div>
+  <div class="card">
+    <svg viewBox="0 0 240 170" role="img" aria-label="Influence 1.6 — necks form">
+      <defs>
+        <filter id="goo-md" x="-30%" y="-30%" width="160%" height="160%">
+          <feGaussianBlur in="SourceGraphic" stdDeviation="6" result="b"/>
+          <feColorMatrix in="b" type="matrix" values="1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 24 -10"/>
+        </filter>
+      </defs>
+      <rect width="240" height="170" fill="#0e1014"/>
+      <g filter="url(#goo-md)" fill="#4caf50">
+        <circle cx="80"  cy="62"  r="24"/><circle cx="134" cy="70"  r="22"/>
+        <circle cx="106" cy="110" r="25"/><circle cx="158" cy="112" r="20"/>
+        <circle cx="62"  cy="108" r="19"/>
+      </g>
+      <text x="120" y="152" fill="var(--accent)" font-size="12" text-anchor="middle" font-weight="700">Influence 1.6</text>
+      <text x="120" y="165" fill="#8b9098" font-size="10" text-anchor="middle">necks — tissue (default)</text>
+    </svg>
+  </div>
+  <div class="card">
+    <svg viewBox="0 0 240 170" role="img" aria-label="Influence 2.5 — one organism">
+      <defs>
+        <filter id="goo-xl" x="-30%" y="-30%" width="160%" height="160%">
+          <feGaussianBlur in="SourceGraphic" stdDeviation="12" result="b"/>
+          <feColorMatrix in="b" type="matrix" values="1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 22 -9"/>
+        </filter>
+      </defs>
+      <rect width="240" height="170" fill="#0e1014"/>
+      <g filter="url(#goo-xl)" fill="#4caf50">
+        <circle cx="80"  cy="62"  r="24"/><circle cx="134" cy="70"  r="22"/>
+        <circle cx="106" cy="110" r="25"/><circle cx="158" cy="112" r="20"/>
+        <circle cx="62"  cy="108" r="19"/>
+      </g>
+      <text x="120" y="152" fill="var(--accent)" font-size="12" text-anchor="middle" font-weight="700">Influence 2.5</text>
+      <text x="120" y="165" fill="#8b9098" font-size="10" text-anchor="middle">a single organism</text>
+    </svg>
+  </div>
+</div>
+
+<!-- ==================================================================== -->
+<h2>3 · Why they fuse — the scalar field</h2>
+<p>
+  Each agent contributes a smooth falloff <code>w(d) = (1 − (d/R)²)³</code> that is 1 at its centre and
+  0 at its influence edge. The fields <strong>sum</strong>. The surface is wherever the sum crosses the
+  <strong>Threshold</strong>. Between two neighbours the two falloffs add up and stay <em>above</em> the
+  threshold — so the surface never closes, and a neck forms.
+</p>
+
+<div class="card">
+  <svg viewBox="0 0 700 300" role="img" aria-label="1D scalar field: two falloffs summing above the threshold">
+    <rect width="700" height="300" fill="#0e1014"/>
+    <g transform="translate(40,20)">
+      <!-- axes -->
+      <line x1="0" y1="160" x2="620" y2="160" stroke="#3a404c" stroke-width="1"/>
+      <line x1="0" y1="10" x2="0" y2="160" stroke="#3a404c" stroke-width="1"/>
+      <text x="-8" y="55" fill="#8b9098" font-size="10" text-anchor="end">1.0</text>
+      <text x="-8" y="164" fill="#8b9098" font-size="10" text-anchor="end">0</text>
+      <text x="-26" y="95" fill="#8b9098" font-size="10" text-anchor="middle" transform="rotate(-90 -26 95)">field f(p)</text>
+
+      <!-- interior (f >= T) shading -->
+      <path d="M 60,135 L 60,160 L 260,160 L 260,135
+               C 240,120 220,112 210,110 C 195,107 175,107 160,110
+               C 140,113 120,122 100,131 Z"
+            fill="#4caf5018"/>
+
+      <!-- individual falloffs (dashed) -->
+      <polyline fill="none" stroke="#4cc9f0" stroke-width="1.4" stroke-dasharray="4 3" opacity="0.75"
+        points="30,160 40,158.6 50,150.8 60,135.1 70,113.6 80,90.2 90,69.4 100,55.1 110,50 120,55.1 130,69.4 140,90.2 150,113.6 160,135.1 170,150.8 180,158.6 190,160"/>
+      <polyline fill="none" stroke="#e06c9f" stroke-width="1.4" stroke-dasharray="4 3" opacity="0.75"
+        points="130,160 140,158.6 150,150.8 160,135.1 170,113.6 180,90.2 190,69.4 200,55.1 210,50 220,55.1 230,69.4 240,90.2 250,113.6 260,135.1 270,150.8 280,158.6 290,160"/>
+
+      <!-- the SUM -->
+      <polyline fill="none" stroke="#4caf50" stroke-width="2.6"
+        points="30,160 40,158.6 50,150.8 60,135.1 70,113.6 80,90.2 90,69.4 100,55.1 110,50 120,55.1 130,69.4 140,88.8 150,104.4 160,110.2 170,104.4 180,88.8 190,69.4 200,55.1 210,50 220,55.1 230,69.4 240,90.2 250,113.6 260,135.1 270,150.8 280,158.6 290,160"/>
+
+      <!-- threshold -->
+      <line x1="0" y1="135.1" x2="620" y2="135.1" stroke="var(--accent)" stroke-width="1.6" stroke-dasharray="6 4"/>
+      <text x="624" y="139" fill="var(--accent)" font-size="11" font-weight="700">Threshold T</text>
+
+      <!-- agent centres -->
+      <circle cx="110" cy="160" r="3.5" fill="#4cc9f0"/>
+      <circle cx="210" cy="160" r="3.5" fill="#e06c9f"/>
+      <text x="110" y="178" fill="#4cc9f0" font-size="10" text-anchor="middle">agent A</text>
+      <text x="210" y="178" fill="#e06c9f" font-size="10" text-anchor="middle">agent B</text>
+
+      <!-- surface crossings -->
+      <circle cx="60" cy="135.1" r="4" fill="var(--accent)"/>
+      <circle cx="260" cy="135.1" r="4" fill="var(--accent)"/>
+      <text x="60" y="200" fill="var(--accent)" font-size="10" text-anchor="middle">surface</text>
+      <text x="260" y="200" fill="var(--accent)" font-size="10" text-anchor="middle">surface</text>
+
+      <!-- the neck callout -->
+      <line x1="160" y1="110" x2="160" y2="135.1" stroke="#8b9098" stroke-width="1"/>
+      <text x="330" y="112" fill="#d8dbe0" font-size="11.5">
+        the SUM stays above T in the gap → the surface bridges → <tspan fill="var(--accent)" font-weight="700">a neck forms</tspan>
+      </text>
+      <text x="330" y="130" fill="#8b9098" font-size="10.5">
+        (either falloff <tspan font-style="italic">alone</tspan> would dip below T here → two separate balls)
+      </text>
+      <text x="330" y="212" fill="#8b9098" font-size="10.5">
+        Lower T ⇒ fatter, more fused. Higher T ⇒ thinner, more separate.
+      </text>
+    </g>
+  </svg>
+  <p class="cap">Solid green = the summed field. Dashed = each agent alone. Amber dashed = the threshold isovalue.</p>
+</div>
+
+<div class="note">
+  <strong>Good default:</strong> pick <code>T = (1 − 1/influence²)³</code> so an <em>isolated</em> agent’s
+  metaball renders at <strong>exactly its own sphere radius</strong> — switching Metaballs on never resizes
+  lone agents, and all the visual change comes from genuine fusion. (Influence 1.6 → T ≈ 0.226.)
+</div>
+
+<!-- ==================================================================== -->
+<h2>4 · How it’s rendered — bake a field, then raymarch it</h2>
+<p>
+  Blender polygonises with marching cubes. We can’t: WebGL2 has no compute or geometry shaders, and
+  re-meshing every simulation step in JS is far too slow. Instead we <strong>bake the scalar field into a
+  3D texture</strong> (cheap — each agent only touches a small neighbourhood) and <strong>raymarch it</strong>
+  in a fragment shader (cost is per-pixel, <em>independent of agent count</em>).
+</p>
+
+<div class="card">
+  <svg viewBox="0 0 1060 220" role="img" aria-label="Pipeline: snapshot to bake to 3D texture to raymarch to shaded surface">
+    <rect width="1060" height="220" fill="#0e1014"/>
+    <defs>
+      <marker id="ar" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto">
+        <path d="M0,0 L9,4.5 L0,9 Z" fill="#5a6070"/>
+      </marker>
+      <style>
+        .bx { fill:#1c1f26; stroke:#2a2e37; }
+        .bt { fill:#d8dbe0; font-size:12.5px; font-weight:700; }
+        .bs { fill:#8b9098; font-size:10.5px; }
+        .cpu { fill:#4cc9f0; font-size:9.5px; font-weight:700; letter-spacing:.05em; }
+        .gpu { fill:var(--accent); font-size:9.5px; font-weight:700; letter-spacing:.05em; }
+      </style>
+    </defs>
+
+    <!-- 1 snapshot -->
+    <rect class="bx" x="14" y="52" width="176" height="104" rx="8"/>
+    <text class="cpu" x="26" y="72">CPU</text>
+    <text class="bt" x="26" y="94">Agent snapshot</text>
+    <text class="bs" x="26" y="112">x/y/z · radius · colour</text>
+    <text class="bs" x="26" y="127">alive · (sprites excluded)</text>
+    <text class="bs" x="26" y="145">already shipped each step</text>
+    <line x1="192" y1="104" x2="228" y2="104" stroke="#5a6070" stroke-width="1.6" marker-end="url(#ar)"/>
+
+    <!-- 2 bake -->
+    <rect class="bx" x="230" y="52" width="186" height="104" rx="8"/>
+    <text class="cpu" x="242" y="72">CPU</text>
+    <text class="bt" x="242" y="94">Splat the falloffs</text>
+    <text class="bs" x="242" y="112">w = (1 − (d/R)²)³</text>
+    <text class="bs" x="242" y="127">accumulate density + colour</text>
+    <text class="bs" x="242" y="145">only the agents’ bbox</text>
+    <line x1="418" y1="104" x2="454" y2="104" stroke="#5a6070" stroke-width="1.6" marker-end="url(#ar)"/>
+
+    <!-- 3 texture -->
+    <rect class="bx" x="456" y="52" width="176" height="104" rx="8"/>
+    <text class="gpu" x="468" y="72">GPU</text>
+    <text class="bt" x="468" y="94">3D texture</text>
+    <text class="bs" x="468" y="112">RGBA8 · LINEAR</text>
+    <text class="bs" x="468" y="127">A = density, RGB = colour</text>
+    <text class="bs" x="468" y="145">re-baked only on change</text>
+    <line x1="634" y1="104" x2="670" y2="104" stroke="#5a6070" stroke-width="1.6" marker-end="url(#ar)"/>
+
+    <!-- 4 raymarch -->
+    <rect class="bx" x="672" y="52" width="186" height="104" rx="8"/>
+    <text class="gpu" x="684" y="72">GPU</text>
+    <text class="bt" x="684" y="94">Raymarch</text>
+    <text class="bs" x="684" y="112">ray ∩ box → step → bisect</text>
+    <text class="bs" x="684" y="127">normal = ∇f · gl_FragDepth</text>
+    <text class="bs" x="684" y="145">cost ∝ pixels, not agents</text>
+    <line x1="860" y1="104" x2="896" y2="104" stroke="#5a6070" stroke-width="1.6" marker-end="url(#ar)"/>
+
+    <!-- 5 shade -->
+    <rect class="bx" x="898" y="52" width="148" height="104" rx="8" stroke="var(--accent)"/>
+    <text class="gpu" x="910" y="72">GPU</text>
+    <text class="bt" x="910" y="94">Shade</text>
+    <text class="bs" x="910" y="112">existing lighting +</text>
+    <text class="bs" x="910" y="127">cast shadows (free)</text>
+    <text class="bs" x="910" y="145">+ specular</text>
+
+    <text x="530" y="196" fill="#8b9098" font-size="11" text-anchor="middle">
+      Writes <tspan fill="#d8dbe0">gl_FragDepth</tspan> exactly like the sphere impostors do today → depth-interleaves with voxels, bonds and the clip plane with no pipeline restructure.
+    </text>
+  </svg>
+</div>
+
+<!-- ==================================================================== -->
+<h2>5 · The panel</h2>
+<p>
+  A new <strong>Agents</strong> block in the existing <em>3D&nbsp;View</em> panel (shown only for agent
+  models), sitting under the Lighting block that already carries Shadows / Occlusion.
+</p>
+
+<div class="grid2">
+  <div class="card">
+    <h3><span class="tag now">Today</span></h3>
+    <div class="panel-mock">
+      <div class="ttl"><span>Lighting</span><span style="color:#7a8090">Reset</span></div>
+      <div class="r"><span class="lbl">Ambient</span><div class="track"><div class="fill" style="width:45%"></div><div class="knob" style="left:45%"></div></div></div>
+      <div class="r"><span class="lbl">Light</span><div class="track"><div class="fill" style="width:37%"></div><div class="knob" style="left:37%"></div></div></div>
+      <div class="r"><span class="lbl">Shine</span><div class="track"><div class="fill" style="width:0%"></div><div class="knob" style="left:0%"></div></div></div>
+      <div class="r"><div class="cb"></div><span class="lbl">Shadows</span><div class="track off"><div class="fill" style="width:60%"></div><div class="knob" style="left:60%"></div></div></div>
+      <div class="r"><div class="cb"></div><span class="lbl">Occlusion</span><div class="track off"><div class="fill" style="width:70%"></div><div class="knob" style="left:70%"></div></div></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h3><span class="tag new">Proposed</span></h3>
+    <div class="panel-mock">
+      <div class="ttl"><span>Lighting</span><span style="color:#7a8090">Reset</span></div>
+      <div class="r"><span class="lbl">Ambient</span><div class="track"><div class="fill" style="width:45%"></div><div class="knob" style="left:45%"></div></div></div>
+      <div class="r"><span class="lbl">Light</span><div class="track"><div class="fill" style="width:37%"></div><div class="knob" style="left:37%"></div></div></div>
+      <div class="r"><span class="lbl">Shine</span><div class="track"><div class="fill" style="width:0%"></div><div class="knob" style="left:0%"></div></div></div>
+      <div class="r"><div class="cb on"></div><span class="lbl">Shadows</span><div class="track"><div class="fill" style="width:60%"></div><div class="knob" style="left:60%"></div></div></div>
+      <div class="r"><div class="cb"></div><span class="lbl">Occlusion</span><div class="track off"><div class="fill" style="width:70%"></div><div class="knob" style="left:70%"></div></div></div>
+
+      <div class="divider"></div>
+      <div class="ttl" style="color:var(--accent)"><span>Agents</span></div>
+      <div class="r"><div class="cb on"></div><span class="lbl">Metaballs</span></div>
+      <div class="r"><span class="lbl">Influence</span><div class="track"><div class="fill" style="width:30%"></div><div class="knob" style="left:30%"></div></div></div>
+      <div class="r"><span class="lbl">Threshold</span><div class="track"><div class="fill" style="width:25%"></div><div class="knob" style="left:25%"></div></div></div>
+      <div class="r"><span class="lbl">Resolution</span><div class="seg"><span>1×</span><span class="on">2×</span><span>4×</span></div></div>
+    </div>
+  </div>
+</div>
+<p class="cap">
+  Sliders dim when <em>Metaballs</em> is off — the same convention as the Shadows / Occlusion rows.
+  <strong>Resolution</strong> is the perf/quality knob (Blender’s <em>Resolution</em>).
+</p>
+
+<div class="note">
+  <strong>Per-element Radius is already there.</strong> Blender’s per-element <em>Radius</em> maps onto each
+  agent’s own <code>radius</code> — a real, graph-authorable agent property (Set Target Radius / the Body
+  capability). So a cell that <em>grows</em> fuses more, straight from the rule graph. Only Ball elements are needed.
+</div>
+
+<!-- ==================================================================== -->
+<h2>6 · What it must not break</h2>
+<table>
+  <tr><th>Feature</th><th>Handling</th></tr>
+  <tr><td><strong>Picking / brushing / inspect</strong></td>
+      <td>Keeps using the existing <em>sphere</em> pick FBO. Agents stay spheres <em>logically</em> — clicking the blob still selects the nearest agent. <code>uploadAgents</code> must keep running.</td></tr>
+  <tr><td><strong>Cast shadows</strong></td>
+      <td>The shadow pass already draws <em>sphere</em> casters, and the union of spheres closely approximates the blob → <strong>keep as-is</strong>. The metaball shader just calls <code>shadowFactor()</code> and <em>receives</em> shadows.</td></tr>
+  <tr><td><strong>Sprite agents</strong></td>
+      <td>Flagged by a <strong>negative radius</strong>. Excluded from the field; still drawn as billboards on top.</td></tr>
+  <tr><td><strong>Bonds</strong></td>
+      <td>Drawn first; end up inside the blob and depth-hidden. Show-bonds toggle still governs.</td></tr>
+  <tr><td><strong>Clip plane</strong></td>
+      <td>Clipped space is treated as density 0 → the blob is cut open (a nice cutaway of the tissue interior).</td></tr>
+  <tr><td><strong>Occupancy AO · voxels · 2D · compilers · worker · schema</strong></td>
+      <td><strong>Zero impact.</strong> This is a <code>gl3d.ts</code> render mode plus a panel.</td></tr>
+</table>
+
+<div class="note warn">
+  <strong>Top gotchas (all learned the hard way in this renderer):</strong>
+  <ul>
+    <li>The Z-up remap must match <em>exactly</em>: <code>world = (col − hx, hy − row, hz − layer)</code> — row and layer are <strong>negated</strong>. Map all 8 AABB corners and take a component-wise min/max.</li>
+    <li><code>gl_FragDepth</code> must use the <em>identical</em> formula to <code>SPHERE_FS</code>, or the blob z-fights the voxels.</li>
+    <li><code>precision highp sampler3D;</code> is <strong>required</strong> in GLSL ES 3.00 — the same “No precision specified” error that failed the first <code>sampler2DShadow</code> build.</li>
+    <li>Texture units 0 (sprite atlas) and 1 (shadow map) are taken → use <strong>unit 2</strong>, and bind it <em>after</em> <code>setLightUniforms()</code> (which resets <code>activeTexture</code> to unit 0).</li>
+    <li>Changing Influence/Resolution must <strong>invalidate the baked field</strong> — otherwise the slider does nothing until the next sim step. (Same trap the occupancy AO’s re-upload trigger exists to avoid.)</li>
+  </ul>
+</div>
+
+<!-- ==================================================================== -->
+<h2>7 · Delivery</h2>
+<table>
+  <tr><th>PR</th><th>Content</th></tr>
+  <tr><td><strong>1 — renderer core</strong></td><td>Type + default, 3D texture, CPU bake, the two shaders, <code>renderMetaballs()</code> wired into <code>render()</code>. Hardcoded params. Verify a blob renders and that raising Influence fuses neighbours.</td></tr>
+  <tr><td><strong>2 — integration</strong></td><td>Clip plane, shadows, specular, <code>agentsInFront</code>, sprite exclusion, pick unaffected, edge cases, <code>dispose()</code>.</td></tr>
+  <tr><td><strong>3 — UI + persistence</strong></td><td>Toggle + Influence + Threshold + Resolution; <code>sanitizeMetaballs3d</code>; the re-bake trigger.</td></tr>
+  <tr><td><strong>4 — perf</strong></td><td>Bbox-restricted field, re-bake gating, voxel cap, torus fallback. Measure on 3D Tissue at 1500+ agents.</td></tr>
+  <tr><td><strong>5 — polish + docs</strong></td><td>Field-derived AO, capped clip cut, optional translucency. CLAUDE.md · HelpView · README.</td></tr>
+</table>
+
+<p class="lede" style="margin-top:28px">
+  Full technical detail — the exact symbols to touch in <code>gl3d.ts</code> and <code>SimulatorView.tsx</code>,
+  the complete fragment-shader listing, the bake algorithm, open decisions and the <code>readPixels</code>
+  verification recipe — is in <code>docs/PLAN_AGENT_METABALLS.md</code>.
+</p>
+
+</div>
+</body>
+</html>
