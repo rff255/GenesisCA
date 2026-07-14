@@ -11,7 +11,7 @@ import { resolveKeyLabels, resolveValueTagOptions, buildLookupTablePayload, isMu
 import { NeighborIndexValuePicker } from '../modeler/panels/NeighborIndexDefaultEditor';
 import { LookupTableEditor } from '../modeler/panels/LookupTableEditor';
 import { compileGraphWebGPU } from '../modeler/vpl/compiler/webgpu/compile';
-import { Gl3DRenderer, panCamera, cameraBasis, DEFAULT_LIGHT3D, DEFAULT_METABALLS3D, metaballAutoThreshold, DEFAULT_AUTOZOOM3D, defaultCamera3d, autoZoomBaseFrom, MIN_CAM_DIST, MAX_CAM_DIST } from './render/gl3d';
+import { Gl3DRenderer, panCamera, cameraBasis, DEFAULT_LIGHT3D, DEFAULT_METABALLS3D, metaballAutoThreshold, DEFAULT_AUTOZOOM3D, defaultCamera3d, MIN_CAM_DIST, MAX_CAM_DIST } from './render/gl3d';
 import type { SpriteAtlasInput, Light3D, Metaballs3D, AutoZoom3D } from './render/gl3d';
 import { LightBallWidget } from './LightBallWidget';
 import { agentTargetOf, resolveMaxBonds } from '../model/centerBased';
@@ -1515,13 +1515,9 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   const plane3dEnabledRef = useRef(false);
   // Auto-orbit (rAF loop increments yaw).
   const orbit3dRef = useRef<{ on: boolean; speed: number }>({ on: false, speed: 0.4 });
-  // Auto-zoom — the dolly sibling of auto-orbit: the SAME rAF loop breathes the
-  // camera distance around `zoomBaseRef` (see the loop below). `zoomBaseRef` is the
-  // un-oscillated distance; it is re-derived whenever the user zooms/resets the view
-  // while auto-zoom runs, so a manual wheel-zoom sticks instead of being stomped.
+  // Auto-zoom — the dolly sibling of auto-orbit: the SAME rAF loop dollies the camera
+  // distance in ONE direction (see the loop below), clamped at the distance limits.
   const zoom3dRef = useRef<AutoZoom3D>({ ...DEFAULT_AUTOZOOM3D });
-  const zoomPhaseRef = useRef(0);
-  const zoomBaseRef = useRef(defaultCamera3d().dist);
   // 3D pick → inspector. Set below `commitInspectPopover` (which is declared
   // later in the component); the pointer effect calls it via this ref.
   const openInspect3dRef = useRef<((idx: number, x: number, y: number) => void) | null>(null);
@@ -4752,11 +4748,10 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       if (e.ctrlKey || e.metaKey) return;
       e.stopPropagation();
       const cam = cam3dRef.current;
+      // A wheel zoom composes with a running auto-zoom for free — the dolly SCALES the
+      // current distance each frame rather than setting it, so it just carries on from
+      // wherever the user lands.
       cam.dist = Math.max(MIN_CAM_DIST, Math.min(MAX_CAM_DIST, cam.dist * (e.deltaY > 0 ? 1.1 : 0.9)));
-      // Auto-zoom running? Re-derive its BASE from the distance the user just chose,
-      // at the current phase — otherwise the next animation frame would overwrite the
-      // wheel-zoom and the camera would feel stuck.
-      if (zoom3dRef.current.on) zoomBaseRef.current = autoZoomBaseFrom(cam.dist, zoomPhaseRef.current, zoom3dRef.current.amount);
       draw();
     };
     const onCtx = (e: MouseEvent) => e.preventDefault();  // RMB shouldn't pop the page menu
@@ -4840,14 +4835,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     draw();
   }, [plane3d, draw]);
   useEffect(() => { orbit3dRef.current = orbit3d; }, [orbit3d]);
-  // Auto-zoom: mirror into the ref, and on the OFF→ON edge capture the current
-  // distance as the oscillation base + restart the phase at 0 (so it breathes out
-  // from where the user left the camera, with no jump on the first frame).
-  useEffect(() => {
-    const wasOn = zoom3dRef.current.on;
-    zoom3dRef.current = zoom3d;
-    if (zoom3d.on && !wasOn) { zoomBaseRef.current = cam3dRef.current.dist; zoomPhaseRef.current = 0; }
-  }, [zoom3d]);
+  useEffect(() => { zoom3dRef.current = zoom3d; }, [zoom3d]);
   useEffect(() => {
     if (bg3d.enabled) {
       const m = /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(bg3d.color.trim());
@@ -4892,12 +4880,16 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   }, [simWidth, simHeight, simDepth, is3D]);
 
   // 3D Grid CA: the camera-animation loop — auto-orbit (spins yaw) and auto-zoom
-  // (breathes `dist` around `zoomBaseRef`). ONE rAF for both: two independent loops
-  // would each call draw() every frame and double the redraw rate when both are on.
-  // Reads the params through refs so a slider drag doesn't restart the loop (and,
-  // for auto-zoom, doesn't reset the phase); the effect only re-runs when either is
-  // toggled. `last` resets to 0 while hidden so the first frame back can't apply a
-  // huge dt (a tab-away would otherwise fling the camera).
+  // (dollies `dist` one way, clamped at the distance limits so it stops instead of
+  // zooming forever). ONE rAF for both: two independent loops would each call draw()
+  // every frame and double the redraw rate when both are on. Reads the params through
+  // refs so a slider drag doesn't restart the loop; the effect only re-runs when
+  // either is toggled. `last` resets to 0 while hidden so the first frame back can't
+  // apply a huge dt (a tab-away would otherwise fling the camera).
+  //
+  // The dolly is MULTIPLICATIVE (`*= exp(speed*dt)`) so it reads as a constant-rate
+  // zoom at every distance; a manual wheel-zoom mid-flight just composes with it
+  // (the loop scales whatever distance the camera is at — it never overrides it).
   useEffect(() => {
     if (!is3D || (!orbit3d.on && !zoom3d.on)) return;
     let raf = 0; let last = 0;
@@ -4907,10 +4899,8 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       const cam = cam3dRef.current;
       if (orbit3dRef.current.on) cam.yaw += orbit3dRef.current.speed * dt;
       const z = zoom3dRef.current;
-      if (z.on) {
-        zoomPhaseRef.current += z.speed * dt * Math.PI * 2;   // speed = cycles/second
-        const d = zoomBaseRef.current * (1 + z.amount * Math.sin(zoomPhaseRef.current));
-        cam.dist = Math.max(MIN_CAM_DIST, Math.min(MAX_CAM_DIST, d));
+      if (z.on && z.speed !== 0) {
+        cam.dist = Math.max(MIN_CAM_DIST, Math.min(MAX_CAM_DIST, cam.dist * Math.exp(z.speed * dt)));
       }
       draw();
       raf = requestAnimationFrame(tick);
@@ -8278,11 +8268,6 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
                     // `window.__sim3dCamera` hook among them).
                     const d = defaultCamera3d(), cam = cam3dRef.current;
                     cam.yaw = d.yaw; cam.pitch = d.pitch; cam.dist = d.dist; cam.target = d.target;
-                    // Re-baseline a running auto-zoom on the restored distance (and
-                    // restart its phase) so the reset sticks instead of being
-                    // overwritten by the next animation frame.
-                    zoomBaseRef.current = cam.dist;
-                    zoomPhaseRef.current = 0;
                     draw();
                   }}
                   title="Reset the orbit camera">Reset view</button>
@@ -8306,28 +8291,20 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
                   )}
                 </label>
 
-                {/* Auto-zoom — the dolly sibling of auto-orbit. A one-way dolly would
-                    fly into / away from the volume, so it BREATHES: the distance
-                    oscillates around whatever the camera was at when it was switched
-                    on (Speed = cycles/s, Range = ± fraction of that base). A wheel
-                    zoom or Reset view while it runs re-baselines it, so manual zooming
-                    still works. Pairs with auto-orbit for a hands-off fly-around. */}
-                <label style={row} title="Slowly dolly the camera in and out (breathes around the current distance)">
+                {/* Auto-zoom — the dolly sibling of auto-orbit, same shape: one slider
+                    spanning negative→positive, so the camera pulls OUT or pushes IN at
+                    the chosen rate; 0 = stopped. It stops at the distance limit rather
+                    than zooming forever. Pair it with auto-orbit for an unattended
+                    "start close, orbit and slowly pull out as the model grows" recording. */}
+                <label style={row} title="Slowly dolly the camera out (right of centre) or in (left of centre); stops at the zoom limit">
                   <input type="checkbox" checked={zoom3d.on} onChange={e => setZoom3d(z => ({ ...z, on: e.target.checked }))} />
                   Auto-zoom
-                </label>
-                {zoom3d.on && (<>
-                  <label style={{ ...row, gap: 4 }} title="Zoom speed — full in-and-out cycles per second">
-                    <span style={{ fontSize: '0.6rem', color: '#999', width: 44, flex: '0 0 auto' }}>Speed</span>
-                    <input type="range" min={0.02} max={1} step={0.01} value={zoom3d.speed} style={{ flex: 1, minWidth: 0 }}
+                  {zoom3d.on && (
+                    <input type="range" min={-1} max={1} step={0.02} value={zoom3d.speed} style={{ flex: 1 }}
+                      title="Zoom speed (negative = zoom in, positive = zoom out; 0 = stopped)"
                       onChange={e => setZoom3d(z => ({ ...z, speed: Number(e.target.value) }))} />
-                  </label>
-                  <label style={{ ...row, gap: 4 }} title="Zoom range — how far in/out it travels, as a fraction of the base distance">
-                    <span style={{ fontSize: '0.6rem', color: '#999', width: 44, flex: '0 0 auto' }}>Range</span>
-                    <input type="range" min={0.05} max={0.9} step={0.05} value={zoom3d.amount} style={{ flex: 1, minWidth: 0 }}
-                      onChange={e => setZoom3d(z => ({ ...z, amount: Number(e.target.value) }))} />
-                  </label>
-                </>)}
+                  )}
+                </label>
 
                 {/* Clip interval (slab) — two cuts; the band [From, To] stays visible (req 6). */}
                 <label style={row}>

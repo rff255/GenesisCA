@@ -1144,13 +1144,13 @@ export function HelpView() {
             the <code>(0,0,0)</code> origin corner and grow toward +column / +row / +depth),
             <strong>Auto-orbit</strong> (+ a speed slider that spans negative&rarr;positive, so the
             camera can spin either way; 0 = stopped),
-            <strong>Auto-zoom</strong> (the dolly companion to auto-orbit: the camera
-            slowly <em>breathes</em> in and out around wherever it currently sits &mdash;{' '}
-            <strong>Speed</strong> sets how many full in-and-out cycles per second,{' '}
-            <strong>Range</strong> how far it travels. Turn both on for a hands-off fly-around.
-            Zooming with the wheel, or hitting Reset view, re-centres the breathing on the
-            distance you chose, so you stay in control; switching it off leaves the camera
-            exactly where it is), a
+            <strong>Auto-zoom</strong> (the dolly companion to auto-orbit, and it works the
+            same way: one slider spanning negative&rarr;positive, so the camera slowly pulls
+            <em> out</em> (right of centre) or pushes <em>in</em> (left of centre); 0 = stopped.
+            It stops at the zoom limit rather than travelling forever. Turn both on and start
+            the camera in close for an unattended &ldquo;orbit and slowly pull out as the model
+            grows&rdquo; recording; you can still wheel-zoom mid-flight and it simply carries on
+            from there, and switching it off leaves the camera exactly where it is), a
             <strong>Clip interval</strong> (axis X/Y/Z or the camera view, with <em>two</em> handles
             &mdash; From and To &mdash; that cut from both sides, so you control exactly how thick a
             slab of the volume stays visible; clips voxels, agent spheres <em>and</em> bonds), an
