@@ -1154,6 +1154,7 @@ export function HelpView() {
             the CA-grid voxels regardless of depth, since the grid usually surrounds them; uncheck
             for normal depth occlusion between the two layers when the grid field is sparse; the
             axes / grid / bounds / brush plane always occlude normally either way), a
+            <strong>Metaballs</strong> block (agent models — see below), a
             <strong>Background</strong> colour (off = transparent), a
             <strong>Lighting</strong> block, and
             <strong>Reset view</strong>. The left panel's <strong>Grid Dimensions</strong> gains
@@ -1176,6 +1177,23 @@ export function HelpView() {
             shadows (voxels and agents shadow each other) and <strong>Occlusion</strong> darkens
             the crevices of a packed voxel volume so it reads as one solid form. Each has a
             strength slider; both are off by default.
+          </p>
+          <p className={styles.p}>
+            <strong>Metaballs</strong> (agent models, off by default) render the agent population
+            as one <em>fused implicit surface</em> instead of discrete spheres &mdash; each agent
+            contributes a field over <strong>Influence</strong> &times; its own radius, the fields
+            sum, and the surface sits at the <strong>Threshold</strong> isovalue, so agents whose
+            fields overlap merge into one organic blob (Blender-metaball semantics &mdash; the
+            natural look for tissues and morphogenesis; agent colours blend smoothly across the
+            fused surface). At the auto threshold (the <strong>&#10226;</strong> button) a lone
+            agent renders at exactly its own radius; lower fattens/fuses, higher thins/separates.
+            <strong> Detail</strong> sets the field resolution (voxels per cell). Metaballs are a
+            pure <em>render</em> mode &mdash; picking, brushing, inspecting and the simulation
+            itself still target the underlying agents, sprite-agents stay crisp billboards on
+            top, and the blob receives cast shadows and respects the clip interval. The same
+            preference also applies in <strong>2D</strong>, where nearby agent discs fuse via an
+            approximate &ldquo;gooey&rdquo; blur-and-threshold filter (the 2D controls live in
+            the right panel's agent section).
           </p>
           <p className={styles.p}>
             <strong>Painting in 3D</strong> uses an <strong>interaction plane</strong>: enable
