@@ -7951,11 +7951,15 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
                   Alpha blend
                 </label>
                 {/* Cell gaps — the 3D analogue of the 2D gridlines toggle. Off =
-                    adjacent cells render flush (a seamless solid volume). */}
-                <label style={row} title="Leave a small gap between adjacent cells (like 2D gridlines). Uncheck to render cells flush against each other as one solid volume.">
-                  <input type="checkbox" checked={cellGaps3d} onChange={e => setCellGaps3d(e.target.checked)} />
-                  Cell gaps
-                </label>
+                    adjacent cells render flush (a seamless solid volume). Only
+                    affects the CA-grid voxels, so it's hidden for an agents-only
+                    model (no grid to render). */}
+                {gridCellsOn && (
+                  <label style={row} title="Leave a small gap between adjacent cells (like 2D gridlines). Uncheck to render cells flush against each other as one solid volume.">
+                    <input type="checkbox" checked={cellGaps3d} onChange={e => setCellGaps3d(e.target.checked)} />
+                    Cell gaps
+                  </label>
+                )}
                 {/* Draw agents in front (agent models only) */}
                 {isAgentModel && (
                   <label style={row} title="Draw agents over the CA-grid voxels regardless of depth (the grid usually surrounds them). Uncheck for normal depth occlusion between the two layers — useful when the grid field is sparse. Axes / grid / bounds / brush plane always occlude normally.">
