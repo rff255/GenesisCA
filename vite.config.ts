@@ -64,6 +64,10 @@ function modelsLibraryPlugin(): Plugin {
         // 3D iff the model USES the depth axis (mirrors is3dModel in the app —
         // a 1-layer "3d" file runs the 2D fast path, so it lists as 2D here too).
         const is3d = props.dimension === '3d' && (props.gridDepth ?? 1) > 1;
+        // Topology layers (mirrors CAModel.topologyMode defaults: absent →
+        // gridCells on, agents off). A model can have BOTH — the library's
+        // CA Grid / Agents quick filters are independent toggles, not a radio.
+        const topo = model.topologyMode || {};
         return {
           id: file.replace('.gcaproj', ''),
           name: props.name || file,
@@ -74,6 +78,8 @@ function modelsLibraryPlugin(): Plugin {
           tags: props.tags || [],
           gridSize: `${props.gridWidth || '?'}x${props.gridHeight || '?'}${is3d ? `x${props.gridDepth}` : ''}`,
           dimension: is3d ? '3d' : '2d',
+          hasGrid: topo.gridCells !== false,
+          hasAgents: topo.agents === true,
           // File mtime (epoch ms) — powers the library's Newest/Oldest sort +
           // the card date stamp. The .gcaproj files are committed, so this is
           // the last-edited date of the shipped model.

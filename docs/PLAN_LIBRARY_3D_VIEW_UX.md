@@ -23,6 +23,11 @@ Additive fields per entry (index.json is regenerated on every dev start / build)
 - **Category select** — one `<select>` of all tags (case-insensitive canonical,
   with counts, sorted by frequency); clicking a tag chip on a card also sets it.
 - **2D / 3D segmented filter** — All · 2D · 3D.
+- **CA Grid / Agents topology filters** *(feedback round)* — independent
+  TOGGLES, not a radio (a model can run both layers at once): each toggle
+  requires its layer; both on = models coupling a grid with agents. Fed by
+  plugin-emitted `hasGrid`/`hasAgents` (from `topologyMode`; absent → grid
+  on / agents off).
 - **Sort select** — Name A→Z (default, the historical order) · Name Z→A ·
   Newest · Oldest · Largest grid.
 - **Group by category** checkbox — sections keyed by each model's FIRST tag
@@ -34,16 +39,21 @@ Additive fields per entry (index.json is regenerated on every dev start / build)
 - Cards get a **fixed height** (flex column): name (1-line ellipsis), authors
   (1-line each), description (flex-1, clipped), meta row pinned to the bottom
   (tags nowrap-clipped, grid size + date right-aligned).
+- *(Feedback round)* height 172 → **224 px** (+30%), grid min column 280 →
+  **308 px** (+10%), internal padding/margins cut roughly in half, and the
+  title recoloured to the **accent** so it stands out.
 
 ### Hover-scroll description
 - When the clipped description OVERFLOWS and the pointer rests on the card for
   ~0.8 s, the text auto-scrolls slowly to the end, holds, scrolls back, and
   loops while hovered (rAF, direct style writes — no React re-render). Leaving
   the card resets it. Cards whose description fits do nothing.
-- The hover **preview popover becomes thumbnail-only** and moves BESIDE the
-  card (right, flips left near the viewport edge) so it no longer covers the
-  scrolling description. Models without a thumbnail get no popover (the card
-  itself now reveals the full text).
+- *(Feedback round)* The hover **preview popover is TWO same-size 320×240
+  panes side by side** — [title + full description | thumbnail] — centered
+  horizontally on the card and placed just ABOVE it (flips below at the
+  viewport top). The description pane follows the SAME auto-scroll rule when
+  too long for the pane (shared `useAutoScrollOverflow` hook). No thumbnail →
+  the description pane alone; neither thumbnail nor description → no popover.
 
 ---
 
