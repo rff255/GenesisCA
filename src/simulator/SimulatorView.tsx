@@ -238,6 +238,82 @@ export const MANUAL_BRUSH_MAPPING_ID = '__manual__';
 const EMPTY_HOVER_CELLS: ReadonlyArray<{ layer: number; row: number; col: number }> = [];
 const EMPTY_AGENT_RINGS: ReadonlyArray<{ x: number; y: number; z: number; radius: number }> = [];
 
+/** The agent-brush modes, in cycle order (Alt+scroll steps through them). Shared
+ *  by the mode-button row and the wheel-cycle handlers so they can't drift. */
+const AGENT_BRUSH_MODES: ReadonlyArray<'add' | 'remove' | 'move' | 'edit' | 'glue' | 'cut' | 'bond'> =
+  ['add', 'remove', 'move', 'edit', 'glue', 'cut', 'bond'];
+
+/** Build a bounded wireframe OUTLINE of a 3D brush footprint at a plane cell, as
+ *  cell-space line segments (a flat Float32Array of [col,row,layer, col,row,layer …]
+ *  endpoint pairs; the renderer maps each to world space + colours it amber). The
+ *  geometry is a few circles / a box regardless of brush size — so a huge
+ *  volumetric brush can't blow up memory the way a per-cell cube cursor would.
+ *  Free axes A (bw/halfW) and B (bh/halfH) + fixed axis N per the plane:
+ *    z → A=col,  B=row,   N=layer
+ *    y → A=col,  B=layer, N=row
+ *    x → A=row,  B=layer, N=col   (matches mapStampToPlane / agentProj3d) */
+function buildBrushOutline3dSegs(o: {
+  axis: 'x' | 'y' | 'z';
+  cx: number; cy: number; cz: number;              // centre col,row,layer
+  shape: 'rect' | 'circle' | 'ring' | 'line';
+  halfW: number; halfH: number;                    // rect half-extents (free1, free2)
+  radius: number; ringW: number; lineW: number;    // circle / ring / line params
+  fixedHalf: number;                               // volumetric half-depth along N (0 = flat)
+  anchor: { col: number; row: number; layer: number } | null;  // line-tool staging
+}): Float32Array | null {
+  const A: [number, number, number] = o.axis === 'x' ? [0, 1, 0] : [1, 0, 0];
+  const B: [number, number, number] = o.axis === 'z' ? [0, 1, 0] : [0, 0, 1];
+  const N: [number, number, number] = o.axis === 'z' ? [0, 0, 1] : o.axis === 'y' ? [0, 1, 0] : [1, 0, 0];
+  const seg: number[] = [];
+  const P = (a: number, b: number, n: number): [number, number, number] => [
+    o.cx + a * A[0] + b * B[0] + n * N[0],
+    o.cy + a * A[1] + b * B[1] + n * N[1],
+    o.cz + a * A[2] + b * B[2] + n * N[2],
+  ];
+  const line = (p: [number, number, number], q: [number, number, number]) => seg.push(p[0], p[1], p[2], q[0], q[1], q[2]);
+  const NSEG = 36;
+  // A circle parametrised by θ→[a,b,n] offsets around the centre.
+  const arc = (f: (t: number) => [number, number, number]) => {
+    let prev: [number, number, number] | null = null;
+    for (let k = 0; k <= NSEG; k++) {
+      const t = (k / NSEG) * Math.PI * 2;
+      const p = P(...f(t));
+      if (prev) line(prev, p);
+      prev = p;
+    }
+  };
+  const circleAB = (R: number, n: number) => arc(t => [R * Math.cos(t), R * Math.sin(t), n]);
+  const rectAt = (hw: number, hh: number, n: number) => {
+    line(P(-hw, -hh, n), P(hw, -hh, n)); line(P(hw, -hh, n), P(hw, hh, n));
+    line(P(hw, hh, n), P(-hw, hh, n)); line(P(-hw, hh, n), P(-hw, -hh, n));
+  };
+  if (o.shape === 'line') {
+    if (o.anchor) line([o.anchor.col, o.anchor.row, o.anchor.layer], [o.cx, o.cy, o.cz]);
+    circleAB(Math.max(0.5, o.lineW / 2), 0);
+  } else if (o.shape === 'rect') {
+    const hw = Math.max(0.5, o.halfW), hh = Math.max(0.5, o.halfH);
+    if (o.fixedHalf > 0) {
+      const fh = o.fixedHalf;
+      rectAt(hw, hh, -fh); rectAt(hw, hh, fh);
+      line(P(-hw, -hh, -fh), P(-hw, -hh, fh)); line(P(hw, -hh, -fh), P(hw, -hh, fh));
+      line(P(hw, hh, -fh), P(hw, hh, fh)); line(P(-hw, hh, -fh), P(-hw, hh, fh));
+    } else rectAt(hw, hh, 0);
+  } else {
+    const R = Math.max(0.5, o.radius);
+    if (o.shape === 'ring') {
+      circleAB(R + o.ringW / 2, 0);
+      circleAB(Math.max(0.25, R - o.ringW / 2), 0);
+    } else {
+      circleAB(R, 0);
+      if (o.fixedHalf > 0) { // sphere: add the two great circles through the fixed axis
+        arc(t => [R * Math.cos(t), 0, R * Math.sin(t)]);
+        arc(t => [0, R * Math.cos(t), R * Math.sin(t)]);
+      }
+    }
+  }
+  return seg.length ? new Float32Array(seg) : null;
+}
+
 export interface ManualBrushAttrEntry {
   enabled: boolean;
   /** Canonical string encoding, identical to Attribute.defaultValue. */
@@ -1992,6 +2068,39 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       r.setBrushPlane(plane3dEnabledRef.current ? { axis: plane3dRef.current.axis, pos: plane3dRef.current.pos } : null);
       r.setHoverCells(plane3dEnabledRef.current ? hoverCells3dRef.current : EMPTY_HOVER_CELLS);
       r.setInspectCells(inspectHighlight3dRef.current);
+      // Brush footprint OUTLINE cursor — a bounded analytic wireframe on the
+      // interaction plane, for the grid brush AND the agent brush. Shown only when
+      // the plane is on, the cursor toggle is on, and a plane cell is hovered.
+      {
+        const hc = hover3dRef.current;
+        if (hc && plane3dEnabledRef.current && showBrushCursorRef.current) {
+          const isAgentBrush = isAgentModelRef.current && brushTargetRef.current === 'agents';
+          const vol = brush3dVolumeRef.current;
+          let shp: 'rect' | 'circle' | 'ring' | 'line';
+          let bw: number, bh: number, rad: number, rw: number, lw: number, fixedHalf = 0;
+          let anchor: { col: number; row: number; layer: number } | null;
+          if (isAgentBrush) {
+            const m = agentBrushModeRef.current;
+            shp = agentBrushShapeRef.current;
+            bw = agentBrushWRef.current; bh = agentBrushHRef.current;
+            rad = agentBrushRadiusRef.current; rw = Math.max(1, agentBrushRingWidthRef.current); lw = agentBrushLineWidthRef.current;
+            anchor = agentLine3dAnchorRef.current;
+            if (m === 'bond') { shp = 'circle'; }                                // scan-radius ring
+            else if (m === 'glue' || m === 'cut') { shp = 'circle'; rad = 1; anchor = null; }  // small cursor dot
+            else if (vol) { if (shp === 'circle') fixedHalf = Math.max(0.5, rad); else if (shp === 'rect') fixedHalf = Math.max(bw, bh) / 2; }
+          } else {
+            shp = brushShapeRef.current;
+            bw = brushWRef.current; bh = brushHRef.current;
+            rad = brushRadiusRef.current; rw = Math.max(1, brushRingWidthRef.current); lw = brushLineWidthRef.current;
+            anchor = line3dAnchorRef.current;
+            if (vol) { if (shp === 'circle') fixedHalf = Math.max(0.5, rad); else if (shp === 'rect') fixedHalf = brushBoxDepthRef.current / 2; }
+          }
+          r.setBrushOutline(buildBrushOutline3dSegs({
+            axis: plane3dRef.current.axis, cx: hc.col, cy: hc.row, cz: hc.layer,
+            shape: shp, halfW: bw / 2, halfH: bh / 2, radius: rad, ringW: rw, lineW: lw, fixedHalf, anchor,
+          }));
+        } else r.setBrushOutline(null);
+      }
       r.setBackgroundColor(bg3dRef.current);
       r.setLight(light3dRef.current);
       r.setCellGaps(cellGaps3dRef.current);
@@ -2050,7 +2159,13 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
           lastUploadedAgentSnapRef.current = snap;
         }
         r.setHoverAgents(hoverAgents3dRef.current);
-        r.setInspectAgents(inspectAgents3dRef.current);
+        // A staged Glue/Cut anchor gets a persistent white ring alongside any
+        // inspect highlight (derived from state so a mode switch clears it).
+        const glueA = agentGlueAnchorRef.current;
+        if (snap && glueA >= 0 && glueA < snap.highWater && snap.alive[glueA]) {
+          const gz = snap.z.length > 0 ? snap.z[glueA]! : 0;
+          r.setInspectAgents([...inspectAgents3dRef.current, { x: snap.x[glueA]!, y: snap.y[glueA]!, z: gz, radius: snap.radius[glueA]! }]);
+        } else r.setInspectAgents(inspectAgents3dRef.current);
       } else if (r.agentInstanceCount !== 0 || r.hasAgentGeometry) {
         // Non-agent model: drop any agent spheres AND bond lines left over from a
         // previously loaded agent model so they don't linger in the volume (the
@@ -3987,7 +4102,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     if (!is3D) return;
     const glc = glCanvasRef.current;
     if (!glc) return;
-    let active: 'orbit' | 'pan' | 'brush' | 'inspect' | 'resize' | 'agentSeed' | 'agentKill' | 'agentMove' | 'agentGroupMove' | 'agentEdit' | null = null;
+    let active: 'orbit' | 'pan' | 'brush' | 'inspect' | 'resize' | 'agentSeed' | 'agentKill' | 'agentMove' | 'agentGroupMove' | 'agentEdit' | 'agentBond' | null = null;
     let lastX = 0, lastY = 0, downX = 0, downY = 0, moved = false;
     // PR5 3D agent move: the agent picked at drag-start (-1 = none).
     let agentDragId = -1;
@@ -4032,32 +4147,24 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       }
       flushPaintBatch();
     };
-    // The brush footprint to highlight at a hovered cell: the line preview while a
-    // Line anchor is staged, otherwise the current shape's stamp.
-    const footprintFor = (hit: Cell): ReadonlyArray<Cell> =>
-      (brushShapeRef.current === 'line' && line3dAnchorRef.current)
-        ? lineFootprint(line3dAnchorRef.current, hit, brushLineWidthRef.current)
-        : mapStampToPlane(hit, currentStampOffsets3d());
     const sameCell = (a: Cell | null, b: Cell | null): boolean =>
       a === b || (!!a && !!b && a.layer === b.layer && a.row === b.row && a.col === b.col);
-    // Track the hovered brush-plane cell + its FOOTPRINT (the cells the brush would
-    // affect). Returns true when something changed (caller redraws only then — a
-    // full GL re-render per raw pointermove is wasteful on large volumes). A staged
-    // Line always recomputes (the preview grows with the cursor).
+    // Track the hovered brush-plane cell — the CENTRE of the brush OUTLINE cursor
+    // (built analytically in draw(), for both the grid brush and the agent brush).
+    // The per-cell footprint set is deliberately NOT built: a large volumetric
+    // brush would build (and re-upload) millions of cell cubes per frame and OOM;
+    // the outline is bounded geometry regardless of brush size. Returns true when
+    // the cell changed (caller redraws only then — a full GL re-render per raw
+    // pointermove is wasteful on large volumes). A staged Line always recomputes
+    // so its preview grows with the cursor.
     const updateHover = (clientX: number, clientY: number): boolean => {
       const hit = pickCell(clientX, clientY);
-      // The grid-brush footprint cursor is meaningless when the brush targets
-      // agents (the agent brush shows a hovered-agent ring instead) — clear it.
-      if (isAgentModelRef.current && brushTargetRef.current === 'agents') {
-        hover3dRef.current = hit;
-        if (hoverCells3dRef.current.length === 0) return false;
-        hoverCells3dRef.current = EMPTY_HOVER_CELLS; return true;
-      }
-      const lineStaging = brushShapeRef.current === 'line' && !!line3dAnchorRef.current;
-      if (!lineStaging && sameCell(hit, hover3dRef.current)) return false;
+      const lineStaging = (brushShapeRef.current === 'line' && !!line3dAnchorRef.current)
+        || (agentBrushShapeRef.current === 'line' && !!agentLine3dAnchorRef.current);
+      const changed = lineStaging || !sameCell(hit, hover3dRef.current);
       hover3dRef.current = hit;
-      hoverCells3dRef.current = hit ? footprintFor(hit) : EMPTY_HOVER_CELLS;
-      return true;
+      hoverCells3dRef.current = EMPTY_HOVER_CELLS;
+      return changed;
     };
     // ---- Bond-Graph Agents (PR5): the 3D agent brush + inspect. ----
     // Resolve the agent slot under the cursor via the renderer's sphere pick FBO
@@ -4099,12 +4206,23 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       const mode = agentBrushModeRef.current;
       const aShape = agentBrushShapeRef.current;
       const aScope = (mode === 'move' && aShape === 'line') ? 'single' : agentBrushScopeRef.current;
-      const want = brushTargetRef.current === 'agents' && (mode === 'remove' || mode === 'glue' || mode === 'cut' || mode === 'move' || mode === 'edit');
+      const want = brushTargetRef.current === 'agents' && (mode === 'remove' || mode === 'glue' || mode === 'cut' || mode === 'move' || mode === 'edit' || mode === 'bond');
       if (!want || !snap) {
         if (hoverAgents3dRef.current.length === 0) return false;
         hoverAgents3dRef.current = EMPTY_AGENT_RINGS; return true;
       }
       const hasZ = snap.z.length > 0;
+      // Bond: highlight every agent inside the scan ball on the plane (the pairs
+      // that could get bonded), mirroring the 2D bond hover.
+      if (mode === 'bond') {
+        const hit = pickCell(clientX, clientY);
+        const ids = hit ? agentsInRadius3dAt(hit, agentBrushRadiusRef.current) : [];
+        const rings = ids.map(id => ({ x: snap.x[id]!, y: snap.y[id]!, z: hasZ ? snap.z[id]! : 0, radius: snap.radius[id]! }));
+        const prev = hoverAgents3dRef.current;
+        if (prev.length === rings.length && prev.every((p, i) => p.x === rings[i]!.x && p.y === rings[i]!.y && p.z === rings[i]!.z)) return false;
+        hoverAgents3dRef.current = rings.length ? rings : EMPTY_AGENT_RINGS;
+        return true;
+      }
       // Area (Remove/Move/Edit): highlight ALL agents under the footprint (the ones
       // the stroke will touch), not just the single hovered one.
       if (aScope === 'area' && (mode === 'remove' || mode === 'move' || mode === 'edit')) {
@@ -4186,8 +4304,10 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       const orbitBtn = e.button === 1 || (e.button === 0 && e.altKey);
       if (orbitBtn) active = e.shiftKey ? 'pan' : 'orbit';
       else if (e.button === 2) {
-        // RMB cancels a staged Line anchor (grid or agent); otherwise it pans.
+        // RMB cancels a staged Line anchor / Glue-Cut anchor (grid or agent);
+        // otherwise it pans.
         if (line3dAnchorRef.current || agentLine3dAnchorRef.current) { line3dAnchorRef.current = null; agentLine3dAnchorRef.current = null; active = null; updateHover(e.clientX, e.clientY); draw(); }
+        else if (agentGlueAnchorRef.current >= 0) { agentGlueAnchorRef.current = -1; active = null; draw(); }
         else active = 'pan';
       }
       else if (e.button === 0 && (e.ctrlKey || e.metaKey)) {
@@ -4222,8 +4342,9 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       } // Shift+LMB → sweep inspect (drag) / pin (click)
       else if (e.button === 0 && isAgentModelRef.current && brushTargetRef.current === 'agents') {
         // Plain LMB, brush targets agents. Add/Remove/Move/Edit honour the Single/
-        // Area scope + the shape (volumetric footprint on the plane); Glue/Cut/Bond
-        // stay 2D-only and collapse to Add. (brushTarget==='grid' paints cells.)
+        // Area scope + the shape (volumetric footprint on the plane); Glue/Cut click
+        // two agents (pickAgent3d) to bond/unbond, Bond drag-scans the plane ball.
+        // (brushTarget==='grid' paints cells.)
         const mode = agentBrushModeRef.current;
         const aShape = agentBrushShapeRef.current;
         const aScope: 'single' | 'area' = (mode === 'move' && aShape === 'line') ? 'single' : agentBrushScopeRef.current;
@@ -4269,7 +4390,26 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
             const id = pickAgent3d(e.clientX, e.clientY);
             if (id >= 0) { active = 'agentMove'; agentDragId = id; } else active = null;
           }
-        } else { active = 'agentSeed'; addAgents3d(e.clientX, e.clientY, aScope); } // glue/cut/bond fallback → Add
+        } else if (mode === 'glue' || mode === 'cut') {
+          // Click two agents to bond / unbond them (plane-independent — picks the
+          // rendered sphere, so it works with or without the brush plane). The
+          // staged first agent gets a persistent white ring (derived in draw()
+          // from agentGlueAnchorRef, so a mode switch clears it for free).
+          active = null;
+          const id = pickAgent3d(e.clientX, e.clientY);
+          if (id < 0) agentGlueAnchorRef.current = -1;
+          else if (agentGlueAnchorRef.current < 0) agentGlueAnchorRef.current = id;
+          else {
+            if (agentGlueAnchorRef.current !== id && worker) worker.postMessage({ type: mode === 'glue' ? 'formBond' : 'breakBond', a: agentGlueAnchorRef.current, b: id, activeViewer: activeViewerRef.current });
+            agentGlueAnchorRef.current = -1;
+          }
+          draw();
+        } else if (mode === 'bond') {
+          // Bond-paint: scan the plane ball for near pairs on the drag, flush on up.
+          pendingBondPairs.current.clear();
+          const hit = pickCell(e.clientX, e.clientY);
+          if (hit) { scanBondPairs3d(hit); active = 'agentBond'; } else active = null;
+        } else { active = 'agentSeed'; addAgents3d(e.clientX, e.clientY, aScope); } // (unreached — all modes handled)
       }
       else if (e.button === 0 && brushShapeRef.current === 'line') {
         // Line tool: two clicks. First stages a plane-cell anchor (no paint); the
@@ -4380,9 +4520,10 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       }
       // Agent brush drags: seed / kill along the drag, or drag-move the picked
       // agent on the brush plane (plane-constrained — pickCell gives x/y/z).
-      if (active === 'agentSeed') { if (agentBrushScopeRef.current === 'area' && agentBrushShapeRef.current !== 'line') addAgents3d(e.clientX, e.clientY, 'area'); draw(); return; }
-      if (active === 'agentKill') { removeAgents3d(e.clientX, e.clientY, agentBrushScopeRef.current); updateAgentHover(e.clientX, e.clientY); draw(); return; }
-      if (active === 'agentEdit') { editAgents3d(e.clientX, e.clientY); draw(); return; }
+      if (active === 'agentSeed') { if (agentBrushScopeRef.current === 'area' && agentBrushShapeRef.current !== 'line') addAgents3d(e.clientX, e.clientY, 'area'); updateHover(e.clientX, e.clientY); draw(); return; }
+      if (active === 'agentKill') { removeAgents3d(e.clientX, e.clientY, agentBrushScopeRef.current); updateHover(e.clientX, e.clientY); updateAgentHover(e.clientX, e.clientY); draw(); return; }
+      if (active === 'agentEdit') { editAgents3d(e.clientX, e.clientY); updateHover(e.clientX, e.clientY); draw(); return; }
+      if (active === 'agentBond') { const hit = pickCell(e.clientX, e.clientY); if (hit) scanBondPairs3d(hit); updateHover(e.clientX, e.clientY); updateAgentHover(e.clientX, e.clientY); draw(); return; }
       if (active === 'agentGroupMove') {
         const g = agentGroupMoveRef.current, hit = pickCell(e.clientX, e.clientY);
         if (g && hit) {
@@ -4444,11 +4585,22 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       // position arrives on the next stepped frame).
       if (active === 'agentMove') { agentDragId = -1; inspectAgents3dRef.current = []; draw(); }
       if (active === 'agentGroupMove') { agentGroupMoveRef.current = null; }
+      if (active === 'agentBond') { flushBondBatch(); draw(); }
       active = null;
       last3dHitRef.current = null;
     };
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
+      // Alt+wheel cycles the agent brush mode (add → remove → move → …) when the
+      // brush targets agents — a fast keyboard-free way to switch actions.
+      if (e.altKey && isAgentModelRef.current && brushTargetRef.current === 'agents') {
+        e.stopPropagation();
+        const modes = AGENT_BRUSH_MODES, i = modes.indexOf(agentBrushModeRef.current);
+        setAgentBrushMode(modes[(((i < 0 ? 0 : i) + (e.deltaY > 0 ? 1 : -1)) + modes.length) % modes.length]!);
+        agentGlueAnchorRef.current = -1; agentLineAnchorRef.current = null; agentLine3dAnchorRef.current = null;
+        draw();
+        return;
+      }
       // Ctrl/Cmd+wheel is reserved for cycling Input Mappings (handled by the
       // parent container's handleWheel) — return WITHOUT stopPropagation so the
       // event still bubbles there; don't ALSO zoom the camera. Plain wheel = zoom,
@@ -4494,6 +4646,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       return gl3dRef.current.pick(px, py, glc.clientWidth || 1, glc.clientHeight || 1);
     };
     W.__sim3dRenderer = () => gl3dRef.current;
+    W.__buildBrushOutline3dSegs = buildBrushOutline3dSegs;  // DEV: unit-test the outline geometry
     // Drive the plane-brush stamp directly (synthetic pointer drags can't reach
     // pickOnPlane). Pass a plane cell (layer,row,col); set reset=true to start a
     // fresh stroke (clears the interpolation anchor).
@@ -4693,6 +4846,11 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     boundaryTreatmentRef.current = model.properties.boundaryTreatment;
     draw();
   }, [model.properties.boundaryTreatment, draw]);
+  // Live formDistance (bond-brush contact multiplier) so the 3D bond scan — a
+  // useCallback captured once by the empty-deps 3D pointer effect — reads the
+  // current value instead of the one baked at 3D-switch time.
+  const formDistanceRef = useRef(1);
+  formDistanceRef.current = cbNum(model.centerBased, 'formDistance');
   // When the model leaves torus, infinity canvas no longer makes physical sense
   // (it would lie about the grid wrapping). Force the toggle off.
   useEffect(() => {
@@ -5327,6 +5485,50 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     }
     return ids;
   }, [agentShapeMetrics, agentProj3d]);
+  /** Live agent ids within a 3D ball of `radius` around a plane-pick cell — the
+   *  Bond brush's scan region (3D sibling of agentsInRadiusAt). Torus-aware via
+   *  agentProj3d's shortest-offset fold. */
+  const agentsInRadius3dAt = useCallback((hit: Cell3, radius: number): number[] => {
+    const snap = agentsRef.current;
+    if (!snap || snap.highWater === 0 || radius <= 0) return [];
+    const hasZ = snap.z.length > 0, r2 = radius * radius, ids: number[] = [];
+    for (let i = 0; i < snap.highWater; i++) {
+      if (!snap.alive[i]) continue;
+      const [u, v, w] = agentProj3d(snap.x[i]!, snap.y[i]!, hasZ ? snap.z[i]! : 0, hit);
+      if (u * u + v * v + w * w <= r2) ids.push(i);
+    }
+    return ids;
+  }, [agentProj3d]);
+  /** 3D Bond-brush scan: queue every not-yet-bonded pair of agents within the
+   *  scan ball that is close enough to touch (formDistance × summed radii) — the
+   *  3D sibling of scanBondPairsAt. Torus-aware; feeds the same pendingBondPairs +
+   *  formBondBatch flush. */
+  const scanBondPairs3d = useCallback((hit: Cell3) => {
+    const snap = agentsRef.current;
+    if (!snap || snap.highWater === 0) return;
+    const W = gridWidth.current, H = gridHeight.current, D = gridDepth.current;
+    const torus = boundaryTreatmentRef.current === 'torus';
+    const hasZ = snap.z.length > 0;
+    const fMul = formDistanceRef.current;
+    const brushR = agentBrushRadiusRef.current;
+    const bonded = new Set<string>();
+    const bonds = snap.bonds;
+    if (bonds) for (let b = 0; b < bonds.length; b += 2) { const i = bonds[b]!, j = bonds[b + 1]!; bonded.add(i < j ? `${i}:${j}` : `${j}:${i}`); }
+    const dist2 = (i: number, j: number): number => {
+      let dx = snap.x[i]! - snap.x[j]!, dy = snap.y[i]! - snap.y[j]!, dz = (hasZ ? snap.z[i]! : 0) - (hasZ ? snap.z[j]! : 0);
+      if (torus) { if (dx > W / 2) dx -= W; else if (dx < -W / 2) dx += W; if (dy > H / 2) dy -= H; else if (dy < -H / 2) dy += H; if (D > 1) { if (dz > D / 2) dz -= D; else if (dz < -D / 2) dz += D; } }
+      return dx * dx + dy * dy + dz * dz;
+    };
+    const under = agentsInRadius3dAt(hit, brushR);
+    for (let a = 0; a < under.length; a++) {
+      for (let b = a + 1; b < under.length; b++) {
+        const i = under[a]!, j = under[b]!, key = i < j ? `${i}:${j}` : `${j}:${i}`;
+        if (bonded.has(key) || pendingBondPairs.current.has(key)) continue;
+        const thr = fMul * (snap.radius[i]! + snap.radius[j]!);
+        if (dist2(i, j) <= thr * thr) pendingBondPairs.current.add(key);
+      }
+    }
+  }, [agentsInRadius3dAt]);
   /** Seed points scattered in the 3D shape around a plane-pick cell. Circle reuses
    *  agentSeedPoints3d (ball / flat disc). Others rejection-sample the plane frame;
    *  the "volumetric" toggle extrudes along the fixed axis (else w=0 → on the plane). */
@@ -5715,6 +5917,15 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     const handleWheel = (e: WheelEvent) => {
       if ((e.target as HTMLElement).closest('[data-sim-overlay]')) return;
       e.preventDefault();
+      // Alt+wheel cycles the agent brush mode (add → remove → move → …) when the
+      // brush targets agents — a fast keyboard-free way to switch actions.
+      if (e.altKey && isAgentModelRef.current && brushTargetRef.current === 'agents') {
+        const modes = AGENT_BRUSH_MODES, i = modes.indexOf(agentBrushModeRef.current);
+        setAgentBrushMode(modes[(((i < 0 ? 0 : i) + (e.deltaY > 0 ? 1 : -1)) + modes.length) % modes.length]!);
+        agentGlueAnchorRef.current = -1; agentLineAnchorRef.current = null; agentLine3dAnchorRef.current = null;
+        draw();
+        return;
+      }
       // Ctrl+wheel = cycle through Input Mappings (for quick brush behavior switching)
       // Manual Brush participates in the cycle as the rightmost entry, so it's
       // always reachable even when the model has zero color-input mappings.
@@ -8390,7 +8601,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
                   </>)}
                   {/* Mode row — the brush actions (labels via textTransform:capitalize). */}
                   <div style={{ display: 'flex', gap: 3, flexWrap: 'wrap' }}>
-                    {(['add', 'remove', 'move', 'edit', 'glue', 'cut', 'bond'] as const).map(m => (
+                    {AGENT_BRUSH_MODES.map(m => (
                       <button
                         key={m}
                         onClick={() => { setAgentBrushMode(m); agentGlueAnchorRef.current = -1; agentLineAnchorRef.current = null; agentLine3dAnchorRef.current = null; draw(); }}

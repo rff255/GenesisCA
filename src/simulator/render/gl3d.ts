@@ -672,6 +672,11 @@ export class Gl3DRenderer {
   /** Hovered brush FOOTPRINT — every cell the brush would affect, drawn as
    *  wireframe cube cursors. Empty = no hover. */
   private hoverCells: ReadonlyArray<{ layer: number; row: number; col: number }> = [];
+  /** Brush footprint OUTLINE — a bounded wireframe (a few circles / a box) in
+   *  cell space: a flat [col,row,layer, col,row,layer …] of LINE-segment endpoint
+   *  pairs. Bounded geometry regardless of brush size (unlike a per-cell cursor).
+   *  Null/empty = nothing to draw. */
+  private brushOutline: Float32Array | null = null;
   /** Inspected cells to highlight (e.g. on inspect-dialog hover). Empty = none. */
   private inspectCells: ReadonlyArray<{ layer: number; row: number; col: number }> = [];
   /** Canvas clear colour [r,g,b,a] 0..1. Default transparent (shows the page). */
@@ -843,6 +848,9 @@ export class Gl3DRenderer {
   setBrushPlane(p: { axis: 'x' | 'y' | 'z'; pos: number } | null): void { this.brushPlane = p; }
   /** Set the hovered brush footprint (every affected cell). Pass [] to clear. */
   setHoverCells(cells: ReadonlyArray<{ layer: number; row: number; col: number }>): void { this.hoverCells = cells; }
+  /** Set the brush footprint OUTLINE (cell-space line-segment endpoint pairs).
+   *  Pass null to clear. */
+  setBrushOutline(pts: Float32Array | null): void { this.brushOutline = pts; }
   /** Set the inspected cells to highlight (white cube). Pass [] to clear. */
   setInspectCells(cells: ReadonlyArray<{ layer: number; row: number; col: number }>): void { this.inspectCells = cells; }
   /** Canvas background. `null` → transparent (page shows through). */
@@ -1403,6 +1411,7 @@ export class Gl3DRenderer {
       this.renderAgentRings(); // hovered/inspected agent rings (depth OFF, on top)
     }
     this.renderHoverCells(); // wireframe cube cursors on the brush footprint (on top)
+    this.renderBrushOutline(); // brush footprint outline (bounded wireframe, on top)
     this.renderGizmo();      // corner orientation widget (always on top)
   }
 
@@ -1549,6 +1558,28 @@ export class Gl3DRenderer {
     for (const c of this.inspectCells) this.pushCellCube(v, c, [0.95, 0.97, 1.0], 0.6); // white inspect highlight
     gl.disable(gl.DEPTH_TEST);
     this.drawLines(new Float32Array(v), gl.LINES, this.mvp);
+    gl.enable(gl.DEPTH_TEST);
+  }
+
+  /** Draw the brush footprint OUTLINE — a bounded amber wireframe (a few circles /
+   *  a box). Maps the cell-space endpoint pairs to Z-up world space (same mapping
+   *  as pushCellCube: col→+X, row→-Y, layer→-Z) and colours them amber. Depth OFF
+   *  so it reads as an always-visible cursor. */
+  private renderBrushOutline(): void {
+    const pts = this.brushOutline;
+    if (!pts || pts.length < 6) return;
+    const gl = this.gl;
+    const hx = (this.W - 1) / 2, hy = (this.H - 1) / 2, hz = (this.D - 1) / 2;
+    const n = (pts.length / 3) | 0;
+    const v = new Float32Array(n * 6);
+    for (let i = 0; i < n; i++) {
+      v[i * 6] = pts[i * 3]! - hx;          // col → +X
+      v[i * 6 + 1] = hy - pts[i * 3 + 1]!;  // row → -Y
+      v[i * 6 + 2] = hz - pts[i * 3 + 2]!;  // layer → -Z
+      v[i * 6 + 3] = 1.0; v[i * 6 + 4] = 0.85; v[i * 6 + 5] = 0.2;  // amber
+    }
+    gl.disable(gl.DEPTH_TEST);
+    this.drawLines(v, gl.LINES, this.mvp);
     gl.enable(gl.DEPTH_TEST);
   }
 
