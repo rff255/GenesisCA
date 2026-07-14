@@ -794,6 +794,7 @@ export function HelpView() {
             <tbody>
               <tr><td>Get Cell Attribute</td><td>Read the current cell&apos;s attribute value (e.g., &quot;alive&quot;). Supports multiple attribute <strong>slots</strong> (&quot;+ Attribute&quot;): one node reads several attributes, each through its own output port &mdash; no need for a separate Get node per attribute.</td></tr>
               <tr><td>Get Cell Position</td><td>Outputs the current cell&apos;s grid coordinates &mdash; <strong>Row</strong>, <strong>Col</strong>, and (in 3D) <strong>Layer</strong>. A controlled, own-cell-only break of locality so a cell can behave by where it is: spatial gradients, region-specific rules, or a coordinate-aware Output Mapping. Works in every event.</td></tr>
+              <tr><td>Get Grid Dimensions</td><td>Outputs the <strong>size of the world</strong> &mdash; <strong>Width</strong>, <strong>Height</strong>, and (in 3D) <strong>Depth</strong>. Use it to write a rule that doesn&apos;t care how big the grid is: seed the middle (<em>Width &divide; 2</em>), normalise a coordinate to 0&ndash;1, or fade by distance from an edge &mdash; instead of typing the numbers in and having them go silently wrong the moment you resize the grid. Works in every event, and on the <strong>Agents</strong> graph too (there it&apos;s called <strong>Get World Dimensions</strong> &mdash; the agent world <em>is</em> the cell grid, so it reports the same numbers).</td></tr>
               <tr><td>Get Model Attribute</td><td>Read a global model parameter. Supports multiple attribute slots (&quot;+ Attribute&quot;) &mdash; one node exposes several model parameters as separate output ports (a color parameter in a slot exposes its own R/G/B trio).</td></tr>
               <tr><td>Get Neighbors Attribute</td><td>Collect an attribute from all neighbors as an array.</td></tr>
               <tr><td>Get Neighbor Attr By Index</td><td>Read a cell attribute from ONE specific neighbor by index. Works in both sync and async modes.</td></tr>
@@ -1142,7 +1143,14 @@ export function HelpView() {
             toggleable <strong>Axes / Grid / Bounds / the corner Gizmo</strong> (the Axes start at
             the <code>(0,0,0)</code> origin corner and grow toward +column / +row / +depth),
             <strong>Auto-orbit</strong> (+ a speed slider that spans negative&rarr;positive, so the
-            camera can spin either way; 0 = stopped), a
+            camera can spin either way; 0 = stopped),
+            <strong>Auto-zoom</strong> (the dolly companion to auto-orbit: the camera
+            slowly <em>breathes</em> in and out around wherever it currently sits &mdash;{' '}
+            <strong>Speed</strong> sets how many full in-and-out cycles per second,{' '}
+            <strong>Range</strong> how far it travels. Turn both on for a hands-off fly-around.
+            Zooming with the wheel, or hitting Reset view, re-centres the breathing on the
+            distance you chose, so you stay in control; switching it off leaves the camera
+            exactly where it is), a
             <strong>Clip interval</strong> (axis X/Y/Z or the camera view, with <em>two</em> handles
             &mdash; From and To &mdash; that cut from both sides, so you control exactly how thick a
             slab of the volume stays visible; clips voxels, agent spheres <em>and</em> bonds), an

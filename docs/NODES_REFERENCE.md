@@ -4,9 +4,11 @@ This document catalogues every node in the GenesisCA Visual Programming Language
 describes the port type system, and flags redundancies or gaps. It is a working reference
 to inform future consolidation — it does **not** describe any committed refactoring.
 
-**Scope:** 143 registry node types across 7 categories (event, flow, data, logic, aggregation,
+**Scope:** 144 registry node types across 7 categories (event, flow, data, logic, aggregation,
 output, color) — 3 hidden from the Add Node menu (`macro` / `macroInput` / `macroOutput`),
-leaving **140 selectable** (the **Grid Init Event** [`gridInit`] + **Set Cell (at Position)**
+leaving **141 selectable** (**Get Grid Dimensions** [`getGridDimensions`] is the newest —
+a UNIVERSAL node exposing the world's Width / Height / Depth on BOTH graphs;
+the **Grid Init Event** [`gridInit`] + **Set Cell (at Position)**
 [`setCellAtPosition`] added the global procedural-seeding pair; Agent Capability Profiles added **Get Age** [Lifespan] + the two
 Sensing nodes **Get Agents In View** [the directional vision cone] + **Sense Hemifield** [the
 Braitenberg L/R split of that cone]; the **Overseer** milestone added the **20
@@ -189,6 +191,7 @@ exists purely to keep graphs readable without Sequence nodes. See
 |---|---|---|---|---|---|
 | 12 | `getCellAttribute` | Get Cell Attribute | Read current cell's attribute. Extra attribute slots (`extraCount` + `attr_N`) read several attributes through per-slot `value_N` outputs. | `O: Value` (any) + `O: value_N` per extra slot | Requires `attributeId` (+ each slot's `attr_N`). Multi-slot nodes expand to single-slot primitives pre-compile (`multiAttrExpand.ts`) |
 | 12a | `getCellPosition` | Get Cell Position | Outputs the current cell's grid coordinates — a controlled, own-cell-only break of locality (spatial gradients, region rules, coordinate-aware Output Mappings). | `O: Row` (int) `O: Col` (int) `O: Layer` (int, 3D only) | Multi-output; `Layer` hidden in 2D. No config. `NEVER_INVARIANT` (per-cell). Works in every event. |
+| 12b | `getGridDimensions` | Get Grid Dimensions *(shown as **Get World Dimensions** on the Agents tab)* | Outputs the SIZE of the world — Width, Height and (3D) Depth — so a rule can be written independently of the grid size (centre-relative seeding, normalised coordinates, distance from an edge). **UNIVERSAL**: works on the Cells graph (the lattice grid size) AND the Agents graph (the agent world size — the agent world IS the cell grid, 1:1), in every event on both. | `O: Width` (int) `O: Height` (int) `O: Depth` (int, 3D only) | Multi-output; `Depth` hidden in 2D. No config. Pure + input-free ⇒ loop-invariant (hoisted out of the per-cell/per-agent loop) and CSE-eligible (two instances merge). Values are always LIVE — a simulator Resize recompiles with the real dims; nothing is baked into the model file. |
 | 13 | `getModelAttribute` | Get Model Attribute | Read global model-level attribute. Extra attribute slots read several model attributes (a color attribute in a slot exposes `r/g/b_N`). | `O: Value` OR `O: R/G/B` (if attr is a color) + per-slot outputs | Requires model-level `attributeId` (+ each slot's `attr_N`) |
 | 14 | `getNeighborsAttribute` | Get Neighbors Attribute | Read attr of **every** neighbor → array. | `O: Values` (arr) | Requires `neighborhoodId` + `attributeId`; allocates a scratch array per cell |
 | 15 | `getNeighborAttributeByIndex` | Get Neighbor Attr By Index | Read **one** neighbor by index. | `I: INDEX` (NI) / `O: Value` | Requires `neighborhoodId` + `attributeId`; read-only so sync-safe. Index port retyped to `neighborIndex`. |
@@ -283,7 +286,8 @@ exists purely to keep graphs readable without Sequence nodes. See
 > in `LATTICE_ONLY_TYPES` and hidden on the Agents tab.
 > Universal nodes (arithmetic, conditionals, `getCellAttribute`/`setAttribute` over the
 > shared attributes — displayed as **Get/Set/Update Self Attribute** on the Agents tab —
-> `getRandom`, `setCellLooks`, …) appear in **both** graphs. The agent behaviour loop has its
+> `getRandom`, `setCellLooks`, `getGridDimensions` — displayed as **Get World Dimensions**
+> there, since the agent world IS the cell grid — …) appear in **both** graphs. The agent behaviour loop has its
 > own **Compile Target radio (JS / WebAssembly / WebGPU)**, independent of the grid's: the
 > **WASM** agent target covers the FULL agent catalogue with JS bit-parity (the only clamp is
 > a getNearbyAgents scratch-slot budget); the **WebGPU** agent target covers the full catalogue
