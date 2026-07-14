@@ -251,6 +251,9 @@
   color: var(--color-accent);
 }
 
+/* Synthetic "mode" badges (3D = accent, Agents = success/green — distinct in
+ * both shipped themes). They behave like tag chips: clickable, and filled with
+ * a soft tint when they're the active category filter. */
 .dimBadge {
   display: inline-block;
   padding: var(--space-1) var(--space-4);
@@ -260,6 +263,35 @@
   font-weight: 600;
   color: var(--color-accent);
   flex: 0 0 auto;
+  cursor: pointer;
+}
+
+.dimBadge:hover {
+  background: color-mix(in srgb, var(--color-accent) 12%, transparent);
+}
+
+.dimBadgeActive {
+  background: color-mix(in srgb, var(--color-accent) 22%, transparent);
+}
+
+.agentBadge {
+  display: inline-block;
+  padding: var(--space-1) var(--space-4);
+  border: 1px solid var(--color-success);
+  border-radius: var(--radius-pill);
+  font-size: 0.68rem;
+  font-weight: 600;
+  color: var(--color-success);
+  flex: 0 0 auto;
+  cursor: pointer;
+}
+
+.agentBadge:hover {
+  background: color-mix(in srgb, var(--color-success) 12%, transparent);
+}
+
+.agentBadgeActive {
+  background: color-mix(in srgb, var(--color-success) 22%, transparent);
 }
 
 .gridSize {

@@ -2034,8 +2034,11 @@ export function HelpView() {
             on the card</strong>: the title + full description on the left (when too long for
             the panel it <strong>slowly auto-scrolls</strong>, holds, and loops) and the model's
             thumbnail on the right, side by side &mdash; clicks pass straight through it, so the
-            card stays clickable. 3D models carry a
-            <strong> 3D</strong> badge and show their grid as W&times;H&times;D.
+            card stays clickable. A model's mode shows as a coloured <strong>badge</strong> &mdash;
+            <strong> 3D</strong> (amber) and <strong>Agents</strong> (green) &mdash; and each badge
+            behaves like a tag: click it to filter, and it also appears in the category dropdown
+            and as a grouping section (2D and CA-Grid, the defaults, stay unbadged). 3D models
+            show their grid as W&times;H&times;D.
           </p>
 
           <h3 className={styles.h3}>State Files (.gcastate)</h3>
