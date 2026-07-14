@@ -11,8 +11,8 @@ import { resolveKeyLabels, resolveValueTagOptions, buildLookupTablePayload, isMu
 import { NeighborIndexValuePicker } from '../modeler/panels/NeighborIndexDefaultEditor';
 import { LookupTableEditor } from '../modeler/panels/LookupTableEditor';
 import { compileGraphWebGPU } from '../modeler/vpl/compiler/webgpu/compile';
-import { Gl3DRenderer, panCamera, cameraBasis, DEFAULT_LIGHT3D, DEFAULT_METABALLS3D, metaballAutoThreshold } from './render/gl3d';
-import type { SpriteAtlasInput, Light3D, Metaballs3D } from './render/gl3d';
+import { Gl3DRenderer, panCamera, cameraBasis, DEFAULT_LIGHT3D, DEFAULT_METABALLS3D, metaballAutoThreshold, DEFAULT_AUTOZOOM3D, defaultCamera3d, autoZoomBaseFrom, MIN_CAM_DIST, MAX_CAM_DIST } from './render/gl3d';
+import type { SpriteAtlasInput, Light3D, Metaballs3D, AutoZoom3D } from './render/gl3d';
 import { LightBallWidget } from './LightBallWidget';
 import { agentTargetOf, resolveMaxBonds } from '../model/centerBased';
 import { compileAgentGraphWasmForModel, isAgentGraphWasmSupported, buildAgentLayoutExtras } from '../modeler/vpl/compiler/agentWasm/compile';
@@ -1495,7 +1495,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   const glCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const gl3dRef = useRef<import('./render/gl3d').Gl3DRenderer | null>(null);
   // Z-up Blender-style orbit camera. Default 3/4 view looking down onto the XY plane.
-  const cam3dRef = useRef<import('./render/gl3d').Camera3D>({ yaw: -0.9, pitch: 0.6, dist: 1.9, target: [0, 0, 0] });
+  const cam3dRef = useRef<import('./render/gl3d').Camera3D>(defaultCamera3d());
   const clip3dRef = useRef<import('./render/gl3d').ClipPlane3D>({ enabled: false, axis: 'z', lo: 0, hi: 0 });
   const alpha3dRef = useRef(false);
   const agentsFront3dRef = useRef(true);
@@ -1515,6 +1515,13 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   const plane3dEnabledRef = useRef(false);
   // Auto-orbit (rAF loop increments yaw).
   const orbit3dRef = useRef<{ on: boolean; speed: number }>({ on: false, speed: 0.4 });
+  // Auto-zoom — the dolly sibling of auto-orbit: the SAME rAF loop breathes the
+  // camera distance around `zoomBaseRef` (see the loop below). `zoomBaseRef` is the
+  // un-oscillated distance; it is re-derived whenever the user zooms/resets the view
+  // while auto-zoom runs, so a manual wheel-zoom sticks instead of being stomped.
+  const zoom3dRef = useRef<AutoZoom3D>({ ...DEFAULT_AUTOZOOM3D });
+  const zoomPhaseRef = useRef(0);
+  const zoomBaseRef = useRef(defaultCamera3d().dist);
   // 3D pick → inspector. Set below `commitInspectPopover` (which is declared
   // later in the component); the pointer effect calls it via this ref.
   const openInspect3dRef = useRef<((idx: number, x: number, y: number) => void) | null>(null);
@@ -1562,6 +1569,9 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   const [viz3d, setViz3d] = useState<import('./render/gl3d').Viz3D>({ axes: false, grid: false, bounds: true, gizmo: true, voxels: true, agents: true, bonds: true });
   const [plane3d, setPlane3d] = useState<{ enabled: boolean; axis: 'x' | 'y' | 'z'; pos: number }>({ enabled: false, axis: 'z', pos: 0 });
   const [orbit3d, setOrbit3d] = useState<{ on: boolean; speed: number }>({ on: false, speed: 0.4 });
+  // Auto-zoom (session state, like auto-orbit — a camera animation that resumed
+  // itself on every load would surprise, so neither is persisted).
+  const [zoom3d, setZoom3d] = useState<AutoZoom3D>({ ...DEFAULT_AUTOZOOM3D });
   // 3D canvas background. `enabled` false = transparent (page shows through);
   // when enabled, `color` (hex) fills the canvas opaquely.
   const [bg3d, setBg3d] = useState<{ enabled: boolean; color: string }>({ enabled: false, color: '#0c0d10' });
@@ -4742,7 +4752,11 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       if (e.ctrlKey || e.metaKey) return;
       e.stopPropagation();
       const cam = cam3dRef.current;
-      cam.dist = Math.max(0.2, Math.min(40, cam.dist * (e.deltaY > 0 ? 1.1 : 0.9)));
+      cam.dist = Math.max(MIN_CAM_DIST, Math.min(MAX_CAM_DIST, cam.dist * (e.deltaY > 0 ? 1.1 : 0.9)));
+      // Auto-zoom running? Re-derive its BASE from the distance the user just chose,
+      // at the current phase — otherwise the next animation frame would overwrite the
+      // wheel-zoom and the camera would feel stuck.
+      if (zoom3dRef.current.on) zoomBaseRef.current = autoZoomBaseFrom(cam.dist, zoomPhaseRef.current, zoom3dRef.current.amount);
       draw();
     };
     const onCtx = (e: MouseEvent) => e.preventDefault();  // RMB shouldn't pop the page menu
@@ -4826,6 +4840,14 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     draw();
   }, [plane3d, draw]);
   useEffect(() => { orbit3dRef.current = orbit3d; }, [orbit3d]);
+  // Auto-zoom: mirror into the ref, and on the OFF→ON edge capture the current
+  // distance as the oscillation base + restart the phase at 0 (so it breathes out
+  // from where the user left the camera, with no jump on the first frame).
+  useEffect(() => {
+    const wasOn = zoom3dRef.current.on;
+    zoom3dRef.current = zoom3d;
+    if (zoom3d.on && !wasOn) { zoomBaseRef.current = cam3dRef.current.dist; zoomPhaseRef.current = 0; }
+  }, [zoom3d]);
   useEffect(() => {
     if (bg3d.enabled) {
       const m = /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(bg3d.color.trim());
@@ -4869,20 +4891,33 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     });
   }, [simWidth, simHeight, simDepth, is3D]);
 
-  // 3D Grid CA: auto-orbit loop — spins the camera while enabled (and 3D + visible).
+  // 3D Grid CA: the camera-animation loop — auto-orbit (spins yaw) and auto-zoom
+  // (breathes `dist` around `zoomBaseRef`). ONE rAF for both: two independent loops
+  // would each call draw() every frame and double the redraw rate when both are on.
+  // Reads the params through refs so a slider drag doesn't restart the loop (and,
+  // for auto-zoom, doesn't reset the phase); the effect only re-runs when either is
+  // toggled. `last` resets to 0 while hidden so the first frame back can't apply a
+  // huge dt (a tab-away would otherwise fling the camera).
   useEffect(() => {
-    if (!is3D || !orbit3d.on) return;
+    if (!is3D || (!orbit3d.on && !zoom3d.on)) return;
     let raf = 0; let last = 0;
     const tick = (ts: number) => {
-      if (!visibleRef.current) { raf = requestAnimationFrame(tick); return; }
-      const dt = last ? (ts - last) / 1000 : 0; last = ts;
-      cam3dRef.current.yaw += orbit3dRef.current.speed * dt;
+      if (!visibleRef.current) { last = 0; raf = requestAnimationFrame(tick); return; }
+      const dt = last ? Math.min(0.1, (ts - last) / 1000) : 0; last = ts;
+      const cam = cam3dRef.current;
+      if (orbit3dRef.current.on) cam.yaw += orbit3dRef.current.speed * dt;
+      const z = zoom3dRef.current;
+      if (z.on) {
+        zoomPhaseRef.current += z.speed * dt * Math.PI * 2;   // speed = cycles/second
+        const d = zoomBaseRef.current * (1 + z.amount * Math.sin(zoomPhaseRef.current));
+        cam.dist = Math.max(MIN_CAM_DIST, Math.min(MAX_CAM_DIST, d));
+      }
       draw();
       raf = requestAnimationFrame(tick);
     };
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
-  }, [is3D, orbit3d, draw]);
+  }, [is3D, orbit3d.on, zoom3d.on, draw]);
 
   // Pause simulation when leaving tab, redraw when coming back
   useEffect(() => {
@@ -8237,7 +8272,19 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
               </div>
               {controls3dOpen && (<>
                 <button className={styles.panelToggle} style={{ width: '100%' }}
-                  onClick={() => { cam3dRef.current = { yaw: -0.9, pitch: 0.6, dist: 1.9, target: [0, 0, 0] }; draw(); }}
+                  onClick={() => {
+                    // Restore the default view IN PLACE — replacing `cam3dRef.current`
+                    // would strand every holder of the old object (the DEV
+                    // `window.__sim3dCamera` hook among them).
+                    const d = defaultCamera3d(), cam = cam3dRef.current;
+                    cam.yaw = d.yaw; cam.pitch = d.pitch; cam.dist = d.dist; cam.target = d.target;
+                    // Re-baseline a running auto-zoom on the restored distance (and
+                    // restart its phase) so the reset sticks instead of being
+                    // overwritten by the next animation frame.
+                    zoomBaseRef.current = cam.dist;
+                    zoomPhaseRef.current = 0;
+                    draw();
+                  }}
                   title="Reset the orbit camera">Reset view</button>
 
                 {/* Overlays — 2×2 grid so the labels never squash. */}
@@ -8258,6 +8305,29 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
                       title="Orbit speed (rad/s; negative = reverse)" onChange={e => setOrbit3d(o => ({ ...o, speed: Number(e.target.value) }))} />
                   )}
                 </label>
+
+                {/* Auto-zoom — the dolly sibling of auto-orbit. A one-way dolly would
+                    fly into / away from the volume, so it BREATHES: the distance
+                    oscillates around whatever the camera was at when it was switched
+                    on (Speed = cycles/s, Range = ± fraction of that base). A wheel
+                    zoom or Reset view while it runs re-baselines it, so manual zooming
+                    still works. Pairs with auto-orbit for a hands-off fly-around. */}
+                <label style={row} title="Slowly dolly the camera in and out (breathes around the current distance)">
+                  <input type="checkbox" checked={zoom3d.on} onChange={e => setZoom3d(z => ({ ...z, on: e.target.checked }))} />
+                  Auto-zoom
+                </label>
+                {zoom3d.on && (<>
+                  <label style={{ ...row, gap: 4 }} title="Zoom speed — full in-and-out cycles per second">
+                    <span style={{ fontSize: '0.6rem', color: '#999', width: 44, flex: '0 0 auto' }}>Speed</span>
+                    <input type="range" min={0.02} max={1} step={0.01} value={zoom3d.speed} style={{ flex: 1, minWidth: 0 }}
+                      onChange={e => setZoom3d(z => ({ ...z, speed: Number(e.target.value) }))} />
+                  </label>
+                  <label style={{ ...row, gap: 4 }} title="Zoom range — how far in/out it travels, as a fraction of the base distance">
+                    <span style={{ fontSize: '0.6rem', color: '#999', width: 44, flex: '0 0 auto' }}>Range</span>
+                    <input type="range" min={0.05} max={0.9} step={0.05} value={zoom3d.amount} style={{ flex: 1, minWidth: 0 }}
+                      onChange={e => setZoom3d(z => ({ ...z, amount: Number(e.target.value) }))} />
+                  </label>
+                </>)}
 
                 {/* Clip interval (slab) — two cuts; the band [From, To] stays visible (req 6). */}
                 <label style={row}>
