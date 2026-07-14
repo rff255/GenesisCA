@@ -59,6 +59,7 @@ import { LookupInteractionNode } from './LookupInteractionNode';
 import { InteractionTableMapNode } from './InteractionTableMapNode';
 import { GetCellAttributeNode } from './GetCellAttributeNode';
 import { GetCellPositionNode } from './GetCellPositionNode';
+import { GetGridDimensionsNode } from './GetGridDimensionsNode';
 import { GetNeighborsAttributeNode } from './GetNeighborsAttributeNode';
 import { GetConstantNode } from './GetConstantNode';
 import { GetModelAttributeNode } from './GetModelAttributeNode';
@@ -237,6 +238,7 @@ const ALL_NODES: NodeTypeDef[] = [
   // Data
   GetCellAttributeNode,
   GetCellPositionNode,
+  GetGridDimensionsNode,
   GetModelAttributeNode,
   GetNeighborsAttributeNode,
   GetNeighborAttributeByIndexNode,

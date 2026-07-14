@@ -239,6 +239,49 @@ function buildMultiAttrModel() {
   };
 }
 
+// Get Grid Dimensions parity vehicle: the agent world's Width / Height / Depth
+// (the agent ABI's fieldW / fieldH / fieldD params on WASM, `_fieldW` / `_fieldH`
+// / derived-from-`_fieldTotal` on JS). 3D on purpose so Depth ≠ 1 — a wrong param
+// index or a 2D-only emit diverges immediately. Each dim goes to its own attr
+// (so a width/height swap is caught) and a fourth attr folds all three, so a
+// single wrong dim can't cancel out.
+function buildGridDimsModel() {
+  const used = new Set();
+  const nid = (p) => { let id; do { id = p + Math.random().toString(36).slice(2, 8); } while (used.has(id)); used.add(id); return id; };
+  const aN = [], aEd = [];
+  const an = (t, c) => { const n = { id: nid('a'), type: 'caNode', position: { x: 0, y: 0 }, data: { nodeType: t, config: c } }; aN.push(n); return n; };
+  const aE = (s, sp, tt, tp, cat) => aEd.push({ id: nid('e'), source: s.id, target: tt.id, sourceHandle: `output_${cat}_${sp}`, targetHandle: `input_${cat}_${tp}` });
+  const bs = an('behaviourStep', {});
+  const gd = an('getGridDimensions', {});
+  const fold = an('expression', { expression: 'a + b*1000 + c*1000000', visibleCount: 3 });
+  aE(gd, 'width', fold, 'a', 'value');
+  aE(gd, 'height', fold, 'b', 'value');
+  aE(gd, 'depth', fold, 'c', 'value');
+  // One multi-slot Set writes all four (also keeps the slot expansion on the path).
+  const set = an('setAttribute', { attributeId: 'gw', extraCount: 3, attr_2: 'gh', attr_3: 'gd', attr_4: 'fold' });
+  aE(gd, 'width', set, 'value', 'value');
+  aE(gd, 'height', set, 'value_2', 'value');
+  aE(gd, 'depth', set, 'value_3', 'value');
+  aE(fold, 'result', set, 'value_4', 'value');
+  aE(bs, 'do', set, 'do', 'flow');
+  return {
+    schemaVersion: 1,
+    properties: { name: 'Grid Dimensions Parity Test', dimension: '3d', gridWidth: 21, gridHeight: 13, gridDepth: 7, topology: '2d-grid', boundaryTreatment: 'torus', useWasm: false, useWebGPU: false },
+    topologyMode: { gridCells: false, agents: true },
+    centerBased: { enabled: true, maxAgents: 100, maxBonds: 0, worldWidth: 21, worldHeight: 13, worldDepth: 7, seedCount: 40, seedPattern: 'scatter', defaultRadius: 0.5, growthRate: 0, repulsionStiffness: 2, adhesionStiffness: 0, interactionRange: 1.5, drag: 1, timeStep: 0.1, momentum: 0, maxSpeed: 0, neighbourQueryRadius: 8, useBondingPhysics: false, autoBond: false, agentTarget: 'wasm', agentUpdateMode: 'async',
+      agentCapabilities: { motion: 'force', body: true, collision: 'off', bonds: 'off', autoBond: false, growth: false, division: false, lifespan: false, populationBirth: false, populationDeath: false, sensing: false, sensingHeadingSource: 'velocity', orientation: false, fieldCoupling: false, appearance: true } },
+    attributes: [], modelAttributes: [], neighborhoods: [],
+    agentAttributes: [
+      { id: 'gw', name: 'GW', type: 'float', defaultValue: '0' },
+      { id: 'gh', name: 'GH', type: 'float', defaultValue: '0' },
+      { id: 'gd', name: 'GD', type: 'float', defaultValue: '0' },
+      { id: 'fold', name: 'Fold', type: 'float', defaultValue: '0' },
+    ],
+    variables: [], agentVariables: [], indicators: [], mappings: [],
+    graphNodes: [], graphEdges: [], agentGraphNodes: aN, agentGraphEdges: aEd, macroDefs: [],
+  };
+}
+
 const modelsDir = join(ROOT, 'public', 'models');
 const files = readdirSync(modelsDir).filter(f => f.endsWith('.gcaproj'));
 const SEED = 0x9e3779b1 >>> 0;
@@ -259,6 +302,7 @@ entries.push({ name: '[synthetic] Field3D (all 5 field nodes, 3D)', raw: build3D
 entries.push({ name: '[synthetic] FOV cone (Get Agents In View)', raw: buildFOVModel() });
 entries.push({ name: '[synthetic] Hemifield (Sense Hemifield L/R)', raw: buildHemifieldModel() });
 entries.push({ name: '[synthetic] Multi-attribute slots (Get/Set + by-id)', raw: buildMultiAttrModel() });
+entries.push({ name: '[synthetic] Get Grid Dimensions (3D world W/H/D)', raw: buildGridDimsModel() });
 
 for (const { name: f, raw } of entries) {
   const model = migrateForHarness(raw);

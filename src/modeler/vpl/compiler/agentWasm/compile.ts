@@ -134,6 +134,8 @@ export const AGENT_WASM_SUPPORTED_TYPES: ReadonlySet<string> = new Set<string>([
   'behaviourStep',
   // self reads (SoA geometry + engine reductions)
   'getSelfPosition', 'getRadius', 'getAge', 'getBondDegree', 'neighbourDensity', 'getCurvature',
+  // world size (the agent world IS the cell grid — fieldW/fieldH/fieldD params)
+  'getGridDimensions',
   // neighbour access
   'getSelfHandle',
   'getNearbyAgents', 'getAgentsInView', 'senseHemifield', 'forEachInArray', 'getAgentOffset', 'getVelocity',
@@ -592,6 +594,16 @@ function compileValueNode(ctx: AgentWasmCtx, nodeId: string, portId: string): Va
     }
     case 'getRadius': {
       result = f64Result(() => pushF64Elem(em, ctx.layout.f64['radius']!, ctx.idxLocal));
+      break;
+    }
+    // Get Grid Dimensions — the agent world IS the cell grid (1:1), and its dims
+    // ride the behaviour signature as the fieldW / fieldH / fieldD f64 params
+    // (fieldD is 1 in a 2D world). Zero-cost: just re-read the param local.
+    case 'getGridDimensions': {
+      const dimLocal = portId === 'height' ? ctx.fieldHLocal
+        : portId === 'depth' ? ctx.fieldDLocal
+        : ctx.fieldWLocal;
+      result = f64Result(() => em.localGet(dimLocal));
       break;
     }
     case 'getAge': {

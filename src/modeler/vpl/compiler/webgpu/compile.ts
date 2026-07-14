@@ -2282,6 +2282,18 @@ const VALUE_NODE_EMITTERS: Record<string, NodeValueEmitter> = {
     if (D > 1) setCachedPort(ctx, node.id, 'layer', emitLet(ctx, 'i32', `i32(idx / ${W * H}u)`, 'cpLayer'));
     return row;  // default 'value' port → row
   },
+
+  // -- Get Grid Dimensions (multi-output: width, height, depth) ------------
+  // The world size, baked from the layout (which is derived from the SAME
+  // dimensions the runtime allocates — the simulator's Resize `dimsModel`, so a
+  // resized grid recompiles with the right literals). `gridDepth` is 1 in 2D.
+  getGridDimensions: ({ node, ctx }) => {
+    const w = emitLet(ctx, 'i32', `${ctx.layout.gridWidth}`, 'gdW');
+    setCachedPort(ctx, node.id, 'width', w);
+    setCachedPort(ctx, node.id, 'height', emitLet(ctx, 'i32', `${ctx.layout.gridHeight}`, 'gdH'));
+    setCachedPort(ctx, node.id, 'depth', emitLet(ctx, 'i32', `${ctx.layout.gridDepth}`, 'gdD'));
+    return w;  // default 'value' port → width
+  },
 };
 
 // ---------------------------------------------------------------------------
