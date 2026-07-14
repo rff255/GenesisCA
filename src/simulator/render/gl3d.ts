@@ -207,6 +207,13 @@ export interface Light3D {
   ambient: number;   // base fill 0..1
   diffuse: number;   // directional strength 0..~1.5
   specular: number;  // white Blinn-Phong highlight strength 0..1 (default 0)
+  /** GLOBAL LIGHTING (opt-in; default off = the historical per-fragment shade).
+   *  These make cells/agents affect each other's shading instead of each surface
+   *  being lit only by its own normal. */
+  shadows: boolean;       // cast shadows (shadow map) — voxels + agents cast + receive
+  shadowStrength: number; // 0..1 how dark a fully-shadowed diffuse term goes
+  ao: boolean;            // ambient occlusion (voxel occupancy) — crevices darken
+  aoStrength: number;     // 0..1 how much the ambient term is occluded
 }
 
 /** norm(0.4, 0.8, 0.6) — the exact light the shaders used to hardcode. */
@@ -216,6 +223,7 @@ export const DEFAULT_LIGHT3D: Readonly<Light3D> = Object.freeze({
   bx: -0.2, by: 0.55,
   wx: 0.4 / DEF_L, wy: 0.8 / DEF_L, wz: 0.6 / DEF_L,
   ambient: 0.45, diffuse: 0.55, specular: 0,
+  shadows: false, shadowStrength: 0.6, ao: false, aoStrength: 0.7,
 });
 
 const WORLD_UP: [number, number, number] = [0, 0, 1];
@@ -264,6 +272,37 @@ const CUBE: number[] = (() => {
   return out;
 })();
 
+// Shared cast-shadow sampling — spliced into the voxel + sphere fragment shaders
+// (right after `precision`, so its uniforms + shadowFactor() are declared before
+// use). Directional shadow map: transform the fragment's WORLD surface point into
+// light-clip space, PCF-sample the depth compare (sampler2DShadow), and return a
+// [0,1] factor folded by the user strength. uShadowEnabled=0 → 1.0 (no shadows,
+// byte-identical to the historical shade). Takes ndl (= max(0, N·L)) so it needs
+// no forward reference to the per-shader uLightDir.
+const SHADOW_GLSL = `
+precision highp sampler2DShadow;
+uniform int uShadowEnabled;
+uniform sampler2DShadow uShadowMap;
+uniform mat4 uLightMVP;
+uniform float uShadowStrength;
+uniform vec2 uShadowTexel;
+uniform float uShadowBias;   // base depth bias in [0,1] space (scale-relative: ~1 cell)
+float shadowFactor(vec3 fragWorld, float ndl) {
+  if (uShadowEnabled == 0) return 1.0;
+  vec4 lp = uLightMVP * vec4(fragWorld, 1.0);
+  vec3 sc = lp.xyz / lp.w * 0.5 + 0.5;
+  if (sc.x < 0.0 || sc.x > 1.0 || sc.y < 0.0 || sc.y > 1.0 || sc.z > 1.0) return 1.0;
+  float bias = uShadowBias * (1.0 + 3.0 * (1.0 - ndl));  // slope-scaled (steeper = more)
+  float ref = sc.z - bias;
+  float s = 0.0;
+  for (int y = -1; y <= 1; y++)
+    for (int x = -1; x <= 1; x++)
+      s += texture(uShadowMap, vec3(sc.xy + vec2(float(x), float(y)) * uShadowTexel, ref));
+  s /= 9.0;
+  return mix(1.0, s, uShadowStrength);
+}
+`;
+
 const VS = `#version 300 es
 precision highp float;
 layout(location=0) in vec3 aPos;
@@ -273,6 +312,7 @@ layout(location=2) in uint aCellIndex;   // flat SoA index of this instance (u32
                                          // to even, shifting voxels onto the wrong
                                          // column on grids past ~16.7M cells)
 layout(location=3) in vec4 aColor;       // rgba 0..1
+layout(location=4) in float aAO;         // occupancy AO 0..1 (0 exposed, 1 buried)
 uniform mat4 uMVP;
 uniform uint uWu; uniform uint uWHu;     // grid W and W*H (integer — exact decode)
 uniform vec3 uHalf;                      // half-extents (W-1)/2 etc.
@@ -280,6 +320,8 @@ uniform float uCubeScale;
 out vec4 vColor;
 out vec3 vNormal;
 out vec3 vWorld;     // world-space cell-centre (for the clip plane)
+out vec3 vFragWorld; // world-space surface point (for shadow-map sampling)
+out float vAO;
 void main() {
   uint layerU = aCellIndex / uWHu;
   uint remU = aCellIndex - layerU * uWHu;
@@ -291,17 +333,23 @@ void main() {
   // increases DOWN the screen); layer/depth→-Z (into the screen / downward,
   // layer 0 on top).
   vec3 centre = vec3(col - uHalf.x, uHalf.y - row, uHalf.z - layer);
+  vec3 world = aPos * uCubeScale + centre;
   vWorld = centre;
+  vFragWorld = world;
   vColor = aColor;
   vNormal = aNormal;
-  gl_Position = uMVP * vec4(aPos * uCubeScale + centre, 1.0);
+  vAO = aAO;
+  gl_Position = uMVP * vec4(world, 1.0);
 }`;
 
 const FS = `#version 300 es
 precision highp float;
+${SHADOW_GLSL}
 in vec4 vColor;
 in vec3 vNormal;
 in vec3 vWorld;
+in vec3 vFragWorld;
+in float vAO;
 uniform int uClipEnabled;   // 0/1
 uniform int uClipAxis;      // 0=x 1=y 2=z 3=camera-view-axis
 uniform float uClipLo;      // slab near bound (cells outside [lo,hi] are hidden)
@@ -312,6 +360,7 @@ uniform float uAmbient;     // base fill
 uniform float uDiffuse;     // directional strength
 uniform float uSpecular;    // white Blinn-Phong highlight strength (0 = off)
 uniform vec3 uViewDir;      // world-space dir toward the viewer (target→eye)
+uniform float uAOStrength;  // occupancy-AO amount (0 = off)
 out vec4 outColor;
 void main() {
   if (uClipEnabled == 1) {
@@ -320,13 +369,17 @@ void main() {
   }
   // Flat directional shade by face normal so the cubes read as solid volume.
   // Light dir + ambient/diffuse/specular come from the Lighting controls
-  // (defaults reproduce the historical 0.45 + 0.55·n·L shade exactly).
+  // (defaults reproduce the historical 0.45 + 0.55·n·L shade exactly). Global
+  // lighting (opt-in) layers occupancy AO onto ambient + cast shadows onto diffuse.
   vec3 N = normalize(vNormal);
-  float lum = uAmbient + uDiffuse * max(0.0, dot(N, uLightDir));
+  float ndl = max(0.0, dot(N, uLightDir));
+  float ao = 1.0 - uAOStrength * vAO;
+  float sh = shadowFactor(vFragWorld, ndl);
+  float lum = uAmbient * ao + uDiffuse * ndl * sh;
   vec3 col = vColor.rgb * lum;
   if (uSpecular > 0.0) {
     vec3 H = normalize(uLightDir + uViewDir);
-    col += uSpecular * pow(max(0.0, dot(N, H)), 32.0);
+    col += uSpecular * pow(max(0.0, dot(N, H)), 32.0) * sh;
   }
   outColor = vec4(col, vColor.a);
 }`;
@@ -449,6 +502,7 @@ void main() {
 }`;
 const SPHERE_FS = `#version 300 es
 precision highp float;
+${SHADOW_GLSL}
 in vec3 vCentre;
 in float vRadius;
 in vec2 vUV;
@@ -484,12 +538,15 @@ void main() {
   // Re-project the surface point so the impostor depth-interleaves with cubes.
   vec4 clip = uMVP * vec4(surf, 1.0);
   gl_FragDepth = (clip.z / clip.w) * 0.5 + 0.5;
-  // Same Lighting-controls shade as the voxel FS (view dir = -uCamForward).
-  float lum = uAmbient + uDiffuse * max(0.0, dot(n, uLightDir));
+  // Same Lighting-controls shade as the voxel FS (view dir = -uCamForward), plus
+  // the cast-shadow factor (agents receive shadows from voxels + each other).
+  float ndl = max(0.0, dot(n, uLightDir));
+  float sh = shadowFactor(surf, ndl);
+  float lum = uAmbient + uDiffuse * ndl * sh;
   vec3 col = vColor.rgb * lum;
   if (uSpecular > 0.0) {
     vec3 H = normalize(uLightDir - uCamForward);
-    col += uSpecular * pow(max(0.0, dot(n, H)), 32.0);
+    col += uSpecular * pow(max(0.0, dot(n, H)), 32.0) * sh;
   }
   outColor = vec4(col, vColor.a);
 }`;
@@ -621,6 +678,86 @@ void main() {
   outColor = vec4(t.rgb, a);
 }`;
 
+// ---------------------------------------------------------------------------
+// Cast-shadow DEPTH passes (global lighting). Render the voxel cubes + agent
+// spheres from the LIGHT's orthographic POV into a depth texture; the main voxel
+// + sphere shaders then PCF-sample it (SHADOW_GLSL) to darken shadowed diffuse.
+// Depth-only (no colour output). Clip-aware so a clipped-open view's interior is
+// lit as if the removed shell weren't casting.
+// ---------------------------------------------------------------------------
+const CUBE_SHADOW_VS = `#version 300 es
+precision highp float;
+layout(location=0) in vec3 aPos;
+layout(location=2) in uint aCellIndex;
+uniform mat4 uLightMVP;
+uniform uint uWu; uniform uint uWHu; uniform vec3 uHalf; uniform float uCubeScale;
+out vec3 vWorldS;
+void main() {
+  uint layerU = aCellIndex / uWHu;
+  uint remU = aCellIndex - layerU * uWHu;
+  uint rowU = remU / uWu;
+  vec3 centre = vec3(float(remU - rowU * uWu) - uHalf.x, uHalf.y - float(rowU), uHalf.z - float(layerU));
+  vWorldS = centre;
+  gl_Position = uLightMVP * vec4(aPos * uCubeScale + centre, 1.0);
+}`;
+const CUBE_SHADOW_FS = `#version 300 es
+precision highp float;
+in vec3 vWorldS;
+uniform int uClipEnabled; uniform int uClipAxis; uniform float uClipLo; uniform float uClipHi; uniform vec3 uClipForward;
+void main() {
+  if (uClipEnabled == 1) {
+    float w = uClipAxis == 0 ? vWorldS.x : uClipAxis == 1 ? vWorldS.y : uClipAxis == 2 ? vWorldS.z : dot(vWorldS, uClipForward);
+    if (w < uClipLo || w > uClipHi) discard;
+  }
+}`;
+const SPHERE_SHADOW_VS = `#version 300 es
+precision highp float;
+layout(location=0) in vec2 aCorner;
+layout(location=1) in vec3 aPos;
+layout(location=2) in float aRadius;
+uniform mat4 uLightMVP;
+uniform vec3 uHalf;
+uniform vec3 uLightRight;   // billboard axes perpendicular to the light dir
+uniform vec3 uLightUp;
+out vec3 vCentreS;
+out float vRadiusS;
+out vec2 vUVS;
+out float vSkipS;
+void main() {
+  vec3 centre = vec3(aPos.x - uHalf.x, uHalf.y - aPos.y, uHalf.z - aPos.z);
+  vCentreS = centre;
+  float ar = abs(aRadius);
+  vRadiusS = ar;
+  vSkipS = aRadius < 0.0 ? 1.0 : 0.0;   // sprite-agents don't cast a sphere shadow
+  vUVS = aCorner;
+  vec3 world = centre + (uLightRight * aCorner.x + uLightUp * aCorner.y) * ar;
+  gl_Position = uLightMVP * vec4(world, 1.0);
+}`;
+const SPHERE_SHADOW_FS = `#version 300 es
+precision highp float;
+in vec3 vCentreS;
+in float vRadiusS;
+in vec2 vUVS;
+in float vSkipS;
+uniform mat4 uLightMVP;
+uniform vec3 uLightRight;
+uniform vec3 uLightUp;
+uniform vec3 uLightDirW;    // dir TOWARD the light (unit)
+uniform int uClipEnabled; uniform int uClipAxis; uniform float uClipLo; uniform float uClipHi; uniform vec3 uClipForward;
+void main() {
+  if (vSkipS > 0.5) discard;
+  float r2 = dot(vUVS, vUVS);
+  if (r2 > 1.0) discard;
+  float zc = sqrt(1.0 - r2);
+  vec3 surf = vCentreS + (uLightRight * vUVS.x + uLightUp * vUVS.y + uLightDirW * zc) * vRadiusS;
+  if (uClipEnabled == 1) {
+    float w = uClipAxis == 0 ? surf.x : uClipAxis == 1 ? surf.y : uClipAxis == 2 ? surf.z : dot(surf, uClipForward);
+    if (w < uClipLo || w > uClipHi) discard;
+  }
+  vec4 clip = uLightMVP * vec4(surf, 1.0);
+  gl_FragDepth = clip.z / clip.w * 0.5 + 0.5;
+}`;
+
 function compileProgram(gl: WebGL2RenderingContext, vsSrc: string, fsSrc: string): WebGLProgram {
   const vs = gl.createShader(gl.VERTEX_SHADER)!;
   gl.shaderSource(vs, vsSrc); gl.compileShader(vs);
@@ -644,6 +781,13 @@ export class Gl3DRenderer {
   private instBuf: WebGLBuffer;
   private instCapacity = 0;     // floats allocated in instBuf
   private instData: Float32Array = new Float32Array(0);
+  /** Per-voxel occupancy AMBIENT OCCLUSION — one float/instance (0 = fully
+   *  exposed, 1 = surrounded), a PARALLEL buffer to instBuf (attrib 4 on `vao`)
+   *  so the tightly-tuned 5-lane instBuf layout + pick/sort stay untouched.
+   *  Computed in uploadColors from neighbour occupancy only when light.ao is on. */
+  private aoBuf: WebGLBuffer;
+  private aoData: Float32Array = new Float32Array(0);
+  private aoCapacity = 0;       // floats allocated in aoBuf
   /** Uint32 view over instData.buffer — the cellIndex lane (slot 0 of each 5-lane
    *  record) is written/read through THIS view so indices stay exact past 2^24
    *  (a Float32 write silently rounds odd indices to even on >16.7M-cell grids). */
@@ -728,6 +872,22 @@ export class Gl3DRenderer {
   /** Fixed atlas cell size (each frame is drawn stretched to CELL×CELL; the
    *  aspect-shaped billboard quad un-stretches it — see SPRITE_VS). */
   private static readonly ATLAS_CELL = 128;
+  // --- Cast shadows (global lighting). Depth-only light-space passes + a shadow
+  //     depth texture the main voxel/sphere shaders PCF-sample. Created lazily
+  //     the first time shadows are enabled; a 1×1 dummy keeps the sampler valid
+  //     (always bound to SHADOW_TEX_UNIT) when shadows are off. ---
+  private cubeShadowProg: WebGLProgram;
+  private sphereShadowProg: WebGLProgram;
+  private shadowFbo: WebGLFramebuffer | null = null;
+  private shadowTex: WebGLTexture | null = null;
+  private dummyShadowTexObj: WebGLTexture | null = null;
+  private static readonly SHADOW_SIZE = 2048;
+  private static readonly SHADOW_TEX_UNIT = 1;
+  private lightMVP: Mat4 = mat4Identity();
+  private lightRight: [number, number, number] = [1, 0, 0];
+  private lightUp: [number, number, number] = [0, 1, 0];
+  private shadowDepthRange = 1;   // ortho far-near span (world units) for a scale-relative bias
+  private shadowUnsupported = false;  // set if the depth-only shadow FBO is incomplete (→ shadows quietly off)
 
   constructor(canvas: HTMLCanvasElement) {
     const gl = canvas.getContext('webgl2', { antialias: true, alpha: true, preserveDrawingBuffer: true });
@@ -749,6 +909,11 @@ export class Gl3DRenderer {
     gl.bindBuffer(gl.ARRAY_BUFFER, this.instBuf);
     gl.enableVertexAttribArray(2); gl.vertexAttribIPointer(2, 1, gl.UNSIGNED_INT, 20, 0); gl.vertexAttribDivisor(2, 1);
     gl.enableVertexAttribArray(3); gl.vertexAttribPointer(3, 4, gl.FLOAT, false, 20, 4); gl.vertexAttribDivisor(3, 1);
+    // Parallel per-instance AO buffer (attrib 4, 1 float). Only the main voxel
+    // program declares location 4; the pick / shadow cube programs ignore it.
+    this.aoBuf = gl.createBuffer()!;
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.aoBuf);
+    gl.enableVertexAttribArray(4); gl.vertexAttribPointer(4, 1, gl.FLOAT, false, 4, 0); gl.vertexAttribDivisor(4, 1);
     gl.bindVertexArray(null);
     // Line pipeline (axes/grid/bounds/gizmo): pos(3) + color(3), stride 24.
     this.lineProg = compileProgram(gl, LINE_VS, LINE_FS);
@@ -790,6 +955,10 @@ export class Gl3DRenderer {
     gl.enableVertexAttribArray(4); gl.vertexAttribPointer(4, 1, gl.FLOAT, false, 36, 28); gl.vertexAttribDivisor(4, 1);
     gl.enableVertexAttribArray(5); gl.vertexAttribPointer(5, 1, gl.FLOAT, false, 36, 32); gl.vertexAttribDivisor(5, 1);
     gl.bindVertexArray(null);
+    // Cast-shadow depth programs (reuse the cube VAO + sphere VAO — they read only
+    // aPos/aCellIndex resp. aCorner/aPos/aRadius; the extra attribs are ignored).
+    this.cubeShadowProg = compileProgram(gl, CUBE_SHADOW_VS, CUBE_SHADOW_FS);
+    this.sphereShadowProg = compileProgram(gl, SPHERE_SHADOW_VS, SPHERE_SHADOW_FS);
     gl.enable(gl.DEPTH_TEST);
     gl.clearColor(0, 0, 0, 0);
   }
@@ -833,6 +1002,137 @@ export class Gl3DRenderer {
     gl.uniform1f(gl.getUniformLocation(prog, 'uDiffuse'), this.light.diffuse);
     gl.uniform1f(gl.getUniformLocation(prog, 'uSpecular'), this.light.specular);
     gl.uniform3f(gl.getUniformLocation(prog, 'uViewDir'), this.camDir[0], this.camDir[1], this.camDir[2]);
+    // Cast-shadow uniforms (voxel + sphere programs; null on pick/line = no-op).
+    // The shadow map (or a 1×1 dummy when off) is ALWAYS bound to a dedicated unit
+    // so the sampler2DShadow stays valid; the FS branches out on uShadowEnabled=0.
+    const shadowsOn = this.light.shadows && !this.shadowUnsupported;
+    gl.uniform1i(gl.getUniformLocation(prog, 'uShadowEnabled'), shadowsOn ? 1 : 0);
+    gl.uniformMatrix4fv(gl.getUniformLocation(prog, 'uLightMVP'), false, this.lightMVP);
+    gl.uniform1f(gl.getUniformLocation(prog, 'uShadowStrength'), this.light.shadowStrength);
+    const texel = 1 / Gl3DRenderer.SHADOW_SIZE;
+    gl.uniform2f(gl.getUniformLocation(prog, 'uShadowTexel'), texel, texel);
+    // ~0.9 world-unit (≈1 cell) base bias mapped into the light's [0,1] depth range
+    // (scale-relative → avoids acne on small grids AND peter-panning on huge ones).
+    gl.uniform1f(gl.getUniformLocation(prog, 'uShadowBias'), Math.min(0.02, Math.max(0.0002, 0.9 / (this.shadowDepthRange || 1))));
+    gl.activeTexture(gl.TEXTURE0 + Gl3DRenderer.SHADOW_TEX_UNIT);
+    gl.bindTexture(gl.TEXTURE_2D, shadowsOn && this.shadowTex ? this.shadowTex : this.ensureDummyShadowTex());
+    gl.uniform1i(gl.getUniformLocation(prog, 'uShadowMap'), Gl3DRenderer.SHADOW_TEX_UNIT);
+    gl.activeTexture(gl.TEXTURE0);
+  }
+
+  /** Clip-interval uniforms (shared by the shadow depth passes). */
+  private setClipUniforms(gl: WebGL2RenderingContext, prog: WebGLProgram): void {
+    gl.uniform1i(gl.getUniformLocation(prog, 'uClipEnabled'), this.clip.enabled ? 1 : 0);
+    const axisN = this.clip.axis === 'x' ? 0 : this.clip.axis === 'y' ? 1 : this.clip.axis === 'z' ? 2 : 3;
+    gl.uniform1i(gl.getUniformLocation(prog, 'uClipAxis'), axisN);
+    gl.uniform1f(gl.getUniformLocation(prog, 'uClipLo'), this.clip.lo);
+    gl.uniform1f(gl.getUniformLocation(prog, 'uClipHi'), this.clip.hi);
+    gl.uniform3f(gl.getUniformLocation(prog, 'uClipForward'), this.camForward[0], this.camForward[1], this.camForward[2]);
+  }
+
+  /** Directional shadow-map light matrix (ortho, fitting the volume's bounding
+   *  sphere so it's stable at any light angle) + the light-perpendicular billboard
+   *  axes for the sphere shadow caster. */
+  private computeLightMVP(): void {
+    const R = Math.hypot((this.W - 1) / 2 + 0.5, (this.H - 1) / 2 + 0.5, (this.D - 1) / 2 + 0.5) || 1;
+    const L = this.lightWorldDir();  // dir toward the light (world centred at origin)
+    const up: [number, number, number] = Math.abs(L[2]) > 0.99 ? [0, 1, 0] : [0, 0, 1];
+    const eye: [number, number, number] = [L[0] * 2 * R, L[1] * 2 * R, L[2] * 2 * R];
+    const view = mat4LookAt(eye, [0, 0, 0], up);
+    const proj = mat4Ortho(-R, R, -R, R, 0.5 * R, 3.5 * R);
+    this.lightMVP = mat4Mul(proj, view);
+    this.shadowDepthRange = 3 * R;  // far - near, for the scale-relative depth bias
+    // Billboard axes ⟂ L (cross(up,L) → right, cross(L,right) → up).
+    let rx = up[1] * L[2] - up[2] * L[1], ry = up[2] * L[0] - up[0] * L[2], rz = up[0] * L[1] - up[1] * L[0];
+    const rn = Math.hypot(rx, ry, rz) || 1; rx /= rn; ry /= rn; rz /= rn;
+    this.lightRight = [rx, ry, rz];
+    this.lightUp = [L[1] * rz - L[2] * ry, L[2] * rx - L[0] * rz, L[0] * ry - L[1] * rx];
+  }
+
+  /** Create the shadow depth texture + FBO (lazy — only when shadows first turn
+   *  on). LINEAR + COMPARE_REF gives free 2×2 hardware PCF per tap. */
+  private ensureShadowFbo(): void {
+    if (this.shadowFbo || this.shadowUnsupported) return;
+    const gl = this.gl, S = Gl3DRenderer.SHADOW_SIZE;
+    this.shadowTex = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, this.shadowTex);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.DEPTH_COMPONENT24, S, S, 0, gl.DEPTH_COMPONENT, gl.UNSIGNED_INT, null);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_COMPARE_MODE, gl.COMPARE_REF_TO_TEXTURE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_COMPARE_FUNC, gl.LEQUAL);
+    this.shadowFbo = gl.createFramebuffer();
+    gl.bindFramebuffer(gl.FRAMEBUFFER, this.shadowFbo);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.TEXTURE_2D, this.shadowTex, 0);
+    gl.drawBuffers([gl.NONE]);
+    gl.readBuffer(gl.NONE);
+    const ok = gl.checkFramebufferStatus(gl.FRAMEBUFFER) === gl.FRAMEBUFFER_COMPLETE;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.bindTexture(gl.TEXTURE_2D, null);
+    if (!ok) {  // driver can't do a depth-only shadow FBO → quietly disable shadows
+      gl.deleteFramebuffer(this.shadowFbo); gl.deleteTexture(this.shadowTex);
+      this.shadowFbo = null; this.shadowTex = null; this.shadowUnsupported = true;
+    }
+  }
+
+  /** A 1×1 depth-compare texture kept bound to SHADOW_TEX_UNIT while shadows are
+   *  off, so the sampler2DShadow is always valid (never sampled — uShadowEnabled=0). */
+  private ensureDummyShadowTex(): WebGLTexture {
+    if (this.dummyShadowTexObj) return this.dummyShadowTexObj;
+    const gl = this.gl;
+    const t = gl.createTexture()!;
+    gl.bindTexture(gl.TEXTURE_2D, t);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.DEPTH_COMPONENT24, 1, 1, 0, gl.DEPTH_COMPONENT, gl.UNSIGNED_INT, null);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_COMPARE_MODE, gl.COMPARE_REF_TO_TEXTURE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_COMPARE_FUNC, gl.LEQUAL);
+    gl.bindTexture(gl.TEXTURE_2D, null);
+    this.dummyShadowTexObj = t;
+    return t;
+  }
+
+  /** Render the voxel cubes + agent spheres from the light POV into the shadow
+   *  depth texture (no-op when shadows are off). Runs before the main pass. */
+  private renderShadowMap(): void {
+    if (!this.light.shadows || this.shadowUnsupported) return;
+    const gl = this.gl, S = Gl3DRenderer.SHADOW_SIZE;
+    this.ensureShadowFbo();
+    if (!this.shadowFbo) return;  // creation failed (unsupported) → skip
+    this.computeLightMVP();
+    gl.bindFramebuffer(gl.FRAMEBUFFER, this.shadowFbo);
+    gl.viewport(0, 0, S, S);
+    gl.clear(gl.DEPTH_BUFFER_BIT);
+    gl.enable(gl.DEPTH_TEST); gl.depthMask(true); gl.disable(gl.BLEND);
+    const hx = (this.W - 1) / 2, hy = (this.H - 1) / 2, hz = (this.D - 1) / 2;
+    if (this.viz.voxels && this.instanceCount > 0) {
+      gl.useProgram(this.cubeShadowProg);
+      gl.bindVertexArray(this.vao);
+      gl.uniformMatrix4fv(gl.getUniformLocation(this.cubeShadowProg, 'uLightMVP'), false, this.lightMVP);
+      gl.uniform1ui(gl.getUniformLocation(this.cubeShadowProg, 'uWu'), this.W);
+      gl.uniform1ui(gl.getUniformLocation(this.cubeShadowProg, 'uWHu'), this.W * this.H);
+      gl.uniform3f(gl.getUniformLocation(this.cubeShadowProg, 'uHalf'), hx, hy, hz);
+      gl.uniform1f(gl.getUniformLocation(this.cubeShadowProg, 'uCubeScale'), this.cubeScale);
+      this.setClipUniforms(gl, this.cubeShadowProg);
+      gl.drawArraysInstanced(gl.TRIANGLES, 0, 36, this.instanceCount);
+      gl.bindVertexArray(null);
+    }
+    if (this.viz.agents && this.agentInstanceCount > 0) {
+      const L = this.lightWorldDir();
+      gl.useProgram(this.sphereShadowProg);
+      gl.bindVertexArray(this.sphereVao);
+      gl.uniformMatrix4fv(gl.getUniformLocation(this.sphereShadowProg, 'uLightMVP'), false, this.lightMVP);
+      gl.uniform3f(gl.getUniformLocation(this.sphereShadowProg, 'uHalf'), hx, hy, hz);
+      gl.uniform3f(gl.getUniformLocation(this.sphereShadowProg, 'uLightRight'), this.lightRight[0], this.lightRight[1], this.lightRight[2]);
+      gl.uniform3f(gl.getUniformLocation(this.sphereShadowProg, 'uLightUp'), this.lightUp[0], this.lightUp[1], this.lightUp[2]);
+      gl.uniform3f(gl.getUniformLocation(this.sphereShadowProg, 'uLightDirW'), L[0], L[1], L[2]);
+      this.setClipUniforms(gl, this.sphereShadowProg);
+      gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, this.agentInstanceCount);
+      gl.bindVertexArray(null);
+    }
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
   }
 
   /** "Draw agents in front" (default ON — the historical behaviour): agents render
@@ -952,17 +1252,41 @@ export class Gl3DRenderer {
     }
     const d = this.instData;
     const u = this.instDataU32;
+    // Occupancy AO: darken cells by how many of their 6 face-neighbours are
+    // filled (crevices/interiors → darker), so a packed volume reads as one solid
+    // form instead of flat-shaded cubes. Only computed when AO is enabled (an
+    // opt-in cost that folds into this per-step scan); otherwise the parallel
+    // buffer is left as-is (multiplied by uAOStrength=0 in the FS, so ignored).
+    const aoOn = this.light.ao;
+    if (aoOn && this.aoData.length < total) this.aoData = new Float32Array(total);
+    const ao = this.aoData;
+    const W = this.W, H = this.H, D = this.D, WH = W * H;
+    let col = 0, row = 0, layer = 0;
     let n = 0;
     for (let i = 0; i < total; i++) {
       const a = colors[i * 4 + 3]!;
-      if (a === 0) continue;
-      const o = n * 5;
-      u[o] = i;  // u32 lane — exact for any grid size (f32 rounds past 2^24)
-      d[o + 1] = colors[i * 4]! / 255;
-      d[o + 2] = colors[i * 4 + 1]! / 255;
-      d[o + 3] = colors[i * 4 + 2]! / 255;
-      d[o + 4] = a / 255;
-      n++;
+      if (a !== 0) {
+        const o = n * 5;
+        u[o] = i;  // u32 lane — exact for any grid size (f32 rounds past 2^24)
+        d[o + 1] = colors[i * 4]! / 255;
+        d[o + 2] = colors[i * 4 + 1]! / 255;
+        d[o + 3] = colors[i * 4 + 2]! / 255;
+        d[o + 4] = a / 255;
+        if (aoOn) {
+          let cnt = 0;
+          if (col > 0 && colors[(i - 1) * 4 + 3]! !== 0) cnt++;
+          if (col < W - 1 && colors[(i + 1) * 4 + 3]! !== 0) cnt++;
+          if (row > 0 && colors[(i - W) * 4 + 3]! !== 0) cnt++;
+          if (row < H - 1 && colors[(i + W) * 4 + 3]! !== 0) cnt++;
+          if (layer > 0 && colors[(i - WH) * 4 + 3]! !== 0) cnt++;
+          if (layer < D - 1 && colors[(i + WH) * 4 + 3]! !== 0) cnt++;
+          ao[n] = cnt / 6;
+        }
+        n++;
+      }
+      // Advance the (col,row,layer) of cell i — only tracked when AO is on (the
+      // off path stays as cheap as the historical scan).
+      if (aoOn && ++col >= W) { col = 0; if (++row >= H) { row = 0; layer++; } }
     }
     this.instanceCount = n;
     const gl = this.gl;
@@ -972,6 +1296,16 @@ export class Gl3DRenderer {
       this.instCapacity = d.length;
     } else {
       gl.bufferSubData(gl.ARRAY_BUFFER, 0, d.subarray(0, n * 5));
+    }
+    // Upload the parallel AO buffer. Grow allocates (keeping the attrib valid even
+    // when AO is off); when AO is on we refresh it each step; when off + no grow we
+    // skip (the buffered values are ×0 in the shader).
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.aoBuf);
+    if (this.aoCapacity < n) {
+      gl.bufferData(gl.ARRAY_BUFFER, ao.length >= n ? ao : new Float32Array(n), gl.DYNAMIC_DRAW);
+      this.aoCapacity = Math.max(n, ao.length);
+    } else if (aoOn) {
+      gl.bufferSubData(gl.ARRAY_BUFFER, 0, ao.subarray(0, n));
     }
     return n;
   }
@@ -1010,6 +1344,15 @@ export class Gl3DRenderer {
     const gl = this.gl;
     gl.bindBuffer(gl.ARRAY_BUFFER, this.instBuf);
     gl.bufferSubData(gl.ARRAY_BUFFER, 0, sorted);
+    // Keep the parallel AO buffer in step with the reordered instances.
+    if (this.light.ao && this.aoData.length >= n) {
+      const ao = this.aoData;
+      const sortedAo = new Float32Array(n);
+      for (let k = 0; k < n; k++) sortedAo[k] = ao[order[k]!]!;
+      ao.set(sortedAo.subarray(0, n));
+      gl.bindBuffer(gl.ARRAY_BUFFER, this.aoBuf);
+      gl.bufferSubData(gl.ARRAY_BUFFER, 0, sortedAo);
+    }
   }
 
   // ------------------------------------------------------------------------
@@ -1339,6 +1682,7 @@ export class Gl3DRenderer {
     gl.uniform1ui(gl.getUniformLocation(prog, 'uWHu'), this.W * this.H);
     gl.uniform3f(gl.getUniformLocation(prog, 'uHalf'), (this.W - 1) / 2, (this.H - 1) / 2, (this.D - 1) / 2);
     gl.uniform1f(gl.getUniformLocation(prog, 'uCubeScale'), this.cubeScale);
+    gl.uniform1f(gl.getUniformLocation(prog, 'uAOStrength'), this.light.ao ? this.light.aoStrength : 0);
     this.setLightUniforms(gl, prog);
     gl.uniform1i(gl.getUniformLocation(prog, 'uClipEnabled'), this.clip.enabled ? 1 : 0);
     const axisN = this.clip.axis === 'x' ? 0 : this.clip.axis === 'y' ? 1 : this.clip.axis === 'z' ? 2 : 3;
@@ -1358,6 +1702,9 @@ export class Gl3DRenderer {
 
   render(): void {
     const gl = this.gl;
+    // Cast-shadow depth pass (light POV) — first, before the canvas pass. No-op
+    // when shadows are off; the voxel/sphere shaders then PCF-sample the result.
+    this.renderShadowMap();
     gl.viewport(0, 0, gl.canvas.width, gl.canvas.height);
     gl.clearColor(this.bgColor[0], this.bgColor[1], this.bgColor[2], this.bgColor[3]);
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
@@ -1825,17 +2172,22 @@ export class Gl3DRenderer {
     gl.deleteProgram(this.sphereProg);
     gl.deleteProgram(this.spherePickProg);
     gl.deleteProgram(this.spriteProg);
+    gl.deleteProgram(this.cubeShadowProg);
+    gl.deleteProgram(this.sphereShadowProg);
     gl.deleteVertexArray(this.vao);
     gl.deleteVertexArray(this.lineVao);
     gl.deleteVertexArray(this.sphereVao);
     gl.deleteVertexArray(this.spriteVao);
     gl.deleteBuffer(this.cubeBuf);
     gl.deleteBuffer(this.instBuf);
+    gl.deleteBuffer(this.aoBuf);
     gl.deleteBuffer(this.lineBuf);
     gl.deleteBuffer(this.quadBuf);
     gl.deleteBuffer(this.agentInstBuf);
     gl.deleteBuffer(this.spriteInstBuf);
     if (this.spriteAtlasTex) gl.deleteTexture(this.spriteAtlasTex);
     if (this.pickFbo) { gl.deleteFramebuffer(this.pickFbo); gl.deleteTexture(this.pickTex!); gl.deleteRenderbuffer(this.pickDepth!); }
+    if (this.shadowFbo) { gl.deleteFramebuffer(this.shadowFbo); gl.deleteTexture(this.shadowTex!); }
+    if (this.dummyShadowTexObj) gl.deleteTexture(this.dummyShadowTexObj);
   }
 }

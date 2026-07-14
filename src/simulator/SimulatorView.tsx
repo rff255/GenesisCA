@@ -75,6 +75,10 @@ function sanitizeLight3d(raw: unknown): Light3D {
     ambient: num(r.ambient, d.ambient, 0, 1),
     diffuse: num(r.diffuse, d.diffuse, 0, 1.5),
     specular: num(r.specular, d.specular, 0, 1),
+    shadows: typeof r.shadows === 'boolean' ? r.shadows : d.shadows,
+    shadowStrength: num(r.shadowStrength, d.shadowStrength, 0, 1),
+    ao: typeof r.ao === 'boolean' ? r.ao : d.ao,
+    aoStrength: num(r.aoStrength, d.aoStrength, 0, 1),
   };
 }
 
@@ -4670,7 +4674,16 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   useEffect(() => { clip3dRef.current = clip3d; draw(); }, [clip3d, draw]);
   useEffect(() => { alpha3dRef.current = alpha3d; draw(); }, [alpha3d, draw]);
   useEffect(() => { agentsFront3dRef.current = agentsFront3d; draw(); }, [agentsFront3d, draw]);
-  useEffect(() => { light3dRef.current = light3d; draw(); }, [light3d, draw]);
+  // The occupancy AO is BAKED into the voxel buffer at upload time, so toggling
+  // AO on/off must force a re-upload (colours are unchanged, so draw()'s
+  // identity check would otherwise skip uploadColors and the AO never appears /
+  // clears). Strength changes are a shader uniform → just a redraw.
+  const prevAoRef = useRef(light3d.ao);
+  useEffect(() => {
+    light3dRef.current = light3d;
+    if (light3d.ao !== prevAoRef.current) { prevAoRef.current = light3d.ao; lastUploadedColors3dRef.current = null; }
+    draw();
+  }, [light3d, draw]);
   useEffect(() => { cellGaps3dRef.current = cellGaps3d; draw(); }, [cellGaps3d, draw]);
   useEffect(() => { viz3dRef.current = viz3d; draw(); }, [viz3d, draw]);
   useEffect(() => {
@@ -8224,6 +8237,25 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
                     title="The light is fixed in the scene — orbiting sweeps the lit side (sun style)"
                     onClick={() => setLightMode('world')}>World</button>
                 </div>
+                {/* Global lighting (opt-in): cast shadows + ambient occlusion —
+                    cells/agents shade each other instead of each surface being lit
+                    only by its own normal. */}
+                <label style={{ ...row, gap: 4 }} title="Cast shadows — voxels and agents shadow each other (shadow-mapped). Slider = darkness.">
+                  <input type="checkbox" checked={light3d.shadows} data-sim-overlay
+                    onChange={e => setLight3d(l => ({ ...l, shadows: e.target.checked }))} />
+                  <span style={{ fontSize: '0.6rem', color: '#999', width: 60, flex: '0 0 auto' }}>Shadows</span>
+                  <input type="range" min={0} max={1} step={0.01} value={light3d.shadowStrength} disabled={!light3d.shadows}
+                    style={{ flex: 1, minWidth: 0, opacity: light3d.shadows ? 1 : 0.4 }}
+                    onChange={e => setLight3d(l => ({ ...l, shadowStrength: Number(e.target.value) }))} />
+                </label>
+                <label style={{ ...row, gap: 4 }} title="Ambient occlusion — crevices between filled cells darken so a packed volume reads as one solid form. Slider = strength.">
+                  <input type="checkbox" checked={light3d.ao} data-sim-overlay
+                    onChange={e => setLight3d(l => ({ ...l, ao: e.target.checked }))} />
+                  <span style={{ fontSize: '0.6rem', color: '#999', width: 60, flex: '0 0 auto' }}>Occlusion</span>
+                  <input type="range" min={0} max={1} step={0.01} value={light3d.aoStrength} disabled={!light3d.ao}
+                    style={{ flex: 1, minWidth: 0, opacity: light3d.ao ? 1 : 0.4 }}
+                    onChange={e => setLight3d(l => ({ ...l, aoStrength: Number(e.target.value) }))} />
+                </label>
               </>)}
             </div>
           );
