@@ -86,6 +86,15 @@ export interface CompileContext {
    *  to relax the live-agent guard in the init context (a freshly Created agent is
    *  STAGED — alive=0 — until Add Agent To World commits it). Absent on cell roots. */
   agentRoot?: 'init' | 'behaviour' | 'division';
+  /** Generic Agent Platform: true when the current root belongs to the AGENTS
+   *  graph (behaviourStep / divisionEvent / agentInit / agentOutputMapping), i.e.
+   *  the emitted code runs in a per-agent function whose ABI carries the agent
+   *  SoA + the `_field*` world dims — NOT the per-cell `W`/`H`/`D` step params.
+   *  Distinct from `agentRoot`, which is undefined on the agent OUTPUT MAPPING
+   *  root (it only tags the three roots whose live-agent guard differs). Used by
+   *  the universal nodes that read the same thing from a different ABI on the two
+   *  graphs (Get Grid Dimensions). Absent/false on cell roots. */
+  agentGraph?: boolean;
 }
 
 /** Capability requirements for a node type. A node whose requirements aren't

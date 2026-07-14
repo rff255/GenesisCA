@@ -1168,6 +1168,27 @@ const VALUE_NODE_EMITTERS: Record<string, NodeValueEmitter> = {
     return rowRef;  // default 'value' port → row (parity with other multi-output emitters)
   },
 
+  // Get Grid Dimensions — the world size (width / height / depth). Compile-time
+  // constants baked from the model the compiler was handed (the SIMULATOR passes a
+  // `dimsModel` with the live dimensions after a Resize, so these track the real
+  // grid — never the stale saved ones). Depth is 1 in a 2D model. Pure + input-free
+  // ⇒ loop-invariant, so this lands in the pre-loop preamble.
+  getGridDimensions: ({ node, ctx }) => {
+    const p = ctx.model.properties;
+    const D = p.dimension === '3d' ? Math.max(1, p.gridDepth ?? 1) : 1;
+    const konst = (v: number): LocalRef => {
+      const l = ctx.emitter.allocLocal(I32);
+      ctx.emitter.i32Const(v);
+      ctx.emitter.localSet(l);
+      return { localIdx: l, valtype: I32 };
+    };
+    const wRef = konst(p.gridWidth);
+    setCachedPort(ctx, node.id, 'width', wRef);
+    setCachedPort(ctx, node.id, 'height', konst(p.gridHeight));
+    setCachedPort(ctx, node.id, 'depth', konst(D));
+    return wRef;  // default 'value' port → width
+  },
+
   getModelAttribute: ({ node, ctx }) => {
     const attrId = node.data.config.attributeId as string;
     const isColor = !!node.data.config.isColorAttr;

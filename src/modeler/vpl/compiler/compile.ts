@@ -76,12 +76,20 @@ function buildAdjacency(graphNodes: GraphNode[], graphEdges: GraphEdge[]) {
 const MULTI_OUTPUT_TYPES = new Set(['inputColor', 'initEvent', 'getColorConstant', 'macro', 'colorScale', 'categoricalColor', 'breakDownNeighborIndex', 'getFacingLabels', 'getAllFacingLabels', 'getCellPosition', 'behaviourStep', 'divisionEvent', 'getSelfPosition', 'forEachBond', 'fieldGradient', 'getAgentPosition', 'getAgentOffset', 'getVelocity', 'senseHemifield',
   // Grid Init Event's value-outs (width/height/depth) resolve via `_v<id>_<port>`.
   'gridInit',
+  // Get Grid Dimensions (universal — cells AND agents): width/height/depth.
+  'getGridDimensions',
   // Generic Agent Platform spawn/init: the Agent Init Event's value-outs
   // (worldWidth/worldHeight/seedIndexBase) + Create Agent's `handle` resolve via
   // the `_v<id>_<port>` convention.
   'agentInit', 'createAgent',
   // Composite-type Break nodes + Vector Op resolve via the `_v<id>_<port>` convention.
   'breakVector', 'breakColor', 'vectorOp']);
+
+/** The four AGENTS-graph event roots. A root in this set compiles into a
+ *  per-AGENT function (the agent ABI — `_agentX`, `_fieldW`, …); anything else is
+ *  a per-CELL function (`W`/`H`/`D`, `r_<attr>`, …). Drives `CompileContext.agentGraph`
+ *  so a UNIVERSAL node (one available on both graphs) can emit against the right ABI. */
+const AGENT_ROOT_TYPES = new Set(['behaviourStep', 'divisionEvent', 'agentInit', 'agentOutputMapping']);
 
 /** Check if a node's data uses multi-output variable naming */
 function isMultiOutput(data: { nodeType: string; config: Record<string, string | number | boolean> }): boolean {
@@ -443,6 +451,11 @@ function compileRoot(
       : rootNode.data.nodeType === 'behaviourStep' ? 'behaviour'
       : rootNode.data.nodeType === 'divisionEvent' ? 'division'
       : undefined,
+    // Which GRAPH this root belongs to. Unlike `agentRoot` this also covers the
+    // agent OUTPUT MAPPING root, so a universal node can tell "I'm compiling into
+    // a per-agent function (agent ABI: `_fieldW`/`_fieldH`/`_fieldTotal`)" from
+    // "I'm compiling into a per-cell function (`W`/`H`/`D` params)".
+    agentGraph: AGENT_ROOT_TYPES.has(rootNode.data.nodeType),
   };
 
   const compiled = new Set<string>();

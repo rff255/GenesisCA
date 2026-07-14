@@ -74,6 +74,8 @@ export const AGENT_WEBGPU_SUPPORTED_TYPES: ReadonlySet<string> = new Set<string>
   'behaviourStep',
   // self reads
   'getSelfPosition', 'getSelfHandle', 'getRadius', 'getAge', 'getBondDegree', 'neighbourDensity', 'getCurvature',
+  // world size (the agent world IS the cell grid — control.fieldW/H/D)
+  'getGridDimensions',
   // neighbour access
   'getNearbyAgents', 'getAgentsInView', 'senseHemifield', 'forEachInArray', 'getAgentOffset', 'getVelocity',
   'getAgentPosition', 'getAgentRadius', 'getAgentAttribute',
@@ -419,6 +421,15 @@ function compileValueNode(ctx: AgentWgpuCtx, nodeId: string, portId: string): Va
       result = emitLet(ctx, 'f32', f32At(ctx, 'radius', 'idx'), 'rad');
       break;
     }
+    // Get Grid Dimensions — the agent world IS the cell grid (1:1); its dims ride
+    // the Control uniform as fieldW / fieldH / fieldD (fieldD is 1 in a 2D world).
+    case 'getGridDimensions': {
+      const dim = portId === 'height' ? 'control.fieldH'
+        : portId === 'depth' ? 'control.fieldD'
+        : 'control.fieldW';
+      result = emitLet(ctx, 'f32', dim, 'gdim');
+      break;
+    }
     case 'getAge': {
       result = emitLet(ctx, 'f32', f32At(ctx, 'age', 'idx'), 'age');
       break;
@@ -636,6 +647,12 @@ function emitBehaviourStep(ctx: AgentWgpuCtx, portId: string): ValueRef {
   switch (portId) {
     case 'myX': return emitLet(ctx, 'f32', f32At(ctx, 'x', 'idx'), 'myX');
     case 'myY': return emitLet(ctx, 'f32', f32At(ctx, 'y', 'idx'), 'myY');
+    // `myZ` exists only in a 3D world (the `z` SoA run is appended only then, and
+    // the port is hidden in 2D). Without this case a 3D Behaviour Step → Z wire
+    // silently read 0.0 on WebGPU while JS/WASM read `_agentZ[idx]`.
+    case 'myZ': return ctx.is3d
+      ? emitLet(ctx, 'f32', f32At(ctx, 'z', 'idx'), 'myZ')
+      : { expr: '0.0', type: 'f32' };
     case 'myRadius': return emitLet(ctx, 'f32', f32At(ctx, 'radius', 'idx'), 'myR');
     case 'myArea': {
       const r = f32At(ctx, 'radius', 'idx');
