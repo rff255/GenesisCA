@@ -105,6 +105,7 @@ import { is3dModel } from '../compile';
 import { expandMacros } from '../macroExpand';
 import { collapseReroutes } from '../rerouteCollapse';
 import { expandMultiAttrs } from '../multiAttrExpand';
+import { expandForceToAgents } from '../forceToAgentsExpand';
 import { expandComposites } from '../expandComposites';
 import { lowerVectorAttrs, expandVectorAttributes } from '../vectorAttr';
 import { lowerFacingSource } from '../facingSource';
@@ -172,7 +173,7 @@ export const AGENT_WASM_SUPPORTED_TYPES: ReadonlySet<string> = new Set<string>([
   // indicators
   'getIndicator', 'setIndicator', 'updateIndicator',
   // writes (SoA / request)
-  'applyForce', 'setTargetRadius',
+  'applyForce', 'applyForceToAgent', 'setTargetRadius',
   // layout-agnostic value/flow utility (operate on the f64 stack / locals)
   'getConstant', 'arithmeticOperator', 'expression', 'statement', 'logicOperator', 'getRandom',
   // flow
@@ -2273,6 +2274,31 @@ function compileFlowNode(ctx: AgentWasmCtx, nodeId: string): void {
       compileFlowChain(ctx, node.id, 'next');
       break;
     }
+    case 'applyForceToAgent': {
+      // Commutative cross-agent force scatter: `force[target] += f` (range+alive
+      // guarded, LIVE agents only — matches the JS behaviour-root live guard). No
+      // atomics needed: the behaviour loop is SEQUENTIAL on WASM (only WebGPU's
+      // parallel scatter needs an atomic add). fx/fy/fz evaluated into locals BEFORE
+      // the guard (mirrors emitSetAgentsAttribute's `value` hoist), so the guard
+      // gates only the stores — bit-identical to the JS `if (guard) { += }`.
+      const a = em.allocLocal(I32); pushValueAs(em, resolveValueInput(ctx, node, 'agentId', -1), I32); em.localSet(a);
+      const fx = em.allocLocal(F64); pushValueInputF64(ctx, node, 'fx', 0); em.localSet(fx);
+      const fy = em.allocLocal(F64); pushValueInputF64(ctx, node, 'fy', 0); em.localSet(fy);
+      let fz = -1;
+      if (ctx.is3d) { fz = em.allocLocal(F64); pushValueInputF64(ctx, node, 'fz', 0); em.localSet(fz); }
+      em.localGet(a); em.i32Const(0); em.op(OP_I32_GE_S);
+      em.localGet(a); em.localGet(ctx.highWaterLocal); em.op(OP_I32_LT_S); em.op(OP_I32_AND);
+      em.ifThen(() => {
+        em.localGet(a); em.i32Const(ctx.layout.u8['alive']!); em.op(OP_I32_ADD); em.i32Load8U();
+        em.ifThen(() => {
+          forceAddAt(ctx, ctx.layout.f64['forceX']!, a, () => em.localGet(fx));
+          forceAddAt(ctx, ctx.layout.f64['forceY']!, a, () => em.localGet(fy));
+          if (ctx.is3d) forceAddAt(ctx, ctx.layout.f64['forceZ']!, a, () => em.localGet(fz));
+        });
+      });
+      compileFlowChain(ctx, node.id, 'next');
+      break;
+    }
     case 'setTargetRadius': {
       pushF64ElemAddr(em, ctx.layout.f64['targetRadius']!, ctx.idxLocal);
       pushValueInputF64(ctx, node, 'value', 1);
@@ -3207,6 +3233,17 @@ function forceAdd(ctx: AgentWasmCtx, regionOffset: number, pushVal: () => void):
   const em = ctx.em;
   pushF64ElemAddr(em, regionOffset, ctx.idxLocal);              // store address
   pushF64Elem(em, regionOffset, ctx.idxLocal);                 // current value
+  pushVal();
+  em.op(OP_F64_ADD);
+  em.f64Store();
+}
+
+/** `_agentForce*[aLocal] += <pushVal()>` — the cross-agent (arbitrary target)
+ *  sibling of `forceAdd`. Used by applyForceToAgent (target ≠ idx). */
+function forceAddAt(ctx: AgentWasmCtx, regionOffset: number, aLocal: number, pushVal: () => void): void {
+  const em = ctx.em;
+  pushF64ElemAddr(em, regionOffset, aLocal);
+  pushF64Elem(em, regionOffset, aLocal);
   pushVal();
   em.op(OP_F64_ADD);
   em.f64Store();
@@ -4288,6 +4325,9 @@ function flattenAgentGraph(nodes: GraphNode[], edges: GraphEdge[], model: CAMode
   if (expanded.error) return { nodes, edges, model, error: expanded.error };
   let n = expanded.nodes, e = expanded.edges;
   ({ nodes: n, edges: e } = collapseReroutes(n, e));
+  // Apply Force To Agents (array broadcast) → For Each In Array → Apply Force To
+  // Agent (both already supported), so the gate + emitter never see the array node.
+  ({ nodes: n, edges: e } = expandForceToAgents(n, e, model));
   // Multi-attribute slot expansion — multi-slot Get/Set Attribute nodes become the
   // single-slot primitives the gate + emitter already handle. See multiAttrExpand.ts.
   ({ nodes: n, edges: e } = expandMultiAttrs(n, e, model));

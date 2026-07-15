@@ -46,6 +46,8 @@ import { GetAgentAttributeNode } from './GetAgentAttributeNode';
 import { GetAgentRadiusNode } from './GetAgentRadiusNode';
 import { GetVelocityNode } from './GetVelocityNode';
 import { ApplyForceNode } from './ApplyForceNode';
+import { ApplyForceToAgentNode } from './ApplyForceToAgentNode';
+import { ApplyForceToAgentsNode } from './ApplyForceToAgentsNode';
 import { SetAgentAttributeNode } from './SetAgentAttributeNode';
 import { GetOrientationNode } from './GetOrientationNode';
 import { SetOrientationNode } from './SetOrientationNode';
@@ -208,6 +210,8 @@ const ALL_NODES: NodeTypeDef[] = [
   GetAgentRadiusNode,
   GetVelocityNode,
   ApplyForceNode,
+  ApplyForceToAgentNode,
+  ApplyForceToAgentsNode,
   SetVelocityNode,
   SetAgentAttributeNode,
   // Generic Agent Platform — agent-equivalent array / set ops (nearby + bonded

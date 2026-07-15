@@ -15,6 +15,7 @@ import { injectLinkedOutputMappings } from './linkedOutputMappings';
 import { injectAgentLinkedOutputMappings } from './agentLinkedOutputMappings';
 import { collapseReroutes } from './rerouteCollapse';
 import { expandMultiAttrs } from './multiAttrExpand';
+import { expandForceToAgents } from './forceToAgentsExpand';
 import { expandComposites } from './expandComposites';
 import { lowerVectorAttrs } from './vectorAttr';
 import { lowerFacingSource } from './facingSource';
@@ -2384,6 +2385,9 @@ export function compileAgentGraph(
     agentEdges = expanded.edges;
   }
   ({ nodes: agentNodes, edges: agentEdges } = collapseReroutes(agentNodes, agentEdges));
+  // Apply Force To Agents (array broadcast) → For Each In Array → Apply Force To
+  // Agent, so it reuses the single node's emitters on every target (no new emit).
+  ({ nodes: agentNodes, edges: agentEdges } = expandForceToAgents(agentNodes, agentEdges, model));
   // Multi-attribute slot expansion (agent scope) — see the cell compiler + multiAttrExpand.ts.
   ({ nodes: agentNodes, edges: agentEdges } = expandMultiAttrs(agentNodes, agentEdges, model));
   // FOV `facing` heading source → Get Self Attribute [vector] → Break Vector → wired
@@ -2465,6 +2469,48 @@ export function compileAgentGraph(
   const { nodeMap, inputToSource, inputToSources, flowOutputToTargets } = buildAdjacency(agentNodes, agentEdges);
   const loopInvariant = classifyLoopInvariant(agentNodes, inputToSource);
   const fusion = detectFusableConsumers(agentNodes, agentEdges, inputToSources, inputToSource, model, new Set<string>());
+
+  // --- Cross-agent OVERWRITE writes are async-only (the agent form of the CA
+  // grid's Fundamental #4: sync units write only themselves). In SYNC agent mode
+  // the attrs are double-buffered, so a write to ANOTHER agent's slot collides
+  // with that agent's OWN self-update — a lost update, order-dependent, and a
+  // genuine data race on parallel targets. Forbid it in the per-agent self-update
+  // loop (the BEHAVIOUR root), EXCEPT when the target is a freshly-`createAgent`'d
+  // handle (spawn configuration: the staged newborn isn't concurrently written).
+  // Init + Division roots are sequential (one-time setup / the structural phase),
+  // never the parallel self-update loop, so they are NOT gated. Async mode is the
+  // intended home for cross-agent writes (use commutative patterns for order).
+  // The overwrite/accumulate split matters: Apply Force To Agent is a commutative
+  // `+=` and is NOT gated (see applyForceToAgent). WebGPU is sync-only, so a
+  // cross-agent-overwrite model is async ⇒ JS/WASM-only by construction.
+  if (model.centerBased?.agentUpdateMode === 'sync') {
+    const CROSS_AGENT_OVERWRITE = new Set(['setAgentAttribute', 'setAgentsAttribute', 'setAgentPosition', 'setAgentRadius']);
+    // Behaviour-root flow reachability (BFS over flow-output edges). The gated
+    // nodes are flow (`output`) nodes, each in exactly one flow chain, so this
+    // isolates the behaviour loop from the init/division chains.
+    const behaviourReachable = new Set<string>();
+    const bfs = [behaviourNode.id];
+    while (bfs.length) {
+      const id = bfs.pop()!;
+      if (behaviourReachable.has(id)) continue;
+      behaviourReachable.add(id);
+      for (const [key, targets] of flowOutputToTargets) {
+        if (!key.startsWith(id + ':')) continue;
+        for (const t of targets) if (!behaviourReachable.has(t.nodeId)) bfs.push(t.nodeId);
+      }
+    }
+    for (const id of behaviourReachable) {
+      const node = nodeMap.get(id);
+      if (!node || !CROSS_AGENT_OVERWRITE.has(node.data.nodeType)) continue;
+      // One-hop Create Agent handle exemption (newborn spawn config, not a race).
+      const targetPort = node.data.nodeType === 'setAgentsAttribute' ? 'agents' : 'agentId';
+      const src = inputToSource.get(`${id}:${targetPort}`);
+      if (src && nodeMap.get(src.nodeId)?.data.nodeType === 'createAgent') continue;
+      const label = getNodeDef(node.data.nodeType)?.label ?? node.data.nodeType;
+      return { behaviourCode: '', initCode: '', divisionCode: '', stopMessages, outputMappingCodes: [],
+        error: `"${label}" writes another agent's state, which races that agent's own update in Synchronous agent mode. Switch to Asynchronous agent mode (Model Properties > Bond-Graph Agents), or target a Create Agent handle (spawn configuration).` };
+    }
+  }
 
   const { valueLines, preLoopValueLines, flowLines, scratchNodes } = compileRoot(
     behaviourNode, 'do', nodeMap, inputToSource, inputToSources, flowOutputToTargets,

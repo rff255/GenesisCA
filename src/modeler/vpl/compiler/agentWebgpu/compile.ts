@@ -49,6 +49,7 @@ import { is3dModel } from '../compile';
 import { expandMacros } from '../macroExpand';
 import { collapseReroutes } from '../rerouteCollapse';
 import { expandMultiAttrs } from '../multiAttrExpand';
+import { expandForceToAgents } from '../forceToAgentsExpand';
 import { expandComposites } from '../expandComposites';
 import { lowerVectorAttrs, expandVectorAttributes } from '../vectorAttr';
 import { lowerFacingSource } from '../facingSource';
@@ -109,7 +110,7 @@ export const AGENT_WEBGPU_SUPPORTED_TYPES: ReadonlySet<string> = new Set<string>
   // Stop Event — atomicCompareExchangeWeak into a stopFlag buffer (worker merges it)
   'stopEvent',
   // writes
-  'applyForce', 'setTargetRadius',
+  'applyForce', 'applyForceToAgent', 'setTargetRadius',
   // value/flow utility
   'getConstant', 'arithmeticOperator', 'expression', 'statement', 'logicOperator', 'getRandom',
   // flow
@@ -146,6 +147,11 @@ export interface AgentWebGPUResult {
    *  stopFlag atomic buffer (binding 13), seeds it to 0, and reads it back to
    *  merge into the shared stopFlag. */
   usesStop?: boolean;
+  /** True when the behaviour graph uses Apply Force To Agent (cross-agent force
+   *  scatter) — the runtime binds a `forceScatter` atomic buffer (binding 14, an
+   *  f32-bitcast atomic accumulator), zeros it each step, and the force pass adds it
+   *  to each agent's self-force seed (its binding 4). */
+  usesForceScatter?: boolean;
   error?: string;
 }
 
@@ -271,6 +277,9 @@ interface AgentWgpuCtx {
   usesSpawn: boolean;
   /** Set when a Stop Event emitter runs — declares the stopFlag atomic binding. */
   usesStop: boolean;
+  /** Set when an Apply Force To Agent emitter runs — declares the forceScatter
+   *  atomic binding (14) + emits the forceScatterAdd f32-CAS helper. */
+  usesForceScatter: boolean;
   /** Active forEachBond iteration frames — the per-iteration value-output WGSL
    *  expressions (partnerId / restLength / currentLength / index). */
   forEachBondStack: Array<{ nodeId: string; partner: string; rest: string; cur: string; index: string }>;
@@ -1838,6 +1847,29 @@ function compileFlowNode(ctx: AgentWgpuCtx, nodeId: string): void {
       compileFlowChain(ctx, node.id, 'next');
       break;
     }
+    case 'applyForceToAgent': {
+      // Cross-agent COMMUTATIVE force scatter: `force[target] += f`. On the PARALLEL
+      // GPU many threads scatter onto the same target this step, so the add goes
+      // through an f32-bitcast atomic CAS (forceScatterAdd) into a dedicated
+      // `forceScatter` buffer (binding 14); the force pass adds it to each agent's
+      // self-force seed. (Self Apply Force above stays a plain write — each thread
+      // owns its slot.) Range-guarded (emitAgentIdGuarded); a dead-slot write is
+      // harmless (the force pass skips dead agents; the buffer is zeroed each step)
+      // — observably identical to the JS/WASM live guard. Region stride = maxAgents.
+      const g = emitAgentIdGuarded(ctx, node, 'agentId');
+      const fx = inF32(ctx, node, 'fx', 0);
+      const fy = inF32(ctx, node, 'fy', 0);
+      const fz = ctx.is3d ? inF32(ctx, node, 'fz', 0) : null;
+      const MA = ctx.layout.maxAgents;
+      ctx.lines.push(`  if (${g.ok}) {`);
+      ctx.lines.push(`    forceScatterAdd(u32(${g.name}), ${fx});`);
+      ctx.lines.push(`    forceScatterAdd(${MA}u + u32(${g.name}), ${fy});`);
+      if (fz !== null) ctx.lines.push(`    forceScatterAdd(${2 * MA}u + u32(${g.name}), ${fz});`);
+      ctx.lines.push(`  }`);
+      ctx.usesForceScatter = true;
+      compileFlowChain(ctx, node.id, 'next');
+      break;
+    }
     case 'setTargetRadius': {
       ctx.lines.push(`  ${f32At(ctx, 'targetRadius', 'idx')} = ${inF32(ctx, node, 'value', 1)};`);
       compileFlowChain(ctx, node.id, 'next');
@@ -2937,6 +2969,9 @@ function flattenAgentGraph(nodes: GraphNode[], edges: GraphEdge[], model: CAMode
   if (expanded.error) return { nodes, edges, model, error: expanded.error };
   let n = expanded.nodes, e = expanded.edges;
   ({ nodes: n, edges: e } = collapseReroutes(n, e));
+  // Apply Force To Agents (array broadcast) → For Each In Array → Apply Force To
+  // Agent (both already supported), so the gate + emitter never see the array node.
+  ({ nodes: n, edges: e } = expandForceToAgents(n, e, model));
   // Multi-attribute slot expansion — multi-slot Get/Set Attribute nodes become the
   // single-slot primitives the gate + emitter already handle. See multiAttrExpand.ts.
   ({ nodes: n, edges: e } = expandMultiAttrs(n, e, model));
@@ -3142,6 +3177,21 @@ function emitControlStruct(): string {
  *  (index = (z·H + y)·W + x). 2D models emit ONLY the bilinear helper (byte-
  *  identical to pre-3D); 3D models emit ONLY the trilinear one (the field nodes
  *  call `fieldSampleField(base, px, py)` either way — see emitFieldSampleCall). */
+/** The Apply Force To Agent scatter helper — a commutative f32-bitcast atomic-CAS
+ *  accumulate into `forceScatter` (parallel agents scatter onto the same target;
+ *  the force pass reads the summed result). Same CAS shape as fieldDepositCell's
+ *  add path. Emitted once, only when a graph uses Apply Force To Agent. */
+function emitForceScatterHelper(): string {
+  return `fn forceScatterAdd(ci: u32, v: f32) {
+  loop {
+    let oldBits: u32 = atomicLoad(&forceScatter[ci]);
+    let nv: f32 = bitcast<f32>(oldBits) + v;
+    let res = atomicCompareExchangeWeak(&forceScatter[ci], oldBits, bitcast<u32>(nv));
+    if (res.exchanged) { break; }
+  }
+}`;
+}
+
 function emitFieldHelpers(is3d: boolean): string {
   const deposit = `fn fieldDepositCell(ci: u32, v: f32, op: u32) {
   // op: 0=set, 1=subtract, 2=max, 3=min, 4=add. f32-bitcast CAS loop.
@@ -3294,6 +3344,7 @@ export function compileAgentGraphWebGPU(
     usesBondStore: false, usesIndicators: false, usesAux: false,
     usesSpawn: false,
     usesStop: false,
+    usesForceScatter: false,
   };
 
   // Assign array-producer scratch slots (separate i32 + f32 `var<function>` pools)
@@ -3442,10 +3493,16 @@ export function compileAgentGraphWebGPU(
   // Event emitter ran (else Naga strips it → a bind-group mismatch).
   const hasStop = ctx.usesStop;
   if (hasStop) fieldBindingLines.push('@group(0) @binding(13) var<storage, read_write> stopFlag    : atomic<u32>;');
+  // Apply Force To Agent (binding 14) — the cross-agent force-scatter atomic
+  // accumulator (f32-bitcast). Declared ONLY when an emitter ran (else Naga strips
+  // it → a bind-group mismatch, like the other universal bindings).
+  const hasForceScatter = ctx.usesForceScatter;
+  if (hasForceScatter) fieldBindingLines.push('@group(0) @binding(14) var<storage, read_write> forceScatter : array<atomic<u32>>;');
   // Each carries its OWN leading newline so the no-extra case inserts NOTHING (a
   // no-field Boids shader is then byte-identical to the pre-G5 template).
   const fieldBindings = fieldBindingLines.length > 0 ? '\n' + fieldBindingLines.join('\n') : '';
   const fieldHelpers = (hasFieldRead || hasFieldWrite) ? '\n' + emitFieldHelpers(ctx.is3d) : '';
+  const forceScatterHelper = hasForceScatter ? '\n' + emitForceScatterHelper() : '';
   // agentI32 is read_write ONLY when a setAgentType wrote it (the worker selects
   // the matching bind-group layout from the result's `usesI32Write` flag).
   const i32Access = ctx.usesI32Write ? 'read_write' : 'read      ';
@@ -3460,7 +3517,7 @@ export function compileAgentGraphWebGPU(
 @group(0) @binding(5) var<storage, read_write> rngState    : array<u32>;
 @group(0) @binding(6) var<storage, read_write> agentColors : array<u32>;${fieldBindings}
 
-${emitRngHelpers()}${fieldHelpers}
+${emitRngHelpers()}${fieldHelpers}${forceScatterHelper}
 
 @compute @workgroup_size(64)
 fn behaviour(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(num_workgroups) nwg: vec3<u32>) {
@@ -3477,7 +3534,7 @@ ${ctx.lines.join('\n')}
   return {
     shaderCode, layout, supportedTypes: [...seen], usesI32Write: ctx.usesI32Write,
     usesBondStore: hasBondStore, usesIndicators: hasIndicators, usesAux: hasAux,
-    usesSpawn: hasSpawn, usesStop: hasStop,
+    usesSpawn: hasSpawn, usesStop: hasStop, usesForceScatter: hasForceScatter,
   };
 }
 

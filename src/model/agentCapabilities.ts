@@ -93,6 +93,8 @@ export const AGENT_NODE_REQUIREMENT: Record<string, AgentCapKey> = {
   getVelocity: 'motionMoving',
   setVelocity: 'motionMoving',
   applyForce: 'motionForce',
+  applyForceToAgent: 'motionForce',
+  applyForceToAgents: 'motionForce',
   // sensing
   getNearbyAgents: 'sensing',
   getAgentsInView: 'sensing',
