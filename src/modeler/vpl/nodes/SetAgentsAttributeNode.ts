@@ -5,7 +5,7 @@ import type { NodeTypeDef } from '../types';
  *  the agent analogue of Set Neighbor Attribute By Index over a list. Feed it Get
  *  Nearby Agents / Get Bonded Agents / Filter Agents to signal a whole group
  *  (mark contacted, broadcast a value). Immediate (async-style) writes, each id
- *  range+alive guarded. JS-only this milestone. */
+ *  range+alive guarded. Runs on all three agent targets (JS / WASM / WebGPU). */
 export const SetAgentsAttributeNode: NodeTypeDef = {
   type: 'setAgentsAttribute',
   label: 'Set Agents Attribute',
