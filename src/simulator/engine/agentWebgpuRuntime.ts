@@ -118,6 +118,11 @@ export interface AgentWebGPURuntime {
    *  the worker merges it into the shared stopFlag. */
   stopFlagBuf: GPUBuffer | null;
   usesStop: boolean;
+  /** Apply Force To Agent (binding 14) — an f32-bitcast atomic force-scatter
+   *  accumulator (X/Y[/Z] regions strided by maxAgents). null when the behaviour
+   *  graph has no Apply Force To Agent. Zeroed (clearBuffer) before each behaviour
+   *  dispatch; the force pass reads it (its binding 4) into the self-force seed. */
+  forceScatterBuf: GPUBuffer | null;
 
   // --- pipelines ---
   behaviourPipeline: GPUComputePipeline;
@@ -179,6 +184,7 @@ export interface AgentRuntimeUsage {
   usesAux?: boolean;
   usesSpawn?: boolean;
   usesStop?: boolean;
+  usesForceScatter?: boolean;
 }
 
 export async function createAgentWebGPURuntime(
@@ -237,6 +243,11 @@ export async function createAgentWebGPURuntime(
   // Stop Event flag (binding 13) — a single-word atomic; seeded to 0 before each
   // dispatch, read back after, merged into the shared stopFlag by the worker.
   const hasStop = !!usage.usesStop;
+  // Apply Force To Agent (binding 14) — an atomic f32 force-scatter accumulator,
+  // X/Y[/Z] regions each `maxAgents` wide. Zeroed each step, read by the force pass.
+  const hasForceScatter = !!usage.usesForceScatter;
+  const forceScatterComponents = layout.gridDepth > 1 ? 3 : 2;
+  const forceScatterBuf = hasForceScatter ? mk('agentForceScatter', Math.max(4, layout.maxAgents * forceScatterComponents * 4), STORAGE) : null;
   const agentF32Buf = mk('agentF32', f32Bytes(layout), STORAGE);
   // agentI32 needs COPY_SRC (readback) + read_write storage when setAgentType writes it.
   const agentI32Buf = mk('agentI32', i32Bytes(layout), usesI32Write ? STORAGE : STORAGE_RO);
@@ -285,6 +296,7 @@ export async function createAgentWebGPURuntime(
   if (bondStoreBuf) behaviourEntries.push({ binding: 11, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } });
   if (spawnCursorBuf) behaviourEntries.push({ binding: 12, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } });
   if (stopFlagBuf) behaviourEntries.push({ binding: 13, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } });
+  if (forceScatterBuf) behaviourEntries.push({ binding: 14, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } });
   const behaviourBGL = device.createBindGroupLayout({ label: 'agent-behaviour-bgl', entries: behaviourEntries });
   const behaviourPL = device.createPipelineLayout({ label: 'agent-behaviour-pl', bindGroupLayouts: [behaviourBGL] });
   const behaviourPipeline = await device.createComputePipelineAsync({
@@ -307,34 +319,34 @@ export async function createAgentWebGPURuntime(
   if (bondStoreBuf) behaviourBgEntries.push({ binding: 11, resource: { buffer: bondStoreBuf } });
   if (spawnCursorBuf) behaviourBgEntries.push({ binding: 12, resource: { buffer: spawnCursorBuf } });
   if (stopFlagBuf) behaviourBgEntries.push({ binding: 13, resource: { buffer: stopFlagBuf } });
+  if (forceScatterBuf) behaviourBgEntries.push({ binding: 14, resource: { buffer: forceScatterBuf } });
   const behaviourBindGroup = device.createBindGroup({
     label: 'agent-behaviour-bg', layout: behaviourBGL, entries: behaviourBgEntries,
   });
 
-  // --- force pipeline (4 bindings: agentF32 rw, agentAlive r, hashBins r, fc uniform) ---
-  const forceBGL = device.createBindGroupLayout({
-    label: 'agent-force-bgl',
-    entries: [
-      { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },
-      { binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },
-      { binding: 2, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },
-      { binding: 3, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'uniform' } },
-    ],
-  });
+  // --- force pipeline (4 bindings: agentF32 rw, agentAlive r, hashBins r, fc
+  //     uniform; + binding 4 forceScatter r when Apply Force To Agent is used) ---
+  const forceEntries: GPUBindGroupLayoutEntry[] = [
+    { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },
+    { binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },
+    { binding: 2, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },
+    { binding: 3, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'uniform' } },
+  ];
+  if (forceScatterBuf) forceEntries.push({ binding: 4, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } });
+  const forceBGL = device.createBindGroupLayout({ label: 'agent-force-bgl', entries: forceEntries });
   const forcePL = device.createPipelineLayout({ label: 'agent-force-pl', bindGroupLayouts: [forceBGL] });
   const forcePipeline = await device.createComputePipelineAsync({
     label: 'agent-force', layout: forcePL,
     compute: { module: forceModule, entryPoint: 'forcePass' },
   });
-  const forceBindGroup = device.createBindGroup({
-    label: 'agent-force-bg', layout: forceBGL,
-    entries: [
-      { binding: 0, resource: { buffer: agentF32Buf } },
-      { binding: 1, resource: { buffer: agentAliveBuf } },
-      { binding: 2, resource: { buffer: hashBinsBuf } },
-      { binding: 3, resource: { buffer: forceControlBuf } },
-    ],
-  });
+  const forceBgEntries: GPUBindGroupEntry[] = [
+    { binding: 0, resource: { buffer: agentF32Buf } },
+    { binding: 1, resource: { buffer: agentAliveBuf } },
+    { binding: 2, resource: { buffer: hashBinsBuf } },
+    { binding: 3, resource: { buffer: forceControlBuf } },
+  ];
+  if (forceScatterBuf) forceBgEntries.push({ binding: 4, resource: { buffer: forceScatterBuf } });
+  const forceBindGroup = device.createBindGroup({ label: 'agent-force-bg', layout: forceBGL, entries: forceBgEntries });
 
   const rt: AgentWebGPURuntime = {
     device, adapter, layout, ready: true, usesI32Write: i32WritesI32,
@@ -344,6 +356,7 @@ export async function createAgentWebGPURuntime(
     auxF32Buf, indicatorsBuf, bondStoreBuf,
     spawnCursorBuf, usesSpawn: hasSpawn,
     stopFlagBuf, usesStop: hasStop,
+    forceScatterBuf,
     behaviourPipeline, forcePipeline, behaviourBindGroup, forceBindGroup,
     stagingPool: new Map(),
     f32Upload: new Float32Array(layout.f32Len),
@@ -740,6 +753,9 @@ export function resetAgentStopFlag(rt: AgentWebGPURuntime): void {
 export function dispatchAgentStep(rt: AgentWebGPURuntime, highWater: number): void {
   const enc = rt.device.createCommandEncoder({ label: 'agent-step-enc' });
   const total = Math.max(1, highWater);
+  // Apply Force To Agent: zero the cross-agent force-scatter accumulator before the
+  // behaviour pass writes it (the force pass then folds it into each self-force seed).
+  if (rt.forceScatterBuf) enc.clearBuffer(rt.forceScatterBuf);
   const passB = enc.beginComputePass({ label: 'agent-behaviour-pass' });
   passB.setPipeline(rt.behaviourPipeline);
   passB.setBindGroup(0, rt.behaviourBindGroup);

@@ -252,7 +252,7 @@ interface InitMsg {
   agentWebgpuUsesI32Write?: boolean;
   /** Which universal bindings the shader actually declares (so the runtime binds
    *  matching entries ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â a declared-but-unused global is stripped ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ bind mismatch). */
-  agentWebgpuUsage?: { usesBondStore?: boolean; usesIndicators?: boolean; usesAux?: boolean; usesSpawn?: boolean; usesStop?: boolean };
+  agentWebgpuUsage?: { usesBondStore?: boolean; usesIndicators?: boolean; usesAux?: boolean; usesSpawn?: boolean; usesStop?: boolean; usesForceScatter?: boolean };
 }
 
 // reqId: optional Overseer correlation id ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â echoed on the resulting `stepped`
@@ -283,7 +283,7 @@ interface PaintManualMsg {
   activeViewer: string;
 }
 interface ResetMsg { type: 'reset'; activeViewer: string; reqId?: number }
-interface RecompileMsg { type: 'recompile'; stepCode: string; initCode?: string; gridInitCode?: string; skipIsolatedEmpty?: SkipIsolatedEmptyConfig; inputColorCodes: Array<{ mappingId: string; code: string }>; outputMappingCodes: Array<{ mappingId: string; code: string }>; stopMessages?: string[]; updateMode: string; asyncScheme: string; wasmStepBytes?: Uint8Array; wasmStepError?: string; wasmExports?: string[]; viewerIds?: Record<string, number>; webgpuShaderCode?: string; webgpuShaderError?: string; webgpuEntryPoints?: WebGPUEntryPoints; webgpuLayout?: WebGPULayout; webgpuStopCheckInterval?: number; variegated?: VariegatedPayload; interactionTables?: InteractionTablePayload[]; agentBehaviourCode?: string; agentInitCode?: string; agentDivisionCode?: string; agentColorViewer?: string; agentOutputMappingCodes?: Array<{ mappingId: string; code: string }>; agentHasSprites?: boolean; centerBased?: CenterBasedConfig; agentUsesField?: boolean; agentTarget?: 'js' | 'wasm' | 'webgpu'; agentWasmBytes?: Uint8Array; agentWasmViewerGuardIds?: string[]; agentLayoutExtras?: AgentLayoutExtras; agentWebgpuBehaviourShader?: string; agentWebgpuForceShader?: string; agentWebgpuMaxAgents?: number; agentWebgpuMaxHashBins?: number; agentWebgpuLayout?: AgentWebGPULayout; agentWebgpuUsesI32Write?: boolean; agentWebgpuUsage?: { usesBondStore?: boolean; usesIndicators?: boolean; usesAux?: boolean; usesSpawn?: boolean; usesStop?: boolean } }
+interface RecompileMsg { type: 'recompile'; stepCode: string; initCode?: string; gridInitCode?: string; skipIsolatedEmpty?: SkipIsolatedEmptyConfig; inputColorCodes: Array<{ mappingId: string; code: string }>; outputMappingCodes: Array<{ mappingId: string; code: string }>; stopMessages?: string[]; updateMode: string; asyncScheme: string; wasmStepBytes?: Uint8Array; wasmStepError?: string; wasmExports?: string[]; viewerIds?: Record<string, number>; webgpuShaderCode?: string; webgpuShaderError?: string; webgpuEntryPoints?: WebGPUEntryPoints; webgpuLayout?: WebGPULayout; webgpuStopCheckInterval?: number; variegated?: VariegatedPayload; interactionTables?: InteractionTablePayload[]; agentBehaviourCode?: string; agentInitCode?: string; agentDivisionCode?: string; agentColorViewer?: string; agentOutputMappingCodes?: Array<{ mappingId: string; code: string }>; agentHasSprites?: boolean; centerBased?: CenterBasedConfig; agentUsesField?: boolean; agentTarget?: 'js' | 'wasm' | 'webgpu'; agentWasmBytes?: Uint8Array; agentWasmViewerGuardIds?: string[]; agentLayoutExtras?: AgentLayoutExtras; agentWebgpuBehaviourShader?: string; agentWebgpuForceShader?: string; agentWebgpuMaxAgents?: number; agentWebgpuMaxHashBins?: number; agentWebgpuLayout?: AgentWebGPULayout; agentWebgpuUsesI32Write?: boolean; agentWebgpuUsage?: { usesBondStore?: boolean; usesIndicators?: boolean; usesAux?: boolean; usesSpawn?: boolean; usesStop?: boolean; usesForceScatter?: boolean } }
 interface UpdateLookupTableMsg {
   type: 'updateLookupTable';
   attrId: string;
@@ -751,7 +751,7 @@ let pendingAgentWebgpuMaxAgents = 0;
 let pendingAgentWebgpuMaxHashBins = 0;
 let pendingAgentWebgpuLayout: AgentWebGPULayout | null = null;
 let pendingAgentWebgpuUsesI32Write = false;
-let pendingAgentWebgpuUsage: { usesBondStore?: boolean; usesIndicators?: boolean; usesAux?: boolean; usesSpawn?: boolean; usesStop?: boolean } = {};
+let pendingAgentWebgpuUsage: { usesBondStore?: boolean; usesIndicators?: boolean; usesAux?: boolean; usesSpawn?: boolean; usesStop?: boolean; usesForceScatter?: boolean } = {};
 /** Warn once when the per-step hash overflows the GPU reserve (step runs on JS). */
 let agentWebgpuHashOverflowWarned = false;
 /** A monotonic build token: only the most-recent async runtime build commits (an

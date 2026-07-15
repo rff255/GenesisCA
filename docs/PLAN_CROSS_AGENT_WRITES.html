@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Plan — Cross-Agent Write Semantics</title>
+<style>
+  :root{
+    --bg:#0c0d10; --panel:#16181d; --panel2:#1d2027; --border:#2b2f38;
+    --text:#e6e8ec; --muted:#9aa0ab; --accent:#e8a13a; --accent-soft:#3a2c14;
+    --green:#4caf50; --green-soft:#173a1c; --red:#e5534b; --red-soft:#3a1817;
+    --cyan:#4cc9f0; --violet:#7e57c2;
+    --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);
+    font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+    padding:32px 20px 80px;}
+  .wrap{max-width:960px;margin:0 auto}
+  h1{font-size:26px;margin:0 0 4px}
+  h2{font-size:18px;margin:34px 0 12px;color:var(--accent);border-bottom:1px solid var(--border);padding-bottom:6px}
+  .sub{color:var(--muted);margin:0 0 8px}
+  .panel{background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:18px 20px;margin:14px 0}
+  code,.mono{font-family:var(--mono);font-size:13px}
+  .kbd{background:var(--panel2);border:1px solid var(--border);border-radius:5px;padding:1px 6px;font-family:var(--mono);font-size:12px}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  @media(max-width:720px){.grid2{grid-template-columns:1fr}}
+  .card{background:var(--panel2);border:1px solid var(--border);border-radius:10px;padding:14px 16px}
+  .card.good{border-color:var(--green);}
+  .card.bad{border-color:var(--red);}
+  .tag{display:inline-block;font-size:11px;font-weight:600;border-radius:6px;padding:2px 8px;letter-spacing:.02em}
+  .tag.race{background:var(--red-soft);color:#ffb3ad;border:1px solid var(--red)}
+  .tag.safe{background:var(--green-soft);color:#9fe6a6;border:1px solid var(--green)}
+  .tag.async{background:var(--accent-soft);color:var(--accent);border:1px solid var(--accent)}
+  table{border-collapse:collapse;width:100%;font-size:13.5px}
+  th,td{border:1px solid var(--border);padding:8px 10px;text-align:left;vertical-align:top}
+  th{background:var(--panel2);color:var(--muted);font-weight:600}
+  .node{display:inline-block;background:#20242c;border:1px solid var(--border);border-radius:9px;min-width:190px;
+    box-shadow:0 2px 8px rgba(0,0,0,.35)}
+  .node .hd{padding:7px 12px;border-bottom:1px solid var(--border);font-weight:600;font-size:13px;border-radius:9px 9px 0 0}
+  .node .bd{padding:9px 12px;font-family:var(--mono);font-size:12px;color:var(--muted)}
+  .port{display:flex;align-items:center;gap:6px;margin:3px 0}
+  .dot{width:9px;height:9px;border-radius:50%;flex:0 0 auto}
+  .dot.val{background:var(--cyan)}
+  .dot.flow{background:var(--green);border-radius:0;clip-path:polygon(0 0,100% 50%,0 100%)}
+  .badge{position:relative;top:-1px;display:inline-flex;width:17px;height:17px;border-radius:50%;
+    background:var(--accent);color:#111;font-weight:800;align-items:center;justify-content:center;font-size:12px;margin-left:6px}
+  ul{margin:8px 0;padding-left:20px}li{margin:4px 0}
+  .lead{font-size:16px}
+  .hl{color:var(--accent);font-weight:600}
+  .flowdiag{width:100%;height:auto;display:block;margin:6px 0}
+  .small{font-size:12.5px;color:var(--muted)}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1>Cross-Agent Write Semantics</h1>
+  <p class="sub">Design plan · 2026-07-14 · companion to <span class="mono">PLAN_CROSS_AGENT_WRITES.md</span></p>
+
+  <p class="lead panel">The one idea: <span class="hl">OVERWRITE writes race across agents; ACCUMULATE writes don't.</span>
+  So the two capabilities get opposite rules — gate cross-agent overwrites (attribute/position/radius) to <b>async only</b>,
+  but freely allow a new commutative <b>Apply Force To Agent</b> in both modes.</p>
+
+  <h2>0 · What "Apply Force" actually does (myth-buster)</h2>
+  <div class="panel">
+    <p style="margin-top:0">It is <span class="hl">not</span> "set the force". It is an <b>accumulate</b> onto a buffer that is
+    <b>zeroed every step</b> — so one call looks like a set, N calls sum, and the engine adds its own physics on top.</p>
+    <svg class="flowdiag" viewBox="0 0 900 120" xmlns="http://www.w3.org/2000/svg" font-family="ui-monospace,monospace" font-size="12">
+      <defs><marker id="a" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#9aa0ab"/></marker></defs>
+      <g>
+        <rect x="8"  y="40" width="150" height="42" rx="7" fill="#1d2027" stroke="#2b2f38"/>
+        <text x="83" y="58" fill="#e6e8ec" text-anchor="middle">forceX[i] = 0</text>
+        <text x="83" y="73" fill="#9aa0ab" text-anchor="middle">reset each step</text>
+
+        <rect x="210" y="40" width="180" height="42" rx="7" fill="#1d2027" stroke="#7e57c2"/>
+        <text x="300" y="58" fill="#e6e8ec" text-anchor="middle">forceX[i] += fx</text>
+        <text x="300" y="73" fill="#9aa0ab" text-anchor="middle">Apply Force ×N (graph)</text>
+
+        <rect x="440" y="40" width="200" height="42" rx="7" fill="#1d2027" stroke="#2b2f38"/>
+        <text x="540" y="58" fill="#e6e8ec" text-anchor="middle">+ soft-sphere + springs</text>
+        <text x="540" y="73" fill="#9aa0ab" text-anchor="middle">engine (fused pass)</text>
+
+        <rect x="690" y="40" width="200" height="42" rx="7" fill="#1d2027" stroke="#4caf50"/>
+        <text x="790" y="58" fill="#e6e8ec" text-anchor="middle">v = m·v + (dt/η)·F</text>
+        <text x="790" y="73" fill="#9aa0ab" text-anchor="middle">integrate → move</text>
+
+        <line x1="160" y1="61" x2="206" y2="61" stroke="#9aa0ab" marker-end="url(#a)"/>
+        <line x1="392" y1="61" x2="436" y2="61" stroke="#9aa0ab" marker-end="url(#a)"/>
+        <line x1="642" y1="61" x2="686" y2="61" stroke="#9aa0ab" marker-end="url(#a)"/>
+      </g>
+    </svg>
+    <p class="small" style="margin-bottom:0">Your gravity model — accumulate in a local variable, then one Apply Force — is <b>equivalent</b> to N Apply Force calls. Both sum.</p>
+  </div>
+
+  <h2>1 · Overwrite vs accumulate — why the rules differ</h2>
+  <div class="panel" style="padding-top:8px">
+  <table>
+    <tr><th>Cross-agent write</th><th>Op</th><th>Sync mode</th><th>WebGPU (parallel)</th><th>Verdict</th></tr>
+    <tr>
+      <td>Set Agent Attribute / Position / Radius</td>
+      <td class="mono">w[B] = v</td>
+      <td>Last-writer-wins; collides with B's own self-write → <b>lost update</b>, order-dependent</td>
+      <td>Non-atomic store into another thread's slot → <b>data race (UB)</b></td>
+      <td><span class="tag race">async-only</span></td>
+    </tr>
+    <tr>
+      <td>Apply Force To Agent <span class="small">(new)</span></td>
+      <td class="mono">force[B] += f</td>
+      <td>Commutative sum; buffer zeroed per step, consumed after pass → <b>order-independent</b></td>
+      <td>Contends, but fixable with an <b>atomic add</b> (f32 CAS)</td>
+      <td><span class="tag safe">both modes</span></td>
+    </tr>
+  </table>
+  </div>
+
+  <h2>2 · Part A — gate cross-agent overwrites (async-only)</h2>
+  <p class="sub">Mirror the CA grid's Fundamental #4: in sync mode a unit writes only itself; neighbour-writes are async-only.</p>
+  <div class="grid2">
+    <div class="card bad">
+      <div class="tag race">SYNC MODE — now (silent footgun)</div>
+      <div style="margin:12px 0">
+        <div class="node">
+          <div class="hd">Set Agent Attribute</div>
+          <div class="bd">
+            <div class="port"><span class="dot flow"></span>DO → NEXT</div>
+            <div class="port"><span class="dot val"></span>Agent ← Get Nearby Agents</div>
+            <div class="port"><span class="dot val"></span>Value = 1</div>
+          </div>
+        </div>
+      </div>
+      <p class="small" style="margin:0">Compiles &amp; runs — but the write races the target's own update. Nondeterministic; UB on WebGPU.</p>
+    </div>
+    <div class="card good">
+      <div class="tag async">SYNC MODE — proposed</div>
+      <div style="margin:12px 0">
+        <div class="node" style="border-color:var(--accent)">
+          <div class="hd">Set Agent Attribute <span class="badge">!</span></div>
+          <div class="bd">
+            <div class="port"><span class="dot flow"></span>DO → NEXT</div>
+            <div class="port"><span class="dot val"></span>Agent ← Get Nearby Agents</div>
+            <div class="port"><span class="dot val"></span>Value = 1</div>
+          </div>
+        </div>
+      </div>
+      <p class="small" style="margin:0"><b>Badge + compile error:</b> "Writing another agent requires Async agent mode." Self-writes stay legal.</p>
+    </div>
+  </div>
+  <div class="panel" style="margin-top:12px">
+    <b>Exemption — spawning is not a race.</b> Configuring a freshly-<span class="mono">createAgent</span>'d handle (the newborn isn't
+    concurrently written) stays legal in any mode. The gate fires only when <span class="mono">Agent</span> traces to an
+    <i>existing</i> agent (Get Nearby / For Each Bond / Pick Random / …), not a one-hop Create Agent handle.
+    <div class="small" style="margin-top:8px">Nodes affected: <span class="mono">setAgentAttribute · setAgentsAttribute · setAgentPosition · setAgentRadius</span>. <span class="mono">setVelocity</span> is self-only → untouched.</div>
+  </div>
+
+  <h2>3 · Part B — new node: Apply Force To Agent</h2>
+  <div class="grid2">
+    <div class="card">
+      <div class="tag safe">safe in both modes</div>
+      <div style="margin:12px 0">
+        <div class="node" style="border-color:var(--violet)">
+          <div class="hd" style="color:#c8b3ea">Apply Force To Agent</div>
+          <div class="bd">
+            <div class="port"><span class="dot flow"></span>DO → NEXT</div>
+            <div class="port"><span class="dot val"></span>Agent ← (target id)</div>
+            <div class="port"><span class="dot val"></span>Force X / Y <span class="small">(Z in 3D)</span></div>
+          </div>
+        </div>
+      </div>
+      <p class="small" style="margin:0">Emits <span class="mono">force[target] += f</span> (range+alive guarded). Newton's 3rd law, Coulomb, custom pairwise laws. Sibling: <b>Apply Force To Agents</b> (array).</p>
+    </div>
+    <div class="card">
+      <div class="tag safe">all three targets</div>
+      <table style="font-size:12.5px;margin-top:10px">
+        <tr><th>Target</th><th>Emit</th></tr>
+        <tr><td>JS</td><td class="mono">force[B] += f</td></tr>
+        <tr><td>WASM</td><td class="mono">f64.add @ offset</td></tr>
+        <tr><td>WebGPU</td><td class="mono">f32 atomic-CAS<br><span class="small">(UpdateIndicator-float pattern)</span></td></tr>
+      </table>
+      <p class="small" style="margin:8px 0 0">Sequential loops (JS/WASM) need no atomics; only the parallel GPU scatter does.</p>
+    </div>
+  </div>
+
+  <h2>4 · Sequencing &amp; open decisions</h2>
+  <div class="panel">
+    <p style="margin-top:0"><b>Order:</b> A1→A2 first (small, self-contained safety fix), then B1 (JS/WASM) → B2 (WebGPU atomic) → B3 (docs). A and B ship independently.</p>
+    <b>Owner decisions (2026-07-14):</b>
+    <ul>
+      <li><span class="tag safe">resolved</span> <b>WebGPU async agents — no.</b> Fundamentally unsupported (like the CA grid), so cross-agent-overwrite models are JS/WASM-only <i>by construction</i>.</li>
+      <li><span class="tag safe">resolved</span> <b>Newborn exemption</b> — one-hop Create Agent trace.</li>
+      <li><span class="tag async">leaning</span> <b>B on WebGPU</b> — atomic-CAS scatter (keeps the node general + all-target). Awaiting final confirm.</li>
+      <li><span class="tag safe">resolved</span> <b>setAgentSprite-by-id</b> — not gated (cosmetic).</li>
+    </ul>
+  </div>
+
+</div>
+</body>
+</html>

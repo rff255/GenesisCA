@@ -282,6 +282,64 @@ function buildGridDimsModel() {
   };
 }
 
+// Synthetic: each agent scatters a small force onto EVERY nearby agent
+// (applyForceToAgent inside a forEach over getNearbyAgents) — the pairwise-force
+// pattern. Momentum > 0 so the scattered force accumulates into velocity → the
+// cross-agent write + guard must be JS↔WASM bit-identical or positions diverge.
+function buildApplyForceToAgentModel() {
+  const used = new Set();
+  const nid = (p) => { let id; do { id = p + Math.random().toString(36).slice(2, 8); } while (used.has(id)); used.add(id); return id; };
+  const aN = [], aEd = [];
+  const an = (t, c) => { const n = { id: nid('a'), type: 'caNode', position: { x: 0, y: 0 }, data: { nodeType: t, config: c } }; aN.push(n); return n; };
+  const aE = (s, sp, tt, tp, cat) => aEd.push({ id: nid('e'), source: s.id, target: tt.id, sourceHandle: `output_${cat}_${sp}`, targetHandle: `input_${cat}_${tp}` });
+  const bs = an('behaviourStep', {});
+  const near = an('getNearbyAgents', { _port_radius: '6' });
+  const fe = an('forEachInArray', {});
+  const af = an('applyForceToAgent', { _port_fx: '0.03', _port_fy: '-0.02' });
+  aE(bs, 'do', fe, 'do', 'flow');
+  aE(near, 'agents', fe, 'array', 'value');
+  aE(fe, 'body', af, 'do', 'flow');
+  aE(fe, 'element', af, 'agentId', 'value');
+  return {
+    schemaVersion: 1,
+    properties: { name: 'Apply Force To Agent Parity Test', dimension: '2d', gridWidth: 24, gridHeight: 24, topology: '2d-grid', boundaryTreatment: 'torus', useWasm: false, useWebGPU: false },
+    topologyMode: { gridCells: false, agents: true },
+    centerBased: { enabled: true, maxAgents: 100, maxBonds: 0, worldWidth: 24, worldHeight: 24, seedCount: 40, seedPattern: 'scatter', defaultRadius: 0.5, growthRate: 0, repulsionStiffness: 2, adhesionStiffness: 0, interactionRange: 1.5, drag: 1, timeStep: 0.1, momentum: 0.9, maxSpeed: 0, neighbourQueryRadius: 8, useBondingPhysics: false, autoBond: false, agentTarget: 'wasm', agentUpdateMode: 'async',
+      agentCapabilities: { motion: 'force', body: true, collision: 'off', bonds: 'off', autoBond: false, growth: false, division: false, lifespan: false, populationBirth: false, populationDeath: false, sensing: true, sensingHeadingSource: 'velocity', orientation: false, fieldCoupling: false, appearance: true } },
+    attributes: [], modelAttributes: [], neighborhoods: [],
+    agentAttributes: [],
+    variables: [], agentVariables: [], indicators: [], mappings: [],
+    graphNodes: [], graphEdges: [], agentGraphNodes: aN, agentGraphEdges: aEd, macroDefs: [],
+  };
+}
+
+// Synthetic: the ARRAY broadcast — Apply Force To Agents over the whole nearby set.
+// Lowers to For Each In Array → Apply Force To Agent, so this exercises the lowering
+// end-to-end and must be JS↔WASM bit-identical like the single-node scatter.
+function buildApplyForceToAgentsModel() {
+  const used = new Set();
+  const nid = (p) => { let id; do { id = p + Math.random().toString(36).slice(2, 8); } while (used.has(id)); used.add(id); return id; };
+  const aN = [], aEd = [];
+  const an = (t, c) => { const n = { id: nid('a'), type: 'caNode', position: { x: 0, y: 0 }, data: { nodeType: t, config: c } }; aN.push(n); return n; };
+  const aE = (s, sp, tt, tp, cat) => aEd.push({ id: nid('e'), source: s.id, target: tt.id, sourceHandle: `output_${cat}_${sp}`, targetHandle: `input_${cat}_${tp}` });
+  const bs = an('behaviourStep', {});
+  const near = an('getNearbyAgents', { _port_radius: '6' });
+  const afs = an('applyForceToAgents', { _port_fx: '0.03', _port_fy: '-0.02' });
+  aE(bs, 'do', afs, 'do', 'flow');
+  aE(near, 'agents', afs, 'agents', 'value');
+  return {
+    schemaVersion: 1,
+    properties: { name: 'Apply Force To Agents Parity Test', dimension: '2d', gridWidth: 24, gridHeight: 24, topology: '2d-grid', boundaryTreatment: 'torus', useWasm: false, useWebGPU: false },
+    topologyMode: { gridCells: false, agents: true },
+    centerBased: { enabled: true, maxAgents: 100, maxBonds: 0, worldWidth: 24, worldHeight: 24, seedCount: 40, seedPattern: 'scatter', defaultRadius: 0.5, growthRate: 0, repulsionStiffness: 2, adhesionStiffness: 0, interactionRange: 1.5, drag: 1, timeStep: 0.1, momentum: 0.9, maxSpeed: 0, neighbourQueryRadius: 8, useBondingPhysics: false, autoBond: false, agentTarget: 'wasm', agentUpdateMode: 'async',
+      agentCapabilities: { motion: 'force', body: true, collision: 'off', bonds: 'off', autoBond: false, growth: false, division: false, lifespan: false, populationBirth: false, populationDeath: false, sensing: true, sensingHeadingSource: 'velocity', orientation: false, fieldCoupling: false, appearance: true } },
+    attributes: [], modelAttributes: [], neighborhoods: [],
+    agentAttributes: [],
+    variables: [], agentVariables: [], indicators: [], mappings: [],
+    graphNodes: [], graphEdges: [], agentGraphNodes: aN, agentGraphEdges: aEd, macroDefs: [],
+  };
+}
+
 const modelsDir = join(ROOT, 'public', 'models');
 const files = readdirSync(modelsDir).filter(f => f.endsWith('.gcaproj'));
 const SEED = 0x9e3779b1 >>> 0;
@@ -303,6 +361,8 @@ entries.push({ name: '[synthetic] FOV cone (Get Agents In View)', raw: buildFOVM
 entries.push({ name: '[synthetic] Hemifield (Sense Hemifield L/R)', raw: buildHemifieldModel() });
 entries.push({ name: '[synthetic] Multi-attribute slots (Get/Set + by-id)', raw: buildMultiAttrModel() });
 entries.push({ name: '[synthetic] Get Grid Dimensions (3D world W/H/D)', raw: buildGridDimsModel() });
+entries.push({ name: '[synthetic] Apply Force To Agent (pairwise scatter)', raw: buildApplyForceToAgentModel() });
+entries.push({ name: '[synthetic] Apply Force To Agents (array broadcast, lowered)', raw: buildApplyForceToAgentsModel() });
 
 for (const { name: f, raw } of entries) {
   const model = migrateForHarness(raw);

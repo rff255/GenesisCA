@@ -1279,7 +1279,13 @@ export function HelpView() {
             neighbour is immediately visible to a later agent this step) or <strong>Synchronous</strong>
             (every agent reads the previous step; attribute writes are swapped in at the step&rsquo;s
             end &mdash; the snapshot/parallel semantics the GPU path uses). Positions are
-            snapshot-integrated in both modes.
+            snapshot-integrated in both modes. Because writing <em>another</em> agent&rsquo;s attribute
+            (or position/radius) would race that agent&rsquo;s own update under Synchronous mode,
+            those cross-agent OVERWRITE writes are <strong>allowed only in Asynchronous mode</strong>
+            (the agent form of the CA grid&rsquo;s &ldquo;a cell writes only itself&rdquo; rule) &mdash;
+            except when the target is a freshly-created handle you&rsquo;re configuring at spawn time.
+            <em>Apply Force To Agent</em> is exempt: adding a force is commutative, so it&rsquo;s safe in
+            both modes.
           </p>
           <h3 className={styles.h3}>Enabling Agents</h3>
           <p className={styles.p}>
@@ -1433,7 +1439,16 @@ export function HelpView() {
               <strong> 3D</strong> model the position, force, and velocity nodes (Get/Set Agent
               Position, Apply Force, Set Velocity, Get Self Position) expose a <code>Z</code> axis.
               Apply Force also has a <strong>Vector input</strong> toggle that takes a single force
-              vector (from Vector Op) instead of the X / Y / Z components.</li>
+              vector (from Vector Op) instead of the X / Y / Z components. (Apply Force
+              <em>accumulates</em> onto a buffer reset each step, so several Apply Force nodes sum.)</li>
+            <li><strong>Apply Force To Agent</strong> &mdash; add a force to <em>another</em> agent by
+              id (the cross-agent counterpart to Apply Force). This is the physically-correct way to
+              author interactions: push a neighbour and, by Newton&rsquo;s 3rd law, feel the reaction;
+              custom pairwise or Coulomb forces; springs you code yourself. Because forces
+              <em>sum</em> (commutative), it&rsquo;s race-free in both update modes &mdash; unlike
+              writing another agent&rsquo;s attribute. <strong>Apply Force To Agents</strong> is the
+              broadcast sibling &mdash; push the same force onto <em>every</em> agent in an id array
+              (a whole sensed group) at once.</li>
             <li><strong>Set Agent Attribute</strong> &mdash; write an attribute on another agent by
               id (signal a neighbour). And because Get Nearby Agents now supplies a target,
               <strong> Form Bond</strong> is fully graph-driven &mdash; bond to compatible

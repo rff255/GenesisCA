@@ -66,8 +66,17 @@ function emitForceControlStruct(): string {
 /** Emit the standalone WGSL force-pass module for the given GPU agent layout.
  *  One invocation per agent slot (2-D dispatch tiling recovers the linear idx,
  *  the lattice pattern). Pure — no GPU calls. */
-export function emitAgentForcePassWGSL(layout: AgentWebGPULayout): string {
+export function emitAgentForcePassWGSL(layout: AgentWebGPULayout, usesForceScatter = false): string {
   const is3d = layout.gridDepth > 1;
+  // Apply Force To Agent — the behaviour shader scattered cross-agent force into an
+  // atomic `forceScatter` buffer (X/Y[/Z] regions strided by maxAgents); the force
+  // pass adds it to each agent's OWN self-force seed. Each agent reads only its own
+  // slot here (no contention → a plain read + bitcast, not atomic). Absent → the
+  // seed is byte-identical to the pre-feature force pass.
+  const MA = layout.maxAgents;
+  const scatterX = usesForceScatter ? ` + bitcast<f32>(forceScatter[i])` : '';
+  const scatterY = usesForceScatter ? ` + bitcast<f32>(forceScatter[${MA}u + i])` : '';
+  const scatterZ = usesForceScatter ? ` + bitcast<f32>(forceScatter[${2 * MA}u + i])` : '';
   const f32 = (field: string, idxExpr: string): string => {
     const base = layout.f32Base[field]!;
     return base === 0 ? `agentF32[${idxExpr}]` : `agentF32[${base}u + ${idxExpr}]`;
@@ -117,7 +126,7 @@ export function emitAgentForcePassWGSL(layout: AgentWebGPULayout): string {
   // 3D-only declarations / extents.
   const zi3 = is3d ? `\n  let zi: f32 = ${f32('z', 'i')};` : '';
   const hD3 = is3d ? `\n  let hD: f32 = fc.fieldD * 0.5;` : '';
-  const fz3Decl = is3d ? `\n  var fz: f32 = ${f32('forceZ', 'i')};` : '';
+  const fz3Decl = is3d ? `\n  var fz: f32 = ${f32('forceZ', 'i')}${scatterZ};` : '';
   const deadZ = is3d ? `\n    ${f32('zNext', 'i')} = ${f32('z', 'i')};` : '';
 
   // The hash stencil — 3×3 (2D) or 3×3×3 (3D); the 3D bin index is
@@ -191,7 +200,7 @@ export function emitAgentForcePassWGSL(layout: AgentWebGPULayout): string {
 @group(0) @binding(0) var<storage, read_write> agentF32   : array<f32>;
 @group(0) @binding(1) var<storage, read>       agentAlive : array<u32>;
 @group(0) @binding(2) var<storage, read>       hashBins   : array<i32>;
-@group(0) @binding(3) var<uniform>             fc         : ForceControl;
+@group(0) @binding(3) var<uniform>             fc         : ForceControl;${usesForceScatter ? '\n@group(0) @binding(4) var<storage, read>       forceScatter : array<u32>;' : ''}
 
 @compute @workgroup_size(64)
 fn forcePass(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(num_workgroups) nwg: vec3<u32>) {
@@ -210,9 +219,10 @@ fn forcePass(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(num_workgro
   let hW: f32 = fc.fieldW * 0.5;
   let hH: f32 = fc.fieldH * 0.5;${hD3}
 
-  // Start from the graph-authored force (Apply Force wrote it this step).
-  var fx: f32 = ${f32('forceX', 'i')};
-  var fy: f32 = ${f32('forceY', 'i')};${fz3Decl}
+  // Start from the graph-authored force: this agent's own Apply Force (self, in
+  // agentF32) PLUS any cross-agent Apply Force To Agent scattered onto it this step.
+  var fx: f32 = ${f32('forceX', 'i')}${scatterX};
+  var fy: f32 = ${f32('forceY', 'i')}${scatterY};${fz3Decl}
   var dens: f32 = 0.0;
 
   if (fc.hashValid != 0u) {

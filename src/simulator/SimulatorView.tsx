@@ -1783,7 +1783,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   // (Decision D-TARGET). PR-A2 returns a placeholder (agents seed + render but
   // don't behave); PR-A3 wires the real compileAgentGraph over
   // model.agentGraphNodes (the behaviourStep loop + value-outs + force hooks).
-  const compileAgentModel = useCallback((stopIdxBase = 0): { behaviourCode?: string; initCode?: string; divisionCode?: string; outputMappingCodes?: Array<{ mappingId: string; code: string }>; stopMessages: string[]; colorViewer: string; error?: string; agentTarget: 'js' | 'wasm' | 'webgpu'; agentWasmBytes?: Uint8Array; agentWasmViewerGuardIds?: string[]; agentLayoutExtras?: AgentLayoutExtras; agentWebgpuBehaviourShader?: string; agentWebgpuForceShader?: string; agentWebgpuMaxAgents?: number; agentWebgpuMaxHashBins?: number; agentWebgpuLayout?: AgentWebGPULayout; agentWebgpuUsesI32Write?: boolean; agentWebgpuUsage?: { usesBondStore?: boolean; usesIndicators?: boolean; usesAux?: boolean; usesSpawn?: boolean; usesStop?: boolean } } => {
+  const compileAgentModel = useCallback((stopIdxBase = 0): { behaviourCode?: string; initCode?: string; divisionCode?: string; outputMappingCodes?: Array<{ mappingId: string; code: string }>; stopMessages: string[]; colorViewer: string; error?: string; agentTarget: 'js' | 'wasm' | 'webgpu'; agentWasmBytes?: Uint8Array; agentWasmViewerGuardIds?: string[]; agentLayoutExtras?: AgentLayoutExtras; agentWebgpuBehaviourShader?: string; agentWebgpuForceShader?: string; agentWebgpuMaxAgents?: number; agentWebgpuMaxHashBins?: number; agentWebgpuLayout?: AgentWebGPULayout; agentWebgpuUsesI32Write?: boolean; agentWebgpuUsage?: { usesBondStore?: boolean; usesIndicators?: boolean; usesAux?: boolean; usesSpawn?: boolean; usesStop?: boolean; usesForceScatter?: boolean } } => {
     if (!model.topologyMode?.agents) return { colorViewer: '', agentTarget: 'js', stopMessages: [] };
     // The default AGENT viewer = the first agent A→C mapping (drives the agent
     // colour pass). Empty when the model has no agent mappings (agents are then
@@ -1813,7 +1813,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     let agentWebgpuMaxHashBins: number | undefined;
     let agentWebgpuLayout: AgentWebGPULayout | undefined;
     let agentWebgpuUsesI32Write: boolean | undefined;
-    let agentWebgpuUsage: { usesBondStore?: boolean; usesIndicators?: boolean; usesAux?: boolean; usesSpawn?: boolean; usesStop?: boolean } | undefined;
+    let agentWebgpuUsage: { usesBondStore?: boolean; usesIndicators?: boolean; usesAux?: boolean; usesSpawn?: boolean; usesStop?: boolean; usesForceScatter?: boolean } | undefined;
     let agentLayoutExtras: AgentLayoutExtras | undefined;
     let agentWasmViewerGuardIds: string[] | undefined;
     if (agentTarget === 'wasm') {
@@ -1852,7 +1852,9 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
           agentTarget = 'js';
         } else {
           agentWebgpuBehaviourShader = r.shaderCode;
-          agentWebgpuForceShader = emitAgentForcePassWGSL(r.layout);
+          // The force shader reads the cross-agent force-scatter buffer only when the
+          // behaviour graph uses Apply Force To Agent (r.usesForceScatter).
+          agentWebgpuForceShader = emitAgentForcePassWGSL(r.layout, r.usesForceScatter);
           agentWebgpuMaxAgents = r.layout.maxAgents;
           agentWebgpuMaxHashBins = r.layout.maxHashBins;
           // Ship the FULL layout (it carries the universal-node region bases —
@@ -1861,7 +1863,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
           // mismatch). + the i32-write flag (setAgentType → read_write agentI32).
           agentWebgpuLayout = r.layout;
           agentWebgpuUsesI32Write = r.usesI32Write;
-          agentWebgpuUsage = { usesBondStore: r.usesBondStore, usesIndicators: r.usesIndicators, usesAux: r.usesAux, usesSpawn: r.usesSpawn, usesStop: r.usesStop };
+          agentWebgpuUsage = { usesBondStore: r.usesBondStore, usesIndicators: r.usesIndicators, usesAux: r.usesAux, usesSpawn: r.usesSpawn, usesStop: r.usesStop, usesForceScatter: r.usesForceScatter };
         }
       } catch (e) {
         // eslint-disable-next-line no-console
