@@ -3931,7 +3931,14 @@ function compileAgentFns(behaviourCode?: string, initCode?: string, divisionCode
  *  views over wasmMemory so writes still land in the right place; WebGPU
  *  uploads readAttrs after init in the reset handler. */
 function runInit(): void {
-  const useWebGPUInit = useWebGPU && webgpuRuntime?.stepReady && webgpuRuntime.initPipeline !== null;
+  // Grid Init Event models: the GPU init pipeline is BYPASSED — the grid seed
+  // is written by the CPU-only runGridInit, so the CPU must be the init
+  // authority end-to-end (per-cell init on CPU via the JS initFn, then the
+  // grid init on top) and the reset handler uploads the complete CPU state.
+  // Taking the GPU shortcut here left the CPU without the per-cell init's
+  // writes AND skipped the upload -> the seed silently never reached the GPU
+  // (the reported "switch the Accretor to WebGPU and Reset shows no seed").
+  const useWebGPUInit = useWebGPU && webgpuRuntime?.stepReady && webgpuRuntime.initPipeline !== null && gridInitFn === null;
   const callWasm = useWasm && wasmInitFn !== null;
   const isSync = updateMode !== 'asynchronous';
   if (!useWebGPUInit && !callWasm && !initFn) return;
@@ -5242,7 +5249,10 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       // When present, it modifies attrs in place AFTER defaults
       // have been applied and BEFORE the color pass / GPU upload.
       const webgpuReset = useWebGPU && webgpuRuntime?.stepReady;
-      const useGPUInit = !!(webgpuReset && webgpuRuntime?.initPipeline);
+      // Grid Init Event models bypass the GPU init pipeline (see runInit) — the
+      // CPU is the init authority, and the !useGPUInit branch below uploads the
+      // complete CPU state (per-cell init + the grid-init seed) to the GPU.
+      const useGPUInit = !!(webgpuReset && webgpuRuntime?.initPipeline && !gridInitFn);
       const hadInit = initFn !== null || (useWasm && wasmInitFn !== null) || useGPUInit || gridInitFn !== null;
       // GPU init path: push the CPU defaults to GPU BEFORE dispatching init so
       // the init shader reads from a known-good attrsReadBuf. dispatchInit then
@@ -5253,11 +5263,9 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       }
       runInit();
       // Grid Init Event — the GLOBAL seeding pass, AFTER the per-cell Init Event
-      // (so a global seed is the final word). Writes CPU readAttrs; the WebGPU
-      // block below re-uploads them when the GPU init pipeline didn't run (the
-      // common gridInit-only case has no GPU init pipeline → useGPUInit false →
-      // readAttrs is uploaded). On WebGPU prefer EITHER a per-cell Init Event OR a
-      // Grid Init Event, not both (a GPU per-cell init owns the GPU buffers).
+      // (so a global seed is the final word). Writes CPU readAttrs; on WebGPU a
+      // gridInit model always takes the CPU init path (useGPUInit is forced
+      // false above), so the block below uploads the complete seeded state.
       runGridInit();
       // Agent Init Event + colour pass ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â after the cell Init Event (D-FIELD).
       if (agentsEnabled) { runAgentInit(); runAgentColorPass(); }

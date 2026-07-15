@@ -395,24 +395,6 @@
     "overseer.driver": "e3b0c44298fc1c14",
     "overseer.error": null
   },
-  "general_2d_ca_golly_style.gcaproj": {
-    "js.stepCode": "83104fe2e66cedf3",
-    "js.fullCode": "21255b32317c7cac",
-    "js.error": null,
-    "wasm.bytes": "3da441ee43886f59",
-    "wasm.bytesLen": 2639,
-    "wasm.error": null,
-    "webgpu.shader": "8ce675d1e9c1ea98",
-    "webgpu.error": null,
-    "agent.behaviourCode": "e3b0c44298fc1c14",
-    "agent.error": "No Behaviour Step node in the agent graph.",
-    "agent.wasm.bytes": "e3b0c44298fc1c14",
-    "agent.wasm.error": null,
-    "agent.webgpu.shader": "e3b0c44298fc1c14",
-    "agent.webgpu.error": null,
-    "overseer.driver": "e3b0c44298fc1c14",
-    "overseer.error": null
-  },
   "snake.gcaproj": {
     "js.stepCode": "70b66cfcb6e16332",
     "js.fullCode": "fa7ad9c66a364cf5",
