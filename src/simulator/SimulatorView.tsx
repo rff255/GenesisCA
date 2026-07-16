@@ -368,15 +368,21 @@ function buildBrushOutline3dSegs(o: {
     } else rectAt(hw, hh, 0);
   } else {
     const R = Math.max(0.5, o.radius);
-    if (o.shape === 'ring') {
-      circleAB(R + o.ringW / 2, 0);
-      circleAB(Math.max(0.25, R - o.ringW / 2), 0);
-    } else {
-      circleAB(R, 0);
-      if (o.fixedHalf > 0) { // sphere: add the two great circles through the fixed axis
-        arc(t => [R * Math.cos(t), 0, R * Math.sin(t)]);
-        arc(t => [0, R * Math.cos(t), R * Math.sin(t)]);
+    // Draw a circle of `rad` on the plane, plus (when volumetric) the two great
+    // circles through the fixed axis → a sphere. A ring stacks two spheres
+    // (outer + inner) → a spherical shell, matching the painted footprint.
+    const sphere = (rad: number) => {
+      circleAB(rad, 0);
+      if (o.fixedHalf > 0) {
+        arc(t => [rad * Math.cos(t), 0, rad * Math.sin(t)]);
+        arc(t => [0, rad * Math.cos(t), rad * Math.sin(t)]);
       }
+    };
+    if (o.shape === 'ring') {
+      sphere(R + o.ringW / 2);
+      sphere(Math.max(0.25, R - o.ringW / 2));
+    } else {
+      sphere(R);
     }
   }
   return seg.length ? new Float32Array(seg) : null;
@@ -2173,13 +2179,18 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
             anchor = agentLine3dAnchorRef.current;
             if (m === 'bond') { shp = 'circle'; }                                // scan-radius ring
             else if (m === 'glue' || m === 'cut') { shp = 'circle'; rad = 1; anchor = null; }  // small cursor dot
-            else if (vol) { if (shp === 'circle') fixedHalf = Math.max(0.5, rad); else if (shp === 'rect') fixedHalf = Math.max(bw, bh) / 2; }
+            // The 3D agent footprint is ALWAYS a volumetric solid (sphere/box through
+            // the depth — see agentsInShape3dAt / agentSeedInShape3dAt), NOT gated on
+            // the CA-grid-only "Volumetric Brush" toggle. So the outline is always
+            // volumetric, matching the agents the stroke will actually affect.
+            else if (shp === 'circle' || shp === 'ring') fixedHalf = Math.max(0.5, rad);
+            else if (shp === 'rect') fixedHalf = Math.max(bw, bh) / 2;
           } else {
             shp = brushShapeRef.current;
             bw = brushWRef.current; bh = brushHRef.current;
             rad = brushRadiusRef.current; rw = Math.max(1, brushRingWidthRef.current); lw = brushLineWidthRef.current;
             anchor = line3dAnchorRef.current;
-            if (vol) { if (shp === 'circle') fixedHalf = Math.max(0.5, rad); else if (shp === 'rect') fixedHalf = brushBoxDepthRef.current / 2; }
+            if (vol) { if (shp === 'circle' || shp === 'ring') fixedHalf = Math.max(0.5, rad); else if (shp === 'rect') fixedHalf = brushBoxDepthRef.current / 2; }
           }
           r.setBrushOutline(buildBrushOutline3dSegs({
             axis: plane3dRef.current.axis, cx: hc.col, cy: hc.row, cz: hc.layer,
@@ -5705,12 +5716,15 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
    *  the "volumetric" toggle extrudes along the fixed axis (else w=0 → on the plane). */
   const agentSeedInShape3dAt = useCallback((hit: Cell3): Array<{ x: number; y: number; z: number }> => {
     const shape = agentBrushShapeRef.current;
-    if (shape === 'circle') return agentSeedPoints3d({ x: hit.col, y: hit.row, z: hit.layer }, agentBrushRadiusRef.current, agentSeedDensityRef.current, brush3dVolumeRef.current);
+    // The 3D agent brush is ALWAYS a volumetric solid (ball/box/shell through the
+    // depth), matching agentsInShape3dAt and the outline cursor — NOT the CA-grid-only
+    // "Volumetric Brush" toggle. So Add seeds the same solid the outline previews.
+    if (shape === 'circle') return agentSeedPoints3d({ x: hit.col, y: hit.row, z: hit.layer }, agentBrushRadiusRef.current, agentSeedDensityRef.current, true);
     const m = agentShapeMetrics();
     const W = gridWidth.current, H = gridHeight.current, D = gridDepth.current, torus = boundaryTreatmentRef.current === 'torus';
-    const axis = plane3dRef.current.axis, volumetric = brush3dVolumeRef.current;
-    const hd = volumetric ? Math.max(m.halfW, m.halfH) : 0;
-    const vol = (m.shape === 'rect' ? (m.halfW * 2) * (m.halfH * 2) : m.area) * (volumetric ? (hd * 2 + 1) : 1);
+    const axis = plane3dRef.current.axis;
+    const hd = Math.max(m.halfW, m.halfH);
+    const vol = (m.shape === 'rect' ? (m.halfW * 2) * (m.halfH * 2) : m.area) * (hd * 2 + 1);
     const n = Math.max(1, Math.round(agentSeedDensityRef.current * vol));
     const toWorld = (u: number, v: number, w: number): Cell3 =>
       axis === 'z' ? { col: hit.col + u, row: hit.row + v, layer: hit.layer + w }
@@ -5719,7 +5733,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     const pts: Array<{ x: number; y: number; z: number }> = [];
     let tries = 0; const maxTries = n * 30 + 50;
     while (pts.length < n && tries++ < maxTries) {
-      const u = (Math.random() * 2 - 1) * m.boundW, v = (Math.random() * 2 - 1) * m.boundH, w = volumetric ? (Math.random() * 2 - 1) * hd : 0;
+      const u = (Math.random() * 2 - 1) * m.boundW, v = (Math.random() * 2 - 1) * m.boundH, w = (Math.random() * 2 - 1) * hd;
       let inside: boolean;
       if (m.shape === 'rect') inside = Math.abs(u) <= m.halfW && Math.abs(v) <= m.halfH;
       else { const d = Math.hypot(u, v, w); inside = m.shape === 'ring' ? Math.abs(d - m.radius) <= m.ringW / 2 : d <= m.radius; }
