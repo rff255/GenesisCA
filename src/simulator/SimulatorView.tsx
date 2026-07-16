@@ -1,5 +1,6 @@
 import { memo, useCallback, useEffect, useMemo, useReducer, useRef, useState, useSyncExternalStore, type CSSProperties } from 'react';
 import { useModel } from '../model/ModelContext';
+import { hexToRgba } from '../model/colorHex';
 import { compileGraph, compileAgentGraph } from '../modeler/vpl/compiler/compile';
 import { expandVectorAttributes, encodeAttrSets, decodeVectorFromValues } from '../modeler/vpl/compiler/vectorAttr';
 import { hasGlyphsInModel } from '../modeler/vpl/compiler/glyphsUsage';
@@ -535,10 +536,13 @@ function computeDefaultModelAttrs(attributes: Attribute[]): Record<string, numbe
         break;
       }
       case 'color': {
-        const hex = a.defaultValue || '#808080';
-        mAttrs[a.id + '_r'] = parseInt(hex.slice(1, 3), 16) || 0;
-        mAttrs[a.id + '_g'] = parseInt(hex.slice(3, 5), 16) || 0;
-        mAttrs[a.id + '_b'] = parseInt(hex.slice(5, 7), 16) || 0;
+        // #rrggbb (alpha absent → 255) or #rrggbbaa. Slot names must match
+        // `modelAttrSlotKeys` — the layout-lockstep invariant.
+        const c = hexToRgba(a.defaultValue || '#808080');
+        mAttrs[a.id + '_r'] = c.r;
+        mAttrs[a.id + '_g'] = c.g;
+        mAttrs[a.id + '_b'] = c.b;
+        mAttrs[a.id + '_a'] = c.a;
         break;
       }
       case 'lookupTable':

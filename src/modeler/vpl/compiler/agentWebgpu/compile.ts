@@ -58,6 +58,7 @@ import { computeAsyncReadWriteHazards } from '../asyncWriteHazard';
 import { computeVolatileHoist } from '../volatileHoist';
 import { getNodeDef } from '../../nodes/registry';
 import { cellFieldAttrsOf, cellFieldWriteAttrsOf, agentAttrsOf } from '../../../../model/attributeScope';
+import { modelAttrSlotKeys } from '../../../../model/attributeScope';
 import { readCategoricalEntries, readCategoricalDefault } from '../../nodes/CategoricalColorNode';
 import { readColorScaleStops } from '../../nodes/ColorScaleNode';
 import { viewCosHalf } from '../../nodes/GetAgentsInViewNode';
@@ -3578,11 +3579,14 @@ export function agentWebGPUFieldSpecOf(model: CAModel) {
  *  keys (scalar + the 3 color sub-keys), the lookup-table dims, the indicator
  *  count, the bond capacity, and the world depth. */
 export function agentWebGPUExtrasOf(model: CAModel) {
+  // Slot list via the shared `modelAttrSlotKeys` (colour → r/g/b/a) — the
+  // layout-lockstep invariant, see attributeScope.ts. This site has historically
+  // NOT filtered `lookupTable`; that is preserved deliberately, since dropping the
+  // slot would shift every later attribute's offset here but not elsewhere.
   const modelAttrKeys: string[] = [];
   for (const a of model.attributes ?? []) {
     if (!a.isModelAttribute) continue;
-    if (a.type === 'color') { modelAttrKeys.push(`${a.id}_r`, `${a.id}_g`, `${a.id}_b`); }
-    else modelAttrKeys.push(a.id);
+    modelAttrKeys.push(...modelAttrSlotKeys(a));
   }
   const lookupTables: Array<{ id: string; rowCount: number; colCount: number; dims?: number[]; mins?: number[] }> = [];
   for (const a of model.attributes ?? []) {

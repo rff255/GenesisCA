@@ -45,3 +45,43 @@ export function cellFieldAttrsOf(model: CAModel): Attribute[] {
 export function cellFieldWriteAttrsOf(model: CAModel): Attribute[] {
   return cellAttrsOf(model).filter(a => a.agentAccess === 'readWrite');
 }
+
+/** The scalar SLOT KEYS a MODEL attribute occupies in the `modelAttrs` channel.
+ *
+ *  A `color` model attribute has no single numeric value, so it expands into one
+ *  scalar slot per channel: `id_r`, `id_g`, `id_b`, `id_a`. Everything else is a
+ *  single slot named by the bare id.
+ *
+ *  ── Why this helper exists (the ABI-mirror rule at the top of this file) ──────
+ *  This expansion was inlined at SIX sites that must agree exactly or the baked
+ *  offsets desync — and a desync does NOT crash, it silently shifts every
+ *  subsequent attribute's offset in one target but not another, so the model runs
+ *  and renders plausible garbage. The sites:
+ *
+ *    1. sim.worker.ts        — cachedModelAttrs writer
+ *    2. SimulatorView.tsx    — the `init` message writer
+ *    3. wasm/layout.ts       — f64 slot per key
+ *    4. webgpu/layout.ts     — f32 slot per key
+ *    5. agentWasm/compile.ts — modelAttrKeysOf
+ *    6. agentWebgpu/compile  — agentWebGPUExtrasOf
+ *
+ *  The copy loops that populate those regions are key-driven
+ *  (`Object.keys(modelAttrOffset)` → `cachedModelAttrs[key]`), so they inherit any
+ *  slot this helper adds for free.
+ *
+ *  ── SCOPE: this owns the colour expansion ONLY ───────────────────────────────
+ *  It deliberately does NOT filter `lookupTable`. The six sites diverge on that
+ *  today — the two layouts include it (reserving a slot nothing ever reads),
+ *  while SimulatorView and agentWasm skip it. That divergence is pre-existing and
+ *  benign, but unifying it here would REMOVE a reserved slot from the layouts and
+ *  shift every later attribute's offset on any model with a lookupTable model
+ *  attribute (Chromatography, Accretor, Golly). Each caller keeps its own filter;
+ *  this helper answers only "what slots does THIS attribute occupy".
+ *
+ *  Structurally typed (`{id, type}`) so the compiler-side `AttrDef` shape can call
+ *  it without importing the full `Attribute`. */
+export function modelAttrSlotKeys(attr: { id: string; type: string }): string[] {
+  return attr.type === 'color'
+    ? [attr.id + '_r', attr.id + '_g', attr.id + '_b', attr.id + '_a']
+    : [attr.id];
+}

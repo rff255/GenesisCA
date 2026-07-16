@@ -18,6 +18,7 @@ import type { CAModel } from '../../../../model/types';
 import { FACE_SLOT_COUNT, resolveKeyLabels, resolveAxes, isMultiAxisTable } from '../variegation';
 import { hasGlyphsInModel } from '../glyphsUsage';
 import { expandVectorAttributes } from '../vectorAttr';
+import { modelAttrSlotKeys } from '../../../../model/attributeScope';
 
 export interface WebGPULayoutAttr {
   id: string;
@@ -104,10 +105,12 @@ export interface WebGPULayout {
   glyphCodesBytes: number;
   /** Bytes for the glyphColors storage buffer (u32 per cell, R|G<<8|B<<16). */
   glyphColorsBytes: number;
-  /** Bytes for the modelAttrs uniform buffer (one f32 per scalar, three f32 per color). */
+  /** Bytes for the modelAttrs uniform buffer (one f32 per scalar, four f32 per
+   *  colour attr: r/g/b/a). */
   modelAttrsBytes: number;
-  /** Map from model-attr key ("id" or "id_r" / "id_g" / "id_b") to byte offset
-   *  inside the modelAttrs buffer. */
+  /** Map from model-attr key ("id", or "id_r" / "id_g" / "id_b" / "id_a" for a
+   *  colour attr) to byte offset inside the modelAttrs buffer. Slot list from the
+   *  shared `modelAttrSlotKeys`. */
   modelAttrOffset: Record<string, number>;
   /** Bytes for the indicators buffer (one f32 / atomic<u32> per indicator, indices match model.indicators order). */
   indicatorsBytes: number;
@@ -250,17 +253,13 @@ export function computeWebGPULayout(model: CAModel): WebGPULayout {
   });
   const nbrBytes = Math.max(4, nbrCursor);
 
-  // Model attrs: one f32 per scalar, three f32 per color (r, g, b separately).
+  // Model attrs: one f32 per scalar, four f32 per colour (r, g, b, a separately).
+  // Slot list via the shared `modelAttrSlotKeys` — the layout-lockstep invariant
+  // (see attributeScope.ts).
   let modelCursor = 0;
   const modelAttrOffset: Record<string, number> = {};
   for (const a of modelAttrs) {
-    if (a.type === 'color') {
-      modelAttrOffset[a.id + '_r'] = modelCursor; modelCursor += 4;
-      modelAttrOffset[a.id + '_g'] = modelCursor; modelCursor += 4;
-      modelAttrOffset[a.id + '_b'] = modelCursor; modelCursor += 4;
-    } else {
-      modelAttrOffset[a.id] = modelCursor; modelCursor += 4;
-    }
+    for (const key of modelAttrSlotKeys(a)) { modelAttrOffset[key] = modelCursor; modelCursor += 4; }
   }
   // Uniform buffers must be 16-byte aligned in size.
   const modelAttrsBytes = Math.max(16, Math.ceil(modelCursor / 16) * 16);
