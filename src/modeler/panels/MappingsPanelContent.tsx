@@ -13,7 +13,7 @@ import { typeDisplayName } from '../../model/typeLabels';
 import { NumberField } from '../vpl/widgets/InlineWidgets';
 import styles from './PanelContent.module.css';
 import { ColorField } from '../vpl/widgets/ColorField';
-import { hexToRgba, rgbaToHex, OPAQUE } from '../../model/colorHex';
+import { hexToRgba, rgbaToHex, isOpaque, OPAQUE } from '../../model/colorHex';
 
 // (The local 6-digit-only rgbToHex/hexToRgb pair that used to live here is gone —
 //  ColorSwatch now routes through the shared alpha-aware helpers in colorHex.ts.
@@ -181,9 +181,19 @@ function LinkedOutputEditor({ selected, attrs, update }: { selected: Mapping; at
 
       {attr && (attr.type === 'float' || attr.type === 'integer') && (() => {
         const g = selected.linkedColors?.gradient ?? defaultGradientStops(attr.type);
-        const editorStops: GradStop[] = g.map(s => ({ p: s.position, r: s.r, g: s.g, b: s.b }));
-        const onStops = (next: GradStop[]) =>
-          setGradient(next.map(s => ({ position: s.p, r: s.r, g: s.g, b: s.b })));
+        // `a` must survive BOTH legs of this round-trip. Dropping it (as this
+        // mapper used to) makes the picker look like it refuses any alpha but
+        // 255: GradientStopsEditor sets the stop's `a`, this discards it, and
+        // the next render reads back opaque. Written only when some stop is
+        // non-opaque, so an untouched palette keeps its exact pre-alpha
+        // `ColorStop`s and the linked-OM injector wires no alpha edge.
+        const editorStops: GradStop[] = g.map(s => ({ p: s.position, r: s.r, g: s.g, b: s.b, a: s.a }));
+        const onStops = (next: GradStop[]) => {
+          const withA = next.some(s => !isOpaque(s));
+          setGradient(next.map(s => (withA
+            ? { position: s.p, r: s.r, g: s.g, b: s.b, a: s.a ?? OPAQUE }
+            : { position: s.p, r: s.r, g: s.g, b: s.b })));
+        };
         const min = selected.linkedMin ?? attr.min ?? 0;
         const max = selected.linkedMax ?? attr.max ?? (attr.type === 'integer' ? 10 : 1);
         return (

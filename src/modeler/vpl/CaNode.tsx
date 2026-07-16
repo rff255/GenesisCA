@@ -53,6 +53,7 @@ import { InlineNumberInput, InlineBoolSelect, InlineTagSelect, InlineGlyphInput 
 import { ColorField } from './widgets/ColorField';
 import { hexToRgba, rgbaToHex, isOpaque, OPAQUE } from '../../model/colorHex';
 import { readCategoricalEntries, readCategoricalDefault, type CategoricalEntry } from './nodes/CategoricalColorNode';
+import { readColorScaleStopsRaw, writeColorScaleStops } from './nodes/ColorScaleNode';
 import { GradientStopsEditor, type GradStop } from './widgets/GradientStopsEditor';
 
 /** Pick the handle CSS class for a port based on its category + data type.
@@ -103,34 +104,23 @@ interface CaNodeData {
   [key: string]: unknown;
 }
 
-/** Gradient-editor UI for the Color Scale node — a thin wrapper that maps the
- *  node's flat config (`stopCount` + `stop_<i>_(position|r|g|b)`) to/from the
- *  shared GradientStopsEditor (which also provides the palette presets). */
+/** Gradient-editor UI for the Color Scale node — a thin wrapper mapping the
+ *  node's flat config (`stopCount` + `stop_<i>_(position|r|g|b|a)`) to/from the
+ *  shared GradientStopsEditor (which also provides the palette presets).
+ *
+ *  Reuses the node's OWN parser + writer, so the editor and the compiler can
+ *  never disagree about what the config means (the CategoricalColorEditor rule).
+ *  A hand-rolled copy here is exactly how the `a` key went missing: this wrapper
+ *  used to parse and write only position/r/g/b, so a stop's alpha was silently
+ *  discarded on the way into config and read back opaque — the picker looked
+ *  like it refused any alpha but 255, while the compiler was alpha-ready all
+ *  along. Read via the RAW (unsorted) parser: the widget addresses stops by
+ *  array index, so a sorted read would retarget a drag past a neighbour. */
 function ColorScaleEditor({ id, nodeData }: { id: string; nodeData: CaNodeData }) {
   const { updateNodeData } = useReactFlow();
-  const stopCount = Math.max(0, Number(nodeData.config.stopCount) || 0);
-  const stops: GradStop[] = [];
-  for (let i = 0; i < stopCount; i++) {
-    stops.push({
-      p: Number(nodeData.config[`stop_${i}_position`] ?? '0'),
-      r: parseInt(String(nodeData.config[`stop_${i}_r`] ?? '0'), 10) || 0,
-      g: parseInt(String(nodeData.config[`stop_${i}_g`] ?? '0'), 10) || 0,
-      b: parseInt(String(nodeData.config[`stop_${i}_b`] ?? '0'), 10) || 0,
-    });
-  }
+  const stops: GradStop[] = readColorScaleStopsRaw(nodeData.config);
   const setStops = (next: GradStop[]) => {
-    const newConfig: NodeConfig = { ...nodeData.config };
-    for (const k of Object.keys(newConfig)) {
-      if (/^stop_\d+_(position|r|g|b)$/.test(k)) delete newConfig[k];
-    }
-    next.forEach((s, i) => {
-      newConfig[`stop_${i}_position`] = String(s.p);
-      newConfig[`stop_${i}_r`] = String(s.r | 0);
-      newConfig[`stop_${i}_g`] = String(s.g | 0);
-      newConfig[`stop_${i}_b`] = String(s.b | 0);
-    });
-    newConfig.stopCount = next.length;
-    updateNodeData(id, { ...nodeData, config: newConfig });
+    updateNodeData(id, { ...nodeData, config: writeColorScaleStops(nodeData.config, next) as NodeConfig });
   };
   return <GradientStopsEditor stops={stops} onChange={setStops} />;
 }
