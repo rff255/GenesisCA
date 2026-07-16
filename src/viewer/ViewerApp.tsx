@@ -4,11 +4,14 @@ import { SimulatorView } from '../simulator/SimulatorView';
 import { serializeModel, modelFilename, downloadJSON } from '../model/fileOperations';
 import type { CAModel } from '../model/types';
 
+const GENESIS_URL = 'https://genesisca.online';
+
 /**
- * Chromeless standalone shell for the Presentation Export. Seeds the in-memory
- * ModelProvider with the embedded model, renders the full Simulator, and layers
- * an About panel (R2 — all presentation metadata) + a "Download model" action
- * (R1 — the .html is also a recoverable model source) on top.
+ * Chromeless standalone shell for a standalone-simulation export. Seeds the
+ * in-memory ModelProvider with the embedded model, renders the full Simulator,
+ * and layers a centered "welcome" info modal (R2 — all presentation metadata,
+ * shown on open) + a "Download model" action (R1 — the .html is also a
+ * recoverable model source) on top.
  */
 export function ViewerApp({ model, error }: { model: CAModel | null; error: string | null }) {
   const { model: liveModel, loadModel } = useModel();
@@ -66,11 +69,25 @@ function Centered({ children }: { children: React.ReactNode }) {
   );
 }
 
-/** Floating ⓘ button + the About/Info panel (auto-open on first load). */
+/**
+ * Reopen button (bottom-right, out of the way of both side panels) + a centered
+ * "welcome" modal that pops up in front on load so the viewer is greeted with
+ * what they just opened, and can close it whenever.
+ */
 function AboutOverlay({ model }: { model: CAModel }) {
   const p = model.properties;
-  const hasInfo = !!(p.author || p.modelAuthor || p.description || p.ruleDescription || (p.tags || []).length || p.thumbnail);
-  const [open, setOpen] = useState(hasInfo);
+  const [open, setOpen] = useState(true); // welcome: shown on first open
+
+  // Esc closes the modal. Capture-phase + stopPropagation so it doesn't also
+  // trigger the simulator's Esc = Reset.
+  useEffect(() => {
+    if (!open) return;
+    const h = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') { e.stopPropagation(); setOpen(false); }
+    };
+    window.addEventListener('keydown', h, true);
+    return () => window.removeEventListener('keydown', h, true);
+  }, [open]);
 
   const handleDownload = () => {
     void downloadJSON(serializeModel(model), modelFilename(model));
@@ -78,70 +95,103 @@ function AboutOverlay({ model }: { model: CAModel }) {
 
   return (
     <>
-      <button
-        onClick={() => setOpen(o => !o)}
-        title="About this model"
-        style={{
-          position: 'absolute', top: 12, left: 12, zIndex: 40,
-          width: 34, height: 34, borderRadius: 8, cursor: 'pointer',
-          background: 'var(--color-bg-panel, #16181d)', color: 'var(--color-accent, #e8a13a)',
-          border: '1px solid var(--color-border, #2a2e37)', fontSize: 17, fontWeight: 700,
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-        }}
-      >ⓘ</button>
+      {!open && (
+        <button
+          onClick={() => setOpen(true)}
+          title="About this model"
+          style={{
+            position: 'absolute', right: 16, bottom: 64, zIndex: 46,
+            width: 42, height: 42, borderRadius: '50%', cursor: 'pointer',
+            background: 'var(--color-accent, #e8a13a)', color: '#16181d',
+            border: 'none', fontSize: 22, fontWeight: 700, lineHeight: 1,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            boxShadow: '0 6px 20px #000a',
+          }}
+        >ⓘ</button>
+      )}
 
       {open && (
         <div
+          onClick={() => setOpen(false)}
           style={{
-            position: 'absolute', top: 12, left: 56, zIndex: 40, width: 340, maxWidth: 'calc(100vw - 72px)',
-            maxHeight: 'calc(100vh - 24px)', overflowY: 'auto',
-            background: 'var(--color-bg-panel, #16181d)', color: 'var(--color-text, #d8dae0)',
-            border: '1px solid var(--color-border, #2a2e37)', borderRadius: 12,
-            boxShadow: '0 14px 44px #0009', fontFamily: 'system-ui, sans-serif', fontSize: 13.5,
+            position: 'fixed', inset: 0, zIndex: 50,
+            display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24,
+            background: 'rgba(0,0,0,0.55)', backdropFilter: 'blur(2px)',
+            fontFamily: 'system-ui, -apple-system, "Segoe UI", sans-serif',
           }}
         >
-          <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12, padding: 16 }}>
-            {p.thumbnail && (
-              <img
-                src={p.thumbnail}
-                alt=""
-                style={{ width: 72, height: 72, borderRadius: 8, objectFit: 'cover', flex: 'none', imageRendering: 'pixelated' }}
-              />
-            )}
-            <div style={{ minWidth: 0 }}>
-              <div style={{ fontSize: 16, fontWeight: 600, color: 'var(--color-text, #ecebe6)' }}>
-                {p.name || 'Untitled model'}
-              </div>
-              {p.author && <Meta label="Rule author" value={p.author} />}
-              {p.modelAuthor && <Meta label="Project author" value={p.modelAuthor} />}
-              {(p.tags || []).length > 0 && (
-                <div style={{ marginTop: 7, display: 'flex', gap: 5, flexWrap: 'wrap' }}>
-                  {(p.tags || []).map(t => (
-                    <span key={t} style={chipStyle}>{t}</span>
-                  ))}
-                </div>
+          <div
+            onClick={e => e.stopPropagation()}
+            style={{
+              width: 'min(600px, 94vw)', maxHeight: '86vh', overflowY: 'auto',
+              background: 'var(--color-bg-panel, #16181d)', color: 'var(--color-text, #d8dae0)',
+              border: '1px solid var(--color-border, #2a2e37)', borderRadius: 16,
+              boxShadow: '0 24px 70px #000c', fontSize: 14,
+            }}
+          >
+            {/* Header */}
+            <div style={{ display: 'flex', alignItems: 'flex-start', gap: 18, padding: '22px 24px 16px' }}>
+              {p.thumbnail && (
+                <img
+                  src={p.thumbnail}
+                  alt=""
+                  style={{ width: 104, height: 104, borderRadius: 12, objectFit: 'cover', flex: 'none', imageRendering: 'pixelated', border: '1px solid var(--color-border, #2a2e37)' }}
+                />
               )}
+              <div style={{ minWidth: 0, flex: 1 }}>
+                <div style={{ fontSize: 11, letterSpacing: '.6px', textTransform: 'uppercase', color: 'var(--color-accent, #e8a13a)', marginBottom: 3 }}>
+                  Standalone simulation
+                </div>
+                <div style={{ fontSize: 23, fontWeight: 700, lineHeight: 1.15, color: 'var(--color-text, #ecebe6)' }}>
+                  {p.name || 'Untitled model'}
+                </div>
+                <div style={{ marginTop: 10, display: 'grid', gridTemplateColumns: 'auto 1fr', columnGap: 10, rowGap: 3 }}>
+                  <Meta label="Rule author" value={p.author} />
+                  <Meta label="Project author" value={p.modelAuthor} />
+                </div>
+                {(p.tags || []).length > 0 && (
+                  <div style={{ marginTop: 10, display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                    {(p.tags || []).map(t => <span key={t} style={chipStyle}>{t}</span>)}
+                  </div>
+                )}
+              </div>
+              <button
+                onClick={() => setOpen(false)}
+                title="Close (Esc)"
+                style={{ marginLeft: 'auto', background: 'none', border: 'none', color: 'var(--color-text-muted, #8a8f9a)', cursor: 'pointer', fontSize: 24, lineHeight: 1, flex: 'none', padding: 0 }}
+              >×</button>
             </div>
-            <button
-              onClick={() => setOpen(false)}
-              title="Close"
-              style={{ marginLeft: 'auto', background: 'none', border: 'none', color: 'var(--color-text-muted, #8a8f9a)', cursor: 'pointer', fontSize: 18, lineHeight: 1, flex: 'none' }}
-            >×</button>
-          </div>
 
-          {p.description && (
-            <Section title="Summary"><div>{p.description}</div></Section>
-          )}
-          {p.ruleDescription && (
-            <Section title="Rule description">
-              <div style={{ color: 'var(--color-text-muted, #b7bcc6)', whiteSpace: 'pre-wrap' }}>{p.ruleDescription}</div>
+            {p.description && <Section title="Summary"><div style={{ lineHeight: 1.5 }}>{p.description}</div></Section>}
+            {p.ruleDescription && (
+              <Section title="Rule description">
+                <div style={{ color: 'var(--color-text-muted, #b7bcc6)', whiteSpace: 'pre-wrap', lineHeight: 1.55 }}>{p.ruleDescription}</div>
+              </Section>
+            )}
+
+            <Section title="How to use">
+              <div style={{ color: 'var(--color-text-muted, #b7bcc6)', lineHeight: 1.55 }}>
+                Use the transport bar to <b style={{ color: 'var(--color-text, #d8dae0)' }}>play / pause / step / reset</b>,
+                the left panel to tune parameters, and paint on the grid to edit cells. Reopen this window any time with
+                the <b style={{ color: 'var(--color-accent, #e8a13a)' }}>ⓘ</b> button.
+              </div>
             </Section>
-          )}
 
-          <div style={{ borderTop: '1px solid var(--color-border, #2a2e37)', padding: '12px 16px', display: 'flex', flexDirection: 'column', gap: 8 }}>
-            <button onClick={handleDownload} style={dlBtnStyle}>⤓ Download model (.gcaproj)</button>
-            <div style={{ fontSize: 11.5, color: 'var(--color-text-muted, #8a8f9a)' }}>
-              Made with <b style={{ color: 'var(--color-accent, #e8a13a)' }}>GenesisCA</b> · open this .html in GenesisCA to edit the model.
+            {/* Footer */}
+            <div style={{ borderTop: '1px solid var(--color-border, #2a2e37)', padding: '16px 24px 20px', display: 'flex', flexDirection: 'column', gap: 12 }}>
+              <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+                <button onClick={handleDownload} style={dlBtnStyle}>⤓ Download model (.gcaproj)</button>
+                <button onClick={() => setOpen(false)} style={primaryBtnStyle}>Start exploring →</button>
+              </div>
+              <div style={{ fontSize: 12, color: 'var(--color-text-muted, #8a8f9a)', lineHeight: 1.5 }}>
+                Made with{' '}
+                <a href={GENESIS_URL} target="_blank" rel="noopener noreferrer"
+                   style={{ color: 'var(--color-accent, #e8a13a)', fontWeight: 700, textDecoration: 'none' }}>
+                  GenesisCA
+                </a>
+                {' '}— a free, browser-based cellular-automata IDE. This file is also the full model:
+                open it in GenesisCA (File → Load) to edit the rule.
+              </div>
             </div>
           </div>
         </div>
@@ -150,31 +200,41 @@ function AboutOverlay({ model }: { model: CAModel }) {
   );
 }
 
-function Meta({ label, value }: { label: string; value: string }) {
+/** A labeled metadata row. Renders a muted "—" when the value is empty so the
+ *  field is never silently absent. */
+function Meta({ label, value }: { label: string; value?: string }) {
   return (
-    <div style={{ fontSize: 12, color: 'var(--color-text-muted, #8a8f9a)', marginTop: 2 }}>
-      {label} · <span style={{ color: 'var(--color-text, #c8ccd4)' }}>{value}</span>
-    </div>
+    <>
+      <div style={{ fontSize: 12.5, color: 'var(--color-text-muted, #8a8f9a)' }}>{label}</div>
+      <div style={{ fontSize: 12.5, color: value ? 'var(--color-text, #c8ccd4)' : 'var(--color-text-muted, #5f646d)' }}>
+        {value || '—'}
+      </div>
+    </>
   );
 }
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <div style={{ padding: '0 16px 14px' }}>
-      <div style={{ fontSize: 11, letterSpacing: '.4px', textTransform: 'uppercase', color: 'var(--color-text-muted, #8a8f9a)', margin: '2px 0 4px' }}>{title}</div>
+    <div style={{ padding: '0 24px 16px' }}>
+      <div style={{ fontSize: 11, letterSpacing: '.5px', textTransform: 'uppercase', color: 'var(--color-text-muted, #8a8f9a)', margin: '4px 0 6px' }}>{title}</div>
       {children}
     </div>
   );
 }
 
 const chipStyle: React.CSSProperties = {
-  fontSize: 11, padding: '2px 8px', borderRadius: 20,
+  fontSize: 11.5, padding: '2px 9px', borderRadius: 20,
   background: 'var(--color-accent-soft, #e8a13a22)', color: 'var(--color-accent, #e8a13a)',
   border: '1px solid #e8a13a44',
 };
 
 const dlBtnStyle: React.CSSProperties = {
-  padding: '7px 12px', borderRadius: 7, cursor: 'pointer', fontSize: 13, textAlign: 'left',
+  padding: '9px 14px', borderRadius: 8, cursor: 'pointer', fontSize: 13,
   background: 'var(--color-bg, #0f1116)', color: 'var(--color-text, #d8dae0)',
   border: '1px solid var(--color-border, #2a2e37)',
+};
+
+const primaryBtnStyle: React.CSSProperties = {
+  padding: '9px 16px', borderRadius: 8, cursor: 'pointer', fontSize: 13, fontWeight: 600,
+  background: 'var(--color-accent, #e8a13a)', color: '#16181d', border: 'none',
 };

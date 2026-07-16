@@ -16,7 +16,7 @@ export. Everything is additive — the IDE, the compile targets, and every model
 unchanged.
 
 ### Presentation Export
-- **File → Export Presentation…** produces one self-contained `.html` carrying the
+- **File → Export standalone simulation…** produces one self-contained `.html` carrying the
   whole model (graph, attributes, neighborhoods, mappings, presets, sprites,
   thumbnail) and, optionally, the current board state and simulator controls. No
   sidecar folder — sprites/thumbnail/presets/board are all embedded (base64). Large

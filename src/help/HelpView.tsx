@@ -1936,9 +1936,9 @@ export function HelpView() {
             save will include the simulation snapshot.
           </p>
 
-          <h3 className={styles.h3}>Share as a standalone page (Export Presentation)</h3>
+          <h3 className={styles.h3}>Share as a standalone simulation</h3>
           <p className={styles.p}>
-            <strong>File &rarr; Export Presentation&hellip;</strong> bundles the Simulator and
+            <strong>File &rarr; Export standalone simulation&hellip;</strong> bundles the Simulator and
             one model into a <strong>single self-contained <code>.html</code> file</strong>.
             Anyone can open it in a browser &mdash; no install, no server, and it works offline
             straight from a downloaded file. It is the modern replacement for the old Genesis
