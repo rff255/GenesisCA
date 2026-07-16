@@ -198,7 +198,7 @@ export function HelpView() {
           <ul className={styles.list}>
             <li><strong>Tag</strong> &mdash; An integer with named values (picklist). Define tag options in the editor, and use the Tag Constant node to reference them by name.</li>
             <li><strong>Vector</strong> (cell &amp; agent attributes) &mdash; a 2D or 3D direction stored as one named value (a flow field, a facing/orientation, an accumulated force) instead of hand-maintaining separate X/Y/Z scalars. A single <em>vector</em> port appears on Get/Set (Self) Attribute, <strong>Get/Set Neighbor Attr</strong> (read/write a neighbour&apos;s vector), <strong>Get/Set Agent Attribute</strong> (read/write another agent&apos;s vector), and <strong>Transfer Cell Attributes</strong>; wire it to Make Vector / Break Vector / Vector Op. Under the hood the vector is stored as its scalar float components, so it runs natively on all three compile targets. <strong>Local Variables</strong> can be vectors too (e.g. accumulate a force over neighbours with one variable). 3D vectors are offered only in a 3D model. (A few nodes have no single-vector shape &mdash; array-of-neighbours reads and Update Attribute&apos;s increment/max/&hellip; &mdash; read those via a scalar node + Break Vector; the modeler badges them.)</li>
-            <li><strong>Color</strong> (model attributes only) &mdash; An RGB color value. Accessed via Get Model Attribute with separate R, G, B output ports. Adjustable live in the simulator.</li>
+            <li><strong>Color</strong> (model attributes only) &mdash; An RGBA color value. Accessed via Get Model Attribute with separate R, G, B and A output ports. Stored as <code>#rrggbb</code> (fully opaque) or <code>#rrggbbaa</code>; alpha is always available, defaulting to opaque. Adjustable live in the simulator.</li>
             <li><strong>Boundary Value</strong> (cell attributes only, constant boundary) &mdash; the value held by out-of-grid cells. Shown next to Default Value only when the model&apos;s boundary treatment is <em>constant</em>. Leave blank to inherit the default.</li>
             <li>
               <strong>Sub-attribute</strong> (cell attributes only) &mdash; a cell
@@ -310,6 +310,46 @@ export function HelpView() {
             auto pass uses the same Color Scale (gradients) and Categorical Color (tags) nodes
             you can build by hand, and is lockstepped across the JS, WASM, and WebGPU
             compilers. Show Code displays the synthesized color-pass function.
+          </p>
+
+          <h4 className={styles.h3}>Transparency (alpha)</h4>
+          <p className={styles.p}>
+            Every color picker is <strong>RGBA</strong>. Click a color swatch and the popover
+            offers the color plus an <strong>Alpha</strong> slider (0 = fully transparent,
+            255 = opaque). The swatch itself is drawn over a checkerboard showing the real
+            composite, so you can see transparency at a glance rather than reading a number.
+          </p>
+          <ul className={styles.ul}>
+            <li>
+              <strong>Alpha is optional everywhere.</strong> A color you never make
+              transparent stays exactly as it was &mdash; it saves as <code>#rrggbb</code>,
+              and the compiled rule is byte-for-byte what it was before alpha existed. Only a
+              color you actually make translucent widens to <code>#rrggbbaa</code>.
+            </li>
+            <li>
+              <strong>The A output port appears when you use it.</strong> Color Scale,
+              Categorical Color and Color Constant show an <strong>A</strong> output only once
+              a palette entry declares a non-opaque alpha. Set every entry back to 255 and the
+              port goes away again. (Get Model Attribute always shows <strong>A</strong> for a
+              color attribute &mdash; its alpha always exists.)
+            </li>
+            <li>
+              <strong>What alpha does when rendered:</strong> in 2D it composites over
+              whatever is behind the cell; in the <strong>3D</strong> view an
+              alpha of <strong>0</strong> makes the cell vanish entirely (it is not drawn at
+              all &mdash; the standard way to hide &ldquo;empty&rdquo; cells in a volume), and
+              partial alpha blends when <em>Alpha blend</em> is enabled in the 3D View panel.
+              Agents honour their color&rsquo;s alpha too.
+            </li>
+            <li>
+              A <strong>Linked</strong> mapping wires alpha automatically once its palette has
+              any; an all-opaque palette behaves exactly as before. In a hand-built pass, wire
+              the <strong>A</strong> output into Set Cell Looks&rsquo; <strong>A</strong> input.
+            </li>
+          </ul>
+          <p className={styles.p}>
+            Note: the <em>Color&rarr;Attribute</em> (brush / image import) direction is still
+            RGB &mdash; painting and image import ignore alpha for now.
           </p>
 
           <h3 className={styles.h3}>Indicators (Properties Panel)</h3>
@@ -863,8 +903,8 @@ export function HelpView() {
             <tbody>
               <tr><td>Set Cell Looks</td><td>Sets the current cell&apos;s appearance for an Attribute-to-Color visualization. <strong>Plain mode</strong>: write R/G/B for a flat cell color. <strong>Use glyph</strong>: overlay a Unicode character (with an inline glyph picker) in its own glyph color, plus an optional <strong>background color</strong> (shown at every zoom, behind the glyph) and an optional <strong>glyph color when zoomed out</strong> (paints each glyphed cell with its glyph color once cells are too small to draw the character &mdash; configurable via <code>genesisca_sim_settings.glyphMinPx</code>, default 6 px). Cells with glyph=0 render no character. Pick a specific mapping, or choose <strong>Current Simulator Selected</strong> to write to whichever viewer is active. (Merges the former Set Color Viewer + Set Cell Glyph.)</td></tr>
               <tr><td>Get Color Constant</td><td>Output fixed R, G, B values.</td></tr>
-              <tr><td>Color Scale</td><td>Map an input <strong>T</strong> (0&ndash;1) to an RGB color via a multi-stop gradient. Edit the stops on a draggable gradient bar, or load a named palette preset (Viridis, Magma, Plasma, Inferno, Rainbow, Heat, Cool&rarr;Warm, Cividis, Grayscale). The <strong>curve</strong> dropdown controls the interpolation shape: Linear, Smoothstep, Ease-In Quadratic, Ease-Out Quadratic, Exponential, Logarithmic. Outputs R, G, B; T outside the stop range clamps to the nearest endpoint.</td></tr>
-              <tr><td>Categorical Color</td><td>Map an integer <strong>Index</strong> to a flat RGB color from an editable N-entry palette &mdash; <em>discrete</em>, with no blending between entries (contrast Color Scale, which interpolates). Index <code>i</code> selects palette entry <code>i</code>; out-of-range indices use the default color. Outputs R, G, B. Used internally by Linked Output Mappings for tag attributes, and available as a node for hand-built graphs.</td></tr>
+              <tr><td>Color Scale</td><td>Map an input <strong>T</strong> (0&ndash;1) to an RGB color via a multi-stop gradient. Edit the stops on a draggable gradient bar, or load a named palette preset (Viridis, Magma, Plasma, Inferno, Rainbow, Heat, Cool&rarr;Warm, Cividis, Grayscale). The <strong>curve</strong> dropdown controls the interpolation shape: Linear, Smoothstep, Ease-In Quadratic, Ease-Out Quadratic, Exponential, Logarithmic. Outputs R, G, B &mdash; plus <strong>A</strong> once any stop is given a non-opaque alpha (alpha interpolates on the same curve as the colour channels). T outside the stop range clamps to the nearest endpoint.</td></tr>
+              <tr><td>Categorical Color</td><td>Map an integer <strong>Index</strong> to a flat RGB color from an editable N-entry palette &mdash; <em>discrete</em>, with no blending between entries (contrast Color Scale, which interpolates). Index <code>i</code> selects palette entry <code>i</code>; out-of-range indices use the default color. Outputs R, G, B &mdash; plus <strong>A</strong> once any entry (or the default) is given a non-opaque alpha. Used internally by Linked Output Mappings for tag attributes, and available as a node for hand-built graphs.</td></tr>
               <tr><td>Make Color / Break Color</td><td>Bundle R / G / B / A channels into a single <strong>color</strong> value, and split one back into channels (the Unreal/Blender Make &amp; Break pattern) &mdash; pass a whole colour on one wire. A defaults to 255 (opaque). Runs on all three targets.</td></tr>
             </tbody>
           </table>
