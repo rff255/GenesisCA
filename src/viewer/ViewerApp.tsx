@@ -93,26 +93,29 @@ function AboutOverlay({ model }: { model: CAModel }) {
     void downloadJSON(serializeModel(model), modelFilename(model));
   };
 
-  // Anchor the reopen ⓘ to the RIGHT EDGE of the Simulator's Settings panel, so
-  // it moves as the panel is resized or collapsed. The panel is a CSS-module
-  // class (`sidePanel_<hash>`) whose readable prefix survives the production
-  // build, so `[class*="sidePanel"]` finds it; when collapsed it's not in the
-  // DOM, so we fall back to just right of the collapse ear (at left:0).
+  // Anchor the reopen ⓘ just to the RIGHT of the Settings panel's collapse/expand
+  // ear (`.panelExpandBtn`). That ear is always in the DOM and sits at the panel's
+  // right edge when open / at left:0 when collapsed, so following it keeps the ⓘ
+  // beside it in both states (and as the panel is resized). Its CSS-module class
+  // keeps a readable prefix in the production build; the trailing underscore in
+  // `panelExpandBtn_` excludes the right panel's `panelExpandBtnRight_`.
   const infoBtnRef = useRef<HTMLButtonElement>(null);
   useEffect(() => {
     if (open) return; // button only exists while the modal is closed
     let raf = 0;
-    let cached: HTMLElement | null = null;
+    let ear: HTMLElement | null = null;
     const place = () => {
       const btn = infoBtnRef.current;
       if (btn) {
-        if (!cached || !cached.isConnected) {
-          cached = document.querySelector('[class*="sidePanel"]');
+        if (!ear || !ear.isConnected) {
+          ear = document.querySelector('[class*="panelExpandBtn_"]');
         }
-        // Panel open → tuck into its top-right corner; collapsed → past the ear.
-        const left = cached ? Math.max(8, cached.getBoundingClientRect().right - 38) : 34;
-        if (Math.abs((parseFloat(btn.style.left) || -1) - left) > 0.5) {
-          btn.style.left = `${left}px`;
+        if (ear) {
+          const r = ear.getBoundingClientRect();
+          const left = Math.round(r.right + 8);
+          const top = Math.round(r.top + r.height / 2 - 15); // vertically centre the 30px button on the ear
+          if (Math.abs((parseFloat(btn.style.left) || -1) - left) > 0.5) btn.style.left = `${left}px`;
+          if (Math.abs((parseFloat(btn.style.top) || -1) - top) > 0.5) btn.style.top = `${top}px`;
         }
       }
       raf = requestAnimationFrame(place);
@@ -129,7 +132,7 @@ function AboutOverlay({ model }: { model: CAModel }) {
           onClick={() => setOpen(true)}
           title="About this model"
           style={{
-            position: 'absolute', top: 7, left: 34, zIndex: 46,
+            position: 'absolute', top: 12, left: 40, zIndex: 46,
             width: 30, height: 30, borderRadius: '50%', cursor: 'pointer',
             background: 'var(--color-accent, #e8a13a)', color: '#16181d',
             border: 'none', fontSize: 17, fontWeight: 700, lineHeight: 1,
