@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { hexToRgba, rgbaToHex, rgbaToCss, hexRgbPart, isOpaque, OPAQUE } from '../../../model/colorHex';
 
 /**
@@ -29,6 +30,15 @@ import { hexToRgba, rgbaToHex, rgbaToCss, hexRgbPart, isOpaque, OPAQUE } from '.
  *
  * This replaces seven bespoke swatch layouts, and with them three divergent
  * hex-helper pairs — see colorHex.ts.
+ *
+ * ── The popover is PORTALLED to document.body (load-bearing) ──────────────────
+ * It is `position: fixed` at measured viewport coords, which is only correct
+ * when no ancestor is transformed: a `transform` makes that element the
+ * containing block for its fixed descendants. VPL nodes live inside React
+ * Flow's `.react-flow__viewport`, which carries `transform: translate(…)
+ * scale(…)` — so an in-tree popover was offset by the pan/zoom (and scaled) on
+ * every canvas node, while the panel sites (no transformed ancestor) looked
+ * fine. The portal escapes the transform, so ONE positioning path serves both.
  */
 
 const CHECKER_BG =
@@ -74,19 +84,23 @@ export function ColorField({ value, onChange, noAlpha, title, style, disabled }:
   }, [open, noAlpha]);
 
   // Close on outside press / Escape. Capture-phase so a press that starts a drag
-  // elsewhere still dismisses (the GraphEditor context-menu lesson).
+  // elsewhere still dismisses (the GraphEditor context-menu lesson). An outside
+  // WHEEL closes too: the popover is measured once at open, so a canvas zoom (or
+  // a panel scroll) would slide the swatch out from under it — a pan already
+  // dismisses via the pointerdown, but a wheel fires none.
   useEffect(() => {
     if (!open) return;
-    const onDown = (e: PointerEvent) => {
-      const t = e.target as globalThis.Node | null;
-      if (popRef.current?.contains(t) || btnRef.current?.contains(t)) return;
-      setOpen(false);
-    };
+    const outside = (t: globalThis.Node | null) =>
+      !popRef.current?.contains(t) && !btnRef.current?.contains(t);
+    const onDown = (e: PointerEvent) => { if (outside(e.target as globalThis.Node | null)) setOpen(false); };
+    const onWheel = (e: WheelEvent) => { if (outside(e.target as globalThis.Node | null)) setOpen(false); };
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') { e.stopPropagation(); setOpen(false); } };
     document.addEventListener('pointerdown', onDown, true);
+    document.addEventListener('wheel', onWheel, true);
     document.addEventListener('keydown', onKey, true);
     return () => {
       document.removeEventListener('pointerdown', onDown, true);
+      document.removeEventListener('wheel', onWheel, true);
       document.removeEventListener('keydown', onKey, true);
     };
   }, [open]);
@@ -122,7 +136,7 @@ export function ColorField({ value, onChange, noAlpha, title, style, disabled }:
         <span style={{ display: 'block', width: '100%', height: '100%', background: rgbaToCss(c) }} />
       </button>
 
-      {open && pos && (
+      {open && pos && createPortal(
         <div
           ref={popRef}
           className="nodrag"
@@ -175,7 +189,8 @@ export function ColorField({ value, onChange, noAlpha, title, style, disabled }:
           }}>
             {rgbaToHex(c)}
           </div>
-        </div>
+        </div>,
+        document.body,
       )}
     </>
   );
