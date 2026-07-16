@@ -14,6 +14,18 @@
 //
 // Culling is mandatory: a W×H×D volume can be millions of cells; we ONLY
 // instance cells with alpha > 0 (compacted into the instance buffer each upload).
+// Two further occlusion cuts, both provably image-identical in the modes they
+// run in (see buriedCullEligible + the cube draw sites):
+//  - BURIED-CELL culling: a cell with all 6 face-neighbours filled is dropped
+//    from the instance buffer — a ray's first hit on a union of FLUSH opaque
+//    cubes always lands on a face whose adjacent cell is empty, so a fully
+//    enclosed cell can never be the visible surface. Only when nothing can
+//    reveal interiors: cell gaps OFF (flush cubes), no alpha blend, no clip.
+//  - BACKFACE culling: each cube is a closed convex solid with consistent
+//    CCW-outward winding, so its backfaces are never visible while it renders
+//    closed + opaque — gl.CULL_FACE halves rasterized cube fragments for free.
+//    Off under alpha blend (backfaces are part of the blended look) and under
+//    an active clip interval (the cut's visible interior walls ARE backfaces).
 
 // ---------------------------------------------------------------------------
 // mat4 (column-major, the order WebGL expects)
@@ -963,6 +975,16 @@ export class Gl3DRenderer {
    *  record) is written/read through THIS view so indices stay exact past 2^24
    *  (a Float32 write silently rounds odd indices to even on >16.7M-cell grids). */
   private instDataU32: Uint32Array = new Uint32Array(0);
+  /** Last-uploaded colours buffer + total, kept by REFERENCE (the worker hands a
+   *  fresh buffer per step and never mutates one in place — the same identity
+   *  contract SimulatorView's upload gate relies on). Lets an eligibility flip
+   *  for buried-cell culling (clip / alpha blend / cell gaps toggled) re-compact
+   *  the instance buffer internally, without a round-trip through SimulatorView. */
+  private lastColors: Uint8ClampedArray | null = null;
+  private lastTotal = 0;
+  /** Whether the CURRENT instance buffer was compacted WITH buried-cell culling
+   *  (recorded at upload; compared against buriedCullEligible() on state flips). */
+  private buriedCullApplied = false;
   private W = 1; private H = 1; private D = 1;
   private alphaBlend = false;
   /** Scene lighting (see Light3D). Defaults = the historical hardcoded shade. */
@@ -1172,14 +1194,42 @@ export class Gl3DRenderer {
   setGrid(w: number, h: number, d: number): void {
     this.W = Math.max(1, w); this.H = Math.max(1, h); this.D = Math.max(1, d);
   }
-  setAlphaBlend(on: boolean): void { this.alphaBlend = on; }
+  setAlphaBlend(on: boolean): void { this.alphaBlend = on; this.refreshVoxelsIfCullingChanged(); }
   /** Scene lighting (voxels + agent spheres). See Light3D / DEFAULT_LIGHT3D. */
   setLight(l: Light3D): void { this.light = l; }
   /** Gaps between adjacent voxel cells (the 3D analogue of the 2D gridlines
    *  toggle). ON = the historical 0.92 cube scale; OFF = flush cubes (1.001 —
    *  see the cubeScale field for why not exactly 1.0). The pick pass shares
    *  the uniform, so clicking "between" cells matches what's drawn. */
-  setCellGaps(on: boolean): void { this.cubeScale = on ? 0.92 : 1.001; }
+  setCellGaps(on: boolean): void { this.cubeScale = on ? 0.92 : 1.001; this.refreshVoxelsIfCullingChanged(); }
+
+  /** Buried-cell culling is sound ONLY when nothing can reveal a fully-enclosed
+   *  cell: cubes must be FLUSH (cell gaps off — with the 0.92 gapped look the
+   *  crack planes between cubes expose interior cells' side faces), rendering
+   *  must be OPAQUE (no per-cell alpha blend), and no clip interval may cut the
+   *  volume open. Under those three conditions a ray's first hit on the cube
+   *  union always lands on a face whose adjacent cell is empty — i.e. on a
+   *  NON-buried cell — so dropping buried cells is pixel-identical. */
+  private buriedCullEligible(): boolean {
+    return !this.alphaBlend && !this.clip.enabled && this.cubeScale >= 1;
+  }
+
+  /** Re-compact the instance buffer from the stashed colours when a state flip
+   *  (clip / alpha blend / cell gaps) changed buried-cull eligibility. The
+   *  setters call this every frame — a cheap bool compare when nothing changed.
+   *  Guarded on instanceCount > 0: an externally cleared buffer (agents-only
+   *  model — see clearVoxels) must never be resurrected from stale colours. */
+  private refreshVoxelsIfCullingChanged(): void {
+    if (this.lastColors && this.instanceCount > 0 && this.buriedCullApplied !== this.buriedCullEligible()) {
+      this.uploadColors(this.lastColors, this.lastTotal);
+    }
+  }
+
+  /** Drop all voxel instances AND the stashed colours source. Use instead of
+   *  zeroing `instanceCount` when the colours buffer itself is gone (agents-only
+   *  model / cross-model reinit) — a later culling-eligibility flip must NOT
+   *  resurrect the stale grid from lastColors. */
+  clearVoxels(): void { this.instanceCount = 0; this.lastColors = null; this.lastTotal = 0; }
 
   /** Resolve the light's WORLD direction for this frame: camera mode combines
    *  the ball position with the current camera basis (light rides the view);
@@ -1322,7 +1372,15 @@ export class Gl3DRenderer {
       gl.uniform3f(gl.getUniformLocation(this.cubeShadowProg, 'uHalf'), hx, hy, hz);
       gl.uniform1f(gl.getUniformLocation(this.cubeShadowProg, 'uCubeScale'), this.cubeScale);
       this.setClipUniforms(gl, this.cubeShadowProg);
+      // Backface cull — depth-identical when unclipped (the light-facing front
+      // face is always nearer to the light than the same cube's backface).
+      // Under a clip cut a straddling cube's surviving depth can come from a
+      // backface, so keep culling off there. Disabled again before the sphere
+      // caster below (light-facing billboards must never be culled).
+      const cullBack = !this.clip.enabled;
+      if (cullBack) { gl.enable(gl.CULL_FACE); gl.cullFace(gl.BACK); }
       gl.drawArraysInstanced(gl.TRIANGLES, 0, 36, this.instanceCount);
+      if (cullBack) gl.disable(gl.CULL_FACE);
       gl.bindVertexArray(null);
     }
     if (this.viz.agents && this.agentInstanceCount > 0) {
@@ -1349,7 +1407,7 @@ export class Gl3DRenderer {
    *  sparse enough to see both layers interleaved). */
   setAgentsInFront(on: boolean): void { this.agentsInFront = on; }
   private agentsInFront = true;
-  setClipPlane(clip: ClipPlane3D): void { this.clip = clip; }
+  setClipPlane(clip: ClipPlane3D): void { this.clip = clip; this.refreshVoxelsIfCullingChanged(); }
   setViz(viz: Viz3D): void { this.viz = viz; }
   setBrushPlane(p: { axis: 'x' | 'y' | 'z'; pos: number } | null): void { this.brushPlane = p; }
   /** Set the hovered brush footprint (every affected cell). Pass [] to clear. */
@@ -1449,7 +1507,11 @@ export class Gl3DRenderer {
   }
 
   /** Scan the RGBA colors buffer for alpha>0 cells, compact into the instance
-   *  buffer. NEVER instances the full volume. Returns the visible count. */
+   *  buffer. NEVER instances the full volume. When buried-cell culling is
+   *  eligible (flush cubes, opaque, unclipped — see buriedCullEligible) cells
+   *  with all 6 face-neighbours filled are ALSO dropped (a dense volume
+   *  collapses to its shell). Returns the instanced count — which is therefore
+   *  the alive count only when buried culling didn't run. */
   uploadColors(colors: Uint8ClampedArray, total: number): number {
     const need = total * 5;
     if (this.instData.length < need) {
@@ -1464,6 +1526,15 @@ export class Gl3DRenderer {
     // opt-in cost that folds into this per-step scan); otherwise the parallel
     // buffer is left as-is (multiplied by uAOStrength=0 in the FS, so ignored).
     const aoOn = this.light.ao;
+    // Buried-cell culling: skip cells with all 6 face-neighbours filled — they
+    // are provably invisible when nothing can open the volume (flush cubes,
+    // opaque, unclipped — see buriedCullEligible). Boundary cells never reach
+    // cnt 6 (the bounds guards), so the volume's outer faces always render, and
+    // torus wrap is irrelevant here (the render never wraps the lattice).
+    // Note "filled" = alpha ≠ 0 suffices: with blending off (an eligibility
+    // condition) every instanced cell renders fully opaque regardless of alpha.
+    const cullBuried = this.buriedCullEligible();
+    const needNbr = aoOn || cullBuried;  // both share the 6-neighbour scan
     if (aoOn && this.aoData.length < total) this.aoData = new Float32Array(total);
     const ao = this.aoData;
     const W = this.W, H = this.H, D = this.D, WH = W * H;
@@ -1472,29 +1543,36 @@ export class Gl3DRenderer {
     for (let i = 0; i < total; i++) {
       const a = colors[i * 4 + 3]!;
       if (a !== 0) {
-        const o = n * 5;
-        u[o] = i;  // u32 lane — exact for any grid size (f32 rounds past 2^24)
-        d[o + 1] = colors[i * 4]! / 255;
-        d[o + 2] = colors[i * 4 + 1]! / 255;
-        d[o + 3] = colors[i * 4 + 2]! / 255;
-        d[o + 4] = a / 255;
-        if (aoOn) {
-          let cnt = 0;
+        let cnt = 0;
+        if (needNbr) {
           if (col > 0 && colors[(i - 1) * 4 + 3]! !== 0) cnt++;
           if (col < W - 1 && colors[(i + 1) * 4 + 3]! !== 0) cnt++;
           if (row > 0 && colors[(i - W) * 4 + 3]! !== 0) cnt++;
           if (row < H - 1 && colors[(i + W) * 4 + 3]! !== 0) cnt++;
           if (layer > 0 && colors[(i - WH) * 4 + 3]! !== 0) cnt++;
           if (layer < D - 1 && colors[(i + WH) * 4 + 3]! !== 0) cnt++;
-          ao[n] = cnt / 6;
         }
-        n++;
+        if (!(cullBuried && cnt === 6)) {
+          const o = n * 5;
+          u[o] = i;  // u32 lane — exact for any grid size (f32 rounds past 2^24)
+          d[o + 1] = colors[i * 4]! / 255;
+          d[o + 2] = colors[i * 4 + 1]! / 255;
+          d[o + 3] = colors[i * 4 + 2]! / 255;
+          d[o + 4] = a / 255;
+          if (aoOn) ao[n] = cnt / 6;
+          n++;
+        }
       }
-      // Advance the (col,row,layer) of cell i — only tracked when AO is on (the
-      // off path stays as cheap as the historical scan).
-      if (aoOn && ++col >= W) { col = 0; if (++row >= H) { row = 0; layer++; } }
+      // Advance the (col,row,layer) of cell i — only tracked when the neighbour
+      // scan runs (the plain path stays as cheap as the historical scan).
+      if (needNbr && ++col >= W) { col = 0; if (++row >= H) { row = 0; layer++; } }
     }
     this.instanceCount = n;
+    // Stash the source so an eligibility flip (clip / blend / gaps toggled) can
+    // re-compact without SimulatorView re-sending the same buffer.
+    this.lastColors = colors;
+    this.lastTotal = total;
+    this.buriedCullApplied = cullBuried;
     const gl = this.gl;
     gl.bindBuffer(gl.ARRAY_BUFFER, this.instBuf);
     if (this.instCapacity < n * 5) {
@@ -2111,6 +2189,14 @@ export class Gl3DRenderer {
       gl.useProgram(this.prog);
       gl.bindVertexArray(this.vao);
       this.setCommonUniforms(gl, this.prog);
+      // Backface culling — image-identical while the cubes render closed +
+      // opaque (each cube is a closed convex solid, CCW-outward winding — see
+      // CUBE), halving rasterized cube fragments. OFF under alpha blend
+      // (backfaces show through translucent fronts) and under an active clip
+      // (the cut's visible interior walls ARE backfaces). Scoped to this draw —
+      // every other pass (spheres/sprites/lines/metaballs) is unaffected.
+      const cullBack = !this.alphaBlend && !this.clip.enabled;
+      if (cullBack) { gl.enable(gl.CULL_FACE); gl.cullFace(gl.BACK); }
       if (this.alphaBlend) {
         this.sortBackToFront();
         gl.enable(gl.BLEND);
@@ -2121,6 +2207,7 @@ export class Gl3DRenderer {
         gl.depthMask(true);
       }
       gl.drawArraysInstanced(gl.TRIANGLES, 0, 36, this.instanceCount);
+      if (cullBack) gl.disable(gl.CULL_FACE);
       gl.depthMask(true);
       gl.disable(gl.BLEND);
       gl.bindVertexArray(null);
@@ -2531,7 +2618,14 @@ export class Gl3DRenderer {
       gl.bindVertexArray(this.vao);
       this.setCommonUniforms(gl, this.pickProg);
       gl.disable(gl.BLEND); gl.depthMask(true);
+      // Backface cull — result-identical when unclipped (a cube's front face is
+      // always nearer than its own backface, so the nearest-id winner can't
+      // change). With a clip cut, a straddling cube's BACKFACE can be the
+      // surviving pick surface — keep culling off there.
+      const cullBack = !this.clip.enabled;
+      if (cullBack) { gl.enable(gl.CULL_FACE); gl.cullFace(gl.BACK); }
       gl.drawArraysInstanced(gl.TRIANGLES, 0, 36, this.instanceCount);
+      if (cullBack) gl.disable(gl.CULL_FACE);
       gl.bindVertexArray(null);
     }
     // Map CSS (top-left) → drawing-buffer (bottom-left) coords.

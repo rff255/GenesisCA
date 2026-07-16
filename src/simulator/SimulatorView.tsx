@@ -751,7 +751,11 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   const [light3d, setLight3d] = useState<Light3D>(() => sanitizeLight3d(saved.current.light3d));
   // Gaps between adjacent 3D cells — the 3D analogue of the 2D gridlines
   // toggle. ON (default) = the historical 0.92 cube scale; OFF = flush cubes.
-  const [cellGaps3d, setCellGaps3d] = useState<boolean>(saved.current.cellGaps3d !== false);
+  // Default OFF (flush cubes): the seamless-solid look, and the mode where the
+  // renderer's buried-cell culling engages (gaps expose interiors through the
+  // cracks, so gaps-ON renders the full alive set). An explicitly saved true
+  // (the user turned gaps on) is respected.
+  const [cellGaps3d, setCellGaps3d] = useState<boolean>(saved.current.cellGaps3d === true);
   // Agent METABALLS (2D + 3D): render the agents as a fused implicit surface
   // instead of discrete circles / spheres. 3D = a baked density field raymarched
   // in gl3d; 2D = an approximate gooey filter (blur + alpha threshold). One
@@ -1512,9 +1516,12 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   const alpha3dRef = useRef(false);
   const agentsFront3dRef = useRef(true);
   // 3D scene lighting + the cell-gaps toggle, mirrored into the renderer each
-  // draw (both persisted in genesisca_sim_settings; defaults = historical look).
+  // draw (both persisted in genesisca_sim_settings). Cell gaps default OFF
+  // (flush cubes — the buried-cell-culling mode); the sync effect overwrites
+  // from the persisted state on mount, this initial just avoids a first-frame
+  // mismatch with the state default.
   const light3dRef = useRef<Light3D>({ ...DEFAULT_LIGHT3D });
-  const cellGaps3dRef = useRef(true);
+  const cellGaps3dRef = useRef(false);
   const agentMetaballsRef = useRef<Metaballs3D>({ ...DEFAULT_METABALLS3D });
   // 2D metaballs — the offscreen scratch the agent discs draw into before the
   // gooey-filtered blit (reused across frames; never getImageData'd).
@@ -2224,7 +2231,10 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
         // ref-keyed guard never fired and an agents-only model loaded after a
         // voxel model kept rendering the previous model's grid (the reported
         // cross-model state leak: Life3D's voxels under Morphogenesis's agents).
-        if (r.instanceCount > 0) r.instanceCount = 0;
+        // clearVoxels also drops the renderer's stashed colours source so a
+        // later buried-cull eligibility flip (clip/blend/gaps toggle) can't
+        // resurrect the stale grid from it.
+        if (r.instanceCount > 0) r.clearVoxels();
         lastUploadedColors3dRef.current = null;
       }
       // Bond-Graph Agents (PR5): overlay the agent spheres + bonds via the
