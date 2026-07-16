@@ -8385,7 +8385,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
                 )}
 
                 {/* Alpha blend */}
-                <label style={row} title="Blend translucent cells back-to-front (opt-in; opaque is the default)">
+                <label style={row} title="Show semi-transparent colors (alpha < 255) for cells AND agents — off, everything visible renders opaque (alpha-0 cells stay hidden either way)">
                   <input type="checkbox" checked={alpha3d} onChange={e => setAlpha3d(e.target.checked)} />
                   Alpha blend
                 </label>
