@@ -27,6 +27,9 @@
 import type { GraphNode, GraphEdge, CAModel, Attribute, Mapping, RGB, ColorStop } from '../../../model/types';
 import { handleId } from '../types';
 import { presetStops } from '../nodes/colorScalePresets';
+import { OPAQUE, isOpaque } from '../../../model/colorHex';
+import { colorScaleHasAlpha } from '../nodes/ColorScaleNode';
+import { categoricalHasAlpha } from '../nodes/CategoricalColorNode';
 
 const SYNTH_PREFIX = '__linkedOM_';
 
@@ -58,21 +61,32 @@ export function injectLinkedOutputMappings(
 
     const colorId = P + 'color';
     let colorInPort: string;
+    let withAlpha: boolean;
     if (attr.type === 'tag') {
-      nodes.push(mkNode(colorId, 'categoricalColor', buildCategoricalConfig(m, attr)));
+      const cfg = buildCategoricalConfig(m, attr);
+      nodes.push(mkNode(colorId, 'categoricalColor', cfg));
       colorInPort = 'index';
+      withAlpha = categoricalHasAlpha(cfg);
     } else {
-      nodes.push(mkNode(colorId, 'colorScale', buildColorScaleConfig(m, attr)));
+      const cfg = buildColorScaleConfig(m, attr);
+      nodes.push(mkNode(colorId, 'colorScale', cfg));
       colorInPort = 't';
+      withAlpha = colorScaleHasAlpha(cfg);
     }
     edges.push(valEdge(P + 'e_av', getAttrId, 'value', colorId, colorInPort));
 
-    // 2. terminal setCellLooks (plain-color mode) fed by r/g/b
+    // 2. terminal setCellLooks (plain-color mode) fed by r/g/b [, a]
     const scvId = P + 'scv';
     nodes.push(mkNode(scvId, 'setCellLooks', { mappingId: m.id, useGlyph: false, setBackground: true }));
     edges.push(valEdge(P + 'e_r', colorId, 'r', scvId, 'r'));
     edges.push(valEdge(P + 'e_g', colorId, 'g', scvId, 'g'));
     edges.push(valEdge(P + 'e_b', colorId, 'b', scvId, 'b'));
+    // The 4th edge ONLY when the palette carries a non-255 alpha — the hot-path
+    // no-op that keeps an opaque linked mapping byte-identical (setCellLooks' `a`
+    // then falls back to its inline '255', exactly as before). Driven by the SAME
+    // predicate that gates the colour node's `a` PORT, so the edge can never
+    // target a port that does not exist.
+    if (withAlpha) edges.push(valEdge(P + 'e_a', colorId, 'a', scvId, 'a'));
 
     // 3. sequencing — attach to the FIRST user OutputMapping node for this id.
     const userRoot = nodes.find(
@@ -153,11 +167,16 @@ export function buildColorScaleConfig(m: Mapping, attr: Attribute): Config {
   const { min, max } = attr.type === 'bool' ? { min: 0, max: 1 } : gradientDomain(m, attr);
   const span = max - min;
   const config: Config = { method: (m.linkedColors?.method as string) || 'linear', stopCount: stops.length };
+  // Alpha keys are written ONLY when the palette declares one. An opaque palette
+  // therefore produces a config byte-identical to the pre-alpha one — which also
+  // keeps accessor-CSE's purity key (which hashes config) unchanged.
+  const withA = stops.some(s => !isOpaque(s));
   stops.forEach((s, i) => {
     config[`stop_${i}_position`] = String(min + s.position * span);
     config[`stop_${i}_r`] = String(s.r | 0);
     config[`stop_${i}_g`] = String(s.g | 0);
     config[`stop_${i}_b`] = String(s.b | 0);
+    if (withA) config[`stop_${i}_a`] = String((s.a ?? OPAQUE) | 0);
   });
   return config;
 }
@@ -166,10 +185,14 @@ export function buildColorScaleConfig(m: Mapping, attr: Attribute): Config {
 export function buildCategoricalConfig(m: Mapping, attr: Attribute): Config {
   const colors = buildTagColors(m, attr);
   const config: Config = { count: colors.length, default_r: '128', default_g: '128', default_b: '128' };
+  // See buildColorScaleConfig — alpha keys only when declared. The out-of-range
+  // default stays opaque (it has no user control in a linked mapping).
+  const withA = colors.some(c => !isOpaque(c));
   colors.forEach((c, i) => {
     config[`entry_${i}_r`] = String(c.r | 0);
     config[`entry_${i}_g`] = String(c.g | 0);
     config[`entry_${i}_b`] = String(c.b | 0);
+    if (withA) config[`entry_${i}_a`] = String((c.a ?? OPAQUE) | 0);
   });
   return config;
 }
