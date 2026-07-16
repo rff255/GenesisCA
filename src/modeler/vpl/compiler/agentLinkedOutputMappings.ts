@@ -33,6 +33,8 @@ import { handleId } from '../types';
 import {
   buildColorScaleConfig, buildCategoricalConfig, mkLinkedNode,
 } from './linkedOutputMappings';
+import { colorScaleHasAlpha } from '../nodes/ColorScaleNode';
+import { categoricalHasAlpha } from '../nodes/CategoricalColorNode';
 
 const SYNTH_PREFIX = '__agentOM_';
 
@@ -65,12 +67,17 @@ export function injectAgentLinkedOutputMappings(
 
     const colorId = P + 'color';
     let colorInPort: string;
+    let withAlpha: boolean;
     if (attr.type === 'tag') {
-      nodes.push(mkLinkedNode(colorId, 'categoricalColor', buildCategoricalConfig(m, attr)));
+      const cfg = buildCategoricalConfig(m, attr);
+      nodes.push(mkLinkedNode(colorId, 'categoricalColor', cfg));
       colorInPort = 'index';
+      withAlpha = categoricalHasAlpha(cfg);
     } else {
-      nodes.push(mkLinkedNode(colorId, 'colorScale', buildColorScaleConfig(m, attr)));
+      const cfg = buildColorScaleConfig(m, attr);
+      nodes.push(mkLinkedNode(colorId, 'colorScale', cfg));
       colorInPort = 't';
+      withAlpha = colorScaleHasAlpha(cfg);
     }
     edges.push(valEdge(P + 'e_av', getAttrId, 'value', colorId, colorInPort));
 
@@ -81,6 +88,10 @@ export function injectAgentLinkedOutputMappings(
     edges.push(valEdge(P + 'e_r', colorId, 'r', scvId, 'r'));
     edges.push(valEdge(P + 'e_g', colorId, 'g', scvId, 'g'));
     edges.push(valEdge(P + 'e_b', colorId, 'b', scvId, 'b'));
+    // The 4th edge ONLY when the palette carries a non-255 alpha — the hot-path
+    // no-op keeping an opaque agent mapping byte-identical. Mirrors the cell
+    // injector exactly; the agent disc/sprite render already honours colour alpha.
+    if (withAlpha) edges.push(valEdge(P + 'e_a', colorId, 'a', scvId, 'a'));
 
     // 3. sequencing — attach to the FIRST user agentOutputMapping node for this id.
     const userRoot = nodes.find(

@@ -424,5 +424,63 @@ section('CROSS-TARGET — an OPAQUE Colour Scale emits no alpha on WASM/WGSL');
   if (!wg.error) eq(/_csa\d+/.test(wg.shaderCode), false, 'WGSL contains NO alpha var for an opaque scale');
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// LINKED OUTPUT MAPPINGS — the auto colour pass. A linked mapping synthesizes
+// its colour nodes at COMPILE time, so they appear in ZERO .gcaproj files and no
+// shipped model exercises the alpha edge at all.
+// ═══════════════════════════════════════════════════════════════════════════
+section('LINKED OM — an alpha palette wires the 4th edge and reaches the colors buffer');
+{
+  // A linked float mapping whose gradient goes transparent → opaque. The value
+  // chain is entirely synthesized: getCellAttribute → colorScale → setCellLooks.
+  const mkLinked = (gradient) => {
+    const g = mkGraph();
+    g.n('step'); // a Step root is required even though the OM pass is separate
+    const model = M.migrateForHarness({
+      schemaVersion: 2,
+      properties: {
+        name: 'linked', description: '', topology: '2d-grid', boundaryTreatment: 'torus',
+        updateMode: 'synchronous', gridWidth: W, gridHeight: H, dimension: '2d', gridDepth: 1,
+        useWasm: false,
+      },
+      attributes: [{ id: 'v', name: 'v', type: 'float', description: '', isModelAttribute: false, defaultValue: '0' }],
+      neighborhoods: [],
+      mappings: [{
+        id: 'viz', name: 'viz', description: '', isAttributeToColor: true,
+        linked: true, linkedAttributeId: 'v', linkedMin: 0, linkedMax: 1,
+        linkedColors: { method: 'linear', gradient },
+      }],
+      indicators: [], graphNodes: g.nodes, graphEdges: g.edges, macroDefs: [],
+      topologyMode: { gridCells: true, agents: false },
+    });
+    return M.compileGraph(model.graphNodes, model.graphEdges, model);
+  };
+
+  // OPAQUE palette (no `a` anywhere) → must be the pre-alpha 3-edge shape.
+  const opaque = mkLinked([
+    { position: 0, r: 0, g: 0, b: 0 },
+    { position: 1, r: 255, g: 255, b: 255 },
+  ]);
+  eq(opaque.error, undefined, 'opaque linked mapping compiles');
+  const opaqueOM = (opaque.outputMappingCodes ?? []).map(o => o.code).join('\n');
+  eq(/_a\b/.test(opaqueOM.replace(/colorIdx/g, '')), false,
+     'opaque linked OM emits NO alpha variable');
+  eq(/colors\[colorIdx\s*\+\s*3\]\s*=\s*255;/.test(opaqueOM), true,
+     'opaque linked OM writes the literal 255 alpha (unchanged behaviour)');
+
+  // ALPHA palette → the 4th edge is wired, so setCellLooks reads the scale's `a`.
+  const alpha = mkLinked([
+    { position: 0, r: 0, g: 0, b: 0, a: 0 },
+    { position: 1, r: 255, g: 255, b: 255, a: 255 },
+  ]);
+  eq(alpha.error, undefined, 'alpha linked mapping compiles');
+  const alphaOM = (alpha.outputMappingCodes ?? []).map(o => o.code).join('\n');
+  eq(/_a\b/.test(alphaOM), true, 'alpha linked OM emits the alpha channel');
+  eq(/colors\[colorIdx\s*\+\s*3\]\s*=\s*255;/.test(alphaOM), false,
+     'alpha linked OM no longer writes the literal 255 — it reads the scale');
+  eq(/colors\[colorIdx\s*\+\s*3\]\s*=\s*_v__linkedOM_viz_color_a;/.test(alphaOM), true,
+     'the synthesized `a` edge feeds setCellLooks directly');
+}
+
 console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);
