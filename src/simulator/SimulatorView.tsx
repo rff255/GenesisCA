@@ -1,6 +1,7 @@
 import { memo, useCallback, useEffect, useMemo, useReducer, useRef, useState, useSyncExternalStore, type CSSProperties } from 'react';
 import { useModel } from '../model/ModelContext';
-import { hexToRgba } from '../model/colorHex';
+import { hexToRgba, rgbaToHex, OPAQUE } from '../model/colorHex';
+import { ColorField } from '../modeler/vpl/widgets/ColorField';
 import { compileGraph, compileAgentGraph } from '../modeler/vpl/compiler/compile';
 import { expandVectorAttributes, encodeAttrSets, decodeVectorFromValues } from '../modeler/vpl/compiler/vectorAttr';
 import { hasGlyphsInModel } from '../modeler/vpl/compiler/glyphsUsage';
@@ -7840,19 +7841,25 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
                       {(!a.tagOptions || a.tagOptions.length === 0) && <option value={0}>(no tags)</option>}
                     </select>
                   ) : a.type === 'color' ? (
-                    <input type="color"
-                      value={'#' + [
-                        (runtimeModelAttrs[a.id + '_r'] ?? 128).toString(16).padStart(2, '0'),
-                        (runtimeModelAttrs[a.id + '_g'] ?? 128).toString(16).padStart(2, '0'),
-                        (runtimeModelAttrs[a.id + '_b'] ?? 128).toString(16).padStart(2, '0'),
-                      ].join('')}
-                      onChange={e => {
-                        const hex = e.target.value;
-                        handleModelAttrChange(a.id + '_r', parseInt(hex.slice(1, 3), 16));
-                        handleModelAttrChange(a.id + '_g', parseInt(hex.slice(3, 5), 16));
-                        handleModelAttrChange(a.id + '_b', parseInt(hex.slice(5, 7), 16));
+                    // Live-tunable colour: the four runtime slots (id_r/_g/_b/_a)
+                    // are the SAME keys `modelAttrSlotKeys` reserves, so a write
+                    // here lands where the compiled code reads. `_a` defaults to
+                    // opaque for a model saved before alpha existed.
+                    <ColorField
+                      value={rgbaToHex({
+                        r: runtimeModelAttrs[a.id + '_r'] ?? 128,
+                        g: runtimeModelAttrs[a.id + '_g'] ?? 128,
+                        b: runtimeModelAttrs[a.id + '_b'] ?? 128,
+                        a: runtimeModelAttrs[a.id + '_a'] ?? OPAQUE,
+                      })}
+                      onChange={hex => {
+                        const c = hexToRgba(hex);
+                        handleModelAttrChange(a.id + '_r', c.r);
+                        handleModelAttrChange(a.id + '_g', c.g);
+                        handleModelAttrChange(a.id + '_b', c.b);
+                        handleModelAttrChange(a.id + '_a', c.a);
                       }}
-                      style={{ width: 50, height: 24, border: 'none', cursor: 'pointer' }}
+                      style={{ width: 50, height: 24 }}
                     />
                   ) : a.type === 'neighborIndex' ? (
                     // NeighborIndex is stored on GPU/WASM as a packed (dr, dc) i32.

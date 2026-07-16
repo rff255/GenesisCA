@@ -1,8 +1,16 @@
 import { useState, useRef } from 'react';
 import { InlineNumberInput } from './InlineWidgets';
+import { ColorField } from './ColorField';
 import { COLOR_SCALE_PRESETS } from '../nodes/colorScalePresets';
+import { hexToRgba, rgbaToHex, rgbaToCss, OPAQUE } from '../../../model/colorHex';
 
-export interface GradStop { p: number; r: number; g: number; b: number; }
+/** A gradient stop. `a` is OPTIONAL — absent means opaque, which is what keeps a
+ *  pre-alpha palette byte-identical through the compiler (see ColorScaleNode's
+ *  `colorScaleHasAlpha`). */
+export interface GradStop { p: number; r: number; g: number; b: number; a?: number; }
+
+const CHECKER_BG =
+  'repeating-conic-gradient(#3a3f4b 0% 25%, #20242c 0% 50%) 50% / 10px 10px';
 
 const ctrlStyle: React.CSSProperties = {
   width: '100%', background: '#1a2530', color: '#cfd8dc',
@@ -30,24 +38,28 @@ export function GradientStopsEditor({ stops, onChange }: { stops: GradStop[]; on
     onChange(stops.map((s, j) => (j === i ? { ...s, ...patch } : s)));
   };
 
-  const sampleAt = (p: number): { r: number; g: number; b: number } => {
+  // Samples r/g/b AND alpha, so a stop added mid-gradient inherits the local
+  // transparency instead of silently snapping to opaque. `a` is returned only
+  // when some stop declares one — an unconditional `a` would make every palette
+  // "have alpha" and defeat the compiler's byte-identity gate.
+  const anyAlpha = stops.some(s => s.a !== undefined && s.a !== OPAQUE);
+  const pick = (s: GradStop) => (anyAlpha ? { r: s.r, g: s.g, b: s.b, a: s.a ?? OPAQUE } : { r: s.r, g: s.g, b: s.b });
+  const sampleAt = (p: number): { r: number; g: number; b: number; a?: number } => {
     if (stops.length === 0) return { r: 0, g: 0, b: 0 };
     const sorted = [...stops].sort((a, b) => a.p - b.p);
-    if (p <= sorted[0]!.p) return { r: sorted[0]!.r, g: sorted[0]!.g, b: sorted[0]!.b };
-    if (p >= sorted[sorted.length - 1]!.p) {
-      const s = sorted[sorted.length - 1]!;
-      return { r: s.r, g: s.g, b: s.b };
-    }
+    if (p <= sorted[0]!.p) return pick(sorted[0]!);
+    if (p >= sorted[sorted.length - 1]!.p) return pick(sorted[sorted.length - 1]!);
     for (let i = 0; i < sorted.length - 1; i++) {
       const a = sorted[i]!;
       const b = sorted[i + 1]!;
       if (p < b.p && b.p !== a.p) {
         const t = (p - a.p) / (b.p - a.p);
-        return {
-          r: Math.round(a.r + t * (b.r - a.r)),
-          g: Math.round(a.g + t * (b.g - a.g)),
-          b: Math.round(a.b + t * (b.b - a.b)),
+        const lerp = (x: number, y: number) => Math.round(x + t * (y - x));
+        const out: { r: number; g: number; b: number; a?: number } = {
+          r: lerp(a.r, b.r), g: lerp(a.g, b.g), b: lerp(a.b, b.b),
         };
+        if (anyAlpha) out.a = lerp(a.a ?? OPAQUE, b.a ?? OPAQUE);
+        return out;
       }
     }
     return { r: 0, g: 0, b: 0 };
@@ -58,13 +70,13 @@ export function GradientStopsEditor({ stops, onChange }: { stops: GradStop[]; on
     const last = sorted[sorted.length - 1];
     const prev = sorted[sorted.length - 2];
     let np = 0.5;
-    let sample = { r: 128, g: 128, b: 128 };
+    let sample: { r: number; g: number; b: number; a?: number } = { r: 128, g: 128, b: 128 };
     if (last && prev) {
       np = (last.p + prev.p) / 2;
       sample = sampleAt(np);
     } else if (last) {
       np = Math.min(1, last.p + 0.1);
-      sample = { r: last.r, g: last.g, b: last.b };
+      sample = pick(last);
     }
     const next = [...stops, { p: np, ...sample }];
     onChange(next);
@@ -81,17 +93,22 @@ export function GradientStopsEditor({ stops, onChange }: { stops: GradStop[]; on
   const applyPreset = (name: string) => {
     const preset = COLOR_SCALE_PRESETS.find(x => x.name === name);
     if (!preset) return;
+    // Presets carry no alpha (PresetStop is RGB-only), so applying one resets the
+    // scale to the fully-opaque form — which is also the byte-identical compiler
+    // path. Deliberate: a preset is a colour ramp, not a transparency design.
     onChange(preset.stops.map(s => ({ p: s.position, r: s.r, g: s.g, b: s.b })));
     setSelectedStopIdx(0);
   };
 
   const sortedForCss = [...stops].sort((a, b) => a.p - b.p);
   const gradStops = sortedForCss.length === 0
-    ? 'rgb(0,0,0)'
+    ? 'rgba(0,0,0,1.000)'
     : sortedForCss
-        .map(s => `rgb(${s.r},${s.g},${s.b}) ${Math.max(0, Math.min(1, s.p)) * 100}%`)
+        .map(s => `${rgbaToCss(s)} ${Math.max(0, Math.min(1, s.p)) * 100}%`)
         .join(', ');
-  const barBg = `linear-gradient(to right, ${gradStops})`;
+  // The gradient composites OVER a checkerboard, so a transparent run reads as
+  // transparent rather than as black.
+  const barBg = `linear-gradient(to right, ${gradStops}), ${CHECKER_BG}`;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }} onMouseDown={stopDrag}>
@@ -132,7 +149,8 @@ export function GradientStopsEditor({ stops, onChange }: { stops: GradStop[]; on
             key={i}
             style={{
               position: 'absolute', left: `calc(${Math.max(0, Math.min(1, s.p)) * 100}% - 6px)`,
-              top: -3, width: 12, height: 28, background: `rgb(${s.r},${s.g},${s.b})`,
+              top: -3, width: 12, height: 28,
+              background: `linear-gradient(${rgbaToCss(s)}, ${rgbaToCss(s)}), ${CHECKER_BG}`,
               border: i === safeIdx ? '2px solid #4cc9f0' : '1px solid #cfd8dc',
               borderRadius: 2, cursor: 'grab', boxSizing: 'border-box',
             }}
@@ -160,7 +178,7 @@ export function GradientStopsEditor({ stops, onChange }: { stops: GradStop[]; on
               window.addEventListener('mouseup', onUp);
             }}
             onClick={(e) => { e.stopPropagation(); setSelectedStopIdx(i); }}
-            title={`Stop ${i}: pos ${s.p.toFixed(3)}, rgb(${s.r},${s.g},${s.b})`}
+            title={`Stop ${i}: pos ${s.p.toFixed(3)}, ${rgbaToHex(s)}`}
           />
         ))}
       </div>
@@ -175,15 +193,18 @@ export function GradientStopsEditor({ stops, onChange }: { stops: GradStop[]; on
             style={{ ...ctrlStyle, width: 52, flex: '0 0 auto', textAlign: 'center' }}
             title="Stop position (0–1)"
           />
-          <input
-            type="color"
-            style={{ height: 24, padding: 1, cursor: 'pointer', flex: 1 }}
-            value={`#${[selStop.r, selStop.g, selStop.b].map(c => Math.min(255, Math.max(0, c)).toString(16).padStart(2, '0')).join('')}`}
-            onChange={(e) => {
-              const h = e.target.value;
-              updateStop(safeIdx, { r: parseInt(h.slice(1, 3), 16), g: parseInt(h.slice(3, 5), 16), b: parseInt(h.slice(5, 7), 16) });
+          <ColorField
+            value={rgbaToHex(selStop)}
+            onChange={(hex) => {
+              const n = hexToRgba(hex);
+              // Write `a` only when non-opaque, so an opaque stop keeps no alpha
+              // key at all and the compiler stays on its pre-alpha path.
+              updateStop(safeIdx, n.a === OPAQUE
+                ? { r: n.r, g: n.g, b: n.b, a: undefined }
+                : { r: n.r, g: n.g, b: n.b, a: n.a });
             }}
-            onClick={(e) => e.stopPropagation()}
+            style={{ height: 24, flex: 1 }}
+            title={`Stop colour — ${rgbaToHex(selStop)}`}
           />
           <button
             onClick={() => deleteStop(safeIdx)}
