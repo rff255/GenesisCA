@@ -11,6 +11,7 @@ import { resolveKeyLabels, resolveValueTagOptions, buildLookupTablePayload, isMu
 import { NeighborIndexValuePicker } from '../modeler/panels/NeighborIndexDefaultEditor';
 import { LookupTableEditor } from '../modeler/panels/LookupTableEditor';
 import { compileGraphWebGPU } from '../modeler/vpl/compiler/webgpu/compile';
+import { createSimWorker } from './createSimWorker';
 import { Gl3DRenderer, panCamera, cameraBasis, DEFAULT_LIGHT3D, DEFAULT_METABALLS3D, metaballAutoThreshold, DEFAULT_AUTOZOOM3D, defaultCamera3d, MIN_CAM_DIST, MAX_CAM_DIST } from './render/gl3d';
 import type { SpriteAtlasInput, Light3D, Metaballs3D, AutoZoom3D } from './render/gl3d';
 import { LightBallWidget } from './LightBallWidget';
@@ -3443,10 +3444,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       interactionTableDefaultsRef.current = snap;
     }
 
-    const worker = new Worker(
-      new URL('./engine/sim.worker.ts', import.meta.url),
-      { type: 'module' },
-    );
+    const worker = createSimWorker();
     worker.onmessage = (e) => onWorkerMessageRef.current(e);
     // Resize / image-import override grid dimensions WITHOUT updating the
     // model state, so we have to feed the compilers a model with the new

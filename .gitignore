@@ -48,3 +48,7 @@ public/agents-*.gcaproj
 
 # esbuild temp bundle entries written by the DEV check scripts
 scripts/__*_entry.ts
+
+# Presentation viewer build artifacts
+dist-viewer/
+public/viewer-template.html

@@ -1,0 +1,391 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Presentation Export — Illustrated Plan</title>
+<style>
+  :root{
+    --bg:#0c0d10; --panel:#16181d; --panel2:#1c1f26; --line:#2a2e37;
+    --ink:#d8dae0; --muted:#8a8f9a; --accent:#e8a13a; --accent-soft:#e8a13a22;
+    --green:#66bb6a; --cyan:#4cc9f0; --pink:#e06ea8; --radius:10px;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:15px/1.55 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;
+    padding:32px 20px 80px}
+  .wrap{max-width:1080px;margin:0 auto}
+  h1{font-size:30px;margin:0 0 4px;letter-spacing:-.4px}
+  h1 .sub{color:var(--accent)}
+  .lede{color:var(--muted);margin:0 0 28px;max-width:760px}
+  h2{font-size:19px;margin:40px 0 14px;padding-bottom:8px;border-bottom:1px solid var(--line)}
+  h2 .n{color:var(--accent);font-variant-numeric:tabular-nums;margin-right:8px}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+  @media(max-width:760px){.grid2{grid-template-columns:1fr}}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:16px 18px}
+  .card h3{margin:0 0 8px;font-size:15px}
+  .muted{color:var(--muted)}
+  .tag{display:inline-block;font-size:11px;font-weight:600;letter-spacing:.3px;
+    padding:2px 8px;border-radius:20px;background:var(--accent-soft);color:var(--accent);
+    border:1px solid #e8a13a44;vertical-align:middle}
+  .tag.green{background:#66bb6a22;color:var(--green);border-color:#66bb6a44}
+  .tag.cyan{background:#4cc9f022;color:var(--cyan);border-color:#4cc9f044}
+  code{background:#0000004d;border:1px solid var(--line);border-radius:5px;padding:1px 5px;
+    font:12.5px/1.4 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;color:#cdd3dd}
+  .fig{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);
+    padding:18px;margin:6px 0 4px;overflow-x:auto}
+  .figcap{color:var(--muted);font-size:12.5px;margin:4px 2px 0}
+  ul.tight{margin:6px 0 0;padding-left:18px}
+  ul.tight li{margin:3px 0}
+  .kbd{font:12px ui-monospace,monospace;background:#000;border:1px solid var(--line);
+    border-radius:4px;padding:1px 6px;color:#aeb4bf}
+  /* ---- mock UI ---- */
+  .win{background:var(--panel2);border:1px solid var(--line);border-radius:12px;overflow:hidden;
+    box-shadow:0 12px 40px #0009}
+  .win .bar{display:flex;align-items:center;gap:8px;padding:9px 13px;background:#111318;border-bottom:1px solid var(--line)}
+  .dot{width:11px;height:11px;border-radius:50%}
+  .dot.r{background:#ec6a5e}.dot.y{background:#f4bf4f}.dot.g{background:#61c554}
+  .wtitle{margin-left:8px;color:var(--muted);font-size:12.5px}
+  .menu{position:relative;display:inline-block}
+  .menuname{padding:5px 11px;border:1px solid var(--line);border-radius:7px;background:#12141a;font-size:13px}
+  .dropdown{margin-top:8px;width:230px;background:#0f1116;border:1px solid var(--line);border-radius:9px;
+    padding:6px;box-shadow:0 10px 30px #000a}
+  .mi{padding:7px 10px;border-radius:6px;font-size:13.5px;display:flex;justify-content:space-between}
+  .mi:hover{background:#ffffff08}
+  .mi.hl{background:var(--accent-soft);color:var(--accent);outline:1px solid #e8a13a55}
+  .mi .sc{color:var(--muted);font-size:11px}
+  .dlg{width:420px}
+  .dlg .body{padding:16px 18px}
+  .field{margin:0 0 14px}
+  .field label{display:block;font-size:12.5px;color:var(--muted);margin-bottom:5px}
+  .inp{width:100%;background:#0f1116;border:1px solid var(--line);border-radius:7px;color:var(--ink);
+    padding:7px 10px;font-size:13.5px}
+  .row{display:flex;align-items:center;gap:9px;margin:9px 0}
+  .row .cb{width:16px;height:16px;border:1px solid #4a5060;border-radius:4px;flex:none;position:relative;background:#0f1116}
+  .row .cb.on{background:var(--accent);border-color:var(--accent)}
+  .row .cb.on::after{content:"";position:absolute;left:5px;top:1px;width:4px;height:9px;
+    border:solid #16181d;border-width:0 2px 2px 0;transform:rotate(42deg)}
+  .row .lab{font-size:13.5px}
+  .row .hint{color:var(--muted);font-size:11.5px;margin-left:auto}
+  .dlg .foot{display:flex;justify-content:flex-end;gap:9px;padding:13px 18px;border-top:1px solid var(--line);background:#111318}
+  .btn{padding:7px 15px;border-radius:7px;font-size:13px;border:1px solid var(--line);background:#12141a;color:var(--ink)}
+  .btn.primary{background:var(--accent);border-color:var(--accent);color:#16181d;font-weight:600}
+  .seg{display:inline-flex;border:1px solid var(--line);border-radius:7px;overflow:hidden}
+  .seg span{padding:5px 12px;font-size:12.5px;background:#0f1116}
+  .seg span.on{background:var(--accent-soft);color:var(--accent)}
+  .note{background:#e8a13a10;border:1px solid #e8a13a33;border-left:3px solid var(--accent);
+    border-radius:8px;padding:11px 14px;margin:14px 0;font-size:13.5px}
+  .risk{background:#e0555510;border:1px solid #e0555533;border-left:3px solid #e06a5e;
+    border-radius:8px;padding:11px 14px;margin:14px 0;font-size:13.5px}
+  .legend{display:flex;gap:16px;flex-wrap:wrap;font-size:12px;color:var(--muted);margin-top:6px}
+  .legend b{display:inline-block;width:11px;height:11px;border-radius:3px;margin-right:5px;vertical-align:-1px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1>Presentation Export <span class="sub">→ standalone <code>.html</code></span></h1>
+  <p class="lede">Share the Simulator + one model as a single self-contained HTML file — no server, no install,
+  no network. The web rewrite's replacement for legacy Genesis's standalone <code>.exe</code> export.
+  <span class="tag">plan</span> <span class="tag green">runtime already fits</span></p>
+
+  <!-- ============ WHY IT FITS ============ -->
+  <h2><span class="n">A</span>Why the runtime already fits</h2>
+  <div class="grid2">
+    <div class="card"><h3>① No binary assets</h3>
+      <p class="muted" style="margin:0">WASM bytes &amp; WGSL are generated <em>in-JS</em> from the model graph at
+      load time and instantiated from memory. Nothing is fetched — <code>WebAssembly.instantiate(bytes)</code>
+      works under <code>file://</code>.</p></div>
+    <div class="card"><h3>② The file is the graph</h3>
+      <p class="muted" style="margin:0">A <code>.gcaproj</code> is plain JSON of the <code>CAModel</code> graph;
+      code is <em>recompiled</em> at load. Embedding the model JSON alone is enough to run.</p></div>
+    <div class="card"><h3>③ Simulator ⟂ Modeler</h3>
+      <p class="muted" style="margin:0"><code>SimulatorView</code> takes no data props — it reads
+      <code>ModelContext</code> and auto-restores an embedded <code>simulationState</code>. The runtime is
+      self-contained.</p></div>
+    <div class="card" style="border-color:#e0555544"><h3>⚠ The one blocker</h3>
+      <p class="muted" style="margin:0">The worker is code-split
+      (<code>new Worker(new URL(…))</code>). A single file must inline it — solved with Vite's
+      <code>?worker&amp;inline</code> (base64 Blob worker).</p></div>
+  </div>
+
+  <div class="note" style="margin-top:18px"><b>One self-contained file — no folder.</b> Sprites
+  (<code>dataUrl</code>/frames), the thumbnail, presets, and the initial board (<code>simulationState</code>) are
+  ALL already base64 inside the <code>CAModel</code> JSON, so the whole thing inlines into a single <code>.html</code>.
+  And because that JSON is the <em>complete</em> model graph, the file is a <b>dual artifact</b> — it runs, and it's
+  a recoverable model source (download the <code>.gcaproj</code> back, or load the <code>.html</code> into GenesisCA
+  to edit). The model's nodes/logic are never lost.</div>
+
+  <!-- ============ EXPORT FLOW ============ -->
+  <h2><span class="n">B</span>Export data-flow (runtime, in the running app)</h2>
+  <div class="fig">
+    <svg viewBox="0 0 1020 200" width="100%" height="200" font-family="inherit">
+      <defs>
+        <marker id="ar" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto">
+          <path d="M0,0 L7,3 L0,6 Z" fill="#e8a13a"/></marker>
+        <style>.bx{fill:#1c1f26;stroke:#2a2e37;rx:9}.t{fill:#d8dae0;font-size:12.5px}
+          .tm{fill:#8a8f9a;font-size:11px}.fl{stroke:#e8a13a;stroke-width:1.6;fill:none;marker-end:url(#ar)}</style>
+      </defs>
+      <!-- boxes -->
+      <g>
+        <rect class="bx" x="10"  y="60" width="150" height="72" rx="9"/>
+        <text class="t"  x="85" y="88"  text-anchor="middle">live model +</text>
+        <text class="t"  x="85" y="105" text-anchor="middle">board state</text>
+        <text class="tm" x="85" y="122" text-anchor="middle">getState round-trip</text>
+
+        <rect class="bx" x="200" y="60" width="150" height="72" rx="9"/>
+        <text class="t"  x="275" y="88" text-anchor="middle">serializeModel</text>
+        <text class="t"  x="275" y="105" text-anchor="middle">(+ simState)</text>
+        <text class="tm" x="275" y="122" text-anchor="middle">reused verbatim</text>
+
+        <rect class="bx" x="390" y="60" width="160" height="72" rx="9"/>
+        <text class="t"  x="470" y="88" text-anchor="middle">fetch template</text>
+        <text class="t"  x="470" y="105" text-anchor="middle">viewer-template.html</text>
+        <text class="tm" x="470" y="122" text-anchor="middle">precached · offline OK</text>
+
+        <rect class="bx" x="590" y="60" width="150" height="72" rx="9"/>
+        <text class="t"  x="665" y="88" text-anchor="middle">inject JSON</text>
+        <text class="t"  x="665" y="105" text-anchor="middle">into placeholder</text>
+        <text class="tm" x="665" y="122" text-anchor="middle">escape &lt;/script&gt;</text>
+
+        <rect class="bx" x="780" y="60" width="150" height="72" rx="9" stroke="#e8a13a"/>
+        <text class="t"  x="855" y="92" text-anchor="middle">download</text>
+        <text class="t"  x="855" y="110" text-anchor="middle" fill="#e8a13a">model.html</text>
+      </g>
+      <path class="fl" d="M162,96 L198,96"/>
+      <path class="fl" d="M352,96 L388,96"/>
+      <path class="fl" d="M552,96 L588,96"/>
+      <path class="fl" d="M742,96 L778,96"/>
+      <text class="tm" x="470" y="30" text-anchor="middle">every step reuses existing serializers — no new file format</text>
+    </svg>
+    <div class="figcap">The running app never stitches hashed chunks — it fetches a pre-built, fully-inlined template
+    and injects one <code>&lt;script&gt;</code>.</div>
+  </div>
+
+  <!-- ============ BUILD FLOW ============ -->
+  <h2><span class="n">C</span>Two builds: the app, and the viewer template</h2>
+  <div class="fig">
+    <svg viewBox="0 0 1020 250" width="100%" height="250" font-family="inherit">
+      <defs><marker id="ar2" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto">
+        <path d="M0,0 L7,3 L0,6 Z" fill="#4cc9f0"/></marker></defs>
+      <!-- main build -->
+      <rect x="10" y="20" width="150" height="54" rx="9" fill="#1c1f26" stroke="#2a2e37"/>
+      <text x="85" y="43" text-anchor="middle" fill="#d8dae0" font-size="12.5">vite build</text>
+      <text x="85" y="60" text-anchor="middle" fill="#8a8f9a" font-size="11">react+PWA+library</text>
+      <rect x="220" y="20" width="180" height="54" rx="9" fill="#1c1f26" stroke="#2a2e37"/>
+      <text x="310" y="43" text-anchor="middle" fill="#d8dae0" font-size="12.5">dist/ (the IDE)</text>
+      <text x="310" y="60" text-anchor="middle" fill="#8a8f9a" font-size="11">Modeler + Simulator</text>
+      <path d="M162,47 L216,47" stroke="#4cc9f0" stroke-width="1.6" fill="none" marker-end="url(#ar2)"/>
+
+      <!-- viewer build -->
+      <rect x="10" y="120" width="150" height="66" rx="9" fill="#1c1f26" stroke="#e8a13a"/>
+      <text x="85" y="146" text-anchor="middle" fill="#e8a13a" font-size="12.5">vite build</text>
+      <text x="85" y="162" text-anchor="middle" fill="#8a8f9a" font-size="11">--mode viewer</text>
+      <text x="85" y="177" text-anchor="middle" fill="#8a8f9a" font-size="11">singlefile · no PWA</text>
+
+      <rect x="220" y="112" width="200" height="42" rx="8" fill="#16181d" stroke="#2a2e37"/>
+      <text x="320" y="138" text-anchor="middle" fill="#d8dae0" font-size="12">SimulatorView only</text>
+      <rect x="220" y="160" width="200" height="42" rx="8" fill="#16181d" stroke="#2a2e37"/>
+      <text x="320" y="186" text-anchor="middle" fill="#d8dae0" font-size="12">worker <tspan fill="#e8a13a">?worker&amp;inline</tspan></text>
+      <path d="M162,153 L216,133" stroke="#e8a13a" stroke-width="1.6" fill="none" marker-end="url(#ar)"/>
+      <path d="M162,153 L216,181" stroke="#e8a13a" stroke-width="1.6" fill="none" marker-end="url(#ar)"/>
+
+      <rect x="470" y="120" width="220" height="66" rx="9" fill="#1c1f26" stroke="#e8a13a"/>
+      <text x="580" y="146" text-anchor="middle" fill="#d8dae0" font-size="12.5">viewer-template.html</text>
+      <text x="580" y="163" text-anchor="middle" fill="#8a8f9a" font-size="11">100% inlined · ~1–2 MB</text>
+      <text x="580" y="178" text-anchor="middle" fill="#8a8f9a" font-size="11">window.__GENESIS_MODEL__ = ⌷</text>
+      <path d="M422,153 L466,153" stroke="#e8a13a" stroke-width="1.6" fill="none" marker-end="url(#ar)"/>
+
+      <rect x="760" y="120" width="150" height="66" rx="9" fill="#16181d" stroke="#2a2e37"/>
+      <text x="835" y="146" text-anchor="middle" fill="#d8dae0" font-size="12.5">copied into</text>
+      <text x="835" y="163" text-anchor="middle" fill="#8a8f9a" font-size="11">dist/ + precached</text>
+      <text x="835" y="178" text-anchor="middle" fill="#8a8f9a" font-size="11">(app fetches it)</text>
+      <path d="M692,153 L756,153" stroke="#e8a13a" stroke-width="1.6" fill="none" marker-end="url(#ar)"/>
+    </svg>
+    <div class="figcap"><span class="tag cyan">unchanged</span> the main IDE build. <span class="tag">new</span>
+    a second, tiny build with <code>vite-plugin-singlefile</code> that inlines everything (incl. the worker) into
+    one HTML the app ships and fetches at export time.</div>
+  </div>
+
+  <!-- ============ UI: FILE MENU + DIALOG ============ -->
+  <h2><span class="n">D</span>New UI — File ▾ entry &amp; the export dialog</h2>
+  <div class="grid2" style="align-items:start">
+    <div>
+      <div class="menu">
+        <span class="menuname">File ▾</span>
+        <div class="dropdown">
+          <div class="mi">New <span class="sc">Ctrl N</span></div>
+          <div class="mi">Save Project… <span class="sc">Ctrl S</span></div>
+          <div class="mi">Load… <span class="sc">Ctrl O</span></div>
+          <div style="height:1px;background:var(--line);margin:5px 4px"></div>
+          <div class="mi hl">Export Presentation… <span class="sc">.html</span></div>
+        </div>
+      </div>
+      <p class="figcap" style="margin-top:12px">One new item in the existing File dropdown
+      (<code>FileMenu.tsx</code>). Behavior/UI change → mockup required (this doc).</p>
+    </div>
+
+    <div class="win dlg">
+      <div class="bar"><span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+        <span class="wtitle">Export Presentation</span></div>
+      <div class="body">
+        <div class="field"><label>Title / credits</label>
+          <input class="inp" value="Conway's Game of Life — R. Figueiredo"></div>
+        <div class="field"><label>Starting viewer (A→C mapping)</label>
+          <input class="inp" value="Default visualization ▾"></div>
+        <div class="row"><span class="cb on"></span><span class="lab">Include current board state</span>
+          <span class="hint">+ ~2 KB · 60×60</span></div>
+        <div class="row"><span class="cb on"></span><span class="lab">Include simulator controls</span></div>
+        <div class="row"><span class="cb on"></span><span class="lab">Autoplay on open</span></div>
+        <div class="row"><span class="cb"></span><span class="lab">Show transport controls</span>
+          <span class="hint">off = clean playback</span></div>
+        <div style="margin-top:14px;font-size:12px;color:var(--muted)">
+          Estimated file size <b style="color:var(--ink)">1.4 MB</b> · runs offline from a bare file
+        </div>
+      </div>
+      <div class="foot"><span class="btn">Cancel</span><span class="btn primary">Export .html</span></div>
+    </div>
+  </div>
+  <div class="note"><b>Reuses the Save-dialog semantics.</b> "Include board state / controls" mirror
+  <code>deriveSaveOptions</code>; the grid snapshot is captured via the same <code>genesis-capture-sim-state</code>
+  seam used by "Save Project → include grid". The viewer-behavior toggles (autoplay / show-transport / starting
+  viewer) ride an additive <code>properties.presentation</code> the Modeler ignores.</div>
+
+  <!-- ============ THE EXPORTED VIEWER ============ -->
+  <h2><span class="n">E</span>What the exported file looks like when opened</h2>
+  <div class="win">
+    <div class="bar"><span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+      <span class="wtitle">Conway's Game of Life.html — file:///…</span></div>
+    <div style="display:flex;min-height:270px">
+      <div style="flex:1;background:radial-gradient(circle at 50% 40%,#12141a,#0a0b0e);position:relative">
+        <!-- fake grid -->
+        <svg viewBox="0 0 340 240" width="100%" height="240" preserveAspectRatio="xMidYMid meet">
+          <g fill="#4cc9f0">
+            <rect x="150" y="70" width="12" height="12"/><rect x="164" y="84" width="12" height="12"/>
+            <rect x="136" y="98" width="12" height="12"/><rect x="150" y="98" width="12" height="12"/>
+            <rect x="164" y="98" width="12" height="12"/>
+            <rect x="196" y="120" width="12" height="12"/><rect x="210" y="134" width="12" height="12"/>
+            <rect x="182" y="148" width="12" height="12"/><rect x="196" y="148" width="12" height="12"/>
+            <rect x="210" y="148" width="12" height="12"/>
+            <rect x="96" y="150" width="12" height="12" fill="#e06ea8"/><rect x="110" y="150" width="12" height="12" fill="#e06ea8"/>
+            <rect x="96" y="164" width="12" height="12" fill="#e06ea8"/><rect x="110" y="164" width="12" height="12" fill="#e06ea8"/>
+          </g>
+        </svg>
+        <div style="position:absolute;left:14px;top:12px;font-size:12px;color:#8a8f9a">Conway's Game of Life
+          <span style="color:#e8a13a"> · gen 142</span></div>
+      </div>
+    </div>
+    <div style="display:flex;align-items:center;gap:14px;padding:10px 16px;background:#111318;border-top:1px solid var(--line)">
+      <span style="font-size:16px;color:var(--accent)">⏸</span>
+      <span style="font-size:14px;color:var(--muted)">⏭</span>
+      <span style="font-size:14px;color:var(--muted)">↺</span>
+      <div style="flex:1;height:4px;background:#2a2e37;border-radius:3px;position:relative">
+        <div style="position:absolute;left:0;top:-4px;width:60%;height:12px;background:#e8a13a33;border-radius:3px"></div></div>
+      <span style="font-size:12px;color:var(--muted)">18 fps</span>
+      <span class="seg"><span class="on">Default</span><span>Age</span></span>
+    </div>
+  </div>
+  <p class="figcap" style="margin-top:8px">Chromeless: no navbar, no Modeler, no library. Just the canvas +
+  SimulatorView's own transport &amp; viewer tabs. Fully interactive (play / step / brush / model-attribute
+  sliders / record) because it runs a full in-memory <code>ModelProvider</code> — for free.</p>
+
+  <div class="grid2" style="margin-top:16px;align-items:start">
+    <div class="win">
+      <div class="bar"><span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+        <span class="wtitle">ⓘ About this model</span></div>
+      <div style="padding:16px 18px">
+        <div style="display:flex;gap:14px">
+          <div style="width:74px;height:74px;border-radius:8px;flex:none;
+            background:linear-gradient(135deg,#4cc9f0,#e06ea8);opacity:.85"></div>
+          <div>
+            <div style="font-size:16px;color:var(--ink);font-weight:600">Conway's Game of Life</div>
+            <div style="font-size:12px;color:var(--muted);margin-top:2px">Rule Author · John H. Conway</div>
+            <div style="font-size:12px;color:var(--muted)">Project Author · R. Figueiredo</div>
+            <div style="margin-top:7px">
+              <span class="tag" style="margin-right:5px">life</span>
+              <span class="tag" style="margin-right:5px">totalistic</span>
+              <span class="tag">classic</span></div>
+          </div>
+        </div>
+        <div style="font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.4px;margin:14px 0 4px">Summary</div>
+        <div style="font-size:13px">A cell lives with 2–3 neighbours, is born with exactly 3. Emergent gliders,
+          oscillators &amp; still-lifes from two rules.</div>
+        <div style="font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.4px;margin:14px 0 4px">Rule description</div>
+        <div style="font-size:12.5px;color:var(--muted)">Outer-totalistic B3/S23 on the Moore neighbourhood…</div>
+      </div>
+    </div>
+
+    <div>
+      <div class="card">
+        <h3>The file is also the model source <span class="tag">R1</span></h3>
+        <p class="muted" style="margin:0 0 12px">The whole <code>CAModel</code> graph rides in
+        <code>window.__GENESIS_MODEL__</code> — the logic is never lost.</p>
+        <div class="row" style="margin:0 0 8px"><span style="color:var(--accent)">⤓</span>
+          <span class="lab">Download model (.gcaproj)</span></div>
+        <div class="row" style="margin:0"><span style="color:var(--accent)">⧉</span>
+          <span class="lab">Open in GenesisCA</span>
+          <span class="hint">drag the .html into the IDE</span></div>
+      </div>
+      <div class="note" style="margin-top:14px"><b>Round-trip.</b> The IDE's Load accepts a presentation
+      <code>.html</code>: it extracts the embedded model JSON and runs the same normalization as a
+      <code>.gcaproj</code> — so a promising standalone example can always be reopened, edited, and re-shared.</div>
+    </div>
+  </div>
+  <p class="figcap" style="margin-top:8px"><b>R2</b> — every presentation field
+  (<code>name</code> · <code>author</code> · <code>modelAuthor</code> · <code>description</code> ·
+  <code>ruleDescription</code> · <code>tags</code> · <code>thumbnail</code>) is displayed, reusing the Modeler's
+  read-only <code>InfoPanelContent</code> rendering so it can't drift.</p>
+
+  <!-- ============ RISKS ============ -->
+  <h2><span class="n">F</span>Risks &amp; how they're handled</h2>
+  <div class="risk"><b>Inlined <code>type:module</code> worker under <code>file://</code></b> — the highest risk.
+  De-risked <em>first</em> in a throwaway PR0 spike across Chrome/Firefox/Safari before anything else is built;
+  fallback is a classic <code>worker.format:'iife'</code> viewer build.</div>
+  <div class="grid2">
+    <div class="card"><h3>WebGPU under <code>file://</code> <span class="tag green">graceful</span></h3>
+      <p class="muted" style="margin:0">May not init from a bare file — the worker already falls back to WASM/JS
+      automatically. WASM from in-memory bytes is fine under <code>file://</code>.</p></div>
+    <div class="card"><h3>File size <span class="tag">toggle</span></h3>
+      <p class="muted" style="margin:0">Grid state (base64) can dominate (Elementary CA 1D ≈ 10.8 MB). "Include
+      board state" defaults OFF past a threshold; dialog shows the estimate.</p></div>
+    <div class="card"><h3>Template staleness <span class="tag">version-stamp</span></h3>
+      <p class="muted" style="margin:0">The template is a build artifact — rebuilt by <code>npm run build</code>.
+      A version marker surfaces a mismatch instead of silently exporting old runtime.</p></div>
+    <div class="card"><h3>No COOP/COEP needed <span class="tag green">confirmed</span></h3>
+      <p class="muted" style="margin:0">Engine uses a non-shared <code>WebAssembly.Memory</code> + typed arrays —
+      no SharedArrayBuffer, so no cross-origin-isolation headers (which <code>file://</code> can't provide).</p></div>
+  </div>
+
+  <!-- ============ PRs ============ -->
+  <h2><span class="n">G</span>Delivery — 4 PRs, ~1 week</h2>
+  <div class="fig" style="padding:14px 18px">
+    <table style="width:100%;border-collapse:collapse;font-size:13.5px">
+      <tr style="color:var(--muted);text-align:left"><th style="padding:6px 8px">PR</th><th>Scope</th><th style="width:90px">Effort</th></tr>
+      <tr style="border-top:1px solid var(--line)"><td style="padding:8px"><b style="color:var(--accent)">PR0</b></td>
+        <td>Spike — prove the inlined worker runs offline (throwaway, gates everything)</td><td>½ day</td></tr>
+      <tr style="border-top:1px solid var(--line)"><td style="padding:8px"><b>PR1</b></td>
+        <td>Viewer app (<code>src/viewer/</code>) + the singlefile template build + worker seam</td><td>2–3 days</td></tr>
+      <tr style="border-top:1px solid var(--line)"><td style="padding:8px"><b>PR2</b></td>
+        <td>Export flow (<code>exportPresentation.ts</code>) + dialog + File-menu entry</td><td>2 days</td></tr>
+      <tr style="border-top:1px solid var(--line)"><td style="padding:8px"><b>PR3</b></td>
+        <td>Offline precache · size guard · docs sweep · version bump</td><td>1 day</td></tr>
+    </table>
+  </div>
+
+  <!-- ============ DECISIONS ============ -->
+  <h2><span class="n">H</span>Decisions to confirm before PR1</h2>
+  <ul class="tight">
+    <li><b>Template delivery</b> — fetch a precached <code>viewer-template.html</code> <span class="tag green">recommended</span>
+      vs. <code>?raw</code>-import it into the app bundle (two-pass build).</li>
+    <li><b>Interactivity level</b> — fully interactive <span class="tag green">recommended</span> vs. playback-only
+      (hide brush/editing).</li>
+    <li><b>Worker inline mode</b> — decided empirically in PR0 (module <code>?worker&amp;inline</code> vs. classic
+      <code>iife</code>).</li>
+  </ul>
+
+  <p class="figcap" style="margin-top:26px">Companion docs:
+  <code>IMPACT_MAP_PRESENTATION_EXPORT.md</code> · <code>PLAN_PRESENTATION_EXPORT.md</code></p>
+
+</div>
+</body>
+</html>

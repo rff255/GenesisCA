@@ -1936,6 +1936,30 @@ export function HelpView() {
             save will include the simulation snapshot.
           </p>
 
+          <h3 className={styles.h3}>Share as a standalone page (Export Presentation)</h3>
+          <p className={styles.p}>
+            <strong>File &rarr; Export Presentation&hellip;</strong> bundles the Simulator and
+            one model into a <strong>single self-contained <code>.html</code> file</strong>.
+            Anyone can open it in a browser &mdash; no install, no server, and it works offline
+            straight from a downloaded file. It is the modern replacement for the old Genesis
+            standalone <code>.exe</code> export.
+          </p>
+          <ul className={styles.list}>
+            <li><strong>Everything travels in one file</strong> &mdash; the model graph,
+              attributes, neighborhoods, mappings, presets, sprites, thumbnail, and (optionally)
+              the current board are all embedded. No sidecar folder.</li>
+            <li><strong>Options</strong> &mdash; choose whether to include the current board
+              state and simulator controls (like Save Project). Large grids default to
+              board-state-off to keep the file small.</li>
+            <li><strong>Model info is shown</strong> &mdash; the standalone page has an
+              <strong>ⓘ About</strong> panel displaying the name, rule author, project author,
+              summary, rule description, tags, and thumbnail.</li>
+            <li><strong>It stays editable</strong> &mdash; the exported <code>.html</code> also
+              carries the full model, so you never lose the logic: click <strong>Download model
+              (.gcaproj)</strong> in the About panel, or simply <strong>Load</strong> the
+              <code>.html</code> back into GenesisCA to recover and edit it.</li>
+          </ul>
+
           <h3 className={styles.h3}>Model Presets</h3>
           <p className={styles.p}>
             The left panel includes a <strong>Presets</strong> section (right above Model
