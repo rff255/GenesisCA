@@ -5,6 +5,7 @@
  */
 
 import { instantiateWasmModule } from '../../modeler/vpl/compiler/wasm/compile';
+import { hexToRgba } from '../../model/colorHex';
 import { buildFacePatternLookup, normalizeLookupTablePayload } from '../../modeler/vpl/compiler/variegation';
 import { computeMemoryLayout, type MemoryLayout, type VariegatedLayoutInputs, type LookupTableLayoutInput } from '../../modeler/vpl/compiler/wasm/layout';
 import type { WebGPULayout } from '../../modeler/vpl/compiler/webgpu/layout';
@@ -4674,10 +4675,13 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       for (const attr of msg.attributes) {
         if (!attr.isModelAttribute) continue;
         if (attr.type === 'color') {
-          const hex = attr.defaultValue || '#808080';
-          cachedModelAttrs[attr.id + '_r'] = parseInt(hex.slice(1, 3), 16) || 0;
-          cachedModelAttrs[attr.id + '_g'] = parseInt(hex.slice(3, 5), 16) || 0;
-          cachedModelAttrs[attr.id + '_b'] = parseInt(hex.slice(5, 7), 16) || 0;
+          // #rrggbb (alpha absent → 255, i.e. every pre-alpha model is unchanged)
+          // or #rrggbbaa. Slot names must match `modelAttrSlotKeys`.
+          const c = hexToRgba(attr.defaultValue || '#808080');
+          cachedModelAttrs[attr.id + '_r'] = c.r;
+          cachedModelAttrs[attr.id + '_g'] = c.g;
+          cachedModelAttrs[attr.id + '_b'] = c.b;
+          cachedModelAttrs[attr.id + '_a'] = c.a;
         } else {
           cachedModelAttrs[attr.id] = defaultValue(attr);
         }

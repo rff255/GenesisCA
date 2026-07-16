@@ -9,7 +9,7 @@
  *   [orientation read][orientation write]           (variegated only; i32/cell, write skipped in async)
  *   [colors: 4 bytes/cell]
  *   [neighbor index table 0][...]                   (Int32Array per neighborhood, total*size i32 each)
- *   [model attrs region]                            (one f64 per scalar; 3 per color attr)
+ *   [model attrs region]                            (one f64 per scalar; 4 per color attr: r/g/b/a)
  *   [indicators region]                             (one f64 per indicator)
  *   [rngState: 4 bytes]
  *   [activeViewer: 4 bytes]
@@ -28,6 +28,7 @@ import type { CAModel } from '../../../../model/types';
 import { FACE_SLOT_COUNT, resolveKeyLabels, resolveAxes, isMultiAxisTable } from '../variegation';
 import { hasGlyphsInModel } from '../glyphsUsage';
 import { expandVectorAttributes } from '../vectorAttr';
+import { modelAttrSlotKeys } from '../../../../model/attributeScope';
 import { sparseSteppingEnabled } from '../sparseStepping';
 
 export interface AttrDef {
@@ -108,7 +109,8 @@ export interface MemoryLayout {
   nbrIndexOffset: Record<string, number>;
   nbrSize: Record<string, number>;
 
-  /** Model-attr offsets (per slot key — "id" or "id_r/_g/_b" for colors), each f64. */
+  /** Model-attr offsets (per slot key — "id", or "id_r/_g/_b/_a" for colour
+   *  attrs), each f64. Slot list from the shared `modelAttrSlotKeys`. */
   modelAttrOffset: Record<string, number>;
 
   /** Per-indicator offset (f64 each). Indexed by indicator id. */
@@ -336,17 +338,14 @@ export function computeMemoryLayout(
     off += (sparseStepping && gridCells ? 1 : total) * n.coords.length * 4;
   }
 
-  // Model attrs region — one f64 slot per scalar (or per color channel for color attrs)
+  // Model attrs region — one f64 slot per scalar (or per colour channel for
+  // colour attrs: r/g/b/a). The slot list comes from the shared
+  // `modelAttrSlotKeys` so this layout cannot drift from the worker's writer or
+  // the other three mirror sites (see attributeScope.ts).
   const modelAttrOffset: Record<string, number> = {};
   off = alignTo(off, 8);
   for (const a of modelAttrs) {
-    if (a.type === 'color') {
-      modelAttrOffset[a.id + '_r'] = off; off += 8;
-      modelAttrOffset[a.id + '_g'] = off; off += 8;
-      modelAttrOffset[a.id + '_b'] = off; off += 8;
-    } else {
-      modelAttrOffset[a.id] = off; off += 8;
-    }
+    for (const key of modelAttrSlotKeys(a)) { modelAttrOffset[key] = off; off += 8; }
   }
 
   // Indicators region — one f64 per indicator (matches model.indicators order)

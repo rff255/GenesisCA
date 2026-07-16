@@ -67,6 +67,7 @@
 
 import type { GraphNode, GraphEdge, CAModel } from '../../../../model/types';
 import { agentAttrsOf } from '../../../../model/attributeScope';
+import { modelAttrSlotKeys } from '../../../../model/attributeScope';
 import { resolveMaxBonds } from '../../../../model/centerBased';
 import {
   I32, F64,
@@ -4799,14 +4800,19 @@ export function agentMaxHashBinsForModel(model: CAModel): number {
   return computeAgentMaxHashBins(W, H, D, range, dr, nq);
 }
 
-/** The model-attribute keys (color attrs expand to id_r/id_g/id_b) — the order the
- *  worker copies `cachedModelAttrs` into the in-memory region. */
+/** The model-attribute keys (colour attrs expand to id_r/id_g/id_b/id_a via the
+ *  shared `modelAttrSlotKeys`) — the order the worker copies `cachedModelAttrs`
+ *  into the in-memory region.
+ *
+ *  NB the `lookupTable` skip is this site's own long-standing filter (a lookup
+ *  table lives in its own region, not the scalar channel) and is intentionally
+ *  NOT folded into the shared helper — see attributeScope.ts. */
 function modelAttrKeysOf(model: CAModel): string[] {
   const keys: string[] = [];
   for (const a of model.attributes) {
     if (!a.isModelAttribute) continue;
-    if (a.type === 'color') { keys.push(a.id + '_r', a.id + '_g', a.id + '_b'); }
-    else if (a.type !== 'lookupTable') keys.push(a.id);
+    if (a.type === 'lookupTable') continue;
+    keys.push(...modelAttrSlotKeys(a));
   }
   return keys;
 }
