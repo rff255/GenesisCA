@@ -120,7 +120,8 @@ export works offline in the installed PWA (template precached — see PR3).
   "regenerating…" revalidation rather than silently exporting old runtime.
 - Docs sweep (atomic): `CLAUDE.md` (Presentation Export planned→shipped + a subsystem section), `HelpView.tsx`
   (a "Share as a standalone page" entry), `README.md`.
-- `/updateversion` bump.
+- **No version bump.** Versioning is the user's call — never bump as part of finishing a feature. When the user
+  decides to cut a release they run the `/updateversion` skill themselves.
 
 ---
 

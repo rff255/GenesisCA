@@ -7,32 +7,6 @@ https://github.com/rff255/GenesisCA/releases
 The version at the top of `package.json` is the single source of truth; each
 entry below is cut when that version is tagged (see `.github/workflows/release.yml`).
 
-## [1.27.0] - 2026-07-15
-
-Presentation Export: share the Simulator plus one model as a **single
-self-contained `.html`** that runs in any browser with no install, no server, and
-works offline from a bare file. It replaces legacy Genesis's standalone `.exe`
-export. Everything is additive — the IDE, the compile targets, and every model are
-unchanged.
-
-### Presentation Export
-- **File → Export standalone simulation…** produces one self-contained `.html` carrying the
-  whole model (graph, attributes, neighborhoods, mappings, presets, sprites,
-  thumbnail) and, optionally, the current board state and simulator controls. No
-  sidecar folder — sprites/thumbnail/presets/board are all embedded (base64). Large
-  grids default the board snapshot off to keep the file small.
-- **Runs with no assets.** The exported page regenerates WASM/WGSL in-JS from the
-  model graph at load, so nothing is fetched; a fully-inlined viewer template
-  (built via `vite-plugin-singlefile`, with the sim worker inlined as a Blob) hosts
-  the Simulator. The template is precached, so exporting works offline.
-- **It stays editable (dual artifact).** The `.html` embeds the complete model, so
-  the logic is never lost: the standalone page's About panel has a **Download model
-  (.gcaproj)** button, and the IDE's **Load** now accepts a presentation `.html`
-  and recovers the full editable model.
-- **Model info on display.** The standalone page shows the model's name, rule
-  author, project author, summary, rule description, tags, and thumbnail in an
-  **ⓘ About** panel.
-
 ## [1.26.1] - 2026-07-08
 
 The Agent Capability Profiles milestone plus a large agent-platform push: opt-in
