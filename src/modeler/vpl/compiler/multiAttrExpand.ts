@@ -144,9 +144,13 @@ export function buildExtraSlotPorts(
     const label = attr?.name ?? `Value ${i}`;
     if (MULTI_ATTR_GET_TYPES.has(nodeType)) {
       if (nodeType === 'getModelAttribute' && attr?.type === 'color') {
+        // A colour model attribute always occupies r/g/b/a slots (see
+        // `modelAttrSlotKeys`), so the alpha channel is always exposed here —
+        // unlike the palette nodes, whose `a` port is gated on a declared alpha.
         outputs.push({ id: `r_${i}`, label: `${label} R`, kind: 'output', category: 'value', dataType: 'integer' });
         outputs.push({ id: `g_${i}`, label: `${label} G`, kind: 'output', category: 'value', dataType: 'integer' });
         outputs.push({ id: `b_${i}`, label: `${label} B`, kind: 'output', category: 'value', dataType: 'integer' });
+        outputs.push({ id: `a_${i}`, label: `${label} A`, kind: 'output', category: 'value', dataType: 'integer' });
       } else {
         outputs.push({
           id: slotPortId(i), label, kind: 'output', category: 'value',
@@ -172,9 +176,11 @@ export function buildExtraSlotPorts(
 const isColorModelAttr = (model: CAModel, attrId: string): boolean =>
   model.attributes.some(a => a.id === attrId && a.isModelAttribute && a.type === 'color');
 
-/** Slot-port handle (a `value_${i}` / `r/g/b_${i}` handle) — used to drop STALE
- *  edges on an expanded node that no remap claimed. */
-const STALE_SLOT_HANDLE = /^(input|output)_value_(value|r|g|b)_\d+$/;
+/** Slot-port handle (a `value_${i}` / `r/g/b/a_${i}` handle) — used to drop STALE
+ *  edges on an expanded node that no remap claimed. MUST list every channel the
+ *  slot-port builder can emit: an unclaimed handle left here would fall through to
+ *  the pruned slot-1 node and silently resolve to the WRONG variable. */
+const STALE_SLOT_HANDLE = /^(input|output)_value_(value|r|g|b|a)_\d+$/;
 
 export function expandMultiAttrs(
   nodes: GraphNode[], edges: GraphEdge[], model: CAModel,
@@ -231,7 +237,9 @@ export function expandMultiAttrs(
         const gid = `${nd.id}__ma${i}`;
         outNodes.push({ id: gid, type: 'caNode', position: nd.position, data: { nodeType: t, config: cfg } });
         if (colorSlot) {
-          for (const ch of ['r', 'g', 'b']) {
+          // r/g/b/a — must match `buildExtraSlotPorts`' colour-slot output list,
+          // or an `a_${i}` consumer edge would be dropped as a stale handle.
+          for (const ch of ['r', 'g', 'b', 'a']) {
             remapSrc.set(`${nd.id} output_value_${ch}_${i}`, { source: gid, sourceHandle: `output_value_${ch}` });
           }
         } else {
