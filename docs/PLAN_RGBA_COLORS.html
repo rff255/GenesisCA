@@ -1,0 +1,511 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Plan — RGBA colours</title>
+<style>
+  :root{
+    --bg:#0c0d10; --panel:#15171c; --panel2:#1b1e25; --line:#2a2e38;
+    --text:#e6e8ec; --dim:#9aa0ac; --faint:#6b7280;
+    --accent:#e8a13a; --accent-soft:rgba(232,161,58,.14);
+    --ok:#4ade80; --warn:#fbbf24; --bad:#f87171; --info:#4cc9f0;
+    --checker:
+      linear-gradient(45deg,#3a3f4b 25%,transparent 25%),
+      linear-gradient(-45deg,#3a3f4b 25%,transparent 25%),
+      linear-gradient(45deg,transparent 75%,#3a3f4b 75%),
+      linear-gradient(-45deg,transparent 75%,#3a3f4b 75%);
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);
+    font:14px/1.6 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+    padding:32px 20px 80px}
+  .wrap{max-width:1080px;margin:0 auto}
+  h1{font-size:26px;margin:0 0 4px;letter-spacing:-.4px}
+  h1 small{display:block;font-size:13px;color:var(--dim);font-weight:400;margin-top:6px;letter-spacing:0}
+  h2{font-size:17px;margin:44px 0 14px;padding-bottom:8px;border-bottom:1px solid var(--line);
+     color:var(--accent);letter-spacing:-.2px}
+  h3{font-size:13px;margin:22px 0 8px;color:var(--text);text-transform:uppercase;
+     letter-spacing:.8px;font-weight:600}
+  p{margin:10px 0;color:var(--dim)}
+  code{font-family:ui-monospace,"Cascadia Code",Consolas,monospace;font-size:12px;
+    background:var(--panel2);padding:1px 5px;border-radius:4px;color:#d6dae2}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px 18px;margin:14px 0}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  @media(max-width:820px){.grid2{grid-template-columns:1fr}}
+  .tag{display:inline-block;font-size:10px;font-weight:700;letter-spacing:.7px;text-transform:uppercase;
+    padding:2px 8px;border-radius:999px;vertical-align:middle}
+  .tag.before{background:rgba(248,113,113,.15);color:var(--bad);border:1px solid rgba(248,113,113,.3)}
+  .tag.after{background:rgba(74,222,128,.13);color:var(--ok);border:1px solid rgba(74,222,128,.3)}
+  .tag.new{background:var(--accent-soft);color:var(--accent);border:1px solid rgba(232,161,58,.35)}
+
+  /* ---- faux GenesisCA panel widgets ---- */
+  .panel{background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:12px}
+  .row{display:flex;align-items:center;gap:8px;margin:7px 0}
+  .lbl{font-size:11px;color:var(--dim);min-width:52px}
+  .swatch{width:30px;height:22px;border-radius:4px;border:1px solid #3a3f4b;flex:none}
+  .checker{background-image:var(--checker);background-size:10px 10px;
+    background-position:0 0,0 5px,5px -5px,-5px 0px}
+  .num{background:#0f1116;border:1px solid #343a45;border-radius:4px;color:#d6dae2;
+    font:11px ui-monospace,monospace;padding:3px 6px;width:52px;text-align:center}
+  .num.alpha{border-color:var(--accent);box-shadow:0 0 0 2px var(--accent-soft)}
+  .bar{height:26px;border-radius:5px;border:1px solid #3a3f4b;position:relative;margin:8px 0 12px}
+  .stopdot{position:absolute;top:-5px;width:11px;height:36px;border-radius:3px;
+    border:2px solid #fff;box-shadow:0 0 0 1px #000;transform:translateX(-50%)}
+
+  table{width:100%;border-collapse:collapse;margin:10px 0;font-size:12.5px}
+  th,td{text-align:left;padding:7px 9px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{color:var(--faint);font-size:10.5px;text-transform:uppercase;letter-spacing:.7px;font-weight:600}
+  td code{font-size:11.5px}
+  .mono{font-family:ui-monospace,monospace;font-size:11.5px}
+  .no{color:var(--bad);font-weight:600}
+  .yes{color:var(--ok);font-weight:600}
+
+  .callout{border-left:3px solid var(--accent);background:var(--accent-soft);
+    padding:12px 14px;border-radius:0 8px 8px 0;margin:16px 0}
+  .callout.bad{border-left-color:var(--bad);background:rgba(248,113,113,.08)}
+  .callout.ok{border-left-color:var(--ok);background:rgba(74,222,128,.07)}
+  .callout b{color:var(--text)}
+  .callout p{margin:5px 0;color:#c2c7d0}
+
+  ol.steps{counter-reset:s;list-style:none;padding:0;margin:14px 0}
+  ol.steps li{counter-increment:s;position:relative;padding:11px 0 11px 42px;border-bottom:1px solid var(--line)}
+  ol.steps li::before{content:counter(s);position:absolute;left:0;top:11px;width:26px;height:26px;
+    border-radius:50%;background:var(--accent-soft);border:1px solid var(--accent);color:var(--accent);
+    font-size:12px;font-weight:700;display:flex;align-items:center;justify-content:center}
+  ol.steps b{color:var(--text)}
+  ol.steps span{color:var(--dim);display:block;font-size:12.5px;margin-top:2px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>RGBA colours — alpha through the colour-producer chain
+  <small>Illustrated companion to PLAN_RGBA_COLORS.md · precondition: IMPACT_MAP_RGBA_COLORS.md</small>
+</h1>
+
+<!-- ============================================================= -->
+<h2>1 · The premise, corrected</h2>
+<p>The engine is <b>half</b> RGBA-ready. The <em>sink</em> takes alpha; every <em>producer</em> upstream of it is RGB-only.
+   Adding alpha to the pickers alone would produce a value with nowhere to flow.</p>
+
+<div class="card">
+<svg viewBox="0 0 1000 250" width="100%" role="img" aria-label="Data flow from colour producers to the colors buffer, showing the alpha gap">
+  <defs>
+    <marker id="ar" markerWidth="9" markerHeight="9" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L8,3 z" fill="#6b7280"/>
+    </marker>
+    <marker id="arOk" markerWidth="9" markerHeight="9" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L8,3 z" fill="#4ade80"/>
+    </marker>
+  </defs>
+
+  <text x="14" y="22" fill="#6b7280" font-size="11" font-family="ui-monospace,monospace" letter-spacing="1">PRODUCERS — RGB ONLY (the gap)</text>
+
+  <!-- producers -->
+  <g font-family="system-ui" font-size="11.5">
+    <rect x="14" y="34" width="188" height="34" rx="6" fill="#1b1e25" stroke="#f87171" stroke-dasharray="4 3"/>
+    <text x="26" y="55" fill="#e6e8ec">Color Scale</text><text x="176" y="55" fill="#f87171" font-size="10">r g b</text>
+
+    <rect x="14" y="76" width="188" height="34" rx="6" fill="#1b1e25" stroke="#f87171" stroke-dasharray="4 3"/>
+    <text x="26" y="97" fill="#e6e8ec">Categorical Color</text><text x="176" y="97" fill="#f87171" font-size="10">r g b</text>
+
+    <rect x="14" y="118" width="188" height="34" rx="6" fill="#1b1e25" stroke="#f87171" stroke-dasharray="4 3"/>
+    <text x="26" y="139" fill="#e6e8ec">Color Constant</text><text x="176" y="139" fill="#f87171" font-size="10">r g b</text>
+
+    <rect x="14" y="160" width="188" height="34" rx="6" fill="#1b1e25" stroke="#f87171" stroke-dasharray="4 3"/>
+    <text x="26" y="181" fill="#e6e8ec">Get Model Attr</text><text x="176" y="181" fill="#f87171" font-size="10">r g b</text>
+
+    <rect x="14" y="202" width="188" height="34" rx="6" fill="#1b1e25" stroke="#f87171" stroke-dasharray="4 3"/>
+    <text x="26" y="223" fill="#e6e8ec">ColorStop / RGB</text><text x="168" y="223" fill="#f87171" font-size="10">no a</text>
+  </g>
+
+  <!-- linked OM -->
+  <g>
+    <rect x="262" y="86" width="176" height="86" rx="6" fill="#15171c" stroke="#f87171" stroke-dasharray="4 3"/>
+    <text x="274" y="108" fill="#e6e8ec" font-size="11.5" font-family="system-ui">Linked Output Mapping</text>
+    <text x="274" y="126" fill="#9aa0ac" font-size="10" font-family="ui-monospace,monospace">injectLinkedOutput…</text>
+    <text x="274" y="146" fill="#f87171" font-size="10.5" font-family="ui-monospace,monospace">wires 3 edges:</text>
+    <text x="274" y="161" fill="#f87171" font-size="10.5" font-family="ui-monospace,monospace">r, g, b</text>
+  </g>
+  <line x1="206" y1="129" x2="256" y2="129" stroke="#6b7280" stroke-width="1.4" marker-end="url(#ar)"/>
+
+  <!-- setCellLooks -->
+  <g>
+    <rect x="498" y="86" width="176" height="86" rx="6" fill="#15171c" stroke="#4ade80"/>
+    <text x="510" y="108" fill="#e6e8ec" font-size="11.5" font-family="system-ui">Set Cell Looks</text>
+    <text x="510" y="128" fill="#4ade80" font-size="10.5" font-family="ui-monospace,monospace">r  g  b</text>
+    <text x="510" y="146" fill="#4ade80" font-size="10.5" font-family="ui-monospace,monospace">a  ← EXISTS</text>
+    <text x="510" y="163" fill="#fbbf24" font-size="10" font-family="ui-monospace,monospace">…defaults to 255</text>
+  </g>
+  <line x1="442" y1="129" x2="492" y2="129" stroke="#6b7280" stroke-width="1.4" marker-end="url(#ar)"/>
+
+  <!-- colors buffer -->
+  <g>
+    <rect x="734" y="86" width="252" height="86" rx="6" fill="#15171c" stroke="#4ade80"/>
+    <text x="746" y="108" fill="#e6e8ec" font-size="11.5" font-family="system-ui">colors buffer — RGBA</text>
+    <text x="746" y="127" fill="#9aa0ac" font-size="10" font-family="ui-monospace,monospace">2D: ImageData source-over</text>
+    <text x="746" y="143" fill="#9aa0ac" font-size="10" font-family="ui-monospace,monospace">3D: alpha=0 culled, blend</text>
+    <text x="746" y="159" fill="#9aa0ac" font-size="10" font-family="ui-monospace,monospace">agents: disc/sprite alpha</text>
+  </g>
+  <line x1="678" y1="129" x2="728" y2="129" stroke="#4ade80" stroke-width="1.6" marker-end="url(#arOk)"/>
+
+  <text x="734" y="196" fill="#4ade80" font-size="10.5" font-family="ui-monospace,monospace">ALREADY RGBA ✓</text>
+  <text x="498" y="196" fill="#4ade80" font-size="10.5" font-family="ui-monospace,monospace">SINK READY ✓</text>
+  <text x="262" y="196" fill="#f87171" font-size="10.5" font-family="ui-monospace,monospace">NO ALPHA EDGE ✗</text>
+</svg>
+</div>
+
+<div class="callout">
+  <p><b>The work runs sink-backwards:</b> schema → producers (ports + emit × 5 compilers) → linked-OM wiring → <em>then</em> pickers.</p>
+</div>
+
+<!-- ============================================================= -->
+<h2>2 · The invariant that makes this safe</h2>
+<div class="callout ok">
+  <p><b>Absent alpha ⇒ 255 ⇒ opaque ⇒ behaviour-identical.</b></p>
+  <p>Every alpha field is optional (<code>a?: number</code>); every parser defaults to 255 — exactly what
+     <code>setCellLooks</code>' inline default already writes today. <b>No <code>.gcaproj</code> migration.</b>
+     Same additive-optional discipline as <code>coords3d</code>, <code>vectorDims</code>, <code>agentCapabilities</code>.</p>
+</div>
+
+<!-- ============================================================= -->
+<h2>3 · The load-bearing decision — how the <code>a</code> port avoids polluting every existing emit</h2>
+<p>A multi-output node emits all its ports together. An unconditional <code>const _v&lt;id&gt;_a = 255;</code>
+   adds a <em>dead</em> line to every model with a linked float/integer OM — harmless at runtime, but it turns
+   <code>check-compile-identity.mjs</code> red across ~10 models and burns the cheapest safety net we have.</p>
+
+<div class="grid2">
+  <div class="card">
+    <span class="tag before">Option B — always emit</span>
+    <p style="margin-top:10px">Re-baseline the identity sweep and review the diff.</p>
+    <p class="mono" style="color:#f87171">✗ burns the one cheap regression net<br>✗ normalises "baseline moved, trust me"</p>
+  </div>
+  <div class="card" style="border-color:rgba(232,161,58,.45)">
+    <span class="tag new">Option A — hiddenPorts gating · RECOMMENDED</span>
+    <p style="margin-top:10px">The <code>a</code> output exists only when the palette declares an alpha.
+       All-opaque ⇒ emits <b>exactly</b> today's three-var form.</p>
+    <p class="mono" style="color:#4ade80">✓ byte-identity by construction<br>✓ reuses an existing mechanism</p>
+  </div>
+</div>
+
+<p><code>hiddenPorts</code> already gates <code>getModelAttribute</code>'s r/g/b-vs-value on <code>isColorAttr</code>,
+   and <code>setCellLooks</code>' own <code>a</code> port in glyph mode. The config-driven
+   <code>updateNodeInternals</code> effect in <code>CaNode.tsx</code> already re-measures handle bounds on exactly
+   this kind of port-set change (the Vector-Op bug).</p>
+
+<h3>Option A in the node</h3>
+<div class="card">
+<svg viewBox="0 0 900 190" width="100%" role="img" aria-label="Color Scale node before and after: the A output port appears once a stop declares alpha">
+  <g font-family="system-ui">
+    <!-- before -->
+    <text x="10" y="18" fill="#6b7280" font-size="10.5" font-family="ui-monospace,monospace" letter-spacing="1">ALL STOPS OPAQUE — byte-identical</text>
+    <rect x="10" y="30" width="180" height="112" rx="7" fill="#15171c" stroke="#2a2e38"/>
+    <rect x="10" y="30" width="180" height="24" rx="7" fill="#006064"/>
+    <text x="22" y="47" fill="#e6e8ec" font-size="11.5">Color Scale</text>
+    <circle cx="10" cy="76" r="4.5" fill="#4cc9f0" stroke="#0c0d10"/><text x="22" y="80" fill="#9aa0ac" font-size="10.5">Position</text>
+    <circle cx="190" cy="76" r="4.5" fill="#4cc9f0" stroke="#0c0d10"/><text x="176" y="80" fill="#9aa0ac" font-size="10.5" text-anchor="end">R</text>
+    <circle cx="190" cy="98" r="4.5" fill="#4cc9f0" stroke="#0c0d10"/><text x="176" y="102" fill="#9aa0ac" font-size="10.5" text-anchor="end">G</text>
+    <circle cx="190" cy="120" r="4.5" fill="#4cc9f0" stroke="#0c0d10"/><text x="176" y="124" fill="#9aa0ac" font-size="10.5" text-anchor="end">B</text>
+    <text x="10" y="164" fill="#4ade80" font-size="10" font-family="ui-monospace,monospace">emit: _v_r, _v_g, _v_b</text>
+
+    <!-- arrow -->
+    <path d="M230,86 L300,86" stroke="#e8a13a" stroke-width="1.6" marker-end="url(#ar)"/>
+    <text x="232" y="76" fill="#e8a13a" font-size="10" font-family="ui-monospace,monospace">user drags a stop's</text>
+    <text x="232" y="104" fill="#e8a13a" font-size="10" font-family="ui-monospace,monospace">alpha below 255</text>
+
+    <!-- after -->
+    <text x="340" y="18" fill="#e8a13a" font-size="10.5" font-family="ui-monospace,monospace" letter-spacing="1">ANY STOP DECLARES ALPHA</text>
+    <rect x="340" y="30" width="180" height="134" rx="7" fill="#15171c" stroke="#e8a13a"/>
+    <rect x="340" y="30" width="180" height="24" rx="7" fill="#006064"/>
+    <text x="352" y="47" fill="#e6e8ec" font-size="11.5">Color Scale</text>
+    <circle cx="340" cy="76" r="4.5" fill="#4cc9f0" stroke="#0c0d10"/><text x="352" y="80" fill="#9aa0ac" font-size="10.5">Position</text>
+    <circle cx="520" cy="76" r="4.5" fill="#4cc9f0" stroke="#0c0d10"/><text x="506" y="80" fill="#9aa0ac" font-size="10.5" text-anchor="end">R</text>
+    <circle cx="520" cy="98" r="4.5" fill="#4cc9f0" stroke="#0c0d10"/><text x="506" y="102" fill="#9aa0ac" font-size="10.5" text-anchor="end">G</text>
+    <circle cx="520" cy="120" r="4.5" fill="#4cc9f0" stroke="#0c0d10"/><text x="506" y="124" fill="#9aa0ac" font-size="10.5" text-anchor="end">B</text>
+    <circle cx="520" cy="142" r="5.5" fill="#e8a13a" stroke="#0c0d10"/><text x="506" y="146" fill="#e8a13a" font-size="10.5" text-anchor="end" font-weight="600">A</text>
+    <text x="340" y="182" fill="#e8a13a" font-size="10" font-family="ui-monospace,monospace">emit: _v_r, _v_g, _v_b, _v_a</text>
+
+    <!-- linked OM corollary -->
+    <text x="600" y="18" fill="#6b7280" font-size="10.5" font-family="ui-monospace,monospace" letter-spacing="1">LINKED-OM COROLLARY</text>
+    <rect x="600" y="30" width="290" height="134" rx="7" fill="#15171c" stroke="#2a2e38"/>
+    <text x="614" y="54" fill="#e6e8ec" font-size="11">The 4th <tspan font-family="ui-monospace,monospace" fill="#e8a13a">a</tspan> edge is wired</text>
+    <text x="614" y="72" fill="#e6e8ec" font-size="11">only when the palette carries</text>
+    <text x="614" y="90" fill="#e6e8ec" font-size="11">a non-255 alpha.</text>
+    <text x="614" y="118" fill="#9aa0ac" font-size="10" font-family="ui-monospace,monospace">opaque palette → 3 edges</text>
+    <text x="614" y="134" fill="#4ade80" font-size="10" font-family="ui-monospace,monospace">→ byte-identical ✓</text>
+    <text x="614" y="154" fill="#6b7280" font-size="9.5">same hot-path no-op as expandComposites</text>
+  </g>
+</svg>
+</div>
+
+<!-- ============================================================= -->
+<h2>4 · The pickers — one shared <code>ColorField</code></h2>
+
+<h3>First: can the native picker just do alpha? — measured, not assumed</h3>
+<div class="callout bad">
+  <p><b>No.</b> <code>&lt;input type="color" alpha&gt;</code> is specced, but it is <b>Safari 18.4+ only —
+     12.58% global support; Chrome ✗ through 150, Edge ✗, Firefox ✗</b> (caniuse). Probed live in a Chrome 148 renderer:</p>
+  <p class="mono" style="color:#c2c7d0;margin-left:6px">
+    idlAlphaPresent: <span class="no">false</span><br>
+    value = '#ff000080' → <span class="no">'#ff0000'</span> &nbsp;&nbsp;<span style="color:#f87171">// silently TRUNCATED, no error</span><br>
+    colorSpace IDL: <span class="no">ABSENT</span>
+  </p>
+  <p><b>It lights up in exactly the wrong browser.</b> WebGPU and the Tauri shell are Chromium-bound (macOS/Linux
+     Tauri uses WebKit → the simulator falls back to WASM/JS). Native alpha would work only where GenesisCA is
+     <em>least</em> capable, and stay dark for the Chromium users who are the actual audience. A
+     progressive-enhancement branch would give ~87% of users a different control <em>and</em> still require the
+     fallback to be built — more code, worse consistency.</p>
+</div>
+
+<div class="callout ok">
+  <p><b>The better answer: one <code>ColorField</code> component, not an alpha box welded beside seven swatches.</b>
+     A checkerboard-backed swatch rendering the true <code>rgba()</code> composite, opening a popover with the native
+     picker (RGB) + an alpha slider. Follows the existing <code>BrushColorPopover.tsx</code> precedent.</p>
+  <p>Seven bespoke picker layouts collapse to <b>one</b> — <em>less</em> code than the status quo — and the three
+     divergent hex-helper pairs (including the 24-bit mask that silently corrupts 8-digit hex) collapse to one
+     alpha-aware pair.</p>
+</div>
+
+<div class="card">
+<svg viewBox="0 0 900 200" width="100%" role="img" aria-label="The ColorField component: a checkerboard swatch opening a popover with a native colour picker and an alpha slider">
+  <g font-family="system-ui">
+    <text x="10" y="16" fill="#6b7280" font-size="10.5" font-family="ui-monospace,monospace" letter-spacing="1">COLLAPSED — the swatch shows real alpha</text>
+    <rect x="10" y="28" width="230" height="40" rx="6" fill="#1b1e25" stroke="#2a2e38"/>
+    <text x="24" y="53" fill="#9aa0ac" font-size="11">Color</text>
+    <!-- checkerboard swatch -->
+    <defs>
+      <pattern id="ck" width="8" height="8" patternUnits="userSpaceOnUse">
+        <rect width="8" height="8" fill="#20242c"/>
+        <rect width="4" height="4" fill="#3a3f4b"/><rect x="4" y="4" width="4" height="4" fill="#3a3f4b"/>
+      </pattern>
+    </defs>
+    <rect x="76" y="37" width="34" height="22" rx="4" fill="url(#ck)" stroke="#3a3f4b"/>
+    <rect x="76" y="37" width="34" height="22" rx="4" fill="#21918c" fill-opacity="0.5"/>
+    <text x="122" y="53" fill="#6b7280" font-size="10" font-family="ui-monospace,monospace">#21918c80</text>
+    <path d="M212,48 L222,48" stroke="#6b7280" stroke-width="1.2" marker-end="url(#ar)"/>
+
+    <!-- popover -->
+    <text x="300" y="16" fill="#e8a13a" font-size="10.5" font-family="ui-monospace,monospace" letter-spacing="1">CLICK → POPOVER</text>
+    <rect x="300" y="28" width="250" height="160" rx="8" fill="#15171c" stroke="#e8a13a"/>
+
+    <text x="316" y="52" fill="#9aa0ac" font-size="10.5">RGB</text>
+    <rect x="316" y="60" width="218" height="26" rx="4" fill="#21918c" stroke="#3a3f4b"/>
+    <text x="425" y="78" fill="#0c0d10" font-size="10" text-anchor="middle" font-family="ui-monospace,monospace">native &lt;input type="color"&gt;</text>
+
+    <text x="316" y="108" fill="#e8a13a" font-size="10.5">Alpha</text>
+    <text x="534" y="108" fill="#e8a13a" font-size="10.5" text-anchor="end" font-family="ui-monospace,monospace">128</text>
+    <!-- alpha slider track: transparent -> opaque over checkerboard -->
+    <rect x="316" y="116" width="218" height="14" rx="7" fill="url(#ck)" stroke="#3a3f4b"/>
+    <defs>
+      <linearGradient id="ag" x1="0" y1="0" x2="1" y2="0">
+        <stop offset="0" stop-color="#21918c" stop-opacity="0"/>
+        <stop offset="1" stop-color="#21918c" stop-opacity="1"/>
+      </linearGradient>
+    </defs>
+    <rect x="316" y="116" width="218" height="14" rx="7" fill="url(#ag)"/>
+    <circle cx="425" cy="123" r="8" fill="#e6e8ec" stroke="#0c0d10" stroke-width="1.5"/>
+
+    <rect x="316" y="146" width="218" height="24" rx="4" fill="#0f1116" stroke="#343a45"/>
+    <text x="425" y="162" fill="#d6dae2" font-size="10.5" text-anchor="middle" font-family="ui-monospace,monospace">#21918c80</text>
+
+    <!-- callout -->
+    <text x="580" y="16" fill="#6b7280" font-size="10.5" font-family="ui-monospace,monospace" letter-spacing="1">USED AT ALL SEVEN SITES</text>
+    <g font-size="10" fill="#9aa0ac" font-family="ui-monospace,monospace">
+      <rect x="580" y="28" width="310" height="160" rx="8" fill="#15171c" stroke="#2a2e38"/>
+      <text x="594" y="50">GradientStopsEditor      (shared × 2 callers)</text>
+      <text x="594" y="70">MappingsPanel  bool + tag palettes</text>
+      <text x="594" y="90">CaNode  ColorScaleEditor</text>
+      <text x="594" y="110">CaNode  CategoricalColorEditor</text>
+      <text x="594" y="130">CaNode  getColorConstant</text>
+      <text x="594" y="150">AttributesPanel  colour attr  #rrggbbaa</text>
+      <text x="594" y="170">SimulatorView  model attr  _a</text>
+    </g>
+  </g>
+</svg>
+</div>
+
+<h3>Before / after at the call sites</h3>
+
+<div class="grid2">
+  <div class="card">
+    <span class="tag before">Before</span>
+    <h3 style="margin-top:12px">Gradient stops (shared widget)</h3>
+    <div class="panel">
+      <div class="bar" style="background:linear-gradient(90deg,#440154,#21918c,#fde725)"></div>
+      <div class="row"><span class="lbl">Position</span><input class="num" value="0.50" readonly></div>
+      <div class="row"><span class="lbl">Color</span><span class="swatch" style="background:#21918c"></span></div>
+    </div>
+    <p style="font-size:12px"><code>GradStop { p, r, g, b }</code></p>
+  </div>
+
+  <div class="card" style="border-color:rgba(232,161,58,.45)">
+    <span class="tag after">After</span>
+    <h3 style="margin-top:12px">Gradient stops (shared widget)</h3>
+    <div class="panel">
+      <div class="bar checker" style="background-image:
+          linear-gradient(90deg,rgba(68,1,84,0),rgba(33,145,140,.65),rgba(253,231,37,1)),
+          var(--checker);
+          background-size:auto,10px 10px;
+          background-position:0 0,0 0,0 5px,5px -5px,-5px 0px"></div>
+      <div class="row"><span class="lbl">Position</span><input class="num" value="0.50" readonly></div>
+      <div class="row"><span class="lbl">Color</span>
+        <span class="swatch checker" style="border-color:var(--accent)"><span style="display:block;width:100%;height:100%;background:rgba(33,145,140,.65);border-radius:3px"></span></span>
+        <span style="font-size:10px;color:var(--faint);font-family:ui-monospace,monospace">#21918ca6 · click → popover</span>
+      </div>
+    </div>
+    <p style="font-size:12px"><code>GradStop { p, r, g, b, a? }</code> — <span class="tag new">a? absent = 255</span></p>
+    <p style="font-size:11.5px;color:var(--faint)">One <code>ColorField</code> — no separate alpha box in the row.</p>
+  </div>
+</div>
+
+<div class="grid2">
+  <div class="card">
+    <span class="tag before">Before</span>
+    <h3 style="margin-top:12px">Categorical palette / tag OM</h3>
+    <div class="panel">
+      <div class="row"><span class="lbl">empty</span><span class="swatch" style="background:#1a1d24"></span></div>
+      <div class="row"><span class="lbl">A</span><span class="swatch" style="background:#4cc9f0"></span></div>
+      <div class="row"><span class="lbl">B</span><span class="swatch" style="background:#e8a13a"></span></div>
+    </div>
+    <p style="font-size:12px"><code>RGB { r, g, b }</code></p>
+  </div>
+
+  <div class="card" style="border-color:rgba(232,161,58,.45)">
+    <span class="tag after">After</span>
+    <h3 style="margin-top:12px">Categorical palette / tag OM</h3>
+    <div class="panel">
+      <div class="row"><span class="lbl">empty</span>
+        <span class="swatch checker" style="border-color:var(--accent)"></span>
+        <span style="font-size:10px;color:var(--faint);font-family:ui-monospace,monospace">#1a1d2400</span>
+        <span style="font-size:10px;color:var(--info)">→ culled in 3D</span></div>
+      <div class="row"><span class="lbl">A</span>
+        <span class="swatch checker"><span style="display:block;width:100%;height:100%;background:#4cc9f0;border-radius:3px"></span></span>
+        <span style="font-size:10px;color:var(--faint);font-family:ui-monospace,monospace">#4cc9f0</span>
+        <span style="font-size:10px;color:var(--faint)">opaque · <code style="font-size:9.5px">a?</code> absent</span></div>
+      <div class="row"><span class="lbl">B</span>
+        <span class="swatch checker" style="border-color:var(--accent)"><span style="display:block;width:100%;height:100%;background:rgba(232,161,58,.5);border-radius:3px"></span></span>
+        <span style="font-size:10px;color:var(--faint);font-family:ui-monospace,monospace">#e8a13a80</span></div>
+    </div>
+    <p style="font-size:12px"><code>RGB { r, g, b, a? }</code></p>
+    <p style="font-size:11.5px;color:var(--faint)">The swatch <em>is</em> the control — alpha is visible, not a number to read.</p>
+  </div>
+</div>
+
+<!-- ============================================================= -->
+<h2>5 · ⚠ The highest-risk subsystem — the <code>_a</code> runtime slot</h2>
+<p>A colour <b>model</b> attribute is split into scalar slots. Adding <code>_a</code> appends a 4th — across
+   <b>six mirror sites that must agree exactly</b>, or the baked offsets desync.</p>
+
+<div class="card">
+<svg viewBox="0 0 980 168" width="100%" role="img" aria-label="The model attribute slot layout before and after adding the alpha slot, across six mirror sites">
+  <g font-family="ui-monospace,monospace" font-size="10.5">
+    <text x="10" y="16" fill="#6b7280" letter-spacing="1">BEFORE — 3 slots per colour attr</text>
+    <rect x="10" y="26" width="86" height="26" rx="4" fill="#1b1e25" stroke="#2a2e38"/><text x="30" y="43" fill="#9aa0ac">tint_r</text>
+    <rect x="100" y="26" width="86" height="26" rx="4" fill="#1b1e25" stroke="#2a2e38"/><text x="120" y="43" fill="#9aa0ac">tint_g</text>
+    <rect x="190" y="26" width="86" height="26" rx="4" fill="#1b1e25" stroke="#2a2e38"/><text x="210" y="43" fill="#9aa0ac">tint_b</text>
+    <rect x="280" y="26" width="104" height="26" rx="4" fill="#15171c" stroke="#4cc9f0"/><text x="296" y="43" fill="#4cc9f0">nextAttr</text>
+
+    <text x="10" y="80" fill="#e8a13a" letter-spacing="1">AFTER — appended 4th slot; every later attr shifts identically in all six sites</text>
+    <rect x="10" y="90" width="86" height="26" rx="4" fill="#1b1e25" stroke="#2a2e38"/><text x="30" y="107" fill="#9aa0ac">tint_r</text>
+    <rect x="100" y="90" width="86" height="26" rx="4" fill="#1b1e25" stroke="#2a2e38"/><text x="120" y="107" fill="#9aa0ac">tint_g</text>
+    <rect x="190" y="90" width="86" height="26" rx="4" fill="#1b1e25" stroke="#2a2e38"/><text x="210" y="107" fill="#9aa0ac">tint_b</text>
+    <rect x="280" y="90" width="86" height="26" rx="4" fill="#2b2417" stroke="#e8a13a"/><text x="300" y="107" fill="#e8a13a">tint_a</text>
+    <rect x="370" y="90" width="104" height="26" rx="4" fill="#15171c" stroke="#4cc9f0"/><text x="386" y="107" fill="#4cc9f0">nextAttr</text>
+    <path d="M332,128 L332,142 L420,142 L420,124" stroke="#4cc9f0" stroke-width="1.2" fill="none" stroke-dasharray="3 3"/>
+    <text x="336" y="158" fill="#4cc9f0" font-size="9.5">shifted — but identically in all six</text>
+
+    <!-- six sites -->
+    <text x="530" y="16" fill="#6b7280" letter-spacing="1">THE SIX MIRROR SITES</text>
+    <g font-size="9.8" fill="#9aa0ac">
+      <rect x="530" y="26" width="440" height="130" rx="6" fill="#15171c" stroke="#f87171" stroke-dasharray="4 3"/>
+      <text x="544" y="45">1  sim.worker.ts:4676        cachedModelAttrs[id+'_r'…]</text>
+      <text x="544" y="63">2  SimulatorView.tsx:537      init message split</text>
+      <text x="544" y="81">3  wasm/layout.ts:343         3 × f64,  off += 8</text>
+      <text x="544" y="99">4  webgpu/layout.ts:257       3 × f32,  cursor += 4</text>
+      <text x="544" y="117">5  agentWasm/compile.ts:4808   agent-loop read</text>
+      <text x="544" y="135">6  agentWebgpu/compile.ts:3584 agent-loop read</text>
+      <text x="544" y="152" fill="#f87171" font-size="9.5">a partial edit does not crash — it renders plausible garbage</text>
+    </g>
+  </g>
+</svg>
+</div>
+
+<div class="callout bad">
+  <p><b>The library cannot test this.</b> <code>colorAttr = 0</code> across all 23 shipped models — <b>no model has a
+     colour attribute at all</b>. The highest-risk subsystem has <b>zero</b> regression coverage from the library.</p>
+  <p>⇒ A synthetic model (<code>scripts/test-rgba-colors.mjs</code>) is <b>mandatory</b>, plus a new
+     <code>scripts/audit-modelattr-layout.mjs</code> asserting all six sites agree — the model-attr split has no
+     equivalent of the agent side's <code>audit-agent-layout.mjs</code>.</p>
+</div>
+
+<!-- ============================================================= -->
+<h2>6 · Compiler lockstep — five surfaces</h2>
+<table>
+  <thead><tr><th>Compiler</th><th>Nodes to widen</th><th>Needs</th></tr></thead>
+  <tbody>
+    <tr><td class="mono">JS <code>compile.ts</code></td><td>colorScale · categoricalColor · getColorConstant · getModelAttribute</td><td><code>_v&lt;id&gt;_a</code> via the existing MULTI_OUTPUT convention — <span class="yes">no varName() case</span></td></tr>
+    <tr><td class="mono">wasm/compile.ts</td><td>all four</td><td><code>setCachedPort(ctx, id, 'a', …)</code></td></tr>
+    <tr><td class="mono">webgpu/compile.ts</td><td>all four</td><td><code>setCachedPort</code>; f32 exact for 0–255</td></tr>
+    <tr><td class="mono">agentWasm/compile.ts</td><td>categoricalColor · getModelAttribute</td><td>the shipped agent-colouring idiom</td></tr>
+    <tr><td class="mono">agentWebgpu/compile.ts</td><td>categoricalColor · getModelAttribute</td><td>ditto</td></tr>
+  </tbody>
+</table>
+<p>Four of the five hand-placed <code>categoricalColor</code> instances in the library are in <b>agent</b> models
+   (Morphogenesis ×2, GoL-on-Agents, Ant Necrophoresis) — the agent compilers are not an afterthought here.</p>
+
+<!-- ============================================================= -->
+<h2>7 · Steps</h2>
+<ol class="steps">
+  <li><b>Schema + hex widening</b><span><code>RGB.a?</code>, <code>ColorStop.a?</code>; parsers accept <code>#rrggbb</code> <em>and</em> <code>#rrggbbaa</code>. No behaviour change.</span></li>
+  <li><b>The <code>_a</code> slot + a new layout audit</b> <span style="color:#f87171">⚠ highest risk — all six mirror sites in one commit, with the synthetic test, because the library cannot cover it.</span></li>
+  <li><b>JS node ports + emit (Option A)</b><span>hiddenPorts gating; compile-identity on the representative 6 stays green.</span></li>
+  <li><b>The four non-JS compilers</b><span>lockstep; cross-target compile via the dev harness; <code>parity-agent-wasm.mjs</code> green.</span></li>
+  <li><b>Linked OM conditional wiring</b><span>cell + agent; 4th edge only when the palette carries non-255 alpha.</span></li>
+  <li><b>UI pickers</b><span><code>GradientStopsEditor</code> first — one shared widget serves two callers.</span></li>
+  <li><b>Docs sweep</b><span>CLAUDE.md (retire the PR7 deferred note) · HelpView · README · NODES_REFERENCE port tables.</span></li>
+</ol>
+
+<!-- ============================================================= -->
+<h2>8 · Verification — the representative 6</h2>
+<p>Chosen on audit evidence to span 2D/3D × grid/agents × every linked-OM palette kind.</p>
+<table>
+  <thead><tr><th>Model</th><th>Covers</th></tr></thead>
+  <tbody>
+    <tr><td>Game Of Life</td><td>2D grid · linked <b>bool</b> OM — the canonical baseline</td></tr>
+    <tr><td>Gray-Scott Reaction-Diffusion</td><td>2D grid · linked <b>float</b> OM → synthesized <code>colorScale</code> · CSE-heavy</td></tr>
+    <tr><td>Kelp War</td><td>2D grid · linked <b>tag</b> OM → synthesized <code>categoricalColor</code></td></tr>
+    <tr><td>Accretor</td><td>3D grid · hand <code>categoricalColor</code> + <b>already uses alpha-0 culling</b> · sparse stepping</td></tr>
+    <tr><td>Morphogenesis - Differential Tissue</td><td>2D <b>agents</b> · agent colour pass</td></tr>
+    <tr><td>Morphogenesis - 3D Tissue</td><td>3D <b>agents</b></td></tr>
+  </tbody>
+</table>
+
+<h3>Paths with zero library coverage → synthetic required</h3>
+<table>
+  <thead><tr><th>Path</th><th>Library usage</th><th>Consequence</th></tr></thead>
+  <tbody>
+    <tr><td>Colour <b>model attribute</b> (the <code>_a</code> slot)</td><td class="no">0 models</td><td>The highest-risk subsystem is untested by the library</td></tr>
+    <tr><td><code>getColorConstant</code></td><td class="no">0 models</td><td>New <code>a</code> config/port untested</td></tr>
+    <tr><td><code>makeColor</code> / <code>breakColor</code></td><td class="no">0 models</td><td>Already alpha-capable; nothing proves it</td></tr>
+    <tr><td><b>Agent</b> linked OM</td><td class="no">0 models</td><td>The agent injection path untested</td></tr>
+  </tbody>
+</table>
+
+<div class="callout">
+  <p><b>Also note:</b> <code>colorScale</code> and <code>categoricalColor</code> appear in <b>zero</b> <code>.gcaproj</code> files
+     as linked-OM nodes — they are <em>synthesized at compile time</em>. The identity sweep does cover them (it hashes
+     emitted output), but any audit that greps the model files will wrongly conclude they're unused.</p>
+</div>
+
+<div class="callout ok">
+  <p><b>Assert values, not "it compiles."</b> <code>#rrggbb80</code> → <code>Get Model Attribute.a</code> == <b>128</b> on
+     JS, WASM <em>and</em> WebGPU; <code>colorScale</code> alpha <b>interpolates</b> (assert a midpoint);
+     <code>categoricalColor</code> falls back to <code>default_a</code>; an all-opaque palette emits
+     <b>byte-identically</b>. Then a runtime pass: a transparent→opaque linked float OM stepped through the
+     <b>real worker</b> on all three targets, asserting the <code>colors</code> alpha bytes agree.</p>
+</div>
+
+</div>
+</body>
+</html>
