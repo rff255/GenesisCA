@@ -293,5 +293,136 @@ section('RUNTIME — Categorical Color alpha selects per entry + falls back to d
   eq(mk(9).bufs?.w_oa[0], 33, 'out-of-range index → default_a 33');
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// CROSS-TARGET — the same model on JS, a REAL instantiated WASM module, and the
+// WGSL emit. Byte-identity proves we broke nothing; only this proves the new
+// alpha code WORKS on the other targets.
+// ═══════════════════════════════════════════════════════════════════════════
+const buildModel = (g, attrs) => M.migrateForHarness({
+  schemaVersion: 2,
+  properties: {
+    name: 'RGBA-xt', description: '', topology: '2d-grid', boundaryTreatment: 'torus',
+    updateMode: 'synchronous', gridWidth: W, gridHeight: H, dimension: '2d', gridDepth: 1,
+    useWasm: true,
+  },
+  attributes: attrs, neighborhoods: [], mappings: [], indicators: [],
+  graphNodes: g.nodes, graphEdges: g.edges, macroDefs: [],
+  topologyMode: { gridCells: true, agents: false },
+});
+
+section('CROSS-TARGET — colour model attribute alpha on JS / WASM / WebGPU');
+{
+  // The `_a` slot end-to-end: #ff000080 -> modelAttrs.tint_a -> Get Model
+  // Attribute .a -> a cell attribute. Run on JS and on a REAL WASM module.
+  const mk = () => {
+    const g = mkGraph();
+    const step = g.n('step');
+    const gm = g.n('getModelAttribute', { attributeId: 'tint', isColorAttr: true });
+    const sa = g.n('setAttribute', { attributeId: 'oa' });
+    g.f(step, 'do', sa, 'do');
+    g.v(gm, 'a', sa, 'value');
+    return g;
+  };
+  const attrs = [
+    cellAttr('oa'),
+    { id: 'tint', name: 'tint', type: 'color', description: '', isModelAttribute: true, defaultValue: '#ff000080' },
+  ];
+  const c = M.hexToRgba('#ff000080');
+  const ma = { tint_r: c.r, tint_g: c.g, tint_b: c.b, tint_a: c.a };
+
+  // JS
+  const jsOut = runJS(mk(), attrs, ma);
+  eq(jsOut.error, undefined, 'JS compiles');
+  eq(jsOut.bufs?.w_oa[0], 128, 'JS: Get Model Attribute .a === 128');
+
+  // WASM — real module, instantiated and stepped.
+  const model = buildModel(mk(), attrs);
+  const layout = M.computeLayoutFromModel(model);
+  eq(layout.modelAttrOffset['tint_a'] !== undefined, true, 'WASM layout reserves the tint_a slot');
+  const wa = M.compileGraphWasm(model.graphNodes, model.graphEdges, model, layout, M.buildViewerIds(model));
+  eq(wa.error, undefined, `WASM compiles${wa.error ? ': ' + wa.error : ''}`);
+  if (!wa.error) {
+    const mem = new WebAssembly.Memory({ initial: layout.pages });
+    const env = { mem, pow: Math.pow, exp: Math.exp, log: Math.log, sin: Math.sin, cos: Math.cos, tan: Math.tan, tanh: Math.tanh, fmod: (a, b) => a % b };
+    const { instance } = await WebAssembly.instantiate(wa.bytes, { env });
+    // Seed the modelAttrs region exactly as the worker's copy loop does
+    // (key-driven over layout.modelAttrOffset).
+    for (const [k, v] of Object.entries(ma)) {
+      new Float64Array(mem.buffer, layout.modelAttrOffset[k], 1)[0] = v;
+    }
+    instance.exports.step(TOTAL);
+    const out = new Float64Array(mem.buffer, layout.attrWriteOffset['oa'], TOTAL);
+    eq([...out].every(v => v === 128), true, `WASM runtime: .a === 128 on every cell (got ${out[0]})`);
+    eq([...out].every(v => v === jsOut.bufs.w_oa[0]), true, 'JS ↔ WASM bit-identical');
+  }
+
+  // WebGPU — emit level (a real device run is verified in-browser).
+  const wg = M.compileGraphWebGPU(model.graphNodes, model.graphEdges, model);
+  eq(wg.error, undefined, `WebGPU compiles${wg.error ? ': ' + wg.error : ''}`);
+  if (!wg.error) {
+    // The `_a` slot's f32 lives at some vec4 component; assert FOUR mac lets are
+    // emitted (r/g/b/a) rather than the pre-alpha three.
+    const macs = (wg.shaderCode.match(/let _mac\d+: i32 = i32\(modelAttrs\[/g) || []).length;
+    eq(macs >= 4, true, `WGSL emits 4 colour-channel reads (got ${macs})`);
+  }
+}
+
+section('CROSS-TARGET — Colour Scale alpha interpolation on JS / WASM');
+{
+  const mk = () => {
+    const g = mkGraph();
+    const step = g.n('step');
+    const cs = g.n('colorScale', {
+      method: 'linear', stopCount: 2,
+      stop_0_position: '0', stop_0_r: '0', stop_0_g: '0', stop_0_b: '0', stop_0_a: '0',
+      stop_1_position: '1', stop_1_r: '255', stop_1_g: '255', stop_1_b: '255', stop_1_a: '200',
+      _port_t: '0.5',
+    });
+    const sa = g.n('setAttribute', { attributeId: 'oa' });
+    g.f(step, 'do', sa, 'do');
+    g.v(cs, 'a', sa, 'value');
+    return g;
+  };
+  const attrs = [cellAttr('oa')];
+  const jsOut = runJS(mk(), attrs, {});
+  eq(jsOut.bufs?.w_oa[0], 100, 'JS: alpha at t=0.5 === 100');
+
+  const model = buildModel(mk(), attrs);
+  const layout = M.computeLayoutFromModel(model);
+  const wa = M.compileGraphWasm(model.graphNodes, model.graphEdges, model, layout, M.buildViewerIds(model));
+  eq(wa.error, undefined, `WASM compiles${wa.error ? ': ' + wa.error : ''}`);
+  if (!wa.error) {
+    const mem = new WebAssembly.Memory({ initial: layout.pages });
+    const env = { mem, pow: Math.pow, exp: Math.exp, log: Math.log, sin: Math.sin, cos: Math.cos, tan: Math.tan, tanh: Math.tanh, fmod: (a, b) => a % b };
+    const { instance } = await WebAssembly.instantiate(wa.bytes, { env });
+    instance.exports.step(TOTAL);
+    const out = new Float64Array(mem.buffer, layout.attrWriteOffset['oa'], TOTAL);
+    eq(out[0], 100, `WASM runtime: alpha at t=0.5 === 100 (got ${out[0]})`);
+  }
+  const wg = M.compileGraphWebGPU(model.graphNodes, model.graphEdges, model);
+  eq(wg.error, undefined, `WebGPU compiles${wg.error ? ': ' + wg.error : ''}`);
+  if (!wg.error) eq(/var _csa\d+: i32;/.test(wg.shaderCode), true, 'WGSL declares the alpha channel var');
+}
+
+section('CROSS-TARGET — an OPAQUE Colour Scale emits no alpha on WASM/WGSL');
+{
+  // The Option-A guarantee at the other targets: no stray local / var / name.
+  const g = mkGraph();
+  const step = g.n('step');
+  const cs = g.n('colorScale', {
+    method: 'linear', stopCount: 2,
+    stop_0_position: '0', stop_0_r: '0', stop_0_g: '0', stop_0_b: '0',
+    stop_1_position: '1', stop_1_r: '255', stop_1_g: '255', stop_1_b: '255',
+    _port_t: '0.5',
+  });
+  const sa = g.n('setAttribute', { attributeId: 'oa' });
+  g.f(step, 'do', sa, 'do');
+  g.v(cs, 'r', sa, 'value');
+  const model = buildModel(g, [cellAttr('oa')]);
+  const wg = M.compileGraphWebGPU(model.graphNodes, model.graphEdges, model);
+  eq(wg.error, undefined, 'opaque model compiles on WebGPU');
+  if (!wg.error) eq(/_csa\d+/.test(wg.shaderCode), false, 'WGSL contains NO alpha var for an opaque scale');
+}
+
 console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

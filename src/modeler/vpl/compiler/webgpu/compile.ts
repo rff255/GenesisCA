@@ -25,8 +25,9 @@ import {
   emitBindings, emitEntryPoint, emitPerCellCopyPreamble, sanitiseWgslName,
 } from './encoder';
 import { getNodeDef } from '../../nodes/registry';
-import { readColorScaleStops } from '../../nodes/ColorScaleNode';
-import { readCategoricalEntries, readCategoricalDefault } from '../../nodes/CategoricalColorNode';
+import { readColorScaleStops, colorScaleHasAlpha, type ColorScaleStop } from '../../nodes/ColorScaleNode';
+import { readCategoricalEntries, readCategoricalDefault, categoricalHasAlpha, type CategoricalEntry } from '../../nodes/CategoricalColorNode';
+import { colorConstantHasAlpha } from '../../nodes/GetColorConstantNode';
 import { CURRENT_VIEWER_SENTINEL } from '../../nodes/SetCellLooksNode';
 import { parseHandleId } from '../../types';
 import {
@@ -1484,10 +1485,10 @@ const VALUE_NODE_EMITTERS: Record<string, NodeValueEmitter> = {
     const attrId = node.data.config.attributeId as string;
     const isColor = !!node.data.config.isColorAttr;
     if (isColor) {
-      const offR = ctx.layout.modelAttrOffset[attrId + '_r'];
-      const offG = ctx.layout.modelAttrOffset[attrId + '_g'];
-      const offB = ctx.layout.modelAttrOffset[attrId + '_b'];
-      if (offR === undefined || offG === undefined || offB === undefined) {
+      // A colour model attr ALWAYS occupies four slots (`modelAttrSlotKeys`), so
+      // alpha is not gated here the way the palette nodes' is.
+      const offs = ['r', 'g', 'b', 'a'].map(ch => ctx.layout.modelAttrOffset[attrId + '_' + ch]);
+      if (offs.some(o => o === undefined)) {
         ctx.errors.push(`getModelAttribute color: unknown ${attrId}`); return null;
       }
       const fetch = (off: number): ValueRef => {
@@ -1495,13 +1496,9 @@ const VALUE_NODE_EMITTERS: Record<string, NodeValueEmitter> = {
         const compName = ['x', 'y', 'z', 'w'][(off % 16) / 4]!;
         return emitLet(ctx, 'i32', `i32(modelAttrs[${vecIdx}u].${compName})`, 'mac');
       };
-      const rRef = fetch(offR);
-      const gRef = fetch(offG);
-      const bRef = fetch(offB);
-      setCachedPort(ctx, node.id, 'r', rRef);
-      setCachedPort(ctx, node.id, 'g', gRef);
-      setCachedPort(ctx, node.id, 'b', bRef);
-      return rRef;
+      const refs = offs.map(o => fetch(o!));
+      ['r', 'g', 'b', 'a'].forEach((p, i) => setCachedPort(ctx, node.id, p, refs[i]!));
+      return refs[0]!;
     }
     const ref = readModelAttr(ctx.layout, attrId);
     if (!ref) { ctx.errors.push(`getModelAttribute: unknown ${attrId}`); return null; }
@@ -1903,6 +1900,12 @@ const VALUE_NODE_EMITTERS: Record<string, NodeValueEmitter> = {
     setCachedPort(ctx, node.id, 'r', rRef);
     setCachedPort(ctx, node.id, 'g', gRef);
     setCachedPort(ctx, node.id, 'b', bRef);
+    // `a` emitted LAST and only when declared — an extra `let` (and the `fresh`
+    // name it consumes) would change the shader of every existing model.
+    if (colorConstantHasAlpha(node.data.config)) {
+      const a = parseInt(String(node.data.config.a ?? '255'), 10) || 0;
+      setCachedPort(ctx, node.id, 'a', emitLet(ctx, 'i32', `${a | 0}`, 'ca'));
+    }
     return rRef;
   },
 
@@ -1917,51 +1920,52 @@ const VALUE_NODE_EMITTERS: Record<string, NodeValueEmitter> = {
     // below assigns into. routeEmissionForNode captures every push, so all of
     // these lines land in a single block — assignments inside the branches
     // can see the vars declared above.
+    const withA = colorScaleHasAlpha(node.data.config);
+
     const tName = fresh(ctx, 'cst');
     ctx.lines.push(`  let ${tName}: f32 = ${t};`);
-    const rName = fresh(ctx, 'csr');
-    const gName = fresh(ctx, 'csg');
-    const bName = fresh(ctx, 'csb');
-    ctx.lines.push(`  var ${rName}: i32;`);
-    ctx.lines.push(`  var ${gName}: i32;`);
-    ctx.lines.push(`  var ${bName}: i32;`);
+    // Channel table — `a` minted LAST and only when declared, so the opaque path
+    // consumes the same `fresh` names and emits the same lines as before.
+    const chans: Array<{ name: string; get: (s: ColorScaleStop) => number }> = [
+      { name: fresh(ctx, 'csr'), get: s => s.r },
+      { name: fresh(ctx, 'csg'), get: s => s.g },
+      { name: fresh(ctx, 'csb'), get: s => s.b },
+    ];
+    if (withA) chans.push({ name: fresh(ctx, 'csa'), get: s => s.a ?? 255 });
+    for (const c of chans) ctx.lines.push(`  var ${c.name}: i32;`);
 
-    const writeConst = (r: number, g: number, b: number) =>
-      `${rName} = ${r | 0}; ${gName} = ${g | 0}; ${bName} = ${b | 0};`;
+    const writeConst = (s: ColorScaleStop) =>
+      chans.map(c => `${c.name} = ${c.get(s) | 0};`).join(' ');
 
+    const ZERO: ColorScaleStop = { p: 0, r: 0, g: 0, b: 0, a: 0 };
     if (stops.length === 0) {
-      ctx.lines.push(`  ${writeConst(0, 0, 0)}`);
+      ctx.lines.push(`  ${writeConst(ZERO)}`);
     } else if (stops.length === 1) {
-      const s = stops[0]!;
-      ctx.lines.push(`  ${writeConst(s.r, s.g, s.b)}`);
+      ctx.lines.push(`  ${writeConst(stops[0]!)}`);
     } else {
       const first = stops[0]!;
       const last = stops[stops.length - 1]!;
-      ctx.lines.push(`  if (${tName} <= ${f32Lit(first.p)}) { ${writeConst(first.r, first.g, first.b)} }`);
+      ctx.lines.push(`  if (${tName} <= ${f32Lit(first.p)}) { ${writeConst(first)} }`);
       for (let i = 0; i < stops.length - 1; i++) {
         const a = stops[i]!;
         const b = stops[i + 1]!;
         if (b.p === a.p) continue;
         const localExpr = `((${tName} - ${f32Lit(a.p)}) / ${f32Lit(b.p - a.p)})`;
         const curved = wgslInterpolationCurveExpr(localExpr, method);
-        const rExpr = `i32(floor(${f32Lit(a.r)} + (${curved}) * ${f32Lit(b.r - a.r)} + 0.5))`;
-        const gExpr = `i32(floor(${f32Lit(a.g)} + (${curved}) * ${f32Lit(b.g - a.g)} + 0.5))`;
-        const bExpr = `i32(floor(${f32Lit(a.b)} + (${curved}) * ${f32Lit(b.b - a.b)} + 0.5))`;
-        ctx.lines.push(
-          `  else if (${tName} < ${f32Lit(b.p)}) { `
-          + `${rName} = ${rExpr}; ${gName} = ${gExpr}; ${bName} = ${bExpr}; }`,
-        );
+        // Alpha interpolates on the SAME curve as the colour channels — matching JS/WASM.
+        const body = chans
+          .map(c => `${c.name} = i32(floor(${f32Lit(c.get(a))} + (${curved}) * ${f32Lit(c.get(b) - c.get(a))} + 0.5)); `)
+          .join('');
+        ctx.lines.push(`  else if (${tName} < ${f32Lit(b.p)}) { ${body}}`);
       }
-      ctx.lines.push(`  else { ${writeConst(last.r, last.g, last.b)} }`);
+      ctx.lines.push(`  else { ${writeConst(last)} }`);
     }
 
-    const rRef: ValueRef = { expr: rName, type: 'i32' };
-    const gRef: ValueRef = { expr: gName, type: 'i32' };
-    const bRef: ValueRef = { expr: bName, type: 'i32' };
-    setCachedPort(ctx, node.id, 'r', rRef);
-    setCachedPort(ctx, node.id, 'g', gRef);
-    setCachedPort(ctx, node.id, 'b', bRef);
-    return rRef;
+    const refs: ValueRef[] = chans.map(c => ({ expr: c.name, type: 'i32' }));
+    (withA ? ['r', 'g', 'b', 'a'] : ['r', 'g', 'b']).forEach((p, i) => {
+      setCachedPort(ctx, node.id, p, refs[i]!);
+    });
+    return refs[0]!;
   },
 
   // -- categoricalColor: integer index → flat RGB from an N-entry palette
@@ -1971,35 +1975,37 @@ const VALUE_NODE_EMITTERS: Record<string, NodeValueEmitter> = {
     const entries = readCategoricalEntries(node.data.config);
     const d = readCategoricalDefault(node.data.config);
 
-    const rName = fresh(ctx, 'ccr');
-    const gName = fresh(ctx, 'ccg');
-    const bName = fresh(ctx, 'ccb');
-    ctx.lines.push(`  var ${rName}: i32;`);
-    ctx.lines.push(`  var ${gName}: i32;`);
-    ctx.lines.push(`  var ${bName}: i32;`);
+    const withA = categoricalHasAlpha(node.data.config);
 
-    const writeConst = (r: number, g: number, b: number) =>
-      `${rName} = ${r | 0}; ${gName} = ${g | 0}; ${bName} = ${b | 0};`;
+    // `a` minted LAST and only when declared — see the colorScale twin.
+    const chans: Array<{ name: string; get: (e: CategoricalEntry) => number }> = [
+      { name: fresh(ctx, 'ccr'), get: e => e.r },
+      { name: fresh(ctx, 'ccg'), get: e => e.g },
+      { name: fresh(ctx, 'ccb'), get: e => e.b },
+    ];
+    if (withA) chans.push({ name: fresh(ctx, 'cca'), get: e => e.a ?? 255 });
+    for (const c of chans) ctx.lines.push(`  var ${c.name}: i32;`);
+
+    const writeConst = (e: CategoricalEntry) =>
+      chans.map(c => `${c.name} = ${c.get(e) | 0};`).join(' ');
 
     if (entries.length === 0) {
-      ctx.lines.push(`  ${writeConst(d.r, d.g, d.b)}`);
+      ctx.lines.push(`  ${writeConst(d)}`);
     } else {
       const kName = fresh(ctx, 'cck');
       ctx.lines.push(`  let ${kName}: i32 = ${idx};`);
       entries.forEach((e, i) => {
         const head = i === 0 ? `if (${kName} == ${i})` : `else if (${kName} == ${i})`;
-        ctx.lines.push(`  ${head} { ${writeConst(e.r, e.g, e.b)} }`);
+        ctx.lines.push(`  ${head} { ${writeConst(e)} }`);
       });
-      ctx.lines.push(`  else { ${writeConst(d.r, d.g, d.b)} }`);
+      ctx.lines.push(`  else { ${writeConst(d)} }`);
     }
 
-    const rRef: ValueRef = { expr: rName, type: 'i32' };
-    const gRef: ValueRef = { expr: gName, type: 'i32' };
-    const bRef: ValueRef = { expr: bName, type: 'i32' };
-    setCachedPort(ctx, node.id, 'r', rRef);
-    setCachedPort(ctx, node.id, 'g', gRef);
-    setCachedPort(ctx, node.id, 'b', bRef);
-    return rRef;
+    const refs: ValueRef[] = chans.map(c => ({ expr: c.name, type: 'i32' }));
+    (withA ? ['r', 'g', 'b', 'a'] : ['r', 'g', 'b']).forEach((p, i) => {
+      setCachedPort(ctx, node.id, p, refs[i]!);
+    });
+    return refs[0]!;
   },
 
   // -- Variegated Cells: Get Orientation ----------------------------------

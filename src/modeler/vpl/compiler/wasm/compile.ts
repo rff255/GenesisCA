@@ -21,8 +21,9 @@
 
 import type { Attribute, CAModel, GraphNode, GraphEdge } from '../../../../model/types';
 import { getNodeDef } from '../../nodes/registry';
-import { readColorScaleStops } from '../../nodes/ColorScaleNode';
-import { readCategoricalEntries, readCategoricalDefault } from '../../nodes/CategoricalColorNode';
+import { readColorScaleStops, colorScaleHasAlpha, type ColorScaleStop } from '../../nodes/ColorScaleNode';
+import { readCategoricalEntries, readCategoricalDefault, categoricalHasAlpha, type CategoricalEntry } from '../../nodes/CategoricalColorNode';
+import { colorConstantHasAlpha } from '../../nodes/GetColorConstantNode';
 import { CURRENT_VIEWER_SENTINEL } from '../../nodes/SetCellLooksNode';
 import {
   ValType, F64, I32, OP_F64_ABS, OP_F64_ADD, OP_F64_CONVERT_I32_S, OP_F64_CONVERT_I32_U, OP_F64_DIV,
@@ -1193,28 +1194,24 @@ const VALUE_NODE_EMITTERS: Record<string, NodeValueEmitter> = {
     const attrId = node.data.config.attributeId as string;
     const isColor = !!node.data.config.isColorAttr;
     if (isColor) {
-      // Three-way emit: load r, g, b from modelAttrOffset[id+'_r'/'_g'/'_b']
-      const offR = ctx.layout.modelAttrOffset[attrId + '_r'];
-      const offG = ctx.layout.modelAttrOffset[attrId + '_g'];
-      const offB = ctx.layout.modelAttrOffset[attrId + '_b'];
-      if (offR === undefined || offG === undefined || offB === undefined) {
+      // Four-way emit: load r, g, b, a from modelAttrOffset[id+'_r'/'_g'/'_b'/'_a'].
+      // A colour model attr ALWAYS occupies four slots (`modelAttrSlotKeys`), so
+      // alpha is not gated here the way the palette nodes' is.
+      const offs = ['r', 'g', 'b', 'a'].map(ch => ctx.layout.modelAttrOffset[attrId + '_' + ch]);
+      if (offs.some(o => o === undefined)) {
         ctx.errors.push(`getModelAttribute color: unknown ${attrId}`); return null;
       }
-      // Emit three i32 locals — model attrs are stored as f64 so we truncate.
+      // Emit four i32 locals — model attrs are stored as f64 so we truncate.
       const emitCh = (off: number) => {
         ctx.emitter.i32Const(0);
         ctx.emitter.f64Load(off, 3);
         ctx.emitter.f64ToI32();
         return storeResult(ctx.emitter, I32);
       };
-      const rRef = emitCh(offR);
-      const gRef = emitCh(offG);
-      const bRef = emitCh(offB);
-      setCachedPort(ctx, node.id, 'r', rRef);
-      setCachedPort(ctx, node.id, 'g', gRef);
-      setCachedPort(ctx, node.id, 'b', bRef);
+      const refs = offs.map(o => emitCh(o!));
+      ['r', 'g', 'b', 'a'].forEach((p, i) => setCachedPort(ctx, node.id, p, refs[i]!));
       // Default 'value' port also resolves to r (matches JS where it's just multi-output).
-      return rRef;
+      return refs[0]!;
     }
     const slotOff = ctx.layout.modelAttrOffset[attrId];
     if (slotOff === undefined) { ctx.errors.push(`getModelAttribute: unknown ${attrId}`); return null; }
@@ -2386,7 +2383,10 @@ const VALUE_NODE_EMITTERS: Record<string, NodeValueEmitter> = {
     return storeResult(ctx.emitter, F64);
   },
 
-  // -- getColorConstant: three i32 channels from config (r, g, b) --
+  // -- getColorConstant: i32 channels from config (r, g, b [, a]).
+  //    `a` is emitted ONLY when the config declares a non-opaque alpha
+  //    (colorConstantHasAlpha) — an extra local would change the module bytes of
+  //    every existing model, so the opaque path must allocate exactly three. --
   getColorConstant: ({ node, ctx }) => {
     const r = parseInt(String(node.data.config.r ?? '0'), 10) || 0;
     const g = parseInt(String(node.data.config.g ?? '0'), 10) || 0;
@@ -2401,6 +2401,10 @@ const VALUE_NODE_EMITTERS: Record<string, NodeValueEmitter> = {
     setCachedPort(ctx, node.id, 'r', rRef);
     setCachedPort(ctx, node.id, 'g', gRef);
     setCachedPort(ctx, node.id, 'b', bRef);
+    if (colorConstantHasAlpha(node.data.config)) {
+      setCachedPort(ctx, node.id, 'a',
+        alloc(parseInt(String(node.data.config.a ?? '255'), 10) || 0));
+    }
     return rRef;
   },
 
@@ -2413,22 +2417,27 @@ const VALUE_NODE_EMITTERS: Record<string, NodeValueEmitter> = {
     const method = (node.data.config.method as string) || 'linear';
     const stops = readColorScaleStops(node.data.config);
 
+    const withA = colorScaleHasAlpha(node.data.config);
+
     const em = ctx.emitter;
     const tLoc = em.allocLocal(F64);
-    const rLoc = em.allocLocal(I32);
-    const gLoc = em.allocLocal(I32);
-    const bLoc = em.allocLocal(I32);
+    // Channel table — r/g/b always, `a` allocated LAST and only when declared, so
+    // the opaque path allocates exactly [tLoc, rLoc, gLoc, bLoc] as before. A
+    // stray local would change the module bytes of every existing model.
+    const chans: Array<{ loc: number; get: (s: ColorScaleStop) => number }> = [
+      { loc: em.allocLocal(I32), get: s => s.r },
+      { loc: em.allocLocal(I32), get: s => s.g },
+      { loc: em.allocLocal(I32), get: s => s.b },
+    ];
+    if (withA) chans.push({ loc: em.allocLocal(I32), get: s => s.a ?? 255 });
 
     pushValueAs(em, t, F64);
     em.localSet(tLoc);
 
-    const writeConst = (r: number, g: number, b: number) => {
-      em.i32Const(r | 0); em.localSet(rLoc);
-      em.i32Const(g | 0); em.localSet(gLoc);
-      em.i32Const(b | 0); em.localSet(bLoc);
+    const writeConst = (s: ColorScaleStop) => {
+      for (const c of chans) { em.i32Const(c.get(s) | 0); em.localSet(c.loc); }
     };
-    const writeSegment = (a: { p: number; r: number; g: number; b: number },
-                          b: { p: number; r: number; g: number; b: number }) => {
+    const writeSegment = (a: ColorScaleStop, b: ColorScaleStop) => {
       const localTLoc = em.allocLocal(F64);
       em.localGet(tLoc);
       em.f64Const(a.p);
@@ -2449,27 +2458,27 @@ const VALUE_NODE_EMITTERS: Record<string, NodeValueEmitter> = {
         em.f64ToI32();
         em.localSet(dst);
       };
-      chan(a.r, b.r, rLoc);
-      chan(a.g, b.g, gLoc);
-      chan(a.b, b.b, bLoc);
+      // Alpha interpolates on the SAME curve as the colour channels — matching JS.
+      for (const c of chans) chan(c.get(a), c.get(b), c.loc);
     };
 
+    const ZERO: ColorScaleStop = { p: 0, r: 0, g: 0, b: 0, a: 0 };
     if (stops.length === 0) {
-      writeConst(0, 0, 0);
+      // No stops ⇒ no alpha can be declared ⇒ withA is false ⇒ three channels.
+      writeConst(ZERO);
     } else if (stops.length === 1) {
-      writeConst(stops[0]!.r, stops[0]!.g, stops[0]!.b);
+      writeConst(stops[0]!);
     } else {
       const first = stops[0]!;
       em.localGet(tLoc);
       em.f64Const(first.p);
       em.op(OP_F64_LE);
       em.ifThenElse(
-        () => writeConst(first.r, first.g, first.b),
+        () => writeConst(first),
         () => {
           const buildChain = (i: number) => {
             if (i >= stops.length - 1) {
-              const last = stops[stops.length - 1]!;
-              writeConst(last.r, last.g, last.b);
+              writeConst(stops[stops.length - 1]!);
               return;
             }
             const a = stops[i]!;
@@ -2488,13 +2497,11 @@ const VALUE_NODE_EMITTERS: Record<string, NodeValueEmitter> = {
       );
     }
 
-    const rRef: LocalRef = { localIdx: rLoc, valtype: I32 };
-    const gRef: LocalRef = { localIdx: gLoc, valtype: I32 };
-    const bRef: LocalRef = { localIdx: bLoc, valtype: I32 };
-    setCachedPort(ctx, node.id, 'r', rRef);
-    setCachedPort(ctx, node.id, 'g', gRef);
-    setCachedPort(ctx, node.id, 'b', bRef);
-    return rRef;
+    const refs = chans.map(c => ({ localIdx: c.loc, valtype: I32 } as LocalRef));
+    (withA ? ['r', 'g', 'b', 'a'] : ['r', 'g', 'b']).forEach((p, i) => {
+      setCachedPort(ctx, node.id, p, refs[i]!);
+    });
+    return refs[0]!;
   },
 
   // -- categoricalColor: maps an integer index to a flat RGB color from an
@@ -2504,44 +2511,46 @@ const VALUE_NODE_EMITTERS: Record<string, NodeValueEmitter> = {
     const entries = readCategoricalEntries(node.data.config);
     const d = readCategoricalDefault(node.data.config);
 
-    const em = ctx.emitter;
-    const rLoc = em.allocLocal(I32);
-    const gLoc = em.allocLocal(I32);
-    const bLoc = em.allocLocal(I32);
+    const withA = categoricalHasAlpha(node.data.config);
 
-    const writeConst = (r: number, g: number, b: number) => {
-      em.i32Const(r | 0); em.localSet(rLoc);
-      em.i32Const(g | 0); em.localSet(gLoc);
-      em.i32Const(b | 0); em.localSet(bLoc);
+    const em = ctx.emitter;
+    // `a` allocated LAST and only when declared — see the colorScale twin.
+    const chans: Array<{ loc: number; get: (e: CategoricalEntry) => number }> = [
+      { loc: em.allocLocal(I32), get: e => e.r },
+      { loc: em.allocLocal(I32), get: e => e.g },
+      { loc: em.allocLocal(I32), get: e => e.b },
+    ];
+    if (withA) chans.push({ loc: em.allocLocal(I32), get: e => e.a ?? 255 });
+
+    const writeConst = (e: CategoricalEntry) => {
+      for (const c of chans) { em.i32Const(c.get(e) | 0); em.localSet(c.loc); }
     };
 
     if (entries.length === 0) {
-      writeConst(d.r, d.g, d.b);
+      writeConst(d);
     } else {
       const kLoc = em.allocLocal(I32);
       pushValueAs(em, idx, I32);
       em.localSet(kLoc);
       const buildChain = (i: number) => {
-        if (i >= entries.length) { writeConst(d.r, d.g, d.b); return; }
+        if (i >= entries.length) { writeConst(d); return; }
         const e = entries[i]!;
         em.localGet(kLoc);
         em.i32Const(i);
         em.op(OP_I32_EQ);
         em.ifThenElse(
-          () => writeConst(e.r, e.g, e.b),
+          () => writeConst(e),
           () => buildChain(i + 1),
         );
       };
       buildChain(0);
     }
 
-    const rRef: LocalRef = { localIdx: rLoc, valtype: I32 };
-    const gRef: LocalRef = { localIdx: gLoc, valtype: I32 };
-    const bRef: LocalRef = { localIdx: bLoc, valtype: I32 };
-    setCachedPort(ctx, node.id, 'r', rRef);
-    setCachedPort(ctx, node.id, 'g', gRef);
-    setCachedPort(ctx, node.id, 'b', bRef);
-    return rRef;
+    const refs = chans.map(c => ({ localIdx: c.loc, valtype: I32 } as LocalRef));
+    (withA ? ['r', 'g', 'b', 'a'] : ['r', 'g', 'b']).forEach((p, i) => {
+      setCachedPort(ctx, node.id, p, refs[i]!);
+    });
+    return refs[0]!;
   },
 
   // -- groupStatement: tests an assertion across an array. --

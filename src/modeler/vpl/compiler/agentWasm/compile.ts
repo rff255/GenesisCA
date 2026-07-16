@@ -112,8 +112,9 @@ import { lowerVectorAttrs, expandVectorAttributes } from '../vectorAttr';
 import { lowerFacingSource } from '../facingSource';
 import { canonicalizeAccessorEdges } from '../accessorCSE';
 import { resolveKeyLabels, resolveAxes, isMultiAxisTable } from '../variegation';
-import { readColorScaleStops, type ColorScaleStop } from '../../nodes/ColorScaleNode';
-import { readCategoricalEntries, readCategoricalDefault } from '../../nodes/CategoricalColorNode';
+import { colorScaleHasAlpha, readColorScaleStops, type ColorScaleStop } from '../../nodes/ColorScaleNode';
+import { categoricalHasAlpha, readCategoricalEntries, readCategoricalDefault, type CategoricalEntry } from '../../nodes/CategoricalColorNode';
+import { colorConstantHasAlpha } from '../../nodes/GetColorConstantNode';
 import { viewCosHalf } from '../../nodes/GetAgentsInViewNode';
 import { cellFieldAttrsOf } from '../../../../model/attributeScope';
 import {
@@ -1272,9 +1273,13 @@ function emitGetModelAttribute(ctx: AgentWasmCtx, node: GraphNode, portId: strin
     const l = em.allocLocal(F64); em.localSet(l); return { localIdx: l, valtype: F64 };
   };
   if (cfg['isColorAttr']) {
-    const r = readKey(attr + '_r'), g = readKey(attr + '_g'), b = readKey(attr + '_b');
-    setCachedPort(ctx, node.id, 'r', r); setCachedPort(ctx, node.id, 'g', g); setCachedPort(ctx, node.id, 'b', b);
-    return portId === 'g' ? g : portId === 'b' ? b : r;
+    // A colour model attr ALWAYS occupies four slots (`modelAttrSlotKeys`), so
+    // alpha is not gated here the way the palette nodes' is.
+    const ports = ['r', 'g', 'b', 'a'];
+    const refs = ports.map(ch => readKey(attr + '_' + ch));
+    ports.forEach((p, i) => setCachedPort(ctx, node.id, p, refs[i]!));
+    const pi = ports.indexOf(portId);
+    return refs[pi >= 0 ? pi : 0]!;
   }
   return readKey(attr);
 }
@@ -1399,12 +1404,21 @@ function emitColorScale(ctx: AgentWasmCtx, node: GraphNode, portId: string): Val
   const cfg = node.data.config as Record<string, string | number | boolean>;
   const method = (cfg['method'] as string) || 'linear';
   const stops = readColorScaleStops(cfg);
-  const rLoc = em.allocLocal(I32), gLoc = em.allocLocal(I32), bLoc = em.allocLocal(I32);
-  const writeConst = (r: number, g: number, b: number) => {
-    em.i32Const(r | 0); em.localSet(rLoc); em.i32Const(g | 0); em.localSet(gLoc); em.i32Const(b | 0); em.localSet(bLoc);
+  // Channel table — `a` allocated LAST and only when declared, so the opaque path
+  // allocates exactly [rLoc, gLoc, bLoc] and the module bytes are unchanged.
+  const withA = colorScaleHasAlpha(cfg);
+  const chans: Array<{ loc: number; get: (s: ColorScaleStop) => number }> = [
+    { loc: em.allocLocal(I32), get: s => s.r },
+    { loc: em.allocLocal(I32), get: s => s.g },
+    { loc: em.allocLocal(I32), get: s => s.b },
+  ];
+  if (withA) chans.push({ loc: em.allocLocal(I32), get: s => s.a ?? 255 });
+  const writeConst = (s: ColorScaleStop) => {
+    for (const c of chans) { em.i32Const(c.get(s) | 0); em.localSet(c.loc); }
   };
-  if (stops.length === 0) writeConst(0, 0, 0);
-  else if (stops.length === 1) writeConst(stops[0]!.r, stops[0]!.g, stops[0]!.b);
+  const ZERO: ColorScaleStop = { p: 0, r: 0, g: 0, b: 0, a: 0 };
+  if (stops.length === 0) writeConst(ZERO);
+  else if (stops.length === 1) writeConst(stops[0]!);
   else {
     const tLoc = em.allocLocal(F64); pushValueInputF64(ctx, node, 't', 0.5); em.localSet(tLoc);
     const writeSeg = (a: ColorScaleStop, b: ColorScaleStop) => {
@@ -1415,15 +1429,16 @@ function emitColorScale(ctx: AgentWasmCtx, node: GraphNode, portId: string): Val
         em.f64Const(ac); em.localGet(cv); em.f64Const(bc - ac); em.op(OP_F64_MUL); em.op(OP_F64_ADD);
         em.f64Const(0.5); em.op(OP_F64_ADD); em.op(OP_F64_FLOOR); em.f64ToI32(); em.localSet(dst);
       };
-      chan(a.r, b.r, rLoc); chan(a.g, b.g, gLoc); chan(a.b, b.b, bLoc);
+      // Alpha interpolates on the SAME curve as the colour channels — matching JS.
+      for (const c of chans) chan(c.get(a), c.get(b), c.loc);
     };
     const first = stops[0]!;
     em.localGet(tLoc); em.f64Const(first.p); em.op(OP_F64_LE);
     em.ifThenElse(
-      () => writeConst(first.r, first.g, first.b),
+      () => writeConst(first),
       () => {
         const buildChain = (i: number) => {
-          if (i >= stops.length - 1) { const last = stops[stops.length - 1]!; writeConst(last.r, last.g, last.b); return; }
+          if (i >= stops.length - 1) { writeConst(stops[stops.length - 1]!); return; }
           const a = stops[i]!, b = stops[i + 1]!;
           if (b.p === a.p) { buildChain(i + 1); return; }
           em.localGet(tLoc); em.f64Const(b.p); em.op(OP_F64_LT);
@@ -1433,9 +1448,11 @@ function emitColorScale(ctx: AgentWasmCtx, node: GraphNode, portId: string): Val
       },
     );
   }
-  const rRef: LocalRef = { localIdx: rLoc, valtype: I32 }, gRef: LocalRef = { localIdx: gLoc, valtype: I32 }, bRef: LocalRef = { localIdx: bLoc, valtype: I32 };
-  setCachedPort(ctx, node.id, 'r', rRef); setCachedPort(ctx, node.id, 'g', gRef); setCachedPort(ctx, node.id, 'b', bRef);
-  return portId === 'g' ? gRef : portId === 'b' ? bRef : rRef;
+  const refs = chans.map(c => ({ localIdx: c.loc, valtype: I32 } as LocalRef));
+  const ports = withA ? ['r', 'g', 'b', 'a'] : ['r', 'g', 'b'];
+    ports.forEach((p, i) => setCachedPort(ctx, node.id, p, refs[i]!));
+  const pi = ports.indexOf(portId);
+  return refs[pi >= 0 ? pi : 0]!;
 }
 
 /** Categorical Color — multi-output R/G/B (N-way integer-compare select). */
@@ -1444,22 +1461,31 @@ function emitCategoricalColor(ctx: AgentWasmCtx, node: GraphNode, portId: string
   const cfg = node.data.config as Record<string, string | number | boolean>;
   const entries = readCategoricalEntries(cfg);
   const d = readCategoricalDefault(cfg);
-  const rLoc = em.allocLocal(I32), gLoc = em.allocLocal(I32), bLoc = em.allocLocal(I32);
-  const writeConst = (r: number, g: number, b: number) => { em.i32Const(r | 0); em.localSet(rLoc); em.i32Const(g | 0); em.localSet(gLoc); em.i32Const(b | 0); em.localSet(bLoc); };
-  if (entries.length === 0) writeConst(d.r, d.g, d.b);
+  // `a` allocated LAST and only when declared — see the colorScale twin.
+  const withA = categoricalHasAlpha(cfg);
+  const chans: Array<{ loc: number; get: (e: CategoricalEntry) => number }> = [
+    { loc: em.allocLocal(I32), get: e => e.r },
+    { loc: em.allocLocal(I32), get: e => e.g },
+    { loc: em.allocLocal(I32), get: e => e.b },
+  ];
+  if (withA) chans.push({ loc: em.allocLocal(I32), get: e => e.a ?? 255 });
+  const writeConst = (e: CategoricalEntry) => { for (const c of chans) { em.i32Const(c.get(e) | 0); em.localSet(c.loc); } };
+  if (entries.length === 0) writeConst(d);
   else {
     const kLoc = em.allocLocal(I32); pushValueAs(em, resolveValueInput(ctx, node, 'index', 0), I32); em.localSet(kLoc);
     const buildChain = (i: number) => {
-      if (i >= entries.length) { writeConst(d.r, d.g, d.b); return; }
+      if (i >= entries.length) { writeConst(d); return; }
       const e = entries[i]!;
       em.localGet(kLoc); em.i32Const(i); em.op(OP_I32_EQ);
-      em.ifThenElse(() => writeConst(e.r, e.g, e.b), () => buildChain(i + 1));
+      em.ifThenElse(() => writeConst(e), () => buildChain(i + 1));
     };
     buildChain(0);
   }
-  const rRef: LocalRef = { localIdx: rLoc, valtype: I32 }, gRef: LocalRef = { localIdx: gLoc, valtype: I32 }, bRef: LocalRef = { localIdx: bLoc, valtype: I32 };
-  setCachedPort(ctx, node.id, 'r', rRef); setCachedPort(ctx, node.id, 'g', gRef); setCachedPort(ctx, node.id, 'b', bRef);
-  return portId === 'g' ? gRef : portId === 'b' ? bRef : rRef;
+  const refs = chans.map(c => ({ localIdx: c.loc, valtype: I32 } as LocalRef));
+  const ports = withA ? ['r', 'g', 'b', 'a'] : ['r', 'g', 'b'];
+  ports.forEach((p, i) => setCachedPort(ctx, node.id, p, refs[i]!));
+  const pi = ports.indexOf(portId);
+  return refs[pi >= 0 ? pi : 0]!;
 }
 
 /** Color Constant — three inline i32 channels. */
@@ -1472,7 +1498,13 @@ function emitGetColorConstant(ctx: AgentWasmCtx, node: GraphNode, portId: string
   const gRef: ValueRef = { inline: true, value: g, valtype: I32 };
   const bRef: ValueRef = { inline: true, value: b, valtype: I32 };
   setCachedPort(ctx, node.id, 'r', rRef); setCachedPort(ctx, node.id, 'g', gRef); setCachedPort(ctx, node.id, 'b', bRef);
-  return portId === 'g' ? gRef : portId === 'b' ? bRef : rRef;
+  // `a` only when declared — see colorScaleHasAlpha for the byte-identity gate.
+  let aRef: ValueRef | null = null;
+  if (colorConstantHasAlpha(cfg as Record<string, string | number | boolean>)) {
+    aRef = { inline: true, value: parseInt(String(cfg['a'] ?? '255'), 10) || 0, valtype: I32 };
+    setCachedPort(ctx, node.id, 'a', aRef);
+  }
+  return portId === 'g' ? gRef : portId === 'b' ? bRef : (portId === 'a' && aRef) ? aRef : rRef;
 }
 
 /** Get Curvature — mean unit-vector magnitude to bonded partners (torus-folded). */
