@@ -12,16 +12,12 @@ import type { Mapping, RGB, ColorStop, Attribute } from '../../model/types';
 import { typeDisplayName } from '../../model/typeLabels';
 import { NumberField } from '../vpl/widgets/InlineWidgets';
 import styles from './PanelContent.module.css';
+import { ColorField } from '../vpl/widgets/ColorField';
+import { hexToRgba, rgbaToHex, OPAQUE } from '../../model/colorHex';
 
-function rgbToHex(c: RGB): string {
-  const h = (n: number) => Math.max(0, Math.min(255, n | 0)).toString(16).padStart(2, '0');
-  return `#${h(c.r)}${h(c.g)}${h(c.b)}`;
-}
-function hexToRgb(hex: string): RGB {
-  const m = /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(hex.trim());
-  if (!m) return { r: 0, g: 0, b: 0 };
-  return { r: parseInt(m[1]!, 16), g: parseInt(m[2]!, 16), b: parseInt(m[3]!, 16) };
-}
+// (The local 6-digit-only rgbToHex/hexToRgb pair that used to live here is gone —
+//  ColorSwatch now routes through the shared alpha-aware helpers in colorHex.ts.
+//  See its note on why three divergent copies of this had to be collapsed.)
 
 const SPRITE_MAX_BYTES = 4 * 1024 * 1024;
 const SPRITE_ACCEPT = 'image/png,image/jpeg,image/gif,image/webp';
@@ -102,13 +98,19 @@ function SpriteBgPicker({ dataUrl, onPick }: { dataUrl: string; onPick: (hex: st
   );
 }
 
+/** The bool / tag palette swatch. RGB in, RGB out — the callers spread `...c`
+ *  into their ColorStop / RGB, so alpha rides along with no change at the call
+ *  sites. Emits `a` ONLY when non-opaque, so an opaque palette carries no alpha
+ *  key at all and the compiler stays on its byte-identical pre-alpha path. */
 function ColorSwatch({ value, onChange }: { value: RGB; onChange: (c: RGB) => void }) {
   return (
-    <input
-      type="color"
-      value={rgbToHex(value)}
-      onChange={e => onChange(hexToRgb(e.target.value))}
-      style={{ width: 34, height: 22, padding: 0, border: 'none', background: 'none', cursor: 'pointer' }}
+    <ColorField
+      value={rgbaToHex(value)}
+      onChange={(hex) => {
+        const n = hexToRgba(hex);
+        onChange(n.a === OPAQUE ? { r: n.r, g: n.g, b: n.b } : { r: n.r, g: n.g, b: n.b, a: n.a });
+      }}
+      style={{ width: 34, height: 22 }}
     />
   );
 }

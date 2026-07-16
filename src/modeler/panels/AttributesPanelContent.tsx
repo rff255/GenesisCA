@@ -17,6 +17,7 @@ import { typeDisplayName } from '../../model/typeLabels';
 import { vectorDimsForModel, vectorComponentLabels } from '../vpl/compiler/vectorAttr';
 import { NumberField, InlineNumberInput } from '../vpl/widgets/InlineWidgets';
 import styles from './PanelContent.module.css';
+import { ColorField } from '../vpl/widgets/ColorField';
 
 /** Build the drag payload for an attribute row. Cell vs Model attribute drop
  *  on the canvas opens different related-node menus (cell attrs get reads /
@@ -708,13 +709,15 @@ export function AttributesPanelContent({ mode = 'list' }: PanelContentProps = {}
                   }
                 />
               ) : selected.type === 'color' ? (
-                <input
-                  type="color"
+                // `defaultValue` accepts #rrggbb (alpha absent → opaque) or
+                // #rrggbbaa; ColorField emits 6 digits when opaque, so an opaque
+                // colour round-trips to exactly the string it had before alpha.
+                // The worker / SimulatorView split it into the id_r/_g/_b/_a slots.
+                <ColorField
                   value={selected.defaultValue || '#808080'}
-                  onChange={e =>
-                    updateAttribute(selected.id, { defaultValue: e.target.value })
-                  }
-                  style={{ width: '100%', height: 30, border: 'none', cursor: 'pointer' }}
+                  onChange={hex => updateAttribute(selected.id, { defaultValue: hex })}
+                  style={{ width: '100%', height: 30 }}
+                  title="Default colour — alpha is exposed to the graph via Get Model Attribute's A output"
                 />
               ) : selected.type === 'tag' ? (
                 <select

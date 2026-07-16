@@ -50,6 +50,9 @@ function getCompatibleHandlesSnapshot() {
 }
 import styles from './CaNode.module.css';
 import { InlineNumberInput, InlineBoolSelect, InlineTagSelect, InlineGlyphInput } from './widgets/InlineWidgets';
+import { ColorField } from './widgets/ColorField';
+import { hexToRgba, rgbaToHex, isOpaque, OPAQUE } from '../../model/colorHex';
+import { readCategoricalEntries, readCategoricalDefault, type CategoricalEntry } from './nodes/CategoricalColorNode';
 import { GradientStopsEditor, type GradStop } from './widgets/GradientStopsEditor';
 
 /** Pick the handle CSS class for a port based on its category + data type.
@@ -137,46 +140,45 @@ function ColorScaleEditor({ id, nodeData }: { id: string; nodeData: CaNodeData }
  *  Entries live in node.data.config as `count` + `entry_<i>_(r|g|b)` + `default_(r|g|b)`. */
 function CategoricalColorEditor({ id, nodeData }: { id: string; nodeData: CaNodeData }) {
   const { updateNodeData } = useReactFlow();
-  type E = { r: number; g: number; b: number };
-  const count = Math.max(0, Number(nodeData.config.count) || 0);
-  const entries: E[] = [];
-  for (let i = 0; i < count; i++) {
-    entries.push({
-      r: parseInt(String(nodeData.config[`entry_${i}_r`] ?? '0'), 10) || 0,
-      g: parseInt(String(nodeData.config[`entry_${i}_g`] ?? '0'), 10) || 0,
-      b: parseInt(String(nodeData.config[`entry_${i}_b`] ?? '0'), 10) || 0,
-    });
-  }
-  const def: E = {
-    r: parseInt(String(nodeData.config.default_r ?? '0'), 10) || 0,
-    g: parseInt(String(nodeData.config.default_g ?? '0'), 10) || 0,
-    b: parseInt(String(nodeData.config.default_b ?? '0'), 10) || 0,
-  };
+  // `a` optional — absent means opaque. Reuses the node's OWN parsers so the
+  // editor and the compiler can never disagree about what the config means.
+  type E = CategoricalEntry;
+  const entries: E[] = readCategoricalEntries(nodeData.config);
+  const def: E = readCategoricalDefault(nodeData.config);
   const stopDrag = (e: React.MouseEvent) => { if (e.button === 0) e.stopPropagation(); };
-  const hex = (c: E) => `#${[c.r, c.g, c.b].map(x => Math.min(255, Math.max(0, x)).toString(16).padStart(2, '0')).join('')}`;
-  const fromHex = (h: string): E => ({
-    r: parseInt(h.slice(1, 3), 16) || 0,
-    g: parseInt(h.slice(3, 5), 16) || 0,
-    b: parseInt(h.slice(5, 7), 16) || 0,
-  });
-  const writeEntries = (next: E[]) => {
+  // Any entry declaring alpha widens the WHOLE palette's config (a mixed palette
+  // must write every entry's `a`, else an opaque one would read as undefined and
+  // silently take the pre-alpha emit path for that entry).
+  const anyAlpha = (list: E[], d: E) => list.some(e => !isOpaque(e)) || !isOpaque(d);
+  const writeAll = (next: E[], d: E) => {
     const cfg: NodeConfig = { ...nodeData.config };
-    for (const k of Object.keys(cfg)) if (/^entry_\d+_(r|g|b)$/.test(k)) delete cfg[k];
+    for (const k of Object.keys(cfg)) if (/^entry_\d+_(r|g|b|a)$/.test(k)) delete cfg[k];
+    delete cfg.default_a;
+    const withA = anyAlpha(next, d);
     next.forEach((e, i) => {
       cfg[`entry_${i}_r`] = String(e.r | 0);
       cfg[`entry_${i}_g`] = String(e.g | 0);
       cfg[`entry_${i}_b`] = String(e.b | 0);
+      if (withA) cfg[`entry_${i}_a`] = String((e.a ?? OPAQUE) | 0);
     });
+    cfg.default_r = String(d.r | 0);
+    cfg.default_g = String(d.g | 0);
+    cfg.default_b = String(d.b | 0);
+    if (withA) cfg.default_a = String((d.a ?? OPAQUE) | 0);
     cfg.count = next.length;
     updateNodeData(id, { ...nodeData, config: cfg });
   };
-  const setDefault = (c: E) =>
-    updateNodeData(id, { ...nodeData, config: { ...nodeData.config, default_r: String(c.r | 0), default_g: String(c.g | 0), default_b: String(c.b | 0) } });
+  const writeEntries = (next: E[]) => writeAll(next, def);
+  const setDefault = (c: E) => writeAll(entries, c);
   const swatch = (val: E, onChange: (c: E) => void) => (
-    <input type="color" className={styles.input}
-      style={{ height: 24, padding: 1, cursor: 'pointer', flex: 1 }}
-      value={hex(val)} onMouseDown={stopDrag} onClick={e => e.stopPropagation()}
-      onChange={e => onChange(fromHex(e.target.value))} />
+    <ColorField
+      value={rgbaToHex(val)}
+      onChange={(h) => {
+        const n = hexToRgba(h);
+        onChange(n.a === OPAQUE ? { r: n.r, g: n.g, b: n.b } : { r: n.r, g: n.g, b: n.b, a: n.a });
+      }}
+      style={{ height: 24, flex: 1 }}
+    />
   );
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }} onMouseDown={stopDrag}>
@@ -2370,26 +2372,24 @@ function CaNodeComponent({ id, data }: NodeProps) {
           const r = parseInt(String(nodeData.config.r ?? '128'), 10) || 0;
           const g = parseInt(String(nodeData.config.g ?? '128'), 10) || 0;
           const b = parseInt(String(nodeData.config.b ?? '128'), 10) || 0;
-          const hex = `#${r.toString(16).padStart(2, '0')}${g.toString(16).padStart(2, '0')}${b.toString(16).padStart(2, '0')}`;
+          const rawA = nodeData.config.a;
+          const a = rawA === undefined ? OPAQUE : (parseInt(String(rawA), 10) || 0);
           return (
             <>
-              <input
-                type="color"
-                className={styles.input}
-                style={{ height: 24, padding: 1, cursor: 'pointer' }}
-                value={hex}
-                onChange={e => {
-                  const h = e.target.value;
-                  const nr = parseInt(h.slice(1, 3), 16);
-                  const ng = parseInt(h.slice(3, 5), 16);
-                  const nb = parseInt(h.slice(5, 7), 16);
-                  // Batch update r, g, b
-                  updateNodeData(id, {
-                    ...nodeData,
-                    config: { ...nodeData.config, r: String(nr), g: String(ng), b: String(nb) },
-                  });
+              <ColorField
+                value={rgbaToHex({ r, g, b, a })}
+                onChange={(h) => {
+                  const n = hexToRgba(h);
+                  const cfg: NodeConfig = {
+                    ...nodeData.config,
+                    r: String(n.r), g: String(n.g), b: String(n.b),
+                  };
+                  // Drop the `a` key entirely when opaque, so the node keeps its
+                  // pre-alpha config + 3-port shape + byte-identical emit.
+                  if (n.a === OPAQUE) delete cfg.a; else cfg.a = String(n.a);
+                  updateNodeData(id, { ...nodeData, config: cfg });
                 }}
-                onClick={e => e.stopPropagation()}
+                style={{ height: 24, width: '100%' }}
               />
               <InlineNumberInput className={styles.input} placeholder="R" min={0} max={255}
                 value={(nodeData.config.r as string) || '128'}
