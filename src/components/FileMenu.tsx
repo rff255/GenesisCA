@@ -4,10 +4,13 @@ import {
   serializeModel,
   modelFilename,
   downloadJSON,
+  downloadHTML,
   readModelFile,
 } from '../model/fileOperations';
+import { buildPresentationHtml, presentationFilename } from '../export/exportPresentation';
 import type { SimulationState, CAModel } from '../model/types';
 import { SaveProjectDialog, type SaveOptions } from './SaveProjectDialog';
+import { ExportPresentationDialog, type ExportPresentationOptions } from './ExportPresentationDialog';
 import { ConfirmDialog } from './ConfirmDialog';
 import styles from './FileMenu.module.css';
 
@@ -63,6 +66,7 @@ export function FileMenu({ onNew, onLoaded }: {
   const modelRef = useRef(model);
   modelRef.current = model;
   const [saveDialogOpen, setSaveDialogOpen] = useState(false);
+  const [exportDialogOpen, setExportDialogOpen] = useState(false);
   const [pendingConfirm, setPendingConfirm] = useState<PendingConfirm>(null);
   // File dropdown open state. Closes on any outside press or Escape.
   const [open, setOpen] = useState(false);
@@ -157,6 +161,35 @@ export function FileMenu({ onNew, onLoaded }: {
     if (saved) markSaved(filename, opts);
   };
 
+  const handleExport = () => {
+    setExportDialogOpen(true);
+  };
+
+  const doExport = async (opts: ExportPresentationOptions) => {
+    setExportDialogOpen(false);
+    // Capture the requested live state (same seam as Save). Presets + the full
+    // model graph + sprites + metadata are always embedded by serializeModel.
+    const captured = await new Promise<SimulationState | null | undefined>(resolve => {
+      const timeout = setTimeout(() => resolve(undefined), 5000);
+      window.dispatchEvent(new CustomEvent('genesis-capture-sim-state', {
+        detail: {
+          resolve: (state: SimulationState | null = null) => { clearTimeout(timeout); resolve(state); },
+          include: { grid: opts.includeGrid, controls: opts.includeControls },
+        },
+      }));
+    });
+    const latest = modelRef.current;
+    const wantsAny = opts.includeGrid || opts.includeControls;
+    const stateForFile = wantsAny ? (captured ?? latest.simulationState) : undefined;
+    const modelForExport = { ...latest, simulationState: stateForFile };
+    try {
+      const html = await buildPresentationHtml(modelForExport);
+      await downloadHTML(html, presentationFilename(latest));
+    } catch (err) {
+      alert(err instanceof Error ? err.message : 'Export failed.');
+    }
+  };
+
   const handleLoad = () => {
     if (isDirty) {
       setPendingConfirm({
@@ -200,12 +233,13 @@ export function FileMenu({ onNew, onLoaded }: {
           <button className={styles.dropdownItem} role="menuitem" onClick={() => runItem(handleNew)}>New</button>
           <button className={styles.dropdownItem} role="menuitem" onClick={() => runItem(handleSave)}>Save</button>
           <button className={styles.dropdownItem} role="menuitem" onClick={() => runItem(handleLoad)}>Load</button>
+          <button className={styles.dropdownItem} role="menuitem" onClick={() => runItem(handleExport)}>Export Presentation…</button>
         </div>
       )}
       <input
         ref={fileInputRef}
         type="file"
-        accept=".gcaproj,.json"
+        accept=".gcaproj,.json,.html,.htm"
         style={{ display: 'none' }}
         onChange={handleFileChange}
       />
@@ -216,6 +250,23 @@ export function FileMenu({ onNew, onLoaded }: {
           onCancel={() => setSaveDialogOpen(false)}
         />
       )}
+      {exportDialogOpen && (() => {
+        const p = model.properties;
+        const cellCount = (p.gridWidth || 0) * (p.gridHeight || 0) * (p.gridDepth ?? 1);
+        // A big embedded board dominates the exported file (base64 typed arrays),
+        // so default it OFF past a threshold — the model + metadata still export.
+        const bigGrid = cellCount > 250_000;
+        const derived = deriveSaveOptions(model);
+        return (
+          <ExportPresentationDialog
+            initial={{ includeGrid: bigGrid ? false : derived.includeGrid, includeControls: derived.includeControls }}
+            modelName={p.name}
+            cellCount={cellCount}
+            onConfirm={doExport}
+            onCancel={() => setExportDialogOpen(false)}
+          />
+        );
+      })()}
       {pendingConfirm && (
         <ConfirmDialog
           title={pendingConfirm.title}

@@ -163,9 +163,18 @@ Worker messages: `getState` (worker copies and transfers all typed arrays), `loa
 
 Auto-save to localStorage strips `simulationState` to avoid exceeding quota on large grids.
 
-### Presentation Export
+### Presentation Export (standalone `.html` — SHIPPED)
 
-A "presentation" export bundles the Simulator + a compiled model into a **single self-contained `.html` file**. Anyone can open it in a browser — no install, no server. This replaces the old Genesis's standalone `.exe` export.
+File ▾ → **Export Presentation…** bundles the Simulator + one model into a **single self-contained `.html`** that runs in any browser — no install, no server, offline from a bare `file://`. The web rewrite's replacement for legacy Genesis's `.exe` export. Docs: [docs/IMPACT_MAP_PRESENTATION_EXPORT.md](docs/IMPACT_MAP_PRESENTATION_EXPORT.md) / [PLAN_PRESENTATION_EXPORT.md](docs/PLAN_PRESENTATION_EXPORT.md) (+ `.html` mockup).
+
+- **Why it needs no binary assets:** WASM bytes + WGSL are generated in-JS from the model graph at load (works under `file://`); the `.gcaproj` IS the graph (recompiled at load). So embedding the model JSON alone runs the sim. Sprites (`SpriteAsset.dataUrl`/frames), thumbnail, presets, and the initial board (`simulationState`) are all already base64 inside the `CAModel`, so **one file carries everything — no folder**.
+- **The build-time viewer template + runtime injection design.** A SECOND Vite build (`vite build --mode viewer`, the `mode==='viewer'` branch in [vite.config.ts](vite.config.ts)) produces `viewer-template.html` — a fully-inlined single file (`vite-plugin-singlefile`) mounting ONLY `<SimulatorView>` under a viewer `ModelProvider` ([src/viewer/{index=viewer.html at repo root, main.tsx, ViewerApp.tsx}](src/viewer/main.tsx)), NO PWA/library plugins. The template reads its model from the `<script id="genesis-model" type="application/json">` placeholder. `build:viewer` copies it to `public/viewer-template.html` (served at `/viewer-template.html` in dev, copied into `dist/` by the main build → PWA-precached for offline). `npm run build` runs `build:viewer` first.
+- **The worker seam (the single blocker, solved).** The sim worker is code-split (`new Worker(new URL('./engine/sim.worker.ts', import.meta.url))` → its own chunk), which a single-file inliner won't fold in. Extracted into [createSimWorker.ts](src/simulator/createSimWorker.ts) (main app: `new URL`) + [createSimWorker.inline.ts](src/simulator/createSimWorker.inline.ts) (viewer: `import W from './engine/sim.worker?worker&inline'` → base64 Blob worker). The viewer build swaps them via a `resolve.alias` (`/^\.\/createSimWorker$/`; anchor BOTH ends — a partial regex mangles the leading `./` into the absolute path). Verified: the inlined worker boots + instantiates WASM from in-memory bytes + steps under a single-file HTML.
+- **Export flow** ([src/export/exportPresentation.ts](src/export/exportPresentation.ts) + [FileMenu.tsx](src/components/FileMenu.tsx) `doExport` + [ExportPresentationDialog.tsx](src/components/ExportPresentationDialog.tsx)): capture live state via the existing `genesis-capture-sim-state` event (same seam as Save; `include: {grid, controls}`) → `serializeModel(modelWithState)` → `fetchViewerTemplate()` (`${BASE_URL}viewer-template.html`) → `assemblePresentationHtml` injects the escaped JSON → `downloadHTML`. **Injection gotcha:** the placeholder sentinel `__GENESIS_MODEL_JSON__` appears TWICE in the built file (the `<script>` placeholder AND the bundled `EMBEDDED_MODEL_PLACEHOLDER` JS constant), so a bare string-replace hits the wrong one — target the `<script id="genesis-model">` element with a regex. Escape `<`→`<` (+ U+2028/9) so a `</script>`/`<!--` inside a string value can't break the tag. Presets + the whole graph + sprites + metadata are ALWAYS embedded; grid/controls are the only opt-outs (grid defaults OFF past 250k cells — a big base64 board dominates the file).
+- **R1 — dual artifact (recoverable model source).** The `.html` embeds the COMPLETE `CAModel`, so the logic is never lost. The viewer's About panel has "⤓ Download model (.gcaproj)"; the IDE's Load accepts a presentation `.html` — `extractEmbeddedModel(html)` + the shared `parseModelJSON(text)` (the `readModelFile` body was refactored to expose both, [fileOperations.ts](src/model/fileOperations.ts)); `readModelFile` auto-detects HTML (extension / `<!doctype` / the `genesis-model` marker) and extracts first. FileMenu Load `accept` = `.gcaproj,.json,.html,.htm`. Verified round-trip: export → re-import → editable model recovered.
+- **R2 — metadata display.** [ViewerApp.tsx](src/viewer/ViewerApp.tsx)'s About/Info panel (ⓘ, auto-open on first load) shows Title (`name`), Rule author (`author`), Project author (`modelAuthor`), Summary (`description`), Rule description (`ruleDescription`), Tags, Thumbnail — a lean read-only render (NOT coupled to the editing `InfoPanelContent`).
+- **DEV helpers** (not shipped): [scripts/inject-test-model.mjs](scripts/inject-test-model.mjs) (inject a `.gcaproj` into the template for manual testing) + [scripts/static-serve.mjs](scripts/static-serve.mjs) (serve the single file — the Browser pane can't open `file://`, so verify over http; the runtime is identical). `dist-viewer/` + `public/viewer-template.html` are gitignored build artifacts.
+- **WebGPU under `file://`** may not init (secure-context gating) — the worker falls back to JS/WASM automatically, so an exported WebGPU model runs on WASM; no COOP/COEP needed (non-shared `WebAssembly.Memory`).
 
 ---
 
@@ -260,7 +269,11 @@ genesis-ca/
 │   │   ├── agentTypeRemovalMigration.ts # Strips the removed built-in agent `type` from legacy files (setAgentType nodes, createAgent _port_type, behaviourStep myType edges); wired into LOAD_MODEL + macroImport + the dev harness
 │   │   ├── schema.ts
 │   │   └── types.ts                  # TypeScript types for CAModel (incl. CAModel.agentMappings — linked A→C views of the agent population)
-│   └── export/                       # Presentation .html builder (planned)
+│   ├── export/
+│   │   └── exportPresentation.ts     # Presentation .html builder (fetch template + inject model + download)
+│   └── viewer/                       # Standalone-.html viewer entry (mounts only SimulatorView)
+│       ├── main.tsx                  # reads window model from <script id="genesis-model">, mounts ViewerApp
+│       └── ViewerApp.tsx             # chromeless shell + About panel (R2) + Download-model (R1)
 ├── public/
 │   ├── icon.svg                      # Two-cell app mark (source for the PWA + Tauri icon sets)
 │   ├── pwa-*.png / maskable-icon-*.png / apple-touch-icon-*.png / favicon.ico  # Generated PWA icons

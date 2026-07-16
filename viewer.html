@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>GenesisCA — Model</title>
+    <meta name="theme-color" content="#e8a13a" />
+    <style>
+      html, body { margin: 0; background: #0c0d10; }
+      #root { height: 100vh; }
+    </style>
+    <script>
+      // Self-contained theme init (no localStorage dependency on a stranger's
+      // machine — default Nocturne). A viewer never writes the theme back.
+      (function () {
+        try {
+          var t = localStorage.getItem('genesisca_theme');
+          document.documentElement.dataset.theme =
+            (t === 'blender' || t === 'nocturne') ? t : 'nocturne';
+        } catch (e) {
+          document.documentElement.dataset.theme = 'nocturne';
+        }
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <!-- The exported model is injected here by the Presentation Export flow.
+         Ships with the placeholder sentinel until a model is embedded. -->
+    <script id="genesis-model" type="application/json">__GENESIS_MODEL_JSON__</script>
+    <script type="module" src="/src/viewer/main.tsx"></script>
+  </body>
+</html>

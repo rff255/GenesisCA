@@ -1,6 +1,7 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import { VitePWA } from 'vite-plugin-pwa'
+import { viteSingleFile } from 'vite-plugin-singlefile'
 import { readdirSync, readFileSync, writeFileSync, existsSync, mkdirSync, unlinkSync, statSync } from 'fs'
 import { join, resolve, dirname } from 'path'
 import { fileURLToPath } from 'url'
@@ -193,7 +194,40 @@ function buildManifest(base: string) {
   };
 }
 
-export default defineConfig(({ command }) => {
+export default defineConfig(({ command, mode }) => {
+  // ── PRESENTATION VIEWER build (`vite build --mode viewer`) ──────────────
+  // A separate, tiny build that produces ONE fully-inlined self-contained HTML
+  // (the "viewer template") shipped with the app + fetched at export time.
+  // Entry = viewer.html (mounts only SimulatorView); NO PWA / models / macros
+  // plugins (a viewer needs none and must never register a service worker).
+  // The sim worker is inlined via a resolve.alias that swaps createSimWorker
+  // for its `?worker&inline` variant. See docs/IMPACT_MAP_PRESENTATION_EXPORT.md.
+  if (mode === 'viewer') {
+    return {
+      base: './', // relative asset URLs so the file opens from file://
+      plugins: [react(), viteSingleFile()],
+      resolve: {
+        alias: [
+          // Match the WHOLE relative specifier (a regex replaces only the
+          // matched substring, so anchoring both ends avoids mangling the
+          // leading "./" into the absolute replacement path).
+          {
+            find: /^\.\/createSimWorker$/,
+            replacement: resolve(__dirname, 'src/simulator/createSimWorker.inline.ts'),
+          },
+        ],
+      },
+      build: {
+        outDir: 'dist-viewer',
+        emptyOutDir: true,
+        // Emit ONE HTML with everything inlined; keep it uncompressed-legible.
+        assetsInlineLimit: Infinity,
+        chunkSizeWarningLimit: 20000,
+        rollupOptions: { input: resolve(__dirname, 'viewer.html') },
+      },
+    };
+  }
+
   // The production site is served at the ROOT of the custom domain
   // (https://genesisca.online/, pinned by public/CNAME), so the deploy now builds
   // with base '/' — the same as `npm run dev`, local `build` + `preview`, and the

@@ -245,17 +245,47 @@ export function downloadJSON(content: string, filename: string): Promise<boolean
   return saveTextFile(content, filename, 'application/json');
 }
 
-export function readModelFile(file: File): Promise<CAModel> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      const raw = reader.result as string;
-      // Strip a UTF-8 BOM if an editor added one. Leaving it in front of `{`
-      // makes JSON.parse throw "Unexpected token" at position 0 on files that
-      // look identical to the eye.
-      let text = raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw;
-      let model: CAModel;
-      try {
+/** Download a standalone presentation `.html` (Tauri Save As / browser blob). */
+export function downloadHTML(content: string, filename: string): Promise<boolean> {
+  return saveTextFile(content, filename, 'text/html');
+}
+
+/**
+ * Extract the embedded model JSON from an exported presentation `.html`.
+ * The template carries the model in `<script id="genesis-model"
+ * type="application/json">…</script>` (see the Presentation Export feature).
+ * Returns the raw JSON text, or null if the input isn't a GenesisCA
+ * presentation file. Kept dependency-free (a regex, not a DOM parse) so it
+ * works the same in the worker/build contexts.
+ */
+export function extractEmbeddedModel(html: string): string | null {
+  const m = html.match(
+    /<script[^>]*id=["']genesis-model["'][^>]*>([\s\S]*?)<\/script>/i,
+  );
+  if (!m || m[1] == null) return null;
+  const inner = m[1].trim();
+  if (!inner || inner === EMBEDDED_MODEL_PLACEHOLDER) return null;
+  return inner;
+}
+
+/** The sentinel the viewer template ships with before a model is injected. */
+export const EMBEDDED_MODEL_PLACEHOLDER = '__GENESIS_MODEL_JSON__';
+
+/**
+ * Parse + normalize a model from its raw JSON/`.gcaproj` text: BOM strip,
+ * legacy `"key": undefined` recovery, required-field + schema-version
+ * validation, and the v1→v2 NeighborIndex migration. Shared by
+ * `readModelFile` (file loads) and the viewer entry (embedded model in an
+ * exported `.html`). Throws on invalid input.
+ */
+export function parseModelJSON(raw: string): CAModel {
+  // Strip a UTF-8 BOM if an editor added one. Leaving it in front of `{`
+  // makes JSON.parse throw "Unexpected token" at position 0 on files that
+  // look identical to the eye.
+  let text = raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw;
+  let model: CAModel;
+  {
+    try {
         model = JSON.parse(text) as CAModel;
       } catch (err) {
         // Recovery: older GenesisCA builds (pre-1.8.1) had a custom serializer
@@ -282,8 +312,7 @@ export function readModelFile(file: File): Promise<CAModel> {
               const end = Math.min(cleaned.length, pos + 40);
               snippet = `\nNear: ...${cleaned.slice(start, end).replace(/\n/g, '\\n')}...`;
             }
-            reject(new Error(`Failed to parse file: ${msg}${snippet}`));
-            return;
+            throw new Error(`Failed to parse file: ${msg}${snippet}`);
           }
         } else {
           const msg = err instanceof Error ? err.message : String(err);
@@ -297,41 +326,69 @@ export function readModelFile(file: File): Promise<CAModel> {
             const end = Math.min(text.length, pos + 40);
             snippet = `\nNear: ...${text.slice(start, end).replace(/\n/g, '\\n')}...`;
           }
-          reject(new Error(`Failed to parse file: ${msg}${snippet}`));
-          return;
+          throw new Error(`Failed to parse file: ${msg}${snippet}`);
         }
       }
-      if (!model.properties || !model.attributes) {
-        reject(new Error('Invalid file: missing required model fields.'));
-        return;
+    }
+    if (!model.properties || !model.attributes) {
+      throw new Error('Invalid file: missing required model fields.');
+    }
+    if (
+      model.schemaVersion != null &&
+      model.schemaVersion > SCHEMA_VERSION
+    ) {
+      throw new Error(
+        `File uses schema version ${model.schemaVersion}, but this app supports up to version ${SCHEMA_VERSION}. Please update GenesisCA.`,
+      );
+    }
+    // Wave A.6: v1 → v2 migration translates slot-index NI default values
+    // into packed (dr, dc) using each NI attribute's neighborhoodHintId.
+    // Treat absent schemaVersion as v1 — earlier builds didn't always stamp
+    // the version, so a hand-edited or pre-versioning file might lack it
+    // even though it has NI attrs. Running migration on a model without NI
+    // attrs is a no-op (loop iterates zero times), so this is safe.
+    if ((model.schemaVersion ?? 1) < 2) {
+      migrateNiAttributesV1toV2(model);
+      // Embedded simulationState's NI cell-attr arrays also need translation
+      // (per-element). The slot index N becomes the packed value coords[N].
+      if (model.simulationState?.attributes) {
+        migrateNiCellAttrArraysV1toV2(model.simulationState, model);
       }
-      if (
-        model.schemaVersion != null &&
-        model.schemaVersion > SCHEMA_VERSION
-      ) {
-        reject(
-          new Error(
-            `File uses schema version ${model.schemaVersion}, but this app supports up to version ${SCHEMA_VERSION}. Please update GenesisCA.`,
-          ),
-        );
-        return;
-      }
-      // Wave A.6: v1 → v2 migration translates slot-index NI default values
-      // into packed (dr, dc) using each NI attribute's neighborhoodHintId.
-      // Treat absent schemaVersion as v1 — earlier builds didn't always stamp
-      // the version, so a hand-edited or pre-versioning file might lack it
-      // even though it has NI attrs. Running migration on a model without NI
-      // attrs is a no-op (loop iterates zero times), so this is safe.
-      if ((model.schemaVersion ?? 1) < 2) {
-        migrateNiAttributesV1toV2(model);
-        // Embedded simulationState's NI cell-attr arrays also need translation
-        // (per-element). The slot index N becomes the packed value coords[N].
-        if (model.simulationState?.attributes) {
-          migrateNiCellAttrArraysV1toV2(model.simulationState, model);
+    }
+    model.schemaVersion = SCHEMA_VERSION;
+    return model;
+}
+
+/**
+ * Read a model from a picked file. Accepts a `.gcaproj` (JSON) OR an exported
+ * presentation `.html` (the embedded model is extracted first) — so dropping a
+ * shared standalone `.html` back into GenesisCA recovers the editable model.
+ */
+export function readModelFile(file: File): Promise<CAModel> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const raw = reader.result as string;
+        const looksHtml =
+          /\.html?$/i.test(file.name) ||
+          /^\s*<(?:!doctype|html)/i.test(raw) ||
+          raw.includes('id="genesis-model"') ||
+          raw.includes("id='genesis-model'");
+        let text = raw;
+        if (looksHtml) {
+          const embedded = extractEmbeddedModel(raw);
+          if (!embedded) {
+            throw new Error(
+              'This HTML file has no embedded GenesisCA model (not a Presentation Export?).',
+            );
+          }
+          text = embedded;
         }
+        resolve(parseModelJSON(text));
+      } catch (err) {
+        reject(err instanceof Error ? err : new Error(String(err)));
       }
-      model.schemaVersion = SCHEMA_VERSION;
-      resolve(model);
     };
     reader.onerror = () => reject(new Error('Failed to read file.'));
     reader.readAsText(file);
