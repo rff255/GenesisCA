@@ -233,7 +233,7 @@ export function FileMenu({ onNew, onLoaded }: {
           <button className={styles.dropdownItem} role="menuitem" onClick={() => runItem(handleNew)}>New</button>
           <button className={styles.dropdownItem} role="menuitem" onClick={() => runItem(handleSave)}>Save</button>
           <button className={styles.dropdownItem} role="menuitem" onClick={() => runItem(handleLoad)}>Load</button>
-          <button className={styles.dropdownItem} role="menuitem" onClick={() => runItem(handleExport)}>Export Presentation…</button>
+          <button className={styles.dropdownItem} role="menuitem" onClick={() => runItem(handleExport)}>Export standalone simulation…</button>
         </div>
       )}
       <input

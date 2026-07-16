@@ -45,7 +45,7 @@ export function ExportPresentationDialog({ initial, modelName, cellCount = 0, on
   return (
     <div className={styles.backdrop} onClick={onCancel}>
       <div className={styles.dialog} onClick={e => e.stopPropagation()}>
-        <div className={styles.title}>Export Presentation</div>
+        <div className={styles.title}>Export standalone simulation</div>
         <div className={styles.body}>
           <p style={{ margin: '0 0 4px', fontSize: 12.5, color: 'var(--color-text-muted, #8a8f9a)' }}>
             Bundles the Simulator + <b style={{ color: 'var(--color-text, #d8dae0)' }}>{modelName || 'this model'}</b> into
