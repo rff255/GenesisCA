@@ -210,13 +210,18 @@ export interface Neighborhood {
   includeCentralCell?: boolean;
 }
 
-/** A plain 0–255 RGB triple used by Linked Output Mapping palettes. */
-export interface RGB { r: number; g: number; b: number; }
+/** A plain 0–255 RGB(A) colour used by Linked Output Mapping palettes.
+ *
+ *  `a` is OPTIONAL and **absent means fully opaque (255)** — the invariant that
+ *  keeps every pre-alpha model byte-identical: an opaque palette serialises with
+ *  no `a` key (`stringifyCompact` drops `undefined`), emits the pre-alpha
+ *  three-channel form, and wires no alpha edge. See `colorHex.ts`. */
+export interface RGB { r: number; g: number; b: number; a?: number; }
 
 /** A gradient stop for a Linked Output Mapping scale. `position` is in [0,1]
  *  (same space as the Color Scale node) and is mapped onto [linkedMin, linkedMax]
- *  at compile time. */
-export interface ColorStop { position: number; r: number; g: number; b: number; }
+ *  at compile time. `a` is optional; absent = opaque (see {@link RGB}). */
+export interface ColorStop { position: number; r: number; g: number; b: number; a?: number; }
 
 /** User-overridable colors for a Linked Output Mapping. Absent sub-fields fall
  *  back to auto-generated defaults at compile time (see linkedOutputMappings.ts). */
