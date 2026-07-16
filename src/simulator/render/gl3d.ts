@@ -23,9 +23,11 @@
 //    reveal interiors: cell gaps OFF (flush cubes), no alpha blend, no clip.
 //  - BACKFACE culling: each cube is a closed convex solid with consistent
 //    CCW-outward winding, so its backfaces are never visible while it renders
-//    closed + opaque — gl.CULL_FACE halves rasterized cube fragments for free.
-//    Off under alpha blend (backfaces are part of the blended look) and under
-//    an active clip interval (the cut's visible interior walls ARE backfaces).
+//    closed + opaque — gl.CULL_FACE halves rasterized cube fragments for free
+//    (off under an active clip: the cut's interior walls ARE backfaces). Under
+//    ALPHA BLEND culling is REQUIRED for correctness: with depth writes off,
+//    an uncculled cube blends its backfaces in buffer order (not depth order)
+//    → incoherent per-cube colour + doubled opacity. See the display pass.
 
 // ---------------------------------------------------------------------------
 // mat4 (column-major, the order WebGL expects)
@@ -2189,13 +2191,22 @@ export class Gl3DRenderer {
       gl.useProgram(this.prog);
       gl.bindVertexArray(this.vao);
       this.setCommonUniforms(gl, this.prog);
-      // Backface culling — image-identical while the cubes render closed +
-      // opaque (each cube is a closed convex solid, CCW-outward winding — see
-      // CUBE), halving rasterized cube fragments. OFF under alpha blend
-      // (backfaces show through translucent fronts) and under an active clip
-      // (the cut's visible interior walls ARE backfaces). Scoped to this draw —
-      // every other pass (spheres/sprites/lines/metaballs) is unaffected.
-      const cullBack = !this.alphaBlend && !this.clip.enabled;
+      // Backface culling on the cube draw. Scoped to this draw — every other
+      // pass (spheres/sprites/lines/metaballs) is unaffected. Two regimes:
+      //  - OPAQUE: image-identical while the cubes render closed (each cube is
+      //    a closed convex solid, CCW-outward winding — see CUBE), halving
+      //    rasterized cube fragments. OFF under an active clip: the cut's
+      //    visible interior walls ARE backfaces.
+      //  - ALPHA BLEND: culling is REQUIRED for correctness, not just speed.
+      //    With depthMask(false) every triangle blends in BUFFER order, so an
+      //    uncculled cube composites its dark backfaces over/under its front
+      //    faces in an order unrelated to depth — incoherent per-cube colour +
+      //    doubled opacity (the reported "weird" translucent look). Culled, a
+      //    convex cube contributes only its front faces (which never overlap
+      //    in screen space), and the per-cube back-to-front sort gives correct
+      //    Option-A ordering. Kept ON even when clipped — a translucent volume
+      //    is see-through anyway, and the blend-order argument still applies.
+      const cullBack = this.alphaBlend || !this.clip.enabled;
       if (cullBack) { gl.enable(gl.CULL_FACE); gl.cullFace(gl.BACK); }
       if (this.alphaBlend) {
         this.sortBackToFront();
