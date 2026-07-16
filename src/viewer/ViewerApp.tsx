@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useModel } from '../model/ModelContext';
 import { SimulatorView } from '../simulator/SimulatorView';
 import { serializeModel, modelFilename, downloadJSON } from '../model/fileOperations';
@@ -93,19 +93,48 @@ function AboutOverlay({ model }: { model: CAModel }) {
     void downloadJSON(serializeModel(model), modelFilename(model));
   };
 
+  // Anchor the reopen ⓘ to the RIGHT EDGE of the Simulator's Settings panel, so
+  // it moves as the panel is resized or collapsed. The panel is a CSS-module
+  // class (`sidePanel_<hash>`) whose readable prefix survives the production
+  // build, so `[class*="sidePanel"]` finds it; when collapsed it's not in the
+  // DOM, so we fall back to just right of the collapse ear (at left:0).
+  const infoBtnRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (open) return; // button only exists while the modal is closed
+    let raf = 0;
+    let cached: HTMLElement | null = null;
+    const place = () => {
+      const btn = infoBtnRef.current;
+      if (btn) {
+        if (!cached || !cached.isConnected) {
+          cached = document.querySelector('[class*="sidePanel"]');
+        }
+        // Panel open → tuck into its top-right corner; collapsed → past the ear.
+        const left = cached ? Math.max(8, cached.getBoundingClientRect().right - 38) : 34;
+        if (Math.abs((parseFloat(btn.style.left) || -1) - left) > 0.5) {
+          btn.style.left = `${left}px`;
+        }
+      }
+      raf = requestAnimationFrame(place);
+    };
+    raf = requestAnimationFrame(place);
+    return () => cancelAnimationFrame(raf);
+  }, [open]);
+
   return (
     <>
       {!open && (
         <button
+          ref={infoBtnRef}
           onClick={() => setOpen(true)}
           title="About this model"
           style={{
-            position: 'absolute', right: 16, bottom: 64, zIndex: 46,
-            width: 42, height: 42, borderRadius: '50%', cursor: 'pointer',
+            position: 'absolute', top: 7, left: 34, zIndex: 46,
+            width: 30, height: 30, borderRadius: '50%', cursor: 'pointer',
             background: 'var(--color-accent, #e8a13a)', color: '#16181d',
-            border: 'none', fontSize: 22, fontWeight: 700, lineHeight: 1,
+            border: 'none', fontSize: 17, fontWeight: 700, lineHeight: 1,
             display: 'flex', alignItems: 'center', justifyContent: 'center',
-            boxShadow: '0 6px 20px #000a',
+            boxShadow: '0 4px 14px #0009',
           }}
         >ⓘ</button>
       )}
@@ -179,9 +208,9 @@ function AboutOverlay({ model }: { model: CAModel }) {
 
             {/* Footer */}
             <div style={{ borderTop: '1px solid var(--color-border, #2a2e37)', padding: '16px 24px 20px', display: 'flex', flexDirection: 'column', gap: 12 }}>
-              <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+              <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between' }}>
                 <button onClick={handleDownload} style={dlBtnStyle}>⤓ Download model (.gcaproj)</button>
-                <button onClick={() => setOpen(false)} style={primaryBtnStyle}>Start exploring →</button>
+                <button onClick={() => setOpen(false)} style={primaryBtnStyle}>Explore simulation →</button>
               </div>
               <div style={{ fontSize: 12, color: 'var(--color-text-muted, #8a8f9a)', lineHeight: 1.5 }}>
                 Made with{' '}
