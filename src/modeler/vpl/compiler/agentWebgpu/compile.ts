@@ -59,8 +59,9 @@ import { computeVolatileHoist } from '../volatileHoist';
 import { getNodeDef } from '../../nodes/registry';
 import { cellFieldAttrsOf, cellFieldWriteAttrsOf, agentAttrsOf } from '../../../../model/attributeScope';
 import { modelAttrSlotKeys } from '../../../../model/attributeScope';
-import { readCategoricalEntries, readCategoricalDefault } from '../../nodes/CategoricalColorNode';
-import { readColorScaleStops } from '../../nodes/ColorScaleNode';
+import { categoricalHasAlpha, readCategoricalEntries, readCategoricalDefault, type CategoricalEntry } from '../../nodes/CategoricalColorNode';
+import { colorConstantHasAlpha } from '../../nodes/GetColorConstantNode';
+import { colorScaleHasAlpha, readColorScaleStops, type ColorScaleStop } from '../../nodes/ColorScaleNode';
 import { viewCosHalf } from '../../nodes/GetAgentsInViewNode';
 import { resolveKeyLabels, resolveAxes, isMultiAxisTable } from '../variegation';
 import { computeAgentWebGPULayout, type AgentWebGPULayout } from './layout';
@@ -867,26 +868,31 @@ function emitCategoricalColor(ctx: AgentWgpuCtx, node: GraphNode, portId: string
   const idx = castTo(resolveValueInput(ctx, node, 'index', 0), 'i32');
   const entries = readCategoricalEntries(node.data.config as Record<string, string | number | boolean>);
   const d = readCategoricalDefault(node.data.config as Record<string, string | number | boolean>);
-  const rName = fresh(ctx, 'ccr'), gName = fresh(ctx, 'ccg'), bName = fresh(ctx, 'ccb');
-  ctx.lines.push(`  var ${rName}: i32; var ${gName}: i32; var ${bName}: i32;`);
-  const writeConst = (r: number, g: number, b: number) =>
-    `${rName} = ${r | 0}; ${gName} = ${g | 0}; ${bName} = ${b | 0};`;
+  // `a` minted LAST and only when declared - see the colorScale twin.
+  const withA = categoricalHasAlpha(node.data.config as Record<string, string | number | boolean>);
+  const chans: Array<{ name: string; get: (e: CategoricalEntry) => number }> = [
+    { name: fresh(ctx, 'ccr'), get: e => e.r },
+    { name: fresh(ctx, 'ccg'), get: e => e.g },
+    { name: fresh(ctx, 'ccb'), get: e => e.b },
+  ];
+  if (withA) chans.push({ name: fresh(ctx, 'cca'), get: e => e.a ?? 255 });
+  ctx.lines.push(`  ${chans.map(c => `var ${c.name}: i32;`).join(' ')}`);
+  const writeConst = (e: CategoricalEntry) => chans.map(c => `${c.name} = ${c.get(e) | 0};`).join(' ');
   if (entries.length === 0) {
-    ctx.lines.push(`  ${writeConst(d.r, d.g, d.b)}`);
+    ctx.lines.push(`  ${writeConst(d)}`);
   } else {
     const kName = fresh(ctx, 'cck');
     ctx.lines.push(`  let ${kName}: i32 = ${idx};`);
     entries.forEach((e, i) => {
       const head = i === 0 ? `if (${kName} == ${i})` : `else if (${kName} == ${i})`;
-      ctx.lines.push(`  ${head} { ${writeConst(e.r, e.g, e.b)} }`);
+      ctx.lines.push(`  ${head} { ${writeConst(e)} }`);
     });
-    ctx.lines.push(`  else { ${writeConst(d.r, d.g, d.b)} }`);
+    ctx.lines.push(`  else { ${writeConst(d)} }`);
   }
-  const refs: Record<string, ValueRef> = {
-    r: { expr: rName, type: 'i32' },
-    g: { expr: gName, type: 'i32' },
-    b: { expr: bName, type: 'i32' },
-  };
+  const refs: Record<string, ValueRef> = {};
+  (withA ? ['r', 'g', 'b', 'a'] : ['r', 'g', 'b']).forEach((pn, i) => {
+    refs[pn] = { expr: chans[i]!.name, type: 'i32' };
+  });
   for (const k of Object.keys(refs)) ctx.valueCache.set(`${node.id}:${k}`, refs[k]!);
   return refs[portId] ?? refs['r']!;
 }
@@ -1142,6 +1148,12 @@ function emitGetColorConstant(ctx: AgentWgpuCtx, node: GraphNode, portId: string
     g: emitLet(ctx, 'i32', `${g | 0}`, 'gcg'),
     b: emitLet(ctx, 'i32', `${b | 0}`, 'gcb'),
   };
+  // `a` emitted LAST and only when declared - an extra `let` (and its `fresh`
+  // name) would change the shader of every existing model.
+  if (colorConstantHasAlpha((cfg ?? {}) as Record<string, string | number | boolean>)) {
+    const a = parseInt(String(cfg?.['a'] ?? '255'), 10) || 0;
+    refs['a'] = emitLet(ctx, 'i32', `${a | 0}`, 'gca');
+  }
   for (const k of Object.keys(refs)) ctx.valueCache.set(`${node.id}:${k}`, refs[k]!);
   return refs[portId] ?? refs['r']!;
 }
@@ -1185,32 +1197,42 @@ function emitColorScale(ctx: AgentWgpuCtx, node: GraphNode, portId: string): Val
   const f32Lit = (n: number) => Number.isInteger(n) ? `${n}.0` : `${n}`;
   const tName = fresh(ctx, 'cst');
   ctx.lines.push(`  let ${tName}: f32 = ${t};`);
-  const rName = fresh(ctx, 'csr'), gName = fresh(ctx, 'csg'), bName = fresh(ctx, 'csb');
-  ctx.lines.push(`  var ${rName}: i32; var ${gName}: i32; var ${bName}: i32;`);
-  const writeConst = (r: number, g: number, b: number) => `${rName} = ${r | 0}; ${gName} = ${g | 0}; ${bName} = ${b | 0};`;
+  // Channel table - `a` minted LAST and only when declared, so the opaque path
+  // consumes the same `fresh` names and emits the same lines as before.
+  const withA = colorScaleHasAlpha(node.data.config as Record<string, string | number | boolean>);
+  const chans: Array<{ name: string; get: (s: ColorScaleStop) => number }> = [
+    { name: fresh(ctx, 'csr'), get: s => s.r },
+    { name: fresh(ctx, 'csg'), get: s => s.g },
+    { name: fresh(ctx, 'csb'), get: s => s.b },
+  ];
+  if (withA) chans.push({ name: fresh(ctx, 'csa'), get: s => s.a ?? 255 });
+  ctx.lines.push(`  ${chans.map(c => `var ${c.name}: i32;`).join(' ')}`);
+  const writeConst = (s: ColorScaleStop) => chans.map(c => `${c.name} = ${c.get(s) | 0};`).join(' ');
+  const ZERO: ColorScaleStop = { p: 0, r: 0, g: 0, b: 0, a: 0 };
   if (stops.length === 0) {
-    ctx.lines.push(`  ${writeConst(0, 0, 0)}`);
+    ctx.lines.push(`  ${writeConst(ZERO)}`);
   } else if (stops.length === 1) {
-    const s = stops[0]!;
-    ctx.lines.push(`  ${writeConst(s.r, s.g, s.b)}`);
+    ctx.lines.push(`  ${writeConst(stops[0]!)}`);
   } else {
     const first = stops[0]!, last = stops[stops.length - 1]!;
-    ctx.lines.push(`  if (${tName} <= ${f32Lit(first.p)}) { ${writeConst(first.r, first.g, first.b)} }`);
+    ctx.lines.push(`  if (${tName} <= ${f32Lit(first.p)}) { ${writeConst(first)} }`);
     for (let i = 0; i < stops.length - 1; i++) {
       const a = stops[i]!, b = stops[i + 1]!;
       if (b.p === a.p) continue;
       const localExpr = `((${tName} - ${f32Lit(a.p)}) / ${f32Lit(b.p - a.p)})`;
       const curved = curveExpr(localExpr, method);
-      const rExpr = `i32(floor(${f32Lit(a.r)} + (${curved}) * ${f32Lit(b.r - a.r)} + 0.5))`;
-      const gExpr = `i32(floor(${f32Lit(a.g)} + (${curved}) * ${f32Lit(b.g - a.g)} + 0.5))`;
-      const bExpr = `i32(floor(${f32Lit(a.b)} + (${curved}) * ${f32Lit(b.b - a.b)} + 0.5))`;
-      ctx.lines.push(`  else if (${tName} < ${f32Lit(b.p)}) { ${rName} = ${rExpr}; ${gName} = ${gExpr}; ${bName} = ${bExpr}; }`);
+      // Alpha interpolates on the SAME curve as the colour channels.
+      const body = chans
+        .map(c => `${c.name} = i32(floor(${f32Lit(c.get(a))} + (${curved}) * ${f32Lit(c.get(b) - c.get(a))} + 0.5)); `)
+        .join('');
+      ctx.lines.push(`  else if (${tName} < ${f32Lit(b.p)}) { ${body}}`);
     }
-    ctx.lines.push(`  else { ${writeConst(last.r, last.g, last.b)} }`);
+    ctx.lines.push(`  else { ${writeConst(last)} }`);
   }
-  const refs: Record<string, ValueRef> = {
-    r: { expr: rName, type: 'i32' }, g: { expr: gName, type: 'i32' }, b: { expr: bName, type: 'i32' },
-  };
+  const refs: Record<string, ValueRef> = {};
+  (withA ? ['r', 'g', 'b', 'a'] : ['r', 'g', 'b']).forEach((pn, i) => {
+    refs[pn] = { expr: chans[i]!.name, type: 'i32' };
+  });
   for (const k of Object.keys(refs)) ctx.valueCache.set(`${node.id}:${k}`, refs[k]!);
   return refs[portId] ?? refs['r']!;
 }
@@ -1294,10 +1316,13 @@ function emitGetModelAttribute(ctx: AgentWgpuCtx, node: GraphNode, portId: strin
   if (isColor) {
     const cached = ctx.valueCache.get(`${node.id}:r`);
     if (cached !== undefined) return ctx.valueCache.get(`${node.id}:${portId}`) ?? cached;
+    // A colour model attr ALWAYS occupies four slots (`modelAttrSlotKeys`), so
+    // alpha is not gated here the way the palette nodes' is.
     const refs: Record<string, ValueRef> = {
       r: emitLet(ctx, 'f32', auxRead(ctx, `${attr}_r`), 'mar'),
       g: emitLet(ctx, 'f32', auxRead(ctx, `${attr}_g`), 'mag'),
       b: emitLet(ctx, 'f32', auxRead(ctx, `${attr}_b`), 'mab'),
+      a: emitLet(ctx, 'f32', auxRead(ctx, `${attr}_a`), 'maa'),
     };
     for (const k of Object.keys(refs)) ctx.valueCache.set(`${node.id}:${k}`, refs[k]!);
     return refs[portId] ?? refs['r']!;
