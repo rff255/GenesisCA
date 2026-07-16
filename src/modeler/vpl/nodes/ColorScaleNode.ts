@@ -11,9 +11,16 @@ import {
  *  (see {@link colorScaleHasAlpha}). */
 export interface ColorScaleStop { p: number; r: number; g: number; b: number; a?: number; }
 
-/** Parse stop_${i}_(position|r|g|b|a) keys from config and sort by position.
- *  Exported so the WASM and WebGPU emitters can reuse the same parser. */
-export function readColorScaleStops(
+/** Parse stop_${i}_(position|r|g|b|a) keys from config in CONFIG-INDEX order.
+ *
+ *  The EDITOR's parser: `GradientStopsEditor` addresses a stop by its index in
+ *  the array it is handed (drag / select / delete / update), so a sort on read
+ *  would let a stop dragged past a neighbour silently retarget a different one
+ *  mid-drag. Compile paths want the position-sorted {@link readColorScaleStops}
+ *  (interpolation requires the order). Both share THIS parse, so the editor and
+ *  the compilers can never disagree about what a config key means — in
+ *  particular about absent-`a`-means-no-alpha, the byte-identity gate. */
+export function readColorScaleStopsRaw(
   config: Record<string, string | number | boolean>,
 ): ColorScaleStop[] {
   const n = Math.max(0, Number(config.stopCount) || 0);
@@ -31,8 +38,46 @@ export function readColorScaleStops(
       a: rawA === undefined ? undefined : ((parseInt(String(rawA), 10) || 0) | 0),
     });
   }
+  return stops;
+}
+
+/** Parse stop_${i}_(position|r|g|b|a) keys from config and sort by position.
+ *  Exported so the WASM and WebGPU emitters can reuse the same parser. */
+export function readColorScaleStops(
+  config: Record<string, string | number | boolean>,
+): ColorScaleStop[] {
+  const stops = readColorScaleStopsRaw(config);
   stops.sort((a, b) => a.p - b.p);
   return stops;
+}
+
+/** Write a stop list back to config keys, applying the Option-A alpha gate:
+ *  `a` keys are written ONLY when some stop is non-opaque, so a palette that
+ *  never touches alpha keeps its exact pre-alpha config (and thus its 3-port
+ *  shape + byte-identical emit), and dragging alpha to full and back leaves no
+ *  trace. Returns a NEW config; the caller owns the update dispatch.
+ *
+ *  Paired with `readColorScaleStopsRaw` so the key names + the gate live in ONE
+ *  place — this is the writer both the node editor and any future stop-editing
+ *  UI must use. */
+export function writeColorScaleStops(
+  config: Record<string, string | number | boolean>,
+  stops: ColorScaleStop[],
+): Record<string, string | number | boolean> {
+  const next = { ...config };
+  for (const k of Object.keys(next)) {
+    if (/^stop_\d+_(position|r|g|b|a)$/.test(k)) delete next[k];
+  }
+  const withA = stops.some(s => !isOpaque(s));
+  stops.forEach((s, i) => {
+    next[`stop_${i}_position`] = String(s.p);
+    next[`stop_${i}_r`] = String(s.r | 0);
+    next[`stop_${i}_g`] = String(s.g | 0);
+    next[`stop_${i}_b`] = String(s.b | 0);
+    if (withA) next[`stop_${i}_a`] = String((s.a ?? OPAQUE) | 0);
+  });
+  next.stopCount = stops.length;
+  return next;
 }
 
 /** Does this palette declare a non-opaque alpha anywhere?
