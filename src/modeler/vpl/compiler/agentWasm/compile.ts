@@ -316,6 +316,9 @@ interface AgentWasmCtx {
    *  supported set is single-level, but kept general). Each entry exposes the
    *  forEach node id + its element (i32 local) + index (i32 local). */
   forEachStack: Array<{ nodeId: string; elemLocal: number; idxLocal: number }>;
+  /** Active Loop nodes (innermost last) — exposes the iteration counter local
+   *  for the Loop's `index` output port (mirrors forEachStack). */
+  loopStack: Array<{ nodeId: string; idxLocal: number }>;
   /** The current forEachBond iteration locals (partnerId/restLength/currentLength
    *  /index per-iteration), keyed by the forEachBond node id. */
   forEachBondStack: Array<{ nodeId: string; partnerLocal: number; restLocal: number; curLocal: number; idxLocal: number }>;
@@ -571,6 +574,13 @@ function compileValueNode(ctx: AgentWasmCtx, nodeId: string, portId: string): Va
       if (!frame) { result = { inline: true, value: 0, valtype: I32 }; break; }
       if (portId === 'index') result = { localIdx: frame.idxLocal, valtype: I32 };
       else result = { localIdx: frame.elemLocal, valtype: forEachElemIsF64.get(nodeId) ? F64 : I32 };
+      break;
+    }
+    case 'loop': {
+      // The Loop node's per-iteration counter (`index` output). Only valid inside
+      // the BODY (the live loop is on loopStack); outside → 0, like forEach.
+      const frame = ctx.loopStack.find(f => f.nodeId === nodeId);
+      result = frame ? { localIdx: frame.idxLocal, valtype: I32 } : { inline: true, value: 0, valtype: I32 };
       break;
     }
     case 'behaviourStep': {
@@ -2800,12 +2810,17 @@ function emitLoop(ctx: AgentWasmCtx, node: GraphNode): void {
   const em = ctx.em;
   const cnt = em.allocLocal(I32); pushValueAs(em, resolveValueInput(ctx, node, 'count', 1), I32); em.localSet(cnt);
   const li = em.allocLocal(I32); em.i32Const(0); em.localSet(li);
+  // Expose the counter for the Loop's `index` output (body-only, like forEach's
+  // index) — consumers are volatile (computeVolatile seeds `loop`) so their
+  // caches clear per iteration and they re-read the live local.
+  ctx.loopStack.push({ nodeId: node.id, idxLocal: li });
   em.block(() => { em.loop(() => {
     em.localGet(li); em.localGet(cnt); em.op(OP_I32_GE_S); em.brIf(1);
     clearVolatileCache(ctx);
     compileFlowChain(ctx, node.id, 'body');
     em.localGet(li); em.i32Const(1); em.op(OP_I32_ADD); em.localSet(li); em.br(0);
   }); });
+  ctx.loopStack.pop();
   clearVolatileCache(ctx);
 }
 
@@ -3748,7 +3763,7 @@ function computeVolatile(ctx: AgentWasmCtx, extraSeeds?: Set<string>): void {
   const volatileSet = new Set<string>(extraSeeds ?? []);
   for (const [, node] of nodeMap) {
     const t = node.data.nodeType;
-    if (t === 'forEachInArray' || t === 'forEachBond' || t === 'getVariable') volatileSet.add(node.id);
+    if (t === 'forEachInArray' || t === 'forEachBond' || t === 'loop' || t === 'getVariable') volatileSet.add(node.id);
   }
   let changed = true;
   while (changed) {
@@ -3775,7 +3790,7 @@ function computeVolatile(ctx: AgentWasmCtx, extraSeeds?: Set<string>): void {
  *  the JS sink-hoist) is hoistable. */
 const AGENT_VALUE_NO_HOIST: ReadonlySet<string> = new Set<string>([
   'getRandom', 'getVariable', 'getAgentAttribute', 'getIndicator',
-  'forEachInArray', 'forEachBond',
+  'forEachInArray', 'forEachBond', 'loop',
   'getNearbyAgents', 'getAgentsInView', 'getAgentsAttribute', 'filterAgents', 'joinAgents',
   'pickNRandomAgents', 'pickRandomAgent', 'getBondedAgents',
   'aggregate', 'groupOperator', 'groupCounting', 'groupStatement',
@@ -4548,6 +4563,7 @@ export function compileAgentGraphWasm(
     nearbyScratchSlot: new Map<string, number>(),
     scratchTopLocal: -1,
     forEachStack: [],
+    loopStack: [],
     forEachBondStack: [],
     fieldWLocal: P_fieldW, fieldHLocal: P_fieldH, fieldDLocal: P_fieldD, fieldTorusLocal: P_fieldTorus,
     fieldTotalLocal: -1,

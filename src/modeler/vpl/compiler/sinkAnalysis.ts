@@ -440,6 +440,13 @@ export function analyzeSinkScopes(input: SinkAnalysisInput): SinkAnalysisResult 
         { nodeId: node.id, portId: 'currentLength' },
         { nodeId: node.id, portId: 'index' },
       ]));
+    } else if (node.data.nodeType === 'loop') {
+      // Loop's per-iteration `index` output: any value derived from it must
+      // stay pinned inside the loop body (the counter is only in scope there,
+      // and its value changes per iteration).
+      elementDependentsByForEach.set(node.id, forwardValueConsumersMulti([
+        { nodeId: node.id, portId: 'index' },
+      ]));
     }
   }
 
@@ -478,19 +485,17 @@ export function analyzeSinkScopes(input: SinkAnalysisInput): SinkAnalysisResult 
   }
 
   /** Walk up from `scope` past loop/forEach bodies where `valueId` isn't forced
-   *  to live there. For Loop nodes the only iteration variable (`_li`) has no
-   *  value output, so nothing can depend on it — hoist past UNLESS the value's
-   *  subtree contains an RNG node (per-iteration side effect). For ForEach, hoist
-   *  only when the value isn't element-dependent AND isn't RNG-pinned. */
+   *  to live there. A value depending on the iteration variable (Loop's `index`,
+   *  ForEach's `element`/`index`) must stay in that loop's body; everything else
+   *  hoists past UNLESS the value's subtree contains an RNG node (per-iteration
+   *  side effect — loops have a per-iteration recompute cost, branches don't). */
   function hoistPastLoops(valueId: string, scope: ScopeId): ScopeId {
     if (isLoopPinned(valueId)) return scope;   // RNG: keep in its innermost loop body
     let current = scope;
     while (current !== CELL_TOP) {
       const k = scopeKind.get(current);
       if (!k) break;
-      if (k.kind === 'loopBody') {
-        current = scopeParent.get(current) ?? CELL_TOP;
-      } else if (k.kind === 'forEachBody') {
+      if (k.kind === 'loopBody' || k.kind === 'forEachBody') {
         const deps = elementDependentsByForEach.get(k.flowNodeId);
         if (deps && deps.has(valueId)) break;
         current = scopeParent.get(current) ?? CELL_TOP;
