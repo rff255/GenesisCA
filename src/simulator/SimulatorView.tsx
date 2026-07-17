@@ -107,21 +107,42 @@ function sanitizeAgentMetaballs(raw: unknown): Metaballs3D {
  *  once, module-singleton; drawAgentsOverlay updates the blur radius + threshold
  *  per frame and references it via ctx.filter = 'url(#…)'. */
 const GOO_FILTER_ID = 'genesisca-agent-goo';
-let gooFilterEls: { blur: SVGFEGaussianBlurElement; matrix: SVGFEColorMatrixElement } | null = null;
+let gooFilterEls: { blur: SVGFEGaussianBlurElement; matrix: SVGFEColorMatrixElement; fade: SVGFEColorMatrixElement } | null = null;
+/** Build the fade (alpha-scale) stage — a SECOND feColorMatrix AFTER the
+ *  threshold matrix. It carries the blob's mean-agent-alpha translucency,
+ *  because `ctx.globalAlpha` is silently IGNORED by Chromium when the draw is
+ *  routed through an SVG `url(#…)` filter (measured: a 0.5-globalAlpha draw
+ *  through this filter composites fully opaque, while a builtin-filter or
+ *  unfiltered draw honours it). Primitive results clamp to [0,1] BETWEEN
+ *  stages, so threshold-then-scale caps the blob's alpha at exactly the mean. */
+function makeGooFade(NS: string): SVGFEColorMatrixElement {
+  const fade = document.createElementNS(NS, 'feColorMatrix') as SVGFEColorMatrixElement;
+  fade.setAttribute('type', 'matrix');
+  fade.setAttribute('values', '1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 1 0');
+  return fade;
+}
 function ensureGooFilter(): NonNullable<typeof gooFilterEls> {
   if (gooFilterEls) return gooFilterEls;
+  const NS = 'http://www.w3.org/2000/svg';
   // Adopt an already-injected filter (a re-evaluated module — e.g. Vite HMR —
   // must not append a DUPLICATE id: url(#…) resolves the FIRST match, so the
-  // duplicate's params would never reach the canvas).
-  const existing = document.getElementById(GOO_FILTER_ID);
+  // duplicate's params would never reach the canvas). An adopted filter from an
+  // older build may lack the fade stage — append it then.
+  const existing = document.getElementById(GOO_FILTER_ID);  // the <filter> element itself
   if (existing) {
+    const matrices = existing.querySelectorAll('feColorMatrix');
+    let fade = matrices[1] as SVGFEColorMatrixElement | undefined;
+    if (!fade) {
+      fade = makeGooFade(NS);
+      existing.appendChild(fade);
+    }
     gooFilterEls = {
       blur: existing.querySelector('feGaussianBlur') as SVGFEGaussianBlurElement,
-      matrix: existing.querySelector('feColorMatrix') as SVGFEColorMatrixElement,
+      matrix: matrices[0] as SVGFEColorMatrixElement,
+      fade,
     };
     return gooFilterEls;
   }
-  const NS = 'http://www.w3.org/2000/svg';
   const svg = document.createElementNS(NS, 'svg');
   svg.setAttribute('width', '0');
   svg.setAttribute('height', '0');
@@ -138,13 +159,15 @@ function ensureGooFilter(): NonNullable<typeof gooFilterEls> {
   const matrix = document.createElementNS(NS, 'feColorMatrix');
   matrix.setAttribute('type', 'matrix');
   matrix.setAttribute('values', '1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 20 -9.5');
+  const fade = makeGooFade(NS);
   filter.appendChild(blur);
   filter.appendChild(matrix);
+  filter.appendChild(fade);
   const defs = document.createElementNS(NS, 'defs');
   defs.appendChild(filter);
   svg.appendChild(defs);
   document.body.appendChild(svg);
-  gooFilterEls = { blur, matrix };
+  gooFilterEls = { blur, matrix, fade };
   return gooFilterEls;
 }
 
@@ -2572,9 +2595,16 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
         // LONE agent at roughly its drawn size — the 2D analogue of the 3D auto
         // threshold) and shifts with the user's threshold relative to that auto
         // value, so both knobs mirror the 3D semantics (approximately).
-        let radSum = 0, radN = 0;
-        for (let i = 0; i < hw; i++) if (aal[i]) { radSum += ar[i]!; radN++; }
+        let radSum = 0, radN = 0, alphaSum = 0;
+        for (let i = 0; i < hw; i++) if (aal[i]) { radSum += ar[i]!; radN++; alphaSum += (acol[i * 4 + 3] ?? 255); }
         const avgRadPx = radN > 0 ? Math.max(1.2, (radSum / radN) * scale) : 4;
+        // Mean agent alpha → the blob's translucency. The goo filter's threshold
+        // matrix re-hardens the per-disc alpha toward 0/1 (that's what makes
+        // discs FUSE), so per-agent alpha dies inside the filter — the fused
+        // blob is re-composited at the population's mean alpha instead (the 2D
+        // analogue of the 3D blob's density-weighted mean; always on, like the
+        // plain 2D discs — no toggle in 2D).
+        const meanAlpha = radN > 0 ? alphaSum / (radN * 255) : 1;
         const sigma = Math.max(0.6, (mbCfg.influence - 1) * avgRadPx * 0.85);
         // An isolated blurred disc's PEAK alpha decays as σ grows (the blur
         // redistributes its mass), so a fixed alpha threshold would make lone
@@ -2589,6 +2619,10 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
         const goo = ensureGooFilter();
         goo.blur.setAttribute('stdDeviation', sigma.toFixed(2));
         goo.matrix.setAttribute('values', `1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 ${S.toFixed(1)} ${(0.5 - S * tSvg).toFixed(3)}`);
+        // The mean-alpha translucency rides the filter's FADE stage — NOT
+        // ctx.globalAlpha, which Chromium silently ignores on a drawImage routed
+        // through an SVG url(#…) filter (measured; see makeGooFade).
+        goo.fade.setAttribute('values', `1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 ${meanAlpha.toFixed(4)} 0`);
         ctx.save();
         ctx.filter = `url(#${GOO_FILTER_ID})`;
         ctx.drawImage(gooScratchRef.current!, 0, 0);

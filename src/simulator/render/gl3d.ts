@@ -860,6 +860,8 @@ uniform float uThreshold;  // the isovalue
 uniform float uFMax;       // density scale (texture A × uFMax = density)
 uniform float uStepWorld;  // march step (≈ half a field voxel, world units)
 uniform int   uMaxSteps;
+uniform float uAlpha;      // blob translucency (density-weighted mean agent alpha;
+                           // 1 = opaque — the pass then runs blend-off as before)
 uniform vec3 uLightDir;    // same lighting uniforms as FS / SPHERE_FS
 uniform float uAmbient;
 uniform float uDiffuse;
@@ -940,7 +942,7 @@ void main() {
   //    voxels / bonds / sprites.
   vec4 cpos = uMVP * vec4(hitP, 1.0);
   gl_FragDepth = (cpos.z / cpos.w) * 0.5 + 0.5;
-  outColor = vec4(col, 1.0);
+  outColor = vec4(col, uAlpha);
 }`;
 
 function compileProgram(gl: WebGL2RenderingContext, vsSrc: string, fsSrc: string): WebGLProgram {
@@ -1082,6 +1084,9 @@ export class Gl3DRenderer {
   private metaCornerB: [number, number, number] = [0, 0, 0];
   private metaStepWorld = 0.25;
   private metaMaxSteps = 64;
+  /** Density-weighted mean agent alpha (0..1) from the last bake — the blob's
+   *  uniform translucency under the Alpha blend toggle (1 = opaque). */
+  private metaBlobAlpha = 1;
   /** Params or agent data changed → re-bake before the next metaball pass. */
   private metaDirty = true;
   private metaTorus = false;                     // stashed by uploadAgents
@@ -1964,6 +1969,11 @@ export class Gl3DRenderer {
     const wsum = this.metaWsum, csum = this.metaCsum, bytes = this.metaBytes;
     wsum.fill(0, 0, total);
     csum.fill(0, 0, total * 3);
+    // Density-weighted MEAN agent alpha → the blob's uniform translucency (the
+    // field's RGBA8 has no spare channel for per-voxel alpha: A carries the
+    // density that defines the isosurface). A fused surface with one alpha is
+    // the honest v1 — per-agent-varying alpha would need a second 3D texture.
+    let aNum = 0, aDen = 0;
     // Pass 2 — splat each agent's falloff over its influence box:
     // w = (1 − (d/R)²)³ inside R (Wyvill soft-object kernel).
     for (let k = 0; k < n; k++) {
@@ -1974,6 +1984,7 @@ export class Gl3DRenderer {
       const R2 = R * R, invR2 = 1 / R2;
       const cx = d[o]!, cy = d[o + 1]!, cz = d[o + 2]!;
       const cr = d[o + 4]!, cg = d[o + 5]!, cb = d[o + 6]!;
+      const ca = d[o + 7]!;
       const fx0 = Math.floor((cx - R - bx0) * rx - 0.5), fx1 = Math.ceil((cx + R - bx0) * rx - 0.5);
       const fy0 = Math.floor((cy - R - by0) * ry - 0.5), fy1 = Math.ceil((cy + R - by0) * ry - 0.5);
       const fz0 = Math.floor((cz - R - bz0) * rz - 0.5), fz1 = Math.ceil((cz + R - bz0) * rz - 0.5);
@@ -2005,6 +2016,7 @@ export class Gl3DRenderer {
             wsum[idx]! += w;
             const ci = idx * 3;
             csum[ci]! += w * cr; csum[ci + 1]! += w * cg; csum[ci + 2]! += w * cb;
+            aNum += w * ca; aDen += w;
           }
         }
       }
@@ -2042,6 +2054,7 @@ export class Gl3DRenderer {
     gl.bindTexture(gl.TEXTURE_3D, null);
     gl.activeTexture(gl.TEXTURE0);
     this.metaFW = FW; this.metaFH = FH; this.metaFD = FD;
+    this.metaBlobAlpha = aDen > 0 ? aNum / aDen : 1;
     // World-space corners of the field (Z-up remap NEGATES row/layer — pass the
     // SIGNED cell-min/cell-max corners, see the META_FS header comment).
     const hx = (this.W - 1) / 2, hy = (this.H - 1) / 2, hz = (this.D - 1) / 2;
@@ -2055,16 +2068,28 @@ export class Gl3DRenderer {
   }
 
   /** Raymarch the baked metaball field from a fullscreen quad (replaces the
-   *  sphere-impostor pass while metaballs are enabled). Opaque; writes depth. */
+   *  sphere-impostor pass while metaballs are enabled). Opaque + depth-write by
+   *  default; when the agents carry alpha AND the Alpha blend toggle is on, the
+   *  blob blends at the bake's density-weighted mean agent alpha (depth-write
+   *  off — the sphere pass's Option-A rule; a single closed surface needs no
+   *  sort). Sprites draw after and are already blended/depth-tested. */
   private renderMetaballs(): void {
     if (!this.metaTex || this.metaFW === 0) return;
     const inv = mat4Invert(this.mvp);
     if (!inv) return;
     const gl = this.gl;
+    const blobAlpha = this.agentAlphaBlend ? this.metaBlobAlpha : 1;
+    const translucent = blobAlpha < 254.5 / 255;
     gl.useProgram(this.metaProg);
     gl.bindVertexArray(this.metaVao);
-    gl.disable(gl.BLEND);
-    gl.depthMask(true);
+    if (translucent) {
+      gl.enable(gl.BLEND);
+      gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+      gl.depthMask(false);
+    } else {
+      gl.disable(gl.BLEND);
+      gl.depthMask(true);
+    }
     gl.enable(gl.DEPTH_TEST);
     gl.uniformMatrix4fv(gl.getUniformLocation(this.metaProg, 'uMVP'), false, this.mvp);
     gl.uniformMatrix4fv(gl.getUniformLocation(this.metaProg, 'uInvMVP'), false, inv);
@@ -2074,12 +2099,15 @@ export class Gl3DRenderer {
     gl.uniform1f(gl.getUniformLocation(this.metaProg, 'uFMax'), Gl3DRenderer.META_F_MAX);
     gl.uniform1f(gl.getUniformLocation(this.metaProg, 'uStepWorld'), this.metaStepWorld);
     gl.uniform1i(gl.getUniformLocation(this.metaProg, 'uMaxSteps'), this.metaMaxSteps);
+    gl.uniform1f(gl.getUniformLocation(this.metaProg, 'uAlpha'), blobAlpha);
     this.setLightUniforms(gl, this.metaProg);   // binds the shadow map (unit 1)…
     this.setClipUniforms(gl, this.metaProg);
     gl.activeTexture(gl.TEXTURE0 + Gl3DRenderer.META_TEX_UNIT);  // …and resets the
     gl.bindTexture(gl.TEXTURE_3D, this.metaTex);                 // active unit to 0,
     gl.uniform1i(gl.getUniformLocation(this.metaProg, 'uField'), Gl3DRenderer.META_TEX_UNIT);  // so bind AFTER it
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+    gl.depthMask(true);
+    gl.disable(gl.BLEND);
     gl.bindTexture(gl.TEXTURE_3D, null);
     gl.activeTexture(gl.TEXTURE0);
     gl.bindVertexArray(null);

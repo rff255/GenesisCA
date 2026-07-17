@@ -52,8 +52,9 @@ import styles from './CaNode.module.css';
 import { InlineNumberInput, InlineBoolSelect, InlineTagSelect, InlineGlyphInput } from './widgets/InlineWidgets';
 import { ColorField } from './widgets/ColorField';
 import { hexToRgba, rgbaToHex, isOpaque, OPAQUE } from '../../model/colorHex';
-import { readCategoricalEntries, readCategoricalDefault, type CategoricalEntry } from './nodes/CategoricalColorNode';
-import { readColorScaleStopsRaw, writeColorScaleStops } from './nodes/ColorScaleNode';
+import { readCategoricalEntries, readCategoricalDefault, categoricalHasAlpha, type CategoricalEntry } from './nodes/CategoricalColorNode';
+import { readColorScaleStopsRaw, writeColorScaleStops, colorScaleHasAlpha } from './nodes/ColorScaleNode';
+import { colorConstantHasAlpha } from './nodes/GetColorConstantNode';
 import { GradientStopsEditor, type GradStop } from './widgets/GradientStopsEditor';
 
 /** Pick the handle CSS class for a port based on its category + data type.
@@ -570,6 +571,19 @@ function CaNodeComponent({ id, data }: NodeProps) {
       // Connection-kind hazards (typed-port mismatches that the runtime would silently accept)
       if (connectionHazards.length > 0) {
         for (const h of connectionHazards) own.push(h);
+      }
+      // Declared-but-unwired alpha (the silent-transparency trap): setting a
+      // non-opaque alpha on a colour node's palette grows its A OUTPUT port
+      // (Option A), but nothing flows until that port is wired into Set Cell
+      // Looks' A input — the alpha otherwise has NO effect anywhere, which
+      // reads as "transparency doesn't work". Surface it as a badge.
+      const declaredAlpha =
+        nodeData.nodeType === 'colorScale' ? colorScaleHasAlpha(nodeData.config)
+        : nodeData.nodeType === 'categoricalColor' ? categoricalHasAlpha(nodeData.config)
+        : nodeData.nodeType === 'getColorConstant' ? colorConstantHasAlpha(nodeData.config)
+        : false;
+      if (declaredAlpha && !connectedInputHandles.has('output_value_a')) {
+        own.push("Alpha is set but the A output is unwired — wire it into Set Cell Looks' A input for the transparency to take effect");
       }
       return own;
     },
