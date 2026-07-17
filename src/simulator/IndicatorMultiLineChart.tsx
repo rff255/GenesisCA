@@ -225,7 +225,7 @@ export function IndicatorMultiLineChart({ data, generation, height, hidden, onTo
       {/* Legend — one swatch per category, with current value */}
       <div style={{
         display: 'flex', flexWrap: 'wrap', gap: '2px 8px',
-        marginTop: 2, fontSize: '0.62rem', color: LEGEND_LABEL_COLOR,
+        marginTop: 2, fontSize: '0.7rem', color: LEGEND_LABEL_COLOR,
         lineHeight: 1.2,
       }}>
         {categories.map((cat, ci) => {

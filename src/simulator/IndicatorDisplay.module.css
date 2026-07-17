@@ -140,11 +140,11 @@
   background: none;
   border: none;
   cursor: pointer;
-  font-size: var(--font-xs);
-  padding: 0;
+  font-size: 0.85rem;
+  padding: 2px 0;
   line-height: 1;
   color: var(--color-text-tertiary);
-  width: 16px;
+  width: 22px;
   text-align: center;
 }
 
@@ -161,11 +161,11 @@
   background: none;
   border: none;
   cursor: pointer;
-  font-size: 0.5rem;
-  padding: 0;
+  font-size: 0.8rem;
+  padding: 2px 0;
   line-height: 1;
-  color: var(--color-text-muted);
-  width: 14px;
+  color: var(--color-text-tertiary);
+  width: 20px;
   text-align: center;
   transition: color var(--duration-base);
 }

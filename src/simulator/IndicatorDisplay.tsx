@@ -337,7 +337,7 @@ export function IndicatorDisplay({ indicators, values, history, generation, grid
                     className={styles.chartBtn}
                     onClick={() => onCycleVizMode(ind.id)}
                     title={`Viz: ${label} \u2014 click to cycle (Bars \u2192 Lines \u2192 Stack)`}
-                    style={{ fontSize: '0.58rem', minWidth: 34 }}
+                    style={{ fontSize: '0.7rem', minWidth: 40 }}
                   >
                     {label}
                   </button>
