@@ -346,6 +346,51 @@ const SEED = 0x9e3779b1 >>> 0;
 const STEPS = Number(process.env.STEPS) || 30;
 let allPass = true;
 
+// Synthetic: the Loop node's `index` output. Each agent runs Loop(5); the body
+// increments `acc` by (index*2+1) — Σ = 25/step — and, inside a Conditional
+// gated on Compare(index >= 3), increments `acc2` by the raw index — Σ = 7/step.
+// Exercises index consumers as a VALUE-node chain (expression), as a Compare
+// input inside a nested branch, and as a direct flow-node input — the three
+// scoping shapes the per-target pinning (volatile / loopStack / sink scope)
+// must get right, JS↔WASM bit-identical.
+function buildLoopIndexModel() {
+  const used = new Set();
+  const nid = (p) => { let id; do { id = p + Math.random().toString(36).slice(2, 8); } while (used.has(id)); used.add(id); return id; };
+  const aN = [], aEd = [];
+  const an = (t, c) => { const n = { id: nid('a'), type: 'caNode', position: { x: 0, y: 0 }, data: { nodeType: t, config: c } }; aN.push(n); return n; };
+  const aE = (s, sp, tt, tp, cat) => aEd.push({ id: nid('e'), source: s.id, target: tt.id, sourceHandle: `output_${cat}_${sp}`, targetHandle: `input_${cat}_${tp}` });
+  const bs = an('behaviourStep', {});
+  const lp = an('loop', { _port_count: '5' });
+  aE(bs, 'do', lp, 'do', 'flow');
+  const ex = an('expression', { expression: 'a*2+1', visibleCount: 1 });
+  aE(lp, 'index', ex, 'a', 'value');
+  const upd1 = an('updateAttribute', { attributeId: 'acc', operation: 'increment' });
+  aE(ex, 'result', upd1, 'value', 'value');
+  aE(lp, 'body', upd1, 'do', 'flow');
+  const cmp = an('statement', { operation: '>=', compareType: 'numerical', _port_y: '3' });
+  aE(lp, 'index', cmp, 'x', 'value');
+  const cond = an('conditional', {});
+  aE(cmp, 'result', cond, 'condition', 'value');
+  aE(upd1, 'next', cond, 'do', 'flow');
+  const upd2 = an('updateAttribute', { attributeId: 'acc2', operation: 'increment' });
+  aE(lp, 'index', upd2, 'value', 'value');
+  aE(cond, 'then', upd2, 'do', 'flow');
+  return {
+    schemaVersion: 1,
+    properties: { name: 'Loop Index Parity Test', dimension: '2d', gridWidth: 24, gridHeight: 24, gridDepth: 1, topology: '2d-grid', boundaryTreatment: 'torus', useWasm: false, useWebGPU: false },
+    topologyMode: { gridCells: false, agents: true },
+    centerBased: { enabled: true, maxAgents: 100, maxBonds: 0, worldWidth: 24, worldHeight: 24, seedCount: 40, seedPattern: 'scatter', defaultRadius: 0.5, growthRate: 0, repulsionStiffness: 2, adhesionStiffness: 0, interactionRange: 1.5, drag: 1, timeStep: 0.1, momentum: 0, maxSpeed: 0, neighbourQueryRadius: 8, useBondingPhysics: false, autoBond: false, agentTarget: 'wasm', agentUpdateMode: 'async',
+      agentCapabilities: { motion: 'force', body: true, collision: 'off', bonds: 'off', autoBond: false, growth: false, division: false, lifespan: false, populationBirth: false, populationDeath: false, sensing: false, sensingHeadingSource: 'velocity', orientation: false, fieldCoupling: false, appearance: true } },
+    attributes: [], modelAttributes: [], neighborhoods: [],
+    agentAttributes: [
+      { id: 'acc', name: 'Acc', type: 'float', defaultValue: '0' },
+      { id: 'acc2', name: 'Acc2', type: 'float', defaultValue: '0' },
+    ],
+    variables: [], agentVariables: [], indicators: [], mappings: [],
+    graphNodes: [], graphEdges: [], agentGraphNodes: aN, agentGraphEdges: aEd, macroDefs: [],
+  };
+}
+
 // Build the entry list: every shipped agent .gcaproj PLUS a synthetic 3D-field
 // model exercising ALL FIVE field-bridge nodes in 3D (trilinear sample/gradient/
 // splat + r-sphere read/affect). The 3D-field model is built in-memory (not
@@ -363,6 +408,7 @@ entries.push({ name: '[synthetic] Multi-attribute slots (Get/Set + by-id)', raw:
 entries.push({ name: '[synthetic] Get Grid Dimensions (3D world W/H/D)', raw: buildGridDimsModel() });
 entries.push({ name: '[synthetic] Apply Force To Agent (pairwise scatter)', raw: buildApplyForceToAgentModel() });
 entries.push({ name: '[synthetic] Apply Force To Agents (array broadcast, lowered)', raw: buildApplyForceToAgentsModel() });
+entries.push({ name: '[synthetic] Loop index output (value chain + branch + direct)', raw: buildLoopIndexModel() });
 
 for (const { name: f, raw } of entries) {
   const model = migrateForHarness(raw);

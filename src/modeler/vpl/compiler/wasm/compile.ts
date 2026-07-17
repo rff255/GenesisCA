@@ -6376,6 +6376,11 @@ function compileFlowChain(sourceNodeId: string, sourcePortId: string, ctx: WasmC
           ctx.emitter.localGet(lc);
           ctx.emitter.op(OP_I32_GE_S);
           ctx.emitter.brIf(1);
+          // Cache the iteration counter on the `index` output port so body-side
+          // consumers resolve it via the standard valueLocals path (mirrors
+          // forEachInArray's index). sinkAnalysis pins index-dependents at the
+          // loopBody scope, so their emit below sees the cached local.
+          setCachedPort(ctx, node.id, 'index', { localIdx: li, valtype: I32 });
           // body
           emitValuesForScope(ctx, `${node.id}:body`);
           compileFlowChain(node.id, 'body', ctx);

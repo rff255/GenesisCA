@@ -297,6 +297,18 @@ function routeEmissionForNode<T>(ctx: CompileCtx, nodeId: string, emit: () => T)
   return result;
 }
 
+/** The (stable, per-loop-node) WGSL identifier of a Loop's iteration counter —
+ *  minted on first request and cached on the node's `index` port so consumers
+ *  compiled BEFORE the loop's flow emit and the `for (var …)` declaration
+ *  itself agree on the name. */
+function loopIndexRef(ctx: CompileCtx, loopNodeId: string): ValueRef {
+  const cached = getCachedPort(ctx, loopNodeId, 'index');
+  if (cached) return cached;
+  const ref: ValueRef = { expr: fresh(ctx, 'li'), type: 'i32' };
+  setCachedPort(ctx, loopNodeId, 'index', ref);
+  return ref;
+}
+
 function flushBranchValues(ctx: CompileCtx, scope: ScopeId): void {
   const arr = ctx.branchLines.get(scope);
   if (!arr || arr.length === 0) return;
@@ -3195,6 +3207,16 @@ function compileValueNode(ctx: CompileCtx, nodeId: string, portId: string = 'val
     return null;
   }
 
+  if (node.data.nodeType === 'loop' && portId === 'index') {
+    // The Loop node's per-iteration counter. Mint the WGSL var name on demand
+    // (once per loop node) so consumers compiled during preEmitValueNodes
+    // reference the same identifier the loop's `for (var …)` statement later
+    // declares. Their `let` lines are routed to the loopBody sink scope by
+    // routeEmissionForNode and flushed INSIDE the for block, where the counter
+    // is in scope (sinkAnalysis pins index-dependents at loopBody).
+    return loopIndexRef(ctx, nodeId);
+  }
+
   const emitter = VALUE_NODE_EMITTERS[node.data.nodeType];
   if (!emitter) {
     ctx.errors.push(`No WebGPU value emitter for "${node.data.nodeType}"`);
@@ -3470,7 +3492,9 @@ function compileFlowChain(ctx: CompileCtx, sourceNodeId: string, sourcePortId: s
         countRef = { expr: `${parseInlineNum(inlineVal, 1) | 0}`, type: 'i32' };
       }
       const cnt = castTo(countRef, 'i32');
-      const li = fresh(ctx, 'li');
+      // Use the SAME identifier consumers of the `index` output already hold
+      // (minted on demand during preEmit) — see loopIndexRef.
+      const li = loopIndexRef(ctx, node.id).expr;
       ctx.lines.push(`  for (var ${li}: i32 = 0; ${li} < ${cnt}; ${li} = ${li} + 1) {`);
       flushBranchValues(ctx, `${node.id}:body`);
       if (!compileFlowChain(ctx, node.id, 'body')) return false;

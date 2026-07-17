@@ -263,6 +263,9 @@ interface AgentWgpuCtx {
   /** Active forEach iteration locals (innermost last). `elemType` is the source
    *  array's element type (i32 for id arrays, f32 for value arrays). */
   forEachStack: Array<{ nodeId: string; elemName: string; idxName: string; elemType: WgslType }>;
+  /** Active Loop nodes (innermost last) — exposes the iteration counter var
+   *  for the Loop's `index` output port (mirrors forEachStack). */
+  loopStack: Array<{ nodeId: string; idxName: string }>;
   /** Set when the behaviour body writes the i32 SoA (setAgentType) — the agentI32
    *  binding is then declared `read_write` (else `read`, the Boids-byte-identical
    *  default). */
@@ -409,6 +412,13 @@ function compileValueNode(ctx: AgentWgpuCtx, nodeId: string, portId: string): Va
         : portId === 'currentLength' ? { expr: frame.cur, type: 'f32' }
         : portId === 'index' ? { expr: frame.index, type: 'i32' }
         : { expr: frame.partner, type: 'i32' }; // partnerId
+      break;
+    }
+    case 'loop': {
+      // The Loop node's per-iteration counter (`index` output). Body-only —
+      // outside the live loop it resolves to 0, like forEach.
+      const frame = ctx.loopStack.find(f => f.nodeId === nodeId);
+      result = frame ? { expr: frame.idxName, type: 'i32' } : { expr: '0', type: 'i32' };
       break;
     }
     case 'behaviourStep': {
@@ -2793,13 +2803,17 @@ function emitSwitch(ctx: AgentWgpuCtx, node: GraphNode): void {
   }
 }
 
-/** Loop — repeat BODY `count` times. */
+/** Loop — repeat BODY `count` times. The counter is exposed via the node's
+ *  `index` output (body-only; consumers are volatile so they re-emit per
+ *  iteration, like forEach element/index). */
 function emitLoop(ctx: AgentWgpuCtx, node: GraphNode): void {
   const cnt = castTo(resolveValueInput(ctx, node, 'count', 1), 'i32');
   const li = fresh(ctx, 'lpI');
   ctx.lines.push(`  for (var ${li}: i32 = 0; ${li} < ${cnt}; ${li} = ${li} + 1) {`);
+  ctx.loopStack.push({ nodeId: node.id, idxName: li });
   clearVolatileCache(ctx);
   compileFlowChain(ctx, node.id, 'body');
+  ctx.loopStack.pop();
   ctx.lines.push(`  }`);
   clearVolatileCache(ctx);
 }
@@ -2847,7 +2861,7 @@ const AGENT_VALUE_NO_HOIST: ReadonlySet<string> = new Set<string>([
   'getVariable',                            // mutable Local Variable storage
   'getAgentAttribute',                      // a neighbour write can mutate it
   'getIndicator',                           // mutable indicator storage
-  'forEachInArray', 'forEachBond',          // per-iteration element refs
+  'forEachInArray', 'forEachBond', 'loop',  // per-iteration element/index refs
   // array producers (use scratch — emitted via compileArrayNode, not here)
   'getNearbyAgents', 'getAgentsInView', 'getAgentsAttribute', 'filterAgents', 'joinAgents',
   'pickNRandomAgents', 'pickRandomAgent', 'getBondedAgents',
@@ -2970,7 +2984,7 @@ function computeVolatile(ctx: AgentWgpuCtx, extraSeeds?: Set<string>): void {
   // pinned to re-emit at use so a "Set Attribute → read later in flow" shape
   // reads post-write like JS/WASM instead of a hoisted stale snapshot.
   const volatileSet = new Set<string>(extraSeeds ?? []);
-  for (const [, node] of nodeMap) if (node.data.nodeType === 'forEachInArray' || node.data.nodeType === 'forEachBond') volatileSet.add(node.id);
+  for (const [, node] of nodeMap) if (node.data.nodeType === 'forEachInArray' || node.data.nodeType === 'forEachBond' || node.data.nodeType === 'loop') volatileSet.add(node.id);
   let changed = true;
   while (changed) {
     changed = false;
@@ -3365,6 +3379,7 @@ export function compileAgentGraphWebGPU(
     hazardEmitBefore: new Map<string, string[]>(),
     arrayScratchSlot: new Map<string, { slot: number; elemType: WgslType }>(),
     forEachStack: [],
+    loopStack: [],
     forEachBondStack: [],
     usesI32Write: false,
     usesBondStore: false, usesIndicators: false, usesAux: false,

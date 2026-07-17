@@ -160,6 +160,14 @@ export function compileOverseerGraph(
       }
       return { ref: portId === 'index' ? `_fei${srcId}` : `_v${srcId}_element`, kind: 'preset' };
     }
+    if (t === 'loop') {
+      // The Loop node's per-iteration counter (`index` output) — the `_l<id>`
+      // loop variable, in scope only inside the BODY chain.
+      if (!loopScopes.includes(srcId)) {
+        compileError = compileError ?? '[overseer] A Loop Index is used outside its loop body.';
+      }
+      return { ref: `_l${srcId}`, kind: 'preset' };
+    }
     if (t === 'getModelAttribute' && src?.data.config.isColorAttr) {
       return { ref: `_v${srcId}_${portId}`, kind: 'emit' };
     }
@@ -183,7 +191,7 @@ export function compileOverseerGraph(
     if (!node) return;
     const t = node.data.nodeType;
     // Preset sources never emit (their variable already exists in scope).
-    if (t === 'ovRunUntilStop' || t === 'forEachInArray' || t === 'experiment') return;
+    if (t === 'ovRunUntilStop' || t === 'forEachInArray' || t === 'loop' || t === 'experiment') return;
     const def = getNodeDef(t);
     if (!def) return;
 
@@ -301,7 +309,9 @@ export function compileOverseerGraph(
       stmt.push(`${inner}for (let _l${nodeId} = 0; _l${nodeId} < _lc${nodeId}; _l${nodeId}++) {`);
       stmt.push(`${inner}  if (O.aborted) return;`);
       target.push(...stmt);
+      loopScopes.push(nodeId);
       emitFlowChain(nodeId, 'body', inner + '  ', target);
+      loopScopes.pop();
       target.push(`${inner}}`);
       target.push(indent + '}');
       emitFlowChain(nodeId, 'next', indent, target);

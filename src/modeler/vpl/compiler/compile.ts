@@ -680,6 +680,12 @@ function compileRoot(
     if (sourceNode?.data.nodeType === 'forEachInArray' && sourcePortId === 'index') {
       return `_fei${sourceNodeId}`;
     }
+    // Loop's per-iteration counter — declared as `_li<id>` by the for statement
+    // in compileFlowChain, in scope only inside the BODY chain (same scope rules
+    // as forEachInArray's element/index above).
+    if (sourceNode?.data.nodeType === 'loop' && sourcePortId === 'index') {
+      return `_li${sourceNodeId}`;
+    }
     // pickNRandomNeighbors / pickNRandomAgents write to the _result scratch array
     // (the _work scratch is internal and never read by downstream nodes).
     if (sourceNode?.data.nodeType === 'pickNRandomNeighbors' || sourceNode?.data.nodeType === 'pickNRandomAgents') {
@@ -1030,7 +1036,25 @@ function compileRoot(
         }
         flowLines.push(`${indent}for (let _li${node.id} = 0; _li${node.id} < ${countVar}; _li${node.id}++) {`);
         flushBranchValues(`${node.id}:body`, flowLines, indent + '  ');
-        compileFlowChain(node.id, 'body', indent + '  ');
+        // Body-emit context (mirrors forEachInArray): value nodes depending on
+        // the loop's `index` output that are compiled lazily during the body
+        // walk must land INSIDE the for block where `_li<id>` is in scope.
+        {
+          const savedTarget = bodyTarget;
+          const savedIndent = bodyIndent;
+          const savedDeps = bodyDependents;
+          const savedCompiled = bodyCompiled;
+          const ownDeps = findElementDependents(node.id, ['index']);
+          bodyDependents = new Set([...(savedDeps ?? []), ...ownDeps]);
+          bodyTarget = flowLines;
+          bodyIndent = indent + '  ';
+          bodyCompiled = new Set(savedCompiled);
+          compileFlowChain(node.id, 'body', indent + '  ');
+          bodyTarget = savedTarget;
+          bodyIndent = savedIndent;
+          bodyDependents = savedDeps;
+          bodyCompiled = savedCompiled;
+        }
         flowLines.push(`${indent}}`);
       } else if (node.data.nodeType === 'forEachInArray') {
         const arraySource = inputToSource.get(`${node.id}:array`);

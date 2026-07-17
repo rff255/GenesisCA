@@ -97,6 +97,11 @@ const NEVER_INVARIANT = new Set<string>([
   // undefined. (Models that route index only into arrayElement/setArrayElement
   // dodged this because those consumers also read a never-invariant variable.)
   'forEachInArray',
+  // Loop's `index` output varies per iteration exactly like ForEach's — same
+  // hazard: `loop` has only a (typically invariant) Count input, so the
+  // composite rule would classify it invariant and hoist every index consumer
+  // to the function preamble where `_li<id>` is undefined.
+  'loop',
   // Get Cell Position reads the per-cell `_row`/`_col`/`_layer` locals (decoded
   // inside the loop). It has NO value inputs, so the composite rule would
   // classify it vacuously invariant and hoist it to the function preamble —
