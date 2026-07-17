@@ -75,6 +75,62 @@ function buildSocialMetaTags(model: CAModel): string {
 
 const TITLE_RE = /<title>[\s\S]*?<\/title>/;
 const HEAD_OPEN_RE = /<head([^>]*)>/;
+const DOCTYPE_RE = /^\s*<!doctype html>/i;
+
+/** Make text safe inside an HTML comment: `--` is invalid in comments and
+ *  `-->` would terminate the banner early — replace with an en dash. */
+function commentSafe(s: string): string {
+  return s.replace(/-{2,}/g, '–');
+}
+
+/** Wrap text to `width`-char lines (word boundaries), capped at `maxLines`. */
+function wrapLines(text: string, width: number, maxLines: number): string[] {
+  const words = text.split(/\s+/).filter(Boolean);
+  const out: string[] = [];
+  let line = '';
+  for (const w of words) {
+    if (line && line.length + 1 + w.length > width) {
+      out.push(line);
+      if (out.length === maxLines) { out[maxLines - 1] += ' …'; return out; }
+      line = w;
+    } else {
+      line = line ? `${line} ${w}` : w;
+    }
+  }
+  if (line) out.push(line);
+  return out;
+}
+
+/**
+ * A human-readable comment banner placed at the VERY TOP of the exported file
+ * (right after the doctype). Messaging apps never OG-scrape file ATTACHMENTS —
+ * but some (Discord, Slack) preview an attached text file's FIRST LINES as raw
+ * text, which for a single-file bundle is minified code soup. This banner makes
+ * that snippet read as the model's name + summary + "open in a browser" hint
+ * instead. (Real rich previews with a thumbnail need the file HOSTED at a URL —
+ * then the injected og:/twitter: tags take over.)
+ */
+function buildAttachmentBanner(model: CAModel): string {
+  const p = model.properties;
+  const name = commentSafe(p.name || 'GenesisCA Model');
+  const desc = commentSafe((p.description || '').trim());
+  const author = commentSafe([p.author, p.modelAuthor].filter(Boolean).join(', '));
+  const lines: string[] = [
+    '',
+    '  ============================================================',
+    `  ${name} — an interactive GenesisCA simulation`,
+    '  ============================================================',
+  ];
+  for (const l of wrapLines(desc, 60, 4)) lines.push(`  ${l}`);
+  if (author) lines.push(`  By: ${author}`);
+  lines.push('');
+  lines.push('  HOW TO RUN: save this file and open it in any web browser');
+  lines.push('  (double-click it) — no install, works offline.');
+  lines.push('');
+  lines.push('  Built with GenesisCA — https://genesisca.online');
+  lines.push('');
+  return `<!--\n${lines.join('\n')}\n-->`;
+}
 
 /** Inject a model into the viewer template, targeting the model <script>
  *  specifically (the sentinel also appears as a bundled JS constant). */
@@ -93,6 +149,17 @@ export function assemblePresentationHtml(template: string, model: CAModel): stri
   html = html.replace(TITLE_RE, () => `<title>${escapeHtml(name)} — GenesisCA</title>`);
   const meta = buildSocialMetaTags(model);
   html = html.replace(HEAD_OPEN_RE, (m) => `${m}\n${meta}`);
+  // Attachment banner FIRST in the file (after the doctype) so raw-text
+  // attachment previews (Discord/Slack show the first lines) read as the
+  // model's name/summary instead of minified code. Valid HTML: comments may
+  // sit between the doctype and <html>. If the doctype ever goes missing from
+  // the template, prepend the banner (browsers tolerate a comment before it).
+  const banner = buildAttachmentBanner(model);
+  if (DOCTYPE_RE.test(html)) {
+    html = html.replace(DOCTYPE_RE, (m) => `${m}\n${banner}`);
+  } else {
+    html = `${banner}\n${html}`;
+  }
   return html;
 }
 
