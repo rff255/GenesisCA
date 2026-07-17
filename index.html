@@ -4,6 +4,23 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>GenesisCA</title>
+    <!-- Social link previews (Open Graph + Twitter cards). og:image MUST be an
+         absolute URL — scrapers don't resolve relative paths or data URLs — so
+         these are pinned to the production domain (public/CNAME). They're inert
+         under dev / Tauri / a fork's subpath. -->
+    <meta name="description" content="GenesisCA is a free, browser-based IDE for designing and simulating Cellular Automata and agent-based models with a visual node language — no coding required. Compiles to WebAssembly and WebGPU, works offline." />
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="GenesisCA" />
+    <meta property="og:title" content="GenesisCA — Cellular Automata & Agent-Based Modeling IDE" />
+    <meta property="og:description" content="Design and simulate Cellular Automata and agent-based models in your browser with a visual node language — no coding required. Compiles to WebAssembly and WebGPU, works offline." />
+    <meta property="og:url" content="https://genesisca.online/" />
+    <meta property="og:image" content="https://genesisca.online/pwa-512x512.png" />
+    <meta property="og:image:width" content="512" />
+    <meta property="og:image:height" content="512" />
+    <meta name="twitter:card" content="summary" />
+    <meta name="twitter:title" content="GenesisCA — Cellular Automata & Agent-Based Modeling IDE" />
+    <meta name="twitter:description" content="Design and simulate Cellular Automata and agent-based models in your browser with a visual node language — no coding required." />
+    <meta name="twitter:image" content="https://genesisca.online/pwa-512x512.png" />
     <!-- Icons use %BASE_URL% so they resolve under '/' (dev / Tauri) and
          '/GenesisCA/' (GitHub Pages) without branching. The PWA <link rel="manifest">
          is injected by vite-plugin-pwa — do not add it here. -->
