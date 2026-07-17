@@ -8528,14 +8528,20 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
                     style={{ flex: 1, minWidth: 0, opacity: light3d.shadows ? 1 : 0.4 }}
                     onChange={e => setLight3d(l => ({ ...l, shadowStrength: Number(e.target.value) }))} />
                 </label>
-                <label style={{ ...row, gap: 4 }} title="Ambient occlusion — crevices between filled cells darken so a packed volume reads as one solid form. Slider = strength.">
-                  <input type="checkbox" checked={light3d.ao} data-sim-overlay
-                    onChange={e => setLight3d(l => ({ ...l, ao: e.target.checked }))} />
-                  <span style={{ fontSize: '0.6rem', color: '#999', width: 60, flex: '0 0 auto' }}>Occlusion</span>
-                  <input type="range" min={0} max={1} step={0.01} value={light3d.aoStrength} disabled={!light3d.ao}
-                    style={{ flex: 1, minWidth: 0, opacity: light3d.ao ? 1 : 0.4 }}
-                    onChange={e => setLight3d(l => ({ ...l, aoStrength: Number(e.target.value) }))} />
-                </label>
+                {/* Occlusion is VOXEL-occupancy AO (computed from cell face-
+                    neighbours in uploadColors) — it does nothing for agents
+                    (spheres get their inter-shading from cast shadows), so the
+                    row is hidden for an agents-only model, like Cell gaps. */}
+                {gridCellsOn && (
+                  <label style={{ ...row, gap: 4 }} title="Ambient occlusion — crevices between filled cells darken so a packed volume reads as one solid form (CA-grid voxels only). Slider = strength.">
+                    <input type="checkbox" checked={light3d.ao} data-sim-overlay
+                      onChange={e => setLight3d(l => ({ ...l, ao: e.target.checked }))} />
+                    <span style={{ fontSize: '0.6rem', color: '#999', width: 60, flex: '0 0 auto' }}>Occlusion</span>
+                    <input type="range" min={0} max={1} step={0.01} value={light3d.aoStrength} disabled={!light3d.ao}
+                      style={{ flex: 1, minWidth: 0, opacity: light3d.ao ? 1 : 0.4 }}
+                      onChange={e => setLight3d(l => ({ ...l, aoStrength: Number(e.target.value) }))} />
+                  </label>
+                )}
               </>)}
             </div>
           );
