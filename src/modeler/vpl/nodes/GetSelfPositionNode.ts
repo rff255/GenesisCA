@@ -10,6 +10,7 @@ import { is3dModelLike } from '../compiler/niCodec';
 export const GetSelfPositionNode: NodeTypeDef = {
   type: 'getSelfPosition',
   label: 'Get Self Position',
+  agentLabel: 'Get Position',
   description: "Outputs the agent's own continuous position (X, Y) in the world frame.",
   category: 'data',
   color: '#5e35b1',

@@ -9,6 +9,7 @@ import { is3dModelLike } from '../compiler/niCodec';
 export const SetAgentPositionNode: NodeTypeDef = {
   type: 'setAgentPosition',
   label: 'Set Agent Position',
+  agentLabel: 'Set Position (by ID)',
   description: "Set an agent's position by id (a Create Agent handle, or a live agent).",
   category: 'output',
   color: '#4527a0',

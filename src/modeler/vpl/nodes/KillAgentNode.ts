@@ -8,6 +8,7 @@ import type { NodeTypeDef } from '../types';
 export const KillAgentNode: NodeTypeDef = {
   type: 'killAgent',
   label: 'Kill Agent',
+  agentLabel: 'Kill Self',
   description: 'Request that this agent die — recycled + all bonds broken (applied after the step).',
   category: 'output',
   color: '#ad1457',

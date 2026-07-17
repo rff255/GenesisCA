@@ -9,6 +9,7 @@ import type { NodeTypeDef } from '../types';
 export const SecreteToFieldNode: NodeTypeDef = {
   type: 'secreteToField',
   label: 'Secrete To Field',
+  agentLabel: 'Secrete To Field (CA Grid)',
   description: "Deposit a rate into a cell attribute at the agent's position (bilinear splat; negative = consume).",
   category: 'output',
   color: '#00695c',

@@ -12,6 +12,7 @@ import type { NodeTypeDef } from '../types';
 export const AffectCellsUnderNode: NodeTypeDef = {
   type: 'affectCellsUnder',
   label: 'Affect Cells Under',
+  agentLabel: 'Affect Cells Under (CA Grid)',
   description: 'Write a cell attribute over a radius of cells under the agent (deposit into the field before the cell step).',
   category: 'output',
   color: '#00695c',

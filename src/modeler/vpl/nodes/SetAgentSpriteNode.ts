@@ -32,6 +32,7 @@ import type { NodeTypeDef } from '../types';
 export const SetAgentSpriteNode: NodeTypeDef = {
   type: 'setAgentSprite',
   label: 'Set Agent Sprite',
+  agentLabel: 'Set Sprite',
   description: 'Control the agent’s sprite exhibition: change the sprite, set the frame, playback speed (frames/step; negative = reverse), rotation (an angle or a direction vector to align to), and size scale. Tick only the facets you want to change. Leave Agent unwired for the current agent (Output Mapping / Behaviour graph), or wire a Create Agent handle to target a spawned agent in the Init Event.',
   category: 'color',
   color: '#8e24aa',

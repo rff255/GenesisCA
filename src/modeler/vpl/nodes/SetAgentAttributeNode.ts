@@ -12,6 +12,7 @@ import type { NodeTypeDef } from '../types';
 export const SetAgentAttributeNode: NodeTypeDef = {
   type: 'setAgentAttribute',
   label: 'Set Agent Attribute',
+  agentLabel: 'Set Attribute (by ID)',
   description: "Write an attribute on another agent by id (signal a neighbour). Immediate (async-style) write. Extra attribute slots (+ Attribute) write several of that agent's attributes through one shared Agent input.",
   category: 'output',
   color: '#4527a0',
