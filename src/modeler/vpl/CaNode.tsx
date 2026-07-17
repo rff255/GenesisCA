@@ -2862,6 +2862,19 @@ function CaNodeComponent({ id, data }: NodeProps) {
           );
         })()}
 
+        {nodeData.nodeType === 'loop' && (
+          // Count vs Range mode — swaps the Count port for From/To (hiddenPorts).
+          <select
+            className={styles.select}
+            value={(nodeData.config.mode as string) || 'count'}
+            onChange={e => updateConfig('mode', e.target.value)}
+            title="Count: Index runs 0..N-1. Range: Index runs From..To (inclusive, ascending; From > To runs zero times)."
+          >
+            <option value="count">Count (Index 0..N-1)</option>
+            <option value="range">Range (Index From..To)</option>
+          </select>
+        )}
+
         {nodeData.nodeType === 'getNeighborAttributeByTag' && (() => {
           const selNbr = model.neighborhoods.find(n => n.id === nodeData.config.neighborhoodId);
           const tags = selNbr?.tags || {};

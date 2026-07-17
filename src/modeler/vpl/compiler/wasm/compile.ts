@@ -6350,31 +6350,38 @@ function compileFlowChain(sourceNodeId: string, sourcePortId: string, ctx: WasmC
         compileFlowChain(node.id, `then_${si}`, ctx);
       }
     } else if (node.data.nodeType === 'loop') {
-      // Loop: for (let _i = 0; _i < count; _i++) { body }
-      const countSource = ctx.inputToSource.get(`${node.id}:count`);
-      let countRef: ValueRef;
-      if (countSource) {
-        const r = compileValueNode(countSource.nodeId, ctx, countSource.portId);
-        if (!r) return false;
-        countRef = r;
-      } else {
-        const port = def.ports.find(p => p.id === 'count');
+      // Loop: for (let _i = 0; _i < count; _i++) { body } — or, in RANGE mode,
+      // for (let _i = from; _i <= to; _i++) (inclusive; from > to = zero runs).
+      const isRange = node.data.config.mode === 'range';
+      const resolveLoopI32 = (portId: string, dflt: number): ValueRef | null => {
+        const src = ctx.inputToSource.get(`${node.id}:${portId}`);
+        if (src) return compileValueNode(src.nodeId, ctx, src.portId);
+        const port = def.ports.find(p => p.id === portId);
         const inlineVal = port ? getInlineValue(port, node.data.config) : undefined;
-        countRef = { inline: true, value: parseInlineNum(inlineVal, 1), valtype: I32 };
-      }
-      // Allocate loop counter local + bound local
+        return { inline: true, value: parseInlineNum(inlineVal, dflt), valtype: I32 };
+      };
+      // Resolve the bound/start refs BEFORE allocating li/lc — a lazily-compiled
+      // source allocates its own locals during resolution, and the historical
+      // (byte-identity-relevant) order is source locals first, then li/lc.
+      const boundRef = resolveLoopI32(isRange ? 'to' : 'count', isRange ? 0 : 1);
+      if (!boundRef) return false;
+      const fromRef = isRange ? resolveLoopI32('from', 0) : null;
+      if (isRange && !fromRef) return false;
+      // Loop counter local + bound local. Count mode: li = 0, lc = count, exit
+      // on li >= lc. Range mode: li = from, lc = to, exit on li > lc.
       const li = ctx.emitter.allocLocal(I32);
       const lc = ctx.emitter.allocLocal(I32);
-      pushValueAs(ctx.emitter, countRef, I32);
+      pushValueAs(ctx.emitter, boundRef, I32);
       ctx.emitter.localSet(lc);
-      ctx.emitter.i32Const(0);
+      if (isRange) pushValueAs(ctx.emitter, fromRef!, I32);
+      else ctx.emitter.i32Const(0);
       ctx.emitter.localSet(li);
       ctx.emitter.block(() => {
         ctx.emitter.loop(() => {
-          // if (li >= lc) br block
+          // count: if (li >= lc) br block — range: if (li > lc) br block
           ctx.emitter.localGet(li);
           ctx.emitter.localGet(lc);
-          ctx.emitter.op(OP_I32_GE_S);
+          ctx.emitter.op(isRange ? OP_I32_GT_S : OP_I32_GE_S);
           ctx.emitter.brIf(1);
           // Cache the iteration counter on the `index` output port so body-side
           // consumers resolve it via the standard valueLocals path (mirrors

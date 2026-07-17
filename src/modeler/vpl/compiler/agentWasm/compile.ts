@@ -2808,14 +2808,22 @@ function emitSwitch(ctx: AgentWasmCtx, node: GraphNode): void {
  *  the construct. */
 function emitLoop(ctx: AgentWasmCtx, node: GraphNode): void {
   const em = ctx.em;
-  const cnt = em.allocLocal(I32); pushValueAs(em, resolveValueInput(ctx, node, 'count', 1), I32); em.localSet(cnt);
-  const li = em.allocLocal(I32); em.i32Const(0); em.localSet(li);
+  // Count mode: li = 0..count-1 (exit on li >= bound). Range mode: li runs
+  // From..To INCLUSIVE (exit on li > bound; From > To = zero iterations).
+  const isRange = node.data.config?.['mode'] === 'range';
+  const cnt = em.allocLocal(I32);
+  pushValueAs(em, resolveValueInput(ctx, node, isRange ? 'to' : 'count', isRange ? 0 : 1), I32);
+  em.localSet(cnt);
+  const li = em.allocLocal(I32);
+  if (isRange) pushValueAs(em, resolveValueInput(ctx, node, 'from', 0), I32);
+  else em.i32Const(0);
+  em.localSet(li);
   // Expose the counter for the Loop's `index` output (body-only, like forEach's
   // index) — consumers are volatile (computeVolatile seeds `loop`) so their
   // caches clear per iteration and they re-read the live local.
   ctx.loopStack.push({ nodeId: node.id, idxLocal: li });
   em.block(() => { em.loop(() => {
-    em.localGet(li); em.localGet(cnt); em.op(OP_I32_GE_S); em.brIf(1);
+    em.localGet(li); em.localGet(cnt); em.op(isRange ? OP_I32_GT_S : OP_I32_GE_S); em.brIf(1);
     clearVolatileCache(ctx);
     compileFlowChain(ctx, node.id, 'body');
     em.localGet(li); em.i32Const(1); em.op(OP_I32_ADD); em.localSet(li); em.br(0);

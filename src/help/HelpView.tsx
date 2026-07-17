@@ -820,7 +820,7 @@ export function HelpView() {
             <tbody>
               <tr><td>Conditional</td><td>If/else branching based on a binary (true/false) condition.</td></tr>
               <tr><td>Sequence</td><td>Execute &quot;First&quot; then &quot;Then&quot; sequentially.</td></tr>
-              <tr><td>Loop</td><td>Repeat &quot;Body&quot; a given number of times. The <strong>Index</strong> output carries the current iteration (0-based) &mdash; only valid inside the Body chain. Works on every graph (cells, agents, overseer) and every compile target.</td></tr>
+              <tr><td>Loop</td><td>Repeat &quot;Body&quot; a given number of times. The <strong>Index</strong> output carries the current iteration (0-based) &mdash; only valid inside the Body chain. A <strong>Range</strong> mode replaces Count with <strong>From</strong>/<strong>To</strong> inputs: Index then runs From..To <em>inclusive</em> (ascending; From &gt; To runs zero times) &mdash; the natural &quot;for i = n to m&quot; shape. Works on every graph (cells, agents, overseer) and every compile target.</td></tr>
               <tr><td>Switch</td><td>Route flow to multiple cases. Two modes: <strong>By Conditions</strong> (wire binary inputs per case) or <strong>By Value</strong> (compare a value against per-case thresholds with ==, !=, &gt;, &lt;, &gt;=, &lt;= operators, or match tag options). The By Value type can be Integer, Decimal, Tag, or <strong>Neighbor Index</strong> &mdash; for Neighbor Index each case takes a wired NI value and matching is equality. A &quot;First match only&quot; toggle controls whether only the first matching case fires or all matches execute.</td></tr>
             </tbody>
           </table>

@@ -212,6 +212,134 @@ console.log('== Overseer driver (emit) ==');
   }
 }
 
+// --- RANGE mode (From..To inclusive) on JS + WASM + WGSL -------------------
+// Three chained loops: 3..7 → acc += index (Σ 25); 5..2 (EMPTY: from > to) →
+// acc2 += 1 (0 contribution); -2..2 → acc2 += index*2+1 (Σ 5). Expected after
+// one step: acc = 25, acc2 = 5.
+console.log('== range mode (JS + WASM runtime, WGSL emit) ==');
+{
+  const rN = [], rEd = [];
+  const rn = (t, c) => { const n = { id: nid('r'), type: 'caNode', position: { x: 0, y: 0 }, data: { nodeType: t, config: c } }; rN.push(n); return n; };
+  const rE = (s, sp, t, tp, cat) => rEd.push({ id: nid('e'), source: s.id, target: t.id, sourceHandle: `output_${cat}_${sp}`, targetHandle: `input_${cat}_${tp}` });
+  const rstep = rn('step', {});
+  const la = rn('loop', { mode: 'range', _port_from: '3', _port_to: '7' });
+  rE(rstep, 'do', la, 'do', 'flow');
+  const ua = rn('updateAttribute', { attributeId: 'acc', operation: 'increment' });
+  rE(la, 'index', ua, 'value', 'value');
+  rE(la, 'body', ua, 'do', 'flow');
+  const lb = rn('loop', { mode: 'range', _port_from: '5', _port_to: '2' });  // EMPTY
+  rE(la, 'next', lb, 'do', 'flow');
+  const ub = rn('updateAttribute', { attributeId: 'acc2', operation: 'increment', _port_value: '1' });
+  rE(lb, 'body', ub, 'do', 'flow');
+  const lc = rn('loop', { mode: 'range', _port_from: '-2', _port_to: '2' });
+  rE(lb, 'next', lc, 'do', 'flow');
+  const exc = rn('expression', { expression: 'a*2+1', visibleCount: 1 });
+  rE(lc, 'index', exc, 'a', 'value');
+  const uc = rn('updateAttribute', { attributeId: 'acc2', operation: 'increment' });
+  rE(exc, 'result', uc, 'value', 'value');
+  rE(lc, 'body', uc, 'do', 'flow');
+
+  const rModel = M.migrateForHarness({
+    schemaVersion: 2,
+    properties: {
+      name: 'Loop Range Test', description: '', topology: '2d-grid',
+      boundaryTreatment: 'torus', updateMode: 'synchronous',
+      gridWidth: W, gridHeight: H, dimension: '2d', gridDepth: 1,
+      useWasm: false,
+    },
+    attributes: [
+      { id: 'acc', name: 'acc', type: 'float', description: '', isModelAttribute: false, defaultValue: '0' },
+      { id: 'acc2', name: 'acc2', type: 'float', description: '', isModelAttribute: false, defaultValue: '0' },
+    ],
+    neighborhoods: [], mappings: [], indicators: [],
+    graphNodes: rN, graphEdges: rEd, macroDefs: [],
+    topologyMode: { gridCells: true, agents: false },
+  });
+  const EXP_A = 25, EXP_B = 5;
+
+  const rjs = M.compileGraph(rModel.graphNodes, rModel.graphEdges, rModel);
+  check('range: JS compiles', !rjs.error, rjs.error ?? '');
+  let jsA = null, jsB = null;
+  if (!rjs.error) {
+    const m = /\(\s*function\s*\(([^)]*)\)/.exec(rjs.stepCode);
+    const params = m[1].split(',').map(s => s.trim()).filter(Boolean);
+    const bufs = {
+      total: TOTAL,
+      r_acc: new Float64Array(TOTAL), w_acc: new Float64Array(TOTAL),
+      r_acc2: new Float64Array(TOTAL), w_acc2: new Float64Array(TOTAL),
+      modelAttrs: {}, colors: new Uint8ClampedArray(TOTAL * 4), activeViewer: '',
+      _indicators: {},
+      r_orientation: new Int32Array(TOTAL), w_orientation: new Int32Array(TOTAL),
+      _facePatternLookup: new Int32Array(0), _lookupTables: {},
+      _rngState: new Uint32Array([0x12345678]), _stopFlag: new Uint32Array(1),
+      W, H, D: 1, WH: W * H, _linkedResults: {},
+      glyphCodes: new Uint32Array(0), glyphColors: new Uint32Array(0),
+      order: null, _skipped: new Uint8Array(0),
+    };
+    const missing = params.filter(p => !(p in bufs));
+    check('range: JS params resolvable', missing.length === 0, missing.join(','));
+    if (missing.length === 0) {
+      (0, eval)(rjs.stepCode)(...params.map(p => bufs[p]));
+      let badA = 0, badB = 0;
+      for (let i = 0; i < TOTAL; i++) {
+        if (bufs.w_acc[i] !== EXP_A) badA++;
+        if (bufs.w_acc2[i] !== EXP_B) badB++;
+      }
+      check(`range: JS acc == ${EXP_A} (3..7 inclusive)`, badA === 0, `got ${bufs.w_acc[0]}`);
+      check(`range: JS acc2 == ${EXP_B} (empty 5..2 skipped + -2..2 sum)`, badB === 0, `got ${bufs.w_acc2[0]}`);
+      jsA = Float64Array.from(bufs.w_acc); jsB = Float64Array.from(bufs.w_acc2);
+    }
+  }
+
+  const rLayout = M.computeLayoutFromModel(rModel);
+  const rwa = M.compileGraphWasm(rModel.graphNodes, rModel.graphEdges, rModel, rLayout, M.buildViewerIds(rModel));
+  check('range: WASM compiles', !rwa.error, rwa.error ?? '');
+  if (!rwa.error) {
+    const mem = new WebAssembly.Memory({ initial: rLayout.pages });
+    const env = { mem, pow: Math.pow, exp: Math.exp, log: Math.log, sin: Math.sin, cos: Math.cos, tan: Math.tan, tanh: Math.tanh, fmod: (a, b) => a % b };
+    const { instance } = await WebAssembly.instantiate(rwa.bytes, { env });
+    instance.exports.step(TOTAL);
+    const wA = new Float64Array(mem.buffer, rLayout.attrWriteOffset['acc'], TOTAL);
+    const wB = new Float64Array(mem.buffer, rLayout.attrWriteOffset['acc2'], TOTAL);
+    let badA = 0, badB = 0, diff = 0;
+    for (let i = 0; i < TOTAL; i++) {
+      if (wA[i] !== EXP_A) badA++;
+      if (wB[i] !== EXP_B) badB++;
+      if (jsA && (wA[i] !== jsA[i] || wB[i] !== jsB[i])) diff++;
+    }
+    check(`range: WASM acc == ${EXP_A}`, badA === 0, `got ${wA[0]}`);
+    check(`range: WASM acc2 == ${EXP_B}`, badB === 0, `got ${wB[0]}`);
+    check('range: JS ↔ WASM bit-identical', diff === 0, `${diff}/${TOTAL}`);
+  }
+
+  const rwg = M.compileGraphWebGPU(rModel.graphNodes, rModel.graphEdges, rModel);
+  check('range: WebGPU compiles', !rwg.error, rwg.error ?? '');
+  if (!rwg.error) {
+    const s = rwg.shaderCode;
+    check('range: WGSL has inclusive from..to loops', /for \(var _li\d+: i32 = 3; _li\d+ <= 7;/.test(s) && /= -2; _li\d+ <= 2;/.test(s), 'from/to loop headers missing');
+  }
+
+  // Overseer range: loop 2..4 → logs 2, 3, 4.
+  const oN = [], oEd = [];
+  const on = (t, c) => { const n = { id: nid('o'), type: 'caNode', position: { x: 0, y: 0 }, data: { nodeType: t, config: c } }; oN.push(n); return n; };
+  const oE = (s, sp, t, tp, cat) => oEd.push({ id: nid('e'), source: s.id, target: t.id, sourceHandle: `output_${cat}_${sp}`, targetHandle: `input_${cat}_${tp}` });
+  const root = on('experiment', {});
+  const olp = on('loop', { mode: 'range', _port_from: '2', _port_to: '4' });
+  oE(root, 'do', olp, 'do', 'flow');
+  const olog = on('ovLog', { message: 'i={value}' });
+  oE(olp, 'index', olog, 'value', 'value');
+  oE(olp, 'body', olog, 'do', 'flow');
+  const ores = M.compileOverseerGraph(oN, oEd, rModel);
+  check('range: overseer compiles', !ores.error && !!ores.driverCode, ores.error ?? '');
+  if (ores.driverCode) {
+    const logged = [];
+    const O = { aborted: false, log: (m2) => logged.push(m2), logT: (t2, v) => logged.push(v) };
+    const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
+    await new AsyncFunction('O', ores.driverCode)(O);
+    check('range: overseer logs 2,3,4', logged.length === 3 && Number(logged[0]) === 2 && Number(logged[2]) === 4, JSON.stringify(logged));
+  }
+}
+
 // --- Agent WebGPU (emit-level; JS↔WASM agent runtime parity lives in
 // scripts/parity-agent-wasm.mjs "[synthetic] Loop index output") ---
 console.log('== Agent WebGPU (emit) ==');
@@ -225,6 +353,12 @@ console.log('== Agent WebGPU (emit) ==');
   const aupd = an('updateAttribute', { attributeId: 'acc', operation: 'increment' });
   aE(alp, 'index', aupd, 'value', 'value');
   aE(alp, 'body', aupd, 'do', 'flow');
+  // Range-mode loop on the agent shader too (2..5 → acc += index).
+  const alp2 = an('loop', { mode: 'range', _port_from: '2', _port_to: '5' });
+  aE(alp, 'next', alp2, 'do', 'flow');
+  const aupd2 = an('updateAttribute', { attributeId: 'acc', operation: 'increment' });
+  aE(alp2, 'index', aupd2, 'value', 'value');
+  aE(alp2, 'body', aupd2, 'do', 'flow');
   const agentModel = M.migrateForHarness({
     schemaVersion: 1,
     properties: { name: 'Agent Loop Index', dimension: '2d', gridWidth: 24, gridHeight: 24, gridDepth: 1, topology: '2d-grid', boundaryTreatment: 'torus', useWasm: false, useWebGPU: false },
@@ -246,6 +380,7 @@ console.log('== Agent WebGPU (emit) ==');
       const liName = /for \(var (_lpI\d+): i32/.exec(sh.slice(forAt))[1];
       check('agent WGSL body uses the counter', sh.slice(forAt).split(liName).length > 2);
     }
+    check('agent WGSL has the range-mode loop (2..5 inclusive)', /for \(var _lpI\d+: i32 = i32\(2(\.0)?\); _lpI\d+ <= i32\(5(\.0)?\);/.test(sh));
   }
 }
 

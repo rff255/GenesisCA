@@ -1024,17 +1024,28 @@ function compileRoot(
           compileFlowChain(node.id, `then_${si}`, indent);
         }
       } else if (node.data.nodeType === 'loop') {
-        const countSource = inputToSource.get(`${node.id}:count`);
-        let countVar: string;
-        if (countSource) {
-          compileValueNode(countSource.nodeId);
-          countVar = varName(countSource.nodeId, countSource.portId);
+        const resolveLoopInput = (portId: string, dflt: string): string => {
+          const source = inputToSource.get(`${node.id}:${portId}`);
+          if (source) {
+            compileValueNode(source.nodeId);
+            return varName(source.nodeId, source.portId);
+          }
+          const port = def.ports.find(p => p.id === portId);
+          const inlineVal = port ? getInlineValue(port, node.data.config) : undefined;
+          return inlineVal ?? dflt;
+        };
+        if (node.data.config.mode === 'range') {
+          // Range mode: the counter runs From..To INCLUSIVE (ascending; empty
+          // when From > To). `| 0` truncates like the WASM/WebGPU i32 casts so
+          // fractional inputs stay in cross-target lockstep. The bound is
+          // captured in a second `let` so a volatile To isn't re-read mid-loop.
+          const fromVar = resolveLoopInput('from', '0');
+          const toVar = resolveLoopInput('to', '0');
+          flowLines.push(`${indent}for (let _li${node.id} = (${fromVar}) | 0, _liEnd${node.id} = (${toVar}) | 0; _li${node.id} <= _liEnd${node.id}; _li${node.id}++) {`);
         } else {
-          const countPort = def.ports.find(p => p.id === 'count');
-          const inlineVal = countPort ? getInlineValue(countPort, node.data.config) : undefined;
-          countVar = inlineVal ?? '0';
+          const countVar = resolveLoopInput('count', '0');
+          flowLines.push(`${indent}for (let _li${node.id} = 0; _li${node.id} < ${countVar}; _li${node.id}++) {`);
         }
-        flowLines.push(`${indent}for (let _li${node.id} = 0; _li${node.id} < ${countVar}; _li${node.id}++) {`);
         flushBranchValues(`${node.id}:body`, flowLines, indent + '  ');
         // Body-emit context (mirrors forEachInArray): value nodes depending on
         // the loop's `index` output that are compiled lazily during the body

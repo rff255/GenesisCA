@@ -375,6 +375,13 @@ function buildLoopIndexModel() {
   const upd2 = an('updateAttribute', { attributeId: 'acc2', operation: 'increment' });
   aE(lp, 'index', upd2, 'value', 'value');
   aE(cond, 'then', upd2, 'do', 'flow');
+  // RANGE mode: a second loop with Index running 2..4 inclusive — acc3 += index
+  // per iteration (Σ = 9/step). Chained off the first loop's DONE.
+  const lp2 = an('loop', { mode: 'range', _port_from: '2', _port_to: '4' });
+  aE(lp, 'next', lp2, 'do', 'flow');
+  const upd3 = an('updateAttribute', { attributeId: 'acc3', operation: 'increment' });
+  aE(lp2, 'index', upd3, 'value', 'value');
+  aE(lp2, 'body', upd3, 'do', 'flow');
   return {
     schemaVersion: 1,
     properties: { name: 'Loop Index Parity Test', dimension: '2d', gridWidth: 24, gridHeight: 24, gridDepth: 1, topology: '2d-grid', boundaryTreatment: 'torus', useWasm: false, useWebGPU: false },
@@ -385,6 +392,7 @@ function buildLoopIndexModel() {
     agentAttributes: [
       { id: 'acc', name: 'Acc', type: 'float', defaultValue: '0' },
       { id: 'acc2', name: 'Acc2', type: 'float', defaultValue: '0' },
+      { id: 'acc3', name: 'Acc3', type: 'float', defaultValue: '0' },
     ],
     variables: [], agentVariables: [], indicators: [], mappings: [],
     graphNodes: [], graphEdges: [], agentGraphNodes: aN, agentGraphEdges: aEd, macroDefs: [],
