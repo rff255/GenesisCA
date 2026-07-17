@@ -3480,22 +3480,31 @@ function compileFlowChain(ctx: CompileCtx, sourceNodeId: string, sourcePortId: s
         if (!compileFlowChain(ctx, node.id, `then_${si}`)) return false;
       }
     } else if (node.data.nodeType === 'loop') {
-      const countSrc = ctx.inputToSource.get(`${node.id}:count`);
-      let countRef: ValueRef;
-      if (countSrc) {
-        const r = compileValueNode(ctx, countSrc.nodeId, countSrc.portId);
-        if (!r) return false;
-        countRef = r;
-      } else {
-        const port = def.ports.find(p => p.id === 'count');
+      const isRange = node.data.config.mode === 'range';
+      const resolveLoopI32 = (portId: string, dflt: number): string | null => {
+        const src = ctx.inputToSource.get(`${node.id}:${portId}`);
+        if (src) {
+          const r = compileValueNode(ctx, src.nodeId, src.portId);
+          return r ? castTo(r, 'i32') : null;
+        }
+        const port = def.ports.find(p => p.id === portId);
         const inlineVal = port ? getInlineValue(port, node.data.config) : undefined;
-        countRef = { expr: `${parseInlineNum(inlineVal, 1) | 0}`, type: 'i32' };
-      }
-      const cnt = castTo(countRef, 'i32');
+        return `${parseInlineNum(inlineVal, dflt) | 0}`;
+      };
       // Use the SAME identifier consumers of the `index` output already hold
       // (minted on demand during preEmit) — see loopIndexRef.
       const li = loopIndexRef(ctx, node.id).expr;
-      ctx.lines.push(`  for (var ${li}: i32 = 0; ${li} < ${cnt}; ${li} = ${li} + 1) {`);
+      if (isRange) {
+        // Range mode: From..To inclusive (ascending; From > To runs zero times).
+        const from = resolveLoopI32('from', 0);
+        const to = resolveLoopI32('to', 0);
+        if (from === null || to === null) return false;
+        ctx.lines.push(`  for (var ${li}: i32 = ${from}; ${li} <= ${to}; ${li} = ${li} + 1) {`);
+      } else {
+        const cnt = resolveLoopI32('count', 1);
+        if (cnt === null) return false;
+        ctx.lines.push(`  for (var ${li}: i32 = 0; ${li} < ${cnt}; ${li} = ${li} + 1) {`);
+      }
       flushBranchValues(ctx, `${node.id}:body`);
       if (!compileFlowChain(ctx, node.id, 'body')) return false;
       ctx.lines.push(`  }`);

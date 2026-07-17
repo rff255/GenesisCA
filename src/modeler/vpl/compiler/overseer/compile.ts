@@ -304,9 +304,17 @@ export function compileOverseerGraph(
     if (t === 'loop') {
       const stmt: string[] = [];
       stmt.push(indent + '{');
-      const count = resolveFlowInput(nodeId, 'count', stmt, emitted, inner, { fallback: '1' });
-      stmt.push(`${inner}const _lc${nodeId} = Math.max(0, Math.floor(${count}));`);
-      stmt.push(`${inner}for (let _l${nodeId} = 0; _l${nodeId} < _lc${nodeId}; _l${nodeId}++) {`);
+      if (node.data.config.mode === 'range') {
+        // Range mode: _l runs From..To inclusive (ascending; From > To = zero runs).
+        const from = resolveFlowInput(nodeId, 'from', stmt, emitted, inner, { fallback: '0' });
+        const to = resolveFlowInput(nodeId, 'to', stmt, emitted, inner, { fallback: '0' });
+        stmt.push(`${inner}const _lTo${nodeId} = Math.floor(${to});`);
+        stmt.push(`${inner}for (let _l${nodeId} = Math.floor(${from}); _l${nodeId} <= _lTo${nodeId}; _l${nodeId}++) {`);
+      } else {
+        const count = resolveFlowInput(nodeId, 'count', stmt, emitted, inner, { fallback: '1' });
+        stmt.push(`${inner}const _lc${nodeId} = Math.max(0, Math.floor(${count}));`);
+        stmt.push(`${inner}for (let _l${nodeId} = 0; _l${nodeId} < _lc${nodeId}; _l${nodeId}++) {`);
+      }
       stmt.push(`${inner}  if (O.aborted) return;`);
       target.push(...stmt);
       loopScopes.push(nodeId);

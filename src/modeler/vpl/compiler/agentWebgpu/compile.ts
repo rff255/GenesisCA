@@ -2803,13 +2803,31 @@ function emitSwitch(ctx: AgentWgpuCtx, node: GraphNode): void {
   }
 }
 
-/** Loop — repeat BODY `count` times. The counter is exposed via the node's
- *  `index` output (body-only; consumers are volatile so they re-emit per
- *  iteration, like forEach element/index). */
+/** Loop — repeat BODY `count` times (or From..To inclusive in range mode). The
+ *  counter is exposed via the node's `index` output (body-only; consumers are
+ *  volatile so they re-emit per iteration, like forEach element/index). */
 function emitLoop(ctx: AgentWgpuCtx, node: GraphNode): void {
+  // Resolve the bound inputs BEFORE minting `li` — resolution mints fresh names
+  // of its own, and the historical name order (bound first) is what existing
+  // shaders carry (byte-identity for count-mode models).
+  const isRange = node.data.config?.['mode'] === 'range';
+  if (isRange) {
+    const from = castTo(resolveValueInput(ctx, node, 'from', 0), 'i32');
+    const to = castTo(resolveValueInput(ctx, node, 'to', 0), 'i32');
+    const li = fresh(ctx, 'lpI');
+    ctx.lines.push(`  for (var ${li}: i32 = ${from}; ${li} <= ${to}; ${li} = ${li} + 1) {`);
+    runLoopBody(ctx, node, li);
+    return;
+  }
   const cnt = castTo(resolveValueInput(ctx, node, 'count', 1), 'i32');
   const li = fresh(ctx, 'lpI');
   ctx.lines.push(`  for (var ${li}: i32 = 0; ${li} < ${cnt}; ${li} = ${li} + 1) {`);
+  runLoopBody(ctx, node, li);
+}
+
+/** Shared Loop body emit (both modes): expose the counter frame, compile the
+ *  BODY chain with per-iteration volatile-cache clears, close the block. */
+function runLoopBody(ctx: AgentWgpuCtx, node: GraphNode, li: string): void {
   ctx.loopStack.push({ nodeId: node.id, idxName: li });
   clearVolatileCache(ctx);
   compileFlowChain(ctx, node.id, 'body');
