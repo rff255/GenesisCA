@@ -860,8 +860,9 @@ uniform float uThreshold;  // the isovalue
 uniform float uFMax;       // density scale (texture A × uFMax = density)
 uniform float uStepWorld;  // march step (≈ half a field voxel, world units)
 uniform int   uMaxSteps;
-uniform float uAlpha;      // blob translucency (density-weighted mean agent alpha;
-                           // 1 = opaque — the pass then runs blend-off as before)
+uniform sampler3D uAlphaField; // per-voxel mean agent alpha Σ(w·a)/Σw (R8) — the
+                               // blob's LOCAL translucency (see bakeMetaballField)
+uniform int uAlphaOn;          // 1 = translucent pass: sample uAlphaField at the hit
 uniform vec3 uLightDir;    // same lighting uniforms as FS / SPHERE_FS
 uniform float uAmbient;
 uniform float uDiffuse;
@@ -942,7 +943,11 @@ void main() {
   //    voxels / bonds / sprites.
   vec4 cpos = uMVP * vec4(hitP, 1.0);
   gl_FragDepth = (cpos.z / cpos.w) * 0.5 + 0.5;
-  outColor = vec4(col, uAlpha);
+  // Per-voxel translucency: the surface point takes its LOCAL agents' mean
+  // alpha (trilinear across the alpha field, so species boundaries fade
+  // smoothly). Opaque pass (uAlphaOn = 0) writes a = 1 — the historical blob.
+  float aOut = uAlphaOn == 1 ? texture(uAlphaField, (hitP - uFieldA) / (uFieldB - uFieldA)).r : 1.0;
+  outColor = vec4(col, aOut);
 }`;
 
 function compileProgram(gl: WebGL2RenderingContext, vsSrc: string, fsSrc: string): WebGLProgram {
@@ -1084,9 +1089,22 @@ export class Gl3DRenderer {
   private metaCornerB: [number, number, number] = [0, 0, 0];
   private metaStepWorld = 0.25;
   private metaMaxSteps = 64;
-  /** Density-weighted mean agent alpha (0..1) from the last bake — the blob's
-   *  uniform translucency under the Alpha blend toggle (1 = opaque). */
-  private metaBlobAlpha = 1;
+  /** PER-VOXEL blob alpha — a SECOND 3D texture (R8) holding the density-
+   *  weighted mean agent alpha Σ(w·a)/Σw per voxel, sampled at the raymarch
+   *  hit point so each blob REGION inherits its local agents' translucency
+   *  (a translucent species reads translucent, an opaque one opaque — NOT one
+   *  global mean across the whole body). Needed because the main field's
+   *  RGBA8 has no spare channel (A carries the isosurface density). */
+  private metaAlphaTex: WebGLTexture | null = null;
+  private metaAlphaDims: [number, number, number] = [0, 0, 0];
+  /** 1×1 opaque R8 kept bound while the field carries no alpha, so the
+   *  sampler3D stays valid (never sampled — uAlphaOn = 0). */
+  private metaAlphaDummy: WebGLTexture | null = null;
+  /** True when the last bake saw any non-opaque agent (gates the blend pass). */
+  private metaFieldHasAlpha = false;
+  private metaASum: Float32Array = new Float32Array(0);
+  private metaABytes: Uint8Array = new Uint8Array(0);
+  private static readonly META_ALPHA_TEX_UNIT = 3;  // 0 atlas, 1 shadow, 2 field
   /** Params or agent data changed → re-bake before the next metaball pass. */
   private metaDirty = true;
   private metaTorus = false;                     // stashed by uploadAgents
@@ -1939,7 +1957,7 @@ export class Gl3DRenderer {
       if (y < minY) minY = y; if (y > maxY) maxY = y;
       if (z < minZ) minZ = z; if (z > maxZ) maxZ = z;
     }
-    if (count === 0) { this.metaFW = 0; return; }
+    if (count === 0) { this.metaFW = 0; this.metaFieldHasAlpha = false; return; }
     // Field box in CELL coords. Torus → the full world (agents wrap across the
     // seam, so a tight bbox is meaningless AND the splat must wrap — see below).
     const torus = this.metaTorus;
@@ -1965,15 +1983,19 @@ export class Gl3DRenderer {
       this.metaWsum = new Float32Array(total);
       this.metaCsum = new Float32Array(total * 3);
       this.metaBytes = new Uint8Array(total * 4);
+      this.metaASum = new Float32Array(total);
+      this.metaABytes = new Uint8Array(total);
     }
     const wsum = this.metaWsum, csum = this.metaCsum, bytes = this.metaBytes;
+    const asum = this.metaASum, aBytes = this.metaABytes;
     wsum.fill(0, 0, total);
     csum.fill(0, 0, total * 3);
-    // Density-weighted MEAN agent alpha → the blob's uniform translucency (the
-    // field's RGBA8 has no spare channel for per-voxel alpha: A carries the
-    // density that defines the isosurface). A fused surface with one alpha is
-    // the honest v1 — per-agent-varying alpha would need a second 3D texture.
-    let aNum = 0, aDen = 0;
+    asum.fill(0, 0, total);
+    // PER-VOXEL alpha: Σ(w·a)/Σw baked into a second R8 texture, so each blob
+    // region inherits its LOCAL agents' translucency (a translucent species
+    // reads translucent where it is; an opaque one stays opaque) instead of
+    // one global mean washing the whole body.
+    let hasAlpha = false;
     // Pass 2 — splat each agent's falloff over its influence box:
     // w = (1 − (d/R)²)³ inside R (Wyvill soft-object kernel).
     for (let k = 0; k < n; k++) {
@@ -1985,6 +2007,7 @@ export class Gl3DRenderer {
       const cx = d[o]!, cy = d[o + 1]!, cz = d[o + 2]!;
       const cr = d[o + 4]!, cg = d[o + 5]!, cb = d[o + 6]!;
       const ca = d[o + 7]!;
+      if (ca < 254.5 / 255) hasAlpha = true;
       const fx0 = Math.floor((cx - R - bx0) * rx - 0.5), fx1 = Math.ceil((cx + R - bx0) * rx - 0.5);
       const fy0 = Math.floor((cy - R - by0) * ry - 0.5), fy1 = Math.ceil((cy + R - by0) * ry - 0.5);
       const fz0 = Math.floor((cz - R - bz0) * rz - 0.5), fz1 = Math.ceil((cz + R - bz0) * rz - 0.5);
@@ -2016,22 +2039,25 @@ export class Gl3DRenderer {
             wsum[idx]! += w;
             const ci = idx * 3;
             csum[ci]! += w * cr; csum[ci + 1]! += w * cg; csum[ci + 2]! += w * cb;
-            aNum += w * ca; aDen += w;
+            asum[idx]! += w * ca;
           }
         }
       }
     }
-    // Pass 3 — pack RGBA8: A = density / F_MAX, RGB = weighted-average colour.
+    // Pass 3 — pack RGBA8: A = density / F_MAX, RGB = weighted-average colour;
+    // the alpha field packs Σ(w·a)/Σw per voxel (empty voxels 0 — same
+    // treatment as the colour channels, whose empties are black).
     const invFMax = 255 / Gl3DRenderer.META_F_MAX;
     for (let i = 0; i < total; i++) {
       const wv = wsum[i]!;
       const bi = i * 4;
-      if (wv <= 0) { bytes[bi] = 0; bytes[bi + 1] = 0; bytes[bi + 2] = 0; bytes[bi + 3] = 0; continue; }
+      if (wv <= 0) { bytes[bi] = 0; bytes[bi + 1] = 0; bytes[bi + 2] = 0; bytes[bi + 3] = 0; aBytes[i] = 0; continue; }
       const ci = i * 3, inv = 255 / wv;
       bytes[bi] = Math.min(255, csum[ci]! * inv);
       bytes[bi + 1] = Math.min(255, csum[ci + 1]! * inv);
       bytes[bi + 2] = Math.min(255, csum[ci + 2]! * inv);
       bytes[bi + 3] = Math.min(255, wv * invFMax);
+      aBytes[i] = Math.min(255, (asum[i]! / wv) * 255);
     }
     // Pass 4 — upload. Reallocate on a dims change, else subimage in place.
     const gl = this.gl;
@@ -2054,7 +2080,33 @@ export class Gl3DRenderer {
     gl.bindTexture(gl.TEXTURE_3D, null);
     gl.activeTexture(gl.TEXTURE0);
     this.metaFW = FW; this.metaFH = FH; this.metaFD = FD;
-    this.metaBlobAlpha = aDen > 0 ? aNum / aDen : 1;
+    // Alpha field upload (only when some agent is non-opaque; the render binds
+    // a 1×1 opaque dummy otherwise and branches out on uAlphaOn = 0). R8 rows
+    // aren't 4-byte multiples for arbitrary FW, so drop UNPACK_ALIGNMENT to 1
+    // for the upload (and restore the default).
+    this.metaFieldHasAlpha = hasAlpha;
+    if (hasAlpha) {
+      gl.activeTexture(gl.TEXTURE0 + Gl3DRenderer.META_ALPHA_TEX_UNIT);
+      if (!this.metaAlphaTex) this.metaAlphaTex = gl.createTexture();
+      gl.bindTexture(gl.TEXTURE_3D, this.metaAlphaTex);
+      gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+      const aView = aBytes.subarray(0, total);
+      const [pw, ph, pd] = this.metaAlphaDims;
+      if (FW !== pw || FH !== ph || FD !== pd) {
+        gl.texImage3D(gl.TEXTURE_3D, 0, gl.R8, FW, FH, FD, 0, gl.RED, gl.UNSIGNED_BYTE, aView);
+        gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+        gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+        gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_WRAP_R, gl.CLAMP_TO_EDGE);
+        this.metaAlphaDims = [FW, FH, FD];
+      } else {
+        gl.texSubImage3D(gl.TEXTURE_3D, 0, 0, 0, 0, FW, FH, FD, gl.RED, gl.UNSIGNED_BYTE, aView);
+      }
+      gl.pixelStorei(gl.UNPACK_ALIGNMENT, 4);
+      gl.bindTexture(gl.TEXTURE_3D, null);
+      gl.activeTexture(gl.TEXTURE0);
+    }
     // World-space corners of the field (Z-up remap NEGATES row/layer — pass the
     // SIGNED cell-min/cell-max corners, see the META_FS header comment).
     const hx = (this.W - 1) / 2, hy = (this.H - 1) / 2, hz = (this.D - 1) / 2;
@@ -2070,16 +2122,16 @@ export class Gl3DRenderer {
   /** Raymarch the baked metaball field from a fullscreen quad (replaces the
    *  sphere-impostor pass while metaballs are enabled). Opaque + depth-write by
    *  default; when the agents carry alpha AND the Alpha blend toggle is on, the
-   *  blob blends at the bake's density-weighted mean agent alpha (depth-write
-   *  off — the sphere pass's Option-A rule; a single closed surface needs no
-   *  sort). Sprites draw after and are already blended/depth-tested. */
+   *  blob blends at the PER-VOXEL alpha field sampled at each hit point — a
+   *  translucent species' region is translucent, an opaque one stays opaque
+   *  (depth-write off — the sphere pass's Option-A rule; a single closed
+   *  surface needs no sort). Sprites draw after, already blended/depth-tested. */
   private renderMetaballs(): void {
     if (!this.metaTex || this.metaFW === 0) return;
     const inv = mat4Invert(this.mvp);
     if (!inv) return;
     const gl = this.gl;
-    const blobAlpha = this.agentAlphaBlend ? this.metaBlobAlpha : 1;
-    const translucent = blobAlpha < 254.5 / 255;
+    const translucent = this.agentAlphaBlend && this.metaFieldHasAlpha;
     gl.useProgram(this.metaProg);
     gl.bindVertexArray(this.metaVao);
     if (translucent) {
@@ -2099,18 +2151,40 @@ export class Gl3DRenderer {
     gl.uniform1f(gl.getUniformLocation(this.metaProg, 'uFMax'), Gl3DRenderer.META_F_MAX);
     gl.uniform1f(gl.getUniformLocation(this.metaProg, 'uStepWorld'), this.metaStepWorld);
     gl.uniform1i(gl.getUniformLocation(this.metaProg, 'uMaxSteps'), this.metaMaxSteps);
-    gl.uniform1f(gl.getUniformLocation(this.metaProg, 'uAlpha'), blobAlpha);
+    gl.uniform1i(gl.getUniformLocation(this.metaProg, 'uAlphaOn'), translucent ? 1 : 0);
     this.setLightUniforms(gl, this.metaProg);   // binds the shadow map (unit 1)…
     this.setClipUniforms(gl, this.metaProg);
     gl.activeTexture(gl.TEXTURE0 + Gl3DRenderer.META_TEX_UNIT);  // …and resets the
     gl.bindTexture(gl.TEXTURE_3D, this.metaTex);                 // active unit to 0,
     gl.uniform1i(gl.getUniformLocation(this.metaProg, 'uField'), Gl3DRenderer.META_TEX_UNIT);  // so bind AFTER it
+    // The per-voxel alpha field on its own unit (the 1×1 opaque dummy keeps the
+    // sampler3D valid when the pass is opaque — never sampled, uAlphaOn = 0).
+    gl.activeTexture(gl.TEXTURE0 + Gl3DRenderer.META_ALPHA_TEX_UNIT);
+    gl.bindTexture(gl.TEXTURE_3D, translucent && this.metaAlphaTex ? this.metaAlphaTex : this.ensureMetaAlphaDummy());
+    gl.uniform1i(gl.getUniformLocation(this.metaProg, 'uAlphaField'), Gl3DRenderer.META_ALPHA_TEX_UNIT);
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
     gl.depthMask(true);
     gl.disable(gl.BLEND);
     gl.bindTexture(gl.TEXTURE_3D, null);
+    gl.activeTexture(gl.TEXTURE0 + Gl3DRenderer.META_TEX_UNIT);
+    gl.bindTexture(gl.TEXTURE_3D, null);
     gl.activeTexture(gl.TEXTURE0);
     gl.bindVertexArray(null);
+  }
+
+  /** 1×1×1 opaque R8 3D texture bound to the alpha-field unit while the blob is
+   *  opaque, so the sampler stays valid (mirrors ensureDummyShadowTex). */
+  private ensureMetaAlphaDummy(): WebGLTexture {
+    if (this.metaAlphaDummy) return this.metaAlphaDummy;
+    const gl = this.gl;
+    const t = gl.createTexture()!;
+    gl.bindTexture(gl.TEXTURE_3D, t);
+    gl.texImage3D(gl.TEXTURE_3D, 0, gl.R8, 1, 1, 1, 0, gl.RED, gl.UNSIGNED_BYTE, new Uint8Array([255]));
+    gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    gl.bindTexture(gl.TEXTURE_3D, null);
+    this.metaAlphaDummy = t;
+    return t;
   }
 
   /** Wireframe rings for hovered (amber) / inspected (white) agents, billboarded
@@ -2717,6 +2791,8 @@ export class Gl3DRenderer {
     gl.deleteVertexArray(this.spriteVao);
     gl.deleteVertexArray(this.metaVao);
     if (this.metaTex) gl.deleteTexture(this.metaTex);
+    if (this.metaAlphaTex) gl.deleteTexture(this.metaAlphaTex);
+    if (this.metaAlphaDummy) gl.deleteTexture(this.metaAlphaDummy);
     gl.deleteBuffer(this.cubeBuf);
     gl.deleteBuffer(this.instBuf);
     gl.deleteBuffer(this.aoBuf);
