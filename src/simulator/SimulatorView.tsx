@@ -2573,7 +2573,9 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
           tc.fillStyle = `rgba(${acol[c]},${acol[c + 1]},${acol[c + 2]},${acol[c + 3]! / 255})`;
           tc.fill();
           if (pass !== 'goo' && rad >= 2) {  // no outline inside the goo field
-            tc.lineWidth = Math.max(0.5, rad * 0.14);
+            // Constant contour width (was rad * 0.14, which grew with the agent):
+            // capped by a fraction of the radius so tiny discs aren't all outline.
+            tc.lineWidth = Math.min(1.5, rad * 0.25);
             tc.strokeStyle = 'rgba(0,0,0,0.40)';
             tc.stroke();
           }
