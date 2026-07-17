@@ -819,6 +819,8 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   const editPrefillIdRef = useRef<number>(-1);
   const [showBrushCursor, setShowBrushCursor] = useState((saved.current.showBrushCursor as boolean) ?? true);
   const [showGridlines, setShowGridlines] = useState((saved.current.showGridlines as boolean) ?? false);
+  // Inspect mode — toolbar toggle making plain LMB inspect (see inspectModeRef).
+  const [inspectMode, setInspectMode] = useState(false);
   // Infinity canvas: when the model uses torus boundary, the grid tiles into the
   // viewport so the user can pan endlessly across the wrap seams. Settings flag
   // persists across sessions, but the boundary-treatment guard below forces it
@@ -4526,9 +4528,10 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
         resizeStart.ringW = rzAgent ? agentBrushRingWidthRef.current : brushRingWidthRef.current;
         resizeStart.lineW = rzAgent ? agentBrushLineWidthRef.current : brushLineWidthRef.current;
       }
-      else if (e.button === 0 && e.shiftKey) {
-        // Shift+LMB → inspect. In an agent model, pick the AGENT first; if none is
-        // hit, fall through to the cell-plane sweep inspect (the grid below).
+      else if (e.button === 0 && (e.shiftKey || inspectModeRef.current)) {
+        // Shift+LMB (or the toolbar Inspect toggle) → inspect. In an agent model,
+        // pick the AGENT first; if none is hit, fall through to the cell-plane
+        // sweep inspect (the grid below).
         if (isAgentModelRef.current) {
           const id = pickAgent3d(e.clientX, e.clientY);
           if (id >= 0) {
@@ -5065,6 +5068,11 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   useEffect(() => { draw(); }, [bg2d, draw]);
   const showGridlinesRef = useRef(false);
   useEffect(() => { showGridlinesRef.current = showGridlines; }, [showGridlines]);
+  // Inspect mode (toolbar toggle): plain LMB inspects cells/agents — the
+  // keyboard-free equivalent of Shift+LMB (both 2D and 3D read the ref in
+  // their pointer handlers). Session-only, never persisted.
+  const inspectModeRef = useRef(false);
+  useEffect(() => { inspectModeRef.current = inspectMode; }, [inspectMode]);
   // Middle-click autoscroll — origin/cursor are canvas-local pixel coords.
   // When origin is non-null we're in autoscroll mode; the rAF loop pans by a
   // velocity proportional to (cursor - origin) and the draw() function paints
@@ -6280,8 +6288,9 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
         return;
       }
 
-      if (e.button === 0 && e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey) {
-        // Shift+LMB = start a cell-inspector sweep. A plain click (release on
+      if (e.button === 0 && (e.shiftKey || inspectModeRef.current) && !e.ctrlKey && !e.altKey && !e.metaKey) {
+        // Shift+LMB (or the toolbar Inspect toggle) = start a cell-inspector
+        // sweep. A plain click (release on
         // the same cell as press, no drag) commits via mouseup → pins a popover
         // (today's behavior). Dragging to a different cell recycles a single
         // transient popover and discards it on release — quick-peek across a
@@ -8294,6 +8303,14 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
           <button className={styles.zoomBtn} onClick={() => { zoomRef.current = Math.min(50, zoomRef.current * 1.3); draw(); }} title="Zoom in">+</button>
           <button className={styles.zoomBtn} onClick={() => { zoomRef.current = Math.max(0.1, zoomRef.current / 1.3); draw(); }} title="Zoom out">&minus;</button>
           <button className={styles.zoomBtn} onClick={handleResetView} title="Fit view">&#x2922;</button>
+          <button
+            className={`${styles.zoomBtn} ${inspectMode ? styles.zoomBtnActive : ''}`}
+            onClick={() => setInspectMode(v => !v)}
+            title={inspectMode
+              ? 'Inspect mode ON — click a cell/agent to inspect it (click again to turn off)'
+              : 'Inspect cells/agents on click (equivalent to Shift+Click)'}
+            aria-label="Toggle inspect mode"
+          >&#x24D8;</button>
           <button
             className={`${styles.zoomBtn} ${showGridlines ? styles.zoomBtnActive : ''}`}
             onClick={() => { setShowGridlines(v => !v); draw(); }}
