@@ -11,6 +11,7 @@ import { is3dModelLike } from '../compiler/niCodec';
 export const GetAgentOffsetNode: NodeTypeDef = {
   type: 'getAgentOffset',
   label: 'Get Agent Offset',
+  agentLabel: 'Get Offset (by ID)',
   description: 'Torus-shortest (dX, dY) and Distance from this agent to a target — for wrap-correct neighbour vectors.',
   category: 'data',
   color: '#5e35b1',

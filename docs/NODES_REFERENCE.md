@@ -38,7 +38,17 @@ vector directly (also lowered to its fx/fy/fz components).
 
 On the **Agents** sub-tab the universal Get / Set / Update Attribute nodes display as
 **Get / Set / Update Self Attribute** (via `NodeTypeDef.agentLabel` / `displayNodeLabel`) —
-they read/write the agent's own attribute.
+they read/write the agent's own attribute. The same mechanism de-noises the agent-only
+catalogue there (display-only; the canonical `label` in the tables below and the node
+`type` ids are unchanged): the redundant "Agent" qualifier is dropped from self / by-id
+operations — *Get Self Position* → **Get Position**, *Get/Set Agent Position / Radius /
+Attribute / Offset* → **Get/Set … (by ID)**, *Apply Force To Agent* → **Apply Force (by
+ID)**, *Add Agent To World* → **Add To World**, *Set Agent Sprite* → **Set Sprite**,
+*Divide/Kill Agent* → **Divide/Kill Self** — the five field-bridge nodes gain an explicit
+**(CA Grid)** suffix (they are the only agent nodes that touch the lattice), and *Set
+Cell Looks* displays as **Set Agent Looks** (its glyph UI is hidden on the Agents graph —
+glyphs are a render no-op for agents). Set-of-agents nodes (Get Nearby Agents, Filter
+Agents, …) keep "Agents": there the word names the data, not the context.
 
 **Editor-only constructs** (not counted above, no computation): comments, groups, and
 **reroute points**. A reroute is a movable relay dot placed on a wire (Blender / Unreal

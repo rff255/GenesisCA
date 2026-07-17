@@ -19,6 +19,7 @@ import { is3dModelLike } from '../compiler/niCodec';
 export const DivideAgentNode: NodeTypeDef = {
   type: 'divideAgent',
   label: 'Divide Agent',
+  agentLabel: 'Divide Self',
   description: 'Request the agent divide along its tension axis (applied after the step). Bonds inherited by geometry.',
   category: 'output',
   color: '#ad1457',

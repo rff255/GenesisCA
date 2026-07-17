@@ -7,6 +7,7 @@ import type { NodeTypeDef } from '../types';
 export const ReadCellsUnderNode: NodeTypeDef = {
   type: 'readCellsUnder',
   label: 'Read Cells Under',
+  agentLabel: 'Read Cells Under (CA Grid)',
   description: 'Aggregate a cell attribute (mean/sum/max/min) over the cells within a radius under the agent.',
   category: 'data',
   color: '#00695c',

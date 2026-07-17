@@ -9,6 +9,7 @@ import { is3dModelLike } from '../compiler/niCodec';
 export const FieldGradientNode: NodeTypeDef = {
   type: 'fieldGradient',
   label: 'Field Gradient',
+  agentLabel: 'Field Gradient (CA Grid)',
   description: "The (∂x, ∂y) gradient of a cell attribute (the field) at the agent's position — for chemotaxis.",
   category: 'data',
   color: '#00695c',

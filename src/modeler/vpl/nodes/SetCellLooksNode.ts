@@ -33,6 +33,11 @@ export const CURRENT_VIEWER_SENTINEL = '__current__';
 export const SetCellLooksNode: NodeTypeDef = {
   type: 'setCellLooks',
   label: 'Set Cell Looks',
+  // Agents graph: the same node colours the current AGENT for an agent view.
+  // Glyphs are a render no-op there (agents draw as discs/sprites, no glyph
+  // overlay) — the editor hides the glyph UI on the Agents graph.
+  agentLabel: 'Set Agent Looks',
+  agentDescription: 'Sets the current agent’s color for the named agent view (RGBA — alpha makes the agent translucent). "Current Simulator Selected" instead targets whichever agent view is active.',
   description: 'Sets the current cell’s appearance for the named Output Mapping: a flat color, or (Use glyph) an overlaid Unicode character with an optional background color and an optional zoomed-out glyph-color fallback. "Current Simulator Selected" instead targets whichever viewer is active.',
   category: 'color',
   color: '#006064',

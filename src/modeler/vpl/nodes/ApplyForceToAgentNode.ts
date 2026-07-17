@@ -17,6 +17,7 @@ import { is3dModelLike } from '../compiler/niCodec';
 export const ApplyForceToAgentNode: NodeTypeDef = {
   type: 'applyForceToAgent',
   label: 'Apply Force To Agent',
+  agentLabel: 'Apply Force (by ID)',
   description: 'Add a force vector to another agent by id (commutative — safe in both update modes). Newton\'s 3rd law, custom pairwise forces.',
   category: 'output',
   color: '#5e35b1',

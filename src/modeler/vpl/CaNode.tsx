@@ -1883,7 +1883,11 @@ function CaNodeComponent({ id, data }: NodeProps) {
                     <option key={m.id} value={m.id}>{m.name}</option>
                   ))}
               </select>
-              {checkbox('useGlyph', 'Use glyph', useGlyph, 'Overlay a Unicode glyph on the cell (drawn when zoomed in)')}
+              {/* Glyphs are a render no-op for agents (discs/sprites carry no glyph
+                  overlay), so the checkbox is hidden on the Agents graph — except
+                  when a legacy config already has it ON, so it can be turned off. */}
+              {(getActiveGraphKind() !== 'agents' || useGlyph)
+                && checkbox('useGlyph', 'Use glyph', useGlyph, 'Overlay a Unicode glyph on the cell (drawn when zoomed in)')}
               {!useGlyph && renderColorPicker(['r', 'g', 'b'], '0', 'Cell color (overridden per-channel by connections)')}
               {useGlyph && (
                 <>

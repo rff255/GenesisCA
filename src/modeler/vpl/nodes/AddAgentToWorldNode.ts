@@ -8,6 +8,7 @@ import type { NodeTypeDef } from '../types';
 export const AddAgentToWorldNode: NodeTypeDef = {
   type: 'addAgentToWorld',
   label: 'Add Agent To World',
+  agentLabel: 'Add To World',
   description: 'Commit a staged agent (from Create Agent) — marks it live so the simulation processes it.',
   category: 'output',
   color: '#4527a0',

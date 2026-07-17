@@ -7,6 +7,7 @@ import type { NodeTypeDef } from '../types';
 export const SetAgentRadiusNode: NodeTypeDef = {
   type: 'setAgentRadius',
   label: 'Set Agent Radius',
+  agentLabel: 'Set Radius (by ID)',
   description: "Set an agent's radius (and growth target) by id (a Create Agent handle, or a live agent).",
   category: 'output',
   color: '#4527a0',

@@ -6,6 +6,7 @@ import type { NodeTypeDef } from '../types';
 export const GetAgentRadiusNode: NodeTypeDef = {
   type: 'getAgentRadius',
   label: 'Get Agent Radius',
+  agentLabel: 'Get Radius (by ID)',
   description: "A specific agent's radius by id.",
   category: 'data',
   color: '#5e35b1',

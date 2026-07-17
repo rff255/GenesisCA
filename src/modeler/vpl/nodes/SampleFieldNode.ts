@@ -10,6 +10,7 @@ import type { NodeTypeDef } from '../types';
 export const SampleFieldNode: NodeTypeDef = {
   type: 'sampleField',
   label: 'Sample Field',
+  agentLabel: 'Sample Field (CA Grid)',
   description: "Bilinearly read a cell attribute (the field) at the agent's continuous position.",
   category: 'data',
   color: '#00695c',

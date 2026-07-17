@@ -17,6 +17,7 @@ import { is3dModelLike } from '../compiler/niCodec';
 export const GetAgentPositionNode: NodeTypeDef = {
   type: 'getAgentPosition',
   label: 'Get Agent Position',
+  agentLabel: 'Get Position (by ID)',
   description: "Outputs a specific agent's (X, Y, Z) by id — absolute, or (relative mode) the torus-shortest vector from a reference agent (default self).",
   category: 'data',
   color: '#5e35b1',
