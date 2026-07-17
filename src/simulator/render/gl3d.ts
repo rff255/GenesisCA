@@ -2362,6 +2362,7 @@ export class Gl3DRenderer {
     }
     this.renderHoverCells(); // wireframe cube cursors on the brush footprint (on top)
     this.renderBrushOutline(); // brush footprint outline (bounded wireframe, on top)
+    this.renderAxisLabels(); // axis dimension numbers (0 at origin + W/H/D at the tips)
     this.renderGizmo();      // corner orientation widget (always on top)
   }
 
@@ -2530,6 +2531,90 @@ export class Gl3DRenderer {
     }
     gl.disable(gl.DEPTH_TEST);
     this.drawLines(v, gl.LINES, this.mvp);
+    gl.enable(gl.DEPTH_TEST);
+  }
+
+  /** Seven-segment strokes for the axis dimension labels (unit cell, y-up —
+   *  same coordinate style as GLYPHS). Each digit = a set of 2-point segments. */
+  private static readonly SEG7: Record<string, [number, number, number, number]> = {
+    A: [-.25, .45, .25, .45], B: [.25, .45, .25, 0], C: [.25, 0, .25, -.45],
+    D: [-.25, -.45, .25, -.45], E: [-.25, 0, -.25, -.45], F: [-.25, .45, -.25, 0], G: [-.25, 0, .25, 0],
+  };
+  private static readonly DIGIT_SEGS: Record<string, string> = {
+    '0': 'ABCDEF', '1': 'BC', '2': 'ABGED', '3': 'ABGCD', '4': 'FGBC',
+    '5': 'AFGCD', '6': 'AFGEDC', '7': 'ABC', '8': 'ABCDEFG', '9': 'ABCDFG',
+  };
+
+  /** Project a world point to NDC via the current MVP; null when behind the camera. */
+  private projectNdc(x: number, y: number, z: number): [number, number] | null {
+    const m = this.mvp;
+    const w = m[3]! * x + m[7]! * y + m[11]! * z + m[15]!;
+    if (w <= 1e-6) return null;
+    return [
+      (m[0]! * x + m[4]! * y + m[8]! * z + m[12]!) / w,
+      (m[1]! * x + m[5]! * y + m[9]! * z + m[13]!) / w,
+    ];
+  }
+
+  /** Append a digit string's stroke segments (NDC coords, centred on cx/cy). */
+  private pushDigitsNdc(out: number[], text: string, cx: number, cy: number,
+    sx: number, sy: number, col: [number, number, number]): void {
+    const adv = 0.8;                     // glyph-unit advance per character
+    const total = (text.length - 1) * adv;
+    const [r, g, b] = col;
+    for (let i = 0; i < text.length; i++) {
+      const segs = Gl3DRenderer.DIGIT_SEGS[text[i]!];
+      if (!segs) continue;
+      const gx = cx + (i * adv - total / 2) * sx;
+      for (const s of segs) {
+        const [x0, y0, x1, y1] = Gl3DRenderer.SEG7[s]!;
+        out.push(gx + x0 * sx, cy + y0 * sy, 0, r, g, b, gx + x1 * sx, cy + y1 * sy, 0, r, g, b);
+      }
+    }
+  }
+
+  /** Axis dimension labels — companion to viz.axes: a "0" at the origin corner
+   *  plus each axis's cell count (W / H / D) just past its arrowhead, coloured
+   *  like the axis, so the user can tell WHERE the origin is and how far each
+   *  dimension runs. Screen-space (constant pixel size), depth OFF like the
+   *  gizmo letters, drawn with an identity MVP in NDC. */
+  private renderAxisLabels(): void {
+    if (!this.viz.axes) return;
+    const gl = this.gl;
+    const hx = (this.W - 1) / 2, hy = (this.H - 1) / 2, hz = (this.D - 1) / 2;
+    const ox = -hx, oy = hy, oz = hz;      // origin = cell (0,0,0) world centre
+    const ext = 1.2;                       // must match renderOverlays' axis extension
+    // Same on-screen pixel size on both NDC axes (NDC x/y units differ by aspect).
+    const sy = 30 / Math.max(1, gl.canvas.height);
+    const sx = 30 / Math.max(1, gl.canvas.width);
+    const v: number[] = [];
+    const label = (wx: number, wy: number, wz: number, text: string,
+      col: [number, number, number], awayFrom: [number, number] | null): void => {
+      const p = this.projectNdc(wx, wy, wz);
+      if (!p) return;
+      let [cx, cy] = p;
+      if (awayFrom) {
+        // Nudge the label outward (past the arrowhead / away from the volume)
+        // along the on-screen direction from the reference point to the anchor.
+        let dx = cx - awayFrom[0], dy = cy - awayFrom[1];
+        const len = Math.hypot(dx, dy);
+        if (len > 1e-6) { dx /= len; dy /= len; } else { dx = 0; dy = 1; }
+        const halfW = ((text.length - 1) * 0.8 / 2 + 0.4) * sx;
+        const halfH = 0.45 * sy;
+        cx += dx * (halfW + 0.012);
+        cy += dy * (halfH + 0.018);
+      }
+      this.pushDigitsNdc(v, text, cx, cy, sx, sy, col);
+    };
+    const centre = this.projectNdc(0, 0, 0);
+    label(ox, oy, oz, '0', [0.78, 0.80, 0.86], centre);
+    const origin = this.projectNdc(ox, oy, oz);
+    label(hx + ext, oy, oz, String(this.W), [0.96, 0.55, 0.55], origin);                  // +col end
+    label(ox, -hy - ext, oz, String(this.H), [0.55, 0.92, 0.62], origin);                 // +row end
+    label(ox, oy, oz - (this.D - 1) - ext, String(this.D), [0.62, 0.74, 1.0], origin);    // +depth end
+    if (v.length === 0) return;
+    gl.disable(gl.DEPTH_TEST);
+    this.drawLines(new Float32Array(v), gl.LINES, mat4Identity());  // identity → NDC
     gl.enable(gl.DEPTH_TEST);
   }
 
