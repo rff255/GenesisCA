@@ -1279,11 +1279,13 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
         // not supported mid-experiment (v1) — the runtime journals + skips it.
         const s = p.state;
         const hasGrid = s.width != null && s.height != null && s.attributes != null && s.colors != null;
-        const boundaryChanged = !!s.boundaryTreatment && s.boundaryTreatment !== model.properties.boundaryTreatment;
+        // Mirrors applySimulationState: grid-less presets never adapt dims/boundary.
+        const boundaryChanged = hasGrid && !!s.boundaryTreatment && s.boundaryTreatment !== model.properties.boundaryTreatment;
         const sD = s.gridDepth ?? s.depth ?? 1;
-        const dimsFromState = s.gridWidth != null && s.gridHeight != null
-          ? { w: s.gridWidth, h: s.gridHeight, d: sD }
-          : hasGrid ? { w: s.width!, h: s.height!, d: sD } : null;
+        const dimsFromState = !hasGrid ? null
+          : s.gridWidth != null && s.gridHeight != null
+            ? { w: s.gridWidth, h: s.gridHeight, d: sD }
+            : { w: s.width!, h: s.height!, d: sD };
         const dimsChanged = dimsFromState != null
           && (dimsFromState.w !== gridWidth.current || dimsFromState.h !== gridHeight.current || dimsFromState.d !== gridDepth.current);
         if (boundaryChanged || dimsChanged) return 'needs-reinit' as const;
@@ -7306,15 +7308,18 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     // mirrors applySimulationState's boundaryChanged/dimsChanged check.
     const s = p.state;
     const hasGrid = s.width != null && s.height != null && s.attributes != null && s.colors != null;
-    const boundaryChanged = !!s.boundaryTreatment && s.boundaryTreatment !== model.properties.boundaryTreatment;
+    // Mirrors applySimulationState: a grid-less (parameter-only) preset never
+    // adapts dims/boundary, so it never forces a reinit → never pauses.
+    const boundaryChanged = hasGrid && !!s.boundaryTreatment && s.boundaryTreatment !== model.properties.boundaryTreatment;
     const sD = s.gridDepth ?? s.depth ?? 1;
-    const dimsFromState = s.gridWidth != null && s.gridHeight != null
-      ? { w: s.gridWidth, h: s.gridHeight, d: sD }
-      : hasGrid ? { w: s.width!, h: s.height!, d: sD } : null;
+    const dimsFromState = !hasGrid ? null
+      : s.gridWidth != null && s.gridHeight != null
+        ? { w: s.gridWidth, h: s.gridHeight, d: sD }
+        : { w: s.width!, h: s.height!, d: sD };
     const dimsChanged = dimsFromState != null
       && (dimsFromState.w !== gridWidth.current || dimsFromState.h !== gridHeight.current || dimsFromState.d !== gridDepth.current);
     if ((boundaryChanged || dimsChanged) && playing) setPlaying(false);
-    applySimulationState(p.state, { adaptDims: true });  // explicit preset load — its dims are authoritative
+    applySimulationState(p.state, { adaptDims: true });  // explicit preset load — a WITH-GRID preset's dims are authoritative
   };
 
   const handleDeletePreset = (p: Preset) => {
@@ -7373,13 +7378,21 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     // existing useEffect on [model] detects structural changes and triggers a full
     // worker reinit; the pending-restore mechanism then applies the grid/control
     // state after the new worker finishes its first step.
-    const boundaryChanged = state.boundaryTreatment && state.boundaryTreatment !== model.properties.boundaryTreatment;
+    // A state with NO embedded grid (a parameter-only preset / a controls-only
+    // save) must never resize the grid or flip the boundary — it has no board
+    // to restore, and adapting would clobber the live dims AND the model's
+    // default dims (via updateProperties) with whatever the worker happened to
+    // be at when the preset was saved (the reported "parameter preset changes
+    // the grid and then the default" bug). The gridWidth/gridHeight/
+    // boundaryTreatment such states carry are save-time metadata only.
+    const boundaryChanged = hasGrid && state.boundaryTreatment && state.boundaryTreatment !== model.properties.boundaryTreatment;
     // 3D Grid CA: carry depth (gridDepth ?? depth ?? 1) so a depth change adapts
     // the model + triggers the structural reinit.
     const stateDepth = state.gridDepth ?? state.depth ?? 1;
-    const dimsFromState = state.gridWidth != null && state.gridHeight != null
-      ? { w: state.gridWidth, h: state.gridHeight, d: stateDepth }
-      : hasGrid ? { w: state.width!, h: state.height!, d: stateDepth } : null;
+    const dimsFromState = !hasGrid ? null
+      : state.gridWidth != null && state.gridHeight != null
+        ? { w: state.gridWidth, h: state.gridHeight, d: stateDepth }
+        : { w: state.width!, h: state.height!, d: stateDepth };
     const dimsChanged = dimsFromState != null
       && (dimsFromState.w !== gridWidth.current || dimsFromState.h !== gridHeight.current || dimsFromState.d !== gridDepth.current);
     if (boundaryChanged || dimsChanged) {
