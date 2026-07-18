@@ -29,6 +29,9 @@ interface Props {
    *  indices are looked up here so runtime category filtering (Track
    *  Categories) never shifts surviving series onto different colors. */
   categoryOrder?: string[];
+  /** Chart style: 'lines' (default — one curve per series) or 'bars' (a
+   *  histogram bar per position bin; multiple series overlay semi-transparent). */
+  mode?: 'lines' | 'bars';
 }
 
 const TOKEN_NAMES = [
@@ -68,7 +71,7 @@ export function compareSeriesKeys(a: string, b: string): number {
   return a.localeCompare(b);
 }
 
-export function IndicatorSpatialChart({ data, axis, axisLength, height, hidden, onToggleCategory, settings, categoryOrder }: Props) {
+export function IndicatorSpatialChart({ data, axis, axisLength, height, hidden, onToggleCategory, settings, categoryOrder, mode = 'lines' }: Props) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [width, setWidth] = useState(0);
@@ -200,26 +203,47 @@ export function IndicatorSpatialChart({ data, axis, axisLength, height, hidden, 
       ctx.clip();
     }
 
-    // One curve per series — all series share the same bin axis (equal length,
-    // no right-align/scroll: spatial X is fixed by the grid, not by time).
-    const xStep = binCount > 1 ? plotW / (binCount - 1) : 0;
-    const toX = (i: number) => plotLeft + (binCount > 1 ? i * xStep : plotW / 2);
     const toY = (v: number) => plotTop + plotH - ((v - yMin) / yRange) * plotH;
-    for (let ci = 0; ci < categories.length; ci++) {
-      if (isHidden(categories[ci]!)) continue;
-      const arr = data[categories[ci]!] || [];
-      if (arr.length === 0) continue;
-      ctx.beginPath();
-      ctx.moveTo(toX(0), toY(arr[0]!));
-      for (let i = 1; i < arr.length; i++) ctx.lineTo(toX(i), toY(arr[i]!));
-      ctx.strokeStyle = colorFor(ci, categories[ci]!);
-      ctx.lineWidth = 1.2;
-      ctx.stroke();
+    if (mode === 'bars') {
+      // Histogram style: one bar per position bin, per series. Bars occupy a
+      // bin-wide slot; multiple series OVERLAY as semi-transparent fills (bins
+      // are typically ~50, so grouped side-by-side bars would be sub-pixel).
+      const slot = plotW / binCount;
+      const barW = Math.max(1, slot * 0.9);
+      const y0 = toY(Math.max(0, yMin));  // bars grow from the 0 line (or yMin when fixed axes cut it off)
+      ctx.globalAlpha = categories.length > 1 ? 0.55 : 0.8;
+      for (let ci = 0; ci < categories.length; ci++) {
+        if (isHidden(categories[ci]!)) continue;
+        const arr = data[categories[ci]!] || [];
+        ctx.fillStyle = colorFor(ci, categories[ci]!);
+        for (let i = 0; i < arr.length; i++) {
+          const y = toY(arr[i]!);
+          const x = plotLeft + i * slot + (slot - barW) / 2;
+          ctx.fillRect(x, Math.min(y, y0), barW, Math.abs(y0 - y));
+        }
+      }
+      ctx.globalAlpha = 1;
+    } else {
+      // One curve per series — all series share the same bin axis (equal length,
+      // no right-align/scroll: spatial X is fixed by the grid, not by time).
+      const xStep = binCount > 1 ? plotW / (binCount - 1) : 0;
+      const toX = (i: number) => plotLeft + (binCount > 1 ? i * xStep : plotW / 2);
+      for (let ci = 0; ci < categories.length; ci++) {
+        if (isHidden(categories[ci]!)) continue;
+        const arr = data[categories[ci]!] || [];
+        if (arr.length === 0) continue;
+        ctx.beginPath();
+        ctx.moveTo(toX(0), toY(arr[0]!));
+        for (let i = 1; i < arr.length; i++) ctx.lineTo(toX(i), toY(arr[i]!));
+        ctx.strokeStyle = colorFor(ci, categories[ci]!);
+        ctx.lineWidth = 1.2;
+        ctx.stroke();
+      }
     }
 
     if (clipped) ctx.restore();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [data, width, plotHeight, binCount, axisName, axisLength, categories.length, categories.join('|'), hiddenKey, AXIS_COLOR, LABEL_COLOR, PALETTE.join(','), chartSettingsKey(settings)]);
+  }, [data, width, plotHeight, binCount, axisName, axisLength, mode, categories.length, categories.join('|'), hiddenKey, AXIS_COLOR, LABEL_COLOR, PALETTE.join(','), chartSettingsKey(settings)]);
 
   // Wrapper always mounts so ResizeObserver can attach on first render.
   return (

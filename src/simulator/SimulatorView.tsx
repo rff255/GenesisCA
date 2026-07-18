@@ -1165,6 +1165,11 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     });
   }, []);
 
+  // Direct set (the spatial chart's Lines ⇄ Bars toggle — a 2-state flip).
+  const setIndicatorVizMode = useCallback((id: string, mode: VizMode) => {
+    setIndicatorVizModes(prev => ({ ...prev, [id]: mode }));
+  }, []);
+
   const toggleIndicatorCategory = useCallback((id: string, category: string) => {
     setIndicatorHiddenCategories(prev => {
       const next = { ...prev };
@@ -9232,6 +9237,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
                   else chartExpandedRef.current.delete(id);
                 }}
                 onCycleVizMode={cycleIndicatorVizMode}
+                onSetVizMode={setIndicatorVizMode}
                 onToggleCategory={toggleIndicatorCategory}
                 onChangeChartOverrides={changeIndicatorChartOverrides}
                 onClearHistory={clearIndicatorHistory}
