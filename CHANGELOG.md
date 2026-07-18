@@ -7,6 +7,105 @@ https://github.com/rff255/GenesisCA/releases
 The version at the top of `package.json` is the single source of truth; each
 entry below is cut when that version is tagged (see `.github/workflows/release.yml`).
 
+## [1.27.0] - 2026-07-17
+
+A large release headlined by the **Overseer** — a third graph for experiment
+orchestration — plus **N-dimensional lookup tables**, a **large-grid stepping**
+optimization that unlocks 300³ models, authorable **RGBA alpha** through the whole
+colour chain, a much richer **3D viewport**, and a self-contained **standalone
+`.html` export**. Additive and gated throughout: the lattice (2D+3D, all three
+compile targets) and every existing model stay byte-identical.
+
+### Overseer — experiment orchestration (the third graph)
+- A new opt-in **Overseer** graph authors experiment protocols AROUND the
+  simulation — replicate statistics (N seeded runs → mean ± σ), parameter sweeps,
+  run-until-stop protocols, and capture — as an async main-thread driver that
+  commands the sim worker through the existing message protocol, so the CA keeps
+  running on whichever compile target the model selects. Fully hidden when off.
+- 20 experiment nodes (run control, measurement, data/stats, capture), a
+  reqId-correlated runtime, and an **Overseer Experiments** simulator panel with a
+  live Journal, Series table, scalar-series **histograms**, **spatial aggregate
+  charts** (per-bin mean ± σ chromatograms), and CSV/JSON export.
+- Ships the **GoL Replicate Statistics** tutorial sample and a built-in
+  Chromatography replicate experiment (the paper's Fig. 3 as an ensemble average).
+- `setRngSeed` is now a first-class worker message that reaches the WASM RNG cell
+  and the WebGPU per-cell PCG streams, so seeded experiments are bit-reproducible on
+  JS/WASM and statistically reproducible on WebGPU.
+
+### N-Dimensional Lookup Tables + the Accretor
+- Lookup tables generalise from 2 axes to **1–6 axes** (with an integer-range axis
+  kind) plus a **seeded Randomize** fill — all lowered to one flat dense read, so
+  every compile surface runs multi-axis tables with no new runtime machinery. Custom
+  axis labels and a selectable value type (bool/integer/float/tag) are authorable.
+- New **Accretor** sample — a 300³ 3D accretion automaton whose rule is a 4-axis
+  table — with random and mirror-symmetric seeding and an Overseer Rule Explorer.
+- The Overseer **Randomize Table** node re-rolls a table's values at runtime for
+  automated rule-space search.
+
+### Large grids — Skip Isolated Empty Cells
+- Opt-in **Skip Isolated Empty Cells** turns the O(total cells) step into
+  O(active cells) — only cells within range of a non-empty cell run the rule — and
+  replaces the multi-GB precomputed neighbour tables with inline neighbour
+  computation (JS + WASM). Off by default → every model byte-identical.
+- With incremental linked-indicator maintenance and batch-tail scan deferral, the
+  Accretor runs at **300³ (27M cells)** — inits in ~1.9 s and steps interactively —
+  where the full loop was impractical. A live "N active" stat shows the saving.
+
+### RGBA colours (authorable alpha)
+- Alpha now flows end-to-end from every colour producer to the colour buffer on all
+  five compilers (JS/WASM/WebGPU × cell + agent), 2D + 3D: a colour model-attribute
+  alpha slot, an `a` output on Color Scale / Categorical Color / Colour Constant
+  (gated so opaque palettes stay byte-identical), and alpha-aware linked Output
+  Mappings.
+- One shared **ColorField** picker (checkerboard swatch + alpha slider, portalled
+  out of the transformed canvas) replaces seven bespoke pickers; the gradient
+  editors no longer drop alpha.
+
+### 3D viewport
+- **Agent metaballs** — fused implicit-surface agent rendering (3D raymarch + a 2D
+  gooey filter), with per-voxel translucency inherited from local agents.
+- **Global lighting** — opt-in cast shadows (shadow map) + occupancy ambient
+  occlusion, plus library/viewport lighting controls and a cell-gaps toggle.
+- **Auto-zoom** — a one-way dolly companion to auto-orbit (stops at the distance
+  limit) for unattended recordings.
+- Occlusion culling (cube backfaces + buried voxels), 3D agent Glue/Cut/Bond with a
+  brush-outline cursor and Alt-scroll mode cycle, axis dimension labels, and a fix
+  for voxel cell-index corruption past 2²⁴ (~16.7M) cells.
+
+### Standalone export + sharing
+- **Export standalone simulation…** bundles the simulator + one model into a single
+  self-contained `.html` that runs offline from a bare `file://` — with a welcome
+  modal, Open Graph / Twitter link-preview tags, and a human-readable banner so
+  chat attachments preview as a title card instead of minified code.
+
+### Modeler + VPL
+- **Get Grid Dimensions** — a universal node exposing the world's Width / Height /
+  Depth (plus optional Center X/Y/Z = ⌊size/2⌋) on both the Cells and Agents graphs,
+  so a rule can be written independently of the grid size.
+- **Grid Init Event** — global once-per-Reset procedural seeding (loop + Set Cell at
+  Position), the free-form counterpart to the per-cell Init Event.
+- **Loop node** gains an **Index** output (the 0-based counter) and a **Range mode**
+  (From..To inclusive) on all compile surfaces.
+- **Multi-attribute slots** on Get/Set Attribute (read/write N attributes through one
+  node) and **cross-agent writes** — Apply Force To Agent(s) (commutative, race-free)
+  plus a sync-mode overwrite gate.
+- Agent-graph node labels de-noised (`agentLabel`), field-bridge nodes marked, and
+  Set/Set-Agents Attribute widgets adapt to the picked attribute's type.
+
+### Simulator + library
+- A canvas-toolbar **Inspect toggle** (plain-click inspects cells/agents, 2D + 3D)
+  with inspect-mode drag sweeps; a **Bonds** display toggle in the Layers panel;
+  indicator header controls visible from load with a spatial-chart Lines/Bars toggle.
+- Library browse tools — topology filters, roomier cards, a two-pane hover preview,
+  and 3D/Agents mode badges that act like tags.
+- Fixes: parameter-only presets no longer resize the grid or overwrite the model's
+  default dimensions; constant-width agent contours; the tag lookup-table Randomize
+  "Max" now round-trips and the Simulator table editor stops resetting it to 1; the
+  Chromatography sample restored to its hand-organized layout with only the Overseer
+  layer added; the PWA no longer self-reloads mid-session (deferred `'prompt'` SW
+  update); and a batch of agent/3D fixes (depth option, cursor overlay layer,
+  cross-model leak, save-dialog memory, agent slot hygiene).
+
 ## [1.26.1] - 2026-07-08
 
 The Agent Capability Profiles milestone plus a large agent-platform push: opt-in
