@@ -33,6 +33,9 @@ interface Props {
   onToggleWatch: (id: string, watched: boolean) => void;
   onChartToggle: (id: string, expanded: boolean) => void;
   onCycleVizMode: (id: string) => void;
+  /** Set one indicator's viz mode directly (the spatial Lines ⇄ Bars toggle —
+   *  a 2-state flip, so cycling through the 3 freq modes doesn't fit). */
+  onSetVizMode: (id: string, mode: IndicatorVizMode) => void;
   /** Toggle one category's visibility for a frequency indicator's chart. */
   onToggleCategory: (id: string, category: string) => void;
   /** Replace one indicator's override entry (null clears it entirely). */
@@ -235,7 +238,7 @@ function formatValue(val: number, ind: Indicator): string {
   return String(val);
 }
 
-export function IndicatorDisplay({ indicators, values, history, generation, gridWidth, gridHeight, gridDepth = 1, vizModes, hiddenCategories, chartOverrides, onToggleWatch, onChartToggle, onCycleVizMode, onToggleCategory, onChangeChartOverrides, onClearHistory, categoryOrders }: Props) {
+export function IndicatorDisplay({ indicators, values, history, generation, gridWidth, gridHeight, gridDepth = 1, vizModes, hiddenCategories, chartOverrides, onToggleWatch, onChartToggle, onCycleVizMode, onSetVizMode, onToggleCategory, onChangeChartOverrides, onClearHistory, categoryOrders }: Props) {
   // Track *collapsed* IDs — everything is expanded by default
   const [collapsedCharts, setCollapsedCharts] = useState<Set<string>>(new Set());
   // Per-indicator custom content height (drag-to-resize)
@@ -302,6 +305,13 @@ export function IndicatorDisplay({ indicators, values, history, generation, grid
         const isSpatial = ind.kind === 'linked' && (ind.xAxis === 'rows' || ind.xAxis === 'columns' || ind.xAxis === 'layers');
         const isScalar = val !== undefined && typeof val === 'number';
         const isFreq = val !== undefined && typeof val === 'object' && !isSpatial;
+        // DEFINITION-based shape flags (independent of whether a value has
+        // arrived yet) — drive the header CONTROL visibility so the viz-mode /
+        // clear buttons are discoverable from load, not only after the first
+        // step delivers a value. The val-shape flags above keep driving the
+        // chart rendering itself.
+        const isFreqDef = ind.kind === 'linked' && ind.linkedAggregation === 'frequency' && !isSpatial;
+        const isScalarDef = !isSpatial && (ind.kind === 'standalone' || (ind.kind === 'linked' && ind.linkedAggregation !== 'frequency'));
         // Effective chart settings: model defaults ⊕ simulator overrides.
         const chartFx = mergeChartSettings(ind.chartSettings, chartOverrides[ind.id]);
         const hasAnyChartSetting = ind.chartSettings !== undefined || chartOverrides[ind.id] !== undefined;
@@ -329,7 +339,7 @@ export function IndicatorDisplay({ indicators, values, history, generation, grid
                   {isExpanded ? '\u25B2' : '\u25BC'}
                 </button>
               )}
-              {isWatched && isFreq && isExpanded && (() => {
+              {isWatched && (isFreq || isFreqDef) && isExpanded && (() => {
                 const mode = vizModes[ind.id] ?? 'bars';
                 const label = mode === 'bars' ? 'Bars' : mode === 'multiline' ? 'Lines' : 'Stack';
                 return (
@@ -337,6 +347,23 @@ export function IndicatorDisplay({ indicators, values, history, generation, grid
                     className={styles.chartBtn}
                     onClick={() => onCycleVizMode(ind.id)}
                     title={`Viz: ${label} \u2014 click to cycle (Bars \u2192 Lines \u2192 Stack)`}
+                    style={{ fontSize: '0.7rem', minWidth: 40 }}
+                  >
+                    {label}
+                  </button>
+                );
+              })()}
+              {isWatched && isSpatial && isExpanded && (() => {
+                // Spatial charts have their own 2-state style toggle (curves or a
+                // per-bin histogram). Stored in the same persisted vizModes slot:
+                // 'bars' = bars, anything else = lines.
+                const sMode = vizModes[ind.id] === 'bars' ? 'bars' : 'lines';
+                const label = sMode === 'bars' ? 'Bars' : 'Lines';
+                return (
+                  <button
+                    className={styles.chartBtn}
+                    onClick={() => onSetVizMode(ind.id, sMode === 'bars' ? 'multiline' : 'bars')}
+                    title={`Spatial chart style: ${label} \u2014 click to toggle (Lines \u21c4 Bars)`}
                     style={{ fontSize: '0.7rem', minWidth: 40 }}
                   >
                     {label}
@@ -352,11 +379,21 @@ export function IndicatorDisplay({ indicators, values, history, generation, grid
                   {'\u2699'}
                 </button>
               )}
-              {isWatched && isExpanded && (isScalar || isFreq) && (
+              {isWatched && isExpanded && (isScalar || isFreq || isScalarDef || isFreqDef) && (
                 <button
                   className={styles.chartBtn}
                   onClick={() => onClearHistory(ind.id)}
                   title="Clear chart history \u2014 start monitoring this indicator afresh"
+                >
+                  {'\u232b'}
+                </button>
+              )}
+              {isWatched && isExpanded && isSpatial && (
+                <button
+                  className={styles.chartBtn}
+                  disabled
+                  style={{ opacity: 0.35, cursor: 'default' }}
+                  title="Nothing to clear \u2014 a spatial chart redraws from the CURRENT generation each step (it keeps no history)"
                 >
                   {'\u232b'}
                 </button>
@@ -497,6 +534,7 @@ export function IndicatorDisplay({ indicators, values, history, generation, grid
                     onToggleCategory={cat => onToggleCategory(ind.id, cat)}
                     settings={chartFx}
                     categoryOrder={categoryOrders[ind.id]}
+                    mode={vizModes[ind.id] === 'bars' ? 'bars' : 'lines'}
                   />
                 </div>
               );
