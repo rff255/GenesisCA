@@ -4307,8 +4307,13 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     if (!is3D) return;
     const glc = glCanvasRef.current;
     if (!glc) return;
-    let active: 'orbit' | 'pan' | 'brush' | 'inspect' | 'resize' | 'agentSeed' | 'agentKill' | 'agentMove' | 'agentGroupMove' | 'agentEdit' | 'agentBond' | null = null;
+    let active: 'orbit' | 'pan' | 'brush' | 'inspect' | 'inspectAgent' | 'resize' | 'agentSeed' | 'agentKill' | 'agentMove' | 'agentGroupMove' | 'agentEdit' | 'agentBond' | null = null;
     let lastX = 0, lastY = 0, downX = 0, downY = 0, moved = false;
+    // AGENT sweep (active === 'inspectAgent'): the agent picked at press + whether
+    // the drag ever re-targeted a DIFFERENT agent — the discard rule is
+    // agent-change-based (like the 2D agent sweep), so wiggling within one
+    // agent's silhouette still pins on release.
+    let agentSweepStartId = -1, agentSweepMoved = false;
     // PR5 3D agent move: the agent picked at drag-start (-1 = none).
     let agentDragId = -1;
     // Ctrl+LMB-drag brush resize (mirrors the 2D canvas): captured at drag start.
@@ -4535,7 +4540,12 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
         if (isAgentModelRef.current) {
           const id = pickAgent3d(e.clientX, e.clientY);
           if (id >= 0) {
-            active = null;
+            // AGENT sweep: the popover opens immediately (it doubles as the
+            // transient) and the drag re-targets it to whichever agent is under
+            // the cursor. Release without a drag keeps it pinned; release after
+            // a drag discards (mirrors the cell sweep's !moved rule).
+            active = 'inspectAgent';
+            agentSweepStartId = id; agentSweepMoved = false;
             openAgentInspector(id, e.clientX, e.clientY);
             const snap = agentsRef.current!;
             const hasZ = snap.z.length > 0;
@@ -4699,6 +4709,25 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
         }
         return;
       }
+      if (active === 'inspectAgent') {
+        // Agent sweep: re-target the (already open) inspector to the agent under
+        // the cursor, keeping the popover anchored at the press point. Empty
+        // space keeps the last inspected agent showing.
+        const id = pickAgent3d(e.clientX, e.clientY);
+        if (id >= 0) {
+          if (id !== agentSweepStartId) agentSweepMoved = true;
+          if (id !== agentInspectRef.current?.id) {
+            openAgentInspector(id, downX, downY);
+            const snap = agentsRef.current;
+            if (snap) {
+              const hasZ = snap.z.length > 0;
+              inspectAgents3dRef.current = [{ x: snap.x[id]!, y: snap.y[id]!, z: hasZ ? snap.z[id]! : 0, radius: snap.radius[id]! }];
+            }
+            draw();
+          }
+        }
+        return;
+      }
       if (active === 'resize') {
         // dx grows the primary size; dy (up) grows the secondary. Mirrors the 2D
         // canvas's Ctrl-drag resize, then the hover footprint follows on redraw.
@@ -4782,6 +4811,14 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
           const idx = gl3dRef.current.pick(e.clientX - rect.left, e.clientY - rect.top, rect.width, rect.height);
           if (idx >= 0) openInspect3dRef.current?.(idx, e.clientX, e.clientY);
         }
+        draw();
+      }
+      if (active === 'inspectAgent') {
+        // Agent sweep release: a release that never re-targeted a different
+        // agent keeps the popover pinned (it opened on press); a sweep across
+        // other agents discards it + the highlight ring.
+        if (agentSweepMoved) { setAgentInspect(null); inspectAgents3dRef.current = []; }
+        agentSweepStartId = -1; agentSweepMoved = false;
         draw();
       }
       // Commit the final coalesced stamp synchronously (the rAF may not have
@@ -5163,6 +5200,12 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   const [sweepInspector, setSweepInspector] = useState<InspectPopoverState | null>(null);
   const sweepInspectorRef = useRef<InspectPopoverState | null>(null);
   const sweepActiveRef = useRef(false);
+  // Bond-Graph Agents — the 2D AGENT sweep (drag re-targets the open agent
+  // inspector; see the mousedown/mousemove/mouseup agent-sweep branches).
+  const agentSweepActiveRef = useRef(false);
+  const agentSweepMovedRef = useRef(false);
+  const agentSweepStartIdRef = useRef(-1);
+  const agentSweepAnchorRef = useRef<{ x: number; y: number } | null>(null);
   const sweepStartCellRef = useRef<number | null>(null);
   const sweepMovedRef = useRef(false);
   const sweepRectRef = useRef<DOMRect | null>(null);
@@ -6301,7 +6344,18 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
         // through to the cell sweep when no agent is under the cursor.
         if (isAgentModelRef.current) {
           const aid = pickAgentAt(e.clientX, e.clientY);
-          if (aid >= 0) { openAgentInspector(aid, e.clientX, e.clientY); return; }
+          if (aid >= 0) {
+            // AGENT sweep: open immediately (the popover doubles as the drag's
+            // transient) and arm the sweep — the drag re-targets it, release
+            // without a drag keeps it pinned, release after a drag discards
+            // (mirrors the cell sweep's !moved rule).
+            openAgentInspector(aid, e.clientX, e.clientY);
+            agentSweepActiveRef.current = true;
+            agentSweepMovedRef.current = false;
+            agentSweepStartIdRef.current = aid;
+            agentSweepAnchorRef.current = { x: e.clientX, y: e.clientY };
+            return;
+          }
         }
         const cell = screenToGrid(e.clientX, e.clientY);
         // Guard against the brief window where the canvas hasn't been laid out
@@ -6672,11 +6726,36 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
         }
       }
 
-      // Shift+LMB sweep: update the transient inspector to follow the cursor
-      // cell, and detect movement off the start cell (= sweep, not click).
-      // Releasing Shift mid-drag cancels the sweep entirely.
+      // Bond-Graph Agents — AGENT sweep drag: re-target the (already open) agent
+      // inspector to whichever agent is under the cursor, keeping the popover
+      // anchored at the press point. Works for Shift+LMB AND the toolbar Inspect
+      // toggle; empty space keeps the last inspected agent showing. Releasing
+      // Shift mid-drag cancels (unless inspect mode holds the gesture).
+      if (agentSweepActiveRef.current) {
+        if (!e.shiftKey && !inspectModeRef.current) {
+          agentSweepActiveRef.current = false;
+          agentSweepMovedRef.current = false;
+          agentSweepAnchorRef.current = null;
+          setAgentInspect(null);
+          return;
+        }
+        const aid = pickAgentAt(e.clientX, e.clientY);
+        if (aid >= 0) {
+          if (aid !== agentSweepStartIdRef.current) agentSweepMovedRef.current = true;
+          if (aid !== agentInspectRef.current?.id) {
+            const a = agentSweepAnchorRef.current;
+            openAgentInspector(aid, a?.x ?? e.clientX, a?.y ?? e.clientY);
+          }
+        }
+        return;
+      }
+
+      // Shift+LMB sweep (or the toolbar Inspect toggle): update the transient
+      // inspector to follow the cursor cell, and detect movement off the start
+      // cell (= sweep, not click). Releasing Shift mid-drag cancels the sweep
+      // entirely — unless inspect mode is what armed the gesture.
       if (sweepActiveRef.current) {
-        if (!e.shiftKey) {
+        if (!e.shiftKey && !inspectModeRef.current) {
           sweepActiveRef.current = false;
           sweepStartCellRef.current = null;
           sweepMovedRef.current = false;
@@ -6749,6 +6828,17 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     };
 
     const handleMouseUp = () => {
+      // End of an AGENT sweep: no-drag release keeps the popover pinned (it
+      // opened on press); a drag across other agents discards it.
+      if (agentSweepActiveRef.current) {
+        const movedAgents = agentSweepMovedRef.current;
+        agentSweepActiveRef.current = false;
+        agentSweepMovedRef.current = false;
+        agentSweepStartIdRef.current = -1;
+        agentSweepAnchorRef.current = null;
+        if (movedAgents) setAgentInspect(null);
+        return;
+      }
       // End of a Shift+LMB sweep: if the cursor never left the start cell,
       // commit (pin the popover — today's Shift+LMB click behavior). If it
       // moved, discard the transient. Runs before the brush-stroke cleanup
