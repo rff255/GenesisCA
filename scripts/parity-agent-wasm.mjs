@@ -252,17 +252,24 @@ function buildGridDimsModel() {
   const an = (t, c) => { const n = { id: nid('a'), type: 'caNode', position: { x: 0, y: 0 }, data: { nodeType: t, config: c } }; aN.push(n); return n; };
   const aE = (s, sp, tt, tp, cat) => aEd.push({ id: nid('e'), source: s.id, target: tt.id, sourceHandle: `output_${cat}_${sp}`, targetHandle: `input_${cat}_${tp}` });
   const bs = an('behaviourStep', {});
-  const gd = an('getGridDimensions', {});
+  const gd = an('getGridDimensions', { withCenter: true });
   const fold = an('expression', { expression: 'a + b*1000 + c*1000000', visibleCount: 3 });
   aE(gd, 'width', fold, 'a', 'value');
   aE(gd, 'height', fold, 'b', 'value');
   aE(gd, 'depth', fold, 'c', 'value');
-  // One multi-slot Set writes all four (also keeps the slot expansion on the path).
-  const set = an('setAttribute', { attributeId: 'gw', extraCount: 3, attr_2: 'gh', attr_3: 'gd', attr_4: 'fold' });
+  // The centre outputs fold the same way (⌊W/2⌋ + ⌊H/2⌋·1000 + ⌊D/2⌋·1e6) — a
+  // wrong floor emit on either target diverges here.
+  const cfold = an('expression', { expression: 'a + b*1000 + c*1000000', visibleCount: 3 });
+  aE(gd, 'centerX', cfold, 'a', 'value');
+  aE(gd, 'centerY', cfold, 'b', 'value');
+  aE(gd, 'centerZ', cfold, 'c', 'value');
+  // One multi-slot Set writes all five (also keeps the slot expansion on the path).
+  const set = an('setAttribute', { attributeId: 'gw', extraCount: 4, attr_2: 'gh', attr_3: 'gd', attr_4: 'fold', attr_5: 'cfold' });
   aE(gd, 'width', set, 'value', 'value');
   aE(gd, 'height', set, 'value_2', 'value');
   aE(gd, 'depth', set, 'value_3', 'value');
   aE(fold, 'result', set, 'value_4', 'value');
+  aE(cfold, 'result', set, 'value_5', 'value');
   aE(bs, 'do', set, 'do', 'flow');
   return {
     schemaVersion: 1,
@@ -276,6 +283,7 @@ function buildGridDimsModel() {
       { id: 'gh', name: 'GH', type: 'float', defaultValue: '0' },
       { id: 'gd', name: 'GD', type: 'float', defaultValue: '0' },
       { id: 'fold', name: 'Fold', type: 'float', defaultValue: '0' },
+      { id: 'cfold', name: 'CenterFold', type: 'float', defaultValue: '0' },
     ],
     variables: [], agentVariables: [], indicators: [], mappings: [],
     graphNodes: [], graphEdges: [], agentGraphNodes: aN, agentGraphEdges: aEd, macroDefs: [],
@@ -413,7 +421,7 @@ entries.push({ name: '[synthetic] Field3D (all 5 field nodes, 3D)', raw: build3D
 entries.push({ name: '[synthetic] FOV cone (Get Agents In View)', raw: buildFOVModel() });
 entries.push({ name: '[synthetic] Hemifield (Sense Hemifield L/R)', raw: buildHemifieldModel() });
 entries.push({ name: '[synthetic] Multi-attribute slots (Get/Set + by-id)', raw: buildMultiAttrModel() });
-entries.push({ name: '[synthetic] Get Grid Dimensions (3D world W/H/D)', raw: buildGridDimsModel() });
+entries.push({ name: '[synthetic] Get Grid Dimensions (3D world W/H/D + centres)', raw: buildGridDimsModel() });
 entries.push({ name: '[synthetic] Apply Force To Agent (pairwise scatter)', raw: buildApplyForceToAgentModel() });
 entries.push({ name: '[synthetic] Apply Force To Agents (array broadcast, lowered)', raw: buildApplyForceToAgentsModel() });
 entries.push({ name: '[synthetic] Loop index output (value chain + branch + direct)', raw: buildLoopIndexModel() });

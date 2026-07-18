@@ -444,11 +444,14 @@ function compileValueNode(ctx: AgentWgpuCtx, nodeId: string, portId: string): Va
     }
     // Get Grid Dimensions — the agent world IS the cell grid (1:1); its dims ride
     // the Control uniform as fieldW / fieldH / fieldD (fieldD is 1 in a 2D world).
+    // Centre ports = floor(dim / 2), matching the JS/WASM `Math.floor(dim / 2)`
+    // (grid dims are small integers, exact in f32).
     case 'getGridDimensions': {
-      const dim = portId === 'height' ? 'control.fieldH'
-        : portId === 'depth' ? 'control.fieldD'
+      const isCenter = portId === 'centerX' || portId === 'centerY' || portId === 'centerZ';
+      const dim = (portId === 'height' || portId === 'centerY') ? 'control.fieldH'
+        : (portId === 'depth' || portId === 'centerZ') ? 'control.fieldD'
         : 'control.fieldW';
-      result = emitLet(ctx, 'f32', dim, 'gdim');
+      result = emitLet(ctx, 'f32', isCenter ? `floor(${dim} * 0.5)` : dim, 'gdim');
       break;
     }
     case 'getAge': {

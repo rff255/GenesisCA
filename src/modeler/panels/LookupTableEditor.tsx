@@ -142,7 +142,25 @@ export function LookupTableEditor({
   // ---- Randomize (seeded fill) ------------------------------------------
   const [rollSeed, setRollSeed] = useState<number>(attribute.tableRoll?.seed ?? 1);
   const [rollDensity, setRollDensity] = useState<number>(attribute.tableRoll?.density ?? 0.2);
-  const [rollMaxInt, setRollMaxInt] = useState<number>(1); // integer tables: values drawn from 1..max
+  const [rollMaxInt, setRollMaxInt] = useState<number>(attribute.tableRoll?.max ?? 1); // integer tables: values drawn from 1..max
+  // Re-seed the Randomize fields from the SAVED roll whenever it changes — a
+  // model load, an attribute switch, or an external Apply. Without this the
+  // useState initializers only fire at first mount, so a persistent editor
+  // instance (notably the Simulator right-panel one, which survives model
+  // loads) kept showing the mount-time defaults (Max reset to 1) instead of
+  // the attribute's stored values. Keyed on the saved fields, NOT local edits,
+  // so typing into a field without Applying is never clobbered (typing doesn't
+  // touch attribute.tableRoll; an Apply writes back the just-typed values, so
+  // this re-seeds to the same numbers — a harmless no-op).
+  const savedSeed = attribute.tableRoll?.seed;
+  const savedDensity = attribute.tableRoll?.density;
+  const savedMax = attribute.tableRoll?.max;
+  useEffect(() => {
+    if (savedSeed !== undefined) setRollSeed(savedSeed);
+    if (savedDensity !== undefined) setRollDensity(savedDensity);
+    if (savedMax !== undefined) setRollMaxInt(savedMax);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [attribute.id, savedSeed, savedDensity, savedMax]);
   const totalEntries = multi
     ? axesResolved!.total
     : rowLabels.length * colLabels.length;
@@ -151,8 +169,13 @@ export function LookupTableEditor({
       ? Math.max(1, valueTagOptions.length - 1)
       : valueType === 'integer' ? Math.max(1, Math.floor(rollMaxInt)) : 1;
     const flat = randomFillTableData(totalEntries, rollSeed, rollDensity, { valueType, valueCount });
+    // `max` is only meaningful for integer-valued tables — store it there so the
+    // 1..max range round-trips with the attribute (.gcaproj) like seed/density.
+    const roll = valueType === 'integer'
+      ? { seed: rollSeed, density: rollDensity, max: valueCount }
+      : { seed: rollSeed, density: rollDensity };
     if (multi) {
-      onChange({ tableData: flat, tableRoll: { seed: rollSeed, density: rollDensity } });
+      onChange({ tableData: flat, tableRoll: roll });
       return;
     }
     // Legacy: convert the flat row-major fill into the sparse nested map
@@ -167,7 +190,7 @@ export function LookupTableEditor({
       });
       tv[rl] = row;
     });
-    onChange({ tableValues: tv, tableRoll: { seed: rollSeed, density: rollDensity } });
+    onChange({ tableValues: tv, tableRoll: roll });
   };
 
   // Per-cell value editor, dispatched by the table's value type. The stored

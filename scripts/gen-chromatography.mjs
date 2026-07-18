@@ -1,5 +1,14 @@
 #!/usr/bin/env node
 /**
+ * !!! DO NOT RE-RUN THIS SCRIPT OVER THE SHIPPED MODEL !!!
+ * The shipped public/models/Chromatography.gcaproj has DIVERGED from this
+ * generator: its node graph was hand-reorganized (human-friendly layout) and
+ * hand-edited in the app, and only the Overseer layer (overseerConfig +
+ * overseerGraphNodes/Edges) was later spliced on top. Re-running this script
+ * regenerates the graph from scratch and CLOBBERS those manual edits (the
+ * preserve tail only keeps simulationState + thumbnail). Historical reference /
+ * bootstrap only.
+ *
  * Generates public/models/Chromatography.gcaproj — the Kier, Cheng & Karnes
  * (2000) chromatography model, "A Cellular Automata Model of Chromatography",
  * Biomed. Chromatogr. 14:530-534.

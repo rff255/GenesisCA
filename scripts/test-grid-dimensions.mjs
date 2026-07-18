@@ -59,16 +59,21 @@ const mkGraph = () => {
   return { nodes, edges, n, v: (s, sp, t, tp) => e(s, sp, t, tp, 'value'), f: (s, sp, t, tp) => e(s, sp, t, tp, 'flow') };
 };
 
-// A dims-writing chain: <root> → Set(ow) → Set(oh) → Set(od), fed by one
-// Get Grid Dimensions. Separate Set nodes (not multi-slot) so this exercises the
-// plain single-slot path; the parity harness covers the multi-slot one.
+// A dims-writing chain: <root> → Set(id[0]) → Set(id[1]) → …, fed by one
+// Get Grid Dimensions (ids map positionally onto width/height/depth/centerX/
+// centerY/centerZ — pass 3 ids for size-only, 6 to also exercise the centre
+// ports). Separate Set nodes (not multi-slot) so this exercises the plain
+// single-slot path; the parity harness covers the multi-slot one.
+const GD_PORTS = ['width', 'height', 'depth', 'centerX', 'centerY', 'centerZ'];
 const wireDims = (g, root, rootFlowPort, ids) => {
-  const gd = g.n('getGridDimensions');
-  const sw = g.n('setAttribute', { attributeId: ids[0] });
-  const sh = g.n('setAttribute', { attributeId: ids[1] });
-  const sd = g.n('setAttribute', { attributeId: ids[2] });
-  g.f(root, rootFlowPort, sw, 'do'); g.f(sw, 'next', sh, 'do'); g.f(sh, 'next', sd, 'do');
-  g.v(gd, 'width', sw, 'value'); g.v(gd, 'height', sh, 'value'); g.v(gd, 'depth', sd, 'value');
+  const gd = g.n('getGridDimensions', { withCenter: ids.length > 3 });
+  let prev = root, prevPort = rootFlowPort;
+  ids.forEach((attrId, i) => {
+    const s = g.n('setAttribute', { attributeId: attrId });
+    g.f(prev, prevPort, s, 'do');
+    g.v(gd, GD_PORTS[i], s, 'value');
+    prev = s; prevPort = 'next';
+  });
   return gd;
 };
 
@@ -93,6 +98,13 @@ console.log('== availability ==');
   M.setActiveGraphKind('cells');
   check('Depth port hidden in 2D', def.hiddenPorts({}, model2d).includes('depth'));
   check('Depth port shown in 3D', !def.hiddenPorts({}, model3d).includes('depth'));
+  check('center ports hidden by default (withCenter off)',
+    ['centerX', 'centerY', 'centerZ'].every(p => def.hiddenPorts({}, model3d).includes(p)));
+  const on2d = def.hiddenPorts({ withCenter: true }, model2d);
+  const on3d = def.hiddenPorts({ withCenter: true }, model3d);
+  check('Center X/Y shown with withCenter', !on2d.includes('centerX') && !on2d.includes('centerY'));
+  check('Center Z hidden in 2D even with withCenter', on2d.includes('centerZ'));
+  check('Center Z shown in 3D with withCenter', !on3d.includes('centerZ'));
 }
 
 // ===========================================================================
@@ -101,9 +113,11 @@ console.log('== availability ==');
 const cellCase = async (label, W, H, D) => {
   console.log(`\n== cells ${label} (${W}x${H}x${D}) ==`);
   const is3d = D > 1;
+  const CX = Math.floor(W / 2), CY = Math.floor(H / 2), CZ = is3d ? Math.floor(D / 2) : 0;
   const g = mkGraph();
   const step = g.n('step');
-  wireDims(g, step, 'do', ['ow', 'oh', 'od']);
+  const attrIds = ['ow', 'oh', 'od', 'ocx', 'ocy', 'ocz'];
+  wireDims(g, step, 'do', attrIds);
   const model = M.migrateForHarness({
     schemaVersion: 2,
     properties: {
@@ -112,7 +126,7 @@ const cellCase = async (label, W, H, D) => {
       gridWidth: W, gridHeight: H, dimension: is3d ? '3d' : '2d', gridDepth: D,
       useWasm: false,
     },
-    attributes: [cellAttr('ow'), cellAttr('oh'), cellAttr('od')],
+    attributes: attrIds.map(cellAttr),
     neighborhoods: [], mappings: [], indicators: [],
     graphNodes: g.nodes, graphEdges: g.edges, macroDefs: [],
     topologyMode: { gridCells: true, agents: false },
@@ -127,14 +141,12 @@ const cellCase = async (label, W, H, D) => {
     const params = /\(\s*function\s*\(([^)]*)\)/.exec(js.stepCode)[1].split(',').map(s => s.trim()).filter(Boolean);
     const bufs = {
       total: TOTAL, W, H, D, WH: W * H,
-      r_ow: new Float64Array(TOTAL), w_ow: new Float64Array(TOTAL),
-      r_oh: new Float64Array(TOTAL), w_oh: new Float64Array(TOTAL),
-      r_od: new Float64Array(TOTAL), w_od: new Float64Array(TOTAL),
       modelAttrs: {}, colors: new Uint8ClampedArray(TOTAL * 4), activeViewer: '',
       _indicators: {}, _linkedResults: {}, _rngState: new Uint32Array([0x12345678]),
       _stopFlag: new Uint32Array(1), glyphCodes: new Uint32Array(0), glyphColors: new Uint32Array(0),
       order: null, _skipped: new Uint8Array(0),
     };
+    for (const id of attrIds) { bufs[`r_${id}`] = new Float64Array(TOTAL); bufs[`w_${id}`] = new Float64Array(TOTAL); }
     const missing = params.filter(p => !(p in bufs));
     check('JS step params all resolvable', missing.length === 0, `unknown: ${missing.join(', ')}`);
     if (!missing.length) {
@@ -143,7 +155,10 @@ const cellCase = async (label, W, H, D) => {
       check(`JS runtime width === ${W}`, allEq(bufs.w_ow, W), `got ${bufs.w_ow[0]}`);
       check(`JS runtime height === ${H}`, allEq(bufs.w_oh, H), `got ${bufs.w_oh[0]}`);
       check(`JS runtime depth === ${D}`, allEq(bufs.w_od, D), `got ${bufs.w_od[0]}`);
-      jsOut = [Float64Array.from(bufs.w_ow), Float64Array.from(bufs.w_oh), Float64Array.from(bufs.w_od)];
+      check(`JS runtime centerX === ${CX}`, allEq(bufs.w_ocx, CX), `got ${bufs.w_ocx[0]}`);
+      check(`JS runtime centerY === ${CY}`, allEq(bufs.w_ocy, CY), `got ${bufs.w_ocy[0]}`);
+      check(`JS runtime centerZ === ${CZ}`, allEq(bufs.w_ocz, CZ), `got ${bufs.w_ocz[0]}`);
+      jsOut = attrIds.map(id => Float64Array.from(bufs[`w_${id}`]));
     }
   }
 
@@ -162,9 +177,12 @@ const cellCase = async (label, W, H, D) => {
     check(`WASM runtime width === ${W}`, allEq(rd('ow'), W), `got ${rd('ow')[0]}`);
     check(`WASM runtime height === ${H}`, allEq(rd('oh'), H), `got ${rd('oh')[0]}`);
     check(`WASM runtime depth === ${D}`, allEq(rd('od'), D), `got ${rd('od')[0]}`);
+    check(`WASM runtime centerX === ${CX}`, allEq(rd('ocx'), CX), `got ${rd('ocx')[0]}`);
+    check(`WASM runtime centerY === ${CY}`, allEq(rd('ocy'), CY), `got ${rd('ocy')[0]}`);
+    check(`WASM runtime centerZ === ${CZ}`, allEq(rd('ocz'), CZ), `got ${rd('ocz')[0]}`);
     if (jsOut) {
       let diff = 0;
-      for (const [k, id] of [[0, 'ow'], [1, 'oh'], [2, 'od']]) { const a = rd(id); for (let i = 0; i < TOTAL; i++) if (a[i] !== jsOut[k][i]) diff++; }
+      attrIds.forEach((id, k) => { const a = rd(id); for (let i = 0; i < TOTAL; i++) if (a[i] !== jsOut[k][i]) diff++; });
       check('JS ↔ WASM bit-identical', diff === 0, `${diff} mismatches`);
     }
   }
@@ -177,6 +195,9 @@ const cellCase = async (label, W, H, D) => {
     check('WGSL bakes the width/height/depth literals',
       new RegExp(`let _gdW\\d+: i32 = ${W};`).test(s) && new RegExp(`let _gdH\\d+: i32 = ${H};`).test(s) && new RegExp(`let _gdD\\d+: i32 = ${D};`).test(s),
       'literal lets missing');
+    check('WGSL bakes the centre literals',
+      new RegExp(`let _gdCX\\d+: i32 = ${CX};`).test(s) && new RegExp(`let _gdCY\\d+: i32 = ${CY};`).test(s) && new RegExp(`let _gdCZ\\d+: i32 = ${Math.floor(D / 2)};`).test(s),
+      'centre literal lets missing');
   }
 };
 
@@ -231,9 +252,10 @@ const agentCase = (label, W, H, D) => {
   // path a naive `_fieldD` emit would blow up on. (Per-agent writers like Set
   // Attribute can't run in the once-only init — that's the documented footgun — so
   // the init test uses the real spawn idiom.)
+  const CX = Math.floor(W / 2), CY = Math.floor(H / 2), CZ = Math.floor(D / 2);
   const g = mkGraph();
   const bs = g.n('behaviourStep');
-  wireDims(g, bs, 'do', ['bw', 'bh', 'bd']);
+  wireDims(g, bs, 'do', ['bw', 'bh', 'bd', 'bcx', 'bcy', 'bcz']);
   const ai = g.n('agentInit');
   const loop = g.n('loop', { _port_count: String(N) });
   g.f(ai, 'do', loop, 'do');
@@ -258,7 +280,7 @@ const agentCase = (label, W, H, D) => {
     topologyMode: { gridCells: false, agents: true },
     centerBased: { enabled: true, maxAgents: N, maxBonds: 0, worldWidth: W, worldHeight: H, worldDepth: D, seedCount: N, seedPattern: 'scatter', defaultRadius: 0.5, growthRate: 0, repulsionStiffness: 2, adhesionStiffness: 0, interactionRange: 1.5, drag: 1, timeStep: 0.1, momentum: 0, maxSpeed: 0, neighbourQueryRadius: 4, useBondingPhysics: false, autoBond: false, agentTarget: 'wasm', agentUpdateMode: 'async' },
     attributes: [], neighborhoods: [], mappings: [], indicators: [],
-    agentAttributes: ['bw', 'bh', 'bd', 'iw', 'ih', 'id'].map(aAttr),
+    agentAttributes: ['bw', 'bh', 'bd', 'bcx', 'bcy', 'bcz', 'iw', 'ih', 'id'].map(aAttr),
     variables: [], agentVariables: [],
     graphNodes: [], graphEdges: [],
     agentGraphNodes: g.nodes, agentGraphEdges: g.edges, macroDefs: [],
@@ -271,13 +293,16 @@ const agentCase = (label, W, H, D) => {
   // --- run the JS BEHAVIOUR loop ---
   {
     const spec = new Map();
-    for (const id of ['bw', 'bh', 'bd', 'iw', 'ih', 'id']) { spec.set(`r_${id}`, new Float64Array(N)); spec.set(`w_${id}`, new Float64Array(N)); }
+    for (const id of ['bw', 'bh', 'bd', 'bcx', 'bcy', 'bcz', 'iw', 'ih', 'id']) { spec.set(`r_${id}`, new Float64Array(N)); spec.set(`w_${id}`, new Float64Array(N)); }
     const params = /\(\s*function\s*\(([^)]*)\)/.exec(ag.behaviourCode)[1].split(',').map(s => s.trim()).filter(Boolean);
     (0, eval)(ag.behaviourCode)(...agentArgs(params, { N, W, H, D, spec }));
     const allEq = (a, v) => { for (let i = 0; i < N; i++) if (a[i] !== v) return false; return true; };
     check(`JS behaviour width === ${W}`, allEq(spec.get('w_bw'), W), `got ${spec.get('w_bw')[0]}`);
     check(`JS behaviour height === ${H}`, allEq(spec.get('w_bh'), H), `got ${spec.get('w_bh')[0]}`);
     check(`JS behaviour depth === ${D}`, allEq(spec.get('w_bd'), D), `got ${spec.get('w_bd')[0]}`);
+    check(`JS behaviour centerX === ${CX}`, allEq(spec.get('w_bcx'), CX), `got ${spec.get('w_bcx')[0]}`);
+    check(`JS behaviour centerY === ${CY}`, allEq(spec.get('w_bcy'), CY), `got ${spec.get('w_bcy')[0]}`);
+    check(`JS behaviour centerZ === ${CZ}`, allEq(spec.get('w_bcz'), CZ), `got ${spec.get('w_bcz')[0]}`);
   }
 
   // --- run the JS AGENT INIT EVENT (no `_fieldD` in its ABI — the trap) ---
@@ -326,6 +351,11 @@ const agentCase = (label, W, H, D) => {
         /let _gdim\d+: f32 = control\.fieldW;/.test(s) && /let _gdim\d+: f32 = control\.fieldH;/.test(s)
         && (!is3d || /let _gdim\d+: f32 = control\.fieldD;/.test(s)),
         'control.field* reads missing');
+      check('WGSL centre reads = floor(control.field* * 0.5)',
+        /let _gdim\d+: f32 = floor\(control\.fieldW \* 0\.5\);/.test(s)
+        && /let _gdim\d+: f32 = floor\(control\.fieldH \* 0\.5\);/.test(s)
+        && /let _gdim\d+: f32 = floor\(control\.fieldD \* 0\.5\);/.test(s),
+        'floor(control.field* * 0.5) reads missing');
     }
   }
 };
