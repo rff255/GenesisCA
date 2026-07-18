@@ -612,11 +612,17 @@ function compileValueNode(ctx: AgentWasmCtx, nodeId: string, portId: string): Va
     // Get Grid Dimensions — the agent world IS the cell grid (1:1), and its dims
     // ride the behaviour signature as the fieldW / fieldH / fieldD f64 params
     // (fieldD is 1 in a 2D world). Zero-cost: just re-read the param local.
+    // Centre ports = floor(dim / 2) — `dim * 0.5` is exact for integer dims, so
+    // the floor matches the JS `Math.floor(dim / 2)` bit-for-bit.
     case 'getGridDimensions': {
-      const dimLocal = portId === 'height' ? ctx.fieldHLocal
-        : portId === 'depth' ? ctx.fieldDLocal
+      const isCenter = portId === 'centerX' || portId === 'centerY' || portId === 'centerZ';
+      const dimLocal = (portId === 'height' || portId === 'centerY') ? ctx.fieldHLocal
+        : (portId === 'depth' || portId === 'centerZ') ? ctx.fieldDLocal
         : ctx.fieldWLocal;
-      result = f64Result(() => em.localGet(dimLocal));
+      result = f64Result(() => {
+        em.localGet(dimLocal);
+        if (isCenter) { em.f64Const(0.5); em.op(OP_F64_MUL); em.op(OP_F64_FLOOR); }
+      });
       break;
     }
     case 'getAge': {

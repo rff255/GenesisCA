@@ -2310,6 +2310,11 @@ const VALUE_NODE_EMITTERS: Record<string, NodeValueEmitter> = {
     setCachedPort(ctx, node.id, 'width', w);
     setCachedPort(ctx, node.id, 'height', emitLet(ctx, 'i32', `${ctx.layout.gridHeight}`, 'gdH'));
     setCachedPort(ctx, node.id, 'depth', emitLet(ctx, 'i32', `${ctx.layout.gridDepth}`, 'gdD'));
+    // Grid centre (⌊size/2⌋ per axis) — baked like the dims; emitted regardless
+    // of the `withCenter` UI checkbox so a wire into a centre port never dangles.
+    setCachedPort(ctx, node.id, 'centerX', emitLet(ctx, 'i32', `${Math.floor(ctx.layout.gridWidth / 2)}`, 'gdCX'));
+    setCachedPort(ctx, node.id, 'centerY', emitLet(ctx, 'i32', `${Math.floor(ctx.layout.gridHeight / 2)}`, 'gdCY'));
+    setCachedPort(ctx, node.id, 'centerZ', emitLet(ctx, 'i32', `${Math.floor(ctx.layout.gridDepth / 2)}`, 'gdCZ'));
     return w;  // default 'value' port → width
   },
 };

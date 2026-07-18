@@ -1252,10 +1252,12 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
         const attr = model.attributes.find(a => a.id === tableId && a.isModelAttribute && a.type === 'lookupTable');
         if (!attr) return;
         // Value policy mirrors the editor's Randomize: tag → uniform over the
-        // non-zero tag options, bool → 1, integer/float → 1 / uniform(0,1).
+        // non-zero tag options, integer → uniform over 1..tableRoll.max (the
+        // attribute's stored Max), bool → 1, float → uniform(0,1).
         const valueType = attr.valueType ?? 'float';
         const valueCount = valueType === 'tag'
           ? Math.max(1, resolveValueTagOptions(attr, model).length - 1)
+          : valueType === 'integer' ? Math.max(1, Math.floor(attr.tableRoll?.max ?? 1))
           : 1;
         if (isMultiAxisTable(attr)) {
           const r = resolveAxes(attr, model);
@@ -7167,7 +7169,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     tableValues: Record<string, Record<string, number>> | undefined,
     symmetric: boolean | undefined,
     tableData?: number[],
-    tableRoll?: { seed: number; density: number },
+    tableRoll?: { seed: number; density: number; max?: number },
   ) => {
     const changes: Partial<Attribute> = {};
     if (tableValues !== undefined) changes.tableValues = tableValues;

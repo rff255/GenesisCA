@@ -142,11 +142,12 @@ export interface Attribute {
    *  encoding as `tableValues` (bool 0/1, tag index, int/float). Missing /
    *  short arrays read as 0 (the normalizer zero-fills). */
   tableData?: number[];
-  /** Multi-axis tables only, informational: the last "Randomize table" roll's
-   *  seed + density (seeds the editor fields; journaled by the Overseer's
-   *  Randomize Table node). The DATA (`tableData`) stays authoritative — this
-   *  never regenerates implicitly. */
-  tableRoll?: { seed: number; density: number };
+  /** Informational: the last "Randomize table" roll's seed + density (+ `max`,
+   *  the 1..max value range, for integer-valued tables) — seeds the editor
+   *  fields; journaled by the Overseer's Randomize Table node. The DATA
+   *  (`tableData` / `tableValues`) stays authoritative — this never
+   *  regenerates implicitly. */
+  tableRoll?: { seed: number; density: number; max?: number };
   /** Lookup Table model attributes only: the data TYPE of the table's cell
    *  values. Absent → `'float'` (Decimal), the historical behaviour. Restricted
    *  to the scalar-numeric types that fit one stored number exactly on all

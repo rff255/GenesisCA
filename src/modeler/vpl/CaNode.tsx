@@ -2965,6 +2965,18 @@ function CaNodeComponent({ id, data }: NodeProps) {
           );
         })()}
 
+        {nodeData.nodeType === 'getGridDimensions' && (
+          <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: '0.68rem', color: '#a0b0c0', cursor: 'pointer' }}>
+            <input
+              type="checkbox"
+              checked={!!nodeData.config.withCenter}
+              onChange={e => updateConfig('withCenter', e.target.checked)}
+              style={{ cursor: 'pointer' }}
+            />
+            Output center (⌊size/2⌋)
+          </label>
+        )}
+
         {nodeData.nodeType === 'getAllFacingLabels' && (
           <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: '0.68rem', color: '#a0b0c0', cursor: 'pointer' }}>
             <input
