@@ -1684,7 +1684,7 @@ export class Gl3DRenderer {
    *  sphere impostors' silhouette rim (SPHERE_FS uOutline); display pass only
    *  (the pick/shadow programs don't declare the uniform → null location no-op). */
   setAgentOutlines(on: boolean): void { this.agentOutlines = on; }
-  private agentOutlines = true;
+  private agentOutlines = false;
   /** Agent metaballs config. `threshold` is a pure shader uniform (no re-bake);
    *  the other fields invalidate the baked field. */
   setMetaballs(cfg: Metaballs3D): void {

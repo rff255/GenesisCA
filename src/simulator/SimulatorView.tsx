@@ -976,10 +976,11 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   );
   const bg2dRef = useRef<string | null>(null);
   useEffect(() => { bg2dRef.current = bg2d.enabled ? bg2d.color : null; }, [bg2d]);
-  // Agent disc outlines (the dark contour stroke on circles with rad >= 2px) —
-  // optional so dense populations can render as clean solid dots. Default ON
-  // (the historical look). Persisted; a ref drives the draw() hot path.
-  const [agentOutlines, setAgentOutlines] = useState<boolean>(saved.current.agentOutlines !== false);
+  // Agent disc outlines (the dark contour stroke on circles with rad >= 2px;
+  // in 3D a silhouette rim on the sphere impostors) — optional so dense
+  // populations render as clean solid dots. Default OFF; an explicitly saved ON
+  // is respected. Persisted; a ref drives the draw() hot path.
+  const [agentOutlines, setAgentOutlines] = useState<boolean>(saved.current.agentOutlines === true);
   const agentOutlinesRef = useRef(agentOutlines); agentOutlinesRef.current = agentOutlines;
   // PR3 — agent inspector: a single on-demand popover (one at a time).
   const [agentInspect, setAgentInspect] = useState<{ id: number; x: number; y: number } | null>(null);
