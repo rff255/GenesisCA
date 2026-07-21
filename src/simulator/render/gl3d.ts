@@ -589,6 +589,7 @@ uniform vec3 uLightDir;     // world-space dir TOWARD the light (unit)
 uniform float uAmbient;
 uniform float uDiffuse;
 uniform float uSpecular;
+uniform int uOutline;       // agent disc outlines — darken the silhouette rim
 out vec4 outColor;
 void main() {
   if (vSkip > 0.5) { discard; }           // sprite-agent → drawn by the billboard pass
@@ -615,6 +616,17 @@ void main() {
   if (uSpecular > 0.0) {
     vec3 H = normalize(uLightDir - uCamForward);
     col += uSpecular * pow(max(0.0, dot(n, H)), 32.0) * sh;
+  }
+  // Silhouette rim — the 3D analogue of the 2D disc contour stroke. fwidth(rr)
+  // ≈ one screen pixel in normalized-radius units, so the band reproduces the
+  // 2D rule (lineWidth = min(1.5px, 0.25·rad), 0.40 black over the colour) at
+  // any zoom. Applied AFTER lighting (the 2D stroke draws over the shaded disc).
+  if (uOutline == 1) {
+    float rr = sqrt(r2);
+    float pxw = fwidth(rr);
+    float band = min(1.5 * pxw, 0.25);
+    float rim = smoothstep(1.0 - band - pxw, 1.0 - band + pxw, rr);
+    col *= (1.0 - 0.4 * rim);
   }
   outColor = vec4(col, vColor.a);
 }`;
@@ -1668,6 +1680,11 @@ export class Gl3DRenderer {
   // Bond-Graph Agents (PR5): sphere-impostor + bond-line upload / render / pick.
   // ------------------------------------------------------------------------
   setAgentAlphaBlend(on: boolean): void { this.agentAlphaBlend = on; }
+  /** Agent disc outlines — the shared simulator toggle. In 3D it darkens the
+   *  sphere impostors' silhouette rim (SPHERE_FS uOutline); display pass only
+   *  (the pick/shadow programs don't declare the uniform → null location no-op). */
+  setAgentOutlines(on: boolean): void { this.agentOutlines = on; }
+  private agentOutlines = true;
   /** Agent metaballs config. `threshold` is a pure shader uniform (no re-bake);
    *  the other fields invalidate the baked field. */
   setMetaballs(cfg: Metaballs3D): void {
@@ -1897,6 +1914,8 @@ export class Gl3DRenderer {
     gl.uniform1f(gl.getUniformLocation(prog, 'uClipLo'), this.clip.lo);
     gl.uniform1f(gl.getUniformLocation(prog, 'uClipHi'), this.clip.hi);
     gl.uniform3f(gl.getUniformLocation(prog, 'uClipForward'), this.camForward[0], this.camForward[1], this.camForward[2]);
+    // Agent outlines — the pick program doesn't declare uOutline (null → no-op).
+    gl.uniform1i(gl.getUniformLocation(prog, 'uOutline'), this.agentOutlines ? 1 : 0);
   }
 
   /** Draw the bond lines (depth-tested). Pass the active clip so bonds respect the
