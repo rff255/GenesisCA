@@ -15,7 +15,7 @@ import { fileURLToPath, pathToFileURL } from 'url';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const ENTRY = `
-export { createAgentStore, computeAgentMaxHashBins, buildSpatialHash, seedAgents } from '../src/simulator/engine/agentEngine.ts';
+export { createAgentStore, computeAgentMaxHashBins, buildSpatialHash, seedAgents, formBond } from '../src/simulator/engine/agentEngine.ts';
 export { compileAgentGraphWasmForModel, instantiateAgentWasm, buildAgentLayoutExtras, isAgentGraphWasmSupported } from '../src/modeler/vpl/compiler/agentWasm/compile.ts';
 export { compileAgentGraph } from '../src/modeler/vpl/compiler/compile.ts';
 export { buildAgentAbiArgs } from '../src/modeler/vpl/compiler/agentAbi.ts';
@@ -30,7 +30,7 @@ const outPath = join(dir, 'bundle.mjs');
 await build({ entryPoints: [entryPath], bundle: true, format: 'esm', platform: 'node', outfile: outPath, logLevel: 'error', absWorkingDir: process.cwd() });
 const m = await import(pathToFileURL(outPath).href);
 const {
-  createAgentStore, computeAgentMaxHashBins, buildSpatialHash, seedAgents,
+  createAgentStore, computeAgentMaxHashBins, buildSpatialHash, seedAgents, formBond,
   compileAgentGraphWasmForModel, instantiateAgentWasm,
   compileAgentGraph, buildAgentAbiArgs, migrateForHarness, agentAttrsOf, cellFieldAttrsOf,
   resolveKeyLabels, normalizeLookupTable,
@@ -407,6 +407,67 @@ function buildLoopIndexModel() {
   };
 }
 
+// Synthetic: Get Curvature + For Each Bond currentLength over a BONDED population
+// (a `setup` hook forms the bonds — chain + cross links, so bondCount ≥ 2 and the
+// curvature branch actually runs; agents are re-positioned to irregular values,
+// with seam-straddling pairs so the torus fold is on the path). Guards the
+// sqrt-of-squared-sum ↔ Math.hypot ULP class: the JS emit must use
+// Math.sqrt(dx*dx + dy*dy) with the SAME associativity as the WASM f64 ops
+// (the getAgentOffset.distance lesson) or curvature/length values diverge by ULPs.
+// curv stores the curvature; lenSum accumulates Σ currentLength across steps
+// (compounding, so a single-ULP divergence is caught within a few steps).
+function buildCurvatureModel() {
+  const used = new Set();
+  const nid = (p) => { let id; do { id = p + Math.random().toString(36).slice(2, 8); } while (used.has(id)); used.add(id); return id; };
+  const aN = [], aEd = [];
+  const an = (t, c) => { const n = { id: nid('a'), type: 'caNode', position: { x: 0, y: 0 }, data: { nodeType: t, config: c } }; aN.push(n); return n; };
+  const aE = (s, sp, tt, tp, cat) => aEd.push({ id: nid('e'), source: s.id, target: tt.id, sourceHandle: `output_${cat}_${sp}`, targetHandle: `input_${cat}_${tp}` });
+  const bs = an('behaviourStep', {});
+  const gc = an('getCurvature', {});
+  const setCurv = an('setAttribute', { attributeId: 'curv' });
+  aE(bs, 'do', setCurv, 'do', 'flow');
+  aE(gc, 'value', setCurv, 'value', 'value');
+  const feb = an('forEachBond', {});
+  aE(setCurv, 'next', feb, 'do', 'flow');
+  const upd = an('updateAttribute', { attributeId: 'lenSum', operation: 'increment' });
+  aE(feb, 'currentLength', upd, 'value', 'value');
+  aE(feb, 'body', upd, 'do', 'flow');
+  return {
+    schemaVersion: 1,
+    properties: { name: 'Curvature Parity Test', dimension: '2d', gridWidth: 24, gridHeight: 24, gridDepth: 1, topology: '2d-grid', boundaryTreatment: 'torus', useWasm: false, useWebGPU: false },
+    topologyMode: { gridCells: false, agents: true },
+    centerBased: { enabled: true, maxAgents: 100, maxBonds: 4, worldWidth: 24, worldHeight: 24, seedCount: 40, seedPattern: 'scatter', defaultRadius: 0.5, growthRate: 0, repulsionStiffness: 2, adhesionStiffness: 0, interactionRange: 1.5, drag: 1, timeStep: 0.1, momentum: 0, maxSpeed: 0, neighbourQueryRadius: 8, useBondingPhysics: false, autoBond: false, bondStiffness: 0.4, bondRestLength: 1.5, formDistance: 1.2, breakDistance: 2.0, agentTarget: 'wasm', agentUpdateMode: 'async',
+      agentCapabilities: { motion: 'force', body: true, collision: 'off', bonds: 'data', autoBond: false, growth: false, division: false, lifespan: false, populationBirth: false, populationDeath: false, sensing: false, sensingHeadingSource: 'velocity', orientation: false, fieldCoupling: false, appearance: true } },
+    attributes: [], modelAttributes: [], neighborhoods: [],
+    agentAttributes: [
+      { id: 'curv', name: 'Curvature', type: 'float', defaultValue: '0' },
+      { id: 'lenSum', name: 'LenSum', type: 'float', defaultValue: '0' },
+    ],
+    variables: [], agentVariables: [], indicators: [], mappings: [],
+    graphNodes: [], graphEdges: [], agentGraphNodes: aN, agentGraphEdges: aEd, macroDefs: [],
+  };
+}
+
+// The curvature model's bond/position setup — runs IDENTICALLY on both stores
+// after seeding. Irregular (but deterministic) positions across the full torus,
+// chain + cross bonds so every agent has 2-4 partners; the modulo wrap puts
+// several bonded pairs across the seam (torus-fold coverage).
+function setupCurvatureStores(stores) {
+  const W = 24, H = 24;
+  for (const s of stores) {
+    for (let i = 0; i < s.highWater; i++) {
+      const px = ((i * 7.371) + Math.sin(i * 1.618) * 0.9) % W;
+      const py = ((i * 5.137) + Math.cos(i * 2.71) * 0.9) % H;
+      const x = ((px % W) + W) % W, y = ((py % H) + H) % H;
+      s.x[i] = x; s.xNext[i] = x; s.y[i] = y; s.yNext[i] = y;
+    }
+    for (let i = 0; i < s.highWater; i++) {
+      formBond(s, i, (i + 1) % s.highWater, 1.5, 0.5);
+      if ((i & 1) === 0) formBond(s, i, (i + 7) % s.highWater, 2.0, 0.5);
+    }
+  }
+}
+
 // Build the entry list: every shipped agent .gcaproj PLUS a synthetic 3D-field
 // model exercising ALL FIVE field-bridge nodes in 3D (trilinear sample/gradient/
 // splat + r-sphere read/affect). The 3D-field model is built in-memory (not
@@ -425,8 +486,9 @@ entries.push({ name: '[synthetic] Get Grid Dimensions (3D world W/H/D + centres)
 entries.push({ name: '[synthetic] Apply Force To Agent (pairwise scatter)', raw: buildApplyForceToAgentModel() });
 entries.push({ name: '[synthetic] Apply Force To Agents (array broadcast, lowered)', raw: buildApplyForceToAgentsModel() });
 entries.push({ name: '[synthetic] Loop index output (value chain + branch + direct)', raw: buildLoopIndexModel() });
+entries.push({ name: '[synthetic] Curvature + bond currentLength (bonded, hypot↔sqrt)', raw: buildCurvatureModel(), setup: setupCurvatureStores });
 
-for (const { name: f, raw } of entries) {
+for (const { name: f, raw, setup } of entries) {
   const model = migrateForHarness(raw);
   if (!model?.topologyMode?.agents) continue;
 
@@ -506,6 +568,8 @@ for (const { name: f, raw } of entries) {
   seedAgents(A, seedSpecs, r); seedAgents(B, seedSpecs, r);
   // give agent attrs deterministic non-default values
   for (const s of [A, B]) for (const spec of agentAttrs) { const a = s.attrRead[spec.id]; for (let i = 0; i < s.highWater; i++) a[i] = (i % 5) - 2; if (s.attrWrite[spec.id] !== a) s.attrWrite[spec.id].set(a); }
+  // per-entry post-seed setup (bond topology / repositioning) — identical on both stores.
+  if (setup) setup([A, B]);
 
   // LAYOUT-MATCH assertion: the store's layout MUST equal the compiler's, else the
   // baked field/attr offsets are wrong (the +64-cell bug).
