@@ -2287,6 +2287,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       if (isAgentModelRef.current) {
         const snap = agentsRef.current;
         r.setAgentAlphaBlend(alpha3dRef.current);
+        r.setAgentOutlines(agentOutlinesRef.current);
         // (Re)build the sprite atlas when the sprite set / decoded frames changed
         // (registry onReady / sprite-set edit / fresh renderer). Must precede
         // uploadAgents (which reads the atlas slot meta) and force a re-upload so
@@ -8881,20 +8882,18 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
                 </label>
               </div>
               )}
-              {/* Agent disc outlines — the dark contour stroke around each circle
-                  (drawn only when a disc is >= 2px). Optional so dense populations
-                  can render as clean solid dots. 2D only — the 3D spheres have no
-                  outline pass. */}
-              {!is3D && (
+              {/* Agent disc outlines — 2D: the dark contour stroke around each
+                  circle (drawn only when a disc is >= 2px); 3D: a matching dark
+                  silhouette rim on the sphere impostors (SPHERE_FS uOutline).
+                  Optional so dense populations can render as clean solid dots. */}
               <div>
                 <div style={{ fontSize: '0.6rem', color: 'var(--color-text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 4 }}>Outlines</div>
                 <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.66rem' }}
-                  title="Draw a dark contour around each agent disc (only visible on discs at least 2px on screen). Off = clean solid dots.">
+                  title="Draw a dark contour around each agent (2D discs at least 2px on screen; 3D spheres get a silhouette rim). Off = clean solid dots.">
                   <input type="checkbox" checked={agentOutlines} onChange={e => setAgentOutlines(e.target.checked)} />
-                  <span style={{ color: 'var(--color-text-muted)' }}>Outline agent discs</span>
+                  <span style={{ color: 'var(--color-text-muted)' }}>Outline agents</span>
                 </label>
               </div>
-              )}
               {/* Agent metaballs (2D) — the same shared preference as the 3D View
                   panel's Metaballs block; in 2D it's an approximate gooey filter
                   (blur + alpha threshold) fusing the agent discs. */}
