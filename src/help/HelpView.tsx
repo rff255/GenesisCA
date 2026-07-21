@@ -501,7 +501,28 @@ export function HelpView() {
             state&nbsp;&times;&nbsp;face/edge/corner neighbour counts) expressible. The{' '}
             <strong>Randomize</strong> block fills the whole table from a seed at a chosen
             density &mdash; the seed <em>is</em> the rule identity (same seed &rArr; same
-            structure), so re-roll it to grow an entirely different form.
+            structure), so re-roll it to grow an entirely different form. For Decimal-valued
+            tables the roll also takes a <strong>Min / Max range</strong> &mdash; signed
+            ranges like &minus;1&hellip;1 make attraction/repulsion matrices (the{' '}
+            <strong>Particle Life</strong> samples&rsquo; rules matrix).
+          </p>
+          <p className={styles.p}>
+            Decimal-valued tables open in a <strong>Matrix view</strong> built for play:
+            each cell is a colour swatch (red&nbsp;=&nbsp;repel, cyan&nbsp;=&nbsp;attract,
+            saturation&nbsp;=&nbsp;magnitude) &mdash; <strong>drag a cell horizontally</strong>{' '}
+            to adjust it, click to select, Ctrl+click to multi-select, and use the slider
+            below to edit the selection (or every cell at once when nothing is selected).
+            Square tables add a <strong>Fill pattern</strong> menu (uniform or symmetric
+            random, snake, rock&ndash;paper&ndash;scissors, chains, bipartite,
+            hub&nbsp;&amp;&nbsp;spokes, shells, swirl, dimers, triad flocks) plus
+            Zero&nbsp;/ Symmetrize&nbsp;/ Transpose&nbsp;/ Negate&nbsp;/ Mutate quick
+            actions. A <em>#&nbsp;Values</em> toggle restores the classic number grid.
+            Everything works live in the Simulator&rsquo;s left-panel Model Attributes
+            section while the model runs. An axis (or a Tag value type) can also be keyed by
+            an <strong>agent</strong> tag attribute &mdash; the Particle Life samples key
+            all three of their tables (rules&nbsp;/ attractMin&nbsp;/ attractMax) by the
+            agents&rsquo; <em>species</em> tag, with per-pair minimum and maximum radii just
+            like the original.
           </p>
           <p className={styles.p}>
             You can define multiple face-label <strong>palettes</strong> in the Variegated
