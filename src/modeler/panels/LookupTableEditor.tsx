@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { Attribute } from '../../model/types';
 import type { ResolvedLookupAxes } from '../vpl/compiler/variegation';
 import { randomFillTableData } from '../vpl/compiler/variegation';
+import { MATRIX_GENERATORS, generateMatrix, mutateMatrix } from '../../model/matrixGenerators';
 import { NumberField, InlineTagSelect } from '../vpl/widgets/InlineWidgets';
 import styles from './PanelContent.module.css';
 
@@ -139,6 +140,137 @@ export function LookupTableEditor({
   const valueType = attribute.valueType ?? 'float';
   const valueTagOptions = resolvedValueTagOptions ?? attribute.valueTagOptions ?? [];
 
+  // ---- Matrix-play view (float tables) ------------------------------------
+  // The Particle Life-style play surface: diverging-color cells (red = repel /
+  // cyan = attract over dark neutral, |value| = saturation), horizontal
+  // DRAG-on-cell adjust, click select + Ctrl multi-select, a shared slider for
+  // the selection (or ALL cells), named generators + quick actions. Float
+  // tables default to it; the '# Values' toggle restores the NumberField grid.
+  const isFloat = valueType === 'float';
+  const [view, setView] = useState<'matrix' | 'values'>(isFloat ? 'matrix' : 'values');
+  useEffect(() => { setView(isFloat ? 'matrix' : 'values'); }, [attribute.id, isFloat]);
+  const matrixMode = isFloat && view === 'matrix';
+  const [selected, setSelected] = useState<ReadonlySet<string>>(new Set<string>());
+  useEffect(() => { setSelected(new Set<string>()); /* selection is grid-local */ }, [attribute.id, dimsSig]);
+  const cellKeyOf = (ri: number, ci: number) => `${ri},${ci}`;
+  const dragRef = useRef<{ startX: number; startVals: Map<string, number>; moved: boolean } | null>(null);
+  // "All cells" slider position when nothing is selected (their All Types).
+  const [allSliderVal, setAllSliderVal] = useState(0);
+
+  // Color scale + slider bounds: the declared roll range when present, else the
+  // live data extent (min 1e-6 so an all-zero table still renders).
+  const rangeLoDecl = attribute.tableRoll?.rangeMin;
+  const rangeHiDecl = attribute.tableRoll?.rangeMax;
+  const scaleMax = useMemo(() => {
+    let m = 1e-6;
+    if (rangeLoDecl !== undefined) m = Math.max(m, Math.abs(rangeLoDecl));
+    if (rangeHiDecl !== undefined) m = Math.max(m, Math.abs(rangeHiDecl));
+    for (let ri = 0; ri < mRowLabels.length; ri++) {
+      for (let ci = 0; ci < mColLabels.length; ci++) {
+        const v = Math.abs(get(mRowLabels[ri]!, mColLabels[ci]!, ri, ci));
+        if (Number.isFinite(v) && v > m) m = v;
+      }
+    }
+    return m;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [attribute.tableValues, attribute.tableData, rangeLoDecl, rangeHiDecl, mRowLabels, mColLabels, outerIdx]);
+  const sliderLo = rangeLoDecl !== undefined && rangeHiDecl !== undefined ? Math.min(rangeLoDecl, rangeHiDecl) : -scaleMax;
+  const sliderHi = rangeLoDecl !== undefined && rangeHiDecl !== undefined ? Math.max(rangeLoDecl, rangeHiDecl) : scaleMax;
+  const clampSlider = (v: number) => Math.min(sliderHi, Math.max(sliderLo, v));
+
+  // Their exact diverging scheme (RulesMatrix.vue): dark neutral → cyan
+  // (attraction) / red (repulsion), |value|/scale = saturation.
+  const divergingColor = (v: number) => {
+    const t = Math.min(1, Math.abs(v) / scaleMax);
+    const n = [9, 13, 22], c = v > 0 ? [6, 182, 212] : v < 0 ? [214, 40, 57] : n;
+    const r = Math.round(n[0]! + (c[0]! - n[0]!) * t);
+    const g = Math.round(n[1]! + (c[1]! - n[1]!) * t);
+    const b = Math.round(n[2]! + (c[2]! - n[2]!) * t);
+    return `rgb(${r}, ${g}, ${b})`;
+  };
+
+  /** Batch write — ONE onChange for any number of cells (a drag frame, the
+   *  slider, a generator fill). Mirrors `set`'s symmetric write-both rule. */
+  const applyEntries = (entries: ReadonlyArray<{ ri: number; ci: number; v: number }>) => {
+    if (!entries.length) return;
+    if (multi) {
+      const totalM = axesResolved!.total;
+      const next = new Array<number>(totalM).fill(0);
+      const src = attribute.tableData ?? [];
+      for (let i = 0; i < Math.min(totalM, src.length); i++) {
+        const sv = src[i];
+        if (typeof sv === 'number' && Number.isFinite(sv)) next[i] = sv;
+      }
+      for (const e of entries) next[flatIndex(e.ri, e.ci)] = e.v;
+      onChange({ tableData: next });
+      return;
+    }
+    const next: Record<string, Record<string, number>> = {};
+    for (const [rk, row] of Object.entries(values)) next[rk] = { ...row };
+    for (const e of entries) {
+      const row = mRowLabels[e.ri]!, col = mColLabels[e.ci]!;
+      (next[row] ??= {})[col] = e.v;
+      if (symmetric && row !== col) (next[col] ??= {})[row] = e.v;
+    }
+    onChange({ tableValues: next });
+  };
+  const allEntries = (f: (ri: number, ci: number, v: number) => number) => {
+    const out: Array<{ ri: number; ci: number; v: number }> = [];
+    for (let ri = 0; ri < mRowLabels.length; ri++) {
+      for (let ci = 0; ci < mColLabels.length; ci++) {
+        out.push({ ri, ci, v: f(ri, ci, get(mRowLabels[ri]!, mColLabels[ci]!, ri, ci)) });
+      }
+    }
+    return out;
+  };
+
+  const selectionEntries = (): Array<{ ri: number; ci: number }> =>
+    [...selected].map(k => { const [r, c] = k.split(',').map(Number); return { ri: r!, ci: c! }; });
+
+  const onCellPointerDown = (e: React.PointerEvent, ri: number, ci: number) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    // Drag adjusts the SELECTION when the pressed cell is part of it, else just
+    // the pressed cell (matching their RulesMatrix behaviour).
+    const inSel = selected.has(cellKeyOf(ri, ci));
+    const keys = inSel && selected.size > 0 ? [...selected] : [cellKeyOf(ri, ci)];
+    const startVals = new Map<string, number>();
+    for (const k of keys) {
+      const [r, c] = k.split(',').map(Number);
+      startVals.set(k, get(mRowLabels[r!]!, mColLabels[c!]!, r!, c!));
+    }
+    dragRef.current = { startX: e.clientX, startVals, moved: false };
+  };
+  const onCellPointerMove = (e: React.PointerEvent) => {
+    const d = dragRef.current;
+    if (!d) return;
+    const dx = e.clientX - d.startX;
+    if (!d.moved && Math.abs(dx) < 3) return;
+    d.moved = true;
+    const step = (sliderHi - sliderLo) / 150; // full range ≈ a 150px drag
+    const entries: Array<{ ri: number; ci: number; v: number }> = [];
+    for (const [k, v0] of d.startVals) {
+      const [r, c] = k.split(',').map(Number);
+      entries.push({ ri: r!, ci: c!, v: clampSlider(v0 + dx * step) });
+    }
+    applyEntries(entries);
+  };
+  const onCellPointerUp = (e: React.PointerEvent, ri: number, ci: number) => {
+    const d = dragRef.current;
+    dragRef.current = null;
+    if (!d || d.moved) return;
+    // Plain click = single-select (click again to clear); Ctrl+click toggles
+    // membership in a multi-selection.
+    const k = cellKeyOf(ri, ci);
+    setSelected(prev => {
+      const next = new Set(prev);
+      if (e.ctrlKey || e.metaKey) { if (next.has(k)) next.delete(k); else next.add(k); return next; }
+      if (next.has(k) && next.size === 1) return new Set<string>();
+      return new Set([k]);
+    });
+  };
+
   // ---- Randomize (seeded fill) ------------------------------------------
   const [rollSeed, setRollSeed] = useState<number>(attribute.tableRoll?.seed ?? 1);
   const [rollDensity, setRollDensity] = useState<number>(attribute.tableRoll?.density ?? 0.2);
@@ -237,6 +369,90 @@ export function LookupTableEditor({
     );
   };
 
+  // ---- View toggle + generator quick-actions (float tables) ----------------
+  const viewToggle = isFloat && (
+    <div style={{ display: 'flex', gap: 4, marginBottom: 6 }}>
+      <button className={styles.addButton} style={{ padding: '1px 8px', opacity: matrixMode ? 1 : 0.55 }}
+        title="Matrix view: colored cells (red = repel, cyan = attract). Drag a cell horizontally to adjust; click selects; Ctrl+click multi-selects; the slider edits the selection (or all cells)."
+        onClick={() => setView('matrix')}>▦ Matrix</button>
+      <button className={styles.addButton} style={{ padding: '1px 8px', opacity: matrixMode ? 0.55 : 1 }}
+        title="Values view: one number field per cell." onClick={() => setView('values')}># Values</button>
+    </div>
+  );
+  const [genChoice, setGenChoice] = useState('uniform');
+  const squareGrid = mRowLabels.length === mColLabels.length && mRowLabels.length > 0;
+  const genLo = rangeLoDecl ?? -1, genHi = rangeHiDecl ?? 1;
+  const quickActions = matrixMode && squareGrid && !multi && (
+    <div style={{
+      display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 6,
+      margin: '6px 0', padding: '5px 6px', border: '1px solid var(--color-border, #2a3548)',
+      borderRadius: 5, fontSize: '0.66rem',
+    }}>
+      <span style={{ color: '#7a8a9a' }}>Fill pattern</span>
+      <select className={styles.selectInput} style={{ height: inputHeight, fontSize: '0.64rem', maxWidth: 130 }}
+        value={genChoice} onChange={e => setGenChoice(e.target.value)}>
+        {MATRIX_GENERATORS.map(g => <option key={g.id} value={g.id}>{g.name}</option>)}
+      </select>
+      <button className={styles.addButton} style={{ padding: '1px 8px' }}
+        title="Fill the whole matrix with the chosen pattern (random patterns use the Randomize seed + Min/Max range; deterministic patterns are fixed)."
+        onClick={() => {
+          const n = mRowLabels.length;
+          const flatM = generateMatrix(genChoice, n, rollSeed, genLo, genHi);
+          if (flatM) applyEntries(allEntries((ri, ci) => flatM[ri * n + ci]!));
+        }}>Fill</button>
+      <span style={{ color: '#3a4658' }}>|</span>
+      <button className={styles.addButton} style={{ padding: '1px 6px' }} title="Set every cell to 0"
+        onClick={() => applyEntries(allEntries(() => 0))}>Zero</button>
+      <button className={styles.addButton} style={{ padding: '1px 6px' }} title="table[A][B] ← table[B][A] ← their average"
+        onClick={() => applyEntries(allEntries((ri, ci, v) => (v + get(mRowLabels[ci]!, mColLabels[ri]!, ci, ri)) / 2))}>Symmetrize</button>
+      <button className={styles.addButton} style={{ padding: '1px 6px' }} title="Swap table[A][B] with table[B][A]"
+        onClick={() => applyEntries(allEntries((ri, ci) => get(mRowLabels[ci]!, mColLabels[ri]!, ci, ri)))}>Transpose</button>
+      <button className={styles.addButton} style={{ padding: '1px 6px' }} title="Negate every cell (attract ↔ repel)"
+        onClick={() => applyEntries(allEntries((_ri, _ci, v) => -v))}>Negate</button>
+      <button className={styles.addButton} style={{ padding: '1px 6px' }}
+        title="Add ±10%-of-range random noise to every cell (perturb-and-watch exploration)"
+        onClick={() => {
+          const n = mRowLabels.length;
+          const cur: number[] = [];
+          for (let ri = 0; ri < n; ri++) for (let ci = 0; ci < mColLabels.length; ci++) cur.push(get(mRowLabels[ri]!, mColLabels[ci]!, ri, ci));
+          const amp = (sliderHi - sliderLo) * 0.1;
+          const mut = mutateMatrix(cur, Math.floor(Math.random() * 0x7fffffff), amp, sliderLo, sliderHi);
+          applyEntries(allEntries((ri, ci) => mut[ri * mColLabels.length + ci]!));
+        }}>Mutate</button>
+    </div>
+  );
+
+  // The selection slider (matrix mode): edits the selected cell(s), or ALL
+  // cells when nothing is selected — their "All Types" behaviour.
+  const selArr = selectionEntries();
+  const sliderValue = selArr.length > 0
+    ? get(mRowLabels[selArr[selArr.length - 1]!.ri]!, mColLabels[selArr[selArr.length - 1]!.ci]!, selArr[selArr.length - 1]!.ri, selArr[selArr.length - 1]!.ci)
+    : allSliderVal;
+  const sliderRow = matrixMode && (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 6, fontSize: '0.66rem' }}>
+      <span style={{ color: '#7a8a9a', minWidth: 64, textAlign: 'right' }}>
+        {selArr.length === 0 ? 'All cells' : selArr.length === 1 ? `${dispRow(mRowLabels[selArr[0]!.ri]!)} → ${dispCol(mColLabels[selArr[0]!.ci]!)}` : `${selArr.length} selected`}
+      </span>
+      <input type="range" min={sliderLo} max={sliderHi} step={(sliderHi - sliderLo) / 200 || 0.01}
+        value={sliderValue} style={{ flex: 1, minWidth: 80 }}
+        onChange={e => {
+          const v = clampSlider(Number(e.target.value));
+          if (selArr.length > 0) applyEntries(selArr.map(s => ({ ...s, v })));
+          else { setAllSliderVal(v); applyEntries(allEntries(() => v)); }
+        }} />
+      <NumberField className={styles.numberInput} value={+sliderValue.toFixed(4)} step={0.01}
+        onNumber={n => {
+          const v = clampSlider(n);
+          if (selArr.length > 0) applyEntries(selArr.map(s => ({ ...s, v })));
+          else { setAllSliderVal(v); applyEntries(allEntries(() => v)); }
+        }} style={{ width: 64, height: inputHeight }} noSpinner />
+      {selArr.length > 0 && (
+        <button className={styles.addButton} style={{ padding: '1px 6px' }} title="Clear the selection"
+          onClick={() => setSelected(new Set<string>())}>✕</button>
+      )}
+    </div>
+  );
+
   const randomizeBlock = totalEntries > 0 && (
     <div style={{
       display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 6,
@@ -325,7 +541,9 @@ export function LookupTableEditor({
           </span>
         </div>
       )}
+      {viewToggle}
       {randomizeBlock}
+      {quickActions}
       <div style={{ overflowX: 'auto' }}>
         <table style={{ borderCollapse: 'collapse', fontSize: compact ? '0.6rem' : '0.66rem' }}>
           <thead>
@@ -343,6 +561,29 @@ export function LookupTableEditor({
               <tr key={row}>
                 <th style={{ padding: '2px 6px', textAlign: 'right', color: '#6080a0', fontWeight: 600 }}>{multi ? row : dispRow(row)}</th>
                 {mColLabels.map((col, ci) => {
+                  if (matrixMode) {
+                    // Matrix-play cell: diverging color + drag/select. Symmetric
+                    // tables show (and edit) the mirrored cells too — the write
+                    // goes through the same mirror rule as the Values view.
+                    const v = get(row, col, ri, ci);
+                    const sel = selected.has(cellKeyOf(ri, ci));
+                    const px = compact ? 22 : 30;
+                    return (
+                      <td key={col} style={{ padding: 1 }}>
+                        <div
+                          title={`${multi ? row : dispRow(row)} → ${multi ? col : dispCol(col)}: ${v.toFixed(3)}`}
+                          onPointerDown={e => onCellPointerDown(e, ri, ci)}
+                          onPointerMove={onCellPointerMove}
+                          onPointerUp={e => onCellPointerUp(e, ri, ci)}
+                          style={{
+                            width: px, height: px, background: divergingColor(v),
+                            cursor: 'ew-resize', borderRadius: 2, touchAction: 'none',
+                            boxShadow: sel ? 'inset 0 0 0 2px #cfd6df' : undefined,
+                          }}
+                        />
+                      </td>
+                    );
+                  }
                   const isHidden = symmetric && ri > ci;
                   if (isHidden) {
                     return (
@@ -362,6 +603,7 @@ export function LookupTableEditor({
           </tbody>
         </table>
       </div>
+      {sliderRow}
     </div>
   );
 }
