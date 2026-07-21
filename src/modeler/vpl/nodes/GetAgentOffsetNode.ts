@@ -33,7 +33,11 @@ export const GetAgentOffsetNode: NodeTypeDef = {
     const V = `_v${nodeId}`;
     const ok = `__goOk${nodeId}`;
     if (ctx?.is3d) {
-      // 3D: add the z arm with the depth torus-wrap (`_fieldD`); distance = hypot of all 3.
+      // 3D: add the z arm with the depth torus-wrap (`_fieldD`). Distance is
+      // sqrt(dx²+dy²+dz²) — NOT Math.hypot, which is correctly-rounded and
+      // differs by ULPs from the WASM emit's f64.sqrt-of-squared-sum; the
+      // sqrt-of-sum form (same associativity as the WASM ops) keeps JS↔WASM
+      // bit-parity for Distance consumers (Particle Life's force law).
       return `const __go${nodeId}=${a};`
         + `const ${ok}=__go${nodeId}>=0&&__go${nodeId}<highWater;`
         + `let __odx${nodeId}=0,__ody${nodeId}=0,__odz${nodeId}=0;`
@@ -43,7 +47,7 @@ export const GetAgentOffsetNode: NodeTypeDef = {
         + `if(__odx${nodeId}>__hW)__odx${nodeId}-=__W;else if(__odx${nodeId}<-__hW)__odx${nodeId}+=__W;`
         + `if(__ody${nodeId}>__hH)__ody${nodeId}-=__H;else if(__ody${nodeId}<-__hH)__ody${nodeId}+=__H;`
         + `if(__odz${nodeId}>__hD)__odz${nodeId}-=__D;else if(__odz${nodeId}<-__hD)__odz${nodeId}+=__D;}}`
-        + `const ${V}_dx=__odx${nodeId},${V}_dy=__ody${nodeId},${V}_dz=__odz${nodeId},${V}_distance=${ok}?Math.hypot(__odx${nodeId},__ody${nodeId},__odz${nodeId}):0;\n`;
+        + `const ${V}_dx=__odx${nodeId},${V}_dy=__ody${nodeId},${V}_dz=__odz${nodeId},${V}_distance=${ok}?Math.sqrt(__odx${nodeId}*__odx${nodeId}+__ody${nodeId}*__ody${nodeId}+__odz${nodeId}*__odz${nodeId}):0;\n`;
     }
     return `const __go${nodeId}=${a};`
       + `const ${ok}=__go${nodeId}>=0&&__go${nodeId}<highWater;`
@@ -53,6 +57,6 @@ export const GetAgentOffsetNode: NodeTypeDef = {
       + `if(_fieldBoundaryTorus){const __W=_fieldW,__H=_fieldH,__hW=__W/2,__hH=__H/2;`
       + `if(__odx${nodeId}>__hW)__odx${nodeId}-=__W;else if(__odx${nodeId}<-__hW)__odx${nodeId}+=__W;`
       + `if(__ody${nodeId}>__hH)__ody${nodeId}-=__H;else if(__ody${nodeId}<-__hH)__ody${nodeId}+=__H;}}`
-      + `const ${V}_dx=__odx${nodeId},${V}_dy=__ody${nodeId},${V}_distance=${ok}?Math.hypot(__odx${nodeId},__ody${nodeId}):0;\n`;
+      + `const ${V}_dx=__odx${nodeId},${V}_dy=__ody${nodeId},${V}_distance=${ok}?Math.sqrt(__odx${nodeId}*__odx${nodeId}+__ody${nodeId}*__ody${nodeId}):0;\n`;
   },
 };
