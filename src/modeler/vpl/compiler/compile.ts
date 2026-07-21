@@ -1110,6 +1110,9 @@ function compileRoot(
         // node subtracting two agent positions routes through the offset wrap"
         // invariant — a seam-straddling bond otherwise reads ≈ W − actual and
         // "break over-strained bonds" severs every seam bond) + the z arm in 3D.
+        // Length = Math.sqrt(dx*dx + dy*dy [+ dz*dz]) — NOT Math.hypot (correctly-
+        // rounded, ULP-different from the WASM f64.sqrt-of-squared-sum; same
+        // associativity as agentWasm's forEachBond emit keeps JS↔WASM bit-parity).
         const feb = `_feb${node.id}`;
         const base = `_bb${node.id}`;
         const pid = `_v${node.id}_partnerId`;
@@ -1124,13 +1127,13 @@ function compileRoot(
             + ` if (${dbx} > __hW) ${dbx} -= _fieldW; else if (${dbx} < -__hW) ${dbx} += _fieldW;`
             + ` if (${dby} > __hH) ${dby} -= _fieldH; else if (${dby} < -__hH) ${dby} += _fieldH;`
             + ` if (${dbz} > __hD) ${dbz} -= _fieldD; else if (${dbz} < -__hD) ${dbz} += _fieldD; }`);
-          flowLines.push(`${indent}  const _v${node.id}_currentLength = Math.hypot(${dbx}, ${dby}, ${dbz});`);
+          flowLines.push(`${indent}  const _v${node.id}_currentLength = Math.sqrt(${dbx} * ${dbx} + ${dby} * ${dby} + ${dbz} * ${dbz});`);
         } else {
           flowLines.push(`${indent}  let ${dbx} = _agentX[${pid}] - _agentX[idx], ${dby} = _agentY[${pid}] - _agentY[idx];`);
           flowLines.push(`${indent}  if (_fieldBoundaryTorus) { const __hW = _fieldW/2, __hH = _fieldH/2;`
             + ` if (${dbx} > __hW) ${dbx} -= _fieldW; else if (${dbx} < -__hW) ${dbx} += _fieldW;`
             + ` if (${dby} > __hH) ${dby} -= _fieldH; else if (${dby} < -__hH) ${dby} += _fieldH; }`);
-          flowLines.push(`${indent}  const _v${node.id}_currentLength = Math.hypot(${dbx}, ${dby});`);
+          flowLines.push(`${indent}  const _v${node.id}_currentLength = Math.sqrt(${dbx} * ${dbx} + ${dby} * ${dby});`);
         }
         flowLines.push(`${indent}  const _v${node.id}_index = ${feb};`);
         flushBranchValues(`${node.id}:body`, flowLines, indent + '  ');
@@ -1744,16 +1747,6 @@ export function compileGraph(
   // (face palette → ['none', ...labels]; tag attribute → tagOptions). Replaces
   // the old single global labelCount — supports rectangular + multi-palette and
   // tag×tag tables that need no variegation at all.
-  const lookupTableDims = (tableId: string): { rowCount: number; colCount: number } => {
-    const attr = model!.attributes.find(
-      a => a.id === tableId && a.isModelAttribute && a.type === 'lookupTable',
-    );
-    if (!attr) return { rowCount: 1, colCount: 1 };
-    return {
-      rowCount: resolveKeyLabels(attr.rowKeySource, model!).length || 1,
-      colCount: resolveKeyLabels(attr.colKeySource, model!).length || 1,
-    };
-  };
   // (dr, dc) offsets for each of the 8 face slots, indexed by direction index.
   // Order matches DIRECTION_TAGS exactly: N, NE, E, SE, S, SW, W, NW.
   const DIRECTION_OFFSETS: ReadonlyArray<readonly [number, number]> = [
@@ -1787,32 +1780,7 @@ export function compileGraph(
         node.data.config._sourceAttrId = variegatedSourceAttrId;
       }
       if (node.data.nodeType === 'lookupInteraction' || node.data.nodeType === 'interactionTableMap') {
-        const tableId = String(node.data.config.tableId ?? '');
-        const tableAttr = model!.attributes.find(
-          a => a.id === tableId && a.isModelAttribute && a.type === 'lookupTable',
-        );
-        if (tableAttr && isMultiAxisTable(tableAttr)) {
-          // MULTI-AXIS table: bake the full axis geometry (dims + intRange index
-          // offsets) as comma-joined strings (NodeConfig holds scalars only).
-          // The emit clamps per axis and indexes `Σ idxₖ·strideₖ`.
-          const r = resolveAxes(tableAttr, model!);
-          node.data.config._dims = r.dims.join(',');
-          node.data.config._mins = r.mins.join(',');
-          // Legacy keys kept coherent for anything that still reads them.
-          node.data.config._rowCount = r.dims[0] ?? 1;
-          node.data.config._colCount = r.dims[1] ?? 1;
-        } else {
-          // LEGACY 2-axis table: inject the per-table row count + col stride.
-          // The emit indexes the flat table as `row * _colCount + col`, so the
-          // column count is the stride. Scrub any stale multi-axis bake (the
-          // pre-resolve mutates the live node config, which persists across
-          // recompiles — a table converted back to 2-axis must not keep _dims).
-          const dims = lookupTableDims(tableId);
-          node.data.config._rowCount = dims.rowCount;
-          node.data.config._colCount = dims.colCount;
-          delete node.data.config._dims;
-          delete node.data.config._mins;
-        }
+        preResolveLookupTableNode(node, model!);
       }
       if (node.data.nodeType === 'getConstant' && node.data.config.constType === 'faceLabel') {
         // Resolve face-label NAME to its compile-time index within the chosen
@@ -2401,6 +2369,42 @@ export function buildAgentLoopParams(model: CAModel): { params: string; agentAtt
   return { params: buildAgentAbiParams('loop', agentAbiShapeOf(model)), agentAttrs };
 }
 
+/** Bake a Table Lookup / Table Map node's table GEOMETRY into its config —
+ *  multi-axis `_dims`/`_mins` (comma-joined) or the legacy `_rowCount` +
+ *  `_colCount` stride. Extracted from the cell compiler's
+ *  preResolveVariegatedNodes so `compileAgentGraph` bakes the SAME geometry
+ *  (it previously skipped this pre-resolve entirely, leaving `_colCount`
+ *  undefined → the JS agent emit fell back to stride 1 and read the WRONG
+ *  table cells for any multi-column table — the WASM/WebGPU agent emitters
+ *  resolve dims from the layout and were already correct). */
+function preResolveLookupTableNode(node: GraphNode, model: CAModel): void {
+  const tableId = String(node.data.config.tableId ?? '');
+  const tableAttr = model.attributes.find(
+    a => a.id === tableId && a.isModelAttribute && a.type === 'lookupTable',
+  );
+  if (tableAttr && isMultiAxisTable(tableAttr)) {
+    // MULTI-AXIS table: bake the full axis geometry (dims + intRange index
+    // offsets) as comma-joined strings (NodeConfig holds scalars only).
+    // The emit clamps per axis and indexes `Σ idxₖ·strideₖ`.
+    const r = resolveAxes(tableAttr, model);
+    node.data.config._dims = r.dims.join(',');
+    node.data.config._mins = r.mins.join(',');
+    // Legacy keys kept coherent for anything that still reads them.
+    node.data.config._rowCount = r.dims[0] ?? 1;
+    node.data.config._colCount = r.dims[1] ?? 1;
+  } else {
+    // LEGACY 2-axis table: inject the per-table row count + col stride.
+    // The emit indexes the flat table as `row * _colCount + col`, so the
+    // column count is the stride. Scrub any stale multi-axis bake (the
+    // pre-resolve mutates the live node config, which persists across
+    // recompiles — a table converted back to 2-axis must not keep _dims).
+    node.data.config._rowCount = tableAttr ? (resolveKeyLabels(tableAttr.rowKeySource, model).length || 1) : 1;
+    node.data.config._colCount = tableAttr ? (resolveKeyLabels(tableAttr.colKeySource, model).length || 1) : 1;
+    delete node.data.config._dims;
+    delete node.data.config._mins;
+  }
+}
+
 export function compileAgentGraph(
   agentNodes: GraphNode[],
   agentEdges: GraphEdge[],
@@ -2456,6 +2460,12 @@ export function compileAgentGraph(
       if (t === 'getIndicator' || t === 'setIndicator' || t === 'updateIndicator') {
         const idx = indicatorIdxMap.get(node.data.config.indicatorId as string);
         node.data.config._indicatorIdx = idx !== undefined ? idx : -1;
+      }
+      // Table Lookup / Table Map geometry bake (the SAME pre-resolve the cell
+      // compiler runs) — without it the JS agent emit read `_colCount` as 1 and
+      // indexed the wrong table cells (Particle Life's species×species tables).
+      if (t === 'lookupInteraction' || t === 'interactionTableMap') {
+        preResolveLookupTableNode(node, model);
       }
     }
   }
