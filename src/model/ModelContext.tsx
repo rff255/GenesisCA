@@ -268,6 +268,140 @@ type ModelAction =
   | { type: 'DUPLICATE_FACE_PATTERN'; sourceId: string }
   | { type: 'UPDATE_TOPOLOGY_MODE'; changes: Partial<TopologyMode> };
 
+/** Lookup-Table cascade for a tagOptions change on the tag attribute `attrId`
+ *  (CELL or AGENT — tables always live in `model.attributes` but an axis may
+ *  be keyed by either scope's tag attribute): remaps 2-axis `tableValues` keys
+ *  (rename → new name, deleted → drop), N-D `tableData` along axes keyed by
+ *  `attrId`, and the stored tag-INDEX cell values of a tag-VALUED table whose
+ *  value labels come from `attrId`. `preModel` = the PRE-update model (old
+ *  axis dims resolve there). Shared by UPDATE_ATTRIBUTE and
+ *  UPDATE_AGENT_ATTRIBUTE so the two scopes cannot drift. */
+function remapLookupTableForTagChange(
+  sa: Attribute,
+  attrId: string,
+  oldOpts: readonly string[],
+  newOpts: readonly string[],
+  newOptsSet: Set<string>,
+  remap: (val: string | number | boolean | undefined) => string,
+  remapTagKey: (k: string) => string | null,
+  preModel: CAModel,
+): Attribute {
+  let next = sa;
+  // Legacy 2-axis tableValues: remap row/col keys when an axis is keyed by
+  // THIS tag attribute (rename → new name, deleted → drop).
+  if (sa.type === 'lookupTable' && sa.tableValues) {
+    const rowIsTag = sa.rowKeySource?.kind === 'tagAttribute' && sa.rowKeySource.attributeId === attrId;
+    const colIsTag = sa.colKeySource?.kind === 'tagAttribute' && sa.colKeySource.attributeId === attrId;
+    if (rowIsTag || colIsTag) {
+      const nextTV: Record<string, Record<string, number>> = {};
+      for (const [rk, row] of Object.entries(sa.tableValues)) {
+        const newRk = rowIsTag ? remapTagKey(rk) : rk;
+        if (newRk === null) continue;
+        const nextRow: Record<string, number> = {};
+        for (const [ck, val] of Object.entries(row)) {
+          const newCk = colIsTag ? remapTagKey(ck) : ck;
+          if (newCk === null) continue;
+          nextRow[newCk] = val;
+        }
+        nextTV[newRk] = { ...(nextTV[newRk] || {}), ...nextRow };
+      }
+      next = { ...next, tableValues: nextTV };
+    }
+    // Tag-VALUED table drawing its value labels from THIS tag attribute:
+    // the stored cell values are tag INDICES, so a reorder/removal shifts
+    // them (a rename is index-stable). Remap by the same indexMap.
+    if (next.valueType === 'tag' && next.valueTagAttributeId === attrId && next.tableValues) {
+      const remappedTV: Record<string, Record<string, number>> = {};
+      for (const [rk, row] of Object.entries(next.tableValues)) {
+        const nr: Record<string, number> = {};
+        for (const [ck, val] of Object.entries(row)) nr[ck] = Number(remap(val));
+        remappedTV[rk] = nr;
+      }
+      next = { ...next, tableValues: remappedTV };
+    }
+  }
+  // MULTI-AXIS Lookup Table: axes keyed by THIS tag attribute remap the
+  // dense tableData along that axis (rename keeps values, reorder gathers,
+  // deleted drops, added zero-fills) — the N-D analogue of the key remap.
+  if (sa.type === 'lookupTable' && sa.axes && sa.axes.length > 0) {
+    const axIdxs = sa.axes
+      .map((ax, i) => (ax.source?.kind === 'tagAttribute' && ax.source.attributeId === attrId ? i : -1))
+      .filter(i => i >= 0);
+    if (axIdxs.length > 0 && next.tableData) {
+      // Old dims resolve against the PRE-update model (labels = oldOpts).
+      const rOld = resolveAxes(sa, preModel);
+      // New label j → old index: name match, else the index-paired
+      // rename heuristic, else -1 (new option, zero-fill).
+      const axisIdxMap = newOpts.map((name, j) => {
+        const oi = oldOpts.indexOf(name);
+        if (oi >= 0) return oi;
+        if (oldOpts[j] !== undefined && !newOptsSet.has(oldOpts[j]!)) return j;
+        return -1;
+      });
+      let data = [...next.tableData];
+      const dims = rOld.dims.slice();
+      for (const ai of axIdxs) {
+        data = remapTableDataAxis(data, dims, ai, axisIdxMap);
+        dims[ai] = axisIdxMap.length;
+      }
+      next = { ...next, tableData: data };
+    }
+    // Tag-VALUED axes table: stored cell values are tag indices.
+    if (next.valueType === 'tag' && next.valueTagAttributeId === attrId && next.tableData) {
+      next = { ...next, tableData: next.tableData.map(v => Number(remap(v))) };
+    }
+  }
+  return next;
+}
+
+/** Lookup-Table cascade for a REMOVED tag attribute (cell or agent): detaches
+ *  dangling 2-axis row/col sources + `valueTagAttributeId`, and collapses any
+ *  N-D axis keyed by the removed attribute to `single` (dim 1, keeping the
+ *  slice at old index 0) with the dense tableData structurally remapped.
+ *  `preModel` = the PRE-removal model (the removed attribute must still
+ *  resolve there for the old dims). Shared by REMOVE_ATTRIBUTE and
+ *  REMOVE_AGENT_ATTRIBUTE. */
+function detachLookupTableFromRemovedTag(a: Attribute, removedId: string, preModel: CAModel): Attribute {
+  if (a.type !== 'lookupTable') return a;
+  let next = a;
+  const rowDangling = next.rowKeySource?.kind === 'tagAttribute' && next.rowKeySource.attributeId === removedId;
+  const colDangling = next.colKeySource?.kind === 'tagAttribute' && next.colKeySource.attributeId === removedId;
+  if (rowDangling || colDangling) {
+    next = {
+      ...next,
+      rowKeySource: rowDangling ? undefined : next.rowKeySource,
+      colKeySource: colDangling ? undefined : next.colKeySource,
+    };
+  }
+  // Tag-valued table sourcing its value labels from the removed tag
+  // attribute: detach → fall back to manual valueTagOptions.
+  if (next.valueTagAttributeId === removedId) {
+    next = { ...next, valueTagAttributeId: undefined };
+  }
+  // MULTI-AXIS: any axis keyed by the removed tag attribute collapses to
+  // `single` and the dense tableData is remapped to match.
+  if (next.axes && next.axes.length > 0) {
+    const dangling = next.axes
+      .map((ax, i) => (ax.source?.kind === 'tagAttribute' && ax.source.attributeId === removedId ? i : -1))
+      .filter(i => i >= 0);
+    if (dangling.length > 0) {
+      const rOld = resolveAxes(next, preModel);
+      let data = next.tableData ? [...next.tableData] : undefined;
+      const dims = rOld.dims.slice();
+      for (const axIdx of dangling) {
+        if (data) data = remapTableDataAxis(data, dims, axIdx, [0]);
+        dims[axIdx] = 1;
+      }
+      next = {
+        ...next,
+        axes: next.axes.map((ax, i) => (dangling.includes(i) ? { ...ax, source: { kind: 'single' as const } } : ax)),
+        tableData: data,
+      };
+    }
+  }
+  return next;
+}
+
 // ---------------------------------------------------------------------------
 // Reducer
 // ---------------------------------------------------------------------------
@@ -345,49 +479,9 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
           if (next.parentAttributeId === action.id) {
             next = { ...next, parentAttributeId: undefined, parentValues: undefined, undefinedValue: undefined };
           }
-          // Lookup Table: detach an axis keyed by the removed tag attribute so
-          // the dangling source doesn't survive in saved files.
-          if (next.type === 'lookupTable') {
-            const rowDangling = next.rowKeySource?.kind === 'tagAttribute' && next.rowKeySource.attributeId === action.id;
-            const colDangling = next.colKeySource?.kind === 'tagAttribute' && next.colKeySource.attributeId === action.id;
-            if (rowDangling || colDangling) {
-              next = {
-                ...next,
-                rowKeySource: rowDangling ? undefined : next.rowKeySource,
-                colKeySource: colDangling ? undefined : next.colKeySource,
-              };
-            }
-            // Tag-valued table sourcing its value labels from the removed tag
-            // attribute: detach Ã¢â€ â€™ fall back to manual valueTagOptions.
-            if (next.valueTagAttributeId === action.id) {
-              next = { ...next, valueTagAttributeId: undefined };
-            }
-            // MULTI-AXIS: any axis keyed by the removed tag attribute collapses
-            // to `single` (dim 1, keeping the slice at old index 0) and the
-            // dense tableData is structurally remapped to match — the N-D
-            // analogue of the row/col detach above.
-            if (next.axes && next.axes.length > 0) {
-              const dangling = next.axes
-                .map((ax, i) => (ax.source?.kind === 'tagAttribute' && ax.source.attributeId === action.id ? i : -1))
-                .filter(i => i >= 0);
-              if (dangling.length > 0) {
-                // Resolve OLD dims against the pre-removal model (the removed
-                // attribute is still present on state.model here).
-                const rOld = resolveAxes(next, state.model);
-                let data = next.tableData ? [...next.tableData] : undefined;
-                const dims = rOld.dims.slice();
-                for (const axIdx of dangling) {
-                  if (data) data = remapTableDataAxis(data, dims, axIdx, [0]);
-                  dims[axIdx] = 1;
-                }
-                next = {
-                  ...next,
-                  axes: next.axes.map((ax, i) => (dangling.includes(i) ? { ...ax, source: { kind: 'single' as const } } : ax)),
-                  tableData: data,
-                };
-              }
-            }
-          }
+          // Lookup Table: detach axes / value-tag sources keyed by the removed
+          // tag attribute (shared with REMOVE_AGENT_ATTRIBUTE).
+          next = detachLookupTableFromRemovedTag(next, action.id, state.model);
           return next;
         });
       // Variegation cascade: if the removed attribute was the variegation
@@ -586,71 +680,9 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
             }
             next = { ...next, facePatternAssignments: nextAssign };
           }
-          // Lookup Table tableValues: remap row/col keys when an axis is keyed
-          // by THIS tag attribute (rename Ã¢â€ â€™ new name, deleted Ã¢â€ â€™ drop).
-          if (sa.type === 'lookupTable' && sa.tableValues) {
-            const rowIsTag = sa.rowKeySource?.kind === 'tagAttribute' && sa.rowKeySource.attributeId === attrId;
-            const colIsTag = sa.colKeySource?.kind === 'tagAttribute' && sa.colKeySource.attributeId === attrId;
-            if (rowIsTag || colIsTag) {
-              const nextTV: Record<string, Record<string, number>> = {};
-              for (const [rk, row] of Object.entries(sa.tableValues)) {
-                const newRk = rowIsTag ? remapTagKey(rk) : rk;
-                if (newRk === null) continue;
-                const nextRow: Record<string, number> = {};
-                for (const [ck, val] of Object.entries(row)) {
-                  const newCk = colIsTag ? remapTagKey(ck) : ck;
-                  if (newCk === null) continue;
-                  nextRow[newCk] = val;
-                }
-                nextTV[newRk] = { ...(nextTV[newRk] || {}), ...nextRow };
-              }
-              next = { ...next, tableValues: nextTV };
-            }
-            // Tag-VALUED table drawing its value labels from THIS tag attribute:
-            // the stored cell values are tag INDICES, so a reorder/removal shifts
-            // them (a rename is index-stable). Remap by the same indexMap.
-            if (next.valueType === 'tag' && next.valueTagAttributeId === attrId && next.tableValues) {
-              const remappedTV: Record<string, Record<string, number>> = {};
-              for (const [rk, row] of Object.entries(next.tableValues)) {
-                const nr: Record<string, number> = {};
-                for (const [ck, val] of Object.entries(row)) nr[ck] = Number(remap(val));
-                remappedTV[rk] = nr;
-              }
-              next = { ...next, tableValues: remappedTV };
-            }
-          }
-          // MULTI-AXIS Lookup Table: axes keyed by THIS tag attribute remap the
-          // dense tableData along that axis (rename keeps values, reorder
-          // gathers, deleted drops, added zero-fills) — the N-D analogue of the
-          // tableValues key remap above.
-          if (sa.type === 'lookupTable' && sa.axes && sa.axes.length > 0) {
-            const axIdxs = sa.axes
-              .map((ax, i) => (ax.source?.kind === 'tagAttribute' && ax.source.attributeId === attrId ? i : -1))
-              .filter(i => i >= 0);
-            if (axIdxs.length > 0 && next.tableData) {
-              // Old dims resolve against the PRE-update model (labels = oldOpts).
-              const rOld = resolveAxes(sa, state.model);
-              // New label j → old index: name match, else the index-paired
-              // rename heuristic, else -1 (new option, zero-fill).
-              const axisIdxMap = newOpts.map((name, j) => {
-                const oi = oldOpts.indexOf(name);
-                if (oi >= 0) return oi;
-                if (oldOpts[j] !== undefined && !newOptsSet.has(oldOpts[j]!)) return j;
-                return -1;
-              });
-              let data = [...next.tableData];
-              const dims = rOld.dims.slice();
-              for (const ai of axIdxs) {
-                data = remapTableDataAxis(data, dims, ai, axisIdxMap);
-                dims[ai] = axisIdxMap.length;
-              }
-              next = { ...next, tableData: data };
-            }
-            // Tag-VALUED axes table: stored cell values are tag indices.
-            if (next.valueType === 'tag' && next.valueTagAttributeId === attrId && next.tableData) {
-              next = { ...next, tableData: next.tableData.map(v => Number(remap(v))) };
-            }
-          }
+          // Lookup Tables keyed by / valued from THIS tag attribute (shared
+          // cascade with UPDATE_AGENT_ATTRIBUTE).
+          next = remapLookupTableForTagChange(next, attrId, oldOpts, newOpts, newOptsSet, remap, remapTagKey, state.model);
           return next;
         });
         // Variables cascade: tag variables referencing this attr get their
@@ -823,7 +855,11 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
       const agentVariables = (state.model.agentVariables ?? []).map(v =>
         v.attributeId === action.id ? { ...v, dataType: 'integer' as const, attributeId: undefined } : v,
       );
-      const modelAfter = { ...state.model, agentAttributes: filtered, agentMappings, agentVariables };
+      // Lookup Tables keyed by / valued from the removed AGENT tag attribute:
+      // detach dangling sources (shared cascade with REMOVE_ATTRIBUTE).
+      const attributesAfter = state.model.attributes.map(a =>
+        detachLookupTableFromRemovedTag(a, action.id, state.model));
+      const modelAfter = { ...state.model, attributes: attributesAfter, agentAttributes: filtered, agentMappings, agentVariables };
       // Clear stale attributeId / tagAttributeId references (scans both graphs +
       // macros) so a removed agent attribute doesn't strand `_undef` in the
       // agent graph.
@@ -883,8 +919,23 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
         const remap = (val: string | number | boolean | undefined): string =>
           String(indexMap.get(Number(val) || 0) ?? 0);
         const attrId = action.id;
+        // Lookup-Table cascade: tables live in model.attributes but an axis /
+        // value-tag source may be keyed by THIS agent tag attribute (Particle
+        // Life-style species matrices). Same name-remap heuristic + shared
+        // helper as the cell UPDATE_ATTRIBUTE path.
+        const newOptsSet = new Set(newOpts);
+        const tagNameRemap = new Map<string, string | null>();
+        for (let oi = 0; oi < oldOpts.length; oi++) {
+          const oldName = oldOpts[oi]!;
+          if (newOptsSet.has(oldName)) tagNameRemap.set(oldName, oldName);
+          else if (newOpts[oi] && !oldOpts.includes(newOpts[oi]!)) tagNameRemap.set(oldName, newOpts[oi]!);
+          else tagNameRemap.set(oldName, null);
+        }
+        const remapTagKey = (k: string): string | null => (tagNameRemap.has(k) ? tagNameRemap.get(k)! : k);
         updatedModel = {
           ...updatedModel,
+          attributes: updatedModel.attributes.map(sa =>
+            remapLookupTableForTagChange(sa, attrId, oldOpts, newOpts, newOptsSet, remap, remapTagKey, state.model)),
           agentVariables: (updatedModel.agentVariables ?? []).map(v =>
             v.attributeId === attrId && v.dataType === 'tag' ? { ...v, initialValue: remap(v.initialValue) } : v),
         };

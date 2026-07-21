@@ -28,7 +28,7 @@ export { migrateForHarness } from '../src/dev/compileHarness.ts';
 export {
   resolveAxes, isMultiAxisTable, normalizeLookupTablePayload,
   randomFillTableData, remapTableDataAxis, remapTableDataForAxesChange,
-  buildLookupTablePayload,
+  buildLookupTablePayload, resolveKeyLabels, resolveValueTagOptions,
 } from '../src/modeler/vpl/compiler/variegation.ts';
 `;
 const dir = mkdtempSync(join(tmpdir(), 'gca-ndtable-'));
@@ -79,6 +79,23 @@ console.log('== helpers ==');
   const intA = M.randomFillTableData(512, 5, 0.5, { valueType: 'integer', valueCount: 3 });
   const intB = M.randomFillTableData(512, 5, 0.5, { valueType: 'integer', valueCount: 3, rangeMin: -9, rangeMax: 9 });
   check('randomFill integer policy unaffected by range fields', JSON.stringify(intA) === JSON.stringify(intB));
+}
+{
+  // Axis + value-tag sources resolve AGENT tag attributes (Particle Life
+  // species-keyed matrices): cell/model attributes win, agentAttributes are
+  // the fallback scope.
+  const model = {
+    attributes: [{ id: 'cellTag', type: 'tag', tagOptions: ['a', 'b'] }],
+    agentAttributes: [{ id: 'species', type: 'tag', tagOptions: ['red', 'green', 'blue'] }],
+  };
+  const agentAxis = M.resolveKeyLabels({ kind: 'tagAttribute', attributeId: 'species' }, model);
+  check('resolveKeyLabels finds agent tag attr', JSON.stringify(agentAxis) === JSON.stringify(['red', 'green', 'blue']));
+  const cellAxis = M.resolveKeyLabels({ kind: 'tagAttribute', attributeId: 'cellTag' }, model);
+  check('resolveKeyLabels cell attrs still first', JSON.stringify(cellAxis) === JSON.stringify(['a', 'b']));
+  const vt = M.resolveValueTagOptions({ valueTagAttributeId: 'species' }, model);
+  check('resolveValueTagOptions finds agent tag attr', JSON.stringify(vt) === JSON.stringify(['red', 'green', 'blue']));
+  const missing = M.resolveKeyLabels({ kind: 'tagAttribute', attributeId: 'nope' }, model);
+  check('resolveKeyLabels unknown id → empty', missing.length === 0);
 }
 {
   // remapTableDataAxis: 2×3 table, reorder axis 1 as [2,0] (drop old col 1)
