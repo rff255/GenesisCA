@@ -7,8 +7,8 @@ import { NumberField, InlineTagSelect } from '../vpl/widgets/InlineWidgets';
 import styles from './PanelContent.module.css';
 
 /** Compact matrix editor for a `lookupTable` model attribute. Used in BOTH the
- *  Attributes panel (design-time editing) and the Simulator's right-side
- *  model-attribute panel (runtime live-tuning).
+ *  Attributes panel (design-time editing) and the Simulator's LEFT-panel
+ *  Model Attributes section (runtime live-tuning).
  *
  *  LEGACY 2-axis storage: `Attribute.tableValues: Record<rowLabel,
  *  Record<colLabel, number>>`. Rows come from the row key source, columns from
