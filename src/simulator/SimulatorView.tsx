@@ -976,6 +976,11 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   );
   const bg2dRef = useRef<string | null>(null);
   useEffect(() => { bg2dRef.current = bg2d.enabled ? bg2d.color : null; }, [bg2d]);
+  // Agent disc outlines (the dark contour stroke on circles with rad >= 2px) —
+  // optional so dense populations can render as clean solid dots. Default ON
+  // (the historical look). Persisted; a ref drives the draw() hot path.
+  const [agentOutlines, setAgentOutlines] = useState<boolean>(saved.current.agentOutlines !== false);
+  const agentOutlinesRef = useRef(agentOutlines); agentOutlinesRef.current = agentOutlines;
   // PR3 — agent inspector: a single on-demand popover (one at a time).
   const [agentInspect, setAgentInspect] = useState<{ id: number; x: number; y: number } | null>(null);
   const [agentState, setAgentState] = useState<AgentStateResponse | null>(null);
@@ -1026,7 +1031,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
           light3d, cellGaps3d, agentMetaballs,
           agentBrushRadius, agentSeedDensity, agentSeedSpacing,
           agentBrushShape, agentBrushW, agentBrushH, agentBrushRingWidth, agentBrushLineWidth,
-          showCaGrid, showAgents, showBonds, simulateCells, simulateAgents, brushTarget, bg2d,
+          showCaGrid, showAgents, showBonds, simulateCells, simulateAgents, brushTarget, bg2d, agentOutlines,
           indicatorHiddenCategories: Object.fromEntries(
             Object.entries(indicatorHiddenCategories)
               .filter(([, s]) => s.size > 0)
@@ -1038,7 +1043,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       } catch { /* localStorage full */ }
     }, 300);
     return () => clearTimeout(timer);
-  }, [targetFps, unlimitedFps, gensPerFrame, unlimitedGens, activeViewer, brushColor, brushW, brushH, brushMapping, showBrushCursor, showGridlines, brushShape, brushRadius, brushRingWidth, brushLineWidth, brush3dVolume, brushBoxDepth, infinityCanvas, indicatorVizModes, recordFormat, brushSectionH, agentsFront3d, light3d, cellGaps3d, agentMetaballs, agentBrushRadius, agentSeedDensity, agentSeedSpacing, agentBrushShape, agentBrushW, agentBrushH, agentBrushRingWidth, agentBrushLineWidth, showCaGrid, showAgents, showBonds, simulateCells, simulateAgents, brushTarget, bg2d, indicatorHiddenCategories, indicatorChartOverrides]);
+  }, [targetFps, unlimitedFps, gensPerFrame, unlimitedGens, activeViewer, brushColor, brushW, brushH, brushMapping, showBrushCursor, showGridlines, brushShape, brushRadius, brushRingWidth, brushLineWidth, brush3dVolume, brushBoxDepth, infinityCanvas, indicatorVizModes, recordFormat, brushSectionH, agentsFront3d, light3d, cellGaps3d, agentMetaballs, agentBrushRadius, agentSeedDensity, agentSeedSpacing, agentBrushShape, agentBrushW, agentBrushH, agentBrushRingWidth, agentBrushLineWidth, showCaGrid, showAgents, showBonds, simulateCells, simulateAgents, brushTarget, bg2d, agentOutlines, indicatorHiddenCategories, indicatorChartOverrides]);
 
   // Manual Brush — signature-keyed merge effect. Re-derives `manualBrush`
   // whenever the cell attribute set (id+type) changes. Surviving attrs carry
@@ -2587,7 +2592,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
           tc.arc(cx, cy, rad, 0, Math.PI * 2);
           tc.fillStyle = `rgba(${acol[c]},${acol[c + 1]},${acol[c + 2]},${acol[c + 3]! / 255})`;
           tc.fill();
-          if (pass !== 'goo' && rad >= 2) {  // no outline inside the goo field
+          if (pass !== 'goo' && rad >= 2 && agentOutlinesRef.current) {  // no outline inside the goo field
             // Constant contour width (was rad * 0.14, which grew with the agent):
             // capped by a fraction of the radius so tiny discs aren't all outline.
             tc.lineWidth = Math.min(1.5, rad * 0.25);
@@ -2603,6 +2608,57 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
               stamp(ox + tx * scaledW, oy + ty * scaledH, pass);
         } else {
           stamp(ox, oy, pass);
+        }
+      };
+      // Batched fast path for the plain-circles case ('all' pass, no sprites, no
+      // goo scratch, every agent fully opaque): the per-agent beginPath+arc+fill+
+      // stroke above costs 4 canvas state changes per dot — at Particle-Life-scale
+      // populations (5-10k small dots) that rivals the sim step. Group agents by
+      // (packed RGB, radius rounded to 0.1px) and draw each group as ONE path:
+      // one beginPath, one arc per agent, ONE fill (+ ONE stroke when rad >= 2).
+      // Opaque same-colour overlaps composite pixel-identically batched or not;
+      // TRANSLUCENT discs do NOT (a batched union composites once where per-disc
+      // draws stack), so any alpha < 255 bails to the per-agent loop. Returns
+      // null when ineligible (translucent agent found).
+      const buildOpaqueGroups = (): Map<number, number[]> | null => {
+        const groups = new Map<number, number[]>();
+        for (let i = 0; i < hw; i++) {
+          if (!aal[i]) continue;
+          const c = i * 4;
+          if (acol[c + 3] !== 255) return null; // translucency → slow path
+          const rad = Math.max(1.2, ar[i]! * scale);
+          const radKey = Math.min(99999, Math.round(rad * 10));
+          const key = ((acol[c]! << 16) | (acol[c + 1]! << 8) | acol[c + 2]!) * 100000 + radKey;
+          let arr = groups.get(key);
+          if (!arr) { arr = []; groups.set(key, arr); }
+          arr.push(i);
+        }
+        return groups;
+      };
+      const stampBatchedTile = (tileOx: number, tileOy: number, groups: Map<number, number[]>) => {
+        for (const [key, idxs] of groups) {
+          const packed = Math.floor(key / 100000);
+          const groupRad = (key % 100000) / 10;
+          ctx.beginPath();
+          let any = false;
+          for (let k = 0; k < idxs.length; k++) {
+            const i = idxs[k]!;
+            const cx = tileOx + ax[i]! * scale;
+            const cy = tileOy + ay[i]! * scale;
+            const rad = Math.max(1.2, ar[i]! * scale);
+            if (cx + rad < 0 || cx - rad > parentW || cy + rad < 0 || cy - rad > parentH) continue;
+            ctx.moveTo(cx + rad, cy); // break the subpath — else arc() draws a chord from the previous arc's end
+            ctx.arc(cx, cy, rad, 0, Math.PI * 2);
+            any = true;
+          }
+          if (!any) continue;
+          ctx.fillStyle = `rgb(${(packed >> 16) & 0xff},${(packed >> 8) & 0xff},${packed & 0xff})`;
+          ctx.fill();
+          if (groupRad >= 2 && agentOutlinesRef.current) {
+            ctx.lineWidth = Math.min(1.5, groupRad * 0.25);
+            ctx.strokeStyle = 'rgba(0,0,0,0.40)';
+            ctx.stroke();
+          }
         }
       };
       if (gooCtx) {
@@ -2646,7 +2702,18 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
         ctx.restore();
         if (spritesActive) forTiles('sprites');
       } else {
-        forTiles('all');
+        const groups = spritesActive ? null : buildOpaqueGroups();
+        if (groups) {
+          if (infinity) {
+            for (let ty = tyMin; ty <= tyMax; ty++)
+              for (let tx = txMin; tx <= txMax; tx++)
+                stampBatchedTile(ox + tx * scaledW, oy + ty * scaledH, groups);
+          } else {
+            stampBatchedTile(ox, oy, groups);
+          }
+        } else {
+          forTiles('all');
+        }
       }
       // The agent-brush cursor + highlight visuals (hover/edit/area rings, the
       // footprint + bond-ring silhouettes, the glue anchor) moved to the cursor
@@ -5113,7 +5180,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   useEffect(() => { showBrushCursorRef.current = showBrushCursor; draw(); }, [showBrushCursor, draw]);
   // Redraw when the environment background changes (the ref is updated in its own
   // effect above; this one repaints so the change shows immediately even when paused).
-  useEffect(() => { draw(); }, [bg2d, draw]);
+  useEffect(() => { draw(); }, [bg2d, agentOutlines, draw]);
   const showGridlinesRef = useRef(false);
   useEffect(() => { showGridlinesRef.current = showGridlines; }, [showGridlines]);
   // Inspect mode (toolbar toggle): plain LMB inspects cells/agents — the
@@ -8811,6 +8878,20 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
                     onChange={e => setBg2d(b => ({ ...b, color: e.target.value }))}
                     style={{ width: 34, height: 20, padding: 0, border: 'none', background: 'none', opacity: bg2d.enabled ? 1 : 0.4, cursor: bg2d.enabled ? 'pointer' : 'default' }} />
                   <span style={{ color: 'var(--color-text-muted)' }}>Agents-only backdrop</span>
+                </label>
+              </div>
+              )}
+              {/* Agent disc outlines — the dark contour stroke around each circle
+                  (drawn only when a disc is >= 2px). Optional so dense populations
+                  can render as clean solid dots. 2D only — the 3D spheres have no
+                  outline pass. */}
+              {!is3D && (
+              <div>
+                <div style={{ fontSize: '0.6rem', color: 'var(--color-text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 4 }}>Outlines</div>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.66rem' }}
+                  title="Draw a dark contour around each agent disc (only visible on discs at least 2px on screen). Off = clean solid dots.">
+                  <input type="checkbox" checked={agentOutlines} onChange={e => setAgentOutlines(e.target.checked)} />
+                  <span style={{ color: 'var(--color-text-muted)' }}>Outline agent discs</span>
                 </label>
               </div>
               )}
