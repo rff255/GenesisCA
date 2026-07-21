@@ -1,0 +1,1710 @@
+{
+  "schemaVersion": 1,
+  "properties": {
+    "name": "Particle Life 3D",
+    "description": "The classic Particle Life sandbox in a 3D volume: K species, a signed attraction/repulsion matrix, per-pair min/max radii — chase spirals, membranes and cell-like blobs emerge from one table.",
+    "ruleDescription": "Each particle sums a pairwise force over neighbours within queryRadius: below the pair’s attractMin the force is always repulsive (repel·(d/minR−1)); between attractMin and attractMax it follows a tent peaking at the midpoint with height rules[my][their] ∈ [−1,1]. Velocity keeps friction·v each step (graph-side Set Velocity; engine momentum 1). All three tables are live — edit them (or Randomize with a signed range) while playing. rules is ASYMMETRIC: A may chase B while B flees A, which is where the endless pursuit dynamics come from. Presets carry named matrices (snake / rock–paper–scissors / symmetric clusters). N applies on Reset.",
+    "author": "",
+    "projectAuthor": "",
+    "tags": [
+      "agents",
+      "particle-life",
+      "emergence",
+      "matrix"
+    ],
+    "dimension": "3d",
+    "gridWidth": 160,
+    "gridHeight": 110,
+    "gridDepth": 70,
+    "topology": "2d-grid",
+    "boundaryTreatment": "torus",
+    "useWasm": false,
+    "useWebGPU": false
+  },
+  "topologyMode": {
+    "gridCells": false,
+    "agents": true
+  },
+  "centerBased": {
+    "enabled": true,
+    "maxAgents": 2400,
+    "maxBonds": 0,
+    "worldWidth": 160,
+    "worldHeight": 110,
+    "worldDepth": 70,
+    "repulsionStiffness": 0,
+    "adhesionStiffness": 0,
+    "interactionRange": 1.5,
+    "drag": 1,
+    "timeStep": 1,
+    "momentum": 1,
+    "maxSpeed": 0,
+    "neighbourQueryRadius": 24,
+    "useBondingPhysics": false,
+    "autoBond": false,
+    "growthRate": 0,
+    "bondStiffness": 0,
+    "seedCount": 0,
+    "seedPattern": "scatter",
+    "defaultRadius": 1.2,
+    "agentTarget": "wasm",
+    "agentUpdateMode": "async",
+    "agentCapabilities": {
+      "motion": "force",
+      "body": true,
+      "collision": "off",
+      "bonds": "off",
+      "autoBond": false,
+      "growth": false,
+      "division": false,
+      "lifespan": false,
+      "populationBirth": true,
+      "populationDeath": true,
+      "sensing": true,
+      "sensingHeadingSource": "velocity",
+      "orientation": false,
+      "fieldCoupling": false,
+      "appearance": true
+    }
+  },
+  "attributes": [
+    {
+      "id": "numParticles",
+      "name": "N (particles)",
+      "description": "Population size — applied on Reset (the Agent Init spawn loop reads it).",
+      "type": "integer",
+      "isModelAttribute": true,
+      "defaultValue": "1200",
+      "hasBounds": true,
+      "min": 100,
+      "max": 2400
+    },
+    {
+      "id": "forceFactor",
+      "name": "forceFactor",
+      "description": "Overall force gain.",
+      "type": "float",
+      "isModelAttribute": true,
+      "defaultValue": "0.05",
+      "hasBounds": true,
+      "min": 0.01,
+      "max": 1
+    },
+    {
+      "id": "repel",
+      "name": "repel",
+      "description": "Strength of the short-range repulsion core (below each pair’s min radius).",
+      "type": "float",
+      "isModelAttribute": true,
+      "defaultValue": "1.5",
+      "hasBounds": true,
+      "min": 0,
+      "max": 3
+    },
+    {
+      "id": "friction",
+      "name": "friction",
+      "description": "Velocity keep-fraction per step (1 = frictionless, 0 = full stop).",
+      "type": "float",
+      "isModelAttribute": true,
+      "defaultValue": "0.8",
+      "hasBounds": true,
+      "min": 0,
+      "max": 0.99
+    },
+    {
+      "id": "queryRadius",
+      "name": "queryRadius",
+      "description": "Neighbour search radius. Keep ≥ the attractMax range and ≤ 24 (the spatial-hash ceiling) or far pairs stop interacting.",
+      "type": "float",
+      "isModelAttribute": true,
+      "defaultValue": "16",
+      "hasBounds": true,
+      "min": 4,
+      "max": 24
+    },
+    {
+      "id": "rules",
+      "name": "rules",
+      "description": "Attraction (+) / repulsion (−) per species pair — THE Particle Life matrix. Asymmetric: rules[A][B] is the force ON an A FROM a B.",
+      "type": "lookupTable",
+      "isModelAttribute": true,
+      "defaultValue": "0",
+      "rowKeySource": {
+        "kind": "tagAttribute",
+        "attributeId": "species"
+      },
+      "colKeySource": {
+        "kind": "tagAttribute",
+        "attributeId": "species"
+      },
+      "symmetric": false,
+      "valueType": "float",
+      "tableValues": {
+        "red": {
+          "red": -0.15440135961398482,
+          "green": -0.8173166452907026,
+          "blue": -0.6346276481635869,
+          "yellow": -0.8730241735465825,
+          "purple": -0.3921967362985015,
+          "cyan": 0.375614442396909
+        },
+        "green": {
+          "red": 0.37652497505769134,
+          "green": -0.7718156040646136,
+          "blue": -0.1737492955289781,
+          "yellow": 0.3661116994917393,
+          "purple": 0.4121171827428043,
+          "cyan": -0.05514867603778839
+        },
+        "blue": {
+          "red": -0.7890886948443949,
+          "green": -0.047167826909571886,
+          "blue": 0.43255455838516355,
+          "yellow": -0.9525946136564016,
+          "purple": -0.7742111277766526,
+          "cyan": 0.7217226563952863
+        },
+        "yellow": {
+          "red": 0.5057221055030823,
+          "green": -0.88788843434304,
+          "blue": -0.4162646378390491,
+          "yellow": -0.8825215571559966,
+          "purple": 0.5015124683268368,
+          "cyan": -0.02359616383910179
+        },
+        "purple": {
+          "red": 0.7761566662229598,
+          "green": 0.19316319096833467,
+          "blue": 0.7579955705441535,
+          "yellow": 0.21225134562700987,
+          "purple": 0.5099726468324661,
+          "cyan": -0.38023671973496675
+        },
+        "cyan": {
+          "red": -0.6876362515613437,
+          "green": -0.35466871596872807,
+          "blue": 0.1611436903476715,
+          "yellow": 0.8675979538820684,
+          "purple": -0.9346452173776925,
+          "cyan": 0.2701962445862591
+        }
+      },
+      "tableRoll": {
+        "seed": 20260721,
+        "density": 1,
+        "rangeMin": -1,
+        "rangeMax": 1
+      }
+    },
+    {
+      "id": "attractMin",
+      "name": "attractMin",
+      "description": "Per-pair repulsion-core radius (below it the pair always repels).",
+      "type": "lookupTable",
+      "isModelAttribute": true,
+      "defaultValue": "0",
+      "rowKeySource": {
+        "kind": "tagAttribute",
+        "attributeId": "species"
+      },
+      "colKeySource": {
+        "kind": "tagAttribute",
+        "attributeId": "species"
+      },
+      "symmetric": false,
+      "valueType": "float",
+      "tableValues": {
+        "red": {
+          "red": 3.351929299766198,
+          "green": 4.638937988318503,
+          "blue": 3.033878680318594,
+          "yellow": 5.533837670926005,
+          "purple": 3.694285625126213,
+          "cyan": 5.221628590486944
+        },
+        "green": {
+          "red": 4.207415645476431,
+          "green": 4.212694610701874,
+          "blue": 5.4857849520631135,
+          "yellow": 5.536337597994134,
+          "purple": 5.341621056664735,
+          "cyan": 5.460376553004608
+        },
+        "blue": {
+          "red": 3.8807838808279485,
+          "green": 5.681947917211801,
+          "blue": 4.920987526187673,
+          "yellow": 4.534591503906995,
+          "purple": 4.263105809222907,
+          "cyan": 4.97655655327253
+        },
+        "yellow": {
+          "red": 5.35997076658532,
+          "green": 5.076354632154107,
+          "blue": 5.66072758496739,
+          "yellow": 3.784958927426487,
+          "purple": 4.243117164820433,
+          "cyan": 4.609621219569817
+        },
+        "purple": {
+          "red": 3.460619361139834,
+          "green": 4.16208497970365,
+          "blue": 5.702324650716037,
+          "yellow": 4.401574490591884,
+          "purple": 5.152970094932243,
+          "cyan": 5.2255929401144385
+        },
+        "cyan": {
+          "red": 5.215853096684441,
+          "green": 4.389797979500145,
+          "blue": 5.8286940737161785,
+          "yellow": 4.334737238008529,
+          "purple": 3.6560899377800524,
+          "cyan": 3.9287625302094966
+        }
+      },
+      "tableRoll": {
+        "seed": 71,
+        "density": 1,
+        "rangeMin": 3,
+        "rangeMax": 6
+      }
+    },
+    {
+      "id": "attractMax",
+      "name": "attractMax",
+      "description": "Per-pair interaction range (the tent reaches zero here). Keep ≤ queryRadius.",
+      "type": "lookupTable",
+      "isModelAttribute": true,
+      "defaultValue": "0",
+      "rowKeySource": {
+        "kind": "tagAttribute",
+        "attributeId": "species"
+      },
+      "colKeySource": {
+        "kind": "tagAttribute",
+        "attributeId": "species"
+      },
+      "symmetric": false,
+      "valueType": "float",
+      "tableValues": {
+        "red": {
+          "red": 9.06294310837984,
+          "green": 13.617885446175933,
+          "blue": 9.180992022156715,
+          "yellow": 9.127365972846746,
+          "purple": 10.969500685110688,
+          "cyan": 12.268482206389308
+        },
+        "green": {
+          "red": 9.672410544008017,
+          "green": 9.482175955548882,
+          "blue": 13.92834042198956,
+          "yellow": 10.581770913675427,
+          "purple": 10.801434705033898,
+          "cyan": 15.376778151839972
+        },
+        "blue": {
+          "red": 11.198086338117719,
+          "green": 14.446521125733852,
+          "blue": 15.503196699544787,
+          "yellow": 9.737882025539875,
+          "purple": 11.475039072334766,
+          "cyan": 14.668363697826862
+        },
+        "yellow": {
+          "red": 15.792174121364951,
+          "green": 8.19945233501494,
+          "blue": 9.015749095007777,
+          "yellow": 14.78387101367116,
+          "purple": 13.107449539005756,
+          "cyan": 11.643876230344176
+        },
+        "purple": {
+          "red": 11.135976811870933,
+          "green": 10.89952969737351,
+          "blue": 14.801030650734901,
+          "yellow": 10.304309710860252,
+          "purple": 8.136701187118888,
+          "cyan": 8.741679847240448
+        },
+        "cyan": {
+          "red": 9.355739809572697,
+          "green": 11.456230692565441,
+          "blue": 10.541426612064242,
+          "yellow": 9.765501357614994,
+          "purple": 15.195249676704407,
+          "cyan": 11.711585953831673
+        }
+      },
+      "tableRoll": {
+        "seed": 72,
+        "density": 1,
+        "rangeMin": 8,
+        "rangeMax": 16
+      }
+    }
+  ],
+  "agentAttributes": [
+    {
+      "id": "species",
+      "name": "species",
+      "type": "tag",
+      "description": "Particle species — the row/column key of all three interaction tables.",
+      "isModelAttribute": false,
+      "defaultValue": "0",
+      "tagOptions": [
+        "red",
+        "green",
+        "blue",
+        "yellow",
+        "purple",
+        "cyan"
+      ]
+    }
+  ],
+  "modelAttributes": [],
+  "neighborhoods": [],
+  "mappings": [],
+  "agentMappings": [
+    {
+      "id": "view_species",
+      "name": "Species",
+      "description": "Colour by species.",
+      "isAttributeToColor": true,
+      "linked": true,
+      "linkedAttributeId": "species",
+      "linkedColors": {
+        "tag": [
+          {
+            "r": 230,
+            "g": 70,
+            "b": 70
+          },
+          {
+            "r": 95,
+            "g": 200,
+            "b": 95
+          },
+          {
+            "r": 90,
+            "g": 140,
+            "b": 235
+          },
+          {
+            "r": 225,
+            "g": 200,
+            "b": 80
+          },
+          {
+            "r": 170,
+            "g": 110,
+            "b": 220
+          },
+          {
+            "r": 80,
+            "g": 200,
+            "b": 215
+          }
+        ]
+      },
+      "redDescription": "",
+      "greenDescription": "",
+      "blueDescription": ""
+    }
+  ],
+  "variables": [],
+  "indicators": [],
+  "presets": [
+    {
+      "id": "preset_mrue19blcxo9",
+      "name": "Random soup (seed 4242)",
+      "description": "Dense uniform [−1,1) reroll — the classic Particle Life chaos.",
+      "state": {
+        "schemaVersion": 2,
+        "interactionTables": {
+          "rules": {
+            "red": {
+              "red": 0.6006998978555202,
+              "green": -0.37651516823098063,
+              "blue": -0.6959604220464826,
+              "yellow": -0.38354818942025304,
+              "purple": -0.795279904268682,
+              "cyan": 0.7746034250594676
+            },
+            "green": {
+              "red": 0.8119489387609065,
+              "green": -0.3710043444298208,
+              "blue": 0.7577618476934731,
+              "yellow": 0.9400370270013809,
+              "purple": -0.5495990654453635,
+              "cyan": 0.3354418925009668
+            },
+            "blue": {
+              "red": 0.15541293751448393,
+              "green": 0.38447456946596503,
+              "blue": -0.2661786717362702,
+              "yellow": 0.20027505420148373,
+              "purple": -0.7388070514425635,
+              "cyan": 0.8563131638802588
+            },
+            "yellow": {
+              "red": -0.23011275427415967,
+              "green": 0.015486872289329767,
+              "blue": 0.7784213931299746,
+              "yellow": -0.46367638604715466,
+              "purple": 0.5464425329118967,
+              "cyan": -0.9908000230789185
+            },
+            "purple": {
+              "red": -0.40364470332860947,
+              "green": 0.4149717823602259,
+              "blue": 0.35456312680616975,
+              "yellow": 0.4966177185997367,
+              "purple": -0.5847529545426369,
+              "cyan": 0.3535558693110943
+            },
+            "cyan": {
+              "red": -0.7658471050672233,
+              "green": -0.7254280848428607,
+              "blue": 0.49207592522725463,
+              "yellow": -0.7528580147773027,
+              "purple": -0.48300428315997124,
+              "cyan": 0.045308022294193506
+            }
+          }
+        },
+        "modelAttrs": {}
+      },
+      "createdAt": 1753000000000
+    },
+    {
+      "id": "preset_mrue19blius7",
+      "name": "Snake",
+      "description": "Self-cohesion + a weak pull toward the next species — crawling chains.",
+      "state": {
+        "schemaVersion": 2,
+        "interactionTables": {
+          "rules": {
+            "red": {
+              "red": 1,
+              "green": 0.2
+            },
+            "green": {
+              "green": 1,
+              "blue": 0.2
+            },
+            "blue": {
+              "blue": 1,
+              "yellow": 0.2
+            },
+            "yellow": {
+              "yellow": 1,
+              "purple": 0.2
+            },
+            "purple": {
+              "purple": 1,
+              "cyan": 0.2
+            },
+            "cyan": {
+              "red": 0.2,
+              "cyan": 1
+            }
+          }
+        },
+        "modelAttrs": {}
+      },
+      "createdAt": 1753000001000
+    },
+    {
+      "id": "preset_mrue19bluemv",
+      "name": "Rock–Paper–Scissors",
+      "description": "Chase the next species, flee the previous — endless pursuit spirals.",
+      "state": {
+        "schemaVersion": 2,
+        "interactionTables": {
+          "rules": {
+            "red": {
+              "red": -0.1,
+              "green": 0.9,
+              "cyan": -0.7
+            },
+            "green": {
+              "red": -0.7,
+              "green": -0.1,
+              "blue": 0.9
+            },
+            "blue": {
+              "green": -0.7,
+              "blue": -0.1,
+              "yellow": 0.9
+            },
+            "yellow": {
+              "blue": -0.7,
+              "yellow": -0.1,
+              "purple": 0.9
+            },
+            "purple": {
+              "yellow": -0.7,
+              "purple": -0.1,
+              "cyan": 0.9
+            },
+            "cyan": {
+              "red": 0.9,
+              "purple": -0.7,
+              "cyan": -0.1
+            }
+          }
+        },
+        "modelAttrs": {}
+      },
+      "createdAt": 1753000002000
+    },
+    {
+      "id": "preset_mrue19blqtnr",
+      "name": "Stable clusters (symmetric)",
+      "description": "Symmetric random matrix — settles into blob \"molecules\".",
+      "state": {
+        "schemaVersion": 2,
+        "interactionTables": {
+          "rules": {
+            "red": {
+              "red": -0.5777970249764621,
+              "green": -0.19820059090852737,
+              "blue": -0.1868416671641171,
+              "yellow": -0.3064046879298985,
+              "purple": -0.804299296811223,
+              "cyan": -0.3545987429097295
+            },
+            "green": {
+              "red": -0.19820059090852737,
+              "green": -0.0867236191406846,
+              "blue": -0.9079563785344362,
+              "yellow": -0.9405624005012214,
+              "purple": -0.29821586748585105,
+              "cyan": 0.9634893308393657
+            },
+            "blue": {
+              "red": -0.1868416671641171,
+              "green": -0.9079563785344362,
+              "blue": -0.032952599693089724,
+              "yellow": -0.5139360260218382,
+              "purple": -0.6005097413435578,
+              "cyan": -0.5905132927000523
+            },
+            "yellow": {
+              "red": -0.3064046879298985,
+              "green": -0.9405624005012214,
+              "blue": -0.5139360260218382,
+              "yellow": -0.09677403420209885,
+              "purple": 0.8477274822071195,
+              "cyan": -0.41814235551282763
+            },
+            "purple": {
+              "red": -0.804299296811223,
+              "green": -0.29821586748585105,
+              "blue": -0.6005097413435578,
+              "yellow": 0.8477274822071195,
+              "purple": 0.10376647068187594,
+              "cyan": 0.5907164546661079
+            },
+            "cyan": {
+              "red": -0.3545987429097295,
+              "green": 0.9634893308393657,
+              "blue": -0.5905132927000523,
+              "yellow": -0.41814235551282763,
+              "purple": 0.5907164546661079,
+              "cyan": 0.44002217380329967
+            }
+          }
+        },
+        "modelAttrs": {}
+      },
+      "createdAt": 1753000003000
+    }
+  ],
+  "graphNodes": [
+    {
+      "id": "nmrue19bljkej",
+      "type": "caNode",
+      "position": {
+        "x": 0,
+        "y": 0
+      },
+      "data": {
+        "nodeType": "step",
+        "config": {}
+      }
+    }
+  ],
+  "graphEdges": [],
+  "agentGraphNodes": [
+    {
+      "id": "amrue19bk7y58",
+      "type": "caNode",
+      "position": {
+        "x": 0,
+        "y": 0
+      },
+      "data": {
+        "nodeType": "agentInit",
+        "config": {}
+      }
+    },
+    {
+      "id": "amrue19bk11u8",
+      "type": "caNode",
+      "position": {
+        "x": 0,
+        "y": 140
+      },
+      "data": {
+        "nodeType": "getModelAttribute",
+        "config": {
+          "attributeId": "numParticles"
+        }
+      }
+    },
+    {
+      "id": "amrue19bk50kb",
+      "type": "caNode",
+      "position": {
+        "x": 240,
+        "y": 0
+      },
+      "data": {
+        "nodeType": "loop",
+        "config": {}
+      }
+    },
+    {
+      "id": "amrue19bk5jdq",
+      "type": "caNode",
+      "position": {
+        "x": 384,
+        "y": 160
+      },
+      "data": {
+        "nodeType": "getRandom",
+        "config": {
+          "randomType": "float",
+          "min": "0",
+          "max": "1"
+        }
+      }
+    },
+    {
+      "id": "amrue19bkx93c",
+      "type": "caNode",
+      "position": {
+        "x": 384,
+        "y": 260
+      },
+      "data": {
+        "nodeType": "getRandom",
+        "config": {
+          "randomType": "float",
+          "min": "0",
+          "max": "1"
+        }
+      }
+    },
+    {
+      "id": "amrue19bkez90",
+      "type": "caNode",
+      "position": {
+        "x": 624,
+        "y": 160
+      },
+      "data": {
+        "nodeType": "expression",
+        "config": {
+          "expression": "a*b",
+          "visibleCount": 2
+        }
+      }
+    },
+    {
+      "id": "amrue19bkup1g",
+      "type": "caNode",
+      "position": {
+        "x": 624,
+        "y": 260
+      },
+      "data": {
+        "nodeType": "expression",
+        "config": {
+          "expression": "a*b",
+          "visibleCount": 2
+        }
+      }
+    },
+    {
+      "id": "amrue19bk29va",
+      "type": "caNode",
+      "position": {
+        "x": 384,
+        "y": 360
+      },
+      "data": {
+        "nodeType": "getRandom",
+        "config": {
+          "randomType": "float",
+          "min": "0",
+          "max": "1"
+        }
+      }
+    },
+    {
+      "id": "amrue19bkflv5",
+      "type": "caNode",
+      "position": {
+        "x": 624,
+        "y": 360
+      },
+      "data": {
+        "nodeType": "expression",
+        "config": {
+          "expression": "a*b",
+          "visibleCount": 2
+        }
+      }
+    },
+    {
+      "id": "amrue19bk0vn2",
+      "type": "caNode",
+      "position": {
+        "x": 912,
+        "y": 0
+      },
+      "data": {
+        "nodeType": "createAgent",
+        "config": {
+          "_port_radius": "1.2"
+        }
+      }
+    },
+    {
+      "id": "amrue19bk69pc",
+      "type": "caNode",
+      "position": {
+        "x": 912,
+        "y": 180
+      },
+      "data": {
+        "nodeType": "getRandom",
+        "config": {
+          "randomType": "integer",
+          "min": "0",
+          "max": "5"
+        }
+      }
+    },
+    {
+      "id": "amrue19bk8ul3",
+      "type": "caNode",
+      "position": {
+        "x": 1200,
+        "y": 80
+      },
+      "data": {
+        "nodeType": "setAgentAttribute",
+        "config": {
+          "attributeId": "species"
+        }
+      }
+    },
+    {
+      "id": "amrue19bkt43h",
+      "type": "caNode",
+      "position": {
+        "x": 1488,
+        "y": 0
+      },
+      "data": {
+        "nodeType": "addAgentToWorld",
+        "config": {}
+      }
+    },
+    {
+      "id": "amrue19bk1pjy",
+      "type": "caNode",
+      "position": {
+        "x": 0,
+        "y": 600
+      },
+      "data": {
+        "nodeType": "behaviourStep",
+        "config": {}
+      }
+    },
+    {
+      "id": "amrue19bkdkbc",
+      "type": "caNode",
+      "position": {
+        "x": 0,
+        "y": 760
+      },
+      "data": {
+        "nodeType": "getVelocity",
+        "config": {}
+      }
+    },
+    {
+      "id": "amrue19bknrg4",
+      "type": "caNode",
+      "position": {
+        "x": 0,
+        "y": 880.0000000000001
+      },
+      "data": {
+        "nodeType": "getModelAttribute",
+        "config": {
+          "attributeId": "friction"
+        }
+      }
+    },
+    {
+      "id": "amrue19bkwuv3",
+      "type": "caNode",
+      "position": {
+        "x": 264,
+        "y": 740
+      },
+      "data": {
+        "nodeType": "expression",
+        "config": {
+          "expression": "a*b",
+          "visibleCount": 2
+        }
+      }
+    },
+    {
+      "id": "amrue19bkotbz",
+      "type": "caNode",
+      "position": {
+        "x": 264,
+        "y": 840
+      },
+      "data": {
+        "nodeType": "expression",
+        "config": {
+          "expression": "a*b",
+          "visibleCount": 2
+        }
+      }
+    },
+    {
+      "id": "amrue19blslt7",
+      "type": "caNode",
+      "position": {
+        "x": 264,
+        "y": 940
+      },
+      "data": {
+        "nodeType": "expression",
+        "config": {
+          "expression": "a*b",
+          "visibleCount": 2
+        }
+      }
+    },
+    {
+      "id": "amrue19bl3c9l",
+      "type": "caNode",
+      "position": {
+        "x": 552,
+        "y": 600
+      },
+      "data": {
+        "nodeType": "setVelocity",
+        "config": {}
+      }
+    },
+    {
+      "id": "amrue19blwstn",
+      "type": "caNode",
+      "position": {
+        "x": 552,
+        "y": 760
+      },
+      "data": {
+        "nodeType": "getModelAttribute",
+        "config": {
+          "attributeId": "queryRadius"
+        }
+      }
+    },
+    {
+      "id": "amrue19bl984s",
+      "type": "caNode",
+      "position": {
+        "x": 816,
+        "y": 720
+      },
+      "data": {
+        "nodeType": "getNearbyAgents",
+        "config": {}
+      }
+    },
+    {
+      "id": "amrue19blxm3c",
+      "type": "caNode",
+      "position": {
+        "x": 864,
+        "y": 600
+      },
+      "data": {
+        "nodeType": "forEachInArray",
+        "config": {}
+      }
+    },
+    {
+      "id": "amrue19blwx2s",
+      "type": "caNode",
+      "position": {
+        "x": 1152,
+        "y": 740
+      },
+      "data": {
+        "nodeType": "getAgentOffset",
+        "config": {}
+      }
+    },
+    {
+      "id": "amrue19blev6b",
+      "type": "caNode",
+      "position": {
+        "x": 1152,
+        "y": 880.0000000000001
+      },
+      "data": {
+        "nodeType": "getCellAttribute",
+        "config": {
+          "attributeId": "species"
+        }
+      }
+    },
+    {
+      "id": "amrue19blxhm1",
+      "type": "caNode",
+      "position": {
+        "x": 1152,
+        "y": 980.0000000000001
+      },
+      "data": {
+        "nodeType": "getAgentAttribute",
+        "config": {
+          "attributeId": "species"
+        }
+      }
+    },
+    {
+      "id": "amrue19blhbqp",
+      "type": "caNode",
+      "position": {
+        "x": 1440,
+        "y": 819.9999999999999
+      },
+      "data": {
+        "nodeType": "lookupInteraction",
+        "config": {
+          "tableId": "rules"
+        }
+      }
+    },
+    {
+      "id": "amrue19blxqka",
+      "type": "caNode",
+      "position": {
+        "x": 1440,
+        "y": 940
+      },
+      "data": {
+        "nodeType": "lookupInteraction",
+        "config": {
+          "tableId": "attractMin"
+        }
+      }
+    },
+    {
+      "id": "amrue19blggb1",
+      "type": "caNode",
+      "position": {
+        "x": 1440,
+        "y": 1060
+      },
+      "data": {
+        "nodeType": "lookupInteraction",
+        "config": {
+          "tableId": "attractMax"
+        }
+      }
+    },
+    {
+      "id": "amrue19bljpz4",
+      "type": "caNode",
+      "position": {
+        "x": 1752,
+        "y": 700
+      },
+      "data": {
+        "nodeType": "statement",
+        "config": {
+          "operation": "<",
+          "compareType": "numerical"
+        }
+      }
+    },
+    {
+      "id": "amrue19bl3f0b",
+      "type": "caNode",
+      "position": {
+        "x": 1752,
+        "y": 819.9999999999999
+      },
+      "data": {
+        "nodeType": "statement",
+        "config": {
+          "operation": "<",
+          "compareType": "numerical"
+        }
+      }
+    },
+    {
+      "id": "amrue19bluob6",
+      "type": "caNode",
+      "position": {
+        "x": 1752,
+        "y": 940
+      },
+      "data": {
+        "nodeType": "getModelAttribute",
+        "config": {
+          "attributeId": "repel"
+        }
+      }
+    },
+    {
+      "id": "amrue19blkkj8",
+      "type": "caNode",
+      "position": {
+        "x": 2040,
+        "y": 700
+      },
+      "data": {
+        "nodeType": "expression",
+        "config": {
+          "expression": "c*(a/max(b,0.0001)-1)",
+          "visibleCount": 3
+        }
+      }
+    },
+    {
+      "id": "amrue19blp2el",
+      "type": "caNode",
+      "position": {
+        "x": 2040,
+        "y": 840
+      },
+      "data": {
+        "nodeType": "expression",
+        "config": {
+          "expression": "d*(1-abs(a-(b+c)*0.5)/max((c-b)*0.5,0.0001))",
+          "visibleCount": 4
+        }
+      }
+    },
+    {
+      "id": "amrue19bldj81",
+      "type": "caNode",
+      "position": {
+        "x": 2328,
+        "y": 819.9999999999999
+      },
+      "data": {
+        "nodeType": "valueSwitch",
+        "config": {
+          "_port_elseValue": "0"
+        }
+      }
+    },
+    {
+      "id": "amrue19blnmu4",
+      "type": "caNode",
+      "position": {
+        "x": 2616,
+        "y": 740
+      },
+      "data": {
+        "nodeType": "valueSwitch",
+        "config": {}
+      }
+    },
+    {
+      "id": "amrue19blfxy2",
+      "type": "caNode",
+      "position": {
+        "x": 2616,
+        "y": 900
+      },
+      "data": {
+        "nodeType": "getModelAttribute",
+        "config": {
+          "attributeId": "forceFactor"
+        }
+      }
+    },
+    {
+      "id": "amrue19bl189i",
+      "type": "caNode",
+      "position": {
+        "x": 2904,
+        "y": 660
+      },
+      "data": {
+        "nodeType": "expression",
+        "config": {
+          "expression": "d*a*b/max(c,0.0001)",
+          "visibleCount": 4
+        }
+      }
+    },
+    {
+      "id": "amrue19bly2v6",
+      "type": "caNode",
+      "position": {
+        "x": 2904,
+        "y": 780
+      },
+      "data": {
+        "nodeType": "expression",
+        "config": {
+          "expression": "d*a*b/max(c,0.0001)",
+          "visibleCount": 4
+        }
+      }
+    },
+    {
+      "id": "amrue19bl03tj",
+      "type": "caNode",
+      "position": {
+        "x": 2904,
+        "y": 900
+      },
+      "data": {
+        "nodeType": "expression",
+        "config": {
+          "expression": "d*a*b/max(c,0.0001)",
+          "visibleCount": 4
+        }
+      }
+    },
+    {
+      "id": "amrue19blo8la",
+      "type": "caNode",
+      "position": {
+        "x": 3216,
+        "y": 600
+      },
+      "data": {
+        "nodeType": "applyForce",
+        "config": {}
+      }
+    }
+  ],
+  "agentGraphEdges": [
+    {
+      "id": "emrue19bka87r",
+      "source": "amrue19bk11u8",
+      "target": "amrue19bk50kb",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_count"
+    },
+    {
+      "id": "emrue19bkw3ln",
+      "source": "amrue19bk7y58",
+      "target": "amrue19bk50kb",
+      "sourceHandle": "output_flow_do",
+      "targetHandle": "input_flow_do"
+    },
+    {
+      "id": "emrue19bk46qo",
+      "source": "amrue19bk5jdq",
+      "target": "amrue19bkez90",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_a"
+    },
+    {
+      "id": "emrue19bkc4u5",
+      "source": "amrue19bk7y58",
+      "target": "amrue19bkez90",
+      "sourceHandle": "output_value_worldWidth",
+      "targetHandle": "input_value_b"
+    },
+    {
+      "id": "emrue19bk8j67",
+      "source": "amrue19bkx93c",
+      "target": "amrue19bkup1g",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_a"
+    },
+    {
+      "id": "emrue19bkekb5",
+      "source": "amrue19bk7y58",
+      "target": "amrue19bkup1g",
+      "sourceHandle": "output_value_worldHeight",
+      "targetHandle": "input_value_b"
+    },
+    {
+      "id": "emrue19bk66i1",
+      "source": "amrue19bk29va",
+      "target": "amrue19bkflv5",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_a"
+    },
+    {
+      "id": "emrue19bky9d9",
+      "source": "amrue19bk7y58",
+      "target": "amrue19bkflv5",
+      "sourceHandle": "output_value_worldDepth",
+      "targetHandle": "input_value_b"
+    },
+    {
+      "id": "emrue19bk4v2p",
+      "source": "amrue19bkez90",
+      "target": "amrue19bk0vn2",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_x"
+    },
+    {
+      "id": "emrue19bkwscs",
+      "source": "amrue19bkup1g",
+      "target": "amrue19bk0vn2",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_y"
+    },
+    {
+      "id": "emrue19bk39s2",
+      "source": "amrue19bkflv5",
+      "target": "amrue19bk0vn2",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_z"
+    },
+    {
+      "id": "emrue19bkt3zv",
+      "source": "amrue19bk0vn2",
+      "target": "amrue19bk8ul3",
+      "sourceHandle": "output_value_handle",
+      "targetHandle": "input_value_agentId"
+    },
+    {
+      "id": "emrue19bk3w8x",
+      "source": "amrue19bk69pc",
+      "target": "amrue19bk8ul3",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_value"
+    },
+    {
+      "id": "emrue19bke9t8",
+      "source": "amrue19bk0vn2",
+      "target": "amrue19bkt43h",
+      "sourceHandle": "output_value_handle",
+      "targetHandle": "input_value_handle"
+    },
+    {
+      "id": "emrue19bkodja",
+      "source": "amrue19bk50kb",
+      "target": "amrue19bk0vn2",
+      "sourceHandle": "output_flow_body",
+      "targetHandle": "input_flow_do"
+    },
+    {
+      "id": "emrue19bkbsxq",
+      "source": "amrue19bk0vn2",
+      "target": "amrue19bk8ul3",
+      "sourceHandle": "output_flow_next",
+      "targetHandle": "input_flow_do"
+    },
+    {
+      "id": "emrue19bk94ft",
+      "source": "amrue19bk8ul3",
+      "target": "amrue19bkt43h",
+      "sourceHandle": "output_flow_next",
+      "targetHandle": "input_flow_do"
+    },
+    {
+      "id": "emrue19bk84jz",
+      "source": "amrue19bkdkbc",
+      "target": "amrue19bkwuv3",
+      "sourceHandle": "output_value_vx",
+      "targetHandle": "input_value_a"
+    },
+    {
+      "id": "emrue19bkn3n8",
+      "source": "amrue19bknrg4",
+      "target": "amrue19bkwuv3",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_b"
+    },
+    {
+      "id": "emrue19bk7eum",
+      "source": "amrue19bkdkbc",
+      "target": "amrue19bkotbz",
+      "sourceHandle": "output_value_vy",
+      "targetHandle": "input_value_a"
+    },
+    {
+      "id": "emrue19bk2298",
+      "source": "amrue19bknrg4",
+      "target": "amrue19bkotbz",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_b"
+    },
+    {
+      "id": "emrue19bl3iy8",
+      "source": "amrue19bkdkbc",
+      "target": "amrue19blslt7",
+      "sourceHandle": "output_value_vz",
+      "targetHandle": "input_value_a"
+    },
+    {
+      "id": "emrue19bl0a0s",
+      "source": "amrue19bknrg4",
+      "target": "amrue19blslt7",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_b"
+    },
+    {
+      "id": "emrue19bl8j4g",
+      "source": "amrue19bkwuv3",
+      "target": "amrue19bl3c9l",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_vx"
+    },
+    {
+      "id": "emrue19blfntc",
+      "source": "amrue19bkotbz",
+      "target": "amrue19bl3c9l",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_vy"
+    },
+    {
+      "id": "emrue19bl2x8l",
+      "source": "amrue19blslt7",
+      "target": "amrue19bl3c9l",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_vz"
+    },
+    {
+      "id": "emrue19bli9w1",
+      "source": "amrue19bk1pjy",
+      "target": "amrue19bl3c9l",
+      "sourceHandle": "output_flow_do",
+      "targetHandle": "input_flow_do"
+    },
+    {
+      "id": "emrue19blg5g9",
+      "source": "amrue19blwstn",
+      "target": "amrue19bl984s",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_radius"
+    },
+    {
+      "id": "emrue19bll2qw",
+      "source": "amrue19bl984s",
+      "target": "amrue19blxm3c",
+      "sourceHandle": "output_value_agents",
+      "targetHandle": "input_value_array"
+    },
+    {
+      "id": "emrue19bl8280",
+      "source": "amrue19bl3c9l",
+      "target": "amrue19blxm3c",
+      "sourceHandle": "output_flow_next",
+      "targetHandle": "input_flow_do"
+    },
+    {
+      "id": "emrue19bl1mwx",
+      "source": "amrue19blxm3c",
+      "target": "amrue19blwx2s",
+      "sourceHandle": "output_value_element",
+      "targetHandle": "input_value_agentId"
+    },
+    {
+      "id": "emrue19bliioe",
+      "source": "amrue19blxm3c",
+      "target": "amrue19blxhm1",
+      "sourceHandle": "output_value_element",
+      "targetHandle": "input_value_agentId"
+    },
+    {
+      "id": "emrue19bl34gv",
+      "source": "amrue19blev6b",
+      "target": "amrue19blhbqp",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_labelA"
+    },
+    {
+      "id": "emrue19bliqy7",
+      "source": "amrue19blxhm1",
+      "target": "amrue19blhbqp",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_labelB"
+    },
+    {
+      "id": "emrue19blhdhe",
+      "source": "amrue19blev6b",
+      "target": "amrue19blxqka",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_labelA"
+    },
+    {
+      "id": "emrue19blyuhl",
+      "source": "amrue19blxhm1",
+      "target": "amrue19blxqka",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_labelB"
+    },
+    {
+      "id": "emrue19bla9x2",
+      "source": "amrue19blev6b",
+      "target": "amrue19blggb1",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_labelA"
+    },
+    {
+      "id": "emrue19bllluh",
+      "source": "amrue19blxhm1",
+      "target": "amrue19blggb1",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_labelB"
+    },
+    {
+      "id": "emrue19bl385c",
+      "source": "amrue19blwx2s",
+      "target": "amrue19bljpz4",
+      "sourceHandle": "output_value_distance",
+      "targetHandle": "input_value_x"
+    },
+    {
+      "id": "emrue19bl7puc",
+      "source": "amrue19blxqka",
+      "target": "amrue19bljpz4",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_y"
+    },
+    {
+      "id": "emrue19bl5gdw",
+      "source": "amrue19blwx2s",
+      "target": "amrue19bl3f0b",
+      "sourceHandle": "output_value_distance",
+      "targetHandle": "input_value_x"
+    },
+    {
+      "id": "emrue19bl8dlh",
+      "source": "amrue19blggb1",
+      "target": "amrue19bl3f0b",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_y"
+    },
+    {
+      "id": "emrue19blevau",
+      "source": "amrue19blwx2s",
+      "target": "amrue19blkkj8",
+      "sourceHandle": "output_value_distance",
+      "targetHandle": "input_value_a"
+    },
+    {
+      "id": "emrue19bl9bah",
+      "source": "amrue19blxqka",
+      "target": "amrue19blkkj8",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_b"
+    },
+    {
+      "id": "emrue19bl0gb7",
+      "source": "amrue19bluob6",
+      "target": "amrue19blkkj8",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_c"
+    },
+    {
+      "id": "emrue19blk2mr",
+      "source": "amrue19blwx2s",
+      "target": "amrue19blp2el",
+      "sourceHandle": "output_value_distance",
+      "targetHandle": "input_value_a"
+    },
+    {
+      "id": "emrue19bl6zg1",
+      "source": "amrue19blxqka",
+      "target": "amrue19blp2el",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_b"
+    },
+    {
+      "id": "emrue19blb038",
+      "source": "amrue19blggb1",
+      "target": "amrue19blp2el",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_c"
+    },
+    {
+      "id": "emrue19blbulf",
+      "source": "amrue19blhbqp",
+      "target": "amrue19blp2el",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_d"
+    },
+    {
+      "id": "emrue19bl27or",
+      "source": "amrue19bl3f0b",
+      "target": "amrue19bldj81",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_condition"
+    },
+    {
+      "id": "emrue19bl8mmi",
+      "source": "amrue19blp2el",
+      "target": "amrue19bldj81",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_ifValue"
+    },
+    {
+      "id": "emrue19bly2zw",
+      "source": "amrue19bljpz4",
+      "target": "amrue19blnmu4",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_condition"
+    },
+    {
+      "id": "emrue19bl6xl1",
+      "source": "amrue19blkkj8",
+      "target": "amrue19blnmu4",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_ifValue"
+    },
+    {
+      "id": "emrue19blhw47",
+      "source": "amrue19bldj81",
+      "target": "amrue19blnmu4",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_elseValue"
+    },
+    {
+      "id": "emrue19blcw2k",
+      "source": "amrue19blnmu4",
+      "target": "amrue19bl189i",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_a"
+    },
+    {
+      "id": "emrue19blr3gv",
+      "source": "amrue19blwx2s",
+      "target": "amrue19bl189i",
+      "sourceHandle": "output_value_dx",
+      "targetHandle": "input_value_b"
+    },
+    {
+      "id": "emrue19blkpe6",
+      "source": "amrue19blwx2s",
+      "target": "amrue19bl189i",
+      "sourceHandle": "output_value_distance",
+      "targetHandle": "input_value_c"
+    },
+    {
+      "id": "emrue19bl3cld",
+      "source": "amrue19blfxy2",
+      "target": "amrue19bl189i",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_d"
+    },
+    {
+      "id": "emrue19ble81x",
+      "source": "amrue19blnmu4",
+      "target": "amrue19bly2v6",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_a"
+    },
+    {
+      "id": "emrue19blkr0d",
+      "source": "amrue19blwx2s",
+      "target": "amrue19bly2v6",
+      "sourceHandle": "output_value_dy",
+      "targetHandle": "input_value_b"
+    },
+    {
+      "id": "emrue19bl71zp",
+      "source": "amrue19blwx2s",
+      "target": "amrue19bly2v6",
+      "sourceHandle": "output_value_distance",
+      "targetHandle": "input_value_c"
+    },
+    {
+      "id": "emrue19bl36id",
+      "source": "amrue19blfxy2",
+      "target": "amrue19bly2v6",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_d"
+    },
+    {
+      "id": "emrue19blq2e7",
+      "source": "amrue19blnmu4",
+      "target": "amrue19bl03tj",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_a"
+    },
+    {
+      "id": "emrue19bl23ee",
+      "source": "amrue19blwx2s",
+      "target": "amrue19bl03tj",
+      "sourceHandle": "output_value_dz",
+      "targetHandle": "input_value_b"
+    },
+    {
+      "id": "emrue19blh7sz",
+      "source": "amrue19blwx2s",
+      "target": "amrue19bl03tj",
+      "sourceHandle": "output_value_distance",
+      "targetHandle": "input_value_c"
+    },
+    {
+      "id": "emrue19blma4e",
+      "source": "amrue19blfxy2",
+      "target": "amrue19bl03tj",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_d"
+    },
+    {
+      "id": "emrue19bleiuq",
+      "source": "amrue19bl189i",
+      "target": "amrue19blo8la",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_fx"
+    },
+    {
+      "id": "emrue19bl3qhx",
+      "source": "amrue19bly2v6",
+      "target": "amrue19blo8la",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_fy"
+    },
+    {
+      "id": "emrue19blpwpq",
+      "source": "amrue19bl03tj",
+      "target": "amrue19blo8la",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_fz"
+    },
+    {
+      "id": "emrue19blznnc",
+      "source": "amrue19blxm3c",
+      "target": "amrue19blo8la",
+      "sourceHandle": "output_flow_body",
+      "targetHandle": "input_flow_do"
+    }
+  ],
+  "macroDefs": []
+}
