@@ -389,7 +389,10 @@ export function LookupTableEditor({
       borderRadius: 5, fontSize: '0.66rem',
     }}>
       <span style={{ color: '#7a8a9a' }}>Fill pattern</span>
-      <select className={styles.selectInput} style={{ height: inputHeight, fontSize: '0.64rem', maxWidth: 130 }}
+      {/* padding OVERRIDE: the class's 6px vertical padding inside the forced
+          compact height clips the selected text out of view (reads as an empty
+          black strip) — zero it so the label fits. */}
+      <select className={styles.selectInput} style={{ height: inputHeight, fontSize: '0.64rem', maxWidth: 130, padding: '0 4px' }}
         value={genChoice} onChange={e => setGenChoice(e.target.value)}>
         {MATRIX_GENERATORS.map(g => <option key={g.id} value={g.id}>{g.name}</option>)}
       </select>
@@ -459,27 +462,41 @@ export function LookupTableEditor({
       margin: '6px 0', padding: '5px 6px', border: '1px solid var(--color-border, #2a3548)',
       borderRadius: 5, fontSize: '0.66rem',
     }}>
+      {/* Each label+field pair is a nowrap inline-flex GROUP so a narrow panel
+          wraps between pairs, never between a label and its field (a bare-flex
+          wrap paired fields with the NEXT label — "Density / 1 / Min / −1"). */}
       <span style={{ color: '#7a8a9a' }}>Randomize</span>
-      <label style={{ color: '#7a8a9a' }}>Seed</label>
-      <NumberField className={styles.numberInput} value={rollSeed} integer
-        onNumber={n => setRollSeed(Math.floor(n))} style={{ width: 84, height: inputHeight }} noSpinner />
+      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+        <label style={{ color: '#7a8a9a' }}>Seed</label>
+        <NumberField className={styles.numberInput} value={rollSeed} integer
+          onNumber={n => setRollSeed(Math.floor(n))} style={{ width: 72, height: inputHeight }} noSpinner />
+      </span>
+      {/* Own wrap item so a narrow panel never pushes it out of the block. */}
       <button className={styles.addButton} style={{ padding: '1px 6px' }} title="Roll a new random seed"
         onClick={() => setRollSeed(Math.floor(Math.random() * 0x7fffffff) || 1)}>🎲</button>
-      <label style={{ color: '#7a8a9a' }}>Density</label>
-      <NumberField className={styles.numberInput} value={rollDensity} min={0} max={1} step={0.05}
-        onNumber={n => setRollDensity(Math.min(1, Math.max(0, n)))} style={{ width: 56, height: inputHeight }} noSpinner />
-      {valueType === 'integer' && (<>
-        <label style={{ color: '#7a8a9a' }} title="Non-zero entries are drawn uniformly from 1..max">Max</label>
-        <NumberField className={styles.numberInput} value={rollMaxInt} integer min={1}
-          onNumber={n => setRollMaxInt(Math.max(1, Math.floor(n)))} style={{ width: 48, height: inputHeight }} noSpinner />
-      </>)}
+      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+        <label style={{ color: '#7a8a9a' }}>Density</label>
+        <NumberField className={styles.numberInput} value={rollDensity} min={0} max={1} step={0.05}
+          onNumber={n => setRollDensity(Math.min(1, Math.max(0, n)))} style={{ width: 56, height: inputHeight }} noSpinner />
+      </span>
+      {valueType === 'integer' && (
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+          <label style={{ color: '#7a8a9a' }} title="Non-zero entries are drawn uniformly from 1..max">Max</label>
+          <NumberField className={styles.numberInput} value={rollMaxInt} integer min={1}
+            onNumber={n => setRollMaxInt(Math.max(1, Math.floor(n)))} style={{ width: 48, height: inputHeight }} noSpinner />
+        </span>
+      )}
       {valueType === 'float' && (<>
-        <label style={{ color: '#7a8a9a' }} title="Rolled entries are drawn uniformly from [Min, Max). Signed ranges (e.g. −1..1) make attraction/repulsion matrices.">Min</label>
-        <NumberField className={styles.numberInput} value={rollRangeMin} step={0.1}
-          onNumber={n => setRollRangeMin(n)} style={{ width: 52, height: inputHeight }} noSpinner />
-        <label style={{ color: '#7a8a9a' }} title="Rolled entries are drawn uniformly from [Min, Max).">Max</label>
-        <NumberField className={styles.numberInput} value={rollRangeMax} step={0.1}
-          onNumber={n => setRollRangeMax(n)} style={{ width: 52, height: inputHeight }} noSpinner />
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+          <label style={{ color: '#7a8a9a' }} title="Rolled entries are drawn uniformly from [Min, Max). Signed ranges (e.g. −1..1) make attraction/repulsion matrices.">Min</label>
+          <NumberField className={styles.numberInput} value={rollRangeMin} step={0.1}
+            onNumber={n => setRollRangeMin(n)} style={{ width: 52, height: inputHeight }} noSpinner />
+        </span>
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+          <label style={{ color: '#7a8a9a' }} title="Rolled entries are drawn uniformly from [Min, Max).">Max</label>
+          <NumberField className={styles.numberInput} value={rollRangeMax} step={0.1}
+            onNumber={n => setRollRangeMax(n)} style={{ width: 52, height: inputHeight }} noSpinner />
+        </span>
       </>)}
       <button className={styles.addButton} style={{ padding: '1px 8px' }}
         title={`Seeded random fill of all ${totalEntries.toLocaleString()} entries — P(entry ≠ 0) = density; same seed + density ⇒ the identical table (deterministic). Overwrites the current values.`}
@@ -527,7 +544,7 @@ export function LookupTableEditor({
                 <span style={{ color: '#7a8a9a' }}>{ax.name}</span>
                 <button className={styles.addButton} style={{ padding: '0 5px' }} disabled={cur <= 0}
                   onClick={() => setK(cur - 1)} title="Previous slice">◂</button>
-                <select className={styles.selectInput} style={{ height: inputHeight, fontSize: '0.64rem' }}
+                <select className={styles.selectInput} style={{ height: inputHeight, fontSize: '0.64rem', padding: '0 4px' }}
                   value={cur} onChange={e => setK(Number(e.target.value))}>
                   {ax.labels.map((l, i) => <option key={i} value={i}>{l}</option>)}
                 </select>
