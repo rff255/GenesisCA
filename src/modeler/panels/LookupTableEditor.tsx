@@ -143,6 +143,11 @@ export function LookupTableEditor({
   const [rollSeed, setRollSeed] = useState<number>(attribute.tableRoll?.seed ?? 1);
   const [rollDensity, setRollDensity] = useState<number>(attribute.tableRoll?.density ?? 0.2);
   const [rollMaxInt, setRollMaxInt] = useState<number>(attribute.tableRoll?.max ?? 1); // integer tables: values drawn from 1..max
+  // Float tables: rolled entries drawn uniform in [rangeMin, rangeMax) — the
+  // defaults reproduce the historical (0,1) draw. Signed ranges (−1..1) are the
+  // Particle Life-style attraction/repulsion matrices.
+  const [rollRangeMin, setRollRangeMin] = useState<number>(attribute.tableRoll?.rangeMin ?? 0);
+  const [rollRangeMax, setRollRangeMax] = useState<number>(attribute.tableRoll?.rangeMax ?? 1);
   // Re-seed the Randomize fields from the SAVED roll whenever it changes — a
   // model load, an attribute switch, or an external Apply. Without this the
   // useState initializers only fire at first mount, so a persistent editor
@@ -155,12 +160,16 @@ export function LookupTableEditor({
   const savedSeed = attribute.tableRoll?.seed;
   const savedDensity = attribute.tableRoll?.density;
   const savedMax = attribute.tableRoll?.max;
+  const savedRangeMin = attribute.tableRoll?.rangeMin;
+  const savedRangeMax = attribute.tableRoll?.rangeMax;
   useEffect(() => {
     if (savedSeed !== undefined) setRollSeed(savedSeed);
     if (savedDensity !== undefined) setRollDensity(savedDensity);
     if (savedMax !== undefined) setRollMaxInt(savedMax);
+    if (savedRangeMin !== undefined) setRollRangeMin(savedRangeMin);
+    if (savedRangeMax !== undefined) setRollRangeMax(savedRangeMax);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [attribute.id, savedSeed, savedDensity, savedMax]);
+  }, [attribute.id, savedSeed, savedDensity, savedMax, savedRangeMin, savedRangeMax]);
   const totalEntries = multi
     ? axesResolved!.total
     : rowLabels.length * colLabels.length;
@@ -168,12 +177,18 @@ export function LookupTableEditor({
     const valueCount = valueType === 'tag'
       ? Math.max(1, valueTagOptions.length - 1)
       : valueType === 'integer' ? Math.max(1, Math.floor(rollMaxInt)) : 1;
-    const flat = randomFillTableData(totalEntries, rollSeed, rollDensity, { valueType, valueCount });
-    // `max` is only meaningful for integer-valued tables — store it there so the
-    // 1..max range round-trips with the attribute (.gcaproj) like seed/density.
+    const isFloat = valueType === 'float';
+    const flat = randomFillTableData(totalEntries, rollSeed, rollDensity, isFloat
+      ? { valueType, valueCount, rangeMin: rollRangeMin, rangeMax: rollRangeMax }
+      : { valueType, valueCount });
+    // `max` is only meaningful for integer-valued tables, `rangeMin`/`rangeMax`
+    // for float ones — store the applicable fields so the roll round-trips with
+    // the attribute (.gcaproj) like seed/density.
     const roll = valueType === 'integer'
       ? { seed: rollSeed, density: rollDensity, max: valueCount }
-      : { seed: rollSeed, density: rollDensity };
+      : isFloat
+        ? { seed: rollSeed, density: rollDensity, rangeMin: rollRangeMin, rangeMax: rollRangeMax }
+        : { seed: rollSeed, density: rollDensity };
     if (multi) {
       onChange({ tableData: flat, tableRoll: roll });
       return;
@@ -241,6 +256,14 @@ export function LookupTableEditor({
         <label style={{ color: '#7a8a9a' }} title="Non-zero entries are drawn uniformly from 1..max">Max</label>
         <NumberField className={styles.numberInput} value={rollMaxInt} integer min={1}
           onNumber={n => setRollMaxInt(Math.max(1, Math.floor(n)))} style={{ width: 48, height: inputHeight }} noSpinner />
+      </>)}
+      {valueType === 'float' && (<>
+        <label style={{ color: '#7a8a9a' }} title="Rolled entries are drawn uniformly from [Min, Max). Signed ranges (e.g. −1..1) make attraction/repulsion matrices.">Min</label>
+        <NumberField className={styles.numberInput} value={rollRangeMin} step={0.1}
+          onNumber={n => setRollRangeMin(n)} style={{ width: 52, height: inputHeight }} noSpinner />
+        <label style={{ color: '#7a8a9a' }} title="Rolled entries are drawn uniformly from [Min, Max).">Max</label>
+        <NumberField className={styles.numberInput} value={rollRangeMax} step={0.1}
+          onNumber={n => setRollRangeMax(n)} style={{ width: 52, height: inputHeight }} noSpinner />
       </>)}
       <button className={styles.addButton} style={{ padding: '1px 8px' }}
         title={`Seeded random fill of all ${totalEntries.toLocaleString()} entries — P(entry ≠ 0) = density; same seed + density ⇒ the identical table (deterministic). Overwrites the current values.`}

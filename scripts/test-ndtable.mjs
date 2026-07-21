@@ -59,6 +59,28 @@ console.log('== helpers ==');
   check('randomFill values in 1..2', a.every(v => v === 0 || v === 1 || v === 2));
 }
 {
+  // Float range policy (rangeMin/rangeMax): absent ⇒ BIT-identical to the
+  // historical (0,1) draw; present ⇒ uniform in [lo, hi) incl. signed ranges.
+  const base = M.randomFillTableData(4096, 318, 0.5, { valueType: 'float', valueCount: 1 });
+  const zeroOne = M.randomFillTableData(4096, 318, 0.5, { valueType: 'float', valueCount: 1, rangeMin: 0, rangeMax: 1 });
+  check('randomFill float range 0..1 ≡ legacy draw (bit-identical)', JSON.stringify(base) === JSON.stringify(zeroOne));
+  const signed = M.randomFillTableData(4096, 1, 1, { valueType: 'float', valueCount: 1, rangeMin: -1, rangeMax: 1 });
+  check('randomFill signed range within [−1,1)', signed.every(v => v >= -1 && v < 1));
+  check('randomFill signed range spans both signs', signed.some(v => v < -0.5) && signed.some(v => v > 0.5));
+  const signed2 = M.randomFillTableData(4096, 1, 1, { valueType: 'float', valueCount: 1, rangeMin: -1, rangeMax: 1 });
+  check('randomFill signed range deterministic', JSON.stringify(signed) === JSON.stringify(signed2));
+  const dense = M.randomFillTableData(2048, 7, 1, { valueType: 'float', valueCount: 1, rangeMin: 3, rangeMax: 6 });
+  check('randomFill offset range within [3,6)', dense.every(v => v >= 3 && v < 6));
+  // Density still gates rolls in ranged mode (un-rolled entries stay 0).
+  const sparse = M.randomFillTableData(4096, 12, 0.25, { valueType: 'float', valueCount: 1, rangeMin: -1, rangeMax: 1 });
+  const sd = sparse.filter(v => v !== 0).length / sparse.length;
+  check('randomFill ranged density ≈ 0.25', Math.abs(sd - 0.25) < 0.03, `got ${sd.toFixed(3)}`);
+  // Integer policy ignores the range fields (defensive).
+  const intA = M.randomFillTableData(512, 5, 0.5, { valueType: 'integer', valueCount: 3 });
+  const intB = M.randomFillTableData(512, 5, 0.5, { valueType: 'integer', valueCount: 3, rangeMin: -9, rangeMax: 9 });
+  check('randomFill integer policy unaffected by range fields', JSON.stringify(intA) === JSON.stringify(intB));
+}
+{
   // remapTableDataAxis: 2×3 table, reorder axis 1 as [2,0] (drop old col 1)
   const data = [0, 1, 2, 10, 11, 12]; // dims [2,3]
   const out = M.remapTableDataAxis(data, [2, 3], 1, [2, 0]);

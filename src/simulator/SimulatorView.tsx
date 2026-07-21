@@ -1253,15 +1253,19 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
         if (!attr) return;
         // Value policy mirrors the editor's Randomize: tag → uniform over the
         // non-zero tag options, integer → uniform over 1..tableRoll.max (the
-        // attribute's stored Max), bool → 1, float → uniform(0,1).
+        // attribute's stored Max), bool → 1, float → uniform over the stored
+        // [tableRoll.rangeMin, rangeMax) range (absent ⇒ the historical (0,1)).
         const valueType = attr.valueType ?? 'float';
         const valueCount = valueType === 'tag'
           ? Math.max(1, resolveValueTagOptions(attr, model).length - 1)
           : valueType === 'integer' ? Math.max(1, Math.floor(attr.tableRoll?.max ?? 1))
           : 1;
+        const floatRange = valueType === 'float'
+          ? { rangeMin: attr.tableRoll?.rangeMin, rangeMax: attr.tableRoll?.rangeMax }
+          : {};
         if (isMultiAxisTable(attr)) {
           const r = resolveAxes(attr, model);
-          const data = randomFillTableData(r.total, seed, density, { valueType, valueCount });
+          const data = randomFillTableData(r.total, seed, density, { valueType, valueCount, ...floatRange });
           // Runtime-only (like a slider): post to the worker, do NOT updateAttribute.
           workerRef.current?.postMessage({
             type: 'updateLookupTable', attrId: tableId,
@@ -1270,7 +1274,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
         } else {
           const rowLabels = resolveKeyLabels(attr.rowKeySource, model);
           const colLabels = resolveKeyLabels(attr.colKeySource, model);
-          const flat = randomFillTableData(rowLabels.length * colLabels.length, seed, density, { valueType, valueCount });
+          const flat = randomFillTableData(rowLabels.length * colLabels.length, seed, density, { valueType, valueCount, ...floatRange });
           const values: Record<string, Record<string, number>> = {};
           rowLabels.forEach((rl, i) => {
             const row: Record<string, number> = {};
@@ -7169,7 +7173,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     tableValues: Record<string, Record<string, number>> | undefined,
     symmetric: boolean | undefined,
     tableData?: number[],
-    tableRoll?: { seed: number; density: number; max?: number },
+    tableRoll?: { seed: number; density: number; max?: number; rangeMin?: number; rangeMax?: number },
   ) => {
     const changes: Partial<Attribute> = {};
     if (tableValues !== undefined) changes.tableValues = tableValues;
