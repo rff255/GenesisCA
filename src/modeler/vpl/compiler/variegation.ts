@@ -152,10 +152,20 @@ export function resolveValueTagOptions(
   model: CAModel,
 ): string[] {
   if (attr.valueTagAttributeId) {
-    const src = model.attributes.find(a => a.id === attr.valueTagAttributeId);
+    const src = findTagAttrById(model, attr.valueTagAttributeId);
     return src?.tagOptions ? [...src.tagOptions] : [];
   }
   return attr.valueTagOptions ? [...attr.valueTagOptions] : [];
+}
+
+/** Resolve a tag attribute referenced by a Lookup Table axis / value-tag source:
+ *  cell + model attributes first, then AGENT attributes (a species-keyed
+ *  Particle Life-style matrix binds the agent tag directly). Ids are globally
+ *  unique in practice (`generateId`); the cell/model array wins on a
+ *  hypothetical collision, preserving the historical resolution. */
+function findTagAttrById(model: CAModel, id: string) {
+  return model.attributes.find(a => a.id === id)
+    ?? model.agentAttributes?.find(a => a.id === id);
 }
 
 /** Resolve a Lookup Table axis key source to its ordered label list — the
@@ -185,7 +195,7 @@ export function resolveKeyLabels(
     const pal = model.variegatedCells?.facePalettes.find(p => p.id === source.paletteId);
     return pal ? ['none', ...pal.labels] : [];
   }
-  const attr = model.attributes.find(a => a.id === source.attributeId);
+  const attr = findTagAttrById(model, source.attributeId);
   return attr?.tagOptions ? [...attr.tagOptions] : [];
 }
 

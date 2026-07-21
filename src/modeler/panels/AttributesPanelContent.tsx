@@ -65,6 +65,10 @@ function KeySourceField({ label, value, model, onChange }: {
 }) {
   const palettes = model.variegatedCells?.enabled ? (model.variegatedCells.facePalettes ?? []) : [];
   const tagAttrs = model.attributes.filter(a => a.type === 'tag');
+  // Agent tag attributes are first-class axis sources too (a species-keyed
+  // Particle Life-style matrix binds the agent tag directly) — resolveKeyLabels
+  // searches model.attributes then agentAttributes.
+  const agentTagAttrs = model.topologyMode?.agents ? (model.agentAttributes ?? []).filter(a => a.type === 'tag') : [];
   const current = value
     ? value.kind === 'facePalette' ? `palette:${value.paletteId}`
       : value.kind === 'tagAttribute' ? `tag:${value.attributeId}`
@@ -107,6 +111,11 @@ function KeySourceField({ label, value, model, onChange }: {
         <optgroup label="Tag attributes">
           {tagAttrs.map(a => <option key={a.id} value={`tag:${a.id}`}>{a.name}</option>)}
         </optgroup>
+        {agentTagAttrs.length > 0 && (
+          <optgroup label="Agent tag attributes">
+            {agentTagAttrs.map(a => <option key={a.id} value={`tag:${a.id}`}>{a.name}</option>)}
+          </optgroup>
+        )}
       </select>
       {intRange && (
         <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginTop: 2 }}>
@@ -619,6 +628,13 @@ export function AttributesPanelContent({ mode = 'list' }: PanelContentProps = {}
                           <option key={a.id} value={`tag:${a.id}`}>{a.name}</option>
                         ))}
                       </optgroup>
+                      {model.topologyMode?.agents && (model.agentAttributes ?? []).some(a => a.type === 'tag') && (
+                        <optgroup label="From agent tag attribute">
+                          {(model.agentAttributes ?? []).filter(a => a.type === 'tag').map(a => (
+                            <option key={a.id} value={`tag:${a.id}`}>{a.name}</option>
+                          ))}
+                        </optgroup>
+                      )}
                     </select>
                   </div>
                 )}
