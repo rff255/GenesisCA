@@ -133,13 +133,17 @@ function AboutOverlay({ model }: { model: CAModel }) {
           title="About this model"
           style={{
             position: 'absolute', top: 12, left: 40, zIndex: 46,
-            width: 30, height: 30, borderRadius: '50%', cursor: 'pointer',
+            height: 30, borderRadius: 15, padding: '0 12px 0 9px', cursor: 'pointer',
             background: 'var(--color-accent, #e8a13a)', color: '#16181d',
-            border: 'none', fontSize: 17, fontWeight: 700, lineHeight: 1,
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            border: 'none', fontWeight: 700, lineHeight: 1,
+            display: 'flex', alignItems: 'center', gap: 5,
             boxShadow: '0 4px 14px #0009',
+            fontFamily: 'inherit',
           }}
-        >ⓘ</button>
+        >
+          <span style={{ fontSize: 17, lineHeight: 1 }}>ⓘ</span>
+          <span style={{ fontSize: 13, lineHeight: 1 }}>Info</span>
+        </button>
       )}
 
       {open && (
@@ -205,7 +209,7 @@ function AboutOverlay({ model }: { model: CAModel }) {
               <div style={{ color: 'var(--color-text-muted, #b7bcc6)', lineHeight: 1.55 }}>
                 Use the transport bar to <b style={{ color: 'var(--color-text, #d8dae0)' }}>play / pause / step / reset</b>,
                 the left panel to tune parameters, and paint on the grid to edit cells. Reopen this window any time with
-                the <b style={{ color: 'var(--color-accent, #e8a13a)' }}>ⓘ</b> button.
+                the <b style={{ color: 'var(--color-accent, #e8a13a)' }}>ⓘ Info</b> button.
               </div>
             </Section>
 
