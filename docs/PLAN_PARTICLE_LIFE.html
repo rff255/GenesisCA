@@ -1,0 +1,195 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Particle Life — illustrated plan</title>
+<style>
+  body { background:#0c0d10; color:#cfd6df; font:14px/1.5 "Segoe UI",system-ui,sans-serif; margin:0; padding:28px 36px; }
+  h1 { color:#e8a13a; font-size:1.4rem; margin:0 0 4px; }
+  h2 { color:#e8a13a; font-size:1.05rem; margin:34px 0 8px; border-bottom:1px solid #2a3548; padding-bottom:4px; }
+  .sub { color:#7a8a9a; margin-bottom:18px; }
+  .row { display:flex; gap:26px; flex-wrap:wrap; align-items:flex-start; }
+  .card { background:#12151b; border:1px solid #2a3548; border-radius:8px; padding:14px 16px; }
+  .cap { color:#7a8a9a; font-size:0.78rem; margin-top:8px; max-width:420px; }
+  .tag { display:inline-block; background:#1d2634; color:#e8a13a; border-radius:4px; padding:1px 7px; font-size:0.72rem; margin-right:6px; }
+  table.mx { border-collapse:collapse; }
+  table.mx td { width:34px; height:34px; border:1px solid #0c0d10; text-align:center; font-size:0.65rem; cursor:ew-resize; }
+  table.mx th { width:34px; height:34px; }
+  .sw { width:22px; height:22px; border-radius:50%; display:inline-block; }
+  .slider { margin-top:10px; display:flex; align-items:center; gap:10px; }
+  .slider .track { flex:1; height:6px; background:linear-gradient(90deg,#d62839,#090d16 50%,#06b6d4); border-radius:3px; position:relative; }
+  .slider .thumb { position:absolute; top:-5px; left:68%; width:16px; height:16px; border-radius:50%; background:#e8a13a; }
+  .pill { background:#1d2634; border:1px solid #2a3548; border-radius:5px; padding:2px 9px; font-size:0.72rem; color:#cfd6df; margin-right:5px; display:inline-block; }
+  .pill.on { border-color:#e8a13a; color:#e8a13a; }
+  code { background:#1d2634; padding:1px 5px; border-radius:3px; font-size:0.8rem; }
+  .phase { display:grid; grid-template-columns:110px 1fr 260px; gap:8px 14px; font-size:0.82rem; }
+  .phase > div { padding:6px 0; border-bottom:1px solid #1d2634; }
+  .phase .p { color:#e8a13a; font-weight:600; }
+  .phase .v { color:#7a8a9a; font-size:0.75rem; }
+</style>
+</head>
+<body>
+<h1>Particle Life on GenesisCA — illustrated plan</h1>
+<div class="sub">Companion to <code>PLAN_PARTICLE_LIFE.md</code> · faithful to the Sandbox Science force law + three-matrix model · 2D and 3D samples</div>
+
+<h2>1 · The force law (per neighbour pair, from their WGSL)</h2>
+<div class="row">
+  <div class="card">
+    <svg width="460" height="230" viewBox="0 0 460 230">
+      <line x1="40" y1="115" x2="440" y2="115" stroke="#3a4658" stroke-width="1"/>
+      <line x1="40" y1="20" x2="40" y2="210" stroke="#3a4658" stroke-width="1"/>
+      <text x="446" y="119" fill="#7a8a9a" font-size="11">d</text>
+      <text x="18" y="26" fill="#7a8a9a" font-size="11">F</text>
+      <!-- repulsion core: line from (40, 210) rising to (150,115) -->
+      <path d="M 40 195 L 150 115" stroke="#d62839" stroke-width="2.5" fill="none"/>
+      <!-- tent (rule>0): up from (150,115) to (255,55) down to (360,115) -->
+      <path d="M 150 115 L 255 55 L 360 115" stroke="#06b6d4" stroke-width="2.5" fill="none"/>
+      <!-- tent (rule<0) dashed -->
+      <path d="M 150 115 L 255 170 L 360 115" stroke="#d62839" stroke-width="1.5" stroke-dasharray="4 4" fill="none"/>
+      <line x1="150" y1="110" x2="150" y2="120" stroke="#7a8a9a"/>
+      <line x1="255" y1="110" x2="255" y2="120" stroke="#7a8a9a"/>
+      <line x1="360" y1="110" x2="360" y2="120" stroke="#7a8a9a"/>
+      <text x="140" y="135" fill="#cfd6df" font-size="11">minR</text>
+      <text x="243" y="135" fill="#cfd6df" font-size="11">mid</text>
+      <text x="350" y="135" fill="#cfd6df" font-size="11">maxR</text>
+      <text x="60" y="185" fill="#d62839" font-size="11">repel·(d/minR−1)</text>
+      <text x="235" y="45" fill="#06b6d4" font-size="11">rule&gt;0 (attract)</text>
+      <text x="235" y="188" fill="#d62839" font-size="11">rule&lt;0 (repel)</text>
+    </svg>
+    <div class="cap"><b>minR</b>, <b>maxR</b>, <b>rule</b> are all PER-PAIR — three K×K
+      lookup tables keyed <code>species × species</code> (asymmetric). Below minR the force is
+      always repulsive; between minR and maxR it is a tent peaking at the midpoint with
+      height <code>rule ∈ [−1,1]</code>.</div>
+  </div>
+  <div class="card">
+    <b style="color:#cfd6df">Graph skeleton (Behaviour Step)</b>
+    <svg width="430" height="240" viewBox="0 0 430 240" style="margin-top:8px">
+      <defs><marker id="ar" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto"><path d="M0,0 L7,3.5 L0,7 z" fill="#66bb6a"/></marker></defs>
+      <g font-size="10.5" fill="#cfd6df">
+        <rect x="8" y="8" width="106" height="26" rx="4" fill="#fff"/><text x="14" y="25" fill="#1e2a3a">Behaviour Step</text>
+        <rect x="8" y="52" width="150" height="26" rx="4" fill="#1d2634" stroke="#2a3548"/><text x="14" y="69">friction: v·f → Set Velocity</text>
+        <rect x="8" y="96" width="168" height="26" rx="4" fill="#1d2634" stroke="#2a3548"/><text x="14" y="113">Get Nearby Agents(queryR)</text>
+        <rect x="8" y="140" width="120" height="26" rx="4" fill="#1d2634" stroke="#2a3548"/><text x="14" y="157">For Each In Array</text>
+        <rect x="200" y="96" width="200" height="26" rx="4" fill="#1d2634" stroke="#2a3548"/><text x="206" y="113">Get Agent Offset → dx dy dist</text>
+        <rect x="200" y="132" width="220" height="26" rx="4" fill="#1d2634" stroke="#2a3548"/><text x="206" y="149">3× Table Lookup(my, their)</text>
+        <rect x="200" y="168" width="220" height="26" rx="4" fill="#1d2634" stroke="#2a3548"/><text x="206" y="185">Compare + valueSwitch + Expr tent</text>
+        <rect x="200" y="204" width="130" height="26" rx="4" fill="#1d2634" stroke="#2a3548"/><text x="206" y="221">Apply Force fx fy [fz]</text>
+        <path d="M60 34 L60 52" stroke="#66bb6a" stroke-width="1.5" marker-end="url(#ar)"/>
+        <path d="M60 78 L60 96" stroke="#66bb6a" stroke-width="1.5" marker-end="url(#ar)"/>
+        <path d="M60 122 L60 140" stroke="#66bb6a" stroke-width="1.5" marker-end="url(#ar)"/>
+        <path d="M128 153 L200 109" stroke="#4cc9f0" stroke-width="1.2" marker-end="url(#ar)"/>
+        <path d="M300 122 L300 132" stroke="#4cc9f0" stroke-width="1.2"/>
+        <path d="M300 158 L300 168" stroke="#4cc9f0" stroke-width="1.2"/>
+        <path d="M300 194 L300 204" stroke="#4cc9f0" stroke-width="1.2"/>
+      </g>
+    </svg>
+    <div class="cap">Friction runs in-graph (<code>f</code> is a bounded model attribute → a live
+      simulator slider); the engine integrates with <code>momentum = 1.0</code>. Spawn = Agent Init →
+      Loop(Count ← model attr <code>N</code>) → Create Agent(rand·W, rand·H) → Set species(rand 0..K−1) → Add To World.</div>
+  </div>
+</div>
+
+<h2>2 · Matrix-play widget (Phase 5 — LookupTableEditor "Matrix" view)</h2>
+<div class="row">
+  <div class="card">
+    <div style="margin-bottom:8px">
+      <span class="pill on">▦ Matrix</span><span class="pill"># Values</span>
+      <span class="pill" style="float:right">Symmetric ☐</span>
+    </div>
+    <table class="mx">
+      <tr><th></th>
+        <th><span class="sw" style="background:#e35555"></span></th>
+        <th><span class="sw" style="background:#5fbf5f"></span></th>
+        <th><span class="sw" style="background:#5b8ee6"></span></th>
+        <th><span class="sw" style="background:#e0c94f"></span></th>
+        <th><span class="sw" style="background:#a86fd6"></span></th>
+      </tr>
+      <tr><th><span class="sw" style="background:#e35555"></span></th>
+        <td style="background:#06b6d4"></td><td style="background:#0b3f4a"></td><td style="background:#7a1f28"></td><td style="background:#090d16"></td><td style="background:#0a6b80"></td></tr>
+      <tr><th><span class="sw" style="background:#5fbf5f"></span></th>
+        <td style="background:#4d1219"></td><td style="background:#08849b"></td><td style="background:#090d16"></td><td style="background:#d62839"></td><td style="background:#0b2f38"></td></tr>
+      <tr><th><span class="sw" style="background:#5b8ee6"></span></th>
+        <td style="background:#0a5b6d;box-shadow:inset 0 0 0 2px #cfd6df" title="0.42"></td><td style="background:#090d16"></td><td style="background:#06b6d4"></td><td style="background:#96222e"></td><td style="background:#090d16"></td></tr>
+      <tr><th><span class="sw" style="background:#e0c94f"></span></th>
+        <td style="background:#090d16"></td><td style="background:#0a4753"></td><td style="background:#631a22"></td><td style="background:#099eb9"></td><td style="background:#2f0d12"></td></tr>
+      <tr><th><span class="sw" style="background:#a86fd6"></span></th>
+        <td style="background:#d62839"></td><td style="background:#090d16"></td><td style="background:#0b7f96"></td><td style="background:#090d16"></td><td style="background:#06b6d4"></td></tr>
+    </table>
+    <div class="slider"><span style="font-size:0.72rem;color:#7a8a9a">−1</span><div class="track"><div class="thumb"></div></div><span style="font-size:0.72rem;color:#7a8a9a">+1</span><span class="pill">0.42</span></div>
+    <div class="cap">Cells colored by a diverging scale (red = repel, cyan = attract, |value| =
+      saturation, dark ≈ 0). <b>Drag horizontally on a cell</b> to adjust; click selects
+      (outlined), Ctrl+click multi-selects; the slider edits the selection — or ALL cells
+      when nothing is selected. Hover shows the value. Row/col headers are the species
+      palette from the linked agent view.</div>
+  </div>
+  <div class="card">
+    <b style="color:#cfd6df">Randomize + generators (Phases 2 + 5)</b>
+    <div style="margin-top:10px; font-size:0.78rem; display:flex; flex-wrap:wrap; gap:6px; align-items:center; max-width:380px">
+      <span style="color:#7a8a9a">Randomize</span>
+      <span class="pill">Seed 318</span><span class="pill">🎲</span>
+      <span class="pill">Density 1.0</span>
+      <span class="pill" style="border-color:#e8a13a">Min −1</span>
+      <span class="pill" style="border-color:#e8a13a">Max 1</span>
+      <span class="pill on">Apply</span>
+    </div>
+    <div style="margin-top:12px; font-size:0.78rem; display:flex; flex-wrap:wrap; gap:6px; align-items:center; max-width:380px">
+      <span style="color:#7a8a9a">Fill pattern</span>
+      <span class="pill">Snake ▾</span><span class="pill on">Fill</span>
+      <span style="color:#3a4658">|</span>
+      <span class="pill">Zero</span><span class="pill">Symmetrize</span>
+      <span class="pill">Transpose</span><span class="pill">Negate</span><span class="pill">Mutate</span>
+    </div>
+    <div class="cap"><b>Phase 2</b> adds the amber Min/Max range to the seeded fill (floats were
+      [0,1) sparse-only — Particle Life needs dense uniform [−1,1)). <b>Phase 5</b> adds the
+      named generators ported from their <code>rulesGenerator.ts</code>: Uniform, Symmetric, Snake,
+      Chains A/B/C, Rock-Paper-Scissors, Bipartite, Hub &amp; Spokes, Shells + quick actions.
+      Everything seeded → reproducible → journaled by the Overseer's Randomize Table.</div>
+  </div>
+</div>
+
+<h2>3 · Simulator layout (the play surface)</h2>
+<div class="row">
+  <div class="card">
+    <svg width="560" height="250" viewBox="0 0 560 250">
+      <rect x="0" y="0" width="560" height="250" rx="6" fill="#0c0d10" stroke="#2a3548"/>
+      <rect x="8" y="8" width="150" height="234" rx="4" fill="#12151b" stroke="#2a3548"/>
+      <text x="16" y="26" fill="#e8a13a" font-size="11" font-weight="600">Left panel</text>
+      <text x="16" y="44" fill="#cfd6df" font-size="10">Model Attributes</text>
+      <text x="22" y="60" fill="#7a8a9a" font-size="9.5">N ────────●── 1800</text>
+      <text x="22" y="74" fill="#7a8a9a" font-size="9.5">forceFactor ──●─ 0.15</text>
+      <text x="22" y="88" fill="#7a8a9a" font-size="9.5">repel ────●──── 1.0</text>
+      <text x="22" y="102" fill="#7a8a9a" font-size="9.5">friction ──────● 0.85</text>
+      <text x="22" y="116" fill="#7a8a9a" font-size="9.5">queryRadius ──●─ 16</text>
+      <text x="16" y="138" fill="#cfd6df" font-size="10">rules ▦ (matrix widget)</text>
+      <text x="16" y="152" fill="#cfd6df" font-size="10">attractMin ▦</text>
+      <text x="16" y="166" fill="#cfd6df" font-size="10">attractMax ▦</text>
+      <text x="16" y="188" fill="#7a8a9a" font-size="9">live edits → updateLookupTable</text>
+      <text x="16" y="200" fill="#7a8a9a" font-size="9">(no pause, no reinit)</text>
+      <!-- canvas dots -->
+      <g>
+        <circle cx="260" cy="80" r="3" fill="#e35555"/><circle cx="268" cy="88" r="3" fill="#e35555"/><circle cx="252" cy="90" r="3" fill="#e35555"/><circle cx="262" cy="97" r="3" fill="#e35555"/>
+        <circle cx="330" cy="150" r="3" fill="#5fbf5f"/><circle cx="340" cy="146" r="3" fill="#5fbf5f"/><circle cx="336" cy="158" r="3" fill="#5fbf5f"/>
+        <circle cx="334" cy="152" r="3" fill="#e0c94f"/><circle cx="344" cy="154" r="3" fill="#e0c94f"/>
+        <circle cx="420" cy="70" r="3" fill="#5b8ee6"/><circle cx="428" cy="76" r="3" fill="#5b8ee6"/><circle cx="414" cy="78" r="3" fill="#5b8ee6"/><circle cx="422" cy="84" r="3" fill="#5b8ee6"/><circle cx="430" cy="86" r="3" fill="#a86fd6"/>
+        <circle cx="470" cy="180" r="3" fill="#a86fd6"/><circle cx="478" cy="174" r="3" fill="#a86fd6"/><circle cx="474" cy="186" r="3" fill="#e35555"/>
+      </g>
+      <text x="230" y="230" fill="#7a8a9a" font-size="9.5">agents-only canvas · torus · presets = named matrices (snake / RPS / random seeds)</text>
+    </svg>
+    <div class="cap">2D sample: 1800 particles, 6 species, WASM agent target. 3D sample (Phase 6):
+      the same recipe in a 160×110×70 volume, sphere impostors, z-aware offsets/forces.</div>
+  </div>
+  <div class="card">
+    <b style="color:#cfd6df">Phases → verification gates</b>
+    <div class="phase" style="margin-top:10px">
+      <div class="p">Phase 2</div><div>Signed/ranged seeded fill (Min/Max on tableRoll + Randomize UI + Overseer policy)</div><div class="v">test-ndtable · identity green</div>
+      <div class="p">Phase 3</div><div>Axes + value-tag resolvers search agentAttributes; KeySourceField optgroup; agent-side cascades</div><div class="v">identity green · synthetic resolve/compile</div>
+      <div class="p">Phase 4</div><div>2D sample gen script (3 tables, force law, sliders, presets)</div><div class="v">JS/WASM parity · WebGPU compile · browser run</div>
+      <div class="p">Phase 5</div><div>Matrix-play widget + generators + quick actions</div><div class="v">identity green · browser drive</div>
+      <div class="p">Phase 6</div><div>3D sample</div><div class="v">parity · 3D shader · browser run</div>
+      <div class="p">Phase 7</div><div>Docs (CLAUDE.md/README/Help) + final sweep</div><div class="v">tsc · build · all harnesses</div>
+      <div class="p">Phase 8</div><div>(stretch) 2D point-splat render fast path</div><div class="v">visual parity · perf measure</div>
+    </div>
+  </div>
+</div>
+</body>
+</html>
