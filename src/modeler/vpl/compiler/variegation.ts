@@ -347,6 +347,12 @@ export interface TableFillPolicy {
   /** integer/tag: the count of distinct NON-ZERO values (entries drawn
    *  uniformly from 1..valueCount). tag ⇒ tagOptions.length − 1. */
   valueCount: number;
+  /** float only: rolled entries are drawn uniform in [rangeMin, rangeMax)
+   *  instead of the historical (0,1). Either absent ⇒ the exact old draw
+   *  (byte-identical — one `next()` per rolled entry either way). Signed
+   *  ranges (e.g. −1..1, the Particle Life rules matrix) are the point. */
+  rangeMin?: number;
+  rangeMax?: number;
 }
 
 /** Deterministic seeded random table fill — THE one implementation shared by
@@ -372,11 +378,17 @@ export function randomFillTableData(
   const d = Math.min(1, Math.max(0, density));
   const vt = policy.valueType || 'float';
   const count = Math.max(1, Math.floor(policy.valueCount) || 1);
+  // Float range (rangeMin/rangeMax): map the single per-entry value draw onto
+  // [lo, hi). Both absent ⇒ lo 0 / span 1 ⇒ `u*1+0 === u` — bit-identical to
+  // the historical bare `next()` draw, so old rolls reproduce exactly.
+  const lo = Number.isFinite(policy.rangeMin as number) ? (policy.rangeMin as number) : 0;
+  const hiRaw = Number.isFinite(policy.rangeMax as number) ? (policy.rangeMax as number) : lo + 1;
+  const span = hiRaw - lo; // may be negative/zero on a hand-edited policy; degenerate spans just collapse toward lo
   const out = new Array<number>(Math.max(0, total | 0));
   for (let i = 0; i < out.length; i++) {
     if (next() < d) {
       if (vt === 'bool') { next(); out[i] = 1; }
-      else if (vt === 'float') out[i] = next();
+      else if (vt === 'float') out[i] = next() * span + lo;
       else out[i] = 1 + Math.floor(next() * count);
     } else out[i] = 0;
   }
