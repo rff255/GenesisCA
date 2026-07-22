@@ -1846,16 +1846,24 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   // (Decision D-TARGET). PR-A2 returns a placeholder (agents seed + render but
   // don't behave); PR-A3 wires the real compileAgentGraph over
   // model.agentGraphNodes (the behaviourStep loop + value-outs + force hooks).
-  const compileAgentModel = useCallback((stopIdxBase = 0): { behaviourCode?: string; initCode?: string; divisionCode?: string; outputMappingCodes?: Array<{ mappingId: string; code: string }>; stopMessages: string[]; colorViewer: string; error?: string; agentTarget: 'js' | 'wasm' | 'webgpu'; agentWasmBytes?: Uint8Array; agentWasmViewerGuardIds?: string[]; agentLayoutExtras?: AgentLayoutExtras; agentWebgpuBehaviourShader?: string; agentWebgpuForceShader?: string; agentWebgpuMaxAgents?: number; agentWebgpuMaxHashBins?: number; agentWebgpuLayout?: AgentWebGPULayout; agentWebgpuUsesI32Write?: boolean; agentWebgpuUsage?: { usesBondStore?: boolean; usesIndicators?: boolean; usesAux?: boolean; usesSpawn?: boolean; usesStop?: boolean; usesForceScatter?: boolean } } => {
-    if (!model.topologyMode?.agents) return { colorViewer: '', agentTarget: 'js', stopMessages: [] };
+  const compileAgentModel = useCallback((stopIdxBase = 0, dimsModel?: CAModel): { behaviourCode?: string; initCode?: string; divisionCode?: string; outputMappingCodes?: Array<{ mappingId: string; code: string }>; stopMessages: string[]; colorViewer: string; error?: string; agentTarget: 'js' | 'wasm' | 'webgpu'; agentWasmBytes?: Uint8Array; agentWasmViewerGuardIds?: string[]; agentLayoutExtras?: AgentLayoutExtras; agentWasmLayoutSig?: { maxHashBins: number; totalBytes: number }; agentWebgpuBehaviourShader?: string; agentWebgpuForceShader?: string; agentWebgpuMaxAgents?: number; agentWebgpuMaxHashBins?: number; agentWebgpuLayout?: AgentWebGPULayout; agentWebgpuUsesI32Write?: boolean; agentWebgpuUsage?: { usesBondStore?: boolean; usesIndicators?: boolean; usesAux?: boolean; usesSpawn?: boolean; usesStop?: boolean; usesForceScatter?: boolean } } => {
+    // A simulator Resize / image-import overrides the live grid dims WITHOUT
+    // touching model state, and the agent WASM/WebGPU compilers bake dims-derived
+    // layout regions (the spatial-hash reserve, fieldTotal). Compiling from the
+    // raw model desyncs those baked layouts from the live worker dims — the
+    // WebGPU "spatial hash exceeds the reserve → runs on JS" demotion after a
+    // resize, and (worse) a WASM store↔module offset mismatch. So the caller
+    // passes the SAME dims-overridden model the grid compilers get.
+    const m = dimsModel ?? model;
+    if (!m.topologyMode?.agents) return { colorViewer: '', agentTarget: 'js', stopMessages: [] };
     // The default AGENT viewer = the first agent A→C mapping (drives the agent
     // colour pass). Empty when the model has no agent mappings (agents are then
     // coloured by the behaviour's Set Cell Looks).
-    const firstAgentViewer = (model.agentMappings ?? []).find(mp => mp.isAttributeToColor);
+    const firstAgentViewer = (m.agentMappings ?? []).find(mp => mp.isAttributeToColor);
     const colorViewer = firstAgentViewer?.id ?? '';
     // FIX 4: offset the agent stop indices by the cell graph's stop count so the
     // shared worker stopMessages array `[...cell, ...agent]` aligns 1-based.
-    const ag = compileAgentGraph(model.agentGraphNodes || [], model.agentGraphEdges || [], model, stopIdxBase);
+    const ag = compileAgentGraph(m.agentGraphNodes || [], m.agentGraphEdges || [], m, stopIdxBase);
     if (ag.error) {
       // Surface alongside the cells compile error (Show Code / status). A bare
       // behaviourStep with no flow is fine (empty behaviourCode, no error).
@@ -1868,7 +1876,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     // model) and ship the bytes to the worker — mirroring how lattice
     // `wasmStepBytes` are sent. The JS behaviourCode is ALWAYS sent too (the
     // worker keeps it as the fallback + for Show Code).
-    let agentTarget = agentTargetOf(model.centerBased, isAgentGraphWasmSupported(model), isAgentGraphWebGPUSupported(model));
+    let agentTarget = agentTargetOf(m.centerBased, isAgentGraphWasmSupported(m), isAgentGraphWebGPUSupported(m));
     let agentWasmBytes: Uint8Array | undefined;
     let agentWebgpuBehaviourShader: string | undefined;
     let agentWebgpuForceShader: string | undefined;
@@ -1879,9 +1887,10 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     let agentWebgpuUsage: { usesBondStore?: boolean; usesIndicators?: boolean; usesAux?: boolean; usesSpawn?: boolean; usesStop?: boolean; usesForceScatter?: boolean } | undefined;
     let agentLayoutExtras: AgentLayoutExtras | undefined;
     let agentWasmViewerGuardIds: string[] | undefined;
+    let agentWasmLayoutSig: { maxHashBins: number; totalBytes: number } | undefined;
     if (agentTarget === 'wasm') {
       try {
-        const r = compileAgentGraphWasmForModel(model);
+        const r = compileAgentGraphWasmForModel(m);
         if (r.error || r.bytes.length === 0) {
           // eslint-disable-next-line no-console
           console.warn('[agents] WASM compile fell back to JS:', r.error);
@@ -1893,7 +1902,13 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
           // / cell fields / array scratch) — the worker builds the SAME-offset store
           // layout with these (the baked-offset lockstep) + copies the external
           // regions in/out around the WASM call.
-          agentLayoutExtras = { ...buildAgentLayoutExtras(model), syncAttrs: model.centerBased?.agentUpdateMode === 'sync' };
+          agentLayoutExtras = { ...buildAgentLayoutExtras(m), syncAttrs: m.centerBased?.agentUpdateMode === 'sync' };
+          // Layout-lockstep signature: the worker asserts its store layout matches
+          // the module's baked layout BEFORE instantiating. A mismatch (any future
+          // dims/extras desync) would put the hash / scratch / lookup-table / field
+          // regions at DIFFERENT offsets in the store vs the module — silent
+          // wrong-offset reads/writes, the baked-offset corruption class.
+          agentWasmLayoutSig = { maxHashBins: r.layout.maxHashBins, totalBytes: r.layout.totalBytes };
         }
       } catch (e) {
         // eslint-disable-next-line no-console
@@ -1908,7 +1923,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       // behaviourCode above stays as the fallback (any device/compile failure
       // demotes to JS in the worker).
       try {
-        const r = compileAgentGraphWebGPUForModel(model);
+        const r = compileAgentGraphWebGPUForModel(m);
         if (r.error || !r.shaderCode) {
           // eslint-disable-next-line no-console
           console.warn('[agents] WebGPU compile fell back to JS:', r.error);
@@ -1934,7 +1949,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
         agentTarget = 'js';
       }
     }
-    return { behaviourCode: ag.behaviourCode || undefined, initCode: ag.initCode || undefined, divisionCode: ag.divisionCode || undefined, outputMappingCodes: ag.outputMappingCodes && ag.outputMappingCodes.length ? ag.outputMappingCodes : undefined, stopMessages: ag.stopMessages, colorViewer, error: ag.error || undefined, agentTarget, agentWasmBytes, agentWasmViewerGuardIds, agentLayoutExtras, agentWebgpuBehaviourShader, agentWebgpuForceShader, agentWebgpuMaxAgents, agentWebgpuMaxHashBins, agentWebgpuLayout, agentWebgpuUsesI32Write, agentWebgpuUsage };
+    return { behaviourCode: ag.behaviourCode || undefined, initCode: ag.initCode || undefined, divisionCode: ag.divisionCode || undefined, outputMappingCodes: ag.outputMappingCodes && ag.outputMappingCodes.length ? ag.outputMappingCodes : undefined, stopMessages: ag.stopMessages, colorViewer, error: ag.error || undefined, agentTarget, agentWasmBytes, agentWasmViewerGuardIds, agentLayoutExtras, agentWasmLayoutSig, agentWebgpuBehaviourShader, agentWebgpuForceShader, agentWebgpuMaxAgents, agentWebgpuMaxHashBins, agentWebgpuLayout, agentWebgpuUsesI32Write, agentWebgpuUsage };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [model.agentGraphNodes, model.agentGraphEdges, model.topologyMode?.agents, model.attributes, model.agentAttributes, model.mappings, model.centerBased]);
 
@@ -3524,9 +3539,6 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     inspectOrientationsRef.current.clear();
     srcCanvasRef.current = null;
     const result = compileModel();
-    // Generic Agent Platform: compile the agent rule graph. Offset the agent stop
-    // indices by the cell graph's stop-message count (shared _stopFlag + messages).
-    const agentResult = compileAgentModel(result.stopMessages.length);
     const firstViewer = model.mappings.find(m => m.isAttributeToColor);
     const viewer = firstViewer?.id ?? '';
     setActiveViewer(viewer);
@@ -3537,12 +3549,6 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     setBrushMapping(firstInput?.id ?? MANUAL_BRUSH_MAPPING_ID);
     // Suppress the cell "No nodes / No Step" error for an agents-only model (no grid).
     if (result.error && model.topologyMode?.gridCells !== false) setCompileError(result.error);
-    // Surface the AGENT graph's compile error too (it was console.warn-only —
-    // "agents never move and nothing says why" was the observable symptom, e.g.
-    // "No Behaviour Step node in the agent graph.").
-    if (agentResult.error) {
-      setCompileError(prev => (prev ? `${prev}\n[agents] ${agentResult.error}` : `[agents] ${agentResult.error}`));
-    }
 
     // Only reset pan/zoom when the grid dimensions actually change. This
     // function ALSO fires on structural reinit at the same dims (e.g. the
@@ -3620,6 +3626,21 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     // <int>`; without this map populated, the upload defaults to -1, no guards
     // fire, and no-OM viewers (e.g. MNCA's "Case Colored") never write colors.
     const viewerIds = buildViewerIds(dimsModel);
+    // Generic Agent Platform: compile the agent rule graph — AFTER dimsModel is
+    // built, and FROM dimsModel, so a simulator Resize reaches the agent
+    // compilers too. The agent WASM/WebGPU layouts bake dims-derived regions
+    // (the spatial-hash reserve, fieldTotal); compiling from the raw model
+    // desynced them from the live worker dims — the WebGPU "spatial hash
+    // exceeds the reserve → runs on JS" demotion after a resize, and a WASM
+    // store↔module offset mismatch. Offset the agent stop indices by the cell
+    // graph's stop-message count (shared _stopFlag + messages).
+    const agentResult = compileAgentModel(result.stopMessages.length, dimsModel);
+    // Surface the AGENT graph's compile error too (it was console.warn-only —
+    // "agents never move and nothing says why" was the observable symptom, e.g.
+    // "No Behaviour Step node in the agent graph.").
+    if (agentResult.error) {
+      setCompileError(prev => (prev ? `${prev}\n[agents] ${agentResult.error}` : `[agents] ${agentResult.error}`));
+    }
     // Wave 2: compile WASM only when the user has selected the WASM target.
     // Mirrors the WebGPU gating below — saves a compile pass per model change
     // when WASM isn't active, and avoids surfacing WASM-only errors when the
@@ -3801,6 +3822,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       agentWasmBytes: agentResult.agentWasmBytes,
       agentWasmViewerGuardIds: agentResult.agentWasmViewerGuardIds,
       agentLayoutExtras: agentResult.agentLayoutExtras,
+      agentWasmLayoutSig: agentResult.agentWasmLayoutSig,
       // PR7 G3-runtime: when the agent target resolves to 'webgpu', ship the two
       // compiled WGSL shaders + the GPU agent layout dims. The worker builds a
       // dedicated agent WebGPU runtime (its own device) + dispatches both passes
@@ -4116,7 +4138,11 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       // field CPU↔GPU per generation. See the init-path comment for rationale.
       const result = compileGraph(dimsModel.graphNodes, dimsModel.graphEdges, dimsModel);
       // Bond-Graph Agents: recompile the agent graph too (graph-only edit path).
-      const agentResult = compileAgentModel(result.stopMessages.length);
+      // dimsModel carries the LIVE dims (a resize sets gridWidth/Height/Depth
+      // refs without touching model state) — the agent WASM/WebGPU layouts bake
+      // dims-derived regions, so they must see the same override the grid
+      // compilers get (the resize hash-reserve/offset-desync fix).
+      const agentResult = compileAgentModel(result.stopMessages.length, dimsModel);
       // Show Code follows the selected target — same dispatch as compileModel().
       // Agents-only model → suppress the expected cell "No nodes / No Step" error.
       const gridOn = dimsModel.topologyMode?.gridCells !== false;
@@ -4231,6 +4257,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
         // the extras the module was compiled against — the baked-offset
         // layout-mismatch corruption class.
         agentLayoutExtras: agentResult.agentLayoutExtras,
+        agentWasmLayoutSig: agentResult.agentWasmLayoutSig,
         // PR7 G3-runtime: re-ship the WebGPU agent shaders + FULL layout + usage
         // flags on recompile (same lockstep argument as agentLayoutExtras).
         agentWebgpuBehaviourShader: agentResult.agentWebgpuBehaviourShader,

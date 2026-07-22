@@ -232,6 +232,12 @@ interface InitMsg {
    *  scratch) ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â the SAME extras the compiler built the module's layout from. The
    *  worker copies the external regions in/out around the WASM behaviour call. */
   agentLayoutExtras?: AgentLayoutExtras;
+  /** Layout-lockstep signature of the layout the WASM agent module was compiled
+   *  against. The worker REFUSES to instantiate when its own store layout
+   *  disagrees (→ JS fallback + a loud error) — a mismatch means the hash /
+   *  scratch / lookup-table / field regions sit at different offsets in the
+   *  store vs the module (silent wrong-offset reads/writes). */
+  agentWasmLayoutSig?: { maxHashBins: number; totalBytes: number };
   /** PR7 G3-runtime: the compiled WebGPU agent shaders (only when
    *  `agentTarget === 'webgpu'`). The behaviour shader is the per-agent loop; the
    *  force shader is the standalone integrator. The worker builds a dedicated
@@ -284,7 +290,7 @@ interface PaintManualMsg {
   activeViewer: string;
 }
 interface ResetMsg { type: 'reset'; activeViewer: string; reqId?: number }
-interface RecompileMsg { type: 'recompile'; stepCode: string; initCode?: string; gridInitCode?: string; skipIsolatedEmpty?: SkipIsolatedEmptyConfig; inputColorCodes: Array<{ mappingId: string; code: string }>; outputMappingCodes: Array<{ mappingId: string; code: string }>; stopMessages?: string[]; updateMode: string; asyncScheme: string; wasmStepBytes?: Uint8Array; wasmStepError?: string; wasmExports?: string[]; viewerIds?: Record<string, number>; webgpuShaderCode?: string; webgpuShaderError?: string; webgpuEntryPoints?: WebGPUEntryPoints; webgpuLayout?: WebGPULayout; webgpuStopCheckInterval?: number; variegated?: VariegatedPayload; interactionTables?: InteractionTablePayload[]; agentBehaviourCode?: string; agentInitCode?: string; agentDivisionCode?: string; agentColorViewer?: string; agentOutputMappingCodes?: Array<{ mappingId: string; code: string }>; agentHasSprites?: boolean; centerBased?: CenterBasedConfig; agentUsesField?: boolean; agentTarget?: 'js' | 'wasm' | 'webgpu'; agentWasmBytes?: Uint8Array; agentWasmViewerGuardIds?: string[]; agentLayoutExtras?: AgentLayoutExtras; agentWebgpuBehaviourShader?: string; agentWebgpuForceShader?: string; agentWebgpuMaxAgents?: number; agentWebgpuMaxHashBins?: number; agentWebgpuLayout?: AgentWebGPULayout; agentWebgpuUsesI32Write?: boolean; agentWebgpuUsage?: { usesBondStore?: boolean; usesIndicators?: boolean; usesAux?: boolean; usesSpawn?: boolean; usesStop?: boolean; usesForceScatter?: boolean } }
+interface RecompileMsg { type: 'recompile'; stepCode: string; initCode?: string; gridInitCode?: string; skipIsolatedEmpty?: SkipIsolatedEmptyConfig; inputColorCodes: Array<{ mappingId: string; code: string }>; outputMappingCodes: Array<{ mappingId: string; code: string }>; stopMessages?: string[]; updateMode: string; asyncScheme: string; wasmStepBytes?: Uint8Array; wasmStepError?: string; wasmExports?: string[]; viewerIds?: Record<string, number>; webgpuShaderCode?: string; webgpuShaderError?: string; webgpuEntryPoints?: WebGPUEntryPoints; webgpuLayout?: WebGPULayout; webgpuStopCheckInterval?: number; variegated?: VariegatedPayload; interactionTables?: InteractionTablePayload[]; agentBehaviourCode?: string; agentInitCode?: string; agentDivisionCode?: string; agentColorViewer?: string; agentOutputMappingCodes?: Array<{ mappingId: string; code: string }>; agentHasSprites?: boolean; centerBased?: CenterBasedConfig; agentUsesField?: boolean; agentTarget?: 'js' | 'wasm' | 'webgpu'; agentWasmBytes?: Uint8Array; agentWasmViewerGuardIds?: string[]; agentLayoutExtras?: AgentLayoutExtras; agentWasmLayoutSig?: { maxHashBins: number; totalBytes: number }; agentWebgpuBehaviourShader?: string; agentWebgpuForceShader?: string; agentWebgpuMaxAgents?: number; agentWebgpuMaxHashBins?: number; agentWebgpuLayout?: AgentWebGPULayout; agentWebgpuUsesI32Write?: boolean; agentWebgpuUsage?: { usesBondStore?: boolean; usesIndicators?: boolean; usesAux?: boolean; usesSpawn?: boolean; usesStop?: boolean; usesForceScatter?: boolean } }
 interface UpdateLookupTableMsg {
   type: 'updateLookupTable';
   attrId: string;
@@ -722,6 +728,9 @@ let pendingAgentWasmBytes: Uint8Array | null = null;
  *  memory layout from (model attrs / indicators / lookup tables / cell fields /
  *  array scratch + the sync-attr write region). The store layout MUST match. */
 let pendingAgentLayoutExtras: AgentLayoutExtras | null = null;
+/** The layout signature the WASM agent module was compiled against — asserted
+ *  against the store layout before instantiation (offset-desync guard). */
+let pendingAgentWasmLayoutSig: { maxHashBins: number; totalBytes: number } | null = null;
 /** PR6b-2 ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â the instantiated WASM `behaviour(...)` export (null on the JS target /
  *  before instantiation / on a failed instantiate ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ JS fallback). Signature:
  *  `(highWater, hashValid, nBinsX, nBinsY, nBinsZ, binSizeX, binSizeY, binSizeZ,
@@ -819,9 +828,11 @@ function initAgents(): void {
   // agent world) dims + the force config ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â the SAME formula the compiler uses
   // (agentMaxHashBinsForModel), so the worker's store layout matches the compiled
   // module's offsets. Only meaningful under wasmBacked; 0 otherwise.
-  // The hash bin budget ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â derived from the LIVE dims (= the model dims; a resize
-  // reinits with new dims, recompiled the same way), so it equals the WASM-baked
-  // reserve. Computed for ALL targets (the JS path also caps its per-step bin
+  // The hash bin budget ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â derived from the LIVE dims (a resize
+  // reinits with new dims AND SimulatorView recompiles the agent module from the
+  // SAME dims-overridden model — compileAgentModel(dimsModel) — while
+  // instantiateAgentWasmIfNeeded asserts the layout lockstep before
+  // instantiating), so it equals the WASM-baked reserve. Computed for ALL targets (the JS path also caps its per-step bin
   // count via buildSpatialHash, so a big grid never slows the JS agent loop).
   agentHashReserve = computeAgentMaxHashBins(
     width, height, depth,
@@ -926,6 +937,17 @@ function instantiateAgentWasmIfNeeded(): void {
   agentForcePassWasmFn = null;
   const store = agentStore;
   if (agentTarget !== 'wasm' || !pendingAgentWasmBytes || !store || !store.wasmBacked || !store.memory) return;
+  // Layout-lockstep guard: the module's baked offsets MUST equal the store's.
+  // A mismatch (e.g. a dims desync between the compile-time model and the live
+  // worker dims) would put the hash / nearby-scratch / lookup-table / field
+  // regions at different addresses in the store vs the module — silent
+  // wrong-offset reads/writes, NOT a crash. Refuse + run the JS behaviour fn
+  // on the same wasmBacked views (proven safe — the agentWasmBackedDev path).
+  const sig = pendingAgentWasmLayoutSig;
+  if (sig && store.layout && (sig.maxHashBins !== store.layout.maxHashBins || sig.totalBytes !== store.layout.totalBytes)) {
+    self.postMessage({ type: 'error', message: `[agents] compiled WASM layout (hash ${sig.maxHashBins}, ${sig.totalBytes} B) does not match the worker store layout (hash ${store.layout.maxHashBins}, ${store.layout.totalBytes} B) — agent loop runs on JS. This is a compile/worker dims desync; please report it.` });
+    return;
+  }
   const bytes = pendingAgentWasmBytes;
   const mem = store.memory;
   void (async () => {
@@ -4762,6 +4784,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       pendingAgentWasmBytes = msg.agentWasmBytes ?? null;
       agentWasmViewerGuardIds = msg.agentWasmViewerGuardIds ?? [];
       pendingAgentLayoutExtras = msg.agentLayoutExtras ?? null;
+      pendingAgentWasmLayoutSig = msg.agentWasmLayoutSig ?? null;
       pendingAgentWebgpuBehaviour = msg.agentWebgpuBehaviourShader ?? null;
       pendingAgentWebgpuForce = msg.agentWebgpuForceShader ?? null;
       pendingAgentWebgpuMaxAgents = msg.agentWebgpuMaxAgents ?? 0;
@@ -5338,6 +5361,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
         pendingAgentWasmBytes = rc.agentWasmBytes ?? null;
         agentWasmViewerGuardIds = rc.agentWasmViewerGuardIds ?? [];
         pendingAgentLayoutExtras = rc.agentLayoutExtras ?? null;
+        pendingAgentWasmLayoutSig = rc.agentWasmLayoutSig ?? null;
         pendingAgentWebgpuBehaviour = rc.agentWebgpuBehaviourShader ?? null;
         pendingAgentWebgpuForce = rc.agentWebgpuForceShader ?? null;
         pendingAgentWebgpuMaxAgents = rc.agentWebgpuMaxAgents ?? 0;
