@@ -152,7 +152,7 @@ function AppInner() {
             height={22}
             draggable={false}
           />
-          <span className={styles.title}>GenesisCA <span className={styles.version}>v1.27.0</span></span>
+          <span className={styles.title}>GenesisCA <span className={styles.version}>v1.28.0</span></span>
           <FileMenu onNew={() => setMode('modeler')} onLoaded={afterLoad} />
           <button
             className={`${styles.navButton} ${mode === 'library' ? styles.navButtonActive : ''}`}
