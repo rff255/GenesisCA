@@ -7,6 +7,52 @@ https://github.com/rff255/GenesisCA/releases
 The version at the top of `package.json` is the single source of truth; each
 entry below is cut when that version is tagged (see `.github/workflows/release.yml`).
 
+## [1.28.0] - 2026-07-22
+
+Headlined by **Particle Life** — two new library samples plus the matrix-play
+editing UX that makes interaction tables fun to tinker with — alongside a faster
+2D agent renderer and a handful of fixes. Additive throughout: the lattice
+(2D+3D, all three compile targets) and every existing model stay byte-identical.
+
+### Particle Life
+- Two new library samples, **Particle Life** and **Particle Life 3D**, built from
+  one parameterized generator and faithful to the classic force law: a per-pair
+  repulsion core, a tent-shaped attraction band, and three asymmetric
+  species×species tables (rules / attractMin / attractMax). Agents-only, torus,
+  graph-side friction, with live sliders for particle count, force factor, repel,
+  friction and query radius, plus four named matrix presets.
+
+### Lookup tables — matrix play
+- Float tables now open in a **matrix view**: a diverging red/cyan grid you can
+  drag-adjust per cell, click or Ctrl-click to select, and nudge with a shared
+  slider (one cell, a selection, or the whole matrix). Available in both the
+  Attributes panel and the simulator's live Model Attributes section.
+- Square tables gain a **Fill pattern** catalogue (snake, rock-paper-scissors,
+  chains, bipartite, hubs, shells, swirl, dimers, triad flocks, symmetric and
+  uniform random) plus Zero / Symmetrize / Transpose / Negate / Mutate.
+- **Randomize** accepts a signed range, so a rules matrix can roll uniformly in
+  −1..1. Omitting the range reproduces the previous (0,1) draw bit-for-bit.
+- Lookup-table axes and value-tag sources can now bind **agent** tag attributes,
+  not just cell/model ones — with rename, reorder and removal cascades.
+
+### Agents — rendering
+- Fully opaque agent discs now render through a **batched path** that groups by
+  colour and radius, roughly 2.5–3× cheaper to draw at several thousand agents.
+  Any translucent agent falls back to the exact per-agent path.
+- New **Outlines** toggle (default off) controls the dark disc contour in 2D and a
+  matching silhouette rim on the 3D sphere impostors.
+
+### Fixes
+- Two latent JS-target agent parity bugs, both surfaced by Particle Life: the
+  agent graph never ran the lookup-table geometry pre-resolve (so Table Lookup
+  read the wrong cells of any multi-column table on JS), and Get Agent Offset's
+  Distance used `Math.hypot` where WASM used a squared-sum sqrt, diverging by
+  ULPs. Get Curvature carried the same hypot pattern and is fixed alongside, with
+  a permanent parity synthetic.
+- The lookup-table Fill-pattern select rendered with invisible, clipped text, and
+  the Randomize row no longer breaks its label/field pairs across lines.
+- The standalone export viewer's reopen button is now labelled **ⓘ Info**.
+
 ## [1.27.0] - 2026-07-17
 
 A large release headlined by the **Overseer** — a third graph for experiment
