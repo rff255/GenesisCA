@@ -1987,6 +1987,35 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     return scan(model.agentGraphNodes);
   }, [model.agentGraphNodes, model.topologyMode?.agents, model.macroDefs]);
 
+  // P1 (the dead density scan): does ANY reachable agent node consume the
+  // per-agent density? `neighbourDensity` reads it directly; `divideAgent`'s
+  // degenerate-axis fallback reads it in the engine. When false AND engine
+  // physics is off, the worker's force pass skips its whole neighbour scan
+  // (~70% of a custom-force model's force-pass cost). Same macro-aware scan
+  // as agentUsesField (the agent compilers flatten macros up front).
+  const agentUsesDensity = useCallback((): boolean => {
+    if (!model.topologyMode?.agents) return false;
+    const DENSITY_NODE_TYPES = new Set(['neighbourDensity', 'divideAgent']);
+    const macroDefs = model.macroDefs || [];
+    const seen = new Set<string>();
+    const scan = (nodes?: typeof model.agentGraphNodes): boolean => {
+      for (const n of nodes || []) {
+        const t = n.data?.nodeType as string;
+        if (DENSITY_NODE_TYPES.has(t)) return true;
+        if (t === 'macro') {
+          const defId = (n.data?.config as Record<string, unknown> | undefined)?.macroDefId as string | undefined;
+          if (defId && !seen.has(defId)) {
+            seen.add(defId);
+            const def = macroDefs.find(d => d.id === defId);
+            if (def && scan(def.nodes as typeof model.agentGraphNodes)) return true;
+          }
+        }
+      }
+      return false;
+    };
+    return scan(model.agentGraphNodes);
+  }, [model.agentGraphNodes, model.topologyMode?.agents, model.macroDefs]);
+
   // Draw using ImageData + zoom/pan transform
   /** Render the CURSOR LAYER — the cell-brush silhouette, the agent-brush
    *  footprint/scan-ring silhouettes (white, on the `cursorNeg` canvas whose CSS
@@ -3814,6 +3843,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       // the WebGPU-grid field bridge (a no-field model does 0 per-step
       // readbacks). Cheap boolean — leave the JS/WASM grid path untouched.
       agentUsesField: agentUsesField(),
+      agentUsesDensity: agentUsesDensity(),
       // PR6b-1: the resolved agent compile target + the compiled WASM agent loop
       // bytes (only when 'wasm'). The worker backs the AgentStore on a
       // WebAssembly.Memory + runs the WASM behaviour fn instead of the JS one;
@@ -4247,6 +4277,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
         centerBased: model.centerBased,
         // PR5 (C-D1): re-detect on a graph-only edit (field nodes added/removed).
         agentUsesField: agentUsesField(),
+        agentUsesDensity: agentUsesDensity(),
         // PR6b-1: re-resolve the agent target + ship the WASM bytes on recompile.
         agentTarget: agentResult.agentTarget,
         agentWasmBytes: agentResult.agentWasmBytes,

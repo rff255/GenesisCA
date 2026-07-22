@@ -77,11 +77,12 @@ function jsForceLoop(s, hash, o) {
   const range = o.range, muRep = o.muR, muAdh = o.muA, doForce = o.doForce, torus = o.torus;
   const momentum = o.momentum, maxSpeed = o.maxSpeed, growthRate = o.growthRate;
   const springs = o.springs, maxBonds = s.maxBonds, dtOverEta = o.dtOverEta;
+  const doScan = o.doForce || o.doDensity;   // P1: the dead-density-scan gate (mirrors the worker)
   for (let i = 0; i < hw; i++) {
     if (!alive[i]) { xN[i] = x[i]; yN[i] = y[i]; continue; }
     const xi = x[i], yi = y[i], ri = rad[i];
     let fx = s.forceX[i], fy = s.forceY[i], dens = 0;
-    if (hash) {
+    if (doScan && hash) {
       const nBinsX = hash.nBinsX, nBinsY = hash.nBinsY;
       const binStart = hash.binStart, binAgents = hash.binAgents;
       let bx = ((xi - hash.originX) / hash.binSizeX) | 0; if (bx < 0) bx = 0; else if (bx >= nBinsX) bx = nBinsX - 1;
@@ -107,7 +108,7 @@ function jsForceLoop(s, hash, o) {
         }
       }
     }
-    s.density[i] = dens;
+    if (doScan) s.density[i] = dens;
     const bc = s.bondCount[i];
     if (springs && bc > 0) {
       const base = i * maxBonds;
@@ -212,7 +213,11 @@ for (const sc of SCENARIOS) {
   const doForce = usesSoftCollision(cfg);
   const springs = usesEngineSprings(cfg);
   const growthRate = usesEngineGrowth(cfg) ? cbNum(cfg, 'growthRate', 0) : 0;
+  // P1: does anything consume density? (neighbourDensity read / divideAgent's
+  // engine axis fallback) — mirrors SimulatorView's agentUsesDensity scan.
+  const usesDensity = (model.agentGraphNodes ?? []).some(n => n.data?.nodeType === 'neighbourDensity' || n.data?.nodeType === 'divideAgent');
   const fOpts = {
+    doDensity: usesDensity,
     W, H, torus, range: cbNum(cfg, 'interactionRange', 1.5), muR: cbNum(cfg, 'repulsionStiffness', 2), muA: cbNum(cfg, 'adhesionStiffness', 0),
     momentum: cbNum(cfg, 'momentum', 0), maxSpeed: cbNum(cfg, 'maxSpeed', 0), growthRate,
     doForce, springs, dtOverEta: cbNum(cfg, 'timeStep', 1) / Math.max(1e-6, cbNum(cfg, 'drag', 1)),
@@ -259,7 +264,7 @@ for (const sc of SCENARIOS) {
     });
     phase(t, 'behaviour', () => inst.behaviour(B.highWater, hv, nbx, nby, nbz, bsx, bsy, bsz, W, H, D, torus ? 1 : 0, ox, oy, oz));
     phase(t, 'force', () => {
-      if (inst.forcePass) inst.forcePass(B.highWater, hv, nbx, nby, nbz, bsx, bsy, bsz, fOpts.dtOverEta, fOpts.muR, fOpts.muA, fOpts.range, fOpts.momentum, fOpts.maxSpeed, fOpts.growthRate, W, H, D, 0, torus ? 1 : 0, ox, oy, oz, fOpts.doForce ? 1 : 0, fOpts.springs ? 1 : 0);
+      if (inst.forcePass) inst.forcePass(B.highWater, hv, nbx, nby, nbz, bsx, bsy, bsz, fOpts.dtOverEta, fOpts.muR, fOpts.muA, fOpts.range, fOpts.momentum, fOpts.maxSpeed, fOpts.growthRate, W, H, D, 0, torus ? 1 : 0, ox, oy, oz, fOpts.doForce ? 1 : 0, fOpts.springs ? 1 : 0, fOpts.doDensity ? 1 : 0);
       else jsForceLoop(B, hash, fOpts);
     });
     phase(t, 'swap', () => { B.x.set(B.xNext); B.y.set(B.yNext); });

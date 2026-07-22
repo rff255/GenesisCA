@@ -70,6 +70,9 @@ export interface AgentForceDispatchParams {
   originX?: number;
   originY?: number;
   originZ?: number;
+  /** P1: run the neighbour/density scan. 0 ⇒ skip it entirely (engine physics
+   *  off AND nothing reads density). Absent ⇒ 1 (the historical always-scan). */
+  doDensity?: number;
 }
 
 interface PooledBuffer { buffer: GPUBuffer; size: number; inUse: boolean }
@@ -164,7 +167,9 @@ function colorsBytes(layout: AgentWebGPULayout): number { return Math.max(4, lay
 // 16-byte aligned). Control was 14 u32/f32 (→64) + origin block = 80; ForceControl
 // was 21 (→80, with WGSL's 16-byte round-up) + origin block = 96.
 const CONTROL_BYTES = 80;
-const FORCE_CONTROL_BYTES = 96;
+// 25 scalar fields = 100 B; padded to 112 (16-aligned headroom). The WGSL
+// all-scalar struct's minBindingSize is 100 — a larger buffer is valid.
+const FORCE_CONTROL_BYTES = 112;
 
 // ---------------------------------------------------------------------------
 // Create.
@@ -648,6 +653,7 @@ export function uploadAgentForceControl(rt: AgentWebGPURuntime, highWater: numbe
   fl[21] = fp.originY ?? 0;
   fl[22] = fp.originZ ?? 0;
   u[23] = (fp.doCollision ?? fp.bonding) >>> 0; // Collision capability (repulsion); fallback to bonding for older callers
+  u[24] = (fp.doDensity ?? 1) >>> 0; // P1: run the neighbour/density scan (absent → 1, the historical always-scan)
   rt.device.queue.writeBuffer(rt.forceControlBuf, 0, ab);
 }
 

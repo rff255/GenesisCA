@@ -3922,6 +3922,7 @@ const FORCE_PASS_PARAMS: ('i32' | 'f64')[] = [
   'f64', 'f64', 'f64',                   // originX, originY, originZ (the bbox-anchored hash grid origin)
   'i32',                                 // doCollision (soft-sphere repulsion — the Collision capability, independent of bonding physics)
   'i32',                                 // doSprings (bond springs — the Bonds=Physics capability, independent of bonding physics)
+  'i32',                                 // doDensity (P1: run the neighbour/density scan even with forces off — a density consumer exists)
 ];
 
 interface ForcePassParamIdx {
@@ -3934,6 +3935,7 @@ interface ForcePassParamIdx {
   originX: number; originY: number; originZ: number;
   doCollision: number;
   doSprings: number;
+  doDensity: number;
 }
 
 /** Emit the force-pass function body onto `em`. Reads the wasmBacked AgentStore at
@@ -4111,25 +4113,34 @@ function emitForcePass(em: WasmEmitter, layout: AgentMemoryLayout, is3d: boolean
     if (is3d) { pushF64Elem(em, off.fZ, i); em.localSet(fz); }
     em.f64Const(0); em.localSet(dens);
 
-    // --- neighbour pass: hash stencil when hashValid, else all-pairs ---
-    em.localGet(P.hashValid);
-    em.ifThenElse(
-      () => emitForceStencil(),
-      () => {
-        // all-pairs: for (j=0; j<highWater; j++) candidate(skipDead=true)
-        em.i32Const(0); em.localSet(jL);
-        em.block(() => {
-          em.loop(() => {
-            em.localGet(jL); em.localGet(P.highWater); em.op(OP_I32_GE_S); em.brIf(1);
-            candidate(true);
-            em.localGet(jL); em.i32Const(1); em.op(OP_I32_ADD); em.localSet(jL);
-            em.br(0);
+    // --- neighbour pass: hash stencil when hashValid, else all-pairs. P1 (the
+    //     dead density scan): the pass exists to (a) apply the soft-sphere force
+    //     and (b) count density — when NEITHER is needed (engine physics off AND
+    //     no density consumer) skip the WHOLE scan + the density store (it was
+    //     ~70% of a custom-force model's force-pass cost; density then keeps its
+    //     last value, which nothing observes). Mirrors the JS/WGSL gates. ---
+    em.localGet(P.bonding); em.localGet(P.doCollision); em.op(OP_I32_OR);
+    em.localGet(P.doDensity); em.op(OP_I32_OR);
+    em.ifThen(() => {
+      em.localGet(P.hashValid);
+      em.ifThenElse(
+        () => emitForceStencil(),
+        () => {
+          // all-pairs: for (j=0; j<highWater; j++) candidate(skipDead=true)
+          em.i32Const(0); em.localSet(jL);
+          em.block(() => {
+            em.loop(() => {
+              em.localGet(jL); em.localGet(P.highWater); em.op(OP_I32_GE_S); em.brIf(1);
+              candidate(true);
+              em.localGet(jL); em.i32Const(1); em.op(OP_I32_ADD); em.localSet(jL);
+              em.br(0);
+            });
           });
-        });
-      },
-    );
-    // density[i] = dens
-    addr(off.dens, i); em.localGet(dens); em.f64Store();
+        },
+      );
+      // density[i] = dens
+      addr(off.dens, i); em.localGet(dens); em.f64Store();
+    });
 
     // --- bond springs (gated on the Bonds=Physics capability && bondCount>0;
     //     Data bonds are force-free edges) ---
@@ -4765,7 +4776,7 @@ export function compileAgentGraphWasm(
     dtOverEta: 8, muR: 9, muA: 10, range: 11, momentum: 12, maxSpeed: 13, growthRate: 14,
     W: 15, H: 16, D: 17, bonding: 18, torus: 19,
     originX: 20, originY: 21, originZ: 22,
-    doCollision: 23, doSprings: 24,
+    doCollision: 23, doSprings: 24, doDensity: 25,
   };
   let forceBody: Uint8Array;
   try {

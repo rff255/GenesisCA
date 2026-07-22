@@ -19,8 +19,10 @@
 // target constraint). The soft-sphere runs when `bonding || doCollision`: the
 // REPULSION half (d<sij volume exclusion = collision) is gated on the Collision
 // capability's `doCollision`, the ADHESION half (d>=sij cohesion) on `bonding`;
-// the growth ramp is gated on `growthRate > 0` (bonding-driven). density is always
-// counted. Mirrors the JS `engineForces`/`doCollision`/`growthRate` gates.
+// the growth ramp is gated on `growthRate > 0` (bonding-driven). The neighbour
+// scan (+ density count) runs only when `bonding || doCollision || doDensity` —
+// a custom-force model with no density consumer skips it entirely (P1).
+// Mirrors the JS `engineForces`/`doCollision`/`doDensity`/`growthRate` gates.
 //
 // HARD CONSTRAINT: like the behaviour compiler, this touches NO lattice/grid
 // WebGPU code + NO existing agent JS/WASM path → byte-identity holds BY
@@ -60,6 +62,7 @@ function emitForceControlStruct(): string {
   originY    : f32,
   originZ    : f32,
   doCollision : u32,
+  doDensity  : u32,
 };`;
 }
 
@@ -225,14 +228,21 @@ fn forcePass(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(num_workgro
   var fy: f32 = ${f32('forceY', 'i')}${scatterY};${fz3Decl}
   var dens: f32 = 0.0;
 
-  if (fc.hashValid != 0u) {
-    // --- hash-bin stencil over the CSR hash, torus-wrapped ---${stencil}
-  } else {
-    // --- all-pairs fallback (a world too small to tile) ---
-    for (var j: u32 = 0u; j < fc.highWater; j = j + 1u) {${neighbourBody}
+  // P1 (the dead density scan): the neighbour pass exists to (a) apply the
+  // soft-sphere force and (b) count density. When NEITHER is needed (engine
+  // physics off + no node reads density + no division fallback), skip the
+  // whole scan — it was ~70% of a custom-force model's force-pass cost.
+  // density[i] then keeps its last value (nothing observes it).
+  if (fc.bonding != 0u || fc.doCollision != 0u || fc.doDensity != 0u) {
+    if (fc.hashValid != 0u) {
+      // --- hash-bin stencil over the CSR hash, torus-wrapped ---${stencil}
+    } else {
+      // --- all-pairs fallback (a world too small to tile) ---
+      for (var j: u32 = 0u; j < fc.highWater; j = j + 1u) {${neighbourBody}
+      }
     }
+    ${f32('density', 'i')} = dens;
   }
-  ${f32('density', 'i')} = dens;
 
   // Integrate: v = momentum·v + (dt/eta)·F; optional speed cap; x += v; wrap/clamp.
   var vxi: f32 = fc.momentum * ${f32('vx', 'i')} + fc.dtOverEta * fx;

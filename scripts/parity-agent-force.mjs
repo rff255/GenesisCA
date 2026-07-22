@@ -39,8 +39,8 @@ const baseCfg = {
   neighbourQueryRadius: 5.0, defaultRadius: 0.5, growthRate: 0.0,
 };
 
-// The FULL 25-param force-pass ABI (mirrors FORCE_PASS_PARAMS in agentWasm/compile.ts).
-const forceArgs = (s, hash, cfg, dtOverEta, bonding, doCollision, torus) => ([
+// The FULL 26-param force-pass ABI (mirrors FORCE_PASS_PARAMS in agentWasm/compile.ts).
+const forceArgs = (s, hash, cfg, dtOverEta, bonding, doCollision, torus, doDensity = true) => ([
   s.highWater, hash ? 1 : 0, hash ? hash.nBinsX : 0, hash ? hash.nBinsY : 0, 0,
   hash ? hash.binSizeX : 1, hash ? hash.binSizeY : 1, 1,
   dtOverEta, cfg.repulsionStiffness, cfg.adhesionStiffness, cfg.interactionRange,
@@ -48,11 +48,12 @@ const forceArgs = (s, hash, cfg, dtOverEta, bonding, doCollision, torus) => ([
   W, H, 1, bonding ? 1 : 0, torus ? 1 : 0,
   hash ? hash.originX : 0, hash ? hash.originY : 0, 0,
   doCollision ? 1 : 0, bonding ? 1 : 0 /*doSprings — no bonds in this harness (bc=0), so inert*/,
+  doDensity ? 1 : 0 /*P1: run the neighbour/density scan*/,
 ]);
 
 // Verbatim JS 2D force loop — matches the CURRENT sim.worker.ts runAgentStep
 // (doForce = doCollision||engineForces; muRep = doCollision?muR:0; muAdh = engineForces?muA:0).
-function jsForceLoop(s, hash, cfg, dtOverEta, bonding, doCollision, torus) {
+function jsForceLoop(s, hash, cfg, dtOverEta, bonding, doCollision, torus, doDensity = true) {
   const hw = s.highWater, x = s.x, y = s.y, rad = s.radius, alive = s.alive;
   const xN = s.xNext, yN = s.yNext, vxArr = s.vx, vyArr = s.vy;
   const W2 = s.worldWidth, H2 = s.worldHeight, halfW = W2 / 2, halfH = H2 / 2;
@@ -61,6 +62,7 @@ function jsForceLoop(s, hash, cfg, dtOverEta, bonding, doCollision, torus) {
   const engineForces = bonding;
   const muRep = doCollision ? muR : 0, muAdh = engineForces ? muA : 0;
   const doForce = doCollision || engineForces;
+  const doScan = doForce || doDensity;   // P1: skip the whole scan when neither force nor density is needed
   for (let i = 0; i < hw; i++) {
     if (!alive[i]) { xN[i] = x[i]; yN[i] = y[i]; continue; }
     const xi = x[i], yi = y[i], ri = rad[i];
@@ -74,7 +76,7 @@ function jsForceLoop(s, hash, cfg, dtOverEta, bonding, doCollision, torus) {
       dens++;
       if (doForce) { const d = Math.sqrt(d2); const F = ((d < sij) ? muRep : muAdh) * (d - sij); const k = F / d; fx += k * dx; fy += k * dy; }
     };
-    if (hash) {
+    if (doScan && hash) {
       const nBinsX = hash.nBinsX, nBinsY = hash.nBinsY, binStart = hash.binStart, binAgents = hash.binAgents;
       let bx = ((xi - hash.originX) / hash.binSizeX) | 0; if (bx < 0) bx = 0; else if (bx >= nBinsX) bx = nBinsX - 1;
       let by = ((yi - hash.originY) / hash.binSizeY) | 0; if (by < 0) by = 0; else if (by >= nBinsY) by = nBinsY - 1;
@@ -87,10 +89,10 @@ function jsForceLoop(s, hash, cfg, dtOverEta, bonding, doCollision, torus) {
           for (let p = binStart[b]; p < end; p++) interact(binAgents[p]);
         }
       }
-    } else {
+    } else if (doScan) {
       for (let j = 0; j < hw; j++) { if (alive[j]) interact(j); }
     }
-    s.density[i] = dens;
+    if (doScan) s.density[i] = dens;
     let vxi = momentum * vxArr[i] + dtOverEta * fx;
     let vyi = momentum * vyArr[i] + dtOverEta * fy;
     if (maxSpeed > 0) { const sp = Math.sqrt(vxi * vxi + vyi * vyi); if (sp > maxSpeed) { const sc = maxSpeed / sp; vxi *= sc; vyi *= sc; } }
@@ -131,7 +133,7 @@ function minPairDist(s) {
 let fail = 0, checks = 0;
 const torus = true;
 
-async function runCombo(name, bonding, doCollision) {
+async function runCombo(name, bonding, doCollision, doDensity = true) {
   const cfg = { ...baseCfg };
   const attrSpecs = [];
   const maxHashBins = computeAgentMaxHashBins(W, H, 1, cfg.interactionRange, cfg.defaultRadius, cfg.neighbourQueryRadius);
@@ -161,13 +163,13 @@ async function runCombo(name, bonding, doCollision) {
   for (let step = 0; step < STEPS; step++) {
     const hashJS = buildSpatialHash(sJS, Math.max(1e-3, binEdge), W, H, 1);
     sJS.forceX.fill(0, 0, sJS.highWater); sJS.forceY.fill(0, 0, sJS.highWater);
-    jsForceLoop(sJS, hashJS, cfg, dtOverEta, bonding, doCollision, torus);
+    jsForceLoop(sJS, hashJS, cfg, dtOverEta, bonding, doCollision, torus, doDensity);
     { const t = sJS.x; sJS.x = sJS.xNext; sJS.xNext = t; const t2 = sJS.y; sJS.y = sJS.yNext; sJS.yNext = t2; }
 
     const hashW = buildSpatialHash(sW, Math.max(1e-3, binEdge), W, H, 1);
     sW.forceX.fill(0, 0, sW.highWater); sW.forceY.fill(0, 0, sW.highWater);
     copyHashIntoMemory(sW, hashW);
-    fpFn(...forceArgs(sW, hashW, cfg, dtOverEta, bonding, doCollision, torus));
+    fpFn(...forceArgs(sW, hashW, cfg, dtOverEta, bonding, doCollision, torus, doDensity));
     sW.x.set(sW.xNext); sW.y.set(sW.yNext);
 
     for (let i = 0; i < sJS.highWater; i++) {
@@ -185,6 +187,11 @@ const sCollisionOnly = await runCombo('collision-only (doCollision=1, bonding=0)
 const sBondingOnly = await runCombo('bonding-only  (doCollision=0, bonding=1)', true, false);
 await runCombo('both          (doCollision=1, bonding=1)', true, true);
 const sNeither = await runCombo('neither       (doCollision=0, bonding=0)', false, false);
+// P1 (the dead density scan): with forces off AND no density consumer the scan
+// is skipped ENTIRELY on both targets — parity must hold on the skip path too
+// (velocities integrate from the graph force only; density stays untouched).
+await runCombo('density-skip  (doCollision=0, bonding=0, doDensity=0)', false, false, false);
+await runCombo('density-only  (doCollision=0, bonding=0, doDensity=1)', false, false, true);
 
 // BEHAVIOUR: collision-only must SEPARATE the blob; neither must NOT.
 console.log('\nBehaviour (the user-reported pass-through):');

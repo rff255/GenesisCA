@@ -80,12 +80,18 @@ const model = {
   graphNodes: [], graphEdges: [], macroDefs: [], variables: [], attributes: [], neighborhoods: [],
 };
 
+// The FULL current 26-param ABI (mirrors FORCE_PASS_PARAMS in agentWasm/compile.ts).
+// doCollision=0 (customForces bench) + doDensity=1 so the neighbour/density scan
+// — the thing this bench times — actually runs (the older 20-arg call left the
+// trailing params 0 and silently measured a skipped scan after the ABI grew).
 const FORCE_PASS_PARAMS_ORDER = (s, hash, dtOverEta, bonding, torus) => ([
   s.highWater, hash ? 1 : 0, hash ? hash.nBinsX : 0, hash ? hash.nBinsY : 0, 0,
   hash ? hash.binSizeX : 1, hash ? hash.binSizeY : 1, 1,
   dtOverEta, cfg.repulsionStiffness, cfg.adhesionStiffness, cfg.interactionRange,
   cfg.momentum, cfg.maxSpeed, 0 /*growthRate*/,
   W, H, 1, bonding ? 1 : 0, torus ? 1 : 0,
+  hash ? hash.originX ?? 0 : 0, hash ? hash.originY ?? 0 : 0, 0,
+  0 /*doCollision*/, 0 /*doSprings*/, 1 /*doDensity*/,
 ]);
 
 // ---- verbatim JS 2D force loop (copied from sim.worker.ts runAgentStep) ----

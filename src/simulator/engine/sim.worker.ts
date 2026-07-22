@@ -214,6 +214,12 @@ interface InitMsg {
    *  needs the per-generation attrs CPUÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬ÂGPU readback/upload around runAgentStep
    *  (a no-field model's agent loop never touches `readAttrs`). */
   agentUsesField?: boolean;
+  /** P1 (the dead density scan): whether ANY reachable agent node consumes the
+   *  per-agent density — `neighbourDensity` reads it, `divideAgent`'s degenerate
+   *  axis fallback reads it. When false AND engine physics is off, the force
+   *  pass skips its whole neighbour scan (~70% of a custom-force model's
+   *  force-pass cost). Absent → true (the historical always-scan). */
+  agentUsesDensity?: boolean;
   /** PR6b-1: the resolved agent compile target ('js' default). When 'wasm' the
    *  worker backs the AgentStore on a WebAssembly.Memory (views at baked offsets)
    *  and runs the compiled `agentWasmBytes` behaviour loop instead of the JS one.
@@ -290,7 +296,7 @@ interface PaintManualMsg {
   activeViewer: string;
 }
 interface ResetMsg { type: 'reset'; activeViewer: string; reqId?: number }
-interface RecompileMsg { type: 'recompile'; stepCode: string; initCode?: string; gridInitCode?: string; skipIsolatedEmpty?: SkipIsolatedEmptyConfig; inputColorCodes: Array<{ mappingId: string; code: string }>; outputMappingCodes: Array<{ mappingId: string; code: string }>; stopMessages?: string[]; updateMode: string; asyncScheme: string; wasmStepBytes?: Uint8Array; wasmStepError?: string; wasmExports?: string[]; viewerIds?: Record<string, number>; webgpuShaderCode?: string; webgpuShaderError?: string; webgpuEntryPoints?: WebGPUEntryPoints; webgpuLayout?: WebGPULayout; webgpuStopCheckInterval?: number; variegated?: VariegatedPayload; interactionTables?: InteractionTablePayload[]; agentBehaviourCode?: string; agentInitCode?: string; agentDivisionCode?: string; agentColorViewer?: string; agentOutputMappingCodes?: Array<{ mappingId: string; code: string }>; agentHasSprites?: boolean; centerBased?: CenterBasedConfig; agentUsesField?: boolean; agentTarget?: 'js' | 'wasm' | 'webgpu'; agentWasmBytes?: Uint8Array; agentWasmViewerGuardIds?: string[]; agentLayoutExtras?: AgentLayoutExtras; agentWasmLayoutSig?: { maxHashBins: number; totalBytes: number }; agentWebgpuBehaviourShader?: string; agentWebgpuForceShader?: string; agentWebgpuMaxAgents?: number; agentWebgpuMaxHashBins?: number; agentWebgpuLayout?: AgentWebGPULayout; agentWebgpuUsesI32Write?: boolean; agentWebgpuUsage?: { usesBondStore?: boolean; usesIndicators?: boolean; usesAux?: boolean; usesSpawn?: boolean; usesStop?: boolean; usesForceScatter?: boolean } }
+interface RecompileMsg { type: 'recompile'; stepCode: string; initCode?: string; gridInitCode?: string; skipIsolatedEmpty?: SkipIsolatedEmptyConfig; inputColorCodes: Array<{ mappingId: string; code: string }>; outputMappingCodes: Array<{ mappingId: string; code: string }>; stopMessages?: string[]; updateMode: string; asyncScheme: string; wasmStepBytes?: Uint8Array; wasmStepError?: string; wasmExports?: string[]; viewerIds?: Record<string, number>; webgpuShaderCode?: string; webgpuShaderError?: string; webgpuEntryPoints?: WebGPUEntryPoints; webgpuLayout?: WebGPULayout; webgpuStopCheckInterval?: number; variegated?: VariegatedPayload; interactionTables?: InteractionTablePayload[]; agentBehaviourCode?: string; agentInitCode?: string; agentDivisionCode?: string; agentColorViewer?: string; agentOutputMappingCodes?: Array<{ mappingId: string; code: string }>; agentHasSprites?: boolean; centerBased?: CenterBasedConfig; agentUsesField?: boolean; agentUsesDensity?: boolean; agentTarget?: 'js' | 'wasm' | 'webgpu'; agentWasmBytes?: Uint8Array; agentWasmViewerGuardIds?: string[]; agentLayoutExtras?: AgentLayoutExtras; agentWasmLayoutSig?: { maxHashBins: number; totalBytes: number }; agentWebgpuBehaviourShader?: string; agentWebgpuForceShader?: string; agentWebgpuMaxAgents?: number; agentWebgpuMaxHashBins?: number; agentWebgpuLayout?: AgentWebGPULayout; agentWebgpuUsesI32Write?: boolean; agentWebgpuUsage?: { usesBondStore?: boolean; usesIndicators?: boolean; usesAux?: boolean; usesSpawn?: boolean; usesStop?: boolean; usesForceScatter?: boolean } }
 interface UpdateLookupTableMsg {
   type: 'updateLookupTable';
   attrId: string;
@@ -654,6 +660,9 @@ let simulateAgents = true;
  *  WebGPU-grid field bridge (CPUÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬ÂGPU attrs readback/upload around runAgentStep).
  *  A no-field model leaves it false ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ 0 per-step readbacks. */
 let agentUsesField = false;
+/** P1: a density consumer exists (neighbourDensity / divideAgent) — absent from
+ *  the message → true, the historical always-scan (see InitMsg.agentUsesDensity). */
+let agentUsesDensity = true;
 let centerBasedConfig: CenterBasedConfig | null = null;
 /** Compiled agent behaviour function (runs once per agent each generation).
  *  Null until the agent compile path ships it (PR-A2.5/A3). */
@@ -1373,6 +1382,13 @@ function runAgentStep(): void {
   const muRep = doCollision ? muR : 0;
   const muAdh = engineForces ? muA : 0;
   const doForce = doCollision || engineForces;
+  // P1 (the dead density scan): the neighbour pass exists for (a) the soft-sphere
+  // force and (b) the density count. With engine physics OFF and NO density
+  // consumer in the graph (no neighbourDensity; no divideAgent, whose degenerate
+  // axis fallback reads density), skip the WHOLE scan — measured ~70% of a
+  // custom-force model's force-pass cost. density[] then keeps its last value,
+  // which nothing observes (the inspector may show a stale/initial 0).
+  const doScan = doForce || agentUsesDensity;
 
   // Reset the per-step force accumulator (Apply Force adds into it during
   // behaviour) BEFORE behaviour runs. forceZ is a memset of an always-zero-in-2D
@@ -1528,7 +1544,7 @@ function runAgentStep(): void {
         dtOverEta, muR, muA, range, momentum, maxSpeed, growthRate,
         W, H, D, bonding ? 1 : 0, torus ? 1 : 0,
         fpOriginX, fpOriginY, fpOriginZ,
-        doCollision ? 1 : 0, springs ? 1 : 0,
+        doCollision ? 1 : 0, springs ? 1 : 0, agentUsesDensity ? 1 : 0,
       );
       ranForceWasm = true;
     } catch (e) {
@@ -1556,7 +1572,7 @@ function runAgentStep(): void {
       let fx = s.forceX[i]!, fy = s.forceY[i]!, fz = s.forceZ[i]!, dens = 0;
 
       // --- neighbour pass: 3ÃƒÆ’Ã¢â‚¬â€3ÃƒÆ’Ã¢â‚¬â€3 stencil over the z-major hash, torus-wrapped ---
-      if (hash) {
+      if (doScan && hash) {
         const nBinsX = hash.nBinsX, nBinsY = hash.nBinsY, nBinsZ = hash.nBinsZ;
         const binStart = hash.binStart, binAgents = hash.binAgents;
         let bx = ((xi - hash.originX) / hash.binSizeX) | 0; if (bx < 0) bx = 0; else if (bx >= nBinsX) bx = nBinsX - 1;
@@ -1594,7 +1610,7 @@ function runAgentStep(): void {
             }
           }
         }
-      } else {
+      } else if (doScan) {
         for (let j = 0; j < hw; j++) {
           if (j === i || !alive[j]) continue;
           let dx = x[j]! - xi, dy = y[j]! - yi, dz = z[j]! - zi;
@@ -1616,7 +1632,7 @@ function runAgentStep(): void {
           }
         }
       }
-      s.density[i] = dens;
+      if (doScan) s.density[i] = dens;
 
       // --- bond springs ÃƒÅ½Ã‚Â»(lÃƒÂ¢Ã‹â€ Ã¢â‚¬â„¢L)Ãƒâ€šÃ‚Â·rÃƒÅ’Ã¢â‚¬Å¡ over the 3-vector (dangling-bond epoch ABI) ---
       // Gated on the Bonds=Physics capability: Data bonds are connectivity edges
@@ -1675,7 +1691,7 @@ function runAgentStep(): void {
 
       // --- neighbour pass: always counts density; applies soft-sphere force only
       // when engineForces (customForcesOnly skips the built-in repulsion) ---
-      if (hash) {
+      if (doScan && hash) {
         const nBinsX = hash.nBinsX, nBinsY = hash.nBinsY;
         const binStart = hash.binStart, binAgents = hash.binAgents;
         let bx = ((xi - hash.originX) / hash.binSizeX) | 0; if (bx < 0) bx = 0; else if (bx >= nBinsX) bx = nBinsX - 1;
@@ -1706,7 +1722,7 @@ function runAgentStep(): void {
             }
           }
         }
-      } else {
+      } else if (doScan) {
         for (let j = 0; j < hw; j++) {
           if (j === i || !alive[j]) continue;
           let dx = x[j]! - xi, dy = y[j]! - yi;
@@ -1724,7 +1740,7 @@ function runAgentStep(): void {
           }
         }
       }
-      s.density[i] = dens;
+      if (doScan) s.density[i] = dens;
 
       // --- bond springs ÃƒÅ½Ã‚Â»(lÃƒÂ¢Ã‹â€ Ã¢â‚¬â„¢L)Ãƒâ€šÃ‚Â·rÃƒÅ’Ã¢â‚¬Å¡ (no-op until bonds exist). The partnerEpoch
       // check is the dangling-bond ABI ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â a recycled slot's stale bond reads
@@ -1946,7 +1962,7 @@ async function runAgentStepWebGPUInner(): Promise<boolean> {
     hashValid, nBinsX: hash ? hash.nBinsX : 0, nBinsY: hash ? hash.nBinsY : 0,
     binSizeX: hash ? hash.binSizeX : 1, binSizeY: hash ? hash.binSizeY : 1,
     dtOverEta: dt / eta, muR, muA, range, momentum, maxSpeed, growthRate,
-    fieldW: W, fieldH: H, bonding: bonding ? 1 : 0, doCollision: doCollision ? 1 : 0, torus: torus ? 1 : 0,
+    fieldW: W, fieldH: H, bonding: bonding ? 1 : 0, doCollision: doCollision ? 1 : 0, doDensity: agentUsesDensity ? 1 : 0, torus: torus ? 1 : 0,
     nBinsZ: hash ? hash.nBinsZ : 1, binSizeZ: hash ? hash.binSizeZ : 1, fieldD: s.worldDepth,
     originX: hash ? hash.originX : 0, originY: hash ? hash.originY : 0, originZ: hash ? hash.originZ : 0,
   });
@@ -4822,6 +4838,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       // compiled by compileAgentFns; absent in PR-A2 (agents seed + render only).
       agentsEnabled = !!msg.agents;
       agentUsesField = !!msg.agentUsesField;
+      agentUsesDensity = msg.agentUsesDensity ?? true;
       centerBasedConfig = msg.centerBased ?? null;
       agentColorViewer = msg.agentColorViewer || '';
       hasAgentSprites = !!msg.agentHasSprites;
@@ -5398,6 +5415,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
         const rc = msg as RecompileMsg;
         if (rc.centerBased) centerBasedConfig = rc.centerBased;
         if (rc.agentUsesField !== undefined) agentUsesField = !!rc.agentUsesField;
+        if (rc.agentUsesDensity !== undefined) agentUsesDensity = !!rc.agentUsesDensity;
         if (rc.agentColorViewer !== undefined) agentColorViewer = rc.agentColorViewer || '';
         if (rc.agentHasSprites !== undefined) hasAgentSprites = !!rc.agentHasSprites;
         compileAgentFns(rc.agentBehaviourCode, rc.agentInitCode, rc.agentDivisionCode, rc.agentOutputMappingCodes);
