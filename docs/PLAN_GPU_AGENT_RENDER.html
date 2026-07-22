@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Plan — GPU-Resident Agent Render</title>
+<style>
+  body { background:#0c0d10; color:#d8dbe2; font:14px/1.55 "Segoe UI",system-ui,sans-serif; margin:0; padding:32px 40px 80px; }
+  h1 { color:#e8a13a; font-size:22px; margin:0 0 4px; }
+  h2 { color:#e8a13a; font-size:16px; margin:36px 0 10px; border-bottom:1px solid #2a2d35; padding-bottom:6px; }
+  .sub { color:#8a8f9c; margin:0 0 24px; }
+  .panel { background:#14161b; border:1px solid #262a33; border-radius:10px; padding:18px 20px; margin:14px 0; }
+  .cols { display:flex; gap:18px; flex-wrap:wrap; }
+  .cols > div { flex:1 1 420px; }
+  svg text { font:12px "Segoe UI",system-ui,sans-serif; fill:#d8dbe2; }
+  svg .dim { fill:#8a8f9c; font-size:11px; }
+  svg .accent { fill:#e8a13a; }
+  svg .good { fill:#69d18c; }
+  svg .bad { fill:#e06c75; }
+  table { border-collapse:collapse; width:100%; font-size:13px; }
+  th, td { border:1px solid #2a2d35; padding:6px 10px; text-align:left; vertical-align:top; }
+  th { background:#191c22; color:#e8a13a; font-weight:600; }
+  td.free { color:#69d18c; }
+  td.hot { color:#e5c07b; }
+  td.fb { color:#8a8f9c; }
+  code { background:#1b1e25; border:1px solid #2a2d35; border-radius:4px; padding:1px 5px; font-size:12px; color:#7ec8e3; }
+  .tag { display:inline-block; background:#232734; border:1px solid #3a4152; color:#9fb6d9; border-radius:20px; padding:1px 10px; font-size:11px; margin-right:6px; }
+  .rule { color:#69d18c; font-weight:600; }
+</style>
+</head>
+<body>
+<h1>GPU-Resident Agent Render (A) + Bin-Sorted Iteration (B)</h1>
+<p class="sub">Companion to IMPACT_MAP_GPU_AGENT_RENDER.md — how the frame changes, how every feature keeps working, and where B's sim-side multiple comes from.
+<span class="tag">first-principles gates only</span><span class="tag">zero compiler changes in A</span><span class="tag">features never lost — they cost a readback while used</span></p>
+
+<h2>1 · The frame, before and after</h2>
+<div class="panel">
+<svg viewBox="0 0 980 330" width="100%" style="max-width:980px">
+  <!-- BEFORE -->
+  <text x="10" y="18" class="accent" font-weight="600">TODAY (resident, post-PR7c)</text>
+  <rect x="10" y="30" width="450" height="120" rx="8" fill="#191c22" stroke="#2a2d35"/>
+  <text x="24" y="52" class="dim">WORKER (GPU)</text>
+  <rect x="24" y="60" width="120" height="30" rx="5" fill="#233042" stroke="#3a5a7a"/><text x="34" y="79">sim batch ×G</text>
+  <rect x="154" y="60" width="150" height="30" rx="5" fill="#42303a" stroke="#7a4a5a"/><text x="164" y="79" class="bad">readback 4–5 MB</text>
+  <rect x="314" y="60" width="130" height="30" rx="5" fill="#42303a" stroke="#7a4a5a"/><text x="324" y="79" class="bad">snapshot + clone</text>
+  <rect x="10" y="170" width="450" height="120" rx="8" fill="#191c22" stroke="#2a2d35"/>
+  <text x="24" y="192" class="dim">MAIN THREAD</text>
+  <rect x="24" y="200" width="180" height="30" rx="5" fill="#42303a" stroke="#7a4a5a"/><text x="34" y="219" class="bad">Canvas2D draw ~10 ms</text>
+  <rect x="214" y="200" width="110" height="30" rx="5" fill="#233042" stroke="#3a5a7a"/><text x="224" y="219">pan/zoom blit</text>
+  <line x1="380" y1="90" x2="120" y2="200" stroke="#7a4a5a" stroke-dasharray="4 3"/>
+  <text x="24" y="260" class="dim">every frame pays readback + clone + CPU draw → fps capped even when the sim is free</text>
+
+  <!-- AFTER -->
+  <text x="520" y="18" class="good" font-weight="600">PLAN A (direct render, free-running)</text>
+  <rect x="520" y="30" width="450" height="120" rx="8" fill="#191c22" stroke="#2a2d35"/>
+  <text x="534" y="52" class="dim">WORKER (GPU) — one queue submit</text>
+  <rect x="534" y="60" width="120" height="30" rx="5" fill="#233042" stroke="#3a5a7a"/><text x="544" y="79">sim batch ×G</text>
+  <rect x="664" y="60" width="190" height="30" rx="5" fill="#1f3a2a" stroke="#2f7a4a"/><text x="674" y="79" class="good">render pass → canvas</text>
+  <text x="534" y="112" class="dim">camera + tiling uniforms · glow/outline in-shader</text>
+  <text x="534" y="130" class="dim">reads x/y/radius/alive/colors — engine-owned, graph-agnostic</text>
+  <rect x="520" y="170" width="450" height="120" rx="8" fill="#191c22" stroke="#2a2d35"/>
+  <text x="534" y="192" class="dim">MAIN THREAD</text>
+  <rect x="534" y="200" width="130" height="30" rx="5" fill="#233042" stroke="#3a5a7a"/><text x="544" y="219">blit 1:1</text>
+  <rect x="674" y="200" width="200" height="30" rx="5" fill="#1f3a2a" stroke="#2f7a4a"/><text x="684" y="219" class="good">setAgentCamera on pan/zoom</text>
+  <text x="534" y="260" class="dim">0 readback · 0 snapshot · 0 CPU draw per frame — render cost independent of N</text>
+</svg>
+</div>
+
+<h2>2 · The readback policy — how every feature keeps working</h2>
+<div class="panel">
+<svg viewBox="0 0 980 250" width="100%" style="max-width:980px">
+  <rect x="60" y="70" width="220" height="90" rx="12" fill="#1f3a2a" stroke="#2f7a4a"/>
+  <text x="105" y="105" class="good" font-size="15" font-weight="600">FREE</text>
+  <text x="80" y="128" class="dim">no readback, no snapshot</text>
+  <text x="80" y="144" class="dim">stepped ships liveCount only</text>
+
+  <rect x="620" y="70" width="240" height="90" rx="12" fill="#3a3424" stroke="#7a6a3a"/>
+  <text x="665" y="105" fill="#e5c07b" font-size="15" font-weight="600">FRAME (today's mode)</text>
+  <text x="640" y="128" class="dim">per-frame readback + snapshot</text>
+  <text x="640" y="144" class="dim">picks/hover/recording all live</text>
+
+  <path d="M 280 95 C 400 60 500 60 620 95" fill="none" stroke="#e5c07b" marker-end="url(#a1)"/>
+  <text x="330" y="62" fill="#e5c07b">brush armed · inspector pinned · recording · paused</text>
+  <path d="M 620 140 C 500 175 400 175 280 140" fill="none" stroke="#69d18c" marker-end="url(#a2)"/>
+  <text x="400" y="192" class="good">feature released → back to free</text>
+
+  <rect x="330" y="205" width="330" height="34" rx="8" fill="#232734" stroke="#3a4152"/>
+  <text x="344" y="227">ONE-SHOT: <tspan class="rule">any agent read/write message while stale ⇒ readback first</tspan></text>
+  <text x="60" y="227" class="dim">getAgentState · getState/save · mutations</text>
+  <defs>
+    <marker id="a1" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 z" fill="#e5c07b"/></marker>
+    <marker id="a2" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 z" fill="#69d18c"/></marker>
+  </defs>
+</svg>
+<p class="dim" style="margin:6px 0 0">The one-shot rule lives in ONE place (the worker message dispatcher), so no feature can ever read stale state — it just pays ~2 ms when it syncs. Interaction therefore works exactly as today (SandboxScience-style GPU brushes are a possible later upgrade, not a prerequisite).</p>
+</div>
+
+<h2>3 · Feature matrix</h2>
+<div class="panel">
+<table>
+<tr><th>Feature</th><th>Mode</th><th>Cost while used</th></tr>
+<tr><td>Watching the sim / pan / zoom / infinity</td><td class="free">free (camera + tiling uniforms)</td><td>none — the win</td></tr>
+<tr><td>Agent brush (all 7 modes) · hover · area preview</td><td class="hot">frame while pointer armed</td><td>~2 ms/frame readback @50k</td></tr>
+<tr><td>Inspector / edit prefill / Apply</td><td class="hot">one-shot + frame while pinned</td><td>one readback (+frame while pinned)</td></tr>
+<tr><td>Recording / screenshot</td><td class="hot">frame forced; display-canvas capture unchanged</td><td>accepted drop while recording</td></tr>
+<tr><td>Save State / Project / presets / pause</td><td class="hot">one-shot before serialize</td><td>one readback (also fixes a latent save-freshness gap)</td></tr>
+<tr><td>Outlines · background · glow (new option)</td><td class="free">in-shader</td><td>none</td></tr>
+<tr><td>Sprites · metaballs/goo · 3D · JS/WASM targets</td><td class="fb">fallback: today's CPU path (A2 lifts JS/WASM later)</td><td>today's cost</td></tr>
+</table>
+</div>
+
+<h2>4 · Phases + B (the sim-side multiple)</h2>
+<div class="cols">
+<div class="panel">
+<b class="rule">A1 — direct render (the milestone)</b>
+<p>Render pipeline + <code>attachAgentCanvas</code> (clone of the grid's proven two-phase seam) + camera messages + the readback policy + the UI-sync driver. Gates: 2D · agents-only · WebGPU target · resident-eligible · no sprites/metaballs. Zero compiler changes.</p>
+<b class="rule">A2 — same renderer, snapshot-fed</b>
+<p>Upload the f32 snapshot instead of reading resident buffers → JS/WASM targets and per-gen GPU models lose the ~10 ms Canvas2D draw too. Same shaders, same gates minus residency.</p>
+</div>
+<div class="panel">
+<b class="rule">B — bin-sorted mirror</b>
+<p><b>B1</b>: the hash build's scatter also writes a bin-sorted field-major mirror + <code>sortedId</code>; the engine force pass iterates contiguous runs (no compiler change). <b>B2</b>: fuse <code>forEachInArray(getNearbyAgents)</code> to iterate bin runs against the mirror, materializing canonical ids only where the graph consumes identity. Identity stays canonical — we sort a read-mirror, never the agents (bonds/inspector/brushes keep stable slots).</p>
+<p class="dim">Why it's general: any model that gathers neighbours (Boids, GoL-on-agents, future) reads coalesced instead of scattered — the 2–4× GPU memory-pattern gap measured against SandboxScience.</p>
+</div>
+</div>
+
+<h2>5 · First-principles guarantee</h2>
+<div class="panel">
+<p>Every gate keys on <b>general properties</b>: <code>topologyMode</code>, resolved agent target, <code>agentResidentEligible</code> (itself built from behaviour-scoped usage flags), sprite/metaball presence, OffscreenCanvas support. The render reads only engine-owned SoA fields that exist for every agent model; colour is whatever the model's own graph computed. Nothing anywhere inspects what rule the graph encodes — Particle Life is just the model that happens to hit the fast path hardest today; Boids hits it identically, and a future gas/swarm/ecology model hits it the day it's authored.</p>
+</div>
+</body>
+</html>
