@@ -164,8 +164,9 @@ stepped-handler (snapshot consume + draw) went **25 → 9.6 ms median**.
 **P2 — snapshot: IMPLEMENTED (2026-07-22).** `snapshotAgentsForRender` ships
 Float32 copies (render precision; the store stays f64) and vx/vy only when the
 model has sprites (the orientToVelocity heading is their sole consumer) —
-45 → ~21 B/agent for a plain 2D model. The worker transfer list gates the
-length-0 placeholder buffers (they share one ArrayBuffer — transferring it
+measured **45 → 17 B/agent** for a plain 2D model (profiler: snapshot 1.5 →
+0.83 ms + clone 3.9 → 1.33 ms per frame at 50k). The worker transfer list gates
+the length-0 placeholder buffers (they share one ArrayBuffer — transferring it
 twice is a DataCloneError).
 
 **P3 — Float64 SoA → Float32:** halves memory bandwidth in every loop, but
