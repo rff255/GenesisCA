@@ -133,8 +133,9 @@ next phase must know.
 
 | Phase | Status | Session/commits | Notes |
 |---|---|---|---|
-| A1 resident direct render | **DONE** | `optimize` (1 commit) | render pipeline + readback policy + one-shot rule + gate/attach/UI-sync/glow; verified in-browser (protocol + flocking 0.9991; pixels unverifiable while pane occluded); OM-exclusion gate term added |
-| A2 snapshot-fed renderer | READY (unblocked) | — | handoff complete; can reuse A1's `AGENT_RENDER_WGSL` + camera by feeding uploaded snapshots |
+| A1 resident direct render | **DONE + ORCHESTRATOR-REVIEWED** | `optimize` 3bdd5f4 | render pipeline + readback policy + one-shot rule + gate/attach/UI-sync/glow; session verified (Boids direct render, flocking 0.9991, staleness probes) + orchestrator re-ran gates, audited the diff surface (no compilers/gl3d/engine), and independently confirmed the CPU fallback path + mutation/one-shot correctness on an OM model. Composited pixels still unverified (pane occluded both sessions) — the user should eyeball an agents-only WebGPU model once. |
+| A1.5 GPU agent-OM colour pass | queued (refine first) | — | The A1 OM-exclusion gate term (`agentMappings.length === 0`, SimulatorView:3995) is CORRECT but excludes OM-coloured models — incl. Particle Life itself — from the resident fast path (OM colours are CPU-computed into `s.colors`; the render reads GPU `agentColors`). Remedy: compile agent OM graphs into a per-agent GPU colour pass writing `agentColors` (the agentWebgpu emitters already exist — behaviour setCellLooks does exactly this), active-viewer switch re-dispatches it. Compiler-touching → full identity/parity discipline. NB A2 covers OM models on CPU targets for free (the snapshot already carries OM colours). |
+| A2 snapshot-fed renderer | READY (unblocked) | — | handoff complete; can reuse A1's `AGENT_RENDER_WGSL` + camera by feeding uploaded snapshots; NOTE: A2's upload path carries `s.colors` (CPU-computed, OM included) — so drop the OM exclusion from A2's gate variant |
 | B1 sorted mirror (force pass) | ready (independent) | — | handoff complete |
 | B2 fused gather (compiler) | blocked on B1 | — | design in A2_B doc; refine before launch |
 | C 3D sphere render | blocked on A1 | — | refine before launch |
