@@ -123,7 +123,18 @@
 </div>
 </div>
 
-<h2>5 · First-principles guarantee</h2>
+<h2>5 · Extension roadmap — the v1 limits are scoping, not theory</h2>
+<div class="panel">
+<table>
+<tr><th>v1 restriction</th><th>Why (v1)</th><th>Lifted by</th><th>Fundamental?</th></tr>
+<tr><td>2D render only</td><td>gl3d is main-thread WebGL2 (can't share WebGPU buffers)</td><td><b>C</b>: WGSL sphere-impostor pass in the agent runtime (free mode); gl3d keeps frame mode. <i>The resident SIM already runs 3D today.</i></td><td class="free">no</td></tr>
+<tr><td>Agents-only</td><td>simplest correct gate</td><td><b>D</b>: field-decoupled grid+agents (relax the gate to "no field coupling" + two-canvas composite) · <b>E</b>: ONE unified GPUDevice → agent shaders read/deposit the grid attrs directly → the whole closed loop resident, one composite render</td><td class="free">no — two-devices is our code structure, not hardware</td></tr>
+<tr><td>Resident-eligibility exclusions</td><td>smallest surface</td><td><b>F</b>: sync attrs (GPU ping-pong) · springs/growth (bond binding exists; ramp in posCommit) · positional collision (Jacobi = order-independent = GPU-natural) · spawn (poll the atomic cursor) · stop (4-byte readback) · indicators (GPU atomics, the webgpuReduce precedent) · structural (poll the small request fields, eigensolve stays CPU)</td><td class="free">no — each staged</td></tr>
+<tr><td>—</td><td>—</td><td>async GRID mode · order-dependent ops · JS/WASM sim staying CPU (the target's definition; A2 gives them the render win)</td><td class="bad" style="color:#e06c75">yes — the only true fundamentals</td></tr>
+</table>
+</div>
+
+<h2>6 · First-principles guarantee</h2>
 <div class="panel">
 <p>Every gate keys on <b>general properties</b>: <code>topologyMode</code>, resolved agent target, <code>agentResidentEligible</code> (itself built from behaviour-scoped usage flags), sprite/metaball presence, OffscreenCanvas support. The render reads only engine-owned SoA fields that exist for every agent model; colour is whatever the model's own graph computed. Nothing anywhere inspects what rule the graph encodes — Particle Life is just the model that happens to hit the fast path hardest today; Boids hits it identically, and a future gas/swarm/ecology model hits it the day it's authored.</p>
 </div>

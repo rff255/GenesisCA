@@ -139,10 +139,14 @@ the sorted mirror; ids materialize from `sortedId` only where the graph
 consumes identity) — scoped separately in the plan; JS/WASM targets and the
 lattice grid are untouched by both A and B.
 
-### 1.5 3D (`gl3d.ts`) — unaffected
-The 3D view is a main-thread WebGL2 context; it cannot share WebGPU buffers.
-3D agent models keep today's snapshot path (which stays available — it's the
-`frame` mode). A future 3D uplift is out of scope.
+### 1.5 3D (`gl3d.ts`) — unaffected in A1, extendable (plan Phase C)
+The 3D view is a main-thread WebGL2 context; it cannot share WebGPU buffers —
+so A1 keeps 3D agent models on today's snapshot path (= the `frame` mode).
+NB the resident SIM already covers 3D (the eligibility gate has no 3D term);
+only the render round-trip remains, and Phase C removes it with a WGSL
+sphere-impostor pass in the agent runtime (`free` mode) while gl3d keeps
+serving `frame` mode unchanged. See the plan's Extension roadmap for the full
+scoping-vs-fundamental audit (grid+agents Phases D/E, eligibility Phase F).
 
 ### 1.6 Engine (`agentEngine.ts`) — unaffected by A
 The CPU store stays the identity authority (slots, bonds, epochs, free-list).
