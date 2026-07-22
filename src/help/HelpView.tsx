@@ -1732,6 +1732,37 @@ export function HelpView() {
             load &mdash; so a grown tissue or an aggregated flock resumes exactly where you
             left it.
           </p>
+          <h3 className={styles.h3}>Performance</h3>
+          <p className={styles.p}>
+            Almost the entire cost of an agent generation is the <em>neighbour pair
+            work</em>: it scales with <strong>N &times; local density &times; query
+            radius&sup2;</strong>, not with N alone. Two practical consequences:
+          </p>
+          <ul className={styles.list}>
+            <li><strong>Grow the world with the population.</strong> Doubling N in the
+              same world doubles the density too, so each agent sees twice the
+              neighbours &mdash; the cost <em>quadruples</em>. Scaling the world so
+              density stays constant keeps the per-agent cost flat (50k agents in a
+              large world can run faster than 10k crammed into a small one).</li>
+            <li><strong>Keep radii tight.</strong> The <strong>Neighbour Query
+              Radius</strong> (Properties &rarr; Bond-Graph Agents &rarr; Motion) sets the
+              spatial-hash bin size for <em>every</em> neighbour pass &mdash; set it no
+              larger than the biggest radius the model actually queries, and keep the
+              wired Get Nearby Agents radii as small as the rule allows. Halving a
+              radius quarters the candidate area.</li>
+            <li><strong>Compile target:</strong> WebAssembly runs heavy per-agent rules
+              2&ndash;5&times; faster than JS (bit-identically). The <strong>WebGPU</strong>{' '}
+              agent target shines for <em>large populations</em>: eligible models (custom
+              forces, async attributes, no bonds/division/field coupling &mdash; the
+              Particle-Life / Boids class) run whole frames <em>resident on the GPU</em>,
+              tens of times faster than the CPU at 50k+ agents. Models outside that
+              class use the per-generation GPU path, where the CPU&harr;GPU transfer
+              often makes JS/WASM the faster choice below ~10k agents.</li>
+            <li>The engine skips work it can prove is dead automatically &mdash; e.g. the
+              built-in neighbour-density scan only runs when something actually reads it
+              (a Neighbour Density node, division, or engine physics), so a pure
+              custom-force model pays nothing for it.</li>
+          </ul>
         </section>
 
         {/* ============================================================ */}

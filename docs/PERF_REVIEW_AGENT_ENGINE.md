@@ -130,33 +130,50 @@ that gap is PR7c, not parameter tuning.
   now flocks 0.223→0.998 on the GPU target; the WebGPU-grid burst path
   serializes cleanly too. The WebGPU agent target is trustworthy again.
 
-**P1 — the cheap 1.6×: skip the dead density scan.**
-Compile-side flag (does any reachable node read `neighbourDensity`?) threaded to
-the worker; when false AND soft-collision off AND springs off, the force pass
-skips the neighbour scan entirely (JS branch, a WASM forcePass param like
-`doCollision`, a GPU force-shader variant). All-target, small surface,
-measured-large payoff for every custom-force model.
+**P1 — the cheap 1.6×: skip the dead density scan. IMPLEMENTED (2026-07-22).**
+Compile-side flag `agentUsesDensity` (macro-aware scan for `neighbourDensity` /
+`divideAgent` in the agent graph) threaded to the worker; the fused force pass
+runs its neighbour scan only when `doScan = engineForces || usesDensity` — JS
+branch, WASM forcePass `doDensity` param (index 25, 26-param ABI), WGSL
+`ForceControl.doDensity` (u[24]). Measured: 50k @ 600² force 449 → **2.8 ms**;
+total 1123/994 → **589/544 ms/gen** (JS/WASM) — ~1.9×. Parity: 6 gate combos
+bit-exact (parity-agent-force), Tissue (a density consumer) unregressed.
 
-**P1 — WebGPU per-gen overhead:** iterate upload/readback/commit and the
-dispatch bound over `highWater`, not `maxAgents` (measured ~60% of GPU step time
-at 5k live/50k max). Then the real PR7c: persist the SoA on-GPU across
-generations, read back once per FRAME (gens/frame batching), hash built on GPU
-or uploaded only. Ceiling: 50k+ at 60 fps for Particle-Life-class models.
+**P1 — WebGPU per-gen overhead / PR7c residency: IMPLEMENTED (2026-07-22).**
+`runAgentBatchResident` (sim.worker.ts) + the resident runtime block in
+agentWebgpuRuntime.ts: the spatial hash is built ON-GPU (clear → atomic count →
+single-workgroup two-level exclusive scan → atomic scatter), a whole gens/frame
+batch is encoded in ONE queue submit (per gen: hash passes → behaviour → force →
+posCommit, which commits xNext→x and zeroes the force accumulators GPU-side),
+and the CPU reads back once per FRAME (`readbackAgentFrame`). A dirty flag
+(`agentGpuUploadPending`, set by every mutation message) re-uploads only when
+the CPU touched the state. Eligibility is behaviour-scoped compiler flags
+(`usesStructural`/`usesRadiusWrite`) + agents-only + async attrs + no
+field/springs/growth/spawn/stop/indicators/positional — anything else falls
+back to the per-gen path unchanged. Measured: Boids flocks 0.105→0.998 at
+**~0.4 ms/gen**; 50k Particle Life @ 600² runs **~20 ms/gen** resident (29× the
+1030 ms pre-review WASM baseline, ~10× the per-gen GPU path); mutation
+round-trip exact (moveAgents lands and integrates).
 
-**P2 — render:** the batched-disc Canvas2D path costs ~25 ms/frame at 50k
-(caps fps at ~40 even with free physics). The deferred point-splat fast path
-(sub-2px discs → per-color ImageData/rect splats), or a WebGL point sprite
-layer, is the fix for 10k+ populations.
+**P2 — render: IMPLEMENTED (2026-07-22).** Batched opaque discs below 2px
+screen radius draw as `rect()` splats instead of `moveTo`+`arc` subpaths
+(`SPLAT_MAX_RAD = 2` in `stampBatchedTile`) — visually identical at that size,
+far cheaper to tessellate. Together with the snapshot slim below, the 50k
+stepped-handler (snapshot consume + draw) went **25 → 9.6 ms median**.
 
-**P2 — snapshot:** ship render-only fields, as Float32, and skip vx/vy unless
-sprites orient-to-velocity / metaballs need them (45 → ~21 B/agent). Minor
-today (~5 ms/frame at 50k), matters once physics is GPU-resident.
+**P2 — snapshot: IMPLEMENTED (2026-07-22).** `snapshotAgentsForRender` ships
+Float32 copies (render precision; the store stays f64) and vx/vy only when the
+model has sprites (the orientToVelocity heading is their sole consumer) —
+45 → ~21 B/agent for a plain 2D model. The worker transfer list gates the
+length-0 placeholder buffers (they share one ArrayBuffer — transferring it
+twice is a DataCloneError).
 
 **P3 — Float64 SoA → Float32:** halves memory bandwidth in every loop, but
 breaks the JS↔WASM f64 bit-parity contract — only worth considering as part of
 a deliberate precision-policy decision. Not recommended now.
 
-**User-facing guidance** (worth a note in Help): agent physics cost scales with
+**User-facing guidance — ADDED to Help (Bond-Graph Agents § Performance,
+2026-07-22)**: agent physics cost scales with
 N × density × queryRadius² — growing the world with N (constant density) keeps
 per-agent cost flat; cranking N in a fixed world is quadratic-feeling. And
 `neighbourQueryRadius` (the config ceiling) sets the hash bin edge for BOTH
