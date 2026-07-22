@@ -1037,6 +1037,11 @@ function buildAgentWebGPUIfNeeded(): void {
           self.postMessage({ type: 'error', message: '[agents][gpu] uncaptured: ' + (ev.error?.message ?? String(ev.error)) });
         };
         void rt.device.lost.then((info) => {
+          // reason 'destroyed' = OUR OWN destroyAgentWebGPURuntime (every reset /
+          // recompile / target flip tears the old runtime down before building the
+          // new one) — deliberate teardown, NOT an error. Only a genuine loss
+          // (reason 'unknown' — driver reset, TDR, adapter removed) surfaces.
+          if (info.reason === 'destroyed') return;
           self.postMessage({ type: 'error', message: `[agents][gpu] device lost (${info.reason}): ${info.message}` });
         });
         agentWebgpuRuntime = rt;
