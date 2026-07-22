@@ -1565,6 +1565,20 @@ function isAgentArrayProducer(nodeType: string): boolean {
   return AGENT_ARRAY_PRODUCERS.has(nodeType);
 }
 
+/** Per-thread scratch CAPACITY for the agent-array producers. WGSL
+ *  `var<function>` arrays are ZERO-INITIALIZED (spec) and live in spilled
+ *  private memory, so sizing them at `maxAgents` made EVERY thread allocate +
+ *  zero `maxAgents*4` bytes per dispatch — at 50k maxAgents that is 200 KB of
+ *  private memory per thread: occupancy collapse + hundreds of ms per step (the
+ *  "WebGPU agents barely faster than WASM at 50k" profile). The cap bounds the
+ *  per-thread cost to 8 KB; models with maxAgents ≤ the cap emit byte-identical
+ *  shaders (min()). Semantics: a single query/gather yielding MORE than the cap
+ *  TRUNCATES to the first 2048 members — a documented GPU capacity bound (JS/
+ *  WASM keep all members; a >2048-neighbour query means a degenerate density
+ *  where the physics is far past useful anyway). */
+const AGENT_GPU_ARRAY_CAP = 2048;
+function arrCapOf(ctx: AgentWgpuCtx): number { return Math.min(ctx.layout.maxAgents, AGENT_GPU_ARRAY_CAP); }
+
 /** The `var<function>` array name for a producer's assigned scratch slot. */
 function arraySlotName(ctx: AgentWgpuCtx, nodeId: string): { arrName: string; elemType: WgslType } {
   const s = ctx.arrayScratchSlot.get(nodeId);
@@ -1726,7 +1740,7 @@ function emitJoinAgents(ctx: AgentWgpuCtx, node: GraphNode): AgentArrayRef {
       ctx.lines.push(`      var ${inB}: bool = false;`);
       ctx.lines.push(`      for (var ${bk}: i32 = 0; ${bk} < ${bArr.lenName}; ${bk} = ${bk} + 1) { if (${arrLoad(bArr, bk)} == ${x}) { ${inB} = true; break; } }`);
       const seen = seenInOut(x);
-      ctx.lines.push(`      if (${inB} && !${seen}) { ${arrName}[${cntName}] = ${x}; ${cntName} = ${cntName} + 1; }`);
+      ctx.lines.push(`      if (${inB} && !${seen} && ${cntName} < ${arrCapOf(ctx)}) { ${arrName}[${cntName}] = ${x}; ${cntName} = ${cntName} + 1; }`);
       ctx.lines.push(`    }`);
       ctx.lines.push(`  }`);
     }
@@ -1739,7 +1753,7 @@ function emitJoinAgents(ctx: AgentWgpuCtx, node: GraphNode): AgentArrayRef {
       ctx.lines.push(`    let ${x}: i32 = ${arrLoad(src, k)};`);
       ctx.lines.push(`    if (${x} != -1) {`);
       const seen = seenInOut(x);
-      ctx.lines.push(`      if (!${seen}) { ${arrName}[${cntName}] = ${x}; ${cntName} = ${cntName} + 1; }`);
+      ctx.lines.push(`      if (!${seen} && ${cntName} < ${arrCapOf(ctx)}) { ${arrName}[${cntName}] = ${x}; ${cntName} = ${cntName} + 1; }`);
       ctx.lines.push(`    }`);
       ctx.lines.push(`  }`);
     }
@@ -2416,7 +2430,8 @@ function emitSetCellLooks(ctx: AgentWgpuCtx, node: GraphNode): void {
 // ---------------------------------------------------------------------------
 // getNearbyAgents + forEachInArray — the keystone array path.
 //
-// getNearbyAgents fills a per-thread `var<function> array<i32, maxAgents>` with
+// getNearbyAgents fills a per-thread `var<function> array<i32, min(maxAgents,
+// AGENT_GPU_ARRAY_CAP)>` with
 // the matched agent ids + a length local, queried against the in-buffer CSR hash
 // (3×3 bin stencil + torus wrap) with an all-pairs fallback. forEachInArray loops
 // it. Mirrors GetNearbyAgentsNode's JS emit exactly (2D Boids subset).
@@ -2481,7 +2496,7 @@ function emitNearbyFill(ctx: AgentWgpuCtx, naNode: GraphNode): AgentArrayRef {
     }
     ctx.lines.push(`      }`);
     const d2 = is3d ? `${dx} * ${dx} + ${dy} * ${dy} + ${dz} * ${dz}` : `${dx} * ${dx} + ${dy} * ${dy}`;
-    ctx.lines.push(`      if (${d2} <= ${r2} && ${lenName} < i32(control.maxAgents)) {`);
+    ctx.lines.push(`      if (${d2} <= ${r2} && ${lenName} < ${arrCapOf(ctx)}) {`);
     if (cone) {
       // Cone gate: hm2==0 ⇒ omnidirectional; else dot(h,offset) ≥ cosHalf·|h|·d
       // (division-free `cosA ≥ cosHalf`). Mirrors the JS/WASM op order.
@@ -3506,13 +3521,17 @@ export function compileAgentGraphWebGPU(
 
   // --- assemble the WGSL module ---
   // Array-producer scratch pools: one `var<function>` array per assigned slot
-  // (`arri32<n>` for id arrays, `arrf32<n>` for gathered value arrays).
+  // (`arri32<n>` for id arrays, `arrf32<n>` for gathered value arrays). Sized at
+  // min(maxAgents, AGENT_GPU_ARRAY_CAP) — NEVER bare maxAgents: `var<function>`
+  // arrays are zero-initialized per-thread private memory, so a maxAgents-sized
+  // slot at 50k agents cost 200 KB/thread (occupancy collapse; see the cap doc).
+  const arrCap = Math.min(layout.maxAgents, AGENT_GPU_ARRAY_CAP);
   const nearbyDecls: string[] = [];
   for (let i = 0; i < i32Slots; i++) {
-    nearbyDecls.push(`  var<function> arri32${i}: array<i32, ${layout.maxAgents}>;`);
+    nearbyDecls.push(`  var<function> arri32${i}: array<i32, ${arrCap}>;`);
   }
   for (let i = 0; i < f32Slots; i++) {
-    nearbyDecls.push(`  var<function> arrf32${i}: array<f32, ${layout.maxAgents}>;`);
+    nearbyDecls.push(`  var<function> arrf32${i}: array<f32, ${arrCap}>;`);
   }
   const varDecls: string[] = [];
   for (const v of (model.agentVariables ?? [])) {
