@@ -177,26 +177,26 @@ export interface Viz3D { axes: boolean; grid: boolean; bounds: boolean; gizmo: b
  *  so it ships against the 2D engine), so it's typed as a maybe-empty array. */
 export interface AgentSnapshot3D {
   highWater: number;
-  x: Float64Array;
-  y: Float64Array;
-  z: Float64Array;
-  radius: Float64Array;
+  x: Float32Array;
+  y: Float32Array;
+  z: Float32Array;
+  radius: Float32Array;
   alive: Uint8Array;
   colors: Uint8ClampedArray;
   /** Flat [a, b, a, b, …] live bond index pairs (empty when no bonds). */
   bonds: Int32Array;
   /** Velocity — read only for a sprite whose asset has `orientToVelocity`. Length-0
-   *  in 2D / non-sprite models (then treated as 0). */
-  vx: Float64Array;
-  vy: Float64Array;
+   *  in non-sprite models (then treated as 0). */
+  vx: Float32Array;
+  vy: Float32Array;
   /** Per-agent sprite slot (1-based, 0 = none) + current frame (fractional) +
    *  facing (compass degrees) + size override (0 = use the asset default). All are
    *  length-0 for a non-sprite model → the renderer draws sphere impostors, exactly
    *  as before this feature (the sprite pass never runs). */
   spriteIds: Int32Array;
-  spriteFrames: Float64Array;
-  spriteRotations: Float64Array;
-  spriteScales: Float64Array;
+  spriteFrames: Float32Array;
+  spriteRotations: Float32Array;
+  spriteScales: Float32Array;
 }
 
 /** One sprite's atlas contribution — the decoded frame bitmaps + the render meta

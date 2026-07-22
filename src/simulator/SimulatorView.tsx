@@ -2685,10 +2685,17 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
         }
         return groups;
       };
+      // P2 point-splat: below this projected radius a filled SQUARE is visually
+      // a dot, and rect() subpaths skip arc tessellation entirely — the arc walk
+      // was the dominant cost of the batched path at Particle-Life populations
+      // (measured ~25 ms/frame at 50k discs). Kept strictly below the ≥2px
+      // outline-stroke threshold so splat groups never stroke squares.
+      const SPLAT_MAX_RAD = 2;
       const stampBatchedTile = (tileOx: number, tileOy: number, groups: Map<number, number[]>) => {
         for (const [key, idxs] of groups) {
           const packed = Math.floor(key / 100000);
           const groupRad = (key % 100000) / 10;
+          const splat = groupRad < SPLAT_MAX_RAD;
           ctx.beginPath();
           let any = false;
           for (let k = 0; k < idxs.length; k++) {
@@ -2697,8 +2704,12 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
             const cy = tileOy + ay[i]! * scale;
             const rad = Math.max(1.2, ar[i]! * scale);
             if (cx + rad < 0 || cx - rad > parentW || cy + rad < 0 || cy - rad > parentH) continue;
-            ctx.moveTo(cx + rad, cy); // break the subpath — else arc() draws a chord from the previous arc's end
-            ctx.arc(cx, cy, rad, 0, Math.PI * 2);
+            if (splat) {
+              ctx.rect(cx - rad, cy - rad, rad * 2, rad * 2);
+            } else {
+              ctx.moveTo(cx + rad, cy); // break the subpath — else arc() draws a chord from the previous arc's end
+              ctx.arc(cx, cy, rad, 0, Math.PI * 2);
+            }
             any = true;
           }
           if (!any) continue;

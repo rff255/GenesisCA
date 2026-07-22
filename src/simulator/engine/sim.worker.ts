@@ -4788,20 +4788,25 @@ function sendColors(): void {
     runAgentColorPass();
     agentsPayload = snapshotAgentsForRender(agentStore, hasAgentSprites);
     agentTransfers.push(
-      agentsPayload.x.buffer, agentsPayload.y.buffer, agentsPayload.vx.buffer, agentsPayload.vy.buffer,
+      agentsPayload.x.buffer, agentsPayload.y.buffer,
       agentsPayload.radius.buffer,
       agentsPayload.alive.buffer, agentsPayload.colors.buffer,
       agentsPayload.bonds.buffer,
     );
+    // vx/vy ship only for sprite models (P2 slim — the orientToVelocity heading
+    // is their sole consumer); the length-0 placeholders SHARE one buffer, so
+    // transferring them unconditionally would list a duplicate ArrayBuffer.
+    if (agentsPayload.vx.length > 0) agentTransfers.push(agentsPayload.vx.buffer, agentsPayload.vy.buffer);
     // z/vz are length-0 placeholders in 2D (the A1 snapshot gate) ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â transfer them
     // only when 3D populated them, else an empty buffer is harmlessly cheap but
     // we skip it for symmetry with the gate.
-    if (agentsPayload.z.length > 0) agentTransfers.push(agentsPayload.z.buffer, agentsPayload.vz.buffer);
+    if (agentsPayload.z.length > 0) agentTransfers.push(agentsPayload.z.buffer);
+    if (agentsPayload.vz.length > 0) agentTransfers.push(agentsPayload.vz.buffer);
     // Sprites: same gate ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â only ship the per-agent buffers when the model has sprites.
     if (agentsPayload.spriteIds.length > 0) agentTransfers.push(agentsPayload.spriteIds.buffer, agentsPayload.spriteFrames.buffer, agentsPayload.spriteRotations.buffer, agentsPayload.spriteScales.buffer);
   } else if (agentStore) {
     // Empty store ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â still tell the main thread so it clears any stale agents.
-    agentsPayload = { highWater: 0, liveCount: 0, x: new Float64Array(0), y: new Float64Array(0), z: new Float64Array(0), vx: new Float64Array(0), vy: new Float64Array(0), vz: new Float64Array(0), radius: new Float64Array(0), alive: new Uint8Array(0), colors: new Uint8ClampedArray(0), bonds: new Int32Array(0), spriteIds: new Int32Array(0), spriteFrames: new Float64Array(0), spriteRotations: new Float64Array(0), spriteScales: new Float64Array(0) };
+    agentsPayload = { highWater: 0, liveCount: 0, x: new Float32Array(0), y: new Float32Array(0), z: new Float32Array(0), vx: new Float32Array(0), vy: new Float32Array(0), vz: new Float32Array(0), radius: new Float32Array(0), alive: new Uint8Array(0), colors: new Uint8ClampedArray(0), bonds: new Int32Array(0), spriteIds: new Int32Array(0), spriteFrames: new Float32Array(0), spriteRotations: new Float32Array(0), spriteScales: new Float32Array(0) };
   }
 
   // P7 ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â when WebGPU direct render is active, the OffscreenCanvas already

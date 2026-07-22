@@ -917,21 +917,28 @@ export function clearAgents(store: AgentStore): void {
 // live arrays) so the engine keeps owning its SoA.
 // ---------------------------------------------------------------------------
 
+/** The render snapshot is FLOAT32 (P2 slim): every consumer (the 2D canvas
+ *  overlay, the gl3d instance packer — itself f32 — the metaball bake, picking)
+ *  is render-precision work, and f32 halves the per-frame slice + ship cost.
+ *  The SIMULATION state stays f64 in the store; only this per-frame copy narrows. */
 export interface AgentRenderSnapshot {
   highWater: number;
   liveCount: number;
-  x: Float64Array;
-  y: Float64Array;
+  x: Float32Array;
+  y: Float32Array;
   /** z (3D agents). Sliced only in 3D (`worldDepth > 1`); in 2D it's a length-0
    *  placeholder so the renderer draws at z=0 with no per-step alloc/transfer
-   *  regression (A1 — vx/vy already pay that cost; z/vz don't need to in 2D). */
-  z: Float64Array;
-  /** Velocity (for heading indicators / flocking diagnostics). */
-  vx: Float64Array;
-  vy: Float64Array;
-  /** z velocity (3D; length-0 placeholder in 2D — see `z`). */
-  vz: Float64Array;
-  radius: Float64Array;
+   *  regression (A1). */
+  z: Float32Array;
+  /** Velocity — consumed ONLY by the sprite orientToVelocity heading (2D overlay
+   *  + 3D billboards), so it ships ONLY when the model has sprites (the z/vz "A1"
+   *  gate pattern); length-0 otherwise. Diagnostics that need velocities read the
+   *  store via getState. */
+  vx: Float32Array;
+  vy: Float32Array;
+  /** z velocity (3D + sprites; length-0 placeholder otherwise — see `vx`). */
+  vz: Float32Array;
+  radius: Float32Array;
   alive: Uint8Array;
   colors: Uint8ClampedArray;
   /** Flat [a, b, a, b, …] live bond index pairs (empty when no bonds). */
@@ -942,12 +949,12 @@ export interface AgentRenderSnapshot {
    *  agent models pay no extra per-step alloc/transfer (the z/vz "A1" gate
    *  pattern). The speed stays worker-side (only the resolved frame renders). */
   spriteIds: Int32Array;
-  spriteFrames: Float64Array;
+  spriteFrames: Float32Array;
   /** Per-agent sprite facing angle (compass degrees) + size override (0 = use the
    *  sprite's default scale). Shipped alongside spriteIds when the model has
    *  sprites; length-0 otherwise. */
-  spriteRotations: Float64Array;
-  spriteScales: Float64Array;
+  spriteRotations: Float32Array;
+  spriteScales: Float32Array;
 }
 
 // ---------------------------------------------------------------------------
@@ -1698,31 +1705,41 @@ export function resolvePositionalCollisions(
   }
 }
 
+/** Slice a Float64 store array into a fresh Float32 copy (narrowing convert). */
+function f32Slice(src: Float64Array, n: number): Float32Array {
+  const out = new Float32Array(n);
+  out.set(src.subarray(0, n));
+  return out;
+}
+
 export function snapshotAgentsForRender(store: AgentStore, includeSprites = false): AgentRenderSnapshot {
   const hw = store.highWater;
   // A1: gate z/vz on worldDepth > 1 so 2D models pay NO extra per-step alloc/
   // transfer for the (always-zero) z arm. 2D → length-0 placeholders (renderer
-  // reads z=0). 3D slices them like x/y/vx/vy.
+  // reads z=0). P2 slim: vx/vy ship only for SPRITE models (the orientToVelocity
+  // heading is their only consumer) and everything ships as f32 (render
+  // precision — the store stays f64). 45 → ~21 B/agent for a plain 2D model.
   const is3d = store.worldDepth > 1;
+  const EMPTY = new Float32Array(0);
   return {
     highWater: hw,
     liveCount: store.liveCount,
-    x: store.x.slice(0, hw),
-    y: store.y.slice(0, hw),
-    z: is3d ? store.z.slice(0, hw) : new Float64Array(0),
-    vx: store.vx.slice(0, hw),
-    vy: store.vy.slice(0, hw),
-    vz: is3d ? store.vz.slice(0, hw) : new Float64Array(0),
-    radius: store.radius.slice(0, hw),
+    x: f32Slice(store.x, hw),
+    y: f32Slice(store.y, hw),
+    z: is3d ? f32Slice(store.z, hw) : EMPTY,
+    vx: includeSprites ? f32Slice(store.vx, hw) : EMPTY,
+    vy: includeSprites ? f32Slice(store.vy, hw) : EMPTY,
+    vz: is3d && includeSprites ? f32Slice(store.vz, hw) : EMPTY,
+    radius: f32Slice(store.radius, hw),
     alive: store.alive.slice(0, hw),
     colors: store.colors.slice(0, hw * 4),
     bonds: snapshotBonds(store),
     // Sprites: only ship the per-agent buffers when the model has sprites; else
     // length-0 so non-sprite agent models are byte-identical (no extra transfer).
     spriteIds: includeSprites ? store.spriteIds.slice(0, hw) : new Int32Array(0),
-    spriteFrames: includeSprites ? store.spriteFrames.slice(0, hw) : new Float64Array(0),
-    spriteRotations: includeSprites ? store.spriteRotations.slice(0, hw) : new Float64Array(0),
-    spriteScales: includeSprites ? store.spriteScales.slice(0, hw) : new Float64Array(0),
+    spriteFrames: includeSprites ? f32Slice(store.spriteFrames, hw) : EMPTY,
+    spriteRotations: includeSprites ? f32Slice(store.spriteRotations, hw) : EMPTY,
+    spriteScales: includeSprites ? f32Slice(store.spriteScales, hw) : EMPTY,
   };
 }
 
