@@ -133,8 +133,8 @@ next phase must know.
 
 | Phase | Status | Session/commits | Notes |
 |---|---|---|---|
-| A1 resident direct render | **READY TO LAUNCH** | — | handoff complete |
-| A2 snapshot-fed renderer | blocked on A1 | — | handoff complete |
+| A1 resident direct render | **DONE** | `optimize` (1 commit) | render pipeline + readback policy + one-shot rule + gate/attach/UI-sync/glow; verified in-browser (protocol + flocking 0.9991; pixels unverifiable while pane occluded); OM-exclusion gate term added |
+| A2 snapshot-fed renderer | READY (unblocked) | — | handoff complete; can reuse A1's `AGENT_RENDER_WGSL` + camera by feeding uploaded snapshots |
 | B1 sorted mirror (force pass) | ready (independent) | — | handoff complete |
 | B2 fused gather (compiler) | blocked on B1 | — | design in A2_B doc; refine before launch |
 | C 3D sphere render | blocked on A1 | — | refine before launch |

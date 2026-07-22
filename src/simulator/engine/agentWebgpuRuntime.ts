@@ -149,6 +149,29 @@ export interface AgentWebGPURuntime {
    *  `residentBuildFailed` latches a build failure so we don't retry per batch. */
   resident?: AgentResidentRuntime | null;
   residentBuildFailed?: boolean;
+
+  // --- A1 direct agent render (GPU-side, agents-only 2D) ---
+  /** The transferred OffscreenCanvas + its WebGPU context (display-pixel sized).
+   *  null until `setupAgentDirectRender` succeeds. */
+  renderCanvas?: OffscreenCanvas | null;
+  renderCtx?: GPUCanvasContext | null;
+  /** The RenderView uniform (camera + tiling + outline/glow/bg). */
+  renderViewBuf?: GPUBuffer | null;
+  /** Two pipelines from one module: plain (premultiplied-alpha) + glow (additive). */
+  renderPlainPipeline?: GPURenderPipeline | null;
+  renderGlowPipeline?: GPURenderPipeline | null;
+  renderBindGroup?: GPUBindGroup | null;
+  /** True once the render canvas is attached + pipelines live. dispatchResidentBatch
+   *  appends the present pass to its single submit only when this is set. */
+  renderActive?: boolean;
+  /** The clear colour (from the last RenderView) — premultiplied RGBA in 0..1. */
+  renderClear?: [number, number, number, number];
+  /** Whether the last uploaded RenderView selected the glow pipeline. */
+  renderGlow?: boolean;
+  /** Torus-copy counts from the last RenderView (the render instance count is
+   *  `highWater × renderCopiesX × renderCopiesY`). */
+  renderCopiesX?: number;
+  renderCopiesY?: number;
 }
 
 /** PR7c — the GPU-side spatial-hash build (clear→count→scan→scatter) + the
@@ -809,6 +832,301 @@ export function dispatchAgentStep(rt: AgentWebGPURuntime, highWater: number): vo
 }
 
 // ---------------------------------------------------------------------------
+// A1 — direct agent render. The WORKER renders the agents straight from the
+// GPU SoA (x/y/radius/alive) + the packed agentColors buffer into a transferred
+// OffscreenCanvas via instanced quads (one disc per agent × torus copy). No
+// compiler changes — the render reads only engine-owned fields that exist for
+// EVERY agent model (FP-1). Camera + tiling + outline/glow/bg live in the
+// RenderView uniform, so pan/zoom/infinity is a uniform update + re-present
+// (crisp at any zoom, unlike the upscaled grid blit).
+// ---------------------------------------------------------------------------
+
+/** The camera + tiling + graphics uniform. Field order MIRRORS
+ *  `RENDER_VIEW_WGSL` below AND `uploadAgentRenderView`. All scalar members ⇒
+ *  tight 4-byte packing; the WGSL struct rounds to 96 B. */
+export interface AgentRenderView {
+  highWater: number;
+  scalePx: number;
+  oxPx: number;
+  oyPx: number;
+  canvasW: number;
+  canvasH: number;
+  worldW: number;
+  worldH: number;
+  copiesX: number;
+  copiesY: number;
+  startX: number;
+  startY: number;
+  outlineOn: number;
+  glowOn: number;
+  glowSize: number;
+  glowIntensity: number;
+  glowSteepness: number;
+  bgR: number;
+  bgG: number;
+  bgB: number;
+  bgA: number;
+}
+const RENDER_VIEW_BYTES = 96;
+
+const RENDER_VIEW_WGSL = `struct RenderView {
+  highWater     : u32,
+  scalePx       : f32,
+  oxPx          : f32,
+  oyPx          : f32,
+  canvasW       : f32,
+  canvasH       : f32,
+  worldW        : f32,
+  worldH        : f32,
+  copiesX       : i32,
+  copiesY       : i32,
+  startX        : i32,
+  startY        : i32,
+  outlineOn     : u32,
+  glowOn        : u32,
+  glowSize      : f32,
+  glowIntensity : f32,
+  glowSteepness : f32,
+  bgR           : f32,
+  bgG           : f32,
+  bgB           : f32,
+  bgA           : f32,
+};`;
+
+/** Build the agent render module (VS pulls x/y/radius from agentF32 + packed
+ *  RGBA from agentColors; FS = disc SDF + optional outline rim OR additive glow).
+ *  The f32 field bases are baked from the layout (like emitBinOf). */
+function agentRenderWGSL(layout: AgentWebGPULayout): string {
+  const xB = layout.f32Base['x']!, yB = layout.f32Base['y']!, rB = layout.f32Base['radius']!;
+  const at = (base: number): string => (base === 0 ? 'agent' : `${base}u + agent`);
+  return `${RENDER_VIEW_WGSL}
+@group(0) @binding(0) var<storage, read> agentF32    : array<f32>;
+@group(0) @binding(1) var<storage, read> agentAlive  : array<u32>;
+@group(0) @binding(2) var<storage, read> agentColors : array<u32>;
+@group(0) @binding(3) var<uniform>       rv          : RenderView;
+
+struct VSOut {
+  @builtin(position) pos   : vec4<f32>,
+  @location(0)       uv    : vec2<f32>,
+  @location(1)       col   : vec4<f32>,
+  @location(2)       radPx : f32,
+};
+
+@vertex
+fn vsMain(@builtin(vertex_index) vi: u32, @builtin(instance_index) inst: u32) -> VSOut {
+  var out: VSOut;
+  let hw: u32 = max(1u, rv.highWater);
+  let agent: u32 = inst % hw;
+  let copy:  u32 = inst / hw;
+  let ncx: u32 = max(1u, u32(rv.copiesX));
+  let cx: i32 = i32(copy % ncx) + rv.startX;
+  let cy: i32 = i32(copy / ncx) + rv.startY;
+  // Quad corner (triangle-strip, 4 verts): (-1,-1)(1,-1)(-1,1)(1,1).
+  var corner: vec2<f32> = vec2<f32>(-1.0, -1.0);
+  if (vi == 1u) { corner = vec2<f32>(1.0, -1.0); }
+  else if (vi == 2u) { corner = vec2<f32>(-1.0, 1.0); }
+  else if (vi == 3u) { corner = vec2<f32>(1.0, 1.0); }
+  let packed: u32 = agentColors[agent];
+  let a: f32 = f32((packed >> 24u) & 0xffu) / 255.0;
+  // Dead / invisible agents → a degenerate off-screen quad (clipped away).
+  if (agentAlive[agent] == 0u || a <= 0.0) {
+    out.pos = vec4<f32>(2.0, 2.0, 2.0, 1.0);
+    out.uv = vec2<f32>(0.0, 0.0);
+    out.col = vec4<f32>(0.0, 0.0, 0.0, 0.0);
+    out.radPx = 0.0;
+    return out;
+  }
+  let ax: f32 = agentF32[${at(xB)}];
+  let ay: f32 = agentF32[${at(yB)}];
+  let ar: f32 = agentF32[${at(rB)}];
+  let wx: f32 = ax + f32(cx) * rv.worldW;
+  let wy: f32 = ay + f32(cy) * rv.worldH;
+  let px: f32 = wx * rv.scalePx + rv.oxPx;
+  let py: f32 = wy * rv.scalePx + rv.oyPx;
+  let radPx: f32 = ar * rv.scalePx;
+  var half: f32 = radPx;
+  if (rv.glowOn != 0u) { half = half + rv.glowSize; }
+  let sx: f32 = px + corner.x * half;
+  let sy: f32 = py + corner.y * half;
+  out.pos = vec4<f32>(sx / rv.canvasW * 2.0 - 1.0, 1.0 - sy / rv.canvasH * 2.0, 0.0, 1.0);
+  out.uv = corner;
+  out.col = vec4<f32>(f32(packed & 0xffu) / 255.0, f32((packed >> 8u) & 0xffu) / 255.0, f32((packed >> 16u) & 0xffu) / 255.0, a);
+  out.radPx = radPx;
+  return out;
+}
+
+@fragment
+fn fsMain(in: VSOut) -> @location(0) vec4<f32> {
+  let d: f32 = length(in.uv);
+  if (rv.glowOn != 0u) {
+    // Additive radial glow across the enlarged quad (selected by the glow pipeline).
+    let t: f32 = max(0.0, 1.0 - d);
+    let g: f32 = rv.glowIntensity * pow(t, max(0.01, rv.glowSteepness));
+    return vec4<f32>(in.col.rgb * g, g);
+  }
+  if (d > 1.0) { discard; }
+  var rgb: vec3<f32> = in.col.rgb;
+  let a: f32 = in.col.a;
+  if (rv.outlineOn != 0u) {
+    // Match the 2D overlay rim rule (stampBatchedTile): darken the outer
+    // min(1.5px, 0.25*rad) band by ×0.60.
+    let radPx: f32 = max(0.001, in.radPx);
+    let rim: f32 = min(1.5, 0.25 * radPx) / radPx;
+    if (d > 1.0 - rim) { rgb = rgb * 0.60; }
+  }
+  // Premultiplied output (the canvas is configured 'premultiplied').
+  return vec4<f32>(rgb * a, a);
+}`;
+}
+
+/** Set up direct render on the transferred OffscreenCanvas. Clones the grid's
+ *  setupDirectRender shape (rgba8unorm, premultiplied). Non-fatal on failure
+ *  (returns false → the worker keeps the CPU snapshot path). */
+export async function setupAgentDirectRender(rt: AgentWebGPURuntime, canvas: OffscreenCanvas): Promise<boolean> {
+  try {
+    const ctx = canvas.getContext('webgpu') as GPUCanvasContext | null;
+    if (!ctx) return false;
+    const format: GPUTextureFormat = 'rgba8unorm';
+    ctx.configure({ device: rt.device, format, usage: GPUTextureUsage.RENDER_ATTACHMENT, alphaMode: 'premultiplied' });
+    const module = rt.device.createShaderModule({ code: agentRenderWGSL(rt.layout) });
+    const info = await module.getCompilationInfo();
+    const errs = info.messages.filter(m => m.type === 'error');
+    if (errs.length > 0) {
+      // eslint-disable-next-line no-console
+      console.error('[agents/webgpu] render WGSL compile errors:\n' + errs.map(m => `  line ${m.lineNum}: ${m.message}`).join('\n'));
+      return false;
+    }
+    const bgl = rt.device.createBindGroupLayout({
+      label: 'agent-render-bgl',
+      entries: [
+        { binding: 0, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: { type: 'read-only-storage' } },
+        { binding: 1, visibility: GPUShaderStage.VERTEX, buffer: { type: 'read-only-storage' } },
+        { binding: 2, visibility: GPUShaderStage.VERTEX, buffer: { type: 'read-only-storage' } },
+        { binding: 3, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: { type: 'uniform' } },
+      ],
+    });
+    const pl = rt.device.createPipelineLayout({ label: 'agent-render-pl', bindGroupLayouts: [bgl] });
+    const mkPipe = (label: string, blend: GPUBlendState): GPURenderPipeline => rt.device.createRenderPipeline({
+      label, layout: pl,
+      vertex: { module, entryPoint: 'vsMain' },
+      fragment: { module, entryPoint: 'fsMain', targets: [{ format, blend }] },
+      primitive: { topology: 'triangle-strip' },
+    });
+    const plainBlend: GPUBlendState = {
+      color: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
+      alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
+    };
+    const glowBlend: GPUBlendState = {
+      color: { srcFactor: 'one', dstFactor: 'one', operation: 'add' },
+      alpha: { srcFactor: 'one', dstFactor: 'one', operation: 'add' },
+    };
+    const renderViewBuf = rt.device.createBuffer({ label: 'agent-render-view', size: RENDER_VIEW_BYTES, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+    const renderBindGroup = rt.device.createBindGroup({
+      label: 'agent-render-bg', layout: bgl,
+      entries: [
+        { binding: 0, resource: { buffer: rt.agentF32Buf } },
+        { binding: 1, resource: { buffer: rt.agentAliveBuf } },
+        { binding: 2, resource: { buffer: rt.agentColorsBuf } },
+        { binding: 3, resource: { buffer: renderViewBuf } },
+      ],
+    });
+    rt.renderCanvas = canvas;
+    rt.renderCtx = ctx;
+    rt.renderViewBuf = renderViewBuf;
+    rt.renderPlainPipeline = mkPipe('agent-render-plain', plainBlend);
+    rt.renderGlowPipeline = mkPipe('agent-render-glow', glowBlend);
+    rt.renderBindGroup = renderBindGroup;
+    rt.renderActive = true;
+    rt.renderClear = [0, 0, 0, 0];
+    rt.renderGlow = false;
+    return true;
+  } catch {
+    rt.renderActive = false;
+    return false;
+  }
+}
+
+/** Pack the CPU store's per-agent RGBA (s.colors) into the GPU agentColors buffer
+ *  (r|g<<8|b<<16|a<<24) — the SAME pack the behaviour shader / readbackAgentStep use.
+ *  Needed so a MUTATION-driven present (seed/edit) shows the CPU-computed colours
+ *  (the GPU behaviour shader hasn't re-run since). */
+export function uploadAgentColors(rt: AgentWebGPURuntime, s: AgentStore): void {
+  const ma = rt.layout.maxAgents, hw = s.highWater;
+  const u = new Uint32Array(ma);
+  const c = s.colors;
+  for (let i = 0; i < hw; i++) {
+    const ci = i * 4;
+    u[i] = ((c[ci]! & 0xff) | ((c[ci + 1]! & 0xff) << 8) | ((c[ci + 2]! & 0xff) << 16) | ((c[ci + 3]! & 0xff) << 24)) >>> 0;
+  }
+  rt.device.queue.writeBuffer(rt.agentColorsBuf, 0, u.buffer, u.byteOffset, u.byteLength);
+}
+
+/** Write the RenderView uniform + stash the clear colour / glow selection. */
+export function uploadAgentRenderView(rt: AgentWebGPURuntime, v: AgentRenderView): void {
+  if (!rt.renderViewBuf) return;
+  const ab = new ArrayBuffer(RENDER_VIEW_BYTES);
+  const u = new Uint32Array(ab), fl = new Float32Array(ab), i = new Int32Array(ab);
+  u[0] = v.highWater >>> 0;
+  fl[1] = v.scalePx; fl[2] = v.oxPx; fl[3] = v.oyPx;
+  fl[4] = v.canvasW; fl[5] = v.canvasH;
+  fl[6] = v.worldW; fl[7] = v.worldH;
+  i[8] = v.copiesX | 0; i[9] = v.copiesY | 0; i[10] = v.startX | 0; i[11] = v.startY | 0;
+  u[12] = v.outlineOn >>> 0; u[13] = v.glowOn >>> 0;
+  fl[14] = v.glowSize; fl[15] = v.glowIntensity; fl[16] = v.glowSteepness;
+  fl[17] = v.bgR; fl[18] = v.bgG; fl[19] = v.bgB; fl[20] = v.bgA;
+  rt.device.queue.writeBuffer(rt.renderViewBuf, 0, ab);
+  // Clear colour is applied CPU-side (loadOp clear); store premultiplied so the
+  // premultiplied canvas composites the background correctly.
+  const a = v.bgA;
+  rt.renderClear = [v.bgR * a, v.bgG * a, v.bgB * a, a];
+  rt.renderGlow = v.glowOn !== 0;
+  rt.renderCopiesX = Math.max(1, v.copiesX | 0);
+  rt.renderCopiesY = Math.max(1, v.copiesY | 0);
+}
+
+/** Append the agent render pass (instanced disc quads) to an existing encoder.
+ *  Draws `hw × copiesX × copiesY` instances. No-op when render isn't active. */
+export function presentAgentsEncode(rt: AgentWebGPURuntime, enc: GPUCommandEncoder, hw: number): void {
+  if (!rt.renderActive || !rt.renderCtx || !rt.renderBindGroup || !rt.renderViewBuf) return;
+  // Keep the uniform's highWater == the draw's instance decomposition base. The
+  // camera message can't know the live highWater (free mode ships no snapshot),
+  // so patch it here from the value the caller passes (cheap 4-byte write, queued
+  // before this encoder's submit reads it).
+  rt.device.queue.writeBuffer(rt.renderViewBuf, 0, new Uint32Array([Math.max(1, hw) >>> 0]).buffer);
+  const view = rt.renderCtx.getCurrentTexture().createView();
+  const [cr, cg, cb, ca] = rt.renderClear ?? [0, 0, 0, 0];
+  const pass = enc.beginRenderPass({
+    label: 'agent-present',
+    colorAttachments: [{ view, loadOp: 'clear', storeOp: 'store', clearValue: { r: cr, g: cg, b: cb, a: ca } }],
+  });
+  pass.setPipeline(rt.renderGlow ? rt.renderGlowPipeline! : rt.renderPlainPipeline!);
+  pass.setBindGroup(0, rt.renderBindGroup);
+  const copies = Math.max(1, rt.renderCopiesX ?? 1) * Math.max(1, rt.renderCopiesY ?? 1);
+  pass.draw(4, Math.max(1, hw) * copies);
+  pass.end();
+}
+
+/** Present one frame (own encoder + submit) — for camera changes / mutation
+ *  refresh / attach / tab-refocus. */
+export function presentAgentsOnce(rt: AgentWebGPURuntime, hw: number): void {
+  if (!rt.renderActive || !rt.renderCtx) return;
+  const enc = rt.device.createCommandEncoder({ label: 'agent-present-once' });
+  presentAgentsEncode(rt, enc, hw);
+  rt.device.queue.submit([enc.finish()]);
+}
+
+/** Sync the GPU render buffers from the CPU store (positions + colours) and
+ *  present. Used wherever the CPU store is authoritative (per-gen batch tail,
+ *  mutations, load/reset) — NOT the resident batch (GPU-authoritative, presents
+ *  inside its own submit). */
+export function presentAgentsFromStore(rt: AgentWebGPURuntime, s: AgentStore): void {
+  if (!rt.renderActive) return;
+  uploadAgentSoA(rt, s);
+  uploadAgentColors(rt, s);
+  presentAgentsOnce(rt, s.highWater);
+}
+
+// ---------------------------------------------------------------------------
 // Readback — pull xNext/yNext/vx/vy/radius/density/age back into the CPU store.
 // ---------------------------------------------------------------------------
 
@@ -1293,6 +1611,10 @@ export function dispatchResidentBatch(rt: AgentWebGPURuntime, gens: number, high
     const pm = enc.beginComputePass({ label: 'agent-pos-commit' });
     pm.setPipeline(res.commitPipeline); pm.setBindGroup(0, res.commitBind); dispatchAgents(pm, total); pm.end();
   }
+  // A1 direct render: present the FINAL frame in the SAME submit (posCommit ran,
+  // so agentF32[x] holds the committed position; the behaviour wrote agentColors).
+  // No-op unless a render canvas is attached.
+  presentAgentsEncode(rt, enc, highWater);
   rt.device.queue.submit([enc.finish()]);
 }
 
@@ -1360,7 +1682,12 @@ export function destroyAgentWebGPURuntime(rt: AgentWebGPURuntime | null): void {
     rt.fieldReadBuf, rt.fieldDepositBuf,
     rt.auxF32Buf, rt.indicatorsBuf, rt.bondStoreBuf, rt.spawnCursorBuf, rt.stopFlagBuf,
     rt.resident?.countsBuf ?? null, rt.resident?.cursorBuf ?? null, rt.resident?.hashParamsBuf ?? null,
+    rt.renderViewBuf ?? null,
   ];
+  // A1 render canvas is a transferred OffscreenCanvas — its context is released
+  // with the device; just drop the references (unconfigure is implicit on destroy).
+  rt.renderActive = false;
+  rt.renderCtx = null;
   for (const b of bufs) { if (b) try { b.destroy(); } catch { /* non-fatal */ } }
   for (const bucket of rt.stagingPool.values()) for (const e of bucket) { try { e.buffer.destroy(); } catch { /* non-fatal */ } }
   rt.stagingPool.clear();

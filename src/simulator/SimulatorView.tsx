@@ -24,6 +24,7 @@ import { compileAgentGraphWebGPUForModel, isAgentGraphWebGPUSupported } from '..
 import type { AgentWebGPULayout } from '../modeler/vpl/compiler/agentWebgpu/layout';
 import { emitAgentForcePassWGSL } from '../modeler/vpl/compiler/agentWebgpu/forcePass';
 import type { AgentRenderSnapshot } from './engine/agentEngine';
+import type { AgentRenderView } from './engine/agentWebgpuRuntime';
 import { SpriteRegistry } from './spriteRegistry';
 import { ImageMappingDialog, type ImageMappingConfig } from './ImageMappingDialog';
 import { GIFEncoder, quantize, applyPalette } from 'gifenc';
@@ -98,6 +99,25 @@ function sanitizeAgentMetaballs(raw: unknown): Metaballs3D {
     influence: num(r.influence, d.influence, 1, 3),
     threshold: num(r.threshold, d.threshold, 0.02, 0.9),
     resolution: r.resolution === 1 || r.resolution === 4 ? r.resolution : 2,
+  };
+}
+
+/** A1 direct-agent-render "Glow" graphics option (genesisca_sim_settings.agentGlow).
+ *  Renders ONLY on the WebGPU direct-render path (additive radial falloff per
+ *  agent); the CPU overlay ignores it. Persisted as a simulator setting. */
+interface AgentGlow { on: boolean; size: number; intensity: number; steepness: number }
+const DEFAULT_AGENT_GLOW: AgentGlow = { on: false, size: 8, intensity: 0.6, steepness: 2 };
+function sanitizeAgentGlow(raw: unknown): AgentGlow {
+  const d = DEFAULT_AGENT_GLOW;
+  if (!raw || typeof raw !== 'object') return { ...d };
+  const r = raw as Partial<AgentGlow>;
+  const num = (v: unknown, dv: number, lo: number, hi: number) =>
+    typeof v === 'number' && Number.isFinite(v) ? Math.max(lo, Math.min(hi, v)) : dv;
+  return {
+    on: typeof r.on === 'boolean' ? r.on : d.on,
+    size: num(r.size, d.size, 0, 64),
+    intensity: num(r.intensity, d.intensity, 0, 4),
+    steepness: num(r.steepness, d.steepness, 0.1, 8),
   };
 }
 
@@ -785,6 +805,10 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   // shared, persisted preference for both views (declared HERE, before the
   // settings-persist effect, like light3d — see its comment).
   const [agentMetaballs, setAgentMetaballs] = useState<Metaballs3D>(() => sanitizeAgentMetaballs(saved.current.agentMetaballs));
+  // A1 direct-agent-render Glow option (WebGPU direct path only). Declared HERE,
+  // before the settings-persist effect (like agentMetaballs).
+  const [agentGlow, setAgentGlow] = useState<AgentGlow>(() => sanitizeAgentGlow(saved.current.agentGlow));
+  const agentGlowRef = useRef<AgentGlow>(agentGlow); agentGlowRef.current = agentGlow;
   // 3D Grid CA: depth (number of layers) of the VOLUMETRIC box brush — independent
   // of the row size (H), so a box can be e.g. wide+tall+shallow.
   const [brushBoxDepth, setBrushBoxDepth] = useState<number>((saved.current.brushBoxDepth as number) ?? 3);
@@ -1029,7 +1053,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
           activeViewer, brushColor, brushW, brushH, brushMapping, showBrushCursor, showGridlines,
           brushShape, brushRadius, brushRingWidth, brushLineWidth, brush3dVolume, brushBoxDepth,
           infinityCanvas, indicatorVizModes, recordFormat, brushSectionH, agentsFront3d,
-          light3d, cellGaps3d, agentMetaballs,
+          light3d, cellGaps3d, agentMetaballs, agentGlow,
           agentBrushRadius, agentSeedDensity, agentSeedSpacing,
           agentBrushShape, agentBrushW, agentBrushH, agentBrushRingWidth, agentBrushLineWidth,
           showCaGrid, showAgents, showBonds, simulateCells, simulateAgents, brushTarget, bg2d, agentOutlines,
@@ -1044,7 +1068,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       } catch { /* localStorage full */ }
     }, 300);
     return () => clearTimeout(timer);
-  }, [targetFps, unlimitedFps, gensPerFrame, unlimitedGens, activeViewer, brushColor, brushW, brushH, brushMapping, showBrushCursor, showGridlines, brushShape, brushRadius, brushRingWidth, brushLineWidth, brush3dVolume, brushBoxDepth, infinityCanvas, indicatorVizModes, recordFormat, brushSectionH, agentsFront3d, light3d, cellGaps3d, agentMetaballs, agentBrushRadius, agentSeedDensity, agentSeedSpacing, agentBrushShape, agentBrushW, agentBrushH, agentBrushRingWidth, agentBrushLineWidth, showCaGrid, showAgents, showBonds, simulateCells, simulateAgents, brushTarget, bg2d, agentOutlines, indicatorHiddenCategories, indicatorChartOverrides]);
+  }, [targetFps, unlimitedFps, gensPerFrame, unlimitedGens, activeViewer, brushColor, brushW, brushH, brushMapping, showBrushCursor, showGridlines, brushShape, brushRadius, brushRingWidth, brushLineWidth, brush3dVolume, brushBoxDepth, infinityCanvas, indicatorVizModes, recordFormat, brushSectionH, agentsFront3d, light3d, cellGaps3d, agentMetaballs, agentGlow, agentBrushRadius, agentSeedDensity, agentSeedSpacing, agentBrushShape, agentBrushW, agentBrushH, agentBrushRingWidth, agentBrushLineWidth, showCaGrid, showAgents, showBonds, simulateCells, simulateAgents, brushTarget, bg2d, agentOutlines, indicatorHiddenCategories, indicatorChartOverrides]);
 
   // Manual Brush — signature-keyed merge effect. Re-derives `manualBrush`
   // whenever the cell attribute set (id+type) changes. Surviving attrs carry
@@ -1779,6 +1803,36 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   // tearing down the worker (so model attribute sliders + grid state survive).
   const recompilePendingCanvasRefresh = useRef<boolean>(false);
 
+  // --- A1 direct AGENT render (agents-only, 2D, WebGPU) ---
+  // Active once the worker acks agentRenderStatus{active:true}: the worker renders
+  // agents straight from the GPU SoA into a transferred OffscreenCanvas and the
+  // main thread blits it 1:1 (no drawAgentsOverlay). Mirrors the grid seam.
+  const agentDirectRenderActiveRef = useRef<boolean>(false);
+  // The gate result (general model properties) — read by the agentRuntimeReady
+  // handler to decide whether to (re)attach the agent canvas.
+  const agentRenderEligibleRef = useRef<boolean>(false);
+  // We owe the worker a canvas attach on the next agentRuntimeReady.
+  const pendingAgentCanvasAttach = useRef<boolean>(false);
+  // The placeholder canvas whose control was transferred to the worker (becomes
+  // the 1:1 blit source once active). Display-pixel sized (fixed at transfer).
+  const agentRenderCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  // The fresh canvas awaiting the agentRenderStatus ack.
+  const pendingAgentRenderCanvas = useRef<HTMLCanvasElement | null>(null);
+  // The display pixel size the agent render canvas was attached at (a parent
+  // resize past this needs a fresh re-attach — transferred canvas dims are fixed).
+  const agentRenderCanvasDimsRef = useRef<{ w: number; h: number }>({ w: 0, h: 0 });
+  // Live-agent count from the stepped message (snapshot present → snap.liveCount,
+  // free mode → the agentLiveCount scalar). Drives the stats chip.
+  const agentLiveCountRef = useRef<number>(0);
+  // Last UI-sync value posted (avoid redundant messages).
+  const agentUiSyncPostedRef = useRef<boolean>(true);
+  // rAF coalescing token for setAgentCamera.
+  const agentCameraRafRef = useRef<number>(0);
+  // Last posted camera key (skip redundant setAgentCamera posts).
+  const lastAgentCameraKeyRef = useRef<string>('');
+  // UI-sync debounce-OFF timer (so a brush stroke doesn't thrash the readback).
+  const agentUiSyncTimerRef = useRef<number>(0);
+
   // Build full code display from all compiled functions
   const buildFullCode = useCallback((result: ReturnType<typeof compileGraph>) => {
     const parts: string[] = [];
@@ -2228,6 +2282,116 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       }
       hlCtx.beginPath(); hlCtx.arc(cx, cy, rad, 0, Math.PI * 2);
       hlCtx.strokeStyle = 'rgba(232, 161, 58, 0.95)'; hlCtx.lineWidth = 2; hlCtx.setLineDash([4, 3]); hlCtx.stroke(); hlCtx.setLineDash([]);
+    }
+  }, []);
+
+  // A1 — compute the agent RenderView (camera + tiling + graphics) from the SAME
+  // draw math as the 2D blit. highWater is patched worker-side (free mode ships
+  // no snapshot, so the main thread can't know it) — send 0 here.
+  const computeAgentRenderView = useCallback((): AgentRenderView | null => {
+    const canvas = canvasRef.current;
+    if (!canvas) return null;
+    const w = gridWidth.current, h = gridHeight.current;
+    if (!w || !h) return null;
+    const parentW = canvas.parentElement?.clientWidth ?? 500;
+    const parentH = canvas.parentElement?.clientHeight ?? 500;
+    const zoom = zoomRef.current, pan = panRef.current;
+    const baseScale = Math.min(parentW / w, parentH / h);
+    const scale = baseScale * zoom;
+    const scaledW = w * scale, scaledH = h * scale;
+    const ox = (parentW - scaledW) / 2 + pan.x;
+    const oy = (parentH - scaledH) / 2 + pan.y;
+    const infinity = infinityCanvasRef.current && boundaryTreatmentRef.current === 'torus';
+    let startX = 0, startY = 0, copiesX = 1, copiesY = 1;
+    if (infinity && scaledW > 0 && scaledH > 0) {
+      const txMin = Math.floor(-ox / scaledW);
+      const txMax = Math.floor((parentW - ox) / scaledW);
+      const tyMin = Math.floor(-oy / scaledH);
+      const tyMax = Math.floor((parentH - oy) / scaledH);
+      const tileCount = (txMax - txMin + 1) * (tyMax - tyMin + 1);
+      if (tileCount <= 256) { startX = txMin; startY = tyMin; copiesX = txMax - txMin + 1; copiesY = tyMax - tyMin + 1; }
+    }
+    const glow = agentGlowRef.current;
+    let bgR = 0, bgG = 0, bgB = 0, bgA = 0;
+    if (bg2dRef.current) { const c = hexToRgba(bg2dRef.current); bgR = c.r / 255; bgG = c.g / 255; bgB = c.b / 255; bgA = 1; }
+    return {
+      highWater: 0,
+      scalePx: scale, oxPx: ox, oyPx: oy, canvasW: parentW, canvasH: parentH,
+      worldW: w, worldH: h,
+      copiesX, copiesY, startX, startY,
+      outlineOn: agentOutlinesRef.current ? 1 : 0,
+      glowOn: glow.on ? 1 : 0, glowSize: glow.size, glowIntensity: glow.intensity, glowSteepness: glow.steepness,
+      bgR, bgG, bgB, bgA,
+    };
+  }, []);
+
+  // Post the agent camera to the worker, rAF-coalesced + deduped (skip when the
+  // view is unchanged — a plain step doesn't move the camera, and setAgentCamera
+  // triggers a present, so a per-frame post would double the render cost).
+  const postAgentCamera = useCallback(() => {
+    if (!agentDirectRenderActiveRef.current || !workerRef.current) return;
+    if (agentCameraRafRef.current) return;
+    agentCameraRafRef.current = requestAnimationFrame(() => {
+      agentCameraRafRef.current = 0;
+      const view = computeAgentRenderView();
+      if (!view || !workerRef.current || !agentDirectRenderActiveRef.current) return;
+      const key = `${view.scalePx}|${view.oxPx}|${view.oyPx}|${view.canvasW}|${view.canvasH}|${view.startX}|${view.startY}|${view.copiesX}|${view.copiesY}|${view.outlineOn}|${view.glowOn}|${view.glowSize}|${view.glowIntensity}|${view.glowSteepness}|${view.bgR}|${view.bgG}|${view.bgB}|${view.bgA}`;
+      if (key === lastAgentCameraKeyRef.current) return;
+      lastAgentCameraKeyRef.current = key;
+      workerRef.current.postMessage({ type: 'setAgentCamera', view });
+    });
+  }, [computeAgentRenderView]);
+
+  // A1 UI-sync driver: while ON the worker reads GPU agent state back each frame
+  // and ships the render snapshot (features that need CPU state); while OFF the
+  // resident batch free-runs. ON iff a feature is (or may be) reading agent
+  // state: paused, recording, a pinned/sweep inspector, an edit target, the agent
+  // brush armed + hovering, or a CPU-only visual (metaballs) suppressing direct
+  // render. Debounced OFF by ~300 ms so brush strokes don't thrash.
+  const updateAgentUiSync = useCallback(() => {
+    if (!agentDirectRenderActiveRef.current || !workerRef.current) return;
+    const want =
+      !playingRef.current
+      || recordingRef.current
+      || agentInspectRef.current != null
+      || sweepActiveRef.current
+      || editTargetIdRef.current >= 0
+      || agentMetaballsRef.current.enabled
+      || (brushTargetRef.current === 'agents' && agentCursorWorldRef.current != null);
+    const w = workerRef.current;
+    if (want) {
+      if (agentUiSyncTimerRef.current) { clearTimeout(agentUiSyncTimerRef.current); agentUiSyncTimerRef.current = 0; }
+      if (!agentUiSyncPostedRef.current) { agentUiSyncPostedRef.current = true; w.postMessage({ type: 'setAgentUiSync', on: true }); }
+    } else if (agentUiSyncPostedRef.current && !agentUiSyncTimerRef.current) {
+      agentUiSyncTimerRef.current = window.setTimeout(() => {
+        agentUiSyncTimerRef.current = 0;
+        if (agentUiSyncPostedRef.current) { agentUiSyncPostedRef.current = false; workerRef.current?.postMessage({ type: 'setAgentUiSync', on: false }); }
+      }, 300);
+    }
+  }, []);
+
+  // (Re)attach the agent render canvas: transfer a display-sized OffscreenCanvas
+  // and ask the worker to set up direct render. Safe to call whenever the agent
+  // WebGPU runtime is up (initial attach on agentRuntimeReady; re-attach on a
+  // display resize or a CPU-visual toggle change). No-op unless eligible + idle.
+  const maybeAttachAgentCanvas = useCallback(() => {
+    if (!agentRenderEligibleRef.current || agentMetaballsRef.current.enabled) return;
+    if (agentDirectRenderActiveRef.current || pendingAgentRenderCanvas.current) return;
+    const worker = workerRef.current, canvas = canvasRef.current;
+    if (!worker || !canvas) return;
+    const w = Math.max(1, canvas.parentElement?.clientWidth ?? canvas.clientWidth ?? 500);
+    const h = Math.max(1, canvas.parentElement?.clientHeight ?? canvas.clientHeight ?? 500);
+    try {
+      const fresh = document.createElement('canvas');
+      fresh.width = w; fresh.height = h;
+      const offscreen = (fresh as HTMLCanvasElement & { transferControlToOffscreen: () => OffscreenCanvas }).transferControlToOffscreen();
+      pendingAgentRenderCanvas.current = fresh;
+      agentRenderCanvasDimsRef.current = { w, h };
+      worker.postMessage({ type: 'attachAgentCanvas', canvas: offscreen, width: w, height: h }, [offscreen]);
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.warn('[agents] OffscreenCanvas transfer failed; staying on CPU overlay:', e);
+      pendingAgentRenderCanvas.current = null;
     }
   }, []);
 
@@ -2889,7 +3053,26 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     // chosen colour so agents sit on a solid backdrop instead of the page showing
     // through. Tiled in infinity (matches the grid blit). No-op when the grid shows
     // (its colours ARE the background) or when disabled (bg2dRef null).
-    if (!showGrid2d && bg2dRef.current) {
+    // A1 direct AGENT render: the worker rendered the agents (+ background clear)
+    // straight into the transferred OffscreenCanvas — blit it 1:1 and skip the
+    // CPU bg fill + drawAgentsOverlay. Camera lives in the worker uniform.
+    // A transferred canvas has FIXED dims — a display resize needs a fresh
+    // re-attach; keep the worker camera synced otherwise.
+    let agentDirect = agentDirectRenderActiveRef.current && agentRenderCanvasRef.current;
+    if (agentDirect) {
+      const dims = agentRenderCanvasDimsRef.current;
+      if (dims.w !== parentW || dims.h !== parentH) {
+        agentDirectRenderActiveRef.current = false;
+        agentRenderCanvasRef.current = null;
+        agentDirect = false;
+        maybeAttachAgentCanvas();   // fresh canvas at the new display size
+      } else {
+        postAgentCamera();
+      }
+    }
+    if (agentDirect && !showGrid2d && bg2dRef.current) {
+      // (bg is drawn by the render shader's clear — nothing to do here)
+    } else if (!showGrid2d && bg2dRef.current) {
       ctx.save();
       ctx.fillStyle = bg2dRef.current;
       if (infinity) {
@@ -2906,7 +3089,11 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
 
     // Bond-Graph Agents — draw the agent circles on top of the grid + gridlines,
     // below the brush cursor. Render-layer toggle (req 7): skip when agents hidden.
-    if (showAgentsRef.current) drawAgentsOverlay();
+    if (agentDirect) {
+      if (showAgentsRef.current) ctx.drawImage(agentRenderCanvasRef.current!, 0, 0);
+    } else if (showAgentsRef.current) {
+      drawAgentsOverlay();
+    }
 
     // Brush cursor: drawn on the dedicated cursor overlay layer (drawCursorLayer)
     // — the scene canvas no longer carries it, so cursor movement never forces a
@@ -3129,6 +3316,13 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       // radius / alive / colours) for drawAgents + nearest-agent picking. Sent
       // every frame for an agent model; absent for a lattice-only model.
       if (msg.agents !== undefined) agentsRef.current = msg.agents as AgentRenderSnapshot | null;
+      // A1: live-agent count for the stats chip — from the snapshot when present,
+      // else the free-mode scalar (the worker renders the frame GPU-side).
+      if (msg.agents !== undefined && (msg.agents as AgentRenderSnapshot | null)) agentLiveCountRef.current = (msg.agents as AgentRenderSnapshot).liveCount;
+      else if (typeof msg.agentLiveCount === 'number') agentLiveCountRef.current = msg.agentLiveCount as number;
+      // A1: re-evaluate whether a feature needs live CPU agent state (hover while
+      // playing is the common transition the per-frame call catches).
+      if (agentDirectRenderActiveRef.current) updateAgentUiSync();
       // "Skip Isolated Empty Cells" observability: the worker's live active-cell
       // count (-1 = configured on but NOT engaged → the full loop is running;
       // undefined = feature off). Rendered in the stats overlay; re-renders ride
@@ -3235,7 +3429,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
         // Without this, one-shot mutations under direct render leave the
         // canvas showing stale post-Play state until the next user action.
         // Cost is negligible (one extra drawImage at vsync rate).
-        if (directRenderActiveRef.current) {
+        if (directRenderActiveRef.current || agentDirectRenderActiveRef.current) {
           requestAnimationFrame(() => draw());
         }
 
@@ -3542,6 +3736,35 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
         pendingDirectRenderCanvas.current = null;
       }
     }
+    // A1 direct AGENT render — the runtime-ready trigger + the attach ack.
+    if (msg.type === 'agentRuntimeReady') {
+      // The agent WebGPU runtime is (re)built (init / recompile / target flip) —
+      // its render pipeline is gone, so reset our state and re-attach the canvas
+      // if the model is eligible (the gate is stable across a soft recompile —
+      // sprites/metaballs/OM/target/topology changes all force a full reinit).
+      agentDirectRenderActiveRef.current = false;
+      agentRenderCanvasRef.current = null;
+      pendingAgentRenderCanvas.current = null;
+      if (agentRenderEligibleRef.current) maybeAttachAgentCanvas();
+    } else if (msg.type === 'agentRenderStatus') {
+      if (msg.active && pendingAgentRenderCanvas.current) {
+        // Commit the swap: the placeholder becomes the 1:1 blit source.
+        agentRenderCanvasRef.current = pendingAgentRenderCanvas.current;
+        pendingAgentRenderCanvas.current = null;
+        pendingAgentCanvasAttach.current = false;
+        agentDirectRenderActiveRef.current = true;
+        // Send the initial camera + draw so the canvas shows the current frame.
+        const view = computeAgentRenderView();
+        if (view && workerRef.current) { lastAgentCameraKeyRef.current = ''; workerRef.current.postMessage({ type: 'setAgentCamera', view }); }
+        agentUiSyncPostedRef.current = true;   // worker default is ON
+        updateAgentUiSync();
+        draw();
+      } else {
+        // Attach failed — stay on the CPU overlay path.
+        agentDirectRenderActiveRef.current = false;
+        pendingAgentRenderCanvas.current = null;
+      }
+    }
   };
 
   // Reusable worker initializer (used by structural effect and dimension/image apply)
@@ -3759,6 +3982,22 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     if (dimsModel.properties.useWebGPU && !webgpuResult.error && offscreenSupported && !is3D && !agentModel) {
       pendingCanvasAttach.current = true;
     }
+    // A1 direct AGENT render gate (all GENERAL model properties). The WORKER
+    // renders agents from the resident GPU SoA; the main thread blits 1:1.
+    // agents-only + 2D + resolved agent target 'webgpu' + OffscreenCanvas + no
+    // CPU-only visual (sprites / metaballs) + no Agent Output Mapping (its colours
+    // are computed CPU-side into s.colors, NOT the GPU agentColors the render reads
+    // — an OM model keeps today's CPU-overlay path so its colours stay correct).
+    const agentRenderEligible =
+      agentModel && model.topologyMode?.gridCells === false && !is3D
+      && agentResult.agentTarget === 'webgpu' && offscreenSupported
+      && (model.sprites?.length ?? 0) === 0 && !agentMetaballsRef.current.enabled
+      && (model.agentMappings?.length ?? 0) === 0;
+    agentRenderEligibleRef.current = agentRenderEligible;
+    agentDirectRenderActiveRef.current = false;
+    pendingAgentRenderCanvas.current = null;
+    pendingAgentCanvasAttach.current = agentRenderEligible;
+    agentUiSyncPostedRef.current = true;   // worker default is ON
     // 3D Grid CA: effective layer count = d3 computed above (honours a resize-
     // panel dOverride; otherwise the model's depth, only when dimension==='3d' so
     // the worker's `depth` stays in lockstep with the compilers' `is3d`).
@@ -5181,10 +5420,16 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       if (directRenderActiveRef.current && workerRef.current) {
         workerRef.current.postMessage({ type: 'refreshDisplay' });
       }
+      // A1: same for the agent direct-render canvas (re-present + re-send camera).
+      if (agentDirectRenderActiveRef.current && workerRef.current) {
+        const view = computeAgentRenderView();
+        if (view) { lastAgentCameraKeyRef.current = ''; workerRef.current.postMessage({ type: 'setAgentCamera', view }); }
+        workerRef.current.postMessage({ type: 'refreshAgentDisplay' });
+      }
     } else if (playing) {
       setPlaying(false);
     }
-  }, [visible, draw, playing]);
+  }, [visible, draw, playing, computeAgentRenderView]);
 
   // Brush refs (so event handlers don't need to re-register)
   const brushColorRef = useRef('#4cc9f0');
@@ -5258,6 +5503,21 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   // Redraw when the environment background changes (the ref is updated in its own
   // effect above; this one repaints so the change shows immediately even when paused).
   useEffect(() => { draw(); }, [bg2d, agentOutlines, draw]);
+  // A1 Glow option — redraw so the agent RenderView camera picks up the change.
+  useEffect(() => { draw(); }, [agentGlow, draw]);
+  // A1: re-evaluate UI-sync on state-signal changes (pause / recording / inspector
+  // / edit target / metaballs suppression). Hover-during-play is handled per-frame.
+  useEffect(() => { updateAgentUiSync(); }, [playing, recording, agentInspect, editTargetId, agentMetaballs.enabled, updateAgentUiSync]);
+  // A1: a CPU-only visual (metaballs) needs the CPU overlay path — detach direct
+  // render when it turns on, re-attach when it turns off (if eligible + runtime up).
+  useEffect(() => {
+    if (agentMetaballs.enabled) {
+      if (agentDirectRenderActiveRef.current) { agentDirectRenderActiveRef.current = false; agentRenderCanvasRef.current = null; }
+    } else {
+      maybeAttachAgentCanvas();
+    }
+    draw();
+  }, [agentMetaballs.enabled, draw, maybeAttachAgentCanvas]);
   const showGridlinesRef = useRef(false);
   useEffect(() => { showGridlinesRef.current = showGridlines; }, [showGridlines]);
   // Inspect mode (toolbar toggle): plain LMB inspects cells/agents — the
@@ -8317,7 +8577,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
           )}
           <HoverCoordsChip />
           {recording && <span style={{ color: '#e05050' }}>{'\u23FA'} REC {recordFrameCount}f</span>}
-          {isAgentModel && agentsRef.current && <span title="Live agents">{'\u25CF'} {agentsRef.current.liveCount} agents</span>}
+          {isAgentModel && (agentsRef.current || agentDirectRenderActiveRef.current) && <span title="Live agents">{'\u25CF'} {agentDirectRenderActiveRef.current ? agentLiveCountRef.current : (agentsRef.current?.liveCount ?? 0)} agents</span>}
         </div>
 
         {/* Bond-Graph Agents brush + the Layers toggles now live DOCKED in the
@@ -8970,6 +9230,41 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
                   <span style={{ color: 'var(--color-text-muted)' }}>Outline agents</span>
                 </label>
               </div>
+              {/* A1 direct-render Glow — additive radial falloff per agent. Renders
+                  ONLY on the WebGPU direct-render path (agents-only, 2D). */}
+              {!is3D && (
+              <div>
+                <div style={{ fontSize: '0.6rem', color: 'var(--color-text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 4 }}>Glow</div>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.66rem' }}
+                  title="Render each agent as an additive radial glow (WebGPU direct render only — agents-only 2D models on the WebGPU agent target). The CPU overlay path ignores this.">
+                  <input type="checkbox" checked={agentGlow.on}
+                    onChange={e => setAgentGlow(g => ({ ...g, on: e.target.checked }))} />
+                  <span style={{ color: 'var(--color-text-muted)' }}>Glow (WebGPU direct render)</span>
+                </label>
+                {agentGlow.on && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 4 }}>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.66rem' }}
+                      title="Glow size — the extra halo radius in pixels around each agent.">
+                      <span style={{ fontSize: '0.6rem', color: 'var(--color-text-muted)', width: 48, flex: '0 0 auto' }}>Size</span>
+                      <input type="range" min={0} max={40} step={1} value={agentGlow.size} style={{ flex: 1, minWidth: 0 }}
+                        onChange={e => setAgentGlow(g => ({ ...g, size: Number(e.target.value) }))} />
+                    </label>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.66rem' }}
+                      title="Glow intensity — brightness of the additive halo.">
+                      <span style={{ fontSize: '0.6rem', color: 'var(--color-text-muted)', width: 48, flex: '0 0 auto' }}>Intensity</span>
+                      <input type="range" min={0} max={3} step={0.05} value={agentGlow.intensity} style={{ flex: 1, minWidth: 0 }}
+                        onChange={e => setAgentGlow(g => ({ ...g, intensity: Number(e.target.value) }))} />
+                    </label>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.66rem' }}
+                      title="Glow falloff — higher = tighter core, lower = softer spread.">
+                      <span style={{ fontSize: '0.6rem', color: 'var(--color-text-muted)', width: 48, flex: '0 0 auto' }}>Falloff</span>
+                      <input type="range" min={0.3} max={6} step={0.1} value={agentGlow.steepness} style={{ flex: 1, minWidth: 0 }}
+                        onChange={e => setAgentGlow(g => ({ ...g, steepness: Number(e.target.value) }))} />
+                    </label>
+                  </div>
+                )}
+              </div>
+              )}
               {/* Agent metaballs (2D) — the same shared preference as the 3D View
                   panel's Metaballs block; in 2D it's an approximate gooey filter
                   (blur + alpha threshold) fusing the agent discs. */}

@@ -176,6 +176,84 @@ still capture the blitted frame), JS/WASM paths.
    render (A1)"), HelpView (Performance § note + the Glow option), master
    Status Board row, this doc's Completion Report.
 
-## Completion Report
-(fill in when done — commits, deviations + why, measured numbers, new
-gotchas, notes for A2/C)
+## Completion Report (2026-07-22)
+
+**Commit** (branch `optimize`, not pushed): one commit — "perf(agents): A1 direct
+GPU agent render (2D agents-only, WebGPU)". `git diff --stat` touches exactly the
+three allowed files: `agentWebgpuRuntime.ts` (+~330), `sim.worker.ts` (+~195),
+`SimulatorView.tsx` (+~310). NO compilers / gl3d / agentEngine / JS-WASM paths.
+
+**What shipped vs the spec** — everything in the work items, with these
+deviations (all justified):
+1. **Added an Agent-Output-Mapping exclusion to the gate** (`(model.agentMappings
+   ?.length ?? 0) === 0`). NOT in the handoff's gate list. Reason: the impact
+   map's FP-1 assumes "colour is whatever Set Cell Looks / the Agent Output
+   Mapping computed into the GPU `agentColors` buffer" — but an **OM computes on
+   the CPU** (`runAgentColorPass` writes `s.colors`), NOT into `agentColors`. The
+   render reads `agentColors`, so an OM model would render the behaviour's Set
+   Cell Looks / default colours, not the OM. Excluding OM models keeps them on the
+   correct CPU-overlay path (function-first, a general property — FP-0). This is a
+   one-term gate refinement, not a redesign. **A2/C must keep this term** (or make
+   the OM write `agentColors` GPU-side, a separate feature).
+2. **Added `highWater` to the RenderView struct** (not in the handoff's field
+   list) — the VS needs it to decompose the instance index. `presentAgentsEncode`
+   patches it from the caller's live value each present (a 4-byte write) so it
+   always matches the draw's instance count even in free mode (where the main
+   thread can't know highWater — no snapshot ships). Dropped the handoff's `flags`
+   field (unused in A1).
+3. **`setupAgentDirectRender` is async** (awaits `getCompilationInfo`) so a WGSL
+   error fails the attach cleanly (acks `active:false`) instead of a silently
+   broken pipeline. The `attachAgentCanvas` handler awaits it in an IIFE.
+4. **Added a worker→main `agentRuntimeReady` message** — the agent runtime builds
+   ASYNC in `buildAgentWebGPUIfNeeded` with no prior "ready" signal (unlike the
+   grid's `useWebGPUStatus`). SimulatorView attaches the canvas on it. Also covers
+   soft-recompile re-attach (the handler resets the active flag first, since a
+   runtime rebuild drops the render pipeline).
+5. **`presentAgentsFromStore` also uploads colours** (`uploadAgentColors`) — for a
+   mutation (seed/edit) the CPU `s.colors` is authoritative but the GPU
+   `agentColors` is stale (the behaviour shader hasn't re-run), so the mutation
+   present must sync colours too. Non-OM models seed cyan defaults into
+   `agentColors` at attach this way.
+
+**Measured** (in-browser, WebGPU-agent Boids, 120×120, 260 agents):
+- Free mode: `stepped` ships `hasAgents:false` + `agentLiveCount:260`, gen advances.
+- Boids flocks under direct render: **polarization 0.9991** (>0.99 = coherent).
+- Hostile staleness: `getAgentState` mid-free-run returns evolving (not frozen)
+  positions; `moveAgents` to (42,7) lands exactly; `getState` includes fresh agents.
+- 1 attach, 0 GPU errors, no re-attach storm over ~900 gens.
+- A JS-target model does NOT engage (0 render-status; CPU path ships agents).
+- Gates: tsc + `npm run build` + `parity-agent-wasm` (18) + `parity-agent-force`
+  (7) all green.
+
+**Could NOT verify: composited display PIXELS.** The Browser pane reports hidden,
+so the compositor is suspended → `drawImage(transferredCanvas)` reads stale/blank
+and `preview_screenshot` refuses ("not compositing frames"). This is the
+documented occlusion trap (master §0.7), not a code gap. The render pipeline is
+proven by: `agentRenderStatus:true` (the ack posts AFTER the WGSL module compiled
+with 0 errors, both pipelines built, and `presentAgentsFromStore` ran without
+throwing), 0 `uncapturederror` over 900 gens, and the **identical battle-tested
+grid direct-render blit pattern** (a detached `document.createElement('canvas')` +
+`transferControlToOffscreen` + main-thread `drawImage`). **A displayed pane would
+confirm the pixels** — the orchestrator's spot-check should do a screenshot with
+the pane visible.
+
+**New gotchas / notes for A2/C:**
+- The `AGENT_RENDER_WGSL` + `AgentRenderView` + camera math are directly reusable
+  by **A2**: feed the pipeline by UPLOADING an f32 snapshot (positions/colours)
+  into `agentF32`/`agentColors` instead of reading the resident buffers, then
+  `presentAgentsOnce`. `setupAgentDirectRender` / `uploadAgentRenderView` /
+  `presentAgentsEncode` are already snapshot-agnostic. The gate for A2 drops the
+  `agentTarget === 'webgpu'` term (JS/WASM/per-gen models) — but needs an agent
+  WebGPU RUNTIME (device+buffers) to render into even when the SIM runs on
+  JS/WASM; that runtime doesn't exist for a non-webgpu target today, so A2 must
+  either build a render-only runtime or upload into the existing one.
+- The one-shot rule reuses `asyncStepBatchInFlight` deferral (block → readback →
+  replay). Any NEW async worker path that leaves the store stale must set
+  `agentStoreStale` and rely on this ONE dispatcher rule — never add a second
+  ad-hoc readback.
+- `presentAgentsEncode` patches the RenderView `highWater` from `hw` every present
+  — a spawn/kill that changes highWater between camera messages stays correct.
+- **C (3D)**: gl3d is a WebGL2 main-thread context — it can't share the agent
+  WebGPU buffers, so 3D keeps the snapshot (`frame`-mode) path. A C-phase WGSL
+  sphere pass would live in the agent runtime like this 2D disc pass; the readback
+  policy + one-shot rule + UI-sync driver are dimension-agnostic and reusable.

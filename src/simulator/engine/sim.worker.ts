@@ -46,7 +46,8 @@ import {
   uploadAgentField, readbackAgentField,
   uploadAgentAux, uploadAgentIndicators, readbackAgentIndicators, uploadAgentBondStore,
   ensureAgentResident, computeResidentHashParams, uploadAgentHashParams, dispatchResidentBatch, readbackAgentFrame,
-  type AgentWebGPURuntime, type FieldArray,
+  setupAgentDirectRender, uploadAgentRenderView, presentAgentsOnce, presentAgentsFromStore,
+  type AgentWebGPURuntime, type FieldArray, type AgentRenderView,
 } from './agentWebgpuRuntime';
 
 interface AttrDef {
@@ -488,8 +489,24 @@ interface BreakBondMsg { type: 'breakBond'; a: number; b: number; activeViewer: 
  *  the generation loop WITHOUT a recompile, so the user can freeze either layer and
  *  watch the other evolve. Both default true ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ byte-identical to no message. */
 interface SetSimLayersMsg { type: 'setSimLayers'; simulateCells: boolean; simulateAgents: boolean }
+// --- A1 direct agent render ---
+/** Late-binding agent-canvas attach (clone of AttachCanvasMsg): the main thread
+ *  transfers a display-pixel-sized OffscreenCanvas once the agent WebGPU runtime
+ *  is ready. The worker sets up the render pipeline + presents once, then acks
+ *  with `agentRenderStatus`. */
+interface AttachAgentCanvasMsg { type: 'attachAgentCanvas'; canvas: OffscreenCanvas; width: number; height: number }
+/** Camera + tiling + graphics options for the agent render (world→screen +
+ *  torus copies + outline/glow/bg). Present-only (no step). */
+interface SetAgentCameraMsg { type: 'setAgentCamera'; view: AgentRenderView }
+/** UI-sync toggle: while ON the worker reads the GPU agent state back each frame
+ *  and ships the render snapshot (features that need CPU agent state). While OFF
+ *  the resident batch skips the readback (free-running). Default ON. */
+interface SetAgentUiSyncMsg { type: 'setAgentUiSync'; on: boolean }
+/** Re-present the agent frame (tab-refocus / soft-recompile analogue of
+ *  refreshDisplay). */
+interface RefreshAgentDisplayMsg { type: 'refreshAgentDisplay' }
 
-type WorkerMsg = InitMsg | StepMsg | PaintMsg | PaintManualMsg | ResetMsg | RecompileMsg | UpdateModelAttrsMsg | UpdateLookupTableMsg | ImportImageMsg | UpdateIndicatorsMsg | GetStateMsg | LoadStateMsg | ReadRegionMsg | WriteRegionMsg | ClearRegionMsg | SetUseWasmMsg | SetUseWebGPUMsg | ReadbackWebGPUMsg | ColorPassMsg | SetRecordingMsg | AttachCanvasMsg | RequestColorsSnapshotMsg | SetInspectCellsMsg | RefreshDisplayMsg | SeedAgentsMsg | CreateAgentMsg | KillAgentsMsg | PaintAgentsMsg | ClearAgentsMsg | FormBondMsg | BreakBondMsg | GetAgentStateMsg | MoveAgentsMsg | FormBondBatchMsg | SetAgentWasmBackedMsg | SetRngSeedMsg | SetSimLayersMsg;
+type WorkerMsg = InitMsg | StepMsg | PaintMsg | PaintManualMsg | ResetMsg | RecompileMsg | UpdateModelAttrsMsg | UpdateLookupTableMsg | ImportImageMsg | UpdateIndicatorsMsg | GetStateMsg | LoadStateMsg | ReadRegionMsg | WriteRegionMsg | ClearRegionMsg | SetUseWasmMsg | SetUseWebGPUMsg | ReadbackWebGPUMsg | ColorPassMsg | SetRecordingMsg | AttachCanvasMsg | RequestColorsSnapshotMsg | SetInspectCellsMsg | RefreshDisplayMsg | SeedAgentsMsg | CreateAgentMsg | KillAgentsMsg | PaintAgentsMsg | ClearAgentsMsg | FormBondMsg | BreakBondMsg | GetAgentStateMsg | MoveAgentsMsg | FormBondBatchMsg | SetAgentWasmBackedMsg | SetRngSeedMsg | SetSimLayersMsg | AttachAgentCanvasMsg | SetAgentCameraMsg | SetAgentUiSyncMsg | RefreshAgentDisplayMsg;
 
 // ---------------------------------------------------------------------------
 // State
@@ -786,6 +803,46 @@ let pendingAgentWebgpuUsesI32Write = false;
 let pendingAgentWebgpuUsage: { usesBondStore?: boolean; usesIndicators?: boolean; usesAux?: boolean; usesSpawn?: boolean; usesStop?: boolean; usesForceScatter?: boolean } = {};
 /** Warn once when the per-step hash overflows the GPU reserve (step runs on JS). */
 let agentWebgpuHashOverflowWarned = false;
+
+// --- A1 direct agent render ---
+/** True once an agent OffscreenCanvas is attached + the render pipeline is live.
+ *  When set, the WORKER renders agents straight from the GPU SoA into the canvas;
+ *  the main thread just blits it 1:1. */
+let agentRenderActive = false;
+/** UI-sync: while ON the resident batch reads the GPU state back each frame and
+ *  ships the render snapshot (features that need CPU agent state). While OFF it
+ *  free-runs (no readback, no snapshot). Default ON so behaviour is unchanged
+ *  until SimulatorView opts in. */
+let agentUiSync = true;
+/** True when the CPU agent store lags the GPU (a free-mode resident batch skipped
+ *  the readback). The message dispatcher's one-shot rule readbacks before serving
+ *  any agent-reading/-mutating message. */
+let agentStoreStale = false;
+/** Set by the resident batch after it appended the present pass to its submit, so
+ *  sendColors does NOT double-present (its present reads the CPU store, wrong under
+ *  free mode). Cleared by sendColors. */
+let agentBatchPresented = false;
+/** The last camera/tiling/graphics uniform (re-applied on attach / refocus). */
+let agentRenderView: AgentRenderView | null = null;
+
+/** Present the agent frame from the current CPU store (positions + colours) —
+ *  used wherever the CPU store is authoritative (per-gen batch tail, mutations).
+ *  No-op unless render is active. */
+function presentAgentsIfActive(): void {
+  if (!agentRenderActive || !agentWebgpuRuntime || !agentStore) return;
+  presentAgentsFromStore(agentWebgpuRuntime, agentStore);
+}
+
+/** One-shot readback: if the CPU agent store is stale (free-mode residency),
+ *  pull the GPU state down so a CPU consumer (mutation / inspect / save) sees
+ *  fresh values. Returns true if it read back. */
+async function ensureAgentStoreFresh(): Promise<boolean> {
+  if (!agentStoreStale || !agentWebgpuRuntime || !agentStore) return false;
+  try { await readbackAgentFrame(agentWebgpuRuntime, agentStore); }
+  catch { /* runtime torn down mid-await — leave stale flag, caller degrades */ }
+  agentStoreStale = false;
+  return true;
+}
 /** A monotonic build token: only the most-recent async runtime build commits (an
  *  earlier in-flight build whose token is stale is discarded, like the WASM
  *  orphan-on-reinit discipline). */
@@ -822,6 +879,9 @@ function buildAgentAttrSpecs(): AgentAttrSpec[] {
 function initAgents(): void {
   // PR7c: a fresh/re-seeded store must reach the GPU before the next resident batch.
   agentGpuUploadPending = true;
+  // A1: re-allocating the store drops the agent runtime below — its render canvas
+  // needs re-attach (the main thread re-attaches on agentRuntimeReady).
+  agentRenderActive = false; agentStoreStale = false;
   // Re-allocating the store invalidates any GPU agent runtime bound to the old
   // store/dims ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â drop it (buildAgentWebGPUIfNeeded rebuilds against the fresh one).
   if (agentWebgpuRuntime) { destroyAgentWebGPURuntime(agentWebgpuRuntime); agentWebgpuRuntime = null; }
@@ -998,6 +1058,9 @@ function instantiateAgentWasmIfNeeded(): void {
 function buildAgentWebGPUIfNeeded(): void {
   // Drop any prior runtime first (a re-init may have swapped the store/dims).
   if (agentWebgpuRuntime) { destroyAgentWebGPURuntime(agentWebgpuRuntime); agentWebgpuRuntime = null; }
+  // A1: the render pipeline lived on the old runtime — the main thread must
+  // re-attach its canvas once the new runtime is ready (agentRuntimeReady below).
+  agentRenderActive = false; agentStoreStale = false;
   const store = agentStore;
   if (agentTarget !== 'webgpu' || !pendingAgentWebgpuBehaviour || !pendingAgentWebgpuForce || !store) return;
   const behaviour = pendingAgentWebgpuBehaviour;
@@ -1045,6 +1108,11 @@ function buildAgentWebGPUIfNeeded(): void {
           self.postMessage({ type: 'error', message: `[agents][gpu] device lost (${info.reason}): ${info.message}` });
         });
         agentWebgpuRuntime = rt;
+        // A1: signal the main thread the agent WebGPU runtime is up so it can
+        // (re)attach its render canvas (the direct-render gate is evaluated
+        // main-side; this is just the "runtime ready" trigger, like the grid's
+        // useWebGPUStatus). Harmless when the model isn't render-eligible.
+        self.postMessage({ type: 'agentRuntimeReady' });
       } else {
         destroyAgentWebGPURuntime(rt);
       }
@@ -2005,7 +2073,20 @@ async function runAgentBatchResident(count: number): Promise<boolean> {
       agentGpuUploadPending = true;   // GPU state unknown — re-upload next time
       return false;
     }
-    await readbackAgentFrame(rt, s);
+    // A1 readback policy: when the frame is rendered GPU-side AND no feature
+    // needs live CPU state, SKIP the per-frame readback — the render already
+    // presented inside dispatchResidentBatch's submit (GPU-authoritative). The
+    // one-shot rule in the message dispatcher pulls state down for any consumer.
+    if (agentRenderActive && !agentUiSync) {
+      agentStoreStale = true;
+      agentBatchPresented = true;   // the batch's submit included the present
+    } else {
+      await readbackAgentFrame(rt, s);
+      agentStoreStale = false;
+      // The batch still presented internally (render active) — flag it so
+      // sendColors doesn't re-present from the (now-fresh) store redundantly.
+      agentBatchPresented = agentRenderActive;
+    }
     // Sprite frames advance CPU-side (independent of the GPU SoA) — one tick/gen.
     if (hasAgentSprites) for (let k = 0; k < count; k++) advanceAgentSprites(s);
     generation += count;
@@ -2179,6 +2260,7 @@ async function runAgentStepWebGPUInner(): Promise<boolean> {
     if (agentWebgpuRuntime === rt) {
       self.postMessage({ type: 'error', message: '[agents] WebGPU step failed, falling back to JS: ' + ((e as Error)?.message || e) });
       destroyAgentWebGPURuntime(agentWebgpuRuntime); agentWebgpuRuntime = null;
+      agentRenderActive = false; agentStoreStale = false;   // A1: runtime gone → render off
     }
     return false;
   }
@@ -4785,12 +4867,22 @@ function sendColors(): void {
     ? ((activeSet && !(useWebGPU && webgpuRuntime?.stepReady)) ? activeSet.count : -1)
     : undefined;
   let agentsPayload: ReturnType<typeof snapshotAgentsForRender> | undefined;
+  // A1 direct render: in FREE mode (render active + UI-sync off) the GPU renders
+  // the frame, so ship NO agents payload — just a live-count scalar (stats chip).
+  let agentLiveCount: number | undefined;
+  const agentRenderFree = agentRenderActive && !agentUiSync;
   const agentTransfers: ArrayBuffer[] = [];
   if (agentStore && agentStore.highWater > 0) {
     // Agent Output Mappings: recolour from the active agent viewer before
     // snapshotting (no-op when the model has no agent mappings ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â agents are then
     // coloured by the behaviour's Set Cell Looks during the step).
     runAgentColorPass();
+    // Present the current frame when direct render is active and the resident
+    // batch didn't already present it (per-gen path, mutations). Reads the CPU
+    // store, so skip when a free-mode batch left it stale (already presented).
+    if (agentRenderActive && !agentBatchPresented && !agentStoreStale) presentAgentsIfActive();
+    if (agentRenderFree) { agentLiveCount = agentStore.liveCount; agentBatchPresented = false; }
+    else {
     agentsPayload = snapshotAgentsForRender(agentStore, hasAgentSprites);
     agentTransfers.push(
       agentsPayload.x.buffer, agentsPayload.y.buffer,
@@ -4809,9 +4901,17 @@ function sendColors(): void {
     if (agentsPayload.vz.length > 0) agentTransfers.push(agentsPayload.vz.buffer);
     // Sprites: same gate ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â only ship the per-agent buffers when the model has sprites.
     if (agentsPayload.spriteIds.length > 0) agentTransfers.push(agentsPayload.spriteIds.buffer, agentsPayload.spriteFrames.buffer, agentsPayload.spriteRotations.buffer, agentsPayload.spriteScales.buffer);
+    }
+    agentBatchPresented = false;
   } else if (agentStore) {
+    if (agentRenderFree) {
+      agentLiveCount = 0;
+      if (agentRenderActive && !agentBatchPresented && !agentStoreStale) presentAgentsIfActive();
+      agentBatchPresented = false;
+    } else {
     // Empty store ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â still tell the main thread so it clears any stale agents.
     agentsPayload = { highWater: 0, liveCount: 0, x: new Float32Array(0), y: new Float32Array(0), z: new Float32Array(0), vx: new Float32Array(0), vy: new Float32Array(0), vz: new Float32Array(0), radius: new Float32Array(0), alive: new Uint8Array(0), colors: new Uint8ClampedArray(0), bonds: new Int32Array(0), spriteIds: new Int32Array(0), spriteFrames: new Float32Array(0), spriteRotations: new Float32Array(0), spriteScales: new Float32Array(0) };
+    }
   }
 
   // P7 ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â when WebGPU direct render is active, the OffscreenCanvas already
@@ -4822,11 +4922,11 @@ function sendColors(): void {
   if (webgpuRuntime?.directRender && !recording) {
     if (glyphsPayload) {
       self.postMessage(
-        { type: 'stepped', generation, indicators, sieActive, reqId: ackId, glyphCodes: glyphsPayload.codes, glyphColors: glyphsPayload.colors, agents: agentsPayload },
+        { type: 'stepped', generation, indicators, sieActive, reqId: ackId, glyphCodes: glyphsPayload.codes, glyphColors: glyphsPayload.colors, agents: agentsPayload, agentLiveCount },
         { transfer: [glyphsPayload.codes.buffer, glyphsPayload.colors.buffer, ...agentTransfers] },
       );
     } else {
-      self.postMessage({ type: 'stepped', generation, indicators, sieActive, reqId: ackId, agents: agentsPayload }, { transfer: agentTransfers });
+      self.postMessage({ type: 'stepped', generation, indicators, sieActive, reqId: ackId, agents: agentsPayload, agentLiveCount }, { transfer: agentTransfers });
     }
     postInspectCellsData();
     return;
@@ -4837,7 +4937,7 @@ function sendColors(): void {
   // the WebGPU direct-render branch above). At agent-world scales this is the
   // difference between a usable sim and copying WÃƒâ€šÃ‚Â·HÃƒâ€šÃ‚Â·DÃƒâ€šÃ‚Â·4 bytes every step.
   if (!gridCellsEnabled && (!colorsDirty || colors.length === 0)) {
-    self.postMessage({ type: 'stepped', generation, indicators, sieActive, reqId: ackId, agents: agentsPayload }, { transfer: agentTransfers });
+    self.postMessage({ type: 'stepped', generation, indicators, sieActive, reqId: ackId, agents: agentsPayload, agentLiveCount }, { transfer: agentTransfers });
     postInspectCellsData();
     return;
   }
@@ -4845,12 +4945,12 @@ function sendColors(): void {
   colorsDirty = false;
   if (glyphsPayload) {
     self.postMessage(
-      { type: 'stepped', generation, colors: copy, indicators, sieActive, reqId: ackId, glyphCodes: glyphsPayload.codes, glyphColors: glyphsPayload.colors, agents: agentsPayload },
+      { type: 'stepped', generation, colors: copy, indicators, sieActive, reqId: ackId, glyphCodes: glyphsPayload.codes, glyphColors: glyphsPayload.colors, agents: agentsPayload, agentLiveCount },
       { transfer: [copy.buffer, glyphsPayload.codes.buffer, glyphsPayload.colors.buffer, ...agentTransfers] },
     );
   } else {
     self.postMessage(
-      { type: 'stepped', generation, colors: copy, indicators, sieActive, reqId: ackId, agents: agentsPayload },
+      { type: 'stepped', generation, colors: copy, indicators, sieActive, reqId: ackId, agents: agentsPayload, agentLiveCount },
       { transfer: [copy.buffer, ...agentTransfers] },
     );
   }
@@ -4878,6 +4978,20 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
   // messages until the step settles so the readback can't clobber them.
   if (agentGpuStepInFlight && AGENT_GPU_DEFER_TYPES.has(msg.type)) {
     deferredDuringAgentGpuStep.push(msg);
+    return;
+  }
+
+  // A1 one-shot rule (the ONE place): if the CPU agent store lags the GPU
+  // (free-mode residency skipped the per-frame readback) and this message reads
+  // or mutates agent state, pull the GPU state DOWN first so no consumer ever
+  // sees stale coordinates. Reuses the async-batch deferral discipline: block,
+  // readback, then replay the (now-fresh) message. AGENT_GPU_DEFER_TYPES covers
+  // every mutation; getAgentState / getState are the on-demand readers.
+  if (agentStoreStale && agentWebgpuRuntime && agentStore
+      && (AGENT_GPU_DEFER_TYPES.has(msg.type) || msg.type === 'getAgentState' || msg.type === 'getState')) {
+    asyncStepBatchInFlight = true;   // no message may interleave the one-shot readback
+    deferredDuringAsyncBatch.push(msg);
+    void (async () => { await ensureAgentStoreFresh(); endAsyncStepBatch(); })();
     return;
   }
 
@@ -5836,6 +5950,69 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       } catch (e) {
         const m = (e instanceof Error) ? e.message : String(e);
         self.postMessage({ type: 'error', message: '[webgpu] attachCanvas failed: ' + m });
+      }
+      break;
+    }
+
+    case 'attachAgentCanvas': {
+      // A1: the main thread transferred a display-pixel-sized OffscreenCanvas —
+      // set up the agent render pipeline on the agent WebGPU runtime, present
+      // once, and ack. Any failure acks active:false (main thread keeps the CPU
+      // overlay path). Async setup (validates the WGSL module) via an IIFE.
+      const rt = agentWebgpuRuntime, s = agentStore;
+      if (!rt || !rt.ready || !s) {
+        self.postMessage({ type: 'agentRenderStatus', active: false });
+        break;
+      }
+      void (async () => {
+        try {
+          const ok = await setupAgentDirectRender(rt, msg.canvas);
+          if (!ok) { self.postMessage({ type: 'agentRenderStatus', active: false }); return; }
+          agentRenderActive = true;
+          agentStoreStale = false;
+          if (agentRenderView) uploadAgentRenderView(rt, agentRenderView);
+          presentAgentsFromStore(rt, s);
+          self.postMessage({ type: 'agentRenderStatus', active: true });
+        } catch (e) {
+          agentRenderActive = false;
+          self.postMessage({ type: 'agentRenderStatus', active: false, message: (e as Error)?.message || String(e) });
+        }
+      })();
+      break;
+    }
+
+    case 'setAgentCamera': {
+      // Camera / tiling / graphics uniform (pan/zoom/resize/settings). Present-
+      // only: re-present with the new view (the GPU buffers hold the last frame).
+      agentRenderView = msg.view;
+      if (agentRenderActive && agentWebgpuRuntime) {
+        uploadAgentRenderView(agentWebgpuRuntime, msg.view);
+        // Present now only when idle — a batch in flight is deferred (won't reach
+        // here); a per-gen/mutation present covers the running case via sendColors.
+        presentAgentsOnce(agentWebgpuRuntime, agentStore ? agentStore.highWater : 0);
+      }
+      break;
+    }
+
+    case 'setAgentUiSync': {
+      // While ON the resident batch reads back + ships the snapshot each frame
+      // (features need CPU state). Turning it ON when the store is stale pulls
+      // state down once so the next snapshot is fresh.
+      const wasOff = !agentUiSync;
+      agentUiSync = !!msg.on;
+      if (agentUiSync && wasOff && agentStoreStale && agentWebgpuRuntime && agentStore) {
+        asyncStepBatchInFlight = true;
+        void (async () => { await ensureAgentStoreFresh(); endAsyncStepBatch(); })();
+      }
+      break;
+    }
+
+    case 'refreshAgentDisplay': {
+      // Tab-refocus / soft-recompile analogue of refreshDisplay — re-present the
+      // agent frame so a stale/unpresented canvas repaints.
+      if (agentRenderActive && agentWebgpuRuntime && agentStore) {
+        if (agentRenderView) uploadAgentRenderView(agentWebgpuRuntime, agentRenderView);
+        presentAgentsFromStore(agentWebgpuRuntime, agentStore);
       }
       break;
     }
