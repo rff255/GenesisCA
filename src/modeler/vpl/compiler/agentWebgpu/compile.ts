@@ -3196,6 +3196,30 @@ export function isAgentGraphWebGPUSupported(model: CAModel | undefined | null): 
     // too — no field-in-3D clamp remains.
   }
   if (arrayProducerCount > AGENT_WEBGPU_NEARBY_SLOTS) return false;
+  // Cross-agent OVERWRITE writes (a by-id setter targeting ANOTHER agent) are a
+  // genuine parallel fundamental: on the GPU every agent is a thread, so a write
+  // into another thread's slot has NO defined order vs that agent's own reads/
+  // writes — the same "non-commutative mutation of shared state by parallel
+  // writers" class as the grid's toggle-indicator reject. JS/WASM run the agent
+  // loop SEQUENTIALLY, so async mode gives them a well-defined order; the GPU
+  // cannot honour it → such models clamp to JS/WASM. Mirrors the sync-mode
+  // compile gate in compileAgentGraph (same 4 node types, same one-hop
+  // Create-Agent-handle exemption — a staged newborn slot is thread-owned, so
+  // spawn configuration never races). The commutative Apply Force To Agent is
+  // NOT gated (atomic-CAS scatter). Behaviour-reachable only: init/division
+  // roots are sequential CPU/JS on every target.
+  {
+    const CROSS_AGENT_OVERWRITE = new Set(['setAgentAttribute', 'setAgentsAttribute', 'setAgentPosition', 'setAgentRadius']);
+    const flatMap = new Map(flat.nodes.map(n => [n.id, n] as const));
+    for (const n of reachNodes) {
+      if (!CROSS_AGENT_OVERWRITE.has(n.data.nodeType)) continue;
+      const targetPort = n.data.nodeType === 'setAgentsAttribute' ? 'agents' : 'agentId';
+      const idEdge = flat.edges.find(e => e.target === n.id && e.targetHandle === `input_value_${targetPort}`);
+      if (!idEdge) continue;                       // unwired id = the current agent (thread-own, race-free)
+      if (flatMap.get(idEdge.source)?.data.nodeType === 'createAgent') continue;  // spawn handle
+      return false;
+    }
+  }
   // Every array input (forEachInArray.array / aggregate|group*.values / pick*.agents
   // / getAgentsAttribute|setAgentsAttribute.agents / filter/join inputs) must come
   // from an agent-array producer OR an array Local Variable (the array tier never

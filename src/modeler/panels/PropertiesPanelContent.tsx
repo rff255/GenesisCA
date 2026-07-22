@@ -660,7 +660,7 @@ export function PropertiesPanelContent({ mode = 'list' }: PanelContentProps = {}
                       : 'Selectable, but this graph has too many simultaneous Get-Nearby-Agents producers for the WASM scratch budget, so it falls back to JS.', false],
                     ['webgpu', 'WebGPU', agentWebgpuSupported
                       ? 'This agent graph runs on WebGPU — the behaviour + force passes dispatch on the GPU. Eligible models (custom forces, async attributes, no bonds/division/field coupling — the Particle Life / Boids class) run whole frames RESIDENT on the GPU (hash built on-GPU, one readback per frame) — tens of times faster than the CPU at large populations. Other models use the per-generation path, which pays a CPU↔GPU upload/readback each step — there, below ~10k agents (especially field models) JS/WASM is usually faster. Falls back to JS if WebGPU is unavailable.'
-                      : 'Selectable, but this graph uses one of the few WebGPU-fundamental rejects (median / uniform-random aggregate, toggle/next/previous indicator ops, or too many array producers), so it falls back to JS.', false],
+                      : 'Selectable, but this graph uses one of the few WebGPU-fundamental rejects (median / uniform-random aggregate, toggle/next/previous indicator ops, a cross-agent overwrite write to a wired agent id — order-dependent under parallel threads — or too many array producers), so it falls back to JS.', false],
                   ] as const).map(([val, title, hint, disabled]) => (
                     <label
                       key={val}
