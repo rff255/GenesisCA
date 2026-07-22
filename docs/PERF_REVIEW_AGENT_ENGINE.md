@@ -107,20 +107,28 @@ that gap is PR7c, not parameter tuning.
 
 ## 4. Prioritized recommendations
 
-**P0 — correctness (do before trusting GPU at scale):**
-- The WebGPU agent target produces **wrong collective dynamics** on this
-  machine: shipped Boids reaches polarization 0.997 on JS/WASM but plateaus at
-  ~0.03–0.45 on WebGPU (pre-existing — confirmed on unmodified base code), and a
-  jitter-less variant is bitwise FROZEN despite gens advancing. An exhaustive
-  probe session verified every individual primitive (gather incl. torus seam,
-  offsets, velocity reads incl. 2nd ports, accumulators, chained bodies,
-  expressions incl. gap binding, applyForce accumulate, integration checked
-  against the analytic value, RNG spatial+temporal, uniform layouts, emitted
-  WGSL semantics) — all correct in isolation; the full-model divergence is
-  unexplained. Next: worker-side `device.onuncapturederror` + `pushErrorScope`
-  around `dispatchAgentStep`, and a single-step CPU-vs-GPU full-state diff from
-  an identical uploaded state. Until fixed, treat WebGPU-agent results as
-  unreliable for dynamics-sensitive models.
+**P0 — correctness: RESOLVED (2026-07-22, the batch re-entrancy fix).**
+- Root cause found via a state-roundtrip experiment (loadState the SAME agent
+  state into both targets): a single GPU step matches a single JS step to
+  1.4e-5 (pure f32) on every agent, one batch-of-5 is BITWISE identical to five
+  singles, the GPU HOLDS a loaded 0.999-polarization flock indefinitely, and
+  with STRICTLY SEQUENTIAL batches GPU Boids flocks 0.378→0.998 exactly like
+  JS. **The GPU physics was correct all along.** The divergence appeared ONLY
+  when multiple `step` messages were queued at once: the async WebGPU batch
+  loops yield to onmessage at every await, so a queued `step` started a
+  CONCURRENT batch interleaved with the running one — stale CPU uploads raced
+  fresh GPU results → frozen/plateaued dynamics with zero errors. (The
+  synchronous JS/WASM batch loop cannot be interleaved, which is why only the
+  GPU paths broke — and why probe scripts that post several step messages at
+  once were the reliable reproducer while the send-await-send Play loop mostly
+  wasn't.) **Fix**: while an async step batch is in flight the worker defers
+  EVERY incoming message and replays them in order when the batch settles
+  (`asyncStepBatchInFlight` + `endAsyncStepBatch` in sim.worker.ts), restoring
+  the synchronous path's semantics; plus permanent GPU diagnostics
+  (`device.onuncapturederror`, `device.lost`, `pushErrorScope` around the
+  dispatch). Verified: the previously-failing 10×40-overlapped-burst pattern
+  now flocks 0.223→0.998 on the GPU target; the WebGPU-grid burst path
+  serializes cleanly too. The WebGPU agent target is trustworthy again.
 
 **P1 — the cheap 1.6×: skip the dead density scan.**
 Compile-side flag (does any reachable node read `neighbourDensity`?) threaded to

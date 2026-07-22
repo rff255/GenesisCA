@@ -1005,6 +1005,16 @@ function buildAgentWebGPUIfNeeded(): void {
       // Guard against a re-init that swapped the store / changed the target /
       // launched a newer build while this one was in flight.
       if (agentStore === store && agentTarget === 'webgpu' && token === agentWebgpuBuildToken) {
+        // Permanent diagnostics: surface GPU validation/OOM errors + device loss
+        // LOUDLY. Without these a failing dispatch is SILENT — the queue drops the
+        // work, the readback returns whatever was uploaded, and the observable
+        // symptom is "frozen / wrong dynamics with zero errors" (the P0 class).
+        rt.device.onuncapturederror = (ev: GPUUncapturedErrorEvent) => {
+          self.postMessage({ type: 'error', message: '[agents][gpu] uncaptured: ' + (ev.error?.message ?? String(ev.error)) });
+        };
+        void rt.device.lost.then((info) => {
+          self.postMessage({ type: 'error', message: `[agents][gpu] device lost (${info.reason}): ${info.message}` });
+        });
         agentWebgpuRuntime = rt;
       } else {
         destroyAgentWebGPURuntime(rt);
@@ -1818,6 +1828,28 @@ const AGENT_GPU_DEFER_TYPES = new Set<string>([
 let agentGpuStepInFlight = false;
 let deferredDuringAgentGpuStep: WorkerMsg[] = [];
 
+/** P0 (the "GPU dynamics" bug): the ASYNC step-batch branches (WebGPU grid /
+ *  WebGPU agents) yield to onmessage at every await — so a second `step` (or any
+ *  state-touching message) arriving MID-BATCH interleaved a CONCURRENT batch
+ *  with the running one: uploads of stale CPU state raced fresh GPU results and
+ *  the dynamics froze/corrupted with ZERO errors (single steps + strictly
+ *  sequential batches were bit-correct; only overlapped batches broke). The
+ *  synchronous JS/WASM batch loop can't be interleaved AT ALL — so the async
+ *  branches must reproduce exactly that: while a batch is in flight, EVERY
+ *  incoming message is deferred and replayed IN ORDER after the batch settles.
+ *  A replayed `step` that starts a new async batch re-arms the guard; the rest
+ *  of the replay queue then re-defers into the fresh queue (order preserved). */
+let asyncStepBatchInFlight = false;
+let deferredDuringAsyncBatch: WorkerMsg[] = [];
+
+function endAsyncStepBatch(): void {
+  asyncStepBatchInFlight = false;
+  if (deferredDuringAsyncBatch.length === 0) return;
+  const q = deferredDuringAsyncBatch;
+  deferredDuringAsyncBatch = [];
+  for (const m of q) self.onmessage!.call(self as never, { data: m } as MessageEvent<WorkerMsg>);
+}
+
 function flushDeferredAgentGpuMsgs(): void {
   if (deferredDuringAgentGpuStep.length === 0) return;
   const q = deferredDuringAgentGpuStep;
@@ -1949,7 +1981,14 @@ async function runAgentStepWebGPUInner(): Promise<boolean> {
     // of the grow-only `_agentCreate`). readbackAgentStep reconciles them below.
     if (rt.usesSpawn) uploadAgentSpawnCursor(rt, hw);
     if (rt.usesStop) resetAgentStopFlag(rt);   // fresh first-match each step
+    // Error scope around the dispatch: a validation failure would otherwise be
+    // SILENT (dropped work + a readback of unchanged state = frozen dynamics).
+    rt.device.pushErrorScope('validation');
     dispatchAgentStep(rt, hw);
+    const dispatchErr = await rt.device.popErrorScope();
+    if (dispatchErr) {
+      self.postMessage({ type: 'error', message: '[agents][gpu] dispatch validation error: ' + dispatchErr.message });
+    }
     const rb = await readbackAgentStep(rt, s);   // x/y (from xNext/yNext) + vx/vy/radius/density/age + attrsÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢attrWrite + requests + colours + spawn reconcile + stop
     if (rb.spawnOverflow) self.postMessage({ type: 'agentOverflow', message: `Agent capacity reached during a Behaviour spawn (maxAgents=${s.maxAgents}). Some Create Agent calls were skipped.` });
     // Merge the GPU Stop Event into the shared stopFlag (first-match); drainAgentStop
@@ -4667,6 +4706,16 @@ function sendColors(): void {
 self.onmessage = (e: MessageEvent<WorkerMsg>) => {
   const msg = e.data;
 
+  // P0: an ASYNC step batch is running (WebGPU grid / WebGPU agents) — defer
+  // EVERYTHING until it settles, reproducing the synchronous batch loop's
+  // can't-be-interleaved semantics (see endAsyncStepBatch). Without this, a
+  // queued `step` started a CONCURRENT batch mid-await → frozen/corrupted
+  // dynamics with zero errors.
+  if (asyncStepBatchInFlight) {
+    deferredDuringAsyncBatch.push(msg);
+    return;
+  }
+
   // A GPU agent step's awaited readback yields to this handler ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â defer mutation
   // messages until the step settles so the readback can't clobber them.
   if (agentGpuStepInFlight && AGENT_GPU_DEFER_TYPES.has(msg.type)) {
@@ -4891,6 +4940,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
         // readback per-step to honour the same first-stop-wins semantics as JS).
         // Most models won't have stop events, but the readback is cheap (single
         // u32 mapAsync).
+        asyncStepBatchInFlight = true;   // P0: no message may interleave this batch
         (async () => {
           let stoppedByEvent: string | null = null;
           let lastFinalize: Promise<void> = Promise.resolve();
@@ -4969,7 +5019,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
         })().catch(e => {
           const m = (e instanceof Error) ? e.message : String(e);
           self.postMessage({ type: 'error', message: '[webgpu] step pipeline failed: ' + m });
-        });
+        }).finally(endAsyncStepBatch);
         break;
       }
 
@@ -4981,6 +5031,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       // failure the agent step returns false and the JS runAgentStep() runs for
       // that step (so this stays correct even mid-batch).
       if (agentStore && agentTarget === 'webgpu' && agentWebgpuRuntime) {
+        asyncStepBatchInFlight = true;   // P0: no message may interleave this batch
         (async () => {
           let stoppedByEvent: string | null = null;
           for (let i = 0; i < msg.count; i++) {
@@ -5022,7 +5073,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
           if (stoppedByEvent !== null) self.postMessage({ type: 'stopEvent', message: stoppedByEvent, reqId: msg.reqId });
         })().catch(e => {
           self.postMessage({ type: 'error', message: '[agents] WebGPU step batch failed: ' + ((e as Error)?.message || e) });
-        });
+        }).finally(endAsyncStepBatch);
         break;
       }
 
