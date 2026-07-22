@@ -45,6 +45,7 @@ import {
   uploadAgentControl, uploadAgentForceControl, dispatchAgentStep, readbackAgentStep, uploadAgentSpawnCursor, resetAgentStopFlag,
   uploadAgentField, readbackAgentField,
   uploadAgentAux, uploadAgentIndicators, readbackAgentIndicators, uploadAgentBondStore,
+  ensureAgentResident, computeResidentHashParams, uploadAgentHashParams, dispatchResidentBatch, readbackAgentFrame,
   type AgentWebGPURuntime, type FieldArray,
 } from './agentWebgpuRuntime';
 
@@ -220,6 +221,11 @@ interface InitMsg {
    *  pass skips its whole neighbour scan (~70% of a custom-force model's
    *  force-pass cost). Absent → true (the historical always-scan). */
   agentUsesDensity?: boolean;
+  /** PR7c GPU residency: the agent graph has NO structural / spawn / radius-write
+   *  nodes (divideAgent, killAgent, formBond, breakBond, createAgent,
+   *  addAgentToWorld, setAgentRadius, setTargetRadius) — one of the eligibility
+   *  conditions for running whole batches GPU-resident. Absent → false. */
+  agentResidencyClean?: boolean;
   /** PR6b-1: the resolved agent compile target ('js' default). When 'wasm' the
    *  worker backs the AgentStore on a WebAssembly.Memory (views at baked offsets)
    *  and runs the compiled `agentWasmBytes` behaviour loop instead of the JS one.
@@ -296,7 +302,7 @@ interface PaintManualMsg {
   activeViewer: string;
 }
 interface ResetMsg { type: 'reset'; activeViewer: string; reqId?: number }
-interface RecompileMsg { type: 'recompile'; stepCode: string; initCode?: string; gridInitCode?: string; skipIsolatedEmpty?: SkipIsolatedEmptyConfig; inputColorCodes: Array<{ mappingId: string; code: string }>; outputMappingCodes: Array<{ mappingId: string; code: string }>; stopMessages?: string[]; updateMode: string; asyncScheme: string; wasmStepBytes?: Uint8Array; wasmStepError?: string; wasmExports?: string[]; viewerIds?: Record<string, number>; webgpuShaderCode?: string; webgpuShaderError?: string; webgpuEntryPoints?: WebGPUEntryPoints; webgpuLayout?: WebGPULayout; webgpuStopCheckInterval?: number; variegated?: VariegatedPayload; interactionTables?: InteractionTablePayload[]; agentBehaviourCode?: string; agentInitCode?: string; agentDivisionCode?: string; agentColorViewer?: string; agentOutputMappingCodes?: Array<{ mappingId: string; code: string }>; agentHasSprites?: boolean; centerBased?: CenterBasedConfig; agentUsesField?: boolean; agentUsesDensity?: boolean; agentTarget?: 'js' | 'wasm' | 'webgpu'; agentWasmBytes?: Uint8Array; agentWasmViewerGuardIds?: string[]; agentLayoutExtras?: AgentLayoutExtras; agentWasmLayoutSig?: { maxHashBins: number; totalBytes: number }; agentWebgpuBehaviourShader?: string; agentWebgpuForceShader?: string; agentWebgpuMaxAgents?: number; agentWebgpuMaxHashBins?: number; agentWebgpuLayout?: AgentWebGPULayout; agentWebgpuUsesI32Write?: boolean; agentWebgpuUsage?: { usesBondStore?: boolean; usesIndicators?: boolean; usesAux?: boolean; usesSpawn?: boolean; usesStop?: boolean; usesForceScatter?: boolean } }
+interface RecompileMsg { type: 'recompile'; stepCode: string; initCode?: string; gridInitCode?: string; skipIsolatedEmpty?: SkipIsolatedEmptyConfig; inputColorCodes: Array<{ mappingId: string; code: string }>; outputMappingCodes: Array<{ mappingId: string; code: string }>; stopMessages?: string[]; updateMode: string; asyncScheme: string; wasmStepBytes?: Uint8Array; wasmStepError?: string; wasmExports?: string[]; viewerIds?: Record<string, number>; webgpuShaderCode?: string; webgpuShaderError?: string; webgpuEntryPoints?: WebGPUEntryPoints; webgpuLayout?: WebGPULayout; webgpuStopCheckInterval?: number; variegated?: VariegatedPayload; interactionTables?: InteractionTablePayload[]; agentBehaviourCode?: string; agentInitCode?: string; agentDivisionCode?: string; agentColorViewer?: string; agentOutputMappingCodes?: Array<{ mappingId: string; code: string }>; agentHasSprites?: boolean; centerBased?: CenterBasedConfig; agentUsesField?: boolean; agentUsesDensity?: boolean; agentResidencyClean?: boolean; agentTarget?: 'js' | 'wasm' | 'webgpu'; agentWasmBytes?: Uint8Array; agentWasmViewerGuardIds?: string[]; agentLayoutExtras?: AgentLayoutExtras; agentWasmLayoutSig?: { maxHashBins: number; totalBytes: number }; agentWebgpuBehaviourShader?: string; agentWebgpuForceShader?: string; agentWebgpuMaxAgents?: number; agentWebgpuMaxHashBins?: number; agentWebgpuLayout?: AgentWebGPULayout; agentWebgpuUsesI32Write?: boolean; agentWebgpuUsage?: { usesBondStore?: boolean; usesIndicators?: boolean; usesAux?: boolean; usesSpawn?: boolean; usesStop?: boolean; usesForceScatter?: boolean } }
 interface UpdateLookupTableMsg {
   type: 'updateLookupTable';
   attrId: string;
@@ -663,6 +669,13 @@ let agentUsesField = false;
 /** P1: a density consumer exists (neighbourDensity / divideAgent) — absent from
  *  the message → true, the historical always-scan (see InitMsg.agentUsesDensity). */
 let agentUsesDensity = true;
+/** PR7c: the agent graph is residency-clean (no structural / spawn / radius-write
+ *  nodes — see InitMsg.agentResidencyClean). Absent → false (conservative). */
+let agentGraphResidencyClean = false;
+/** PR7c: the CPU agent store changed since the last GPU upload (mutations /
+ *  init / reset / loadState) — the next resident batch re-uploads the SoA;
+ *  otherwise the batch runs on the GPU-resident state with ZERO uploads. */
+let agentGpuUploadPending = true;
 let centerBasedConfig: CenterBasedConfig | null = null;
 /** Compiled agent behaviour function (runs once per agent each generation).
  *  Null until the agent compile path ships it (PR-A2.5/A3). */
@@ -807,6 +820,8 @@ function buildAgentAttrSpecs(): AgentAttrSpec[] {
  *  Called on init when the model has the Agents topology. Seeds the configured
  *  initial agent count. */
 function initAgents(): void {
+  // PR7c: a fresh/re-seeded store must reach the GPU before the next resident batch.
+  agentGpuUploadPending = true;
   // Re-allocating the store invalidates any GPU agent runtime bound to the old
   // store/dims ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â drop it (buildAgentWebGPUIfNeeded rebuilds against the fresh one).
   if (agentWebgpuRuntime) { destroyAgentWebGPURuntime(agentWebgpuRuntime); agentWebgpuRuntime = null; }
@@ -1877,6 +1892,123 @@ async function runAgentStepWebGPU(): Promise<boolean> {
   agentGpuStepInFlight = true;
   try {
     return await runAgentStepWebGPUInner();
+  } finally {
+    agentGpuStepInFlight = false;
+    flushDeferredAgentGpuMsgs();
+  }
+}
+
+// ---------------------------------------------------------------------------
+// PR7c — GPU residency. When the model qualifies, a WHOLE gens/frame batch runs
+// on the GPU in ONE queue submit (per-gen GPU hash build + behaviour + force +
+// position commit) with a SINGLE per-frame readback — eliminating the measured
+// maxAgents-proportional per-generation upload/readback/pack overhead (~60% of
+// the GPU step time at 50k agents). The CPU store is refreshed once per frame
+// (readbackAgentFrame), so paint/inspect/save see ≤1-frame-fresh state; any
+// mutation sets agentGpuUploadPending and the next batch re-uploads.
+// ---------------------------------------------------------------------------
+
+/** Residency eligibility — every condition here exists because the excluded
+ *  feature needs per-generation CPU work (structural phase, field bridge, sync
+ *  attr swap, positional projection, stop drain, indicator sync) or CPU-visible
+ *  per-gen state (spawn reconcile). Anything ineligible falls back to the
+ *  per-generation GPU path — never silently wrong. */
+function agentResidentEligible(): boolean {
+  const s = agentStore, rt = agentWebgpuRuntime, cfg = centerBasedConfig;
+  if (!s || !rt || !rt.ready || agentTarget !== 'webgpu' || !cfg) return false;
+  return (
+    agentGraphResidencyClean
+    && !gridCellsEnabled                       // agents-only (v1 — no cell-step interleave)
+    && simulateAgents
+    && !agentUsesField
+    && cfg.agentUpdateMode !== 'sync'          // async single-buffer attrs on the GPU
+    && !usesPositionalCollision(cfg)           // CPU projection pass is per-gen
+    && !usesEngineSprings(cfg) && s.maxBonds === 0   // no bond store / auto-bond scan
+    && !(usesEngineGrowth(cfg) && cbNum(cfg, 'growthRate') > 0)  // radius static ⇒ hash edge static
+    && !rt.usesSpawn && !rt.usesStop
+    && !rt.indicatorsBuf                        // indicator accumulation needs per-gen sync
+    && stopMessages.length === 0
+  );
+}
+
+/** Run `count` generations fully GPU-resident (one submit) + one frame readback.
+ *  Returns false on any failure (pipelines unavailable / device error) — the
+ *  caller falls back to the per-generation path for this batch. */
+async function runAgentBatchResident(count: number): Promise<boolean> {
+  const s = agentStore, rt = agentWebgpuRuntime, cfg = centerBasedConfig;
+  if (!s || !rt || !cfg) return false;
+  agentGpuStepInFlight = true;
+  try {
+    if (!(await ensureAgentResident(rt))) return false;
+    const hw = s.highWater;
+    // Per-batch hash geometry — CPU-computed once (radius is static under the
+    // eligibility gate, so maxR can't drift mid-batch).
+    let maxR = cbNum(cfg, 'defaultRadius');
+    for (let i = 0; i < hw; i++) if (s.alive[i] && s.radius[i]! > maxR) maxR = s.radius[i]!;
+    const hp = computeResidentHashParams(
+      width, height, depth,
+      cbNum(cfg, 'interactionRange'), maxR, cbNum(cfg, 'neighbourQueryRadius'),
+      rt.layout.maxHashBins,
+    );
+    const torus = boundaryTreatment === 'torus';
+    // Upload the CPU store ONLY when something mutated it since the last batch.
+    // The force accumulators are zeroed first (a JS fallback step may have left
+    // them nonzero) — the per-gen zeroing lives in the GPU posCommit pass.
+    if (agentGpuUploadPending) {
+      s.forceX.fill(0, 0, hw); s.forceY.fill(0, 0, hw); s.forceZ.fill(0, 0, hw);
+      uploadAgentSoA(rt, s);
+      agentGpuUploadPending = false;
+    }
+    // Uniforms once per batch (highWater is static — no spawn under eligibility).
+    uploadAgentControl(rt, {
+      highWater: hw, hashValid: hp.hashValid, nBinsX: hp.nBinsX, nBinsY: hp.nBinsY,
+      fieldTorus: torus ? 1 : 0,
+      binSizeX: hp.binSizeX, binSizeY: hp.binSizeY,
+      fieldW: width, fieldH: height,
+      nBinsZ: hp.nBinsZ, binSizeZ: hp.binSizeZ, fieldD: s.worldDepth,
+      originX: 0, originY: 0, originZ: 0,
+    });
+    const eta = Math.max(1e-6, cbNum(cfg, 'drag'));
+    uploadAgentForceControl(rt, hw, {
+      hashValid: hp.hashValid, nBinsX: hp.nBinsX, nBinsY: hp.nBinsY,
+      binSizeX: hp.binSizeX, binSizeY: hp.binSizeY,
+      dtOverEta: s.dt / eta,
+      muR: cbNum(cfg, 'repulsionStiffness'), muA: cbNum(cfg, 'adhesionStiffness'),
+      range: cbNum(cfg, 'interactionRange'),
+      momentum: Math.max(0, Math.min(0.999, cbNum(cfg, 'momentum'))),
+      maxSpeed: Math.max(0, cbNum(cfg, 'maxSpeed')),
+      growthRate: 0,                          // eligibility: growth off
+      fieldW: width, fieldH: height,
+      bonding: usesBondingPhysics(cfg) ? 1 : 0,
+      doCollision: usesSoftCollision(cfg) ? 1 : 0,
+      doDensity: agentUsesDensity ? 1 : 0,
+      torus: torus ? 1 : 0,
+      nBinsZ: hp.nBinsZ, binSizeZ: hp.binSizeZ, fieldD: s.worldDepth,
+      originX: 0, originY: 0, originZ: 0,
+    });
+    if (rt.layout.auxF32Len > 0 && rt.auxF32Buf) {
+      const tables: Record<string, ArrayLike<number>> = {};
+      for (const id of rt.layout.lookupTableIds) { const t = cachedInteractionTables[id]; if (t) tables[id] = t; }
+      uploadAgentAux(rt, cachedModelAttrs as Record<string, number>, tables);
+    }
+    uploadAgentHashParams(rt, hw, hp, torus);
+    rt.device.pushErrorScope('validation');
+    dispatchResidentBatch(rt, count, hw, hp);
+    const dispatchErr = await rt.device.popErrorScope();
+    if (dispatchErr) {
+      self.postMessage({ type: 'error', message: '[agents][gpu] resident batch validation error: ' + dispatchErr.message });
+      agentGpuUploadPending = true;   // GPU state unknown — re-upload next time
+      return false;
+    }
+    await readbackAgentFrame(rt, s);
+    // Sprite frames advance CPU-side (independent of the GPU SoA) — one tick/gen.
+    if (hasAgentSprites) for (let k = 0; k < count; k++) advanceAgentSprites(s);
+    generation += count;
+    return true;
+  } catch (e) {
+    self.postMessage({ type: 'error', message: '[agents] resident batch failed, falling back: ' + ((e as Error)?.message || e) });
+    agentGpuUploadPending = true;
+    return false;
   } finally {
     agentGpuStepInFlight = false;
     flushDeferredAgentGpuMsgs();
@@ -4739,6 +4871,13 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
     return;
   }
 
+  // PR7c: any state-mutating message invalidates the GPU-resident agent copy —
+  // the next resident batch re-uploads the SoA. (Deferred messages replay
+  // through this handler, so the flag is set when they actually APPLY.)
+  if (AGENT_GPU_DEFER_TYPES.has(msg.type) || msg.type === 'loadState' || msg.type === 'reset' || msg.type === 'setRngSeed' || msg.type === 'importImage') {
+    agentGpuUploadPending = true;
+  }
+
   switch (msg.type) {
     case 'init': {
       width = msg.width;
@@ -4839,6 +4978,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       agentsEnabled = !!msg.agents;
       agentUsesField = !!msg.agentUsesField;
       agentUsesDensity = msg.agentUsesDensity ?? true;
+      agentGraphResidencyClean = !!msg.agentResidencyClean;
       centerBasedConfig = msg.centerBased ?? null;
       agentColorViewer = msg.agentColorViewer || '';
       hasAgentSprites = !!msg.agentHasSprites;
@@ -5050,6 +5190,13 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       if (agentStore && agentTarget === 'webgpu' && agentWebgpuRuntime) {
         asyncStepBatchInFlight = true;   // P0: no message may interleave this batch
         (async () => {
+          // PR7c: fully GPU-resident batch when the model qualifies — one queue
+          // submit for ALL generations + one per-frame readback (no per-gen CPU
+          // work). On any failure fall through to the per-generation path below.
+          if (agentResidentEligible()) {
+            const ok = await runAgentBatchResident(msg.count);
+            if (ok) { sendColors(); return; }
+          }
           let stoppedByEvent: string | null = null;
           for (let i = 0; i < msg.count; i++) {
             if (simulateAgents) {
@@ -5416,6 +5563,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
         if (rc.centerBased) centerBasedConfig = rc.centerBased;
         if (rc.agentUsesField !== undefined) agentUsesField = !!rc.agentUsesField;
         if (rc.agentUsesDensity !== undefined) agentUsesDensity = !!rc.agentUsesDensity;
+        if (rc.agentResidencyClean !== undefined) agentGraphResidencyClean = !!rc.agentResidencyClean;
         if (rc.agentColorViewer !== undefined) agentColorViewer = rc.agentColorViewer || '';
         if (rc.agentHasSprites !== undefined) hasAgentSprites = !!rc.agentHasSprites;
         compileAgentFns(rc.agentBehaviourCode, rc.agentInitCode, rc.agentDivisionCode, rc.agentOutputMappingCodes);

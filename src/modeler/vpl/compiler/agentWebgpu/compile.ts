@@ -154,6 +154,15 @@ export interface AgentWebGPUResult {
    *  f32-bitcast atomic accumulator), zeros it each step, and the force pass adds it
    *  to each agent's self-force seed (its binding 4). */
   usesForceScatter?: boolean;
+  /** PR7c residency: the BEHAVIOUR emitted a structural-request writer
+   *  (divideAgent / killAgent / formBond / breakBond) — per-generation CPU
+   *  structural work ⇒ not residency-eligible. Scoped to behaviour-reachable
+   *  nodes (an init-event divide/bond doesn't block residency). */
+  usesStructural?: boolean;
+  /** PR7c residency: the BEHAVIOUR writes a radius (setAgentRadius /
+   *  setTargetRadius) — the hash bin edge could drift mid-batch ⇒ not
+   *  residency-eligible. */
+  usesRadiusWrite?: boolean;
   error?: string;
 }
 
@@ -282,6 +291,11 @@ interface AgentWgpuCtx {
   usesSpawn: boolean;
   /** Set when a Stop Event emitter runs — declares the stopFlag atomic binding. */
   usesStop: boolean;
+  /** PR7c residency flags — set by the structural-request / radius-write
+   *  emitters (behaviour-reachable by construction: only the behaviour graph is
+   *  compiled here). */
+  usesStructural: boolean;
+  usesRadiusWrite: boolean;
   /** Set when an Apply Force To Agent emitter runs — declares the forceScatter
    *  atomic binding (14) + emits the forceScatterAdd f32-CAS helper. */
   usesForceScatter: boolean;
@@ -1924,6 +1938,7 @@ function compileFlowNode(ctx: AgentWgpuCtx, nodeId: string): void {
       break;
     }
     case 'setTargetRadius': {
+      ctx.usesRadiusWrite = true;
       ctx.lines.push(`  ${f32At(ctx, 'targetRadius', 'idx')} = ${inF32(ctx, node, 'value', 1)};`);
       compileFlowChain(ctx, node.id, 'next');
       break;
@@ -2047,6 +2062,7 @@ function compileFlowNode(ctx: AgentWgpuCtx, nodeId: string): void {
       break;
     }
     case 'setAgentRadius': {
+      ctx.usesRadiusWrite = true;
       const id = castTo(resolveValueInput(ctx, node, 'agentId', -1), 'i32');
       const sr = fresh(ctx, 'sr'), rv = fresh(ctx, 'srV');
       ctx.lines.push(`  { let ${sr}: i32 = ${id}; let ${rv}: f32 = ${inF32(ctx, node, 'radius', 1)};`);
@@ -2094,6 +2110,7 @@ function compileFlowNode(ctx: AgentWgpuCtx, nodeId: string): void {
       break;
     }
     case 'divideAgent': {
+      ctx.usesStructural = true;
       // Flag a division request (the CPU structural phase reads it back). The
       // axes default to (0,0) = "engine-resolved tension axis": divideAgent()
       // resolves the tension axis whenever the axis is non-finite OR (0,0)
@@ -2111,6 +2128,7 @@ function compileFlowNode(ctx: AgentWgpuCtx, nodeId: string): void {
       break;
     }
     case 'formBond': {
+      ctx.usesStructural = true;
       // `_bondFormReq = (target | 0) + 1` (0 = no request); restLength / stiffness.
       const tgt = castTo(resolveValueInput(ctx, node, 'targetAgent', -1), 'i32');
       ctx.lines.push(`  ${f32At(ctx, 'bondFormReq', 'idx')} = f32(${tgt} + 1);`);
@@ -2120,12 +2138,14 @@ function compileFlowNode(ctx: AgentWgpuCtx, nodeId: string): void {
       break;
     }
     case 'breakBond': {
+      ctx.usesStructural = true;
       const tgt = castTo(resolveValueInput(ctx, node, 'targetAgent', -1), 'i32');
       ctx.lines.push(`  ${f32At(ctx, 'bondBreakReq', 'idx')} = f32(${tgt} + 1);`);
       compileFlowChain(ctx, node.id, 'next');
       break;
     }
     case 'killAgent': {
+      ctx.usesStructural = true;
       ctx.lines.push(`  ${f32At(ctx, 'killRequest', 'idx')} = 1.0;`);
       compileFlowChain(ctx, node.id, 'next');
       break;
@@ -3422,6 +3442,7 @@ export function compileAgentGraphWebGPU(
     usesSpawn: false,
     usesStop: false,
     usesForceScatter: false,
+    usesStructural: false, usesRadiusWrite: false,
   };
 
   // Assign array-producer scratch slots (separate i32 + f32 `var<function>` pools)
@@ -3616,6 +3637,7 @@ ${ctx.lines.join('\n')}
     shaderCode, layout, supportedTypes: [...seen], usesI32Write: ctx.usesI32Write,
     usesBondStore: hasBondStore, usesIndicators: hasIndicators, usesAux: hasAux,
     usesSpawn: hasSpawn, usesStop: hasStop, usesForceScatter: hasForceScatter,
+    usesStructural: ctx.usesStructural, usesRadiusWrite: ctx.usesRadiusWrite,
   };
 }
 

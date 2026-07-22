@@ -1846,7 +1846,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   // (Decision D-TARGET). PR-A2 returns a placeholder (agents seed + render but
   // don't behave); PR-A3 wires the real compileAgentGraph over
   // model.agentGraphNodes (the behaviourStep loop + value-outs + force hooks).
-  const compileAgentModel = useCallback((stopIdxBase = 0, dimsModel?: CAModel): { behaviourCode?: string; initCode?: string; divisionCode?: string; outputMappingCodes?: Array<{ mappingId: string; code: string }>; stopMessages: string[]; colorViewer: string; error?: string; agentTarget: 'js' | 'wasm' | 'webgpu'; agentWasmBytes?: Uint8Array; agentWasmViewerGuardIds?: string[]; agentLayoutExtras?: AgentLayoutExtras; agentWasmLayoutSig?: { maxHashBins: number; totalBytes: number }; agentWebgpuBehaviourShader?: string; agentWebgpuForceShader?: string; agentWebgpuMaxAgents?: number; agentWebgpuMaxHashBins?: number; agentWebgpuLayout?: AgentWebGPULayout; agentWebgpuUsesI32Write?: boolean; agentWebgpuUsage?: { usesBondStore?: boolean; usesIndicators?: boolean; usesAux?: boolean; usesSpawn?: boolean; usesStop?: boolean; usesForceScatter?: boolean } } => {
+  const compileAgentModel = useCallback((stopIdxBase = 0, dimsModel?: CAModel): { behaviourCode?: string; initCode?: string; divisionCode?: string; outputMappingCodes?: Array<{ mappingId: string; code: string }>; stopMessages: string[]; colorViewer: string; error?: string; agentTarget: 'js' | 'wasm' | 'webgpu'; agentWasmBytes?: Uint8Array; agentWasmViewerGuardIds?: string[]; agentLayoutExtras?: AgentLayoutExtras; agentWasmLayoutSig?: { maxHashBins: number; totalBytes: number }; agentResidencyClean?: boolean; agentWebgpuBehaviourShader?: string; agentWebgpuForceShader?: string; agentWebgpuMaxAgents?: number; agentWebgpuMaxHashBins?: number; agentWebgpuLayout?: AgentWebGPULayout; agentWebgpuUsesI32Write?: boolean; agentWebgpuUsage?: { usesBondStore?: boolean; usesIndicators?: boolean; usesAux?: boolean; usesSpawn?: boolean; usesStop?: boolean; usesForceScatter?: boolean } } => {
     // A simulator Resize / image-import overrides the live grid dims WITHOUT
     // touching model state, and the agent WASM/WebGPU compilers bake dims-derived
     // layout regions (the spatial-hash reserve, fieldTotal). Compiling from the
@@ -1888,6 +1888,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     let agentLayoutExtras: AgentLayoutExtras | undefined;
     let agentWasmViewerGuardIds: string[] | undefined;
     let agentWasmLayoutSig: { maxHashBins: number; totalBytes: number } | undefined;
+    let agentResidencyClean = false;   // PR7c — behaviour-scoped, from the GPU compiler's flags
     if (agentTarget === 'wasm') {
       try {
         const r = compileAgentGraphWasmForModel(m);
@@ -1942,6 +1943,9 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
           agentWebgpuLayout = r.layout;
           agentWebgpuUsesI32Write = r.usesI32Write;
           agentWebgpuUsage = { usesBondStore: r.usesBondStore, usesIndicators: r.usesIndicators, usesAux: r.usesAux, usesSpawn: r.usesSpawn, usesStop: r.usesStop, usesForceScatter: r.usesForceScatter };
+          // PR7c: residency-clean = the BEHAVIOUR emits no structural-request /
+          // radius writes (compiler-scoped — an init-event spawn doesn't block).
+          agentResidencyClean = !r.usesStructural && !r.usesRadiusWrite;
         }
       } catch (e) {
         // eslint-disable-next-line no-console
@@ -1949,7 +1953,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
         agentTarget = 'js';
       }
     }
-    return { behaviourCode: ag.behaviourCode || undefined, initCode: ag.initCode || undefined, divisionCode: ag.divisionCode || undefined, outputMappingCodes: ag.outputMappingCodes && ag.outputMappingCodes.length ? ag.outputMappingCodes : undefined, stopMessages: ag.stopMessages, colorViewer, error: ag.error || undefined, agentTarget, agentWasmBytes, agentWasmViewerGuardIds, agentLayoutExtras, agentWasmLayoutSig, agentWebgpuBehaviourShader, agentWebgpuForceShader, agentWebgpuMaxAgents, agentWebgpuMaxHashBins, agentWebgpuLayout, agentWebgpuUsesI32Write, agentWebgpuUsage };
+    return { behaviourCode: ag.behaviourCode || undefined, initCode: ag.initCode || undefined, divisionCode: ag.divisionCode || undefined, outputMappingCodes: ag.outputMappingCodes && ag.outputMappingCodes.length ? ag.outputMappingCodes : undefined, stopMessages: ag.stopMessages, colorViewer, error: ag.error || undefined, agentTarget, agentWasmBytes, agentWasmViewerGuardIds, agentLayoutExtras, agentWasmLayoutSig, agentResidencyClean, agentWebgpuBehaviourShader, agentWebgpuForceShader, agentWebgpuMaxAgents, agentWebgpuMaxHashBins, agentWebgpuLayout, agentWebgpuUsesI32Write, agentWebgpuUsage };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [model.agentGraphNodes, model.agentGraphEdges, model.topologyMode?.agents, model.attributes, model.agentAttributes, model.mappings, model.centerBased]);
 
@@ -3844,6 +3848,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       // readbacks). Cheap boolean — leave the JS/WASM grid path untouched.
       agentUsesField: agentUsesField(),
       agentUsesDensity: agentUsesDensity(),
+      agentResidencyClean: agentResult.agentResidencyClean,
       // PR6b-1: the resolved agent compile target + the compiled WASM agent loop
       // bytes (only when 'wasm'). The worker backs the AgentStore on a
       // WebAssembly.Memory + runs the WASM behaviour fn instead of the JS one;
@@ -4278,6 +4283,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
         // PR5 (C-D1): re-detect on a graph-only edit (field nodes added/removed).
         agentUsesField: agentUsesField(),
         agentUsesDensity: agentUsesDensity(),
+        agentResidencyClean: agentResult.agentResidencyClean,
         // PR6b-1: re-resolve the agent target + ship the WASM bytes on recompile.
         agentTarget: agentResult.agentTarget,
         agentWasmBytes: agentResult.agentWasmBytes,

@@ -144,6 +144,39 @@ export interface AgentWebGPURuntime {
   /** G5 — scratch CPU buffers for the field read snapshot + the deposit init/readback. */
   fieldReadUpload: Float32Array;
   fieldDepositUpload: Float32Array;
+  /** PR7c GPU residency — the lazily-built GPU hash-build + position-commit
+   *  pipelines (see ensureAgentResident). null until residency first engages;
+   *  `residentBuildFailed` latches a build failure so we don't retry per batch. */
+  resident?: AgentResidentRuntime | null;
+  residentBuildFailed?: boolean;
+}
+
+/** PR7c — the GPU-side spatial-hash build (clear→count→scan→scatter) + the
+ *  per-generation position commit (xNext→x), letting a whole gens/frame batch
+ *  run on the GPU with ZERO per-generation CPU work or transfers. */
+export interface AgentResidentRuntime {
+  countPipeline: GPUComputePipeline;
+  scanPipeline: GPUComputePipeline;
+  scatterPipeline: GPUComputePipeline;
+  commitPipeline: GPUComputePipeline;
+  countBind: GPUBindGroup;
+  scanBind: GPUBindGroup;
+  scatterBind: GPUBindGroup;
+  commitBind: GPUBindGroup;
+  /** Per-bin atomic counters (maxHashBins × u32). */
+  countsBuf: GPUBuffer;
+  /** Per-bin scatter cursors (maxHashBins × u32, seeded = binStart by the scan). */
+  cursorBuf: GPUBuffer;
+  /** The HashParams uniform (48 B — see HASH_PARAMS_WGSL). */
+  hashParamsBuf: GPUBuffer;
+}
+
+/** CPU-computed per-batch hash geometry for the resident path (radius is static
+ *  under residency eligibility, so this is exact for the whole batch). */
+export interface ResidentHashParams {
+  hashValid: number;
+  nBinsX: number; nBinsY: number; nBinsZ: number;
+  binSizeX: number; binSizeY: number; binSizeZ: number;
 }
 
 function isWebGPUAvailable(): boolean {
@@ -948,6 +981,374 @@ export async function readbackAgentStep(rt: AgentWebGPURuntime, s: AgentStore): 
 }
 
 // ---------------------------------------------------------------------------
+// PR7c — GPU residency. For eligible models (no structural mutations / spawn /
+// stop / indicators / field bridge / sync attrs / growth / positional collision
+// — the worker's agentResidentEligible gate) a WHOLE gens/frame batch runs on
+// the GPU in ONE queue submit: per generation clear→count→scan→scatter builds
+// the CSR spatial hash ON the GPU, then behaviour + force dispatch, then a tiny
+// commit pass folds xNext→x. ZERO per-generation CPU work and ZERO transfers —
+// the CPU store is refreshed ONCE per frame by readbackAgentFrame. This is what
+// the measured maxAgents-proportional per-gen overhead (~60% of GPU step time
+// at 50k) was spent on. Bin ORDER within a hash bin is nondeterministic
+// (atomic scatter), so f32 accumulation order varies run-to-run — within the
+// documented WebGPU statistical-parity stance.
+// ---------------------------------------------------------------------------
+
+/** The hash-build uniform. Field order MIRRORS uploadAgentHashParams. 48 B. */
+const HASH_PARAMS_WGSL = `struct HashParams {
+  highWater : u32,
+  nBinsX    : u32,
+  nBinsY    : u32,
+  nBinsZ    : u32,
+  torus     : u32,
+  is3d      : u32,
+  binSizeX  : f32,
+  binSizeY  : f32,
+  binSizeZ  : f32,
+  originX   : f32,
+  originY   : f32,
+  originZ   : f32,
+};`;
+const HASH_PARAMS_BYTES = 48;
+
+/** The shared WGSL bin index of agent i — MUST mirror the behaviour/force
+ *  stencils' bin math (clamped truncation, z-major bin index). */
+function emitBinOf(layout: AgentWebGPULayout): string {
+  const f32 = (field: string, idxExpr: string): string => {
+    const base = layout.f32Base[field]!;
+    return base === 0 ? `agentF32[${idxExpr}]` : `agentF32[${base}u + ${idxExpr}]`;
+  };
+  const is3d = layout.gridDepth > 1;
+  return `
+fn binOf(i: u32) -> u32 {
+  var bx: i32 = i32((${f32('x', 'i')} - hp.originX) / hp.binSizeX);
+  bx = clamp(bx, 0, i32(hp.nBinsX) - 1);
+  var by: i32 = i32((${f32('y', 'i')} - hp.originY) / hp.binSizeY);
+  by = clamp(by, 0, i32(hp.nBinsY) - 1);${is3d ? `
+  var bz: i32 = i32((${f32('z', 'i')} - hp.originZ) / hp.binSizeZ);
+  bz = clamp(bz, 0, i32(hp.nBinsZ) - 1);
+  return u32((bz * i32(hp.nBinsY) + by) * i32(hp.nBinsX) + bx);` : `
+  return u32(by * i32(hp.nBinsX) + bx);`}
+}`;
+}
+
+const RESIDENT_ENTRY = `@builtin(global_invocation_id) gid: vec3<u32>, @builtin(num_workgroups) nwg: vec3<u32>`;
+const RESIDENT_IDX = `  let i: u32 = gid.y * (nwg.x * 64u) + gid.x;`;
+
+function emitHashCountWGSL(layout: AgentWebGPULayout): string {
+  return `${HASH_PARAMS_WGSL}
+@group(0) @binding(0) var<storage, read>       agentF32   : array<f32>;
+@group(0) @binding(1) var<storage, read>       agentAlive : array<u32>;
+@group(0) @binding(2) var<storage, read_write> counts     : array<atomic<u32>>;
+@group(0) @binding(3) var<uniform>             hp         : HashParams;
+${emitBinOf(layout)}
+@compute @workgroup_size(64)
+fn hashCount(${RESIDENT_ENTRY}) {
+${RESIDENT_IDX}
+  if (i >= hp.highWater) { return; }
+  if (agentAlive[i] == 0u) { return; }
+  atomicAdd(&counts[binOf(i)], 1u);
+}`;
+}
+
+/** Single-workgroup two-level exclusive scan over up to 65536 bins (256 threads
+ *  × ≤256-bin chunks) — writes binStart (incl. the trailing total) into the
+ *  hashBins CSR buffer at the layout's binStart base, and seeds the scatter
+ *  cursors = binStart. */
+function emitHashScanWGSL(layout: AgentWebGPULayout): string {
+  const bsBase = layout.hashBinStartBase;
+  const bsAt = (e: string) => (bsBase === 0 ? `hashBins[${e}]` : `hashBins[${bsBase}u + ${e}]`);
+  return `${HASH_PARAMS_WGSL}
+@group(0) @binding(0) var<storage, read>       counts   : array<u32>;
+@group(0) @binding(1) var<storage, read_write> hashBins : array<i32>;
+@group(0) @binding(2) var<storage, read_write> cursor   : array<u32>;
+@group(0) @binding(3) var<uniform>             hp       : HashParams;
+var<workgroup> partials : array<u32, 256>;
+@compute @workgroup_size(256)
+fn hashScan(@builtin(local_invocation_id) lid: vec3<u32>) {
+  let t: u32 = lid.x;
+  let nBins: u32 = hp.nBinsX * hp.nBinsY * hp.nBinsZ;
+  let chunk: u32 = (nBins + 255u) / 256u;
+  let start: u32 = t * chunk;
+  var sum: u32 = 0u;
+  for (var k: u32 = 0u; k < chunk; k = k + 1u) {
+    let b = start + k;
+    if (b < nBins) { sum = sum + counts[b]; }
+  }
+  partials[t] = sum;
+  workgroupBarrier();
+  if (t == 0u) {
+    var acc: u32 = 0u;
+    for (var q: u32 = 0u; q < 256u; q = q + 1u) { let v = partials[q]; partials[q] = acc; acc = acc + v; }
+  }
+  workgroupBarrier();
+  var run: u32 = partials[t];
+  for (var k: u32 = 0u; k < chunk; k = k + 1u) {
+    let b = start + k;
+    if (b < nBins) {
+      ${bsAt('b')} = i32(run);
+      cursor[b] = run;
+      run = run + counts[b];
+    }
+  }
+  if (t == 255u) { ${bsAt('nBins')} = i32(run); }
+}`;
+}
+
+function emitHashScatterWGSL(layout: AgentWebGPULayout): string {
+  const baBase = layout.hashBinAgentsBase;
+  const baAt = (e: string) => (baBase === 0 ? `hashBins[${e}]` : `hashBins[${baBase}u + ${e}]`);
+  return `${HASH_PARAMS_WGSL}
+@group(0) @binding(0) var<storage, read>       agentF32   : array<f32>;
+@group(0) @binding(1) var<storage, read>       agentAlive : array<u32>;
+@group(0) @binding(2) var<storage, read_write> hashBins   : array<i32>;
+@group(0) @binding(3) var<storage, read_write> cursor     : array<atomic<u32>>;
+@group(0) @binding(4) var<uniform>             hp         : HashParams;
+${emitBinOf(layout)}
+@compute @workgroup_size(64)
+fn hashScatter(${RESIDENT_ENTRY}) {
+${RESIDENT_IDX}
+  if (i >= hp.highWater) { return; }
+  if (agentAlive[i] == 0u) { return; }
+  let slot: u32 = atomicAdd(&cursor[binOf(i)], 1u);
+  ${baAt('slot')} = i32(i);
+}`;
+}
+
+/** The per-generation position commit — the GPU analogue of swapPositions
+ *  (xNext→x); dead slots are safe (the force pass copied x→xNext for them).
+ *  ALSO zeroes the per-step force accumulators for the NEXT generation — the
+ *  per-gen path did this CPU-side before every upload; without it the
+ *  behaviour's `applyForce +=` accumulates across generations unboundedly
+ *  (the resident-path "no flocking" bug). */
+function emitPosCommitWGSL(layout: AgentWebGPULayout): string {
+  const is3d = layout.gridDepth > 1;
+  const xB = layout.f32Base['x']!, yB = layout.f32Base['y']!;
+  const xnB = layout.f32Base['xNext']!, ynB = layout.f32Base['yNext']!;
+  const zB = is3d ? layout.f32Base['z']! : 0, znB = is3d ? layout.f32Base['zNext']! : 0;
+  const fxB = layout.f32Base['forceX']!, fyB = layout.f32Base['forceY']!;
+  const fzB = is3d ? layout.f32Base['forceZ']! : 0;
+  return `${HASH_PARAMS_WGSL}
+@group(0) @binding(0) var<storage, read_write> agentF32 : array<f32>;
+@group(0) @binding(1) var<uniform>             hp       : HashParams;
+@compute @workgroup_size(64)
+fn posCommit(${RESIDENT_ENTRY}) {
+${RESIDENT_IDX}
+  if (i >= hp.highWater) { return; }
+  agentF32[${xB}u + i] = agentF32[${xnB}u + i];
+  agentF32[${yB}u + i] = agentF32[${ynB}u + i];${is3d ? `
+  agentF32[${zB}u + i] = agentF32[${znB}u + i];` : ''}
+  agentF32[${fxB}u + i] = 0.0;
+  agentF32[${fyB}u + i] = 0.0;${is3d ? `
+  agentF32[${fzB}u + i] = 0.0;` : ''}
+}`;
+}
+
+/** Lazily build the residency pipelines + buffers. Returns false (and latches
+ *  residentBuildFailed) on any failure — the caller falls back to the per-gen
+ *  path, never silently wrong. */
+export async function ensureAgentResident(rt: AgentWebGPURuntime): Promise<boolean> {
+  if (rt.resident) return true;
+  if (rt.residentBuildFailed) return false;
+  try {
+    const device = rt.device, L = rt.layout;
+    const countsBuf = device.createBuffer({ label: 'agent-hash-counts', size: Math.max(4, L.maxHashBins * 4), usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
+    const cursorBuf = device.createBuffer({ label: 'agent-hash-cursor', size: Math.max(4, L.maxHashBins * 4), usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
+    const hashParamsBuf = device.createBuffer({ label: 'agent-hash-params', size: HASH_PARAMS_BYTES, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+    const mkPipe = async (label: string, code: string, entry: string, entries: GPUBindGroupLayoutEntry[]) => {
+      const mod = device.createShaderModule({ code });
+      const info = await mod.getCompilationInfo();
+      const errs = info.messages.filter(m => m.type === 'error');
+      if (errs.length > 0) throw new Error(`${label} WGSL: ` + errs.map(m => `line ${m.lineNum}: ${m.message}`).join('; '));
+      const bgl = device.createBindGroupLayout({ label: `${label}-bgl`, entries });
+      const pl = device.createPipelineLayout({ label: `${label}-pl`, bindGroupLayouts: [bgl] });
+      const pipe = await device.createComputePipelineAsync({ label, layout: pl, compute: { module: mod, entryPoint: entry } });
+      return { pipe, bgl };
+    };
+    const S = GPUShaderStage.COMPUTE;
+    const count = await mkPipe('agent-hash-count', emitHashCountWGSL(L), 'hashCount', [
+      { binding: 0, visibility: S, buffer: { type: 'read-only-storage' } },
+      { binding: 1, visibility: S, buffer: { type: 'read-only-storage' } },
+      { binding: 2, visibility: S, buffer: { type: 'storage' } },
+      { binding: 3, visibility: S, buffer: { type: 'uniform' } },
+    ]);
+    const scan = await mkPipe('agent-hash-scan', emitHashScanWGSL(L), 'hashScan', [
+      { binding: 0, visibility: S, buffer: { type: 'read-only-storage' } },
+      { binding: 1, visibility: S, buffer: { type: 'storage' } },
+      { binding: 2, visibility: S, buffer: { type: 'storage' } },
+      { binding: 3, visibility: S, buffer: { type: 'uniform' } },
+    ]);
+    const scatter = await mkPipe('agent-hash-scatter', emitHashScatterWGSL(L), 'hashScatter', [
+      { binding: 0, visibility: S, buffer: { type: 'read-only-storage' } },
+      { binding: 1, visibility: S, buffer: { type: 'read-only-storage' } },
+      { binding: 2, visibility: S, buffer: { type: 'storage' } },
+      { binding: 3, visibility: S, buffer: { type: 'storage' } },
+      { binding: 4, visibility: S, buffer: { type: 'uniform' } },
+    ]);
+    const commit = await mkPipe('agent-pos-commit', emitPosCommitWGSL(L), 'posCommit', [
+      { binding: 0, visibility: S, buffer: { type: 'storage' } },
+      { binding: 1, visibility: S, buffer: { type: 'uniform' } },
+    ]);
+    rt.resident = {
+      countPipeline: count.pipe, scanPipeline: scan.pipe, scatterPipeline: scatter.pipe, commitPipeline: commit.pipe,
+      countBind: rt.device.createBindGroup({ label: 'agent-hash-count-bg', layout: count.bgl, entries: [
+        { binding: 0, resource: { buffer: rt.agentF32Buf } },
+        { binding: 1, resource: { buffer: rt.agentAliveBuf } },
+        { binding: 2, resource: { buffer: countsBuf } },
+        { binding: 3, resource: { buffer: hashParamsBuf } },
+      ] }),
+      scanBind: rt.device.createBindGroup({ label: 'agent-hash-scan-bg', layout: scan.bgl, entries: [
+        { binding: 0, resource: { buffer: countsBuf } },
+        { binding: 1, resource: { buffer: rt.hashBinsBuf } },
+        { binding: 2, resource: { buffer: cursorBuf } },
+        { binding: 3, resource: { buffer: hashParamsBuf } },
+      ] }),
+      scatterBind: rt.device.createBindGroup({ label: 'agent-hash-scatter-bg', layout: scatter.bgl, entries: [
+        { binding: 0, resource: { buffer: rt.agentF32Buf } },
+        { binding: 1, resource: { buffer: rt.agentAliveBuf } },
+        { binding: 2, resource: { buffer: rt.hashBinsBuf } },
+        { binding: 3, resource: { buffer: cursorBuf } },
+        { binding: 4, resource: { buffer: hashParamsBuf } },
+      ] }),
+      commitBind: rt.device.createBindGroup({ label: 'agent-pos-commit-bg', layout: commit.bgl, entries: [
+        { binding: 0, resource: { buffer: rt.agentF32Buf } },
+        { binding: 1, resource: { buffer: hashParamsBuf } },
+      ] }),
+      countsBuf, cursorBuf, hashParamsBuf,
+    };
+    return true;
+  } catch {
+    rt.residentBuildFailed = true;
+    rt.resident = null;
+    return false;
+  }
+}
+
+/** Compute the per-batch hash geometry CPU-side (origin 0; world-box bins;
+ *  coarsened to fit the layout reserve — mirrors buildSpatialHash's cap loop;
+ *  <3 bins on any used axis ⇒ hashValid 0, the all-pairs fallback). */
+export function computeResidentHashParams(
+  W: number, H: number, D: number,
+  interactionRange: number, maxR: number, neighbourQueryRadius: number,
+  maxBins: number,
+): ResidentHashParams {
+  const is3d = D > 1;
+  let edge = Math.max(1e-3, interactionRange * 2 * maxR, neighbourQueryRadius);
+  let nx = Math.max(1, Math.floor(W / edge));
+  let ny = Math.max(1, Math.floor(H / edge));
+  let nz = is3d ? Math.max(1, Math.floor(D / edge)) : 1;
+  for (let it = 0; it < 64 && nx * ny * nz > Math.max(1, maxBins); it++) {
+    edge *= 1.3;
+    nx = Math.max(1, Math.floor(W / edge));
+    ny = Math.max(1, Math.floor(H / edge));
+    nz = is3d ? Math.max(1, Math.floor(D / edge)) : 1;
+  }
+  const hashValid = (nx >= 3 && ny >= 3 && (!is3d || nz >= 3) && nx * ny * nz <= Math.max(1, maxBins)) ? 1 : 0;
+  return { hashValid, nBinsX: nx, nBinsY: ny, nBinsZ: nz, binSizeX: W / nx, binSizeY: H / ny, binSizeZ: is3d ? D / nz : 1 };
+}
+
+/** Upload the HashParams uniform. Field order MIRRORS HASH_PARAMS_WGSL. */
+export function uploadAgentHashParams(rt: AgentWebGPURuntime, highWater: number, hp: ResidentHashParams, torus: boolean): void {
+  if (!rt.resident) return;
+  const ab = new ArrayBuffer(HASH_PARAMS_BYTES);
+  const u = new Uint32Array(ab), fl = new Float32Array(ab);
+  u[0] = highWater >>> 0;
+  u[1] = hp.nBinsX >>> 0;
+  u[2] = hp.nBinsY >>> 0;
+  u[3] = hp.nBinsZ >>> 0;
+  u[4] = torus ? 1 : 0;
+  u[5] = rt.layout.gridDepth > 1 ? 1 : 0;
+  fl[6] = hp.binSizeX;
+  fl[7] = hp.binSizeY;
+  fl[8] = hp.binSizeZ;
+  fl[9] = 0; fl[10] = 0; fl[11] = 0;   // origin — always 0 for the world-box hash
+  rt.device.queue.writeBuffer(rt.resident.hashParamsBuf, 0, ab);
+}
+
+/** Encode + submit a WHOLE batch of generations in ONE queue submit: per gen
+ *  [clear counts → count → scan → scatter] (hash build, when hashValid) →
+ *  [clear forceScatter] → behaviour → force → posCommit. No CPU work between
+ *  generations; the implicit inter-pass ordering provides the barriers. */
+export function dispatchResidentBatch(rt: AgentWebGPURuntime, gens: number, highWater: number, hp: ResidentHashParams): void {
+  const res = rt.resident;
+  if (!res) throw new Error('resident pipelines not built');
+  const enc = rt.device.createCommandEncoder({ label: 'agent-resident-batch' });
+  const total = Math.max(1, highWater);
+  const nBins = hp.nBinsX * hp.nBinsY * hp.nBinsZ;
+  for (let g = 0; g < gens; g++) {
+    if (hp.hashValid) {
+      enc.clearBuffer(res.countsBuf, 0, nBins * 4);
+      const pc = enc.beginComputePass({ label: 'agent-hash-count' });
+      pc.setPipeline(res.countPipeline); pc.setBindGroup(0, res.countBind); dispatchAgents(pc, total); pc.end();
+      const ps = enc.beginComputePass({ label: 'agent-hash-scan' });
+      ps.setPipeline(res.scanPipeline); ps.setBindGroup(0, res.scanBind); ps.dispatchWorkgroups(1); ps.end();
+      const px = enc.beginComputePass({ label: 'agent-hash-scatter' });
+      px.setPipeline(res.scatterPipeline); px.setBindGroup(0, res.scatterBind); dispatchAgents(px, total); px.end();
+    }
+    if (rt.forceScatterBuf) enc.clearBuffer(rt.forceScatterBuf);
+    const pb = enc.beginComputePass({ label: 'agent-behaviour-pass' });
+    pb.setPipeline(rt.behaviourPipeline); pb.setBindGroup(0, rt.behaviourBindGroup); dispatchAgents(pb, total); pb.end();
+    const pf = enc.beginComputePass({ label: 'agent-force-pass' });
+    pf.setPipeline(rt.forcePipeline); pf.setBindGroup(0, rt.forceBindGroup); dispatchAgents(pf, total); pf.end();
+    const pm = enc.beginComputePass({ label: 'agent-pos-commit' });
+    pm.setPipeline(res.commitPipeline); pm.setBindGroup(0, res.commitBind); dispatchAgents(pm, total); pm.end();
+  }
+  rt.device.queue.submit([enc.finish()]);
+}
+
+/** The once-per-FRAME readback for the resident path: pull the f32 SoA + colours
+ *  and commit positions (from the COMMITTED x/y[/z] — posCommit ran last),
+ *  velocities, radius/density/age, the user agent attributes (async single-buffer
+ *  ⇒ straight into attrRead), and the packed per-agent colours into the CPU
+ *  store. No structural/spawn/stop handling — residency eligibility excludes
+ *  them. */
+export async function readbackAgentFrame(rt: AgentWebGPURuntime, s: AgentStore): Promise<void> {
+  const L = rt.layout, hw = s.highWater;
+  const f32ByteLen = f32Bytes(L);
+  const colByteLen = colorsBytes(L);
+  const pooledF = acquireStaging(rt, f32ByteLen);
+  const pooledC = acquireStaging(rt, colByteLen);
+  const enc = rt.device.createCommandEncoder({ label: 'agent-frame-readback' });
+  enc.copyBufferToBuffer(rt.agentF32Buf, 0, pooledF.buffer, 0, f32ByteLen);
+  enc.copyBufferToBuffer(rt.agentColorsBuf, 0, pooledC.buffer, 0, colByteLen);
+  rt.device.queue.submit([enc.finish()]);
+  await pooledF.buffer.mapAsync(GPUMapMode.READ, 0, f32ByteLen);
+  await pooledC.buffer.mapAsync(GPUMapMode.READ, 0, colByteLen);
+  const f = new Float32Array(pooledF.buffer.getMappedRange(0, f32ByteLen));
+  const col = new Uint32Array(pooledC.buffer.getMappedRange(0, colByteLen));
+  const is3d = L.gridDepth > 1;
+  const xB = L.f32Base['x']!, yB = L.f32Base['y']!;
+  const vxB = L.f32Base['vx']!, vyB = L.f32Base['vy']!;
+  const radB = L.f32Base['radius']!, denB = L.f32Base['density']!, ageB = L.f32Base['age']!;
+  const zB = is3d ? L.f32Base['z']! : -1, vzB = is3d ? L.f32Base['vz']! : -1;
+  for (let i = 0; i < hw; i++) {
+    if (!s.alive[i]) continue;
+    s.x[i] = f[xB + i]!; s.y[i] = f[yB + i]!;
+    s.xNext[i] = s.x[i]!; s.yNext[i] = s.y[i]!;
+    s.vx[i] = f[vxB + i]!; s.vy[i] = f[vyB + i]!;
+    if (is3d) { s.z[i] = f[zB + i]!; s.zNext[i] = s.z[i]!; s.vz[i] = f[vzB + i]!; }
+    s.radius[i] = f[radB + i]!;
+    s.density[i] = f[denB + i]!;
+    s.age[i] = f[ageB + i]!;
+    const c = col[i]! >>> 0, ci = i * 4;
+    s.colors[ci] = c & 0xff; s.colors[ci + 1] = (c >>> 8) & 0xff;
+    s.colors[ci + 2] = (c >>> 16) & 0xff; s.colors[ci + 3] = (c >>> 24) & 0xff;
+  }
+  // User agent attributes — async single-buffer under residency eligibility, so
+  // attrWrite aliases attrRead; write attrRead directly (no swap needed).
+  for (const id of L.agentAttrIds) {
+    const base = L.agentAttrBase[id]!;
+    const dst = s.attrRead[id] as { [i: number]: number } | undefined;
+    if (!dst) continue;
+    const isInt = s.attrKind[id] !== 'float64';
+    for (let i = 0; i < hw; i++) { if (!s.alive[i]) continue; dst[i] = isInt ? Math.round(f[base + i]!) : f[base + i]!; }
+  }
+  pooledF.buffer.unmap();
+  pooledC.buffer.unmap();
+  pooledF.inUse = false; pooledC.inUse = false;
+}
+
+// ---------------------------------------------------------------------------
 // Dispose.
 // ---------------------------------------------------------------------------
 
@@ -958,6 +1359,7 @@ export function destroyAgentWebGPURuntime(rt: AgentWebGPURuntime | null): void {
     rt.controlBuf, rt.rngStateBuf, rt.agentColorsBuf, rt.forceControlBuf,
     rt.fieldReadBuf, rt.fieldDepositBuf,
     rt.auxF32Buf, rt.indicatorsBuf, rt.bondStoreBuf, rt.spawnCursorBuf, rt.stopFlagBuf,
+    rt.resident?.countsBuf ?? null, rt.resident?.cursorBuf ?? null, rt.resident?.hashParamsBuf ?? null,
   ];
   for (const b of bufs) { if (b) try { b.destroy(); } catch { /* non-fatal */ } }
   for (const bucket of rt.stagingPool.values()) for (const e of bucket) { try { e.buffer.destroy(); } catch { /* non-fatal */ } }
