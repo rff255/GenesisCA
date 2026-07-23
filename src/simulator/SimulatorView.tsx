@@ -3077,7 +3077,13 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     let agentDirect = agentDirectRenderActiveRef.current && agentRenderCanvasRef.current;
     if (agentDirect) {
       const dims = agentRenderCanvasDimsRef.current;
-      if (dims.w !== parentW || dims.h !== parentH) {
+      // Re-attach ONLY on a REAL size change: an occluded/hidden pane measures
+      // the parent at 0×0 while the attach clamps to ≥1px, so comparing raw
+      // parent dims re-attached EVERY draw (a device/transfer churn storm —
+      // hundreds/sec while stepping hidden, e.g. an Overseer run in a hidden
+      // tab). A degenerate parent keeps the current canvas; the first visible
+      // draw sees the true size and does one clean re-attach.
+      if ((dims.w !== parentW || dims.h !== parentH) && parentW >= 2 && parentH >= 2) {
         agentDirectRenderActiveRef.current = false;
         agentRenderCanvasRef.current = null;
         agentDirect = false;
