@@ -182,3 +182,62 @@ agentEngine / lattice compilers (the do-not-touch list is clean).
   sphere pass ever renders from the resident GPU SoA — the OM colour pass is dimension-agnostic
   (it reads agent attrs, writes agentColors; gl3d's WebGL2 context can't share the buffers, so
   3D stays snapshot-fed today).
+
+---
+
+## Completion Report — getState vx/vy "garbage" mini-phase (2026-07-23)
+
+**Verdict: FALSE ALARM — no bug. No code change.** The A1.5 side-finding
+(`getState`'s serialized vx/vy holds ~5e19 garbage in ~20% of a resident
+WebGPU store's slots, while `getAgentState` + the sim are clean) was a
+**verification error**, not a data-corruption bug. The reproduction below
+rules out both the dead-slot AND the live-slot corruption hypotheses.
+
+**Root cause of the "garbage": reading a Float64 buffer through a Float32Array
+view.** `serializeAgentStore` ships `store.vx`/`store.vy` as **Float64**
+buffers (`store.vx` is a `Float64Array`) — a Boids store with hw=260 ships a
+`vx` ArrayBuffer of **2080 bytes = 260 × 8** (measured). The A1.5 session (and
+this session's first pass) analyzed it with `new Float32Array(ag.vx)`, which
+reinterprets the f64 bytes as f32: element `[i]` of the f32 view lands on the
+high dword of `store.vx[i>>1]`, and the exponent bits of a normal small
+velocity (≈0.0x, exp ≈ 0x3F…) read as an f32 exponent ≈ 192 → **±2⁶⁵ =
+±36893488147419103000** (exactly the reported "5e19"), for ≈20% of slots (the
+fraction whose high dword happens to look like a large finite f32). It is a
+pure display artifact of the wrong TypedArray view — the bytes are correct.
+
+**Reproduction (real GPU, in-browser, `window.__simWorker`, Boids forced to
+`agentTarget:'webgpu'`, resident free mode via `setAgentUiSync{on:false}` +
+resident batches):**
+- Read as **Float32Array** (the buggy view): 23/260 "bad" slots, all
+  `alive===1`, all showing `x=0,y=0,vx=±2⁶⁵` — i.e. **live** slots, NOT dead
+  (deadCount=0). This already refuted the dead-slot hypothesis.
+- `getAgentState(2)` on a "bad" slot → `{x:42.68, y:76.04, vx:0.00140,
+  vy:0.2704}` (a real flock agent), while the f32-view getState scan showed
+  slot 2 as `x=0,y=0,vx=2⁶⁵`. getState and getAgentState "disagreeing" for the
+  SAME slot with NO readback between them is impossible for one shared f64
+  array — the tell that the getState read was misinterpreting the bytes.
+- Read the SAME getState buffers as **Float64Array**: **0 bad slots**;
+  `slot2 = {x:42.68, y:76.04, vx:0.00140, vy:0.2704}` — bit-identical to
+  `getAgentState`. `vx_bytelen = 2080 = 260×8` confirms the f64 element size.
+- **Save→load round-trip** (getState → `loadState` with the same agents →
+  getState): `maxDvx=0, maxDvy=0, maxDx=0`, 0 mismatches across all 260 slots,
+  256 non-zero velocities all preserved bit-exactly. `deserializeAgentStore`
+  reads `p.vx`/`p.vy` as `Float64Array` (matching the save), so a momentum
+  model's `.gcastate` save→load preserves motion exactly.
+
+**Nothing to fix.** `serializeAgentStore` / `readbackAgentFrame` /
+`readbackAgentStep` all correctly skip dead slots and ship/commit the right
+Float64 velocities. The proposed remedies (zero dead-slot lanes on
+readback/serialize) are unnecessary — dead slots aren't the issue and there is
+no garbage. Making a change would only add dead code.
+
+**Gates (no code changed, so trivially unchanged from the prior commit):**
+`parity-agent-wasm` (18) ✓, `parity-agent-force` (7) ✓, tree clean.
+
+**Lesson (added to the master §0 #7 trap list):** the AGENT arrays are `f64`
+end-to-end (`store.*` + `serializeAgentStore` + `deserializeAgentStore`);
+`getState.agents.{x,y,vx,vy,radius,…}` buffers are **Float64** — read them with
+`new Float64Array(buf)`, never `Float32Array`. Only the RENDER snapshot
+(`snapshotAgentsForRender`, the `stepped` message's `agents`) is `f32`. A green
+"garbage-in-getState" reading is almost always this view mismatch; dump
+`buf.byteLength` (÷ hw = 8 ⇒ f64, 4 ⇒ f32) before concluding corruption.
