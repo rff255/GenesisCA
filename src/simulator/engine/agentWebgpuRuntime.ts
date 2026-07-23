@@ -622,6 +622,19 @@ export function uploadAgentSoA(rt: AgentWebGPURuntime, s: AgentStore): void {
   for (let i = 0; i < hw; i++) al[i] = s.alive[i]!;
   for (let i = hw; i < ma; i++) al[i] = 0;
   rt.device.queue.writeBuffer(rt.agentAliveBuf, 0, al.buffer, al.byteOffset, al.byteLength);
+
+  // Seed the GPU agentColors buffer from the CPU store BEFORE the behaviour
+  // dispatch. A model whose agent behaviour has NO colour write (no Set Cell
+  // Looks, no Agent Output Mapping — e.g. Boids / Chemotaxis, which rely on the
+  // per-slot DEFAULT_AGENT_COLOR) never touches agentColors in the shader, so
+  // without this seed the readback (readbackAgentStep) pulls the buffer's
+  // uninitialized ZEROS back into s.colors → fully-transparent agents (invisible
+  // on the CPU overlay AND the composite disc pass). A colour-writing shader
+  // simply overwrites this seed GPU-side, so the seed is idempotent there. This
+  // mirrors the render-path seed (presentAgentsFromStore / uploadAgentRenderFields
+  // both call uploadAgentColors) — the per-gen + resident SoA-upload path lacked
+  // it, so a colour-less WebGPU-agent model was transparent on those paths.
+  uploadAgentColors(rt, s);
 }
 
 /** Seed the per-agent RNG buffer ONCE from a single global seed (PCG-hashed per

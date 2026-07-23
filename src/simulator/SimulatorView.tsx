@@ -4284,23 +4284,23 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       // alpha-blend OFF (translucent spheres need back-to-front sorting = gl3d's
       // job; opaque impostors here). 2D is unaffected (both behind `!is3D ||`).
       && (!is3D || (resolveMaxBonds(model.centerBased) === 0 && !alpha3dRef.current));
-    // E2 — single-canvas composite gate: a 2D grid+agents model with a WebGPU
-    // GRID + a WebGPU AGENT target. The worker composites the grid layer (grid
-    // colorsBuf) + the agent discs into ONE world-sized canvas (one encoder),
-    // removing the grid's per-gen colors readback + the two-canvas composite.
-    // Covers BOTH decoupled (D) and field-coupled resident (E1b) — the field
-    // bridge mechanism is orthogonal to the render (the CPU store is fresh each
-    // frame either way). Requires the WebGPU agent runtime (agentWebgpuRuntime)
-    // so the render surface always exists — a CPU agent target keeps the D
-    // two-canvas / A2 path (composite-for-CPU-agents is a follow-up). The worker
-    // asserts the shared device (E1) before enabling composite; if it refuses,
-    // it falls back to the disc render and acks composite:false.
-    const agentComposite =
-      agentModel && model.topologyMode?.gridCells !== false && !is3D
-      && !!dimsModel.properties.useWebGPU && !webgpuResult.error
-      && agentResult.agentTarget === 'webgpu'
-      && offscreenSupported
-      && (model.sprites?.length ?? 0) === 0 && !agentMetaballsRef.current.enabled;
+    // E2 — single-canvas composite gate (DISABLED): a 2D grid+agents model with a
+    // WebGPU GRID + a WebGPU AGENT target used to composite the grid layer + the
+    // agent discs into ONE WORLD-SIZED canvas (scalePx=1), letting the main-thread
+    // zoom/pan blit scale it. That removed the grid's per-gen colors readback, but
+    // rendered the agents at WORLD resolution — an agent (radius ~1 world unit) is
+    // a ~1px disc on the world-sized canvas, so once the composite is blitted up to
+    // the display each agent becomes a cell-sized block indistinguishable from the
+    // grid cells (the user-reported "agents become a blob of cells" on WebGPU/WebGPU
+    // Chemotaxis). The E2 report flagged this world-resolution look as a tradeoff
+    // pending the visible-pane eyeball; the user has rejected it. Rendering the
+    // composite at DISPLAY resolution needs a camera-aware (resampling) grid-present
+    // shader — exactly what the E2 handoff forbade inventing ad hoc — so that is a
+    // follow-up redesign, not a wiring repair. Until then the composite stays OFF:
+    // decoupled grid+agents fall back to the D two-canvas path (agentRenderEligible,
+    // DISPLAY-res agent discs over the grid) and field-coupled models fall back to
+    // the CPU overlay + grid colors readback (also DISPLAY-res) — both crisp.
+    const agentComposite = false;
     // The union drives the attach machinery (a field-coupled composite model is
     // NOT agentRenderEligible — agentDecoupled is false — but IS composite-eligible).
     agentRenderEligibleRef.current = agentRenderEligible || agentComposite;
