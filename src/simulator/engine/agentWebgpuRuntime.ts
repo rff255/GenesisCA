@@ -33,6 +33,7 @@ import type { AgentStore } from './agentEngine';
 import { initAgentSlot, freeStagedSlot } from './agentEngine';
 import type { AgentWebGPULayout } from '../../modeler/vpl/compiler/agentWebgpu/layout';
 import { AGENT_GPU_F32_FIELDS, AGENT_GPU_F32_FIELDS_3D, AGENT_GPU_I32_FIELDS, AGENT_GPU_REQUEST_FIELDS } from '../../modeler/vpl/compiler/agentWebgpu/layout';
+import { emitAgentForcePassWGSL, agentMirrorFields } from '../../modeler/vpl/compiler/agentWebgpu/forcePass';
 
 const REQUEST_FIELD_SET: ReadonlySet<string> = new Set(AGENT_GPU_REQUEST_FIELDS);
 
@@ -192,6 +193,22 @@ export interface AgentResidentRuntime {
   cursorBuf: GPUBuffer;
   /** The HashParams uniform (48 B — see HASH_PARAMS_WGSL). */
   hashParamsBuf: GPUBuffer;
+  // --- B1 bin-sorted mirror (built ONLY when the force scan runs — needScan) ---
+  /** True when the mirror scatter + mirror force pass were built (the model runs
+   *  the engine force scan). false for pure-custom-force models (Boids/PL) — no
+   *  mirror buffers/pipelines, the `scatterPipeline` is the plain scatter and the
+   *  resident batch uses the shared `rt.forcePipeline`. */
+  hasMirror: boolean;
+  /** Field-major mirror of the neighbour-read fields — a contiguous `maxAgents`
+   *  f32 run per `agentMirrorFields(is3d)` field, written in CSR (bin) order by the
+   *  mirror scatter. null when !hasMirror. */
+  sortedBuf: GPUBuffer | null;
+  /** Each CSR slot's canonical agent id (u32 × maxAgents). null when !hasMirror. */
+  sortedIdBuf: GPUBuffer | null;
+  /** The resident-only mirror force pass (reads neighbour fields COALESCED from
+   *  the mirror). null when !hasMirror ⇒ the batch uses the shared rt.forcePipeline. */
+  forceMirrorPipeline: GPUComputePipeline | null;
+  forceMirrorBind: GPUBindGroup | null;
 }
 
 /** CPU-computed per-batch hash geometry for the resident path (radius is static
@@ -1532,15 +1549,32 @@ fn hashScan(@builtin(local_invocation_id) lid: vec3<u32>) {
 }`;
 }
 
-function emitHashScatterWGSL(layout: AgentWebGPULayout): string {
+function emitHashScatterWGSL(layout: AgentWebGPULayout, withMirror = false): string {
   const baBase = layout.hashBinAgentsBase;
   const baAt = (e: string) => (baBase === 0 ? `hashBins[${e}]` : `hashBins[${baBase}u + ${e}]`);
+  const is3d = layout.gridDepth > 1;
+  const MA = layout.maxAgents;
+  // B1 mirror: write the field-major mirror + sortedId at the SAME CSR slot the
+  // binAgents entry gets (one extra store per field). The read of agentF32 field f
+  // for agent i uses the compiled f32Base; the write target is the mirror run k*MA.
+  const f32 = (field: string, idxExpr: string): string => {
+    const base = layout.f32Base[field]!;
+    return base === 0 ? `agentF32[${idxExpr}]` : `agentF32[${base}u + ${idxExpr}]`;
+  };
+  const mirrorBindings = withMirror
+    ? `\n@group(0) @binding(5) var<storage, read_write> sorted     : array<f32>;\n@group(0) @binding(6) var<storage, read_write> sortedId   : array<u32>;`
+    : '';
+  const mirrorStores = withMirror
+    ? '\n' + agentMirrorFields(is3d).map((f, k) =>
+        `  sorted[${k === 0 ? '' : `${k * MA}u + `}slot] = ${f32(f, 'i')};`).join('\n')
+      + '\n  sortedId[slot] = i;'
+    : '';
   return `${HASH_PARAMS_WGSL}
 @group(0) @binding(0) var<storage, read>       agentF32   : array<f32>;
 @group(0) @binding(1) var<storage, read>       agentAlive : array<u32>;
 @group(0) @binding(2) var<storage, read_write> hashBins   : array<i32>;
 @group(0) @binding(3) var<storage, read_write> cursor     : array<atomic<u32>>;
-@group(0) @binding(4) var<uniform>             hp         : HashParams;
+@group(0) @binding(4) var<uniform>             hp         : HashParams;${mirrorBindings}
 ${emitBinOf(layout)}
 @compute @workgroup_size(64)
 fn hashScatter(${RESIDENT_ENTRY}) {
@@ -1548,7 +1582,7 @@ ${RESIDENT_IDX}
   if (i >= hp.highWater) { return; }
   if (agentAlive[i] == 0u) { return; }
   let slot: u32 = atomicAdd(&cursor[binOf(i)], 1u);
-  ${baAt('slot')} = i32(i);
+  ${baAt('slot')} = i32(i);${mirrorStores}
 }`;
 }
 
@@ -1583,8 +1617,17 @@ ${RESIDENT_IDX}
 
 /** Lazily build the residency pipelines + buffers. Returns false (and latches
  *  residentBuildFailed) on any failure — the caller falls back to the per-gen
- *  path, never silently wrong. */
-export async function ensureAgentResident(rt: AgentWebGPURuntime): Promise<boolean> {
+ *  path, never silently wrong.
+ *
+ *  `needScan` (B1): the ENGINE force pass runs its neighbour scan (bonding ||
+ *  doCollision || doDensity). When true, the scatter ALSO writes a bin-sorted
+ *  field-major mirror + sortedId, and the resident batch runs a mirror-variant
+ *  force pass reading neighbour fields COALESCED from that mirror. When false
+ *  (pure-custom-force models — Boids/PL) NO mirror is built and the resident
+ *  batch uses the shared per-gen `rt.forcePipeline` (zero mirror cost).
+ *  `needScan` is a STATIC per-model property (its gates don't change under the
+ *  residency-eligibility conditions), so the first-build memoization is safe. */
+export async function ensureAgentResident(rt: AgentWebGPURuntime, needScan = false): Promise<boolean> {
   if (rt.resident) return true;
   if (rt.residentBuildFailed) return false;
   try {
@@ -1615,17 +1658,66 @@ export async function ensureAgentResident(rt: AgentWebGPURuntime): Promise<boole
       { binding: 2, visibility: S, buffer: { type: 'storage' } },
       { binding: 3, visibility: S, buffer: { type: 'uniform' } },
     ]);
-    const scatter = await mkPipe('agent-hash-scatter', emitHashScatterWGSL(L), 'hashScatter', [
+    // --- B1 mirror buffers + the mirror scatter/force variants (needScan only) ---
+    const nMirror = agentMirrorFields(L.gridDepth > 1).length;
+    const sortedBuf = needScan ? device.createBuffer({ label: 'agent-mirror-sorted', size: Math.max(4, nMirror * L.maxAgents * 4), usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST }) : null;
+    const sortedIdBuf = needScan ? device.createBuffer({ label: 'agent-mirror-sortedid', size: Math.max(4, L.maxAgents * 4), usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST }) : null;
+    // The scatter: mirror variant (writes hashBins + mirror + sortedId) when needScan.
+    const scatterEntries: GPUBindGroupLayoutEntry[] = [
       { binding: 0, visibility: S, buffer: { type: 'read-only-storage' } },
       { binding: 1, visibility: S, buffer: { type: 'read-only-storage' } },
       { binding: 2, visibility: S, buffer: { type: 'storage' } },
       { binding: 3, visibility: S, buffer: { type: 'storage' } },
       { binding: 4, visibility: S, buffer: { type: 'uniform' } },
-    ]);
+    ];
+    if (needScan) {
+      scatterEntries.push({ binding: 5, visibility: S, buffer: { type: 'storage' } });
+      scatterEntries.push({ binding: 6, visibility: S, buffer: { type: 'storage' } });
+    }
+    const scatter = await mkPipe('agent-hash-scatter', emitHashScatterWGSL(L, needScan), 'hashScatter', scatterEntries);
     const commit = await mkPipe('agent-pos-commit', emitPosCommitWGSL(L), 'posCommit', [
       { binding: 0, visibility: S, buffer: { type: 'storage' } },
       { binding: 1, visibility: S, buffer: { type: 'uniform' } },
     ]);
+    // The resident mirror force pass — reads neighbour fields from the mirror
+    // (bindings 5/6). null when !needScan ⇒ the batch uses the shared rt.forcePipeline.
+    let forceMirrorPipeline: GPUComputePipeline | null = null;
+    let forceMirrorBind: GPUBindGroup | null = null;
+    if (needScan) {
+      const usesScatterFC = !!rt.forceScatterBuf;
+      const forceEntries: GPUBindGroupLayoutEntry[] = [
+        { binding: 0, visibility: S, buffer: { type: 'storage' } },
+        { binding: 1, visibility: S, buffer: { type: 'read-only-storage' } },
+        { binding: 2, visibility: S, buffer: { type: 'read-only-storage' } },
+        { binding: 3, visibility: S, buffer: { type: 'uniform' } },
+      ];
+      if (usesScatterFC) forceEntries.push({ binding: 4, visibility: S, buffer: { type: 'read-only-storage' } });
+      forceEntries.push({ binding: 5, visibility: S, buffer: { type: 'read-only-storage' } });
+      forceEntries.push({ binding: 6, visibility: S, buffer: { type: 'read-only-storage' } });
+      const fm = await mkPipe('agent-force-mirror', emitAgentForcePassWGSL(L, usesScatterFC, true), 'forcePass', forceEntries);
+      forceMirrorPipeline = fm.pipe;
+      const fmEntries: GPUBindGroupEntry[] = [
+        { binding: 0, resource: { buffer: rt.agentF32Buf } },
+        { binding: 1, resource: { buffer: rt.agentAliveBuf } },
+        { binding: 2, resource: { buffer: rt.hashBinsBuf } },
+        { binding: 3, resource: { buffer: rt.forceControlBuf } },
+      ];
+      if (usesScatterFC && rt.forceScatterBuf) fmEntries.push({ binding: 4, resource: { buffer: rt.forceScatterBuf } });
+      fmEntries.push({ binding: 5, resource: { buffer: sortedBuf! } });
+      fmEntries.push({ binding: 6, resource: { buffer: sortedIdBuf! } });
+      forceMirrorBind = rt.device.createBindGroup({ label: 'agent-force-mirror-bg', layout: fm.bgl, entries: fmEntries });
+    }
+    const scatterBgEntries: GPUBindGroupEntry[] = [
+      { binding: 0, resource: { buffer: rt.agentF32Buf } },
+      { binding: 1, resource: { buffer: rt.agentAliveBuf } },
+      { binding: 2, resource: { buffer: rt.hashBinsBuf } },
+      { binding: 3, resource: { buffer: cursorBuf } },
+      { binding: 4, resource: { buffer: hashParamsBuf } },
+    ];
+    if (needScan) {
+      scatterBgEntries.push({ binding: 5, resource: { buffer: sortedBuf! } });
+      scatterBgEntries.push({ binding: 6, resource: { buffer: sortedIdBuf! } });
+    }
     rt.resident = {
       countPipeline: count.pipe, scanPipeline: scan.pipe, scatterPipeline: scatter.pipe, commitPipeline: commit.pipe,
       countBind: rt.device.createBindGroup({ label: 'agent-hash-count-bg', layout: count.bgl, entries: [
@@ -1640,18 +1732,13 @@ export async function ensureAgentResident(rt: AgentWebGPURuntime): Promise<boole
         { binding: 2, resource: { buffer: cursorBuf } },
         { binding: 3, resource: { buffer: hashParamsBuf } },
       ] }),
-      scatterBind: rt.device.createBindGroup({ label: 'agent-hash-scatter-bg', layout: scatter.bgl, entries: [
-        { binding: 0, resource: { buffer: rt.agentF32Buf } },
-        { binding: 1, resource: { buffer: rt.agentAliveBuf } },
-        { binding: 2, resource: { buffer: rt.hashBinsBuf } },
-        { binding: 3, resource: { buffer: cursorBuf } },
-        { binding: 4, resource: { buffer: hashParamsBuf } },
-      ] }),
+      scatterBind: rt.device.createBindGroup({ label: 'agent-hash-scatter-bg', layout: scatter.bgl, entries: scatterBgEntries }),
       commitBind: rt.device.createBindGroup({ label: 'agent-pos-commit-bg', layout: commit.bgl, entries: [
         { binding: 0, resource: { buffer: rt.agentF32Buf } },
         { binding: 1, resource: { buffer: hashParamsBuf } },
       ] }),
       countsBuf, cursorBuf, hashParamsBuf,
+      hasMirror: needScan, sortedBuf, sortedIdBuf, forceMirrorPipeline, forceMirrorBind,
     };
     return true;
   } catch {
@@ -1725,8 +1812,16 @@ export function dispatchResidentBatch(rt: AgentWebGPURuntime, gens: number, high
     if (rt.forceScatterBuf) enc.clearBuffer(rt.forceScatterBuf);
     const pb = enc.beginComputePass({ label: 'agent-behaviour-pass' });
     pb.setPipeline(rt.behaviourPipeline); pb.setBindGroup(0, rt.behaviourBindGroup); dispatchAgents(pb, total); pb.end();
+    // B1: when the mirror was built (needScan), run the mirror-variant force pass
+    // (coalesced neighbour reads from the bin-sorted mirror); else the shared
+    // per-gen force pipeline (custom-force models — no scan, no mirror).
     const pf = enc.beginComputePass({ label: 'agent-force-pass' });
-    pf.setPipeline(rt.forcePipeline); pf.setBindGroup(0, rt.forceBindGroup); dispatchAgents(pf, total); pf.end();
+    if (res.forceMirrorPipeline && res.forceMirrorBind) {
+      pf.setPipeline(res.forceMirrorPipeline); pf.setBindGroup(0, res.forceMirrorBind);
+    } else {
+      pf.setPipeline(rt.forcePipeline); pf.setBindGroup(0, rt.forceBindGroup);
+    }
+    dispatchAgents(pf, total); pf.end();
     const pm = enc.beginComputePass({ label: 'agent-pos-commit' });
     pm.setPipeline(res.commitPipeline); pm.setBindGroup(0, res.commitBind); dispatchAgents(pm, total); pm.end();
   }
@@ -1801,6 +1896,7 @@ export function destroyAgentWebGPURuntime(rt: AgentWebGPURuntime | null): void {
     rt.fieldReadBuf, rt.fieldDepositBuf,
     rt.auxF32Buf, rt.indicatorsBuf, rt.bondStoreBuf, rt.spawnCursorBuf, rt.stopFlagBuf,
     rt.resident?.countsBuf ?? null, rt.resident?.cursorBuf ?? null, rt.resident?.hashParamsBuf ?? null,
+    rt.resident?.sortedBuf ?? null, rt.resident?.sortedIdBuf ?? null,
     rt.renderViewBuf ?? null,
   ];
   // A1 render canvas is a transferred OffscreenCanvas — its context is released

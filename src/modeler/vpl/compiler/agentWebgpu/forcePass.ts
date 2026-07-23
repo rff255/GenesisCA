@@ -31,6 +31,34 @@
 
 import type { AgentWebGPULayout } from './layout';
 
+// ===========================================================================
+// B1 — the bin-sorted MIRROR (the resident force pass's coalesced neighbour scan).
+//
+// The resident hash build scatters a field-major mirror of the fields the force
+// scan reads for NEIGHBOURS, in CSR (bin) order, plus a `sortedId` array. The
+// mirror is a contiguous run of `maxAgents` f32 per field; a field's element at
+// sorted-slot `s` is `sorted[fieldIndex*maxAgents + s]`. The mirror-variant force
+// scan then reads neighbour fields COALESCED from the mirror at the CSR slot,
+// instead of the random-access indirection `binAgents[p] -> agentF32[base + j]`.
+//
+// The field SET is the fields the ENGINE force pass reads (x, y[,z], radius, vx,
+// vy[,vz]); B1's scan only reads x/y/[z]/radius, but vx/vy[/vz] ride the mirror so
+// B2's fused gather can read neighbour velocities for free. sortedId (u32) carries
+// each slot's canonical agent id (for the self-skip + B2's identity consumption).
+// The mirror is built ONLY when the force scan runs (needScan = bonding ||
+// doCollision || doDensity) — pure-custom-force models (Boids/PL) pay ZERO cost.
+// ===========================================================================
+/** The mirror field order (2D). The mirror stores one contiguous `maxAgents` run
+ *  per field, in THIS order; field k's slot `s` is `sorted[k*maxAgents + s]`. */
+export const AGENT_MIRROR_FIELDS_2D = ['x', 'y', 'radius', 'vx', 'vy'] as const;
+/** The mirror field order (3D). */
+export const AGENT_MIRROR_FIELDS_3D = ['x', 'y', 'z', 'radius', 'vx', 'vy', 'vz'] as const;
+/** The mirror field order for the given dimensionality — the SINGLE source shared
+ *  by the mirror scatter (agentWebgpuRuntime.ts) + the mirror force scan here. */
+export function agentMirrorFields(is3d: boolean): readonly string[] {
+  return is3d ? AGENT_MIRROR_FIELDS_3D : AGENT_MIRROR_FIELDS_2D;
+}
+
 /** The ForceControl uniform — the per-step scalars the worker writes before the
  *  force dispatch (its own struct, separate from the behaviour's Control, so the
  *  two shaders stay decoupled). The field order MIRRORS the worker's write +
@@ -69,7 +97,7 @@ function emitForceControlStruct(): string {
 /** Emit the standalone WGSL force-pass module for the given GPU agent layout.
  *  One invocation per agent slot (2-D dispatch tiling recovers the linear idx,
  *  the lattice pattern). Pure — no GPU calls. */
-export function emitAgentForcePassWGSL(layout: AgentWebGPULayout, usesForceScatter = false): string {
+export function emitAgentForcePassWGSL(layout: AgentWebGPULayout, usesForceScatter = false, mirror = false): string {
   const is3d = layout.gridDepth > 1;
   // Apply Force To Agent — the behaviour shader scattered cross-agent force into an
   // atomic `forceScatter` buffer (X/Y[/Z] regions strided by maxAgents); the force
@@ -126,6 +154,49 @@ export function emitAgentForcePassWGSL(layout: AgentWebGPULayout, usesForceScatt
       }
     }`;
 
+  // B1 (resident-only, `mirror`): the bin-sorted MIRROR neighbour body — reads
+  // neighbour fields COALESCED from `sorted` at the CSR slot `sp`, `j` = the
+  // canonical id from `sortedId[sp]` (for the self-skip). The mirror holds ONLY
+  // alive agents (the scatter skips dead), so no `agentAlive[j]` check. Used only
+  // in the hash-stencil branch (hashValid != 0); the all-pairs fallback (no hash
+  // ⇒ no mirror this batch) stays canonical. `mirror` false ⇒ byte-identical.
+  const mfields = agentMirrorFields(is3d);
+  const sm = (field: string): string => {
+    const k = mfields.indexOf(field);
+    return k <= 0 ? 'sorted[sp]' : `sorted[${k * MA}u + sp]`;
+  };
+  const dz3m = is3d ? `\n        var dz: f32 = ${sm('z')} - zi;` : '';
+  const mirrorBody = `
+        let j: u32 = sortedId[sp];
+        if (j != i) {
+          var dx: f32 = ${sm('x')} - xi;
+          var dy: f32 = ${sm('y')} - yi;${dz3m}
+          if (fc.torus != 0u) {
+            if (dx > hW) { dx = dx - fc.fieldW; } else if (dx < -hW) { dx = dx + fc.fieldW; }
+            if (dy > hH) { dy = dy - fc.fieldH; } else if (dy < -hH) { dy = dy + fc.fieldH; }${dzWrap}
+          }
+          let d2: f32 = ${d2Expr};
+          let sij: f32 = ri + ${sm('radius')};
+          let rmax: f32 = fc.range * sij;
+          if (d2 != 0.0 && d2 < rmax * rmax) {
+            dens = dens + 1.0;
+            if (fc.bonding != 0u || fc.doCollision != 0u) {
+              let d: f32 = sqrt(d2);
+              let muRep: f32 = select(0.0, fc.muR, fc.doCollision != 0u);
+              let muAdh: f32 = select(0.0, fc.muA, fc.bonding != 0u);
+              let mu: f32 = select(muAdh, muRep, d < sij);
+              let F: f32 = mu * (d - sij);
+              let k: f32 = F / d;
+              fx = fx + k * dx; fy = fy + k * dy;${fz3}
+            }
+          }
+        }`;
+  // The stencil inner loop body (shared by the 2D + 3D stencils). Non-mirror emits
+  // the canonical `binAgents[p] -> agentF32` indirection VERBATIM (byte-identical).
+  const stencilInner = mirror
+    ? `let sp: u32 = u32(p);${mirrorBody}`
+    : `let j: u32 = u32(${binAgentsAt('u32(p)')});${neighbourBody}`;
+
   // 3D-only declarations / extents.
   const zi3 = is3d ? `\n  let zi: f32 = ${f32('z', 'i')};` : '';
   const hD3 = is3d ? `\n  let hD: f32 = fc.fieldD * 0.5;` : '';
@@ -155,7 +226,7 @@ export function emitAgentForcePassWGSL(layout: AgentWebGPULayout, usesForceScatt
         let pStart: i32 = ${binStartAt('u32(b)')};
         let pEnd: i32 = ${binStartAt('u32(b) + 1u')};
         for (var p: i32 = pStart; p < pEnd; p = p + 1) {
-          let j: u32 = u32(${binAgentsAt('u32(p)')});${neighbourBody}
+          ${stencilInner}
         }
       }
     } } }` : `
@@ -179,7 +250,7 @@ export function emitAgentForcePassWGSL(layout: AgentWebGPULayout, usesForceScatt
         let pStart: i32 = ${binStartAt('u32(b)')};
         let pEnd: i32 = ${binStartAt('u32(b) + 1u')};
         for (var p: i32 = pStart; p < pEnd; p = p + 1) {
-          let j: u32 = u32(${binAgentsAt('u32(p)')});${neighbourBody}
+          ${stencilInner}
         }
       }
     } }`;
@@ -203,7 +274,7 @@ export function emitAgentForcePassWGSL(layout: AgentWebGPULayout, usesForceScatt
 @group(0) @binding(0) var<storage, read_write> agentF32   : array<f32>;
 @group(0) @binding(1) var<storage, read>       agentAlive : array<u32>;
 @group(0) @binding(2) var<storage, read>       hashBins   : array<i32>;
-@group(0) @binding(3) var<uniform>             fc         : ForceControl;${usesForceScatter ? '\n@group(0) @binding(4) var<storage, read>       forceScatter : array<u32>;' : ''}
+@group(0) @binding(3) var<uniform>             fc         : ForceControl;${usesForceScatter ? '\n@group(0) @binding(4) var<storage, read>       forceScatter : array<u32>;' : ''}${mirror ? '\n@group(0) @binding(5) var<storage, read>       sorted     : array<f32>;\n@group(0) @binding(6) var<storage, read>       sortedId   : array<u32>;' : ''}
 
 @compute @workgroup_size(64)
 fn forcePass(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(num_workgroups) nwg: vec3<u32>) {

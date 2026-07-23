@@ -2053,7 +2053,14 @@ async function runAgentBatchResident(count: number): Promise<boolean> {
   if (!s || !rt || !cfg) return false;
   agentGpuStepInFlight = true;
   try {
-    if (!(await ensureAgentResident(rt))) return false;
+    // B1: the ENGINE force pass runs its neighbour scan (bonding || collision ||
+    // a density consumer). Only then does the resident hash build scatter the
+    // bin-sorted mirror + the resident force pass read neighbours from it. A
+    // pure-custom-force model (Boids/PL) skips the scan ⇒ no mirror cost. STATIC
+    // per model under residency eligibility (radius/config don't drift mid-batch).
+    const needScan = usesBondingPhysics(cfg) || usesSoftCollision(cfg) || agentUsesDensity;
+    if (!(await ensureAgentResident(rt, needScan))) return false;
+    if (!(self as unknown as { __b1logged?: boolean }).__b1logged) { (self as unknown as { __b1logged?: boolean }).__b1logged = true; self.postMessage({ type: 'error', message: '[B1-DEBUG] resident engaged needScan=' + needScan + ' hasMirror=' + (rt.resident ? rt.resident.hasMirror : 'null') + ' forceMirrorPipeline=' + (rt.resident && rt.resident.forceMirrorPipeline ? 'set' : 'null') }); }
     const hw = s.highWater;
     // Per-batch hash geometry — CPU-computed once (radius is static under the
     // eligibility gate, so maxR can't drift mid-batch).
@@ -6052,7 +6059,13 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
           uploadAgentRenderView(rt, msg.view);
           // Present now only when idle — a batch in flight is deferred (won't reach
           // here); a per-gen/mutation present covers the running case via sendColors.
-          presentAgentsOnce(rt, agentStore ? agentStore.highWater : 0);
+          // FromStore (upload fields/colours, then present), NOT a raw present:
+          // at load the only prior upload can be the attach-time present made
+          // BEFORE seeding/colouring settled, so a raw camera present could show
+          // an empty/stale frame. Camera posts are rAF-coalesced + deduped
+          // main-side, so the extra upload cost is one-shot.
+          if (!agentStoreStale) presentAgentsIfActive();
+          else presentAgentsOnce(rt, agentStore ? agentStore.highWater : 0);
         }
       }
       break;

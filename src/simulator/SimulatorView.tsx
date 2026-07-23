@@ -2355,6 +2355,16 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       if (key === lastAgentCameraKeyRef.current) return;
       lastAgentCameraKeyRef.current = key;
       workerRef.current.postMessage({ type: 'setAgentCamera', view });
+      // Re-blit AFTER the worker's camera-triggered present lands (double-rAF —
+      // the grid's compositor-lag trick). Without this the FIRST valid present
+      // after attach is never blitted: at load the ack-time draw() blits the
+      // attach present (made with a null camera → zero uniform → black), the
+      // camera post then presents the real frame into the placeholder, and no
+      // draw follows until the next stepped/interaction — the reported
+      // "black on load until Play or a mouse move".
+      requestAnimationFrame(() => requestAnimationFrame(() => {
+        if (agentDirectRenderActiveRef.current) drawRef.current();
+      }));
     });
   }, [computeAgentRenderView]);
 
