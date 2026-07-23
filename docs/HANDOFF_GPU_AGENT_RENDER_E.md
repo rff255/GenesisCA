@@ -103,6 +103,147 @@ render seams beyond wiring the shared device.
 - Perf numbers: Chemotaxis ms/gen CPU-bridge vs unified-resident at the
   shipped size + a 10× field, in the commit message.
 
-## Completion Report (E1)
-(fill in when done — commits, deviations + why, measured numbers, gotchas,
-the E2 seed notes: what the composite render needs from the unified device)
+## Completion Report (E1) — 2026-07-23
+
+**Outcome**: **item 1 (shared GPUDevice) SHIPPED + in-browser-verified. Items 2/3
+(zero-copy field bridge + field-coupled residency) STOPPED with a documented
+finding — item 2's mechanism is a confirmed-false assumption, per §0 invariant
+#2 (STOP + record; do not redesign).** Item 4 (fallback/protocol/getState)
+applies to the field bridge and is deferred with it.
+
+**Commit** (branch `optimize`, not pushed): one commit — "perf(agents): E1
+shared GPUDevice singleton (device unification)". `git diff --stat` = the new
+[sharedGpuDevice.ts](../src/simulator/engine/sharedGpuDevice.ts) +
+[webgpuRuntime.ts](../src/simulator/engine/webgpuRuntime.ts) +
+[agentWebgpuRuntime.ts](../src/simulator/engine/agentWebgpuRuntime.ts) + a small
+hunk in [sim.worker.ts](../src/simulator/engine/sim.worker.ts). **NO compiler
+files, NO agentEngine, NO gl3d, NO SimulatorView** — device-lifecycle only.
+
+### What shipped (item 1 — device unification)
+- **`sharedGpuDevice.ts`** — a refcounted worker-owned singleton.
+  `acquireSharedGpuDevice()` requests the adapter + device ONCE with the UNION of
+  the limit keys both runtimes ask for (the grid's set is the superset; agent's
+  is a subset), with the same retry-with-defaults fallback the runtimes had.
+  `releaseSharedGpuDevice(device)` decrements the refcount and destroys the
+  device only at zero. Consolidated `uncapturederror` + `device.lost` (filter
+  reason `'destroyed'`) hooks live here. DEV-only `sharedGpuAdapterRequestCount()`
+  / `sharedGpuRefCount()` for the leak metric.
+- **`createWebGPURuntime` / `createAgentWebGPURuntime` / `createAgentRenderOnlyRuntime`**
+  take the device from the singleton (no more per-runtime `requestAdapter`/
+  `requestDevice`). Each wraps its post-acquire body so a throw (WGSL error,
+  buffer OOM) `releaseSharedGpuDevice`s before rethrowing — a mid-build failure
+  can't leak a reference.
+- **`destroyWebGPURuntime` / `destroyAgentWebGPURuntime` / `destroyAgentRenderSurface`**
+  release the reference instead of destroying the device (which would kill a
+  still-live sibling runtime). The device is destroyed only when the last
+  runtime releases.
+- **Worker**: removed the per-agent-runtime `onuncapturederror`/`device.lost`
+  block in `buildAgentWebGPUIfNeeded` (consolidated at the singleton — on a shared
+  device it would mislabel grid errors as agent errors and accumulate a lost
+  handler per rebuild). Real dispatch failures stay user-visible via the existing
+  `pushErrorScope('validation')` around each dispatch (unchanged).
+- **Failure isolation** preserved: either runtime's pipeline build failing
+  degrades that runtime only; the device survives for the other.
+
+### Measured (real WebGPU, in-browser, hidden pane → worker protocol + getState + a DEV probe)
+- **Device sharing (the payoff)**: Chemotaxis on **WebGPU grid + WebGPU agents**
+  → **adapterRequests = 1, refCount = 2** (both runtimes on ONE device; pre-E1 =
+  two devices), hasGrid=true + hasAgent=true, **0 errors**.
+- **Leak metric across rebuilds**: **2 recompile cycles** (each rebuilds both
+  runtimes) → adapterRequests **stays 1**, refCount balanced at **2**, 0 errors —
+  rebuilds reuse the device, no leak, no premature destroy.
+- **Field model correctness on the shared device**: Chemotaxis steps to gen 20 +
+  post-recompile to gen 10, fresh `getState` (attributes + agents), 0 errors
+  (the CPU field bridge still round-trips; item 2 not shipped).
+- **Agents-only headline unchanged**: Boids-webgpu flocks to **polarization
+  0.9987** on the shared device (adapterRequests 1, refCount 1).
+- Gates: `tsc -p tsconfig.app.json --noEmit` + `npm run build` +
+  `parity-agent-wasm` (18) + `parity-agent-force` (7) all green. No compiler
+  files touched → `check-compile-identity` not required.
+
+### Deviations from the handoff (all justified)
+1. **Consolidated the error hooks by REMOVING the per-runtime ones** (handoff:
+   "consolidate at the singleton"). The singleton logs generic `console.error`
+   diagnostics for BOTH runtimes; the user-visible surfacing of REAL dispatch
+   failures already exists via `pushErrorScope('validation')` (unchanged), so no
+   user-visible error surfacing is lost. Kept the singleton console-only (it's a
+   generic module — it must not call `self.postMessage`).
+2. **Refcount, not a bare worker-owned singleton.** The refcount frees the device
+   precisely when BOTH runtimes are gone (e.g. user flips both targets to JS)
+   while surviving every rebuild. The adapter is still requested exactly once (the
+   leak metric).
+
+### THE ITEM-2/3 FINDING (why the field bridge stopped) — the orchestrator re-plans from here
+- **Item 2's "direct bind" is impossible without a compiler change** (§0 #2 STOP
+  trigger). The agent `fieldRead` layout ([agentWebgpu/layout.ts](../src/modeler/vpl/compiler/agentWebgpu/layout.ts))
+  is a COMPACTED `array<f32>` — `fieldReadBase[id] + cellIdx`, one contiguous
+  `fieldTotal`-run per agent-accessible attr, in `fieldReadAttrs` order, NO
+  sentinel. The grid `attrsRead` buffer ([webgpu/layout.ts](../src/modeler/vpl/compiler/webgpu/layout.ts))
+  is per-attr bitcast WORDS — `attr.wordOffset + cellIdx`, `cellsPerAttr = total`
+  OR **`total + 1`** (a constant-boundary SENTINEL slot at index `total`), in the
+  grid's FULL attr order (all cell attrs, not just the field subset). So:
+  (a) offsets don't line up (agent field base ≠ grid attr word offset; field
+  attrs aren't first in the grid layout); (b) the sentinel slot shifts everything
+  under constant boundary; (c) **int/bool/tag** field attrs differ in BIT PATTERN
+  — the grid stores `bitcast<u32>(i32 v)`, the agent shader reads `f32`, and the
+  CPU `uploadAgentField` does a NUMERIC convert (`f32(i32 v)`), not a bit copy.
+  A raw bind reads garbage; matching the layouts = recompiling the agent field
+  shader against the grid's attr word layout = a compiler change (forbidden).
+- **Field-coupled residency (item 3) also needs a branch restructure.** A WebGPU
+  grid + WebGPU agent FIELD model runs today in the worker's `webgpuActive`
+  branch, which runs agents via **JS `runAgentStep()`** (NOT the GPU agent
+  runtime) with the CPU field round-trip (`ensureCpuAttrsFresh` → runAgentStep →
+  `uploadAttrs`). Making it resident requires routing those agents onto the GPU
+  runtime AND encoding grid+agent+fold per gen — not the "drop a copy" the handoff
+  imagined.
+- **Shipped-model reality**: both shipped field models (Chemotaxis, Ant) use
+  **float** field attrs, **torus** boundary (no sentinel), and default to
+  **non-WebGPU grid + JS agents** — the WebGPU-grid+WebGPU-agent resident field
+  path is a user-selected config, exercised only after flipping both targets.
+
+### CONCRETE RE-PLAN for a refined E1b / E-field handoff (compiler-free, tractable)
+On the shared device (now delivered), replace the CPU field round-trip with
+**GPU `copyBufferToBuffer` passes** — NOT a direct bind:
+1. **Gate** (general property): the model has agent-accessible cell attrs whose
+   types are ALL **float** (grid `bitcast<u32>(f32)` word == agent `f32` byte
+   pattern → a raw copy is correct). Any int/bool/tag field → keep the CPU bridge
+   (or add a tiny convert compute shader later). Also gate on WebGPU grid +
+   WebGPU agents + the shared device live.
+2. **Route** the `webgpuActive` branch's field agents onto the GPU agent runtime
+   (they run JS today). Per gen, on the shared device:
+   - prime `agentFieldRead` ← grid `attrsReadBuf` per read-attr:
+     `copyBufferToBuffer(attrsReadBuf, attr.byteOffset, agentFieldReadBuf,
+     fieldReadBase*4, total*4)` (copies cells 0..total-1; the constant-boundary
+     sentinel at index `total` is excluded automatically);
+   - prime `agentFieldDeposit` ← grid `attrsReadBuf` per write-attr (same shape);
+   - dispatch agent behaviour (atomic-deposits) → force → posCommit;
+   - **fold**: `copyBufferToBuffer(agentFieldDeposit, fieldWriteBase*4,
+     attrsReadBuf, attr.byteOffset, total*4)` (the deposit words ARE the final f32
+     field — the CPU `readbackAgentField` just copies them, so the fold is a plain
+     buffer copy, no decode);
+   - grid `dispatchStep` (its copy line carries the deposit; then swap).
+   Re-read `webgpuRuntime.attrsReadBuf` EACH gen (it ping-pongs per step).
+3. **Buffer usage flags**: grid `attrsBufA/B` need `COPY_SRC | COPY_DST`; agent
+   `fieldReadBuf` needs `COPY_DST`, `fieldDepositBuf` needs `COPY_SRC | COPY_DST`.
+   Check + add (additive, safe).
+4. **getState**: for a resident field-coupled model, the field lives in the grid
+   attrs (GPU) — `getState`'s existing `gpuOwnsAttrs → ensureCpuAttrsFresh` pulls
+   it down; the agent one-shot rule pulls the agent store down. Verify the interplay.
+5. Not strictly "one submit" — separate queue-ordered submits (agent step, then
+   grid step) are correct (queue order = the barrier); the handoff's "one submit"
+   is an optimization, not a correctness requirement.
+6. **Verify** statistical equivalence (Chemotaxis aggregation metric on the same
+   seed) — feasible via worker protocol + getState (C/D proved field metrics are
+   checkable under occlusion). NB routing agents JS→GPU changes RNG (shared
+   xorshift32 → per-cell PCG) — a documented "statistical, not bit" difference.
+
+### E2 seed notes (what the composite render needs from the unified device)
+- The shared device is the E2 prerequisite: a single WebGPU canvas context is
+  bound to ONE device, so compositing grid + agents on one canvas requires both
+  runtimes on the shared device — which E1 delivers.
+- The C-report leak (a re-attach building a fresh render-only device) is FIXED by
+  E1 (the render-only surface takes the shared device now).
+- The grid runtime already renders its own canvas (`setupDirectRender` /
+  `presentToCanvas`); with one device E2 can lift D's `&& !is3D` render carve-out
+  (voxels-vs-spheres depth-composite on one device/canvas). The z-order stays
+  grid → agents → gl overlays.

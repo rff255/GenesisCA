@@ -1152,21 +1152,14 @@ function buildAgentWebGPUIfNeeded(): void {
       // Guard against a re-init that swapped the store / changed the target /
       // launched a newer build while this one was in flight.
       if (agentStore === store && agentTarget === 'webgpu' && token === agentWebgpuBuildToken) {
-        // Permanent diagnostics: surface GPU validation/OOM errors + device loss
-        // LOUDLY. Without these a failing dispatch is SILENT — the queue drops the
-        // work, the readback returns whatever was uploaded, and the observable
-        // symptom is "frozen / wrong dynamics with zero errors" (the P0 class).
-        rt.device.onuncapturederror = (ev: GPUUncapturedErrorEvent) => {
-          self.postMessage({ type: 'error', message: '[agents][gpu] uncaptured: ' + (ev.error?.message ?? String(ev.error)) });
-        };
-        void rt.device.lost.then((info) => {
-          // reason 'destroyed' = OUR OWN destroyAgentWebGPURuntime (every reset /
-          // recompile / target flip tears the old runtime down before building the
-          // new one) — deliberate teardown, NOT an error. Only a genuine loss
-          // (reason 'unknown' — driver reset, TDR, adapter removed) surfaces.
-          if (info.reason === 'destroyed') return;
-          self.postMessage({ type: 'error', message: `[agents][gpu] device lost (${info.reason}): ${info.message}` });
-        });
+        // E1: uncaptured-error + device-loss diagnostics are consolidated at the
+        // shared-device singleton (sharedGpuDevice.ts) — one hook set for BOTH the
+        // grid + agent runtimes (the device is shared; per-runtime hooks would
+        // mislabel grid errors as agent errors and accumulate a lost handler per
+        // rebuild on the surviving device). Real dispatch failures stay
+        // user-visible via the pushErrorScope('validation') around each dispatch
+        // (runAgentStepWebGPUInner / runAgentBatchResident) — the P0 silent-error
+        // guard is unchanged.
         agentWebgpuRuntime = rt;
         // A1: signal the main thread the agent WebGPU runtime is up so it can
         // (re)attach its render canvas (the direct-render gate is evaluated

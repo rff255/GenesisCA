@@ -34,6 +34,7 @@ import { initAgentSlot, freeStagedSlot } from './agentEngine';
 import type { AgentWebGPULayout } from '../../modeler/vpl/compiler/agentWebgpu/layout';
 import { AGENT_GPU_F32_FIELDS, AGENT_GPU_F32_FIELDS_3D, AGENT_GPU_I32_FIELDS, AGENT_GPU_REQUEST_FIELDS } from '../../modeler/vpl/compiler/agentWebgpu/layout';
 import { emitAgentForcePassWGSL, agentMirrorFields } from '../../modeler/vpl/compiler/agentWebgpu/forcePass';
+import { acquireSharedGpuDevice, releaseSharedGpuDevice } from './sharedGpuDevice';
 
 const REQUEST_FIELD_SET: ReadonlySet<string> = new Set(AGENT_GPU_REQUEST_FIELDS);
 
@@ -308,27 +309,13 @@ export async function createAgentWebGPURuntime(
   omShaders: AgentOMShaderInput[] = [],
 ): Promise<AgentWebGPURuntime> {
   if (!isWebGPUAvailable()) throw new Error('navigator.gpu is unavailable in this context');
-  const gpu = (navigator as Navigator & { gpu: GPU }).gpu;
-  const adapter = await gpu.requestAdapter();
-  if (!adapter) throw new Error('WebGPU adapter request returned null (agents)');
-
-  // Request the adapter's max storage limits (large agent counts can exceed the
-  // default 128 MB cap on the f32 SoA, though the Boids subset is small).
-  const required: Record<string, number> = {};
-  const limits = adapter.limits as unknown as Record<string, number>;
-  for (const k of [
-    'maxStorageBufferBindingSize', 'maxBufferSize', 'maxComputeWorkgroupsPerDimension',
-    'maxStorageBuffersPerShaderStage',
-  ]) { const v = limits[k]; if (typeof v === 'number') required[k] = v; }
-  let device: GPUDevice;
-  try { device = await adapter.requestDevice({ requiredLimits: required }); }
-  catch { device = await adapter.requestDevice(); }
-  if (!device) throw new Error('WebGPU device request returned null (agents)');
-
-  device.addEventListener('uncapturederror', (ev: Event) => {
-    // eslint-disable-next-line no-console
-    console.error('[agents/webgpu] uncaptured device error:', (ev as GPUUncapturedErrorEvent).error.message);
-  });
+  // E1: take the worker's shared device (one device serves the grid + every agent
+  // runtime; the union limits were requested at the singleton). Released by
+  // destroyAgentWebGPURuntime. A throw past this point releases the reference.
+  const sd = await acquireSharedGpuDevice();
+  if (!sd) throw new Error('WebGPU shared device unavailable (agents)');
+  const device = sd.device, adapter = sd.adapter;
+  try {
 
   // Compile + validate both modules up front (clear errors before any dispatch).
   const behaviourModule = device.createShaderModule({ code: behaviourShader });
@@ -554,6 +541,12 @@ export async function createAgentWebGPURuntime(
   // Seed the per-agent RNG once (the GPU advances it in place across steps).
   seedAgentRng(rt, 0x1234abcd);
   return rt;
+  } catch (err) {
+    // A throw past the shared-device acquire (WGSL compile error, buffer OOM)
+    // must release the reference or the device leaks for the worker's life.
+    releaseSharedGpuDevice(device);
+    throw err;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1584,11 +1577,13 @@ export function presentAgentsFromStore(rt: AgentWebGPURuntime, s: AgentStore): v
  *  unavailable / device acquisition fails (the worker keeps the CPU overlay path). */
 export async function createAgentRenderOnlyRuntime(layout: AgentWebGPULayout): Promise<AgentRenderSurface | null> {
   if (!isWebGPUAvailable()) return null;
+  // E1: the render-only surface takes the shared device too (this closes the
+  // C-report leak: a re-attach used to request a fresh device without releasing
+  // the prior one). Released by destroyAgentRenderSurface.
+  const sd = await acquireSharedGpuDevice();
+  if (!sd) return null;
+  const device = sd.device;
   try {
-    const gpu = (navigator as Navigator & { gpu: GPU }).gpu;
-    const adapter = await gpu.requestAdapter();
-    if (!adapter) return null;
-    const device = await adapter.requestDevice();
     const ma = layout.maxAgents;
     const mk = (label: string, bytes: number): GPUBuffer =>
       device.createBuffer({ label, size: Math.max(4, bytes), usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
@@ -1602,6 +1597,7 @@ export async function createAgentRenderOnlyRuntime(layout: AgentWebGPULayout): P
       renderAliveScratch: new Uint32Array(ma),
     };
   } catch {
+    releaseSharedGpuDevice(device);
     return null;
   }
 }
@@ -1653,8 +1649,8 @@ export function destroyAgentRenderSurface(rt: AgentRenderSurface | null): void {
   if (rt.renderDepthTex) { try { rt.renderDepthTex.destroy(); } catch { /* non-fatal */ } rt.renderDepthTex = null; }
   const bufs = [rt.agentF32Buf, rt.agentAliveBuf, rt.agentColorsBuf, rt.renderViewBuf ?? null, rt.renderView3DBuf ?? null];
   for (const b of bufs) { if (b) try { b.destroy(); } catch { /* non-fatal */ } }
-  const dev = rt.device as GPUDevice & { destroy?: () => void };
-  if (typeof dev.destroy === 'function') { try { dev.destroy(); } catch { /* non-fatal */ } }
+  // E1: release the shared-device reference (was: destroy a per-surface device).
+  releaseSharedGpuDevice(rt.device);
 }
 
 // ---------------------------------------------------------------------------
@@ -2309,14 +2305,12 @@ export function destroyAgentWebGPURuntime(rt: AgentWebGPURuntime | null): void {
   for (const b of bufs) { if (b) try { b.destroy(); } catch { /* non-fatal */ } }
   for (const bucket of rt.stagingPool.values()) for (const e of bucket) { try { e.buffer.destroy(); } catch { /* non-fatal */ } }
   rt.stagingPool.clear();
-  // Release the GPUDevice too (mirrors the grid runtime's destroyWebGPURuntime,
-  // webgpuRuntime.ts). createAgentWebGPURuntime requests its OWN adapter+device
-  // per build, so every in-session rebuild (soft recompile / agent-target flip /
-  // reset) that tears down the prior runtime WITHOUT a worker.terminate() would
-  // otherwise leak a heavyweight GPUDevice, accumulating driver pressure for the
-  // rest of the worker's life. (A full model LOAD terminates the worker and
-  // reclaims devices regardless, so this is an in-session correctness fix.)
-  const dev = rt.device as GPUDevice & { destroy?: () => void };
-  if (typeof dev.destroy === 'function') { try { dev.destroy(); } catch { /* non-fatal */ } }
+  // E1: release the shared-device reference (mirrors destroyWebGPURuntime). The
+  // device is destroyed only when the LAST runtime — grid + all agent runtimes —
+  // releases it, so a rebuild (soft recompile / target flip / reset) reuses the
+  // ONE device and a live grid runtime isn't killed when the agent runtime tears
+  // down. Before E1 each runtime destroyed its own device, which leaked on every
+  // rebuild that didn't worker.terminate().
+  releaseSharedGpuDevice(rt.device);
   rt.ready = false;
 }

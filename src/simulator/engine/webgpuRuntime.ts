@@ -17,6 +17,7 @@ import {
   type LinkedDef, type ReductionPlan,
   buildReductionPlan, emitReductionShader,
 } from './webgpuReduce';
+import { acquireSharedGpuDevice, releaseSharedGpuDevice } from './sharedGpuDevice';
 
 export interface WebGPURuntimeInit {
   shaderCode: string;
@@ -154,63 +155,26 @@ export async function createWebGPURuntime(init: WebGPURuntimeInit): Promise<WebG
   if (!isWebGPUAvailable()) {
     throw new Error('navigator.gpu is unavailable in this context');
   }
-  const gpu = (navigator as Navigator & { gpu: GPU }).gpu;
-  const adapter = await gpu.requestAdapter();
-  if (!adapter) throw new Error('WebGPU adapter request returned null');
-  // Request the adapter's max storage/buffer limits at device creation. Default
-  // device limits cap storage buffers at 128 MB, which kills large grids that
-  // use multi-neighbourhood patterns (e.g. MNCA's 692-cell-per-cell neighbour
-  // index table at 500x500 is 660 MB). Devices that don't support the higher
-  // tier still get whatever they support — requestDevice returns OK as long as
-  // the requested limits are <= adapter limits.
-  const required: Record<string, number> = {};
-  const limitKeys = [
-    'maxStorageBufferBindingSize', 'maxBufferSize', 'maxUniformBufferBindingSize',
-    'maxComputeWorkgroupStorageSize', 'maxComputeInvocationsPerWorkgroup',
-    'maxComputeWorkgroupSizeX', 'maxComputeWorkgroupSizeY', 'maxComputeWorkgroupSizeZ',
-    'maxComputeWorkgroupsPerDimension',
-    // Variegated Cells: binding 8 (varAux) takes us to 7 storage buffers per
-    // compute stage in non-variegated models (still ≤ default 8) and 8 in
-    // variegated models. Some conservative adapters cap at 8 by default,
-    // others go higher — request the adapter's max so we don't trip the cap.
-    'maxStorageBuffersPerShaderStage',
-  ] as const;
-  const limits = adapter.limits as unknown as Record<string, number>;
-  for (const k of limitKeys) {
-    const v = limits[k];
-    if (typeof v === 'number') required[k] = v;
-  }
-  // Some adapters report supported limits the device can't actually back; the
-  // first requestDevice call then fails with an opaque error. Retry once with
-  // default limits so we degrade gracefully — models that fit within the
-  // default 128 MB storage-buffer cap still work, larger grids will surface
-  // the more specific "buffer size exceeds device limit" error in
-  // setupBuffersAndPipelines.
-  let device: GPUDevice | null = null;
+  // E1: take the worker's shared device (union limits requested once at the
+  // singleton). Every runtime shares ONE device so a field-coupled model can
+  // bind buffers across the grid + agent runtimes and rebuilds don't re-request
+  // the adapter. destroyWebGPURuntime releases this reference.
+  const sd = await acquireSharedGpuDevice();
+  if (!sd) throw new Error('WebGPU shared device unavailable');
+  const { device, adapter } = sd;
+
+  // Everything past the acquire must release the device on failure (the caller's
+  // catch only tears down a RETURNED runtime — a throw here has none).
   try {
-    device = await adapter.requestDevice({ requiredLimits: required });
-  } catch (err) {
-    // eslint-disable-next-line no-console
-    console.warn('[webgpu] requestDevice with adapter max limits failed, retrying with defaults:', err);
-    device = await adapter.requestDevice();
-  }
-  if (!device) throw new Error('WebGPU device request returned null');
+    const shaderModule = device.createShaderModule({ code: init.shaderCode });
+    const info = await shaderModule.getCompilationInfo();
+    const errors = info.messages.filter(m => m.type === 'error');
+    if (errors.length > 0) {
+      const lines = errors.map(m => `  line ${m.lineNum}: ${m.message}`).join('\n');
+      throw new Error('WGSL compile errors:\n' + lines);
+    }
 
-  device.addEventListener('uncapturederror', (ev: Event) => {
-    const err = (ev as GPUUncapturedErrorEvent).error;
-    // eslint-disable-next-line no-console
-    console.error('[webgpu] uncaptured device error:', err.message);
-  });
-
-  const shaderModule = device.createShaderModule({ code: init.shaderCode });
-  const info = await shaderModule.getCompilationInfo();
-  const errors = info.messages.filter(m => m.type === 'error');
-  if (errors.length > 0) {
-    const lines = errors.map(m => `  line ${m.lineNum}: ${m.message}`).join('\n');
-    throw new Error('WGSL compile errors:\n' + lines);
-  }
-
-  return {
+    return {
     device, adapter, shaderModule,
     layout: init.layout,
     entryPoints: init.entryPoints,
@@ -245,6 +209,12 @@ export async function createWebGPURuntime(init: WebGPURuntimeInit): Promise<WebG
     reductionPipelines: new Map(),
     reductionPlan: null,
   };
+  } catch (err) {
+    // A throw after the shared-device acquire (WGSL compile error, etc.) must
+    // release the reference or the device leaks for the worker's life.
+    releaseSharedGpuDevice(device);
+    throw err;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1298,7 +1268,9 @@ export function destroyWebGPURuntime(rt: WebGPURuntime | null): void {
     ]) {
       if (buf) buf.destroy();
     }
-    const dev = rt.device as GPUDevice & { destroy?: () => void };
-    if (typeof dev.destroy === 'function') dev.destroy();
+    // E1: release the shared-device reference (destroys the device only when the
+    // LAST runtime — grid + all agent runtimes — has released it), instead of
+    // destroying the device outright (which would kill a still-live agent runtime).
+    releaseSharedGpuDevice(rt.device);
   } catch { /* non-fatal */ }
 }
