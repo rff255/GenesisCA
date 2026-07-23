@@ -1790,6 +1790,17 @@ export function HelpView() {
               (alpha-blend) agents, and the brush plane occluding the spheres all appear
               then; in the free-running fast path those are off (the spheres are opaque and
               always drawn under the overlays).</li>
+            <li><strong>Single-canvas composite (2D grid+agents on WebGPU).</strong> When a
+              2D grid+agents model runs its <em>grid</em> on the WebGPU compile target and
+              its agents on the WebGPU agent target, the worker composites both layers &mdash;
+              the grid below, the agents above &mdash; into ONE canvas in a single GPU pass,
+              so the grid no longer copies its colours back to the main thread each step.
+              This applies to decoupled grid+agents models AND field-coupled ones
+              (chemotaxis / stigmergy) once both targets are WebGPU. One tradeoff: on this
+              path the agents render at grid resolution, so they look slightly soft when you
+              zoom in far (the grid itself is unaffected). Any other configuration &mdash; a
+              JS/WebAssembly grid, sprites, metaballs, or 3D &mdash; keeps the standard
+              layered render.</li>
           </ul>
         </section>
 

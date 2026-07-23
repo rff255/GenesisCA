@@ -190,6 +190,15 @@ export interface AgentWebGPURuntime {
   renderDepthTex?: GPUTexture | null;
   renderDepthW?: number;
   renderDepthH?: number;
+  // E2 — single-canvas composite (2D grid+agents, WebGPU grid). The canvas is
+  // WORLD-sized (W×H); one encoder presents the grid layer (a fullscreen quad
+  // reading the grid runtime's `colorsBuf`) then the agent disc pass with
+  // loadOp:'load' over it, so both layers ride ONE canvas. The main thread's
+  // zoom/pan blit scales the world-sized composite (the grid direct-render blit).
+  renderComposite?: boolean;
+  gridPresentPipeline?: GPURenderPipeline | null;
+  gridPresentBGL?: GPUBindGroupLayout | null;
+  gridPresentUniform?: GPUBuffer | null;
 }
 
 /** PR7c — the GPU-side spatial-hash build (clear→count→scan→scatter) + the
@@ -1088,6 +1097,15 @@ export interface AgentRenderSurface {
   renderDepthTex?: GPUTexture | null;
   renderDepthW?: number;
   renderDepthH?: number;
+  // E2 — single-canvas composite (2D grid+agents, WebGPU grid). The canvas is
+  // WORLD-sized (W×H); one encoder presents the grid layer (a fullscreen quad
+  // reading the grid runtime's `colorsBuf`) then the agent disc pass with
+  // loadOp:'load' over it, so both layers ride ONE canvas. The main thread's
+  // zoom/pan blit scales the world-sized composite (the grid direct-render blit).
+  renderComposite?: boolean;
+  gridPresentPipeline?: GPURenderPipeline | null;
+  gridPresentBGL?: GPUBindGroupLayout | null;
+  gridPresentUniform?: GPUBuffer | null;
 }
 
 /** The camera + tiling + graphics uniform. Field order MIRRORS
@@ -1115,6 +1133,12 @@ export interface AgentRenderView {
   bgG: number;
   bgB: number;
   bgA: number;
+  // E2 composite only (CPU-side flags — NOT part of the RENDER_VIEW byte layout,
+  // ignored by uploadAgentRenderView): the per-layer Show toggles. `showGrid` off
+  // → skip the grid pass (agent pass clears to bg*); `showAgents` off → skip the
+  // agent disc draw. Both off → a plain bg clear.
+  showGrid?: boolean;
+  showAgents?: boolean;
 }
 const RENDER_VIEW_BYTES = 96;
 
@@ -1464,61 +1488,71 @@ async function setupAgentSphereRender(rt: AgentRenderSurface, canvas: OffscreenC
   }
 }
 
+/** Build the 2D disc render pipelines + bind group + view uniform on `rt` (the
+ *  canvas must already be configured). Shared by the standalone disc render
+ *  (setupAgentDiscRender) and the E2 composite (setupAgentCompositeRender), so
+ *  the two paths can't drift on the disc pass. Returns false on a WGSL error. */
+async function buildAgentDiscPipelines(rt: AgentRenderSurface): Promise<boolean> {
+  const format: GPUTextureFormat = 'rgba8unorm';
+  const module = rt.device.createShaderModule({ code: agentRenderWGSL(rt.layout) });
+  const info = await module.getCompilationInfo();
+  const errs = info.messages.filter(m => m.type === 'error');
+  if (errs.length > 0) {
+    // eslint-disable-next-line no-console
+    console.error('[agents/webgpu] render WGSL compile errors:\n' + errs.map(m => `  line ${m.lineNum}: ${m.message}`).join('\n'));
+    return false;
+  }
+  const bgl = rt.device.createBindGroupLayout({
+    label: 'agent-render-bgl',
+    entries: [
+      { binding: 0, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: { type: 'read-only-storage' } },
+      { binding: 1, visibility: GPUShaderStage.VERTEX, buffer: { type: 'read-only-storage' } },
+      { binding: 2, visibility: GPUShaderStage.VERTEX, buffer: { type: 'read-only-storage' } },
+      { binding: 3, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: { type: 'uniform' } },
+    ],
+  });
+  const pl = rt.device.createPipelineLayout({ label: 'agent-render-pl', bindGroupLayouts: [bgl] });
+  const mkPipe = (label: string, blend: GPUBlendState): GPURenderPipeline => rt.device.createRenderPipeline({
+    label, layout: pl,
+    vertex: { module, entryPoint: 'vsMain' },
+    fragment: { module, entryPoint: 'fsMain', targets: [{ format, blend }] },
+    primitive: { topology: 'triangle-strip' },
+  });
+  const plainBlend: GPUBlendState = {
+    color: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
+    alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
+  };
+  const glowBlend: GPUBlendState = {
+    color: { srcFactor: 'one', dstFactor: 'one', operation: 'add' },
+    alpha: { srcFactor: 'one', dstFactor: 'one', operation: 'add' },
+  };
+  const renderViewBuf = rt.device.createBuffer({ label: 'agent-render-view', size: RENDER_VIEW_BYTES, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+  rt.renderViewBuf = renderViewBuf;
+  rt.renderPlainPipeline = mkPipe('agent-render-plain', plainBlend);
+  rt.renderGlowPipeline = mkPipe('agent-render-glow', glowBlend);
+  rt.renderBindGroup = rt.device.createBindGroup({
+    label: 'agent-render-bg', layout: bgl,
+    entries: [
+      { binding: 0, resource: { buffer: rt.agentF32Buf } },
+      { binding: 1, resource: { buffer: rt.agentAliveBuf } },
+      { binding: 2, resource: { buffer: rt.agentColorsBuf } },
+      { binding: 3, resource: { buffer: renderViewBuf } },
+    ],
+  });
+  return true;
+}
+
 async function setupAgentDiscRender(rt: AgentRenderSurface, canvas: OffscreenCanvas): Promise<boolean> {
   try {
     const ctx = canvas.getContext('webgpu') as GPUCanvasContext | null;
     if (!ctx) return false;
     const format: GPUTextureFormat = 'rgba8unorm';
     ctx.configure({ device: rt.device, format, usage: GPUTextureUsage.RENDER_ATTACHMENT, alphaMode: 'premultiplied' });
-    const module = rt.device.createShaderModule({ code: agentRenderWGSL(rt.layout) });
-    const info = await module.getCompilationInfo();
-    const errs = info.messages.filter(m => m.type === 'error');
-    if (errs.length > 0) {
-      // eslint-disable-next-line no-console
-      console.error('[agents/webgpu] render WGSL compile errors:\n' + errs.map(m => `  line ${m.lineNum}: ${m.message}`).join('\n'));
-      return false;
-    }
-    const bgl = rt.device.createBindGroupLayout({
-      label: 'agent-render-bgl',
-      entries: [
-        { binding: 0, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: { type: 'read-only-storage' } },
-        { binding: 1, visibility: GPUShaderStage.VERTEX, buffer: { type: 'read-only-storage' } },
-        { binding: 2, visibility: GPUShaderStage.VERTEX, buffer: { type: 'read-only-storage' } },
-        { binding: 3, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: { type: 'uniform' } },
-      ],
-    });
-    const pl = rt.device.createPipelineLayout({ label: 'agent-render-pl', bindGroupLayouts: [bgl] });
-    const mkPipe = (label: string, blend: GPUBlendState): GPURenderPipeline => rt.device.createRenderPipeline({
-      label, layout: pl,
-      vertex: { module, entryPoint: 'vsMain' },
-      fragment: { module, entryPoint: 'fsMain', targets: [{ format, blend }] },
-      primitive: { topology: 'triangle-strip' },
-    });
-    const plainBlend: GPUBlendState = {
-      color: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
-      alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
-    };
-    const glowBlend: GPUBlendState = {
-      color: { srcFactor: 'one', dstFactor: 'one', operation: 'add' },
-      alpha: { srcFactor: 'one', dstFactor: 'one', operation: 'add' },
-    };
-    const renderViewBuf = rt.device.createBuffer({ label: 'agent-render-view', size: RENDER_VIEW_BYTES, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
-    const renderBindGroup = rt.device.createBindGroup({
-      label: 'agent-render-bg', layout: bgl,
-      entries: [
-        { binding: 0, resource: { buffer: rt.agentF32Buf } },
-        { binding: 1, resource: { buffer: rt.agentAliveBuf } },
-        { binding: 2, resource: { buffer: rt.agentColorsBuf } },
-        { binding: 3, resource: { buffer: renderViewBuf } },
-      ],
-    });
+    if (!(await buildAgentDiscPipelines(rt))) return false;
     rt.renderCanvas = canvas;
     rt.renderCtx = ctx;
-    rt.renderViewBuf = renderViewBuf;
-    rt.renderPlainPipeline = mkPipe('agent-render-plain', plainBlend);
-    rt.renderGlowPipeline = mkPipe('agent-render-glow', glowBlend);
-    rt.renderBindGroup = renderBindGroup;
     rt.renderActive = true;
+    rt.renderComposite = false;
     rt.renderClear = [0, 0, 0, 0];
     rt.renderGlow = false;
     return true;
@@ -1526,6 +1560,189 @@ async function setupAgentDiscRender(rt: AgentRenderSurface, canvas: OffscreenCan
     rt.renderActive = false;
     return false;
   }
+}
+
+// ---------------------------------------------------------------------------
+// E2 — single-canvas composite: grid layer + agent discs on ONE world-sized
+// canvas in ONE encoder. The grid layer is a fullscreen-triangle render pass
+// reading the grid runtime's `colorsBuf` (row-major RGBA8 u32/cell) — the
+// "render-pass equivalent" of the grid's compute presentColors, so the canvas
+// stays RENDER_ATTACHMENT-only (no STORAGE_BINDING divergence, no compute-then-
+// render on the same texture). The agent disc pass loads over it (loadOp:'load').
+// The camera is WORLD space (scalePx=1, ox=oy=0, canvas=world); the main thread's
+// zoom/pan blit scales the world-sized composite. Accepted tradeoff: agents render
+// at world resolution → blurry at high zoom (documented in the E2 report/Help).
+// ---------------------------------------------------------------------------
+
+/** WGSL: a fullscreen triangle that reads the grid `colorsBuf` (packed RGBA8 u32
+ *  per cell, row-major) at the fragment's cell and outputs premultiplied — the
+ *  grid layer of the composite. gridW/gridH come from a tiny uniform (the canvas
+ *  is world-sized, so fragCoord maps 1:1 to cells). */
+const GRID_PRESENT_WGSL = `
+struct GridDims { w : u32, h : u32, _p0 : u32, _p1 : u32 };
+@group(0) @binding(0) var<storage, read> colorsIn : array<u32>;
+@group(0) @binding(1) var<uniform>       dims     : GridDims;
+
+@vertex
+fn vsMain(@builtin(vertex_index) vi : u32) -> @builtin(position) vec4<f32> {
+  // A single oversized triangle covering the viewport.
+  var p = vec2<f32>(-1.0, -1.0);
+  if (vi == 1u) { p = vec2<f32>(3.0, -1.0); }
+  else if (vi == 2u) { p = vec2<f32>(-1.0, 3.0); }
+  return vec4<f32>(p, 0.0, 1.0);
+}
+
+@fragment
+fn fsMain(@builtin(position) fragCoord : vec4<f32>) -> @location(0) vec4<f32> {
+  let cx : u32 = u32(fragCoord.x);
+  let cy : u32 = u32(fragCoord.y);
+  if (cx >= dims.w || cy >= dims.h) { discard; }
+  let packed : u32 = colorsIn[cy * dims.w + cx];
+  let r : f32 = f32((packed >>  0u) & 0xffu) / 255.0;
+  let g : f32 = f32((packed >>  8u) & 0xffu) / 255.0;
+  let b : f32 = f32((packed >> 16u) & 0xffu) / 255.0;
+  let a : f32 = f32((packed >> 24u) & 0xffu) / 255.0;
+  // Premultiplied (the canvas is 'premultiplied'); default a=1 → identity.
+  return vec4<f32>(r * a, g * a, b * a, a);
+}`;
+
+/** Set up the composite render surface: configure the WORLD-sized canvas
+ *  (RENDER_ATTACHMENT), build the disc pipelines AND the grid-present pipeline.
+ *  Non-fatal on failure (returns false → the worker keeps the two-canvas path).
+ *  The grid `colorsBuf` is passed per-present (it can be rebuilt on recompile),
+ *  so only the pipeline/BGL/uniform are stored here. */
+export async function setupAgentCompositeRender(rt: AgentRenderSurface, canvas: OffscreenCanvas): Promise<boolean> {
+  try {
+    const ctx = canvas.getContext('webgpu') as GPUCanvasContext | null;
+    if (!ctx) return false;
+    const format: GPUTextureFormat = 'rgba8unorm';
+    // COPY_SRC so a DEV probe can read composited pixels back (occlusion-safe
+    // verification); harmless in production.
+    ctx.configure({ device: rt.device, format, usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC, alphaMode: 'premultiplied' });
+    if (!(await buildAgentDiscPipelines(rt))) return false;
+    const gmod = rt.device.createShaderModule({ code: GRID_PRESENT_WGSL });
+    const ginfo = await gmod.getCompilationInfo();
+    const gerrs = ginfo.messages.filter(m => m.type === 'error');
+    if (gerrs.length > 0) {
+      // eslint-disable-next-line no-console
+      console.error('[agents/webgpu] grid-present WGSL compile errors:\n' + gerrs.map(m => `  line ${m.lineNum}: ${m.message}`).join('\n'));
+      return false;
+    }
+    const gbgl = rt.device.createBindGroupLayout({
+      label: 'grid-present-bgl',
+      entries: [
+        { binding: 0, visibility: GPUShaderStage.FRAGMENT, buffer: { type: 'read-only-storage' } },
+        { binding: 1, visibility: GPUShaderStage.FRAGMENT, buffer: { type: 'uniform' } },
+      ],
+    });
+    const gpl = rt.device.createPipelineLayout({ label: 'grid-present-pl', bindGroupLayouts: [gbgl] });
+    rt.gridPresentPipeline = rt.device.createRenderPipeline({
+      label: 'grid-present', layout: gpl,
+      vertex: { module: gmod, entryPoint: 'vsMain' },
+      fragment: { module: gmod, entryPoint: 'fsMain', targets: [{ format }] },   // opaque write (loadOp clear)
+      primitive: { topology: 'triangle-list' },
+    });
+    rt.gridPresentBGL = gbgl;
+    rt.gridPresentUniform = rt.device.createBuffer({ label: 'grid-present-dims', size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+    rt.renderCanvas = canvas;
+    rt.renderCtx = ctx;
+    rt.renderActive = true;
+    rt.renderComposite = true;
+    rt.renderClear = [0, 0, 0, 0];
+    rt.renderGlow = false;
+    return true;
+  } catch {
+    rt.renderActive = false;
+    rt.renderComposite = false;
+    return false;
+  }
+}
+
+/** Encode the composite present into `enc`: grid-present pass (fullscreen quad
+ *  reading `gridColorsBuf`, loadOp clear) then the agent disc pass (loadOp load).
+ *  `gridColorsBuf` is the LIVE grid runtime `colorsBuf` (passed per-present so a
+ *  recompile-rebuilt buffer is always current). No-op unless composite is active. */
+export function presentCompositeEncode(rt: AgentRenderSurface, enc: GPUCommandEncoder, gridColorsBuf: GPUBuffer, gridW: number, gridH: number, hw: number, showGrid: boolean, showAgents: boolean): void {
+  if (!rt.renderActive || !rt.renderComposite || !rt.renderCtx) return;
+  if (!rt.renderBindGroup || !rt.renderViewBuf || !rt.gridPresentPipeline || !rt.gridPresentBGL || !rt.gridPresentUniform) return;
+  // Keep the uniform's highWater == the draw's instance decomposition base.
+  rt.device.queue.writeBuffer(rt.renderViewBuf, 0, new Uint32Array([Math.max(1, hw) >>> 0]).buffer);
+  const tex = rt.renderCtx.getCurrentTexture();
+  const view = tex.createView();
+  if (showGrid) {
+    // Pass 1 — grid layer (fullscreen triangle), clears to transparent then writes.
+    rt.device.queue.writeBuffer(rt.gridPresentUniform, 0, new Uint32Array([gridW >>> 0, gridH >>> 0, 0, 0]).buffer);
+    const gbind = rt.device.createBindGroup({
+      label: 'grid-present-bg', layout: rt.gridPresentBGL,
+      entries: [
+        { binding: 0, resource: { buffer: gridColorsBuf } },
+        { binding: 1, resource: { buffer: rt.gridPresentUniform } },
+      ],
+    });
+    const gp = enc.beginRenderPass({
+      label: 'grid-present-pass',
+      colorAttachments: [{ view, loadOp: 'clear', storeOp: 'store', clearValue: { r: 0, g: 0, b: 0, a: 0 } }],
+    });
+    gp.setPipeline(rt.gridPresentPipeline); gp.setBindGroup(0, gbind); gp.draw(3); gp.end();
+  }
+  // Pass 2 — agent discs (+ the grid-hidden background clear). Runs when agents
+  // show, OR (grid hidden) to clear the canvas to the agent background. When the
+  // grid shows, LOAD over it; when hidden, CLEAR to bg2d (premultiplied in
+  // renderClear) so agents sit on a solid backdrop.
+  if (showAgents || !showGrid) {
+    const [cr, cg, cb, ca] = rt.renderClear ?? [0, 0, 0, 0];
+    const ap = enc.beginRenderPass({
+      label: 'agent-composite-pass',
+      colorAttachments: [{ view, loadOp: showGrid ? 'load' : 'clear', storeOp: 'store', clearValue: { r: cr, g: cg, b: cb, a: ca } }],
+    });
+    if (showAgents) {
+      ap.setPipeline(rt.renderGlow ? rt.renderGlowPipeline! : rt.renderPlainPipeline!);
+      ap.setBindGroup(0, rt.renderBindGroup);
+      const copies = Math.max(1, rt.renderCopiesX ?? 1) * Math.max(1, rt.renderCopiesY ?? 1);
+      ap.draw(4, Math.max(1, hw) * copies);
+    }
+    ap.end();
+  }
+}
+
+/** Sync the render buffers from the CPU store (tight fields + colours) and
+ *  present the composite (grid + agents) in one encoder+submit. Used by every
+ *  composite present point (batch tail, camera, mutation). `showGrid`/`showAgents`
+ *  gate the per-layer passes (Layers panel). */
+export function presentAgentCompositeFromStore(rt: AgentRenderSurface, gridColorsBuf: GPUBuffer, gridW: number, gridH: number, s: AgentStore, showGrid: boolean, showAgents: boolean): void {
+  if (!rt.renderActive || !rt.renderComposite) return;
+  uploadAgentRenderFields(rt, s);
+  const enc = rt.device.createCommandEncoder({ label: 'agent-composite-present' });
+  presentCompositeEncode(rt, enc, gridColorsBuf, gridW, gridH, s.highWater, showGrid, showAgents);
+  rt.device.queue.submit([enc.finish()]);
+}
+
+/** DEV/verification only: present the composite, then copy the whole canvas
+ *  texture into a readback buffer and return the RGBA bytes at the given
+ *  world-cell sample points (px,py in canvas/world coords). Occlusion-safe proof
+ *  that BOTH layers land on ONE texture (grid pixel under a disc, disc pixel).
+ *  Returns null if the surface isn't a composite. */
+export async function debugReadCompositePixels(rt: AgentRenderSurface, gridColorsBuf: GPUBuffer, gridW: number, gridH: number, s: AgentStore, showGrid: boolean, showAgents: boolean, points: Array<[number, number]>): Promise<Array<[number, number, number, number]> | null> {
+  if (!rt.renderActive || !rt.renderComposite || !rt.renderCtx) return null;
+  uploadAgentRenderFields(rt, s);
+  const enc = rt.device.createCommandEncoder({ label: 'agent-composite-dev-readback' });
+  presentCompositeEncode(rt, enc, gridColorsBuf, gridW, gridH, s.highWater, showGrid, showAgents);
+  const tex = rt.renderCtx.getCurrentTexture();
+  const W = tex.width, H = tex.height;
+  const bytesPerRow = Math.ceil((W * 4) / 256) * 256;
+  const rb = rt.device.createBuffer({ label: 'composite-readback', size: bytesPerRow * H, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
+  enc.copyTextureToBuffer({ texture: tex }, { buffer: rb, bytesPerRow, rowsPerImage: H }, { width: W, height: H, depthOrArrayLayers: 1 });
+  rt.device.queue.submit([enc.finish()]);
+  await rb.mapAsync(GPUMapMode.READ);
+  const data = new Uint8Array(rb.getMappedRange().slice(0));
+  rb.unmap(); rb.destroy();
+  const out: Array<[number, number, number, number]> = [];
+  for (const [px, py] of points) {
+    const x = Math.min(W - 1, Math.max(0, px | 0)), y = Math.min(H - 1, Math.max(0, py | 0));
+    const o = y * bytesPerRow + x * 4;
+    out.push([data[o]!, data[o + 1]!, data[o + 2]!, data[o + 3]!]);
+  }
+  return out;
 }
 
 /** Pack the CPU store's per-agent RGBA (s.colors) into the GPU agentColors buffer
@@ -1717,8 +1934,9 @@ export function destroyAgentRenderSurface(rt: AgentRenderSurface | null): void {
   if (!rt) return;
   rt.renderActive = false;
   rt.renderCtx = null;
+  rt.renderComposite = false;
   if (rt.renderDepthTex) { try { rt.renderDepthTex.destroy(); } catch { /* non-fatal */ } rt.renderDepthTex = null; }
-  const bufs = [rt.agentF32Buf, rt.agentAliveBuf, rt.agentColorsBuf, rt.renderViewBuf ?? null, rt.renderView3DBuf ?? null];
+  const bufs = [rt.agentF32Buf, rt.agentAliveBuf, rt.agentColorsBuf, rt.renderViewBuf ?? null, rt.renderView3DBuf ?? null, rt.gridPresentUniform ?? null];
   for (const b of bufs) { if (b) try { b.destroy(); } catch { /* non-fatal */ } }
   // E1: release the shared-device reference (was: destroy a per-surface device).
   releaseSharedGpuDevice(rt.device);
@@ -2367,11 +2585,13 @@ export function destroyAgentWebGPURuntime(rt: AgentWebGPURuntime | null): void {
     rt.resident?.countsBuf ?? null, rt.resident?.cursorBuf ?? null, rt.resident?.hashParamsBuf ?? null,
     rt.resident?.sortedBuf ?? null, rt.resident?.sortedIdBuf ?? null,
     rt.renderViewBuf ?? null, rt.renderView3DBuf ?? null,   // + Phase C 3D uniform
+    rt.gridPresentUniform ?? null,   // + E2 composite grid-dims uniform
   ];
   // A1 render canvas is a transferred OffscreenCanvas — its context is released
   // with the device; just drop the references (unconfigure is implicit on destroy).
   rt.renderActive = false;
   rt.renderCtx = null;
+  rt.renderComposite = false;
   if (rt.renderDepthTex) { try { rt.renderDepthTex.destroy(); } catch { /* non-fatal */ } rt.renderDepthTex = null; }
   for (const b of bufs) { if (b) try { b.destroy(); } catch { /* non-fatal */ } }
   for (const bucket of rt.stagingPool.values()) for (const e of bucket) { try { e.buffer.destroy(); } catch { /* non-fatal */ } }

@@ -1815,6 +1815,14 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   // The gate result (general model properties) — read by the agentRuntimeReady
   // handler to decide whether to (re)attach the agent canvas.
   const agentRenderEligibleRef = useRef<boolean>(false);
+  // E2: this model wants the single-canvas COMPOSITE (2D grid+agents, WebGPU grid,
+  // WebGPU agents) — the transferred canvas is WORLD-sized (grid dims) and the
+  // worker composites the grid layer + the agent discs into it in one encoder.
+  // The main thread blits the world-sized composite scaled+tiled (the grid
+  // direct-render blit), NOT 1:1. False → the display-sized standard agent render.
+  const agentCompositeEligibleRef = useRef<boolean>(false);
+  // Set from the agentRenderStatus ack: the worker actually enabled the composite.
+  const agentCompositeActiveRef = useRef<boolean>(false);
   // We owe the worker a canvas attach on the next agentRuntimeReady.
   const pendingAgentCanvasAttach = useRef<boolean>(false);
   // The placeholder canvas whose control was transferred to the worker (becomes
@@ -1822,6 +1830,8 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   const agentRenderCanvasRef = useRef<HTMLCanvasElement | null>(null);
   // The fresh canvas awaiting the agentRenderStatus ack.
   const pendingAgentRenderCanvas = useRef<HTMLCanvasElement | null>(null);
+  // Whether the pending attach requested the E2 composite (world-sized canvas).
+  const pendingAgentCompositeRef = useRef<boolean>(false);
   // The display pixel size the agent render canvas was attached at (a parent
   // resize past this needs a fresh re-attach — transferred canvas dims are fixed).
   const agentRenderCanvasDimsRef = useRef<{ w: number; h: number }>({ w: 0, h: 0 });
@@ -2367,6 +2377,27 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     if (!canvas) return null;
     const w = gridWidth.current, h = gridHeight.current;
     if (!w || !h) return null;
+    // E2 composite: the canvas is WORLD-sized and carries the grid layer too. The
+    // agent discs render in WORLD space (scalePx=1, no offset, canvas=world, one
+    // copy — the main thread's zoom/pan blit does the scaling + infinity tiling).
+    // No bg (the grid layer IS the background; the agent pass loads over it).
+    if (agentCompositeActiveRef.current) {
+      // "Show CA grid" off → the composite hides the grid layer + the agent pass
+      // clears to the agent bg2d backdrop (mirrors the standard render's bg fill).
+      const gridShown = gridCellsOnRef.current && showCaGridRef.current;
+      let cbgR = 0, cbgG = 0, cbgB = 0, cbgA = 0;
+      if (!gridShown && bg2dRef.current) { const c = hexToRgba(bg2dRef.current); cbgR = c.r / 255; cbgG = c.g / 255; cbgB = c.b / 255; cbgA = 1; }
+      return {
+        highWater: 0,
+        scalePx: 1, oxPx: 0, oyPx: 0, canvasW: w, canvasH: h,
+        worldW: w, worldH: h,
+        copiesX: 1, copiesY: 1, startX: 0, startY: 0,
+        outlineOn: agentOutlinesRef.current ? 1 : 0,
+        glowOn: 0, glowSize: 0, glowIntensity: 0, glowSteepness: 0,
+        bgR: cbgR, bgG: cbgG, bgB: cbgB, bgA: cbgA,
+        showGrid: gridShown, showAgents: !!showAgentsRef.current,
+      };
+    }
     const parentW = canvas.parentElement?.clientWidth ?? 500;
     const parentH = canvas.parentElement?.clientHeight ?? 500;
     const zoom = zoomRef.current, pan = panRef.current;
@@ -2418,7 +2449,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       const v3 = view as AgentRenderView3D, v2 = view as AgentRenderView;
       const key = v3.mode === '3d'
         ? '3d|' + v3.mvp.join(',') + `|${v3.camForwardX}|${v3.lightX}|${v3.lightY}|${v3.lightZ}|${v3.ambient}|${v3.diffuse}|${v3.specular}|${v3.outlineOn}|${v3.bgR}|${v3.bgG}|${v3.bgB}|${v3.bgA}|${v3.halfX}|${v3.halfY}|${v3.halfZ}`
-        : `${v2.scalePx}|${v2.oxPx}|${v2.oyPx}|${v2.canvasW}|${v2.canvasH}|${v2.startX}|${v2.startY}|${v2.copiesX}|${v2.copiesY}|${v2.outlineOn}|${v2.glowOn}|${v2.glowSize}|${v2.glowIntensity}|${v2.glowSteepness}|${v2.bgR}|${v2.bgG}|${v2.bgB}|${v2.bgA}`;
+        : `${v2.scalePx}|${v2.oxPx}|${v2.oyPx}|${v2.canvasW}|${v2.canvasH}|${v2.startX}|${v2.startY}|${v2.copiesX}|${v2.copiesY}|${v2.outlineOn}|${v2.glowOn}|${v2.glowSize}|${v2.glowIntensity}|${v2.glowSteepness}|${v2.bgR}|${v2.bgG}|${v2.bgB}|${v2.bgA}|${v2.showGrid ? 1 : 0}|${v2.showAgents ? 1 : 0}`;
       if (key === lastAgentCameraKeyRef.current) return;
       lastAgentCameraKeyRef.current = key;
       workerRef.current.postMessage({ type: 'setAgentCamera', view });
@@ -2511,15 +2542,27 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       }
       return;
     }
-    const w = Math.max(1, canvas.parentElement?.clientWidth ?? canvas.clientWidth ?? 500);
-    const h = Math.max(1, canvas.parentElement?.clientHeight ?? canvas.clientHeight ?? 500);
+    // E2 composite: the transferred canvas is WORLD-sized (grid dims) so the grid
+    // present writes 1:1 texels and the agent discs render in world space; the
+    // main thread scales the composite via its zoom/pan blit. The DIMS ref records
+    // the DISPLAY size the camera/resize logic keys on (the composite canvas dims
+    // are the world, independent of a display resize — a resize re-posts the
+    // world-space camera, no re-attach needed since the canvas is world-fixed).
+    const composite = !!agentCompositeEligibleRef.current;
+    const dispW = Math.max(1, canvas.parentElement?.clientWidth ?? canvas.clientWidth ?? 500);
+    const dispH = Math.max(1, canvas.parentElement?.clientHeight ?? canvas.clientHeight ?? 500);
+    const cw = composite ? Math.max(1, gridWidth.current | 0) : dispW;
+    const ch = composite ? Math.max(1, gridHeight.current | 0) : dispH;
     try {
       const fresh = document.createElement('canvas');
-      fresh.width = w; fresh.height = h;
+      fresh.width = cw; fresh.height = ch;
       const offscreen = (fresh as HTMLCanvasElement & { transferControlToOffscreen: () => OffscreenCanvas }).transferControlToOffscreen();
       pendingAgentRenderCanvas.current = fresh;
-      agentRenderCanvasDimsRef.current = { w, h };
-      worker.postMessage({ type: 'attachAgentCanvas', canvas: offscreen, width: w, height: h }, [offscreen]);
+      pendingAgentCompositeRef.current = composite;
+      // For composite: record the DISPLAY size (drives the resize-reattach guard);
+      // for the standard render the canvas IS display-sized, so it's the same.
+      agentRenderCanvasDimsRef.current = { w: dispW, h: dispH };
+      worker.postMessage({ type: 'attachAgentCanvas', canvas: offscreen, width: cw, height: ch, composite }, [offscreen]);
     } catch (e) {
       // eslint-disable-next-line no-console
       console.warn('[agents] OffscreenCanvas transfer failed; staying on CPU overlay:', e);
@@ -3114,8 +3157,14 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     // shows the glyph distribution instead of going blank. One composited blit
     // (cheaper than per-cell fills for dense glyph models); the per-tile glyph
     // overlay below stays skipped at this zoom.
+    // E2 single-canvas composite: the WORLD-sized agent canvas already carries
+    // the grid layer + the agent discs (composited by the worker). Blit it via the
+    // same scaled+tiled grid-blit path (world→screen), and skip the separate grid
+    // srcCanvas blit / agent overlay / bg fill below. Agents render at world
+    // resolution here (blurry at high zoom — the accepted E2 tradeoff).
+    const agentComposite = agentCompositeActiveRef.current && !!agentRenderCanvasRef.current;
     let blitSource = srcCanvasRef.current;
-    if (!directRenderActiveRef.current && colors && colors.length >= w * h * 4 && srcCanvasRef.current) {
+    if (!agentComposite && !directRenderActiveRef.current && colors && colors.length >= w * h * 4 && srcCanvasRef.current) {
       const codes = glyphCodesRef.current;
       const gcols = glyphColorsRef.current;
       const fb = glyphFallbackRef.current;
@@ -3151,7 +3200,11 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     // agents-only model (gridCells off) never draws the grid, so the environment
     // background applies without the user unchecking "Show".
     const showGrid2d = gridCellsOnRef.current && (!isAgentModelRef.current || showCaGridRef.current);
-    if (showGrid2d && blitSource) {
+    // Composite: blit the world-sized composite (grid+agents) unconditionally (it
+    // holds agents even when the grid layer is hidden — the worker cleared to bg
+    // there). Else the normal grid blit gated on showGrid2d.
+    if (agentComposite) blitSource = agentRenderCanvasRef.current;
+    if ((showGrid2d || agentComposite) && blitSource) {
       if (infinity) {
         // Snap each tile's left/top edges to integer pixels and derive width/height
         // from the difference with the NEXT tile's left/top. This guarantees that
@@ -3172,8 +3225,9 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       }
     }
 
-    // Glyph overlay (after colour blit, before gridlines + cursor).
-    if (showGrid2d) drawGlyphOverlay();
+    // Glyph overlay (after colour blit, before gridlines + cursor). Skipped for
+    // the composite (glyph data isn't shipped; the grid layer is GPU-composited).
+    if (showGrid2d && !agentComposite) drawGlyphOverlay();
 
     // Draw gridlines when zoomed in enough (cells >= 4px)
     if (showGrid2d && showGridlinesRef.current && scale >= 4) {
@@ -3221,8 +3275,14 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     // CPU bg fill + drawAgentsOverlay. Camera lives in the worker uniform.
     // A transferred canvas has FIXED dims — a display resize needs a fresh
     // re-attach; keep the worker camera synced otherwise.
-    let agentDirect = agentDirectRenderActiveRef.current && agentRenderCanvasRef.current;
-    if (agentDirect) {
+    let agentDirect = !agentComposite && agentDirectRenderActiveRef.current && agentRenderCanvasRef.current;
+    if (agentComposite) {
+      // The composite canvas is WORLD-sized (display-independent) — no resize
+      // re-attach; a display resize is handled by the scaled blit above. Keep the
+      // world-space camera synced (changes only on outline / show-grid toggle;
+      // postAgentCamera is deduped, so a plain step/pan/zoom is a no-op).
+      postAgentCamera();
+    } else if (agentDirect) {
       const dims = agentRenderCanvasDimsRef.current;
       // Re-attach ONLY on a REAL size change: an occluded/hidden pane measures
       // the parent at 0×0 while the attach clamps to ≥1px, so comparing raw
@@ -3239,7 +3299,10 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
         postAgentCamera();
       }
     }
-    if (agentDirect && !showGrid2d && bg2dRef.current) {
+    if (agentComposite) {
+      // The composite already carries the grid layer + agents + the bg backdrop
+      // (worker clear when the grid is hidden) — nothing more to draw here.
+    } else if (agentDirect && !showGrid2d && bg2dRef.current) {
       // (bg is drawn by the render shader's clear — nothing to do here)
     } else if (!showGrid2d && bg2dRef.current) {
       ctx.save();
@@ -3258,7 +3321,11 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
 
     // Bond-Graph Agents — draw the agent circles on top of the grid + gridlines,
     // below the brush cursor. Render-layer toggle (req 7): skip when agents hidden.
-    if (agentDirect) {
+    // Composite: agents are already in the world-sized blit above (skip both the
+    // 1:1 blit AND the CPU overlay).
+    if (agentComposite) {
+      // agents drawn by the composite blit above
+    } else if (agentDirect) {
       if (showAgentsRef.current) ctx.drawImage(agentRenderCanvasRef.current!, 0, 0);
     } else if (showAgentsRef.current) {
       drawAgentsOverlay();
@@ -3927,6 +3994,24 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
         pendingAgentRenderCanvas.current = null;
         pendingAgentCanvasAttach.current = false;
         agentDirectRenderActiveRef.current = true;
+        // E2: the worker echoes whether it actually enabled the composite. Only
+        // treat the canvas as world-sized-composite when BOTH we requested it AND
+        // the worker confirmed (shared device present). A mismatch (worker refused)
+        // means it did the standard disc render — but we transferred a world-sized
+        // canvas, so drop back to a fresh standard re-attach next tick.
+        agentCompositeActiveRef.current = !!pendingAgentCompositeRef.current && !!msg.composite;
+        if (pendingAgentCompositeRef.current && !msg.composite) {
+          // Worker refused composite (no shared device) — the world-sized canvas is
+          // wrong for the disc render. Fall back to the standard path: forget the
+          // composite intent + re-attach display-sized.
+          agentCompositeEligibleRef.current = false;
+          agentDirectRenderActiveRef.current = false;
+          agentRenderCanvasRef.current = null;
+          pendingAgentCompositeRef.current = false;
+          maybeAttachAgentCanvas();
+          return;
+        }
+        pendingAgentCompositeRef.current = false;
         // Send the initial camera + draw so the canvas shows the current frame.
         const view = computeAgentRenderView();
         if (view && workerRef.current) { lastAgentCameraKeyRef.current = ''; workerRef.current.postMessage({ type: 'setAgentCamera', view }); }
@@ -4199,10 +4284,31 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       // alpha-blend OFF (translucent spheres need back-to-front sorting = gl3d's
       // job; opaque impostors here). 2D is unaffected (both behind `!is3D ||`).
       && (!is3D || (resolveMaxBonds(model.centerBased) === 0 && !alpha3dRef.current));
-    agentRenderEligibleRef.current = agentRenderEligible;
+    // E2 — single-canvas composite gate: a 2D grid+agents model with a WebGPU
+    // GRID + a WebGPU AGENT target. The worker composites the grid layer (grid
+    // colorsBuf) + the agent discs into ONE world-sized canvas (one encoder),
+    // removing the grid's per-gen colors readback + the two-canvas composite.
+    // Covers BOTH decoupled (D) and field-coupled resident (E1b) — the field
+    // bridge mechanism is orthogonal to the render (the CPU store is fresh each
+    // frame either way). Requires the WebGPU agent runtime (agentWebgpuRuntime)
+    // so the render surface always exists — a CPU agent target keeps the D
+    // two-canvas / A2 path (composite-for-CPU-agents is a follow-up). The worker
+    // asserts the shared device (E1) before enabling composite; if it refuses,
+    // it falls back to the disc render and acks composite:false.
+    const agentComposite =
+      agentModel && model.topologyMode?.gridCells !== false && !is3D
+      && !!dimsModel.properties.useWebGPU && !webgpuResult.error
+      && agentResult.agentTarget === 'webgpu'
+      && offscreenSupported
+      && (model.sprites?.length ?? 0) === 0 && !agentMetaballsRef.current.enabled;
+    // The union drives the attach machinery (a field-coupled composite model is
+    // NOT agentRenderEligible — agentDecoupled is false — but IS composite-eligible).
+    agentRenderEligibleRef.current = agentRenderEligible || agentComposite;
+    agentCompositeEligibleRef.current = agentComposite;
+    agentCompositeActiveRef.current = false;
     agentDirectRenderActiveRef.current = false;
     pendingAgentRenderCanvas.current = null;
-    pendingAgentCanvasAttach.current = agentRenderEligible;
+    pendingAgentCanvasAttach.current = agentRenderEligible || agentComposite;
     agentUiSyncPostedRef.current = true;   // worker default is ON
     // 3D Grid CA: effective layer count = d3 computed above (honours a resize-
     // panel dOverride; otherwise the model's depth, only when dimension==='3d' so

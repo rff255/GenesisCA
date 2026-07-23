@@ -48,6 +48,7 @@ import {
   uploadAgentAux, uploadAgentIndicators, readbackAgentIndicators, uploadAgentBondStore,
   ensureAgentResident, computeResidentHashParams, uploadAgentHashParams, dispatchResidentBatch, readbackAgentFrame,
   setupAgentDirectRender, uploadAgentRenderView, uploadAgentRenderView3D, presentAgentsOnce, presentAgentsFromStore,
+  setupAgentCompositeRender, presentAgentCompositeFromStore, debugReadCompositePixels,
   createAgentRenderOnlyRuntime, presentAgentRenderFromStore, destroyAgentRenderSurface,
   type AgentWebGPURuntime, type AgentRenderSurface, type FieldArray, type AgentRenderView, type AgentRenderView3D, type AgentOMShaderInput,
 } from './agentWebgpuRuntime';
@@ -367,6 +368,8 @@ interface GetStateMsg { type: 'getState' }
 interface SetRngSeedMsg { type: 'setRngSeed'; seed: number }
 /** E1b DEV probe (verification only; the app never sends it). */
 interface E1bCountersMsg { type: '__e1bCounters' }
+/** E2 DEV probe: read composited pixels back (occlusion-safe verification). */
+interface CompositeReadbackMsg { type: '__compositeReadback'; points: Array<[number, number]> }
 interface LoadStateMsg {
   type: 'loadState';
   width: number;
@@ -514,7 +517,7 @@ interface SetSimLayersMsg { type: 'setSimLayers'; simulateCells: boolean; simula
  *  transfers a display-pixel-sized OffscreenCanvas once the agent WebGPU runtime
  *  is ready. The worker sets up the render pipeline + presents once, then acks
  *  with `agentRenderStatus`. */
-interface AttachAgentCanvasMsg { type: 'attachAgentCanvas'; canvas: OffscreenCanvas; width: number; height: number }
+interface AttachAgentCanvasMsg { type: 'attachAgentCanvas'; canvas: OffscreenCanvas; width: number; height: number; composite?: boolean }
 /** Camera + tiling + graphics options for the agent render (world→screen +
  *  torus copies + outline/glow/bg). Present-only (no step). */
 interface SetAgentCameraMsg { type: 'setAgentCamera'; view: AgentRenderViewAny }
@@ -526,7 +529,7 @@ interface SetAgentUiSyncMsg { type: 'setAgentUiSync'; on: boolean }
  *  refreshDisplay). */
 interface RefreshAgentDisplayMsg { type: 'refreshAgentDisplay' }
 
-type WorkerMsg = InitMsg | StepMsg | PaintMsg | PaintManualMsg | ResetMsg | RecompileMsg | UpdateModelAttrsMsg | UpdateLookupTableMsg | ImportImageMsg | UpdateIndicatorsMsg | GetStateMsg | LoadStateMsg | ReadRegionMsg | WriteRegionMsg | ClearRegionMsg | SetUseWasmMsg | SetUseWebGPUMsg | ReadbackWebGPUMsg | ColorPassMsg | SetRecordingMsg | AttachCanvasMsg | RequestColorsSnapshotMsg | SetInspectCellsMsg | RefreshDisplayMsg | SeedAgentsMsg | CreateAgentMsg | KillAgentsMsg | PaintAgentsMsg | ClearAgentsMsg | FormBondMsg | BreakBondMsg | GetAgentStateMsg | MoveAgentsMsg | FormBondBatchMsg | SetAgentWasmBackedMsg | SetRngSeedMsg | SetSimLayersMsg | AttachAgentCanvasMsg | SetAgentCameraMsg | SetAgentUiSyncMsg | RefreshAgentDisplayMsg | E1bCountersMsg;
+type WorkerMsg = InitMsg | StepMsg | PaintMsg | PaintManualMsg | ResetMsg | RecompileMsg | UpdateModelAttrsMsg | UpdateLookupTableMsg | ImportImageMsg | UpdateIndicatorsMsg | GetStateMsg | LoadStateMsg | ReadRegionMsg | WriteRegionMsg | ClearRegionMsg | SetUseWasmMsg | SetUseWebGPUMsg | ReadbackWebGPUMsg | ColorPassMsg | SetRecordingMsg | AttachCanvasMsg | RequestColorsSnapshotMsg | SetInspectCellsMsg | RefreshDisplayMsg | SeedAgentsMsg | CreateAgentMsg | KillAgentsMsg | PaintAgentsMsg | ClearAgentsMsg | FormBondMsg | BreakBondMsg | GetAgentStateMsg | MoveAgentsMsg | FormBondBatchMsg | SetAgentWasmBackedMsg | SetRngSeedMsg | SetSimLayersMsg | AttachAgentCanvasMsg | SetAgentCameraMsg | SetAgentUiSyncMsg | RefreshAgentDisplayMsg | E1bCountersMsg | CompositeReadbackMsg;
 
 // ---------------------------------------------------------------------------
 // State
@@ -845,6 +848,13 @@ let agentStoreStale = false;
  *  sendColors does NOT double-present (its present reads the CPU store, wrong under
  *  free mode). Cleared by sendColors. */
 let agentBatchPresented = false;
+/** E2 single-canvas composite: the agent render canvas is WORLD-sized and the
+ *  worker composites the WebGPU grid layer (grid `colorsBuf`) + the agent discs
+ *  into it in one encoder. When active, the grid's per-gen colors readback is
+ *  skipped (sendColors ships no `colors`) and the agent present is the composite
+ *  (grid + agents), NOT the agent-only present. Set only for 2D grid+agents with a
+ *  WebGPU grid on the shared device; agents-only / two-canvas configs leave it false. */
+let agentCompositeActive = false;
 /** The last camera/tiling/graphics uniform (re-applied on attach / refocus).
  *  2D disc view OR the Phase C 3D sphere view (routed by applyAgentRenderView). */
 let agentRenderView: AgentRenderViewAny | null = null;
@@ -873,6 +883,18 @@ function activeRenderSurface(): AgentRenderSurface | null {
  *  uploads only the render fields (tight). */
 function presentAgentsIfActive(): void {
   if (!agentRenderActive || !agentStore) return;
+  // E2: single-canvas composite — present the WebGPU grid layer + agent discs
+  // together (world space). Reads the LIVE grid colorsBuf (post color pass).
+  if (agentCompositeActive && webgpuRuntime?.colorsBuf) {
+    const rt = activeRenderSurface();
+    if (rt) {
+      const v = agentRenderView as { showGrid?: boolean; showAgents?: boolean } | null;
+      const showGrid = v?.showGrid !== false;      // default: both layers shown
+      const showAgents = v?.showAgents !== false;
+      presentAgentCompositeFromStore(rt, webgpuRuntime.colorsBuf, webgpuRuntime.layout.gridWidth, webgpuRuntime.layout.gridHeight, agentStore, showGrid, showAgents);
+      return;
+    }
+  }
   if (agentWebgpuRuntime) presentAgentsFromStore(agentWebgpuRuntime, agentStore);
   else if (agentRenderRuntime) presentAgentRenderFromStore(agentRenderRuntime, agentStore);
 }
@@ -925,7 +947,7 @@ function initAgents(): void {
   agentGpuUploadPending = true;
   // A1: re-allocating the store drops the agent runtime below — its render canvas
   // needs re-attach (the main thread re-attaches on agentRuntimeReady).
-  agentRenderActive = false; agentStoreStale = false;
+  agentRenderActive = false; agentStoreStale = false; agentCompositeActive = false;
   // Re-allocating the store invalidates any GPU agent runtime bound to the old
   // store/dims ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â drop it (buildAgentWebGPUIfNeeded rebuilds against the fresh one).
   if (agentWebgpuRuntime) { destroyAgentWebGPURuntime(agentWebgpuRuntime); agentWebgpuRuntime = null; }
@@ -1107,7 +1129,7 @@ function buildAgentWebGPUIfNeeded(): void {
   if (agentWebgpuRuntime) { destroyAgentWebGPURuntime(agentWebgpuRuntime); agentWebgpuRuntime = null; }
   // A1: the render pipeline lived on the old runtime — the main thread must
   // re-attach its canvas once the new runtime is ready (agentRuntimeReady below).
-  agentRenderActive = false; agentStoreStale = false;
+  agentRenderActive = false; agentStoreStale = false; agentCompositeActive = false;
   // A2: a re-init/recompile may have swapped the store/dims — drop the CPU
   // render-only surface too (the main thread re-attaches on agentRuntimeReady).
   if (agentRenderRuntime) { destroyAgentRenderSurface(agentRenderRuntime); agentRenderRuntime = null; }
@@ -2388,7 +2410,7 @@ async function runAgentStepWebGPUInner(gpuFieldBridge?: GpuFieldBridge | null): 
     if (agentWebgpuRuntime === rt) {
       self.postMessage({ type: 'error', message: '[agents] WebGPU step failed, falling back to JS: ' + ((e as Error)?.message || e) });
       destroyAgentWebGPURuntime(agentWebgpuRuntime); agentWebgpuRuntime = null;
-      agentRenderActive = false; agentStoreStale = false;   // A1: runtime gone → render off
+      agentRenderActive = false; agentStoreStale = false; agentCompositeActive = false;   // A1: runtime gone → render off
     }
     return false;
   }
@@ -5047,7 +5069,11 @@ function sendColors(): void {
   // draw() detects this and only does the zoom/pan composite. Exception:
   // when GIF recording is on, finalizeStepWebGPU populated the `colors`
   // mirror via readback so the main thread can capture frames.
-  if (webgpuRuntime?.directRender && !recording) {
+  // E2 composite: the shared canvas already holds grid+agents (composited above
+  // via presentAgentsIfActive) — ship no grid `colors`; the main thread blits the
+  // composite. Recording captures the DISPLAY canvas (which holds the composite),
+  // so no colors readback is needed even under recording.
+  if ((webgpuRuntime?.directRender && !recording) || agentCompositeActive) {
     if (glyphsPayload) {
       self.postMessage(
         { type: 'stepped', generation, indicators, sieActive, reqId: ackId, glyphCodes: glyphsPayload.codes, glyphColors: glyphsPayload.colors, agents: agentsPayload, agentLiveCount },
@@ -5441,7 +5467,11 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
           // SetColorViewer-in-step (e.g. MNCA's "Case Colored"). Either way we
           // read the GPU colors buffer back ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â that's the canonical source.
           if (!msg.skipColorPass) runColorPassWebGPU();
-          await finalizeStepWebGPU({ needColors: !msg.skipColorPass });
+          // E2 composite: the grid layer is composited into the shared canvas from
+          // the GPU colorsBuf (grid-present pass) — so SKIP the per-gen colors
+          // readback (the CPU win). sendColors ships no `colors` + does the composite
+          // present (grid + agents). Else the two-canvas / readback path (unchanged).
+          await finalizeStepWebGPU({ needColors: !agentCompositeActive && !msg.skipColorPass });
           sendColors();
           if (stoppedByEvent !== null) {
             self.postMessage({ type: 'stopEvent', message: stoppedByEvent, reqId: msg.reqId });
@@ -6154,7 +6184,15 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
             rt = await createAgentRenderOnlyRuntime(pendingAgentRenderLayout!);
             if (!rt) { self.postMessage({ type: 'agentRenderStatus', active: false }); return; }
           }
-          const ok = await setupAgentDirectRender(rt, msg.canvas);
+          // E2: `composite` → the canvas is WORLD-sized and carries BOTH the
+          // WebGPU grid layer AND the agent discs (one encoder). Requires the grid
+          // runtime on the SAME shared device (E1) — assert before enabling.
+          const wantComposite = !!msg.composite
+            && !!webgpuRuntime && !!webgpuRuntime.colorsBuf
+            && rt.device === webgpuRuntime.device;
+          const ok = wantComposite
+            ? await setupAgentCompositeRender(rt, msg.canvas)
+            : await setupAgentDirectRender(rt, msg.canvas);
           if (!ok) {
             if (rt !== agentWebgpuRuntime) destroyAgentRenderSurface(rt);
             self.postMessage({ type: 'agentRenderStatus', active: false });
@@ -6162,10 +6200,11 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
           }
           if (rt !== agentWebgpuRuntime) agentRenderRuntime = rt;
           agentRenderActive = true;
+          agentCompositeActive = wantComposite;
           agentStoreStale = false;
           if (agentRenderView) applyAgentRenderView(rt, agentRenderView);
           presentAgentsIfActive();
-          self.postMessage({ type: 'agentRenderStatus', active: true });
+          self.postMessage({ type: 'agentRenderStatus', active: true, composite: agentCompositeActive });
         } catch (e) {
           agentRenderActive = false;
           self.postMessage({ type: 'agentRenderStatus', active: false, message: (e as Error)?.message || String(e) });
@@ -6635,6 +6674,26 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
         sharedDevice: !!(agentWebgpuRuntime && webgpuRuntime && agentWebgpuRuntime.device === webgpuRuntime.device),
         fieldSpecTypes: fieldSpecs.map(s => s.type),
       });
+      break;
+    }
+
+    case '__compositeReadback': {
+      // E2 DEV probe (verification only): present the composite + read pixels back
+      // at the given world-cell points → proves grid + agents land on ONE texture.
+      void (async () => {
+        try {
+          const rt = activeRenderSurface();
+          if (!agentCompositeActive || !rt || !agentStore || !webgpuRuntime?.colorsBuf) {
+            self.postMessage({ type: '__compositeReadback', pixels: null, composite: agentCompositeActive });
+            return;
+          }
+          const v = agentRenderView as { showGrid?: boolean; showAgents?: boolean } | null;
+          const px = await debugReadCompositePixels(rt, webgpuRuntime.colorsBuf, webgpuRuntime.layout.gridWidth, webgpuRuntime.layout.gridHeight, agentStore, v?.showGrid !== false, v?.showAgents !== false, msg.points);
+          self.postMessage({ type: '__compositeReadback', pixels: px, composite: true });
+        } catch (e) {
+          self.postMessage({ type: '__compositeReadback', pixels: null, error: (e as Error)?.message || String(e) });
+        }
+      })();
       break;
     }
 
