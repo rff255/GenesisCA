@@ -44,6 +44,7 @@ import {
   createAgentWebGPURuntime, destroyAgentWebGPURuntime, uploadAgentSoA, uploadAgentHash,
   uploadAgentControl, uploadAgentForceControl, dispatchAgentStep, readbackAgentStep, uploadAgentSpawnCursor, resetAgentStopFlag,
   uploadAgentField, readbackAgentField,
+  primeAgentFieldFromGrid, foldAgentFieldToGrid,
   uploadAgentAux, uploadAgentIndicators, readbackAgentIndicators, uploadAgentBondStore,
   ensureAgentResident, computeResidentHashParams, uploadAgentHashParams, dispatchResidentBatch, readbackAgentFrame,
   setupAgentDirectRender, uploadAgentRenderView, uploadAgentRenderView3D, presentAgentsOnce, presentAgentsFromStore,
@@ -364,6 +365,8 @@ interface UpdateIndicatorsMsg { type: 'updateIndicators'; indicators: IndicatorD
 interface GetStateMsg { type: 'getState' }
 /** DEV/test-only: force the shared xorshift32 RNG seed (PR6b-2 bit-parity test). */
 interface SetRngSeedMsg { type: 'setRngSeed'; seed: number }
+/** E1b DEV probe (verification only; the app never sends it). */
+interface E1bCountersMsg { type: '__e1bCounters' }
 interface LoadStateMsg {
   type: 'loadState';
   width: number;
@@ -523,7 +526,7 @@ interface SetAgentUiSyncMsg { type: 'setAgentUiSync'; on: boolean }
  *  refreshDisplay). */
 interface RefreshAgentDisplayMsg { type: 'refreshAgentDisplay' }
 
-type WorkerMsg = InitMsg | StepMsg | PaintMsg | PaintManualMsg | ResetMsg | RecompileMsg | UpdateModelAttrsMsg | UpdateLookupTableMsg | ImportImageMsg | UpdateIndicatorsMsg | GetStateMsg | LoadStateMsg | ReadRegionMsg | WriteRegionMsg | ClearRegionMsg | SetUseWasmMsg | SetUseWebGPUMsg | ReadbackWebGPUMsg | ColorPassMsg | SetRecordingMsg | AttachCanvasMsg | RequestColorsSnapshotMsg | SetInspectCellsMsg | RefreshDisplayMsg | SeedAgentsMsg | CreateAgentMsg | KillAgentsMsg | PaintAgentsMsg | ClearAgentsMsg | FormBondMsg | BreakBondMsg | GetAgentStateMsg | MoveAgentsMsg | FormBondBatchMsg | SetAgentWasmBackedMsg | SetRngSeedMsg | SetSimLayersMsg | AttachAgentCanvasMsg | SetAgentCameraMsg | SetAgentUiSyncMsg | RefreshAgentDisplayMsg;
+type WorkerMsg = InitMsg | StepMsg | PaintMsg | PaintManualMsg | ResetMsg | RecompileMsg | UpdateModelAttrsMsg | UpdateLookupTableMsg | ImportImageMsg | UpdateIndicatorsMsg | GetStateMsg | LoadStateMsg | ReadRegionMsg | WriteRegionMsg | ClearRegionMsg | SetUseWasmMsg | SetUseWebGPUMsg | ReadbackWebGPUMsg | ColorPassMsg | SetRecordingMsg | AttachCanvasMsg | RequestColorsSnapshotMsg | SetInspectCellsMsg | RefreshDisplayMsg | SeedAgentsMsg | CreateAgentMsg | KillAgentsMsg | PaintAgentsMsg | ClearAgentsMsg | FormBondMsg | BreakBondMsg | GetAgentStateMsg | MoveAgentsMsg | FormBondBatchMsg | SetAgentWasmBackedMsg | SetRngSeedMsg | SetSimLayersMsg | AttachAgentCanvasMsg | SetAgentCameraMsg | SetAgentUiSyncMsg | RefreshAgentDisplayMsg | E1bCountersMsg;
 
 // ---------------------------------------------------------------------------
 // State
@@ -2014,14 +2017,56 @@ function flushDeferredAgentGpuMsgs(): void {
   for (const m of q) self.onmessage!.call(self as never, { data: m } as MessageEvent<WorkerMsg>);
 }
 
-async function runAgentStepWebGPU(): Promise<boolean> {
+/** E1b — the per-gen GPU field bridge context: the LIVE grid `attrsRead` buffer
+ *  (it ping-pongs per step — re-resolve EVERY gen) + the grid attr byte offsets.
+ *  Passed only for a float-field WebGPU-grid + WebGPU-agent model on the shared
+ *  device; absent ⇒ runAgentStepWebGPUInner uses the CPU field bridge. */
+interface GpuFieldBridge {
+  gridAttrsReadBuf: GPUBuffer;
+  gridByteOffset: Record<string, number>;
+}
+
+// E1b DEV probe (verification only, mirrors E1's sharedGpuAdapterRequestCount) —
+// how many generations ran the GPU field bridge vs fell back to the CPU bridge.
+// The app never reads these; a test harness requests them via '__e1bCounters'.
+let e1bGpuBridgeGenCount = 0;
+let e1bCpuBridgeFallbackCount = 0;
+
+async function runAgentStepWebGPU(gpuFieldBridge?: GpuFieldBridge | null): Promise<boolean> {
   agentGpuStepInFlight = true;
   try {
-    return await runAgentStepWebGPUInner();
+    return await runAgentStepWebGPUInner(gpuFieldBridge);
   } finally {
     agentGpuStepInFlight = false;
     flushDeferredAgentGpuMsgs();
   }
+}
+
+/** E1b gate — a field-coupled agent model on a WebGPU grid + WebGPU agents,
+ *  sharing the E1 device, whose agent-accessible cell attrs are ALL `float`, runs
+ *  the per-gen field round-trip via GPU copyBufferToBuffer instead of the CPU
+ *  upload/readback. General properties only: WebGPU grid + WebGPU agent target +
+ *  live runtimes + the same GPUDevice + a field bridge present + every fieldSpec
+ *  float. Any int/bool/tag field, a non-shared device, or a missing runtime →
+ *  false → the CPU bridge (unchanged). */
+function agentFieldBridgeGpuEligible(): boolean {
+  const rt = agentWebgpuRuntime, grid = webgpuRuntime;
+  if (!rt || !rt.ready || agentTarget !== 'webgpu') return false;
+  if (!useWebGPU || !grid?.stepReady || !grid.attrsReadBuf) return false;
+  if (rt.device !== grid.device) return false;                         // E1 shared device required
+  if (rt.layout.fieldReadLen === 0 && rt.layout.fieldWriteLen === 0) return false;  // not a field model
+  for (const s of fieldSpecs) { if (s.type !== 'float') return false; }             // float byte-pattern copy only
+  return true;
+}
+
+/** Build the per-gen GPU field bridge context. The grid `attrsReadBuf` ping-pongs
+ *  per step, so this MUST be rebuilt EVERY gen (never cache it across steps). */
+function buildGpuFieldBridge(): GpuFieldBridge | null {
+  const grid = webgpuRuntime;
+  if (!grid || !grid.attrsReadBuf) return null;
+  const gridByteOffset: Record<string, number> = {};
+  for (const a of grid.layout.attrs) gridByteOffset[a.id] = a.byteOffset;
+  return { gridAttrsReadBuf: grid.attrsReadBuf, gridByteOffset };
 }
 
 // ---------------------------------------------------------------------------
@@ -2171,7 +2216,7 @@ async function runAgentBatchResident(count: number, bumpGeneration: boolean = tr
   }
 }
 
-async function runAgentStepWebGPUInner(): Promise<boolean> {
+async function runAgentStepWebGPUInner(gpuFieldBridge?: GpuFieldBridge | null): Promise<boolean> {
   const s = agentStore;
   const rt = agentWebgpuRuntime;
   if (!s || !rt || !rt.ready) return false;
@@ -2262,15 +2307,21 @@ async function runAgentStepWebGPUInner(): Promise<boolean> {
   // `fieldSpecs` is the agent-readable set; the readWrite subset is deposited.
   const hasFieldBridge = rt.layout.fieldReadLen > 0 || rt.layout.fieldWriteLen > 0;
   if (hasFieldBridge) {
-    const readArrays: Record<string, FieldArray> = {};
-    const writeArrays: Record<string, FieldArray> = {};
-    for (const spec of fieldSpecs) {
-      const arr = readAttrs[spec.id] as unknown as FieldArray | undefined;
-      if (!arr) continue;
-      readArrays[spec.id] = arr;
-      if (spec.agentAccess === 'readWrite') writeArrays[spec.id] = arr;
+    if (gpuFieldBridge) {
+      // E1b — GPU-side prime: copy the grid's attrsRead buffer into fieldRead +
+      // fieldDeposit (no CPU round-trip). Float-field WebGPU-grid models only.
+      primeAgentFieldFromGrid(rt, gpuFieldBridge.gridAttrsReadBuf, gpuFieldBridge.gridByteOffset, rt.layout.fieldTotal);
+    } else {
+      const readArrays: Record<string, FieldArray> = {};
+      const writeArrays: Record<string, FieldArray> = {};
+      for (const spec of fieldSpecs) {
+        const arr = readAttrs[spec.id] as unknown as FieldArray | undefined;
+        if (!arr) continue;
+        readArrays[spec.id] = arr;
+        if (spec.agentAccess === 'readWrite') writeArrays[spec.id] = arr;
+      }
+      uploadAgentField(rt, readArrays, writeArrays);
     }
-    uploadAgentField(rt, readArrays, writeArrays);
   }
 
   // Dispatch behaviour ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ force, then commit. `readbackAgentStep` reads the GPU's
@@ -2306,8 +2357,15 @@ async function runAgentStepWebGPUInner(): Promise<boolean> {
       // step uses; here the GPU owns them for the agent step).
       await readbackAgentIndicators(rt, cachedIndicators, agentWebgpuIndicatorIsInt());
     }
-    if (hasFieldBridge && rt.layout.fieldWriteLen > 0) {
-      // The deposit accumulator holds the evolved field ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ copy into readAttrs so
+    if (hasFieldBridge && rt.layout.fieldWriteLen > 0 && gpuFieldBridge) {
+      // E1b GPU-side fold: copy the deposit accumulator back into the grid's
+      // attrsRead buffer (the deposit words ARE the final f32 field). The grid step
+      // (runStepWebGPU, run by the batch loop) reads attrsRead, so its copy line
+      // carries the deposit into the next gen. readAttrs (CPU) stays stale; getState
+      // pulls it via ensureCpuAttrsFresh (gpuOwnsAttrs stays true).
+      foldAgentFieldToGrid(rt, gpuFieldBridge.gridAttrsReadBuf, gpuFieldBridge.gridByteOffset, rt.layout.fieldTotal);
+    } else if (hasFieldBridge && rt.layout.fieldWriteLen > 0) {
+      // CPU field bridge (JS/WASM grid, or a non-float field): the deposit accumulator holds the evolved field ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ copy into readAttrs so
       // the cell step (runStep) reads it (its w.set(r) carries it; diffusion spreads).
       const writeArrays: Record<string, FieldArray & { [i: number]: number }> = {};
       for (const spec of fieldSpecs) {
@@ -5325,7 +5383,26 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
             // then up every generation). Field-heavy 3D-agent models pay a DÃƒÆ’Ã¢â‚¬â€
             // per-step residency tax on WebGPU ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â prefer JS/WASM agents there, or a
             // shallow depth, until a same-device zero-copy field lands (Phase F).
-            if (agentStore && simulateAgents && webgpuRuntime) {
+            if (agentStore && simulateAgents && webgpuRuntime && agentFieldBridgeGpuEligible()) {
+              // E1b GPU field bridge: the field lives in the grid attrs (GPU). Copy it
+              // into the agent field buffers, dispatch the agent gen on the GPU, fold the
+              // deposit back into the grid attrs -- all GPU-side (no CPU round-trip).
+              // gpuOwnsAttrs stays true; readAttrs (CPU) is left stale (getState pulls it).
+              if (!gpuOwnsAttrs) { uploadAttrs(webgpuRuntime, readAttrs); gpuOwnsAttrs = true; }
+              const bridge = buildGpuFieldBridge();   // re-resolve the LIVE attrsReadBuf each gen (ping-pong)
+              const ranGpuBridge = bridge ? await runAgentStepWebGPU(bridge) : false;
+              if (ranGpuBridge) {
+                e1bGpuBridgeGenCount++;   // DEV probe
+                // runAgentStep advances sprites; the GPU path doesn't, so do it here.
+                if (hasAgentSprites && agentStore) advanceAgentSprites(agentStore);
+              } else {
+                e1bCpuBridgeFallbackCount++;   // DEV probe
+                // GPU bailed (hash overflow / device failure) -> CPU field bridge this gen.
+                if (agentUsesField && gpuOwnsAttrs) await ensureCpuAttrsFresh();
+                runAgentStep();
+                if (agentUsesField) { uploadAttrs(webgpuRuntime, readAttrs); gpuOwnsAttrs = false; }
+              }
+            } else if (agentStore && simulateAgents && webgpuRuntime) {
               if (agentUsesField && gpuOwnsAttrs) {
                 await ensureCpuAttrsFresh();        // GPUÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢CPU; flips gpuOwnsAttrs=false
               }
@@ -6543,6 +6620,21 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       if (useWebGPU && webgpuRuntime?.stepReady) {
         seedRngState(webgpuRuntime, rngState[0]!);
       }
+      break;
+    }
+
+    case '__e1bCounters': {
+      // E1b DEV probe (verification only) — report GPU-vs-CPU field-bridge gen
+      // counts + whether the model is currently GPU-field-bridge eligible.
+      self.postMessage({
+        type: '__e1bCounters',
+        gpuBridge: e1bGpuBridgeGenCount,
+        cpuFallback: e1bCpuBridgeFallbackCount,
+        eligible: agentFieldBridgeGpuEligible(),
+        useWebGPU, agentTarget,
+        sharedDevice: !!(agentWebgpuRuntime && webgpuRuntime && agentWebgpuRuntime.device === webgpuRuntime.device),
+        fieldSpecTypes: fieldSpecs.map(s => s.type),
+      });
       break;
     }
 

@@ -903,6 +903,77 @@ export async function readbackAgentField(
 }
 
 // ---------------------------------------------------------------------------
+// E1b — GPU field bridge (copyBufferToBuffer, no CPU round-trip).
+// For a field-coupled model on a WebGPU grid + WebGPU agents SHARING the E1
+// device, the cell field lives in the grid's `attrsRead` buffer (GPU). Instead
+// of the CPU `uploadAgentField`/`readbackAgentField` round-trip, copy the field
+// GPU-side. Correct ONLY when every field attr is `float` — the grid stores a
+// float attr as `bitcast<u32>(f32)`, the agent field buffers hold raw `f32`, so
+// the byte pattern is identical and a plain buffer copy is exact (the caller's
+// gate enforces the float-only condition; an int/bool/tag field needs the numeric
+// convert `uploadAgentField` does and keeps the CPU bridge).
+// ---------------------------------------------------------------------------
+
+/** Prime the agent `fieldRead` + `fieldDeposit` buffers by copying the grid's
+ *  `attrsRead` buffer GPU-side (replaces the CPU `uploadAgentField` prime).
+ *  `gridByteOffset` maps a field attr id → its byte offset in the grid attrs
+ *  buffer; `total` = `fieldTotal` (copies cells 0..total-1, so a constant-boundary
+ *  sentinel slot at index `total` is excluded automatically). Both buffers must be
+ *  on `rt.device` (the shared device). */
+export function primeAgentFieldFromGrid(
+  rt: AgentWebGPURuntime,
+  gridAttrsReadBuf: GPUBuffer,
+  gridByteOffset: Record<string, number>,
+  total: number,
+): void {
+  const L = rt.layout;
+  const bytes = total * 4;
+  if (bytes <= 0) return;
+  const enc = rt.device.createCommandEncoder({ label: 'agent-field-prime-gpu-enc' });
+  if (rt.fieldReadBuf && L.fieldReadLen > 0) {
+    for (const id of L.fieldReadAttrs) {
+      const off = gridByteOffset[id];
+      if (off === undefined) continue;
+      enc.copyBufferToBuffer(gridAttrsReadBuf, off, rt.fieldReadBuf, L.fieldReadBase[id]! * 4, bytes);
+    }
+  }
+  if (rt.fieldDepositBuf && L.fieldWriteLen > 0) {
+    // Prime the atomic deposit accumulator with the current field (mirrors
+    // uploadAgentField's priming so `add` accumulates onto it, `set`/`max`/`min`
+    // start from it). The deposit is f32-bitcast, matching the grid's f32 word.
+    for (const id of L.fieldWriteAttrs) {
+      const off = gridByteOffset[id];
+      if (off === undefined) continue;
+      enc.copyBufferToBuffer(gridAttrsReadBuf, off, rt.fieldDepositBuf, L.fieldWriteBase[id]! * 4, bytes);
+    }
+  }
+  rt.device.queue.submit([enc.finish()]);
+}
+
+/** Fold the agent `fieldDeposit` accumulator back into the grid's `attrsRead`
+ *  buffer GPU-side (replaces the CPU `readbackAgentField`). The deposit words ARE
+ *  the final f32 field (`readbackAgentField` is a plain copy), so the fold is a
+ *  plain buffer copy — no decode. Only `fieldWriteAttrs` fold. */
+export function foldAgentFieldToGrid(
+  rt: AgentWebGPURuntime,
+  gridAttrsReadBuf: GPUBuffer,
+  gridByteOffset: Record<string, number>,
+  total: number,
+): void {
+  const L = rt.layout;
+  if (!rt.fieldDepositBuf || L.fieldWriteLen === 0) return;
+  const bytes = total * 4;
+  if (bytes <= 0) return;
+  const enc = rt.device.createCommandEncoder({ label: 'agent-field-fold-gpu-enc' });
+  for (const id of L.fieldWriteAttrs) {
+    const off = gridByteOffset[id];
+    if (off === undefined) continue;
+    enc.copyBufferToBuffer(rt.fieldDepositBuf, L.fieldWriteBase[id]! * 4, gridAttrsReadBuf, off, bytes);
+  }
+  rt.device.queue.submit([enc.finish()]);
+}
+
+// ---------------------------------------------------------------------------
 // Dispatch.
 // ---------------------------------------------------------------------------
 

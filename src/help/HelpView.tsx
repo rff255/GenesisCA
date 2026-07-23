@@ -1757,7 +1757,11 @@ export function HelpView() {
               Particle-Life / Boids class) run whole frames <em>resident on the GPU</em>,
               tens of times faster than the CPU at 50k+ agents. Models outside that
               class use the per-generation GPU path, where the CPU&harr;GPU transfer
-              often makes JS/WASM the faster choice below ~10k agents.</li>
+              often makes JS/WASM the faster choice below ~10k agents. One exception: a
+              field-coupled model (agents that read/write a cell field) whose grid is{' '}
+              <em>also</em> on WebGPU and whose agent-accessible cell fields are all
+              Decimal (float) bridges the field entirely GPU-side each step &mdash; no CPU
+              field copy &mdash; roughly twice as fast as the CPU field bridge.</li>
             <li>The engine skips work it can prove is dead automatically &mdash; e.g. the
               built-in neighbour-density scan only runs when something actually reads it
               (a Neighbour Density node, division, or engine physics), so a pure
