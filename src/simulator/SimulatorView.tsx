@@ -1900,7 +1900,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   // (Decision D-TARGET). PR-A2 returns a placeholder (agents seed + render but
   // don't behave); PR-A3 wires the real compileAgentGraph over
   // model.agentGraphNodes (the behaviourStep loop + value-outs + force hooks).
-  const compileAgentModel = useCallback((stopIdxBase = 0, dimsModel?: CAModel): { behaviourCode?: string; initCode?: string; divisionCode?: string; outputMappingCodes?: Array<{ mappingId: string; code: string }>; stopMessages: string[]; colorViewer: string; error?: string; agentTarget: 'js' | 'wasm' | 'webgpu'; agentWasmBytes?: Uint8Array; agentWasmViewerGuardIds?: string[]; agentLayoutExtras?: AgentLayoutExtras; agentWasmLayoutSig?: { maxHashBins: number; totalBytes: number }; agentResidencyClean?: boolean; agentWebgpuBehaviourShader?: string; agentWebgpuForceShader?: string; agentWebgpuMaxAgents?: number; agentWebgpuMaxHashBins?: number; agentWebgpuLayout?: AgentWebGPULayout; agentRenderLayout?: AgentWebGPULayout; agentWebgpuUsesI32Write?: boolean; agentWebgpuUsage?: { usesBondStore?: boolean; usesIndicators?: boolean; usesAux?: boolean; usesSpawn?: boolean; usesStop?: boolean; usesForceScatter?: boolean } } => {
+  const compileAgentModel = useCallback((stopIdxBase = 0, dimsModel?: CAModel): { behaviourCode?: string; initCode?: string; divisionCode?: string; outputMappingCodes?: Array<{ mappingId: string; code: string }>; stopMessages: string[]; colorViewer: string; error?: string; agentTarget: 'js' | 'wasm' | 'webgpu'; agentWasmBytes?: Uint8Array; agentWasmViewerGuardIds?: string[]; agentLayoutExtras?: AgentLayoutExtras; agentWasmLayoutSig?: { maxHashBins: number; totalBytes: number }; agentResidencyClean?: boolean; agentWebgpuBehaviourShader?: string; agentWebgpuForceShader?: string; agentWebgpuMaxAgents?: number; agentWebgpuMaxHashBins?: number; agentWebgpuLayout?: AgentWebGPULayout; agentRenderLayout?: AgentWebGPULayout; agentWebgpuUsesI32Write?: boolean; agentWebgpuUsage?: { usesBondStore?: boolean; usesIndicators?: boolean; usesAux?: boolean; usesSpawn?: boolean; usesStop?: boolean; usesForceScatter?: boolean }; agentWebgpuOmShaders?: Array<{ mappingId: string; code: string; usesBondStore: boolean; usesIndicators: boolean; usesAux: boolean }>; agentWebgpuOmSupported?: boolean } => {
     // A simulator Resize / image-import overrides the live grid dims WITHOUT
     // touching model state, and the agent WASM/WebGPU compilers bake dims-derived
     // layout regions (the spatial-hash reserve, fieldTotal). Compiling from the
@@ -1947,6 +1947,10 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     let agentRenderLayout: AgentWebGPULayout | undefined;
     let agentWebgpuUsesI32Write: boolean | undefined;
     let agentWebgpuUsage: { usesBondStore?: boolean; usesIndicators?: boolean; usesAux?: boolean; usesSpawn?: boolean; usesStop?: boolean; usesForceScatter?: boolean } | undefined;
+    // A1.5 — the per-mapping GPU Agent Output-Mapping colour-pass shaders + whether
+    // the whole OM graph compiled (relaxes the WebGPU-target render gate below).
+    let agentWebgpuOmShaders: Array<{ mappingId: string; code: string; usesBondStore: boolean; usesIndicators: boolean; usesAux: boolean }> | undefined;
+    let agentWebgpuOmSupported = false;
     let agentLayoutExtras: AgentLayoutExtras | undefined;
     let agentWasmViewerGuardIds: string[] | undefined;
     let agentWasmLayoutSig: { maxHashBins: number; totalBytes: number } | undefined;
@@ -2005,6 +2009,11 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
           agentWebgpuLayout = r.layout;
           agentWebgpuUsesI32Write = r.usesI32Write;
           agentWebgpuUsage = { usesBondStore: r.usesBondStore, usesIndicators: r.usesIndicators, usesAux: r.usesAux, usesSpawn: r.usesSpawn, usesStop: r.usesStop, usesForceScatter: r.usesForceScatter };
+          // A1.5 — the GPU OM colour passes (empty for a no-mapping model). The
+          // supported flag lets an OM-coloured WebGPU model engage direct render
+          // (the resident batch dispatches the OM pass writing agentColors).
+          agentWebgpuOmShaders = (r.omShaders ?? []).map(o => ({ mappingId: o.mappingId, code: o.code, usesBondStore: o.usesBondStore, usesIndicators: o.usesIndicators, usesAux: o.usesAux }));
+          agentWebgpuOmSupported = r.omSupported ?? false;
           // PR7c: residency-clean = the BEHAVIOUR emits no structural-request /
           // radius writes (compiler-scoped — an init-event spawn doesn't block).
           agentResidencyClean = !r.usesStructural && !r.usesRadiusWrite;
@@ -2023,7 +2032,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
         Math.max(1, Math.floor((m.centerBased?.maxAgents as number) ?? 2000)), 0, undefined, [], { gridDepth: 1 },
       );
     }
-    return { behaviourCode: ag.behaviourCode || undefined, initCode: ag.initCode || undefined, divisionCode: ag.divisionCode || undefined, outputMappingCodes: ag.outputMappingCodes && ag.outputMappingCodes.length ? ag.outputMappingCodes : undefined, stopMessages: ag.stopMessages, colorViewer, error: ag.error || undefined, agentTarget, agentWasmBytes, agentWasmViewerGuardIds, agentLayoutExtras, agentWasmLayoutSig, agentResidencyClean, agentWebgpuBehaviourShader, agentWebgpuForceShader, agentWebgpuMaxAgents, agentWebgpuMaxHashBins, agentWebgpuLayout, agentRenderLayout, agentWebgpuUsesI32Write, agentWebgpuUsage };
+    return { behaviourCode: ag.behaviourCode || undefined, initCode: ag.initCode || undefined, divisionCode: ag.divisionCode || undefined, outputMappingCodes: ag.outputMappingCodes && ag.outputMappingCodes.length ? ag.outputMappingCodes : undefined, stopMessages: ag.stopMessages, colorViewer, error: ag.error || undefined, agentTarget, agentWasmBytes, agentWasmViewerGuardIds, agentLayoutExtras, agentWasmLayoutSig, agentResidencyClean, agentWebgpuBehaviourShader, agentWebgpuForceShader, agentWebgpuMaxAgents, agentWebgpuMaxHashBins, agentWebgpuLayout, agentRenderLayout, agentWebgpuUsesI32Write, agentWebgpuUsage, agentWebgpuOmShaders, agentWebgpuOmSupported };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [model.agentGraphNodes, model.agentGraphEdges, model.topologyMode?.agents, model.attributes, model.agentAttributes, model.mappings, model.centerBased]);
 
@@ -4033,7 +4042,11 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       agentModel && model.topologyMode?.gridCells === false && !is3D
       && offscreenSupported
       && (model.sprites?.length ?? 0) === 0 && !agentMetaballsRef.current.enabled
-      && (agentResult.agentTarget !== 'webgpu' || (model.agentMappings?.length ?? 0) === 0);
+      // A1.5: a WebGPU-target model with agent mappings is render-eligible when the
+      // OM graph compiled to GPU colour passes (they write agentColors GPU-side, so
+      // the resident batch presents the correct OM colours). An unsupported OM keeps
+      // the CPU overlay (the A1 exclusion), unchanged.
+      && (agentResult.agentTarget !== 'webgpu' || (model.agentMappings?.length ?? 0) === 0 || !!agentResult.agentWebgpuOmSupported);
     agentRenderEligibleRef.current = agentRenderEligible;
     agentDirectRenderActiveRef.current = false;
     pendingAgentRenderCanvas.current = null;
@@ -4161,6 +4174,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       agentRenderLayout: agentResult.agentRenderLayout,
       agentWebgpuUsesI32Write: agentResult.agentWebgpuUsesI32Write,
       agentWebgpuUsage: agentResult.agentWebgpuUsage,
+      agentWebgpuOmShaders: agentResult.agentWebgpuOmShaders,
     };
     // Canvas transfer is deferred to the useWebGPUStatus handler — see
     // pendingCanvasAttach above. The init message never carries webgpuCanvas
@@ -4596,6 +4610,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
         agentWebgpuLayout: agentResult.agentWebgpuLayout,
         agentWebgpuUsesI32Write: agentResult.agentWebgpuUsesI32Write,
         agentWebgpuUsage: agentResult.agentWebgpuUsage,
+        agentWebgpuOmShaders: agentResult.agentWebgpuOmShaders,
       });
       // If user has the model toggle on, ensure useWasm is set (recompile doesn't carry useWasm by default).
       // PR5: the grid target now flows through for agent models too (the

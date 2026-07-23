@@ -133,6 +133,14 @@ export interface AgentWebGPURuntime {
   forcePipeline: GPUComputePipeline;
   behaviourBindGroup: GPUBindGroup;
   forceBindGroup: GPUBindGroup;
+  /** A1.5 — one GPU Agent Output-Mapping colour pass per mapping id (each writes
+   *  agentColors from the agent attrs). Empty for a no-OM model (Boids). */
+  omPipelines: Map<string, { pipeline: GPUComputePipeline; bindGroup: GPUBindGroup }>;
+  /** The mapping id of the active agent viewer — the resident batch + present
+   *  dispatch `omPipelines.get(activeOmMappingId)` (the worker sets it from
+   *  `agentColorViewer`). Empty ⇒ no OM dispatch (behaviour Set Cell Looks or
+   *  the uploaded CPU colours drive agentColors). */
+  activeOmMappingId: string;
 
   /** Reusable MAP_READ staging buffers, keyed by power-of-two byte size. */
   stagingPool: Map<number, PooledBuffer[]>;
@@ -265,12 +273,31 @@ export interface AgentRuntimeUsage {
   usesForceScatter?: boolean;
 }
 
+/** A1.5 — one Agent Output-Mapping GPU colour pass: its WGSL module + the
+ *  read-only universal bindings it references (an OM never spawns / writes i32 /
+ *  scatters force, so only aux/indicators/bondStore can appear). The runtime
+ *  builds one compute pipeline + bind group per OM (sharing the SoA buffers). */
+export interface AgentOMShaderInput {
+  mappingId: string;
+  code: string;
+  usesBondStore: boolean;
+  usesIndicators: boolean;
+  usesAux: boolean;
+}
+
+/** A built OM colour-pass pipeline (shares the runtime's SoA/control buffers). */
+interface AgentOMPipeline {
+  pipeline: GPUComputePipeline;
+  bindGroup: GPUBindGroup;
+}
+
 export async function createAgentWebGPURuntime(
   behaviourShader: string,
   forceShader: string,
   layout: AgentWebGPULayout,
   usesI32Write = false,
   usage: AgentRuntimeUsage = {},
+  omShaders: AgentOMShaderInput[] = [],
 ): Promise<AgentWebGPURuntime> {
   if (!isWebGPUAvailable()) throw new Error('navigator.gpu is unavailable in this context');
   const gpu = (navigator as Navigator & { gpu: GPU }).gpu;
@@ -298,6 +325,10 @@ export async function createAgentWebGPURuntime(
   // Compile + validate both modules up front (clear errors before any dispatch).
   const behaviourModule = device.createShaderModule({ code: behaviourShader });
   const forceModule = device.createShaderModule({ code: forceShader });
+  // A1.5 — the OM colour-pass modules (one per agent mapping). A per-module
+  // compile failure disables ONLY that OM (it keeps its last colours) — never the
+  // whole runtime.
+  const omModules = omShaders.map(o => ({ input: o, module: device.createShaderModule({ code: o.code }) }));
   for (const [name, mod] of [['behaviour', behaviourModule], ['force', forceModule]] as const) {
     const info = await mod.getCompilationInfo();
     const errs = info.messages.filter(m => m.type === 'error');
@@ -350,9 +381,19 @@ export async function createAgentWebGPURuntime(
   const hasAux = (usage.usesAux ?? layout.auxF32Len > 0) && layout.auxF32Len > 0;
   const hasIndicators = (usage.usesIndicators ?? layout.indicatorCount > 0) && layout.indicatorCount > 0;
   const hasBondStore = (usage.usesBondStore ?? layout.bondStoreLen > 0) && layout.bondStoreLen > 0;
-  const auxF32Buf = hasAux ? mk('agentAuxF32', Math.max(4, layout.auxF32Len * 4), STORAGE_RO) : null;
-  const indicatorsBuf = hasIndicators ? mk('agentIndicators', Math.max(4, layout.indicatorCount * 4), STORAGE) : null;
-  const bondStoreBuf = hasBondStore ? mk('agentBondStore', Math.max(4, layout.bondStoreLen * 4), STORAGE_RO) : null;
+  // A1.5 — the read-only aux / indicators / bond-store buffers must exist for the
+  // UNION of the behaviour + every OM colour pass (an OM may read a model attr /
+  // indicator / bond the behaviour doesn't). The BEHAVIOUR bind group still binds
+  // ONLY the behaviour's own declared bindings (hasAux/…), and each OM binds its
+  // own — a declared-but-unbound buffer is a valid unused entry, but a used-but-
+  // unbound binding is not, so the buffer set is the union while each bind group
+  // matches its shader exactly.
+  const bufAux = (hasAux || omShaders.some(o => o.usesAux)) && layout.auxF32Len > 0;
+  const bufIndicators = (hasIndicators || omShaders.some(o => o.usesIndicators)) && layout.indicatorCount > 0;
+  const bufBondStore = (hasBondStore || omShaders.some(o => o.usesBondStore)) && layout.bondStoreLen > 0;
+  const auxF32Buf = bufAux ? mk('agentAuxF32', Math.max(4, layout.auxF32Len * 4), STORAGE_RO) : null;
+  const indicatorsBuf = bufIndicators ? mk('agentIndicators', Math.max(4, layout.indicatorCount * 4), STORAGE) : null;
+  const bondStoreBuf = bufBondStore ? mk('agentBondStore', Math.max(4, layout.bondStoreLen * 4), STORAGE_RO) : null;
   // agentI32 is read_write only when the shader writes it (setAgentType).
   const i32WritesI32 = !!usesI32Write;
 
@@ -369,9 +410,9 @@ export async function createAgentWebGPURuntime(
   ];
   if (fieldReadBuf) behaviourEntries.push({ binding: 7, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } });
   if (fieldDepositBuf) behaviourEntries.push({ binding: 8, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } });
-  if (auxF32Buf) behaviourEntries.push({ binding: 9, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } });
-  if (indicatorsBuf) behaviourEntries.push({ binding: 10, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } });
-  if (bondStoreBuf) behaviourEntries.push({ binding: 11, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } });
+  if (hasAux) behaviourEntries.push({ binding: 9, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } });
+  if (hasIndicators) behaviourEntries.push({ binding: 10, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } });
+  if (hasBondStore) behaviourEntries.push({ binding: 11, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } });
   if (spawnCursorBuf) behaviourEntries.push({ binding: 12, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } });
   if (stopFlagBuf) behaviourEntries.push({ binding: 13, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } });
   if (forceScatterBuf) behaviourEntries.push({ binding: 14, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } });
@@ -392,9 +433,9 @@ export async function createAgentWebGPURuntime(
   ];
   if (fieldReadBuf) behaviourBgEntries.push({ binding: 7, resource: { buffer: fieldReadBuf } });
   if (fieldDepositBuf) behaviourBgEntries.push({ binding: 8, resource: { buffer: fieldDepositBuf } });
-  if (auxF32Buf) behaviourBgEntries.push({ binding: 9, resource: { buffer: auxF32Buf } });
-  if (indicatorsBuf) behaviourBgEntries.push({ binding: 10, resource: { buffer: indicatorsBuf } });
-  if (bondStoreBuf) behaviourBgEntries.push({ binding: 11, resource: { buffer: bondStoreBuf } });
+  if (hasAux) behaviourBgEntries.push({ binding: 9, resource: { buffer: auxF32Buf! } });
+  if (hasIndicators) behaviourBgEntries.push({ binding: 10, resource: { buffer: indicatorsBuf! } });
+  if (hasBondStore) behaviourBgEntries.push({ binding: 11, resource: { buffer: bondStoreBuf! } });
   if (spawnCursorBuf) behaviourBgEntries.push({ binding: 12, resource: { buffer: spawnCursorBuf } });
   if (stopFlagBuf) behaviourBgEntries.push({ binding: 13, resource: { buffer: stopFlagBuf } });
   if (forceScatterBuf) behaviourBgEntries.push({ binding: 14, resource: { buffer: forceScatterBuf } });
@@ -426,6 +467,63 @@ export async function createAgentWebGPURuntime(
   if (forceScatterBuf) forceBgEntries.push({ binding: 4, resource: { buffer: forceScatterBuf } });
   const forceBindGroup = device.createBindGroup({ label: 'agent-force-bg', layout: forceBGL, entries: forceBgEntries });
 
+  // --- A1.5 OM colour-pass pipelines (one per agent mapping) ---
+  // Each OM module declares bindings 0-6 (the same base set the behaviour uses,
+  // always) + the conditional field bindings 7/8 (layout-driven, like the
+  // behaviour) + the read-only aux/indicators/bondStore per THAT OM's own usage.
+  // An OM never spawns / writes i32 / scatters force, so agentI32 (1) + agentAlive
+  // (2) are always read-only-storage here (a read_write SoA buffer binds fine to a
+  // read-only entry). Shares ALL of the runtime's SoA/control buffers.
+  const omPipelines = new Map<string, AgentOMPipeline>();
+  for (const { input, module } of omModules) {
+    try {
+      const info = await module.getCompilationInfo();
+      const errs = info.messages.filter(m => m.type === 'error');
+      if (errs.length > 0) {
+        // eslint-disable-next-line no-console
+        console.warn(`[agents/webgpu] OM "${input.mappingId}" WGSL compile error (colour pass disabled): ` +
+          errs.map(m => `line ${m.lineNum}: ${m.message}`).join('; '));
+        continue;
+      }
+      const omEntries: GPUBindGroupLayoutEntry[] = [
+        { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },
+        { binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },
+        { binding: 2, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },
+        { binding: 3, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },
+        { binding: 4, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'uniform' } },
+        { binding: 5, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },
+        { binding: 6, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },
+      ];
+      if (fieldReadBuf) omEntries.push({ binding: 7, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } });
+      if (fieldDepositBuf) omEntries.push({ binding: 8, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } });
+      if (input.usesAux && auxF32Buf) omEntries.push({ binding: 9, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } });
+      if (input.usesIndicators && indicatorsBuf) omEntries.push({ binding: 10, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } });
+      if (input.usesBondStore && bondStoreBuf) omEntries.push({ binding: 11, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } });
+      const omBGL = device.createBindGroupLayout({ label: `agent-om-bgl-${input.mappingId}`, entries: omEntries });
+      const omPL = device.createPipelineLayout({ label: `agent-om-pl-${input.mappingId}`, bindGroupLayouts: [omBGL] });
+      const omPipeline = await device.createComputePipelineAsync({ label: `agent-om-${input.mappingId}`, layout: omPL, compute: { module, entryPoint: 'behaviour' } });
+      const omBgEntries: GPUBindGroupEntry[] = [
+        { binding: 0, resource: { buffer: agentF32Buf } },
+        { binding: 1, resource: { buffer: agentI32Buf } },
+        { binding: 2, resource: { buffer: agentAliveBuf } },
+        { binding: 3, resource: { buffer: hashBinsBuf } },
+        { binding: 4, resource: { buffer: controlBuf } },
+        { binding: 5, resource: { buffer: rngStateBuf } },
+        { binding: 6, resource: { buffer: agentColorsBuf } },
+      ];
+      if (fieldReadBuf) omBgEntries.push({ binding: 7, resource: { buffer: fieldReadBuf } });
+      if (fieldDepositBuf) omBgEntries.push({ binding: 8, resource: { buffer: fieldDepositBuf } });
+      if (input.usesAux && auxF32Buf) omBgEntries.push({ binding: 9, resource: { buffer: auxF32Buf } });
+      if (input.usesIndicators && indicatorsBuf) omBgEntries.push({ binding: 10, resource: { buffer: indicatorsBuf } });
+      if (input.usesBondStore && bondStoreBuf) omBgEntries.push({ binding: 11, resource: { buffer: bondStoreBuf } });
+      const omBindGroup = device.createBindGroup({ label: `agent-om-bg-${input.mappingId}`, layout: omBGL, entries: omBgEntries });
+      omPipelines.set(input.mappingId, { pipeline: omPipeline, bindGroup: omBindGroup });
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.warn(`[agents/webgpu] OM "${input.mappingId}" pipeline build failed (colour pass disabled): ` + ((e as Error)?.message || e));
+    }
+  }
+
   const rt: AgentWebGPURuntime = {
     device, adapter, layout, ready: true, usesI32Write: i32WritesI32,
     agentF32Buf, agentI32Buf, agentAliveBuf, hashBinsBuf,
@@ -436,6 +534,7 @@ export async function createAgentWebGPURuntime(
     stopFlagBuf, usesStop: hasStop,
     forceScatterBuf,
     behaviourPipeline, forcePipeline, behaviourBindGroup, forceBindGroup,
+    omPipelines, activeOmMappingId: '',
     stagingPool: new Map(),
     f32Upload: new Float32Array(layout.f32Len),
     i32Upload: new Int32Array(layout.i32Len),
@@ -846,6 +945,24 @@ export function dispatchAgentStep(rt: AgentWebGPURuntime, highWater: number): vo
   dispatchAgents(passF, total);
   passF.end();
   rt.device.queue.submit([enc.finish()]);
+}
+
+/** A1.5 — append the active Agent Output-Mapping colour pass to an encoder (reads
+ *  the agent attrs the behaviour wrote → writes agentColors). No-op unless an OM
+ *  pipeline for `activeOmMappingId` exists (a no-OM model / no active viewer keeps
+ *  agentColors as the behaviour Set Cell Looks / uploaded CPU colours left it).
+ *  `control` must already carry the batch's highWater (the caller uploaded it). */
+export function dispatchAgentOMEncode(rt: AgentWebGPURuntime, enc: GPUCommandEncoder, highWater: number): boolean {
+  // Default to the FIRST OM when the active viewer id isn't a built OM pipeline
+  // (mirrors runAgentColorPass's `?? agentOutputMappingFns[0]`).
+  const om = rt.omPipelines.get(rt.activeOmMappingId) ?? [...rt.omPipelines.values()][0];
+  if (!om) return false;
+  const pass = enc.beginComputePass({ label: 'agent-om-pass' });
+  pass.setPipeline(om.pipeline);
+  pass.setBindGroup(0, om.bindGroup);
+  dispatchAgents(pass, Math.max(1, highWater));
+  pass.end();
+  return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -1825,6 +1942,13 @@ export function dispatchResidentBatch(rt: AgentWebGPURuntime, gens: number, high
     const pm = enc.beginComputePass({ label: 'agent-pos-commit' });
     pm.setPipeline(res.commitPipeline); pm.setBindGroup(0, res.commitBind); dispatchAgents(pm, total); pm.end();
   }
+  // A1.5 — the active Agent Output-Mapping colour pass writes agentColors from the
+  // final-state agent attrs (once per batch = once per presented frame). For a
+  // no-OM model this is a no-op and agentColors keeps the behaviour Set Cell Looks
+  // colours (Boids). Runs AFTER the gen loop (reads the committed state) and BEFORE
+  // the present, so the presented frame carries the OM colours (the resident
+  // fast-path fix for OM-coloured models — Particle Life).
+  dispatchAgentOMEncode(rt, enc, highWater);
   // A1 direct render: present the FINAL frame in the SAME submit (posCommit ran,
   // so agentF32[x] holds the committed position; the behaviour wrote agentColors).
   // No-op unless a render canvas is attached.

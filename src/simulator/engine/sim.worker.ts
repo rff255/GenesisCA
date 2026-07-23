@@ -48,7 +48,7 @@ import {
   ensureAgentResident, computeResidentHashParams, uploadAgentHashParams, dispatchResidentBatch, readbackAgentFrame,
   setupAgentDirectRender, uploadAgentRenderView, presentAgentsOnce, presentAgentsFromStore,
   createAgentRenderOnlyRuntime, presentAgentRenderFromStore, destroyAgentRenderSurface,
-  type AgentWebGPURuntime, type AgentRenderSurface, type FieldArray, type AgentRenderView,
+  type AgentWebGPURuntime, type AgentRenderSurface, type FieldArray, type AgentRenderView, type AgentOMShaderInput,
 } from './agentWebgpuRuntime';
 
 interface AttrDef {
@@ -278,6 +278,9 @@ interface InitMsg {
   /** Which universal bindings the shader actually declares (so the runtime binds
    *  matching entries ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â a declared-but-unused global is stripped ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ bind mismatch). */
   agentWebgpuUsage?: { usesBondStore?: boolean; usesIndicators?: boolean; usesAux?: boolean; usesSpawn?: boolean; usesStop?: boolean; usesForceScatter?: boolean };
+  /** A1.5 — the per-mapping GPU Agent Output-Mapping colour-pass WGSL modules (the
+   *  runtime builds one pipeline each; the active agent viewer selects which runs). */
+  agentWebgpuOmShaders?: AgentOMShaderInput[];
 }
 
 // reqId: optional Overseer correlation id ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â echoed on the resulting `stepped`
@@ -308,7 +311,7 @@ interface PaintManualMsg {
   activeViewer: string;
 }
 interface ResetMsg { type: 'reset'; activeViewer: string; reqId?: number }
-interface RecompileMsg { type: 'recompile'; stepCode: string; initCode?: string; gridInitCode?: string; skipIsolatedEmpty?: SkipIsolatedEmptyConfig; inputColorCodes: Array<{ mappingId: string; code: string }>; outputMappingCodes: Array<{ mappingId: string; code: string }>; stopMessages?: string[]; updateMode: string; asyncScheme: string; wasmStepBytes?: Uint8Array; wasmStepError?: string; wasmExports?: string[]; viewerIds?: Record<string, number>; webgpuShaderCode?: string; webgpuShaderError?: string; webgpuEntryPoints?: WebGPUEntryPoints; webgpuLayout?: WebGPULayout; webgpuStopCheckInterval?: number; variegated?: VariegatedPayload; interactionTables?: InteractionTablePayload[]; agentBehaviourCode?: string; agentInitCode?: string; agentDivisionCode?: string; agentColorViewer?: string; agentOutputMappingCodes?: Array<{ mappingId: string; code: string }>; agentHasSprites?: boolean; centerBased?: CenterBasedConfig; agentUsesField?: boolean; agentUsesDensity?: boolean; agentResidencyClean?: boolean; agentTarget?: 'js' | 'wasm' | 'webgpu'; agentWasmBytes?: Uint8Array; agentWasmViewerGuardIds?: string[]; agentLayoutExtras?: AgentLayoutExtras; agentWasmLayoutSig?: { maxHashBins: number; totalBytes: number }; agentWebgpuBehaviourShader?: string; agentWebgpuForceShader?: string; agentWebgpuMaxAgents?: number; agentWebgpuMaxHashBins?: number; agentWebgpuLayout?: AgentWebGPULayout; agentRenderLayout?: AgentWebGPULayout; agentWebgpuUsesI32Write?: boolean; agentWebgpuUsage?: { usesBondStore?: boolean; usesIndicators?: boolean; usesAux?: boolean; usesSpawn?: boolean; usesStop?: boolean; usesForceScatter?: boolean } }
+interface RecompileMsg { type: 'recompile'; stepCode: string; initCode?: string; gridInitCode?: string; skipIsolatedEmpty?: SkipIsolatedEmptyConfig; inputColorCodes: Array<{ mappingId: string; code: string }>; outputMappingCodes: Array<{ mappingId: string; code: string }>; stopMessages?: string[]; updateMode: string; asyncScheme: string; wasmStepBytes?: Uint8Array; wasmStepError?: string; wasmExports?: string[]; viewerIds?: Record<string, number>; webgpuShaderCode?: string; webgpuShaderError?: string; webgpuEntryPoints?: WebGPUEntryPoints; webgpuLayout?: WebGPULayout; webgpuStopCheckInterval?: number; variegated?: VariegatedPayload; interactionTables?: InteractionTablePayload[]; agentBehaviourCode?: string; agentInitCode?: string; agentDivisionCode?: string; agentColorViewer?: string; agentOutputMappingCodes?: Array<{ mappingId: string; code: string }>; agentHasSprites?: boolean; centerBased?: CenterBasedConfig; agentUsesField?: boolean; agentUsesDensity?: boolean; agentResidencyClean?: boolean; agentTarget?: 'js' | 'wasm' | 'webgpu'; agentWasmBytes?: Uint8Array; agentWasmViewerGuardIds?: string[]; agentLayoutExtras?: AgentLayoutExtras; agentWasmLayoutSig?: { maxHashBins: number; totalBytes: number }; agentWebgpuBehaviourShader?: string; agentWebgpuForceShader?: string; agentWebgpuMaxAgents?: number; agentWebgpuMaxHashBins?: number; agentWebgpuLayout?: AgentWebGPULayout; agentRenderLayout?: AgentWebGPULayout; agentWebgpuUsesI32Write?: boolean; agentWebgpuUsage?: { usesBondStore?: boolean; usesIndicators?: boolean; usesAux?: boolean; usesSpawn?: boolean; usesStop?: boolean; usesForceScatter?: boolean }; agentWebgpuOmShaders?: AgentOMShaderInput[] }
 interface UpdateLookupTableMsg {
   type: 'updateLookupTable';
   attrId: string;
@@ -806,6 +809,9 @@ let pendingAgentWebgpuMaxHashBins = 0;
 let pendingAgentWebgpuLayout: AgentWebGPULayout | null = null;
 let pendingAgentWebgpuUsesI32Write = false;
 let pendingAgentWebgpuUsage: { usesBondStore?: boolean; usesIndicators?: boolean; usesAux?: boolean; usesSpawn?: boolean; usesStop?: boolean; usesForceScatter?: boolean } = {};
+/** A1.5 — the per-mapping GPU Agent Output-Mapping colour-pass shaders (held so
+ *  buildAgentWebGPUIfNeeded builds one pipeline each on the agent runtime). */
+let pendingAgentWebgpuOmShaders: AgentOMShaderInput[] = [];
 /** Warn once when the per-step hash overflows the GPU reserve (step runs on JS). */
 let agentWebgpuHashOverflowWarned = false;
 
@@ -1125,11 +1131,14 @@ function buildAgentWebGPUIfNeeded(): void {
   );
   const i32Write = pendingAgentWebgpuUsesI32Write;
   const usage = pendingAgentWebgpuUsage;
+  const omShaders = pendingAgentWebgpuOmShaders;
   const token = ++agentWebgpuBuildToken;
   agentWebgpuHashOverflowWarned = false;
   void (async () => {
     try {
-      const rt = await createAgentWebGPURuntime(behaviour, force, layout, i32Write, usage);
+      const rt = await createAgentWebGPURuntime(behaviour, force, layout, i32Write, usage, omShaders);
+      // A1.5 — select the OM colour pass matching the active agent viewer.
+      rt.activeOmMappingId = agentColorViewer;
       // Guard against a re-init that swapped the store / changed the target /
       // launched a newer build while this one was in flight.
       if (agentStore === store && agentTarget === 'webgpu' && token === agentWebgpuBuildToken) {
@@ -2112,6 +2121,9 @@ async function runAgentBatchResident(count: number): Promise<boolean> {
       uploadAgentAux(rt, cachedModelAttrs as Record<string, number>, tables);
     }
     uploadAgentHashParams(rt, hw, hp, torus);
+    // A1.5 — the OM colour pass appended inside dispatchResidentBatch selects this
+    // mapping (the active agent viewer; may have switched since the last batch).
+    rt.activeOmMappingId = agentColorViewer;
     rt.device.pushErrorScope('validation');
     dispatchResidentBatch(rt, count, hw, hp);
     const dispatchErr = await rt.device.popErrorScope();
@@ -5170,6 +5182,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       pendingAgentRenderLayout = msg.agentRenderLayout ?? null;
       pendingAgentWebgpuUsesI32Write = msg.agentWebgpuUsesI32Write ?? false;
       pendingAgentWebgpuUsage = msg.agentWebgpuUsage ?? {};
+      pendingAgentWebgpuOmShaders = msg.agentWebgpuOmShaders ?? [];
       initAgents();
       compileAgentFns(msg.agentBehaviourCode, msg.agentInitCode, msg.agentDivisionCode, (msg as InitMsg).agentOutputMappingCodes);
       instantiateAgentWasmIfNeeded();
@@ -5759,6 +5772,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
         pendingAgentRenderLayout = rc.agentRenderLayout ?? null;
         pendingAgentWebgpuUsesI32Write = rc.agentWebgpuUsesI32Write ?? false;
         pendingAgentWebgpuUsage = rc.agentWebgpuUsage ?? {};
+        pendingAgentWebgpuOmShaders = rc.agentWebgpuOmShaders ?? [];
         const backingChanged = (newTarget === 'wasm') !== (agentStore?.wasmBacked ?? false) && !agentWasmBackedDev;
         agentTarget = newTarget;
         if (agentsEnabled && backingChanged) { initAgents(); runAgentInit(); runAgentColorPass(); }
@@ -6267,6 +6281,10 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       // Agent Output Mappings: switch the active AGENT viewer too (independent of
       // the cell viewer). sendColors() below recolours agents from it.
       { const aav = (msg as { activeAgentViewer?: string }).activeAgentViewer; if (aav !== undefined) agentColorViewer = aav; }
+      // A1.5 — point the GPU OM colour pass at the new viewer so the next resident
+      // batch (or a mutation present) recolours from it. The immediate paused
+      // present goes through the CPU s.colors path (runAgentColorPass in sendColors).
+      if (agentWebgpuRuntime) agentWebgpuRuntime.activeOmMappingId = agentColorViewer;
       const webgpuCp = useWebGPU && webgpuRuntime?.stepReady;
       if (webgpuCp && webgpuRuntime) {
         uploadActiveViewer(webgpuRuntime, viewerIdMap[activeViewer] ?? -1);

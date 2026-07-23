@@ -57,6 +57,8 @@ for (const f of files) {
     'agent.wasm.error': r.agent.wasm.error,
     'agent.webgpu.shader': sha(r.agent.webgpu.shaderCode),
     'agent.webgpu.error': r.agent.webgpu.error,
+    'agent.webgpu.om': sha((r.agent.webgpu.omShaders ?? []).map(o => `${o.mappingId}\n${o.code}`).join('\n---\n')),
+    'agent.webgpu.omSupported': r.agent.webgpu.omSupported,
     'overseer.driver': sha(r.overseer.driverCode ?? ''),
     'overseer.error': r.overseer.error,
   };

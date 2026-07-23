@@ -42,7 +42,10 @@ export interface CompileAllResult {
     /** PR7/G1+G2 — the WebGPU agent behaviour SHADER (WGSL source). `supported`
      *  is the `isAgentGraphWebGPUSupported` gate; `shaderCode` is the emitted
      *  WGSL module (empty for a non-agent / unsupported model). */
-    webgpu: { supported: boolean; shaderCode: string; supportedTypes: string[]; error: string | null };
+    webgpu: { supported: boolean; shaderCode: string; supportedTypes: string[]; error: string | null;
+      /** A1.5 — the per-mapping GPU Output-Mapping colour-pass WGSL modules +
+       *  whether the whole OM graph compiled. Empty for a non-OM / unsupported model. */
+      omShaders: Array<{ mappingId: string; code: string }>; omSupported: boolean };
   };
   /** Overseer — the async experiment DRIVER body (main-thread JS, not a compile
    *  target; see compiler/overseer/compile.ts). `driverCode` is null when the
@@ -58,7 +61,7 @@ export function compileAll(model: CAModel): CompileAllResult {
     agent: {
       behaviourCode: '', error: null,
       wasm: { supported: false, bytesLen: 0, bytesJoined: '', supportedTypes: [], error: null },
-      webgpu: { supported: false, shaderCode: '', supportedTypes: [], error: null },
+      webgpu: { supported: false, shaderCode: '', supportedTypes: [], error: null, omShaders: [], omSupported: true },
     },
     overseer: { driverCode: null, error: null },
   };
@@ -128,6 +131,8 @@ export function compileAll(model: CAModel): CompileAllResult {
       out.agent.webgpu.shaderCode = r.shaderCode;
       out.agent.webgpu.supportedTypes = r.supportedTypes;
       out.agent.webgpu.error = r.error || null;
+      out.agent.webgpu.omShaders = (r.omShaders ?? []).map(o => ({ mappingId: o.mappingId, code: o.code }));
+      out.agent.webgpu.omSupported = r.omSupported ?? true;
     }
   } catch (e) {
     out.agent.webgpu.error = String((e as Error)?.message || e);

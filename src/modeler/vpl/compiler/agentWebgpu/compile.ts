@@ -51,6 +51,7 @@ import { collapseReroutes } from '../rerouteCollapse';
 import { expandMultiAttrs } from '../multiAttrExpand';
 import { expandForceToAgents } from '../forceToAgentsExpand';
 import { expandComposites } from '../expandComposites';
+import { injectAgentLinkedOutputMappings } from '../agentLinkedOutputMappings';
 import { lowerVectorAttrs, expandVectorAttributes } from '../vectorAttr';
 import { lowerFacingSource } from '../facingSource';
 import { canonicalizeAccessorEdges } from '../accessorCSE';
@@ -73,8 +74,10 @@ import { encodeAttrValue } from '../../../../model/attrValueEncoding';
  *  target; anything else FALLS BACK to JS. SINGLE source of truth for the gate +
  *  the emitter dispatch (mirrors AGENT_WASM_SUPPORTED_TYPES). */
 export const AGENT_WEBGPU_SUPPORTED_TYPES: ReadonlySet<string> = new Set<string>([
-  // event roots
-  'behaviourStep',
+  // event roots (A1.5: agentOutputMapping is a colour-pass root — it is never
+  // emitted as a value/flow node, only walked from its `do` output; the behaviour
+  // cone never contains it, so the behaviour verdict is unaffected).
+  'behaviourStep', 'agentOutputMapping',
   // self reads
   'getSelfPosition', 'getSelfHandle', 'getRadius', 'getAge', 'getBondDegree', 'neighbourDensity', 'getCurvature',
   // world size (the agent world IS the cell grid — control.fieldW/H/D)
@@ -163,7 +166,28 @@ export interface AgentWebGPUResult {
    *  setTargetRadius) — the hash bin edge could drift mid-batch ⇒ not
    *  residency-eligible. */
   usesRadiusWrite?: boolean;
+  /** A1.5 — one GPU colour-pass WGSL module per agent Output-Mapping root (user +
+   *  synthesized-linked). Each writes the GPU `agentColors` buffer per agent, so an
+   *  OM-coloured WebGPU model runs fully resident (the render reads agentColors).
+   *  Empty when the model has no agent mappings OR the OM graph is unsupported. */
+  omShaders?: AgentWebGPUOMShader[];
+  /** A1.5 — true iff EVERY agent OM graph compiled to WGSL (a SEPARATE verdict
+   *  from the behaviour gate). When false the behaviour still runs on the GPU but
+   *  the model keeps the CPU overlay render (the A1 exclusion, unchanged). */
+  omSupported?: boolean;
   error?: string;
+}
+
+/** One agent Output-Mapping GPU colour pass — its WGSL module + the
+ *  binding-usage flags the runtime reads to build a matching bind group (mirrors
+ *  the behaviour usage flags; an OM never spawns / writes i32 / scatters force, so
+ *  only the read-only aux/indicators/bond bindings can appear). */
+export interface AgentWebGPUOMShader {
+  mappingId: string;
+  code: string;
+  usesBondStore: boolean;
+  usesIndicators: boolean;
+  usesAux: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -3092,10 +3116,18 @@ function flattenAgentGraph(nodes: GraphNode[], edges: GraphEdge[], model: CAMode
  *  (e.g.) an `expression` only inside its divisionEvent subtree must NOT make the
  *  gate reject the model. Mirrors how the JS/WASM compilers walk one root at a time. */
 function behaviourReachableNodeIds(nodes: GraphNode[], edges: GraphEdge[]): Set<string> {
-  const adj = buildAdjacency(nodes, edges);
   const root = nodes.find(x => x.data.nodeType === 'behaviourStep');
+  if (!root) return new Set<string>();
+  return reachableFromRoot(nodes, edges, root.id);
+}
+
+/** The set of node ids reachable from an arbitrary flow root (its every flow
+ *  output chain + every transitive value input) — the generic form of
+ *  `behaviourReachableNodeIds`, reused by the Agent Output-Mapping compile to
+ *  scope the gate + emit to ONE agentOutputMapping root's cone. */
+function reachableFromRoot(nodes: GraphNode[], edges: GraphEdge[], rootId: string): Set<string> {
+  const adj = buildAdjacency(nodes, edges);
   const reached = new Set<string>();
-  if (!root) return reached;
   // value-input cone of a node.
   const pullValues = (nodeId: string) => {
     const stack = [nodeId];
@@ -3119,7 +3151,7 @@ function behaviourReachableNodeIds(nodes: GraphNode[], edges: GraphEdge[]): Set<
       for (const t of targets) walkFlow(t.nodeId);
     }
   };
-  walkFlow(root.id);
+  walkFlow(rootId);
   return reached;
 }
 
@@ -3143,7 +3175,19 @@ export function isAgentGraphWebGPUSupported(model: CAModel | undefined | null): 
   // already flattened, so a leftover macro boundary node is a structural error.
   const reachable = behaviourReachableNodeIds(flat.nodes, flat.edges);
   const reachNodes = flat.nodes.filter(n => reachable.has(n.id));
+  return agentSubsetSupported(reachNodes, flat.edges, flat.nodes, model);
+}
 
+/** TRUE iff a scoped set of reachable agent nodes is entirely emittable to WGSL
+ *  (the per-node type/op rejects + the array-producer capacity gate + the
+ *  cross-agent-write + array-source edge gates). Factored so BOTH the behaviour
+ *  gate (isAgentGraphWebGPUSupported, over the behaviourStep cone) AND the Agent
+ *  Output-Mapping gate (over each agentOutputMapping cone) share ONE reject
+ *  policy — a model with a GPU behaviour but an unsupported OM keeps its
+ *  behaviour on the GPU + the CPU overlay render (OM support is a SEPARATE flag,
+ *  never the behaviour verdict). `flatNodes` is the whole flat graph (for the
+ *  edge gates' source/consumer lookups); `reachNodes` is the scoped cone. */
+function agentSubsetSupported(reachNodes: GraphNode[], edges: GraphEdge[], flatNodes: GraphNode[], model: CAModel): boolean {
   let arrayProducerCount = 0;
   for (const n of reachNodes) {
     const t = n.data.nodeType;
@@ -3210,11 +3254,11 @@ export function isAgentGraphWebGPUSupported(model: CAModel | undefined | null): 
   // roots are sequential CPU/JS on every target.
   {
     const CROSS_AGENT_OVERWRITE = new Set(['setAgentAttribute', 'setAgentsAttribute', 'setAgentPosition', 'setAgentRadius']);
-    const flatMap = new Map(flat.nodes.map(n => [n.id, n] as const));
+    const flatMap = new Map(flatNodes.map(n => [n.id, n] as const));
     for (const n of reachNodes) {
       if (!CROSS_AGENT_OVERWRITE.has(n.data.nodeType)) continue;
       const targetPort = n.data.nodeType === 'setAgentsAttribute' ? 'agents' : 'agentId';
-      const idEdge = flat.edges.find(e => e.target === n.id && e.targetHandle === `input_value_${targetPort}`);
+      const idEdge = edges.find(e => e.target === n.id && e.targetHandle === `input_value_${targetPort}`);
       if (!idEdge) continue;                       // unwired id = the current agent (thread-own, race-free)
       if (flatMap.get(idEdge.source)?.data.nodeType === 'createAgent') continue;  // spawn handle
       return false;
@@ -3226,7 +3270,7 @@ export function isAgentGraphWebGPUSupported(model: CAModel | undefined | null): 
   // sees a non-producer non-variable array source).
   const map = new Map(reachNodes.map(n => [n.id, n] as const));
   const ARRAY_INPUT_PORTS = new Set(['array', 'values', 'agents', 'a', 'b']);
-  for (const e of flat.edges) {
+  for (const e of edges) {
     const tgt = parseHandle(e.targetHandle);
     if (!tgt || tgt.category !== 'value' || !ARRAY_INPUT_PORTS.has(tgt.portId)) continue;
     const consumer = map.get(e.target);
@@ -3416,6 +3460,7 @@ export function compileAgentGraphWebGPU(
 ): AgentWebGPUResult {
   const empty = (error: string): AgentWebGPUResult => ({ shaderCode: '', layout, supportedTypes: [], error });
   if (!model.topologyMode?.agents) return empty('Agents topology not enabled.');
+  const origModel = model;  // pre-expansion (the OM compile re-flattens from it, like the JS path)
 
   const flat = flattenAgentGraph(agentNodes, agentEdges, model);
   if (flat.error) return empty(flat.error);
@@ -3442,6 +3487,64 @@ export function compileAgentGraphWebGPU(
   }
   if (arrayProducerCount > AGENT_WEBGPU_NEARBY_SLOTS) return empty(`agentWebgpu: too many agent-array producers (${arrayProducerCount} > ${AGENT_WEBGPU_NEARBY_SLOTS} slots).`);
 
+  let emit: AgentRootModuleEmit;
+  try {
+    emit = emitAgentRootModule(behaviourNode, 'do', nodes, edges, model, layout, reachable, 'behaviour');
+  } catch (e) {
+    return empty(String((e as Error)?.message || e));
+  }
+  // A1.5 — the per-mapping GPU Agent Output-Mapping colour passes (a SEPARATE flag
+  // from the behaviour verdict). A model whose behaviour compiles on the GPU but
+  // whose OM graph uses an unsupported node keeps its behaviour on the GPU + the
+  // CPU overlay render (omSupported false), exactly as before A1.5.
+  let omShaders: AgentWebGPUOMShader[] = [];
+  let omSupported = true;
+  try {
+    ({ omShaders, omSupported } = compileAgentOutputMappingsWebGPU(agentNodes, agentEdges, origModel, layout));
+  } catch { omShaders = []; omSupported = false; }
+
+  return {
+    shaderCode: emit.shaderCode, layout, supportedTypes: [...seen], usesI32Write: emit.usesI32Write,
+    usesBondStore: emit.usesBondStore, usesIndicators: emit.usesIndicators, usesAux: emit.usesAux,
+    usesSpawn: emit.usesSpawn, usesStop: emit.usesStop, usesForceScatter: emit.usesForceScatter,
+    usesStructural: emit.usesStructural, usesRadiusWrite: emit.usesRadiusWrite,
+    omShaders, omSupported,
+  };
+}
+
+/** The behaviour/OM per-root module emit result: the WGSL source + the
+ *  binding-usage flags the runtime reads to build a matching bind group. */
+interface AgentRootModuleEmit {
+  shaderCode: string;
+  usesI32Write: boolean;
+  usesBondStore: boolean;
+  usesIndicators: boolean;
+  usesAux: boolean;
+  usesSpawn: boolean;
+  usesStop: boolean;
+  usesForceScatter: boolean;
+  usesStructural: boolean;
+  usesRadiusWrite: boolean;
+}
+
+/** Compile ONE flow root (the behaviourStep root, or an agentOutputMapping root)
+ *  into a self-contained WGSL compute module over the GPU agent SoA. Factored out
+ *  of `compileAgentGraphWebGPU` so the behaviour shader AND every Agent
+ *  Output-Mapping colour pass share the EXACT ctx-setup + emitters + module
+ *  assembly (one source of truth). `reachable` scopes the array-producer slot
+ *  assignment to the root's cone; `entryName` names the `@compute` entry (each OM
+ *  is its own GPUShaderModule, so `behaviour` is reused). Throws on an emit error.
+ *  NB the behaviour path must stay byte-identical (check-compile-identity). */
+function emitAgentRootModule(
+  rootNode: GraphNode,
+  rootPortId: string,
+  nodes: GraphNode[],
+  edges: GraphEdge[],
+  model: CAModel,
+  layout: AgentWebGPULayout,
+  reachable: Set<string>,
+  entryName: string,
+): AgentRootModuleEmit {
   const adj = buildAdjacency(nodes, edges);
   const agentAttrType = new Map<string, string>();
   const agentAttrDefault = new Map<string, number>();
@@ -3500,8 +3603,8 @@ export function compileAgentGraphWebGPU(
       inputToSource: adj.inputToSource,
       inputToSources: adj.inputToSources,
       flowOutputToTargets: adj.flowOutputToTargets,
-      rootNodeId: behaviourNode.id,
-      rootFlowPortId: 'do',
+      rootNodeId: rootNode.id,
+      rootFlowPortId: rootPortId,
       isAsync: model.centerBased?.agentUpdateMode !== 'sync',
     });
     if (hazardSeeds.size > 0) {
@@ -3530,15 +3633,15 @@ export function compileAgentGraphWebGPU(
         inputToSource: adj.inputToSource,
         inputToSources: adj.inputToSources,
         flowOutputToTargets: adj.flowOutputToTargets,
-        rootNodeId: behaviourNode.id,
-        rootFlowPortId: 'do',
+        rootNodeId: rootNode.id,
+        rootFlowPortId: rootPortId,
         volatile: cone,
       }).emitBefore;
     }
   }
 
-  // --- emit the per-agent body ---
-  try {
+  // --- emit the per-agent body (throws on error; the caller wraps) ---
+  {
     // reset Local Variables to their initialValue (per agent).
     for (const v of (model.agentVariables ?? [])) {
       if (v.kind === 'array') {
@@ -3550,18 +3653,16 @@ export function compileAgentGraphWebGPU(
         ctx.lines.push(`  ${ctx.varNames.get(v.id)!} = ${wgslFloatLit(variableInitNum(v))};`);
       }
     }
-    // Pre-emit the PURE, non-volatile value cone of the behaviour root at
-    // function-top scope. WGSL `let`/`var` are block-scoped, so a pure value read
-    // in MULTIPLE sibling branches (e.g. a readCellsUnder result tested in both a
-    // switch case AND the default) must be declared in a dominating scope — else
-    // the cache returns a name declared inside the first branch and the sibling
-    // branch sees an "unresolved value". Pre-emitting at top makes the cache serve
-    // every branch. Skipped: volatile (forEach-element-derived) values + RNG /
+    // Pre-emit the PURE, non-volatile value cone of the root at function-top
+    // scope. WGSL `let`/`var` are block-scoped, so a pure value read in MULTIPLE
+    // sibling branches (e.g. a readCellsUnder result tested in both a switch case
+    // AND the default) must be declared in a dominating scope — else the cache
+    // returns a name declared inside the first branch and the sibling branch sees
+    // an "unresolved value". Pre-emitting at top makes the cache serve every
+    // branch. Skipped: volatile (forEach-element-derived) values + RNG /
     // array-producer / mutable-storage reads (those stay inline / per-iteration).
-    preEmitAgentValues(ctx, behaviourNode.id);
-    compileFlowChain(ctx, behaviourNode.id, 'do');
-  } catch (e) {
-    return empty(String((e as Error)?.message || e));
+    preEmitAgentValues(ctx, rootNode.id);
+    compileFlowChain(ctx, rootNode.id, rootPortId);
   }
 
   // --- assemble the WGSL module ---
@@ -3646,7 +3747,7 @@ export function compileAgentGraphWebGPU(
 ${emitRngHelpers()}${fieldHelpers}${forceScatterHelper}
 
 @compute @workgroup_size(64)
-fn behaviour(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(num_workgroups) nwg: vec3<u32>) {
+fn ${entryName}(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(num_workgroups) nwg: vec3<u32>) {
   let idx: u32 = gid.y * (nwg.x * 64u) + gid.x;
   if (idx >= control.highWater) { return; }
   if (agentAlive[idx] == 0u) { return; }
@@ -3658,11 +3759,63 @@ ${ctx.lines.join('\n')}
 `;
 
   return {
-    shaderCode, layout, supportedTypes: [...seen], usesI32Write: ctx.usesI32Write,
+    shaderCode, usesI32Write: ctx.usesI32Write,
     usesBondStore: hasBondStore, usesIndicators: hasIndicators, usesAux: hasAux,
     usesSpawn: hasSpawn, usesStop: hasStop, usesForceScatter: hasForceScatter,
     usesStructural: ctx.usesStructural, usesRadiusWrite: ctx.usesRadiusWrite,
   };
+}
+
+/** A1.5 — compile every agent Output-Mapping graph into a per-agent WGSL colour
+ *  pass writing the GPU `agentColors` buffer. Mirrors `compileAgentGraph`'s OM
+ *  step on the JS side: flatten the agent graph, run `injectAgentLinkedOutputMappings`
+ *  (synthesizes the LINKED `getCellAttribute → colorScale|categorical → setCellLooks`
+ *  chain + sequences it with any user `agentOutputMapping` root), then compile EACH
+ *  `agentOutputMapping` root's flow chain into its own module. `setCellLooks` in
+ *  this context writes packed `agentColors[idx]` — the SAME emitter the behaviour
+ *  graph uses; each OM pass is dispatched only for its own mapping, so the viewer
+ *  guard is a no-op inside an OM module. `omSupported` is FALSE (whole feature off)
+ *  if ANY reachable OM node falls outside the supported set — the model then keeps
+ *  its GPU behaviour + the CPU overlay render (never the behaviour verdict). */
+export function compileAgentOutputMappingsWebGPU(
+  agentNodes: GraphNode[],
+  agentEdges: GraphEdge[],
+  model: CAModel,
+  layout: AgentWebGPULayout,
+): { omShaders: AgentWebGPUOMShader[]; omSupported: boolean } {
+  if (!model.topologyMode?.agents) return { omShaders: [], omSupported: true };
+  // No agent mappings ⇒ no OM passes (the common Boids case) — byte-identical to
+  // before A1.5 (omSupported true, no shaders).
+  if ((model.agentMappings ?? []).length === 0) return { omShaders: [], omSupported: true };
+
+  const flat = flattenAgentGraph(agentNodes, agentEdges, model);
+  if (flat.error) return { omShaders: [], omSupported: false };
+  let nodes = flat.nodes, edges = flat.edges;
+  const m = flat.model;  // component-expanded (same as the behaviour compile)
+  ({ nodes, edges } = injectAgentLinkedOutputMappings(nodes, edges, m));
+  preResolveIndicators(nodes, m);
+
+  const omRoots = nodes.filter(n => n.data.nodeType === 'agentOutputMapping');
+  if (omRoots.length === 0) return { omShaders: [], omSupported: true };
+
+  const shaders: AgentWebGPUOMShader[] = [];
+  for (const root of omRoots) {
+    const mappingId = (root.data.config?.mappingId as string) || '';
+    const reachable = reachableFromRoot(nodes, edges, root.id);
+    const reachNodes = nodes.filter(n => reachable.has(n.id));
+    // Same reject policy as the behaviour gate (factored) — unsupported ⇒ the whole
+    // OM feature clamps to the CPU overlay (never a per-mapping partial).
+    if (!agentSubsetSupported(reachNodes, edges, nodes, m)) return { omShaders: [], omSupported: false };
+    let emit: AgentRootModuleEmit;
+    try {
+      emit = emitAgentRootModule(root, 'do', nodes, edges, m, layout, reachable, 'behaviour');
+    } catch { return { omShaders: [], omSupported: false }; }
+    shaders.push({
+      mappingId, code: emit.shaderCode,
+      usesBondStore: emit.usesBondStore, usesIndicators: emit.usesIndicators, usesAux: emit.usesAux,
+    });
+  }
+  return { omShaders: shaders, omSupported: true };
 }
 
 /** Bake `_indicatorIdx` + `_indicatorIsInt` onto each indicator node (the agent
