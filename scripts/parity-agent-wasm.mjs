@@ -348,6 +348,69 @@ function buildApplyForceToAgentsModel() {
   };
 }
 
+// Synthetic: an agent flow DIAMOND. A conditional (gated on Get Cell Attribute
+// `sel` >= 0) whose `then` and `else` branches each write a DISTINCT `mark`, and
+// BOTH flow into a SHARED downstream chain: applyForce(fx = sel*0.01, a PURE value
+// hoisted once) → applyForce(fx = (rndX-0.5)*0.05, fy = (rndY-0.5)*0.05, getRandom-
+// TAINTED = non-hoistable). `compileFlowChain` inlines the shared chain once per
+// branch, so the getRandom-tainted expressions must re-emit in EACH branch's own
+// scope (WebGPU: a WGSL unresolved-name error otherwise; WASM: a stale local reused
+// / a skipped random draw = silently wrong + a broken RNG stream). This is the
+// exact class the user hit on a Chemotaxis overpopulation rule. Bit-identical
+// JS↔WASM proves the fix draws the right randoms in the right order on both.
+function buildDiamondModel() {
+  const used = new Set();
+  const nid = (p) => { let id; do { id = p + Math.random().toString(36).slice(2, 8); } while (used.has(id)); used.add(id); return id; };
+  const aN = [], aEd = [];
+  const an = (t, c) => { const n = { id: nid('a'), type: 'caNode', position: { x: 0, y: 0 }, data: { nodeType: t, config: c } }; aN.push(n); return n; };
+  const aE = (s, sp, tt, tp, cat) => aEd.push({ id: nid('e'), source: s.id, target: tt.id, sourceHandle: `output_${cat}_${sp}`, targetHandle: `input_${cat}_${tp}` });
+  const bs = an('behaviourStep', {});
+  const gca = an('getCellAttribute', { attributeId: 'sel' });
+  const cmp = an('statement', { compareType: 'numerical', operation: '>=', _port_y: '0' });
+  aE(gca, 'value', cmp, 'x', 'value');
+  const cond = an('conditional', {});
+  aE(bs, 'do', cond, 'check', 'flow');
+  aE(cmp, 'result', cond, 'condition', 'value');
+  // then / else each write a distinct mark, then both → the SHARED force chain.
+  const setThen = an('setAttribute', { attributeId: 'mark', _port_value: '1' });
+  const setElse = an('setAttribute', { attributeId: 'mark', _port_value: '2' });
+  aE(cond, 'then', setThen, 'do', 'flow');
+  aE(cond, 'else', setElse, 'do', 'flow');
+  // PURE hoisted value shared across branches (sel*0.01 → applyForce fx).
+  const exprGrad = an('expression', { expression: 'a*0.01', visibleCount: 1 });
+  aE(gca, 'value', exprGrad, 'a', 'value');
+  const afGrad = an('applyForce', {});
+  aE(exprGrad, 'result', afGrad, 'fx', 'value');
+  // NON-hoistable getRandom-tainted values on the second (chained) applyForce.
+  const rndX = an('getRandom', { randomType: 'float', min: '0', max: '1' });
+  const rndY = an('getRandom', { randomType: 'float', min: '0', max: '1' });
+  const exprRx = an('expression', { expression: '(a-0.5)*0.05', visibleCount: 1 });
+  const exprRy = an('expression', { expression: '(a-0.5)*0.05', visibleCount: 1 });
+  aE(rndX, 'value', exprRx, 'a', 'value');
+  aE(rndY, 'value', exprRy, 'a', 'value');
+  const afRand = an('applyForce', {});
+  aE(exprRx, 'result', afRand, 'fx', 'value');
+  aE(exprRy, 'result', afRand, 'fy', 'value');
+  // DIAMOND: setThen.next AND setElse.next both → afGrad → afRand.
+  aE(setThen, 'next', afGrad, 'do', 'flow');
+  aE(setElse, 'next', afGrad, 'do', 'flow');
+  aE(afGrad, 'next', afRand, 'do', 'flow');
+  return {
+    schemaVersion: 1,
+    properties: { name: 'Flow Diamond Parity Test', dimension: '2d', gridWidth: 24, gridHeight: 24, topology: '2d-grid', boundaryTreatment: 'torus', useWasm: false, useWebGPU: false },
+    topologyMode: { gridCells: false, agents: true },
+    centerBased: { enabled: true, maxAgents: 100, maxBonds: 0, worldWidth: 24, worldHeight: 24, seedCount: 40, seedPattern: 'scatter', defaultRadius: 0.5, growthRate: 0, repulsionStiffness: 2, adhesionStiffness: 0, interactionRange: 1.5, drag: 1, timeStep: 0.1, momentum: 0, maxSpeed: 0, neighbourQueryRadius: 8, useBondingPhysics: false, autoBond: false, agentTarget: 'wasm', agentUpdateMode: 'async',
+      agentCapabilities: { motion: 'force', body: true, collision: 'off', bonds: 'off', autoBond: false, growth: false, division: false, lifespan: false, populationBirth: false, populationDeath: false, sensing: false, sensingHeadingSource: 'velocity', orientation: false, fieldCoupling: false, appearance: true } },
+    attributes: [], modelAttributes: [], neighborhoods: [],
+    agentAttributes: [
+      { id: 'sel', name: 'Sel', type: 'float', defaultValue: '0' },
+      { id: 'mark', name: 'Mark', type: 'float', defaultValue: '0' },
+    ],
+    variables: [], agentVariables: [], indicators: [], mappings: [],
+    graphNodes: [], graphEdges: [], agentGraphNodes: aN, agentGraphEdges: aEd, macroDefs: [],
+  };
+}
+
 const modelsDir = join(ROOT, 'public', 'models');
 const files = readdirSync(modelsDir).filter(f => f.endsWith('.gcaproj'));
 const SEED = 0x9e3779b1 >>> 0;
@@ -487,6 +550,7 @@ entries.push({ name: '[synthetic] Apply Force To Agent (pairwise scatter)', raw:
 entries.push({ name: '[synthetic] Apply Force To Agents (array broadcast, lowered)', raw: buildApplyForceToAgentsModel() });
 entries.push({ name: '[synthetic] Loop index output (value chain + branch + direct)', raw: buildLoopIndexModel() });
 entries.push({ name: '[synthetic] Curvature + bond currentLength (bonded, hypot↔sqrt)', raw: buildCurvatureModel(), setup: setupCurvatureStores });
+entries.push({ name: '[synthetic] Flow diamond (conditional → shared getRandom chain)', raw: buildDiamondModel() });
 
 for (const { name: f, raw, setup } of entries) {
   const model = migrateForHarness(raw);

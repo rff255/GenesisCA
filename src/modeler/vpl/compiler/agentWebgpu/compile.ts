@@ -2258,11 +2258,15 @@ function compileFlowNode(ctx: AgentWgpuCtx, nodeId: string): void {
       // referencing a block-scoped `let` from the sibling branch (WGSL
       // unresolved-name compile error).
       ctx.lines.push(`  if (${cond}) {`);
+      const sThen = enterCacheScope(ctx);
       clearVolatileCache(ctx);
       compileFlowChain(ctx, node.id, 'then');
+      exitCacheScope(ctx, sThen);
       ctx.lines.push(`  } else {`);
+      const sElse = enterCacheScope(ctx);
       clearVolatileCache(ctx);
       compileFlowChain(ctx, node.id, 'else');
+      exitCacheScope(ctx, sElse);
       ctx.lines.push(`  }`);
       clearVolatileCache(ctx);
       compileFlowChain(ctx, node.id, 'next');
@@ -2794,8 +2798,10 @@ function emitForEachBond(ctx: AgentWgpuCtx, node: GraphNode): void {
   }
   ctx.lines.push(`      }`);
   ctx.forEachBondStack.push({ nodeId: node.id, partner, rest, cur, index: k });
+  const s = enterCacheScope(ctx);
   clearVolatileCache(ctx);
   compileFlowChain(ctx, node.id, 'body');
+  exitCacheScope(ctx, s);
   ctx.forEachBondStack.pop();
   ctx.lines.push(`    }`);
   ctx.lines.push(`  }`);
@@ -2843,10 +2849,12 @@ function emitSwitch(ctx: AgentWgpuCtx, node: GraphNode): void {
   // (WGSL unresolved-name compile error). Mirrors the conditional emit.
   if (firstMatchOnly) {
     const open = (ci: number): void => {
-      if (ci >= caseCount) { if (hasDefault) { clearVolatileCache(ctx); compileFlowChain(ctx, node.id, 'default'); } return; }
+      if (ci >= caseCount) { if (hasDefault) { const sd = enterCacheScope(ctx); clearVolatileCache(ctx); compileFlowChain(ctx, node.id, 'default'); exitCacheScope(ctx, sd); } return; }
       ctx.lines.push(`  if (${caseConds[ci]}) {`);
+      const sc = enterCacheScope(ctx);
       clearVolatileCache(ctx);
       compileFlowChain(ctx, node.id, `case_${ci}`);
+      exitCacheScope(ctx, sc);
       ctx.lines.push(`  } else {`);
       open(ci + 1);
       ctx.lines.push(`  }`);
@@ -2856,11 +2864,13 @@ function emitSwitch(ctx: AgentWgpuCtx, node: GraphNode): void {
   } else {
     for (let ci = 0; ci < caseCount; ci++) {
       ctx.lines.push(`  if (${caseConds[ci]}) {`);
+      const sc = enterCacheScope(ctx);
       clearVolatileCache(ctx);
       compileFlowChain(ctx, node.id, `case_${ci}`);
+      exitCacheScope(ctx, sc);
       ctx.lines.push(`  }`);
     }
-    if (hasDefault) { clearVolatileCache(ctx); compileFlowChain(ctx, node.id, 'default'); }
+    if (hasDefault) { const sd = enterCacheScope(ctx); clearVolatileCache(ctx); compileFlowChain(ctx, node.id, 'default'); exitCacheScope(ctx, sd); }
     clearVolatileCache(ctx);
   }
 }
@@ -2891,8 +2901,10 @@ function emitLoop(ctx: AgentWgpuCtx, node: GraphNode): void {
  *  BODY chain with per-iteration volatile-cache clears, close the block. */
 function runLoopBody(ctx: AgentWgpuCtx, node: GraphNode, li: string): void {
   ctx.loopStack.push({ nodeId: node.id, idxName: li });
+  const s = enterCacheScope(ctx);
   clearVolatileCache(ctx);
   compileFlowChain(ctx, node.id, 'body');
+  exitCacheScope(ctx, s);
   ctx.loopStack.pop();
   ctx.lines.push(`  }`);
   clearVolatileCache(ctx);
@@ -2906,8 +2918,10 @@ function emitForEach(ctx: AgentWgpuCtx, node: GraphNode): void {
   ctx.lines.push(`  for (var ${fi}: i32 = 0; ${fi} < ${arr.lenName}; ${fi} = ${fi} + 1) {`);
   ctx.lines.push(`    let ${elem}: ${wt} = ${arrLoad(arr, fi)};`);
   ctx.forEachStack.push({ nodeId: node.id, elemName: elem, idxName: fi, elemType: arr.elemType });
+  const s = enterCacheScope(ctx);
   clearVolatileCache(ctx);
   compileFlowChain(ctx, node.id, 'body');
+  exitCacheScope(ctx, s);
   ctx.forEachStack.pop();
   ctx.lines.push(`  }`);
   clearVolatileCache(ctx);
@@ -2924,6 +2938,42 @@ function clearVolatileCache(ctx: AgentWgpuCtx): void {
     const nid = k.slice(0, k.lastIndexOf(':'));
     if (ctx.volatileNodes.has(nid)) ctx.arrayCache.delete(k);
   }
+}
+
+// ---------------------------------------------------------------------------
+// Block-scope cache discipline (the flow-DIAMOND fix).
+//
+// WGSL is block-scoped: a `let` emitted inside a `{ ... }` block is out of scope
+// once the block closes. `compileFlowChain` has NO visited guard (the documented
+// "flow graphs are DAGs, not trees" discipline), so a flow DIAMOND — a node
+// reached from >1 sibling branch (a conditional `then` AND `else` both flowing
+// into a shared downstream node) — inlines that shared node's body ONCE PER
+// branch walk. A value in the shared body that is NOT hoisted to function-top by
+// preEmitAgentValues (an impure cone — e.g. a getRandom-tainted expression) is
+// emitted + cached during the FIRST branch's walk (inside that branch's block);
+// the SECOND branch's walk then hits the cache and references the first block's
+// `let` — OUT OF SCOPE (a WGSL unresolved-name compile error).
+//
+// Fix: snapshot the value + array caches on entering a flow block, and on exit
+// drop every entry ADDED inside it, so the shared body re-emits its non-hoisted
+// values in each sibling branch's own scope. Pure cross-branch values already
+// exist at snapshot time (hoisted at function-top / emitted in a dominating linear
+// scope) → they survive the drop, so a model with no diamond is byte-identical.
+// Orthogonal to clearVolatileCache (which forces forEach-element re-emission per
+// iteration); the snapshot is taken BEFORE the entry clearVolatileCache so volatile
+// handling is left entirely to clearVolatileCache (unchanged), and exit drops only
+// the NON-volatile branch-local entries clearVolatileCache misses.
+// ---------------------------------------------------------------------------
+
+interface AgentCacheScope { v: Set<string>; a: Set<string>; }
+
+function enterCacheScope(ctx: AgentWgpuCtx): AgentCacheScope {
+  return { v: new Set(ctx.valueCache.keys()), a: new Set(ctx.arrayCache.keys()) };
+}
+
+function exitCacheScope(ctx: AgentWgpuCtx, snap: AgentCacheScope): void {
+  for (const k of [...ctx.valueCache.keys()]) if (!snap.v.has(k)) ctx.valueCache.delete(k);
+  for (const k of [...ctx.arrayCache.keys()]) if (!snap.a.has(k)) ctx.arrayCache.delete(k);
 }
 
 // ---------------------------------------------------------------------------

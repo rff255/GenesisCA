@@ -2384,8 +2384,8 @@ function compileFlowNode(ctx: AgentWasmCtx, nodeId: string): void {
       // reading a local whose set instruction only exists in A's bytecode (a
       // stale previous-iteration value at runtime).
       em.ifThenElse(
-        () => { clearVolatileCache(ctx); compileFlowChain(ctx, node.id, 'then'); },
-        () => { clearVolatileCache(ctx); compileFlowChain(ctx, node.id, 'else'); },
+        () => { const s = enterCacheScope(ctx); clearVolatileCache(ctx); compileFlowChain(ctx, node.id, 'then'); exitCacheScope(ctx, s); },
+        () => { const s = enterCacheScope(ctx); clearVolatileCache(ctx); compileFlowChain(ctx, node.id, 'else'); exitCacheScope(ctx, s); },
       );
       clearVolatileCache(ctx);
       compileFlowChain(ctx, node.id, 'next');
@@ -2737,8 +2737,10 @@ function emitForEachBond(ctx: AgentWasmCtx, node: GraphNode): void {
     em.op(OP_F64_SQRT); em.localSet(curL);
     // index = feb
     em.localGet(feb); em.localSet(idxL);
+    const s = enterCacheScope(ctx);
     clearVolatileCache(ctx);
     compileFlowChain(ctx, node.id, 'body');
+    exitCacheScope(ctx, s);
     em.localGet(feb); em.i32Const(1); em.op(OP_I32_ADD); em.localSet(feb);
     em.br(0);
   }); });
@@ -2789,10 +2791,10 @@ function emitSwitch(ctx: AgentWasmCtx, node: GraphNode): void {
   // local whose set instruction lives only in the first case's bytecode.
   if (firstMatchOnly) {
     const open = (ci: number): void => {
-      if (ci >= caseCount) { if (hasDefault) { clearVolatileCache(ctx); compileFlowChain(ctx, node.id, 'default'); } return; }
+      if (ci >= caseCount) { if (hasDefault) { const s = enterCacheScope(ctx); clearVolatileCache(ctx); compileFlowChain(ctx, node.id, 'default'); exitCacheScope(ctx, s); } return; }
       pushValueAs(em, caseConds[ci]!, I32);
       em.ifThenElse(
-        () => { clearVolatileCache(ctx); compileFlowChain(ctx, node.id, `case_${ci}`); },
+        () => { const s = enterCacheScope(ctx); clearVolatileCache(ctx); compileFlowChain(ctx, node.id, `case_${ci}`); exitCacheScope(ctx, s); },
         () => open(ci + 1),
       );
     };
@@ -2802,9 +2804,9 @@ function emitSwitch(ctx: AgentWasmCtx, node: GraphNode): void {
     const matched = em.allocLocal(I32); em.i32Const(0); em.localSet(matched);
     for (let ci = 0; ci < caseCount; ci++) {
       pushValueAs(em, caseConds[ci]!, I32);
-      em.ifThen(() => { em.i32Const(1); em.localSet(matched); clearVolatileCache(ctx); compileFlowChain(ctx, node.id, `case_${ci}`); });
+      em.ifThen(() => { em.i32Const(1); em.localSet(matched); const s = enterCacheScope(ctx); clearVolatileCache(ctx); compileFlowChain(ctx, node.id, `case_${ci}`); exitCacheScope(ctx, s); });
     }
-    if (hasDefault) { em.localGet(matched); em.op(OP_I32_EQZ); em.ifThen(() => { clearVolatileCache(ctx); compileFlowChain(ctx, node.id, 'default'); }); }
+    if (hasDefault) { em.localGet(matched); em.op(OP_I32_EQZ); em.ifThen(() => { const s = enterCacheScope(ctx); clearVolatileCache(ctx); compileFlowChain(ctx, node.id, 'default'); exitCacheScope(ctx, s); }); }
     clearVolatileCache(ctx);
   }
 }
@@ -2830,8 +2832,10 @@ function emitLoop(ctx: AgentWasmCtx, node: GraphNode): void {
   ctx.loopStack.push({ nodeId: node.id, idxLocal: li });
   em.block(() => { em.loop(() => {
     em.localGet(li); em.localGet(cnt); em.op(isRange ? OP_I32_GT_S : OP_I32_GE_S); em.brIf(1);
+    const s = enterCacheScope(ctx);
     clearVolatileCache(ctx);
     compileFlowChain(ctx, node.id, 'body');
+    exitCacheScope(ctx, s);
     em.localGet(li); em.i32Const(1); em.op(OP_I32_ADD); em.localSet(li); em.br(0);
   }); });
   ctx.loopStack.pop();
@@ -3732,8 +3736,10 @@ function emitForEach(ctx: AgentWasmCtx, node: GraphNode): void {
       // element = arr[fi]
       if (arr.isF64) { pushArrayElemF64(em, arr, fiL); em.localSet(elemL); }
       else { pushArrayElemI32(em, arr, fiL); em.localSet(elemL); }
+      const s = enterCacheScope(ctx);
       clearVolatileCache(ctx);
       compileFlowChain(ctx, node.id, 'body');
+      exitCacheScope(ctx, s);
       em.localGet(fiL); em.i32Const(1); em.op(OP_I32_ADD); em.localSet(fiL);
       em.br(0);
     });
@@ -3756,6 +3762,38 @@ function clearVolatileCache(ctx: AgentWasmCtx): void {
     const nid = k.slice(0, k.lastIndexOf(':'));
     if (ctx.volatileNodes.has(nid)) ctx.arrayCache.delete(k);
   }
+}
+
+// ---------------------------------------------------------------------------
+// Block-scope cache discipline (the flow-DIAMOND fix — mirrors agentWebgpu).
+//
+// `compileFlowChain` has NO visited guard, so a flow DIAMOND (a node reached from
+// >1 sibling branch — a conditional `then` AND `else` both flowing into a shared
+// downstream node) inlines that shared node's body ONCE PER branch walk. A value
+// in the shared body NOT hoisted to function-top by preEmitAgentValues (an impure
+// cone — e.g. a getRandom-tainted expression) is emitted to a local + cached during
+// the FIRST branch's walk; the SECOND branch's walk then hits the cache and reads
+// that local WITHOUT re-emitting the `local.set` (which lives only in the first
+// branch's bytecode). WASM locals are function-scoped so it doesn't fail to
+// validate (unlike WGSL), but at runtime the second branch reads a STALE local (or
+// skips the getRandom draw entirely) — silently wrong AND breaks JS↔WASM parity.
+//
+// Fix: snapshot the value + array caches on entering a flow block, and on exit drop
+// every entry ADDED inside it, so the shared body re-emits (its `local.set`) in each
+// sibling branch. Pure cross-branch values pre-exist at snapshot time (hoisted at
+// function-top) → survive → byte-identical for models with no diamond. Snapshot is
+// taken BEFORE the entry clearVolatileCache, so volatile handling is unchanged.
+// ---------------------------------------------------------------------------
+
+interface AgentCacheScope { v: Set<string>; a: Set<string>; }
+
+function enterCacheScope(ctx: AgentWasmCtx): AgentCacheScope {
+  return { v: new Set(ctx.valueCache.keys()), a: new Set(ctx.arrayCache.keys()) };
+}
+
+function exitCacheScope(ctx: AgentWasmCtx, snap: AgentCacheScope): void {
+  for (const k of [...ctx.valueCache.keys()]) if (!snap.v.has(k)) ctx.valueCache.delete(k);
+  for (const k of [...ctx.arrayCache.keys()]) if (!snap.a.has(k)) ctx.arrayCache.delete(k);
 }
 
 // ---------------------------------------------------------------------------
