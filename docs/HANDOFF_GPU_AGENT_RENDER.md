@@ -147,6 +147,12 @@ next phase must know.
 
 1. Launch one phase session at a time (fresh Opus 4.8 session; boot prompt
    below). Never two sessions touching the same files concurrently.
+   **And never `git add -A` while a phase session is in flight** — stage
+   EXPLICIT paths only (an orchestrator hotfix once swept a running
+   session's half-finished edits into its commit, 380b00b). If it happens:
+   leave the mixed commit (splitting races the session's git ops), message
+   the session so it doesn't panic-revert, and note the span in both
+   commit messages.
 2. On completion: read the Completion Report, spot-check the gates yourself
    (rerun parity + one in-browser probe), review the diff
    (`git diff <prev>..HEAD --stat` + read the risky hunks), and only then
