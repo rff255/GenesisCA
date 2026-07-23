@@ -1762,9 +1762,9 @@ export function HelpView() {
               built-in neighbour-density scan only runs when something actually reads it
               (a Neighbour Density node, division, or engine physics), so a pure
               custom-force model pays nothing for it.</li>
-            <li><strong>Direct agent render.</strong> For an agents-only, 2D model on the
-              <strong> WebGPU</strong> agent target (no sprites, no metaballs, no Agent
-              Output Mapping), the worker renders the agents <em>straight from the GPU</em>
+            <li><strong>Direct agent render.</strong> For an agents-only, 2D model
+              (no sprites, no metaballs) &mdash; on <em>any</em> agent target (JS,
+              WebAssembly, or WebGPU) &mdash; the worker renders the agents on the GPU
               into the canvas &mdash; the main thread just copies the finished frame. While
               you simply watch it run, the browser does almost no per-frame work; the
               simulation only pays a small one-off cost the moment a feature (the agent

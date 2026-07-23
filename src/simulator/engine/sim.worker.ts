@@ -47,7 +47,8 @@ import {
   uploadAgentAux, uploadAgentIndicators, readbackAgentIndicators, uploadAgentBondStore,
   ensureAgentResident, computeResidentHashParams, uploadAgentHashParams, dispatchResidentBatch, readbackAgentFrame,
   setupAgentDirectRender, uploadAgentRenderView, presentAgentsOnce, presentAgentsFromStore,
-  type AgentWebGPURuntime, type FieldArray, type AgentRenderView,
+  createAgentRenderOnlyRuntime, presentAgentRenderFromStore, destroyAgentRenderSurface,
+  type AgentWebGPURuntime, type AgentRenderSurface, type FieldArray, type AgentRenderView,
 } from './agentWebgpuRuntime';
 
 interface AttrDef {
@@ -267,6 +268,10 @@ interface InitMsg {
    *  universal-node region bases ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â auxF32 / indicators / bondStore / 3D z fields).
    *  The worker binds + uploads against this EXACT layout (no recompute mismatch). */
   agentWebgpuLayout?: AgentWebGPULayout;
+  /** A2 — the render-only GPU agent layout for a CPU (JS/WASM) render-eligible
+   *  model (maxAgents + the x/y/radius bases). The worker builds a render-only
+   *  surface from it (no compute pipelines). Absent on a webgpu target. */
+  agentRenderLayout?: AgentWebGPULayout;
   /** True when the behaviour writes the i32 SoA (setAgentType) ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ the runtime binds
    *  agentI32 read_write + reads the type run back. */
   agentWebgpuUsesI32Write?: boolean;
@@ -303,7 +308,7 @@ interface PaintManualMsg {
   activeViewer: string;
 }
 interface ResetMsg { type: 'reset'; activeViewer: string; reqId?: number }
-interface RecompileMsg { type: 'recompile'; stepCode: string; initCode?: string; gridInitCode?: string; skipIsolatedEmpty?: SkipIsolatedEmptyConfig; inputColorCodes: Array<{ mappingId: string; code: string }>; outputMappingCodes: Array<{ mappingId: string; code: string }>; stopMessages?: string[]; updateMode: string; asyncScheme: string; wasmStepBytes?: Uint8Array; wasmStepError?: string; wasmExports?: string[]; viewerIds?: Record<string, number>; webgpuShaderCode?: string; webgpuShaderError?: string; webgpuEntryPoints?: WebGPUEntryPoints; webgpuLayout?: WebGPULayout; webgpuStopCheckInterval?: number; variegated?: VariegatedPayload; interactionTables?: InteractionTablePayload[]; agentBehaviourCode?: string; agentInitCode?: string; agentDivisionCode?: string; agentColorViewer?: string; agentOutputMappingCodes?: Array<{ mappingId: string; code: string }>; agentHasSprites?: boolean; centerBased?: CenterBasedConfig; agentUsesField?: boolean; agentUsesDensity?: boolean; agentResidencyClean?: boolean; agentTarget?: 'js' | 'wasm' | 'webgpu'; agentWasmBytes?: Uint8Array; agentWasmViewerGuardIds?: string[]; agentLayoutExtras?: AgentLayoutExtras; agentWasmLayoutSig?: { maxHashBins: number; totalBytes: number }; agentWebgpuBehaviourShader?: string; agentWebgpuForceShader?: string; agentWebgpuMaxAgents?: number; agentWebgpuMaxHashBins?: number; agentWebgpuLayout?: AgentWebGPULayout; agentWebgpuUsesI32Write?: boolean; agentWebgpuUsage?: { usesBondStore?: boolean; usesIndicators?: boolean; usesAux?: boolean; usesSpawn?: boolean; usesStop?: boolean; usesForceScatter?: boolean } }
+interface RecompileMsg { type: 'recompile'; stepCode: string; initCode?: string; gridInitCode?: string; skipIsolatedEmpty?: SkipIsolatedEmptyConfig; inputColorCodes: Array<{ mappingId: string; code: string }>; outputMappingCodes: Array<{ mappingId: string; code: string }>; stopMessages?: string[]; updateMode: string; asyncScheme: string; wasmStepBytes?: Uint8Array; wasmStepError?: string; wasmExports?: string[]; viewerIds?: Record<string, number>; webgpuShaderCode?: string; webgpuShaderError?: string; webgpuEntryPoints?: WebGPUEntryPoints; webgpuLayout?: WebGPULayout; webgpuStopCheckInterval?: number; variegated?: VariegatedPayload; interactionTables?: InteractionTablePayload[]; agentBehaviourCode?: string; agentInitCode?: string; agentDivisionCode?: string; agentColorViewer?: string; agentOutputMappingCodes?: Array<{ mappingId: string; code: string }>; agentHasSprites?: boolean; centerBased?: CenterBasedConfig; agentUsesField?: boolean; agentUsesDensity?: boolean; agentResidencyClean?: boolean; agentTarget?: 'js' | 'wasm' | 'webgpu'; agentWasmBytes?: Uint8Array; agentWasmViewerGuardIds?: string[]; agentLayoutExtras?: AgentLayoutExtras; agentWasmLayoutSig?: { maxHashBins: number; totalBytes: number }; agentWebgpuBehaviourShader?: string; agentWebgpuForceShader?: string; agentWebgpuMaxAgents?: number; agentWebgpuMaxHashBins?: number; agentWebgpuLayout?: AgentWebGPULayout; agentRenderLayout?: AgentWebGPULayout; agentWebgpuUsesI32Write?: boolean; agentWebgpuUsage?: { usesBondStore?: boolean; usesIndicators?: boolean; usesAux?: boolean; usesSpawn?: boolean; usesStop?: boolean; usesForceScatter?: boolean } }
 interface UpdateLookupTableMsg {
   type: 'updateLookupTable';
   attrId: string;
@@ -825,12 +830,32 @@ let agentBatchPresented = false;
 /** The last camera/tiling/graphics uniform (re-applied on attach / refocus). */
 let agentRenderView: AgentRenderView | null = null;
 
+/** A2 — the render-ONLY surface for a CPU (JS/WASM) target. On a webgpu target the
+ *  render reads the full `agentWebgpuRuntime`; on a CPU target there is no compute
+ *  runtime, so this lightweight surface (device + the three render buffers) is
+ *  fed by uploading the CPU store each frame. Mutually exclusive with
+ *  `agentWebgpuRuntime` (webgpu builds the former, CPU builds this). */
+let agentRenderRuntime: AgentRenderSurface | null = null;
+/** The GPU agent layout SimulatorView ships for a render-eligible CPU target
+ *  (maxAgents + the x/y/radius bases). Null on a webgpu target (uses the full
+ *  layout the runtime was built from). Drives the lazy render-only build on attach. */
+let pendingAgentRenderLayout: AgentWebGPULayout | null = null;
+
+/** The active render surface — the full webgpu runtime OR the CPU render-only
+ *  surface (they never coexist). */
+function activeRenderSurface(): AgentRenderSurface | null {
+  return agentWebgpuRuntime ?? agentRenderRuntime;
+}
+
 /** Present the agent frame from the current CPU store (positions + colours) —
- *  used wherever the CPU store is authoritative (per-gen batch tail, mutations).
- *  No-op unless render is active. */
+ *  used wherever the CPU store is authoritative (per-gen batch tail, mutations,
+ *  every CPU-target step batch). No-op unless render is active. The webgpu runtime
+ *  uploads the FULL SoA (its compute step reads it next); the render-only surface
+ *  uploads only the render fields (tight). */
 function presentAgentsIfActive(): void {
-  if (!agentRenderActive || !agentWebgpuRuntime || !agentStore) return;
-  presentAgentsFromStore(agentWebgpuRuntime, agentStore);
+  if (!agentRenderActive || !agentStore) return;
+  if (agentWebgpuRuntime) presentAgentsFromStore(agentWebgpuRuntime, agentStore);
+  else if (agentRenderRuntime) presentAgentRenderFromStore(agentRenderRuntime, agentStore);
 }
 
 /** One-shot readback: if the CPU agent store is stale (free-mode residency),
@@ -885,6 +910,9 @@ function initAgents(): void {
   // Re-allocating the store invalidates any GPU agent runtime bound to the old
   // store/dims ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â drop it (buildAgentWebGPUIfNeeded rebuilds against the fresh one).
   if (agentWebgpuRuntime) { destroyAgentWebGPURuntime(agentWebgpuRuntime); agentWebgpuRuntime = null; }
+  // A2: same for the CPU-target render-only surface — the main thread re-attaches
+  // its canvas on the next agentRuntimeReady (posted by buildAgentWebGPUIfNeeded).
+  if (agentRenderRuntime) { destroyAgentRenderSurface(agentRenderRuntime); agentRenderRuntime = null; }
   // The per-step hash references the OLD store's scratch arrays ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â never hand it
   // to a colour pass built over the fresh store (stale ids up to the old maxAgents).
   currentAgentHash = null;
@@ -1061,8 +1089,21 @@ function buildAgentWebGPUIfNeeded(): void {
   // A1: the render pipeline lived on the old runtime — the main thread must
   // re-attach its canvas once the new runtime is ready (agentRuntimeReady below).
   agentRenderActive = false; agentStoreStale = false;
+  // A2: a re-init/recompile may have swapped the store/dims — drop the CPU
+  // render-only surface too (the main thread re-attaches on agentRuntimeReady).
+  if (agentRenderRuntime) { destroyAgentRenderSurface(agentRenderRuntime); agentRenderRuntime = null; }
   const store = agentStore;
-  if (agentTarget !== 'webgpu' || !pendingAgentWebgpuBehaviour || !pendingAgentWebgpuForce || !store) return;
+  if (agentTarget !== 'webgpu' || !pendingAgentWebgpuBehaviour || !pendingAgentWebgpuForce || !store) {
+    // A2: for a render-eligible CPU (JS/WASM) target — SimulatorView shipped a
+    // render layout — signal ready so the main thread attaches a render-only
+    // canvas (the render-only surface is built lazily in attachAgentCanvas).
+    // Harmless when the model isn't render-eligible (the attach is main-side
+    // gated on agentRenderEligibleRef; a failed device build acks active:false).
+    if (agentTarget !== 'webgpu' && agentsEnabled && store && pendingAgentRenderLayout) {
+      self.postMessage({ type: 'agentRuntimeReady' });
+    }
+    return;
+  }
   const behaviour = pendingAgentWebgpuBehaviour;
   const force = pendingAgentWebgpuForce;
   // G5 field bridge ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â the agent-accessible cell-attr id lists + grid dims. MUST
@@ -5120,6 +5161,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       pendingAgentWebgpuMaxAgents = msg.agentWebgpuMaxAgents ?? 0;
       pendingAgentWebgpuMaxHashBins = msg.agentWebgpuMaxHashBins ?? 0;
       pendingAgentWebgpuLayout = msg.agentWebgpuLayout ?? null;
+      pendingAgentRenderLayout = msg.agentRenderLayout ?? null;
       pendingAgentWebgpuUsesI32Write = msg.agentWebgpuUsesI32Write ?? false;
       pendingAgentWebgpuUsage = msg.agentWebgpuUsage ?? {};
       initAgents();
@@ -5708,6 +5750,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
         pendingAgentWebgpuMaxAgents = rc.agentWebgpuMaxAgents ?? 0;
         pendingAgentWebgpuMaxHashBins = rc.agentWebgpuMaxHashBins ?? 0;
         pendingAgentWebgpuLayout = rc.agentWebgpuLayout ?? null;
+        pendingAgentRenderLayout = rc.agentRenderLayout ?? null;
         pendingAgentWebgpuUsesI32Write = rc.agentWebgpuUsesI32Write ?? false;
         pendingAgentWebgpuUsage = rc.agentWebgpuUsage ?? {};
         const backingChanged = (newTarget === 'wasm') !== (agentStore?.wasmBacked ?? false) && !agentWasmBackedDev;
@@ -5959,19 +6002,37 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       // set up the agent render pipeline on the agent WebGPU runtime, present
       // once, and ack. Any failure acks active:false (main thread keeps the CPU
       // overlay path). Async setup (validates the WGSL module) via an IIFE.
-      const rt = agentWebgpuRuntime, s = agentStore;
-      if (!rt || !rt.ready || !s) {
+      const s = agentStore;
+      // webgpu target → render straight from the full compute runtime (A1); a CPU
+      // (js/wasm) target → build a lightweight render-ONLY surface (A2) from the
+      // shipped render layout. Either way present once + ack.
+      if (!s || (!agentWebgpuRuntime && !pendingAgentRenderLayout)) {
+        self.postMessage({ type: 'agentRenderStatus', active: false });
+        break;
+      }
+      if (agentWebgpuRuntime && !agentWebgpuRuntime.ready) {
         self.postMessage({ type: 'agentRenderStatus', active: false });
         break;
       }
       void (async () => {
         try {
+          let rt: AgentRenderSurface | null = agentWebgpuRuntime;
+          if (!rt) {
+            // A2 — CPU target: acquire a device + the three render buffers.
+            rt = await createAgentRenderOnlyRuntime(pendingAgentRenderLayout!);
+            if (!rt) { self.postMessage({ type: 'agentRenderStatus', active: false }); return; }
+          }
           const ok = await setupAgentDirectRender(rt, msg.canvas);
-          if (!ok) { self.postMessage({ type: 'agentRenderStatus', active: false }); return; }
+          if (!ok) {
+            if (rt !== agentWebgpuRuntime) destroyAgentRenderSurface(rt);
+            self.postMessage({ type: 'agentRenderStatus', active: false });
+            return;
+          }
+          if (rt !== agentWebgpuRuntime) agentRenderRuntime = rt;
           agentRenderActive = true;
           agentStoreStale = false;
           if (agentRenderView) uploadAgentRenderView(rt, agentRenderView);
-          presentAgentsFromStore(rt, s);
+          presentAgentsIfActive();
           self.postMessage({ type: 'agentRenderStatus', active: true });
         } catch (e) {
           agentRenderActive = false;
@@ -5985,11 +6046,14 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       // Camera / tiling / graphics uniform (pan/zoom/resize/settings). Present-
       // only: re-present with the new view (the GPU buffers hold the last frame).
       agentRenderView = msg.view;
-      if (agentRenderActive && agentWebgpuRuntime) {
-        uploadAgentRenderView(agentWebgpuRuntime, msg.view);
-        // Present now only when idle — a batch in flight is deferred (won't reach
-        // here); a per-gen/mutation present covers the running case via sendColors.
-        presentAgentsOnce(agentWebgpuRuntime, agentStore ? agentStore.highWater : 0);
+      {
+        const rt = activeRenderSurface();
+        if (agentRenderActive && rt) {
+          uploadAgentRenderView(rt, msg.view);
+          // Present now only when idle — a batch in flight is deferred (won't reach
+          // here); a per-gen/mutation present covers the running case via sendColors.
+          presentAgentsOnce(rt, agentStore ? agentStore.highWater : 0);
+        }
       }
       break;
     }
@@ -6010,9 +6074,12 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
     case 'refreshAgentDisplay': {
       // Tab-refocus / soft-recompile analogue of refreshDisplay — re-present the
       // agent frame so a stale/unpresented canvas repaints.
-      if (agentRenderActive && agentWebgpuRuntime && agentStore) {
-        if (agentRenderView) uploadAgentRenderView(agentWebgpuRuntime, agentRenderView);
-        presentAgentsFromStore(agentWebgpuRuntime, agentStore);
+      {
+        const rt = activeRenderSurface();
+        if (agentRenderActive && rt && agentStore) {
+          if (agentRenderView) uploadAgentRenderView(rt, agentRenderView);
+          presentAgentsIfActive();
+        }
       }
       break;
     }

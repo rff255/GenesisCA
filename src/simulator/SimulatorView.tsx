@@ -21,7 +21,7 @@ import { agentTargetOf, resolveMaxBonds } from '../model/centerBased';
 import { compileAgentGraphWasmForModel, isAgentGraphWasmSupported, buildAgentLayoutExtras } from '../modeler/vpl/compiler/agentWasm/compile';
 import type { AgentLayoutExtras } from './engine/agentEngine';
 import { compileAgentGraphWebGPUForModel, isAgentGraphWebGPUSupported } from '../modeler/vpl/compiler/agentWebgpu/compile';
-import type { AgentWebGPULayout } from '../modeler/vpl/compiler/agentWebgpu/layout';
+import { computeAgentWebGPULayout, type AgentWebGPULayout } from '../modeler/vpl/compiler/agentWebgpu/layout';
 import { emitAgentForcePassWGSL } from '../modeler/vpl/compiler/agentWebgpu/forcePass';
 import type { AgentRenderSnapshot } from './engine/agentEngine';
 import type { AgentRenderView } from './engine/agentWebgpuRuntime';
@@ -1900,7 +1900,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   // (Decision D-TARGET). PR-A2 returns a placeholder (agents seed + render but
   // don't behave); PR-A3 wires the real compileAgentGraph over
   // model.agentGraphNodes (the behaviourStep loop + value-outs + force hooks).
-  const compileAgentModel = useCallback((stopIdxBase = 0, dimsModel?: CAModel): { behaviourCode?: string; initCode?: string; divisionCode?: string; outputMappingCodes?: Array<{ mappingId: string; code: string }>; stopMessages: string[]; colorViewer: string; error?: string; agentTarget: 'js' | 'wasm' | 'webgpu'; agentWasmBytes?: Uint8Array; agentWasmViewerGuardIds?: string[]; agentLayoutExtras?: AgentLayoutExtras; agentWasmLayoutSig?: { maxHashBins: number; totalBytes: number }; agentResidencyClean?: boolean; agentWebgpuBehaviourShader?: string; agentWebgpuForceShader?: string; agentWebgpuMaxAgents?: number; agentWebgpuMaxHashBins?: number; agentWebgpuLayout?: AgentWebGPULayout; agentWebgpuUsesI32Write?: boolean; agentWebgpuUsage?: { usesBondStore?: boolean; usesIndicators?: boolean; usesAux?: boolean; usesSpawn?: boolean; usesStop?: boolean; usesForceScatter?: boolean } } => {
+  const compileAgentModel = useCallback((stopIdxBase = 0, dimsModel?: CAModel): { behaviourCode?: string; initCode?: string; divisionCode?: string; outputMappingCodes?: Array<{ mappingId: string; code: string }>; stopMessages: string[]; colorViewer: string; error?: string; agentTarget: 'js' | 'wasm' | 'webgpu'; agentWasmBytes?: Uint8Array; agentWasmViewerGuardIds?: string[]; agentLayoutExtras?: AgentLayoutExtras; agentWasmLayoutSig?: { maxHashBins: number; totalBytes: number }; agentResidencyClean?: boolean; agentWebgpuBehaviourShader?: string; agentWebgpuForceShader?: string; agentWebgpuMaxAgents?: number; agentWebgpuMaxHashBins?: number; agentWebgpuLayout?: AgentWebGPULayout; agentRenderLayout?: AgentWebGPULayout; agentWebgpuUsesI32Write?: boolean; agentWebgpuUsage?: { usesBondStore?: boolean; usesIndicators?: boolean; usesAux?: boolean; usesSpawn?: boolean; usesStop?: boolean; usesForceScatter?: boolean } } => {
     // A simulator Resize / image-import overrides the live grid dims WITHOUT
     // touching model state, and the agent WASM/WebGPU compilers bake dims-derived
     // layout regions (the spatial-hash reserve, fieldTotal). Compiling from the
@@ -1937,6 +1937,14 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     let agentWebgpuMaxAgents: number | undefined;
     let agentWebgpuMaxHashBins: number | undefined;
     let agentWebgpuLayout: AgentWebGPULayout | undefined;
+    // A2: the render-only GPU agent layout for a CPU (JS/WASM) target. The worker
+    // builds a render-only surface from it (device + the three render buffers) to
+    // move the ~10 ms Canvas2D agent draw onto the GPU. maxAgents matches the store
+    // (both from cfg.maxAgents); x/y/radius are the static leading SoA fields, so a
+    // minimal layout (no hash / field / attrs; gridDepth 1 — A2 render is 2D-only)
+    // gives the same bases the render pipeline reads. Only used if the render gate
+    // holds main-side (agentRenderEligibleRef); harmless otherwise.
+    let agentRenderLayout: AgentWebGPULayout | undefined;
     let agentWebgpuUsesI32Write: boolean | undefined;
     let agentWebgpuUsage: { usesBondStore?: boolean; usesIndicators?: boolean; usesAux?: boolean; usesSpawn?: boolean; usesStop?: boolean; usesForceScatter?: boolean } | undefined;
     let agentLayoutExtras: AgentLayoutExtras | undefined;
@@ -2007,7 +2015,15 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
         agentTarget = 'js';
       }
     }
-    return { behaviourCode: ag.behaviourCode || undefined, initCode: ag.initCode || undefined, divisionCode: ag.divisionCode || undefined, outputMappingCodes: ag.outputMappingCodes && ag.outputMappingCodes.length ? ag.outputMappingCodes : undefined, stopMessages: ag.stopMessages, colorViewer, error: ag.error || undefined, agentTarget, agentWasmBytes, agentWasmViewerGuardIds, agentLayoutExtras, agentWasmLayoutSig, agentResidencyClean, agentWebgpuBehaviourShader, agentWebgpuForceShader, agentWebgpuMaxAgents, agentWebgpuMaxHashBins, agentWebgpuLayout, agentWebgpuUsesI32Write, agentWebgpuUsage };
+    // A2: for a CPU (js/wasm) target, ship a minimal render-only GPU agent layout
+    // so the worker can build a render-only surface (the direct-render fast path
+    // for CPU-simulated agents). Not needed on webgpu (the full runtime renders).
+    if (agentTarget !== 'webgpu') {
+      agentRenderLayout = computeAgentWebGPULayout(
+        Math.max(1, Math.floor((m.centerBased?.maxAgents as number) ?? 2000)), 0, undefined, [], { gridDepth: 1 },
+      );
+    }
+    return { behaviourCode: ag.behaviourCode || undefined, initCode: ag.initCode || undefined, divisionCode: ag.divisionCode || undefined, outputMappingCodes: ag.outputMappingCodes && ag.outputMappingCodes.length ? ag.outputMappingCodes : undefined, stopMessages: ag.stopMessages, colorViewer, error: ag.error || undefined, agentTarget, agentWasmBytes, agentWasmViewerGuardIds, agentLayoutExtras, agentWasmLayoutSig, agentResidencyClean, agentWebgpuBehaviourShader, agentWebgpuForceShader, agentWebgpuMaxAgents, agentWebgpuMaxHashBins, agentWebgpuLayout, agentRenderLayout, agentWebgpuUsesI32Write, agentWebgpuUsage };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [model.agentGraphNodes, model.agentGraphEdges, model.topologyMode?.agents, model.attributes, model.agentAttributes, model.mappings, model.centerBased]);
 
@@ -3982,17 +3998,26 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     if (dimsModel.properties.useWebGPU && !webgpuResult.error && offscreenSupported && !is3D && !agentModel) {
       pendingCanvasAttach.current = true;
     }
-    // A1 direct AGENT render gate (all GENERAL model properties). The WORKER
-    // renders agents from the resident GPU SoA; the main thread blits 1:1.
-    // agents-only + 2D + resolved agent target 'webgpu' + OffscreenCanvas + no
-    // CPU-only visual (sprites / metaballs) + no Agent Output Mapping (its colours
-    // are computed CPU-side into s.colors, NOT the GPU agentColors the render reads
-    // — an OM model keeps today's CPU-overlay path so its colours stay correct).
+    // Direct AGENT render gate (all GENERAL model properties). The WORKER renders
+    // agents into the OffscreenCanvas; the main thread blits 1:1.
+    //   A1: a WebGPU-target model renders from the resident GPU SoA.
+    //   A2: a CPU (JS / WASM) target — the worker uploads the CPU store's positions/
+    //       colours each frame into a render-only surface and presents (the CPU keeps
+    //       simulating; only the DRAW moves to the GPU). The CPU present ALWAYS uploads
+    //       `s.colors` = CPU-computed colours INCLUDING Agent Output Mappings
+    //       (runAgentColorPass writes them), so OM models ARE render-eligible on a CPU
+    //       target. The OM exclusion is KEPT for the WebGPU target: a resident WebGPU
+    //       batch presents the GPU `agentColors` the behaviour wrote (NOT the CPU OM
+    //       `s.colors`), so a WebGPU+OM model must stay on the CPU overlay until A1.5
+    //       compiles the OM into a GPU colour pass.
+    // Shared exclusions: agents-only + 2D + OffscreenCanvas + no CPU-only visual
+    // (sprites / metaballs). The worker demotes to the CPU overlay if the device
+    // build fails (WebGPU unavailable on a CPU target).
     const agentRenderEligible =
       agentModel && model.topologyMode?.gridCells === false && !is3D
-      && agentResult.agentTarget === 'webgpu' && offscreenSupported
+      && offscreenSupported
       && (model.sprites?.length ?? 0) === 0 && !agentMetaballsRef.current.enabled
-      && (model.agentMappings?.length ?? 0) === 0;
+      && (agentResult.agentTarget !== 'webgpu' || (model.agentMappings?.length ?? 0) === 0);
     agentRenderEligibleRef.current = agentRenderEligible;
     agentDirectRenderActiveRef.current = false;
     pendingAgentRenderCanvas.current = null;
@@ -4117,6 +4142,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       agentWebgpuMaxAgents: agentResult.agentWebgpuMaxAgents,
       agentWebgpuMaxHashBins: agentResult.agentWebgpuMaxHashBins,
       agentWebgpuLayout: agentResult.agentWebgpuLayout,
+      agentRenderLayout: agentResult.agentRenderLayout,
       agentWebgpuUsesI32Write: agentResult.agentWebgpuUsesI32Write,
       agentWebgpuUsage: agentResult.agentWebgpuUsage,
     };

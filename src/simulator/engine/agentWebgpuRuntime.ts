@@ -841,6 +841,38 @@ export function dispatchAgentStep(rt: AgentWebGPURuntime, highWater: number): vo
 // (crisp at any zoom, unlike the upscaled grid blit).
 // ---------------------------------------------------------------------------
 
+/** A2 — the narrow render SURFACE the direct-render helpers operate on: a device,
+ *  the layout (for the baked x/y/radius bases + maxAgents), the three buffers the
+ *  render pipeline binds, and the render-pipeline state. `AgentWebGPURuntime` is
+ *  structurally a superset (it declares all these), so the full webgpu-target
+ *  runtime passes to every surface helper unchanged; a CPU-target model instead
+ *  builds a lightweight render-ONLY surface (createAgentRenderOnlyRuntime) with
+ *  no compute pipelines — the SAME AGENT_RENDER_WGSL fed by uploading the CPU
+ *  store's positions/colours each frame (uploadAgentRenderFields). */
+export interface AgentRenderSurface {
+  device: GPUDevice;
+  layout: AgentWebGPULayout;
+  agentF32Buf: GPUBuffer;
+  agentAliveBuf: GPUBuffer;
+  agentColorsBuf: GPUBuffer;
+  renderCanvas?: OffscreenCanvas | null;
+  renderCtx?: GPUCanvasContext | null;
+  renderViewBuf?: GPUBuffer | null;
+  renderPlainPipeline?: GPURenderPipeline | null;
+  renderGlowPipeline?: GPURenderPipeline | null;
+  renderBindGroup?: GPUBindGroup | null;
+  renderActive?: boolean;
+  renderClear?: [number, number, number, number];
+  renderGlow?: boolean;
+  renderCopiesX?: number;
+  renderCopiesY?: number;
+  /** Render-only path: reusable CPU scratch for the tight per-frame upload
+   *  (x/y/radius runs + alive), so a present doesn't allocate. Absent on the full
+   *  webgpu runtime (which uploads via uploadAgentSoA's own persistent scratch). */
+  renderF32Scratch?: Float32Array;
+  renderAliveScratch?: Uint32Array;
+}
+
 /** The camera + tiling + graphics uniform. Field order MIRRORS
  *  `RENDER_VIEW_WGSL` below AND `uploadAgentRenderView`. All scalar members ⇒
  *  tight 4-byte packing; the WGSL struct rounds to 96 B. */
@@ -982,7 +1014,7 @@ fn fsMain(in: VSOut) -> @location(0) vec4<f32> {
 /** Set up direct render on the transferred OffscreenCanvas. Clones the grid's
  *  setupDirectRender shape (rgba8unorm, premultiplied). Non-fatal on failure
  *  (returns false → the worker keeps the CPU snapshot path). */
-export async function setupAgentDirectRender(rt: AgentWebGPURuntime, canvas: OffscreenCanvas): Promise<boolean> {
+export async function setupAgentDirectRender(rt: AgentRenderSurface, canvas: OffscreenCanvas): Promise<boolean> {
   try {
     const ctx = canvas.getContext('webgpu') as GPUCanvasContext | null;
     if (!ctx) return false;
@@ -1050,7 +1082,7 @@ export async function setupAgentDirectRender(rt: AgentWebGPURuntime, canvas: Off
  *  (r|g<<8|b<<16|a<<24) — the SAME pack the behaviour shader / readbackAgentStep use.
  *  Needed so a MUTATION-driven present (seed/edit) shows the CPU-computed colours
  *  (the GPU behaviour shader hasn't re-run since). */
-export function uploadAgentColors(rt: AgentWebGPURuntime, s: AgentStore): void {
+export function uploadAgentColors(rt: AgentRenderSurface, s: AgentStore): void {
   const ma = rt.layout.maxAgents, hw = s.highWater;
   const u = new Uint32Array(ma);
   const c = s.colors;
@@ -1062,7 +1094,7 @@ export function uploadAgentColors(rt: AgentWebGPURuntime, s: AgentStore): void {
 }
 
 /** Write the RenderView uniform + stash the clear colour / glow selection. */
-export function uploadAgentRenderView(rt: AgentWebGPURuntime, v: AgentRenderView): void {
+export function uploadAgentRenderView(rt: AgentRenderSurface, v: AgentRenderView): void {
   if (!rt.renderViewBuf) return;
   const ab = new ArrayBuffer(RENDER_VIEW_BYTES);
   const u = new Uint32Array(ab), fl = new Float32Array(ab), i = new Int32Array(ab);
@@ -1086,7 +1118,7 @@ export function uploadAgentRenderView(rt: AgentWebGPURuntime, v: AgentRenderView
 
 /** Append the agent render pass (instanced disc quads) to an existing encoder.
  *  Draws `hw × copiesX × copiesY` instances. No-op when render isn't active. */
-export function presentAgentsEncode(rt: AgentWebGPURuntime, enc: GPUCommandEncoder, hw: number): void {
+export function presentAgentsEncode(rt: AgentRenderSurface, enc: GPUCommandEncoder, hw: number): void {
   if (!rt.renderActive || !rt.renderCtx || !rt.renderBindGroup || !rt.renderViewBuf) return;
   // Keep the uniform's highWater == the draw's instance decomposition base. The
   // camera message can't know the live highWater (free mode ships no snapshot),
@@ -1108,7 +1140,7 @@ export function presentAgentsEncode(rt: AgentWebGPURuntime, enc: GPUCommandEncod
 
 /** Present one frame (own encoder + submit) — for camera changes / mutation
  *  refresh / attach / tab-refocus. */
-export function presentAgentsOnce(rt: AgentWebGPURuntime, hw: number): void {
+export function presentAgentsOnce(rt: AgentRenderSurface, hw: number): void {
   if (!rt.renderActive || !rt.renderCtx) return;
   const enc = rt.device.createCommandEncoder({ label: 'agent-present-once' });
   presentAgentsEncode(rt, enc, hw);
@@ -1124,6 +1156,93 @@ export function presentAgentsFromStore(rt: AgentWebGPURuntime, s: AgentStore): v
   uploadAgentSoA(rt, s);
   uploadAgentColors(rt, s);
   presentAgentsOnce(rt, s.highWater);
+}
+
+// ---------------------------------------------------------------------------
+// A2 — render-ONLY runtime for CPU (JS / WASM) targets.
+//
+// A CPU-target model has no agent WebGPU runtime (no compute pipelines). To move
+// the ~10 ms Canvas2D agent draw onto the GPU, the worker builds this lightweight
+// surface — a device + the three render buffers (agentF32 / agentAlive /
+// agentColors) — and uploads the CPU store's positions/colours each frame, then
+// presents via the SAME AGENT_RENDER_WGSL pipeline (built by setupAgentDirectRender
+// on attach). The sim keeps running on the CPU; only the DRAW moves to the GPU.
+// ---------------------------------------------------------------------------
+
+/** Build a render-only agent surface (device + the three render buffers sized to
+ *  `layout`, NO compute pipelines). setupAgentDirectRender builds the render
+ *  pipeline on it later (on canvas attach). Returns null when WebGPU is
+ *  unavailable / device acquisition fails (the worker keeps the CPU overlay path). */
+export async function createAgentRenderOnlyRuntime(layout: AgentWebGPULayout): Promise<AgentRenderSurface | null> {
+  if (!isWebGPUAvailable()) return null;
+  try {
+    const gpu = (navigator as Navigator & { gpu: GPU }).gpu;
+    const adapter = await gpu.requestAdapter();
+    if (!adapter) return null;
+    const device = await adapter.requestDevice();
+    const ma = layout.maxAgents;
+    const mk = (label: string, bytes: number): GPUBuffer =>
+      device.createBuffer({ label, size: Math.max(4, bytes), usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
+    return {
+      device, layout,
+      agentF32Buf: mk('agent-render-f32', layout.f32Len * 4),
+      agentAliveBuf: mk('agent-render-alive', ma * 4),
+      agentColorsBuf: mk('agent-render-colors', ma * 4),
+      renderActive: false,
+      renderF32Scratch: new Float32Array(ma),
+      renderAliveScratch: new Uint32Array(ma),
+    };
+  } catch {
+    return null;
+  }
+}
+
+/** A2 tight upload: write ONLY x/y/radius (+ alive + colours) from the CPU store
+ *  into the render buffers — exactly the fields AGENT_RENDER_WGSL reads. Reuses
+ *  the surface's persistent scratch (no per-frame allocation). Dead / beyond-hw
+ *  slots are culled by the alive mask (written 0 past hw), so the other runs need
+ *  no zeroing. ≈ 1 MB of writeBuffer at 50k agents (≪ the readback we'd skip). */
+export function uploadAgentRenderFields(rt: AgentRenderSurface, s: AgentStore): void {
+  const L = rt.layout, ma = L.maxAgents, hw = Math.min(s.highWater, ma);
+  const scratch = rt.renderF32Scratch ?? (rt.renderF32Scratch = new Float32Array(ma));
+  const write = (base: number, src: ArrayLike<number>): void => {
+    for (let i = 0; i < hw; i++) scratch[i] = src[i]!;
+    // writeBuffer copies the source synchronously, so the scratch is reusable
+    // across the three field writes.
+    rt.device.queue.writeBuffer(rt.agentF32Buf, base * 4, scratch.buffer, 0, hw * 4);
+  };
+  if (hw > 0) {
+    write(L.f32Base['x']!, s.x);
+    write(L.f32Base['y']!, s.y);
+    write(L.f32Base['radius']!, s.radius);
+  }
+  const al = rt.renderAliveScratch ?? (rt.renderAliveScratch = new Uint32Array(ma));
+  for (let i = 0; i < hw; i++) al[i] = s.alive[i]!;
+  for (let i = hw; i < ma; i++) al[i] = 0;
+  rt.device.queue.writeBuffer(rt.agentAliveBuf, 0, al.buffer, 0, ma * 4);
+  uploadAgentColors(rt, s);
+}
+
+/** Sync the render-only surface from the CPU store (tight fields + colours) and
+ *  present. The A2 analogue of presentAgentsFromStore (which uploads the FULL SoA
+ *  because the webgpu compute step reads it next). */
+export function presentAgentRenderFromStore(rt: AgentRenderSurface, s: AgentStore): void {
+  if (!rt.renderActive) return;
+  uploadAgentRenderFields(rt, s);
+  presentAgentsOnce(rt, s.highWater);
+}
+
+/** Tear down a render-only surface (its three buffers + render-view uniform +
+ *  device). The worker calls this ONLY on render-only surfaces — the full
+ *  webgpu runtime is torn down by destroyAgentWebGPURuntime. */
+export function destroyAgentRenderSurface(rt: AgentRenderSurface | null): void {
+  if (!rt) return;
+  rt.renderActive = false;
+  rt.renderCtx = null;
+  const bufs = [rt.agentF32Buf, rt.agentAliveBuf, rt.agentColorsBuf, rt.renderViewBuf ?? null];
+  for (const b of bufs) { if (b) try { b.destroy(); } catch { /* non-fatal */ } }
+  const dev = rt.device as GPUDevice & { destroy?: () => void };
+  if (typeof dev.destroy === 'function') { try { dev.destroy(); } catch { /* non-fatal */ } }
 }
 
 // ---------------------------------------------------------------------------
