@@ -184,3 +184,104 @@ A1's pixels were user-confirmed separately). The ~12 ms delta is roughly consist
 - The render-only surface has its OWN GPUDevice (like the full runtime). `destroyAgentRenderSurface`
   releases it; `initAgents` / `buildAgentWebGPUIfNeeded` tear it down on every re-init/recompile
   (no cross-load device leak).
+
+### B1 Completion Report (2026-07-22)
+
+**Commits** (branch `optimize`, not pushed): B1's diff **spans TWO commits**. Most of the
+implementation (forcePass.ts mirror variant, agentWebgpuRuntime.ts mirror scatter/force/buffers/
+destroy, sim.worker.ts `needScan`) was accidentally swept into the orchestrator's unrelated
+hotfix `380b00b` by a `git add -A` while this session was in flight. The B1 SESSION commit then
+carries the remainder: removing a stray temp-debug line left in `sim.worker.ts` by that sweep +
+these docs (CLAUDE.md B1 subsection, master Status Board, this report). Net production diff for
+B1 = `forcePass.ts` + `agentWebgpuRuntime.ts` + one `sim.worker.ts` line — NO compilers touched
+beyond `agentWebgpu/forcePass.ts` (a compiler-dir file, hence the full identity discipline),
+NO gl3d / agentEngine / JS-WASM / behaviour-shader paths.
+
+**What shipped vs the spec** (deviations, all justified):
+1. **Mirror force pass = a resident-only VARIANT FLAG on `emitAgentForcePassWGSL`, default false**
+   (the orchestrator's binding steer). `mirror=false` emits BYTE-IDENTICAL WGSL to the pre-B1
+   force pass (proven empirically: 2D/3D x scatter-on/off all byte-identical vs `HEAD`), so the
+   per-gen `rt.forcePipeline` + `check-compile-identity` are untouched. The mirror force is a
+   SEPARATE pipeline (`res.forceMirrorPipeline`) built only under `needScan`; `dispatchResidentBatch`
+   routes to it when set, else the shared per-gen pipeline.
+2. **Mirror field SET = the spec's `x,y[,z],radius,vx,vy[,vz]`** even though B1's force scan reads
+   only `x/y/[z]/radius` for neighbours — `vx/vy[/vz]` ride the mirror for B2's fused gather (neighbour
+   velocities) at trivial cost. Field order is the exported `agentMirrorFields(is3d)`, the SINGLE
+   source shared by the scatter emit (runtime) + the force scan emit (forcePass.ts).
+3. **Self-skip via `j = sortedId[p]` + `j != i`** (mirror stencil), matching the canonical body's
+   guard exactly; the mirror holds only alive agents (scatter skips dead) so NO `agentAlive[j]` check.
+   The all-pairs fallback (hashValid 0 => no scatter => no mirror this batch) stays fully canonical.
+4. **`needScan` computed in `runAgentBatchResident`** = `usesBondingPhysics || usesSoftCollision ||
+   agentUsesDensity` (the exact gate the force uniform's `bonding/doCollision/doDensity` come from,
+   STATIC per model under residency eligibility). Passed to `ensureAgentResident(rt, needScan)`;
+   Boids/PL (`customForcesOnly`) => `needScan=false` => no mirror (verified in Node + in-browser).
+
+**Verified** (all real-GPU where GPU-relevant; the pane is occlusion-hidden so compute + readback +
+worker protocol + DOM, never composited pixels — master 0.7; message-driven waits, NOT throttled
+`setTimeout`):
+- **Gates**: `tsc` + `npm run build` + `parity-agent-force` (7) + `parity-agent-wasm` + a **standalone
+  byte-diff** of `emitAgentForcePassWGSL(layout)` old-vs-new (byte-identical, 4 combos) +
+  `check-compile-identity --compare` (25 models, all surfaces unchanged) — all green.
+- **Standalone GPU force test** (page context): the mirror force fed a matched-order hash is
+  **BIT-IDENTICAL** to the canonical force — 0 density-count mismatch, 0 position delta (same
+  neighbour order => identical float sums) — AND matches an independent CPU brute-force neighbour
+  count (0 mismatches). Proves the mirror force math + field/slot reads are correct GIVEN a correct mirror.
+- **GPU-scatter validation** (worker, temp readback, since removed): a soft-collision gas ENGAGES the
+  mirror (`needScan=true hasMirror=true forceMirrorPipeline=set`, `hashValid=1` so the mirror stencil
+  IS exercised) and a direct readback of `sortedBuf`/`sortedId`/`agentF32` confirms **every alive agent
+  appears EXACTLY ONCE** in the mirror with correct field values: `radiusMismatch=0`, `idOutOfRange=0`,
+  `idDead=0`, `aliveSeenOnce=450/450` AND `50000/50000` — a correct CSR permutation.
+- **End-to-end physics**: the resident gas (GPU scatter + mirror force) produces physically-correct
+  collision (median-nn 1.45, 0.35% overlapping pairs in a dense 50%-packed world), 0 worker errors
+  over 180 gens on the CLEAN build (temp debug removed).
+- **No-regression gating**: Boids (webgpu target, custom force) builds NO mirror (`needScan=false
+  hasMirror=false forceMirrorPipeline=null`) and flocks to polarization **0.998**.
+
+**Measured — B1 is a WASH (honest, matches W1's WASM-force conclusion).** Whole-batch GPU timing
+(the only timing this worker-round-trip path exposes; the force pass is 1 of ~6 passes/gen + the
+per-frame readback), dense soft-collision gas, `hashValid=1` so the mirror stencil runs, median of
+5 batches x(10-30 gens):
+
+| N (agents) | mirror ON (ms/gen) | mirror OFF / canonical (ms/gen) | delta |
+|---|---|---|---|
+| 10,000 | 3.73 | 3.46 | mirror ~8% slower |
+| 50,000 | 46.83 | 47.03 | wash (mirror ~0.4% faster) |
+
+Both within measurement noise (hidden-tab GPU throttling + round-trip jitter; 10k batches ranged
+96-126 ms mirror vs 99-106 canonical). The force-pass-specific coalescing improvement is BELOW the
+resolution of whole-batch worker timing — the extra scatter stores (6/agent) + the `sortedId` read
+offset the coalescing gain at these scales, and the batch is dominated by hash-build + behaviour +
+readback + present. **B1 is correctness-neutral, zero-cost-for-custom-force INFRASTRUCTURE for B2**
+(the compiler fused gather, where the behaviour graph's `getNearbyAgents` loops read neighbour FIELDS
+from the same sorted storage — the intended coalescing win), NOT a standalone speedup here. This is
+the same finding W1 reported for the WASM force pass; it is a PERF assumption ("pure win") that did
+not hold, NOT a correctness issue — the mirror is bit-correct and fully gated.
+
+**Mirror-layout facts B2 will need:**
+- Field-major mirror: `sorted[k * layout.maxAgents + slot]` for `agentMirrorFields(is3d)[k]`
+  (`['x','y','radius','vx','vy']` 2D, `['x','y','z','radius','vx','vy','vz']` 3D). `sortedId[slot]` =
+  the canonical agent id at that CSR slot. Both are `AgentResidentRuntime.sortedBuf`/`sortedIdBuf`,
+  allocated only when `needScan` (`rt.resident.hasMirror`).
+- CSR order: `slot in [binStart[b], binStart[b+1])` per bin `b`; `binStart` is the layout's
+  `hashBinStartBase` run in `hashBinsBuf`; the same `slot` also holds `binAgents[slot] = i32(id)`.
+  Slots are packed contiguously `[0, liveCount)`.
+- The mirror is CURRENTLY GPU-storage-only (`STORAGE | COPY_DST`, no `COPY_SRC`) — B2's parity
+  harness must add `COPY_SRC` (temporarily or permanently) to read it back for frozen-frame checks.
+- B2 will want to EXTEND the mirror with the neighbour fields the fused `getNearbyAgents` bodies read
+  (agent attrs -> attr runs; velocities already present). The mirror-field list is one place
+  (`agentMirrorFields`); the scatter loops it, so adding a run is a one-line list edit + a matching
+  read-base in the fused emitter.
+
+**New gotchas discovered:**
+- **A mirror buffer read back to the CPU needs `COPY_SRC`.** The mirror + `hashBinsBuf` are created
+  `STORAGE | COPY_DST` (the force shader reads them via storage binding — never a copy), so a naive
+  `copyBufferToBuffer` from them is a validation error (silent zeros — my first validation read
+  `slots=0`). Production never copies them; only a debug/parity readback does.
+- **`hashValid` must be 1 for the mirror STENCIL to run.** `computeResidentHashParams` returns
+  `hashValid=0` (all-pairs, canonical reads — NO mirror) when the world is too small to tile (< 3 bins/
+  axis) OR when `nBins > maxHashBins` after coarsening. `maxHashBins = min(cap, nx*ny)` with edge =
+  `max(range*2*defaultRadius, neighbourQueryRadius)`; pick the bench/verify world so `nBins <= maxHashBins`
+  AND `nx,ny >= 3` (a too-large world at 50k => `hashValid=0` => O(N^2) all-pairs => the renderer HUNG).
+- **Cross-load `setRngSeed`+`reset` is NOT deterministic** across two model loads (the agent-init spawn
+  differed by >world-size) — use `loadState` for a same-frozen-state cross-config comparison; the
+  standalone matched-order GPU test is the cleaner mirror-vs-canonical proof anyway.

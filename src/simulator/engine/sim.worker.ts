@@ -2060,7 +2060,6 @@ async function runAgentBatchResident(count: number): Promise<boolean> {
     // per model under residency eligibility (radius/config don't drift mid-batch).
     const needScan = usesBondingPhysics(cfg) || usesSoftCollision(cfg) || agentUsesDensity;
     if (!(await ensureAgentResident(rt, needScan))) return false;
-    if (!(self as unknown as { __b1logged?: boolean }).__b1logged) { (self as unknown as { __b1logged?: boolean }).__b1logged = true; self.postMessage({ type: 'error', message: '[B1-DEBUG] resident engaged needScan=' + needScan + ' hasMirror=' + (rt.resident ? rt.resident.hasMirror : 'null') + ' forceMirrorPipeline=' + (rt.resident && rt.resident.forceMirrorPipeline ? 'set' : 'null') }); }
     const hw = s.highWater;
     // Per-batch hash geometry — CPU-computed once (radius is static under the
     // eligibility gate, so maxR can't drift mid-batch).
