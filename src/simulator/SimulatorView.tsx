@@ -2387,7 +2387,13 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     }
     const glow = agentGlowRef.current;
     let bgR = 0, bgG = 0, bgB = 0, bgA = 0;
-    if (bg2dRef.current) { const c = hexToRgba(bg2dRef.current); bgR = c.r / 255; bgG = c.g / 255; bgB = c.b / 255; bgA = 1; }
+    // D: when the CA grid LAYER shows (decoupled grid+agents), the grid IS the
+    // background — the agent canvas must clear TRANSPARENT so the grid blitted
+    // below shows through, even when bg2d is set. Mirrors the showGrid2d bg-fill
+    // suppression in draw(). bg2d applies only when the grid layer is hidden
+    // (agents-only, or "Show CA grid" off).
+    const showGrid2d = gridCellsOnRef.current && (!isAgentModelRef.current || showCaGridRef.current);
+    if (!showGrid2d && bg2dRef.current) { const c = hexToRgba(bg2dRef.current); bgR = c.r / 255; bgG = c.g / 255; bgB = c.b / 255; bgA = 1; }
     return {
       highWater: 0,
       scalePx: scale, oxPx: ox, oyPx: oy, canvasW: parentW, canvasH: parentH,
@@ -4164,11 +4170,23 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     //       batch presents the GPU `agentColors` the behaviour wrote (NOT the CPU OM
     //       `s.colors`), so a WebGPU+OM model must stay on the CPU overlay until A1.5
     //       compiles the OM into a GPU colour pass.
-    // Shared exclusions: agents-only + 2D + OffscreenCanvas + no CPU-only visual
-    // (sprites / metaballs). The worker demotes to the CPU overlay if the device
-    // build fails (WebGPU unavailable on a CPU target).
+    // Shared exclusions: field-decoupled + 2D + OffscreenCanvas + no CPU-only
+    // visual (sprites / metaballs). The worker demotes to the CPU overlay if the
+    // device build fails (WebGPU unavailable on a CPU target).
+    // Phase D: the agents-only proxy (`gridCells === false`) is replaced by the
+    // true term — field DECOUPLING. A grid+agents model whose agent layer never
+    // touches a cell field is two independent sims sharing a viewport: the agent
+    // layer direct-renders above the grid's own render (2D composite). The
+    // predicate mirrors the worker's `agentResidentEligible`: no field node
+    // reachable (agentUsesField) AND no cell attr grants agent access. 3D
+    // grid+agents keeps the CPU path in D (voxels-vs-spheres depth compositing
+    // across two canvases is Phase E) — hence the `&& !is3D` on the decoupled arm;
+    // 3D agents-only is still eligible via `gridCells === false`.
+    const agentDecoupled =
+      !agentUsesField()
+      && (model.attributes ?? []).every(a => !a.agentAccess || a.agentAccess === 'none');
     const agentRenderEligible =
-      agentModel && model.topologyMode?.gridCells === false
+      agentModel && (model.topologyMode?.gridCells === false || (agentDecoupled && !is3D))
       && offscreenSupported
       && (model.sprites?.length ?? 0) === 0 && !agentMetaballsRef.current.enabled
       // A1.5: a WebGPU-target model with agent mappings is render-eligible when the

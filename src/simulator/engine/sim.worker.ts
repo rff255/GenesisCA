@@ -2051,9 +2051,15 @@ function agentResidentEligible(): boolean {
   if (!s || !rt || !rt.ready || agentTarget !== 'webgpu' || !cfg) return false;
   return (
     agentGraphResidencyClean
-    && !gridCellsEnabled                       // agents-only (v1 — no cell-step interleave)
-    && simulateAgents
+    // D: field-DECOUPLED, not agents-only. The agent layer never touches a cell
+    // field, so a grid+agents model is two INDEPENDENT sims sharing a viewport —
+    // the agents run resident (one submit) while the grid steps by its own JS/WASM
+    // per-gen path (the resident branch interleaves them; see the `step` handler).
+    // The predicate is general: no field node reachable (agentUsesField) AND no
+    // cell attr grants agent access (fieldSpecs). Replaces the agents-only proxy.
     && !agentUsesField
+    && fieldSpecs.length === 0
+    && simulateAgents
     && cfg.agentUpdateMode !== 'sync'          // async single-buffer attrs on the GPU
     && !usesPositionalCollision(cfg)           // CPU projection pass is per-gen
     && !usesEngineSprings(cfg) && s.maxBonds === 0   // no bond store / auto-bond scan
@@ -2067,7 +2073,7 @@ function agentResidentEligible(): boolean {
 /** Run `count` generations fully GPU-resident (one submit) + one frame readback.
  *  Returns false on any failure (pipelines unavailable / device error) — the
  *  caller falls back to the per-generation path for this batch. */
-async function runAgentBatchResident(count: number): Promise<boolean> {
+async function runAgentBatchResident(count: number, bumpGeneration: boolean = true): Promise<boolean> {
   const s = agentStore, rt = agentWebgpuRuntime, cfg = centerBasedConfig;
   if (!s || !rt || !cfg) return false;
   agentGpuStepInFlight = true;
@@ -2158,7 +2164,9 @@ async function runAgentBatchResident(count: number): Promise<boolean> {
     }
     // Sprite frames advance CPU-side (independent of the GPU SoA) — one tick/gen.
     if (hasAgentSprites) for (let k = 0; k < count; k++) advanceAgentSprites(s);
-    generation += count;
+    // D: a decoupled grid+agents batch counts the generation via the grid's cell
+    // steps (bumpGeneration=false); an agents-only batch owns the count here.
+    if (bumpGeneration) generation += count;
     return true;
   } catch (e) {
     self.postMessage({ type: 'error', message: '[agents] resident batch failed, falling back: ' + ((e as Error)?.message || e) });
@@ -5389,8 +5397,32 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
           // submit for ALL generations + one per-frame readback (no per-gen CPU
           // work). On any failure fall through to the per-generation path below.
           if (agentResidentEligible()) {
-            const ok = await runAgentBatchResident(msg.count);
-            if (ok) { sendColors(); return; }
+            // D: decoupled grid+agents — the agent batch runs resident (one submit)
+            // and the grid runs its own JS/WASM per-gen steps. They share no state
+            // (no field coupling), so the order is free; run the resident batch
+            // FIRST (it advances nothing on failure) so a bailout falls through to
+            // the per-gen loop cleanly with no double-stepped grid. Generation
+            // counts ONCE per gen: the resident batch skips its own bump and the
+            // cell-step loop does it (agents-only ⇒ gridSteps false ⇒ batch counts).
+            const gridSteps = gridCellsEnabled && simulateCells && !!stepFn;
+            const ok = await runAgentBatchResident(msg.count, !gridSteps);
+            if (ok) {
+              if (gridSteps) {
+                for (let i = 0; i < msg.count; i++) runStep(true);
+                // Deferred indicator scan (runStep used deferIndicatorScan): one
+                // O(total) scan at the batch tail, identical to per-gen scanning
+                // (only the last gen's values are observed).
+                if (indicatorScanPending) {
+                  if (linkedDefs.length > 0) computeLinkedIndicatorsFromBuffer();
+                  if (hasSpatialIndicators) computeSpatialIndicators();
+                  indicatorScanPending = false;
+                }
+                // Sparse-safe grid colour pass (only steps ran since the last pass).
+                if (!msg.skipColorPass) runColorPass(true);
+              }
+              sendColors();
+              return;
+            }
           }
           let stoppedByEvent: string | null = null;
           for (let i = 0; i < msg.count; i++) {
