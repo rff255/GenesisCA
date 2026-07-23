@@ -324,6 +324,51 @@ export function panCamera(cam: Camera3D, dxPx: number, dyPx: number, scale: numb
   cam.target[2] += (-dxPx * right[2] + dyPx * up[2]) * scale;
 }
 
+/** The scene view-projection matrix + camera basis — the SINGLE source both the
+ *  WebGL2 renderer (setCamera below) AND the worker's WGSL sphere pass (Phase C)
+ *  derive from, so the two renderers can NEVER disagree on projection. `mvp` is a
+ *  column-major 4×4 (the order WebGL/WebGPU expect); `forward`/`right`/`up` are the
+ *  world-space camera axes the sphere billboards + lighting need. Grid-size aware
+ *  via W/H/D (dist is a multiple of the largest dim; the Z-up remap uses (W-1)/2). */
+export function sceneCameraMatrices(
+  cam: Camera3D, aspect: number, W: number, H: number, D: number,
+): { mvp: Float32Array; dir: [number, number, number]; forward: [number, number, number]; right: [number, number, number]; up: [number, number, number] } {
+  const r = cam.dist * Math.max(W, H, D);
+  const basis = cameraBasis(cam);
+  const dir = basis.dir;
+  const t = cam.target;
+  const eye: [number, number, number] = [t[0] + r * dir[0], t[1] + r * dir[1], t[2] + r * dir[2]];
+  const forward: [number, number, number] = [-dir[0], -dir[1], -dir[2]];
+  const proj = mat4Perspective(Math.PI / 4, aspect || 1, 0.05, r * 8 + 100);
+  // Camera "roll" at the ±Depth POVs — WORLD_UP (+Z) parallel to the view →
+  // lookAt degenerate. Y-up so top matches the 2D CA (identical to setCamera).
+  const up: [number, number, number] = Math.abs(forward[2]) > 0.999
+    ? [0, forward[2] > 0 ? -1 : 1, 0]
+    : WORLD_UP;
+  const view = mat4LookAt(eye, [t[0], t[1], t[2]], up);
+  return { mvp: mat4Mul(proj, view), dir, forward, right: basis.right, up: basis.up };
+}
+
+/** World-space light direction (unit, toward the light) for a given camera basis —
+ *  the SINGLE source both renderers use so the shade matches. World mode = the
+ *  stored vector; camera mode combines the ball (bx,by, implied bz toward viewer)
+ *  with the CURRENT basis (dir = toward viewer). Mirrors the private lightWorldDir. */
+export function lightWorldDirFor(
+  light: Pick<Light3D, 'mode' | 'bx' | 'by' | 'wx' | 'wy' | 'wz'>,
+  dir: [number, number, number], right: [number, number, number], up: [number, number, number],
+): [number, number, number] {
+  if (light.mode === 'world') {
+    const n = Math.hypot(light.wx, light.wy, light.wz) || 1;
+    return [light.wx / n, light.wy / n, light.wz / n];
+  }
+  const bz = Math.sqrt(Math.max(0, 1 - light.bx * light.bx - light.by * light.by));
+  const x = right[0] * light.bx + up[0] * light.by + dir[0] * bz;
+  const y = right[1] * light.bx + up[1] * light.by + dir[1] * bz;
+  const z = right[2] * light.bx + up[2] * light.by + dir[2] * bz;
+  const n = Math.hypot(x, y, z) || 1;
+  return [x / n, y / n, z / n];
+}
+
 // 36-vertex unit cube centred at origin (side 1), with per-vertex face normals.
 // pos.xyz then normal.xyz, 6 floats/vertex.
 const CUBE: number[] = (() => {
@@ -1008,6 +1053,12 @@ export class Gl3DRenderer {
   private buriedCullApplied = false;
   private W = 1; private H = 1; private D = 1;
   private alphaBlend = false;
+  /** Phase C (agent 3D free-mode direct render): when ON, render() draws ONLY the
+   *  scene overlays (axes / grid / bounds / gizmo / brush plane + outline / hover /
+   *  labels) over a TRANSPARENT clear and skips voxels / agents / bonds / metaballs
+   *  / sprites / shadow map — the worker's WGSL sphere pass composites the agents in
+   *  a sibling canvas UNDER this one. A small additive flag, NOT a fork. */
+  private overlaysOnly = false;
   /** Scene lighting (see Light3D). Defaults = the historical hardcoded shade. */
   private light: Light3D = { ...DEFAULT_LIGHT3D };
   /** Voxel cube scale. 0.92 = the historical gapped lattice look; 1.001 when
@@ -1272,18 +1323,9 @@ export class Gl3DRenderer {
    *  the ball position with the current camera basis (light rides the view);
    *  world mode returns the stored scene-fixed vector. */
   private lightWorldDir(): [number, number, number] {
-    const l = this.light;
-    if (l.mode === 'world') {
-      const n = Math.hypot(l.wx, l.wy, l.wz) || 1;
-      return [l.wx / n, l.wy / n, l.wz / n];
-    }
-    const bz = Math.sqrt(Math.max(0, 1 - l.bx * l.bx - l.by * l.by));
-    const r = this.camRight, u = this.camUp, d = this.camDir;  // camDir = toward viewer
-    const x = r[0] * l.bx + u[0] * l.by + d[0] * bz;
-    const y = r[1] * l.bx + u[1] * l.by + d[1] * bz;
-    const z = r[2] * l.bx + u[2] * l.by + d[2] * bz;
-    const n = Math.hypot(x, y, z) || 1;
-    return [x / n, y / n, z / n];
+    // camDir = toward viewer. Delegates to the exported lightWorldDirFor so the
+    // worker's WGSL sphere pass (Phase C) computes the identical light direction.
+    return lightWorldDirFor(this.light, this.camDir, this.camRight, this.camUp);
   }
 
   /** Upload the shared lighting uniforms (null locations — e.g. on the pick
@@ -1446,6 +1488,8 @@ export class Gl3DRenderer {
   private agentsInFront = true;
   setClipPlane(clip: ClipPlane3D): void { this.clip = clip; this.refreshVoxelsIfCullingChanged(); }
   setViz(viz: Viz3D): void { this.viz = viz; }
+  /** Phase C: overlays-only mode (agent 3D free-mode direct render — see the field). */
+  setOverlaysOnly(on: boolean): void { this.overlaysOnly = on; }
   setBrushPlane(p: { axis: 'x' | 'y' | 'z'; pos: number } | null): void { this.brushPlane = p; }
   /** Set the hovered brush footprint (every affected cell). Pass [] to clear. */
   setHoverCells(cells: ReadonlyArray<{ layer: number; row: number; col: number }>): void { this.hoverCells = cells; }
@@ -1518,29 +1562,15 @@ export class Gl3DRenderer {
 
   /** Compute the view-projection matrix from the Z-up orbit camera. */
   setCamera(cam: Camera3D, aspect: number): void {
-    const r = cam.dist * Math.max(this.W, this.H, this.D);
-    const basis = cameraBasis(cam);
-    const dir = basis.dir;
-    const t = cam.target;
-    const eye: [number, number, number] = [t[0] + r * dir[0], t[1] + r * dir[1], t[2] + r * dir[2]];
-    this.camForward = [-dir[0], -dir[1], -dir[2]];
-    this.camDir = dir;
+    // Delegate to the exported sceneCameraMatrices — the SAME math the worker's
+    // WGSL sphere pass (Phase C) uses, so the two renderers can never disagree.
+    const m = sceneCameraMatrices(cam, aspect, this.W, this.H, this.D);
+    this.camForward = m.forward;
+    this.camDir = m.dir;
     // Stash the camera right/up basis so the sphere billboards face the camera.
-    // cameraBasis already returns right/up for forward = -dir (re-derived every
-    // setCamera — orbit changes them, a stale basis points the impostors wrong).
-    this.camRight = basis.right;
-    this.camUp = basis.up;
-    const proj = mat4Perspective(Math.PI / 4, aspect || 1, 0.05, r * 8 + 100);
-    // Camera "roll" at the ±Depth POVs: looking down/up the Z (depth) axis makes
-    // WORLD_UP (+Z) parallel to the view → lookAt degenerate. Override with a
-    // Y-up so the top view matches the 2D CA (look down -Z → up +Y → col-right,
-    // row-down) and the bottom view mirrors it (look up +Z → up -Y). General
-    // orbit (clamped to |pitch|≤1.5 → |fwd.z|≤0.997) keeps WORLD_UP.
-    const up: [number, number, number] = Math.abs(this.camForward[2]) > 0.999
-      ? [0, this.camForward[2] > 0 ? -1 : 1, 0]
-      : WORLD_UP;
-    const view = mat4LookAt(eye, [t[0], t[1], t[2]], up);
-    this.mvp = mat4Mul(proj, view);
+    this.camRight = m.right;
+    this.camUp = m.up;
+    this.mvp = m.mvp;
   }
 
   /** Scan the RGBA colors buffer for alpha>0 cells, compact into the instance
@@ -2298,14 +2328,28 @@ export class Gl3DRenderer {
 
   render(): void {
     const gl = this.gl;
+    // Phase C: agent 3D free-mode direct render — the worker's WGSL sphere pass
+    // draws the agents into a sibling canvas UNDER this one, so gl3d renders ONLY
+    // the overlays over a TRANSPARENT clear (no voxels/agents/bonds/metaballs/
+    // shadows). Interaction/recording/pause flips back to full render (frame mode).
+    const overlaysOnly = this.overlaysOnly;
     // Cast-shadow depth pass (light POV) — first, before the canvas pass. No-op
     // when shadows are off; the voxel/sphere shaders then PCF-sample the result.
-    this.renderShadowMap();
+    if (!overlaysOnly) this.renderShadowMap();
     gl.viewport(0, 0, gl.canvas.width, gl.canvas.height);
-    gl.clearColor(this.bgColor[0], this.bgColor[1], this.bgColor[2], this.bgColor[3]);
+    if (overlaysOnly) gl.clearColor(0, 0, 0, 0);
+    else gl.clearColor(this.bgColor[0], this.bgColor[1], this.bgColor[2], this.bgColor[3]);
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
     this.renderOverlays();   // axes / grid / bounds (behind the voxels)
     this.renderBrushPlane(); // brush interaction-plane bounds + grid (depth-tested)
+    if (overlaysOnly) {
+      // Skip all scene content — just the interaction overlays over transparent.
+      this.renderHoverCells();
+      this.renderBrushOutline();
+      this.renderAxisLabels();
+      this.renderGizmo();
+      return;
+    }
     // CA-grid voxels — gated by viz.voxels (render-layer toggle, req 7). The DRAW
     // is gated, not the upload, so the GPU buffer stays current for re-enable.
     if (this.viz.voxels && this.instanceCount > 0) {

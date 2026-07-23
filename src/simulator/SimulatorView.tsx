@@ -14,7 +14,7 @@ import { NeighborIndexValuePicker } from '../modeler/panels/NeighborIndexDefault
 import { LookupTableEditor } from '../modeler/panels/LookupTableEditor';
 import { compileGraphWebGPU } from '../modeler/vpl/compiler/webgpu/compile';
 import { createSimWorker } from './createSimWorker';
-import { Gl3DRenderer, panCamera, cameraBasis, DEFAULT_LIGHT3D, DEFAULT_METABALLS3D, metaballAutoThreshold, DEFAULT_AUTOZOOM3D, defaultCamera3d, MIN_CAM_DIST, MAX_CAM_DIST } from './render/gl3d';
+import { Gl3DRenderer, panCamera, cameraBasis, sceneCameraMatrices, lightWorldDirFor, DEFAULT_LIGHT3D, DEFAULT_METABALLS3D, metaballAutoThreshold, DEFAULT_AUTOZOOM3D, defaultCamera3d, MIN_CAM_DIST, MAX_CAM_DIST } from './render/gl3d';
 import type { SpriteAtlasInput, Light3D, Metaballs3D, AutoZoom3D } from './render/gl3d';
 import { LightBallWidget } from './LightBallWidget';
 import { agentTargetOf, resolveMaxBonds } from '../model/centerBased';
@@ -24,7 +24,7 @@ import { compileAgentGraphWebGPUForModel, isAgentGraphWebGPUSupported } from '..
 import { computeAgentWebGPULayout, type AgentWebGPULayout } from '../modeler/vpl/compiler/agentWebgpu/layout';
 import { emitAgentForcePassWGSL } from '../modeler/vpl/compiler/agentWebgpu/forcePass';
 import type { AgentRenderSnapshot } from './engine/agentEngine';
-import type { AgentRenderView } from './engine/agentWebgpuRuntime';
+import type { AgentRenderView, AgentRenderView3D } from './engine/agentWebgpuRuntime';
 import { SpriteRegistry } from './spriteRegistry';
 import { ImageMappingDialog, type ImageMappingConfig } from './ImageMappingDialog';
 import { GIFEncoder, quantize, applyPalette } from 'gifenc';
@@ -1618,6 +1618,10 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   // Hovered brush-plane cell (change-detection) + the full brush FOOTPRINT it
   // expands to (the cells the renderer outlines as the cube cursor).
   const hover3dRef = useRef<{ layer: number; row: number; col: number } | null>(null);
+  // Phase C: pointer over the 3D gl canvas (set on enter/leave). Drives the agent-
+  // brush frame-mode flip so the gl3d pick FBO (which reads the snapshot) works —
+  // the 3D analogue of the 2D `agentCursorWorldRef != null` UI-sync condition.
+  const glPointerOverRef = useRef(false);
   const hoverCells3dRef = useRef<ReadonlyArray<{ layer: number; row: number; col: number }>>([]);
   // 3D Line tool: first click stages a plane-cell anchor (no paint); the second
   // click draws the capsule line between them. null = no staged anchor.
@@ -1832,6 +1836,17 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   const lastAgentCameraKeyRef = useRef<string>('');
   // UI-sync debounce-OFF timer (so a brush stroke doesn't thrash the readback).
   const agentUiSyncTimerRef = useRef<number>(0);
+  // Phase C — 3D free-mode direct render: unlike the 2D path (a DETACHED canvas
+  // the main thread blits onto the 2D display canvas), the 3D worker canvas is a
+  // VISIBLE DOM sibling UNDER the gl3d canvas, composited by the browser (no blit).
+  // We imperatively manage a fresh `<canvas>` inside this stable layer on each
+  // attach (fresh element handles transfer-once + resize + recompile); gl3d renders
+  // ONLY the overlays over a transparent clear on top. `agentSphere3DActiveRef` is
+  // true while the worker composites the sphere canvas (free mode); flipping it OFF
+  // (frame mode) hides the sphere canvas + lets gl3d render the full snapshot.
+  const agentSphereLayerRef = useRef<HTMLDivElement | null>(null);
+  const agentSphereCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const agentSphere3DActiveRef = useRef<boolean>(false);
 
   // Build full code display from all compiled functions
   const buildFullCode = useCallback((result: ReturnType<typeof compileGraph>) => {
@@ -2028,8 +2043,11 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     // so the worker can build a render-only surface (the direct-render fast path
     // for CPU-simulated agents). Not needed on webgpu (the full runtime renders).
     if (agentTarget !== 'webgpu') {
+      // Phase C: a 3D model's render-only surface needs the real depth so the
+      // layout carries a `z` field base (the sphere pass reads it). 2D → depth 1.
+      const renderDepth = (m.properties.dimension === '3d') ? Math.max(1, Math.floor((m.properties.gridDepth as number) ?? 1)) : 1;
       agentRenderLayout = computeAgentWebGPULayout(
-        Math.max(1, Math.floor((m.centerBased?.maxAgents as number) ?? 2000)), 0, undefined, [], { gridDepth: 1 },
+        Math.max(1, Math.floor((m.centerBased?.maxAgents as number) ?? 2000)), 0, undefined, [], { gridDepth: renderDepth },
       );
     }
     return { behaviourCode: ag.behaviourCode || undefined, initCode: ag.initCode || undefined, divisionCode: ag.divisionCode || undefined, outputMappingCodes: ag.outputMappingCodes && ag.outputMappingCodes.length ? ag.outputMappingCodes : undefined, stopMessages: ag.stopMessages, colorViewer, error: ag.error || undefined, agentTarget, agentWasmBytes, agentWasmViewerGuardIds, agentLayoutExtras, agentWasmLayoutSig, agentResidencyClean, agentWebgpuBehaviourShader, agentWebgpuForceShader, agentWebgpuMaxAgents, agentWebgpuMaxHashBins, agentWebgpuLayout, agentRenderLayout, agentWebgpuUsesI32Write, agentWebgpuUsage, agentWebgpuOmShaders, agentWebgpuOmSupported };
@@ -2313,7 +2331,38 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   // A1 — compute the agent RenderView (camera + tiling + graphics) from the SAME
   // draw math as the 2D blit. highWater is patched worker-side (free mode ships
   // no snapshot, so the main thread can't know it) — send 0 here.
-  const computeAgentRenderView = useCallback((): AgentRenderView | null => {
+  // Phase C: the 3D sphere-pass uniform — MVP (from the SAME sceneCameraMatrices
+  // gl3d uses, so projection can't disagree) + camera basis + world light + uHalf +
+  // bg. The MAIN thread computes it so the two renderers stay in lockstep.
+  const computeAgentRenderView3D = useCallback((): AgentRenderView3D | null => {
+    const glc = glCanvasRef.current;
+    const w = gridWidth.current, h = gridHeight.current, d = gridDepth.current;
+    if (!glc || !w || !h) return null;
+    const cssW = glc.clientWidth || glc.parentElement?.clientWidth || 500;
+    const cssH = glc.clientHeight || glc.parentElement?.clientHeight || 500;
+    const cam = cam3dRef.current;
+    const m = sceneCameraMatrices(cam, cssW / (cssH || 1), w, h, d);
+    const light = light3dRef.current;
+    const L = lightWorldDirFor(light, m.dir, m.right, m.up);
+    let bgR = 0, bgG = 0, bgB = 0, bgA = 0;
+    const bg = bg3dRef.current;   // [r,g,b,a] (0..1) | null (transparent → page shows)
+    if (bg) { bgR = bg[0]!; bgG = bg[1]!; bgB = bg[2]!; bgA = bg[3]!; }
+    return {
+      mode: '3d',
+      mvp: Array.from(m.mvp),
+      halfX: (w - 1) / 2, halfY: (h - 1) / 2, halfZ: (d - 1) / 2,
+      camRightX: m.right[0], camRightY: m.right[1], camRightZ: m.right[2],
+      camUpX: m.up[0], camUpY: m.up[1], camUpZ: m.up[2],
+      camForwardX: m.forward[0], camForwardY: m.forward[1], camForwardZ: m.forward[2],
+      lightX: L[0], lightY: L[1], lightZ: L[2],
+      ambient: light.ambient, diffuse: light.diffuse, specular: light.specular,
+      outlineOn: agentOutlinesRef.current ? 1 : 0,
+      bgR, bgG, bgB, bgA,
+    };
+  }, []);
+
+  const computeAgentRenderView = useCallback((): AgentRenderView | AgentRenderView3D | null => {
+    if (is3dRef.current) return computeAgentRenderView3D();
     const canvas = canvasRef.current;
     if (!canvas) return null;
     const w = gridWidth.current, h = gridHeight.current;
@@ -2360,7 +2409,10 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       agentCameraRafRef.current = 0;
       const view = computeAgentRenderView();
       if (!view || !workerRef.current || !agentDirectRenderActiveRef.current) return;
-      const key = `${view.scalePx}|${view.oxPx}|${view.oyPx}|${view.canvasW}|${view.canvasH}|${view.startX}|${view.startY}|${view.copiesX}|${view.copiesY}|${view.outlineOn}|${view.glowOn}|${view.glowSize}|${view.glowIntensity}|${view.glowSteepness}|${view.bgR}|${view.bgG}|${view.bgB}|${view.bgA}`;
+      const v3 = view as AgentRenderView3D, v2 = view as AgentRenderView;
+      const key = v3.mode === '3d'
+        ? '3d|' + v3.mvp.join(',') + `|${v3.camForwardX}|${v3.lightX}|${v3.lightY}|${v3.lightZ}|${v3.ambient}|${v3.diffuse}|${v3.specular}|${v3.outlineOn}|${v3.bgR}|${v3.bgG}|${v3.bgB}|${v3.bgA}|${v3.halfX}|${v3.halfY}|${v3.halfZ}`
+        : `${v2.scalePx}|${v2.oxPx}|${v2.oyPx}|${v2.canvasW}|${v2.canvasH}|${v2.startX}|${v2.startY}|${v2.copiesX}|${v2.copiesY}|${v2.outlineOn}|${v2.glowOn}|${v2.glowSize}|${v2.glowIntensity}|${v2.glowSteepness}|${v2.bgR}|${v2.bgG}|${v2.bgB}|${v2.bgA}`;
       if (key === lastAgentCameraKeyRef.current) return;
       lastAgentCameraKeyRef.current = key;
       workerRef.current.postMessage({ type: 'setAgentCamera', view });
@@ -2392,7 +2444,10 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       || sweepActiveRef.current
       || editTargetIdRef.current >= 0
       || agentMetaballsRef.current.enabled
-      || (brushTargetRef.current === 'agents' && agentCursorWorldRef.current != null);
+      || (brushTargetRef.current === 'agents' && agentCursorWorldRef.current != null)
+      // Phase C: 3D agent brush armed + pointer over the gl canvas → frame mode so
+      // the gl3d pick FBO (reads the snapshot) resolves agents.
+      || (is3dRef.current && brushTargetRef.current === 'agents' && glPointerOverRef.current);
     const w = workerRef.current;
     if (want) {
       if (agentUiSyncTimerRef.current) { clearTimeout(agentUiSyncTimerRef.current); agentUiSyncTimerRef.current = 0; }
@@ -2411,9 +2466,45 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   // display resize or a CPU-visual toggle change). No-op unless eligible + idle.
   const maybeAttachAgentCanvas = useCallback(() => {
     if (!agentRenderEligibleRef.current || agentMetaballsRef.current.enabled) return;
+    // Phase C: 3D alpha-blend needs back-to-front sorting (gl3d's job), so a 3D
+    // alpha-blend-on model stays on the CPU/frame path — don't attach.
+    if (is3dRef.current && alpha3dRef.current) return;
     if (agentDirectRenderActiveRef.current || pendingAgentRenderCanvas.current) return;
     const worker = workerRef.current, canvas = canvasRef.current;
     if (!worker || !canvas) return;
+    if (is3dRef.current) {
+      // Phase C: append a FRESH DOM canvas into the sphere layer (UNDER the gl
+      // canvas), transfer its control to the worker, and let the browser composite
+      // it (no blit). A fresh element each attach handles transfer-once + resize +
+      // recompile. Buffer resolution = CSS px × dpr (matches gl overlays' crispness);
+      // the MVP aspect is CSS px, resolution-independent.
+      const layer = agentSphereLayerRef.current;
+      if (!layer) return;
+      const cssW = Math.max(1, layer.clientWidth || canvas.parentElement?.clientWidth || 500);
+      const cssH = Math.max(1, layer.clientHeight || canvas.parentElement?.clientHeight || 500);
+      const dpr = window.devicePixelRatio || 1;
+      const bw = Math.max(1, Math.round(cssW * dpr)), bh = Math.max(1, Math.round(cssH * dpr));
+      try {
+        // Remove any prior sphere canvas (a stale element after resize/recompile).
+        if (agentSphereCanvasRef.current && agentSphereCanvasRef.current.parentElement === layer) {
+          layer.removeChild(agentSphereCanvasRef.current);
+        }
+        agentSphereCanvasRef.current = null;
+        const fresh = document.createElement('canvas');
+        fresh.width = bw; fresh.height = bh;
+        fresh.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;display:none';
+        layer.appendChild(fresh);
+        const offscreen = (fresh as HTMLCanvasElement & { transferControlToOffscreen: () => OffscreenCanvas }).transferControlToOffscreen();
+        pendingAgentRenderCanvas.current = fresh;
+        agentRenderCanvasDimsRef.current = { w: cssW, h: cssH };
+        worker.postMessage({ type: 'attachAgentCanvas', canvas: offscreen, width: bw, height: bh }, [offscreen]);
+      } catch (e) {
+        // eslint-disable-next-line no-console
+        console.warn('[agents] 3D sphere canvas transfer failed; staying on CPU overlay:', e);
+        pendingAgentRenderCanvas.current = null;
+      }
+      return;
+    }
     const w = Math.max(1, canvas.parentElement?.clientWidth ?? canvas.clientWidth ?? 500);
     const h = Math.max(1, canvas.parentElement?.clientHeight ?? canvas.clientHeight ?? 500);
     try {
@@ -2444,6 +2535,37 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       if (!glc || !w3 || !h3) return;
       const cssW = glc.clientWidth || glc.parentElement?.clientWidth || 500;
       const cssH = glc.clientHeight || glc.parentElement?.clientHeight || 500;
+      // Phase C — 3D agent free-mode direct render. When the worker composites the
+      // WGSL sphere impostors into the sibling canvas UNDER this one (free mode),
+      // gl3d renders ONLY the overlays (transparent clear). Frame mode (UI-sync ON:
+      // interaction / recording / pause) hides the sphere canvas + does the full
+      // render from the snapshot, exactly as today.
+      let agent3dActive = isAgentModelRef.current && agentDirectRenderActiveRef.current && !!agentSphereCanvasRef.current;
+      if (agent3dActive) {
+        const dims = agentRenderCanvasDimsRef.current;
+        // Re-attach only on a REAL size change (an occluded pane measures 0×0 — the
+        // A1/A2 storm guard). A fresh transferred canvas is needed (dims are fixed).
+        if ((dims.w !== cssW || dims.h !== cssH) && cssW >= 2 && cssH >= 2) {
+          agentDirectRenderActiveRef.current = false;
+          agent3dActive = false;
+          maybeAttachAgentCanvas();
+        }
+      }
+      // FRAME mode (gl3d full render from the snapshot) requires a snapshot IN HAND
+      // — arming a feature posts UI-sync ON but the snapshot arrives ~1 frame later,
+      // so keep showing the spheres (FREE) until agentsRef is populated. This makes
+      // the flip seamless (no blank frame) and also handles UI-sync flipping OFF
+      // (agentsRef goes stale / uiSync false → back to spheres). The worker keeps the
+      // sphere canvas fresh even while hidden (the resident batch presents in both
+      // modes), so flipping visibility back is instant.
+      const agent3dFrame = agent3dActive && agentUiSyncPostedRef.current && agentsRef.current != null;
+      const agent3dFree = agent3dActive && !agent3dFrame;
+      r.setOverlaysOnly(agent3dFree);
+      { const sc = agentSphereCanvasRef.current; if (sc) sc.style.display = agent3dFree ? 'block' : 'none'; }
+      agentSphere3DActiveRef.current = agent3dFree;
+      // Keep the worker's sphere camera synced (rAF-coalesced + deduped) whenever the
+      // sphere canvas exists, so a flip back to free shows the current viewpoint.
+      if (agent3dActive) postAgentCamera();
       r.resize(cssW, cssH, window.devicePixelRatio || 1);
       r.setGrid(w3, h3, d3);
       r.setAlphaBlend(alpha3dRef.current);
@@ -3785,12 +3907,17 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       // sprites/metaballs/OM/target/topology changes all force a full reinit).
       agentDirectRenderActiveRef.current = false;
       agentRenderCanvasRef.current = null;
+      // Phase C: drop the 3D sphere DOM canvas (a runtime rebuild dropped its
+      // render pipeline). maybeAttachAgentCanvas appends a fresh one.
+      { const sc = agentSphereCanvasRef.current; if (sc?.parentElement) sc.parentElement.removeChild(sc); agentSphereCanvasRef.current = null; }
       pendingAgentRenderCanvas.current = null;
       if (agentRenderEligibleRef.current) maybeAttachAgentCanvas();
     } else if (msg.type === 'agentRenderStatus') {
       if (msg.active && pendingAgentRenderCanvas.current) {
-        // Commit the swap: the placeholder becomes the 1:1 blit source.
-        agentRenderCanvasRef.current = pendingAgentRenderCanvas.current;
+        // Commit the swap. 2D: the placeholder becomes the 1:1 blit source.
+        // 3D: the appended DOM sphere canvas (composited by the browser).
+        if (is3dRef.current) agentSphereCanvasRef.current = pendingAgentRenderCanvas.current;
+        else agentRenderCanvasRef.current = pendingAgentRenderCanvas.current;
         pendingAgentRenderCanvas.current = null;
         pendingAgentCanvasAttach.current = false;
         agentDirectRenderActiveRef.current = true;
@@ -3801,8 +3928,10 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
         updateAgentUiSync();
         draw();
       } else {
-        // Attach failed — stay on the CPU overlay path.
+        // Attach failed — stay on the CPU overlay path (drop a 3D placeholder DOM canvas).
         agentDirectRenderActiveRef.current = false;
+        const p = pendingAgentRenderCanvas.current;
+        if (p?.parentElement) p.parentElement.removeChild(p);
         pendingAgentRenderCanvas.current = null;
       }
     }
@@ -4039,14 +4168,19 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     // (sprites / metaballs). The worker demotes to the CPU overlay if the device
     // build fails (WebGPU unavailable on a CPU target).
     const agentRenderEligible =
-      agentModel && model.topologyMode?.gridCells === false && !is3D
+      agentModel && model.topologyMode?.gridCells === false
       && offscreenSupported
       && (model.sprites?.length ?? 0) === 0 && !agentMetaballsRef.current.enabled
       // A1.5: a WebGPU-target model with agent mappings is render-eligible when the
       // OM graph compiled to GPU colour passes (they write agentColors GPU-side, so
       // the resident batch presents the correct OM colours). An unsupported OM keeps
       // the CPU overlay (the A1 exclusion), unchanged.
-      && (agentResult.agentTarget !== 'webgpu' || (model.agentMappings?.length ?? 0) === 0 || !!agentResult.agentWebgpuOmSupported);
+      && (agentResult.agentTarget !== 'webgpu' || (model.agentMappings?.length ?? 0) === 0 || !!agentResult.agentWebgpuOmSupported)
+      // Phase C: 3D adds — no bond LINES to draw (resident models satisfy this; it
+      // only bites snapshot-fed 3D bonded models, which keep the CPU path) AND 3D
+      // alpha-blend OFF (translucent spheres need back-to-front sorting = gl3d's
+      // job; opaque impostors here). 2D is unaffected (both behind `!is3D ||`).
+      && (!is3D || (resolveMaxBonds(model.centerBased) === 0 && !alpha3dRef.current));
     agentRenderEligibleRef.current = agentRenderEligible;
     agentDirectRenderActiveRef.current = false;
     pendingAgentRenderCanvas.current = null;
@@ -5244,7 +5378,13 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       }
       draw();
     };
+    const onEnter = () => {
+      // Phase C: pointer entered the 3D canvas — if the agent brush is armed, flip
+      // to frame mode (gl3d full render + snapshot) so picks work.
+      if (!glPointerOverRef.current) { glPointerOverRef.current = true; if (agentDirectRenderActiveRef.current) updateAgentUiSync(); }
+    };
     const onLeave = () => {
+      if (glPointerOverRef.current) { glPointerOverRef.current = false; if (agentDirectRenderActiveRef.current) updateAgentUiSync(); }
       if (hover3dRef.current || hoverCells3dRef.current.length || hoverAgents3dRef.current.length) {
         hover3dRef.current = null; hoverCells3dRef.current = EMPTY_HOVER_CELLS; hoverAgents3dRef.current = EMPTY_AGENT_RINGS; draw();
       }
@@ -5316,6 +5456,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     glc.addEventListener('wheel', onWheel, { passive: false });
     glc.addEventListener('contextmenu', onCtx);
     glc.addEventListener('pointerleave', onLeave);
+    glc.addEventListener('pointerenter', onEnter);
     return () => {
       if (agentHoverRaf !== 0) cancelAnimationFrame(agentHoverRaf);
       if (hover3dRaf !== 0) cancelAnimationFrame(hover3dRaf);
@@ -5325,6 +5466,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       glc.removeEventListener('wheel', onWheel);
       glc.removeEventListener('contextmenu', onCtx);
       glc.removeEventListener('pointerleave', onLeave);
+      glc.removeEventListener('pointerenter', onEnter);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [is3D, draw]);
@@ -5365,7 +5507,26 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
 
   // 3D Grid CA: mirror the control state into the renderer refs + redraw.
   useEffect(() => { clip3dRef.current = clip3d; draw(); }, [clip3d, draw]);
-  useEffect(() => { alpha3dRef.current = alpha3d; draw(); }, [alpha3d, draw]);
+  useEffect(() => {
+    alpha3dRef.current = alpha3d;
+    // Phase C: 3D alpha-blend needs back-to-front sorting (gl3d's job). Turning it
+    // ON detaches the sphere direct render → gl3d full render (frame path); OFF
+    // re-attaches when eligible + the runtime is up (mirrors the metaballs effect).
+    if (is3dRef.current) {
+      if (alpha3d) {
+        if (agentDirectRenderActiveRef.current) {
+          agentDirectRenderActiveRef.current = false;
+          const sc = agentSphereCanvasRef.current;
+          if (sc) sc.style.display = 'none';
+          if (workerRef.current) workerRef.current.postMessage({ type: 'setAgentUiSync', on: true });
+          agentUiSyncPostedRef.current = true;
+        }
+      } else if (agentRenderEligibleRef.current) {
+        maybeAttachAgentCanvas();
+      }
+    }
+    draw();
+  }, [alpha3d, draw, maybeAttachAgentCanvas]);
   useEffect(() => { agentsFront3dRef.current = agentsFront3d; draw(); }, [agentsFront3d, draw]);
   // The occupancy AO is BAKED into the voxel buffer at upload time, so toggling
   // AO on/off must force a re-upload (colours are unchanged, so draw()'s
@@ -8599,10 +8760,19 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
           data-sim-overlay
         >{leftPanelOpen ? '‹' : '›'}</button>
         <canvas ref={canvasRef} className={styles.canvas} style={is3D ? { display: 'none' } : undefined} />
+        {/* Phase C — 3D agent free-mode direct render: the worker composites the
+            WGSL sphere impostors into a canvas we imperatively append here, UNDER
+            the gl3d canvas (z-index 1 vs the gl canvas's 2). Empty until an eligible
+            3D agents-only model attaches; hidden in 2D. pointer-events:none so the
+            gl canvas (top) keeps orbit/pan/zoom/brush. */}
+        <div ref={agentSphereLayerRef} style={{ position: 'absolute', inset: 0, zIndex: 1, pointerEvents: 'none', display: is3D ? undefined : 'none' }} />
         {/* 3D Grid CA: WebGL2 voxel canvas, shown only for 3D models. Its own
             pointer handlers (orbit/zoom/pan + colour-id pick) are attached in a
-            dedicated effect since draw() routes here via is3dRef. */}
-        <canvas ref={glCanvasRef} className={styles.canvas} style={is3D ? undefined : { display: 'none' }} />
+            dedicated effect since draw() routes here via is3dRef. In 3D it is
+            absolutely positioned (z-index 2) so it composites OVER the sphere
+            layer (Phase C); the transparent clear in overlays-only mode lets the
+            spheres show through. */}
+        <canvas ref={glCanvasRef} className={styles.canvas} style={is3D ? { position: 'absolute', inset: 0, zIndex: 2 } : { display: 'none' }} />
 
         {/* Cursor overlay layer (2D) — two dedicated canvases above the scene:
             `cursorHl` = coloured highlight rings (normal blending), `cursorNeg` =

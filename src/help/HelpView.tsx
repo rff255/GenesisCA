@@ -1762,7 +1762,7 @@ export function HelpView() {
               built-in neighbour-density scan only runs when something actually reads it
               (a Neighbour Density node, division, or engine physics), so a pure
               custom-force model pays nothing for it.</li>
-            <li><strong>Direct agent render.</strong> For an agents-only, 2D model
+            <li><strong>Direct agent render.</strong> For an agents-only model
               (no sprites, no metaballs) &mdash; on <em>any</em> agent target (JS,
               WebAssembly, or WebGPU) &mdash; the worker renders the agents on the GPU
               into the canvas &mdash; the main thread just copies the finished frame. While
@@ -1771,7 +1771,17 @@ export function HelpView() {
               brush, the inspector, recording, saving, or pausing) needs the live agent
               positions, and everything keeps working exactly as before. A
               <strong> Glow</strong> Graphics option (in the agent controls) renders each
-              agent as an additive halo on this path.</li>
+              agent as an additive halo on this path (2D only).</li>
+            <li><strong>Direct agent render &mdash; 3D.</strong> The same fast path works
+              for <em>3D</em> agents-only models: while you just watch, the worker draws the
+              agents as GPU spheres and the 3D viewport draws only the overlays (axes,
+              grid, gizmo) on top. It engages when there are no bonds to draw and
+              <strong> Alpha blend</strong> is OFF (translucent spheres need the sorted
+              3D path). The moment you interact, pause, or record, it seamlessly returns to
+              the full 3D render &mdash; so cast shadows, ambient occlusion, translucent
+              (alpha-blend) agents, and the brush plane occluding the spheres all appear
+              then; in the free-running fast path those are off (the spheres are opaque and
+              always drawn under the overlays).</li>
           </ul>
         </section>
 

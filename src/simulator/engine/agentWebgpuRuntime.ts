@@ -181,6 +181,14 @@ export interface AgentWebGPURuntime {
    *  `highWater × renderCopiesX × renderCopiesY`). */
   renderCopiesX?: number;
   renderCopiesY?: number;
+  // --- Phase C 3D sphere-impostor render (built when layout.gridDepth > 1) ---
+  render3D?: boolean;
+  renderSpherePipeline?: GPURenderPipeline | null;
+  renderSphereBindGroup?: GPUBindGroup | null;
+  renderView3DBuf?: GPUBuffer | null;
+  renderDepthTex?: GPUTexture | null;
+  renderDepthW?: number;
+  renderDepthH?: number;
 }
 
 /** PR7c — the GPU-side spatial-hash build (clear→count→scan→scatter) + the
@@ -1005,6 +1013,17 @@ export interface AgentRenderSurface {
    *  webgpu runtime (which uploads via uploadAgentSoA's own persistent scratch). */
   renderF32Scratch?: Float32Array;
   renderAliveScratch?: Uint32Array;
+  // Phase C — 3D sphere-impostor render (built instead of the 2D disc pipeline when
+  // layout.gridDepth > 1). The MVP + camera basis + light come from the main thread
+  // (sceneCameraMatrices in gl3d.ts, so the two renderers agree on projection); the
+  // pass is opaque with a depth attachment so spheres depth-sort among themselves.
+  render3D?: boolean;
+  renderSpherePipeline?: GPURenderPipeline | null;
+  renderSphereBindGroup?: GPUBindGroup | null;
+  renderView3DBuf?: GPUBuffer | null;
+  renderDepthTex?: GPUTexture | null;
+  renderDepthW?: number;
+  renderDepthH?: number;
 }
 
 /** The camera + tiling + graphics uniform. Field order MIRRORS
@@ -1145,10 +1164,243 @@ fn fsMain(in: VSOut) -> @location(0) vec4<f32> {
 }`;
 }
 
+// ---------------------------------------------------------------------------
+// Phase C — 3D sphere-impostor render (agents-only, is3D, no bonds, alpha-blend
+// off). Camera-facing billboard quads ray-cast into spheres in the FS, writing
+// frag_depth so they depth-sort among themselves. The MAIN thread computes the
+// MVP + camera basis + light with the SAME math the WebGL2 gl3d renderer uses
+// (sceneCameraMatrices / lightWorldDirFor, exported from gl3d.ts), so the WGSL
+// spheres and the gl3d overlays can't disagree on projection. Z-up world remap:
+// col→+X, row→−Y, layer→−Z (identical to gl3d's SPHERE_VS).
+// ---------------------------------------------------------------------------
+
+/** The 3D camera + lighting uniform for the sphere pass. `mvp` is column-major
+ *  (16 f32). Byte layout mirrors RENDER_VIEW_3D_WGSL + uploadAgentRenderView3D. */
+export interface AgentRenderView3D {
+  mode: '3d';
+  mvp: number[];               // 16 floats, column-major
+  halfX: number; halfY: number; halfZ: number;         // (W-1)/2 etc.
+  camRightX: number; camRightY: number; camRightZ: number;
+  camUpX: number; camUpY: number; camUpZ: number;
+  camForwardX: number; camForwardY: number; camForwardZ: number;
+  lightX: number; lightY: number; lightZ: number;      // world dir toward the light
+  ambient: number; diffuse: number; specular: number;
+  outlineOn: number;
+  bgR: number; bgG: number; bgB: number; bgA: number;  // clear colour
+}
+const RENDER_VIEW_3D_BYTES = 176;
+
+const RENDER_VIEW_3D_WGSL = `struct RenderView3D {
+  mvp        : mat4x4<f32>,
+  half       : vec3<f32>,
+  camRight   : vec3<f32>,
+  camUp      : vec3<f32>,
+  camForward : vec3<f32>,
+  lightDir   : vec3<f32>,
+  ambient    : f32,
+  diffuse    : f32,
+  specular   : f32,
+  outlineOn  : u32,
+  bg         : vec4<f32>,
+};`;
+
+/** The 3D sphere-impostor module. VS pulls x/y/z/radius from agentF32, unpacks the
+ *  RGBA from agentColors, and expands a camera-facing billboard quad; FS ray-casts
+ *  the unit sphere, discards on miss/dead/alpha-0, writes frag_depth, and shades
+ *  with the SAME formula gl3d's SPHERE_FS uses (ambient + diffuse·n·L + Blinn-Phong
+ *  specular; shadows/AO not replicated — frame mode covers those). Opaque output
+ *  (alpha-blend is gated off), premultiplied for the canvas. */
+function agentRenderSphereWGSL(layout: AgentWebGPULayout): string {
+  const xB = layout.f32Base['x']!, yB = layout.f32Base['y']!, rB = layout.f32Base['radius']!;
+  // A 3D layout always carries a z field base (AGENT_GPU_F32_FIELDS_3D); fall back
+  // to x's base defensively (never hit — the gate requires is3D).
+  const zB = layout.f32Base['z'] ?? xB;
+  const at = (base: number): string => (base === 0 ? 'agent' : `${base}u + agent`);
+  return `${RENDER_VIEW_3D_WGSL}
+@group(0) @binding(0) var<storage, read> agentF32    : array<f32>;
+@group(0) @binding(1) var<storage, read> agentAlive  : array<u32>;
+@group(0) @binding(2) var<storage, read> agentColors : array<u32>;
+@group(0) @binding(3) var<uniform>       rv          : RenderView3D;
+
+struct VSOut {
+  @builtin(position) pos    : vec4<f32>,
+  @location(0)       uv     : vec2<f32>,
+  @location(1)       col    : vec4<f32>,
+  @location(2)       centre : vec3<f32>,
+  @location(3)       radius : f32,
+};
+
+@vertex
+fn vsMain(@builtin(vertex_index) vi: u32, @builtin(instance_index) inst: u32) -> VSOut {
+  var out: VSOut;
+  let agent: u32 = inst;   // 3D: no infinity tiling — one instance per agent.
+  let packed: u32 = agentColors[agent];
+  let a: f32 = f32((packed >> 24u) & 0xffu) / 255.0;
+  if (agentAlive[agent] == 0u || a <= 0.0) {
+    out.pos = vec4<f32>(2.0, 2.0, 2.0, 1.0);
+    out.uv = vec2<f32>(0.0, 0.0);
+    out.col = vec4<f32>(0.0, 0.0, 0.0, 0.0);
+    out.centre = vec3<f32>(0.0, 0.0, 0.0);
+    out.radius = 0.0;
+    return out;
+  }
+  var corner: vec2<f32> = vec2<f32>(-1.0, -1.0);
+  if (vi == 1u) { corner = vec2<f32>(1.0, -1.0); }
+  else if (vi == 2u) { corner = vec2<f32>(-1.0, 1.0); }
+  else if (vi == 3u) { corner = vec2<f32>(1.0, 1.0); }
+  let ax: f32 = agentF32[${at(xB)}];
+  let ay: f32 = agentF32[${at(yB)}];
+  let az: f32 = agentF32[${at(zB)}];
+  let ar: f32 = agentF32[${at(rB)}];
+  // Z-up remap (matches gl3d SPHERE_VS): centre = (ax-half.x, half.y-ay, half.z-az).
+  let centre: vec3<f32> = vec3<f32>(ax - rv.half.x, rv.half.y - ay, rv.half.z - az);
+  let world: vec3<f32> = centre + (rv.camRight * corner.x + rv.camUp * corner.y) * ar;
+  out.pos = rv.mvp * vec4<f32>(world, 1.0);
+  out.uv = corner;
+  out.col = vec4<f32>(f32(packed & 0xffu) / 255.0, f32((packed >> 8u) & 0xffu) / 255.0, f32((packed >> 16u) & 0xffu) / 255.0, a);
+  out.centre = centre;
+  out.radius = ar;
+  return out;
+}
+
+struct FSOut {
+  @location(0)          color : vec4<f32>,
+  @builtin(frag_depth)  depth : f32,
+};
+
+@fragment
+fn fsMain(in: VSOut) -> FSOut {
+  var out: FSOut;
+  let r2: f32 = dot(in.uv, in.uv);
+  if (r2 > 1.0) { discard; }
+  let zc: f32 = sqrt(1.0 - r2);                       // height above the billboard plane
+  let n: vec3<f32> = normalize(rv.camRight * in.uv.x + rv.camUp * in.uv.y - rv.camForward * zc);
+  let surf: vec3<f32> = in.centre + n * in.radius;    // world surface point
+  let clip: vec4<f32> = rv.mvp * vec4<f32>(surf, 1.0);
+  out.depth = (clip.z / clip.w) * 0.5 + 0.5;          // depth-interleave impostors
+  // Lighting-controls shade (view dir = -camForward). Shadows/AO not replicated.
+  let ndl: f32 = max(0.0, dot(n, rv.lightDir));
+  var col: vec3<f32> = in.col.rgb * (rv.ambient + rv.diffuse * ndl);
+  if (rv.specular > 0.0) {
+    let H: vec3<f32> = normalize(rv.lightDir - rv.camForward);
+    col = col + rv.specular * pow(max(0.0, dot(n, H)), 32.0);
+  }
+  if (rv.outlineOn != 0u) {
+    // Silhouette rim — the 3D analogue of the 2D disc contour (match gl3d SPHERE_FS).
+    let rr: f32 = sqrt(r2);
+    let pxw: f32 = fwidth(rr);
+    let band: f32 = min(1.5 * pxw, 0.25);
+    let rim: f32 = smoothstep(1.0 - band - pxw, 1.0 - band + pxw, rr);
+    col = col * (1.0 - 0.4 * rim);
+  }
+  // Opaque (alpha-blend gated off) → force alpha 1 so the sphere composites over the
+  // page/overlays; premultiplied == straight at alpha 1.
+  out.color = vec4<f32>(col, 1.0);
+  return out;
+}`;
+}
+
+/** Ensure the depth texture matches the canvas size (recreated on resize). */
+function ensureAgentDepthTex(rt: AgentRenderSurface, w: number, h: number): GPUTextureView {
+  if (!rt.renderDepthTex || rt.renderDepthW !== w || rt.renderDepthH !== h) {
+    if (rt.renderDepthTex) { try { rt.renderDepthTex.destroy(); } catch { /* non-fatal */ } }
+    rt.renderDepthTex = rt.device.createTexture({
+      label: 'agent-render-depth', size: { width: Math.max(1, w), height: Math.max(1, h) },
+      format: 'depth24plus', usage: GPUTextureUsage.RENDER_ATTACHMENT,
+    });
+    rt.renderDepthW = w; rt.renderDepthH = h;
+  }
+  return rt.renderDepthTex.createView();
+}
+
+/** Write the 3D camera/lighting uniform (176 bytes, mirrors RENDER_VIEW_3D_WGSL). */
+export function uploadAgentRenderView3D(rt: AgentRenderSurface, v: AgentRenderView3D): void {
+  if (!rt.renderView3DBuf) return;
+  const ab = new ArrayBuffer(RENDER_VIEW_3D_BYTES);
+  const f = new Float32Array(ab), u = new Uint32Array(ab);
+  for (let i = 0; i < 16; i++) f[i] = v.mvp[i] ?? 0;      // mvp 0..63
+  f[16] = v.halfX; f[17] = v.halfY; f[18] = v.halfZ;      // half @64
+  f[20] = v.camRightX; f[21] = v.camRightY; f[22] = v.camRightZ;   // @80
+  f[24] = v.camUpX; f[25] = v.camUpY; f[26] = v.camUpZ;            // @96
+  f[28] = v.camForwardX; f[29] = v.camForwardY; f[30] = v.camForwardZ; // @112
+  f[32] = v.lightX; f[33] = v.lightY; f[34] = v.lightZ;   // lightDir @128
+  f[35] = v.ambient; f[36] = v.diffuse; f[37] = v.specular; // @140,144,148
+  u[38] = v.outlineOn >>> 0;                               // outlineOn @152
+  f[40] = v.bgR; f[41] = v.bgG; f[42] = v.bgB; f[43] = v.bgA; // bg @160
+  rt.device.queue.writeBuffer(rt.renderView3DBuf, 0, ab);
+  const a = v.bgA;
+  rt.renderClear = [v.bgR * a, v.bgG * a, v.bgB * a, a];
+}
+
 /** Set up direct render on the transferred OffscreenCanvas. Clones the grid's
  *  setupDirectRender shape (rgba8unorm, premultiplied). Non-fatal on failure
  *  (returns false → the worker keeps the CPU snapshot path). */
 export async function setupAgentDirectRender(rt: AgentRenderSurface, canvas: OffscreenCanvas): Promise<boolean> {
+  // Phase C: a 3D layout renders spheres with a depth attachment; a 2D layout
+  // renders discs (the A1/A2 path). Mutually exclusive per surface (dimension is
+  // baked into the layout), so branch here.
+  if ((rt.layout.gridDepth ?? 1) > 1) return setupAgentSphereRender(rt, canvas);
+  return setupAgentDiscRender(rt, canvas);
+}
+
+/** Phase C — the 3D sphere pipeline (opaque, depth-tested). */
+async function setupAgentSphereRender(rt: AgentRenderSurface, canvas: OffscreenCanvas): Promise<boolean> {
+  try {
+    const ctx = canvas.getContext('webgpu') as GPUCanvasContext | null;
+    if (!ctx) return false;
+    const format: GPUTextureFormat = 'rgba8unorm';
+    ctx.configure({ device: rt.device, format, usage: GPUTextureUsage.RENDER_ATTACHMENT, alphaMode: 'premultiplied' });
+    const module = rt.device.createShaderModule({ code: agentRenderSphereWGSL(rt.layout) });
+    const info = await module.getCompilationInfo();
+    const errs = info.messages.filter(m => m.type === 'error');
+    if (errs.length > 0) {
+      // eslint-disable-next-line no-console
+      console.error('[agents/webgpu] sphere WGSL compile errors:\n' + errs.map(m => `  line ${m.lineNum}: ${m.message}`).join('\n'));
+      return false;
+    }
+    const bgl = rt.device.createBindGroupLayout({
+      label: 'agent-sphere-bgl',
+      entries: [
+        { binding: 0, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: { type: 'read-only-storage' } },
+        { binding: 1, visibility: GPUShaderStage.VERTEX, buffer: { type: 'read-only-storage' } },
+        { binding: 2, visibility: GPUShaderStage.VERTEX, buffer: { type: 'read-only-storage' } },
+        { binding: 3, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: { type: 'uniform' } },
+      ],
+    });
+    const pl = rt.device.createPipelineLayout({ label: 'agent-sphere-pl', bindGroupLayouts: [bgl] });
+    const pipeline = rt.device.createRenderPipeline({
+      label: 'agent-sphere', layout: pl,
+      vertex: { module, entryPoint: 'vsMain' },
+      fragment: { module, entryPoint: 'fsMain', targets: [{ format }] },   // opaque (no blend)
+      primitive: { topology: 'triangle-strip' },
+      depthStencil: { format: 'depth24plus', depthWriteEnabled: true, depthCompare: 'less' },
+    });
+    const renderView3DBuf = rt.device.createBuffer({ label: 'agent-render-view-3d', size: RENDER_VIEW_3D_BYTES, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+    const renderBindGroup = rt.device.createBindGroup({
+      label: 'agent-sphere-bg', layout: bgl,
+      entries: [
+        { binding: 0, resource: { buffer: rt.agentF32Buf } },
+        { binding: 1, resource: { buffer: rt.agentAliveBuf } },
+        { binding: 2, resource: { buffer: rt.agentColorsBuf } },
+        { binding: 3, resource: { buffer: renderView3DBuf } },
+      ],
+    });
+    rt.renderCanvas = canvas;
+    rt.renderCtx = ctx;
+    rt.render3D = true;
+    rt.renderView3DBuf = renderView3DBuf;
+    rt.renderSpherePipeline = pipeline;
+    rt.renderSphereBindGroup = renderBindGroup;
+    rt.renderActive = true;
+    rt.renderClear = [0, 0, 0, 0];
+    return true;
+  } catch {
+    rt.renderActive = false;
+    return false;
+  }
+}
+
+async function setupAgentDiscRender(rt: AgentRenderSurface, canvas: OffscreenCanvas): Promise<boolean> {
   try {
     const ctx = canvas.getContext('webgpu') as GPUCanvasContext | null;
     if (!ctx) return false;
@@ -1253,7 +1505,11 @@ export function uploadAgentRenderView(rt: AgentRenderSurface, v: AgentRenderView
 /** Append the agent render pass (instanced disc quads) to an existing encoder.
  *  Draws `hw × copiesX × copiesY` instances. No-op when render isn't active. */
 export function presentAgentsEncode(rt: AgentRenderSurface, enc: GPUCommandEncoder, hw: number): void {
-  if (!rt.renderActive || !rt.renderCtx || !rt.renderBindGroup || !rt.renderViewBuf) return;
+  if (!rt.renderActive || !rt.renderCtx) return;
+  // Phase C: a 3D surface draws sphere impostors with a depth attachment (one
+  // instance per agent, no infinity tiling); a 2D surface draws the disc quads.
+  if (rt.render3D) { presentAgentSpheresEncode(rt, enc, hw); return; }
+  if (!rt.renderBindGroup || !rt.renderViewBuf) return;
   // Keep the uniform's highWater == the draw's instance decomposition base. The
   // camera message can't know the live highWater (free mode ships no snapshot),
   // so patch it here from the value the caller passes (cheap 4-byte write, queued
@@ -1269,6 +1525,25 @@ export function presentAgentsEncode(rt: AgentRenderSurface, enc: GPUCommandEncod
   pass.setBindGroup(0, rt.renderBindGroup);
   const copies = Math.max(1, rt.renderCopiesX ?? 1) * Math.max(1, rt.renderCopiesY ?? 1);
   pass.draw(4, Math.max(1, hw) * copies);
+  pass.end();
+}
+
+/** Phase C: append the 3D sphere-impostor pass — one instance per agent (no
+ *  infinity tiling), opaque, with a depth attachment so spheres depth-sort. */
+function presentAgentSpheresEncode(rt: AgentRenderSurface, enc: GPUCommandEncoder, hw: number): void {
+  if (!rt.renderCtx || !rt.renderSpherePipeline || !rt.renderSphereBindGroup) return;
+  const tex = rt.renderCtx.getCurrentTexture();
+  const view = tex.createView();
+  const depthView = ensureAgentDepthTex(rt, tex.width, tex.height);
+  const [cr, cg, cb, ca] = rt.renderClear ?? [0, 0, 0, 0];
+  const pass = enc.beginRenderPass({
+    label: 'agent-sphere-present',
+    colorAttachments: [{ view, loadOp: 'clear', storeOp: 'store', clearValue: { r: cr, g: cg, b: cb, a: ca } }],
+    depthStencilAttachment: { view: depthView, depthClearValue: 1.0, depthLoadOp: 'clear', depthStoreOp: 'store' },
+  });
+  pass.setPipeline(rt.renderSpherePipeline);
+  pass.setBindGroup(0, rt.renderSphereBindGroup);
+  pass.draw(4, Math.max(1, hw));   // 4 verts (triangle-strip quad) × hw agents
   pass.end();
 }
 
@@ -1349,6 +1624,8 @@ export function uploadAgentRenderFields(rt: AgentRenderSurface, s: AgentStore): 
     write(L.f32Base['x']!, s.x);
     write(L.f32Base['y']!, s.y);
     write(L.f32Base['radius']!, s.radius);
+    // Phase C: a 3D layout carries a z field the sphere pass reads.
+    if ((L.gridDepth ?? 1) > 1 && L.f32Base['z'] !== undefined && s.z) write(L.f32Base['z'], s.z);
   }
   const al = rt.renderAliveScratch ?? (rt.renderAliveScratch = new Uint32Array(ma));
   for (let i = 0; i < hw; i++) al[i] = s.alive[i]!;
@@ -1373,7 +1650,8 @@ export function destroyAgentRenderSurface(rt: AgentRenderSurface | null): void {
   if (!rt) return;
   rt.renderActive = false;
   rt.renderCtx = null;
-  const bufs = [rt.agentF32Buf, rt.agentAliveBuf, rt.agentColorsBuf, rt.renderViewBuf ?? null];
+  if (rt.renderDepthTex) { try { rt.renderDepthTex.destroy(); } catch { /* non-fatal */ } rt.renderDepthTex = null; }
+  const bufs = [rt.agentF32Buf, rt.agentAliveBuf, rt.agentColorsBuf, rt.renderViewBuf ?? null, rt.renderView3DBuf ?? null];
   for (const b of bufs) { if (b) try { b.destroy(); } catch { /* non-fatal */ } }
   const dev = rt.device as GPUDevice & { destroy?: () => void };
   if (typeof dev.destroy === 'function') { try { dev.destroy(); } catch { /* non-fatal */ } }
@@ -2021,12 +2299,13 @@ export function destroyAgentWebGPURuntime(rt: AgentWebGPURuntime | null): void {
     rt.auxF32Buf, rt.indicatorsBuf, rt.bondStoreBuf, rt.spawnCursorBuf, rt.stopFlagBuf,
     rt.resident?.countsBuf ?? null, rt.resident?.cursorBuf ?? null, rt.resident?.hashParamsBuf ?? null,
     rt.resident?.sortedBuf ?? null, rt.resident?.sortedIdBuf ?? null,
-    rt.renderViewBuf ?? null,
+    rt.renderViewBuf ?? null, rt.renderView3DBuf ?? null,   // + Phase C 3D uniform
   ];
   // A1 render canvas is a transferred OffscreenCanvas — its context is released
   // with the device; just drop the references (unconfigure is implicit on destroy).
   rt.renderActive = false;
   rt.renderCtx = null;
+  if (rt.renderDepthTex) { try { rt.renderDepthTex.destroy(); } catch { /* non-fatal */ } rt.renderDepthTex = null; }
   for (const b of bufs) { if (b) try { b.destroy(); } catch { /* non-fatal */ } }
   for (const bucket of rt.stagingPool.values()) for (const e of bucket) { try { e.buffer.destroy(); } catch { /* non-fatal */ } }
   rt.stagingPool.clear();

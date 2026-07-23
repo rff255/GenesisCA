@@ -46,10 +46,19 @@ import {
   uploadAgentField, readbackAgentField,
   uploadAgentAux, uploadAgentIndicators, readbackAgentIndicators, uploadAgentBondStore,
   ensureAgentResident, computeResidentHashParams, uploadAgentHashParams, dispatchResidentBatch, readbackAgentFrame,
-  setupAgentDirectRender, uploadAgentRenderView, presentAgentsOnce, presentAgentsFromStore,
+  setupAgentDirectRender, uploadAgentRenderView, uploadAgentRenderView3D, presentAgentsOnce, presentAgentsFromStore,
   createAgentRenderOnlyRuntime, presentAgentRenderFromStore, destroyAgentRenderSurface,
-  type AgentWebGPURuntime, type AgentRenderSurface, type FieldArray, type AgentRenderView, type AgentOMShaderInput,
+  type AgentWebGPURuntime, type AgentRenderSurface, type FieldArray, type AgentRenderView, type AgentRenderView3D, type AgentOMShaderInput,
 } from './agentWebgpuRuntime';
+
+/** A camera/graphics view is either the 2D disc view or the Phase C 3D sphere view
+ *  (distinguished by `mode: '3d'`). One setAgentCamera message carries either. */
+type AgentRenderViewAny = AgentRenderView | AgentRenderView3D;
+/** Route a view to the right uniform uploader by dimension. */
+function applyAgentRenderView(rt: AgentRenderSurface, view: AgentRenderViewAny): void {
+  if ((view as AgentRenderView3D).mode === '3d') uploadAgentRenderView3D(rt, view as AgentRenderView3D);
+  else uploadAgentRenderView(rt, view as AgentRenderView);
+}
 
 interface AttrDef {
   id: string;
@@ -505,7 +514,7 @@ interface SetSimLayersMsg { type: 'setSimLayers'; simulateCells: boolean; simula
 interface AttachAgentCanvasMsg { type: 'attachAgentCanvas'; canvas: OffscreenCanvas; width: number; height: number }
 /** Camera + tiling + graphics options for the agent render (world→screen +
  *  torus copies + outline/glow/bg). Present-only (no step). */
-interface SetAgentCameraMsg { type: 'setAgentCamera'; view: AgentRenderView }
+interface SetAgentCameraMsg { type: 'setAgentCamera'; view: AgentRenderViewAny }
 /** UI-sync toggle: while ON the worker reads the GPU agent state back each frame
  *  and ships the render snapshot (features that need CPU agent state). While OFF
  *  the resident batch skips the readback (free-running). Default ON. */
@@ -833,8 +842,9 @@ let agentStoreStale = false;
  *  sendColors does NOT double-present (its present reads the CPU store, wrong under
  *  free mode). Cleared by sendColors. */
 let agentBatchPresented = false;
-/** The last camera/tiling/graphics uniform (re-applied on attach / refocus). */
-let agentRenderView: AgentRenderView | null = null;
+/** The last camera/tiling/graphics uniform (re-applied on attach / refocus).
+ *  2D disc view OR the Phase C 3D sphere view (routed by applyAgentRenderView). */
+let agentRenderView: AgentRenderViewAny | null = null;
 
 /** A2 — the render-ONLY surface for a CPU (JS/WASM) target. On a webgpu target the
  *  render reads the full `agentWebgpuRuntime`; on a CPU target there is no compute
@@ -6051,7 +6061,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
           if (rt !== agentWebgpuRuntime) agentRenderRuntime = rt;
           agentRenderActive = true;
           agentStoreStale = false;
-          if (agentRenderView) uploadAgentRenderView(rt, agentRenderView);
+          if (agentRenderView) applyAgentRenderView(rt, agentRenderView);
           presentAgentsIfActive();
           self.postMessage({ type: 'agentRenderStatus', active: true });
         } catch (e) {
@@ -6069,7 +6079,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       {
         const rt = activeRenderSurface();
         if (agentRenderActive && rt) {
-          uploadAgentRenderView(rt, msg.view);
+          applyAgentRenderView(rt, msg.view);
           // Present now only when idle — a batch in flight is deferred (won't reach
           // here); a per-gen/mutation present covers the running case via sendColors.
           // FromStore (upload fields/colours, then present), NOT a raw present:
@@ -6090,9 +6100,15 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       // state down once so the next snapshot is fresh.
       const wasOff = !agentUiSync;
       agentUiSync = !!msg.on;
-      if (agentUiSync && wasOff && agentStoreStale && agentWebgpuRuntime && agentStore) {
+      if (agentUiSync && wasOff && agentStore) {
+        // OFF→ON: a consumer now needs live CPU agent state. Pull the GPU state
+        // down (if a free-mode resident batch left it stale) AND ship ONE snapshot,
+        // so a paused frame-mode renderer — the Phase C 3D gl3d full render, which
+        // draws/picks agents from the snapshot, not the sphere canvas — has fresh
+        // agents immediately (a paused sim ships no step, hence no snapshot without
+        // this). Free mode (uiSync off) ships no snapshot, so nothing to undo.
         asyncStepBatchInFlight = true;
-        void (async () => { await ensureAgentStoreFresh(); endAsyncStepBatch(); })();
+        void (async () => { await ensureAgentStoreFresh(); sendColors(); endAsyncStepBatch(); })();
       }
       break;
     }
@@ -6103,7 +6119,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       {
         const rt = activeRenderSurface();
         if (agentRenderActive && rt && agentStore) {
-          if (agentRenderView) uploadAgentRenderView(rt, agentRenderView);
+          if (agentRenderView) applyAgentRenderView(rt, agentRenderView);
           presentAgentsIfActive();
         }
       }
