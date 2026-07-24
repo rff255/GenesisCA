@@ -6364,7 +6364,13 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
             }
             if (gridRenderView) uploadVoxelView(rt, gridRenderView);
             presentVoxelsIfActive();
-            self.postMessage({ type: 'voxelRenderStatus', active: true });
+            // ACK the worker's ACTUAL `gridUiSync`. `gridUiSync` is a MODULE flag
+            // that SURVIVES a re-attach (a display resize re-attaches on the SAME
+            // worker), so the main thread must NOT assume the module default here
+            // — assuming ON while the worker is OFF strands its mirror and its
+            // `if (!posted)` guard then suppresses every later ON post (pause /
+            // inspect / shadows / recording silently stop working, forever).
+            self.postMessage({ type: 'voxelRenderStatus', active: true, uiSync: gridUiSync });
           } catch (e) {
             destroyVoxelRender(rt);
             self.postMessage({ type: 'voxelRenderStatus', active: false, message: (e as Error)?.message || String(e) });
@@ -6510,7 +6516,10 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
           agentStoreStale = false;
           if (agentRenderView) applyAgentRenderView(rt, agentRenderView);
           presentAgentsIfActive();
-          self.postMessage({ type: 'agentRenderStatus', active: true, composite: agentCompositeActive });
+          // ACK the worker's ACTUAL `agentUiSync` — same rule as the voxel ack
+          // above: the module flag survives a re-attach on the SAME worker, so the
+          // main thread mirrors what the worker reports instead of assuming ON.
+          self.postMessage({ type: 'agentRenderStatus', active: true, composite: agentCompositeActive, uiSync: agentUiSync });
         } catch (e) {
           agentRenderActive = false;
           self.postMessage({ type: 'agentRenderStatus', active: false, message: (e as Error)?.message || String(e) });

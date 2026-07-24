@@ -389,6 +389,78 @@ check('runtime: uploadAgentSoA seeds the agent colour buffer [invisible-agents b
     layoutScript.includes("struct: 'VoxelView'") && layoutScript.includes("writer: 'uploadVoxelView'"));
 }
 
+// B11 (UI-SYNC MIRROR INVARIANT, user-reported: "after free mode, pause / 3D
+// inspect / shadows / AO / alpha blend / recording all silently stop working").
+//
+// The worker's `gridUiSync` / `agentUiSync` are MODULE flags that SURVIVE a
+// re-attach on the SAME worker (a display resize re-attaches the canvas), so the
+// attach ack must MIRROR what the worker reports — never assume the module
+// default. Assuming ON while the worker sits OFF strands the main thread's
+// mirror, and the driver's `if (!posted)` guard then suppresses EVERY later ON
+// post. Because the stuck value is ON, no OFF transition can resync it either:
+// the readback path is dead for the rest of the session and no colours/snapshot
+// frame ever crosses the wire again.
+//
+// The invariant these pin: the mirror is only ever assigned from a value the
+// worker was TOLD (a post in the same statement), a value the worker ACKED, or
+// the module default of a BRAND-NEW worker created in the same tick.
+{
+  const sv = readSrc('simulator/SimulatorView.tsx');
+  const w = readSrc('simulator/engine/sim.worker.ts');
+  const countAll = (s, needle) => s.split(needle).length - 1;
+
+  // 1. The worker ACKS its live flag on both attach paths (nothing else can tell
+  //    the main thread whether a re-attach landed on an ON or an OFF worker).
+  check('worker: the voxel attach ack carries the live gridUiSync [mirror invariant]',
+    /case 'attachVoxelCanvas':[\s\S]{0,3000}voxelRenderStatus', active: true, uiSync: gridUiSync/.test(w));
+  check('worker: the agent attach ack carries the live agentUiSync [mirror invariant]',
+    /case 'attachAgentCanvas':[\s\S]{0,6000}agentRenderStatus', active: true[^}]*uiSync: agentUiSync/.test(w));
+
+  // 2. The main thread MIRRORS the acked value instead of assuming ON.
+  const gridAck = blockAfter(sv, /if \(msg\.type === 'voxelRenderStatus'\)/);
+  const agentAck = blockAfter(sv, /msg\.type === 'agentRenderStatus'\)/);
+  check('SimulatorView: the voxel ack derives the mirror from msg.uiSync [mirror invariant]',
+    /gridUiSyncPostedRef\.current = \(msg\.uiSync[^;]*!== false/.test(gridAck));
+  check('SimulatorView: the voxel ack never assumes the mirror is ON [mirror invariant]',
+    gridAck.length > 0 && !gridAck.includes('gridUiSyncPostedRef.current = true'));
+  check('SimulatorView: the agent ack derives the mirror from msg.uiSync [mirror invariant]',
+    /agentUiSyncPostedRef\.current = \(msg\.uiSync[^;]*!== false/.test(agentAck));
+  check('SimulatorView: the agent ack never assumes the mirror is ON [mirror invariant]',
+    agentAck.length > 0 && !agentAck.includes('agentUiSyncPostedRef.current = true'));
+
+  // 3. A pending OFF debounce armed for the PREVIOUS attach must not survive the
+  //    re-mirror (it would post OFF against freshly-mirrored state).
+  check('SimulatorView: the voxel ack drops any pending OFF debounce [mirror invariant]',
+    gridAck.includes('clearTimeout(gridUiSyncTimerRef.current)'));
+  check('SimulatorView: the agent ack drops any pending OFF debounce [mirror invariant]',
+    agentAck.includes('clearTimeout(agentUiSyncTimerRef.current)'));
+
+  // 4. The fix must NOT be "delete the guard" — that would post on every driver
+  //    call (the driver runs per stepped message and per pointer event).
+  const gridDriver = blockAfter(sv, /const updateGridUiSync = useCallback\(/);
+  const agentDriver = blockAfter(sv, /const updateAgentUiSync = useCallback\(/);
+  check('SimulatorView: the grid driver still guards its ON post on the mirror [no redundant posts]',
+    gridDriver.includes('if (!gridUiSyncPostedRef.current)'));
+  check('SimulatorView: the agent driver still guards its ON post on the mirror [no redundant posts]',
+    agentDriver.includes('if (!agentUiSyncPostedRef.current)'));
+
+  // 5. No ASSUMED `= true` anywhere else. The sanctioned sites are the driver's
+  //    own ON post, the two brand-new-worker resets inside initWorkerWithDimensions,
+  //    and (agents) the 3D alpha-blend detach, which POSTS in the same statement.
+  const initBlock = blockAfter(sv, /const initWorkerWithDimensions = useCallback\(/);
+  check('SimulatorView: every gridUiSync "= true" is a post or a brand-new worker [mirror invariant]',
+    countAll(sv, 'gridUiSyncPostedRef.current = true')
+      === countAll(gridDriver, 'gridUiSyncPostedRef.current = true')
+        + countAll(initBlock, 'gridUiSyncPostedRef.current = true'));
+  check('SimulatorView: the 3D alpha-blend detach TELLS the worker before mirroring [mirror invariant]',
+    /setAgentUiSync', on: true \}\);\s*\n\s*agentUiSyncPostedRef\.current = true;/.test(sv));
+  check('SimulatorView: every agentUiSync "= true" is a post or a brand-new worker [mirror invariant]',
+    countAll(sv, 'agentUiSyncPostedRef.current = true')
+      === countAll(agentDriver, 'agentUiSyncPostedRef.current = true')
+        + countAll(initBlock, 'agentUiSyncPostedRef.current = true')
+        + 1 /* the alpha-blend detach checked above */);
+}
+
 // ---------------------------------------------------------------------------
 // TIER C — browser probes (printed; only reachable with a live GPUDevice)
 // ---------------------------------------------------------------------------

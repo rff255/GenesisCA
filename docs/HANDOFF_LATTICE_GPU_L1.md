@@ -621,3 +621,98 @@ buffer-level probing. Two rules follow: never let a scalar follow a `vec3` witho
 than a structural one. More generally, §9's lesson has a companion: *presenting* is not *displaying*
 — "the pass ran and the buffers are right" and "the user sees pixels" are different claims, and only
 the second one is the feature.
+
+---
+
+## 11. Post-ship regression fix #3 (2026-07-24) — the UI-sync mirror desynced from the worker
+
+**Reported** (real app, the shipped Accretor 300³ on the WebGPU grid target): once the grid UI-sync
+driver has posted `setGridUiSync {on:false}` ONCE — the normal free-mode entry a few hundred ms after
+the voxel canvas attaches — **it never posts `{on:true}` again for the rest of the session**. Pressing
+Pause: zero posts, zero colour frames. Shift+LMB on the GL canvas: zero posts, zero colour frames, and
+**no inspect popover** (gl3d's colour-id `pick()` resolves against a CPU instance buffer that only
+frame mode refreshes). Meanwhile the voxel canvas is demonstrably live — the structure renders and
+grows — so the render itself was fine. `git diff --stat` =
+[SimulatorView.tsx](../src/simulator/SimulatorView.tsx) + [sim.worker.ts](../src/simulator/engine/sim.worker.ts)
++ [verify-agent-render.mjs](../scripts/verify-agent-render.mjs). **No compiler, no gl3d, no runtime.**
+
+### Root cause — the attach ack ASSUMED the worker's flag instead of reading it
+
+The worker's `gridUiSync` is a **module-level flag**. It is deliberately *not* derived from the
+runtime (unlike `voxelRenderOn()`), because it encodes a decision the MAIN THREAD owns. So it
+**survives a re-attach**: `attachVoxelCanvas` rebuilds the pipelines on the SAME worker and never
+touches it.
+
+But a re-attach is routine — `draw()` re-attaches whenever the display CSS size changes (panel
+splitter, window resize, transport bar), and the ack handler ended with
+
+```ts
+gridUiSyncPostedRef.current = true;   // worker default is ON
+```
+
+That comment is true only for a BRAND-NEW worker. On a re-attach in **free mode** the worker's flag is
+`false`, so the ack stranded the mirror at `true` while the worker sat at `false`. The driver's
+
+```ts
+if (!gridUiSyncPostedRef.current) { …post ON… }
+```
+
+then suppressed **every** later ON post. And because the stuck value is ON, no OFF transition can
+resync it either (the OFF branch is guarded on `posted === true`, sets it to `false`, and posts a
+redundant OFF — which *does* self-heal, but only while `want` stays false). The moment `want` turned
+true inside that window — pause, Shift, a shadows checkbox — the desync became **permanent**: the
+readback path was dead for the rest of the session.
+
+The AGENT driver (`agentUiSyncPostedRef`, used by far more models) had the identical shape and the
+identical latent bug in its `agentRenderStatus` ack.
+
+### The fix — the worker ACKS its flag; the main thread mirrors what it is told
+
+`attachVoxelCanvas` / `attachAgentCanvas` now ack `uiSync: gridUiSync` / `uiSync: agentUiSync`, and the
+two ack handlers set the mirror from `msg.uiSync` (absent ⇒ ON, the historical assumption, so a
+pre-fix/failure ack degrades to today's behaviour). Both also clear a pending OFF debounce so a timer
+armed for the PREVIOUS attach can't fire against freshly-mirrored state. The `if (!posted)` guard is
+**kept** — removing it would post on every driver call, and the driver runs per stepped message and
+per pointer event.
+
+**The invariant, documented on `gridUiSyncPostedRef`:** the mirror may only ever be assigned from a
+value the worker has actually been TOLD (a post in the same statement), a value the worker has ACKED,
+or the module default of a BRAND-NEW worker created in the same tick — **never from an assumption**.
+
+### Verification — negative-controlled, at both the protocol and the UI level
+
+The window is only ~300 ms wide, so the repro was made deterministic by arming a page-side listener
+that fires the "want = true" trigger 60 ms after the attach ack, then forcing a re-attach with a
+window resize while the sim ran in free mode.
+
+| | pre-fix (ack reverted to `= true`) | post-fix |
+|---|---|---|
+| re-attach ack | `{active:true, uiSync:false}` (ignored) | `{active:true, uiSync:false}` (mirrored) |
+| trigger → ON post | **none** | `setGridUiSync {on:true}` |
+| worker `gridUiSync` after Pause | **`false`** (stuck) | `true` |
+| colour frames | **0** (frozen) | flowing |
+| Shift+LMB inspect | **no popover** | `Cell (152, 152) · State E · Fade 3` |
+
+All four user-visible consequences confirmed post-fix on the Accretor: **pause** posts ON + a colour
+frame arrives; **3D inspect** during play opens a popover with real cell data; **shadows / occupancy
+AO / alpha blend** each pin ON when checked and release OFF when unchecked (a clean alternating
+ON/OFF post sequence across all three, while playing); **recording** pins ON on Record and releases on
+Stop & Save. The a4805a6 camera behaviour is unregressed: a 20-move Alt+LMB orbit drag posted 11
+`setGridCamera` with **0 `setGridUiSync` flips and 0 colour frames**.
+
+The class is now pinned structurally by the **B11** block in
+[verify-agent-render.mjs](../scripts/verify-agent-render.mjs) (11 checks over both drivers), proven by
+a 10-mutation negative control: drop `uiSync` from either ack, assume ON in either ack handler, keep a
+stale debounce, delete either guard, add a stray `= true` anywhere else, or mirror without telling the
+worker in the alpha-blend detach — every one is caught.
+
+### The durable lesson
+
+**A flag that lives on one side of a message boundary and is mirrored on the other is a distributed
+state machine, and every "the default is X" comment in the mirror is an assumption with a lifetime.**
+Here the assumption was true exactly once (the first attach) and false on every re-attach — and the
+guard that made the mirror *useful* (don't re-post what the worker already knows) is precisely what
+made a wrong mirror *permanent*. Make the owning side report its value on any handshake that could
+have been re-entered, and mirror only what was told or acked. Corollary for reviewers: a desync of
+this shape has no error, no log, and no visual tell — the render kept working perfectly; only the
+features that quietly *depend* on the readback stopped.

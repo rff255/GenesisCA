@@ -1875,7 +1875,10 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   // Live-agent count from the stepped message (snapshot present → snap.liveCount,
   // free mode → the agentLiveCount scalar). Drives the stats chip.
   const agentLiveCountRef = useRef<number>(0);
-  // Last UI-sync value posted (avoid redundant messages).
+  // Last UI-sync value posted (avoid redundant messages). Bound by the SAME
+  // UI-SYNC MIRROR INVARIANT as gridUiSyncPostedRef (see its doc comment):
+  // only ever assigned from a value the worker was told / acked, or the module
+  // default of a brand-new worker — never assumed after a re-attach.
   const agentUiSyncPostedRef = useRef<boolean>(true);
   // rAF coalescing token for setAgentCamera.
   const agentCameraRafRef = useRef<number>(0);
@@ -1911,7 +1914,23 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   /** True once the worker acked `voxelRenderStatus { active: true }`. */
   const voxelRenderActiveRef = useRef<boolean>(false);
   const voxelCanvasDimsRef = useRef<{ w: number; h: number }>({ w: 0, h: 0 });
-  /** Mirrors the worker's `gridUiSync` (worker default is ON). */
+  /** Mirrors the worker's `gridUiSync`.
+   *
+   *  UI-SYNC MIRROR INVARIANT (applies equally to `agentUiSyncPostedRef`):
+   *  this ref may ONLY be assigned from a value the worker has actually been
+   *  TOLD (a `setGridUiSync` we post in the same statement), a value the worker
+   *  has ACKED (`uiSync` on the attach ack), or the documented module default of
+   *  a BRAND-NEW worker created in the same tick. NEVER from an ASSUMPTION.
+   *
+   *  The bug this rule exists to prevent: the worker's `gridUiSync` is a MODULE
+   *  flag that SURVIVES a re-attach (a display resize re-attaches the voxel
+   *  canvas on the SAME worker), so the ack handler's old hardcoded "= true,
+   *  the worker default is ON" stranded the mirror ON while the worker sat
+   *  OFF. The driver's `if (!gridUiSyncPostedRef.current)` guard then
+   *  suppressed EVERY later ON post, so pause / 3D inspect / shadows / AO /
+   *  alpha blend / recording all silently stopped working for the rest of the
+   *  session (no colours frame ever crossed the wire again). Because the stuck
+   *  value is ON, no OFF transition can resync it either — it is permanent. */
   const gridUiSyncPostedRef = useRef<boolean>(true);
   const gridUiSyncTimerRef = useRef<number>(0);
   /** Set when UI-sync is posted ON; cleared by the first `stepped` that carries
@@ -4301,7 +4320,15 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
           lastGridCameraKeyRef.current = '';
           workerRef.current.postMessage({ type: 'setGridCamera', view });
         }
-        gridUiSyncPostedRef.current = true;   // worker default is ON
+        // MIRROR THE WORKER'S ACTUAL FLAG (the UI-sync mirror invariant — see
+        // gridUiSyncPostedRef). A display resize re-attaches on the SAME worker,
+        // whose `gridUiSync` survives; assuming ON here stranded the mirror and
+        // permanently suppressed every later ON post. `uiSync` is absent only on
+        // a pre-fix / failure ack, where ON was the historical assumption.
+        // Also drop any pending OFF debounce so a timer armed for the previous
+        // attach can't fire against the freshly-mirrored state.
+        if (gridUiSyncTimerRef.current) { clearTimeout(gridUiSyncTimerRef.current); gridUiSyncTimerRef.current = 0; }
+        gridUiSyncPostedRef.current = (msg.uiSync as boolean | undefined) !== false;
         updateGridUiSync();
         draw();
       } else {
@@ -4358,7 +4385,12 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
         // Send the initial camera + draw so the canvas shows the current frame.
         const view = computeAgentRenderView();
         if (view && workerRef.current) { lastAgentCameraKeyRef.current = ''; workerRef.current.postMessage({ type: 'setAgentCamera', view }); }
-        agentUiSyncPostedRef.current = true;   // worker default is ON
+        // MIRROR THE WORKER'S ACTUAL FLAG (the UI-sync mirror invariant). A
+        // display resize / metaballs-off re-attaches on the SAME worker, whose
+        // `agentUiSync` survives — assuming ON here would strand the mirror and
+        // permanently suppress every later ON post (pause / inspect / recording).
+        if (agentUiSyncTimerRef.current) { clearTimeout(agentUiSyncTimerRef.current); agentUiSyncTimerRef.current = 0; }
+        agentUiSyncPostedRef.current = (msg.uiSync as boolean | undefined) !== false;
         updateAgentUiSync();
         draw();
       } else {
@@ -4408,6 +4440,10 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     // and remove the stale DOM canvas so it can't linger over the new frame.
     voxelRenderActiveRef.current = false;
     pendingVoxelCanvas.current = null;
+    // A BRAND-NEW worker (created a few lines below) starts at the module
+    // default ON — the one assumption the mirror invariant allows. Drop any
+    // pending OFF debounce armed against the OUTGOING worker.
+    if (gridUiSyncTimerRef.current) { clearTimeout(gridUiSyncTimerRef.current); gridUiSyncTimerRef.current = 0; }
     gridUiSyncPostedRef.current = true;
     gridFrameAwaitingColorsRef.current = false;
     lastGridCameraKeyRef.current = '';
@@ -4620,6 +4656,8 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     voxelRenderEligibleRef.current = voxelRenderEligible;
     voxelRenderActiveRef.current = false;
     pendingVoxelCanvas.current = null;
+    // Same tick as the fresh `createSimWorker()` above → module default ON.
+    if (gridUiSyncTimerRef.current) { clearTimeout(gridUiSyncTimerRef.current); gridUiSyncTimerRef.current = 0; }
     gridUiSyncPostedRef.current = true;   // worker default is ON
     gridFrameAwaitingColorsRef.current = false;
     lastGridCameraKeyRef.current = '';
@@ -4702,6 +4740,8 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     agentDirectRenderActiveRef.current = false;
     pendingAgentRenderCanvas.current = null;
     pendingAgentCanvasAttach.current = agentRenderEligible || agentComposite;
+    // Same tick as the fresh `createSimWorker()` above → module default ON.
+    if (agentUiSyncTimerRef.current) { clearTimeout(agentUiSyncTimerRef.current); agentUiSyncTimerRef.current = 0; }
     agentUiSyncPostedRef.current = true;   // worker default is ON
     // 3D Grid CA: effective layer count = d3 computed above (honours a resize-
     // panel dOverride; otherwise the model's depth, only when dimension==='3d' so
