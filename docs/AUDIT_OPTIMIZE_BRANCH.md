@@ -5,9 +5,16 @@ v1.28.0 bump). `git diff origin/master...optimize` = 35 files (19 source/scripts
 Read-only audit session — no production source was modified. Fix plan:
 [HANDOFF_AUDIT_FIXES.md](HANDOFF_AUDIT_FIXES.md).
 
+> **STATUS — 2026-07-23: the fix pass is DONE.** Commits `8441b0a` (BLOCKER + 3
+> HIGH), `8f35802` (MEDIUM), `070a1e5` (LOW/NIT) on `optimize`. **Every BLOCKER,
+> HIGH, MEDIUM and LOW finding except L2 is FIXED**; NITs N1/N3/N4 addressed or
+> accepted; N2 deferred to its owning session; M4 investigated with a plan (no code).
+> Per-finding status is marked inline below; evidence + gate results are in the fix
+> handoff's Completion Report. **Merge verdict is now: NOT BLOCKED.**
+
 ---
 
-## ⛔ BLOCKER — read this first
+## ⛔ BLOCKER — read this first — **[FIXED `8441b0a`]**
 
 **B1 — a soft recompile can ZERO the entire live agent population (silent data
 corruption).** `buildAgentWebGPUIfNeeded()` destroys and rebuilds the agent WebGPU
@@ -44,6 +51,13 @@ permanent (the next present/save/readback carries it).
 Fix: set `agentGpuUploadPending = true` in `buildAgentWebGPUIfNeeded()` (one line,
 independently revertable). See HANDOFF item 1.
 
+**FIXED (`8441b0a`)** — and reproduced BOTH ways in the real app before/after
+(Particle Life on the WebGPU agent target, render-ineligible via a sprite, soft
+recompile driven by a real Modeler name edit): pre-fix every live agent collapsed to
+`x=0, y=0, radius=0` permanently with zero errors; post-fix positions survive and
+keep evolving. M3's fix (a `recompile` one-shot readback) additionally makes the
+recompile lossless rather than merely consistent.
+
 ---
 
 ## Counts
@@ -56,9 +70,19 @@ independently revertable). See HANDOFF item 1.
 | LOW | 6 |
 | NIT | 4 |
 
-**Merge verdict: BLOCKED** on B1 (silent data corruption) and H1 (a shipped sample
+~~**Merge verdict: BLOCKED** on B1 (silent data corruption) and H1 (a shipped sample
 loses its defining visual). Both are small, local fixes. H2 (worker lock-up) and H3
-(GPU resource leak) should land in the same pass. Everything else is safe to defer.
+(GPU resource leak) should land in the same pass. Everything else is safe to defer.~~
+
+**Merge verdict (2026-07-23, post fix pass): NOT BLOCKED.** B1/H1/H2/H3 fixed +
+regression-proved; all six MEDIUM and five of six LOW findings fixed; the fix pass
+also closed one defect the audit missed (the recompile message dropping
+`agentRenderLayout`, which permanently disabled direct render for CPU-target agent
+models after their first graph edit). Remaining open: **M4** (investigated, plan
+written, no code — a WebGPU-grid + WebGPU-agent decoupled model still runs its
+agents on JS), **L2** (cosmetic infinity-tiling cap), **N2** (an untracked bench
+script owned by another session), **N3** (sub-millionth-unit f32 quantisation), and
+the visible-pane verification debt below.
 
 ---
 
@@ -84,7 +108,7 @@ loses its defining visual). Both are small, local fixes. H2 (worker lock-up) and
 
 ### HIGH
 
-**H1 — 2D bonded agent models silently lose their bond lines under direct render.**
+**H1 — 2D bonded agent models silently lose their bond lines under direct render.** **[FIXED `8441b0a`]**
 The A1/A2 2D gate has no bonds term ([SimulatorView.tsx:4273-4286](../src/simulator/SimulatorView.tsx));
 only the C (3D) arm adds `resolveMaxBonds(...) === 0`. When direct render is active,
 `draw()` blits the agent canvas and **skips `drawAgentsOverlay()` entirely**
@@ -101,7 +125,7 @@ The `showBonds` Layers toggle also becomes a no-op there.
 the 3D arm), or render bonds in the GPU pass. The gate term is the minimal, safe fix.
 
 **H2 — the worker can dead-lock permanently if `sendColors()` throws inside the
-UI-sync OFF→ON handler.** [sim.worker.ts:6251-6252](../src/simulator/engine/sim.worker.ts):
+UI-sync OFF→ON handler.** **[FIXED `8441b0a`]** [sim.worker.ts:6251-6252](../src/simulator/engine/sim.worker.ts):
 ```
 asyncStepBatchInFlight = true;
 void (async () => { await ensureAgentStoreFresh(); sendColors(); endAsyncStepBatch(); })();
@@ -119,7 +143,7 @@ with no replay — the simulator freezes with no error surfaced. Same shape (low
 *Fix*: wrap both IIFE bodies in `try { … } finally { endAsyncStepBatch(); }`.
 
 **H3 — the A2 render-only surface leaks on every re-attach (GPU buffers + a shared-device
-reference that can never be released).** The attach handler
+reference that can never be released).** **[FIXED `8441b0a`]** The attach handler
 ([sim.worker.ts:6180-6186](../src/simulator/engine/sim.worker.ts)) reads
 `let rt = agentWebgpuRuntime; if (!rt) rt = await createAgentRenderOnlyRuntime(...)`
 — it never consults or destroys the existing `agentRenderRuntime`, then overwrites it
@@ -139,7 +163,7 @@ building a new one (or reuse it when the layout is unchanged).
 ### MEDIUM
 
 **M1 — the direct-render gate is computed only inside `initWorkerWithDimensions`, so
-it goes stale across soft recompiles.** [SimulatorView.tsx:4246-4308](../src/simulator/SimulatorView.tsx)
+it goes stale across soft recompiles.** **[FIXED `8f35802`]** [SimulatorView.tsx:4246-4308](../src/simulator/SimulatorView.tsx)
 is inside the full-init path; `needsFullInit` ([:4618-4681](../src/simulator/SimulatorView.tsx))
 does **not** include `model.sprites` or `model.agentMappings`. Consequences:
 - Adding a **sprite** to a running direct-rendered agent model keeps direct render on
@@ -156,7 +180,7 @@ each have their own detach/re-attach effect.)
 or (better) re-evaluate the gate in the soft-recompile path and detach/attach like the
 metaballs effect does.
 
-**M2 — sub-pixel agents disappear under direct render (CPU/GPU visual divergence).**
+**M2 — sub-pixel agents disappear under direct render (CPU/GPU visual divergence).** **[FIXED `8f35802`]**
 The CPU overlay clamps the drawn radius to `Math.max(1.2, r*scale)` at all three draw
 sites ([SimulatorView.tsx:2958](../src/simulator/SimulatorView.tsx),
 [:3049](../src/simulator/SimulatorView.tsx), [:3075](../src/simulator/SimulatorView.tsx));
@@ -169,7 +193,7 @@ item "visual parity vs the CPU path (pixel-count + colour-bucket comparison)" wa
 *Fix*: `radPx = max(ar * scalePx, 1.2)` in the disc VS (and mirror the `>= 2` outline
 threshold), or document the divergence.
 
-**M3 — GPU-side progress is discarded on a runtime rebuild (visible rewind).**
+**M3 — GPU-side progress is discarded on a runtime rebuild (visible rewind).** **[FIXED `8f35802`]**
 `buildAgentWebGPUIfNeeded()` sets `agentStoreStale = false`
 ([sim.worker.ts:1132](../src/simulator/engine/sim.worker.ts)) **without** reading the
 GPU state back. In free mode the CPU store can be many frames behind, so a soft
@@ -177,7 +201,7 @@ recompile silently rewinds the simulation to the last synced frame. (Independent
 B1: fixing B1 makes the rewind *consistent* rather than corrupting.)
 *Fix*: `await ensureAgentStoreFresh()` before dropping the runtime (or accept + document).
 
-**M4 — a WebGPU-grid + WebGPU-agent model without a field runs its agents on JS.**
+**M4 — a WebGPU-grid + WebGPU-agent model without a field runs its agents on JS.** **[OPEN — investigated, plan in the fix handoff's Completion Report]**
 [sim.worker.ts:5431](../src/simulator/engine/sim.worker.ts): the `webgpuActive`
 branch's non-E1b arm calls `runAgentStep()` — the JS/WASM agent step — regardless of
 `agentTarget === 'webgpu'`. E1b routed the *float-field* sub-case onto the GPU runtime
@@ -186,14 +210,14 @@ the GPU agent behaviour the user selected nor residency, and its RNG family/dyna
 differ from the same model with a JS/WASM grid. Pre-existing (D's report noted it) but
 now inconsistent with E1b and worth closing.
 
-**M5 — `uploadAgentColors` allocates a fresh `Uint32Array(maxAgents)` on every call**
+**M5 — `uploadAgentColors` allocates a fresh `Uint32Array(maxAgents)` on every call** **[FIXED `8f35802`]**
 ([agentWebgpuRuntime.ts:1767](../src/simulator/engine/agentWebgpuRuntime.ts)). It is on
 the **per-frame** path twice over (`uploadAgentRenderFields` for A2, `uploadAgentSoA`
 per generation for the per-gen GPU path) — 200 KB of garbage per call at 50k agents.
 Every sibling uploader uses persistent scratch (`rt.f32Upload`, `renderF32Scratch`).
 *Fix*: persistent scratch on the surface (a 3-line change).
 
-**M6 — user-facing doc drift: HelpView still documents the disabled E2 composite.**
+**M6 — user-facing doc drift: HelpView still documents the disabled E2 composite.** **[FIXED `8f35802`]**
 [HelpView.tsx:1793](../src/help/HelpView.tsx) tells users that a 2D grid+agents model
 on WebGPU/WebGPU "composites both layers … into ONE canvas in a single GPU pass, so
 the grid no longer copies its colours back" and warns about the world-resolution
@@ -204,19 +228,19 @@ report were updated, HelpView was not. §0.6 requires all layers to agree.
 ### LOW
 
 **L1 — the 2D background disappears when "Show agents" is unticked under direct
-render.** [SimulatorView.tsx:3279-3286](../src/simulator/SimulatorView.tsx): the
+render.** **[FIXED `070a1e5`]** [SimulatorView.tsx:3279-3286](../src/simulator/SimulatorView.tsx): the
 `agentDirect && !showGrid2d && bg2dRef.current` arm intentionally does nothing
 ("bg is drawn by the render shader's clear"), but the blit that would carry that clear
 is gated on `showAgentsRef.current` ([:3329](../src/simulator/SimulatorView.tsx)) — so
 with agents hidden the backdrop is never painted.
 
-**L2 — infinity tiling silently collapses to one tile past 256 copies.**
+**L2 — infinity tiling silently collapses to one tile past 256 copies.** **[OPEN — cosmetic, deferred]**
 `computeAgentRenderView` leaves `copiesX/Y = 1, startX/Y = 0` when the tile count
 exceeds 256 ([SimulatorView.tsx:4389-4390 region](../src/simulator/SimulatorView.tsx)),
 so at extreme zoom-out the grid tiles but the agents appear only in the home tile. The
 CPU overlay tiles unconditionally. Cosmetic, rare.
 
-**L3 — dormant E2 code has a latent conflict with residency.**
+**L3 — dormant E2 code has a latent conflict with residency.** **[FIXED `070a1e5`]**
 `dispatchResidentBatch` unconditionally appends `presentAgentsEncode`
 ([agentWebgpuRuntime.ts:2531](../src/simulator/engine/agentWebgpuRuntime.ts)), which is
 the disc-only pass with `loadOp:'clear'` and does **not** consult `rt.renderComposite`
@@ -225,7 +249,7 @@ re-enabled for a residency-eligible model the batch present would wipe the grid 
 Harmless today (composite off; and the only composite-eligible configs took the
 non-resident `webgpuActive` branch) — but it must be fixed before any E2 revival.
 
-**L4 — the E1 device-leak metric is unreachable.** `sharedGpuRefCount()` and
+**L4 — the E1 device-leak metric is unreachable.** **[FIXED `8441b0a`]** `sharedGpuRefCount()` and
 `sharedGpuAdapterRequestCount()` ([sharedGpuDevice.ts:154,161](../src/simulator/engine/sharedGpuDevice.ts))
 are exported and imported by nothing. A page-side `import()` of the module would get a
 *different* module instance from the worker's, so the E1 "adapterRequests = 1,
@@ -234,11 +258,11 @@ the session used was evidently not kept). Either wire them into the existing
 `__e1bCounters` probe or delete them.
 
 **L5 — `buildAgentDiscPipelines` orphans the previous `renderViewBuf`/pipelines on a
-re-attach** ([agentWebgpuRuntime.ts:1542-1554](../src/simulator/engine/agentWebgpuRuntime.ts)):
+re-attach** **[FIXED `8441b0a`]** ([agentWebgpuRuntime.ts:1542-1554](../src/simulator/engine/agentWebgpuRuntime.ts)):
 it assigns `rt.renderViewBuf = …` without destroying the old buffer. 96 bytes per
 re-attach — negligible, but the same re-attach loop as H3.
 
-**L6 — `renderAgentRings()` is skipped in gl3d overlays-only mode**
+**L6 — `renderAgentRings()` is skipped in gl3d overlays-only mode** **[FIXED `070a1e5` — comment]**
 ([gl3d.ts:2345-2351](../src/simulator/render/gl3d.ts)). Correct today only because
 every ring-producing feature (agent brush hover, inspector) flips UI-sync ON → frame
 mode. Fragile coupling; worth an explicit comment so a future UI-sync condition change
@@ -246,23 +270,23 @@ does not silently drop the rings.
 
 ### NIT
 
-**N1** — the `AGENT_GPU_ARRAY_CAP` comment claims "models with maxAgents ≤ the cap
+**N1** **[FIXED `070a1e5`]** — the `AGENT_GPU_ARRAY_CAP` comment claims "models with maxAgents ≤ the cap
 emit byte-identical shaders" ([agentWebgpu/compile.ts:1612](../src/modeler/vpl/compiler/agentWebgpu/compile.ts)).
 They do not: the emit changed from `i32(control.maxAgents)` (a uniform read) to a
 literal at [:2547](../src/modeler/vpl/compiler/agentWebgpu/compile.ts). It is
 *semantically* equivalent below the cap; the shader text differs for every model with
 `getNearbyAgents`. Fix the comment so a future identity check is not mis-triaged.
 
-**N2** — `scripts/bench-lattice.mjs` is present in the working tree **untracked**
+**N2** **[DEFERRED — owned by a concurrent session]** — `scripts/bench-lattice.mjs` is present in the working tree **untracked**
 (`git status`), a leftover from an earlier session. Either commit it deliberately or
 delete it.
 
-**N3** — the P2 f32 render snapshot quantises positions used by the agent
+**N3** **[ACCEPTED — no change]** — the P2 f32 render snapshot quantises positions used by the agent
 group-move brush (`start + delta` is posted from snapshot values), so a group move
 rounds each agent's f64 position to f32. Sub-millionth of a world unit; noted only for
 completeness.
 
-**N4** — `deferredDuringAgentGpuStep` / `flushDeferredAgentGpuMsgs`
+**N4** **[FIXED `070a1e5` — comment]** — `deferredDuringAgentGpuStep` / `flushDeferredAgentGpuMsgs`
 ([sim.worker.ts:2010-2012](../src/simulator/engine/sim.worker.ts)) are now effectively
 unreachable during a step batch: the `asyncStepBatchInFlight` guard runs first and
 catches everything. Dead-ish machinery worth a comment (or removal) so the two

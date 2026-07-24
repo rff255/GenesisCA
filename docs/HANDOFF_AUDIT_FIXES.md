@@ -280,3 +280,253 @@ these):
 - **Left open**: which audit findings were deliberately deferred (with the finding id),
   and the item-11 investigation outcome + proposed plan.
 - Update the master Status Board with an "AUDIT FIX PASS" row.
+
+---
+
+## Completion Report (2026-07-23)
+
+### Commits (branch `optimize`, NOT pushed)
+
+| # | Commit | Items | `git diff --stat` |
+|---|---|---|---|
+| 1 | `8441b0a` fix(agents): audit BLOCKER + 3 HIGH | 1 (B1), 2 (H1), 3 (H2), 4 (H3+L5) + L4 wiring | CLAUDE.md, HANDOFF_GPU_AGENT_RENDER{,_E}.md, HelpView.tsx, SimulatorView.tsx, agentWebgpuRuntime.ts, sim.worker.ts — 7 files, +105/−17 |
+| 2 | `8f35802` fix(agents): audit MEDIUM batch | 5 (M1 + a found-in-verification A2 gap), 6 (M3), 7 (M2), 8 (M6), 9 (M5) | CLAUDE.md, HelpView.tsx, SimulatorView.tsx, agentWebgpuRuntime.ts, sim.worker.ts — 5 files, +123/−24 |
+| 3 | `070a1e5` fix(agents): audit LOW batch | 10 (L1, L3, L6, N1, N4) | agentWebgpu/compile.ts (COMMENT only), SimulatorView.tsx, agentWebgpuRuntime.ts, sim.worker.ts, gl3d.ts — 5 files, +35/−4 |
+
+(Two commits by a CONCURRENT session — `b858a2d` docs, `efc6cf0` an Accretor `.gcaproj`
+fix — are interleaved in the log. They touch no file in this pass.)
+
+### Per item
+
+**1 — BLOCKER B1: FIXED.** `agentGpuUploadPending = true` at the top of
+`buildAgentWebGPUIfNeeded()`. Checked the other four call sites: `:5296` (init),
+`:5828`, `:6595`, `:6893` all call `initAgents()` first (which already sets it);
+only the `recompile` site lacked it, as the audit stated.
+**Regression proof (real UI, pre/post A/B with the identical procedure)** — Particle
+Life on the WebGPU agent target (`__e1bCounters.agentTarget === 'webgpu'`), one
+injected sprite so the model is render-INELIGIBLE (no canvas attach can mask the
+result — deterministic, and a general model property rather than a UI toggle);
+soft recompile driven by a **real model-name edit in the Modeler Info panel**;
+positions read with `getAgentState` (f64-safe):
+- **pre-fix** (the one line commented out): agents 0/5/100 went
+  `(244.4, 111.7) (38.4, 60.9) (266.6, 128.1)` → **`(0,0) (0,0) (0,0)` with radius 0**,
+  still zero after 3 further steps, `live: true`, **0 errors** (silent + permanent).
+- **post-fix**: `(20.0, 48.1) (270.4, 60.7) (249.4, 80.5)` preserved and still
+  evolving after the rebuild (`runtimeReady: 1`, `recompile` posted, 0 errors).
+
+**2 — H1: FIXED.** `resolveMaxBonds(model.centerBased) === 0` moved out of the
+3D-only arm into a shared gate term; the 3D arm keeps only the alpha-blend term.
+Verified in-browser: **Morphogenesis — Growing Tissue** posts **0** `attachAgentCanvas`
+(CPU overlay ⇒ bonds render, `showBonds` works again) while **Boids** (Bonds
+capability off ⇒ `resolveMaxBonds` 0) still posts the attach and keeps the fast
+path. **3D Tissue** re-checked: `eligible:false`, 0 attaches, snapshot carries
+`bonds`. Docs: CLAUDE.md gate bullet + the HelpView bullet now name the requirement.
+The GPU bond-line pass is recorded as a follow-up, not attempted.
+
+**3 — H2: FIXED.** Both non-step sites that set `asyncStepBatchInFlight` now clear it
+from a `finally` (the `setAgentUiSync` OFF→ON IIFE and the one-shot rule).
+Verified BOTH ways with a temporary unconditional `throw` in the UI-sync IIFE:
+with the `finally` the worker keeps answering (`step` gen 2 → 4, `getAgentState`
+answered); without it the next `step` never returns (`timeout stepped`) — the
+dead-lock reproduced, then the temporary throw removed. Master §0 #7 gained the rule.
+
+**4 — H3 + L5: FIXED.** The attach handler REUSES `agentRenderRuntime` when the
+shipped layout matches (`maxAgents` + `gridDepth` + `f32Len`) and destroys a
+stale-layout surface first; a failed setup on a reused surface also clears the
+module ref. `buildAgentDiscPipelines` / `setupAgentSphereRender` destroy the previous
+render-view uniform (L5).
+**Measured pre/post** via the L4 metric (surfaced through `__e1bCounters`), 6
+consecutive re-attaches on a JS-target agents-only model: **pre-fix `gpuRefCount`
+1 → 7** (+1 per attach, exactly the audit's claim); **post-fix 1 → 1**,
+`gpuAdapterRequests` 1, all 6 attaches ack `active: true`, sim keeps stepping.
+The E1 report's "the C-report leak is FIXED by E1" sentence is corrected in place.
+
+**5 — M1: FIXED (detach path chosen, NOT `needsFullInit`).** Widening
+`needsFullInit` would reset the grid and re-seed the agent population on every
+sprite/OM edit; instead one module-scope `agentRenderModelTermsOk()` feeds BOTH the
+init gate and a soft-recompile refresh of `agentRenderModelTermsOkRef`, which
+`maybeAttachAgentCanvas` consults exactly like the metaballs suppression.
+**Deviation from the handoff's sketch**: the refresh does NOT call
+`maybeAttachAgentCanvas()` when the terms go back to OK — the `agentRuntimeReady`
+that follows the same recompile already re-attaches, and posting both produced TWO
+attaches whose SECOND ack found no pending canvas and took the "attach failed"
+branch, leaving direct render OFF (observed in the trace).
+**Bug found while verifying (fixed here, same family)**: the recompile message never
+carried `agentRenderLayout`, while the worker does
+`pendingAgentRenderLayout = rc.agentRenderLayout ?? null` — so every soft recompile
+NULLED it, after which `buildAgentWebGPUIfNeeded` stops posting `agentRuntimeReady`
+for a CPU target and the attach handler bails `active:false`. **A JS/WASM-target
+agent model therefore lost direct render permanently on its first graph edit**
+(pre-existing A2 plumbing gap; the audit did not list it).
+Verified in-browser on Boids via the new DEV hook `window.__agentRenderState()`:
+baseline `directActive:true` → real sprite import in the Modeler Mappings panel →
+`modelTermsOk:false, directActive:false` → Remove sprite → `modelTermsOk:true,
+directActive:true` with exactly ONE attach ack, 0 errors.
+
+**6 — M3: FIXED, by a different (simpler) route than the handoff sketched.** Rather
+than restructuring `buildAgentWebGPUIfNeeded`'s teardown into an awaited IIFE,
+`recompile` was added to the **one-shot staleness set** in the dispatcher — the
+mechanism that already exists for exactly this ("block, readback, replay"). The
+readback lands before the rebuild, and item 1's `agentGpuUploadPending` then re-seeds
+the fresh runtime from it, so a soft recompile is now lossless. This keeps the
+one-shot rule in ONE place (master §0 invariant 4).
+
+**7 — M2: FIXED.** `let radPx: f32 = max(ar * rv.scalePx, 1.2);` in the disc VS,
+matching the CPU overlay's three `Math.max(1.2, ar[i]! * scale)` sites; the FS rim
+band derives from the same `radPx`, so the `>= 2` outline behaviour stays consistent.
+No compiler file involved (the runtime's own WGSL string).
+**Verification honesty**: the shader compiled on the REAL device (an
+`agentRenderStatus{active:true}` ack requires `buildAgentDiscPipelines` →
+`getCompilationInfo` with 0 errors) and the change is pure shader arithmetic mirroring
+the CPU rule — but the pixel-level zoomed-out A/B needs a VISIBLE pane and was NOT
+performed (the pane reports hidden; see Left open).
+
+**8 — M6: FIXED.** The "Single-canvas composite" bullet is deleted from HelpView
+(the composite is hard-off), and the "Direct agent render" bullet now names the
+no-bonds requirement (item 2).
+
+**9 — M5: FIXED.** `uploadAgentColors` packs into `rt.renderColorScratch`
+(persistent, declared on `AgentRenderSurface` so the full webgpu runtime shares it);
+slots past `highWater` are zeroed explicitly, so behaviour is unchanged. No
+`bench-agent-engine` number recorded — at 50k agents this is ~200 KB of avoided
+garbage per call, below the whole-batch timing resolution the branch's earlier perf
+work already documented.
+
+**10 — LOW batch: L1, L3, L6, N1, N4 FIXED; L4 landed in commit 1; N2 SKIPPED.**
+- **L1**: the `agentDirect && !showGrid2d && bg2d` no-op branch now also requires
+  `showAgents`, so hiding agents falls through to the CPU bg fill (the blit that
+  carried the shader clear is `showAgents`-gated).
+- **L3**: `presentAgentsEncode` returns early on a composite surface + a comment at
+  the `dispatchResidentBatch` call site.
+- **L4**: `sharedGpuRefCount()` / `sharedGpuAdapterRequestCount()` are surfaced
+  through `__e1bCounters` (`gpuRefCount`, `gpuAdapterRequests`, plus
+  `hasRenderOnlySurface`) — landed in commit 1 because item 4's verification needed
+  it. Re-confirmed live: Chemotaxis on WebGPU/WebGPU reports `refCount 2, adapters 1`.
+- **L6**: comment added at the gl3d overlays-only early return.
+- **N1**: the `AGENT_GPU_ARRAY_CAP` comment no longer claims byte-identical shaders
+  below the cap (semantically identical; the emitted literal replaced the
+  `control.maxAgents` read).
+- **N4**: `deferredDuringAgentGpuStep` documented as not a peer of
+  `asyncStepBatchInFlight`.
+- **N2 SKIPPED — deliberately**: `scripts/bench-lattice.mjs` is owned by a CONCURRENT
+  planning session (explicitly out of bounds for this pass). Still untracked; that
+  session should commit or delete it.
+
+**11 — INVESTIGATED, not implemented.** See the section below.
+
+### Gates
+
+Run before EACH commit (all green every time):
+- `npx tsc -p tsconfig.app.json --noEmit` — clean.
+- `npm run build` — clean.
+- `node scripts/parity-agent-wasm.mjs` — all samples + 13 synthetics, JS↔WASM bit-parity.
+- `node scripts/parity-agent-force.mjs` — 7 checks.
+- `node scripts/check-compile-identity.mjs` — run for commit 3 (the only one touching
+  a file under `compiler/`, a comment): baseline captured on the parent commit via
+  `git stash`, compared after → **BYTE-IDENTITY OK, 25 models, all surfaces
+  unchanged**. Commits 1 and 2 touch no `compiler/` file (asserted with
+  `git diff --stat`), so the identity check does not apply there.
+
+### In-browser results (pane state stated per claim)
+
+The Browser pane reports **hidden/occluded** throughout, so every claim below rests on
+worker protocol + DOM/DEV-hook probes, never on composited pixels or rAF. All probes
+are message-driven (`stepped`/`agentState`/`agentRenderStatus`/`__e1bCounters`); the
+one time a `setTimeout`-based sleep was used it hung (hidden-tab timer throttling) —
+split across tool calls instead.
+
+| Check | Result | Pane |
+|---|---|---|
+| Item 1 pre-fix corruption | agents → (0,0), radius 0, permanent, 0 errors | occluded (state probes) |
+| Item 1 post-fix | positions preserved + evolving across a real soft recompile | occluded (state probes) |
+| Item 2 Growing Tissue | 0 `attachAgentCanvas` ⇒ CPU overlay ⇒ bonds drawn | occluded (protocol) |
+| Item 2 Boids | attach posted, direct path kept | occluded (protocol) |
+| Item 3 with `finally` | worker answers after a throw (gen 2 → 4) | occluded (protocol) |
+| Item 3 without `finally` | `timeout stepped` — dead-lock reproduced | occluded (protocol) |
+| Item 4 post-fix | 6 re-attaches → refCount 1, adapters 1, 6× `active:true` | occluded (DEV metric) |
+| Item 4 pre-fix | 6 re-attaches → refCount 1 → **7** | occluded (DEV metric) |
+| Item 5 sprite add/remove | `directActive` true → false → true, 1 ack, 0 errors | occluded (DEV hook) |
+| Item 7 floored radius | shader compiles + pipelines build on the real device | occluded — **pixel A/B NOT done** |
+| Regression: Boids-webgpu | polarization **0.998** over 200 gens, direct render active | occluded (getAgentState) |
+| Regression: Chemotaxis WASM+JS | gen 100, f64 agent positions, `eligible:false`, 0 errors | occluded (protocol) |
+| Regression: Chemotaxis WebGPU/WebGPU | `gpuBridge 100, cpuFallback 0, sharedDevice true, refCount 2, adapters 1` | occluded (DEV probe) |
+| Regression: 3D Tissue | `eligible:false`, 0 attaches, snapshot carries `bonds`, gen 25 | occluded (protocol) |
+
+### New gotchas discovered
+
+1. **A hidden pane throttles `setTimeout` to a standstill** — a `sleep()`-based probe
+   hangs indefinitely while worker messages keep flowing. Drive everything off
+   message events and split awaits across tool calls (the master's occlusion trap,
+   now with a concrete failure mode).
+2. **Editing a watched source file mid-probe triggers a Vite full reload** and wipes
+   every `window.__*` probe helper. Re-inject the harness after any edit; keep the
+   bootstrap in one re-runnable block.
+3. **`agentRenderStatus{active:true}` with no pending canvas is treated as a FAILURE**
+   and turns direct render off. Any new attach trigger must not race the
+   `agentRuntimeReady` handler (which nulls the pending canvas and re-attaches) —
+   this is what made the naive M1 fix regress.
+4. **A worker message that rebuilds GPU state must be in the one-shot staleness set**,
+   not just the mutation set — `recompile` was the missing reader.
+5. The **`sprites` gate term doubles as a clean way to make a model render-INELIGIBLE**
+   for probing (a general model property, no UI toggle, no rendering side effect when
+   no node references the sprite).
+
+### Item 11 — INVESTIGATION (M4: a WebGPU-grid + WebGPU-agent decoupled model runs its agents on JS)
+
+Confirmed as described. In the `webgpuActive` step branch, the E1b arm routes a
+**float-field** model onto `runAgentStepWebGPU(bridge)`, and the sibling
+`else if (agentStore && simulateAgents && webgpuRuntime)` arm calls the CPU
+`runAgentStep()` **regardless of `agentTarget`** — so a decoupled (no-field)
+grid+agents model on WebGPU/WebGPU silently ignores the user's agent-target choice.
+
+1. **Can that arm just call `runAgentStepWebGPU()` (no bridge)?** — Yes, on the
+   evidence: it is the pre-E1b default, not a requirement. `runAgentStepWebGPUInner`
+   already takes the bridge as an OPTIONAL param and skips all field work when
+   `fieldReadLen === fieldWriteLen === 0`; the JS/WASM-grid branch already dispatches
+   WebGPU agents exactly this way; and it returns `false` on any failure so the
+   caller can fall back to `runAgentStep()` for that generation (the same
+   bail-out contract E1b's arm uses). Proposed shape:
+   `else if (agentStore && simulateAgents && agentTarget === 'webgpu' && agentWebgpuRuntime) { if (!(await runAgentStepWebGPU())) runAgentStep(); … }`
+   plus the sprite-advance the GPU path skips (copy E1b's `advanceAgentSprites`
+   line) — then the existing `else if` for CPU targets.
+2. **Can the RESIDENT batch be reached from that branch?** — Not without
+   restructuring, but it is closer than D's report implied. `agentResidentEligible()`
+   never tests the grid target, so these models already qualify; what is missing is a
+   decoupled variant of D's interleave inside the *async* branch: run
+   `runAgentBatchResident(count, /*bump*/false)` once, then the per-gen
+   `runStepWebGPU()` loop, all inside the existing `asyncStepBatchInFlight` deferral.
+   Both runtimes are on the SAME device since E1, so submits serialise on one queue
+   and the layers are decoupled by definition (no field), making order irrelevant.
+   The care points are (a) generation counting exactly once (D's `bumpGeneration`
+   already solves this), (b) the stop-check/`finalizeStepWebGPU` cadence, which today
+   is per-gen inside the loop, and (c) a resident-batch bail-out must fall through to
+   the per-gen loop without double-stepping (D's ordering argument applies verbatim).
+3. **What changes for the user**: the RNG family (shared xorshift32 → per-agent PCG)
+   and f32 agent math — i.e. the documented *statistical, not bitwise* difference.
+   That is acceptable and expected here: the user explicitly selected the WebGPU agent
+   target, and the SAME model with a JS/WASM grid already runs its agents that way, so
+   the current behaviour is the inconsistency, not the fix.
+
+**Recommended plan** (its own small milestone, not this pass): land (1) alone first —
+it is a ~6-line change in one branch, honours the user's selection, and is verifiable
+with the existing probes (`__e1bCounters.agentTarget` + f32-quantised positions +
+a Boids-style polarization metric on a decoupled synthetic). Treat (2) as a separate
+follow-up behind its own measurement, since it changes batch structure in the branch
+that already caused the P0 concurrency bug.
+
+### Left open (deliberately deferred)
+
+- **M4** — investigated only (item 11 above); no code change in this pass.
+- **N2** — `scripts/bench-lattice.mjs`, owned by a concurrent session.
+- **L2** — infinity tiling collapses past 256 tiles (cosmetic, rare; untouched).
+- **N3** — f32 render-snapshot quantisation of group-move positions (sub-millionth of
+  a world unit; untouched).
+- **Verification debt items 1–4** (composited-pixel confirmation for A2/C/D, A1's
+  visual-parity A/B, C's lighting eyeball, D's z-order probe) remain open: they need a
+  VISIBLE pane. Item 7 (the 1.2 px floor) adds one more entry to that list — the
+  arithmetic mirrors the CPU rule and the shader compiles on the device, but the
+  zoomed-out look was not compared.
+- **Verification debt item 7** — there is still no automated harness over the
+  render/gate/attach layer. This pass added `window.__agentRenderState()` (DEV) and
+  the `__e1bCounters` device metrics, which make the gate matrix and the attach
+  lifecycle probeable from a script; a real harness remains future work.
