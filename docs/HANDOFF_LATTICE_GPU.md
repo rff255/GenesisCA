@@ -87,6 +87,22 @@ Architectural precedent (READ IT — this project is its lattice twin):
        overriding only one side is a silent offset desync.
      - `colors` is a **view over `wasmMemory`** at a baked offset. It cannot be
        transferred, reassigned, or double-buffered. Copy into it, never replace it.
+   - **Found by L1** (see its Completion Report for the full write-ups):
+     - **Capture the identity baseline with `git stash`, and capture it TWICE.**
+       L1's first pre-change capture produced an Accretor variant that three
+       later captures never reproduced — a phantom "you broke the compiler".
+       Compare two captures of the SAME tree before trusting any DIFF.
+     - **Never hand-post a message a main-thread driver also owns** (e.g.
+       `setGridUiSync` / `setAgentUiSync`): the driver's mirror ref then
+       disagrees with the worker and the next real UI action looks broken.
+     - **Per-frame latency measured in an occluded pane is unusable above
+       ~10 ms** (a control experiment produced a strictly-cheaper configuration
+       measuring 14× slower). Use interleaved A/B; never quote an absolute.
+     - **A large-grid runtime rebuild can exceed a 30 s eval timeout**
+       (`seedRngState` alone builds a 108 MB array at 27M cells) — bound every
+       probe issued around a Recompile with `performance.now()`.
+     - **A backtick inside a WGSL comment terminates the TS template literal**
+       holding the shader.
 
 ## 1. Phase sequence + dependency graph
 
@@ -168,7 +184,7 @@ probes); new gotchas discovered; what the next phase must know.
 | Phase | Status | Session/commits | Notes |
 |---|---|---|---|
 | **Planning** | **DONE** | `optimize` (this session) | Built `scripts/bench-lattice.mjs` (drives the REAL worker with a `self` shim + a WASM-engaged assertion). Measured CPU targets across 8 models × 2–3 sizes and the WebGPU path in-browser on NVIDIA Pascal. Headline: a 3D WebGPU grid spends 15–320× more time on the render round trip than on the simulation (Accretor 300³ = 2.35 ms sim inside a 758 ms frame); 2D WebGPU pays a flat ~7 ms per-batch fence; CPU targets reserve 128–693 MB neighbour tables with 0.45–2.0 s init; SIE is worth 13.8× but is CPU-only. Docs: PERF_REVIEW_LATTICE.md, IMPACT_MAP_LATTICE_GPU.md, PLAN_LATTICE_GPU.md(+.html), this master, L1 + L2 handoffs. |
-| L1 3D WGSL voxel render | READY — not started | — | [HANDOFF_LATTICE_GPU_L1.md](HANDOFF_LATTICE_GPU_L1.md) |
+| **L1 3D WGSL voxel render** | **DONE** | `optimize` — "perf(lattice): L1 worker-side WGSL voxel render for 3D WebGPU grids" | Compaction (alpha + buried cull) → indirect instanced cubes, presented from the worker into a canvas layered under gl3d; gl3d renders overlays only in free mode. **Accretor 300³: 753 → 123 ms/worker frame (≈6.2×), fixed cost 860 → 8.7 ms**, plus the main-thread rescan + 103 MB/frame gone. Zero compiler changes (identity: 25 models unchanged). Shadows/AO/alpha blend are frame-mode features. Report + deviations + new gotchas: [HANDOFF_LATTICE_GPU_L1.md](HANDOFF_LATTICE_GPU_L1.md) §8. **Needs a visible-pane eyeball** (composited image / lighting parity). |
 | L2 pipelined step batches | READY — not started (opens with a measure-first gate) | — | [HANDOFF_LATTICE_GPU_L2.md](HANDOFF_LATTICE_GPU_L2.md) |
 | L5 instData sizing | not started | — | tiny; fold into a session with room |
 | L3 sparse stepping on WebGPU | blocked on L1 refinement | — | design in PLAN §L3 |

@@ -16,6 +16,7 @@ import { compileGraphWebGPU } from '../modeler/vpl/compiler/webgpu/compile';
 import { createSimWorker } from './createSimWorker';
 import { Gl3DRenderer, panCamera, cameraBasis, sceneCameraMatrices, lightWorldDirFor, DEFAULT_LIGHT3D, DEFAULT_METABALLS3D, metaballAutoThreshold, DEFAULT_AUTOZOOM3D, defaultCamera3d, MIN_CAM_DIST, MAX_CAM_DIST } from './render/gl3d';
 import type { SpriteAtlasInput, Light3D, Metaballs3D, AutoZoom3D } from './render/gl3d';
+import type { VoxelRenderView } from './engine/webgpuRuntime';
 import { LightBallWidget } from './LightBallWidget';
 import { agentTargetOf, resolveMaxBonds } from '../model/centerBased';
 import { compileAgentGraphWasmForModel, isAgentGraphWasmSupported, buildAgentLayoutExtras } from '../modeler/vpl/compiler/agentWasm/compile';
@@ -1887,6 +1888,37 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   const agentSphereCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const agentSphere3DActiveRef = useRef<boolean>(false);
 
+  // L1 — worker-side WGSL VOXEL render (3D CA grids on the WebGPU target). Same
+  // seam as Phase C's sphere layer: a stable layer div under the gl3d canvas into
+  // which we imperatively append a fresh transferred `<canvas>` per attach, while
+  // gl3d renders ONLY the interaction overlays over a transparent clear. In FREE
+  // mode (grid UI-sync off) nothing crosses the wire — no colours readback, no
+  // postMessage, no main-thread uploadColors rescan. FRAME mode (interaction /
+  // recording / pause / shadows / AO / alpha blend) hides the voxel canvas and
+  // gl3d renders everything from `colorsRef`, exactly as before L1.
+  const voxelLayerRef = useRef<HTMLDivElement | null>(null);
+  const voxelCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const pendingVoxelCanvas = useRef<HTMLCanvasElement | null>(null);
+  /** The model-level gate (see the model effect) — general properties only. */
+  const voxelRenderEligibleRef = useRef<boolean>(false);
+  /** True once the worker acked `voxelRenderStatus { active: true }`. */
+  const voxelRenderActiveRef = useRef<boolean>(false);
+  const voxelCanvasDimsRef = useRef<{ w: number; h: number }>({ w: 0, h: 0 });
+  /** Mirrors the worker's `gridUiSync` (worker default is ON). */
+  const gridUiSyncPostedRef = useRef<boolean>(true);
+  const gridUiSyncTimerRef = useRef<number>(0);
+  /** Set when UI-sync is posted ON; cleared by the first `stepped` that carries
+   *  colours. Frame mode waits for it so a flip can't render a colours buffer
+   *  captured thousands of generations ago (the Phase C no-blank-frame rule). */
+  const gridFrameAwaitingColorsRef = useRef<boolean>(false);
+  const gridCameraRafRef = useRef<number>(0);
+  const lastGridCameraKeyRef = useRef<string>('');
+  /** True while the voxel canvas is the visible grid (gl3d in overlays-only mode). */
+  const voxel3DActiveRef = useRef<boolean>(false);
+  /** Persistent scratch canvases for capture3dPixels (never displayed). */
+  const capture3dScratchRef = useRef<HTMLCanvasElement | null>(null);
+  const capture3dOverlayRef = useRef<HTMLCanvasElement | null>(null);
+
   // Build full code display from all compiled functions
   const buildFullCode = useCallback((result: ReturnType<typeof compileGraph>) => {
     const parts: string[] = [];
@@ -2604,6 +2636,169 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     }
   }, []);
 
+  // L1 — the voxel-render camera/lighting/clip uniform. Computed on the MAIN
+  // thread from the SAME sceneCameraMatrices + lightWorldDirFor helpers gl3d
+  // itself uses, so the WGSL cubes and the gl3d overlays can never disagree on
+  // projection or lighting. Every field mirrors a gl3d uniform (see its VS/FS).
+  const computeVoxelRenderView = useCallback((): VoxelRenderView | null => {
+    const glc = glCanvasRef.current;
+    const w = gridWidth.current, h = gridHeight.current, d = gridDepth.current;
+    if (!glc || !w || !h) return null;
+    const cssW = glc.clientWidth || glc.parentElement?.clientWidth || 500;
+    const cssH = glc.clientHeight || glc.parentElement?.clientHeight || 500;
+    const m = sceneCameraMatrices(cam3dRef.current, cssW / (cssH || 1), w, h, d);
+    const light = light3dRef.current;
+    const L = lightWorldDirFor(light, m.dir, m.right, m.up);
+    const clip = clip3dRef.current;
+    const axisN = clip.axis === 'x' ? 0 : clip.axis === 'y' ? 1 : clip.axis === 'z' ? 2 : 3;
+    // gl3d's setCellGaps: ON = the historical 0.92 cube, OFF = flush (1.001).
+    const cubeScale = cellGaps3dRef.current ? 0.92 : 1.001;
+    let bgR = 0, bgG = 0, bgB = 0, bgA = 0;
+    const bg = bg3dRef.current;
+    if (bg) { bgR = bg[0]!; bgG = bg[1]!; bgB = bg[2]!; bgA = bg[3]!; }
+    return {
+      mvp: Array.from(m.mvp),
+      halfX: (w - 1) / 2, halfY: (h - 1) / 2, halfZ: (d - 1) / 2,
+      lightX: L[0], lightY: L[1], lightZ: L[2],
+      viewX: m.dir[0], viewY: m.dir[1], viewZ: m.dir[2],
+      clipFwdX: m.forward[0], clipFwdY: m.forward[1], clipFwdZ: m.forward[2],
+      ambient: light.ambient, diffuse: light.diffuse, specular: light.specular,
+      cubeScale,
+      clipLo: clip.lo, clipHi: clip.hi,
+      clipEnabled: clip.enabled ? 1 : 0,
+      clipAxis: axisN,
+      bgR, bgG, bgB, bgA,
+      // gl3d's buriedCullEligible(): flush cubes + opaque + no open clip.
+      cullBuried: (!alpha3dRef.current && !clip.enabled && cubeScale >= 1) ? 1 : 0,
+    };
+  }, []);
+
+  // Post the voxel camera to the worker, rAF-coalesced + deduped (a plain step
+  // doesn't move the camera, and setGridCamera triggers a present, so a per-frame
+  // post would double the render cost).
+  const postGridCamera = useCallback(() => {
+    if (!voxelRenderActiveRef.current || !workerRef.current) return;
+    if (gridCameraRafRef.current) return;
+    gridCameraRafRef.current = requestAnimationFrame(() => {
+      gridCameraRafRef.current = 0;
+      const view = computeVoxelRenderView();
+      if (!view || !workerRef.current || !voxelRenderActiveRef.current) return;
+      const key = view.mvp.join(',')
+        + `|${view.lightX}|${view.lightY}|${view.lightZ}|${view.ambient}|${view.diffuse}|${view.specular}`
+        + `|${view.clipEnabled}|${view.clipAxis}|${view.clipLo}|${view.clipHi}|${view.cubeScale}`
+        + `|${view.bgR}|${view.bgG}|${view.bgB}|${view.bgA}|${view.cullBuried}`
+        + `|${view.halfX}|${view.halfY}|${view.halfZ}|${view.viewX}|${view.viewY}|${view.viewZ}`;
+      if (key === lastGridCameraKeyRef.current) return;
+      lastGridCameraKeyRef.current = key;
+      workerRef.current.postMessage({ type: 'setGridCamera', view });
+    });
+  }, [computeVoxelRenderView]);
+
+  // L1 UI-sync driver (the grid sibling of updateAgentUiSync). ON = the worker
+  // reads colours back each frame and ships them, so gl3d renders the full frame
+  // (and its colour-id pick FBO resolves). ON iff a feature is — or may be —
+  // reading the CPU colours: paused, recording, an inspect popover pinned/sweeping,
+  // the pointer over the GL canvas (brush / pick), OR a frame-mode-only visual is
+  // enabled (cast shadows, occupancy AO, alpha blend — none of which the WGSL pass
+  // replicates; see §4 of the L1 handoff). Debounced OFF by ~300 ms.
+  const updateGridUiSync = useCallback(() => {
+    if (!voxelRenderActiveRef.current || !workerRef.current) return;
+    const light = light3dRef.current;
+    const want =
+      !playingRef.current
+      || recordingRef.current
+      || inspectCellIdxsRef.current.length > 0
+      || sweepActiveRef.current
+      || glPointerOverRef.current
+      || light.shadows || light.ao
+      || alpha3dRef.current;
+    const w = workerRef.current;
+    if (want) {
+      if (gridUiSyncTimerRef.current) { clearTimeout(gridUiSyncTimerRef.current); gridUiSyncTimerRef.current = 0; }
+      if (!gridUiSyncPostedRef.current) {
+        gridUiSyncPostedRef.current = true;
+        gridFrameAwaitingColorsRef.current = true;
+        w.postMessage({ type: 'setGridUiSync', on: true });
+      }
+    } else if (gridUiSyncPostedRef.current && !gridUiSyncTimerRef.current) {
+      gridUiSyncTimerRef.current = window.setTimeout(() => {
+        gridUiSyncTimerRef.current = 0;
+        if (gridUiSyncPostedRef.current) {
+          gridUiSyncPostedRef.current = false;
+          workerRef.current?.postMessage({ type: 'setGridUiSync', on: false });
+        }
+      }, 300);
+    }
+  }, []);
+
+  // (Re)attach the voxel render canvas: append a FRESH DOM canvas into the voxel
+  // layer (UNDER the gl canvas), transfer its control, and ask the worker to build
+  // the pipelines. A fresh element each attach handles transfer-once + resize +
+  // runtime rebuild. No-op unless eligible + idle.
+  const maybeAttachVoxelCanvas = useCallback(() => {
+    if (!voxelRenderEligibleRef.current) return;
+    if (voxelRenderActiveRef.current || pendingVoxelCanvas.current) return;
+    const worker = workerRef.current, layer = voxelLayerRef.current;
+    if (!worker || !layer) return;
+    const glc = glCanvasRef.current;
+    const cssW = Math.max(1, layer.clientWidth || glc?.parentElement?.clientWidth || 500);
+    const cssH = Math.max(1, layer.clientHeight || glc?.parentElement?.clientHeight || 500);
+    const dpr = window.devicePixelRatio || 1;
+    const bw = Math.max(1, Math.round(cssW * dpr)), bh = Math.max(1, Math.round(cssH * dpr));
+    try {
+      // Drop any prior voxel canvas (stale after a resize / runtime rebuild).
+      if (voxelCanvasRef.current && voxelCanvasRef.current.parentElement === layer) {
+        layer.removeChild(voxelCanvasRef.current);
+      }
+      voxelCanvasRef.current = null;
+      const fresh = document.createElement('canvas');
+      fresh.width = bw; fresh.height = bh;
+      fresh.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;display:none';
+      layer.appendChild(fresh);
+      const offscreen = (fresh as HTMLCanvasElement & { transferControlToOffscreen: () => OffscreenCanvas }).transferControlToOffscreen();
+      pendingVoxelCanvas.current = fresh;
+      voxelCanvasDimsRef.current = { w: cssW, h: cssH };
+      worker.postMessage({ type: 'attachVoxelCanvas', canvas: offscreen, width: bw, height: bh }, [offscreen]);
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.warn('[webgpu] voxel canvas transfer failed; staying on the readback path:', e);
+      pendingVoxelCanvas.current = null;
+    }
+  }, []);
+
+  // L1 — capture the 3D scene as ImageData for screenshot / recording. In FRAME
+  // mode gl3d holds everything, so this is the historical readPixels. In FREE mode
+  // the volume lives in the worker's voxel canvas UNDERNEATH gl3d's overlays-only
+  // output, so the capture must COMPOSITE the two — otherwise a screenshot taken
+  // mid-run would be overlays over nothing. (A transferred canvas is still a valid
+  // CanvasImageSource — the 2D direct-render blit relies on the same property.)
+  const capture3dPixels = useCallback((): { data: Uint8ClampedArray; width: number; height: number } | null => {
+    const r = gl3dRef.current;
+    if (!r) return null;
+    const px = r.readPixels();
+    const vc = voxel3DActiveRef.current ? voxelCanvasRef.current : null;
+    if (!vc) return px;
+    let scratch = capture3dScratchRef.current;
+    if (!scratch) { scratch = document.createElement('canvas'); capture3dScratchRef.current = scratch; }
+    if (scratch.width !== px.width || scratch.height !== px.height) { scratch.width = px.width; scratch.height = px.height; }
+    // A CPU-backed scratch: getImageData on a LIVE canvas de-optimises it
+    // permanently (the recording-slowdown lesson) — this one is never displayed.
+    const sctx = scratch.getContext('2d', { willReadFrequently: true });
+    if (!sctx) return px;
+    sctx.clearRect(0, 0, px.width, px.height);
+    sctx.drawImage(vc, 0, 0, px.width, px.height);
+    // putImageData REPLACES (no compositing), so route the overlay pixels through
+    // an intermediate canvas and drawImage them so their alpha blends.
+    let ov = capture3dOverlayRef.current;
+    if (!ov) { ov = document.createElement('canvas'); capture3dOverlayRef.current = ov; }
+    if (ov.width !== px.width || ov.height !== px.height) { ov.width = px.width; ov.height = px.height; }
+    const octx = ov.getContext('2d');
+    if (!octx) return px;
+    octx.putImageData(new ImageData(px.data, px.width, px.height), 0, 0);
+    sctx.drawImage(ov, 0, 0);
+    return { data: sctx.getImageData(0, 0, px.width, px.height).data, width: px.width, height: px.height };
+  }, []);
+
   const draw = useCallback(() => {
     // 3D Grid CA: render the voxel volume via WebGL2 instead of the 2D blit.
     // Everything is read via refs (this callback has empty deps + ~20 call sites).
@@ -2643,9 +2838,35 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       // modes), so flipping visibility back is instant.
       const agent3dFrame = agent3dActive && agentUiSyncPostedRef.current && agentsRef.current != null;
       const agent3dFree = agent3dActive && !agent3dFrame;
-      r.setOverlaysOnly(agent3dFree);
+      // L1 — the CA-grid analogue: when the worker's WGSL voxel pass owns the
+      // display (free mode) gl3d renders overlays only and we skip uploadColors
+      // entirely. FRAME mode requires a colours buffer IN HAND (and one that
+      // arrived AFTER the flip — see gridFrameAwaitingColorsRef), so the flip is
+      // seamless and can never show a colours snapshot from thousands of
+      // generations ago. Mutually exclusive with the agent path (the L1 gate
+      // excludes agent models), so the two never fight over overlays-only.
+      let voxelActive = voxelRenderActiveRef.current && !!voxelCanvasRef.current;
+      if (voxelActive) {
+        const dims = voxelCanvasDimsRef.current;
+        // Re-attach only on a REAL size change (an occluded pane measures 0×0 —
+        // the A1/A2 attach-storm guard). The transferred canvas has fixed dims.
+        if ((dims.w !== cssW || dims.h !== cssH) && cssW >= 2 && cssH >= 2) {
+          voxelRenderActiveRef.current = false;
+          voxelActive = false;
+          maybeAttachVoxelCanvas();
+        }
+      }
+      const voxelFrame = voxelActive
+        && gridUiSyncPostedRef.current && !gridFrameAwaitingColorsRef.current && colors3d != null;
+      const voxelFree = voxelActive && !voxelFrame;
+      r.setOverlaysOnly(agent3dFree || voxelFree);
       { const sc = agentSphereCanvasRef.current; if (sc) sc.style.display = agent3dFree ? 'block' : 'none'; }
+      { const vc = voxelCanvasRef.current; if (vc) vc.style.display = voxelFree ? 'block' : 'none'; }
       agentSphere3DActiveRef.current = agent3dFree;
+      voxel3DActiveRef.current = voxelFree;
+      // Keep the worker's voxel camera synced (rAF-coalesced + deduped) whenever
+      // the voxel canvas exists, so a flip back to free shows the current view.
+      if (voxelActive) postGridCamera();
       // Keep the worker's sphere camera synced (rAF-coalesced + deduped) whenever the
       // sphere canvas exists, so a flip back to free shows the current viewpoint.
       if (agent3dActive) postAgentCamera();
@@ -2714,7 +2935,11 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       // 3D perf: only re-scan + re-upload the (potentially millions of) cells when
       // the colours actually changed (a new buffer from a `stepped` message).
       // Camera-only redraws reuse the existing GPU instance buffer.
-      if (colors3d) {
+      // L1: in free mode the GPU owns the volume — skip the O(total) CPU rescan
+      // + instance upload entirely (at 300³ that alone was ~220 ms/frame).
+      if (voxelFree) {
+        // Nothing to do: the worker presented the frame into the voxel canvas.
+      } else if (colors3d) {
         if (colors3d !== lastUploadedColors3dRef.current) {
           r.uploadColors(colors3d, w3 * h3 * d3);
           lastUploadedColors3dRef.current = colors3d;
@@ -3585,7 +3810,12 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     if (msg.type === 'stepped') {
       // `colors` may be ABSENT: WebGPU direct render skips it, and agents-only
       // models ship the (static) buffer only when it changed — keep the last one.
-      if (msg.colors !== undefined) colorsRef.current = msg.colors as Uint8ClampedArray;
+      if (msg.colors !== undefined) {
+        colorsRef.current = msg.colors as Uint8ClampedArray;
+        // L1: a colours buffer that arrived AFTER the UI-sync ON post is what
+        // makes frame mode safe to enter (it reflects the current generation).
+        gridFrameAwaitingColorsRef.current = false;
+      }
       // Bond-Graph Agents: stash the latest agent render snapshot (positions /
       // radius / alive / colours) for drawAgents + nearest-agent picking. Sent
       // every frame for an agent model; absent for a lattice-only model.
@@ -3597,6 +3827,9 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       // A1: re-evaluate whether a feature needs live CPU agent state (hover while
       // playing is the common transition the per-frame call catches).
       if (agentDirectRenderActiveRef.current) updateAgentUiSync();
+      // L1: same per-frame re-evaluation for the grid (hover-while-playing is the
+      // common transition a per-frame call catches).
+      if (voxelRenderActiveRef.current) updateGridUiSync();
       // "Skip Isolated Empty Cells" observability: the worker's live active-cell
       // count (-1 = configured on but NOT engaged → the full loop is running;
       // undefined = feature off). Rendered in the stats overlay; re-renders ride
@@ -3717,7 +3950,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
           // 3D Grid CA: capture the WebGL2 display canvas (display resolution,
           // not grid resolution). The first frame fixes the size; the encoders
           // accept arbitrary ImageData sizes.
-          const px = gl3dRef.current.readPixels();
+          const px = capture3dPixels() ?? gl3dRef.current.readPixels();
           const expected = recordedFrames.current[0];
           if (!expected || (px.width === expected.width && px.height === expected.height)) {
             forceFrameOpaque(px.data);
@@ -4009,6 +4242,42 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
         directRenderActiveRef.current = false;
         pendingDirectRenderCanvas.current = null;
       }
+      // L1 — voxel attach. The worker reports its LIVE `voxelRender` state, so a
+      // (re)built runtime (which loses its render pipelines) is detected without
+      // a second message: ready + eligible + the worker says it's off ⇒ attach.
+      if (msg.ready) {
+        if (!msg.voxelRender) {
+          voxelRenderActiveRef.current = false;
+          if (voxelRenderEligibleRef.current) maybeAttachVoxelCanvas();
+        }
+      } else if (msg.ready === false) {
+        voxelRenderActiveRef.current = false;
+        pendingVoxelCanvas.current = null;
+      }
+    }
+    if (msg.type === 'voxelRenderStatus') {
+      if (msg.active && pendingVoxelCanvas.current) {
+        voxelCanvasRef.current = pendingVoxelCanvas.current;
+        pendingVoxelCanvas.current = null;
+        voxelRenderActiveRef.current = true;
+        // Send the initial camera + draw so the canvas shows the current frame
+        // (the attach-time present used a zero uniform — the Phase C black-at-load
+        // lesson: the first present after attach must never be the only one).
+        const view = computeVoxelRenderView();
+        if (view && workerRef.current) {
+          lastGridCameraKeyRef.current = '';
+          workerRef.current.postMessage({ type: 'setGridCamera', view });
+        }
+        gridUiSyncPostedRef.current = true;   // worker default is ON
+        updateGridUiSync();
+        draw();
+      } else {
+        // Attach failed — stay on the colours-readback + gl3d path.
+        voxelRenderActiveRef.current = false;
+        const p = pendingVoxelCanvas.current;
+        if (p?.parentElement) p.parentElement.removeChild(p);
+        pendingVoxelCanvas.current = null;
+      }
     }
     // A1 direct AGENT render — the runtime-ready trigger + the attach ack.
     if (msg.type === 'agentRuntimeReady') {
@@ -4101,6 +4370,15 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     colorsRef.current = null;
     lastUploadedColors3dRef.current = null;  // colours cleared → force a re-upload after reinit
     lastUploadedAgentSnapRef.current = null; // agents cleared → force a re-upload after reinit
+    // L1: the outgoing worker owned the voxel pipelines + the transferred canvas.
+    // Drop our state (the fresh worker re-attaches on its first useWebGPUStatus)
+    // and remove the stale DOM canvas so it can't linger over the new frame.
+    voxelRenderActiveRef.current = false;
+    pendingVoxelCanvas.current = null;
+    gridUiSyncPostedRef.current = true;
+    gridFrameAwaitingColorsRef.current = false;
+    lastGridCameraKeyRef.current = '';
+    { const vc = voxelCanvasRef.current; if (vc?.parentElement) vc.parentElement.removeChild(vc); voxelCanvasRef.current = null; }
     glyphCodesRef.current = null;
     glyphColorsRef.current = null;
     inspectDataRef.current.clear();
@@ -4284,6 +4562,34 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     if (dimsModel.properties.useWebGPU && !webgpuResult.error && offscreenSupported && !is3D && !agentModel) {
       pendingCanvasAttach.current = true;
     }
+    // L1 — worker-side WGSL VOXEL render gate (GENERAL model properties only).
+    // A 3D volume on the WebGPU target renders from the GPU inside the worker: no
+    // per-frame colours readback, no colours postMessage, no main-thread
+    // uploadColors rescan. Terms:
+    //   is3D (a real volume: dimension '3d' AND gridDepth > 1 — see d3 above)
+    //   + the resolved GRID target is WebGPU
+    //   + OffscreenCanvas support
+    //   + NOT an agent model — the agent sphere pass already owns a layered canvas
+    //     (Phase C) and compositing voxels with spheres in ONE depth buffer is a
+    //     separate follow-up, so 3D grid+agents keeps today's path
+    //   + no glyphs — the glyph overlay is a main-thread pass over the per-cell
+    //     glyph buffers (and is already badge-rejected in 3D)
+    // Cast shadows, occupancy AO and alpha blend are NOT attach terms: they are
+    // frame-mode features (the WGSL pass doesn't replicate them), enforced by the
+    // UI-sync driver — enabling any of them keeps UI-sync permanently ON, which
+    // hides the voxel canvas and makes gl3d render the frame exactly as today.
+    const voxelRenderEligible =
+      is3D
+      && !!dimsModel.properties.useWebGPU && !webgpuResult.error
+      && offscreenSupported
+      && !agentModel
+      && !hasGlyphsInModel(model);
+    voxelRenderEligibleRef.current = voxelRenderEligible;
+    voxelRenderActiveRef.current = false;
+    pendingVoxelCanvas.current = null;
+    gridUiSyncPostedRef.current = true;   // worker default is ON
+    gridFrameAwaitingColorsRef.current = false;
+    lastGridCameraKeyRef.current = '';
     // Direct AGENT render gate (all GENERAL model properties). The WORKER renders
     // agents into the OffscreenCanvas; the main thread blits 1:1.
     //   A1: a WebGPU-target model renders from the resident GPU SoA.
@@ -5591,10 +5897,10 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     const onEnter = () => {
       // Phase C: pointer entered the 3D canvas — if the agent brush is armed, flip
       // to frame mode (gl3d full render + snapshot) so picks work.
-      if (!glPointerOverRef.current) { glPointerOverRef.current = true; if (agentDirectRenderActiveRef.current) updateAgentUiSync(); }
+      if (!glPointerOverRef.current) { glPointerOverRef.current = true; if (agentDirectRenderActiveRef.current) updateAgentUiSync(); if (voxelRenderActiveRef.current) updateGridUiSync(); }
     };
     const onLeave = () => {
-      if (glPointerOverRef.current) { glPointerOverRef.current = false; if (agentDirectRenderActiveRef.current) updateAgentUiSync(); }
+      if (glPointerOverRef.current) { glPointerOverRef.current = false; if (agentDirectRenderActiveRef.current) updateAgentUiSync(); if (voxelRenderActiveRef.current) updateGridUiSync(); }
       if (hover3dRef.current || hoverCells3dRef.current.length || hoverAgents3dRef.current.length) {
         hover3dRef.current = null; hoverCells3dRef.current = EMPTY_HOVER_CELLS; hoverAgents3dRef.current = EMPTY_AGENT_RINGS; draw();
       }
@@ -5859,6 +6165,12 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       if (directRenderActiveRef.current && workerRef.current) {
         workerRef.current.postMessage({ type: 'refreshDisplay' });
       }
+      // L1: same for the voxel canvas (re-present + re-send camera).
+      if (voxelRenderActiveRef.current && workerRef.current) {
+        const gv = computeVoxelRenderView();
+        if (gv) { lastGridCameraKeyRef.current = ''; workerRef.current.postMessage({ type: 'setGridCamera', view: gv }); }
+        workerRef.current.postMessage({ type: 'refreshGridDisplay' });
+      }
       // A1: same for the agent direct-render canvas (re-present + re-send camera).
       if (agentDirectRenderActiveRef.current && workerRef.current) {
         const view = computeAgentRenderView();
@@ -5868,7 +6180,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     } else if (playing) {
       setPlaying(false);
     }
-  }, [visible, draw, playing, computeAgentRenderView]);
+  }, [visible, draw, playing, computeAgentRenderView, computeVoxelRenderView]);
 
   // Brush refs (so event handlers don't need to re-register)
   const brushColorRef = useRef('#4cc9f0');
@@ -5947,6 +6259,15 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   // A1: re-evaluate UI-sync on state-signal changes (pause / recording / inspector
   // / edit target / metaballs suppression). Hover-during-play is handled per-frame.
   useEffect(() => { updateAgentUiSync(); }, [playing, recording, agentInspect, editTargetId, agentMetaballs.enabled, updateAgentUiSync]);
+  // L1: the GRID sibling — re-evaluate the voxel UI-sync on every state signal that
+  // needs the CPU colours mirror. `light3d.shadows` / `light3d.ao` / `alpha3d` are
+  // the FRAME-MODE-ONLY visuals (the WGSL pass replicates neither shadows, AO nor
+  // back-to-front alpha sorting): turning any of them on pins UI-sync ON, which
+  // hides the voxel canvas and hands the frame back to gl3d exactly as before L1;
+  // turning them off releases free mode again. Hover-during-play is per-frame.
+  useEffect(() => {
+    updateGridUiSync();
+  }, [playing, recording, light3d.shadows, light3d.ao, alpha3d, updateGridUiSync]);
   // A1: a CPU-only visual (metaballs) needs the CPU overlay path — detach direct
   // render when it turns on, re-attach when it turns off (if eligible + runtime up).
   useEffect(() => {
@@ -6089,7 +6410,10 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       if (!live.has(k)) inspectOrientationsRef.current.delete(k);
     }
     workerRef.current?.postMessage({ type: 'setInspectCells', cellIdxs: ids });
-  }, [inspectPopovers, sweepInspector?.cellIdx]);
+    // L1: an open inspect popover needs the CPU colours mirror (its RGB swatch +
+    // the gl3d frame render), so it pins the grid UI-sync ON.
+    updateGridUiSync();
+  }, [inspectPopovers, sweepInspector?.cellIdx, updateGridUiSync]);
   // Auto-close popovers whose cell is out of bounds after a grid resize.
   useEffect(() => {
     const w = model.properties.gridWidth;
@@ -8109,7 +8433,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     // is on; re-render first so the buffer is current.
     if (is3dRef.current && gl3dRef.current) {
       draw();
-      const px = gl3dRef.current.readPixels();
+      const px = capture3dPixels() ?? gl3dRef.current.readPixels();
       const off = document.createElement('canvas');
       off.width = px.width; off.height = px.height;
       const ctx = off.getContext('2d');
@@ -8987,6 +9311,11 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
             3D agents-only model attaches; hidden in 2D. pointer-events:none so the
             gl canvas (top) keeps orbit/pan/zoom/brush. */}
         <div ref={agentSphereLayerRef} style={{ position: 'absolute', inset: 0, zIndex: 1, pointerEvents: 'none', display: is3D ? undefined : 'none' }} />
+        {/* L1 — 3D CA-grid free-mode voxel render: same seam, the worker draws the
+            WGSL instanced cubes into a canvas we append here, UNDER the gl3d canvas.
+            Mutually exclusive with the sphere layer above (the L1 gate excludes
+            agent models), so the two never overlap. */}
+        <div ref={voxelLayerRef} style={{ position: 'absolute', inset: 0, zIndex: 1, pointerEvents: 'none', display: is3D ? undefined : 'none' }} />
         {/* 3D Grid CA: WebGL2 voxel canvas, shown only for 3D models. Its own
             pointer handlers (orbit/zoom/pan + colour-id pick) are attached in a
             dedicated effect since draw() routes here via is3dRef. In 3D it is

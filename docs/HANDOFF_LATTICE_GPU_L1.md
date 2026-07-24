@@ -236,12 +236,153 @@ over the voxel layer.
   are "high-quality mode" and cost per-frame CPU.
 - This document's Completion Report + the master Status Board row.
 
-## 8. Completion Report
+## 8. Completion Report (2026-07-24)
 
-`## Completion Report (<date>)`
-- commits (hashes + one line each)
-- deviations from this spec and why
-- measured before/after (bench-lattice rows + the in-browser probes)
-- the alpha-blend decision (§3 W1.5) and any other scope call
-- new gotchas discovered (add the durable ones to master §0.7)
-- what L3 (sparse on WebGPU) and the 3D grid+agent composite follow-up must know
+**Commit** (branch `optimize`, not pushed): one commit — *perf(lattice): L1 worker-side WGSL
+voxel render for 3D WebGPU grids*. `git diff --stat` = exactly the three files the checklist
+allows plus docs: `webgpuRuntime.ts` (+~380), `sim.worker.ts` (+~150), `SimulatorView.tsx`
+(+~250), `HelpView.tsx` (copy), `CLAUDE.md`, this doc, the master Status Board. **NO compiler
+file, NO gl3d.ts, NO agent path, NO activeSet** — L1 is render/worker-only.
+
+### What shipped vs the spec
+
+All of W1/W2/W3 as written, with three deviations (all justified, all narrowing risk):
+
+1. **§2's `light3d.shadows === false && light3d.ao === false` (and alpha blend) are enforced as
+   FRAME-MODE terms, not ATTACH terms.** The spec's requirement is "toggling shadows or AO must
+   detach free mode and re-attach when they go back off". Making them UI-sync terms achieves
+   exactly that (free mode disengages, the voxel canvas hides, gl3d renders the frame verbatim,
+   and switching them off releases free mode) with **no attach/detach churn, no canvas
+   re-transfer, and one less way for the attach lifecycle to go wrong**. Verified through the
+   real checkboxes for all three.
+2. **`voxelRenderActive` is DERIVED (`voxelRenderOn() = !!webgpuRuntime?.voxelRender`), not a
+   module flag.** The spec said "module state … reset on EVERY runtime teardown". A derived
+   getter makes the reset structural: the pipelines die with the runtime and a rebuilt runtime
+   starts `false`, so the documented "a REBUILT runtime must reset its flags" trap cannot bite.
+   `useWebGPUStatus` carries the live flag so the main thread re-attaches after a rebuild with
+   no extra message.
+3. **No `gridColorsStale` flag.** W2.5 asked for the one-shot rule to cover grid state. It
+   already does: the grid's one-shot mechanism is `gpuOwnsAttrs` / `ensureCpuAttrsFresh`, which
+   `getState` / `paint` / `paintManual` / `writeRegion` / `clearRegion` / `readRegion` /
+   `loadState` / `setInspectCells` / `colorPass` all honour today **because 2D direct render has
+   exercised the identical state for years**. Free mode reproduces exactly that state
+   (`gridDisplayOwnedByGpu()` extends the existing `rt.directRender` term). Adding a second
+   staleness flag was explicitly forbidden by the spec; the only gap found was
+   `requestColorsSnapshot`, whose GPU-readback arm was gated on `rt.directRender` — extended to
+   include `rt.voxelRender`. The hostile probe passes (below).
+
+**Alpha-blend decision (W1.5)**: option (b) — **gate free mode off when alpha blend is on** (the
+simplest correct choice, mirroring the agent Phase C gate). No GPU sort was written. Alpha blend
+therefore pins frame mode and gl3d does its back-to-front sort exactly as today.
+
+**Two additions beyond the spec, both required for feature preservation:**
+- `capture3dPixels()` — screenshot/recording in free mode composite the worker's voxel canvas
+  UNDER gl3d's overlays-only `readPixels` output. Without it a screenshot taken mid-run would be
+  "overlays over nothing" (recording is covered by the UI-sync flip, but a screenshot is a
+  one-shot with no flip). A transferred canvas is still a valid `CanvasImageSource` — the same
+  property the 2D direct-render blit relies on.
+- `__voxelReadback` — a DEV-only probe (the `__compositeReadback` precedent; the app never sends
+  it) that presents one frame and reads the indirect draw args back. This is the occlusion-safe
+  correctness proof the checklist demands.
+
+### Measured
+
+**bench-lattice (CPU targets, A/B against the stashed pre-change tree)** — unchanged within
+noise, as expected (on a CPU target `gridDisplayOwnedByGpu()` is one extra `false` per
+`sendColors`): GoL 1024² wasm 12.3 → 12.3 ms/gen, 2048² wasm 50.4 → 51.5, JS 99.0 → 97.9.
+
+**In-browser, real GPU, Accretor 300³ (27M cells), gens/frame = 1, interleaved A/B ×3** so
+drift cannot favour either mode:
+
+| | frame mode (= today's 3D path) | free mode (L1) |
+|---|---|---|
+| pair 1 | 614 ms | 155 ms |
+| pair 2 | 769 ms | 124 ms |
+| pair 3 | 753 ms | 123 ms |
+| `count: 0` (fixed per-frame cost) | 860 ms | 8.7 ms |
+
+**≈ 6.2× on the worker frame time**, and that is *before* counting what leaves the main thread:
+the per-frame O(total) `uploadColors` rescan (bench: 54.9 ms at 300³ on this machine; 218 ms in
+the review's measurement) and 103 MB/frame of copy + structured transfer, both gone entirely in
+free mode. The marginal per-generation slope in free mode is ~1.6–2.7 ms, consistent with the
+review's 2.35 ms GPU step — i.e. **the frame is now simulation-dominated instead of
+render-dominated**, which was the phase's objective.
+
+**Honesty note on the absolute free-mode figure**: on an occluded pane, per-frame latency at the
+~100 ms scale is dominated by scheduling noise (a control experiment produced
+`skipColorPass:true` *slower* than `skipColorPass:false` — physically impossible, so the noise
+floor exceeds the residual). `getCurrentTexture()` on a canvas the compositor is not driving is
+the likely stall. The **frame-mode side was tightly clustered (734–819 ms over 12 samples) and no
+free-mode sample ever exceeded 244 ms**, so the sign and magnitude of the win are unambiguous;
+the residual ~120 ms should be re-measured in a VISIBLE pane and is expected to be lower.
+
+### Verification performed (all protocol/buffer-level, per master §3)
+
+- Life3D 96³ + WebGPU **engages** — `voxelRenderStatus {active:true}` is posted only after BOTH
+  WGSL modules compiled with **0 errors** (`getCompilationInfo`) and a present ran. 0 worker
+  errors and 0 console errors across the entire session (the shared device's uncaptured-error
+  handler posts a worker `error`, and none arrived over ~114 messages incl. many presents).
+- Free mode: generations advance with **no `colors`** on `stepped`; frame mode ships them.
+- **Compaction correctness by buffer readback** (the definitive occlusion-safe proof): the GPU
+  instance count read out of the indirect draw args equals an independently CPU-computed count
+  from a colours snapshot — **4432 = 4432** on the sparse state, and **12432 → 6600** on a solid
+  20³ block (exactly 18³ = 5832 buried cells culled). Every sampled compacted index is a
+  genuinely visible cell; `vertexCount === 36`. Toggling the buried cull via the camera uniform
+  changes the count in step (8707 un-culled vs 2734 culled), so the clip-open case correctly
+  keeps interior cells.
+- **Hostile staleness probe** (free mode running): `getState` agrees with a colours snapshot
+  **cell-for-cell over 884,736 cells, 0 mismatches**; `setInspectCells` on a live cell reports
+  `alive: 1`; `paintManual` on a dead cell lands and reads back.
+- Shadows / Occlusion / Alpha blend each flip the worker's `uiSync` to true via the **real
+  checkboxes** and release it when unchecked.
+- **Fallbacks unchanged**: 2D WebGPU GoL still direct-renders (`directRender:true`, zero
+  `voxelRenderStatus` messages); 3D WASM Life3D ships colours with no attach; a glyph-3D model
+  and an agent-3D model (Morphogenesis — 3D Tissue) never attach.
+- **Recording** through the real button: Play → free mode → start recording flips UI-sync ON and
+  `stepped` ships colours again → stop returns to free.
+- **Recompile / runtime rebuild**: `useWebGPUStatus {ready:true, voxelRender:false}` → automatic
+  re-attach → `voxelRenderStatus {active:true}`, and free mode resumes.
+- Gates: `tsc -p tsconfig.app.json --noEmit`, `npm run build`, `check-compile-identity`
+  (**25 models, all surfaces unchanged** — verified with a `git stash` pre/post capture),
+  `parity-agent-wasm`, `parity-agent-force`, `verify-agent-render` all green.
+
+**Deferred to an orchestrator/user spot-check in a VISIBLE pane** (explicitly NOT claimed): the
+composited voxel image, lighting parity against gl3d's cubes, the clip-interval / cell-gaps look,
+the brush-plane overlay compositing over the voxel layer, and a re-measure of the free-mode
+frame time.
+
+### New gotchas (durable — candidates for master §0.7)
+
+- **The identity baseline must be captured with `git stash`, and confirmed reproducible.** My
+  first `--capture` on the (clean) pre-change tree produced an Accretor whose WASM was 6736 bytes
+  — the `skipIsolatedEmpty.enabled: true` variant — while three later captures all produced 2845
+  (the shipped `enabled: false`). The stash-based pre/post comparison is 0 diffs, and the
+  anomalous capture was never reproduced. **Capture twice and compare the two captures before
+  trusting any DIFF**, or a phantom "you broke the compiler" will burn an hour.
+- **Do not hand-post a message that a main-thread driver also owns.** Posting `setGridUiSync`
+  directly left the driver's mirror (`gridUiSyncPostedRef`) disagreeing with the worker, so a
+  later real UI action (start recording) *looked* like it failed to flip the mode. Drive the real
+  UI, or re-sync the mirror first.
+- **Per-frame latency measured on an occluded pane is unusable above ~10 ms.** Use interleaved
+  A/B for comparisons and never quote an absolute.
+- **A 27M-cell runtime rebuild can exceed a 30 s eval timeout** (`seedRngState` alone builds a
+  108 MB Uint32Array). Any probe issued around a Recompile must be bounded by
+  `performance.now()`, not left awaiting a worker reply.
+- **A backtick inside a WGSL comment terminates the TS template literal** holding the shader.
+
+### What the next phases must know
+
+- **L3 (sparse stepping on WebGPU)**: L1 is what makes L3 visible at all — the render tax that
+  hid the 2.35 ms step is gone, and the marginal per-gen cost is now the dominant term at 300³.
+  The compaction pass here is the exact clear → atomic-count → scatter → indirect shape L3 needs
+  for the active set, and `dispatchCells` + the 2-D index recovery are already proven at 27M
+  cells. NB the compaction reads **`colorsBuf`**, not attrs, so an L3 active list is independent
+  of it — but if L3 makes the step skip cells, the colour pass must still cover every cell whose
+  colour can change, or the voxel render will show stale voxels (they are the same buffer).
+- **The 3D grid+agents composite follow-up**: the voxel layer and the agent sphere layer are two
+  sibling divs at `z-index: 1` and are currently mutually exclusive by gate. Compositing them
+  needs ONE canvas with a shared depth buffer (both passes into one encoder), not two layers —
+  the agent pass already has its own depth attachment, so the merge is a render-pass
+  restructure, not a wiring change.
+- **L5 (`instData` sizing)** still matters: it is the CPU renderer's buffer, which frame mode and
+  every CPU-target 3D model still use.

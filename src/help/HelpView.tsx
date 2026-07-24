@@ -1245,7 +1245,13 @@ export function HelpView() {
             instead of each surface being lit only on its own: <strong>Shadows</strong> casts real
             shadows (voxels and agents shadow each other) and <strong>Occlusion</strong> darkens
             the crevices of a packed voxel volume so it reads as one solid form. Each has a
-            strength slider; both are off by default.
+            strength slider; both are off by default. They are a <strong>high-quality
+            mode</strong>: on a 3D grid running the WebGPU compile target, the volume is
+            normally drawn straight from the GPU inside the worker (nothing has to travel
+            back to the page), but shadows and occlusion are computed by the page-side
+            renderer &mdash; so switching either on (like <strong>Alpha blend</strong>)
+            hands the frame back to it and costs real per-frame CPU work on large volumes.
+            Switch them off and the fast path resumes automatically.
           </p>
           <p className={styles.p}>
             <strong>Metaballs</strong> (agent models, off by default) render the agent population

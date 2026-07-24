@@ -19,7 +19,8 @@ import {
   setupReductionPipelines, dispatchReductions, setupDirectRender,
   dispatchInit, uploadOrientation, uploadFacePatternLookup, uploadInteractionTable,
   clearGlyphBuffersWebGPU,
-  type WebGPURuntime, type ReadbackRegion,
+  setupVoxelRender, uploadVoxelView, presentVoxels, destroyVoxelRender, debugReadVoxelInstances,
+  type WebGPURuntime, type ReadbackRegion, type VoxelRenderView,
 } from './webgpuRuntime';
 import { decodeReductions, gpuHandledIds, gpuHandledAttrIds } from './webgpuReduce';
 import { encodeAttrValue } from '../../model/attrValueEncoding';
@@ -458,6 +459,29 @@ interface SetInspectCellsMsg { type: 'setInspectCells'; cellIdxs: number[] }
  *  content despite dispatching a present internally). Idempotent + cheap. */
 interface RefreshDisplayMsg { type: 'refreshDisplay' }
 
+// --- L1 worker-side voxel render (3D grids on the WebGPU target) ---
+/** Late-binding voxel-canvas attach (the 3D sibling of AttachCanvasMsg): the main
+ *  thread transfers a display-pixel-sized OffscreenCanvas once the grid WebGPU
+ *  runtime is ready. The worker builds the compaction + indirect-draw pipelines,
+ *  presents once, and acks with `voxelRenderStatus`. */
+interface AttachVoxelCanvasMsg { type: 'attachVoxelCanvas'; canvas: OffscreenCanvas; width: number; height: number }
+/** Camera + lighting + clip uniform for the voxel render (orbit/pan/zoom/settings).
+ *  Present-only (no step). Computed on the MAIN thread with the same
+ *  sceneCameraMatrices / lightWorldDirFor helpers gl3d uses. */
+interface SetGridCameraMsg { type: 'setGridCamera'; view: VoxelRenderView }
+/** UI-sync toggle for the GRID (the agent `setAgentUiSync` sibling): while ON the
+ *  worker reads the colours back each frame and ships them (features that need the
+ *  CPU colours mirror: gl3d frame rendering + picking, recording, inspect). While
+ *  OFF the voxel render owns the display and nothing crosses the wire. Default ON. */
+interface SetGridUiSyncMsg { type: 'setGridUiSync'; on: boolean }
+/** Re-present the voxel frame (tab-refocus / soft-recompile analogue of
+ *  refreshDisplay). */
+interface RefreshGridDisplayMsg { type: 'refreshGridDisplay' }
+/** DEV probe (verification only; the app never sends it): present one voxel frame
+ *  and read the indirect draw args back, so a test can assert the GPU-computed
+ *  instance count against an independently computed visible-cell count. */
+interface VoxelReadbackMsg { type: '__voxelReadback'; sample?: number }
+
 // --- Bond-Graph Agents messages ---
 /** Lay down N agents (the seed brush / Reset / headless seeding). Positions are
  *  in continuous WORLD coordinates. Overflow past maxAgents is reported back. */
@@ -533,7 +557,7 @@ interface SetAgentUiSyncMsg { type: 'setAgentUiSync'; on: boolean }
  *  refreshDisplay). */
 interface RefreshAgentDisplayMsg { type: 'refreshAgentDisplay' }
 
-type WorkerMsg = InitMsg | StepMsg | PaintMsg | PaintManualMsg | ResetMsg | RecompileMsg | UpdateModelAttrsMsg | UpdateLookupTableMsg | ImportImageMsg | UpdateIndicatorsMsg | GetStateMsg | LoadStateMsg | ReadRegionMsg | WriteRegionMsg | ClearRegionMsg | SetUseWasmMsg | SetUseWebGPUMsg | ReadbackWebGPUMsg | ColorPassMsg | SetRecordingMsg | AttachCanvasMsg | RequestColorsSnapshotMsg | SetInspectCellsMsg | RefreshDisplayMsg | SeedAgentsMsg | CreateAgentMsg | KillAgentsMsg | PaintAgentsMsg | ClearAgentsMsg | FormBondMsg | BreakBondMsg | GetAgentStateMsg | MoveAgentsMsg | FormBondBatchMsg | SetAgentWasmBackedMsg | SetRngSeedMsg | SetSimLayersMsg | AttachAgentCanvasMsg | SetAgentCameraMsg | SetAgentUiSyncMsg | RefreshAgentDisplayMsg | E1bCountersMsg | CompositeReadbackMsg;
+type WorkerMsg = InitMsg | StepMsg | PaintMsg | PaintManualMsg | ResetMsg | RecompileMsg | UpdateModelAttrsMsg | UpdateLookupTableMsg | ImportImageMsg | UpdateIndicatorsMsg | GetStateMsg | LoadStateMsg | ReadRegionMsg | WriteRegionMsg | ClearRegionMsg | SetUseWasmMsg | SetUseWebGPUMsg | ReadbackWebGPUMsg | ColorPassMsg | SetRecordingMsg | AttachCanvasMsg | RequestColorsSnapshotMsg | SetInspectCellsMsg | RefreshDisplayMsg | SeedAgentsMsg | CreateAgentMsg | KillAgentsMsg | PaintAgentsMsg | ClearAgentsMsg | FormBondMsg | BreakBondMsg | GetAgentStateMsg | MoveAgentsMsg | FormBondBatchMsg | SetAgentWasmBackedMsg | SetRngSeedMsg | SetSimLayersMsg | AttachAgentCanvasMsg | SetAgentCameraMsg | SetAgentUiSyncMsg | RefreshAgentDisplayMsg | E1bCountersMsg | CompositeReadbackMsg | AttachVoxelCanvasMsg | SetGridCameraMsg | SetGridUiSyncMsg | RefreshGridDisplayMsg | VoxelReadbackMsg;
 
 // ---------------------------------------------------------------------------
 // State
@@ -2914,7 +2938,7 @@ function startWebGPUInit(
   // expensive async device + shaderModule + pipeline rebuild ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â saves hundreds
   // of ms on graph-only edits where the user isn't actually changing the rule.
   if (shaderCode && webgpuRuntime?.stepReady && shaderHashOf(shaderCode) === webgpuRuntime.shaderHash) {
-    self.postMessage({ type: 'useWebGPUStatus', enabled: useWebGPU, ready: true, directRender: webgpuRuntime.directRender });
+    self.postMessage({ type: 'useWebGPUStatus', enabled: useWebGPU, ready: true, directRender: webgpuRuntime.directRender, voxelRender: webgpuRuntime.voxelRender });
     return;
   }
   // P7 ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â salvage any direct-render canvas attached to the previous runtime.
@@ -2984,7 +3008,7 @@ function startWebGPUInit(
       }
       // eslint-disable-next-line no-console
       console.log(`[webgpu] runtime ready: device + shader + buffers + step pipeline (${rt.entryPoints.outputMappings.length} viewer pipeline(s) lazily built)`);
-      self.postMessage({ type: 'useWebGPUStatus', enabled: useWebGPU, ready: rt.stepReady, directRender: rt.directRender });
+      self.postMessage({ type: 'useWebGPUStatus', enabled: useWebGPU, ready: rt.stepReady, directRender: rt.directRender, voxelRender: rt.voxelRender });
     })
     .catch((e: unknown) => {
       // Same staleness check on the failure path ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â don't clobber the newer
@@ -3492,6 +3516,47 @@ async function ensureCpuAttrsFresh(): Promise<void> {
   gpuOwnsAttrs = false;
 }
 
+// --- L1 worker-side voxel render (3D grids on the WebGPU target) -------------
+/** True once the main thread's OffscreenCanvas is wired into the voxel pipelines.
+ *  DERIVED from the runtime rather than mirrored in a module flag ON PURPOSE: the
+ *  pipelines die with the runtime (destroyWebGPURuntime → destroyVoxelRender), and
+ *  a rebuilt runtime starts with `voxelRender === false`, so every teardown /
+ *  rebuild path resets this for free — the "a REBUILT runtime must reset its
+ *  flags" trap cannot bite. The main thread re-attaches on the next
+ *  `useWebGPUStatus` that reports `voxelRender: false`. */
+function voxelRenderOn(): boolean { return !!webgpuRuntime?.voxelRender; }
+/** While ON the worker reads the colours back each frame and ships them, so gl3d
+ *  can render the frame + resolve its pick FBO (interaction / recording / pause).
+ *  While OFF the voxel render owns the display and NOTHING crosses the wire.
+ *  Default ON so behaviour is unchanged until SimulatorView opts in. */
+let gridUiSync = true;
+/** The last camera/lighting/clip uniform (re-applied on attach / refocus). */
+let gridRenderView: VoxelRenderView | null = null;
+
+/** True when the GPU owns the display and the CPU `colours` mirror is therefore
+ *  intentionally NOT refreshed this frame — 2D direct render (the historical
+ *  `rt.directRender` term) OR the 3D voxel render in free mode. One predicate so
+ *  `finalizeStepWebGPU`'s readback and `sendColors`' ship decision can't drift.
+ *  NB the CPU **attrs** mirror keeps its existing, separate one-shot mechanism
+ *  (`gpuOwnsAttrs` / `ensureCpuAttrsFresh`) — L1 adds no second staleness flag. */
+function gridDisplayOwnedByGpu(): boolean {
+  return !!webgpuRuntime?.directRender || (voxelRenderOn() && !gridUiSync);
+}
+
+/** Re-present the voxel frame from the live GPU colours buffer. Called from every
+ *  path that refreshes colours (step-batch tail, mutation tails, colour pass,
+ *  camera, attach, refresh). No-op unless the voxel render is wired up. */
+function presentVoxelsIfActive(): void {
+  const rt = webgpuRuntime;
+  if (!rt || !rt.voxelRender) return;
+  try { presentVoxels(rt); }
+  catch (e) {
+    destroyVoxelRender(rt);   // clears rt.voxelRender → voxelRenderOn() goes false
+    self.postMessage({ type: 'error', message: '[webgpu] voxel present failed: ' + ((e instanceof Error) ? e.message : String(e)) });
+    self.postMessage({ type: 'voxelRenderStatus', active: false });
+  }
+}
+
 /** Parse an attribute's `defaultValue` string into the numeric storage value.
  *  Mirrors attrValueLiteralJS but evaluates to a JS number. */
 function parseAttrValue(attr: AttrDef, valueStr: string | undefined): number {
@@ -3869,6 +3934,11 @@ function runColorPassWebGPU(): boolean {
   // still runs and pushes whatever the step shader wrote via
   // SetColorViewer-in-step.
   const ok = dispatchColorPassAndPresent(webgpuRuntime, activeViewer);
+  // L1 (3D): the colours buffer just changed — re-run the voxel compaction +
+  // indirect draw so the transferred canvas shows the new frame. This is the ONE
+  // hook that covers the step-batch tail, mutation tails and the colour-pass
+  // message, because every colour refresh routes through here.
+  presentVoxelsIfActive();
   // O5 ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â refresh the watched-linked-indicator histograms on GPU. Cheap (a
   // handful of u32 atomics per cell) and the result rides the same
   // batched mapAsync as colors/indicators/stopFlag in the next finalize.
@@ -3905,6 +3975,7 @@ function refreshColorsAfterInputWebGPU(): void {
   // texture picks it up.
   runStepWebGPU();
   presentToCanvas(rt);
+  presentVoxelsIfActive();   // L1 (3D): the no-OM branch writes colours too.
 }
 
 /** JS / WASM analogue of refreshColorsAfterInputWebGPU. Same intent: after any
@@ -4079,7 +4150,11 @@ async function finalizeStepWebGPU(opts: { needAttrs?: boolean; needColors?: bool
   // inspect: into the per-cell RGB readout in the popover). The readback is
   // the same cost as before P7, but only paid when at least one of those is
   // active.
-  const wantColors = (opts.needColors !== false) && (!rt.directRender || recording || inspectCellIdxs.length > 0);
+  // L1 extends the `!rt.directRender` term to `!gridDisplayOwnedByGpu()`: the 3D
+  // voxel render in free mode owns the display exactly like 2D direct render, so
+  // the colours never need to reach the CPU. STRUCTURALLY IDENTICAL — the
+  // selective watched-attr readback and the reductions path below are untouched.
+  const wantColors = (opts.needColors !== false) && (!gridDisplayOwnedByGpu() || recording || inspectCellIdxs.length > 0);
   // P5 ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â only read back indicators that the UI/end-conditions actually
   // consume. A model can declare 10 indicators with `watched=false` and they
   // ALL stayed in the readback path before, paying the per-frame mapAsync
@@ -5115,7 +5190,10 @@ function sendColors(): void {
   // via presentAgentsIfActive) — ship no grid `colors`; the main thread blits the
   // composite. Recording captures the DISPLAY canvas (which holds the composite),
   // so no colors readback is needed even under recording.
-  if ((webgpuRuntime?.directRender && !recording) || agentCompositeActive) {
+  // L1: the 3D voxel render in free mode is the same deal — the worker already
+  // presented the frame into the transferred canvas, so ship no `colors` (they
+  // were never read back either; see finalizeStepWebGPU's wantColors).
+  if ((gridDisplayOwnedByGpu() && !recording) || agentCompositeActive) {
     if (glyphsPayload) {
       self.postMessage(
         { type: 'stepped', generation, indicators, sieActive, reqId: ackId, glyphCodes: glyphsPayload.codes, glyphColors: glyphsPayload.colors, agents: agentsPayload, agentLiveCount },
@@ -6091,7 +6169,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
         // Mutual exclusion: WebGPU wins.
         useWasm = false;
       }
-      self.postMessage({ type: 'useWebGPUStatus', enabled: useWebGPU, ready: webgpuRuntime?.stepReady ?? false, directRender: webgpuRuntime?.directRender ?? false });
+      self.postMessage({ type: 'useWebGPUStatus', enabled: useWebGPU, ready: webgpuRuntime?.stepReady ?? false, directRender: webgpuRuntime?.directRender ?? false, voxelRender: webgpuRuntime?.voxelRender ?? false });
       break;
     }
 
@@ -6114,7 +6192,9 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       // main thread. Tag echoed back so the requester can match the response.
       const tag = msg.tag ?? '';
       const rt = webgpuRuntime;
-      if (useWebGPU && rt?.stepReady && rt.directRender) {
+      // L1: the voxel render leaves the CPU colours mirror stale exactly like 2D
+      // direct render, so it needs the same one-shot readback before snapshotting.
+      if (useWebGPU && rt?.stepReady && (rt.directRender || rt.voxelRender)) {
         void (async () => {
           try {
             await readbackColors(rt, colors);
@@ -6225,6 +6305,110 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       } catch (e) {
         const m = (e instanceof Error) ? e.message : String(e);
         self.postMessage({ type: 'error', message: '[webgpu] attachCanvas failed: ' + m });
+      }
+      break;
+    }
+
+    case 'attachVoxelCanvas': {
+      // L1 — the 3D sibling of attachCanvas. The main thread transferred a
+      // display-pixel-sized OffscreenCanvas once the grid WebGPU runtime was
+      // ready; build the compaction + indirect-draw pipelines on it, apply the
+      // last camera, present once, and ack. Any failure acks active:false and the
+      // main thread keeps today's colours-readback + gl3d path.
+      if (!webgpuRuntime || !webgpuRuntime.stepReady) {
+        self.postMessage({ type: 'voxelRenderStatus', active: false, message: 'runtime not ready' });
+        break;
+      }
+      {
+        const rt = webgpuRuntime;
+        void (async () => {
+          try {
+            const ok = await setupVoxelRender(rt, msg.canvas);
+            // A newer runtime landed while the WGSL validated — the pipelines we
+            // just built belong to a runtime nobody uses. Bail; the main thread
+            // re-attaches on the newer runtime's useWebGPUStatus.
+            if (!ok || webgpuRuntime !== rt) {
+              if (webgpuRuntime !== rt) destroyVoxelRender(rt);
+              self.postMessage({ type: 'voxelRenderStatus', active: false });
+              return;
+            }
+            if (gridRenderView) uploadVoxelView(rt, gridRenderView);
+            presentVoxelsIfActive();
+            self.postMessage({ type: 'voxelRenderStatus', active: true });
+          } catch (e) {
+            destroyVoxelRender(rt);
+            self.postMessage({ type: 'voxelRenderStatus', active: false, message: (e as Error)?.message || String(e) });
+          }
+        })();
+      }
+      break;
+    }
+
+    case 'setGridCamera': {
+      // Camera / lighting / clip uniform (orbit/pan/zoom/settings). Present-only:
+      // re-present with the new view (the GPU colours buffer holds the last frame).
+      gridRenderView = msg.view;
+      if (webgpuRuntime?.voxelRender) {
+        uploadVoxelView(webgpuRuntime, msg.view);
+        presentVoxelsIfActive();
+      }
+      break;
+    }
+
+    case 'setGridUiSync': {
+      // OFF: the voxel render owns the display, nothing crosses the wire.
+      // ON: a consumer needs the CPU colours mirror (gl3d frame render + its pick
+      // FBO, recording, inspect). Ship ONE colours frame immediately so a PAUSED
+      // frame-mode gl3d has pixels straight away — a paused sim posts no step, so
+      // without this the flip would show a blank/stale volume until the next Play.
+      {
+        const wasOff = !gridUiSync;
+        gridUiSync = !!msg.on;
+        const rt = webgpuRuntime;
+        if (gridUiSync && wasOff && useWebGPU && rt?.stepReady && voxelRenderOn()) {
+          asyncStepBatchInFlight = true;   // no message may interleave the readback
+          // The flag MUST be cleared from a finally (audit H2): a throw with it set
+          // would defer every later message with no replay — a silent dead-lock.
+          void (async () => {
+            try {
+              await readbackColors(rt, colors);
+              colorsDirty = true;
+              sendColors();
+            } finally { endAsyncStepBatch(); }
+          })();
+        }
+      }
+      break;
+    }
+
+    case '__voxelReadback': {
+      // L1 DEV probe (verification only). Occlusion-safe proof of the compaction:
+      // the instance count the GPU computed, read straight out of the indirect
+      // draw args, plus the state a test needs to reproduce it CPU-side.
+      void (async () => {
+        try {
+          const rt = webgpuRuntime;
+          if (!rt || !rt.voxelRender) { self.postMessage({ type: '__voxelReadback', active: false }); return; }
+          const r = await debugReadVoxelInstances(rt, msg.sample ?? 0);
+          self.postMessage({
+            type: '__voxelReadback', active: true, uiSync: gridUiSync,
+            instanceCount: r?.instanceCount ?? -1, vertexCount: r?.vertexCount ?? -1,
+            sample: r?.sample ?? [], total: rt.layout.total,
+            gridW: rt.layout.gridWidth, gridH: rt.layout.gridHeight, gridD: rt.layout.gridDepth,
+          });
+        } catch (e) {
+          self.postMessage({ type: '__voxelReadback', active: false, error: (e as Error)?.message || String(e) });
+        }
+      })();
+      break;
+    }
+
+    case 'refreshGridDisplay': {
+      // Tab-refocus / soft-recompile analogue of refreshDisplay for the voxel
+      // canvas — re-present so a stale/unpresented canvas repaints.
+      if (webgpuRuntime?.voxelRender) {
+        if (gridRenderView) uploadVoxelView(webgpuRuntime, gridRenderView);
+        presentVoxelsIfActive();
       }
       break;
     }

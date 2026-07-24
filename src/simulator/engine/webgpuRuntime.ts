@@ -110,6 +110,42 @@ export interface WebGPURuntime {
    *  + sendColors path. */
   directRender: boolean;
 
+  // --- L1 — worker-side WGSL VOXEL render (3D grids on the WebGPU target) ---
+  // A second, independent canvas path: instead of blitting the colors buffer 1:1
+  // (2D direct render, above), a compute pass COMPACTS the visible cells into an
+  // instance buffer and an indirect instanced draw rasterises unit cubes. The CPU
+  // never learns the instance count, so no readback, no postMessage, and no
+  // main-thread O(total) rescan. Mutually exclusive with `directRender` in
+  // practice (the gate is 3D-only), but the two sets of state are separate.
+  voxelCanvas: OffscreenCanvas | null;
+  voxelCtx: GPUCanvasContext | null;
+  voxelDepthTex: GPUTexture | null;
+  voxelDepthW: number;
+  voxelDepthH: number;
+  /** One u32 cell index per VISIBLE cell, written by the compaction pass. Sized
+   *  `total` (the worst case: every cell visible) so no capacity readback is
+   *  ever needed. */
+  voxelInstanceBuf: GPUBuffer | null;
+  /** [vertexCount=36, instanceCount, firstVertex=0, firstInstance=0]. The
+   *  compaction pass atomically bumps slot 1; the draw reads it indirectly. */
+  voxelIndirectBuf: GPUBuffer | null;
+  /** The camera / lighting / clip uniform (mirrors VoxelRenderView). */
+  voxelViewBuf: GPUBuffer | null;
+  voxelCompactPipeline: GPUComputePipeline | null;
+  voxelCompactBindGroup: GPUBindGroup | null;
+  /** Two draw pipelines differing only in cullMode — gl3d culls cube backfaces
+   *  unless a clip interval is open (the cut's visible interior walls ARE
+   *  backfaces). Selected per frame from the uniform's clip flag. */
+  voxelDrawPipelineCull: GPURenderPipeline | null;
+  voxelDrawPipelineNoCull: GPURenderPipeline | null;
+  voxelDrawBindGroup: GPUBindGroup | null;
+  /** True once the canvas is configured and both pipelines are built. */
+  voxelRender: boolean;
+  /** Premultiplied clear colour (the 3D background), mirrored from the view. */
+  voxelClear: [number, number, number, number];
+  /** Whether the current view wants backface culling (no open clip interval). */
+  voxelCullBack: boolean;
+
   /** O5 reduction state — when watched linked indicators have GPU-eligible
    *  aggregations (total / freq-bool / freq-tag), the reductions buffer is
    *  populated by per-indicator atomic kernels each step and read back
@@ -201,6 +237,22 @@ export async function createWebGPURuntime(init: WebGPURuntimeInit): Promise<WebG
     presentPipeline: null,
     presentBindGroupLayout: null,
     directRender: false,
+    voxelCanvas: null,
+    voxelCtx: null,
+    voxelDepthTex: null,
+    voxelDepthW: 0,
+    voxelDepthH: 0,
+    voxelInstanceBuf: null,
+    voxelIndirectBuf: null,
+    voxelViewBuf: null,
+    voxelCompactPipeline: null,
+    voxelCompactBindGroup: null,
+    voxelDrawPipelineCull: null,
+    voxelDrawPipelineNoCull: null,
+    voxelDrawBindGroup: null,
+    voxelRender: false,
+    voxelClear: [0, 0, 0, 0],
+    voxelCullBack: true,
     reductionsBuf: null,
     reductionShaderModule: null,
     reductionBindGroupLayout: null,
@@ -516,6 +568,442 @@ export function setupDirectRender(rt: WebGPURuntime): void {
 }
 
 const PRESENT_WG = 8;
+
+// ---------------------------------------------------------------------------
+// L1 — worker-side WGSL voxel render (3D grids)
+//
+// A 3D grid on the WebGPU target used to be permanently stuck on the readback
+// path: the WebGL2 voxel renderer (gl3d.ts) lives on the MAIN thread and needs a
+// CPU colours buffer, so every frame paid a total×4 GPU→CPU readback + a total×4
+// copy + a total×4 structured transfer + an O(total) main-thread instance rescan.
+// This pass does the whole thing on the GPU instead:
+//
+//   compaction (compute)  →  visible cells' flat indices into an instance buffer
+//                            (alpha ≠ 0, plus the buried-cell cull) + an atomic
+//                            instance counter written straight into the indirect
+//                            draw args, so the CPU never learns the count
+//   draw (indirect)       →  36-vertex unit cubes, one instance per visible cell
+//
+// Parity with gl3d is deliberate and load-bearing: the SAME Z-up world remap
+// (col→+X, row→−Y, layer→−Z), the same ambient + diffuse·n·L + Blinn-Phong
+// specular shade, the same clip interval, the same cube scale (cell gaps), the
+// same buried-cull eligibility rule, and the MVP + light direction are computed
+// on the main thread by the SHARED sceneCameraMatrices / lightWorldDirFor
+// helpers gl3d itself uses — so the two renderers cannot disagree on projection
+// or lighting. Cast shadows and occupancy AO are NOT replicated: they stay
+// frame-mode features (the worker's UI-sync flag flips the display back to gl3d).
+// ---------------------------------------------------------------------------
+
+/** The voxel render's camera + lighting + clip uniform. `mvp` is column-major
+ *  (16 f32). Byte layout mirrors VOXEL_VIEW_WGSL + uploadVoxelView. */
+export interface VoxelRenderView {
+  mvp: number[];                 // 16 floats, column-major
+  halfX: number; halfY: number; halfZ: number;          // (W-1)/2 etc.
+  lightX: number; lightY: number; lightZ: number;       // world dir TOWARD the light
+  viewX: number; viewY: number; viewZ: number;          // world dir toward the viewer
+  clipFwdX: number; clipFwdY: number; clipFwdZ: number; // camera forward (clip axis 3)
+  ambient: number; diffuse: number; specular: number;
+  cubeScale: number;             // 0.92 with cell gaps, 1.001 flush
+  clipLo: number; clipHi: number;
+  clipEnabled: number;           // 0 / 1
+  clipAxis: number;              // 0=x 1=y 2=z 3=camera
+  bgR: number; bgG: number; bgB: number; bgA: number;   // clear colour
+  /** Buried-cell culling: 1 iff nothing can reveal a fully-enclosed cell
+   *  (flush cubes, opaque, no clip) — mirrors gl3d's buriedCullEligible(). */
+  cullBuried: number;
+}
+const VOXEL_VIEW_BYTES = 192;
+
+const VOXEL_VIEW_WGSL = `struct VoxelView {
+  mvp         : mat4x4<f32>,
+  half        : vec3<f32>,
+  lightDir    : vec3<f32>,
+  viewDir     : vec3<f32>,
+  clipFwd     : vec3<f32>,
+  ambient     : f32,
+  diffuse     : f32,
+  specular    : f32,
+  cubeScale   : f32,
+  clipLo      : f32,
+  clipHi      : f32,
+  clipEnabled : u32,
+  clipAxis    : u32,
+  bg          : vec4<f32>,
+  gridW       : u32,
+  gridWH      : u32,
+  total       : u32,
+  cullBuried  : u32,
+};`;
+
+/** Compaction: one thread per cell. Skips alpha-0 cells and (when eligible)
+ *  cells whose 6 face-neighbours are all filled, then atomically appends the
+ *  survivor's flat index to the instance buffer. The atomic counter IS slot 1 of
+ *  the indirect draw args, so the draw picks up the count with no CPU round trip. */
+const VOXEL_COMPACT_WGSL = `${VOXEL_VIEW_WGSL}
+@group(0) @binding(0) var<storage, read>       colorsIn  : array<u32>;
+@group(0) @binding(1) var<storage, read_write> instances : array<u32>;
+@group(0) @binding(2) var<storage, read_write> drawArgs  : array<atomic<u32>>;
+@group(0) @binding(3) var<uniform>             vv        : VoxelView;
+
+fn filled(i: u32) -> bool { return ((colorsIn[i] >> 24u) & 0xffu) != 0u; }
+
+@compute @workgroup_size(64)
+fn compact(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(num_workgroups) nwg: vec3<u32>) {
+  // 2-D dispatch tiling (dispatchCells) — a flat 1-D dispatch silently no-ops
+  // past 65535*64 ≈ 4.19M cells, which is exactly the 3D-volume regime.
+  let idx: u32 = gid.y * (nwg.x * 64u) + gid.x;
+  if (idx >= vv.total) { return; }
+  if (!filled(idx)) { return; }
+  if (vv.cullBuried != 0u) {
+    let H: u32 = vv.gridWH / vv.gridW;
+    let D: u32 = vv.total / vv.gridWH;
+    let layer: u32 = idx / vv.gridWH;
+    let rem: u32 = idx - layer * vv.gridWH;
+    let row: u32 = rem / vv.gridW;
+    let col: u32 = rem - row * vv.gridW;
+    var cnt: u32 = 0u;
+    if (col > 0u          && filled(idx - 1u))         { cnt = cnt + 1u; }
+    if (col + 1u < vv.gridW  && filled(idx + 1u))         { cnt = cnt + 1u; }
+    if (row > 0u          && filled(idx - vv.gridW))   { cnt = cnt + 1u; }
+    if (row + 1u < H      && filled(idx + vv.gridW))   { cnt = cnt + 1u; }
+    if (layer > 0u        && filled(idx - vv.gridWH))  { cnt = cnt + 1u; }
+    if (layer + 1u < D    && filled(idx + vv.gridWH))  { cnt = cnt + 1u; }
+    if (cnt == 6u) { return; }
+  }
+  let slot: u32 = atomicAdd(&drawArgs[1], 1u);
+  if (slot < arrayLength(&instances)) { instances[slot] = idx; }
+}`;
+
+/** Instanced unit cubes. The cube's 36 vertices are generated procedurally (no
+ *  const/private array — a per-invocation array would burn private memory for
+ *  every vertex thread), with CCW-outward winding so backface culling is valid.
+ *  The cell index is read from the compacted instance buffer as a u32 and decoded
+ *  with INTEGER math — never route a cell index through f32 (f32 cannot represent
+ *  odd integers ≥ 2^24, and a 300³ volume is 27M cells). */
+const VOXEL_DRAW_WGSL = `${VOXEL_VIEW_WGSL}
+@group(0) @binding(0) var<storage, read> instances : array<u32>;
+@group(0) @binding(1) var<storage, read> colorsIn  : array<u32>;
+@group(0) @binding(2) var<uniform>       vv        : VoxelView;
+
+struct VSOut {
+  @builtin(position) pos    : vec4<f32>,
+  @location(0)       color  : vec4<f32>,
+  @location(1)       normal : vec3<f32>,
+  @location(2)       centre : vec3<f32>,
+};
+
+fn basisVec(k: u32) -> vec3<f32> {
+  return vec3<f32>(f32(k == 0u), f32(k == 1u), f32(k == 2u));
+}
+
+@vertex
+fn vsMain(@builtin(vertex_index) vi: u32, @builtin(instance_index) inst: u32) -> VSOut {
+  let cellIdx: u32 = instances[inst];
+  let layer: u32 = cellIdx / vv.gridWH;
+  let rem: u32 = cellIdx - layer * vv.gridWH;
+  let row: u32 = rem / vv.gridW;
+  let col: u32 = rem - row * vv.gridW;
+  // Z-up remap, identical to gl3d's VS: col→+X (right), row→−Y (down the
+  // screen, so a top-down view matches the 2D CA), layer→−Z (into the screen).
+  let centre: vec3<f32> = vec3<f32>(f32(col) - vv.half.x, vv.half.y - f32(row), vv.half.z - f32(layer));
+  // 6 faces × 6 verts. (u, v, n) is right-handed per face ⇒ the [0,1,2,0,2,3]
+  // corner order is CCW seen from outside.
+  let f: u32 = vi / 6u;
+  let axis: u32 = f / 2u;
+  let sgn: f32 = select(-1.0, 1.0, (f & 1u) == 0u);
+  let n: vec3<f32> = sgn * basisVec(axis);
+  let uu: vec3<f32> = sgn * basisVec((axis + 1u) % 3u);
+  let vvv: vec3<f32> = basisVec((axis + 2u) % 3u);
+  let k: u32 = vi % 6u;
+  var ci: u32 = k;
+  if (k == 3u) { ci = 0u; } else if (k == 4u) { ci = 2u; } else if (k == 5u) { ci = 3u; }
+  let cu: f32 = select(-1.0, 1.0, ci == 1u || ci == 2u);
+  let cv: f32 = select(-1.0, 1.0, ci == 2u || ci == 3u);
+  let local: vec3<f32> = (n + uu * cu + vvv * cv) * 0.5;
+  let world: vec3<f32> = local * vv.cubeScale + centre;
+  let packed: u32 = colorsIn[cellIdx];
+  var out: VSOut;
+  out.pos = vv.mvp * vec4<f32>(world, 1.0);
+  out.color = vec4<f32>(
+    f32(packed & 0xffu) / 255.0,
+    f32((packed >> 8u) & 0xffu) / 255.0,
+    f32((packed >> 16u) & 0xffu) / 255.0,
+    f32((packed >> 24u) & 0xffu) / 255.0);
+  out.normal = n;
+  out.centre = centre;
+  return out;
+}
+
+@fragment
+fn fsMain(in: VSOut) -> @location(0) vec4<f32> {
+  if (vv.clipEnabled == 1u) {
+    var w: f32 = dot(in.centre, vv.clipFwd);
+    if (vv.clipAxis == 0u) { w = in.centre.x; }
+    else if (vv.clipAxis == 1u) { w = in.centre.y; }
+    else if (vv.clipAxis == 2u) { w = in.centre.z; }
+    if (w < vv.clipLo || w > vv.clipHi) { discard; }
+  }
+  // Flat directional shade by face normal (identical formula to gl3d's FS; the
+  // occupancy-AO and cast-shadow terms are frame-mode-only and omitted here).
+  let N: vec3<f32> = normalize(in.normal);
+  let ndl: f32 = max(0.0, dot(N, vv.lightDir));
+  var col: vec3<f32> = in.color.rgb * (vv.ambient + vv.diffuse * ndl);
+  if (vv.specular > 0.0) {
+    let H: vec3<f32> = normalize(vv.lightDir + vv.viewDir);
+    col = col + vv.specular * pow(max(0.0, dot(N, H)), 32.0);
+  }
+  // Alpha passes through exactly like gl3d's FS (outColor = vec4(col, vColor.a));
+  // its WebGL canvas is premultipliedAlpha:true, ours is alphaMode 'premultiplied'.
+  return vec4<f32>(col, in.color.a);
+}`;
+
+/** Ensure the depth attachment matches the canvas size (recreated on resize). */
+function ensureVoxelDepthTex(rt: WebGPURuntime, w: number, h: number): GPUTextureView {
+  if (!rt.voxelDepthTex || rt.voxelDepthW !== w || rt.voxelDepthH !== h) {
+    if (rt.voxelDepthTex) { try { rt.voxelDepthTex.destroy(); } catch { /* non-fatal */ } }
+    rt.voxelDepthTex = rt.device.createTexture({
+      label: 'voxel-render-depth', size: { width: Math.max(1, w), height: Math.max(1, h) },
+      format: 'depth24plus', usage: GPUTextureUsage.RENDER_ATTACHMENT,
+    });
+    rt.voxelDepthW = w; rt.voxelDepthH = h;
+  }
+  return rt.voxelDepthTex.createView();
+}
+
+/** Write the 192-byte camera/lighting/clip uniform (mirrors VOXEL_VIEW_WGSL). */
+export function uploadVoxelView(rt: WebGPURuntime, v: VoxelRenderView): void {
+  if (!rt.voxelViewBuf) return;
+  const ab = new ArrayBuffer(VOXEL_VIEW_BYTES);
+  const f = new Float32Array(ab), u = new Uint32Array(ab);
+  for (let i = 0; i < 16; i++) f[i] = v.mvp[i] ?? 0;            // mvp   @0
+  f[16] = v.halfX; f[17] = v.halfY; f[18] = v.halfZ;            // half  @64
+  f[20] = v.lightX; f[21] = v.lightY; f[22] = v.lightZ;         // light @80
+  f[24] = v.viewX; f[25] = v.viewY; f[26] = v.viewZ;            // view  @96
+  f[28] = v.clipFwdX; f[29] = v.clipFwdY; f[30] = v.clipFwdZ;   // clipF @112
+  f[32] = v.ambient; f[33] = v.diffuse; f[34] = v.specular; f[35] = v.cubeScale;
+  f[36] = v.clipLo; f[37] = v.clipHi;
+  u[38] = v.clipEnabled >>> 0; u[39] = v.clipAxis >>> 0;
+  f[40] = v.bgR; f[41] = v.bgG; f[42] = v.bgB; f[43] = v.bgA;   // bg    @160
+  u[44] = rt.layout.gridWidth >>> 0;
+  u[45] = (rt.layout.gridWidth * rt.layout.gridHeight) >>> 0;
+  u[46] = rt.layout.total >>> 0;
+  u[47] = v.cullBuried >>> 0;
+  rt.device.queue.writeBuffer(rt.voxelViewBuf, 0, ab);
+  const a = v.bgA;
+  rt.voxelClear = [v.bgR * a, v.bgG * a, v.bgB * a, a];
+  // gl3d culls cube backfaces unless a clip interval is open (the cut's visible
+  // interior walls ARE backfaces). Alpha blending never reaches free mode.
+  rt.voxelCullBack = v.clipEnabled === 0;
+}
+
+/** Build the voxel render on a transferred OffscreenCanvas. Non-fatal on failure
+ *  (returns false → the worker keeps the colours-readback path and gl3d renders). */
+export async function setupVoxelRender(rt: WebGPURuntime, canvas: OffscreenCanvas): Promise<boolean> {
+  try {
+    if (!rt.colorsBuf) return false;
+    const total = Math.max(1, rt.layout.total);
+    const instBytes = total * 4;
+    // Same defensive check as setupBuffersAndPipelines: surface an honest
+    // fallback instead of a lower-level GPU validation error.
+    if (instBytes > rt.device.limits.maxStorageBufferBindingSize) return false;
+    const ctx = canvas.getContext('webgpu') as GPUCanvasContext | null;
+    if (!ctx) return false;
+    const format: GPUTextureFormat = 'rgba8unorm';
+    ctx.configure({ device: rt.device, format, usage: GPUTextureUsage.RENDER_ATTACHMENT, alphaMode: 'premultiplied' });
+
+    const compactModule = rt.device.createShaderModule({ label: 'voxel-compact', code: VOXEL_COMPACT_WGSL });
+    const drawModule = rt.device.createShaderModule({ label: 'voxel-draw', code: VOXEL_DRAW_WGSL });
+    for (const [name, mod] of [['compact', compactModule], ['draw', drawModule]] as const) {
+      const info = await mod.getCompilationInfo();
+      const errs = info.messages.filter(m => m.type === 'error');
+      if (errs.length > 0) {
+        // eslint-disable-next-line no-console
+        console.error(`[webgpu] voxel ${name} WGSL compile errors:\n` + errs.map(m => `  line ${m.lineNum}: ${m.message}`).join('\n'));
+        return false;
+      }
+    }
+
+    // Release anything a previous attach built on this runtime (a re-attach
+    // fires on every REAL display-size change) — never orphan GPU buffers.
+    releaseVoxelResources(rt);
+
+    const instanceBuf = rt.device.createBuffer({
+      label: 'voxel-instances', size: instBytes,
+      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
+    });
+    const indirectBuf = rt.device.createBuffer({
+      label: 'voxel-draw-args', size: 16,
+      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.INDIRECT | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC,
+    });
+    // [vertexCount, instanceCount, firstVertex, firstInstance]. vertexCount is
+    // written ONCE; the per-frame clear zeroes only the instanceCount word.
+    rt.device.queue.writeBuffer(indirectBuf, 0, new Uint32Array([36, 0, 0, 0]));
+    const viewBuf = rt.device.createBuffer({
+      label: 'voxel-view', size: VOXEL_VIEW_BYTES,
+      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+    });
+
+    const compactBgl = rt.device.createBindGroupLayout({
+      label: 'voxel-compact-bgl',
+      entries: [
+        { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },
+        { binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },
+        { binding: 2, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },
+        { binding: 3, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'uniform' } },
+      ],
+    });
+    const compactPipeline = rt.device.createComputePipeline({
+      label: 'voxel-compact',
+      layout: rt.device.createPipelineLayout({ label: 'voxel-compact-pl', bindGroupLayouts: [compactBgl] }),
+      compute: { module: compactModule, entryPoint: 'compact' },
+    });
+    const compactBindGroup = rt.device.createBindGroup({
+      label: 'voxel-compact-bg', layout: compactBgl,
+      entries: [
+        { binding: 0, resource: { buffer: rt.colorsBuf } },
+        { binding: 1, resource: { buffer: instanceBuf } },
+        { binding: 2, resource: { buffer: indirectBuf } },
+        { binding: 3, resource: { buffer: viewBuf } },
+      ],
+    });
+
+    const drawBgl = rt.device.createBindGroupLayout({
+      label: 'voxel-draw-bgl',
+      entries: [
+        { binding: 0, visibility: GPUShaderStage.VERTEX, buffer: { type: 'read-only-storage' } },
+        { binding: 1, visibility: GPUShaderStage.VERTEX, buffer: { type: 'read-only-storage' } },
+        { binding: 2, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: { type: 'uniform' } },
+      ],
+    });
+    const drawPl = rt.device.createPipelineLayout({ label: 'voxel-draw-pl', bindGroupLayouts: [drawBgl] });
+    const mkDraw = (label: string, cullMode: GPUCullMode): GPURenderPipeline => rt.device.createRenderPipeline({
+      label, layout: drawPl,
+      vertex: { module: drawModule, entryPoint: 'vsMain' },
+      fragment: { module: drawModule, entryPoint: 'fsMain', targets: [{ format }] },  // opaque (no blend)
+      primitive: { topology: 'triangle-list', cullMode },
+      depthStencil: { format: 'depth24plus', depthWriteEnabled: true, depthCompare: 'less' },
+    });
+    const drawBindGroup = rt.device.createBindGroup({
+      label: 'voxel-draw-bg', layout: drawBgl,
+      entries: [
+        { binding: 0, resource: { buffer: instanceBuf } },
+        { binding: 1, resource: { buffer: rt.colorsBuf } },
+        { binding: 2, resource: { buffer: viewBuf } },
+      ],
+    });
+
+    rt.voxelCanvas = canvas;
+    rt.voxelCtx = ctx;
+    rt.voxelInstanceBuf = instanceBuf;
+    rt.voxelIndirectBuf = indirectBuf;
+    rt.voxelViewBuf = viewBuf;
+    rt.voxelCompactPipeline = compactPipeline;
+    rt.voxelCompactBindGroup = compactBindGroup;
+    rt.voxelDrawPipelineCull = mkDraw('voxel-draw-cull', 'back');
+    rt.voxelDrawPipelineNoCull = mkDraw('voxel-draw-nocull', 'none');
+    rt.voxelDrawBindGroup = drawBindGroup;
+    rt.voxelClear = [0, 0, 0, 0];
+    rt.voxelCullBack = true;
+    rt.voxelRender = true;
+    return true;
+  } catch {
+    rt.voxelRender = false;
+    return false;
+  }
+}
+
+/** Encode compaction + the indirect instanced draw into ONE encoder + ONE submit. */
+export function presentVoxels(rt: WebGPURuntime): void {
+  if (!rt.voxelRender || !rt.voxelCtx || !rt.voxelCompactPipeline || !rt.voxelCompactBindGroup
+      || !rt.voxelDrawBindGroup || !rt.voxelIndirectBuf) return;
+  const tex = rt.voxelCtx.getCurrentTexture();
+  const view = tex.createView();
+  const depthView = ensureVoxelDepthTex(rt, tex.width, tex.height);
+  const enc = rt.device.createCommandEncoder({ label: 'voxel-present-enc' });
+  // Zero ONLY the instanceCount word — vertexCount (36) and the first* words
+  // were written once at setup.
+  enc.clearBuffer(rt.voxelIndirectBuf, 4, 4);
+  const cpass = enc.beginComputePass({ label: 'voxel-compact-pass' });
+  cpass.setPipeline(rt.voxelCompactPipeline);
+  cpass.setBindGroup(0, rt.voxelCompactBindGroup);
+  dispatchCells(cpass, rt.layout.total, VOXEL_COMPACT_WG);
+  cpass.end();
+  const [cr, cg, cb, ca] = rt.voxelClear;
+  const rpass = enc.beginRenderPass({
+    label: 'voxel-draw-pass',
+    colorAttachments: [{ view, loadOp: 'clear', storeOp: 'store', clearValue: { r: cr, g: cg, b: cb, a: ca } }],
+    depthStencilAttachment: { view: depthView, depthClearValue: 1.0, depthLoadOp: 'clear', depthStoreOp: 'store' },
+  });
+  const pipe = rt.voxelCullBack ? rt.voxelDrawPipelineCull : rt.voxelDrawPipelineNoCull;
+  if (pipe) {
+    rpass.setPipeline(pipe);
+    rpass.setBindGroup(0, rt.voxelDrawBindGroup);
+    rpass.drawIndirect(rt.voxelIndirectBuf, 0);
+  }
+  rpass.end();
+  rt.device.queue.submit([enc.finish()]);
+}
+
+const VOXEL_COMPACT_WG = 64;
+
+/** DEV probe (verification only — the app never calls this). Present one frame,
+ *  then read the indirect draw args back so a test can assert the GPU-computed
+ *  instance count against an independently computed visible-cell count. This is
+ *  the definitive correctness proof for the compaction while the pane is occluded
+ *  (composited pixels are unreadable there). Optionally returns the first
+ *  `sampleInstances` compacted cell indices. */
+export async function debugReadVoxelInstances(
+  rt: WebGPURuntime, sampleInstances = 0,
+): Promise<{ instanceCount: number; vertexCount: number; sample: number[] } | null> {
+  if (!rt.voxelRender || !rt.voxelIndirectBuf || !rt.voxelInstanceBuf) return null;
+  presentVoxels(rt);
+  const args = await readbackBufferBytes(rt, rt.voxelIndirectBuf, 0, 16);
+  const a32 = new Uint32Array(args.buffer, args.byteOffset, 4);
+  const instanceCount = a32[1] ?? 0;
+  const sample: number[] = [];
+  const n = Math.min(sampleInstances, instanceCount);
+  if (n > 0) {
+    const bytes = await readbackBufferBytes(rt, rt.voxelInstanceBuf, 0, n * 4);
+    const i32 = new Uint32Array(bytes.buffer, bytes.byteOffset, n);
+    for (let i = 0; i < n; i++) sample.push(i32[i]!);
+  }
+  return { instanceCount, vertexCount: a32[0] ?? 0, sample };
+}
+
+/** Copy `size` bytes out of a GPU buffer through the staging pool. */
+async function readbackBufferBytes(rt: WebGPURuntime, src: GPUBuffer, offset: number, size: number): Promise<Uint8Array> {
+  const pooled = acquireStagingBuffer(rt, size);
+  const enc = rt.device.createCommandEncoder({ label: 'voxel-debug-readback-enc' });
+  enc.copyBufferToBuffer(src, offset, pooled.buffer, 0, size);
+  rt.device.queue.submit([enc.finish()]);
+  await pooled.buffer.mapAsync(GPUMapMode.READ, 0, size);
+  const out = new Uint8Array(pooled.buffer.getMappedRange(0, size)).slice();
+  pooled.buffer.unmap();
+  releaseStagingBuffer(pooled);
+  return out;
+}
+
+/** Destroy the voxel buffers + depth texture (shared by re-attach and teardown).
+ *  Leaves the canvas context alone — the caller decides whether to unconfigure. */
+function releaseVoxelResources(rt: WebGPURuntime): void {
+  for (const buf of [rt.voxelInstanceBuf, rt.voxelIndirectBuf, rt.voxelViewBuf]) {
+    if (buf) { try { buf.destroy(); } catch { /* non-fatal */ } }
+  }
+  rt.voxelInstanceBuf = null; rt.voxelIndirectBuf = null; rt.voxelViewBuf = null;
+  if (rt.voxelDepthTex) { try { rt.voxelDepthTex.destroy(); } catch { /* non-fatal */ } }
+  rt.voxelDepthTex = null; rt.voxelDepthW = 0; rt.voxelDepthH = 0;
+  rt.voxelCompactPipeline = null; rt.voxelCompactBindGroup = null;
+  rt.voxelDrawPipelineCull = null; rt.voxelDrawPipelineNoCull = null; rt.voxelDrawBindGroup = null;
+}
+
+/** Full teardown — buffers, depth texture, and the canvas context binding. */
+export function destroyVoxelRender(rt: WebGPURuntime): void {
+  releaseVoxelResources(rt);
+  if (rt.voxelCtx) { try { rt.voxelCtx.unconfigure(); } catch { /* non-fatal */ } }
+  rt.voxelCtx = null;
+  rt.voxelCanvas = null;
+  rt.voxelRender = false;
+}
 
 // ---------------------------------------------------------------------------
 // O5 — GPU-side reduction for watched linked indicators
@@ -1259,6 +1747,8 @@ export function destroyWebGPURuntime(rt: WebGPURuntime | null): void {
     if (rt.canvasContext) {
       try { rt.canvasContext.unconfigure(); } catch { /* ok */ }
     }
+    // L1 — release the voxel render's buffers + depth texture + canvas binding.
+    destroyVoxelRender(rt);
     // attrsReadBuf / attrsWriteBuf are aliases of attrsBufA / attrsBufB —
     // destroy via the underlying refs to avoid double-destroy.
     for (const buf of [
