@@ -1,5 +1,22 @@
 #!/usr/bin/env node
 /**
+ * ⚠️  DO NOT RUN THIS OVER THE SHIPPED MODEL WITHOUT ASKING.
+ *
+ * public/models/Accretor.gcaproj is now HAND-TUNED in the app and is AHEAD of
+ * this script: the shipped file drops the (always-0) State axis from the rule
+ * table (3 axes / 819 entries instead of 4 / 2457), adds a `Fade` cell
+ * attribute + a `Fade time` model attribute for the visual trail, adds a
+ * `#Cell States` model attribute, carries its own rule roll
+ * ({seed 2041300143, density 0.2, max 5}), and runs on the WebGPU target with
+ * Skip-Isolated-Empty configured but OFF (measured: dispatching all 27M cells
+ * on the GPU beats the CPU sparse path for this model, and pulls further ahead
+ * as the structure grows and at >1 gen/frame). Re-running this script would
+ * OVERWRITE all of that.
+ *
+ * Keep it as the reference for how the model was originally constructed (and
+ * for the seed-search env overrides below). If the two disagree, the SHIPPED
+ * FILE is the intended state.
+ *
  * Generates public/models/Accretor.gcaproj — the Accretor CA (Driessens &
  * Verstappen, via the Softology 2018-01-12 post "Accretor Cellular Automata").
  *
@@ -33,7 +50,8 @@
  * `symmetricSeed` model attribute mirrors each seed point octahedrally (draw once
  * → 8 mirror cells), so the seed is BOTH random and symmetric.
  *
- * Compile target: WASM (default). Runs identically on JS, WASM, and WebGPU
+ * Compile target: the shipped model runs WebGPU (see the banner above); this
+ * script emits WASM. Runs identically on JS, WASM, and WebGPU
  * (verified at cross-target parity — the multi-axis lookup emits the same
  * clamped Σ idxₖ·strideₖ read on all three).
  *
@@ -51,11 +69,15 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const OUT = resolve(__dirname, '..', 'public', 'models', 'Accretor.gcaproj');
 
 // --- tunables ---------------------------------------------------------------
-// 300³ = 27M cells — practical because the model ships with "Skip Isolated
-// Empty Cells" ON (docs/PLAN_LARGE_GRID_PERF.md): only cells within radius 1
-// of the structure run the rule (the growing SURFACE, not the volume), and the
-// per-cell neighbour tables are replaced by inline computation (the table
-// alone would be 27e6×26×4 ≈ 2.8 GB). Init ~2 s; ~10 gens/s measured.
+// 300³ = 27M cells. Two things make that practical, and the SHIPPED model uses
+// the second: (a) "Skip Isolated Empty Cells" (docs/PLAN_LARGE_GRID_PERF.md) —
+// only cells within radius 1 of the structure run the rule (the growing
+// SURFACE, not the volume), and the per-cell neighbour tables are replaced by
+// inline computation (the table alone would be 27e6×26×4 ≈ 2.8 GB); or (b) the
+// WebGPU target, which dispatches all 27M cells in parallel and — measured by
+// the user on this model — beats (a) outright, increasingly so as the structure
+// grows and at >1 gen/frame. The shipped file therefore runs WebGPU with SIE
+// configured but OFF; this script's defaults below predate that choice.
 const W = 300, H = 300, D = 300;
 const STATES = ['empty', 'A', 'B'];          // 3 states (0 = empty)
 // The shipped rule. Chosen by a seed search for a rule where BOTH the random
