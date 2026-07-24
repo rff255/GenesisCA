@@ -614,25 +614,36 @@ export interface VoxelRenderView {
 }
 const VOXEL_VIEW_BYTES = 192;
 
+// The `@align(16)` on `ambient` is LOAD-BEARING, not decoration. A `vec3<f32>` has
+// align 16 but SIZE 12, so WGSL's natural offset rule
+// (offset = roundUp(align(m), offset(prev) + size(prev))) would place a following
+// f32 at byte 124 — INSIDE clipFwd's trailing pad — shifting this whole scalar
+// block 4 bytes down from the 16-byte-slot layout uploadVoxelView writes. That was
+// a real shipped bug: the shader read `cubeScale` out of the specular slot (0 by
+// default), every cube collapsed to a zero-size point, and the free-mode voxel
+// canvas rendered NOTHING while the compaction (which only reads the members past
+// `bg`, whose vec4 alignment re-syncs the layout) looked perfectly healthy. The
+// attribute pins the block to byte 128 so the mirror below is exact; the byte
+// offsets are annotated on both sides and asserted by scripts/verify-agent-render.mjs.
 const VOXEL_VIEW_WGSL = `struct VoxelView {
-  mvp         : mat4x4<f32>,
-  half        : vec3<f32>,
-  lightDir    : vec3<f32>,
-  viewDir     : vec3<f32>,
-  clipFwd     : vec3<f32>,
-  ambient     : f32,
-  diffuse     : f32,
-  specular    : f32,
-  cubeScale   : f32,
-  clipLo      : f32,
-  clipHi      : f32,
-  clipEnabled : u32,
-  clipAxis    : u32,
-  bg          : vec4<f32>,
-  gridW       : u32,
-  gridWH      : u32,
-  total       : u32,
-  cullBuried  : u32,
+  mvp                    : mat4x4<f32>,   // @0
+  half                   : vec3<f32>,     // @64
+  lightDir               : vec3<f32>,     // @80
+  viewDir                : vec3<f32>,     // @96
+  clipFwd                : vec3<f32>,     // @112 (size 12 → pads to 128)
+  @align(16) ambient     : f32,           // @128 — pinned; see the note above
+  diffuse                : f32,           // @132
+  specular               : f32,           // @136
+  cubeScale              : f32,           // @140
+  clipLo                 : f32,           // @144
+  clipHi                 : f32,           // @148
+  clipEnabled            : u32,           // @152
+  clipAxis               : u32,           // @156
+  bg                     : vec4<f32>,     // @160
+  gridW                  : u32,           // @176
+  gridWH                 : u32,           // @180
+  total                  : u32,           // @184
+  cullBuried             : u32,           // @188
 };`;
 
 /** Compaction: one thread per cell. Skips alpha-0 cells and (when eligible)
@@ -780,6 +791,9 @@ export function uploadVoxelView(rt: WebGPURuntime, v: VoxelRenderView): void {
   f[20] = v.lightX; f[21] = v.lightY; f[22] = v.lightZ;         // light @80
   f[24] = v.viewX; f[25] = v.viewY; f[26] = v.viewZ;            // view  @96
   f[28] = v.clipFwdX; f[29] = v.clipFwdY; f[30] = v.clipFwdZ;   // clipF @112
+  // @128 — the scalar block. It only lands here because VOXEL_VIEW_WGSL pins
+  // `ambient` with @align(16); without that the shader reads it from @124 and
+  // every field below is off by one float (see the note on the struct).
   f[32] = v.ambient; f[33] = v.diffuse; f[34] = v.specular; f[35] = v.cubeScale;
   f[36] = v.clipLo; f[37] = v.clipHi;
   u[38] = v.clipEnabled >>> 0; u[39] = v.clipAxis >>> 0;

@@ -335,6 +335,60 @@ check('runtime: uploadAgentSoA seeds the agent colour buffer [invisible-agents b
   }
 }
 
+// B10 (L1 lattice voxel render, user-reported: "free mode never displays") — the
+// same attach/present discipline as the agent path, on the 3D grid's canvas.
+//
+// NB the shipped cause of that bug was NOT any of these: it was the VoxelView
+// uniform's byte layout drifting from uploadVoxelView (a vec3's 12-byte size put
+// the shader's `ambient` at 124 while the writer wrote from 128, so `cubeScale`
+// read the specular slot — 0 by default — and every cube collapsed to a point).
+// That class is COMPUTED by scripts/verify-render-uniform-layouts.mjs; a source
+// harness cannot derive byte offsets, so it lives there. These pin the wiring the
+// investigation had to rule out first, so a future regression is triaged in one
+// step instead of re-walking all five candidates.
+{
+  const sv = readSrc('simulator/SimulatorView.tsx');
+  // The canvas the worker presents into MUST be the one in the DOM: append the
+  // fresh element, transfer THAT element's control, and promote exactly it.
+  const attach = blockAfter(sv, /const maybeAttachVoxelCanvas = useCallback\(/);
+  check('SimulatorView: the voxel canvas is appended to the DOM layer [presented ≠ attached]',
+    attach.includes('layer.appendChild(fresh)'));
+  check('SimulatorView: control of THAT element is what gets transferred [presented ≠ attached]',
+    /fresh as HTMLCanvasElement[\s\S]{0,140}transferControlToOffscreen\(\)/.test(attach));
+  check('SimulatorView: the transferred element is stashed as the pending canvas [presented ≠ attached]',
+    attach.includes('pendingVoxelCanvas.current = fresh'));
+  const status = blockAfter(sv, /if \(msg\.type === 'voxelRenderStatus'\)/);
+  check('SimulatorView: the attach ack promotes exactly the pending element [presented ≠ attached]',
+    status.includes('voxelCanvasRef.current = pendingVoxelCanvas.current'));
+  // The attach-time present runs with whatever uniform the worker already had
+  // (zero on a first attach), so the ack MUST force a camera post — dedup and all.
+  check('SimulatorView: the attach ack force-posts the camera (defeats the dedup key) [zero-uniform frame]',
+    status.includes("lastGridCameraKeyRef.current = ''") && status.includes("type: 'setGridCamera'"));
+  // A failed attach must not leave an orphan canvas over the gl3d output.
+  check('SimulatorView: a failed voxel attach removes the orphan canvas [layering]',
+    status.includes('p.parentElement.removeChild(p)'));
+
+  const rt = readSrc('simulator/engine/webgpuRuntime.ts');
+  // The swap-chain texture is per-frame: a cached view presents into a stale one.
+  check('runtime: presentVoxels acquires the current swap-chain texture each frame [stale-target]',
+    bodyHas('simulator/engine/webgpuRuntime.ts', /export function presentVoxels\b/, 'rt.voxelCtx.getCurrentTexture()'));
+  check('runtime: the depth attachment tracks the canvas size [stale-target]',
+    bodyHas('simulator/engine/webgpuRuntime.ts', /export function presentVoxels\b/, 'ensureVoxelDepthTex(rt, tex.width, tex.height)'));
+  check('runtime: the canvas context is configured premultiplied (gl3d composites over it)',
+    bodyHas('simulator/engine/webgpuRuntime.ts', /export async function setupVoxelRender\b/, "alphaMode: 'premultiplied'"));
+  // The uniform must be (re)uploaded on attach and on an explicit refresh, not
+  // only when the camera happens to move.
+  const w = readSrc('simulator/engine/sim.worker.ts');
+  check('worker: attach uploads the stored view before its first present [zero-uniform frame]',
+    /case 'attachVoxelCanvas':[\s\S]{0,2200}uploadVoxelView\(rt, gridRenderView\)/.test(w));
+  check('worker: refreshGridDisplay re-uploads the view then presents [tab-refocus]',
+    /case 'refreshGridDisplay':[\s\S]{0,600}uploadVoxelView\([\s\S]{0,200}presentVoxelsIfActive\(\)/.test(w));
+  // The layout cross-check must exist and cover VoxelView (this harness cannot).
+  const layoutScript = readFileSync(join(ROOT, 'scripts/verify-render-uniform-layouts.mjs'), 'utf8');
+  check('scripts: the uniform-layout cross-check exists and covers VoxelView [invisible-voxels bug]',
+    layoutScript.includes("struct: 'VoxelView'") && layoutScript.includes("writer: 'uploadVoxelView'"));
+}
+
 // ---------------------------------------------------------------------------
 // TIER C — browser probes (printed; only reachable with a live GPUDevice)
 // ---------------------------------------------------------------------------

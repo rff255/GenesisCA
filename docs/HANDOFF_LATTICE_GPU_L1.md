@@ -512,3 +512,112 @@ agent path got this right by presenting from `sendColors` (which always runs) wi
 ends must leave the presented canvas showing that batch**. And a new DEV counter (`presents`, on the
 `__voxelReadback` probe) now makes "did anything present?" a one-line question instead of an
 inference.
+
+## 10. Post-ship regression fix #2 (2026-07-24) — free mode never displayed ANYTHING
+
+**Reported** (real app, the shipped Accretor 300³ on the WebGPU grid target, gens/frame = 1, low
+FPS): the free-mode voxel canvas *never* shows the volume. §9's fix addressed a different symptom
+(the ∞ G/F present cadence) and did not touch this. `git diff --stat` =
+[webgpuRuntime.ts](../src/simulator/engine/webgpuRuntime.ts) +
+[verify-agent-render.mjs](../scripts/verify-agent-render.mjs) + the new
+[verify-render-uniform-layouts.mjs](../scripts/verify-render-uniform-layouts.mjs). **No compiler, no
+worker, no gl3d, no SimulatorView** — the fix is one WGSL attribute.
+
+### Root cause — the VoxelView uniform's byte layout drifted from its writer
+
+`VOXEL_VIEW_WGSL` declared
+
+```wgsl
+clipFwd : vec3<f32>,   // align 16, SIZE 12  → occupies 112..124
+ambient : f32,         // align 4            → lands at 124, NOT 128
+```
+
+A `vec3<f32>` has alignment 16 but **size 12** — it does not round its own size up. WGSL's member
+rule is `offset(m) = roundUp(align(m), offset(prev) + size(prev))`, so `ambient` landed at byte
+**124**, inside `clipFwd`'s trailing pad, and every scalar below it shifted one float. But
+`uploadVoxelView` writes the block from byte **128** (`f[32] = v.ambient`), i.e. it assumed each
+vec3 group occupies a full 16-byte slot. The resulting misread, with the shipped defaults:
+
+| shader member | reads byte | gets | value |
+|---|---|---|---|
+| `ambient` | 124 | (never written) | **0** |
+| `diffuse` | 128 | JS `ambient` | 0.45 |
+| `specular` | 132 | JS `diffuse` | 0.55 |
+| **`cubeScale`** | **136** | **JS `specular`** | **0** |
+| `clipEnabled` | 148 | bit pattern of JS `clipHi` (f32) | garbage-nonzero |
+
+`cubeScale = 0` makes `local * vv.cubeScale + centre` collapse all 36 vertices of every cube onto the
+cell centre: zero-area triangles, **zero rasterised pixels**. `clipEnabled` also went garbage, so the
+FS may have discarded anyway — which is why opening the clip interval (§8's cull-mode switch) changed
+nothing.
+
+**Why every probe looked healthy.** `bg` is a `vec4`, whose 16-byte alignment RE-SYNCS the layout at
+byte 160 — so `gridW` / `gridWH` / `total` / `cullBuried` were all read correctly. Those are the only
+members the **compaction** shader touches. Hence the compaction produced a genuinely correct instance
+count (1198, then 33 181, tracking the surface), a correct `vertexCount: 36`, and a rising `presents`
+counter, while the draw rendered nothing. Every piece of evidence the DEV probe can produce was
+truthful and pointed away from the bug.
+
+### The fix
+
+One token: `@align(16) ambient : f32` pins the scalar block back to byte 128, making the existing
+writer exactly correct (verified field-by-field: all 18 members line up, struct size 192 unchanged).
+The alternative — moving the writer down to 124 — was rejected because it would put `ambient` at
+`f[31]`, the pad slot of `clipFwd`, which reads like a bug and invites a future "correction" that
+re-breaks it. Both sides now carry explicit `// @byte` annotations, and the shader carries the full
+explanation inline.
+
+### Why the render harness could not catch this, and what now does
+
+`verify-agent-render.mjs` is structural: it can assert a line exists, never derive a byte offset. So
+the class gets a **computed** sibling, [scripts/verify-render-uniform-layouts.mjs](../scripts/verify-render-uniform-layouts.mjs),
+which implements the WGSL host-shareable layout rules (including `@align`/`@size`), parses each
+registered `struct` out of the TS source and each writer's index assignments, and asserts:
+
+1. **no writer byte lands in struct padding** (the buggy writer wrote 156–159, the pad before `bg`);
+2. **no declared member byte is left unwritten** (the buggy shader's `ambient@124`);
+3. the declared `*_BYTES` constant covers the struct and is not stale.
+
+Name-independent by construction (shader `half` ↔ writer `halfX/Y/Z`), so it needs no mapping table.
+Registered today: `VoxelView`, `RenderView3D`, `RenderView`. **Negative-controlled** — reverting the
+`@align(16)`, transposing one writer index, and adding an unmirrored member each produce a failure
+naming the exact member. It also found (and cleared) a benign 84-in-96-byte over-allocation in
+`RenderView`. `verify-agent-render.mjs` gained a **B10** block pinning the voxel attach wiring the
+investigation had to rule out first (the presented canvas IS the DOM-attached element; the ack
+force-posts the camera past the dedup key; `presentVoxels` re-acquires the swap-chain texture each
+frame), so a future regression is triaged in one step.
+
+### Verification — SCREENSHOTS, in the real app (the pane is now displayed)
+
+This is the point. A GPU-buffer probe is what missed the bug; only pixels prove it.
+
+- **Reproduced first**: Accretor 300³, WebGPU, G/F 1, playing, free mode confirmed by probe
+  (`uiSync:false`, `presents:15`, `instanceCount:308`) — the viewport showed **only the bounds box
+  and gizmo**. Screenshot.
+- **After the fix**, same model/settings: the accreting structure is **visible and growing while
+  playing** (gen 21 → 75 → 135), never pausing or rotating. Screenshots.
+- **The decisive test**: setting the gl3d canvas to `visibility:hidden` mid-run removes the overlays
+  (bounds box, axes, gizmo) and **leaves the full structure on screen** — it is the worker's WGSL
+  canvas carrying it. This exact test previously left the area completely empty.
+- **Seamless handoff**: the model's own Stop Event fired at gen 151 → frame mode → gl3d shows the
+  identical structure with overlays restored.
+- **Second 3D model**: Life3D resized to 96³ and switched to WebGPU engages free mode
+  (`uiSync:false`, total 884 736, 161 instances) and renders its blobs while playing.
+- **Fallbacks unchanged**: 2D WebGPU (Game of Life 300×300) direct-renders and evolves (gen 171,
+  80 FPS); 3D **WASM** (Life3D 24³) renders through gl3d as before.
+- 0 console errors, 0 worker errors throughout.
+- Gates: `tsc -p tsconfig.app.json --noEmit`, `npm run build`, `parity-agent-wasm` (18),
+  `parity-agent-force` (7), `verify-agent-render` (now incl. B10), `verify-render-uniform-layouts`
+  — all green. `check-compile-identity` not run: no compiler file is touched.
+
+### The durable lesson
+
+**A hand-written TypedArray writer and a WGSL struct are two independent declarations of one byte
+layout, and nothing in the toolchain checks that they agree.** The failure is silent, produces no
+validation error, and — because a `vec4` re-aligns everything after it — can corrupt an arbitrary
+*middle slice* of a uniform while leaving both ends correct, which is precisely what makes it survive
+buffer-level probing. Two rules follow: never let a scalar follow a `vec3` without pinning it
+(`@align(16)`, or write the pad deliberately), and keep the pairing under a computed check rather
+than a structural one. More generally, §9's lesson has a companion: *presenting* is not *displaying*
+— "the pass ran and the buffers are right" and "the user sees pixels" are different claims, and only
+the second one is the feature.
