@@ -1643,6 +1643,13 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   // brush frame-mode flip so the gl3d pick FBO (which reads the snapshot) works —
   // the 3D analogue of the 2D `agentCursorWorldRef != null` UI-sync condition.
   const glPointerOverRef = useRef(false);
+  // A pointer gesture (press → release) is in progress on the 3D gl canvas, and
+  // whether Shift is held while hovering it. Both pin the grid's frame mode: they
+  // are the states in which a colour-id `pick()` (inspect) can fire, and that pick
+  // reads gl3d's CPU instance buffer, which only frame mode refreshes. PASSIVE
+  // hover deliberately does NOT pin — see updateGridUiSync.
+  const glGestureActiveRef = useRef(false);
+  const glShiftDownRef = useRef(false);
   const hoverCells3dRef = useRef<ReadonlyArray<{ layer: number; row: number; col: number }>>([]);
   // 3D Line tool: first click stages a plane-cell anchor (no paint); the second
   // click draws the capsule line between them. null = no staged anchor.
@@ -2698,9 +2705,24 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   // reads colours back each frame and ships them, so gl3d renders the full frame
   // (and its colour-id pick FBO resolves). ON iff a feature is — or may be —
   // reading the CPU colours: paused, recording, an inspect popover pinned/sweeping,
-  // the pointer over the GL canvas (brush / pick), OR a frame-mode-only visual is
-  // enabled (cast shadows, occupancy AO, alpha blend — none of which the WGSL pass
-  // replicates; see §4 of the L1 handoff). Debounced OFF by ~300 ms.
+  // a POINTER GESTURE that can pick, OR a frame-mode-only visual is enabled (cast
+  // shadows, occupancy AO, alpha blend — none of which the WGSL pass replicates;
+  // see §4 of the L1 handoff). Debounced OFF by ~300 ms.
+  //
+  // NB the pointer term is deliberately NARROW. Pinning on bare `glPointerOverRef`
+  // (the shipped L1 driver) meant simply RESTING the cursor over the canvas held
+  // the readback path for as long as it sat there, so a user watching their model
+  // run saw no speedup at all — reported as "same performance while my cursor is on
+  // the canvas". Nothing about passive hovering needs CPU state: the brush cursor
+  // and the brush itself are pure `pickOnPlane` ray math, and a paint refreshes +
+  // re-presents through the worker's own mutation tail. The one thing that DOES
+  // need it is gl3d's colour-id `pick()` (3D inspect), which reads the CPU instance
+  // buffer only frame mode refreshes — so pin for the states in which a pick can
+  // fire: an in-progress gesture (press→release), the Inspect toggle armed while
+  // hovering, or Shift held while hovering (the Shift+LMB inspect gesture, whose
+  // pick happens on the RELEASE — pressing the modifier first gives the flip its
+  // frame). The AGENT driver's hover term is already this narrow (it ANDs an armed
+  // agent brush) and is intentionally left untouched.
   const updateGridUiSync = useCallback(() => {
     if (!voxelRenderActiveRef.current || !workerRef.current) return;
     const light = light3dRef.current;
@@ -2709,7 +2731,8 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       || recordingRef.current
       || inspectCellIdxsRef.current.length > 0
       || sweepActiveRef.current
-      || glPointerOverRef.current
+      || glGestureActiveRef.current
+      || (glPointerOverRef.current && (inspectModeRef.current || glShiftDownRef.current))
       || light.shadows || light.ao
       || alpha3dRef.current;
     const w = workerRef.current;
@@ -3914,6 +3937,15 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
           lastDrawTime.current = now;
           setGeneration(gen);
           lastGenSetTime.current = now;
+          // L1: the worker-presented voxel canvas keeps updating on its own (the
+          // browser composites it), but WHICH canvas is visible — and whether gl3d
+          // renders overlays-only — is decided in draw(), which this fast path
+          // otherwise never runs, so the free/frame flip would never happen and the
+          // user would watch a frozen gl3d frame. In free mode draw() is cheap (the
+          // GPU owns the volume, so the O(total) uploadColors rescan is skipped), so
+          // run it at the same 2 Hz cadence as the counter. Every other model keeps
+          // the historical skip-drawing-entirely-for-throughput behaviour.
+          if (voxelRenderActiveRef.current) draw();
         }
         sendNextStep();
       } else {
@@ -5595,6 +5627,13 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     };
     const onDown = (e: PointerEvent) => {
       if ((e.target as HTMLElement)?.closest?.('[data-sim-overlay]')) return;
+      // L1: a gesture is starting — pin the grid's frame mode for its duration so a
+      // release that PICKS (3D inspect) resolves against a fresh instance buffer.
+      // Set before every early return below; cleared in onUp (a window listener, so
+      // it always fires). Passive hover no longer pins — see updateGridUiSync.
+      glGestureActiveRef.current = true;
+      glShiftDownRef.current = e.shiftKey;
+      if (voxelRenderActiveRef.current) updateGridUiSync();
       // Move keyboard focus off any text field so the transport shortcuts
       // (Enter/Space/Esc) work after clicking the canvas — the canvas isn't
       // focusable and the e.preventDefault() below would otherwise leave focus on
@@ -5938,6 +5977,11 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       if (active === 'agentBond') { flushBondBatch(); draw(); }
       active = null;
       last3dHitRef.current = null;
+      // L1: the gesture is over — release the frame-mode pin (debounced OFF).
+      if (glGestureActiveRef.current) {
+        glGestureActiveRef.current = false;
+        if (voxelRenderActiveRef.current) updateGridUiSync();
+      }
     };
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
@@ -5966,6 +6010,17 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       draw();
     };
     const onCtx = (e: MouseEvent) => e.preventDefault();  // RMB shouldn't pop the page menu
+    // L1: track Shift so HOLDING it over the canvas pre-warms frame mode — the
+    // Shift+LMB inspect pick fires on the RELEASE, so pressing the modifier first
+    // gives the flip (and the worker's immediate one-colours-frame reply) a head
+    // start. Only matters while the pointer is over the canvas (see the driver).
+    const onShiftKey = (e: KeyboardEvent) => {
+      if (e.shiftKey === glShiftDownRef.current) return;
+      glShiftDownRef.current = e.shiftKey;
+      if (glPointerOverRef.current && voxelRenderActiveRef.current) updateGridUiSync();
+    };
+    window.addEventListener('keydown', onShiftKey);
+    window.addEventListener('keyup', onShiftKey);
     glc.addEventListener('pointerdown', onDown);
     window.addEventListener('pointermove', onMove);
     window.addEventListener('pointerup', onUp);
@@ -5983,6 +6038,12 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       glc.removeEventListener('contextmenu', onCtx);
       glc.removeEventListener('pointerleave', onLeave);
       glc.removeEventListener('pointerenter', onEnter);
+      window.removeEventListener('keydown', onShiftKey);
+      window.removeEventListener('keyup', onShiftKey);
+      // Unmounting mid-gesture (or with Shift held) must not leave the frame-mode
+      // pin latched on — it would silently hold the readback path forever.
+      glGestureActiveRef.current = false;
+      glShiftDownRef.current = false;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [is3D, draw]);

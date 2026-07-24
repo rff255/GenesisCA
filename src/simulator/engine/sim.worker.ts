@@ -3532,6 +3532,10 @@ function voxelRenderOn(): boolean { return !!webgpuRuntime?.voxelRender; }
 let gridUiSync = true;
 /** The last camera/lighting/clip uniform (re-applied on attach / refocus). */
 let gridRenderView: VoxelRenderView | null = null;
+/** DEV probe (reported by `__voxelReadback`): how many frames the worker has
+ *  presented into the transferred voxel canvas. The regression this guards is
+ *  "the display froze because nothing presented" — see voxelDisplayLive(). */
+let voxelPresentCount = 0;
 
 /** True when the GPU owns the display and the CPU `colours` mirror is therefore
  *  intentionally NOT refreshed this frame — 2D direct render (the historical
@@ -3543,13 +3547,23 @@ function gridDisplayOwnedByGpu(): boolean {
   return !!webgpuRuntime?.directRender || (voxelRenderOn() && !gridUiSync);
 }
 
+/** True when the worker-presented voxel canvas IS the live display (free mode).
+ *  DELIBERATELY NARROWER than gridDisplayOwnedByGpu(): 2D direct render also owns
+ *  the display, but its OffscreenCanvas is a PLACEHOLDER the main thread has to
+ *  `drawImage` into the visible canvas, so it can only ever refresh as often as
+ *  the main thread draws (and the unlimited-gens fast path deliberately doesn't).
+ *  The voxel canvas is a real DOM canvas the BROWSER composites, so a worker-side
+ *  present alone changes what the user sees — which is why it, and only it, must
+ *  keep refreshing even when the main thread asked to skip the colour pass. */
+function voxelDisplayLive(): boolean { return voxelRenderOn() && !gridUiSync; }
+
 /** Re-present the voxel frame from the live GPU colours buffer. Called from every
  *  path that refreshes colours (step-batch tail, mutation tails, colour pass,
  *  camera, attach, refresh). No-op unless the voxel render is wired up. */
 function presentVoxelsIfActive(): void {
   const rt = webgpuRuntime;
   if (!rt || !rt.voxelRender) return;
-  try { presentVoxels(rt); }
+  try { presentVoxels(rt); voxelPresentCount++; }
   catch (e) {
     destroyVoxelRender(rt);   // clears rt.voxelRender → voxelRenderOn() goes false
     self.postMessage({ type: 'error', message: '[webgpu] voxel present failed: ' + ((e instanceof Error) ? e.message : String(e)) });
@@ -3922,7 +3936,7 @@ function runStepWebGPU(): void {
  *  dispatch the present pipeline so the OffscreenCanvas's frame mirrors the
  *  colors buffer. The canvas auto-presents to the visible DOM canvas on the
  *  main thread ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â no readback or postMessage needed for display. */
-function runColorPassWebGPU(): boolean {
+function runColorPassWebGPU(opts: { skipReductions?: boolean } = {}): boolean {
   if (!webgpuRuntime || !webgpuRuntime.stepReady) return false;
   // Glyphs: clear before the colour pass so the OM shader's per-cell writes
   // see codepoint-0 sentinels everywhere. Mirrors the CPU runColorPass path.
@@ -3942,7 +3956,11 @@ function runColorPassWebGPU(): boolean {
   // O5 ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â refresh the watched-linked-indicator histograms on GPU. Cheap (a
   // handful of u32 atomics per cell) and the result rides the same
   // batched mapAsync as colors/indicators/stopFlag in the next finalize.
-  if (webgpuRuntime.reductionPlan) dispatchReductions(webgpuRuntime);
+  // `skipReductions` is for the DISPLAY-ONLY refresh the free-mode voxel render
+  // forces under skipColorPass: that finalize passes needColors:false, which
+  // already gates the reductions READBACK off, so dispatching them would be one
+  // more whole pass over the grid whose result nobody reads.
+  if (webgpuRuntime.reductionPlan && !opts.skipReductions) dispatchReductions(webgpuRuntime);
   return ok;
 }
 
@@ -5615,6 +5633,18 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
           // SetColorViewer-in-step (e.g. MNCA's "Case Colored"). Either way we
           // read the GPU colors buffer back ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â that's the canonical source.
           if (!msg.skipColorPass) runColorPassWebGPU();
+          // L1 REGRESSION FIX (the "canvas turns black" report). `skipColorPass`
+          // (unlimited gens/frame) is a throughput request aimed at the CPU display
+          // pipeline — the main thread also skips its draw. But in FREE mode the
+          // transferred voxel canvas IS the display and it renders the GPU colours
+          // buffer, so skipping the colour pass left every present rendering the
+          // frame the canvas was attached with: the volume froze at generation 0
+          // while the simulation ran on (measured: 13 200 generations, 0 presents,
+          // instance count pinned at its gen-0 value). A worker-side present is the
+          // whole display here, so refresh + present ONCE PER BATCH (never per
+          // generation): one colour-pass dispatch + one indirect draw per frame,
+          // which is both cheap and strictly better than a frozen display.
+          else if (voxelDisplayLive()) runColorPassWebGPU({ skipReductions: true });
           // E2 composite: the grid layer is composited into the shared canvas from
           // the GPU colorsBuf (grid-present pass) — so SKIP the per-gen colors
           // readback (the CPU win). sendColors ships no `colors` + does the composite
@@ -6391,7 +6421,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
           if (!rt || !rt.voxelRender) { self.postMessage({ type: '__voxelReadback', active: false }); return; }
           const r = await debugReadVoxelInstances(rt, msg.sample ?? 0);
           self.postMessage({
-            type: '__voxelReadback', active: true, uiSync: gridUiSync,
+            type: '__voxelReadback', active: true, uiSync: gridUiSync, presents: voxelPresentCount,
             instanceCount: r?.instanceCount ?? -1, vertexCount: r?.vertexCount ?? -1,
             sample: r?.sample ?? [], total: rt.layout.total,
             gridW: rt.layout.gridWidth, gridH: rt.layout.gridHeight, gridD: rt.layout.gridDepth,

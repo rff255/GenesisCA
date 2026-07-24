@@ -386,3 +386,129 @@ frame time.
   restructure, not a wiring change.
 - **L5 (`instData` sizing)** still matters: it is the CPU renderer's buffer, which frame mode and
   every CPU-target 3D model still use.
+
+---
+
+## 9. Post-ship regression fix (2026-07-24) — "the canvas turns black" + hover pins the slow path
+
+**Reported** (real app, Accretor 300³ on the WebGPU grid target): *"same performance while I have my
+cursor on top of the canvas, but the moment I move the cursor away it speeds up the FPS and Gen/F,
+but the canvas turns black and no cell is drawn until it reaches the stop condition and shows the
+final result."* Two independent defects, both now fixed on `optimize`. `git diff --stat` =
+[sim.worker.ts](../src/simulator/engine/sim.worker.ts) + [SimulatorView.tsx](../src/simulator/SimulatorView.tsx)
+only (no compiler / gl3d / agent / runtime file; `check-compile-identity`: **25 models, all surfaces
+unchanged**).
+
+### Root cause 1 — the present was hooked to a pass the user can switch off
+
+`presentVoxelsIfActive()` was called from exactly one hot-path place: the tail of
+`runColorPassWebGPU()`, described in §8 as *"the ONE hook that covers the step-batch tail"*. But the
+step handler guards that call with `if (!msg.skipColorPass)`, and the main thread sets
+`skipColorPass: unlimitedGensRef.current` — so at **unlimited gens/frame** (∞ G/F: exactly what a
+user chasing throughput on a 27M-cell model selects) the colour pass never ran, therefore **nothing
+ever presented**, and every frame the canvas did show was the one it was attached with.
+
+Pre-L1 that flag merely left the display FROZEN (the main thread also skips `draw()` at ∞ G/F, and
+the colours mirror was still shipped, so the last drawn frame stayed on screen). L1 turned frozen
+into *empty*: the moment free mode engages, the frozen-at-generation-0 voxel canvas becomes the
+visible layer — on an accretion model whose generation 0 is a 60-cell seed inside a 300³ box, that
+reads as black.
+
+**Measured before the fix** (Life3D 96³ WebGPU, ∞ G/F, free mode): 132 batches / 13 200 generations
+elapsed, `presents` **4 → 4** (zero), GPU instance count pinned at its generation-0 value
+(17 843 → 17 843).
+
+**Fix (worker)**: a new predicate `voxelDisplayLive()` = `voxelRenderOn() && !gridUiSync`, and
+
+```ts
+if (!msg.skipColorPass) runColorPassWebGPU();
+else if (voxelDisplayLive()) runColorPassWebGPU({ skipReductions: true });
+```
+
+i.e. in free mode refresh + present **once per BATCH** (never per generation): one colour-pass
+dispatch + one indirect draw per frame, which is both cheap and strictly better than a frozen
+display. `skipReductions` is new and deliberate — that finalize passes `needColors:false`, which
+already gates the reductions *readback* off, so dispatching them would be one more whole pass over
+the grid whose result nobody reads. Indicator behaviour under ∞ G/F is therefore unchanged.
+
+**Root cause 1b (found while verifying the fix, and required for it to be visible)**: WHICH canvas is
+visible — and whether gl3d renders overlays-only — is decided in `draw()`, which the ∞ G/F fast path
+skips entirely. So even with the worker presenting, the voxel canvas stayed `display:none` and the
+user kept watching a frozen gl3d frame. `draw()` in free mode is cheap (the GPU owns the volume, so
+the O(total) `uploadColors` rescan is skipped), so the unlimited-gens branch now calls it at the same
+2 Hz cadence as the generation counter, **gated on `voxelRenderActiveRef`** — every other model keeps
+the historical skip-drawing-entirely-for-throughput behaviour byte-for-byte.
+
+### Root cause 2 — passive hover pinned frame mode
+
+§8's own follow-up note ("the pointer merely RESTING over the GL canvas pins frame mode … worth
+narrowing later") was the whole first half of the report: a bare `glPointerOverRef.current` term in
+`updateGridUiSync` held the readback path for as long as the cursor sat there, so a user watching
+their model run saw **no speedup at all**.
+
+Nothing about passive hovering needs CPU state: the brush cursor and the brush itself are pure
+`pickOnPlane` ray math, and a paint refreshes + re-presents through the worker's own mutation tail.
+The one thing that does is gl3d's colour-id `pick()` (3D inspect), which reads the CPU instance
+buffer only frame mode refreshes. So the term is now the states in which a pick can fire:
+
+- `glGestureActiveRef` — a pointer gesture in progress (set in `onDown` after the
+  `data-sim-overlay` guard, cleared in `onUp`, which is a window listener so it always fires; also
+  cleared in the effect teardown so an unmount mid-gesture can't latch the pin on);
+- `glPointerOverRef && (inspectModeRef || glShiftDownRef)` — the Inspect toggle armed while
+  hovering, or **Shift held** while hovering. The Shift+LMB inspect pick fires on the RELEASE, so
+  pressing the modifier first gives the flip (and the worker's immediate one-colours-frame reply)
+  its head start. New `keydown`/`keyup` listeners in the 3D pointer effect track Shift.
+
+**The AGENT UI-sync driver was checked and deliberately left untouched**: its hover term is already
+this narrow — `is3dRef && brushTargetRef === 'agents' && glPointerOverRef` — i.e. it only pins when
+the agent brush is ARMED, which is a deliberate act, and agent hover highlighting genuinely reads the
+CPU snapshot. Byte-identical.
+
+### The sibling risk (2D WebGPU direct render) — present, and deliberately NOT "fixed"
+
+2D direct render skips its present under `skipColorPass` in exactly the same way. It is **not**
+actionable: that OffscreenCanvas is a *placeholder* which only reaches the screen through the main
+thread's `ctx.drawImage(blitSource, …)` inside `draw()` — which ∞ G/F skips by design — so presenting
+there would burn a colour-pass dispatch per batch for zero visible change. Frozen-while-∞ is the
+intended 2D behaviour and predates L1. Verified unchanged: 2D WebGPU GoL at ∞ G/F ran 459 batches /
+45 800 generations with **0 colours shipped** and no voxel attach. This asymmetry is exactly why the
+new predicate is `voxelDisplayLive()` and not `gridDisplayOwnedByGpu()`: the voxel canvas is a real
+DOM canvas the BROWSER composites, so a worker-side present alone changes what the user sees.
+
+### Verification (protocol + GPU-buffer level; the pane reports hidden)
+
+- **Repro first**, then fix: the zero-presents / pinned-instance-count measurement above, and a bare
+  `pointerenter` flipping the worker's `uiSync` to true (colours shipped 1 → 43).
+- **The fix, on the user's exact model** (Accretor 300³ as shipped, WebGPU, ∞ G/F, no pointer): the
+  voxel canvas becomes `display:block` while playing, `stepped` carries **no `colors`** (the L1 win
+  intact), gl3d's CPU instance buffer stays at the seed (69 — the O(total) rescan still skipped), and
+  the GPU-presented volume TRACKS the simulation: **113 823 @ gen 500 → 356 302 @ gen 700 → 735 108 @
+  gen 857**, one present per batch. At the stop event (gen 859) it pauses → UI-sync ON → a colours
+  frame arrives → gl3d's count becomes **748 288 = the GPU's count exactly** → the voxel canvas hides
+  and gl3d renders the final result. Seamless handoff, no blank frame. 0 errors.
+- **Hover narrowing**: passive `pointerenter` now leaves `uiSync` **false** and ships no colours;
+  `pointerdown` flips it **true** (colours resume); `pointerup` returns to free after the debounce;
+  Shift-down while hovering flips true, Shift-up returns to free.
+- **Picking still correct**: after a free-mode run + the flip, gl3d's instance buffer equals the GPU
+  compaction count (748 288 = 748 288), and three `pick()` hits fed to `setInspectCells` all report
+  `state: 1` (genuinely occupied) from the worker's fresh attrs.
+- **Fallbacks unchanged**: 2D WebGPU GoL (above); 3D **WASM** Life3D ships colours on all 150 batches
+  with no voxel attach.
+- Gates: `tsc -p tsconfig.app.json --noEmit`, `npm run build`, `check-compile-identity` (25 models,
+  all surfaces unchanged), `parity-agent-wasm` (18), `parity-agent-force` (7), `verify-agent-render`
+  — all green.
+- **Not claimable from an occluded pane** (deferred to a visible-pane eyeball): the composited image
+  itself, and the finite-G/F play loop (it is paced by rAF, which a hidden tab suspends — that path
+  is unchanged code, `if (!msg.skipColorPass) runColorPassWebGPU()`).
+
+### The durable lesson
+
+**A GPU-presented display must be refreshed by something that cannot be switched off by a display
+optimisation.** Hooking the present to the colour pass was economical but fragile: `skipColorPass`
+exists precisely to remove per-frame display work, so hanging the *only* display refresh off it
+guarantees that the one mode a throughput-seeking user selects is the one where the display dies. The
+agent path got this right by presenting from `sendColors` (which always runs) with an
+`agentBatchPresented` guard; the lattice path should be understood the same way — **every batch that
+ends must leave the presented canvas showing that batch**. And a new DEV counter (`presents`, on the
+`__voxelReadback` probe) now makes "did anything present?" a one-line question instead of an
+inference.
