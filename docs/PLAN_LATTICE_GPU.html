@@ -1,0 +1,538 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GenesisCA — Lattice GPU Render &amp; Residency (illustrated plan)</title>
+<style>
+  :root{
+    --bg:#0c0d10; --panel:#15171c; --panel2:#1b1e25; --line:#2a2f39;
+    --tx:#e6e8ee; --dim:#9aa2b1; --accent:#e8a13a; --accent2:#4cc9f0;
+    --good:#4caf50; --bad:#ef5350; --warn:#ffb74d; --purple:#b388ff;
+    --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--tx);
+       font:15px/1.6 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+  .wrap{max-width:1180px;margin:0 auto;padding:40px 24px 80px}
+  h1{font-size:30px;margin:0 0 6px;letter-spacing:-.02em}
+  h2{font-size:21px;margin:52px 0 14px;color:var(--accent);
+     border-bottom:1px solid var(--line);padding-bottom:8px}
+  h3{font-size:16px;margin:26px 0 8px;color:var(--accent2)}
+  p{margin:10px 0}
+  .sub{color:var(--dim);margin:0 0 26px}
+  code,.mono{font-family:var(--mono);font-size:.9em}
+  code{background:#0a0b0e;border:1px solid var(--line);border-radius:4px;padding:1px 5px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;
+        padding:18px 20px;margin:18px 0}
+  .grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:16px}
+  table{width:100%;border-collapse:collapse;margin:12px 0;font-size:13.5px}
+  th,td{border-bottom:1px solid var(--line);padding:7px 9px;text-align:left;vertical-align:top}
+  th{color:var(--dim);font-weight:600;font-size:12px;text-transform:uppercase;letter-spacing:.05em}
+  td.num,th.num{text-align:right;font-family:var(--mono)}
+  .scroll{overflow-x:auto}
+  .tag{display:inline-block;font-size:11px;font-weight:700;padding:2px 8px;border-radius:99px;
+       letter-spacing:.04em;text-transform:uppercase;vertical-align:middle}
+  .t-hi{background:rgba(239,83,80,.16);color:#ff8a85;border:1px solid rgba(239,83,80,.4)}
+  .t-md{background:rgba(255,183,77,.14);color:var(--warn);border:1px solid rgba(255,183,77,.35)}
+  .t-lo{background:rgba(76,175,80,.14);color:#7bd07f;border:1px solid rgba(76,175,80,.35)}
+  .t-x{background:rgba(154,162,177,.12);color:var(--dim);border:1px solid var(--line)}
+  ul{margin:8px 0 8px 20px;padding:0}
+  li{margin:5px 0}
+  .kv{color:var(--dim)}
+  .big{font-family:var(--mono);font-size:26px;color:var(--accent);font-weight:700}
+  .note{border-left:3px solid var(--accent);background:rgba(232,161,58,.06);
+        padding:12px 16px;border-radius:0 8px 8px 0;margin:16px 0}
+  .warnbox{border-left:3px solid var(--bad);background:rgba(239,83,80,.07);
+        padding:12px 16px;border-radius:0 8px 8px 0;margin:16px 0}
+  svg{display:block;max-width:100%;height:auto}
+  .cap{color:var(--dim);font-size:12.5px;margin:6px 0 0}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>Lattice GPU Render &amp; Residency</h1>
+<p class="sub">Illustrated plan — CA grid performance, 2D + 3D, all three compile targets.
+Measurements: <span class="mono">docs/PERF_REVIEW_LATTICE.md</span> ·
+Risk: <span class="mono">docs/IMPACT_MAP_LATTICE_GPU.md</span> ·
+Runbook: <span class="mono">docs/HANDOFF_LATTICE_GPU.md</span></p>
+
+<div class="note">
+<strong>Two rules govern every phase.</strong>
+<b>Generality</b> — gates key only on general model properties (dimension, depth, resolved
+target, topology, glyph usage, SIE flag, boundary, compiler usage flags); never on a rule
+shape or a shipped model. <b>Feature preservation</b> — the readback policy
+(<i>free</i> / <i>frame</i> / <i>one-shot</i>) is the only sanctioned way to remove per-frame
+CPU work: a feature may cost a readback <i>while in use</i>, never lose function.
+</div>
+
+<!-- ============================================================ -->
+<h2>1 · Where a generation actually goes (measured)</h2>
+
+<p>Every bar is <strong>one frame at the default gens/frame&nbsp;=&nbsp;1</strong>, on an
+NVIDIA Pascal machine, driving the real worker. The dark segment is the actual simulation.</p>
+
+<div class="card">
+<svg viewBox="0 0 1080 330" role="img" aria-label="Frame time breakdown by case">
+  <defs>
+    <linearGradient id="gsim" x1="0" x2="1"><stop offset="0" stop-color="#4caf50"/><stop offset="1" stop-color="#2e7d32"/></linearGradient>
+  </defs>
+  <style>
+    .lab{fill:#e6e8ee;font:13px system-ui}
+    .sublab{fill:#9aa2b1;font:11px ui-monospace,monospace}
+    .seg{stroke:#0c0d10;stroke-width:1}
+    .val{fill:#9aa2b1;font:11px ui-monospace,monospace}
+    .hd{fill:#9aa2b1;font:11px system-ui;text-transform:uppercase;letter-spacing:.05em}
+  </style>
+
+  <text x="0" y="14" class="hd">case</text>
+  <text x="250" y="14" class="hd">frame composition (log-ish scale, labelled)</text>
+
+  <!-- Accretor -->
+  <text x="0" y="48" class="lab">Accretor 300³ · WebGPU</text>
+  <text x="0" y="64" class="sublab">27M cells</text>
+  <rect x="250" y="34" width="3"   height="20" fill="url(#gsim)" class="seg"/>
+  <rect x="253" y="34" width="118" height="20" fill="#5c6bc0" class="seg"/>
+  <rect x="371" y="34" width="230" height="20" fill="#7e57c2" class="seg"/>
+  <rect x="601" y="34" width="32"  height="20" fill="#26a69a" class="seg"/>
+  <rect x="633" y="34" width="233" height="20" fill="#ef5350" class="seg"/>
+  <text x="876" y="49" class="val">758 ms  ·  sim 2.35 ms  (0.3%)</text>
+
+  <!-- Life3D 128 -->
+  <text x="0" y="100" class="lab">Life3D 128³ · WebGPU</text>
+  <text x="0" y="116" class="sublab">2.1M cells</text>
+  <rect x="250" y="86" width="2"  height="20" fill="url(#gsim)" class="seg"/>
+  <rect x="252" y="86" width="46" height="20" fill="#5c6bc0" class="seg"/>
+  <rect x="298" y="86" width="36" height="20" fill="#7e57c2" class="seg"/>
+  <rect x="334" y="86" width="4"  height="20" fill="#26a69a" class="seg"/>
+  <rect x="338" y="86" width="20" height="20" fill="#ef5350" class="seg"/>
+  <text x="368" y="101" class="val">87 ms  ·  sim ≈ 0 (hidden in the readback)</text>
+
+  <!-- Life3D 96 -->
+  <text x="0" y="152" class="lab">Life3D 96³ · WebGPU</text>
+  <text x="0" y="168" class="sublab">0.9M cells</text>
+  <rect x="250" y="138" width="8"  height="20" fill="url(#gsim)" class="seg"/>
+  <rect x="258" y="138" width="26" height="20" fill="#5c6bc0" class="seg"/>
+  <rect x="284" y="138" width="14" height="20" fill="#7e57c2" class="seg"/>
+  <rect x="298" y="138" width="2"  height="20" fill="#26a69a" class="seg"/>
+  <rect x="300" y="138" width="8"  height="20" fill="#ef5350" class="seg"/>
+  <text x="318" y="153" class="val">44 ms  ·  sim 2.8 ms  (6%)</text>
+
+  <!-- GoL 1000 gpu -->
+  <text x="0" y="204" class="lab">GoL 1000² · WebGPU</text>
+  <text x="0" y="220" class="sublab">1M cells · direct render</text>
+  <rect x="250" y="190" width="3"  height="20" fill="url(#gsim)" class="seg"/>
+  <rect x="253" y="190" width="70" height="20" fill="#ffa726" class="seg"/>
+  <text x="333" y="205" class="val">7.2 ms  ·  sim 0.29 ms  (4%)</text>
+
+  <!-- GoL 1000 wasm -->
+  <text x="0" y="256" class="lab">GoL 1000² · WASM</text>
+  <text x="0" y="272" class="sublab">1M cells</text>
+  <rect x="250" y="242" width="147" height="20" fill="url(#gsim)" class="seg"/>
+  <rect x="397" y="242" width="60"  height="20" fill="#7e57c2" class="seg"/>
+  <rect x="457" y="242" width="20"  height="20" fill="#26a69a" class="seg"/>
+  <rect x="477" y="242" width="7"   height="20" fill="#ef5350" class="seg"/>
+  <text x="494" y="257" class="val">26.9 ms  ·  sim 14.7 ms  (55%)</text>
+
+  <!-- legend -->
+  <g transform="translate(250,296)">
+    <rect x="0" y="0" width="12" height="12" fill="url(#gsim)"/><text x="18" y="10" class="sublab">simulation</text>
+    <rect x="110" y="0" width="12" height="12" fill="#5c6bc0"/><text x="128" y="10" class="sublab">GPU→CPU readback</text>
+    <rect x="270" y="0" width="12" height="12" fill="#7e57c2"/><text x="288" y="10" class="sublab">colour pass</text>
+    <rect x="380" y="0" width="12" height="12" fill="#26a69a"/><text x="398" y="10" class="sublab">copy + transfer</text>
+    <rect x="510" y="0" width="12" height="12" fill="#ef5350"/><text x="528" y="10" class="sublab">main-thread rescan</text>
+    <rect x="670" y="0" width="12" height="12" fill="#ffa726"/><text x="688" y="10" class="sublab">GPU fence + round trip</text>
+  </g>
+</svg>
+<p class="cap">Segment widths are indicative within each row; the labelled totals and the
+simulation figures are measured. Accretor 300³: 540&nbsp;ms in the worker + 218&nbsp;ms on the
+main thread.</p>
+</div>
+
+<!-- ============================================================ -->
+<h2>2 · L1 — the 3D render round trip <span class="tag t-hi">headline</span></h2>
+
+<div class="grid2">
+<div class="card">
+<h3>Today — every 3D frame</h3>
+<svg viewBox="0 0 480 300" role="img" aria-label="Current 3D data flow">
+  <style>
+    .bx{fill:#1b1e25;stroke:#2a2f39}
+    .bt{fill:#e6e8ee;font:12px system-ui}
+    .bs{fill:#9aa2b1;font:10.5px ui-monospace,monospace}
+    .ar{stroke:#ef5350;stroke-width:2;fill:none;marker-end:url(#ah)}
+    .arq{stroke:#4cc9f0;stroke-width:2;fill:none;marker-end:url(#ah2)}
+  </style>
+  <defs>
+    <marker id="ah" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+      <path d="M0,0 L8,4 L0,8 z" fill="#ef5350"/></marker>
+    <marker id="ah2" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+      <path d="M0,0 L8,4 L0,8 z" fill="#4cc9f0"/></marker>
+  </defs>
+
+  <rect x="14" y="14" width="150" height="52" rx="7" class="bx"/>
+  <text x="26" y="34" class="bt">GPU · step shader</text>
+  <text x="26" y="50" class="bs">2.35 ms @ 27M</text>
+
+  <rect x="14" y="92" width="150" height="52" rx="7" class="bx"/>
+  <text x="26" y="112" class="bt">GPU · colorsBuf</text>
+  <text x="26" y="128" class="bs">103 MB</text>
+
+  <rect x="14" y="170" width="150" height="60" rx="7" class="bx" stroke="#ef5350"/>
+  <text x="26" y="190" class="bt">worker · readback</text>
+  <text x="26" y="206" class="bs">mapAsync 103 MB</text>
+  <text x="26" y="221" class="bs">+ copy 30 ms</text>
+
+  <rect x="290" y="170" width="176" height="60" rx="7" class="bx" stroke="#ef5350"/>
+  <text x="302" y="190" class="bt">main · uploadColors</text>
+  <text x="302" y="206" class="bs">O(total) rescan 218 ms</text>
+  <text x="302" y="221" class="bs">instData 515 MB</text>
+
+  <rect x="290" y="252" width="176" height="34" rx="7" class="bx"/>
+  <text x="302" y="274" class="bt">gl3d (WebGL2) draw</text>
+
+  <path class="ar" d="M89,66 L89,88"/>
+  <path class="ar" d="M89,144 L89,166"/>
+  <path class="ar" d="M164,200 L286,200"/>
+  <path class="ar" d="M378,230 L378,248"/>
+  <text x="176" y="192" class="bs">postMessage 103 MB</text>
+</svg>
+</div>
+
+<div class="card">
+<h3>After L1 — free mode</h3>
+<svg viewBox="0 0 480 300" role="img" aria-label="L1 3D data flow">
+  <style>
+    .bx2{fill:#1b1e25;stroke:#2a2f39}
+    .bt2{fill:#e6e8ee;font:12px system-ui}
+    .bs2{fill:#9aa2b1;font:10.5px ui-monospace,monospace}
+    .ag{stroke:#4caf50;stroke-width:2;fill:none;marker-end:url(#ah3)}
+    .ac{stroke:#4cc9f0;stroke-width:2;fill:none;stroke-dasharray:4 3;marker-end:url(#ah2b)}
+  </style>
+  <defs>
+    <marker id="ah3" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+      <path d="M0,0 L8,4 L0,8 z" fill="#4caf50"/></marker>
+    <marker id="ah2b" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+      <path d="M0,0 L8,4 L0,8 z" fill="#4cc9f0"/></marker>
+  </defs>
+
+  <rect x="14" y="14" width="150" height="52" rx="7" class="bx2"/>
+  <text x="26" y="34" class="bt2">GPU · step shader</text>
+  <text x="26" y="50" class="bs2">2.35 ms @ 27M</text>
+
+  <rect x="14" y="92" width="150" height="52" rx="7" class="bx2"/>
+  <text x="26" y="112" class="bt2">GPU · colorsBuf</text>
+  <text x="26" y="128" class="bs2">stays on the GPU</text>
+
+  <rect x="14" y="170" width="150" height="60" rx="7" class="bx2" stroke="#4caf50"/>
+  <text x="26" y="190" class="bt2">GPU · compact</text>
+  <text x="26" y="206" class="bs2">alpha≠0 + buried cull</text>
+  <text x="26" y="221" class="bs2">→ indirect draw</text>
+
+  <rect x="14" y="252" width="150" height="34" rx="7" class="bx2" stroke="#4caf50"/>
+  <text x="26" y="274" class="bt2">GPU · voxel pass</text>
+
+  <rect x="290" y="252" width="176" height="34" rx="7" class="bx2"/>
+  <text x="302" y="274" class="bt2">OffscreenCanvas</text>
+
+  <rect x="290" y="150" width="176" height="80" rx="7" class="bx2"/>
+  <text x="302" y="172" class="bt2">gl3d · overlays only</text>
+  <text x="302" y="190" class="bs2">axes / grid / bounds</text>
+  <text x="302" y="205" class="bs2">brush plane / cursor</text>
+  <text x="302" y="220" class="bs2">transparent clear</text>
+
+  <path class="ag" d="M89,66 L89,88"/>
+  <path class="ag" d="M89,144 L89,166"/>
+  <path class="ag" d="M89,230 L89,248"/>
+  <path class="ag" d="M164,269 L286,269"/>
+  <path class="ac" d="M378,150 L378,120 L200,120"/>
+  <text x="206" y="112" class="bs2">camera uniform only</text>
+</svg>
+</div>
+</div>
+
+<div class="card">
+<h3>Free ⇄ frame — the readback policy (nothing loses function)</h3>
+<svg viewBox="0 0 1040 190" role="img" aria-label="Free and frame mode state machine">
+  <style>
+    .st{fill:#1b1e25;stroke:#2a2f39;stroke-width:1.5}
+    .stt{fill:#e6e8ee;font:14px system-ui;font-weight:600}
+    .sd{fill:#9aa2b1;font:11.5px system-ui}
+    .fl{stroke:#e8a13a;stroke-width:2;fill:none;marker-end:url(#ah4)}
+    .fll{fill:#e8a13a;font:11px ui-monospace,monospace}
+  </style>
+  <defs><marker id="ah4" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+    <path d="M0,0 L8,4 L0,8 z" fill="#e8a13a"/></marker></defs>
+
+  <rect x="20" y="40" width="300" height="110" rx="10" class="st" stroke="#4caf50"/>
+  <text x="40" y="68" class="stt">FREE — GPU authoritative</text>
+  <text x="40" y="92" class="sd">no readback · no colours on the wire</text>
+  <text x="40" y="112" class="sd">worker renders voxels into the canvas</text>
+  <text x="40" y="132" class="sd">gl3d draws overlays only</text>
+
+  <rect x="600" y="40" width="300" height="110" rx="10" class="st" stroke="#ffb74d"/>
+  <text x="620" y="68" class="stt">FRAME — CPU mirror fresh</text>
+  <text x="620" y="92" class="sd">colours read back each frame</text>
+  <text x="620" y="112" class="sd">gl3d full render (today's code)</text>
+  <text x="620" y="132" class="sd">pick / inspect / record / shadows / AO</text>
+
+  <path class="fl" d="M322,72 L596,72"/>
+  <text x="352" y="62" class="fll">pointer over canvas · popover pinned · recording · shadows/AO on</text>
+  <path class="fl" d="M596,124 L324,124"/>
+  <text x="380" y="144" class="fll">…and back when nothing needs the CPU copy</text>
+
+  <rect x="20" y="164" width="880" height="0.5" fill="#2a2f39"/>
+</svg>
+<p class="cap"><strong>One-shot rule</strong> (unchanged, one place): any message that reads or
+mutates grid state while free mode is active blocks, pulls the GPU state down, then replays —
+so <span class="mono">getState</span>, paint, region write, inspect and save can never observe
+stale cells.</p>
+</div>
+
+<!-- ============================================================ -->
+<h2>3 · L2 — the flat per-batch fence</h2>
+
+<div class="card">
+<svg viewBox="0 0 1040 230" role="img" aria-label="Serialized vs pipelined batches">
+  <style>
+    .lane{fill:#9aa2b1;font:12px system-ui}
+    .cpu{fill:#5c6bc0}
+    .gpu{fill:#4caf50}
+    .idle{fill:#222630}
+    .tick{fill:#9aa2b1;font:10.5px ui-monospace,monospace}
+    .ttl{fill:#e6e8ee;font:13px system-ui;font-weight:600}
+  </style>
+
+  <text x="0" y="16" class="ttl">Today — CPU and GPU never overlap</text>
+  <text x="0" y="48" class="lane">worker CPU</text>
+  <text x="0" y="76" class="lane">GPU</text>
+  <rect x="90" y="34" width="30"  height="18" class="cpu"/>
+  <rect x="120" y="34" width="200" height="18" class="idle"/>
+  <rect x="320" y="34" width="30"  height="18" class="cpu"/>
+  <rect x="350" y="34" width="200" height="18" class="idle"/>
+  <rect x="550" y="34" width="30"  height="18" class="cpu"/>
+  <rect x="580" y="34" width="200" height="18" class="idle"/>
+  <rect x="90"  y="62" width="30"  height="18" class="idle"/>
+  <rect x="120" y="62" width="14"  height="18" class="gpu"/>
+  <rect x="134" y="62" width="186" height="18" class="idle"/>
+  <rect x="350" y="62" width="14"  height="18" class="gpu"/>
+  <rect x="364" y="62" width="186" height="18" class="idle"/>
+  <rect x="580" y="62" width="14"  height="18" class="gpu"/>
+  <text x="800" y="48" class="tick">frame = 7.2 ms</text>
+  <text x="800" y="76" class="tick">kernel = 0.29 ms</text>
+  <text x="126" y="100" class="tick">◄──── submit→fence latency ≈ 6.7 ms ────►</text>
+
+  <text x="0" y="146" class="ttl">L2 — one batch in flight (back-pressure preserved)</text>
+  <text x="0" y="178" class="lane">worker CPU</text>
+  <text x="0" y="206" class="lane">GPU</text>
+  <rect x="90"  y="164" width="30" height="18" class="cpu"/>
+  <rect x="120" y="164" width="30" height="18" class="cpu"/>
+  <rect x="150" y="164" width="30" height="18" class="cpu"/>
+  <rect x="180" y="164" width="30" height="18" class="cpu"/>
+  <rect x="210" y="164" width="30" height="18" class="cpu"/>
+  <rect x="120" y="192" width="14" height="18" class="gpu"/>
+  <rect x="150" y="192" width="14" height="18" class="gpu"/>
+  <rect x="180" y="192" width="14" height="18" class="gpu"/>
+  <rect x="210" y="192" width="14" height="18" class="gpu"/>
+  <text x="270" y="178" class="tick">frame ≈ 1.5 ms — the fence overlaps the next encode</text>
+</svg>
+<div class="warnbox">
+<strong>Precondition.</strong> The 6.7&nbsp;ms figure was measured in an <em>occluded</em>
+browser pane. L2 <strong>begins by re-measuring it in a visible pane</strong>. If the fence is
+really ~1&nbsp;ms there, L2 is cancelled and recorded as not worth doing — a valid outcome.
+<br><br>
+<strong>Do not</strong> relax the <span class="mono">asyncStepBatchInFlight</span> message
+deferral. Concurrent batches were the P0 corruption bug in the agent arc: stale uploads racing
+fresh results, with zero errors reported. Only the <em>GPU fence</em> relaxes.
+</div>
+</div>
+
+<!-- ============================================================ -->
+<h2>4 · L3 / L4 — dispatch and memory</h2>
+
+<div class="grid2">
+<div class="card">
+<h3>L3 · sparse stepping reaches WebGPU</h3>
+<svg viewBox="0 0 460 200" role="img" aria-label="Full dispatch versus active list">
+  <style>
+    .cell{fill:#222630;stroke:#0c0d10;stroke-width:.5}
+    .act{fill:#e8a13a}
+    .liv{fill:#4cc9f0}
+    .cp{fill:#9aa2b1;font:11px ui-monospace,monospace}
+    .cttl{fill:#e6e8ee;font:12.5px system-ui;font-weight:600}
+  </style>
+  <text x="0" y="14" class="cttl">WebGPU today — dispatch every cell</text>
+  <!-- grid A -->
+  <g transform="translate(0,26)">
+    <rect x="0" y="0" width="180" height="120" fill="#1b1e25" stroke="#2a2f39"/>
+    <g>
+      <rect x="10" y="10" width="160" height="100" fill="#2b2f3a"/>
+      <circle cx="86" cy="58" r="16" fill="#4cc9f0"/>
+      <circle cx="86" cy="58" r="26" fill="none" stroke="#e8a13a" stroke-dasharray="3 3"/>
+    </g>
+    <text x="10" y="136" class="cp">27,000,000 threads · 2.35 ms</text>
+  </g>
+  <!-- grid B -->
+  <g transform="translate(250,26)">
+    <rect x="0" y="0" width="180" height="120" fill="#1b1e25" stroke="#2a2f39"/>
+    <rect x="10" y="10" width="160" height="100" fill="#15171c"/>
+    <circle cx="86" cy="58" r="16" fill="#4cc9f0"/>
+    <circle cx="86" cy="58" r="26" fill="none" stroke="#e8a13a"/>
+    <text x="10" y="136" class="cp">~10⁵ threads · indirect dispatch</text>
+  </g>
+  <text x="250" y="14" class="cttl">L3 — dispatch the active list</text>
+  <text x="0" y="186" class="cp">count → exclusive scan → scatter (the shipped agent resident-hash algorithm)</text>
+</svg>
+<p>Measured on the CPU targets: <strong>13.8×</strong> (Accretor 128³, 24.2 → 1.75 ms/gen).
+WebGPU ignores the feature today and reports <span class="mono">sieActive: -1</span>.</p>
+</div>
+
+<div class="card">
+<h3>L4 · the CPU neighbour table</h3>
+<svg viewBox="0 0 460 200" role="img" aria-label="Neighbour table sizes">
+  <style>
+    .bar{fill:#ef5350}
+    .bar2{fill:#4caf50}
+    .bl{fill:#e6e8ee;font:12px system-ui}
+    .bv{fill:#9aa2b1;font:11px ui-monospace,monospace}
+  </style>
+  <text x="0" y="14" class="bl">reserved bytes · total × nSz × 4</text>
+  <text x="0" y="40" class="bl">MNCA 512²</text>
+  <rect x="120" y="28" width="300" height="14" class="bar"/><text x="426" y="40" class="bv">693 MB</text>
+  <text x="0" y="66" class="bl">Accretor 128³</text>
+  <rect x="120" y="54" width="90" height="14" class="bar"/><text x="216" y="66" class="bv">208 MB</text>
+  <text x="0" y="92" class="bl">MNCA 256²</text>
+  <rect x="120" y="80" width="75" height="14" class="bar"/><text x="201" y="92" class="bv">173 MB</text>
+  <text x="0" y="118" class="bl">GoL 2048²</text>
+  <rect x="120" y="106" width="55" height="14" class="bar"/><text x="181" y="118" class="bv">128 MB</text>
+  <text x="0" y="150" class="bl">…after L4 (packed offsets)</text>
+  <rect x="120" y="138" width="3" height="14" class="bar2"/><text x="130" y="150" class="bv">~1.4 KB (MNCA 512²)</text>
+  <text x="0" y="182" class="bv">init: 2.0 s → ~10 ms · a 300³ Moore model becomes possible on WASM</text>
+</svg>
+<div class="warnbox" style="margin-top:14px">
+<strong>Measurement-gated.</strong> Is inline decode faster or slower than a table fetch on a
+CPU? Unknown — and JS aggregate <em>fusion</em> is disabled in inline mode. The phase opens with
+a throwaway A/B and <strong>stops if inline loses</strong>.
+</div>
+</div>
+</div>
+
+<!-- ============================================================ -->
+<h2>5 · Phase sequence &amp; expected wins</h2>
+
+<div class="card scroll">
+<table>
+<thead><tr>
+  <th>phase</th><th>what</th><th>target (measured)</th><th>expected</th>
+  <th>compiler?</th><th>risk</th>
+</tr></thead>
+<tbody>
+<tr>
+  <td class="mono">L1</td>
+  <td>WGSL voxel render in the worker (3D)</td>
+  <td>23–330 ms readback + 7–218 ms main-thread rescan + 3.5–108 MB/frame</td>
+  <td class="num"><strong>50–75×</strong> @300³</td>
+  <td>no</td><td><span class="tag t-md">medium</span></td>
+</tr>
+<tr>
+  <td class="mono">L2</td>
+  <td>pipelined step batches</td>
+  <td>flat ~7 ms per-batch fence</td>
+  <td class="num">≈ 4× (2D, g/f 1)</td>
+  <td>no</td><td><span class="tag t-hi">high</span></td>
+</tr>
+<tr>
+  <td class="mono">L3</td>
+  <td>sparse stepping on WebGPU</td>
+  <td>full-grid dispatch; SIE gives 13.8× on CPU</td>
+  <td class="num">~20× marginal</td>
+  <td><strong>yes</strong></td><td><span class="tag t-md">medium</span></td>
+</tr>
+<tr>
+  <td class="mono">L4</td>
+  <td>inline neighbours on CPU targets</td>
+  <td>173/693/208/128 MB tables; 0.5–2.0 s init</td>
+  <td class="num">memory ≈ 0; init ~200×</td>
+  <td><strong>yes</strong></td><td><span class="tag t-md">medium</span></td>
+</tr>
+<tr>
+  <td class="mono">L5</td>
+  <td>size instData by visible cells</td>
+  <td>515 MB reservation @300³</td>
+  <td class="num">~500 MB heap</td>
+  <td>no</td><td><span class="tag t-lo">low</span></td>
+</tr>
+<tr>
+  <td class="mono">L6</td>
+  <td>widen GPU indicator reductions</td>
+  <td>3.5–4 ms/gen per 1M cells CPU fallback</td>
+  <td class="num">removes an O(total) scan</td>
+  <td>no</td><td><span class="tag t-md">medium</span></td>
+</tr>
+</tbody>
+</table>
+<p class="cap">Launch order: <strong>L1 → L2 → L5 → L3 → L6 → L4</strong>. L4 last because its
+<em>value</em> is the only one still unproven.</p>
+</div>
+
+<!-- ============================================================ -->
+<h2>6 · Ruled out — with evidence</h2>
+
+<div class="card scroll">
+<table>
+<thead><tr><th>candidate</th><th>measured</th><th>verdict</th></tr></thead>
+<tbody>
+<tr><td>eliminate the sync w→r bulk copy</td><td class="mono">0.05–2.0 ms/gen = 3–10% of a WASM step</td>
+    <td><span class="tag t-x">no</span> WASM offsets are baked — a ref swap is impossible by construction</td></tr>
+<tr><td>batch N gens into one encoder</td><td class="mono">the cost is the fence, not the submits</td>
+    <td><span class="tag t-x">fold into L2</span> as an optional sub-item</td></tr>
+<tr><td>remove the sendColors copy</td><td class="mono">1.0 / 4.5 / 30 ms at 1M / 4M / 27M</td>
+    <td><span class="tag t-x">cannot</span> <span class="mono">colors</span> is a view over wasmMemory; SAB needs COOP/COEP</td></tr>
+<tr><td>f64 → f32 cell attributes</td><td class="mono">would halve float bandwidth</td>
+    <td><span class="tag t-x">no</span> breaks the JS↔WASM bit-parity contract</td></tr>
+<tr><td>workgroup-tiled stencil</td><td class="mono">kernel is 3% of the frame</td>
+    <td><span class="tag t-x">premature</span> revisit after L1+L2</td></tr>
+<tr><td>sub-word bool/tag packing (GPU)</td><td class="mono">no measured size hit the 2 GB limit</td>
+    <td><span class="tag t-x">defer</span> a ceiling item, not a speed item</td></tr>
+<tr><td>incremental colour pass</td><td class="mono">8–10 ms/frame @1024² JS</td>
+    <td><span class="tag t-x">no general form</span> the SIE active set is already the only sound version</td></tr>
+</tbody>
+</table>
+</div>
+
+<h2>7 · Fundamentals vs scope</h2>
+<div class="grid2">
+<div class="card">
+<h3>Genuine fundamentals — do not attempt</h3>
+<ul>
+<li><strong>Async update mode on WebGPU</strong> — a write visible to a later cell in the same
+step is inherently serial.</li>
+<li><strong>Order-dependent indicator ops</strong> (toggle / next / previous) on WebGPU —
+non-commutative mutation of one accumulator by parallel writers.</li>
+<li><strong>SIE requires synchronous mode</strong> — the shuffled single-buffer order is
+incompatible with list iteration.</li>
+<li><strong>SIE excludes agent models</strong> — agents deposit into cell attributes outside the
+step, so the active set cannot observe those transitions.</li>
+</ul>
+<p class="cap">f32-vs-f64 and per-cell-PCG-vs-shared-RNG are documented intentional differences,
+not limits.</p>
+</div>
+<div class="card">
+<h3>Scoping limits — liftable</h3>
+<ul>
+<li>SIE excludes <strong>glyph</strong> models (a sparse glyph clear would lift it).</li>
+<li>SIE on WebGPU → <strong>L3</strong>.</li>
+<li>Inline neighbours on CPU → <strong>L4</strong>.</li>
+<li>3D never gets GPU direct render → <strong>L1</strong>.</li>
+<li>Shadows / occupancy AO in free-mode 3D — frame-mode features in L1; a WGSL shadow pass
+could lift it later.</li>
+<li>A <strong>display-resolution</strong> grid+agent composite (the world-resolution E2 version
+was user-rejected and is disabled) — an independent, still-open redesign.</li>
+</ul>
+</div>
+</div>
+
+</div>
+</body>
+</html>
