@@ -2723,7 +2723,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   // L1 UI-sync driver (the grid sibling of updateAgentUiSync). ON = the worker
   // reads colours back each frame and ships them, so gl3d renders the full frame
   // (and its colour-id pick FBO resolves). ON iff a feature is — or may be —
-  // reading the CPU colours: paused, recording, an inspect popover pinned/sweeping,
+  // reading the CPU colours: recording, an inspect popover pinned/sweeping,
   // a POINTER GESTURE that can pick, OR a frame-mode-only visual is enabled (cast
   // shadows, occupancy AO, alpha blend — none of which the WGSL pass replicates;
   // see §4 of the L1 handoff). Debounced OFF by ~300 ms.
@@ -2746,9 +2746,18 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   const updateGridUiSync = useCallback(() => {
     if (!voxelRenderActiveRef.current || !workerRef.current) return;
     const light = light3dRef.current;
+    // NB `!playing` is deliberately NOT a term. Pausing needs no CPU colours by
+    // itself — the worker-presented canvas is already showing the current frame
+    // and keeps tracking the camera — but flipping costs a full colour readback
+    // (108 MB at 300³) plus the main thread's O(total) uploadColors rescan, which
+    // is the visible hitch on every pause and, worse, on every stop-condition
+    // halt (the user hits it without having asked for anything). Everything a
+    // paused user can do that genuinely reads CPU colours has its OWN term below
+    // — inspect (a pinned popover / sweep / a picking gesture / Inspect armed /
+    // Shift held), recording, and the frame-mode-only visuals — so the cost is
+    // now paid at the moment it buys something instead of on every halt.
     const want =
-      !playingRef.current
-      || recordingRef.current
+      recordingRef.current
       || inspectCellIdxsRef.current.length > 0
       || sweepActiveRef.current
       || glGestureActiveRef.current
