@@ -2100,6 +2100,29 @@ function agentFieldBridgeGpuEligible(): boolean {
   return true;
 }
 
+/** M4 gate - a field-DECOUPLED agent model whose resolved agent target is WebGPU.
+ *  Decoupled = the agent layer and the cell grid share NO state: no field node is
+ *  reachable in the agent graph (agentUsesField), no cell attribute grants agent
+ *  access (fieldSpecs), and the compiled GPU agent layout therefore reserved no
+ *  field regions. Such a generation is an ordinary per-gen GPU agent step with NO
+ *  bridge - the same dispatch the JS/WASM-grid branch already uses. Used ONLY by
+ *  the WebGPU-grid step branch, which used to run these agents on the CPU
+ *  regardless of the user's agent-target choice (E1b's routing covered the
+ *  field-COUPLED case only). General properties only; mirrors the decoupling term
+ *  in agentResidentEligible + the main thread's render gate. */
+function agentDecoupledGpuAgents(): boolean {
+  const rt = agentWebgpuRuntime;
+  if (!rt || !rt.ready || agentTarget !== 'webgpu') return false;
+  if (agentUsesField || fieldSpecs.length > 0) return false;
+  return rt.layout.fieldReadLen === 0 && rt.layout.fieldWriteLen === 0;
+}
+
+// M4 DEV probe (verification only, mirrors the E1b counters) - how many
+// generations of the WebGPU-GRID branch dispatched their agents on the GPU
+// decoupled path vs fell back to the CPU agent step. Reported via '__e1bCounters'.
+let m4DecoupledGpuGenCount = 0;
+let m4DecoupledCpuFallbackCount = 0;
+
 /** Build the per-gen GPU field bridge context. The grid `attrsReadBuf` ping-pongs
  *  per step, so this MUST be rebuilt EVERY gen (never cache it across steps). */
 function buildGpuFieldBridge(): GpuFieldBridge | null {
@@ -5457,6 +5480,24 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
                 runAgentStep();
                 if (agentUsesField) { uploadAttrs(webgpuRuntime, readAttrs); gpuOwnsAttrs = false; }
               }
+            } else if (agentStore && simulateAgents && agentDecoupledGpuAgents()) {
+              // M4: a field-DECOUPLED grid+agents model on a WebGPU grid + a
+              // WebGPU agent target used to fall through to the CPU runAgentStep()
+              // below, silently ignoring the user's agent-target choice (E1b's
+              // routing only covered the field-COUPLED case). Decoupled means the
+              // two layers share no state, so the agent generation is just the
+              // ordinary per-gen GPU agent step with no bridge - exactly what the
+              // JS/WASM-grid branch already dispatches. On any GPU failure the
+              // call returns false and JS runs that generation (the same bail-out
+              // contract as every other GPU agent dispatch site).
+              if (await runAgentStepWebGPU()) {
+                m4DecoupledGpuGenCount++;   // DEV probe
+                // runAgentStep advances sprites; the GPU path doesn't, so do it here.
+                if (hasAgentSprites && agentStore) advanceAgentSprites(agentStore);
+              } else {
+                m4DecoupledCpuFallbackCount++;   // DEV probe
+                runAgentStep();
+              }
             } else if (agentStore && simulateAgents && webgpuRuntime) {
               if (agentUsesField && gpuOwnsAttrs) {
                 await ensureCpuAttrsFresh();        // GPUÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢CPU; flips gpuOwnsAttrs=false
@@ -6740,6 +6781,14 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
         gpuRefCount: sharedGpuRefCount(),
         gpuAdapterRequests: sharedGpuAdapterRequestCount(),
         hasRenderOnlySurface: !!agentRenderRuntime,
+        // M4 routing probe: on a WebGPU GRID, did a field-DECOUPLED model's agents
+        // dispatch on the GPU (m4Gpu) or fall back to the CPU step (m4Cpu)?
+        m4Gpu: m4DecoupledGpuGenCount,
+        m4Cpu: m4DecoupledCpuFallbackCount,
+        m4Eligible: agentDecoupledGpuAgents(),
+        agentRuntimeReady: !!agentWebgpuRuntime?.ready,
+        residentEligible: agentResidentEligible(),
+        agentGpuUploadPending,
       });
       break;
     }
