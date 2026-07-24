@@ -71,6 +71,10 @@ shape. Design authority: [IMPACT_MAP_GPU_AGENT_RENDER.md](IMPACT_MAP_GPU_AGENT_R
      zero-init collapse — cap pattern `AGENT_GPU_ARRAY_CAP`).
    - WGSL constant-folding rejects non-representable f32 literals (a NaN
      bitcast fails at createShaderModule) — sentinels must be real f32s.
+   - Branch scope: diff/count against **`origin/master`**, NEVER the local
+     `master` ref (it is stale in this repo — `master..optimize` reports
+     ~100 already-merged commits as branch work). Sanity-check with
+     `git log --oneline -1 $(git merge-base origin/master optimize)`.
    - The AGENT store arrays are `f64` end-to-end, and `getState.agents.
      {x,y,vx,vy,radius,…}` ships **Float64** buffers — read them with
      `new Float64Array(buf)`, NEVER `Float32Array` (only the render snapshot,
