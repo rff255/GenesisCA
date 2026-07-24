@@ -1099,6 +1099,12 @@ export interface AgentRenderSurface {
    *  webgpu runtime (which uploads via uploadAgentSoA's own persistent scratch). */
   renderF32Scratch?: Float32Array;
   renderAliveScratch?: Uint32Array;
+  /** Persistent packing scratch for uploadAgentColors (audit M5). That runs on the
+   *  per-frame path TWICE over (uploadAgentRenderFields for A2 + uploadAgentSoA per
+   *  generation), so a fresh Uint32Array(maxAgents) there was 200 KB of garbage per
+   *  call at 50k agents. Declared here (not only on the render-only surface)
+   *  because the FULL webgpu runtime goes through the same helper. */
+  renderColorScratch?: Uint32Array;
   // Phase C — 3D sphere-impostor render (built instead of the 2D disc pipeline when
   // layout.gridDepth > 1). The MVP + camera basis + light come from the main thread
   // (sceneCameraMatrices in gl3d.ts, so the two renderers agree on projection); the
@@ -1229,7 +1235,12 @@ fn vsMain(@builtin(vertex_index) vi: u32, @builtin(instance_index) inst: u32) ->
   let wy: f32 = ay + f32(cy) * rv.worldH;
   let px: f32 = wx * rv.scalePx + rv.oxPx;
   let py: f32 = wy * rv.scalePx + rv.oyPx;
-  let radPx: f32 = ar * rv.scalePx;
+  // Floor the drawn radius at 1.2 px to MATCH the CPU overlay (audit M2): the
+  // overlay clamps every disc with Math.max(1.2, r*scale) at all three draw sites,
+  // so without this a sub-pixel agent (zoomed out / a large world) rendered as a
+  // near-empty quad on the fast path while the CPU path still showed a dot. The
+  // FS rim band derives from in.radPx, so it stays consistent with the same rule.
+  let radPx: f32 = max(ar * rv.scalePx, 1.2);
   var half: f32 = radPx;
   if (rv.glowOn != 0u) { half = half + rv.glowSize; }
   let sx: f32 = px + corner.x * half;
@@ -1770,12 +1781,18 @@ export async function debugReadCompositePixels(rt: AgentRenderSurface, gridColor
  *  (the GPU behaviour shader hasn't re-run since). */
 export function uploadAgentColors(rt: AgentRenderSurface, s: AgentStore): void {
   const ma = rt.layout.maxAgents, hw = s.highWater;
-  const u = new Uint32Array(ma);
+  // Persistent scratch (audit M5) — a fresh allocation here ran on the per-frame
+  // path. Slots past highWater are zeroed explicitly (a fresh array was
+  // zero-filled by construction; agents beyond hw must stay transparent).
+  const u = rt.renderColorScratch && rt.renderColorScratch.length === ma
+    ? rt.renderColorScratch
+    : (rt.renderColorScratch = new Uint32Array(ma));
   const c = s.colors;
   for (let i = 0; i < hw; i++) {
     const ci = i * 4;
     u[i] = ((c[ci]! & 0xff) | ((c[ci + 1]! & 0xff) << 8) | ((c[ci + 2]! & 0xff) << 16) | ((c[ci + 3]! & 0xff) << 24)) >>> 0;
   }
+  if (hw < ma) u.fill(0, hw, ma);
   rt.device.queue.writeBuffer(rt.agentColorsBuf, 0, u.buffer, u.byteOffset, u.byteLength);
 }
 

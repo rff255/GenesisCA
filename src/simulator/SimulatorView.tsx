@@ -204,6 +204,26 @@ function forceFrameOpaque(data: Uint8ClampedArray): void {
   for (let i = 3; i < data.length; i += 4) data[i] = 255;
 }
 
+/** M1 (audit) — the direct-agent-render gate terms that a SOFT recompile can flip.
+ *  Everything ELSE in the gate (topology, dimension, agent target, decoupling,
+ *  OffscreenCanvas, bonds) already forces a FULL reinit when it changes, so those
+ *  can safely be evaluated once in initWorkerWithDimensions. These two cannot:
+ *  `sprites` and `agentMappings` are not in `needsFullInit`, so the gate went
+ *  stale — a sprite added mid-session kept direct render on (the GPU pass draws
+ *  discs only and drawAgentsOverlay is skipped ⇒ sprites never drawn), and an
+ *  agent OM the GPU can't compile kept it presenting behaviour/default colours
+ *  instead of the CPU OM colours. ONE helper so the init gate and the
+ *  soft-recompile refresh can't drift. */
+function agentRenderModelTermsOk(
+  sprites: unknown[] | undefined,
+  agentMappings: unknown[] | undefined,
+  agentTarget: string,
+  omGpuSupported: boolean | undefined,
+): boolean {
+  return (sprites?.length ?? 0) === 0
+    && (agentTarget !== 'webgpu' || (agentMappings?.length ?? 0) === 0 || !!omGpuSupported);
+}
+
 // --- Brush shapes ---
 // The brush stamp is no longer always a rectangle: circle (filled disc by
 // radius), ring (annulus: radius ± width/2), and line (two clicks on the
@@ -1815,6 +1835,15 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   // The gate result (general model properties) — read by the agentRuntimeReady
   // handler to decide whether to (re)attach the agent canvas.
   const agentRenderEligibleRef = useRef<boolean>(false);
+  // M1 (audit): the two gate terms that a SOFT recompile can flip — no sprites, and
+  // (WebGPU target) either no agent Output Mappings or an OM the GPU compiled. The
+  // full gate is only evaluated in initWorkerWithDimensions, so without this the
+  // terms went stale: adding a sprite kept direct render on (sprites never drawn,
+  // since the GPU pass draws discs and drawAgentsOverlay is skipped), and adding a
+  // GPU-unsupported OM kept it presenting behaviour/default colours instead of the
+  // CPU OM colours. Refreshed in the soft-recompile path; consumed by
+  // maybeAttachAgentCanvas (same shape as the metaballs suppression).
+  const agentRenderModelTermsOkRef = useRef<boolean>(true);
   // E2: this model wants the single-canvas COMPOSITE (2D grid+agents, WebGPU grid,
   // WebGPU agents) — the transferred canvas is WORLD-sized (grid dims) and the
   // worker composites the grid layer + the agent discs into it in one encoder.
@@ -2503,6 +2532,11 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   // display resize or a CPU-visual toggle change). No-op unless eligible + idle.
   const maybeAttachAgentCanvas = useCallback(() => {
     if (!agentRenderEligibleRef.current || agentMetaballsRef.current.enabled) return;
+    // M1 (audit): the gate's MODEL-dependent terms (sprites / an agent OM whose
+    // graph the GPU can't compile) can change on a SOFT recompile, which never
+    // re-runs the full gate — the soft-recompile path refreshes this ref, and it
+    // suppresses the attach exactly like the metaballs check above.
+    if (!agentRenderModelTermsOkRef.current) return;
     // Phase C: 3D alpha-blend needs back-to-front sorting (gl3d's job), so a 3D
     // alpha-blend-on model stays on the CPU/frame path — don't attach.
     if (is3dRef.current && alpha3dRef.current) return;
@@ -3976,8 +4010,11 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     if (msg.type === 'agentRuntimeReady') {
       // The agent WebGPU runtime is (re)built (init / recompile / target flip) —
       // its render pipeline is gone, so reset our state and re-attach the canvas
-      // if the model is eligible (the gate is stable across a soft recompile —
-      // sprites/metaballs/OM/target/topology changes all force a full reinit).
+      // if the model is eligible. Most gate terms (target / topology / dimension /
+      // bonds) force a FULL reinit when they change; the two that do NOT
+      // (sprites, agentMappings) are refreshed into agentRenderModelTermsOkRef by
+      // the soft-recompile path and re-checked inside maybeAttachAgentCanvas
+      // (audit M1) — so this single re-attach point stays correct.
       agentDirectRenderActiveRef.current = false;
       agentRenderCanvasRef.current = null;
       // Phase C: drop the 3D sphere DOM canvas (a runtime rebuild dropped its
@@ -4273,12 +4310,14 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     const agentRenderEligible =
       agentModel && (model.topologyMode?.gridCells === false || (agentDecoupled && !is3D))
       && offscreenSupported
-      && (model.sprites?.length ?? 0) === 0 && !agentMetaballsRef.current.enabled
-      // A1.5: a WebGPU-target model with agent mappings is render-eligible when the
-      // OM graph compiled to GPU colour passes (they write agentColors GPU-side, so
-      // the resident batch presents the correct OM colours). An unsupported OM keeps
-      // the CPU overlay (the A1 exclusion), unchanged.
-      && (agentResult.agentTarget !== 'webgpu' || (model.agentMappings?.length ?? 0) === 0 || !!agentResult.agentWebgpuOmSupported)
+      && !agentMetaballsRef.current.enabled
+      // No sprites (a CPU-only visual the GPU disc pass can't draw), and — on the
+      // WebGPU target — either no agent Output Mappings or an OM graph that
+      // compiled to GPU colour passes (A1.5: they write agentColors GPU-side, so
+      // the resident batch presents the correct OM colours; an unsupported OM keeps
+      // the CPU overlay). Both terms are re-evaluated on a soft recompile — see
+      // agentRenderModelTermsOk / agentRenderModelTermsOkRef (audit M1).
+      && agentRenderModelTermsOk(model.sprites, model.agentMappings, agentResult.agentTarget, agentResult.agentWebgpuOmSupported)
       // NO BOND LINES (audit H1 — BOTH dimensions, not just 3D). The GPU pass draws
       // discs (2D) / sphere impostors (3D) only, and under direct render draw()
       // skips drawAgentsOverlay() entirely — which is the SOLE bond renderer. A
@@ -4311,6 +4350,10 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     // The union drives the attach machinery (a field-coupled composite model is
     // NOT agentRenderEligible — agentDecoupled is false — but IS composite-eligible).
     agentRenderEligibleRef.current = agentRenderEligible || agentComposite;
+    // M1: seed the live-term ref from the SAME helper the gate above used, so a
+    // later re-attach (display resize / metaballs off) re-checks the same terms.
+    agentRenderModelTermsOkRef.current =
+      agentRenderModelTermsOk(model.sprites, model.agentMappings, agentResult.agentTarget, agentResult.agentWebgpuOmSupported);
     agentCompositeEligibleRef.current = agentComposite;
     agentCompositeActiveRef.current = false;
     agentDirectRenderActiveRef.current = false;
@@ -4873,10 +4916,42 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
         agentWebgpuMaxAgents: agentResult.agentWebgpuMaxAgents,
         agentWebgpuMaxHashBins: agentResult.agentWebgpuMaxHashBins,
         agentWebgpuLayout: agentResult.agentWebgpuLayout,
+        // A2 render-only layout MUST ride every recompile too (found while
+        // verifying M1): the worker does `pendingAgentRenderLayout = rc
+        // .agentRenderLayout ?? null`, so omitting it NULLED the layout on every
+        // soft recompile — after which buildAgentWebGPUIfNeeded stops posting
+        // agentRuntimeReady for a CPU target and the attach handler bails with
+        // active:false, i.e. a JS/WASM-target agent model lost direct render
+        // permanently on the first graph edit.
+        agentRenderLayout: agentResult.agentRenderLayout,
         agentWebgpuUsesI32Write: agentResult.agentWebgpuUsesI32Write,
         agentWebgpuUsage: agentResult.agentWebgpuUsage,
         agentWebgpuOmShaders: agentResult.agentWebgpuOmShaders,
       });
+      // M1 (audit): re-evaluate the direct-render gate's MODEL-dependent terms.
+      // `sprites` / `agentMappings` are deliberately NOT in needsFullInit (a full
+      // reinit would reset the grid + re-seed the agent population), so the gate —
+      // computed once in initWorkerWithDimensions — went stale on a soft recompile.
+      // Detach / re-attach exactly like the metaballs suppression effect: no worker
+      // teardown, the live population survives.
+      {
+        const ok = agentRenderModelTermsOk(model.sprites, model.agentMappings, agentResult.agentTarget, agentResult.agentWebgpuOmSupported);
+        if (ok !== agentRenderModelTermsOkRef.current) {
+          agentRenderModelTermsOkRef.current = ok;
+          if (!ok) {
+            // Fall back to the CPU overlay: stop blitting the worker's canvas (the
+            // worker keeps presenting into an orphan canvas, same as metaballs).
+            if (agentDirectRenderActiveRef.current) { agentDirectRenderActiveRef.current = false; agentRenderCanvasRef.current = null; }
+          }
+          // Do NOT attach here when the terms go back to OK: this recompile also
+          // rebuilds the agent runtime, and the `agentRuntimeReady` that follows
+          // drops any in-flight attach and re-attaches itself (now gated on the
+          // ref we just refreshed). Posting one here too produced TWO attaches
+          // whose SECOND ack found no pending canvas and took the "attach failed"
+          // branch — turning direct render back off.
+          draw();
+        }
+      }
       // If user has the model toggle on, ensure useWasm is set (recompile doesn't carry useWasm by default).
       // PR5: the grid target now flows through for agent models too (the
       // force-JS hack is gone), so these reflect dimsModel's real flags.
@@ -5634,6 +5709,17 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       const inst = gl3dRef.current.pickAgent(px, py, glc.clientWidth || 1, glc.clientHeight || 1);
       return instanceToSlot(snap, inst);
     };
+    // Direct-agent-render gate state (DEV/verification only). The render layer has
+    // no automated harness (parity-agent-* cover the compilers/engine), so the gate
+    // matrix + attach lifecycle can only be checked in-browser — this exposes the
+    // decision so a probe doesn't have to infer it from pixels in an occluded pane.
+    W.__agentRenderState = () => ({
+      eligible: agentRenderEligibleRef.current,
+      modelTermsOk: agentRenderModelTermsOkRef.current,
+      directActive: agentDirectRenderActiveRef.current,
+      compositeActive: agentCompositeActiveRef.current,
+      metaballs: agentMetaballsRef.current.enabled,
+    });
   }, [is3D, draw, instanceToSlot]);
 
   // 3D Grid CA: mirror the control state into the renderer refs + redraw.

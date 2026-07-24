@@ -5154,8 +5154,15 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
   // sees stale coordinates. Reuses the async-batch deferral discipline: block,
   // readback, then replay the (now-fresh) message. AGENT_GPU_DEFER_TYPES covers
   // every mutation; getAgentState / getState are the on-demand readers.
+  // `recompile` joins the readers (audit M3): it REBUILDS the agent GPU runtime,
+  // dropping every GPU-side buffer. In free mode the CPU store can be many frames
+  // behind, so without the one-shot readback a soft recompile silently REWOUND the
+  // simulation to the last synced frame. Pulling the state down here (then item
+  // B1's agentGpuUploadPending re-seeds the fresh runtime from it) makes a soft
+  // recompile lossless. Reuses the one-and-only one-shot mechanism — no new
+  // await/teardown sequencing inside buildAgentWebGPUIfNeeded.
   if (agentStoreStale && agentWebgpuRuntime && agentStore
-      && (AGENT_GPU_DEFER_TYPES.has(msg.type) || msg.type === 'getAgentState' || msg.type === 'getState')) {
+      && (AGENT_GPU_DEFER_TYPES.has(msg.type) || msg.type === 'getAgentState' || msg.type === 'getState' || msg.type === 'recompile')) {
     asyncStepBatchInFlight = true;   // no message may interleave the one-shot readback
     deferredDuringAsyncBatch.push(msg);
     // The flag MUST be cleared from a finally (audit H2): a throw here would leave
