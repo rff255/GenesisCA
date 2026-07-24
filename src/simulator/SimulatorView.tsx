@@ -4279,11 +4279,18 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       // the resident batch presents the correct OM colours). An unsupported OM keeps
       // the CPU overlay (the A1 exclusion), unchanged.
       && (agentResult.agentTarget !== 'webgpu' || (model.agentMappings?.length ?? 0) === 0 || !!agentResult.agentWebgpuOmSupported)
-      // Phase C: 3D adds — no bond LINES to draw (resident models satisfy this; it
-      // only bites snapshot-fed 3D bonded models, which keep the CPU path) AND 3D
-      // alpha-blend OFF (translucent spheres need back-to-front sorting = gl3d's
-      // job; opaque impostors here). 2D is unaffected (both behind `!is3D ||`).
-      && (!is3D || (resolveMaxBonds(model.centerBased) === 0 && !alpha3dRef.current));
+      // NO BOND LINES (audit H1 — BOTH dimensions, not just 3D). The GPU pass draws
+      // discs (2D) / sphere impostors (3D) only, and under direct render draw()
+      // skips drawAgentsOverlay() entirely — which is the SOLE bond renderer. A
+      // bonded model would silently lose its bond lines (and the showBonds Layers
+      // toggle would become a no-op), which is the defining visual of a tissue
+      // model. Emitting bond lines in the GPU pass is a real render feature (a line
+      // pipeline + the bond pair buffer), not a wiring repair — recorded as a
+      // follow-up; until then a bonded model keeps the CPU overlay.
+      && resolveMaxBonds(model.centerBased) === 0
+      // Phase C: 3D adds — alpha-blend OFF (translucent spheres need back-to-front
+      // sorting = gl3d's job; opaque impostors here). 2D is unaffected.
+      && (!is3D || !alpha3dRef.current);
     // E2 — single-canvas composite gate (DISABLED): a 2D grid+agents model with a
     // WebGPU GRID + a WebGPU AGENT target used to composite the grid layer + the
     // agent discs into ONE WORLD-SIZED canvas (scalePx=1), letting the main-thread

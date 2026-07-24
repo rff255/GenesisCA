@@ -55,7 +55,18 @@ shape. Design authority: [IMPACT_MAP_GPU_AGENT_RENDER.md](IMPACT_MAP_GPU_AGENT_R
      old_strings on clean ASCII CODE lines, never comment lines.
    - Any new async batch loop in the worker MUST set/clear
      `asyncStepBatchInFlight` (message deferral) — concurrent batches were
-     the P0 corruption bug.
+     the P0 corruption bug. **EVERY path that sets it must clear it from a
+     `finally`** (audit H2): a throw with the flag still set makes the
+     dispatcher defer every subsequent message with no replay — a permanent,
+     silent worker dead-lock.
+   - A REBUILT GPU runtime has spec-ZERO-initialised buffers: any rebuild
+     path must set `agentGpuUploadPending = true` (audit B1) or the resident
+     batch's conditional upload skips the seed, dispatches on zeros, and the
+     frame readback writes those zeros into every LIVE CPU agent slot.
+   - Anything built per canvas ATTACH must be reused or destroyed on
+     re-attach (audit H3/L5): a re-attach fires on every real display-size
+     change (once per frame while a splitter is dragged), so a fresh
+     allocation there orphans GPU buffers AND a shared-device reference.
    - `device.lost` fires with reason `destroyed` on OUR OWN teardown —
      never report that as an error.
    - Never list the same ArrayBuffer twice in a postMessage transfer list

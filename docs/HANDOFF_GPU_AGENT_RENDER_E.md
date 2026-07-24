@@ -241,8 +241,16 @@ On the shared device (now delivered), replace the CPU field round-trip with
 - The shared device is the E2 prerequisite: a single WebGPU canvas context is
   bound to ONE device, so compositing grid + agents on one canvas requires both
   runtimes on the shared device — which E1 delivers.
-- The C-report leak (a re-attach building a fresh render-only device) is FIXED by
-  E1 (the render-only surface takes the shared device now).
+- The C-report leak (a re-attach building a fresh render-only device) is only
+  **half** fixed by E1. **CORRECTED 2026-07-23** (audit H3): E1 stopped the
+  *duplicate DEVICE* (the render-only surface takes the shared device), but the
+  attach handler still built a brand-new surface on every re-attach without
+  destroying the previous one — so each re-attach orphaned three
+  `maxAgents`-sized buffers **and** a shared-device reference that could never be
+  released (making the device undestroyable, i.e. the leak merely changed shape).
+  The remaining half was closed by the AUDIT FIX PASS (handoff item 4): the
+  attach handler now REUSES a layout-matching `agentRenderRuntime` and destroys a
+  stale-layout one before rebuilding.
 - The grid runtime already renders its own canvas (`setupDirectRender` /
   `presentToCanvas`); with one device E2 can lift D's `&& !is3D` render carve-out
   (voxels-vs-spheres depth-composite on one device/canvas). The z-order stays

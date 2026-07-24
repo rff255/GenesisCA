@@ -1769,7 +1769,7 @@ export function HelpView() {
             <li><strong>Direct agent render.</strong> For a model whose agents do
               <em>not</em> exchange a cell field with the grid (an agents-only model, or a
               2D grid+agents model whose agents never read or write a cell attribute) &mdash;
-              with no sprites and no metaballs, on <em>any</em> agent target (JS,
+              with no bonds, no sprites and no metaballs, on <em>any</em> agent target (JS,
               WebAssembly, or WebGPU) &mdash; the worker renders the agents on the GPU
               into the canvas and the main thread just copies the finished frame. When the
               grid is present it draws normally underneath, with the agents composited on
@@ -1779,7 +1779,9 @@ export function HelpView() {
               agent positions, and everything keeps working exactly as before. A
               <strong> Glow</strong> Graphics option (in the agent controls) renders each
               agent as an additive halo on this path (2D only). A model whose agents DO use
-              a cell field (chemotaxis, stigmergy) keeps the standard render.</li>
+              a cell field (chemotaxis, stigmergy), or one that draws <em>bonds</em>
+              (a tissue), keeps the standard render &mdash; bond lines are drawn by the
+              regular agent overlay, which this fast path replaces.</li>
             <li><strong>Direct agent render &mdash; 3D.</strong> The same fast path works
               for <em>3D</em> agents-only models: while you just watch, the worker draws the
               agents as GPU spheres and the 3D viewport draws only the overlays (axes,

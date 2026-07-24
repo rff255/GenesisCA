@@ -52,6 +52,10 @@ import {
   createAgentRenderOnlyRuntime, presentAgentRenderFromStore, destroyAgentRenderSurface,
   type AgentWebGPURuntime, type AgentRenderSurface, type FieldArray, type AgentRenderView, type AgentRenderView3D, type AgentOMShaderInput,
 } from './agentWebgpuRuntime';
+// E1 device-leak metric (DEV/verification only — surfaced through the __e1bCounters
+// probe so the "one adapter, balanced refcount" claim is reproducible from the
+// committed tree; a page-side import() would get a DIFFERENT module instance).
+import { sharedGpuRefCount, sharedGpuAdapterRequestCount } from './sharedGpuDevice';
 
 /** A camera/graphics view is either the 2D disc view or the Phase C 3D sphere view
  *  (distinguished by `mode: '3d'`). One setAgentCamera message carries either. */
@@ -1125,6 +1129,15 @@ function instantiateAgentWasmIfNeeded(): void {
  *  discards a stale in-flight build (the orphan-on-reinit discipline). Called from
  *  init / reset / recompile when the agent target is 'webgpu'. */
 function buildAgentWebGPUIfNeeded(): void {
+  // BLOCKER (audit B1): a REBUILT runtime has fresh, spec-ZERO-initialised GPU
+  // buffers, and the PR7c resident batch uploads the CPU SoA only when this flag
+  // is set (runAgentBatchResident's conditional upload). Without the flag the
+  // first resident batch after a rebuild would dispatch on an all-zero agent SoA
+  // and readbackAgentFrame would write those zeros back into every LIVE CPU slot
+  // (x/y/radius/velocity/attributes -> 0, permanently). A rebuild without a store
+  // re-init happens on EVERY soft recompile (initAgents, the only other setter,
+  // runs there only when the WASM backing changed).
+  agentGpuUploadPending = true;
   // Drop any prior runtime first (a re-init may have swapped the store/dims).
   if (agentWebgpuRuntime) { destroyAgentWebGPURuntime(agentWebgpuRuntime); agentWebgpuRuntime = null; }
   // A1: the render pipeline lived on the old runtime — the main thread must
@@ -5145,7 +5158,10 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       && (AGENT_GPU_DEFER_TYPES.has(msg.type) || msg.type === 'getAgentState' || msg.type === 'getState')) {
     asyncStepBatchInFlight = true;   // no message may interleave the one-shot readback
     deferredDuringAsyncBatch.push(msg);
-    void (async () => { await ensureAgentStoreFresh(); endAsyncStepBatch(); })();
+    // The flag MUST be cleared from a finally (audit H2): a throw here would leave
+    // asyncStepBatchInFlight set forever and the guard above would then defer every
+    // subsequent message with no replay — a permanent, silent worker dead-lock.
+    void (async () => { try { await ensureAgentStoreFresh(); } finally { endAsyncStepBatch(); } })();
     return;
   }
 
@@ -6180,9 +6196,25 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
         try {
           let rt: AgentRenderSurface | null = agentWebgpuRuntime;
           if (!rt) {
-            // A2 — CPU target: acquire a device + the three render buffers.
-            rt = await createAgentRenderOnlyRuntime(pendingAgentRenderLayout!);
-            if (!rt) { self.postMessage({ type: 'agentRenderStatus', active: false }); return; }
+            // A2 — CPU target: the three render buffers on the shared device.
+            // Audit H3: REUSE an existing render-only surface when the shipped
+            // layout still matches. A re-attach fires on every REAL display-size
+            // change (once per frame while a panel splitter is dragged) and never
+            // changes the layout, so building a new surface each time orphaned
+            // three maxAgents-sized buffers AND a shared-device reference that
+            // could never be released (the device became undestroyable). A
+            // stale-layout surface is destroyed before the rebuild.
+            const want = pendingAgentRenderLayout!;
+            const prev = agentRenderRuntime;
+            if (prev && prev.layout.maxAgents === want.maxAgents
+                && (prev.layout.gridDepth ?? 1) === (want.gridDepth ?? 1)
+                && prev.layout.f32Len === want.f32Len) {
+              rt = prev;
+            } else {
+              if (prev) { destroyAgentRenderSurface(prev); agentRenderRuntime = null; }
+              rt = await createAgentRenderOnlyRuntime(want);
+              if (!rt) { self.postMessage({ type: 'agentRenderStatus', active: false }); return; }
+            }
           }
           // E2: `composite` → the canvas is WORLD-sized and carries BOTH the
           // WebGPU grid layer AND the agent discs (one encoder). Requires the grid
@@ -6194,7 +6226,13 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
             ? await setupAgentCompositeRender(rt, msg.canvas)
             : await setupAgentDirectRender(rt, msg.canvas);
           if (!ok) {
-            if (rt !== agentWebgpuRuntime) destroyAgentRenderSurface(rt);
+            // A render-only surface (possibly the REUSED one) is torn down here —
+            // clear the module ref too so a later attach can't hand out a destroyed
+            // surface (audit H3's reuse path).
+            if (rt !== agentWebgpuRuntime) {
+              destroyAgentRenderSurface(rt);
+              if (agentRenderRuntime === rt) agentRenderRuntime = null;
+            }
             self.postMessage({ type: 'agentRenderStatus', active: false });
             return;
           }
@@ -6249,7 +6287,16 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
         // agents immediately (a paused sim ships no step, hence no snapshot without
         // this). Free mode (uiSync off) ships no snapshot, so nothing to undo.
         asyncStepBatchInFlight = true;
-        void (async () => { await ensureAgentStoreFresh(); sendColors(); endAsyncStepBatch(); })();
+        // try/finally is MANDATORY (audit H2): sendColors() does real work that can
+        // throw (typed-array slicing at capacity, a postMessage transfer-list
+        // DataCloneError, an OM colour-pass edge case). Without the finally the
+        // in-flight flag would stay set forever and the dispatcher's guard would
+        // defer EVERY subsequent message with no replay — the simulator freezes
+        // with no error surfaced.
+        void (async () => {
+          try { await ensureAgentStoreFresh(); sendColors(); }
+          finally { endAsyncStepBatch(); }
+        })();
       }
       break;
     }
@@ -6673,6 +6720,13 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
         useWebGPU, agentTarget,
         sharedDevice: !!(agentWebgpuRuntime && webgpuRuntime && agentWebgpuRuntime.device === webgpuRuntime.device),
         fieldSpecTypes: fieldSpecs.map(s => s.type),
+        // E1 leak metric (audit L4) + the H3 re-attach evidence: adapterRequests
+        // stays 1 for the worker's lifetime and refCount stays balanced (it must
+        // NOT grow with re-attaches now that a matching render-only surface is
+        // reused instead of rebuilt).
+        gpuRefCount: sharedGpuRefCount(),
+        gpuAdapterRequests: sharedGpuAdapterRequestCount(),
+        hasRenderOnlySurface: !!agentRenderRuntime,
       });
       break;
     }

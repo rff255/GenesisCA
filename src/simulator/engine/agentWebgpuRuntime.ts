@@ -1489,6 +1489,9 @@ async function setupAgentSphereRender(rt: AgentRenderSurface, canvas: OffscreenC
     rt.renderCanvas = canvas;
     rt.renderCtx = ctx;
     rt.render3D = true;
+    // Audit L5 (3D sibling): a re-attach rebuilds on the SAME surface — release the
+    // previous view uniform rather than orphaning it.
+    if (rt.renderView3DBuf) { try { rt.renderView3DBuf.destroy(); } catch { /* non-fatal */ } }
     rt.renderView3DBuf = renderView3DBuf;
     rt.renderSpherePipeline = pipeline;
     rt.renderSphereBindGroup = renderBindGroup;
@@ -1540,6 +1543,9 @@ async function buildAgentDiscPipelines(rt: AgentRenderSurface): Promise<boolean>
     alpha: { srcFactor: 'one', dstFactor: 'one', operation: 'add' },
   };
   const renderViewBuf = rt.device.createBuffer({ label: 'agent-render-view', size: RENDER_VIEW_BYTES, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+  // Audit L5: a re-attach (every real display-size change) rebuilds the pipelines
+  // on the SAME surface — release the previous view uniform instead of orphaning it.
+  if (rt.renderViewBuf) { try { rt.renderViewBuf.destroy(); } catch { /* non-fatal */ } }
   rt.renderViewBuf = renderViewBuf;
   rt.renderPlainPipeline = mkPipe('agent-render-plain', plainBlend);
   rt.renderGlowPipeline = mkPipe('agent-render-glow', glowBlend);
