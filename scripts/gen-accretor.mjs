@@ -410,14 +410,25 @@ const properties = {
   dimension: '3d',
   maxIterations: 100000,
   tags: ['3D', 'accretion', 'growth', 'rule-table', 'Driessens-Verstappen', 'voxel'],
-  useWasm: true,
-  // "Skip Isolated Empty Cells" — the large-grid optimization that makes 300³
-  // practical. "Empty" = state 0; the processing range is the radius-1 Moore
-  // box (covers the rule's face/edge/corner reads — a cell can only change if
-  // a Moore neighbour is occupied, since growth requires faceCount >= 1).
-  // Verified byte-identical to the full loop at a fixed RNG seed.
+  // SHIPS ON WEBGPU (deliberate, user-measured — do NOT "fix" this to WASM+SIE):
+  // the GPU dispatches all 27M cells in parallel, which beats the CPU+SIE path
+  // for this model and pulls further ahead as the accretion structure grows and
+  // at >1 gen/frame. The lattice perf review (docs/PERF_REVIEW_LATTICE.md) shows
+  // why the margin is not yet as large as it should be — the GPU simulates a
+  // 300³ generation in ~2.35 ms inside a ~540 ms frame, because a 3D grid still
+  // round-trips its colours to the CPU every frame for the WebGL2 voxel renderer
+  // (lattice phase L1 removes that).
+  useWasm: false,
+  useWebGPU: true,
+  // "Skip Isolated Empty Cells" — the CPU-target (JS/WASM) large-grid
+  // optimization: "empty" = state 0, processing range = the radius-1 Moore box
+  // (covers the rule's face/edge/corner reads — a cell can only change if a
+  // Moore neighbour is occupied, since growth requires faceCount >= 1).
+  // Verified byte-identical to the full loop at a fixed RNG seed. Shipped
+  // CONFIGURED BUT OFF: it does nothing on WebGPU (which dispatches every cell),
+  // so a user switching to WASM/JS only has to tick the box.
   skipIsolatedEmpty: {
-    enabled: true,
+    enabled: false,
     emptyAttributeId: 'state',
     emptyValue: '0',
     rangeKind: 'radius',
