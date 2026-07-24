@@ -78,11 +78,18 @@ loses its defining visual). Both are small, local fixes. H2 (worker lock-up) and
 regression-proved; all six MEDIUM and five of six LOW findings fixed; the fix pass
 also closed one defect the audit missed (the recompile message dropping
 `agentRenderLayout`, which permanently disabled direct render for CPU-target agent
-models after their first graph edit). Remaining open: **M4** (investigated, plan
-written, no code — a WebGPU-grid + WebGPU-agent decoupled model still runs its
-agents on JS), **L2** (cosmetic infinity-tiling cap), **N2** (an untracked bench
-script owned by another session), **N3** (sub-millionth-unit f32 quantisation), and
-the visible-pane verification debt below.
+models after their first graph edit). Remaining open: **L2** (cosmetic infinity-tiling
+cap), **N2** (an untracked bench script owned by another session), **N3**
+(sub-millionth-unit f32 quantisation), and the visible-pane verification debt below.
+
+**Follow-up pass (2026-07-24)** closed the two largest remaining items:
+**M4 is FIXED** (`c7e04cb` — step 1 of its plan: a decoupled grid+agents model on a
+WebGPU grid now dispatches its agents on the GPU when the user selected the WebGPU
+agent target; step 2, reaching the RESIDENT batch from that branch, stays deferred),
+and **verification-debt item 7 is CLOSED for the regression surface** (`db3ff16` —
+`scripts/verify-agent-render.mjs`, the first automated coverage of the
+render/gate/attach/upload layer, negative-control-proved). The visible-pane debt
+(items 1–5) is unchanged.
 
 ---
 
@@ -201,7 +208,7 @@ recompile silently rewinds the simulation to the last synced frame. (Independent
 B1: fixing B1 makes the rewind *consistent* rather than corrupting.)
 *Fix*: `await ensureAgentStoreFresh()` before dropping the runtime (or accept + document).
 
-**M4 — a WebGPU-grid + WebGPU-agent model without a field runs its agents on JS.** **[OPEN — investigated, plan in the fix handoff's Completion Report]**
+**M4 — a WebGPU-grid + WebGPU-agent model without a field runs its agents on JS.** **[FIXED `c7e04cb` — step 1 of the plan; step 2 (residency from this branch) still deferred]**
 [sim.worker.ts:5431](../src/simulator/engine/sim.worker.ts): the `webgpuActive`
 branch's non-E1b arm calls `runAgentStep()` — the JS/WASM agent step — regardless of
 `agentTarget === 'webgpu'`. E1b routed the *float-field* sub-case onto the GPU runtime
@@ -209,6 +216,29 @@ and left the no-field sub-case on JS. So a decoupled grid+agents model gets neit
 the GPU agent behaviour the user selected nor residency, and its RNG family/dynamics
 differ from the same model with a JS/WASM grid. Pre-existing (D's report noted it) but
 now inconsistent with E1b and worth closing.
+
+*Fixed (2026-07-24, `c7e04cb`)* — **step 1 of the plan only**. A new arm between the
+E1b field arm and the CPU arm, gated on `agentDecoupledGpuAgents()` (general
+properties: resolved target `webgpu`, runtime ready, no field node reachable, no cell
+attr grants agent access, and the compiled GPU agent layout reserved no field
+regions), dispatches the ordinary per-gen `runAgentStepWebGPU()` with **no bridge**
+and falls back to `runAgentStep()` for that generation on any GPU failure — the same
+bail-out contract as every other GPU agent dispatch site. The premise was re-verified
+against the current code before implementing: `runAgentStepWebGPUInner` gates every
+field operation on `rt.layout.fieldReadLen/fieldWriteLen`, so the bridge parameter is
+genuinely optional. Sprites are advanced explicitly (the GPU path does not).
+Verified in-browser on a synthetic decoupled model (Game of Life grid on WebGPU +
+Boids agents on WebGPU, shared device): 271 generations with `m4Gpu 271 / m4Cpu 0`,
+260 agents flocking at polarization **0.9964**, **every agent position exactly
+f32-representable** (the proof the state came through the GPU pipeline rather than the
+f64 CPU step), the grid layer evolving alongside (seeded soup 530 → 492 → 327 alive),
+generation counting exactly once per generation, 0 errors. Regressions: Chemotaxis on
+WebGPU/WebGPU keeps the E1b bridge (`gpuBridge 90 / cpuFallback 0`, `m4Eligible false`);
+agents-only Boids on WebGPU is untouched. DEV probe: `m4Gpu` / `m4Cpu` / `m4Eligible`
+(+ `agentRuntimeReady`, `residentEligible`, `agentGpuUploadPending`) on `__e1bCounters`.
+**Step 2 remains deferred**: reaching the RESIDENT batch from this branch restructures
+the batch loop that produced the P0 concurrency bug and needs its own measurement — it
+is not a contained change, so it was deliberately not attempted here.
 
 **M5 — `uploadAgentColors` allocates a fresh `Uint32Array(maxAgents)` on every call** **[FIXED `8f35802`]**
 ([agentWebgpuRuntime.ts:1767](../src/simulator/engine/agentWebgpuRuntime.ts)). It is on
@@ -386,7 +416,33 @@ deferral systems are not mistaken for peers.
    fresh capture on `origin/master` (via a temporary `git worktree`) compared against
    HEAD would let a reviewer confirm the *lattice* surfaces are byte-identical and
    enumerate exactly which agent surfaces moved and why.
-7. **No harness covers the render/readback layer at all.** `parity-agent-*` exercise
-   the compilers/engine; nothing exercises the gate matrix, the attach lifecycle, the
-   free/frame flip, or the one-shot rule. B1, H2, H3 and M1 are all outside every
-   automated check on this branch.
+7. ~~**No harness covers the render/readback layer at all.**~~ **[CLOSED for the
+   regression surface, 2026-07-24 — `scripts/verify-agent-render.mjs`]** The gap was
+   real: `parity-agent-*` exercise the compilers/engine only, so B1, H1, H2, H3, M1
+   and both user-reported render bugs sat outside every automated check. There is now
+   a dedicated harness with three tiers:
+   - **Tier A (computed)** imports the REAL modules and evaluates the direct-render
+     gate's discriminating INPUTS over every shipped library model — no logic is
+     replicated. E.g. `resolveMaxBonds` must report > 0 for every model whose agent
+     graph forms bonds (if it ever reported 0, the gate silently admits a bonded model
+     to a disc-only renderer and the bond lines vanish — H1); the field-decoupling
+     predicate must exclude every model with a field node or an agent-accessible cell
+     attr; the resolved agent target must never name an unsupported backend.
+   - **Tier B (source invariants)** pins the exact line whose ABSENCE caused each
+     shipped bug, anchored to the enclosing function body (never a whole-file grep):
+     the rebuild upload flag + its conditional consumer (BLOCKER), the colour seed in
+     `uploadAgentSoA` (invisible agents), the gate's bonds/sprites/metaballs/decoupling
+     terms (H1, M1), the attach reuse-or-destroy pair (H3), `agentRenderLayout` on BOTH
+     the init and recompile messages (the fix pass's bonus find), every
+     `asyncStepBatchInFlight` setter clearing from a `finally` (H2), the M4 routing arm,
+     and that the render shader stays graph-agnostic (FP-1).
+   - **Tier C (`--probes`)** prints the invariants that need a live GPUDevice as a
+     copy-pasteable in-browser probe list (routing, no-leak re-attach, the gate matrix,
+     the rebuild seed, colours with no colour node).
+   **Proven live by a negative control**: seven targeted mutations (drop the rebuild
+   flag / drop the colour seed / remove the bonds term / stop reusing the render
+   surface / drop `agentRenderLayout` from the recompile / remove the M4 GPU dispatch /
+   make `resolveMaxBonds` return 0) were each applied byte-exactly and reverted — the
+   harness caught **all seven**. What it does NOT cover, and is left as debt: anything
+   requiring composited pixels or a real device (items 1–5 above) — those live in
+   tier C as probes, not assertions.
