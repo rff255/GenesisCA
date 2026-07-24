@@ -2718,7 +2718,8 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   // re-presents through the worker's own mutation tail. The one thing that DOES
   // need it is gl3d's colour-id `pick()` (3D inspect), which reads the CPU instance
   // buffer only frame mode refreshes — so pin for the states in which a pick can
-  // fire: an in-progress gesture (press→release), the Inspect toggle armed while
+  // fire: an in-progress PICKING gesture (press→release; a camera orbit/pan/zoom
+  // or a brush stroke is NOT one — see onDown), the Inspect toggle armed while
   // hovering, or Shift held while hovering (the Shift+LMB inspect gesture, whose
   // pick happens on the RELEASE — pressing the modifier first gives the flip its
   // frame). The AGENT driver's hover term is already this narrow (it ANDs an armed
@@ -5627,11 +5628,23 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     };
     const onDown = (e: PointerEvent) => {
       if ((e.target as HTMLElement)?.closest?.('[data-sim-overlay]')) return;
-      // L1: a gesture is starting — pin the grid's frame mode for its duration so a
-      // release that PICKS (3D inspect) resolves against a fresh instance buffer.
-      // Set before every early return below; cleared in onUp (a window listener, so
-      // it always fires). Passive hover no longer pins — see updateGridUiSync.
-      glGestureActiveRef.current = true;
+      // L1: pin the grid's frame mode for this gesture ONLY when the gesture can
+      // PICK — gl3d's colour-id pick() (3D cell inspect) resolves against the CPU
+      // instance buffer that only frame mode refreshes, and the pick fires on the
+      // RELEASE, so the pin must start at the press to give the flip its frame.
+      // A CAMERA gesture (orbit / pan / Ctrl-resize / brush) needs NO CPU state:
+      // the brush is pure pickOnPlane ray math and a paint re-presents through the
+      // worker's own mutation tail, while the camera is re-presented GPU-side from
+      // setGridCamera. Pinning those was the bug — manual orbiting dropped to the
+      // readback path (stutter) and froze the display on a stale frame that no
+      // longer tracked the camera until colours arrived, while AUTO-orbit/zoom,
+      // which never set this flag, stayed smooth. Determinable from the event
+      // alone, so it is still set before every early return below; cleared in onUp
+      // (a window listener, so it always fires). Passive hover does not pin either
+      // — see updateGridUiSync.
+      glGestureActiveRef.current =
+        e.button === 0 && !e.ctrlKey && !e.metaKey && !e.altKey
+        && (e.shiftKey || inspectModeRef.current);
       glShiftDownRef.current = e.shiftKey;
       if (voxelRenderActiveRef.current) updateGridUiSync();
       // Move keyboard focus off any text field so the transport shortcuts
