@@ -1823,6 +1823,14 @@ export function uploadAgentRenderView(rt: AgentRenderSurface, v: AgentRenderView
  *  Draws `hw × copiesX × copiesY` instances. No-op when render isn't active. */
 export function presentAgentsEncode(rt: AgentRenderSurface, enc: GPUCommandEncoder, hw: number): void {
   if (!rt.renderActive || !rt.renderCtx) return;
+  // Audit L3 — NEVER run the disc-only pass on a COMPOSITE surface: its canvas
+  // carries the grid layer too, and this pass clears (loadOp:'clear') before
+  // drawing only the discs, so it would wipe the grid. The composite has its own
+  // encoder path (presentCompositeEncode) which needs the grid colours buffer +
+  // dims this function does not receive. The E2 composite is disabled today, but
+  // dispatchResidentBatch appends this pass unconditionally — so this guard is
+  // what keeps a future E2 revival from silently blanking the grid under residency.
+  if (rt.renderComposite) return;
   // Phase C: a 3D surface draws sphere impostors with a depth attachment (one
   // instance per agent, no infinity tiling); a 2D surface draws the disc quads.
   if (rt.render3D) { presentAgentSpheresEncode(rt, enc, hw); return; }
@@ -2550,7 +2558,10 @@ export function dispatchResidentBatch(rt: AgentWebGPURuntime, gens: number, high
   dispatchAgentOMEncode(rt, enc, highWater);
   // A1 direct render: present the FINAL frame in the SAME submit (posCommit ran,
   // so agentF32[x] holds the committed position; the behaviour wrote agentColors).
-  // No-op unless a render canvas is attached.
+  // No-op unless a render canvas is attached — and (audit L3) also a no-op on a
+  // COMPOSITE surface, whose canvas carries the grid layer that this disc-only,
+  // clear-first pass would wipe. Reviving E2 for residency therefore needs a
+  // composite-aware batch present here, not just flipping the gate back on.
   presentAgentsEncode(rt, enc, highWater);
   rt.device.queue.submit([enc.finish()]);
 }

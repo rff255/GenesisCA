@@ -2344,6 +2344,12 @@ export class Gl3DRenderer {
     this.renderBrushPlane(); // brush interaction-plane bounds + grid (depth-tested)
     if (overlaysOnly) {
       // Skip all scene content — just the interaction overlays over transparent.
+      // NB renderAgentRings() is deliberately NOT called here (audit L6): free
+      // mode has no agent snapshot to derive rings from, and every ring PRODUCER
+      // (agent-brush hover, the agent inspector, an edit target) flips UI-sync ON,
+      // which flips the view back to FRAME mode where the full render below runs.
+      // If a future change lets a ring exist while UI-sync is OFF, the rings must
+      // be drawn here too — otherwise they silently vanish in free mode.
       this.renderHoverCells();
       this.renderBrushOutline();
       this.renderAxisLabels();

@@ -2021,6 +2021,12 @@ const AGENT_GPU_DEFER_TYPES = new Set<string>([
   'paint', 'paintManual', 'writeRegion', 'clearRegion',
 ]);
 let agentGpuStepInFlight = false;
+// NB (audit N4): this deferral and `asyncStepBatchInFlight` below are NOT peers.
+// The async-batch guard runs FIRST in the dispatcher and defers EVERY message
+// type, so while a step batch is running nothing reaches this one — it only
+// covers a GPU agent step started OUTSIDE a batch (a mutation-driven present /
+// colour pass). Keep both: they have different scopes, and the async-batch guard
+// is the P0 corruption fix, not a superset by design.
 let deferredDuringAgentGpuStep: WorkerMsg[] = [];
 
 /** P0 (the "GPU dynamics" bug): the ASYNC step-batch branches (WebGPU grid /

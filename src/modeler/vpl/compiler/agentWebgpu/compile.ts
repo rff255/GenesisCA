@@ -1609,8 +1609,12 @@ function isAgentArrayProducer(nodeType: string): boolean {
  *  zero `maxAgents*4` bytes per dispatch — at 50k maxAgents that is 200 KB of
  *  private memory per thread: occupancy collapse + hundreds of ms per step (the
  *  "WebGPU agents barely faster than WASM at 50k" profile). The cap bounds the
- *  per-thread cost to 8 KB; models with maxAgents ≤ the cap emit byte-identical
- *  shaders (min()). Semantics: a single query/gather yielding MORE than the cap
+ *  per-thread cost to 8 KB. Below the cap the emission is SEMANTICALLY identical
+ *  (min() picks maxAgents) but the shader TEXT is not: the array bound became an
+ *  emitted literal where it used to read `i32(control.maxAgents)`, so every model
+ *  with a getNearbyAgents moved on the agent.webgpu identity surface — do not
+ *  mis-triage that diff as a behaviour change (audit N1 corrects the original
+ *  "byte-identical shaders" claim). Semantics: a single query/gather yielding MORE than the cap
  *  TRUNCATES to the first 2048 members — a documented GPU capacity bound (JS/
  *  WASM keep all members; a >2048-neighbour query means a degenerate density
  *  where the physics is far past useful anyway). */

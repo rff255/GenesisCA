@@ -3336,8 +3336,12 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     if (agentComposite) {
       // The composite already carries the grid layer + agents + the bg backdrop
       // (worker clear when the grid is hidden) — nothing more to draw here.
-    } else if (agentDirect && !showGrid2d && bg2dRef.current) {
+    } else if (agentDirect && showAgentsRef.current && !showGrid2d && bg2dRef.current) {
       // (bg is drawn by the render shader's clear — nothing to do here)
+      // …but ONLY while we actually blit that canvas: the blit below is gated on
+      // showAgents, so with agents hidden the shader's clear never reaches the
+      // display and the backdrop would vanish entirely (audit L1). Requiring
+      // showAgents here falls through to the CPU bg fill in that case.
     } else if (!showGrid2d && bg2dRef.current) {
       ctx.save();
       ctx.fillStyle = bg2dRef.current;
