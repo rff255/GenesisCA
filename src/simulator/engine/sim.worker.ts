@@ -921,6 +921,22 @@ function activeRenderSurface(): AgentRenderSurface | null {
  *  uploads only the render fields (tight). */
 function presentAgentsIfActive(): void {
   if (!agentRenderActive || !agentStore) return;
+  // NEVER upload a STALE CPU store to the GPU. In free-mode residency the GPU is
+  // authoritative and the CPU store is deliberately NOT read back each frame, so
+  // the *FromStore present paths below (which uploadAgentSoA before presenting)
+  // would OVERWRITE the live diffused GPU state with the stale ≈last-synced frame
+  // — reverting the sim (the agent sibling of audit-B1, realised on a present
+  // path). When stale, re-present the GPU's CURRENT frame WITHOUT uploading; any
+  // caller that needs fresh CPU state must ensureAgentStoreFresh() first (which
+  // reads back GPU→CPU and clears the flag). This guard makes every present site
+  // safe by construction — the setAgentCamera handler's explicit stale branch is
+  // now redundant-but-harmless, and refreshAgentDisplay / attachAgentCanvas can no
+  // longer revert via a present.
+  if (agentStoreStale) {
+    const rt = activeRenderSurface();
+    if (rt) presentAgentsOnce(rt, agentStore.highWater);
+    return;
+  }
   // E2: single-canvas composite — present the WebGPU grid layer + agent discs
   // together (world space). Reads the LIVE grid colorsBuf (post color pass).
   if (agentCompositeActive && webgpuRuntime?.colorsBuf) {
@@ -6623,7 +6639,16 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
           if (rt !== agentWebgpuRuntime) agentRenderRuntime = rt;
           agentRenderActive = true;
           agentCompositeActive = wantComposite;
-          agentStoreStale = false;
+          // A canvas re-attach (display resize / pane refocus) does NOT rebuild the
+          // compute runtime, so if a free-mode resident batch left the CPU store
+          // stale the GPU is still authoritative. Force-clearing the stale flag here
+          // (the old code) LIED that the CPU was fresh, so the present below then
+          // uploaded the stale store and REVERTED the sim (the Particle-Life
+          // "brush-remove then it jumps back" bug). Instead read the GPU state down
+          // if stale (a no-op on a fresh/rebuilt runtime or a CPU target, where the
+          // CPU is genuinely authoritative), so the CPU is truly fresh before the
+          // present uploads it — an identity upload, no revert.
+          await ensureAgentStoreFresh();
           if (agentRenderView) applyAgentRenderView(rt, agentRenderView);
           presentAgentsIfActive();
           // ACK the worker's ACTUAL `agentUiSync` — same rule as the voxel ack
