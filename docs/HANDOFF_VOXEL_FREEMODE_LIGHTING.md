@@ -1,8 +1,9 @@
 # HANDOFF — occupancy AO, cast shadows & alpha blend in the FREE-mode voxel render
 
-**Branch**: `optimize`. **Status**: QUEUED — runs AFTER the WebGPU-neighbour-table
-memory phase ([HANDOFF_WEBGPU_NBR_TABLE_MEMORY.md](HANDOFF_WEBGPU_NBR_TABLE_MEMORY.md))
-so the two don't collide in `webgpuRuntime.ts` / the UI-sync driver. Read first:
+**Branch**: `optimize`. **Status**: DONE — **Phase 1 (occupancy AO)** and **Phase 2
+(cast shadows)** shipped free-mode + verified in-browser on the Accretor; **Phase 3
+(alpha blend)** remains frame-mode-only by a documented decision (see its Completion
+Report — both a GPU sort and WBOIT have concrete blockers). Read first:
 CLAUDE.md "L1 — worker-side WGSL voxel render", the **§10** VoxelView
 uniform-layout root cause (the padding trap — you WILL add fields to that
 struct), and gl3d's shadow-map + occupancy-AO + buried-cull implementation
@@ -254,5 +255,38 @@ trace (hooked `worker.postMessage`): toggling shadows ON→OFF in free mode =
 **0 `setGridUiSync` flips** (1 `setGridCamera` re-present each). The voxel render is
 confirmed active via `__voxelReadback` (`active:true`, instanceCount tracks the
 structure).
-### Phase 3 — Alpha blend
-(fill in)
+### Phase 3 — Alpha blend — REMAINS FRAME-MODE-ONLY (documented decision — outcome #3)
+Both approaches were evaluated and both have a CONCRETE blocker; per the handoff's
+sanctioned outcome #3, alpha blend stays frame-mode-only, its `want` term kept
+(`alpha3dRef.current` in `updateGridUiSync` — unchanged, byte-identical to pre-Phase-3
+behaviour). **No code change.**
+
+**Why NOT a GPU depth sort (option 1):** a correct back-to-front sort matching gl3d's
+`sortBackToFront` (key `m[2]cx+m[6]cy+m[10]cz+m[14]`) needs a bitonic/radix pass
+structure sized to the VISIBLE-INSTANCE COUNT (padded to a power of two). But L1's
+ENTIRE architectural win is that the visible count is **never read back to the CPU** —
+it lives GPU-side in the indirect draw args (`atomicAdd` → `drawArgs[1]`) precisely so
+no per-frame readback happens. A count-bounded GPU sort would have to either (a)
+**read the count back**, reintroducing exactly the CPU round-trip L1 removed (defeating
+the feature), or (b) sort the WORST case `total` — up to 27M cells at 300³, padded to
+2²⁵ ⇒ ~325 bitonic passes over 33M elements = billions of comparisons per frame,
+non-interactive. A GPU sort thus fights the L1 no-readback design head-on. (`dispatch­
+WorkgroupsIndirect` bounds the dispatch but not the log²(n) pass *structure*, which
+still needs the count CPU-side.)
+
+**Why NOT weighted-blended OIT (option 2):** WBOIT is order-independent (no sort, no
+count) and far simpler, but it is an APPROXIMATION that does NOT reproduce gl3d's exact
+back-to-front Option-A compositing. The cross-cutting invariant — *recording forces
+frame mode (gl3d), so the two must match* — means a recording (or the Shift-inspect
+flip) of a translucent model would show gl3d's exact sort while the live free view
+shows the WBOIT approximation: a visible discrepancy on every flip. WBOIT is rejected
+specifically because it breaks that seamless-flip + recording-match invariant.
+
+**Net:** for a niche, opt-in visual (translucent voxels — the default Accretor OM writes
+alpha 255, i.e. opaque, so alpha blend needs an alpha-OM model variant to even engage),
+the only faithful free-mode implementation (an exact GPU sort) is architecturally at
+odds with L1's no-readback core, and the simpler alternative breaks the match invariant.
+Alpha blend therefore stays frame-mode-only (gl3d handles it exactly as before L1). A
+future exact GPU sort — behind an indirect-dispatch + count-aware bitonic, verified by
+reading back the sorted instance buffer and asserting monotonic keys — is the recorded
+follow-up if the feature is prioritised.
