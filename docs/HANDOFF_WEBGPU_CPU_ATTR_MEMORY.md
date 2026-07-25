@@ -134,4 +134,97 @@ doc's Completion Report. Finish with: the exact write-alias gate, the 600³
 screenshot evidence, and the new practical ceiling.
 
 ## Completion Report
-(fill in when executed)
+
+**Status: DONE** (branch `optimize`). Two files: [sim.worker.ts](../src/simulator/engine/sim.worker.ts)
++ [wasm/layout.ts](../src/modeler/vpl/compiler/wasm/layout.ts) — **layout, not emit**, so
+JS/WASM/WebGPU emitted output is byte-identical by construction (`check-compile-identity`
+run anyway as belt-and-suspenders: **25 models, all surfaces unchanged**). Plus a new
+regression script. `git diff --stat` vs the pre-change HEAD = exactly those files (no
+compiler EMIT file touched).
+
+### The exact write-alias gate
+```
+// init handler, BEFORE initGrid (the layout is baked here from INTENT):
+const isAsyncInit = updateMode === 'asynchronous';
+attrWriteAliased = !!msg.useWebGPU && gridCellsEnabled && !isAsyncInit;
+
+// wasm/layout.ts computeMemoryLayout — new trailing param webgpuGridWriteAliased:
+if (!isAsync && gridCells && !webgpuGridWriteAliased) { /* reserve separate write region */ }
+else { for (const a of cellAttrs) attrWriteOffset[a.id] = attrReadOffset[a.id]; }   // alias
+
+// initGrid attr-view loop: `if (isAsync || attrWriteAliased) attrsB[id] = arrA;`
+// runStep guard (shared with nbrTableDropped): `if (nbrTableDropped || attrWriteAliased) return;`
+```
+- **BROADER than `nbrTableDropped`** (its own flag): the write buffer's only reader that
+  needs a distinct buffer is the sync STEP, which never runs on WebGPU (`runStepWebGPU`
+  returns first) — so the alias is INDEPENDENT of whether any CPU function reads neighbours.
+  Whenever the CPU step can't run (nbr table dropped OR write aliased), `runStep` returns
+  early; a genuine `webgpuGridFailed` posts the one-time honest "runs on WebGPU only" error
+  (message generalised to name both dropped resources).
+- **Decided from `msg.useWebGPU` (INTENT)** since `initGrid` bakes the layout before the
+  async runtime is known to succeed — same as `nbrTableDropped`. Async already single-buffers,
+  so gated on `!async` (a hand-edited WebGPU+async file is already aliased by the `!isAsync`
+  layout arm).
+- **No WASM-desync risk:** on the WebGPU target SimulatorView sends an EMPTY `wasmStepBytes`,
+  so `tryInstantiateWasmModule` early-returns — no WASM module is instantiated against the
+  (now-smaller) `wasmMemory`. `computeLayoutFromModel` (which bakes the WASM module's offsets
+  for the WASM target) NEVER passes the alias flag (default false) → the WASM module keeps its
+  separate write region → JS/WASM byte-identical. (This is why the change touches only the
+  runtime `wasmMemory` + JS-side views.)
+- **Correctness surface (all write FINAL values, correct with r===w):** `runInit` writes `r_`
+  directly, post-init `w→r` is a self-copy no-op; `runGridInit` seeds cells (its w→r copies are
+  no-ops); paint/paintManual/writeRegion/clearRegion write the single shared buffer (`dstB[i]=v`
+  is a redundant self-write) then upload/patch to the GPU; `resetGrid` fills both (same slot
+  twice). The sub-attr sync conditional copy runs on the GPU (WGSL) on WebGPU, so the CPU write
+  region isn't needed for it either. **Documented edge (accepted, same class as the STEP
+  tradeoff):** a WebGPU model with a Grid Init Event (forces CPU init) whose per-cell Init Event
+  READS-BACK a cell attribute would see intra-pass writes — the Accretor's init only writes a
+  position-derived `border` + gridInit-scatters seeds (no attr read-back) → provably safe.
+
+### 600³ screenshot evidence (real browser, WebGPU, DISPLAYED pane)
+- **300³ (shipped size) — unchanged:** loaded on the Simulator, played to **Gen 141**, the
+  dendritic star-shaped accretion structure grew + rendered (voxels), 0 console/JS errors —
+  the write buffer aliased and the model behaves identically.
+- **600³ (the user's failing resize) — THE WIN:** set W/H/D=600, Resize → **`initGrid` (the
+  WASM `WebAssembly.Memory` allocation) SUCCEEDED** — the reported `value 88990 above the upper
+  bound 65536` is GONE. (The banner shown is `[webgpu] init failed`, which is posted by
+  `startWebGPUInit` AFTER `initGrid`; a WASM-cap failure would instead read `Grid allocation
+  failed for 600x600x600` from `initGrid`'s catch — it did not.) The remaining 600³ blocker on
+  this test device is the **GPU device's `maxStorageBufferBindingSize` (2048 MB)** vs the GPU's
+  OWN attrsRead+attrsWrite ping-pong (2471.9 MB) — a device-specific limit orthogonal to the
+  WASM cap, surfaced as a clear honest error. On a GPU with ≥~2.5 GB storage buffers 600³ now
+  plays end-to-end (the WASM cap no longer gates it).
+- The COMPUTED harness independently confirms the exact page counts: 600³ full (write kept) =
+  **88990 pages** (== the user's error), aliased (write dropped) = **59327 pages** (fits).
+
+### New practical ceiling (WebGPU target)
+Dropping the write buffer cuts the Accretor's WebGPU per-cell WASM cost ~27 → ~18 B/cell, so
+the WASM-cap cube ceiling moves further past the nbr-report's ~860³. The **real-device ceiling
+is now GPU-storage-buffer-bound** (~560³ on this 2048 MB device — `attrsRead/Write ≤ 2048 MB`),
+NOT the WASM cap. A device with a larger `maxStorageBufferBindingSize` runs correspondingly
+larger. **Follow-on dead-weight (NOT done, out of scope — 600³ is GPU-bound, not WASM-bound):**
+the async-only `orderArray` (`total×4`) + `skippedArray` (`total`) are reserved even in sync
+mode (5 B/cell dead on a sync WebGPU model), and the CPU `colours` buffer (4 B/cell, frame-mode
+readback only) — candidates only if the WASM ceiling must move further.
+
+### Regression guard + gates
+- **NEW [scripts/verify-webgpu-attr-write.mjs](../scripts/verify-webgpu-attr-write.mjs)**
+  (COMPUTED, imports the real modules): (1) the layout delta full−aliased == Σ writeable-attr
+  bytes (cellsPerAttr·bytesPerType, 8-aligned, continuing the accumulator from the read-block
+  end) at 300³/400³/600³; (2) the aliased layout reserves NO separate write region
+  (`attrWriteOffset[id] === attrReadOffset[id]`) while the full one does; (3) the aliased 600³
+  FITS the 4 GiB cap (59327p) while the full one OVERFLOWS (88990p — the exact reported error);
+  (4) the Accretor's worker predicate `attrWriteAliased === true`. **ALL PASS.**
+- `npx tsc -p tsconfig.app.json --noEmit` ✓, `npm run build` ✓, `parity-agent-wasm` ✓,
+  `parity-agent-force` ✓, `verify-agent-render` ✓, `verify-render-uniform-layouts` ✓,
+  `verify-webgpu-nbr-table` ✓, `check-compile-identity` (25 models) ✓.
+
+### Files changed
+- [src/simulator/engine/sim.worker.ts](../src/simulator/engine/sim.worker.ts) —
+  `attrWriteAliased` global; the init-handler decision; the `computeMemoryLayout` call arg;
+  the `initGrid` attr-view aliasing + `writeAttrs` assignment; the shared `runStep` CPU guard.
+- [src/modeler/vpl/compiler/wasm/layout.ts](../src/modeler/vpl/compiler/wasm/layout.ts) —
+  the `webgpuGridWriteAliased` param on `computeMemoryLayout` (gates the write-region block)
+  + a forwarding optional param on `computeLayoutFromModel` (harness-only; default false).
+- [scripts/verify-webgpu-attr-write.mjs](../scripts/verify-webgpu-attr-write.mjs) — NEW.
+- [CLAUDE.md](../CLAUDE.md) — the WebGPU "Key gotchas" bullet (after the neighbour-table one).

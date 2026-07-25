@@ -613,6 +613,21 @@ let nbrIndices: Record<string, Int32Array> = {};
 // too). Decided in the `init` handler from msg.useWebGPU (intent) + a source scan
 // of the compiled CPU functions; drives the layout + the runStep CPU guard.
 let nbrTableDropped = false;
+// WebGPU grid target only (sync mode): when true, initGrid did NOT reserve a
+// SEPARATE per-attr sync WRITE buffer — the write side aliases the read side
+// (attrsB[id] === attrsA[id]), the SAME 0-byte-write layout the agents-only +
+// async paths already use. On WebGPU the STEP runs on the GPU (its own attrsBufA/B
+// ping-pong), so the ~9 B/cell CPU double-buffer is dead weight — the ~1.9 GB at
+// 600³ that (after the nbr-table drop) keeps a 600³ 3D grid over the wasm32 4 GiB
+// Memory cap. The only OTHER CPU writers (init / gridInit / paint) write FINAL
+// values and are correct with write===read. The JS/WASM sync STEP is the one
+// reader that needs a separate buffer, and it never runs on this target
+// (runStepWebGPU returns first; the runStep guard below enforces it). Decided in
+// the `init` handler from msg.useWebGPU (INTENT — the layout is baked before the
+// async runtime is known to succeed) + gridCells + !async. BROADER than
+// nbrTableDropped (independent of neighbour reads), so it has its own flag and
+// the runStep CPU guard checks BOTH.
+let attrWriteAliased = false;
 
 let colors: Uint8ClampedArray = new Uint8ClampedArray(0);
 let orderArray: Int32Array | null = null;
@@ -3271,6 +3286,11 @@ function initGrid(): void {
     // the baked activeListOffset desyncs — layout-lockstep. sieConfig + hasGlyphs
     // are set from the init message BEFORE initGrid runs.
     !!sieConfig?.enabled && !isAsync && gridCellsEnabled && !agentsEnabled && !hasGlyphs,
+    // WebGPU grid target (attrWriteAliased, decided in the init handler): the STEP
+    // runs on the GPU, so reserve NO separate sync attr WRITE buffer — the write
+    // side aliases the read side (the view loop below does the same aliasing).
+    // Frees the ~9 B/cell double-buffer that keeps 600³ over the 4 GiB cap.
+    attrWriteAliased,
   );
   wasmMemory = new WebAssembly.Memory({ initial: wasmLayout.pages });
   const buf = wasmMemory.buffer;
@@ -3287,7 +3307,12 @@ function initGrid(): void {
     if (dv !== 0) arrA.fill(dv);
     attrsA[attr.id] = arrA;
 
-    if (isAsync) {
+    // Async OR the WebGPU grid target (attrWriteAliased): single buffer — read
+    // and write share one view (the layout reserved no separate write region, so
+    // attrWriteOffset[id] === attrReadOffset[id]). On WebGPU the sync STEP — the
+    // one reader that needs a distinct write buffer — runs on the GPU; init /
+    // gridInit / paint write final values, correct with write===read.
+    if (isAsync || attrWriteAliased) {
       // Async: single buffer ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â both read and write point to the same view (same offset)
       attrsB[attr.id] = arrA;
     } else {
@@ -3298,7 +3323,7 @@ function initGrid(): void {
   }
 
   readAttrs = attrsA;
-  writeAttrs = isAsync ? attrsA : attrsB;
+  writeAttrs = (isAsync || attrWriteAliased) ? attrsA : attrsB;
   colors = new Uint8ClampedArray(buf, wasmLayout.colorsOffset, wasmLayout.colorsBytes);
   // Glyph buffer views ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â only when the layout reserved regions (i.e. the
   // model has at least one setCellGlyph node). Otherwise null, all readers
@@ -3715,18 +3740,20 @@ function runStep(deferIndicatorScan: boolean = false): void {
     runStepWebGPU();
     return;
   }
-  // WebGPU-target model whose FULL neighbour table was dropped for memory: the
-  // JS/WASM step indexes that table, so it CANNOT run on the CPU. Steps advance
-  // on the GPU. While the runtime is still initializing this is a transient
-  // no-op (steps resume once it's ready); on a genuine WebGPU failure surface a
-  // one-time clear error — a dropped-table model can't fall back to the CPU
-  // step (a grid too large for the GPU table is too large for JS/WASM anyway).
-  if (nbrTableDropped) {
+  // WebGPU-target model whose FULL neighbour table AND/OR its separate sync attr
+  // WRITE buffer were dropped for memory (nbrTableDropped / attrWriteAliased):
+  // the JS/WASM step indexes the neighbour table and read-modify-writes across a
+  // distinct write buffer, so it CANNOT run on the CPU. Steps advance on the GPU.
+  // While the runtime is still initializing this is a transient no-op (steps
+  // resume once it's ready); on a genuine WebGPU failure surface a one-time clear
+  // error — a dropped-resource model can't fall back to the CPU step (a grid too
+  // large for the GPU is too large for JS/WASM anyway).
+  if (nbrTableDropped || attrWriteAliased) {
     if (webgpuGridFailed && !nbrTableDroppedErrorPosted) {
       nbrTableDroppedErrorPosted = true;
       self.postMessage({
         type: 'error',
-        message: 'This model runs on WebGPU only: its per-cell neighbour table was not reserved (a memory optimization for large 3D grids) and the WebGPU runtime failed to start. It cannot fall back to the JS/WASM step. Use a WebGPU-capable browser, or reduce the grid size and switch the compile target to WebAssembly.',
+        message: 'This model runs on WebGPU only: a CPU-side buffer was dropped as a memory optimization for large 3D grids (its per-cell neighbour table and/or its sync attribute write buffer) and the WebGPU runtime failed to start. It cannot fall back to the JS/WASM step. Use a WebGPU-capable browser, or reduce the grid size and switch the compile target to WebAssembly.',
       });
     }
     return;
@@ -5466,6 +5493,14 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
           || (msg.inputColorCodes ?? []).some(ic => codeIndexesNeighbourTable(ic.code));
         nbrTableDropped = !!msg.useWebGPU && gridCellsEnabled && !sieOnInit && !cpuIndexesNbrInit;
         nbrTableDroppedErrorPosted = false;
+        // WebGPU grid target (sync): the STEP runs on the GPU, so drop the CPU
+        // sync attr WRITE double-buffer too (attrWriteAliased). Unlike the
+        // neighbour table this is INDEPENDENT of what CPU functions read — the
+        // only reader that needs a distinct write buffer is the sync STEP, which
+        // never runs on WebGPU (runStepWebGPU returns first; the runStep guard
+        // enforces it). init / gridInit / paint write final values, correct with
+        // write===read. Async already aliases (single buffer), so gate on !async.
+        attrWriteAliased = !!msg.useWebGPU && gridCellsEnabled && !isAsyncInit;
       }
       try {
         initGrid();

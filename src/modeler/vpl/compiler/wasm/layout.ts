@@ -5,7 +5,12 @@
  *
  * Layout (in order):
  *   [cell attr 0 read][cell attr 1 read]...
- *   [cell attr 0 write][cell attr 1 write]...      (skipped in async — write aliases read)
+ *   [cell attr 0 write][cell attr 1 write]...      (skipped in async, agents-only,
+ *                                                    OR the WebGPU grid target —
+ *                                                    write aliases read; only the
+ *                                                    JS/WASM sync STEP needs a
+ *                                                    separate write buffer, and it
+ *                                                    never runs on WebGPU)
  *   [orientation read][orientation write]           (variegated only; i32/cell, write skipped in async)
  *   [colors: 4 bytes/cell]
  *   [neighbor index table 0][...]                   (Int32Array per neighborhood, total*size i32 each)
@@ -239,6 +244,17 @@ export function computeMemoryLayout(
   // MUST equal `sparseSteppingEnabled(model)` on the compile side and the
   // worker's mirror predicate — layout-lockstep.
   sparseStepping: boolean = false,
+  // WebGPU grid target: the STEP runs on the GPU (its own attrsBufA/B ping-pong),
+  // so the CPU sync attr WRITE buffer (state+... one copy per writeable attr) is
+  // dead weight — the only other CPU writers (init / gridInit / paint) write FINAL
+  // values and are correct with write===read. Alias the write region to the read
+  // region (0 extra bytes), exactly like the agents-only + async paths, so even a
+  // 600³ 3D WebGPU grid fits under the wasm32 4 GiB Memory cap. Decided by the
+  // worker from msg.useWebGPU (INTENT) — see sim.worker.ts `attrWriteAliased`.
+  // COMPILE-side callers (computeLayoutFromModel → the WASM module) NEVER pass
+  // true: the WASM sync step indexes a separate write buffer, so JS/WASM stay
+  // byte-identical. This is WebGPU-grid-target-only.
+  webgpuGridWriteAliased: boolean = false,
 ): MemoryLayout {
   let off = 0;
   const glyphsOn = hasGlyphs && gridCells;
@@ -265,8 +281,10 @@ export function computeMemoryLayout(
     off += cellsPerAttr * ib;
   }
   // Cell attrs — write region (sync only; grid off ⇒ no cell step ever writes,
-  // so the write side aliases the read side like async mode)
-  if (!isAsync && gridCells) {
+  // so the write side aliases the read side like async mode; ditto the WebGPU
+  // grid target — the sync STEP runs on the GPU, so no CPU function needs a
+  // SEPARATE write buffer, see `webgpuGridWriteAliased`).
+  if (!isAsync && gridCells && !webgpuGridWriteAliased) {
     for (const a of cellAttrs) {
       const ib = attrTypeBytes[a.id]!;
       off = alignTo(off, 8);
@@ -469,6 +487,12 @@ export function computeMemoryLayout(
 
 export function computeLayoutFromModel(
   model: CAModel,
+  // WebGPU grid target: alias the CPU sync attr WRITE buffer to the read buffer
+  // (see computeMemoryLayout's `webgpuGridWriteAliased`). ONLY the regression
+  // harness passes true — every production compile caller omits it (default
+  // false), so the WASM module's baked offsets keep the separate write region
+  // and JS/WASM output stays byte-identical.
+  webgpuGridWriteAliased: boolean = false,
 ): MemoryLayout {
   // Lower any `vector` cell attribute into its scalar-float components BEFORE
   // building the layout, so the WASM memory offsets match the compiler's
@@ -530,6 +554,7 @@ export function computeLayoutFromModel(
     lookupTables,
     true,
     sparseSteppingEnabled(model),
+    webgpuGridWriteAliased,
   );
 }
 
