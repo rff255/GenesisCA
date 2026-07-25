@@ -2696,6 +2696,9 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       bgR, bgG, bgB, bgA,
       // gl3d's buriedCullEligible(): flush cubes + opaque + no open clip.
       cullBuried: (!alpha3dRef.current && !clip.enabled && cubeScale >= 1) ? 1 : 0,
+      // Occupancy AO: 0 when off ⇒ the cube shader folds no darkening (byte-
+      // behaviour-identical to no AO). gl3d gates the same on light.ao.
+      aoStrength: light.ao ? light.aoStrength : 0,
     };
   }, []);
 
@@ -2713,7 +2716,8 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
         + `|${view.lightX}|${view.lightY}|${view.lightZ}|${view.ambient}|${view.diffuse}|${view.specular}`
         + `|${view.clipEnabled}|${view.clipAxis}|${view.clipLo}|${view.clipHi}|${view.cubeScale}`
         + `|${view.bgR}|${view.bgG}|${view.bgB}|${view.bgA}|${view.cullBuried}`
-        + `|${view.halfX}|${view.halfY}|${view.halfZ}|${view.viewX}|${view.viewY}|${view.viewZ}`;
+        + `|${view.halfX}|${view.halfY}|${view.halfZ}|${view.viewX}|${view.viewY}|${view.viewZ}`
+        + `|${view.aoStrength}`;
       if (key === lastGridCameraKeyRef.current) return;
       lastGridCameraKeyRef.current = key;
       workerRef.current.postMessage({ type: 'setGridCamera', view });
@@ -2735,8 +2739,8 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   // (and its colour-id pick FBO resolves). ON iff a feature is — or may be —
   // reading the CPU colours: recording, an inspect popover pinned/sweeping,
   // a POINTER GESTURE that can pick, OR a frame-mode-only visual is enabled (cast
-  // shadows, occupancy AO, alpha blend — none of which the WGSL pass replicates;
-  // see §4 of the L1 handoff). Debounced OFF by ~300 ms.
+  // shadows, alpha blend — which the WGSL pass does not replicate; occupancy AO
+  // now runs free-mode, see Phase 1). Debounced OFF by ~300 ms.
   //
   // NB the pointer term is deliberately NARROW. Pinning on bare `glPointerOverRef`
   // (the shipped L1 driver) meant simply RESTING the cursor over the canvas held
@@ -2772,7 +2776,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       || sweepActiveRef.current
       || glGestureActiveRef.current
       || (glPointerOverRef.current && (inspectModeRef.current || glShiftDownRef.current))
-      || light.shadows || light.ao
+      || light.shadows
       || alpha3dRef.current;
     const w = workerRef.current;
     if (want) {
@@ -6399,14 +6403,16 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   // / edit target / metaballs suppression). Hover-during-play is handled per-frame.
   useEffect(() => { updateAgentUiSync(); }, [playing, recording, agentInspect, editTargetId, agentMetaballs.enabled, updateAgentUiSync]);
   // L1: the GRID sibling — re-evaluate the voxel UI-sync on every state signal that
-  // needs the CPU colours mirror. `light3d.shadows` / `light3d.ao` / `alpha3d` are
-  // the FRAME-MODE-ONLY visuals (the WGSL pass replicates neither shadows, AO nor
-  // back-to-front alpha sorting): turning any of them on pins UI-sync ON, which
-  // hides the voxel canvas and hands the frame back to gl3d exactly as before L1;
-  // turning them off releases free mode again. Hover-during-play is per-frame.
+  // needs the CPU colours mirror. `light3d.shadows` / `alpha3d` are the remaining
+  // FRAME-MODE-ONLY visuals (the WGSL pass replicates neither cast shadows nor
+  // back-to-front alpha sorting): turning either on pins UI-sync ON, which hides
+  // the voxel canvas and hands the frame back to gl3d exactly as before L1; turning
+  // them off releases free mode again. Occupancy AO (light3d.ao) runs free-mode
+  // (Phase 1) so it is NOT a want term — its re-present rides the light3d effect's
+  // draw() → postGridCamera. Hover-during-play is per-frame.
   useEffect(() => {
     updateGridUiSync();
-  }, [playing, recording, light3d.shadows, light3d.ao, alpha3d, updateGridUiSync]);
+  }, [playing, recording, light3d.shadows, alpha3d, updateGridUiSync]);
   // A1: a CPU-only visual (metaballs) needs the CPU overlay path — detach direct
   // render when it turns on, re-attach when it turns off (if eligible + runtime up).
   useEffect(() => {

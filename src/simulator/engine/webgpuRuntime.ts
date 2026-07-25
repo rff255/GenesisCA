@@ -610,8 +610,9 @@ const PRESENT_WG = 8;
 // same buried-cull eligibility rule, and the MVP + light direction are computed
 // on the main thread by the SHARED sceneCameraMatrices / lightWorldDirFor
 // helpers gl3d itself uses — so the two renderers cannot disagree on projection
-// or lighting. Cast shadows and occupancy AO are NOT replicated: they stay
-// frame-mode features (the worker's UI-sync flag flips the display back to gl3d).
+// or lighting. Occupancy AO IS replicated (the cube VS recomputes the same
+// 6-face-neighbour scan gl3d does in uploadColors). Cast shadows and alpha blend
+// stay frame-mode features (the worker's UI-sync flag flips back to gl3d).
 // ---------------------------------------------------------------------------
 
 /** The voxel render's camera + lighting + clip uniform. `mvp` is column-major
@@ -631,8 +632,12 @@ export interface VoxelRenderView {
   /** Buried-cell culling: 1 iff nothing can reveal a fully-enclosed cell
    *  (flush cubes, opaque, no clip) — mirrors gl3d's buriedCullEligible(). */
   cullBuried: number;
+  /** Occupancy AO amount (0 = off ⇒ byte-behaviour-identical to no AO). The cube
+   *  VS recomputes the 6-face-neighbour occupancy per instance (same scan gl3d
+   *  does CPU-side in uploadColors); the FS folds it into the ambient term. */
+  aoStrength: number;
 }
-const VOXEL_VIEW_BYTES = 192;
+const VOXEL_VIEW_BYTES = 208;
 
 // The `@align(16)` on `ambient` is LOAD-BEARING, not decoration. A `vec3<f32>` has
 // align 16 but SIZE 12, so WGSL's natural offset rule
@@ -664,6 +669,7 @@ const VOXEL_VIEW_WGSL = `struct VoxelView {
   gridWH                 : u32,           // @180
   total                  : u32,           // @184
   cullBuried             : u32,           // @188
+  aoStrength             : f32,           // @192 (0 = off)
 };`;
 
 /** Compaction: one thread per cell. Skips alpha-0 cells and (when eligible)
@@ -721,11 +727,14 @@ struct VSOut {
   @location(0)       color  : vec4<f32>,
   @location(1)       normal : vec3<f32>,
   @location(2)       centre : vec3<f32>,
+  @location(3) @interpolate(flat) ao : f32,   // occupancy AO 0..1 (0 exposed, 1 buried)
 };
 
 fn basisVec(k: u32) -> vec3<f32> {
   return vec3<f32>(f32(k == 0u), f32(k == 1u), f32(k == 2u));
 }
+
+fn filled(i: u32) -> bool { return ((colorsIn[i] >> 24u) & 0xffu) != 0u; }
 
 @vertex
 fn vsMain(@builtin(vertex_index) vi: u32, @builtin(instance_index) inst: u32) -> VSOut {
@@ -734,6 +743,22 @@ fn vsMain(@builtin(vertex_index) vi: u32, @builtin(instance_index) inst: u32) ->
   let rem: u32 = cellIdx - layer * vv.gridWH;
   let row: u32 = rem / vv.gridW;
   let col: u32 = rem - row * vv.gridW;
+  // Occupancy AO: the SAME 6-face-neighbour scan gl3d does CPU-side in
+  // uploadColors (ao = cnt/6). Gated on aoStrength > 0 so the storage reads
+  // aren't paid when AO is off (then ao stays 0 ⇒ the FS folds no darkening).
+  var ao: f32 = 0.0;
+  if (vv.aoStrength > 0.0) {
+    let Hn: u32 = vv.gridWH / vv.gridW;
+    let Dn: u32 = vv.total / vv.gridWH;
+    var cnt: u32 = 0u;
+    if (col > 0u          && filled(cellIdx - 1u))         { cnt = cnt + 1u; }
+    if (col + 1u < vv.gridW  && filled(cellIdx + 1u))         { cnt = cnt + 1u; }
+    if (row > 0u          && filled(cellIdx - vv.gridW))   { cnt = cnt + 1u; }
+    if (row + 1u < Hn     && filled(cellIdx + vv.gridW))   { cnt = cnt + 1u; }
+    if (layer > 0u        && filled(cellIdx - vv.gridWH))  { cnt = cnt + 1u; }
+    if (layer + 1u < Dn   && filled(cellIdx + vv.gridWH))  { cnt = cnt + 1u; }
+    ao = f32(cnt) / 6.0;
+  }
   // Z-up remap, identical to gl3d's VS: col→+X (right), row→−Y (down the
   // screen, so a top-down view matches the 2D CA), layer→−Z (into the screen).
   let centre: vec3<f32> = vec3<f32>(f32(col) - vv.half.x, vv.half.y - f32(row), vv.half.z - f32(layer));
@@ -762,6 +787,7 @@ fn vsMain(@builtin(vertex_index) vi: u32, @builtin(instance_index) inst: u32) ->
     f32((packed >> 24u) & 0xffu) / 255.0);
   out.normal = n;
   out.centre = centre;
+  out.ao = ao;
   return out;
 }
 
@@ -774,11 +800,13 @@ fn fsMain(in: VSOut) -> @location(0) vec4<f32> {
     else if (vv.clipAxis == 2u) { w = in.centre.z; }
     if (w < vv.clipLo || w > vv.clipHi) { discard; }
   }
-  // Flat directional shade by face normal (identical formula to gl3d's FS; the
-  // occupancy-AO and cast-shadow terms are frame-mode-only and omitted here).
+  // Flat directional shade by face normal (identical formula to gl3d's FS).
+  // Occupancy AO folds onto the ambient term (ao = 1 - aoStrength·vAO); the
+  // cast-shadow term is still frame-mode-only and omitted here (Phase 2).
   let N: vec3<f32> = normalize(in.normal);
   let ndl: f32 = max(0.0, dot(N, vv.lightDir));
-  var col: vec3<f32> = in.color.rgb * (vv.ambient + vv.diffuse * ndl);
+  let ao: f32 = 1.0 - vv.aoStrength * in.ao;
+  var col: vec3<f32> = in.color.rgb * (vv.ambient * ao + vv.diffuse * ndl);
   if (vv.specular > 0.0) {
     let H: vec3<f32> = normalize(vv.lightDir + vv.viewDir);
     col = col + vv.specular * pow(max(0.0, dot(N, H)), 32.0);
@@ -920,6 +948,7 @@ export function uploadVoxelView(rt: WebGPURuntime, v: VoxelRenderView): void {
   u[45] = (rt.layout.gridWidth * rt.layout.gridHeight) >>> 0;
   u[46] = rt.layout.total >>> 0;
   u[47] = v.cullBuried >>> 0;
+  f[48] = v.aoStrength;                                         // @192
   rt.device.queue.writeBuffer(rt.voxelViewBuf, 0, ab);
   const a = v.bgA;
   rt.voxelClear = [v.bgR * a, v.bgG * a, v.bgB * a, a];

@@ -156,8 +156,41 @@ mojibake in a user-facing string; measure branch scope against `origin/master`.
 Update CLAUDE.md (the L1 section) + each phase's Completion Report below.
 
 ## Completion Reports
-### Phase 1 — Occupancy AO
-(fill in)
+### Phase 1 — Occupancy AO — DONE (free-mode, verified)
+**Approach:** the cube draw VS (`VOXEL_DRAW_WGSL`) recomputes the SAME 6-face-neighbour
+occupancy scan gl3d does CPU-side in `uploadColors` (`ao = cnt/6`, bound-guarded,
+reusing the compaction shader's `filled()` over binding-1 `colorsIn`), passes it as
+a `@interpolate(flat) ao` varying, and the FS folds it onto the ambient term exactly
+like gl3d's `float ao = 1.0 - uAOStrength*vAO;` → `ambient*ao + diffuse*ndl`. The VS
+scan is **gated on `aoStrength > 0`** so the 6 storage reads aren't paid when AO is off.
+
+**VoxelView:** added `aoStrength : f32` at `@192`; `VOXEL_VIEW_BYTES` 192→208;
+`uploadVoxelView` writes `f[48]`; `VoxelRenderView.aoStrength` fed by
+`computeVoxelRenderView` as `light.ao ? light.aoStrength : 0` (0 ⇒ byte-behaviour-
+identical to no AO). `verify-render-uniform-layouts.mjs` green.
+
+**Driver:** `postGridCamera`'s dedup key gained `aoStrength` (so a toggle/slider
+re-presents in free mode); `light.ao` **removed** from `updateGridUiSync`'s `want`
+list and from the ui-sync re-eval effect's deps — its re-present rides the `light3d`
+effect's `draw()` → `postGridCamera`.
+
+**Scope:** render-only, ZERO compiler files (`git diff --stat` = `webgpuRuntime.ts` +
+`SimulatorView.tsx` for the code; CLAUDE.md + this handoff for docs). No worker change
+(uniform flows through the existing `setGridCamera` → `uploadVoxelView` → `presentVoxels`).
+
+**Gates:** tsc ✓, `npm run build` ✓, parity-agent-wasm ✓, parity-agent-force ✓,
+verify-agent-render ✓, verify-render-uniform-layouts ✓.
+
+**Visual verification (Accretor 300³, WebGPU, dense dendrite, dist 0.28, free mode):**
+- AO ON darkens crevices/deep intersections in free mode; AO OFF returns to the flat
+  ambient+diffuse baseline. Screenshots captured (off / on / off).
+- Free↔frame match: arming Inspect + hovering flips to gl3d frame mode; the gl3d AO
+  render (AO baked into `uploadColors`) looks the same as the free-mode WGSL AO render —
+  the flip is seamless. (Composited-pixel/lighting-parity eyeball flagged for a human
+  spot-check — the two frames match closely to my eye.)
+- Protocol trace (hooked `worker.postMessage`): toggling AO ON→OFF in free mode caused
+  **0 `setGridUiSync` flips** (the log stayed empty; 1 `setGridCamera` re-present each) —
+  the whole point: AO no longer forces the slow colours-readback frame path.
 ### Phase 2 — Cast shadows
 (fill in)
 ### Phase 3 — Alpha blend
