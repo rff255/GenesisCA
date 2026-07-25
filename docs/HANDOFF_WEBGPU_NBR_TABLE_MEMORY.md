@@ -154,4 +154,97 @@ when done. Finish with: the design chosen, the exact CPU-reader gate, the 400³
 screenshot evidence, and the new practical grid ceiling.
 
 ## Completion Report
-(fill in when executed)
+
+**Status: DONE** (branch `optimize`). Worker-only change — no compiler file
+touched, so JS/WASM/WebGPU emitted output is byte-identical by construction
+(`check-compile-identity` therefore not required, and not run).
+
+### Design chosen — Option A (narrow, worker-side, no compiler change)
+`initGrid` drops the FULL per-cell neighbour table on the WebGPU grid target
+whenever no CPU-executed compiled function indexes it. The whole change lives in
+[sim.worker.ts](../src/simulator/engine/sim.worker.ts) + a new regression script
+— zero compiler/layout-primitive edits. `computeMemoryLayout` already accepts a
+`neighborhoods` list (the agents-only path passes `[]`); the WebGPU drop reuses
+that exact seam (`layoutNeighborhoods = (gridCellsEnabled && !nbrTableDropped) ?
+neighborhoods : []`), and `buildNeighborIndices` early-returns after
+`fillBoundarySentinel()` (the constant-boundary sentinel, extracted into a shared
+helper, is still filled + uploaded to the GPU).
+
+Option B (compile the CPU init/gridInit/OM in inline-neighbour mode) was NOT
+needed — the Option A source-scan flag is robust (see the exact gate) and touches
+no compiler, so there is no byte-identity risk.
+
+### The exact CPU-reader gate
+```
+// init handler, BEFORE initGrid (the layout is baked here):
+const sieOn = enabled && sync && gridCells && !agents && !glyphs;   // full table already tiny when SIE-on
+const cpuIndexesNbr =
+     codeIndexesNeighbourTable(msg.initCode)              // per-cell Init Event
+  || codeIndexesNeighbourTable(msg.gridInitCode)          // Grid Init Event
+  || outputMappingCodes.some(o => codeIndexesNeighbourTable(o.code))   // JS/WASM OM
+  || inputColorCodes.some(ic => codeIndexesNeighbourTable(ic.code));   // brush / paste
+nbrTableDropped = !!msg.useWebGPU && gridCells && !sieOn && !cpuIndexesNbr;
+
+// codeIndexesNeighbourTable(code) = /nIdx_\w*\[/.test(code)
+// The compiled param decl is `nIdx_<id>,` (bare id + comma), so `nIdx_<id>[`
+// (id immediately followed by a bracket) appears only at a genuine read site.
+```
+- The **STEP is deliberately EXCLUDED** — its JS/WASM fallback is the one CPU
+  reader we intentionally drop (a grid too large for the GPU table is too large
+  for JS/WASM anyway; `runStep` returns without running the CPU step when
+  `nbrTableDropped`, surfacing a one-time honest error on genuine WebGPU failure
+  via the `webgpuGridFailed` latch). Decided from `msg.useWebGPU` (INTENT), since
+  `initGrid` bakes the layout before the async runtime is known to succeed.
+- **Edge case (Verify step 3):** a WebGPU model with a Grid Init Event forces the
+  CPU init path (`useWebGPUInit` is false when `gridInitFn !== null`), so a
+  per-cell Init Event that reads a neighbour KEEPS the full table — the
+  `codeIndexesNeighbourTable(msg.initCode)` arm covers exactly this. The
+  full-table path is byte-identical to pre-change (only the drop path is new).
+- **Recompile-flip:** a soft recompile that adds a neighbour read to a CPU
+  function while the table is already dropped can't reallocate the layout; it
+  posts a one-time "reload to apply" error (the reload does a full reinit that
+  rebuilds the table).
+
+### 400³ screenshot evidence (real browser, WebGPU, DISPLAYED pane)
+- **300³ (shipped size) — unchanged:** loaded, played to Gen 93, the dendritic
+  accretion structure grew + rendered correctly (GPU inline-neighbour path is
+  right with the CPU table dropped), 0 errors.
+- **400³ (the user's failing resize) — THE WIN:** resized 300³→400³, the worker
+  reinit produced **NO allocation error** (before: `value ~127930 above the upper
+  bound 65536`), Gen 0 showed the seed, then **played to Gen 204** with the
+  accretion structure growing + voxels rendering, 0 errors.
+- **512³ (push further):** resized to 512³ → a `RangeError: Array buffer
+  allocation failed` (a JS ArrayBuffer alloc, NOT the WASM-cap error) — the ceiling
+  moved PAST the WASM cap; 512³ now hits the browser tab's contiguous-memory
+  budget for the (much smaller, 0.84 GiB) `wasmMemory` + GPU buffers. The app did
+  NOT white-screen; resizing back to 128³ recovered cleanly (played to Gen 69).
+
+### New practical grid ceiling (WebGPU target)
+The WASM-4-GiB-cap ceiling (~320³ with the 26-Moore table) is GONE. The dropped
+layout now scales with attrs + colours only: for the Accretor's attribute set the
+computed dropped layout hits 65536 pages (4 GiB) at **~860³** — i.e. the ceiling
+moved from ~320³ to ~860³ (well past the handoff's "700³" target). In practice the
+browser tab's own contiguous-ArrayBuffer budget bites first (~400³–512³ here),
+which is an environment limit, not the engine.
+
+### Regression guard + gates
+- **NEW [scripts/verify-webgpu-nbr-table.mjs](../scripts/verify-webgpu-nbr-table.mjs)**
+  (COMPUTED, imports the real modules): (1) the layout delta full−dropped ==
+  Σ `total·nSz·4` (8-aligned) at 300³/400³/512³; the dropped layout fits the
+  65536-page cap while the full one overflows at 400³/512³; (2) the shipped
+  Accretor's compiled init/gridInit/OM/inputColor do NOT index `nIdx_` (its STEP
+  does) → `nbrTableDropped === true`; (3) a synthetic WebGPU 3D model whose
+  per-cell Init Event reads a neighbour → `initCode` indexes `nIdx_` → table KEPT,
+  and the no-neighbour variant → dropped (the flag discriminates). **ALL PASS.**
+- `npx tsc -p tsconfig.app.json --noEmit` ✓, `npm run build` ✓,
+  `parity-agent-wasm` ✓, `parity-agent-force` ✓, `verify-agent-render` ✓,
+  `verify-render-uniform-layouts` ✓.
+
+### Files changed
+- [src/simulator/engine/sim.worker.ts](../src/simulator/engine/sim.worker.ts) —
+  `nbrTableDropped` / `webgpuGridFailed` / `nbrTableDroppedErrorPosted` globals +
+  `codeIndexesNeighbourTable` + `fillBoundarySentinel`; the init-handler decision;
+  the `layoutNeighborhoods` gate; the `buildNeighborIndices` dropped path; the
+  `runStep` CPU guard; the recompile-flip guard.
+- [scripts/verify-webgpu-nbr-table.mjs](../scripts/verify-webgpu-nbr-table.mjs) — NEW.
+- [CLAUDE.md](../CLAUDE.md) — the WebGPU "Key gotchas" bullet.

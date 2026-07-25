@@ -603,6 +603,16 @@ let writeAttrs = attrsB;
 
 // Pre-computed neighbor indices: nbrIndices[nbrId][cellIdx * nbrSize + n] = neighbor flat index
 let nbrIndices: Record<string, Int32Array> = {};
+// WebGPU grid target only: when true, initGrid did NOT reserve the FULL per-cell
+// neighbour table (total * nSz * 4 — the 2.8 GB hog at 300³ that blows the wasm32
+// 4 GiB Memory cap at 400³). The GPU computes neighbours inline from the compact
+// nbrOffsets buffer, so the CPU table is dead weight UNLESS a CPU-executed
+// compiled function (init / gridInit / OM / inputColor) actually indexes it. The
+// JS/WASM STEP fallback is the only other CPU reader and is deliberately dropped
+// on this target (a grid too large for the GPU table is too large for JS/WASM
+// too). Decided in the `init` handler from msg.useWebGPU (intent) + a source scan
+// of the compiled CPU functions; drives the layout + the runStep CPU guard.
+let nbrTableDropped = false;
 
 let colors: Uint8ClampedArray = new Uint8ClampedArray(0);
 let orderArray: Int32Array | null = null;
@@ -2910,6 +2920,29 @@ let webgpuRuntime: WebGPURuntime | null = null;
 // Without this, an old in-flight init can race the new one and clobber
 // `webgpuRuntime` with a now-orphaned runtime ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â racy and hard to repro.
 let webgpuInitSeq = 0;
+// Set true in every startWebGPUInit failure branch, cleared when a fresh init
+// begins or the runtime is created. Only consulted when `nbrTableDropped` is
+// true: it lets the runStep CPU guard distinguish a transient init window (the
+// runtime is still coming up — no error, steps no-op until ready) from a genuine
+// WebGPU failure (surface a clear one-time error, since a dropped-table model
+// genuinely cannot fall back to the JS/WASM step).
+let webgpuGridFailed = false;
+// One-shot latch so the "dropped-table WebGPU model can't run on CPU" error is
+// posted at most once (from runStep on failure, or from a recompile that adds a
+// neighbour read to a CPU function while the table is already dropped).
+let nbrTableDroppedErrorPosted = false;
+
+/** Does a compiled CPU function's SOURCE actually INDEX a neighbour table
+ *  (`nIdx_<nbr>[...]`)? The compiled param declaration is `nIdx_<nbr>,` (a bare
+ *  identifier followed by a comma), so `nIdx_<id>` immediately followed by `[`
+ *  appears only at a genuine read site — never in the param list. Used by the
+ *  `init`/`recompile` handlers to decide whether the WebGPU target can drop the
+ *  full CPU neighbour table (kept whenever a CPU init/gridInit/OM/inputColor
+ *  function reads neighbours). MUST stay in sync with the emitter's `nIdx_`
+ *  naming (compile.ts buildLoopParams / buildCellParams / omParamParts). */
+function codeIndexesNeighbourTable(code: string | undefined): boolean {
+  return !!code && /nIdx_\w*\[/.test(code);
+}
 
 function startWebGPUInit(
   shaderCode: string | undefined,
@@ -2921,15 +2954,19 @@ function startWebGPUInit(
   // Bump the sequence FIRST so any in-flight init's `.then` callback sees a
   // mismatch and bails instead of writing to webgpuRuntime.
   const mySeq = ++webgpuInitSeq;
+  // A fresh attempt clears any prior failure latch (see webgpuGridFailed).
+  webgpuGridFailed = false;
   if (shaderError) {
     destroyWebGPURuntime(webgpuRuntime);
     webgpuRuntime = null;
+    webgpuGridFailed = true;
     self.postMessage({ type: 'error', message: '[webgpu] compile failed: ' + shaderError });
     return;
   }
   if (!shaderCode || !entryPoints || !layout) {
     destroyWebGPURuntime(webgpuRuntime);
     webgpuRuntime = null;
+    webgpuGridFailed = true;
     return;
   }
   // Pipeline cache: when the new shader is byte-identical to the running one,
@@ -2950,6 +2987,7 @@ function startWebGPUInit(
   destroyWebGPURuntime(webgpuRuntime);
   webgpuRuntime = null;
   if (!isWebGPUAvailable()) {
+    webgpuGridFailed = true;
     self.postMessage({ type: 'error', message: '[webgpu] navigator.gpu unavailable in this worker context' });
     return;
   }
@@ -2966,6 +3004,7 @@ function startWebGPUInit(
         return;
       }
       webgpuRuntime = rt;
+      webgpuGridFailed = false;   // runtime created — no longer a failure state
       // Build buffers + pipeline, upload initial CPU state, seed per-cell RNG.
       await setupBuffersAndPipelines(rt);
       // Re-check after the second await ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â same race window.
@@ -3015,6 +3054,7 @@ function startWebGPUInit(
       // runtime's state with a stale error message.
       if (mySeq !== webgpuInitSeq) return;
       webgpuRuntime = null;
+      webgpuGridFailed = true;
       const msg = (e instanceof Error) ? e.message : String(e);
       self.postMessage({ type: 'error', message: '[webgpu] init failed: ' + msg });
       self.postMessage({ type: 'useWebGPUStatus', enabled: useWebGPU, ready: false, directRender: false });
@@ -3195,7 +3235,14 @@ function initGrid(): void {
   // agent-world scales they dominate the layout catastrophically: a 600ÃƒÆ’Ã¢â‚¬â€600ÃƒÆ’Ã¢â‚¬â€400
   // world with a Moore-3D neighbourhood would reserve totalÃƒÆ’Ã¢â‚¬â€26ÃƒÆ’Ã¢â‚¬â€4 ÃƒÂ¢Ã¢â‚¬Â°Ã‹â€  15 GB and
   // blow the wasm32 4 GiB Memory limit ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â the "resize never completes" hang.
-  const layoutNeighborhoods = gridCellsEnabled ? neighborhoods : [];
+  // WebGPU grid target (nbrTableDropped, decided in the init handler): the GPU
+  // computes neighbours inline from the compact nbrOffsets buffer, so the FULL
+  // per-cell table (total * nSz * 4 — the SAME 2.8 GB hog at 300 cubed) is dead
+  // weight when no CPU init/gridInit/OM/inputColor function indexes it. Reserve
+  // nothing here too; buildNeighborIndices fills only the constant-boundary
+  // sentinel. This lifts the WebGPU-target grid ceiling from ~320 cubed to well
+  // past 700 cubed on the same 4 GiB backing store.
+  const layoutNeighborhoods = (gridCellsEnabled && !nbrTableDropped) ? neighborhoods : [];
   wasmLayout = computeMemoryLayout(
     cellAttrs, modelAttrsList, layoutNeighborhoods, indicatorsList,
     total, isAsync, boundaryTreatment,
@@ -3301,9 +3348,32 @@ function initGrid(): void {
   }
 }
 
+/** Constant boundary: write each attr's boundary value (falls back to default
+ *  when unset) into the sentinel cell at index `total`. The +1 slot was already
+ *  allocated in initGrid (see viewLen); set it in place (replacing the array
+ *  would orphan the WASM module's view). Neighbour lookups for OOB positions
+ *  read it — including WebGPU's inline WGSL, which reads the sentinel from the
+ *  uploaded attrs. Shared by every buildNeighborIndices branch (full, compact,
+ *  and the WebGPU dropped-table path). No-op for torus. */
+function fillBoundarySentinel(): void {
+  if (boundaryTreatment === 'torus') return;
+  for (const attr of cellAttrs) {
+    const bv = boundaryCellValue(attr);
+    attrsA[attr.id]![total] = bv;
+    if (attrsB[attr.id] !== attrsA[attr.id]) attrsB[attr.id]![total] = bv;
+  }
+}
+
 function buildNeighborIndices(): void {
   nbrIndices = {};
   if (!wasmMemory || !wasmLayout) return;
+  // WebGPU grid target with the FULL CPU table dropped for memory: the GPU
+  // computes neighbours inline; no CPU fn indexes the table on this model. There
+  // is nothing to build — just fill the constant-boundary sentinel (uploaded to
+  // the GPU with the attrs) and return. nbrIndices stays {} so buildLoopArgs
+  // pushes the `undefined` table arg, which the (guaranteed-non-indexing) CPU
+  // init/gridInit/OM/inputColor functions never read.
+  if (nbrTableDropped) { fillBoundarySentinel(); return; }
   const buf = wasmMemory.buffer;
   // "Skip Isolated Empty Cells" (inline-neighbour mode): the layout reserved
   // COMPACT per-neighbourhood tables — `size` PACKED NIs (packNI/packNI3), not
@@ -3324,14 +3394,7 @@ function buildNeighborIndices(): void {
       }
       nbrIndices[nbr.id] = packed;
     }
-    // Sentinel fill (constant boundary) — same as the table path below.
-    if (boundaryTreatment !== 'torus') {
-      for (const attr of cellAttrs) {
-        const bv = boundaryCellValue(attr);
-        attrsA[attr.id]![total] = bv;
-        if (attrsB[attr.id] !== attrsA[attr.id]) attrsB[attr.id]![total] = bv;
-      }
-    }
+    fillBoundarySentinel();
     return;
   }
   for (const nbr of neighborhoods) {
@@ -3378,18 +3441,7 @@ function buildNeighborIndices(): void {
     nbrIndices[nbr.id] = indices;
   }
 
-  // Constant boundary: write the boundary cell value (falls back to default
-  // when unset) into the sentinel cell at index `total`. The +1 slot was
-  // already allocated as part of wasmMemory in initGrid (see viewLen), so we
-  // just need to set it; we don't replace the array (which would orphan the
-  // WASM module's view).
-  if (boundaryTreatment !== 'torus') {
-    for (const attr of cellAttrs) {
-      const bv = boundaryCellValue(attr);
-      attrsA[attr.id]![total] = bv;
-      if (attrsB[attr.id] !== attrsA[attr.id]) attrsB[attr.id]![total] = bv;
-    }
-  }
+  fillBoundarySentinel();
 }
 
 
@@ -3645,6 +3697,22 @@ function runStep(deferIndicatorScan: boolean = false): void {
   // dispatch when the runtime has finished its async buffer + pipeline setup.
   if (useWebGPU && webgpuRuntime?.stepReady) {
     runStepWebGPU();
+    return;
+  }
+  // WebGPU-target model whose FULL neighbour table was dropped for memory: the
+  // JS/WASM step indexes that table, so it CANNOT run on the CPU. Steps advance
+  // on the GPU. While the runtime is still initializing this is a transient
+  // no-op (steps resume once it's ready); on a genuine WebGPU failure surface a
+  // one-time clear error — a dropped-table model can't fall back to the CPU
+  // step (a grid too large for the GPU table is too large for JS/WASM anyway).
+  if (nbrTableDropped) {
+    if (webgpuGridFailed && !nbrTableDroppedErrorPosted) {
+      nbrTableDroppedErrorPosted = true;
+      self.postMessage({
+        type: 'error',
+        message: 'This model runs on WebGPU only: its per-cell neighbour table was not reserved (a memory optimization for large 3D grids) and the WebGPU runtime failed to start. It cannot fall back to the JS/WASM step. Use a WebGPU-capable browser, or reduce the grid size and switch the compile target to WebAssembly.',
+      });
+    }
     return;
   }
   // If the previous step ran on GPU, attrs on CPU are stale. Pull them back
@@ -5362,6 +5430,27 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       // the agent payload — this early assignment only feeds the layout flag.
       sieConfig = msg.skipIsolatedEmpty ?? null;
       agentsEnabled = !!msg.agents;
+      // WebGPU grid target: decide whether initGrid can DROP the full per-cell
+      // neighbour table (nbrTableDropped) — the GPU computes neighbours inline,
+      // so the table (total * nSz * 4) is dead weight unless a CPU-executed
+      // compiled function indexes it. Decided from msg.useWebGPU (INTENT — the
+      // layout is baked here, before the async runtime is known to succeed) +
+      // whether any of init / gridInit / OM / inputColor indexes `nIdx_` (the
+      // STEP is deliberately EXCLUDED: its JS/WASM fallback is what we drop).
+      // Only when the FULL table would be reserved (grid on + SIE off): with SIE
+      // on the table is already the tiny compact form — nothing to save.
+      // nbrTableDroppedErrorPosted resets per init (fresh worker state).
+      {
+        const isAsyncInit = updateMode === 'asynchronous';
+        const sieOnInit = !!sieConfig?.enabled && !isAsyncInit && gridCellsEnabled && !agentsEnabled && !hasGlyphs;
+        const cpuIndexesNbrInit =
+          codeIndexesNeighbourTable(msg.initCode)
+          || codeIndexesNeighbourTable(msg.gridInitCode)
+          || (msg.outputMappingCodes ?? []).some(o => codeIndexesNeighbourTable(o.code))
+          || (msg.inputColorCodes ?? []).some(ic => codeIndexesNeighbourTable(ic.code));
+        nbrTableDropped = !!msg.useWebGPU && gridCellsEnabled && !sieOnInit && !cpuIndexesNbrInit;
+        nbrTableDroppedErrorPosted = false;
+      }
       try {
         initGrid();
       } catch (e) {
@@ -6053,6 +6142,27 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
         syncActiveViewerToMemory();
       }
       compileFns(msg.stepCode, msg.inputColorCodes, (msg as RecompileMsg).outputMappingCodes || [], (msg as RecompileMsg).initCode || '', (msg as RecompileMsg).gridInitCode || '');
+      // Dropped-table WebGPU model: a soft recompile keeps the (dropped) layout,
+      // so if this graph edit ADDED a neighbour read to a CPU-executed function
+      // (init / gridInit / OM / inputColor), that function would index a table
+      // that isn't reserved. We can't reallocate here (the grid state must
+      // survive a soft recompile) — surface a clear one-time error asking the
+      // user to reload, which does a full reinit that rebuilds the table.
+      if (nbrTableDropped && !nbrTableDroppedErrorPosted) {
+        const rc = msg as RecompileMsg;
+        const nowIndexesNbr =
+          codeIndexesNeighbourTable(rc.initCode)
+          || codeIndexesNeighbourTable(rc.gridInitCode)
+          || (rc.outputMappingCodes ?? []).some(o => codeIndexesNeighbourTable(o.code))
+          || (msg.inputColorCodes ?? []).some(ic => codeIndexesNeighbourTable(ic.code));
+        if (nowIndexesNbr) {
+          nbrTableDroppedErrorPosted = true;
+          self.postMessage({
+            type: 'error',
+            message: 'This edit added a neighbour read to the Init / Grid Init / brush of a large WebGPU model whose per-cell neighbour table was dropped for memory. Reload the model to apply it.',
+          });
+        }
+      }
       // "Skip Isolated Empty Cells": re-resolve from the (possibly changed) config
       // + rebuild from the CURRENT grid (a soft recompile keeps the grid state), so
       // the active-set params/args stay consistent with the just-recompiled step.
