@@ -8253,6 +8253,13 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
 
   const handleReset = () => {
     if (overseerRunningRef.current) return;  // the experiment owns the transport
+    // An explicit Reset is AUTHORITATIVE: reseed from the model's Init Events. Drop
+    // any deferred embedded-snapshot restore that a prior Save-with-grid armed and
+    // a paused reinit left pending — otherwise the worker reseeds cleanly, then the
+    // next Play's first `stepped` fires applySimulationState and clobbers the fresh
+    // state with the saved snapshot (cells AND agents), so "Reset" silently
+    // restores a stale/edited board instead of the model's initial configuration.
+    pendingSimStateRestore.current = null;
     setPlaying(false);
     pendingStep.current = true;
     workerRef.current?.postMessage({ type: 'reset', activeViewer });
