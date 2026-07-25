@@ -145,6 +145,20 @@ export interface WebGPURuntime {
   voxelClear: [number, number, number, number];
   /** Whether the current view wants backface culling (no open clip interval). */
   voxelCullBack: boolean;
+  /** Scene-anchored wireframe overlays drawn in the SAME depth pass as the cubes
+   *  (so voxels in front occlude them — the free-mode two-canvas fix). Mirror
+   *  gl3d's renderOverlays; gated per-flag by the Viz3D axes/grid/bounds toggles
+   *  the main thread threads via setGridViz. The gizmo / brush plane / brush
+   *  outline / hover cells / axis labels stay in gl3d (always-on-top UI). */
+  voxelLinePipeline: GPURenderPipeline | null;
+  voxelLineBindGroup: GPUBindGroup | null;
+  voxelLineBuf: GPUBuffer | null;
+  /** Line-vertex count in voxelLineBuf (6 floats/vertex). */
+  voxelLineCount: number;
+  /** Cache key for the built line geometry (viz flags + dims) — rebuild only on change. */
+  voxelLineSig: string;
+  /** Which scene wireframes to draw (mirrors Viz3D axes/grid/bounds). */
+  voxelViz: { axes: boolean; grid: boolean; bounds: boolean };
 
   /** O5 reduction state — when watched linked indicators have GPU-eligible
    *  aggregations (total / freq-bool / freq-tag), the reductions buffer is
@@ -253,6 +267,12 @@ export async function createWebGPURuntime(init: WebGPURuntimeInit): Promise<WebG
     voxelRender: false,
     voxelClear: [0, 0, 0, 0],
     voxelCullBack: true,
+    voxelLinePipeline: null,
+    voxelLineBindGroup: null,
+    voxelLineBuf: null,
+    voxelLineCount: 0,
+    voxelLineSig: '',
+    voxelViz: { axes: false, grid: false, bounds: false },
     reductionsBuf: null,
     reductionShaderModule: null,
     reductionBindGroupLayout: null,
@@ -768,6 +788,104 @@ fn fsMain(in: VSOut) -> @location(0) vec4<f32> {
   return vec4<f32>(col, in.color.a);
 }`;
 
+/** Scene-anchored wireframe overlays (bounds box / floor grid / origin axes),
+ *  drawn in the SAME render pass + depth buffer as the cubes so voxels in front
+ *  occlude them. Reuses the VoxelView uniform (mvp @0) — no new uniform, no
+ *  VoxelView widening (see verify-render-uniform-layouts.mjs). Line-list; pos +
+ *  colour vertex attributes; depth-test ON + depth-write ON. */
+const VOXEL_LINE_WGSL = `${VOXEL_VIEW_WGSL}
+@group(0) @binding(0) var<uniform> vv : VoxelView;
+struct VSOut { @builtin(position) pos : vec4<f32>, @location(0) color : vec3<f32> };
+@vertex
+fn vsMain(@location(0) p : vec3<f32>, @location(1) c : vec3<f32>) -> VSOut {
+  var out : VSOut;
+  out.pos = vv.mvp * vec4<f32>(p, 1.0);
+  out.color = c;
+  return out;
+}
+@fragment
+fn fsMain(in : VSOut) -> @location(0) vec4<f32> {
+  // Opaque lines; the canvas is premultiplied-alpha, alpha 1 ⇒ colour as-is.
+  return vec4<f32>(in.color, 1.0);
+}`;
+
+/** Build the bounds / grid / axes line-list vertices (pos.xyz + colour.rgb per
+ *  vertex, 6 floats each), mirroring gl3d's renderOverlays EXACTLY (same Z-up
+ *  remap, same colours, same >100-cell grid step, same origin-corner axes with
+ *  2-pronged arrowheads). Each `viz` flag gates its group; all-off ⇒ empty. */
+function buildVoxelOverlayVerts(W: number, H: number, D: number, viz: { axes: boolean; grid: boolean; bounds: boolean }): Float32Array {
+  const hx = (W - 1) / 2, hy = (H - 1) / 2, hz = (D - 1) / 2;
+  const x0 = -hx - 0.5, x1 = hx + 0.5, y0 = -hy - 0.5, y1 = hy + 0.5, z0 = -hz - 0.5, z1 = hz + 0.5;
+  const v: number[] = [];
+  const seg = (ax: number, ay: number, az: number, bx: number, by: number, bz: number, r: number, g: number, b: number) =>
+    v.push(ax, ay, az, r, g, b, bx, by, bz, r, g, b);
+  if (viz.grid) {
+    const c = 0.26, g = 0.28, bl = 0.34;
+    const sx = Math.max(1, Math.ceil(W / 100)), sy = Math.max(1, Math.ceil(H / 100));
+    for (let i = 0; i <= W; i += sx) { const x = x0 + i; seg(x, y0, z0, x, y1, z0, c, g, bl); }
+    for (let j = 0; j <= H; j += sy) { const y = y0 + j; seg(x0, y, z0, x1, y, z0, c, g, bl); }
+  }
+  if (viz.bounds) {
+    const c = 0.42, g = 0.45, bl = 0.55;
+    seg(x0, y0, z0, x1, y0, z0, c, g, bl); seg(x1, y0, z0, x1, y1, z0, c, g, bl);
+    seg(x1, y1, z0, x0, y1, z0, c, g, bl); seg(x0, y1, z0, x0, y0, z0, c, g, bl);
+    seg(x0, y0, z1, x1, y0, z1, c, g, bl); seg(x1, y0, z1, x1, y1, z1, c, g, bl);
+    seg(x1, y1, z1, x0, y1, z1, c, g, bl); seg(x0, y1, z1, x0, y0, z1, c, g, bl);
+    seg(x0, y0, z0, x0, y0, z1, c, g, bl); seg(x1, y0, z0, x1, y0, z1, c, g, bl);
+    seg(x1, y1, z0, x1, y1, z1, c, g, bl); seg(x0, y1, z0, x0, y1, z1, c, g, bl);
+  }
+  if (viz.axes) {
+    // Origin = cell (0,0,0)'s world centre (the volume CORNER): col→+X, row→−Y,
+    // depth→−Z. cell(0,0,0) world = (-hx, +hy, +hz). Draw each axis toward its
+    // positive direction + a 2-pronged arrowhead (identical to gl3d renderOverlays).
+    const ox = -hx, oy = hy, oz = hz;
+    const ext = 1.2;
+    const axis = (ex: number, ey: number, ez: number, r: number, g: number, b: number) => {
+      seg(ox, oy, oz, ex, ey, ez, r, g, b);
+      const dx = ex - ox, dy = ey - oy, dz = ez - oz;
+      const len = Math.hypot(dx, dy, dz) || 1;
+      const ux = dx / len, uy = dy / len, uz = dz / len;
+      let px = -uy, py = ux, pz = 0;
+      if (Math.hypot(px, py, pz) < 0.1) { px = 0; py = -uz; pz = uy; }
+      const pl = Math.hypot(px, py, pz) || 1; px /= pl; py /= pl; pz /= pl;
+      const hl = 0.7;
+      seg(ex, ey, ez, ex - ux * hl + px * hl * 0.5, ey - uy * hl + py * hl * 0.5, ez - uz * hl + pz * hl * 0.5, r, g, b);
+      seg(ex, ey, ez, ex - ux * hl - px * hl * 0.5, ey - uy * hl - py * hl * 0.5, ez - uz * hl - pz * hl * 0.5, r, g, b);
+    };
+    axis(hx + ext, oy, oz, 0.90, 0.27, 0.27);                 // +col → +X (red)
+    axis(ox, -hy - ext, oz, 0.34, 0.82, 0.40);                // +row → -Y (green)
+    axis(ox, oy, oz - (D - 1) - ext, 0.36, 0.55, 0.95);       // +depth → -Z (blue)
+  }
+  return new Float32Array(v);
+}
+
+/** Set which scene wireframes the voxel render draws (mirrors Viz3D axes/grid/
+ *  bounds). Clears the geometry cache so the next present rebuilds. */
+export function uploadVoxelViz(rt: WebGPURuntime, viz: { axes: boolean; grid: boolean; bounds: boolean }): void {
+  rt.voxelViz = { axes: !!viz.axes, grid: !!viz.grid, bounds: !!viz.bounds };
+  rt.voxelLineSig = '';   // force rebuild on the next present
+}
+
+/** (Re)build the line-overlay vertex buffer when the viz flags or grid dims
+ *  change. No-op when the signature is unchanged. */
+function ensureVoxelLineBuffer(rt: WebGPURuntime): void {
+  const W = rt.layout.gridWidth, H = rt.layout.gridHeight, D = rt.layout.gridDepth;
+  const viz = rt.voxelViz;
+  const sig = `${viz.axes ? 1 : 0}${viz.grid ? 1 : 0}${viz.bounds ? 1 : 0}|${W}|${H}|${D}`;
+  if (sig === rt.voxelLineSig && (rt.voxelLineBuf || rt.voxelLineCount === 0)) return;
+  rt.voxelLineSig = sig;
+  const verts = (viz.axes || viz.grid || viz.bounds) ? buildVoxelOverlayVerts(W, H, D, viz) : new Float32Array(0);
+  rt.voxelLineCount = verts.length / 6;
+  if (rt.voxelLineBuf) { try { rt.voxelLineBuf.destroy(); } catch { /* non-fatal */ } rt.voxelLineBuf = null; }
+  if (verts.length === 0) return;
+  const buf = rt.device.createBuffer({
+    label: 'voxel-lines', size: verts.byteLength,
+    usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+  });
+  rt.device.queue.writeBuffer(buf, 0, verts);
+  rt.voxelLineBuf = buf;
+}
+
 /** Ensure the depth attachment matches the canvas size (recreated on resize). */
 function ensureVoxelDepthTex(rt: WebGPURuntime, w: number, h: number): GPUTextureView {
   if (!rt.voxelDepthTex || rt.voxelDepthW !== w || rt.voxelDepthH !== h) {
@@ -906,6 +1024,41 @@ export async function setupVoxelRender(rt: WebGPURuntime, canvas: OffscreenCanva
       ],
     });
 
+    // Scene-wireframe (bounds/grid/axes) line pipeline — reuses the VoxelView
+    // uniform (mvp) so it shares projection with the cubes; depth-tested against
+    // the same buffer the cube pass writes, so voxels in front occlude it.
+    const lineModule = rt.device.createShaderModule({ label: 'voxel-line', code: VOXEL_LINE_WGSL });
+    {
+      const info = await lineModule.getCompilationInfo();
+      const errs = info.messages.filter(m => m.type === 'error');
+      if (errs.length > 0) {
+        // eslint-disable-next-line no-console
+        console.error('[webgpu] voxel line WGSL compile errors:\n' + errs.map(m => `  line ${m.lineNum}: ${m.message}`).join('\n'));
+        return false;
+      }
+    }
+    const lineBgl = rt.device.createBindGroupLayout({
+      label: 'voxel-line-bgl',
+      entries: [{ binding: 0, visibility: GPUShaderStage.VERTEX, buffer: { type: 'uniform' } }],
+    });
+    const linePipeline = rt.device.createRenderPipeline({
+      label: 'voxel-line', layout: rt.device.createPipelineLayout({ label: 'voxel-line-pl', bindGroupLayouts: [lineBgl] }),
+      vertex: {
+        module: lineModule, entryPoint: 'vsMain',
+        buffers: [{ arrayStride: 24, attributes: [
+          { shaderLocation: 0, offset: 0, format: 'float32x3' },
+          { shaderLocation: 1, offset: 12, format: 'float32x3' },
+        ] }],
+      },
+      fragment: { module: lineModule, entryPoint: 'fsMain', targets: [{ format }] },
+      primitive: { topology: 'line-list' },
+      depthStencil: { format: 'depth24plus', depthWriteEnabled: true, depthCompare: 'less' },
+    });
+    const lineBindGroup = rt.device.createBindGroup({
+      label: 'voxel-line-bg', layout: lineBgl,
+      entries: [{ binding: 0, resource: { buffer: viewBuf } }],
+    });
+
     rt.voxelCanvas = canvas;
     rt.voxelCtx = ctx;
     rt.voxelInstanceBuf = instanceBuf;
@@ -916,6 +1069,9 @@ export async function setupVoxelRender(rt: WebGPURuntime, canvas: OffscreenCanva
     rt.voxelDrawPipelineCull = mkDraw('voxel-draw-cull', 'back');
     rt.voxelDrawPipelineNoCull = mkDraw('voxel-draw-nocull', 'none');
     rt.voxelDrawBindGroup = drawBindGroup;
+    rt.voxelLinePipeline = linePipeline;
+    rt.voxelLineBindGroup = lineBindGroup;
+    rt.voxelLineSig = '';   // force a rebuild against the current viz on the next present
     rt.voxelClear = [0, 0, 0, 0];
     rt.voxelCullBack = true;
     rt.voxelRender = true;
@@ -933,6 +1089,9 @@ export function presentVoxels(rt: WebGPURuntime): void {
   const tex = rt.voxelCtx.getCurrentTexture();
   const view = tex.createView();
   const depthView = ensureVoxelDepthTex(rt, tex.width, tex.height);
+  // Rebuild the scene-wireframe geometry (bounds/grid/axes) when the viz flags or
+  // dims changed — buffer writes must happen outside the render pass.
+  ensureVoxelLineBuffer(rt);
   const enc = rt.device.createCommandEncoder({ label: 'voxel-present-enc' });
   // Zero ONLY the instanceCount word — vertexCount (36) and the first* words
   // were written once at setup.
@@ -953,6 +1112,15 @@ export function presentVoxels(rt: WebGPURuntime): void {
     rpass.setPipeline(pipe);
     rpass.setBindGroup(0, rt.voxelDrawBindGroup);
     rpass.drawIndirect(rt.voxelIndirectBuf, 0);
+  }
+  // Scene wireframes (bounds/grid/axes) in the SAME pass ⇒ shared depth ⇒ voxels
+  // in front occlude them (the free-mode two-canvas bug fix). Depth-write ON so
+  // the axis arrowheads self-order; drawn after the cubes but depth handles order.
+  if (rt.voxelLinePipeline && rt.voxelLineBindGroup && rt.voxelLineBuf && rt.voxelLineCount > 0) {
+    rpass.setPipeline(rt.voxelLinePipeline);
+    rpass.setBindGroup(0, rt.voxelLineBindGroup);
+    rpass.setVertexBuffer(0, rt.voxelLineBuf);
+    rpass.draw(rt.voxelLineCount);
   }
   rpass.end();
   rt.device.queue.submit([enc.finish()]);
@@ -1000,14 +1168,16 @@ async function readbackBufferBytes(rt: WebGPURuntime, src: GPUBuffer, offset: nu
 /** Destroy the voxel buffers + depth texture (shared by re-attach and teardown).
  *  Leaves the canvas context alone — the caller decides whether to unconfigure. */
 function releaseVoxelResources(rt: WebGPURuntime): void {
-  for (const buf of [rt.voxelInstanceBuf, rt.voxelIndirectBuf, rt.voxelViewBuf]) {
+  for (const buf of [rt.voxelInstanceBuf, rt.voxelIndirectBuf, rt.voxelViewBuf, rt.voxelLineBuf]) {
     if (buf) { try { buf.destroy(); } catch { /* non-fatal */ } }
   }
   rt.voxelInstanceBuf = null; rt.voxelIndirectBuf = null; rt.voxelViewBuf = null;
+  rt.voxelLineBuf = null; rt.voxelLineCount = 0; rt.voxelLineSig = '';
   if (rt.voxelDepthTex) { try { rt.voxelDepthTex.destroy(); } catch { /* non-fatal */ } }
   rt.voxelDepthTex = null; rt.voxelDepthW = 0; rt.voxelDepthH = 0;
   rt.voxelCompactPipeline = null; rt.voxelCompactBindGroup = null;
   rt.voxelDrawPipelineCull = null; rt.voxelDrawPipelineNoCull = null; rt.voxelDrawBindGroup = null;
+  rt.voxelLinePipeline = null; rt.voxelLineBindGroup = null;
 }
 
 /** Full teardown — buffers, depth texture, and the canvas context binding. */

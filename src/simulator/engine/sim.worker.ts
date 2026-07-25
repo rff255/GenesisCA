@@ -19,7 +19,7 @@ import {
   setupReductionPipelines, dispatchReductions, setupDirectRender,
   dispatchInit, uploadOrientation, uploadFacePatternLookup, uploadInteractionTable,
   clearGlyphBuffersWebGPU,
-  setupVoxelRender, uploadVoxelView, presentVoxels, destroyVoxelRender, debugReadVoxelInstances,
+  setupVoxelRender, uploadVoxelView, uploadVoxelViz, presentVoxels, destroyVoxelRender, debugReadVoxelInstances,
   type WebGPURuntime, type ReadbackRegion, type VoxelRenderView,
 } from './webgpuRuntime';
 import { decodeReductions, gpuHandledIds, gpuHandledAttrIds } from './webgpuReduce';
@@ -474,6 +474,10 @@ interface SetGridCameraMsg { type: 'setGridCamera'; view: VoxelRenderView }
  *  CPU colours mirror: gl3d frame rendering + picking, recording, inspect). While
  *  OFF the voxel render owns the display and nothing crosses the wire. Default ON. */
 interface SetGridUiSyncMsg { type: 'setGridUiSync'; on: boolean }
+/** Which scene-anchored wireframes the free-mode voxel render draws (mirrors gl3d's
+ *  Viz3D axes/grid/bounds toggles). The worker's voxel renderer draws these into
+ *  its canvas depth-tested against the cubes; gl3d stops drawing them in free mode. */
+interface SetGridVizMsg { type: 'setGridViz'; axes: boolean; grid: boolean; bounds: boolean }
 /** Re-present the voxel frame (tab-refocus / soft-recompile analogue of
  *  refreshDisplay). */
 interface RefreshGridDisplayMsg { type: 'refreshGridDisplay' }
@@ -557,7 +561,7 @@ interface SetAgentUiSyncMsg { type: 'setAgentUiSync'; on: boolean }
  *  refreshDisplay). */
 interface RefreshAgentDisplayMsg { type: 'refreshAgentDisplay' }
 
-type WorkerMsg = InitMsg | StepMsg | PaintMsg | PaintManualMsg | ResetMsg | RecompileMsg | UpdateModelAttrsMsg | UpdateLookupTableMsg | ImportImageMsg | UpdateIndicatorsMsg | GetStateMsg | LoadStateMsg | ReadRegionMsg | WriteRegionMsg | ClearRegionMsg | SetUseWasmMsg | SetUseWebGPUMsg | ReadbackWebGPUMsg | ColorPassMsg | SetRecordingMsg | AttachCanvasMsg | RequestColorsSnapshotMsg | SetInspectCellsMsg | RefreshDisplayMsg | SeedAgentsMsg | CreateAgentMsg | KillAgentsMsg | PaintAgentsMsg | ClearAgentsMsg | FormBondMsg | BreakBondMsg | GetAgentStateMsg | MoveAgentsMsg | FormBondBatchMsg | SetAgentWasmBackedMsg | SetRngSeedMsg | SetSimLayersMsg | AttachAgentCanvasMsg | SetAgentCameraMsg | SetAgentUiSyncMsg | RefreshAgentDisplayMsg | E1bCountersMsg | CompositeReadbackMsg | AttachVoxelCanvasMsg | SetGridCameraMsg | SetGridUiSyncMsg | RefreshGridDisplayMsg | VoxelReadbackMsg;
+type WorkerMsg = InitMsg | StepMsg | PaintMsg | PaintManualMsg | ResetMsg | RecompileMsg | UpdateModelAttrsMsg | UpdateLookupTableMsg | ImportImageMsg | UpdateIndicatorsMsg | GetStateMsg | LoadStateMsg | ReadRegionMsg | WriteRegionMsg | ClearRegionMsg | SetUseWasmMsg | SetUseWebGPUMsg | ReadbackWebGPUMsg | ColorPassMsg | SetRecordingMsg | AttachCanvasMsg | RequestColorsSnapshotMsg | SetInspectCellsMsg | RefreshDisplayMsg | SeedAgentsMsg | CreateAgentMsg | KillAgentsMsg | PaintAgentsMsg | ClearAgentsMsg | FormBondMsg | BreakBondMsg | GetAgentStateMsg | MoveAgentsMsg | FormBondBatchMsg | SetAgentWasmBackedMsg | SetRngSeedMsg | SetSimLayersMsg | AttachAgentCanvasMsg | SetAgentCameraMsg | SetAgentUiSyncMsg | RefreshAgentDisplayMsg | E1bCountersMsg | CompositeReadbackMsg | AttachVoxelCanvasMsg | SetGridCameraMsg | SetGridUiSyncMsg | SetGridVizMsg | RefreshGridDisplayMsg | VoxelReadbackMsg;
 
 // ---------------------------------------------------------------------------
 // State
@@ -3625,6 +3629,9 @@ function voxelRenderOn(): boolean { return !!webgpuRuntime?.voxelRender; }
 let gridUiSync = true;
 /** The last camera/lighting/clip uniform (re-applied on attach / refocus). */
 let gridRenderView: VoxelRenderView | null = null;
+/** The last scene-wireframe viz toggles (mirrors gl3d's Viz3D axes/grid/bounds),
+ *  re-applied on attach / refocus so a display re-attach keeps the overlays. */
+let gridViz3d: { axes: boolean; grid: boolean; bounds: boolean } = { axes: false, grid: false, bounds: false };
 /** DEV probe (reported by `__voxelReadback`): how many frames the worker has
  *  presented into the transferred voxel canvas. The regression this guards is
  *  "the display froze because nothing presented" — see voxelDisplayLive(). */
@@ -6524,6 +6531,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
               return;
             }
             if (gridRenderView) uploadVoxelView(rt, gridRenderView);
+            uploadVoxelViz(rt, gridViz3d);   // re-apply the scene-wireframe toggles
             presentVoxelsIfActive();
             // ACK the worker's ACTUAL `gridUiSync`. `gridUiSync` is a MODULE flag
             // that SURVIVES a re-attach (a display resize re-attaches on the SAME
@@ -6547,6 +6555,17 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       gridRenderView = msg.view;
       if (webgpuRuntime?.voxelRender) {
         uploadVoxelView(webgpuRuntime, msg.view);
+        presentVoxelsIfActive();
+      }
+      break;
+    }
+
+    case 'setGridViz': {
+      // Which scene wireframes (bounds/grid/axes) the free-mode voxel render draws
+      // (mirrors gl3d's Viz3D toggles). Present-only: re-present with the new set.
+      gridViz3d = { axes: !!msg.axes, grid: !!msg.grid, bounds: !!msg.bounds };
+      if (webgpuRuntime?.voxelRender) {
+        uploadVoxelViz(webgpuRuntime, gridViz3d);
         presentVoxelsIfActive();
       }
       break;
@@ -6605,6 +6624,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       // canvas — re-present so a stale/unpresented canvas repaints.
       if (webgpuRuntime?.voxelRender) {
         if (gridRenderView) uploadVoxelView(webgpuRuntime, gridRenderView);
+        uploadVoxelViz(webgpuRuntime, gridViz3d);
         presentVoxelsIfActive();
       }
       break;

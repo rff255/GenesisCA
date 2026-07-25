@@ -2720,6 +2720,16 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     });
   }, [computeVoxelRenderView]);
 
+  // L1 — thread the scene-wireframe toggles (bounds/grid/axes) to the worker's
+  // voxel renderer, which now draws them depth-tested against the cubes (so they
+  // occlude in free mode). gl3d stops drawing those three in its overlaysOnly
+  // path; the gizmo / brush plane / hover / axis labels stay in gl3d (on top).
+  const postGridViz = useCallback(() => {
+    if (!voxelRenderActiveRef.current || !workerRef.current) return;
+    const v = viz3dRef.current;
+    workerRef.current.postMessage({ type: 'setGridViz', axes: v.axes, grid: v.grid, bounds: v.bounds });
+  }, []);
+
   // L1 UI-sync driver (the grid sibling of updateAgentUiSync). ON = the worker
   // reads colours back each frame and ships them, so gl3d renders the full frame
   // (and its colour-id pick FBO resolves). ON iff a feature is — or may be —
@@ -4329,6 +4339,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
           lastGridCameraKeyRef.current = '';
           workerRef.current.postMessage({ type: 'setGridCamera', view });
         }
+        postGridViz();  // apply the current bounds/grid/axes toggles to the worker
         // MIRROR THE WORKER'S ACTUAL FLAG (the UI-sync mirror invariant — see
         // gridUiSyncPostedRef). A display resize re-attaches on the SAME worker,
         // whose `gridUiSync` survives; assuming ON here stranded the mirror and
@@ -6193,7 +6204,12 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   // lazily from its own cached agent instance data (setMetaballs marks it dirty
   // on an enabled/influence/resolution change; threshold is a pure uniform).
   useEffect(() => { agentMetaballsRef.current = agentMetaballs; draw(); }, [agentMetaballs, draw]);
-  useEffect(() => { viz3dRef.current = viz3d; draw(); }, [viz3d, draw]);
+  useEffect(() => {
+    viz3dRef.current = viz3d;
+    // Free-mode voxel render draws bounds/grid/axes itself — thread the toggles.
+    if (voxelRenderActiveRef.current) postGridViz();
+    draw();
+  }, [viz3d, draw, postGridViz]);
   useEffect(() => {
     plane3dRef.current = { axis: plane3d.axis, pos: plane3d.pos };
     plane3dEnabledRef.current = plane3d.enabled;

@@ -2340,7 +2340,14 @@ export class Gl3DRenderer {
     if (overlaysOnly) gl.clearColor(0, 0, 0, 0);
     else gl.clearColor(this.bgColor[0], this.bgColor[1], this.bgColor[2], this.bgColor[3]);
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
-    this.renderOverlays();   // axes / grid / bounds (behind the voxels)
+    // In FREE mode (overlaysOnly) the worker's WGSL voxel renderer draws the
+    // scene-anchored wireframes (bounds / grid / axes) into ITS canvas, depth-
+    // tested against the cubes — so gl3d must NOT draw them here (it renders onto
+    // a SEPARATE transparent canvas above the voxels, which has no shared depth
+    // buffer and would always composite them in front). In FRAME mode (one canvas,
+    // shared depth) gl3d still draws them correctly. The brush interaction plane
+    // stays gl3d-drawn in both modes (always-on-top UI, like the gizmo/labels).
+    if (!overlaysOnly) this.renderOverlays();   // axes / grid / bounds (frame mode only; worker owns them in free mode)
     this.renderBrushPlane(); // brush interaction-plane bounds + grid (depth-tested)
     if (overlaysOnly) {
       // Skip all scene content — just the interaction overlays over transparent.

@@ -84,4 +84,57 @@ Update CLAUDE.md (the L1 section) + this doc's Completion Report. Finish with th
 before/after screenshot evidence.
 
 ## Completion Report
-(fill in when executed)
+
+**Status: DONE** (branch `optimize`). Render-only — `git diff --stat` = 4 files
+(`webgpuRuntime.ts`, `sim.worker.ts`, `SimulatorView.tsx`, `gl3d.ts`), no compiler
+files, measured against `origin/master`.
+
+### What changed
+- **[webgpuRuntime.ts]** — a small WGSL **LINE pipeline** added to the voxel
+  renderer (`VOXEL_LINE_WGSL`): `pos+colour` vertex attributes, line-list,
+  depth-test + depth-write ON (`depthCompare:'less'`), drawn in the SAME render
+  pass + `depth24plus` attachment as the cube draw, so voxels in front occlude the
+  wireframe. The line VS **reuses the `VoxelView` uniform's `mvp` (@0)** — no new
+  uniform, no `VoxelView` widening (so `verify-render-uniform-layouts.mjs` stays
+  green; the separate-line-buffer fallback was unnecessary). New:
+  `buildVoxelOverlayVerts(W,H,D,viz)` mirrors gl3d's `renderOverlays` byte-for-byte
+  (colours, `>100-cell` grid step, origin-corner axes + 2-pronged arrowheads);
+  `uploadVoxelViz(rt,viz)` + `ensureVoxelLineBuffer` (rebuild only on a
+  `${axes}${grid}${bounds}|W|H|D` signature change); line pipeline built in
+  `setupVoxelRender`, drawn in `presentVoxels`, freed in `releaseVoxelResources`.
+- **[sim.worker.ts]** — new `setGridViz` message + `gridViz3d` module var; applied
+  in the handler, on `attachVoxelCanvas`, and on `refreshGridDisplay`.
+- **[SimulatorView.tsx]** — `postGridViz` callback; posts on the `voxelRenderStatus`
+  active ack and whenever `viz3d` changes.
+- **[gl3d.ts]** — the `overlaysOnly` (free-mode) branch now SKIPS `renderOverlays()`
+  (`if (!overlaysOnly) this.renderOverlays()`), so bounds/grid/axes aren't
+  double-drawn. Everything else stays gl3d-drawn in free mode (gizmo / brush plane
+  + outline / hover cells / axis labels — always-on-top UI). Frame-mode path
+  UNCHANGED.
+
+### Gates — all green
+`npx tsc -p tsconfig.app.json --noEmit` ✓ · `npm run build` ✓ ·
+`parity-agent-wasm.mjs` (JS↔WASM bit-parity, all samples) ✓ ·
+`parity-agent-force.mjs` (7 checks) ✓ · `verify-agent-render.mjs` ✓ ·
+`verify-render-uniform-layouts.mjs` (`GPU UNIFORM LAYOUTS ✓`, VoxelView unchanged) ✓.
+
+### Visual verification (in-browser, Browser pane, real GPU)
+Accretor (WebGPU, 3D, resized 40³ for a fast/clear occlusion test) + Life3D:
+- **Free mode active** (`__voxelReadback` → `active:true, uiSync:false`,
+  `presents` incrementing) and the bounds box / floor grid / RGB axes render — they
+  can only come from the worker (gl3d no longer draws them in `overlaysOnly`).
+- **Occlusion**: the growing structure occludes the floor grid + axis behind it
+  (grid/axis vanish where the structure is between them and the camera, visible on
+  either side), across multiple orbit angles + a cold-load session.
+- **Free↔frame consistent**: the free-mode image and the frame-mode gl3d
+  ground-truth image at the SAME camera show identical wireframe occlusion (forced
+  frame mode via the Shadows checkbox → `uiSync:true`).
+- **Toggles work in free mode**: turning Axes + Grid off removed them from the
+  worker render (only the bounds box + gizmo remained); re-enabling restored them.
+- **Gizmo + axis labels stay on top** (gl3d, unchanged).
+- **Life3D (WASM)**: no voxel render (`active:false`) — pure gl3d frame-mode,
+  visually unchanged (my edit only touches the free-mode `overlaysOnly` branch).
+- **Cold load: 0 console errors** (the earlier "useEffect deps changed size"
+  warning was a Vite-HMR-only artifact of adding `postGridViz` to the `viz3d`
+  effect deps; gone on a fresh reload). The line WGSL compiles clean
+  (`voxelRenderStatus:true` is posted only after all voxel modules compile).
