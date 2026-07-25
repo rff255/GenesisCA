@@ -369,6 +369,25 @@ export function lightWorldDirFor(
   return [x / n, y / n, z / n];
 }
 
+/** Directional shadow-map light matrix (GL convention: NDC z ∈ [−1,1], y up) —
+ *  ortho, fitting the volume's bounding sphere so it's stable at any light angle.
+ *  The SINGLE source both the gl3d frame-mode shadow pass (its private
+ *  computeLightMVP delegates here) AND the L1 worker WGSL shadow pass use, so the
+ *  two renderers cannot disagree on the caster projection. `lightDir` is the unit
+ *  world dir TOWARD the light (from lightWorldDirFor). Returns the light MVP + the
+ *  depth range (far − near) for the scale-relative shadow bias. A WebGPU consumer
+ *  must apply the standard GL→WGPU clip remaps (z: (z+w)·½; sample uv.y flip). */
+export function computeLightMVP(
+  W: number, H: number, D: number, lightDir: [number, number, number],
+): { lightMVP: Float32Array; depthRange: number } {
+  const R = Math.hypot((W - 1) / 2 + 0.5, (H - 1) / 2 + 0.5, (D - 1) / 2 + 0.5) || 1;
+  const up: [number, number, number] = Math.abs(lightDir[2]) > 0.99 ? [0, 1, 0] : [0, 0, 1];
+  const eye: [number, number, number] = [lightDir[0] * 2 * R, lightDir[1] * 2 * R, lightDir[2] * 2 * R];
+  const view = mat4LookAt(eye, [0, 0, 0], up);
+  const proj = mat4Ortho(-R, R, -R, R, 0.5 * R, 3.5 * R);
+  return { lightMVP: mat4Mul(proj, view), depthRange: 3 * R };
+}
+
 // 36-vertex unit cube centred at origin (side 1), with per-vertex face normals.
 // pos.xyz then normal.xyz, 6 floats/vertex.
 const CUBE: number[] = (() => {
@@ -1369,14 +1388,13 @@ export class Gl3DRenderer {
    *  sphere so it's stable at any light angle) + the light-perpendicular billboard
    *  axes for the sphere shadow caster. */
   private computeLightMVP(): void {
-    const R = Math.hypot((this.W - 1) / 2 + 0.5, (this.H - 1) / 2 + 0.5, (this.D - 1) / 2 + 0.5) || 1;
     const L = this.lightWorldDir();  // dir toward the light (world centred at origin)
+    // Delegate the ortho light MVP to the exported helper — the SAME math the L1
+    // worker WGSL shadow pass uses, so the two renderers can't disagree.
+    const { lightMVP, depthRange } = computeLightMVP(this.W, this.H, this.D, L);
+    this.lightMVP = lightMVP;
+    this.shadowDepthRange = depthRange;  // far - near, for the scale-relative depth bias
     const up: [number, number, number] = Math.abs(L[2]) > 0.99 ? [0, 1, 0] : [0, 0, 1];
-    const eye: [number, number, number] = [L[0] * 2 * R, L[1] * 2 * R, L[2] * 2 * R];
-    const view = mat4LookAt(eye, [0, 0, 0], up);
-    const proj = mat4Ortho(-R, R, -R, R, 0.5 * R, 3.5 * R);
-    this.lightMVP = mat4Mul(proj, view);
-    this.shadowDepthRange = 3 * R;  // far - near, for the scale-relative depth bias
     // Billboard axes ⟂ L (cross(up,L) → right, cross(L,right) → up).
     let rx = up[1] * L[2] - up[2] * L[1], ry = up[2] * L[0] - up[0] * L[2], rz = up[0] * L[1] - up[1] * L[0];
     const rn = Math.hypot(rx, ry, rz) || 1; rx /= rn; ry /= rn; rz /= rn;

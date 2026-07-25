@@ -160,6 +160,18 @@ export interface WebGPURuntime {
   /** Which scene wireframes to draw (mirrors Viz3D axes/grid/bounds). */
   voxelViz: { axes: boolean; grid: boolean; bounds: boolean };
 
+  /** L1 free-mode cast shadows (Phase 2). A depth-only pass renders the compacted
+   *  cubes from the light POV into voxelShadowTex; the draw FS PCF-samples it. The
+   *  2048² depth texture + comparison sampler are always allocated (bound in the
+   *  draw bind group) but the extra depth pass only runs when voxelShadowOn — set
+   *  from the uniform's shadowStrength each uploadVoxelView. Off ⇒ the draw FS
+   *  short-circuits to 1.0 (the texture is bound but never sampled). */
+  voxelShadowOn: boolean;
+  voxelShadowTex: GPUTexture | null;
+  voxelShadowSampler: GPUSampler | null;
+  voxelShadowPipeline: GPURenderPipeline | null;
+  voxelShadowBindGroup: GPUBindGroup | null;
+
   /** O5 reduction state — when watched linked indicators have GPU-eligible
    *  aggregations (total / freq-bool / freq-tag), the reductions buffer is
    *  populated by per-indicator atomic kernels each step and read back
@@ -273,6 +285,11 @@ export async function createWebGPURuntime(init: WebGPURuntimeInit): Promise<WebG
     voxelLineCount: 0,
     voxelLineSig: '',
     voxelViz: { axes: false, grid: false, bounds: false },
+    voxelShadowOn: false,
+    voxelShadowTex: null,
+    voxelShadowSampler: null,
+    voxelShadowPipeline: null,
+    voxelShadowBindGroup: null,
     reductionsBuf: null,
     reductionShaderModule: null,
     reductionBindGroupLayout: null,
@@ -610,9 +627,10 @@ const PRESENT_WG = 8;
 // same buried-cull eligibility rule, and the MVP + light direction are computed
 // on the main thread by the SHARED sceneCameraMatrices / lightWorldDirFor
 // helpers gl3d itself uses — so the two renderers cannot disagree on projection
-// or lighting. Occupancy AO IS replicated (the cube VS recomputes the same
-// 6-face-neighbour scan gl3d does in uploadColors). Cast shadows and alpha blend
-// stay frame-mode features (the worker's UI-sync flag flips back to gl3d).
+// or lighting. Occupancy AO (VS 6-neighbour scan) AND cast shadows (a depth-only
+// light-POV pass + PCF-sampled draw FS, sharing gl3d's computeLightMVP) are BOTH
+// replicated. Alpha blend stays a frame-mode feature (the worker's UI-sync flag
+// flips back to gl3d for correct back-to-front sorting).
 // ---------------------------------------------------------------------------
 
 /** The voxel render's camera + lighting + clip uniform. `mvp` is column-major
@@ -636,8 +654,21 @@ export interface VoxelRenderView {
    *  VS recomputes the 6-face-neighbour occupancy per instance (same scan gl3d
    *  does CPU-side in uploadColors); the FS folds it into the ambient term. */
   aoStrength: number;
+  /** Cast-shadow amount (0 = off ⇒ the FS short-circuits shadowFactor to 1.0 and
+   *  the shadow depth pass is skipped ⇒ byte-behaviour-identical to no shadows). */
+  shadowStrength: number;
+  /** Base depth bias in light-clip [0,1] space (scale-relative ~1 cell; mirrors
+   *  gl3d's uShadowBias = min(0.02, max(0.0002, 0.9/depthRange))). */
+  shadowBias: number;
+  /** The directional shadow-map light MVP (16 floats, column-major, GL convention
+   *  — from gl3d's shared computeLightMVP; the WGSL applies the GL→WGPU clip
+   *  remaps). Empty when shadows off. */
+  lightMVP: number[];
 }
-const VOXEL_VIEW_BYTES = 208;
+const VOXEL_VIEW_BYTES = 272;
+// Cast-shadow depth-map resolution (mirrors gl3d's SHADOW_SIZE). MUST match the
+// `1.0 / 2048.0` texel literal in VOXEL_DRAW_WGSL's shadowFactor.
+const VOXEL_SHADOW_SIZE = 2048;
 
 // The `@align(16)` on `ambient` is LOAD-BEARING, not decoration. A `vec3<f32>` has
 // align 16 but SIZE 12, so WGSL's natural offset rule
@@ -670,6 +701,9 @@ const VOXEL_VIEW_WGSL = `struct VoxelView {
   total                  : u32,           // @184
   cullBuried             : u32,           // @188
   aoStrength             : f32,           // @192 (0 = off)
+  shadowStrength         : f32,           // @196 (0 = off)
+  shadowBias             : f32,           // @200
+  lightMVP               : mat4x4<f32>,   // @208 (align 16 ⇒ @204 is padding, unwritten)
 };`;
 
 /** Compaction: one thread per cell. Skips alpha-0 cells and (when eligible)
@@ -721,6 +755,8 @@ const VOXEL_DRAW_WGSL = `${VOXEL_VIEW_WGSL}
 @group(0) @binding(0) var<storage, read> instances : array<u32>;
 @group(0) @binding(1) var<storage, read> colorsIn  : array<u32>;
 @group(0) @binding(2) var<uniform>       vv        : VoxelView;
+@group(0) @binding(3) var shadowMap  : texture_depth_2d;
+@group(0) @binding(4) var shadowSamp : sampler_comparison;
 
 struct VSOut {
   @builtin(position) pos    : vec4<f32>,
@@ -728,6 +764,7 @@ struct VSOut {
   @location(1)       normal : vec3<f32>,
   @location(2)       centre : vec3<f32>,
   @location(3) @interpolate(flat) ao : f32,   // occupancy AO 0..1 (0 exposed, 1 buried)
+  @location(4)       fragWorld : vec3<f32>,   // world-space surface point (shadow sampling)
 };
 
 fn basisVec(k: u32) -> vec3<f32> {
@@ -735,6 +772,32 @@ fn basisVec(k: u32) -> vec3<f32> {
 }
 
 fn filled(i: u32) -> bool { return ((colorsIn[i] >> 24u) & 0xffu) != 0u; }
+
+// Cast-shadow sampling — the WGSL analogue of gl3d's SHADOW_GLSL shadowFactor.
+// Transform the fragment's WORLD point into the light's clip space (the SHARED
+// GL-convention lightMVP), PCF-sample the depth compare (3×3 taps over the
+// hardware-2×2 comparison filter), and fold by strength. The GL→WGPU clip remaps:
+// z sample ref = ndc.z·½+½ (matches the z:(z+w)·½ remap the depth pass writes),
+// uv = ndc.xy·(½,−½)+½ (the −½ on y flips for WGPU's y-down framebuffer/texture).
+// shadowStrength ≤ 0 → 1.0 (byte-identical to no shadows; ndl = max(0, N·L)).
+fn shadowFactor(fw: vec3<f32>, ndl: f32) -> f32 {
+  if (vv.shadowStrength <= 0.0) { return 1.0; }
+  let lp: vec4<f32> = vv.lightMVP * vec4<f32>(fw, 1.0);
+  let ndc: vec3<f32> = lp.xyz / lp.w;
+  let uv: vec2<f32> = ndc.xy * vec2<f32>(0.5, -0.5) + vec2<f32>(0.5, 0.5);
+  let d: f32 = ndc.z * 0.5 + 0.5;
+  if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0 || d > 1.0) { return 1.0; }
+  let bias: f32 = vv.shadowBias * (1.0 + 3.0 * (1.0 - ndl));  // slope-scaled
+  let zRef: f32 = d - bias;   // 'ref' is a WGSL reserved keyword
+  let texel: f32 = 1.0 / 2048.0;   // SHADOW_SIZE
+  var s: f32 = 0.0;
+  for (var y: i32 = -1; y <= 1; y = y + 1) {
+    for (var x: i32 = -1; x <= 1; x = x + 1) {
+      s = s + textureSampleCompareLevel(shadowMap, shadowSamp, uv + vec2<f32>(f32(x), f32(y)) * texel, zRef);
+    }
+  }
+  return mix(1.0, s / 9.0, vv.shadowStrength);
+}
 
 @vertex
 fn vsMain(@builtin(vertex_index) vi: u32, @builtin(instance_index) inst: u32) -> VSOut {
@@ -788,6 +851,7 @@ fn vsMain(@builtin(vertex_index) vi: u32, @builtin(instance_index) inst: u32) ->
   out.normal = n;
   out.centre = centre;
   out.ao = ao;
+  out.fragWorld = world;
   return out;
 }
 
@@ -801,19 +865,78 @@ fn fsMain(in: VSOut) -> @location(0) vec4<f32> {
     if (w < vv.clipLo || w > vv.clipHi) { discard; }
   }
   // Flat directional shade by face normal (identical formula to gl3d's FS).
-  // Occupancy AO folds onto the ambient term (ao = 1 - aoStrength·vAO); the
-  // cast-shadow term is still frame-mode-only and omitted here (Phase 2).
+  // Occupancy AO folds onto ambient (ao = 1 - aoStrength·vAO); cast shadows fold
+  // onto diffuse + specular (sh = shadowFactor). Both default to no-op (0 strength).
   let N: vec3<f32> = normalize(in.normal);
   let ndl: f32 = max(0.0, dot(N, vv.lightDir));
   let ao: f32 = 1.0 - vv.aoStrength * in.ao;
-  var col: vec3<f32> = in.color.rgb * (vv.ambient * ao + vv.diffuse * ndl);
+  let sh: f32 = shadowFactor(in.fragWorld, ndl);
+  var col: vec3<f32> = in.color.rgb * (vv.ambient * ao + vv.diffuse * ndl * sh);
   if (vv.specular > 0.0) {
     let H: vec3<f32> = normalize(vv.lightDir + vv.viewDir);
-    col = col + vv.specular * pow(max(0.0, dot(N, H)), 32.0);
+    col = col + vv.specular * pow(max(0.0, dot(N, H)), 32.0) * sh;
   }
   // Alpha passes through exactly like gl3d's FS (outColor = vec4(col, vColor.a));
   // its WebGL canvas is premultipliedAlpha:true, ours is alphaMode 'premultiplied'.
   return vec4<f32>(col, in.color.a);
+}`;
+
+/** Cast-shadow depth pass. Renders the SAME compacted, procedurally-generated
+ *  cubes from the LIGHT's ortho POV into a depth24plus shadow texture (gl3d's
+ *  CUBE_SHADOW_VS/FS). Depth-only (no colour target). Uses the SHARED GL-convention
+ *  lightMVP + the standard GL→WebGPU clip-z remap `p.z = (p.z + p.w)·½` so the
+ *  written depth matches the `ndc.z·½+½` reference the draw FS samples. Cull mode
+ *  is 'none' (both faces rasterise; the light-facing front wins the depth test —
+ *  depth-identical to gl3d's cull-back-when-unclipped, and correct under a clip
+ *  cut where interior walls must cast). The FS discards clipped cubes. */
+const VOXEL_SHADOW_WGSL = `${VOXEL_VIEW_WGSL}
+@group(0) @binding(0) var<storage, read> instances : array<u32>;
+@group(0) @binding(1) var<uniform>       vv        : VoxelView;
+
+struct SOut { @builtin(position) pos : vec4<f32>, @location(0) centre : vec3<f32> };
+
+fn basisVec(k: u32) -> vec3<f32> {
+  return vec3<f32>(f32(k == 0u), f32(k == 1u), f32(k == 2u));
+}
+
+@vertex
+fn vsShadow(@builtin(vertex_index) vi: u32, @builtin(instance_index) inst: u32) -> SOut {
+  let cellIdx: u32 = instances[inst];
+  let layer: u32 = cellIdx / vv.gridWH;
+  let rem: u32 = cellIdx - layer * vv.gridWH;
+  let row: u32 = rem / vv.gridW;
+  let col: u32 = rem - row * vv.gridW;
+  let centre: vec3<f32> = vec3<f32>(f32(col) - vv.half.x, vv.half.y - f32(row), vv.half.z - f32(layer));
+  let f: u32 = vi / 6u;
+  let axis: u32 = f / 2u;
+  let sgn: f32 = select(-1.0, 1.0, (f & 1u) == 0u);
+  let n: vec3<f32> = sgn * basisVec(axis);
+  let uu: vec3<f32> = sgn * basisVec((axis + 1u) % 3u);
+  let vvv: vec3<f32> = basisVec((axis + 2u) % 3u);
+  let k: u32 = vi % 6u;
+  var ci: u32 = k;
+  if (k == 3u) { ci = 0u; } else if (k == 4u) { ci = 2u; } else if (k == 5u) { ci = 3u; }
+  let cu: f32 = select(-1.0, 1.0, ci == 1u || ci == 2u);
+  let cv: f32 = select(-1.0, 1.0, ci == 2u || ci == 3u);
+  let local: vec3<f32> = (n + uu * cu + vvv * cv) * 0.5;
+  let world: vec3<f32> = local * vv.cubeScale + centre;
+  var p: vec4<f32> = vv.lightMVP * vec4<f32>(world, 1.0);
+  p.z = (p.z + p.w) * 0.5;   // GL clip-z [-w,w] → WebGPU clip-z [0,w]
+  var out: SOut;
+  out.pos = p;
+  out.centre = centre;
+  return out;
+}
+
+@fragment
+fn fsShadow(in: SOut) {
+  if (vv.clipEnabled == 1u) {
+    var w: f32 = dot(in.centre, vv.clipFwd);
+    if (vv.clipAxis == 0u) { w = in.centre.x; }
+    else if (vv.clipAxis == 1u) { w = in.centre.y; }
+    else if (vv.clipAxis == 2u) { w = in.centre.z; }
+    if (w < vv.clipLo || w > vv.clipHi) { discard; }
+  }
 }`;
 
 /** Scene-anchored wireframe overlays (bounds box / floor grid / origin axes),
@@ -949,12 +1072,24 @@ export function uploadVoxelView(rt: WebGPURuntime, v: VoxelRenderView): void {
   u[46] = rt.layout.total >>> 0;
   u[47] = v.cullBuried >>> 0;
   f[48] = v.aoStrength;                                         // @192
+  f[49] = v.shadowStrength;                                     // @196
+  f[50] = v.shadowBias;                                         // @200
+  // @204 (f[51]) is padding — the mat4x4 @align(16) pushes lightMVP to @208.
+  // Write each of the 16 floats with a LITERAL index so the layout harness
+  // detects them (its matrix-loop parser only recognises a 0-based `f[i]` loop).
+  const lm = v.lightMVP;
+  f[52] = lm[0] ?? 0; f[53] = lm[1] ?? 0; f[54] = lm[2] ?? 0; f[55] = lm[3] ?? 0;
+  f[56] = lm[4] ?? 0; f[57] = lm[5] ?? 0; f[58] = lm[6] ?? 0; f[59] = lm[7] ?? 0;
+  f[60] = lm[8] ?? 0; f[61] = lm[9] ?? 0; f[62] = lm[10] ?? 0; f[63] = lm[11] ?? 0;
+  f[64] = lm[12] ?? 0; f[65] = lm[13] ?? 0; f[66] = lm[14] ?? 0; f[67] = lm[15] ?? 0;
   rt.device.queue.writeBuffer(rt.voxelViewBuf, 0, ab);
   const a = v.bgA;
   rt.voxelClear = [v.bgR * a, v.bgG * a, v.bgB * a, a];
   // gl3d culls cube backfaces unless a clip interval is open (the cut's visible
   // interior walls ARE backfaces). Alpha blending never reaches free mode.
   rt.voxelCullBack = v.clipEnabled === 0;
+  // The cast-shadow depth pass runs iff the light contributes shadows this frame.
+  rt.voxelShadowOn = v.shadowStrength > 0;
 }
 
 /** Build the voxel render on a transferred OffscreenCanvas. Non-fatal on failure
@@ -974,7 +1109,8 @@ export async function setupVoxelRender(rt: WebGPURuntime, canvas: OffscreenCanva
 
     const compactModule = rt.device.createShaderModule({ label: 'voxel-compact', code: VOXEL_COMPACT_WGSL });
     const drawModule = rt.device.createShaderModule({ label: 'voxel-draw', code: VOXEL_DRAW_WGSL });
-    for (const [name, mod] of [['compact', compactModule], ['draw', drawModule]] as const) {
+    const shadowModule = rt.device.createShaderModule({ label: 'voxel-shadow', code: VOXEL_SHADOW_WGSL });
+    for (const [name, mod] of [['compact', compactModule], ['draw', drawModule], ['shadow', shadowModule]] as const) {
       const info = await mod.getCompilationInfo();
       const errs = info.messages.filter(m => m.type === 'error');
       if (errs.length > 0) {
@@ -1028,12 +1164,26 @@ export async function setupVoxelRender(rt: WebGPURuntime, canvas: OffscreenCanva
       ],
     });
 
+    // Cast-shadow depth map (Phase 2). Always allocated + bound in the draw group;
+    // the depth pass that fills it only runs when shadows are on (else the draw FS
+    // short-circuits before sampling). Comparison sampler + linear filter ⇒ free
+    // hardware 2×2 PCF per tap, like gl3d's LINEAR + COMPARE_REF depth texture.
+    const shadowTex = rt.device.createTexture({
+      label: 'voxel-shadow-map', size: { width: VOXEL_SHADOW_SIZE, height: VOXEL_SHADOW_SIZE },
+      format: 'depth24plus', usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
+    });
+    const shadowSampler = rt.device.createSampler({
+      label: 'voxel-shadow-samp', compare: 'less-equal', magFilter: 'linear', minFilter: 'linear',
+    });
+
     const drawBgl = rt.device.createBindGroupLayout({
       label: 'voxel-draw-bgl',
       entries: [
         { binding: 0, visibility: GPUShaderStage.VERTEX, buffer: { type: 'read-only-storage' } },
         { binding: 1, visibility: GPUShaderStage.VERTEX, buffer: { type: 'read-only-storage' } },
         { binding: 2, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: { type: 'uniform' } },
+        { binding: 3, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'depth' } },
+        { binding: 4, visibility: GPUShaderStage.FRAGMENT, sampler: { type: 'comparison' } },
       ],
     });
     const drawPl = rt.device.createPipelineLayout({ label: 'voxel-draw-pl', bindGroupLayouts: [drawBgl] });
@@ -1050,6 +1200,34 @@ export async function setupVoxelRender(rt: WebGPURuntime, canvas: OffscreenCanva
         { binding: 0, resource: { buffer: instanceBuf } },
         { binding: 1, resource: { buffer: rt.colorsBuf } },
         { binding: 2, resource: { buffer: viewBuf } },
+        { binding: 3, resource: shadowTex.createView() },
+        { binding: 4, resource: shadowSampler },
+      ],
+    });
+
+    // Depth-only shadow-caster pipeline (light POV). cull 'none' — depth-identical
+    // to gl3d's cull-back-when-unclipped (front face wins) and correct under a clip
+    // cut. No colour target; the FS only discards clipped cubes.
+    const shadowBgl = rt.device.createBindGroupLayout({
+      label: 'voxel-shadow-bgl',
+      entries: [
+        { binding: 0, visibility: GPUShaderStage.VERTEX, buffer: { type: 'read-only-storage' } },
+        { binding: 1, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: { type: 'uniform' } },
+      ],
+    });
+    const shadowPipeline = rt.device.createRenderPipeline({
+      label: 'voxel-shadow',
+      layout: rt.device.createPipelineLayout({ label: 'voxel-shadow-pl', bindGroupLayouts: [shadowBgl] }),
+      vertex: { module: shadowModule, entryPoint: 'vsShadow' },
+      fragment: { module: shadowModule, entryPoint: 'fsShadow', targets: [] },
+      primitive: { topology: 'triangle-list', cullMode: 'none' },
+      depthStencil: { format: 'depth24plus', depthWriteEnabled: true, depthCompare: 'less' },
+    });
+    const shadowBindGroup = rt.device.createBindGroup({
+      label: 'voxel-shadow-bg', layout: shadowBgl,
+      entries: [
+        { binding: 0, resource: { buffer: instanceBuf } },
+        { binding: 1, resource: { buffer: viewBuf } },
       ],
     });
 
@@ -1101,11 +1279,18 @@ export async function setupVoxelRender(rt: WebGPURuntime, canvas: OffscreenCanva
     rt.voxelLinePipeline = linePipeline;
     rt.voxelLineBindGroup = lineBindGroup;
     rt.voxelLineSig = '';   // force a rebuild against the current viz on the next present
+    rt.voxelShadowTex = shadowTex;
+    rt.voxelShadowSampler = shadowSampler;
+    rt.voxelShadowPipeline = shadowPipeline;
+    rt.voxelShadowBindGroup = shadowBindGroup;
+    rt.voxelShadowOn = false;
     rt.voxelClear = [0, 0, 0, 0];
     rt.voxelCullBack = true;
     rt.voxelRender = true;
     return true;
-  } catch {
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.error('[webgpu] setupVoxelRender failed:', (e as Error)?.message || String(e));
     rt.voxelRender = false;
     return false;
   }
@@ -1130,6 +1315,23 @@ export function presentVoxels(rt: WebGPURuntime): void {
   cpass.setBindGroup(0, rt.voxelCompactBindGroup);
   dispatchCells(cpass, rt.layout.total, VOXEL_COMPACT_WG);
   cpass.end();
+  // Cast-shadow depth pass (Phase 2): render the SAME compacted cubes from the
+  // light POV into the shadow depth map, so the display FS can PCF-sample it. Only
+  // when shadows are on; the compacted instance buffer + indirect count are shared.
+  if (rt.voxelShadowOn && rt.voxelShadowPipeline && rt.voxelShadowBindGroup && rt.voxelShadowTex) {
+    const spass = enc.beginRenderPass({
+      label: 'voxel-shadow-pass',
+      colorAttachments: [],
+      depthStencilAttachment: {
+        view: rt.voxelShadowTex.createView(),
+        depthClearValue: 1.0, depthLoadOp: 'clear', depthStoreOp: 'store',
+      },
+    });
+    spass.setPipeline(rt.voxelShadowPipeline);
+    spass.setBindGroup(0, rt.voxelShadowBindGroup);
+    spass.drawIndirect(rt.voxelIndirectBuf, 0);
+    spass.end();
+  }
   const [cr, cg, cb, ca] = rt.voxelClear;
   const rpass = enc.beginRenderPass({
     label: 'voxel-draw-pass',
@@ -1204,6 +1406,9 @@ function releaseVoxelResources(rt: WebGPURuntime): void {
   rt.voxelLineBuf = null; rt.voxelLineCount = 0; rt.voxelLineSig = '';
   if (rt.voxelDepthTex) { try { rt.voxelDepthTex.destroy(); } catch { /* non-fatal */ } }
   rt.voxelDepthTex = null; rt.voxelDepthW = 0; rt.voxelDepthH = 0;
+  if (rt.voxelShadowTex) { try { rt.voxelShadowTex.destroy(); } catch { /* non-fatal */ } }
+  rt.voxelShadowTex = null; rt.voxelShadowSampler = null;
+  rt.voxelShadowPipeline = null; rt.voxelShadowBindGroup = null; rt.voxelShadowOn = false;
   rt.voxelCompactPipeline = null; rt.voxelCompactBindGroup = null;
   rt.voxelDrawPipelineCull = null; rt.voxelDrawPipelineNoCull = null; rt.voxelDrawBindGroup = null;
   rt.voxelLinePipeline = null; rt.voxelLineBindGroup = null;

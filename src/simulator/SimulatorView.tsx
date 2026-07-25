@@ -14,7 +14,7 @@ import { NeighborIndexValuePicker } from '../modeler/panels/NeighborIndexDefault
 import { LookupTableEditor } from '../modeler/panels/LookupTableEditor';
 import { compileGraphWebGPU } from '../modeler/vpl/compiler/webgpu/compile';
 import { createSimWorker } from './createSimWorker';
-import { Gl3DRenderer, panCamera, cameraBasis, sceneCameraMatrices, lightWorldDirFor, DEFAULT_LIGHT3D, DEFAULT_METABALLS3D, metaballAutoThreshold, DEFAULT_AUTOZOOM3D, defaultCamera3d, MIN_CAM_DIST, MAX_CAM_DIST } from './render/gl3d';
+import { Gl3DRenderer, panCamera, cameraBasis, sceneCameraMatrices, lightWorldDirFor, computeLightMVP, DEFAULT_LIGHT3D, DEFAULT_METABALLS3D, metaballAutoThreshold, DEFAULT_AUTOZOOM3D, defaultCamera3d, MIN_CAM_DIST, MAX_CAM_DIST } from './render/gl3d';
 import type { SpriteAtlasInput, Light3D, Metaballs3D, AutoZoom3D } from './render/gl3d';
 import type { VoxelRenderView } from './engine/webgpuRuntime';
 import { LightBallWidget } from './LightBallWidget';
@@ -2682,6 +2682,17 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     let bgR = 0, bgG = 0, bgB = 0, bgA = 0;
     const bg = bg3dRef.current;
     if (bg) { bgR = bg[0]!; bgG = bg[1]!; bgB = bg[2]!; bgA = bg[3]!; }
+    // Cast-shadow light matrix + scale-relative bias (only when shadows are on;
+    // computeLightMVP is the SHARED helper gl3d's own shadow pass delegates to).
+    let shadowStrength = 0, shadowBias = 0;
+    let lightMVP: number[] = [];
+    if (light.shadows) {
+      const lm = computeLightMVP(w, h, d, L);
+      lightMVP = Array.from(lm.lightMVP);
+      shadowStrength = light.shadowStrength;
+      // Mirror gl3d: uShadowBias = min(0.02, max(0.0002, 0.9/depthRange)).
+      shadowBias = Math.min(0.02, Math.max(0.0002, 0.9 / (lm.depthRange || 1)));
+    }
     return {
       mvp: Array.from(m.mvp),
       halfX: (w - 1) / 2, halfY: (h - 1) / 2, halfZ: (d - 1) / 2,
@@ -2699,6 +2710,12 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       // Occupancy AO: 0 when off ⇒ the cube shader folds no darkening (byte-
       // behaviour-identical to no AO). gl3d gates the same on light.ao.
       aoStrength: light.ao ? light.aoStrength : 0,
+      // Cast shadows: the shared computeLightMVP (GL convention) + the scale-
+      // relative bias, exactly mirroring gl3d. 0 strength ⇒ the shader short-
+      // circuits + the worker skips the depth pass ⇒ byte-identical to no shadows.
+      shadowStrength,
+      shadowBias,
+      lightMVP,
     };
   }, []);
 
@@ -2717,7 +2734,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
         + `|${view.clipEnabled}|${view.clipAxis}|${view.clipLo}|${view.clipHi}|${view.cubeScale}`
         + `|${view.bgR}|${view.bgG}|${view.bgB}|${view.bgA}|${view.cullBuried}`
         + `|${view.halfX}|${view.halfY}|${view.halfZ}|${view.viewX}|${view.viewY}|${view.viewZ}`
-        + `|${view.aoStrength}`;
+        + `|${view.aoStrength}|${view.shadowStrength}|${view.shadowBias}|${view.lightMVP.join(',')}`;
       if (key === lastGridCameraKeyRef.current) return;
       lastGridCameraKeyRef.current = key;
       workerRef.current.postMessage({ type: 'setGridCamera', view });
@@ -2738,9 +2755,9 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   // reads colours back each frame and ships them, so gl3d renders the full frame
   // (and its colour-id pick FBO resolves). ON iff a feature is — or may be —
   // reading the CPU colours: recording, an inspect popover pinned/sweeping,
-  // a POINTER GESTURE that can pick, OR a frame-mode-only visual is enabled (cast
-  // shadows, alpha blend — which the WGSL pass does not replicate; occupancy AO
-  // now runs free-mode, see Phase 1). Debounced OFF by ~300 ms.
+  // a POINTER GESTURE that can pick, OR alpha blend is enabled (the only remaining
+  // frame-mode-only visual — the WGSL pass does not back-to-front sort; occupancy
+  // AO [Phase 1] and cast shadows [Phase 2] now run free-mode). Debounced OFF ~300 ms.
   //
   // NB the pointer term is deliberately NARROW. Pinning on bare `glPointerOverRef`
   // (the shipped L1 driver) meant simply RESTING the cursor over the canvas held
@@ -2759,7 +2776,6 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   // agent brush) and is intentionally left untouched.
   const updateGridUiSync = useCallback(() => {
     if (!voxelRenderActiveRef.current || !workerRef.current) return;
-    const light = light3dRef.current;
     // NB `!playing` is deliberately NOT a term. Pausing needs no CPU colours by
     // itself — the worker-presented canvas is already showing the current frame
     // and keeps tracking the camera — but flipping costs a full colour readback
@@ -2776,7 +2792,6 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       || sweepActiveRef.current
       || glGestureActiveRef.current
       || (glPointerOverRef.current && (inspectModeRef.current || glShiftDownRef.current))
-      || light.shadows
       || alpha3dRef.current;
     const w = workerRef.current;
     if (want) {
@@ -6403,16 +6418,16 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   // / edit target / metaballs suppression). Hover-during-play is handled per-frame.
   useEffect(() => { updateAgentUiSync(); }, [playing, recording, agentInspect, editTargetId, agentMetaballs.enabled, updateAgentUiSync]);
   // L1: the GRID sibling — re-evaluate the voxel UI-sync on every state signal that
-  // needs the CPU colours mirror. `light3d.shadows` / `alpha3d` are the remaining
-  // FRAME-MODE-ONLY visuals (the WGSL pass replicates neither cast shadows nor
-  // back-to-front alpha sorting): turning either on pins UI-sync ON, which hides
-  // the voxel canvas and hands the frame back to gl3d exactly as before L1; turning
-  // them off releases free mode again. Occupancy AO (light3d.ao) runs free-mode
-  // (Phase 1) so it is NOT a want term — its re-present rides the light3d effect's
-  // draw() → postGridCamera. Hover-during-play is per-frame.
+  // needs the CPU colours mirror. `alpha3d` is the ONLY remaining FRAME-MODE-ONLY
+  // visual (the WGSL pass does not back-to-front sort): turning it on pins UI-sync
+  // ON, which hides the voxel canvas and hands the frame back to gl3d exactly as
+  // before L1; turning it off releases free mode again. Occupancy AO (Phase 1) and
+  // cast shadows (Phase 2) run free-mode so they are NOT want terms — their
+  // re-present rides the light3d effect's draw() → postGridCamera. Hover-during-play
+  // is per-frame.
   useEffect(() => {
     updateGridUiSync();
-  }, [playing, recording, light3d.shadows, alpha3d, updateGridUiSync]);
+  }, [playing, recording, alpha3d, updateGridUiSync]);
   // A1: a CPU-only visual (metaballs) needs the CPU overlay path — detach direct
   // render when it turns on, re-attach when it turns off (if eligible + runtime up).
   useEffect(() => {

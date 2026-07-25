@@ -191,7 +191,68 @@ verify-agent-render ✓, verify-render-uniform-layouts ✓.
 - Protocol trace (hooked `worker.postMessage`): toggling AO ON→OFF in free mode caused
   **0 `setGridUiSync` flips** (the log stayed empty; 1 `setGridCamera` re-present each) —
   the whole point: AO no longer forces the slow colours-readback frame path.
-### Phase 2 — Cast shadows
-(fill in)
+### Phase 2 — Cast shadows — DONE (free-mode, verified)
+**Approach:** a depth-only shadow-map pass (`VOXEL_SHADOW_WGSL` — the SAME
+procedurally-generated compacted cubes rendered from the light's ortho POV into a
+2048² `depth24plus` texture; `cullMode:'none'` [depth-identical to gl3d's cull-back
+when unclipped, correct under a clip cut]; FS discards clipped cubes) runs BEFORE
+the display cube pass in the SAME `presentVoxels` encoder, drawIndirect'ing the
+shared compacted instance buffer, only when `voxelShadowOn`. The draw FS
+PCF-samples it (`shadowFactor`, 3×3 taps over a `sampler_comparison` +
+`texture_depth_2d` at draw bindings 3/4) and folds `sh` onto diffuse+specular
+exactly like gl3d's `SHADOW_GLSL`.
+
+**Shared light matrix:** `computeLightMVP(W,H,D,lightDir)` is now EXPORTED from
+gl3d — its private method delegates to it (the Phase-C `sceneCameraMatrices` /
+`lightWorldDirFor` precedent), so the two renderers cannot disagree on the caster
+projection. `computeVoxelRenderView` calls it + the scale-relative bias
+`min(0.02, max(0.0002, 0.9/depthRange))`.
+
+**GL→WebGPU clip adaptation** (gl3d's ortho is GL-convention NDC z∈[−1,1] / y-up;
+WebGPU is z∈[0,1] / y-down — the ortho fills the whole z range, so this cannot be
+skipped like the display perspective can): the shadow VS applies `p.z = (p.z+p.w)·½`
+(GL clip-z → WebGPU clip-z), and `shadowFactor` samples `uv = ndc.xy·(½,−½)+½`
+(the −½ flips y for WebGPU's y-down texture) + `zRef = ndc.z·½+½` (matching the
+written depth). `textureSampleCompareLevel` (level 0, non-uniform-flow-safe).
+
+**VoxelView:** added `shadowStrength @196` / `shadowBias @200` / `lightMVP @208`
+(a mat4 pinned by the align-16 padding at @204); `VOXEL_VIEW_BYTES` 208→272;
+`uploadVoxelView` LITERAL-indexes the 16 `lightMVP` floats `f[52..67]` (the layout
+harness's matrix-loop parser only recognises a 0-based `f[i]` loop, so a literal
+index list is required); `verify-render-uniform-layouts.mjs` green. **0 strength ⇒
+the FS short-circuits `shadowFactor` to 1.0 AND the depth pass is skipped ⇒
+byte-behaviour-identical to no shadows.**
+
+**Driver:** `postGridCamera`'s dedup key gained `shadowStrength`/`shadowBias`/
+`lightMVP`; `light.shadows` REMOVED from `updateGridUiSync`'s `want` + the ui-sync
+re-eval effect's deps.
+
+**THE BUG the visual verification caught (and why it mattered):** `ref` is a WGSL
+RESERVED KEYWORD — `let ref: f32 = d - bias;` made the DRAW shader fail to compile,
+so `setupVoxelRender` returned false and the model **silently fell back to gl3d
+frame mode** (`voxelRender` stayed false; the sim still rendered, so nothing looked
+broken). Renamed `ref` → `zRef`. Root-caused by compiling the exact WGSL in the
+page's own WebGPU device via `getCompilationInfo` (a green gate suite + tsc could
+NOT catch a WGSL-string error). Hardened: `setupVoxelRender`'s previously-SILENT
+final `catch` now `console.error`s the failure — the silent catch is precisely what
+hid this for several reloads.
+
+**Scope:** render-only, ZERO compiler files (`git diff --stat` = `webgpuRuntime.ts`
++ `SimulatorView.tsx` + `gl3d.ts` [the `computeLightMVP` export + private-method
+delegation only — gl3d's frame-mode rendering is unchanged]). No worker change.
+
+**Gates:** tsc ✓, `npm run build` ✓, parity-agent-wasm ✓, parity-agent-force ✓,
+verify-agent-render ✓, verify-render-uniform-layouts ✓.
+
+**Visual verification (Accretor 300³, WebGPU, dense structure, dist 0.32, free
+mode):** shadows ON casts inter-beam shadows in free mode; shadows OFF returns to
+the flat baseline. Free↔frame match: arming Inspect + hovering flips to gl3d frame
+mode; the gl3d shadow render (its own shadow-map pass) matches the free-mode WGSL
+shadow render — the flip is seamless (composited-pixel/lighting-parity eyeball
+flagged for a human spot-check; the two frames match closely to my eye). Protocol
+trace (hooked `worker.postMessage`): toggling shadows ON→OFF in free mode =
+**0 `setGridUiSync` flips** (1 `setGridCamera` re-present each). The voxel render is
+confirmed active via `__voxelReadback` (`active:true`, instanceCount tracks the
+structure).
 ### Phase 3 — Alpha blend
 (fill in)
