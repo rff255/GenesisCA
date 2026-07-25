@@ -5371,12 +5371,12 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
         // worker died silently mid-init and a resize appeared to "hang".
         self.postMessage({
           type: 'error',
-          message: `Grid allocation failed for ${width}ÃƒÆ’Ã¢â‚¬â€${height}ÃƒÆ’Ã¢â‚¬â€${depth} (${(width * height * depth).toLocaleString()} cells): `
+          message: `Grid allocation failed for ${width}x${height}x${depth} (${(width * height * depth).toLocaleString()} cells): `
             + ((e as Error)?.message || e)
             + '. The simulation memory is one WebAssembly.Memory backing store shared by ALL compile targets (hard cap 4 GiB). '
             + (gridCellsEnabled
-              ? 'Per-cell storage scales with WÃƒÆ’Ã¢â‚¬â€HÃƒÆ’Ã¢â‚¬â€D: cell attributes + colours + engine buffers, and neighbour tables add ÃƒÆ’Ã¢â‚¬â€neighbourhood-size.'
-              : 'With the CA grid off, per-cell storage is the CELL ATTRIBUTES only (agents read/deposit fields through them) ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â delete unused cell attributes or reduce the world dimensions.'),
+              ? 'Per-cell storage scales with W*H*D: cell attributes + colours + engine buffers, and neighbour tables add x neighbourhood-size (the dominant cost on a large 3D grid).'
+              : 'With the CA grid off, per-cell storage is the CELL ATTRIBUTES only (agents read/deposit fields through them) - delete unused cell attributes or reduce the world dimensions.'),
         });
         break;
       }
