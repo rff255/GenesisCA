@@ -124,5 +124,82 @@ Update CLAUDE.md (the WebGPU direct-render / E2 sections — note grid-only now
 shares the display-res present) + this doc's Completion Report. Finish with the
 large-grid crisp-at-zoom screenshot + confirmation the E2 path is unregressed.
 
-## Completion Report
-(fill in when executed)
+## Completion Report (2026-07-26)
+
+**Outcome**: SHIPPED. A grid-only 2D WebGPU model now direct-renders at DISPLAY
+resolution via the SAME grid-plane present the E2 composite uses, so grid-only and
+grid+agents present the grid IDENTICALLY (the user's consistency goal). The
+transferred OffscreenCanvas is now DISPLAY-sized (verified 764×941 at both 300²
+and 2000², NOT grid-W×H), and the main thread blits it 1:1 — the old grid-res
+`presentColors` COMPUTE present + the per-frame scale of a grid-sized canvas (the
+L2 ~330 ms/frame cost at 2000²) is retired. **RENDER/worker only, ZERO compiler
+changes** (asserted `git diff --stat` — no `compiler/` file; `check-compile-identity`
+not required).
+
+**Surface** (6 files): [gridPlanePresent.ts](../src/simulator/engine/gridPlanePresent.ts)
+(NEW — the shared shader `GRID_PRESENT_WGSL` + `GridPlaneView` + `writeGridPlaneView`
+extracted from agentWebgpuRuntime.ts), [webgpuRuntime.ts](../src/simulator/engine/webgpuRuntime.ts)
+(display-res render present replacing the compute present + a `setGridCamera2D`
+setter + a `debugReadGridPresentPixels` DEV probe), [agentWebgpuRuntime.ts](../src/simulator/engine/agentWebgpuRuntime.ts)
+(imports the shared shader; local defs removed), [sim.worker.ts](../src/simulator/engine/sim.worker.ts)
+(a `setGridCamera2D` message + a `__gridPresentReadback` DEV message), [SimulatorView.tsx](../src/simulator/SimulatorView.tsx)
+(display-sized canvas attach + a `postGridCamera2D` + the 1:1 blit branch + resize-
+reattach), [scripts/verify-render-uniform-layouts.mjs](../scripts/verify-render-uniform-layouts.mjs)
+(GridPlaneView registry entry → the shared module).
+
+### As built
+1. **Shared shader** — `GRID_PRESENT_WGSL` (a fullscreen triangle whose FS inverts
+   the 2D camera per display pixel → cell (`col=floor(wx)`, `row=floor(wy)`) →
+   `colorsBuf` NEAREST, premultiplied) + `GridPlaneView` (32 B scalars) + its writer
+   moved to `gridPlanePresent.ts`, imported by BOTH runtimes. No forked cell-sampling.
+2. **Grid runtime present** — `setupDirectRender` configures the display-sized canvas
+   RENDER_ATTACHMENT + COPY_SRC (dropped STORAGE_BINDING), builds the grid-plane RENDER
+   pipeline, seeds a default fit camera. `presentToCanvas` + `dispatchColorPassAndPresent`
+   (OM compute pass → grid-plane render pass in one encoder) use `encodeGridPlanePresent`
+   with `rt.gridCamera2D`. `setGridCamera2D` stores + re-presents.
+3. **2D grid camera** — a `setGridCamera2D` worker message (mirroring voxel `setGridCamera`
+   / agent `setAgentCamera`), rAF-coalesced + deduped on the main thread (`postGridCamera2D`),
+   posted on pan/zoom + the Phase 2 ack. The worker re-presents on colour refresh
+   (step tail, mutation tail, viewer switch, reset — all route through `dispatchColorPassAndPresent`).
+4. **Main-thread 1:1 blit** — `draw()`'s new `directRenderActiveRef` branch blits the
+   display-sized canvas 1:1 (mirrors E2's `agentComposite` branch) + re-attaches on a
+   display resize; gridlines / glyph overlay / brush cursor overlay on top (same scene
+   transform the camera encodes).
+
+### Must-not-regress — verified
+- **Recording** ships GRID-resolution colours (300²×4 = 360000 bytes, NOT display-res) —
+  reads `colorsBuf` via `readbackColors`, independent of the present path. NOT touched.
+- **E2 grid+agents composite UNREGRESSED** (Chemotaxis WebGPU/WebGPU) — `composite:true`,
+  the shared `GRID_PRESENT_WGSL` compiles, `hasColors:false` (readback still eliminated),
+  0 errors. The grid's own direct render is correctly OFF for agent models (mutually exclusive).
+- **JS/WASM grid fallback** — no `directRender`, no attach, no camera; colours shipped every
+  step (unchanged scaled-blit path).
+- **Glyph** — a glyph 2D WebGPU model engages direct render; NO glyph code touched
+  (`sendColors` ships `glyphsPayload` under direct render unchanged; `drawGlyphOverlay`
+  gate `showGrid2d && !agentComposite` unchanged). Byte-identical behaviour.
+- **Paint / inspect** — read/patch `colorsBuf`/attrs independent of the present; a mutation
+  re-presents through `dispatchColorPassAndPresent`.
+
+### Verification note (occlusion)
+The Browser pane would NOT composite frames in this environment (screenshots timed
+out — "the Browser pane is not displayed"), so the composited-pixel eyeball is
+**flagged for the user**. In its place I used the same OCCLUSION-SAFE method the E2
+report used: the worker message protocol (directRender engaged, canvas DISPLAY-sized,
+camera flow, no errors) + a `__gridPresentReadback` GPU-buffer readback that samples
+the presented canvas. The crispness pass/fail was proven via a horizontal pixel
+profile at extreme zoom: PIECEWISE-CONSTANT per cell, **ZERO intermediate/blur
+pixels** (a linear present would show grey), transition EXACTLY on the cell boundary
+(display x=160 = col-170 edge) — NEAREST crisp cells with correct mapping.
+
+### Deeper-unification note
+Grid-only = the grid plane; grid+agents (E2) = the grid plane + agent discs. Both now
+share `GRID_PRESENT_WGSL`. A full single-present-path unification was NOT taken (the
+grid runtime and the agent runtime are separate objects on the shared E1 device with
+separate canvases/attach lifecycles); reusing the shader source is the required bar and
+that is met. The next natural step (out of scope here) is the L2 grid-only-render
+follow-up already noted in the E2 report — done by this phase.
+
+### Gates (all green)
+`tsc -p tsconfig.app.json --noEmit`, `npm run build`, `parity-agent-wasm` (18),
+`parity-agent-force` (7), `verify-agent-render`, `verify-render-uniform-layouts`
+(GridPlaneView now parsed from the shared module). No compiler files touched.

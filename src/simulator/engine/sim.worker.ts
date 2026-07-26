@@ -16,7 +16,7 @@ import {
   uploadModelAttrs, uploadActiveViewer, uploadIndicators, uploadIndicatorsAt, dispatchStep,
   dispatchOutputMapping, dispatchColorPassAndPresent, presentToCanvas, readbackAttrs, readbackColors,
   readbackBatched, unpackAttrsFromReadback, unpackAttrFromReadback, resetStopFlag, seedRngState,
-  setupReductionPipelines, dispatchReductions, setupDirectRender,
+  setupReductionPipelines, dispatchReductions, setupDirectRender, setGridCamera2D, debugReadGridPresentPixels,
   dispatchInit, uploadOrientation, uploadFacePatternLookup, uploadInteractionTable,
   clearGlyphBuffersWebGPU,
   setupVoxelRender, uploadVoxelView, uploadVoxelViz, presentVoxels, destroyVoxelRender, debugReadVoxelInstances,
@@ -469,6 +469,11 @@ interface AttachVoxelCanvasMsg { type: 'attachVoxelCanvas'; canvas: OffscreenCan
  *  Present-only (no step). Computed on the MAIN thread with the same
  *  sceneCameraMatrices / lightWorldDirFor helpers gl3d uses. */
 interface SetGridCameraMsg { type: 'setGridCamera'; view: VoxelRenderView }
+/** 2D display-res grid direct render: the scene transform (scale/pan) + torus +
+ *  showGrid the grid-plane present inverts per display pixel. Present-only (the
+ *  colorsBuf holds the last frame). The 2D sibling of setGridCamera (voxel) and
+ *  setAgentCamera (agent discs). */
+interface SetGridCamera2DMsg { type: 'setGridCamera2D'; scalePx: number; oxPx: number; oyPx: number; torus: boolean; showGrid: boolean }
 /** UI-sync toggle for the GRID (the agent `setAgentUiSync` sibling): while ON the
  *  worker reads the colours back each frame and ships them (features that need the
  *  CPU colours mirror: gl3d frame rendering + picking, recording, inspect). While
@@ -485,6 +490,10 @@ interface RefreshGridDisplayMsg { type: 'refreshGridDisplay' }
  *  and read the indirect draw args back, so a test can assert the GPU-computed
  *  instance count against an independently computed visible-cell count. */
 interface VoxelReadbackMsg { type: '__voxelReadback'; sample?: number }
+/** DEV probe (verification only): present the display-res grid plane (optionally at
+ *  a camera override) and read back the RGBA at DISPLAY-pixel sample points. Proves
+ *  the grid-plane present is crisp at any zoom when the pane can't composite. */
+interface GridPresentReadbackMsg { type: '__gridPresentReadback'; cam?: { scalePx: number; oxPx: number; oyPx: number; torus: boolean; showGrid: boolean }; points: Array<[number, number]> }
 
 // --- Bond-Graph Agents messages ---
 /** Lay down N agents (the seed brush / Reset / headless seeding). Positions are
@@ -561,7 +570,7 @@ interface SetAgentUiSyncMsg { type: 'setAgentUiSync'; on: boolean }
  *  refreshDisplay). */
 interface RefreshAgentDisplayMsg { type: 'refreshAgentDisplay' }
 
-type WorkerMsg = InitMsg | StepMsg | PaintMsg | PaintManualMsg | ResetMsg | RecompileMsg | UpdateModelAttrsMsg | UpdateLookupTableMsg | ImportImageMsg | UpdateIndicatorsMsg | GetStateMsg | LoadStateMsg | ReadRegionMsg | WriteRegionMsg | ClearRegionMsg | SetUseWasmMsg | SetUseWebGPUMsg | ReadbackWebGPUMsg | ColorPassMsg | SetRecordingMsg | AttachCanvasMsg | RequestColorsSnapshotMsg | SetInspectCellsMsg | RefreshDisplayMsg | SeedAgentsMsg | CreateAgentMsg | KillAgentsMsg | PaintAgentsMsg | ClearAgentsMsg | FormBondMsg | BreakBondMsg | GetAgentStateMsg | MoveAgentsMsg | FormBondBatchMsg | SetAgentWasmBackedMsg | SetRngSeedMsg | SetSimLayersMsg | AttachAgentCanvasMsg | SetAgentCameraMsg | SetAgentUiSyncMsg | RefreshAgentDisplayMsg | E1bCountersMsg | CompositeReadbackMsg | AttachVoxelCanvasMsg | SetGridCameraMsg | SetGridUiSyncMsg | SetGridVizMsg | RefreshGridDisplayMsg | VoxelReadbackMsg;
+type WorkerMsg = InitMsg | StepMsg | PaintMsg | PaintManualMsg | ResetMsg | RecompileMsg | UpdateModelAttrsMsg | UpdateLookupTableMsg | ImportImageMsg | UpdateIndicatorsMsg | GetStateMsg | LoadStateMsg | ReadRegionMsg | WriteRegionMsg | ClearRegionMsg | SetUseWasmMsg | SetUseWebGPUMsg | ReadbackWebGPUMsg | ColorPassMsg | SetRecordingMsg | AttachCanvasMsg | RequestColorsSnapshotMsg | SetInspectCellsMsg | RefreshDisplayMsg | SeedAgentsMsg | CreateAgentMsg | KillAgentsMsg | PaintAgentsMsg | ClearAgentsMsg | FormBondMsg | BreakBondMsg | GetAgentStateMsg | MoveAgentsMsg | FormBondBatchMsg | SetAgentWasmBackedMsg | SetRngSeedMsg | SetSimLayersMsg | AttachAgentCanvasMsg | SetAgentCameraMsg | SetAgentUiSyncMsg | RefreshAgentDisplayMsg | E1bCountersMsg | CompositeReadbackMsg | AttachVoxelCanvasMsg | SetGridCameraMsg | SetGridCamera2DMsg | SetGridUiSyncMsg | SetGridVizMsg | RefreshGridDisplayMsg | VoxelReadbackMsg | GridPresentReadbackMsg;
 
 // ---------------------------------------------------------------------------
 // State
@@ -6562,6 +6571,20 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       break;
     }
 
+    case 'setGridCamera2D': {
+      // 2D display-res grid direct render: the scene transform (pan/zoom) + torus +
+      // showGrid. Present-only — setGridCamera2D stores the camera and re-runs the
+      // grid-plane present (colorsBuf holds the last frame). The 2D sibling of the
+      // voxel setGridCamera / agent setAgentCamera.
+      if (webgpuRuntime?.directRender) {
+        setGridCamera2D(webgpuRuntime, {
+          scalePx: msg.scalePx, oxPx: msg.oxPx, oyPx: msg.oyPx,
+          torus: !!msg.torus, showGrid: !!msg.showGrid,
+        });
+      }
+      break;
+    }
+
     case 'setGridViz': {
       // Which scene wireframes (bounds/grid/axes) the free-mode voxel render draws
       // (mirrors gl3d's Viz3D toggles). Present-only: re-present with the new set.
@@ -6616,6 +6639,27 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
           });
         } catch (e) {
           self.postMessage({ type: '__voxelReadback', active: false, error: (e as Error)?.message || String(e) });
+        }
+      })();
+      break;
+    }
+
+    case '__gridPresentReadback': {
+      // DEV probe (verification only). Occlusion-safe proof of the display-res
+      // grid-plane present: sample the presented canvas at DISPLAY pixels (optionally
+      // at a camera override — e.g. extreme zoom) and confirm crisp cells.
+      void (async () => {
+        try {
+          const rt = webgpuRuntime;
+          if (!rt || !rt.directRender) { self.postMessage({ type: '__gridPresentReadback', active: false }); return; }
+          const pix = await debugReadGridPresentPixels(rt, msg.cam ?? null, msg.points ?? []);
+          self.postMessage({
+            type: '__gridPresentReadback', active: true, pixels: pix,
+            gridW: rt.layout.gridWidth, gridH: rt.layout.gridHeight,
+            camera: rt.gridCamera2D,
+          });
+        } catch (e) {
+          self.postMessage({ type: '__gridPresentReadback', active: false, error: (e as Error)?.message || String(e) });
         }
       })();
       break;
