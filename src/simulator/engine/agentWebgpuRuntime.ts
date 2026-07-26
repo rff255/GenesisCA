@@ -191,10 +191,11 @@ export interface AgentWebGPURuntime {
   renderDepthW?: number;
   renderDepthH?: number;
   // E2 — single-canvas composite (2D grid+agents, WebGPU grid). The canvas is
-  // WORLD-sized (W×H); one encoder presents the grid layer (a fullscreen quad
-  // reading the grid runtime's `colorsBuf`) then the agent disc pass with
-  // loadOp:'load' over it, so both layers ride ONE canvas. The main thread's
-  // zoom/pan blit scales the world-sized composite (the grid direct-render blit).
+  // DISPLAY-sized; one encoder presents the grid layer (a fullscreen triangle whose
+  // FS INVERTS the camera — display pixel → world coord → cell → grid `colorsBuf`,
+  // NEAREST) then the agent disc pass (the same display-res camera as A1) with
+  // loadOp:'load' over it, so BOTH layers ride ONE canvas at DISPLAY resolution —
+  // agents stay crisp discs at any zoom. The main thread blits the canvas 1:1.
   renderComposite?: boolean;
   gridPresentPipeline?: GPURenderPipeline | null;
   gridPresentBGL?: GPUBindGroupLayout | null;
@@ -1117,10 +1118,11 @@ export interface AgentRenderSurface {
   renderDepthW?: number;
   renderDepthH?: number;
   // E2 — single-canvas composite (2D grid+agents, WebGPU grid). The canvas is
-  // WORLD-sized (W×H); one encoder presents the grid layer (a fullscreen quad
-  // reading the grid runtime's `colorsBuf`) then the agent disc pass with
-  // loadOp:'load' over it, so both layers ride ONE canvas. The main thread's
-  // zoom/pan blit scales the world-sized composite (the grid direct-render blit).
+  // DISPLAY-sized; one encoder presents the grid layer (a fullscreen triangle whose
+  // FS INVERTS the camera — display pixel → world coord → cell → grid `colorsBuf`,
+  // NEAREST) then the agent disc pass (the same display-res camera as A1) with
+  // loadOp:'load' over it, so BOTH layers ride ONE canvas at DISPLAY resolution —
+  // agents stay crisp discs at any zoom. The main thread blits the canvas 1:1.
   renderComposite?: boolean;
   gridPresentPipeline?: GPURenderPipeline | null;
   gridPresentBGL?: GPUBindGroupLayout | null;
@@ -1155,9 +1157,12 @@ export interface AgentRenderView {
   // E2 composite only (CPU-side flags — NOT part of the RENDER_VIEW byte layout,
   // ignored by uploadAgentRenderView): the per-layer Show toggles. `showGrid` off
   // → skip the grid pass (agent pass clears to bg*); `showAgents` off → skip the
-  // agent disc draw. Both off → a plain bg clear.
+  // agent disc draw. Both off → a plain bg clear. `torus` selects the grid-plane
+  // FS wrap policy (infinity canvas → tile the grid via modulo; bounded → discard
+  // outside [0,W)×[0,H) so the grid layer letterboxes transparently).
   showGrid?: boolean;
   showAgents?: boolean;
+  torus?: boolean;
 }
 const RENDER_VIEW_BYTES = 96;
 
@@ -1593,29 +1598,61 @@ async function setupAgentDiscRender(rt: AgentRenderSurface, canvas: OffscreenCan
 }
 
 // ---------------------------------------------------------------------------
-// E2 — single-canvas composite: grid layer + agent discs on ONE world-sized
-// canvas in ONE encoder. The grid layer is a fullscreen-triangle render pass
-// reading the grid runtime's `colorsBuf` (row-major RGBA8 u32/cell) — the
-// "render-pass equivalent" of the grid's compute presentColors, so the canvas
-// stays RENDER_ATTACHMENT-only (no STORAGE_BINDING divergence, no compute-then-
-// render on the same texture). The agent disc pass loads over it (loadOp:'load').
-// The camera is WORLD space (scalePx=1, ox=oy=0, canvas=world); the main thread's
-// zoom/pan blit scales the world-sized composite. Accepted tradeoff: agents render
-// at world resolution → blurry at high zoom (documented in the E2 report/Help).
+// E2 — single-canvas composite: grid layer + agent discs on ONE DISPLAY-sized
+// canvas in ONE encoder, at DISPLAY resolution through the camera. The grid layer
+// is a fullscreen-triangle render pass whose FRAGMENT shader INVERTS the camera —
+// display pixel → world coord → cell (col=floor(wx), row=floor(wy)) → the grid
+// runtime's `colorsBuf` (row-major RGBA8 u32/cell) with NEAREST semantics (integer
+// floor = hard cell edges = the crisp CA-block look). It is DISPLAY-PIXEL-BOUND
+// (one cell lookup per covered display pixel), NOT cell-count-bound — a 5000² field
+// costs the same to present as a 300² one (the single sampled plane is the
+// efficient realization of "a plane of cells"; do NOT render W×H instanced quads).
+// The agent disc pass loads over it (loadOp:'load') using the SAME display-res
+// camera as the A1 render (scalePx=zoom·baseScale, ox/oy=pan), so agents stay CRISP
+// discs at any zoom — the fix for the world-res "blob of cells" the first E2 hit.
+// The canvas stays RENDER_ATTACHMENT-only (a render pass, not compute-present, so no
+// STORAGE_BINDING divergence). The main thread blits the display-sized canvas 1:1.
 // ---------------------------------------------------------------------------
 
-/** WGSL: a fullscreen triangle that reads the grid `colorsBuf` (packed RGBA8 u32
- *  per cell, row-major) at the fragment's cell and outputs premultiplied — the
- *  grid layer of the composite. gridW/gridH come from a tiny uniform (the canvas
- *  is world-sized, so fragCoord maps 1:1 to cells). */
-const GRID_PRESENT_WGSL = `
-struct GridDims { w : u32, h : u32, _p0 : u32, _p1 : u32 };
+/** The grid-plane camera uniform for the composite grid layer (32 B, all scalars —
+ *  no vec3 padding trap). Mirrors `GRID_PLANE_VIEW_WGSL` below AND
+ *  `writeGridPlaneView`. `torus` selects wrap (infinity) vs bounds-discard. */
+const GRID_PLANE_VIEW_BYTES = 32;
+function writeGridPlaneView(gridW: number, gridH: number, torus: boolean, scalePx: number, oxPx: number, oyPx: number): ArrayBuffer {
+  const ab = new ArrayBuffer(GRID_PLANE_VIEW_BYTES);
+  const u = new Uint32Array(ab), fl = new Float32Array(ab);
+  u[0] = gridW >>> 0;
+  u[1] = gridH >>> 0;
+  u[2] = torus ? 1 : 0;
+  u[3] = 0;
+  fl[4] = scalePx;
+  fl[5] = oxPx;
+  fl[6] = oyPx;
+  fl[7] = 0;
+  return ab;
+}
+
+const GRID_PLANE_VIEW_WGSL = `struct GridPlaneView {
+  gridW   : u32,
+  gridH   : u32,
+  torus   : u32,
+  _pad0   : u32,
+  scalePx : f32,
+  oxPx    : f32,
+  oyPx    : f32,
+  _pad1   : f32,
+};`;
+
+/** WGSL: a fullscreen triangle whose FS inverts the display-res camera to a world
+ *  coordinate, resolves the covered cell (NEAREST), and samples the grid `colorsBuf`
+ *  (packed RGBA8 u32/cell, row-major) — the grid layer of the composite, premultiplied. */
+const GRID_PRESENT_WGSL = `${GRID_PLANE_VIEW_WGSL}
 @group(0) @binding(0) var<storage, read> colorsIn : array<u32>;
-@group(0) @binding(1) var<uniform>       dims     : GridDims;
+@group(0) @binding(1) var<uniform>       gv       : GridPlaneView;
 
 @vertex
 fn vsMain(@builtin(vertex_index) vi : u32) -> @builtin(position) vec4<f32> {
-  // A single oversized triangle covering the viewport.
+  // A single oversized triangle covering the whole DISPLAY viewport.
   var p = vec2<f32>(-1.0, -1.0);
   if (vi == 1u) { p = vec2<f32>(3.0, -1.0); }
   else if (vi == 2u) { p = vec2<f32>(-1.0, 3.0); }
@@ -1624,10 +1661,26 @@ fn vsMain(@builtin(vertex_index) vi : u32) -> @builtin(position) vec4<f32> {
 
 @fragment
 fn fsMain(@builtin(position) fragCoord : vec4<f32>) -> @location(0) vec4<f32> {
-  let cx : u32 = u32(fragCoord.x);
-  let cy : u32 = u32(fragCoord.y);
-  if (cx >= dims.w || cy >= dims.h) { discard; }
-  let packed : u32 = colorsIn[cy * dims.w + cx];
+  // Invert the camera: display pixel → world coordinate. scalePx > 0 always
+  // (guarded CPU-side: baseScale·zoom). DISPLAY-pixel-bound: one cell lookup per
+  // covered display pixel, so field size does not affect present cost.
+  let W : f32 = f32(gv.gridW);
+  let H : f32 = f32(gv.gridH);
+  var wx : f32 = (fragCoord.x - gv.oxPx) / gv.scalePx;
+  var wy : f32 = (fragCoord.y - gv.oyPx) / gv.scalePx;
+  if (gv.torus != 0u) {
+    // Infinity canvas → the grid tiles: wrap into [0,W)×[0,H).
+    wx = wx - floor(wx / W) * W;
+    wy = wy - floor(wy / H) * H;
+  } else {
+    // Bounded → outside the grid is the transparent letterbox.
+    if (wx < 0.0 || wx >= W || wy < 0.0 || wy >= H) { discard; }
+  }
+  // NEAREST cell = integer floor of the world coord (hard cell edges, no lerp).
+  // wx,wy are in [0,W)/[0,H) here, so u32() truncation is a valid floor.
+  let col : u32 = min(gv.gridW - 1u, u32(wx));
+  let row : u32 = min(gv.gridH - 1u, u32(wy));
+  let packed : u32 = colorsIn[row * gv.gridW + col];
   let r : f32 = f32((packed >>  0u) & 0xffu) / 255.0;
   let g : f32 = f32((packed >>  8u) & 0xffu) / 255.0;
   let b : f32 = f32((packed >> 16u) & 0xffu) / 255.0;
@@ -1636,7 +1689,7 @@ fn fsMain(@builtin(position) fragCoord : vec4<f32>) -> @location(0) vec4<f32> {
   return vec4<f32>(r * a, g * a, b * a, a);
 }`;
 
-/** Set up the composite render surface: configure the WORLD-sized canvas
+/** Set up the composite render surface: configure the DISPLAY-sized canvas
  *  (RENDER_ATTACHMENT), build the disc pipelines AND the grid-present pipeline.
  *  Non-fatal on failure (returns false → the worker keeps the two-canvas path).
  *  The grid `colorsBuf` is passed per-present (it can be rebuilt on recompile),
@@ -1673,7 +1726,7 @@ export async function setupAgentCompositeRender(rt: AgentRenderSurface, canvas: 
       primitive: { topology: 'triangle-list' },
     });
     rt.gridPresentBGL = gbgl;
-    rt.gridPresentUniform = rt.device.createBuffer({ label: 'grid-present-dims', size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+    rt.gridPresentUniform = rt.device.createBuffer({ label: 'grid-plane-view', size: GRID_PLANE_VIEW_BYTES, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
     rt.renderCanvas = canvas;
     rt.renderCtx = ctx;
     rt.renderActive = true;
@@ -1688,11 +1741,14 @@ export async function setupAgentCompositeRender(rt: AgentRenderSurface, canvas: 
   }
 }
 
-/** Encode the composite present into `enc`: grid-present pass (fullscreen quad
- *  reading `gridColorsBuf`, loadOp clear) then the agent disc pass (loadOp load).
- *  `gridColorsBuf` is the LIVE grid runtime `colorsBuf` (passed per-present so a
- *  recompile-rebuilt buffer is always current). No-op unless composite is active. */
-export function presentCompositeEncode(rt: AgentRenderSurface, enc: GPUCommandEncoder, gridColorsBuf: GPUBuffer, gridW: number, gridH: number, hw: number, showGrid: boolean, showAgents: boolean): void {
+/** Encode the composite present into `enc`: grid-present pass (fullscreen triangle
+ *  whose FS inverts the DISPLAY-res camera to a cell, loadOp clear) then the agent
+ *  disc pass (loadOp load, same display-res camera). `gridColorsBuf` is the LIVE
+ *  grid runtime `colorsBuf` (passed per-present so a recompile-rebuilt buffer is
+ *  always current); `scalePx`/`oxPx`/`oyPx`/`torus` are the SAME camera the disc
+ *  pass reads from `renderViewBuf` — so grid and agents can't disagree on the
+ *  transform. No-op unless composite is active. */
+export function presentCompositeEncode(rt: AgentRenderSurface, enc: GPUCommandEncoder, gridColorsBuf: GPUBuffer, gridW: number, gridH: number, hw: number, showGrid: boolean, showAgents: boolean, scalePx: number, oxPx: number, oyPx: number, torus: boolean): void {
   if (!rt.renderActive || !rt.renderComposite || !rt.renderCtx) return;
   if (!rt.renderBindGroup || !rt.renderViewBuf || !rt.gridPresentPipeline || !rt.gridPresentBGL || !rt.gridPresentUniform) return;
   // Keep the uniform's highWater == the draw's instance decomposition base.
@@ -1701,7 +1757,8 @@ export function presentCompositeEncode(rt: AgentRenderSurface, enc: GPUCommandEn
   const view = tex.createView();
   if (showGrid) {
     // Pass 1 — grid layer (fullscreen triangle), clears to transparent then writes.
-    rt.device.queue.writeBuffer(rt.gridPresentUniform, 0, new Uint32Array([gridW >>> 0, gridH >>> 0, 0, 0]).buffer);
+    // The FS inverts (scalePx, oxPx, oyPx) → world → cell, sampling colorsBuf NEAREST.
+    rt.device.queue.writeBuffer(rt.gridPresentUniform, 0, writeGridPlaneView(gridW, gridH, torus, scalePx, oxPx, oyPx));
     const gbind = rt.device.createBindGroup({
       label: 'grid-present-bg', layout: rt.gridPresentBGL,
       entries: [
@@ -1739,24 +1796,24 @@ export function presentCompositeEncode(rt: AgentRenderSurface, enc: GPUCommandEn
  *  present the composite (grid + agents) in one encoder+submit. Used by every
  *  composite present point (batch tail, camera, mutation). `showGrid`/`showAgents`
  *  gate the per-layer passes (Layers panel). */
-export function presentAgentCompositeFromStore(rt: AgentRenderSurface, gridColorsBuf: GPUBuffer, gridW: number, gridH: number, s: AgentStore, showGrid: boolean, showAgents: boolean): void {
+export function presentAgentCompositeFromStore(rt: AgentRenderSurface, gridColorsBuf: GPUBuffer, gridW: number, gridH: number, s: AgentStore, showGrid: boolean, showAgents: boolean, scalePx: number, oxPx: number, oyPx: number, torus: boolean): void {
   if (!rt.renderActive || !rt.renderComposite) return;
   uploadAgentRenderFields(rt, s);
   const enc = rt.device.createCommandEncoder({ label: 'agent-composite-present' });
-  presentCompositeEncode(rt, enc, gridColorsBuf, gridW, gridH, s.highWater, showGrid, showAgents);
+  presentCompositeEncode(rt, enc, gridColorsBuf, gridW, gridH, s.highWater, showGrid, showAgents, scalePx, oxPx, oyPx, torus);
   rt.device.queue.submit([enc.finish()]);
 }
 
 /** DEV/verification only: present the composite, then copy the whole canvas
- *  texture into a readback buffer and return the RGBA bytes at the given
- *  world-cell sample points (px,py in canvas/world coords). Occlusion-safe proof
- *  that BOTH layers land on ONE texture (grid pixel under a disc, disc pixel).
+ *  texture into a readback buffer and return the RGBA bytes at the given DISPLAY-
+ *  pixel sample points (px,py in canvas/display coords). Occlusion-safe proof that
+ *  BOTH layers land on ONE texture (grid pixel under a disc, disc pixel).
  *  Returns null if the surface isn't a composite. */
-export async function debugReadCompositePixels(rt: AgentRenderSurface, gridColorsBuf: GPUBuffer, gridW: number, gridH: number, s: AgentStore, showGrid: boolean, showAgents: boolean, points: Array<[number, number]>): Promise<Array<[number, number, number, number]> | null> {
+export async function debugReadCompositePixels(rt: AgentRenderSurface, gridColorsBuf: GPUBuffer, gridW: number, gridH: number, s: AgentStore, showGrid: boolean, showAgents: boolean, scalePx: number, oxPx: number, oyPx: number, torus: boolean, points: Array<[number, number]>): Promise<Array<[number, number, number, number]> | null> {
   if (!rt.renderActive || !rt.renderComposite || !rt.renderCtx) return null;
   uploadAgentRenderFields(rt, s);
   const enc = rt.device.createCommandEncoder({ label: 'agent-composite-dev-readback' });
-  presentCompositeEncode(rt, enc, gridColorsBuf, gridW, gridH, s.highWater, showGrid, showAgents);
+  presentCompositeEncode(rt, enc, gridColorsBuf, gridW, gridH, s.highWater, showGrid, showAgents, scalePx, oxPx, oyPx, torus);
   const tex = rt.renderCtx.getCurrentTexture();
   const W = tex.width, H = tex.height;
   const bytesPerRow = Math.ceil((W * 4) / 256) * 256;

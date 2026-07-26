@@ -114,5 +114,25 @@ Update CLAUDE.md (replace the "E2 DISABLED" note with the redesign) + the E2
 status-board row + this doc's Completion Report. Finish with the crisp-at-zoom
 screenshot evidence + the readback-eliminated trace.
 
-## Completion Report
-(fill in when executed)
+## Completion Report (2026-07-25)
+
+**Outcome**: the DISPLAY-resolution E2 composite is SHIPPED, re-enabled, and VISIBLE-PANE verified. The exact world-res failure (agents = "blob of cells" at zoom) is fixed: at extreme zoom the agents render as **crisp smooth round discs over crisp square grid cells** — screenshotted as the pass/fail. The grid's per-gen colours readback is eliminated (0 grid-colours on 250 stepped messages). Both target configs (decoupled D + field-coupled E1b) engage the composite; the E1b GPU field bridge is untouched.
+
+**Surface (RENDER/worker only, ZERO compiler changes — asserted `git diff --stat`)**: exactly three code files + the uniform-layout harness — [agentWebgpuRuntime.ts](../src/simulator/engine/agentWebgpuRuntime.ts), [sim.worker.ts](../src/simulator/engine/sim.worker.ts), [SimulatorView.tsx](../src/simulator/SimulatorView.tsx), [scripts/verify-render-uniform-layouts.mjs](../scripts/verify-render-uniform-layouts.mjs). NO compilers / gl3d / agentEngine / lattice / `webgpuRuntime.ts` → `check-compile-identity` not required.
+
+### The redesign, as built
+1. **Grid-plane FS-inverse** (`GRID_PRESENT_WGSL` in agentWebgpuRuntime.ts): a fullscreen triangle whose FS maps each DISPLAY pixel back to a world coordinate `(fragCoord − oxPx)/scalePx`, wraps (torus/infinity) or bounds-discards, floors to a cell (`min(gridW−1, u32(wx))` — integer floor = NEAREST = hard cell edges), and samples `colorsIn[row*gridW+col]` premultiplied. DISPLAY-PIXEL-BOUND: one cell lookup per covered display pixel, so a 5000² field costs the same to present as a 300² one (NOT W×H instanced quads). A new 32-byte `GridPlaneView` uniform (`gridW,gridH,torus,scalePx,oxPx,oyPx` — all scalars, no vec3 trap) carries the camera; registered in the layout harness via `writeGridPlaneView`.
+2. **Agent discs unchanged** — the A1 disc pass already renders through the display-res camera (`scalePx/oxPx/oyPx/canvasW/canvasH/copies`). The composite canvas is now DISPLAY-sized, so the discs stay crisp at any zoom with zero new disc code. `presentCompositeEncode` grew the camera params and writes `GridPlaneView` from the SAME `AgentRenderView` the disc pass's `renderViewBuf` was uploaded from (grid + agents can't disagree on the transform).
+3. **`computeAgentRenderView` unified** (SimulatorView): the composite branch now IS the standard display-res A1 branch, plus the CPU-only `showGrid/showAgents/torus` flags. The attach transfers a DISPLAY-sized canvas (not world-sized). `draw()` blits the composite 1:1 (like A1 direct render) with resize-reattach, skipping the grid srcCanvas blit / glyph / CPU bg / drawAgentsOverlay. The worker's `presentAgentsIfActive` composite branch + the `__compositeReadback` DEV probe pass the camera params through.
+4. **Gate re-enabled** (SimulatorView): `agentModel && gridCells !== false && !is3D && useWebGPU(grid) && !webgpuResult.error && agentResult.agentTarget === 'webgpu' && offscreenSupported && agentRenderModelTermsOk(sprites/OM) && !metaballs`. The worker-refused-composite fallback no longer re-attaches (the canvas is display-sized either way → a valid A1 disc surface).
+
+### Verified on the real GPU (VISIBLE pane — screenshots + the worker message trace)
+- **Chemotaxis (field-coupled), WebGPU grid + WebGPU agent** — `composite:true`; 250 stepped messages, `withColors:0` (the readback eliminated — for an agent model `gridDisplayOwnedByGpu` is false, so only the composite skips colours). **THE ZOOM PASS/FAIL**: at extreme zoom, agents are crisp smooth ROUND cyan discs over crisp SQUARE Viridis field cells (screenshots at two zoom levels). The chemical FIELD builds up (purple→yellow) and agents AGGREGATE into clusters — the field bridge works.
+- **Decoupled (GoL grid + Boids agents synthetic), WebGPU/WebGPU** — `composite:true`, `withColors:0`, generation advancing (both layers), 260 agents flock; the Show-Agents toggle hides the agent layer in the composite.
+- **Ant Necrophoresis (field-coupled), WebGPU/WebGPU** — `composite:true`, `withColors:0`, **E1b GPU field bridge UNCHANGED** (`gpuBridge:5, cpuFallback:0, sharedDevice:true, fieldSpecTypes:['float']`) — corpse field + ant discs on ONE canvas, piles forming.
+- **Fallbacks** — agents-only Boids-webgpu → `composite:false` (A1 disc render, crisp); grid-only GoL-webgpu → its own grid direct render (`composite:false`, evolving, Input-Mapping panel = no agents). JS/WASM grid / 3D / sprites / metaballs excluded by the gate (structural).
+- **0 console/GPU errors** across every load + hundreds of steps.
+- Gates: `tsc -p tsconfig.app.json --noEmit`, `npm run build`, `parity-agent-wasm` (18), `parity-agent-force` (7), `verify-agent-render`, `verify-render-uniform-layouts` (incl. the new GridPlaneView) — all green.
+
+### Follow-up recorded (NOT built here)
+The L2 lattice probe found large 2D grids are display-bound (~330 ms/frame main-thread scaling a 2000² world-res grid canvas). This display-res GPU grid present is the SAME fix for GRID-ONLY 2D WebGPU models (which today direct-render to a grid-res OffscreenCanvas + main-thread scale) — a natural follow-up. The 3D voxel+sphere composite remains out of scope (a WGSL instanced-voxel pass depth-composited with the C sphere pass).

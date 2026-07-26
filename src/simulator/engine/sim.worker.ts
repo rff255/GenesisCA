@@ -957,14 +957,16 @@ function presentAgentsIfActive(): void {
     return;
   }
   // E2: single-canvas composite — present the WebGPU grid layer + agent discs
-  // together (world space). Reads the LIVE grid colorsBuf (post color pass).
+  // together at DISPLAY resolution through the camera. Reads the LIVE grid
+  // colorsBuf (post color pass) + the SAME camera (scalePx/oxPx/oyPx/torus) the
+  // disc pass reads from the RenderView uniform, so both layers align exactly.
   if (agentCompositeActive && webgpuRuntime?.colorsBuf) {
     const rt = activeRenderSurface();
     if (rt) {
-      const v = agentRenderView as { showGrid?: boolean; showAgents?: boolean } | null;
+      const v = agentRenderView as { showGrid?: boolean; showAgents?: boolean; scalePx?: number; oxPx?: number; oyPx?: number; torus?: boolean } | null;
       const showGrid = v?.showGrid !== false;      // default: both layers shown
       const showAgents = v?.showAgents !== false;
-      presentAgentCompositeFromStore(rt, webgpuRuntime.colorsBuf, webgpuRuntime.layout.gridWidth, webgpuRuntime.layout.gridHeight, agentStore, showGrid, showAgents);
+      presentAgentCompositeFromStore(rt, webgpuRuntime.colorsBuf, webgpuRuntime.layout.gridWidth, webgpuRuntime.layout.gridHeight, agentStore, showGrid, showAgents, v?.scalePx ?? 1, v?.oxPx ?? 0, v?.oyPx ?? 0, !!v?.torus);
       return;
     }
   }
@@ -7208,7 +7210,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
 
     case '__compositeReadback': {
       // E2 DEV probe (verification only): present the composite + read pixels back
-      // at the given world-cell points → proves grid + agents land on ONE texture.
+      // at the given DISPLAY-pixel points → proves grid + agents land on ONE texture.
       void (async () => {
         try {
           const rt = activeRenderSurface();
@@ -7216,8 +7218,8 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
             self.postMessage({ type: '__compositeReadback', pixels: null, composite: agentCompositeActive });
             return;
           }
-          const v = agentRenderView as { showGrid?: boolean; showAgents?: boolean } | null;
-          const px = await debugReadCompositePixels(rt, webgpuRuntime.colorsBuf, webgpuRuntime.layout.gridWidth, webgpuRuntime.layout.gridHeight, agentStore, v?.showGrid !== false, v?.showAgents !== false, msg.points);
+          const v = agentRenderView as { showGrid?: boolean; showAgents?: boolean; scalePx?: number; oxPx?: number; oyPx?: number; torus?: boolean } | null;
+          const px = await debugReadCompositePixels(rt, webgpuRuntime.colorsBuf, webgpuRuntime.layout.gridWidth, webgpuRuntime.layout.gridHeight, agentStore, v?.showGrid !== false, v?.showAgents !== false, v?.scalePx ?? 1, v?.oxPx ?? 0, v?.oyPx ?? 0, !!v?.torus, msg.points);
           self.postMessage({ type: '__compositeReadback', pixels: px, composite: true });
         } catch (e) {
           self.postMessage({ type: '__compositeReadback', pixels: null, error: (e as Error)?.message || String(e) });
