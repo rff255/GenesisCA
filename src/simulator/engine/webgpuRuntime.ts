@@ -18,18 +18,6 @@ import {
   buildReductionPlan, emitReductionShader,
 } from './webgpuReduce';
 import { acquireSharedGpuDevice, releaseSharedGpuDevice } from './sharedGpuDevice';
-// The display-res grid-plane present is SHARED with the E2 grid+agents composite
-// (agentWebgpuRuntime.ts) so grid-only and grid+agents present the grid the SAME
-// way (a fullscreen triangle whose FS inverts the 2D camera → cell → colorsBuf).
-import { GRID_PRESENT_WGSL, GRID_PLANE_VIEW_BYTES, writeGridPlaneView } from './gridPlanePresent';
-
-/** The 2D display-res camera (the scene transform) for the grid-plane present:
- *  world→screen is `screen = world*scalePx + (oxPx,oyPx)`; the shader inverts it
- *  per display pixel. `torus` = infinity-canvas wrap; `showGrid` gates the layer. */
-export interface GridCamera2D {
-  scalePx: number; oxPx: number; oyPx: number;
-  torus: boolean; showGrid: boolean;
-}
 
 export interface WebGPURuntimeInit {
   shaderCode: string;
@@ -114,23 +102,12 @@ export interface WebGPURuntime {
   canvas: OffscreenCanvas | null;
   canvasContext: GPUCanvasContext | null;
   canvasFormat: GPUTextureFormat | null;
-  /** DISPLAY-resolution grid-plane present (shared with the E2 composite): a
-   *  fullscreen-triangle RENDER pass whose FS inverts the 2D camera per DISPLAY
-   *  pixel → cell → colorsBuf (NEAREST). Replaces the old grid-res `presentColors`
-   *  COMPUTE present so the transferred OffscreenCanvas is DISPLAY-sized and the
-   *  main thread blits it 1:1 — no per-frame scaling of a grid-sized canvas (the
-   *  L2 large-grid cost). */
-  gridPresentModule: GPUShaderModule | null;
-  gridPresentPipeline: GPURenderPipeline | null;
-  gridPresentBGL: GPUBindGroupLayout | null;
-  gridPresentUniform: GPUBuffer | null;
-  /** The current 2D display-res camera, fed by the main thread's setGridCamera2D
-   *  message. setupDirectRender seeds a default fit camera (from the canvas + grid
-   *  dims) so the first present isn't blank before the first camera arrives. */
-  gridCamera2D: GridCamera2D | null;
-  /** True iff the canvas was successfully configured and the grid-plane present
-   *  pipeline is built. The worker uses this flag to short-circuit the colors-
-   *  readback + sendColors path (the GPU owns the display). */
+  canvasShaderModule: GPUShaderModule | null;
+  presentPipeline: GPUComputePipeline | null;
+  presentBindGroupLayout: GPUBindGroupLayout | null;
+  /** True iff the canvas was successfully configured and the present pipeline
+   *  is built. The worker uses this flag to short-circuit the colors-readback
+   *  + sendColors path. */
   directRender: boolean;
 
   // --- L1 — worker-side WGSL VOXEL render (3D grids on the WebGPU target) ---
@@ -282,11 +259,9 @@ export async function createWebGPURuntime(init: WebGPURuntimeInit): Promise<WebG
     canvas: init.canvas ?? null,
     canvasContext: null,
     canvasFormat: null,
-    gridPresentModule: null,
-    gridPresentPipeline: null,
-    gridPresentBGL: null,
-    gridPresentUniform: null,
-    gridCamera2D: null,
+    canvasShaderModule: null,
+    presentPipeline: null,
+    presentBindGroupLayout: null,
     directRender: false,
     voxelCanvas: null,
     voxelCtx: null,
@@ -557,147 +532,79 @@ export async function setupBuffersAndPipelines(rt: WebGPURuntime): Promise<void>
 }
 
 // ---------------------------------------------------------------------------
-// Direct render via OffscreenCanvas — DISPLAY-resolution grid-plane present
-//
-// The transferred OffscreenCanvas is DISPLAY-sized (not grid-W×H). Each present
-// runs the SHARED grid-plane RENDER pass (GRID_PRESENT_WGSL): a fullscreen triangle
-// whose FS inverts the 2D camera per display pixel → cell → colorsBuf (NEAREST =
-// crisp CA blocks). The main thread blits the display-sized canvas 1:1 — so a big
-// grid no longer forces a per-frame drawImage-SCALE of a grid-sized canvas (the L2
-// ~330 ms/frame cost at 2000²). This is the grid-only sibling of the E2 composite,
-// so both present the grid the SAME way; recording still reads colorsBuf at grid
-// resolution (readbackColors), independent of the present path.
+// P7 — Direct render via OffscreenCanvas
 // ---------------------------------------------------------------------------
+
+/** WGSL: copy the colors storage buffer (RGBA8 packed u32 per cell) into the
+ *  presented canvas texture. The grid is laid out row-major; the texture
+ *  matches grid dimensions. */
+function presentShaderSource(canvasFormat: GPUTextureFormat): string {
+  return `
+@group(0) @binding(0) var<storage, read> colorsIn : array<u32>;
+@group(0) @binding(1) var canvasOut : texture_storage_2d<${canvasFormat}, write>;
+
+@compute @workgroup_size(8, 8)
+fn presentColors(@builtin(global_invocation_id) gid: vec3<u32>) {
+  let dim = textureDimensions(canvasOut);
+  if (gid.x >= dim.x || gid.y >= dim.y) { return; }
+  let cellIdx = gid.y * dim.x + gid.x;
+  let packed = colorsIn[cellIdx];
+  let r = f32((packed >>  0u) & 0xffu) / 255.0;
+  let g = f32((packed >>  8u) & 0xffu) / 255.0;
+  let b = f32((packed >> 16u) & 0xffu) / 255.0;
+  let a = f32((packed >> 24u) & 0xffu) / 255.0;
+  // Authorable RGBA alpha (PR7): the canvas is configured 'premultiplied', so
+  // write premultiplied RGB. For the default a=1.0 this is identity (r,g,b,1) —
+  // every existing opaque model renders unchanged; sub-255 alpha now blends.
+  textureStore(canvasOut, vec2<i32>(i32(gid.x), i32(gid.y)), vec4<f32>(r * a, g * a, b * a, a));
+}
+`;
+}
 
 export function setupDirectRender(rt: WebGPURuntime): void {
   if (!rt.canvas || !rt.colorsBuf) return;
   const ctx = rt.canvas.getContext('webgpu') as GPUCanvasContext | null;
   if (!ctx) throw new Error('OffscreenCanvas.getContext("webgpu") returned null');
-  // rgba8unorm is universally supported and matches the colors buffer's RGBA8 pack.
+  const gpu = (typeof navigator !== 'undefined') ? (navigator as Navigator & { gpu: GPU }).gpu : null;
+  // rgba8unorm is universally supported as a texture-storage format and is
+  // what colors are packed as in the storage buffer (RGBA8). Don't trust
+  // getPreferredCanvasFormat() here — bgra8unorm would require us to swap
+  // channel order in the present shader.
   const format: GPUTextureFormat = 'rgba8unorm';
   ctx.configure({
     device: rt.device,
     format,
-    // RENDER_ATTACHMENT (the grid-plane pass draws into it) + COPY_SRC (a DEV probe
-    // can read the presented pixels back). No STORAGE_BINDING — this is a render
-    // pass, not a compute-present. 'premultiplied' so authored sub-255 alpha shows
-    // through (the shader writes premultiplied RGB; a=255 → identity).
-    usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC,
+    usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_DST,
+    // PR7: 'premultiplied' so authored sub-255 alpha shows through (matches the
+    // 2D canvas's source-over compositing). The present shader writes premultiplied
+    // RGB; default a=255 → identity, so existing opaque models are unchanged.
     alphaMode: 'premultiplied',
   });
   rt.canvasContext = ctx;
   rt.canvasFormat = format;
+  // Avoid the unused `gpu` complaint; it'd be needed for getPreferredCanvasFormat.
+  void gpu;
 
-  rt.gridPresentBGL = rt.device.createBindGroupLayout({
-    label: 'genesisca-grid-present-bgl',
+  rt.presentBindGroupLayout = rt.device.createBindGroupLayout({
+    label: 'genesisca-present-bgl',
     entries: [
-      { binding: 0, visibility: GPUShaderStage.FRAGMENT, buffer: { type: 'read-only-storage' } },
-      { binding: 1, visibility: GPUShaderStage.FRAGMENT, buffer: { type: 'uniform' } },
+      { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },
+      { binding: 1, visibility: GPUShaderStage.COMPUTE, storageTexture: { access: 'write-only', format, viewDimension: '2d' } },
     ],
   });
   const presentLayout = rt.device.createPipelineLayout({
-    label: 'genesisca-grid-present-pl', bindGroupLayouts: [rt.gridPresentBGL],
+    label: 'genesisca-present-pl', bindGroupLayouts: [rt.presentBindGroupLayout],
   });
-  rt.gridPresentModule = rt.device.createShaderModule({ code: GRID_PRESENT_WGSL });
-  rt.gridPresentPipeline = rt.device.createRenderPipeline({
-    label: 'genesisca-grid-present',
+  rt.canvasShaderModule = rt.device.createShaderModule({ code: presentShaderSource(format) });
+  rt.presentPipeline = rt.device.createComputePipeline({
+    label: 'genesisca-present',
     layout: presentLayout,
-    vertex: { module: rt.gridPresentModule, entryPoint: 'vsMain' },
-    fragment: { module: rt.gridPresentModule, entryPoint: 'fsMain', targets: [{ format }] },
-    primitive: { topology: 'triangle-list' },
+    compute: { module: rt.canvasShaderModule, entryPoint: 'presentColors' },
   });
-  rt.gridPresentUniform = rt.device.createBuffer({
-    label: 'grid-plane-view', size: GRID_PLANE_VIEW_BYTES,
-    usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-  });
-  // Seed a default FIT camera (matches the main thread at zoom=1, pan=0, bounded)
-  // so the first present isn't blank before the first setGridCamera2D arrives.
-  const cw = rt.canvas.width, ch = rt.canvas.height;
-  const W = rt.layout.gridWidth, H = rt.layout.gridHeight;
-  const baseScale = W > 0 && H > 0 ? Math.min(cw / W, ch / H) : 1;
-  rt.gridCamera2D = {
-    scalePx: baseScale,
-    oxPx: (cw - W * baseScale) / 2,
-    oyPx: (ch - H * baseScale) / 2,
-    torus: false,
-    showGrid: true,
-  };
   rt.directRender = true;
 }
 
-/** Encode the grid-plane present render pass into `enc`: a fullscreen triangle
- *  whose FS inverts the 2D camera (rt.gridCamera2D) per display pixel → cell →
- *  colorsBuf (NEAREST), clearing to transparent. No-op unless direct render is up.
- *  When the camera's showGrid is off (agent-less grid models never toggle this),
- *  the pass just clears the canvas transparent. */
-function encodeGridPlanePresent(rt: WebGPURuntime, enc: GPUCommandEncoder): void {
-  if (!rt.directRender || !rt.canvasContext || !rt.gridPresentPipeline || !rt.gridPresentBGL || !rt.gridPresentUniform || !rt.colorsBuf) return;
-  const cam = rt.gridCamera2D;
-  const tex = rt.canvasContext.getCurrentTexture();
-  const view = tex.createView();
-  const pass = enc.beginRenderPass({
-    label: 'grid-plane-present-pass',
-    colorAttachments: [{ view, loadOp: 'clear', storeOp: 'store', clearValue: { r: 0, g: 0, b: 0, a: 0 } }],
-  });
-  if (cam && cam.showGrid) {
-    rt.device.queue.writeBuffer(
-      rt.gridPresentUniform, 0,
-      writeGridPlaneView(rt.layout.gridWidth, rt.layout.gridHeight, cam.torus, cam.scalePx, cam.oxPx, cam.oyPx),
-    );
-    const bg = rt.device.createBindGroup({
-      label: 'grid-plane-present-bg', layout: rt.gridPresentBGL,
-      entries: [
-        { binding: 0, resource: { buffer: rt.colorsBuf } },
-        { binding: 1, resource: { buffer: rt.gridPresentUniform } },
-      ],
-    });
-    pass.setPipeline(rt.gridPresentPipeline); pass.setBindGroup(0, bg); pass.draw(3);
-  }
-  pass.end();
-}
-
-/** Store the 2D display-res camera (from the main thread's setGridCamera2D) and
- *  re-present. Present-only: colorsBuf holds the last frame, so a pan/zoom just
- *  re-runs the grid-plane pass with the new transform (mirrors the voxel /
- *  agent camera messages). */
-export function setGridCamera2D(rt: WebGPURuntime, cam: GridCamera2D): void {
-  if (!rt.directRender) return;
-  rt.gridCamera2D = cam;
-  presentToCanvas(rt);
-}
-
-/** DEV/verification only: present the grid plane (optionally at a camera override,
- *  e.g. extreme zoom) into the display canvas, copy the whole canvas texture into a
- *  readback buffer, and return the RGBA bytes at the given DISPLAY-pixel sample
- *  points. Occlusion-safe proof that the display-res grid-plane present produces
- *  crisp cells at the right screen positions (the canvas is configured COPY_SRC).
- *  Returns null unless direct render is up. */
-export async function debugReadGridPresentPixels(
-  rt: WebGPURuntime, camOverride: GridCamera2D | null, points: Array<[number, number]>,
-): Promise<Array<[number, number, number, number]> | null> {
-  if (!rt.directRender || !rt.canvasContext) return null;
-  const prev = rt.gridCamera2D;
-  if (camOverride) rt.gridCamera2D = camOverride;
-  const enc = rt.device.createCommandEncoder({ label: 'grid-present-dev-readback' });
-  encodeGridPlanePresent(rt, enc);   // the PRODUCTION present path
-  const tex = rt.canvasContext.getCurrentTexture();   // same texture within this task
-  const W = tex.width, H = tex.height;
-  const bytesPerRow = Math.ceil((W * 4) / 256) * 256;
-  const rb = rt.device.createBuffer({ label: 'grid-present-readback', size: bytesPerRow * H, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
-  enc.copyTextureToBuffer({ texture: tex }, { buffer: rb, bytesPerRow, rowsPerImage: H }, { width: W, height: H, depthOrArrayLayers: 1 });
-  rt.device.queue.submit([enc.finish()]);
-  await rb.mapAsync(GPUMapMode.READ);
-  const data = new Uint8Array(rb.getMappedRange().slice(0));
-  rb.unmap(); rb.destroy();
-  if (camOverride) rt.gridCamera2D = prev;
-  const out: Array<[number, number, number, number]> = [];
-  for (const [px, py] of points) {
-    const x = Math.min(W - 1, Math.max(0, px | 0)), y = Math.min(H - 1, Math.max(0, py | 0));
-    const o = y * bytesPerRow + x * 4;
-    out.push([data[o]!, data[o + 1]!, data[o + 2]!, data[o + 3]!]);
-  }
-  return out;
-}
+const PRESENT_WG = 8;
 
 // ---------------------------------------------------------------------------
 // L1 — worker-side WGSL voxel render (3D grids)
@@ -1654,12 +1561,27 @@ export async function readbackReductions(rt: WebGPURuntime): Promise<Uint32Array
   return view;
 }
 
-/** Present the grid-plane pass into the canvas's current texture (display-res,
- *  camera-inverting). No-op when direct render isn't active. */
+/** Dispatch the present pipeline: copy the colors storage buffer into the
+ *  canvas's current texture. No-op when direct render isn't active. */
 export function presentToCanvas(rt: WebGPURuntime): void {
-  if (!rt.directRender || !rt.canvasContext) return;
-  const enc = rt.device.createCommandEncoder({ label: 'grid-present-enc' });
-  encodeGridPlanePresent(rt, enc);
+  if (!rt.directRender || !rt.canvasContext || !rt.presentPipeline || !rt.colorsBuf || !rt.presentBindGroupLayout) return;
+  const tex = rt.canvasContext.getCurrentTexture();
+  const view = tex.createView();
+  const bg = rt.device.createBindGroup({
+    label: 'present-bg',
+    layout: rt.presentBindGroupLayout,
+    entries: [
+      { binding: 0, resource: { buffer: rt.colorsBuf } },
+      { binding: 1, resource: view },
+    ],
+  });
+  const enc = rt.device.createCommandEncoder({ label: 'present-enc' });
+  const pass = enc.beginComputePass({ label: 'present-pass' });
+  pass.setPipeline(rt.presentPipeline);
+  pass.setBindGroup(0, bg);
+  const w = tex.width, h = tex.height;
+  pass.dispatchWorkgroups(Math.ceil(w / PRESENT_WG), Math.ceil(h / PRESENT_WG));
+  pass.end();
   rt.device.queue.submit([enc.finish()]);
 }
 
@@ -2027,8 +1949,8 @@ export function dispatchColorPassAndPresent(rt: WebGPURuntime, mappingId: string
   if (!rt.stepReady || !rt.bindGroup) return false;
   const pipe = ensureOutputPipeline(rt, mappingId);
   const wantPresent = !!(
-    rt.directRender && rt.canvasContext && rt.gridPresentPipeline
-    && rt.colorsBuf && rt.gridPresentBGL && rt.gridPresentUniform
+    rt.directRender && rt.canvasContext && rt.presentPipeline
+    && rt.colorsBuf && rt.presentBindGroupLayout
   );
   if (!pipe && !wantPresent) return false;
   const enc = rt.device.createCommandEncoder({ label: 'om+present-enc' });
@@ -2039,9 +1961,25 @@ export function dispatchColorPassAndPresent(rt: WebGPURuntime, mappingId: string
     dispatchCells(omPass, rt.layout.total, WORKGROUP_SIZE);
     omPass.end();
   }
-  // The OM compute pass (above) wrote colorsBuf; the grid-plane render pass reads
-  // it — passes within one encoder are serialised, so the present sees fresh colours.
-  if (wantPresent) encodeGridPlanePresent(rt, enc);
+  if (wantPresent) {
+    // The canvas texture handle changes every frame, so the bind group must
+    // be rebuilt; this is intrinsic to the canvas-context API.
+    const tex = rt.canvasContext!.getCurrentTexture();
+    const view = tex.createView();
+    const bg = rt.device.createBindGroup({
+      label: 'present-bg',
+      layout: rt.presentBindGroupLayout!,
+      entries: [
+        { binding: 0, resource: { buffer: rt.colorsBuf! } },
+        { binding: 1, resource: view },
+      ],
+    });
+    const presentPass = enc.beginComputePass({ label: 'present-pass' });
+    presentPass.setPipeline(rt.presentPipeline!);
+    presentPass.setBindGroup(0, bg);
+    presentPass.dispatchWorkgroups(Math.ceil(tex.width / PRESENT_WG), Math.ceil(tex.height / PRESENT_WG));
+    presentPass.end();
+  }
   rt.device.queue.submit([enc.finish()]);
   return !!pipe;
 }
@@ -2235,7 +2173,6 @@ export function destroyWebGPURuntime(rt: WebGPURuntime | null): void {
       rt.attrsBufA, rt.attrsBufB, rt.colorsBuf, rt.nbrOffsetsBuf,
       rt.modelAttrsBuf, rt.indicatorsBuf, rt.rngStateBuf, rt.controlBuf,
       rt.reductionsBuf, rt.varAuxBuf, rt.glyphCodesBuf, rt.glyphColorsBuf,
-      rt.gridPresentUniform,
     ]) {
       if (buf) buf.destroy();
     }

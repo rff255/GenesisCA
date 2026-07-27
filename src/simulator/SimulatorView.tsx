@@ -1834,15 +1834,6 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   // soft recompile path into the same fresh-canvas treatment, but without
   // tearing down the worker (so model attribute sliders + grid state survive).
   const recompilePendingCanvasRefresh = useRef<boolean>(false);
-  // Display-res grid direct render: the transferred OffscreenCanvas is now
-  // DISPLAY-sized (not grid-W×H) and the worker presents into it via the grid-plane
-  // shader (FS inverts the 2D camera → cell → colorsBuf, NEAREST). The main thread
-  // blits it 1:1 (no per-frame scaling of a grid-sized canvas — the L2 large-grid
-  // cost). These track the attached display size (for resize-reattach) + the camera
-  // post (rAF-coalesced + deduped, the voxel/agent camera pattern).
-  const directRenderCanvasDimsRef = useRef<{ w: number; h: number }>({ w: 0, h: 0 });
-  const gridCamera2DRafRef = useRef<number>(0);
-  const lastGridCamera2DKeyRef = useRef<string>('');
 
   // --- A1 direct AGENT render (agents-only, 2D, WebGPU) ---
   // Active once the worker acks agentRenderStatus{active:true}: the worker renders
@@ -2552,77 +2543,6 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       }));
     });
   }, [computeAgentRenderView]);
-
-  // Post the 2D grid camera (the scene transform) to the worker for the display-res
-  // grid direct render, rAF-coalesced + deduped (a plain step doesn't move the
-  // camera, and setGridCamera2D triggers a present, so a per-frame post would double
-  // the render cost). The 2D sibling of postGridCamera (voxel) / postAgentCamera.
-  const postGridCamera2D = useCallback(() => {
-    if (!directRenderActiveRef.current || !workerRef.current) return;
-    if (gridCamera2DRafRef.current) return;
-    gridCamera2DRafRef.current = requestAnimationFrame(() => {
-      gridCamera2DRafRef.current = 0;
-      if (!directRenderActiveRef.current || !workerRef.current) return;
-      const canvas = canvasRef.current;
-      const w = gridWidth.current, h = gridHeight.current;
-      if (!canvas || !w || !h) return;
-      const parentW = canvas.parentElement?.clientWidth ?? 500;
-      const parentH = canvas.parentElement?.clientHeight ?? 500;
-      const zoom = zoomRef.current, pan = panRef.current;
-      const baseScale = Math.min(parentW / w, parentH / h);
-      const scale = baseScale * zoom;
-      const oxPx = (parentW - w * scale) / 2 + pan.x;
-      const oyPx = (parentH - h * scale) / 2 + pan.y;
-      const torus = infinityCanvasRef.current && boundaryTreatmentRef.current === 'torus';
-      // A grid-only model always shows the grid (no agents to toggle "Show CA grid"),
-      // but respect the flag for robustness.
-      const showGrid = gridCellsOnRef.current;
-      const key = `${scale}|${oxPx}|${oyPx}|${torus ? 1 : 0}|${showGrid ? 1 : 0}`;
-      if (key === lastGridCamera2DKeyRef.current) return;
-      lastGridCamera2DKeyRef.current = key;
-      workerRef.current.postMessage({ type: 'setGridCamera2D', scalePx: scale, oxPx, oyPx, torus, showGrid });
-      // Re-blit AFTER the worker's camera-triggered present lands (double-rAF — the
-      // compositor-lag trick, mirroring postAgentCamera): the ack-time draw() blits
-      // the attach present made with the default fit camera; this pulls the refined
-      // frame in without waiting for the next step / interaction.
-      requestAnimationFrame(() => requestAnimationFrame(() => {
-        if (directRenderActiveRef.current) drawRef.current();
-      }));
-    });
-  }, []);
-
-  // Create a fresh DISPLAY-sized OffscreenCanvas, transfer it, and post attachCanvas
-  // to the worker for the display-res grid direct render. The Phase 2 ack
-  // (useWebGPUStatus { directRender: true } + pendingDirectRenderCanvas) commits the
-  // swap. Shared by Phase 1 (first attach), the post-recompile refresh, and the
-  // resize-reattach in draw() (a transferred canvas has fixed dims). Returns false
-  // if transferControlToOffscreen is unavailable/throws (stay on the readback path).
-  const sendDirectRenderAttach = useCallback((): boolean => {
-    try {
-      const cel = canvasRef.current;
-      const pw = Math.max(2, Math.round(cel?.parentElement?.clientWidth ?? gridWidth.current));
-      const ph = Math.max(2, Math.round(cel?.parentElement?.clientHeight ?? gridHeight.current));
-      const fresh = document.createElement('canvas');
-      fresh.width = pw;
-      fresh.height = ph;
-      const offscreen = (fresh as HTMLCanvasElement & {
-        transferControlToOffscreen: () => OffscreenCanvas;
-      }).transferControlToOffscreen();
-      pendingDirectRenderCanvas.current = fresh;
-      directRenderCanvasDimsRef.current = { w: pw, h: ph };
-      lastGridCamera2DKeyRef.current = '';   // force a fresh camera post after this attach
-      workerRef.current?.postMessage(
-        { type: 'attachCanvas', canvas: offscreen, width: pw, height: ph },
-        [offscreen],
-      );
-      return true;
-    } catch (e) {
-      // eslint-disable-next-line no-console
-      console.warn('[webgpu] direct-render canvas attach failed; staying on readback path:', e);
-      pendingDirectRenderCanvas.current = null;
-      return false;
-    }
-  }, []);
 
   // A1 UI-sync driver: while ON the worker reads GPU agent state back each frame
   // and ships the render snapshot (features that need CPU state); while OFF the
@@ -3627,23 +3547,6 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
         ctx.drawImage(agentRenderCanvasRef.current!, 0, 0);
         postAgentCamera();
       }
-    } else if (directRenderActiveRef.current && srcCanvasRef.current) {
-      // Display-res grid direct render: the transferred OffscreenCanvas is DISPLAY-
-      // sized and the worker presents the grid-plane shader into it (FS inverts THIS
-      // camera → cell → colorsBuf, NEAREST), so blit it 1:1 — no per-frame scaling of
-      // a grid-sized canvas (the L2 large-grid cost). A display resize needs a fresh
-      // re-attach (transferred canvas dims are fixed); a degenerate parent (occluded
-      // pane) keeps the current canvas. Gridlines / glyph overlay / brush cursor
-      // overlay on top below (they use the same scene transform this camera encodes).
-      const dims = directRenderCanvasDimsRef.current;
-      if ((dims.w !== parentW || dims.h !== parentH) && parentW >= 2 && parentH >= 2) {
-        directRenderActiveRef.current = false;
-        srcCanvasRef.current = null;
-        sendDirectRenderAttach();   // fresh display-sized canvas; Phase 2 commits the swap
-      } else {
-        ctx.drawImage(srcCanvasRef.current, 0, 0);
-        postGridCamera2D();
-      }
     } else if (showGrid2d && blitSource) {
       if (infinity) {
         // Snap each tile's left/top edges to integer pixels and derive width/height
@@ -4370,27 +4273,59 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     // and we stay permanently on JS-fallback — graceful degradation.
     if (msg.type === 'useWebGPUStatus') {
       if (msg.ready && msg.directRender && pendingDirectRenderCanvas.current) {
-        // Phase 2 ack — commit the swap. The transferred canvas is DISPLAY-sized;
-        // draw() now blits it 1:1. Post the camera so the worker re-presents with
-        // the live scene transform (the attach present used the default fit camera).
+        // Phase 2 ack — commit the swap.
         srcCanvasRef.current = pendingDirectRenderCanvas.current;
         pendingDirectRenderCanvas.current = null;
         directRenderActiveRef.current = true;
-        postGridCamera2D();
       } else if (msg.ready && msg.directRender && recompilePendingCanvasRefresh.current) {
-        // Post-soft-recompile fresh-canvas swap. Allocate a NEW DISPLAY-sized
-        // placeholder, transferControlToOffscreen, and send attachCanvas to the
-        // worker. The worker discards the salvaged-but-broken OffscreenCanvas and
-        // runs setupDirectRender against the fresh one. The Phase 2 branch above
-        // commits the swap when the worker's reply lands. Grid state + model
-        // attribute sliders survive because the worker isn't torn down.
+        // Post-soft-recompile fresh-canvas swap. Allocate a NEW srcCanvas
+        // placeholder, transferControlToOffscreen, and send attachCanvas to
+        // the worker. Worker discards the salvaged-but-broken OffscreenCanvas
+        // and runs setupDirectRender against the fresh one. The Phase 2
+        // branch above commits the swap when the worker's reply lands. Grid
+        // state and model attribute sliders survive because the worker isn't
+        // torn down. The OFFSCREEN-RENDER FALSE branch never runs here —
+        // the recompile path always lands in direct render when the user has
+        // useWebGPU on.
         recompilePendingCanvasRefresh.current = false;
-        sendDirectRenderAttach();
+        try {
+          const fresh = document.createElement('canvas');
+          fresh.width = gridWidth.current;
+          fresh.height = gridHeight.current;
+          const offscreen = (fresh as HTMLCanvasElement & {
+            transferControlToOffscreen: () => OffscreenCanvas;
+          }).transferControlToOffscreen();
+          pendingDirectRenderCanvas.current = fresh;
+          workerRef.current?.postMessage(
+            { type: 'attachCanvas', canvas: offscreen, width: fresh.width, height: fresh.height },
+            [offscreen],
+          );
+        } catch (e) {
+          // eslint-disable-next-line no-console
+          console.warn('[webgpu] post-recompile canvas refresh failed; staying with stale canvas:', e);
+        }
       } else if (msg.ready && pendingCanvasAttach.current) {
-        // Phase 1 ack — send attachCanvas (a fresh DISPLAY-sized canvas), stash it,
-        // but DON'T swap srcCanvasRef or set directRenderActiveRef yet (Phase 2 does).
+        // Phase 1 ack — send attachCanvas, stash the fresh canvas, but DON'T
+        // swap srcCanvasRef or set directRenderActiveRef yet.
         pendingCanvasAttach.current = false;
-        if (!sendDirectRenderAttach()) directRenderActiveRef.current = false;
+        try {
+          const fresh = document.createElement('canvas');
+          fresh.width = gridWidth.current;
+          fresh.height = gridHeight.current;
+          const offscreen = (fresh as HTMLCanvasElement & {
+            transferControlToOffscreen: () => OffscreenCanvas;
+          }).transferControlToOffscreen();
+          workerRef.current?.postMessage(
+            { type: 'attachCanvas', canvas: offscreen, width: fresh.width, height: fresh.height },
+            [offscreen],
+          );
+          pendingDirectRenderCanvas.current = fresh;
+        } catch (e) {
+          // eslint-disable-next-line no-console
+          console.warn('[webgpu] deferred OffscreenCanvas transfer failed; staying on readback path:', e);
+          directRenderActiveRef.current = false;
+          pendingDirectRenderCanvas.current = null;
+        }
       } else if (msg.ready === false) {
         // Worker reports WebGPU is off (init failure or explicit downgrade).
         // Drop any pending direct-render canvas so we don't apply it later.
@@ -4695,11 +4630,6 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     directRenderActiveRef.current = false;
     pendingCanvasAttach.current = false;
     pendingDirectRenderCanvas.current = null;
-    // Display-res grid direct render: forget the attached display size + the last
-    // camera so the fresh worker re-attaches + re-posts cleanly.
-    directRenderCanvasDimsRef.current = { w: 0, h: 0 };
-    lastGridCamera2DKeyRef.current = '';
-    if (gridCamera2DRafRef.current) { cancelAnimationFrame(gridCamera2DRafRef.current); gridCamera2DRafRef.current = 0; }
     // Drop any prior srcCanvas reference — if the previous worker init went
     // through the direct-render path, srcCanvasRef holds a transferred canvas
     // whose 2D context is permanently unavailable. Re-using it here would

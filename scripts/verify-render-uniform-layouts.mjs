@@ -150,7 +150,7 @@ const REGISTRY = [
     struct: 'RenderView3D', writer: 'uploadAgentRenderView3D', bytesConst: 'RENDER_VIEW_3D_BYTES' },
   { label: 'RenderView (A1/A2 agent discs)', file: 'simulator/engine/agentWebgpuRuntime.ts',
     struct: 'RenderView', writer: 'uploadAgentRenderView', bytesConst: 'RENDER_VIEW_BYTES' },
-  { label: 'GridPlaneView (shared display-res grid-plane present)', file: 'simulator/engine/gridPlanePresent.ts',
+  { label: 'GridPlaneView (E2 display-res composite grid layer)', file: 'simulator/engine/agentWebgpuRuntime.ts',
     struct: 'GridPlaneView', writer: 'writeGridPlaneView', bytesConst: 'GRID_PLANE_VIEW_BYTES' },
 ];
 

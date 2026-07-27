@@ -35,10 +35,6 @@ import type { AgentWebGPULayout } from '../../modeler/vpl/compiler/agentWebgpu/l
 import { AGENT_GPU_F32_FIELDS, AGENT_GPU_F32_FIELDS_3D, AGENT_GPU_I32_FIELDS, AGENT_GPU_REQUEST_FIELDS } from '../../modeler/vpl/compiler/agentWebgpu/layout';
 import { emitAgentForcePassWGSL, agentMirrorFields } from '../../modeler/vpl/compiler/agentWebgpu/forcePass';
 import { acquireSharedGpuDevice, releaseSharedGpuDevice } from './sharedGpuDevice';
-// The display-res grid-plane present is SHARED with the grid-only 2D WebGPU direct
-// render (webgpuRuntime.ts) so both present the grid the SAME way (E2 composite =
-// grid plane + agent discs; grid-only = grid plane alone). See gridPlanePresent.ts.
-import { GRID_PLANE_VIEW_BYTES, writeGridPlaneView, GRID_PRESENT_WGSL } from './gridPlanePresent';
 
 const REQUEST_FIELD_SET: ReadonlySet<string> = new Set(AGENT_GPU_REQUEST_FIELDS);
 
@@ -1618,11 +1614,80 @@ async function setupAgentDiscRender(rt: AgentRenderSurface, canvas: OffscreenCan
 // STORAGE_BINDING divergence). The main thread blits the display-sized canvas 1:1.
 // ---------------------------------------------------------------------------
 
-// The grid-plane camera uniform (`GridPlaneView` / `writeGridPlaneView` /
-// `GRID_PLANE_VIEW_BYTES`) + the camera-inverting present shader (`GRID_PRESENT_WGSL`)
-// now live in the SHARED module ./gridPlanePresent (imported above), so the grid
-// layer of THIS composite and the grid-only 2D direct render (webgpuRuntime.ts)
-// present the grid identically.
+/** The grid-plane camera uniform for the composite grid layer (32 B, all scalars —
+ *  no vec3 padding trap). Mirrors `GRID_PLANE_VIEW_WGSL` below AND
+ *  `writeGridPlaneView`. `torus` selects wrap (infinity) vs bounds-discard. */
+const GRID_PLANE_VIEW_BYTES = 32;
+function writeGridPlaneView(gridW: number, gridH: number, torus: boolean, scalePx: number, oxPx: number, oyPx: number): ArrayBuffer {
+  const ab = new ArrayBuffer(GRID_PLANE_VIEW_BYTES);
+  const u = new Uint32Array(ab), fl = new Float32Array(ab);
+  u[0] = gridW >>> 0;
+  u[1] = gridH >>> 0;
+  u[2] = torus ? 1 : 0;
+  u[3] = 0;
+  fl[4] = scalePx;
+  fl[5] = oxPx;
+  fl[6] = oyPx;
+  fl[7] = 0;
+  return ab;
+}
+
+const GRID_PLANE_VIEW_WGSL = `struct GridPlaneView {
+  gridW   : u32,
+  gridH   : u32,
+  torus   : u32,
+  _pad0   : u32,
+  scalePx : f32,
+  oxPx    : f32,
+  oyPx    : f32,
+  _pad1   : f32,
+};`;
+
+/** WGSL: a fullscreen triangle whose FS inverts the display-res camera to a world
+ *  coordinate, resolves the covered cell (NEAREST), and samples the grid `colorsBuf`
+ *  (packed RGBA8 u32/cell, row-major) — the grid layer of the composite, premultiplied. */
+const GRID_PRESENT_WGSL = `${GRID_PLANE_VIEW_WGSL}
+@group(0) @binding(0) var<storage, read> colorsIn : array<u32>;
+@group(0) @binding(1) var<uniform>       gv       : GridPlaneView;
+
+@vertex
+fn vsMain(@builtin(vertex_index) vi : u32) -> @builtin(position) vec4<f32> {
+  // A single oversized triangle covering the whole DISPLAY viewport.
+  var p = vec2<f32>(-1.0, -1.0);
+  if (vi == 1u) { p = vec2<f32>(3.0, -1.0); }
+  else if (vi == 2u) { p = vec2<f32>(-1.0, 3.0); }
+  return vec4<f32>(p, 0.0, 1.0);
+}
+
+@fragment
+fn fsMain(@builtin(position) fragCoord : vec4<f32>) -> @location(0) vec4<f32> {
+  // Invert the camera: display pixel → world coordinate. scalePx > 0 always
+  // (guarded CPU-side: baseScale·zoom). DISPLAY-pixel-bound: one cell lookup per
+  // covered display pixel, so field size does not affect present cost.
+  let W : f32 = f32(gv.gridW);
+  let H : f32 = f32(gv.gridH);
+  var wx : f32 = (fragCoord.x - gv.oxPx) / gv.scalePx;
+  var wy : f32 = (fragCoord.y - gv.oyPx) / gv.scalePx;
+  if (gv.torus != 0u) {
+    // Infinity canvas → the grid tiles: wrap into [0,W)×[0,H).
+    wx = wx - floor(wx / W) * W;
+    wy = wy - floor(wy / H) * H;
+  } else {
+    // Bounded → outside the grid is the transparent letterbox.
+    if (wx < 0.0 || wx >= W || wy < 0.0 || wy >= H) { discard; }
+  }
+  // NEAREST cell = integer floor of the world coord (hard cell edges, no lerp).
+  // wx,wy are in [0,W)/[0,H) here, so u32() truncation is a valid floor.
+  let col : u32 = min(gv.gridW - 1u, u32(wx));
+  let row : u32 = min(gv.gridH - 1u, u32(wy));
+  let packed : u32 = colorsIn[row * gv.gridW + col];
+  let r : f32 = f32((packed >>  0u) & 0xffu) / 255.0;
+  let g : f32 = f32((packed >>  8u) & 0xffu) / 255.0;
+  let b : f32 = f32((packed >> 16u) & 0xffu) / 255.0;
+  let a : f32 = f32((packed >> 24u) & 0xffu) / 255.0;
+  // Premultiplied (the canvas is 'premultiplied'); default a=1 → identity.
+  return vec4<f32>(r * a, g * a, b * a, a);
+}`;
 
 /** Set up the composite render surface: configure the DISPLAY-sized canvas
  *  (RENDER_ATTACHMENT), build the disc pipelines AND the grid-present pipeline.
