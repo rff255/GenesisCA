@@ -131,7 +131,14 @@ function parseWriterOffsets(src, fnName) {
 
 const fileCache = new Map();
 const readSrc = (rel) => {
-  if (!fileCache.has(rel)) fileCache.set(rel, readFileSync(SRC(rel), 'utf8'));
+  // Normalize CRLF → LF: on a Windows checkout the source has \r\n line endings,
+  // and the member-line comment strip (/\/\/.*$/) can't cross a trailing \r
+  // (`.` doesn't match \r and `$` won't anchor before it), so NO comment gets
+  // stripped and every annotated member line ("mvp : mat4x4<f32>, // @0") reads
+  // as unparseable — silently disabling the whole VoxelView parse. This is the
+  // guard for the exact VoxelView-padding class that caused the invisible-voxels
+  // bug, so it must actually run on every platform.
+  if (!fileCache.has(rel)) fileCache.set(rel, readFileSync(SRC(rel), 'utf8').replace(/\r\n/g, '\n'));
   return fileCache.get(rel);
 };
 
