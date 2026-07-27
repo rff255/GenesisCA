@@ -1,6 +1,45 @@
 # HANDOFF — display-resolution GPU present for GRID-ONLY 2D WebGPU models
 
-**Branch**: `optimize`. **Status**: READY. Render/worker only. This is the
+**Branch**: `optimize`. **Status**: ⛔ **WITHDRAWN — DO NOT EXECUTE / DO NOT
+RE-EXECUTE.** Shipped as `7fd8f37`, then REVERTED in `b2e544b` (2026-07-27)
+after the user's stable A/B against v1.28.0 showed a THROUGHPUT REGRESSION at
+high gens/frame on their GPU (G/F=50: 2300 → 1600 g/s; G/F=100: 2500 → 2000)
+plus a structural ~5-frame interaction lag (the camera became a main→worker
+round-trip; the base applies it INSTANTLY on the main thread, matching the
+JS/WASM targets). The premise (a costly main-thread `drawImage` scale of the
+grid-sized canvas) was never verified and measured ~0.002 ms at 1000². The
+per-batch cost on the WebGPU grid is dominated by the PRESENT/FENCE vsync
+coupling, which is DRIVER-controlled — see the failed-decoupling record below
+before attempting anything in this area again. E2 (grid+agents composite,
+`974eba1`) is NOT withdrawn: it rides the agent-residency present path and the
+user verified it smooth; the revert moved its shader back inline.
+
+## ⚠️ Failed follow-up experiments (2026-07-27) — recorded so they are not re-tried blindly
+
+Two attempts to decouple the present from the per-batch backpressure fence
+(the "agent-grade" pattern) were implemented and A/B-measured, and NEITHER
+demonstrated improvement; both were reverted uncommitted:
+
+1. **Present deferred past the batch fence** (colour pass in the fence, present
+   submitted after the await): NO improvement — `onSubmittedWorkDone` is
+   queue-global, so the deferred present simply lands inside the NEXT batch's
+   fence (in-order queue). Measured slightly worse (extra submit + phase).
+2. **One-deep pipeline** (await the PREVIOUS batch's boxed bare-fence, bounded
+   queue depth 1; real readbacks stay synchronous): measured worse-to-neutral.
+   Working theory: with two presents potentially outstanding,
+   `getCurrentTexture` can block the worker thread on swap-chain depth. NB
+   `return promise` inside an async function AWAITS it — a deferred fence must
+   be BOXED (`{ fence }`) or the stall silently returns.
+
+**Measurement caveat that gates any retry:** the test box's throughput drifted
+±40% between SAME-condition runs minutes apart (650 → 400 g/s, zero changes),
+so sequential absolute comparisons there are unreliable — exactly the master
+handoff §0.7 trap ("interleaved A/B; never quote an absolute"). Any future
+attempt needs a stable rig: in-worker `performance.now` probes, interleaved
+A/B, many repetitions — and should validate on the USER's machine, whose base
+overhead is already small (~2500 g/s at G/F=100 = ~5 ms/batch fixed).
+
+The original (now-withdrawn) plan follows for reference. This is the
 GRID-ONLY sibling of the E2 composite (`974eba1`), unifying how the two paths
 present so a lattice-only model and a lattice+agents model render the SAME way.
 Read first: CLAUDE.md "E2 — single-canvas composite render" (the display-res
