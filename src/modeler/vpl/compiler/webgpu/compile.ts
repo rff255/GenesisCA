@@ -1546,6 +1546,10 @@ const VALUE_NODE_EMITTERS: Record<string, NodeValueEmitter> = {
       case 'mean': expr = `((${x} + ${y}) * 0.5)`; break;
       case 'sqrt': expr = `sqrt(${x})`; break;
       case 'abs': expr = `abs(${x})`; break;
+      case 'floor': expr = `floor(${x})`; break;
+      case 'ceil': expr = `ceil(${x})`; break;
+      // floor(x + 0.5) — NOT WGSL round() (banker's), matching JS/WASM.
+      case 'round': expr = `floor((${x}) + 0.5)`; break;
       case 'pow': expr = `pow(${x}, ${y})`; break;
       case 'exp': expr = `exp(${x})`; break;
       case 'log': expr = `log(${x})`; break;

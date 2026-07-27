@@ -81,6 +81,25 @@ console.log('== helpers ==');
   check('randomFill integer policy unaffected by range fields', JSON.stringify(intA) === JSON.stringify(intB));
 }
 {
+  // Integer/tag lower bound (intMin): absent ⇒ the historical 1..count draw;
+  // intMin: 1 must be BIT-identical to absent (the editor now always passes it);
+  // other mins shift the draw window, incl. negative integer ranges.
+  const legacy = M.randomFillTableData(2048, 41, 0.5, { valueType: 'integer', valueCount: 4 });
+  const min1 = M.randomFillTableData(2048, 41, 0.5, { valueType: 'integer', valueCount: 4, intMin: 1 });
+  check('randomFill intMin:1 ≡ legacy 1..max draw (bit-identical)', JSON.stringify(legacy) === JSON.stringify(min1));
+  const min2 = M.randomFillTableData(2048, 41, 1, { valueType: 'integer', valueCount: 5, intMin: 2 });
+  check('randomFill integer min respected (2..5)', min2.every(v => v >= 2 && v <= 5));
+  check('randomFill integer min spans window', [2, 3, 4, 5].every(x => min2.includes(x)));
+  const neg = M.randomFillTableData(2048, 9, 1, { valueType: 'integer', valueCount: -2, intMin: -5 });
+  check('randomFill negative integer range (−5..−2)', neg.every(v => v >= -5 && v <= -2) && [-5, -2].every(x => neg.includes(x)));
+  const tagMin = M.randomFillTableData(2048, 7, 1, { valueType: 'tag', valueCount: 3, intMin: 2 });
+  check('randomFill tag min respected (2..3)', tagMin.every(v => v === 2 || v === 3) && [2, 3].every(x => tagMin.includes(x)));
+  const tagZero = M.randomFillTableData(2048, 7, 1, { valueType: 'tag', valueCount: 3, intMin: 0 });
+  check('randomFill tag min 0 admits index 0', tagZero.every(v => v >= 0 && v <= 3) && tagZero.includes(0));
+  const degenerate = M.randomFillTableData(64, 3, 1, { valueType: 'integer', valueCount: 2, intMin: 7 });
+  check('randomFill degenerate min > max collapses to min', degenerate.every(v => v === 7));
+}
+{
   // Axis + value-tag sources resolve AGENT tag attributes (Particle Life
   // species-keyed matrices): cell/model attributes win, agentAttributes are
   // the fallback scope.

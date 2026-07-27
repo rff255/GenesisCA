@@ -2025,6 +2025,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
                 </select>
               )}
               {cbx('setScale', 'Set scale', !!nodeData.config.setScale, 'Set the sprite size multiplier per agent (the Scale input)')}
+              {cbx('setAlpha', 'Set alpha', !!nodeData.config.setAlpha, 'Set the agent colour’s alpha byte (0–255, the Alpha input) — the sprite render multiplies by it, so this fades/hides the sprite. A colour pass that writes the agent colour afterwards overrides it.')}
             </>
           );
         })()}
@@ -2434,6 +2435,9 @@ function CaNodeComponent({ id, data }: NodeProps) {
             <option value="sqrt">Sqrt</option>
             <option value="pow">Power</option>
             <option value="abs">Abs</option>
+            <option value="floor">Floor</option>
+            <option value="ceil">Ceil</option>
+            <option value="round">Round</option>
             <option value="max">Max</option>
             <option value="min">Min</option>
             <option value="mean">Mean</option>

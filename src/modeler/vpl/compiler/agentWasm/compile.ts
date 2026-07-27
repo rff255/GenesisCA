@@ -929,6 +929,10 @@ function emitArithmetic(ctx: AgentWasmCtx, node: GraphNode): void {
     case '/': emitGuardedDiv(ctx, node); break;
     case 'sqrt': pushValueInputF64(ctx, node, 'x', 0); em.op(OP_F64_SQRT); break;
     case 'abs': pushValueInputF64(ctx, node, 'x', 0); em.op(OP_F64_ABS); break;
+    case 'floor': pushValueInputF64(ctx, node, 'x', 0); em.op(OP_F64_FLOOR); break;
+    case 'ceil': pushValueInputF64(ctx, node, 'x', 0); em.op(OP_F64_CEIL); break;
+    // floor(x + 0.5) — matches JS/WGSL; NOT f64.nearest (banker's rounding).
+    case 'round': pushValueInputF64(ctx, node, 'x', 0); em.f64Const(0.5); em.op(OP_F64_ADD); em.op(OP_F64_FLOOR); break;
     case 'max': pushValueInputF64(ctx, node, 'x', 0); pushValueInputF64(ctx, node, 'y', 0); em.op(OP_F64_MAX); break;
     case 'min': pushValueInputF64(ctx, node, 'x', 0); pushValueInputF64(ctx, node, 'y', 0); em.op(OP_F64_MIN); break;
     case 'mean': pushValueInputF64(ctx, node, 'x', 0); pushValueInputF64(ctx, node, 'y', 0); em.op(OP_F64_ADD); em.f64Const(2); em.op(OP_F64_DIV); break;

@@ -274,7 +274,10 @@ export function LookupTableEditor({
   // ---- Randomize (seeded fill) ------------------------------------------
   const [rollSeed, setRollSeed] = useState<number>(attribute.tableRoll?.seed ?? 1);
   const [rollDensity, setRollDensity] = useState<number>(attribute.tableRoll?.density ?? 0.2);
-  const [rollMaxInt, setRollMaxInt] = useState<number>(attribute.tableRoll?.max ?? 1); // integer tables: values drawn from 1..max
+  const [rollMaxInt, setRollMaxInt] = useState<number>(attribute.tableRoll?.max ?? 1); // integer tables: values drawn from min..max
+  // Integer/tag lower bound — default 1 reproduces the historical 1..max
+  // (tag: 1..len−1) draw exactly; for tag it is an option INDEX.
+  const [rollMinInt, setRollMinInt] = useState<number>(attribute.tableRoll?.min ?? 1);
   // Float tables: rolled entries drawn uniform in [rangeMin, rangeMax) — the
   // defaults reproduce the historical (0,1) draw. Signed ranges (−1..1) are the
   // Particle Life-style attraction/repulsion matrices.
@@ -291,36 +294,48 @@ export function LookupTableEditor({
   // this re-seeds to the same numbers — a harmless no-op).
   const savedSeed = attribute.tableRoll?.seed;
   const savedDensity = attribute.tableRoll?.density;
+  const savedMin = attribute.tableRoll?.min;
   const savedMax = attribute.tableRoll?.max;
   const savedRangeMin = attribute.tableRoll?.rangeMin;
   const savedRangeMax = attribute.tableRoll?.rangeMax;
   useEffect(() => {
     if (savedSeed !== undefined) setRollSeed(savedSeed);
     if (savedDensity !== undefined) setRollDensity(savedDensity);
+    if (savedMin !== undefined) setRollMinInt(savedMin);
     if (savedMax !== undefined) setRollMaxInt(savedMax);
     if (savedRangeMin !== undefined) setRollRangeMin(savedRangeMin);
     if (savedRangeMax !== undefined) setRollRangeMax(savedRangeMax);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [attribute.id, savedSeed, savedDensity, savedMax, savedRangeMin, savedRangeMax]);
+  }, [attribute.id, savedSeed, savedDensity, savedMin, savedMax, savedRangeMin, savedRangeMax]);
   const totalEntries = multi
     ? axesResolved!.total
     : rowLabels.length * colLabels.length;
   const doRandomize = () => {
+    // Tag min is an option INDEX (clamped into the palette); integer min is any
+    // whole number. intMin = 1 reproduces the historical 1..max draw exactly.
+    const minInt = valueType === 'tag'
+      ? Math.min(Math.max(0, Math.floor(rollMinInt)), Math.max(1, valueTagOptions.length - 1))
+      : Math.floor(rollMinInt);
     const valueCount = valueType === 'tag'
       ? Math.max(1, valueTagOptions.length - 1)
-      : valueType === 'integer' ? Math.max(1, Math.floor(rollMaxInt)) : 1;
+      : valueType === 'integer' ? Math.floor(rollMaxInt) : 1;
     const isFloat = valueType === 'float';
     const flat = randomFillTableData(totalEntries, rollSeed, rollDensity, isFloat
       ? { valueType, valueCount, rangeMin: rollRangeMin, rangeMax: rollRangeMax }
-      : { valueType, valueCount });
-    // `max` is only meaningful for integer-valued tables, `rangeMin`/`rangeMax`
-    // for float ones — store the applicable fields so the roll round-trips with
-    // the attribute (.gcaproj) like seed/density.
+      : valueType === 'bool'
+        ? { valueType, valueCount }
+        : { valueType, valueCount, intMin: minInt });
+    // `min`/`max` are only meaningful for integer/tag tables (`max` integer
+    // only — tag's top is always len−1), `rangeMin`/`rangeMax` for float ones —
+    // store the applicable fields so the roll round-trips with the attribute
+    // (.gcaproj) like seed/density.
     const roll = valueType === 'integer'
-      ? { seed: rollSeed, density: rollDensity, max: valueCount }
+      ? { seed: rollSeed, density: rollDensity, min: minInt, max: valueCount }
       : isFloat
         ? { seed: rollSeed, density: rollDensity, rangeMin: rollRangeMin, rangeMax: rollRangeMax }
-        : { seed: rollSeed, density: rollDensity };
+        : valueType === 'tag'
+          ? { seed: rollSeed, density: rollDensity, min: minInt }
+          : { seed: rollSeed, density: rollDensity };
     if (multi) {
       onChange({ tableData: flat, tableRoll: roll });
       return;
@@ -479,11 +494,23 @@ export function LookupTableEditor({
         <NumberField className={styles.numberInput} value={rollDensity} min={0} max={1} step={0.05}
           onNumber={n => setRollDensity(Math.min(1, Math.max(0, n)))} style={{ width: 56, height: inputHeight }} noSpinner />
       </span>
+      {(valueType === 'integer' || valueType === 'tag') && (
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+          <label style={{ color: '#7a8a9a' }}
+            title={valueType === 'tag'
+              ? 'Lowest tag option INDEX a rolled entry may take (default 1 — index 0 is what un-rolled entries hold).'
+              : 'Lowest value a rolled entry may take (default 1). Rolled entries are drawn uniformly from Min..Max.'}>Min</label>
+          <NumberField className={styles.numberInput} value={rollMinInt} integer
+            min={valueType === 'tag' ? 0 : undefined}
+            onNumber={n => setRollMinInt(valueType === 'tag' ? Math.max(0, Math.floor(n)) : Math.floor(n))}
+            style={{ width: 48, height: inputHeight }} noSpinner />
+        </span>
+      )}
       {valueType === 'integer' && (
         <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-          <label style={{ color: '#7a8a9a' }} title="Non-zero entries are drawn uniformly from 1..max">Max</label>
-          <NumberField className={styles.numberInput} value={rollMaxInt} integer min={1}
-            onNumber={n => setRollMaxInt(Math.max(1, Math.floor(n)))} style={{ width: 48, height: inputHeight }} noSpinner />
+          <label style={{ color: '#7a8a9a' }} title="Non-zero entries are drawn uniformly from Min..Max">Max</label>
+          <NumberField className={styles.numberInput} value={rollMaxInt} integer
+            onNumber={n => setRollMaxInt(Math.floor(n))} style={{ width: 48, height: inputHeight }} noSpinner />
         </span>
       )}
       {valueType === 'float' && (<>

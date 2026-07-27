@@ -2,6 +2,7 @@
    Editor-only; collapsed out before compilation (see rerouteCollapse.ts). */
 
 .reroute {
+  position: relative; /* anchors the .label overflow */
   width: 16px;
   height: 16px;
   border-radius: 50%;
@@ -25,4 +26,21 @@
 .grabbing {
   cursor: grabbing;
   box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.95), 0 0 12px 3px rgba(255, 255, 255, 0.5);
+}
+
+/* Optional user label (context-menu Rename) — pinned above the dot; purely
+   cosmetic overflow, so the 16px hit target and handle geometry are untouched. */
+.label {
+  position: absolute;
+  bottom: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  margin-bottom: 3px;
+  font-size: 10px;
+  line-height: 1.1;
+  white-space: nowrap;
+  color: var(--color-text-muted, #8fa3b8);
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
+  pointer-events: none;
+  user-select: none;
 }

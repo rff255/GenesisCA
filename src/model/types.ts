@@ -142,15 +142,16 @@ export interface Attribute {
    *  encoding as `tableValues` (bool 0/1, tag index, int/float). Missing /
    *  short arrays read as 0 (the normalizer zero-fills). */
   tableData?: number[];
-  /** Informational: the last "Randomize table" roll's seed + density (+ `max`,
-   *  the 1..max value range, for integer-valued tables; + `rangeMin`/`rangeMax`,
-   *  the uniform float draw range — absent ⇒ the historical (0,1) — for
-   *  float-valued tables; signed ranges like −1..1 are the Particle Life rules
-   *  matrix) — seeds the editor fields; journaled by the Overseer's Randomize
-   *  Table node (whose runtime re-roll reads these to reproduce the editor's
-   *  value policy). The DATA (`tableData` / `tableValues`) stays authoritative —
-   *  this never regenerates implicitly. */
-  tableRoll?: { seed: number; density: number; max?: number; rangeMin?: number; rangeMax?: number };
+  /** Informational: the last "Randomize table" roll's seed + density (+ `min`/
+   *  `max`, the integer/tag value range — `min` absent ⇒ the historical lower
+   *  bound 1 (tag: option index); + `rangeMin`/`rangeMax`, the uniform float
+   *  draw range — absent ⇒ the historical (0,1) — for float-valued tables;
+   *  signed ranges like −1..1 are the Particle Life rules matrix) — seeds the
+   *  editor fields; journaled by the Overseer's Randomize Table node (whose
+   *  runtime re-roll reads these to reproduce the editor's value policy). The
+   *  DATA (`tableData` / `tableValues`) stays authoritative — this never
+   *  regenerates implicitly. */
+  tableRoll?: { seed: number; density: number; min?: number; max?: number; rangeMin?: number; rangeMax?: number };
   /** Lookup Table model attributes only: the data TYPE of the table's cell
    *  values. Absent → `'float'` (Decimal), the historical behaviour. Restricted
    *  to the scalar-numeric types that fit one stored number exactly on all

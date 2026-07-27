@@ -21,7 +21,11 @@ import type { NodeTypeDef } from '../types';
  *  `setRotation` (the facing — either an `Rotation` ANGLE in compass degrees
  *  [0 = up, clockwise], or a `Dir X`/`Dir Y` VECTOR the art aligns to via atan2,
  *  so a static agent can "look at" a target), `setScale` (the `Scale` size
- *  multiplier). Unticked facets are left untouched.
+ *  multiplier), `setAlpha` (the agent colour's ALPHA byte, 0–255 — the sprite
+ *  render multiplies the blit by it, so this fades/hides the sprite; it is the
+ *  same alpha a Set Cell Looks / Agent Output Mapping writes, so a colour pass
+ *  that writes the agent colour afterwards overrides it). Unticked facets are
+ *  left untouched.
  *
  *  Writes the JS-engine per-agent display buffers (`spriteIds`/`spriteFrames`/
  *  `spriteSpeeds`/`spriteRotations`/`spriteScales`) so it has NO WASM/WebGPU emit
@@ -47,8 +51,9 @@ export const SetAgentSpriteNode: NodeTypeDef = {
     { id: 'dirX', label: 'Dir X', kind: 'input', category: 'value', dataType: 'float', inlineWidget: 'number', defaultValue: '0' },
     { id: 'dirY', label: 'Dir Y', kind: 'input', category: 'value', dataType: 'float', inlineWidget: 'number', defaultValue: '0' },
     { id: 'scale', label: 'Scale', kind: 'input', category: 'value', dataType: 'float', inlineWidget: 'number', defaultValue: '1' },
+    { id: 'alpha', label: 'Alpha', kind: 'input', category: 'value', dataType: 'integer', inlineWidget: 'number', defaultValue: '255' },
   ],
-  defaultConfig: { spriteId: '', setSprite: true, setFrame: false, setSpeed: false, setRotation: false, rotationMode: 'angle', setScale: false },
+  defaultConfig: { spriteId: '', setSprite: true, setFrame: false, setSpeed: false, setRotation: false, rotationMode: 'angle', setScale: false, setAlpha: false },
   // Each facet's input(s) only matter when the facet is ticked; the rotation mode
   // picks between the angle input and the vector inputs.
   hiddenPorts: (config) => {
@@ -60,6 +65,7 @@ export const SetAgentSpriteNode: NodeTypeDef = {
     if (!rotOn || vectorMode) hidden.push('rotation');
     if (!rotOn || !vectorMode) { hidden.push('dirX'); hidden.push('dirY'); }
     if (!config.setScale) hidden.push('scale');
+    if (!config.setAlpha) hidden.push('alpha');
     return hidden;
   },
   compile: (_nodeId, config, inputs, _boundary, ctx) => {
@@ -90,6 +96,8 @@ export const SetAgentSpriteNode: NodeTypeDef = {
       }
     }
     if (config.setScale) body.push(`spriteScales[_t] = (${inputs['scale'] || '1'});`);
+    // Alpha = the agent colour's A byte (colors is Uint8ClampedArray → clamps).
+    if (config.setAlpha) body.push(`colors[_t * 4 + 3] = (${inputs['alpha'] || '255'});`);
     if (body.length === 0) return '';
     const inner = body.join(' ');
     return guard

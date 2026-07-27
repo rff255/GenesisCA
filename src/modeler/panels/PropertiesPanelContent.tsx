@@ -15,9 +15,55 @@ import { isAgentGraphWebGPUSupported } from '../vpl/compiler/agentWebgpu/compile
 import { AgentCapabilitiesSection } from './AgentCapabilitiesSection';
 import { resolveAgentProfile, applyCapabilityEdit } from '../../model/agentCapabilities';
 import styles from './PanelContent.module.css';
+import { useState, type ReactNode } from 'react';
 
 function newCondId(): string {
   return `ec_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`;
+}
+
+// --- Collapsible section wrapper -------------------------------------------
+// Each top-level Properties section collapses via its title row (chevron).
+// Collapsed bodies stay MOUNTED (display: none) — the Indicators list is a
+// controlled master-detail child whose selection/effects must not reset.
+// The collapsed set persists in localStorage, keyed by stable section ids.
+const COLLAPSE_LS_KEY = 'genesisca_properties_collapsed';
+function readCollapsedSet(): Set<string> {
+  try {
+    const raw = localStorage.getItem(COLLAPSE_LS_KEY);
+    const arr = raw ? JSON.parse(raw) : [];
+    return new Set(Array.isArray(arr) ? arr.filter((x): x is string => typeof x === 'string') : []);
+  } catch { return new Set(); }
+}
+function writeCollapsed(id: string, collapsed: boolean) {
+  try {
+    const s = readCollapsedSet();
+    if (collapsed) s.add(id); else s.delete(id);
+    localStorage.setItem(COLLAPSE_LS_KEY, JSON.stringify([...s]));
+  } catch { /* storage unavailable — session-only collapse */ }
+}
+function CollapsibleSection({ id, title, bare = false, children }: {
+  id: string;
+  title: string;
+  /** bare: no own `.section` wrapper — the child brings its own section chrome
+   *  (the IndicatorsPanelSection case, with its internal title suppressed). */
+  bare?: boolean;
+  children: ReactNode;
+}) {
+  const [collapsed, setCollapsed] = useState(() => readCollapsedSet().has(id));
+  const toggle = () => setCollapsed(c => { writeCollapsed(id, !c); return !c; });
+  const titleRow = (
+    <div
+      className={`${styles.sectionTitle} ${styles.sectionTitleCollapsible}`}
+      onClick={toggle}
+      title={collapsed ? 'Expand section' : 'Collapse section'}
+    >
+      <span className={styles.sectionChevron} style={collapsed ? { transform: 'rotate(-90deg)' } : undefined}>▾</span>
+      {title}
+    </div>
+  );
+  const body = <div style={collapsed ? { display: 'none' } : undefined}>{children}</div>;
+  if (bare) return <>{titleRow}{body}</>;
+  return <div className={styles.section}>{titleRow}{body}</div>;
 }
 
 export function PropertiesPanelContent({ mode = 'list' }: PanelContentProps = {}) {
@@ -97,8 +143,7 @@ export function PropertiesPanelContent({ mode = 'list' }: PanelContentProps = {}
 
   return (
     <div className={styles.fieldGroup}>
-      <div className={styles.section}>
-        <div className={styles.sectionTitle}>Structure</div>
+      <CollapsibleSection id="structure" title="Structure">
         <div className={styles.fieldGroup}>
           <div className={styles.field}>
             <label className={styles.fieldLabel}>Boundary Treatment</label>
@@ -195,10 +240,9 @@ export function PropertiesPanelContent({ mode = 'list' }: PanelContentProps = {}
             </div>
           </div>
         </div>
-      </div>
+      </CollapsibleSection>
 
-      <div className={styles.section}>
-        <div className={styles.sectionTitle}>Execution</div>
+      <CollapsibleSection id="execution" title="Execution">
         <div className={styles.fieldGroup}>
           {/* Cell-grid execution — the GRID's update mode + compile target. Hidden
               for an agents-only model (no lattice to simulate); the agent layer's
@@ -958,16 +1002,17 @@ export function PropertiesPanelContent({ mode = 'list' }: PanelContentProps = {}
             )}
           </div>
         </div>
-      </div>
+      </CollapsibleSection>
 
-      <IndicatorsPanelSection mode="list" selectedId={selIndId} onSelect={selectInd} />
+      <CollapsibleSection id="indicators" title="Indicators" bare>
+        <IndicatorsPanelSection mode="list" selectedId={selIndId} onSelect={selectInd} hideTitle />
+      </CollapsibleSection>
 
       {/* Variegated Cells — a specialised 2D-grid feature (directional per-cell
           interactions). The most setup-specific option, so it sits LAST, after the
           common Indicators / End Conditions. Only relevant with the CA grid on. */}
       {topo.gridCells && (
-        <div className={styles.section}>
-          <div className={styles.sectionTitle}>Variegated Cells</div>
+        <CollapsibleSection id="variegated" title="Variegated Cells">
           <div className={styles.fieldGroup}>
             <label
               style={{ display: 'flex', alignItems: 'flex-start', gap: 6, cursor: is3d ? 'not-allowed' : 'pointer', fontSize: '0.72rem', opacity: is3d ? 0.55 : 1 }}
@@ -989,7 +1034,7 @@ export function PropertiesPanelContent({ mode = 'list' }: PanelContentProps = {}
               </span>
             </label>
           </div>
-        </div>
+        </CollapsibleSection>
       )}
     </div>
   );

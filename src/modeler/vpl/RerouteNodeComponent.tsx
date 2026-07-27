@@ -29,6 +29,9 @@ function RerouteNodeInner({ id, data, selected }: NodeProps) {
   const d = data as Record<string, unknown>;
   const category: PortCategory = (d.portCategory as string) === 'flow' ? 'flow' : 'value';
   const dataType = d.dataType as string | undefined;
+  // Optional user label (context-menu Rename → data.label, round-trips like any
+  // node data) — rendered above the dot so reroutes can be organized by name.
+  const label = typeof d.label === 'string' ? d.label.trim() : '';
 
   const cf = useSyncExternalStore(subscribeConnectingFrom, getConnectingFromSnapshot, getConnectingFromSnapshot);
 
@@ -65,8 +68,9 @@ function RerouteNodeInner({ id, data, selected }: NodeProps) {
     <div
       className={`${styles.reroute} ${selected ? styles.selected : ''}`}
       style={{ background: fill, borderColor: stroke }}
-      title={`Reroute (${category})`}
+      title={label ? `${label} — reroute (${category})` : `Reroute (${category})`}
     >
+      {label && <div className={styles.label}>{label}</div>}
       <Handle
         type="target"
         position={Position.Left}

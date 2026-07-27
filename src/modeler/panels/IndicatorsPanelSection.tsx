@@ -25,10 +25,13 @@ function handleIndicatorDragEnd() {
   setCurrentModelElementDrag(null);
 }
 
-export function IndicatorsPanelSection({ mode = 'list', selectedId, onSelect }: {
+export function IndicatorsPanelSection({ mode = 'list', selectedId, onSelect, hideTitle = false }: {
   mode?: PanelMode;
   selectedId: string | null;
   onSelect: (id: string | null) => void;
+  /** The Properties panel's collapsible wrapper renders its own "Indicators"
+   *  title — suppress the internal one so it isn't doubled. */
+  hideTitle?: boolean;
 }) {
   const { model, addIndicator, duplicateIndicator, removeIndicator, updateIndicator, reorderIndicators } = useModel();
   const indicators = model.indicators || [];
@@ -74,7 +77,7 @@ export function IndicatorsPanelSection({ mode = 'list', selectedId, onSelect }: 
     <>
     {mode !== 'detail' && (
     <div className={styles.section}>
-      <div className={styles.sectionTitle}>Indicators</div>
+      {!hideTitle && <div className={styles.sectionTitle}>Indicators</div>}
 
       <div className={styles.list} data-reorder-list>
         {indicators.map((ind, i) => {

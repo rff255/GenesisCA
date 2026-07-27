@@ -26,7 +26,7 @@ import { readCategoricalEntries, readCategoricalDefault, categoricalHasAlpha, ty
 import { colorConstantHasAlpha } from '../../nodes/GetColorConstantNode';
 import { CURRENT_VIEWER_SENTINEL } from '../../nodes/SetCellLooksNode';
 import {
-  ValType, F64, I32, OP_F64_ABS, OP_F64_ADD, OP_F64_CONVERT_I32_S, OP_F64_CONVERT_I32_U, OP_F64_DIV,
+  ValType, F64, I32, OP_F64_ABS, OP_F64_ADD, OP_F64_CEIL, OP_F64_CONVERT_I32_S, OP_F64_CONVERT_I32_U, OP_F64_DIV,
   OP_F64_EQ, OP_F64_FLOOR, OP_F64_GE, OP_F64_GT, OP_F64_LE, OP_F64_LT,
   OP_F64_MAX, OP_F64_MIN, OP_F64_MUL, OP_F64_NE, OP_F64_SQRT, OP_F64_SUB,
   OP_I32_ADD, OP_I32_AND, OP_I32_DIV_S, OP_I32_EQ, OP_I32_EQZ, OP_I32_GE_S,
@@ -1350,6 +1350,22 @@ const VALUE_NODE_EMITTERS: Record<string, NodeValueEmitter> = {
       case 'abs':
         pushValueAs(em, x, F64);
         em.op(OP_F64_ABS);
+        break;
+      case 'floor':
+        pushValueAs(em, x, F64);
+        em.op(OP_F64_FLOOR);
+        break;
+      case 'ceil':
+        pushValueAs(em, x, F64);
+        em.op(OP_F64_CEIL);
+        break;
+      case 'round':
+        // floor(x + 0.5) — matches JS/WGSL. NOT native f64.nearest (banker's
+        // rounding), which would diverge from the other targets on .5 cases.
+        pushValueAs(em, x, F64);
+        em.f64Const(0.5);
+        em.op(OP_F64_ADD);
+        em.op(OP_F64_FLOOR);
         break;
       case 'pow':
         // imported Math.pow at funcIdx 0

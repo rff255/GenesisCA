@@ -15,6 +15,26 @@
   border-bottom: 1px solid var(--color-border-muted);
 }
 
+/* Collapsible section title (Properties panel): the title row toggles the
+ * section body (display: none — children stay mounted). */
+.sectionTitleCollapsible {
+  cursor: pointer;
+  user-select: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.sectionTitleCollapsible:hover {
+  color: var(--color-accent);
+}
+.sectionChevron {
+  display: inline-block;
+  font-size: 0.6rem;
+  line-height: 1;
+  transition: transform 0.12s ease;
+  color: var(--color-text-muted, #8fa3b8);
+}
+
 /* Group heading — a more prominent divider than .sectionTitle, used to separate
  * top-level layers of a panel (e.g. "CA Grid" vs "Agents" in the Mappings panel
  * when a model has both topologies). */

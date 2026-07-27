@@ -864,6 +864,9 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   const editPrefillIdRef = useRef<number>(-1);
   const [showBrushCursor, setShowBrushCursor] = useState((saved.current.showBrushCursor as boolean) ?? true);
   const [showGridlines, setShowGridlines] = useState((saved.current.showGridlines as boolean) ?? false);
+  // 2D axes indicator (origin + row/col growth arrows, the 2D sibling of the
+  // 3D Axes toggle). Declared ABOVE the settings-persist effect (TDZ trap).
+  const [show2dAxes, setShow2dAxes] = useState((saved.current.show2dAxes as boolean) ?? false);
   // Inspect mode — toolbar toggle making plain LMB inspect (see inspectModeRef).
   const [inspectMode, setInspectMode] = useState(false);
   // Infinity canvas: when the model uses torus boundary, the grid tiles into the
@@ -889,6 +892,53 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   // spatial (xAxis rows/columns) → Record<seriesKey, number[]> (per-position-bin
   // series). IndicatorDisplay branches on the indicator's xAxis to render.
   const sieActiveRef = useRef<number | null>(null);
+  // --- Compile-target chip (stats overlay) ---------------------------------
+  // Which target each layer RESOLVES to, from the model (the same resolution
+  // the compile paths use). Memoised — the agent gates flatten the agent graph,
+  // too costly to re-run on every stepped re-render. The WebGPU grid target is
+  // additionally tracked live via useWebGPUStatus (ready:false ⇒ the worker
+  // fell back / errored) so the chip stays honest about silent demotions.
+  const compileTargetInfo = useMemo(() => {
+    const gridCellsOn = model.topologyMode?.gridCells !== false;
+    const grid = model.properties.useWebGPU ? 'WebGPU' : model.properties.useWasm ? 'WASM' : 'JS';
+    const agents = model.topologyMode?.agents
+      ? agentTargetOf(model.centerBased, isAgentGraphWasmSupported(model), isAgentGraphWebGPUSupported(model))
+      : null;
+    return { gridCellsOn, grid, agents };
+  }, [model]);
+  // 'pending' until the worker acks; 'failed' when useWebGPUStatus reports
+  // ready:false while WebGPU is the selected grid target (device/init failure —
+  // the worker falls back to JS where it can, or surfaces an error).
+  const gridWebgpuStatusRef = useRef<'pending' | 'ready' | 'failed'>('pending');
+  // --- Transport speed POPUP sliders (FPS / Gens-per-Frame) ----------------
+  // The inline sliders were replaced by compact readout buttons that open a
+  // small vertical-slider popover; one popover at a time. Session-only UI
+  // state (the VALUES keep their existing persistence). Dismissed by a
+  // capture-phase outside pointerdown (the context-menu pattern) or Escape.
+  const [speedPopup, setSpeedPopup] = useState<'fps' | 'gpf' | null>(null);
+  const speedPopupWrapRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!speedPopup) return;
+    const onDown = (e: PointerEvent) => {
+      if (speedPopupWrapRef.current && !speedPopupWrapRef.current.contains(e.target as globalThis.Node)) {
+        setSpeedPopup(null);
+      }
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        // Capture-phase + stopPropagation so Esc closes the popover instead of
+        // firing the simulator's Esc=reset shortcut (the shortcuts-overlay rule).
+        e.stopPropagation();
+        setSpeedPopup(null);
+      }
+    };
+    document.addEventListener('pointerdown', onDown, true);
+    document.addEventListener('keydown', onKey, true);
+    return () => {
+      document.removeEventListener('pointerdown', onDown, true);
+      document.removeEventListener('keydown', onKey, true);
+    };
+  }, [speedPopup]);
   const indicatorValuesRef = useRef<Record<string, number | Record<string, number> | Record<string, number[]>>>({});
   // For scalar indicators: number[] of samples over time.
   // For linked-frequency indicators: Record<category, number[]> so each category
@@ -1071,7 +1121,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       try {
         localStorage.setItem(SIM_SETTINGS_KEY, JSON.stringify({
           targetFps, unlimitedFps, gensPerFrame, unlimitedGens,
-          activeViewer, brushColor, brushW, brushH, brushMapping, showBrushCursor, showGridlines,
+          activeViewer, brushColor, brushW, brushH, brushMapping, showBrushCursor, showGridlines, show2dAxes,
           brushShape, brushRadius, brushRingWidth, brushLineWidth, brush3dVolume, brushBoxDepth,
           infinityCanvas, indicatorVizModes, recordFormat, brushSectionH, agentsFront3d,
           light3d, cellGaps3d, agentMetaballs, agentGlow,
@@ -1089,7 +1139,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       } catch { /* localStorage full */ }
     }, 300);
     return () => clearTimeout(timer);
-  }, [targetFps, unlimitedFps, gensPerFrame, unlimitedGens, activeViewer, brushColor, brushW, brushH, brushMapping, showBrushCursor, showGridlines, brushShape, brushRadius, brushRingWidth, brushLineWidth, brush3dVolume, brushBoxDepth, infinityCanvas, indicatorVizModes, recordFormat, brushSectionH, agentsFront3d, light3d, cellGaps3d, agentMetaballs, agentGlow, agentBrushRadius, agentSeedDensity, agentSeedSpacing, agentBrushShape, agentBrushW, agentBrushH, agentBrushRingWidth, agentBrushLineWidth, showCaGrid, showAgents, showBonds, simulateCells, simulateAgents, brushTarget, bg2d, agentOutlines, indicatorHiddenCategories, indicatorChartOverrides]);
+  }, [targetFps, unlimitedFps, gensPerFrame, unlimitedGens, activeViewer, brushColor, brushW, brushH, brushMapping, showBrushCursor, showGridlines, show2dAxes, brushShape, brushRadius, brushRingWidth, brushLineWidth, brush3dVolume, brushBoxDepth, infinityCanvas, indicatorVizModes, recordFormat, brushSectionH, agentsFront3d, light3d, cellGaps3d, agentMetaballs, agentGlow, agentBrushRadius, agentSeedDensity, agentSeedSpacing, agentBrushShape, agentBrushW, agentBrushH, agentBrushRingWidth, agentBrushLineWidth, showCaGrid, showAgents, showBonds, simulateCells, simulateAgents, brushTarget, bg2d, agentOutlines, indicatorHiddenCategories, indicatorChartOverrides]);
 
   // Manual Brush — signature-keyed merge effect. Re-derives `manualBrush`
   // whenever the cell attribute set (id+type) changes. Surviving attrs carry
@@ -1303,17 +1353,20 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
         const attr = model.attributes.find(a => a.id === tableId && a.isModelAttribute && a.type === 'lookupTable');
         if (!attr) return;
         // Value policy mirrors the editor's Randomize: tag → uniform over the
-        // non-zero tag options, integer → uniform over 1..tableRoll.max (the
-        // attribute's stored Max), bool → 1, float → uniform over the stored
+        // stored [tableRoll.min, len−1] option indices (min absent ⇒ 1),
+        // integer → uniform over [tableRoll.min ?? 1, tableRoll.max] (the
+        // attribute's stored range), bool → 1, float → uniform over the stored
         // [tableRoll.rangeMin, rangeMax) range (absent ⇒ the historical (0,1)).
         const valueType = attr.valueType ?? 'float';
         const valueCount = valueType === 'tag'
           ? Math.max(1, resolveValueTagOptions(attr, model).length - 1)
-          : valueType === 'integer' ? Math.max(1, Math.floor(attr.tableRoll?.max ?? 1))
+          : valueType === 'integer' ? Math.floor(attr.tableRoll?.max ?? 1)
           : 1;
         const floatRange = valueType === 'float'
           ? { rangeMin: attr.tableRoll?.rangeMin, rangeMax: attr.tableRoll?.rangeMax }
-          : {};
+          : (valueType === 'integer' || valueType === 'tag')
+            ? { intMin: attr.tableRoll?.min }
+            : {};
         if (isMultiAxisTable(attr)) {
           const r = resolveAxes(attr, model);
           const data = randomFillTableData(r.total, seed, density, { valueType, valueCount, ...floatRange });
@@ -3608,6 +3661,40 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       ctx.stroke();
     }
 
+    // 2D axes indicator — marks the grid ORIGIN (cell 0,0) and the growth
+    // directions, matching the 3D convention: columns = red toward +X (right),
+    // rows = green toward screen-down. Drawn on the PRIMARY tile only (infinity
+    // mode included) so it reads as a coordinate legend, not a lattice overlay.
+    if (show2dAxesRef.current && !is3dRef.current) {
+      const len = Math.max(28, Math.min(90, scale * 4));
+      ctx.save();
+      const drawAxis = (dx: number, dy: number, color: string, label: string) => {
+        const x2 = ox + dx * len, y2 = oy + dy * len;
+        ctx.strokeStyle = color;
+        ctx.fillStyle = color;
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(ox, oy);
+        ctx.lineTo(x2, y2);
+        // Two-pronged arrowhead (the 3D renderOverlays style).
+        const ah = 6;
+        ctx.moveTo(x2, y2);
+        ctx.lineTo(x2 - dx * ah - dy * ah * 0.6, y2 - dy * ah + dx * ah * 0.6);
+        ctx.moveTo(x2, y2);
+        ctx.lineTo(x2 - dx * ah + dy * ah * 0.6, y2 - dy * ah - dx * ah * 0.6);
+        ctx.stroke();
+        ctx.font = 'bold 11px sans-serif';
+        ctx.fillText(label, x2 + 5, y2 + 4);
+      };
+      drawAxis(1, 0, '#e05050', 'C');   // +columns → right (red, the 3D col axis)
+      drawAxis(0, 1, '#50c050', 'R');   // +rows → down (green, the 3D row axis)
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.85)';
+      ctx.beginPath();
+      ctx.arc(ox, oy, 2.5, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    }
+
     // Environment background — when the CA grid layer is hidden (agents-only view),
     // the canvas is cleared/transparent; fill the W×H world rect with the user's
     // chosen colour so agents sit on a solid backdrop instead of the page showing
@@ -4272,6 +4359,9 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     // a race), the transferred canvas stays orphaned in pendingDirectRenderCanvas
     // and we stay permanently on JS-fallback — graceful degradation.
     if (msg.type === 'useWebGPUStatus') {
+      // Compile-target chip honesty: ready:false while WebGPU is enabled means
+      // the grid runtime failed to come up (falls back / errors).
+      gridWebgpuStatusRef.current = msg.enabled ? (msg.ready ? 'ready' : 'failed') : 'pending';
       if (msg.ready && msg.directRender && pendingDirectRenderCanvas.current) {
         // Phase 2 ack — commit the swap.
         srcCanvasRef.current = pendingDirectRenderCanvas.current;
@@ -6437,6 +6527,11 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   }, [agentMetaballs.enabled, draw, maybeAttachAgentCanvas]);
   const showGridlinesRef = useRef(false);
   useEffect(() => { showGridlinesRef.current = showGridlines; }, [showGridlines]);
+  const show2dAxesRef = useRef(false);
+  // Sync + redraw: the onClick's own draw() runs BEFORE this effect updates the
+  // ref (stale for that call) — the post-sync draw here makes the toggle land
+  // immediately even while paused.
+  useEffect(() => { show2dAxesRef.current = show2dAxes; draw(); }, [show2dAxes, draw]);
   // Inspect mode (toolbar toggle): plain LMB inspects cells/agents — the
   // keyboard-free equivalent of Shift+LMB (both 2D and 3D read the ref in
   // their pointer handlers). Session-only, never persisted.
@@ -9504,6 +9599,23 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
           <span>{gridWidth.current || simWidth}&times;{gridHeight.current || simHeight}</span>
           <span>{actualFps} FPS</span>
           <span>{actualGps} g/s</span>
+          {(compileTargetInfo.gridCellsOn || compileTargetInfo.agents) && (() => {
+            const failed = compileTargetInfo.grid === 'WebGPU' && gridWebgpuStatusRef.current === 'failed';
+            const parts: string[] = [];
+            if (compileTargetInfo.gridCellsOn) parts.push(failed ? 'WebGPU✗' : compileTargetInfo.grid);
+            if (compileTargetInfo.agents) {
+              const a = compileTargetInfo.agents === 'webgpu' ? 'WebGPU' : compileTargetInfo.agents === 'wasm' ? 'WASM' : 'JS';
+              parts.push(`agents ${a}`);
+            }
+            return (
+              <span
+                style={failed ? { color: '#e0a050' } : undefined}
+                title={failed
+                  ? 'The selected WebGPU grid target failed to initialise on this device — the simulation falls back to JavaScript where possible (see the error notice). Change the Compile Target in Properties → Execution.'
+                  : 'Compile target(s) in use — selected in Properties → Execution. Unsupported features clamp to JavaScript automatically.'}
+              >{'⚙'} {parts.join(' · ')}</span>
+            );
+          })()}
           {sieActiveRef.current !== null && (
             sieActiveRef.current >= 0 ? (
               <span title="Skip Isolated Empty Cells — cells processed per generation (active) out of the whole grid">
@@ -9680,14 +9792,26 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
           <input ref={stateFileInputRef} type="file" accept=".gcastate" style={{ display: 'none' }} onChange={handleLoadState} />
           <div className={styles.transportDivider} />
 
-          {/* Speed controls (left side) */}
-          <div className={styles.transportSpeed}>
-            <span className={styles.transportSpeedLabel}>FPS {unlimitedFps ? '\u221E' : targetFps}</span>
-            <input className={styles.transportSlider} type="range" min={1} max={200} value={targetFps}
-              disabled={unlimitedFps} onChange={e => setTargetFps(Number(e.target.value))} />
-            <label className={styles.transportCheck}>
-              <input type="checkbox" checked={unlimitedFps} onChange={e => setUnlimitedFps(e.target.checked)} />&infin;
-            </label>
+          {/* Speed controls (left side) \u2014 compact readout, click for the
+              vertical-slider popover. */}
+          <div className={styles.transportSpeed} ref={speedPopup === 'fps' ? speedPopupWrapRef : undefined} data-sim-overlay>
+            <button
+              className={`${styles.transportBtn} ${speedPopup === 'fps' ? styles.zoomBtnActive : ''}`}
+              onClick={() => setSpeedPopup(p => (p === 'fps' ? null : 'fps'))}
+              title="Display frame rate (frames per second) \u2014 click to adjust"
+            >FPS {unlimitedFps ? '\u221E' : targetFps}</button>
+            {speedPopup === 'fps' && (
+              <div className={styles.speedPopup} data-sim-overlay>
+                <span className={styles.speedPopupValue}>{unlimitedFps ? '\u221E' : targetFps}</span>
+                <div className={styles.speedPopupSliderWrap}>
+                  <input type="range" min={1} max={200} value={targetFps}
+                    disabled={unlimitedFps} onChange={e => setTargetFps(Number(e.target.value))} />
+                </div>
+                <label className={styles.transportCheck} title="Unlimited (render as fast as possible)">
+                  <input type="checkbox" checked={unlimitedFps} onChange={e => setUnlimitedFps(e.target.checked)} />&infin;
+                </label>
+              </div>
+            )}
           </div>
           <div className={styles.transportDivider} />
 
@@ -9725,14 +9849,25 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
           )}
           <div className={styles.transportDivider} />
 
-          {/* Gens/frame (right side) */}
-          <div className={styles.transportSpeed}>
-            <span className={styles.transportSpeedLabel}>G/F {unlimitedGens ? '\u221E' : gensPerFrame}</span>
-            <input className={styles.transportSlider} type="range" min={1} max={200} value={gensPerFrame}
-              disabled={unlimitedGens} onChange={e => setGensPerFrame(Number(e.target.value))} />
-            <label className={styles.transportCheck}>
-              <input type="checkbox" checked={unlimitedGens} onChange={e => setUnlimitedGens(e.target.checked)} />&infin;
-            </label>
+          {/* Gens/frame (right side) \u2014 compact readout, click for the popover. */}
+          <div className={styles.transportSpeed} ref={speedPopup === 'gpf' ? speedPopupWrapRef : undefined} data-sim-overlay>
+            <button
+              className={`${styles.transportBtn} ${speedPopup === 'gpf' ? styles.zoomBtnActive : ''}`}
+              onClick={() => setSpeedPopup(p => (p === 'gpf' ? null : 'gpf'))}
+              title="Generations simulated per displayed frame \u2014 click to adjust"
+            >G/F {unlimitedGens ? '\u221E' : gensPerFrame}</button>
+            {speedPopup === 'gpf' && (
+              <div className={styles.speedPopup} data-sim-overlay>
+                <span className={styles.speedPopupValue}>{unlimitedGens ? '\u221E' : gensPerFrame}</span>
+                <div className={styles.speedPopupSliderWrap}>
+                  <input type="range" min={1} max={200} value={gensPerFrame}
+                    disabled={unlimitedGens} onChange={e => setGensPerFrame(Number(e.target.value))} />
+                </div>
+                <label className={styles.transportCheck} title="Unlimited (simulate without displaying)">
+                  <input type="checkbox" checked={unlimitedGens} onChange={e => setUnlimitedGens(e.target.checked)} />&infin;
+                </label>
+              </div>
+            )}
           </div>
         </div>
 
@@ -9762,6 +9897,13 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
             onClick={() => { setShowGridlines(v => !v); draw(); }}
             title="Toggle gridlines"
           >#</button>
+          {!is3D && (
+            <button
+              className={`${styles.zoomBtn} ${show2dAxes ? styles.zoomBtnActive : ''}`}
+              onClick={() => { setShow2dAxes(v => !v); draw(); }}
+              title="Toggle axes — marks the grid origin (cell 0,0) and the row/column growth directions (columns red → right, rows green → down)"
+            >&#x22BE;</button>
+          )}
           <button
             className={`${styles.zoomBtn} ${infinityCanvas ? styles.zoomBtnActive : ''}`}
             onClick={() => { setInfinityCanvas(v => !v); }}

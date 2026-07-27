@@ -778,6 +778,46 @@ export function GraphEditorInner() {
   const currentScopeRef = useRef(currentScope);
   useEffect(() => { currentScopeRef.current = currentScope; }, [currentScope]);
 
+  // --- Browser "back" exits the macro view instead of leaving the site ---
+  // One same-document pushState entry per macro level currently entered,
+  // RECONCILED from currentScope: entering a level pushes, a UI exit
+  // (breadcrumb / Undo Macro / graph swap) consumes our entries via ONE
+  // history.go(), and a user back (mouse back button / Alt+Left / gesture)
+  // pops exactly one level. suppressPopRef counts pending history.go() calls
+  // WE issued so their popstate can't double-exit. At root the handler
+  // no-ops, so normal browser history behaviour applies. Entries orphaned by
+  // an unmount mid-macro (Modeler→Simulator tab switch) are harmless: a later
+  // back over a same-document state entry the app ignores changes nothing
+  // visible, and a remount re-pushes fresh entries for the restored scope.
+  const historyDepthRef = useRef(0);
+  const suppressPopRef = useRef(0);
+  useEffect(() => {
+    const desired = currentScope.length - 1;
+    const have = historyDepthRef.current;
+    if (desired > have) {
+      for (let i = have; i < desired; i++) window.history.pushState({ gcaMacroDepth: i + 1 }, '');
+      historyDepthRef.current = desired;
+    } else if (desired < have) {
+      suppressPopRef.current++;
+      historyDepthRef.current = desired;
+      window.history.go(desired - have);
+    }
+  }, [currentScope]);
+  useEffect(() => {
+    const onPop = () => {
+      if (suppressPopRef.current > 0) { suppressPopRef.current--; return; }
+      if (currentScopeRef.current.length > 1) {
+        // The browser already consumed one of our entries — mirror it in the
+        // depth counter BEFORE the scope change so the reconcile effect sees
+        // desired === have and doesn't issue a redundant history.go().
+        historyDepthRef.current = Math.max(0, historyDepthRef.current - 1);
+        setCurrentScope(prev => (prev.length > 1 ? prev.slice(0, -1) : prev));
+      }
+    };
+    window.addEventListener('popstate', onPop);
+    return () => window.removeEventListener('popstate', onPop);
+  }, []);
+
   const scheduleSync = useCallback(() => {
     if (syncTimer.current) clearTimeout(syncTimer.current);
     syncTimer.current = setTimeout(() => {

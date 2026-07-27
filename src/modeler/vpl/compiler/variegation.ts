@@ -357,6 +357,12 @@ export interface TableFillPolicy {
   /** integer/tag: the count of distinct NON-ZERO values (entries drawn
    *  uniformly from 1..valueCount). tag ⇒ tagOptions.length − 1. */
   valueCount: number;
+  /** integer/tag: the LOWER bound of the value draw — entries are drawn
+   *  uniformly from [intMin, valueCount] (valueCount doubles as the raw upper
+   *  bound; tag: both are option indices). Absent ⇒ the historical lower bound
+   *  1 — byte-identical draws (same single `next()` per rolled entry, same
+   *  mapping formula). */
+  intMin?: number;
   /** float only: rolled entries are drawn uniform in [rangeMin, rangeMax)
    *  instead of the historical (0,1). Either absent ⇒ the exact old draw
    *  (byte-identical — one `next()` per rolled entry either way). Signed
@@ -371,7 +377,8 @@ export interface TableFillPolicy {
  *  draw per entry plus one value draw per non-zero entry, so the output is a
  *  pure function of (seed, density, total, policy) on any machine.
  *  `density` = P(entry ≠ 0); values: bool → 1, integer/tag → uniform over
- *  1..valueCount, float → uniform (0,1). */
+ *  [intMin, valueCount] (intMin absent ⇒ 1), float → uniform (0,1) or the
+ *  declared [rangeMin, rangeMax). */
 export function randomFillTableData(
   total: number,
   seed: number,
@@ -387,7 +394,15 @@ export function randomFillTableData(
   };
   const d = Math.min(1, Math.max(0, density));
   const vt = policy.valueType || 'float';
-  const count = Math.max(1, Math.floor(policy.valueCount) || 1);
+  const countRaw = Math.floor(policy.valueCount) || 1;
+  const count = Math.max(1, countRaw);
+  // Integer/tag lower bound (intMin): draw uniform over [intMin, countRaw].
+  // Absent ⇒ im 1 / span count ⇒ `1 + floor(next()*count)` — bit-identical to
+  // the historical draw. With a min, countRaw is used UNclamped so negative
+  // ranges (e.g. −5..−2) work; a degenerate min > max collapses to min.
+  const hasIntMin = Number.isFinite(policy.intMin as number);
+  const im = hasIntMin ? Math.floor(policy.intMin as number) : 1;
+  const ispan = hasIntMin ? Math.max(1, countRaw - im + 1) : count;
   // Float range (rangeMin/rangeMax): map the single per-entry value draw onto
   // [lo, hi). Both absent ⇒ lo 0 / span 1 ⇒ `u*1+0 === u` — bit-identical to
   // the historical bare `next()` draw, so old rolls reproduce exactly.
@@ -399,7 +414,7 @@ export function randomFillTableData(
     if (next() < d) {
       if (vt === 'bool') { next(); out[i] = 1; }
       else if (vt === 'float') out[i] = next() * span + lo;
-      else out[i] = 1 + Math.floor(next() * count);
+      else out[i] = im + Math.floor(next() * ispan);
     } else out[i] = 0;
   }
   return out;

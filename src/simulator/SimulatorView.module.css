@@ -599,23 +599,55 @@
 }
 
 .transportSpeed {
+  position: relative; /* anchors the .speedPopup popover */
   display: flex;
   align-items: center;
   gap: var(--space-2);
 }
 
-.transportSpeedLabel {
-  font-size: var(--font-2xs);
-  color: var(--color-text-muted);
-  white-space: nowrap;
-  min-width: 36px;
+/* Popup vertical slider for FPS / Gens-per-Frame — opens above the compact
+   transport readout button; dismissed by outside pointerdown / Escape. */
+.speedPopup {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 8px 6px;
+  background: var(--color-bg-panel);
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45);
+  z-index: 40;
 }
 
-.transportSlider {
-  width: 60px;
+.speedPopupValue {
+  font-size: var(--font-2xs);
+  color: var(--color-text-primary);
+  font-variant-numeric: tabular-nums;
+}
+
+/* The vertical slider = a horizontal range rotated -90° inside a fixed-size
+   wrap (robust everywhere, unlike writing-mode/orient support). Rotated -90°
+   the range's min lands at the BOTTOM. */
+.speedPopupSliderWrap {
+  position: relative;
+  width: 26px;
+  height: 120px;
+}
+
+.speedPopupSliderWrap input {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 120px;
+  margin: 0;
+  transform: translate(-50%, -50%) rotate(-90deg);
   accent-color: var(--color-accent);
   cursor: pointer;
-  height: 12px;
 }
 
 .transportCheck {

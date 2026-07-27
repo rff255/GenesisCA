@@ -504,7 +504,10 @@ export function HelpView() {
             structure), so re-roll it to grow an entirely different form. For Decimal-valued
             tables the roll also takes a <strong>Min / Max range</strong> &mdash; signed
             ranges like &minus;1&hellip;1 make attraction/repulsion matrices (the{' '}
-            <strong>Particle Life</strong> samples&rsquo; rules matrix).
+            <strong>Particle Life</strong> samples&rsquo; rules matrix). Integer- and
+            Tag-valued tables likewise take a <strong>Min</strong> (and Integer a{' '}
+            <strong>Max</strong>): rolled entries draw uniformly from Min&hellip;Max
+            (Tag: Min is the lowest option <em>index</em> a rolled entry may take).
           </p>
           <p className={styles.p}>
             Decimal-valued tables open in a <strong>Matrix view</strong> built for play:
@@ -769,6 +772,9 @@ export function HelpView() {
             areas. Reroutes are purely cosmetic: they have <strong>no effect</strong> on
             the simulation &mdash; a wire through a reroute behaves exactly like a direct
             connection. Deleting a reroute removes it and all of its links.
+            <strong> Right-click a reroute &rarr; Rename</strong> to give it a small label
+            (shown above the dot) &mdash; handy for keeping a web of reroutes readable;
+            clearing the name removes the label.
           </p>
 
           <h3 className={styles.h3}>Inline Port Widgets</h3>
@@ -874,7 +880,7 @@ export function HelpView() {
           <table className={styles.table}>
             <thead><tr><th>Node</th><th>Description</th></tr></thead>
             <tbody>
-              <tr><td>Arithmetic Operator (Math)</td><td>+, -, *, /, %, sqrt, pow, abs, max, min, mean, exp, log (natural), sin, cos, tan, tanh.</td></tr>
+              <tr><td>Arithmetic Operator (Math)</td><td>+, -, *, /, %, sqrt, pow, abs, floor, ceil, round, max, min, mean, exp, log (natural), sin, cos, tan, tanh. Round is floor(x + 0.5) on every compile target (identical results on JS / WASM / WebGPU).</td></tr>
               <tr><td>Expression</td><td>Type a math <strong>formula</strong> in a text field instead of wiring up many Math nodes &mdash; ideal for equation-heavy models. Operators <code>+ - * / % ^</code> and functions <code>sqrt abs floor ceil round min max pow mod exp log sin cos tan tanh</code> (<code>log</code> = natural log), plus the constants <code>pi</code> and <code>e</code>. Variables come from the input ports: add 1&ndash;8 ports with the <strong>+</strong> / <strong>&minus;</strong> buttons, give each a name, then reference those names in the formula (e.g. <em>u + Du*lap - u*v*v</em>). Compiles on all three targets (JS, WASM, WebGPU).</td></tr>
               <tr><td>Proportion Map</td><td>Remap a value from one range to another: <em>output = outMin + curve(t) * (outMax - outMin)</em> with <em>t = (x - inMin) / (inMax - inMin)</em>. Has 5 inputs (X, In Min, In Max, Out Min, Out Max) plus a <strong>curve</strong> dropdown: Linear, Smoothstep, Ease-In Quadratic, Ease-Out Quadratic, Exponential, Logarithmic. Linear keeps un-clamped extrapolation; non-linear curves clamp t to [0, 1].</td></tr>
               <tr><td>Interpolate</td><td>Linear interpolation: output = min + t * (max - min). Inputs: T (0&ndash;1), Min, Max.</td></tr>
@@ -962,7 +968,9 @@ export function HelpView() {
             Double-click a Macro node to enter its subgraph. You&apos;ll see teal
             <strong> Macro Input</strong> and <strong>Macro Output</strong> boundary
             nodes. Add, remove, or rename ports on these to modify the macro&apos;s
-            external interface. Use the breadcrumb bar at the top to navigate back.
+            external interface. Use the breadcrumb bar at the top to navigate back &mdash;
+            or press the browser/mouse <strong>Back</strong> button: while inside a macro
+            it steps one macro level up instead of leaving GenesisCA.
           </p>
 
           <h3 className={styles.h3}>Linked vs Independent Copies</h3>
@@ -1642,6 +1650,10 @@ export function HelpView() {
               separate from the sprite&rsquo;s per-sprite <em>Orient to velocity</em> option.</li>
             <li><strong>Set scale</strong> &mdash; a per-agent size multiplier (overrides the
               sprite&rsquo;s default size &times;).</li>
+            <li><strong>Set alpha</strong> &mdash; the agent colour&rsquo;s alpha byte (0&ndash;255);
+              the sprite blit is multiplied by it, so this fades or hides the sprite per agent.
+              It is the same alpha a colour pass writes &mdash; an Agent Output Mapping that sets
+              the agent colour afterwards overrides it.</li>
           </ul>
           <p className={styles.p}>
             <strong>Which agent?</strong> Leave the node&rsquo;s <strong>Agent</strong> input
@@ -1897,7 +1909,9 @@ export function HelpView() {
           <h3 className={styles.h3}>Layout</h3>
           <p className={styles.p}>
             The simulator has a <strong>bottom transport bar</strong> with playback
-            controls (Play/Pause/Step/Reset) and speed sliders (Target FPS, Gens/Frame),
+            controls (Play/Pause/Step/Reset) and compact speed readouts (Target FPS,
+            Gens/Frame) &mdash; click one to open a vertical slider popover (Esc or an
+            outside click closes it; the &infin; checkbox keeps its meaning),
             a <strong>top viewer bar</strong> for switching between visualization
             mappings, a collapsible <strong>left panel</strong> for settings (actions,
             grid dimensions, model attributes), and a collapsible <strong>right
@@ -1922,9 +1936,16 @@ export function HelpView() {
               dimensions adapt to the active brush shape: Rectangle = width (horizontal) / height
               (vertical); Circle = radius; Ring = radius (horizontal) / band width (vertical);
               Line = thickness.</li>
-            <li><strong>Zoom buttons</strong> (+/&minus;/fit/gridlines/infinity) &mdash; Bottom-left of the canvas.
+            <li><strong>Zoom buttons</strong> (+/&minus;/fit/gridlines/axes/infinity) &mdash; Bottom-left of the canvas.
               The <strong>&infin;</strong> button (only enabled on torus-boundary models) tiles the grid
-              across the viewport so you can pan endlessly across the wrap seams; the brush wraps with it.</li>
+              across the viewport so you can pan endlessly across the wrap seams; the brush wraps with it.
+              The <strong>axes</strong> toggle (2D) marks the grid origin (cell 0,0) with the row/column
+              growth directions &mdash; columns red toward the right, rows green toward the bottom &mdash;
+              matching the 3D view&rsquo;s axis colours.</li>
+            <li><strong>Compile-target chip</strong> &mdash; the top-left stats overlay shows which
+              compile target is running (<code>&#x2699; WASM</code>, <code>WebGPU</code>, <code>JS</code>,
+              plus <code>agents &hellip;</code> for agent models). If the selected WebGPU target fails to
+              initialise on the device, the chip turns amber (<code>WebGPU&#x2717;</code>).</li>
             <li><strong>Hover coordinates</strong> &mdash; the top-left stats overlay shows the
               cell currently under the cursor as <code>Cell (col, row)</code>. When the brush
               is larger than 1&times;1, the chip switches to{' '}
