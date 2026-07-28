@@ -752,6 +752,13 @@ const subscribeHoverCellInfo = (l: () => void): (() => void) => {
   return () => { hoverCellInfoListeners.delete(l); };
 };
 const getHoverCellInfoSnap = (): HoverCellInfo => hoverCellInfoVal;
+
+/** Width of the per-preset "…" actions menu (px) — must match `.presetMenu`
+ *  in SimulatorView.module.css; used to right-align it on its trigger. */
+const PRESET_MENU_W = 232;
+/** Approximate height of the same menu (5 items + padding) — only used to
+ *  decide whether to drop it below or above its trigger. */
+const PRESET_MENU_H = 152;
 const HoverCoordsChip = memo(function HoverCoordsChip() {
   const info = useSyncExternalStore(subscribeHoverCellInfo, getHoverCellInfoSnap);
   if (!info) return null;
@@ -1568,6 +1575,31 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
   // so the deferred onConfirm doesn't need to recapture it through a closure.
   const [presetToDelete, setPresetToDelete] = useState<Preset | null>(null);
   const [presetToOverwrite, setPresetToOverwrite] = useState<Preset | null>(null);
+  // Rename dialog target — reuses PresetSaveDialog in its metadata-only
+  // (hideGridOption) mode; confirming dispatches updatePreset({name, description})
+  // WITHOUT touching the preset's embedded state.
+  const [presetToRename, setPresetToRename] = useState<Preset | null>(null);
+  // Per-row "…" actions menu (Overwrite / Rename / Duplicate / Export / Delete).
+  // One open at a time; `x`/`y` are viewport coords measured from the trigger
+  // (the menu renders position:fixed so the scrolling panel can't clip it).
+  const [presetMenu, setPresetMenu] = useState<{ id: string; x: number; y: number } | null>(null);
+  const presetMenuRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!presetMenu) return;
+    const onDown = (e: PointerEvent) => {
+      const t = e.target as globalThis.Node;
+      if (presetMenuRef.current && !presetMenuRef.current.contains(t)) setPresetMenu(null);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') { e.stopPropagation(); setPresetMenu(null); }
+    };
+    document.addEventListener('pointerdown', onDown, true);
+    document.addEventListener('keydown', onKey, true);
+    return () => {
+      document.removeEventListener('pointerdown', onDown, true);
+      document.removeEventListener('keydown', onKey, true);
+    };
+  }, [presetMenu]);
 
   // Clipboard for Ctrl+C / Ctrl+V / Ctrl+X (cell-attribute region copy). The
   // region is always read as a rectangle (the brush footprint's bounding box),
@@ -9797,15 +9829,60 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
                   {p.name}{hasGrid ? ' \u25C9' : ''}
                 </span>
                 <button className={styles.controlButton} style={{ padding: '2px 8px', flex: 'none' }} onClick={() => handleLoadPreset(p)}>Load</button>
-                <button className={styles.controlButton} style={{ padding: '2px 6px', flex: 'none' }} title="Overwrite preset with current state" onClick={() => handleOverwritePreset(p)}>&#x1F4BE;</button>
-                <button className={styles.controlButton} style={{ padding: '2px 6px', flex: 'none' }} title="Duplicate preset" onClick={() => duplicatePreset(p.id)}>&#x29C9;</button>
-                <button className={styles.controlButton} style={{ padding: '2px 6px', flex: 'none' }} title="Export preset (.gcapreset)" onClick={() => handleExportPreset(p)}>&#x2913;</button>
-                <button className={styles.controlButton} style={{ padding: '2px 6px', flex: 'none' }} title="Delete preset" onClick={() => handleDeletePreset(p)}>&times;</button>
+                {/* The per-row actions (overwrite / rename / duplicate / export / delete)
+                    live behind this "…" menu — five inline icon buttons crowded the row. */}
+                <button
+                  className={styles.controlButton}
+                  style={{ padding: '2px 6px', flex: 'none' }}
+                  data-sim-overlay
+                  title="More preset actions"
+                  onClick={e => {
+                    const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                    // Drop below the trigger, flipping above when the (5-item)
+                    // menu wouldn't fit under it.
+                    const vh = window.innerHeight || 0;
+                    const below = r.bottom + 4;
+                    const y = vh > 0 && below + PRESET_MENU_H > vh - 8
+                      ? Math.max(8, r.top - 4 - PRESET_MENU_H)
+                      : below;
+                    setPresetMenu(cur => cur?.id === p.id ? null : { id: p.id, x: r.right, y });
+                  }}
+                >&hellip;</button>
                 <button className={styles.dragHandle} title="Drag to reorder" onPointerDown={presetReorder.startDrag(p.id)} onClick={e => e.stopPropagation()}>&#x22EE;&#x22EE;</button>
               </div>
             );
           })}
           </div>
+          {/* The one open "…" preset menu. position:fixed (measured from the
+              trigger) so the scrolling panel body can't clip it; dismissed by a
+              capture-phase outside pointerdown or Escape (see the presetMenu effect). */}
+          {presetMenu && (() => {
+            const p = (model.presets || []).find(x => x.id === presetMenu.id);
+            if (!p) return null;
+            const close = () => setPresetMenu(null);
+            const item = (label: string, title: string, onClick: () => void, danger = false) => (
+              <button
+                className={`${styles.presetMenuItem} ${danger ? styles.presetMenuItemDanger : ''}`}
+                data-sim-overlay
+                title={title}
+                onClick={() => { close(); onClick(); }}
+              >{label}</button>
+            );
+            return (
+              <div
+                ref={presetMenuRef}
+                className={styles.presetMenu}
+                data-sim-overlay
+                style={{ left: Math.max(8, presetMenu.x - PRESET_MENU_W), top: presetMenu.y }}
+              >
+                {item('\u{1F4BE}  Overwrite with current state', 'Replace this preset with the current simulation state', () => handleOverwritePreset(p))}
+                {item('✎  Rename…', 'Edit this preset’s name and description', () => setPresetToRename(p))}
+                {item('⧉  Duplicate', 'Add a copy of this preset', () => duplicatePreset(p.id))}
+                {item('⤓  Export (.gcapreset)', 'Download this preset as a .gcapreset file', () => handleExportPreset(p))}
+                {item('✕  Delete', 'Remove this preset from the model', () => handleDeletePreset(p), true)}
+              </div>
+            );
+          })()}
           <button className={styles.controlButton} onClick={() => setPresetDialogOpen(true)}>
             + Save Current as Preset&hellip;
           </button>
@@ -11479,6 +11556,22 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
             doOverwritePreset(target, name, description, includeGrid);
           }}
           onCancel={() => setPresetOverwriteTarget(null)}
+        />
+      )}
+      {presetToRename && (
+        <PresetSaveDialog
+          title={`Rename Preset "${presetToRename.name}"`}
+          confirmLabel="Rename"
+          initialName={presetToRename.name}
+          initialDescription={presetToRename.description ?? ''}
+          hideGridOption
+          onConfirm={(name, description) => {
+            const id = presetToRename.id;
+            setPresetToRename(null);
+            // Metadata only — the preset's embedded state is untouched.
+            updatePreset(id, { name, description });
+          }}
+          onCancel={() => setPresetToRename(null)}
         />
       )}
       {presetToDelete && (

@@ -8,9 +8,13 @@ interface Props {
   initialDescription?: string;
   title?: string;
   confirmLabel?: string;
+  /** RENAME mode: hide the "include cell grid state" checkbox. The dialog then
+   *  edits metadata only (name + description) and never captures sim state —
+   *  `includeGrid` is reported as false. */
+  hideGridOption?: boolean;
 }
 
-export function PresetSaveDialog({ onConfirm, onCancel, initialName = '', initialDescription = '', title = 'Save Current as Preset', confirmLabel = 'Save Preset' }: Props) {
+export function PresetSaveDialog({ onConfirm, onCancel, initialName = '', initialDescription = '', title = 'Save Current as Preset', confirmLabel = 'Save Preset', hideGridOption = false }: Props) {
   const [name, setName] = useState(initialName);
   const [description, setDescription] = useState(initialDescription);
   const [includeGrid, setIncludeGrid] = useState(false);
@@ -60,7 +64,7 @@ export function PresetSaveDialog({ onConfirm, onCancel, initialName = '', initia
               }}
             />
           </div>
-          <label className={styles.row}>
+          {!hideGridOption && <label className={styles.row}>
             <input type="checkbox" checked={includeGrid}
               onChange={e => setIncludeGrid(e.target.checked)} />
             <div>
@@ -70,7 +74,7 @@ export function PresetSaveDialog({ onConfirm, onCancel, initialName = '', initia
                 for parameter-only presets that work with any starting grid.
               </div>
             </div>
-          </label>
+          </label>}
         </div>
         <div className={styles.actions}>
           <button className={styles.btnSecondary} onClick={onCancel}>Cancel</button>
