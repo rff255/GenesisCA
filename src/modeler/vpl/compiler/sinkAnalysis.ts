@@ -44,6 +44,24 @@ export type ScopeKind =
  *  child scope. Adding a new transparent flow type? Add it here. */
 const TRANSPARENT_FLOW_TYPES = new Set(['sequence']);
 
+const RNG_TYPES = new Set<string>(['getRandom', 'pickRandomNeighbor', 'pickNRandomNeighbors', 'pickRandomAgent', 'pickNRandomAgents']);
+
+/** True for a value node that ADVANCES the shared RNG stream — i.e. one whose
+ *  evaluation is a side effect, not a pure read. Two consumers, and they must
+ *  agree or the two rules below disagree about the same node:
+ *   - `isLoopPinned` (below): never hoist such a value out of a loop body, or
+ *     every iteration reuses one draw.
+ *   - the JS compiler's agent-behaviour flow-order seeding: never hoist such a
+ *     value ABOVE the flow node that consumes it, or the draw lands at a
+ *     different point in the stream than the WASM/WebGPU agent compilers put it
+ *     (they emit at the use site), breaking JS↔WASM bit-parity. */
+export function isRngNode(node: GraphNode): boolean {
+  const t = node.data.nodeType;
+  return RNG_TYPES.has(t)
+    || (t === 'groupOperator' && (node.data.config.operation === 'random' || node.data.config.operation === 'weightedRandom'))
+    || (t === 'aggregate' && node.data.config.operation === 'random');
+}
+
 export interface SinkAnalysisInput {
   /** Graph nodes — flat, post-macro-expansion. */
   nodes: GraphNode[];
@@ -456,7 +474,6 @@ export function analyzeSinkScopes(input: SinkAnalysisInput): SinkAnalysisResult 
    *  iteration reuses the same draw (the Agent Init Event spawn-with-random bug).
    *  Computed as a backward closure over the value DAG (self OR any value-input
    *  source is RNG). getVariable mutability is handled separately by volatileHoist. */
-  const RNG_TYPES = new Set<string>(['getRandom', 'pickRandomNeighbor', 'pickNRandomNeighbors', 'pickRandomAgent', 'pickNRandomAgents']);
   const loopPinnedMemo = new Map<string, boolean>();
   function isLoopPinned(nodeId: string): boolean {
     const cached = loopPinnedMemo.get(nodeId);
@@ -464,10 +481,7 @@ export function analyzeSinkScopes(input: SinkAnalysisInput): SinkAnalysisResult 
     loopPinnedMemo.set(nodeId, false); // cycle guard
     const node = adj.nodeMap.get(nodeId);
     if (!node) return false;
-    const t = node.data.nodeType;
-    let pinned = RNG_TYPES.has(t)
-      || (t === 'groupOperator' && (node.data.config.operation === 'random' || node.data.config.operation === 'weightedRandom'))
-      || (t === 'aggregate' && node.data.config.operation === 'random');
+    let pinned = isRngNode(node);
     if (!pinned) {
       for (const [key, source] of adj.inputToSource) {
         if (!key.startsWith(`${nodeId}:`)) continue;

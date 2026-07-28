@@ -9,7 +9,7 @@ import { safeId } from './identifierSafe';
 import { detectFusableConsumers, type FusionResult } from './fusion';
 import { getInlineValue } from './inlinePort';
 import { INVALID_NI, packNI, packNI3, NI_ARRAY_PRODUCERS } from './niCodec';
-import { analyzeSinkScopes, CELL_TOP, type ScopeId } from './sinkAnalysis';
+import { analyzeSinkScopes, isRngNode, CELL_TOP, type ScopeId } from './sinkAnalysis';
 import { canonicalizeAccessorEdges } from './accessorCSE';
 import { injectLinkedOutputMappings } from './linkedOutputMappings';
 import { injectAgentLinkedOutputMappings } from './agentLinkedOutputMappings';
@@ -517,7 +517,28 @@ function compileRoot(
     nodeMap, inputToSource, inputToSources, flowOutputToTargets,
     rootNodeId: rootNode.id, rootFlowPortId: rootFlowPort, isAsync: hazardEligible,
   });
-  const volatileValues = computeVolatileValueClosure(graphNodes, inputToSource, inputToSources, hazardReads);
+  // RNG DRAW ORDER — agent behaviour only. Evaluating an RNG node is a SIDE
+  // EFFECT (it advances the shared `_rs` stream), so WHERE it is emitted decides
+  // where the draw lands in that stream. The agent WASM/WebGPU compilers emit a
+  // draw at its flow USE SITE; JS sink analysis would hoist one whose uses all
+  // sit at agent-loop top into the pre-flow value block, ordered topologically.
+  // A graph with a draw inside a branch and another after it therefore advanced
+  // the stream in a DIFFERENT ORDER per target and every downstream decision
+  // diverged (each target individually correct — only JS↔WASM bit-parity broke).
+  // Seeding the RNG nodes into the volatile set routes them through
+  // volatileHoist ("emit at the LCA flow scope, immediately before the consuming
+  // flow node") = flow order, matching the other targets by construction.
+  // Scoped to `behaviourStep`: it is the ONLY root the WASM/WebGPU agent
+  // compilers emit (init / division / agent output mappings are JS-on-CPU on
+  // every target, so they cannot diverge), and the CELL grid is already in
+  // lockstep because its WASM/WebGPU compilers consume this same sink analysis.
+  const rngSeeds: string[] = [];
+  if (rootNode.data.nodeType === 'behaviourStep') {
+    for (const n of graphNodes) if (isRngNode(n)) rngSeeds.push(n.id);
+  }
+  const volatileValues = computeVolatileValueClosure(
+    graphNodes, inputToSource, inputToSources, [...hazardReads, ...rngSeeds],
+  );
   const volatileHoist = computeVolatileHoist({
     nodeMap,
     inputToSource,
@@ -543,10 +564,23 @@ function compileRoot(
 
   function routeValueEmit(nodeId: string, code: string): void {
     if ((forceVolatileCurrentScope || volatileValues.has(nodeId)) && volatileEmitTarget) {
-      // Inline emit at the current flow-walk position. flowLines (or a
-      // branch's accumulator) gets the line right where we are.
-      volatileEmitTarget.push(volatileEmitIndent + code.trimEnd());
-      return;
+      // A NON-volatile value dragged in by a force-emit whose own sink scope is
+      // CELL_TOP is SHARED — its uses span sibling branches (or sit above them),
+      // so pinning it at the current flow position declares it inside ONE branch
+      // and every sibling reference is out of scope (`_v… is not defined`). It is
+      // pure, so cell-top is always a valid dominating home, and `valueLines` is
+      // assembled ABOVE flowLines — safe to push to mid-walk. Branch-scoped
+      // inputs (the canonical case: a getRandom reachable only through volatile
+      // arithmetic) keep the current position: their sink buffer was already
+      // flushed at branch entry, and their single use is right here.
+      const ownScope = sinkAnalysis.emitScope.get(nodeId);
+      const shared = forceVolatileCurrentScope && !volatileValues.has(nodeId) && ownScope === CELL_TOP;
+      if (!shared) {
+        // Inline emit at the current flow-walk position. flowLines (or a
+        // branch's accumulator) gets the line right where we are.
+        volatileEmitTarget.push(volatileEmitIndent + code.trimEnd());
+        return;
+      }
     }
     let scope = sinkAnalysis.emitScope.get(nodeId) ?? CELL_TOP;
     // Agent field reads are a STEP-START SNAPSHOT on every target (D-FIELD

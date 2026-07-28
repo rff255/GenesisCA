@@ -411,6 +411,191 @@ function buildDiamondModel() {
   };
 }
 
+// Synthetic: RNG DRAW ORDER across a branch. One getRandom is consumed INSIDE a
+// conditional branch; a second + third are consumed by flow nodes AFTER the
+// conditional. The JS agent compiler used to hoist a draw whose sink scope is
+// agent-loop top into the pre-flow value block (topo order) while the WASM agent
+// compiler emits at the flow use site — so the two advanced the shared `_rs`
+// stream in a DIFFERENT ORDER and every downstream decision diverged. Each draw
+// lands in an agent attribute, so any reordering shows up as a mismatch.
+function buildRngOrderModel() {
+  const used = new Set();
+  const nid = (p) => { let id; do { id = p + Math.random().toString(36).slice(2, 8); } while (used.has(id)); used.add(id); return id; };
+  const aN = [], aEd = [];
+  const an = (t, c) => { const n = { id: nid('a'), type: 'caNode', position: { x: 0, y: 0 }, data: { nodeType: t, config: c } }; aN.push(n); return n; };
+  const aE = (s, sp, tt, tp, cat) => aEd.push({ id: nid('e'), source: s.id, target: tt.id, sourceHandle: `output_${cat}_${sp}`, targetHandle: `input_${cat}_${tp}` });
+  const bs = an('behaviourStep', {});
+  const gca = an('getCellAttribute', { attributeId: 'sel' });
+  const cmp = an('statement', { compareType: 'numerical', operation: '>=', _port_y: '0' });
+  aE(gca, 'value', cmp, 'x', 'value');
+  const cond = an('conditional', {});
+  aE(bs, 'do', cond, 'check', 'flow');
+  aE(cmp, 'result', cond, 'condition', 'value');
+  // Branch-local draw.
+  const rndIn = an('getRandom', { randomType: 'float', min: '0', max: '1' });
+  const setIn = an('setAttribute', { attributeId: 'inBranch' });
+  aE(rndIn, 'value', setIn, 'value', 'value');
+  aE(cond, 'then', setIn, 'do', 'flow');
+  // Draw consumed AFTER the conditional (a top-level flow node => sink = loop top).
+  const rndAfter = an('getRandom', { randomType: 'float', min: '0', max: '1' });
+  const setAfter = an('setAttribute', { attributeId: 'afterBranch' });
+  aE(rndAfter, 'value', setAfter, 'value', 'value');
+  aE(cond, 'next', setAfter, 'do', 'flow');
+  // A third draw, also after, so the post-branch ORDER of two draws is pinned too.
+  const rndAfter2 = an('getRandom', { randomType: 'integer', min: '-1', max: '1' });
+  const setAfter2 = an('setAttribute', { attributeId: 'sel' });
+  aE(rndAfter2, 'value', setAfter2, 'value', 'value');
+  aE(setAfter, 'next', setAfter2, 'do', 'flow');
+  return {
+    schemaVersion: 1,
+    properties: { name: 'RNG Order Parity Test', dimension: '2d', gridWidth: 24, gridHeight: 24, topology: '2d-grid', boundaryTreatment: 'torus', useWasm: false, useWebGPU: false },
+    topologyMode: { gridCells: false, agents: true },
+    centerBased: { enabled: true, maxAgents: 100, maxBonds: 0, worldWidth: 24, worldHeight: 24, seedCount: 40, seedPattern: 'scatter', defaultRadius: 0.5, growthRate: 0, repulsionStiffness: 0, adhesionStiffness: 0, interactionRange: 1.5, drag: 1, timeStep: 0.1, momentum: 0, maxSpeed: 0, neighbourQueryRadius: 8, useBondingPhysics: false, autoBond: false, agentTarget: 'wasm', agentUpdateMode: 'async',
+      agentCapabilities: { motion: 'static', body: true, collision: 'off', bonds: 'off', autoBond: false, growth: false, division: false, lifespan: false, populationBirth: false, populationDeath: false, sensing: false, sensingHeadingSource: 'velocity', orientation: false, fieldCoupling: false, appearance: true } },
+    attributes: [], modelAttributes: [], neighborhoods: [],
+    agentAttributes: [
+      { id: 'sel', name: 'Sel', type: 'float', defaultValue: '0' },
+      { id: 'inBranch', name: 'InBranch', type: 'float', defaultValue: '0' },
+      { id: 'afterBranch', name: 'AfterBranch', type: 'float', defaultValue: '0' },
+    ],
+    variables: [], agentVariables: [], indicators: [], mappings: [],
+    graphNodes: [], graphEdges: [], agentGraphNodes: aN, agentGraphEdges: aEd, macroDefs: [],
+  };
+}
+
+// Synthetic: a value used BOTH inside a branch AND after it (the JS agent
+// compiler used to declare it INSIDE the branch => `_v... is not defined`), plus
+// a getVariable read consumed in BOTH branches whose shared PURE input was
+// dragged into the FIRST branch by the force-emit. Either defect throws at
+// runtime, so simply RUNNING this model is the regression check.
+function buildBranchScopeModel() {
+  const used = new Set();
+  const nid = (p) => { let id; do { id = p + Math.random().toString(36).slice(2, 8); } while (used.has(id)); used.add(id); return id; };
+  const aN = [], aEd = [];
+  const an = (t, c) => { const n = { id: nid('a'), type: 'caNode', position: { x: 0, y: 0 }, data: { nodeType: t, config: c } }; aN.push(n); return n; };
+  const aE = (s, sp, tt, tp, cat) => aEd.push({ id: nid('e'), source: s.id, target: tt.id, sourceHandle: `output_${cat}_${sp}`, targetHandle: `input_${cat}_${tp}` });
+  const bs = an('behaviourStep', {});
+  // --- part 1: a getVariable read used in BOTH branches over a SHARED pure input
+  const rnd = an('getRandom', { randomType: 'float', min: '0', max: '1' });
+  const sv = an('setVariable', { variableId: 'roll' });
+  aE(rnd, 'value', sv, 'value', 'value');
+  aE(bs, 'do', sv, 'do', 'flow');
+  const gv = an('getVariable', { variableId: 'roll' });
+  const shared = an('getRadius', {});                       // PURE, used by both branches
+  const pA = an('expression', { expression: 'a+1', visibleCount: 1 });
+  aE(shared, 'value', pA, 'a', 'value');
+  const pB = an('expression', { expression: 'a+2', visibleCount: 1 });
+  aE(shared, 'value', pB, 'a', 'value');
+  const cmpA = an('statement', { compareType: 'numerical', operation: '<' });
+  aE(gv, 'value', cmpA, 'x', 'value'); aE(pA, 'result', cmpA, 'y', 'value');
+  const cmpB = an('statement', { compareType: 'numerical', operation: '<' });
+  aE(gv, 'value', cmpB, 'x', 'value'); aE(pB, 'result', cmpB, 'y', 'value');
+  const gsel = an('getCellAttribute', { attributeId: 'sel' });
+  const cond = an('conditional', {});
+  aE(gsel, 'value', cond, 'condition', 'value');
+  aE(sv, 'next', cond, 'check', 'flow');
+  // --- part 2: `shownVal` is consumed by a setAttribute INSIDE `then` (the 2nd
+  // statement of the branch, so the branch's own next-chain must be walked) AND
+  // by a node AFTER the conditional.
+  const shownVal = an('valueSwitch', { _port_ifValue: '5', _port_elseValue: '9' });
+  aE(gsel, 'value', shownVal, 'condition', 'value');
+  const firstInThen = an('setAttribute', { attributeId: 'mark', _port_value: '1' });
+  const secondInThen = an('setAttribute', { attributeId: 'sel' });
+  aE(shownVal, 'result', secondInThen, 'value', 'value');
+  aE(cond, 'then', firstInThen, 'do', 'flow');
+  aE(firstInThen, 'next', secondInThen, 'do', 'flow');
+  const inElse = an('setAttribute', { attributeId: 'mark' });
+  aE(cmpB, 'result', inElse, 'value', 'value');
+  aE(cond, 'else', inElse, 'do', 'flow');
+  const afterA = an('setAttribute', { attributeId: 'inBranch' });
+  aE(cmpA, 'result', afterA, 'value', 'value');
+  aE(cond, 'next', afterA, 'do', 'flow');
+  const afterShown = an('setAttribute', { attributeId: 'afterBranch' });
+  aE(shownVal, 'result', afterShown, 'value', 'value');
+  aE(afterA, 'next', afterShown, 'do', 'flow');
+  return {
+    schemaVersion: 1,
+    properties: { name: 'Branch Scope Parity Test', dimension: '2d', gridWidth: 24, gridHeight: 24, topology: '2d-grid', boundaryTreatment: 'torus', useWasm: false, useWebGPU: false },
+    topologyMode: { gridCells: false, agents: true },
+    centerBased: { enabled: true, maxAgents: 100, maxBonds: 0, worldWidth: 24, worldHeight: 24, seedCount: 40, seedPattern: 'scatter', defaultRadius: 0.5, growthRate: 0, repulsionStiffness: 0, adhesionStiffness: 0, interactionRange: 1.5, drag: 1, timeStep: 0.1, momentum: 0, maxSpeed: 0, neighbourQueryRadius: 8, useBondingPhysics: false, autoBond: false, agentTarget: 'wasm', agentUpdateMode: 'async',
+      agentCapabilities: { motion: 'static', body: true, collision: 'off', bonds: 'off', autoBond: false, growth: false, division: false, lifespan: false, populationBirth: false, populationDeath: false, sensing: false, sensingHeadingSource: 'velocity', orientation: false, fieldCoupling: false, appearance: true } },
+    attributes: [], modelAttributes: [], neighborhoods: [],
+    agentAttributes: [
+      { id: 'sel', name: 'Sel', type: 'float', defaultValue: '0' },
+      { id: 'mark', name: 'Mark', type: 'float', defaultValue: '0' },
+      { id: 'inBranch', name: 'InBranch', type: 'float', defaultValue: '0' },
+      { id: 'afterBranch', name: 'AfterBranch', type: 'float', defaultValue: '0' },
+    ],
+    variables: [],
+    agentVariables: [{ id: 'roll', name: 'roll', description: '', kind: 'scalar', dataType: 'float', initialValue: '0' }],
+    indicators: [], mappings: [],
+    graphNodes: [], graphEdges: [], agentGraphNodes: aN, agentGraphEdges: aEd, macroDefs: [],
+  };
+}
+
+// Synthetic: ONE Get Random node, MANY consumers — the "a single draw is shared"
+// invariant. A node's value must be drawn ONCE per agent per step and every
+// consumer must see that same number, no matter where in the flow it is read.
+// The risky shapes are cross-scope: a consumer INSIDE a branch plus one AFTER it
+// (the JS compiler emits at the LCA, above the branch; the WASM/WebGPU agent
+// compilers emit at first use and drop the cache at branch exit — a re-emit
+// there would be a SECOND draw with a different value), and consumers in two
+// SIBLING branches. `top` and `after` must always agree; whichever of
+// `inThen`/`inElse` ran must agree with them too.
+function buildRngSharingModel() {
+  const used = new Set();
+  const nid = (p) => { let id; do { id = p + Math.random().toString(36).slice(2, 8); } while (used.has(id)); used.add(id); return id; };
+  const aN = [], aEd = [];
+  const an = (t, c) => { const n = { id: nid('a'), type: 'caNode', position: { x: 0, y: 0 }, data: { nodeType: t, config: c } }; aN.push(n); return n; };
+  const aE = (s, sp, tt, tp, cat) => aEd.push({ id: nid('e'), source: s.id, target: tt.id, sourceHandle: `output_${cat}_${sp}`, targetHandle: `input_${cat}_${tp}` });
+  const bs = an('behaviourStep', {});
+  const rnd = an('getRandom', { randomType: 'float', min: '0', max: '1' });
+  // (1) consumer at top level, BEFORE the branch
+  const sTop = an('setAttribute', { attributeId: 'top' });
+  aE(rnd, 'value', sTop, 'value', 'value');
+  aE(bs, 'do', sTop, 'do', 'flow');
+  // (2) + (3) consumers in the two SIBLING branches
+  const gsel = an('getCellAttribute', { attributeId: 'sel' });
+  const cmp = an('statement', { compareType: 'numerical', operation: '>=', _port_y: '0' });
+  aE(gsel, 'value', cmp, 'x', 'value');
+  const cond = an('conditional', {});
+  aE(cmp, 'result', cond, 'condition', 'value');
+  aE(sTop, 'next', cond, 'check', 'flow');
+  const sThen = an('setAttribute', { attributeId: 'inThen' });
+  aE(rnd, 'value', sThen, 'value', 'value');
+  aE(cond, 'then', sThen, 'do', 'flow');
+  const sElse = an('setAttribute', { attributeId: 'inElse' });
+  aE(rnd, 'value', sElse, 'value', 'value');
+  aE(cond, 'else', sElse, 'do', 'flow');
+  // (4) consumer AFTER the branch, and (5) one reading it THROUGH an expression
+  const sAfter = an('setAttribute', { attributeId: 'afterB' });
+  aE(rnd, 'value', sAfter, 'value', 'value');
+  aE(cond, 'next', sAfter, 'do', 'flow');
+  const expr = an('expression', { expression: 'a*10', visibleCount: 1 });
+  aE(rnd, 'value', expr, 'a', 'value');
+  const sExpr = an('setAttribute', { attributeId: 'viaExpr' });
+  aE(expr, 'result', sExpr, 'value', 'value');
+  aE(sAfter, 'next', sExpr, 'do', 'flow');
+  return {
+    schemaVersion: 1,
+    properties: { name: 'RNG Sharing Parity Test', dimension: '2d', gridWidth: 24, gridHeight: 24, topology: '2d-grid', boundaryTreatment: 'torus', useWasm: false, useWebGPU: false },
+    topologyMode: { gridCells: false, agents: true },
+    centerBased: { enabled: true, maxAgents: 100, maxBonds: 0, worldWidth: 24, worldHeight: 24, seedCount: 40, seedPattern: 'scatter', defaultRadius: 0.5, growthRate: 0, repulsionStiffness: 0, adhesionStiffness: 0, interactionRange: 1.5, drag: 1, timeStep: 0.1, momentum: 0, maxSpeed: 0, neighbourQueryRadius: 8, useBondingPhysics: false, autoBond: false, agentTarget: 'wasm', agentUpdateMode: 'async',
+      agentCapabilities: { motion: 'static', body: true, collision: 'off', bonds: 'off', autoBond: false, growth: false, division: false, lifespan: false, populationBirth: false, populationDeath: false, sensing: false, sensingHeadingSource: 'velocity', orientation: false, fieldCoupling: false, appearance: true } },
+    attributes: [], modelAttributes: [], neighborhoods: [],
+    agentAttributes: [
+      { id: 'sel', name: 'Sel', type: 'float', defaultValue: '0' },
+      { id: 'top', name: 'Top', type: 'float', defaultValue: '0' },
+      { id: 'inThen', name: 'InThen', type: 'float', defaultValue: '0' },
+      { id: 'inElse', name: 'InElse', type: 'float', defaultValue: '0' },
+      { id: 'afterB', name: 'AfterB', type: 'float', defaultValue: '0' },
+      { id: 'viaExpr', name: 'ViaExpr', type: 'float', defaultValue: '0' },
+    ],
+    variables: [], agentVariables: [], indicators: [], mappings: [],
+    graphNodes: [], graphEdges: [], agentGraphNodes: aN, agentGraphEdges: aEd, macroDefs: [],
+  };
+}
+
 const modelsDir = join(ROOT, 'public', 'models');
 const files = readdirSync(modelsDir).filter(f => f.endsWith('.gcaproj'));
 const SEED = 0x9e3779b1 >>> 0;
@@ -551,8 +736,33 @@ entries.push({ name: '[synthetic] Apply Force To Agents (array broadcast, lowere
 entries.push({ name: '[synthetic] Loop index output (value chain + branch + direct)', raw: buildLoopIndexModel() });
 entries.push({ name: '[synthetic] Curvature + bond currentLength (bonded, hypot↔sqrt)', raw: buildCurvatureModel(), setup: setupCurvatureStores });
 entries.push({ name: '[synthetic] Flow diamond (conditional → shared getRandom chain)', raw: buildDiamondModel() });
+entries.push({ name: '[synthetic] RNG draw order (branch draw + post-branch draws)', raw: buildRngOrderModel() });
+entries.push({ name: '[synthetic] Branch scope (value used inside AND after a branch)', raw: buildBranchScopeModel() });
+entries.push({
+  name: '[synthetic] RNG sharing (one draw, many consumers across scopes)',
+  raw: buildRngSharingModel(),
+  // ONE draw per agent per step, shared by every consumer: the pre-branch read,
+  // the post-branch read and the expression-mediated read must all be the same
+  // number, and whichever branch ran must have seen it too. A second draw
+  // anywhere (e.g. a branch-exit cache drop re-emitting the node) shows up here
+  // even if BOTH targets did it identically, which parity could not catch.
+  invariant: (st) => {
+    for (let i = 0; i < st.highWater; i++) {
+      if (!st.alive[i]) continue;
+      const top = st.attrRead.top[i], after = st.attrRead.afterB[i];
+      const viaExpr = st.attrRead.viaExpr[i];
+      const sel = st.attrRead.sel[i];
+      const branch = sel >= 0 ? st.attrRead.inThen[i] : st.attrRead.inElse[i];
+      if (top !== after) return `agent ${i}: top ${top} !== afterBranch ${after}`;
+      if (top !== branch) return `agent ${i}: top ${top} !== in-branch ${branch}`;
+      if (Math.abs(viaExpr - top * 10) > 1e-12) return `agent ${i}: viaExpr ${viaExpr} !== top*10 ${top * 10}`;
+      if (!(top > 0 && top < 1)) return `agent ${i}: draw ${top} outside [0,1)`;
+    }
+    return null;
+  },
+});
 
-for (const { name: f, raw, setup } of entries) {
+for (const { name: f, raw, setup, invariant } of entries) {
   const model = migrateForHarness(raw);
   if (!model?.topologyMode?.agents) continue;
 
@@ -709,6 +919,15 @@ for (const { name: f, raw, setup } of entries) {
     cmpArr('bondBreakReq', A.bondBreakReq, B.bondBreakReq, hw);
     cmpArr('divideAxisX', A.divideAxisX, B.divideAxisX, hw); cmpArr('divideAxisY', A.divideAxisY, B.divideAxisY, hw);
     for (const spec of agentAttrs) cmpArr('attr_' + spec.id, A.attrRead[spec.id], B.attrRead[spec.id], hw);
+    // Per-entry VALUE invariant, checked on BOTH stores. Parity alone would pass
+    // if both targets were equally wrong, so an entry can assert a semantic
+    // property (see the RNG-sharing synthetic) that must hold independently.
+    if (invariant && mismatch === 0) {
+      for (const [label, st] of [['js', A], ['wasm', B]]) {
+        const bad = invariant(st);
+        if (bad) { mismatch++; if (!firstField) firstField = `INVARIANT(${label}) ${bad}`; break; }
+      }
+    }
     cmpArr('colors', A.colors, B.colors, hw * 4);
     for (const spec of fieldSpecs) if (spec.agentAccess === 'readWrite') cmpArr('field_' + spec.id, readAttrs[spec.id], readAttrsB[spec.id], total);
     // RNG stream parity

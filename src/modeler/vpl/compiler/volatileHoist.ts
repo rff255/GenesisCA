@@ -315,23 +315,38 @@ export function computeVolatileHoist(input: VolatileHoistInput): VolatileHoistRe
     for (const srcId of valueInputSources(valueId)) volatileCone(srcId, acc);
   }
   const subtreeCache = new Map<string, Set<string>>();
-  function usedVolatiles(flowNodeId: string): Set<string> {
-    const cached = subtreeCache.get(flowNodeId);
+  /** Volatiles referenced anywhere in `flowNodeId`'s subtree.
+   *
+   *  `includeNext` distinguishes the node's TWO roles, and getting it wrong
+   *  breaks one case or the other:
+   *   - `false` (the top-level call, on a member of the LCA scope): the `next`
+   *     continuation runs AFTER this node at the SAME scope — walkNode already
+   *     pushed those targets as separate scope members — so a volatile used only
+   *     in the next-chain belongs to that LATER SIBLING. Without the skip, a
+   *     value read after a loop (`forEach.next → consumer`) is attributed to the
+   *     loop and emitted BEFORE it, reading the accumulators pre-loop.
+   *   - `true` (every recursive call, i.e. anything reached through a BRANCH
+   *     port): we are inside a nested block, where the next-chain is just the
+   *     rest of that block's statements and IS part of this subtree. Skipping it
+   *     there made a conditional fail to claim a volatile used by the 2nd+
+   *     statement of its own branch, so ownership fell to a LATER top-level
+   *     sibling and the value was emitted after the branch that reads it — the
+   *     JS compiler then declared it inline INSIDE the branch and every later
+   *     reference was out of scope (`_v… is not defined`). */
+  function usedVolatiles(flowNodeId: string, includeNext: boolean): Set<string> {
+    const cacheKey = `${includeNext ? 1 : 0}${flowNodeId}`;
+    const cached = subtreeCache.get(cacheKey);
     if (cached) return cached;
     const acc = new Set<string>();
-    subtreeCache.set(flowNodeId, acc); // set early — guards cycles / diamonds
+    subtreeCache.set(cacheKey, acc); // set early — guards cycles / diamonds
     for (const srcId of valueInputSources(flowNodeId)) volatileCone(srcId, acc);
     for (const [key, targets] of flowOutputToTargets) {
       if (!key.startsWith(`${flowNodeId}:`)) continue;
-      // SKIP the `next` continuation: it runs AFTER this node at the SAME scope
-      // (walkNode already pushed its targets as separate scope members), so a
-      // volatile used only in the next-chain belongs to that later sibling — not
-      // to this node. Without this skip, a value read AFTER a loop (forEach.next
-      // → consumer) is wrongly attributed to the loop and emitted BEFORE it,
-      // reading the loop's accumulators at their initial (pre-loop) value.
       const portId = key.slice(flowNodeId.length + 1);
-      if (portId === 'next') continue;
-      for (const t of targets) for (const v of usedVolatiles(t.nodeId)) acc.add(v);
+      if (portId === 'next' && !includeNext) continue;
+      // Anything below this node lives in a nested block (or the rest of one),
+      // so its own next-chain counts.
+      for (const t of targets) for (const v of usedVolatiles(t.nodeId, true)) acc.add(v);
     }
     return acc;
   }
@@ -341,7 +356,7 @@ export function computeVolatileHoist(input: VolatileHoistInput): VolatileHoistRe
     const chain = scopeChain.get(scope);
     if (!chain) continue;
     for (const fId of chain) {
-      if (usedVolatiles(fId).has(vId)) {
+      if (usedVolatiles(fId, false).has(vId)) {
         let a = emitBefore.get(fId);
         if (!a) { a = []; emitBefore.set(fId, a); }
         a.push(vId);
