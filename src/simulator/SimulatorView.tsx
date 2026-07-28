@@ -1660,6 +1660,15 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   // id (change-detected so we don't full-redraw on every raw mousemove).
   const agentCursorWorldRef = useRef<{ x: number; y: number } | null>(null);
   const agentHoverIdRef = useRef<number>(-1);
+  // Agent clipboard (Ctrl+C/V/X with the AGENT brush target, 2D): per-agent
+  // world-offset-from-the-copy-anchor + radius/velocity/attribute values. Copy
+  // is a two-step round-trip — collect the footprint ids from the snapshot,
+  // batch-read their FRESH spec via the `readAgents` worker message (which
+  // joins the one-shot staleness readers, so free-mode copies are never
+  // stale) — the reply lands in the `agentsRead` handler below. Cut kills the
+  // copied ids once the read confirms.
+  const agentClipboardRef = useRef<Array<{ dx: number; dy: number; radius: number; vx: number; vy: number; attrs: Record<string, number> }> | null>(null);
+  const pendingAgentCopyRef = useRef<{ anchor: { x: number; y: number }; cut: boolean; ids: number[] } | null>(null);
   // PR4 — Move brush: the agent currently being dragged (-1 = none) + its
   // pre-drag position (for the RMB-cancel revert). Own rAF token (C-B4).
   const draggingAgentRef = useRef<number>(-1);
@@ -4426,6 +4435,21 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     } else if (msg.type === 'agentState') {
       // Bond-Graph Agents: response to a `getAgentState {id}` inspector request.
       onAgentStateRef.current(msg as unknown as AgentStateResponse);
+    } else if (msg.type === 'agentsRead') {
+      // Agent clipboard COPY reply: stash relative-to-anchor specs; a cut then
+      // kills the source ids (only once the read has safely captured them).
+      const pend = pendingAgentCopyRef.current;
+      pendingAgentCopyRef.current = null;
+      const agents = (msg.agents ?? []) as Array<{ x: number; y: number; radius: number; vx: number; vy: number; attrs: Record<string, number> }>;
+      if (pend && agents.length > 0) {
+        agentClipboardRef.current = agents.map(a => ({
+          dx: a.x - pend.anchor.x, dy: a.y - pend.anchor.y,
+          radius: a.radius, vx: a.vx, vy: a.vy, attrs: a.attrs,
+        }));
+        if (pend.cut) {
+          workerRef.current?.postMessage({ type: 'killAgents', ids: pend.ids, activeViewer: activeViewerRef.current });
+        }
+      }
     } else if (msg.type === 'error') {
       setCompileError(msg.message as string);
       pendingStep.current = false;
@@ -8722,6 +8746,37 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
         // plane the user is looking at. (A layer-aware region copy anchored on
         // the brush plane is the follow-up.)
         if (is3dRef.current) return;
+        // AGENT clipboard (2D, agent brush target): copy/cut the agents under
+        // the brush footprint (fresh spec via readAgents), paste at the cursor
+        // with the copied world offsets (per-agent attrs/velocity via the
+        // pasteAgents worker message). Falls back to the nearest picked agent
+        // when the footprint catches none (the Single-scope case).
+        if (isAgentModelRef.current && brushTargetRef.current === 'agents') {
+          const wpt = agentCursorWorldRef.current;
+          if (!wpt) return;
+          e.preventDefault();
+          if (e.key === 'c' || e.key === 'x') {
+            let ids = agentsInShapeAt(wpt.x, wpt.y);
+            if (ids.length === 0 && agentHoverIdRef.current >= 0) ids = [agentHoverIdRef.current];
+            if (ids.length === 0) return;
+            pendingAgentCopyRef.current = { anchor: { x: wpt.x, y: wpt.y }, cut: e.key === 'x', ids };
+            workerRef.current?.postMessage({ type: 'readAgents', ids });
+          } else {
+            const clip = agentClipboardRef.current;
+            if (!clip || clip.length === 0) return;
+            workerRef.current?.postMessage({
+              type: 'pasteAgents',
+              agents: clip.map(a => ({
+                x: wpt.x + a.dx, y: wpt.y + a.dy,
+                radius: a.radius, vx: a.vx, vy: a.vy,
+                sets: Object.entries(a.attrs).map(([attrId, value]) => ({ attrId, value })),
+              })),
+              torus: boundaryTreatmentRef.current === 'torus',
+              activeViewer: activeViewerRef.current,
+            });
+          }
+          return;
+        }
         const cur = cursorGrid.current;
         if (!cur) return;
         if (e.key === 'c' || e.key === 'x') {

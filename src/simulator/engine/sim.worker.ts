@@ -531,6 +531,22 @@ interface PaintAgentsMsg {
 }
 /** Remove ALL agents (Reset). */
 interface ClearAgentsMsg { type: 'clearAgents'; activeViewer: string }
+/** Agent clipboard COPY read: batch-read the given agents' full spec (position,
+ *  radius, velocity, all agent-attribute values). Replies `agentsRead`. Joins
+ *  the one-shot staleness READERS (like getAgentState) so a free-mode copy is
+ *  never stale. */
+interface ReadAgentsMsg { type: 'readAgents'; ids: number[] }
+/** Agent clipboard PASTE: create one agent per spec (per-agent position /
+ *  radius / velocity / attribute sets — unlike seedAgents' shared sets).
+ *  Overflow past maxAgents drops the excess + posts agentOverflow. In
+ *  AGENT_GPU_DEFER_TYPES (deferred during GPU step batches + invalidates the
+ *  resident GPU copy like every mutation). */
+interface PasteAgentsMsg {
+  type: 'pasteAgents';
+  agents: Array<{ x: number; y: number; z?: number; radius?: number; vx?: number; vy?: number; vz?: number; sets?: Array<{ attrId: string; value: number }> }>;
+  torus?: boolean;
+  activeViewer: string;
+}
 /** AW-MEM (PR6a) DEV-only: force the AgentStore onto a WebAssembly.Memory (views
  *  at baked offsets) even for the `js` target, then re-init agents ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â the
  *  JS-on-views proof. */
@@ -561,7 +577,7 @@ interface SetAgentUiSyncMsg { type: 'setAgentUiSync'; on: boolean }
  *  refreshDisplay). */
 interface RefreshAgentDisplayMsg { type: 'refreshAgentDisplay' }
 
-type WorkerMsg = InitMsg | StepMsg | PaintMsg | PaintManualMsg | ResetMsg | RecompileMsg | UpdateModelAttrsMsg | UpdateLookupTableMsg | ImportImageMsg | UpdateIndicatorsMsg | GetStateMsg | LoadStateMsg | ReadRegionMsg | WriteRegionMsg | ClearRegionMsg | SetUseWasmMsg | SetUseWebGPUMsg | ReadbackWebGPUMsg | ColorPassMsg | SetRecordingMsg | AttachCanvasMsg | RequestColorsSnapshotMsg | SetInspectCellsMsg | RefreshDisplayMsg | SeedAgentsMsg | CreateAgentMsg | KillAgentsMsg | PaintAgentsMsg | ClearAgentsMsg | FormBondMsg | BreakBondMsg | GetAgentStateMsg | MoveAgentsMsg | FormBondBatchMsg | SetAgentWasmBackedMsg | SetRngSeedMsg | SetSimLayersMsg | AttachAgentCanvasMsg | SetAgentCameraMsg | SetAgentUiSyncMsg | RefreshAgentDisplayMsg | E1bCountersMsg | CompositeReadbackMsg | AttachVoxelCanvasMsg | SetGridCameraMsg | SetGridUiSyncMsg | SetGridVizMsg | RefreshGridDisplayMsg | VoxelReadbackMsg;
+type WorkerMsg = InitMsg | StepMsg | PaintMsg | PaintManualMsg | ResetMsg | RecompileMsg | UpdateModelAttrsMsg | UpdateLookupTableMsg | ImportImageMsg | UpdateIndicatorsMsg | GetStateMsg | LoadStateMsg | ReadRegionMsg | WriteRegionMsg | ClearRegionMsg | SetUseWasmMsg | SetUseWebGPUMsg | ReadbackWebGPUMsg | ColorPassMsg | SetRecordingMsg | AttachCanvasMsg | RequestColorsSnapshotMsg | SetInspectCellsMsg | RefreshDisplayMsg | SeedAgentsMsg | CreateAgentMsg | KillAgentsMsg | PaintAgentsMsg | ClearAgentsMsg | ReadAgentsMsg | PasteAgentsMsg | FormBondMsg | BreakBondMsg | GetAgentStateMsg | MoveAgentsMsg | FormBondBatchMsg | SetAgentWasmBackedMsg | SetRngSeedMsg | SetSimLayersMsg | AttachAgentCanvasMsg | SetAgentCameraMsg | SetAgentUiSyncMsg | RefreshAgentDisplayMsg | E1bCountersMsg | CompositeReadbackMsg | AttachVoxelCanvasMsg | SetGridCameraMsg | SetGridUiSyncMsg | SetGridVizMsg | RefreshGridDisplayMsg | VoxelReadbackMsg;
 
 // ---------------------------------------------------------------------------
 // State
@@ -2087,7 +2103,7 @@ function agentWebgpuIndicatorIsInt(): boolean[] {
  *  `readbackAgentField` (cell fields) overwrites the CPU arrays with
  *  pre-mutation GPU values. Deferred + replayed right after the step settles. */
 const AGENT_GPU_DEFER_TYPES = new Set<string>([
-  'seedAgents', 'createAgent', 'killAgents', 'paintAgents', 'moveAgents',
+  'seedAgents', 'createAgent', 'killAgents', 'paintAgents', 'moveAgents', 'pasteAgents',
   'formBond', 'formBondBatch', 'breakBond', 'clearAgents',
   'paint', 'paintManual', 'writeRegion', 'clearRegion',
 ]);
@@ -5407,7 +5423,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
   // recompile lossless. Reuses the one-and-only one-shot mechanism — no new
   // await/teardown sequencing inside buildAgentWebGPUIfNeeded.
   if (agentStoreStale && agentWebgpuRuntime && agentStore
-      && (AGENT_GPU_DEFER_TYPES.has(msg.type) || msg.type === 'getAgentState' || msg.type === 'getState' || msg.type === 'recompile')) {
+      && (AGENT_GPU_DEFER_TYPES.has(msg.type) || msg.type === 'getAgentState' || msg.type === 'readAgents' || msg.type === 'getState' || msg.type === 'recompile')) {
     asyncStepBatchInFlight = true;   // no message may interleave the one-shot readback
     deferredDuringAsyncBatch.push(msg);
     // The flag MUST be cleared from a finally (audit H2): a throw here would leave
@@ -7056,6 +7072,57 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
     case 'clearAgents': {
       activeViewer = msg.activeViewer; syncActiveViewerToMemory();
       if (agentStore) clearAgents(agentStore);
+      sendColors();
+      break;
+    }
+    case 'readAgents': {
+      // Agent clipboard COPY: one batched read of the requested agents' spec.
+      // Attribute values are the RAW SoA numbers (paste feeds them back through
+      // applyAgentSets unchanged). Dead/out-of-range ids are skipped.
+      const out: Array<{ x: number; y: number; z?: number; radius: number; vx: number; vy: number; vz?: number; attrs: Record<string, number> }> = [];
+      if (agentStore) {
+        const s = agentStore, is3d = s.worldDepth > 1;
+        for (const id of msg.ids) {
+          if (id < 0 || id >= s.highWater || !s.alive[id]) continue;
+          const attrs: Record<string, number> = {};
+          for (const spec of s.attrSpecs) { const a = s.attrRead[spec.id]; if (a) attrs[spec.id] = a[id]!; }
+          out.push({
+            x: s.x[id]!, y: s.y[id]!, z: is3d ? s.z[id]! : undefined,
+            radius: s.radius[id]!, vx: s.vx[id]!, vy: s.vy[id]!, vz: is3d ? s.vz[id]! : undefined,
+            attrs,
+          });
+        }
+      }
+      self.postMessage({ type: 'agentsRead', agents: out });
+      break;
+    }
+    case 'pasteAgents': {
+      // Agent clipboard PASTE: per-agent specs (position/radius/velocity/attrs).
+      // Composes the engine primitives (allocAgentSlot/initAgentSlot/
+      // applyAgentSets) — the compiled-fn ABI / SoA layout is untouched.
+      activeViewer = msg.activeViewer; syncActiveViewerToMemory();
+      if (agentStore) {
+        const s = agentStore, W = s.worldWidth, H = s.worldHeight, D = s.worldDepth, torus = !!msg.torus;
+        const dr = cbNum(centerBasedConfig, 'defaultRadius');
+        let dropped = 0;
+        for (const a of msg.agents) {
+          const id = allocAgentSlot(s);
+          if (id < 0) { dropped++; continue; }
+          const x = torus ? ((a.x % W) + W) % W : Math.max(0, Math.min(W, a.x));
+          const y = torus ? ((a.y % H) + H) % H : Math.max(0, Math.min(H, a.y));
+          let z = a.z ?? 0;
+          if (D > 1) z = torus ? ((z % D) + D) % D : Math.max(0, Math.min(D, z));
+          initAgentSlot(s, id, x, y, z, a.radius ?? dr, id);
+          if (a.vx !== undefined) s.vx[id] = a.vx;
+          if (a.vy !== undefined) s.vy[id] = a.vy;
+          if (a.vz !== undefined && D > 1) s.vz[id] = a.vz;
+          if (a.sets && a.sets.length > 0) applyAgentSets(s, id, a.sets);
+        }
+        if (dropped > 0) {
+          self.postMessage({ type: 'agentOverflow', message: `Agent capacity reached (maxAgents=${s.maxAgents}). ${dropped} agent(s) not pasted.` });
+        }
+        runAgentColorPass();
+      }
       sendColors();
       break;
     }

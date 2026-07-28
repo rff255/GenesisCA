@@ -1725,6 +1725,12 @@ export function HelpView() {
             <strong> Glue</strong> / <strong>Cut</strong> (bond/unbond two clicked agents), and
             <strong> Bond&nbsp;paint</strong> (auto-glue agents a stroke passes near).
             <span className={styles.kbd}>Alt</span>+scroll cycles through the modes.
+            With the agent brush active (2D), <span className={styles.kbd}>Ctrl+C</span> /
+            <span className={styles.kbd}>Ctrl+X</span> <strong>copy / cut the agents under the
+            brush footprint</strong> (positions relative to the cursor, radius, velocity, and all
+            agent-attribute values; an empty footprint falls back to the hovered agent) and
+            <span className={styles.kbd}> Ctrl+V</span> <strong>pastes</strong> them at the cursor
+            (torus-wrapped; pasting past the agent capacity drops the excess with a notice).
             <span className={styles.kbd}>Shift</span>+click an agent to <strong>inspect</strong> it
             (a popover of its position, velocity, bond degree and attribute values); the
             <strong> CA&nbsp;Grid</strong> brush target paints cells with the normal brush. In Area
