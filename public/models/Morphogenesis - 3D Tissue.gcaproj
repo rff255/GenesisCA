@@ -27,7 +27,7 @@
     "gridCells": false,
     "agents": true
   },
-  "centerBased": {
+  "centerBased": { "agentTarget": "webgpu", 
     "enabled": true,
     "maxAgents": 4000,
     "maxBonds": 12,

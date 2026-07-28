@@ -102,7 +102,7 @@ const model = {
   },
   topologyMode: { gridCells: true, agents: true },
   centerBased: {
-    enabled: true, maxAgents: W * H + 16, maxBonds: 2, worldWidth: W, worldHeight: H,
+    enabled: true, agentTarget: 'webgpu', maxAgents: W * H + 16, maxBonds: 2, worldWidth: W, worldHeight: H,
     seedCount: 0, seedPattern: 'scatter', defaultRadius: 0.45, growthRate: 0,
     repulsionStiffness: 0, adhesionStiffness: 0, interactionRange: 1.5, drag: 1.0, timeStep: 0.5,
     momentum: 0, maxSpeed: 0, neighbourQueryRadius: 2, customForcesOnly: true, autoBond: false,

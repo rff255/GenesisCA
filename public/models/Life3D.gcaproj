@@ -21,7 +21,7 @@
       "Bays",
       "voxel"
     ],
-    "useWasm": true
+    "useWasm": false, "useWebGPU": true
   },
   "attributes": [
     {

@@ -159,7 +159,8 @@ const properties = {
   gridHeight: H,
   maxIterations: 100000,
   tags: ['Overseer', 'experiment', 'statistics', 'Life', 'tutorial'],
-  useWasm: true,
+  useWasm: false,
+  useWebGPU: true,
 };
 
 const attributes = [

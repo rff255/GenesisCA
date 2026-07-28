@@ -44,7 +44,7 @@
   ],
   "macroDefs": [],
   "topologyMode": { "gridCells": false, "agents": true },
-  "centerBased": {
+  "centerBased": { "agentTarget": "webgpu", 
     "enabled": true,
     "maxAgents": 1500,
     "maxBonds": 10,

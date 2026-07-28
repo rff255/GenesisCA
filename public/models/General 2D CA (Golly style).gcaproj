@@ -21,9 +21,9 @@
       "lookup-table",
       "conway"
     ],
-    "useWasm": true,
+    "useWasm": false,
     "dimension": "2d",
-    "useWebGPU": false,
+    "useWebGPU": true,
     "endConditions": {
       "enabled": false,
       "maxGenerations": 32

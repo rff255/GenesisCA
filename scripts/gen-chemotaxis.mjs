@@ -98,11 +98,11 @@ const model = {
     author: '', projectAuthor: '', tags: ['agents', 'chemotaxis', 'aggregation', 'slime mould', 'keller-segel', 'field'],
     dimension: '2d', gridWidth: 100, gridHeight: 100, gridDepth: 1,
     topology: '2d-grid', boundaryTreatment: 'torus',
-    useWasm: true, useWebGPU: false,   // the field diffusion takes the WASM fast path; agents stay JS
+    useWasm: false, useWebGPU: true,   // GPU grid + GPU agents — the field round-trips via the E1b GPU bridge
   },
   topologyMode: { gridCells: true, agents: true },
   centerBased: {
-    enabled: true, maxAgents: 500, maxBonds: 2, worldWidth: 100, worldHeight: 100,
+    enabled: true, agentTarget: 'webgpu', maxAgents: 500, maxBonds: 2, worldWidth: 100, worldHeight: 100,
     seedCount: 220, seedPattern: 'scatter', defaultRadius: 1.0, growthRate: 0,
     repulsionStiffness: 1.2, adhesionStiffness: 0, interactionRange: 1.4, drag: 1.0, timeStep: 0.25,
     momentum: 0.7, maxSpeed: 1.0, neighbourQueryRadius: 5, customForcesOnly: false,

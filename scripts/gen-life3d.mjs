@@ -157,7 +157,8 @@ const properties = {
   maxIterations: 100000,
   tags: ['3D', 'Life', 'totalistic', 'Bays', 'voxel'],
   // 3D Grid CA: WASM (default target) — verified at JS↔WASM parity in PR5.
-  useWasm: true,
+  useWasm: false,
+  useWebGPU: true,
 };
 
 const attributes = [

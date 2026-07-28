@@ -116,11 +116,11 @@ const model = {
     author: 'Deneubourg et al.', modelAuthor: '', tags: ['agents', 'stigmergy', 'necrophoresis', 'self-organisation', 'field'],
     dimension: '2d', gridWidth: W, gridHeight: H, gridDepth: 1, topology: '2d-grid',
     boundaryTreatment: 'torus', updateMode: 'synchronous', asyncScheme: 'random-order',
-    maxIterations: 0, useWasm: false, useWebGPU: false,
+    maxIterations: 0, useWasm: false, useWebGPU: true,
   },
   topologyMode: { gridCells: true, agents: true },
   centerBased: {
-    enabled: true, maxAgents: 120, maxBonds: 2, worldWidth: W, worldHeight: H,
+    enabled: true, agentTarget: 'webgpu', maxAgents: 120, maxBonds: 2, worldWidth: W, worldHeight: H,
     seedCount: 70, seedPattern: 'scatter', defaultRadius: 0.9, growthRate: 0,
     repulsionStiffness: 0, adhesionStiffness: 0, interactionRange: 1.5, drag: 1.0, timeStep: 0.6,
     momentum: 0.55, maxSpeed: 0.9, neighbourQueryRadius: 4, customForcesOnly: true, autoBond: false,

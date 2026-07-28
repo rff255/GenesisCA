@@ -23,13 +23,13 @@
     "asyncScheme": "random-order",
     "maxIterations": 0,
     "useWasm": false,
-    "useWebGPU": false
+    "useWebGPU": true
   },
   "topologyMode": {
     "gridCells": true,
     "agents": true
   },
-  "centerBased": {
+  "centerBased": { "agentTarget": "webgpu", 
     "enabled": true,
     "maxAgents": 120,
     "maxBonds": 2,

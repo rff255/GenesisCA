@@ -1742,8 +1742,8 @@ export function HelpView() {
             chemical, the grid diffuses it, agents climb the gradient and aggregate),
             <strong> Game of Life on Agents</strong> (Conway&apos;s rule on a grid of agents &mdash;
             the genericity proof), <strong>Ant Necrophoresis</strong> (stigmergy: ants pile
-            corpses via the cell-field bridge), and the <strong>Agent WASM Drift Test</strong>
-            (a deterministic parity vehicle) &mdash; load any to see the pipeline at work.
+            corpses via the cell-field bridge), and the two <strong>Particle Life</strong>
+            samples (2D / 3D) &mdash; load any to see the pipeline at work.
           </p>
           <p className={styles.p}>
             <strong>Saving agent state:</strong> agent positions, velocities, attributes,

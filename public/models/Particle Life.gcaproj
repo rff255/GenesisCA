@@ -46,7 +46,7 @@
     "seedCount": 0,
     "seedPattern": "scatter",
     "defaultRadius": 1.2,
-    "agentTarget": "wasm",
+    "agentTarget": "webgpu",
     "agentUpdateMode": "async",
     "agentCapabilities": {
       "motion": "force",

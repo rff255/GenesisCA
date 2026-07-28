@@ -20,7 +20,7 @@
       "Life",
       "tutorial"
     ],
-    "useWasm": true
+    "useWasm": false, "useWebGPU": true
   },
   "attributes": [
     {

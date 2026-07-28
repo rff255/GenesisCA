@@ -334,7 +334,7 @@ function buildModel(is3d) {
       neighbourQueryRadius: 24, useBondingPhysics: false,
       autoBond: false, growthRate: 0, bondStiffness: 0,
       seedCount: 0, seedPattern: 'scatter', defaultRadius: 1.2,
-      agentTarget: 'wasm', agentUpdateMode: 'async',
+      agentTarget: 'webgpu', agentUpdateMode: 'async',
       agentCapabilities: {
         motion: 'force', body: true, collision: 'off', bonds: 'off',
         autoBond: false, growth: false, division: false, lifespan: false,

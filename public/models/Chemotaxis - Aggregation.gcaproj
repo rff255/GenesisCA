@@ -20,14 +20,14 @@
     "gridDepth": 1,
     "topology": "2d-grid",
     "boundaryTreatment": "torus",
-    "useWasm": true,
-    "useWebGPU": false
+    "useWasm": false,
+    "useWebGPU": true
   },
   "topologyMode": {
     "gridCells": true,
     "agents": true
   },
-  "centerBased": {
+  "centerBased": { "agentTarget": "webgpu", 
     "enabled": true,
     "maxAgents": 500,
     "maxBonds": 2,
