@@ -1112,6 +1112,19 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     if (saved2 === 'gif') return 'gif';
     return webmAvailable ? 'webm' : 'gif';
   });
+  // Capture scope: "simulation" crops the recording to the drawn world rectangle
+  // (no letterbox margins — the area of interest); "view" records the whole
+  // display canvas exactly as shown (with margins / pan / zoom). Applies uniformly
+  // to every model type + compile target (2D grid, grid+agents, agents-only, 3D).
+  type RecordScope = 'view' | 'simulation';
+  const [recordScope, setRecordScope] = useState<RecordScope>(() =>
+    (saved.current.recordScope as RecordScope | undefined) === 'view' ? 'view' : 'simulation');
+  const recordScopeRef = useRef<RecordScope>(recordScope);
+  useEffect(() => { recordScopeRef.current = recordScope; }, [recordScope]);
+  // Crop rect + output dims are LOCKED at the first captured frame of a recording,
+  // so mid-record pan / zoom / panel-resize can't change frame dimensions (which the
+  // dimension guard would otherwise drop) — the recording keeps a stable framing.
+  const recordCropRef = useRef<{ sx: number; sy: number; sw: number; sh: number; outW: number; outH: number } | null>(null);
   const [encodingWebM, setEncodingWebM] = useState(false);
   useEffect(() => { recordingRef.current = recording; }, [recording]);
 
@@ -1123,7 +1136,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
           targetFps, unlimitedFps, gensPerFrame, unlimitedGens,
           activeViewer, brushColor, brushW, brushH, brushMapping, showBrushCursor, showGridlines, show2dAxes,
           brushShape, brushRadius, brushRingWidth, brushLineWidth, brush3dVolume, brushBoxDepth,
-          infinityCanvas, indicatorVizModes, recordFormat, brushSectionH, agentsFront3d,
+          infinityCanvas, indicatorVizModes, recordFormat, recordScope, brushSectionH, agentsFront3d,
           light3d, cellGaps3d, agentMetaballs, agentGlow,
           agentBrushRadius, agentSeedDensity, agentSeedSpacing,
           agentBrushShape, agentBrushW, agentBrushH, agentBrushRingWidth, agentBrushLineWidth,
@@ -1139,7 +1152,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       } catch { /* localStorage full */ }
     }, 300);
     return () => clearTimeout(timer);
-  }, [targetFps, unlimitedFps, gensPerFrame, unlimitedGens, activeViewer, brushColor, brushW, brushH, brushMapping, showBrushCursor, showGridlines, show2dAxes, brushShape, brushRadius, brushRingWidth, brushLineWidth, brush3dVolume, brushBoxDepth, infinityCanvas, indicatorVizModes, recordFormat, brushSectionH, agentsFront3d, light3d, cellGaps3d, agentMetaballs, agentGlow, agentBrushRadius, agentSeedDensity, agentSeedSpacing, agentBrushShape, agentBrushW, agentBrushH, agentBrushRingWidth, agentBrushLineWidth, showCaGrid, showAgents, showBonds, simulateCells, simulateAgents, brushTarget, bg2d, agentOutlines, indicatorHiddenCategories, indicatorChartOverrides]);
+  }, [targetFps, unlimitedFps, gensPerFrame, unlimitedGens, activeViewer, brushColor, brushW, brushH, brushMapping, showBrushCursor, showGridlines, show2dAxes, brushShape, brushRadius, brushRingWidth, brushLineWidth, brush3dVolume, brushBoxDepth, infinityCanvas, indicatorVizModes, recordFormat, recordScope, brushSectionH, agentsFront3d, light3d, cellGaps3d, agentMetaballs, agentGlow, agentBrushRadius, agentSeedDensity, agentSeedSpacing, agentBrushShape, agentBrushW, agentBrushH, agentBrushRingWidth, agentBrushLineWidth, showCaGrid, showAgents, showBonds, simulateCells, simulateAgents, brushTarget, bg2d, agentOutlines, indicatorHiddenCategories, indicatorChartOverrides]);
 
   // Manual Brush — signature-keyed merge effect. Re-derives `manualBrush`
   // whenever the cell attribute set (id+type) changes. Surviving attrs carry
@@ -4167,99 +4180,80 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
           requestAnimationFrame(() => draw());
         }
 
-        // GIF frame capture. Two source paths depending on render mode:
-        // - Non-direct (JS / WASM, or WebGPU pre-P7): srcCanvas's 2D context
-        //   is available; getImageData reads the latest frame.
-        // - Direct render: srcCanvas was transferred to the worker, so the
-        //   2D context is unavailable. The worker (when recording) ships
-        //   colors in the stepped message; we build ImageData directly.
-        if (recordingRef.current && is3dRef.current && gl3dRef.current) {
-          // 3D Grid CA: capture the WebGL2 display canvas (display resolution,
-          // not grid resolution). The first frame fixes the size; the encoders
-          // accept arbitrary ImageData sizes.
-          const px = capture3dPixels() ?? gl3dRef.current.readPixels();
-          const expected = recordedFrames.current[0];
-          if (!expected || (px.width === expected.width && px.height === expected.height)) {
-            forceFrameOpaque(px.data);
-            recordedFrames.current.push(new ImageData(px.data, px.width, px.height));
-            recordCountRef.current += 1;
-          }
-          if (recordCountRef.current > 0 && now - lastRecordCountSet.current >= 200) {
-            setRecordFrameCount(recordCountRef.current);
-            lastRecordCountSet.current = now;
-          }
-        } else if (recordingRef.current) {
-          const w = gridWidth.current, h = gridHeight.current;
-          const stepColors = colorsRef.current;
-          // Defensive dimension check: never push a frame whose size doesn't
-          // match the first captured frame. Protects the GIF encode from
-          // corrupted output if anything (mode toggle, off-cycle resize,
-          // race) sneaks a different-sized frame past initWorker's
-          // stop-recording reset.
+        // ── Recording frame capture (unified across ALL model types + targets) ──
+        // ONE path captures the DISPLAY surface the user actually sees, then applies
+        // the chosen SCOPE:
+        //   • "simulation" — crop to the drawn world rectangle (the W×H grid mapped
+        //     through the current transform), so the empty letterbox margins between
+        //     the side panels are removed. This is the area of interest.
+        //   • "view"       — the whole display canvas exactly as shown (with margins,
+        //     pan, zoom, gridlines, axes — WYSIWYG).
+        // 2D reads canvasRef, the FINAL composited surface for every 2D path (JS/WASM
+        // grid, WebGPU direct render, E2 composite, CPU-overlay agents, agent direct
+        // render) — so grid + agents + background are all captured uniformly. It reads
+        // via a CPU-backed scratch: drawImage (a texture READ that does NOT de-optimize
+        // the source) then getImageData the willReadFrequently scratch — NEVER
+        // getImageData on the live display canvas (that de-optimizes it out of GPU
+        // acceleration, a persistent ~6x slowdown outliving the recording). 3D reads
+        // the WebGL2 buffer (no letterbox → both scopes are the full frame). The crop +
+        // output size are LOCKED on the first captured frame (recordCropRef) so
+        // mid-record pan/zoom/panel-resize can't change frame dims (the dimension guard
+        // would drop them) — the recording keeps a stable framing throughout.
+        if (recordingRef.current) {
           const expected = recordedFrames.current[0];
           let frame: ImageData | null = null;
-          if (isAgentModelRef.current && canvasRef.current && !directRenderActiveRef.current) {
-            // Generic Agent Platform: agents are drawn as an overlay on the
-            // DISPLAY canvas (drawAgentsOverlay, after the grid blit), so the
-            // grid-resolution srcCanvas would miss them. Capture the display via a
-            // CPU-backed scratch canvas (NOT getImageData on the display canvas —
-            // that de-optimizes it out of GPU acceleration and keeps drawing slow
-            // even after recording stops). drawImage(display → scratch) is a
-            // texture read that leaves the display canvas fast; then getImageData
-            // the willReadFrequently scratch (cheap). Downscaled to a bounded
-            // long-axis so dozens of window-sized frames don't thrash memory.
-            const dc = canvasRef.current;
-            if (dc.width > 0 && dc.height > 0) {
-              const RECORD_MAX = 960;
-              const s = Math.min(1, RECORD_MAX / Math.max(dc.width, dc.height));
-              const cw = Math.max(1, Math.round(dc.width * s)), ch = Math.max(1, Math.round(dc.height * s));
-              let rc = recordScratchRef.current;
-              if (!rc) { rc = document.createElement('canvas'); recordScratchRef.current = rc; }
-              if (rc.width !== cw || rc.height !== ch) { rc.width = cw; rc.height = ch; }
-              const rctx = rc.getContext('2d', { willReadFrequently: true });
-              if (rctx) {
-                rctx.imageSmoothingEnabled = true;
-                rctx.clearRect(0, 0, cw, ch);
-                rctx.drawImage(dc, 0, 0, cw, ch);
-                frame = rctx.getImageData(0, 0, cw, ch);
-              }
+
+          if (is3dRef.current && gl3dRef.current) {
+            // 3D: the scene fills the viewport (no letterbox) — both scopes capture
+            // the full GL display buffer.
+            const px = capture3dPixels() ?? gl3dRef.current.readPixels();
+            if (!expected || (px.width === expected.width && px.height === expected.height)) {
+              forceFrameOpaque(px.data);
+              frame = new ImageData(px.data, px.width, px.height);
             }
-          } else if (stepColors && w && h && stepColors.length >= w * h * 4) {
-            // Build the frame straight from the worker's grid-resolution colors
-            // buffer — for BOTH WebGPU direct render AND JS/WASM. This is the exact
-            // pixel data the blit uses (colorsRef → srcCanvas via putImageData), so
-            // it's identical to the old getImageData(srcCanvas) capture WITHOUT
-            // reading a live canvas. CRITICAL: getImageData on the live srcCanvas
-            // (the blit SOURCE, drawImage'd to the display every frame) de-optimizes
-            // it out of GPU acceleration — a persistent ~6x slowdown of EVERY
-            // subsequent blit that outlives the recording (the reported "stays slow
-            // after recording" bug; measured 33ms→204ms for 150 blits). Copy the
-            // buffer since the worker reuses the slot on later steps.
-            const data = new Uint8ClampedArray(stepColors.buffer, stepColors.byteOffset, w * h * 4);
-            frame = new ImageData(new Uint8ClampedArray(data), w, h);
-          } else if (srcCanvasRef.current && !directRenderActiveRef.current) {
-            // Fallback when the colors buffer is unavailable (e.g. a transient
-            // step with no colors): capture srcCanvas via the CPU-backed scratch
-            // (drawImage → scratch → getImageData scratch) — NEVER getImageData on
-            // the live srcCanvas directly, which would de-optimize it (see above).
-            const src = srcCanvasRef.current;
-            if (src.width > 0 && src.height > 0) {
-              let rc = recordScratchRef.current;
-              if (!rc) { rc = document.createElement('canvas'); recordScratchRef.current = rc; }
-              if (rc.width !== src.width || rc.height !== src.height) { rc.width = src.width; rc.height = src.height; }
-              const rctx = rc.getContext('2d', { willReadFrequently: true });
-              if (rctx) {
-                rctx.clearRect(0, 0, src.width, src.height);
-                try { rctx.drawImage(src, 0, 0); frame = rctx.getImageData(0, 0, src.width, src.height); } catch { /* transferred */ }
+          } else if (canvasRef.current && canvasRef.current.width > 0 && canvasRef.current.height > 0) {
+            const dc = canvasRef.current;
+            // Lock the source crop + output dims on the first captured frame.
+            let crop = recordCropRef.current;
+            if (!crop) {
+              const RECORD_MAX = 960;
+              let sx = 0, sy = 0, sw = dc.width, sh = dc.height;
+              if (recordScopeRef.current === 'simulation') {
+                const v = viewXformRef.current;
+                // Crop to the drawn world rectangle. In infinity mode the world tiles
+                // the whole viewport (no margins), and when zoomed in the sim rect
+                // already covers the canvas — both clamp to the full frame naturally.
+                if (v && !v.infinity && v.scaledW > 0 && v.scaledH > 0) {
+                  const rx = Math.max(0, Math.floor(v.ox));
+                  const ry = Math.max(0, Math.floor(v.oy));
+                  const rr = Math.min(dc.width, Math.ceil(v.ox + v.scaledW));
+                  const rb = Math.min(dc.height, Math.ceil(v.oy + v.scaledH));
+                  if (rr - rx >= 1 && rb - ry >= 1) { sx = rx; sy = ry; sw = rr - rx; sh = rb - ry; }
+                }
               }
+              // Bound the long axis so dozens of window-sized frames don't thrash GC.
+              const s = Math.min(1, RECORD_MAX / Math.max(sw, sh));
+              crop = { sx, sy, sw, sh, outW: Math.max(1, Math.round(sw * s)), outH: Math.max(1, Math.round(sh * s)) };
+              recordCropRef.current = crop;
+            }
+            let rc = recordScratchRef.current;
+            if (!rc) { rc = document.createElement('canvas'); recordScratchRef.current = rc; }
+            if (rc.width !== crop.outW || rc.height !== crop.outH) { rc.width = crop.outW; rc.height = crop.outH; }
+            const rctx = rc.getContext('2d', { willReadFrequently: true });
+            if (rctx) {
+              rctx.imageSmoothingEnabled = crop.outW !== crop.sw || crop.outH !== crop.sh;
+              rctx.clearRect(0, 0, crop.outW, crop.outH);
+              rctx.drawImage(dc, crop.sx, crop.sy, crop.sw, crop.sh, 0, 0, crop.outW, crop.outH);
+              frame = rctx.getImageData(0, 0, crop.outW, crop.outH);
+              // Opacify: the 2D canvas is cleared transparent, so "view"-scope margins
+              // AND any translucent cells/agents would otherwise leave GIF frame-disposal
+              // trails / let the page show through. RGB is kept (composite over the dark
+              // canvas), matching what's on screen.
+              forceFrameOpaque(frame.data);
             }
           }
+
           if (frame && (!expected || (frame.width === expected.width && frame.height === expected.height))) {
-            // Opacify ONLY the agent-overlay display capture — its transparent
-            // cleared background is the GIF-trail artifact. A plain grid frame
-            // (direct-render / srcCanvas) carries the colours buffer's authored
-            // alpha (setCellLooks.a), which must be preserved, so it is left as-is.
-            if (isAgentModelRef.current) forceFrameOpaque(frame.data);
             recordedFrames.current.push(frame);
             recordCountRef.current += 1;
           }
@@ -4620,6 +4614,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       recordedFrames.current = [];
       recordCountRef.current = 0;
       lastRecordCountSet.current = 0;
+      recordCropRef.current = null;
       setRecordFrameCount(0);
       // Tell the worker to stop including colors in stepped messages.
       workerRef.current?.postMessage({ type: 'setRecording', enabled: false });
@@ -8487,6 +8482,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     recordedFrames.current = [];
     recordCountRef.current = 0;
     lastRecordCountSet.current = 0;
+    recordCropRef.current = null;
     setRecordFrameCount(0);
     setRecording(true);
     // Tell the worker to include the colors buffer in stepped messages so we
@@ -8567,6 +8563,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     recordedFrames.current = [];
     recordCountRef.current = 0;
     lastRecordCountSet.current = 0;
+    recordCropRef.current = null;
     setRecordFrameCount(0);
   };
 
@@ -9916,25 +9913,31 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
                 className={styles.transportBtn}
                 onClick={startRecording}
                 disabled={encodingWebM}
-                title={encodingWebM ? 'Encoding WebM\u2026' : `Record ${recordFormat.toUpperCase()}`}
+                title={encodingWebM ? 'Encoding WebM\u2026' : `Record ${recordFormat.toUpperCase()} (${recordScope === 'simulation' ? 'simulation' : 'current view'})`}
                 style={{ color: '#e05050' }}
               >{'\u23FA'}</button>
               <select
                 className={styles.transportBtn}
-                value={recordFormat}
-                onChange={e => setRecordFormat(e.target.value as RecordFormat)}
+                value={`${recordFormat}:${recordScope}`}
+                onChange={e => {
+                  const [fmt, scope] = e.target.value.split(':') as [RecordFormat, RecordScope];
+                  setRecordFormat(fmt);
+                  setRecordScope(scope);
+                }}
                 disabled={encodingWebM}
                 title={webmAvailable
-                  ? 'Recording format'
+                  ? 'Recording format \u2014 "current view" keeps the panel margins as shown; "simulation" crops to the area of interest'
                   : 'WebM not supported in this browser \u2014 use GIF instead'}
                 style={{ padding: '4px 4px', fontSize: '0.65rem' }}
               >
-                <option value="webm" disabled={!webmAvailable}>WebM</option>
-                <option value="gif">GIF</option>
+                <option value="webm:view" disabled={!webmAvailable}>WebM (current view)</option>
+                <option value="webm:simulation" disabled={!webmAvailable}>WebM (simulation)</option>
+                <option value="gif:view">GIF (current view)</option>
+                <option value="gif:simulation">GIF (simulation)</option>
               </select>
             </>
           ) : (
-            <button className={styles.transportBtn} onClick={stopRecording} title={`Stop & Save ${recordFormat.toUpperCase()}`} style={{ color: '#e05050' }}>{'\u23F9'} {recordFrameCount}</button>
+            <button className={styles.transportBtn} onClick={stopRecording} title={`Stop & Save ${recordFormat.toUpperCase()} (${recordScope === 'simulation' ? 'simulation' : 'current view'})`} style={{ color: '#e05050' }}>{'\u23F9'} {recordFrameCount}</button>
           )}
           <div className={styles.transportDivider} />
 
