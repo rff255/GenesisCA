@@ -1135,10 +1135,11 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     (saved.current.screenshotScope as RecordScope | undefined) === 'view' ? 'view' : 'simulation');
   const screenshotScopeRef = useRef<RecordScope>(screenshotScope);
   useEffect(() => { screenshotScopeRef.current = screenshotScope; }, [screenshotScope]);
-  // Crop rect + output dims are LOCKED at the first captured frame of a recording,
-  // so mid-record pan / zoom / panel-resize can't change frame dimensions (which the
-  // dimension guard would otherwise drop) — the recording keeps a stable framing.
-  const recordCropRef = useRef<{ sx: number; sy: number; sw: number; sh: number; outW: number; outH: number } | null>(null);
+  // "current view" scope: the OUTPUT dims are locked at the first captured frame (the
+  // encoder needs a constant frame size) so a panel resize mid-record can't change them.
+  // The "simulation" scope uses renderSimulationFrame (deterministic grid-aspect dims),
+  // so it needs no lock.
+  const recordCropRef = useRef<{ outW: number; outH: number } | null>(null);
   const [encodingWebM, setEncodingWebM] = useState(false);
   useEffect(() => { recordingRef.current = recording; }, [recording]);
 
@@ -1844,21 +1845,88 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     scaledW: number; scaledH: number; ox: number; oy: number; infinity: boolean;
     txMin: number; txMax: number; tyMin: number; tyMax: number;
   } | null>(null);
-  /** The "simulation" crop of the 2D display canvas (recording + screenshot share
-   *  it): the drawn world rectangle from the last render's transform, clamped to the
-   *  canvas. In infinity mode the world tiles the whole viewport, and when zoomed in
-   *  the sim rect already covers the canvas — both fall back to the full frame, so
-   *  there are no margins to remove. Reads only refs → stable. */
-  const simCropRect = useCallback((cw: number, ch: number): { sx: number; sy: number; sw: number; sh: number } => {
-    const v = viewXformRef.current;
-    if (v && !v.infinity && v.scaledW > 0 && v.scaledH > 0) {
-      const rx = Math.max(0, Math.floor(v.ox));
-      const ry = Math.max(0, Math.floor(v.oy));
-      const rr = Math.min(cw, Math.ceil(v.ox + v.scaledW));
-      const rb = Math.min(ch, Math.ceil(v.oy + v.scaledH));
-      if (rr - rx >= 1 && rb - ry >= 1) return { sx: rx, sy: ry, sw: rr - rx, sh: rb - ry };
+  /** Scratch canvases for the "simulation"-scope capture (recording + screenshot).
+   *  simGridTmpRef holds the W×H colours buffer; simCaptureRef is the reused output
+   *  offscreen for recording. Never displayed → getImageData on them is safe. */
+  const simGridTmpRef = useRef<HTMLCanvasElement | null>(null);
+  const simCaptureRef = useRef<HTMLCanvasElement | null>(null);
+  /** Render the WHOLE grid/world at a fit framing (zoom/pan-INDEPENDENT) into an
+   *  offscreen — the "simulation" capture scope. Composited on the main thread from
+   *  data that's always available while recording: the colours buffer (grid) + the
+   *  agent snapshot (circles + bonds). So it works on every compile target incl. WebGPU
+   *  direct render / composite (which otherwise only expose the current-view framing).
+   *  Output is grid-aspect (W:H) → no letterbox margins by construction. Reads only refs.
+   *  NB agent SPRITES / METABALLS / GLOW are drawn as plain circles here — use the
+   *  "current view" scope for a WYSIWYG capture of those. Reuses `target` if given. */
+  const renderSimulationFrame = useCallback((maxSize: number, target?: HTMLCanvasElement): HTMLCanvasElement | null => {
+    if (is3dRef.current) return null;
+    const w = gridWidth.current, h = gridHeight.current;
+    if (!w || !h) return null;
+    const scale = maxSize / Math.max(w, h);
+    const outW = Math.max(1, Math.round(w * scale)), outH = Math.max(1, Math.round(h * scale));
+    const off = target ?? document.createElement('canvas');
+    if (off.width !== outW) off.width = outW;
+    if (off.height !== outH) off.height = outH;
+    const ctx = off.getContext('2d');
+    if (!ctx) return null;
+    ctx.imageSmoothingEnabled = false;
+    ctx.clearRect(0, 0, outW, outH);
+    const showGrid = gridCellsOnRef.current && (!isAgentModelRef.current || showCaGridRef.current);
+    const colors = colorsRef.current;
+    if (showGrid && colors && colors.length >= w * h * 4) {
+      let tmp = simGridTmpRef.current;
+      if (!tmp) { tmp = document.createElement('canvas'); simGridTmpRef.current = tmp; }
+      if (tmp.width !== w) tmp.width = w;
+      if (tmp.height !== h) tmp.height = h;
+      const tctx = tmp.getContext('2d');
+      if (tctx) {
+        tctx.putImageData(new ImageData(new Uint8ClampedArray(new Uint8ClampedArray(colors.buffer, colors.byteOffset, w * h * 4)), w, h), 0, 0);
+        ctx.drawImage(tmp, 0, 0, outW, outH);
+      }
+    } else if (isAgentModelRef.current && !showGrid && bg2dRef.current) {
+      ctx.fillStyle = bg2dRef.current;
+      ctx.fillRect(0, 0, outW, outH);
     }
-    return { sx: 0, sy: 0, sw: cw, sh: ch };
+    // Agent layer (circles + bonds) at the fit transform (ox = oy = 0, one world tile).
+    if (isAgentModelRef.current && showAgentsRef.current) {
+      const snap = agentsRef.current;
+      if (snap && snap.highWater > 0) {
+        const { x: ax, y: ay, radius: ar, alive: aal, colors: acol, highWater: hw, bonds } = snap;
+        if (showBondsRef.current && bonds && bonds.length > 0) {
+          const torus = boundaryTreatmentRef.current === 'torus';
+          ctx.beginPath();
+          for (let b = 0; b < bonds.length; b += 2) {
+            const i = bonds[b]!, j = bonds[b + 1]!;
+            let jx = ax[j]!, jy = ay[j]!;
+            if (torus) {
+              if (jx - ax[i]! > w / 2) jx -= w; else if (jx - ax[i]! < -w / 2) jx += w;
+              if (jy - ay[i]! > h / 2) jy -= h; else if (jy - ay[i]! < -h / 2) jy += h;
+            }
+            ctx.moveTo(ax[i]! * scale, ay[i]! * scale);
+            ctx.lineTo(jx * scale, jy * scale);
+          }
+          ctx.strokeStyle = 'rgba(230, 230, 245, 0.55)';
+          ctx.lineWidth = Math.max(1, scale * 0.18);
+          ctx.stroke();
+        }
+        const outlines = agentOutlinesRef.current;
+        for (let i = 0; i < hw; i++) {
+          if (!aal[i]) continue;
+          const c = i * 4;
+          const cx = ax[i]! * scale, cy = ay[i]! * scale, rad = Math.max(1.2, ar[i]! * scale);
+          ctx.beginPath();
+          ctx.arc(cx, cy, rad, 0, Math.PI * 2);
+          ctx.fillStyle = `rgba(${acol[c]},${acol[c + 1]},${acol[c + 2]},${(acol[c + 3] ?? 255) / 255})`;
+          ctx.fill();
+          if (outlines && rad >= 2) {
+            ctx.lineWidth = Math.min(1.5, rad * 0.25);
+            ctx.strokeStyle = 'rgba(0, 0, 0, 0.4)';
+            ctx.stroke();
+          }
+        }
+      }
+    }
+    return off;
   }, []);
   /** Idle hover tracking (cursor cell + chip + agent hover scans) is coalesced
    *  to ONE rAF per frame — a 125–1000 Hz mouse must not run O(agents) scans or
@@ -4241,18 +4309,29 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
               forceFrameOpaque(px.data);
               frame = new ImageData(px.data, px.width, px.height);
             }
+          } else if (recordScopeRef.current === 'simulation') {
+            // "simulation": the WHOLE grid/world at a fit framing, INDEPENDENT of the
+            // current zoom/pan — so it captures the entire simulation no matter how far
+            // you've zoomed in to inspect a part. Rendered on the main thread from data
+            // (colours buffer for the grid + the agent snapshot), reusing a persistent
+            // offscreen (RECORD_MAX-bounded). getImageData on a never-displayed canvas
+            // is safe (no willReadFrequently de-opt).
+            const off = renderSimulationFrame(960, simCaptureRef.current ?? undefined);
+            if (off) {
+              simCaptureRef.current = off;
+              frame = off.getContext('2d')!.getImageData(0, 0, off.width, off.height);
+              forceFrameOpaque(frame.data);
+            }
           } else if (canvasRef.current && canvasRef.current.width > 0 && canvasRef.current.height > 0) {
+            // "current view": the display canvas exactly as shown (zoom / pan / margins).
+            // Lock only the OUTPUT dims on the first frame (a panel resize mustn't change
+            // frame size mid-record); the source is always the full canvas.
             const dc = canvasRef.current;
-            // Lock the source crop + output dims on the first captured frame.
             let crop = recordCropRef.current;
             if (!crop) {
               const RECORD_MAX = 960;
-              const { sx, sy, sw, sh } = recordScopeRef.current === 'simulation'
-                ? simCropRect(dc.width, dc.height)
-                : { sx: 0, sy: 0, sw: dc.width, sh: dc.height };
-              // Bound the long axis so dozens of window-sized frames don't thrash GC.
-              const s = Math.min(1, RECORD_MAX / Math.max(sw, sh));
-              crop = { sx, sy, sw, sh, outW: Math.max(1, Math.round(sw * s)), outH: Math.max(1, Math.round(sh * s)) };
+              const s = Math.min(1, RECORD_MAX / Math.max(dc.width, dc.height));
+              crop = { outW: Math.max(1, Math.round(dc.width * s)), outH: Math.max(1, Math.round(dc.height * s)) };
               recordCropRef.current = crop;
             }
             let rc = recordScratchRef.current;
@@ -4260,14 +4339,13 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
             if (rc.width !== crop.outW || rc.height !== crop.outH) { rc.width = crop.outW; rc.height = crop.outH; }
             const rctx = rc.getContext('2d', { willReadFrequently: true });
             if (rctx) {
-              rctx.imageSmoothingEnabled = crop.outW !== crop.sw || crop.outH !== crop.sh;
+              rctx.imageSmoothingEnabled = crop.outW !== dc.width || crop.outH !== dc.height;
               rctx.clearRect(0, 0, crop.outW, crop.outH);
-              rctx.drawImage(dc, crop.sx, crop.sy, crop.sw, crop.sh, 0, 0, crop.outW, crop.outH);
+              rctx.drawImage(dc, 0, 0, dc.width, dc.height, 0, 0, crop.outW, crop.outH);
               frame = rctx.getImageData(0, 0, crop.outW, crop.outH);
-              // Opacify: the 2D canvas is cleared transparent, so "view"-scope margins
-              // AND any translucent cells/agents would otherwise leave GIF frame-disposal
-              // trails / let the page show through. RGB is kept (composite over the dark
-              // canvas), matching what's on screen.
+              // Opacify: the 2D canvas is cleared transparent, so margins / translucent
+              // cells would otherwise leave GIF frame-disposal trails / let the page show
+              // through. RGB is kept (composite over the dark canvas), matching the screen.
               forceFrameOpaque(frame.data);
             }
           }
@@ -8799,21 +8877,26 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       off.toBlob(blob => { if (blob) downloadBlob(blob); }, 'image/png');
       return;
     }
-    // 2D (every path — JS/WASM grid, WebGPU direct render, E2 composite, agents):
-    // canvasRef is the final composited surface. draw() first so it's current, then
-    // copy it onto a throwaway offscreen (drawImage = texture read; never getImageData
-    // the live display canvas — that de-optimizes it) and crop per the chosen scope.
+    // "simulation": the WHOLE grid/world at a fit framing, independent of the current
+    // zoom/pan (renders from the colours buffer + agent snapshot — see
+    // renderSimulationFrame). A fresh offscreen (one-shot; toBlob is async).
+    if (screenshotScopeRef.current === 'simulation') {
+      const w = gridWidth.current || 1, h = gridHeight.current || 1;
+      const off = renderSimulationFrame(Math.min(2048, Math.max(720, Math.max(w, h))));
+      if (off) off.toBlob(blob => { if (blob) downloadBlob(blob); }, 'image/png');
+      return;
+    }
+    // "current view": the display canvas exactly as shown (zoom / pan / margins).
+    // draw() first so it's current, then copy it onto a throwaway offscreen (drawImage
+    // = texture read; never getImageData the live display canvas — that de-optimizes it).
     draw();
     const dc = canvasRef.current;
     if (!dc || dc.width <= 0 || dc.height <= 0) return;
-    const { sx, sy, sw, sh } = screenshotScopeRef.current === 'simulation'
-      ? simCropRect(dc.width, dc.height)
-      : { sx: 0, sy: 0, sw: dc.width, sh: dc.height };
     const off = document.createElement('canvas');
-    off.width = sw; off.height = sh;
+    off.width = dc.width; off.height = dc.height;
     const octx = off.getContext('2d');
     if (!octx) return;
-    octx.drawImage(dc, sx, sy, sw, sh, 0, 0, sw, sh);
+    octx.drawImage(dc, 0, 0);
     off.toBlob(blob => { if (blob) downloadBlob(blob); }, 'image/png');
   };
 
