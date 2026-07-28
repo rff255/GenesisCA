@@ -20,11 +20,16 @@ import { viewCosHalf, viewHeadingExprs } from './GetAgentsInViewNode';
  *  heading (a still agent under the `velocity` source) has no defined side, so the
  *  cone gate is omnidirectional and every in-range neighbour tallies as Left.
  *  `halfAngle = 180°` = omnidirectional (all in-range neighbours, split L/R).
- *  Per-agent, behaviour-graph only. Multi-output (`_v<id>_<port>`). */
+ *  Per-agent, behaviour-graph only. Multi-output (`_v<id>_<port>`).
+ *
+ *  `config.visionColor` (optional `#rrggbb`) is DISPLAY-ONLY — the simulator's
+ *  vision-cone overlay tints THIS node's wedges with it instead of picking the
+ *  next automatic palette slot. Absent ⇒ the palette. No compiler emit reads
+ *  it on any target. */
 export const SenseHemifieldNode: NodeTypeDef = {
   type: 'senseHemifield',
   label: 'Sense Hemifield',
-  description: 'Count nearby agents in the LEFT vs RIGHT half of a heading-relative vision cone — the Braitenberg L/R sensor. Steer by Left − Right. Heading = Velocity, Wired, or Facing (a stored vector agent-attribute — needs the Orientation capability).',
+  description: 'Count nearby agents in the LEFT vs RIGHT half of a heading-relative vision cone — the Braitenberg L/R sensor. Steer by Left − Right. Set how far it senses with the Radius input (inline number, default 5) and how wide with Half-angle°. Heading = Velocity, Wired, or Facing (a stored vector agent-attribute — needs the Orientation capability). Optional Cone color tints its wedges in the simulator vision display.',
   category: 'data',
   color: '#5e35b1',
   requirements: { bondGraph: true },

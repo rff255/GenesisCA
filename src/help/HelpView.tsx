@@ -1481,22 +1481,29 @@ export function HelpView() {
               <strong> For Each In Array</strong>, then read each with <strong>Get Agent Position /
               Offset / Attribute / Radius / Get Velocity</strong>, bond to it, or steer from it.</li>
             <li><strong>Get Agents In View</strong> &mdash; the directional version: only the nearby
-              agents inside a heading-relative <strong>vision cone</strong> (set the <em>Half-angle°</em>
-              and a <em>Heading</em> source &mdash; the agent's Velocity, or a Wired direction). A
+              agents inside a heading-relative <strong>vision cone</strong> (how FAR it sees is the
+              node&apos;s <em>Radius</em> input &mdash; an inline number box on the port row, default 5;
+              how WIDE is the <em>Half-angle°</em> config, plus a <em>Heading</em> source &mdash;
+              the agent&apos;s Velocity, or a Wired direction). A
               still agent (zero heading) sees all around; 180° is the full omnidirectional radius. Ideal
               for predators/prey that only react to what's in front of them.</li>
             <li><strong>Sense Hemifield</strong> &mdash; the Braitenberg <strong>Left / Right</strong>
               sensor: it runs the same vision cone but returns two counts &mdash; how many neighbours
               fall to the <em>left</em> of the heading versus the <em>right</em>. Steer by
               <em>Left &minus; Right</em> to turn toward (or away from) the crowded side &mdash;
-              taxis and flocking asymmetry emerge from those two numbers alone.</li>
+              taxis and flocking asymmetry emerge from those two numbers alone. Same two knobs as
+              above: the <em>Radius</em> input sets how far it senses, <em>Half-angle°</em> how wide
+              (the 90° default is a 180° front hemisphere). The
+              <em> Boids &mdash; Hemifield Vision</em> sample is built entirely from these counts.</li>
             <li><strong>Seeing the cones</strong> &mdash; when a model uses either FOV node, the
               Simulator&apos;s agent controls (2D) gain a <strong>Show vision</strong> selector that
               draws each node&apos;s sensing cone as a translucent wedge &mdash; for the
               <em> inspected/edited/hovered</em> agent, or <em>all</em> agents (capped at 1500).
               The wedge follows the agent&apos;s velocity heading (Facing/Wired heading sources are
               approximated by it), and a wired Radius input falls back to the model&apos;s Neighbour
-              Query Radius.</li>
+              Query Radius. Each FOV node gets its own tint from an automatic palette, or you can
+              pick one per node with its <strong>Cone color</strong> setting (a display-only config
+              &mdash; no compile-target effect) so several cones on the same agent stay readable.</li>
             <li><strong>Facing / orientation</strong> &mdash; to have an agent look in a stored
               direction rather than along its velocity, give it a <strong>Vector agent attribute</strong>
               (e.g. &quot;facing&quot;), set the FOV node's Heading to <em>Wired</em>, and wire that
@@ -1747,12 +1754,14 @@ export function HelpView() {
             voxel view too. For an <strong>agents-only</strong> model (or when you hide the CA&nbsp;Grid
             layer), the CA-grid controls disappear and a <strong>Background</strong> colour can fill
             the environment behind the agents.
-            <strong> Clear all agents</strong> empties the population. The library ships eight agent samples: <strong>Morphogenesis &mdash; Growing Tissue</strong> (12 → ~1500 cells
+            <strong> Clear all agents</strong> empties the population. The library ships ten agent samples: <strong>Morphogenesis &mdash; Growing Tissue</strong> (12 → ~1500 cells
             dividing along the tension axis), <strong>Morphogenesis &mdash; Differential
             Tissue</strong> (asymmetric division + a maturity gradient + contact inhibition = cell
             <em> specialization</em>), <strong>Morphogenesis &mdash; 3D Tissue</strong> (the same
             engine growing a connected tissue in a 3D volume), <strong>Boids &mdash; Flocking</strong> (separation +
-            alignment + cohesion), <strong>Chemotaxis &mdash; Aggregation</strong> (secrete a
+            alignment + cohesion), <strong>Boids &mdash; Hemifield Vision</strong> (the Braitenberg
+            variant: agents steer purely from left-vs-right agent COUNTS in three differently-coloured
+            vision cones &mdash; try <em>Show vision = All</em>), <strong>Chemotaxis &mdash; Aggregation</strong> (secrete a
             chemical, the grid diffuses it, agents climb the gradient and aggregate),
             <strong> Game of Life on Agents</strong> (Conway&apos;s rule on a grid of agents &mdash;
             the genericity proof), <strong>Ant Necrophoresis</strong> (stigmergy: ants pile

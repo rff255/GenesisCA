@@ -41,11 +41,16 @@ export function viewHeadingExprs(
  *  cosHalf`); a ZERO heading (a still agent under the `velocity` source) is
  *  omnidirectional (the ÷0 guard). `halfAngle = 180°` = omnidirectional (compiles
  *  to exactly Get Nearby Agents). Heading source: Velocity (default) or Wired
- *  (Heading X/Y/Z inputs). Per-agent, behaviour-graph only. */
+ *  (Heading X/Y/Z inputs). Per-agent, behaviour-graph only.
+ *
+ *  `config.visionColor` (optional `#rrggbb`) is DISPLAY-ONLY — the simulator's
+ *  vision-cone overlay tints THIS node's wedges with it instead of picking the
+ *  next automatic palette slot. Absent ⇒ the palette. No compiler emit reads
+ *  it on any target. */
 export const GetAgentsInViewNode: NodeTypeDef = {
   type: 'getAgentsInView',
   label: 'Get Agents In View',
-  description: 'Nearby agents inside a heading-relative vision cone (set Half-angle°) — the directional Get Nearby Agents. Iterate with For Each In Array. Heading = Velocity (default), Wired, or Facing (a stored vector agent-attribute — needs the Orientation capability).',
+  description: 'Nearby agents inside a heading-relative vision cone — the directional Get Nearby Agents. Set how far it sees with the Radius input (inline number, default 5) and how wide with Half-angle°. Iterate with For Each In Array. Heading = Velocity (default), Wired, or Facing (a stored vector agent-attribute — needs the Orientation capability). Optional Cone color tints its wedges in the simulator vision display.',
   category: 'data',
   color: '#5e35b1',
   requirements: { bondGraph: true },

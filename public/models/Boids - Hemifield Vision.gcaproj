@@ -1,0 +1,816 @@
+{
+  "schemaVersion": 1,
+  "properties": {
+    "name": "Boids — Hemifield Vision",
+    "description": "Braitenberg-style flocking: agents steer purely by how many neighbours they see on their LEFT vs RIGHT, through three differently-coloured vision cones.",
+    "ruleDescription": "Two Sense Hemifield nodes give left/right agent counts in a wide NEAR cone and a narrow FAR cone. The turn signal KFAR*(Lfar-Rfar) - KNEAR*(Lnear-Rnear) is applied as a force along the heading’s left normal (-vy, vx), so an agent veers toward distant company and away from crowding. A Get Agents In View cone adds velocity matching over the agents actually ahead, and a self-propulsion term holds a cruise speed. No engine physics at all — collision, bonds and growth are off; the graph IS the whole rule.",
+    "instructions": "Press Play. Every agent steers ONLY by comparing how many agents it sees on its left vs its right.\n\nTo SEE what they see, set \"Show vision\" (right panel, Agents section) to All — three coloured cones are drawn on every agent:\n  • cyan  — the forward view cone whose agents it matches velocity with (alignment)\n  • red   — the wide near cone it turns AWAY from (separation)\n  • green — the narrow far cone it turns TOWARD (cohesion)\n\nSet it to Inspected instead to follow a single agent (hover / Shift+click one).\nOpen the Modeler → Agents graph to retune the cones: each FOV node has a Radius input, a Half-angle, and its own Cone color.",
+    "author": "",
+    "projectAuthor": "",
+    "tags": [
+      "agents",
+      "flocking",
+      "boids",
+      "braitenberg",
+      "vision",
+      "emergence"
+    ],
+    "dimension": "2d",
+    "gridWidth": 120,
+    "gridHeight": 120,
+    "gridDepth": 1,
+    "topology": "2d-grid",
+    "boundaryTreatment": "torus",
+    "useWasm": false,
+    "useWebGPU": false
+  },
+  "topologyMode": {
+    "gridCells": false,
+    "agents": true
+  },
+  "centerBased": {
+    "enabled": true,
+    "agentTarget": "webgpu",
+    "maxAgents": 600,
+    "maxBonds": 0,
+    "worldWidth": 120,
+    "worldHeight": 120,
+    "seedCount": 300,
+    "seedPattern": "scatter",
+    "defaultRadius": 0.9,
+    "growthRate": 0,
+    "repulsionStiffness": 0.4,
+    "adhesionStiffness": 0,
+    "interactionRange": 1.2,
+    "drag": 1,
+    "timeStep": 0.5,
+    "momentum": 0.9,
+    "maxSpeed": 1.1,
+    "neighbourQueryRadius": 16,
+    "customForcesOnly": true,
+    "useBondingPhysics": false,
+    "autoBond": false,
+    "bondStiffness": 0.4,
+    "bondRestLength": 2,
+    "formDistance": 1.15,
+    "breakDistance": 1.8,
+    "agentCapabilities": {
+      "motion": "force",
+      "body": true,
+      "collision": "soft",
+      "bonds": "off",
+      "autoBond": false,
+      "growth": false,
+      "division": false,
+      "lifespan": false,
+      "populationBirth": false,
+      "populationDeath": false,
+      "sensing": true,
+      "sensingHeadingSource": "velocity",
+      "orientation": false,
+      "fieldCoupling": false,
+      "appearance": true
+    }
+  },
+  "attributes": [],
+  "modelAttributes": [],
+  "neighborhoods": [],
+  "mappings": [],
+  "variables": [
+    {
+      "id": "cnt",
+      "name": "in-view count",
+      "description": "",
+      "kind": "scalar",
+      "dataType": "float",
+      "initialValue": "0"
+    },
+    {
+      "id": "sumVX",
+      "name": "Σ in-view Vx",
+      "description": "",
+      "kind": "scalar",
+      "dataType": "float",
+      "initialValue": "0"
+    },
+    {
+      "id": "sumVY",
+      "name": "Σ in-view Vy",
+      "description": "",
+      "kind": "scalar",
+      "dataType": "float",
+      "initialValue": "0"
+    }
+  ],
+  "indicators": [],
+  "graphNodes": [
+    {
+      "id": "nms4tzml2b5wq",
+      "type": "caNode",
+      "position": {
+        "x": 0,
+        "y": 0
+      },
+      "data": {
+        "nodeType": "step",
+        "config": {}
+      }
+    }
+  ],
+  "graphEdges": [],
+  "agentGraphNodes": [
+    {
+      "id": "ams4tzml1dztl",
+      "type": "caNode",
+      "position": {
+        "x": 0,
+        "y": 380
+      },
+      "data": {
+        "nodeType": "behaviourStep",
+        "config": {}
+      }
+    },
+    {
+      "id": "ams4tzml1jztx",
+      "type": "caNode",
+      "position": {
+        "x": 230,
+        "y": 665
+      },
+      "data": {
+        "nodeType": "getAgentsInView",
+        "config": {
+          "_port_radius": "12",
+          "halfAngle": "70",
+          "headingSource": "velocity",
+          "visionColor": "#50c8ff"
+        }
+      }
+    },
+    {
+      "id": "ams4tzml1f36r",
+      "type": "caNode",
+      "position": {
+        "x": 460,
+        "y": 380
+      },
+      "data": {
+        "nodeType": "forEachInArray",
+        "config": {}
+      }
+    },
+    {
+      "id": "ams4tzml2abze",
+      "type": "caNode",
+      "position": {
+        "x": 690,
+        "y": 570
+      },
+      "data": {
+        "nodeType": "getVelocity",
+        "config": {}
+      }
+    },
+    {
+      "id": "ams4tzml264b0",
+      "type": "caNode",
+      "position": {
+        "x": 920,
+        "y": 380
+      },
+      "data": {
+        "nodeType": "getVariable",
+        "config": {
+          "variableId": "cnt"
+        }
+      }
+    },
+    {
+      "id": "ams4tzml2flb6",
+      "type": "caNode",
+      "position": {
+        "x": 1150,
+        "y": 380
+      },
+      "data": {
+        "nodeType": "arithmeticOperator",
+        "config": {
+          "operation": "add",
+          "_port_y": "1"
+        }
+      }
+    },
+    {
+      "id": "ams4tzml2rirj",
+      "type": "caNode",
+      "position": {
+        "x": 1380,
+        "y": 380
+      },
+      "data": {
+        "nodeType": "setVariable",
+        "config": {
+          "variableId": "cnt"
+        }
+      }
+    },
+    {
+      "id": "ams4tzml23hm5",
+      "type": "caNode",
+      "position": {
+        "x": 920,
+        "y": 484.49999999999994
+      },
+      "data": {
+        "nodeType": "getVariable",
+        "config": {
+          "variableId": "sumVX"
+        }
+      }
+    },
+    {
+      "id": "ams4tzml2kgg0",
+      "type": "caNode",
+      "position": {
+        "x": 1150,
+        "y": 484.49999999999994
+      },
+      "data": {
+        "nodeType": "arithmeticOperator",
+        "config": {
+          "operation": "add"
+        }
+      }
+    },
+    {
+      "id": "ams4tzml2qfo6",
+      "type": "caNode",
+      "position": {
+        "x": 1380,
+        "y": 484.49999999999994
+      },
+      "data": {
+        "nodeType": "setVariable",
+        "config": {
+          "variableId": "sumVX"
+        }
+      }
+    },
+    {
+      "id": "ams4tzml2xjgv",
+      "type": "caNode",
+      "position": {
+        "x": 920,
+        "y": 588.9999999999999
+      },
+      "data": {
+        "nodeType": "getVariable",
+        "config": {
+          "variableId": "sumVY"
+        }
+      }
+    },
+    {
+      "id": "ams4tzml2sp2j",
+      "type": "caNode",
+      "position": {
+        "x": 1150,
+        "y": 588.9999999999999
+      },
+      "data": {
+        "nodeType": "arithmeticOperator",
+        "config": {
+          "operation": "add"
+        }
+      }
+    },
+    {
+      "id": "ams4tzml2nrbu",
+      "type": "caNode",
+      "position": {
+        "x": 1380,
+        "y": 588.9999999999999
+      },
+      "data": {
+        "nodeType": "setVariable",
+        "config": {
+          "variableId": "sumVY"
+        }
+      }
+    },
+    {
+      "id": "ams4tzml24517",
+      "type": "caNode",
+      "position": {
+        "x": 1610,
+        "y": 0
+      },
+      "data": {
+        "nodeType": "senseHemifield",
+        "config": {
+          "_port_radius": "4.5",
+          "halfAngle": "110",
+          "headingSource": "velocity",
+          "visionColor": "#ff6464"
+        }
+      }
+    },
+    {
+      "id": "ams4tzml2mz51",
+      "type": "caNode",
+      "position": {
+        "x": 1610,
+        "y": 133
+      },
+      "data": {
+        "nodeType": "senseHemifield",
+        "config": {
+          "_port_radius": "16",
+          "halfAngle": "55",
+          "headingSource": "velocity",
+          "visionColor": "#78e878"
+        }
+      }
+    },
+    {
+      "id": "ams4tzml2yete",
+      "type": "caNode",
+      "position": {
+        "x": 1840,
+        "y": 66.5
+      },
+      "data": {
+        "nodeType": "expression",
+        "config": {
+          "expression": "(a-b)*0.008 - (c-d)*0.07",
+          "visibleCount": 4
+        }
+      }
+    },
+    {
+      "id": "ams4tzml2zh27",
+      "type": "caNode",
+      "position": {
+        "x": 1610,
+        "y": 285
+      },
+      "data": {
+        "nodeType": "getVelocity",
+        "config": {}
+      }
+    },
+    {
+      "id": "ams4tzml2jsnh",
+      "type": "caNode",
+      "position": {
+        "x": 1840,
+        "y": 285
+      },
+      "data": {
+        "nodeType": "expression",
+        "config": {
+          "expression": "sqrt(a*a+b*b)",
+          "visibleCount": 2
+        }
+      }
+    },
+    {
+      "id": "ams4tzml227k6",
+      "type": "caNode",
+      "position": {
+        "x": 1610,
+        "y": 399
+      },
+      "data": {
+        "nodeType": "getVariable",
+        "config": {
+          "variableId": "cnt"
+        }
+      }
+    },
+    {
+      "id": "ams4tzml2074f",
+      "type": "caNode",
+      "position": {
+        "x": 1610,
+        "y": 494
+      },
+      "data": {
+        "nodeType": "getVariable",
+        "config": {
+          "variableId": "sumVX"
+        }
+      }
+    },
+    {
+      "id": "ams4tzml2hv5z",
+      "type": "caNode",
+      "position": {
+        "x": 1610,
+        "y": 589
+      },
+      "data": {
+        "nodeType": "getVariable",
+        "config": {
+          "variableId": "sumVY"
+        }
+      }
+    },
+    {
+      "id": "ams4tzml2lvhu",
+      "type": "caNode",
+      "position": {
+        "x": 2070,
+        "y": 190
+      },
+      "data": {
+        "nodeType": "expression",
+        "config": {
+          "expression": "a*(-b/max(c,0.001)) + (d/max(e,1)-f)*0.3*min(e,1) + (0.75/max(c,0.001)-1)*f*0.15",
+          "visibleCount": 6
+        }
+      }
+    },
+    {
+      "id": "ams4tzml2hl2w",
+      "type": "caNode",
+      "position": {
+        "x": 2070,
+        "y": 380
+      },
+      "data": {
+        "nodeType": "expression",
+        "config": {
+          "expression": "a*(b/max(c,0.001)) + (d/max(e,1)-f)*0.3*min(e,1) + (0.75/max(c,0.001)-1)*f*0.15",
+          "visibleCount": 6
+        }
+      }
+    },
+    {
+      "id": "ams4tzml2gn52",
+      "type": "caNode",
+      "position": {
+        "x": 2300,
+        "y": 285
+      },
+      "data": {
+        "nodeType": "applyForce",
+        "config": {}
+      }
+    },
+    {
+      "id": "ams4tzml20z5s",
+      "type": "caNode",
+      "position": {
+        "x": 2070,
+        "y": 570
+      },
+      "data": {
+        "nodeType": "getRandom",
+        "config": {
+          "mode": "float"
+        }
+      }
+    },
+    {
+      "id": "ams4tzml2mkdt",
+      "type": "caNode",
+      "position": {
+        "x": 2070,
+        "y": 665
+      },
+      "data": {
+        "nodeType": "getRandom",
+        "config": {
+          "mode": "float"
+        }
+      }
+    },
+    {
+      "id": "ams4tzml2ukvn",
+      "type": "caNode",
+      "position": {
+        "x": 2300,
+        "y": 570
+      },
+      "data": {
+        "nodeType": "expression",
+        "config": {
+          "expression": "(a-0.5)*0.045",
+          "visibleCount": 1
+        }
+      }
+    },
+    {
+      "id": "ams4tzml2cfra",
+      "type": "caNode",
+      "position": {
+        "x": 2300,
+        "y": 665
+      },
+      "data": {
+        "nodeType": "expression",
+        "config": {
+          "expression": "(a-0.5)*0.045",
+          "visibleCount": 1
+        }
+      }
+    },
+    {
+      "id": "ams4tzml2i6v3",
+      "type": "caNode",
+      "position": {
+        "x": 2530,
+        "y": 617.5
+      },
+      "data": {
+        "nodeType": "applyForce",
+        "config": {}
+      }
+    }
+  ],
+  "agentGraphEdges": [
+    {
+      "id": "ems4tzml2qev9",
+      "source": "ams4tzml1dztl",
+      "target": "ams4tzml1f36r",
+      "sourceHandle": "output_flow_do",
+      "targetHandle": "input_flow_do"
+    },
+    {
+      "id": "ems4tzml2m7jp",
+      "source": "ams4tzml1jztx",
+      "target": "ams4tzml1f36r",
+      "sourceHandle": "output_value_agents",
+      "targetHandle": "input_value_array"
+    },
+    {
+      "id": "ems4tzml2rbsd",
+      "source": "ams4tzml1f36r",
+      "target": "ams4tzml2abze",
+      "sourceHandle": "output_value_element",
+      "targetHandle": "input_value_agentId"
+    },
+    {
+      "id": "ems4tzml2hphq",
+      "source": "ams4tzml264b0",
+      "target": "ams4tzml2flb6",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_x"
+    },
+    {
+      "id": "ems4tzml289jv",
+      "source": "ams4tzml2flb6",
+      "target": "ams4tzml2rirj",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_value"
+    },
+    {
+      "id": "ems4tzml2khc9",
+      "source": "ams4tzml23hm5",
+      "target": "ams4tzml2kgg0",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_x"
+    },
+    {
+      "id": "ems4tzml2do1v",
+      "source": "ams4tzml2abze",
+      "target": "ams4tzml2kgg0",
+      "sourceHandle": "output_value_vx",
+      "targetHandle": "input_value_y"
+    },
+    {
+      "id": "ems4tzml2tfg1",
+      "source": "ams4tzml2kgg0",
+      "target": "ams4tzml2qfo6",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_value"
+    },
+    {
+      "id": "ems4tzml2m7us",
+      "source": "ams4tzml2xjgv",
+      "target": "ams4tzml2sp2j",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_x"
+    },
+    {
+      "id": "ems4tzml2a4ps",
+      "source": "ams4tzml2abze",
+      "target": "ams4tzml2sp2j",
+      "sourceHandle": "output_value_vy",
+      "targetHandle": "input_value_y"
+    },
+    {
+      "id": "ems4tzml2iuun",
+      "source": "ams4tzml2sp2j",
+      "target": "ams4tzml2nrbu",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_value"
+    },
+    {
+      "id": "ems4tzml2dekq",
+      "source": "ams4tzml1f36r",
+      "target": "ams4tzml2rirj",
+      "sourceHandle": "output_flow_body",
+      "targetHandle": "input_flow_do"
+    },
+    {
+      "id": "ems4tzml2c81k",
+      "source": "ams4tzml2rirj",
+      "target": "ams4tzml2qfo6",
+      "sourceHandle": "output_flow_next",
+      "targetHandle": "input_flow_do"
+    },
+    {
+      "id": "ems4tzml28uo7",
+      "source": "ams4tzml2qfo6",
+      "target": "ams4tzml2nrbu",
+      "sourceHandle": "output_flow_next",
+      "targetHandle": "input_flow_do"
+    },
+    {
+      "id": "ems4tzml2ntwv",
+      "source": "ams4tzml2mz51",
+      "target": "ams4tzml2yete",
+      "sourceHandle": "output_value_leftCount",
+      "targetHandle": "input_value_a"
+    },
+    {
+      "id": "ems4tzml2vy3e",
+      "source": "ams4tzml2mz51",
+      "target": "ams4tzml2yete",
+      "sourceHandle": "output_value_rightCount",
+      "targetHandle": "input_value_b"
+    },
+    {
+      "id": "ems4tzml2m1ms",
+      "source": "ams4tzml24517",
+      "target": "ams4tzml2yete",
+      "sourceHandle": "output_value_leftCount",
+      "targetHandle": "input_value_c"
+    },
+    {
+      "id": "ems4tzml231f1",
+      "source": "ams4tzml24517",
+      "target": "ams4tzml2yete",
+      "sourceHandle": "output_value_rightCount",
+      "targetHandle": "input_value_d"
+    },
+    {
+      "id": "ems4tzml2ekof",
+      "source": "ams4tzml2zh27",
+      "target": "ams4tzml2jsnh",
+      "sourceHandle": "output_value_vx",
+      "targetHandle": "input_value_a"
+    },
+    {
+      "id": "ems4tzml2u1g4",
+      "source": "ams4tzml2zh27",
+      "target": "ams4tzml2jsnh",
+      "sourceHandle": "output_value_vy",
+      "targetHandle": "input_value_b"
+    },
+    {
+      "id": "ems4tzml2jlnb",
+      "source": "ams4tzml2yete",
+      "target": "ams4tzml2lvhu",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_a"
+    },
+    {
+      "id": "ems4tzml2j3il",
+      "source": "ams4tzml2zh27",
+      "target": "ams4tzml2lvhu",
+      "sourceHandle": "output_value_vy",
+      "targetHandle": "input_value_b"
+    },
+    {
+      "id": "ems4tzml2z97c",
+      "source": "ams4tzml2jsnh",
+      "target": "ams4tzml2lvhu",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_c"
+    },
+    {
+      "id": "ems4tzml2tkvb",
+      "source": "ams4tzml2074f",
+      "target": "ams4tzml2lvhu",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_d"
+    },
+    {
+      "id": "ems4tzml26ls9",
+      "source": "ams4tzml227k6",
+      "target": "ams4tzml2lvhu",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_e"
+    },
+    {
+      "id": "ems4tzml2brln",
+      "source": "ams4tzml2zh27",
+      "target": "ams4tzml2lvhu",
+      "sourceHandle": "output_value_vx",
+      "targetHandle": "input_value_f"
+    },
+    {
+      "id": "ems4tzml27hqb",
+      "source": "ams4tzml2yete",
+      "target": "ams4tzml2hl2w",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_a"
+    },
+    {
+      "id": "ems4tzml2iqyb",
+      "source": "ams4tzml2zh27",
+      "target": "ams4tzml2hl2w",
+      "sourceHandle": "output_value_vx",
+      "targetHandle": "input_value_b"
+    },
+    {
+      "id": "ems4tzml2qzhv",
+      "source": "ams4tzml2jsnh",
+      "target": "ams4tzml2hl2w",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_c"
+    },
+    {
+      "id": "ems4tzml2xiyy",
+      "source": "ams4tzml2hv5z",
+      "target": "ams4tzml2hl2w",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_d"
+    },
+    {
+      "id": "ems4tzml24xeq",
+      "source": "ams4tzml227k6",
+      "target": "ams4tzml2hl2w",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_e"
+    },
+    {
+      "id": "ems4tzml2iuuy",
+      "source": "ams4tzml2zh27",
+      "target": "ams4tzml2hl2w",
+      "sourceHandle": "output_value_vy",
+      "targetHandle": "input_value_f"
+    },
+    {
+      "id": "ems4tzml2nebu",
+      "source": "ams4tzml2lvhu",
+      "target": "ams4tzml2gn52",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_fx"
+    },
+    {
+      "id": "ems4tzml2v3nf",
+      "source": "ams4tzml2hl2w",
+      "target": "ams4tzml2gn52",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_fy"
+    },
+    {
+      "id": "ems4tzml2elv6",
+      "source": "ams4tzml1f36r",
+      "target": "ams4tzml2gn52",
+      "sourceHandle": "output_flow_next",
+      "targetHandle": "input_flow_do"
+    },
+    {
+      "id": "ems4tzml235oy",
+      "source": "ams4tzml20z5s",
+      "target": "ams4tzml2ukvn",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_a"
+    },
+    {
+      "id": "ems4tzml2gank",
+      "source": "ams4tzml2mkdt",
+      "target": "ams4tzml2cfra",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_a"
+    },
+    {
+      "id": "ems4tzml269xc",
+      "source": "ams4tzml2ukvn",
+      "target": "ams4tzml2i6v3",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_fx"
+    },
+    {
+      "id": "ems4tzml26auy",
+      "source": "ams4tzml2cfra",
+      "target": "ams4tzml2i6v3",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_fy"
+    },
+    {
+      "id": "ems4tzml2p4ua",
+      "source": "ams4tzml2gn52",
+      "target": "ams4tzml2i6v3",
+      "sourceHandle": "output_flow_next",
+      "targetHandle": "input_flow_do"
+    }
+  ],
+  "macroDefs": []
+}

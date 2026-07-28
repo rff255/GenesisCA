@@ -194,6 +194,40 @@ function CategoricalColorEditor({ id, nodeData }: { id: string; nodeData: CaNode
   );
 }
 
+/** Optional per-node "Cone color" for the two FOV sensing nodes (Get Agents In
+ *  View / Sense Hemifield). DISPLAY-ONLY — the simulator's vision-cone overlay
+ *  tints this node's wedges with it; no compiler on any target reads
+ *  `config.visionColor`. Empty (the ⟳ reset) restores the automatic palette
+ *  slot. A cosmetic RGB picker (never an 8-digit hex) per the RGBA-colours
+ *  rule; `nodrag` because it sits in the node body. */
+function VisionColorRow({ value, onChange }: { value?: string; onChange: (v: string) => void }) {
+  const set = typeof value === 'string' && /^#[0-9a-fA-F]{6}$/.test(value);
+  return (
+    <>
+      <label style={{ fontSize: '0.6rem', color: '#999' }}>Cone color (display)</label>
+      <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+        <input
+          type="color"
+          className="nodrag"
+          value={set ? value! : '#50c8ff'}
+          onMouseDown={e => { if (e.button === 0) e.stopPropagation(); }}
+          onChange={e => onChange(e.target.value)}
+          style={{ flex: 1, height: 22, padding: 0, background: 'transparent', border: '1px solid #2d4059', borderRadius: 3, cursor: 'pointer' }}
+          title="Tint this node's vision cones in the simulator (Show vision). Leave unset for the automatic palette."
+        />
+        <button
+          className="nodrag"
+          onMouseDown={e => { if (e.button === 0) e.stopPropagation(); }}
+          onClick={() => onChange('')}
+          disabled={!set}
+          style={{ background: 'none', border: 'none', color: set ? '#999' : '#555', cursor: set ? 'pointer' : 'default', fontSize: '0.7rem', padding: '0 2px' }}
+          title="Use the automatic palette color"
+        >{'⟳'}</button>
+      </div>
+    </>
+  );
+}
+
 function CaNodeComponent({ id, data }: NodeProps) {
   const nodeData = data as CaNodeData;
   const def = getNodeDef(nodeData.nodeType);
@@ -1471,6 +1505,10 @@ function CaNodeComponent({ id, data }: NodeProps) {
                 </select>
               </>
             )}
+            <VisionColorRow
+              value={nodeData.config.visionColor as string | undefined}
+              onChange={v => updateConfig('visionColor', v)}
+            />
           </>
         )}
 
@@ -1507,6 +1545,10 @@ function CaNodeComponent({ id, data }: NodeProps) {
                 </select>
               </>
             )}
+            <VisionColorRow
+              value={nodeData.config.visionColor as string | undefined}
+              onChange={v => updateConfig('visionColor', v)}
+            />
           </>
         )}
 
@@ -3441,7 +3483,11 @@ function CaNodeComponent({ id, data }: NodeProps) {
               title={port.label}
             />
             {showWidget && (
-              <div className={`${styles.inlineWidgetWrapper} nodrag`} style={{ top: `${topPx}px` }} onDoubleClick={stopAll}>
+              // `title` names the port: with the global port-label toggle OFF
+              // (the default) an inline widget is otherwise an unlabelled box, so
+              // hovering is the only way to learn what it sets (the reported
+              // "where is the Radius input?" on the FOV sensing nodes).
+              <div className={`${styles.inlineWidgetWrapper} nodrag`} title={port.label} style={{ top: `${topPx}px` }} onDoubleClick={stopAll}>
                 {effectiveWidget === 'bool' ? (
                   <InlineBoolSelect
                     className={styles.inlineWidget}

@@ -935,10 +935,11 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
   // (top-level + macro internals) — feeds the vision-cone display. halfAngle /
   // headingSource come from config; the radius is the inline widget value when
   // the port is UNWIRED, else the neighbourQueryRadius fallback (a wired radius
-  // isn't knowable at render time).
+  // isn't knowable at render time). `tint` is the node's optional DISPLAY-ONLY
+  // `visionColor` (#rrggbb) as an "r,g,b" string; null ⇒ the automatic palette.
   const visionCones = useMemo(() => {
     if (!model.topologyMode?.agents) return [];
-    const out: Array<{ halfAngleDeg: number; radius: number }> = [];
+    const out: Array<{ halfAngleDeg: number; radius: number; tint: string | null }> = [];
     const fallbackR = cbNum(model.centerBased, 'neighbourQueryRadius');
     const scan = (
       nodes: typeof model.agentGraphNodes,
@@ -954,7 +955,11 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
         const radiusWired = (edges ?? []).some(e => e.target === n.id && e.targetHandle === 'input_value_radius');
         const inlineR = Number(cfg._port_radius ?? 5);
         const r = radiusWired ? fallbackR : (Number.isFinite(inlineR) && inlineR > 0 ? inlineR : 5);
-        out.push({ halfAngleDeg: Math.max(0, deg), radius: Math.max(0.1, r) });
+        const vc = cfg.visionColor;
+        const tint = typeof vc === 'string' && /^#[0-9a-fA-F]{6}$/.test(vc)
+          ? (() => { const c = hexToRgba(vc); return `${c.r},${c.g},${c.b}`; })()
+          : null;
+        out.push({ halfAngleDeg: Math.max(0, deg), radius: Math.max(0.1, r), tint });
       }
     };
     scan(model.agentGraphNodes, model.agentGraphEdges);
@@ -4021,7 +4026,8 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
         if (ids.length > 0) {
           ctx.save();
           cones.forEach((cone, ci) => {
-            const tint = TINTS[ci % TINTS.length]!;
+            // The node's own visionColor wins over the automatic palette slot.
+            const tint = cone.tint ?? TINTS[ci % TINTS.length]!;
             ctx.fillStyle = `rgba(${tint}, 0.10)`;
             ctx.strokeStyle = `rgba(${tint}, 0.45)`;
             ctx.lineWidth = 1;
