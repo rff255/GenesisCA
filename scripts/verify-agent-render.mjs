@@ -448,16 +448,26 @@ check('runtime: uploadAgentSoA seeds the agent colour buffer [invisible-agents b
   //    own ON post, the two brand-new-worker resets inside initWorkerWithDimensions,
   //    and (agents) the 3D alpha-blend detach, which POSTS in the same statement.
   const initBlock = blockAfter(sv, /const initWorkerWithDimensions = useCallback\(/);
+  // The failed-attach force-on helpers (the frozen-frame-on-panel-resize fix)
+  // are sanctioned: they mirror + post in the same statement, exactly like the
+  // driver's own ON post.
+  const forceGrid = blockAfter(sv, /const forceGridUiSyncOn = useCallback\(/);
+  const forceAgent = blockAfter(sv, /const forceAgentUiSyncOn = useCallback\(/);
+  check('SimulatorView: the force-on helpers TELL the worker in the same statement [mirror invariant]',
+    /gridUiSyncPostedRef\.current = true;[\s\S]{0,200}?w\.postMessage\(\{ type: 'setGridUiSync', on: true \}\)/.test(forceGrid)
+    && /agentUiSyncPostedRef\.current = true; w\.postMessage\(\{ type: 'setAgentUiSync', on: true \}\)/.test(forceAgent));
   check('SimulatorView: every gridUiSync "= true" is a post or a brand-new worker [mirror invariant]',
     countAll(sv, 'gridUiSyncPostedRef.current = true')
       === countAll(gridDriver, 'gridUiSyncPostedRef.current = true')
-        + countAll(initBlock, 'gridUiSyncPostedRef.current = true'));
+        + countAll(initBlock, 'gridUiSyncPostedRef.current = true')
+        + countAll(forceGrid, 'gridUiSyncPostedRef.current = true'));
   check('SimulatorView: the 3D alpha-blend detach TELLS the worker before mirroring [mirror invariant]',
     /setAgentUiSync', on: true \}\);\s*\n\s*agentUiSyncPostedRef\.current = true;/.test(sv));
   check('SimulatorView: every agentUiSync "= true" is a post or a brand-new worker [mirror invariant]',
     countAll(sv, 'agentUiSyncPostedRef.current = true')
       === countAll(agentDriver, 'agentUiSyncPostedRef.current = true')
         + countAll(initBlock, 'agentUiSyncPostedRef.current = true')
+        + countAll(forceAgent, 'agentUiSyncPostedRef.current = true')
         + 1 /* the alpha-blend detach checked above */);
 }
 

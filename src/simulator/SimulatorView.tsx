@@ -2632,7 +2632,10 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   // and ask the worker to set up direct render. Safe to call whenever the agent
   // WebGPU runtime is up (initial attach on agentRuntimeReady; re-attach on a
   // display resize or a CPU-visual toggle change). No-op unless eligible + idle.
-  const maybeAttachAgentCanvas = useCallback(() => {
+  // `reattach = true` = a display-resize re-attach while the render is STILL
+  // active: the caller keeps showing the old (still worker-presented) canvas
+  // until the ack commits the fresh one — never a stale-CPU fallback gap.
+  const maybeAttachAgentCanvas = useCallback((reattach = false) => {
     if (!agentRenderEligibleRef.current || agentMetaballsRef.current.enabled) return;
     // M1 (audit): the gate's MODEL-dependent terms (sprites / an agent OM whose
     // graph the GPU can't compile) can change on a SOFT recompile, which never
@@ -2642,7 +2645,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     // Phase C: 3D alpha-blend needs back-to-front sorting (gl3d's job), so a 3D
     // alpha-blend-on model stays on the CPU/frame path — don't attach.
     if (is3dRef.current && alpha3dRef.current) return;
-    if (agentDirectRenderActiveRef.current || pendingAgentRenderCanvas.current) return;
+    if ((agentDirectRenderActiveRef.current && !reattach) || pendingAgentRenderCanvas.current) return;
     const worker = workerRef.current, canvas = canvasRef.current;
     if (!worker || !canvas) return;
     if (is3dRef.current) {
@@ -2658,11 +2661,11 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       const dpr = window.devicePixelRatio || 1;
       const bw = Math.max(1, Math.round(cssW * dpr)), bh = Math.max(1, Math.round(cssH * dpr));
       try {
-        // Remove any prior sphere canvas (a stale element after resize/recompile).
-        if (agentSphereCanvasRef.current && agentSphereCanvasRef.current.parentElement === layer) {
-          layer.removeChild(agentSphereCanvasRef.current);
-        }
-        agentSphereCanvasRef.current = null;
+        // The PRIOR sphere canvas (if any) STAYS in the DOM and keeps
+        // compositing the worker's presents until the ack COMMITS the fresh one
+        // (which removes it) — a resize re-attach must never show a stale/blank
+        // gap. Dead-canvas paths (runtime rebuild) remove it explicitly in the
+        // agentRuntimeReady handler.
         const fresh = document.createElement('canvas');
         fresh.width = bw; fresh.height = bh;
         fresh.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;display:none';
@@ -2854,13 +2857,39 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     }
   }, []);
 
+  // A direct-render ATTACH FAILED (the ack came back inactive), so the display
+  // falls back to the CPU paths — whose data free mode deliberately let go stale.
+  // Force the sync ON so the worker ships fresh snapshots / colours (the OFF→ON
+  // handlers ship one immediately, even paused). The normal drivers early-return
+  // while the render is inactive, so this one-shot ON sticks — a permanent CPU
+  // fallback stays LIVE instead of frozen on an ancient frame. Mirrors are only
+  // assigned in the same statement as the post (the UI-sync mirror invariant).
+  const forceAgentUiSyncOn = useCallback(() => {
+    const w = workerRef.current;
+    if (!w) return;
+    if (agentUiSyncTimerRef.current) { clearTimeout(agentUiSyncTimerRef.current); agentUiSyncTimerRef.current = 0; }
+    if (!agentUiSyncPostedRef.current) { agentUiSyncPostedRef.current = true; w.postMessage({ type: 'setAgentUiSync', on: true }); }
+  }, []);
+  const forceGridUiSyncOn = useCallback(() => {
+    const w = workerRef.current;
+    if (!w) return;
+    if (gridUiSyncTimerRef.current) { clearTimeout(gridUiSyncTimerRef.current); gridUiSyncTimerRef.current = 0; }
+    if (!gridUiSyncPostedRef.current) {
+      gridUiSyncPostedRef.current = true;
+      gridFrameAwaitingColorsRef.current = true;
+      w.postMessage({ type: 'setGridUiSync', on: true });
+    }
+  }, []);
+
   // (Re)attach the voxel render canvas: append a FRESH DOM canvas into the voxel
   // layer (UNDER the gl canvas), transfer its control, and ask the worker to build
   // the pipelines. A fresh element each attach handles transfer-once + resize +
   // runtime rebuild. No-op unless eligible + idle.
-  const maybeAttachVoxelCanvas = useCallback(() => {
+  // `reattach = true` = a display-resize re-attach while the render is STILL
+  // active (see maybeAttachAgentCanvas — same keep-the-old-canvas contract).
+  const maybeAttachVoxelCanvas = useCallback((reattach = false) => {
     if (!voxelRenderEligibleRef.current) return;
-    if (voxelRenderActiveRef.current || pendingVoxelCanvas.current) return;
+    if ((voxelRenderActiveRef.current && !reattach) || pendingVoxelCanvas.current) return;
     const worker = workerRef.current, layer = voxelLayerRef.current;
     if (!worker || !layer) return;
     const glc = glCanvasRef.current;
@@ -2869,11 +2898,9 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     const dpr = window.devicePixelRatio || 1;
     const bw = Math.max(1, Math.round(cssW * dpr)), bh = Math.max(1, Math.round(cssH * dpr));
     try {
-      // Drop any prior voxel canvas (stale after a resize / runtime rebuild).
-      if (voxelCanvasRef.current && voxelCanvasRef.current.parentElement === layer) {
-        layer.removeChild(voxelCanvasRef.current);
-      }
-      voxelCanvasRef.current = null;
+      // The PRIOR voxel canvas (if any) STAYS in the DOM and keeps compositing
+      // the worker's presents until the ack COMMITS the fresh one (which removes
+      // it) — a resize re-attach must never show a stale/blank gap.
       const fresh = document.createElement('canvas');
       fresh.width = bw; fresh.height = bh;
       fresh.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;display:none';
@@ -2947,9 +2974,12 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
         // Re-attach only on a REAL size change (an occluded pane measures 0×0 — the
         // A1/A2 storm guard). A fresh transferred canvas is needed (dims are fixed).
         if ((dims.w !== cssW || dims.h !== cssH) && cssW >= 2 && cssH >= 2) {
-          agentDirectRenderActiveRef.current = false;
-          agent3dActive = false;
-          maybeAttachAgentCanvas();
+          // Re-attach WITHOUT falling back — the OLD sphere canvas is CSS-
+          // stretched (width/height 100%) and keeps compositing the worker's
+          // presents until the ack commits the fresh one. Flipping to the gl3d
+          // snapshot path here rendered an ANCIENT snapshot (free mode) — the
+          // reported frozen-frame-on-panel-resize.
+          maybeAttachAgentCanvas(true);
         }
       }
       // FRAME mode (gl3d full render from the snapshot) requires a snapshot IN HAND
@@ -2974,9 +3004,12 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
         // Re-attach only on a REAL size change (an occluded pane measures 0×0 —
         // the A1/A2 attach-storm guard). The transferred canvas has fixed dims.
         if ((dims.w !== cssW || dims.h !== cssH) && cssW >= 2 && cssH >= 2) {
-          voxelRenderActiveRef.current = false;
-          voxelActive = false;
-          maybeAttachVoxelCanvas();
+          // Re-attach WITHOUT falling back — the OLD voxel canvas is CSS-
+          // stretched and keeps compositing the worker's presents until the ack
+          // commits the fresh one. Flipping to the gl3d colours path here
+          // rendered ANCIENT colours (free mode ships none) — the reported
+          // frozen-frame-on-panel-resize (Accretor-class models).
+          maybeAttachVoxelCanvas(true);
         }
       }
       const voxelFrame = voxelActive
@@ -3594,15 +3627,14 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       // brush cursor overlay on top below.
       const dims = agentRenderCanvasDimsRef.current;
       if ((dims.w !== parentW || dims.h !== parentH) && parentW >= 2 && parentH >= 2) {
-        agentCompositeActiveRef.current = false;
-        agentDirectRenderActiveRef.current = false;
-        agentRenderCanvasRef.current = null;
-        agentComposite = false;
-        maybeAttachAgentCanvas();   // fresh display-sized canvas at the new size
-      } else {
-        ctx.drawImage(agentRenderCanvasRef.current!, 0, 0);
-        postAgentCamera();
+        // Re-attach WITHOUT falling back — keep blitting the OLD (still worker-
+        // presented) composite until the ack commits the fresh one. Dropping to
+        // the CPU paths here showed a frozen outdated grid+agents frame for the
+        // whole handshake (free mode ships neither colours nor snapshots).
+        maybeAttachAgentCanvas(true);
       }
+      ctx.drawImage(agentRenderCanvasRef.current!, 0, 0);
+      postAgentCamera();
     } else if (showGrid2d && blitSource) {
       if (infinity) {
         // Snap each tile's left/top edges to integer pixels and derive width/height
@@ -3687,13 +3719,15 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       // tab). A degenerate parent keeps the current canvas; the first visible
       // draw sees the true size and does one clean re-attach.
       if ((dims.w !== parentW || dims.h !== parentH) && parentW >= 2 && parentH >= 2) {
-        agentDirectRenderActiveRef.current = false;
-        agentRenderCanvasRef.current = null;
-        agentDirect = false;
-        maybeAttachAgentCanvas();   // fresh canvas at the new display size
-      } else {
-        postAgentCamera();
+        // Re-attach WITHOUT falling back: the OLD canvas keeps receiving the
+        // worker's presents until the fresh one is committed by the ack, so we
+        // keep blitting it (slightly mis-sized) instead of dropping to the CPU
+        // overlay — whose snapshot is ANCIENT in free mode (UI-sync off), which
+        // showed a frozen outdated frame for the whole handshake (the reported
+        // panel-resize freeze on Particle Life-class models).
+        maybeAttachAgentCanvas(true);
       }
+      postAgentCamera();
     }
     if (agentComposite) {
       // The composite already carries the grid layer + agents + the bg backdrop
@@ -4447,12 +4481,23 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
           if (voxelRenderEligibleRef.current) maybeAttachVoxelCanvas();
         }
       } else if (msg.ready === false) {
+        // WebGPU died — the worker falls back and ships colours again. Drop the
+        // (now dead) voxel canvases so a frozen frame can't linger in the DOM.
         voxelRenderActiveRef.current = false;
         pendingVoxelCanvas.current = null;
+        const oldV = voxelCanvasRef.current;
+        if (oldV?.parentElement) oldV.parentElement.removeChild(oldV);
+        voxelCanvasRef.current = null;
       }
     }
     if (msg.type === 'voxelRenderStatus') {
       if (msg.active && pendingVoxelCanvas.current) {
+        // Commit: the OLD canvas (kept live through a resize re-attach) leaves
+        // the DOM now that the fresh one takes over.
+        {
+          const old = voxelCanvasRef.current;
+          if (old && old !== pendingVoxelCanvas.current && old.parentElement) old.parentElement.removeChild(old);
+        }
         voxelCanvasRef.current = pendingVoxelCanvas.current;
         pendingVoxelCanvas.current = null;
         voxelRenderActiveRef.current = true;
@@ -4477,11 +4522,18 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
         updateGridUiSync();
         draw();
       } else {
-        // Attach failed — stay on the colours-readback + gl3d path.
+        // Attach failed — stay on the colours-readback + gl3d path. Drop BOTH
+        // the pending canvas AND any old one a resize re-attach kept alive, and
+        // force the grid sync ON so the fallback renders LIVE colours (free
+        // mode's stale colorsRef otherwise froze the display).
         voxelRenderActiveRef.current = false;
         const p = pendingVoxelCanvas.current;
         if (p?.parentElement) p.parentElement.removeChild(p);
         pendingVoxelCanvas.current = null;
+        const oldV = voxelCanvasRef.current;
+        if (oldV?.parentElement) oldV.parentElement.removeChild(oldV);
+        voxelCanvasRef.current = null;
+        forceGridUiSyncOn();
       }
     }
     // A1 direct AGENT render — the runtime-ready trigger + the attach ack.
@@ -4503,9 +4555,13 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     } else if (msg.type === 'agentRenderStatus') {
       if (msg.active && pendingAgentRenderCanvas.current) {
         // Commit the swap. 2D: the placeholder becomes the 1:1 blit source.
-        // 3D: the appended DOM sphere canvas (composited by the browser).
-        if (is3dRef.current) agentSphereCanvasRef.current = pendingAgentRenderCanvas.current;
-        else agentRenderCanvasRef.current = pendingAgentRenderCanvas.current;
+        // 3D: the appended DOM sphere canvas (composited by the browser) — the
+        // OLD one (kept live through a resize re-attach) leaves the DOM now.
+        if (is3dRef.current) {
+          const old = agentSphereCanvasRef.current;
+          if (old && old !== pendingAgentRenderCanvas.current && old.parentElement) old.parentElement.removeChild(old);
+          agentSphereCanvasRef.current = pendingAgentRenderCanvas.current;
+        } else agentRenderCanvasRef.current = pendingAgentRenderCanvas.current;
         pendingAgentRenderCanvas.current = null;
         pendingAgentCanvasAttach.current = false;
         agentDirectRenderActiveRef.current = true;
@@ -4530,11 +4586,20 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
         updateAgentUiSync();
         draw();
       } else {
-        // Attach failed — stay on the CPU overlay path (drop a 3D placeholder DOM canvas).
+        // Attach failed — stay on the CPU overlay path. Drop BOTH the pending
+        // canvas AND any old one a resize re-attach kept alive, and force the
+        // agent sync ON so the fallback draws LIVE snapshots (free mode's stale
+        // agentsRef otherwise froze the display on an ancient frame).
         agentDirectRenderActiveRef.current = false;
+        agentCompositeActiveRef.current = false;
         const p = pendingAgentRenderCanvas.current;
         if (p?.parentElement) p.parentElement.removeChild(p);
         pendingAgentRenderCanvas.current = null;
+        agentRenderCanvasRef.current = null;
+        const oldS = agentSphereCanvasRef.current;
+        if (oldS?.parentElement) oldS.parentElement.removeChild(oldS);
+        agentSphereCanvasRef.current = null;
+        forceAgentUiSyncOn();
       }
     }
   };
