@@ -2153,6 +2153,17 @@ export function HelpView() {
             them from a given save if needed.
           </p>
 
+          <h3 className={styles.h3}>Drag &amp; Drop</h3>
+          <p className={styles.p}>
+            You can <strong>drop files anywhere on the GenesisCA window</strong>:
+            a <code>.gcaproj</code> (or an exported standalone <code>.html</code>) prompts to
+            load the project (with the usual unsaved-changes confirmation);
+            a <code>.gcastate</code> asks to replace the current simulation state;
+            a <code>.gcapreset</code> is added to the model&apos;s presets; and an
+            <strong> image</strong> (PNG/JPEG/BMP/WebP) opens the <strong>Map Image to
+            Cells</strong> dialog, just like pasting one with Ctrl+V.
+          </p>
+
           <p className={styles.p}>
             All simulator settings (speed, brush, viewer) are automatically saved and
             restored between sessions.

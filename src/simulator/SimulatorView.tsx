@@ -9418,6 +9418,58 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     return () => window.removeEventListener('paste', onPaste);
   }, []);
 
+  // Drag-and-drop plumbing (App.tsx owns the window drop targets and routes by
+  // extension): consume the dropped-file CustomEvents. Latest-refs so the
+  // once-registered listeners never act on stale closures.
+  //  - genesis-load-state-file  → the transport-bar Load State path (adaptDims).
+  //  - genesis-open-image-file  → the Map Image to Cells dialog (the Ctrl+V seam).
+  //  - genesis-import-preset-file → readPresetFile + addPreset (feature parity
+  //    with the Presets block's Import button).
+  const applySimulationStateRef2 = useRef<(s: SimulationState, o?: { adaptDims?: boolean }) => void>(() => {});
+  applySimulationStateRef2.current = applySimulationState;
+  const addPresetRef = useRef(addPreset);
+  addPresetRef.current = addPreset;
+  useEffect(() => {
+    const onStateFile = (e: Event) => {
+      const file = (e as CustomEvent).detail?.file as File | undefined;
+      if (!file) return;
+      void (async () => {
+        try {
+          const state = await readStateFile(file);
+          applySimulationStateRef2.current(state, { adaptDims: true });
+        } catch (err) {
+          setCompileError(String(err));
+        }
+      })();
+    };
+    const onImageFile = (e: Event) => {
+      const file = (e as CustomEvent).detail?.file as File | undefined;
+      if (!file) return;
+      const img = new Image();
+      img.onload = () => openImageForMappingRef.current(img);
+      img.src = URL.createObjectURL(file);
+    };
+    const onPresetFile = (e: Event) => {
+      const file = (e as CustomEvent).detail?.file as File | undefined;
+      if (!file) return;
+      void (async () => {
+        try {
+          addPresetRef.current(await readPresetFile(file));
+        } catch (err) {
+          setCompileError(`Preset import failed: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      })();
+    };
+    window.addEventListener('genesis-load-state-file', onStateFile);
+    window.addEventListener('genesis-open-image-file', onImageFile);
+    window.addEventListener('genesis-import-preset-file', onPresetFile);
+    return () => {
+      window.removeEventListener('genesis-load-state-file', onStateFile);
+      window.removeEventListener('genesis-open-image-file', onImageFile);
+      window.removeEventListener('genesis-import-preset-file', onPresetFile);
+    };
+  }, []);
+
   const [leftPanelOpen, setLeftPanelOpen] = useState(true);
   const [rightPanelOpen, setRightPanelOpen] = useState(true);
   // Which tab the shared right panel shows. 'controls' = the sim controls

@@ -31,6 +31,12 @@ function AppInner() {
   // Holds the requested model so the deferred onConfirm has a closed-over
   // reference; setting to null dismisses the dialog.
   const [pendingLibLoad, setPendingLibLoad] = useState<{ model: CAModel; fileName?: string } | null>(null);
+  // Pending .gcastate drop awaiting the replace-state confirmation.
+  const [pendingStateDrop, setPendingStateDrop] = useState<File | null>(null);
+  // File-drag-over-the-window indicator (drives the drop overlay). Counter-based
+  // (dragenter/dragleave fire per-element as the drag crosses children).
+  const [dragActive, setDragActive] = useState(false);
+  const dragDepth = useRef(0);
   // Transient load-confirmation toast (auto-dismisses).
   const [toast, setToast] = useState<string | null>(null);
   const toastTimer = useRef<number | null>(null);
@@ -110,6 +116,83 @@ function AppInner() {
     loadModel(model, fileName);
     afterLoad(model.properties.name);
   };
+
+  // --- Drag-and-drop files anywhere on the app -----------------------------
+  // .gcaproj / .json / presentation .html → the SAME confirm-load flow as
+  // FileMenu / the PWA file handler (readModelFile auto-detects HTML; unsaved
+  // changes go through pendingLibLoad). .gcastate → confirm, then replace the
+  // sim state via a genesis-load-state-file CustomEvent SimulatorView handles
+  // (the exact transport-bar Load State path). .gcapreset → append to the
+  // model's presets (genesis-import-preset-file). Images → the Map Image to
+  // Cells dialog (genesis-open-image-file — the Ctrl+V clipboard seam).
+  // Window-level listeners preventDefault dragover+drop so the browser never
+  // navigates to a dropped file.
+  const loadDroppedProject = async (file: File) => {
+    try {
+      const parsed = await readModelFile(file);
+      if (isDirtyRef.current) {
+        setPendingLibLoad({ model: parsed, fileName: file.name });
+      } else {
+        loadModel(parsed, file.name);
+        afterLoad(parsed.properties?.name ?? 'Model');
+      }
+    } catch (err) {
+      showToast(`Could not open "${file.name}": ${err instanceof Error ? err.message : 'invalid project file'}`);
+    }
+  };
+  const handleDroppedFile = (file: File) => {
+    const ext = (file.name.split('.').pop() ?? '').toLowerCase();
+    if (['gcaproj', 'json', 'html', 'htm'].includes(ext)) { void loadDroppedProject(file); return; }
+    if (ext === 'gcastate') { setPendingStateDrop(file); return; }
+    if (ext === 'gcapreset') {
+      window.dispatchEvent(new CustomEvent('genesis-import-preset-file', { detail: { file } }));
+      showToast(`Importing preset from "${file.name}"…`);
+      return;
+    }
+    if (file.type.startsWith('image/') || ['png', 'jpg', 'jpeg', 'bmp', 'webp'].includes(ext)) {
+      setMode('simulator');
+      window.dispatchEvent(new CustomEvent('genesis-open-image-file', { detail: { file } }));
+      return;
+    }
+    showToast(`Unsupported file type: "${file.name}"`);
+  };
+  // Latest-ref so the once-registered listeners never act on a stale closure.
+  const handleDroppedFileRef = useRef(handleDroppedFile);
+  handleDroppedFileRef.current = handleDroppedFile;
+  useEffect(() => {
+    const hasFiles = (e: DragEvent) => !!e.dataTransfer && [...e.dataTransfer.types].includes('Files');
+    const onDragEnter = (e: DragEvent) => {
+      if (!hasFiles(e)) return;
+      e.preventDefault();
+      dragDepth.current++;
+      setDragActive(true);
+    };
+    const onDragOver = (e: DragEvent) => { if (hasFiles(e)) e.preventDefault(); };
+    const onDragLeave = (e: DragEvent) => {
+      if (!hasFiles(e)) return;
+      dragDepth.current = Math.max(0, dragDepth.current - 1);
+      if (dragDepth.current === 0) setDragActive(false);
+    };
+    const onDrop = (e: DragEvent) => {
+      dragDepth.current = 0;
+      setDragActive(false);
+      if (!hasFiles(e)) return;
+      e.preventDefault();
+      const file = e.dataTransfer?.files?.[0];
+      if (file) handleDroppedFileRef.current(file);
+    };
+    window.addEventListener('dragenter', onDragEnter);
+    window.addEventListener('dragover', onDragOver);
+    window.addEventListener('dragleave', onDragLeave);
+    window.addEventListener('drop', onDrop);
+    return () => {
+      window.removeEventListener('dragenter', onDragEnter);
+      window.removeEventListener('dragover', onDragOver);
+      window.removeEventListener('dragleave', onDragLeave);
+      window.removeEventListener('drop', onDrop);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // OS file association: when GenesisCA is launched by opening a .gcaproj — the
   // PWA File Handling API, declared via manifest `file_handlers` — load that
@@ -245,6 +328,31 @@ function AppInner() {
           }}
           onCancel={() => setPendingLibLoad(null)}
         />
+      )}
+      {pendingStateDrop && (
+        <ConfirmDialog
+          title="Replace the simulation state?"
+          message={`Load "${pendingStateDrop.name}" and replace the current grid/agent state? The model definition is untouched.`}
+          confirmLabel="Replace"
+          danger
+          onConfirm={() => {
+            const f = pendingStateDrop;
+            setPendingStateDrop(null);
+            setMode('simulator');
+            window.dispatchEvent(new CustomEvent('genesis-load-state-file', { detail: { file: f } }));
+          }}
+          onCancel={() => setPendingStateDrop(null)}
+        />
+      )}
+      {dragActive && (
+        <div style={{
+          position: 'fixed', inset: 0, zIndex: 1000, pointerEvents: 'none',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          background: 'rgba(0, 0, 0, 0.45)', border: '3px dashed var(--color-accent)',
+          color: 'var(--color-text-primary)', fontSize: '1.05rem', fontWeight: 600,
+        }}>
+          Drop to open — .gcaproj / .gcastate / .gcapreset / image
+        </div>
       )}
       {toast && <div className={styles.toast}>{toast}</div>}
       <KeyboardShortcutsOverlay open={shortcutsOpen} onClose={() => setShortcutsOpen(false)} />
