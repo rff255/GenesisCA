@@ -772,8 +772,10 @@ export function HelpView() {
             areas. Reroutes are purely cosmetic: they have <strong>no effect</strong> on
             the simulation &mdash; a wire through a reroute behaves exactly like a direct
             connection. Deleting a reroute removes it and all of its links.
-            <strong> Right-click a reroute &rarr; Rename</strong> to give it a small label
-            (shown above the dot) &mdash; handy for keeping a web of reroutes readable;
+            A new reroute is <strong>named after the port it relays</strong> (or, when placed
+            on another reroute&rsquo;s wire, after that reroute&rsquo;s &mdash; possibly renamed
+            &mdash; label), shown above the dot.
+            <strong> Right-click a reroute &rarr; Rename</strong> to change it;
             clearing the name removes the label.
           </p>
 
@@ -1910,8 +1912,9 @@ export function HelpView() {
           <p className={styles.p}>
             The simulator has a <strong>bottom transport bar</strong> with playback
             controls (Play/Pause/Step/Reset) and compact speed readouts (Target FPS,
-            Gens/Frame) &mdash; click one to open a vertical slider popover (Esc or an
-            outside click closes it; the &infin; checkbox keeps its meaning),
+            Gens/Frame) &mdash; hover or click one to open a vertical slider popover
+            (Esc, an outside click, or moving away closes it; the &infin; checkbox keeps
+            its meaning, and grabbing the slider while &infin; is on unticks it),
             a <strong>top viewer bar</strong> for switching between visualization
             mappings, a collapsible <strong>left panel</strong> for settings (actions,
             grid dimensions, model attributes), and a collapsible <strong>right
@@ -1940,8 +1943,11 @@ export function HelpView() {
               The <strong>&infin;</strong> button (only enabled on torus-boundary models) tiles the grid
               across the viewport so you can pan endlessly across the wrap seams; the brush wraps with it.
               The <strong>axes</strong> toggle (2D) marks the grid origin (cell 0,0) with the row/column
-              growth directions &mdash; columns red toward the right, rows green toward the bottom &mdash;
-              matching the 3D view&rsquo;s axis colours.</li>
+              growth directions &mdash; columns red toward the right, rows green toward the bottom,
+              each axis spanning the full grid edge with an arrowhead and a <code>C&nbsp;(n)</code> /
+              <code>R&nbsp;(n)</code> label carrying the dimension count &mdash; matching the 3D
+              view&rsquo;s axis colours (whose axes likewise carry C/R/D letters + counts at the tips).
+              Drawn on top of the agent layer so nothing covers it.</li>
             <li><strong>Compile-target chip</strong> &mdash; the top-left stats overlay shows which
               compile target is running (<code>&#x2699; WASM</code>, <code>WebGPU</code>, <code>JS</code>,
               plus <code>agents &hellip;</code> for agent models). If the selected WebGPU target fails to

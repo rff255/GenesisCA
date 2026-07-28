@@ -990,7 +990,10 @@ function buildVoxelOverlayVerts(W: number, H: number, D: number, viz: { axes: bo
     // depth→−Z. cell(0,0,0) world = (-hx, +hy, +hz). Draw each axis toward its
     // positive direction + a 2-pronged arrowhead (identical to gl3d renderOverlays).
     const ox = -hx, oy = hy, oz = hz;
-    const ext = 1.2;
+    // Extension + arrowhead scale with the grid — MUST stay byte-identical to
+    // gl3d's renderOverlays (the free/frame flip must not move the axes).
+    const maxDim = Math.max(W, H, D);
+    const ext = 1.2 + maxDim * 0.02;
     const axis = (ex: number, ey: number, ez: number, r: number, g: number, b: number) => {
       seg(ox, oy, oz, ex, ey, ez, r, g, b);
       const dx = ex - ox, dy = ey - oy, dz = ez - oz;
@@ -999,7 +1002,7 @@ function buildVoxelOverlayVerts(W: number, H: number, D: number, viz: { axes: bo
       let px = -uy, py = ux, pz = 0;
       if (Math.hypot(px, py, pz) < 0.1) { px = 0; py = -uz; pz = uy; }
       const pl = Math.hypot(px, py, pz) || 1; px /= pl; py /= pl; pz /= pl;
-      const hl = 0.7;
+      const hl = 0.7 + maxDim * 0.025;
       seg(ex, ey, ez, ex - ux * hl + px * hl * 0.5, ey - uy * hl + py * hl * 0.5, ez - uz * hl + pz * hl * 0.5, r, g, b);
       seg(ex, ey, ez, ex - ux * hl - px * hl * 0.5, ey - uy * hl - py * hl * 0.5, ez - uz * hl - pz * hl * 0.5, r, g, b);
     };

@@ -136,6 +136,42 @@ function getOriginPortInfo(
   return null;
 }
 
+/** Default label for a NEW reroute: the name of the PORT it relays — or, when
+ *  the source is another reroute, THAT reroute's (possibly user-renamed) label,
+ *  resolved up the chain (an unnamed reroute keeps walking to the original
+ *  port). Falls back to the raw port id; '' when unresolvable (no label). */
+function defaultRerouteLabel(
+  nodes: Node[],
+  edges: Edge[],
+  sourceId: string,
+  sourcePortId: string,
+): string {
+  let curId = sourceId;
+  let curPort = sourcePortId;
+  const seen = new Set<string>();
+  while (!seen.has(curId)) {
+    seen.add(curId);
+    const node = nodes.find(n => n.id === curId);
+    if (!node) return '';
+    const nd = node.data as { nodeType?: string; label?: string } | undefined;
+    if (nd?.nodeType === 'reroute') {
+      const lbl = typeof nd.label === 'string' ? nd.label.trim() : '';
+      if (lbl) return lbl;
+      // Unnamed reroute — walk up to the original port it relays.
+      const inEdge = edges.find(e => e.target === curId);
+      const sh = inEdge?.sourceHandle ? parseHandleId(inEdge.sourceHandle) : null;
+      if (!inEdge || !sh) return '';
+      curId = inEdge.source;
+      curPort = sh.portId;
+      continue;
+    }
+    const def = nd?.nodeType ? getNodeDef(nd.nodeType) : undefined;
+    const port = def?.ports.find(p => p.id === curPort);
+    return (port?.label ?? curPort) || '';
+  }
+  return '';
+}
+
 function portsCompatible(
   srcCategory: 'flow' | 'value',
   srcKind: 'input' | 'output',
@@ -2137,11 +2173,14 @@ export function GraphEditorInner() {
 
   /** Build a fresh reroute RF node typed for the given wire category. */
   const makeRerouteNode = useCallback(
-    (category: 'flow' | 'value', dataType: string | undefined, pos: { x: number; y: number }): Node => ({
+    (category: 'flow' | 'value', dataType: string | undefined, pos: { x: number; y: number }, label?: string): Node => ({
       id: generateNodeId(nodesRef.current),
       type: 'rerouteNode',
       position: { x: pos.x, y: pos.y },
-      data: { nodeType: 'reroute', portCategory: category, ...(dataType ? { dataType } : {}), config: {} },
+      // The default label = the relayed port's name (or the upstream reroute's
+      // label) — computed by the caller via defaultRerouteLabel. Rename can
+      // change or clear it like any node label.
+      data: { nodeType: 'reroute', portCategory: category, ...(dataType ? { dataType } : {}), ...(label ? { label } : {}), config: {} },
       selected: true,
     }),
     [],
@@ -2160,7 +2199,8 @@ export function GraphEditorInner() {
       const category = sh.category;
       const srcNode = nodesRef.current.find(n => n.id === edge.source);
       const dataType = srcNode ? getOriginPortInfo(srcNode, sh.portId)?.dataType : undefined;
-      const reroute = makeRerouteNode(category, dataType, pos);
+      const reroute = makeRerouteNode(category, dataType, pos,
+        defaultRerouteLabel(nodesRef.current, edgesRef.current, edge.source, sh.portId));
       const ts = Date.now().toString(36);
       const rnd = () => Math.random().toString(36).slice(2, 5);
       const inEdge: Edge = {
@@ -2203,7 +2243,8 @@ export function GraphEditorInner() {
       if (origin.kind !== 'output') return; // reroutes relay outputs only
       pushCurrentSnapshot();
       const category = origin.category;
-      const reroute = makeRerouteNode(category, origin.dataType, pos);
+      const reroute = makeRerouteNode(category, origin.dataType, pos,
+        defaultRerouteLabel(nodesRef.current, edgesRef.current, origin.nodeId, origin.portId));
       const newEdge: Edge = {
         id: `e${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`,
         source: origin.nodeId,

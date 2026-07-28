@@ -2982,7 +2982,10 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       const voxelFrame = voxelActive
         && gridUiSyncPostedRef.current && !gridFrameAwaitingColorsRef.current && colors3d != null;
       const voxelFree = voxelActive && !voxelFrame;
-      r.setOverlaysOnly(agent3dFree || voxelFree);
+      // wireframesExternal = voxelFree ONLY: the worker's voxel renderer draws
+      // the bounds/grid/axes itself (depth-tested); the agent-sphere free mode
+      // has no worker line pass, so gl3d must keep drawing them on top.
+      r.setOverlaysOnly(agent3dFree || voxelFree, voxelFree);
       { const sc = agentSphereCanvasRef.current; if (sc) sc.style.display = agent3dFree ? 'block' : 'none'; }
       { const vc = voxelCanvasRef.current; if (vc) vc.style.display = voxelFree ? 'block' : 'none'; }
       agentSphere3DActiveRef.current = agent3dFree;
@@ -3661,40 +3664,6 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       ctx.stroke();
     }
 
-    // 2D axes indicator — marks the grid ORIGIN (cell 0,0) and the growth
-    // directions, matching the 3D convention: columns = red toward +X (right),
-    // rows = green toward screen-down. Drawn on the PRIMARY tile only (infinity
-    // mode included) so it reads as a coordinate legend, not a lattice overlay.
-    if (show2dAxesRef.current && !is3dRef.current) {
-      const len = Math.max(28, Math.min(90, scale * 4));
-      ctx.save();
-      const drawAxis = (dx: number, dy: number, color: string, label: string) => {
-        const x2 = ox + dx * len, y2 = oy + dy * len;
-        ctx.strokeStyle = color;
-        ctx.fillStyle = color;
-        ctx.lineWidth = 2;
-        ctx.beginPath();
-        ctx.moveTo(ox, oy);
-        ctx.lineTo(x2, y2);
-        // Two-pronged arrowhead (the 3D renderOverlays style).
-        const ah = 6;
-        ctx.moveTo(x2, y2);
-        ctx.lineTo(x2 - dx * ah - dy * ah * 0.6, y2 - dy * ah + dx * ah * 0.6);
-        ctx.moveTo(x2, y2);
-        ctx.lineTo(x2 - dx * ah + dy * ah * 0.6, y2 - dy * ah - dx * ah * 0.6);
-        ctx.stroke();
-        ctx.font = 'bold 11px sans-serif';
-        ctx.fillText(label, x2 + 5, y2 + 4);
-      };
-      drawAxis(1, 0, '#e05050', 'C');   // +columns → right (red, the 3D col axis)
-      drawAxis(0, 1, '#50c050', 'R');   // +rows → down (green, the 3D row axis)
-      ctx.fillStyle = 'rgba(255, 255, 255, 0.85)';
-      ctx.beginPath();
-      ctx.arc(ox, oy, 2.5, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.restore();
-    }
-
     // Environment background — when the CA grid layer is hidden (agents-only view),
     // the canvas is cleared/transparent; fill the W×H world rect with the user's
     // chosen colour so agents sit on a solid backdrop instead of the page showing
@@ -3760,6 +3729,53 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       if (showAgentsRef.current) ctx.drawImage(agentRenderCanvasRef.current!, 0, 0);
     } else if (showAgentsRef.current) {
       drawAgentsOverlay();
+    }
+
+    // 2D axes indicator — marks the grid ORIGIN (cell 0,0) and the growth
+    // directions, matching the 3D convention: columns = red toward +X (right),
+    // rows = green toward screen-down. Each axis spans the FULL grid edge with
+    // an arrowhead at the far end and a `C (n)` / `R (n)` label carrying the
+    // dimension count. Drawn AFTER the agent layer so nothing covers it, on the
+    // PRIMARY tile only (infinity mode included) — a coordinate legend, not a
+    // lattice overlay. Labels get a dark halo so they read on any content.
+    if (show2dAxesRef.current && !is3dRef.current) {
+      ctx.save();
+      ctx.font = 'bold 11px sans-serif';
+      const halo = (text: string, x: number, y: number, color: string) => {
+        ctx.lineWidth = 3;
+        ctx.strokeStyle = 'rgba(0, 0, 0, 0.75)';
+        ctx.strokeText(text, x, y);
+        ctx.fillStyle = color;
+        ctx.fillText(text, x, y);
+      };
+      const drawAxis = (dx: number, dy: number, len: number, color: string, label: string) => {
+        const x2 = ox + dx * len, y2 = oy + dy * len;
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(ox, oy);
+        ctx.lineTo(x2, y2);
+        // Two-pronged arrowhead (the 3D renderOverlays style).
+        const ah = 7;
+        ctx.moveTo(x2, y2);
+        ctx.lineTo(x2 - dx * ah - dy * ah * 0.6, y2 - dy * ah + dx * ah * 0.6);
+        ctx.moveTo(x2, y2);
+        ctx.lineTo(x2 - dx * ah + dy * ah * 0.6, y2 - dy * ah - dx * ah * 0.6);
+        ctx.stroke();
+        // Label anchored just INSIDE the arrow tip (stays on-screen when the
+        // grid fills the view): column axis → left of the tip, below the top
+        // edge; row axis → right of the tip, above the bottom end.
+        const tw = ctx.measureText(label).width;
+        if (dx) halo(label, x2 - tw - 10, y2 + 15, color);
+        else halo(label, x2 + 8, y2 - 8, color);
+      };
+      drawAxis(1, 0, scaledW, '#e05050', `C (${w})`);  // +columns → right, full grid width
+      drawAxis(0, 1, scaledH, '#50c050', `R (${h})`);  // +rows → down, full grid height
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
+      ctx.beginPath();
+      ctx.arc(ox, oy, 2.5, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
     }
 
     // Brush cursor: drawn on the dedicated cursor overlay layer (drawCursorLayer)
@@ -9794,18 +9810,26 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
 
           {/* Speed controls (left side) \u2014 compact readout, click for the
               vertical-slider popover. */}
-          <div className={styles.transportSpeed} ref={speedPopup === 'fps' ? speedPopupWrapRef : undefined} data-sim-overlay>
+          <div
+            className={styles.transportSpeed}
+            ref={speedPopup === 'fps' ? speedPopupWrapRef : undefined}
+            data-sim-overlay
+            onPointerEnter={() => setSpeedPopup('fps')}
+            onPointerLeave={() => setSpeedPopup(p => (p === 'fps' ? null : p))}
+          >
             <button
               className={`${styles.transportBtn} ${speedPopup === 'fps' ? styles.zoomBtnActive : ''}`}
               onClick={() => setSpeedPopup(p => (p === 'fps' ? null : 'fps'))}
-              title="Display frame rate (frames per second) \u2014 click to adjust"
+              title="Display frame rate (frames per second) \u2014 hover or click to adjust"
             >FPS {unlimitedFps ? '\u221E' : targetFps}</button>
             {speedPopup === 'fps' && (
               <div className={styles.speedPopup} data-sim-overlay>
                 <span className={styles.speedPopupValue}>{unlimitedFps ? '\u221E' : targetFps}</span>
                 <div className={styles.speedPopupSliderWrap}>
+                  {/* Interacting with the slider while \u221E is on UNTICKS it \u2014 the
+                      user grabbing the slider means "I want this value". */}
                   <input type="range" min={1} max={200} value={targetFps}
-                    disabled={unlimitedFps} onChange={e => setTargetFps(Number(e.target.value))} />
+                    onChange={e => { setTargetFps(Number(e.target.value)); if (unlimitedFps) setUnlimitedFps(false); }} />
                 </div>
                 <label className={styles.transportCheck} title="Unlimited (render as fast as possible)">
                   <input type="checkbox" checked={unlimitedFps} onChange={e => setUnlimitedFps(e.target.checked)} />&infin;
@@ -9850,18 +9874,24 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
           <div className={styles.transportDivider} />
 
           {/* Gens/frame (right side) \u2014 compact readout, click for the popover. */}
-          <div className={styles.transportSpeed} ref={speedPopup === 'gpf' ? speedPopupWrapRef : undefined} data-sim-overlay>
+          <div
+            className={styles.transportSpeed}
+            ref={speedPopup === 'gpf' ? speedPopupWrapRef : undefined}
+            data-sim-overlay
+            onPointerEnter={() => setSpeedPopup('gpf')}
+            onPointerLeave={() => setSpeedPopup(p => (p === 'gpf' ? null : p))}
+          >
             <button
               className={`${styles.transportBtn} ${speedPopup === 'gpf' ? styles.zoomBtnActive : ''}`}
               onClick={() => setSpeedPopup(p => (p === 'gpf' ? null : 'gpf'))}
-              title="Generations simulated per displayed frame \u2014 click to adjust"
+              title="Generations simulated per displayed frame \u2014 hover or click to adjust"
             >G/F {unlimitedGens ? '\u221E' : gensPerFrame}</button>
             {speedPopup === 'gpf' && (
               <div className={styles.speedPopup} data-sim-overlay>
                 <span className={styles.speedPopupValue}>{unlimitedGens ? '\u221E' : gensPerFrame}</span>
                 <div className={styles.speedPopupSliderWrap}>
                   <input type="range" min={1} max={200} value={gensPerFrame}
-                    disabled={unlimitedGens} onChange={e => setGensPerFrame(Number(e.target.value))} />
+                    onChange={e => { setGensPerFrame(Number(e.target.value)); if (unlimitedGens) setUnlimitedGens(false); }} />
                 </div>
                 <label className={styles.transportCheck} title="Unlimited (simulate without displaying)">
                   <input type="checkbox" checked={unlimitedGens} onChange={e => setUnlimitedGens(e.target.checked)} />&infin;

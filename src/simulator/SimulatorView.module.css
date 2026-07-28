@@ -609,7 +609,10 @@
    transport readout button; dismissed by outside pointerdown / Escape. */
 .speedPopup {
   position: absolute;
-  bottom: calc(100% + 8px);
+  /* Flush above the trigger (NO gap): the popover opens on HOVER of the
+     wrapper, and enter/leave are DOM-tree based — a visual gap would be a
+     hit-test hole that fires pointerleave while crossing into the popover. */
+  bottom: 100%;
   left: 50%;
   transform: translateX(-50%);
   display: flex;

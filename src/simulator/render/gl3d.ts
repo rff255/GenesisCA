@@ -1506,8 +1506,18 @@ export class Gl3DRenderer {
   private agentsInFront = true;
   setClipPlane(clip: ClipPlane3D): void { this.clip = clip; this.refreshVoxelsIfCullingChanged(); }
   setViz(viz: Viz3D): void { this.viz = viz; }
-  /** Phase C: overlays-only mode (agent 3D free-mode direct render — see the field). */
-  setOverlaysOnly(on: boolean): void { this.overlaysOnly = on; }
+  /** Phase C: overlays-only mode (agent/voxel 3D free-mode direct render).
+   *  `wireframesExternal` = the worker's renderer draws the scene wireframes
+   *  (bounds / grid / axes) itself, depth-tested — TRUE only for the L1 VOXEL
+   *  free mode. The agent-SPHERE free mode has no worker line pass, so gl3d
+   *  must keep drawing them (always-on-top on the transparent canvas — the
+   *  known free-mode occlusion tradeoff; before this flag they silently
+   *  vanished in agent free mode and "only appeared on interaction"). */
+  setOverlaysOnly(on: boolean, wireframesExternal = false): void {
+    this.overlaysOnly = on;
+    this.wireframesExternal = wireframesExternal;
+  }
+  private wireframesExternal = false;
   setBrushPlane(p: { axis: 'x' | 'y' | 'z'; pos: number } | null): void { this.brushPlane = p; }
   /** Set the hovered brush footprint (every affected cell). Pass [] to clear. */
   setHoverCells(cells: ReadonlyArray<{ layer: number; row: number; col: number }>): void { this.hoverCells = cells; }
@@ -2365,7 +2375,7 @@ export class Gl3DRenderer {
     // buffer and would always composite them in front). In FRAME mode (one canvas,
     // shared depth) gl3d still draws them correctly. The brush interaction plane
     // stays gl3d-drawn in both modes (always-on-top UI, like the gizmo/labels).
-    if (!overlaysOnly) this.renderOverlays();   // axes / grid / bounds (frame mode only; worker owns them in free mode)
+    if (!overlaysOnly || !this.wireframesExternal) this.renderOverlays();   // axes / grid / bounds (worker owns them ONLY in voxel free mode)
     this.renderBrushPlane(); // brush interaction-plane bounds + grid (depth-tested)
     if (overlaysOnly) {
       // Skip all scene content — just the interaction overlays over transparent.
@@ -2517,7 +2527,12 @@ export class Gl3DRenderer {
       // (into the screen / downward). cell(0,0,0) world = (-hx, +hy, +hz).
       // Draw each axis from the origin toward its positive direction + an arrowhead.
       const ox = -hx, oy = hy, oz = hz;
-      const ext = 1.2;
+      // Extension + arrowhead SCALE with the grid (fixed 1.2/0.7-cell sizes are
+      // invisible on a 300³ volume). MUST stay byte-identical to the worker's
+      // buildVoxelOverlayVerts (webgpuRuntime.ts) AND renderAxisLabels' ext —
+      // the free/frame flip must not move the axes.
+      const maxDim = Math.max(this.W, this.H, this.D);
+      const ext = 1.2 + maxDim * 0.02;
       const axis = (ex: number, ey: number, ez: number, r: number, g: number, b: number) => {
         seg(ox, oy, oz, ex, ey, ez, r, g, b);
         const dx = ex - ox, dy = ey - oy, dz = ez - oz;
@@ -2527,7 +2542,7 @@ export class Gl3DRenderer {
         let px = -uy, py = ux, pz = 0;
         if (Math.hypot(px, py, pz) < 0.1) { px = 0; py = -uz; pz = uy; }
         const pl = Math.hypot(px, py, pz) || 1; px /= pl; py /= pl; pz /= pl;
-        const hl = 0.7;
+        const hl = 0.7 + maxDim * 0.025;
         seg(ex, ey, ez, ex - ux * hl + px * hl * 0.5, ey - uy * hl + py * hl * 0.5, ez - uz * hl + pz * hl * 0.5, r, g, b);
         seg(ex, ey, ez, ex - ux * hl - px * hl * 0.5, ey - uy * hl - py * hl * 0.5, ez - uz * hl - pz * hl * 0.5, r, g, b);
       };
@@ -2650,19 +2665,32 @@ export class Gl3DRenderer {
     ];
   }
 
-  /** Append a digit string's stroke segments (NDC coords, centred on cx/cy). */
+  /** Append a label's stroke segments (NDC coords, centred on cx/cy). Digits
+   *  render via the 7-segment table; letters via the gizmo GLYPHS polylines
+   *  (C/R/D); a space just advances. */
   private pushDigitsNdc(out: number[], text: string, cx: number, cy: number,
     sx: number, sy: number, col: [number, number, number]): void {
     const adv = 0.8;                     // glyph-unit advance per character
     const total = (text.length - 1) * adv;
     const [r, g, b] = col;
     for (let i = 0; i < text.length; i++) {
-      const segs = Gl3DRenderer.DIGIT_SEGS[text[i]!];
-      if (!segs) continue;
+      const ch = text[i]!;
       const gx = cx + (i * adv - total / 2) * sx;
-      for (const s of segs) {
-        const [x0, y0, x1, y1] = Gl3DRenderer.SEG7[s]!;
-        out.push(gx + x0 * sx, cy + y0 * sy, 0, r, g, b, gx + x1 * sx, cy + y1 * sy, 0, r, g, b);
+      const segs = Gl3DRenderer.DIGIT_SEGS[ch];
+      if (segs) {
+        for (const s of segs) {
+          const [x0, y0, x1, y1] = Gl3DRenderer.SEG7[s]!;
+          out.push(gx + x0 * sx, cy + y0 * sy, 0, r, g, b, gx + x1 * sx, cy + y1 * sy, 0, r, g, b);
+        }
+        continue;
+      }
+      const glyph = Gl3DRenderer.GLYPHS[ch];
+      if (!glyph) continue; // space / unknown → gap
+      for (const stroke of glyph) {
+        for (let k = 0; k + 1 < stroke.length; k++) {
+          const a = stroke[k]!, bpt = stroke[k + 1]!;
+          out.push(gx + a[0]! * sx, cy + a[1]! * sy, 0, r, g, b, gx + bpt[0]! * sx, cy + bpt[1]! * sy, 0, r, g, b);
+        }
       }
     }
   }
@@ -2677,7 +2705,8 @@ export class Gl3DRenderer {
     const gl = this.gl;
     const hx = (this.W - 1) / 2, hy = (this.H - 1) / 2, hz = (this.D - 1) / 2;
     const ox = -hx, oy = hy, oz = hz;      // origin = cell (0,0,0) world centre
-    const ext = 1.2;                       // must match renderOverlays' axis extension
+    // must match renderOverlays' (grid-scaled) axis extension
+    const ext = 1.2 + Math.max(this.W, this.H, this.D) * 0.02;
     // Same on-screen pixel size on both NDC axes (NDC x/y units differ by aspect).
     const sy = 30 / Math.max(1, gl.canvas.height);
     const sx = 30 / Math.max(1, gl.canvas.width);
@@ -2703,9 +2732,10 @@ export class Gl3DRenderer {
     const centre = this.projectNdc(0, 0, 0);
     label(ox, oy, oz, '0', [0.78, 0.80, 0.86], centre);
     const origin = this.projectNdc(ox, oy, oz);
-    label(hx + ext, oy, oz, String(this.W), [0.96, 0.55, 0.55], origin);                  // +col end
-    label(ox, -hy - ext, oz, String(this.H), [0.55, 0.92, 0.62], origin);                 // +row end
-    label(ox, oy, oz - (this.D - 1) - ext, String(this.D), [0.62, 0.74, 1.0], origin);    // +depth end
+    // Axis letter (C/R/D — which dimension this is) + its cell count.
+    label(hx + ext, oy, oz, `C ${this.W}`, [0.96, 0.55, 0.55], origin);                  // +col end
+    label(ox, -hy - ext, oz, `R ${this.H}`, [0.55, 0.92, 0.62], origin);                 // +row end
+    label(ox, oy, oz - (this.D - 1) - ext, `D ${this.D}`, [0.62, 0.74, 1.0], origin);    // +depth end
     if (v.length === 0) return;
     gl.disable(gl.DEPTH_TEST);
     this.drawLines(new Float32Array(v), gl.LINES, mat4Identity());  // identity → NDC
