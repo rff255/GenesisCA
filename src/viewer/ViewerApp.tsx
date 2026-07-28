@@ -47,8 +47,10 @@ export function ViewerApp({ model, error }: { model: CAModel | null; error: stri
 
   return (
     <div style={{ position: 'relative', height: '100vh', width: '100vw', overflow: 'hidden' }}>
-      {/* SimulatorView is always mounted; it reads the model from context once loadModel has run. */}
-      {ready && <SimulatorView visible />}
+      {/* SimulatorView is always mounted; it reads the model from context once loadModel has run.
+          hideInstructionsPill: the viewer has its own top-left ⓘ Info button (which the pill would
+          render behind) and its About panel already carries the instructions text. */}
+      {ready && <SimulatorView visible hideInstructionsPill />}
       <AboutOverlay model={liveModel.properties.name ? liveModel : model} />
     </div>
   );

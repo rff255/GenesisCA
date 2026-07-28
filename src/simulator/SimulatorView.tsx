@@ -760,7 +760,14 @@ const HoverCoordsChip = memo(function HoverCoordsChip() {
     : <span title="Brush footprint at the hovered cell">Cells ({info.x0},{info.y0}) {'→'} ({info.x1},{info.y1})</span>;
 });
 
-export function SimulatorView({ visible = true }: { visible?: boolean }) {
+/**
+ *  `hideInstructionsPill` — the standalone-simulation VIEWER shell
+ *  ([src/viewer/ViewerApp.tsx]) renders its OWN top-left "ⓘ Info" button
+ *  (anchored just right of the settings ear) whose About panel ALREADY shows
+ *  the model's instructions, so the pill would both collide with it and be
+ *  redundant there. The main app leaves it undefined (pill shown).
+ */
+export function SimulatorView({ visible = true, hideInstructionsPill = false }: { visible?: boolean; hideInstructionsPill?: boolean }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const { model, modelVersion, updateIndicator, setSimulationState, addPreset, duplicatePreset, deletePreset, updatePreset, reorderPresets, updateProperties, updateAttribute } = useModel();
   const presetReorder = useListReorder(model.presets || [], reorderPresets);
@@ -10059,7 +10066,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
         {/* Author-written usage instructions \u2014 pill + dismissible card (only when
             the model carries properties.instructions). display:contents wrapper
             so the outside-pointerdown dismissal treats pill+card as one region. */}
-        {instructionsText && (
+        {instructionsText && !hideInstructionsPill && (
           <div ref={instructionsRef2} style={{ display: 'contents' }}>
             <button
               className={styles.instructionsBtn}
@@ -10070,7 +10077,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
             {showInstructions && (
               <div className={styles.instructionsPopover} data-sim-overlay>
                 <div className={styles.instructionsHeader}>
-                  <span>Instructions \u2014 {model.properties.name || 'this model'}</span>
+                  <span>Instructions {'\u2014'} {model.properties.name || 'this model'}</span>
                   <button className={styles.instructionsClose} onClick={() => setShowInstructions(false)} title="Close (Esc)">&#x2715;</button>
                 </div>
                 <div className={styles.instructionsBody}>{instructionsText}</div>
