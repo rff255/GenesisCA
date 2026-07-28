@@ -1742,7 +1742,7 @@ export function HelpView() {
             chemical, the grid diffuses it, agents climb the gradient and aggregate),
             <strong> Game of Life on Agents</strong> (Conway&apos;s rule on a grid of agents &mdash;
             the genericity proof), <strong>Ant Necrophoresis</strong> (stigmergy: ants pile
-            corpses via the cell-field bridge), and the two <strong>Particle Life</strong>
+            discrete corpses via the cell-field bridge, with the total exactly conserved), and the two <strong>Particle Life</strong>
             samples (2D / 3D) &mdash; load any to see the pipeline at work.
           </p>
           <p className={styles.p}>

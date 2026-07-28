@@ -2,8 +2,8 @@
   "schemaVersion": 1,
   "properties": {
     "name": "Ant Necrophoresis",
-    "description": "Worker ants cluster corpses into cemeteries by a density-dependent pick-up/drop rule — stigmergy via the agent↔grid field bridge. The classic self-organising clustering of Deneubourg et al.",
-    "ruleDescription": "The `corpse` cell attribute is the shared field. Ants (agents) random-walk and sense the local corpse density (Read Cells Under). Empty-handed, an ant picks up a corpse with a probability that FALLS with density (isolated corpses get carried off). Carrying, it drops with a probability that RISES with density (onto growing piles) — autocatalytic, so a few clusters win and grow sigmoidally. Colour: red = carrying.",
+    "description": "Worker ants cluster scattered corpses into cemeteries by a density-dependent pick-up / drop rule — stigmergy through the agent↔grid field bridge. Corpses are discrete items and the total is exactly conserved.",
+    "ruleDescription": "Each cell holds 0 or 1 corpse (the `corpse` integer attribute — the shared field). Ants are agents on integer cell positions that step to one of their 8 neighbours (or stay) each generation.\n\nAn ant senses f, the fraction of occupied cells within Sense Radius. Empty-handed and standing ON a corpse it picks it up with probability (k1/(k1+f))², which FALLS with density — isolated corpses get carried off. Carrying and standing on an EMPTY cell it drops with probability (f/(k2+f))², which RISES with density — corpses land on growing piles. That feedback is autocatalytic, so a few cemeteries win and grow.\n\nMass conservation is structural, not approximate: a pick-up is gated on the cell holding a corpse and writes 0; a drop is gated on the cell being empty and writes 1; each ant carries at most one corpse. So corpses on the ground + corpses in transit is constant, and the \"Corpses on ground\" indicator only ever dips by at most the number of ants. The agent loop is sequential on the JS/WASM agent targets, so two ants can never claim the same corpse.\n\nTune Ants, Seed Density, Sense Radius, and the pick/drop constants k1 and k2 live; Ants and Seed Density apply on Reset. Colour: red = carrying.",
     "author": "Deneubourg et al.",
     "modelAuthor": "",
     "tags": [
@@ -14,52 +14,127 @@
       "field"
     ],
     "dimension": "2d",
-    "gridWidth": 60,
-    "gridHeight": 60,
+    "gridWidth": 80,
+    "gridHeight": 80,
     "gridDepth": 1,
     "topology": "2d-grid",
     "boundaryTreatment": "torus",
     "updateMode": "synchronous",
     "asyncScheme": "random-order",
     "maxIterations": 0,
-    "useWasm": false,
-    "useWebGPU": true
+    "useWasm": true,
+    "useWebGPU": false
   },
   "topologyMode": {
     "gridCells": true,
     "agents": true
   },
-  "centerBased": { "agentTarget": "webgpu", 
+  "centerBased": {
     "enabled": true,
-    "maxAgents": 120,
-    "maxBonds": 2,
-    "worldWidth": 60,
-    "worldHeight": 60,
-    "seedCount": 70,
+    "agentTarget": "wasm",
+    "maxAgents": 400,
+    "maxBonds": 0,
+    "worldWidth": 80,
+    "worldHeight": 80,
+    "seedCount": 0,
     "seedPattern": "scatter",
-    "defaultRadius": 0.9,
+    "defaultRadius": 0.42,
     "growthRate": 0,
     "repulsionStiffness": 0,
     "adhesionStiffness": 0,
-    "interactionRange": 1.5,
+    "bondStiffness": 0,
+    "interactionRange": 1,
     "drag": 1,
-    "timeStep": 0.6,
-    "momentum": 0.55,
-    "maxSpeed": 0.9,
-    "neighbourQueryRadius": 4,
+    "timeStep": 1,
+    "momentum": 0,
+    "maxSpeed": 0,
+    "neighbourQueryRadius": 2,
     "customForcesOnly": true,
+    "useBondingPhysics": false,
     "autoBond": false,
-    "agentUpdateMode": "async"
+    "agentUpdateMode": "async",
+    "agentCapabilities": {
+      "motion": "static",
+      "body": true,
+      "collision": "off",
+      "bonds": "off",
+      "autoBond": false,
+      "growth": false,
+      "division": false,
+      "lifespan": false,
+      "populationBirth": false,
+      "populationDeath": false,
+      "sensing": false,
+      "sensingHeadingSource": "velocity",
+      "orientation": false,
+      "fieldCoupling": true,
+      "appearance": true
+    }
   },
   "attributes": [
     {
       "id": "corpse",
       "name": "corpse",
-      "type": "float",
-      "description": "Dead-ant density (the field ants cluster)",
+      "type": "integer",
+      "description": "A dead ant lying on this cell (0 or 1) — the field the workers cluster",
       "isModelAttribute": false,
       "defaultValue": "0",
       "agentAccess": "readWrite"
+    },
+    {
+      "id": "ants",
+      "name": "Ants",
+      "type": "integer",
+      "description": "Number of worker ants (applies on Reset)",
+      "isModelAttribute": true,
+      "defaultValue": "120",
+      "hasBounds": true,
+      "min": 10,
+      "max": 400
+    },
+    {
+      "id": "seedDensity",
+      "name": "Seed Density",
+      "type": "float",
+      "description": "Fraction of cells seeded with a corpse (applies on Reset)",
+      "isModelAttribute": true,
+      "defaultValue": "0.12",
+      "hasBounds": true,
+      "min": 0.01,
+      "max": 0.5
+    },
+    {
+      "id": "senseRadius",
+      "name": "Sense Radius",
+      "type": "float",
+      "description": "Radius of the disk an ant averages to estimate local corpse density",
+      "isModelAttribute": true,
+      "defaultValue": "2.5",
+      "hasBounds": true,
+      "min": 1,
+      "max": 6
+    },
+    {
+      "id": "k1",
+      "name": "k1 (pick)",
+      "type": "float",
+      "description": "Pick-up constant — P(pick) = (k1/(k1+f))². Lower = fussier, only truly isolated corpses get lifted.",
+      "isModelAttribute": true,
+      "defaultValue": "0.1",
+      "hasBounds": true,
+      "min": 0.01,
+      "max": 1
+    },
+    {
+      "id": "k2",
+      "name": "k2 (drop)",
+      "type": "float",
+      "description": "Drop constant — P(drop) = (f/(k2+f))². Lower = drops more readily, so piles seed faster.",
+      "isModelAttribute": true,
+      "defaultValue": "0.3",
+      "hasBounds": true,
+      "min": 0.01,
+      "max": 1
     }
   ],
   "agentAttributes": [
@@ -67,7 +142,7 @@
       "id": "carrying",
       "name": "carrying",
       "type": "bool",
-      "description": "Is the ant carrying a corpse?",
+      "description": "Is this ant carrying a corpse?",
       "isModelAttribute": false,
       "defaultValue": "false"
     }
@@ -76,8 +151,8 @@
   "mappings": [
     {
       "id": "viz",
-      "name": "Corpse field",
-      "description": "Corpse density heatmap (ants drawn on top)",
+      "name": "Corpses",
+      "description": "Corpses on the ground (ants drawn on top; red = carrying)",
       "isAttributeToColor": true,
       "redDescription": "",
       "greenDescription": "",
@@ -85,33 +160,21 @@
       "linked": true,
       "linkedAttributeId": "corpse",
       "linkedMin": 0,
-      "linkedMax": 4,
+      "linkedMax": 1,
       "linkedColors": {
         "method": "linear",
         "gradient": [
           {
             "position": 0,
-            "r": 18,
-            "g": 18,
-            "b": 26
-          },
-          {
-            "position": 0.35,
-            "r": 60,
-            "g": 40,
-            "b": 30
-          },
-          {
-            "position": 0.7,
-            "r": 170,
-            "g": 120,
-            "b": 50
+            "r": 16,
+            "g": 16,
+            "b": 22
           },
           {
             "position": 1,
-            "r": 250,
-            "g": 230,
-            "b": 150
+            "r": 245,
+            "g": 225,
+            "b": 155
           }
         ]
       }
@@ -119,10 +182,22 @@
   ],
   "variables": [],
   "agentVariables": [],
-  "indicators": [],
+  "indicators": [
+    {
+      "id": "ground",
+      "name": "Corpses on ground",
+      "kind": "linked",
+      "dataType": "integer",
+      "defaultValue": "0",
+      "accumulationMode": "per-generation",
+      "linkedAttributeId": "corpse",
+      "linkedAggregation": "total",
+      "watched": true
+    }
+  ],
   "graphNodes": [
     {
-      "id": "c03tal",
+      "id": "c0v7ol",
       "type": "caNode",
       "position": {
         "x": 0,
@@ -134,11 +209,11 @@
       }
     },
     {
-      "id": "c1etzo",
+      "id": "c1qopt",
       "type": "caNode",
       "position": {
         "x": 0,
-        "y": 180
+        "y": 190
       },
       "data": {
         "nodeType": "initEvent",
@@ -146,26 +221,39 @@
       }
     },
     {
-      "id": "c26jfy",
+      "id": "c20ngq",
       "type": "caNode",
       "position": {
-        "x": 210,
-        "y": 90
+        "x": 0,
+        "y": 304
       },
       "data": {
-        "nodeType": "getRandom",
+        "nodeType": "getModelAttribute",
         "config": {
-          "randomType": "bool",
-          "_port_probability": "0.18"
+          "attributeId": "seedDensity"
         }
       }
     },
     {
-      "id": "c3tdoo",
+      "id": "c3e9o2",
       "type": "caNode",
       "position": {
-        "x": 420,
-        "y": 180
+        "x": 215,
+        "y": 304
+      },
+      "data": {
+        "nodeType": "getRandom",
+        "config": {
+          "randomType": "bool"
+        }
+      }
+    },
+    {
+      "id": "c5idez",
+      "type": "caNode",
+      "position": {
+        "x": 430,
+        "y": 190
       },
       "data": {
         "nodeType": "setAttribute",
@@ -177,27 +265,174 @@
   ],
   "graphEdges": [
     {
-      "id": "e49bnn",
-      "source": "c26jfy",
-      "target": "c3tdoo",
+      "id": "e42wap",
+      "source": "c20ngq",
+      "target": "c3e9o2",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_probability"
+    },
+    {
+      "id": "e6ke2m",
+      "source": "c3e9o2",
+      "target": "c5idez",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_value"
     },
     {
-      "id": "e58v7w",
-      "source": "c1etzo",
-      "target": "c3tdoo",
+      "id": "e7cosf",
+      "source": "c1qopt",
+      "target": "c5idez",
       "sourceHandle": "output_flow_do",
       "targetHandle": "input_flow_do"
     }
   ],
   "agentGraphNodes": [
     {
-      "id": "a6bzyw",
+      "id": "a8nnkk",
       "type": "caNode",
       "position": {
         "x": 0,
-        "y": 352
+        "y": 0
+      },
+      "data": {
+        "nodeType": "agentInit",
+        "config": {}
+      }
+    },
+    {
+      "id": "a90bge",
+      "type": "caNode",
+      "position": {
+        "x": 0,
+        "y": 114
+      },
+      "data": {
+        "nodeType": "getModelAttribute",
+        "config": {
+          "attributeId": "ants"
+        }
+      }
+    },
+    {
+      "id": "aat6op",
+      "type": "caNode",
+      "position": {
+        "x": 215,
+        "y": 0
+      },
+      "data": {
+        "nodeType": "loop",
+        "config": {
+          "mode": "count"
+        }
+      }
+    },
+    {
+      "id": "adndd2",
+      "type": "caNode",
+      "position": {
+        "x": 215,
+        "y": 190
+      },
+      "data": {
+        "nodeType": "getGridDimensions",
+        "config": {}
+      }
+    },
+    {
+      "id": "ae880l",
+      "type": "caNode",
+      "position": {
+        "x": 430,
+        "y": 95
+      },
+      "data": {
+        "nodeType": "getRandom",
+        "config": {
+          "randomType": "float"
+        }
+      }
+    },
+    {
+      "id": "afa9nv",
+      "type": "caNode",
+      "position": {
+        "x": 430,
+        "y": 190
+      },
+      "data": {
+        "nodeType": "getRandom",
+        "config": {
+          "randomType": "float"
+        }
+      }
+    },
+    {
+      "id": "agmfy0",
+      "type": "caNode",
+      "position": {
+        "x": 645,
+        "y": 95
+      },
+      "data": {
+        "nodeType": "expression",
+        "config": {
+          "expression": "floor(u*W)",
+          "visibleCount": 2,
+          "_varName_a": "u",
+          "_varName_b": "W"
+        }
+      }
+    },
+    {
+      "id": "aj6e6e",
+      "type": "caNode",
+      "position": {
+        "x": 645,
+        "y": 190
+      },
+      "data": {
+        "nodeType": "expression",
+        "config": {
+          "expression": "floor(u*H)",
+          "visibleCount": 2,
+          "_varName_a": "u",
+          "_varName_b": "H"
+        }
+      }
+    },
+    {
+      "id": "amrw8q",
+      "type": "caNode",
+      "position": {
+        "x": 860,
+        "y": 0
+      },
+      "data": {
+        "nodeType": "createAgent",
+        "config": {
+          "_port_radius": "0.42"
+        }
+      }
+    },
+    {
+      "id": "ap7w5z",
+      "type": "caNode",
+      "position": {
+        "x": 1075,
+        "y": 0
+      },
+      "data": {
+        "nodeType": "addAgentToWorld",
+        "config": {}
+      }
+    },
+    {
+      "id": "atog47",
+      "type": "caNode",
+      "position": {
+        "x": 0,
+        "y": 475
       },
       "data": {
         "nodeType": "behaviourStep",
@@ -205,81 +440,56 @@
       }
     },
     {
-      "id": "a7vrx7",
+      "id": "augfog",
       "type": "caNode",
       "position": {
-        "x": 210,
-        "y": 0
+        "x": 0,
+        "y": 608
       },
       "data": {
-        "nodeType": "getRandom",
+        "nodeType": "getModelAttribute",
         "config": {
-          "randomType": "float"
+          "attributeId": "senseRadius"
         }
       }
     },
     {
-      "id": "a8ez3d",
+      "id": "avycov",
       "type": "caNode",
       "position": {
-        "x": 210,
-        "y": 105.6
+        "x": 215,
+        "y": 608
       },
       "data": {
-        "nodeType": "getRandom",
+        "nodeType": "readCellsUnder",
         "config": {
-          "randomType": "float"
+          "attributeId": "corpse",
+          "reduce": "mean"
         }
       }
     },
     {
-      "id": "a9sn4x",
+      "id": "axh8ar",
       "type": "caNode",
       "position": {
-        "x": 420,
-        "y": 0
+        "x": 215,
+        "y": 722
       },
       "data": {
-        "nodeType": "expression",
+        "nodeType": "readCellsUnder",
         "config": {
-          "expression": "(a-0.5)*1.4",
-          "visibleCount": 1
+          "attributeId": "corpse",
+          "reduce": "max",
+          "_port_radius": "0.5"
         }
       }
     },
     {
-      "id": "abukat",
+      "id": "ay1qyv",
       "type": "caNode",
       "position": {
-        "x": 420,
-        "y": 105.6
-      },
-      "data": {
-        "nodeType": "expression",
-        "config": {
-          "expression": "(a-0.5)*1.4",
-          "visibleCount": 1
-        }
-      }
-    },
-    {
-      "id": "ade050",
-      "type": "caNode",
-      "position": {
-        "x": 630,
-        "y": 52.8
-      },
-      "data": {
-        "nodeType": "applyForce",
-        "config": {}
-      }
-    },
-    {
-      "id": "ag4u22",
-      "type": "caNode",
-      "position": {
-        "x": 210,
-        "y": 264
+        "x": 215,
+        "y": 475
       },
       "data": {
         "nodeType": "getCellAttribute",
@@ -289,91 +499,85 @@
       }
     },
     {
-      "id": "ahspy3",
+      "id": "az6gb1",
       "type": "caNode",
       "position": {
-        "x": 420,
-        "y": 264
+        "x": 430,
+        "y": 323
       },
       "data": {
-        "nodeType": "categoricalColor",
+        "nodeType": "getModelAttribute",
         "config": {
-          "count": 2,
-          "entry_0_r": 150,
-          "entry_0_g": 150,
-          "entry_0_b": 160,
-          "entry_1_r": 235,
-          "entry_1_g": 70,
-          "entry_1_b": 70,
-          "default_r": 0,
-          "default_g": 0,
-          "default_b": 0
+          "attributeId": "k2"
         }
       }
     },
     {
-      "id": "ajp8xl",
+      "id": "a10eqt3",
       "type": "caNode",
       "position": {
-        "x": 630,
-        "y": 264
-      },
-      "data": {
-        "nodeType": "setCellLooks",
-        "config": {
-          "mappingId": "__current__"
-        }
-      }
-    },
-    {
-      "id": "anup9u",
-      "type": "caNode",
-      "position": {
-        "x": 210,
-        "y": 440
-      },
-      "data": {
-        "nodeType": "readCellsUnder",
-        "config": {
-          "attributeId": "corpse",
-          "reduce": "mean",
-          "_port_radius": "3"
-        }
-      }
-    },
-    {
-      "id": "aozwp3",
-      "type": "caNode",
-      "position": {
-        "x": 840,
-        "y": 352
-      },
-      "data": {
-        "nodeType": "conditional",
-        "config": {}
-      }
-    },
-    {
-      "id": "aql6u4",
-      "type": "caNode",
-      "position": {
-        "x": 1050,
-        "y": 132
+        "x": 645,
+        "y": 323
       },
       "data": {
         "nodeType": "expression",
         "config": {
-          "expression": "1/(1+exp(-10*(a-0.12)))",
-          "visibleCount": 1
+          "expression": "pow(f/(f+k2),2)",
+          "visibleCount": 2,
+          "_varName_a": "f",
+          "_varName_b": "k2"
         }
       }
     },
     {
-      "id": "aslzjo",
+      "id": "a13iwo4",
       "type": "caNode",
       "position": {
-        "x": 1050,
-        "y": 228.8
+        "x": 430,
+        "y": 436.99999999999994
+      },
+      "data": {
+        "nodeType": "getModelAttribute",
+        "config": {
+          "attributeId": "k1"
+        }
+      }
+    },
+    {
+      "id": "a14lgnh",
+      "type": "caNode",
+      "position": {
+        "x": 645,
+        "y": 436.99999999999994
+      },
+      "data": {
+        "nodeType": "expression",
+        "config": {
+          "expression": "pow(k1/(f+k1),2)",
+          "visibleCount": 2,
+          "_varName_a": "f",
+          "_varName_b": "k1"
+        }
+      }
+    },
+    {
+      "id": "a17iv16",
+      "type": "caNode",
+      "position": {
+        "x": 860,
+        "y": 380
+      },
+      "data": {
+        "nodeType": "valueSwitch",
+        "config": {}
+      }
+    },
+    {
+      "id": "a1b2c4u",
+      "type": "caNode",
+      "position": {
+        "x": 645,
+        "y": 570
       },
       "data": {
         "nodeType": "getRandom",
@@ -383,11 +587,44 @@
       }
     },
     {
-      "id": "at7ewu",
+      "id": "a1czc0h",
       "type": "caNode",
       "position": {
-        "x": 1260,
-        "y": 176
+        "x": 860,
+        "y": 570
+      },
+      "data": {
+        "nodeType": "expression",
+        "config": {
+          "expression": "floor(u*9)",
+          "visibleCount": 1,
+          "_varName_a": "u"
+        }
+      }
+    },
+    {
+      "id": "a1ed0gw",
+      "type": "caNode",
+      "position": {
+        "x": 1075,
+        "y": 570
+      },
+      "data": {
+        "nodeType": "expression",
+        "config": {
+          "expression": "u*9 - k",
+          "visibleCount": 2,
+          "_varName_a": "u",
+          "_varName_b": "k"
+        }
+      }
+    },
+    {
+      "id": "a1hwz2d",
+      "type": "caNode",
+      "position": {
+        "x": 1290,
+        "y": 436.99999999999994
       },
       "data": {
         "nodeType": "statement",
@@ -398,115 +635,55 @@
       }
     },
     {
-      "id": "awa5nb",
+      "id": "a1k28vn",
       "type": "caNode",
       "position": {
-        "x": 1470,
-        "y": 176
-      },
-      "data": {
-        "nodeType": "conditional",
-        "config": {}
-      }
-    },
-    {
-      "id": "ay1pux",
-      "type": "caNode",
-      "position": {
-        "x": 1680,
-        "y": 132
-      },
-      "data": {
-        "nodeType": "affectCellsUnder",
-        "config": {
-          "attributeId": "corpse",
-          "op": "add",
-          "_port_value": "1",
-          "_port_radius": "0.8"
-        }
-      }
-    },
-    {
-      "id": "azn0al",
-      "type": "caNode",
-      "position": {
-        "x": 1890,
-        "y": 132
-      },
-      "data": {
-        "nodeType": "setAttribute",
-        "config": {
-          "attributeId": "carrying",
-          "_port_value": "false"
-        }
-      }
-    },
-    {
-      "id": "a13gnqt",
-      "type": "caNode",
-      "position": {
-        "x": 1050,
-        "y": 440
-      },
-      "data": {
-        "nodeType": "expression",
-        "config": {
-          "expression": "1/(1+exp(10*(a-0.12)))",
-          "visibleCount": 1
-        }
-      }
-    },
-    {
-      "id": "a15t2gy",
-      "type": "caNode",
-      "position": {
-        "x": 1050,
-        "y": 528
-      },
-      "data": {
-        "nodeType": "getRandom",
-        "config": {
-          "randomType": "float"
-        }
-      }
-    },
-    {
-      "id": "a16euoi",
-      "type": "caNode",
-      "position": {
-        "x": 1260,
-        "y": 440
+        "x": 860,
+        "y": 608
       },
       "data": {
         "nodeType": "statement",
         "config": {
           "operation": "<",
-          "compareType": "numerical"
+          "compareType": "numerical",
+          "_port_y": "0.5"
         }
       }
     },
     {
-      "id": "a19m34r",
+      "id": "a1mxqh6",
       "type": "caNode",
       "position": {
-        "x": 1260,
-        "y": 545.6
+        "x": 860,
+        "y": 722
       },
       "data": {
         "nodeType": "statement",
         "config": {
           "operation": ">",
           "compareType": "numerical",
-          "_port_y": "0.02"
+          "_port_y": "0.5"
         }
       }
     },
     {
-      "id": "a1bfx99",
+      "id": "a1op5vo",
       "type": "caNode",
       "position": {
-        "x": 1470,
-        "y": 484
+        "x": 1075,
+        "y": 665
+      },
+      "data": {
+        "nodeType": "valueSwitch",
+        "config": {}
+      }
+    },
+    {
+      "id": "a1saxkl",
+      "type": "caNode",
+      "position": {
+        "x": 1290,
+        "y": 522.5
       },
       "data": {
         "nodeType": "logicOperator",
@@ -516,11 +693,11 @@
       }
     },
     {
-      "id": "a1enqhs",
+      "id": "a1vf1go",
       "type": "caNode",
       "position": {
-        "x": 1680,
-        "y": 484
+        "x": 1505,
+        "y": 522.5
       },
       "data": {
         "nodeType": "conditional",
@@ -528,241 +705,642 @@
       }
     },
     {
-      "id": "a1gboyp",
+      "id": "a1xhd9u",
       "type": "caNode",
       "position": {
-        "x": 1890,
-        "y": 440
+        "x": 1505,
+        "y": 342
+      },
+      "data": {
+        "nodeType": "valueSwitch",
+        "config": {
+          "_port_ifValue": "1",
+          "_port_elseValue": "0"
+        }
+      }
+    },
+    {
+      "id": "a1z3pk4",
+      "type": "caNode",
+      "position": {
+        "x": 1505,
+        "y": 703
+      },
+      "data": {
+        "nodeType": "valueSwitch",
+        "config": {
+          "_port_ifValue": "0",
+          "_port_elseValue": "1"
+        }
+      }
+    },
+    {
+      "id": "a218mrk",
+      "type": "caNode",
+      "position": {
+        "x": 1720,
+        "y": 436.99999999999994
       },
       "data": {
         "nodeType": "affectCellsUnder",
         "config": {
           "attributeId": "corpse",
-          "op": "subtract",
-          "_port_value": "1",
-          "_port_radius": "0.8"
+          "op": "set",
+          "_port_radius": "0.5"
         }
       }
     },
     {
-      "id": "a1hffhw",
+      "id": "a23jez2",
       "type": "caNode",
       "position": {
-        "x": 2100,
-        "y": 440
+        "x": 1935,
+        "y": 436.99999999999994
       },
       "data": {
         "nodeType": "setAttribute",
         "config": {
-          "attributeId": "carrying",
-          "_port_value": "true"
+          "attributeId": "carrying"
         }
+      }
+    },
+    {
+      "id": "a28bil8",
+      "type": "caNode",
+      "position": {
+        "x": 2150,
+        "y": 589
+      },
+      "data": {
+        "nodeType": "expression",
+        "config": {
+          "expression": "c + act*(1-2*c)",
+          "visibleCount": 2,
+          "_varName_a": "act",
+          "_varName_b": "c"
+        }
+      }
+    },
+    {
+      "id": "a2bme0m",
+      "type": "caNode",
+      "position": {
+        "x": 2365,
+        "y": 494
+      },
+      "data": {
+        "nodeType": "categoricalColor",
+        "config": {
+          "count": 2,
+          "entry_0_r": 140,
+          "entry_0_g": 145,
+          "entry_0_b": 160,
+          "entry_1_r": 240,
+          "entry_1_g": 70,
+          "entry_1_b": 60,
+          "default_r": 255,
+          "default_g": 255,
+          "default_b": 255
+        }
+      }
+    },
+    {
+      "id": "a2d87q6",
+      "type": "caNode",
+      "position": {
+        "x": 2365,
+        "y": 494
+      },
+      "data": {
+        "nodeType": "setCellLooks",
+        "config": {
+          "mappingId": "__current__"
+        }
+      }
+    },
+    {
+      "id": "a2iop7q",
+      "type": "caNode",
+      "position": {
+        "x": 2365,
+        "y": 627
+      },
+      "data": {
+        "nodeType": "getSelfPosition",
+        "config": {}
+      }
+    },
+    {
+      "id": "a2jsq4z",
+      "type": "caNode",
+      "position": {
+        "x": 2365,
+        "y": 741
+      },
+      "data": {
+        "nodeType": "getGridDimensions",
+        "config": {}
+      }
+    },
+    {
+      "id": "a2kl4cc",
+      "type": "caNode",
+      "position": {
+        "x": 2365,
+        "y": 855
+      },
+      "data": {
+        "nodeType": "expression",
+        "config": {
+          "expression": "(k - floor(k/3)*3) - 1",
+          "visibleCount": 1,
+          "_varName_a": "k"
+        }
+      }
+    },
+    {
+      "id": "a2m3loc",
+      "type": "caNode",
+      "position": {
+        "x": 2365,
+        "y": 950
+      },
+      "data": {
+        "nodeType": "expression",
+        "config": {
+          "expression": "floor(k/3) - 1",
+          "visibleCount": 1,
+          "_varName_a": "k"
+        }
+      }
+    },
+    {
+      "id": "a2om1bi",
+      "type": "caNode",
+      "position": {
+        "x": 2580,
+        "y": 627
+      },
+      "data": {
+        "nodeType": "expression",
+        "config": {
+          "expression": "(x+dx) - floor((x+dx)/W)*W",
+          "visibleCount": 3,
+          "_varName_a": "x",
+          "_varName_b": "dx",
+          "_varName_c": "W"
+        }
+      }
+    },
+    {
+      "id": "a2sjhxi",
+      "type": "caNode",
+      "position": {
+        "x": 2580,
+        "y": 760
+      },
+      "data": {
+        "nodeType": "expression",
+        "config": {
+          "expression": "(y+dy) - floor((y+dy)/H)*H",
+          "visibleCount": 3,
+          "_varName_a": "y",
+          "_varName_b": "dy",
+          "_varName_c": "H"
+        }
+      }
+    },
+    {
+      "id": "a2w2qht",
+      "type": "caNode",
+      "position": {
+        "x": 2580,
+        "y": 513
+      },
+      "data": {
+        "nodeType": "getSelfHandle",
+        "config": {}
+      }
+    },
+    {
+      "id": "a2x4rog",
+      "type": "caNode",
+      "position": {
+        "x": 2795,
+        "y": 627
+      },
+      "data": {
+        "nodeType": "setAgentPosition",
+        "config": {}
       }
     }
   ],
   "agentGraphEdges": [
     {
-      "id": "earkwz",
-      "source": "a7vrx7",
-      "target": "a9sn4x",
+      "id": "ebny04",
+      "source": "a90bge",
+      "target": "aat6op",
       "sourceHandle": "output_value_value",
-      "targetHandle": "input_value_a"
+      "targetHandle": "input_value_count"
     },
     {
-      "id": "eca7m8",
-      "source": "a8ez3d",
-      "target": "abukat",
-      "sourceHandle": "output_value_value",
-      "targetHandle": "input_value_a"
-    },
-    {
-      "id": "eeno4e",
-      "source": "a9sn4x",
-      "target": "ade050",
-      "sourceHandle": "output_value_result",
-      "targetHandle": "input_value_fx"
-    },
-    {
-      "id": "efhvhk",
-      "source": "abukat",
-      "target": "ade050",
-      "sourceHandle": "output_value_result",
-      "targetHandle": "input_value_fy"
-    },
-    {
-      "id": "eixc1d",
-      "source": "ag4u22",
-      "target": "ahspy3",
-      "sourceHandle": "output_value_value",
-      "targetHandle": "input_value_index"
-    },
-    {
-      "id": "ekxckk",
-      "source": "ahspy3",
-      "target": "ajp8xl",
-      "sourceHandle": "output_value_r",
-      "targetHandle": "input_value_r"
-    },
-    {
-      "id": "el8syw",
-      "source": "ahspy3",
-      "target": "ajp8xl",
-      "sourceHandle": "output_value_g",
-      "targetHandle": "input_value_g"
-    },
-    {
-      "id": "em8kji",
-      "source": "ahspy3",
-      "target": "ajp8xl",
-      "sourceHandle": "output_value_b",
-      "targetHandle": "input_value_b"
-    },
-    {
-      "id": "ep41d7",
-      "source": "ag4u22",
-      "target": "aozwp3",
-      "sourceHandle": "output_value_value",
-      "targetHandle": "input_value_condition"
-    },
-    {
-      "id": "ern69r",
-      "source": "anup9u",
-      "target": "aql6u4",
-      "sourceHandle": "output_value_value",
-      "targetHandle": "input_value_a"
-    },
-    {
-      "id": "eusxzr",
-      "source": "aslzjo",
-      "target": "at7ewu",
-      "sourceHandle": "output_value_value",
-      "targetHandle": "input_value_x"
-    },
-    {
-      "id": "evlaoh",
-      "source": "aql6u4",
-      "target": "at7ewu",
-      "sourceHandle": "output_value_result",
-      "targetHandle": "input_value_y"
-    },
-    {
-      "id": "ex68t0",
-      "source": "at7ewu",
-      "target": "awa5nb",
-      "sourceHandle": "output_value_result",
-      "targetHandle": "input_value_condition"
-    },
-    {
-      "id": "e10zgir",
-      "source": "awa5nb",
-      "target": "ay1pux",
-      "sourceHandle": "output_flow_then",
-      "targetHandle": "input_flow_do"
-    },
-    {
-      "id": "e11axor",
-      "source": "ay1pux",
-      "target": "azn0al",
-      "sourceHandle": "output_flow_next",
-      "targetHandle": "input_flow_do"
-    },
-    {
-      "id": "e12xljy",
-      "source": "aozwp3",
-      "target": "awa5nb",
-      "sourceHandle": "output_flow_then",
-      "targetHandle": "input_flow_check"
-    },
-    {
-      "id": "e147qm4",
-      "source": "anup9u",
-      "target": "a13gnqt",
-      "sourceHandle": "output_value_value",
-      "targetHandle": "input_value_a"
-    },
-    {
-      "id": "e17y8kk",
-      "source": "a15t2gy",
-      "target": "a16euoi",
-      "sourceHandle": "output_value_value",
-      "targetHandle": "input_value_x"
-    },
-    {
-      "id": "e18eud8",
-      "source": "a13gnqt",
-      "target": "a16euoi",
-      "sourceHandle": "output_value_result",
-      "targetHandle": "input_value_y"
-    },
-    {
-      "id": "e1aa3ld",
-      "source": "anup9u",
-      "target": "a19m34r",
-      "sourceHandle": "output_value_value",
-      "targetHandle": "input_value_x"
-    },
-    {
-      "id": "e1ch64e",
-      "source": "a16euoi",
-      "target": "a1bfx99",
-      "sourceHandle": "output_value_result",
-      "targetHandle": "input_value_a"
-    },
-    {
-      "id": "e1de02q",
-      "source": "a19m34r",
-      "target": "a1bfx99",
-      "sourceHandle": "output_value_result",
-      "targetHandle": "input_value_b"
-    },
-    {
-      "id": "e1f7r7o",
-      "source": "a1bfx99",
-      "target": "a1enqhs",
-      "sourceHandle": "output_value_result",
-      "targetHandle": "input_value_condition"
-    },
-    {
-      "id": "e1iqs29",
-      "source": "a1enqhs",
-      "target": "a1gboyp",
-      "sourceHandle": "output_flow_then",
-      "targetHandle": "input_flow_do"
-    },
-    {
-      "id": "e1jqilj",
-      "source": "a1gboyp",
-      "target": "a1hffhw",
-      "sourceHandle": "output_flow_next",
-      "targetHandle": "input_flow_do"
-    },
-    {
-      "id": "e1k4i8v",
-      "source": "aozwp3",
-      "target": "a1enqhs",
-      "sourceHandle": "output_flow_else",
-      "targetHandle": "input_flow_check"
-    },
-    {
-      "id": "e1lcnm0",
-      "source": "a6bzyw",
-      "target": "ade050",
+      "id": "ecq2st",
+      "source": "a8nnkk",
+      "target": "aat6op",
       "sourceHandle": "output_flow_do",
       "targetHandle": "input_flow_do"
     },
     {
-      "id": "e1mw4kb",
-      "source": "ade050",
-      "target": "ajp8xl",
+      "id": "ehzhn5",
+      "source": "ae880l",
+      "target": "agmfy0",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_a"
+    },
+    {
+      "id": "eikezm",
+      "source": "adndd2",
+      "target": "agmfy0",
+      "sourceHandle": "output_value_width",
+      "targetHandle": "input_value_b"
+    },
+    {
+      "id": "ekuw2c",
+      "source": "afa9nv",
+      "target": "aj6e6e",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_a"
+    },
+    {
+      "id": "elg8qj",
+      "source": "adndd2",
+      "target": "aj6e6e",
+      "sourceHandle": "output_value_height",
+      "targetHandle": "input_value_b"
+    },
+    {
+      "id": "enjztv",
+      "source": "agmfy0",
+      "target": "amrw8q",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_x"
+    },
+    {
+      "id": "eo2i1n",
+      "source": "aj6e6e",
+      "target": "amrw8q",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_y"
+    },
+    {
+      "id": "eqbl36",
+      "source": "amrw8q",
+      "target": "ap7w5z",
+      "sourceHandle": "output_value_handle",
+      "targetHandle": "input_value_handle"
+    },
+    {
+      "id": "erwubg",
+      "source": "aat6op",
+      "target": "amrw8q",
+      "sourceHandle": "output_flow_body",
+      "targetHandle": "input_flow_do"
+    },
+    {
+      "id": "estg6c",
+      "source": "amrw8q",
+      "target": "ap7w5z",
       "sourceHandle": "output_flow_next",
       "targetHandle": "input_flow_do"
     },
     {
-      "id": "e1nyi0v",
-      "source": "ajp8xl",
-      "target": "aozwp3",
-      "sourceHandle": "output_flow_next",
+      "id": "ew1e9f",
+      "source": "augfog",
+      "target": "avycov",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_radius"
+    },
+    {
+      "id": "e11trd3",
+      "source": "avycov",
+      "target": "a10eqt3",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_a"
+    },
+    {
+      "id": "e12983j",
+      "source": "az6gb1",
+      "target": "a10eqt3",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_b"
+    },
+    {
+      "id": "e15fpl8",
+      "source": "avycov",
+      "target": "a14lgnh",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_a"
+    },
+    {
+      "id": "e162yp7",
+      "source": "a13iwo4",
+      "target": "a14lgnh",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_b"
+    },
+    {
+      "id": "e18351g",
+      "source": "ay1qyv",
+      "target": "a17iv16",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_condition"
+    },
+    {
+      "id": "e19m1xx",
+      "source": "a10eqt3",
+      "target": "a17iv16",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_ifValue"
+    },
+    {
+      "id": "e1akrad",
+      "source": "a14lgnh",
+      "target": "a17iv16",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_elseValue"
+    },
+    {
+      "id": "e1d44oh",
+      "source": "a1b2c4u",
+      "target": "a1czc0h",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_a"
+    },
+    {
+      "id": "e1foubj",
+      "source": "a1b2c4u",
+      "target": "a1ed0gw",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_a"
+    },
+    {
+      "id": "e1g1gx1",
+      "source": "a1czc0h",
+      "target": "a1ed0gw",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_b"
+    },
+    {
+      "id": "e1ii8ma",
+      "source": "a1ed0gw",
+      "target": "a1hwz2d",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_x"
+    },
+    {
+      "id": "e1joqbz",
+      "source": "a17iv16",
+      "target": "a1hwz2d",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_y"
+    },
+    {
+      "id": "e1lgbqi",
+      "source": "axh8ar",
+      "target": "a1k28vn",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_x"
+    },
+    {
+      "id": "e1n02in",
+      "source": "axh8ar",
+      "target": "a1mxqh6",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_x"
+    },
+    {
+      "id": "e1phigr",
+      "source": "ay1qyv",
+      "target": "a1op5vo",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_condition"
+    },
+    {
+      "id": "e1q7nzq",
+      "source": "a1k28vn",
+      "target": "a1op5vo",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_ifValue"
+    },
+    {
+      "id": "e1rlk8m",
+      "source": "a1mxqh6",
+      "target": "a1op5vo",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_elseValue"
+    },
+    {
+      "id": "e1tgken",
+      "source": "a1hwz2d",
+      "target": "a1saxkl",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_a"
+    },
+    {
+      "id": "e1upt6l",
+      "source": "a1op5vo",
+      "target": "a1saxkl",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_b"
+    },
+    {
+      "id": "e1wcs8e",
+      "source": "a1saxkl",
+      "target": "a1vf1go",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_condition"
+    },
+    {
+      "id": "e1ya7sa",
+      "source": "ay1qyv",
+      "target": "a1xhd9u",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_condition"
+    },
+    {
+      "id": "e20tobx",
+      "source": "ay1qyv",
+      "target": "a1z3pk4",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_condition"
+    },
+    {
+      "id": "e22y2ct",
+      "source": "a1xhd9u",
+      "target": "a218mrk",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_value"
+    },
+    {
+      "id": "e24xp2r",
+      "source": "a1z3pk4",
+      "target": "a23jez2",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_value"
+    },
+    {
+      "id": "e25hniz",
+      "source": "atog47",
+      "target": "a1vf1go",
+      "sourceHandle": "output_flow_do",
       "targetHandle": "input_flow_check"
+    },
+    {
+      "id": "e261c7i",
+      "source": "a1vf1go",
+      "target": "a218mrk",
+      "sourceHandle": "output_flow_then",
+      "targetHandle": "input_flow_do"
+    },
+    {
+      "id": "e27k6aw",
+      "source": "a218mrk",
+      "target": "a23jez2",
+      "sourceHandle": "output_flow_next",
+      "targetHandle": "input_flow_do"
+    },
+    {
+      "id": "e29relg",
+      "source": "a1saxkl",
+      "target": "a28bil8",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_a"
+    },
+    {
+      "id": "e2a4vyz",
+      "source": "ay1qyv",
+      "target": "a28bil8",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_b"
+    },
+    {
+      "id": "e2c0x95",
+      "source": "a28bil8",
+      "target": "a2bme0m",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_index"
+    },
+    {
+      "id": "e2eun83",
+      "source": "a2bme0m",
+      "target": "a2d87q6",
+      "sourceHandle": "output_value_r",
+      "targetHandle": "input_value_r"
+    },
+    {
+      "id": "e2foq1d",
+      "source": "a2bme0m",
+      "target": "a2d87q6",
+      "sourceHandle": "output_value_g",
+      "targetHandle": "input_value_g"
+    },
+    {
+      "id": "e2gqhq6",
+      "source": "a2bme0m",
+      "target": "a2d87q6",
+      "sourceHandle": "output_value_b",
+      "targetHandle": "input_value_b"
+    },
+    {
+      "id": "e2hc1fl",
+      "source": "a1vf1go",
+      "target": "a2d87q6",
+      "sourceHandle": "output_flow_next",
+      "targetHandle": "input_flow_do"
+    },
+    {
+      "id": "e2lu0s7",
+      "source": "a1czc0h",
+      "target": "a2kl4cc",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_a"
+    },
+    {
+      "id": "e2nwlr3",
+      "source": "a1czc0h",
+      "target": "a2m3loc",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_a"
+    },
+    {
+      "id": "e2pp506",
+      "source": "a2iop7q",
+      "target": "a2om1bi",
+      "sourceHandle": "output_value_x",
+      "targetHandle": "input_value_a"
+    },
+    {
+      "id": "e2qsfm8",
+      "source": "a2kl4cc",
+      "target": "a2om1bi",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_b"
+    },
+    {
+      "id": "e2rnow1",
+      "source": "a2jsq4z",
+      "target": "a2om1bi",
+      "sourceHandle": "output_value_width",
+      "targetHandle": "input_value_c"
+    },
+    {
+      "id": "e2tful3",
+      "source": "a2iop7q",
+      "target": "a2sjhxi",
+      "sourceHandle": "output_value_y",
+      "targetHandle": "input_value_a"
+    },
+    {
+      "id": "e2uy90i",
+      "source": "a2m3loc",
+      "target": "a2sjhxi",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_b"
+    },
+    {
+      "id": "e2v4xda",
+      "source": "a2jsq4z",
+      "target": "a2sjhxi",
+      "sourceHandle": "output_value_height",
+      "targetHandle": "input_value_c"
+    },
+    {
+      "id": "e2yf5u6",
+      "source": "a2w2qht",
+      "target": "a2x4rog",
+      "sourceHandle": "output_value_handle",
+      "targetHandle": "input_value_agentId"
+    },
+    {
+      "id": "e2zfi6a",
+      "source": "a2om1bi",
+      "target": "a2x4rog",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_x"
+    },
+    {
+      "id": "e305p1i",
+      "source": "a2sjhxi",
+      "target": "a2x4rog",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_y"
+    },
+    {
+      "id": "e31wcuf",
+      "source": "a2d87q6",
+      "target": "a2x4rog",
+      "sourceHandle": "output_flow_next",
+      "targetHandle": "input_flow_do"
     }
   ],
   "macroDefs": []
