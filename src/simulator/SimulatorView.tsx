@@ -205,6 +205,13 @@ function forceFrameOpaque(data: Uint8ClampedArray): void {
   for (let i = 3; i < data.length; i += 4) data[i] = 255;
 }
 
+/** Explicit high-contrast colours for the transport-bar <select> option popups
+ *  (both shipped themes are dark). The `.transportBtn` class leaves options at the
+ *  browser default (light text on a white OS popup → unreadable when expanded); a
+ *  concrete dark bg + light text fixes it regardless of theme (CSS vars don't
+ *  reliably reach native <option> popups, so these are concrete). */
+const PICK_OPT_STYLE: CSSProperties = { background: '#1b1d24', color: '#eaeaea' };
+
 /** M1 (audit) — the direct-agent-render gate terms that a SOFT recompile can flip.
  *  Everything ELSE in the gate (topology, dimension, agent target, decoupling,
  *  OffscreenCanvas, bonds) already forces a FULL reinit when it changes, so those
@@ -1121,6 +1128,13 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     (saved.current.recordScope as RecordScope | undefined) === 'view' ? 'view' : 'simulation');
   const recordScopeRef = useRef<RecordScope>(recordScope);
   useEffect(() => { recordScopeRef.current = recordScope; }, [recordScope]);
+  // Screenshot shares the same scope dilemma as recording — "simulation" crops to
+  // the drawn world rectangle, "view" is the whole canvas as shown. Separate
+  // preference from the recording scope (persisted independently).
+  const [screenshotScope, setScreenshotScope] = useState<RecordScope>(() =>
+    (saved.current.screenshotScope as RecordScope | undefined) === 'view' ? 'view' : 'simulation');
+  const screenshotScopeRef = useRef<RecordScope>(screenshotScope);
+  useEffect(() => { screenshotScopeRef.current = screenshotScope; }, [screenshotScope]);
   // Crop rect + output dims are LOCKED at the first captured frame of a recording,
   // so mid-record pan / zoom / panel-resize can't change frame dimensions (which the
   // dimension guard would otherwise drop) — the recording keeps a stable framing.
@@ -1136,7 +1150,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
           targetFps, unlimitedFps, gensPerFrame, unlimitedGens,
           activeViewer, brushColor, brushW, brushH, brushMapping, showBrushCursor, showGridlines, show2dAxes,
           brushShape, brushRadius, brushRingWidth, brushLineWidth, brush3dVolume, brushBoxDepth,
-          infinityCanvas, indicatorVizModes, recordFormat, recordScope, brushSectionH, agentsFront3d,
+          infinityCanvas, indicatorVizModes, recordFormat, recordScope, screenshotScope, brushSectionH, agentsFront3d,
           light3d, cellGaps3d, agentMetaballs, agentGlow,
           agentBrushRadius, agentSeedDensity, agentSeedSpacing,
           agentBrushShape, agentBrushW, agentBrushH, agentBrushRingWidth, agentBrushLineWidth,
@@ -1152,7 +1166,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       } catch { /* localStorage full */ }
     }, 300);
     return () => clearTimeout(timer);
-  }, [targetFps, unlimitedFps, gensPerFrame, unlimitedGens, activeViewer, brushColor, brushW, brushH, brushMapping, showBrushCursor, showGridlines, show2dAxes, brushShape, brushRadius, brushRingWidth, brushLineWidth, brush3dVolume, brushBoxDepth, infinityCanvas, indicatorVizModes, recordFormat, recordScope, brushSectionH, agentsFront3d, light3d, cellGaps3d, agentMetaballs, agentGlow, agentBrushRadius, agentSeedDensity, agentSeedSpacing, agentBrushShape, agentBrushW, agentBrushH, agentBrushRingWidth, agentBrushLineWidth, showCaGrid, showAgents, showBonds, simulateCells, simulateAgents, brushTarget, bg2d, agentOutlines, indicatorHiddenCategories, indicatorChartOverrides]);
+  }, [targetFps, unlimitedFps, gensPerFrame, unlimitedGens, activeViewer, brushColor, brushW, brushH, brushMapping, showBrushCursor, showGridlines, show2dAxes, brushShape, brushRadius, brushRingWidth, brushLineWidth, brush3dVolume, brushBoxDepth, infinityCanvas, indicatorVizModes, recordFormat, recordScope, screenshotScope, brushSectionH, agentsFront3d, light3d, cellGaps3d, agentMetaballs, agentGlow, agentBrushRadius, agentSeedDensity, agentSeedSpacing, agentBrushShape, agentBrushW, agentBrushH, agentBrushRingWidth, agentBrushLineWidth, showCaGrid, showAgents, showBonds, simulateCells, simulateAgents, brushTarget, bg2d, agentOutlines, indicatorHiddenCategories, indicatorChartOverrides]);
 
   // Manual Brush — signature-keyed merge effect. Re-derives `manualBrush`
   // whenever the cell attribute set (id+type) changes. Surviving attrs carry
@@ -1830,6 +1844,22 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     scaledW: number; scaledH: number; ox: number; oy: number; infinity: boolean;
     txMin: number; txMax: number; tyMin: number; tyMax: number;
   } | null>(null);
+  /** The "simulation" crop of the 2D display canvas (recording + screenshot share
+   *  it): the drawn world rectangle from the last render's transform, clamped to the
+   *  canvas. In infinity mode the world tiles the whole viewport, and when zoomed in
+   *  the sim rect already covers the canvas — both fall back to the full frame, so
+   *  there are no margins to remove. Reads only refs → stable. */
+  const simCropRect = useCallback((cw: number, ch: number): { sx: number; sy: number; sw: number; sh: number } => {
+    const v = viewXformRef.current;
+    if (v && !v.infinity && v.scaledW > 0 && v.scaledH > 0) {
+      const rx = Math.max(0, Math.floor(v.ox));
+      const ry = Math.max(0, Math.floor(v.oy));
+      const rr = Math.min(cw, Math.ceil(v.ox + v.scaledW));
+      const rb = Math.min(ch, Math.ceil(v.oy + v.scaledH));
+      if (rr - rx >= 1 && rb - ry >= 1) return { sx: rx, sy: ry, sw: rr - rx, sh: rb - ry };
+    }
+    return { sx: 0, sy: 0, sw: cw, sh: ch };
+  }, []);
   /** Idle hover tracking (cursor cell + chip + agent hover scans) is coalesced
    *  to ONE rAF per frame — a 125–1000 Hz mouse must not run O(agents) scans or
    *  React updates per raw event (the cursor-slows-the-sim bug). */
@@ -4217,20 +4247,9 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
             let crop = recordCropRef.current;
             if (!crop) {
               const RECORD_MAX = 960;
-              let sx = 0, sy = 0, sw = dc.width, sh = dc.height;
-              if (recordScopeRef.current === 'simulation') {
-                const v = viewXformRef.current;
-                // Crop to the drawn world rectangle. In infinity mode the world tiles
-                // the whole viewport (no margins), and when zoomed in the sim rect
-                // already covers the canvas — both clamp to the full frame naturally.
-                if (v && !v.infinity && v.scaledW > 0 && v.scaledH > 0) {
-                  const rx = Math.max(0, Math.floor(v.ox));
-                  const ry = Math.max(0, Math.floor(v.oy));
-                  const rr = Math.min(dc.width, Math.ceil(v.ox + v.scaledW));
-                  const rb = Math.min(dc.height, Math.ceil(v.oy + v.scaledH));
-                  if (rr - rx >= 1 && rb - ry >= 1) { sx = rx; sy = ry; sw = rr - rx; sh = rb - ry; }
-                }
-              }
+              const { sx, sy, sw, sh } = recordScopeRef.current === 'simulation'
+                ? simCropRect(dc.width, dc.height)
+                : { sx: 0, sy: 0, sw: dc.width, sh: dc.height };
               // Bound the long axis so dozens of window-sized frames don't thrash GC.
               const s = Math.min(1, RECORD_MAX / Math.max(sw, sh));
               crop = { sx, sy, sw, sh, outW: Math.max(1, Math.round(sw * s)), outH: Math.max(1, Math.round(sh * s)) };
@@ -8754,8 +8773,6 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   // then toBlob from there. Falls through to direct toBlob in JS/WASM modes.
   const screenshotPendingRef = useRef<((data: { w: number; h: number; colors?: Uint8ClampedArray }) => void) | null>(null);
   const handleScreenshot = () => {
-    const w = gridWidth.current;
-    const h = gridHeight.current;
     const downloadBlob = (blob: Blob) => {
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
@@ -8765,9 +8782,12 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       a.click();
       URL.revokeObjectURL(url);
     };
-    // 3D Grid CA: screenshot the WebGL2 display canvas (display resolution, not
-    // grid resolution — a volume has no grid-res analogue). preserveDrawingBuffer
-    // is on; re-render first so the buffer is current.
+    // Mirrors the recording capture: one path for the DISPLAY the user sees, with the
+    // chosen scope — "simulation" crops to the drawn world rectangle (no letterbox
+    // margins), "view" is the whole canvas as shown.
+    // 3D Grid CA: screenshot the WebGL2 display buffer (display resolution — a volume
+    // has no grid-res analogue, and no letterbox so both scopes are the full frame).
+    // preserveDrawingBuffer is on; re-render first so the buffer is current.
     if (is3dRef.current && gl3dRef.current) {
       draw();
       const px = capture3dPixels() ?? gl3dRef.current.readPixels();
@@ -8779,43 +8799,22 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       off.toBlob(blob => { if (blob) downloadBlob(blob); }, 'image/png');
       return;
     }
-    if (directRenderActiveRef.current) {
-      if (!workerRef.current || !w || !h) return;
-      screenshotPendingRef.current = ({ w: cw, h: ch, colors }) => {
-        if (!colors || colors.length < cw * ch * 4) return;
-        const off = document.createElement('canvas');
-        off.width = cw; off.height = ch;
-        const ctx = off.getContext('2d');
-        if (!ctx) return;
-        const imageData = new ImageData(new Uint8ClampedArray(colors), cw, ch);
-        ctx.putImageData(imageData, 0, 0);
-        off.toBlob(blob => { if (blob) downloadBlob(blob); }, 'image/png');
-      };
-      workerRef.current.postMessage({ type: 'requestColorsSnapshot', tag: 'screenshot' });
-      return;
-    }
-    // Generic Agent Platform: agent models composite the agent overlay onto the
-    // DISPLAY canvas, so screenshot that (display resolution) to include agents.
-    // Copy the display onto a throwaway offscreen and toBlob THAT — never read the
-    // live display canvas directly (matches the 3D / direct-render branches above
-    // and the recording capture's scratch pattern). `toBlob` doesn't de-optimize a
-    // canvas the way `getImageData` does (measured), but the display canvas is the
-    // one DOM element that persists across every model load, so keeping ALL readbacks
-    // off it removes any risk + keeps the three screenshot branches consistent.
-    if (isAgentModelRef.current && canvasRef.current && !directRenderActiveRef.current) {
-      draw();
-      const dc = canvasRef.current;
-      const off = document.createElement('canvas');
-      off.width = dc.width; off.height = dc.height;
-      const octx = off.getContext('2d');
-      if (!octx) return;
-      octx.drawImage(dc, 0, 0);
-      off.toBlob(blob => { if (blob) downloadBlob(blob); }, 'image/png');
-      return;
-    }
-    const src = srcCanvasRef.current;
-    if (!src) return;
-    src.toBlob(blob => { if (blob) downloadBlob(blob); }, 'image/png');
+    // 2D (every path — JS/WASM grid, WebGPU direct render, E2 composite, agents):
+    // canvasRef is the final composited surface. draw() first so it's current, then
+    // copy it onto a throwaway offscreen (drawImage = texture read; never getImageData
+    // the live display canvas — that de-optimizes it) and crop per the chosen scope.
+    draw();
+    const dc = canvasRef.current;
+    if (!dc || dc.width <= 0 || dc.height <= 0) return;
+    const { sx, sy, sw, sh } = screenshotScopeRef.current === 'simulation'
+      ? simCropRect(dc.width, dc.height)
+      : { sx: 0, sy: 0, sw: dc.width, sh: dc.height };
+    const off = document.createElement('canvas');
+    off.width = sw; off.height = sh;
+    const octx = off.getContext('2d');
+    if (!octx) return;
+    octx.drawImage(dc, sx, sy, sw, sh, 0, 0, sw, sh);
+    off.toBlob(blob => { if (blob) downloadBlob(blob); }, 'image/png');
   };
 
   // Save simulation state
@@ -9906,38 +9905,69 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
           <button className={styles.transportBtn} onClick={() => setPlaying(false)} disabled={!playing} title="Pause (Enter)">&#9646;&#9646;</button>
           <button className={styles.transportBtn} onClick={handleStep} title="Step (Space)">&#9654;|</button>
           <button className={styles.transportBtn} onClick={handleReset} title="Reset (Esc)">&#9632;</button>
-          <button className={styles.transportBtn} onClick={handleScreenshot} title="Screenshot (PNG)">{'\uD83D\uDCF7'}</button>
+          <button
+            className={styles.transportBtn}
+            onClick={handleScreenshot}
+            title={`Screenshot PNG${is3D ? '' : ` (${screenshotScope === 'simulation' ? 'simulation' : 'current view'})`}`}
+          >{'\uD83D\uDCF7'}</button>
+          {/* Screenshot capture scope \u2014 same dilemma as recording. Hidden in 3D
+              (no letterbox \u2192 simulation == current view). */}
+          {!is3D && (
+            <select
+              className={styles.transportBtn}
+              value={`png:${screenshotScope}`}
+              onChange={e => setScreenshotScope(e.target.value.split(':')[1] as RecordScope)}
+              title={'Screenshot scope \u2014 "current view" keeps the panel margins as shown; "simulation" crops to the area of interest'}
+              style={{ color: '#eaeaea', padding: '4px 4px', fontSize: '0.65rem' }}
+            >
+              <option value="png:view" style={PICK_OPT_STYLE}>PNG (current view)</option>
+              <option value="png:simulation" style={PICK_OPT_STYLE}>PNG (simulation)</option>
+            </select>
+          )}
           {!recording ? (
             <>
               <button
                 className={styles.transportBtn}
                 onClick={startRecording}
                 disabled={encodingWebM}
-                title={encodingWebM ? 'Encoding WebM\u2026' : `Record ${recordFormat.toUpperCase()} (${recordScope === 'simulation' ? 'simulation' : 'current view'})`}
+                title={encodingWebM ? 'Encoding WebM\u2026' : `Record ${recordFormat.toUpperCase()} (${!is3D && recordScope === 'simulation' ? 'simulation' : 'current view'})`}
                 style={{ color: '#e05050' }}
               >{'\u23FA'}</button>
               <select
                 className={styles.transportBtn}
-                value={`${recordFormat}:${recordScope}`}
+                value={`${recordFormat}:${is3D ? 'view' : recordScope}`}
                 onChange={e => {
                   const [fmt, scope] = e.target.value.split(':') as [RecordFormat, RecordScope];
                   setRecordFormat(fmt);
-                  setRecordScope(scope);
+                  // In 3D the scope is fixed to the full frame \u2014 don't overwrite the
+                  // user's 2D scope preference just because a format was picked here.
+                  if (!is3D) setRecordScope(scope);
                 }}
                 disabled={encodingWebM}
                 title={webmAvailable
-                  ? 'Recording format \u2014 "current view" keeps the panel margins as shown; "simulation" crops to the area of interest'
+                  ? (is3D
+                    ? 'Recording format (a 3D scene fills the frame \u2014 no separate simulation crop)'
+                    : 'Recording format \u2014 "current view" keeps the panel margins as shown; "simulation" crops to the area of interest')
                   : 'WebM not supported in this browser \u2014 use GIF instead'}
-                style={{ padding: '4px 4px', fontSize: '0.65rem' }}
+                style={{ color: '#eaeaea', padding: '4px 4px', fontSize: '0.65rem' }}
               >
-                <option value="webm:view" disabled={!webmAvailable}>WebM (current view)</option>
-                <option value="webm:simulation" disabled={!webmAvailable}>WebM (simulation)</option>
-                <option value="gif:view">GIF (current view)</option>
-                <option value="gif:simulation">GIF (simulation)</option>
+                {is3D ? (
+                  <>
+                    <option value="webm:view" disabled={!webmAvailable} style={PICK_OPT_STYLE}>WebM</option>
+                    <option value="gif:view" style={PICK_OPT_STYLE}>GIF</option>
+                  </>
+                ) : (
+                  <>
+                    <option value="webm:view" disabled={!webmAvailable} style={PICK_OPT_STYLE}>WebM (current view)</option>
+                    <option value="webm:simulation" disabled={!webmAvailable} style={PICK_OPT_STYLE}>WebM (simulation)</option>
+                    <option value="gif:view" style={PICK_OPT_STYLE}>GIF (current view)</option>
+                    <option value="gif:simulation" style={PICK_OPT_STYLE}>GIF (simulation)</option>
+                  </>
+                )}
               </select>
             </>
           ) : (
-            <button className={styles.transportBtn} onClick={stopRecording} title={`Stop & Save ${recordFormat.toUpperCase()} (${recordScope === 'simulation' ? 'simulation' : 'current view'})`} style={{ color: '#e05050' }}>{'\u23F9'} {recordFrameCount}</button>
+            <button className={styles.transportBtn} onClick={stopRecording} title={`Stop & Save ${recordFormat.toUpperCase()} (${!is3D && recordScope === 'simulation' ? 'simulation' : 'current view'})`} style={{ color: '#e05050' }}>{'\u23F9'} {recordFrameCount}</button>
           )}
           <div className={styles.transportDivider} />
 
