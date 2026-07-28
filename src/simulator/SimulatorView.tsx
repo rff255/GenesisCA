@@ -917,6 +917,31 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   // ready:false while WebGPU is the selected grid target (device/init failure —
   // the worker falls back to JS where it can, or surfaces an error).
   const gridWebgpuStatusRef = useRef<'pending' | 'ready' | 'failed'>('pending');
+  // --- Author-written "Simulator Instructions" popover ---------------------
+  // Shown behind a small "ⓘ Instructions" pill (top-left of the canvas) when
+  // model.properties.instructions is non-empty. Session-only UI state; closes
+  // on model load (the text may no longer apply), outside pointerdown, or Esc.
+  const [showInstructions, setShowInstructions] = useState(false);
+  const instructionsText = (model.properties.instructions ?? '').trim();
+  const instructionsRef2 = useRef<HTMLDivElement | null>(null);
+  useEffect(() => { setShowInstructions(false); }, [model.properties.name]);
+  useEffect(() => {
+    if (!showInstructions) return;
+    const onDown = (e: PointerEvent) => {
+      const t = e.target as globalThis.Node;
+      if (instructionsRef2.current && !instructionsRef2.current.contains(t)) setShowInstructions(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') { e.stopPropagation(); setShowInstructions(false); }
+    };
+    document.addEventListener('pointerdown', onDown, true);
+    document.addEventListener('keydown', onKey, true);
+    return () => {
+      document.removeEventListener('pointerdown', onDown, true);
+      document.removeEventListener('keydown', onKey, true);
+    };
+  }, [showInstructions]);
+
   // --- Transport speed POPUP sliders (FPS / Gens-per-Frame) ----------------
   // The inline sliders were replaced by compact readout buttons that open a
   // small vertical-slider popover; one popover at a time. Session-only UI
@@ -9792,6 +9817,29 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
           {recording && <span style={{ color: '#e05050' }}>{'\u23FA'} REC {recordFrameCount}f</span>}
           {isAgentModel && (agentsRef.current || agentDirectRenderActiveRef.current) && <span title="Live agents">{'\u25CF'} {agentDirectRenderActiveRef.current ? agentLiveCountRef.current : (agentsRef.current?.liveCount ?? 0)} agents</span>}
         </div>
+
+        {/* Author-written usage instructions \u2014 pill + dismissible card (only when
+            the model carries properties.instructions). display:contents wrapper
+            so the outside-pointerdown dismissal treats pill+card as one region. */}
+        {instructionsText && (
+          <div ref={instructionsRef2} style={{ display: 'contents' }}>
+            <button
+              className={styles.instructionsBtn}
+              data-sim-overlay
+              onClick={() => setShowInstructions(v => !v)}
+              title="Usage instructions written by this model's author"
+            >{'\u24D8'} Instructions</button>
+            {showInstructions && (
+              <div className={styles.instructionsPopover} data-sim-overlay>
+                <div className={styles.instructionsHeader}>
+                  <span>Instructions \u2014 {model.properties.name || 'this model'}</span>
+                  <button className={styles.instructionsClose} onClick={() => setShowInstructions(false)} title="Close (Esc)">&#x2715;</button>
+                </div>
+                <div className={styles.instructionsBody}>{instructionsText}</div>
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Bond-Graph Agents brush + the Layers toggles now live DOCKED in the
             right side panel (req 4) \u2014 see the "Agents" rightPanelSection below. */}

@@ -390,6 +390,11 @@ export interface ModelProperties {
   /** Long-form explanation of how the rule works (UI label: "Rule Description").
    *  Not shown on Library cards — for in-depth notes the author deems important. */
   ruleDescription?: string;
+  /** Optional usage instructions written by the model author, surfaced in the
+   *  SIMULATOR (an "Instructions" overlay button) — how to interact with the
+   *  model, what to try, what to look for. Plain text; line breaks preserved.
+   *  Additive + optional, so old files load unchanged. */
+  instructions?: string;
   topology: Topology;
   boundaryTreatment: BoundaryTreatment;
   updateMode: UpdateMode;

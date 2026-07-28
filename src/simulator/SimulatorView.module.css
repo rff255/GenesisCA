@@ -266,6 +266,76 @@
   color: var(--color-accent);
 }
 
+/* Author-written "Simulator Instructions" — a small pill at the canvas's
+ * top-left (clear of the collapsed-panel expand ear at left: 0) opening a
+ * dismissible card with the model's usage instructions. Rendered only when
+ * model.properties.instructions is non-empty. */
+.instructionsBtn {
+  position: absolute;
+  top: var(--space-4);
+  left: 36px;
+  z-index: 6;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 10px;
+  font-size: var(--font-2xs);
+  color: var(--color-text-muted);
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  cursor: pointer;
+}
+.instructionsBtn:hover {
+  color: var(--color-accent);
+  border-color: var(--color-accent);
+}
+
+.instructionsPopover {
+  position: absolute;
+  top: calc(var(--space-4) + 30px);
+  left: 36px;
+  z-index: 30;
+  width: min(440px, 70%);
+  max-height: 65%;
+  display: flex;
+  flex-direction: column;
+  background: var(--color-bg-panel);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5);
+}
+.instructionsHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  font-size: var(--font-xs);
+  font-weight: 600;
+  color: var(--color-heading);
+  border-bottom: 1px solid var(--color-border-muted);
+}
+.instructionsBody {
+  padding: 10px 12px;
+  overflow-y: auto;
+  font-size: var(--font-xs);
+  line-height: 1.5;
+  color: var(--color-text-primary);
+  white-space: pre-wrap; /* the author's line breaks are the formatting */
+  overflow-wrap: break-word;
+}
+.instructionsClose {
+  background: none;
+  border: none;
+  color: var(--color-text-muted);
+  font-size: 0.85rem;
+  cursor: pointer;
+  padding: 0 2px;
+}
+.instructionsClose:hover {
+  color: var(--color-accent);
+}
+
 /* Attached ear button — a small distinct pill that sits adjacent to the viewer
  * or transport bar (same background / border so they live in the same visual
  * language, but the gap between them communicates that the ear is a separate

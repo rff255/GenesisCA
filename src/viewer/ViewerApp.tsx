@@ -204,6 +204,11 @@ function AboutOverlay({ model }: { model: CAModel }) {
                 <div style={{ color: 'var(--color-text-muted, #b7bcc6)', whiteSpace: 'pre-wrap', lineHeight: 1.55 }}>{p.ruleDescription}</div>
               </Section>
             )}
+            {p.instructions && (
+              <Section title="Instructions">
+                <div style={{ whiteSpace: 'pre-wrap', lineHeight: 1.55 }}>{p.instructions}</div>
+              </Section>
+            )}
 
             <Section title="How to use">
               <div style={{ color: 'var(--color-text-muted, #b7bcc6)', lineHeight: 1.55 }}>

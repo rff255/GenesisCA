@@ -157,6 +157,7 @@ export function HelpView() {
             <li><strong>GenesisCA Project Author</strong> &mdash; who built this particular GenesisCA project file.</li>
             <li><strong>Summary</strong> &mdash; a short blurb; this is what appears on the model&apos;s Models Library card.</li>
             <li><strong>Rule Description</strong> &mdash; a longer free-form field to elaborate on how the rule works and document anything else worth keeping. Not shown on Library cards.</li>
+            <li><strong>Simulator Instructions</strong> &mdash; optional usage notes for the people RUNNING the model (how to interact, what to try, what to look for). When present, the Simulator shows an <strong>&#x24D8; Instructions</strong> pill at the canvas&apos;s top-left that opens them in a dismissible card (line breaks preserved); standalone <code>.html</code> exports show them in the viewer&apos;s About panel too.</li>
             <li><strong>Thumbnail</strong> (optional) &mdash; attach a PNG, JPEG, GIF, or WebP image (up to 2&nbsp;MB). It travels inside the <code>.gcaproj</code> file. When the model is shipped as part of the Models Library, hovering its card shows a floating preview; animated GIFs / WebPs play natively.</li>
           </ul>
 

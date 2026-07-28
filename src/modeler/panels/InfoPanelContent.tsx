@@ -98,6 +98,19 @@ export function InfoPanelContent(_props: PanelContentProps = {}) {
             />
           </div>
           <div className={styles.field}>
+            <label className={styles.fieldLabel}>Simulator Instructions</label>
+            <textarea
+              className={styles.textArea}
+              rows={6}
+              value={properties.instructions ?? ''}
+              onChange={e => updateProperties({ instructions: e.target.value })}
+              placeholder="How to interact with this model, what to try, what to look for"
+            />
+            <span style={{ color: '#8090a0', fontSize: '0.62rem' }}>
+              Shown in the Simulator behind an "Instructions" button. Line breaks are preserved.
+            </span>
+          </div>
+          <div className={styles.field}>
             <label className={styles.fieldLabel}>Thumbnail</label>
             <input
               ref={thumbInputRef}
