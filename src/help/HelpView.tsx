@@ -2133,6 +2133,15 @@ export function HelpView() {
               (and grid, if included). Preset rows marked with <code>&#x25C9;</code> include
               grid data. If a grid-carrying preset's dimensions don't match the current
               grid, you'll see a dimension-mismatch error &mdash; resize first.</li>
+            <li><strong>Export</strong> (&#x2913;) &mdash; Downloads the preset as a standalone
+              <code> .gcapreset</code> file (its embedded state + metadata), so a parameter set
+              can be shared or moved between projects.</li>
+            <li><strong>Import Preset&hellip;</strong> &mdash; Loads a <code>.gcapreset</code> and
+              appends it to this model&apos;s presets (with a fresh id). The embedded state
+              travels verbatim &mdash; a grid-carrying preset behaves exactly as it did in the
+              exporting project. NB a preset only makes sense on a model with matching
+              attributes; loading one from an unrelated model applies whatever attribute ids
+              happen to match.</li>
             <li><strong>Delete</strong> (&times;) &mdash; Removes the preset from the model.</li>
             <li><strong>Reorder</strong> &mdash; Drag the <code>&#x22EE;&#x22EE;</code> handle
               to reorder presets; the order is saved with the project.</li>

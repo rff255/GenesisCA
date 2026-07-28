@@ -1,5 +1,5 @@
 import { SCHEMA_VERSION } from './schema';
-import type { CAModel, SimulationState, SerializedTypedArray, Attribute } from './types';
+import type { CAModel, SimulationState, SerializedTypedArray, Attribute, Preset } from './types';
 import { packNI, INVALID_NI } from '../modeler/vpl/compiler/niCodec';
 
 /** Wave A.6: migrate one v1 NeighborIndex value (slot-index string) to a
@@ -642,6 +642,69 @@ export function serializePreset(
 
 export function downloadStateFile(state: SimulationState, filename: string): Promise<boolean> {
   return saveTextFile(JSON.stringify(state), filename, 'application/json');
+}
+
+/** Standalone preset file (`.gcapreset`): ONE named Preset — an embedded
+ *  `SimulationState` + metadata — transportable between projects. The preset
+ *  object travels VERBATIM (the embedded state keeps its exact composition: a
+ *  grid-carrying preset stays dims-authoritative on load, a parameter-only one
+ *  stays grid-less — the documented preset semantics are untouched); only the
+ *  id is regenerated on import so it can never collide with an existing one. */
+export interface PresetFile {
+  schemaVersion: 1;
+  name: string;
+  description?: string;
+  preset: Preset;
+}
+
+export function downloadPresetFile(preset: Preset, filename: string): Promise<boolean> {
+  const file: PresetFile = {
+    schemaVersion: 1,
+    name: preset.name,
+    ...(preset.description ? { description: preset.description } : {}),
+    preset,
+  };
+  return saveTextFile(JSON.stringify(file), filename, 'application/json');
+}
+
+/** Read a `.gcapreset` (also accepts a bare Preset object for hand-made files).
+ *  Returns a preset with a FRESH id (never reuse the file's — imports must not
+ *  collide with existing presets) and the same depth normalization
+ *  `readStateFile` applies to its embedded state. */
+export function readPresetFile(file: File): Promise<Preset> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const raw = JSON.parse(reader.result as string) as Partial<PresetFile> & Partial<Preset>;
+        const p = (raw.preset ?? raw) as Partial<Preset>;
+        if (!p || typeof p !== 'object' || !p.state || typeof p.state !== 'object') {
+          reject(new Error('Invalid preset file: missing the embedded state.'));
+          return;
+        }
+        const state = p.state as SimulationState;
+        if (state.depth === undefined) state.depth = 1;
+        if (state.gridDepth === undefined) state.gridDepth = state.depth;
+        const name = (typeof p.name === 'string' && p.name.trim())
+          || (typeof raw.name === 'string' && raw.name.trim())
+          || 'Imported preset';
+        const description = typeof p.description === 'string' && p.description.trim()
+          ? p.description.trim()
+          : typeof raw.description === 'string' && raw.description.trim() ? raw.description.trim() : undefined;
+        resolve({
+          id: 'preset_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5),
+          name,
+          ...(description ? { description } : {}),
+          state,
+          createdAt: typeof p.createdAt === 'number' ? p.createdAt : Date.now(),
+        });
+      } catch {
+        reject(new Error('Failed to parse preset file. Is it valid JSON?'));
+      }
+    };
+    reader.onerror = () => reject(new Error('Failed to read file.'));
+    reader.readAsText(file);
+  });
 }
 
 export function readStateFile(file: File): Promise<SimulationState> {

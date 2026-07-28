@@ -43,7 +43,7 @@ import { designTimeSeriesKeys, mergeChartSettings, historyWindow, INDICATOR_HIST
 import { InspectCellPopover, InspectHoverLink, type InspectPopoverState } from './InspectCellPopover';
 import { PresetSaveDialog } from './PresetSaveDialog';
 import { ConfirmDialog } from '../components/ConfirmDialog';
-import { serializeSimState, serializePreset, downloadStateFile, readStateFile, base64ToArrayBuffer, deserializeTypedArray, migrateSimulationStateV1toV2, deserializeAgentState } from '../model/fileOperations';
+import { serializeSimState, serializePreset, downloadStateFile, readStateFile, downloadPresetFile, readPresetFile, base64ToArrayBuffer, deserializeTypedArray, migrateSimulationStateV1toV2, deserializeAgentState } from '../model/fileOperations';
 import type { Attribute, CAModel, IndicatorChartSettings, Preset, SimulationState } from '../model/types';
 import { decodeAttrValue } from '../model/attrValueEncoding';
 import { cbNum } from '../model/centerBased';
@@ -9047,6 +9047,29 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     setPresetToDelete(p);
   };
 
+  // --- Preset export / import (.gcapreset) ---------------------------------
+  // One named preset (its embedded SimulationState + metadata) as a standalone
+  // JSON file, transportable between projects. Import appends via addPreset
+  // with a FRESH id; the embedded state travels verbatim, so the documented
+  // preset load semantics (grid-carrying = dims-authoritative, parameter-only
+  // = grid-less) are exactly what the exporting project had.
+  const presetFileInputRef = useRef<HTMLInputElement>(null);
+  const handleExportPreset = (p: Preset) => {
+    const safe = (p.name || 'preset').replace(/[^\w\-. ]+/g, '_').trim() || 'preset';
+    void downloadPresetFile(p, `${safe}.gcapreset`);
+  };
+  const handleImportPresetFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = ''; // allow re-importing the same file
+    if (!file) return;
+    try {
+      const preset = await readPresetFile(file);
+      addPreset(preset);
+    } catch (err) {
+      setCompileError(`Preset import failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  };
+
   // Overwrite preset: same pipeline as create, but dispatches updatePreset instead of addPreset.
   const handleOverwritePreset = (p: Preset) => {
     setPresetToOverwrite(p);
@@ -9560,6 +9583,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
                 <button className={styles.controlButton} style={{ padding: '2px 8px', flex: 'none' }} onClick={() => handleLoadPreset(p)}>Load</button>
                 <button className={styles.controlButton} style={{ padding: '2px 6px', flex: 'none' }} title="Overwrite preset with current state" onClick={() => handleOverwritePreset(p)}>&#x1F4BE;</button>
                 <button className={styles.controlButton} style={{ padding: '2px 6px', flex: 'none' }} title="Duplicate preset" onClick={() => duplicatePreset(p.id)}>&#x29C9;</button>
+                <button className={styles.controlButton} style={{ padding: '2px 6px', flex: 'none' }} title="Export preset (.gcapreset)" onClick={() => handleExportPreset(p)}>&#x2913;</button>
                 <button className={styles.controlButton} style={{ padding: '2px 6px', flex: 'none' }} title="Delete preset" onClick={() => handleDeletePreset(p)}>&times;</button>
                 <button className={styles.dragHandle} title="Drag to reorder" onPointerDown={presetReorder.startDrag(p.id)} onClick={e => e.stopPropagation()}>&#x22EE;&#x22EE;</button>
               </div>
@@ -9569,6 +9593,11 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
           <button className={styles.controlButton} onClick={() => setPresetDialogOpen(true)}>
             + Save Current as Preset&hellip;
           </button>
+          <button className={styles.controlButton} title="Import a preset from a .gcapreset file (added to this model's presets)"
+            onClick={() => presetFileInputRef.current?.click()}>
+            Import Preset&hellip;
+          </button>
+          <input ref={presetFileInputRef} type="file" accept=".gcapreset,.json" style={{ display: 'none' }} onChange={handleImportPresetFile} />
 
           {modelAttrs.length > 0 && (
             <>
