@@ -917,6 +917,38 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   // ready:false while WebGPU is the selected grid target (device/init failure —
   // the worker falls back to JS where it can, or surfaces an error).
   const gridWebgpuStatusRef = useRef<'pending' | 'ready' | 'failed'>('pending');
+  // FOV sensing nodes (Get Agents In View / Sense Hemifield) in the agent graph
+  // (top-level + macro internals) — feeds the vision-cone display. halfAngle /
+  // headingSource come from config; the radius is the inline widget value when
+  // the port is UNWIRED, else the neighbourQueryRadius fallback (a wired radius
+  // isn't knowable at render time).
+  const visionCones = useMemo(() => {
+    if (!model.topologyMode?.agents) return [];
+    const out: Array<{ halfAngleDeg: number; radius: number }> = [];
+    const fallbackR = cbNum(model.centerBased, 'neighbourQueryRadius');
+    const scan = (
+      nodes: typeof model.agentGraphNodes,
+      edges: typeof model.agentGraphEdges,
+    ) => {
+      for (const n of nodes ?? []) {
+        const d = n.data as { nodeType?: string; config?: Record<string, unknown> } | undefined;
+        const t = d?.nodeType;
+        if (t !== 'getAgentsInView' && t !== 'senseHemifield') continue;
+        const cfg = d?.config ?? {};
+        let deg = Number(cfg.halfAngle ?? (t === 'senseHemifield' ? 90 : 60));
+        if (!Number.isFinite(deg)) deg = t === 'senseHemifield' ? 90 : 60;
+        const radiusWired = (edges ?? []).some(e => e.target === n.id && e.targetHandle === 'input_value_radius');
+        const inlineR = Number(cfg._port_radius ?? 5);
+        const r = radiusWired ? fallbackR : (Number.isFinite(inlineR) && inlineR > 0 ? inlineR : 5);
+        out.push({ halfAngleDeg: Math.max(0, deg), radius: Math.max(0.1, r) });
+      }
+    };
+    scan(model.agentGraphNodes, model.agentGraphEdges);
+    for (const m of model.macroDefs ?? []) scan(m.nodes, m.edges);
+    return out;
+  }, [model]);
+  const visionConesRef = useRef(visionCones);
+  visionConesRef.current = visionCones;
   // --- Author-written "Simulator Instructions" popover ---------------------
   // Shown behind a small "ⓘ Instructions" pill (top-left of the canvas) when
   // model.properties.instructions is non-empty. Session-only UI state; closes
@@ -1109,6 +1141,16 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   // is respected. Persisted; a ref drives the draw() hot path.
   const [agentOutlines, setAgentOutlines] = useState<boolean>(saved.current.agentOutlines === true);
   const agentOutlinesRef = useRef(agentOutlines); agentOutlinesRef.current = agentOutlines;
+  // Hemifield / vision-cone display (the FOV sensing nodes — Get Agents In
+  // View / Sense Hemifield): draw each node's cone for the INSPECTED agent or
+  // ALL agents. Off default; persisted (declared ABOVE the persist effect —
+  // the TDZ trap). A ref drives the draw() hot path; the UI-sync driver gains
+  // a want-term while not Off (the cones read the agent snapshot, which
+  // free-running direct-render models don't ship).
+  const [showVision, setShowVision] = useState<'off' | 'inspected' | 'all'>(
+    saved.current.showVision === 'all' ? 'all' : saved.current.showVision === 'inspected' ? 'inspected' : 'off',
+  );
+  const showVisionRef = useRef(showVision); showVisionRef.current = showVision;
   // PR3 — agent inspector: a single on-demand popover (one at a time).
   const [agentInspect, setAgentInspect] = useState<{ id: number; x: number; y: number } | null>(null);
   const [agentState, setAgentState] = useState<AgentStateResponse | null>(null);
@@ -1180,7 +1222,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
           light3d, cellGaps3d, agentMetaballs, agentGlow,
           agentBrushRadius, agentSeedDensity, agentSeedSpacing,
           agentBrushShape, agentBrushW, agentBrushH, agentBrushRingWidth, agentBrushLineWidth,
-          showCaGrid, showAgents, showBonds, simulateCells, simulateAgents, brushTarget, bg2d, agentOutlines,
+          showCaGrid, showAgents, showBonds, simulateCells, simulateAgents, brushTarget, bg2d, agentOutlines, showVision,
           indicatorHiddenCategories: Object.fromEntries(
             Object.entries(indicatorHiddenCategories)
               .filter(([, s]) => s.size > 0)
@@ -1192,7 +1234,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       } catch { /* localStorage full */ }
     }, 300);
     return () => clearTimeout(timer);
-  }, [targetFps, unlimitedFps, gensPerFrame, unlimitedGens, activeViewer, brushColor, brushW, brushH, brushMapping, showBrushCursor, showGridlines, show2dAxes, brushShape, brushRadius, brushRingWidth, brushLineWidth, brush3dVolume, brushBoxDepth, infinityCanvas, indicatorVizModes, recordFormat, recordScope, screenshotScope, brushSectionH, agentsFront3d, light3d, cellGaps3d, agentMetaballs, agentGlow, agentBrushRadius, agentSeedDensity, agentSeedSpacing, agentBrushShape, agentBrushW, agentBrushH, agentBrushRingWidth, agentBrushLineWidth, showCaGrid, showAgents, showBonds, simulateCells, simulateAgents, brushTarget, bg2d, agentOutlines, indicatorHiddenCategories, indicatorChartOverrides]);
+  }, [targetFps, unlimitedFps, gensPerFrame, unlimitedGens, activeViewer, brushColor, brushW, brushH, brushMapping, showBrushCursor, showGridlines, show2dAxes, brushShape, brushRadius, brushRingWidth, brushLineWidth, brush3dVolume, brushBoxDepth, infinityCanvas, indicatorVizModes, recordFormat, recordScope, screenshotScope, brushSectionH, agentsFront3d, light3d, cellGaps3d, agentMetaballs, agentGlow, agentBrushRadius, agentSeedDensity, agentSeedSpacing, agentBrushShape, agentBrushW, agentBrushH, agentBrushRingWidth, agentBrushLineWidth, showCaGrid, showAgents, showBonds, simulateCells, simulateAgents, brushTarget, bg2d, agentOutlines, showVision, indicatorHiddenCategories, indicatorChartOverrides]);
 
   // Manual Brush — signature-keyed merge effect. Re-derives `manualBrush`
   // whenever the cell attribute set (id+type) changes. Surviving attrs carry
@@ -2757,6 +2799,8 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       || sweepActiveRef.current
       || editTargetIdRef.current >= 0
       || agentMetaballsRef.current.enabled
+      // Vision-cone display reads the agent snapshot every frame.
+      || showVisionRef.current !== 'off'
       || (brushTargetRef.current === 'agents' && agentCursorWorldRef.current != null)
       // Phase C: 3D agent brush armed + pointer over the gl canvas → frame mode so
       // the gl3d pick FBO (reads the snapshot) resolves agents.
@@ -3908,6 +3952,64 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       if (showAgentsRef.current) ctx.drawImage(agentRenderCanvasRef.current!, 0, 0);
     } else if (showAgentsRef.current) {
       drawAgentsOverlay();
+    }
+
+    // Hemifield / vision-cone display — the FOV sensing nodes' cones as
+    // translucent wedges (apex at the agent, bisector along its VELOCITY
+    // heading, ± halfAngle, arc radius = the node's sensing radius). Zero
+    // heading or halfAngle ≥ 180° → the full sensing circle (the nodes'
+    // omnidirectional rule). Scope: the inspected/edited/hovered agent, or all
+    // (capped). Reads the agent SNAPSHOT — the UI-sync driver keeps snapshots
+    // flowing while this isn't Off. Primary tile only; one tint per FOV node.
+    if (!is3dRef.current && showVisionRef.current !== 'off' && isAgentModelRef.current) {
+      const cones = visionConesRef.current;
+      const snap = agentsRef.current;
+      if (cones.length > 0 && snap && snap.highWater > 0) {
+        const TINTS = ['80,200,255', '255,180,80', '180,255,120', '255,120,200', '200,160,255'];
+        let ids: number[];
+        if (showVisionRef.current === 'inspected') {
+          const set = new Set<number>();
+          const ins = agentInspectRef.current;
+          if (ins && ins.id >= 0) set.add(ins.id);
+          if (editTargetIdRef.current >= 0) set.add(editTargetIdRef.current);
+          if (agentHoverIdRef.current >= 0) set.add(agentHoverIdRef.current);
+          ids = [...set];
+        } else {
+          ids = [];
+          const CAP = 1500; // sanity cap for the All scope
+          for (let i = 0; i < snap.highWater && ids.length < CAP; i++) if (snap.alive[i]) ids.push(i);
+        }
+        if (ids.length > 0) {
+          ctx.save();
+          cones.forEach((cone, ci) => {
+            const tint = TINTS[ci % TINTS.length]!;
+            ctx.fillStyle = `rgba(${tint}, 0.10)`;
+            ctx.strokeStyle = `rgba(${tint}, 0.45)`;
+            ctx.lineWidth = 1;
+            const half = (Math.min(cone.halfAngleDeg, 180) * Math.PI) / 180;
+            const omniAngle = cone.halfAngleDeg >= 180;
+            for (const id of ids) {
+              if (id >= snap.highWater || !snap.alive[id]) continue;
+              const sx2 = ox + snap.x[id]! * scale, sy2 = oy + snap.y[id]! * scale;
+              const rr = cone.radius * scale;
+              const vx2 = snap.vx?.[id] ?? 0, vy2 = snap.vy?.[id] ?? 0;
+              const omni = omniAngle || (vx2 * vx2 + vy2 * vy2) < 1e-12;
+              ctx.beginPath();
+              if (omni) {
+                ctx.arc(sx2, sy2, rr, 0, Math.PI * 2);
+              } else {
+                const a = Math.atan2(vy2, vx2); // world +y = screen-down, so screen-space directly
+                ctx.moveTo(sx2, sy2);
+                ctx.arc(sx2, sy2, rr, a - half, a + half);
+                ctx.closePath();
+              }
+              ctx.fill();
+              ctx.stroke();
+            }
+          });
+          ctx.restore();
+        }
+      }
     }
 
     // 2D axes indicator — marks the grid ORIGIN (cell 0,0) and the growth
@@ -6720,7 +6822,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   useEffect(() => { showBrushCursorRef.current = showBrushCursor; draw(); }, [showBrushCursor, draw]);
   // Redraw when the environment background changes (the ref is updated in its own
   // effect above; this one repaints so the change shows immediately even when paused).
-  useEffect(() => { draw(); }, [bg2d, agentOutlines, draw]);
+  useEffect(() => { draw(); }, [bg2d, agentOutlines, showVision, draw]);
   // A1 Glow option — redraw so the agent RenderView camera picks up the change.
   useEffect(() => { draw(); }, [agentGlow, draw]);
   // A1: re-evaluate UI-sync on state-signal changes (pause / recording / inspector
@@ -10708,6 +10810,26 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
                   <span style={{ color: 'var(--color-text-muted)' }}>Outline agents</span>
                 </label>
               </div>
+              {/* Hemifield / vision-cone display — draws the FOV sensing nodes'
+                  cones (Get Agents In View / Sense Hemifield) on the 2D overlay,
+                  for the inspected agent or all agents. Heading = the agent's
+                  velocity (facing/wired heading sources are approximated by the
+                  velocity heading — the snapshot doesn't carry them). */}
+              {!is3D && visionCones.length > 0 && (
+              <div>
+                <div style={{ fontSize: '0.6rem', color: 'var(--color-text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 4 }}>Vision</div>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.66rem' }}
+                  title="Show the FOV sensing cones (Get Agents In View / Sense Hemifield) as translucent wedges. Inspected = the inspected/edited/hovered agent; All = every agent (capped at 1500). Heading uses the agent's velocity; a zero heading or a half-angle of 180 or more draws the full sensing circle. Facing/wired heading sources are approximated by the velocity heading; a wired Radius input falls back to the Neighbour Query Radius.">
+                  <span style={{ color: 'var(--color-text-muted)', flex: '0 0 auto' }}>Show vision</span>
+                  <select value={showVision} onChange={e => setShowVision(e.target.value as 'off' | 'inspected' | 'all')}
+                    style={{ flex: 1, minWidth: 0, fontSize: '0.64rem' }}>
+                    <option value="off">Off</option>
+                    <option value="inspected">Inspected agent</option>
+                    <option value="all">All agents</option>
+                  </select>
+                </label>
+              </div>
+              )}
               {/* A1 direct-render Glow — additive radial falloff per agent. Renders
                   ONLY on the WebGPU direct-render path (agents-only, 2D). */}
               {!is3D && (

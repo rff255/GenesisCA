@@ -1490,6 +1490,13 @@ export function HelpView() {
               fall to the <em>left</em> of the heading versus the <em>right</em>. Steer by
               <em>Left &minus; Right</em> to turn toward (or away from) the crowded side &mdash;
               taxis and flocking asymmetry emerge from those two numbers alone.</li>
+            <li><strong>Seeing the cones</strong> &mdash; when a model uses either FOV node, the
+              Simulator&apos;s agent controls (2D) gain a <strong>Show vision</strong> selector that
+              draws each node&apos;s sensing cone as a translucent wedge &mdash; for the
+              <em> inspected/edited/hovered</em> agent, or <em>all</em> agents (capped at 1500).
+              The wedge follows the agent&apos;s velocity heading (Facing/Wired heading sources are
+              approximated by it), and a wired Radius input falls back to the model&apos;s Neighbour
+              Query Radius.</li>
             <li><strong>Facing / orientation</strong> &mdash; to have an agent look in a stored
               direction rather than along its velocity, give it a <strong>Vector agent attribute</strong>
               (e.g. &quot;facing&quot;), set the FOV node's Heading to <em>Wired</em>, and wire that
