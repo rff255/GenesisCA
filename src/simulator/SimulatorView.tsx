@@ -1910,7 +1910,8 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
   // 3D agent hover/inspect highlight rings (the sphere analog of
   // hoverCells3dRef/inspectHighlight3dRef for voxels). Empty = none.
   const hoverAgents3dRef = useRef<ReadonlyArray<{ x: number; y: number; z: number; radius: number }>>([]);
-  const inspectAgents3dRef = useRef<ReadonlyArray<{ x: number; y: number; z: number; radius: number }>>([]);
+  // NB there is no inspectAgents3dRef — the 3D inspect RINGS are derived inside
+  // draw() from the open popovers + the live snapshot, so they track the agent.
   // 3D control UI state (mirrored into the refs the renderer reads).
   // Clip INTERVAL [lo, hi] (world coords) — two cuts, the slab between them visible.
   const [clip3d, setClip3d] = useState<{ enabled: boolean; axis: 'x' | 'y' | 'z' | 'camera'; lo: number; hi: number }>(
@@ -3421,13 +3422,32 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
           lastUploadedAgentSnapRef.current = snap;
         }
         r.setHoverAgents(hoverAgents3dRef.current);
-        // A staged Glue/Cut anchor gets a persistent white ring alongside any
-        // inspect highlight (derived from state so a mode switch clears it).
-        const glueA = agentGlueAnchorRef.current;
-        if (snap && glueA >= 0 && glueA < snap.highWater && snap.alive[glueA]) {
-          const gz = snap.z.length > 0 ? snap.z[glueA]! : 0;
-          r.setInspectAgents([...inspectAgents3dRef.current, { x: snap.x[glueA]!, y: snap.y[glueA]!, z: gz, radius: snap.radius[glueA]! }]);
-        } else r.setInspectAgents(inspectAgents3dRef.current);
+        // White highlight rings — DERIVED FROM THE LIVE SNAPSHOT EVERY FRAME,
+        // never cached. A cached ring array froze each ring at the position the
+        // agent had when its popover opened, so the ring only caught up when
+        // something happened to re-run the (now deleted) sync helper. Deriving
+        // here makes draw() the ONE writer, so there is nothing to keep in step.
+        // Cost is O(open popovers) — a handful of ids per frame.
+        const rings: Array<{ x: number; y: number; z: number; radius: number }> = [];
+        if (snap) {
+          const hasZ = snap.z.length > 0;
+          const pushRing = (id: number) => {
+            if (id < 0 || id >= snap.highWater || !snap.alive[id]) return;
+            for (const rr of rings) if (rr.x === snap.x[id] && rr.y === snap.y[id] && rr.radius === snap.radius[id]) return;
+            rings.push({ x: snap.x[id]!, y: snap.y[id]!, z: hasZ ? snap.z[id]! : 0, radius: snap.radius[id]! });
+          };
+          // Every open agent inspector (pinned + the transient sweep).
+          for (const id of agentInspectIdsRef.current) pushRing(id);
+          // The single-scope Edit target, under EXACTLY the condition its 2D
+          // dashed highlight and its vision cone use (see drawCursorLayer), so
+          // the ring appears/disappears with them instead of lingering after a
+          // brush-mode switch.
+          if (brushTargetRef.current === 'agents' && agentBrushModeRef.current === 'edit'
+              && agentBrushScopeRef.current === 'single') pushRing(editTargetIdRef.current);
+          // A staged Glue/Cut anchor keeps its persistent ring.
+          pushRing(agentGlueAnchorRef.current);
+        }
+        r.setInspectAgents(rings);
       } else if (r.agentInstanceCount !== 0 || r.hasAgentGeometry) {
         // Non-agent model: drop any agent spheres AND bond lines left over from a
         // previously loaded agent model so they don't linger in the volume (the
@@ -6302,10 +6322,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
             active = 'inspectAgent';
             agentSweepStartId = id; agentSweepMoved = false;
             openAgentInspector(id, e.clientX, e.clientY);
-            const snap = agentsRef.current!;
-            const hasZ = snap.z.length > 0;
-            inspectAgents3dRef.current = [{ x: snap.x[id]!, y: snap.y[id]!, z: hasZ ? snap.z[id]! : 0, radius: snap.radius[id]! }];
-            draw();
+            draw();   // the ring is derived from the open popovers inside draw()
             glc.setPointerCapture?.(e.pointerId); e.preventDefault(); return;
           }
         }
@@ -6342,9 +6359,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
             if (id >= 0) {
               editTargetIdRef.current = id; setEditTargetId(id); editPrefillIdRef.current = id;
               worker?.postMessage({ type: 'getAgentState', id });
-              const snap = agentsRef.current;
-              if (snap) { const hasZ = snap.z.length > 0; inspectAgents3dRef.current = [{ x: snap.x[id]!, y: snap.y[id]!, z: hasZ ? snap.z[id]! : 0, radius: snap.radius[id]! }]; }
-              draw();
+              draw();   // the Edit-target ring is derived inside draw()
             }
             active = null;
           } else { active = 'agentEdit'; editAgents3d(e.clientX, e.clientY); }
@@ -6473,12 +6488,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
           if (id !== agentSweepStartId) agentSweepMoved = true;
           if (id !== agentSweepPopoverRef.current?.id) {
             openAgentInspector(id, downX, downY);
-            const snap = agentsRef.current;
-            if (snap) {
-              const hasZ = snap.z.length > 0;
-              inspectAgents3dRef.current = [{ x: snap.x[id]!, y: snap.y[id]!, z: hasZ ? snap.z[id]! : 0, radius: snap.radius[id]! }];
-            }
-            draw();
+            draw();   // the ring follows the re-targeted popover inside draw()
           }
         }
         return;
@@ -6585,11 +6595,9 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       // Commit the final coalesced stamp synchronously (the rAF may not have
       // fired yet on a quick click-release), mirroring the 2D mouse-up path.
       if (active === 'brush') flushPaintBatch();
-      // Agent move: clear the drag state + the inspect ring (the snapshot's new
-      // position arrives on the next stepped frame).
-      // Restore the inspect rings from the open popovers (a move must not wipe
-      // the rings of agents the user has pinned).
-      if (active === 'agentMove') { agentDragId = -1; syncInspectAgents3dRef.current(); }
+      // Agent move: clear the drag state. The rings need no restore — draw()
+      // derives them from the open popovers + the live snapshot every frame.
+      if (active === 'agentMove') { agentDragId = -1; draw(); }
       if (active === 'agentGroupMove') { agentGroupMoveRef.current = null; }
       if (active === 'agentBond') { flushBondBatch(); draw(); }
       active = null;
@@ -7047,15 +7055,14 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
     }
     if (is3D) draw();
   }, [hoveredInspectIdx, is3D, draw]);
-  // 3D agent inspect rings — derived from ALL open agent popovers (pinned + the
-  // transient sweep), so every inspected agent is ringed in the volume and the
-  // rings survive pinning / closing / a mid-drag re-target. The pointer handlers
-  // still set a single ring synchronously for immediate feedback; this effect is
-  // the source of truth and reconciles on the next render.
+  // 3D agent inspect rings: draw() derives them from the open popovers + the
+  // LIVE snapshot every frame (see its agent branch), so this effect only has
+  // to force a repaint when the popover set changes — the ring must appear /
+  // disappear immediately even while the sim is paused.
   useEffect(() => {
     if (!is3D) return;
-    syncInspectAgents3dRef.current();
-  }, [agentPopovers, agentSweepPopover, is3D]);
+    draw();
+  }, [agentPopovers, agentSweepPopover, is3D, draw]);
   const [pulseInspectIdx, setPulseInspectIdx] = useState<number | null>(null);
   const [focusedInspectIdx, setFocusedInspectIdx] = useState<number | null>(null);
   const inspectDataRef = useRef<Map<number, Record<string, number>>>(new Map());
@@ -7180,11 +7187,11 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
     agentSweepMovedRef.current = false;
     agentSweepStartIdRef.current = -1;
     agentSweepAnchorRef.current = null;
-    // Transient visuals that also hold an id into the OLD population: the 3D
-    // inspect rings, a staged Glue/Cut anchor and the single-scope Edit target
-    // (its dashed highlight + prefill would otherwise point at an arbitrary
-    // agent of the new model).
-    inspectAgents3dRef.current = [];
+    // Transient visuals that also hold an id into the OLD population: a staged
+    // Glue/Cut anchor and the single-scope Edit target (its dashed highlight +
+    // prefill would otherwise point at an arbitrary agent of the new model).
+    // The 3D inspect rings need no clearing — draw() derives them from the
+    // popovers cleared just above.
     agentGlueAnchorRef.current = -1;
     editTargetIdRef.current = -1;
     setEditTargetId(-1);
@@ -7433,22 +7440,6 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
     setFocusedAgentPopoverId(sweep.id);
   }, []);
   const clearAgentSweep = useCallback(() => { agentSweepPopoverRef.current = null; setAgentSweepPopover(null); }, []);
-  /** Recompute the 3D inspect rings from every open agent popover (pinned + the
-   *  sweep). Held in a ref so both the render effect and the pointer handlers
-   *  (registered once) can call the live version. */
-  const syncInspectAgents3dRef = useRef<() => void>(() => {});
-  syncInspectAgents3dRef.current = () => {
-    const snap = agentsRef.current;
-    if (!snap) { inspectAgents3dRef.current = []; draw(); return; }
-    const hasZ = snap.z.length > 0;
-    const rings: Array<{ x: number; y: number; z: number; radius: number }> = [];
-    for (const id of agentInspectIdsRef.current) {
-      if (id < 0 || id >= snap.highWater || !snap.alive[id]) continue;
-      rings.push({ x: snap.x[id]!, y: snap.y[id]!, z: hasZ ? snap.z[id]! : 0, radius: snap.radius[id]! });
-    }
-    inspectAgents3dRef.current = rings;
-    draw();
-  };
   const closeAgentPopover = useCallback((id: number) => {
     setAgentPopovers(prev => prev.filter(p => p.id !== id));
     setFocusedAgentPopoverId(f => (f === id ? null : f));
