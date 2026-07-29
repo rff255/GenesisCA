@@ -1,0 +1,260 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>GenesisCA — CSV Import (plan mockup)</title>
+<style>
+  :root{
+    --bg:#0c0d10; --panel:#14161c; --border:#2a3a50; --text:#cdd6e0; --muted:#8090a0;
+    --accent:#e8a13a; --cyan:#4cc9f0; --green:#66bb6a; --red:#e05050; --purple:#9575cd;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);font:14px/1.6 -apple-system,Segoe UI,Roboto,sans-serif;padding:32px}
+  .wrap{max-width:1080px;margin:0 auto}
+  h1{font-size:24px;margin:0 0 4px;color:var(--accent)}
+  h2{font-size:17px;margin:36px 0 10px;padding-bottom:6px;border-bottom:1px solid var(--border)}
+  h3{font-size:14px;margin:20px 0 8px;color:var(--cyan)}
+  p{margin:8px 0}
+  .sub{color:var(--muted);margin:0 0 24px}
+  code{background:#1c2028;padding:1px 5px;border-radius:3px;font-size:12.5px;color:#e0c088}
+  .card{background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:14px 16px;margin:12px 0}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  table{border-collapse:collapse;width:100%;font-size:12.5px;margin:8px 0}
+  th,td{border:1px solid var(--border);padding:5px 8px;text-align:left}
+  th{background:#1a1d24;color:var(--muted);font-weight:600}
+  .note{border-left:3px solid var(--accent);padding:8px 12px;background:#1a1712;margin:12px 0;font-size:13px}
+  .bad{border-left-color:var(--red);background:#1d1414}
+  .ok{border-left-color:var(--green);background:#141c15}
+  svg{display:block;max-width:100%}
+  .mono{font-family:ui-monospace,Consolas,monospace;font-size:12px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>CSV Import — two flavours, one dialog</h1>
+<p class="sub">Agents from rows · the CA grid from a table of values. Illustrated plan for <code>docs/PLAN_CSV_IMPORT.md</code>.</p>
+
+<h2>1 · The two shapes of a CSV</h2>
+<div class="grid2">
+  <div class="card">
+    <h3 style="margin-top:0">Flavour A — agents</h3>
+    <p style="margin:0 0 8px;font-size:13px;color:var(--muted)">A row is an <b>agent</b>; a column is a <b>field</b>.</p>
+    <svg viewBox="0 0 420 200" height="200">
+      <rect x="0" y="0" width="420" height="200" fill="#0a0b0e" rx="4"/>
+      <!-- header -->
+      <rect x="10" y="12" width="400" height="24" fill="#1c2432" stroke="#2a3a50"/>
+      <text x="24" y="29" fill="#4cc9f0" class="mono" font-size="12">x</text>
+      <text x="94" y="29" fill="#4cc9f0" class="mono" font-size="12">y</text>
+      <text x="164" y="29" fill="#4cc9f0" class="mono" font-size="12">radius</text>
+      <text x="244" y="29" fill="#4cc9f0" class="mono" font-size="12">species</text>
+      <text x="334" y="29" fill="#4cc9f0" class="mono" font-size="12">alive</text>
+      <g class="mono" font-size="12" fill="#cdd6e0">
+        <rect x="10" y="36" width="400" height="22" fill="none" stroke="#22303f"/>
+        <text x="24" y="51">12.5</text><text x="94" y="51">40</text><text x="164" y="51">1.5</text><text x="244" y="51">red</text><text x="334" y="51">true</text>
+        <rect x="10" y="58" width="400" height="22" fill="none" stroke="#22303f"/>
+        <text x="24" y="73">80</text><text x="94" y="73">11.25</text><text x="164" y="73">2</text><text x="244" y="73">blue</text><text x="334" y="73">0</text>
+        <rect x="10" y="80" width="400" height="22" fill="none" stroke="#22303f"/>
+        <text x="24" y="95">3</text><text x="94" y="95">3</text><text x="164" y="95">1</text><text x="244" y="95">gren</text><text x="334" y="95">1</text>
+      </g>
+      <text x="278" y="95" fill="#e05050" font-size="11">← typo → default, counted</text>
+      <!-- arrow -->
+      <path d="M210 112 L210 132" stroke="#e8a13a" stroke-width="2" marker-end="url(#ar)"/>
+      <defs><marker id="ar" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 z" fill="#e8a13a"/></marker></defs>
+      <text x="220" y="128" fill="#e8a13a" font-size="11">pasteAgents (existing message)</text>
+      <!-- agents -->
+      <g>
+        <circle cx="70" cy="165" r="9" fill="#e05050"/><circle cx="160" cy="172" r="12" fill="#4cc9f0"/><circle cx="250" cy="160" r="7" fill="#66bb6a"/>
+      </g>
+      <text x="290" y="172" fill="#8090a0" font-size="11">3 agents in the world</text>
+    </svg>
+  </div>
+  <div class="card">
+    <h3 style="margin-top:0">Flavour B — the grid</h3>
+    <p style="margin:0 0 8px;font-size:13px;color:var(--muted)">The table <b>is</b> the board; one chosen cell attribute.</p>
+    <svg viewBox="0 0 420 200" height="200">
+      <rect x="0" y="0" width="420" height="200" fill="#0a0b0e" rx="4"/>
+      <g class="mono" font-size="11" fill="#cdd6e0">
+        <text x="14" y="26">0,0,1,1,0,0</text>
+        <text x="14" y="44">0,1,1,0,1,0</text>
+        <text x="14" y="62">1,1,0,0,1,1</text>
+        <text x="14" y="80">0,0,1,1,0,0</text>
+      </g>
+      <text x="14" y="104" fill="#8090a0" font-size="11">4 lines × 6 fields</text>
+      <path d="M120 60 L180 60" stroke="#e8a13a" stroke-width="2" marker-end="url(#ar2)"/>
+      <defs><marker id="ar2" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 z" fill="#e8a13a"/></marker></defs>
+      <text x="128" y="52" fill="#e8a13a" font-size="10">importGridValues</text>
+      <!-- grid render 6 wide 4 tall -->
+      <g>
+        <script type="application/json" id="d">[[0,0,1,1,0,0],[0,1,1,0,1,0],[1,1,0,0,1,1],[0,0,1,1,0,0]]</script>
+      </g>
+      <g id="cells">
+        <!-- row0 -->
+        <rect x="200" y="20" width="26" height="26" fill="#12161c" stroke="#22303f"/><rect x="226" y="20" width="26" height="26" fill="#12161c" stroke="#22303f"/><rect x="252" y="20" width="26" height="26" fill="#4cc9f0" stroke="#22303f"/><rect x="278" y="20" width="26" height="26" fill="#4cc9f0" stroke="#22303f"/><rect x="304" y="20" width="26" height="26" fill="#12161c" stroke="#22303f"/><rect x="330" y="20" width="26" height="26" fill="#12161c" stroke="#22303f"/>
+        <!-- row1 -->
+        <rect x="200" y="46" width="26" height="26" fill="#12161c" stroke="#22303f"/><rect x="226" y="46" width="26" height="26" fill="#4cc9f0" stroke="#22303f"/><rect x="252" y="46" width="26" height="26" fill="#4cc9f0" stroke="#22303f"/><rect x="278" y="46" width="26" height="26" fill="#12161c" stroke="#22303f"/><rect x="304" y="46" width="26" height="26" fill="#4cc9f0" stroke="#22303f"/><rect x="330" y="46" width="26" height="26" fill="#12161c" stroke="#22303f"/>
+        <!-- row2 -->
+        <rect x="200" y="72" width="26" height="26" fill="#4cc9f0" stroke="#22303f"/><rect x="226" y="72" width="26" height="26" fill="#4cc9f0" stroke="#22303f"/><rect x="252" y="72" width="26" height="26" fill="#12161c" stroke="#22303f"/><rect x="278" y="72" width="26" height="26" fill="#12161c" stroke="#22303f"/><rect x="304" y="72" width="26" height="26" fill="#4cc9f0" stroke="#22303f"/><rect x="330" y="72" width="26" height="26" fill="#4cc9f0" stroke="#22303f"/>
+        <!-- row3 -->
+        <rect x="200" y="98" width="26" height="26" fill="#12161c" stroke="#22303f"/><rect x="226" y="98" width="26" height="26" fill="#12161c" stroke="#22303f"/><rect x="252" y="98" width="26" height="26" fill="#4cc9f0" stroke="#22303f"/><rect x="278" y="98" width="26" height="26" fill="#4cc9f0" stroke="#22303f"/><rect x="304" y="98" width="26" height="26" fill="#12161c" stroke="#22303f"/><rect x="330" y="98" width="26" height="26" fill="#12161c" stroke="#22303f"/>
+      </g>
+      <text x="200" y="142" fill="#66bb6a" font-size="11">grid becomes 6 wide × 4 tall</text>
+      <text x="200" y="160" fill="#8090a0" font-size="11">rows = height · fields = width</text>
+    </svg>
+  </div>
+</div>
+
+<div class="note"><b>Convention (decided, shown in the dialog):</b> a CSV <b>line</b> is a grid <b>row</b> (height); a CSV <b>field</b> is a grid <b>column</b> (width). A 12×9 file gives a 9-wide, 12-tall grid — what you see in a spreadsheet is what you see on the board.</div>
+
+<h2>2 · The dialog (before → after)</h2>
+<div class="card">
+<svg viewBox="0 0 1000 470" height="470">
+  <rect x="0" y="0" width="1000" height="470" fill="#0a0b0e" rx="6"/>
+  <!-- card -->
+  <rect x="20" y="18" width="960" height="434" rx="8" fill="#14161c" stroke="#2a3a50"/>
+  <text x="40" y="46" fill="#cdd6e0" font-size="15" font-weight="700">Import CSV</text>
+  <text x="950" y="47" fill="#8090a0" font-size="16" text-anchor="end">×</text>
+  <line x1="20" y1="58" x2="980" y2="58" stroke="#2a3a50"/>
+
+  <!-- Target switch -->
+  <text x="40" y="82" fill="#8090a0" font-size="12">Target</text>
+  <rect x="88" y="68" width="86" height="20" rx="4" fill="#3a2c14" stroke="#e8a13a"/>
+  <text x="131" y="82" fill="#e8a13a" font-size="12" text-anchor="middle">Agents</text>
+  <rect x="180" y="68" width="66" height="20" rx="4" fill="none" stroke="#2a3a50"/>
+  <text x="213" y="82" fill="#8090a0" font-size="12" text-anchor="middle">Grid</text>
+  <text x="262" y="82" fill="#8090a0" font-size="11">header detected → defaulted to Agents</text>
+
+  <!-- LEFT: preview table -->
+  <text x="40" y="112" fill="#8090a0" font-size="11">Preview — first 8 of 142 rows · delimiter "," · header row</text>
+  <rect x="40" y="120" width="470" height="200" fill="#0a0b0e" stroke="#2a3a50"/>
+  <!-- column target selects (above each column) -->
+  <g font-size="10">
+    <rect x="46" y="126" width="86" height="18" rx="3" fill="#1c2028" stroke="#4cc9f0"/><text x="52" y="139" fill="#4cc9f0">x ▾</text>
+    <rect x="136" y="126" width="86" height="18" rx="3" fill="#1c2028" stroke="#4cc9f0"/><text x="142" y="139" fill="#4cc9f0">y ▾</text>
+    <rect x="226" y="126" width="86" height="18" rx="3" fill="#1c2028" stroke="#4cc9f0"/><text x="232" y="139" fill="#4cc9f0">radius ▾</text>
+    <rect x="316" y="126" width="86" height="18" rx="3" fill="#1c2028" stroke="#9575cd"/><text x="322" y="139" fill="#9575cd">species ▾</text>
+    <rect x="406" y="126" width="98" height="18" rx="3" fill="#1c2028" stroke="#9575cd"/><text x="412" y="139" fill="#9575cd">facing.x ▾</text>
+  </g>
+  <g font-size="10" fill="#8090a0" font-family="ui-monospace,monospace">
+    <text x="52" y="160">x</text><text x="142" y="160">y</text><text x="232" y="160">radius</text><text x="322" y="160">species</text><text x="412" y="160">fx</text>
+  </g>
+  <line x1="40" y1="166" x2="510" y2="166" stroke="#2a3a50"/>
+  <g font-size="10" fill="#cdd6e0" font-family="ui-monospace,monospace">
+    <text x="52" y="182">12.5</text><text x="142" y="182">40</text><text x="232" y="182">1.5</text><text x="322" y="182">red</text><text x="412" y="182">1</text>
+    <text x="52" y="200">80</text><text x="142" y="200">11.25</text><text x="232" y="200">2</text><text x="322" y="200">blue</text><text x="412" y="200">0</text>
+    <text x="52" y="218">3</text><text x="142" y="218">3</text><text x="232" y="218">1</text><text x="412" y="218">-1</text>
+    <text x="322" y="218" fill="#e05050">gren</text>
+    <text x="52" y="236">999</text><text x="142" y="236">-4</text><text x="232" y="236">1</text><text x="322" y="236">red</text><text x="412" y="236">0</text>
+  </g>
+  <text x="52" y="254" fill="#8090a0" font-size="10">…</text>
+  <rect x="46" y="226" width="460" height="16" fill="#e8a13a" opacity="0.08"/>
+  <text x="418" y="236" fill="#e8a13a" font-size="9">out of bounds → wrap</text>
+
+  <!-- summary -->
+  <rect x="40" y="330" width="470" height="42" rx="4" fill="#161a12" stroke="#3a4a2a"/>
+  <text x="52" y="348" fill="#9ccc65" font-size="11">142 rows · 1 unparseable value defaulted · 2 rows out of bounds (wrapped)</text>
+  <text x="52" y="364" fill="#8090a0" font-size="10">row 3, column "species": "gren" → default (idle)</text>
+
+  <!-- RIGHT: options -->
+  <text x="540" y="112" fill="#8090a0" font-size="11">Options</text>
+  <rect x="540" y="120" width="420" height="200" fill="#0a0b0e" stroke="#2a3a50"/>
+  <g font-size="12" fill="#cdd6e0">
+    <rect x="556" y="136" width="11" height="11" rx="2" fill="#e8a13a"/><text x="576" y="146">Replace population (kill all first)</text>
+    <circle cx="561" cy="170" r="5" fill="none" stroke="#8090a0"/><text x="576" y="174">Append to the current population</text>
+    <rect x="556" y="196" width="11" height="11" rx="2" fill="#e8a13a"/><text x="576" y="206">First row is a header</text>
+    <text x="556" y="236" fill="#8090a0" font-size="11">Delimiter</text>
+    <rect x="626" y="224" width="70" height="18" rx="3" fill="#1c2028" stroke="#2a3a50"/><text x="634" y="237" font-size="11">auto ( , ) ▾</text>
+    <text x="556" y="266" fill="#8090a0" font-size="11">Out of bounds</text>
+    <text x="656" y="266" font-size="11" fill="#cdd6e0">wrap (torus)</text>
+    <text x="556" y="296" fill="#8090a0" font-size="11">Capacity</text>
+    <text x="656" y="296" font-size="11" fill="#cdd6e0">142 / 4096 agents</text>
+  </g>
+
+  <!-- grid-mode inset -->
+  <rect x="540" y="330" width="420" height="42" rx="4" fill="#12161d" stroke="#2a3a50" stroke-dasharray="3 3"/>
+  <text x="552" y="348" fill="#8090a0" font-size="10.5">Grid mode swaps these for: target cell attribute · Resize | Keep grid · Layer (3D)</text>
+  <text x="552" y="364" fill="#8090a0" font-size="10.5">and states "rows = height, fields = width".</text>
+
+  <!-- buttons -->
+  <rect x="790" y="404" width="72" height="26" rx="4" fill="none" stroke="#2a3a50"/><text x="826" y="421" fill="#cdd6e0" font-size="12" text-anchor="middle">Cancel</text>
+  <rect x="874" y="404" width="76" height="26" rx="4" fill="#e8a13a"/><text x="912" y="421" fill="#1a1206" font-size="12" font-weight="700" text-anchor="middle">Import</text>
+</svg>
+</div>
+
+<h2>3 · Data flow</h2>
+<div class="card">
+<svg viewBox="0 0 980 300" height="300">
+  <rect x="0" y="0" width="980" height="300" fill="#0a0b0e" rx="6"/>
+  <defs><marker id="a3" markerWidth="9" markerHeight="9" refX="7" refY="3.5" orient="auto"><path d="M0,0 L7,3.5 L0,7 z" fill="#8090a0"/></marker></defs>
+
+  <!-- sources -->
+  <rect x="20" y="30" width="150" height="40" rx="5" fill="#14161c" stroke="#2a3a50"/>
+  <text x="95" y="48" fill="#cdd6e0" font-size="12" text-anchor="middle">drop a .csv</text>
+  <text x="95" y="63" fill="#8090a0" font-size="10" text-anchor="middle">App.tsx handleDroppedFile</text>
+  <rect x="20" y="90" width="150" height="40" rx="5" fill="#14161c" stroke="#2a3a50"/>
+  <text x="95" y="108" fill="#cdd6e0" font-size="12" text-anchor="middle">Import CSV… button</text>
+  <text x="95" y="123" fill="#8090a0" font-size="10" text-anchor="middle">brush panels</text>
+
+  <path d="M172 50 L215 76" stroke="#8090a0" marker-end="url(#a3)"/>
+  <path d="M172 110 L215 90" stroke="#8090a0" marker-end="url(#a3)"/>
+  <text x="176" y="42" fill="#e8a13a" font-size="9">genesis-open-csv-file</text>
+
+  <!-- parser -->
+  <rect x="220" y="60" width="160" height="52" rx="5" fill="#14161c" stroke="#4cc9f0"/>
+  <text x="300" y="80" fill="#4cc9f0" font-size="12" text-anchor="middle">csvImport.ts</text>
+  <text x="300" y="96" fill="#8090a0" font-size="10" text-anchor="middle">parse · delimiter · header</text>
+  <text x="300" y="108" fill="#8090a0" font-size="10" text-anchor="middle">decode per attr type</text>
+
+  <path d="M382 86 L420 86" stroke="#8090a0" marker-end="url(#a3)"/>
+
+  <!-- dialog -->
+  <rect x="424" y="52" width="150" height="68" rx="5" fill="#14161c" stroke="#e8a13a"/>
+  <text x="499" y="74" fill="#e8a13a" font-size="12" text-anchor="middle">CsvImportDialog</text>
+  <text x="499" y="90" fill="#8090a0" font-size="10" text-anchor="middle">target · mapping</text>
+  <text x="499" y="104" fill="#8090a0" font-size="10" text-anchor="middle">preview · summary</text>
+
+  <path d="M576 74 L640 46" stroke="#8090a0" marker-end="url(#a3)"/>
+  <path d="M576 100 L640 160" stroke="#8090a0" marker-end="url(#a3)"/>
+
+  <!-- agents branch -->
+  <rect x="644" y="20" width="180" height="56" rx="5" fill="#14161c" stroke="#66bb6a"/>
+  <text x="734" y="40" fill="#66bb6a" font-size="12" text-anchor="middle">pasteAgents (existing)</text>
+  <text x="734" y="56" fill="#8090a0" font-size="10" text-anchor="middle">+ clearAgents when Replace</text>
+  <text x="734" y="69" fill="#8090a0" font-size="10" text-anchor="middle">in AGENT_GPU_DEFER_TYPES</text>
+
+  <!-- grid branch -->
+  <rect x="644" y="140" width="180" height="56" rx="5" fill="#14161c" stroke="#9575cd"/>
+  <text x="734" y="160" fill="#9575cd" font-size="12" text-anchor="middle">importGridValues (new)</text>
+  <text x="734" y="176" fill="#8090a0" font-size="10" text-anchor="middle">readback if gpuOwnsAttrs</text>
+  <text x="734" y="189" fill="#8090a0" font-size="10" text-anchor="middle">sync r+w · then colour pass</text>
+
+  <path d="M826 48 L876 100" stroke="#8090a0" marker-end="url(#a3)"/>
+  <path d="M826 168 L876 120" stroke="#8090a0" marker-end="url(#a3)"/>
+  <rect x="878" y="86" width="88" height="46" rx="5" fill="#14161c" stroke="#2a3a50"/>
+  <text x="922" y="106" fill="#cdd6e0" font-size="12" text-anchor="middle">worker SoA</text>
+  <text x="922" y="121" fill="#8090a0" font-size="10" text-anchor="middle">JS · WASM · GPU</text>
+
+  <!-- resize note -->
+  <rect x="424" y="200" width="400" height="46" rx="5" fill="#12161d" stroke="#2a3a50" stroke-dasharray="3 3"/>
+  <text x="438" y="220" fill="#8090a0" font-size="10.5">Grid + "Resize": initWorkerWithDimensions(cols, rows), then apply on the first</text>
+  <text x="438" y="236" fill="#8090a0" font-size="10.5">stepped — the existing pendingImageImport / pendingManualImport pattern.</text>
+</svg>
+</div>
+
+<h2>4 · Decisions taken without the user</h2>
+<table>
+<tr><th>Decision</th><th>Choice</th><th>Why</th></tr>
+<tr><td>Grid row/col</td><td>CSV line = grid row (height); field = column (width)</td><td>matches the spreadsheet view; stated in the dialog</td></tr>
+<tr><td>Header detection</td><td>first row has no numeric field AND a later row does</td><td>accepts <code>x,y,r</code>; rejects an all-tag-name grid; checkbox overrides</td></tr>
+<tr><td>Both-layer default target</td><td>header → Agents, else Grid</td><td>a header names fields; a bare block is a board</td></tr>
+<tr><td>3D grid</td><td>layer selector; resize keeps depth</td><td>a 2D table cannot express a volume</td></tr>
+<tr><td>Unparseable value</td><td>attribute default, counted + listed</td><td>never fail silently, never guess</td></tr>
+<tr><td>Bad x/y on an agent row</td><td>skip the ROW (counted)</td><td>an agent with no position is meaningless</td></tr>
+<tr><td>Vector attributes</td><td>one column target per component</td><td>the store holds <code>_vx/_vy/_vz</code>, not a packed vector</td></tr>
+</table>
+
+<div class="note ok"><b>Compile-target story:</b> both flavours go through worker messages that already handle JS / WASM / WebGPU (agents via <code>pasteAgents</code> and its GPU deferral; the grid via the same readback/upload discipline <code>paintManual</code> and <code>importImage</code> use). No compiler is touched — nothing to lockstep.</div>
+
+</div>
+</body>
+</html>
