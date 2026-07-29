@@ -1756,7 +1756,16 @@ export function HelpView() {
             <strong> dragged by its header</strong>, closes with its &times; or <span className={styles.kbd}>Esc</span>,
             and offers <strong>Close all</strong>; dragging across agents before releasing re-targets
             the transient popover instead of pinning it. In 3D every open inspector also rings its
-            agent in the volume, and the ring <strong>follows that agent</strong> as it moves. Loading
+            agent in the volume, and the ring <strong>follows that agent</strong> as it moves. A pinned
+            inspector&rsquo;s <span className={styles.kbd}>&#9678;</span> button turns on <strong>Follow
+            mode</strong>: the camera then tracks that agent, in 2D and in 3D. It has a built-in
+            <em> allowance</em> so jitter never reaches the camera &mdash; while the agent stays inside a
+            deadzone around the view centre the camera does not move at all, and outside it the camera
+            eases smoothly to bring the agent back to the deadzone edge (on a torus it always takes the
+            short way round the seam). One agent is followed at a time. Follow stops when you click{' '}
+            <span className={styles.kbd}>&#9678;</span> again, close the popover, the agent dies, or you
+            take the camera yourself with a pan / orbit / Reset view &mdash; <em>zooming does not stop it</em>,
+            so you can zoom in on a followed agent. Loading
             a different model closes every open inspector (cell and agent). The
             <strong> CA&nbsp;Grid</strong> brush target paints cells with the normal brush. In Area
             scope the agents the stroke will touch are <strong>highlighted</strong> (every mode
