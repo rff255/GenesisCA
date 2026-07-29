@@ -198,6 +198,18 @@ argument for Tier 2 even after Tier 1 lands; it is not a reason to delay Tier 1.
 
 ### 3.2 Backpressure — the one genuinely new hazard
 
+**Two limits, both needed** (the second was added after §6b's investigation showed the first was
+not sufficient on its own):
+
+1. a **queue cap** (`QUEUE_CAP = 2`) — the queue's job is to absorb a frame of jitter, not to
+   buffer;
+2. a **duty-cycle gate** (`DUTY_FACTOR = 1.5`) — after a submission the next one waits until
+   1.5 × the rolling-average encode time has elapsed, so the encoder is never held 100 % busy and
+   always leaves the renderer roughly a third of the wall clock. On cheap content the gate never
+   binds (encode time is far below the frame interval), so ordinary recordings are unaffected.
+
+
+
 `VideoEncoder.encode()` is a non-blocking submission. Measured main-thread cost of the extra work
 per frame (`putImageData` into a reusable `OffscreenCanvas` + `new VideoFrame` + `encode`):
 **0.76 ms/frame** (114 ms for 150 frames). That is affordable in `draw()`.
@@ -283,7 +295,8 @@ available** and is recommended as a follow-up, §7.)
 
 | risk | severity | mitigation |
 |---|---|---|
-| dropped frames on dense/large models | medium — user-visible | generous cap, index-based timestamps, drop count in the UI, documented |
+| dropped frames on dense/large models | medium — user-visible | index-based timestamps, drop count in the UI, documented |
+| the encoder starving the main thread | **high — found in testing** | root-caused to a Chrome profile-1 bug (§6b) and fixed there; the duty-cycle gate additionally bounds sustained load |
 | lazy async encoder creation races the first frames | low | small pending array, drained on resolve; fall back to raw buffering on failure |
 | an encoder error mid-recording | low | recorded, frames stop being accepted, surfaced at Stop |
 | leaked encoder on abort | low | `cancel()` at every existing abort site |
@@ -438,6 +451,56 @@ output configuration exactly.
 
 ---
 
+## 6b. A pre-existing Chrome bug the implementation surfaced (fixed)
+
+Implementing Tier 1 exposed a **latent defect in the shipped recorder**, unrelated to streaming:
+
+> **Chrome's software VP9 profile 1 (4:4:4) encoder freezes the renderer at a coded width of
+> 960** — the exact width GenesisCA's capture cap produces.
+
+Isolated with a standalone probe — no app, no simulation, no WebGPU, just `VideoEncoder` plus a
+50 ms heartbeat — encoding six frames of a synthetic gradient:
+
+| size | pixels | profile | result |
+|---|---|---|---|
+| 898 × 821 | 737 k | 1 (4:4:4) | fine (many real recordings) |
+| 900 × 900 | 810 k | 1 (4:4:4) | **fine** — 124 ms/frame, 13 ms worst main-thread gap |
+| **960 × 540** | **518 k** | 1 (4:4:4) | **FREEZE** after 1 frame — *the fewest pixels of any case* |
+| **960 × 960** | 922 k | 1 (4:4:4) | **FREEZE** after 1–2 frames; 1 chunk in 60 s |
+| 960 × 960 | 922 k | 0 (4:2:0) | **fine** — 124 ms/frame, 12 ms worst gap |
+
+Three things make this serious:
+
+* **It is width-driven, not size-driven.** 960 × 540 has fewer pixels than the perfectly healthy
+  900 × 900 and still freezes; the identical 960 × 960 workload on profile 0 is fine. Lowering
+  the bitrate from 337 Mbps to 40 Mbps did **not** help either — so neither total work nor
+  bitrate is the trigger.
+* **`isConfigSupported` reports it as `supported: true`,** so the existing preference order picks
+  it happily.
+* **960 is exactly `RECORD_MAX` and exactly `renderSimulationFrame(960, …)`,** so the default
+  simulation scope lands on width 960 for any roughly-square or landscape grid. **The buffered
+  encoder hits this too** — it submits every frame in a tight loop at Stop, so pressing Stop on
+  such a recording today freezes the page for the whole recording at once. Streaming did not
+  create the bug; it just made it visible in the first second instead of at the end.
+
+**Fix (in the shared `pickVp9Config`, so it repairs both paths):** profile 1 is only offered
+below `VP9_444_MAX_WIDTH = 960`; at or above it the picker starts at profile 0, which was
+measured to handle the identical workload at 124 ms/frame with the main thread untouched. The
+cost is 4:2:0 chroma subsampling on frames that currently hang the browser.
+
+**Verified after the fix:** Gray-Scott at the 960 × 960 simulation scope now selects
+`vp09.00.10.08`, records 59 frames with a **136 ms** worst main-thread gap (vs. *frozen after
+100 ms* before, and vs. 121 ms for the buffered control on the same model and scope) and
+downloads a valid file; Kelp War at 898 × 821 still selects `vp09.01.10.08.03` with a 120 ms
+worst gap — no regression for the sizes that were healthy.
+
+The threshold is an empirical lower bound on a failure region this investigation did not fully
+characterise. Two follow-ups worth having: check whether the freeze reproduces on other machines
+and Chrome versions (it may be a libvpx tiling/threading path specific to widths that are large
+multiples of 64), and consider filing it upstream.
+
+---
+
 ## 7. Recommendation and phased plan
 
 **Phase 1 — Tier 1, encode-as-you-go (implemented in this branch).**
@@ -489,5 +552,10 @@ self-contained HTML mockup alongside its plan at implementation time.
    or OPFS (no picker, 10 GB quota, download hand-off unproven)? Or both, with FSA preferred?
 4. **The Tauri shell** currently has only a text-only `save_text_file` command. Is a binary
    streaming command worth adding, or should the native shell simply keep Tier 1?
-5. **3D capture resolution.** Capping it to 960 px (matching 2D) changes the resolution of
-   existing 3D recordings. Cap it, make it a setting, or leave it uncapped and merely documented?
+5. **3D capture resolution.** Capping it (matching 2D) changes the resolution of existing 3D
+   recordings. Cap it, make it a setting, or leave it uncapped and merely documented? Note the
+   2D cap is currently 960 — the exact width that trips the Chrome bug in §6b — so if a 3D cap is
+   added it should not be 960 either.
+6. **The Chrome VP9 profile-1 freeze (§6b)** — worth reproducing on your machines and filing
+   upstream? And is `VP9_444_MAX_WIDTH = 960` the right conservative line, or should GenesisCA
+   simply move `RECORD_MAX` off 960 so profile 1 stays available at the default scope?

@@ -30,6 +30,7 @@ import { SpriteRegistry } from './spriteRegistry';
 import { ImageMappingDialog, type ImageMappingConfig } from './ImageMappingDialog';
 import { GIFEncoder, quantize, applyPalette } from 'gifenc';
 import { encodeFramesToWebM, isWebMSupported } from './recording/webmEncoder';
+import { WebMStreamEncoder } from './recording/webmStreamEncoder';
 import { getGlyphTile } from './recording/glyphAtlas';
 import { IndicatorDisplay } from './IndicatorDisplay';
 import { ExperimentsPanel } from './ExperimentsPanel';
@@ -192,6 +193,10 @@ function ensureGooFilter(): NonNullable<typeof gooFilterEls> {
   gooFilterEls = { blur, matrix, fade };
   return gooFilterEls;
 }
+
+/** Max frames held while the streaming encoder's async codec probe resolves.
+ *  Small on purpose — this is a hand-off buffer, not a recording buffer. */
+const WEBM_STREAM_PENDING_MAX = 8;
 
 /** Force every pixel of a captured recording frame to full opacity (alpha=255),
  *  in place. Both the 2D display canvas (agents-only, cleared to transparent
@@ -1265,8 +1270,82 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
   // The "simulation" scope uses renderSimulationFrame (deterministic grid-aspect dims),
   // so it needs no lock.
   const recordCropRef = useRef<{ outW: number; outH: number } | null>(null);
+  // Dimension lock for the recording, shared by BOTH the streaming and the
+  // buffered path. Previously the guard was `recordedFrames.current[0]`, which
+  // is empty while streaming — so the lock has to live in its own ref.
+  const recordDimsRef = useRef<{ w: number; h: number } | null>(null);
+  // ── Streaming WebM (encode-as-you-go) ───────────────────────────────────────
+  // Instead of retaining every captured frame as raw RGBA (2.9-33 MB EACH, OOM
+  // after ~1 min of 2D / <15 s of 3D at HiDPI — see
+  // docs/INVESTIGATION_STREAMING_RECORDING.md), a WebM recording feeds each frame
+  // to the VideoEncoder as it is captured and only the COMPRESSED bytes
+  // accumulate. GIF still buffers raw frames (gifenc needs the pixels to build a
+  // palette per frame), and any failure to bring the streaming encoder up falls
+  // back to the historical buffered path.
+  const recordStreamModeRef = useRef(false);
+  const webmStreamRef = useRef<WebMStreamEncoder | null>(null);
+  const webmStreamStateRef = useRef<'idle' | 'creating' | 'ready' | 'failed'>('idle');
+  // Frames captured while `WebMStreamEncoder.create` (an async isConfigSupported
+  // probe) is in flight — typically 1-3. Bounded: past the cap we drop rather
+  // than reintroduce unbounded raw buffering through the back door.
+  const webmStreamPendingRef = useRef<ImageData[]>([]);
+  const recordDroppedRef = useRef(0);
+  const [recordDroppedCount, setRecordDroppedCount] = useState(0);
   const [encodingWebM, setEncodingWebM] = useState(false);
   useEffect(() => { recordingRef.current = recording; }, [recording]);
+
+  /** Dispose of one finished capture frame: hand it to the streaming WebM
+   *  encoder when one is (or can be) live, else retain it the historical way.
+   *  Reads only refs, so it is safe to call from the worker message handler.
+   *  Every exit path accounts for the frame exactly once (encoded / dropped /
+   *  buffered) so the transport counters stay honest. */
+  const acceptRecordedFrame = (frame: ImageData) => {
+    if (recordStreamModeRef.current) {
+      const enc = webmStreamRef.current;
+      if (enc) {
+        if (enc.addFrame(frame)) recordCountRef.current += 1;
+        else recordDroppedRef.current += 1;
+        return;
+      }
+      if (webmStreamStateRef.current === 'creating') {
+        // The async codec probe is still in flight (typically 1-3 frames' worth).
+        if (webmStreamPendingRef.current.length < WEBM_STREAM_PENDING_MAX) webmStreamPendingRef.current.push(frame);
+        else recordDroppedRef.current += 1;
+        return;
+      }
+      if (webmStreamStateRef.current === 'idle') {
+        // First frame: its dimensions are what the encoder must be configured
+        // for, so the encoder can only be built now. fps is LOCKED here (the
+        // encoder needs it at configure time); previously it was read at Stop,
+        // which silently retimed the whole file if the slider moved mid-record.
+        webmStreamStateRef.current = 'creating';
+        webmStreamPendingRef.current = [frame];
+        WebMStreamEncoder.create(frame.width, frame.height, targetFpsRef.current || 30).then(enc => {
+          if (!recordingRef.current || !recordStreamModeRef.current) { enc.cancel(); return; }
+          webmStreamRef.current = enc;
+          webmStreamStateRef.current = 'ready';
+          for (const f of webmStreamPendingRef.current) {
+            if (enc.addFrame(f)) recordCountRef.current += 1;
+            else recordDroppedRef.current += 1;
+          }
+          webmStreamPendingRef.current = [];
+        }).catch(err => {
+          // No usable VP9 configuration (e.g. an uncapped 3D buffer above the
+          // encoder's max dimensions). Degrade to the historical buffered path
+          // rather than losing the recording.
+          console.warn('[recording] streaming WebM unavailable, buffering frames instead', err);
+          webmStreamStateRef.current = 'failed';
+          recordStreamModeRef.current = false;
+          for (const f of webmStreamPendingRef.current) { recordedFrames.current.push(f); recordCountRef.current += 1; }
+          webmStreamPendingRef.current = [];
+        });
+        return;
+      }
+      // 'failed' — fall through to the buffered path below.
+    }
+    recordedFrames.current.push(frame);
+    recordCountRef.current += 1;
+  };
 
   // Persist simulator settings
   useEffect(() => {
@@ -4594,14 +4673,16 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
         // mid-record pan/zoom/panel-resize can't change frame dims (the dimension guard
         // would drop them) — the recording keeps a stable framing throughout.
         if (recordingRef.current) {
-          const expected = recordedFrames.current[0];
+          // Dimension lock (recordDimsRef, set on the first accepted frame) —
+          // NOT recordedFrames.current[0], which stays empty while streaming.
+          const expected = recordDimsRef.current;
           let frame: ImageData | null = null;
 
           if (is3dRef.current && gl3dRef.current) {
             // 3D: the scene fills the viewport (no letterbox) — both scopes capture
             // the full GL display buffer.
             const px = capture3dPixels() ?? gl3dRef.current.readPixels();
-            if (!expected || (px.width === expected.width && px.height === expected.height)) {
+            if (!expected || (px.width === expected.w && px.height === expected.h)) {
               forceFrameOpaque(px.data);
               frame = new ImageData(px.data, px.width, px.height);
             }
@@ -4646,14 +4727,15 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
             }
           }
 
-          if (frame && (!expected || (frame.width === expected.width && frame.height === expected.height))) {
-            recordedFrames.current.push(frame);
-            recordCountRef.current += 1;
+          if (frame && (!expected || (frame.width === expected.w && frame.height === expected.h))) {
+            if (!expected) recordDimsRef.current = { w: frame.width, h: frame.height };
+            acceptRecordedFrame(frame);
           }
           // Throttle the visible counter to ~5 Hz so we don't re-render the
           // SimulatorView on every captured frame.
-          if (recordCountRef.current > 0 && now - lastRecordCountSet.current >= 200) {
+          if ((recordCountRef.current > 0 || recordDroppedRef.current > 0) && now - lastRecordCountSet.current >= 200) {
             setRecordFrameCount(recordCountRef.current);
+            setRecordDroppedCount(recordDroppedRef.current);
             lastRecordCountSet.current = now;
           }
         }
@@ -5019,11 +5101,9 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
     if (recordingRef.current) {
       recordingRef.current = false;
       setRecording(false);
-      recordedFrames.current = [];
-      recordCountRef.current = 0;
-      lastRecordCountSet.current = 0;
-      recordCropRef.current = null;
-      setRecordFrameCount(0);
+      // Releases the streaming encoder too — abandoning one without cancel()
+      // would leak a hardware encoder session.
+      resetRecordingState();
       // Tell the worker to stop including colors in stepped messages.
       workerRef.current?.postMessage({ type: 'setRecording', enabled: false });
     }
@@ -5567,6 +5647,11 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
   useEffect(() => {
     return () => {
       overseerRuntimeRef.current?.abort('simulator unmounted');
+      // Release an in-flight streaming recording — the VideoEncoder holds a
+      // hardware session that would otherwise outlive the component.
+      webmStreamRef.current?.cancel();
+      webmStreamRef.current = null;
+      webmStreamPendingRef.current = [];
       workerRef.current?.terminate();
       workerRef.current = null;
     };
@@ -9125,12 +9210,31 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
     initWorkerWithDimensions(model.properties.gridWidth, model.properties.gridHeight);
   };
 
-  const startRecording = () => {
+  /** Release the streaming encoder and clear every recording buffer/counter.
+   *  Called from start (fresh slate), stop, and every abort site. */
+  const resetRecordingState = () => {
+    webmStreamRef.current?.cancel();
+    webmStreamRef.current = null;
+    webmStreamStateRef.current = 'idle';
+    webmStreamPendingRef.current = [];
+    recordStreamModeRef.current = false;
     recordedFrames.current = [];
     recordCountRef.current = 0;
+    recordDroppedRef.current = 0;
     lastRecordCountSet.current = 0;
     recordCropRef.current = null;
+    recordDimsRef.current = null;
     setRecordFrameCount(0);
+    setRecordDroppedCount(0);
+  };
+
+  const startRecording = () => {
+    resetRecordingState();
+    // The format/scope select is only rendered while NOT recording, so both are
+    // effectively locked for the run — which is what lets us commit to a
+    // streaming WebM encoder here. GIF keeps the buffered path (gifenc needs the
+    // raw pixels of every frame to build its per-frame palette).
+    recordStreamModeRef.current = recordFormat === 'webm' && webmAvailable;
     setRecording(true);
     // Tell the worker to include the colors buffer in stepped messages so we
     // can capture frames under WebGPU direct render (where srcCanvas's 2D
@@ -9140,11 +9244,55 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
   };
 
   const stopRecording = async () => {
+    // Clear the ref synchronously — setRecording is async, and a `stepped`
+    // landing in between must not feed a stream encoder we are about to finish.
+    recordingRef.current = false;
     setRecording(false);
     workerRef.current?.postMessage({ type: 'setRecording', enabled: false });
-    const frames = recordedFrames.current;
-    if (frames.length === 0) return;
     const fname = model.properties.name.toLowerCase().replace(/\s+/g, '_').replace(/[^a-z0-9_]/g, '') || 'genesis';
+
+    // ── Streaming WebM: everything is already encoded; Stop is just a flush. ──
+    if (recordStreamModeRef.current) {
+      const enc = webmStreamRef.current;
+      const pending = webmStreamPendingRef.current;
+      webmStreamRef.current = null;
+      webmStreamPendingRef.current = [];
+      webmStreamStateRef.current = 'idle';
+      recordStreamModeRef.current = false;
+      if (enc) {
+        for (const f of pending) { if (enc.addFrame(f)) recordCountRef.current += 1; else recordDroppedRef.current += 1; }
+        setEncodingWebM(true);
+        try {
+          const blob = await enc.finish();
+          triggerDownload(blob, `${fname}_recording.webm`);
+        } catch (err) {
+          console.error('WebM encode failed', err);
+          alert(`WebM encode failed: ${err instanceof Error ? err.message : String(err)}`);
+        } finally {
+          setEncodingWebM(false);
+        }
+      } else if (pending.length > 0) {
+        // Stopped before the async codec probe resolved — encode the handful of
+        // held frames through the buffered path so a very short recording still
+        // produces a file.
+        setEncodingWebM(true);
+        try {
+          const blob = await encodeFramesToWebM(pending, targetFpsRef.current || 30);
+          triggerDownload(blob, `${fname}_recording.webm`);
+        } catch (err) {
+          console.error('WebM encode failed', err);
+          alert(`WebM encode failed: ${err instanceof Error ? err.message : String(err)}`);
+        } finally {
+          setEncodingWebM(false);
+        }
+      }
+      resetRecordingState();
+      return;
+    }
+
+    // ── Buffered path (GIF, or WebM after a streaming-setup failure) ──────────
+    const frames = recordedFrames.current;
+    if (frames.length === 0) { resetRecordingState(); return; }
     const fps = targetFpsRef.current || 30;
 
     // Use the format selected at the moment recording stops. WebM falls back
@@ -9207,11 +9355,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       const blob = new Blob([gif.bytes()], { type: 'image/gif' });
       triggerDownload(blob, `${fname}_recording.gif`);
     }
-    recordedFrames.current = [];
-    recordCountRef.current = 0;
-    lastRecordCountSet.current = 0;
-    recordCropRef.current = null;
-    setRecordFrameCount(0);
+    resetRecordingState();
   };
 
   const triggerDownload = (blob: Blob, filename: string) => {
@@ -10497,7 +10641,15 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
             )
           )}
           <HoverCoordsChip />
-          {recording && <span style={{ color: '#e05050' }}>{'\u23FA'} REC {recordFrameCount}f</span>}
+          {recording && (
+            <span style={{ color: '#e05050' }}>
+              {'\u23FA'} REC {recordFrameCount}f
+              {/* Dropped frames: the streaming encoder refuses a frame when its
+                  queue is full (dense content encodes slower than it is captured).
+                  Never silent \u2014 the counter is the only place the user can see it. */}
+              {recordDroppedCount > 0 && <span style={{ color: '#e0a050' }}> {'\u00B7'} {recordDroppedCount} dropped</span>}
+            </span>
+          )}
           {isAgentModel && (agentsRef.current || agentDirectRenderActiveRef.current) && <span title="Live agents">{'\u25CF'} {agentDirectRenderActiveRef.current ? agentLiveCountRef.current : (agentsRef.current?.liveCount ?? 0)} agents</span>}
         </div>
 
