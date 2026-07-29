@@ -2790,6 +2790,35 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       hlCtx.beginPath(); hlCtx.arc(cx, cy, rad, 0, Math.PI * 2);
       hlCtx.strokeStyle = 'rgba(171, 123, 255, 0.95)'; hlCtx.lineWidth = 2; hlCtx.setLineDash([3, 3]); hlCtx.stroke(); hlCtx.setLineDash([]);
     }
+    // Inspected-agent rings (2D) — one per OPEN agent inspector (pinned + the
+    // transient sweep), derived per draw from the LIVE snapshot exactly like
+    // the 3D pushRing loop, so they track moving agents without touching the
+    // popover. Deliberately NOT gated on the brush target or the Show-brush-
+    // cursor toggle: an inspector is open regardless of brush state (the 3D
+    // rings are equally ungated). The FOLLOWED agent gets a double ring in the
+    // accent colour so Follow mode is visible at a glance; other inspected
+    // agents get a soft-white ring (matching the 3D white inspect ring, and
+    // distinct from the cyan hover / dashed purple edit rings). Primary tile
+    // only, like the hover/edit rings.
+    if (snap) {
+      const followId = followAgentIdRef.current;
+      for (const id of agentInspectIdsRef.current) {
+        if (id < 0 || id >= hw || !aal![id]) continue;
+        const cx = ox + ax![id]! * scale, cy = oy + ay![id]! * scale;
+        const rad = Math.max(2, ar![id]! * scale) + 3;
+        hlCtx.beginPath(); hlCtx.arc(cx, cy, rad, 0, Math.PI * 2);
+        if (id === followId) {
+          hlCtx.strokeStyle = 'rgba(232, 161, 58, 0.95)';
+          hlCtx.lineWidth = 2; hlCtx.stroke();
+          hlCtx.beginPath(); hlCtx.arc(cx, cy, rad + 4, 0, Math.PI * 2);
+          hlCtx.strokeStyle = 'rgba(232, 161, 58, 0.5)';
+          hlCtx.lineWidth = 1.5; hlCtx.stroke();
+        } else {
+          hlCtx.strokeStyle = 'rgba(240, 240, 245, 0.9)';
+          hlCtx.lineWidth = 2; hlCtx.stroke();
+        }
+      }
+    }
     // Area-affected agents — every agent the current footprint would touch
     // (Remove/Move/Edit, Area scope; Bond's scan disc), colour-coded per mode.
     if (showAgentCursor && snap && ((aScope === 'area' && (mode === 'remove' || mode === 'move' || mode === 'edit')) || mode === 'bond') && agentAreaHoverIdsRef.current.length) {
@@ -6433,7 +6462,15 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       moved = false;
       lastX = downX = e.clientX; lastY = downY = e.clientY;
       const orbitBtn = e.button === 1 || (e.button === 0 && e.altKey);
-      if (orbitBtn) { active = e.shiftKey ? 'pan' : 'orbit'; cancelFollowRef.current(); }
+      if (orbitBtn) {
+        active = e.shiftKey ? 'pan' : 'orbit';
+        // ORBIT does NOT cancel follow: it only changes yaw/pitch AROUND the
+        // follow target, which is orthogonal to what the follow controller
+        // writes (the target itself) — so the user can look at a followed agent
+        // from any angle while tracking continues. Only a TRANSLATION (pan)
+        // takes the wheel, same as the 2D RMB pan. See FOLLOW MODE.
+        if (active === 'pan') cancelFollowRef.current();
+      }
       else if (e.button === 2) {
         // RMB cancels a staged Line anchor / Glue-Cut anchor (grid or agent);
         // otherwise it pans.
@@ -7415,14 +7452,14 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
     }
     if (is3D) draw();
   }, [hoveredInspectIdx, is3D, draw]);
-  // 3D agent inspect rings: draw() derives them from the open popovers + the
-  // LIVE snapshot every frame (see its agent branch), so this effect only has
-  // to force a repaint when the popover set changes — the ring must appear /
-  // disappear immediately even while the sim is paused.
+  // Agent inspect rings (2D + 3D): draw() / drawCursorLayer derive them from
+  // the open popovers + the LIVE snapshot every frame (see the 3D agent branch
+  // and the 2D cursor-layer inspect block), so this effect only has to force a
+  // repaint when the popover set (or the followed agent) changes — the ring
+  // must appear / disappear / restyle immediately even while the sim is paused.
   useEffect(() => {
-    if (!is3D) return;
     draw();
-  }, [agentPopovers, agentSweepPopover, is3D, draw]);
+  }, [agentPopovers, agentSweepPopover, followAgentId, is3D, draw]);
   const [pulseInspectIdx, setPulseInspectIdx] = useState<number | null>(null);
   const [focusedInspectIdx, setFocusedInspectIdx] = useState<number | null>(null);
   const inspectDataRef = useRef<Map<number, Record<string, number>>>(new Map());

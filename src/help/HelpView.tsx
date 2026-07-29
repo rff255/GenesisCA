@@ -1755,8 +1755,10 @@ export function HelpView() {
             inspectors work like the cell ones: <strong>several can be open at once</strong>, each is
             <strong> dragged by its header</strong>, closes with its &times; or <span className={styles.kbd}>Esc</span>,
             and offers <strong>Close all</strong>; dragging across agents before releasing re-targets
-            the transient popover instead of pinning it. In 3D every open inspector also rings its
-            agent in the volume, and the ring <strong>follows that agent</strong> as it moves. A pinned
+            the transient popover instead of pinning it. Every open inspector also <strong>rings its
+            agent</strong> &mdash; a soft-white circle on the 2D overlay, a white ring in the 3D
+            volume &mdash; and the ring <strong>follows that agent</strong> as it moves; the agent being
+            followed by the camera gets a <strong>double accent ring</strong> instead. A pinned
             inspector&rsquo;s <span className={styles.kbd}>&#9678;</span> button turns on <strong>Follow
             mode</strong>: the camera then tracks that agent, in 2D and in 3D. The camera is
             <em> accelerated</em> toward the agent by a critically damped spring and <em>leads</em> it by
@@ -1766,8 +1768,9 @@ export function HelpView() {
             and stops moving entirely. On a torus it always takes the short way round the seam. One agent is
             followed at a time. Follow stops when you click{' '}
             <span className={styles.kbd}>&#9678;</span> again, close the popover, the agent dies, or you
-            take the camera yourself with a pan / orbit / Reset view &mdash; <em>zooming does not stop it</em>,
-            so you can zoom in on a followed agent. Loading
+            move the camera yourself by <strong>panning</strong> (or Reset view) &mdash; <em>zooming and
+            3D orbiting do not stop it</em>, so you can zoom in on a followed agent and swing the 3D
+            camera around it while it keeps being tracked. Loading
             a different model closes every open inspector (cell and agent). The
             <strong> CA&nbsp;Grid</strong> brush target paints cells with the normal brush. In Area
             scope the agents the stroke will touch are <strong>highlighted</strong> (every mode
