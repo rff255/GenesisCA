@@ -2039,6 +2039,46 @@ export function HelpView() {
             the model has no Colour&rarr;Attribute mapping. (A 3D model keeps the classic
             1&nbsp;pixel&nbsp;=&nbsp;1&nbsp;cell import.)
           </p>
+          <h3 className={styles.h3}>Import CSV</h3>
+          <p className={styles.p}>
+            <strong>Import CSV&hellip;</strong> (in the brush panel, or just <strong>drop a
+            .csv / .tsv file</strong> anywhere on the app) brings tabular data into a running
+            simulation. One dialog covers two flavours; a model with both layers gets a{' '}
+            <strong>Target</strong> switch.
+          </p>
+          <ul className={styles.list}>
+            <li>
+              <strong>Agents</strong> &mdash; each CSV <em>row</em> is one agent. Every column
+              gets a target: <em>ignore</em>, a position/velocity component (x/y/z, vx/vy/vz),
+              <em> radius</em>, an agent attribute, or one component of a <em>vector</em>{' '}
+              attribute (<code>facing.x</code>). With a header row the columns are auto-mapped
+              by name (case- and punctuation-insensitive, so <code>Pos X</code>,{' '}
+              <code>pos_x</code> and <code>x</code> all match) &mdash; always overridable.
+              Choose <strong>Replace population</strong> (clears first) or{' '}
+              <strong>Append</strong>. Positions outside the world wrap on a torus and clamp
+              otherwise; rows beyond <em>Max Agents</em> are reported, not silently dropped.
+            </li>
+            <li>
+              <strong>Grid</strong> &mdash; the CSV <em>is</em> the board: a <strong>line is a
+              grid row</strong> (height) and a <strong>field is a grid column</strong> (width),
+              so a 12&times;9 file gives a 9&nbsp;wide &times; 12&nbsp;tall grid. Every value
+              goes into ONE chosen cell attribute. Either <strong>resize the grid to the
+              CSV</strong> or <strong>keep the grid</strong> (the dimensions must then match
+              exactly). In a 3D model a 2D table cannot fill a volume, so it writes one
+              chosen <strong>Layer</strong>.
+            </li>
+          </ul>
+          <p className={styles.p}>
+            Values are read per attribute type: numbers for integer (rounded) and decimal;{' '}
+            <code>1/0</code>, <code>true/false</code>, <code>yes/no</code> for binary; a tag&apos;s
+            option <em>name</em> (case-insensitive) or its numeric index for tags. The
+            delimiter (comma / semicolon / tab) and whether the first row is a header are
+            auto-detected and overridable &mdash; note that <em>Grid</em> defaults to{' '}
+            <strong>no header</strong>, since in a board every line is a row. Anything that
+            will not parse falls back to that attribute&apos;s default and is{' '}
+            <strong>counted and listed</strong> in the dialog before you import &mdash; an
+            import never fails silently.
+          </p>
           <p className={styles.p}>
             <strong>Brush shapes.</strong> Pick a stamp shape in the brush panel:
           </p>
