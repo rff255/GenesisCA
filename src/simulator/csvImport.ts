@@ -1,0 +1,475 @@
+/**
+ * CSV import — the pure parsing / decoding / column-mapping core.
+ *
+ * Two flavours ride this module (see docs/PLAN_CSV_IMPORT.md):
+ *   - AGENTS: each CSV row is one agent; columns carry position / velocity /
+ *     radius / agent-attribute values → per-agent `pasteAgents` specs.
+ *   - GRID:   the CSV IS the board (a line is a grid ROW, a field a grid COLUMN)
+ *     and every value goes into ONE chosen cell attribute → `importGridValues`.
+ *
+ * DOM-free + side-effect-free on purpose: `scripts/test-csv-import.mjs` imports
+ * it directly and asserts VALUES (a scientific-workflow feature — the number in
+ * the file must be the number in the store, or be reported as defaulted).
+ *
+ * No new dependency: the RFC-4180 parser below is ~40 lines.
+ */
+
+import type { Attribute } from '../model/types';
+import { encodeAttrValue } from '../model/attrValueEncoding';
+import { vectorComponentIds, vectorDimsOf } from '../modeler/vpl/compiler/vectorAttr';
+
+// ---------------------------------------------------------------------------
+// Parsing
+// ---------------------------------------------------------------------------
+
+/** The delimiters auto-detection considers, in tie-break order. */
+export const CSV_DELIMITERS = [',', ';', '\t'] as const;
+export type CsvDelimiter = (typeof CSV_DELIMITERS)[number];
+
+/** Split CSV text into rows of raw string fields (RFC 4180).
+ *
+ *  Handles: quoted fields, `""` escapes inside quotes, delimiters and newlines
+ *  inside quotes, CRLF and LF, a leading UTF-8 BOM, and a trailing newline (no
+ *  phantom final row). Fields are NOT trimmed inside quotes; unquoted fields are
+ *  trimmed of surrounding whitespace (spreadsheets export `a, b` freely). */
+export function parseCsvRows(text: string, delimiter: string): string[][] {
+  const src = text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let field = '';
+  let quoted = false;      // inside a quoted field
+  let wasQuoted = false;   // this field had quotes → don't trim it
+  let i = 0;
+  const pushField = () => { row.push(wasQuoted ? field : field.trim()); field = ''; wasQuoted = false; };
+  const pushRow = () => { pushField(); rows.push(row); row = []; };
+  while (i < src.length) {
+    const ch = src[i]!;
+    if (quoted) {
+      if (ch === '"') {
+        if (src[i + 1] === '"') { field += '"'; i += 2; continue; }
+        quoted = false; i++; continue;
+      }
+      field += ch; i++; continue;
+    }
+    if (ch === '"' && field.trim() === '') { quoted = true; wasQuoted = true; field = ''; i++; continue; }
+    if (ch === delimiter) { pushField(); i++; continue; }
+    if (ch === '\r') { if (src[i + 1] === '\n') i++; pushRow(); i++; continue; }
+    if (ch === '\n') { pushRow(); i++; continue; }
+    field += ch; i++;
+  }
+  // A trailing newline leaves an empty pending row — only keep a final row when
+  // it actually carries content.
+  if (field.length > 0 || row.length > 0) pushRow();
+  // Drop wholly-blank rows (blank lines between blocks, a trailing CRLF).
+  return rows.filter(r => r.length > 1 || (r[0] ?? '') !== '');
+}
+
+/** Pick the delimiter that yields the most consistent field count over the first
+ *  lines (and more than one field). Ties → the earlier entry of CSV_DELIMITERS. */
+export function detectDelimiter(text: string): CsvDelimiter {
+  let best: CsvDelimiter = ',';
+  let bestScore = -1;
+  for (const d of CSV_DELIMITERS) {
+    const rows = parseCsvRows(text, d).slice(0, 20);
+    if (rows.length === 0) continue;
+    const counts = rows.map(r => r.length);
+    const first = counts[0]!;
+    if (first < 2) continue;
+    const consistent = counts.filter(c => c === first).length;
+    // Reward field count AND consistency; consistency dominates.
+    const score = consistent * 100 + first;
+    if (score > bestScore) { bestScore = score; best = d; }
+  }
+  return best;
+}
+
+/** True when the raw field parses as a finite number (the header heuristic's
+ *  and every numeric decode's primitive). Empty is NOT numeric. */
+export function isNumericField(raw: string): boolean {
+  const s = raw.trim();
+  if (s === '') return false;
+  const n = Number(s);
+  return Number.isFinite(n);
+}
+
+/** Header heuristic: the first row is a header iff it holds NO numeric field AND
+ *  at least one LATER row DOES hold a numeric field.
+ *
+ *  Accepts `x,y,radius` over numeric rows; correctly REJECTS a grid of tag NAMES
+ *  (no numeric anywhere → the first row is data like every other row). The
+ *  dialog exposes a checkbox that overrides this either way. */
+export function detectHeader(rows: string[][]): boolean {
+  if (rows.length < 2) return false;
+  const first = rows[0]!;
+  if (first.some(isNumericField)) return false;
+  for (let r = 1; r < rows.length; r++) if (rows[r]!.some(isNumericField)) return true;
+  return false;
+}
+
+export interface CsvTable {
+  delimiter: string;
+  /** Header field names, or null when the file has no header row. */
+  header: string[] | null;
+  /** DATA rows only (the header row excluded when present). */
+  rows: string[][];
+  /** The widest data row's field count. */
+  width: number;
+  /** How many data rows are shorter than `width` (padded on use). */
+  ragged: number;
+}
+
+/** Parse text into a table: delimiter + header detection (both overridable). */
+export function parseCsvTable(
+  text: string,
+  opts?: { delimiter?: string; hasHeader?: boolean },
+): CsvTable {
+  const delimiter = opts?.delimiter ?? detectDelimiter(text);
+  const all = parseCsvRows(text, delimiter);
+  const hasHeader = opts?.hasHeader ?? detectHeader(all);
+  const header = hasHeader ? (all[0] ?? []) : null;
+  const rows = hasHeader ? all.slice(1) : all;
+  let width = 0;
+  for (const r of rows) width = Math.max(width, r.length);
+  if (header) width = Math.max(width, header.length);
+  const ragged = rows.filter(r => r.length < width).length;
+  return { delimiter, header, rows, width, ragged };
+}
+
+// ---------------------------------------------------------------------------
+// Value decoding
+// ---------------------------------------------------------------------------
+
+/** A per-cell decode outcome. `ok:false` ⇒ `value` is the attribute's DEFAULT
+ *  (never a guess) and the caller counts + reports the miss. */
+export interface CsvDecode { value: number; ok: boolean }
+
+const TRUE_WORDS = new Set(['1', 'true', 't', 'yes', 'y', 'on']);
+const FALSE_WORDS = new Set(['0', 'false', 'f', 'no', 'n', 'off']);
+
+/** Attribute shape this module needs (a structural subset of `Attribute`). */
+export interface CsvAttrShape {
+  id: string;
+  name?: string;
+  type: string;
+  defaultValue?: string;
+  tagOptions?: string[];
+  vectorDims?: number;
+}
+
+/** Parse a plain number field (positions, velocities, radius, vector
+ *  components). Returns null when it is not a finite number. */
+export function parseCsvNumber(raw: string): number | null {
+  const s = (raw ?? '').trim();
+  if (s === '') return null;
+  const n = Number(s);
+  return Number.isFinite(n) ? n : null;
+}
+
+/** Decode one raw CSV field into the numeric form the worker stores for `attr`.
+ *
+ *   integer  → any finite number, ROUNDED
+ *   float    → any finite number
+ *   bool     → 1/0, true/false, yes/no, t/f, on/off (case-insensitive)
+ *   tag      → the option NAME (case-insensitive exact) or a numeric index in range
+ *   other    → the attribute default (a colour / lookupTable is not a per-cell scalar)
+ *
+ *  Anything unparseable yields the attribute's default with `ok:false`. */
+export function decodeCsvValue(attr: CsvAttrShape, raw: string): CsvDecode {
+  const fallback = encodeAttrValue(attr, undefined);
+  const s = (raw ?? '').trim();
+  switch (attr.type) {
+    case 'integer':
+    case 'neighborIndex': {
+      const n = parseCsvNumber(s);
+      return n === null ? { value: fallback, ok: false } : { value: Math.round(n), ok: true };
+    }
+    case 'float': {
+      const n = parseCsvNumber(s);
+      return n === null ? { value: fallback, ok: false } : { value: n, ok: true };
+    }
+    case 'bool': {
+      const l = s.toLowerCase();
+      if (TRUE_WORDS.has(l)) return { value: 1, ok: true };
+      if (FALSE_WORDS.has(l)) return { value: 0, ok: true };
+      return { value: fallback, ok: false };
+    }
+    case 'tag': {
+      const opts = attr.tagOptions ?? [];
+      const l = s.toLowerCase();
+      const byName = opts.findIndex(o => o.toLowerCase() === l);
+      if (byName >= 0) return { value: byName, ok: true };
+      const n = parseCsvNumber(s);
+      if (n !== null && Number.isInteger(n) && n >= 0 && n < opts.length) return { value: n, ok: true };
+      return { value: fallback, ok: false };
+    }
+    default:
+      return { value: fallback, ok: false };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Column targets (agents)
+// ---------------------------------------------------------------------------
+
+export type CsvGeomField = 'x' | 'y' | 'z' | 'vx' | 'vy' | 'vz' | 'radius';
+
+export type CsvTarget =
+  | { kind: 'ignore' }
+  | { kind: 'geom'; field: CsvGeomField }
+  | { kind: 'attr'; attrId: string }
+  | { kind: 'vec'; attrId: string; comp: number };
+
+/** Serialise a target into the `<option value>` key (and back) — one string per
+ *  target so the column selects stay plain DOM. */
+export function targetKey(t: CsvTarget): string {
+  switch (t.kind) {
+    case 'ignore': return 'ignore';
+    case 'geom': return `geom:${t.field}`;
+    case 'attr': return `attr:${t.attrId}`;
+    case 'vec': return `vec:${t.attrId}:${t.comp}`;
+  }
+}
+
+export function parseTargetKey(key: string): CsvTarget {
+  if (key.startsWith('geom:')) return { kind: 'geom', field: key.slice(5) as CsvGeomField };
+  if (key.startsWith('attr:')) return { kind: 'attr', attrId: key.slice(5) };
+  if (key.startsWith('vec:')) {
+    const rest = key.slice(4);
+    const i = rest.lastIndexOf(':');
+    return { kind: 'vec', attrId: rest.slice(0, i), comp: Number(rest.slice(i + 1)) || 0 };
+  }
+  return { kind: 'ignore' };
+}
+
+/** Lower-case + strip everything that is not a letter or digit — so `Vel X`,
+ *  `vel_x`, `vel.x` and `velX` all normalise to `velx`. */
+export function normaliseName(s: string): string {
+  return (s ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
+const GEOM_ALIASES: Record<string, CsvGeomField> = {
+  x: 'x', posx: 'x', positionx: 'x', px: 'x',
+  y: 'y', posy: 'y', positiony: 'y', py: 'y',
+  z: 'z', posz: 'z', positionz: 'z', pz: 'z', layer: 'z',
+  vx: 'vx', velx: 'vx', velocityx: 'vx',
+  vy: 'vy', vely: 'vy', velocityy: 'vy',
+  vz: 'vz', velz: 'vz', velocityz: 'vz',
+  radius: 'radius', r: 'radius', size: 'radius',
+};
+
+const COMP_LETTERS = ['x', 'y', 'z'];
+
+/** Every target the Agents mode can offer, in menu order. */
+export function agentTargetOptions(attrs: CsvAttrShape[], is3d: boolean): Array<{ key: string; label: string }> {
+  const out: Array<{ key: string; label: string }> = [{ key: 'ignore', label: '(ignore)' }];
+  const geom: CsvGeomField[] = is3d
+    ? ['x', 'y', 'z', 'vx', 'vy', 'vz', 'radius']
+    : ['x', 'y', 'vx', 'vy', 'radius'];
+  for (const f of geom) out.push({ key: `geom:${f}`, label: f });
+  for (const a of attrs) {
+    if (a.type === 'vector') {
+      const dims = vectorDimsOf(a);
+      for (let c = 0; c < dims; c++) out.push({ key: `vec:${a.id}:${c}`, label: `${a.name ?? a.id}.${COMP_LETTERS[c]}` });
+    } else if (a.type !== 'color' && a.type !== 'lookupTable') {
+      out.push({ key: `attr:${a.id}`, label: a.name ?? a.id });
+    }
+  }
+  return out;
+}
+
+/** Auto-map columns to targets.
+ *
+ *  With a header: geometry aliases first (x/y/z/vx/vy/vz/radius and the obvious
+ *  spellings), then an exact normalised agent-attribute NAME match, then
+ *  `<vectorName><x|y|z>` for vector components. Unmatched → ignore.
+ *  Without a header: everything ignored except the first two columns → x, y.
+ *  Every result is user-overridable in the dialog. */
+export function autoMapAgentColumns(
+  header: string[] | null,
+  attrs: CsvAttrShape[],
+  is3d: boolean,
+  width: number,
+): string[] {
+  if (!header) {
+    return Array.from({ length: width }, (_, i) => (i === 0 ? 'geom:x' : i === 1 ? 'geom:y' : 'ignore'));
+  }
+  const used = new Set<string>();
+  const take = (key: string): string => { if (used.has(key)) return 'ignore'; used.add(key); return key; };
+  return Array.from({ length: width }, (_, i) => {
+    const n = normaliseName(header[i] ?? '');
+    if (n === '') return 'ignore';
+    const g = GEOM_ALIASES[n];
+    if (g && (is3d || (g !== 'z' && g !== 'vz'))) return take(`geom:${g}`);
+    const exact = attrs.find(a => a.type !== 'vector' && a.type !== 'color' && a.type !== 'lookupTable' && normaliseName(a.name ?? a.id) === n);
+    if (exact) return take(`attr:${exact.id}`);
+    for (const a of attrs) {
+      if (a.type !== 'vector') continue;
+      const dims = vectorDimsOf(a);
+      const base = normaliseName(a.name ?? a.id);
+      for (let c = 0; c < dims; c++) {
+        if (n === base + COMP_LETTERS[c]) return take(`vec:${a.id}:${c}`);
+      }
+    }
+    return 'ignore';
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Agent spec building
+// ---------------------------------------------------------------------------
+
+export interface CsvIssue { row: number; column: string; raw: string; reason: string }
+
+export interface CsvAgentSpec {
+  x: number; y: number; z?: number;
+  radius?: number; vx?: number; vy?: number; vz?: number;
+  sets: Array<{ attrId: string; value: number }>;
+}
+
+export interface CsvAgentBuild {
+  agents: CsvAgentSpec[];
+  /** Rows dropped because x or y was missing/unparseable. */
+  skippedRows: number;
+  /** Individual fields that fell back to the attribute default. */
+  badValues: number;
+  /** Rows whose position lay outside the world (the worker wraps or clamps). */
+  outOfBounds: number;
+  issues: CsvIssue[];
+}
+
+const MAX_ISSUES = 12;
+
+/** Build the per-agent `pasteAgents` specs from a parsed table + column targets.
+ *
+ *  A row with no parseable x AND y is SKIPPED (an agent without a position is
+ *  meaningless); every other miss falls back to the attribute default and is
+ *  counted. `world` only drives the out-of-bounds COUNT — the worker owns the
+ *  actual wrap/clamp inside `pasteAgents`. */
+export function buildAgentSpecs(
+  table: CsvTable,
+  targetKeys: string[],
+  attrs: CsvAttrShape[],
+  world: { w: number; h: number; d: number },
+  is3d: boolean,
+): CsvAgentBuild {
+  const attrById = new Map(attrs.map(a => [a.id, a]));
+  const targets = targetKeys.map(parseTargetKey);
+  const colName = (i: number) => table.header?.[i] ?? `column ${i + 1}`;
+  const out: CsvAgentBuild = { agents: [], skippedRows: 0, badValues: 0, outOfBounds: 0, issues: [] };
+  const note = (row: number, col: number, raw: string, reason: string) => {
+    out.badValues++;
+    if (out.issues.length < MAX_ISSUES) out.issues.push({ row, column: colName(col), raw, reason });
+  };
+
+  for (let r = 0; r < table.rows.length; r++) {
+    const row = table.rows[r]!;
+    let x: number | null = null, y: number | null = null, z: number | null = null;
+    let radius: number | null = null, vx: number | null = null, vy: number | null = null, vz: number | null = null;
+    const sets: Array<{ attrId: string; value: number }> = [];
+    for (let c = 0; c < targets.length; c++) {
+      const t = targets[c]!;
+      if (t.kind === 'ignore') continue;
+      const raw = row[c] ?? '';
+      if (t.kind === 'geom') {
+        const n = parseCsvNumber(raw);
+        if (n === null) {
+          if (t.field !== 'x' && t.field !== 'y') note(r + 1, c, raw, 'not a number');
+          continue;
+        }
+        switch (t.field) {
+          case 'x': x = n; break; case 'y': y = n; break; case 'z': z = n; break;
+          case 'vx': vx = n; break; case 'vy': vy = n; break; case 'vz': vz = n; break;
+          case 'radius': radius = n; break;
+        }
+      } else if (t.kind === 'vec') {
+        const attr = attrById.get(t.attrId);
+        if (!attr) continue;
+        const ids = vectorComponentIds(attr.id, vectorDimsOf(attr));
+        const id = ids[t.comp];
+        if (!id) continue;
+        const n = parseCsvNumber(raw);
+        if (n === null) { note(r + 1, c, raw, 'not a number'); sets.push({ attrId: id, value: 0 }); continue; }
+        sets.push({ attrId: id, value: n });
+      } else {
+        const attr = attrById.get(t.attrId);
+        if (!attr) continue;
+        const d = decodeCsvValue(attr, raw);
+        if (!d.ok) note(r + 1, c, raw, `not a valid ${attr.type} value`);
+        sets.push({ attrId: attr.id, value: d.value });
+      }
+    }
+    if (x === null || y === null) { out.skippedRows++; continue; }
+    const spec: CsvAgentSpec = { x, y, sets };
+    if (is3d) spec.z = z ?? 0;
+    if (radius !== null) spec.radius = radius;
+    if (vx !== null) spec.vx = vx;
+    if (vy !== null) spec.vy = vy;
+    if (is3d && vz !== null) spec.vz = vz;
+    const oob = x < 0 || x >= world.w || y < 0 || y >= world.h || (is3d && ((spec.z ?? 0) < 0 || (spec.z ?? 0) >= world.d));
+    if (oob) out.outOfBounds++;
+    out.agents.push(spec);
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// Grid value building
+// ---------------------------------------------------------------------------
+
+export interface CsvGridBuild {
+  /** Row-major, length width*height. */
+  values: Float64Array;
+  width: number;
+  height: number;
+  badValues: number;
+  /** Cells that had no field at all (ragged rows padded with the default). */
+  paddedCells: number;
+  issues: CsvIssue[];
+}
+
+/** Build the flat row-major value block for `importGridValues`.
+ *
+ *  CONVENTION: a CSV LINE is a grid ROW (height) and a FIELD is a grid COLUMN
+ *  (width) — a 12-line × 9-field file gives a 9 wide × 12 tall grid. Ragged rows
+ *  are padded with the attribute default and counted. */
+export function buildGridValues(table: CsvTable, attr: CsvAttrShape): CsvGridBuild {
+  const height = table.rows.length;
+  const width = table.width;
+  const values = new Float64Array(Math.max(0, width * height));
+  const fallback = encodeAttrValue(attr, undefined);
+  const out: CsvGridBuild = { values, width, height, badValues: 0, paddedCells: 0, issues: [] };
+  for (let r = 0; r < height; r++) {
+    const row = table.rows[r]!;
+    for (let c = 0; c < width; c++) {
+      const o = r * width + c;
+      if (c >= row.length) { values[o] = fallback; out.paddedCells++; continue; }
+      const d = decodeCsvValue(attr, row[c]!);
+      values[o] = d.value;
+      if (!d.ok) {
+        out.badValues++;
+        if (out.issues.length < MAX_ISSUES) out.issues.push({ row: r + 1, column: `column ${c + 1}`, raw: row[c]!, reason: `not a valid ${attr.type} value` });
+      }
+    }
+  }
+  return out;
+}
+
+/** The cell attributes a Grid import can target (per-cell scalars only; a
+ *  `vector` attribute contributes one entry PER COMPONENT, keyed by its real
+ *  component id so the value lands in the buffer the worker owns). */
+export function gridTargetOptions(cellAttrs: Attribute[]): Array<{ id: string; label: string; attr: CsvAttrShape }> {
+  const out: Array<{ id: string; label: string; attr: CsvAttrShape }> = [];
+  for (const a of cellAttrs) {
+    if (a.isModelAttribute) continue;
+    if (a.type === 'vector') {
+      const dims = vectorDimsOf(a);
+      const ids = vectorComponentIds(a.id, dims);
+      for (let c = 0; c < dims; c++) {
+        out.push({ id: ids[c]!, label: `${a.name}.${COMP_LETTERS[c]}`, attr: { id: ids[c]!, name: a.name, type: 'float' } });
+      }
+    } else if (a.type !== 'color' && a.type !== 'lookupTable') {
+      out.push({ id: a.id, label: a.name, attr: a as unknown as CsvAttrShape });
+    }
+  }
+  return out;
+}
