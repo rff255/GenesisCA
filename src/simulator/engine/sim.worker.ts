@@ -345,6 +345,21 @@ interface ImportImageMsg { type: 'importImage'; pixels: Uint8ClampedArray; mappi
    *  are preserved). `pixels` is then sized region.w*region.h (row-major). Absent
    *  ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ the classic full-grid import (pixels sized total). */
   region?: { row: number; col: number; w: number; h: number } }
+/** CSV import (grid flavour): write a row-major block of PER-CELL values into ONE
+ *  cell attribute. Distinct from `paintManual` (which carries ONE shared value
+ *  for every cell) and from `importImage` (which routes colours through a
+ *  Colour→Attribute mapping). `values` is length width*height, transferred.
+ *  CONVENTION: block row r, column c → grid (row r, col c) of `layer`; cells
+ *  outside the grid are ignored, cells the block does not cover are untouched. */
+interface ImportGridValuesMsg {
+  type: 'importGridValues';
+  attrId: string;
+  width: number; height: number;
+  /** 3D target layer (default 0). A 2D table cannot fill a volume. */
+  layer?: number;
+  values: Float64Array;
+  activeViewer: string;
+}
 
 interface IndicatorDef {
   id: string;
@@ -584,7 +599,7 @@ interface SetAgentUiSyncMsg { type: 'setAgentUiSync'; on: boolean }
  *  refreshDisplay). */
 interface RefreshAgentDisplayMsg { type: 'refreshAgentDisplay' }
 
-type WorkerMsg = InitMsg | StepMsg | PaintMsg | PaintManualMsg | ResetMsg | RecompileMsg | UpdateModelAttrsMsg | UpdateLookupTableMsg | ImportImageMsg | UpdateIndicatorsMsg | GetStateMsg | LoadStateMsg | ReadRegionMsg | WriteRegionMsg | ClearRegionMsg | SetUseWasmMsg | SetUseWebGPUMsg | ReadbackWebGPUMsg | ColorPassMsg | SetRecordingMsg | AttachCanvasMsg | RequestColorsSnapshotMsg | SetInspectCellsMsg | RefreshDisplayMsg | SeedAgentsMsg | CreateAgentMsg | KillAgentsMsg | PaintAgentsMsg | ClearAgentsMsg | ReadAgentsMsg | PasteAgentsMsg | FormBondMsg | BreakBondMsg | GetAgentStateMsg | MoveAgentsMsg | FormBondBatchMsg | SetAgentWasmBackedMsg | SetRngSeedMsg | SetSimLayersMsg | SetAgentSnapshotVelocityMsg | AttachAgentCanvasMsg | SetAgentCameraMsg | SetAgentUiSyncMsg | RefreshAgentDisplayMsg | E1bCountersMsg | CompositeReadbackMsg | AttachVoxelCanvasMsg | SetGridCameraMsg | SetGridUiSyncMsg | SetGridVizMsg | RefreshGridDisplayMsg | VoxelReadbackMsg;
+type WorkerMsg = InitMsg | StepMsg | PaintMsg | PaintManualMsg | ResetMsg | RecompileMsg | UpdateModelAttrsMsg | UpdateLookupTableMsg | ImportImageMsg | ImportGridValuesMsg | UpdateIndicatorsMsg | GetStateMsg | LoadStateMsg | ReadRegionMsg | WriteRegionMsg | ClearRegionMsg | SetUseWasmMsg | SetUseWebGPUMsg | ReadbackWebGPUMsg | ColorPassMsg | SetRecordingMsg | AttachCanvasMsg | RequestColorsSnapshotMsg | SetInspectCellsMsg | RefreshDisplayMsg | SeedAgentsMsg | CreateAgentMsg | KillAgentsMsg | PaintAgentsMsg | ClearAgentsMsg | ReadAgentsMsg | PasteAgentsMsg | FormBondMsg | BreakBondMsg | GetAgentStateMsg | MoveAgentsMsg | FormBondBatchMsg | SetAgentWasmBackedMsg | SetRngSeedMsg | SetSimLayersMsg | SetAgentSnapshotVelocityMsg | AttachAgentCanvasMsg | SetAgentCameraMsg | SetAgentUiSyncMsg | RefreshAgentDisplayMsg | E1bCountersMsg | CompositeReadbackMsg | AttachVoxelCanvasMsg | SetGridCameraMsg | SetGridUiSyncMsg | SetGridVizMsg | RefreshGridDisplayMsg | VoxelReadbackMsg;
 
 // ---------------------------------------------------------------------------
 // State
@@ -2117,7 +2132,7 @@ function agentWebgpuIndicatorIsInt(): boolean[] {
 const AGENT_GPU_DEFER_TYPES = new Set<string>([
   'seedAgents', 'createAgent', 'killAgents', 'paintAgents', 'moveAgents', 'pasteAgents',
   'formBond', 'formBondBatch', 'breakBond', 'clearAgents',
-  'paint', 'paintManual', 'writeRegion', 'clearRegion',
+  'paint', 'paintManual', 'writeRegion', 'clearRegion', 'importGridValues',
 ]);
 let agentGpuStepInFlight = false;
 // NB (audit N4): this deferral and `asyncStepBatchInFlight` below are NOT peers.
@@ -6981,6 +6996,60 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       } else {
         runApply();
       }
+      break;
+    }
+
+    case 'importGridValues': {
+      // CSV import (grid flavour): a row-major block of PER-CELL values into one
+      // cell attribute. Mirrors the paintManual write discipline (sync keeps BOTH
+      // buffers consistent so a step / InputColor between mutations reads the new
+      // value through w_<id>) + the importImage display tail.
+      activeViewer = msg.activeViewer; syncActiveViewerToMemory();
+      const dst = readAttrs[msg.attrId];
+      if (!dst) break;
+      const isSync = updateMode !== 'asynchronous';
+      const lyr = Math.max(0, Math.min(depth - 1, Math.round(msg.layer ?? 0)));
+      const bw = msg.width | 0, bh = msg.height | 0;
+      const vals = msg.values;
+      const applyValues = () => {
+        const wbuf = isSync ? writeAttrs[msg.attrId] : null;
+        for (let r = 0; r < bh; r++) {
+          if (r >= height) break;
+          for (let c = 0; c < bw; c++) {
+            if (c >= width) break;
+            const v = vals[r * bw + c]!;
+            const idx = cellIndexOf(lyr, r, c);
+            dst[idx] = v;
+            if (wbuf) wbuf[idx] = v;
+          }
+        }
+        const webgpuGrid = useWebGPU && webgpuRuntime?.stepReady;
+        if (webgpuGrid && webgpuRuntime) {
+          // The CPU mirror is authoritative for every attribute at this point
+          // (a stale one was read back below), so a full upload is safe and
+          // simpler than a per-cell patch over a whole block.
+          uploadAttrs(webgpuRuntime, readAttrs);
+          gpuOwnsAttrs = false;
+          uploadActiveViewer(webgpuRuntime, viewerIdMap[activeViewer] ?? -1);
+          refreshColorsAfterInputWebGPU();
+          finalizeStepWebGPU({ needColors: true }).then(() => sendColors())
+            .catch(e => self.postMessage({ type: 'error', message: '[webgpu] importGridValues colorPass failed: ' + ((e instanceof Error) ? e.message : String(e)) }));
+          return;
+        }
+        refreshColorsAfterInputJS();
+        sendColors();
+      };
+      // After a Play under WebGPU the live state lives on the GPU and the CPU
+      // mirror is stale — a partial write + uploadAttrs would push that stale
+      // mirror (of the OTHER attributes, and of the cells this block does not
+      // cover) back onto the GPU. Pull it down once first.
+      if (useWebGPU && webgpuRuntime?.stepReady && gpuOwnsAttrs) {
+        const rt = webgpuRuntime;
+        readbackAttrs(rt, readAttrs).then(() => { gpuOwnsAttrs = false; applyValues(); })
+          .catch(e => self.postMessage({ type: 'error', message: '[webgpu] importGridValues readback failed: ' + ((e instanceof Error) ? e.message : String(e)) }));
+        break;
+      }
+      applyValues();
       break;
     }
 

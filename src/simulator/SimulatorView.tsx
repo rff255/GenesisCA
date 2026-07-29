@@ -28,6 +28,7 @@ import type { AgentRenderSnapshot } from './engine/agentEngine';
 import type { AgentRenderView, AgentRenderView3D } from './engine/agentWebgpuRuntime';
 import { SpriteRegistry } from './spriteRegistry';
 import { ImageMappingDialog, type ImageMappingConfig } from './ImageMappingDialog';
+import { CsvImportDialog, type CsvImportResult } from './CsvImportDialog';
 import { GIFEncoder, quantize, applyPalette } from 'gifenc';
 import { encodeFramesToWebM, isWebMSupported } from './recording/webmEncoder';
 import { WebMStreamEncoder } from './recording/webmStreamEncoder';
@@ -1707,6 +1708,12 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
   // Resize-mode + manual mapping: paint these masked cells after the worker
   // reinitialises to the new grid dims (mirrors pendingImageImport).
   const pendingManualImport = useRef<{ cells: Array<{ row: number; col: number }>; sets: Array<{ attrId: string; value: number }> } | null>(null);
+  // "Import CSV" dialog — the loaded file's raw text (null = closed).
+  const [csvImport, setCsvImport] = useState<{ text: string; name: string } | null>(null);
+  const csvInputRef = useRef<HTMLInputElement>(null);
+  // Grid CSV import with "Resize": apply the value block once the worker has
+  // reinitialised to the new dims (mirrors pendingImageImport / pendingManualImport).
+  const pendingGridValuesImport = useRef<{ attrId: string; width: number; height: number; layer: number; values: Float64Array } | null>(null);
 
   // Save/Load state refs
   const pendingStateSave = useRef<((state: Record<string, unknown>) => void) | null>(null);
@@ -4854,6 +4861,16 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       if (pm.sets.length > 0 && pm.cells.length > 0) {
         workerRef.current?.postMessage({ type: 'paintManual', cells: pm.cells, sets: pm.sets, activeViewer: activeViewerRef.current });
       }
+    }
+    // CSV grid import (resize mode): write the value block once the worker has
+    // reinitialised to the CSV's dimensions.
+    if (msg.type === 'stepped' && pendingGridValuesImport.current) {
+      const gv = pendingGridValuesImport.current;
+      pendingGridValuesImport.current = null;
+      workerRef.current?.postMessage(
+        { type: 'importGridValues', attrId: gv.attrId, width: gv.width, height: gv.height, layer: gv.layer, values: gv.values, activeViewer: activeViewerRef.current },
+        { transfer: [gv.values.buffer] },
+      );
     }
 
     // One-shot colors snapshot — used by handleScreenshot under direct render
@@ -10088,6 +10105,59 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
     }
   };
 
+  // --- CSV import ----------------------------------------------------------
+  // One dialog, two flavours (docs/PLAN_CSV_IMPORT.md):
+  //   Agents — a CSV row is an agent → per-agent `pasteAgents` specs (the SAME
+  //     worker seam the agent clipboard uses, so it is compile-target-agnostic:
+  //     it allocates through the engine primitives and sits in
+  //     AGENT_GPU_DEFER_TYPES). "Replace" clears first via `clearAgents`.
+  //   Grid  — the CSV IS the board (a line is a grid ROW, a field a COLUMN) →
+  //     `importGridValues` into ONE cell attribute; "Resize" reinitialises the
+  //     worker first and applies on the next `stepped` (the image-import pattern).
+  const openCsvFile = (file: File) => {
+    void (async () => {
+      try {
+        const text = await file.text();
+        setCsvImport({ text, name: file.name });
+      } catch (err) {
+        setCompileError(`CSV import failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    })();
+  };
+  const openCsvFileRef = useRef(openCsvFile);
+  openCsvFileRef.current = openCsvFile;
+  const handleCsvInput = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    e.target.value = '';
+    openCsvFile(file);
+  };
+  const applyCsvImport = (r: CsvImportResult) => {
+    setCsvImport(null);
+    const w = workerRef.current;
+    if (!w) return;
+    if (r.target === 'agents') {
+      if (r.agents.length === 0) return;
+      if (r.replace) w.postMessage({ type: 'clearAgents', activeViewer: activeViewerRef.current });
+      w.postMessage({
+        type: 'pasteAgents',
+        agents: r.agents,
+        torus: boundaryTreatmentRef.current === 'torus',
+        activeViewer: activeViewerRef.current,
+      });
+      return;
+    }
+    if (r.resize) {
+      pendingGridValuesImport.current = { attrId: r.attrId, width: r.width, height: r.height, layer: r.layer, values: r.values };
+      initWorkerWithDimensions(r.width, r.height, is3dRef.current ? Math.max(1, gridDepth.current || simDepth) : undefined);
+    } else {
+      w.postMessage(
+        { type: 'importGridValues', attrId: r.attrId, width: r.width, height: r.height, layer: r.layer, values: r.values, activeViewer: activeViewerRef.current },
+        { transfer: [r.values.buffer] },
+      );
+    }
+  };
+
   // Ctrl+V a clipboard image onto the simulator → open the Mapping Cells dialog
   // (same as the Open Image button). Latest-ref so the listener stays cheap.
   const openImageForMappingRef = useRef(openImageForMapping);
@@ -10161,13 +10231,19 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
         }
       })();
     };
+    const onCsvFile = (e: Event) => {
+      const file = (e as CustomEvent).detail?.file as File | undefined;
+      if (file) openCsvFileRef.current(file);
+    };
     window.addEventListener('genesis-load-state-file', onStateFile);
     window.addEventListener('genesis-open-image-file', onImageFile);
     window.addEventListener('genesis-import-preset-file', onPresetFile);
+    window.addEventListener('genesis-open-csv-file', onCsvFile);
     return () => {
       window.removeEventListener('genesis-load-state-file', onStateFile);
       window.removeEventListener('genesis-open-image-file', onImageFile);
       window.removeEventListener('genesis-import-preset-file', onPresetFile);
+      window.removeEventListener('genesis-open-csv-file', onCsvFile);
     };
   }, []);
 
@@ -11638,6 +11714,13 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
               Open Image
             </button>
             <input ref={imageInputRef} type="file" accept=".png,.bmp,.jpg,.jpeg" style={{ display: 'none' }} onChange={handleImageImport} />
+            <button
+              className={styles.controlButton}
+              onClick={() => csvInputRef.current?.click()}
+              title="Import a CSV — the table IS the board (a line is a grid row, a field a grid column), written into one cell attribute"
+            >
+              Import CSV…
+            </button>
             <label className={styles.checkRow}>
               <input type="checkbox" checked={showBrushCursor} onChange={e => setShowBrushCursor(e.target.checked)} />
               Show brush cursor
@@ -11820,10 +11903,17 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
                     <input type="checkbox" checked={showBrushCursor} onChange={e => setShowBrushCursor(e.target.checked)} />
                     Show brush cursor
                   </label>
-                  <button
-                    onClick={() => workerRef.current?.postMessage({ type: 'clearAgents', activeViewer: activeViewerRef.current })}
-                    style={{ alignSelf: 'flex-start', padding: '3px 8px', borderRadius: 'var(--radius-sm)', cursor: 'pointer', border: '1px solid var(--color-widget-border)', background: 'transparent', color: 'var(--color-text-muted)', fontSize: '0.62rem' }}
-                  >Clear all agents</button>
+                  <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                    <button
+                      onClick={() => csvInputRef.current?.click()}
+                      title="Import agents from a CSV — one row per agent; columns map to position / velocity / radius / agent attributes"
+                      style={{ padding: '3px 8px', borderRadius: 'var(--radius-sm)', cursor: 'pointer', border: '1px solid var(--color-widget-border)', background: 'transparent', color: 'var(--color-text-muted)', fontSize: '0.62rem' }}
+                    >Import CSV…</button>
+                    <button
+                      onClick={() => workerRef.current?.postMessage({ type: 'clearAgents', activeViewer: activeViewerRef.current })}
+                      style={{ padding: '3px 8px', borderRadius: 'var(--radius-sm)', cursor: 'pointer', border: '1px solid var(--color-widget-border)', background: 'transparent', color: 'var(--color-text-muted)', fontSize: '0.62rem' }}
+                    >Clear all agents</button>
+                  </div>
               </div>
             </div>
           )}
@@ -12049,6 +12139,24 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
           initialUseManual={brushMapping === MANUAL_BRUSH_MAPPING_ID}
           onApply={applyImageMapping}
           onCancel={() => setImageMapImg(null)}
+        />
+      )}
+      {/* One hidden CSV picker for BOTH brush panels (grid + agents). */}
+      <input ref={csvInputRef} type="file" accept=".csv,.tsv,.txt,text/csv" style={{ display: 'none' }} onChange={handleCsvInput} />
+      {csvImport && (
+        <CsvImportDialog
+          text={csvImport.text}
+          fileName={csvImport.name}
+          cellAttributes={model.attributes.filter(a => !a.isModelAttribute)}
+          agentAttributes={model.agentAttributes ?? []}
+          hasGrid={gridCellsOn}
+          hasAgents={isAgentModel}
+          is3d={is3D}
+          world={{ w: gridWidth.current || simWidth, h: gridHeight.current || simHeight, d: gridDepth.current || simDepth }}
+          maxAgents={Math.max(1, Math.floor(cbNum(model.centerBased, 'maxAgents')))}
+          torus={model.properties.boundaryTreatment === 'torus'}
+          onApply={applyCsvImport}
+          onCancel={() => setCsvImport(null)}
         />
       )}
       {presetOverwriteTarget && (

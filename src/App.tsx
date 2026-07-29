@@ -125,6 +125,7 @@ function AppInner() {
   // (the exact transport-bar Load State path). .gcapreset → append to the
   // model's presets (genesis-import-preset-file). Images → the Map Image to
   // Cells dialog (genesis-open-image-file — the Ctrl+V clipboard seam).
+  // .csv / .tsv → the Import CSV dialog (genesis-open-csv-file).
   // Window-level listeners preventDefault dragover+drop so the browser never
   // navigates to a dropped file.
   const loadDroppedProject = async (file: File) => {
@@ -147,6 +148,11 @@ function AppInner() {
     if (ext === 'gcapreset') {
       window.dispatchEvent(new CustomEvent('genesis-import-preset-file', { detail: { file } }));
       showToast(`Importing preset from "${file.name}"…`);
+      return;
+    }
+    if (['csv', 'tsv'].includes(ext)) {
+      setMode('simulator');
+      window.dispatchEvent(new CustomEvent('genesis-open-csv-file', { detail: { file } }));
       return;
     }
     if (file.type.startsWith('image/') || ['png', 'jpg', 'jpeg', 'bmp', 'webp'].includes(ext)) {
