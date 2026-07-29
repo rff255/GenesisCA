@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { Attribute } from '../model/types';
+import { InlineNumberInput } from '../modeler/vpl/widgets/InlineWidgets';
 import {
   parseCsvTable, detectDelimiter, detectHeader, parseCsvRows,
   autoMapAgentColumns, agentTargetOptions, buildAgentSpecs,
   buildGridValues, gridTargetOptions,
-  type CsvAgentSpec, type CsvAttrShape,
+  distinctChars, autoSeedCharMap, charLabel, CSV_NO_DELIMITER,
+  type CsvAgentSpec, type CsvAttrShape, type CsvCharMap,
 } from './csvImport';
 
 /** What the dialog hands back on Import. Exactly one of `agents` / `grid` is set
@@ -47,9 +49,8 @@ export function CsvImportDialog({
   // --- parse options (auto with an explicit override) -----------------------
   const autoDelim = useMemo(() => detectDelimiter(text), [text]);
   const autoHeader = useMemo(() => detectHeader(parseCsvRows(text, autoDelim)), [text, autoDelim]);
-  const [delimChoice, setDelimChoice] = useState<'auto' | ',' | ';' | '\t'>('auto');
+  const [delimChoice, setDelimChoice] = useState<'auto' | ',' | ';' | '\t' | 'none'>('auto');
   const [headerChoice, setHeaderChoice] = useState<'auto' | 'yes' | 'no'>('auto');
-  const delimiter = delimChoice === 'auto' ? autoDelim : delimChoice;
 
   // --- target layer ---------------------------------------------------------
   // Both layers present → default from the header heuristic: a header names
@@ -62,6 +63,16 @@ export function CsvImportDialog({
   const showTargetSwitch = hasGrid && hasAgents;
   const effTarget: 'agents' | 'grid' = hasAgents ? (hasGrid ? target : 'agents') : 'grid';
 
+  // "No delimiter" (1 char = 1 cell) is GRID-ONLY: one character per column is
+  // meaningless for the agent x/y/attribute columns, which need multi-digit
+  // numbers and tag names. The option renders disabled-with-a-reason in Agents
+  // mode, and a stale `none` selection COERCES back to auto so switching Target
+  // can never silently apply a nonsensical parse.
+  const noneAllowed = effTarget === 'grid';
+  const effDelimChoice = delimChoice === 'none' && !noneAllowed ? 'auto' : delimChoice;
+  const isCharMode = effDelimChoice === 'none';
+  const delimiter = effDelimChoice === 'auto' ? autoDelim : effDelimChoice === 'none' ? CSV_NO_DELIMITER : effDelimChoice;
+
   // The header default is TARGET-DEPENDENT. In Grid mode the CSV *is* the board,
   // so every line is a row: defaulting to "header" there would silently DROP the
   // board's first row (the heuristic fires on an all-text tag grid as soon as any
@@ -70,8 +81,10 @@ export function CsvImportDialog({
   // (every cell of row 1 reports as defaulted in the summary), which is the right
   // trade for a data-import feature. Agents keep the heuristic — there a header is
   // the norm and it names the columns the mapping needs. Overridable either way.
+  // In char mode a header row cannot exist (every character is a cell), so the
+  // heuristic AND the override are both bypassed — parseCsvTable forces it off.
   const autoHeaderForTarget = effTarget === 'grid' ? false : autoHeader;
-  const hasHeader = headerChoice === 'auto' ? autoHeaderForTarget : headerChoice === 'yes';
+  const hasHeader = isCharMode ? false : (headerChoice === 'auto' ? autoHeaderForTarget : headerChoice === 'yes');
 
   const table = useMemo(() => parseCsvTable(text, { delimiter, hasHeader }), [text, delimiter, hasHeader]);
 
@@ -105,9 +118,27 @@ export function CsvImportDialog({
   const [fit, setFit] = useState<'resize' | 'keep'>('resize');
   const [layer, setLayer] = useState(0);
   const gridAttr = gridOpts.find(o => o.id === gridAttrId);
+
+  // --- char mode: the char → value map --------------------------------------
+  // The map is the core of "no delimiter": ANY character can stand for ANY value
+  // (so `a → 10` works on an integer attribute); digits are only the auto-seed.
+  // Session-scoped and re-seeded whenever the parsed CHARACTER SET or the target
+  // ATTRIBUTE changes (a different type / tag list implies different seeds); user
+  // edits survive until then. Deliberately NOT persisted — a char map only means
+  // anything for the file it came from.
+  const chars = useMemo(() => (isCharMode ? distinctChars(table) : []), [isCharMode, table]);
+  const [charMap, setCharMap] = useState<CsvCharMap>({});
+  const charSeedSig = isCharMode ? `${gridAttrId}|${chars.map(c => c.char).join('')}` : '';
+  useEffect(() => {
+    if (!isCharMode || !gridAttr) { setCharMap({}); return; }
+    setCharMap(autoSeedCharMap(chars, gridAttr.attr));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [charSeedSig, isCharMode]);
+  const setCharValue = (ch: string, v: string) => setCharMap(m => ({ ...m, [ch]: v }));
+
   const gridBuild = useMemo(
-    () => (effTarget === 'grid' && gridAttr ? buildGridValues(table, gridAttr.attr) : null),
-    [effTarget, table, gridAttr],
+    () => (effTarget === 'grid' && gridAttr ? buildGridValues(table, gridAttr.attr, isCharMode ? charMap : undefined) : null),
+    [effTarget, table, gridAttr, isCharMode, charMap],
   );
   const dimsMatch = !!gridBuild && gridBuild.width === world.w && gridBuild.height === world.h;
 
@@ -125,7 +156,10 @@ export function CsvImportDialog({
     }
     const g = gridBuild; if (!g) return '';
     const parts = [`${g.width} wide × ${g.height} tall`];
-    if (g.badValues) parts.push(`${g.badValues} unparseable value${g.badValues === 1 ? '' : 's'} defaulted`);
+    if (isCharMode) {
+      const un = g.unmappedChars ?? [];
+      if (g.badValues) parts.push(`${g.badValues} cell${g.badValues === 1 ? '' : 's'} with an unmapped character (${un.map(charLabel).join(' ')}) → default`);
+    } else if (g.badValues) parts.push(`${g.badValues} unparseable value${g.badValues === 1 ? '' : 's'} defaulted`);
     if (g.paddedCells) parts.push(`${g.paddedCells} short cell${g.paddedCells === 1 ? '' : 's'} padded with the default`);
     if (fit === 'keep' && !dimsMatch) parts.push(`does NOT match the grid (${world.w}×${world.h})`);
     return parts.join(' · ');
@@ -188,7 +222,7 @@ export function CsvImportDialog({
           <div style={{ flex: '1 1 520px', minWidth: 0 }}>
             <div style={{ fontSize: 11, color: '#8090a0', marginBottom: 4 }}>
               Preview — {previewRows.length} of {table.rows.length} row{table.rows.length === 1 ? '' : 's'}
-              {' · '}delimiter {delimiter === '\t' ? '"tab"' : `"${delimiter}"`}
+              {' · '}{isCharMode ? 'no delimiter (1 char = 1 cell)' : `delimiter ${delimiter === '\t' ? '"tab"' : `"${delimiter}"`}`}
               {' · '}{table.header ? 'header row' : 'no header'}
               {table.width > PREVIEW_COLS && ` · first ${PREVIEW_COLS} of ${table.width} columns`}
             </div>
@@ -295,23 +329,95 @@ export function CsvImportDialog({
             <hr style={{ border: 'none', borderTop: '1px solid #2a3a50', margin: '2px 0' }} />
             <label style={{ ...label, gap: 6 }}>
               Delimiter
-              <select value={delimChoice} onChange={e => setDelimChoice(e.target.value as typeof delimChoice)} style={{ fontSize: 12 }}>
+              <select value={effDelimChoice} onChange={e => setDelimChoice(e.target.value as typeof delimChoice)} style={{ fontSize: 12 }}>
                 <option value="auto">auto ({autoDelim === '\t' ? 'tab' : autoDelim})</option>
                 <option value=",">comma</option>
                 <option value=";">semicolon</option>
                 <option value={'\t'}>tab</option>
+                <option value="none" disabled={!noneAllowed}>
+                  {noneAllowed ? 'no delimiter — 1 char = 1 cell' : 'no delimiter (Grid target only)'}
+                </option>
               </select>
             </label>
-            <label style={{ ...label, gap: 6 }}>
+            <label style={{ ...label, gap: 6, opacity: isCharMode ? 0.45 : 1 }}>
               Header row
-              <select value={headerChoice} onChange={e => setHeaderChoice(e.target.value as typeof headerChoice)} style={{ fontSize: 12 }}>
+              <select value={isCharMode ? 'no' : headerChoice} disabled={isCharMode}
+                onChange={e => setHeaderChoice(e.target.value as typeof headerChoice)} style={{ fontSize: 12 }}>
                 <option value="auto">auto ({autoHeaderForTarget ? 'yes' : 'no'})</option>
                 <option value="yes">first row is a header</option>
                 <option value="no">no header</option>
               </select>
             </label>
+            {isCharMode && (
+              <div style={{ fontSize: 10.5, color: '#8090a0' }}>
+                A header cannot exist when every character is a cell.
+              </div>
+            )}
           </div>
         </div>
+
+        {/* Char → value map (the "no delimiter" core). Full width below the two
+            columns, like the image dialog's manual-brush block. */}
+        {isCharMode && gridAttr && (
+          <div style={{ marginTop: 10, borderTop: '1px solid #2a3a50', paddingTop: 8 }}>
+            <div style={{ fontSize: 11.5, color: '#cdd6e0', marginBottom: 2 }}>
+              Character → <b>{gridAttr.label}</b> value
+              <span style={{ color: '#8090a0' }}> ({chars.length} distinct character{chars.length === 1 ? '' : 's'})</span>
+            </div>
+            <div style={{ fontSize: 10.5, color: '#8090a0', marginBottom: 6, lineHeight: 1.5 }}>
+              Any character can stand for <em>any</em> value — the value is <strong>not</strong> limited
+              to what fits in one character, so a letter can carry a multi-digit or negative number
+              (e.g. <code>a</code> → <code>10</code>). Digits{gridAttr.attr.type === 'tag' ? ', unambiguous option initials' : ''}
+              {gridAttr.attr.type === 'bool' ? ' and the usual CA conventions (. 0 → false, # O X * → true)' : ''} are
+              only an auto-seed — edit anything. Unmapped characters (including <b>space</b>) take the
+              attribute default and are counted above.
+            </div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, maxHeight: 190, overflow: 'auto' }}>
+              {chars.map(({ char, count }) => {
+                const mapped = charMap[char];
+                const isMapped = mapped !== undefined && mapped !== '';
+                const type = gridAttr.attr.type;
+                const tagOpts = gridAttr.attr.tagOptions ?? [];
+                return (
+                  <div key={char} style={{
+                    display: 'flex', alignItems: 'center', gap: 5, padding: '3px 6px', borderRadius: 4,
+                    border: '1px solid ' + (isMapped ? 'var(--color-accent, #e8a13a)' : '#2a3a50'),
+                    background: isMapped ? 'rgba(232,161,58,0.07)' : '#12161d',
+                  }}>
+                    <code style={{ fontSize: 12, minWidth: 16, textAlign: 'center', color: '#cdd6e0' }}>{charLabel(char)}</code>
+                    <span style={{ fontSize: 9.5, color: '#667', minWidth: 26 }}>×{count}</span>
+                    {type === 'bool' ? (
+                      <select value={isMapped ? mapped : ''} onChange={e => setCharValue(char, e.target.value)} style={{ fontSize: 11 }}>
+                        <option value="">(default)</option>
+                        <option value="false">False</option>
+                        <option value="true">True</option>
+                      </select>
+                    ) : type === 'tag' ? (
+                      <select value={isMapped ? mapped : ''} onChange={e => setCharValue(char, e.target.value)} style={{ fontSize: 11, maxWidth: 120 }}>
+                        <option value="">(default)</option>
+                        {tagOpts.map((t, ti) => <option key={ti} value={String(ti)}>{t}</option>)}
+                      </select>
+                    ) : (
+                      <>
+                        <InlineNumberInput
+                          value={isMapped ? mapped : ''}
+                          onChange={v => setCharValue(char, v)}
+                          placeholder="default"
+                          step="any"
+                          style={{ width: 62, fontSize: 11 }}
+                        />
+                        {isMapped && (
+                          <button onClick={() => setCharValue(char, '')} title="Unmap (use the attribute default)"
+                            style={{ background: 'none', border: 'none', color: '#8090a0', cursor: 'pointer', fontSize: 11, padding: 0 }}>&times;</button>
+                        )}
+                      </>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
 
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 14 }}>
           <button onClick={onCancel} style={{ padding: '6px 14px', cursor: 'pointer' }}>Cancel</button>
