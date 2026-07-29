@@ -471,6 +471,42 @@ check('runtime: uploadAgentSoA seeds the agent colour buffer [invisible-agents b
         + 1 /* the alpha-blend detach checked above */);
 }
 
+// B12 (SNAPSHOT-CONTENTS INVARIANT, user-reported: "the hemifield is being drawn
+// as a circle, not a cone").
+//
+// The render snapshot is SLIM by design: per-agent velocity (vx/vy) ships only
+// for consumers that asked for it — sprite models (orientToVelocity) and the
+// vision-cone display. A consumer that READS vx/vy without requesting them gets
+// a length-0 array, i.e. a silent ZERO heading — and a zero heading is a legal
+// state that means "omnidirectional", so every cone rendered as a full circle
+// with no error anywhere.
+//
+// NB an arc-COUNT check cannot catch this: both the cone and the circle branch
+// call ctx.arc once per agent. Only the arc's SWEEP distinguishes them.
+{
+  const sv = readSrc('simulator/SimulatorView.tsx');
+  const w = readSrc('simulator/engine/sim.worker.ts');
+  const eng = readSrc('simulator/engine/agentEngine.ts');
+
+  check('agentEngine: the snapshot takes an includeVelocity flag [snapshot-contents]',
+    /export function snapshotAgentsForRender\([^)]*includeVelocity/.test(eng));
+  check('agentEngine: vx/vy ship for sprites OR an explicit velocity request [snapshot-contents]',
+    /const wantVel = includeSprites \|\| includeVelocity/.test(eng)
+    && /vx: wantVel \?/.test(eng) && /vy: wantVel \?/.test(eng));
+  check('worker: the render snapshot passes the velocity flag [snapshot-contents]',
+    /snapshotAgentsForRender\(agentStore, hasAgentSprites, agentSnapshotVelocity\)/.test(w));
+  check('worker: setAgentSnapshotVelocity sets the flag [snapshot-contents]',
+    /case 'setAgentSnapshotVelocity':[\s\S]{0,300}agentSnapshotVelocity = !!msg\.on/.test(w));
+  // The display toggle must TELL the worker — on change AND after a worker
+  // reinit (a fresh worker defaults to not shipping velocity).
+  check('SimulatorView: the vision toggle posts setAgentSnapshotVelocity [snapshot-contents]',
+    /setAgentSnapshotVelocity', on: showVision !== 'off'/.test(sv));
+  const initBlock2 = blockAfter(sv, /const initWorkerWithDimensions = useCallback\(/);
+  check('SimulatorView: a worker reinit re-publishes the velocity request [snapshot-contents]',
+    /showVisionRef\.current !== 'off'/.test(initBlock2)
+    && /setAgentSnapshotVelocity', on: true/.test(initBlock2));
+}
+
 // ---------------------------------------------------------------------------
 // TIER C — browser probes (printed; only reachable with a live GPUDevice)
 // ---------------------------------------------------------------------------

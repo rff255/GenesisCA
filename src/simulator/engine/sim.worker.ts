@@ -560,6 +560,13 @@ interface BreakBondMsg { type: 'breakBond'; a: number; b: number; activeViewer: 
  *  the generation loop WITHOUT a recompile, so the user can freeze either layer and
  *  watch the other evolve. Both default true ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ byte-identical to no message. */
 interface SetSimLayersMsg { type: 'setSimLayers'; simulateCells: boolean; simulateAgents: boolean }
+/** Render-snapshot CONTENTS toggle: ship per-agent velocity (vx/vy[/vz]) in the
+ *  agent render snapshot even for a non-sprite model. Set while the simulator's
+ *  vision-cone display is on — the cones need a heading, and `vx/vy` are
+ *  otherwise gated on sprites (P2 slim). Default OFF → byte-identical payload.
+ *  Runtime UI toggle, re-published by initWorkerWithDimensions on a worker
+ *  reinit (the setSimLayers discipline). */
+interface SetAgentSnapshotVelocityMsg { type: 'setAgentSnapshotVelocity'; on: boolean }
 // --- A1 direct agent render ---
 /** Late-binding agent-canvas attach (clone of AttachCanvasMsg): the main thread
  *  transfers a display-pixel-sized OffscreenCanvas once the agent WebGPU runtime
@@ -577,7 +584,7 @@ interface SetAgentUiSyncMsg { type: 'setAgentUiSync'; on: boolean }
  *  refreshDisplay). */
 interface RefreshAgentDisplayMsg { type: 'refreshAgentDisplay' }
 
-type WorkerMsg = InitMsg | StepMsg | PaintMsg | PaintManualMsg | ResetMsg | RecompileMsg | UpdateModelAttrsMsg | UpdateLookupTableMsg | ImportImageMsg | UpdateIndicatorsMsg | GetStateMsg | LoadStateMsg | ReadRegionMsg | WriteRegionMsg | ClearRegionMsg | SetUseWasmMsg | SetUseWebGPUMsg | ReadbackWebGPUMsg | ColorPassMsg | SetRecordingMsg | AttachCanvasMsg | RequestColorsSnapshotMsg | SetInspectCellsMsg | RefreshDisplayMsg | SeedAgentsMsg | CreateAgentMsg | KillAgentsMsg | PaintAgentsMsg | ClearAgentsMsg | ReadAgentsMsg | PasteAgentsMsg | FormBondMsg | BreakBondMsg | GetAgentStateMsg | MoveAgentsMsg | FormBondBatchMsg | SetAgentWasmBackedMsg | SetRngSeedMsg | SetSimLayersMsg | AttachAgentCanvasMsg | SetAgentCameraMsg | SetAgentUiSyncMsg | RefreshAgentDisplayMsg | E1bCountersMsg | CompositeReadbackMsg | AttachVoxelCanvasMsg | SetGridCameraMsg | SetGridUiSyncMsg | SetGridVizMsg | RefreshGridDisplayMsg | VoxelReadbackMsg;
+type WorkerMsg = InitMsg | StepMsg | PaintMsg | PaintManualMsg | ResetMsg | RecompileMsg | UpdateModelAttrsMsg | UpdateLookupTableMsg | ImportImageMsg | UpdateIndicatorsMsg | GetStateMsg | LoadStateMsg | ReadRegionMsg | WriteRegionMsg | ClearRegionMsg | SetUseWasmMsg | SetUseWebGPUMsg | ReadbackWebGPUMsg | ColorPassMsg | SetRecordingMsg | AttachCanvasMsg | RequestColorsSnapshotMsg | SetInspectCellsMsg | RefreshDisplayMsg | SeedAgentsMsg | CreateAgentMsg | KillAgentsMsg | PaintAgentsMsg | ClearAgentsMsg | ReadAgentsMsg | PasteAgentsMsg | FormBondMsg | BreakBondMsg | GetAgentStateMsg | MoveAgentsMsg | FormBondBatchMsg | SetAgentWasmBackedMsg | SetRngSeedMsg | SetSimLayersMsg | SetAgentSnapshotVelocityMsg | AttachAgentCanvasMsg | SetAgentCameraMsg | SetAgentUiSyncMsg | RefreshAgentDisplayMsg | E1bCountersMsg | CompositeReadbackMsg | AttachVoxelCanvasMsg | SetGridCameraMsg | SetGridUiSyncMsg | SetGridVizMsg | RefreshGridDisplayMsg | VoxelReadbackMsg;
 
 // ---------------------------------------------------------------------------
 // State
@@ -841,6 +848,11 @@ let agentColorViewer = '';
  *  buffers (reset before each colour pass + sliced into the render snapshot).
  *  Set from the init/recompile `agentHasSprites` flag. */
 let hasAgentSprites = false;
+/** Ship per-agent velocity in the render snapshot even without sprites — set by
+ *  `setAgentSnapshotVelocity` while the simulator's vision-cone display is on
+ *  (the cones need a heading). Default false → the payload is byte-identical to
+ *  before the vision display existed. */
+let agentSnapshotVelocity = false;
 
 /** AW-MEM (PR6a) ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â DEV-only override that forces the AgentStore onto a
  *  WebAssembly.Memory (views at baked offsets) even for the `js` target, so the
@@ -5304,7 +5316,7 @@ function sendColors(): void {
     if (agentRenderActive && !agentBatchPresented && !agentStoreStale) presentAgentsIfActive();
     if (agentRenderFree) { agentLiveCount = agentStore.liveCount; agentBatchPresented = false; }
     else {
-    agentsPayload = snapshotAgentsForRender(agentStore, hasAgentSprites);
+    agentsPayload = snapshotAgentsForRender(agentStore, hasAgentSprites, agentSnapshotVelocity);
     agentTransfers.push(
       agentsPayload.x.buffer, agentsPayload.y.buffer,
       agentsPayload.radius.buffer,
@@ -6399,6 +6411,13 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       // batch; both default true so a never-sent message keeps current behaviour.
       simulateCells = !!msg.simulateCells;
       simulateAgents = !!msg.simulateAgents;
+      break;
+    }
+
+    case 'setAgentSnapshotVelocity': {
+      // Vision-cone display needs a per-agent heading; vx/vy are otherwise
+      // gated on sprites. Takes effect on the next snapshot.
+      agentSnapshotVelocity = !!msg.on;
       break;
     }
 

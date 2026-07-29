@@ -1712,24 +1712,29 @@ function f32Slice(src: Float64Array, n: number): Float32Array {
   return out;
 }
 
-export function snapshotAgentsForRender(store: AgentStore, includeSprites = false): AgentRenderSnapshot {
+export function snapshotAgentsForRender(store: AgentStore, includeSprites = false, includeVelocity = false): AgentRenderSnapshot {
   const hw = store.highWater;
   // A1: gate z/vz on worldDepth > 1 so 2D models pay NO extra per-step alloc/
   // transfer for the (always-zero) z arm. 2D → length-0 placeholders (renderer
-  // reads z=0). P2 slim: vx/vy ship only for SPRITE models (the orientToVelocity
-  // heading is their only consumer) and everything ships as f32 (render
-  // precision — the store stays f64). 45 → ~21 B/agent for a plain 2D model.
+  // reads z=0). P2 slim: vx/vy ship only for consumers that actually READ a
+  // heading — SPRITE models (orientToVelocity) and the vision-cone display
+  // (`includeVelocity`, set while Show vision isn't Off) — and everything ships
+  // as f32 (render precision — the store stays f64). 45 → ~21 B/agent for a
+  // plain 2D model. NB a consumer that reads vx/vy WITHOUT requesting them sees
+  // length-0 arrays, i.e. a silent zero heading (this is exactly how the vision
+  // cones rendered as full circles before `includeVelocity` existed).
   const is3d = store.worldDepth > 1;
   const EMPTY = new Float32Array(0);
+  const wantVel = includeSprites || includeVelocity;
   return {
     highWater: hw,
     liveCount: store.liveCount,
     x: f32Slice(store.x, hw),
     y: f32Slice(store.y, hw),
     z: is3d ? f32Slice(store.z, hw) : EMPTY,
-    vx: includeSprites ? f32Slice(store.vx, hw) : EMPTY,
-    vy: includeSprites ? f32Slice(store.vy, hw) : EMPTY,
-    vz: is3d && includeSprites ? f32Slice(store.vz, hw) : EMPTY,
+    vx: wantVel ? f32Slice(store.vx, hw) : EMPTY,
+    vy: wantVel ? f32Slice(store.vy, hw) : EMPTY,
+    vz: is3d && wantVel ? f32Slice(store.vz, hw) : EMPTY,
     radius: f32Slice(store.radius, hw),
     alive: store.alive.slice(0, hw),
     colors: store.colors.slice(0, hw * 4),

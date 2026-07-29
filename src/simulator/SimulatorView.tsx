@@ -5377,6 +5377,12 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
     if (!effSimCells || !effSimAgents) {
       worker.postMessage({ type: 'setSimLayers', simulateCells: effSimCells, simulateAgents: effSimAgents });
     }
+    // Same discipline: a fresh worker defaults to NOT shipping velocity, so
+    // re-publish the vision display's need for it (the live effect above
+    // doesn't re-fire on a worker swap).
+    if (showVisionRef.current !== 'off') {
+      worker.postMessage({ type: 'setAgentSnapshotVelocity', on: true });
+    }
     // Re-publish any open inspect-popup subscriptions to the fresh worker so
     // values keep streaming after a recompile / hard re-init.
     if (inspectCellIdxsRef.current.length > 0) {
@@ -6718,6 +6724,14 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
   useEffect(() => {
     workerRef.current?.postMessage({ type: 'setSimLayers', simulateCells: !isAgentModel || simulateCells, simulateAgents: !isAgentModel || simulateAgents });
   }, [simulateCells, simulateAgents, isAgentModel]);
+  // Vision cones need a per-agent HEADING, and the render snapshot ships vx/vy
+  // only for sprite models (P2 slim) — so ask the worker to include velocity
+  // while the display is on. Without this every agent reads a zero heading and
+  // the cones render as full circles (the omnidirectional rule). Re-published
+  // on a worker reinit by initWorkerWithDimensions (the setSimLayers pattern).
+  useEffect(() => {
+    workerRef.current?.postMessage({ type: 'setAgentSnapshotVelocity', on: showVision !== 'off' });
+  }, [showVision]);
   // Clip / brush-plane re-clamp on a simulator resize (req 2): when the live grid
   // dims shrink, pull lo/hi/pos back into the new world extent so a stale handle
   // can't point outside the volume (the slider maxes already track the live dims).
