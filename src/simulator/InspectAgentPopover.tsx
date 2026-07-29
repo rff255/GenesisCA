@@ -36,6 +36,11 @@ interface Props {
   transient?: boolean;
   focused: boolean;
   totalOpen: number;
+  /** FOLLOW MODE: is the camera currently tracking THIS agent? Only meaningful
+   *  when `onToggleFollow` is supplied (pinned popovers — a transient sweep
+   *  popover is about to be discarded, so following it would be pointless). */
+  following?: boolean;
+  onToggleFollow?: () => void;
   onClose: () => void;
   onCloseAll: () => void;
   onFocus: () => void;
@@ -72,7 +77,8 @@ function decodeAgentAttr(attr: Attribute, attrs: Record<string, number>): string
  */
 export function InspectAgentPopover({
   popover, state, agentAttributes, capProfile, transient = false,
-  focused, totalOpen, onClose, onCloseAll, onFocus, onDragEnd,
+  focused, totalOpen, following = false, onToggleFollow,
+  onClose, onCloseAll, onFocus, onDragEnd,
 }: Props) {
   const rootRef = useRef<HTMLDivElement>(null);
   const [pos, setPos] = useState({ left: popover.x, top: popover.y });
@@ -140,6 +146,17 @@ export function InspectAgentPopover({
     >
       <div className={styles.header} onMouseDown={onHeaderMouseDown}>
         <span className={styles.coord}>Agent #{popover.id}</span>
+        {onToggleFollow && (
+          <button
+            className={following ? `${styles.followBtn} ${styles.followBtnActive}` : styles.followBtn}
+            onClick={onToggleFollow}
+            onMouseDown={e => e.stopPropagation()}
+            title={following
+              ? 'Following this agent — click to stop (a manual pan/orbit also stops it)'
+              : 'Follow this agent with the camera'}
+            aria-pressed={following}
+          >&#9678;</button>
+        )}
         {!transient && totalOpen > 1 && (
           <button
             className={styles.closeAllBtn}

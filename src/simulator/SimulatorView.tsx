@@ -1187,6 +1187,32 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
   const agentStatesRef = useRef<Map<number, AgentStateResponse>>(new Map());
   const [, bumpAgentStateVersion] = useState(0);
 
+  // FOLLOW MODE — the camera tracks ONE inspected agent (2D and 3D). Armed from
+  // the ◎ toggle in a PINNED inspector's header, so follow can never be active
+  // with zero popovers open; that means the existing agent UI-sync want-term
+  // (`agentInspectIds.length > 0`) already keeps render snapshots flowing for
+  // free-running direct-render models — follow needs no want-term of its own.
+  // Not persisted (a camera behaviour, like auto-orbit / auto-zoom).
+  //
+  // The ref LEADS the state (the same rule openAgentInspector documents): the
+  // pointer handlers that CANCEL follow on a manual pan/orbit run inside a
+  // gesture, long before any re-render.
+  const [followAgentId, setFollowAgentIdState] = useState<number | null>(null);
+  const followAgentIdRef = useRef<number | null>(null);
+  const setFollowAgent = useCallback((id: number | null) => {
+    if (followAgentIdRef.current === id) return;
+    followAgentIdRef.current = id;
+    setFollowAgentIdState(id);
+  }, []);
+  /** A manual camera gesture (2D pan / autoscroll, 3D orbit / pan, Reset view)
+   *  cancels follow — least surprise: the user just took the wheel. ZOOM does
+   *  NOT cancel (zooming while following is the point). */
+  const cancelFollow = useCallback(() => setFollowAgent(null), [setFollowAgent]);
+  // Ref mirror so the 3D pointer effect (a big, deliberately stable dep array)
+  // can cancel without being re-registered.
+  const cancelFollowRef = useRef(cancelFollow);
+  cancelFollowRef.current = cancelFollow;
+
   // GIF / WebM recording state
   const [recording, setRecording] = useState(false);
   const recordingRef = useRef(false);
@@ -1398,6 +1424,14 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       if (!live.has(k)) agentStatesRef.current.delete(k);
     }
   }, [agentInspectIds]);
+  // FOLLOW MODE ends with its popover: closing it (× / Close all / Esc / the
+  // model-load close-all) drops the id from the PINNED list, so follow stops.
+  // Keyed on agentPopovers, not agentInspectIds — the transient sweep never owns
+  // a follow (its inspector renders no toggle).
+  useEffect(() => {
+    const id = followAgentIdRef.current;
+    if (id != null && !agentPopovers.some(p => p.id === id)) setFollowAgent(null);
+  }, [agentPopovers, setFollowAgent]);
 
   const cycleIndicatorVizMode = useCallback((id: string) => {
     setIndicatorVizModes(prev => {
@@ -6287,13 +6321,13 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       moved = false;
       lastX = downX = e.clientX; lastY = downY = e.clientY;
       const orbitBtn = e.button === 1 || (e.button === 0 && e.altKey);
-      if (orbitBtn) active = e.shiftKey ? 'pan' : 'orbit';
+      if (orbitBtn) { active = e.shiftKey ? 'pan' : 'orbit'; cancelFollowRef.current(); }
       else if (e.button === 2) {
         // RMB cancels a staged Line anchor / Glue-Cut anchor (grid or agent);
         // otherwise it pans.
         if (line3dAnchorRef.current || agentLine3dAnchorRef.current) { line3dAnchorRef.current = null; agentLine3dAnchorRef.current = null; active = null; updateHover(e.clientX, e.clientY); draw(); }
         else if (agentGlueAnchorRef.current >= 0) { agentGlueAnchorRef.current = -1; active = null; draw(); }
-        else active = 'pan';
+        else { active = 'pan'; cancelFollowRef.current(); }
       }
       else if (e.button === 0 && (e.ctrlKey || e.metaKey)) {
         // Ctrl/Cmd+LMB drag → resize the active brush shape (like the 2D canvas).
@@ -6716,6 +6750,18 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       compositeActive: agentCompositeActiveRef.current,
       metaballs: agentMetaballsRef.current.enabled,
     });
+    // FOLLOW MODE state (DEV/verification only, same rationale as
+    // __agentRenderState): the camera the tracker writes lives in refs, so a
+    // probe would otherwise have to infer "did the camera move?" from pixels —
+    // impossible in an occluded pane. Read-only; arming still goes through the
+    // real ◎ button in the inspector header.
+    W.__simFollowState = () => ({
+      id: followAgentIdRef.current,
+      pan: { ...panRef.current },
+      zoom: zoomRef.current,
+      target3d: [...cam3dRef.current.target],
+      dist3d: cam3dRef.current.dist,
+    });
   }, [is3D, draw, instanceToSlot]);
 
   // 3D Grid CA: mirror the control state into the renderer refs + redraw.
@@ -6850,6 +6896,134 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
   }, [is3D, orbit3d.on, zoom3d.on, draw]);
+
+  // ── FOLLOW MODE — the camera tracks the followed agent (2D pan / 3D target) ──
+  //
+  // ONE rAF loop for both dimensions (the auto-orbit pattern above: params read
+  // through refs so nothing restarts it; `last` resets while hidden so a
+  // tab-away can't apply a huge dt and fling the camera). It only ever writes
+  // the SAME camera state a manual pan writes — 2D `panRef`, 3D `cam.target` —
+  // then calls draw(), so every downstream consumer (the direct-render camera
+  // message, the cursor overlay, the composite render) follows for free.
+  //
+  // THE ALLOWANCE (the anti-shake): a DEADZONE plus exponential smoothing.
+  // While the agent stays within `dz` of the camera centre the camera does not
+  // move AT ALL (not one write, not one draw) — that is what keeps jittery agent
+  // motion off the camera. Once outside, the camera eases toward the point that
+  // puts the agent back NEAR THE DEADZONE EDGE (not dead-centre): aiming at the
+  // edge is what lets small wanderings settle instead of ping-ponging through
+  // the middle.
+  //
+  // FOLLOW_AIM_INSIDE aims a hair INSIDE that edge, and it is load-bearing: an
+  // exact-edge target is only reached asymptotically, so `dist` converges to
+  // `dz` from ABOVE and the deadzone test never latches — a motionless agent
+  // then produced an endless stream of sub-pixel camera writes and a draw()
+  // EVERY frame forever (measured: 120 draws / 120 frames while parked).
+  // Aiming just inside makes the camera CROSS the boundary, so the deadzone
+  // check stops it dead (~0.35 s after the agent settles).
+  const FOLLOW_SMOOTH_K = 5;            // 1/s — ~0.2 s to close 63% of the gap
+  const FOLLOW_AIM_INSIDE = 0.9;        // aim at 90% of the deadzone radius
+  const FOLLOW_DEADZONE_FRAC_2D = 0.15; // of min(canvas w, h), in screen px
+  const FOLLOW_DEADZONE_FRAC_3D = 0.08; // of the largest grid dimension, in world units
+  const FOLLOW_DEADZONE_VIEW_3D = 0.15; // ...but never more than this share of the eye distance
+  useEffect(() => {
+    if (followAgentId == null) return;
+    let raf = 0; let last = 0;
+    /** Fold a torus delta to the SHORTEST way round (so an agent crossing the
+     *  seam never makes the camera fly the long way across the world). */
+    const fold = (d: number, period: number) => {
+      if (period <= 0) return d;
+      const h = period / 2;
+      return d > h ? d - period * Math.round(d / period)
+        : d < -h ? d - period * Math.round(d / period) : d;
+    };
+    const tick = (ts: number) => {
+      raf = requestAnimationFrame(tick);
+      if (!visibleRef.current) { last = 0; return; }
+      const dt = last ? Math.min(0.1, (ts - last) / 1000) : 0; last = ts;
+      if (dt <= 0) return;
+      const id = followAgentIdRef.current;
+      const snap = agentsRef.current;
+      if (id == null) return;
+      // The agent died (or the population shrank past it): stop following, but
+      // leave the popover open — it shows its own "Agent no longer exists".
+      if (!snap || id < 0 || id >= snap.highWater || !snap.alive[id]) {
+        if (snap) setFollowAgent(null);
+        return;
+      }
+      const torus = boundaryTreatmentRef.current === 'torus';
+      const ax = snap.x[id]!, ay = snap.y[id]!;
+      const W = gridWidth.current, H = gridHeight.current;
+      const ease = 1 - Math.exp(-FOLLOW_SMOOTH_K * dt);
+
+      if (is3dRef.current) {
+        const r = gl3dRef.current;
+        if (!r) return;
+        const D = gridDepth.current;
+        const md = Math.max(W, H, D, 1);
+        const hx = (W - 1) / 2, hy = (H - 1) / 2, hz = (D - 1) / 2;
+        const az = snap.z.length > 0 ? snap.z[id]! : 0;
+        // gl3d's Z-up remap: col→+X, row→−Y, layer→−Z (see uploadAgents).
+        const wx = ax - hx, wy = hy - ay, wz = hz - az;
+        const cam = cam3dRef.current;
+        let dx = wx - cam.target[0], dy = wy - cam.target[1], dz2 = wz - cam.target[2];
+        if (torus) { dx = fold(dx, W); dy = fold(dy, H); dz2 = fold(dz2, D); }
+        // World-space deadzone, tightened when zoomed in so a close-up still
+        // tracks (cam.dist is a MULTIPLE of the largest grid dimension).
+        const dz = Math.min(FOLLOW_DEADZONE_FRAC_3D * md, FOLLOW_DEADZONE_VIEW_3D * cam.dist * md);
+        const dist = Math.hypot(dx, dy, dz2);
+        if (dist <= dz) return;                       // inside the allowance — no write, no draw
+        const pull = (dist - dz * FOLLOW_AIM_INSIDE) / dist * ease;
+        cam.target[0] += dx * pull;
+        cam.target[1] += dy * pull;
+        cam.target[2] += dz2 * pull;
+        if (torus) {
+          // No tiling in 3D — the volume is drawn once, so keep the target
+          // inside it or the followed agent leaves the frame after a wrap.
+          cam.target[0] = fold(cam.target[0], W);
+          cam.target[1] = fold(cam.target[1], H);
+          cam.target[2] = fold(cam.target[2], D);
+        }
+        draw();
+        return;
+      }
+
+      // 2D — work in WORLD (cell) units, then convert back to pan pixels, so the
+      // torus fold is a plain modulo and zoom cancels out of the geometry.
+      const canvas = canvasRef.current;
+      const parent = canvas?.parentElement;
+      if (!parent || W === 0 || H === 0) return;
+      const rect = parent.getBoundingClientRect();
+      if (rect.width === 0 || rect.height === 0) return;
+      const scale = Math.min(rect.width / W, rect.height / H) * zoomRef.current;
+      if (!(scale > 0)) return;
+      const pan = panRef.current;
+      // The world point currently at the screen centre (inverse of the draw
+      // transform `ox = (parentW - W*scale)/2 + pan.x`).
+      const camX = W / 2 - pan.x / scale;
+      const camY = H / 2 - pan.y / scale;
+      let dx = ax - camX, dy = ay - camY;
+      if (torus) { dx = fold(dx, W); dy = fold(dy, H); }
+      const dz = FOLLOW_DEADZONE_FRAC_2D * Math.min(rect.width, rect.height) / scale;
+      const dist = Math.hypot(dx, dy);
+      if (dist <= dz) return;                         // inside the allowance — no write, no draw
+      const pull = (dist - dz * FOLLOW_AIM_INSIDE) / dist * ease;
+      let nx = camX + dx * pull, ny = camY + dy * pull;
+      // Infinity mode TILES the torus, so a camera that walks off the world edge
+      // still shows the right thing — leave the pan continuous (no jump). Without
+      // tiling the single drawn copy would scroll away from the agent, so wrap the
+      // camera back into the world (the background jumps by one world width, which
+      // mirrors the agent's own teleport).
+      if (torus && !(infinityCanvasRef.current)) {
+        nx = ((nx % W) + W) % W;
+        ny = ((ny % H) + H) % H;
+      }
+      panRef.current = { x: (W / 2 - nx) * scale, y: (H / 2 - ny) * scale };
+      draw();
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [followAgentId, draw, setFollowAgent]);
 
   // Pause simulation when leaving tab, redraw when coming back
   useEffect(() => {
@@ -7183,6 +7357,11 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
     agentSweepPopoverRef.current = null;
     setFocusedAgentPopoverId(null);
     agentStatesRef.current.clear();
+    // FOLLOW MODE holds an id into the OLD population — clear it here too (the
+    // popover-gone effect would also catch it, but the ref LEADS the state, so
+    // the tracker must not see a stale id for even one frame).
+    followAgentIdRef.current = null;
+    setFollowAgentIdState(null);
     agentSweepActiveRef.current = false;
     agentSweepMovedRef.current = false;
     agentSweepStartIdRef.current = -1;
@@ -8263,6 +8442,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       const rect = container.getBoundingClientRect();
       const cx = clientX - rect.left;
       const cy = clientY - rect.top;
+      cancelFollow();  // middle-click autoscroll is a manual pan — see FOLLOW MODE
       autoscrollOriginRef.current = { x: cx, y: cy };
       autoscrollCursorRef.current = { x: cx, y: cy };
       container.style.cursor = 'all-scroll';
@@ -8519,6 +8699,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
         // RMB = pan
         e.preventDefault();
         isPanning.current = true;
+        cancelFollow();  // the user took the wheel — see FOLLOW MODE
         lastMouse.current = { x: e.clientX, y: e.clientY };
         container.style.cursor = 'grabbing';
       }
@@ -8901,7 +9082,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       if (cursorDrawRaf.current != null) { cancelAnimationFrame(cursorDrawRaf.current); cursorDrawRaf.current = null; }
       if (hoverWorkRaf.current != null) { cancelAnimationFrame(hoverWorkRaf.current); hoverWorkRaf.current = null; }
     };
-  }, [draw, scheduleCursorDraw, paintAt, paintLine, screenToGrid, flushPaintBatch, commitInspectPopover, screenToWorld, pickAgentAt, seedAgentsAt, agentSeedPoints, flushSeedBatch, killAgentsInRadius, openAgentInspector, flushMoveBatch, scanBondPairsAt, flushBondBatch, agentsInShapeAt, agentsInRadiusAt, agentSeedInShape, agentSeedInLine, agentLineMembers, applyAgentEditToIds]);
+  }, [draw, scheduleCursorDraw, paintAt, paintLine, screenToGrid, flushPaintBatch, commitInspectPopover, screenToWorld, pickAgentAt, seedAgentsAt, agentSeedPoints, flushSeedBatch, killAgentsInRadius, openAgentInspector, flushMoveBatch, scanBondPairsAt, flushBondBatch, agentsInShapeAt, agentsInRadiusAt, agentSeedInShape, agentSeedInLine, agentLineMembers, applyAgentEditToIds, cancelFollow]);
 
   // Play: kick-start the step pipeline (worker message handler chains subsequent steps)
   useEffect(() => {
@@ -9048,6 +9229,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
   };
 
   const handleResetView = () => {
+    cancelFollow();  // an explicit camera reset takes the wheel back — see FOLLOW MODE
     zoomRef.current = 1;
     panRef.current = { x: 0, y: 0 };
     draw();
@@ -10358,6 +10540,8 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
             capProfile={agentCapProfile}
             focused={focusedAgentPopoverId === p.id}
             totalOpen={agentPopovers.length}
+            following={followAgentId === p.id}
+            onToggleFollow={() => setFollowAgent(followAgentIdRef.current === p.id ? null : p.id)}
             onClose={() => closeAgentPopover(p.id)}
             onCloseAll={closeAllAgentPopovers}
             onFocus={() => setFocusedAgentPopoverId(p.id)}
@@ -10706,6 +10890,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
                     // Restore the default view IN PLACE — replacing `cam3dRef.current`
                     // would strand every holder of the old object (the DEV
                     // `window.__sim3dCamera` hook among them).
+                    cancelFollow();  // an explicit camera reset takes the wheel back — see FOLLOW MODE
                     const d = defaultCamera3d(), cam = cam3dRef.current;
                     cam.yaw = d.yaw; cam.pitch = d.pitch; cam.dist = d.dist; cam.target = d.target;
                     draw();

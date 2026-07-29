@@ -61,6 +61,35 @@
   color: var(--color-text-secondary);
 }
 
+/* FOLLOW MODE toggle (agent inspector header) — same 22px chip as .closeBtn;
+   active state uses the accent so "the camera is tracking this one" is obvious
+   at a glance across several open inspectors. */
+.followBtn {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  line-height: 18px;
+  background: transparent;
+  border: 1px solid var(--color-widget-border);
+  border-radius: var(--radius-sm);
+  color: var(--color-text-tertiary);
+  cursor: pointer;
+  font-size: var(--font-sm);
+  flex: none;
+}
+
+.followBtn:hover {
+  border-color: var(--color-border-muted);
+  color: var(--color-text-secondary);
+}
+
+.followBtnActive,
+.followBtnActive:hover {
+  background: var(--color-accent-soft);
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+}
+
 .closeAllBtn {
   height: 22px;
   padding: 0 var(--space-3);
