@@ -50,9 +50,6 @@ export function CsvImportDialog({
   const [delimChoice, setDelimChoice] = useState<'auto' | ',' | ';' | '\t'>('auto');
   const [headerChoice, setHeaderChoice] = useState<'auto' | 'yes' | 'no'>('auto');
   const delimiter = delimChoice === 'auto' ? autoDelim : delimChoice;
-  const hasHeader = headerChoice === 'auto' ? autoHeader : headerChoice === 'yes';
-
-  const table = useMemo(() => parseCsvTable(text, { delimiter, hasHeader }), [text, delimiter, hasHeader]);
 
   // --- target layer ---------------------------------------------------------
   // Both layers present → default from the header heuristic: a header names
@@ -64,6 +61,19 @@ export function CsvImportDialog({
   });
   const showTargetSwitch = hasGrid && hasAgents;
   const effTarget: 'agents' | 'grid' = hasAgents ? (hasGrid ? target : 'agents') : 'grid';
+
+  // The header default is TARGET-DEPENDENT. In Grid mode the CSV *is* the board,
+  // so every line is a row: defaulting to "header" there would silently DROP the
+  // board's first row (the heuristic fires on an all-text tag grid as soon as any
+  // later cell is numeric — e.g. a tag written as its index). Treating a grid as
+  // all-data instead fails LOUDLY when the file really does carry column names
+  // (every cell of row 1 reports as defaulted in the summary), which is the right
+  // trade for a data-import feature. Agents keep the heuristic — there a header is
+  // the norm and it names the columns the mapping needs. Overridable either way.
+  const autoHeaderForTarget = effTarget === 'grid' ? false : autoHeader;
+  const hasHeader = headerChoice === 'auto' ? autoHeaderForTarget : headerChoice === 'yes';
+
+  const table = useMemo(() => parseCsvTable(text, { delimiter, hasHeader }), [text, delimiter, hasHeader]);
 
   // --- agents mode ----------------------------------------------------------
   const agentAttrShapes = agentAttributes as unknown as CsvAttrShape[];
@@ -295,7 +305,7 @@ export function CsvImportDialog({
             <label style={{ ...label, gap: 6 }}>
               Header row
               <select value={headerChoice} onChange={e => setHeaderChoice(e.target.value as typeof headerChoice)} style={{ fontSize: 12 }}>
-                <option value="auto">auto ({autoHeader ? 'yes' : 'no'})</option>
+                <option value="auto">auto ({autoHeaderForTarget ? 'yes' : 'no'})</option>
                 <option value="yes">first row is a header</option>
                 <option value="no">no header</option>
               </select>

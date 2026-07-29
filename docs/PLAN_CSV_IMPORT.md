@@ -53,6 +53,17 @@ That accepts `x,y,radius` over numeric rows, and correctly REJECTS a grid of tag
 NAMES (all-non-numeric everywhere → no header, the whole file is data). A
 checkbox overrides it either way.
 
+**The header default is TARGET-DEPENDENT (decision, added after verification).**
+In **Grid** mode the CSV *is* the board, so every line is a row and the default
+is **no header** regardless of the heuristic. The heuristic still fires on an
+all-text tag grid the moment any later cell is numeric (a tag written as its
+index), and in Grid mode that would **silently drop the board's first row** —
+the worst failure mode a data-import feature can have. Treating a grid as
+all-data instead fails **loudly** when the file really does carry column names
+(every cell of row 1 lands in the summary as defaulted). **Agents** keep the
+heuristic: there a header is the norm and it names the columns the mapping
+needs. Both remain overridable.
+
 ---
 
 ## 3. Flavour A — Agents
