@@ -1758,11 +1758,13 @@ export function HelpView() {
             the transient popover instead of pinning it. In 3D every open inspector also rings its
             agent in the volume, and the ring <strong>follows that agent</strong> as it moves. A pinned
             inspector&rsquo;s <span className={styles.kbd}>&#9678;</span> button turns on <strong>Follow
-            mode</strong>: the camera then tracks that agent, in 2D and in 3D. It has a built-in
-            <em> allowance</em> so jitter never reaches the camera &mdash; while the agent stays inside a
-            deadzone around the view centre the camera does not move at all, and outside it the camera
-            eases smoothly to bring the agent back to the deadzone edge (on a torus it always takes the
-            short way round the seam). One agent is followed at a time. Follow stops when you click{' '}
+            mode</strong>: the camera then tracks that agent, in 2D and in 3D. The camera is
+            <em> accelerated</em> toward the agent by a critically damped spring and <em>leads</em> it by
+            the agent&rsquo;s own velocity, so it picks up smoothly, never overshoots, and <strong>catches
+            up</strong> instead of trailing behind an agent travelling at a steady speed. Rapid jitter is
+            absorbed by the spring rather than mirrored, and once the agent comes to rest the camera settles
+            and stops moving entirely. On a torus it always takes the short way round the seam. One agent is
+            followed at a time. Follow stops when you click{' '}
             <span className={styles.kbd}>&#9678;</span> again, close the popover, the agent dies, or you
             take the camera yourself with a pan / orbit / Reset view &mdash; <em>zooming does not stop it</em>,
             so you can zoom in on a followed agent. Loading
