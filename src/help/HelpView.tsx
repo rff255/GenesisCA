@@ -1497,8 +1497,13 @@ export function HelpView() {
               <em> Boids &mdash; Hemifield Vision</em> sample is built entirely from these counts.</li>
             <li><strong>Seeing the cones</strong> &mdash; when a model uses either FOV node, the
               Simulator&apos;s agent controls (2D) gain a <strong>Show vision</strong> selector that
-              draws each node&apos;s sensing cone as a translucent wedge &mdash; for the
-              <em> inspected/edited/hovered</em> agent, or <em>all</em> agents (capped at 1500).
+              draws each node&apos;s sensing cone as a translucent wedge, with a faint
+              <strong> dotted centre line</strong> along the heading so the <em>left</em> and
+              <em> right</em> halves of the field (what Sense Hemifield counts) are readable at a
+              glance &mdash; for the <em>inspected/edited/hovered</em> agent, or <em>all</em>
+              agents (capped at 1500). The <em>Inspected</em> scope follows the open agent
+              inspectors and, while the <strong>Edit</strong> brush is active, its edit target
+              (the cone appears and disappears together with the dashed edit highlight).
               The wedge follows the agent&apos;s velocity heading (Facing/Wired heading sources are
               approximated by it), and a wired Radius input falls back to the model&apos;s Neighbour
               Query Radius. Each FOV node gets its own tint from an automatic palette, or you can
@@ -1746,7 +1751,12 @@ export function HelpView() {
             <span className={styles.kbd}> Ctrl+V</span> <strong>pastes</strong> them at the cursor
             (torus-wrapped; pasting past the agent capacity drops the excess with a notice).
             <span className={styles.kbd}>Shift</span>+click an agent to <strong>inspect</strong> it
-            (a popover of its position, velocity, bond degree and attribute values); the
+            (a popover of its position, velocity, bond degree and attribute values). Agent
+            inspectors work like the cell ones: <strong>several can be open at once</strong>, each is
+            <strong> dragged by its header</strong>, closes with its &times; or <span className={styles.kbd}>Esc</span>,
+            and offers <strong>Close all</strong>; dragging across agents before releasing re-targets
+            the transient popover instead of pinning it. In 3D every open inspector also rings its
+            agent in the volume. The
             <strong> CA&nbsp;Grid</strong> brush target paints cells with the normal brush. In Area
             scope the agents the stroke will touch are <strong>highlighted</strong> (every mode
             except Add), a <strong>Show brush cursor</strong> checkbox toggles the brush overlay, and

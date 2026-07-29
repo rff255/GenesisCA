@@ -41,6 +41,7 @@ import { ClipIntervalSlider } from './ClipIntervalSlider';
 import { NumberField } from '../modeler/vpl/widgets/InlineWidgets';
 import { designTimeSeriesKeys, mergeChartSettings, historyWindow, INDICATOR_HISTORY_DEFAULT_CAP, INDICATOR_HISTORY_HARD_CAP } from './indicatorChartSettings';
 import { InspectCellPopover, InspectHoverLink, type InspectPopoverState } from './InspectCellPopover';
+import { InspectAgentPopover, type AgentPopoverState } from './InspectAgentPopover';
 import { PresetSaveDialog } from './PresetSaveDialog';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { serializeSimState, serializePreset, downloadStateFile, readStateFile, downloadPresetFile, readPresetFile, base64ToArrayBuffer, deserializeTypedArray, migrateSimulationStateV1toV2, deserializeAgentState } from '../model/fileOperations';
@@ -1171,8 +1172,20 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
   );
   const showVisionRef = useRef(showVision); showVisionRef.current = showVision;
   // PR3 — agent inspector: a single on-demand popover (one at a time).
-  const [agentInspect, setAgentInspect] = useState<{ id: number; x: number; y: number } | null>(null);
-  const [agentState, setAgentState] = useState<AgentStateResponse | null>(null);
+  // Agent inspectors — the agent-layer twin of the cell inspect popovers:
+  // MULTIPLE pinned popovers (draggable, each closable, with Close all) plus one
+  // TRANSIENT sweep popover that opens on press and follows the drag. A release
+  // that never re-targeted a different agent PINS the sweep; a sweep across
+  // other agents discards it (the cell inspector's !moved rule). Both the 2D and
+  // the 3D pick paths feed the same state, so the feature is dimension- and
+  // compile-target-agnostic (the data comes from the `getAgentState` message,
+  // which the worker answers identically on JS/WASM/WebGPU).
+  const [agentPopovers, setAgentPopovers] = useState<AgentPopoverState[]>([]);
+  const [agentSweepPopover, setAgentSweepPopover] = useState<AgentPopoverState | null>(null);
+  const [focusedAgentPopoverId, setFocusedAgentPopoverId] = useState<number | null>(null);
+  // Latest worker state per inspected agent id (+ a version bump to re-render).
+  const agentStatesRef = useRef<Map<number, AgentStateResponse>>(new Map());
+  const [, bumpAgentStateVersion] = useState(0);
 
   // GIF / WebM recording state
   const [recording, setRecording] = useState(false);
@@ -1359,18 +1372,32 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
     return () => clearTimeout(t);
   }, [manualBrushModelKey, agentEditAttrs]);
 
-  // Agent inspector — low-Hz live refresh while a popover is pinned (re-request
+  // Agent inspector — low-Hz live refresh while any popover is open (re-request
   // getAgentState at ~3 Hz, NOT per-stepped, so multiple-popover round-trips
-  // don't compound — per §3 gotcha #7). The dispatch routes the response into
-  // setAgentState via onAgentStateRef.
+  // don't compound — per §3 gotcha #7). One interval for ALL open ids (pinned +
+  // the transient sweep); the dispatch routes each response into the id-keyed
+  // agentStatesRef via onAgentStateRef.
+  const agentInspectIds = useMemo(() => {
+    const ids = agentPopovers.map(p => p.id);
+    const s = agentSweepPopover?.id;
+    return s != null && !ids.includes(s) ? [...ids, s] : ids;
+  }, [agentPopovers, agentSweepPopover]);
+  const agentInspectIdsRef = useRef<number[]>([]);
+  agentInspectIdsRef.current = agentInspectIds;
   useEffect(() => {
-    if (!agentInspect) return;
-    const id = agentInspect.id;
+    if (agentInspectIds.length === 0) return;
     const poll = setInterval(() => {
-      workerRef.current?.postMessage({ type: 'getAgentState', id });
+      for (const id of agentInspectIds) workerRef.current?.postMessage({ type: 'getAgentState', id });
     }, 333);
     return () => clearInterval(poll);
-  }, [agentInspect]);
+  }, [agentInspectIds]);
+  // Drop cached state for agents whose popover just closed.
+  useEffect(() => {
+    const live = new Set(agentInspectIds);
+    for (const k of Array.from(agentStatesRef.current.keys())) {
+      if (!live.has(k)) agentStatesRef.current.delete(k);
+    }
+  }, [agentInspectIds]);
 
   const cycleIndicatorVizMode = useCallback((id: string) => {
     setIndicatorVizModes(prev => {
@@ -1763,13 +1790,21 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
   const pendingMoveRaf = useRef<number | null>(null);
   // PR4 — Bond-paint: the set of pairs queued from the current stroke (dedup'd).
   const pendingBondPairs = useRef<Set<string>>(new Set());
-  const agentInspectRef = useRef<{ id: number; x: number; y: number } | null>(null);
-  agentInspectRef.current = agentInspect;
+  // The TRANSIENT sweep popover, mirrored for the pointer handlers (which are
+  // registered once per effect run and must read the live value).
+  // NB assigned SYNCHRONOUSLY by openAgentInspector / clear / commit (a fast
+  // click's mousedown+mouseup land in one frame, before any re-render), so the
+  // ref leads the state rather than mirroring it here.
+  const agentSweepPopoverRef = useRef<AgentPopoverState | null>(null);
   // Reassigned each render; the message dispatch calls it when an `agentState`
   // response arrives. Declared as a ref so the dispatch closure stays stable.
   const onAgentStateRef = useRef<(r: AgentStateResponse) => void>(() => {});
   onAgentStateRef.current = (r: AgentStateResponse) => {
-    if (agentInspectRef.current && agentInspectRef.current.id === r.id) setAgentState(r);
+    // Cache by id for whichever popovers are open (pinned or the sweep).
+    if (agentInspectIdsRef.current.includes(r.id)) {
+      agentStatesRef.current.set(r.id, r);
+      bumpAgentStateVersion(v => v + 1);
+    }
     // Edit brush (Single scope): prefill the panel VALUES from the picked agent's
     // live state (keeping the user's per-row enabled toggles). Geometry rows read
     // radius/velocity/position straight; attribute rows decode by type.
@@ -2839,7 +2874,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
     const want =
       !playingRef.current
       || recordingRef.current
-      || agentInspectRef.current != null
+      || agentInspectIdsRef.current.length > 0
       || sweepActiveRef.current
       || editTargetIdRef.current >= 0
       || agentMetaballsRef.current.enabled
@@ -4013,9 +4048,19 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
         let ids: number[];
         if (showVisionRef.current === 'inspected') {
           const set = new Set<number>();
-          const ins = agentInspectRef.current;
-          if (ins && ins.id >= 0) set.add(ins.id);
-          if (editTargetIdRef.current >= 0) set.add(editTargetIdRef.current);
+          // Open inspectors (pinned + the transient sweep) — independent of the
+          // brush mode, like the inspector itself.
+          for (const id of agentInspectIdsRef.current) if (id >= 0) set.add(id);
+          // The EDIT target only counts while the Edit brush is actually active
+          // — exactly the condition its dashed highlight uses (see
+          // drawCursorLayer), so the cone and the highlight appear/disappear
+          // together instead of the cone lingering after a mode switch.
+          if (editTargetIdRef.current >= 0
+              && brushTargetRef.current === 'agents'
+              && agentBrushModeRef.current === 'edit'
+              && agentBrushScopeRef.current === 'single') {
+            set.add(editTargetIdRef.current);
+          }
           if (agentHoverIdRef.current >= 0) set.add(agentHoverIdRef.current);
           ids = [...set];
         } else {
@@ -4040,16 +4085,32 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
               const vx2 = snap.vx?.[id] ?? 0, vy2 = snap.vy?.[id] ?? 0;
               const omni = omniAngle || (vx2 * vx2 + vy2 * vy2) < 1e-12;
               ctx.beginPath();
+              let bisector: number | null = null;
               if (omni) {
                 ctx.arc(sx2, sy2, rr, 0, Math.PI * 2);
               } else {
                 const a = Math.atan2(vy2, vx2); // world +y = screen-down, so screen-space directly
+                bisector = a;
                 ctx.moveTo(sx2, sy2);
                 ctx.arc(sx2, sy2, rr, a - half, a + half);
                 ctx.closePath();
               }
               ctx.fill();
               ctx.stroke();
+              // Faint DOTTED centre line along the heading — the cone's midline,
+              // so the LEFT and RIGHT halves of the field (what Sense Hemifield
+              // counts) are readable at a glance. Skipped for an omnidirectional
+              // cone, which has no left/right split.
+              if (bisector !== null) {
+                ctx.save();
+                ctx.setLineDash([3, 3]);
+                ctx.strokeStyle = `rgba(${tint}, 0.55)`;
+                ctx.beginPath();
+                ctx.moveTo(sx2, sy2);
+                ctx.lineTo(sx2 + Math.cos(bisector) * rr, sy2 + Math.sin(bisector) * rr);
+                ctx.stroke();
+                ctx.restore();
+              }
             }
           });
           ctx.restore();
@@ -6410,7 +6471,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
         const id = pickAgent3d(e.clientX, e.clientY);
         if (id >= 0) {
           if (id !== agentSweepStartId) agentSweepMoved = true;
-          if (id !== agentInspectRef.current?.id) {
+          if (id !== agentSweepPopoverRef.current?.id) {
             openAgentInspector(id, downX, downY);
             const snap = agentsRef.current;
             if (snap) {
@@ -6517,7 +6578,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
         // Agent sweep release: a release that never re-targeted a different
         // agent keeps the popover pinned (it opened on press); a sweep across
         // other agents discards it + the highlight ring.
-        if (agentSweepMoved) { setAgentInspect(null); inspectAgents3dRef.current = []; }
+        if (agentSweepMoved) clearAgentSweep(); else commitAgentSweep();
         agentSweepStartId = -1; agentSweepMoved = false;
         draw();
       }
@@ -6526,7 +6587,9 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       if (active === 'brush') flushPaintBatch();
       // Agent move: clear the drag state + the inspect ring (the snapshot's new
       // position arrives on the next stepped frame).
-      if (active === 'agentMove') { agentDragId = -1; inspectAgents3dRef.current = []; draw(); }
+      // Restore the inspect rings from the open popovers (a move must not wipe
+      // the rings of agents the user has pinned).
+      if (active === 'agentMove') { agentDragId = -1; syncInspectAgents3dRef.current(); }
       if (active === 'agentGroupMove') { agentGroupMoveRef.current = null; }
       if (active === 'agentBond') { flushBondBatch(); draw(); }
       active = null;
@@ -6886,7 +6949,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
   useEffect(() => { draw(); }, [agentGlow, draw]);
   // A1: re-evaluate UI-sync on state-signal changes (pause / recording / inspector
   // / edit target / metaballs suppression). Hover-during-play is handled per-frame.
-  useEffect(() => { updateAgentUiSync(); }, [playing, recording, agentInspect, editTargetId, agentMetaballs.enabled, updateAgentUiSync]);
+  useEffect(() => { updateAgentUiSync(); }, [playing, recording, agentInspectIds, editTargetId, agentMetaballs.enabled, updateAgentUiSync]);
   // L1: the GRID sibling — re-evaluate the voxel UI-sync on every state signal that
   // needs the CPU colours mirror. `alpha3d` is the ONLY remaining FRAME-MODE-ONLY
   // visual (the WGSL pass does not back-to-front sort): turning it on pins UI-sync
@@ -6984,13 +7047,15 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
     }
     if (is3D) draw();
   }, [hoveredInspectIdx, is3D, draw]);
-  // 3D agent inspect ring: clear the white highlight when the agent inspector
-  // popover closes (the onDown Shift+LMB path sets it on open).
+  // 3D agent inspect rings — derived from ALL open agent popovers (pinned + the
+  // transient sweep), so every inspected agent is ringed in the volume and the
+  // rings survive pinning / closing / a mid-drag re-target. The pointer handlers
+  // still set a single ring synchronously for immediate feedback; this effect is
+  // the source of truth and reconciles on the next render.
   useEffect(() => {
-    if (is3D && !agentInspect && inspectAgents3dRef.current.length) {
-      inspectAgents3dRef.current = []; draw();
-    }
-  }, [agentInspect, is3D, draw]);
+    if (!is3D) return;
+    syncInspectAgents3dRef.current();
+  }, [agentPopovers, agentSweepPopover, is3D]);
   const [pulseInspectIdx, setPulseInspectIdx] = useState<number | null>(null);
   const [focusedInspectIdx, setFocusedInspectIdx] = useState<number | null>(null);
   const inspectDataRef = useRef<Map<number, Record<string, number>>>(new Map());
@@ -7286,9 +7351,55 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
   // it fresh while pinned.
   const openAgentInspector = useCallback((id: number, clientX: number, clientY: number) => {
     if (id < 0) return;
-    setAgentInspect({ id, x: clientX, y: clientY });
-    setAgentState(null);
+    // Opens the TRANSIENT sweep popover (a release without re-targeting pins it
+    // — commitAgentSweep below). Re-requesting on every re-target keeps the
+    // body fresh while the drag moves across agents.
+    // The ref is set SYNCHRONOUSLY, not just mirrored at render: a fast click
+    // fires mousedown+mouseup within one frame, so commitAgentSweep would read
+    // a not-yet-rendered null and silently pin nothing.
+    const p = { id, x: clientX, y: clientY };
+    agentSweepPopoverRef.current = p;
+    setAgentSweepPopover(p);
     workerRef.current?.postMessage({ type: 'getAgentState', id });
+  }, []);
+  /** Pin the transient sweep popover (release without re-targeting). Offsets a
+   *  repeat-pin of the SAME agent so a second popover can't hide the first. */
+  const commitAgentSweep = useCallback(() => {
+    const sweep = agentSweepPopoverRef.current;   // synchronous — see openAgentInspector
+    agentSweepPopoverRef.current = null;
+    setAgentSweepPopover(null);
+    if (!sweep) return;
+    setAgentPopovers(prev => {
+      if (prev.some(p => p.id === sweep.id)) return prev;   // already pinned
+      return [...prev, sweep];
+    });
+    setFocusedAgentPopoverId(sweep.id);
+  }, []);
+  const clearAgentSweep = useCallback(() => { agentSweepPopoverRef.current = null; setAgentSweepPopover(null); }, []);
+  /** Recompute the 3D inspect rings from every open agent popover (pinned + the
+   *  sweep). Held in a ref so both the render effect and the pointer handlers
+   *  (registered once) can call the live version. */
+  const syncInspectAgents3dRef = useRef<() => void>(() => {});
+  syncInspectAgents3dRef.current = () => {
+    const snap = agentsRef.current;
+    if (!snap) { inspectAgents3dRef.current = []; draw(); return; }
+    const hasZ = snap.z.length > 0;
+    const rings: Array<{ x: number; y: number; z: number; radius: number }> = [];
+    for (const id of agentInspectIdsRef.current) {
+      if (id < 0 || id >= snap.highWater || !snap.alive[id]) continue;
+      rings.push({ x: snap.x[id]!, y: snap.y[id]!, z: hasZ ? snap.z[id]! : 0, radius: snap.radius[id]! });
+    }
+    inspectAgents3dRef.current = rings;
+    draw();
+  };
+  const closeAgentPopover = useCallback((id: number) => {
+    setAgentPopovers(prev => prev.filter(p => p.id !== id));
+    setFocusedAgentPopoverId(f => (f === id ? null : f));
+  }, []);
+  const closeAllAgentPopovers = useCallback(() => {
+    setAgentPopovers([]);
+    setAgentSweepPopover(null);
+    setFocusedAgentPopoverId(null);
   }, []);
 
   // Bond-Graph Agents — kill every live agent within the brush radius of a
@@ -8549,13 +8660,13 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
           agentSweepActiveRef.current = false;
           agentSweepMovedRef.current = false;
           agentSweepAnchorRef.current = null;
-          setAgentInspect(null);
+          clearAgentSweep();
           return;
         }
         const aid = pickAgentAt(e.clientX, e.clientY);
         if (aid >= 0) {
           if (aid !== agentSweepStartIdRef.current) agentSweepMovedRef.current = true;
-          if (aid !== agentInspectRef.current?.id) {
+          if (aid !== agentSweepPopoverRef.current?.id) {
             const a = agentSweepAnchorRef.current;
             openAgentInspector(aid, a?.x ?? e.clientX, a?.y ?? e.clientY);
           }
@@ -8649,7 +8760,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
         agentSweepMovedRef.current = false;
         agentSweepStartIdRef.current = -1;
         agentSweepAnchorRef.current = null;
-        if (movedAgents) setAgentInspect(null);
+        if (movedAgents) clearAgentSweep(); else commitAgentSweep();
         return;
       }
       // End of a Shift+LMB sweep: if the cursor never left the start cell,
@@ -10187,48 +10298,39 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
             right side panel (req 4) \u2014 see the "Agents" rightPanelSection below. */}
 
         {/* Bond-Graph Agents \u2014 agent inspector popover (on-demand getAgentState). */}
-        {agentInspect && (
-          <div
-            data-sim-overlay
-            style={{
-              position: 'fixed', left: Math.min(agentInspect.x + 12, window.innerWidth - 220), top: Math.min(agentInspect.y + 12, window.innerHeight - 200),
-              zIndex: 40, minWidth: 180, maxWidth: 240,
-              background: 'var(--color-bg-panel)', border: '1px solid var(--color-border)', borderRadius: 'var(--radius-md)',
-              padding: 8, fontSize: '0.7rem', boxShadow: '0 4px 16px rgba(0,0,0,0.4)',
-            }}
-          >
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
-              <strong style={{ color: 'var(--color-accent)' }}>Agent #{agentInspect.id}</strong>
-              <button onClick={() => { setAgentInspect(null); setAgentState(null); }} style={{ cursor: 'pointer', border: 'none', background: 'transparent', color: 'var(--color-text-muted)', fontSize: '0.85rem', lineHeight: 1 }} title="Close">{'\u00d7'}</button>
-            </div>
-            {!agentState || !agentState.live ? (
-              <div style={{ color: 'var(--color-text-muted)' }}>{agentState && !agentState.live ? 'Agent no longer exists.' : 'Loading\u2026'}</div>
-            ) : (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                <div>pos ({agentState.x!.toFixed(2)}, {agentState.y!.toFixed(2)}{agentState.z !== undefined ? `, ${agentState.z.toFixed(2)}` : ''})</div>
-                {/* Geometry rows gated by the Agent Capability Profile (fall open
-                    when no profile, e.g. a hand-edited file). */}
-                {(!agentCapProfile || agentCapProfile.motion !== 'static') && <div>|v| {Math.hypot(agentState.vx ?? 0, agentState.vy ?? 0, agentState.vz ?? 0).toFixed(3)}</div>}
-                {(!agentCapProfile || agentCapProfile.body) && <div>radius {agentState.radius!.toFixed(3)}</div>}
-                {(!agentCapProfile || agentCapProfile.bonds !== 'off') && <div>bonds {agentState.bondDegree}</div>}
-                {(!agentCapProfile || agentCapProfile.collision !== 'off' || agentCapProfile.sensing) && <div>density {agentState.density!.toFixed(3)}</div>}
-                {agentState.attrs && Object.keys(agentState.attrs).length > 0 && (
-                  <div style={{ marginTop: 4, borderTop: '1px solid var(--color-border-muted)', paddingTop: 4 }}>
-                    {(model.agentAttributes ?? []).filter(a => a.type === 'vector' || agentState!.attrs![a.id] !== undefined).map(a => (
-                      <div key={a.id} style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
-                        <span style={{ color: 'var(--color-text-muted)' }} title={a.description || undefined}>{a.name}</span>
-                        <span>{a.type === 'vector' ? decodeVectorFromValues(a, agentState!.attrs!)
-                          : a.type === 'bool' ? (agentState!.attrs![a.id] ? 'true' : 'false')
-                          : a.type === 'tag' ? (a.tagOptions?.[agentState!.attrs![a.id]! | 0] ?? `(${agentState!.attrs![a.id]! | 0})`)
-                          : a.type === 'integer' ? String(agentState!.attrs![a.id]! | 0)
-                          : agentState!.attrs![a.id]!.toFixed(3)}</span>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
+        {/* Agent inspectors \u2014 several pinned popovers (draggable, closable, with
+            Close all) plus the transient sweep one. Same interaction model as
+            the cell inspect popovers; fed by both the 2D and 3D pick paths. */}
+        {agentPopovers.map(p => (
+          <InspectAgentPopover
+            key={p.id}
+            popover={p}
+            state={agentStatesRef.current.get(p.id) ?? null}
+            agentAttributes={model.agentAttributes ?? []}
+            capProfile={agentCapProfile}
+            focused={focusedAgentPopoverId === p.id}
+            totalOpen={agentPopovers.length}
+            onClose={() => closeAgentPopover(p.id)}
+            onCloseAll={closeAllAgentPopovers}
+            onFocus={() => setFocusedAgentPopoverId(p.id)}
+            onDragEnd={(x, y) => setAgentPopovers(prev => prev.map(pp => (pp.id === p.id ? { ...pp, x, y } : pp)))}
+          />
+        ))}
+        {agentSweepPopover && !agentPopovers.some(p => p.id === agentSweepPopover.id) && (
+          <InspectAgentPopover
+            key={`sweep-${agentSweepPopover.id}`}
+            popover={agentSweepPopover}
+            state={agentStatesRef.current.get(agentSweepPopover.id) ?? null}
+            agentAttributes={model.agentAttributes ?? []}
+            capProfile={agentCapProfile}
+            transient
+            focused={false}
+            totalOpen={agentPopovers.length + 1}
+            onClose={clearAgentSweep}
+            onCloseAll={closeAllAgentPopovers}
+            onFocus={() => {}}
+            onDragEnd={() => {}}
+          />
         )}
 
         {/* Bond-Graph Agents \u2014 transient engine-notice toast (e.g. agentOverflow). */}
