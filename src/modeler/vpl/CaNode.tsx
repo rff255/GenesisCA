@@ -16,6 +16,7 @@ import { countMacroInstances } from '../../model/macroImport';
 import { typeDisplayName } from '../../model/typeLabels';
 import { cellAttrsOf, cellFieldAttrsOf } from '../../model/attributeScope';
 import { vectorPortDims } from './compiler/vectorAttr';
+import { is3dModelLike } from './compiler/niCodec';
 import { MULTI_ATTR_TYPES, MULTI_ATTR_SET_TYPES, multiAttrExtraCount, buildExtraSlotPorts, resolveSlotAttr } from './compiler/multiAttrExpand';
 import { applyLookupAxisPorts } from './nodes/LookupInteractionNode';
 import {
@@ -2508,6 +2509,14 @@ function CaNodeComponent({ id, data }: NodeProps) {
             <option value="distance">Distance |A − B|</option>
             <option value="negate">Negate (−A)</option>
             <option value="lerp">Lerp (A→B by T)</option>
+            <option value="rotate2d">Rotate (A by Angle°, about Z)</option>
+            {/* Rodrigues needs a real 3rd axis — a 2D model has no Z and no
+                meaningful non-Z axis, so the option is only offered in 3D. A
+                stale rotateAxis config in a 2D model still SELECTS (kept in the
+                list) and carries a validation badge. */}
+            {(is3dModelLike(model) || (nodeData.config.op as string) === 'rotateAxis') && (
+              <option value="rotateAxis">Rotate Around Axis (3D)</option>
+            )}
           </select>
         )}
 

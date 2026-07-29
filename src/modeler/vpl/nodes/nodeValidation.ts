@@ -10,6 +10,7 @@ import { getActiveGraphKind } from '../graphState';
 import { VECTOR_LOWERED } from '../compiler/vectorAttr';
 import { multiAttrSlotIndices, slotAttrKey } from '../compiler/multiAttrExpand';
 import { isMultiAxisTable, resolveAxes, MAX_LOOKUP_TABLE_ENTRIES } from '../compiler/variegation';
+import { is3dModelLike } from '../compiler/niCodec';
 
 /** Return a list of human-readable issue strings for a node's configuration.
  *  Empty array = node is fully configured.
@@ -486,6 +487,16 @@ export function detectMissingConfig(
       }
       break;
     }
+
+    // Rotate Around Axis is Rodrigues about an arbitrary 3D axis — a 2D model
+    // has no Z, so a stale config carrying it (authored in 3D, or hand-edited)
+    // would silently degenerate. The op is filtered out of the 2D dropdown; this
+    // badge surfaces the leftover.
+    case 'vectorOp':
+      if (config.op === 'rotateAxis' && !is3dModelLike(model)) {
+        issues.push('Rotate Around Axis needs a 3D model (use Rotate for the XY plane)');
+      }
+      break;
 
     case 'macro':
       if (!hasMacroDef(config.macroDefId)) issues.push('Macro definition not found');

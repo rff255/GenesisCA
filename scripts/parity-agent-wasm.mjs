@@ -655,6 +655,88 @@ function buildLoopIndexModel() {
   };
 }
 
+// Synthetic: the two Vector Op ROTATION ops (rotate2d + rotateAxis / Rodrigues).
+// Both are EDITOR SUGAR lowered by `expandComposites` into scalar
+// arithmeticOperator nodes (deg→rad multiply + sin/cos + the guarded ÷ that
+// normalises the axis), so this guards that the LOWERED node tree is JS↔WASM
+// bit-identical — the deg→rad literal, the sin/cos host-import ↔ Math.* pairing,
+// and the ÷0→0 axis guard all sit on the path. 3D so rotateAxis is meaningful.
+// The agent's own position is rotated by a per-agent angle (radius·37°) and the
+// three components are ACCUMULATED into attributes, so any ULP divergence
+// compounds within a few steps.
+function buildVectorRotateModel() {
+  const used = new Set();
+  const nid = (p) => { let id; do { id = p + Math.random().toString(36).slice(2, 8); } while (used.has(id)); used.add(id); return id; };
+  const aN = [], aEd = [];
+  const an = (t, c) => { const n = { id: nid('a'), type: 'caNode', position: { x: 0, y: 0 }, data: { nodeType: t, config: c } }; aN.push(n); return n; };
+  const aE = (s, sp, tt, tp, cat) => aEd.push({ id: nid('e'), source: s.id, target: tt.id, sourceHandle: `output_${cat}_${sp}`, targetHandle: `input_${cat}_${tp}` });
+  const bs = an('behaviourStep', {});
+  // v = (myX, myY, myZ); angle = myRadius * 37 (a per-agent, non-round angle).
+  const mv = an('makeVector', {});
+  aE(bs, 'myX', mv, 'x', 'value');
+  aE(bs, 'myY', mv, 'y', 'value');
+  aE(bs, 'myZ', mv, 'z', 'value');
+  const ang = an('arithmeticOperator', { operation: '*', _port_y: '37' });
+  aE(bs, 'myRadius', ang, 'x', 'value');
+
+  // (1) rotate2d about Z — Z must pass through untouched.
+  const r2 = an('vectorOp', { op: 'rotate2d' });
+  aE(mv, 'vector', r2, 'a', 'value');
+  aE(ang, 'result', r2, 'angle', 'value');
+  const b2 = an('breakVector', {});
+  aE(r2, 'result', b2, 'vector', 'value');
+
+  // (2) rotateAxis about an UNnormalised axis built from the agent's own state
+  //     (myY, myRadius, myX) — exercises the guarded normalise divide.
+  const mk = an('makeVector', {});
+  aE(bs, 'myY', mk, 'x', 'value');
+  aE(bs, 'myRadius', mk, 'y', 'value');
+  aE(bs, 'myX', mk, 'z', 'value');
+  const r3 = an('vectorOp', { op: 'rotateAxis' });
+  aE(mv, 'vector', r3, 'a', 'value');
+  aE(mk, 'vector', r3, 'axis', 'value');
+  aE(ang, 'result', r3, 'angle', 'value');
+  const b3 = an('breakVector', {});
+  aE(r3, 'result', b3, 'vector', 'value');
+
+  // Accumulate all six components so a divergence compounds.
+  const u1 = an('updateAttribute', { attributeId: 'r2x', operation: 'increment' });
+  aE(b2, 'x', u1, 'value', 'value');
+  aE(bs, 'do', u1, 'do', 'flow');
+  const u2 = an('updateAttribute', { attributeId: 'r2y', operation: 'increment' });
+  aE(b2, 'y', u2, 'value', 'value');
+  aE(u1, 'next', u2, 'do', 'flow');
+  const u3 = an('updateAttribute', { attributeId: 'r2z', operation: 'increment' });
+  aE(b2, 'z', u3, 'value', 'value');
+  aE(u2, 'next', u3, 'do', 'flow');
+  const u4 = an('updateAttribute', { attributeId: 'r3x', operation: 'increment' });
+  aE(b3, 'x', u4, 'value', 'value');
+  aE(u3, 'next', u4, 'do', 'flow');
+  const u5 = an('updateAttribute', { attributeId: 'r3y', operation: 'increment' });
+  aE(b3, 'y', u5, 'value', 'value');
+  aE(u4, 'next', u5, 'do', 'flow');
+  const u6 = an('updateAttribute', { attributeId: 'r3z', operation: 'increment' });
+  aE(b3, 'z', u6, 'value', 'value');
+  aE(u5, 'next', u6, 'do', 'flow');
+  // The rotated vector also drives a force, so positions diverge too if the math does.
+  const af = an('applyForce', {});
+  aE(b3, 'x', af, 'fx', 'value');
+  aE(b3, 'y', af, 'fy', 'value');
+  aE(b3, 'z', af, 'fz', 'value');
+  aE(u6, 'next', af, 'do', 'flow');
+  return {
+    schemaVersion: 1,
+    properties: { name: 'Vector Rotate Parity Test', dimension: '3d', gridWidth: 24, gridHeight: 24, gridDepth: 12, topology: '2d-grid', boundaryTreatment: 'torus', useWasm: false, useWebGPU: false },
+    topologyMode: { gridCells: false, agents: true },
+    centerBased: { enabled: true, maxAgents: 100, maxBonds: 0, worldWidth: 24, worldHeight: 24, worldDepth: 12, seedCount: 40, seedPattern: 'scatter', defaultRadius: 0.5, growthRate: 0, repulsionStiffness: 2, adhesionStiffness: 0, interactionRange: 1.5, drag: 1, timeStep: 0.1, momentum: 0.5, maxSpeed: 0, neighbourQueryRadius: 8, useBondingPhysics: false, autoBond: false, agentTarget: 'wasm', agentUpdateMode: 'async',
+      agentCapabilities: { motion: 'force', body: true, collision: 'off', bonds: 'off', autoBond: false, growth: false, division: false, lifespan: false, populationBirth: false, populationDeath: false, sensing: false, sensingHeadingSource: 'velocity', orientation: false, fieldCoupling: false, appearance: true } },
+    attributes: [], modelAttributes: [], neighborhoods: [],
+    agentAttributes: ['r2x', 'r2y', 'r2z', 'r3x', 'r3y', 'r3z'].map(id => ({ id, name: id, type: 'float', defaultValue: '0' })),
+    variables: [], agentVariables: [], indicators: [], mappings: [],
+    graphNodes: [], graphEdges: [], agentGraphNodes: aN, agentGraphEdges: aEd, macroDefs: [],
+  };
+}
+
 // Synthetic: Get Curvature + For Each Bond currentLength over a BONDED population
 // (a `setup` hook forms the bonds — chain + cross links, so bondCount ≥ 2 and the
 // curvature branch actually runs; agents are re-positioned to irregular values,
@@ -734,6 +816,7 @@ entries.push({ name: '[synthetic] Get Grid Dimensions (3D world W/H/D + centres)
 entries.push({ name: '[synthetic] Apply Force To Agent (pairwise scatter)', raw: buildApplyForceToAgentModel() });
 entries.push({ name: '[synthetic] Apply Force To Agents (array broadcast, lowered)', raw: buildApplyForceToAgentsModel() });
 entries.push({ name: '[synthetic] Loop index output (value chain + branch + direct)', raw: buildLoopIndexModel() });
+entries.push({ name: '[synthetic] Vector Op rotate2d + rotateAxis (lowered, 3D)', raw: buildVectorRotateModel() });
 entries.push({ name: '[synthetic] Curvature + bond currentLength (bonded, hypot↔sqrt)', raw: buildCurvatureModel(), setup: setupCurvatureStores });
 entries.push({ name: '[synthetic] Flow diamond (conditional → shared getRandom chain)', raw: buildDiamondModel() });
 entries.push({ name: '[synthetic] RNG draw order (branch draw + post-branch draws)', raw: buildRngOrderModel() });
