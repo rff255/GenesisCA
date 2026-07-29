@@ -46,6 +46,8 @@ A small RFC-4180 parser, pure + unit-verified (`scripts/test-csv-import.mjs`):
 - a UTF-8 BOM stripped
 - **delimiter auto-detection** over `,` `;` `\t` (the one giving the most
   consistent field count across the first lines wins; ties → `,`), user-overridable
+- a fourth, never-auto-detected choice: **`none` — every CHARACTER is a cell**
+  (see §4b below), the ASCII-art board format
 
 **Header detection (decision):** the first row is a header iff it contains **no
 numeric field** AND at least one LATER row **does** contain a numeric field.
@@ -182,6 +184,55 @@ Handler (modelled on `importImage` / `paintManual`):
 
 It joins the message sets that are deferred during a GPU agent batch and that
 invalidate the GPU agent upload, exactly like `paint` / `writeRegion`.
+
+---
+
+## 4b. The `none` delimiter — ASCII-art boards (added 2026-07-29)
+
+`Delimiter → no delimiter` makes **every character one cell** — how published CA
+patterns are actually written down (Life `.`/`O`, Wireworld `.`/`H`/`t`/`#`, a
+digit grid). Everything in §4 (row/col convention, resize-vs-keep, the 3D layer
+selector, the `importGridValues` seam and its `gpuOwnsAttrs` readback-first rule)
+is unchanged; only the parse and the value lookup differ.
+
+**A separate parse path** (`parseCharRows`) — RFC-4180 machinery is exactly wrong
+for a board:
+
+- **no quote handling** — a `"`, a `,` and a `;` are ordinary cells;
+- **no whitespace trimming** — a SPACE is a legitimate cell (the usual "empty" in
+  ASCII art), so a line of spaces is a row of cells;
+- BOM stripped, CRLF/LF, split by code point (an astral char is one cell);
+- leading/trailing blank lines dropped (no phantom row from a trailing newline)
+  but **interior blank lines KEPT as zero-length rows** — in a board an empty line
+  most plausibly means a row of empty cells, and dropping it would shift every
+  later row up, silently corrupting the geometry. Such a row pads with the default
+  and the padding is counted.
+- **header forced OFF unconditionally** (a header cannot exist when every
+  character is a cell) — heuristic and override both bypassed.
+- **GRID only** (decision): one character per column is meaningless for agent
+  x/y/attribute columns. The option renders disabled-with-a-reason on the Agents
+  target, and a stale `none` selection coerces back to `auto`.
+
+**The char → value map** (`CsvCharMap`) is the core, and the general answer to
+"the value has to fit in a single char": **any character can stand for any
+value** — `a → 10`, `b → -3`, `a → 2.5`. Digits are merely the auto-seed. The
+dialog lists every distinct character with its occurrence count and a
+type-appropriate control (a tag/bool `select` with an explicit `(default)` entry;
+an `InlineNumberInput` + clear for numbers — never a raw `<input type=number>`).
+
+Auto-seed (conservative; space never seeded; everything editable):
+
+| attribute | seeds |
+| --- | --- |
+| integer / decimal / neighborIndex | a digit stands for its own value |
+| tag | a digit → that INDEX when in range; else a char matching the **first letter of exactly ONE** option → that option (`H`→Head, `t`→tail, case-insensitive). Ambiguous initials seed NEITHER |
+| binary | `1 # O o X x *` → true, `0 . - b` → false (Life plaintext `.O`, RLE `bo`) |
+
+An unmapped character (including space) takes the attribute default and is
+reported **per character** in the summary — not per cell, which would flood the
+issue list on a large board. The map is session-scoped and re-seeded when the
+character set or the target attribute changes; it is not persisted (a char map
+only means anything for the file it came from).
 
 ---
 

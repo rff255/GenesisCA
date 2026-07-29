@@ -2085,6 +2085,43 @@ export function HelpView() {
             import never fails silently.
           </p>
           <p className={styles.p}>
+            <strong>ASCII-art boards &mdash; the &quot;no delimiter&quot; mode.</strong> Most
+            published CA patterns are written as plain character art (Life as{' '}
+            <code>.</code>/<code>O</code>, Wireworld as <code>.</code>/<code>H</code>/
+            <code>t</code>/<code>#</code>, a digit grid for a numeric attribute). Pick{' '}
+            <strong>Delimiter &rarr; no delimiter</strong> and <em>every character becomes one
+            cell</em>: a line of 40 characters is a 40-wide row. Quoting is off in this mode
+            (a <code>&quot;</code>, a <code>,</code> and a <code>;</code> are ordinary cells)
+            and whitespace is never trimmed, so a <strong>space is a real cell</strong> &mdash;
+            the usual &quot;empty&quot; in ASCII art. A header row cannot exist here, so it is
+            switched off. The mode is available for the <em>Grid</em> target only (one character
+            per column is meaningless for agent position columns).
+          </p>
+          <p className={styles.p}>
+            The dialog then lists every <strong>distinct character</strong> with how often it
+            occurs and lets you say what value it stands for. The value is <strong>not limited
+            to what fits in one character</strong> &mdash; a letter can carry a multi-digit or
+            negative number (map <code>a</code> to <code>10</code>, or <code>b</code> to{' '}
+            <code>-3</code>). Sensible starting points are filled in for you and every one is
+            editable:
+          </p>
+          <ul className={styles.list}>
+            <li><strong>Integer / decimal</strong> &mdash; the digits <code>0</code>&ndash;<code>9</code> stand for their own value.</li>
+            <li><strong>Tag</strong> &mdash; a digit stands for that option&apos;s index (when in range), and a
+              character matching the <em>first letter</em> of exactly <em>one</em> option stands for that
+              option (<code>H</code>&rarr;Head, <code>t</code>&rarr;tail). Two options sharing an initial
+              seed neither, so nothing is guessed.</li>
+            <li><strong>Binary</strong> &mdash; the usual conventions: <code>1 # O o X x *</code> &rarr; true,{' '}
+              <code>0 . - b</code> &rarr; false.</li>
+          </ul>
+          <p className={styles.p}>
+            Any character you leave unmapped &mdash; <strong>including space</strong> &mdash; takes the
+            attribute&apos;s default, and the summary line reports which characters those were and how
+            many cells they covered. Short lines pad with the default and are counted too; a blank
+            line in the middle of a board is kept as a row of default cells so the board&apos;s
+            geometry can never silently shift.
+          </p>
+          <p className={styles.p}>
             <strong>Brush shapes.</strong> Pick a stamp shape in the brush panel:
           </p>
           <ul className={styles.list}>
