@@ -1205,9 +1205,19 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
   // gesture, long before any re-render.
   const [followAgentId, setFollowAgentIdState] = useState<number | null>(null);
   const followAgentIdRef = useRef<number | null>(null);
+  // Controller state (see the FOLLOW MODE effect): the camera's own velocity, the
+  // EMA-filtered agent velocity, and the previous agent position the raw velocity
+  // is derived from. Refs (not effect locals) so the DEV hook can observe them.
+  const followCamVRef = useRef<[number, number, number]>([0, 0, 0]);
+  const followAgentVRef = useRef<[number, number, number]>([0, 0, 0]);
+  const followPrevPosRef = useRef<[number, number, number] | null>(null);
   const setFollowAgent = useCallback((id: number | null) => {
     if (followAgentIdRef.current === id) return;
     followAgentIdRef.current = id;
+    // A different agent (or none) means the controller's history is meaningless.
+    followCamVRef.current = [0, 0, 0];
+    followAgentVRef.current = [0, 0, 0];
+    followPrevPosRef.current = null;
     setFollowAgentIdState(id);
   }, []);
   /** A manual camera gesture (2D pan / autoscroll, 3D orbit / pan, Reset view)
@@ -6863,6 +6873,11 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       zoom: zoomRef.current,
       target3d: [...cam3dRef.current.target],
       dist3d: cam3dRef.current.dist,
+      // Controller state: the camera's own velocity and the EMA-filtered agent
+      // velocity that feeds the look-ahead (world units/s in the frame the
+      // active dimension works in).
+      camV: [...followCamVRef.current],
+      agentV: [...followAgentVRef.current],
     });
   }, [is3D, draw, instanceToSlot]);
 
@@ -7008,29 +7023,54 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
   // then calls draw(), so every downstream consumer (the direct-render camera
   // message, the cursor overlay, the composite render) follows for free.
   //
-  // THE ALLOWANCE (the anti-shake): a DEADZONE plus exponential smoothing.
-  // While the agent stays within `dz` of the camera centre the camera does not
-  // move AT ALL (not one write, not one draw) — that is what keeps jittery agent
-  // motion off the camera. Once outside, the camera eases toward the point that
-  // puts the agent back NEAR THE DEADZONE EDGE (not dead-centre): aiming at the
-  // edge is what lets small wanderings settle instead of ping-ponging through
-  // the middle.
+  // THE CONTROLLER — the standard game-camera composition: a small REST LATCH,
+  // a CRITICALLY DAMPED SPRING, and a FILTERED VELOCITY FEEDFORWARD.
+  // Rationale + measurements: docs/INVESTIGATION_FOLLOW_CAMERA.md.
   //
-  // FOLLOW_AIM_INSIDE aims a hair INSIDE that edge, and it is load-bearing: an
-  // exact-edge target is only reached asymptotically, so `dist` converges to
-  // `dz` from ABOVE and the deadzone test never latches — a motionless agent
-  // then produced an endless stream of sub-pixel camera writes and a draw()
-  // EVERY frame forever (measured: 120 draws / 120 frames while parked).
-  // Aiming just inside makes the camera CROSS the boundary, so the deadzone
-  // check stops it dead (~0.35 s after the agent settles).
-  const FOLLOW_SMOOTH_K = 5;            // 1/s — ~0.2 s to close 63% of the gap
-  const FOLLOW_AIM_INSIDE = 0.9;        // aim at 90% of the deadzone radius
-  const FOLLOW_DEADZONE_FRAC_2D = 0.15; // of min(canvas w, h), in screen px
-  const FOLLOW_DEADZONE_FRAC_3D = 0.08; // of the largest grid dimension, in world units
-  const FOLLOW_DEADZONE_VIEW_3D = 0.15; // ...but never more than this share of the eye distance
+  //   • The spring is what makes it acceleration-based: the camera carries a
+  //     VELOCITY state and is accelerated toward the target, so it picks up
+  //     smoothly and (being critically damped) never overshoots.
+  //   • The feedforward is what makes it CATCH UP. A spring tracking a target
+  //     moving at a constant speed settles at a lag of exactly 2v/ω, so aiming
+  //     at `agent + (2/ω)·v_agent` cancels that lag by construction — zero
+  //     steady-state error, nothing to tune. (The previous law — a first-order
+  //     ease toward the DEADZONE EDGE — had a structural offset of
+  //     `v/k + dz·AIM`; measured in-browser at 78.4 px against a 78.75 px
+  //     deadzone, i.e. the followed agent permanently rode the boundary, and
+  //     at low speed it saw-toothed between 44 and 79 px as it latched and
+  //     re-engaged. Both are gone: the same run now measures under a pixel.)
+  //   • The agent's velocity is DERIVED from successive render-snapshot
+  //     positions, never from the engine's vx/vy: that needs no worker plumbing
+  //     and, crucially, it works for models that move agents with Set Agent
+  //     Position and leave vx/vy at zero (Ant Necrophoresis) — and the slim
+  //     render snapshot omits vx/vy entirely unless something asks for it.
+  //   • The raw sample is speed-clamped to ONE WORLD EXTENT PER SECOND. A
+  //     teleport implies ~60 worlds/s and would fling the camera far past the
+  //     agent (measured: 144 px of overshoot without the clamp, 0.0 px with).
+  //     No real agent approaches that speed, so the clamp never clips genuine
+  //     motion.
+  //   • The DEADZONE IS NOW ONLY A REST LATCH. It no longer shrinks the error
+  //     (aiming at its edge is exactly what parked the camera on the boundary);
+  //     it just decides when the controller may stop writing. It gates on the
+  //     position error AND the camera velocity AND the filtered agent velocity,
+  //     so it cannot fire mid-flight and cannot stall a genuine slow follow —
+  //     and since the spring drives both to zero, it latches in finite time
+  //     (measured 1.5 s), which is what keeps a parked agent at ZERO writes and
+  //     ZERO draws. High-frequency jitter is absorbed by the spring's own
+  //     second-order roll-off instead of by a large allowance.
+  const FOLLOW_OMEGA = 6;               // rad/s — critically damped; ~0.33 s smooth time
+  const FOLLOW_VEL_TAU = 0.35;          // s — EMA time constant on the derived agent velocity
+  const FOLLOW_REST_FRAC_2D = 0.03;     // rest radius, of min(canvas w, h), in screen px
+  const FOLLOW_REST_V_PX_2D = 1.5;      // ...and the "at rest" speed, in screen px/s
+  const FOLLOW_REST_FRAC_3D = 0.02;     // rest radius, of the largest grid dimension
+  const FOLLOW_REST_VIEW_3D = 0.04;     // ...but never more than this share of the eye distance
+  const FOLLOW_REST_V_3D = 0.002;       // "at rest" speed, of the largest grid dimension, per second
   useEffect(() => {
     if (followAgentId == null) return;
     let raf = 0; let last = 0;
+    followCamVRef.current = [0, 0, 0];
+    followAgentVRef.current = [0, 0, 0];
+    followPrevPosRef.current = null;
     /** Fold a torus delta to the SHORTEST way round (so an agent crossing the
      *  seam never makes the camera fly the long way across the world). */
     const fold = (d: number, period: number) => {
@@ -7056,29 +7096,69 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       const torus = boundaryTreatmentRef.current === 'torus';
       const ax = snap.x[id]!, ay = snap.y[id]!;
       const W = gridWidth.current, H = gridHeight.current;
-      const ease = 1 - Math.exp(-FOLLOW_SMOOTH_K * dt);
+      const D = gridDepth.current;
+      const camV = followCamVRef.current, fv = followAgentVRef.current;
+      // Per-frame controller factors. `expf` is the exact critically damped
+      // decay e^(−ω·dt) in Unity SmoothDamp's rational form — unconditionally
+      // stable, which matters because dt is only clamped, never fixed.
+      const wt = FOLLOW_OMEGA * dt;
+      const expf = 1 / (1 + wt + 0.48 * wt * wt + 0.235 * wt * wt * wt);
+      const alpha = 1 - Math.exp(-dt / FOLLOW_VEL_TAU);
+      const leadT = 2 / FOLLOW_OMEGA;   // the exact ramp-lag cancellation
+
+      /** EMA-track the agent's velocity from successive snapshot positions, in
+       *  whichever frame the caller works in. Spike-clamped to one world extent
+       *  per second so a teleport can't inject a huge feedforward. */
+      const trackVelocity = (px: number, py: number, pz: number, tx: number, ty: number, tz: number) => {
+        const prev = followPrevPosRef.current;
+        if (prev) {
+          let rx = fold(px - prev[0], tx) / dt;
+          let ry = fold(py - prev[1], ty) / dt;
+          let rz = fold(pz - prev[2], tz) / dt;
+          const sp = Math.hypot(rx, ry, rz);
+          const maxSp = Math.max(W, H, D, 1);
+          if (sp > maxSp) { const s = maxSp / sp; rx *= s; ry *= s; rz *= s; }
+          fv[0] += alpha * (rx - fv[0]);
+          fv[1] += alpha * (ry - fv[1]);
+          fv[2] += alpha * (rz - fv[2]);
+        }
+        followPrevPosRef.current = [px, py, pz];
+      };
+      /** One critically damped spring step on one axis; returns the camera
+       *  DELTA (everything stays a delta, so the torus fold applies unchanged
+       *  and no absolute position is ever compared across a seam). */
+      const advance = (err: number, i: number) => {
+        const change = -(err + leadT * fv[i]!);
+        const temp = (camV[i]! + FOLLOW_OMEGA * change) * dt;
+        camV[i] = (camV[i]! - FOLLOW_OMEGA * temp) * expf;
+        return (change + temp) * expf - change;
+      };
+      const atRest = (dist: number, rest: number, vEps: number) =>
+        dist <= rest && Math.hypot(camV[0]!, camV[1]!, camV[2]!) <= vEps
+        && Math.hypot(fv[0]!, fv[1]!, fv[2]!) <= vEps;
 
       if (is3dRef.current) {
         const r = gl3dRef.current;
         if (!r) return;
-        const D = gridDepth.current;
         const md = Math.max(W, H, D, 1);
         const hx = (W - 1) / 2, hy = (H - 1) / 2, hz = (D - 1) / 2;
         const az = snap.z.length > 0 ? snap.z[id]! : 0;
         // gl3d's Z-up remap: col→+X, row→−Y, layer→−Z (see uploadAgents).
         const wx = ax - hx, wy = hy - ay, wz = hz - az;
+        trackVelocity(wx, wy, wz, torus ? W : 0, torus ? H : 0, torus ? D : 0);
         const cam = cam3dRef.current;
         let dx = wx - cam.target[0], dy = wy - cam.target[1], dz2 = wz - cam.target[2];
         if (torus) { dx = fold(dx, W); dy = fold(dy, H); dz2 = fold(dz2, D); }
-        // World-space deadzone, tightened when zoomed in so a close-up still
+        // World-space rest radius, tightened when zoomed in so a close-up still
         // tracks (cam.dist is a MULTIPLE of the largest grid dimension).
-        const dz = Math.min(FOLLOW_DEADZONE_FRAC_3D * md, FOLLOW_DEADZONE_VIEW_3D * cam.dist * md);
-        const dist = Math.hypot(dx, dy, dz2);
-        if (dist <= dz) return;                       // inside the allowance — no write, no draw
-        const pull = (dist - dz * FOLLOW_AIM_INSIDE) / dist * ease;
-        cam.target[0] += dx * pull;
-        cam.target[1] += dy * pull;
-        cam.target[2] += dz2 * pull;
+        const rest = Math.min(FOLLOW_REST_FRAC_3D * md, FOLLOW_REST_VIEW_3D * cam.dist * md);
+        if (atRest(Math.hypot(dx, dy, dz2), rest, FOLLOW_REST_V_3D * md)) {
+          camV[0] = camV[1] = camV[2] = 0;
+          return;                                     // settled — no write, no draw
+        }
+        cam.target[0] += advance(dx, 0);
+        cam.target[1] += advance(dy, 1);
+        cam.target[2] += advance(dz2, 2);
         if (torus) {
           // No tiling in 3D — the volume is drawn once, so keep the target
           // inside it or the followed agent leaves the frame after a wrap.
@@ -7104,13 +7184,17 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       // transform `ox = (parentW - W*scale)/2 + pan.x`).
       const camX = W / 2 - pan.x / scale;
       const camY = H / 2 - pan.y / scale;
+      trackVelocity(ax, ay, 0, torus ? W : 0, torus ? H : 0, 0);
       let dx = ax - camX, dy = ay - camY;
       if (torus) { dx = fold(dx, W); dy = fold(dy, H); }
-      const dz = FOLLOW_DEADZONE_FRAC_2D * Math.min(rect.width, rect.height) / scale;
-      const dist = Math.hypot(dx, dy);
-      if (dist <= dz) return;                         // inside the allowance — no write, no draw
-      const pull = (dist - dz * FOLLOW_AIM_INSIDE) / dist * ease;
-      let nx = camX + dx * pull, ny = camY + dy * pull;
+      // The rest radius and the "at rest" speed are defined in SCREEN px (so
+      // they mean the same thing at any zoom) and converted to world units.
+      const rest = FOLLOW_REST_FRAC_2D * Math.min(rect.width, rect.height) / scale;
+      if (atRest(Math.hypot(dx, dy), rest, FOLLOW_REST_V_PX_2D / scale)) {
+        camV[0] = camV[1] = camV[2] = 0;
+        return;                                       // settled — no write, no draw
+      }
+      let nx = camX + advance(dx, 0), ny = camY + advance(dy, 1);
       // Infinity mode TILES the torus, so a camera that walks off the world edge
       // still shows the right thing — leave the pan continuous (no jump). Without
       // tiling the single drawn copy would scroll away from the agent, so wrap the
