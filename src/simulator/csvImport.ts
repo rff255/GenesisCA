@@ -26,6 +26,13 @@ import { vectorComponentIds, vectorDimsOf } from '../modeler/vpl/compiler/vector
 export const CSV_DELIMITERS = [',', ';', '\t'] as const;
 export type CsvDelimiter = (typeof CSV_DELIMITERS)[number];
 
+/** The "no delimiter" mode: every CHARACTER of a line is one cell — the classic
+ *  ASCII-art board format published CA patterns are actually written in (Life as
+ *  `.`/`O`, Wireworld as `.`/`H`/`t`/`#`, a digit grid for an integer attribute).
+ *  NEVER returned by `detectDelimiter` — the user selects it explicitly, and it is
+ *  GRID-only (one char per column is meaningless for agent x/y columns). */
+export const CSV_NO_DELIMITER = 'none';
+
 /** Split CSV text into rows of raw string fields (RFC 4180).
  *
  *  Handles: quoted fields, `""` escapes inside quotes, delimiters and newlines
@@ -64,8 +71,31 @@ export function parseCsvRows(text: string, delimiter: string): string[][] {
   return rows.filter(r => r.length > 1 || (r[0] ?? '') !== '');
 }
 
+/** Split text into rows where every CHARACTER is one field (the `none` delimiter).
+ *
+ *  A SEPARATE path from `parseCsvRows` on purpose — RFC-4180 machinery is exactly
+ *  wrong for an ASCII board:
+ *    - NO quote handling: a `"` is an ordinary cell, and so is a `,` or a `;`.
+ *    - NO whitespace trimming: a leading/interior SPACE is a legitimate cell (the
+ *      most common "empty" in ASCII art), so a line of spaces is a row of cells.
+ *  Strips a UTF-8 BOM, accepts CRLF or LF, and drops LEADING/TRAILING blank lines
+ *  (a trailing newline must not create a phantom row). INTERIOR blank lines are
+ *  KEPT as zero-length rows: in a board an empty line most plausibly means a row
+ *  of empty cells, and dropping it would shift every later row up — silently
+ *  corrupting the geometry. Such a row pads entirely with the attribute default
+ *  and the padding is counted, so it is visible either way.
+ *  Splits by code POINT (`Array.from`), so an astral char counts as one cell. */
+export function parseCharRows(text: string): string[][] {
+  const src = text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
+  const lines = src.split('\n').map(l => (l.endsWith('\r') ? l.slice(0, -1) : l));
+  while (lines.length > 0 && lines[lines.length - 1] === '') lines.pop();
+  while (lines.length > 0 && lines[0] === '') lines.shift();
+  return lines.map(l => Array.from(l));
+}
+
 /** Pick the delimiter that yields the most consistent field count over the first
- *  lines (and more than one field). Ties → the earlier entry of CSV_DELIMITERS. */
+ *  lines (and more than one field). Ties → the earlier entry of CSV_DELIMITERS.
+ *  NEVER returns `CSV_NO_DELIMITER` — that mode is an explicit user choice. */
 export function detectDelimiter(text: string): CsvDelimiter {
   let best: CsvDelimiter = ',';
   let bestScore = -1;
@@ -118,12 +148,22 @@ export interface CsvTable {
   ragged: number;
 }
 
-/** Parse text into a table: delimiter + header detection (both overridable). */
+/** Parse text into a table: delimiter + header detection (both overridable).
+ *
+ *  `delimiter: CSV_NO_DELIMITER` takes the char-per-cell path and forces
+ *  header OFF UNCONDITIONALLY — a header row cannot exist when every character is
+ *  a cell, so the heuristic must not run there. */
 export function parseCsvTable(
   text: string,
   opts?: { delimiter?: string; hasHeader?: boolean },
 ): CsvTable {
   const delimiter = opts?.delimiter ?? detectDelimiter(text);
+  if (delimiter === CSV_NO_DELIMITER) {
+    const rows = parseCharRows(text);
+    let w = 0;
+    for (const r of rows) w = Math.max(w, r.length);
+    return { delimiter, header: null, rows, width: w, ragged: rows.filter(r => r.length < w).length };
+  }
   const all = parseCsvRows(text, delimiter);
   const hasHeader = opts?.hasHeader ?? detectHeader(all);
   const header = hasHeader ? (all[0] ?? []) : null;
@@ -205,6 +245,95 @@ export function decodeCsvValue(attr: CsvAttrShape, raw: string): CsvDecode {
     default:
       return { value: fallback, ok: false };
   }
+}
+
+// ---------------------------------------------------------------------------
+// Character → value mapping (the `none` delimiter's core)
+// ---------------------------------------------------------------------------
+
+/** A character found in a char-per-cell file, with how often it occurs. */
+export interface CsvCharInfo { char: string; count: number }
+
+/** char → the value it stands for, in the CANONICAL `Attribute.defaultValue`
+ *  string encoding (a tag is its INDEX string, a bool is `'true'`/`'false'`,
+ *  numbers are decimal) so it feeds `encodeAttrValue` and the existing inline
+ *  widgets unchanged. An ABSENT key or `''` means UNMAPPED → the attribute
+ *  default (counted + reported, never silent).
+ *
+ *  This map is what makes "the value has to fit in a single char" a non-issue:
+ *  ANY character can stand for ANY value, so `a → 10` works for an integer
+ *  attribute. Digits are merely the auto-seed. */
+export type CsvCharMap = Record<string, string>;
+
+/** The distinct characters of a char-per-cell table with their counts, most
+ *  frequent first (the board's "background" char leads), ties by code point.
+ *  SPACE is included — it is a real cell the user may want to map. */
+export function distinctChars(table: CsvTable): CsvCharInfo[] {
+  const counts = new Map<string, number>();
+  for (const row of table.rows) for (const ch of row) counts.set(ch, (counts.get(ch) ?? 0) + 1);
+  return [...counts.entries()]
+    .map(([char, count]) => ({ char, count }))
+    .sort((a, b) => (b.count - a.count) || (a.char < b.char ? -1 : a.char > b.char ? 1 : 0));
+}
+
+/** Printable label for a character in the mapping table (space / tab are cells
+ *  too, and an invisible row in the UI would be unusable). */
+export function charLabel(ch: string): string {
+  if (ch === ' ') return '␣ (space)';
+  if (ch === '\t') return '⇥ (tab)';
+  const cp = ch.codePointAt(0) ?? 0;
+  if (cp < 0x20) return `\\x${cp.toString(16).padStart(2, '0')}`;
+  return ch;
+}
+
+const BOOL_TRUE_CHARS = ['1', '#', 'O', 'o', 'X', 'x', '*'];
+const BOOL_FALSE_CHARS = ['0', '.', '-', 'b'];
+
+/** Conservative auto-seed for the char map — every seed is visible and editable
+ *  in the dialog's table, and anything not seeded stays UNMAPPED (→ default).
+ *
+ *  integer / float / neighborIndex: a DIGIT stands for its own numeric value.
+ *  tag: a DIGIT stands for that tag INDEX when in range; otherwise a char that
+ *    case-insensitively matches the FIRST LETTER of EXACTLY ONE tag option stands
+ *    for that option (Wireworld `H`→Head, `t`→tail) — only when unambiguous, so
+ *    two options sharing an initial seed neither.
+ *  bool: the universal CA-ASCII conventions — `1 # O o X x *` → true,
+ *    `0 . - b` → false (Life plaintext `.O`, RLE `bo`).
+ *  SPACE is deliberately never seeded (the coordinator's rule: space → default). */
+export function autoSeedCharMap(chars: Array<CsvCharInfo | string>, attr: CsvAttrShape): CsvCharMap {
+  const list = chars.map(c => (typeof c === 'string' ? c : c.char));
+  const map: CsvCharMap = {};
+  const tagOpts = attr.tagOptions ?? [];
+  // For a tag attribute: which initials are UNAMBIGUOUS?
+  const initialToIdx = new Map<string, number | null>();
+  if (attr.type === 'tag') {
+    for (let i = 0; i < tagOpts.length; i++) {
+      const k = (tagOpts[i] ?? '').charAt(0).toLowerCase();
+      if (k === '') continue;
+      initialToIdx.set(k, initialToIdx.has(k) ? null : i);  // null = ambiguous
+    }
+  }
+  for (const ch of list) {
+    if (ch === ' ') continue;
+    const isDigit = ch >= '0' && ch <= '9';
+    if (attr.type === 'tag') {
+      if (isDigit) {
+        const n = Number(ch);
+        if (n < tagOpts.length) { map[ch] = String(n); continue; }
+      }
+      const idx = initialToIdx.get(ch.toLowerCase());
+      if (idx !== undefined && idx !== null) map[ch] = String(idx);
+      continue;
+    }
+    if (attr.type === 'bool') {
+      if (BOOL_TRUE_CHARS.includes(ch)) map[ch] = 'true';
+      else if (BOOL_FALSE_CHARS.includes(ch)) map[ch] = 'false';
+      continue;
+    }
+    // integer / float / neighborIndex
+    if (isDigit) map[ch] = ch;
+  }
+  return map;
 }
 
 // ---------------------------------------------------------------------------
@@ -425,18 +554,61 @@ export interface CsvGridBuild {
   /** Cells that had no field at all (ragged rows padded with the default). */
   paddedCells: number;
   issues: CsvIssue[];
+  /** `none` mode only: the distinct characters that carried NO mapping (their
+   *  cells took the attribute default). Reported per CHARACTER, not per cell — a
+   *  100×100 board with one unmapped background char would otherwise flood the
+   *  per-cell issue list with identical entries. */
+  unmappedChars?: string[];
 }
 
 /** Build the flat row-major value block for `importGridValues`.
  *
  *  CONVENTION: a CSV LINE is a grid ROW (height) and a FIELD is a grid COLUMN
  *  (width) — a 12-line × 9-field file gives a 9 wide × 12 tall grid. Ragged rows
- *  are padded with the attribute default and counted. */
-export function buildGridValues(table: CsvTable, attr: CsvAttrShape): CsvGridBuild {
+ *  are padded with the attribute default and counted.
+ *
+ *  `charMap` (the `none` delimiter) replaces the per-type field decode with a
+ *  char → value lookup: a mapped char yields its value, an UNMAPPED char (absent
+ *  key or `''`, and SPACE by default) yields the attribute default and is counted.
+ *  Without it the DELIMITED path below is untouched. */
+export function buildGridValues(table: CsvTable, attr: CsvAttrShape, charMap?: CsvCharMap): CsvGridBuild {
   const height = table.rows.length;
   const width = table.width;
   const values = new Float64Array(Math.max(0, width * height));
   const fallback = encodeAttrValue(attr, undefined);
+  if (charMap) {
+    const out: CsvGridBuild = { values, width, height, badValues: 0, paddedCells: 0, issues: [], unmappedChars: [] };
+    const seen = new Set<string>();
+    // Pre-encode each mapping ONCE (a board is large; the map is tiny).
+    const enc = new Map<string, number>();
+    for (const [ch, raw] of Object.entries(charMap)) {
+      if (raw === undefined || raw === '') continue;
+      enc.set(ch, encodeAttrValue(attr, raw));
+    }
+    for (let r = 0; r < height; r++) {
+      const row = table.rows[r]!;
+      for (let c = 0; c < width; c++) {
+        const o = r * width + c;
+        if (c >= row.length) { values[o] = fallback; out.paddedCells++; continue; }
+        const ch = row[c]!;
+        const v = enc.get(ch);
+        if (v === undefined) {
+          values[o] = fallback;
+          out.badValues++;
+          if (!seen.has(ch)) {
+            seen.add(ch);
+            out.unmappedChars!.push(ch);
+            if (out.issues.length < MAX_ISSUES) {
+              out.issues.push({ row: r + 1, column: `column ${c + 1}`, raw: charLabel(ch), reason: 'unmapped character → default' });
+            }
+          }
+          continue;
+        }
+        values[o] = v;
+      }
+    }
+    return out;
+  }
   const out: CsvGridBuild = { values, width, height, badValues: 0, paddedCells: 0, issues: [] };
   for (let r = 0; r < height; r++) {
     const row = table.rows[r]!;
