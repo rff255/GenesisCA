@@ -7135,6 +7135,63 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
     });
   }, [model.properties.gridWidth, model.properties.gridHeight]);
 
+  // Close EVERY inspect dialog when a different model is loaded (or New'd).
+  // A cell popover keys on a flat cell index of the OLD grid and an agent
+  // popover on a slot id of the OLD population, so both are meaningless the
+  // moment the model is swapped — leaving them open showed stale/garbage rows.
+  //
+  // THE SEAM: `modelVersion` (ModelState) is bumped by EXACTLY two reducer
+  // actions — LOAD_MODEL and NEW_MODEL — so it means "a different model now"
+  // by construction and covers every call site for free (File > Load, a
+  // Library card, drag-and-drop, the PWA file handler, File > New, and a
+  // re-load of the SAME file). Deliberately NOT keyed on
+  // `model.properties.name` (a different file with the same name would not
+  // close), nor on `loadedFileName` (New nulls it; re-loading the same file
+  // leaves it equal), nor on a window CustomEvent (several load call sites —
+  // missing one silently regresses). A model EDIT never bumps it, so a soft
+  // recompile / attribute tweak correctly leaves popovers alone, and a
+  // simulator Resize keeps its existing out-of-bounds-only auto-close above.
+  useEffect(() => {
+    // Cell inspectors (pinned + the transient sweep) and their gesture state.
+    setInspectPopovers([]);
+    setSweepInspector(null);
+    sweepInspectorRef.current = null;
+    sweepActiveRef.current = false;
+    sweepStartCellRef.current = null;
+    sweepMovedRef.current = false;
+    sweepRectRef.current = null;
+    setHoveredInspectIdx(null);
+    setFocusedInspectIdx(null);
+    setPulseInspectIdx(null);
+    if (pulseTimerRef.current != null) { window.clearTimeout(pulseTimerRef.current); pulseTimerRef.current = null; }
+    inspectDataRef.current.clear();
+    inspectColorsRef.current.clear();
+    inspectOrientationsRef.current.clear();
+    popoverRectsRef.current.clear();
+    inspectHighlight3dRef.current = [];
+    // Agent inspectors — the ref LEADS the state (a fast click reads it before
+    // any re-render; see openAgentInspector), so it must be cleared here too.
+    setAgentPopovers([]);
+    setAgentSweepPopover(null);
+    agentSweepPopoverRef.current = null;
+    setFocusedAgentPopoverId(null);
+    agentStatesRef.current.clear();
+    agentSweepActiveRef.current = false;
+    agentSweepMovedRef.current = false;
+    agentSweepStartIdRef.current = -1;
+    agentSweepAnchorRef.current = null;
+    // Transient visuals that also hold an id into the OLD population: the 3D
+    // inspect rings, a staged Glue/Cut anchor and the single-scope Edit target
+    // (its dashed highlight + prefill would otherwise point at an arbitrary
+    // agent of the new model).
+    inspectAgents3dRef.current = [];
+    agentGlueAnchorRef.current = -1;
+    editTargetIdRef.current = -1;
+    setEditTargetId(-1);
+    editPrefillIdRef.current = -1;
+    draw();
+  }, [modelVersion, draw]);
+
   // Pin (or re-focus) an inspector popover at the given cell. Shared by the
   // Shift+LMB click path (mouseup-after-no-movement on a sweep) and any
   // future commit point.
