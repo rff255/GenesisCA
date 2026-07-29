@@ -1756,7 +1756,8 @@ export function HelpView() {
             <strong> dragged by its header</strong>, closes with its &times; or <span className={styles.kbd}>Esc</span>,
             and offers <strong>Close all</strong>; dragging across agents before releasing re-targets
             the transient popover instead of pinning it. In 3D every open inspector also rings its
-            agent in the volume. The
+            agent in the volume, and the ring <strong>follows that agent</strong> as it moves. Loading
+            a different model closes every open inspector (cell and agent). The
             <strong> CA&nbsp;Grid</strong> brush target paints cells with the normal brush. In Area
             scope the agents the stroke will touch are <strong>highlighted</strong> (every mode
             except Add), a <strong>Show brush cursor</strong> checkbox toggles the brush overlay, and
