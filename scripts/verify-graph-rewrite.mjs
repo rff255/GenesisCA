@@ -36,7 +36,7 @@ export {
   serializeAgentStore, deserializeAgentStore,
   rewireBond, hasBond, drainAgentBondRequests, clearAgentBondRequests,
 } from '../src/simulator/engine/agentEngine.ts';
-export { BOND_REQ_NONE, BOND_REQ_ID_BIAS, bondReqSlotsForModel, agentGraphUsesBondRequests } from '../src/modeler/vpl/compiler/bondRequestQueue.ts';
+export { BOND_REQ_NONE, BOND_REQ_ID_BIAS, BOND_REQ_BETWEEN_SIGN, BOND_REQUEST_NODE_TYPES, bondReqSlotsForModel, agentGraphUsesBondRequests } from '../src/modeler/vpl/compiler/bondRequestQueue.ts';
 export {
   DEFAULT_DIVIDE_PARTITION, dividePartitionFromConfig, dividePartitionKey, dividePartitionCode,
 } from '../src/modeler/vpl/compiler/dividePartition.ts';
@@ -78,7 +78,8 @@ const {
   freeAgentSlot, sweepStaleBonds, allocAgentSlot, initAgentSlot, divideAgent, bondAttrKind,
   serializeAgentStore, deserializeAgentStore, serializeAgentState, deserializeAgentState, bondAttrsOf,
   rewireBond, hasBond, drainAgentBondRequests, clearAgentBondRequests,
-  BOND_REQ_NONE, BOND_REQ_ID_BIAS, bondReqSlotsForModel, agentGraphUsesBondRequests, resolveBondRequestDepth,
+  BOND_REQ_NONE, BOND_REQ_ID_BIAS, BOND_REQ_BETWEEN_SIGN, BOND_REQUEST_NODE_TYPES,
+  bondReqSlotsForModel, agentGraphUsesBondRequests, resolveBondRequestDepth,
   DEFAULT_DIVIDE_PARTITION, dividePartitionFromConfig, dividePartitionKey, dividePartitionCode, detectMissingConfig,
   compileAgentGraphWasmForModel, instantiateAgentWasm, buildAgentLayoutExtras, isAgentGraphWasmSupported,
   compileAgentGraphWebGPUForModel, isAgentGraphWebGPUSupported, compileAgentGraphWebGPU,
@@ -2441,6 +2442,411 @@ function metricView(s) {
   };
 }
 /** A store of `n` seeded agents with a bond capacity of `mb`. */
+// ===========================================================================
+// TIER J — P4b: the FORM BETWEEN verb (third-party bond formation).
+//
+// The gate this tier exists for: the cubic TRIANGLE SPLIT must complete in ONE
+// generation, so that O6 (`min deg == max deg == 3` and `E == 3N/2`) holds at
+// EVERY generation, not merely between rule applications.
+// ===========================================================================
+
+/** Write ONE FORM BETWEEN entry, mirroring all three emitters: the op kind rides
+ *  the SIGN of the break lane (negative), the ids carry the same `+2` bias. */
+function queueBetween(st, i, c, { a = -1, b = -1, L = 0, K = 0 } = {}) {
+  const slots = st.bondReqSlots, depth = slots - 1;
+  const e = i * slots + Math.min(c, depth);
+  const good = a >= 0 && b >= 0;
+  st.bondBreakReq[e] = good ? -(a + BOND_REQ_ID_BIAS) : -BOND_REQ_NONE;
+  st.bondFormReq[e] = good ? b + BOND_REQ_ID_BIAS : BOND_REQ_NONE;
+  st.bondFormL[e] = L; st.bondFormK[e] = K;
+}
+
+/** A behaviour-pass spawn, byte-for-byte what the worker's grow-only
+ *  `agentBehaviourCreate` + `agentBehaviourAddToWorld` closures do (and what the
+ *  WebGPU readback's newborn reconcile does): grow-allocate beyond highWater,
+ *  initialise the slot, then COMMIT it live. This is the ordering that makes a
+ *  newborn a valid bond target in the SAME generation — the structural phase (and
+ *  therefore the queue drain) runs strictly after the behaviour pass. */
+function spawnLive(s, x, y, r = 0.5) {
+  if (s.highWater >= s.maxAgents) return -1;
+  const id = s.highWater++;
+  initAgentSlot(s, id, x, y, 0, r, id);
+  s.alive[id] = 1; s.liveCount++;
+  return id;
+}
+
+/** A store with capacity for a growing cubic graph, seeded with K4 (4 agents,
+ *  6 edges, every degree exactly 3 — the smallest cubic graph). */
+function cubicK4(maxAgents, maxBonds, depth) {
+  const s = createAgentStore(queueCfg(maxAgents, maxBonds, depth), []);
+  s.worldWidth = 4096; s.worldHeight = 4096; s.worldDepth = 1;
+  seedAgents(s, Array.from({ length: 4 }, (_, i) => ({ x: 1 + i, y: 1, radius: 0.5 })), 0.5);
+  for (let i = 0; i < 4; i++) for (let j = i + 1; j < 4; j++) formBond(s, i, j, 1, 1);
+  return s;
+}
+
+/** The live partners of `v`, in slot order. */
+const partnersOf = (s, v) =>
+  Array.from({ length: s.bondCount[v] }, (_, k) => s.bondPartner[v * s.maxBonds + k]);
+
+function tierJ() {
+  section('TIER J — P4b: the Form Between verb + the ONE-generation triangle split');
+
+  // --- 0. registration + the usage gate cover the new verb -----------------
+  {
+    ok(BOND_REQUEST_NODE_TYPES.has('formBondBetween'),
+      'formBondBetween is a queue verb (so the layout reserves the queue for it)');
+    const only = { agentGraphNodes: [{ id: 'a', data: { nodeType: 'formBondBetween' } }], centerBased: {}, topologyMode: { agents: true } };
+    ok(bondReqSlotsForModel(only) === 9,
+      'a graph whose ONLY verb is Form Between still reserves depth + the overflow bucket');
+    const inMacro = { agentGraphNodes: [], macroDefs: [{ id: 'm', nodes: [{ id: 'a', data: { nodeType: 'formBondBetween' } }] }], centerBased: {}, topologyMode: { agents: true } };
+    ok(agentGraphUsesBondRequests(inMacro), 'a Form Between inside a MACRO definition reserves the queue too');
+    ok(BOND_REQ_BETWEEN_SIGN === -1, 'the op-kind marker is the break lane SIGN');
+  }
+
+  // --- 1. the drain bonds the TWO NAMED AGENTS, not self ------------------
+  //
+  // This is the collision test: a Rewire fills BOTH lanes too, so if the sign were
+  // ignored the entry would be applied as a plain self→B form — bonding the WRONG
+  // pair with no error anywhere.
+  {
+    const st = queueStore(12, 4, 8);
+    queueBetween(st, 0, 0, { a: 5, b: 7 });      // agent 0 asks for 5↔7
+    drainAgentBondRequests(st, 1);
+    ok(hasBond(st, 5, 7), 'Form Between bonds the two NAMED agents');
+    ok(!hasBond(st, 0, 5) && !hasBond(st, 0, 7),
+      'Form Between does NOT bond the requester to either endpoint');
+    ok(allInvariants(st) === null, 'I1–I4 hold after a Form Between', String(allInvariants(st)));
+    ok(st.bondCount[0] === 0, 'the requester\'s own degree is untouched');
+
+    // NEGATIVE CONTROL: the SAME two ids with a POSITIVE break lane is the REWIRE
+    // encoding and produces a different (here: empty) graph — proving the sign is
+    // the load-bearing discriminator and this check is not vacuous.
+    const st2 = queueStore(12, 4, 8);
+    queueOp(st2, 0, 0, { from: 5, to: 7 });      // positive lanes ⇒ rewire(0, 5→7)
+    drainAgentBondRequests(st2, 1);
+    ok(!hasBond(st2, 5, 7),
+      'negative control: the SAME ids with a POSITIVE break lane are a REWIRE, not a Form Between');
+
+    // NEGATIVE CONTROL: an entry that only fills the FORM lane is a plain self-form
+    // — the exact wrong result a sign-blind drain would produce.
+    const st3 = queueStore(12, 4, 8);
+    queueOp(st3, 0, 0, { to: 7 });
+    drainAgentBondRequests(st3, 1);
+    ok(hasBond(st3, 0, 7) && !hasBond(st3, 5, 7),
+      'negative control: a sign-blind read of the entry would bond the REQUESTER to B');
+  }
+
+  // --- 2. semantics: self / dead / out of range / already bonded ----------
+  {
+    const st = queueStore(12, 4, 8);
+    queueBetween(st, 0, 0, { a: 3, b: 3 });                 // a === b
+    queueBetween(st, 0, 1, { a: 4, b: 999 });               // out of range
+    queueBetween(st, 0, 2, { a: -1, b: 5 });                // unresolvable A
+    freeAgentSlot(st, 9);
+    queueBetween(st, 0, 3, { a: 6, b: 9 });                 // dead endpoint
+    queueBetween(st, 0, 4, { a: 1, b: 2 });                 // a REAL one, after all of them
+    drainAgentBondRequests(st, 1);
+    ok(st.bondCount[3] === 0, 'a === b is a no-op');
+    ok(st.bondCount[4] === 0, 'an out-of-range endpoint is a no-op');
+    ok(st.bondCount[5] === 0, 'an unresolvable endpoint is a no-op');
+    ok(st.bondCount[6] === 0, 'a DEAD endpoint is a no-op');
+    ok(hasBond(st, 1, 2),
+      'every rejected Form Between still OCCUPIES its entry (no queue truncation)');
+    ok(allInvariants(st) === null, 'I1–I4 hold after the whole rejected batch');
+
+    // idempotence — a second request for an existing edge changes nothing
+    const before = edgeSet(decodeAgentGraph(st)).size;
+    queueBetween(st, 0, 0, { a: 1, b: 2 });
+    drainAgentBondRequests(st, 1);
+    ok(edgeSet(decodeAgentGraph(st)).size === before, 'an already-bonded pair is a no-op (no double edge)');
+  }
+
+  // --- 3. I5 — a full endpoint rejects the WHOLE op ----------------------
+  {
+    for (const fullSide of ['A', 'B']) {
+      const st = queueStore(14, 3, 8);
+      // Fill agent 5's list (3 of 3).
+      for (const k of [10, 11, 12]) formBond(st, 5, k, 1, 1);
+      formBond(st, 7, 13, 1, 1);                            // agent 7 has room
+      const before = edgeSet(decodeAgentGraph(st));
+      const beforeMs = degreeMultiset(decodeAgentGraph(st));
+      queueBetween(st, 0, 0, fullSide === 'A' ? { a: 5, b: 7 } : { a: 7, b: 5 });
+      drainAgentBondRequests(st, 1);
+      const after = edgeSet(decodeAgentGraph(st));
+      ok(!hasBond(st, 5, 7), `I5 (${fullSide} full): the bond is not formed`);
+      ok(st.bondCount[7] === 1, `I5 (${fullSide} full): the OTHER endpoint gains no half-bond`);
+      ok(before.size === after.size && [...before].every(e => after.has(e)),
+        `I5 (${fullSide} full): the graph is EXACTLY the pre-step graph`);
+      ok(degreeMultiset(decodeAgentGraph(st)) === beforeMs,
+        `I5 (${fullSide} full): the degree multiset is exactly unchanged`);
+      ok(allInvariants(st) === null, `I5 (${fullSide} full): I1–I4 hold`);
+    }
+  }
+
+  // --- 4. I2 — the created bond is symmetric in EVERY per-slot field ------
+  {
+    const specs = [
+      { id: 'bw', type: 'float', defaultValue: 0 },
+      { id: 'bk', type: 'integer', defaultValue: 0 },
+    ];
+    const s = createAgentStore(queueCfg(16, 4, 8), [], { bondAttrSpecs: specs });
+    s.worldWidth = 64; s.worldHeight = 64; s.worldDepth = 1;
+    seedAgents(s, Array.from({ length: 12 }, (_, i) => ({ x: 1 + i, y: 1, radius: 0.5 })), 0.5);
+    const slots = s.bondReqSlots;
+    const e = 0 * slots + 0;
+    queueBetween(s, 0, 0, { a: 4, b: 9, L: 3.25, K: 7.5 });
+    s.bondFormAttrs['bw'][e] = 2.75;
+    s.bondFormAttrs['bk'][e] = 6;
+    drainAgentBondRequests(s, 1);
+    ok(hasBond(s, 4, 9), 'I2 setup: the Form Between bond exists');
+    ok(checkBondSymmetry(decodeAgentGraph(s)) === null,
+      'I2: the created bond agrees on EVERY per-slot field in both rows',
+      String(checkBondSymmetry(decodeAgentGraph(s))));
+    const slotOf = (i, p) => {
+      for (let k = 0; k < s.bondCount[i]; k++) if (s.bondPartner[i * s.maxBonds + k] === p) return i * s.maxBonds + k;
+      return -1;
+    };
+    const s49 = slotOf(4, 9), s94 = slotOf(9, 4);
+    ok(s.bondRestLength[s49] === 3.25 && s.bondRestLength[s94] === 3.25,
+      'I2: the requested rest length lands in BOTH slots', `${s.bondRestLength[s49]} / ${s.bondRestLength[s94]}`);
+    ok(s.bondStiffness[s49] === 7.5 && s.bondStiffness[s94] === 7.5, 'I2: the stiffness lands in BOTH slots');
+    ok(s.bondAttrs['bw'][s49] === 2.75 && s.bondAttrs['bw'][s94] === 2.75,
+      'I2: the float bond attribute lands in BOTH slots');
+    ok(s.bondAttrs['bk'][s49] === 6 && s.bondAttrs['bk'][s94] === 6,
+      'I2: the integer bond attribute lands in BOTH slots');
+
+    // The engine defaults when the request leaves L / K at 0: the contact distance
+    // of the TWO NAMED AGENTS (not the requester's radii).
+    const s2 = createAgentStore({ ...queueCfg(16, 4, 8) }, []);
+    s2.worldWidth = 64; s2.worldHeight = 64; s2.worldDepth = 1;
+    seedAgents(s2, Array.from({ length: 12 }, (_, i) => ({ x: 1 + i, y: 1, radius: 0.5 })), 0.5);
+    s2.radius[4] = 2; s2.radius[9] = 3; s2.radius[0] = 100;
+    queueBetween(s2, 0, 0, { a: 4, b: 9 });
+    drainAgentBondRequests(s2, 1);
+    const k49 = (() => { for (let k = 0; k < s2.bondCount[4]; k++) if (s2.bondPartner[4 * s2.maxBonds + k] === 9) return 4 * s2.maxBonds + k; return -1; })();
+    ok(s2.bondRestLength[k49] === 5,
+      'the default rest length is the NAMED pair\'s contact distance (2 + 3), not the requester\'s',
+      String(s2.bondRestLength[k49]));
+  }
+
+  // --- 5. THE GATE — the cubic TRIANGLE SPLIT in ONE generation ----------
+  //
+  // v (deg 3, neighbours a,b,c) → v₁,v₂,v₃ with v₁–a, v₂–b, v₃–c and the triangle
+  // v₁v₂, v₂v₃, v₃v₁. ΔN=+2, ΔE=+3, every degree stays 3.
+  //
+  // Expressed from v₁'s behaviour, as FIVE queue ops (plus 2 host Creates, which
+  // consume no queue slot):
+  //     rewire(from=b, to=v₂)      v₁ drops b, gains v₂   (atomic: deg stays 3)
+  //     rewire(from=c, to=v₃)      v₁ drops c, gains v₃
+  //     between(b, v₂)             b regains its third edge
+  //     between(c, v₃)             c regains its third edge
+  //     between(v₂, v₃)            ← THE EDGE NO SELF-RELATIVE VERB CAN MAKE
+  // maxBonds is a TIGHT 3, so nothing may transiently exceed the cubic degree.
+  {
+    const SPLITS = 60, MB = 3;
+    const st = cubicK4(4 + 2 * SPLITS + 8, MB, 8);
+    const g0 = decodeAgentGraph(st);
+    ok(checkDegreeRegular(g0, 3) === null && edgeSet(g0).size === 6,
+      'O6 setup: K4 — 4 agents, 6 edges, every degree exactly 3', String(checkDegreeRegular(g0, 3)));
+
+    let bad = null, splits = 0, ops = 0, maxOps = 0;
+    for (let gen = 1; gen <= SPLITS && !bad; gen++) {
+      // Pick the mother deterministically (round-robin over the live population).
+      const live = [];
+      for (let i = 0; i < st.highWater; i++) if (st.alive[i]) live.push(i);
+      const v = live[(gen * 7) % live.length];
+      const [a, b, c] = partnersOf(st, v);
+      const nA = st.liveCount, nE = edgeSet(decodeAgentGraph(st)).size;
+
+      // --- behaviour pass: create + commit the two newborns
+      const v2 = spawnLive(st, st.x[v] + 0.25, st.y[v]);
+      const v3 = spawnLive(st, st.x[v] - 0.25, st.y[v]);
+      if (v2 < 0 || v3 < 0) { bad = `capacity exhausted at split ${gen}`; break; }
+      // --- behaviour pass: queue the five ops on the MOTHER's own queue
+      let k = 0;
+      queueOp(st, v, k++, { from: b, to: v2 });
+      queueOp(st, v, k++, { from: c, to: v3 });
+      queueBetween(st, v, k++, { a: b, b: v2 });
+      queueBetween(st, v, k++, { a: c, b: v3 });
+      queueBetween(st, v, k++, { a: v2, b: v3 });
+      ops = k; maxOps = Math.max(maxOps, k);
+
+      // --- structural phase
+      const overflow = drainAgentBondRequests(st, 1);
+      if (overflow) { bad = `unexpected overflow at split ${gen}`; break; }
+
+      // --- O6 IMMEDIATELY after the SAME generation
+      const g = decodeAgentGraph(st);
+      const reg = checkDegreeRegular(g, 3);
+      if (reg) { bad = `gen ${gen}: O6 broken — ${reg}`; break; }
+      const inv = allInvariants(st);
+      if (inv) { bad = `gen ${gen}: ${inv}`; break; }
+      const E = edgeSet(g).size;
+      if (st.liveCount !== nA + 2) { bad = `gen ${gen}: ΔN = ${st.liveCount - nA} != +2`; break; }
+      if (E !== nE + 3) { bad = `gen ${gen}: ΔE = ${E - nE} != +3`; break; }
+      // the triangle is closed and a is still on the mother
+      if (!(hasBond(st, v, v2) && hasBond(st, v, v3) && hasBond(st, v2, v3))) { bad = `gen ${gen}: the triangle is not closed`; break; }
+      if (!(hasBond(st, v, a) && hasBond(st, b, v2) && hasBond(st, c, v3))) { bad = `gen ${gen}: the outer edges are wrong`; break; }
+      splits++;
+    }
+    ok(bad === null, `THE GATE: ${SPLITS} triangle splits, each COMPLETE in ONE generation`, String(bad));
+    ok(splits === SPLITS, `all ${SPLITS} splits applied`, `${splits}`);
+    ok(maxOps === 5, 'the split costs FIVE queue ops (well inside the default depth of 8)', String(maxOps));
+    const gEnd = decodeAgentGraph(st);
+    ok(checkDegreeRegular(gEnd, 3) === null,
+      `O6 at the end: min deg == max deg == 3 and E == 3N/2 (N=${st.liveCount})`, String(checkDegreeRegular(gEnd, 3)));
+    ok(st.liveCount === 4 + 2 * SPLITS && edgeSet(gEnd).size === 6 + 3 * SPLITS,
+      `the growth law holds exactly: N = 4 + 2t, E = 6 + 3t`,
+      `N=${st.liveCount} E=${edgeSet(gEnd).size}`);
+
+    // NEGATIVE CONTROL — the whole point of the phase. Run the SAME split WITHOUT
+    // the v₂–v₃ Form Between (i.e. everything P4 alone could express) and prove
+    // O6 FAILS immediately: two nodes sit at degree 2 and E != 3N/2.
+    const stN = cubicK4(32, MB, 8);
+    {
+      const v = 0, [, b, c] = partnersOf(stN, v);
+      const v2 = spawnLive(stN, 9, 9), v3 = spawnLive(stN, 9, 10);
+      queueOp(stN, v, 0, { from: b, to: v2 });
+      queueOp(stN, v, 1, { from: c, to: v3 });
+      queueBetween(stN, v, 2, { a: b, b: v2 });
+      queueBetween(stN, v, 3, { a: c, b: v3 });
+      // (the v₂–v₃ edge deliberately omitted)
+      drainAgentBondRequests(stN, 1);
+      const g = decodeAgentGraph(stN);
+      ok(checkDegreeRegular(g, 3) !== null,
+        'negative control: WITHOUT the v₂–v₃ Form Between the split BREAKS O6 (the gate is not vacuous)',
+        String(checkDegreeRegular(g, 3)));
+      ok(edgeSet(g).size !== 3 * stN.liveCount / 2,
+        'negative control: E != 3N/2 without that edge', `E=${edgeSet(g).size} N=${stN.liveCount}`);
+      ok(allInvariants(stN) === null,
+        'negative control: the graph is still CONSISTENT — only O6 fails (so O6 is really what is being tested)');
+    }
+  }
+
+  // --- 6. the literal 7-op composition of the handoff also fits depth 8 ---
+  //
+  // 2 Form + 2 Break + 3 Form Between (v₁'s degree transiently reaches 5, so this
+  // shape needs maxBonds >= 5) — recorded so P7 can pick either formulation.
+  {
+    const st = cubicK4(32, 6, 8);
+    const v = 0, [a, b, c] = partnersOf(st, v);
+    const v2 = spawnLive(st, 9, 9), v3 = spawnLive(st, 9, 10);
+    let k = 0;
+    queueOp(st, v, k++, { to: v2 });                 // form v₁–v₂   (deg 4)
+    queueOp(st, v, k++, { to: v3 });                 // form v₁–v₃   (deg 5)
+    queueOp(st, v, k++, { from: b });                // break v₁–b   (deg 4)
+    queueOp(st, v, k++, { from: c });                // break v₁–c   (deg 3)
+    queueBetween(st, v, k++, { a: b, b: v2 });
+    queueBetween(st, v, k++, { a: c, b: v3 });
+    queueBetween(st, v, k++, { a: v2, b: v3 });
+    const overflow = drainAgentBondRequests(st, 1);
+    const g = decodeAgentGraph(st);
+    ok(k === 7 && overflow === false, 'the 7-op formulation fits the DEFAULT depth of 8 with no overflow');
+    ok(checkDegreeRegular(g, 3) === null,
+      'the 7-op formulation reaches the SAME cubic result in one generation', String(checkDegreeRegular(g, 3)));
+    ok(hasBond(st, v, a) && hasBond(st, b, v2) && hasBond(st, c, v3) && hasBond(st, v2, v3),
+      'the 7-op formulation closes the triangle and keeps a on the mother');
+    ok(allInvariants(st) === null, 'the 7-op formulation: I1–I4 hold');
+  }
+
+  // --- 7. the emitters agree with the harness's encoding ------------------
+  //
+  // The helper above re-implements the lane encoding, so assert the SHIPPED JS
+  // emitter produces the same shape (WASM/WebGPU are covered by the parity
+  // synthetic and the emitted-shader checks).
+  {
+    const model = betweenEmitModel();
+    const res = compileAgentGraph(model.agentGraphNodes, model.agentGraphEdges, model);
+    const code = res.behaviourCode || '';
+    ok(!res.error, 'the Form Between graph compiles on the JS agent target', String(res.error));
+    ok(/_bondBreakReq\[_bq\]\s*=\s*_bqOk\s*\?\s*-\(_bqA \+ 2\)\s*:\s*-1;/.test(code),
+      'JS emit: the break lane is NEGATED (the op-kind marker)');
+    ok(/_bondFormReq\[_bq\]\s*=\s*_bqOk\s*\?\s*_bqB \+ 2\s*:\s*1;/.test(code),
+      'JS emit: the form lane carries B with the same +2 bias');
+    ok(isAgentGraphWasmSupported(model), 'the WASM agent gate ACCEPTS Form Between');
+    ok(isAgentGraphWebGPUSupported(model), 'the WebGPU agent gate ACCEPTS Form Between');
+    const wg = compileAgentGraphWebGPUForModel(model);
+    const wgsl = wg.shaderCode || '';
+    ok(!wg.error && /= f32\(-select\(1, _brqA\d+ \+ 2, _brqOk\d+\)\);/.test(wgsl),
+      'WGSL emit: the break lane is NEGATED via f32(-select(...)) (the op-kind marker)', String(wg.error));
+    ok(/= f32\(select\(1, _brqB\d+ \+ 2, _brqOk\d+\)\);/.test(wgsl),
+      'WGSL emit: the form lane carries B with the same +2 bias');
+    ok(!/atomic/i.test(wgsl),
+      'WGSL emit: still NO atomics anywhere (the ids are PAYLOAD on the requester\'s own rows, not addresses)');
+  }
+
+  // --- 8. the SPAWN-HANDLE shape the triangle split depends on --------------
+  //
+  // The split bonds agents it CREATED this generation, so the Create Agent handle
+  // must survive as a VALUE into later flow nodes on every target. A pre-existing
+  // WASM-only omission (`createAgent` missing from AGENT_VALUE_NO_HOIST, which the
+  // WebGPU mirror always had) made exactly this shape fail to compile there —
+  // "unsupported value node 'createAgent'" — silently clamping every behaviour-graph
+  // spawning model to JS. Guarded here permanently because P4b's flagship rule needs it.
+  {
+    const model = spawnHandleModel();
+    const w = compileAgentGraphWasmForModel(model);
+    ok(isAgentGraphWasmSupported(model) && !w.error && w.bytes.length > 0,
+      'a Create Agent handle consumed as a VALUE compiles on the WASM agent target', String(w.error));
+    const g = compileAgentGraphWebGPUForModel(model);
+    ok(isAgentGraphWebGPUSupported(model) && !g.error && (g.shaderCode || '').length > 0,
+      'the same spawn-handle shape compiles on the WebGPU agent target', String(g.error));
+    const js = compileAgentGraph(model.agentGraphNodes, model.agentGraphEdges, model);
+    ok(!js.error, 'the same spawn-handle shape compiles on the JS agent target', String(js.error));
+  }
+}
+
+/** Create Agent → Add To World → Form Between(handle, handle) — the spawn-handle
+ *  shape the triangle split is built on, on all three targets. */
+function spawnHandleModel() {
+  let k = 0; const nid = () => 's' + (k++);
+  const N = [], E = [];
+  const an = (t, cfg = {}) => { const n = { id: nid(), position: { x: 0, y: 0 }, data: { nodeType: t, config: cfg } }; N.push(n); return n; };
+  const ve = (s, sp, t, tp) => E.push({ id: nid(), source: s.id, target: t.id, sourceHandle: `output_value_${sp}`, targetHandle: `input_value_${tp}` });
+  const fe = (s, sp, t) => E.push({ id: nid(), source: s.id, target: t.id, sourceHandle: `output_flow_${sp}`, targetHandle: 'input_flow_do' });
+  const bs = an('behaviourStep', {});
+  const c1 = an('createAgent', { _port_x: '5', _port_y: '5', _port_radius: '0.5' });
+  const a1 = an('addAgentToWorld', {});
+  const c2 = an('createAgent', { _port_x: '6', _port_y: '5', _port_radius: '0.5' });
+  const a2 = an('addAgentToWorld', {});
+  const fb = an('formBondBetween', { _port_restLength: '1', _port_stiffness: '0' });
+  ve(c1, 'handle', a1, 'handle'); ve(c2, 'handle', a2, 'handle');
+  ve(c1, 'handle', fb, 'agentA'); ve(c2, 'handle', fb, 'agentB');
+  fe(bs, 'do', c1); fe(c1, 'next', a1); fe(a1, 'next', c2); fe(c2, 'next', a2); fe(a2, 'next', fb);
+  return {
+    ...migrateForHarness({
+      properties: { name: 'p4b-spawn', gridWidth: 32, gridHeight: 32, updateMode: 'synchronous' },
+      topologyMode: { gridCells: false, agents: true },
+      attributes: [], agentAttributes: [], neighborhoods: [], mappings: [], graphNodes: [], graphEdges: [],
+      agentGraphNodes: N, agentGraphEdges: E,
+      centerBased: { enabled: true, maxAgents: 64, maxBonds: 4, agentCapabilities: AGENT_CAPS({ bonds: 'data', populationBirth: true }) },
+    }),
+    agentGraphNodes: N, agentGraphEdges: E,
+  };
+}
+
+/** A minimal agent model whose behaviour issues ONE Form Between. */
+function betweenEmitModel() {
+  const nodes = [
+    { id: 'root', position: { x: 0, y: 0 }, data: { nodeType: 'behaviourStep', config: {} } },
+    { id: 'fb', position: { x: 200, y: 0 }, data: { nodeType: 'formBondBetween', config: { _port_agentA: '1', _port_agentB: '2', _port_restLength: '3', _port_stiffness: '4' } } },
+  ];
+  const edges = [
+    { id: 'e0', source: 'root', sourceHandle: 'output_flow_do', target: 'fb', targetHandle: 'input_flow_do' },
+  ];
+  return {
+    ...migrateForHarness({
+      properties: { name: 'p4b-between', gridWidth: 32, gridHeight: 32, updateMode: 'synchronous' },
+      topologyMode: { gridCells: false, agents: true },
+      attributes: [], agentAttributes: [], neighborhoods: [], mappings: [], graphNodes: [], graphEdges: [],
+      agentGraphNodes: nodes, agentGraphEdges: edges,
+      centerBased: { enabled: true, maxAgents: 64, maxBonds: 4, agentCapabilities: AGENT_CAPS({ bonds: 'data' }) },
+    }),
+    agentGraphNodes: nodes, agentGraphEdges: edges,
+  };
+}
+
 function metricStore(n, mb) {
   const s = createAgentStore(bondCfg(Math.max(8, n + 8), mb), []);
   seedAgents(s, Array.from({ length: n }, (_, i) => ({ x: 1 + (i % 8) * 2, y: 1 + Math.floor(i / 8) * 2 })), 0.5);
@@ -2768,6 +3174,7 @@ tierE();
 tierF();
 tierG();
 tierH();
+tierJ();
 tierI();
 await tierIMutants();
 

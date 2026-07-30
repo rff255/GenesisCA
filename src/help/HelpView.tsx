@@ -1735,6 +1735,19 @@ export function HelpView() {
             and its replacement missing. That is what lets a rule keep every node's degree exactly
             constant while the topology churns underneath it.
           </p>
+          <p className={styles.p}>
+            <strong>Form Bond Between</strong> bonds <em>two other agents</em>, named by id. Form Bond
+            always joins <em>you</em> to a target, so on its own it cannot make an edge between two
+            agents that are both someone else &mdash; and the classic <strong>triangle split</strong>
+            needs exactly that: it creates two new nodes and one of the three new edges joins those
+            two newborns, neither of which is you, and neither of which runs its own rule until the
+            next generation. With this verb the whole split fits in a single step, so the graph is
+            never caught in a half-rewritten state. The request travels on <em>your</em> queue &mdash;
+            the two ids are just values it carries &mdash; and the same all-or-nothing rule applies:
+            if either agent is gone, they are already bonded, or <em>either</em> one has a full bond
+            list, nothing is formed. Rest length 0 means the contact distance of the two agents you
+            named.
+          </p>
           <h3 className={styles.h3}>Dividing: which daughter gets which bond?</h3>
           <p className={styles.p}>
             When an agent divides, its bonds have to be shared out. By default that happens by

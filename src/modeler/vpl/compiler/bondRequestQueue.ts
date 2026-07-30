@@ -23,8 +23,8 @@
 //   bondFormReq [base+c]  the FORM side    0 = slot empty · 1 = none · v+2 = agent v
 //   bondFormL / bondFormK / bondFormAttr_<id>   the FORM half's parameters
 //
-// so ONE entry expresses all three verbs and `rewireBond` is ATOMIC by
-// construction (break + form are one entry, applied together or not at all —
+// so ONE entry expresses all three self-relative verbs and `rewireBond` is ATOMIC
+// by construction (break + form are one entry, applied together or not at all —
 // invariant I5), rather than two queued ops that could half-apply.
 //
 // THE +2 ENCODING is what lets the drain stop at the first empty slot: every
@@ -32,6 +32,36 @@
 // so `0` unambiguously means "no op was ever written here". Without it a Form
 // Bond whose target resolved to -1 would write 0 and truncate the queue,
 // silently dropping every LATER op the agent issued this step.
+//
+// ─────────────────────────────────────────────────────────────────────────────
+// P4b — FORM BETWEEN, and why its op kind rides the SIGN of the break lane.
+//
+// `formBondBetween(a, b)` bonds two OTHER agents, so it needs TWO agent ids in one
+// entry — which is exactly what a REWIRE already uses both lanes for. The two op
+// kinds therefore collide and must be disambiguated.
+//
+// A new "op kind" lane was rejected: `bondFormReq`/`bondBreakReq` sit MID-LIST in
+// `AGENT_I32_FIELDS` (and `AGENT_GPU_F32_FIELDS`), so any additional field shifts
+// every later baked offset and diffs every agent model's WASM bytes / WGSL shader
+// (the constraint P5 hit and documented). Instead the kind rides the SIGN of the
+// break lane, which costs ZERO new fields and therefore moves ZERO offsets:
+//
+//   verb            bondBreakReq            bondFormReq
+//   ─────────────── ─────────────────────── ────────────────────────
+//   Form(self→t)    NONE  (+1)              t+2   | NONE
+//   Break(self,t)   t+2   | NONE            NONE  (+1)
+//   Rewire(from→to) from+2 | NONE  (>0)     to+2  | NONE
+//   FormBetween(a,b) −(a+2) | −NONE  (<0)   b+2   | NONE
+//
+// A NEGATIVE break lane means "this entry is a Form Between"; its magnitude decodes
+// with the same `+2` bias. Every lane is signed on every target (`bondFormReq` /
+// `bondBreakReq` are `AGENT_I32_FIELDS` ⇒ Int32Array on the CPU, i32 in the WASM
+// layout, and an f32 run on the GPU), so nothing is truncated or wrapped.
+//
+// The "never write 0" rule survives: an unresolvable Form Between writes `−NONE`
+// (−1) and `NONE` (+1), which is still non-zero on both lanes — so it cannot
+// truncate the queue — and decodes to a<0 / b<0, i.e. an explicit no-op entry.
+// The drain's terminator test (`bl === 0 && fl === 0`) is untouched.
 //
 // BYTE IDENTITY. `bondReqSlotsForModel` returns **1** for a model whose agent
 // graph contains none of the three verbs, which reproduces the pre-P4 layout
@@ -45,7 +75,7 @@ import { resolveBondRequestDepth } from '../../../model/centerBased';
 /** The flow nodes that append an entry to the queue. Adding a verb means adding
  *  it HERE (so the layout sizes the queue) and to each target's emitter. */
 export const BOND_REQUEST_NODE_TYPES: ReadonlySet<string> = new Set([
-  'formBond', 'breakBond', 'rewireBond',
+  'formBond', 'breakBond', 'rewireBond', 'formBondBetween',
 ]);
 
 /** Lane value meaning "this side of the entry is unused" (a plain Form has no
@@ -53,6 +83,10 @@ export const BOND_REQUEST_NODE_TYPES: ReadonlySet<string> = new Set([
 export const BOND_REQ_NONE = 1;
 /** Lane encoding for an agent id: `v + BOND_REQ_ID_BIAS`. */
 export const BOND_REQ_ID_BIAS = 2;
+/** P4b — the op-kind marker for FORM BETWEEN: the break lane is NEGATED (see the
+ *  encoding table in this file's header). A negative break lane is the ONLY thing
+ *  that distinguishes a Form Between from a Rewire, since both fill both lanes. */
+export const BOND_REQ_BETWEEN_SIGN = -1;
 
 /** Does this model's AGENT graph use any queue verb? Scans the top-level agent
  *  graph AND every macro definition's nodes — a macro instance on the agent graph

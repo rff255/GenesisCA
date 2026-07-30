@@ -100,6 +100,9 @@ export const AGENT_NODE_REQUIREMENT: Record<string, AgentCapKey> = {
   breakBond: 'bonds',
   // Graph-Rewriting Automata (P4): the atomic move-an-edge verb.
   rewireBond: 'bonds',
+  // Graph-Rewriting Automata (P4b): bond two OTHER agents (the third-party edge a
+  // self-to-target Form Bond cannot make).
+  formBondBetween: 'bonds',
   // Graph-Rewriting Automata (P2): per-EDGE user state. No bonds ⇒ no edges to
   // carry it (and the store allocates zero bond-attribute bytes).
   getBondAttribute: 'bonds',

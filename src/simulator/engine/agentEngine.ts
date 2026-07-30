@@ -1320,10 +1320,16 @@ export function rewireBond(
  *
  *  Entry encoding + the overflow bucket:
  *  [bondRequestQueue.ts](../../modeler/vpl/compiler/bondRequestQueue.ts). Each entry
- *  carries BOTH a break side and a form side, so one entry expresses all three verbs
+ *  carries BOTH a break side and a form side, so one entry expresses all four verbs
  *  and a REWIRE is applied atomically by `rewireBond` (pre-check, then break + form,
  *  or nothing at all — invariant **I5**). `bondReqSlots === 1` (a model whose agent
  *  graph uses no queue verb) reduces this to the pre-P4 single-request drain.
+ *
+ *  P4b: a NEGATIVE break lane marks a **FORM BETWEEN** — bond two OTHER agents,
+ *  the one edge a self-relative verb cannot create (the triangle split's `v₂–v₃`
+ *  joins two newborns, neither of which is `self`). It rides the REQUESTING agent's
+ *  own queue, so no thread ever writes another thread's rows and the WebGPU emit
+ *  still needs no atomics.
  *
  *  P2: a form half's INITIAL bond-attribute values ride the per-entry
  *  `bondFormAttrs[<id>][base + c]` cells; `formBond` / `rewireBond` stamp the SAME
@@ -1351,6 +1357,27 @@ export function drainAgentBondRequests(store: AgentStore, lambda: number): boole
       // was ever appended here — and therefore none is appended after it either.
       if (bl === 0 && fl === 0) break;
       s.bondBreakReq[base + c] = 0; s.bondFormReq[base + c] = 0;
+      // P4b — a NEGATIVE break lane is the FORM BETWEEN op kind (the only marker
+      // distinguishing it from a Rewire, which also fills both lanes). Decoded
+      // FIRST: without this branch the entry would fall through and be applied as
+      // a plain self→B form, silently bonding the wrong pair.
+      if (bl < 0) {
+        const a = -bl >= BOND_REQ_ID_BIAS ? -bl - BOND_REQ_ID_BIAS : -1;
+        const b = fl >= BOND_REQ_ID_BIAS ? fl - BOND_REQ_ID_BIAS : -1;
+        if (a >= 0 && a < hw && b >= 0 && b < hw && alive[a] && alive[b]) {
+          const L = s.bondFormL[base + c]! > 0 ? s.bondFormL[base + c]! : (rad[a]! + rad[b]!);
+          const K = s.bondFormK[base + c]! > 0 ? s.bondFormK[base + c]! : lambda;
+          if (bondFormVals) {
+            for (let ai = 0; ai < s.bondAttrSpecs.length; ai++) {
+              bondFormVals[ai] = s.bondFormAttrs[s.bondAttrSpecs[ai]!.id]![base + c]!;
+            }
+          }
+          // `formBond` is the whole-op gate (self / dead / already-bonded / EITHER
+          // list full ⇒ nothing added on either side) — invariant I5 for free.
+          formBond(s, a, b, L, K, 0, bondFormVals);
+        }
+        continue;
+      }
       const from = bl >= BOND_REQ_ID_BIAS ? bl - BOND_REQ_ID_BIAS : -1;
       const to = fl >= BOND_REQ_ID_BIAS ? fl - BOND_REQ_ID_BIAS : -1;
       if (to >= 0) {

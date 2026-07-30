@@ -14,7 +14,7 @@
 import type { CompileContext } from '../types';
 import { BOND_REQ_ID_BIAS, BOND_REQ_NONE } from './bondRequestQueue';
 
-export type BondRequestVerb = 'form' | 'break' | 'rewire';
+export type BondRequestVerb = 'form' | 'break' | 'rewire' | 'between';
 
 /** Emit one queue append. `inputs` are the node's resolved value inputs. */
 export function emitBondRequestJS(
@@ -37,6 +37,17 @@ export function emitBondRequestJS(
     L.push(`  const _bqOk = _bqF >= 0 && _bqT >= 0;`);
     L.push(`  _bondBreakReq[_bq] = _bqOk ? _bqF + ${BOND_REQ_ID_BIAS} : ${BOND_REQ_NONE};`);
     L.push(`  _bondFormReq[_bq] = _bqOk ? _bqT + ${BOND_REQ_ID_BIAS} : ${BOND_REQ_NONE};`);
+  } else if (verb === 'between') {
+    // P4b — FORM BETWEEN two OTHER agents. The op kind rides the SIGN of the break
+    // lane (see bondRequestQueue.ts): NEGATIVE ⇒ "bond A to B", where a Rewire's
+    // POSITIVE break lane means "break self↔from". Zero new fields, so no baked
+    // offset moves. Both ids must resolve or the entry is an explicit no-op —
+    // still written as (−NONE, NONE) so it stays non-zero and cannot truncate.
+    L.push(`  const _bqA = (${inputs['agentA'] || '-1'}) | 0;`);
+    L.push(`  const _bqB = (${inputs['agentB'] || '-1'}) | 0;`);
+    L.push(`  const _bqOk = _bqA >= 0 && _bqB >= 0;`);
+    L.push(`  _bondBreakReq[_bq] = _bqOk ? -(_bqA + ${BOND_REQ_ID_BIAS}) : ${-BOND_REQ_NONE};`);
+    L.push(`  _bondFormReq[_bq] = _bqOk ? _bqB + ${BOND_REQ_ID_BIAS} : ${BOND_REQ_NONE};`);
   } else {
     const port = 'targetAgent';
     L.push(`  const _bqT = (${inputs[port] || '-1'}) | 0;`);

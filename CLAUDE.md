@@ -222,7 +222,7 @@ genesis-ca/
 │   │       ├── alignmentSnap.ts        # Pure Ctrl-drag alignment-guide geometry (computeAlignmentSnap + sameGuides)
 │   │       ├── bondAttrPorts.ts        # GRA P2: Form Bond's per-BOND-ATTRIBUTE initial-value ports — the ONE builder consumed by BOTH CaNode and effectivePorts
 │   │       ├── NodeExplorer.tsx        # Right-side searchable node list panel
-│   │       ├── nodes/                # 150 node types (one file each) + registry.ts
+│   │       ├── nodes/                # 151 node types (one file each) + registry.ts
 │   │       │   ├── nodeValidation.ts  # detectMissingConfig() — drives warning badges
 │   │       │   └── colorScalePresets.ts # Named palettes (Viridis/Magma/Rainbow/…) for Color Scale + Linked mappings
 │   │       ├── widgets/              # Shared inline editors (InlineWidgets.tsx, GradientStopsEditor.tsx)
@@ -235,8 +235,8 @@ genesis-ca/
 │   │           ├── multiAttrExpand.ts # Pre-compile pass: expands multi-slot Get/Set Attribute nodes (extraCount + attr_N slots) into single-slot primitives (gets split per slot, sets become a flow splice) — all 6 front-ends; also exports the editor slot-port builder
 │   │           ├── expandComposites.ts # Pre-compile pass: lowers vector/color Make/Break/Vector-Op (+ Apply Force vector mode) to scalar arithmeticOperator/getConstant nodes — so all 3 targets run composites natively
 │   │           ├── censusExpand.ts    # Pre-compile pass (GRA P1): lowers Neighbour Census to the gather + one Count Matching per CONSUMED state port (+ Array Length for Total) in all 3 agent front-ends — zero per-target emit; also exports the editor count-port builder
-│   │           ├── bondRequestQueue.ts # GRA P4: the per-agent STRUCTURAL REQUEST QUEUE shape (slots/base/overflow bucket, the +2 lane encoding, the usage gate) — the ONE definition the 4 consumers derive from
-│   │           ├── bondRequestEmitJS.ts # GRA P4: the ONE JS emitter for Form / Break / Rewire Bond (one queue entry carries both sides, so a rewire is atomic by construction)
+│   │           ├── bondRequestQueue.ts # GRA P4/P4b: the per-agent STRUCTURAL REQUEST QUEUE shape (slots/base/overflow bucket, the +2 lane encoding, the NEGATIVE-break-lane Form-Between op kind, the usage gate) — the ONE definition the 4 consumers derive from
+│   │           ├── bondRequestEmitJS.ts # GRA P4/P4b: the ONE JS emitter for Form / Break / Rewire / Form-Between Bond (one queue entry carries both sides, so a rewire is atomic by construction; a NEGATIVE break lane marks Form Between)
 │   │           ├── dividePartition.ts # GRA P5: the DIVISION BOND PARTITION — the spec (tension / alternate / byBondAttribute + the D4 daughter-bond policy), the MODEL-derived key-sorted TABLE + the idempotent code assignment all 3 agent front-ends call, consumed by the engine's divideAgent
 │   │           ├── arrayRelay.ts      # Shared makeProducesArray — context-aware "does this source emit an array?" (valueSwitch dual-mode relay)
 │   │           ├── linkedOutputMappings.ts # Synthesizes the auto color pass for Linked Output Mappings
@@ -358,7 +358,7 @@ The app is functional with these major systems:
 ### Visual Programming Language (VPL)
 - `src/modeler/vpl/GraphEditor.tsx` — React Flow-based node graph editor
 - `src/modeler/vpl/CaNode.tsx` — Custom node component with per-type config UI
-- `src/modeler/vpl/nodes/` — 150 node types (147 selectable from the Add Node menu + 3 hidden macro boundary nodes), each in its own file with `compile()` method. Canonical list: `ALL_NODES` in [registry.ts](src/modeler/vpl/nodes/registry.ts). Async-only nodes (6): SetNeighborhoodAttribute, SetNeighborAttributeByIndex, MarkCellUpdated, SetFacingOrientation, SetNeighborOrientationByIndex, MoveSelfToNeighbor. Includes `StopEventNode` (flow input only, text widget for stop message — compiles to `if (_stopFlag[0] === 0) _stopFlag[0] = <1-based idx>;` first-match-wins; WASM emitter mirrors this via `i32.store` at `layout.stopFlagOffset`).
+- `src/modeler/vpl/nodes/` — 151 node types (148 selectable from the Add Node menu + 3 hidden macro boundary nodes), each in its own file with `compile()` method. Canonical list: `ALL_NODES` in [registry.ts](src/modeler/vpl/nodes/registry.ts). Async-only nodes (6): SetNeighborhoodAttribute, SetNeighborAttributeByIndex, MarkCellUpdated, SetFacingOrientation, SetNeighborOrientationByIndex, MoveSelfToNeighbor. Includes `StopEventNode` (flow input only, text widget for stop message — compiles to `if (_stopFlag[0] === 0) _stopFlag[0] = <1-based idx>;` first-match-wins; WASM emitter mirrors this via `i32.store` at `layout.stopFlagOffset`).
 - Five "event" entry-point nodes: GenerationStep (per-gen logic), InitEvent (runs once PER CELL on simulator Reset — see Variegated Cells section), **GridInit** (runs ONCE GLOBALLY on Reset — free-form procedural seeding; see the "Grid Init Event" section), InputMapping C→A (brush), OutputMapping A→C (color pass)
 - `src/modeler/vpl/compiler/compile.ts` — Two-pass compiler: hoists values, then emits flow
 - Multi-output nodes (InputColor, GetColorConstant, MacroNode, ColorScale, FilterNeighbors, JoinNeighbors, GetFacingLabels, BreakDownNeighborIndex, InitEvent, GetCellPosition, GroupOperator with position output) use `_v${nodeId}_${portId}` naming
@@ -2130,6 +2130,35 @@ The cursor (`_brqC` in JS, an i32 local on WASM, `var brqC` in WGSL) is a per-ag
 
 ### Verification
 `scripts/verify-graph-rewrite.mjs` **Tier G** (135 → **180** checks): the usage gate; **I5** — D+3 ops apply EXACTLY D with the rest rejected whole, the graph exactly the pre-step graph minus those D edges, the queue fully cleared; **I5 rewire** — a rewire that cannot complete leaves the graph EXACTLY unchanged, and one from a non-existent edge never becomes a bare form; the terminator rule; **multi-op** — 3 rewires (6 edge mutations) by one agent in ONE generation with I1–I4 green immediately after; **O5** — a double-edge-swap rule keeps N, E and the **full degree multiset** invariant over **500 generations**, exactly; plus the emit shape on all three targets. **Every one is negative-controlled.** `parity-agent-wasm` gained the permanent `[synthetic] Bond request QUEUE` entry (4 explicit ops + a 12-iteration loop ⇒ overflow) whose **value invariant recomputes the expected queue independently** — negative-controlled three ways, including a SHARED-constant mutation that both targets follow identically (which parity alone would pass).
+
+## Graph-Rewriting Automata — P4b: `Form Bond Between` (third-party bond formation, branch `GRA`)
+
+**The one edge a self-relative verb cannot make.** Form Bond is self-to-target, so an edge joining two agents that are BOTH someone else is inexpressible. That blocks the milestone's flagship oracle **O6**, the cubic **triangle split** (`v(a,b,c) → v₁,v₂,v₃` with the triangle closed): its `v₂–v₃` edge joins two agents the rule CREATED THIS GENERATION — neither is `self`, and neither runs its own behaviour until the next step. Spreading the split over two generations leaves an intermediate state with degree-2 nodes and `E ≠ 3N/2`, i.e. it violates precisely the invariant O6 tests. Runbook: [docs/HANDOFF_GRA_P4B_FORM_BOND_BETWEEN.md](docs/HANDOFF_GRA_P4B_FORM_BOND_BETWEEN.md).
+
+### THE ENCODING — the op kind rides the SIGN of the break lane (zero new fields)
+A Form Between needs TWO agent ids in one queue entry, which is exactly what a **Rewire** already uses both lanes for — so the two collide and must be disambiguated. A new "op kind" lane was **rejected**: `bondFormReq`/`bondBreakReq` sit MID-LIST in `AGENT_I32_FIELDS` (and `AGENT_GPU_F32_FIELDS`), so any additional field shifts every later baked offset and diffs every agent model's bytes (the constraint P5 hit). Instead:
+
+| verb | `bondBreakReq` | `bondFormReq` |
+|---|---|---|
+| Form(self→t) | `NONE` (+1) | `t+2` \| `NONE` |
+| Break(self,t) | `t+2` \| `NONE` | `NONE` (+1) |
+| Rewire(from→to) | `from+2` \| `NONE` — **> 0** | `to+2` \| `NONE` |
+| **FormBetween(a,b)** | **`−(a+2)` \| `−NONE` — < 0** | `b+2` \| `NONE` |
+
+- **Every lane is signed on every target** — `bondFormReq`/`bondBreakReq` are `AGENT_I32_FIELDS` ⇒ `Int32Array` on the CPU, an i32 region in the WASM layout, an f32 run on the GPU — so nothing is truncated or wrapped. **Cost: zero new fields, zero moved offsets** ⇒ `check-compile-identity` 27/27 unchanged.
+- **The "never write 0" rule survives**: an unresolvable Form Between writes `(−NONE, NONE)` = `(−1, +1)`, still non-zero on both lanes, so it cannot truncate the queue, and it decodes to `a<0`/`b<0` = an explicit no-op. The drain's terminator test (`bl === 0 && fl === 0`) is untouched.
+- **The sign is decoded FIRST in the drain** — without that branch the entry falls through and is applied as a plain self→B form, i.e. it bonds the WRONG PAIR with no error anywhere. Negative-controlled by mutating the shipped `if (bl < 0)` to `if (false)`: the triangle split breaks at generation 1 with `degree 2 != 3`.
+
+### The verb ([FormBondBetweenNode.ts](src/modeler/vpl/nodes/FormBondBetweenNode.ts))
+`formBondBetween(agentA, agentB)` + the same payload as Form Bond (rest length, stiffness, one initial-value port per bond attribute). **The request rides the REQUESTING agent's OWN queue, carrying both ids as PAYLOAD, not as addresses** — no thread ever writes another thread's rows, so exactly as in P4 the **WebGPU emit still needs no atomics** (asserted over the emitted shader). The drain calls the existing `formBond(store, a, b, …)`, which IS the whole-op gate: self / dead / out of range / already bonded / **either** list full ⇒ nothing on either side (**I5**), and it stamps both slots identically (**I2**). Rest length 0 ⇒ the **NAMED pair's** contact distance (`rad[a]+rad[b]`), not the requester's. All five registrations done (def, registry, both `AGENT_*_SUPPORTED_TYPES`, `nodeValidation`'s init-invalid set, `AGENT_NODE_REQUIREMENT` → `bonds`), plus `BOND_REQUEST_NODE_TYPES` (so the usage gate sizes the queue for it) and `BOND_ATTR_PORT_TYPES` (it forms a bond, so it seeds attributes).
+
+### The triangle split costs FIVE queue ops, not seven
+From `v₁`'s behaviour, with `maxBonds` a TIGHT **3** (nothing transiently exceeds the cubic degree): `rewire(b → v₂)` · `rewire(c → v₃)` · `between(b, v₂)` · `between(c, v₃)` · **`between(v₂, v₃)`**. The two Create Agent + two Add To World calls are HOST calls and consume **no** queue slot. The handoff's literal `2 Form + 2 Break + 3 Between` formulation is 7 ops and also fits the default depth 8 (but transiently reaches degree 5, so it needs `maxBonds ≥ 5`). **Default depth 8 covers both** — P7 needs no raised depth.
+
+### Verification
+`verify-graph-rewrite.mjs` **Tier J** (297 → **355** checks): registration + the usage gate; the drain bonds the two NAMED agents and NOT the requester; self / dead / out-of-range / already-bonded / unresolvable are no-ops that still OCCUPY their entry; **I5** with EITHER endpoint full leaves the graph exactly unchanged and the degree multiset exactly unchanged; **I2** across rest length, stiffness and both bond-attribute kinds; **THE GATE — 60 triangle splits, each COMPLETE in ONE generation**, with `checkDegreeRegular(g,3)` and I1–I4 asserted after EVERY one, `ΔN=+2`/`ΔE=+3` per split and `N = 4+2t`, `E = 6+3t` exactly (K4 → N=124, E=186); the 7-op formulation; and the emitted shape on all three targets. **Negative controls**: the same ids with a POSITIVE break lane are a Rewire (the sign is the discriminator); a sign-blind read bonds the REQUESTER to B; and — the decisive one — running the SAME split **without** the `v₂–v₃` Form Between breaks O6 while leaving I1–I4 green, so the gate is provably testing O6 and not something weaker. `parity-agent-wasm` gained the permanent `[synthetic] Form Bond BETWEEN` entry, whose entries 0 and 1 carry the **same two ids** and must differ ONLY in the sign; its value invariant recomputes the whole queue independently. Negative-controlled three ways: WASM-only drops the negation (`js=-3 wasm=3`); **both targets drop it identically** (parity PASSES, the value invariant catches it: `breakLane 3 !== -3`); and the engine drain ignores the sign.
+
+**Real worker + real GPU** — a throwaway K4-seeded triangle-split model (generated → measured → deleted): **all three agent targets produced the IDENTICAL sequence**, 54 splits over 55 generations, **O6 (`min deg == max deg == 3` and `E == 3N/2`) TRUE at EVERY generation** together with I1–I4, ending at N=112 / E=168 = 3·112/2, with **0 worker errors and 0 console errors** (chip read `agents JS` / `agents WASM` / `agents WebGPU`).
 
 ## Graph-Rewriting Automata — P5: the DIVISION BOND PARTITION (branch `GRA`)
 
