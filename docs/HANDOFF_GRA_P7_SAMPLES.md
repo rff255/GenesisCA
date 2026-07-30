@@ -167,7 +167,7 @@ The milestone's docs must read as one coherent feature, not eight phase reports.
 
 **State**: **DONE**
 
-**Commit**: see the Status Board row.
+**Commit**: `78c294f` — feat(gra): the flagship samples - Cubic GRA and SDCA - plus the milestone docs sweep
 
 **Files touched**
 
