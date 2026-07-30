@@ -5,7 +5,7 @@
 [IMPACT_MAP_GRAPH_REWRITING_AGENTS.md](IMPACT_MAP_GRAPH_REWRITING_AGENTS.md) §2, §3.7 ·
 [PLAN_GRAPH_REWRITING_AGENTS.md](PLAN_GRAPH_REWRITING_AGENTS.md) §P1, §4.
 
-**State**: **DONE** (`2a8fb42` + `b519565`) · **Depends on**: nothing · **Blocks**: nothing
+**State**: **DONE** (`2a8fb42` + `502ae8d`) · **Depends on**: nothing · **Blocks**: nothing
 (P2 is independent). ⚠️ Two findings the orchestrator must read before P3 — see the
 Completion Report at the bottom.
 
@@ -221,7 +221,7 @@ store layout, or the ABI descriptor in this phase.
   (a **pre-existing P1-BLOCKING defect** found while checking §4.1 — isolated in its own
   commit so the orchestrator can re-scope it if it disagrees with the call; see
   "Scope call" below)
-- `b519565` — `feat(agents): Neighbour State Census — the multiset a graph rule reads`
+- `502ae8d` — `feat(agents): Neighbour State Census — the multiset a graph rule reads`
 
 **Files touched**
 
