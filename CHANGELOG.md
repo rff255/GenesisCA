@@ -7,6 +7,94 @@ https://github.com/rff255/GenesisCA/releases
 The version at the top of `package.json` is the single source of truth; each
 entry below is cut when that version is tagged (see `.github/workflows/release.yml`).
 
+## [1.29.0] - 2026-07-30
+
+A big release headlined by **GPU-resident agent rendering** — agents-only and
+decoupled grid+agents models now draw whole frames on the GPU, freeing the main
+thread when nothing needs per-frame CPU state — alongside a **follow camera**,
+**CSV import**, **streaming video recording**, and **binary Save As** in the
+desktop build. Additive throughout: the lattice (2D+3D, all three compile
+targets) and every existing model stay byte-identical.
+
+### Agents — GPU-resident rendering
+- A new render path lets the worker draw agents directly into a transferred
+  canvas: **2D discs** (A1) and **snapshot-fed CPU targets** (A2), the
+  **3D free-mode sphere render** (C), a **single-canvas grid+agents composite**
+  at display resolution (E2), and **field-decoupled grid+agents residency** (D).
+  While no feature needs per-frame agent state the free-running cost drops to a
+  single blit; pausing, recording, inspecting, or brushing flip the readback back
+  on automatically.
+- A **unified GPUDevice** now serves every WebGPU runtime (E1), and a
+  buffer-copy **field bridge** (E1b) keeps field-coupled Chemotaxis/Ant models
+  resident. Agent **Output-Mapping colours** compile to a GPU pass (A1.5), and a
+  decoupled grid+agents model on a WebGPU grid runs its agents on the GPU (M4).
+- New **agent Glow** graphics option (WebGPU direct render).
+
+### Agents — engine performance
+- **PR7c GPU residency**: eligible models run whole frames on-GPU (GPU-built
+  spatial hash + persistent SoA + one readback per frame) — ~29× on 50k Particle
+  Life. The dead **density scan** is skipped when nothing reads it, per-thread
+  WebGPU scratch is capped, sub-2px discs point-splat, and the render snapshot is
+  Float32.
+- Fixed the **"WebGPU wrong dynamics"** bug by serializing async step batches, and
+  a resize no longer desyncs the agent compiler's baked dimensions.
+
+### Simulator — follow camera + inspect
+- **Follow mode**: a pinned agent inspector's ◎ toggle tracks that agent (2D+3D),
+  driven by a critically-damped spring plus a filtered velocity feedforward that
+  cancels tracking lag by construction — replacing the deadzone-edge ease.
+- Agent inspectors are now **multi + draggable** with a Close-all; every open
+  popover keeps its highlight ring, and rings follow their moving agent. Loading
+  a model closes every inspect dialog.
+
+### Simulator — CSV import
+- A new **Import CSV** dialog brings tabular data into a running simulation:
+  **Agents** (one row per agent, auto-mapped columns) or the **CA grid** (a line
+  is a row, a field is a column). A **no-delimiter** mode reads ASCII-art boards
+  where every character is a cell, with an editable char→value map. Zero compiler
+  impact — verified across every compile target.
+
+### Simulator — recording
+- WebM recordings now **stream** (encode-as-you-go) instead of buffering raw
+  frames, so long captures stay memory-bounded. Added **quality modes**
+  (GOP-30 default), a **lossless capture policy** that throttles the sim instead
+  of dropping frames, and a residue-based VP9 profile-1 guard.
+- **Capture scope** selector (current view vs the whole simulation at a fit
+  framing, zoom-independent) for both recording and screenshots.
+
+### Simulator — vision cones & UX
+- **Vision-cone display** for the FOV sensing nodes (Off / Inspected / All), with
+  per-node cone colour and a hemifield-boids sample.
+- **Simulator Instructions** (author-written usage notes), a preset **… menu**
+  with Rename, **preset export/import** (.gcapreset), **drag-and-drop** files onto
+  the app, and the capture controls moved off the transport bar to the canvas
+  bottom-right.
+
+### Nodes
+- **Vector Op** gains **Rotate (2D)** and **Rotate Around Axis** (Rodrigues, 3D),
+  lowered to scalar arithmetic so all three targets run them.
+
+### Desktop build
+- **Binary Save As** for the Tauri build — recordings, screenshots and every
+  other download now write through a chunked native IPC (previously silently
+  dropped by WebView2), with an honest cancel-vs-failure split.
+
+### Models
+- **Ant Necrophoresis** rebuilt as discrete and exactly mass-conserving.
+- Library **compile-target policy**: WebGPU where the gates accept it, else WASM;
+  Kelp War ships on the WebGPU grid target.
+
+### Fixes
+- Fixed agent value placement (branch scope and RNG draw order) so the JS and
+  WASM agent targets stay bit-identical.
+- A panel resize no longer shows a frozen, outdated frame under direct render.
+- Vision cones drew as circles because the snapshot wasn't shipping velocity; the
+  Instructions pill is hidden in the standalone viewer; capture-popover text
+  rendered literal escape codes.
+- Plus a wide **quick-wins batch**: Math floor/ceil/round ops, lookup-table
+  Randomize Min, per-agent sprite alpha, reroute default names, collapsible
+  Properties sections, transport FPS/G-F popups, a 2D axes indicator, and more.
+
 ## [1.28.0] - 2026-07-22
 
 Headlined by **Particle Life** — two new library samples plus the matrix-play
