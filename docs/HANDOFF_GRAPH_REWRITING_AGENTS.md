@@ -94,9 +94,10 @@ supersedes), [HANDOFF_AGENTS_FLOATING_CELLS.md](HANDOFF_AGENTS_FLOATING_CELLS.md
 ## 1. Phase sequence + dependency graph
 
 ```
-P1 Census + Rule-Table macro + Life-on-Bonds     ← READY, fully specified
+P1 Census + Rule-Table macro + Life-on-Bonds     ← DONE
   └→ P2 Bond attributes: schema/store/CPU ABI/JS+WASM   ← READY, fully specified
-       └→ P3 Bond attributes: WebGPU                     [refine after P2]
+       └→ PX WebGPU sync agent attributes (double-buffer) ← INSERTED by P1's finding
+            └→ P3 Bond attributes: WebGPU                [refine after P2+PX]
 P4 Structural request QUEUE + Rewire verb        ← independent of P2/P3  [refine first]
   └→ P5 Combinatorial division (per-bond assignment)     [refine after P4]
 P6 Graph indicators + Overseer sweep             ← independent           [refine first]
@@ -104,7 +105,20 @@ P7 Samples (Cubic GRA, SDCA) + docs sweep        ← needs P4, P5, P6      [refi
 P8 Visual motif editor                           [STRETCH — not scheduled]
 ```
 
-**Launch order**: P1 → P2 → P3 → P4 → P5 → P6 → P7.
+**Launch order**: P1 → P2 → **PX** → P3 → P4 → P5 → P6 → P7.
+
+**Why PX was inserted (orchestrator decision, 2026-07-30).** P1 found that
+`agentUpdateMode: 'sync'` is not honoured on the WebGPU agent target — the behaviour
+shader reads neighbours' attributes from the same `agentF32` region it writes, with
+no double buffer, so a sync model races. Measured: the SHIPPED, census-free
+`Game of Life on Agents` is wrong by 18/1024 cells on its own WebGPU target (0 on
+JS/WASM). It is **pre-existing and not caused by P1**, but it is in scope for this
+milestone for three reasons: (1) **GRA rules are canonically synchronous**, so the
+milestone's own flagship samples would be silently wrong on WebGPU; (2) it blocks
+`Life on Bonds` from following the library's WebGPU-where-gated-in policy; (3) P3
+must decide whether GPU **bond** attributes need the same double buffer, and it
+should inherit a settled pattern rather than invent one that PX then changes.
+Sequenced **before** P3 for reason (3).
 
 "[refine first]" = the orchestrator expands that phase's handoff **immediately
 before launching it**, using what the preceding phases actually found. Do not
@@ -124,7 +138,8 @@ The orchestrator updates this after reading each phase's Completion Report.
 |---|---|---|---|---|---|
 | P1 Census + Rule Table | [HANDOFF_GRA_P1_CENSUS.md](HANDOFF_GRA_P1_CENSUS.md) | **DONE** | 2026-07-30 | `2a8fb42` + `502ae8d` | Census + lowering on all 3 targets, `Life on Bonds`, GRA Rule Table macro, `verify-graph-rewrite.mjs` (58 checks). O7/O11/O3 + I1/I3/I4 green. **Two things to read**: (a) a pre-existing operand-port defect in BOTH agent `groupCounting`/`groupStatement` emitters was P1-blocking and is fixed in its own commit `2a8fb42`; (b) **`agentUpdateMode: 'sync'` is NOT honoured on the WebGPU agent target** — a pre-existing race that makes the SHIPPED census-free GoL-on-Agents wrong by 18/1024 cells there. **Decide before P3.** |
 | P2 Bond attrs (CPU) | [HANDOFF_GRA_P2_BOND_ATTRIBUTES.md](HANDOFF_GRA_P2_BOND_ATTRIBUTES.md) | READY | — | — | the recorded missing capability |
-| P3 Bond attrs (WebGPU) | *(refine after P2)* | BLOCKED | — | — | needs P2's layout decisions + D3 |
+| PX WebGPU sync agent attrs | *(refine after P2)* | BLOCKED | — | — | **inserted by P1's finding (b)** — double-buffer the GPU agent attr region for sync models, or reject sync+neighbour-read on WebGPU. Fixes a shipped-model correctness bug; unblocks the WebGPU target for synchronous GRA rules |
+| P3 Bond attrs (WebGPU) | *(refine after P2+PX)* | BLOCKED | — | — | needs P2's layout decisions + D3, and PX's double-buffer pattern |
 | P4 Request queue + Rewire | *(refine first)* | PLANNED | — | — | the atomicity unblock; enables O5/O6 |
 | P5 Division partition | *(refine after P4)* | PLANNED | — | — | needs P4 queue + P2 attrs |
 | P6 Graph indicators | *(refine first)* | PLANNED | — | — | feeds the Overseer sweep |
