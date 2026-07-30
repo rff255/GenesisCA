@@ -162,7 +162,7 @@ outputs are id-cached in three emitters).
 
 **State**: **DONE**
 
-**Commit(s)**: `<this phase's commit>` — `feat(agents): bond attributes on the WebGPU agent target`
+**Commit(s)**: `c7d2de0` — `feat(agents): bond attributes on the WebGPU agent target`
 
 **Files touched**
 
