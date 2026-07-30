@@ -1365,8 +1365,11 @@ export function HelpView() {
             <strong> Asynchronous</strong> (default &mdash; a <em>Set Agent Attribute</em> to a
             neighbour is immediately visible to a later agent this step) or <strong>Synchronous</strong>
             (every agent reads the previous step; attribute writes are swapped in at the step&rsquo;s
-            end &mdash; the snapshot/parallel semantics the GPU path uses). Positions are
-            snapshot-integrated in both modes. Because writing <em>another</em> agent&rsquo;s attribute
+            end &mdash; simultaneous-update semantics, which is what a classic totalistic rule like
+            Game of Life needs). <strong>All three agent targets honour it</strong>, each with a real
+            double buffer: JS and WebAssembly keep two attribute buffers and swap, and WebGPU keeps
+            two runs in the GPU array and folds the write run onto the read run once per generation.
+            Positions are snapshot-integrated in both modes. Because writing <em>another</em> agent&rsquo;s attribute
             (or position/radius) would race that agent&rsquo;s own update under Synchronous mode,
             those cross-agent OVERWRITE writes are <strong>allowed only in Asynchronous mode</strong>
             (the agent form of the CA grid&rsquo;s &ldquo;a cell writes only itself&rdquo; rule) &mdash;

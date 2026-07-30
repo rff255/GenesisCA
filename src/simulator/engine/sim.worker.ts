@@ -1308,6 +1308,12 @@ function buildAgentWebGPUIfNeeded(): void {
     pendingAgentWebgpuMaxAgents || store.maxAgents, pendingAgentWebgpuMaxHashBins,
     { readAttrs: fieldReadAttrs, writeAttrs: fieldWriteAttrs, gridWidth: width, gridHeight: height },
     agentAttrIds,
+    // PX — the attr WRITE runs must be reserved here too, or a sync model's buffer
+    // would be shorter than the shader the compiler emitted against them (its
+    // writes would fall out of bounds and be silently dropped). Same general
+    // property the compiler reads. Legacy path only: SimulatorView ships the full
+    // layout for every WebGPU-agent model.
+    { syncAttrs: centerBasedConfig?.agentUpdateMode === 'sync' },
   );
   const i32Write = pendingAgentWebgpuUsesI32Write;
   const usage = pendingAgentWebgpuUsage;

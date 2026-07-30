@@ -351,6 +351,23 @@ function f32At(ctx: AgentWgpuCtx, field: string, idxExpr: string): string {
   return base === 0 ? `agentF32[${idxExpr}]` : `agentF32[${base}u + ${idxExpr}]`;
 }
 
+/** PX — `agentF32[base + <idxExpr>]` for a USER AGENT ATTRIBUTE run, choosing the
+ *  READ run or the WRITE run.
+ *
+ *  `agentUpdateMode: 'sync'` means "every agent reads the PREVIOUS generation and
+ *  writes the NEXT" — on a parallel GPU that REQUIRES two runs, or one thread's
+ *  write becomes another's read mid-dispatch (the race PX fixes). Reads therefore
+ *  resolve `agentAttrBase`, writes `agentAttrWriteBase`, and the runtime folds
+ *  write → read once per generation (the commit pass).
+ *
+ *  In ASYNC mode the layout ALIASES the two bases, so both modes emit the same
+ *  offset and the shader is byte-identical to pre-PX. This mirrors the WASM agent
+ *  compiler's `pushAgentAttrReadF64` / `pushAgentAttrWriteAddr` split exactly. */
+function attrAt(ctx: AgentWgpuCtx, attr: string, idxExpr: string, mode: 'read' | 'write'): string {
+  const base = (mode === 'write' ? ctx.layout.agentAttrWriteBase[attr] : ctx.layout.agentAttrBase[attr]) ?? 0;
+  return base === 0 ? `agentF32[${idxExpr}]` : `agentF32[${base}u + ${idxExpr}]`;
+}
+
 /** `agentI32[base + <idxExpr>]` for the named i32 field. */
 function i32At(ctx: AgentWgpuCtx, field: string, idxExpr: string): string {
   const base = ctx.layout.i32Base[field]!;
@@ -518,7 +535,7 @@ function compileValueNode(ctx: AgentWgpuCtx, nodeId: string, portId: string): Va
       const base = ctx.layout.agentAttrBase[attr];
       result = base === undefined
         ? { expr: '0.0', type: 'f32' }
-        : emitLet(ctx, 'f32', f32At(ctx, attr, 'idx'), 'ga');
+        : emitLet(ctx, 'f32', attrAt(ctx, attr, 'idx', 'read'), 'ga');
       break;
     }
     case 'categoricalColor': {
@@ -657,7 +674,7 @@ function compileValueNode(ctx: AgentWgpuCtx, nodeId: string, portId: string): Va
       const base = ctx.layout.agentAttrBase[attr];
       if (base === undefined) { result = { expr: '0.0', type: 'f32' }; break; }
       const g = emitAgentIdGuarded(ctx, node, 'agentId');
-      result = emitLet(ctx, 'f32', `select(0.0, ${f32At(ctx, attr, g.name)}, ${g.ok})`, 'gaa1');
+      result = emitLet(ctx, 'f32', `select(0.0, ${attrAt(ctx, attr, g.name, 'read')}, ${g.ok})`, 'gaa1');
       break;
     }
     case 'aggregate': {
@@ -1699,7 +1716,7 @@ function emitGetAgentsAttribute(ctx: AgentWgpuCtx, node: GraphNode): AgentArrayR
     ctx.lines.push(`    let ${id}: i32 = ${arrLoad(inArr, k)};`);
     ctx.lines.push(`    if (${id} >= 0 && ${id} < i32(control.highWater) && agentAlive[${id}] != 0u) {`);
     // Unknown attr → push 0.0 (parity with the value-node fallback).
-    const val = base === undefined ? '0.0' : f32At(ctx, attr, `u32(${id})`);
+    const val = base === undefined ? '0.0' : attrAt(ctx, attr, `u32(${id})`, 'read');
     ctx.lines.push(`      ${arrName}[${lenName}] = ${val}; ${lenName} = ${lenName} + 1;`);
     ctx.lines.push(`    }`);
     ctx.lines.push(`  }`);
@@ -1743,7 +1760,7 @@ function emitFilterAgents(ctx: AgentWgpuCtx, node: GraphNode): AgentArrayRef {
     ctx.lines.push(`  for (var ${k}: i32 = 0; ${k} < ${inArr.lenName}; ${k} = ${k} + 1) {`);
     ctx.lines.push(`    let ${id}: i32 = ${arrLoad(inArr, k)};`);
     ctx.lines.push(`    if (${id} >= 0 && ${id} < i32(control.highWater) && agentAlive[${id}] != 0u) {`);
-    const elem = base === undefined ? '0.0' : f32At(ctx, attr, `u32(${id})`);
+    const elem = base === undefined ? '0.0' : attrAt(ctx, attr, `u32(${id})`, 'read');
     const ev = fresh(ctx, 'faV');
     ctx.lines.push(`      let ${ev}: f32 = ${elem};`);
     let cond: string;
@@ -2011,7 +2028,7 @@ function compileFlowNode(ctx: AgentWgpuCtx, nodeId: string): void {
         const t = ctx.agentAttrType.get(attr) || 'float';
         let v = inF32(ctx, node, 'value', 0);
         if (t !== 'float') v = `round(${v})`;
-        ctx.lines.push(`  ${f32At(ctx, attr, 'idx')} = ${v};`);
+        ctx.lines.push(`  ${attrAt(ctx, attr, 'idx', 'write')} = ${v};`);
       }
       compileFlowChain(ctx, node.id, 'next');
       break;
@@ -2022,7 +2039,10 @@ function compileFlowNode(ctx: AgentWgpuCtx, nodeId: string): void {
       const base = ctx.layout.agentAttrBase[attr];
       if (base !== undefined) {
         const op = (node.data.config?.['operation'] as string) || 'increment';
-        const cur = f32At(ctx, attr, 'idx');
+        // Read-modify-write on the WRITE run (`w_<attr>[idx]` on JS, the
+        // syncAttrs write region on WASM) — so a preceding Set Attribute in the
+        // same step is what an Update reads. Aliased ⇒ identical in async.
+        const cur = attrAt(ctx, attr, 'idx', 'write');
         const tagLen = Number(node.data.config?.['_tagLen']) || 1;
         let expr: string;
         switch (op) {
@@ -2038,7 +2058,7 @@ function compileFlowNode(ctx: AgentWgpuCtx, nodeId: string): void {
         }
         const t = ctx.agentAttrType.get(attr) || 'float';
         const wrapped = t !== 'float' ? `round(${expr})` : `(${expr})`;
-        ctx.lines.push(`  ${f32At(ctx, attr, 'idx')} = ${wrapped};`);
+        ctx.lines.push(`  ${attrAt(ctx, attr, 'idx', 'write')} = ${wrapped};`);
       }
       compileFlowChain(ctx, node.id, 'next');
       break;
@@ -2065,7 +2085,7 @@ function compileFlowNode(ctx: AgentWgpuCtx, nodeId: string): void {
         // writable in the behaviour graph — the JS `< _agentMaxAgents` relaxation.
         // (Writing a dead slot is a harmless no-op; the WebGPU compiler only ever
         // emits the behaviour graph, so the strict-live division guard never applies.)
-        ctx.lines.push(`  { let ${sa}: i32 = ${id}; if (${sa} >= 0 && ${sa} < i32(control.maxAgents)) { ${f32At(ctx, attr, `u32(${sa})`)} = ${v}; } }`);
+        ctx.lines.push(`  { let ${sa}: i32 = ${id}; if (${sa} >= 0 && ${sa} < i32(control.maxAgents)) { ${attrAt(ctx, attr, `u32(${sa})`, 'write')} = ${v}; } }`);
       }
       compileFlowChain(ctx, node.id, 'next');
       break;
@@ -2083,7 +2103,7 @@ function compileFlowNode(ctx: AgentWgpuCtx, nodeId: string): void {
         ctx.lines.push(`  { let ${vL}: f32 = ${v};`);
         ctx.lines.push(`    for (var ${k}: i32 = 0; ${k} < ${inArr.lenName}; ${k} = ${k} + 1) {`);
         ctx.lines.push(`      let ${id}: i32 = ${arrLoad(inArr, k)};`);
-        ctx.lines.push(`      if (${id} >= 0 && ${id} < i32(control.highWater) && agentAlive[${id}] != 0u) { ${f32At(ctx, attr, `u32(${id})`)} = ${vL}; }`);
+        ctx.lines.push(`      if (${id} >= 0 && ${id} < i32(control.highWater) && agentAlive[${id}] != 0u) { ${attrAt(ctx, attr, `u32(${id})`, 'write')} = ${vL}; }`);
         ctx.lines.push(`    }`);
         ctx.lines.push(`  }`);
       }
@@ -2234,8 +2254,11 @@ function compileFlowNode(ctx: AgentWgpuCtx, nodeId: string): void {
       // Reset the child's agent attributes to their compile-time defaults (the
       // GPU analogue of initAgentSlot's attr reset — the CPU never runs it here).
       // A later Set Agent Attribute by handle overrides, exactly like the JS path.
+      // These are WRITES, so under sync they land in the write run and the commit
+      // pass folds them onto the read run BEFORE readbackAgentStep reconciles the
+      // newborn from `agentAttrBase` — which is why that reconcile needs no change.
       for (const [attr, def] of ctx.agentAttrDefault) {
-        ctx.lines.push(`    ${f32At(ctx, attr, raw)} = ${wgslFloatLit(def)};`);
+        ctx.lines.push(`    ${attrAt(ctx, attr, raw, 'write')} = ${wgslFloatLit(def)};`);
       }
       ctx.lines.push(`    ${h} = i32(${raw});`);
       ctx.lines.push(`  }`);
@@ -3970,7 +3993,12 @@ export function agentWebGPUExtrasOf(model: CAModel) {
   // Bonds=off model (store 0 vs GPU 2).
   const maxBonds = resolveMaxBonds(model.centerBased);
   const gridDepth = is3dModel(model) ? Math.max(1, Math.floor((model.properties.gridDepth as number) || 1)) : 1;
-  return { modelAttrKeys, lookupTables, indicatorCount, maxBonds, gridDepth };
+  // PX — the agent update mode drives the attribute DOUBLE BUFFER on the GPU, the
+  // same general property the CPU targets read (`createAgentStore`'s syncAttrs /
+  // the WASM `AgentLayoutExtras.syncAttrs`). 'sync' ⇒ a second write run per
+  // attribute; anything else ⇒ the write bases alias the read bases.
+  const syncAttrs = model.centerBased?.agentUpdateMode === 'sync';
+  return { modelAttrKeys, lookupTables, indicatorCount, maxBonds, gridDepth, syncAttrs };
 }
 
 /** Convenience for the DEV harness: derive the GPU agent layout from a model +

@@ -42,6 +42,33 @@ const REQUEST_FIELD_SET: ReadonlySet<string> = new Set(AGENT_GPU_REQUEST_FIELDS)
 const AGENT_WG = 64;
 const MAX_WG_PER_DIM = 65535;
 
+/** PX — the attribute COMMIT shader (`agentUpdateMode: 'sync'` only).
+ *
+ *  Folds the per-attribute WRITE runs onto the READ runs, once per generation,
+ *  right after the behaviour dispatch — so the next generation reads what this one
+ *  wrote, which is what "synchronous" means. Both blocks are contiguous and in the
+ *  same attribute order (see `computeAgentWebGPULayout`), so the whole commit is
+ *  ONE linear copy of `agentAttrIds.length * maxAgents` elements.
+ *
+ *  It is a COMPUTE pass, not a `copyBufferToBuffer`: a same-buffer copy is a WebGPU
+ *  validation error — the exact constraint the L1 voxel `posCommit` pass hit.
+ *
+ *  The 2-D index recovery mirrors `dispatchAgents` (a flat 1-D dispatch silently
+ *  no-ops past 65535 workgroups). Covers ALL `maxAgents` slots, not just
+ *  `highWater`: a Create Agent newborn lives beyond the live range and its GPU-written
+ *  defaults must reach the read run before `readbackAgentStep` reconciles it. */
+function attrCommitWGSL(readStart: number, writeStart: number, count: number): string {
+  return `@group(0) @binding(0) var<storage, read_write> agentF32 : array<f32>;
+
+@compute @workgroup_size(${AGENT_WG})
+fn attrCommit(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(num_workgroups) nwg: vec3<u32>) {
+  let i: u32 = gid.y * (nwg.x * ${AGENT_WG}u) + gid.x;
+  if (i >= ${count}u) { return; }
+  agentF32[${readStart}u + i] = agentF32[${writeStart}u + i];
+}
+`;
+}
+
 /** The mutable per-step force-pass dims the worker stashes after building the
  *  spatial hash (mirrors the WASM force-pass ABI fields). */
 export interface AgentForceDispatchParams {
@@ -134,6 +161,13 @@ export interface AgentWebGPURuntime {
   forcePipeline: GPUComputePipeline;
   behaviourBindGroup: GPUBindGroup;
   forceBindGroup: GPUBindGroup;
+  /** PX — the sync attribute-commit pass (write runs → read runs), appended to
+   *  every `dispatchAgentStep` encoder. null unless `layout.syncAttrs` (an async
+   *  model has one run per attribute, so there is nothing to commit). */
+  attrCommitPipeline: GPUComputePipeline | null;
+  attrCommitBindGroup: GPUBindGroup | null;
+  /** Elements the commit pass copies (= agentAttrIds.length · maxAgents). 0 ⇒ no pass. */
+  attrCommitCount: number;
   /** A1.5 — one GPU Agent Output-Mapping colour pass per mapping id (each writes
    *  agentColors from the agent attrs). Empty for a no-OM model (Boids). */
   omPipelines: Map<string, { pipeline: GPUComputePipeline; bindGroup: GPUBindGroup }>;
@@ -472,6 +506,39 @@ export async function createAgentWebGPURuntime(
   if (forceScatterBuf) forceBgEntries.push({ binding: 4, resource: { buffer: forceScatterBuf } });
   const forceBindGroup = device.createBindGroup({ label: 'agent-force-bg', layout: forceBGL, entries: forceBgEntries });
 
+  // --- PX attribute-commit pipeline (sync agent update only; 1 binding) ---
+  // Built ONLY when the layout allocated distinct write runs, so an async model
+  // creates no extra module/pipeline and its dispatch is unchanged.
+  let attrCommitPipeline: GPUComputePipeline | null = null;
+  let attrCommitBindGroup: GPUBindGroup | null = null;
+  let attrCommitCount = 0;
+  if (layout.syncAttrs && layout.agentAttrIds.length > 0) {
+    const first = layout.agentAttrIds[0]!;
+    const readStart = layout.agentAttrBase[first]!;
+    const writeStart = layout.agentAttrWriteBase[first]!;
+    attrCommitCount = layout.agentAttrIds.length * layout.maxAgents;
+    const commitModule = device.createShaderModule({ code: attrCommitWGSL(readStart, writeStart, attrCommitCount) });
+    const cinfo = await commitModule.getCompilationInfo();
+    const cerrs = cinfo.messages.filter(m => m.type === 'error');
+    if (cerrs.length > 0) {
+      throw new Error('[agents/webgpu] attribute-commit WGSL compile errors:\n' +
+        cerrs.map(m => `  line ${m.lineNum}: ${m.message}`).join('\n'));
+    }
+    const commitBGL = device.createBindGroupLayout({
+      label: 'agent-attr-commit-bgl',
+      entries: [{ binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } }],
+    });
+    attrCommitPipeline = await device.createComputePipelineAsync({
+      label: 'agent-attr-commit',
+      layout: device.createPipelineLayout({ label: 'agent-attr-commit-pl', bindGroupLayouts: [commitBGL] }),
+      compute: { module: commitModule, entryPoint: 'attrCommit' },
+    });
+    attrCommitBindGroup = device.createBindGroup({
+      label: 'agent-attr-commit-bg', layout: commitBGL,
+      entries: [{ binding: 0, resource: { buffer: agentF32Buf } }],
+    });
+  }
+
   // --- A1.5 OM colour-pass pipelines (one per agent mapping) ---
   // Each OM module declares bindings 0-6 (the same base set the behaviour uses,
   // always) + the conditional field bindings 7/8 (layout-driven, like the
@@ -539,6 +606,7 @@ export async function createAgentWebGPURuntime(
     stopFlagBuf, usesStop: hasStop,
     forceScatterBuf,
     behaviourPipeline, forcePipeline, behaviourBindGroup, forceBindGroup,
+    attrCommitPipeline, attrCommitBindGroup, attrCommitCount,
     omPipelines, activeOmMappingId: '',
     stagingPool: new Map(),
     f32Upload: new Float32Array(layout.f32Len),
@@ -599,12 +667,21 @@ export function uploadAgentSoA(rt: AgentWebGPURuntime, s: AgentStore): void {
   }
   // User AGENT attributes (G4) — upload from the read buffer (the values the
   // behaviour shader's Get Attribute reads; Set Attribute writes them back).
+  //
+  // PX — under `syncAttrs` the layout carries a SECOND (write) run per attribute
+  // and the shader writes THERE. Seed it from the SAME source: that is the GPU
+  // analogue of `primeAgentAttrWrite` (the write buffer starts as a clone of the
+  // read buffer, so an attribute the behaviour never touches carries over instead
+  // of being clobbered with 0 by the commit pass). Async ⇒ writeBase === base ⇒
+  // the second store is the same element written twice with the same value, so
+  // the uploaded bytes are identical to pre-PX.
   for (const id of L.agentAttrIds) {
     const base = L.agentAttrBase[id]!;
+    const wbase = L.agentAttrWriteBase[id] ?? base;
     const src = s.attrRead[id] as ArrayLike<number> | undefined;
-    if (!src) { for (let i = 0; i < ma; i++) f[base + i] = 0; continue; }
-    for (let i = 0; i < hw; i++) f[base + i] = src[i]!;
-    for (let i = hw; i < ma; i++) f[base + i] = 0;
+    if (!src) { for (let i = 0; i < ma; i++) { f[base + i] = 0; f[wbase + i] = 0; } continue; }
+    for (let i = 0; i < hw; i++) { const v = src[i]!; f[base + i] = v; f[wbase + i] = v; }
+    for (let i = hw; i < ma; i++) { f[base + i] = 0; f[wbase + i] = 0; }
   }
   rt.device.queue.writeBuffer(rt.agentF32Buf, 0, f.buffer, f.byteOffset, f.byteLength);
 
@@ -1039,6 +1116,19 @@ export function dispatchAgentStep(rt: AgentWebGPURuntime, highWater: number): vo
   passF.setBindGroup(0, rt.forceBindGroup);
   dispatchAgents(passF, total);
   passF.end();
+  // PX — sync agent update: fold the attribute WRITE runs onto the READ runs. Passes
+  // in one encoder execute in order, so this observes every behaviour write; the
+  // force pass touches only geometry/velocity, never a user attribute, so its
+  // position here is immaterial. After it, the READ runs hold the committed
+  // generation — which is why `readbackAgentStep` / the spawn reconcile /
+  // `readbackAgentFrame` all keep reading `agentAttrBase` unchanged.
+  if (rt.attrCommitPipeline && rt.attrCommitBindGroup && rt.attrCommitCount > 0) {
+    const passC = enc.beginComputePass({ label: 'agent-attr-commit-pass' });
+    passC.setPipeline(rt.attrCommitPipeline);
+    passC.setBindGroup(0, rt.attrCommitBindGroup);
+    dispatchAgents(passC, rt.attrCommitCount);
+    passC.end();
+  }
   rt.device.queue.submit([enc.finish()]);
 }
 
@@ -2605,6 +2695,16 @@ export function dispatchResidentBatch(rt: AgentWebGPURuntime, gens: number, high
     dispatchAgents(pf, total); pf.end();
     const pm = enc.beginComputePass({ label: 'agent-pos-commit' });
     pm.setPipeline(res.commitPipeline); pm.setBindGroup(0, res.commitBind); dispatchAgents(pm, total); pm.end();
+    // PX — the attribute commit (sync agent update), per generation, exactly as the
+    // per-gen path does it. Residency currently EXCLUDES sync models
+    // (`agentResidentEligible`), so `attrCommitPipeline` is always null here and
+    // this is dead today — kept so that widening residency to sync inherits the
+    // correct double-buffer semantics instead of silently reintroducing the race.
+    if (rt.attrCommitPipeline && rt.attrCommitBindGroup && rt.attrCommitCount > 0) {
+      const pa = enc.beginComputePass({ label: 'agent-attr-commit-pass' });
+      pa.setPipeline(rt.attrCommitPipeline); pa.setBindGroup(0, rt.attrCommitBindGroup);
+      dispatchAgents(pa, rt.attrCommitCount); pa.end();
+    }
   }
   // A1.5 — the active Agent Output-Mapping colour pass writes agentColors from the
   // final-state agent attrs (once per batch = once per presented frame). For a

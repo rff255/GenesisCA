@@ -3,7 +3,7 @@
   "properties": {
     "name": "Life on Bonds",
     "description": "Conway's Game of Life as a GRAPH rule: each agent is bonded to its 8 Moore neighbours and reads its neighbours through a single Neighbour Census node — the multiset of neighbour states — instead of a lattice neighbourhood.",
-    "ruleDescription": "Agents sit on a 32x32 torus lattice and are bonded to their 8 Moore neighbours by the engine auto-bond (form multiplier 1.9 x contact 0.9 = 1.71, which admits the orthogonal neighbours at 1.0 and the diagonals at 1.414 but excludes the next ring at 2.0). One Neighbour Census node over the bool `alive` attribute yields the True count and the Total; the rule is next = (n == 3) OR (alive AND n == 2). Auto-bond runs in the structural phase at the END of a step, so generation 1 still sees an empty 1-ring — the rule is therefore gated on Total > 0 (an isolated node keeps its state), which makes generation 1 a pure topology bootstrap. From generation 2 on every agent has exactly 8 bonds and the dynamics are Conway exactly. Agents are pinned (bond stiffness 0, no collision, no growth, momentum 0) and updated synchronously. The agent target is WebAssembly rather than WebGPU on purpose: the census is exact on all three targets, but WebGPU does not double-buffer agent attributes for synchronous mode, so any neighbour-reading sync rule races there (a pre-existing limitation that affects the proximity-based Game of Life on Agents too).",
+    "ruleDescription": "Agents sit on a 32x32 torus lattice and are bonded to their 8 Moore neighbours by the engine auto-bond (form multiplier 1.9 x contact 0.9 = 1.71, which admits the orthogonal neighbours at 1.0 and the diagonals at 1.414 but excludes the next ring at 2.0). One Neighbour Census node over the bool `alive` attribute yields the True count and the Total; the rule is next = (n == 3) OR (alive AND n == 2). Auto-bond runs in the structural phase at the END of a step, so generation 1 still sees an empty 1-ring — the rule is therefore gated on Total > 0 (an isolated node keeps its state), which makes generation 1 a pure topology bootstrap. From generation 2 on every agent has exactly 8 bonds and the dynamics are Conway exactly. Agents are pinned (bond stiffness 0, no collision, no growth, momentum 0) and updated synchronously. The census is exact on all three agent targets, and synchronous agent attributes are double-buffered on WebGPU too (the read run and the write run are distinct, folded by a commit pass once per generation), so the model ships on WebGPU per the library policy.",
     "instructions": "Press Play. Generation 1 only forms the bonds (the board is unchanged); Conway starts at generation 2. Open the Modeler > Agents graph to see the whole rule: one Neighbour Census node replaces the Get Bonded Agents -> Get Agents Attribute -> Count Matching chain you would otherwise wire once per state value.",
     "author": "Conway",
     "modelAuthor": "",
@@ -32,7 +32,7 @@
   },
   "centerBased": {
     "enabled": true,
-    "agentTarget": "wasm",
+    "agentTarget": "webgpu",
     "maxAgents": 1040,
     "maxBonds": 8,
     "worldWidth": 32,

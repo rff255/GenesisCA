@@ -138,8 +138,30 @@ export interface AgentWebGPULayout {
    *  attr's element k is `agentF32[attrBase[id] + k]`. f32 storage (the GPU has no
    *  f64); int/tag/bool values round-trip exactly up to 2^24 (rounded on write). */
   agentAttrIds: string[];
-  /** Agent-attr id → its element base offset in `agentF32` (= f32Base[id]). */
+  /** Agent-attr id → its READ-run element base offset in `agentF32` (= f32Base[id]). */
   agentAttrBase: Record<string, number>;
+  /** PX — agent-attr id → its WRITE-run element base offset in `agentF32`.
+   *
+   *  **`agentUpdateMode: 'sync'` needs a double buffer on the GPU exactly like the
+   *  CPU targets do** (the store's `attrRead`/`attrWrite`, the WASM layout's
+   *  `attrOffset`/`attrWriteOffset`). GPU threads run in parallel and in an
+   *  unspecified order, so with ONE run per attribute agent A's write is visible to
+   *  agent B's read within a single dispatch — async (single-buffer) semantics
+   *  silently applied to a model the user configured as synchronous.
+   *
+   *  So when `syncAttrs` a SECOND contiguous run per attribute is appended after
+   *  the read runs; the behaviour shader reads the read run and writes the write
+   *  run, and a per-generation commit pass folds write → read.
+   *
+   *  **When async this ALIASES `agentAttrBase` (identical values, zero extra
+   *  bytes)** — the emitters resolve the same WGSL offset for a read and a write,
+   *  so an async model's shader is byte-identical to the pre-PX build. That is the
+   *  byte-identity gate for the 8 shipped agent models. */
+  agentAttrWriteBase: Record<string, number>;
+  /** PX — true when the attribute WRITE runs are distinct from the read runs (the
+   *  model is `agentUpdateMode: 'sync'` AND has ≥1 user agent attribute). Drives
+   *  the runtime's write-run prime + the commit pass. */
+  syncAttrs: boolean;
   /** Number of f32 elements in `agentF32` (= total field runs * maxAgents). */
   f32Len: number;
   /** Number of i32 elements in `agentI32`. */
@@ -229,6 +251,10 @@ export interface AgentWebGPUExtras {
   maxBonds?: number;
   /** 3D world depth (1 ⇒ 2D). */
   gridDepth?: number;
+  /** PX — `agentUpdateMode: 'sync'`: allocate a SECOND run per user agent attribute
+   *  (the write buffer). Absent/false ⇒ the write bases alias the read bases and
+   *  the layout is byte-identical to pre-PX (the async fast path). */
+  syncAttrs?: boolean;
 }
 
 /** Compute the GPU agent storage layout. Pure (no GPU calls). The optional
@@ -255,9 +281,18 @@ export function computeAgentWebGPULayout(
   for (const f of AGENT_GPU_F32_FIELDS) { f32Base[f] = off; off += ma; }
   // 3D z fields — appended after the static 2D fields (2D layout byte-identical).
   if (gd > 1) { for (const f of AGENT_GPU_F32_FIELDS_3D) { f32Base[f] = off; off += ma; } }
-  // User agent attributes — one run each, appended after the static fields.
+  // User agent attributes — one READ run each, appended after the static fields.
   const agentAttrBase: Record<string, number> = {};
   for (const id of agentAttrIds) { f32Base[id] = off; agentAttrBase[id] = off; off += ma; }
+  // PX — sync agent update: a SECOND contiguous block of WRITE runs, in the SAME
+  // attribute order, appended right after the read block. The two blocks are each
+  // contiguous by construction, which is what lets the commit pass be ONE linear
+  // copy of `agentAttrIds.length * ma` elements. Async ⇒ no second block and the
+  // write bases ALIAS the read bases (⇒ byte-identical shader + layout).
+  const syncAttrs = !!extras.syncAttrs && agentAttrIds.length > 0;
+  const agentAttrWriteBase: Record<string, number> = {};
+  if (syncAttrs) { for (const id of agentAttrIds) { agentAttrWriteBase[id] = off; off += ma; } }
+  else { for (const id of agentAttrIds) { agentAttrWriteBase[id] = agentAttrBase[id]!; } }
   const f32Len = off;
 
   const i32Base: Record<string, number> = {};
@@ -315,7 +350,7 @@ export function computeAgentWebGPULayout(
 
   return {
     maxAgents: ma, maxHashBins: hb,
-    f32Base, i32Base, agentAttrIds: [...agentAttrIds], agentAttrBase, f32Len, i32Len,
+    f32Base, i32Base, agentAttrIds: [...agentAttrIds], agentAttrBase, agentAttrWriteBase, syncAttrs, f32Len, i32Len,
     hashBinStartBase, hashBinAgentsBase, hashLen,
     gridWidth, gridHeight, fieldTotal,
     fieldReadAttrs, fieldWriteAttrs, fieldReadBase, fieldWriteBase,

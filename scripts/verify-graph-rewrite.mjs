@@ -10,6 +10,10 @@
 //   B  The census LOWERING: both agent-target gates accept a census model, the
 //      lowered graph has the expected shape, all three targets emit, and the pass
 //      is a hot-path no-op when no census node exists.
+//   D  BOND ATTRIBUTES (P2): compaction lockstep + I2 through the real engine.
+//   E  PX: `agentUpdateMode: 'sync'` is DOUBLE-BUFFERED on the WebGPU agent target
+//      (reads on the read run, writes on the write run, aliased when async) — with
+//      a negative control that compiles against the pre-PX aliased layout.
 //   C  The Conway oracles, run headless through the REAL compiled behaviour over a
 //      real agent store: O7 (differential vs the shipped Game of Life on Agents),
 //      O11 (block / blinker / toad / glider), O3 (identity rule leaves everything
@@ -37,8 +41,10 @@ export {
   compileAgentGraphWasmForModel, instantiateAgentWasm, buildAgentLayoutExtras, isAgentGraphWasmSupported,
 } from '../src/modeler/vpl/compiler/agentWasm/compile.ts';
 export {
-  compileAgentGraphWebGPUForModel, isAgentGraphWebGPUSupported,
+  compileAgentGraphWebGPUForModel, isAgentGraphWebGPUSupported, compileAgentGraphWebGPU,
+  agentWebGPUExtrasOf,
 } from '../src/modeler/vpl/compiler/agentWebgpu/compile.ts';
+export { computeAgentWebGPULayout } from '../src/modeler/vpl/compiler/agentWebgpu/layout.ts';
 export { compileAgentGraph } from '../src/modeler/vpl/compiler/compile.ts';
 export { buildAgentAbiArgs } from '../src/modeler/vpl/compiler/agentAbi.ts';
 export { migrateForHarness } from '../src/dev/compileHarness.ts';
@@ -60,7 +66,8 @@ const {
   freeAgentSlot, sweepStaleBonds, allocAgentSlot, initAgentSlot, divideAgent, bondAttrKind,
   serializeAgentStore, deserializeAgentStore, serializeAgentState, deserializeAgentState, bondAttrsOf,
   compileAgentGraphWasmForModel, instantiateAgentWasm, buildAgentLayoutExtras, isAgentGraphWasmSupported,
-  compileAgentGraphWebGPUForModel, isAgentGraphWebGPUSupported,
+  compileAgentGraphWebGPUForModel, isAgentGraphWebGPUSupported, compileAgentGraphWebGPU,
+  agentWebGPUExtrasOf, computeAgentWebGPULayout,
   compileAgentGraph, buildAgentAbiArgs, migrateForHarness, agentAttrsOf, cellFieldAttrsOf,
   expandNeighbourCensus, buildCensusPorts, censusOptions, censusAttribute, getEffectivePorts,
 } = m;
@@ -1226,10 +1233,114 @@ function tierD() {
   }
 }
 
+// ===========================================================================
+// TIER E — PX: `agentUpdateMode: 'sync'` is double-buffered on the WebGPU target
+// ===========================================================================
+//
+// GPU threads run in parallel and in an unspecified order, so ONE run per agent
+// attribute means agent A's write is visible to agent B's read WITHIN one
+// dispatch — async semantics silently applied to a synchronous model. Measured
+// before the fix: the shipped Game of Life on Agents was wrong by 32-123 of 1024
+// cells against a Conway reference, VARYING run to run (the variation was the
+// race), while JS and WASM were exact.
+//
+// The fix is a second run per attribute (`agentAttrWriteBase`) + a per-generation
+// commit pass. This tier pins BOTH halves at the shader level: every attribute
+// READ resolves the read base and every WRITE the write base, so the two are
+// DISJOINT under sync — and ALIASED under async, which is what keeps every
+// existing agent model byte-identical.
+//
+// The negative control compiles the SAME sync model against a deliberately
+// aliased (pre-PX) layout and asserts the disjointness check FAILS: a harness
+// that could not detect the race would prove nothing.
+
+/** Split a WGSL body into the `agentF32` element offsets it WRITES vs READS.
+ *  A write is `agentF32[<N>u + <expr>] =` (an assignment target, not `==`). */
+function agentF32Offsets(wgsl) {
+  const writes = new Set(), reads = new Set();
+  const WRITE_RE = /agentF32\[(\d+)u \+ [^\]]*\]\s*=(?!=)/g;
+  let mt;
+  while ((mt = WRITE_RE.exec(wgsl)) !== null) writes.add(Number(mt[1]));
+  // Reads = every occurrence that is NOT an assignment target.
+  const stripped = wgsl.replace(WRITE_RE, ' ');
+  const READ_RE = /agentF32\[(\d+)u \+ /g;
+  while ((mt = READ_RE.exec(stripped)) !== null) reads.add(Number(mt[1]));
+  return { writes, reads };
+}
+
+function tierE() {
+  section('TIER E — PX: sync agent attributes are double-buffered on WebGPU');
+
+  const shipped = () => migrateForHarness(JSON.parse(readFileSync(join(ROOT, 'public/models/Game of Life on Agents.gcaproj'), 'utf8')));
+  const sync = shipped();
+  const async_ = shipped();
+  async_.centerBased.agentUpdateMode = 'async';
+  ok(sync.centerBased.agentUpdateMode === 'sync', 'the shipped Game of Life on Agents is a SYNC model');
+
+  const rSync = compileAgentGraphWebGPUForModel(sync);
+  const rAsync = compileAgentGraphWebGPUForModel(async_);
+  const Ls = rSync.layout, La = rAsync.layout;
+  const attr = Ls.agentAttrIds[0];
+
+  // --- the layout ---
+  ok(Ls.syncAttrs === true && La.syncAttrs === false,
+    'the layout carries syncAttrs from the model update mode', `${Ls.syncAttrs} / ${La.syncAttrs}`);
+  ok(Ls.agentAttrWriteBase[attr] !== Ls.agentAttrBase[attr],
+    'SYNC: the attribute write run is DISTINCT from the read run',
+    `${Ls.agentAttrBase[attr]} vs ${Ls.agentAttrWriteBase[attr]}`);
+  ok(La.agentAttrWriteBase[attr] === La.agentAttrBase[attr],
+    'ASYNC: the write base ALIASES the read base (zero extra bytes)');
+  ok(Ls.f32Len - La.f32Len === Ls.agentAttrIds.length * Ls.maxAgents,
+    'SYNC grows the SoA by exactly one extra run per attribute',
+    `${La.f32Len} -> ${Ls.f32Len} (+${Ls.agentAttrIds.length * Ls.maxAgents})`);
+  ok(Ls.agentAttrWriteBase[attr] === Ls.agentAttrBase[attr] + Ls.maxAgents,
+    'the read and write blocks are CONTIGUOUS and in the same attribute order (the commit pass is one linear copy)');
+
+  // --- the emitted shader: reads on the read run, writes on the write run ---
+  {
+    const { writes, reads } = agentF32Offsets(rSync.shaderCode);
+    const rb = Ls.agentAttrBase[attr], wb = Ls.agentAttrWriteBase[attr];
+    ok(reads.has(rb), 'SYNC shader: the attribute is READ at the read base', String(rb));
+    ok(writes.has(wb), 'SYNC shader: the attribute is WRITTEN at the write base', String(wb));
+    ok(!writes.has(rb),
+      'SYNC shader: NOTHING writes the read run — a neighbour read can never see this generation',
+      `writes=${[...writes].join(',')}`);
+    ok(!reads.has(wb), 'SYNC shader: nothing reads the write run', `reads=${[...reads].join(',')}`);
+  }
+  {
+    const { writes, reads } = agentF32Offsets(rAsync.shaderCode);
+    const b = La.agentAttrBase[attr];
+    ok(reads.has(b) && writes.has(b),
+      'ASYNC shader: the attribute is read AND written at the same (aliased) base — the historical single-buffer emit');
+  }
+
+  // --- NEGATIVE CONTROL: the pre-PX aliased layout must FAIL the check ---
+  {
+    const extras = { ...agentWebGPUExtrasOf(sync), syncAttrs: false };   // force the OLD aliased layout
+    const bad = computeAgentWebGPULayout(Ls.maxAgents, Ls.maxHashBins, undefined, Ls.agentAttrIds, extras);
+    const r = compileAgentGraphWebGPU(sync.agentGraphNodes, sync.agentGraphEdges, sync, bad);
+    const { writes, reads } = agentF32Offsets(r.shaderCode);
+    const rb = bad.agentAttrBase[attr];
+    ok(!r.error && writes.has(rb) && reads.has(rb),
+      'negative control: with the write run aliased (pre-PX), the SAME run is read AND written — the race is CAUGHT',
+      r.error || '');
+  }
+
+  // --- both shipped sync models compile with the double buffer + gate in ---
+  for (const f of ['Game of Life on Agents.gcaproj', 'Life on Bonds.gcaproj']) {
+    const mdl = migrateForHarness(JSON.parse(readFileSync(join(ROOT, 'public/models', f), 'utf8')));
+    const r = compileAgentGraphWebGPUForModel(mdl);
+    ok(!r.error && r.layout.syncAttrs === true, `${f}: compiles with a distinct attribute write run`, r.error || '');
+    ok(isAgentGraphWebGPUSupported(mdl) === true, `${f}: the WebGPU gate accepts it`);
+    ok(mdl.centerBased.agentTarget === 'webgpu', `${f}: ships on the WebGPU agent target (library policy)`);
+  }
+}
+
 tierA();
 tierB();
 await tierC();
 tierD();
+tierE();
 
 console.log(`\n${fail === 0 ? 'GRAPH-REWRITE HARNESS ✓' : 'GRAPH-REWRITE HARNESS ✗'}  (${pass} passed, ${fail} failed)`);
 rmSync(entryPath, { force: true });
