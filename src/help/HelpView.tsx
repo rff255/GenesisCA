@@ -1605,6 +1605,50 @@ export function HelpView() {
               list. <strong>Set Velocity</strong> sets an agent&rsquo;s velocity directly (needs
               Momentum &gt; 0).</li>
           </ul>
+          <h3 className={styles.h3}>Graph-Rewriting Automata &mdash; census &rarr; table &rarr; verb</h3>
+          <p className={styles.p}>
+            A <strong>graph-rewriting automaton</strong> is an automaton whose <em>graph</em> is
+            rewritten by local rules: nodes divide, die, bond, unbond and re-point their edges
+            according to what they see around them. In the literature that idea usually arrives
+            wrapped in category theory &mdash; gluing morphisms, pushouts, double-pushout rewriting.
+            <strong> You will not meet any of that here.</strong>
+          </p>
+          <p className={styles.p}>
+            The reason is a deliberate restriction: GenesisCA only does <strong>node-local</strong>
+            rewriting. General graph rewriting has to <em>find</em> the pattern first (subgraph
+            isomorphism &mdash; genuinely hard). A node-local rule&rsquo;s pattern is always
+            &ldquo;this node and the ring of things bonded to it&rdquo;, which is not a search, it
+            is a lookup. That collapses the whole authoring surface to three steps:
+          </p>
+          <ul className={styles.list}>
+            <li><strong>Census</strong> &mdash; count the neighbours by state (the only thing a
+              graph rule may legitimately read, see below).</li>
+            <li><strong>Table</strong> &mdash; feed those counts and the node&rsquo;s own state into
+              a <strong>Lookup Table</strong> whose value is a <em>tag</em>: Idle, Divide, Die,
+              Bond, Unbond, Rewire&hellip; The rule is now <em>a table you can look at</em>, not a
+              formula &mdash; and its <strong>Randomize</strong> button rolls a whole new automaton.</li>
+            <li><strong>Verb</strong> &mdash; a <strong>Switch</strong> on that value runs the
+              matching verb. Every verb is an ordinary agent node.</li>
+          </ul>
+          <p className={styles.p}>
+            The <strong>GRA Rule Table</strong> default macro (Palette &rarr; Default Macros) is
+            that chain pre-wired. And because the agent engine already lays agents out with
+            springs and repulsion, you get a <strong>live force-directed drawing</strong> of the
+            evolving graph for free &mdash; papers publish static snapshots of these things; here
+            you can watch one and paint into it.
+          </p>
+          <p className={styles.p}>
+            Two library models are the worked examples. <strong>Cubic GRA</strong> keeps a
+            3-regular graph 3-regular while it grows: a &ldquo;triangle split&rdquo; turns one node
+            into three, and the whole rewrite lands in a single generation so the graph is
+            <em> never</em> caught in a broken intermediate state. Its rule is two eight-cell tables
+            you can re-roll, and its Overseer tab sweeps twelve random rules and reports which grow,
+            die or blow up. <strong>SDCA &mdash; Couplers and Decouplers</strong> is the classic
+            structurally-dynamic automaton: node values evolve over the links while the links
+            themselves form and break according to those values, with a <em>hysteresis band</em>
+            (couple above one threshold, decouple below a lower one) so edges do not chatter. Open
+            either one and read its Instructions pill.
+          </p>
           <h3 className={styles.h3}>Neighbour Census &mdash; the input a graph rule reads</h3>
           <p className={styles.p}>
             A rule that runs on a <em>graph</em> cannot name its neighbours &mdash; there is no
@@ -1708,6 +1752,17 @@ export function HelpView() {
             the two node states&rdquo; already is. Only a genuinely <em>asymmetric</em> write (the
             two endpoints computing different values) is affected, and that contradicts the
             both-ends-equal rule on every target.
+          </p>
+          <p className={styles.p}>
+            <strong>One more thing worth knowing, on every target.</strong> Under{' '}
+            <em>synchronous</em> agent update, <em>agent</em> attributes are double-buffered: every
+            agent reads the previous generation, so the value rule is a true synchronous automaton.{' '}
+            <strong>Bond attributes are not</strong> &mdash; they are single-buffered, so a link
+            value written this generation <em>is</em> visible to a later agent in the same
+            generation. For a symmetric link rule (the usual case) that is harmless: both endpoints
+            compute the same number, so the two stored copies always agree; the only visible effect
+            is that a running-average link rule is applied twice per generation, once from each end.
+            The shipped <strong>SDCA</strong> sample says the same thing in its Rule Description.
           </p>
           <h3 className={styles.h3}>Rewiring the graph &mdash; several bond ops in ONE step</h3>
           <p className={styles.p}>

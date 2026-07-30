@@ -6,7 +6,10 @@ to inform future consolidation — it does **not** describe any committed refact
 
 **Scope:** 151 registry node types across 7 categories (event, flow, data, logic, aggregation,
 output, color) — 3 hidden from the Add Node menu (`macro` / `macroInput` / `macroOutput`),
-leaving **148 selectable** (**Form Bond Between** [`formBondBetween`] is the newest — bond two
+leaving **148 selectable**. The **Graph-Rewriting Automata** milestone is COMPLETE at these
+counts: its final phase shipped the two flagship samples (`Cubic GRA`, `SDCA — Couplers and
+Decouplers`) and added **no new node types** — the verbs below are the whole rewriting
+vocabulary. (**Form Bond Between** [`formBondBetween`] is the newest node — bond two
 OTHER agents by id, the third-party edge a self-to-target Form Bond cannot make. It exists
 because the cubic **triangle split** needs the edge joining two agents the rule CREATED THIS
 GENERATION: neither is `self`, and neither runs its own behaviour until the next generation, so

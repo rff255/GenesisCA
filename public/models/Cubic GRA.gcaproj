@@ -1,0 +1,2001 @@
+{
+ "schemaVersion": 2,
+ "properties": {
+  "name": "Cubic GRA",
+  "modelAuthor": "Rodrigo F. Figueiredo",
+  "description": "The flagship Graph-Rewriting Automaton: a 3-regular graph that rewrites itself while staying 3-regular. A rule TABLE keyed by the neighbour census picks a verb; the triangle split adds two nodes and three edges in ONE generation, so min degree == max degree == 3 and E = 3N/2 hold at every single generation. Randomize the tables, or run the Overseer sweep over rule space.",
+  "ruleDescription": "THE OPERATION SET IS OURS. This model does not claim faithfulness to any particular published graph-rewriting-automata paper. The lineage (Suzudo; Tomita, Kurokawa and Murata) is canonically 3-regular with operations chosen to preserve the degree invariant, but the exact operation sets in those papers are not reproduced here. We define our own cubic-preserving set and test it against invariants that are true of ANY cubic graph:\n\n  triangle split   v(a,b,c) -> v1,v2,v3 with v1-a, v2-b, v3-c and the triangle v1v2, v2v3, v3v1.\n                   Every new node has 1 external + 2 triangle edges = degree 3; a, b and c keep\n                   degree 3. dN = +2, dE = +3, and 3N/2 + 3 = 3(N+2)/2, so E = 3N/2 survives.\n  idle             nothing.\n\nTHE EDGE SWAP IS ABSENT, ON PURPOSE. A degree-neutral double-edge swap needs an agent to BREAK an edge between two OTHER agents, and there is no such verb: Break Bond and Rewire Bond are self-relative, and Form Bond Between only ever ADDS. Every combination of the available verbs that leaves the edge count unchanged also leaves every degree unchanged only when it is a no-op. The missing dual of Form Bond Between would close this. The triangle CONTRACT (the inverse of the split) is likewise omitted; a growth-only rule exercises the degree invariant fully.\n\nHOW THE SPLIT IS EXPRESSED. From the mother's own behaviour, in one generation, on one request queue: Create Agent twice and Add Agent To World twice (host calls that consume no queue slot), then FIVE queued operations — Rewire Bond from b to v2, Rewire Bond from c to v3, Form Bond Between b and v2, Form Bond Between c and v3, and Form Bond Between v2 and v3. That last edge joins two agents created this very generation, and no self-relative verb can make it. The peak degree during the drain is exactly 3, which is why Max Bonds is a tight 3.\n\nWHY THE PRIORITY GATE IS LOAD-BEARING. Two ADJACENT nodes must never rewrite in the same generation: the mother's Rewire needs its edge to b to still exist when the request queue is drained, and a splitting b would have re-pointed it away. So every node rolls a fresh random priority into an agent attribute each generation, and only a node whose stored priority is STRICTLY below every bonded neighbour's may rewrite. Strict inequality cannot hold both ways, so the rewriting nodes are pairwise non-adjacent for ANY priorities — the guarantee needs only that everyone reads the same generation's values, which synchronous update gives for free. Non-adjacent rewriters never conflict, because each one's Rewire-break precedes its own Form Between on the same shared neighbour, so that neighbour dips to degree 2 and returns to 3 without ever exceeding Max Bonds. The same roll doubles as the rate knob (priority < Split Rate).\n\nTHE RULE. Neighbour Census counts how many of the three neighbours are Active; that count and the node's own state index two 8-cell tables — one returning a VERB, one returning the NEXT STATE. Randomize either table (in the Attributes panel, or from the Overseer) to roll a new rule; the seed and density are stored, so an interesting rule reproduces exactly.\n\nTHE BOOTSTRAP. Form Bond writes the request queue at the acting agent, so it is invalid in the Agent Init Event. The four seeds therefore build their K4 from the behaviour graph, gated on bond degree 0 — a branch that runs exactly once, since a newborn already has degree 3 by its first behaviour step.\n\nTHE INDICATORS. Node count, edge count, max degree and the degree histogram. A cubic graph reads max degree 3 with the entire histogram in bucket 3, and E = 3N/2 — the invariant, visible live.\n\nCOMPILE TARGET. The agent layer runs on WebAssembly on purpose. The Overseer seed policy drives setRngSeed, which re-seeds the shared xorshift32 stream JS and WASM use; the WebGPU agent target seeds its per-agent PCG once at runtime creation, so a sweep there would not reproduce across runs. The model itself compiles and runs on all three agent targets.",
+  "instructions": "Press Play. Four seed nodes wire themselves into a K4, then the graph grows by triangle splits while the force layout untangles it. Watch the indicators: max degree pins at 3 and E tracks 3N/2 exactly — that is the whole point.\n\nOpen the Attributes panel and press Randomize on Verb Rule or State Rule to roll a new automaton, or drag Split Rate to change how fast it grows. The Overseer tab runs the whole sweep: twelve rules, each reset to K4 and run for 120 generations, exported as a rule -> outcome table.",
+  "topology": "2d-grid",
+  "boundaryTreatment": "torus",
+  "updateMode": "synchronous",
+  "asyncScheme": "random-order",
+  "gridWidth": 220,
+  "gridHeight": 220,
+  "maxIterations": 100000,
+  "tags": [
+   "agents",
+   "graph rewriting",
+   "GRA",
+   "cubic",
+   "Overseer"
+  ],
+  "useWasm": true,
+  "useWebGPU": false,
+  "endConditions": {
+   "enabled": true,
+   "indicatorConditions": [
+    {
+     "id": "capGuard",
+     "indicatorId": "nodes",
+     "op": ">=",
+     "value": "3000"
+    }
+   ]
+  }
+ },
+ "attributes": [
+  {
+   "id": "ruleVerb",
+   "name": "Verb Rule",
+   "type": "lookupTable",
+   "isModelAttribute": true,
+   "defaultValue": "0",
+   "description": "What does a node DO, given its own state and how many of its three neighbours are Active? Idle rewrites nothing; Split A/B/C perform the triangle split, keeping the neighbour in bond slot 0, 1 or 2. Randomize rolls a new rule — that is the rule space this model exists to explore.",
+   "valueType": "tag",
+   "valueTagOptions": [
+    "Idle",
+    "Split A",
+    "Split B",
+    "Split C"
+   ],
+   "axes": [
+    {
+     "name": "Own state",
+     "source": {
+      "kind": "tagAttribute",
+      "attributeId": "state"
+     }
+    },
+    {
+     "name": "Active neighbours",
+     "source": {
+      "kind": "intRange",
+      "min": 0,
+      "max": 3
+     }
+    }
+   ],
+   "tableData": [
+    1,
+    0,
+    1,
+    0,
+    0,
+    2,
+    1,
+    3
+   ],
+   "tableRoll": {
+    "seed": 11,
+    "density": 0.45,
+    "min": 1
+   }
+  },
+  {
+   "id": "ruleState",
+   "name": "State Rule",
+   "type": "lookupTable",
+   "isModelAttribute": true,
+   "defaultValue": "0",
+   "description": "What does a node BECOME, given the same inputs? The value rule and the verb rule are rolled independently, so a rule is a pair of 8-cell tables.",
+   "valueType": "tag",
+   "valueTagAttributeId": "state",
+   "axes": [
+    {
+     "name": "Own state",
+     "source": {
+      "kind": "tagAttribute",
+      "attributeId": "state"
+     }
+    },
+    {
+     "name": "Active neighbours",
+     "source": {
+      "kind": "intRange",
+      "min": 0,
+      "max": 3
+     }
+    }
+   ],
+   "tableData": [
+    1,
+    1,
+    0,
+    0,
+    0,
+    1,
+    1,
+    0
+   ],
+   "tableRoll": {
+    "seed": 18,
+    "density": 0.5,
+    "min": 1
+   }
+  },
+  {
+   "id": "splitRate",
+   "name": "Split Rate",
+   "type": "float",
+   "isModelAttribute": true,
+   "description": "Upper bound on the fraction of nodes that may rewrite in one generation. A node rewrites only if its random priority is below this AND is the strict local minimum among its neighbours, so lowering it slows growth without ever letting two adjacent nodes rewrite together.",
+   "defaultValue": "0.02",
+   "hasBounds": true,
+   "min": 0,
+   "max": 1
+  }
+ ],
+ "neighborhoods": [],
+ "mappings": [],
+ "indicators": [
+  {
+   "id": "nodes",
+   "name": "nodes (N)",
+   "kind": "graph",
+   "graphMetric": "nodeCount",
+   "dataType": "integer",
+   "defaultValue": "0",
+   "accumulationMode": "per-generation",
+   "watched": true
+  },
+  {
+   "id": "edges",
+   "name": "edges (E)",
+   "kind": "graph",
+   "graphMetric": "edgeCount",
+   "dataType": "integer",
+   "defaultValue": "0",
+   "accumulationMode": "per-generation",
+   "watched": true
+  },
+  {
+   "id": "maxDeg",
+   "name": "max degree",
+   "kind": "graph",
+   "graphMetric": "maxDegree",
+   "dataType": "integer",
+   "defaultValue": "0",
+   "accumulationMode": "per-generation",
+   "watched": true
+  },
+  {
+   "id": "degHist",
+   "name": "degree histogram",
+   "kind": "graph",
+   "graphMetric": "degreeHistogram",
+   "dataType": "integer",
+   "defaultValue": "0",
+   "accumulationMode": "per-generation",
+   "watched": true
+  }
+ ],
+ "graphNodes": [],
+ "graphEdges": [],
+ "macroDefs": [],
+ "topologyMode": {
+  "gridCells": false,
+  "agents": true
+ },
+ "centerBased": {
+  "enabled": true,
+  "agentTarget": "wasm",
+  "maxAgents": 6000,
+  "maxBonds": 3,
+  "bondRequestDepth": 8,
+  "worldWidth": 220,
+  "worldHeight": 220,
+  "seedCount": 4,
+  "seedPattern": "compact",
+  "defaultRadius": 0.9,
+  "growthRate": 0,
+  "repulsionStiffness": 0.9,
+  "adhesionStiffness": 0,
+  "interactionRange": 2.2,
+  "drag": 1,
+  "timeStep": 0.12,
+  "momentum": 0,
+  "maxSpeed": 0,
+  "neighbourQueryRadius": 6,
+  "useBondingPhysics": true,
+  "autoBond": false,
+  "bondStiffness": 0.55,
+  "bondRestLength": 5,
+  "formDistance": 1.15,
+  "breakDistance": 1.8,
+  "agentUpdateMode": "sync",
+  "agentCapabilities": {
+   "motion": "force",
+   "body": true,
+   "collision": "soft",
+   "bonds": "physics",
+   "autoBond": false,
+   "growth": false,
+   "division": false,
+   "lifespan": false,
+   "populationBirth": true,
+   "populationDeath": false,
+   "sensing": true,
+   "sensingHeadingSource": "velocity",
+   "orientation": false,
+   "fieldCoupling": false,
+   "appearance": true
+  }
+ },
+ "agentAttributes": [
+  {
+   "id": "state",
+   "name": "state",
+   "type": "tag",
+   "tagOptions": [
+    "Dormant",
+    "Active"
+   ],
+   "defaultValue": "0",
+   "description": "The node state — the alphabet the census counts and the rule tables are keyed by."
+  },
+  {
+   "id": "prio",
+   "name": "prio",
+   "type": "float",
+   "defaultValue": "0.5",
+   "description": "A fresh random priority each generation. Only a node whose priority is strictly below every bonded neighbour's may rewrite, which keeps the rewriting nodes pairwise non-adjacent."
+  }
+ ],
+ "agentVariables": [],
+ "bondAttributes": [],
+ "agentMappings": [
+  {
+   "id": "stateView",
+   "name": "State",
+   "isAttributeToColor": true,
+   "description": "Dormant / Active.",
+   "linked": true,
+   "linkedAttributeId": "state",
+   "linkedColors": {
+    "tag": [
+     {
+      "r": 60,
+      "g": 72,
+      "b": 96
+     },
+     {
+      "r": 240,
+      "g": 176,
+      "b": 64
+     }
+    ]
+   }
+  }
+ ],
+ "agentGraphNodes": [
+  {
+   "id": "nms7ybcjq9dlo",
+   "type": "caNode",
+   "position": {
+    "x": 0,
+    "y": 570
+   },
+   "data": {
+    "nodeType": "behaviourStep",
+    "config": {}
+   }
+  },
+  {
+   "id": "nms7ybcjqgmjy",
+   "type": "caNode",
+   "position": {
+    "x": 0,
+    "y": 0
+   },
+   "data": {
+    "nodeType": "getRandom",
+    "config": {
+     "randomType": "float",
+     "min": "0",
+     "max": "1"
+    }
+   }
+  },
+  {
+   "id": "nms7ybcjqawl7",
+   "type": "caNode",
+   "position": {
+    "x": 240,
+    "y": 0
+   },
+   "data": {
+    "nodeType": "setAttribute",
+    "config": {
+     "attributeId": "prio"
+    }
+   }
+  },
+  {
+   "id": "nms7ybcjqeqgp",
+   "type": "caNode",
+   "position": {
+    "x": 0,
+    "y": 190
+   },
+   "data": {
+    "nodeType": "getBondDegree",
+    "config": {}
+   }
+  },
+  {
+   "id": "nms7ybcjqj6ck",
+   "type": "caNode",
+   "position": {
+    "x": 240,
+    "y": 190
+   },
+   "data": {
+    "nodeType": "statement",
+    "config": {
+     "operation": "==",
+     "compareType": "numerical",
+     "_port_y": "0"
+    }
+   }
+  },
+  {
+   "id": "nms7ybcjqq3ji",
+   "type": "caNode",
+   "position": {
+    "x": 480,
+    "y": 570
+   },
+   "data": {
+    "nodeType": "conditional",
+    "config": {}
+   }
+  },
+  {
+   "id": "nms7ybcjq2oza",
+   "type": "caNode",
+   "position": {
+    "x": 720,
+    "y": 0
+   },
+   "data": {
+    "nodeType": "getSelfHandle",
+    "config": {}
+   }
+  },
+  {
+   "id": "nms7ybcjqqp4j",
+   "type": "caNode",
+   "position": {
+    "x": 960,
+    "y": 0
+   },
+   "data": {
+    "nodeType": "arithmeticOperator",
+    "config": {
+     "operation": "%",
+     "_port_y": "2"
+    }
+   }
+  },
+  {
+   "id": "nms7ybcjqx8ic",
+   "type": "caNode",
+   "position": {
+    "x": 1200,
+    "y": 0
+   },
+   "data": {
+    "nodeType": "setAttribute",
+    "config": {
+     "attributeId": "state"
+    }
+   }
+  },
+  {
+   "id": "nms7ybcjq56wh",
+   "type": "caNode",
+   "position": {
+    "x": 720,
+    "y": 95
+   },
+   "data": {
+    "nodeType": "getNearbyAgents",
+    "config": {
+     "_port_radius": "6"
+    }
+   }
+  },
+  {
+   "id": "nms7ybcjq5c4z",
+   "type": "caNode",
+   "position": {
+    "x": 960,
+    "y": 95
+   },
+   "data": {
+    "nodeType": "forEachInArray",
+    "config": {}
+   }
+  },
+  {
+   "id": "nms7ybcjqhspk",
+   "type": "caNode",
+   "position": {
+    "x": 1200,
+    "y": 95
+   },
+   "data": {
+    "nodeType": "formBond",
+    "config": {
+     "_port_restLength": "5",
+     "_port_stiffness": "0.55"
+    }
+   }
+  },
+  {
+   "id": "nms7ybcjqphau",
+   "type": "caNode",
+   "position": {
+    "x": 0,
+    "y": 760
+   },
+   "data": {
+    "nodeType": "neighbourCensus",
+    "config": {
+     "attributeId": "state",
+     "source": "bonded"
+    }
+   }
+  },
+  {
+   "id": "nms7ybcjqqxh3",
+   "type": "caNode",
+   "position": {
+    "x": 0,
+    "y": 855
+   },
+   "data": {
+    "nodeType": "getCellAttribute",
+    "config": {
+     "attributeId": "state"
+    }
+   }
+  },
+  {
+   "id": "nms7ybcjq19yp",
+   "type": "caNode",
+   "position": {
+    "x": 240,
+    "y": 760
+   },
+   "data": {
+    "nodeType": "lookupInteraction",
+    "config": {
+     "tableId": "ruleState"
+    }
+   }
+  },
+  {
+   "id": "nms7ybcjq248w",
+   "type": "caNode",
+   "position": {
+    "x": 240,
+    "y": 950
+   },
+   "data": {
+    "nodeType": "lookupInteraction",
+    "config": {
+     "tableId": "ruleVerb"
+    }
+   }
+  },
+  {
+   "id": "nms7ybcjq6zuj",
+   "type": "caNode",
+   "position": {
+    "x": 480,
+    "y": 760
+   },
+   "data": {
+    "nodeType": "setAttribute",
+    "config": {
+     "attributeId": "state"
+    }
+   }
+  },
+  {
+   "id": "nms7ybcjq2kld",
+   "type": "caNode",
+   "position": {
+    "x": 0,
+    "y": 1140
+   },
+   "data": {
+    "nodeType": "getBondedAgents",
+    "config": {}
+   }
+  },
+  {
+   "id": "nms7ybcjqdt3a",
+   "type": "caNode",
+   "position": {
+    "x": 240,
+    "y": 1140
+   },
+   "data": {
+    "nodeType": "getAgentsAttribute",
+    "config": {
+     "attributeId": "prio"
+    }
+   }
+  },
+  {
+   "id": "nms7ybcjq2l3m",
+   "type": "caNode",
+   "position": {
+    "x": 480,
+    "y": 1140
+   },
+   "data": {
+    "nodeType": "aggregate",
+    "config": {
+     "operation": "min"
+    }
+   }
+  },
+  {
+   "id": "nms7ybcjqmqum",
+   "type": "caNode",
+   "position": {
+    "x": 0,
+    "y": 1235
+   },
+   "data": {
+    "nodeType": "getCellAttribute",
+    "config": {
+     "attributeId": "prio"
+    }
+   }
+  },
+  {
+   "id": "nms7ybcjqkgty",
+   "type": "caNode",
+   "position": {
+    "x": 720,
+    "y": 1140
+   },
+   "data": {
+    "nodeType": "statement",
+    "config": {
+     "operation": "<",
+     "compareType": "numerical"
+    }
+   }
+  },
+  {
+   "id": "nms7ybcjqc3et",
+   "type": "caNode",
+   "position": {
+    "x": 0,
+    "y": 1330
+   },
+   "data": {
+    "nodeType": "getModelAttribute",
+    "config": {
+     "attributeId": "splitRate"
+    }
+   }
+  },
+  {
+   "id": "nms7ybcjqjqaf",
+   "type": "caNode",
+   "position": {
+    "x": 720,
+    "y": 1330
+   },
+   "data": {
+    "nodeType": "statement",
+    "config": {
+     "operation": "<",
+     "compareType": "numerical"
+    }
+   }
+  },
+  {
+   "id": "nms7ybcjqeboq",
+   "type": "caNode",
+   "position": {
+    "x": 720,
+    "y": 1425
+   },
+   "data": {
+    "nodeType": "statement",
+    "config": {
+     "operation": "==",
+     "compareType": "numerical",
+     "_port_y": "3"
+    }
+   }
+  },
+  {
+   "id": "nms7ybcjqv3wf",
+   "type": "caNode",
+   "position": {
+    "x": 960,
+    "y": 1140
+   },
+   "data": {
+    "nodeType": "logicOperator",
+    "config": {
+     "operation": "AND"
+    }
+   }
+  },
+  {
+   "id": "nms7ybcjqss7m",
+   "type": "caNode",
+   "position": {
+    "x": 1200,
+    "y": 1140
+   },
+   "data": {
+    "nodeType": "logicOperator",
+    "config": {
+     "operation": "AND"
+    }
+   }
+  },
+  {
+   "id": "nms7ybcjq8sy8",
+   "type": "caNode",
+   "position": {
+    "x": 1440,
+    "y": 1045
+   },
+   "data": {
+    "nodeType": "valueSwitch",
+    "config": {
+     "_port_elseValue": "0"
+    }
+   }
+  },
+  {
+   "id": "nms7ybcjqz5xv",
+   "type": "caNode",
+   "position": {
+    "x": 1680,
+    "y": 760
+   },
+   "data": {
+    "nodeType": "switch",
+    "config": {
+     "mode": "value",
+     "valueType": "integer",
+     "caseCount": 1,
+     "firstMatchOnly": true,
+     "_port_case_0_val": "0"
+    }
+   }
+  },
+  {
+   "id": "nms7ybcjqvlm9",
+   "type": "caNode",
+   "position": {
+    "x": 1920,
+    "y": 1235
+   },
+   "data": {
+    "nodeType": "arithmeticOperator",
+    "config": {
+     "operation": "-",
+     "_port_y": "1"
+    }
+   }
+  },
+  {
+   "id": "nms7ybcjqtp3p",
+   "type": "caNode",
+   "position": {
+    "x": 2160,
+    "y": 1235
+   },
+   "data": {
+    "nodeType": "arithmeticOperator",
+    "config": {
+     "operation": "+",
+     "_port_y": "1"
+    }
+   }
+  },
+  {
+   "id": "nms7ybcjqsdhh",
+   "type": "caNode",
+   "position": {
+    "x": 2400,
+    "y": 1235
+   },
+   "data": {
+    "nodeType": "arithmeticOperator",
+    "config": {
+     "operation": "%",
+     "_port_y": "3"
+    }
+   }
+  },
+  {
+   "id": "nms7ybcjqsxn3",
+   "type": "caNode",
+   "position": {
+    "x": 2160,
+    "y": 1330
+   },
+   "data": {
+    "nodeType": "arithmeticOperator",
+    "config": {
+     "operation": "+",
+     "_port_y": "2"
+    }
+   }
+  },
+  {
+   "id": "nms7ybcjqa59v",
+   "type": "caNode",
+   "position": {
+    "x": 2400,
+    "y": 1330
+   },
+   "data": {
+    "nodeType": "arithmeticOperator",
+    "config": {
+     "operation": "%",
+     "_port_y": "3"
+    }
+   }
+  },
+  {
+   "id": "nms7ybcjql1br",
+   "type": "caNode",
+   "position": {
+    "x": 2640,
+    "y": 1235
+   },
+   "data": {
+    "nodeType": "arrayElement",
+    "config": {}
+   }
+  },
+  {
+   "id": "nms7ybcjqf0hy",
+   "type": "caNode",
+   "position": {
+    "x": 2640,
+    "y": 1330
+   },
+   "data": {
+    "nodeType": "arrayElement",
+    "config": {}
+   }
+  },
+  {
+   "id": "nms7ybcjqcsht",
+   "type": "caNode",
+   "position": {
+    "x": 1920,
+    "y": 475
+   },
+   "data": {
+    "nodeType": "getSelfPosition",
+    "config": {}
+   }
+  },
+  {
+   "id": "nms7ybcjq88i1",
+   "type": "caNode",
+   "position": {
+    "x": 2160,
+    "y": 380
+   },
+   "data": {
+    "nodeType": "arithmeticOperator",
+    "config": {
+     "operation": "+",
+     "_port_y": "1.75"
+    }
+   }
+  },
+  {
+   "id": "nms7ybcjqfe8t",
+   "type": "caNode",
+   "position": {
+    "x": 2160,
+    "y": 475
+   },
+   "data": {
+    "nodeType": "arithmeticOperator",
+    "config": {
+     "operation": "+",
+     "_port_y": "1.1"
+    }
+   }
+  },
+  {
+   "id": "nms7ybcjq405d",
+   "type": "caNode",
+   "position": {
+    "x": 2160,
+    "y": 570
+   },
+   "data": {
+    "nodeType": "arithmeticOperator",
+    "config": {
+     "operation": "-",
+     "_port_y": "1.75"
+    }
+   }
+  },
+  {
+   "id": "nms7ybcjq81r3",
+   "type": "caNode",
+   "position": {
+    "x": 2160,
+    "y": 665
+   },
+   "data": {
+    "nodeType": "arithmeticOperator",
+    "config": {
+     "operation": "-",
+     "_port_y": "1.1"
+    }
+   }
+  },
+  {
+   "id": "nms7ybcjqvgao",
+   "type": "caNode",
+   "position": {
+    "x": 2400,
+    "y": 380
+   },
+   "data": {
+    "nodeType": "createAgent",
+    "config": {
+     "_port_radius": "0.9"
+    }
+   }
+  },
+  {
+   "id": "nms7ybcjqza7b",
+   "type": "caNode",
+   "position": {
+    "x": 2640,
+    "y": 380
+   },
+   "data": {
+    "nodeType": "addAgentToWorld",
+    "config": {}
+   }
+  },
+  {
+   "id": "nms7ybcjqlgti",
+   "type": "caNode",
+   "position": {
+    "x": 2400,
+    "y": 570
+   },
+   "data": {
+    "nodeType": "createAgent",
+    "config": {
+     "_port_radius": "0.9"
+    }
+   }
+  },
+  {
+   "id": "nms7ybcjq6paf",
+   "type": "caNode",
+   "position": {
+    "x": 2640,
+    "y": 570
+   },
+   "data": {
+    "nodeType": "addAgentToWorld",
+    "config": {}
+   }
+  },
+  {
+   "id": "nms7ybcjqqef2",
+   "type": "caNode",
+   "position": {
+    "x": 2880,
+    "y": 380
+   },
+   "data": {
+    "nodeType": "rewireBond",
+    "config": {
+     "_port_restLength": "5",
+     "_port_stiffness": "0.55"
+    }
+   }
+  },
+  {
+   "id": "nms7ybcjq93rj",
+   "type": "caNode",
+   "position": {
+    "x": 2880,
+    "y": 475
+   },
+   "data": {
+    "nodeType": "rewireBond",
+    "config": {
+     "_port_restLength": "5",
+     "_port_stiffness": "0.55"
+    }
+   }
+  },
+  {
+   "id": "nms7ybcjqdtv6",
+   "type": "caNode",
+   "position": {
+    "x": 2880,
+    "y": 570
+   },
+   "data": {
+    "nodeType": "formBondBetween",
+    "config": {
+     "_port_restLength": "5",
+     "_port_stiffness": "0.55"
+    }
+   }
+  },
+  {
+   "id": "nms7ybcjqxg4s",
+   "type": "caNode",
+   "position": {
+    "x": 2880,
+    "y": 665
+   },
+   "data": {
+    "nodeType": "formBondBetween",
+    "config": {
+     "_port_restLength": "5",
+     "_port_stiffness": "0.55"
+    }
+   }
+  },
+  {
+   "id": "nms7ybcjqy51b",
+   "type": "caNode",
+   "position": {
+    "x": 2880,
+    "y": 760
+   },
+   "data": {
+    "nodeType": "formBondBetween",
+    "config": {
+     "_port_restLength": "5",
+     "_port_stiffness": "0.55"
+    }
+   }
+  }
+ ],
+ "agentGraphEdges": [
+  {
+   "id": "ems7ybcjqxgtt",
+   "source": "nms7ybcjqgmjy",
+   "target": "nms7ybcjqawl7",
+   "sourceHandle": "output_value_value",
+   "targetHandle": "input_value_value"
+  },
+  {
+   "id": "ems7ybcjqzoub",
+   "source": "nms7ybcjq9dlo",
+   "target": "nms7ybcjqawl7",
+   "sourceHandle": "output_flow_do",
+   "targetHandle": "input_flow_do"
+  },
+  {
+   "id": "ems7ybcjq7g8d",
+   "source": "nms7ybcjqeqgp",
+   "target": "nms7ybcjqj6ck",
+   "sourceHandle": "output_value_value",
+   "targetHandle": "input_value_x"
+  },
+  {
+   "id": "ems7ybcjqlxya",
+   "source": "nms7ybcjqawl7",
+   "target": "nms7ybcjqq3ji",
+   "sourceHandle": "output_flow_next",
+   "targetHandle": "input_flow_check"
+  },
+  {
+   "id": "ems7ybcjqykbt",
+   "source": "nms7ybcjqj6ck",
+   "target": "nms7ybcjqq3ji",
+   "sourceHandle": "output_value_result",
+   "targetHandle": "input_value_condition"
+  },
+  {
+   "id": "ems7ybcjqax69",
+   "source": "nms7ybcjq2oza",
+   "target": "nms7ybcjqqp4j",
+   "sourceHandle": "output_value_handle",
+   "targetHandle": "input_value_x"
+  },
+  {
+   "id": "ems7ybcjqbajj",
+   "source": "nms7ybcjqqp4j",
+   "target": "nms7ybcjqx8ic",
+   "sourceHandle": "output_value_result",
+   "targetHandle": "input_value_value"
+  },
+  {
+   "id": "ems7ybcjqtq5h",
+   "source": "nms7ybcjqq3ji",
+   "target": "nms7ybcjqx8ic",
+   "sourceHandle": "output_flow_then",
+   "targetHandle": "input_flow_do"
+  },
+  {
+   "id": "ems7ybcjqx9xv",
+   "source": "nms7ybcjq56wh",
+   "target": "nms7ybcjq5c4z",
+   "sourceHandle": "output_value_agents",
+   "targetHandle": "input_value_array"
+  },
+  {
+   "id": "ems7ybcjqmuq6",
+   "source": "nms7ybcjqx8ic",
+   "target": "nms7ybcjq5c4z",
+   "sourceHandle": "output_flow_next",
+   "targetHandle": "input_flow_do"
+  },
+  {
+   "id": "ems7ybcjqgx09",
+   "source": "nms7ybcjq5c4z",
+   "target": "nms7ybcjqhspk",
+   "sourceHandle": "output_value_element",
+   "targetHandle": "input_value_targetAgent"
+  },
+  {
+   "id": "ems7ybcjqo7sh",
+   "source": "nms7ybcjq5c4z",
+   "target": "nms7ybcjqhspk",
+   "sourceHandle": "output_flow_body",
+   "targetHandle": "input_flow_do"
+  },
+  {
+   "id": "ems7ybcjqld8p",
+   "source": "nms7ybcjqqxh3",
+   "target": "nms7ybcjq19yp",
+   "sourceHandle": "output_value_value",
+   "targetHandle": "input_value_axis_0"
+  },
+  {
+   "id": "ems7ybcjqssjf",
+   "source": "nms7ybcjqphau",
+   "target": "nms7ybcjq19yp",
+   "sourceHandle": "output_value_count_1",
+   "targetHandle": "input_value_axis_1"
+  },
+  {
+   "id": "ems7ybcjq69ov",
+   "source": "nms7ybcjqqxh3",
+   "target": "nms7ybcjq248w",
+   "sourceHandle": "output_value_value",
+   "targetHandle": "input_value_axis_0"
+  },
+  {
+   "id": "ems7ybcjqvvpt",
+   "source": "nms7ybcjqphau",
+   "target": "nms7ybcjq248w",
+   "sourceHandle": "output_value_count_1",
+   "targetHandle": "input_value_axis_1"
+  },
+  {
+   "id": "ems7ybcjqi8pm",
+   "source": "nms7ybcjq19yp",
+   "target": "nms7ybcjq6zuj",
+   "sourceHandle": "output_value_value",
+   "targetHandle": "input_value_value"
+  },
+  {
+   "id": "ems7ybcjqpnrg",
+   "source": "nms7ybcjqq3ji",
+   "target": "nms7ybcjq6zuj",
+   "sourceHandle": "output_flow_else",
+   "targetHandle": "input_flow_do"
+  },
+  {
+   "id": "ems7ybcjqqz5t",
+   "source": "nms7ybcjq2kld",
+   "target": "nms7ybcjqdt3a",
+   "sourceHandle": "output_value_agents",
+   "targetHandle": "input_value_agents"
+  },
+  {
+   "id": "ems7ybcjqylrz",
+   "source": "nms7ybcjqdt3a",
+   "target": "nms7ybcjq2l3m",
+   "sourceHandle": "output_value_values",
+   "targetHandle": "input_value_values"
+  },
+  {
+   "id": "ems7ybcjqt79z",
+   "source": "nms7ybcjqmqum",
+   "target": "nms7ybcjqkgty",
+   "sourceHandle": "output_value_value",
+   "targetHandle": "input_value_x"
+  },
+  {
+   "id": "ems7ybcjqp452",
+   "source": "nms7ybcjq2l3m",
+   "target": "nms7ybcjqkgty",
+   "sourceHandle": "output_value_result",
+   "targetHandle": "input_value_y"
+  },
+  {
+   "id": "ems7ybcjqnseq",
+   "source": "nms7ybcjqmqum",
+   "target": "nms7ybcjqjqaf",
+   "sourceHandle": "output_value_value",
+   "targetHandle": "input_value_x"
+  },
+  {
+   "id": "ems7ybcjqhdoo",
+   "source": "nms7ybcjqc3et",
+   "target": "nms7ybcjqjqaf",
+   "sourceHandle": "output_value_value",
+   "targetHandle": "input_value_y"
+  },
+  {
+   "id": "ems7ybcjq1pky",
+   "source": "nms7ybcjqeqgp",
+   "target": "nms7ybcjqeboq",
+   "sourceHandle": "output_value_value",
+   "targetHandle": "input_value_x"
+  },
+  {
+   "id": "ems7ybcjq4yrw",
+   "source": "nms7ybcjqkgty",
+   "target": "nms7ybcjqv3wf",
+   "sourceHandle": "output_value_result",
+   "targetHandle": "input_value_a"
+  },
+  {
+   "id": "ems7ybcjqycjr",
+   "source": "nms7ybcjqjqaf",
+   "target": "nms7ybcjqv3wf",
+   "sourceHandle": "output_value_result",
+   "targetHandle": "input_value_b"
+  },
+  {
+   "id": "ems7ybcjqnt5y",
+   "source": "nms7ybcjqv3wf",
+   "target": "nms7ybcjqss7m",
+   "sourceHandle": "output_value_result",
+   "targetHandle": "input_value_a"
+  },
+  {
+   "id": "ems7ybcjqwbj4",
+   "source": "nms7ybcjqeboq",
+   "target": "nms7ybcjqss7m",
+   "sourceHandle": "output_value_result",
+   "targetHandle": "input_value_b"
+  },
+  {
+   "id": "ems7ybcjqmfyc",
+   "source": "nms7ybcjqss7m",
+   "target": "nms7ybcjq8sy8",
+   "sourceHandle": "output_value_result",
+   "targetHandle": "input_value_condition"
+  },
+  {
+   "id": "ems7ybcjq1kya",
+   "source": "nms7ybcjq248w",
+   "target": "nms7ybcjq8sy8",
+   "sourceHandle": "output_value_value",
+   "targetHandle": "input_value_ifValue"
+  },
+  {
+   "id": "ems7ybcjqdboa",
+   "source": "nms7ybcjq8sy8",
+   "target": "nms7ybcjqz5xv",
+   "sourceHandle": "output_value_result",
+   "targetHandle": "input_value_value"
+  },
+  {
+   "id": "ems7ybcjqmijv",
+   "source": "nms7ybcjq6zuj",
+   "target": "nms7ybcjqz5xv",
+   "sourceHandle": "output_flow_next",
+   "targetHandle": "input_flow_check"
+  },
+  {
+   "id": "ems7ybcjqm155",
+   "source": "nms7ybcjq8sy8",
+   "target": "nms7ybcjqvlm9",
+   "sourceHandle": "output_value_result",
+   "targetHandle": "input_value_x"
+  },
+  {
+   "id": "ems7ybcjqs4sx",
+   "source": "nms7ybcjqvlm9",
+   "target": "nms7ybcjqtp3p",
+   "sourceHandle": "output_value_result",
+   "targetHandle": "input_value_x"
+  },
+  {
+   "id": "ems7ybcjq04z5",
+   "source": "nms7ybcjqtp3p",
+   "target": "nms7ybcjqsdhh",
+   "sourceHandle": "output_value_result",
+   "targetHandle": "input_value_x"
+  },
+  {
+   "id": "ems7ybcjqnmbp",
+   "source": "nms7ybcjqvlm9",
+   "target": "nms7ybcjqsxn3",
+   "sourceHandle": "output_value_result",
+   "targetHandle": "input_value_x"
+  },
+  {
+   "id": "ems7ybcjqdulw",
+   "source": "nms7ybcjqsxn3",
+   "target": "nms7ybcjqa59v",
+   "sourceHandle": "output_value_result",
+   "targetHandle": "input_value_x"
+  },
+  {
+   "id": "ems7ybcjqwb69",
+   "source": "nms7ybcjq2kld",
+   "target": "nms7ybcjql1br",
+   "sourceHandle": "output_value_agents",
+   "targetHandle": "input_value_array"
+  },
+  {
+   "id": "ems7ybcjqbozq",
+   "source": "nms7ybcjqsdhh",
+   "target": "nms7ybcjql1br",
+   "sourceHandle": "output_value_result",
+   "targetHandle": "input_value_position"
+  },
+  {
+   "id": "ems7ybcjqn2md",
+   "source": "nms7ybcjq2kld",
+   "target": "nms7ybcjqf0hy",
+   "sourceHandle": "output_value_agents",
+   "targetHandle": "input_value_array"
+  },
+  {
+   "id": "ems7ybcjqcbu9",
+   "source": "nms7ybcjqa59v",
+   "target": "nms7ybcjqf0hy",
+   "sourceHandle": "output_value_result",
+   "targetHandle": "input_value_position"
+  },
+  {
+   "id": "ems7ybcjq6ym6",
+   "source": "nms7ybcjqcsht",
+   "target": "nms7ybcjq88i1",
+   "sourceHandle": "output_value_x",
+   "targetHandle": "input_value_x"
+  },
+  {
+   "id": "ems7ybcjqovmi",
+   "source": "nms7ybcjqcsht",
+   "target": "nms7ybcjqfe8t",
+   "sourceHandle": "output_value_y",
+   "targetHandle": "input_value_x"
+  },
+  {
+   "id": "ems7ybcjqqjfy",
+   "source": "nms7ybcjqcsht",
+   "target": "nms7ybcjq405d",
+   "sourceHandle": "output_value_x",
+   "targetHandle": "input_value_x"
+  },
+  {
+   "id": "ems7ybcjq44g3",
+   "source": "nms7ybcjqcsht",
+   "target": "nms7ybcjq81r3",
+   "sourceHandle": "output_value_y",
+   "targetHandle": "input_value_x"
+  },
+  {
+   "id": "ems7ybcjq0tyc",
+   "source": "nms7ybcjq88i1",
+   "target": "nms7ybcjqvgao",
+   "sourceHandle": "output_value_result",
+   "targetHandle": "input_value_x"
+  },
+  {
+   "id": "ems7ybcjq0lj5",
+   "source": "nms7ybcjqfe8t",
+   "target": "nms7ybcjqvgao",
+   "sourceHandle": "output_value_result",
+   "targetHandle": "input_value_y"
+  },
+  {
+   "id": "ems7ybcjqkgdk",
+   "source": "nms7ybcjqvgao",
+   "target": "nms7ybcjqza7b",
+   "sourceHandle": "output_value_handle",
+   "targetHandle": "input_value_handle"
+  },
+  {
+   "id": "ems7ybcjqovhv",
+   "source": "nms7ybcjq405d",
+   "target": "nms7ybcjqlgti",
+   "sourceHandle": "output_value_result",
+   "targetHandle": "input_value_x"
+  },
+  {
+   "id": "ems7ybcjq6icd",
+   "source": "nms7ybcjq81r3",
+   "target": "nms7ybcjqlgti",
+   "sourceHandle": "output_value_result",
+   "targetHandle": "input_value_y"
+  },
+  {
+   "id": "ems7ybcjqyhuo",
+   "source": "nms7ybcjqlgti",
+   "target": "nms7ybcjq6paf",
+   "sourceHandle": "output_value_handle",
+   "targetHandle": "input_value_handle"
+  },
+  {
+   "id": "ems7ybcjqgi3d",
+   "source": "nms7ybcjql1br",
+   "target": "nms7ybcjqqef2",
+   "sourceHandle": "output_value_value",
+   "targetHandle": "input_value_fromAgent"
+  },
+  {
+   "id": "ems7ybcjqywc7",
+   "source": "nms7ybcjqvgao",
+   "target": "nms7ybcjqqef2",
+   "sourceHandle": "output_value_handle",
+   "targetHandle": "input_value_toAgent"
+  },
+  {
+   "id": "ems7ybcjqt72l",
+   "source": "nms7ybcjqf0hy",
+   "target": "nms7ybcjq93rj",
+   "sourceHandle": "output_value_value",
+   "targetHandle": "input_value_fromAgent"
+  },
+  {
+   "id": "ems7ybcjqfpzq",
+   "source": "nms7ybcjqlgti",
+   "target": "nms7ybcjq93rj",
+   "sourceHandle": "output_value_handle",
+   "targetHandle": "input_value_toAgent"
+  },
+  {
+   "id": "ems7ybcjq0dvu",
+   "source": "nms7ybcjql1br",
+   "target": "nms7ybcjqdtv6",
+   "sourceHandle": "output_value_value",
+   "targetHandle": "input_value_agentA"
+  },
+  {
+   "id": "ems7ybcjq9crg",
+   "source": "nms7ybcjqvgao",
+   "target": "nms7ybcjqdtv6",
+   "sourceHandle": "output_value_handle",
+   "targetHandle": "input_value_agentB"
+  },
+  {
+   "id": "ems7ybcjqgpob",
+   "source": "nms7ybcjqf0hy",
+   "target": "nms7ybcjqxg4s",
+   "sourceHandle": "output_value_value",
+   "targetHandle": "input_value_agentA"
+  },
+  {
+   "id": "ems7ybcjqlu38",
+   "source": "nms7ybcjqlgti",
+   "target": "nms7ybcjqxg4s",
+   "sourceHandle": "output_value_handle",
+   "targetHandle": "input_value_agentB"
+  },
+  {
+   "id": "ems7ybcjqrfzt",
+   "source": "nms7ybcjqvgao",
+   "target": "nms7ybcjqy51b",
+   "sourceHandle": "output_value_handle",
+   "targetHandle": "input_value_agentA"
+  },
+  {
+   "id": "ems7ybcjq8rd4",
+   "source": "nms7ybcjqlgti",
+   "target": "nms7ybcjqy51b",
+   "sourceHandle": "output_value_handle",
+   "targetHandle": "input_value_agentB"
+  },
+  {
+   "id": "ems7ybcjqq63k",
+   "source": "nms7ybcjqz5xv",
+   "target": "nms7ybcjqvgao",
+   "sourceHandle": "output_flow_default",
+   "targetHandle": "input_flow_do"
+  },
+  {
+   "id": "ems7ybcjq1haj",
+   "source": "nms7ybcjqvgao",
+   "target": "nms7ybcjqza7b",
+   "sourceHandle": "output_flow_next",
+   "targetHandle": "input_flow_do"
+  },
+  {
+   "id": "ems7ybcjqhl66",
+   "source": "nms7ybcjqza7b",
+   "target": "nms7ybcjqlgti",
+   "sourceHandle": "output_flow_next",
+   "targetHandle": "input_flow_do"
+  },
+  {
+   "id": "ems7ybcjq6zwj",
+   "source": "nms7ybcjqlgti",
+   "target": "nms7ybcjq6paf",
+   "sourceHandle": "output_flow_next",
+   "targetHandle": "input_flow_do"
+  },
+  {
+   "id": "ems7ybcjq1qvk",
+   "source": "nms7ybcjq6paf",
+   "target": "nms7ybcjqqef2",
+   "sourceHandle": "output_flow_next",
+   "targetHandle": "input_flow_do"
+  },
+  {
+   "id": "ems7ybcjqx2p6",
+   "source": "nms7ybcjqqef2",
+   "target": "nms7ybcjq93rj",
+   "sourceHandle": "output_flow_next",
+   "targetHandle": "input_flow_do"
+  },
+  {
+   "id": "ems7ybcjqv9f5",
+   "source": "nms7ybcjq93rj",
+   "target": "nms7ybcjqdtv6",
+   "sourceHandle": "output_flow_next",
+   "targetHandle": "input_flow_do"
+  },
+  {
+   "id": "ems7ybcjq0xap",
+   "source": "nms7ybcjqdtv6",
+   "target": "nms7ybcjqxg4s",
+   "sourceHandle": "output_flow_next",
+   "targetHandle": "input_flow_do"
+  },
+  {
+   "id": "ems7ybcjq1ylj",
+   "source": "nms7ybcjqxg4s",
+   "target": "nms7ybcjqy51b",
+   "sourceHandle": "output_flow_next",
+   "targetHandle": "input_flow_do"
+  }
+ ],
+ "overseerConfig": {
+  "enabled": true,
+  "seedPolicy": "sequential",
+  "baseSeed": 31415
+ },
+ "overseerGraphNodes": [
+  {
+   "id": "nms7ybcjqv6oa",
+   "type": "caNode",
+   "position": {
+    "x": 0,
+    "y": 285
+   },
+   "data": {
+    "nodeType": "experiment",
+    "config": {}
+   }
+  },
+  {
+   "id": "nms7ybcjq4iua",
+   "type": "caNode",
+   "position": {
+    "x": 240,
+    "y": 285
+   },
+   "data": {
+    "nodeType": "ovClearSeries",
+    "config": {
+     "series": "N"
+    }
+   }
+  },
+  {
+   "id": "nms7ybcjqds85",
+   "type": "caNode",
+   "position": {
+    "x": 480,
+    "y": 285
+   },
+   "data": {
+    "nodeType": "ovClearSeries",
+    "config": {
+     "series": "E"
+    }
+   }
+  },
+  {
+   "id": "nms7ybcjqt6mi",
+   "type": "caNode",
+   "position": {
+    "x": 720,
+    "y": 285
+   },
+   "data": {
+    "nodeType": "ovClearSeries",
+    "config": {
+     "series": "maxDegree"
+    }
+   }
+  },
+  {
+   "id": "nms7ybcjq4rgv",
+   "type": "caNode",
+   "position": {
+    "x": 960,
+    "y": 285
+   },
+   "data": {
+    "nodeType": "ovLog",
+    "config": {
+     "text": "Rule sweep: for each seed, roll BOTH tables, reset to K4 and run 120 generations."
+    }
+   }
+  },
+  {
+   "id": "nms7ybcjq34ns",
+   "type": "caNode",
+   "position": {
+    "x": 0,
+    "y": 570
+   },
+   "data": {
+    "nodeType": "ovSweepValues",
+    "config": {
+     "mode": "list",
+     "list": "11, 22, 33, 44, 55, 66, 77, 88, 99, 110, 121, 132"
+    }
+   }
+  },
+  {
+   "id": "nms7ybcjq5kkx",
+   "type": "caNode",
+   "position": {
+    "x": 240,
+    "y": 475
+   },
+   "data": {
+    "nodeType": "forEachInArray",
+    "config": {}
+   }
+  },
+  {
+   "id": "nms7ybcjqxrad",
+   "type": "caNode",
+   "position": {
+    "x": 480,
+    "y": 570
+   },
+   "data": {
+    "nodeType": "ovRandomizeTable",
+    "config": {
+     "tableId": "ruleVerb",
+     "_port_density": "0.45"
+    }
+   }
+  },
+  {
+   "id": "nms7ybcjq7173",
+   "type": "caNode",
+   "position": {
+    "x": 480,
+    "y": 760
+   },
+   "data": {
+    "nodeType": "arithmeticOperator",
+    "config": {
+     "operation": "+",
+     "_port_y": "7"
+    }
+   }
+  },
+  {
+   "id": "nms7ybcjqd7dc",
+   "type": "caNode",
+   "position": {
+    "x": 720,
+    "y": 570
+   },
+   "data": {
+    "nodeType": "ovRandomizeTable",
+    "config": {
+     "tableId": "ruleState",
+     "_port_density": "0.5"
+    }
+   }
+  },
+  {
+   "id": "nms7ybcjqtadd",
+   "type": "caNode",
+   "position": {
+    "x": 960,
+    "y": 570
+   },
+   "data": {
+    "nodeType": "ovResetBoard",
+    "config": {}
+   }
+  },
+  {
+   "id": "nms7ybcjqiqg6",
+   "type": "caNode",
+   "position": {
+    "x": 1200,
+    "y": 570
+   },
+   "data": {
+    "nodeType": "ovRunUntilStop",
+    "config": {
+     "_port_maxGens": "120"
+    }
+   }
+  },
+  {
+   "id": "nms7ybcjqdhl5",
+   "type": "caNode",
+   "position": {
+    "x": 1200,
+    "y": 760
+   },
+   "data": {
+    "nodeType": "ovReadIndicator",
+    "config": {
+     "indicatorId": "nodes",
+     "category": ""
+    }
+   }
+  },
+  {
+   "id": "nms7ybcjq9rjo",
+   "type": "caNode",
+   "position": {
+    "x": 1200,
+    "y": 855
+   },
+   "data": {
+    "nodeType": "ovReadIndicator",
+    "config": {
+     "indicatorId": "edges",
+     "category": ""
+    }
+   }
+  },
+  {
+   "id": "nms7ybcjqccpv",
+   "type": "caNode",
+   "position": {
+    "x": 1200,
+    "y": 950
+   },
+   "data": {
+    "nodeType": "ovReadIndicator",
+    "config": {
+     "indicatorId": "maxDeg",
+     "category": ""
+    }
+   }
+  },
+  {
+   "id": "nms7ybcjqqpdq",
+   "type": "caNode",
+   "position": {
+    "x": 1440,
+    "y": 570
+   },
+   "data": {
+    "nodeType": "ovCollectSample",
+    "config": {
+     "series": "N",
+     "scope": "experiment"
+    }
+   }
+  },
+  {
+   "id": "nms7ybcjq6r1n",
+   "type": "caNode",
+   "position": {
+    "x": 1680,
+    "y": 570
+   },
+   "data": {
+    "nodeType": "ovCollectSample",
+    "config": {
+     "series": "E",
+     "scope": "experiment"
+    }
+   }
+  },
+  {
+   "id": "nms7ybcjq813u",
+   "type": "caNode",
+   "position": {
+    "x": 1920,
+    "y": 570
+   },
+   "data": {
+    "nodeType": "ovCollectSample",
+    "config": {
+     "series": "maxDegree",
+     "scope": "experiment"
+    }
+   }
+  },
+  {
+   "id": "nms7ybcjqglaw",
+   "type": "caNode",
+   "position": {
+    "x": 2160,
+    "y": 570
+   },
+   "data": {
+    "nodeType": "ovLog",
+    "config": {
+     "text": "rule -> N = {value}"
+    }
+   }
+  },
+  {
+   "id": "nms7ybcjqv01w",
+   "type": "caNode",
+   "position": {
+    "x": 480,
+    "y": 95
+   },
+   "data": {
+    "nodeType": "ovSeriesStat",
+    "config": {
+     "series": "N",
+     "op": "mean"
+    }
+   }
+  },
+  {
+   "id": "nms7ybcjq5p9r",
+   "type": "caNode",
+   "position": {
+    "x": 720,
+    "y": 95
+   },
+   "data": {
+    "nodeType": "ovLog",
+    "config": {
+     "text": "Sweep complete. Mean N over the rule space: {value}. Export the Series table as CSV."
+    }
+   }
+  },
+  {
+   "id": "nms7ybcjq4jjo",
+   "type": "caNode",
+   "position": {
+    "x": 480,
+    "y": 0
+   },
+   "data": {
+    "nodeType": "ovSeriesStat",
+    "config": {
+     "series": "maxDegree",
+     "op": "max"
+    }
+   }
+  },
+  {
+   "id": "nms7ybcjqdvw9",
+   "type": "caNode",
+   "position": {
+    "x": 960,
+    "y": 95
+   },
+   "data": {
+    "nodeType": "ovLog",
+    "config": {
+     "text": "O6 check across the whole sweep - the largest degree ever observed: {value} (must be 3)."
+    }
+   }
+  }
+ ],
+ "overseerGraphEdges": [
+  {
+   "id": "ems7ybcjqfwa7",
+   "source": "nms7ybcjqv6oa",
+   "target": "nms7ybcjq4iua",
+   "sourceHandle": "output_flow_do",
+   "targetHandle": "input_flow_do"
+  },
+  {
+   "id": "ems7ybcjq4wu5",
+   "source": "nms7ybcjq4iua",
+   "target": "nms7ybcjqds85",
+   "sourceHandle": "output_flow_next",
+   "targetHandle": "input_flow_do"
+  },
+  {
+   "id": "ems7ybcjqbn80",
+   "source": "nms7ybcjqds85",
+   "target": "nms7ybcjqt6mi",
+   "sourceHandle": "output_flow_next",
+   "targetHandle": "input_flow_do"
+  },
+  {
+   "id": "ems7ybcjq7nku",
+   "source": "nms7ybcjqt6mi",
+   "target": "nms7ybcjq4rgv",
+   "sourceHandle": "output_flow_next",
+   "targetHandle": "input_flow_do"
+  },
+  {
+   "id": "ems7ybcjqo6ec",
+   "source": "nms7ybcjq34ns",
+   "target": "nms7ybcjq5kkx",
+   "sourceHandle": "output_value_values",
+   "targetHandle": "input_value_array"
+  },
+  {
+   "id": "ems7ybcjqx6f4",
+   "source": "nms7ybcjq4rgv",
+   "target": "nms7ybcjq5kkx",
+   "sourceHandle": "output_flow_next",
+   "targetHandle": "input_flow_do"
+  },
+  {
+   "id": "ems7ybcjqs0ot",
+   "source": "nms7ybcjq5kkx",
+   "target": "nms7ybcjqxrad",
+   "sourceHandle": "output_value_element",
+   "targetHandle": "input_value_seed"
+  },
+  {
+   "id": "ems7ybcjqyyr2",
+   "source": "nms7ybcjq5kkx",
+   "target": "nms7ybcjqxrad",
+   "sourceHandle": "output_flow_body",
+   "targetHandle": "input_flow_do"
+  },
+  {
+   "id": "ems7ybcjqzvc8",
+   "source": "nms7ybcjq5kkx",
+   "target": "nms7ybcjq7173",
+   "sourceHandle": "output_value_element",
+   "targetHandle": "input_value_x"
+  },
+  {
+   "id": "ems7ybcjqme0w",
+   "source": "nms7ybcjq7173",
+   "target": "nms7ybcjqd7dc",
+   "sourceHandle": "output_value_result",
+   "targetHandle": "input_value_seed"
+  },
+  {
+   "id": "ems7ybcjq132b",
+   "source": "nms7ybcjqxrad",
+   "target": "nms7ybcjqd7dc",
+   "sourceHandle": "output_flow_next",
+   "targetHandle": "input_flow_do"
+  },
+  {
+   "id": "ems7ybcjq5taa",
+   "source": "nms7ybcjqd7dc",
+   "target": "nms7ybcjqtadd",
+   "sourceHandle": "output_flow_next",
+   "targetHandle": "input_flow_do"
+  },
+  {
+   "id": "ems7ybcjq2g4s",
+   "source": "nms7ybcjqtadd",
+   "target": "nms7ybcjqiqg6",
+   "sourceHandle": "output_flow_next",
+   "targetHandle": "input_flow_do"
+  },
+  {
+   "id": "ems7ybcjqjh5j",
+   "source": "nms7ybcjqiqg6",
+   "target": "nms7ybcjqqpdq",
+   "sourceHandle": "output_flow_next",
+   "targetHandle": "input_flow_do"
+  },
+  {
+   "id": "ems7ybcjqcsql",
+   "source": "nms7ybcjqqpdq",
+   "target": "nms7ybcjq6r1n",
+   "sourceHandle": "output_flow_next",
+   "targetHandle": "input_flow_do"
+  },
+  {
+   "id": "ems7ybcjqraft",
+   "source": "nms7ybcjq6r1n",
+   "target": "nms7ybcjq813u",
+   "sourceHandle": "output_flow_next",
+   "targetHandle": "input_flow_do"
+  },
+  {
+   "id": "ems7ybcjqngfm",
+   "source": "nms7ybcjqdhl5",
+   "target": "nms7ybcjqqpdq",
+   "sourceHandle": "output_value_value",
+   "targetHandle": "input_value_value"
+  },
+  {
+   "id": "ems7ybcjqx2o7",
+   "source": "nms7ybcjq9rjo",
+   "target": "nms7ybcjq6r1n",
+   "sourceHandle": "output_value_value",
+   "targetHandle": "input_value_value"
+  },
+  {
+   "id": "ems7ybcjqwsze",
+   "source": "nms7ybcjqccpv",
+   "target": "nms7ybcjq813u",
+   "sourceHandle": "output_value_value",
+   "targetHandle": "input_value_value"
+  },
+  {
+   "id": "ems7ybcjqyfzp",
+   "source": "nms7ybcjq813u",
+   "target": "nms7ybcjqglaw",
+   "sourceHandle": "output_flow_next",
+   "targetHandle": "input_flow_do"
+  },
+  {
+   "id": "ems7ybcjqihyl",
+   "source": "nms7ybcjqdhl5",
+   "target": "nms7ybcjqglaw",
+   "sourceHandle": "output_value_value",
+   "targetHandle": "input_value_value"
+  },
+  {
+   "id": "ems7ybcjqkgg5",
+   "source": "nms7ybcjq5kkx",
+   "target": "nms7ybcjq5p9r",
+   "sourceHandle": "output_flow_next",
+   "targetHandle": "input_flow_do"
+  },
+  {
+   "id": "ems7ybcjqjj3q",
+   "source": "nms7ybcjqv01w",
+   "target": "nms7ybcjq5p9r",
+   "sourceHandle": "output_value_result",
+   "targetHandle": "input_value_value"
+  },
+  {
+   "id": "ems7ybcjqdzfl",
+   "source": "nms7ybcjq5p9r",
+   "target": "nms7ybcjqdvw9",
+   "sourceHandle": "output_flow_next",
+   "targetHandle": "input_flow_do"
+  },
+  {
+   "id": "ems7ybcjq76m1",
+   "source": "nms7ybcjq4jjo",
+   "target": "nms7ybcjqdvw9",
+   "sourceHandle": "output_value_result",
+   "targetHandle": "input_value_value"
+  }
+ ]
+}
