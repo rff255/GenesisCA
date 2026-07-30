@@ -144,6 +144,10 @@ export interface AgentWebGPURuntime {
   /** True when spawnCursorBuf is live (agentAlive is bound read_write, and the
    *  readback runs the spawn reconciliation). */
   usesSpawn: boolean;
+  /** P3 — the behaviour (or an OM pass) WRITES the bond store (Set Bond
+   *  Attribute): binding 11 is bound `storage`, the buffer carries COPY_SRC, and
+   *  the worker reads the user attribute lanes back after each dispatch. */
+  usesBondStoreWrite: boolean;
   /** Stop Event flag (binding 13) — a single-word atomic. null when the behaviour
    *  graph has no Stop Event. Seeded to 0 before each dispatch; the shader writes a
    *  1-based stop index via atomicCompareExchangeWeak; the readback returns it so
@@ -324,6 +328,10 @@ export interface AgentRuntimeUsage {
   usesSpawn?: boolean;
   usesStop?: boolean;
   usesForceScatter?: boolean;
+  /** P3 — the behaviour WRITES the bond store (Set Bond Attribute): binding 11 is
+   *  declared `read_write`, so its bind-group entry must be `storage` (not
+   *  read-only) and the buffer needs COPY_SRC for the attribute-lane readback. */
+  usesBondStoreWrite?: boolean;
 }
 
 /** A1.5 — one Agent Output-Mapping GPU colour pass: its WGSL module + the
@@ -334,6 +342,9 @@ export interface AgentOMShaderInput {
   mappingId: string;
   code: string;
   usesBondStore: boolean;
+  /** P3 — this OM pass writes the bond store (Set Bond Attribute in a colour
+   *  pass) ⇒ bind binding 11 as `storage`, matching its `read_write` declaration. */
+  usesBondStoreWrite?: boolean;
   usesIndicators: boolean;
   usesAux: boolean;
 }
@@ -432,7 +443,10 @@ export async function createAgentWebGPURuntime(
   const bufBondStore = (hasBondStore || omShaders.some(o => o.usesBondStore)) && layout.bondStoreLen > 0;
   const auxF32Buf = bufAux ? mk('agentAuxF32', Math.max(4, layout.auxF32Len * 4), STORAGE_RO) : null;
   const indicatorsBuf = bufIndicators ? mk('agentIndicators', Math.max(4, layout.indicatorCount * 4), STORAGE) : null;
-  const bondStoreBuf = bufBondStore ? mk('agentBondStore', Math.max(4, layout.bondStoreLen * 4), STORAGE_RO) : null;
+  // P3 — a bond store the behaviour (or an OM pass) WRITES needs COPY_SRC so the
+  // worker can read the user attribute lanes back after the dispatch.
+  const bondStoreWrites = !!usage.usesBondStoreWrite || omShaders.some(o => o.usesBondStoreWrite);
+  const bondStoreBuf = bufBondStore ? mk('agentBondStore', Math.max(4, layout.bondStoreLen * 4), bondStoreWrites ? STORAGE : STORAGE_RO) : null;
   // agentI32 is read_write only when the shader writes it (setAgentType).
   const i32WritesI32 = !!usesI32Write;
 
@@ -451,7 +465,8 @@ export async function createAgentWebGPURuntime(
   if (fieldDepositBuf) behaviourEntries.push({ binding: 8, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } });
   if (hasAux) behaviourEntries.push({ binding: 9, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } });
   if (hasIndicators) behaviourEntries.push({ binding: 10, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } });
-  if (hasBondStore) behaviourEntries.push({ binding: 11, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } });
+  // P3 — `storage` (read-write) when Set Bond Attribute made binding 11 read_write.
+  if (hasBondStore) behaviourEntries.push({ binding: 11, visibility: GPUShaderStage.COMPUTE, buffer: { type: bondStoreWrites ? 'storage' : 'read-only-storage' } });
   if (spawnCursorBuf) behaviourEntries.push({ binding: 12, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } });
   if (stopFlagBuf) behaviourEntries.push({ binding: 13, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } });
   if (forceScatterBuf) behaviourEntries.push({ binding: 14, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } });
@@ -570,7 +585,7 @@ export async function createAgentWebGPURuntime(
       if (fieldDepositBuf) omEntries.push({ binding: 8, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } });
       if (input.usesAux && auxF32Buf) omEntries.push({ binding: 9, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } });
       if (input.usesIndicators && indicatorsBuf) omEntries.push({ binding: 10, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } });
-      if (input.usesBondStore && bondStoreBuf) omEntries.push({ binding: 11, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } });
+      if (input.usesBondStore && bondStoreBuf) omEntries.push({ binding: 11, visibility: GPUShaderStage.COMPUTE, buffer: { type: input.usesBondStoreWrite ? 'storage' : 'read-only-storage' } });
       const omBGL = device.createBindGroupLayout({ label: `agent-om-bgl-${input.mappingId}`, entries: omEntries });
       const omPL = device.createPipelineLayout({ label: `agent-om-pl-${input.mappingId}`, bindGroupLayouts: [omBGL] });
       const omPipeline = await device.createComputePipelineAsync({ label: `agent-om-${input.mappingId}`, layout: omPL, compute: { module, entryPoint: 'behaviour' } });
@@ -602,7 +617,7 @@ export async function createAgentWebGPURuntime(
     controlBuf, rngStateBuf, agentColorsBuf, forceControlBuf,
     fieldReadBuf, fieldDepositBuf,
     auxF32Buf, indicatorsBuf, bondStoreBuf,
-    spawnCursorBuf, usesSpawn: hasSpawn,
+    spawnCursorBuf, usesSpawn: hasSpawn, usesBondStoreWrite: bondStoreWrites,
     stopFlagBuf, usesStop: hasStop,
     forceScatterBuf,
     behaviourPipeline, forcePipeline, behaviourBindGroup, forceBindGroup,
@@ -682,6 +697,15 @@ export function uploadAgentSoA(rt: AgentWebGPURuntime, s: AgentStore): void {
     if (!src) { for (let i = 0; i < ma; i++) { f[base + i] = 0; f[wbase + i] = 0; } continue; }
     for (let i = 0; i < hw; i++) { const v = src[i]!; f[base + i] = v; f[wbase + i] = v; }
     for (let i = hw; i < ma; i++) { f[base + i] = 0; f[wbase + i] = 0; }
+  }
+  // P3 — Form Bond's per-BOND-ATTRIBUTE initial-value request runs. Uploaded as 0,
+  // a fresh request slate each step exactly like bondFormReq / bondFormL /
+  // bondFormK (the shader writes them, the worker reads them back). Empty for a
+  // model with no bond attributes ⇒ the uploaded bytes are unchanged.
+  for (const id of L.bondAttrIds) {
+    const base = L.bondFormAttrBase[id];
+    if (base === undefined) continue;
+    for (let i = 0; i < ma; i++) f[base + i] = 0;
   }
   rt.device.queue.writeBuffer(rt.agentF32Buf, 0, f.buffer, f.byteOffset, f.byteLength);
 
@@ -872,11 +896,17 @@ export async function readbackAgentIndicators(
   pooled.inUse = false;
 }
 
-/** Upload the ragged bond store (interleaved [partnerId, restLengthBits] per slot,
- *  stride `maxBonds·2`). `s` is the CPU AgentStore (its parallel bondPartner /
- *  bondRestLength arrays at stride `maxBonds`). No-op without a bond store. */
+/** Upload the ragged bond store (interleaved `[partnerId, restLengthBits,
+ *  ...userBondAttributes]` per slot, stride `maxBonds · layout.bondSlotStride`).
+ *  `s` is the CPU AgentStore (its parallel bondPartner / bondRestLength /
+ *  bondAttrs arrays at stride `maxBonds`). No-op without a bond store.
+ *
+ *  P3 — the attribute words come from `s.bondAttrs[id]`, in the layout's
+ *  `bondAttrIds` order (which IS `bondAttrsOf(model)` = the store's
+ *  `bondAttrSpecs` order — the baked-offset lockstep). `float` attributes store
+ *  f32 BITS (like restLength); bool/integer/tag store a plain i32. */
 export function uploadAgentBondStore(rt: AgentWebGPURuntime, s: AgentStore): void {
-  const L = rt.layout, mb = L.maxBonds;
+  const L = rt.layout, mb = L.maxBonds, S = L.bondSlotStride;
   if (!rt.bondStoreBuf || L.bondStoreLen === 0 || mb === 0) return;
   const out = new Int32Array(L.bondStoreLen);
   const rb = new Float32Array(1), rv = new Int32Array(rb.buffer);
@@ -884,14 +914,68 @@ export function uploadAgentBondStore(rt: AgentWebGPURuntime, s: AgentStore): voi
   const sStride = s.maxBonds; // the CPU store stride (== mb, but read it explicitly)
   const hw = s.highWater;
   const cap = Math.min(mb, sStride);
+  // Resolve the attribute lanes ONCE (id → [word, srcArray, isFloat]); empty for a
+  // model with no bond attributes ⇒ the loop below is the pre-P3 body verbatim.
+  const lanes: Array<{ word: number; src: ArrayLike<number>; isF: boolean }> = [];
+  for (const id of L.bondAttrIds) {
+    const src = s.bondAttrs[id] as ArrayLike<number> | undefined;
+    const word = L.bondAttrWord[id];
+    if (!src || word === undefined) continue;
+    lanes.push({ word, src, isF: !!L.bondAttrIsFloat[id] });
+  }
   for (let i = 0; i < hw; i++) {
-    const sBase = i * sStride, gBase = i * mb * 2;
+    const sBase = i * sStride, gBase = i * mb * S;
     for (let k = 0; k < cap; k++) {
-      out[gBase + k * 2] = partner[sBase + k]!;
-      rb[0] = rest[sBase + k]!; out[gBase + k * 2 + 1] = rv[0]!;
+      const g = gBase + k * S, c = sBase + k;
+      out[g] = partner[c]!;
+      rb[0] = rest[c]!; out[g + 1] = rv[0]!;
+      for (const ln of lanes) {
+        if (ln.isF) { rb[0] = ln.src[c]!; out[g + ln.word] = rv[0]!; }
+        else out[g + ln.word] = ln.src[c]! | 0;
+      }
     }
   }
   rt.device.queue.writeBuffer(rt.bondStoreBuf, 0, out.buffer, out.byteOffset, out.byteLength);
+}
+
+/** P3 — read the bond store's USER ATTRIBUTE lanes back into the CPU store after a
+ *  dispatch whose behaviour ran Set Bond Attribute (`usesBondStoreWrite`). ONLY the
+ *  attribute words are copied: partner / restLength are CPU-owned (the structural
+ *  phase forms, breaks and compacts them) and the shader never writes them, so
+ *  copying them back could only ever un-do a CPU edit.
+ *
+ *  Called BEFORE `runAgentStructuralPhase`, so a bond broken this step drops the
+ *  values with its slot (compaction moves whole slots — `moveBondSlot`). */
+export async function readbackAgentBondStore(rt: AgentWebGPURuntime, s: AgentStore): Promise<void> {
+  const L = rt.layout, mb = L.maxBonds, S = L.bondSlotStride;
+  if (!rt.bondStoreBuf || L.bondStoreLen === 0 || mb === 0 || L.bondAttrIds.length === 0) return;
+  const lanes: Array<{ word: number; dst: { [i: number]: number }; isF: boolean }> = [];
+  for (const id of L.bondAttrIds) {
+    const dst = s.bondAttrs[id] as { [i: number]: number } | undefined;
+    const word = L.bondAttrWord[id];
+    if (!dst || word === undefined) continue;
+    lanes.push({ word, dst, isF: !!L.bondAttrIsFloat[id] });
+  }
+  if (lanes.length === 0) return;
+  const byteLen = L.bondStoreLen * 4;
+  const staging = rt.device.createBuffer({ label: 'agentBondStore-readback', size: byteLen, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
+  const enc = rt.device.createCommandEncoder({ label: 'agent-bond-readback-enc' });
+  enc.copyBufferToBuffer(rt.bondStoreBuf, 0, staging, 0, byteLen);
+  rt.device.queue.submit([enc.finish()]);
+  await staging.mapAsync(GPUMapMode.READ, 0, byteLen);
+  const gi = new Int32Array(staging.getMappedRange(0, byteLen));
+  const gf = new Float32Array(gi.buffer, gi.byteOffset, gi.length);
+  const sStride = s.maxBonds, hw = s.highWater, cap = Math.min(mb, sStride);
+  for (let i = 0; i < hw; i++) {
+    if (!s.alive[i]) continue;
+    const sBase = i * sStride, gBase = i * mb * S;
+    for (let k = 0; k < cap; k++) {
+      const g = gBase + k * S, c = sBase + k;
+      for (const ln of lanes) ln.dst[c] = ln.isF ? gf[g + ln.word]! : gi[g + ln.word]!;
+    }
+  }
+  staging.unmap();
+  staging.destroy();
 }
 
 /** Write the force-pass ForceControl uniform. Field order MIRRORS
@@ -2243,6 +2327,16 @@ export async function readbackAgentStep(rt: AgentWebGPURuntime, s: AgentStore): 
     if (!dst) continue;
     const isInt = s.attrKind[id] !== 'float64';
     for (let i = 0; i < hw; i++) { if (!s.alive[i]) continue; dst[i] = isInt ? Math.round(f[base + i]!) : f[base + i]!; }
+  }
+  // P3 — Form Bond's per-BOND-ATTRIBUTE initial-value requests (the sibling of the
+  // bondFormL / bondFormK reads above). The structural phase hands these to
+  // `formBond`, which stamps BOTH slots (I2). The CPU request cells are f64 and
+  // hold the raw value; typing happens where the ragged region is written.
+  for (const id of L.bondAttrIds) {
+    const base = L.bondFormAttrBase[id];
+    const dst = s.bondFormAttrs[id];
+    if (base === undefined || !dst) continue;
+    for (let i = 0; i < hw; i++) { if (!s.alive[i]) continue; dst[i] = f[base + i]!; }
   }
   // (No i32 SoA readback: the agent i32 fields — lineage / bondCount — are
   // CPU-owned + uploaded read-only. There is no built-in agent "type" any more,

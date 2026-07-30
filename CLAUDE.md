@@ -1997,8 +1997,8 @@ A bond is ONE object stored TWICE. `Set Bond Attribute` writes **both** slots an
 
 A node naming an attribute the model no longer declares emits its literal default (Get) or nothing (Set) rather than referencing an undefined `_bondAttr_<id>` param — so a hand-edited or Bonds-off model can't produce a dangling reference.
 
-### The WebGPU capability gate (NOT a silent clamp)
-`isAgentGraphWebGPUSupported` returns **false when `bondAttrsOf(model).length > 0`** — a MODEL-level rejection rather than three node-level ones, because Form Bond's initial values would otherwise silently VANISH on the GPU (its request fields have no attribute lanes). The model still runs, on WASM/JS which support the feature fully, and the Properties agent-target hint says exactly why. P3 lifts it by widening the GPU bondStore stride + promoting it to `read_write` (decision D3).
+### The WebGPU capability gate (P2 only — **LIFTED by P3**)
+P2 shipped a MODEL-level rejection (`isAgentGraphWebGPUSupported` returned false when `bondAttrsOf(model).length > 0`) rather than three node-level ones, because Form Bond's initial values would otherwise have silently VANISHED on the GPU (its request fields had no attribute lanes). **P3 removed it** — bond attributes now run on all three agent targets; see the P3 section below.
 
 ### UI + worker
 A **Bond Attributes** section in the Attributes panel on the **Agents** sub-tab, shown only when the Bonds capability is on. ⚠️ `ModelerView.selectedItemName` resolves the **`bond:<id>`** slot — an unresolved prefix means the detail `PanelShell` (gated on `detailItemName != null`) never mounts, so clicking or adding an item does NOTHING visible (the bug that shipped once for agent attributes). The agent inspector lists each bond with its attribute values (tag values decode to their NAMES). `SimulatorView` ships `bondAttributes` in the init message and treats **any** bond-attribute add/remove/retype/**reorder** as STRUCTURAL (`attrsStructurallyEqual`) ⇒ full worker reinit — a soft recompile against a changed bond layout is the baked-offset corruption class.
@@ -2036,6 +2036,47 @@ P1 shipped it on `wasm` because correctness outranked the perf policy; with the 
 - **Real GPU, real worker** (0 console + 0 worker errors throughout): the primary gate 3× at 0/1024; **50, 20 and 100 generations from three seeds all exact** vs the Conway reference (boards genuinely evolving, 286→152 / 298→190 / 331→58); `Life on Bonds` (shipped file, unpatched) resolves to `webgpu` and is exact over 40 generations, 3 trials; **async unregressed** — Boids flocks to polarization **0.9983** over 400 gens and Particle Life's `species` histogram is unchanged over 200 gens with agents moving, both with `residentEligible: true` (so the resident batch with the added conditional pass ran).
 - ⚠️ **Verification trap**: the service worker runtime-caches model `.gcaproj` (StaleWhileRevalidate), so a browser probe that `fetch`es a model file just edited on disk gets the PRE-EDIT copy. Use `fetch(url + '?t=' + Date.now(), { cache: 'reload' })` — the first `Life on Bonds` run reported `agentTarget: 'wasm'` purely from that cache.
 - tsc · build · `parity-agent-wasm` (JS↔WASM bit-parity, all entries) · `check-agent-wasm-gate` · `audit-agent-layout` · `test-agent-abi` · `parity-agent-force` · `verify-agent-render` · `verify-render-uniform-layouts` · `audit-modelattr-layout` · `test-agent-capabilities` · `test-cross-agent-writes` — all green.
+
+---
+
+## Graph-Rewriting Automata — P3: Bond Attributes on the WebGPU agent target (branch `GRA`)
+
+**Bond attributes now run on ALL THREE agent targets.** P2 shipped them on JS + WASM and rejected them at MODEL level on WebGPU; P3 lifts that. Runbook: [docs/HANDOFF_GRA_P3_BOND_ATTRS_WEBGPU.md](docs/HANDOFF_GRA_P3_BOND_ATTRS_WEBGPU.md).
+
+### The layout — ONE stride constant, widened in place
+A GPU bond slot went from `[partner, restLengthBits]` to **`[partner, restLengthBits, ...userBondAttributes]`**, so the slot stride is `2 + N`. **`AgentWebGPULayout.bondSlotStride` is the SINGLE definition** ([agentWebgpu/layout.ts](src/modeler/vpl/compiler/agentWebgpu/layout.ts), + the exported `bondSlotStrideOf`): the layout, all three pre-existing bond emitters, the two new ones and the runtime upload/readback ALL derive from it. **Never write a literal `2` for the stride** — a missed site reads the WRONG LANE silently (no error, no crash: an attribute read as a rest length, or a partner id read as an attribute). The emitters index exclusively through `bondRowBaseExpr` / `bondSlotWord`, and Tier F asserts stride consistency over the WHOLE emitted shader with a **mutation negative control** that forces the stride back to 2.
+- `bondAttrWord[id]` = `2 + i` · `bondAttrIsFloat[id]` — a `float` attribute stores **f32 BITS** (`bitcast`, exactly like restLength), bool/integer/tag a plain i32 word (mirroring the CPU `bondAttrKind`).
+- `bondFormAttrBase[id]` — one per-agent f32 run in `agentF32` carrying **Form Bond's INITIAL value** (the GPU sibling of `bondFormL`/`bondFormK`), **appended after every other run** so all pre-P3 bases stay byte-stable. This is exactly why P2's gate had to be model-level: a Form-Bond-only model would otherwise have silently dropped its initial values.
+- **No bond attributes ⇒ stride 2, no extra runs, `* 2u` verbatim** — every shipped model's shader is unchanged (`check-compile-identity`: 26 models, all surfaces).
+
+### Binding 11 is `read_write` only when something writes it
+`ctx.usesBondStoreWrite` (set by the Set Bond Attribute emitter) promotes the declaration and is shipped on the compile result → SimulatorView → the worker → `createAgentWebGPURuntime`, which binds `storage` instead of `read-only-storage` and gives the buffer COPY_SRC. `usesBondStore` still gates the DECLARATION itself (Naga strips an unused storage global ⇒ the bind group mismatches the pipeline layout — a shipped bug). A read-only bond-attribute model keeps the pre-P3 `read` binding.
+
+### Runtime round-trip
+`uploadAgentBondStore` writes the attribute lanes from `s.bondAttrs[id]` in `bondAttrIds` order (= `bondAttrsOf(model)` = the store's `bondAttrSpecs` — the baked-offset lockstep); the new **`readbackAgentBondStore`** copies ONLY the attribute words back (partner / restLength are CPU-owned — the structural phase forms, breaks and compacts them; the shader never writes them). It runs **BEFORE `runAgentStructuralPhase`**, so a bond broken this step drops its values with its slot. The Form-Bond request runs upload as 0 each step (a fresh request slate, like `bondFormReq`) and read back into `s.bondFormAttrs`. **NO commit pass and no second (write) region for bonds** — see below.
+
+### Why bond attributes are SINGLE-buffered on the GPU (and PX's pattern is NOT copied)
+PX's follow-up recommended a `bondAttrWriteBase` mirroring the agent-attribute double buffer. **That would have introduced a GPU-ONLY semantic divergence**: the CPU targets store bond attributes SINGLE-buffered *by deliberate P2 design* ("a bond is one object stored twice, so a write goes to BOTH slots — there is no read/write double buffer to keep in step", [agentEngine.ts](src/simulator/engine/agentEngine.ts)), **even under `agentUpdateMode: 'sync'`**. Adding a GPU write region would make a sync model's GPU result deterministically differ from its CPU result. Cross-target agreement outranks a mechanism, so the GPU mirrors the CPU. (True *synchronous* bond semantics would need a CPU double buffer too — an all-three-targets change, recorded as a follow-up.) A bonded model is never residency-eligible (`agentResidentEligible` requires `s.maxBonds === 0`), so the bond store is uploaded and read back every generation — which is what makes single buffering safe here.
+
+### ⚠️ Set Bond Attribute is ORDER-UNDEFINED on WebGPU when BOTH endpoints write one bond
+A bond is stored twice, so this node necessarily writes a word in the **partner's** row — the same hazard class as the gated `CROSS_AGENT_OVERWRITE` set. **Measured on real hardware** (32- and 512-agent rings, sync agent mode, 4 trials each):
+
+| rule shape | CPU (JS ≡ WASM) | WebGPU | I2 |
+|---|---|---|---|
+| **one-sided** (only the lower id writes) | `w == 10` on all 32 edges | **identical — 0 of 32 edges differ** | holds |
+| **symmetric** (both write the SAME value) | `w == seed_i + seed_p` | **identical — 0 of 32 differ, 3 trials** | holds |
+| **asymmetric** (both write DIFFERENT values) | `max(i,p)` everywhere (last writer in index order) | **30 of 32 differ** (510 of 512 at N=512) — the LOWER id wins — and **2 edges TEAR I2** | **violated on 2 edges** |
+| Form Bond initial values | correct | identical | holds |
+
+**Decision: ALLOW + document (option A).** Only the ASYMMETRIC case breaks, and that case is *already* invalid on every target — P2's decision **D2** rules it out ("a genuinely asymmetric bond attribute is impossible without breaking I2; store an owner value instead"). Gating it would clamp every bond-attribute-WRITING model — i.e. essentially every GRA rule, since an SDCA link rule writes every step — off the GPU. Documented in the node description, HelpView, the Properties agent-target hint and here. NB the GPU outcome was *stable across trials on this device*; that is a driver artifact, not a guarantee — WebGPU orders nothing between invocations.
+
+### A JS-only defect this surfaced (fixed here)
+Form Bond's per-bond-attribute INLINE widget values were dropped on the **JS** target: `compileFlowChain`'s generic branch resolved inline values from `def.ports` (STATIC only) and wired dynamic ports from the edge map, so a DYNAMIC port with an inline widget and no wire fell through entirely and the node used the attribute default. WASM/WebGPU read `_port_*` straight from config and were correct — measured `lbl = 0` on JS vs `5` on WASM/WebGPU from the same model. Fixed by also resolving `buildBondAttrPorts(nodeType, model).inputs` (the ONE editor port builder, so the compiler cannot drift from what the canvas draws). Byte-identity unaffected (no shipped model has bond attributes).
+
+### Verification
+- **`verify-graph-rewrite.mjs` Tier F** (new, 29 checks → 135 total): the layout arithmetic; stride consistency across the whole shader **with a mutation control** (forcing the stride back to 2 is caught); the no-bond-attribute model emitting the pre-P3 `* 2u` form; the `read_write` promotion + **exactly two** bond-store writes per Set (own row + partner row, the partner one range+alive guarded) = **I2 at the shader level**; Form Bond's request runs; a read-ONLY model keeping the `read` binding; 3D; bonds=off.
+- **Real GPU / real worker** (0 console + 0 worker errors throughout): **200 generations on WebGPU with mid-run bond breaking** (so CPU compaction interleaves with the GPU readback) — **I1/I2/I3/I4 green at EVERY generation**, 0 value errors, edge count 32 → 30 → 32; **cross-target agreement 2D and 3D** — JS ≡ WASM ≡ WebGPU exactly on the one-sided, symmetric and Form-Bond models; regression smoke on the shipped bonded WebGPU models (Growing Tissue 12→24 agents / 36 edges; `Life on Bonds` 4096 edges, every agent degree 8).
+- `check-compile-identity` vs the PX baseline: **26 models, all surfaces unchanged**. tsc · build · `parity-agent-wasm` · `check-agent-wasm-gate` · `audit-agent-layout` · `test-agent-abi` · `parity-agent-force` · `verify-agent-render` · `verify-render-uniform-layouts` — all green.
 
 ---
 

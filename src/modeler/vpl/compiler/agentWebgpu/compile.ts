@@ -90,8 +90,9 @@ export const AGENT_WEBGPU_SUPPORTED_TYPES: ReadonlySet<string> = new Set<string>
   'getAgentsAttribute', 'setAgentsAttribute', 'filterAgents', 'joinAgents',
   'pickRandomAgent', 'pickNRandomAgents', 'getBondedAgents',
   'aggregate', 'groupOperator', 'groupCounting', 'groupStatement',
-  // bonds
-  'forEachBond',
+  // bonds (P3: per-EDGE user state — Get/Set Bond Attribute + Form Bond's
+  // initial values, over the stride-widened read_write bondStore)
+  'forEachBond', 'getBondAttribute', 'setBondAttribute',
   // local variables (scalar + array)
   'getVariable', 'setVariable', 'setArrayElement',
   // array accessors
@@ -143,6 +144,11 @@ export interface AgentWebGPUResult {
   /** Which universal bindings the shader actually USES (declared only when used,
    *  so the runtime binds matching entries — see the binding-declaration note). */
   usesBondStore?: boolean;
+  /** P3 — the behaviour WRITES the bond store (Set Bond Attribute), so binding 11
+   *  is declared `read_write` and the runtime must bind it as `storage` + read the
+   *  attribute lanes back after the dispatch. Read-only bond use leaves it false ⇒
+   *  the pre-P3 `read` binding, byte-identical. */
+  usesBondStoreWrite?: boolean;
   usesIndicators?: boolean;
   usesAux?: boolean;
   /** True when the behaviour graph uses Create Agent / Add Agent To World (mid-step
@@ -187,6 +193,9 @@ export interface AgentWebGPUOMShader {
   mappingId: string;
   code: string;
   usesBondStore: boolean;
+  /** P3 — this OM pass writes the bond store (Set Bond Attribute in a colour
+   *  pass): its bind group must bind binding 11 as `storage`, not read-only. */
+  usesBondStoreWrite: boolean;
   usesIndicators: boolean;
   usesAux: boolean;
 }
@@ -274,6 +283,9 @@ interface AgentWgpuCtx {
   /** Agent-attr id → its numeric default value (initAgentSlot parity — a GPU
    *  Create Agent resets the newborn's attrs to these, then setters override). */
   agentAttrDefault: Map<string, number>;
+  /** P3 — bond-attr id → its numeric default (the value Get Bond Attribute yields
+   *  when there is NO bond with the requested partner, and Form Bond's fallback). */
+  bondAttrDefault: Map<string, number>;
   /** Scalar Local-Variable id → its WGSL var name (`var<function>`, reset per agent). */
   varNames: Map<string, string>;
   /** Array Local-Variable id → its WGSL var name + fixed length (`var<function>
@@ -309,6 +321,10 @@ interface AgentWgpuCtx {
    *  RESERVES a region (e.g. maxBonds>0) but whose graph never touches it does NOT
    *  declare an unused storage global (Naga strips it → a bind-group mismatch). */
   usesBondStore: boolean;
+  /** P3 — set when Set Bond Attribute emitted a WRITE into the bond store: binding
+   *  11 becomes `read_write` (else the pre-P3 `read`, byte-identical) and the
+   *  runtime reads the attribute lanes back after the dispatch. */
+  usesBondStoreWrite: boolean;
   usesIndicators: boolean;
   usesAux: boolean;
   /** Set when a Create Agent / Add Agent To World emitter runs — declares the
@@ -596,6 +612,10 @@ function compileValueNode(ctx: AgentWgpuCtx, nodeId: string, portId: string): Va
     }
     case 'getCurvature': {
       result = emitGetCurvature(ctx, node);
+      break;
+    }
+    case 'getBondAttribute': {
+      result = emitGetBondAttribute(ctx, node);
       break;
     }
     case 'groupOperator': {
@@ -1348,6 +1368,33 @@ function emitArrayLength(ctx: AgentWgpuCtx, node: GraphNode): ValueRef {
   return emitLet(ctx, 'i32', arr.lenName, 'al');
 }
 
+// ---------------------------------------------------------------------------
+// The ragged bond store — THE ONE indexing helper set (P3).
+//
+// A bond slot is `[partner, restLengthBits, ...userBondAttributes]`, so the stride
+// is `layout.bondSlotStride` (= 2 when the model declares no bond attributes, which
+// is what keeps every pre-P3 shader byte-identical). EVERY bond emitter indexes
+// through these three helpers — a literal `2u` anywhere else would silently read
+// the WRONG LANE the moment a model declares a bond attribute, with no error.
+// ---------------------------------------------------------------------------
+
+/** THE bond-slot stride in i32 words (from the layout — never a local literal). */
+function bondStride(ctx: AgentWgpuCtx): number { return ctx.layout.bondSlotStride; }
+
+/** WGSL for agent `idxExpr`'s ragged bond-row base WORD. */
+function bondRowBaseExpr(ctx: AgentWgpuCtx, idxExpr: string): string {
+  return `${idxExpr} * u32(control.maxBonds) * ${bondStride(ctx)}u`;
+}
+
+/** WGSL word index of bond slot `kExpr` within the row whose base word is
+ *  `baseName`, offset by `word` (0 = partner, 1 = restLength bits, 2+i = the i-th
+ *  user bond attribute). */
+function bondSlotWord(ctx: AgentWgpuCtx, baseName: string, kExpr: string, word: number): string {
+  const S = bondStride(ctx);
+  const slot = `${baseName} + u32(${kExpr}) * ${S}u`;
+  return word === 0 ? slot : `${slot} + ${word}u`;
+}
+
 /** Get Curvature — mean unit-vector magnitude to bonded partners (torus-folded).
  *  Reads the bond store. <2 bonds → 0. Mirrors GetCurvatureNode's JS emit. */
 function emitGetCurvature(ctx: AgentWgpuCtx, node: GraphNode): ValueRef {
@@ -1359,10 +1406,10 @@ function emitGetCurvature(ctx: AgentWgpuCtx, node: GraphNode): ValueRef {
   ctx.lines.push(`  var ${out}: f32 = 0.0;`);
   ctx.lines.push(`  { let ${bc}: i32 = ${i32At(ctx, 'bondCount', 'idx')};`);
   ctx.lines.push(`    if (${bc} >= 2) {`);
-  ctx.lines.push(`      let ${base}: u32 = idx * u32(control.maxBonds) * 2u;`);
+  ctx.lines.push(`      let ${base}: u32 = ${bondRowBaseExpr(ctx, 'idx')};`);
   ctx.lines.push(`      var ${sx}: f32 = 0.0; var ${sy}: f32 = 0.0; var ${cnt}: i32 = 0;`);
   ctx.lines.push(`      for (var ${k}: i32 = 0; ${k} < ${bc}; ${k} = ${k} + 1) {`);
-  ctx.lines.push(`        let ${p}: i32 = bondStore[${base} + u32(${k}) * 2u];`);
+  ctx.lines.push(`        let ${p}: i32 = bondStore[${bondSlotWord(ctx, base, k, 0)}];`);
   ctx.lines.push(`        if (${p} >= 0 && ${p} < i32(control.highWater) && agentAlive[${p}] != 0u) {`);
   ctx.lines.push(`          var ${dx}: f32 = ${f32At(ctx, 'x', `u32(${p})`)} - ${f32At(ctx, 'x', 'idx')};`);
   ctx.lines.push(`          var ${dy}: f32 = ${f32At(ctx, 'y', `u32(${p})`)} - ${f32At(ctx, 'y', 'idx')};`);
@@ -1379,6 +1426,77 @@ function emitGetCurvature(ctx: AgentWgpuCtx, node: GraphNode): ValueRef {
   ctx.lines.push(`    }`);
   ctx.lines.push(`  }`);
   return { expr: out, type: 'f32' };
+}
+
+/** Get Bond Attribute (P3) — read the per-EDGE user attribute of the bond between
+ *  THIS agent and `partnerId`. Scans this agent's live bond list for that partner
+ *  (the SAME membership rule For Each Bond / Get Bonded Agents use — a straight
+ *  partner-id scan of the `bondCount` live entries) and reads the matching slot's
+ *  attribute word. NO such bond ⇒ the attribute's DEFAULT, never garbage.
+ *  Mirrors GetBondAttributeNode's JS emit + the WASM `emitGetBondAttribute`. */
+function emitGetBondAttribute(ctx: AgentWgpuCtx, node: GraphNode): ValueRef {
+  const attr = (node.data.config?.['attributeId'] as string) || '';
+  const word = ctx.layout.bondAttrWord[attr];
+  const def = wgslFloatLit(ctx.bondAttrDefault.get(attr) ?? 0);
+  // Defensive, mirroring the JS emit: an attribute the model no longer declares —
+  // or a Bonds-capability-off model, whose layout reserves no bond words at all —
+  // yields its literal default rather than indexing a lane that does not exist.
+  if (word === undefined || ctx.layout.bondStoreLen === 0) return emitLet(ctx, 'f32', def, 'gba');
+  ctx.usesBondStore = true;
+  const isF = !!ctx.layout.bondAttrIsFloat[attr];
+  const t = castTo(resolveValueInput(ctx, node, 'partnerId', -1), 'i32');
+  const slot = fresh(ctx, 'gbaSlot'), tv = fresh(ctx, 'gbaT'), base = fresh(ctx, 'gbaB');
+  const n = fresh(ctx, 'gbaN'), k = fresh(ctx, 'gbaK'), out = fresh(ctx, 'gbaV');
+  ctx.lines.push(`  var ${slot}: i32 = -1;`);
+  ctx.lines.push(`  { let ${tv}: i32 = ${t};`);
+  ctx.lines.push(`    let ${base}: u32 = ${bondRowBaseExpr(ctx, 'idx')};`);
+  ctx.lines.push(`    let ${n}: i32 = ${i32At(ctx, 'bondCount', 'idx')};`);
+  ctx.lines.push(`    for (var ${k}: i32 = 0; ${k} < ${n}; ${k} = ${k} + 1) {`);
+  ctx.lines.push(`      if (bondStore[${bondSlotWord(ctx, base, k, 0)}] == ${tv}) { ${slot} = i32(${bondSlotWord(ctx, base, k, word)}); break; }`);
+  ctx.lines.push(`    } }`);
+  // WGSL `select` evaluates BOTH arms (no short-circuit), so the load must be in
+  // bounds even when nothing was found — clamp the index to 0 (always valid: with
+  // a bond store, bondStoreLen >= stride) and discard the value via the condition.
+  const load = isF ? `bitcast<f32>(bondStore[u32(max(${slot}, 0))])` : `f32(bondStore[u32(max(${slot}, 0))])`;
+  ctx.lines.push(`  let ${out}: f32 = select(${def}, ${load}, ${slot} >= 0);`);
+  return { expr: out, type: 'f32' };
+}
+
+/** Set Bond Attribute (P3) — write the per-EDGE attribute of the bond between THIS
+ *  agent and `partnerId`, into **BOTH** slots (invariant I2: a bond is one object
+ *  stored twice). No such bond ⇒ a silent no-op. The partner-side scan is
+ *  range + alive guarded (the by-id-writer discipline); the own-side scan needs no
+ *  guard (`idx` is live by the entry-point's alive check).
+ *
+ *  ⚠️ **Order-undefined on WebGPU when BOTH endpoints write the same bond in one
+ *  step** — the two threads race on the same words. A SYMMETRIC rule (both
+ *  endpoints computing the same value, the canonical SDCA link rule) is benign; an
+ *  ASYMMETRIC one is not. Write from ONE side (the `ownerId` idiom) or keep the
+ *  rule symmetric. See the node description + CLAUDE.md. */
+function emitSetBondAttribute(ctx: AgentWgpuCtx, node: GraphNode): void {
+  const attr = (node.data.config?.['attributeId'] as string) || '';
+  const word = ctx.layout.bondAttrWord[attr];
+  if (word === undefined || ctx.layout.bondStoreLen === 0) return;   // unresolved ⇒ no-op (the JS rule)
+  ctx.usesBondStore = true;
+  ctx.usesBondStoreWrite = true;
+  const isF = !!ctx.layout.bondAttrIsFloat[attr];
+  const t = castTo(resolveValueInput(ctx, node, 'partnerId', -1), 'i32');
+  const v = inF32(ctx, node, 'value', 0);
+  const tv = fresh(ctx, 'sbaT'), vv = fresh(ctx, 'sbaV');
+  const b1 = fresh(ctx, 'sbaB'), n1 = fresh(ctx, 'sbaN'), k1 = fresh(ctx, 'sbaK');
+  const b2 = fresh(ctx, 'sbaB2'), n2 = fresh(ctx, 'sbaN2'), k2 = fresh(ctx, 'sbaK2');
+  // int/tag/bool truncate toward zero (WGSL `i32(f32)`), matching the JS write into
+  // an Int32Array (ToInt32) and the WASM `i32.trunc_sat`; float stores its bits.
+  const enc = isF ? `bitcast<i32>(${vv})` : `i32(${vv})`;
+  ctx.lines.push(`  { let ${tv}: i32 = ${t}; let ${vv}: f32 = ${v};`);
+  ctx.lines.push(`    { let ${b1}: u32 = ${bondRowBaseExpr(ctx, 'idx')}; let ${n1}: i32 = ${i32At(ctx, 'bondCount', 'idx')};`);
+  ctx.lines.push(`      for (var ${k1}: i32 = 0; ${k1} < ${n1}; ${k1} = ${k1} + 1) {`);
+  ctx.lines.push(`        if (bondStore[${bondSlotWord(ctx, b1, k1, 0)}] == ${tv}) { bondStore[${bondSlotWord(ctx, b1, k1, word)}] = ${enc}; break; } } }`);
+  ctx.lines.push(`    if (${tv} >= 0 && ${tv} < i32(control.highWater) && agentAlive[u32(${tv})] != 0u) {`);
+  ctx.lines.push(`      let ${b2}: u32 = ${bondRowBaseExpr(ctx, `u32(${tv})`)}; let ${n2}: i32 = ${i32At(ctx, 'bondCount', `u32(${tv})`)};`);
+  ctx.lines.push(`      for (var ${k2}: i32 = 0; ${k2} < ${n2}; ${k2} = ${k2} + 1) {`);
+  ctx.lines.push(`        if (bondStore[${bondSlotWord(ctx, b2, k2, 0)}] == i32(idx)) { bondStore[${bondSlotWord(ctx, b2, k2, word)}] = ${enc}; break; } } }`);
+  ctx.lines.push(`  }`);
 }
 
 /** Get Model Attribute — read a model attribute from the `auxF32` buffer (the
@@ -1733,9 +1851,9 @@ function emitGetBondedAgents(ctx: AgentWgpuCtx, node: GraphNode): AgentArrayRef 
   const bc = fresh(ctx, 'gbaBc'), base = fresh(ctx, 'gbaBase'), k = fresh(ctx, 'gbaK'), p = fresh(ctx, 'gbaP');
   ctx.lines.push(`  var ${lenName}: i32 = 0;`);
   ctx.lines.push(`  { let ${bc}: i32 = ${i32At(ctx, 'bondCount', 'idx')};`);
-  ctx.lines.push(`    let ${base}: u32 = idx * u32(control.maxBonds) * 2u;`);
+  ctx.lines.push(`    let ${base}: u32 = ${bondRowBaseExpr(ctx, 'idx')};`);
   ctx.lines.push(`    for (var ${k}: i32 = 0; ${k} < ${bc}; ${k} = ${k} + 1) {`);
-  ctx.lines.push(`      let ${p}: i32 = bondStore[${base} + u32(${k}) * 2u];`);
+  ctx.lines.push(`      let ${p}: i32 = bondStore[${bondSlotWord(ctx, base, k, 0)}];`);
   ctx.lines.push(`      if (${p} >= 0 && ${p} < i32(control.highWater) && agentAlive[${p}] != 0u) { ${arrName}[${lenName}] = ${p}; ${lenName} = ${lenName} + 1; }`);
   ctx.lines.push(`    }`);
   ctx.lines.push(`  }`);
@@ -2194,6 +2312,22 @@ function compileFlowNode(ctx: AgentWgpuCtx, nodeId: string): void {
       ctx.lines.push(`  ${f32At(ctx, 'bondFormReq', 'idx')} = f32(${tgt} + 1);`);
       ctx.lines.push(`  ${f32At(ctx, 'bondFormL', 'idx')} = ${inF32(ctx, node, 'restLength', 0)};`);
       ctx.lines.push(`  ${f32At(ctx, 'bondFormK', 'idx')} = ${inF32(ctx, node, 'stiffness', 0)};`);
+      // P3 — the new bond's INITIAL attribute values (one dynamic input port per
+      // declared bond attribute, `bondAttr_<id>`). They ride per-agent f32 request
+      // runs alongside bondFormL / bondFormK; the worker reads them back into
+      // `s.bondFormAttrs[id]` and the structural phase hands them to `formBond`,
+      // which stamps BOTH slots (I2). This is WHY the P2 WebGPU gate had to be
+      // model-level: a Form-Bond-only model would otherwise silently drop them.
+      // No bond attributes ⇒ this loop emits NOTHING ⇒ byte-identical.
+      for (const bid of ctx.layout.bondAttrIds) {
+        if (ctx.layout.bondFormAttrBase[bid] === undefined) continue;
+        ctx.lines.push(`  ${f32At(ctx, `bondFormAttr_${bid}`, 'idx')} = ${inF32(ctx, node, `bondAttr_${bid}`, ctx.bondAttrDefault.get(bid) ?? 0)};`);
+      }
+      compileFlowChain(ctx, node.id, 'next');
+      break;
+    }
+    case 'setBondAttribute': {
+      emitSetBondAttribute(ctx, node);
       compileFlowChain(ctx, node.id, 'next');
       break;
     }
@@ -2809,10 +2943,10 @@ function emitForEachBond(ctx: AgentWgpuCtx, node: GraphNode): void {
   const partner = fresh(ctx, 'febP'), rest = fresh(ctx, 'febRest'), cur = fresh(ctx, 'febCur');
   const dx = fresh(ctx, 'febDx'), dy = fresh(ctx, 'febDy');
   ctx.lines.push(`  { let ${bc}: i32 = ${i32At(ctx, 'bondCount', 'idx')};`);
-  ctx.lines.push(`    let ${base}: u32 = idx * u32(control.maxBonds) * 2u;`);
+  ctx.lines.push(`    let ${base}: u32 = ${bondRowBaseExpr(ctx, 'idx')};`);
   ctx.lines.push(`    for (var ${k}: i32 = 0; ${k} < ${bc}; ${k} = ${k} + 1) {`);
-  ctx.lines.push(`      let ${partner}: i32 = bondStore[${base} + u32(${k}) * 2u];`);
-  ctx.lines.push(`      let ${rest}: f32 = bitcast<f32>(bondStore[${base} + u32(${k}) * 2u + 1u]);`);
+  ctx.lines.push(`      let ${partner}: i32 = bondStore[${bondSlotWord(ctx, base, k, 0)}];`);
+  ctx.lines.push(`      let ${rest}: f32 = bitcast<f32>(bondStore[${bondSlotWord(ctx, base, k, 1)}]);`);
   ctx.lines.push(`      var ${cur}: f32 = 0.0;`);
   ctx.lines.push(`      if (${partner} >= 0 && ${partner} < i32(control.highWater)) {`);
   ctx.lines.push(`        var ${dx}: f32 = ${f32At(ctx, 'x', `u32(${partner})`)} - ${f32At(ctx, 'x', 'idx')};`);
@@ -3029,6 +3163,7 @@ const AGENT_VALUE_NO_HOIST: ReadonlySet<string> = new Set<string>([
   'createAgent',                            // alloc side effect — handle emits at its flow position
   'getVariable',                            // mutable Local Variable storage
   'getAgentAttribute',                      // a neighbour write can mutate it
+  'getBondAttribute',                       // mutable bond storage (Set Bond Attribute)
   'getIndicator',                           // mutable indicator storage
   'forEachInArray', 'forEachBond', 'loop',  // per-iteration element/index refs
   // array producers (use scratch — emitted via compileArrayNode, not here)
@@ -3256,17 +3391,14 @@ function reachableFromRoot(nodes: GraphNode[], edges: GraphEdge[], rootId: strin
  *  toggle/next/previous indicators) + the array-producer capacity gate. */
 export function isAgentGraphWebGPUSupported(model: CAModel | undefined | null): boolean {
   if (!model || !model.topologyMode?.agents) return false;
-  // ── P2 (Graph-Rewriting Automata): BOND ATTRIBUTES are CPU-only for now ──────
-  // The GPU bond store is a read-only stride-2 [partner, restLength] array
-  // (agentWebgpu/layout.ts) — it carries no user bond-attribute lanes, and Form
-  // Bond's GPU request fields have no slot for the initial values. Rather than
-  // reject the three nodes individually (which would let a Form-Bond model
-  // silently DROP its initial values on the GPU), the whole model clamps while
-  // it declares any bond attribute. This is the sanctioned CAPABILITY GATE, not a
-  // silent JS clamp: the model still runs — on WASM/JS, which support the feature
-  // fully — and the Properties agent-target hint says why. P3 lifts this by
-  // widening the bondStore stride + promoting it to read_write (decision D3).
-  if (bondAttrsOf(model).length > 0) return false;
+  // ── P3 (Graph-Rewriting Automata): BOND ATTRIBUTES run on the GPU ───────────
+  // P2's model-level rejection (`bondAttrsOf(model).length > 0`) is LIFTED. The
+  // bond store's slot stride widened from 2 to `2 + N` (layout.bondSlotStride —
+  // the ONE definition), it is promoted to `read_write` when a Set Bond Attribute
+  // emitter runs (decision D3), and Form Bond's initial values ride per-agent f32
+  // request runs read back into `s.bondFormAttrs` — which is why the P2 gate had
+  // to be model-level in the first place (a Form-Bond-only model would otherwise
+  // have silently DROPPED its initial values on the GPU).
   const nodes = model.agentGraphNodes ?? [];
   const edges = model.agentGraphEdges ?? [];
   if (!nodes.some(n => n.data.nodeType === 'behaviourStep')) return false;
@@ -3610,7 +3742,8 @@ export function compileAgentGraphWebGPU(
 
   return {
     shaderCode: emit.shaderCode, layout, supportedTypes: [...seen], usesI32Write: emit.usesI32Write,
-    usesBondStore: emit.usesBondStore, usesIndicators: emit.usesIndicators, usesAux: emit.usesAux,
+    usesBondStore: emit.usesBondStore, usesBondStoreWrite: emit.usesBondStoreWrite,
+    usesIndicators: emit.usesIndicators, usesAux: emit.usesAux,
     usesSpawn: emit.usesSpawn, usesStop: emit.usesStop, usesForceScatter: emit.usesForceScatter,
     usesStructural: emit.usesStructural, usesRadiusWrite: emit.usesRadiusWrite,
     omShaders, omSupported,
@@ -3623,6 +3756,7 @@ interface AgentRootModuleEmit {
   shaderCode: string;
   usesI32Write: boolean;
   usesBondStore: boolean;
+  usesBondStoreWrite: boolean;
   usesIndicators: boolean;
   usesAux: boolean;
   usesSpawn: boolean;
@@ -3654,10 +3788,13 @@ function emitAgentRootModule(
   const agentAttrType = new Map<string, string>();
   const agentAttrDefault = new Map<string, number>();
   for (const a of agentAttrsOf(model)) { agentAttrType.set(a.id, a.type); agentAttrDefault.set(a.id, encodeAttrValue(a)); }
+  // P3 — bond-attribute defaults (the SAME `bondAttrsOf` order the layout used).
+  const bondAttrDefault = new Map<string, number>();
+  for (const a of bondAttrsOf(model)) bondAttrDefault.set(a.id, encodeAttrValue(a));
   const ctx: AgentWgpuCtx = {
     adj, layout, is3d: layout.gridDepth > 1,
     lines: [], uid: 0,
-    agentAttrType, agentAttrDefault,
+    agentAttrType, agentAttrDefault, bondAttrDefault,
     varNames: new Map<string, string>(),
     arrayVarNames: new Map<string, { name: string; len: number }>(),
     valueCache: new Map<string, ValueRef>(),
@@ -3670,7 +3807,7 @@ function emitAgentRootModule(
     loopStack: [],
     forEachBondStack: [],
     usesI32Write: false,
-    usesBondStore: false, usesIndicators: false, usesAux: false,
+    usesBondStore: false, usesBondStoreWrite: false, usesIndicators: false, usesAux: false,
     usesSpawn: false,
     usesStop: false,
     usesForceScatter: false,
@@ -3815,7 +3952,11 @@ function emitAgentRootModule(
   const hasBondStore = ctx.usesBondStore && layout.bondStoreLen > 0;     // ragged bond store
   if (hasAux) fieldBindingLines.push('@group(0) @binding(9) var<storage, read>       auxF32      : array<f32>;');
   if (hasIndicators) fieldBindingLines.push('@group(0) @binding(10) var<storage, read_write> indicators : array<atomic<u32>>;');
-  if (hasBondStore) fieldBindingLines.push('@group(0) @binding(11) var<storage, read>       bondStore   : array<i32>;');
+  // P3 — `read_write` ONLY when a Set Bond Attribute emitter wrote it (decision
+  // D3). A read-only bond model keeps the pre-P3 `read` declaration verbatim.
+  if (hasBondStore) fieldBindingLines.push(ctx.usesBondStoreWrite
+    ? '@group(0) @binding(11) var<storage, read_write> bondStore   : array<i32>;'
+    : '@group(0) @binding(11) var<storage, read>       bondStore   : array<i32>;');
   // Mid-step spawning (Create Agent / Add To World): an atomic bump allocator into
   // a single-word storage buffer. Declared ONLY when the graph spawns (else Naga
   // strips it → a bind-group mismatch, like the other universal bindings).
@@ -3865,7 +4006,8 @@ ${ctx.lines.join('\n')}
 
   return {
     shaderCode, usesI32Write: ctx.usesI32Write,
-    usesBondStore: hasBondStore, usesIndicators: hasIndicators, usesAux: hasAux,
+    usesBondStore: hasBondStore, usesBondStoreWrite: hasBondStore && ctx.usesBondStoreWrite,
+    usesIndicators: hasIndicators, usesAux: hasAux,
     usesSpawn: hasSpawn, usesStop: hasStop, usesForceScatter: hasForceScatter,
     usesStructural: ctx.usesStructural, usesRadiusWrite: ctx.usesRadiusWrite,
   };
@@ -3917,7 +4059,8 @@ export function compileAgentOutputMappingsWebGPU(
     } catch { return { omShaders: [], omSupported: false }; }
     shaders.push({
       mappingId, code: emit.shaderCode,
-      usesBondStore: emit.usesBondStore, usesIndicators: emit.usesIndicators, usesAux: emit.usesAux,
+      usesBondStore: emit.usesBondStore, usesBondStoreWrite: emit.usesBondStoreWrite,
+      usesIndicators: emit.usesIndicators, usesAux: emit.usesAux,
     });
   }
   return { omShaders: shaders, omSupported: true };
@@ -3998,7 +4141,12 @@ export function agentWebGPUExtrasOf(model: CAModel) {
   // the WASM `AgentLayoutExtras.syncAttrs`). 'sync' ⇒ a second write run per
   // attribute; anything else ⇒ the write bases alias the read bases.
   const syncAttrs = model.centerBased?.agentUpdateMode === 'sync';
-  return { modelAttrKeys, lookupTables, indicatorCount, maxBonds, gridDepth, syncAttrs };
+  // P3 — the USER bond attributes widen the bondStore slot + add one Form-Bond
+  // request run each. `bondAttrsOf` is the ONE resolver (Bonds-off ⇒ empty, and
+  // only the four allowed types), the SAME list the CPU store's `bondAttrSpecs`
+  // and the WASM layout derive from — the baked-offset lockstep.
+  const bondAttrs = bondAttrsOf(model).map(a => ({ id: a.id, type: a.type }));
+  return { modelAttrKeys, lookupTables, indicatorCount, maxBonds, gridDepth, syncAttrs, bondAttrs };
 }
 
 /** Convenience for the DEV harness: derive the GPU agent layout from a model +

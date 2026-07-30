@@ -8,7 +8,7 @@ Design authority: [IMPACT_MAP_GRAPH_REWRITING_AGENTS.md](IMPACT_MAP_GRAPH_REWRIT
 (what exists on the CPU) and [HANDOFF_GRA_PX_WEBGPU_SYNC_ATTRS.md](HANDOFF_GRA_PX_WEBGPU_SYNC_ATTRS.md)
 (**the read/write-base pattern you inherit**).
 
-**State**: READY · **Depends on**: P2 (the CPU feature) + PX (the pattern) · **Blocks**: nothing
+**State**: **DONE** (see the Completion Report) · **Depends on**: P2 (the CPU feature) + PX (the pattern) · **Blocks**: nothing
 
 ---
 
@@ -160,4 +160,107 @@ outputs are id-cached in three emitters).
 
 ## Completion Report — P3
 
-*(fill in per the master handoff §5 template)*
+**State**: **DONE**
+
+**Commit(s)**: `<this phase's commit>` — `feat(agents): bond attributes on the WebGPU agent target`
+
+**Files touched**
+
+```
+ CLAUDE.md                                        (the P3 section + the P2 gate paragraph corrected)
+ README.md                                        (the bond-attributes bullet: all three targets + the caveat)
+ docs/NODES_REFERENCE.md                          (scope note + rows 121/122)
+ docs/HANDOFF_GRAPH_REWRITING_AGENTS.md           (Status Board)
+ src/help/HelpView.tsx                            (Bond Attributes: all three targets + the order-undefined caveat)
+ src/modeler/panels/PropertiesPanelContent.tsx    (BOTH gate-hint arms lifted, together)
+ src/modeler/vpl/nodes/SetBondAttributeNode.ts    (description + the doc comment: the WebGPU caveat)
+ src/modeler/vpl/compiler/agentWebgpu/layout.ts   (bondSlotStride/bondSlotStrideOf, bondAttrIds/Word/IsFloat, bondFormAttrBase, extras.bondAttrs)
+ src/modeler/vpl/compiler/agentWebgpu/compile.ts  (the 3 bond helpers + 3 rewired sites, get/setBondAttribute, Form Bond's request runs, usesBondStoreWrite, the read_write binding, AGENT_VALUE_NO_HOIST, extras, the GATE LIFT)
+ src/modeler/vpl/compiler/compile.ts              (dynamic INLINE-widget port resolution — the JS-only Form Bond defect)
+ src/simulator/engine/agentWebgpuRuntime.ts       (stride-aware upload + readbackAgentBondStore + the form-attr runs + buffer usage / bind-group type)
+ src/simulator/engine/sim.worker.ts               (the bond-store readback before the structural phase + the usage flag)
+ src/simulator/SimulatorView.tsx                  (usesBondStoreWrite threaded to the worker)
+ scripts/verify-graph-rewrite.mjs                 (TIER F — 29 checks + a mutation negative control; Tier D's gate assertion flipped)
+ .gra-baseline/compile-identity-P3.json           (the baseline for P4)
+```
+
+### What shipped
+
+1. **The bondStore slot widened from `[partner, restBits]` to `[partner, restBits, ...attrs]`** through **ONE** stride definition — `AgentWebGPULayout.bondSlotStride` (+ the exported `bondSlotStrideOf`). All three pre-existing bond emitters (Get Curvature / Get Bonded Agents / For Each Bond) now index through `bondRowBaseExpr` + `bondSlotWord`; there is no stride literal anywhere else. `bondAttrWord[id] = 2+i`, `bondAttrIsFloat[id]` (float ⇒ f32 bits, exactly like restLength; bool/integer/tag ⇒ a plain i32 word, mirroring the CPU `bondAttrKind`).
+2. **`getBondAttribute` / `setBondAttribute` WGSL emitters.** Get scans the live bond row for the partner (the same membership rule For Each Bond uses) and reads the slot word; **no such bond ⇒ the attribute's default**, via a bounds-clamped index because WGSL `select` evaluates both arms. Set writes **BOTH** rows (I2), the partner one range+alive guarded.
+3. **Binding 11 is promoted to `read_write` only when a Set emitter ran** (`ctx.usesBondStoreWrite`, decision **D3**), threaded to the runtime so the bind-group entry becomes `storage` and the buffer gains COPY_SRC. `usesBondStore` still gates the DECLARATION (the Naga strip trap). A read-only bond model keeps the pre-P3 `read` binding.
+4. **Form Bond's initial values reach the GPU** through one per-agent f32 request run per bond attribute (`bondFormAttrBase`, the sibling of `bondFormL`/`bondFormK`), appended AFTER every other f32 run so all pre-P3 bases stay byte-stable, and read back into `s.bondFormAttrs`. This is the reason P2's gate had to be model-level.
+5. **Runtime round-trip**: `uploadAgentBondStore` widened to write the attribute lanes; new **`readbackAgentBondStore`** copies ONLY the attribute words back (partner/restLength are CPU-owned), and it runs **before `runAgentStructuralPhase`** so a bond broken this step drops its values with its slot.
+6. **BOTH gate terms lifted together** — the model-level `bondAttrsOf(model).length > 0` reject and the `PropertiesPanelContent` hint arm; the supported hint gains the order-undefined caveat when the model declares bond attributes.
+
+### Decisions resolved
+
+| ID | Decision taken | Why |
+|---|---|---|
+| **D3** (the §3 crux) | **(A) ALLOW + document.** `setBondAttribute` runs on WebGPU; concurrent writes to the same bond from BOTH endpoints in one step are **order-undefined there**. | Measured (table below): the **one-sided** and **symmetric** idioms — the only ones P2's D2 permits — are **exact** on the GPU, structurally and by value. Only the **asymmetric** case diverges, and that case is *already* invalid on every target (D2: "a genuinely asymmetric bond attribute is impossible without breaking I2"). Option (B) would have added `setBondAttribute` to `CROSS_AGENT_OVERWRITE`, clamping every bond-attribute-WRITING model off the GPU — i.e. essentially every GRA rule, since an SDCA link rule writes every step. Documented in the node description, HelpView, the Properties hint and CLAUDE.md. |
+| Bond attributes are **SINGLE-buffered** on the GPU — **PX's read/write-base pattern is deliberately NOT copied** | The CPU targets are single-buffered *by P2's explicit design*, even under `agentUpdateMode: 'sync'` ([agentEngine.ts](../src/simulator/engine/agentEngine.ts): "a bond is one object stored twice, so a write goes to BOTH slots — there is no read/write double buffer to keep in step"). Adding a GPU write region + commit pass would have made a sync model's GPU result **deterministically differ from its CPU result** — a NEW cross-target divergence, and cross-target agreement is an explicit exit gate. Handoff §4.1's prescription is therefore not followed to the letter; the reasoning is recorded here rather than STOPping, since it is *less* structure and the option that satisfies the gate. Safe because a bonded model is never residency-eligible (`agentResidentEligible` requires `s.maxBonds === 0`), so the bond store round-trips every generation. **Follow-up for the orchestrator**: true *synchronous* bond semantics would need a CPU double buffer too — an all-three-targets change, not a GPU one. |
+| Attribute words live INSIDE the bond slot (stride 2+N) rather than in a separate parallel region | Keeps ONE stride and ONE base expression, so the compaction-free GPU indexing is a single arithmetic form the harness can check exhaustively; a parallel region would double the index shapes an emitter must get right. |
+
+### Assumptions that proved FALSE
+
+**None of the three §6 assumptions.** All held:
+
+1. **PX's `attrCommit` pass exists and is wired** into `dispatchAgentStep` (agentWebgpuRuntime.ts:1125) *and* `dispatchResidentBatch` (:2703), built only under `layout.syncAttrs`, and `attrAt(ctx, attr, idx, 'read'|'write')` is the single accessor. (P3 does not extend it — see the single-buffer decision above.)
+2. **The stride-2 literal was confined to a small findable set**: three emit sites (`emitGetCurvature`, `emitGetBondedAgents`, `emitForEachBond`), one layout line, one runtime upload. All five now derive from `bondSlotStride`.
+3. **`usesBondStore` genuinely gates the binding declaration** (`hasBondStore = ctx.usesBondStore && layout.bondStoreLen > 0`), and the runtime mirrors it.
+
+**One PRE-EXISTING (P2) defect found and fixed** — a JS-only divergence, not an assumption failure:
+- Form Bond's per-bond-attribute **INLINE widget** values were silently dropped on the **JS** target. `compileFlowChain`'s generic branch resolved inline values from `def.ports` (STATIC only) and wired dynamic ports from the edge map, so a DYNAMIC port with an inline widget and NO wire fell through entirely and the node used the attribute default. WASM/WebGPU read `_port_*` straight from config and were correct. **Measured**: with `_port_bondAttr_lbl: '5'`, JS read `lbl = 0` while WASM and WebGPU read `5`. Fixed in [compile.ts](../src/modeler/vpl/compiler/compile.ts) by also resolving `buildBondAttrPorts(nodeType, model).inputs` — the ONE editor port builder, so the compiler cannot drift from what the canvas draws. Byte-identity unaffected (no shipped model declares bond attributes). ⚠️ The general rule: **a dynamic input port with an inline widget needs an explicit resolution path in the JS compiler**; only `formBond` has one today, and `switch`'s dynamic value ports have their own branch.
+
+### THE §3 MEASUREMENT
+
+Real GPU, real worker, `agentUpdateMode: 'sync'`, agents-only ring topologies built by auto-bond (32 agents / 32 edges; a 512-agent variant for the asymmetric case), 4 trials each. `agentTarget` confirmed `webgpu` with `agentRuntimeReady: true` and the on-screen chip reading `agents WebGPU` — not a JS fallback.
+
+| rule shape | CPU (JS ≡ WASM) | WebGPU | I2 on the GPU |
+|---|---|---|---|
+| **one-sided** — only `partnerId > Get Self Handle` writes; `w += 1` each gen | `w == 10` on all 32 edges | **identical: 0 of 32 edges differ** | **holds** (0 tears) |
+| **symmetric** — both endpoints write `seed_i + seed_p` | correct (1, 31, 3, 5, …) | **identical: 0 of 32 differ, on 3 consecutive trials** | **holds** |
+| **asymmetric** — both endpoints write their OWN handle | `max(i,p)` on every edge (the last writer in index order); JS ≡ WASM | **30 of 32 edges differ** (and **510 of 512** on the large variant): the LOWER id wins; **2 edges TEAR I2** (the bond's two slots disagree) | **VIOLATED on 2 edges** |
+| **Form Bond initial values** (wired + inline) | correct | **identical** | holds |
+| **integer lane** (Set Bond Attribute on the `lbl` integer attribute) | `lbl == 7`, float lane untouched at 0 | **identical**, integer-typed | holds |
+
+Notes: the GPU outcome was *stable across trials on this device* at both N=32 and N=512 — a driver/scheduling artifact, **not a guarantee**; WebGPU orders nothing between invocations. The tear is the finding the handoff's "something worse" clause asks about, but it occurs **only in the asymmetric case**, never in the one-sided one — so per §3's own criterion, **(A)** stands.
+
+### Verification
+
+| Gate | Result |
+|---|---|
+| tsc / build | ✓ `npx tsc -p tsconfig.app.json --noEmit` clean · `npm run build` clean (42 precache entries) |
+| parity-agent-wasm | ✓ ALL AGENT SAMPLES: JS↔WASM BIT-PARITY (every entry + every synthetic, incl. `[synthetic] Bond attributes`) |
+| check-agent-wasm-gate | ✓ every sample `GATE✓ COMPILE✓ INST✓` |
+| audit-agent-layout / test-agent-abi | ✓ 156 checks, all 4 CPU sites in lockstep · ✓ 28 ABI tests |
+| check-compile-identity | ✓ vs `.gra-baseline/compile-identity-PX.json` — **26 models, all surfaces unchanged** (no shipped model declares bond attributes ⇒ stride stays 2 ⇒ the emitted WGSL is verbatim). P3 baseline captured for P4. |
+| verify-graph-rewrite | ✓ **135 passed, 0 failed** (106 → 135; the new **Tier F**), Tier D's gate assertion flipped to "WebGPU ACCEPTS" |
+| Others | ✓ parity-agent-force (7) · verify-agent-render · verify-render-uniform-layouts · test-bonds-allocation (16) · test-agent-capabilities (75) · audit-modelattr-layout (18) · test-cross-agent-writes |
+| Real in-browser run | see below |
+
+**Tier F** (shader + layout level, since node has no GPU): the layout arithmetic (stride, word indices, `bondStoreLen`, the request runs appended LAST, the SoA growing by exactly one run per attribute); **stride consistency over the WHOLE emitted shader** with a **MUTATION negative control** — forcing `bondSlotStride` back to 2 while the attribute words still say 2/3 is CAUGHT (the exact wrong-lane risk the handoff names); a no-bond-attribute model emitting the pre-P3 `* 2u` form; the `read_write` promotion + **exactly two** bond-store writes per Set (own row + partner row anchored on `== i32(idx)`) = **I2 at the shader level**; the alive+range guard; Form Bond's per-attribute request writes; a read-ONLY model keeping the `read` binding and NOT asking for a writable store; 3D (stride 4, consistent); bonds=off (no store, no words).
+
+**Real GPU / real worker** (0 console errors and 0 worker/GPU errors across every session):
+- **I2 over 200 generations on WebGPU, with mid-run CHURN**: two bonds broken at generations 50, 51 and 120 (so the CPU compaction interleaves with the GPU readback) — **I1/I2/I3/I4 green at EVERY one of the 200 generations**, 0 value errors, edge count 32 → 30 → back to 32 as auto-bond re-formed them.
+- **Cross-target agreement, 2D**: JS ≡ WASM ≡ WebGPU with **0 differing edges of 32** on the one-sided model, the symmetric model (3 GPU trials), the Form-Bond-initial-values model, and the integer-lane variant.
+- **Cross-target agreement, 3D** (the same ring in a `dimension: '3d'`, depth-8 world): JS ≡ WASM ≡ WebGPU, 0 differing of 32, 0 invariant errors — the 3D shader path compiles and runs with stride 4.
+- **Regression smoke on shipped bonded WebGPU models**: `Morphogenesis - Growing Tissue` grows 12 → 24 agents with 36 bond edges and 0 invariant errors and **zero bond-attribute lanes** (unchanged); `Life on Bonds` reaches 4096 edges with **every one of its 1024 agents at degree 8** and 0 invariant errors.
+
+### Invariants
+
+| ID | Held? | Evidence |
+|---|---|---|
+| **I1** handshake | **YES** | `Σ bondCount == 2 × distinct bonds` at every one of the 200 GPU generations (with breaks + re-forms), and on every cross-target run (2D + 3D). Tier A/C/D unchanged and green. |
+| **I2** symmetry | **YES for every VALID rule shape** (one-sided, symmetric, Form Bond) — 200 GPU generations with churn, 0 tears; the higher-id endpoint reads back what the lower one wrote. **Deliberately NOT guaranteed for an ASYMMETRIC both-endpoints write on WebGPU** (2 of 32 edges torn — measured, decided, documented; that shape already contradicts P2's D2 on every target). Tier F pins the two-row write at the shader level; Tier D's engine-level negative controls unchanged. |
+| **I3** no dangling | **YES** | Every generation of the 200-gen GPU run (which breaks bonds mid-run) and every cross-target run. |
+| **I4** capacity | **YES** | Every generation of the same runs (`maxBonds` 4). |
+| **I5** atomicity | *n/a in P3* | P3 raises no structural requests of its own. Form Bond's both-sides-or-neither rule is unchanged and its attribute values ride it (a rejected form writes no attribute either). Arrives properly with P4. |
+
+### Known gaps / follow-ups for the next phase
+
+1. **True SYNCHRONOUS bond-attribute semantics are an ALL-THREE-TARGETS change, not a GPU one.** Bond attributes are single-buffered on every target, so a rule that reads a bond attribute another agent writes in the SAME step is sequential-order-dependent on the CPU and order-undefined on the GPU. If the milestone wants a genuinely simultaneous link rule (`λ' = ψ(λ, σᵢ, σⱼ)` reading the PREVIOUS `λ`), the CPU store needs a `bondAttrsWrite` + a swap mirroring `attrRead`/`attrWrite`, and only then does a GPU write region make sense. **Do not schedule the GPU half alone.**
+2. **`setBondAttribute` is deliberately NOT in `CROSS_AGENT_OVERWRITE`.** If a future phase adds a general "this write races" gate, remember that bond writes are exempt BY DECISION (A), with the reasoning above — re-litigate it with a measurement, not by pattern-matching the node shape.
+3. **`forEachBond` still does not expose bond attributes** (P2 deferred it; its four outputs are id-cached in three emitters — now including this one, `ctx.forEachBondStack`). Get Bond Attribute inside the body covers it.
+4. **No shipped sample declares bond attributes**, so `check-compile-identity` proves only that nothing regressed — the feature itself is covered by Tier D/F + the parity synthetic + the throwaway browser models (generated, measured, deleted). **P7 should ship an SDCA sample**, which would be the first real coverage; write its link rule **symmetric or one-sided** so it is exact on WebGPU.
+5. **The JS dynamic-inline-port fix is general infrastructure.** Any future node with dynamic input ports carrying inline widgets must be added to that resolution (today it resolves `buildBondAttrPorts`); the symptom of missing it is silent per-target divergence, not an error.

@@ -1182,9 +1182,8 @@ function tierD() {
     ok(!stale, 'a pre-P2 payload (no bondAttrs) resets every bond attribute to its default');
   }
 
-  // --- THE WEBGPU CAPABILITY GATE: a model declaring bond attributes must be
-  //     REJECTED by the WebGPU agent gate (so it clamps to WASM/JS with a stated
-  //     reason) while the WASM gate ACCEPTS it. P3 lifts this.
+  // --- THE WEBGPU CAPABILITY GATE: P2 REJECTED a bond-attribute model at model
+  //     level; P3 LIFTED that (see Tier F), so both gates must now accept it.
   {
     const g = mkGraphBuilder();
     const bs = g.n('behaviourStep', {});
@@ -1201,7 +1200,7 @@ function tierD() {
     withBond.bondAttributes = [{ id: 'w', name: 'W', type: 'float', defaultValue: '0' }];
     ok(bondAttrsOf(withBond).length === 1, 'bondAttrsOf resolves the declared bond attribute');
     ok(isAgentGraphWasmSupported(withBond) === true, 'WASM gate ACCEPTS a bond-attribute model');
-    ok(isAgentGraphWebGPUSupported(withBond) === false, 'WebGPU gate REJECTS a bond-attribute model (clamps to WASM/JS — P3 lifts it)');
+    ok(isAgentGraphWebGPUSupported(withBond) === true, 'WebGPU gate ACCEPTS a bond-attribute model (P3 lifted P2‘s model-level reject)');
     const w = compileAgentGraphWasmForModel(withBond);
     ok(!w.error && w.bytes.length > 0, 'the bond-attribute model compiles to WASM', w.error || '');
     // Bonds OFF ⇒ bondAttrsOf is empty ⇒ nothing to reject, so the gate is free again.
@@ -1336,11 +1335,196 @@ function tierE() {
   }
 }
 
+// ===========================================================================
+// TIER F — P3: BOND ATTRIBUTES on the WebGPU agent target
+// ===========================================================================
+//
+// The phase's highest-risk edit is the bondStore STRIDE. A bond slot went from
+// `[partner, restBits]` to `[partner, restBits, ...attrs]`, so every emitter's
+// index arithmetic had to widen. A missed site reads the WRONG LANE silently — no
+// error, no crash, just a bond attribute that reads as a rest length (or a
+// partner id read as an attribute). So this tier pins:
+//
+//   1. the layout arithmetic (stride, word indices, region sizing, append-last);
+//   2. that NO bond emitter contains a stride literal inconsistent with the
+//      layout's stride — checked over the WHOLE emitted shader, with a MUTATION
+//      negative control that forces the stride back to 2 and proves the check
+//      fails (the risk the handoff names, made detectable);
+//   3. that a no-bond-attribute model's bond indexing is EXACTLY the pre-P3 form
+//      (`* 2u`) — the byte-identity half;
+//   4. Set Bond Attribute writes BOTH rows (I2 at the shader level) under a
+//      `read_write` binding, and Form Bond writes its per-attribute request runs.
+//
+// I2 at RUNTIME on the GPU, and the cross-target agreement, are browser gates
+// (real device) — recorded in the phase doc's Completion Report.
+
+/** Every `bondStore[...]` index expression in a shader, as `{ stride, word }`.
+ *  The emitted form is `<base> + u32(<k>) * <S>u` optionally `+ <W>u`, where
+ *  `<base>` is itself `<idxExpr> * u32(control.maxBonds) * <S>u`. */
+function bondStoreIndexShapes(wgsl) {
+  const rowStrides = new Set();
+  const ROW_RE = /\* u32\(control\.maxBonds\) \* (\d+)u/g;
+  let mt;
+  while ((mt = ROW_RE.exec(wgsl)) !== null) rowStrides.add(Number(mt[1]));
+  const slots = [];
+  const SLOT_RE = /bondStore\[(\w+) \+ u32\([^)]*\) \* (\d+)u(?: \+ (\d+)u)?\]/g;
+  while ((mt = SLOT_RE.exec(wgsl)) !== null) slots.push({ stride: Number(mt[2]), word: mt[3] === undefined ? 0 : Number(mt[3]) });
+  return { rowStrides, slots };
+}
+
+/** null when every bondStore index in `wgsl` agrees with stride `S`; else why. */
+function bondStrideConsistent(wgsl, S) {
+  const { rowStrides, slots } = bondStoreIndexShapes(wgsl);
+  for (const r of rowStrides) if (r !== S) return `a bond ROW base uses stride ${r}, layout says ${S}`;
+  for (const s of slots) {
+    if (s.stride !== S) return `a bond SLOT index uses stride ${s.stride}, layout says ${S}`;
+    if (s.word >= S) return `a bond slot word ${s.word} is outside stride ${S}`;
+  }
+  return null;
+}
+
+/** A bond-attribute agent model: For Each Bond → (read w) → Set Bond Attribute on
+ *  the lower-id side only, plus a Form Bond seeding the initial values. */
+function buildBondAttrGpuModel(over = {}) {
+  const g = mkGraphBuilder();
+  const bs = g.n('behaviourStep', {});
+  const feb = g.n('forEachBond', {});
+  const gba = g.n('getBondAttribute', { attributeId: 'w' });
+  const inc = g.n('arithmeticOperator', { operation: 'add', _port_y: '1' });
+  const sba = g.n('setBondAttribute', { attributeId: 'w' });
+  const fb = g.n('formBond', { _port_bondAttr_w: '7', _port_bondAttr_lbl: '3' });
+  g.f(bs, 'do', feb, 'do');
+  g.f(feb, 'body', sba, 'do');
+  g.f(feb, 'next', fb, 'do');
+  g.v(feb, 'partnerId', gba, 'partnerId');
+  g.v(gba, 'value', inc, 'x');
+  g.v(inc, 'value', sba, 'value');
+  g.v(feb, 'partnerId', sba, 'partnerId');
+  const mdl = migrateForHarness(wrapModel('Bond Attr GPU Test', g.nodes, g.edges, [
+    { id: 'acc', name: 'Acc', type: 'float', defaultValue: '0' },
+  ], over));
+  mdl.bondAttributes = [
+    { id: 'w', name: 'W', type: 'float', defaultValue: '0' },
+    { id: 'lbl', name: 'Label', type: 'integer', defaultValue: '0' },
+  ];
+  return mdl;
+}
+
+function tierF() {
+  section('TIER F — P3: bond attributes on the WebGPU agent target');
+
+  const mdl = buildBondAttrGpuModel();
+  const r = compileAgentGraphWebGPUForModel(mdl);
+  const L = r.layout;
+  ok(!r.error && !!r.shaderCode, 'a bond-attribute model compiles to WGSL', r.error || '');
+  ok(isAgentGraphWebGPUSupported(mdl) === true, 'the WebGPU gate ACCEPTS it (P2‘s model-level reject is lifted)');
+
+  // --- 1. the layout arithmetic ---
+  ok(L.bondSlotStride === 2 + L.bondAttrIds.length,
+    'bondSlotStride == 2 + the bond-attribute count', `${L.bondSlotStride} vs 2+${L.bondAttrIds.length}`);
+  ok(L.bondAttrIds.join(',') === 'w,lbl', 'bondAttrIds follows bondAttrsOf(model) order', L.bondAttrIds.join(','));
+  ok(L.bondAttrWord.w === 2 && L.bondAttrWord.lbl === 3, 'each attribute owns one slot WORD, after partner+rest');
+  ok(L.bondAttrIsFloat.w === true && L.bondAttrIsFloat.lbl === false,
+    'float ⇒ f32 BITS, integer/bool/tag ⇒ a plain i32 word');
+  ok(L.bondStoreLen === L.maxAgents * L.maxBonds * L.bondSlotStride,
+    'bondStoreLen == maxAgents · maxBonds · stride', String(L.bondStoreLen));
+
+  // A no-bond-attribute sibling: stride 2, no widening, no extra f32 runs — the
+  // byte-identity half (check-compile-identity covers the shipped models).
+  const plain = buildBondAttrGpuModel();
+  plain.bondAttributes = [];
+  const rp = compileAgentGraphWebGPUForModel(plain);
+  ok(rp.layout.bondSlotStride === 2, 'NO bond attributes ⇒ stride 2 (the pre-P3 layout)');
+  ok(rp.layout.bondStoreLen === rp.layout.maxAgents * rp.layout.maxBonds * 2, 'NO bond attributes ⇒ the pre-P3 bondStoreLen');
+  ok(Object.keys(rp.layout.bondFormAttrBase).length === 0, 'NO bond attributes ⇒ no Form-Bond request runs');
+  ok(bondStrideConsistent(rp.shaderCode, 2) === null,
+    'NO bond attributes ⇒ every bond index is the pre-P3 `* 2u` form', String(bondStrideConsistent(rp.shaderCode, 2)));
+
+  // The Form-Bond request runs are APPENDED LAST, so every pre-P3 f32 base is
+  // byte-stable (the baked-offset lockstep).
+  ok(L.bondFormAttrBase.w >= rp.layout.f32Len && L.bondFormAttrBase.lbl === L.bondFormAttrBase.w + L.maxAgents,
+    'the Form-Bond request runs are appended AFTER every other f32 run, in attribute order');
+  ok(L.f32Len - rp.layout.f32Len === L.bondAttrIds.length * L.maxAgents,
+    'the SoA grows by exactly one run per bond attribute', `${rp.layout.f32Len} -> ${L.f32Len}`);
+
+  // --- 2. stride consistency over the WHOLE shader + the MUTATION control ---
+  ok(bondStrideConsistent(r.shaderCode, L.bondSlotStride) === null,
+    'every bondStore index in the shader uses the layout stride (no stale `* 2u`)',
+    String(bondStrideConsistent(r.shaderCode, L.bondSlotStride)));
+  {
+    // MUTATION: force the ONE stride constant back to 2 while the attribute words
+    // still say 2/3. If the emitters did not all derive from the layout, this could
+    // not be detected — the check must FAIL here.
+    const bad = { ...L, bondSlotStride: 2 };
+    const rb = compileAgentGraphWebGPU(mdl.agentGraphNodes, mdl.agentGraphEdges, mdl, bad);
+    ok(!rb.error && bondStrideConsistent(rb.shaderCode, L.bondSlotStride) !== null,
+      'negative control: forcing the stride back to 2 is CAUGHT (a wrong-lane read)',
+      rb.error || '');
+  }
+
+  // --- 3. the emitted reads/writes ---
+  {
+    const s = r.shaderCode;
+    ok(/@binding\(11\) var<storage, read_write> bondStore/.test(s),
+      'Set Bond Attribute promotes binding 11 to read_write (decision D3)');
+    ok(r.usesBondStoreWrite === true, 'the result ships usesBondStoreWrite so the runtime binds `storage` + reads the lanes back');
+    ok(/bondStore\[\w+ \+ u32\([^)]*\) \* 4u \+ 2u\] = bitcast<i32>/.test(s),
+      'the float bond attribute is WRITTEN as f32 bits at its slot word');
+    ok(/bitcast<f32>\(bondStore\[u32\(max\(\w+, 0\)\)\]\)/.test(s),
+      'Get Bond Attribute reads through a bounds-clamped index (WGSL select evaluates both arms)');
+    // I2 at the SHADER level: TWO scans, one anchored on the partner id and one on
+    // `i32(idx)` — the own row and the partner's row.
+    ok(/== i32\(idx\)/.test(s), 'Set Bond Attribute scans the PARTNER‘s row too (I2: both slots written)');
+    const writes = (s.match(/bondStore\[[^\]]*\] = /g) || []).length;
+    ok(writes === 2, 'exactly TWO bond-store writes per Set Bond Attribute (own side + partner side)', String(writes));
+    ok(/agentAlive\[u32\(\w+\)\] != 0u/.test(s), 'the partner-side write is range + alive guarded (the by-id-writer discipline)');
+    // Form Bond's initial values ride per-agent f32 request runs.
+    ok(s.includes(`agentF32[${L.bondFormAttrBase.w}u + idx] = `) && s.includes(`agentF32[${L.bondFormAttrBase.lbl}u + idx] = `),
+      'Form Bond writes ONE initial-value request run per bond attribute');
+  }
+
+  // --- 4. a read-ONLY bond-attribute model keeps the read binding ---
+  {
+    const g = mkGraphBuilder();
+    const bs = g.n('behaviourStep', {});
+    const feb = g.n('forEachBond', {});
+    const gba = g.n('getBondAttribute', { attributeId: 'w' });
+    const set = g.n('setAttribute', { attributeId: 'acc' });
+    g.f(bs, 'do', feb, 'do'); g.f(feb, 'body', set, 'do');
+    g.v(feb, 'partnerId', gba, 'partnerId'); g.v(gba, 'value', set, 'value');
+    const ro = migrateForHarness(wrapModel('Bond Attr Read Only', g.nodes, g.edges, [
+      { id: 'acc', name: 'Acc', type: 'float', defaultValue: '0' },
+    ]));
+    ro.bondAttributes = [{ id: 'w', name: 'W', type: 'float', defaultValue: '0' }];
+    const rr = compileAgentGraphWebGPUForModel(ro);
+    ok(!rr.error && /@binding\(11\) var<storage, read>       bondStore/.test(rr.shaderCode),
+      'a READ-ONLY bond-attribute model keeps the pre-P3 `read` binding', rr.error || '');
+    ok(rr.usesBondStoreWrite !== true, 'a read-only model does not ask the runtime for a writable bond store');
+    ok(bondStrideConsistent(rr.shaderCode, rr.layout.bondSlotStride) === null, 'read-only: stride consistent');
+  }
+
+  // --- 5. 3D + bonds-off ---
+  {
+    const d3 = buildBondAttrGpuModel();
+    d3.properties.dimension = '3d'; d3.properties.gridDepth = 8;
+    const r3 = compileAgentGraphWebGPUForModel(d3);
+    ok(!r3.error && r3.layout.gridDepth === 8 && r3.layout.bondSlotStride === 4,
+      '3D: a bond-attribute model compiles with the same widened stride', r3.error || '');
+    ok(bondStrideConsistent(r3.shaderCode, 4) === null, '3D: stride consistent');
+
+    const off = buildBondAttrGpuModel({ agentCapabilities: AGENT_CAPS({ bonds: 'off' }) });
+    const ro = compileAgentGraphWebGPUForModel(off);
+    ok(ro.layout.bondSlotStride === 2 && ro.layout.bondStoreLen === 0 && ro.layout.bondAttrIds.length === 0,
+      'bonds=off ⇒ NO bond store, NO attribute words (bondAttrsOf applies the capability filter)');
+  }
+}
+
 tierA();
 tierB();
 await tierC();
 tierD();
 tierE();
+tierF();
 
 console.log(`\n${fail === 0 ? 'GRAPH-REWRITE HARNESS ✓' : 'GRAPH-REWRITE HARNESS ✗'}  (${pass} passed, ${fail} failed)`);
 rmSync(entryPath, { force: true });

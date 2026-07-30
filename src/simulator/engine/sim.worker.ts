@@ -46,7 +46,7 @@ import {
   uploadAgentControl, uploadAgentForceControl, dispatchAgentStep, readbackAgentStep, uploadAgentSpawnCursor, resetAgentStopFlag,
   uploadAgentField, readbackAgentField,
   primeAgentFieldFromGrid, foldAgentFieldToGrid,
-  uploadAgentAux, uploadAgentIndicators, readbackAgentIndicators, uploadAgentBondStore,
+  uploadAgentAux, uploadAgentIndicators, readbackAgentIndicators, uploadAgentBondStore, readbackAgentBondStore,
   ensureAgentResident, computeResidentHashParams, uploadAgentHashParams, dispatchResidentBatch, readbackAgentFrame,
   setupAgentDirectRender, uploadAgentRenderView, uploadAgentRenderView3D, presentAgentsOnce, presentAgentsFromStore,
   setupAgentCompositeRender, presentAgentCompositeFromStore, debugReadCompositePixels,
@@ -297,7 +297,7 @@ interface InitMsg {
   agentWebgpuUsesI32Write?: boolean;
   /** Which universal bindings the shader actually declares (so the runtime binds
    *  matching entries ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â a declared-but-unused global is stripped ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ bind mismatch). */
-  agentWebgpuUsage?: { usesBondStore?: boolean; usesIndicators?: boolean; usesAux?: boolean; usesSpawn?: boolean; usesStop?: boolean; usesForceScatter?: boolean };
+  agentWebgpuUsage?: { usesBondStore?: boolean; usesBondStoreWrite?: boolean; usesIndicators?: boolean; usesAux?: boolean; usesSpawn?: boolean; usesStop?: boolean; usesForceScatter?: boolean };
   /** A1.5 — the per-mapping GPU Agent Output-Mapping colour-pass WGSL modules (the
    *  runtime builds one pipeline each; the active agent viewer selects which runs). */
   agentWebgpuOmShaders?: AgentOMShaderInput[];
@@ -331,7 +331,7 @@ interface PaintManualMsg {
   activeViewer: string;
 }
 interface ResetMsg { type: 'reset'; activeViewer: string; reqId?: number }
-interface RecompileMsg { type: 'recompile'; stepCode: string; initCode?: string; gridInitCode?: string; skipIsolatedEmpty?: SkipIsolatedEmptyConfig; inputColorCodes: Array<{ mappingId: string; code: string }>; outputMappingCodes: Array<{ mappingId: string; code: string }>; stopMessages?: string[]; updateMode: string; asyncScheme: string; wasmStepBytes?: Uint8Array; wasmStepError?: string; wasmExports?: string[]; viewerIds?: Record<string, number>; webgpuShaderCode?: string; webgpuShaderError?: string; webgpuEntryPoints?: WebGPUEntryPoints; webgpuLayout?: WebGPULayout; webgpuStopCheckInterval?: number; variegated?: VariegatedPayload; interactionTables?: InteractionTablePayload[]; agentBehaviourCode?: string; agentInitCode?: string; agentDivisionCode?: string; agentColorViewer?: string; agentOutputMappingCodes?: Array<{ mappingId: string; code: string }>; agentHasSprites?: boolean; centerBased?: CenterBasedConfig; agentUsesField?: boolean; agentUsesDensity?: boolean; agentResidencyClean?: boolean; agentTarget?: 'js' | 'wasm' | 'webgpu'; agentWasmBytes?: Uint8Array; agentWasmViewerGuardIds?: string[]; agentLayoutExtras?: AgentLayoutExtras; agentWasmLayoutSig?: { maxHashBins: number; totalBytes: number }; agentWebgpuBehaviourShader?: string; agentWebgpuForceShader?: string; agentWebgpuMaxAgents?: number; agentWebgpuMaxHashBins?: number; agentWebgpuLayout?: AgentWebGPULayout; agentRenderLayout?: AgentWebGPULayout; agentWebgpuUsesI32Write?: boolean; agentWebgpuUsage?: { usesBondStore?: boolean; usesIndicators?: boolean; usesAux?: boolean; usesSpawn?: boolean; usesStop?: boolean; usesForceScatter?: boolean }; agentWebgpuOmShaders?: AgentOMShaderInput[] }
+interface RecompileMsg { type: 'recompile'; stepCode: string; initCode?: string; gridInitCode?: string; skipIsolatedEmpty?: SkipIsolatedEmptyConfig; inputColorCodes: Array<{ mappingId: string; code: string }>; outputMappingCodes: Array<{ mappingId: string; code: string }>; stopMessages?: string[]; updateMode: string; asyncScheme: string; wasmStepBytes?: Uint8Array; wasmStepError?: string; wasmExports?: string[]; viewerIds?: Record<string, number>; webgpuShaderCode?: string; webgpuShaderError?: string; webgpuEntryPoints?: WebGPUEntryPoints; webgpuLayout?: WebGPULayout; webgpuStopCheckInterval?: number; variegated?: VariegatedPayload; interactionTables?: InteractionTablePayload[]; agentBehaviourCode?: string; agentInitCode?: string; agentDivisionCode?: string; agentColorViewer?: string; agentOutputMappingCodes?: Array<{ mappingId: string; code: string }>; agentHasSprites?: boolean; centerBased?: CenterBasedConfig; agentUsesField?: boolean; agentUsesDensity?: boolean; agentResidencyClean?: boolean; agentTarget?: 'js' | 'wasm' | 'webgpu'; agentWasmBytes?: Uint8Array; agentWasmViewerGuardIds?: string[]; agentLayoutExtras?: AgentLayoutExtras; agentWasmLayoutSig?: { maxHashBins: number; totalBytes: number }; agentWebgpuBehaviourShader?: string; agentWebgpuForceShader?: string; agentWebgpuMaxAgents?: number; agentWebgpuMaxHashBins?: number; agentWebgpuLayout?: AgentWebGPULayout; agentRenderLayout?: AgentWebGPULayout; agentWebgpuUsesI32Write?: boolean; agentWebgpuUsage?: { usesBondStore?: boolean; usesBondStoreWrite?: boolean; usesIndicators?: boolean; usesAux?: boolean; usesSpawn?: boolean; usesStop?: boolean; usesForceScatter?: boolean }; agentWebgpuOmShaders?: AgentOMShaderInput[] }
 interface UpdateLookupTableMsg {
   type: 'updateLookupTable';
   attrId: string;
@@ -932,7 +932,7 @@ let pendingAgentWebgpuMaxAgents = 0;
 let pendingAgentWebgpuMaxHashBins = 0;
 let pendingAgentWebgpuLayout: AgentWebGPULayout | null = null;
 let pendingAgentWebgpuUsesI32Write = false;
-let pendingAgentWebgpuUsage: { usesBondStore?: boolean; usesIndicators?: boolean; usesAux?: boolean; usesSpawn?: boolean; usesStop?: boolean; usesForceScatter?: boolean } = {};
+let pendingAgentWebgpuUsage: { usesBondStore?: boolean; usesBondStoreWrite?: boolean; usesIndicators?: boolean; usesAux?: boolean; usesSpawn?: boolean; usesStop?: boolean; usesForceScatter?: boolean } = {};
 /** A1.5 — the per-mapping GPU Agent Output-Mapping colour-pass shaders (held so
  *  buildAgentWebGPUIfNeeded builds one pipeline each on the agent runtime). */
 let pendingAgentWebgpuOmShaders: AgentOMShaderInput[] = [];
@@ -2555,6 +2555,11 @@ async function runAgentStepWebGPUInner(gpuFieldBridge?: GpuFieldBridge | null): 
     // in the batch loop reads stopFlag[0] BEFORE the cell step resets it.
     if (rb.agentStop !== 0 && (stopFlag[0] ?? 0) === 0) stopFlag[0] = rb.agentStop;
     swapAgentAttrs(s);
+    // P3 - read the bond store's USER ATTRIBUTE lanes back (Set Bond Attribute).
+    // BEFORE runAgentStructuralPhase, so a bond broken this step drops its values
+    // with its slot (compaction moves whole slots via moveBondSlot). Only when the
+    // behaviour actually WROTE the store; a read-only bond model skips it entirely.
+    if (rt.usesBondStoreWrite && rt.layout.bondAttrIds.length > 0) await readbackAgentBondStore(rt, s);
     if (rt.layout.indicatorCount > 0) {
       // The behaviour shader mutated the indicators atomic buffer (Set/Update
       // Indicator) ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â read them back into cachedIndicators so the sendColors path

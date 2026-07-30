@@ -9,6 +9,7 @@ import { classifyLoopInvariant } from './loopInvariant';
 import { safeId } from './identifierSafe';
 import { detectFusableConsumers, type FusionResult } from './fusion';
 import { getInlineValue } from './inlinePort';
+import { buildBondAttrPorts } from '../bondAttrPorts';
 import { INVALID_NI, packNI, packNI3, NI_ARRAY_PRODUCERS } from './niCodec';
 import { analyzeSinkScopes, isRngNode, CELL_TOP, type ScopeId } from './sinkAnalysis';
 import { canonicalizeAccessorEdges } from './accessorCSE';
@@ -1317,6 +1318,20 @@ function compileRoot(
           if (def.ports.some(p => p.kind === 'input' && p.category === 'value' && p.id === portId)) continue;
           compileValueNode(source.nodeId);
           inputVars[portId] = varName(source.nodeId, source.portId);
+        }
+        // Dynamic INLINE-WIDGET ports (P2's Form Bond per-bond-attribute initial
+        // values). The static loop above only walks `def.ports`, and the edge loop
+        // just above only covers WIRED dynamic ports — so a DYNAMIC port with an
+        // inline widget and no wire fell through entirely and the node silently used
+        // the attribute default. WASM/WebGPU read `_port_*` straight from config and
+        // DID honour it, so this was a JS-only divergence (found by P3's cross-target
+        // check: `lbl` read 0 on JS and 5 on WASM/WebGPU from the same model).
+        // `buildBondAttrPorts` is the ONE port builder the editor uses, so the
+        // compiler cannot drift from what the canvas draws.
+        for (const port of buildBondAttrPorts(node.data.nodeType, model).inputs) {
+          if (inputVars[port.id] !== undefined) continue;
+          const inlineVal = getInlineValue(port, node.data.config);
+          if (inlineVal !== undefined) inputVars[port.id] = inlineVal;
         }
         const code = def.compile(node.id, node.data.config, inputVars, model?.properties.boundaryTreatment, ctx);
         if (code) flowLines.push(indent + code.trimEnd());

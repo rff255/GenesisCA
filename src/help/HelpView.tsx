@@ -1652,9 +1652,18 @@ export function HelpView() {
             the end of the step, so Set Bond Attribute can only reach it from the next generation.
           </p>
           <p className={styles.p}>
-            Bond attributes run on the <strong>Debug/JS</strong> and <strong>WebAssembly</strong>{' '}
-            agent targets. A model that declares any of them falls back off WebGPU (the GPU bond
-            store doesn&rsquo;t carry them yet) &mdash; the Agent Compile Target hint says so.
+            Bond attributes run on <strong>all three</strong> agent targets &mdash; Debug/JS,
+            WebAssembly and WebGPU. One caveat is specific to WebGPU: because a bond is stored at
+            both ends, writing one always touches the <em>partner&rsquo;s</em> storage, and on the
+            GPU every agent is its own thread. So if <em>both</em> endpoints of a bond write the
+            same attribute in the <em>same</em> step, which write lands is{' '}
+            <strong>order-undefined</strong> there. Two ways to stay exact, and both are the natural
+            way to write the rule anyway: write from <em>one side only</em> (the owner idiom above),
+            or make the rule <em>symmetric</em>, so both endpoints compute the same value &mdash;
+            which is what a link rule of the form &ldquo;new edge state from the old edge state and
+            the two node states&rdquo; already is. Only a genuinely <em>asymmetric</em> write (the
+            two endpoints computing different values) is affected, and that contradicts the
+            both-ends-equal rule on every target.
           </p>
           <h3 className={styles.h3}>Spawning Agents (Create &rarr; Add, in either event)</h3>
           <p className={styles.p}>

@@ -216,12 +216,43 @@ export interface AgentWebGPULayout {
   indicatorCount: number;
   /** Per-agent bond capacity (the ragged `bondStore` stride, in bond slots). 0 ⇒
    *  no bond store buffer (no Get Bonded Agents / For Each Bond / Get Curvature).
-   *  The store interleaves `[partnerId, restLengthBits]` per slot, so an agent's
-   *  bond k is at `bondStore[idx·maxBonds·2 + k·2]` (partner) / `+1` (rest f32-bits). */
+   *  The store interleaves `[partnerId, restLengthBits, ...bondAttrs]` per slot, so
+   *  an agent's bond k starts at `bondStore[idx·maxBonds·S + k·S]` where
+   *  `S = bondSlotStride` (2 when the model declares no bond attributes). */
   maxBonds: number;
-  /** Total i32 elements in the `bondStore` buffer (= maxAgents · maxBonds · 2).
+  /** Total i32 elements in the `bondStore` buffer (= maxAgents · maxBonds · S).
    *  0 ⇒ no bond store binding. */
   bondStoreLen: number;
+
+  // --- P3 (Graph-Rewriting Automata): USER BOND ATTRIBUTES on the GPU ---------
+  /** **THE bond-slot stride, in i32 words** (`2 + bondAttrIds.length`): word 0 =
+   *  partner id, word 1 = rest length (f32 bits), then ONE word per user bond
+   *  attribute. This is the SINGLE definition of the stride — every emitter, the
+   *  layout and the runtime read it, never a literal `2`. A missed site would read
+   *  the wrong lane SILENTLY, which is why the constant is not duplicated. With no
+   *  bond attributes it is exactly 2 ⇒ every pre-P3 shader / buffer is unchanged. */
+  bondSlotStride: number;
+  /** Ordered USER bond-attribute ids (`bondAttrsOf(model)` order — the SAME order
+   *  the CPU store's `bondAttrSpecs` and the WASM layout use). */
+  bondAttrIds: string[];
+  /** Bond-attr id → its WORD index inside a bond slot (`2 + i`). */
+  bondAttrWord: Record<string, number>;
+  /** Bond-attr id → true when the slot word holds **f32 BITS** (a `float`
+   *  attribute — read with `bitcast<f32>`, written with `bitcast<i32>`), false when
+   *  it holds a plain i32 (bool / integer / tag). Mirrors the CPU `bondAttrKind`. */
+  bondAttrIsFloat: Record<string, boolean>;
+  /** Bond-attr id → its per-agent f32 run base in `agentF32` carrying **Form
+   *  Bond's INITIAL value** request (the sibling of `bondFormL` / `bondFormK`; the
+   *  GPU mirror of the store's `bondFormAttrs[id]`). Appended after every other
+   *  f32 run so all existing bases stay byte-stable. */
+  bondFormAttrBase: Record<string, number>;
+}
+
+/** **THE** bond-slot stride helper: `[partner, restBits, ...attrs]`. Exported so
+ *  the runtime + the harnesses derive the stride from the same one place the
+ *  layout does. */
+export function bondSlotStrideOf(bondAttrCount: number): number {
+  return 2 + Math.max(0, Math.floor(bondAttrCount) || 0);
 }
 
 export interface AgentWebGPUFieldSpec {
@@ -255,6 +286,11 @@ export interface AgentWebGPUExtras {
    *  (the write buffer). Absent/false ⇒ the write bases alias the read bases and
    *  the layout is byte-identical to pre-PX (the async fast path). */
   syncAttrs?: boolean;
+  /** P3 — USER BOND attributes (per-EDGE state), in `bondAttrsOf(model)` order.
+   *  Each widens the `bondStore` slot by ONE i32 word and adds one per-agent f32
+   *  run for Form Bond's initial value. Absent/empty ⇒ stride 2 + no extra runs ⇒
+   *  byte-identical to pre-P3. `float` ⇒ the slot word holds f32 bits. */
+  bondAttrs?: Array<{ id: string; type: string }>;
 }
 
 /** Compute the GPU agent storage layout. Pure (no GPU calls). The optional
@@ -293,6 +329,12 @@ export function computeAgentWebGPULayout(
   const agentAttrWriteBase: Record<string, number> = {};
   if (syncAttrs) { for (const id of agentAttrIds) { agentAttrWriteBase[id] = off; off += ma; } }
   else { for (const id of agentAttrIds) { agentAttrWriteBase[id] = agentAttrBase[id]!; } }
+  // P3 — Form Bond's per-BOND-ATTRIBUTE initial-value request runs (the GPU
+  // sibling of bondFormL / bondFormK). APPENDED LAST so every base above stays
+  // byte-stable; a model with no bond attributes adds nothing at all.
+  const bondAttrsIn = extras.bondAttrs ?? [];
+  const bondFormAttrBase: Record<string, number> = {};
+  for (const a of bondAttrsIn) { bondFormAttrBase[a.id] = off; f32Base[`bondFormAttr_${a.id}`] = off; off += ma; }
   const f32Len = off;
 
   const i32Base: Record<string, number> = {};
@@ -345,8 +387,14 @@ export function computeAgentWebGPULayout(
 
   const indicatorCount = Math.max(0, Math.floor(extras.indicatorCount ?? 0));
   const maxBonds = Math.max(0, Math.floor(extras.maxBonds ?? 0));
-  // Interleaved [partner, restBits] per bond slot ⇒ 2 i32 per slot.
-  const bondStoreLen = maxBonds > 0 ? ma * maxBonds * 2 : 0;
+  // Interleaved [partner, restBits, ...bondAttrs] per bond slot. THE stride comes
+  // from `bondSlotStrideOf` — the one definition (see AgentWebGPULayout).
+  const bondAttrIds = bondAttrsIn.map(a => a.id);
+  const bondSlotStride = bondSlotStrideOf(bondAttrIds.length);
+  const bondAttrWord: Record<string, number> = {};
+  const bondAttrIsFloat: Record<string, boolean> = {};
+  bondAttrsIn.forEach((a, i) => { bondAttrWord[a.id] = 2 + i; bondAttrIsFloat[a.id] = a.type === 'float'; });
+  const bondStoreLen = maxBonds > 0 ? ma * maxBonds * bondSlotStride : 0;
 
   return {
     maxAgents: ma, maxHashBins: hb,
@@ -358,5 +406,6 @@ export function computeAgentWebGPULayout(
     gridDepth: gd, modelAttrSlot, lookupTables, auxF32Len,
     modelAttrKeys: [...modelAttrKeys], lookupTableIds,
     indicatorCount, maxBonds, bondStoreLen,
+    bondSlotStride, bondAttrIds, bondAttrWord, bondAttrIsFloat, bondFormAttrBase,
   };
 }
