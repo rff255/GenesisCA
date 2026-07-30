@@ -1,7 +1,7 @@
 import type { NodeConfig, NodeTypeDef } from '../types';
 import { parseHandleId } from '../types';
 import type { CAModel } from '../../../model/types';
-import { cellFieldAttrsOf } from '../../../model/attributeScope';
+import { cellFieldAttrsOf, BOND_ATTRIBUTE_TYPES } from '../../../model/attributeScope';
 import { agentNodeRequirement, nodeSatisfiesCapabilities, resolveAgentProfile, capReqLabel } from '../../../model/agentCapabilities';
 import { getNodeDef } from './registry';
 import { CURRENT_VIEWER_SENTINEL } from './SetCellLooksNode';
@@ -201,6 +201,21 @@ export function detectMissingConfig(
       if (!hasAgentAttr(config.attributeId)) issues.push('Select an agent attribute');
       if (isInputConnected('agents') === false) {
         issues.push('Connect an Agents input (e.g. from Get Nearby Agents or Get Bonded Agents)');
+      }
+      break;
+
+    // Graph-Rewriting Automata (P5) — the DIVISION BOND PARTITION. A
+    // `byBondAttribute` partition whose attribute was deleted / is of an
+    // unusable type DEGRADES TO the geometric split in the engine, so the badge
+    // is what stops that being a silent mis-partition.
+    case 'divideAgent':
+      if (String(config.partition ?? 'tension') === 'byBondAttribute') {
+        if (!hasBondAttr(config.partitionAttributeId)) {
+          issues.push('Select a bond attribute for the partition (it falls back to the tension axis otherwise)');
+        } else if ((model.bondAttributes ?? []).some(
+          a => a.id === config.partitionAttributeId && !BOND_ATTRIBUTE_TYPES.includes(a.type))) {
+          issues.push('That bond attribute type cannot select a daughter (use binary / integer / decimal / tag)');
+        }
       }
       break;
 

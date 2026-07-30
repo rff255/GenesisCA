@@ -37,6 +37,10 @@ export {
   rewireBond, hasBond, drainAgentBondRequests, clearAgentBondRequests,
 } from '../src/simulator/engine/agentEngine.ts';
 export { BOND_REQ_NONE, BOND_REQ_ID_BIAS, bondReqSlotsForModel, agentGraphUsesBondRequests } from '../src/modeler/vpl/compiler/bondRequestQueue.ts';
+export {
+  DEFAULT_DIVIDE_PARTITION, dividePartitionFromConfig, dividePartitionKey, dividePartitionCode,
+} from '../src/modeler/vpl/compiler/dividePartition.ts';
+export { detectMissingConfig } from '../src/modeler/vpl/nodes/nodeValidation.ts';
 export { resolveBondRequestDepth } from '../src/model/centerBased.ts';
 export { serializeAgentState, deserializeAgentState } from '../src/model/fileOperations.ts';
 export { bondAttrsOf } from '../src/model/attributeScope.ts';
@@ -70,6 +74,7 @@ const {
   serializeAgentStore, deserializeAgentStore, serializeAgentState, deserializeAgentState, bondAttrsOf,
   rewireBond, hasBond, drainAgentBondRequests, clearAgentBondRequests,
   BOND_REQ_NONE, BOND_REQ_ID_BIAS, bondReqSlotsForModel, agentGraphUsesBondRequests, resolveBondRequestDepth,
+  DEFAULT_DIVIDE_PARTITION, dividePartitionFromConfig, dividePartitionKey, dividePartitionCode, detectMissingConfig,
   compileAgentGraphWasmForModel, instantiateAgentWasm, buildAgentLayoutExtras, isAgentGraphWasmSupported,
   compileAgentGraphWebGPUForModel, isAgentGraphWebGPUSupported, compileAgentGraphWebGPU,
   agentWebGPUExtrasOf, computeAgentWebGPULayout,
@@ -1871,6 +1876,442 @@ function buildRewireModel({ dropVerbs = false } = {}) {
   };
 }
 
+// ===========================================================================
+// TIER H — P5: the DIVISION BOND PARTITION (I7 / O4 / O9)
+// ===========================================================================
+//
+// `divideAgent` split a mother's bonds GEOMETRICALLY. P5 lets the user NAME the
+// partition (tension / alternate / byBondAttribute) plus decision D4, the
+// daughter–daughter bond policy. Everything here runs through the SHIPPED engine
+// (`divideAgent`) and the SHIPPED spec builder (`dividePartitionFromConfig`), and
+// every new invariant carries a negative control.
+
+const P5_SPECS = [
+  { id: 'w', type: 'float', defaultValue: 0 },
+  { id: 'kind', type: 'tag', defaultValue: 0 },   // 0 = apical, 1 = basal
+  { id: 'on', type: 'bool', defaultValue: 0 },
+];
+
+/** The (partner → attribute tuple) multiset an agent's bond list holds. */
+function bondBag(s, owner) {
+  const mb = s.maxBonds, bag = new Map();
+  for (let k = 0; k < s.bondCount[owner]; k++) {
+    const p = s.bondPartner[owner * mb + k];
+    bag.set(p, P5_SPECS.map(sp => s.bondAttrs[sp.id][owner * mb + k]));
+  }
+  return bag;
+}
+
+/** I7 — the conservation law across ONE division. The two daughters' inherited
+ *  (partner, attribute-tuple) multiset must equal the mother's EXACTLY, plus the
+ *  new A–B bond (P5 has no explicit "drop" verb, so nothing may vanish). Returns
+ *  null when it holds, else a message. */
+function checkI7(before, s, a, b, expectDaughterBond) {
+  const bagA = bondBag(s, a), bagB = bondBag(s, b);
+  const sawAB = bagA.has(b), sawBA = bagB.has(a);
+  if (sawAB !== sawBA) return `the A–B bond is one-sided (A→B ${sawAB}, B→A ${sawBA})`;
+  if (sawAB !== expectDaughterBond) return `daughter bond present=${sawAB}, expected ${expectDaughterBond}`;
+  bagA.delete(b); bagB.delete(a);
+  // No partner may land on BOTH daughters, and the union must be the mother's.
+  for (const p of bagA.keys()) if (bagB.has(p)) return `partner ${p} landed on BOTH daughters`;
+  if (bagA.size + bagB.size !== before.size) {
+    return `inherited ${bagA.size + bagB.size} bonds, mother had ${before.size}`;
+  }
+  for (const [p, vals] of before) {
+    const got = bagA.get(p) ?? bagB.get(p);
+    if (!got) return `partner ${p} vanished in the division`;
+    // O9 — the attributes travel WITH the bond and are not re-initialised.
+    for (let i = 0; i < vals.length; i++) {
+      if (!Object.is(got[i], vals[i])) {
+        return `bond ${p} lost ${P5_SPECS[i].id} (got ${got[i]}, want ${vals[i]})`;
+      }
+    }
+  }
+  return null;
+}
+
+/** A hub agent bonded to `n` spokes, every bond carrying deterministic values.
+ *  `kindOf(k)` picks the tag option; `wOf(k)` the float. */
+function starStore(n, { kindOf = (k) => k % 2, wOf = (k) => 100 + k, maxBonds = 16 } = {}) {
+  const s = createAgentStore(bondCfg(n + 8 + 8, maxBonds), [], { bondAttrSpecs: P5_SPECS });
+  seedAgents(s, Array.from({ length: n + 1 }, (_, i) => (
+    i === 0 ? { x: 32, y: 32 } : { x: 32 + 4 * Math.cos((i - 1) * 2 * Math.PI / n), y: 32 + 4 * Math.sin((i - 1) * 2 * Math.PI / n) }
+  )), 0.5);
+  for (let k = 0; k < n; k++) formBond(s, 0, k + 1, 1, 0, 0, [wOf(k), kindOf(k), kindOf(k) === 0 ? 1 : 0]);
+  return s;
+}
+
+function tierH() {
+  section('TIER H — P5: the division bond partition (I7 / O4 / O9)');
+
+  // --- 0. the SPEC BUILDER (the one place a node config becomes an engine spec)
+  {
+    const model = { bondAttributes: [
+      { id: 'w', name: 'W', type: 'float', defaultValue: '0' },
+      { id: 'kind', name: 'Kind', type: 'tag', defaultValue: '0', tagOptions: ['apical', 'basal', 'lateral'] },
+      { id: 'on', name: 'On', type: 'bool', defaultValue: 'false' },
+    ], centerBased: { maxBonds: 8, agentCapabilities: AGENT_CAPS({ bonds: 'data' }) } };
+    ok(dividePartitionKey(dividePartitionFromConfig({}, model)) === dividePartitionKey(DEFAULT_DIVIDE_PARTITION),
+      'an empty config builds the DEFAULT (tension / auto) spec');
+    ok(dividePartitionFromConfig({ partition: 'alternate' }, model).mode === 'alternate',
+      'partition: alternate builds the alternate spec');
+    const byTag = dividePartitionFromConfig(
+      { partition: 'byBondAttribute', partitionAttributeId: 'kind', partTag_1: true, partTag_2: true }, model);
+    ok(byTag.mode === 'byBondAttribute' && byTag.attributeId === 'kind'
+      && byTag.tagB.length === 3 && byTag.tagB.join(',') === '0,1,1',
+      'a TAG partition builds the per-option daughter table', byTag.tagB.join(','));
+    const byBool = dividePartitionFromConfig({ partition: 'byBondAttribute', partitionAttributeId: 'on' }, model);
+    ok(byBool.threshold === 0.5 && byBool.tagB.length === 0, 'a BOOL partition pins threshold 0.5 (false→A, true→B)');
+    const byNum = dividePartitionFromConfig(
+      { partition: 'byBondAttribute', partitionAttributeId: 'w', partitionThreshold: '105' }, model);
+    ok(byNum.threshold === 105, 'a FLOAT partition carries the configured threshold');
+    // Unresolvable ⇒ degrade to tension (NEVER a silent mis-partition), and the
+    // node carries a badge saying so.
+    const gone = dividePartitionFromConfig({ partition: 'byBondAttribute', partitionAttributeId: 'deleted' }, model);
+    ok(gone.mode === 'tension', 'an unresolvable bond attribute DEGRADES to tension');
+    const badge = detectMissingConfig('divideAgent', { partition: 'byBondAttribute', partitionAttributeId: 'deleted' },
+      { ...model, attributes: [], agentAttributes: [] });
+    ok(badge.length > 0, 'and the node is BADGED for it (never silent)', JSON.stringify(badge));
+    const okBadge = detectMissingConfig('divideAgent', { partition: 'tension' },
+      { ...model, attributes: [], agentAttributes: [] });
+    ok(okBadge.length === 0, 'a tension partition needs no attribute (no badge)');
+    // D4 rides every mode.
+    ok(dividePartitionFromConfig({ daughterBond: 'always' }, model).daughterBond === 'always'
+      && dividePartitionFromConfig({ daughterBond: 'never' }, model).daughterBond === 'never'
+      && dividePartitionFromConfig({ daughterBond: 'nonsense' }, model).daughterBond === 'auto',
+      'the daughterBond policy parses (auto / always / never, unknown ⇒ auto)');
+  }
+
+  // --- 1. `tension` is UNCHANGED: passing the default spec explicitly must give
+  //        the SAME graph as the pre-P5 call with no spec at all.
+  {
+    const mk = () => starStore(7);
+    const s1 = mk(), s2 = mk();
+    const n1 = divideAgent(s1, 0, 0, 0, 0, 0.5, 0, false, 64, 64, 1);
+    const n2 = divideAgent(s2, 0, 0, 0, 0, 0.5, 0, false, 64, 64, 1, undefined, DEFAULT_DIVIDE_PARTITION);
+    ok(n1 === n2 && n1 >= 0, 'tension: the default spec allocates the same daughter slot');
+    const sig = (s, a, b) => [...bondBag(s, a).entries()].concat([...bondBag(s, b).entries()])
+      .map(([p, v]) => `${p}:${v.join('/')}`).sort().join('|');
+    ok(sig(s1, 0, n1) === sig(s2, 0, n2), 'tension: the partition is byte-for-byte the pre-P5 result');
+    ok(allInvariants(storeGraph(s1)) === null, 'tension: I1–I4 hold after the division');
+  }
+
+  // --- 2. `alternate` assigns A, B, A, B… in SLOT order (asserted by VALUE)
+  {
+    const s = starStore(8);
+    const partners = [...bondBag(s, 0).keys()];   // slot order
+    const nid = divideAgent(s, 0, 1, 0, 0, 0.5, 0, false, 64, 64, 1, undefined,
+      { ...DEFAULT_DIVIDE_PARTITION, mode: 'alternate' });
+    const bagA = bondBag(s, 0), bagB = bondBag(s, nid);
+    let wrong = 0;
+    partners.forEach((p, k) => {
+      const wantA = (k % 2) === 0;
+      if (wantA ? !bagA.has(p) : !bagB.has(p)) wrong++;
+    });
+    ok(wrong === 0, 'alternate: every EVEN slot went to daughter A and every ODD slot to B', String(wrong));
+    // NEGATIVE CONTROL — the same assertion under an "all to A" partition FAILS,
+    // so the check above is really discriminating.
+    {
+      const s2 = starStore(8);
+      const ps = [...bondBag(s2, 0).keys()];
+      const n2 = divideAgent(s2, 0, 1, 0, 0, 0.5, 0, false, 64, 64, 1, undefined,
+        { ...DEFAULT_DIVIDE_PARTITION, mode: 'byBondAttribute', attributeId: 'w', threshold: 1e9 });
+      const bA = bondBag(s2, 0), bB = bondBag(s2, n2);
+      let w2 = 0;
+      ps.forEach((p, k) => { const wantA = (k % 2) === 0; if (wantA ? !bA.has(p) : !bB.has(p)) w2++; });
+      ok(w2 > 0 && bB.size === 1, 'NEG: an all-to-A partition FAILS the alternate check', `wrong=${w2} B=${bB.size}`);
+    }
+  }
+
+  // --- 3. `byBondAttribute` — the headline: "give daughter A the apical bonds"
+  {
+    // 9 spokes over THREE tag options (apical=0, basal=1, lateral=2), with the
+    // table apical+lateral → A, basal → B. Three options matter: with only two,
+    // the per-option table and a plain 0.5 threshold agree by accident, so the
+    // assertion could not tell them apart (found by a mutation control).
+    const TAGB = [0, 1, 0];
+    const s = starStore(9, { kindOf: (k) => k % 3 });
+    const toA = [], toB = [];
+    for (const [p, v] of bondBag(s, 0)) (TAGB[v[1]] === 0 ? toA : toB).push(p);
+    ok(toA.length === 6 && toB.length === 3, 'the star has 6 apical/lateral + 3 basal bonds', `${toA.length}/${toB.length}`);
+    const nid = divideAgent(s, 0, 1, 0, 0, 0.5, 0, false, 64, 64, 1, undefined,
+      { mode: 'byBondAttribute', attributeId: 'kind', threshold: 0.5, tagB: TAGB, daughterBond: 'auto' });
+    const bagA = bondBag(s, 0), bagB = bondBag(s, nid);
+    bagA.delete(nid); bagB.delete(0);
+    ok(toA.every(p => bagA.has(p)) && bagA.size === 6, 'byBondAttribute (tag): daughter A got EXACTLY the apical+lateral bonds',
+      `${[...bagA.keys()]} vs ${toA}`);
+    ok(toB.every(p => bagB.has(p)) && bagB.size === 3, 'byBondAttribute (tag): daughter B got EXACTLY the basal bonds',
+      `${[...bagB.keys()]} vs ${toB}`);
+    ok(allInvariants(storeGraph(s)) === null, 'byBondAttribute: I1–I4 hold after the split');
+    // NEGATIVE CONTROL — flip the table and the SAME bonds go the other way.
+    {
+      const s2 = starStore(9, { kindOf: (k) => k % 3 });
+      const n2 = divideAgent(s2, 0, 1, 0, 0, 0.5, 0, false, 64, 64, 1, undefined,
+        { mode: 'byBondAttribute', attributeId: 'kind', threshold: 0.5, tagB: [1, 0, 1], daughterBond: 'auto' });
+      const a2 = bondBag(s2, 0), b2 = bondBag(s2, n2);
+      a2.delete(n2); b2.delete(0);
+      ok(toB.every(p => a2.has(p)) && toA.every(p => b2.has(p)),
+        'NEG: flipping the per-option table swaps the two daughters exactly');
+    }
+    // BOOL + THRESHOLD variants, asserted by value.
+    {
+      const sb = starStore(6, { kindOf: (k) => k % 2 });   // `on` = 1 iff kind===0
+      const nb = divideAgent(sb, 0, 1, 0, 0, 0.5, 0, false, 64, 64, 1, undefined,
+        { mode: 'byBondAttribute', attributeId: 'on', threshold: 0.5, tagB: [], daughterBond: 'auto' });
+      const bA = bondBag(sb, 0), bB = bondBag(sb, nb);
+      bA.delete(nb); bB.delete(0);
+      ok(bB.size === 3 && [...bB.values()].every(v => v[2] === 1), 'byBondAttribute (bool): true → daughter B');
+      ok(bA.size === 3 && [...bA.values()].every(v => v[2] === 0), 'byBondAttribute (bool): false → daughter A');
+    }
+    {
+      const sn = starStore(6, { wOf: (k) => 100 + k });    // w = 100..105
+      const nn = divideAgent(sn, 0, 1, 0, 0, 0.5, 0, false, 64, 64, 1, undefined,
+        { mode: 'byBondAttribute', attributeId: 'w', threshold: 103, tagB: [], daughterBond: 'auto' });
+      const bA = bondBag(sn, 0), bB = bondBag(sn, nn);
+      bA.delete(nn); bB.delete(0);
+      ok([...bA.values()].every(v => v[0] < 103) && bA.size === 3
+        && [...bB.values()].every(v => v[0] >= 103) && bB.size === 3,
+        'byBondAttribute (float): value < threshold → A, ≥ → B');
+    }
+  }
+
+  // --- 4. D4 — the daughter–daughter bond policy
+  {
+    const free = () => {
+      const s = createAgentStore(bondCfg(16, 8), [], { bondAttrSpecs: P5_SPECS });
+      seedAgents(s, [{ x: 8, y: 8 }], 0.5);
+      return s;
+    };
+    const d = (s, policy) => divideAgent(s, 0, 1, 0, 0, 0.5, 0, false, 64, 64, 1, undefined,
+      { ...DEFAULT_DIVIDE_PARTITION, daughterBond: policy });
+    const s1 = free(), n1 = d(s1, 'auto');
+    ok(s1.bondCount[0] === 0 && s1.bondCount[n1] === 0, 'D4 auto: a FREE agent divides into two UNBONDED daughters (pre-P5 rule)');
+    const s2 = free(), n2 = d(s2, 'always');
+    ok(s2.bondCount[0] === 1 && s2.bondCount[n2] === 1 && s2.bondPartner[0 * s2.maxBonds] === n2,
+      'D4 always: a FREE agent divides into two BONDED daughters');
+    const s3 = starStore(4), n3 = d(s3, 'never');
+    ok(!bondBag(s3, 0).has(n3) && !bondBag(s3, n3).has(0), 'D4 never: a BONDED mother yields two non-adjacent daughters');
+    ok(allInvariants(storeGraph(s2)) === null && allInvariants(storeGraph(s3)) === null, 'D4: I1–I4 hold under every policy');
+    // `always` with the Bonds capability OFF must not reject the division.
+    const off = createAgentStore({ ...bondCfg(16, 8), agentCapabilities: AGENT_CAPS({ bonds: 'off' }) }, []);
+    seedAgents(off, [{ x: 8, y: 8 }], 0.5);
+    const nOff = divideAgent(off, 0, 1, 0, 0, 0.5, 0, false, 64, 64, 1, undefined,
+      { ...DEFAULT_DIVIDE_PARTITION, daughterBond: 'always' });
+    ok(nOff >= 0, 'D4 always with bonds=off still divides (mb === 0 ⇒ no bond to add)', String(nOff));
+  }
+
+  // --- 5. I7 + O9 over ≥1000 divisions, in EVERY mode, invariants every division
+  {
+    const MODES = [
+      ['tension', { ...DEFAULT_DIVIDE_PARTITION }],
+      ['alternate', { ...DEFAULT_DIVIDE_PARTITION, mode: 'alternate' }],
+      ['byBondAttribute(tag)', { mode: 'byBondAttribute', attributeId: 'kind', threshold: 0.5, tagB: [0, 1], daughterBond: 'auto' }],
+      ['byBondAttribute(float)', { mode: 'byBondAttribute', attributeId: 'w', threshold: 103, tagB: [], daughterBond: 'auto' }],
+    ];
+    for (const [name, spec] of MODES) {
+      let rs = 0x1234567 ^ name.length;
+      const rnd = () => { rs ^= rs << 13; rs >>>= 0; rs ^= rs >>> 17; rs ^= rs << 5; rs >>>= 0; return rs / 0x100000000; };
+      const MB = 12, N = 24;
+      const s = createAgentStore(bondCfg(600, MB), [], { bondAttrSpecs: P5_SPECS });
+      seedAgents(s, Array.from({ length: N }, (_, i) => ({ x: 8 + (i % 6) * 3, y: 8 + Math.floor(i / 6) * 3 })), 0.5);
+      // A random sparse graph with random attribute values on every edge.
+      for (let t = 0; t < 90; t++) {
+        const a = Math.floor(rnd() * N), b = Math.floor(rnd() * N);
+        if (a !== b && !hasBond(s, a, b)) {
+          formBond(s, a, b, 1 + rnd(), 0, 0, [100 + Math.floor(rnd() * 8), Math.floor(rnd() * 2), Math.floor(rnd() * 2)]);
+        }
+      }
+      let divisions = 0, firstFail = null, rejects = 0;
+      for (let gen = 0; gen < 4000 && divisions < 1000 && firstFail === null; gen++) {
+        const a = Math.floor(rnd() * s.highWater);
+        if (!s.alive[a]) continue;
+        const before = bondBag(s, a);
+        const nid = divideAgent(s, a, 0, 0, 0, 0.5, 0, false, 64, 64, 1, undefined, spec);
+        if (nid < 0) { rejects++; continue; }
+        divisions++;
+        firstFail = checkI7(before, s, a, nid, before.size > 0);
+        if (firstFail === null) firstFail = allInvariants(storeGraph(s));
+        // Keep the population bounded + the graph churning: occasionally break a
+        // bond and kill an agent, so compaction interleaves with the partition.
+        if (divisions % 5 === 0) {
+          const x = Math.floor(rnd() * s.highWater);
+          if (s.alive[x] && s.bondCount[x] > 0) breakBond(s, x, s.bondPartner[x * MB]);
+        }
+        if (s.liveCount > 400) {
+          const x = Math.floor(rnd() * s.highWater);
+          if (s.alive[x]) freeAgentSlot(s, x);
+        }
+      }
+      ok(divisions >= 1000 && firstFail === null,
+        `I7/O9 ${name}: ${divisions} divisions conserve every (partner, attributes) bond + I1–I4 hold`,
+        firstFail ?? `divisions=${divisions} rejects=${rejects}`);
+    }
+    // NEGATIVE CONTROL — checkI7 must CATCH a dropped attribute and a dropped bond.
+    {
+      const s = starStore(4);
+      const before = bondBag(s, 0);
+      const nid = divideAgent(s, 0, 1, 0, 0, 0.5, 0, false, 64, 64, 1, undefined, DEFAULT_DIVIDE_PARTITION);
+      ok(checkI7(before, s, 0, nid, true) === null, 'checkI7 passes on a real division');
+      const tampered = new Map([...before].map(([p, v], i) => [p, i === 0 ? [v[0] + 1, v[1], v[2]] : v]));
+      ok(checkI7(tampered, s, 0, nid, true) !== null, 'NEG: checkI7 CATCHES a changed bond attribute (O9)');
+      // Physically drop one inherited bond and re-check.
+      const victim = [...before.keys()].find(p => p !== nid);
+      breakBond(s, 0, victim); breakBond(s, nid, victim);
+      ok(checkI7(before, s, 0, nid, true) !== null, 'NEG: checkI7 CATCHES a bond that vanished in the division');
+    }
+  }
+
+  // --- 6. O4 — the deterministic growth law, in every mode
+  {
+    for (const [name, spec] of [
+      ['tension', { ...DEFAULT_DIVIDE_PARTITION, daughterBond: 'always' }],
+      ['alternate', { ...DEFAULT_DIVIDE_PARTITION, mode: 'alternate', daughterBond: 'always' }],
+      ['byBondAttribute', { mode: 'byBondAttribute', attributeId: 'kind', threshold: 0.5, tagB: [0, 1], daughterBond: 'always' }],
+    ]) {
+      const N0 = 4, T = 8, MB = 32;
+      const s = createAgentStore(bondCfg(N0 * (1 << T) + 64, MB), [], { bondAttrSpecs: P5_SPECS });
+      seedAgents(s, Array.from({ length: N0 }, (_, i) => ({ x: 8 + i * 4, y: 8 })), 0.5);
+      const E0 = 0;
+      let bad = null, rejects = 0;
+      for (let t = 1; t <= T && bad === null; t++) {
+        const hw = s.highWater;
+        for (let i = 0; i < hw; i++) {
+          if (!s.alive[i]) continue;
+          const nid = divideAgent(s, i, 0, 0, 0, 0.5, 0, false, 512, 512, 1, undefined, spec);
+          if (nid < 0) { rejects++; }
+        }
+        const g = decodeAgentGraph({ highWater: s.highWater, maxBonds: s.maxBonds, alive: s.alive, bondCount: s.bondCount, bondPartner: s.bondPartner });
+        const wantN = N0 * (1 << t), wantE = E0 + N0 * ((1 << t) - 1);
+        const gotE = edgeSet(g).size;
+        if (s.liveCount !== wantN) bad = `t=${t}: N=${s.liveCount}, want ${wantN} (rejects=${rejects})`;
+        else if (gotE !== wantE) bad = `t=${t}: E=${gotE}, want ${wantE}`;
+        else bad = allInvariants(storeGraph(s));
+      }
+      ok(bad === null, `O4 ${name}: N_t = N0·2^t and E_t = E0 + N0·(2^t − 1) EXACTLY for t = 1..${T} (no silent capacity rejection)`, bad ?? '');
+    }
+    // NEGATIVE CONTROL — under the `auto` policy free agents never bond, so the
+    // edge law does NOT hold: the check is sensitive to the D4 policy it tests.
+    {
+      const N0 = 4, MB = 32;
+      const s = createAgentStore(bondCfg(N0 * 16 + 64, MB), [], { bondAttrSpecs: P5_SPECS });
+      seedAgents(s, Array.from({ length: N0 }, (_, i) => ({ x: 8 + i * 4, y: 8 })), 0.5);
+      const hw0 = s.highWater;
+      for (let i = 0; i < hw0; i++) if (s.alive[i]) divideAgent(s, i, 0, 0, 0, 0.5, 0, false, 512, 512, 1, undefined, DEFAULT_DIVIDE_PARTITION);
+      const g = decodeAgentGraph({ highWater: s.highWater, maxBonds: s.maxBonds, alive: s.alive, bondCount: s.bondCount, bondPartner: s.bondPartner });
+      ok(s.liveCount === N0 * 2 && edgeSet(g).size === 0,
+        'NEG: under daughterBond=auto the SAME run yields E=0, so the O4 edge law is really testing D4');
+    }
+  }
+
+  // --- 7. the TRANSPORT: the compiler's table + the three emitters
+  {
+    const model = buildDivideModel();
+    const r = compileAgentGraph(model.agentGraphNodes, model.agentGraphEdges, migrateForHarness(model));
+    ok(!r.error, 'a divide-partition model compiles on JS', r.error ?? '');
+    ok(r.dividePartitions.length === 2, 'the table holds one entry per DISTINCT spec (2 of the 3 nodes share one)',
+      String(r.dividePartitions.length));
+    const keys = r.dividePartitions.map(dividePartitionKey);
+    ok(keys.join('') === [...keys].sort().join(''),
+      'the table is in CANONICAL (key-sorted) order — so it does not depend on node order or on which target compiled first');
+    ok(r.dividePartitions.some(p => p.mode === 'tension')
+      && r.dividePartitions.some(p => p.mode === 'byBondAttribute' && p.attributeId === 'kind' && p.tagB.join(',') === '0,1'),
+      'the table carries the resolved specs', JSON.stringify(r.dividePartitions));
+    // Every node's baked code is its OWN spec's 1-based position in that table
+    // (this is what WASM / WebGPU read; the two tension nodes must share a code).
+    const dNodes = model.agentGraphNodes.filter(n => n.data.nodeType === 'divideAgent');
+    const codes = dNodes.map(n => dividePartitionCode(n.data.config));
+    const wantCodes = dNodes.map(n => keys.indexOf(dividePartitionKey(dividePartitionFromConfig(n.data.config, migrateForHarness(model)))) + 1);
+    ok(codes.join(',') === wantCodes.join(',') && codes[0] === codes[2] && codes[0] !== codes[1],
+      'each node carries its 1-based code (deduped: the two tension nodes share one)', `${codes} vs ${wantCodes}`);
+    ok(new RegExp(`_divideRequest\\[idx\\] = ${codes[0]};`).test(r.behaviourCode)
+      && new RegExp(`_divideRequest\\[idx\\] = ${codes[1]};`).test(r.behaviourCode),
+      'JS emits BOTH partition codes into the existing divideRequest cell');
+    // ORDER-INDEPENDENCE: compiling WASM FIRST (the parity harness's order) must
+    // bake the SAME codes. This is the hazard the `_stopIdx` convention has.
+    {
+      const m2 = buildDivideModel();
+      compileAgentGraphWasmForModel(migrateForHarness(m2));   // WASM first…
+      const wasmFirst = m2.agentGraphNodes.filter(n => n.data.nodeType === 'divideAgent').map(n => dividePartitionCode(n.data.config));
+      compileAgentGraph(m2.agentGraphNodes, m2.agentGraphEdges, migrateForHarness(m2));  // …then JS
+      const then = m2.agentGraphNodes.filter(n => n.data.nodeType === 'divideAgent').map(n => dividePartitionCode(n.data.config));
+      ok(wasmFirst.join(',') === codes.join(',') && then.join(',') === codes.join(','),
+        'the codes are ORDER-INDEPENDENT and IDEMPOTENT (WASM-first gives the same numbers)',
+        `${wasmFirst} / ${then} vs ${codes}`);
+    }
+    // WebGPU emits the same codes.
+    const gpu = compileAgentGraphWebGPUForModel(migrateForHarness(model));
+    const gpuSrc = gpu?.shaderCode ?? '';
+    // The WGSL writes the run by BASE (`agentF32[<base>u + idx] = <code>.0;`), so
+    // anchor on the divideRequest run's own base rather than on the field name.
+    const drBase = gpu?.layout?.f32Base?.divideRequest ?? -1;
+    const drWrite = drBase === 0 ? 'agentF32[idx] = ' : `agentF32[${drBase}u + idx] = `;
+    ok(!gpu.error && gpuSrc.includes(`${drWrite}1.0;`) && gpuSrc.includes(`${drWrite}2.0;`),
+      'WebGPU emits the same 1-based codes (exact in f32, ROUNDED on readback)',
+      gpu?.error ?? `no "${drWrite}{1,2}.0;" in the shader`);
+    // WASM compiles + differs from the single-default variant (the code is baked).
+    const wasmOk = isAgentGraphWasmSupported(migrateForHarness(model));
+    ok(wasmOk, 'the WASM gate accepts a divide-partition model (no new node type, no new lane)');
+    // BYTE IDENTITY at the emit level: a model whose ONLY Divide Agent node uses a
+    // non-default partition still emits code 1 — the mode lives in the TABLE, so
+    // switching modes cannot move a single byte of any target's output.
+    {
+      const m1 = buildDivideModel({ single: 'tension' }), m2 = buildDivideModel({ single: 'alternate' });
+      const r1 = compileAgentGraph(m1.agentGraphNodes, m1.agentGraphEdges, migrateForHarness(m1));
+      const r2 = compileAgentGraph(m2.agentGraphNodes, m2.agentGraphEdges, migrateForHarness(m2));
+      ok(r1.behaviourCode === r2.behaviourCode,
+        'a single-node model emits IDENTICAL code for tension and alternate (the mode rides the table)');
+      ok(r1.dividePartitions[0].mode === 'tension' && r2.dividePartitions[0].mode === 'alternate',
+        'and the two shipped TABLES differ — which is where the mode actually lives');
+      const w1 = compileAgentGraphWasmForModel(migrateForHarness(m1));
+      const w2 = compileAgentGraphWasmForModel(migrateForHarness(m2));
+      ok(w1.bytes && w2.bytes && w1.bytes.length === w2.bytes.length
+        && w1.bytes.every((b, i) => b === w2.bytes[i]),
+        'WASM bytes are identical too');
+    }
+  }
+}
+
+/** An agent graph with three Divide Agent nodes: two default (tension) and one
+ *  `byBondAttribute`, so the compiler's table must DEDUPE to two entries. */
+function buildDivideModel({ single = null } = {}) {
+  // DETERMINISTIC ids: the byte-identity assertion below compares two models'
+  // emitted code, and a random id would make them differ for a reason that has
+  // nothing to do with the partition.
+  let seq = 0;
+  const nid = (p) => `${p}${seq++}`;
+  const aN = [], aEd = [];
+  const an = (t, c) => { const n = { id: nid('a'), type: 'caNode', position: { x: 0, y: 0 }, data: { nodeType: t, config: c } }; aN.push(n); return n; };
+  const aE = (s2, sp, tt, tp, cat) => aEd.push({ id: nid('e'), source: s2.id, target: tt.id, sourceHandle: `output_${cat}_${sp}`, targetHandle: `input_${cat}_${tp}` });
+  const bs = an('behaviourStep', {});
+  const chain = single
+    ? [an('divideAgent', { partition: single, partitionAttributeId: single === 'byBondAttribute' ? 'kind' : '', daughterBond: 'auto' })]
+    : [
+      an('divideAgent', { partition: 'tension', daughterBond: 'auto' }),
+      an('divideAgent', { partition: 'byBondAttribute', partitionAttributeId: 'kind', partTag_1: true, daughterBond: 'auto' }),
+      an('divideAgent', { partition: 'tension', daughterBond: 'auto' }),
+    ];
+  aE(bs, 'do', chain[0], 'do', 'flow');
+  for (let i = 1; i < chain.length; i++) aE(chain[i - 1], 'next', chain[i], 'do', 'flow');
+  return {
+    schemaVersion: 1,
+    properties: { name: 'Divide Partition Test', dimension: '2d', gridWidth: 32, gridHeight: 32, gridDepth: 1, topology: '2d-grid', boundaryTreatment: 'torus', useWasm: false, useWebGPU: false },
+    topologyMode: { gridCells: false, agents: true },
+    centerBased: {
+      enabled: true, maxAgents: 64, maxBonds: 6, worldWidth: 32, worldHeight: 32, seedCount: 8,
+      seedPattern: 'scatter', defaultRadius: 0.5, growthRate: 0, repulsionStiffness: 0, adhesionStiffness: 0,
+      interactionRange: 1.5, drag: 1, timeStep: 0.1, momentum: 0, maxSpeed: 0, neighbourQueryRadius: 8,
+      useBondingPhysics: false, autoBond: false, bondStiffness: 1, bondRestLength: 1, formDistance: 1.2,
+      breakDistance: 2.0, agentTarget: 'wasm', agentUpdateMode: 'async', bondRequestDepth: 8,
+      agentCapabilities: AGENT_CAPS({ bonds: 'data', division: true }),
+    },
+    attributes: [], modelAttributes: [], neighborhoods: [],
+    agentAttributes: [],
+    bondAttributes: [{ id: 'kind', name: 'Kind', type: 'tag', defaultValue: '0', description: '', tagOptions: ['apical', 'basal'] }],
+    variables: [], agentVariables: [], indicators: [], mappings: [],
+    graphNodes: [], graphEdges: [], agentGraphNodes: aN, agentGraphEdges: aEd, macroDefs: [],
+  };
+}
+
 tierA();
 tierB();
 await tierC();
@@ -1878,6 +2319,7 @@ tierD();
 tierE();
 tierF();
 tierG();
+tierH();
 
 console.log(`\n${fail === 0 ? 'GRAPH-REWRITE HARNESS ✓' : 'GRAPH-REWRITE HARNESS ✗'}  (${pass} passed, ${fail} failed)`);
 rmSync(entryPath, { force: true });

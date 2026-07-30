@@ -1474,8 +1474,9 @@ export function HelpView() {
               path to a glued cluster.</li>
             <li><strong>Divide Agent</strong> &mdash; split the agent into two daughters along its
               <strong> tension axis</strong> (the net-stretch direction of its bonds), so a glued
-              cluster cleaves along its mechanical axis. Each bond is handed to the nearer
-              daughter and a daughter&ndash;daughter bond keeps the tissue connected. A
+              cluster cleaves along its mechanical axis. <strong>Partition</strong> says which bonds
+              each daughter inherits &mdash; see &ldquo;Dividing: which daughter gets which
+              bond?&rdquo; below. A
               <strong> Division Event</strong> root (optional) runs once per daughter so you can
               give them different attribute values (asymmetric inheritance).</li>
             <li><strong>Kill Agent</strong> &mdash; remove the agent (apoptosis); all its bonds
@@ -1692,6 +1693,39 @@ export function HelpView() {
             list &mdash; then <strong>nothing at all</strong> happens: you never get the edge removed
             and its replacement missing. That is what lets a rule keep every node's degree exactly
             constant while the topology churns underneath it.
+          </p>
+          <h3 className={styles.h3}>Dividing: which daughter gets which bond?</h3>
+          <p className={styles.p}>
+            When an agent divides, its bonds have to be shared out. By default that happens by
+            <strong> geometry</strong> &mdash; each partner goes to whichever daughter it is nearer.
+            That is right for tissue, but a graph-rewriting rule is <em>defined</em> by which edges
+            end up where, and geometry is exactly the thing you cannot say. So <em>Divide Agent</em>
+            offers a <strong>Partition</strong>:
+          </p>
+          <ul className={styles.list}>
+            <li><strong>By tension axis</strong> &mdash; the geometric split (the default, unchanged).</li>
+            <li><strong>Alternate A / B</strong> &mdash; bonds alternate between the daughters in
+              slot order. Deterministic, needs no attribute; the quickest way to halve a hub.</li>
+            <li><strong>By bond attribute</strong> &mdash; a <em>bond attribute</em> you name picks
+              the daughter. A <strong>binary</strong> attribute sends <code>false</code> to A and
+              <code> true</code> to B; a <strong>tag</strong> gets one A/B tick box per option (so
+              the rule reads like what it means &mdash; &ldquo;daughter A takes the <em>apical</em>
+              bonds&rdquo;); an <strong>integer / decimal</strong> compares against a threshold you
+              set (below &rarr; A, at-or-above &rarr; B).</li>
+          </ul>
+          <p className={styles.p}>
+            A second setting, <strong>A&ndash;B bond</strong>, decides whether the two daughters are
+            bonded to each other: <em>when mother was bonded</em> (the default &mdash; a lone agent's
+            daughters drift apart), <em>always</em> (keeps a rewritten graph connected through every
+            split) or <em>never</em> (the deliberate &ldquo;split this node in two&rdquo; rewrite).
+          </p>
+          <p className={styles.p}>
+            Whichever partition you pick, <strong>nothing is lost</strong>: every bond the mother
+            had ends up on exactly one daughter, still carrying its own bond-attribute values, and
+            division is still all-or-nothing &mdash; if a daughter's bond list would overflow, the
+            whole division is skipped and the agent is left untouched. If the attribute you named is
+            deleted, the node falls back to the tension axis <em>and</em> shows a warning badge, so a
+            partition is never silently wrong.
           </p>
           <h3 className={styles.h3}>Spawning Agents (Create &rarr; Add, in either event)</h3>
           <p className={styles.p}>

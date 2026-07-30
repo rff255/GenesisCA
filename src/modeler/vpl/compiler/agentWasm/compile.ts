@@ -119,6 +119,7 @@ import { colorConstantHasAlpha } from '../../nodes/GetColorConstantNode';
 import { viewCosHalf } from '../../nodes/GetAgentsInViewNode';
 import { cellFieldAttrsOf, bondAttrsOf } from '../../../../model/attributeScope';
 import { BOND_REQ_ID_BIAS, BOND_REQ_NONE, BOND_REQUEST_NODE_TYPES, bondReqSlotsForModel } from '../bondRequestQueue';
+import { dividePartitionCode, assignDividePartitionCodes } from '../dividePartition';
 import { encodeAttrValue } from '../../../../model/attrValueEncoding';
 import {
   computeAgentMemoryLayout, computeAgentMaxHashBins, AGENT_NEARBY_SCRATCH_SLOTS,
@@ -2717,8 +2718,13 @@ function compileFlowNode(ctx: AgentWasmCtx, nodeId: string): void {
       break;
     }
     case 'divideAgent': {
-      // _divideRequest[idx]=1; _divideAxisX[idx]=<axisX|NaN>; ...; _divideAsym[idx]=<asym|0.5>
-      em.localGet(ctx.idxLocal); em.i32Const(ctx.layout.u8['divideRequest']!); em.op(OP_I32_ADD); em.i32Const(1); em.i32Store8();
+      // _divideRequest[idx]=<partition code>; _divideAxisX[idx]=<axisX|NaN>; ...; _divideAsym[idx]=<asym|0.5>
+      // P5: the request cell carries the 1-based DIVISION PARTITION code, baked by
+      // `assignDividePartitionCodes` in flattenAgentGraph (model-derived and
+      // key-sorted, so it agrees with the JS compiler whatever order they run in).
+      // Code 1 = the pre-P5 literal, so a default model's bytes are unchanged.
+      em.localGet(ctx.idxLocal); em.i32Const(ctx.layout.u8['divideRequest']!); em.op(OP_I32_ADD);
+      em.i32Const(dividePartitionCode(node.data.config)); em.i32Store8();
       emitAxisWrite(ctx, node, 'axisX', ctx.layout.f64['divideAxisX']!);
       emitAxisWrite(ctx, node, 'axisY', ctx.layout.f64['divideAxisY']!);
       if (ctx.is3d) emitAxisWrite(ctx, node, 'axisZ', ctx.layout.f64['divideAxisZ']!);
@@ -4707,6 +4713,10 @@ function flattenAgentGraph(nodes: GraphNode[], edges: GraphEdge[], model: CAMode
   // lowered arithmeticOperator/getConstant nodes are in the agent allowlist).
   ({ nodes: n, edges: e } = expandComposites(n, e, model));
   e = canonicalizeAccessorEdges(n, e, model);
+  // P5 — bake each Divide Agent node's 1-based DIVISION PARTITION code. The
+  // table is MODEL-derived and key-sorted, so this agrees with the JS compiler
+  // whatever order the two run in (the parity harness compiles WASM FIRST).
+  assignDividePartitionCodes(n, model);
   return { nodes: n, edges: e, model };
 }
 

@@ -53,6 +53,7 @@ import { expandForceToAgents } from '../forceToAgentsExpand';
 import { expandNeighbourCensus } from '../censusExpand';
 import { expandComposites } from '../expandComposites';
 import { BOND_REQ_ID_BIAS, BOND_REQ_NONE, bondReqSlotsForModel } from '../bondRequestQueue';
+import { dividePartitionCode, assignDividePartitionCodes } from '../dividePartition';
 import { injectAgentLinkedOutputMappings } from '../agentLinkedOutputMappings';
 import { lowerVectorAttrs, expandVectorAttributes } from '../vectorAttr';
 import { lowerFacingSource } from '../facingSource';
@@ -2367,7 +2368,11 @@ function compileFlowNode(ctx: AgentWgpuCtx, nodeId: string): void {
       // to the JS path's NaN default. We must NOT emit a NaN literal/bitcast here —
       // WGSL/Naga constant-folds `bitcast<f32>(0x7fc00000u)` into a NaN constant and
       // rejects it ("value nan cannot be represented as 'f32'"), failing the shader.
-      ctx.lines.push(`  ${f32At(ctx, 'divideRequest', 'idx')} = 1.0;`);
+      // P5: the request cell carries the 1-based DIVISION PARTITION code (baked by
+      // the JS compileAgentGraph, which runs first in SimulatorView on the same
+      // node config objects). It is small and integral, so it is exact in f32 and
+      // the readback ROUNDS it. Code 1 = the pre-P5 literal `1.0`.
+      ctx.lines.push(`  ${f32At(ctx, 'divideRequest', 'idx')} = ${dividePartitionCode(node.data.config)}.0;`);
       const ax = resolveOptionalF32(ctx, node, 'axisX');
       const ay = resolveOptionalF32(ctx, node, 'axisY');
       ctx.lines.push(`  ${f32At(ctx, 'divideAxisX', 'idx')} = ${ax ?? '0.0'};`);
@@ -3386,6 +3391,10 @@ function flattenAgentGraph(nodes: GraphNode[], edges: GraphEdge[], model: CAMode
   // the gate + emitter see the graph, so a vector agent model runs on WebGPU.
   ({ nodes: n, edges: e } = expandComposites(n, e, model));
   e = canonicalizeAccessorEdges(n, e, model);
+  // P5 — bake each Divide Agent node's 1-based DIVISION PARTITION code. The
+  // table is MODEL-derived and key-sorted, so this agrees with the JS compiler
+  // whatever order the two run in (the parity harness compiles WASM FIRST).
+  assignDividePartitionCodes(n, model);
   return { nodes: n, edges: e, model };
 }
 

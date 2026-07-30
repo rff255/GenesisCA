@@ -2318,7 +2318,15 @@ export async function readbackAgentStep(rt: AgentWebGPURuntime, s: AgentStore): 
     s.density[i] = f[denB + i]!;
     s.age[i] = f[ageB + i]!;
     // Structural requests — round flags to ints (the engine arrays are Uint8/Int32).
-    s.divideRequest[i] = f[drB + i]! >= 0.5 ? 1 : 0;
+    // P5: `divideRequest` is no longer a bare 0/1 flag — it carries the 1-based
+    // DIVISION PARTITION code (the index into the compiler's partition table + 1),
+    // so it must be ROUNDED, not clamped to 1. `Math.min(255, …)` matters because
+    // the CPU array is a Uint8Array: an out-of-range value would wrap modulo 256
+    // and could alias a DIFFERENT partition spec instead of degrading to none.
+    {
+      const dr = f[drB + i]!;
+      s.divideRequest[i] = dr >= 0.5 ? Math.min(255, Math.round(dr)) : 0;
+    }
     s.divideAxisX[i] = f[daxB + i]!; s.divideAxisY[i] = f[dayB + i]!;
     s.divideAsym[i] = f[dasymB + i]!;
     // P4 - the STRUCTURAL REQUEST QUEUE: copy the agent's WHOLE entry block, not

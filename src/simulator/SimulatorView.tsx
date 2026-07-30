@@ -22,6 +22,7 @@ import { agentTargetOf, resolveMaxBonds } from '../model/centerBased';
 import { bondAttrsOf } from '../model/attributeScope';
 import { compileAgentGraphWasmForModel, isAgentGraphWasmSupported, buildAgentLayoutExtras } from '../modeler/vpl/compiler/agentWasm/compile';
 import { bondReqSlotsForModel } from '../modeler/vpl/compiler/bondRequestQueue';
+import type { DividePartitionSpec } from '../modeler/vpl/compiler/dividePartition';
 import type { AgentLayoutExtras } from './engine/agentEngine';
 import { compileAgentGraphWebGPUForModel, isAgentGraphWebGPUSupported } from '../modeler/vpl/compiler/agentWebgpu/compile';
 import { computeAgentWebGPULayout, type AgentWebGPULayout } from '../modeler/vpl/compiler/agentWebgpu/layout';
@@ -2600,7 +2601,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
   // (Decision D-TARGET). PR-A2 returns a placeholder (agents seed + render but
   // don't behave); PR-A3 wires the real compileAgentGraph over
   // model.agentGraphNodes (the behaviourStep loop + value-outs + force hooks).
-  const compileAgentModel = useCallback((stopIdxBase = 0, dimsModel?: CAModel): { behaviourCode?: string; initCode?: string; divisionCode?: string; outputMappingCodes?: Array<{ mappingId: string; code: string }>; stopMessages: string[]; colorViewer: string; error?: string; agentTarget: 'js' | 'wasm' | 'webgpu'; agentWasmBytes?: Uint8Array; agentWasmViewerGuardIds?: string[]; agentLayoutExtras?: AgentLayoutExtras; agentWasmLayoutSig?: { maxHashBins: number; totalBytes: number }; agentResidencyClean?: boolean; agentWebgpuBehaviourShader?: string; agentWebgpuForceShader?: string; agentWebgpuMaxAgents?: number; agentWebgpuMaxHashBins?: number; agentWebgpuLayout?: AgentWebGPULayout; agentRenderLayout?: AgentWebGPULayout; agentWebgpuUsesI32Write?: boolean; agentWebgpuUsage?: { usesBondStore?: boolean; usesBondStoreWrite?: boolean; usesIndicators?: boolean; usesAux?: boolean; usesSpawn?: boolean; usesStop?: boolean; usesForceScatter?: boolean }; agentWebgpuOmShaders?: Array<{ mappingId: string; code: string; usesBondStore: boolean; usesBondStoreWrite?: boolean; usesIndicators: boolean; usesAux: boolean }>; agentWebgpuOmSupported?: boolean } => {
+  const compileAgentModel = useCallback((stopIdxBase = 0, dimsModel?: CAModel): { behaviourCode?: string; initCode?: string; divisionCode?: string; outputMappingCodes?: Array<{ mappingId: string; code: string }>; stopMessages: string[]; dividePartitions?: DividePartitionSpec[]; colorViewer: string; error?: string; agentTarget: 'js' | 'wasm' | 'webgpu'; agentWasmBytes?: Uint8Array; agentWasmViewerGuardIds?: string[]; agentLayoutExtras?: AgentLayoutExtras; agentWasmLayoutSig?: { maxHashBins: number; totalBytes: number }; agentResidencyClean?: boolean; agentWebgpuBehaviourShader?: string; agentWebgpuForceShader?: string; agentWebgpuMaxAgents?: number; agentWebgpuMaxHashBins?: number; agentWebgpuLayout?: AgentWebGPULayout; agentRenderLayout?: AgentWebGPULayout; agentWebgpuUsesI32Write?: boolean; agentWebgpuUsage?: { usesBondStore?: boolean; usesBondStoreWrite?: boolean; usesIndicators?: boolean; usesAux?: boolean; usesSpawn?: boolean; usesStop?: boolean; usesForceScatter?: boolean }; agentWebgpuOmShaders?: Array<{ mappingId: string; code: string; usesBondStore: boolean; usesBondStoreWrite?: boolean; usesIndicators: boolean; usesAux: boolean }>; agentWebgpuOmSupported?: boolean } => {
     // A simulator Resize / image-import overrides the live grid dims WITHOUT
     // touching model state, and the agent WASM/WebGPU compilers bake dims-derived
     // layout regions (the spatial-hash reserve, fieldTotal). Compiling from the
@@ -2735,7 +2736,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
         Math.max(1, Math.floor((m.centerBased?.maxAgents as number) ?? 2000)), 0, undefined, [], { gridDepth: renderDepth },
       );
     }
-    return { behaviourCode: ag.behaviourCode || undefined, initCode: ag.initCode || undefined, divisionCode: ag.divisionCode || undefined, outputMappingCodes: ag.outputMappingCodes && ag.outputMappingCodes.length ? ag.outputMappingCodes : undefined, stopMessages: ag.stopMessages, colorViewer, error: ag.error || undefined, agentTarget, agentWasmBytes, agentWasmViewerGuardIds, agentLayoutExtras, agentWasmLayoutSig, agentResidencyClean, agentWebgpuBehaviourShader, agentWebgpuForceShader, agentWebgpuMaxAgents, agentWebgpuMaxHashBins, agentWebgpuLayout, agentRenderLayout, agentWebgpuUsesI32Write, agentWebgpuUsage, agentWebgpuOmShaders, agentWebgpuOmSupported };
+    return { behaviourCode: ag.behaviourCode || undefined, initCode: ag.initCode || undefined, divisionCode: ag.divisionCode || undefined, outputMappingCodes: ag.outputMappingCodes && ag.outputMappingCodes.length ? ag.outputMappingCodes : undefined, stopMessages: ag.stopMessages, dividePartitions: ag.dividePartitions, colorViewer, error: ag.error || undefined, agentTarget, agentWasmBytes, agentWasmViewerGuardIds, agentLayoutExtras, agentWasmLayoutSig, agentResidencyClean, agentWebgpuBehaviourShader, agentWebgpuForceShader, agentWebgpuMaxAgents, agentWebgpuMaxHashBins, agentWebgpuLayout, agentRenderLayout, agentWebgpuUsesI32Write, agentWebgpuUsage, agentWebgpuOmShaders, agentWebgpuOmSupported };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [model.agentGraphNodes, model.agentGraphEdges, model.topologyMode?.agents, model.attributes, model.agentAttributes, model.mappings, model.centerBased]);
 
@@ -5792,6 +5793,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       // Shipped on every target so the store's array shapes and the emitters'
       // baked stride are ONE number (bondReqSlotsForModel is the single source).
       agentBondReqSlots: bondReqSlotsForModel(model),
+      agentDividePartitions: agentResult.dividePartitions,
       // PR5 (C-D1): whether the agent graph reads/writes the cell field. Drives
       // the WebGPU-grid field bridge (a no-field model does 0 per-step
       // readbacks). Cheap boolean — leave the JS/WASM grid path untouched.
@@ -6260,6 +6262,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       // Shipped on every target so the store's array shapes and the emitters'
       // baked stride are ONE number (bondReqSlotsForModel is the single source).
       agentBondReqSlots: bondReqSlotsForModel(model),
+      agentDividePartitions: agentResult.dividePartitions,
         centerBased: model.centerBased,
         // PR5 (C-D1): re-detect on a graph-only edit (field nodes added/removed).
         agentUsesField: agentUsesField(),

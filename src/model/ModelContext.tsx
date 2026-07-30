@@ -1029,7 +1029,19 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
         cfg => cfg[`_port_bondAttr_${action.id}`] !== undefined,
         cfg => { delete cfg[`_port_bondAttr_${action.id}`]; return cfg; },
       );
-      return { ...state, isDirty: true, model: { ...modelAfter, ...b3 } };
+      // P5 — a Divide Agent whose BOND PARTITION named this attribute would
+      // silently degrade to the geometric split. Clear the reference AND the
+      // per-tag-option table so the node's badge tells the user to re-pick.
+      const b4 = patchAllNodes(
+        { ...modelAfter, ...b3 },
+        (cfg, nt) => nt === 'divideAgent' && cfg.partitionAttributeId === action.id,
+        cfg => {
+          cfg.partitionAttributeId = '';
+          for (const k of Object.keys(cfg)) if (k.startsWith('partTag_')) delete cfg[k];
+          return cfg;
+        },
+      );
+      return { ...state, isDirty: true, model: { ...modelAfter, ...b4 } };
     }
 
     case 'UPDATE_BOND_ATTRIBUTE': {
@@ -1059,6 +1071,7 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
             (nt === 'switch' && cfg.tagAttributeId === attrId && cfg.valueType === 'tag') ||
             (nt === 'statement' && cfg.compareType === 'tag' && cfg.tagAttributeId === attrId) ||
             (nt === 'setBondAttribute' && cfg.attributeId === attrId) ||
+            (nt === 'divideAgent' && cfg.partitionAttributeId === attrId) ||
             (nt === 'formBond' && cfg[`_port_bondAttr_${attrId}`] !== undefined),
           (cfg, nt) => {
             if (nt === 'getConstant') cfg.constValue = remap(cfg.constValue);
@@ -1073,6 +1086,21 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
             }
             if (nt === 'setBondAttribute' && cfg._port_value !== undefined) cfg._port_value = remap(cfg._port_value);
             if (nt === 'formBond') cfg[`_port_bondAttr_${attrId}`] = remap(cfg[`_port_bondAttr_${attrId}`]);
+            // P5 — the Divide Agent per-tag-option daughter table is keyed by
+            // OPTION INDEX, so a rename/reorder must PERMUTE it. Without this a
+            // reorder would silently send the wrong bonds to the wrong daughter —
+            // exactly the "never silently mis-partition" rule.
+            if (nt === 'divideAgent') {
+              const moved: Record<string, boolean> = {};
+              for (const k of Object.keys(cfg)) {
+                if (!k.startsWith('partTag_')) continue;
+                const oi = Number(k.slice('partTag_'.length));
+                const ni = indexMap.get(oi);
+                if (ni !== undefined && cfg[k]) moved[`partTag_${ni}`] = true;
+                delete cfg[k];
+              }
+              for (const [k, v] of Object.entries(moved)) cfg[k] = v;
+            }
             return cfg;
           },
         );

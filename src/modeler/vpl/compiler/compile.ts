@@ -21,6 +21,7 @@ import { expandForceToAgents } from './forceToAgentsExpand';
 import { expandNeighbourCensus } from './censusExpand';
 import { expandComposites } from './expandComposites';
 import { BOND_REQUEST_NODE_TYPES, bondReqSlotsForModel } from './bondRequestQueue';
+import { assignDividePartitionCodes, type DividePartitionSpec } from './dividePartition';
 import { lowerVectorAttrs } from './vectorAttr';
 import { lowerFacingSource } from './facingSource';
 import { computeAsyncReadWriteHazards } from './asyncWriteHazard';
@@ -2361,6 +2362,13 @@ export interface AgentCompileResult {
    *  whose `mappingId` matches the active AGENT viewer after the agent step + on
    *  mutations. Empty when the model has no agent mappings. */
   outputMappingCodes: Array<{ mappingId: string; code: string }>;
+  /** P5 — the DIVISION BOND PARTITION table: one entry per DISTINCT Divide Agent
+   *  partition spec, in first-encounter order. Each node's `_divideIdx` (baked
+   *  here, read by all three emitters) is `index + 1`, and that 1-based code is
+   *  what the compiled code writes into `divideRequest` — so the mode reaches the
+   *  engine with NO new store lane, exactly like `stopMessages` / `_stopIdx`.
+   *  Empty when the agent graph has no Divide Agent node. */
+  dividePartitions: DividePartitionSpec[];
   error?: string;
 }
 
@@ -2480,12 +2488,12 @@ export function compileAgentGraph(
    *  graph's stop-message count so `[...cellStops, ...agentStops]` aligns 1-based. */
   stopIdxBase = 0,
 ): AgentCompileResult {
-  if (!model) return { behaviourCode: '', initCode: '', divisionCode: '', stopMessages: [], outputMappingCodes: [], error: 'Model required.' };
+  if (!model) return { behaviourCode: '', initCode: '', divisionCode: '', stopMessages: [], outputMappingCodes: [], dividePartitions: [], error: 'Model required.' };
 
   // Flatten macros, strip reroutes — same front-end pipeline the cell compiler runs.
   {
     const expanded = expandMacros(agentNodes, agentEdges, model);
-    if (expanded.error) return { behaviourCode: '', initCode: '', divisionCode: '', stopMessages: [], outputMappingCodes: [], error: expanded.error };
+    if (expanded.error) return { behaviourCode: '', initCode: '', divisionCode: '', stopMessages: [], outputMappingCodes: [], dividePartitions: [], error: expanded.error };
     agentNodes = expanded.nodes;
     agentEdges = expanded.edges;
   }
@@ -2560,6 +2568,17 @@ export function compileAgentGraph(
       node.data.config._stopIdx = stopIdxBase + stopMessages.length;
     }
   }
+  // P5 — the DIVISION BOND PARTITION table. Like `_stopIdx`, the per-node mode is
+  // baked onto the config and all three targets write the resulting 1-based code
+  // into the EXISTING `divideRequest` cell. UNLIKE `_stopIdx`, the table is
+  // MODEL-derived and key-SORTED (see dividePartition.ts), so it does not depend
+  // on this compiler running first — the WASM/WebGPU front-ends call the same
+  // assignment and get the same numbers whatever order they run in.
+  //
+  // A model with ONE distinct spec (every shipped model) assigns code 1 — the
+  // literal the pre-P5 emitters wrote — so switching a mode cannot move a byte of
+  // any target's output. The mode lives entirely in the shipped table.
+  const dividePartitions = assignDividePartitionCodes(agentNodes, model);
   // FIX 3 — the Set Cell Looks viewer-comparison hoist (`_isV_<safeId>`). Without
   // it a real (non-__current__) mappingId references an undefined identifier and
   // the eval'd behaviour fn throws (worker dies → generation stuck at 0).
@@ -2578,7 +2597,7 @@ export function compileAgentGraph(
 
   const behaviourNode = agentNodes.find(n => n.data.nodeType === 'behaviourStep');
   if (!behaviourNode) {
-    return { behaviourCode: '', initCode: '', divisionCode: '', stopMessages, outputMappingCodes: [], error: 'No Behaviour Step node in the agent graph.' };
+    return { behaviourCode: '', initCode: '', divisionCode: '', stopMessages, outputMappingCodes: [], dividePartitions, error: 'No Behaviour Step node in the agent graph.' };
   }
 
   const { nodeMap, inputToSource, inputToSources, flowOutputToTargets } = buildAdjacency(agentNodes, agentEdges);
@@ -2625,7 +2644,7 @@ export function compileAgentGraph(
       const src = inputToSource.get(`${id}:${targetPort}`);
       if (src && nodeMap.get(src.nodeId)?.data.nodeType === 'createAgent') continue;
       const label = getNodeDef(node.data.nodeType)?.label ?? node.data.nodeType;
-      return { behaviourCode: '', initCode: '', divisionCode: '', stopMessages, outputMappingCodes: [],
+      return { behaviourCode: '', initCode: '', divisionCode: '', stopMessages, outputMappingCodes: [], dividePartitions,
         error: `"${label}" writes another agent's state, which races that agent's own update in Synchronous agent mode. Switch to Asynchronous agent mode (Model Properties > Bond-Graph Agents), or target a Create Agent handle (spawn configuration).` };
     }
   }
@@ -2803,7 +2822,7 @@ export function compileAgentGraph(
   }
 
   return {
-    behaviourCode, initCode, divisionCode, stopMessages, outputMappingCodes,
+    behaviourCode, initCode, divisionCode, stopMessages, outputMappingCodes, dividePartitions,
     error: omErrors.length > 0 ? omErrors.join('\n') : undefined,
   };
 }

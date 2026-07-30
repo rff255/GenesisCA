@@ -14,7 +14,7 @@ import type { MacroPort } from '../../model/types';
 import { useModel } from '../../model/ModelContext';
 import { countMacroInstances } from '../../model/macroImport';
 import { typeDisplayName } from '../../model/typeLabels';
-import { cellAttrsOf, cellFieldAttrsOf } from '../../model/attributeScope';
+import { cellAttrsOf, cellFieldAttrsOf, bondAttrsOf } from '../../model/attributeScope';
 import { vectorPortDims } from './compiler/vectorAttr';
 import { is3dModelLike } from './compiler/niCodec';
 import { MULTI_ATTR_TYPES, MULTI_ATTR_SET_TYPES, multiAttrExtraCount, buildExtraSlotPorts, resolveSlotAttr } from './compiler/multiAttrExpand';
@@ -1252,6 +1252,94 @@ function CaNodeComponent({ id, data }: NodeProps) {
             <option value="relative">Relative (from reference)</option>
           </select>
         )}
+
+        {/* Get / Set Bond Attribute (Graph-Rewriting Automata, P2): per-EDGE state.
+            Bond attributes are a THIRD id-space, so — like the field-bridge nodes —
+            the attribute is picked HERE rather than in the Attributes panel's
+            active-graph list. */}
+        {(nodeData.nodeType === 'getBondAttribute' || nodeData.nodeType === 'setBondAttribute') && (
+          <select
+            className={styles.select}
+            value={(nodeData.config.attributeId as string) || ''}
+            onChange={e => updateConfig('attributeId', e.target.value)}
+          >
+            <option value="">Bond attribute...</option>
+            {bondAttrsOf(model).map(a => (
+              <option key={a.id} value={a.id}>{a.name}</option>
+            ))}
+          </select>
+        )}
+
+        {/* Divide Agent (Graph-Rewriting Automata, P5): the BOND PARTITION — which
+            edges each daughter inherits — plus the daughter-daughter bond policy
+            (decision D4). `tension` is the default geometric split; `alternate`
+            needs no attribute; `byBondAttribute` reads a named bond attribute
+            (a per-OPTION table for a tag, a threshold otherwise — bool pins 0.5,
+            so false → A and true → B). */}
+        {nodeData.nodeType === 'divideAgent' && (() => {
+          const mode = (nodeData.config.partition as string) || 'tension';
+          const partAttr = bondAttrsOf(model).find(a => a.id === nodeData.config.partitionAttributeId);
+          return (
+            <>
+              <select
+                className={styles.select}
+                value={mode}
+                onChange={e => updateConfig('partition', e.target.value)}
+                title="How the mother's bonds are split between the two daughters"
+              >
+                <option value="tension">Bonds: by tension axis</option>
+                <option value="alternate">Bonds: alternate A / B</option>
+                <option value="byBondAttribute">Bonds: by bond attribute</option>
+              </select>
+              {mode === 'byBondAttribute' && (
+                <select
+                  className={styles.select}
+                  value={(nodeData.config.partitionAttributeId as string) || ''}
+                  onChange={e => updateConfig('partitionAttributeId', e.target.value)}
+                >
+                  <option value="">Bond attribute...</option>
+                  {bondAttrsOf(model).map(a => (
+                    <option key={a.id} value={a.id}>{a.name}</option>
+                  ))}
+                </select>
+              )}
+              {mode === 'byBondAttribute' && partAttr && partAttr.type === 'tag' && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                  {(partAttr.tagOptions ?? []).map((opt, oi) => (
+                    <label key={oi} style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: '0.62rem' }}>
+                      <input
+                        type="checkbox"
+                        checked={!!nodeData.config[`partTag_${oi}`]}
+                        onMouseDown={e => e.stopPropagation()}
+                        onChange={e => updateConfig(`partTag_${oi}`, e.target.checked)}
+                      />
+                      <span>{opt}{nodeData.config[`partTag_${oi}`] ? ' → B' : ' → A'}</span>
+                    </label>
+                  ))}
+                </div>
+              )}
+              {mode === 'byBondAttribute' && partAttr && (partAttr.type === 'integer' || partAttr.type === 'float') && (
+                <InlineNumberInput
+                  className={styles.numberInput}
+                  value={String(nodeData.config.partitionThreshold ?? '0.5')}
+                  onChange={(v: string) => updateConfig('partitionThreshold', v)}
+                  onMouseDown={(e: React.MouseEvent) => e.stopPropagation()}
+                  title="Threshold: value < t goes to daughter A, >= t to daughter B"
+                />
+              )}
+              <select
+                className={styles.select}
+                value={(nodeData.config.daughterBond as string) || 'auto'}
+                onChange={e => updateConfig('daughterBond', e.target.value)}
+                title="Whether the two daughters are bonded to each other"
+              >
+                <option value="auto">A-B bond: when mother was bonded</option>
+                <option value="always">A-B bond: always</option>
+                <option value="never">A-B bond: never</option>
+              </select>
+            </>
+          );
+        })()}
 
         {/* Neighbour Census (Graph-Rewriting Automata): the tag/bool AGENT attribute
             whose state values become the output ports, plus the neighbour SOURCE

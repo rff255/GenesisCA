@@ -29,6 +29,8 @@
 import type { CenterBasedConfig } from '../../model/types';
 import { cbNum, resolveBondRequestDepth, resolveMaxBonds } from '../../model/centerBased';
 import { BOND_REQ_ID_BIAS } from '../../modeler/vpl/compiler/bondRequestQueue';
+import type { DividePartitionSpec } from '../../modeler/vpl/compiler/dividePartition';
+import { DEFAULT_DIVIDE_PARTITION } from '../../modeler/vpl/compiler/dividePartition';
 
 export type AgentAttrKind = 'uint8' | 'int32' | 'float64';
 export type AgentTypedArray = Uint8Array | Int32Array | Float64Array;
@@ -1637,16 +1639,27 @@ function tensionAxis(store: AgentStore, i: number, torus: boolean, W: number, H:
 /** Divide agent `i` along its tension axis. Returns the new daughter's id, or a
  *  negative rejection code (-1 = maxAgents full, -2 = a daughter's bond list
  *  would overflow). On rejection the agent is UNCHANGED (no half-division). The
- *  mother slot becomes daughter A; a free-list slot becomes daughter B. Each
- *  partner bond goes to the nearer daughter; a daughter-daughter bond is added
- *  when the mother was bonded (a free agent's daughters separate). Daughters
- *  inherit the mother's attributes verbatim (the divisionEvent graph can
- *  reassign them afterwards). */
+ *  mother slot becomes daughter A; a free-list slot becomes daughter B.
+ *
+ *  `partition` (P5) says HOW the mother's bonds are split — geometrically
+ *  (`tension`, the default and byte-identical to the pre-P5 behaviour),
+ *  `alternate` (A, B, A, B... in slot order), or `byBondAttribute` (a named P2
+ *  bond attribute selects the daughter). It also carries decision D4, the
+ *  daughter-daughter bond policy (`auto` = only when the mother was bonded).
+ *  Omitting it reproduces the pre-P5 semantics exactly.
+ *
+ *  The DAUGHTER PLACEMENT is always along the resolved axis — the partition
+ *  chooses which EDGES move, never where the daughters land.
+ *
+ *  Daughters inherit the mother's attributes verbatim (the divisionEvent graph
+ *  can reassign them afterwards), and every inherited bond keeps its own bond
+ *  attributes (oracle O9) — the partition only changes WHICH daughter holds it. */
 export function divideAgent(
   store: AgentStore, i: number,
   axisX: number, axisY: number, axisZ: number, asym: number,
   defaultLambda: number, torus: boolean, W: number, H: number, D: number,
   outAxis?: number[],
+  partition: DividePartitionSpec = DEFAULT_DIVIDE_PARTITION,
 ): number {
   if (!store.alive[i]) return -1;
   const is3d = D > 1;
@@ -1680,7 +1693,34 @@ export function divideAgent(
   const base = i * mb, n = store.bondCount[i]!;
   const sides: boolean[] = []; // true = side A (+m̂)
   let sideGE = 0, sideLT = 0;
+  // P5 — the DECLARATIVE partition modes. `attrArr` is non-null only for a
+  // `byBondAttribute` spec whose attribute the store actually allocated (a
+  // deleted / bonds-off attribute degrades to `tension` here, matching
+  // `dividePartitionFromConfig` and the node's validation badge — never a silent
+  // mis-partition). `tension` leaves the loop below verbatim.
+  const attrArr = partition.mode === 'byBondAttribute' && partition.attributeId
+    ? (store.bondAttrs[partition.attributeId] ?? null)
+    : null;
+  const useTagB = attrArr !== null && partition.tagB.length > 0;
   for (let k = 0; k < n; k++) {
+    if (attrArr !== null) {
+      // A named bond attribute picks the daughter: a per-OPTION table for a tag,
+      // else `value < threshold` -> A (which covers bool with threshold 0.5).
+      const v = attrArr[base + k]!;
+      let toB: boolean;
+      if (useTagB) { const oi = v | 0; toB = oi >= 0 && oi < partition.tagB.length ? partition.tagB[oi] === 1 : false; }
+      else toB = v >= partition.threshold;
+      const side = !toB;
+      sides.push(side);
+      if (side) sideGE++; else sideLT++;
+      continue;
+    }
+    if (partition.mode === 'alternate') {
+      const side = (k & 1) === 0; // A, B, A, B... in SLOT order
+      sides.push(side);
+      if (side) sideGE++; else sideLT++;
+      continue;
+    }
     const p = store.bondPartner[base + k]!;
     let dx = store.x[p]! - cx, dy = store.y[p]! - cy;
     let side: boolean;
@@ -1699,9 +1739,20 @@ export function divideAgent(
     sides.push(side);
     if (side) sideGE++; else sideLT++;
   }
-  const addDaughterBond = n > 0;
+  // Decision D4 — the daughter-daughter bond. `auto` is the pre-P5 rule (only
+  // when the mother was bonded, so a FREE agent's daughters separate); `always`
+  // keeps a rewritten graph connected through every split; `never` is the
+  // deliberate "split this node in two, disconnected" rewrite.
+  // (`always` still needs a bond store — with the Bonds capability off, mb === 0,
+  //  and asking for a bond there would make the capacity check reject EVERY
+  //  division instead of just skipping a bond that cannot exist.)
+  const addDaughterBond = partition.daughterBond === 'always' ? mb > 0
+    : partition.daughterBond === 'never' ? false
+      : n > 0;
   // 3. capacity pre-check — reject the WHOLE division on overflow (A keeps its
-  //    side + the daughter bond; B gets its side + the daughter bond).
+  //    side + the daughter bond; B gets its side + the daughter bond). Counts the
+  //    RESOLVED partition's sides, so every mode inherits the whole-or-nothing
+  //    rule (invariant I5) rather than only the geometric one.
   const aFinal = sideGE + (addDaughterBond ? 1 : 0);
   const bFinal = sideLT + (addDaughterBond ? 1 : 0);
   if (aFinal > mb || bFinal > mb) return -2;
@@ -1752,9 +1803,9 @@ export function divideAgent(
 
   // 7. reattach — move side-B partners' bonds from A(i) to B(newId). The snapshot
   // carries the USER BOND ATTRIBUTES too, so a re-formed bond arrives at daughter B
-  // with the mother's values UNCHANGED (P2 = pure inheritance; P5 adds explicit
-  // per-bond assignment). Must be read BEFORE the first breakBond — the compaction
-  // swap moves slots around underneath us.
+  // with the mother's values UNCHANGED — oracle O9: the partition chooses WHICH
+  // daughter holds a bond, never what the bond carries. Must be read BEFORE the
+  // first breakBond — the compaction swap moves slots around underneath us.
   const nAttr = store.bondAttrSpecs.length;
   const snap: Array<{ p: number; L: number; lam: number; typ: number; attrs: number[] | null }> = [];
   for (let k = 0; k < n; k++) {

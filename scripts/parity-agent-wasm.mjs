@@ -1005,6 +1005,103 @@ function buildBondAttrModel() {
   };
 }
 
+// ---------------------------------------------------------------------------
+// P5 — the DIVISION BOND PARTITION.
+//
+// The partition is per-NODE but applied by the ENGINE, so the compiler bakes a
+// 1-based code onto each Divide Agent node and every target writes it into the
+// EXISTING `divideRequest` cell. Two things must hold and only one of them is
+// parity:
+//   • JS and WASM write the SAME code (parity — `divideRequest` is compared);
+//   • the code an agent receives is the code of the node IT reached, and the two
+//     nodes' codes DIFFER (the value invariant — parity alone would pass happily
+//     if both targets emitted a constant 1, which is exactly the pre-P5 literal
+//     and therefore the most likely way to get this wrong).
+// Even agents take the tension node, odd agents the byBondAttribute node.
+// ---------------------------------------------------------------------------
+function buildDividePartitionModel() {
+  const used = new Set();
+  const nid = (p) => { let id; do { id = p + Math.random().toString(36).slice(2, 8); } while (used.has(id)); used.add(id); return id; };
+  const aN = [], aEd = [];
+  const an = (t, c) => { const n = { id: nid('a'), type: 'caNode', position: { x: 0, y: 0 }, data: { nodeType: t, config: c } }; aN.push(n); return n; };
+  const aE = (s, sp, tt, tp, cat) => aEd.push({ id: nid('e'), source: s.id, target: tt.id, sourceHandle: `output_${cat}_${sp}`, targetHandle: `input_${cat}_${tp}` });
+
+  const bs = an('behaviourStep', {});
+  const gsh = an('getSelfHandle', {});
+  // odd(self) = self - 2*floor(self/2)  → 0 for even, 1 for odd
+  const half = an('arithmeticOperator', { operation: '/', _port_y: '2' });
+  const flr = an('arithmeticOperator', { operation: 'floor' });
+  const dbl = an('arithmeticOperator', { operation: '*', _port_y: '2' });
+  const odd = an('arithmeticOperator', { operation: '-' });
+  const isOdd = an('statement', { operation: '>', _port_y: '0.5' });
+  const cond = an('conditional', {});
+  const dA = an('divideAgent', { partition: 'tension', daughterBond: 'auto', _port_asymmetry: '0.5' });
+  const dB = an('divideAgent', { partition: 'byBondAttribute', partitionAttributeId: 'lbl', partitionThreshold: '3', daughterBond: 'always', _port_asymmetry: '0.5' });
+  // Record which branch ran + the raw request code the target wrote, so the
+  // invariant can compare them WITHOUT re-deriving the emit.
+  // BOTH branches stamp `branch` explicitly — the harness seeds agent attributes
+  // with a deterministic non-zero pattern, so relying on the default would not
+  // distinguish "took the else branch" from "was never written".
+  const markOdd = an('setAttribute', { attributeId: 'branch', _port_value: '1' });
+  const markEven = an('setAttribute', { attributeId: 'branch', _port_value: '0' });
+
+  aE(gsh, 'value', half, 'x', 'value');
+  aE(half, 'result', flr, 'x', 'value');
+  aE(flr, 'result', dbl, 'x', 'value');
+  aE(gsh, 'value', odd, 'x', 'value');
+  aE(dbl, 'result', odd, 'y', 'value');
+  aE(odd, 'result', isOdd, 'x', 'value');
+  aE(isOdd, 'result', cond, 'condition', 'value');
+  aE(bs, 'do', cond, 'check', 'flow');
+  aE(cond, 'then', dB, 'do', 'flow');
+  aE(dB, 'next', markOdd, 'do', 'flow');
+  aE(cond, 'else', dA, 'do', 'flow');
+  aE(dA, 'next', markEven, 'do', 'flow');
+
+  return {
+    schemaVersion: 1,
+    properties: { name: 'Division Partition Parity Test', dimension: '2d', gridWidth: 24, gridHeight: 24, gridDepth: 1, topology: '2d-grid', boundaryTreatment: 'torus', useWasm: false, useWebGPU: false },
+    topologyMode: { gridCells: false, agents: true },
+    centerBased: { enabled: true, maxAgents: 100, maxBonds: 6, worldWidth: 24, worldHeight: 24, seedCount: 40, seedPattern: 'scatter', defaultRadius: 0.5, growthRate: 0, repulsionStiffness: 0, adhesionStiffness: 0, interactionRange: 1.5, drag: 1, timeStep: 0.1, momentum: 0, maxSpeed: 0, neighbourQueryRadius: 8, useBondingPhysics: false, autoBond: false, bondStiffness: 0, bondRestLength: 1.5, formDistance: 1.2, breakDistance: 2.0, agentTarget: 'wasm', agentUpdateMode: 'async',
+      agentCapabilities: { motion: 'force', body: true, collision: 'off', bonds: 'data', autoBond: false, growth: false, division: true, lifespan: false, populationBirth: false, populationDeath: false, sensing: false, sensingHeadingSource: 'velocity', orientation: false, fieldCoupling: false, appearance: true } },
+    attributes: [], modelAttributes: [], neighborhoods: [],
+    agentAttributes: [{ id: 'branch', name: 'Branch', type: 'integer', defaultValue: '0' }],
+    bondAttributes: [
+      { id: 'w', name: 'Weight', type: 'float', defaultValue: '0' },
+      { id: 'lbl', name: 'Label', type: 'integer', defaultValue: '0' },
+    ],
+    variables: [], agentVariables: [], indicators: [], mappings: [],
+    graphNodes: [], graphEdges: [], agentGraphNodes: aN, agentGraphEdges: aEd, macroDefs: [],
+  };
+}
+
+/** THE VALUE INVARIANT for the division-partition synthetic. Recomputes the
+ *  expected code from the store itself (parity of a wrong constant would pass):
+ *  odd agents took the `byBondAttribute` node, even agents the `tension` node,
+ *  the two codes must DIFFER, and both must be ≥ 1 (0 would mean no request). */
+function dividePartitionInvariant(st) {
+  let evenCode = null, oddCode = null;
+  for (let i = 0; i < st.highWater; i++) {
+    if (!st.alive[i]) continue;
+    const code = st.divideRequest[i];
+    if (code < 1) return `agent ${i}: divideRequest ${code} — no division was requested at all`;
+    if (i % 2 === 0) {
+      if (st.attrRead.branch[i] !== 0) return `agent ${i} (even) took the ODD branch`;
+      if (evenCode === null) evenCode = code;
+      else if (evenCode !== code) return `even agents disagree: ${evenCode} vs ${code}`;
+    } else {
+      if (st.attrRead.branch[i] !== 1) return `agent ${i} (odd) did not take the odd branch`;
+      if (oddCode === null) oddCode = code;
+      else if (oddCode !== code) return `odd agents disagree: ${oddCode} vs ${code}`;
+    }
+  }
+  if (evenCode === null || oddCode === null) return 'the run never exercised both branches';
+  if (evenCode === oddCode) {
+    return `both Divide Agent nodes wrote the SAME code ${evenCode} — the partition never reaches the engine`;
+  }
+  return null;
+}
+
 /** Ring + chords, then BREAK a deterministic subset so the ragged bond slots have
  *  already been compacted (swap-with-last) before the behaviour ever runs. */
 function setupBondAttrStores(stores) {
@@ -1247,6 +1344,10 @@ entries.push({
 entries.push({
   name: '[synthetic] Bond request QUEUE (4 ops + a 12-iteration loop, overflow)',
   raw: buildBondQueueModel(), setup: setupBondAttrStores, invariant: bondQueueInvariant,
+});
+entries.push({
+  name: '[synthetic] Division partition (two Divide Agent nodes, distinct codes)',
+  raw: buildDividePartitionModel(), setup: setupBondAttrStores, invariant: dividePartitionInvariant,
 });
 entries.push({ name: '[synthetic] Flow diamond (conditional → shared getRandom chain)', raw: buildDiamondModel() });
 entries.push({ name: '[synthetic] RNG draw order (branch draw + post-branch draws)', raw: buildRngOrderModel() });

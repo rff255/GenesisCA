@@ -38,6 +38,7 @@ import {
   type AgentStore, type AgentSeedSpec, type AgentStatePayload, type AgentAttrSpec, type SpatialHash,
   type AgentLayoutExtras,
 } from './agentEngine';
+import { DEFAULT_DIVIDE_PARTITION, type DividePartitionSpec } from '../../modeler/vpl/compiler/dividePartition';
 import { instantiateAgentWasm } from '../../modeler/vpl/compiler/agentWasm/compile';
 import { buildAgentAbiArgs, type AgentAbiShape, type AgentAbiRuntime } from '../../modeler/vpl/compiler/agentAbi';
 import { computeAgentWebGPULayout, type AgentWebGPULayout } from '../../modeler/vpl/compiler/agentWebgpu/layout';
@@ -238,6 +239,13 @@ interface InitMsg {
    *  lockstep). `1` (a model whose agent graph uses no queue verb) is the pre-P4
    *  single-slot shape. */
   agentBondReqSlots?: number;
+  /** P5 — the DIVISION BOND PARTITION table (one entry per DISTINCT Divide Agent
+   *  partition spec, in the compiler's first-encounter order). The compiled agent
+   *  code writes a 1-based code into `divideRequest`; the structural phase looks
+   *  the spec up here. Absent / empty ⇒ every division uses
+   *  `DEFAULT_DIVIDE_PARTITION` (the pre-P5 geometric split). See
+   *  [dividePartition.ts](../../modeler/vpl/compiler/dividePartition.ts). */
+  agentDividePartitions?: DividePartitionSpec[];
   /** PR5 (C-D1): true when the agent graph reads/writes the cell field
    *  (sampleField / fieldGradient / readCellsUnder / affectCellsUnder /
    *  secreteToField). Drives the WebGPU-grid field bridge: only a field model
@@ -338,7 +346,7 @@ interface PaintManualMsg {
   activeViewer: string;
 }
 interface ResetMsg { type: 'reset'; activeViewer: string; reqId?: number }
-interface RecompileMsg { type: 'recompile'; stepCode: string; initCode?: string; gridInitCode?: string; skipIsolatedEmpty?: SkipIsolatedEmptyConfig; inputColorCodes: Array<{ mappingId: string; code: string }>; outputMappingCodes: Array<{ mappingId: string; code: string }>; stopMessages?: string[]; updateMode: string; asyncScheme: string; wasmStepBytes?: Uint8Array; wasmStepError?: string; wasmExports?: string[]; viewerIds?: Record<string, number>; webgpuShaderCode?: string; webgpuShaderError?: string; webgpuEntryPoints?: WebGPUEntryPoints; webgpuLayout?: WebGPULayout; webgpuStopCheckInterval?: number; variegated?: VariegatedPayload; interactionTables?: InteractionTablePayload[]; agentBehaviourCode?: string; agentInitCode?: string; agentDivisionCode?: string; agentColorViewer?: string; agentOutputMappingCodes?: Array<{ mappingId: string; code: string }>; agentHasSprites?: boolean; agentBondReqSlots?: number; centerBased?: CenterBasedConfig; agentUsesField?: boolean; agentUsesDensity?: boolean; agentResidencyClean?: boolean; agentTarget?: 'js' | 'wasm' | 'webgpu'; agentWasmBytes?: Uint8Array; agentWasmViewerGuardIds?: string[]; agentLayoutExtras?: AgentLayoutExtras; agentWasmLayoutSig?: { maxHashBins: number; totalBytes: number }; agentWebgpuBehaviourShader?: string; agentWebgpuForceShader?: string; agentWebgpuMaxAgents?: number; agentWebgpuMaxHashBins?: number; agentWebgpuLayout?: AgentWebGPULayout; agentRenderLayout?: AgentWebGPULayout; agentWebgpuUsesI32Write?: boolean; agentWebgpuUsage?: { usesBondStore?: boolean; usesBondStoreWrite?: boolean; usesIndicators?: boolean; usesAux?: boolean; usesSpawn?: boolean; usesStop?: boolean; usesForceScatter?: boolean }; agentWebgpuOmShaders?: AgentOMShaderInput[] }
+interface RecompileMsg { type: 'recompile'; stepCode: string; initCode?: string; gridInitCode?: string; skipIsolatedEmpty?: SkipIsolatedEmptyConfig; inputColorCodes: Array<{ mappingId: string; code: string }>; outputMappingCodes: Array<{ mappingId: string; code: string }>; stopMessages?: string[]; updateMode: string; asyncScheme: string; wasmStepBytes?: Uint8Array; wasmStepError?: string; wasmExports?: string[]; viewerIds?: Record<string, number>; webgpuShaderCode?: string; webgpuShaderError?: string; webgpuEntryPoints?: WebGPUEntryPoints; webgpuLayout?: WebGPULayout; webgpuStopCheckInterval?: number; variegated?: VariegatedPayload; interactionTables?: InteractionTablePayload[]; agentBehaviourCode?: string; agentInitCode?: string; agentDivisionCode?: string; agentColorViewer?: string; agentOutputMappingCodes?: Array<{ mappingId: string; code: string }>; agentHasSprites?: boolean; agentBondReqSlots?: number; agentDividePartitions?: DividePartitionSpec[]; centerBased?: CenterBasedConfig; agentUsesField?: boolean; agentUsesDensity?: boolean; agentResidencyClean?: boolean; agentTarget?: 'js' | 'wasm' | 'webgpu'; agentWasmBytes?: Uint8Array; agentWasmViewerGuardIds?: string[]; agentLayoutExtras?: AgentLayoutExtras; agentWasmLayoutSig?: { maxHashBins: number; totalBytes: number }; agentWebgpuBehaviourShader?: string; agentWebgpuForceShader?: string; agentWebgpuMaxAgents?: number; agentWebgpuMaxHashBins?: number; agentWebgpuLayout?: AgentWebGPULayout; agentRenderLayout?: AgentWebGPULayout; agentWebgpuUsesI32Write?: boolean; agentWebgpuUsage?: { usesBondStore?: boolean; usesBondStoreWrite?: boolean; usesIndicators?: boolean; usesAux?: boolean; usesSpawn?: boolean; usesStop?: boolean; usesForceScatter?: boolean }; agentWebgpuOmShaders?: AgentOMShaderInput[] }
 interface UpdateLookupTableMsg {
   type: 'updateLookupTable';
   attrId: string;
@@ -884,6 +892,10 @@ let hasAgentSprites = false;
  *  `createAgentStore`, so the store's request arrays and the emitted stride are
  *  ONE number (the baked-offset lockstep). 1 = the pre-P4 single-slot shape. */
 let agentBondReqSlots = 1;
+/** P5 — the DIVISION BOND PARTITION table the compiler shipped (index = the
+ *  `divideRequest` code minus 1). Empty ⇒ every division takes
+ *  `DEFAULT_DIVIDE_PARTITION`, the pre-P5 geometric split. */
+let agentDividePartitions: DividePartitionSpec[] = [];
 /** Ship per-agent velocity in the render snapshot even without sprites — set by
  *  `setAgentSnapshotVelocity` while the simulator's vision-cone display is on
  *  (the cones need a heading). Default false → the payload is byte-identical to
@@ -2682,8 +2694,14 @@ function runAgentStructuralPhase(): void {
     // z component of the requested axis (0 in 2D ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â divideAxisZ is 2D-ZERO).
     const axisZ = is3d ? s.divideAxisZ[i]! : 0;
     const asym = s.divideAsym[i]! || 0.5;
+    // P5 - the request cell carries a 1-based code into the partition TABLE the
+    // compiler shipped (the stopMessages/_stopIdx precedent), so each Divide Agent
+    // node keeps its own partition without a new store lane. An unknown code (a
+    // stale request, or a model compiled before the table existed) falls back to
+    // the pre-P5 geometric split.
+    const partition = agentDividePartitions[s.divideRequest[i]! - 1] ?? DEFAULT_DIVIDE_PARTITION;
     s.divideRequest[i] = 0;
-    const newId = divideAgent(s, i, axisX, axisY, axisZ, asym, lambda, torus, W, H, D, outAxis);
+    const newId = divideAgent(s, i, axisX, axisY, axisZ, asym, lambda, torus, W, H, D, outAxis, partition);
     if (newId < 0) { divideOverflow = true; continue; }
     // Stamp the RESOLVED axis (engine eigensolve or the explicit override) onto
     // both daughters so the divisionEvent's `divideAxisZ` buffer reads it (3D).
@@ -5642,6 +5660,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       agentColorViewer = msg.agentColorViewer || '';
       hasAgentSprites = !!msg.agentHasSprites;
       agentBondReqSlots = Math.max(1, Math.floor(msg.agentBondReqSlots ?? 1));
+      agentDividePartitions = msg.agentDividePartitions ?? [];
       // PR6b-1 / PR7: resolve the agent target + stash the per-target payload
       // BEFORE initAgents (which reads agentTarget to decide whether to back the
       // store on WebAssembly.Memory). 'wasm' needs bytes; 'webgpu' needs the two
@@ -6332,6 +6351,9 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
         // a later reinit (reset / dims change) in lockstep with the code just
         // recompiled, rather than re-allocating against the previous stride.
         if (rc.agentBondReqSlots !== undefined) agentBondReqSlots = Math.max(1, Math.floor(rc.agentBondReqSlots));
+        // P5 — the partition table rides EVERY recompile (a partition-mode edit is
+        // a graph-only change, so it must not need a full reinit to take effect).
+        agentDividePartitions = rc.agentDividePartitions ?? [];
         compileAgentFns(rc.agentBehaviourCode, rc.agentInitCode, rc.agentDivisionCode, rc.agentOutputMappingCodes);
         // PR6b-1 / PR7: re-resolve the agent target + stash the per-target payload.
         // If the WASM backing requirement changes (JS/WebGPU ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬Â WASM, since wasm
