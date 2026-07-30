@@ -1,0 +1,386 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>GenesisCA &mdash; Recording options plan</title>
+<style>
+  :root{
+    --bg:#0c0d10; --panel:#15171c; --panel2:#1b1e25; --line:#2a2f3a;
+    --txt:#d8dce4; --dim:#8b93a3; --accent:#e8a13a; --accent-soft:rgba(232,161,58,.14);
+    --red:#e05050; --green:#5fbf72; --cyan:#4cc9f0; --amber:#e0a050;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--txt);
+       font:14px/1.6 -apple-system,Segoe UI,Roboto,sans-serif;padding:32px 20px 80px}
+  .wrap{max-width:1080px;margin:0 auto}
+  h1{font-size:1.6rem;margin:0 0 4px;color:var(--accent)}
+  h2{font-size:1.05rem;margin:38px 0 12px;padding-bottom:6px;border-bottom:1px solid var(--line);color:#fff}
+  h3{font-size:.86rem;margin:20px 0 8px;color:var(--dim);text-transform:uppercase;letter-spacing:.06em}
+  p{margin:8px 0}
+  .sub{color:var(--dim);margin:0 0 6px}
+  code{background:#22262e;padding:1px 5px;border-radius:3px;font-size:.86em;font-family:ui-monospace,Consolas,monospace}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:16px 18px;margin:12px 0}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  @media(max-width:820px){.grid2{grid-template-columns:1fr}}
+  table{border-collapse:collapse;width:100%;font-size:.83rem;margin:8px 0}
+  th,td{border:1px solid var(--line);padding:5px 8px;text-align:left}
+  th{background:var(--panel2);color:var(--dim);font-weight:600}
+  .mono{font-family:ui-monospace,Consolas,monospace}
+  .ok{color:var(--green)} .bad{color:var(--red)} .warn{color:var(--amber)} .acc{color:var(--accent)}
+  .tag{display:inline-block;padding:1px 7px;border-radius:10px;font-size:.7rem;font-weight:600;letter-spacing:.03em}
+  .tag.new{background:var(--accent-soft);color:var(--accent);border:1px solid rgba(232,161,58,.4)}
+  .tag.same{background:#20242c;color:var(--dim);border:1px solid var(--line)}
+
+  /* ── transport bar mock ─────────────────────────────── */
+  .bar{display:flex;align-items:center;gap:6px;flex-wrap:wrap;
+       background:#0f1116;border:1px solid var(--line);border-radius:7px;padding:8px 10px}
+  .btn{background:#20242c;border:1px solid #333a46;color:var(--txt);
+       border-radius:4px;padding:5px 9px;font-size:.76rem;font-family:ui-monospace,Consolas,monospace;white-space:nowrap}
+  .btn.rec{color:var(--red)}
+  .sel{background:#20242c;border:1px solid #333a46;color:#eaeaea;
+       border-radius:4px;padding:5px 8px;font-size:.68rem;white-space:nowrap}
+  .sel.hl{border-color:var(--accent);box-shadow:0 0 0 2px var(--accent-soft)}
+  .div{width:1px;height:20px;background:var(--line);margin:0 4px}
+  .callout{font-size:.74rem;color:var(--accent);margin-top:7px}
+  .stats{display:inline-flex;gap:12px;background:#0f1116;border:1px solid var(--line);
+         border-radius:6px;padding:6px 11px;font-size:.76rem;font-family:ui-monospace,Consolas,monospace;margin-top:8px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>Recording options &mdash; quality mode, lossless capture, capture caps</h1>
+<p class="sub">Illustrated companion to <code>PLAN_RECORDING_OPTIONS.md</code>. Implements the user's answers to
+<code>INVESTIGATION_STREAMING_RECORDING.md</code> &sect;8.</p>
+
+<!-- ══════════════ DECISIONS ══════════════ -->
+<h2>1 &middot; The decisions</h2>
+<table>
+<tr><th style="width:34px">#</th><th>question</th><th>answer</th><th style="width:96px">status</th></tr>
+<tr><td>1</td><td>Is dropping frames acceptable when the encoder can't keep up?</td>
+    <td>Ship <strong>both</strong>. Drop stays the default; add an opt-in <em>never skip</em> that slows the simulation.</td>
+    <td><span class="tag new">this plan</span></td></tr>
+<tr><td>2</td><td>Keep all-intra as the default, or move it?</td>
+    <td><strong>Move it.</strong> GOP&nbsp;30 becomes the default; all-intra becomes <em>Archival</em>.</td>
+    <td><span class="tag new">this plan</span></td></tr>
+<tr><td>3</td><td>Tier&nbsp;2 destination (stream to disk)?</td>
+    <td><strong>Deferred by decision.</strong> Marked in the investigation so it isn't re-litigated.</td>
+    <td><span class="tag same">deferred</span></td></tr>
+<tr><td>4</td><td>Tauri binary save command?</td><td>Owned by a separate session.</td>
+    <td><span class="tag same">not here</span></td></tr>
+<tr><td>5</td><td>3D capture resolution?</td><td><strong>Cap the long edge at 1280.</strong></td>
+    <td><span class="tag new">this plan</span></td></tr>
+<tr><td>6</td><td>Move <code>RECORD_MAX</code> off the VP9 4:4:4 freeze width?</td>
+    <td><strong>Yes</strong> &mdash; but the bisect changed what &ldquo;off it&rdquo; means (&sect;2).</td>
+    <td><span class="tag new">this plan</span></td></tr>
+</table>
+
+<!-- ══════════════ BISECT ══════════════ -->
+<h2>2 &middot; The bisect falsified the threshold model</h2>
+<p>The shipped guard is <code>VP9_444_MAX_WIDTH = 960</code> &mdash; <em>&ldquo;profile&nbsp;1 only below width&nbsp;960&rdquo;</em>.
+Bisecting the original 900&nbsp;OK / 960&nbsp;FREEZE bracket produced a different rule entirely: the failure tracks the
+<strong>coded width modulo&nbsp;32</strong>, not its magnitude.</p>
+
+<div class="card">
+<svg viewBox="0 0 1000 250" width="100%" role="img" aria-label="Measured verdict by capture width">
+  <defs>
+    <marker id="ar" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto">
+      <path d="M0,0 L7,3.5 L0,7 z" fill="#8b93a3"/></marker>
+  </defs>
+  <!-- lanes -->
+  <text x="8" y="42"  fill="#5fbf72" font-size="12" font-family="monospace">FAST</text>
+  <text x="8" y="42"  fill="#5fbf72" font-size="11" font-family="monospace" dy="15">~50 ms/f</text>
+  <text x="8" y="112" fill="#e0a050" font-size="12" font-family="monospace">SLOW</text>
+  <text x="8" y="112" fill="#e0a050" font-size="11" font-family="monospace" dy="15">~800 ms/f</text>
+  <text x="8" y="182" fill="#e05050" font-size="12" font-family="monospace">FREEZE</text>
+  <text x="8" y="182" fill="#e05050" font-size="11" font-family="monospace" dy="15">never ends</text>
+  <line x1="88" y1="36"  x2="985" y2="36"  stroke="#2a2f3a"/>
+  <line x1="88" y1="106" x2="985" y2="106" stroke="#2a2f3a"/>
+  <line x1="88" y1="176" x2="985" y2="176" stroke="#2a2f3a"/>
+
+  <!-- axis -->
+  <line x1="88" y1="215" x2="985" y2="215" stroke="#8b93a3" marker-end="url(#ar)"/>
+  <text x="960" y="238" fill="#8b93a3" font-size="11">width</text>
+
+  <!-- helper: x = 88 + (w-620)*(880/680)  →  620..1300 mapped to 88..968 -->
+  <!-- FREEZE points (cw%32==0) -->
+  <g fill="#e05050" font-size="10.5" font-family="monospace" text-anchor="middle">
+    <circle cx="114" cy="176" r="6"/><text x="114" y="199">640</text>
+    <circle cx="404" cy="176" r="6"/><text x="404" y="199">864</text>
+    <circle cx="445" cy="176" r="6"/><text x="445" y="199">896</text>
+    <circle cx="477" cy="176" r="6"/><text x="477" y="199">921</text>
+    <circle cx="486" cy="176" r="6"/><text x="486" y="213">928</text>
+    <circle cx="528" cy="176" r="6"/><text x="528" y="199">960</text>
+  </g>
+  <!-- SLOW points -->
+  <g fill="#e0a050" font-size="10.5" font-family="monospace" text-anchor="middle">
+    <circle cx="450" cy="106" r="6"/><text x="450" y="94">900</text>
+    <circle cx="468" cy="106" r="6"/><text x="468" y="80">914</text>
+    <circle cx="476" cy="106" r="6"/><text x="476" y="94">920</text>
+  </g>
+  <!-- FAST points -->
+  <g fill="#5fbf72" font-size="10.5" font-family="monospace" text-anchor="middle">
+    <circle cx="424" cy="36" r="6"/><text x="424" y="24">880</text>
+    <circle cx="466" cy="36" r="7" stroke="#e8a13a" stroke-width="2.5"/><text x="466" y="24" fill="#e8a13a">912</text>
+    <circle cx="968" cy="36" r="6" fill="#4cc9f0"/><text x="968" y="24" fill="#4cc9f0">1280</text>
+    <text x="968" y="58" fill="#4cc9f0" font-size="9.5">profile 0</text>
+  </g>
+  <text x="466" y="9" fill="#e8a13a" font-size="10.5" text-anchor="middle" font-weight="bold">new RECORD_MAX</text>
+</svg>
+<p style="font-size:.78rem;color:var(--dim);margin:6px 0 0">
+  13 measurements, standalone probe (no app / no sim / no WebGPU), Chrome&nbsp;148 &middot; Windows&nbsp;10.
+  <span class="bad">640 and 864 and 896 freeze <em>today</em></span> &mdash; the shipped <code>w&nbsp;&lt;&nbsp;960</code>
+  guard lets all three through. Only the <em>width</em> matters: 912&times;<strong>928</strong> is fast, 928&times;540 freezes.
+</p>
+</div>
+
+<div class="card" style="border-color:rgba(232,161,58,.45)">
+<h3 style="margin-top:0">The rule</h3>
+<p class="mono" style="font-size:.86rem;line-height:1.9;margin:0">
+  cw = ceil(w / 8) &times; 8 &nbsp;&nbsp;<span style="color:var(--dim)">// VP9 codes width in 8-px units</span><br>
+  cw % 32 === <span class="bad">0</span> &nbsp;&rarr; <span class="bad">FREEZE</span> &mdash; renderer starved, never recovers<br>
+  cw % 32 === <span class="ok">16</span> &rarr; <span class="ok">FAST</span> &nbsp;&mdash; ~50 ms/frame, main thread responsive<br>
+  cw % 32 === <span class="warn">8</span> or <span class="warn">24</span> &rarr; <span class="warn">SLOW</span> &mdash; ~800 ms/frame, ~1 s stalls
+</p>
+<p style="margin-bottom:0;font-size:.83rem">
+  So the guard becomes a <strong>residue test requiring the one measured-fast class</strong>
+  &mdash; not merely &ldquo;avoid the frozen one&rdquo;, because the slow class stalls the main thread for a full
+  second per frame, which is the same harm in slower motion.
+</p>
+</div>
+
+<!-- ══════════════ TRANSPORT ══════════════ -->
+<h2>3 &middot; Transport bar &mdash; before / after</h2>
+
+<div class="grid2">
+  <div class="card">
+    <h3 style="margin-top:0">Before</h3>
+    <div class="bar">
+      <span class="btn">&#9654;</span><span class="btn">&#9646;&#9646;</span>
+      <span class="btn">&#9654;|</span><span class="btn">&#9632;</span>
+      <span class="btn">&#128247;</span>
+      <span class="sel">PNG (simulation) &#9662;</span>
+      <span class="btn rec">&#9210;</span>
+      <span class="sel">WebM (simulation) &#9662;</span>
+      <span class="div"></span><span class="btn">G/F 1</span>
+    </div>
+    <p style="font-size:.78rem;color:var(--dim);margin-bottom:0">
+      All-intra, 960&nbsp;px cap, always drops on overload &mdash; none of it adjustable.
+    </p>
+  </div>
+
+  <div class="card" style="border-color:rgba(232,161,58,.45)">
+    <h3 style="margin-top:0">After <span class="tag new">2 new selects</span></h3>
+    <div class="bar">
+      <span class="btn">&#9654;</span><span class="btn">&#9646;&#9646;</span>
+      <span class="btn">&#9654;|</span><span class="btn">&#9632;</span>
+      <span class="btn">&#128247;</span>
+      <span class="sel">PNG (simulation) &#9662;</span>
+      <span class="btn rec">&#9210;</span>
+      <span class="sel">WebM (simulation) &#9662;</span>
+      <span class="sel hl">Standard &#9662;</span>
+      <span class="sel hl">Skip frames &#9662;</span>
+      <span class="div"></span><span class="btn">G/F 1</span>
+    </div>
+    <p class="callout">Both new selects appear only for <strong>WebM</strong> and only while <strong>not</strong> recording &mdash;
+      so format, scope, quality and overload policy all lock together at Start.</p>
+  </div>
+</div>
+
+<div class="grid2">
+  <div class="card">
+    <h3 style="margin-top:0">Quality &#9662;</h3>
+    <table style="margin:0">
+      <tr><th style="width:96px">option</th><th>meaning</th></tr>
+      <tr><td class="acc"><strong>Standard</strong><br><span style="font-size:.72rem;color:var(--dim)">default</span></td>
+          <td>Keyframe every 30 frames. <strong class="ok">3.5&times; smaller, 1.8&times; faster</strong> (measured on dense content),
+              so the simulation runs closer to full speed while recording. Scrubbing lands on 30-frame boundaries.</td></tr>
+      <tr><td><strong>Archival</strong></td>
+          <td>Every frame a keyframe. Frame-by-frame analysis, scrub-exact, no interframe prediction bleeding across
+              stable regions. ~3.5&times; larger, ~1.8&times; slower.</td></tr>
+    </table>
+  </div>
+  <div class="card">
+    <h3 style="margin-top:0">On overload &#9662;</h3>
+    <table style="margin:0">
+      <tr><th style="width:96px">option</th><th>meaning</th></tr>
+      <tr><td class="acc"><strong>Skip frames</strong><br><span style="font-size:.72rem;color:var(--dim)">default &middot; today</span></td>
+          <td>The encoder refuses a frame when it is behind; the simulation keeps its speed and the video is missing
+              those generations. Skips are counted next to REC.</td></tr>
+      <tr><td><strong>Never skip</strong></td>
+          <td>Every captured frame is encoded. When the encoder is behind, the <em>next simulation step is held back</em>
+              until it drains &mdash; the run gets slower, the video loses nothing.</td></tr>
+    </table>
+  </div>
+</div>
+
+<h3>While recording</h3>
+<div class="bar" style="display:inline-flex">
+  <span class="btn">&#9654;</span><span class="btn">&#9646;&#9646;</span>
+  <span class="btn">&#9654;|</span><span class="btn">&#9632;</span>
+  <span class="btn">&#128247;</span><span class="sel">PNG (simulation) &#9662;</span>
+  <span class="btn rec">&#9209; 412</span>
+  <span class="div"></span><span class="btn">G/F 1</span>
+</div>
+<div>
+  <span class="stats"><span style="color:var(--red)">&#9210; REC 412f</span>
+    <span class="acc">&#9203; waiting for encoder</span></span>
+</div>
+<p style="font-size:.78rem;color:var(--dim)">
+  In <em>Never skip</em> mode the stats overlay says so while the loop is held &mdash; a slowed simulation must never read as a hang.
+  In <em>Skip frames</em> mode the same readout shows <span class="warn">&middot; 37 dropped</span> instead, exactly as today.
+</p>
+
+<!-- ══════════════ LOSSLESS FLOW ══════════════ -->
+<h2>4 &middot; How &ldquo;never skip&rdquo; works</h2>
+<p><code>draw()</code> is synchronous and cannot await the encoder &mdash; which is <em>why</em> the drop policy exists.
+So the throttle goes where the loop is <strong>already asynchronous</strong>: the step chain.</p>
+
+<div class="card">
+<svg viewBox="0 0 1000 300" width="100%" role="img" aria-label="Step pipeline with the lossless throttle">
+  <defs>
+    <marker id="a2" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+      <path d="M0,0 L8,4 L0,8 z" fill="#4cc9f0"/></marker>
+    <marker id="a3" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+      <path d="M0,0 L8,4 L0,8 z" fill="#e8a13a"/></marker>
+  </defs>
+  <g font-family="ui-monospace,Consolas,monospace" font-size="12.5">
+    <!-- boxes -->
+    <rect x="18"  y="40" width="150" height="46" rx="6" fill="#1b1e25" stroke="#333a46"/>
+    <text x="93" y="68" fill="#d8dce4" text-anchor="middle">sendNextStep()</text>
+
+    <rect x="212" y="40" width="120" height="46" rx="6" fill="#1b1e25" stroke="#333a46"/>
+    <text x="272" y="68" fill="#d8dce4" text-anchor="middle">worker</text>
+
+    <rect x="376" y="40" width="140" height="46" rx="6" fill="#1b1e25" stroke="#333a46"/>
+    <text x="446" y="68" fill="#d8dce4" text-anchor="middle">'stepped'</text>
+
+    <rect x="560" y="40" width="150" height="46" rx="6" fill="#1b1e25" stroke="#333a46"/>
+    <text x="635" y="62" fill="#d8dce4" text-anchor="middle">draw() +</text>
+    <text x="635" y="78" fill="#d8dce4" text-anchor="middle">capture frame</text>
+
+    <rect x="754" y="40" width="210" height="46" rx="6" fill="#1b1e25" stroke="#5fbf72"/>
+    <text x="859" y="62" fill="#5fbf72" text-anchor="middle">addFrame(force)</text>
+    <text x="859" y="78" fill="#8b93a3" text-anchor="middle" font-size="10.5">never refused</text>
+
+    <!-- arrows across the top -->
+    <line x1="168" y1="63" x2="206" y2="63" stroke="#4cc9f0" marker-end="url(#a2)"/>
+    <line x1="332" y1="63" x2="370" y2="63" stroke="#4cc9f0" marker-end="url(#a2)"/>
+    <line x1="516" y1="63" x2="554" y2="63" stroke="#4cc9f0" marker-end="url(#a2)"/>
+    <line x1="710" y1="63" x2="748" y2="63" stroke="#4cc9f0" marker-end="url(#a2)"/>
+
+    <!-- the gate -->
+    <rect x="560" y="150" width="404" height="82" rx="7" fill="#1a1712" stroke="#e8a13a"/>
+    <text x="762" y="174" fill="#e8a13a" text-anchor="middle" font-size="12.5">rAF tick &mdash; the throttle</text>
+    <text x="762" y="194" fill="#d8dce4" text-anchor="middle" font-size="11.5">enc.readyForNextFrame()  ?</text>
+    <text x="668" y="216" fill="#5fbf72" text-anchor="middle" font-size="11.5">yes &rarr; send step</text>
+    <text x="866" y="216" fill="#e0a050" text-anchor="middle" font-size="11.5">no &rarr; wait one rAF</text>
+
+    <path d="M762,92 L762,144" stroke="#e8a13a" marker-end="url(#a3)"/>
+    <!-- loop back -->
+    <path d="M560,191 L93,191 L93,92" fill="none" stroke="#5fbf72" stroke-width="1.6" marker-end="url(#a3)"/>
+    <text x="300" y="184" fill="#5fbf72" font-size="11">next step, once the encoder has room</text>
+
+    <!-- bound note -->
+    <text x="18" y="262" fill="#8b93a3" font-size="11.5">A frame is captured exactly once per issued step, and a step is only issued when the queue is below the cap</text>
+    <text x="18" y="280" fill="#8b93a3" font-size="11.5">&rarr; the queue is bounded by <tspan fill="#d8dce4">cap + 1</tspan>. No unbounded GPU-memory queue, and no frame ever refused.</text>
+  </g>
+</svg>
+</div>
+
+<div class="grid2">
+  <div class="card">
+    <h3 style="margin-top:0">It cannot hang</h3>
+    <table style="margin:0">
+      <tr><th style="width:150px">guard</th><th>role</th></tr>
+      <tr><td class="mono">LOSSLESS_HARD_CAP<br>= 8</td>
+          <td>Unreachable in the play loop (the throttle holds it at &le;&nbsp;2). Exists so a burst of <em>manual</em> steps
+              cannot grow the queue without bound.</td></tr>
+      <tr><td class="mono">LOSSLESS_STALL_MS<br>= 8000</td>
+          <td>An order of magnitude past the worst measured per-frame encode. On expiry the run
+              <strong>degrades to Skip mode</strong> and raises a one-time toast. Never flaps back.</td></tr>
+      <tr><td>REC readout</td><td><code>&#9203; waiting for encoder</code> &mdash; a slowed run stays legible.</td></tr>
+    </table>
+  </div>
+  <div class="card">
+    <h3 style="margin-top:0">Does a skipped frame corrupt GOP&nbsp;30?</h3>
+    <p style="margin-top:0"><strong>No &mdash; and the reasoning is checkable.</strong> A skip happens
+      <em>before submission</em>: <code>encode()</code> is never called for that frame. The encoder only ever
+      sees the frames it was given, <strong>in order</strong>, and codes each delta against the previously
+      <em>submitted</em> frame &mdash; so nothing references a frame that was never encoded.</p>
+    <p style="margin-bottom:0">The video simply jumps a few generations, exactly as under all-intra.
+      <span class="acc">Verified by decoding a with-skips GOP-30 file through <code>VideoDecoder</code></span> and
+      asserting it yields exactly <code>encodedCount</code> frames with zero errors &mdash; a size or
+      keyframe-flag check alone cannot tell &ldquo;shortened&rdquo; from &ldquo;corrupt&rdquo;.</p>
+  </div>
+</div>
+
+<!-- ══════════════ CAPS ══════════════ -->
+<h2>5 &middot; Capture-resolution caps</h2>
+<table>
+<tr><th style="width:170px">constant</th><th style="width:80px">old</th><th style="width:90px">new</th><th>why</th></tr>
+<tr><td class="mono">RECORD_MAX</td><td class="mono">960</td><td class="mono acc">912</td>
+    <td>912 &equiv; <strong class="ok">16</strong> (mod 32) &mdash; the one measured-<strong>fast</strong> class.
+        5&nbsp;% smaller than today, and unlike today it is genuinely <strong>4:4:4</strong>
+        (960 &equiv; 0 forces the profile-0 fallback, whose chroma subsampling bleeds 1-px colour transitions).</td></tr>
+<tr><td class="mono">VP9_444_MAX_WIDTH</td><td class="mono">960</td><td class="mono bad">removed</td>
+    <td>A max-width guard cannot express this failure &mdash; 640 freezes. Replaced by
+        <code>isVp9Profile1Safe(w)</code> = <code>ceil(w/8)*8 % 32 === 16</code>.</td></tr>
+<tr><td class="mono">RECORD_MAX_3D</td><td class="mono">&mdash; (uncapped)</td><td class="mono acc">1280</td>
+    <td>3D <code>readPixels</code> returns the whole drawing buffer: <strong>23&nbsp;MB/frame</strong> at DPR&nbsp;2,
+        <strong>33&nbsp;MB</strong> at 4K &mdash; the largest per-frame cost in the codebase, while 2D has been capped all along.
+        1280 &equiv; 0 &rarr; profile&nbsp;0, <span class="ok">measured fastest of all (32 ms/frame)</span>.
+        <strong>3D therefore records in 4:2:0</strong> &mdash; the documented consequence.</td></tr>
+</table>
+
+<div class="card">
+<h3 style="margin-top:0">Margin, in the space the failure actually lives in</h3>
+<svg viewBox="0 0 1000 92" width="100%" role="img" aria-label="Residue ring showing 16 as maximally distant from 0">
+  <g font-family="ui-monospace,Consolas,monospace" font-size="12">
+    <line x1="60" y1="46" x2="940" y2="46" stroke="#2a2f3a" stroke-width="2"/>
+    <g text-anchor="middle">
+      <circle cx="60"  cy="46" r="9" fill="#e05050"/><text x="60"  y="76" fill="#e05050">0</text>
+      <circle cx="280" cy="46" r="7" fill="#e0a050"/><text x="280" y="76" fill="#e0a050">8</text>
+      <circle cx="500" cy="46" r="11" fill="#5fbf72"/><text x="500" y="76" fill="#5fbf72">16</text>
+      <circle cx="720" cy="46" r="7" fill="#e0a050"/><text x="720" y="76" fill="#e0a050">24</text>
+      <circle cx="940" cy="46" r="9" fill="#e05050"/><text x="940" y="76" fill="#e05050">32 &equiv; 0</text>
+      <text x="500" y="22" fill="#5fbf72">every capture width snapped here</text>
+      <text x="170" y="36" fill="#8b93a3" font-size="10.5">&larr; 16 coded px &rarr;</text>
+      <text x="830" y="36" fill="#8b93a3" font-size="10.5">&larr; 16 coded px &rarr;</text>
+    </g>
+  </g>
+</svg>
+<p style="font-size:.83rem;margin-bottom:0">
+  <code>&equiv;&nbsp;16</code> is the <strong>maximum possible distance</strong> from the frozen class, and every capture width is
+  snapped to an exact multiple of 8 so rounding cannot drift across. That is a stronger guarantee than a linear
+  margin &mdash; the failure is not linear in width.
+  <code>snapRecordWidth(w)</code> lowers arbitrary widths (portrait canvases, tall grids) into the fast class,
+  deriving the height from the same scale so the aspect ratio is preserved exactly; it engages only above 320&nbsp;px,
+  bounding the resolution change under 10&nbsp;%.
+</p>
+</div>
+
+<p style="font-size:.8rem;color:var(--dim)">
+  <strong>Residual uncertainty, stated plainly.</strong> The residue rule is inferred from 13 points on one machine and one
+  Chrome build; the cause (likely a libvpx tile/threading path) is unknown, and a different core count could shift it.
+  The mitigation is that GenesisCA controls its own capture widths, and the fallback was measured fast at the
+  <em>worst</em> residue. Anything unexpected degrades to 4:2:0 &mdash; never to a freeze.
+</p>
+
+<!-- ══════════════ SCOPE ══════════════ -->
+<h2>6 &middot; Out of scope</h2>
+<div class="grid2">
+  <div class="card"><h3 style="margin-top:0">Tier 2 &mdash; stream to disk</h3>
+    <p style="margin-bottom:0"><strong>Deferred by decision.</strong> File System Access / OPFS is not implemented.
+      The investigation's measurements stand and its recommendation is marked
+      <code>DEFERRED BY DECISION</code> so it is not re-litigated. Tier&nbsp;1 already moved the ceiling from ~105&nbsp;s to
+      4.4&times;&ndash;541&times; longer, and GOP&nbsp;30 multiplies that again by ~3.5&times; on the dense content that bounds it.</p></div>
+  <div class="card"><h3 style="margin-top:0">Bitrate</h3>
+    <p style="margin-bottom:0">Unchanged (<code>max(4 Mbps, w&middot;h&middot;fps&middot;6)</code>). The investigation measured a 40&nbsp;Mbps cap as a
+      further 3.1&times; win, but at an <em>unmeasured</em> quality cost &mdash; a separate decision, not folded in silently.
+      The Tauri binary-save gap is owned by a different session.</p></div>
+</div>
+
+</div>
+</body>
+</html>
