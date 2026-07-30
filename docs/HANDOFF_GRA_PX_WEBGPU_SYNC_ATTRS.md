@@ -138,7 +138,7 @@ and read state back via `getState`. Remember the f64 trap: `getState.agents.*` s
 **State**: **DONE**
 
 **Commit(s)**
-- `feat(agents): honour sync agent update mode on the WebGPU target`
+- `59556d2` — `feat(agents): honour sync agent update mode on the WebGPU target`
 
 **Files touched**
 
