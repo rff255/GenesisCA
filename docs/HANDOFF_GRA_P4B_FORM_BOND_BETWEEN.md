@@ -141,7 +141,7 @@ instruction). A new lane goes in `AGENT_REQUEST_QUEUE_FIELDS` + `AGENT_GPU_QUEUE
 **Commit(s)**
 - `e1649af` — `fix(agents): the Create Agent handle is not hoistable on the WASM agent target`
   (a **PRE-EXISTING, phase-BLOCKING** defect, in its own commit — see "Assumptions" below)
-- `<P4b>` — `feat(agents): Form Bond Between - the third-party bond verb (GRA P4b)`
+- `6492a51` — `feat(agents): Form Bond Between - the third-party bond verb (GRA P4b)`
 
 **Files touched**
 
