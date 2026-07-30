@@ -1136,9 +1136,117 @@ entries.push({
   name: '[synthetic] Neighbour Census (3-option tag over the bonded 1-ring)',
   raw: buildCensusModel(), setup: setupRingBondStores, invariant: censusInvariant,
 });
+
+// ---------------------------------------------------------------------------
+// P4 - the STRUCTURAL REQUEST QUEUE synthetic.
+//
+// One agent issues FOUR explicit ops (break / form / rewire / rewire-with-an-
+// unresolvable-side) and then a Loop of 12 more forms - 16 ops against the
+// default depth 8, so the queue fills, four loop ops land in real entries and the
+// remaining eight all hit the OVERFLOW BUCKET (each overwriting the last, which is
+// the documented behaviour: the bucket only has to be OCCUPIED for the drain to
+// report the overflow). The parity harness runs the BEHAVIOUR only, so what is
+// compared is exactly what the three targets write into the queue.
+// ---------------------------------------------------------------------------
+function buildBondQueueModel() {
+  const used = new Set();
+  const nid = (p) => { let id; do { id = p + Math.random().toString(36).slice(2, 8); } while (used.has(id)); used.add(id); return id; };
+  const aN = [], aEd = [];
+  const an = (t, c) => { const n = { id: nid('a'), type: 'caNode', position: { x: 0, y: 0 }, data: { nodeType: t, config: c } }; aN.push(n); return n; };
+  const aE = (s, sp, tt, tp, cat) => aEd.push({ id: nid('e'), source: s.id, target: tt.id, sourceHandle: `output_${cat}_${sp}`, targetHandle: `input_${cat}_${tp}` });
+  // `self + k` as a value-node chain (deterministic per agent, no modulo needed:
+  // an out-of-range id is a legal REQUEST, the drain is what rejects it).
+  const gsh = an('getSelfHandle', {});
+  const off = (k) => { const n = an('arithmeticOperator', { operation: '+', _port_y: String(k) }); aE(gsh, 'value', n, 'x', 'value'); return n; };
+
+  const bs = an('behaviourStep', {});
+  const brk = an('breakBond', {});
+  const frm = an('formBond', { _port_restLength: '3', _port_stiffness: '5', _port_bondAttr_bw: '21' });
+  const rw = an('rewireBond', { _port_restLength: '7', _port_stiffness: '11', _port_bondAttr_bw: '22' });
+  const rwBad = an('rewireBond', { _port_restLength: '13', _port_stiffness: '17', _port_bondAttr_bw: '23' });
+  const lp = an('loop', { mode: 'count', _port_count: '12' });
+  const lpForm = an('formBond', { _port_restLength: '0', _port_stiffness: '0', _port_bondAttr_bw: '24' });
+
+  aE(bs, 'do', brk, 'do', 'flow');
+  aE(off(1), 'result', brk, 'targetAgent', 'value');
+  aE(brk, 'next', frm, 'do', 'flow');
+  aE(off(2), 'result', frm, 'targetAgent', 'value');
+  aE(frm, 'next', rw, 'do', 'flow');
+  aE(off(3), 'result', rw, 'fromAgent', 'value');
+  aE(off(4), 'result', rw, 'toAgent', 'value');
+  aE(rw, 'next', rwBad, 'do', 'flow');
+  aE(off(-1000), 'result', rwBad, 'fromAgent', 'value');   // unresolvable -> BOTH lanes NONE
+  aE(off(5), 'result', rwBad, 'toAgent', 'value');
+  aE(rwBad, 'next', lp, 'do', 'flow');
+  aE(lp, 'body', lpForm, 'do', 'flow');
+  // target = self + 100 + loopIndex
+  const base100 = off(100);
+  const withIdx = an('arithmeticOperator', { operation: '+' });
+  aE(base100, 'result', withIdx, 'x', 'value');
+  aE(lp, 'index', withIdx, 'y', 'value');
+  aE(withIdx, 'result', lpForm, 'targetAgent', 'value');
+
+  return {
+    schemaVersion: 1,
+    properties: { name: 'Bond Request Queue Parity Test', dimension: '2d', gridWidth: 24, gridHeight: 24, gridDepth: 1, topology: '2d-grid', boundaryTreatment: 'torus', useWasm: false, useWebGPU: false },
+    topologyMode: { gridCells: false, agents: true },
+    centerBased: { enabled: true, maxAgents: 100, maxBonds: 6, worldWidth: 24, worldHeight: 24, seedCount: 40, seedPattern: 'scatter', defaultRadius: 0.5, growthRate: 0, repulsionStiffness: 0, adhesionStiffness: 0, interactionRange: 1.5, drag: 1, timeStep: 0.1, momentum: 0, maxSpeed: 0, neighbourQueryRadius: 8, useBondingPhysics: false, autoBond: false, bondStiffness: 0, bondRestLength: 1.5, formDistance: 1.2, breakDistance: 2.0, agentTarget: 'wasm', agentUpdateMode: 'async',
+      agentCapabilities: { motion: 'force', body: true, collision: 'off', bonds: 'data', autoBond: false, growth: false, division: false, lifespan: false, populationBirth: false, populationDeath: false, sensing: false, sensingHeadingSource: 'velocity', orientation: false, fieldCoupling: false, appearance: true } },
+    attributes: [], modelAttributes: [], neighborhoods: [],
+    agentAttributes: [],
+    bondAttributes: [{ id: 'bw', name: 'BondW', type: 'float', defaultValue: '0' }],
+    variables: [], agentVariables: [], indicators: [], mappings: [],
+    graphNodes: [], graphEdges: [], agentGraphNodes: aN, agentGraphEdges: aEd, macroDefs: [],
+  };
+}
+
+/** THE VALUE INVARIANT - the expected queue is recomputed INDEPENDENTLY here from
+ *  the agent index (not read back from the emitted code), so both targets writing
+ *  the same WRONG entries would still fail. Lane encoding: 0 empty, 1 unused side,
+ *  id+2 otherwise (bondRequestQueue.ts). */
+function bondQueueInvariant(st) {
+  const NONE = 1, BIAS = 2;
+  const slots = st.bondReqSlots, depth = slots - 1;
+  if (slots !== 9) return `bondReqSlots ${slots} !== 9 (default depth 8 + the overflow bucket)`;
+  for (let i = 0; i < st.highWater; i++) {
+    if (!st.alive[i]) continue;
+    const b = i * slots;
+    // [breakLane, formLane, L, K, bondAttr bw]
+    const want = [
+      [i + 1 + BIAS, NONE, 0, 0, null],            // 0  break(self+1)
+      [NONE, i + 2 + BIAS, 3, 5, 21],              // 1  form(self+2)
+      [i + 3 + BIAS, i + 4 + BIAS, 7, 11, 22],     // 2  rewire(self+3 -> self+4)
+      [NONE, NONE, 13, 17, 23],                    // 3  rewire with an unresolvable From
+      [NONE, i + 100 + BIAS, 0, 0, 24],            // 4  loop k=0
+      [NONE, i + 101 + BIAS, 0, 0, 24],            // 5  loop k=1
+      [NONE, i + 102 + BIAS, 0, 0, 24],            // 6  loop k=2
+      [NONE, i + 103 + BIAS, 0, 0, 24],            // 7  loop k=3
+      [NONE, i + 111 + BIAS, 0, 0, 24],            // 8  OVERFLOW bucket = the LAST rejected op (k=11)
+    ];
+    for (let c = 0; c < slots; c++) {
+      const [wb, wf, wl, wk, wa] = want[c];
+      if (st.bondBreakReq[b + c] !== wb) return `agent ${i} entry ${c}: breakLane ${st.bondBreakReq[b + c]} !== ${wb}`;
+      if (st.bondFormReq[b + c] !== wf) return `agent ${i} entry ${c}: formLane ${st.bondFormReq[b + c]} !== ${wf}`;
+      if (st.bondFormL[b + c] !== wl) return `agent ${i} entry ${c}: L ${st.bondFormL[b + c]} !== ${wl}`;
+      if (st.bondFormK[b + c] !== wk) return `agent ${i} entry ${c}: K ${st.bondFormK[b + c]} !== ${wk}`;
+      if (wa !== null && st.bondFormAttrs.bw[b + c] !== wa) return `agent ${i} entry ${c}: bondAttr bw ${st.bondFormAttrs.bw[b + c]} !== ${wa}`;
+    }
+    // The queue must have filled EXACTLY to the depth (the terminator rule): no
+    // real entry may read as empty, or the drain would truncate and drop later ops.
+    for (let c = 0; c < depth; c++) {
+      if (st.bondBreakReq[b + c] === 0 && st.bondFormReq[b + c] === 0) return `agent ${i} entry ${c} reads as EMPTY (queue truncation)`;
+    }
+  }
+  return null;
+}
+
 entries.push({
   name: '[synthetic] Bond attributes (one-sided write, both-sides read, post-break)',
   raw: buildBondAttrModel(), setup: setupBondAttrStores, invariant: bondAttrInvariant,
+});
+entries.push({
+  name: '[synthetic] Bond request QUEUE (4 ops + a 12-iteration loop, overflow)',
+  raw: buildBondQueueModel(), setup: setupBondAttrStores, invariant: bondQueueInvariant,
 });
 entries.push({ name: '[synthetic] Flow diamond (conditional → shared getRandom chain)', raw: buildDiamondModel() });
 entries.push({ name: '[synthetic] RNG draw order (branch draw + post-branch draws)', raw: buildRngOrderModel() });
@@ -1237,8 +1345,12 @@ for (const { name: f, raw, setup, invariant } of entries) {
     const decl = (model.bondAttributes ?? []).find(a => a.id === b.id);
     return { id: b.id, type: b.type, defaultValue: decl ? encodeAttr(decl) : 0 };
   });
-  const A = createAgentStore(cfg, specs, { wasmBacked: false, syncAttrs, bondAttrSpecs: bondSpecs });
-  const B = createAgentStore(cfg, specs, { wasmBacked: true, syncAttrs, maxHashBins: cMaxHashBins, layoutExtras, bondAttrSpecs: bondSpecs });
+  // P4: BOTH stores must get the SAME request-queue stride (the worker ships one
+  // number to every target). Without it the plain store would fall back to the
+  // config depth while the wasmBacked one uses the usage-gated layout value.
+  const bondReqSlots = layoutExtras.bondReqSlots ?? 1;
+  const A = createAgentStore(cfg, specs, { wasmBacked: false, syncAttrs, bondAttrSpecs: bondSpecs, bondReqSlots });
+  const B = createAgentStore(cfg, specs, { wasmBacked: true, syncAttrs, maxHashBins: cMaxHashBins, layoutExtras, bondAttrSpecs: bondSpecs, bondReqSlots });
   for (const s of [A, B]) { s.worldWidth = W; s.worldHeight = H; s.worldDepth = D; }
 
   // Seed identical agents (deterministic compact grid).
@@ -1328,8 +1440,15 @@ for (const { name: f, raw, setup, invariant } of entries) {
     cmpArr('targetRadius', A.targetRadius, B.targetRadius, hw);
     cmpArr('divideRequest', A.divideRequest, B.divideRequest, hw);
     cmpArr('killRequest', A.killRequest, B.killRequest, hw);
-    cmpArr('bondFormReq', A.bondFormReq, B.bondFormReq, hw);
-    cmpArr('bondBreakReq', A.bondBreakReq, B.bondBreakReq, hw);
+    // P4 - the STRUCTURAL REQUEST QUEUE: compare the WHOLE per-agent entry block
+    // (hw * bondReqSlots), not just entry 0, or a divergence in the 2nd..Dth
+    // queued op (which is the entire point of the queue) would go unseen.
+    const nQ = hw * A.bondReqSlots;
+    cmpArr('bondFormReq', A.bondFormReq, B.bondFormReq, nQ);
+    cmpArr('bondBreakReq', A.bondBreakReq, B.bondBreakReq, nQ);
+    cmpArr('bondFormL', A.bondFormL, B.bondFormL, nQ);
+    cmpArr('bondFormK', A.bondFormK, B.bondFormK, nQ);
+    for (const id of Object.keys(A.bondFormAttrs)) cmpArr('bondFormAttr_' + id, A.bondFormAttrs[id], B.bondFormAttrs[id], nQ);
     cmpArr('divideAxisX', A.divideAxisX, B.divideAxisX, hw); cmpArr('divideAxisY', A.divideAxisY, B.divideAxisY, hw);
     for (const spec of agentAttrs) cmpArr('attr_' + spec.id, A.attrRead[spec.id], B.attrRead[spec.id], hw);
     // Per-entry VALUE invariant, checked on BOTH stores. Parity alone would pass

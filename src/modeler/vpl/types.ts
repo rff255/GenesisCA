@@ -103,6 +103,12 @@ export interface CompileContext {
    *  (b) know the default to fall back to when the agents are not bonded.
    *  Empty/absent on cell roots and on any model with no bond attributes. */
   bondAttrs?: ReadonlyArray<{ id: string; type: string; defaultValue: number }>;
+  /** P4 — the per-agent STRUCTURAL REQUEST QUEUE stride (`D + 1`, the overflow
+   *  bucket included) that Form / Break / Rewire Bond bake into their slot
+   *  addressing (`idx * bondReqSlots + c`). The SAME number the agent store's
+   *  request arrays are shaped by (`bondReqSlotsForModel`). Absent ⇒ 1 (the pre-P4
+   *  single-slot shape, which every model without a queue verb keeps). */
+  bondReqSlots?: number;
 }
 
 /** Capability requirements for a node type. A node whose requirements aren't

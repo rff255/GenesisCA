@@ -901,6 +901,15 @@ export interface CenterBasedConfig {
   maxAgents: number;
   /** Per-agent bond-slot ceiling — the ragged bond store's stride. */
   maxBonds: number;
+  /** GRA P4 — the per-agent STRUCTURAL REQUEST QUEUE depth: how many bond
+   *  form / break / rewire ops one agent may issue in ONE generation. Absent ⇒ the
+   *  engine default (8). A degree-preserving graph rewrite (triangle split, pair
+   *  annihilation, edge swap) needs 2–5 edge mutations at one node in one step, so
+   *  a single request slot made those rules inexpressible. Ops past the depth are
+   *  REJECTED WHOLE (never wrapped, never half-applied — invariant I5) and surface
+   *  an `agentOverflow` notice. Changing it re-lays-out the agent store (a full
+   *  worker reinit). */
+  bondRequestDepth?: number;
   /** Continuous world width. In a grid+agents model the field grid (W×H cells)
    *  maps onto these bounds 1:1; in an agents-only model these ARE the bounds. */
   worldWidth: number;

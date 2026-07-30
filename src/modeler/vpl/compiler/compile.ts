@@ -20,6 +20,7 @@ import { expandMultiAttrs } from './multiAttrExpand';
 import { expandForceToAgents } from './forceToAgentsExpand';
 import { expandNeighbourCensus } from './censusExpand';
 import { expandComposites } from './expandComposites';
+import { BOND_REQUEST_NODE_TYPES, bondReqSlotsForModel } from './bondRequestQueue';
 import { lowerVectorAttrs } from './vectorAttr';
 import { lowerFacingSource } from './facingSource';
 import { computeAsyncReadWriteHazards } from './asyncWriteHazard';
@@ -465,6 +466,10 @@ function compileRoot(
     // this list is exactly the `_bondAttr_<id>` ABI block; a node naming anything
     // outside it emits a literal instead of a dangling param reference.
     bondAttrs: model ? bondAttrsOf(model).map(a => ({ id: a.id, type: a.type, defaultValue: encodeAttrValue(a, a.defaultValue) })) : [],
+    // P4 — the structural-request QUEUE stride the Form / Break / Rewire Bond
+    // emitters bake. ONE source (`bondReqSlotsForModel`), shared with the store's
+    // array shapes and the WASM / WebGPU layouts.
+    bondReqSlots: model ? bondReqSlotsForModel(model) : 1,
   };
 
   const compiled = new Set<string>();
@@ -2639,6 +2644,13 @@ export function compileAgentGraph(
   // (per-agent neighbour accumulators) + differential-division models. The AGENT
   // variable set (separate id-space from the cell variables).
   const variableBlocks = buildVariableJS(model.agentVariables || []);
+  // P4 - the STRUCTURAL REQUEST QUEUE cursor. A per-agent-ITERATION local (the
+  // queue index this agent has reached this step), declared ONLY when the graph
+  // actually uses Form / Break / Rewire Bond. That usage gate is what keeps a
+  // model without a queue verb byte-identical: no declaration, no emit, and
+  // bondReqSlotsForModel keeps its request arrays at the pre-P4 single-slot shape.
+  const usesBondReqQueue = agentNodes.some(n => BOND_REQUEST_NODE_TYPES.has(n.data.nodeType));
+  const bondReqCursorDecl = usesBondReqQueue ? ['    let _brqC = 0;'] : [];
 
   const behaviourCode = [
     `(function(${params}) {`,
@@ -2650,6 +2662,7 @@ export function compileAgentGraph(
     '  for (let idx = 0; idx < highWater; idx++) {',
     '    if (!_alive[idx]) continue;',
     '    const colorIdx = idx * 4;', // Set Cell Looks colours the agent (s.colors)
+    ...bondReqCursorDecl,
     ...variableBlocks.inLoopReset,
     // behaviourStep value-out preamble — the agent's own geometry/identity.
     `    const _v${bsId}_myX = _agentX[idx];`,
@@ -2771,6 +2784,7 @@ export function compileAgentGraph(
           '  for (let idx = 0; idx < highWater; idx++) {',
           '    if (!_alive[idx]) continue;',
           '    const colorIdx = idx * 4;',
+          ...bondReqCursorDecl,
           ...omVars.inLoopReset,
           ...r.valueLines,
           '',

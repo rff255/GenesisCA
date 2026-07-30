@@ -14,6 +14,7 @@ import { NeighbourDensityNode } from './NeighbourDensityNode';
 import { SetTargetRadiusNode } from './SetTargetRadiusNode';
 import { FormBondNode } from './FormBondNode';
 import { BreakBondNode } from './BreakBondNode';
+import { RewireBondNode } from './RewireBondNode';
 import { ForEachBondNode } from './ForEachBondNode';
 import { DivideAgentNode } from './DivideAgentNode';
 import { KillAgentNode } from './KillAgentNode';
@@ -233,6 +234,7 @@ const ALL_NODES: NodeTypeDef[] = [
   SetAgentsAttributeNode,
   FormBondNode,
   BreakBondNode,
+  RewireBondNode,
   ForEachBondNode,
   DivideAgentNode,
   KillAgentNode,

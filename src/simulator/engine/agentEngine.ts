@@ -27,7 +27,8 @@
 // ===========================================================================
 
 import type { CenterBasedConfig } from '../../model/types';
-import { cbNum, resolveMaxBonds } from '../../model/centerBased';
+import { cbNum, resolveBondRequestDepth, resolveMaxBonds } from '../../model/centerBased';
+import { BOND_REQ_ID_BIAS } from '../../modeler/vpl/compiler/bondRequestQueue';
 
 export type AgentAttrKind = 'uint8' | 'int32' | 'float64';
 export type AgentTypedArray = Uint8Array | Int32Array | Float64Array;
@@ -186,6 +187,14 @@ export interface AgentMemoryLayout {
    *  pre-P2 layout is byte-identical (these regions are appended LAST). */
   bondAttrOffset: Record<string, number>;
   bondFormAttrOffset: Record<string, number>;
+  /** P4 — the STRUCTURAL REQUEST QUEUE stride (`D + 1`, the overflow bucket
+   *  included). `1` reproduces the pre-P4 single-slot layout byte-for-byte, which
+   *  is what a model whose agent graph uses no queue verb gets. The four request
+   *  regions (`bondFormReq`/`bondBreakReq`/`bondFormL`/`bondFormK`) and every
+   *  `bondFormAttrOffset` cell are sized `maxAgents * bondReqSlots`; entry `c` of
+   *  agent `idx` lives at `idx * bondReqSlots + c`. See
+   *  [bondRequestQueue.ts](../../modeler/vpl/compiler/bondRequestQueue.ts). */
+  bondReqSlots: number;
 }
 
 /** Sizing inputs for the FULL-COVERAGE WASM agent layout regions — the compiler +
@@ -217,6 +226,12 @@ export interface AgentLayoutExtras {
    *  specs through `createAgentStore`, and the WASM compiler derives the SAME list
    *  from the model via `buildAgentLayoutExtras` — the baked-offset lockstep. */
   bondAttrSpecs?: AgentAttrSpec[];
+  /** P4 — the STRUCTURAL REQUEST QUEUE stride (`D + 1`). Absent / 1 ⇒ the pre-P4
+   *  single-slot layout, byte-identical. Computed ONCE by
+   *  `bondReqSlotsForModel(model)` in `buildAgentLayoutExtras` (main thread) and
+   *  SHIPPED to the worker, so the compiler's baked stride and the store's array
+   *  shapes derive from one number. */
+  bondReqSlots?: number;
 }
 
 /** The number of `getNearbyAgents` scratch buffers the wasmBacked agent layout
@@ -275,6 +290,16 @@ const AGENT_U8_FIELDS = ['alive', 'divideRequest', 'killRequest'] as const;
 const AGENT_BOND_I32_FIELDS = ['bondPartner', 'bondPartnerEpoch', 'bondTypeLabel'] as const;
 const AGENT_BOND_F64_FIELDS = ['bondRestLength', 'bondStiffness'] as const;
 
+/** P4 — the per-agent fields that are QUEUE-shaped (`maxAgents * bondReqSlots`
+ *  instead of `maxAgents`). ONE list, consumed by the layout AND the store's
+ *  array factories, so a field cannot be sized one way in the baked offsets and
+ *  another way in the view over them. `bondFormAttr_<id>` (P2's per-attribute
+ *  Form-Bond initial value) is queue-shaped too — it is part of a form entry, so
+ *  missing it would smear one entry's initial values across the whole queue. */
+const AGENT_REQUEST_QUEUE_FIELDS: ReadonlySet<string> = new Set([
+  'bondFormReq', 'bondBreakReq', 'bondFormL', 'bondFormK',
+]);
+
 function alignTo(off: number, align: number): number {
   return Math.ceil(off / align) * align;
 }
@@ -311,17 +336,20 @@ export function computeAgentMemoryLayout(
   const bondF64: Record<string, number> = {};
   const attrOffset: Record<string, number> = {};
 
-  // Per-agent Float64 (8-aligned, maxAgents*8 each)
+  // P4 — the request-queue stride (D+1). 1 ⇒ the pre-P4 single-slot layout, so
+  // every offset below is byte-identical for a model that uses no queue verb.
+  const bondReqSlots = Math.max(1, Math.floor(extras.bondReqSlots ?? 1));
+  // Per-agent Float64 (8-aligned, maxAgents*8 each; the queue fields ×bondReqSlots)
   for (const name of AGENT_F64_FIELDS) {
     off = alignTo(off, 8);
     f64[name] = off;
-    off += maxAgents * 8;
+    off += maxAgents * (AGENT_REQUEST_QUEUE_FIELDS.has(name) ? bondReqSlots : 1) * 8;
   }
-  // Per-agent Int32 (4-aligned, maxAgents*4 each)
+  // Per-agent Int32 (4-aligned, maxAgents*4 each; the queue fields ×bondReqSlots)
   for (const name of AGENT_I32_FIELDS) {
     off = alignTo(off, 4);
     i32[name] = off;
-    off += maxAgents * 4;
+    off += maxAgents * (AGENT_REQUEST_QUEUE_FIELDS.has(name) ? bondReqSlots : 1) * 4;
   }
   // Ragged bond Int32 (4-aligned, maxAgents*maxBonds*4 each)
   for (const name of AGENT_BOND_I32_FIELDS) {
@@ -456,7 +484,9 @@ export function computeAgentMemoryLayout(
     for (const spec of bondAttrSpecs) {
       off = alignTo(off, 8);
       bondFormAttrOffset[spec.id] = off;
-      off += maxAgents * 8;
+      // P4 — QUEUE-shaped: one initial-value cell per queue entry (see
+      // AGENT_REQUEST_QUEUE_FIELDS). bondReqSlots === 1 ⇒ byte-identical to P2.
+      off += maxAgents * bondReqSlots * 8;
     }
   }
 
@@ -474,7 +504,7 @@ export function computeAgentMemoryLayout(
     lookupTableOffset, lookupTableCols, lookupTableBytes,
     fieldOffset, fieldTotal, fieldBytes,
     stopFlagOffset,
-    bondAttrOffset, bondFormAttrOffset,
+    bondAttrOffset, bondFormAttrOffset, bondReqSlots,
   };
 }
 
@@ -569,13 +599,23 @@ export interface AgentStore {
   divideAxisZ: Float64Array;
   divideAsym: Float64Array;
   killRequest: Uint8Array;
-  /** Form-bond request: partner id + 1 (0 = none), with the rest length L and
-   *  stiffness λ to use. One form request per agent per step (most rules form one
-   *  bond/step; repeated steps form more). */
+  // --- P4 — the STRUCTURAL REQUEST QUEUE. `bondReqSlots = D + 1` entries per
+  // agent, addressed `idx * bondReqSlots + c`; entry D is the OVERFLOW BUCKET
+  // (written by every op past the queue, applied by none — its occupancy IS the
+  // overflow flag). Every entry carries BOTH sides, so one entry expresses all
+  // three verbs and `rewireBond` is atomic by construction (invariant I5):
+  //   bondBreakReq / bondFormReq   0 = empty · 1 = side unused · v+2 = agent v
+  //   bondFormL / bondFormK        the FORM half's rest length + stiffness
+  // See src/modeler/vpl/compiler/bondRequestQueue.ts for the encoding rationale.
+  /** Queue stride (`D + 1`). 1 ⇒ the pre-P4 single-slot shape. */
+  bondReqSlots: number;
+  /** FORM side of each queue entry (`0` empty · `1` none · `id + 2`). */
   bondFormReq: Int32Array;
+  /** Rest length L for the entry's form half (`0` ⇒ the contact distance). */
   bondFormL: Float64Array;
+  /** Stiffness λ for the entry's form half (`0` ⇒ the model's bond stiffness). */
   bondFormK: Float64Array;
-  /** Break-bond request: partner id + 1 (0 = none). */
+  /** BREAK side of each queue entry (`0` empty · `1` none · `id + 2`). */
   bondBreakReq: Int32Array;
 
   // --- per-agent RGBA appearance (written by the agent colour pass; PR-A3) ---
@@ -663,6 +703,13 @@ export interface CreateAgentStoreOpts {
    *  baked offsets are computed from one list (the `syncAttrs` precedent).
    *  Default `[]` ⇒ zero bytes ⇒ every existing model is byte-identical. */
   bondAttrSpecs?: AgentAttrSpec[];
+  /** P4 — the STRUCTURAL REQUEST QUEUE stride (`D + 1`). The AUTHORITATIVE value:
+   *  it overrides `layoutExtras.bondReqSlots` so the allocated arrays and the baked
+   *  offsets are computed from one number (the `syncAttrs` / `bondAttrSpecs`
+   *  precedent). Shipped by the main thread as `bondReqSlotsForModel(model)` on
+   *  EVERY target — the same number the emitters bake. Absent ⇒ derived from the
+   *  config's own depth. */
+  bondReqSlots?: number;
 }
 
 /** Allocate the agent store once from the model's center-based config + agent
@@ -684,6 +731,15 @@ export function createAgentStore(
 
   const attrKind: Record<string, AgentAttrKind> = {};
   for (const spec of attrSpecs) attrKind[spec.id] = agentAttrKind(spec.type);
+
+  // P4 — the STRUCTURAL REQUEST QUEUE stride. The main thread computes it ONCE
+  // (`bondReqSlotsForModel(model)` — the same number every emitter bakes) and
+  // ships it on every target; the explicit opt wins over the (WASM-only) layout
+  // extras so the allocated arrays and the baked offsets are one number. The
+  // config fallback covers pre-P4 call sites + the harnesses.
+  const bondReqSlots = Math.max(1, Math.floor(
+    opts?.bondReqSlots ?? opts?.layoutExtras?.bondReqSlots ?? (resolveBondRequestDepth(config) + 1),
+  ));
 
   const wasmBacked = !!opts?.wasmBacked;
   // FULL-COVERAGE: sync attrs now apply on BOTH paths (the whole-catalogue WASM
@@ -708,13 +764,18 @@ export function createAgentStore(
   // allocated arrays and the baked offsets can never disagree.
   const bondAttrSpecs = maxBonds > 0 ? (opts?.bondAttrSpecs ?? []) : [];
 
+  // Queue-shaped fields get `maxAgents * bondReqSlots` elements; everything else
+  // keeps `maxAgents` (ONE list — AGENT_REQUEST_QUEUE_FIELDS — drives both the
+  // baked offsets and these views, so they cannot disagree).
+  const lenOf = (name: string) => maxAgents * (AGENT_REQUEST_QUEUE_FIELDS.has(name) ? bondReqSlots : 1);
+
   if (wasmBacked) {
-    const extras: AgentLayoutExtras = { ...(opts?.layoutExtras ?? {}), syncAttrs, bondAttrSpecs };
+    const extras: AgentLayoutExtras = { ...(opts?.layoutExtras ?? {}), syncAttrs, bondAttrSpecs, bondReqSlots };
     layout = computeAgentMemoryLayout(maxAgents, maxBonds, attrSpecs, Math.max(0, Math.floor(opts?.maxHashBins ?? 0)), extras);
     memory = new WebAssembly.Memory({ initial: layout.pages });
     const buf = memory.buffer;
-    f64 = (name) => new Float64Array(buf, layout!.f64[name]!, maxAgents);
-    i32 = (name) => new Int32Array(buf, layout!.i32[name]!, maxAgents);
+    f64 = (name) => new Float64Array(buf, layout!.f64[name]!, lenOf(name));
+    i32 = (name) => new Int32Array(buf, layout!.i32[name]!, lenOf(name));
     u8 = (name) => new Uint8Array(buf, layout!.u8[name]!, maxAgents);
     bondI32 = (name) => new Int32Array(buf, layout!.bondI32[name]!, maxAgents * maxBonds);
     bondF64 = (name) => new Float64Array(buf, layout!.bondF64[name]!, maxAgents * maxBonds);
@@ -727,8 +788,8 @@ export function createAgentStore(
       return new Float64Array(buf, o, maxAgents);
     };
   } else {
-    f64 = () => new Float64Array(maxAgents);
-    i32 = () => new Int32Array(maxAgents);
+    f64 = (name) => new Float64Array(lenOf(name));
+    i32 = (name) => new Int32Array(lenOf(name));
     u8 = () => new Uint8Array(maxAgents);
     bondI32 = () => new Int32Array(maxAgents * maxBonds);
     bondF64 = () => new Float64Array(maxAgents * maxBonds);
@@ -790,10 +851,11 @@ export function createAgentStore(
       const buf = memory!.buffer;
       const o = layout!.bondAttrOffset[spec.id]!;
       arr = kind === 'float64' ? new Float64Array(buf, o, n) : new Int32Array(buf, o, n);
-      req = new Float64Array(buf, layout!.bondFormAttrOffset[spec.id]!, maxAgents);
+      // P4 — QUEUE-shaped (one initial-value cell per queue entry).
+      req = new Float64Array(buf, layout!.bondFormAttrOffset[spec.id]!, maxAgents * bondReqSlots);
     } else {
       arr = kind === 'float64' ? new Float64Array(n) : new Int32Array(n);
-      req = new Float64Array(maxAgents);
+      req = new Float64Array(maxAgents * bondReqSlots);
     }
     // Dead slots hold the attribute's default so a freshly-filled slot reads it
     // even before `addBondSlot` writes (defence in depth — addBondSlot always does).
@@ -853,6 +915,7 @@ export function createAgentStore(
     divideAxisZ: f64('divideAxisZ'),
     divideAsym: f64('divideAsym'),
     killRequest: u8('killRequest'),
+    bondReqSlots,
     bondFormReq: i32('bondFormReq'),
     bondFormL: f64('bondFormL'),
     bondFormK: f64('bondFormK'),
@@ -969,12 +1032,10 @@ export function initAgentSlot(
   // previous occupant's payload.
   store.divideAxisX[id] = 0; store.divideAxisY[id] = 0; store.divideAxisZ[id] = 0;
   store.divideAsym[id] = 0;
-  store.bondFormReq[id] = 0; store.bondBreakReq[id] = 0;
-  store.bondFormL[id] = 0; store.bondFormK[id] = 0;
-  // Bond-attribute Form-Bond request cells share bondFormL/K's stale-payload
-  // hygiene: a recycled slot must never pair a fresh request flag with a previous
-  // occupant's initial values.
-  for (const spec of store.bondAttrSpecs) store.bondFormAttrs[spec.id]![id] = spec.defaultValue;
+  // P4 — clear the agent's WHOLE request queue (D entries + the overflow bucket),
+  // not just entry 0: a recycled slot must never inherit a previous occupant's
+  // queued ops. Bond-attribute Form-Bond initial values ride the same entries.
+  clearAgentBondRequests(store, id);
   for (const spec of store.attrSpecs) {
     store.attrRead[spec.id]![id] = spec.defaultValue;
     store.attrWrite[spec.id]![id] = spec.defaultValue;
@@ -1003,9 +1064,29 @@ export function freeAgentSlot(store: AgentStore, id: number): void {
   store.epoch[id] = (store.epoch[id]! + 1) | 0;   // bump epoch → any stale bond is swept
   store.bondCount[id] = 0;
   store.divideRequest[id] = 0; store.killRequest[id] = 0;
-  store.bondFormReq[id] = 0; store.bondBreakReq[id] = 0;
+  clearAgentBondRequests(store, id);
   store.freeList[store.freeTop++] = id;
   store.liveCount--;
+}
+
+/** P4 — clear ONE agent's whole structural-request queue (all `bondReqSlots`
+ *  entries: the D queue entries plus the overflow bucket). The ONLY place a queue
+ *  entry is zeroed wholesale, so a new lane added to an entry goes here and
+ *  nowhere else (the `bondSlotArrays` compaction-list discipline applied to the
+ *  request side). Zeroing the two TARGET lanes is what marks an entry empty; L/K
+ *  and the per-attribute initial values are reset too so a recycled slot can never
+ *  pair a fresh target with a previous occupant's payload. */
+export function clearAgentBondRequests(store: AgentStore, id: number): void {
+  const slots = store.bondReqSlots;
+  const base = id * slots;
+  for (let c = 0; c < slots; c++) {
+    store.bondFormReq[base + c] = 0; store.bondBreakReq[base + c] = 0;
+    store.bondFormL[base + c] = 0; store.bondFormK[base + c] = 0;
+  }
+  for (const spec of store.bondAttrSpecs) {
+    const req = store.bondFormAttrs[spec.id]!;
+    for (let c = 0; c < slots; c++) req[base + c] = spec.defaultValue;
+  }
 }
 
 /** Generic Agent Platform: free a STAGED slot — a Create Agent that was never
@@ -1187,6 +1268,113 @@ export function breakBond(store: AgentStore, a: number, b: number): boolean {
   const r1 = removeBondSlot(store, a, b);
   const r2 = removeBondSlot(store, b, a);
   return r1 || r2;
+}
+
+/** P4 — REWIRE, the atomic graph-rewriting verb: move agent `a`'s edge from `from`
+ *  to `to` as ONE operation (`break(a,from)` + `form(a,to)`), so the intermediate
+ *  half-rewired state never exists.
+ *
+ *  ATOMICITY (invariant **I5**) is the whole point: the op is fully PRE-CHECKED
+ *  and, if anything would reject, **nothing at all is applied** — never a break
+ *  without its form. That is what makes a degree-preserving rule (triangle split,
+ *  edge swap, pair annihilation) express its invariant at EVERY generation instead
+ *  of only between them, which in turn is what makes invariant I6 testable.
+ *
+ *  Pre-conditions, all necessary:
+ *   • `a↔from` must actually exist (otherwise the "rewire" would be a bare form,
+ *     silently RAISING a's degree — the exact thing a degree-preserving rule
+ *     forbids);
+ *   • `to` must be a live agent other than `a`;
+ *   • `to` must have room, unless `a↔to` already exists (then the form half is a
+ *     no-op and only the break applies — a legitimate "collapse a double edge").
+ *  `a`'s own capacity needs no check: the break frees one of its slots first.
+ *  `to === from` is allowed and re-forms the same edge with the new L/λ/attributes.
+ *
+ *  Returns true when the rewire was applied. */
+export function rewireBond(
+  store: AgentStore, a: number, from: number, to: number, L: number, lambda: number,
+  typeLabel = 0, attrValues?: ArrayLike<number> | null,
+): boolean {
+  const hw = store.highWater;
+  if (a < 0 || a >= hw || !store.alive[a]) return false;
+  if (from < 0 || from >= hw) return false;
+  if (to < 0 || to >= hw || to === a || !store.alive[to]) return false;
+  if (!hasBond(store, a, from)) return false;
+  const reForming = to === from || hasBond(store, a, to);
+  if (!reForming && store.bondCount[to]! >= store.maxBonds) return false;
+  breakBond(store, a, from);
+  formBond(store, a, to, L, lambda, typeLabel, attrValues);
+  return true;
+}
+
+/** P4 — DRAIN one step's STRUCTURAL REQUEST QUEUE: apply every agent's queued bond
+ *  Form / Break / Rewire entries, IN SLOT ORDER (= the order the rule issued them),
+ *  and clear the queue. Returns true when at least one agent overflowed (the caller
+ *  surfaces the notice).
+ *
+ *  THIS IS THE ONE PLACE queue entries are consumed. It lives in the engine (not in
+ *  the worker's structural phase) so the invariant harness exercises the SHIPPED
+ *  code rather than a copy of it — a drain the tests re-implement proves nothing.
+ *
+ *  Entry encoding + the overflow bucket:
+ *  [bondRequestQueue.ts](../../modeler/vpl/compiler/bondRequestQueue.ts). Each entry
+ *  carries BOTH a break side and a form side, so one entry expresses all three verbs
+ *  and a REWIRE is applied atomically by `rewireBond` (pre-check, then break + form,
+ *  or nothing at all — invariant **I5**). `bondReqSlots === 1` (a model whose agent
+ *  graph uses no queue verb) reduces this to the pre-P4 single-request drain.
+ *
+ *  P2: a form half's INITIAL bond-attribute values ride the per-entry
+ *  `bondFormAttrs[<id>][base + c]` cells; `formBond` / `rewireBond` stamp the SAME
+ *  values into BOTH slots (invariant **I2**). */
+export function drainAgentBondRequests(store: AgentStore, lambda: number): boolean {
+  const s = store;
+  const hw = s.highWater, rad = s.radius, alive = s.alive;
+  // Reused scratch (the spec list is fixed for the store's lifetime); no bond
+  // attributes ⇒ null ⇒ formBond falls back to each attribute's default.
+  const bondFormVals = s.bondAttrSpecs.length > 0 ? new Float64Array(s.bondAttrSpecs.length) : null;
+  const reqSlots = s.bondReqSlots, reqDepth = reqSlots - 1;
+  let overflow = false;
+  for (let i = 0; i < hw; i++) {
+    const base = i * reqSlots;
+    if (!alive[i]) {
+      // A dead agent's queue is dropped wholesale (its entries can only be stale).
+      if (s.bondFormReq[base] !== 0 || s.bondBreakReq[base] !== 0) clearAgentBondRequests(s, i);
+      continue;
+    }
+    let c = 0;
+    for (; c < reqDepth; c++) {
+      const bl = s.bondBreakReq[base + c]!, fl = s.bondFormReq[base + c]!;
+      // The contiguous-prefix terminator: EVERY emitted op writes a non-zero value
+      // into both lanes (the unused side writes BOND_REQ_NONE), so 0/0 means no op
+      // was ever appended here — and therefore none is appended after it either.
+      if (bl === 0 && fl === 0) break;
+      s.bondBreakReq[base + c] = 0; s.bondFormReq[base + c] = 0;
+      const from = bl >= BOND_REQ_ID_BIAS ? bl - BOND_REQ_ID_BIAS : -1;
+      const to = fl >= BOND_REQ_ID_BIAS ? fl - BOND_REQ_ID_BIAS : -1;
+      if (to >= 0) {
+        // A form half — resolve its parameters (0 ⇒ the engine defaults).
+        const L = s.bondFormL[base + c]! > 0 ? s.bondFormL[base + c]!
+          : (rad[i]! + (to < hw ? rad[to]! : rad[i]!));
+        const K = s.bondFormK[base + c]! > 0 ? s.bondFormK[base + c]! : lambda;
+        if (bondFormVals) {
+          for (let ai = 0; ai < s.bondAttrSpecs.length; ai++) {
+            bondFormVals[ai] = s.bondFormAttrs[s.bondAttrSpecs[ai]!.id]![base + c]!;
+          }
+        }
+        if (from >= 0) rewireBond(s, i, from, to, L, K, 0, bondFormVals);   // ATOMIC
+        else if (to < hw && alive[to]) formBond(s, i, to, L, K, 0, bondFormVals);
+      } else if (from >= 0) {
+        breakBond(s, i, from);
+      }
+    }
+    // The OVERFLOW BUCKET (entry `reqDepth`) is only ever written once the queue
+    // filled, so it can only be occupied when the prefix ran to the end.
+    if (c === reqDepth && (s.bondBreakReq[base + reqDepth] !== 0 || s.bondFormReq[base + reqDepth] !== 0)) {
+      overflow = true;
+      s.bondBreakReq[base + reqDepth] = 0; s.bondFormReq[base + reqDepth] = 0;
+    }
+  }
+  return overflow;
 }
 
 /** Break ALL bonds attached to agent `a` (both directions). Called on death so

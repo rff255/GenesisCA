@@ -52,6 +52,7 @@ import { expandMultiAttrs } from '../multiAttrExpand';
 import { expandForceToAgents } from '../forceToAgentsExpand';
 import { expandNeighbourCensus } from '../censusExpand';
 import { expandComposites } from '../expandComposites';
+import { BOND_REQ_ID_BIAS, BOND_REQ_NONE, bondReqSlotsForModel } from '../bondRequestQueue';
 import { injectAgentLinkedOutputMappings } from '../agentLinkedOutputMappings';
 import { lowerVectorAttrs, expandVectorAttributes } from '../vectorAttr';
 import { lowerFacingSource } from '../facingSource';
@@ -109,7 +110,7 @@ export const AGENT_WEBGPU_SUPPORTED_TYPES: ReadonlySet<string> = new Set<string>
   // indicators
   'getIndicator', 'setIndicator', 'updateIndicator',
   // structural writes (G4 — the post-step CPU structural phase reads the requests)
-  'divideAgent', 'formBond', 'breakBond', 'killAgent',
+  'divideAgent', 'formBond', 'breakBond', 'rewireBond', 'killAgent',
   // mid-step graph-authored spawning (Create Agent → set-by-handle → Add To World,
   // exactly as in the Init Event — an atomic bump allocator gives the handle a real
   // slot id, so the by-id setters write the newborn directly; CPU-reconciled).
@@ -337,6 +338,11 @@ interface AgentWgpuCtx {
    *  compiled here). */
   usesStructural: boolean;
   usesRadiusWrite: boolean;
+  /** P4 — set when a Form / Break / Rewire Bond emitter appends to the STRUCTURAL
+   *  REQUEST QUEUE. Declares the per-invocation cursor `var brqC` in the shader
+   *  preamble. Gated because an unused `var` still changes the emitted WGSL, and a
+   *  model with no queue verb must stay byte-identical. */
+  usesBondReqQueue: boolean;
   /** Set when an Apply Force To Agent emitter runs — declares the forceScatter
    *  atomic binding (14) + emits the forceScatterAdd f32-CAS helper. */
   usesForceScatter: boolean;
@@ -365,6 +371,15 @@ function emitLet(ctx: AgentWgpuCtx, type: WgslType, expr: string, hint: string):
 function f32At(ctx: AgentWgpuCtx, field: string, idxExpr: string): string {
   const base = ctx.layout.f32Base[field]!;
   return base === 0 ? `agentF32[${idxExpr}]` : `agentF32[${base}u + ${idxExpr}]`;
+}
+
+/** P4 — the WGSL address of the CURRENT queue entry in a QUEUE-shaped request run
+ *  (`base + idx * bondReqSlots + slot`). The GPU mirror of the JS `_bq` index and
+ *  the WASM `entry` local, so the three targets address the same entry. `brqC` is
+ *  the per-invocation cursor `var` (declared only when the shader appends). */
+function reqAt(ctx: AgentWgpuCtx, field: string, entryExpr: string): string {
+  const base = ctx.layout.f32Base[field]!;
+  return base === 0 ? `agentF32[${entryExpr}]` : `agentF32[${base}u + ${entryExpr}]`;
 }
 
 /** PX — `agentF32[base + <idxExpr>]` for a USER AGENT ATTRIBUTE run, choosing the
@@ -1473,6 +1488,62 @@ function emitGetBondAttribute(ctx: AgentWgpuCtx, node: GraphNode): ValueRef {
  *  endpoints computing the same value, the canonical SDCA link rule) is benign; an
  *  ASYMMETRIC one is not. Write from ONE side (the `ownerId` idiom) or keep the
  *  rule symmetric. See the node description + CLAUDE.md. */
+/** P4 — append ONE entry to this agent's STRUCTURAL REQUEST QUEUE (Form / Break /
+ *  Rewire Bond). The WGSL mirror of `bondRequestEmitJS` + the WASM `emitBondRequest`
+ *  — same entry addressing, same lane encoding, same overflow bucket.
+ *
+ *  NO ATOMICS are needed: a thread appends only to its OWN agent's rows (`idx`),
+ *  and the emit is sequential within a thread, so nothing races. (Contrast Apply
+ *  Force To Agent, which scatters into ANOTHER agent's slot and therefore does use
+ *  an atomic CAS.) */
+function emitBondRequest(ctx: AgentWgpuCtx, node: GraphNode, verb: 'form' | 'break' | 'rewire'): void {
+  ctx.usesStructural = true;
+  ctx.usesBondReqQueue = true;
+  const slots = Math.max(1, ctx.layout.bondReqSlots);
+  const depth = slots - 1;
+  const e = fresh(ctx, 'brqE');
+  // entry = idx*slots + min(brqC, depth); brqC++ (the cursor bumps even when the
+  // queue is full, so the op lands in the overflow bucket rather than overwriting
+  // the last real entry — the drain reports it and drops it).
+  ctx.lines.push(`  let ${e}: u32 = idx * ${slots}u + u32(min(brqC, ${depth}));`);
+  ctx.lines.push('  brqC = brqC + 1;');
+  if (verb === 'rewire') {
+    // BOTH sides must resolve or the entry is an explicit no-op — a rewire whose
+    // `From` is unresolvable must NOT degrade into a bare Form.
+    const f = fresh(ctx, 'brqF'), t = fresh(ctx, 'brqT'), ok = fresh(ctx, 'brqOk');
+    ctx.lines.push(`  let ${f}: i32 = ${castTo(resolveValueInput(ctx, node, 'fromAgent', -1), 'i32')};`);
+    ctx.lines.push(`  let ${t}: i32 = ${castTo(resolveValueInput(ctx, node, 'toAgent', -1), 'i32')};`);
+    ctx.lines.push(`  let ${ok}: bool = (${f} >= 0) && (${t} >= 0);`);
+    ctx.lines.push(`  ${reqAt(ctx, 'bondBreakReq', e)} = f32(select(${BOND_REQ_NONE}, ${f} + ${BOND_REQ_ID_BIAS}, ${ok}));`);
+    ctx.lines.push(`  ${reqAt(ctx, 'bondFormReq', e)} = f32(select(${BOND_REQ_NONE}, ${t} + ${BOND_REQ_ID_BIAS}, ${ok}));`);
+  } else {
+    const t = fresh(ctx, 'brqT');
+    ctx.lines.push(`  let ${t}: i32 = ${castTo(resolveValueInput(ctx, node, 'targetAgent', -1), 'i32')};`);
+    const lane = `f32(select(${BOND_REQ_NONE}, ${t} + ${BOND_REQ_ID_BIAS}, ${t} >= 0))`;
+    // The unused side writes BOND_REQ_NONE (1), never 0 — 0 is the drain's
+    // "nothing was appended here" terminator, so writing it would truncate the
+    // queue and silently drop every LATER op this agent issued.
+    if (verb === 'form') {
+      ctx.lines.push(`  ${reqAt(ctx, 'bondBreakReq', e)} = ${BOND_REQ_NONE}.0;`);
+      ctx.lines.push(`  ${reqAt(ctx, 'bondFormReq', e)} = ${lane};`);
+    } else {
+      ctx.lines.push(`  ${reqAt(ctx, 'bondBreakReq', e)} = ${lane};`);
+      ctx.lines.push(`  ${reqAt(ctx, 'bondFormReq', e)} = ${BOND_REQ_NONE}.0;`);
+    }
+  }
+  if (verb !== 'break') {
+    ctx.lines.push(`  ${reqAt(ctx, 'bondFormL', e)} = ${inF32(ctx, node, 'restLength', 0)};`);
+    ctx.lines.push(`  ${reqAt(ctx, 'bondFormK', e)} = ${inF32(ctx, node, 'stiffness', 0)};`);
+    // P3 — the new bond's INITIAL attribute values, one f32 cell per QUEUE ENTRY.
+    // The worker reads them back into `s.bondFormAttrs[id]` and the structural
+    // phase hands them to formBond/rewireBond, which stamp BOTH slots (I2).
+    for (const bid of ctx.layout.bondAttrIds) {
+      if (ctx.layout.bondFormAttrBase[bid] === undefined) continue;
+      ctx.lines.push(`  ${reqAt(ctx, `bondFormAttr_${bid}`, e)} = ${inF32(ctx, node, `bondAttr_${bid}`, ctx.bondAttrDefault.get(bid) ?? 0)};`);
+    }
+  }
+}
+
 function emitSetBondAttribute(ctx: AgentWgpuCtx, node: GraphNode): void {
   const attr = (node.data.config?.['attributeId'] as string) || '';
   const word = ctx.layout.bondAttrWord[attr];
@@ -2305,36 +2376,16 @@ function compileFlowNode(ctx: AgentWgpuCtx, nodeId: string): void {
       compileFlowChain(ctx, node.id, 'next');
       break;
     }
-    case 'formBond': {
-      ctx.usesStructural = true;
-      // `_bondFormReq = (target | 0) + 1` (0 = no request); restLength / stiffness.
-      const tgt = castTo(resolveValueInput(ctx, node, 'targetAgent', -1), 'i32');
-      ctx.lines.push(`  ${f32At(ctx, 'bondFormReq', 'idx')} = f32(${tgt} + 1);`);
-      ctx.lines.push(`  ${f32At(ctx, 'bondFormL', 'idx')} = ${inF32(ctx, node, 'restLength', 0)};`);
-      ctx.lines.push(`  ${f32At(ctx, 'bondFormK', 'idx')} = ${inF32(ctx, node, 'stiffness', 0)};`);
-      // P3 — the new bond's INITIAL attribute values (one dynamic input port per
-      // declared bond attribute, `bondAttr_<id>`). They ride per-agent f32 request
-      // runs alongside bondFormL / bondFormK; the worker reads them back into
-      // `s.bondFormAttrs[id]` and the structural phase hands them to `formBond`,
-      // which stamps BOTH slots (I2). This is WHY the P2 WebGPU gate had to be
-      // model-level: a Form-Bond-only model would otherwise silently drop them.
-      // No bond attributes ⇒ this loop emits NOTHING ⇒ byte-identical.
-      for (const bid of ctx.layout.bondAttrIds) {
-        if (ctx.layout.bondFormAttrBase[bid] === undefined) continue;
-        ctx.lines.push(`  ${f32At(ctx, `bondFormAttr_${bid}`, 'idx')} = ${inF32(ctx, node, `bondAttr_${bid}`, ctx.bondAttrDefault.get(bid) ?? 0)};`);
-      }
+    case 'formBond':
+    case 'breakBond':
+    case 'rewireBond': {
+      emitBondRequest(ctx, node, node.data.nodeType === 'formBond' ? 'form'
+        : node.data.nodeType === 'breakBond' ? 'break' : 'rewire');
       compileFlowChain(ctx, node.id, 'next');
       break;
     }
     case 'setBondAttribute': {
       emitSetBondAttribute(ctx, node);
-      compileFlowChain(ctx, node.id, 'next');
-      break;
-    }
-    case 'breakBond': {
-      ctx.usesStructural = true;
-      const tgt = castTo(resolveValueInput(ctx, node, 'targetAgent', -1), 'i32');
-      ctx.lines.push(`  ${f32At(ctx, 'bondBreakReq', 'idx')} = f32(${tgt} + 1);`);
       compileFlowChain(ctx, node.id, 'next');
       break;
     }
@@ -3811,7 +3862,7 @@ function emitAgentRootModule(
     usesSpawn: false,
     usesStop: false,
     usesForceScatter: false,
-    usesStructural: false, usesRadiusWrite: false,
+    usesStructural: false, usesRadiusWrite: false, usesBondReqQueue: false,
   };
 
   // Assign array-producer scratch slots (separate i32 + f32 `var<function>` pools)
@@ -3922,6 +3973,11 @@ function emitAgentRootModule(
     nearbyDecls.push(`  var<function> arrf32${i}: array<f32, ${arrCap}>;`);
   }
   const varDecls: string[] = [];
+  // P4 — the STRUCTURAL REQUEST QUEUE cursor: a per-INVOCATION (= per-agent) var,
+  // the GPU analogue of the JS `_brqC` local and the WASM cursor local. NO atomics:
+  // each thread appends only to its OWN agent's queue rows (every request emitter
+  // writes `idx`-based addresses), so there is no cross-thread contention here.
+  if (ctx.usesBondReqQueue) varDecls.push('  var brqC: i32 = 0;');
   for (const v of (model.agentVariables ?? [])) {
     if (v.kind === 'array') {
       const av = ctx.arrayVarNames.get(v.id)!;
@@ -4146,7 +4202,12 @@ export function agentWebGPUExtrasOf(model: CAModel) {
   // only the four allowed types), the SAME list the CPU store's `bondAttrSpecs`
   // and the WASM layout derive from — the baked-offset lockstep.
   const bondAttrs = bondAttrsOf(model).map(a => ({ id: a.id, type: a.type }));
-  return { modelAttrKeys, lookupTables, indicatorCount, maxBonds, gridDepth, syncAttrs, bondAttrs };
+  // P4 -- the structural-request QUEUE stride. The SAME `bondReqSlotsForModel` the
+  // CPU store + the WASM layout derive from, so the GPU runs, the CPU arrays and
+  // every emitted stride are one number (and a model with no queue verb keeps the
+  // pre-P4 single-slot runs, hence a byte-identical shader).
+  const bondReqSlots = bondReqSlotsForModel(model);
+  return { modelAttrKeys, lookupTables, indicatorCount, maxBonds, gridDepth, syncAttrs, bondAttrs, bondReqSlots };
 }
 
 /** Convenience for the DEV harness: derive the GPU agent layout from a model +

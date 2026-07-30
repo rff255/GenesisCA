@@ -1465,11 +1465,13 @@ export function HelpView() {
               self.</li>
             <li><strong>Set Target Radius</strong> &mdash; set the size the agent grows toward;
               the engine ramps the actual radius each step. A grown agent is what divides.</li>
-            <li><strong>Form Bond / Break Bond / For Each Bond</strong> &mdash; create or remove a
-              spring between two agents, or iterate this agent's bonds (exposing the partner,
-              rest length, and current length) to act per-bond (e.g. break an over-stretched
-              bond). Bonds can also form <strong>automatically by distance</strong> (the
-              Auto-bond option), the simplest path to a glued cluster.</li>
+            <li><strong>Form Bond / Break Bond / Rewire Bond / For Each Bond</strong> &mdash; create,
+              remove or <em>move</em> a bond between two agents, or iterate this agent's bonds
+              (exposing the partner, rest length, and current length) to act per-bond (e.g. break an
+              over-stretched bond). <strong>Rewire Bond</strong> moves one bond from one partner to
+              another <em>atomically</em> &mdash; see &ldquo;Rewiring the graph&rdquo; below. Bonds can
+              also form <strong>automatically by distance</strong> (the Auto-bond option), the simplest
+              path to a glued cluster.</li>
             <li><strong>Divide Agent</strong> &mdash; split the agent into two daughters along its
               <strong> tension axis</strong> (the net-stretch direction of its bonds), so a glued
               cluster cleaves along its mechanical axis. Each bond is handed to the nearer
@@ -1664,6 +1666,32 @@ export function HelpView() {
             the two node states&rdquo; already is. Only a genuinely <em>asymmetric</em> write (the
             two endpoints computing different values) is affected, and that contradicts the
             both-ends-equal rule on every target.
+          </p>
+          <h3 className={styles.h3}>Rewiring the graph &mdash; several bond ops in ONE step</h3>
+          <p className={styles.p}>
+            Bond changes are <em>requests</em>: Form / Break / Rewire Bond do not edit the graph on the
+            spot, they queue an op that the engine applies after the whole step, on the settled state.
+            That is what makes them safe to issue while you are iterating your bonds &mdash; a
+            <em> For Each Bond</em> loop always sees the bond list as it was at the start of the step.
+          </p>
+          <p className={styles.p}>
+            Each agent has a <strong>queue</strong> of those requests, so it can issue{' '}
+            <strong>several in one step</strong> &mdash; which is exactly what a graph rewrite needs
+            (a triangle split, an edge swap or a pair annihilation is 2&ndash;5 edge changes at one
+            node, and spreading them over several generations would break the very property the rule
+            is meant to preserve). The depth is <em>Bond Requests / Agent / Step</em> in{' '}
+            <strong>Model Properties &rarr; Bond-Graph Agents</strong> (default 8). Ops past the depth
+            are <strong>rejected whole</strong> &mdash; never half-applied, never wrapped &mdash; and a
+            notice tells you to raise it.
+          </p>
+          <p className={styles.p}>
+            <strong>Rewire Bond</strong> is the graph-rewriting verb: give it a <em>From</em> partner
+            and a <em>To</em> partner and it breaks one bond and forms the other as{' '}
+            <strong>one indivisible operation</strong>. If the move cannot be completed &mdash; there
+            is no bond to <em>From</em>, or <em>To</em> is gone, is this agent, or has a full bond
+            list &mdash; then <strong>nothing at all</strong> happens: you never get the edge removed
+            and its replacement missing. That is what lets a rule keep every node's degree exactly
+            constant while the topology churns underneath it.
           </p>
           <h3 className={styles.h3}>Spawning Agents (Create &rarr; Add, in either event)</h3>
           <p className={styles.p}>

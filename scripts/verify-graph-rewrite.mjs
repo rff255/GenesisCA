@@ -34,7 +34,10 @@ export {
   createAgentStore, computeAgentMaxHashBins, buildSpatialHash, seedAgents, formBond, breakBond,
   freeAgentSlot, sweepStaleBonds, allocAgentSlot, initAgentSlot, divideAgent, bondAttrKind,
   serializeAgentStore, deserializeAgentStore,
+  rewireBond, hasBond, drainAgentBondRequests, clearAgentBondRequests,
 } from '../src/simulator/engine/agentEngine.ts';
+export { BOND_REQ_NONE, BOND_REQ_ID_BIAS, bondReqSlotsForModel, agentGraphUsesBondRequests } from '../src/modeler/vpl/compiler/bondRequestQueue.ts';
+export { resolveBondRequestDepth } from '../src/model/centerBased.ts';
 export { serializeAgentState, deserializeAgentState } from '../src/model/fileOperations.ts';
 export { bondAttrsOf } from '../src/model/attributeScope.ts';
 export {
@@ -65,6 +68,8 @@ const {
   createAgentStore, computeAgentMaxHashBins, buildSpatialHash, seedAgents, formBond, breakBond,
   freeAgentSlot, sweepStaleBonds, allocAgentSlot, initAgentSlot, divideAgent, bondAttrKind,
   serializeAgentStore, deserializeAgentStore, serializeAgentState, deserializeAgentState, bondAttrsOf,
+  rewireBond, hasBond, drainAgentBondRequests, clearAgentBondRequests,
+  BOND_REQ_NONE, BOND_REQ_ID_BIAS, bondReqSlotsForModel, agentGraphUsesBondRequests, resolveBondRequestDepth,
   compileAgentGraphWasmForModel, instantiateAgentWasm, buildAgentLayoutExtras, isAgentGraphWasmSupported,
   compileAgentGraphWebGPUForModel, isAgentGraphWebGPUSupported, compileAgentGraphWebGPU,
   agentWebGPUExtrasOf, computeAgentWebGPULayout,
@@ -533,13 +538,17 @@ async function makeRunner(rawModel, { W, H, withWasm = false } = {}) {
   const jsFn = eval(jsR.behaviourCode);
 
   const wasmR = withWasm ? compileAgentGraphWasmForModel(model) : null;
+  // P4: ONE request-queue stride for both stores (the worker ships one number to
+  // every target), so the plain store cannot fall back to the config depth while
+  // the wasmBacked one uses the usage-gated layout value.
+  const layoutExtras = { ...buildAgentLayoutExtras(model), fieldTotal: 0, syncAttrs };
+  const bondReqSlots = layoutExtras.bondReqSlots ?? 1;
   const stores = [];
-  const A = createAgentStore(cfg, specs, { wasmBacked: false, syncAttrs });
+  const A = createAgentStore(cfg, specs, { wasmBacked: false, syncAttrs, bondReqSlots });
   stores.push(A);
   let B = null, inst = null;
   if (withWasm && wasmR && !wasmR.error && wasmR.bytes.length) {
-    const layoutExtras = { ...buildAgentLayoutExtras(model), fieldTotal: 0, syncAttrs };
-    B = createAgentStore(cfg, specs, { wasmBacked: true, syncAttrs, maxHashBins: wasmR.layout.maxHashBins, layoutExtras });
+    B = createAgentStore(cfg, specs, { wasmBacked: true, syncAttrs, maxHashBins: wasmR.layout.maxHashBins, layoutExtras, bondReqSlots });
     stores.push(B);
   }
   for (const s of stores) { s.worldWidth = W; s.worldHeight = H; s.worldDepth = D; }
@@ -1442,10 +1451,13 @@ function tierF() {
 
   // The Form-Bond request runs are APPENDED LAST, so every pre-P3 f32 base is
   // byte-stable (the baked-offset lockstep).
-  ok(L.bondFormAttrBase.w >= rp.layout.f32Len && L.bondFormAttrBase.lbl === L.bondFormAttrBase.w + L.maxAgents,
+  // P4: each Form-Bond request run is QUEUE-shaped (maxAgents * bondReqSlots) —
+  // one initial-value cell per queue ENTRY, so queued forms cannot smear values.
+  const reqRun = L.maxAgents * L.bondReqSlots;
+  ok(L.bondFormAttrBase.w >= rp.layout.f32Len && L.bondFormAttrBase.lbl === L.bondFormAttrBase.w + reqRun,
     'the Form-Bond request runs are appended AFTER every other f32 run, in attribute order');
-  ok(L.f32Len - rp.layout.f32Len === L.bondAttrIds.length * L.maxAgents,
-    'the SoA grows by exactly one run per bond attribute', `${rp.layout.f32Len} -> ${L.f32Len}`);
+  ok(L.f32Len - rp.layout.f32Len === L.bondAttrIds.length * reqRun,
+    'the SoA grows by exactly one QUEUE-shaped run per bond attribute', `${rp.layout.f32Len} -> ${L.f32Len}`);
 
   // --- 2. stride consistency over the WHOLE shader + the MUTATION control ---
   ok(bondStrideConsistent(r.shaderCode, L.bondSlotStride) === null,
@@ -1479,8 +1491,13 @@ function tierF() {
     ok(writes === 2, 'exactly TWO bond-store writes per Set Bond Attribute (own side + partner side)', String(writes));
     ok(/agentAlive\[u32\(\w+\)\] != 0u/.test(s), 'the partner-side write is range + alive guarded (the by-id-writer discipline)');
     // Form Bond's initial values ride per-agent f32 request runs.
-    ok(s.includes(`agentF32[${L.bondFormAttrBase.w}u + idx] = `) && s.includes(`agentF32[${L.bondFormAttrBase.lbl}u + idx] = `),
-      'Form Bond writes ONE initial-value request run per bond attribute');
+    // P4: the write addresses the current QUEUE ENTRY (`brqE…`), not a bare `idx`.
+    const sLines = s.split(String.fromCharCode(10));
+    const wLine = sLines.find(l => l.includes(`agentF32[${L.bondFormAttrBase.w}u + _brqE`) && l.includes('] = '));
+    const lLine = sLines.find(l => l.includes(`agentF32[${L.bondFormAttrBase.lbl}u + _brqE`) && l.includes('] = '));
+    ok(!!wLine && !!lLine,
+      'Form Bond writes ONE initial-value cell per bond attribute, at the QUEUE ENTRY',
+      `w=${wLine ?? 'MISSING'} lbl=${lLine ?? 'MISSING'}`);
   }
 
   // --- 4. a read-ONLY bond-attribute model keeps the read binding ---
@@ -1519,12 +1536,348 @@ function tierF() {
   }
 }
 
+
+// ===========================================================================
+// TIER G — P4: the STRUCTURAL REQUEST QUEUE + the atomic Rewire verb
+// ===========================================================================
+//
+// The DRAIN is the thing under test here, so these run against the SHIPPED
+// `drainAgentBondRequests` over a real AgentStore — the harness writes queue
+// entries (playing the part of the compiled behaviour, whose emit is proven
+// separately + bit-identically by the parity synthetic) and then checks what the
+// engine did with them.
+//
+//   I5  atomicity   — D+3 ops: exactly D apply, the rest are rejected WHOLE and
+//                     reported; a rewire that cannot complete applies NEITHER half
+//   O5  conservation — a rewire-only rule keeps N, E and the full degree MULTISET
+//                     invariant for 500 generations, exactly
+//   ——  multi-op    — one agent performing 3 rewires (6 edge mutations) in ONE
+//                     generation, with the graph consistent immediately after
+//
+// Every one is negative-controlled.
+
+/** The degree MULTISET as a canonical string — a STRONGER conservation test than
+ *  min/max, which a swap that moves degree between two nodes would pass. */
+function degreeMultiset(g) {
+  const d = [];
+  for (let i = 0; i < g.highWater; i++) if (g.alive[i]) d.push(g.bondCount[i]);
+  d.sort((a, b) => a - b);
+  return d.join(',');
+}
+
+/** The live edge set as canonical `min:max` keys. */
+function edgeSet(g) {
+  const e = new Set();
+  for (let i = 0; i < g.highWater; i++) {
+    if (!g.alive[i]) continue;
+    for (let k = 0; k < g.bondCount[i]; k++) {
+      const p = g.bondPartner[i * g.maxBonds + k];
+      if (p < 0 || p >= g.highWater || !g.alive[p]) continue;
+      e.add(i < p ? `${i}:${p}` : `${p}:${i}`);
+    }
+  }
+  return e;
+}
+
+/** Write ONE queue entry, exactly as the three emitters do (lanes: 0 = empty,
+ *  BOND_REQ_NONE = side unused, id + BOND_REQ_ID_BIAS otherwise). `c` past the
+ *  depth is clamped to the OVERFLOW BUCKET, mirroring the emitters' cursor. */
+function queueOp(st, i, c, { from = -1, to = -1, L = 0, K = 0 } = {}) {
+  const slots = st.bondReqSlots, depth = slots - 1;
+  const e = i * slots + Math.min(c, depth);
+  st.bondBreakReq[e] = from >= 0 ? from + BOND_REQ_ID_BIAS : BOND_REQ_NONE;
+  st.bondFormReq[e] = to >= 0 ? to + BOND_REQ_ID_BIAS : BOND_REQ_NONE;
+  st.bondFormL[e] = L; st.bondFormK[e] = K;
+}
+
+const queueCfg = (maxAgents, maxBonds, depth) => ({
+  enabled: true, maxAgents, maxBonds, worldWidth: 64, worldHeight: 64,
+  defaultRadius: 0.5, bondStiffness: 1, bondRestLength: 1, bondRequestDepth: depth,
+  agentCapabilities: AGENT_CAPS({ bonds: 'data' }),
+});
+
+/** A store with `n` live agents and no bonds. */
+function queueStore(n, maxBonds, depth) {
+  const s = createAgentStore(queueCfg(n + 8, maxBonds, depth), []);
+  s.worldWidth = 64; s.worldHeight = 64; s.worldDepth = 1;
+  seedAgents(s, Array.from({ length: n }, (_, i) => ({ x: (i % 8) + 0.5, y: Math.floor(i / 8) + 0.5, radius: 0.5 })), 0.5);
+  return s;
+}
+
+const allInvariants = (st) => {
+  const g = decodeAgentGraph(st);
+  return checkHandshake(g) ?? checkNoDangling(g) ?? checkCapacity(g) ?? checkBondSymmetry(g);
+};
+
+function tierG() {
+  section('TIER G — P4: the request queue + the atomic Rewire verb');
+
+  // --- 0. the slot resolver: usage-gated, so an unrelated model is byte-identical
+  {
+    ok(resolveBondRequestDepth({}) === 8, 'the default request-queue depth is 8');
+    ok(resolveBondRequestDepth({ bondRequestDepth: 0 }) === 1
+      && resolveBondRequestDepth({ bondRequestDepth: 1000 }) === 64,
+      'the depth clamps to [1, 64]');
+    const noVerb = { agentGraphNodes: [{ id: 'a', data: { nodeType: 'formBondX' } }], centerBased: {}, topologyMode: { agents: true } };
+    ok(bondReqSlotsForModel(noVerb) === 1,
+      'a graph with NO queue verb keeps 1 slot (the pre-P4 shape ⇒ byte-identical layout)');
+    const withVerb = { agentGraphNodes: [{ id: 'a', data: { nodeType: 'rewireBond' } }], centerBased: {}, topologyMode: { agents: true } };
+    ok(bondReqSlotsForModel(withVerb) === 9, 'a graph WITH a queue verb reserves depth + the overflow bucket');
+    const inMacro = { agentGraphNodes: [], macroDefs: [{ id: 'm', nodes: [{ id: 'a', data: { nodeType: 'breakBond' } }] }], centerBased: {}, topologyMode: { agents: true } };
+    ok(agentGraphUsesBondRequests(inMacro), 'a verb inside a MACRO definition still reserves the queue (macros expand at compile time)');
+  }
+
+  // --- 1. I5 — a full queue applies EXACTLY the depth and rejects the rest WHOLE
+  {
+    const D = 8, N = 20, MB = 16;
+    const st = queueStore(N, MB, D);
+    for (let k = 1; k <= MB; k++) formBond(st, 0, k, 1, 1);
+    const before = edgeSet(decodeAgentGraph(st));
+    ok(before.size === MB, 'I5 setup: agent 0 carries 16 bonds', String(before.size));
+
+    // D + 3 break ops on agent 0, targeting partners 1..11.
+    for (let c = 0; c < D + 3; c++) queueOp(st, 0, c, { from: c + 1 });
+    const overflow = drainAgentBondRequests(st, 1);
+    ok(overflow === true, 'I5: the overflow bucket is REPORTED when the queue is exceeded');
+
+    const after = edgeSet(decodeAgentGraph(st));
+    const want = new Set([...before].filter(e => { const t = Number(e.split(':')[1]); return t > D; }));
+    ok(after.size === MB - D, `I5: EXACTLY ${D} of ${D + 3} ops applied`, `${after.size} edges left (want ${MB - D})`);
+    ok([...want].every(e => after.has(e)) && [...after].every(e => want.has(e)),
+      'I5: the graph is EXACTLY the pre-step graph minus those D edges (no extra, none missing)');
+    ok(allInvariants(st) === null, 'I5: I1–I4 hold after the partially-rejected step', String(allInvariants(st)));
+
+    // The queue must be fully CLEARED — a leftover entry would re-apply next step.
+    let residue = 0;
+    for (let c = 0; c < st.bondReqSlots; c++) if (st.bondBreakReq[c] !== 0 || st.bondFormReq[c] !== 0) residue++;
+    ok(residue === 0, 'I5: the whole queue (incl. the overflow bucket) is cleared by the drain', String(residue));
+
+    // NEGATIVE CONTROL: an unclamped cursor (wrapping instead of rejecting) would
+    // have applied all 11 ops. Emulate it and prove the check distinguishes them.
+    const st2 = queueStore(N, MB, D);
+    for (let k = 1; k <= MB; k++) formBond(st2, 0, k, 1, 1);
+    for (let c = 0; c < D + 3; c++) breakBond(st2, 0, c + 1);          // "all 11 applied"
+    ok(edgeSet(decodeAgentGraph(st2)).size !== MB - D,
+      'negative control: applying ALL D+3 ops gives a DIFFERENT graph (the check is not vacuous)');
+  }
+
+  // --- 2. I5 — a rewire that cannot complete applies NEITHER half
+  {
+    const st = queueStore(12, 3, 8);
+    formBond(st, 0, 1, 1, 1);                       // the edge we will try to move
+    for (let k = 3; k <= 5; k++) formBond(st, 2, k, 1, 1);   // agent 2 is FULL (3 of 3)
+    const before = edgeSet(decodeAgentGraph(st));
+    queueOp(st, 0, 0, { from: 1, to: 2 });          // rewire 0: 1 → 2 (2 has no room)
+    drainAgentBondRequests(st, 1);
+    const after = edgeSet(decodeAgentGraph(st));
+    ok(hasBond(st, 0, 1), 'I5 rewire: a rejected rewire does NOT break its source edge');
+    ok(!hasBond(st, 0, 2), 'I5 rewire: a rejected rewire forms nothing');
+    ok(before.size === after.size && [...before].every(e => after.has(e)),
+      'I5 rewire: the graph is EXACTLY unchanged (no half-applied rewire)');
+
+    // A rewire whose FROM edge does not exist must not become a bare FORM (that
+    // would silently RAISE the agent's degree — what a degree-preserving rule forbids).
+    const st2 = queueStore(12, 4, 8);
+    formBond(st2, 0, 1, 1, 1);
+    queueOp(st2, 0, 0, { from: 7, to: 3 });         // 0 is not bonded to 7
+    drainAgentBondRequests(st2, 1);
+    ok(!hasBond(st2, 0, 3) && st2.bondCount[0] === 1,
+      'I5 rewire: a rewire from a NON-EXISTENT edge applies nothing (never a bare form)');
+
+    // NEGATIVE CONTROL: the non-atomic emulation (break then form) leaves the
+    // half-applied state the invariant forbids.
+    const st3 = queueStore(12, 3, 8);
+    formBond(st3, 0, 1, 1, 1);
+    for (let k = 3; k <= 5; k++) formBond(st3, 2, k, 1, 1);
+    breakBond(st3, 0, 1); formBond(st3, 0, 2, 1, 1);        // the naive break-then-form
+    ok(!hasBond(st3, 0, 1) && !hasBond(st3, 0, 2),
+      'negative control: break-then-form leaves the edge GONE and unreplaced (the state I5 forbids)');
+  }
+
+  // --- 3. the terminator rule: an unresolvable op still OCCUPIES its entry
+  {
+    const st = queueStore(12, 4, 8);
+    queueOp(st, 0, 0, {});                          // both sides unused (an unresolvable op)
+    queueOp(st, 0, 1, { to: 5 });                   // a REAL form after it
+    drainAgentBondRequests(st, 1);
+    ok(hasBond(st, 0, 5),
+      'the entry after an unresolvable op is still drained (the +2 lane bias prevents queue truncation)');
+
+    // NEGATIVE CONTROL: had the unresolvable op written 0 lanes (the naive
+    // "target + 1" encoding with target -1), the drain would stop at entry 0.
+    const st2 = queueStore(12, 4, 8);
+    st2.bondBreakReq[0] = 0; st2.bondFormReq[0] = 0;
+    queueOp(st2, 0, 1, { to: 5 });
+    drainAgentBondRequests(st2, 1);
+    ok(!hasBond(st2, 0, 5),
+      'negative control: a ZERO-lane entry DOES truncate the queue (which is why NONE is 1, not 0)');
+  }
+
+  // --- 4. MULTI-OP IN ONE STEP — the capability this phase exists to deliver
+  {
+    const st = queueStore(16, 6, 8);
+    for (const p of [1, 2, 3]) formBond(st, 0, p, 1, 1);
+    const before = decodeAgentGraph(st);
+    const beforeMs = degreeMultiset(before), beforeE = edgeSet(before).size;
+    // THREE rewires by ONE agent in ONE generation = 6 edge mutations.
+    queueOp(st, 0, 0, { from: 1, to: 4 });
+    queueOp(st, 0, 1, { from: 2, to: 5 });
+    queueOp(st, 0, 2, { from: 3, to: 6 });
+    const of2 = drainAgentBondRequests(st, 1);
+    const after = decodeAgentGraph(st);
+    ok(of2 === false, 'multi-op: three ops are well within the depth (no overflow)');
+    ok(hasBond(st, 0, 4) && hasBond(st, 0, 5) && hasBond(st, 0, 6),
+      'multi-op: all THREE new edges exist after ONE generation');
+    ok(!hasBond(st, 0, 1) && !hasBond(st, 0, 2) && !hasBond(st, 0, 3),
+      'multi-op: all THREE old edges are gone after the SAME generation');
+    ok(allInvariants(st) === null, 'multi-op: the graph is consistent IMMEDIATELY after (I1–I4)', String(allInvariants(st)));
+    ok(edgeSet(after).size === beforeE, 'multi-op: |E| unchanged (3 removed, 3 added)');
+    ok(degreeMultiset(after) === beforeMs,
+      'multi-op: the degree MULTISET is unchanged', `${beforeMs} -> ${degreeMultiset(after)}`);
+  }
+
+  // --- 5. O5 — pure rewiring conserves N, E and the degree MULTISET, 500 gens
+  //
+  // The rule is the canonical DOUBLE-EDGE SWAP, expressed node-locally: on a ring
+  // 0-1-…-N-1-0, for every i ≡ 0 (mod 4) the pair of disjoint edges (i,i+1) and
+  // (i+2,i+3) is swapped into (i,i+2) and (i+1,i+3) —
+  //     agent i    rewires  i+1 → i+2
+  //     agent i+3  rewires  i+2 → i+1
+  // Each of the four endpoints keeps its degree exactly, so the whole degree
+  // VECTOR (not merely the multiset) is invariant. It is an involution, so the
+  // phase flips each generation and the rule exercises rewire on every step.
+  {
+    const N = 32, MB = 4, GENS = 500;
+    const st = queueStore(N, MB, 8);
+    for (let i = 0; i < N; i++) formBond(st, i, (i + 1) % N, 1, 1);
+    const g0 = decodeAgentGraph(st);
+    const ms0 = degreeMultiset(g0), n0 = g0.alive.reduce((a, b) => a + b, 0), e0 = edgeSet(g0).size;
+    ok(checkDegreeRegular(g0, 2) === null && e0 === N, 'O5 setup: a 2-regular ring of 32 agents, E = 32');
+
+    let bad = null, phase = 0, rewires = 0;
+    for (let gen = 1; gen <= GENS && !bad; gen++) {
+      for (let i = 0; i < N; i += 4) {
+        const a = i, b = (i + 1) % N, c = (i + 2) % N, d = (i + 3) % N;
+        if (phase === 0) { queueOp(st, a, 0, { from: b, to: c }); queueOp(st, d, 0, { from: c, to: b }); }
+        else { queueOp(st, a, 0, { from: c, to: b }); queueOp(st, d, 0, { from: b, to: c }); }
+        rewires += 2;
+      }
+      if (drainAgentBondRequests(st, 1)) { bad = `gen ${gen}: unexpected overflow`; break; }
+      const g = decodeAgentGraph(st);
+      const inv = checkHandshake(g) ?? checkNoDangling(g) ?? checkCapacity(g) ?? checkBondSymmetry(g);
+      if (inv) { bad = `gen ${gen}: ${inv}`; break; }
+      if (degreeMultiset(g) !== ms0) { bad = `gen ${gen}: degree multiset ${degreeMultiset(g)} != ${ms0}`; break; }
+      if (edgeSet(g).size !== e0) { bad = `gen ${gen}: |E| ${edgeSet(g).size} != ${e0}`; break; }
+      if (g.alive.reduce((x, y) => x + y, 0) !== n0) { bad = `gen ${gen}: N changed`; break; }
+      phase ^= 1;
+    }
+    ok(bad === null, `O5: N, E and the full degree MULTISET are invariant over ${GENS} generations of pure rewiring`, String(bad));
+    ok(rewires === GENS * (N / 4) * 2, 'O5: the run actually issued a rewire every generation', String(rewires));
+
+    // NEGATIVE CONTROL: a NON-conserving edit (one bare break) must be caught by
+    // the very same checks — otherwise the 500-generation pass proves nothing.
+    breakBond(st, 0, st.bondPartner[0]);
+    const gN = decodeAgentGraph(st);
+    ok(degreeMultiset(gN) !== ms0 && edgeSet(gN).size !== e0,
+      'negative control: a single bare break DOES change the multiset and |E|');
+  }
+
+  // --- 6. the three verbs on all three targets (emit shape; values are proven
+  //        bit-identically by the parity synthetic and end-to-end in the browser)
+  {
+    const raw = buildRewireModel();
+    const model = migrateForHarness(raw);
+    ok(isAgentGraphWasmSupported(model), 'the WASM agent gate ACCEPTS a Rewire Bond graph');
+    ok(isAgentGraphWebGPUSupported(model), 'the WebGPU agent gate ACCEPTS a Rewire Bond graph');
+
+    const js = compileAgentGraph(model.agentGraphNodes, model.agentGraphEdges, model, 0);
+    ok(!js.error, 'JS: a Rewire Bond graph compiles', js.error || '');
+    ok(js.behaviourCode.includes('let _brqC = 0;'),
+      'JS: the per-agent queue cursor is declared in the loop preamble');
+    ok(/_bondBreakReq\[_bq\] = _bqOk \?/.test(js.behaviourCode) && /_bondFormReq\[_bq\] = _bqOk \?/.test(js.behaviourCode),
+      'JS: a rewire writes BOTH lanes under ONE ok-guard (never a bare form)');
+    ok(js.behaviourCode.includes('idx * 9 + (_brqC < 8 ? _brqC : 8)'),
+      'JS: the entry address clamps to the overflow bucket at the configured depth');
+
+    const w = compileAgentGraphWasmForModel(model);
+    ok(!w.error && w.bytes.length > 0, 'WASM: a Rewire Bond graph compiles', w.error || '');
+    ok(w.layout.bondReqSlots === 9, 'WASM: the layout reserves depth + the overflow bucket', String(w.layout.bondReqSlots));
+
+    const g = compileAgentGraphWebGPUForModel(model);
+    ok(!g.error, 'WebGPU: a Rewire Bond graph compiles', g.error || '');
+    ok(g.layout.bondReqSlots === 9, 'WebGPU: the layout reserves depth + the overflow bucket', String(g.layout.bondReqSlots));
+    ok(g.shaderCode.includes('var brqC: i32 = 0;'), 'WebGPU: the per-invocation queue cursor is declared');
+    ok(/let _brqE\d+: u32 = idx \* 9u \+ u32\(min\(brqC, 8\)\);/.test(g.shaderCode),
+      'WebGPU: the entry address clamps to the overflow bucket');
+    ok(!/atomic/.test(g.shaderCode.split('brqC')[0] ?? ''),
+      'WebGPU: NO atomics are used for the queue (each thread appends only to its own rows)');
+    // The whole queue is written through the layout stride — a stale `+ idx]` on a
+    // request run would silently address entry 0 of the wrong agent.
+    const reqBases = ['bondFormReq', 'bondBreakReq', 'bondFormL', 'bondFormK'].map(f => g.layout.f32Base[f]);
+    const stale = reqBases.some(b => g.shaderCode.includes(`agentF32[${b}u + idx]`));
+    ok(!stale, 'WebGPU: no request run is addressed with a bare `idx` (every write goes to a queue ENTRY)');
+
+    // A model WITHOUT any verb keeps the single-slot shape on every surface.
+    const plain = migrateForHarness(buildRewireModel({ dropVerbs: true }));
+    ok(bondReqSlotsForModel(plain) === 1, 'a verb-free model keeps 1 slot on every target');
+    ok(!compileAgentGraph(plain.agentGraphNodes, plain.agentGraphEdges, plain, 0).behaviourCode.includes('_brqC'),
+      'a verb-free model emits NO queue cursor (the byte-identity gate)');
+  }
+}
+
+/** A minimal agent graph exercising all three queue verbs. `dropVerbs` returns the
+ *  SAME graph with the verbs removed — the byte-identity control. */
+function buildRewireModel({ dropVerbs = false } = {}) {
+  const used = new Set();
+  const nid = (p) => { let id; do { id = p + Math.random().toString(36).slice(2, 8); } while (used.has(id)); used.add(id); return id; };
+  const aN = [], aEd = [];
+  const an = (t, c) => { const n = { id: nid('a'), type: 'caNode', position: { x: 0, y: 0 }, data: { nodeType: t, config: c } }; aN.push(n); return n; };
+  const aE = (s2, sp, tt, tp, cat) => aEd.push({ id: nid('e'), source: s2.id, target: tt.id, sourceHandle: `output_${cat}_${sp}`, targetHandle: `input_${cat}_${tp}` });
+  const bs = an('behaviourStep', {});
+  const gsh = an('getSelfHandle', {});
+  const off = (k) => { const n = an('arithmeticOperator', { operation: '+', _port_y: String(k) }); aE(gsh, 'value', n, 'x', 'value'); return n; };
+  if (!dropVerbs) {
+    const brk = an('breakBond', {});
+    const frm = an('formBond', { _port_restLength: '1', _port_stiffness: '1' });
+    const rw = an('rewireBond', { _port_restLength: '1', _port_stiffness: '1' });
+    aE(bs, 'do', brk, 'do', 'flow');
+    aE(off(1), 'result', brk, 'targetAgent', 'value');
+    aE(brk, 'next', frm, 'do', 'flow');
+    aE(off(2), 'result', frm, 'targetAgent', 'value');
+    aE(frm, 'next', rw, 'do', 'flow');
+    aE(off(3), 'result', rw, 'fromAgent', 'value');
+    aE(off(4), 'result', rw, 'toAgent', 'value');
+  } else {
+    const st = an('setTargetRadius', { _port_radius: '1' });
+    aE(bs, 'do', st, 'do', 'flow');
+    aE(off(1), 'result', st, 'radius', 'value');
+  }
+  return {
+    schemaVersion: 1,
+    properties: { name: 'Rewire Bond Test', dimension: '2d', gridWidth: 32, gridHeight: 32, gridDepth: 1, topology: '2d-grid', boundaryTreatment: 'torus', useWasm: false, useWebGPU: false },
+    topologyMode: { gridCells: false, agents: true },
+    centerBased: {
+      enabled: true, maxAgents: 64, maxBonds: 6, worldWidth: 32, worldHeight: 32, seedCount: 16,
+      seedPattern: 'scatter', defaultRadius: 0.5, growthRate: 0, repulsionStiffness: 0, adhesionStiffness: 0,
+      interactionRange: 1.5, drag: 1, timeStep: 0.1, momentum: 0, maxSpeed: 0, neighbourQueryRadius: 8,
+      useBondingPhysics: false, autoBond: false, bondStiffness: 1, bondRestLength: 1, formDistance: 1.2,
+      breakDistance: 2.0, agentTarget: 'wasm', agentUpdateMode: 'async', bondRequestDepth: 8,
+      agentCapabilities: AGENT_CAPS({ bonds: 'data' }),
+    },
+    attributes: [], modelAttributes: [], neighborhoods: [],
+    agentAttributes: [], bondAttributes: [],
+    variables: [], agentVariables: [], indicators: [], mappings: [],
+    graphNodes: [], graphEdges: [], agentGraphNodes: aN, agentGraphEdges: aEd, macroDefs: [],
+  };
+}
+
 tierA();
 tierB();
 await tierC();
 tierD();
 tierE();
 tierF();
+tierG();
 
 console.log(`\n${fail === 0 ? 'GRAPH-REWRITE HARNESS ✓' : 'GRAPH-REWRITE HARNESS ✗'}  (${pass} passed, ${fail} failed)`);
 rmSync(entryPath, { force: true });

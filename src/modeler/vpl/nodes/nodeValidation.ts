@@ -882,7 +882,7 @@ const AGENT_SELF_ONLY_TYPES = new Set<string>([
   // `_agentBondCount[idx]`), neither of which is in the init ABI.
   'getBondAttribute', 'setBondAttribute',
   // self writers
-  'setVelocity', 'applyForce', 'setTargetRadius', 'divideAgent', 'formBond', 'breakBond', 'killAgent',
+  'setVelocity', 'applyForce', 'setTargetRadius', 'divideAgent', 'formBond', 'breakBond', 'rewireBond', 'killAgent',
   // field bridge (sampled/deposited at the SELF position)
   'sampleField', 'fieldGradient', 'readCellsUnder', 'affectCellsUnder', 'secreteToField',
   // universal self-attribute nodes (on the agent SoA at idx) — valid in the

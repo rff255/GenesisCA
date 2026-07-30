@@ -14,8 +14,10 @@ import type { PortDef } from './types';
 import type { Attribute, CAModel } from '../../model/types';
 import { bondAttrsOf } from '../../model/attributeScope';
 
-/** The node types that expose one input port per bond attribute. */
-const BOND_ATTR_PORT_TYPES = new Set(['formBond']);
+/** The node types that expose one input port per bond attribute — every verb that
+ *  FORMS a bond, so the new edge's attribute values are authorable at the point it
+ *  is created (P4: Rewire Bond forms one too). */
+const BOND_ATTR_PORT_TYPES = new Set(['formBond', 'rewireBond']);
 
 /** The port id for a bond attribute's Form Bond initial value. Its inline widget
  *  value therefore lives at config `_port_bondAttr_<id>` (the ModelContext

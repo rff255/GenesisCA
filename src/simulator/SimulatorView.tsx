@@ -21,6 +21,7 @@ import { LightBallWidget } from './LightBallWidget';
 import { agentTargetOf, resolveMaxBonds } from '../model/centerBased';
 import { bondAttrsOf } from '../model/attributeScope';
 import { compileAgentGraphWasmForModel, isAgentGraphWasmSupported, buildAgentLayoutExtras } from '../modeler/vpl/compiler/agentWasm/compile';
+import { bondReqSlotsForModel } from '../modeler/vpl/compiler/bondRequestQueue';
 import type { AgentLayoutExtras } from './engine/agentEngine';
 import { compileAgentGraphWebGPUForModel, isAgentGraphWebGPUSupported } from '../modeler/vpl/compiler/agentWebgpu/compile';
 import { computeAgentWebGPULayout, type AgentWebGPULayout } from '../modeler/vpl/compiler/agentWebgpu/layout';
@@ -5787,6 +5788,10 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       agentColorViewer: activeAgentViewerRef.current || agentResult.colorViewer,
       agentOutputMappingCodes: agentResult.outputMappingCodes,
       agentHasSprites: (model.sprites?.length ?? 0) > 0,
+      // P4 - the structural-request QUEUE stride the compiled agent code bakes.
+      // Shipped on every target so the store's array shapes and the emitters'
+      // baked stride are ONE number (bondReqSlotsForModel is the single source).
+      agentBondReqSlots: bondReqSlotsForModel(model),
       // PR5 (C-D1): whether the agent graph reads/writes the cell field. Drives
       // the WebGPU-grid field bridge (a no-field model does 0 per-step
       // readbacks). Cheap boolean — leave the JS/WASM grid path untouched.
@@ -6046,6 +6051,13 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       // `resolveMaxBonds` subsumes the old raw-maxBonds check (it captures both the
       // config ceiling change AND the capability toggle).
       || resolveMaxBonds(prev.centerBased) !== resolveMaxBonds(model.centerBased)
+      // P4: the STRUCTURAL REQUEST QUEUE stride IS the shape of the request arrays
+      // (and of the baked WASM / WGSL offsets), so a depth change — or ADDING the
+      // first Form / Break / Rewire Bond node to the graph, which flips the stride
+      // from the byte-identical 1 to D+1 — needs a full reinit, not a soft
+      // recompile (which would leave the store allocated against the old stride).
+      // `bondReqSlotsForModel` subsumes both (it is the one number every side bakes).
+      || bondReqSlotsForModel(prev) !== bondReqSlotsForModel(model)
       // PR5: the Agent Compile Target is independent of the grid target. Changing
       // it switches the agent driver's memory residency (Phase F: JS↔WASM↔WebGPU),
       // so it needs a full reinit, not a soft recompile (mirrors useWasm/useWebGPU).
@@ -6244,6 +6256,10 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
         agentColorViewer: activeAgentViewerRef.current || agentResult.colorViewer,
         agentOutputMappingCodes: agentResult.outputMappingCodes,
         agentHasSprites: (model.sprites?.length ?? 0) > 0,
+      // P4 - the structural-request QUEUE stride the compiled agent code bakes.
+      // Shipped on every target so the store's array shapes and the emitters'
+      // baked stride are ONE number (bondReqSlotsForModel is the single source).
+      agentBondReqSlots: bondReqSlotsForModel(model),
         centerBased: model.centerBased,
         // PR5 (C-D1): re-detect on a graph-only edit (field nodes added/removed).
         agentUsesField: agentUsesField(),

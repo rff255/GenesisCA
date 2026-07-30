@@ -79,6 +79,14 @@ export const AGENT_GPU_REQUEST_FIELDS = [
   'killRequest',
 ] as const;
 
+/** P4 -- the request fields that are QUEUE-shaped (`maxAgents * bondReqSlots`).
+ *  ONE list, consumed by the layout AND the runtime's upload/readback loops, so a
+ *  field cannot be sized one way in the bases and another way when it is zeroed or
+ *  read back. Mirrors `AGENT_REQUEST_QUEUE_FIELDS` on the CPU store. */
+export const AGENT_GPU_QUEUE_FIELDS: ReadonlySet<string> = new Set([
+  'bondFormReq', 'bondBreakReq', 'bondFormL', 'bondFormK',
+]);
+
 /** Per-agent i32 fields (identity / reductions the behaviour reads). */
 export const AGENT_GPU_I32_FIELDS = [
   'lineage', 'bondCount',
@@ -246,6 +254,10 @@ export interface AgentWebGPULayout {
    *  GPU mirror of the store's `bondFormAttrs[id]`). Appended after every other
    *  f32 run so all existing bases stay byte-stable. */
   bondFormAttrBase: Record<string, number>;
+  /** P4 — the STRUCTURAL REQUEST QUEUE stride (`D + 1`, the overflow bucket
+   *  included). Entry `c` of agent `idx` in a queue-shaped run is
+   *  `base + idx * bondReqSlots + c`. `1` ⇒ the pre-P4 single-slot runs. */
+  bondReqSlots: number;
 }
 
 /** **THE** bond-slot stride helper: `[partner, restBits, ...attrs]`. Exported so
@@ -291,6 +303,14 @@ export interface AgentWebGPUExtras {
    *  run for Form Bond's initial value. Absent/empty ⇒ stride 2 + no extra runs ⇒
    *  byte-identical to pre-P3. `float` ⇒ the slot word holds f32 bits. */
   bondAttrs?: Array<{ id: string; type: string }>;
+  /** P4 -- the STRUCTURAL REQUEST QUEUE stride (`D + 1`). The four request runs
+   *  (`bondFormReq`/`bondBreakReq`/`bondFormL`/`bondFormK`) and every
+   *  `bondFormAttr_<id>` run become `maxAgents * bondReqSlots` long, addressed
+   *  `base + idx * bondReqSlots + c` -- the SAME agent-major shape the CPU store
+   *  uses, so the readback is a straight elementwise copy. Absent/1 gives the
+   *  pre-P4 single-slot runs, so every base after them (and the whole emitted
+   *  shader) is byte-identical. */
+  bondReqSlots?: number;
 }
 
 /** Compute the GPU agent storage layout. Pure (no GPU calls). The optional
@@ -314,7 +334,10 @@ export function computeAgentWebGPULayout(
   const gd = Math.max(1, Math.floor(extras.gridDepth ?? field?.gridDepth ?? 1));
   const f32Base: Record<string, number> = {};
   let off = 0;
-  for (const f of AGENT_GPU_F32_FIELDS) { f32Base[f] = off; off += ma; }
+  // P4 -- the structural-request runs are QUEUE-shaped (ma * slots); everything
+  // else keeps one element per agent. slots === 1 is byte-identical to pre-P4.
+  const bondReqSlots = Math.max(1, Math.floor(extras.bondReqSlots ?? 1));
+  for (const f of AGENT_GPU_F32_FIELDS) { f32Base[f] = off; off += ma * (AGENT_GPU_QUEUE_FIELDS.has(f) ? bondReqSlots : 1); }
   // 3D z fields — appended after the static 2D fields (2D layout byte-identical).
   if (gd > 1) { for (const f of AGENT_GPU_F32_FIELDS_3D) { f32Base[f] = off; off += ma; } }
   // User agent attributes — one READ run each, appended after the static fields.
@@ -334,7 +357,7 @@ export function computeAgentWebGPULayout(
   // byte-stable; a model with no bond attributes adds nothing at all.
   const bondAttrsIn = extras.bondAttrs ?? [];
   const bondFormAttrBase: Record<string, number> = {};
-  for (const a of bondAttrsIn) { bondFormAttrBase[a.id] = off; f32Base[`bondFormAttr_${a.id}`] = off; off += ma; }
+  for (const a of bondAttrsIn) { bondFormAttrBase[a.id] = off; f32Base[`bondFormAttr_${a.id}`] = off; off += ma * bondReqSlots; }
   const f32Len = off;
 
   const i32Base: Record<string, number> = {};
@@ -407,5 +430,6 @@ export function computeAgentWebGPULayout(
     modelAttrKeys: [...modelAttrKeys], lookupTableIds,
     indicatorCount, maxBonds, bondStoreLen,
     bondSlotStride, bondAttrIds, bondAttrWord, bondAttrIsFloat, bondFormAttrBase,
+    bondReqSlots,
   };
 }

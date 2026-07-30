@@ -32,7 +32,7 @@
 import type { AgentStore } from './agentEngine';
 import { initAgentSlot, freeStagedSlot } from './agentEngine';
 import type { AgentWebGPULayout } from '../../modeler/vpl/compiler/agentWebgpu/layout';
-import { AGENT_GPU_F32_FIELDS, AGENT_GPU_F32_FIELDS_3D, AGENT_GPU_I32_FIELDS, AGENT_GPU_REQUEST_FIELDS } from '../../modeler/vpl/compiler/agentWebgpu/layout';
+import { AGENT_GPU_F32_FIELDS, AGENT_GPU_F32_FIELDS_3D, AGENT_GPU_I32_FIELDS, AGENT_GPU_QUEUE_FIELDS, AGENT_GPU_REQUEST_FIELDS } from '../../modeler/vpl/compiler/agentWebgpu/layout';
 import { emitAgentForcePassWGSL, agentMirrorFields } from '../../modeler/vpl/compiler/agentWebgpu/forcePass';
 import { acquireSharedGpuDevice, releaseSharedGpuDevice } from './sharedGpuDevice';
 
@@ -673,7 +673,15 @@ export function uploadAgentSoA(rt: AgentWebGPURuntime, s: AgentStore): void {
     // The structural-request runs (G4 — incl. the 3D divideAxisZ) are uploaded as
     // 0 — a fresh request slate each step (the shader sets the flag, the worker
     // reads it back). divideAxisZ has no CPU source array here, so it falls through.
-    if (REQUEST_FIELD_SET.has(field) || field === 'divideAxisZ') { for (let i = 0; i < ma; i++) f[base + i] = 0; continue; }
+    if (REQUEST_FIELD_SET.has(field) || field === 'divideAxisZ') {
+      // P4 - a queue-shaped request run is `ma * bondReqSlots` long; zeroing only
+      // the first `ma` elements would leave a previous step's queued entries live
+      // on the GPU (the shader would append past them and the drain would apply
+      // stale ops). AGENT_GPU_QUEUE_FIELDS is the one list that says which.
+      const n = ma * (AGENT_GPU_QUEUE_FIELDS.has(field) ? L.bondReqSlots : 1);
+      for (let i = 0; i < n; i++) f[base + i] = 0;
+      continue;
+    }
     const src = f32Src[field];
     if (!src) continue;
     for (let i = 0; i < hw; i++) f[base + i] = src[i]!;
@@ -705,7 +713,7 @@ export function uploadAgentSoA(rt: AgentWebGPURuntime, s: AgentStore): void {
   for (const id of L.bondAttrIds) {
     const base = L.bondFormAttrBase[id];
     if (base === undefined) continue;
-    for (let i = 0; i < ma; i++) f[base + i] = 0;
+    for (let i = 0, n = ma * L.bondReqSlots; i < n; i++) f[base + i] = 0;
   }
   rt.device.queue.writeBuffer(rt.agentF32Buf, 0, f.buffer, f.byteOffset, f.byteLength);
 
@@ -2298,6 +2306,8 @@ export async function readbackAgentStep(rt: AgentWebGPURuntime, s: AgentStore): 
   const drB = L.f32Base['divideRequest']!, daxB = L.f32Base['divideAxisX']!, dayB = L.f32Base['divideAxisY']!;
   const dasymB = L.f32Base['divideAsym']!, bfrB = L.f32Base['bondFormReq']!, bflB = L.f32Base['bondFormL']!;
   const bfkB = L.f32Base['bondFormK']!, bbrB = L.f32Base['bondBreakReq']!, krB = L.f32Base['killRequest']!;
+  // P4 - queue entries per agent, shared by the GPU runs and the CPU arrays.
+  const nq = Math.min(L.bondReqSlots, s.bondReqSlots);
   for (let i = 0; i < hw; i++) {
     if (!s.alive[i]) continue;
     s.x[i] = f[xB + i]!; s.y[i] = f[yB + i]!;
@@ -2311,9 +2321,19 @@ export async function readbackAgentStep(rt: AgentWebGPURuntime, s: AgentStore): 
     s.divideRequest[i] = f[drB + i]! >= 0.5 ? 1 : 0;
     s.divideAxisX[i] = f[daxB + i]!; s.divideAxisY[i] = f[dayB + i]!;
     s.divideAsym[i] = f[dasymB + i]!;
-    s.bondFormReq[i] = Math.round(f[bfrB + i]!);
-    s.bondFormL[i] = f[bflB + i]!; s.bondFormK[i] = f[bfkB + i]!;
-    s.bondBreakReq[i] = Math.round(f[bbrB + i]!);
+    // P4 - the STRUCTURAL REQUEST QUEUE: copy the agent's WHOLE entry block, not
+    // just entry 0. Both sides are agent-major with the same stride (each derived
+    // from `bondReqSlotsForModel`), so this is a straight elementwise copy; `nq`
+    // is min'd purely as a bounds guard.
+    {
+      const cb = i * s.bondReqSlots, gb = i * L.bondReqSlots;
+      for (let c = 0; c < nq; c++) {
+        s.bondFormReq[cb + c] = Math.round(f[bfrB + gb + c]!);
+        s.bondBreakReq[cb + c] = Math.round(f[bbrB + gb + c]!);
+        s.bondFormL[cb + c] = f[bflB + gb + c]!;
+        s.bondFormK[cb + c] = f[bfkB + gb + c]!;
+      }
+    }
     s.killRequest[i] = f[krB + i]! >= 0.5 ? 1 : 0;
     // Per-agent packed RGBA → the snapshot colour buffer (s.colors is Uint8 RGBA).
     const c = col[i]! >>> 0, ci = i * 4;
@@ -2336,7 +2356,11 @@ export async function readbackAgentStep(rt: AgentWebGPURuntime, s: AgentStore): 
     const base = L.bondFormAttrBase[id];
     const dst = s.bondFormAttrs[id];
     if (base === undefined || !dst) continue;
-    for (let i = 0; i < hw; i++) { if (!s.alive[i]) continue; dst[i] = f[base + i]!; }
+    for (let i = 0; i < hw; i++) {
+      if (!s.alive[i]) continue;
+      const cb = i * s.bondReqSlots, gb = i * L.bondReqSlots;
+      for (let c = 0; c < nq; c++) dst[cb + c] = f[base + gb + c]!;
+    }
   }
   // (No i32 SoA readback: the agent i32 fields — lineage / bondCount — are
   // CPU-owned + uploaded read-only. There is no built-in agent "type" any more,

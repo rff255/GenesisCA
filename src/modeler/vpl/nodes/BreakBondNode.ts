@@ -1,14 +1,18 @@
 import type { NodeTypeDef } from '../types';
+import { emitBondRequestJS } from '../compiler/bondRequestEmitJS';
 
 /** Break Bond — request that the bond between this agent and a target agent be
  *  removed (Bond-Graph Agents). Applied in the post-step structural phase
  *  (symmetric — removed from both lists). `targetAgent` is typically ForEachBond's
  *  partner output (break a bond by condition, e.g. when over-strained). NOT
- *  async-only. */
+ *  async-only.
+ *
+ *  P4: requests are QUEUED — an agent may break several bonds in one step (depth:
+ *  Model Properties → Bond-Graph Agents → Bond Requests / Agent / Step). */
 export const BreakBondNode: NodeTypeDef = {
   type: 'breakBond',
   label: 'Break Bond',
-  description: 'Request that the bond between this agent and a target agent be removed (after the step). One request per agent per step — a later call this step replaces an earlier one.',
+  description: 'Request that the bond between this agent and a target agent be removed (after the step). Requests are queued, so an agent can break several bonds in one step.',
   category: 'output',
   color: '#00838f',
   requirements: { bondGraph: true },
@@ -18,6 +22,6 @@ export const BreakBondNode: NodeTypeDef = {
     { id: 'targetAgent', label: 'Target', kind: 'input', category: 'value', dataType: 'integer' },
   ],
   defaultConfig: {},
-  compile: (_nodeId, _config, inputs) =>
-    `_bondBreakReq[idx] = ((${inputs['targetAgent'] || '-1'}) | 0) + 1;\n`,
+  compile: (_nodeId, _config, inputs, _boundary, ctx) =>
+    emitBondRequestJS('break', inputs, ctx),
 };

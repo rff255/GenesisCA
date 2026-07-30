@@ -118,6 +118,7 @@ import { categoricalHasAlpha, readCategoricalEntries, readCategoricalDefault, ty
 import { colorConstantHasAlpha } from '../../nodes/GetColorConstantNode';
 import { viewCosHalf } from '../../nodes/GetAgentsInViewNode';
 import { cellFieldAttrsOf, bondAttrsOf } from '../../../../model/attributeScope';
+import { BOND_REQ_ID_BIAS, BOND_REQ_NONE, BOND_REQUEST_NODE_TYPES, bondReqSlotsForModel } from '../bondRequestQueue';
 import { encodeAttrValue } from '../../../../model/attrValueEncoding';
 import {
   computeAgentMemoryLayout, computeAgentMaxHashBins, AGENT_NEARBY_SCRATCH_SLOTS,
@@ -161,7 +162,7 @@ export const AGENT_WASM_SUPPORTED_TYPES: ReadonlySet<string> = new Set<string>([
   'getCellAttribute', 'setAttribute', 'updateAttribute', 'setAgentAttribute',
   'setVelocity', 'setAgentPosition', 'setAgentRadius',
   // structural writes (the post-step CPU structural phase reads the requests)
-  'divideAgent', 'formBond', 'breakBond', 'killAgent',
+  'divideAgent', 'formBond', 'breakBond', 'rewireBond', 'killAgent',
   // Stop Event — writes the agent stop cell (worker merges it into the shared flag)
   'stopEvent',
   // unified spawning — Create Agent + Add Agent To World in the behaviour graph
@@ -346,6 +347,13 @@ interface AgentWasmCtx {
    *  — the SAME LCA position JS's volatileHoist uses, keeping bit-parity. */
   hazardPinned: Set<string>;
   hazardEmitBefore: Map<string, string[]>;
+  /** P4 - the STRUCTURAL REQUEST QUEUE cursor: an i32 local holding how many
+   *  bond ops this agent has appended THIS step. Reset to 0 at the top of every
+   *  alive agent iteration. `-1` when the graph uses no queue verb, in which case
+   *  the local is never ALLOCATED - `em.allocLocal` changes the module bytes even
+   *  for an unused local, so the usage gate is what keeps a model without a verb
+   *  byte-identical. */
+  bondReqCursorLocal: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -636,6 +644,89 @@ function emitGetBondAttribute(ctx: AgentWasmCtx, node: GraphNode): void {
     em.localSet(out);
   });
   em.localGet(out);
+}
+
+/** P4 — append ONE entry to this agent's STRUCTURAL REQUEST QUEUE (Form / Break /
+ *  Rewire Bond). The WASM mirror of `bondRequestEmitJS` — same slot addressing,
+ *  same lane encoding, same overflow bucket, so JS↔WASM stays bit-identical.
+ *
+ *  entry = idx * slots + min(cursor, depth);  cursor++
+ *  (the cursor always bumps, so an op past the queue lands in the overflow bucket
+ *  rather than overwriting the last real entry — the drain reports it and drops it)
+ *
+ *  Because the ENTRY index goes into an i32 local, the existing per-agent element
+ *  address helpers (`pushI32ElemAddr` / `pushF64ElemAddr`, which compute
+ *  `regionOffset + local*width`) address a queue entry unchanged. */
+function emitBondRequest(ctx: AgentWasmCtx, node: GraphNode, verb: 'form' | 'break' | 'rewire'): void {
+  const em = ctx.em;
+  const slots = Math.max(1, ctx.layout.bondReqSlots);
+  const depth = slots - 1;
+  const cursor = ctx.bondReqCursorLocal;
+  const entry = em.allocLocal(I32);
+  // entry = idx*slots + min(cursor, depth)
+  em.localGet(ctx.idxLocal); em.i32Const(slots); em.op(OP_I32_MUL);
+  em.localGet(cursor); em.i32Const(depth);
+  em.localGet(cursor); em.i32Const(depth); em.op(OP_I32_LT_S);
+  em.op(OP_SELECT);
+  em.op(OP_I32_ADD); em.localSet(entry);
+  // cursor++
+  em.localGet(cursor); em.i32Const(1); em.op(OP_I32_ADD); em.localSet(cursor);
+
+  /** Push `v >= 0 ? v + BIAS : NONE` for the value in `vLocal`. */
+  const pushLane = (vLocal: number) => {
+    em.localGet(vLocal); em.i32Const(BOND_REQ_ID_BIAS); em.op(OP_I32_ADD);
+    em.i32Const(BOND_REQ_NONE);
+    em.localGet(vLocal); em.i32Const(0); em.op(OP_I32_GE_S);
+    em.op(OP_SELECT);
+  };
+  const breakOff = ctx.layout.i32['bondBreakReq']!, formOff = ctx.layout.i32['bondFormReq']!;
+  if (verb === 'rewire') {
+    // BOTH sides must resolve or the entry is an explicit no-op — a rewire with an
+    // unresolvable `From` must NOT degrade into a bare Form (that would raise the
+    // agent's degree, which a degree-preserving rule forbids).
+    const fL = em.allocLocal(I32);
+    pushValueAs(em, resolveValueInput(ctx, node, 'fromAgent', -1), I32); em.localSet(fL);
+    const tL = em.allocLocal(I32);
+    pushValueAs(em, resolveValueInput(ctx, node, 'toAgent', -1), I32); em.localSet(tL);
+    const okL = em.allocLocal(I32);
+    em.localGet(fL); em.i32Const(0); em.op(OP_I32_GE_S);
+    em.localGet(tL); em.i32Const(0); em.op(OP_I32_GE_S);
+    em.op(OP_I32_AND); em.localSet(okL);
+    const laneWhenOk = (vLocal: number) => {
+      em.localGet(vLocal); em.i32Const(BOND_REQ_ID_BIAS); em.op(OP_I32_ADD);
+      em.i32Const(BOND_REQ_NONE);
+      em.localGet(okL);
+      em.op(OP_SELECT);
+    };
+    pushI32ElemAddr(em, breakOff, entry); laneWhenOk(fL); em.i32Store();
+    pushI32ElemAddr(em, formOff, entry); laneWhenOk(tL); em.i32Store();
+  } else {
+    const tL = em.allocLocal(I32);
+    pushValueAs(em, resolveValueInput(ctx, node, 'targetAgent', -1), I32); em.localSet(tL);
+    if (verb === 'form') {
+      // The unused side writes BOND_REQ_NONE (1), never 0 — 0 is the drain's
+      // "nothing was appended here" terminator, so writing it would truncate the
+      // queue and silently drop every LATER op this agent issued.
+      pushI32ElemAddr(em, breakOff, entry); em.i32Const(BOND_REQ_NONE); em.i32Store();
+      pushI32ElemAddr(em, formOff, entry); pushLane(tL); em.i32Store();
+    } else {
+      pushI32ElemAddr(em, breakOff, entry); pushLane(tL); em.i32Store();
+      pushI32ElemAddr(em, formOff, entry); em.i32Const(BOND_REQ_NONE); em.i32Store();
+    }
+  }
+  if (verb !== 'break') {
+    pushF64ElemAddr(em, ctx.layout.f64['bondFormL']!, entry); pushValueInputF64(ctx, node, 'restLength', 0); em.f64Store();
+    pushF64ElemAddr(em, ctx.layout.f64['bondFormK']!, entry); pushValueInputF64(ctx, node, 'stiffness', 0); em.f64Store();
+    // P2 — the new bond's INITIAL attribute values, one f64 cell per QUEUE ENTRY.
+    // Nothing is emitted when the model has no bond attributes.
+    for (const spec of bondAttrSpecsOf(ctx.model)) {
+      const off = ctx.layout.bondFormAttrOffset[spec.id];
+      if (off === undefined) continue;
+      pushF64ElemAddr(em, off, entry);
+      pushValueInputF64(ctx, node, `bondAttr_${spec.id}`, spec.defaultValue);
+      em.f64Store();
+    }
+  }
 }
 
 /** Set Bond Attribute — write BOTH endpoints' slots (invariant I2). Mirrors
@@ -2635,33 +2726,16 @@ function compileFlowNode(ctx: AgentWasmCtx, nodeId: string): void {
       compileFlowChain(ctx, node.id, 'next');
       break;
     }
-    case 'formBond': {
-      // _bondFormReq[idx] = (target|0)+1; _bondFormL[idx]=restLength; _bondFormK[idx]=stiffness
-      pushI32ElemAddr(em, ctx.layout.i32['bondFormReq']!, ctx.idxLocal);
-      pushValueAs(em, resolveValueInput(ctx, node, 'targetAgent', -1), I32); em.i32Const(1); em.op(OP_I32_ADD); em.i32Store();
-      pushF64ElemAddr(em, ctx.layout.f64['bondFormL']!, ctx.idxLocal); pushValueInputF64(ctx, node, 'restLength', 0); em.f64Store();
-      pushF64ElemAddr(em, ctx.layout.f64['bondFormK']!, ctx.idxLocal); pushValueInputF64(ctx, node, 'stiffness', 0); em.f64Store();
-      // P2 — the new bond's INITIAL attribute values, one per-agent f64 request
-      // cell each (mirrors the JS FormBondNode emit). Nothing is emitted when the
-      // model has no bond attributes, so the module bytes are byte-identical.
-      for (const spec of bondAttrSpecsOf(ctx.model)) {
-        const off = ctx.layout.bondFormAttrOffset[spec.id];
-        if (off === undefined) continue;
-        pushF64ElemAddr(em, off, ctx.idxLocal);
-        pushValueInputF64(ctx, node, `bondAttr_${spec.id}`, spec.defaultValue);
-        em.f64Store();
-      }
+    case 'formBond':
+    case 'breakBond':
+    case 'rewireBond': {
+      emitBondRequest(ctx, node, node.data.nodeType === 'formBond' ? 'form'
+        : node.data.nodeType === 'breakBond' ? 'break' : 'rewire');
       compileFlowChain(ctx, node.id, 'next');
       break;
     }
     case 'setBondAttribute': {
       emitSetBondAttribute(ctx, node);
-      compileFlowChain(ctx, node.id, 'next');
-      break;
-    }
-    case 'breakBond': {
-      pushI32ElemAddr(em, ctx.layout.i32['bondBreakReq']!, ctx.idxLocal);
-      pushValueAs(em, resolveValueInput(ctx, node, 'targetAgent', -1), I32); em.i32Const(1); em.op(OP_I32_ADD); em.i32Store();
       compileFlowChain(ctx, node.id, 'next');
       break;
     }
@@ -4816,6 +4890,7 @@ export function compileAgentGraphWasm(
     viewerGuardIds,
     hazardPinned: new Set<string>(),
     hazardEmitBefore: new Map<string, string[]>(),
+    bondReqCursorLocal: -1,
   };
 
   // Assign getNearbyAgents + getAgentsInView scratch slots (reachable only) — both
@@ -4905,6 +4980,11 @@ export function compileAgentGraphWasm(
     // FRONT of the scratch region so the bump-pointer scratch (resolveInputArray)
     // starts above them.
     ctx.scratchTopLocal = em.allocLocal(I32);
+    // P4 - the queue cursor, allocated ONLY when a reachable node appends to the
+    // queue (an unused local still changes the module bytes).
+    if ([...reachable].some(id => BOND_REQUEST_NODE_TYPES.has(adj.nodeMap.get(id)?.data.nodeType ?? ''))) {
+      ctx.bondReqCursorLocal = em.allocLocal(I32);
+    }
     const arrayVars = (model.agentVariables ?? []).filter(v => v.kind === 'array');
     em.i32Const(agentLayout.scratchOffset); em.localSet(ctx.scratchTopLocal);
     for (const v of arrayVars) {
@@ -4939,6 +5019,8 @@ export function compileAgentGraphWasm(
           }
           // reset the bump-pointer scratch top above the array-var region
           em.localGet(scratchBaseLocal); em.localSet(ctx.scratchTopLocal);
+          // P4 - a fresh request queue for this agent (the cursor is per-agent).
+          if (ctx.bondReqCursorLocal >= 0) { em.i32Const(0); em.localSet(ctx.bondReqCursorLocal); }
           // refill array Local Variables with their uniform initial value
           for (const v of arrayVars) {
             const ref = ctx.arrayVarLocals.get(v.id)!;
@@ -5140,6 +5222,12 @@ export function buildAgentLayoutExtras(model: CAModel): AgentLayoutExtras {
     // baked-offset lockstep). The `defaultValue` here is 0 like the agent specs
     // above — the layout only needs the id + type (sizing), never the default.
     bondAttrSpecs: bondAttrsOf(model).map(a => ({ id: a.id, type: a.type, defaultValue: 0 })),
+    // P4 — the STRUCTURAL REQUEST QUEUE stride (D+1), or 1 when the agent graph
+    // uses no queue verb (⇒ the pre-P4 layout, byte-for-byte). Computed HERE (the
+    // one place the compiler and the worker's store both read, since this object
+    // is shipped) so the stride the emitters bake and the store's array shapes
+    // can never disagree — the baked-offset lockstep.
+    bondReqSlots: bondReqSlotsForModel(model),
   };
 }
 

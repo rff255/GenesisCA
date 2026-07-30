@@ -222,7 +222,7 @@ genesis-ca/
 │   │       ├── alignmentSnap.ts        # Pure Ctrl-drag alignment-guide geometry (computeAlignmentSnap + sameGuides)
 │   │       ├── bondAttrPorts.ts        # GRA P2: Form Bond's per-BOND-ATTRIBUTE initial-value ports — the ONE builder consumed by BOTH CaNode and effectivePorts
 │   │       ├── NodeExplorer.tsx        # Right-side searchable node list panel
-│   │       ├── nodes/                # 149 node types (one file each) + registry.ts
+│   │       ├── nodes/                # 150 node types (one file each) + registry.ts
 │   │       │   ├── nodeValidation.ts  # detectMissingConfig() — drives warning badges
 │   │       │   └── colorScalePresets.ts # Named palettes (Viridis/Magma/Rainbow/…) for Color Scale + Linked mappings
 │   │       ├── widgets/              # Shared inline editors (InlineWidgets.tsx, GradientStopsEditor.tsx)
@@ -354,7 +354,7 @@ The app is functional with these major systems:
 ### Visual Programming Language (VPL)
 - `src/modeler/vpl/GraphEditor.tsx` — React Flow-based node graph editor
 - `src/modeler/vpl/CaNode.tsx` — Custom node component with per-type config UI
-- `src/modeler/vpl/nodes/` — 149 node types (146 selectable from the Add Node menu + 3 hidden macro boundary nodes), each in its own file with `compile()` method. Canonical list: `ALL_NODES` in [registry.ts](src/modeler/vpl/nodes/registry.ts). Async-only nodes (6): SetNeighborhoodAttribute, SetNeighborAttributeByIndex, MarkCellUpdated, SetFacingOrientation, SetNeighborOrientationByIndex, MoveSelfToNeighbor. Includes `StopEventNode` (flow input only, text widget for stop message — compiles to `if (_stopFlag[0] === 0) _stopFlag[0] = <1-based idx>;` first-match-wins; WASM emitter mirrors this via `i32.store` at `layout.stopFlagOffset`).
+- `src/modeler/vpl/nodes/` — 150 node types (147 selectable from the Add Node menu + 3 hidden macro boundary nodes), each in its own file with `compile()` method. Canonical list: `ALL_NODES` in [registry.ts](src/modeler/vpl/nodes/registry.ts). Async-only nodes (6): SetNeighborhoodAttribute, SetNeighborAttributeByIndex, MarkCellUpdated, SetFacingOrientation, SetNeighborOrientationByIndex, MoveSelfToNeighbor. Includes `StopEventNode` (flow input only, text widget for stop message — compiles to `if (_stopFlag[0] === 0) _stopFlag[0] = <1-based idx>;` first-match-wins; WASM emitter mirrors this via `i32.store` at `layout.stopFlagOffset`).
 - Five "event" entry-point nodes: GenerationStep (per-gen logic), InitEvent (runs once PER CELL on simulator Reset — see Variegated Cells section), **GridInit** (runs ONCE GLOBALLY on Reset — free-form procedural seeding; see the "Grid Init Event" section), InputMapping C→A (brush), OutputMapping A→C (color pass)
 - `src/modeler/vpl/compiler/compile.ts` — Two-pass compiler: hoists values, then emits flow
 - Multi-output nodes (InputColor, GetColorConstant, MacroNode, ColorScale, FilterNeighbors, JoinNeighbors, GetFacingLabels, BreakDownNeighborIndex, InitEvent, GetCellPosition, GroupOperator with position output) use `_v${nodeId}_${portId}` naming
@@ -1946,7 +1946,7 @@ Wired into **all three** agent front-ends immediately after `collapseReroutes` �
 
 ### The sample — `Life on Bonds` ([scripts/gen-life-on-bonds.mjs](scripts/gen-life-on-bonds.mjs))
 Conway's Life as a GRAPH rule: a 32×32 torus lattice of agents **bonded to their 8 Moore neighbours**, one census node over the bool `alive`, rule `n == 3 || (alive && n == 2)`.
-- **The topology is built by AUTO-BOND, not Form Bond** (which is one request per agent per step — 8 neighbours would take 8 generations). With radius 0.45 the contact distance is 0.9, so `formDistance 1.9` admits everything under **1.71** — the orthogonals (1.0) and diagonals (√2 ≈ 1.414) — and excludes the next ring (2.0); `breakDistance 2.5` never fires because nothing moves. **Verified in the real worker: degree exactly 8 on all 1024 agents, E = 4096, and the partner set matches the expected Moore ring with 0 mismatches.** Auto-bond rides the Bonds=**Physics** capability, so the springs are on — `bondStiffness: 0` makes their force exactly zero, which is what keeps the lattice rigid.
+- **The topology is built by AUTO-BOND, not Form Bond** (P1-era reason: Form Bond was then one request per agent per step, so 8 neighbours would have taken 8 generations. **P4's request QUEUE removed that limit** — a Form Bond in a loop can now build the whole ring in one step — but the model keeps auto-bond, which needs no graph at all). With radius 0.45 the contact distance is 0.9, so `formDistance 1.9` admits everything under **1.71** — the orthogonals (1.0) and diagonals (√2 ≈ 1.414) — and excludes the next ring (2.0); `breakDistance 2.5` never fires because nothing moves. **Verified in the real worker: degree exactly 8 on all 1024 agents, E = 4096, and the partner set matches the expected Moore ring with 0 mismatches.** Auto-bond rides the Bonds=**Physics** capability, so the springs are on — `bondStiffness: 0` makes their force exactly zero, which is what keeps the lattice rigid.
 - **The one bootstrap subtlety**: the structural phase (where auto-bond runs) executes at the END of a step, so generation 1's behaviour still sees an EMPTY 1-ring. The rule is therefore gated on the census's **`Total > 0`** — an isolated node keeps its state, which is both the standard graph-automaton convention and what makes generation 1 a pure topology bootstrap. **So `Life on Bonds`[t+1] == `Game of Life on Agents`[t]** (verified, 150 generations, cell-for-cell, real worker). In sync agent mode "don't write" preserves the value (the write buffer is primed from the read buffer), so the gate needs no else-branch.
 - **Ships on `agentTarget: 'webgpu'`** per the library policy. P1 originally shipped it on `wasm` because the GPU did not double-buffer sync agent attributes (the finding below); **PX fixed that**, and this model is what proves it — its O7 differential passes cell-for-cell ON the GPU.
 
@@ -2079,6 +2079,41 @@ Form Bond's per-bond-attribute INLINE widget values were dropped on the **JS** t
 - `check-compile-identity` vs the PX baseline: **26 models, all surfaces unchanged**. tsc · build · `parity-agent-wasm` · `check-agent-wasm-gate` · `audit-agent-layout` · `test-agent-abi` · `parity-agent-force` · `verify-agent-render` · `verify-render-uniform-layouts` — all green.
 
 ---
+
+## Graph-Rewriting Automata — P4: the structural request QUEUE + the atomic Rewire verb (branch `GRA`)
+
+**THE KEYSTONE PHASE.** Form Bond and Break Bond each wrote a SINGLE `i32` cell per agent, so a later call in the same step silently REPLACED an earlier one. Every degree-preserving graph rewrite — triangle split, pair annihilation, edge swap — needs **2–5 edge mutations at one node in ONE step**; emulating that across generations makes the intermediate states violate the very invariant the rule preserves, which is why invariant **I6** was not merely unmet but *untestable*. Runbook: [docs/HANDOFF_GRA_P4_REQUEST_QUEUE.md](docs/HANDOFF_GRA_P4_REQUEST_QUEUE.md).
+
+### The queue — ONE shape, four consumers ([bondRequestQueue.ts](src/modeler/vpl/compiler/bondRequestQueue.ts))
+```
+slots  = D + 1                D = resolveBondRequestDepth(cfg)   (default 8, clamped [1,64])
+base   = idx * slots          agent-major, exactly like the ragged bond store
+slot c ∈ [0, D)               the QUEUE, drained in slot order (= the order the rule issued them)
+slot D                        the OVERFLOW BUCKET — written by every op past the queue, applied
+                              by NONE; its occupancy IS the overflow flag
+```
+Per entry the queue REUSES the existing request arrays as lanes, so **the ABI field list is unchanged**: `bondBreakReq` = the break side, `bondFormReq` = the form side, plus `bondFormL`/`bondFormK`/`bondFormAttr_<id>` for the form half. Because every entry carries BOTH sides, **one entry expresses all three verbs** and `rewireBond` is atomic *by construction* rather than two queued ops that could half-apply.
+- **THE `+2` LANE BIAS IS LOAD-BEARING**: `0` = empty slot · `1` (`BOND_REQ_NONE`) = this side unused · `v + 2` = agent `v`. Every emitted op writes a NON-ZERO value into BOTH lanes, so the drain can stop at the first `0/0` entry (O(ops), not O(D), per agent). With the naive `target + 1` encoding a Form Bond whose target resolved to `-1` would write `0` and **truncate the queue**, silently dropping every LATER op that agent issued this step. `verify-graph-rewrite` negative-controls exactly this.
+- **A REWIRE WITH AN UNRESOLVABLE SIDE WRITES `NONE` INTO BOTH LANES** — an explicit no-op entry. It must NOT degrade into a bare Form: that would RAISE the agent's degree, the exact thing a degree-preserving rule forbids.
+- **`bondReqSlotsForModel(model)` returns 1 when the agent graph uses NO queue verb** (scanning the top-level agent graph AND every macro def, since macros expand at compile time). That reproduces the pre-P4 layout byte-for-byte — a general USAGE property, not a rule-shape test — and is what keeps all 26 shipped models byte-identical on every surface.
+
+### The drain lives in the ENGINE, not the worker
+**`drainAgentBondRequests(store, lambda)`** ([agentEngine.ts](src/simulator/engine/agentEngine.ts)) is the ONE place queue entries are consumed; `runAgentStructuralPhase`'s step 1 just calls it and posts the overflow notice. It lives there so `scripts/verify-graph-rewrite.mjs` exercises the SHIPPED drain — **a drain the tests re-implement proves nothing**. Phase ordering is unchanged (bonds → death → division → division event → auto-bond → stale sweep).
+
+### `rewireBond` — the atomic verb (invariant I5)
+`rewireBond(store, a, from, to, …)` PRE-CHECKS, then breaks + forms, or **does nothing at all**: `a↔from` must exist (else the "rewire" would be a bare form), `to` must be live / in range / not `a`, and `to` must have room unless `a↔to` already exists. `a`'s own capacity needs no check — the break frees one of its slots first. `to === from` re-forms the same edge with the new L/λ/attributes. There is never a half-rewired partner.
+
+### Emit — one shared emitter per target, a per-ITERATION cursor
+The cursor (`_brqC` in JS, an i32 local on WASM, `var brqC` in WGSL) is a per-agent-iteration local, **declared only when the graph uses a verb** — on WASM `em.allocLocal` and on WGSL a `var` line both change the emitted bytes even when unused, so that usage gate IS the byte-identity gate. It always bumps, so an op past the queue lands in the overflow bucket instead of overwriting the last real entry.
+- **JS** — [bondRequestEmitJS.ts](src/modeler/vpl/compiler/bondRequestEmitJS.ts), one emitter for all three node files.
+- **WASM** — `emitBondRequest` in [agentWasm/compile.ts](src/modeler/vpl/compiler/agentWasm/compile.ts). Putting the ENTRY index in an i32 local lets the existing `pushI32ElemAddr`/`pushF64ElemAddr` helpers (`regionOffset + local*width`) address a queue entry unchanged.
+- **WebGPU** — `emitBondRequest` + `reqAt` in [agentWebgpu/compile.ts](src/modeler/vpl/compiler/agentWebgpu/compile.ts). **NO ATOMICS**: a thread appends only to its OWN agent's rows and the emit is sequential within a thread (contrast Apply Force To Agent, which scatters into another agent's slot and does need an atomic CAS).
+
+### The layout lockstep
+`AgentLayoutExtras.bondReqSlots` / `AgentMemoryLayout.bondReqSlots` / `AgentWebGPULayout.bondReqSlots` / `AgentStore.bondReqSlots` all come from ONE number, computed on the main thread (`bondReqSlotsForModel`) and shipped on **every** target as `agentBondReqSlots` in the init/recompile messages — because all three emitters BAKE the stride. `AGENT_REQUEST_QUEUE_FIELDS` (CPU) / `AGENT_GPU_QUEUE_FIELDS` (GPU) are the ONE list saying which fields are queue-shaped, consumed by both the offsets and the views/upload/readback over them. `bondReqSlotsForModel` is in SimulatorView's `needsFullInit` set: the stride IS the array shape, so a depth change — or **adding the first Form/Break/Rewire node**, which flips it from 1 to D+1 — needs a reinit, not a soft recompile. `clearAgentBondRequests` is the one place an agent's whole queue is zeroed (slot hygiene on alloc/free), so a new lane goes there and nowhere else.
+
+### Verification
+`scripts/verify-graph-rewrite.mjs` **Tier G** (135 → **180** checks): the usage gate; **I5** — D+3 ops apply EXACTLY D with the rest rejected whole, the graph exactly the pre-step graph minus those D edges, the queue fully cleared; **I5 rewire** — a rewire that cannot complete leaves the graph EXACTLY unchanged, and one from a non-existent edge never becomes a bare form; the terminator rule; **multi-op** — 3 rewires (6 edge mutations) by one agent in ONE generation with I1–I4 green immediately after; **O5** — a double-edge-swap rule keeps N, E and the **full degree multiset** invariant over **500 generations**, exactly; plus the emit shape on all three targets. **Every one is negative-controlled.** `parity-agent-wasm` gained the permanent `[synthetic] Bond request QUEUE` entry (4 explicit ops + a 12-iteration loop ⇒ overflow) whose **value invariant recomputes the expected queue independently** — negative-controlled three ways, including a SHARED-constant mutation that both targets follow identically (which parity alone would pass).
 
 ## Agent Capability Profiles (branch `absorb_old_automatosgt`)
 

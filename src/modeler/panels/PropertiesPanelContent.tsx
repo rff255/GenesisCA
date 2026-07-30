@@ -8,7 +8,7 @@ import { IndicatorsPanelSection } from './IndicatorsPanelSection';
 import { useDetailSelection, type PanelContentProps } from '../ModelerDetailContext';
 import { useListReorder } from './useListReorder';
 import { NumberField } from '../vpl/widgets/InlineWidgets';
-import { cbNum, usesBondingPhysics, CENTER_BASED_DEFAULTS } from '../../model/centerBased';
+import { cbNum, usesBondingPhysics, resolveMaxBonds, BOND_REQUEST_DEPTH_MAX, CENTER_BASED_DEFAULTS } from '../../model/centerBased';
 import type { CenterBasedNumericKey } from '../../model/centerBased';
 import { isAgentGraphWasmSupported } from '../vpl/compiler/agentWasm/compile';
 import { isAgentGraphWebGPUSupported } from '../vpl/compiler/agentWebgpu/compile';
@@ -736,6 +736,9 @@ export function PropertiesPanelContent({ mode = 'list' }: PanelContentProps = {}
                 <div style={{ fontSize: '0.6rem', color: '#888', textTransform: 'uppercase', letterSpacing: '0.05em', margin: '6px 0 4px' }}>Capacity</div>
                 {Row('Max Agents', NF('maxAgents', { min: 1, integer: true }), 'Over-allocated ceiling; overflow rejects (never wraps). Changing it re-inits the engine.')}
                 {Row('Max Bonds / Agent', NF('maxBonds', { min: 0, integer: true }), '0 = no bonds (pure-force / charged-particle models); the bond store is then not allocated.')}
+                {/* GRA P4 — the per-agent structural-request QUEUE depth. Only
+                    meaningful once bonds exist, so it follows Max Bonds. */}
+                {resolveMaxBonds(cb) > 0 && Row('Bond Requests / Agent / Step', NF('bondRequestDepth', { min: 1, max: BOND_REQUEST_DEPTH_MAX, integer: true }), 'How many Form / Break / Rewire Bond ops one agent may issue in ONE step — graph rewrites (triangle split, edge swap) need several at once. Ops past this are rejected whole with a notice. Changing it re-inits the engine.')}
                 <div style={{ fontSize: '0.6rem', color: '#888', textTransform: 'uppercase', letterSpacing: '0.05em', margin: '8px 0 4px' }}>Seeding</div>
                 {Row('Seed Count', NF('seedCount', { min: 0, integer: true }), 'Agents laid down on Reset (0 = seed via the brush).')}
                 {Row('Default Radius', NF('defaultRadius', { min: 0.01, step: 0.1 }))}

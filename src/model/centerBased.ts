@@ -36,6 +36,7 @@ export const CENTER_BASED_DEFAULTS = {
   formDistance: 1.1,         // d_form, × contact distance (auto-bond within)
   breakDistance: 1.6,        // d_break, × contact distance (> d_form — hysteresis)
   positionalIterations: 2,   // Jacobi sweeps for the hard positional collision (more = tighter no-overlap packing)
+  bondRequestDepth: 8,       // GRA P4 — per-agent structural-request QUEUE depth (form/break/rewire ops per generation)
 } as const;
 
 export type CenterBasedNumericKey = keyof typeof CENTER_BASED_DEFAULTS;
@@ -166,6 +167,21 @@ export function resolveMaxBonds(cfg: CenterBasedConfig | undefined | null): numb
     || (usesBondingPhysics(cfg) && !!cfg?.autoBond);
   if (!bondsIntended) return 0;
   return Math.max(0, Math.floor(cbNum(cfg, 'maxBonds')));
+}
+
+/** GRA P4 — the per-agent structural-request QUEUE depth `D`: how many bond
+ *  form / break / rewire ops one agent may issue in a single generation. The
+ *  SINGLE source of truth shared by the store (`createAgentStore`), the baked
+ *  memory layout (`computeAgentMemoryLayout`), the WebGPU agent layout, and all
+ *  three emitters — so the stride they bake and the arrays they index can never
+ *  disagree (the baked-offset lockstep). Clamped to [1, 64]: 1 reproduces the
+ *  historical single-slot behaviour, 64 is a sanity ceiling (the queue costs
+ *  `(D+1)` cells per agent per lane). */
+export const BOND_REQUEST_DEPTH_MAX = 64;
+export function resolveBondRequestDepth(cfg: CenterBasedConfig | undefined | null): number {
+  const v = Math.floor(cbNum(cfg, 'bondRequestDepth'));
+  if (!Number.isFinite(v)) return CENTER_BASED_DEFAULTS.bondRequestDepth;
+  return Math.min(BOND_REQUEST_DEPTH_MAX, Math.max(1, v));
 }
 
 /** Resolve the agent-engine compile target, CLAMPED to what's actually

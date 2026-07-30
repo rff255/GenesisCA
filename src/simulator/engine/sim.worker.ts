@@ -33,7 +33,7 @@ import {
   createAgentStore, seedAgents, clearAgents, allocAgentSlot, initAgentSlot, freeAgentSlot, freeStagedSlot,
   snapshotAgentsForRender, advanceAgentSprites, serializeAgentStore, deserializeAgentStore, buildSpatialHash,
   resolvePositionalCollisions,
-  formBond, breakBond, hasBond, sweepStaleBonds, divideAgent,
+  formBond, breakBond, drainAgentBondRequests, hasBond, sweepStaleBonds, divideAgent,
   primeAgentAttrWrite, swapAgentAttrs, computeAgentMaxHashBins, AGENT_HASH_BIN_CAP,
   type AgentStore, type AgentSeedSpec, type AgentStatePayload, type AgentAttrSpec, type SpatialHash,
   type AgentLayoutExtras,
@@ -231,6 +231,13 @@ interface InitMsg {
    *  sprite display buffers (reset before each colour pass + sliced into the
    *  render snapshot) so non-sprite agent models pay no extra per-step transfer. */
   agentHasSprites?: boolean;
+  /** P4 — the STRUCTURAL REQUEST QUEUE stride (`D + 1`, the overflow bucket
+   *  included), computed on the main thread by `bondReqSlotsForModel(model)`.
+   *  Shipped on EVERY target because all three emitters BAKE this stride, so the
+   *  store's array shapes must derive from the same number (the baked-offset
+   *  lockstep). `1` (a model whose agent graph uses no queue verb) is the pre-P4
+   *  single-slot shape. */
+  agentBondReqSlots?: number;
   /** PR5 (C-D1): true when the agent graph reads/writes the cell field
    *  (sampleField / fieldGradient / readCellsUnder / affectCellsUnder /
    *  secreteToField). Drives the WebGPU-grid field bridge: only a field model
@@ -331,7 +338,7 @@ interface PaintManualMsg {
   activeViewer: string;
 }
 interface ResetMsg { type: 'reset'; activeViewer: string; reqId?: number }
-interface RecompileMsg { type: 'recompile'; stepCode: string; initCode?: string; gridInitCode?: string; skipIsolatedEmpty?: SkipIsolatedEmptyConfig; inputColorCodes: Array<{ mappingId: string; code: string }>; outputMappingCodes: Array<{ mappingId: string; code: string }>; stopMessages?: string[]; updateMode: string; asyncScheme: string; wasmStepBytes?: Uint8Array; wasmStepError?: string; wasmExports?: string[]; viewerIds?: Record<string, number>; webgpuShaderCode?: string; webgpuShaderError?: string; webgpuEntryPoints?: WebGPUEntryPoints; webgpuLayout?: WebGPULayout; webgpuStopCheckInterval?: number; variegated?: VariegatedPayload; interactionTables?: InteractionTablePayload[]; agentBehaviourCode?: string; agentInitCode?: string; agentDivisionCode?: string; agentColorViewer?: string; agentOutputMappingCodes?: Array<{ mappingId: string; code: string }>; agentHasSprites?: boolean; centerBased?: CenterBasedConfig; agentUsesField?: boolean; agentUsesDensity?: boolean; agentResidencyClean?: boolean; agentTarget?: 'js' | 'wasm' | 'webgpu'; agentWasmBytes?: Uint8Array; agentWasmViewerGuardIds?: string[]; agentLayoutExtras?: AgentLayoutExtras; agentWasmLayoutSig?: { maxHashBins: number; totalBytes: number }; agentWebgpuBehaviourShader?: string; agentWebgpuForceShader?: string; agentWebgpuMaxAgents?: number; agentWebgpuMaxHashBins?: number; agentWebgpuLayout?: AgentWebGPULayout; agentRenderLayout?: AgentWebGPULayout; agentWebgpuUsesI32Write?: boolean; agentWebgpuUsage?: { usesBondStore?: boolean; usesBondStoreWrite?: boolean; usesIndicators?: boolean; usesAux?: boolean; usesSpawn?: boolean; usesStop?: boolean; usesForceScatter?: boolean }; agentWebgpuOmShaders?: AgentOMShaderInput[] }
+interface RecompileMsg { type: 'recompile'; stepCode: string; initCode?: string; gridInitCode?: string; skipIsolatedEmpty?: SkipIsolatedEmptyConfig; inputColorCodes: Array<{ mappingId: string; code: string }>; outputMappingCodes: Array<{ mappingId: string; code: string }>; stopMessages?: string[]; updateMode: string; asyncScheme: string; wasmStepBytes?: Uint8Array; wasmStepError?: string; wasmExports?: string[]; viewerIds?: Record<string, number>; webgpuShaderCode?: string; webgpuShaderError?: string; webgpuEntryPoints?: WebGPUEntryPoints; webgpuLayout?: WebGPULayout; webgpuStopCheckInterval?: number; variegated?: VariegatedPayload; interactionTables?: InteractionTablePayload[]; agentBehaviourCode?: string; agentInitCode?: string; agentDivisionCode?: string; agentColorViewer?: string; agentOutputMappingCodes?: Array<{ mappingId: string; code: string }>; agentHasSprites?: boolean; agentBondReqSlots?: number; centerBased?: CenterBasedConfig; agentUsesField?: boolean; agentUsesDensity?: boolean; agentResidencyClean?: boolean; agentTarget?: 'js' | 'wasm' | 'webgpu'; agentWasmBytes?: Uint8Array; agentWasmViewerGuardIds?: string[]; agentLayoutExtras?: AgentLayoutExtras; agentWasmLayoutSig?: { maxHashBins: number; totalBytes: number }; agentWebgpuBehaviourShader?: string; agentWebgpuForceShader?: string; agentWebgpuMaxAgents?: number; agentWebgpuMaxHashBins?: number; agentWebgpuLayout?: AgentWebGPULayout; agentRenderLayout?: AgentWebGPULayout; agentWebgpuUsesI32Write?: boolean; agentWebgpuUsage?: { usesBondStore?: boolean; usesBondStoreWrite?: boolean; usesIndicators?: boolean; usesAux?: boolean; usesSpawn?: boolean; usesStop?: boolean; usesForceScatter?: boolean }; agentWebgpuOmShaders?: AgentOMShaderInput[] }
 interface UpdateLookupTableMsg {
   type: 'updateLookupTable';
   attrId: string;
@@ -872,6 +879,11 @@ let agentColorViewer = '';
  *  buffers (reset before each colour pass + sliced into the render snapshot).
  *  Set from the init/recompile `agentHasSprites` flag. */
 let hasAgentSprites = false;
+/** P4 — the STRUCTURAL REQUEST QUEUE stride (`D + 1`) the compiled agent code
+ *  bakes. Shipped by the main thread on every target and handed to
+ *  `createAgentStore`, so the store's request arrays and the emitted stride are
+ *  ONE number (the baked-offset lockstep). 1 = the pre-P4 single-slot shape. */
+let agentBondReqSlots = 1;
 /** Ship per-agent velocity in the render snapshot even without sprites — set by
  *  `setAgentSnapshotVelocity` while the simulator's vision-cone display is on
  *  (the cones need a heading). Default false → the payload is byte-identical to
@@ -1138,7 +1150,7 @@ function initAgents(): void {
   const layoutExtras: AgentLayoutExtras | undefined = wantWasmBacked
     ? { ...(pendingAgentLayoutExtras ?? {}), fieldTotal: width * height * depth, syncAttrs: wantSyncAttrs }
     : undefined;
-  agentStore = createAgentStore(centerBasedConfig, buildAgentAttrSpecs(), { wasmBacked: wantWasmBacked, syncAttrs: wantSyncAttrs, maxHashBins: agentMaxHashBins, layoutExtras, bondAttrSpecs: buildBondAttrSpecs() });
+  agentStore = createAgentStore(centerBasedConfig, buildAgentAttrSpecs(), { wasmBacked: wantWasmBacked, syncAttrs: wantSyncAttrs, maxHashBins: agentMaxHashBins, layoutExtras, bondAttrSpecs: buildBondAttrSpecs(), bondReqSlots: agentBondReqSlots });
   // The agent world IS the grid coordinate frame (1:1, Decision D-FIELD): agent
   // (x,y) are in CELL units so they map onto the grid + the screen with the same
   // transform the cell blit uses. (worldWidth/Height in the config are reserved
@@ -2642,31 +2654,13 @@ function runAgentStructuralPhase(): void {
   const x = s.x, y = s.y, rad = s.radius, alive = s.alive;
   const lambda = cbNum(cfg, 'bondStiffness');
 
-  // 1. Apply explicit bond requests written by FormBond / BreakBond this step.
-  // P2: the new bond's INITIAL attribute values ride the per-agent
-  // `bondFormAttrs[<id>][i]` request cells the Form Bond node wrote; `formBond`
-  // stamps the SAME values into BOTH slots (invariant I2). Reused scratch (the
-  // spec list is fixed for the store's lifetime); empty ⇒ null ⇒ the defaults.
-  const bondFormVals = s.bondAttrSpecs.length > 0 ? new Float64Array(s.bondAttrSpecs.length) : null;
-  for (let i = 0; i < hw; i++) {
-    if (!alive[i]) { s.bondFormReq[i] = 0; s.bondBreakReq[i] = 0; continue; }
-    const fr = s.bondFormReq[i]!;
-    if (fr > 0) {
-      const p = fr - 1;
-      if (p >= 0 && p < hw && alive[p]) {
-        const L = s.bondFormL[i]! > 0 ? s.bondFormL[i]! : (rad[i]! + rad[p]!);
-        const K = s.bondFormK[i]! > 0 ? s.bondFormK[i]! : lambda;
-        if (bondFormVals) {
-          for (let ai = 0; ai < s.bondAttrSpecs.length; ai++) {
-            bondFormVals[ai] = s.bondFormAttrs[s.bondAttrSpecs[ai]!.id]![i]!;
-          }
-        }
-        formBond(s, i, p, L, K, 0, bondFormVals);
-      }
-      s.bondFormReq[i] = 0;
-    }
-    const br = s.bondBreakReq[i]!;
-    if (br > 0) { breakBond(s, i, br - 1); s.bondBreakReq[i] = 0; }
+  // 1. Drain each agent's STRUCTURAL REQUEST QUEUE (P4) - the bond form / break /
+  // rewire entries the behaviour graph appended this step, applied in slot order.
+  // The drain itself lives in the ENGINE (`drainAgentBondRequests`) so the
+  // invariant harness exercises the shipped code, not a copy; here we only
+  // surface the overflow notice.
+  if (drainAgentBondRequests(s, lambda)) {
+    self.postMessage({ type: 'agentOverflow', message: `Bond request queue full (depth ${s.bondReqSlots - 1}). Some Form / Break / Rewire Bond requests were dropped this step. Raise "Bond Requests / Agent / Step" in Model Properties > Bond-Graph Agents.` });
   }
 
   // 1b. Death ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â recycle killed agents (breaks all bonds + bumps the epoch).
@@ -5647,6 +5641,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       centerBasedConfig = msg.centerBased ?? null;
       agentColorViewer = msg.agentColorViewer || '';
       hasAgentSprites = !!msg.agentHasSprites;
+      agentBondReqSlots = Math.max(1, Math.floor(msg.agentBondReqSlots ?? 1));
       // PR6b-1 / PR7: resolve the agent target + stash the per-target payload
       // BEFORE initAgents (which reads agentTarget to decide whether to back the
       // store on WebAssembly.Memory). 'wasm' needs bytes; 'webgpu' needs the two
@@ -6331,6 +6326,12 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
         if (rc.agentResidencyClean !== undefined) agentGraphResidencyClean = !!rc.agentResidencyClean;
         if (rc.agentColorViewer !== undefined) agentColorViewer = rc.agentColorViewer || '';
         if (rc.agentHasSprites !== undefined) hasAgentSprites = !!rc.agentHasSprites;
+        // P4 — the queue stride only takes effect on the next store allocation
+        // (it IS the array shape), which is why `bondRequestDepth` + the queue-verb
+        // usage are in SimulatorView's `needsFullInit` set. Stashing it here keeps
+        // a later reinit (reset / dims change) in lockstep with the code just
+        // recompiled, rather than re-allocating against the previous stride.
+        if (rc.agentBondReqSlots !== undefined) agentBondReqSlots = Math.max(1, Math.floor(rc.agentBondReqSlots));
         compileAgentFns(rc.agentBehaviourCode, rc.agentInitCode, rc.agentDivisionCode, rc.agentOutputMappingCodes);
         // PR6b-1 / PR7: re-resolve the agent target + stash the per-target payload.
         // If the WASM backing requirement changes (JS/WebGPU ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬Â WASM, since wasm
