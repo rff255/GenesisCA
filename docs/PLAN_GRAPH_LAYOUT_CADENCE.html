@@ -1,0 +1,245 @@
+<meta charset="utf-8">
+<title>Graph Layout + Rule Cadence — illustrated plan</title>
+<style>
+  :root{--bg:#0c0d10;--panel:#15171c;--panel2:#1b1e24;--line:#2a2e37;--ink:#e6e8ee;
+        --dim:#9aa1ad;--faint:#6b727e;--accent:#e8a13a;--accent2:#4cc9f0;--ok:#66bb6a;--bad:#ef5350;--purple:#7e57c2}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;padding:38px 22px 90px}
+  .wrap{max-width:1060px;margin:0 auto}
+  h1{font-size:27px;margin:0 0 6px;letter-spacing:-.02em}
+  h2{font-size:19px;margin:50px 0 4px;color:var(--accent);border-bottom:1px solid var(--line);padding-bottom:7px}
+  h3{font-size:14.5px;margin:24px 0 6px;color:var(--accent2);font-weight:600}
+  p{margin:9px 0;color:var(--dim)} .lede{font-size:16px;color:var(--ink)}
+  code{background:#0a0b0e;border:1px solid var(--line);border-radius:4px;padding:1px 5px;font:12.5px ui-monospace,Consolas,monospace;color:#d8dee9}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:18px 20px;margin:16px 0}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  @media(max-width:820px){.grid2{grid-template-columns:1fr}}
+  table{width:100%;border-collapse:collapse;margin:12px 0;font-size:13.5px}
+  th,td{text-align:left;padding:7px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{color:var(--faint);font-weight:600;font-size:11.5px;letter-spacing:.05em;text-transform:uppercase}
+  .bad{color:var(--bad);font-weight:600}.ok{color:var(--ok);font-weight:600}
+  .cap{font-size:12.5px;color:var(--faint);margin-top:7px;font-style:italic}
+  svg{display:block;max-width:100%;height:auto}
+  .mono{font:12.5px/1.7 ui-monospace,Consolas,monospace;background:#0a0b0e;border:1px solid var(--line);border-radius:8px;padding:13px 15px;color:#d8dee9;white-space:pre;overflow-x:auto}
+  .warn{border-left:3px solid var(--bad);padding:2px 0 2px 14px;margin:14px 0;color:var(--ink)}
+  .rule{border-left:3px solid var(--accent);padding:2px 0 2px 14px;margin:14px 0;color:var(--ink)}
+  ul{color:var(--dim);margin:8px 0;padding-left:20px} li{margin:4px 0}
+  .tag{display:inline-block;font-size:11px;letter-spacing:.06em;text-transform:uppercase;padding:2px 8px;border-radius:99px;border:1px solid var(--line);color:var(--faint)}
+  .tag.l1{color:var(--accent);border-color:#4a3a1c;background:#20180a}
+  .tag.l2{color:var(--accent2);border-color:#1c3a4a;background:#0a1820}
+  .tag.l3{color:var(--ok);border-color:#2c4a30;background:#132016}
+</style>
+<div class="wrap">
+
+<h1>Graph Layout + Rule Cadence</h1>
+<p class="lede">Illustrated plan. Design authority: <code>IMPACT_MAP_GRAPH_LAYOUT_CADENCE.md</code>
+· Execution: <code>HANDOFF_GRAPH_LAYOUT_CADENCE.md</code></p>
+<p>One reported symptom — the grown graph is an unreadable blob and runs slowly — with
+<strong>four measured causes</strong>. Everything here is measured, not reasoned.</p>
+
+<!-- ============================================================ -->
+<h2>1 · Why it collapses</h2>
+
+<div class="card">
+<svg viewBox="0 0 1000 250" role="img" aria-label="Repulsion reaches 1.8 units while bonds pull from 5.">
+  <text x="16" y="22" fill="#9aa1ad" font-size="12.5" font-weight="600" letter-spacing=".08em">THE PAIR FORCE, TO SCALE</text>
+
+  <!-- axis -->
+  <line x1="60" y1="150" x2="940" y2="150" stroke="#2a2e37" stroke-width="2"/>
+  <g font-size="11" fill="#6b727e" text-anchor="middle">
+    <text x="60" y="172">0</text><text x="204" y="172">1.8</text>
+    <text x="377" y="172">3.96</text><text x="460" y="172">5</text><text x="940" y="172">…2000</text>
+  </g>
+  <g stroke="#6b727e" stroke-width="1">
+    <line x1="60" y1="144" x2="60" y2="156"/><line x1="204" y1="144" x2="204" y2="156"/>
+    <line x1="377" y1="144" x2="377" y2="156"/><line x1="460" y1="140" x2="460" y2="160"/>
+  </g>
+
+  <!-- repulsion band -->
+  <rect x="60" y="96" width="144" height="34" rx="4" fill="#ef5350" opacity=".28" stroke="#ef5350"/>
+  <text x="132" y="118" text-anchor="middle" font-size="11.5" fill="#ef5350" font-weight="600">REPULSION</text>
+  <!-- adhesion band -->
+  <rect x="204" y="96" width="173" height="34" rx="4" fill="#7e57c2" opacity=".28" stroke="#7e57c2"/>
+  <text x="290" y="118" text-anchor="middle" font-size="11.5" fill="#b39ddb" font-weight="600">ADHESION (pulls IN)</text>
+  <!-- nothing -->
+  <rect x="377" y="96" width="563" height="34" rx="4" fill="#1b1e24" stroke="#2a2e37" stroke-dasharray="4 4"/>
+  <text x="658" y="118" text-anchor="middle" font-size="12" fill="#6b727e">NOTHING — no force at all</text>
+
+  <!-- bond marker -->
+  <path d="M460,96 L460,60" stroke="#4cc9f0" stroke-width="2"/>
+  <circle cx="460" cy="56" r="5" fill="#4cc9f0"/>
+  <text x="472" y="60" font-size="12.5" fill="#4cc9f0" font-weight="600">bonds rest HERE (5)</text>
+  <text x="472" y="78" font-size="11.5" fill="#9aa1ad">— where repulsion has been zero since 1.8</text>
+
+  <text x="60" y="216" font-size="12.5" fill="#e6e8ee">A node pushes back only once something is practically on top of it.</text>
+  <text x="60" y="236" font-size="12.5" fill="#ef5350">Reference: repulsion reaches <tspan font-weight="600">80×</tspan> the link length. Ours: <tspan font-weight="600">0.36×</tspan>.</text>
+</svg>
+</div>
+
+<div class="grid2">
+<div class="card">
+<h3>Measured on the real growth process</h3>
+<p>K4 → 1200 nodes by triangle split, through the <strong>real engine force loop</strong>.</p>
+<table>
+<tr><th></th><th>nearest non-bonded ÷ bond</th><th>overlap</th></tr>
+<tr><td>shipped</td><td class="bad">0.06</td><td class="bad">99.2 %</td></tr>
+<tr><td>+ 30× settle time</td><td class="bad">0.06</td><td class="bad">99.4 %</td></tr>
+<tr><td><strong>+ widen <code>interactionRange</code></strong></td><td class="bad">0.06</td><td class="bad">99.4 %</td></tr>
+<tr><td><strong>+ charge force</strong></td><td class="ok">0.81</td><td class="ok">0.0 %</td></tr>
+</table>
+<div class="warn"><strong>The third row killed the obvious fix.</strong> <code>interactionRange</code>
+widens the <em>search</em>, not the force — which is zero past contact regardless, and
+past contact the sign flips to attraction. <strong>This is not a tuning problem.</strong></div>
+</div>
+
+<div class="card">
+<h3>…and a finite cutoff is enough</h3>
+<table>
+<tr><th>charge cutoff</th><th>nnb ÷ bond</th><th>overlap</th></tr>
+<tr><td>none</td><td class="bad">0.06</td><td class="bad">99.2 %</td></tr>
+<tr><td>4× rest</td><td>0.68</td><td class="ok">0.0 %</td></tr>
+<tr><td><strong>8× rest</strong></td><td class="ok">0.81</td><td class="ok">0.0 %</td></tr>
+<tr><td>16× rest</td><td>0.87</td><td class="ok">0.0 %</td></tr>
+<tr><td>∞ (the reference)</td><td>0.86</td><td class="ok">0.0 %</td></tr>
+</table>
+<div class="rule"><strong>So: no Barnes–Hut.</strong> Quality saturates by ~8×; unbounded
+range only <em>inflates</em> the layout. A cutoff charge reuses the existing spatial
+hash and is <strong>one extra term in the pair loop all three targets already have</strong>.</div>
+</div>
+</div>
+
+<div class="card">
+<h3>Two further causes</h3>
+<div class="grid2">
+<div>
+<p><strong>The world is saturated.</strong> 220×220 torus; a 3-regular graph needs ~N·rest².</p>
+<table>
+<tr><th>N</th><th>spacing</th><th>needs 5</th></tr>
+<tr><td>1000</td><td>6.96</td><td class="ok">ok</td></tr>
+<tr><td>2000</td><td>4.92</td><td class="bad">saturated</td></tr>
+<tr><td>5120</td><td>3.07</td><td class="bad">2.6× too small</td></tr>
+</table>
+<p class="cap">At the reported size the graph cannot lay out at <em>any</em> repulsion strength.</p>
+</div>
+<div>
+<p><strong>…and it is slow for the same reason.</strong> Cost ∝ N × local density, and a
+collapsed layout maximises density.</p>
+<table>
+<tr><th></th><th>ms/step</th><th>steps/s</th></tr>
+<tr><td>50k, spread</td><td>55</td><td>18</td></tr>
+<tr><td>50k, <strong>5× denser</strong></td><td class="bad">103</td><td class="bad">10</td></tr>
+</table>
+<p class="cap">Fixing the layout makes it faster. WASM ≈ JS throughout (12.1 vs 12.4 ms) —
+the compile target is not the lever.</p>
+</div>
+</div>
+</div>
+
+<!-- ============================================================ -->
+<h2>2 · Cadence — in the rule graph, not the engine <span class="tag l2">L2</span></h2>
+
+<div class="card">
+<p>There is <strong>no engine clock to decouple</strong> — the force pass already runs every
+generation. What is missing is the <em>rule's</em> ability to say when it rewrites. And
+today <strong>nothing can read the generation</strong> from a cell or agent graph
+(<code>ovGetGeneration</code> is Overseer-only; <code>generation</code> is not in the agent ABI).</p>
+
+<svg viewBox="0 0 1000 210" role="img" aria-label="Periodic Step roots lower into one guarded behaviour step.">
+  <text x="16" y="20" fill="#4cc9f0" font-size="12.5" font-weight="600" letter-spacing=".08em">WHAT THE USER AUTHORS</text>
+  <rect x="14" y="32" width="420" height="164" rx="9" fill="#15171c" stroke="#2a2e37"/>
+  <g font-size="11.5">
+    <rect x="36" y="52" width="180" height="40" rx="6" fill="#1b1e24" stroke="#4cc9f0"/>
+    <text x="126" y="70" text-anchor="middle" fill="#e6e8ee" font-weight="600">Periodic Step</text>
+    <text x="126" y="85" text-anchor="middle" fill="#9aa1ad">period 1 · phase 0</text>
+    <text x="230" y="76" fill="#6b727e">→ per-agent logic</text>
+
+    <rect x="36" y="104" width="180" height="40" rx="6" fill="#1b1e24" stroke="#e8a13a"/>
+    <text x="126" y="122" text-anchor="middle" fill="#e6e8ee" font-weight="600">Periodic Step</text>
+    <text x="126" y="137" text-anchor="middle" fill="#9aa1ad">period 10 · phase 0</text>
+    <text x="230" y="128" fill="#e8a13a">→ the REWRITE</text>
+
+    <rect x="36" y="156" width="180" height="26" rx="6" fill="#1b1e24" stroke="#7e57c2"/>
+    <text x="126" y="173" text-anchor="middle" fill="#e6e8ee">Periodic Step · p2 φ1</text>
+    <text x="230" y="173" fill="#6b727e">→ a second phase</text>
+  </g>
+
+  <path d="M446,114 L502,114" stroke="#e8a13a" stroke-width="2" marker-end="url(#a2)"/>
+  <defs><marker id="a2" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 z" fill="#e8a13a"/></marker></defs>
+  <text x="474" y="104" text-anchor="middle" font-size="10.5" fill="#6b727e">lowering</text>
+
+  <text x="516" y="20" fill="#66bb6a" font-size="12.5" font-weight="600" letter-spacing=".08em">WHAT COMPILES (zero per-target emit)</text>
+  <rect x="514" y="32" width="472" height="164" rx="9" fill="#15171c" stroke="#2a2e37"/>
+  <text x="534" y="56" font-size="12" fill="#e6e8ee" font-weight="600">ONE behaviourStep</text>
+  <text x="534" y="80" font-size="11.5" font-family="ui-monospace,monospace" fill="#9aa1ad">if (gen % 1  == 0) { … }</text>
+  <text x="534" y="102" font-size="11.5" font-family="ui-monospace,monospace" fill="#e8a13a">if (gen % 10 == 0) { rewrite }</text>
+  <text x="534" y="124" font-size="11.5" font-family="ui-monospace,monospace" fill="#9aa1ad">if (gen % 2  == 1) { … }</text>
+  <text x="534" y="158" font-size="11.5" fill="#6b727e">the P1 census pattern — a pre-compile lowering,</text>
+  <text x="534" y="176" font-size="11.5" fill="#6b727e">so all three targets work by construction.</text>
+</svg>
+<p class="cap"><code>phase</code> matters as much as <code>period</code>: the reference alternates
+states-then-divisions, which is exactly period 2 at phases 0 and 1.</p>
+</div>
+
+<div class="card">
+<h3>⚠ The delicate point — GPU residency</h3>
+<div class="mono">dispatchResidentBatch(rt, gens, …)
+  const enc = device.createCommandEncoder()
+  for (let g = 0; g &lt; gens; g++) {        <span style="color:#ef5350">// ALL generations…</span>
+      … hash · behaviour · force · posCommit …
+  }
+  device.queue.submit([enc.finish()])     <span style="color:#ef5350">// …ONE submit, no CPU touch per gen</span></div>
+<p>A generation supplied through the Control uniform would be <strong>constant for the whole
+batch</strong> — silently wrong, on that path only, and invisible to any single-step test.</p>
+<div class="rule"><strong>Fix:</strong> a GPU-side counter in a storage buffer, bumped by
+<code>posCommit</code>, which already runs once per generation. Cheap, keeps residency.</div>
+</div>
+
+<div class="warn">
+<strong>What does NOT belong in the graph:</strong> how many times the <em>solver</em> iterates per
+generation. That is numerical relaxation, not rule logic — an engine knob, like the
+existing <code>positionalIterations</code>. Putting it in the graph would be like exposing an
+ODE's step count as a node.
+</div>
+
+<!-- ============================================================ -->
+<h2>3 · Phases</h2>
+
+<div class="card">
+<table>
+<tr><th></th><th>delivers</th><th>exit oracle</th></tr>
+<tr>
+  <td><span class="tag l1">L1</span></td>
+  <td><strong>Charge force</strong> — a cutoff repulsion term in the fused pair loop, new
+      capability (default off), on JS 2D+3D · WASM · WebGPU · the B1 mirror</td>
+  <td>overlap 99.2 % → ≤1 %, nnb ÷ bond ≥ 0.6; charge-off byte-identical; JS↔WASM bit-parity</td>
+</tr>
+<tr>
+  <td><span class="tag l2">L2</span></td>
+  <td><strong>Cadence</strong> — <code>Get Generation</code> (universal) + <code>Periodic Step</code>
+      (lowering) + the GPU residency counter</td>
+  <td>a multi-generation resident batch observes <strong>N distinct generations</strong>, negative-controlled</td>
+</tr>
+<tr>
+  <td><span class="tag l3">L3</span></td>
+  <td><strong>Payoff</strong> — <code>layoutIterations</code> engine knob, sample retune (charge,
+      world size, parent-midpoint newborns, Periodic Step), <strong>Expression instead of Math</strong></td>
+  <td>a readable graph <strong>in a screenshot</strong>, faster than before at equal N, O6 still holding</td>
+</tr>
+</table>
+</div>
+
+<h3>Risks, ranked</h3>
+<ul>
+  <li><strong>The hash bin edge.</strong> If the charge cutoff does not join the <code>binEdge</code>
+      max, the force is <em>silently truncated</em> — plausible-looking and wrong. It gets its
+      own exit-gate test.</li>
+  <li><strong>The B1 mirror force variant.</strong> A second force pipeline exists; missing it
+      diverges only for models that engage it.</li>
+  <li><strong>GPU residency + generation</strong> (above) — wrong only there, only in a batch.</li>
+  <li><strong>Mid-list ABI insertion.</strong> Append; a mid-list lane shifts every later baked
+      offset (P5's finding).</li>
+  <li><strong>3D charge cost.</strong> The stencil is a volume — measure, don't assume the 2D
+      default transfers.</li>
+</ul>
+
+</div>
