@@ -4092,6 +4092,14 @@ function computeVolatile(ctx: AgentWasmCtx, extraSeeds?: Set<string>): void {
  *  the JS sink-hoist) is hoistable. */
 const AGENT_VALUE_NO_HOIST: ReadonlySet<string> = new Set<string>([
   'getRandom', 'getVariable', 'getAgentAttribute', 'getIndicator',
+  // Unified spawning: `createAgent` is an ALLOC SIDE EFFECT whose `handle` is
+  // produced by the FLOW emitter (it caches the host-call result), so it has no
+  // value emitter and must never be hoisted to loop-top. The WebGPU mirror has
+  // carried this entry since the spawn port; its absence here made the DOCUMENTED
+  // idiom (Create Agent -> Add To World -> consume the handle) fail to compile on
+  // WASM with "unsupported value node 'createAgent'", silently clamping every
+  // behaviour-graph spawning model to JS.
+  'createAgent',
   // P2: a bond attribute is mutable mid-step (Set Bond Attribute writes both
   // slots) AND the read scans the CURRENT agent's bond list — never hoist it.
   'getBondAttribute',
