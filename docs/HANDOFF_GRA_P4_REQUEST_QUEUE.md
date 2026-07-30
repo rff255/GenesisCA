@@ -142,7 +142,7 @@ its link-update semantics honestly in light of this.
 
 **State**: **DONE**
 
-**Commit(s)**: `<sha>` — `feat(agents): per-agent structural request queue + the atomic Rewire Bond verb`
+**Commit(s)**: `de9cadc` — `feat(agents): per-agent structural request queue + the atomic Rewire Bond verb`
 
 **Files touched**
 
