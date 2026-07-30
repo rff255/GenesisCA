@@ -64,9 +64,13 @@ supersedes), [HANDOFF_AGENTS_FLOATING_CELLS.md](HANDOFF_AGENTS_FLOATING_CELLS.md
    - **Baked-offset lockstep**: the agent store's layout and the compiler's layout
      must derive from the SAME inputs. A mismatch does not crash — it silently reads
      the wrong memory (the documented "+64-cell corruption" class).
-   - **Compaction lockstep**: `breakBond` and `freeAgentSlot` swap-with-last. A bond
-     field added to the store but missed in *either* path corrupts silently on the
-     first bond removal. Invariant **I2** is the test that catches it — write it first.
+   - **Compaction lockstep**: there are **THREE** swap-with-last sites, not two —
+     `removeBondSlot` (used by Break Bond AND death via `breakAllBonds`) and
+     **`sweepStaleBonds`**, which carries its own copy (P2 finding; the Impact Map
+     §3.5 names only the first two). Since P2 they ALL call the field-list-driven
+     `moveBondSlot`, so a new ragged bond field goes in `store.bondSlotArrays` and
+     nowhere else. A field missed by any of them corrupts silently on the first bond
+     removal. Invariant **I2** + the compaction audit are the tests — write them first.
    - Any new async batch loop in the worker MUST set/clear `asyncStepBatchInFlight`
      from a `finally` — a throw with the flag set dead-locks the worker silently.
    - Naga **strips an unused WGSL storage global** ⇒ the bind group mismatches the
@@ -95,7 +99,7 @@ supersedes), [HANDOFF_AGENTS_FLOATING_CELLS.md](HANDOFF_AGENTS_FLOATING_CELLS.md
 
 ```
 P1 Census + Rule-Table macro + Life-on-Bonds     ← DONE
-  └→ P2 Bond attributes: schema/store/CPU ABI/JS+WASM   ← READY, fully specified
+  └→ P2 Bond attributes: schema/store/CPU ABI/JS+WASM   ← DONE
        └→ PX WebGPU sync agent attributes (double-buffer) ← INSERTED by P1's finding
             └→ P3 Bond attributes: WebGPU                [refine after P2+PX]
 P4 Structural request QUEUE + Rewire verb        ← independent of P2/P3  [refine first]
@@ -137,7 +141,7 @@ The orchestrator updates this after reading each phase's Completion Report.
 | Phase | Handoff doc | State | Session | Commit | Notes |
 |---|---|---|---|---|---|
 | P1 Census + Rule Table | [HANDOFF_GRA_P1_CENSUS.md](HANDOFF_GRA_P1_CENSUS.md) | **DONE** | 2026-07-30 | `2a8fb42` + `502ae8d` | Census + lowering on all 3 targets, `Life on Bonds`, GRA Rule Table macro, `verify-graph-rewrite.mjs` (58 checks). O7/O11/O3 + I1/I3/I4 green. **Two things to read**: (a) a pre-existing operand-port defect in BOTH agent `groupCounting`/`groupStatement` emitters was P1-blocking and is fixed in its own commit `2a8fb42`; (b) **`agentUpdateMode: 'sync'` is NOT honoured on the WebGPU agent target** — a pre-existing race that makes the SHIPPED census-free GoL-on-Agents wrong by 18/1024 cells there. **Decide before P3.** |
-| P2 Bond attrs (CPU) | [HANDOFF_GRA_P2_BOND_ATTRIBUTES.md](HANDOFF_GRA_P2_BOND_ATTRIBUTES.md) | **DONE** | 2026-07-30 | *(see report)* | `CAModel.bondAttributes` (bool/int/float/tag), ragged store, `_bondAttr_`/`_bondFormAttr_` ABI, Get/Set Bond Attribute + Form Bond initial values, panel + inspector, JS+WASM bit-parity. I1–I4 green, 500-gen compaction audit negative-controlled at the ENGINE level, 26 models byte-identical. **Three things to read**: (a) **a THIRD compaction path** (`sweepStaleBonds`) exists that the Impact Map's enumeration missed — handled by the mandated field-list-driven helper, but §3.5's prose needs correcting; (b) the ABI **`gate(profile)` hook is still unused and should NOT be made live** — no caller passes a profile; the SHAPE is the gate; (c) the WebGPU gate rejects at MODEL level (`bondAttrsOf(model).length > 0`), so P3 must lift that term, not just add node types. |
+| P2 Bond attrs (CPU) | [HANDOFF_GRA_P2_BOND_ATTRIBUTES.md](HANDOFF_GRA_P2_BOND_ATTRIBUTES.md) | **DONE** | 2026-07-30 | `a4eb632` | `CAModel.bondAttributes` (bool/int/float/tag), ragged store, `_bondAttr_`/`_bondFormAttr_` ABI, Get/Set Bond Attribute + Form Bond initial values, panel + inspector, JS+WASM bit-parity. I1–I4 green, 500-gen compaction audit negative-controlled at the ENGINE level, 26 models byte-identical. **Three things to read**: (a) **a THIRD compaction path** (`sweepStaleBonds`) exists that the Impact Map's enumeration missed — handled by the mandated field-list-driven helper, but §3.5's prose needs correcting; (b) the ABI **`gate(profile)` hook is still unused and should NOT be made live** — no caller passes a profile; the SHAPE is the gate; (c) the WebGPU gate rejects at MODEL level (`bondAttrsOf(model).length > 0`), so P3 must lift that term, not just add node types. |
 | PX WebGPU sync agent attrs | *(refine after P2)* | BLOCKED | — | — | **inserted by P1's finding (b)** — double-buffer the GPU agent attr region for sync models, or reject sync+neighbour-read on WebGPU. Fixes a shipped-model correctness bug; unblocks the WebGPU target for synchronous GRA rules |
 | P3 Bond attrs (WebGPU) | *(refine after P2+PX)* | BLOCKED | — | — | needs P2's layout decisions + D3, and PX's double-buffer pattern. P2 left it a **model-level** gate term (`bondAttrsOf(model).length > 0` at the top of `isAgentGraphWebGPUSupported`) + a Properties hint arm keyed on `model.bondAttributes?.length` — both must be lifted together |
 | P4 Request queue + Rewire | *(refine first)* | PLANNED | — | — | the atomicity unblock; enables O5/O6 |

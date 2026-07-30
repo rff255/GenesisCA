@@ -221,7 +221,7 @@ inherit attributes with their bonds, and that is all.
 
 **State**: **DONE**
 
-**Commit(s)**: see the Status Board row (one commit on `GRA`).
+**Commit(s)**: `a4eb632` — `feat(agents): bond attributes - per-edge user state on JS and WASM`
 
 **Files touched**
 
