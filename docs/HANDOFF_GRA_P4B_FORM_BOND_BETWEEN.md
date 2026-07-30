@@ -4,7 +4,7 @@
 §0 (invariants), §3, §5. **Predecessor**: [HANDOFF_GRA_P4_REQUEST_QUEUE.md](HANDOFF_GRA_P4_REQUEST_QUEUE.md)
 — this phase completes its verb set and must obey its queue discipline.
 
-**State**: READY · **Depends on**: P4 (the queue) · **Blocks**: **P7's flagship Cubic GRA
+**State**: **DONE** (see the Completion Report) · **Depends on**: P4 (the queue) · **Blocks**: **P7's flagship Cubic GRA
 sample and the milestone's headline oracle O6**
 
 **Origin**: inserted by the orchestrator while preparing P7. Not a defect — a genuine
