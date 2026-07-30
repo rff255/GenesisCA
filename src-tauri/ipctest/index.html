@@ -1,0 +1,96 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>GenesisCA binary-IPC self-test</title></head>
+<body style="font:14px monospace;background:#111;color:#ddd">
+<pre id="log">running…</pre>
+<script>
+// NATIVE BINARY-IPC SELF-TEST -- the only way to exercise the WebView2 raw-body
+// path without a human clicking a Save As dialog. NOT part of the shipped app:
+// it is built as a stand-in frontend via `--config src-tauri/ipctest.conf.json`.
+//
+//   cd <a scratch dir>                      # artefacts land in the CWD
+//   npx tauri build --no-bundle --config src-tauri/ipctest.conf.json
+//   <repo>/src-tauri/target/release/genesisca.exe     # then close the window
+//   cat genesisca_ipctest_result.json
+//   node -e "..."                           # verify the bytes (see the commit)
+//
+// Afterwards rebuild the REAL app (`npm run tauri build -- --no-bundle`), since
+// generate_context! embeds the frontend at compile time and target/release/
+// otherwise holds this test page.
+//
+// Drives the SAME invoke calls saveBinaryFile makes -- same command names, same
+// x-genesis-save-token header, same top-level Uint8Array payload -- then writes
+// a JSON verdict via save_text_file so the outside world can read it.
+// Relative paths -- they resolve against the process CWD, so run the exe from
+// a scratch directory and the artefacts land there (see the header comment).
+const OUT = 'genesisca_ipctest_out.bin';
+const ABORTED = 'genesisca_ipctest_aborted.bin';
+const RESULT = 'genesisca_ipctest_result.json';
+const HDR = 'x-genesis-save-token';
+
+// byte[i] = (i*7 + 13) % 256 -- regenerated independently by the checker.
+function pattern(offset, len) {
+  const a = new Uint8Array(len);
+  for (let i = 0; i < len; i++) a[i] = ((offset + i) * 7 + 13) % 256;
+  return a;
+}
+
+async function run() {
+  const inv = window.__TAURI_INTERNALS__.invoke;
+  const r = { ok: false, steps: [], tokens: [] };
+  try {
+    // ── 1. A multi-chunk binary save, 12 MiB in 8 MiB + 4 MiB pieces ──────
+    const CH = 8 * 1024 * 1024, TOTAL = 12 * 1024 * 1024;
+    const t0 = performance.now();
+    const token = await inv('save_binary_begin', { path: OUT });
+    r.tokens.push(token);
+    r.steps.push('begin -> token ' + token);
+    let chunks = 0;
+    for (let off = 0; off < TOTAL; off += CH) {
+      const len = Math.min(CH, TOTAL - off);
+      await inv('save_binary_chunk', pattern(off, len), { headers: { [HDR]: String(token) } });
+      chunks++;
+    }
+    await inv('save_binary_end', { token });
+    r.steps.push('wrote ' + TOTAL + ' bytes in ' + chunks + ' chunks in ' + Math.round(performance.now() - t0) + ' ms');
+    r.bytes = TOTAL;
+    r.chunks = chunks;
+
+    // ── 2. Abort must UNLINK the partial file ────────────────────────────
+    const t2 = await inv('save_binary_begin', { path: ABORTED });
+    r.tokens.push(t2);
+    await inv('save_binary_chunk', pattern(0, 4096), { headers: { [HDR]: String(t2) } });
+    await inv('save_binary_abort', { token: t2 });
+    r.steps.push('abort session ' + t2);
+
+    // ── 3. A missing token header must be a loud error, not a silent write ─
+    try {
+      await inv('save_binary_chunk', pattern(0, 8));
+      r.steps.push('BAD: chunk without a token header SUCCEEDED');
+      r.headerRejected = false;
+    } catch (e) {
+      r.steps.push('chunk without a token header rejected: ' + String(e));
+      r.headerRejected = true;
+    }
+
+    // ── 4. An unknown token must be a loud error ─────────────────────────
+    try {
+      await inv('save_binary_chunk', pattern(0, 8), { headers: { [HDR]: '424242' } });
+      r.steps.push('BAD: unknown token SUCCEEDED');
+      r.unknownRejected = false;
+    } catch (e) {
+      r.steps.push('unknown token rejected: ' + String(e));
+      r.unknownRejected = true;
+    }
+
+    r.ok = true;
+  } catch (e) {
+    r.error = String(e && e.stack || e);
+  }
+  document.getElementById('log').textContent = JSON.stringify(r, null, 2);
+  try { await window.__TAURI_INTERNALS__.invoke('save_text_file', { path: RESULT, contents: JSON.stringify(r, null, 2) }); } catch (e) {}
+}
+run();
+</script>
+</body>
+</html>

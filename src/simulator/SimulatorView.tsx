@@ -9663,22 +9663,29 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
    *  `saveBinaryFile`, which is a plain blob download on the web but a real
    *  native Save As in the Tauri shell — WebView2 silently drops `<a download>`,
    *  so a bare anchor here would write NOTHING in the desktop build.
-   *  Returns true if a file was written; false if the user cancelled or the
-   *  write failed (the failure is surfaced as a toast, never swallowed). */
-  const triggerDownload = async (blob: Blob, filename: string): Promise<boolean> => {
+   *  CANCELLED and FAILED are kept apart: only the caller knows whether the
+   *  bytes are recoverable, and reporting a write failure as "cancelled" would
+   *  be a lie. A failure is always toasted here; a cancel never is. */
+  const saveBlobFile = async (blob: Blob, filename: string): Promise<'saved' | 'cancelled' | 'failed'> => {
     try {
-      return await saveBinaryFile(blob, filename);
+      return (await saveBinaryFile(blob, filename)) ? 'saved' : 'cancelled';
     } catch (err) {
       console.error('Save failed', err);
       showAgentNotice(`Save failed: ${err instanceof Error ? err.message : String(err)}`);
-      return false;
+      return 'failed';
     }
   };
 
+  /** Fire-and-forget save (screenshots): cancelling loses nothing and the shot
+   *  is trivially retaken, so only a real failure says anything. */
+  const triggerDownload = (blob: Blob, filename: string): void => {
+    void saveBlobFile(blob, filename);
+  };
+
   /** Stop-and-Save tail: the encoder is already finished, so if the user
-   *  cancels Save As the bytes are gone. Say so rather than resetting silently. */
+   *  cancels Save As the bytes are GONE. Say so rather than resetting silently. */
   const saveRecording = async (blob: Blob, filename: string): Promise<void> => {
-    if (!await triggerDownload(blob, filename)) {
+    if (await saveBlobFile(blob, filename) === 'cancelled') {
       showAgentNotice('Recording discarded — save was cancelled');
     }
   };

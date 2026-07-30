@@ -1,0 +1,6 @@
+{
+  "build": {
+    "frontendDist": "ipctest",
+    "beforeBuildCommand": ""
+  }
+}

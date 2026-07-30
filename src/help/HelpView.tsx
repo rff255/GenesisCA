@@ -94,6 +94,15 @@ export function HelpView() {
             from the project&rsquo;s Releases page: it wraps the same browser engine, so the limit
             is the same. It exists for offline / portable use, not more memory.)
           </p>
+          <p className={styles.p}>
+            In the <strong>standalone desktop build</strong> every save &mdash; projects and
+            saved states, presets and macros, exported results, <strong>video recordings</strong>{' '}
+            and <strong>screenshots</strong> alike &mdash; opens a real OS <em>Save As</em>{' '}
+            dialog so you choose the folder and filename, instead of dropping the file into a
+            Downloads folder. Cancelling that dialog writes nothing; if you cancel it after a
+            recording, the simulator says so explicitly, because the video has already been
+            encoded and is discarded at that point.
+          </p>
         </section>
 
         {/* ============================================================ */}
