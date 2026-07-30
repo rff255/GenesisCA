@@ -166,11 +166,12 @@ console.log(`  overlap% = nodes with a non-bonded neighbour inside contact dista
 console.log('  scenario                                         N     bond   nnb/bond   overlap%');
 console.log('  ' + '-'.repeat(78));
 const rows = [
-  { label: 'SHIPPED: contact-only (range 2.2), 1 tick/round', range: 2.2, charge: 0, chargeMaxDist: 1, ticksPerSplitRound: 1 },
-  { label: 'contact-only, 30 ticks/round (settle time)', range: 2.2, charge: 0, chargeMaxDist: 1, ticksPerSplitRound: 30 },
-  { label: 'wide contact repulsion (range 25), 30 ticks', range: 25, charge: 0, chargeMaxDist: 1, ticksPerSplitRound: 30 },
-  { label: 'LONG-RANGE CHARGE -3, maxDist 2000, 1 tick', range: 2.2, charge: -3, chargeMaxDist: 2000, ticksPerSplitRound: 1 },
-  { label: 'LONG-RANGE CHARGE -3, maxDist 2000, 30 ticks', range: 2.2, charge: -3, chargeMaxDist: 2000, ticksPerSplitRound: 30 },
+  { label: 'SHIPPED: contact-only, 1 tick/round', range: 2.2, charge: 0, chargeMaxDist: 1, ticksPerSplitRound: 1 },
+  { label: 'charge -3, cutoff   20 (= 4x rest), 8 ticks', range: 2.2, charge: -3, chargeMaxDist: 20, ticksPerSplitRound: 8 },
+  { label: 'charge -3, cutoff   40 (= 8x rest), 8 ticks', range: 2.2, charge: -3, chargeMaxDist: 40, ticksPerSplitRound: 8 },
+  { label: 'charge -3, cutoff   80 (=16x rest), 8 ticks', range: 2.2, charge: -3, chargeMaxDist: 80, ticksPerSplitRound: 8 },
+  { label: 'charge -3, cutoff  160 (=32x rest), 8 ticks', range: 2.2, charge: -3, chargeMaxDist: 160, ticksPerSplitRound: 8 },
+  { label: 'charge -3, cutoff 2000 (effectively inf)   ', range: 2.2, charge: -3, chargeMaxDist: 2000, ticksPerSplitRound: 8 },
 ];
 for (const r of rows) {
   const o = grow({ target, rest, ...r });
