@@ -1,5 +1,6 @@
 ﻿import type { GraphNode, GraphEdge, CAModel } from '../../../model/types';
-import { agentAttrsOf, cellFieldAttrsOf } from '../../../model/attributeScope';
+import { agentAttrsOf, bondAttrsOf, cellFieldAttrsOf } from '../../../model/attributeScope';
+import { encodeAttrValue } from '../../../model/attrValueEncoding';
 import { buildAgentAbiParams, type AgentAbiShape } from './agentAbi';
 import { getAllNodeDefs, getNodeDef } from '../nodes/registry';
 import { CURRENT_VIEWER_SENTINEL } from '../nodes/SetCellLooksNode';
@@ -458,6 +459,11 @@ function compileRoot(
     // a per-agent function (agent ABI: `_fieldW`/`_fieldH`/`_fieldTotal`)" from
     // "I'm compiling into a per-cell function (`W`/`H`/`D` params)".
     agentGraph: AGENT_ROOT_TYPES.has(rootNode.data.nodeType),
+    // P2 — the model's BOND attributes with their defaults already encoded to the
+    // stored NUMBER. `bondAttrsOf` applies the Bonds-off + allowed-type filters, so
+    // this list is exactly the `_bondAttr_<id>` ABI block; a node naming anything
+    // outside it emits a literal instead of a dangling param reference.
+    bondAttrs: model ? bondAttrsOf(model).map(a => ({ id: a.id, type: a.type, defaultValue: encodeAttrValue(a, a.defaultValue) })) : [],
   };
 
   const compiled = new Set<string>();
@@ -2366,6 +2372,11 @@ export function agentAbiShapeOf(model: CAModel): AgentAbiShape {
     agentAttrs: agentAttrsOf(model),
     fieldAttrs: cellFieldAttrsOf(model),
     hasLookupTables: model.attributes.some(a => a.isModelAttribute && a.type === 'lookupTable'),
+    // P2 — bond attributes. `bondAttrsOf` already returns [] when the Bonds
+    // capability is off and drops any type outside D1's set, so the worker's
+    // `agentAbiShapeOfStore` (which reads the store's `bondAttrSpecs`, built from
+    // the SAME resolver) produces the identical ordered list.
+    bondAttrs: bondAttrsOf(model),
   };
 }
 

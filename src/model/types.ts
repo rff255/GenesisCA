@@ -610,6 +610,10 @@ export interface SerializedAgentState {
   maxBonds: number;
   buffers: Record<string, string>;
   attrs: Record<string, { kind: string; data: string }>;
+  /** P2 — USER BOND attributes, one ragged base64 buffer per attribute (the
+   *  per-EDGE analogue of `attrs`). Optional: absent in every pre-P2 file and in
+   *  any model with no bond attributes → each attribute loads at its default. */
+  bondAttrs?: Record<string, { kind: string; data: string }>;
 }
 
 /** Complete simulation state snapshot for .gcastate files.
@@ -1039,6 +1043,23 @@ export interface CAModel {
    *  `model/attributeScope.ts`. The `_field_<id>` bridge stays keyed by the CELL
    *  attributes (`cellFieldAttrsOf`), so the two id-spaces never collide. */
   agentAttributes?: Attribute[];
+  /** Graph-Rewriting Automata (P2): the BOND attribute set — per-EDGE user state,
+   *  a THIRD id-space alongside `attributes` (cell/model) and `agentAttributes`.
+   *  A bond is one object stored twice (both endpoints carry a slot), so a bond
+   *  attribute is SYMMETRIC: Set Bond Attribute writes BOTH slots and invariant I2
+   *  requires them to agree. Read/written via Get/Set Bond Attribute (by partner
+   *  id) and seeded at Form Bond time.
+   *
+   *  ONLY `bool` / `integer` / `float` / `tag` are offered (decision D1) — the
+   *  scalar-numeric set that fits one number exactly on every target. `vector` /
+   *  `color` / `neighborIndex` are excluded: a vector bond attribute would need
+   *  the `lowerVectorAttrs` treatment on a RAGGED store, a separate milestone.
+   *  The UI dropdown enforces it and the store/layout skip anything else
+   *  defensively (a hand-edited file cannot allocate a shape no target can read).
+   *
+   *  Absent/empty in every legacy file + non-agent model; a Bonds-capability-off
+   *  model allocates ZERO bond-attribute bytes (`resolveMaxBonds` → 0). */
+  bondAttributes?: Attribute[];
   /** Generic Agent Platform: the AGENT Attribute→Color output mappings — separate
    *  "views" of the agent population, the agent analogue of `mappings` (the CELL-grid
    *  mappings). Each is an A→C view over the AGENT attribute set, **Standalone OR

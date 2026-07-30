@@ -59,7 +59,7 @@ import { canonicalizeAccessorEdges } from '../accessorCSE';
 import { computeAsyncReadWriteHazards } from '../asyncWriteHazard';
 import { computeVolatileHoist } from '../volatileHoist';
 import { getNodeDef } from '../../nodes/registry';
-import { cellFieldAttrsOf, cellFieldWriteAttrsOf, agentAttrsOf } from '../../../../model/attributeScope';
+import { cellFieldAttrsOf, cellFieldWriteAttrsOf, agentAttrsOf, bondAttrsOf } from '../../../../model/attributeScope';
 import { modelAttrSlotKeys } from '../../../../model/attributeScope';
 import { categoricalHasAlpha, readCategoricalEntries, readCategoricalDefault, type CategoricalEntry } from '../../nodes/CategoricalColorNode';
 import { colorConstantHasAlpha } from '../../nodes/GetColorConstantNode';
@@ -3233,6 +3233,17 @@ function reachableFromRoot(nodes: GraphNode[], edges: GraphEdge[], rootId: strin
  *  toggle/next/previous indicators) + the array-producer capacity gate. */
 export function isAgentGraphWebGPUSupported(model: CAModel | undefined | null): boolean {
   if (!model || !model.topologyMode?.agents) return false;
+  // ── P2 (Graph-Rewriting Automata): BOND ATTRIBUTES are CPU-only for now ──────
+  // The GPU bond store is a read-only stride-2 [partner, restLength] array
+  // (agentWebgpu/layout.ts) — it carries no user bond-attribute lanes, and Form
+  // Bond's GPU request fields have no slot for the initial values. Rather than
+  // reject the three nodes individually (which would let a Form-Bond model
+  // silently DROP its initial values on the GPU), the whole model clamps while
+  // it declares any bond attribute. This is the sanctioned CAPABILITY GATE, not a
+  // silent JS clamp: the model still runs — on WASM/JS, which support the feature
+  // fully — and the Properties agent-target hint says why. P3 lifts this by
+  // widening the bondStore stride + promoting it to read_write (decision D3).
+  if (bondAttrsOf(model).length > 0) return false;
   const nodes = model.agentGraphNodes ?? [];
   const edges = model.agentGraphEdges ?? [];
   if (!nodes.some(n => n.data.nodeType === 'behaviourStep')) return false;

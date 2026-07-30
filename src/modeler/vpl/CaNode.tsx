@@ -19,6 +19,7 @@ import { vectorPortDims } from './compiler/vectorAttr';
 import { is3dModelLike } from './compiler/niCodec';
 import { MULTI_ATTR_TYPES, MULTI_ATTR_SET_TYPES, multiAttrExtraCount, buildExtraSlotPorts, resolveSlotAttr } from './compiler/multiAttrExpand';
 import { buildCensusPorts, censusAttributes } from './compiler/censusExpand';
+import { buildBondAttrPorts } from './bondAttrPorts';
 import { applyLookupAxisPorts } from './nodes/LookupInteractionNode';
 import {
   isConnectingGlobal,
@@ -522,6 +523,14 @@ function CaNodeComponent({ id, data }: NodeProps) {
   if (nodeData.nodeType === 'neighbourCensus') {
     const censusPorts = buildCensusPorts(nodeData.nodeType, nodeData.config, model);
     outputPorts = [...censusPorts.outputs, ...outputPorts];
+  }
+
+  // Form Bond: one initial-value input per BOND attribute (P2), labelled with the
+  // attribute name + a type-adaptive inline widget. Same shared builder as
+  // effectivePorts.ts (buildBondAttrPorts). See bondAttrPorts.ts.
+  if (nodeData.nodeType === 'formBond') {
+    const bondPorts = buildBondAttrPorts(nodeData.nodeType, model);
+    inputPorts = [...inputPorts, ...bondPorts.inputs];
   }
 
   // Table Lookup: shape the index inputs per the referenced table — legacy

@@ -33,6 +33,14 @@ export interface AgentAbiShape {
   agentAttrs: ReadonlyArray<{ id: string }>;
   fieldAttrs: ReadonlyArray<{ id: string }>;
   hasLookupTables: boolean;
+  /** P2 — USER BOND attributes (per-EDGE state), in `bondAttrsOf(model)` order.
+   *  Adds `_bondAttr_<id>` (the ragged region) to the `loop` AND `division` blocks,
+   *  plus `_bondFormAttr_<id>` (the per-agent Form-Bond initial-value request cell)
+   *  to `loop`. ABSENT / empty ⇒ no fields at all, so every pre-P2 signature is
+   *  byte-identical. Already empty when the Bonds capability is off — `bondAttrsOf`
+   *  applies that filter, so the descriptor needs no `gate` (see the note on the
+   *  `gate` hook below). */
+  bondAttrs?: ReadonlyArray<{ id: string }>;
 }
 
 /** The runtime values the ARG resolvers pull from (the external caches the
@@ -86,8 +94,18 @@ const F = (name: string, cType: AgentAbiField['cType'], get: Getter, gate?: (p: 
  *  byte-identical to the hand-written mirrors. The `profile` param is accepted
  *  now so STEP 3+ can gate fields without a signature change at the call sites. */
 export function deriveAgentAbi(kind: AgentAbiKind, shape: AgentAbiShape, profile?: AgentCapabilities): AgentAbiField[] {
-  void profile; // reserved for STEP 3+ per-field capability gating (`field.gate(profile)`).
+  // The `gate(profile)` hook stays UNUSED, deliberately (P2 finding): NOT ONE
+  // caller passes a profile — `compile.ts`'s three param builders, the worker's
+  // three arg builders and every harness all call with `(kind, shape)`. Making the
+  // hook live would therefore be a silent no-op at every real site, and wiring a
+  // profile through six call sites is not what a capability gate needs to be:
+  // the SHAPE is already the gate. P2's bond block drops when `shape.bondAttrs` is
+  // empty, and `bondAttrsOf(model)` (the ONE resolver every site uses) returns
+  // empty when the Bonds capability is off — so the block gates on the capability
+  // without the descriptor ever seeing a profile.
+  void profile;
   const { is3d, agentAttrs, fieldAttrs, hasLookupTables } = shape;
+  const bondAttrs = shape.bondAttrs ?? [];
   const fields: AgentAbiField[] = [];
 
   // --- leading positional args (division / init) ---
@@ -188,6 +206,12 @@ export function deriveAgentAbi(kind: AgentAbiKind, shape: AgentAbiShape, profile
       F('_bondFormK', 'f64[]', s => s.bondFormK),
       F('_bondBreakReq', 'i32[]', s => s.bondBreakReq),
     );
+    // P2 — USER BOND ATTRIBUTES: the ragged read/write region per attribute, then
+    // the per-agent Form-Bond initial-value request cell per attribute. Both
+    // blocks are EMPTY when the model has none (or Bonds is off), so every pre-P2
+    // loop signature is byte-identical.
+    for (const a of bondAttrs) fields.push(F(`_bondAttr_${a.id}`, 'obj', s => s.bondAttrs[a.id]));
+    for (const a of bondAttrs) fields.push(F(`_bondFormAttr_${a.id}`, 'f64[]', s => s.bondFormAttrs[a.id]));
   } else if (kind === 'division') {
     // Division's smaller bond slice (For Each Bond over inherited bonds).
     fields.push(
@@ -196,6 +220,11 @@ export function deriveAgentAbi(kind: AgentAbiKind, shape: AgentAbiShape, profile
       F('_bondPartnerEpoch', 'i32[]', s => s.bondPartnerEpoch),
       F('maxBonds', 'scalar', s => s.maxBonds),
     );
+    // P2 — the division event reads/writes bond attributes too (a daughter can
+    // inspect the bonds it inherited; P5 will assign them). NO `_bondFormAttr_`
+    // block: the division ABI carries no `_bondFormReq`, so Form Bond is not
+    // usable there in the first place.
+    for (const a of bondAttrs) fields.push(F(`_bondAttr_${a.id}`, 'obj', s => s.bondAttrs[a.id]));
   }
 
   // --- user agent attributes (r_ read block, then w_ write block) ---

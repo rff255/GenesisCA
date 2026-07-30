@@ -19,6 +19,7 @@ import type { SpriteAtlasInput, Light3D, Metaballs3D, AutoZoom3D } from './rende
 import type { VoxelRenderView } from './engine/webgpuRuntime';
 import { LightBallWidget } from './LightBallWidget';
 import { agentTargetOf, resolveMaxBonds } from '../model/centerBased';
+import { bondAttrsOf } from '../model/attributeScope';
 import { compileAgentGraphWasmForModel, isAgentGraphWasmSupported, buildAgentLayoutExtras } from '../modeler/vpl/compiler/agentWasm/compile';
 import type { AgentLayoutExtras } from './engine/agentEngine';
 import { compileAgentGraphWebGPUForModel, isAgentGraphWebGPUSupported } from '../modeler/vpl/compiler/agentWebgpu/compile';
@@ -508,6 +509,8 @@ export interface AgentStateResponse {
   bondDegree?: number; density?: number;
   attrs?: Record<string, number>;
   bonds?: number[];
+  /** P2 — per-EDGE user state, PARALLEL to `bonds`. Absent with no bond attrs. */
+  bondAttrs?: Array<Record<string, number>>;
 }
 
 const MANUAL_BRUSH_KEY_PREFIX = 'genesisca_manual_brush_v1:';
@@ -5698,6 +5701,12 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       attributes: expandVectorAttributes(model.attributes).map(toAttrDefMsg),
       // Generic Agent Platform: the AGENT attribute set (separate id-space).
       agentAttributes: expandVectorAttributes(model.agentAttributes ?? []).map(toAttrDefMsg),
+      // Graph-Rewriting Automata (P2): the BOND attribute set (per-EDGE state).
+      // `bondAttrsOf` applies the Bonds-off + allowed-type filters HERE, so the
+      // worker's store specs are the same ordered list the compiler's ABI block +
+      // memory layout derive from (the baked-offset lockstep). NOT vector-expanded:
+      // `vector` is outside the allowed bond-attribute type set (decision D1).
+      bondAttributes: bondAttrsOf(model).map(toAttrDefMsg),
       neighborhoods: effModel.neighborhoods.map(n => ({ id: n.id, coords: n.coords, coords3d: n.coords3d })),
       boundaryTreatment: model.properties.boundaryTreatment,
       updateMode: model.properties.updateMode || 'synchronous',
@@ -6049,6 +6058,14 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       // the baked agent-WASM memory offsets — adding/removing/retyping one resizes
       // the store, so it needs a full reinit (a soft recompile keeps the stale SoA).
       || !attrsStructurallyEqual(prev.agentAttributes ?? [], model.agentAttributes ?? [])
+      // Graph-Rewriting Automata (P2): the BOND attribute set drives the RAGGED
+      // bond regions in the agent memory layout AND the `_bondAttr_<id>` ABI block.
+      // Adding / removing / RETYPING / REORDERING one changes both, so it needs a
+      // full reinit — a soft recompile would re-bake the module against a layout
+      // the live memory doesn't have (the baked-offset corruption class). Order
+      // matters (the regions are appended in list order), and `attrsStructurallyEqual`
+      // is index-wise, so a reorder is caught.
+      || !attrsStructurallyEqual(prev.bondAttributes ?? [], model.bondAttributes ?? [])
       // Indicators are reserved exactly 8 bytes each in the baked wasmMemory
       // layout (no headroom), with rngState / order / scratch immediately after.
       // A soft recompile re-bakes the WASM module against the NEW indicator count
@@ -11329,6 +11346,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
             popover={p}
             state={agentStatesRef.current.get(p.id) ?? null}
             agentAttributes={model.agentAttributes ?? []}
+            bondAttributes={model.bondAttributes ?? []}
             capProfile={agentCapProfile}
             focused={focusedAgentPopoverId === p.id}
             totalOpen={agentPopovers.length}
@@ -11346,6 +11364,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
             popover={agentSweepPopover}
             state={agentStatesRef.current.get(agentSweepPopover.id) ?? null}
             agentAttributes={model.agentAttributes ?? []}
+            bondAttributes={model.bondAttributes ?? []}
             capProfile={agentCapProfile}
             transient
             focused={false}

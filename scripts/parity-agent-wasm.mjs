@@ -15,7 +15,7 @@ import { fileURLToPath, pathToFileURL } from 'url';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const ENTRY = `
-export { createAgentStore, computeAgentMaxHashBins, buildSpatialHash, seedAgents, formBond } from '../src/simulator/engine/agentEngine.ts';
+export { createAgentStore, computeAgentMaxHashBins, buildSpatialHash, seedAgents, formBond, breakBond } from '../src/simulator/engine/agentEngine.ts';
 export { compileAgentGraphWasmForModel, instantiateAgentWasm, buildAgentLayoutExtras, isAgentGraphWasmSupported } from '../src/modeler/vpl/compiler/agentWasm/compile.ts';
 export { compileAgentGraph } from '../src/modeler/vpl/compiler/compile.ts';
 export { buildAgentAbiArgs } from '../src/modeler/vpl/compiler/agentAbi.ts';
@@ -30,7 +30,7 @@ const outPath = join(dir, 'bundle.mjs');
 await build({ entryPoints: [entryPath], bundle: true, format: 'esm', platform: 'node', outfile: outPath, logLevel: 'error', absWorkingDir: process.cwd() });
 const m = await import(pathToFileURL(outPath).href);
 const {
-  createAgentStore, computeAgentMaxHashBins, buildSpatialHash, seedAgents, formBond,
+  createAgentStore, computeAgentMaxHashBins, buildSpatialHash, seedAgents, formBond, breakBond,
   compileAgentGraphWasmForModel, instantiateAgentWasm,
   compileAgentGraph, buildAgentAbiArgs, migrateForHarness, agentAttrsOf, cellFieldAttrsOf,
   resolveKeyLabels, normalizeLookupTable,
@@ -42,8 +42,22 @@ const cbNum = (cfg, k, d) => { const v = cfg?.[k]; return typeof v === 'number' 
 // — the SAME `buildAgentAbiArgs` the worker uses — instead of a 4th hand-copy that
 // could silently desync. So this parity run also verifies the descriptor-derived
 // loop args (the worker's `buildAgentLoopArgs` routes through the same function).
+/** Encode an attribute's declared string default to the number its region stores
+ *  (the harness analogue of `encodeAttrValue`; bond attrs are bool/int/float/tag). */
+function encodeAttr(a) {
+  const v = a.defaultValue ?? '';
+  if (a.type === 'bool') return v === 'true' || v === '1' ? 1 : 0;
+  if (a.type === 'float') { const n = parseFloat(v); return Number.isFinite(n) ? n : 0; }
+  const n = parseInt(v, 10); return Number.isFinite(n) ? n : 0;
+}
+
 function buildArgs(s, hash, ctx) {
-  const shape = { is3d: s.worldDepth > 1, agentAttrs: s.attrSpecs, fieldAttrs: ctx.fieldSpecs, hasLookupTables: ctx.hasLookupTables };
+  // P2: `bondAttrs` mirrors the worker's `agentAbiShapeOfStore` — the store's OWN
+  // bond-attribute specs (already filtered by `bondAttrsOf` on the way in), so the
+  // `_bondAttr_<id>` + `_bondFormAttr_<id>` blocks land in the same slots the
+  // compiled param list declares. Omitting it shifts EVERY later arg by the bond
+  // count (the `r_`/`w_` block ends up reading the field block, etc.).
+  const shape = { is3d: s.worldDepth > 1, agentAttrs: s.attrSpecs, fieldAttrs: ctx.fieldSpecs, hasLookupTables: ctx.hasLookupTables, bondAttrs: s.bondAttrSpecs };
   const rt = {
     hash, emptyI32: new Int32Array(0),
     modelAttrs: ctx.cachedModelAttrs, viewer: ctx.activeViewer,
@@ -907,6 +921,139 @@ function censusInvariant(st) {
   return null;
 }
 
+// BOND ATTRIBUTES (P2, Graph-Rewriting Automata) — per-EDGE user state.
+//
+// The rule writes each bond's attributes from ONE SIDE ONLY (the lower-id
+// endpoint, gated on `partner > self`) and then reads EVERY bond back — so a
+// write that failed to mirror into the partner's slot shows up as a zero read on
+// the higher-id agent. Both region kinds are exercised: `w` (float → f64 region)
+// and `lbl` (integer → i32 region), written with the SAME value so a region-kind
+// mixup is a mismatch rather than a coincidence.
+//
+// The setup breaks a deterministic subset of the bonds BEFORE the behaviour runs,
+// so the ragged slots have already been COMPACTED (swap-with-last) — the emitted
+// scan must resolve a partner on its post-compaction slot, not a remembered index.
+function buildBondAttrModel() {
+  const used = new Set();
+  const nid = (p) => { let id; do { id = p + Math.random().toString(36).slice(2, 8); } while (used.has(id)); used.add(id); return id; };
+  const aN = [], aEd = [];
+  const an = (t, c) => { const n = { id: nid('a'), type: 'caNode', position: { x: 0, y: 0 }, data: { nodeType: t, config: c } }; aN.push(n); return n; };
+  const aE = (s, sp, tt, tp, cat) => aEd.push({ id: nid('e'), source: s.id, target: tt.id, sourceHandle: `output_${cat}_${sp}`, targetHandle: `input_${cat}_${tp}` });
+
+  const bs = an('behaviourStep', {});
+  // zero the accumulators
+  const z = an('setAttribute', { attributeId: 'sumW', extraCount: 2, attr_2: 'sumL', attr_3: 'nb', _port_value: '0', _port_value_2: '0', _port_value_3: '0' });
+  // --- write loop: only the LOWER-id endpoint writes ---
+  const feb1 = an('forEachBond', {});
+  const gsh = an('getSelfHandle', {});
+  const cmp = an('statement', { operation: '>' });
+  const cond = an('conditional', {});
+  const mul = an('arithmeticOperator', { operation: '*', _port_y: '1000' });
+  const add = an('arithmeticOperator', { operation: '+' });
+  const sbW = an('setBondAttribute', { attributeId: 'w' });
+  const sbL = an('setBondAttribute', { attributeId: 'lbl' });
+  // --- read loop: EVERY bond, from whichever side ---
+  const feb2 = an('forEachBond', {});
+  const gbW = an('getBondAttribute', { attributeId: 'w' });
+  const gbL = an('getBondAttribute', { attributeId: 'lbl' });
+  const upW = an('updateAttribute', { attributeId: 'sumW', operation: 'increment' });
+  const upL = an('updateAttribute', { attributeId: 'sumL', operation: 'increment' });
+  const upN = an('updateAttribute', { attributeId: 'nb', operation: 'increment', _port_value: '1' });
+
+  aE(bs, 'do', z, 'do', 'flow');
+  aE(z, 'next', feb1, 'do', 'flow');
+  aE(feb1, 'body', cond, 'check', 'flow');
+  aE(feb1, 'partnerId', cmp, 'x', 'value');
+  aE(gsh, 'value', cmp, 'y', 'value');
+  aE(cmp, 'result', cond, 'condition', 'value');
+  aE(gsh, 'value', mul, 'x', 'value');
+  aE(mul, 'result', add, 'x', 'value');
+  aE(feb1, 'partnerId', add, 'y', 'value');
+  aE(cond, 'then', sbW, 'do', 'flow');
+  aE(feb1, 'partnerId', sbW, 'partnerId', 'value');
+  aE(add, 'result', sbW, 'value', 'value');
+  aE(sbW, 'next', sbL, 'do', 'flow');
+  aE(feb1, 'partnerId', sbL, 'partnerId', 'value');
+  aE(add, 'result', sbL, 'value', 'value');
+  aE(feb1, 'next', feb2, 'do', 'flow');
+  aE(feb2, 'body', upW, 'do', 'flow');
+  aE(feb2, 'partnerId', gbW, 'partnerId', 'value');
+  aE(feb2, 'partnerId', gbL, 'partnerId', 'value');
+  aE(gbW, 'value', upW, 'value', 'value');
+  aE(upW, 'next', upL, 'do', 'flow');
+  aE(gbL, 'value', upL, 'value', 'value');
+  aE(upL, 'next', upN, 'do', 'flow');
+
+  return {
+    schemaVersion: 1,
+    properties: { name: 'Bond Attributes Parity Test', dimension: '2d', gridWidth: 24, gridHeight: 24, gridDepth: 1, topology: '2d-grid', boundaryTreatment: 'torus', useWasm: false, useWebGPU: false },
+    topologyMode: { gridCells: false, agents: true },
+    centerBased: { enabled: true, maxAgents: 100, maxBonds: 6, worldWidth: 24, worldHeight: 24, seedCount: 40, seedPattern: 'scatter', defaultRadius: 0.5, growthRate: 0, repulsionStiffness: 0, adhesionStiffness: 0, interactionRange: 1.5, drag: 1, timeStep: 0.1, momentum: 0, maxSpeed: 0, neighbourQueryRadius: 8, useBondingPhysics: false, autoBond: false, bondStiffness: 0, bondRestLength: 1.5, formDistance: 1.2, breakDistance: 2.0, agentTarget: 'wasm', agentUpdateMode: 'async',
+      agentCapabilities: { motion: 'force', body: true, collision: 'off', bonds: 'data', autoBond: false, growth: false, division: false, lifespan: false, populationBirth: false, populationDeath: false, sensing: false, sensingHeadingSource: 'velocity', orientation: false, fieldCoupling: false, appearance: true } },
+    attributes: [], modelAttributes: [], neighborhoods: [],
+    agentAttributes: [
+      { id: 'sumW', name: 'SumW', type: 'float', defaultValue: '0' },
+      { id: 'sumL', name: 'SumL', type: 'integer', defaultValue: '0' },
+      { id: 'nb', name: 'NBonds', type: 'integer', defaultValue: '0' },
+    ],
+    bondAttributes: [
+      { id: 'w', name: 'Weight', type: 'float', defaultValue: '0' },
+      { id: 'lbl', name: 'Label', type: 'integer', defaultValue: '0' },
+    ],
+    variables: [], agentVariables: [], indicators: [], mappings: [],
+    graphNodes: [], graphEdges: [], agentGraphNodes: aN, agentGraphEdges: aEd, macroDefs: [],
+  };
+}
+
+/** Ring + chords, then BREAK a deterministic subset so the ragged bond slots have
+ *  already been compacted (swap-with-last) before the behaviour ever runs. */
+function setupBondAttrStores(stores) {
+  for (const s of stores) {
+    for (let i = 0; i < s.highWater; i++) {
+      formBond(s, i, (i + 1) % s.highWater, 1.5, 0);
+      if (i % 3 === 0) formBond(s, i, (i + 5) % s.highWater, 1.5, 0);
+      if (i % 4 === 0) formBond(s, i, (i + 11) % s.highWater, 1.5, 0);
+    }
+    for (let i = 0; i < s.highWater; i += 5) breakBond(s, i, (i + 1) % s.highWater);
+  }
+}
+
+/** THE VALUE INVARIANT (not just cross-target agreement — parity is a mirror test
+ *  and passes happily when both targets are equally wrong):
+ *    • every live bond's value equals `min(i,p)*1000 + max(i,p)`, recomputed here
+ *      straight from the store's own bond list — so a one-sided write (the higher
+ *      agent reading 0) is caught even if JS and WASM agree;
+ *    • the two endpoints' slots hold the SAME value (invariant I2 in the store);
+ *    • the float (`w`) and integer (`lbl`) regions agree, so a region-kind mixup
+ *      cannot pass;
+ *    • the per-agent sums + bond counts match the recount. */
+function bondAttrInvariant(st) {
+  for (let i = 0; i < st.highWater; i++) {
+    if (!st.alive[i]) continue;
+    let sum = 0, cnt = 0;
+    const base = i * st.maxBonds;
+    for (let k = 0; k < st.bondCount[i]; k++) {
+      const p = st.bondPartner[base + k];
+      if (p < 0 || p >= st.highWater || !st.alive[p]) continue;
+      const want = Math.min(i, p) * 1000 + Math.max(i, p);
+      const gotW = st.bondAttrs.w[base + k], gotL = st.bondAttrs.lbl[base + k];
+      if (gotW !== want) return `bond ${i}→${p}: w ${gotW} !== expected ${want}`;
+      if (gotL !== want) return `bond ${i}→${p}: lbl ${gotL} !== expected ${want}`;
+      // I2 — the partner's slot must hold the SAME value.
+      const pb = p * st.maxBonds;
+      let mirrored = null;
+      for (let j = 0; j < st.bondCount[p]; j++) if (st.bondPartner[pb + j] === i) { mirrored = st.bondAttrs.w[pb + j]; break; }
+      if (mirrored === null) return `bond ${i}→${p}: no reverse slot`;
+      if (mirrored !== gotW) return `bond ${i}↔${p}: w ${gotW} !== partner side ${mirrored}`;
+      sum += want; cnt++;
+    }
+    if (st.attrRead.sumW[i] !== sum) return `agent ${i}: sumW ${st.attrRead.sumW[i]} !== recount ${sum}`;
+    if (st.attrRead.sumL[i] !== sum) return `agent ${i}: sumL ${st.attrRead.sumL[i]} !== recount ${sum}`;
+    if (st.attrRead.nb[i] !== cnt) return `agent ${i}: nb ${st.attrRead.nb[i]} !== recount ${cnt}`;
+  }
+  return null;
+}
+
 // A deterministic ring + chord bond topology (identical on both stores). Every
 // agent gets 2-3 partners; positions are left as seeded (the rule is topological,
 // so geometry is irrelevant here).
@@ -988,6 +1135,10 @@ entries.push({
 entries.push({
   name: '[synthetic] Neighbour Census (3-option tag over the bonded 1-ring)',
   raw: buildCensusModel(), setup: setupRingBondStores, invariant: censusInvariant,
+});
+entries.push({
+  name: '[synthetic] Bond attributes (one-sided write, both-sides read, post-break)',
+  raw: buildBondAttrModel(), setup: setupBondAttrStores, invariant: bondAttrInvariant,
 });
 entries.push({ name: '[synthetic] Flow diamond (conditional → shared getRandom chain)', raw: buildDiamondModel() });
 entries.push({ name: '[synthetic] RNG draw order (branch draw + post-branch draws)', raw: buildRngOrderModel() });
@@ -1078,8 +1229,16 @@ for (const { name: f, raw, setup, invariant } of entries) {
   // Stores: A = plain JS; B = wasmBacked (sync attrs if the model is sync).
   const syncAttrs = cfg?.agentUpdateMode === 'sync';
   const layoutExtras = { ...m.buildAgentLayoutExtras(model), fieldTotal: total, syncAttrs };
-  const A = createAgentStore(cfg, specs, { wasmBacked: false, syncAttrs });
-  const B = createAgentStore(cfg, specs, { wasmBacked: true, syncAttrs, maxHashBins: cMaxHashBins, layoutExtras });
+  // P2: BOTH stores get the model's bond-attribute specs — the wasmBacked one so
+  // its baked offsets match the module the compiler emitted (createAgentStore
+  // overrides layoutExtras.bondAttrSpecs with these), the JS one so its ragged
+  // regions exist at all. `bondAttrSpecs` from the layout extras = bondAttrsOf.
+  const bondSpecs = (layoutExtras.bondAttrSpecs ?? []).map(b => {
+    const decl = (model.bondAttributes ?? []).find(a => a.id === b.id);
+    return { id: b.id, type: b.type, defaultValue: decl ? encodeAttr(decl) : 0 };
+  });
+  const A = createAgentStore(cfg, specs, { wasmBacked: false, syncAttrs, bondAttrSpecs: bondSpecs });
+  const B = createAgentStore(cfg, specs, { wasmBacked: true, syncAttrs, maxHashBins: cMaxHashBins, layoutExtras, bondAttrSpecs: bondSpecs });
   for (const s of [A, B]) { s.worldWidth = W; s.worldHeight = H; s.worldDepth = D; }
 
   // Seed identical agents (deterministic compact grid).

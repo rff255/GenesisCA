@@ -28,7 +28,11 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const ENTRY = `
 export {
   createAgentStore, computeAgentMaxHashBins, buildSpatialHash, seedAgents, formBond, breakBond,
+  freeAgentSlot, sweepStaleBonds, allocAgentSlot, initAgentSlot, divideAgent, bondAttrKind,
+  serializeAgentStore, deserializeAgentStore,
 } from '../src/simulator/engine/agentEngine.ts';
+export { serializeAgentState, deserializeAgentState } from '../src/model/fileOperations.ts';
+export { bondAttrsOf } from '../src/model/attributeScope.ts';
 export {
   compileAgentGraphWasmForModel, instantiateAgentWasm, buildAgentLayoutExtras, isAgentGraphWasmSupported,
 } from '../src/modeler/vpl/compiler/agentWasm/compile.ts';
@@ -53,6 +57,8 @@ await build({
 const m = await import(pathToFileURL(outPath).href);
 const {
   createAgentStore, computeAgentMaxHashBins, buildSpatialHash, seedAgents, formBond, breakBond,
+  freeAgentSlot, sweepStaleBonds, allocAgentSlot, initAgentSlot, divideAgent, bondAttrKind,
+  serializeAgentStore, deserializeAgentStore, serializeAgentState, deserializeAgentState, bondAttrsOf,
   compileAgentGraphWasmForModel, instantiateAgentWasm, buildAgentLayoutExtras, isAgentGraphWasmSupported,
   compileAgentGraphWebGPUForModel, isAgentGraphWebGPUSupported,
   compileAgentGraph, buildAgentAbiArgs, migrateForHarness, agentAttrsOf, cellFieldAttrsOf,
@@ -79,12 +85,33 @@ const section = (t) => console.log(`\n=== ${t} ===`);
 export function decodeAgentGraph(p) {
   const asU8 = (v, n) => (v instanceof Uint8Array ? v : new Uint8Array(v, 0, n));
   const asI32 = (v, n) => (v instanceof Int32Array ? v : new Int32Array(v, 0, n));
+  const asF64 = (v, n) => (v instanceof Float64Array ? v : new Float64Array(v, 0, n));
   const hw = p.highWater, mb = p.maxBonds;
+  // P2 — the per-slot bond FIELDS I2 compares. Present on a live AgentStore and on
+  // a `getState` agent payload alike; each is optional so the older callers (and a
+  // legacy payload) still decode. `bondAttrs` mirrors the payload's `attrs` shape
+  // ({ kind, buffer }) OR a live store's plain typed arrays.
+  const bondFields = [];
+  const bw = hw * mb;
+  if (bw > 0) {
+    if (p.bondRestLength) bondFields.push(['restLength', asF64(p.bondRestLength, bw)]);
+    if (p.bondStiffness) bondFields.push(['stiffness', asF64(p.bondStiffness, bw)]);
+    if (p.bondTypeLabel) bondFields.push(['typeLabel', asI32(p.bondTypeLabel, bw)]);
+    for (const [id, e] of Object.entries(p.bondAttrs ?? {})) {
+      // A LIVE store hands a typed array; a `getState` payload hands { kind, buffer }.
+      // NB a typed array also HAS a `.buffer`, so discriminate on ArrayBuffer.isView
+      // FIRST — testing `e.buffer !== undefined` reinterprets an f64 region as i32.
+      if (ArrayBuffer.isView(e)) { bondFields.push([`attr:${id}`, e]); continue; }
+      const kind = e.kind === 'float64' ? 'float64' : 'int32';
+      bondFields.push([`attr:${id}`, kind === 'float64' ? asF64(e.buffer, bw) : asI32(e.buffer, bw)]);
+    }
+  }
   return {
     highWater: hw, maxBonds: mb,
     alive: asU8(p.alive, hw),
     bondCount: asI32(p.bondCount, hw),
-    bondPartner: asI32(p.bondPartner, hw * mb),
+    bondPartner: asI32(p.bondPartner, bw),
+    bondFields,
   };
 }
 
@@ -129,6 +156,32 @@ export function checkCapacity(g) {
     if (!g.alive[i]) continue;
     const n = g.bondCount[i];
     if (n < 0 || n > g.maxBonds) return `agent ${i}: bondCount ${n} outside [0, ${g.maxBonds}]`;
+  }
+  return null;
+}
+
+/** I2 — bond symmetry: a bond is ONE object stored TWICE. For every live `i`,
+ *  slot `k` with a live partner `p`, `p`'s list must contain `i`, and EVERY
+ *  per-slot field (rest length, stiffness, type label, and every bond attribute)
+ *  must read IDENTICALLY from both sides. Catches one-sided writes and a
+ *  compaction that swaps some fields but not others (the phase's highest risk).
+ *  Fields the caller did not supply are simply not compared. */
+export function checkBondSymmetry(g) {
+  for (let i = 0; i < g.highWater; i++) {
+    if (!g.alive[i]) continue;
+    for (let k = 0; k < g.bondCount[i]; k++) {
+      const p = g.bondPartner[i * g.maxBonds + k];
+      if (p < 0 || p >= g.highWater || !g.alive[p]) continue;   // I3's job, not I2's
+      let kp = -1;
+      for (let j = 0; j < g.bondCount[p]; j++) {
+        if (g.bondPartner[p * g.maxBonds + j] === i) { kp = j; break; }
+      }
+      if (kp < 0) return `bond ${i}→${p}: partner has no reverse slot`;
+      for (const [name, arr] of g.bondFields ?? []) {
+        const a = arr[i * g.maxBonds + k], b = arr[p * g.maxBonds + kp];
+        if (!Object.is(a, b)) return `bond ${i}↔${p}: ${name} ${a} != ${b}`;
+      }
+    }
   }
   return null;
 }
@@ -205,6 +258,52 @@ function tierA() {
     const g = build();
     g.bondCount[4] = g.maxBonds + 1;
     ok(checkCapacity(g) !== null, 'I4 negative control: bondCount > maxBonds is CAUGHT');
+  }
+  // I2 symmetry — a graph carrying per-slot fields on both sides.
+  {
+    const buildSym = () => {
+      const N = 6, MB = 4;
+      const g = {
+        highWater: N, maxBonds: MB,
+        alive: new Uint8Array(N).fill(1),
+        bondCount: new Int32Array(N),
+        bondPartner: new Int32Array(N * MB).fill(-1),
+      };
+      const w = new Float64Array(N * MB), lbl = new Int32Array(N * MB);
+      g.bondFields = [['attr:w', w], ['attr:lbl', lbl]];
+      let seq = 1;
+      const link = (a, b) => {
+        const ka = a * MB + g.bondCount[a]++, kb = b * MB + g.bondCount[b]++;
+        g.bondPartner[ka] = b; g.bondPartner[kb] = a;
+        w[ka] = w[kb] = seq * 0.25; lbl[ka] = lbl[kb] = seq; seq++;
+      };
+      for (let i = 0; i < N; i++) link(i, (i + 1) % N);
+      link(0, 3);
+      return g;
+    };
+    const healthySym = buildSym();
+    ok(checkBondSymmetry(healthySym) === null, 'I2 symmetry holds on a healthy attributed graph', String(checkBondSymmetry(healthySym)));
+    // negative control 1: a ONE-SIDED attribute write (the Set Bond Attribute bug).
+    {
+      const g = buildSym();
+      g.bondFields[0][1][0 * g.maxBonds + 0] = 99;
+      ok(checkBondSymmetry(g) !== null, 'I2 negative control: a one-sided attribute write is CAUGHT');
+    }
+    // negative control 2: a compaction that swaps bondPartner but NOT an attribute
+    // (the phase's highest-risk edit — a field missed in removeBondSlot).
+    {
+      const g = buildSym();
+      const a = 1, MB = g.maxBonds, n = g.bondCount[a], last = n - 1;
+      g.bondPartner[a * MB + 0] = g.bondPartner[a * MB + last];   // partner moved…
+      g.bondCount[a] = last;                                      // …attributes NOT
+      ok(checkBondSymmetry(g) !== null, 'I2 negative control: a partner-only compaction swap is CAUGHT');
+    }
+    // negative control 3: a missing reverse slot (half-applied form).
+    {
+      const g = buildSym();
+      g.bondCount[2] = 0;
+      ok(checkBondSymmetry(g) !== null, 'I2 negative control: a missing reverse slot is CAUGHT');
+    }
   }
   // degree regularity.
   {
@@ -761,9 +860,376 @@ async function tierC() {
   }
 }
 
+// ===========================================================================
+// TIER D — BOND ATTRIBUTES (P2): the compaction audit + I2 through the REAL engine
+// ===========================================================================
+//
+// The phase's highest-risk edit is COMPACTION LOCKSTEP: `removeBondSlot` (used by
+// Break Bond AND death) and `sweepStaleBonds` both swap-with-last across every
+// ragged bond field. A field added to the store but missed in EITHER path corrupts
+// silently on the first bond removal — an attribute ends up associated with the
+// WRONG partner, and nothing errors.
+//
+// So this audit does NOT test internal consistency alone (a swap that moves both
+// sides consistently-but-wrongly would pass I2). It runs the real engine against an
+// INDEPENDENT truth map keyed by the unordered pair, and asserts after EVERY
+// generation that the store's bond attributes match the truth for every live bond,
+// on BOTH sides, with the edge sets identical.
+
+const BOND_ATTR_SPECS = [
+  { id: 'w', type: 'float', defaultValue: 0 },       // f64 region
+  { id: 'lbl', type: 'integer', defaultValue: 0 },   // i32 region
+  { id: 'flag', type: 'bool', defaultValue: 0 },     // i32 region (bond bools are i32)
+];
+
+function bondCfg(maxAgents, maxBonds) {
+  return {
+    enabled: true, maxAgents, maxBonds, worldWidth: 64, worldHeight: 64,
+    seedCount: 0, defaultRadius: 0.5, growthRate: 0, repulsionStiffness: 0,
+    adhesionStiffness: 0, interactionRange: 1.5, drag: 1, timeStep: 0.5,
+    momentum: 0, maxSpeed: 0, neighbourQueryRadius: 2, customForcesOnly: true,
+    useBondingPhysics: false, autoBond: false, bondStiffness: 0, bondRestLength: 1,
+    agentCapabilities: AGENT_CAPS({ bonds: 'physics' }),
+  };
+}
+
+/** Read a live store into the normalised graph view, including bond attributes. */
+function storeGraph(s) {
+  return decodeAgentGraph({
+    highWater: s.highWater, maxBonds: s.maxBonds, alive: s.alive,
+    bondCount: s.bondCount, bondPartner: s.bondPartner,
+    bondRestLength: s.bondRestLength, bondStiffness: s.bondStiffness,
+    bondTypeLabel: s.bondTypeLabel, bondAttrs: s.bondAttrs,
+  });
+}
+
+/** Compare the store's live bonds against the truth map. Returns null or a msg. */
+function auditAgainstTruth(s, truth) {
+  const mb = s.maxBonds;
+  let seen = 0;
+  for (let i = 0; i < s.highWater; i++) {
+    if (!s.alive[i]) continue;
+    for (let k = 0; k < s.bondCount[i]; k++) {
+      const p = s.bondPartner[i * mb + k];
+      if (p < 0 || p >= s.highWater || !s.alive[p]) return `agent ${i} slot ${k}: dangling partner ${p}`;
+      const key = i < p ? `${i}:${p}` : `${p}:${i}`;
+      const t = truth.get(key);
+      if (!t) return `bond ${i}↔${p} exists in the store but NOT in the truth map`;
+      if (i < p) seen++;
+      for (const spec of BOND_ATTR_SPECS) {
+        const got = s.bondAttrs[spec.id][i * mb + k];
+        if (!Object.is(got, t[spec.id])) {
+          return `bond ${i}↔${p} (side ${i}): ${spec.id} = ${got}, truth ${t[spec.id]}`;
+        }
+      }
+      if (!Object.is(s.bondRestLength[i * mb + k], t.L)) return `bond ${i}↔${p}: restLength drift`;
+    }
+  }
+  if (seen !== truth.size) return `store has ${seen} live bonds, truth has ${truth.size}`;
+  return null;
+}
+
+function tierD() {
+  section('TIER D — bond attributes: compaction lockstep + I2 (real engine)');
+
+  // --- the store actually allocates the regions ---
+  {
+    const s = createAgentStore(bondCfg(16, 4), [], { bondAttrSpecs: BOND_ATTR_SPECS });
+    ok(!!s.bondAttrs && Object.keys(s.bondAttrs).length === 3, 'store allocates one ragged region per bond attribute');
+    ok(s.bondAttrs.w instanceof Float64Array && s.bondAttrs.lbl instanceof Int32Array && s.bondAttrs.flag instanceof Int32Array,
+      'bond attribute regions are typed by kind (float→f64, integer/bool/tag→i32)');
+    ok(s.bondAttrs.w.length === 16 * 4, 'bond attribute regions are ragged (maxAgents × maxBonds)', String(s.bondAttrs.w.length));
+    ok(bondAttrKind('float') === 'float64' && bondAttrKind('bool') === 'int32'
+      && bondAttrKind('tag') === 'int32' && bondAttrKind('integer') === 'int32', 'bondAttrKind maps the four allowed types');
+    // Bonds OFF ⇒ maxBonds 0 ⇒ zero bond-attribute bytes (handoff assumption 2).
+    const off = createAgentStore({ ...bondCfg(16, 4), agentCapabilities: AGENT_CAPS({ bonds: 'off' }) }, [], { bondAttrSpecs: BOND_ATTR_SPECS });
+    ok(off.maxBonds === 0 && off.bondAttrSpecs.length === 0 && Object.keys(off.bondAttrs).length === 0,
+      'bonds=off allocates ZERO bond-attribute bytes (no specs, no regions)');
+    ok(off.bondSlotArrays.length === 5, 'bonds=off leaves the compaction field list at the five built-ins');
+  }
+
+  // --- formBond writes initial values to BOTH sides ---
+  {
+    const s = createAgentStore(bondCfg(8, 4), [], { bondAttrSpecs: BOND_ATTR_SPECS });
+    seedAgents(s, Array.from({ length: 4 }, (_, i) => ({ x: i, y: 0 })), 0.5);
+    formBond(s, 0, 2, 1.5, 0.25, 7, [3.5, 42, 1]);
+    const mb = s.maxBonds;
+    ok(s.bondAttrs.w[0 * mb] === 3.5 && s.bondAttrs.lbl[0 * mb] === 42 && s.bondAttrs.flag[0 * mb] === 1,
+      'formBond writes the initial attribute values on side A');
+    ok(s.bondAttrs.w[2 * mb] === 3.5 && s.bondAttrs.lbl[2 * mb] === 42 && s.bondAttrs.flag[2 * mb] === 1,
+      'formBond writes the SAME values on side B (I2 by construction)');
+    formBond(s, 1, 3, 1, 0);   // no attr values → the spec defaults
+    ok(s.bondAttrs.w[1 * mb] === 0 && s.bondAttrs.lbl[1 * mb] === 0, 'formBond without values uses the attribute defaults');
+    ok(checkBondSymmetry(storeGraph(s)) === null, 'I2 holds after formBond');
+  }
+
+  // --- THE COMPACTION AUDIT: 500 generations of random form / break / death /
+  //     stale-sweep against an independent truth map ---
+  {
+    const N = 40, MB = 6;
+    const s = createAgentStore(bondCfg(N + 16, MB), [], { bondAttrSpecs: BOND_ATTR_SPECS });
+    seedAgents(s, Array.from({ length: N }, (_, i) => ({ x: (i % 8) * 2, y: Math.floor(i / 8) * 2 })), 0.5);
+    const truth = new Map();
+    const key = (a, b) => (a < b ? `${a}:${b}` : `${b}:${a}`);
+    // Deterministic PRNG so a failure is reproducible.
+    let rs = 0x9e3779b9;
+    const rnd = () => { rs ^= rs << 13; rs >>>= 0; rs ^= rs >>> 17; rs ^= rs << 5; rs >>>= 0; return rs / 0x100000000; };
+    const pick = () => Math.floor(rnd() * s.highWater);
+
+    let firstFail = null, gens = 0, forms = 0, breaks = 0, deaths = 0, divisions = 0, stales = 0;
+    let sweptSlots = 0;
+    for (let gen = 0; gen < 500 && firstFail === null; gen++) {
+      gens++;
+      // 1. form a few random bonds with random attribute values
+      for (let t = 0; t < 5; t++) {
+        const a = pick(), b = pick();
+        if (a === b || !s.alive[a] || !s.alive[b]) continue;
+        const vals = [Math.round(rnd() * 1000) / 8, (gen * 7 + t) | 0, rnd() < 0.5 ? 1 : 0];
+        const L = 1 + Math.round(rnd() * 100) / 16;
+        if (formBond(s, a, b, L, 0, 0, vals)) {
+          truth.set(key(a, b), { w: vals[0], lbl: vals[1], flag: vals[2], L });
+          forms++;
+        }
+      }
+      // 2. break a few random existing bonds
+      for (let t = 0; t < 3; t++) {
+        const a = pick();
+        if (!s.alive[a] || s.bondCount[a] === 0) continue;
+        const k = Math.floor(rnd() * s.bondCount[a]);
+        const b = s.bondPartner[a * MB + k];
+        if (b < 0) continue;
+        breakBond(s, a, b);
+        truth.delete(key(a, b));
+        breaks++;
+      }
+      // 3. occasionally kill an agent (freeAgentSlot → breakAllBonds → compaction
+      //    on EVERY partner's list) and spawn a replacement so the graph churns
+      //    through recycled slots (the epoch mechanism + the stale sweep).
+      if (gen % 7 === 3) {
+        const a = pick();
+        if (s.alive[a]) {
+          for (const k2 of [...truth.keys()]) {
+            const [x, y] = k2.split(':').map(Number);
+            if (x === a || y === a) truth.delete(k2);
+          }
+          freeAgentSlot(s, a);
+          deaths++;
+          const nid = allocAgentSlot(s);
+          if (nid >= 0) initAgentSlot(s, nid, rnd() * 16, rnd() * 16, 0, 0.5, nid);
+        }
+      }
+      // 3b. occasionally induce STALE bonds — mark an agent dead WITHOUT cleaning
+      //     its partners' lists (a raw epoch bump). This is the exact condition
+      //     `sweepStaleBonds` exists for, and the ONLY way to exercise its own
+      //     swap-with-last: `freeAgentSlot` already removes the agent from every
+      //     partner's list, so a normal death leaves nothing stale. Without this
+      //     the THIRD compaction path is never executed and a missed field there
+      //     goes undetected (verified: the negative control did not trip until
+      //     this step existed).
+      if (gen % 11 === 5) {
+        const a = pick();
+        if (s.alive[a] && s.bondCount[a] > 0) {
+          for (const k2 of [...truth.keys()]) {
+            const [x, y] = k2.split(':').map(Number);
+            if (x === a || y === a) truth.delete(k2);
+          }
+          s.alive[a] = 0;
+          s.epoch[a] = (s.epoch[a] + 1) | 0;
+          stales++;
+        }
+      }
+      // 4. occasionally divide — daughters INHERIT their partitioned bonds'
+      //    attributes unchanged (P2 scope; P5 adds explicit per-bond assignment).
+      if (gen % 23 === 11) {
+        const a = pick();
+        if (s.alive[a] && s.bondCount[a] > 0) {
+          const before = new Map();   // partner id → the mother's attribute values
+          for (let k = 0; k < s.bondCount[a]; k++) {
+            const p = s.bondPartner[a * MB + k];
+            before.set(p, BOND_ATTR_SPECS.map(sp => s.bondAttrs[sp.id][a * MB + k]));
+          }
+          const nid = divideAgent(s, a, 0, 0, 0, 0, 0, false, 64, 64, 1);
+          if (nid >= 0) {
+            divisions++;
+            // INHERITANCE assertion: wherever a partner's bond ended up (daughter A
+            // = the mother slot, or daughter B = the new slot), it must still carry
+            // the mother's values.
+            for (const [p, vals] of before) {
+              if (!s.alive[p]) continue;
+              for (const owner of [a, nid]) {
+                for (let k = 0; k < s.bondCount[owner]; k++) {
+                  if (s.bondPartner[owner * MB + k] !== p) continue;
+                  BOND_ATTR_SPECS.forEach((sp, si) => {
+                    if (!Object.is(s.bondAttrs[sp.id][owner * MB + k], vals[si]) && firstFail === null) {
+                      firstFail = `gen ${gen}: division dropped ${sp.id} from the inherited bond ${owner}↔${p} (got ${s.bondAttrs[sp.id][owner * MB + k]}, want ${vals[si]})`;
+                    }
+                  });
+                }
+              }
+            }
+            // Re-sync the truth map from the store for every bond touching either
+            // daughter (division re-partitions bonds by GEOMETRY and adds a
+            // daughter–daughter bond with the attribute defaults — engine-owned
+            // bookkeeping the truth map cannot predict, but the inheritance check
+            // above already pinned the VALUES).
+            for (const [p] of before) truth.delete(key(a, p));
+            for (const owner of [a, nid]) {
+              for (let k = 0; k < s.bondCount[owner]; k++) {
+                const p = s.bondPartner[owner * MB + k];
+                if (p < 0) continue;
+                truth.set(key(owner, p), {
+                  w: s.bondAttrs.w[owner * MB + k], lbl: s.bondAttrs.lbl[owner * MB + k],
+                  flag: s.bondAttrs.flag[owner * MB + k], L: s.bondRestLength[owner * MB + k],
+                });
+              }
+            }
+          }
+        }
+      }
+      // 5. the THIRD compaction path — the per-step stale sweep
+      {
+        let before = 0;
+        for (let i = 0; i < s.highWater; i++) if (s.alive[i]) before += s.bondCount[i];
+        sweepStaleBonds(s);
+        let after = 0;
+        for (let i = 0; i < s.highWater; i++) if (s.alive[i]) after += s.bondCount[i];
+        sweptSlots += before - after;
+      }
+
+      // --- audit EVERY generation ---
+      const g = storeGraph(s);
+      const v = firstFail
+        ?? checkHandshake(g) ?? checkNoDangling(g) ?? checkCapacity(g)
+        ?? checkBondSymmetry(g) ?? auditAgainstTruth(s, truth);
+      if (v) firstFail = `gen ${gen}: ${v}`;
+    }
+    ok(firstFail === null, `compaction audit: 500 gens of form/break/death/division/sweep — attributes never desync`, String(firstFail));
+    ok(forms > 200 && breaks > 100 && deaths > 40 && divisions > 10 && truth.size > 0,
+      `the audit actually churned the graph (${forms} forms, ${breaks} breaks, ${deaths} deaths, ${divisions} divisions, ${truth.size} live bonds after ${gens} gens)`);
+    // COVERAGE of the third compaction path: without swept slots the stale sweep's
+    // own swap-with-last is never executed and a missed field there is invisible.
+    ok(stales > 20 && sweptSlots > 40,
+      `the stale sweep actually compacted (${stales} induced-stale agents, ${sweptSlots} slots swept)`);
+  }
+
+  // --- PERSISTENCE: a bonded population with bond attributes must round-trip
+  //     bit-exact through BOTH layers — the engine payload (`getState`) and the
+  //     base64 `.gcaproj` / `.gcastate` encoding. The `.gcastate` layer needs an
+  //     EXPLICIT arm for the nested `bondAttrs` record (the "field-name-generic"
+  //     sweep only reaches TOP-LEVEL ArrayBuffer properties — handoff assumption 4).
+  {
+    const src = createAgentStore(bondCfg(12, 4), [], { bondAttrSpecs: BOND_ATTR_SPECS });
+    seedAgents(src, Array.from({ length: 8 }, (_, i) => ({ x: i, y: 0 })), 0.5);
+    formBond(src, 0, 1, 1, 0, 0, [1.25, 7, 1]);
+    formBond(src, 1, 2, 2, 0, 0, [-3.5, -9, 0]);
+    formBond(src, 2, 5, 3, 0, 0, [99.0625, 123456, 1]);
+    breakBond(src, 1, 2);   // compact first, so the round-trip carries moved slots
+    const transfers = [];
+    const payload = serializeAgentStore(src, transfers);
+    ok(!!payload.bondAttrs && Object.keys(payload.bondAttrs).length === 3,
+      'getState payload carries one ragged buffer per bond attribute');
+
+    const dst = createAgentStore(bondCfg(12, 4), [], { bondAttrSpecs: BOND_ATTR_SPECS });
+    deserializeAgentStore(dst, payload);
+    const cmp = (a, b) => {
+      for (let i = 0; i < a.highWater; i++) {
+        if (a.alive[i] !== b.alive[i] || a.bondCount[i] !== b.bondCount[i]) return `agent ${i}: liveness/degree differs`;
+        for (let k = 0; k < a.bondCount[i]; k++) {
+          const s1 = i * a.maxBonds + k;
+          if (a.bondPartner[s1] !== b.bondPartner[s1]) return `agent ${i} slot ${k}: partner differs`;
+          for (const spec of BOND_ATTR_SPECS) {
+            if (!Object.is(a.bondAttrs[spec.id][s1], b.bondAttrs[spec.id][s1])) {
+              return `agent ${i} slot ${k}: ${spec.id} ${a.bondAttrs[spec.id][s1]} !== ${b.bondAttrs[spec.id][s1]}`;
+            }
+          }
+        }
+      }
+      return null;
+    };
+    ok(cmp(src, dst) === null, 'engine round-trip: every bond attribute value is bit-exact', String(cmp(src, dst)));
+
+    // .gcaproj / .gcastate: the base64 encode/decode pair.
+    const transfers2 = [];
+    const payload2 = serializeAgentStore(src, transfers2);
+    const encoded = serializeAgentState(payload2);
+    ok(!!encoded.bondAttrs && Object.keys(encoded.bondAttrs).length === 3,
+      '.gcastate encodes one base64 buffer per bond attribute');
+    const decoded = deserializeAgentState(encoded);
+    const dst2 = createAgentStore(bondCfg(12, 4), [], { bondAttrSpecs: BOND_ATTR_SPECS });
+    deserializeAgentStore(dst2, decoded);
+    ok(cmp(src, dst2) === null, '.gcastate base64 round-trip: every bond attribute value is bit-exact', String(cmp(src, dst2)));
+
+    // A pre-P2 payload (no bondAttrs) must load cleanly at the DEFAULTS, never
+    // inheriting a previous run's values on live slots.
+    const legacy = { ...serializeAgentStore(src, []) };
+    delete legacy.bondAttrs;
+    const dst3 = createAgentStore(bondCfg(12, 4), [], { bondAttrSpecs: BOND_ATTR_SPECS });
+    formBond(dst3, 3, 4, 1, 0, 0, [42, 42, 1]);   // pre-existing values to be cleared
+    deserializeAgentStore(dst3, legacy);
+    let stale = false;
+    for (const spec of BOND_ATTR_SPECS) {
+      for (let i = 0; i < dst3.bondAttrs[spec.id].length; i++) {
+        if (dst3.bondAttrs[spec.id][i] !== spec.defaultValue) { stale = true; break; }
+      }
+    }
+    ok(!stale, 'a pre-P2 payload (no bondAttrs) resets every bond attribute to its default');
+  }
+
+  // --- THE WEBGPU CAPABILITY GATE: a model declaring bond attributes must be
+  //     REJECTED by the WebGPU agent gate (so it clamps to WASM/JS with a stated
+  //     reason) while the WASM gate ACCEPTS it. P3 lifts this.
+  {
+    const g = mkGraphBuilder();
+    const bs = g.n('behaviourStep', {});
+    const feb = g.n('forEachBond', {});
+    const gba = g.n('getBondAttribute', { attributeId: 'w' });
+    const set = g.n('setAttribute', { attributeId: 'acc' });
+    g.f(bs, 'do', feb, 'do');
+    g.f(feb, 'body', set, 'do');
+    g.v(feb, 'partnerId', gba, 'partnerId');
+    g.v(gba, 'value', set, 'value');
+    const withBond = migrateForHarness(wrapModel('Bond Attr Gate Test', g.nodes, g.edges, [
+      { id: 'acc', name: 'Acc', type: 'float', defaultValue: '0' },
+    ]));
+    withBond.bondAttributes = [{ id: 'w', name: 'W', type: 'float', defaultValue: '0' }];
+    ok(bondAttrsOf(withBond).length === 1, 'bondAttrsOf resolves the declared bond attribute');
+    ok(isAgentGraphWasmSupported(withBond) === true, 'WASM gate ACCEPTS a bond-attribute model');
+    ok(isAgentGraphWebGPUSupported(withBond) === false, 'WebGPU gate REJECTS a bond-attribute model (clamps to WASM/JS — P3 lifts it)');
+    const w = compileAgentGraphWasmForModel(withBond);
+    ok(!w.error && w.bytes.length > 0, 'the bond-attribute model compiles to WASM', w.error || '');
+    // Bonds OFF ⇒ bondAttrsOf is empty ⇒ nothing to reject, so the gate is free again.
+    const bondsOff = migrateForHarness(wrapModel('Bonds Off', mkGraphBuilder().nodes, [], []));
+    bondsOff.agentGraphNodes = [{ id: 'bs0', type: 'caNode', position: { x: 0, y: 0 }, data: { nodeType: 'behaviourStep', config: {} } }];
+    bondsOff.bondAttributes = [{ id: 'w', name: 'W', type: 'float', defaultValue: '0' }];
+    bondsOff.centerBased.agentCapabilities = AGENT_CAPS({ bonds: 'off' });
+    bondsOff.centerBased.autoBond = false;
+    ok(bondAttrsOf(bondsOff).length === 0, 'bonds=off ⇒ bondAttrsOf is EMPTY (no regions, no ABI fields, no gate rejection)');
+  }
+
+  // --- NEGATIVE CONTROL for the audit itself: simulate the exact bug the phase
+  //     risks (a compaction that moves bondPartner but leaves an attribute) and
+  //     prove the audit catches it. A harness that only ever passes proves nothing.
+  {
+    const s = createAgentStore(bondCfg(8, 4), [], { bondAttrSpecs: BOND_ATTR_SPECS });
+    seedAgents(s, Array.from({ length: 4 }, (_, i) => ({ x: i, y: 0 })), 0.5);
+    const truth = new Map();
+    formBond(s, 0, 1, 1, 0, 0, [1.5, 11, 0]); truth.set('0:1', { w: 1.5, lbl: 11, flag: 0, L: 1 });
+    formBond(s, 0, 2, 2, 0, 0, [2.5, 22, 1]); truth.set('0:2', { w: 2.5, lbl: 22, flag: 1, L: 2 });
+    ok(auditAgainstTruth(s, truth) === null, 'audit passes on a correct two-bond store');
+    // The bug: agent 0 drops slot 0 by moving ONLY bondPartner from the last slot.
+    const mb = s.maxBonds;
+    s.bondPartner[0 * mb + 0] = s.bondPartner[0 * mb + 1];
+    s.bondCount[0] = 1;
+    // (bond 0↔1 is still in agent 1's list, so the truth map keeps it too.)
+    ok(auditAgainstTruth(s, truth) !== null, 'audit negative control: a partner-only compaction swap is CAUGHT');
+    ok(checkBondSymmetry(storeGraph(s)) !== null, 'I2 negative control (real store): the same bug is CAUGHT by symmetry');
+  }
+}
+
 tierA();
 tierB();
 await tierC();
+tierD();
 
 console.log(`\n${fail === 0 ? 'GRAPH-REWRITE HARNESS ✓' : 'GRAPH-REWRITE HARNESS ✗'}  (${pass} passed, ${fail} failed)`);
 rmSync(entryPath, { force: true });

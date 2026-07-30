@@ -22,6 +22,9 @@ export interface AgentStateValues {
   bondDegree?: number; density?: number;
   attrs?: Record<string, number>;
   bonds?: number[];
+  /** P2 — per-EDGE user state, PARALLEL to `bonds` (same order, one record per
+   *  live bond). Absent when the model declares no bond attributes. */
+  bondAttrs?: Array<Record<string, number>>;
 }
 
 interface Props {
@@ -29,6 +32,9 @@ interface Props {
   /** Latest worker state for this agent (null until the first reply lands). */
   state: AgentStateValues | null;
   agentAttributes: Attribute[];
+  /** P2 — the model's BOND attributes, for the per-bond value rows. Empty ⇒ the
+   *  bond-attribute block is not rendered at all. */
+  bondAttributes: Attribute[];
   /** Agent Capability Profile — gates the geometry rows (absent ⇒ show all). */
   capProfile: AgentCapabilities | null;
   /** Transient sweep popover (opened on press, not yet pinned): no Close-all and
@@ -76,7 +82,7 @@ function decodeAgentAttr(attr: Attribute, attrs: Record<string, number>): string
  * both open these (the 3D view additionally rings the agent in the volume).
  */
 export function InspectAgentPopover({
-  popover, state, agentAttributes, capProfile, transient = false,
+  popover, state, agentAttributes, bondAttributes, capProfile, transient = false,
   focused, totalOpen, following = false, onToggleFollow,
   onClose, onCloseAll, onFocus, onDragEnd,
 }: Props) {
@@ -218,6 +224,28 @@ export function InspectAgentPopover({
                       <span className={styles.attrValue}>{decodeAgentAttr(a, attrs)}</span>
                     </div>
                   ))}
+              </>
+            )}
+            {/* P2 — this agent's BONDS with their per-EDGE attribute values. One
+                row per live bond ("→ 42  weight 1.5 · kind Apical"); a bond
+                attribute is symmetric, so the partner shows the same values. */}
+            {bondAttributes.length > 0 && (state.bonds?.length ?? 0) > 0 && (
+              <>
+                <div className={styles.attrRow} style={{ opacity: 0.65, marginTop: 4 }}>
+                  <span className={styles.attrName}>bond attributes</span>
+                  <span className={styles.attrValue} />
+                </div>
+                {(state.bonds ?? []).map((p, i) => (
+                  <div className={styles.attrRow} key={`${p}-${i}`}>
+                    <span className={styles.attrName}>→ {p}</span>
+                    <span className={styles.attrValue}>
+                      {bondAttributes.map(a => {
+                        const v = state.bondAttrs?.[i]?.[a.id];
+                        return `${a.name} ${v === undefined ? '—' : decodeAgentAttr(a, { [a.id]: v })}`;
+                      }).join(' · ')}
+                    </span>
+                  </div>
+                ))}
               </>
             )}
           </>

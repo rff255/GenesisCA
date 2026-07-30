@@ -142,6 +142,10 @@ interface InitMsg {
    *  a separate id-space from `attributes`). Drives the agent SoA (buildAgentAttrSpecs
    *  maps these) + the `r_`/`w_` channel. Absent ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ empty (no agent attrs). */
   agentAttributes?: AttrDef[];
+  /** P2 — the BOND attribute set (per-EDGE user state), pre-filtered by
+   *  `bondAttrsOf` on the main thread. Drives the store's ragged bond-attribute
+   *  regions + the `_bondAttr_<id>` ABI block. Absent → empty (no bond attrs). */
+  bondAttributes?: AttrDef[];
   neighborhoods: NeighborhoodDef[];
   boundaryTreatment: string;
   updateMode: string;
@@ -615,6 +619,11 @@ let cellAttrs: AttrDef[] = [];
  *  buildAgentAttrSpecs maps these ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ the agent SoA; the agent loop's r_/w_ channel
  *  is keyed by them. A SEPARATE id-space from cellAttrs. */
 let agentAttrs: AttrDef[] = [];
+/** P2 (Graph-Rewriting Automata): the BOND attribute set — per-EDGE user state.
+ *  `buildBondAttrSpecs` maps these → the store's ragged bond-attribute regions;
+ *  the agent loop's `_bondAttr_<id>` channel is keyed by them. A THIRD id-space,
+ *  already filtered by `bondAttrsOf` on the main thread (Bonds-off ⇒ empty). */
+let bondAttrs: AttrDef[] = [];
 /** Generic Agent Platform: the agent-ACCESSIBLE cell attributes (agentAccess !==
  *  'none'). Drives the `_field_<id>` channel of the agent loop (args read from
  *  `readAttrs`, the CELL SoA). Mirrors `cellFieldAttrsOf` in the compiler. */
@@ -1057,6 +1066,15 @@ function buildAgentAttrSpecs(): AgentAttrSpec[] {
   return agentAttrs.map(a => ({ id: a.id, type: a.type, defaultValue: defaultValue(a) }));
 }
 
+/** P2 — the BOND attribute specs (per-EDGE state). Mirrors buildAgentAttrSpecs:
+ *  the SoA ragged regions, the `_bondAttr_<id>` ABI block and the WASM layout all
+ *  derive from this ONE ordered list. The main thread already applied
+ *  `bondAttrsOf`'s filters (Bonds-off ⇒ empty; only bool/integer/float/tag), so
+ *  the worker's list matches the compiled param list element-for-element. */
+function buildBondAttrSpecs(): AgentAttrSpec[] {
+  return bondAttrs.map(a => ({ id: a.id, type: a.type, defaultValue: defaultValue(a) }));
+}
+
 /** Allocate (or re-allocate) the agent store from the current config + attrs.
  *  Called on init when the model has the Agents topology. Seeds the configured
  *  initial agent count. */
@@ -1120,7 +1138,7 @@ function initAgents(): void {
   const layoutExtras: AgentLayoutExtras | undefined = wantWasmBacked
     ? { ...(pendingAgentLayoutExtras ?? {}), fieldTotal: width * height * depth, syncAttrs: wantSyncAttrs }
     : undefined;
-  agentStore = createAgentStore(centerBasedConfig, buildAgentAttrSpecs(), { wasmBacked: wantWasmBacked, syncAttrs: wantSyncAttrs, maxHashBins: agentMaxHashBins, layoutExtras });
+  agentStore = createAgentStore(centerBasedConfig, buildAgentAttrSpecs(), { wasmBacked: wantWasmBacked, syncAttrs: wantSyncAttrs, maxHashBins: agentMaxHashBins, layoutExtras, bondAttrSpecs: buildBondAttrSpecs() });
   // The agent world IS the grid coordinate frame (1:1, Decision D-FIELD): agent
   // (x,y) are in CELL units so they map onto the grid + the screen with the same
   // transform the cell blit uses. (worldWidth/Height in the config are reserved
@@ -1376,7 +1394,10 @@ function applyAgentSets(store: AgentStore, id: number, sets: Array<{ attrId: str
  *  the SAME order, and `s.worldDepth > 1 ÃƒÂ¢Ã…Â¸Ã‚Âº is3dModel(model)`, so this produces
  *  the identical ordered field list. */
 function agentAbiShapeOfStore(s: AgentStore): AgentAbiShape {
-  return { is3d: s.worldDepth > 1, agentAttrs: s.attrSpecs, fieldAttrs: fieldSpecs, hasLookupTables };
+  // `s.bondAttrSpecs` is built from the init message's `bondAttributes` through the
+  // SAME `bondAttrsOf` filter the compiler uses (and is empty when maxBonds is 0),
+  // so the `_bondAttr_<id>` block matches the compiled param list exactly.
+  return { is3d: s.worldDepth > 1, agentAttrs: s.attrSpecs, fieldAttrs: fieldSpecs, hasLookupTables, bondAttrs: s.bondAttrSpecs };
 }
 
 /** The shared runtime values (external caches) every kind resolves from ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â pulled
@@ -2611,6 +2632,11 @@ function runAgentStructuralPhase(): void {
   const lambda = cbNum(cfg, 'bondStiffness');
 
   // 1. Apply explicit bond requests written by FormBond / BreakBond this step.
+  // P2: the new bond's INITIAL attribute values ride the per-agent
+  // `bondFormAttrs[<id>][i]` request cells the Form Bond node wrote; `formBond`
+  // stamps the SAME values into BOTH slots (invariant I2). Reused scratch (the
+  // spec list is fixed for the store's lifetime); empty ⇒ null ⇒ the defaults.
+  const bondFormVals = s.bondAttrSpecs.length > 0 ? new Float64Array(s.bondAttrSpecs.length) : null;
   for (let i = 0; i < hw; i++) {
     if (!alive[i]) { s.bondFormReq[i] = 0; s.bondBreakReq[i] = 0; continue; }
     const fr = s.bondFormReq[i]!;
@@ -2619,7 +2645,12 @@ function runAgentStructuralPhase(): void {
       if (p >= 0 && p < hw && alive[p]) {
         const L = s.bondFormL[i]! > 0 ? s.bondFormL[i]! : (rad[i]! + rad[p]!);
         const K = s.bondFormK[i]! > 0 ? s.bondFormK[i]! : lambda;
-        formBond(s, i, p, L, K);
+        if (bondFormVals) {
+          for (let ai = 0; ai < s.bondAttrSpecs.length; ai++) {
+            bondFormVals[ai] = s.bondFormAttrs[s.bondAttrSpecs[ai]!.id]![i]!;
+          }
+        }
+        formBond(s, i, p, L, K, 0, bondFormVals);
       }
       s.bondFormReq[i] = 0;
     }
@@ -5477,6 +5508,11 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       // the agent-accessible cell attrs (the field channel). fieldSpecs mirrors
       // the compiler's cellFieldAttrsOf so the _field_ args stay in ABI lockstep.
       agentAttrs = msg.agentAttributes ?? [];
+      // P2: the BOND attribute set (per-EDGE state) — already filtered by
+      // `bondAttrsOf` on the main thread (Bonds-off ⇒ empty), so the store's
+      // ragged regions + the `_bondAttr_<id>` ABI block match the compiled
+      // signature element-for-element.
+      bondAttrs = msg.bondAttributes ?? [];
       fieldSpecs = cellAttrs.filter(a => a.agentAccess === 'read' || a.agentAccess === 'readWrite');
       modelAttrsList = msg.attributes.filter(a => a.isModelAttribute);
       indicatorsList = msg.indicators || [];
@@ -7254,9 +7290,20 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       // Live bond partner ids (epoch-checked, same discipline as hasBond/render).
       const base = id * s.maxBonds, nb = s.bondCount[id]!;
       const bonds: number[] = [];
+      // P2 — one entry per live bond, carrying its USER BOND ATTRIBUTE values, so
+      // the inspector can show per-EDGE state. Parallel to `bonds` (same order);
+      // omitted when the model declares none.
+      const bondAttrValues: Array<Record<string, number>> = [];
       for (let k = 0; k < nb; k++) {
         const p = s.bondPartner[base + k]!;
-        if (p >= 0 && s.alive[p] && s.epoch[p] === s.bondPartnerEpoch[base + k]) bonds.push(p);
+        if (p >= 0 && s.alive[p] && s.epoch[p] === s.bondPartnerEpoch[base + k]) {
+          bonds.push(p);
+          if (s.bondAttrSpecs.length > 0) {
+            const row: Record<string, number> = {};
+            for (const spec of s.bondAttrSpecs) row[spec.id] = (s.bondAttrs[spec.id]! as Uint8Array)[base + k]!;
+            bondAttrValues.push(row);
+          }
+        }
       }
       self.postMessage({
         type: 'agentState', id, live: true,
@@ -7265,6 +7312,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
         radius: s.radius[id]!, lineage: s.lineage[id]!,
         age: s.age[id]!, bondDegree: s.bondCount[id]!, density: s.density[id]!,
         attrs, bonds,
+        ...(bondAttrValues.length > 0 ? { bondAttrs: bondAttrValues } : {}),
       });
       break;
     }

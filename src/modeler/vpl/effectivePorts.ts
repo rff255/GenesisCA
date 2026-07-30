@@ -22,6 +22,7 @@ import { clampVisibleCount } from './compiler/expression/parser';
 import { vectorPortDims } from './compiler/vectorAttr';
 import { MULTI_ATTR_TYPES, buildExtraSlotPorts } from './compiler/multiAttrExpand';
 import { buildCensusPorts } from './compiler/censusExpand';
+import { buildBondAttrPorts } from './bondAttrPorts';
 import { applyLookupAxisPorts } from './nodes/LookupInteractionNode';
 
 export interface EffectivePorts {
@@ -100,6 +101,13 @@ export function getEffectivePorts(
   if (nodeType === 'neighbourCensus') {
     const extra = buildCensusPorts(nodeType, cfg, model);
     outputs = [...extra.outputs, ...outputs];
+  }
+
+  // Form Bond: one initial-value input per BOND attribute (P2), labelled with the
+  // attribute name + a type-adaptive inline widget. Same shared-builder rule.
+  if (nodeType === 'formBond') {
+    const extra = buildBondAttrPorts(nodeType, model);
+    inputs = [...inputs, ...extra.inputs];
   }
 
   // Table Lookup: shape the index inputs per the referenced table — legacy

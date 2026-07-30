@@ -19,6 +19,7 @@
  *  even on a coincidental id-string clash. */
 
 import type { Attribute, CAModel } from './types';
+import { resolveMaxBonds } from './centerBased';
 
 /** Cell attributes — the lattice CA state + the field substrate. Byte-identical
  *  to the historical `model.attributes.filter(a => !a.isModelAttribute)`. */
@@ -30,6 +31,31 @@ export function cellAttrsOf(model: CAModel): Attribute[] {
  *  when the model has none (every legacy / non-agent model). */
 export function agentAttrsOf(model: CAModel): Attribute[] {
   return model.agentAttributes ?? [];
+}
+
+/** The bond-attribute TYPES v1 offers (decision D1) — the scalar-numeric set that
+ *  fits one number exactly on every target. `vector` / `color` / `neighborIndex`
+ *  are excluded: a vector bond attribute needs the `lowerVectorAttrs` treatment on
+ *  a RAGGED store, which is a separate milestone. */
+export const BOND_ATTRIBUTE_TYPES: readonly string[] = ['bool', 'integer', 'float', 'tag'];
+
+/** BOND attributes — per-EDGE user state (P2, Graph-Rewriting Automata). The
+ *  THIRD id-space, and the single source of truth every mirror derives from: the
+ *  agent memory layout's ragged regions, the `_bondAttr_<id>` ABI block, the
+ *  worker's store specs, and the WASM emitters.
+ *
+ *  TWO filters, and both must be applied EVERYWHERE or the mirrors desync:
+ *    1. `resolveMaxBonds(centerBased) === 0` (the Bonds capability off) ⇒ EMPTY —
+ *       a bonds-off model has no bond store, so it must allocate zero
+ *       bond-attribute bytes and emit no ABI fields.
+ *    2. only `BOND_ATTRIBUTE_TYPES` survive — a hand-edited file naming e.g. a
+ *       `vector` bond attribute is skipped rather than allocating a shape no
+ *       target can read.
+ *
+ *  (`centerBased.ts` imports nothing from here, so this edge is acyclic.) */
+export function bondAttrsOf(model: CAModel): Attribute[] {
+  if (resolveMaxBonds(model.centerBased) <= 0) return [];
+  return (model.bondAttributes ?? []).filter(a => BOND_ATTRIBUTE_TYPES.includes(a.type));
 }
 
 /** Cell attributes agents may READ via the field bridge (Sample Field / Field

@@ -213,6 +213,11 @@ type ModelAction =
   | { type: 'DUPLICATE_AGENT_ATTRIBUTE'; sourceId: string }
   | { type: 'REMOVE_AGENT_ATTRIBUTE'; id: string }
   | { type: 'UPDATE_AGENT_ATTRIBUTE'; id: string; changes: Partial<Attribute> }
+  | { type: 'ADD_BOND_ATTRIBUTE' }
+  | { type: 'DUPLICATE_BOND_ATTRIBUTE'; sourceId: string }
+  | { type: 'REMOVE_BOND_ATTRIBUTE'; id: string }
+  | { type: 'UPDATE_BOND_ATTRIBUTE'; id: string; changes: Partial<Attribute> }
+  | { type: 'REORDER_BOND_ATTRIBUTES'; newOrder: string[] }
   | { type: 'ADD_NEIGHBORHOOD' }
   | { type: 'DUPLICATE_NEIGHBORHOOD'; sourceId: string }
   | { type: 'REMOVE_NEIGHBORHOOD'; id: string }
@@ -973,6 +978,118 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
       return { ...state, isDirty: true, model: updatedModel };
     }
 
+    // --- BOND attributes (P2, Graph-Rewriting Automata) — the per-EDGE id-space.
+    // Mirrors the *_AGENT_ATTRIBUTE cases; the differences are (a) only
+    // bool/integer/float/tag are offered (D1) and (b) the cascades scan the AGENT
+    // graph's bond-attribute node configs (`clearDeletedId` already covers both
+    // graphs + macros).
+    case 'ADD_BOND_ATTRIBUTE': {
+      const newAttr: Attribute = {
+        id: generateId('bond_attribute'),
+        name: 'bond_attribute',
+        type: 'float',
+        description: '',
+        isModelAttribute: false,
+        defaultValue: '0',
+      };
+      return {
+        ...state, isDirty: true,
+        model: { ...state.model, bondAttributes: [...(state.model.bondAttributes || []), newAttr] },
+      };
+    }
+
+    case 'DUPLICATE_BOND_ATTRIBUTE': {
+      const list = state.model.bondAttributes || [];
+      const source = list.find(a => a.id === action.sourceId);
+      if (!source) return state;
+      const dup: Attribute = { ...(JSON.parse(JSON.stringify(source)) as Attribute), id: generateId(source.name + '_copy'), name: `${source.name} (copy)` };
+      return {
+        ...state, isDirty: true,
+        model: { ...state.model, bondAttributes: [...list, dup] },
+      };
+    }
+
+    case 'REMOVE_BOND_ATTRIBUTE': {
+      const filtered = (state.model.bondAttributes || []).filter(a => a.id !== action.id);
+      const modelAfter = { ...state.model, bondAttributes: filtered };
+      // Clear stale `attributeId` (Get/Set Bond Attribute) + `tagAttributeId`
+      // references so a removed bond attribute can't strand `_undef` in the agent
+      // graph. Scans graphNodes + agentGraphNodes + macroDefs[*].nodes.
+      const b1 = clearDeletedId(modelAfter, 'attributeId', action.id);
+      const b2 = patchAllNodes(
+        { ...modelAfter, ...b1 },
+        cfg => cfg.tagAttributeId === action.id,
+        cfg => { cfg.tagAttributeId = ''; return cfg; },
+      );
+      // Form Bond seeds its initial values through per-attribute inline widgets
+      // keyed `_port_bondAttr_<id>` — drop the stale key so a re-added attribute
+      // with the same id can't inherit a previous widget value.
+      const b3 = patchAllNodes(
+        { ...modelAfter, ...b2 },
+        cfg => cfg[`_port_bondAttr_${action.id}`] !== undefined,
+        cfg => { delete cfg[`_port_bondAttr_${action.id}`]; return cfg; },
+      );
+      return { ...state, isDirty: true, model: { ...modelAfter, ...b3 } };
+    }
+
+    case 'UPDATE_BOND_ATTRIBUTE': {
+      const oldAttr = (state.model.bondAttributes || []).find(a => a.id === action.id);
+      const updatedModel = {
+        ...state.model,
+        bondAttributes: (state.model.bondAttributes || []).map(a =>
+          a.id === action.id ? { ...a, ...action.changes } : a),
+      };
+      // Tag-options remap — the SAME indexMap rule the agent path uses, applied to
+      // the node configs that store a tag INDEX for this attribute (Get Constant /
+      // Switch / Compare in tag mode, and the Set/Form Bond Attribute inline value).
+      if (oldAttr && action.changes.tagOptions && oldAttr.tagOptions) {
+        const oldOpts = oldAttr.tagOptions, newOpts = action.changes.tagOptions;
+        const indexMap = new Map<number, number>();
+        for (let oi = 0; oi < oldOpts.length; oi++) {
+          const ni = newOpts.indexOf(oldOpts[oi]!);
+          indexMap.set(oi, ni >= 0 ? ni : 0);
+        }
+        const remap = (val: string | number | boolean | undefined): string =>
+          String(indexMap.get(Number(val) || 0) ?? 0);
+        const attrId = action.id;
+        const patched = patchAllNodes(
+          updatedModel,
+          (cfg, nt) =>
+            (nt === 'getConstant' && cfg.constType === 'tag' && cfg.tagAttributeId === attrId) ||
+            (nt === 'switch' && cfg.tagAttributeId === attrId && cfg.valueType === 'tag') ||
+            (nt === 'statement' && cfg.compareType === 'tag' && cfg.tagAttributeId === attrId) ||
+            (nt === 'setBondAttribute' && cfg.attributeId === attrId) ||
+            (nt === 'formBond' && cfg[`_port_bondAttr_${attrId}`] !== undefined),
+          (cfg, nt) => {
+            if (nt === 'getConstant') cfg.constValue = remap(cfg.constValue);
+            if (nt === 'switch') {
+              const cc = Number(cfg.caseCount) || 0;
+              for (let i = 0; i < cc; i++) cfg[`case_${i}_value`] = remap(cfg[`case_${i}_value`]);
+            }
+            if (nt === 'statement') {
+              if (cfg._port_x !== undefined) cfg._port_x = remap(cfg._port_x);
+              if (cfg._port_y !== undefined) cfg._port_y = remap(cfg._port_y);
+              if (cfg._port_y2 !== undefined) cfg._port_y2 = remap(cfg._port_y2);
+            }
+            if (nt === 'setBondAttribute' && cfg._port_value !== undefined) cfg._port_value = remap(cfg._port_value);
+            if (nt === 'formBond') cfg[`_port_bondAttr_${attrId}`] = remap(cfg[`_port_bondAttr_${attrId}`]);
+            return cfg;
+          },
+        );
+        return { ...state, isDirty: true, model: { ...updatedModel, ...patched } };
+      }
+      return { ...state, isDirty: true, model: updatedModel };
+    }
+
+    case 'REORDER_BOND_ATTRIBUTES':
+      // STRUCTURAL: the order drives the ragged region order in the agent memory
+      // layout AND the `_bondAttr_<id>` ABI block, so SimulatorView must force a
+      // full worker reinit (see `agentBondAttrsStructurallyEqual`).
+      return {
+        ...state, isDirty: true,
+        model: { ...state.model, bondAttributes: reorderById(state.model.bondAttributes ?? [], action.newOrder) },
+      };
+
     case 'ADD_NEIGHBORHOOD': {
       const newNbr: Neighborhood = {
         id: generateId('new_neighborhood'),
@@ -1381,6 +1498,10 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
       // Absent in every legacy file; the split migration below populates it for
       // legacy agent models that stored per-agent state in cell attributes.
       if (!m.agentAttributes) m.agentAttributes = [];
+      // Graph-Rewriting Automata (P2): the BOND attribute set (per-edge state, a
+      // third id-space). Absent in every pre-P2 file → empty, so nothing about the
+      // store layout, the ABI or the emitted code changes for a legacy model.
+      if (!m.bondAttributes) m.bondAttributes = [];
       if (m.topologyMode.agents && !m.centerBased) m.centerBased = defaultCenterBasedConfig();
       for (const n of m.neighborhoods) { n.margin ??= 2; n.includeCentralCell ??= false; }
       for (const a of m.attributes) {
@@ -1809,6 +1930,12 @@ export interface ModelContextValue {
   duplicateAgentAttribute: (sourceId: string) => void;
   removeAgentAttribute: (id: string) => void;
   updateAgentAttribute: (id: string, changes: Partial<Attribute>) => void;
+  /** Graph-Rewriting Automata (P2): bond attribute set (CAModel.bondAttributes). */
+  addBondAttribute: () => void;
+  duplicateBondAttribute: (sourceId: string) => void;
+  removeBondAttribute: (id: string) => void;
+  updateBondAttribute: (id: string, changes: Partial<Attribute>) => void;
+  reorderBondAttributes: (newOrder: string[]) => void;
   addNeighborhood: () => void;
   duplicateNeighborhood: (sourceId: string) => void;
   removeNeighborhood: (id: string) => void;
@@ -1943,6 +2070,18 @@ export function ModelProvider({ children }: { children: ReactNode }) {
   const updateAgentAttribute = useCallback(
     (id: string, changes: Partial<Attribute>) =>
       dispatch({ type: 'UPDATE_AGENT_ATTRIBUTE', id, changes }),
+    [],
+  );
+  const addBondAttribute = useCallback(() => dispatch({ type: 'ADD_BOND_ATTRIBUTE' }), []);
+  const duplicateBondAttribute = useCallback((sourceId: string) => dispatch({ type: 'DUPLICATE_BOND_ATTRIBUTE', sourceId }), []);
+  const removeBondAttribute = useCallback((id: string) => dispatch({ type: 'REMOVE_BOND_ATTRIBUTE', id }), []);
+  const updateBondAttribute = useCallback(
+    (id: string, changes: Partial<Attribute>) =>
+      dispatch({ type: 'UPDATE_BOND_ATTRIBUTE', id, changes }),
+    [],
+  );
+  const reorderBondAttributes = useCallback(
+    (newOrder: string[]) => dispatch({ type: 'REORDER_BOND_ATTRIBUTES', newOrder }),
     [],
   );
   const addNeighborhood = useCallback(
@@ -2182,6 +2321,11 @@ export function ModelProvider({ children }: { children: ReactNode }) {
       duplicateAgentAttribute,
       removeAgentAttribute,
       updateAgentAttribute,
+      addBondAttribute,
+      duplicateBondAttribute,
+      removeBondAttribute,
+      updateBondAttribute,
+      reorderBondAttributes,
       addNeighborhood,
       duplicateNeighborhood,
       removeNeighborhood,
@@ -2252,6 +2396,11 @@ export function ModelProvider({ children }: { children: ReactNode }) {
       duplicateAgentAttribute,
       removeAgentAttribute,
       updateAgentAttribute,
+      addBondAttribute,
+      duplicateBondAttribute,
+      removeBondAttribute,
+      updateBondAttribute,
+      reorderBondAttributes,
       addNeighborhood,
       duplicateNeighborhood,
       removeNeighborhood,

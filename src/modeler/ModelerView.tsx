@@ -62,7 +62,15 @@ function selectedItemName(model: CAModel, panel: PanelId, id: string | null, age
     return (model.indicators ?? []).find(i => i.id === indId)?.name ?? null;
   }
   if (panel === 'attributes') {
-    // Discriminated `attr:<id>` / `var:<id>` — Local Variables share this panel.
+    // Discriminated `attr:<id>` / `var:<id>` / `bond:<id>` — Local Variables AND
+    // (P2) Bond Attributes share this panel's single detail slot.
+    // ⚠ A prefix that does NOT resolve here means the detail PanelShell (gated on
+    // `detailItemName != null`) never mounts, so clicking or adding an item does
+    // NOTHING visible — the exact bug that shipped once for agent attributes.
+    if (id.startsWith('bond:')) {
+      const bondId = id.slice(5);
+      return (model.bondAttributes ?? []).find(a => a.id === bondId)?.name ?? null;
+    }
     if (id.startsWith('var:')) {
       const varId = id.slice(4);
       const list = agentMode ? (model.agentVariables ?? []) : (model.variables ?? []);

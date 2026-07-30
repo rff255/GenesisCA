@@ -44,12 +44,14 @@ import { SetVelocityNode } from './SetVelocityNode';
 import { GetAgentPositionNode } from './GetAgentPositionNode';
 import { GetAgentOffsetNode } from './GetAgentOffsetNode';
 import { GetAgentAttributeNode } from './GetAgentAttributeNode';
+import { GetBondAttributeNode } from './GetBondAttributeNode';
 import { GetAgentRadiusNode } from './GetAgentRadiusNode';
 import { GetVelocityNode } from './GetVelocityNode';
 import { ApplyForceNode } from './ApplyForceNode';
 import { ApplyForceToAgentNode } from './ApplyForceToAgentNode';
 import { ApplyForceToAgentsNode } from './ApplyForceToAgentsNode';
 import { SetAgentAttributeNode } from './SetAgentAttributeNode';
+import { SetBondAttributeNode } from './SetBondAttributeNode';
 import { GetOrientationNode } from './GetOrientationNode';
 import { SetOrientationNode } from './SetOrientationNode';
 import { GetFacingOrientationNode } from './GetFacingOrientationNode';
@@ -211,6 +213,8 @@ const ALL_NODES: NodeTypeDef[] = [
   GetAgentPositionNode,
   GetAgentOffsetNode,
   GetAgentAttributeNode,
+  // Graph-Rewriting Automata (P2): per-EDGE user state.
+  GetBondAttributeNode,
   GetAgentRadiusNode,
   GetVelocityNode,
   ApplyForceNode,
@@ -218,6 +222,7 @@ const ALL_NODES: NodeTypeDef[] = [
   ApplyForceToAgentsNode,
   SetVelocityNode,
   SetAgentAttributeNode,
+  SetBondAttributeNode,
   // Generic Agent Platform — agent-equivalent array / set ops (nearby + bonded
   // sources → filter / join / pick / gather / set-many).
   FilterAgentsNode,

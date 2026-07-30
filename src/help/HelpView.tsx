@@ -1620,6 +1620,39 @@ export function HelpView() {
             Game of Life with each agent bonded to its eight neighbours, the rule read entirely
             through one census node.
           </p>
+          <h3 className={styles.h3}>Bond Attributes &mdash; state that lives on the edge</h3>
+          <p className={styles.p}>
+            Agent attributes describe a <em>node</em>. <strong>Bond attributes</strong> describe an{' '}
+            <em>edge</em>: a weight, a type, an age, a flag &mdash; anything that belongs to the
+            connection between two agents rather than to either of them. Define them in the{' '}
+            <strong>Bond Attributes</strong> section of the Attributes panel (Agents tab, visible
+            once the Bonds capability is on). They can be Binary, Integer, Decimal or Tag.
+          </p>
+          <p className={styles.p}>
+            <strong>Get Bond Attribute</strong> reads one by <em>partner id</em> &mdash; feed the
+            Partner output of <em>For Each Bond</em>. If the two agents aren&rsquo;t bonded you get
+            the attribute&rsquo;s default, never a broken value.{' '}
+            <strong>Set Bond Attribute</strong> writes one the same way.
+          </p>
+          <p className={styles.p}>
+            <strong>A bond is one thing, stored at both ends.</strong> So writing a bond attribute
+            from <em>either</em> agent updates <em>both</em> sides &mdash; there is no &ldquo;my
+            half&rdquo; of a bond. If you want a direction, store it as a <em>value</em>: keep an{' '}
+            <em>owner</em> bond attribute and compare it against <strong>Get Self Handle</strong>.
+            Don&rsquo;t try to write the two sides differently; the engine keeps them equal on
+            purpose, and every rewriting rule depends on that.
+          </p>
+          <p className={styles.p}>
+            A brand-new bond gets its values from <strong>Form Bond</strong>, which grows one input
+            per bond attribute (labelled with its name) &mdash; that is where you seed a new
+            edge&rsquo;s weight or type. A bond requested this generation doesn&rsquo;t exist until
+            the end of the step, so Set Bond Attribute can only reach it from the next generation.
+          </p>
+          <p className={styles.p}>
+            Bond attributes run on the <strong>Debug/JS</strong> and <strong>WebAssembly</strong>{' '}
+            agent targets. A model that declares any of them falls back off WebGPU (the GPU bond
+            store doesn&rsquo;t carry them yet) &mdash; the Agent Compile Target hint says so.
+          </p>
           <h3 className={styles.h3}>Spawning Agents (Create &rarr; Add, in either event)</h3>
           <p className={styles.p}>
             Beyond the <em>Seed Count</em> the engine lays down on Reset, you spawn agents

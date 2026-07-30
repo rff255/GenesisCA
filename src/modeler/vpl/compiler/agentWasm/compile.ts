@@ -117,11 +117,12 @@ import { colorScaleHasAlpha, readColorScaleStops, type ColorScaleStop } from '..
 import { categoricalHasAlpha, readCategoricalEntries, readCategoricalDefault, type CategoricalEntry } from '../../nodes/CategoricalColorNode';
 import { colorConstantHasAlpha } from '../../nodes/GetColorConstantNode';
 import { viewCosHalf } from '../../nodes/GetAgentsInViewNode';
-import { cellFieldAttrsOf } from '../../../../model/attributeScope';
+import { cellFieldAttrsOf, bondAttrsOf } from '../../../../model/attributeScope';
+import { encodeAttrValue } from '../../../../model/attrValueEncoding';
 import {
   computeAgentMemoryLayout, computeAgentMaxHashBins, AGENT_NEARBY_SCRATCH_SLOTS,
   type AgentAttrSpec, type AgentMemoryLayout, type AgentLayoutExtras,
-  agentAttrKind,
+  agentAttrKind, bondAttrKind,
 } from '../../../../simulator/engine/agentEngine';
 
 /** The node types the WASM agent compiler can emit. FULL-COVERAGE: a model whose
@@ -150,6 +151,8 @@ export const AGENT_WASM_SUPPORTED_TYPES: ReadonlySet<string> = new Set<string>([
   'aggregate', 'groupOperator', 'groupCounting', 'groupStatement',
   // bonds
   'forEachBond',
+  // bond attributes (P2) — per-EDGE state in the ragged store
+  'getBondAttribute', 'setBondAttribute',
   // local variables (scalar + array)
   'getVariable', 'setVariable', 'setArrayElement',
   // array accessors
@@ -535,6 +538,142 @@ function emitAgentAttrStore(ctx: AgentWasmCtx, attrId: string): void {
   else { em.f64ToI32(); em.i32Store8(); }   // bool: store the low byte (0/1)
 }
 
+// ---------------------------------------------------------------------------
+// BOND attributes (P2, Graph-Rewriting Automata) — per-EDGE user state in the
+// ragged bond store. Two region kinds only (`bondAttrKind`): Int32 for
+// bool/integer/tag, Float64 for float. Addressed like every other bond field:
+// `slot = agent * maxBonds + k`, byte address = `bondAttrOffset[id] + slot*size`.
+// ---------------------------------------------------------------------------
+
+/** The model's bond attributes with their defaults encoded to the stored NUMBER —
+ *  the SAME list (and order) `bondAttrsOf` gives the ABI + the layout. */
+function bondAttrSpecsOf(model: CAModel): Array<{ id: string; type: string; defaultValue: number }> {
+  return bondAttrsOf(model).map(a => ({ id: a.id, type: a.type, defaultValue: encodeAttrValue(a, a.defaultValue) }));
+}
+
+/** Scan the CURRENT agent's bond list for `portId`'s partner id and leave the
+ *  matching SLOT index in a fresh i32 local (-1 when not bonded). Mirrors the JS
+ *  emit exactly: a straight partner-id scan over the live `bondCount` entries, no
+ *  epoch re-check (the engine's post-step sweep keeps the list clean). */
+function emitBondSlotLocal(ctx: AgentWasmCtx, node: GraphNode, portId: string): number {
+  const em = ctx.em, L = ctx.layout;
+  const tgt = em.allocLocal(I32);
+  pushValueAs(em, resolveValueInput(ctx, node, portId, -1), I32); em.localSet(tgt);
+  const slot = em.allocLocal(I32); em.i32Const(-1); em.localSet(slot);
+  const base = em.allocLocal(I32);
+  em.localGet(ctx.idxLocal); em.i32Const(L.maxBonds); em.op(OP_I32_MUL); em.localSet(base);
+  const n = em.allocLocal(I32); pushI32Elem(em, L.i32['bondCount']!, ctx.idxLocal); em.localSet(n);
+  const k = em.allocLocal(I32); em.i32Const(0); em.localSet(k);
+  const bpOff = L.bondI32['bondPartner']!;
+  em.block(() => { em.loop(() => {
+    em.localGet(k); em.localGet(n); em.op(OP_I32_GE_S); em.brIf(1);
+    // if (bondPartner[base + k] === tgt) { slot = base + k; break; }
+    em.localGet(base); em.localGet(k); em.op(OP_I32_ADD);
+    em.i32Const(4); em.op(OP_I32_MUL); em.i32Const(bpOff); em.op(OP_I32_ADD); em.i32Load();
+    em.localGet(tgt); em.op(OP_I32_EQ);
+    em.ifThen(() => {
+      em.localGet(base); em.localGet(k); em.op(OP_I32_ADD); em.localSet(slot);
+      em.br(2);   // depth: 0 = the `if`, 1 = the `loop`, 2 = the enclosing `block`
+    });
+    em.localGet(k); em.i32Const(1); em.op(OP_I32_ADD); em.localSet(k);
+    em.br(0);
+  }); });
+  return slot;
+}
+
+/** Scan AGENT `agentLocal`'s bond list for a slot pointing back at the CURRENT
+ *  agent (`idx`) — the partner side of a symmetric write. -1 when absent. */
+function emitReverseBondSlotLocal(ctx: AgentWasmCtx, agentLocal: number): number {
+  const em = ctx.em, L = ctx.layout;
+  const slot = em.allocLocal(I32); em.i32Const(-1); em.localSet(slot);
+  const base = em.allocLocal(I32);
+  em.localGet(agentLocal); em.i32Const(L.maxBonds); em.op(OP_I32_MUL); em.localSet(base);
+  const n = em.allocLocal(I32); pushI32Elem(em, L.i32['bondCount']!, agentLocal); em.localSet(n);
+  const k = em.allocLocal(I32); em.i32Const(0); em.localSet(k);
+  const bpOff = L.bondI32['bondPartner']!;
+  em.block(() => { em.loop(() => {
+    em.localGet(k); em.localGet(n); em.op(OP_I32_GE_S); em.brIf(1);
+    em.localGet(base); em.localGet(k); em.op(OP_I32_ADD);
+    em.i32Const(4); em.op(OP_I32_MUL); em.i32Const(bpOff); em.op(OP_I32_ADD); em.i32Load();
+    em.localGet(ctx.idxLocal); em.op(OP_I32_EQ);
+    em.ifThen(() => {
+      em.localGet(base); em.localGet(k); em.op(OP_I32_ADD); em.localSet(slot);
+      em.br(2);
+    });
+    em.localGet(k); em.i32Const(1); em.op(OP_I32_ADD); em.localSet(k);
+    em.br(0);
+  }); });
+  return slot;
+}
+
+/** Push the byte address of bond attribute `attrId` at ragged slot `slotLocal`. */
+function pushBondAttrAddr(ctx: AgentWasmCtx, attrId: string, slotLocal: number, off: number): void {
+  const em = ctx.em;
+  const size = bondAttrKind(bondAttrTypeOf(ctx.model, attrId)) === 'float64' ? 8 : 4;
+  em.localGet(slotLocal); em.i32Const(size); em.op(OP_I32_MUL); em.i32Const(off); em.op(OP_I32_ADD);
+}
+
+function bondAttrTypeOf(model: CAModel, attrId: string): string {
+  return bondAttrsOf(model).find(a => a.id === attrId)?.type ?? 'float';
+}
+
+/** Get Bond Attribute — the bonded value, or the attribute's DEFAULT when the two
+ *  agents are not bonded. Mirrors GetBondAttributeNode's JS emit. */
+function emitGetBondAttribute(ctx: AgentWasmCtx, node: GraphNode): void {
+  const em = ctx.em;
+  const attrId = (node.data.config?.['attributeId'] as string) || '';
+  const spec = bondAttrSpecsOf(ctx.model).find(a => a.id === attrId);
+  const off = ctx.layout.bondAttrOffset[attrId];
+  if (!spec || off === undefined) { em.f64Const(0); return; }
+  const slot = emitBondSlotLocal(ctx, node, 'partnerId');
+  const out = em.allocLocal(F64);
+  em.f64Const(spec.defaultValue); em.localSet(out);
+  em.localGet(slot); em.i32Const(0); em.op(OP_I32_GE_S);
+  em.ifThen(() => {
+    pushBondAttrAddr(ctx, attrId, slot, off);
+    if (bondAttrKind(spec.type) === 'float64') em.f64Load();
+    else { em.i32Load(); em.i32ToF64(); }
+    em.localSet(out);
+  });
+  em.localGet(out);
+}
+
+/** Set Bond Attribute — write BOTH endpoints' slots (invariant I2). Mirrors
+ *  SetBondAttributeNode's JS emit, including the partner-side range+alive guard. */
+function emitSetBondAttribute(ctx: AgentWasmCtx, node: GraphNode): void {
+  const em = ctx.em;
+  const attrId = (node.data.config?.['attributeId'] as string) || '';
+  const spec = bondAttrSpecsOf(ctx.model).find(a => a.id === attrId);
+  const off = ctx.layout.bondAttrOffset[attrId];
+  if (!spec || off === undefined) return;   // unresolved attribute → no-op
+  const isF64 = bondAttrKind(spec.type) === 'float64';
+  const val = em.allocLocal(F64);
+  pushValueInputF64(ctx, node, 'value', 0); em.localSet(val);
+  const store = (slotLocal: number) => {
+    pushBondAttrAddr(ctx, attrId, slotLocal, off);
+    em.localGet(val);
+    // int32 regions truncate toward zero — the JS `Int32Array[i] = x` semantics
+    // (OP_I32_TRUNC_SAT_F64_S, non-trapping on NaN/Inf like ToInt32).
+    if (isF64) em.f64Store(); else { em.f64ToI32(); em.i32Store(); }
+  };
+  // own side
+  const ownSlot = emitBondSlotLocal(ctx, node, 'partnerId');
+  em.localGet(ownSlot); em.i32Const(0); em.op(OP_I32_GE_S);
+  em.ifThen(() => store(ownSlot));
+  // partner side — range + alive guarded (the by-id-writer discipline)
+  const tgt = em.allocLocal(I32);
+  pushValueAs(em, resolveValueInput(ctx, node, 'partnerId', -1), I32); em.localSet(tgt);
+  const guard = emitAgentIdGuard(ctx, tgt);
+  em.localGet(guard.okLocal);
+  em.localGet(guard.safeLocal); em.i32Const(ctx.layout.u8['alive']!); em.op(OP_I32_ADD); em.i32Load8U();
+  em.op(OP_I32_AND);
+  em.ifThen(() => {
+    const revSlot = emitReverseBondSlotLocal(ctx, guard.safeLocal);
+    em.localGet(revSlot); em.i32Const(0); em.op(OP_I32_GE_S);
+    em.ifThen(() => store(revSlot));
+  });
+}
+
 
 // ---------------------------------------------------------------------------
 // Value emission.
@@ -724,6 +863,10 @@ function compileValueNode(ctx: AgentWasmCtx, nodeId: string, portId: string): Va
       // Range-guarded (mirrors GetAgentAttributeNode's JS emit): -1 / oob → 0.
       const guard = emitAgentIdGuard(ctx, aLocal);
       result = f64Result(() => pushGuardedF64(ctx, guard, safe => pushAgentAttrReadF64(ctx, attrId, safe)));
+      break;
+    }
+    case 'getBondAttribute': {
+      result = f64Result(() => emitGetBondAttribute(ctx, node));
       break;
     }
     case 'getCellAttribute': {
@@ -2498,6 +2641,21 @@ function compileFlowNode(ctx: AgentWasmCtx, nodeId: string): void {
       pushValueAs(em, resolveValueInput(ctx, node, 'targetAgent', -1), I32); em.i32Const(1); em.op(OP_I32_ADD); em.i32Store();
       pushF64ElemAddr(em, ctx.layout.f64['bondFormL']!, ctx.idxLocal); pushValueInputF64(ctx, node, 'restLength', 0); em.f64Store();
       pushF64ElemAddr(em, ctx.layout.f64['bondFormK']!, ctx.idxLocal); pushValueInputF64(ctx, node, 'stiffness', 0); em.f64Store();
+      // P2 — the new bond's INITIAL attribute values, one per-agent f64 request
+      // cell each (mirrors the JS FormBondNode emit). Nothing is emitted when the
+      // model has no bond attributes, so the module bytes are byte-identical.
+      for (const spec of bondAttrSpecsOf(ctx.model)) {
+        const off = ctx.layout.bondFormAttrOffset[spec.id];
+        if (off === undefined) continue;
+        pushF64ElemAddr(em, off, ctx.idxLocal);
+        pushValueInputF64(ctx, node, `bondAttr_${spec.id}`, spec.defaultValue);
+        em.f64Store();
+      }
+      compileFlowChain(ctx, node.id, 'next');
+      break;
+    }
+    case 'setBondAttribute': {
+      emitSetBondAttribute(ctx, node);
       compileFlowChain(ctx, node.id, 'next');
       break;
     }
@@ -3854,6 +4012,9 @@ function computeVolatile(ctx: AgentWasmCtx, extraSeeds?: Set<string>): void {
  *  the JS sink-hoist) is hoistable. */
 const AGENT_VALUE_NO_HOIST: ReadonlySet<string> = new Set<string>([
   'getRandom', 'getVariable', 'getAgentAttribute', 'getIndicator',
+  // P2: a bond attribute is mutable mid-step (Set Bond Attribute writes both
+  // slots) AND the read scans the CURRENT agent's bond list — never hoist it.
+  'getBondAttribute',
   'forEachInArray', 'forEachBond', 'loop',
   'getNearbyAgents', 'getAgentsInView', 'getAgentsAttribute', 'filterAgents', 'joinAgents',
   'pickNRandomAgents', 'pickRandomAgent', 'getBondedAgents',
@@ -4973,6 +5134,12 @@ export function buildAgentLayoutExtras(model: CAModel): AgentLayoutExtras {
     lookupTables,
     fieldIds,
     fieldTotal: W * H * D,
+    // P2 — the ragged bond-attribute regions + their Form-Bond request cells.
+    // `bondAttrsOf` applies the Bonds-off + allowed-type filters, so this is the
+    // SAME ordered list the worker's `buildBondAttrSpecs` produces (the
+    // baked-offset lockstep). The `defaultValue` here is 0 like the agent specs
+    // above — the layout only needs the id + type (sizing), never the default.
+    bondAttrSpecs: bondAttrsOf(model).map(a => ({ id: a.id, type: a.type, defaultValue: 0 })),
   };
 }
 

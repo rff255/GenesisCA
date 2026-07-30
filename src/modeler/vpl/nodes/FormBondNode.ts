@@ -26,6 +26,17 @@ export const FormBondNode: NodeTypeDef = {
     { id: 'stiffness', label: 'Stiffness', kind: 'input', category: 'value', dataType: 'float', inlineWidget: 'number', defaultValue: '0' },
   ],
   defaultConfig: {},
-  compile: (_nodeId, _config, inputs) =>
-    `_bondFormReq[idx] = ((${inputs['targetAgent'] || '-1'}) | 0) + 1; _bondFormL[idx] = ${inputs['restLength'] || '0'}; _bondFormK[idx] = ${inputs['stiffness'] || '0'};\n`,
+  compile: (_nodeId, _config, inputs, _boundary, ctx) => {
+    // P2 — the new bond's INITIAL attribute values. One dynamic input port per
+    // declared bond attribute (`bondAttr_<id>`, built by `buildBondAttrPorts`), each
+    // with a type-adaptive inline widget seeded from the attribute's default. The
+    // values ride per-agent request cells alongside restLength/stiffness; the
+    // structural phase hands them to `formBond`, which writes BOTH slots (I2).
+    // A model with no bond attributes emits NOTHING extra ⇒ byte-identical.
+    let out = `_bondFormReq[idx] = ((${inputs['targetAgent'] || '-1'}) | 0) + 1; _bondFormL[idx] = ${inputs['restLength'] || '0'}; _bondFormK[idx] = ${inputs['stiffness'] || '0'};\n`;
+    for (const a of ctx?.bondAttrs ?? []) {
+      out += `_bondFormAttr_${a.id}[idx] = ${inputs[`bondAttr_${a.id}`] ?? String(a.defaultValue)};\n`;
+    }
+    return out;
+  },
 };

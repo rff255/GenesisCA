@@ -95,6 +95,14 @@ export interface CompileContext {
    *  the universal nodes that read the same thing from a different ABI on the two
    *  graphs (Get Grid Dimensions). Absent/false on cell roots. */
   agentGraph?: boolean;
+  /** Graph-Rewriting Automata (P2): the model's BOND attributes (per-EDGE state),
+   *  in `bondAttrsOf(model)` order, each with its default already encoded to the
+   *  NUMBER the ragged region stores. Get/Set Bond Attribute + Form Bond read it to
+   *  (a) confirm the attribute still exists — an unresolved one emits its literal
+   *  default instead of referencing an undefined `_bondAttr_<id>` param — and
+   *  (b) know the default to fall back to when the agents are not bonded.
+   *  Empty/absent on cell roots and on any model with no bond attributes. */
+  bondAttrs?: ReadonlyArray<{ id: string; type: string; defaultValue: number }>;
 }
 
 /** Capability requirements for a node type. A node whose requirements aren't

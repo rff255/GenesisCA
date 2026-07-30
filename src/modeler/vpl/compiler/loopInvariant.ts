@@ -145,6 +145,9 @@ const NEVER_INVARIANT = new Set<string>([
   // Generic Agent Platform — the agent-equivalent array / set ops are all
   // per-agent (they read the current agent's bonds / id-arrays / attrs / the RNG).
   'getBondedAgents',
+  // P2: Get Bond Attribute scans the CURRENT agent's bond list (`idx * maxBonds`),
+  // so hoisting it out of the per-agent loop would read agent 0's bonds forever.
+  'getBondAttribute',
   'filterAgents',
   'joinAgents',
   'pickRandomAgent',

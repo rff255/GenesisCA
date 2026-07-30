@@ -14,6 +14,7 @@ import { MODEL_ELEMENT_DRAG_MIME } from '../vpl/modelElementDrag';
 import type { ModelElementDragPayload } from '../vpl/modelElementDrag';
 import { setCurrentModelElementDrag, subscribeActiveGraphKind, getActiveGraphKind } from '../vpl/graphState';
 import { typeDisplayName } from '../../model/typeLabels';
+import { resolveMaxBonds } from '../../model/centerBased';
 import { vectorDimsForModel, vectorComponentLabels } from '../vpl/compiler/vectorAttr';
 import { NumberField, InlineNumberInput } from '../vpl/widgets/InlineWidgets';
 import styles from './PanelContent.module.css';
@@ -228,6 +229,7 @@ export function AttributesPanelContent({ mode = 'list' }: PanelContentProps = {}
   const {
     model, addAttribute, duplicateAttribute, removeAttribute: removeAttributeRaw, updateAttribute: updateAttributeRaw, reorderAttributes,
     addAgentAttribute, duplicateAgentAttribute, removeAgentAttribute, updateAgentAttribute, reorderAgentAttributes,
+    addBondAttribute, duplicateBondAttribute, removeBondAttribute, updateBondAttribute, reorderBondAttributes,
   } = useModel();
   // Generic Agent Platform: on the Agents sub-tab the primary list shows the
   // AGENT attribute set (model.agentAttributes — a separate id-space), with its
@@ -241,14 +243,25 @@ export function AttributesPanelContent({ mode = 'list' }: PanelContentProps = {}
   // One discriminated selection slot for this panel: `attr:<id>` or `var:<id>`.
   // Attributes and Local Variables share the single second detail panel, so
   // selecting one kind clears the other.
+  // P2 adds a THIRD kind: `bond:<id>` (a per-EDGE attribute). Same single detail
+  // panel, so selecting one kind clears the others. ⚠ `ModelerView.selectedItemName`
+  // MUST resolve the `bond:` prefix or the detail PanelShell (gated on
+  // `detailItemName != null`) silently never mounts — the exact bug that shipped
+  // once for agent attributes.
   const [sel, setSel] = useDetailSelection('attributes');
-  const selKind: 'attr' | 'var' = sel?.startsWith('var:') ? 'var' : 'attr';
+  const selKind: 'attr' | 'var' | 'bond' = sel?.startsWith('var:') ? 'var' : sel?.startsWith('bond:') ? 'bond' : 'attr';
   const selAttrId = sel && selKind === 'attr' ? sel.replace(/^attr:/, '') : null;
   const selVarId = sel && selKind === 'var' ? sel.slice(4) : null;
+  const selBondId = sel && selKind === 'bond' ? sel.slice(5) : null;
   const selectAttr = (id: string | null) => setSel(id ? `attr:${id}` : null);
   const selectVar = (id: string | null) => setSel(id ? `var:${id}` : null);
+  const selectBond = (id: string | null) => setSel(id ? `bond:${id}` : null);
 
   const agentAttrList = model.agentAttributes ?? [];
+  // Bond attributes are AGENT-ONLY and meaningless without bonds — the section is
+  // shown on the Agents sub-tab of a model whose Bonds capability is on.
+  const bondAttrList = model.bondAttributes ?? [];
+  const bondsOn = agentMode && resolveMaxBonds(model.centerBased) > 0;
   // The PRIMARY list (top section): agent attrs on the Agents tab, cell attrs
   // otherwise. The Model Attributes section (below) is shared in both.
   const cellAttrs = agentMode ? agentAttrList : model.attributes.filter(a => !a.isModelAttribute);
@@ -266,6 +279,10 @@ export function AttributesPanelContent({ mode = 'list' }: PanelContentProps = {}
     const map = new Map(cellAttrs.map(a => [a.id, a]));
     reorderAttributes([...newOrder.map(id => map.get(id)!).filter(Boolean), ...modelAttrs].map(a => a.id));
   });
+  // The bond-attribute order is load-bearing (it drives the ragged region order in
+  // the agent memory layout AND the `_bondAttr_<id>` ABI block), but a reorder
+  // forces a full worker reinit via the `attrsStructurallyEqual` signature.
+  const bondReorder = useListReorder(bondAttrList, newOrder => reorderBondAttributes(newOrder));
   const modelReorder = useListReorder(modelAttrs, newOrder => {
     const map = new Map(modelAttrs.map(a => [a.id, a]));
     reorderAttributes([...cellAttrs, ...newOrder.map(id => map.get(id)!).filter(Boolean)].map(a => a.id));
@@ -298,22 +315,42 @@ export function AttributesPanelContent({ mode = 'list' }: PanelContentProps = {}
     }
     prevAgentAttrCount.current = agentAttrList.length;
   }, [agentAttrList]);
+  const prevBondAttrCount = useRef(bondAttrList.length);
+  useEffect(() => {
+    if (bondAttrList.length > prevBondAttrCount.current) {
+      const newItem = bondAttrList[bondAttrList.length - 1];
+      if (newItem) {
+        selectBond(newItem.id);
+        setTimeout(() => {
+          document.getElementById(`attr-${newItem.id}`)?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        }, 50);
+      }
+    }
+    prevBondAttrCount.current = bondAttrList.length;
+  }, [bondAttrList]);
 
   // Generic Agent Platform: the selected attribute may be an AGENT attribute
   // (separate id-space) or a cell/model attribute. Resolve from both, and route
   // edits/deletes to the right reducer so the detail editor's many
   // updateAttribute(selected.id, …) call sites stay unchanged.
+  // P2: a `bond:` selection resolves against the BOND list and routes its edits to
+  // the bond reducers, so the shared detail editor below needs no per-kind branch
+  // beyond the type restriction + the cell-only sections it already gates.
   const selected = selAttrId
     ? (agentAttrList.find(a => a.id === selAttrId) ?? model.attributes.find(a => a.id === selAttrId))
-    : undefined;
+    : selBondId
+      ? bondAttrList.find(a => a.id === selBondId)
+      : undefined;
   const selectedIsAgent = !!selAttrId && agentAttrList.some(a => a.id === selAttrId);
+  const selectedIsBond = !!selBondId && bondAttrList.some(a => a.id === selBondId);
   const updateAttribute = (id: string, changes: Partial<Attribute>) =>
-    (selectedIsAgent ? updateAgentAttribute : updateAttributeRaw)(id, changes);
+    (selectedIsBond ? updateBondAttribute : selectedIsAgent ? updateAgentAttribute : updateAttributeRaw)(id, changes);
   const removeAttribute = (id: string) =>
-    (selectedIsAgent ? removeAgentAttribute : removeAttributeRaw)(id);
+    (selectedIsBond ? removeBondAttribute : selectedIsAgent ? removeAgentAttribute : removeAttributeRaw)(id);
   const addPrimary = () => (agentMode ? addAgentAttribute() : addAttribute(false));
 
   const handleDelete = () => {
+    if (selBondId) { removeBondAttribute(selBondId); setSel(null); return; }
     if (selAttrId) {
       removeAttribute(selAttrId);
       setSel(null);
@@ -440,10 +477,66 @@ export function AttributesPanelContent({ mode = 'list' }: PanelContentProps = {}
         </div>
       </div>
 
+      {/* Graph-Rewriting Automata (P2): BOND attributes — per-EDGE user state.
+          Agents-only, and only when the Bonds capability is on (no bonds ⇒ no
+          edges to carry it, and the store allocates zero bond-attribute bytes). */}
+      {bondsOn && (
+        <div className={styles.section}>
+          <div className={styles.sectionTitle}>Bond Attributes</div>
+          <p className={styles.sectionHelp}>
+            Per-EDGE state carried by a bond. A bond is one object stored at both
+            endpoints, so a bond attribute is symmetric — writing it from either
+            agent updates both sides.
+          </p>
+          <div className={styles.list} data-reorder-list>
+            {bondAttrList.length === 0 && (
+              <p style={{ fontSize: '0.75rem', color: '#6080a0', fontStyle: 'italic', padding: '4px 0' }}>
+                No bond attributes defined.
+              </p>
+            )}
+            {bondAttrList.map((attr, i) => {
+              const isDragging = bondReorder.dragState?.id === attr.id;
+              const srcIdx = bondReorder.dragState ? bondAttrList.findIndex(a => a.id === bondReorder.dragState!.id) : -1;
+              const showBefore = bondReorder.dragState?.overIdx === i && srcIdx !== i && srcIdx !== i - 1;
+              const showAfter = bondReorder.dragState?.overIdx === bondAttrList.length && i === bondAttrList.length - 1 && srcIdx !== i;
+              return (
+                <div
+                  key={attr.id}
+                  id={`attr-${attr.id}`}
+                  data-reorder-row
+                  className={`${styles.listItem} ${sel === `bond:${attr.id}` ? styles.listItemSelected : ''} ${isDragging ? styles.draggingRow : ''} ${showBefore ? styles.dropIndicatorBefore : ''} ${showAfter ? styles.dropIndicatorAfter : ''}`}
+                  onClick={() => selectBond(attr.id)}
+                >
+                  <span className={styles.listItemName}>{attr.name}</span>
+                  <span className={styles.listItemBadge}>{typeDisplayName(attr.type)}</span>
+                  <button
+                    className={styles.dragHandle}
+                    title="Drag to reorder"
+                    onPointerDown={bondReorder.startDrag(attr.id)}
+                    onClick={e => e.stopPropagation()}
+                  >⋮⋮</button>
+                </div>
+              );
+            })}
+          </div>
+          <div className={styles.buttonRow}>
+            <button className={styles.addButton} onClick={() => addBondAttribute()}>
+              + Add Bond Attribute
+            </button>
+            <button className={styles.addButton} onClick={() => selBondId && duplicateBondAttribute(selBondId)} disabled={!selBondId}>
+              Duplicate
+            </button>
+            <button className={styles.deleteButton} onClick={handleDelete} disabled={!selBondId}>
+              Delete
+            </button>
+          </div>
+        </div>
+      )}
+
       <VariablesPanelSection mode="list" selectedId={selVarId} onSelect={selectVar} />
       </>)}
 
-      {mode === 'detail' && selKind === 'attr' && selected && (
+      {mode === 'detail' && (selKind === 'attr' || selKind === 'bond') && selected && (
         <div className={styles.detailEditor}>
           <div className={styles.detailTitle}>Edit: {selected.name}</div>
           <div className={styles.fieldGroup}>
@@ -488,10 +581,10 @@ export function AttributesPanelContent({ mode = 'list' }: PanelContentProps = {}
                     is offered only in a 3D model — OR when this attribute is ALREADY a
                     3D vector (authored in a 3D model, then switched to 2D) so the
                     dropdown never misreports its real type as "Binary". */}
-                {!selected.isModelAttribute && <option value="vector2">Vector (2D)</option>}
-                {!selected.isModelAttribute && (vectorDimsForModel(model) === 3 || (selected.type === 'vector' && selected.vectorDims === 3)) && <option value="vector3">Vector (3D)</option>}
+                {!selected.isModelAttribute && !selectedIsBond && <option value="vector2">Vector (2D)</option>}
+                {!selected.isModelAttribute && !selectedIsBond && (vectorDimsForModel(model) === 3 || (selected.type === 'vector' && selected.vectorDims === 3)) && <option value="vector3">Vector (3D)</option>}
                 {/* A packed lattice-offset type is meaningless for an off-lattice agent. */}
-                {!selectedIsAgent && <option value="neighborIndex">Neighbor Index</option>}
+                {!selectedIsAgent && !selectedIsBond && <option value="neighborIndex">Neighbor Index</option>}
                 {selected.isModelAttribute && <option value="color">Color</option>}
                 {selected.isModelAttribute && <option value="lookupTable">Lookup Table</option>}
               </select>
@@ -499,7 +592,7 @@ export function AttributesPanelContent({ mode = 'list' }: PanelContentProps = {}
             {/* Generic Agent Platform: whether floating agents may read/write this
                 cell attribute (the environment/field) via the field-bridge nodes.
                 Cell attributes only, and only when the model has agents. */}
-            {!selected.isModelAttribute && !selectedIsAgent && model.topologyMode?.agents && (
+            {!selected.isModelAttribute && !selectedIsAgent && !selectedIsBond && model.topologyMode?.agents && (
               <div className={styles.field}>
                 <label className={styles.fieldLabel}>Agent access</label>
                 <select
@@ -770,7 +863,7 @@ export function AttributesPanelContent({ mode = 'list' }: PanelContentProps = {}
 
             </>)}
             {/* Boundary Value — cell attributes only, shown when boundary treatment is constant. */}
-            {!selected.isModelAttribute && !selectedIsAgent && model.properties.boundaryTreatment === 'constant' && (
+            {!selected.isModelAttribute && !selectedIsAgent && !selectedIsBond && model.properties.boundaryTreatment === 'constant' && (
               <div className={styles.field}>
                 <label className={styles.fieldLabel} title="Value held by out-of-grid cells when boundary is constant. Blank = use Default Value.">
                   Boundary Value
@@ -924,7 +1017,7 @@ export function AttributesPanelContent({ mode = 'list' }: PanelContentProps = {}
                 a `vector` attr: its scalar-float component expansion doesn't carry the
                 parent-match fields (parentAttributeId/parentValues/undefinedValue), so a
                 sub-attribute constraint on a vector would be a silent no-op. */}
-            {!selected.isModelAttribute && !selectedIsAgent && selected.type !== 'vector' && (() => {
+            {!selected.isModelAttribute && !selectedIsAgent && !selectedIsBond && selected.type !== 'vector' && (() => {
               const validParents = model.attributes.filter(a =>
                 !a.isModelAttribute &&
                 a.id !== selected.id &&

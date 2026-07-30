@@ -531,6 +531,14 @@ export function serializeAgentState(payload: Record<string, unknown>): import('.
   if (pAttrs) {
     for (const [id, e] of Object.entries(pAttrs)) attrs[id] = { kind: e.kind, data: arrayBufferToBase64(e.buffer) };
   }
+  // P2 — user BOND attributes. A NESTED record like `attrs`, so the generic
+  // ArrayBuffer sweep above does NOT reach it; it needs this explicit arm (the
+  // "field-name-generic" note applies only to top-level ArrayBuffer properties).
+  const pBond = payload.bondAttrs as Record<string, { kind: string; buffer: ArrayBuffer }> | undefined;
+  const bondAttrs: Record<string, { kind: string; data: string }> = {};
+  if (pBond) {
+    for (const [id, e] of Object.entries(pBond)) bondAttrs[id] = { kind: e.kind, data: arrayBufferToBase64(e.buffer) };
+  }
   return {
     highWater: Number(payload.highWater) || 0,
     liveCount: Number(payload.liveCount) || 0,
@@ -538,6 +546,7 @@ export function serializeAgentState(payload: Record<string, unknown>): import('.
     maxBonds: Number(payload.maxBonds) || 0,
     buffers,
     attrs,
+    ...(pBond ? { bondAttrs } : {}),
   };
 }
 
@@ -552,6 +561,11 @@ export function deserializeAgentState(s: import('./types').SerializedAgentState)
   const attrs: Record<string, { kind: string; buffer: ArrayBuffer }> = {};
   for (const [id, e] of Object.entries(s.attrs ?? {})) attrs[id] = { kind: e.kind, buffer: base64ToArrayBuffer(e.data) };
   out.attrs = attrs;
+  if (s.bondAttrs) {
+    const bondAttrs: Record<string, { kind: string; buffer: ArrayBuffer }> = {};
+    for (const [id, e] of Object.entries(s.bondAttrs)) bondAttrs[id] = { kind: e.kind, buffer: base64ToArrayBuffer(e.data) };
+    out.bondAttrs = bondAttrs;
+  }
   return out;
 }
 

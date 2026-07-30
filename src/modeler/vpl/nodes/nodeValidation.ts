@@ -75,6 +75,12 @@ export function detectMissingConfig(
   const hasAgentAttr = (id: unknown) =>
     typeof id === 'string' && id.length > 0 &&
     (model.agentAttributes ?? []).some(a => a.id === id);
+  // Graph-Rewriting Automata (P2): the BOND attribute set (per-EDGE state — a
+  // third id-space). Checks the RAW list so a bonds-off model still tells the user
+  // "select an attribute" vs. the capability badge that says bonds are off.
+  const hasBondAttr = (id: unknown) =>
+    typeof id === 'string' && id.length > 0 &&
+    (model.bondAttributes ?? []).some(a => a.id === id);
   // getCellAttribute/setAttribute/updateAttribute are UNIVERSAL — they read/write
   // the OWN cell on the Cells graph (a cell attr) or the OWN agent on the Agents
   // graph (an agent attr). The node carries no graph-kind, so accept EITHER id;
@@ -195,6 +201,15 @@ export function detectMissingConfig(
       if (!hasAgentAttr(config.attributeId)) issues.push('Select an agent attribute');
       if (isInputConnected('agents') === false) {
         issues.push('Connect an Agents input (e.g. from Get Nearby Agents or Get Bonded Agents)');
+      }
+      break;
+
+    // Graph-Rewriting Automata (P2) — per-EDGE state, keyed by the partner id.
+    case 'getBondAttribute':
+    case 'setBondAttribute':
+      if (!hasBondAttr(config.attributeId)) issues.push('Select a bond attribute');
+      if (isInputConnected('partnerId') === false) {
+        issues.push('Connect a Partner input (e.g. from For Each Bond or Get Bonded Agents)');
       }
       break;
 
@@ -863,6 +878,9 @@ const AGENT_SELF_ONLY_TYPES = new Set<string>([
   // init ABI, so all throw in init regardless of wiring.
   'getAgentOffset', 'getAgentPosition', 'getVelocity', 'getAgentRadius',
   'getAgentAttribute', 'getAgentsAttribute', 'filterAgents',
+  // P2 bond attributes — both scan the SELF bond list (`idx * maxBonds`,
+  // `_agentBondCount[idx]`), neither of which is in the init ABI.
+  'getBondAttribute', 'setBondAttribute',
   // self writers
   'setVelocity', 'applyForce', 'setTargetRadius', 'divideAgent', 'formBond', 'breakBond', 'killAgent',
   // field bridge (sampled/deposited at the SELF position)

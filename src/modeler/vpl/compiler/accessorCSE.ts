@@ -102,6 +102,11 @@ const NEVER_PURE_TYPES = new Set<string>([
   // mutable bond store, and the picks consume the shared RNG stream.
   'getAgentsAttribute',
   'getBondedAgents',
+  // Graph-Rewriting Automata (P2): a bond attribute is mutable mid-step via Set
+  // Bond Attribute (an immediate write to BOTH slots), and the slot a partner id
+  // resolves to moves under compaction — so two structurally-identical bond reads
+  // straddling a write are NOT interchangeable. Same rationale as getAgentAttribute.
+  'getBondAttribute',
   'pickRandomAgent',
   'pickNRandomAgents',
   // Engine-buffer readers whose backing store the BEHAVIOUR graph can mutate

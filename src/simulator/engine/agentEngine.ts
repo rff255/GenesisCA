@@ -49,6 +49,18 @@ function makeArray(kind: AgentAttrKind, len: number): AgentTypedArray {
   return new Float64Array(len);
 }
 
+/** BOND-attribute typed-array kind (P2). Deliberately NARROWER than
+ *  `agentAttrKind`: the ragged bond store has exactly TWO region shapes (Int32 +
+ *  Float64 — see `AGENT_BOND_I32_FIELDS` / `AGENT_BOND_F64_FIELDS`), so a bond
+ *  `bool` rides an Int32 region rather than adding a third (Uint8) ragged shape
+ *  to the layout, the compaction field list and both compilers. The cost is 3
+ *  bytes per bond slot for a bool; the benefit is that every bond region is one
+ *  of two shapes on every target. Only bool / integer / float / tag are offered
+ *  (decision D1) — anything else falls through to float64 defensively. */
+export function bondAttrKind(type: string): 'int32' | 'float64' {
+  return type === 'float' ? 'float64' : 'int32';
+}
+
 /** A user agent-attribute definition (the non-model cell attributes double as
  *  agent attributes; each carries its id + runtime type + default value). */
 export interface AgentAttrSpec { id: string; type: string; defaultValue: number }
@@ -167,6 +179,13 @@ export interface AgentMemoryLayout {
    *  step and merges into the shared stopFlag. Always reserved (4 bytes) so the
    *  offset is stable regardless of whether the graph has a Stop Event. */
   stopFlagOffset: number;
+  /** P2 — USER BOND ATTRIBUTES. `bondAttrOffset[id]` is the RAGGED region
+   *  (maxAgents*maxBonds, Int32 or Float64 per `bondAttrKind`); `bondFormAttrOffset[id]`
+   *  is the PER-AGENT f64 Form-Bond request cell (the initial value). Both empty
+   *  `{}` when the model has no bond attributes OR `maxBonds === 0`, so every
+   *  pre-P2 layout is byte-identical (these regions are appended LAST). */
+  bondAttrOffset: Record<string, number>;
+  bondFormAttrOffset: Record<string, number>;
 }
 
 /** Sizing inputs for the FULL-COVERAGE WASM agent layout regions — the compiler +
@@ -191,6 +210,13 @@ export interface AgentLayoutExtras {
   /** Sync agent mode — reserve a SEPARATE attr-write region per attr (the WASM
    *  behaviour reads attrRead, writes attrWrite; the worker primes + swaps). */
   syncAttrs?: boolean;
+  /** P2 — USER BOND attributes, in `model.bondAttributes` order. Each gets ONE
+   *  ragged region (maxAgents*maxBonds, typed by `bondAttrKind`) plus one
+   *  per-agent f64 Form-Bond REQUEST cell. Empty / `maxBonds === 0` ⇒ zero bytes,
+   *  so every existing model's layout is byte-identical. The store passes its own
+   *  specs through `createAgentStore`, and the WASM compiler derives the SAME list
+   *  from the model via `buildAgentLayoutExtras` — the baked-offset lockstep. */
+  bondAttrSpecs?: AgentAttrSpec[];
 }
 
 /** The number of `getNearbyAgents` scratch buffers the wasmBacked agent layout
@@ -410,6 +436,30 @@ export function computeAgentMemoryLayout(
   const stopFlagOffset = off;
   off += 4;
 
+  // --- P2 USER BOND ATTRIBUTES (appended AFTER every existing region, so a model
+  // with none is byte-identical and one with some shifts nothing). Per attribute:
+  //   • one RAGGED region (maxAgents*maxBonds), Int32 or Float64 by `bondAttrKind`
+  //   • one PER-AGENT f64 Form-Bond request cell (the initial value the structural
+  //     phase hands to `formBond`) — the exact shape of `bondFormL` / `bondFormK`.
+  // maxBonds === 0 (Bonds capability off) ⇒ zero ragged bytes; the request cells
+  // are also skipped (a bonds-off model can raise no form request).
+  const bondAttrOffset: Record<string, number> = {};
+  const bondFormAttrOffset: Record<string, number> = {};
+  const bondAttrSpecs = extras.bondAttrSpecs ?? [];
+  if (maxBonds > 0) {
+    for (const spec of bondAttrSpecs) {
+      const ib = bondAttrKind(spec.type) === 'float64' ? 8 : 4;
+      off = alignTo(off, ib);
+      bondAttrOffset[spec.id] = off;
+      off += maxAgents * maxBonds * ib;
+    }
+    for (const spec of bondAttrSpecs) {
+      off = alignTo(off, 8);
+      bondFormAttrOffset[spec.id] = off;
+      off += maxAgents * 8;
+    }
+  }
+
   const totalBytes = alignTo(off, 8);
   const pages = Math.max(1, Math.ceil(totalBytes / 65536));
   return {
@@ -424,6 +474,7 @@ export function computeAgentMemoryLayout(
     lookupTableOffset, lookupTableCols, lookupTableBytes,
     fieldOffset, fieldTotal, fieldBytes,
     stopFlagOffset,
+    bondAttrOffset, bondFormAttrOffset,
   };
 }
 
@@ -483,6 +534,31 @@ export interface AgentStore {
   bondRestLength: Float64Array;  // L
   bondStiffness: Float64Array;   // λ
   bondTypeLabel: Int32Array;     // bond class
+
+  // --- USER BOND ATTRIBUTES (P2) — per-EDGE state, the graph-rewriting enabler.
+  // One ragged region per attribute, addressed exactly like the built-in bond
+  // fields (`base = idx * maxBonds`, slot `k`), typed by `bondAttrKind`. SINGLE-
+  // buffered (a bond is one object stored twice, so a write goes to BOTH slots —
+  // invariant I2; there is no read/write double buffer to keep in step).
+  /** Bond-attribute specs in `model.bondAttributes` order (empty when none, or
+   *  when the Bonds capability is off). Drives the layout, the ABI block, the
+   *  compaction field list and (de)serialization. */
+  bondAttrSpecs: AgentAttrSpec[];
+  /** attr id → its ragged region (length maxAgents*maxBonds; 0 when bonds off). */
+  bondAttrs: Record<string, AgentTypedArray>;
+  /** attr id → its region kind (mirrors `bondAttrKind(spec.type)`). */
+  bondAttrKinds: Record<string, 'int32' | 'float64'>;
+  /** attr id → the per-agent f64 Form-Bond REQUEST cell (the initial value the
+   *  structural phase hands to `formBond`) — the sibling of `bondFormL`/`bondFormK`. */
+  bondFormAttrs: Record<string, Float64Array>;
+  /** THE COMPACTION FIELD LIST — every ragged per-bond-slot array (the five
+   *  built-ins + one per bond attribute), in a fixed order. `moveBondSlot` is the
+   *  ONLY place a bond slot's contents move, and it iterates THIS list, so a field
+   *  added to the store cannot be missed by a compaction path (the silent
+   *  swap-with-last corruption class). Built once in `createAgentStore`; the arrays
+   *  are never reference-swapped (deserialize copies INTO them), so caching the
+   *  references is safe. */
+  bondSlotArrays: AgentTypedArray[];
 
   // --- request buffers the graph writes (validated + applied post-step; PR-B/C/D) ---
   divideRequest: Uint8Array;
@@ -581,6 +657,12 @@ export interface CreateAgentStoreOpts {
    *  scratch). The compiler + worker build this from the SAME model. Only used
    *  under `wasmBacked`; the sync-attr write region is driven by `syncAttrs`. */
   layoutExtras?: AgentLayoutExtras;
+  /** P2 — USER BOND attributes (`model.bondAttributes`, in order). Allocates one
+   *  ragged region + one per-agent Form-Bond request cell each, on BOTH backings,
+   *  and OVERRIDES `layoutExtras.bondAttrSpecs` so the allocated arrays and the
+   *  baked offsets are computed from one list (the `syncAttrs` precedent).
+   *  Default `[]` ⇒ zero bytes ⇒ every existing model is byte-identical. */
+  bondAttrSpecs?: AgentAttrSpec[];
 }
 
 /** Allocate the agent store once from the model's center-based config + agent
@@ -621,8 +703,13 @@ export function createAgentStore(
   let colorsArr: () => Uint8ClampedArray;
   let attrArr: (id: string, kind: AgentAttrKind) => AgentTypedArray;
 
+  // The store's OWN bond-attribute specs are authoritative for its own layout —
+  // exactly how `syncAttrs` overrides the passed-through extras below, so the
+  // allocated arrays and the baked offsets can never disagree.
+  const bondAttrSpecs = maxBonds > 0 ? (opts?.bondAttrSpecs ?? []) : [];
+
   if (wasmBacked) {
-    const extras: AgentLayoutExtras = { ...(opts?.layoutExtras ?? {}), syncAttrs };
+    const extras: AgentLayoutExtras = { ...(opts?.layoutExtras ?? {}), syncAttrs, bondAttrSpecs };
     layout = computeAgentMemoryLayout(maxAgents, maxBonds, attrSpecs, Math.max(0, Math.floor(opts?.maxHashBins ?? 0)), extras);
     memory = new WebAssembly.Memory({ initial: layout.pages });
     const buf = memory.buffer;
@@ -687,6 +774,46 @@ export function createAgentStore(
 
   const bondPartner = bondI32('bondPartner').fill(-1);
 
+  // --- USER BOND ATTRIBUTES (P2): one ragged region + one per-agent request cell
+  // each. Under wasmBacked these are VIEWS at the layout's baked offsets (so the
+  // WASM behaviour reads/writes the SAME bytes); otherwise plain typed arrays.
+  const bondAttrs: Record<string, AgentTypedArray> = {};
+  const bondAttrKinds: Record<string, 'int32' | 'float64'> = {};
+  const bondFormAttrs: Record<string, Float64Array> = {};
+  for (const spec of bondAttrSpecs) {
+    const kind = bondAttrKind(spec.type);
+    bondAttrKinds[spec.id] = kind;
+    const n = maxAgents * maxBonds;
+    let arr: AgentTypedArray;
+    let req: Float64Array;
+    if (wasmBacked) {
+      const buf = memory!.buffer;
+      const o = layout!.bondAttrOffset[spec.id]!;
+      arr = kind === 'float64' ? new Float64Array(buf, o, n) : new Int32Array(buf, o, n);
+      req = new Float64Array(buf, layout!.bondFormAttrOffset[spec.id]!, maxAgents);
+    } else {
+      arr = kind === 'float64' ? new Float64Array(n) : new Int32Array(n);
+      req = new Float64Array(maxAgents);
+    }
+    // Dead slots hold the attribute's default so a freshly-filled slot reads it
+    // even before `addBondSlot` writes (defence in depth — addBondSlot always does).
+    if (spec.defaultValue !== 0) arr.fill(spec.defaultValue);
+    bondAttrs[spec.id] = arr;
+    bondFormAttrs[spec.id] = req;
+  }
+
+  const bondPartnerEpoch = bondI32('bondPartnerEpoch');
+  const bondRestLength = bondF64('bondRestLength');
+  const bondStiffness = bondF64('bondStiffness');
+  const bondTypeLabel = bondI32('bondTypeLabel');
+  // THE compaction field list — every ragged per-slot array, once. `moveBondSlot`
+  // iterates it, so `removeBondSlot` / `sweepStaleBonds` (and any future
+  // compaction path) can never miss a field.
+  const bondSlotArrays: AgentTypedArray[] = [
+    bondPartner, bondPartnerEpoch, bondRestLength, bondStiffness, bondTypeLabel,
+    ...bondAttrSpecs.map((spec: AgentAttrSpec) => bondAttrs[spec.id]!),
+  ];
+
   return {
     config, maxAgents, maxBonds, worldWidth, worldHeight,
     // worldDepth placeholder — initAgents overwrites it with the grid `depth`
@@ -715,10 +842,11 @@ export function createAgentStore(
     bondCount: i32('bondCount'),
     density: f64('density'),
     bondPartner,
-    bondPartnerEpoch: bondI32('bondPartnerEpoch'),
-    bondRestLength: bondF64('bondRestLength'),
-    bondStiffness: bondF64('bondStiffness'),
-    bondTypeLabel: bondI32('bondTypeLabel'),
+    bondPartnerEpoch,
+    bondRestLength,
+    bondStiffness,
+    bondTypeLabel,
+    bondAttrSpecs, bondAttrs, bondAttrKinds, bondFormAttrs, bondSlotArrays,
     divideRequest: u8('divideRequest'),
     divideAxisX: f64('divideAxisX'),
     divideAxisY: f64('divideAxisY'),
@@ -843,6 +971,10 @@ export function initAgentSlot(
   store.divideAsym[id] = 0;
   store.bondFormReq[id] = 0; store.bondBreakReq[id] = 0;
   store.bondFormL[id] = 0; store.bondFormK[id] = 0;
+  // Bond-attribute Form-Bond request cells share bondFormL/K's stale-payload
+  // hygiene: a recycled slot must never pair a fresh request flag with a previous
+  // occupant's initial values.
+  for (const spec of store.bondAttrSpecs) store.bondFormAttrs[spec.id]![id] = spec.defaultValue;
   for (const spec of store.attrSpecs) {
     store.attrRead[spec.id]![id] = spec.defaultValue;
     store.attrWrite[spec.id]![id] = spec.defaultValue;
@@ -974,8 +1106,31 @@ export function hasBond(store: AgentStore, a: number, b: number): boolean {
   return false;
 }
 
-/** Add a bond slot to agent `a`'s list pointing at `b`. Internal (one direction). */
-function addBondSlot(store: AgentStore, a: number, b: number, L: number, lambda: number, typeLabel: number): boolean {
+/** Move the CONTENTS of bond slot `src` into slot `dst`, across EVERY ragged bond
+ *  field (the five built-ins + every user bond attribute).
+ *
+ *  THE COMPACTION LOCKSTEP RULE: this is the ONLY place a bond slot's contents
+ *  move. Both swap-with-last compaction paths (`removeBondSlot` — used by Break
+ *  Bond AND death — and `sweepStaleBonds`) call it, so a bond field added to
+ *  `bondSlotArrays` cannot be missed by one of them. A missed field does not
+ *  crash: it silently associates a value with the WRONG partner on the first bond
+ *  removal, which is exactly what invariant I2 + the compaction audit in
+ *  `scripts/verify-graph-rewrite.mjs` exist to catch. */
+function moveBondSlot(store: AgentStore, dst: number, src: number): void {
+  const arrays = store.bondSlotArrays;
+  for (let f = 0; f < arrays.length; f++) {
+    const a = arrays[f]! as Uint8Array;   // index-compatible across the union
+    a[dst] = a[src]!;
+  }
+}
+
+/** Add a bond slot to agent `a`'s list pointing at `b`. Internal (one direction).
+ *  `attrValues` (P2) carries the bond attributes' initial values in
+ *  `store.bondAttrSpecs` order; absent/short ⇒ each attribute's default. */
+function addBondSlot(
+  store: AgentStore, a: number, b: number, L: number, lambda: number, typeLabel: number,
+  attrValues?: ArrayLike<number> | null,
+): boolean {
   const n = store.bondCount[a]!;
   if (n >= store.maxBonds) return false; // overflow → reject
   const base = a * store.maxBonds + n;
@@ -984,18 +1139,29 @@ function addBondSlot(store: AgentStore, a: number, b: number, L: number, lambda:
   store.bondRestLength[base] = L;
   store.bondStiffness[base] = lambda;
   store.bondTypeLabel[base] = typeLabel;
+  const specs = store.bondAttrSpecs;
+  for (let i = 0; i < specs.length; i++) {
+    const spec = specs[i]!;
+    const v = attrValues && i < attrValues.length && Number.isFinite(attrValues[i]!) ? attrValues[i]! : spec.defaultValue;
+    (store.bondAttrs[spec.id]! as Uint8Array)[base] = v;
+  }
   store.bondCount[a] = n + 1;
   return true;
 }
 
 /** Form a symmetric bond a↔b. No-op (returns false) if already bonded, self, a
- *  dead agent, or EITHER list is full (atomic — neither side is half-added). */
-export function formBond(store: AgentStore, a: number, b: number, L: number, lambda: number, typeLabel = 0): boolean {
+ *  dead agent, or EITHER list is full (atomic — neither side is half-added).
+ *  `attrValues` writes the SAME initial bond-attribute values into BOTH slots, so
+ *  invariant I2 (bond symmetry) holds by construction. */
+export function formBond(
+  store: AgentStore, a: number, b: number, L: number, lambda: number, typeLabel = 0,
+  attrValues?: ArrayLike<number> | null,
+): boolean {
   if (a === b || a < 0 || b < 0 || !store.alive[a] || !store.alive[b]) return false;
   if (hasBond(store, a, b)) return false;
   if (store.bondCount[a]! >= store.maxBonds || store.bondCount[b]! >= store.maxBonds) return false;
-  addBondSlot(store, a, b, L, lambda, typeLabel);
-  addBondSlot(store, b, a, L, lambda, typeLabel);
+  addBondSlot(store, a, b, L, lambda, typeLabel, attrValues);
+  addBondSlot(store, b, a, L, lambda, typeLabel, attrValues);
   return true;
 }
 
@@ -1006,13 +1172,7 @@ function removeBondSlot(store: AgentStore, a: number, b: number): boolean {
   for (let k = 0; k < n; k++) {
     if (store.bondPartner[base + k] === b) {
       const last = n - 1;
-      if (k !== last) {
-        store.bondPartner[base + k] = store.bondPartner[base + last]!;
-        store.bondPartnerEpoch[base + k] = store.bondPartnerEpoch[base + last]!;
-        store.bondRestLength[base + k] = store.bondRestLength[base + last]!;
-        store.bondStiffness[base + k] = store.bondStiffness[base + last]!;
-        store.bondTypeLabel[base + k] = store.bondTypeLabel[base + last]!;
-      }
+      if (k !== last) moveBondSlot(store, base + k, base + last);
       store.bondPartner[base + last] = -1;
       store.bondCount[a] = last;
       return true;
@@ -1056,13 +1216,9 @@ export function sweepStaleBonds(store: AgentStore): void {
       const stale = p < 0 || p >= hw || !store.alive[p] || store.bondPartnerEpoch[base + k] !== store.epoch[p];
       if (stale) {
         const last = n - 1;
-        if (k !== last) {
-          store.bondPartner[base + k] = store.bondPartner[base + last]!;
-          store.bondPartnerEpoch[base + k] = store.bondPartnerEpoch[base + last]!;
-          store.bondRestLength[base + k] = store.bondRestLength[base + last]!;
-          store.bondStiffness[base + k] = store.bondStiffness[base + last]!;
-          store.bondTypeLabel[base + k] = store.bondTypeLabel[base + last]!;
-        }
+        // The THIRD compaction path (alongside Break Bond + death, which both go
+        // through removeBondSlot) — it MUST use the same field-list-driven move.
+        if (k !== last) moveBondSlot(store, base + k, base + last);
         store.bondPartner[base + last] = -1;
         n = last;
       } else { k++; }
@@ -1406,16 +1562,26 @@ export function divideAgent(
   store.age[i] = 0;
   store.divideRequest[i] = 0;
 
-  // 7. reattach — move side-B partners' bonds from A(i) to B(newId)
-  const snap: Array<{ p: number; L: number; lam: number; typ: number }> = [];
+  // 7. reattach — move side-B partners' bonds from A(i) to B(newId). The snapshot
+  // carries the USER BOND ATTRIBUTES too, so a re-formed bond arrives at daughter B
+  // with the mother's values UNCHANGED (P2 = pure inheritance; P5 adds explicit
+  // per-bond assignment). Must be read BEFORE the first breakBond — the compaction
+  // swap moves slots around underneath us.
+  const nAttr = store.bondAttrSpecs.length;
+  const snap: Array<{ p: number; L: number; lam: number; typ: number; attrs: number[] | null }> = [];
   for (let k = 0; k < n; k++) {
-    snap.push({ p: store.bondPartner[base + k]!, L: store.bondRestLength[base + k]!, lam: store.bondStiffness[base + k]!, typ: store.bondTypeLabel[base + k]! });
+    let attrs: number[] | null = null;
+    if (nAttr > 0) {
+      attrs = new Array<number>(nAttr);
+      for (let ai = 0; ai < nAttr; ai++) attrs[ai] = (store.bondAttrs[store.bondAttrSpecs[ai]!.id]! as Uint8Array)[base + k]!;
+    }
+    snap.push({ p: store.bondPartner[base + k]!, L: store.bondRestLength[base + k]!, lam: store.bondStiffness[base + k]!, typ: store.bondTypeLabel[base + k]!, attrs });
   }
   for (let k = 0; k < n; k++) {
     if (!sides[k]) {
       const s = snap[k]!;
       breakBond(store, i, s.p);
-      formBond(store, newId, s.p, s.L, s.lam, s.typ);
+      formBond(store, newId, s.p, s.L, s.lam, s.typ, s.attrs);
     }
   }
   // 8. daughter-daughter bond (tissue stays connected; free agents separate)
@@ -1797,6 +1963,11 @@ export interface AgentStatePayload {
   bondRestLength: ArrayBuffer; bondStiffness: ArrayBuffer; bondTypeLabel: ArrayBuffer;
   colors: ArrayBuffer;
   attrs: Record<string, { kind: AgentAttrKind; buffer: ArrayBuffer }>;
+  /** P2 — USER BOND ATTRIBUTES, one ragged buffer per attribute (sliced to
+   *  highWater*maxBonds, like the built-in bond fields). Optional so a pre-P2
+   *  `.gcastate` / `getState` payload still loads (each attribute falls back to
+   *  its default). Mirrors `attrs`'s `{ kind, buffer }` shape. */
+  bondAttrs?: Record<string, { kind: 'int32' | 'float64'; buffer: ArrayBuffer }>;
 }
 
 /** Snapshot the store into transferable buffers (for `getState` / .gcastate).
@@ -1809,6 +1980,13 @@ export function serializeAgentStore(store: AgentStore, transfers: ArrayBuffer[])
   const attrs: Record<string, { kind: AgentAttrKind; buffer: ArrayBuffer }> = {};
   for (const spec of store.attrSpecs) {
     attrs[spec.id] = { kind: store.attrKind[spec.id]!, buffer: sl(store.attrRead[spec.id]!, hw) };
+  }
+  // P2 — one ragged buffer per user bond attribute (sliced like the built-ins).
+  // Omitted entirely when the model has none, so a bond-attribute-free payload is
+  // byte-identical to pre-P2.
+  const bondAttrs: Record<string, { kind: 'int32' | 'float64'; buffer: ArrayBuffer }> = {};
+  for (const spec of store.bondAttrSpecs) {
+    bondAttrs[spec.id] = { kind: store.bondAttrKinds[spec.id]!, buffer: sl(store.bondAttrs[spec.id]!, bw) };
   }
   const freeListCopy = store.freeList.slice(0, store.freeTop);
   transfers.push(freeListCopy.buffer);
@@ -1832,6 +2010,7 @@ export function serializeAgentStore(store: AgentStore, transfers: ArrayBuffer[])
     bondTypeLabel: sl(store.bondTypeLabel, bw),
     colors: slColors(),
     attrs,
+    ...(store.bondAttrSpecs.length > 0 ? { bondAttrs } : {}),
   };
 }
 
@@ -1890,6 +2069,16 @@ export function deserializeAgentStore(store: AgentStore, p: AgentStatePayload): 
   copyInto(store.bondRestLength, p.bondRestLength, Float64Array as never);
   copyInto(store.bondStiffness, p.bondStiffness, Float64Array as never);
   copyInto(store.bondTypeLabel, p.bondTypeLabel, Int32Array as never);
+  // P2 — user bond attributes. Reset to the attribute default FIRST (so an
+  // attribute missing from an older payload doesn't inherit the previous run's
+  // values on live slots), then copy whatever the payload carries.
+  for (const spec of store.bondAttrSpecs) {
+    const arr = store.bondAttrs[spec.id]!;
+    (arr as Uint8Array).fill(spec.defaultValue);
+    const entry = p.bondAttrs?.[spec.id];
+    if (!entry) continue;
+    copyInto(arr, entry.buffer, (entry.kind === 'float64' ? Float64Array : Int32Array) as never);
+  }
   // colors is Uint8ClampedArray (outside the AgentTypedArray union) — copy directly.
   { const sc = new Uint8ClampedArray(p.colors); const n = Math.min(store.colors.length, sc.length); for (let i = 0; i < n; i++) store.colors[i] = sc[i]!; }
   copyInto(store.freeList, p.freeList, Int32Array as never);
