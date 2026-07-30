@@ -368,7 +368,7 @@ export function HelpView() {
             feedback. They are defined in the <strong>Properties</strong> panel under the
             &quot;Indicators&quot; section &mdash; click an indicator in the list to edit it in a
             side panel (the same master-detail layout as Attributes, Neighborhoods, and Mappings).
-            Select one and click <strong>Duplicate</strong> to clone it with a fresh id. Two kinds
+            Select one and click <strong>Duplicate</strong> to clone it with a fresh id. Three kinds
             exist:
           </p>
           <ul className={styles.list}>
@@ -379,11 +379,27 @@ export function HelpView() {
             attribute after each step. The aggregation mode depends on the attribute type:
             Binary and Tag support Frequency (count per value); Integer and Decimal support
             Total (sum) or Frequency.</li>
+            <li><strong>Graph</strong> (Bond-Graph Agents only &mdash; the &quot;+ Graph&quot;
+            button appears when the Agents topology is on) &mdash; a graph-global measurement of
+            the agent population, computed by the worker after the structural phase so it always
+            reports the SETTLED graph. Pick a <strong>Graph Metric</strong>: <em>Node count</em>
+            (live agents), <em>Edge count</em> (distinct bonds, via the handshake lemma
+            &Sigma;degree / 2), <em>Mean degree</em>, <em>Max degree</em>,
+            <em>Degree histogram</em> (how many agents have each degree 0..Max Bonds &mdash;
+            frequency-shaped, so it charts through the same Bars / Lines / Stack views a
+            linked-frequency indicator uses) and <em>Connected components</em> (union-find; each
+            isolated agent counts as one). Metrics are only computed when an indicator asks for
+            them, and connected components &mdash; the only non-trivial one &mdash; costs about
+            2&nbsp;ms at 20&nbsp;000 agents. Graph indicators are read-only (no node writes them)
+            and are readable from the Overseer with <strong>Read Indicator</strong>, which is how
+            a rule-space sweep measures what a rewriting rule actually did.</li>
           </ul>
           <p className={styles.p}>
-            Each indicator has an <strong>Accumulation Mode</strong>: &quot;Per
+            Standalone and Linked indicators have an <strong>Accumulation Mode</strong>: &quot;Per
             Generation&quot; resets every step, while &quot;Accumulated&quot; keeps a running
-            total across generations (reset on simulator reset).
+            total across generations (reset on simulator reset). Graph indicators have none
+            &mdash; they are an instantaneous measurement of the current graph, not a per-step
+            quantity to sum.
           </p>
           <p className={styles.p}>
             In the Simulator, the <strong>eye icon</strong> on linked indicators toggles
@@ -1625,6 +1641,31 @@ export function HelpView() {
             pre-wired. See the <em>Life on Bonds</em> sample for a worked example: Conway&rsquo;s
             Game of Life with each agent bonded to its eight neighbours, the rule read entirely
             through one census node.
+          </p>
+          <h3 className={styles.h3}>Measuring the graph &mdash; graph indicators + the sweep</h3>
+          <p className={styles.p}>
+            Rolling a rule is only half the research loop; the other half is <em>measuring what it
+            did</em>. A <strong>Graph</strong> indicator (Properties &rarr; Indicators &rarr;
+            &ldquo;+ Graph&rdquo;, shown once the Agents topology is on) reports a graph-global
+            quantity every step: <em>node count</em>, <em>edge count</em>, <em>mean</em> and{' '}
+            <em>max degree</em>, the <em>degree histogram</em>, and the number of{' '}
+            <em>connected components</em> &mdash; so you can see at a glance whether a rule grows,
+            dies, thickens, or fragments. They chart like any other indicator (scalars as
+            sparklines, the histogram through the Bars / Lines / Stack views).
+          </p>
+          <p className={styles.p}>
+            Because the <strong>Overseer</strong>&rsquo;s <strong>Read Indicator</strong> reads
+            them, the whole rule-space search is expressible as a protocol:{' '}
+            <em>Clear Series &rarr; For Each seed &#123; Randomize Table &rarr; Reset Board &rarr;
+            Run &rarr; Collect(node count, edge count, mean degree, components) &rarr; Log &#125;</em>,
+            then export the rule &rarr; outcome table as CSV. The{' '}
+            <em>Graph Metrics &mdash; Growth Sweep</em> sample ships exactly that, together with a
+            20-replicate measurement of the growth law. Two practical notes if you build your own:
+            an experiment is only reproducible if its <em>initial condition</em> is &mdash; the
+            <em>scatter</em> seed pattern places agents with an unseeded random, so use{' '}
+            <em>compact</em> (or spawn deterministically in the Agent Init Event); and the seed
+            policy re-seeds the shared random stream that the JS and WebAssembly agent targets
+            use, so run sweeps on one of those rather than WebGPU.
           </p>
           <h3 className={styles.h3}>Bond Attributes &mdash; state that lives on the edge</h3>
           <p className={styles.p}>

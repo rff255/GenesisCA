@@ -507,7 +507,11 @@ export interface MacroDef {
 // Indicators
 // ---------------------------------------------------------------------------
 
-export type IndicatorKind = 'standalone' | 'linked';
+/** `graph` (GRA P6) is the agent-tier measurement kind: a graph-global quantity
+ *  (node/edge count, degree stats, components) computed by the worker over the
+ *  bond-graph agent population. It has no compiler presence at all — nothing
+ *  writes it from a rule graph, so it is READ-ONLY like `linked`. */
+export type IndicatorKind = 'standalone' | 'linked' | 'graph';
 export type LinkedAggregation = 'frequency' | 'total';
 export type AccumulationMode = 'per-generation' | 'accumulated';
 
@@ -579,6 +583,12 @@ export interface Indicator {
   /** absolute mode: rows/columns per band (default 1). Bin count derives from
    *  ceil(axisLength / spatialBinSize) at runtime. */
   spatialBinSize?: number;
+  // Graph-only field (GRA P6):
+  /** Which graph-global quantity this indicator measures. Absent on a `graph`
+   *  indicator ⇒ `nodeCount`. Meaningless (and ignored) for the other kinds.
+   *  Typed as a string here so `types.ts` stays free of engine imports; the
+   *  canonical union is `GraphMetric` in `simulator/engine/graphMetrics.ts`. */
+  graphMetric?: string;
   // Display:
   watched: boolean;                     // eye toggle — controls display in simulator
   /** Chart display defaults (axis range / ticks / series colors). The

@@ -1,4 +1,6 @@
 import type { CAModel, Indicator, IndicatorChartSettings } from '../model/types';
+import { resolveMaxBonds } from '../model/centerBased';
+import { degreeHistogramKeys, isGraphFrequencyMetric, type GraphMetric } from './engine/graphMetrics';
 
 /** Series key used by scalar charts (sparkline) in `seriesColors`. */
 export const SCALAR_SERIES_KEY = 'value';
@@ -12,6 +14,14 @@ export const SCALAR_SERIES_KEY = 'value';
  *  shifts the surviving series onto different palette slots. */
 export function designTimeSeriesKeys(ind: Indicator, model: CAModel): string[] {
   if (ind.kind === 'standalone') return [SCALAR_SERIES_KEY];
+  // GRA P6 — a graph indicator is either a scalar or the degree histogram, whose
+  // categories are the FIXED window 0..maxBonds (so they ARE design-time known,
+  // unlike numeric linked-frequency buckets).
+  if (ind.kind === 'graph') {
+    return isGraphFrequencyMetric((ind.graphMetric ?? 'nodeCount') as GraphMetric)
+      ? degreeHistogramKeys(resolveMaxBonds(model.centerBased))
+      : [SCALAR_SERIES_KEY];
+  }
   if (ind.linkedAggregation === 'total') return [SCALAR_SERIES_KEY];
   if (ind.dataType === 'bool') return ['false', 'true'];
   if (ind.dataType === 'tag') {

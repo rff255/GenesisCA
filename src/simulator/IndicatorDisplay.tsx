@@ -7,6 +7,7 @@ import { IndicatorStackedAreaChart } from './IndicatorStackedAreaChart';
 import { IndicatorSpatialChart, compareSeriesKeys } from './IndicatorSpatialChart';
 import { SCALAR_SERIES_KEY, mergeChartSettings, historyWindow, sliceWindow, INDICATOR_HISTORY_HARD_CAP } from './indicatorChartSettings';
 import { NumberField } from '../modeler/vpl/widgets/InlineWidgets';
+import { isGraphFrequencyMetric, GRAPH_METRIC_INFO, type GraphMetric } from './engine/graphMetrics';
 import styles from './IndicatorDisplay.module.css';
 
 export type IndicatorVizMode = 'bars' | 'multiline' | 'stacked';
@@ -64,6 +65,10 @@ function seriesKeysOf(
   hist: number[] | Record<string, number[]> | undefined,
 ): string[] {
   if (typeof val === 'number' || ind.kind === 'standalone') return [SCALAR_SERIES_KEY];
+  // GRA P6 — a graph SCALAR metric before its first value arrives.
+  if (ind.kind === 'graph' && !isGraphFrequencyMetric((ind.graphMetric ?? 'nodeCount') as GraphMetric)) {
+    return [SCALAR_SERIES_KEY];
+  }
   const isSpatial = ind.kind === 'linked' && (ind.xAxis === 'rows' || ind.xAxis === 'columns' || ind.xAxis === 'layers');
   const keys = new Set<string>();
   if (val && typeof val === 'object') for (const k of Object.keys(val)) keys.add(k);
@@ -310,8 +315,17 @@ export function IndicatorDisplay({ indicators, values, history, generation, grid
         // clear buttons are discoverable from load, not only after the first
         // step delivers a value. The val-shape flags above keep driving the
         // chart rendering itself.
-        const isFreqDef = ind.kind === 'linked' && ind.linkedAggregation === 'frequency' && !isSpatial;
-        const isScalarDef = !isSpatial && (ind.kind === 'standalone' || (ind.kind === 'linked' && ind.linkedAggregation !== 'frequency'));
+        // GRA P6 — a graph indicator's shape comes from its metric: the degree
+        // histogram is frequency-shaped (bars / lines / stack), everything else
+        // is a scalar sparkline. Definition-based like the linked flags, so the
+        // header controls are discoverable before the first value arrives.
+        const isGraphFreq = ind.kind === 'graph'
+          && isGraphFrequencyMetric((ind.graphMetric ?? 'nodeCount') as GraphMetric);
+        const isFreqDef = !isSpatial
+          && ((ind.kind === 'linked' && ind.linkedAggregation === 'frequency') || isGraphFreq);
+        const isScalarDef = !isSpatial && (ind.kind === 'standalone'
+          || (ind.kind === 'linked' && ind.linkedAggregation !== 'frequency')
+          || (ind.kind === 'graph' && !isGraphFreq));
         // Effective chart settings: model defaults ⊕ simulator overrides.
         const chartFx = mergeChartSettings(ind.chartSettings, chartOverrides[ind.id]);
         const hasAnyChartSetting = ind.chartSettings !== undefined || chartOverrides[ind.id] !== undefined;
@@ -399,8 +413,13 @@ export function IndicatorDisplay({ indicators, values, history, generation, grid
                 </button>
               )}
               <span className={styles.name}>{ind.name}</span>
-              <span className={styles.badge}>
-                {ind.kind === 'standalone' ? 'S' : 'L'}
+              <span
+                className={styles.badge}
+                title={ind.kind === 'graph'
+                  ? GRAPH_METRIC_INFO[(ind.graphMetric ?? 'nodeCount') as GraphMetric]?.label ?? 'Graph metric'
+                  : undefined}
+              >
+                {ind.kind === 'standalone' ? 'S' : ind.kind === 'graph' ? 'G' : 'L'}
               </span>
             </div>
 

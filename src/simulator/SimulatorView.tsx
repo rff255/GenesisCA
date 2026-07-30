@@ -5755,6 +5755,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
         xAxis: i.xAxis, spatialBinMode: i.spatialBinMode,
         spatialBinCount: i.spatialBinCount, spatialBinSize: i.spatialBinSize,
         trackedValues: i.trackedValues,
+        graphMetric: i.graphMetric,
         watched: i.watched,
       })),
       wasmStepBytes: wasmResult.error ? undefined : wasmResult.bytes,
@@ -6347,6 +6348,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
             xAxis: i.xAxis, spatialBinMode: i.spatialBinMode,
             spatialBinCount: i.spatialBinCount, spatialBinSize: i.spatialBinSize,
             trackedValues: i.trackedValues,
+            graphMetric: i.graphMetric,
             watched: i.watched,
           })),
           attributes: expandVectorAttributes(model.attributes).map(a => ({

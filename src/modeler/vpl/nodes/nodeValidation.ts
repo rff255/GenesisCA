@@ -10,6 +10,7 @@ import { getActiveGraphKind } from '../graphState';
 import { VECTOR_LOWERED } from '../compiler/vectorAttr';
 import { multiAttrSlotIndices, slotAttrKey } from '../compiler/multiAttrExpand';
 import { censusAttribute, censusOptions } from '../compiler/censusExpand';
+import { isGraphFrequencyMetric, type GraphMetric } from '../../../simulator/engine/graphMetrics';
 import { isMultiAxisTable, resolveAxes, MAX_LOOKUP_TABLE_ENTRIES } from '../compiler/variegation';
 import { is3dModelLike } from '../compiler/niCodec';
 
@@ -462,7 +463,10 @@ export function detectMissingConfig(
       if (ind.kind === 'linked' && ind.xAxis && ind.xAxis !== 'generation') {
         issues.push('Spatial indicators (rows/columns/layers axis) cannot be read as a scalar');
       }
-      const isFreq = ind.kind === 'linked' && (ind.linkedAggregation ?? 'frequency') === 'frequency';
+      // GRA P6 — a frequency-shaped GRAPH metric (degree histogram) needs a
+      // category (the degree bucket) exactly like a linked-frequency indicator.
+      const isFreq = (ind.kind === 'linked' && (ind.linkedAggregation ?? 'frequency') === 'frequency')
+        || (ind.kind === 'graph' && isGraphFrequencyMetric((ind.graphMetric ?? 'nodeCount') as GraphMetric));
       if (isFreq && !String(config.category ?? '')) {
         issues.push('Pick the frequency category to read');
       }

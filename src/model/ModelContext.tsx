@@ -35,6 +35,7 @@ import { defaultCenterBasedConfig } from './centerBased';
 import { defaultAgentCapabilities, migrateAgentCapabilities } from './agentCapabilities';
 import { defaultTagColor } from '../modeler/vpl/compiler/linkedOutputMappings';
 import { MULTI_ATTR_TYPES } from '../modeler/vpl/compiler/multiAttrExpand';
+import { DEFAULT_GRAPH_METRIC } from '../simulator/engine/graphMetrics';
 import { resolveAxes, remapTableDataAxis, remapTableDataForAxesChange } from '../modeler/vpl/compiler/variegation';
 import { cloneMacroWithFreshIds } from './macroImport';
 import { migrateColorInterpolationNodes } from './colorScaleMigration';
@@ -1431,12 +1432,14 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
     case 'ADD_INDICATOR': {
       const newInd: Indicator = {
         id: generateId('indicator'),
-        name: 'new_indicator',
+        name: action.kind === 'graph' ? 'node_count' : 'new_indicator',
         kind: action.kind,
         dataType: 'integer',
         defaultValue: '0',
         accumulationMode: 'per-generation',
         watched: true,
+        // GRA P6 — a graph indicator always names a metric; seed the cheapest one.
+        ...(action.kind === 'graph' ? { graphMetric: DEFAULT_GRAPH_METRIC } : {}),
       };
       return {
         ...state,

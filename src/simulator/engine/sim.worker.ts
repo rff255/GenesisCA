@@ -38,6 +38,12 @@ import {
   type AgentStore, type AgentSeedSpec, type AgentStatePayload, type AgentAttrSpec, type SpatialHash,
   type AgentLayoutExtras,
 } from './agentEngine';
+// GRA P6 — graph-global metrics (the measurement layer). Shared with
+// scripts/verify-graph-rewrite.mjs, which recounts independently.
+import {
+  computeGraphMetrics, isGraphFrequencyMetric, GRAPH_METRICS,
+  type GraphMetric, type GraphMetricPasses,
+} from './graphMetrics';
 import { DEFAULT_DIVIDE_PARTITION, type DividePartitionSpec } from '../../modeler/vpl/compiler/dividePartition';
 import { instantiateAgentWasm } from '../../modeler/vpl/compiler/agentWasm/compile';
 import { buildAgentAbiArgs, type AgentAbiShape, type AgentAbiRuntime } from '../../modeler/vpl/compiler/agentAbi';
@@ -398,6 +404,9 @@ interface IndicatorDef {
   spatialBinSize?: number;
   /** bool/tag frequency only: subset of category values to chart (absent = all). */
   trackedValues?: string[];
+  /** GRA P6 — `graph` kind only: which graph-global quantity to measure
+   *  (a `GraphMetric`; absent ⇒ nodeCount). */
+  graphMetric?: string;
   watched: boolean;
 }
 
@@ -407,6 +416,11 @@ interface GetStateMsg { type: 'getState' }
 interface SetRngSeedMsg { type: 'setRngSeed'; seed: number }
 /** E1b DEV probe (verification only; the app never sends it). */
 interface E1bCountersMsg { type: '__e1bCounters' }
+/** GRA P6 DEV probe: the graph-indicator work counters — the EVIDENCE for
+ *  "zero cost when unused" (a model with no graph indicator reports 0/0/0) and
+ *  for "componentCount is opt-in" (its union-find pass counter stays 0 unless an
+ *  indicator asks). Verification only; the app never sends it. */
+interface GraphIndicatorStatsMsg { type: '__graphIndicatorStats' }
 /** E2 DEV probe: read composited pixels back (occlusion-safe verification). */
 interface CompositeReadbackMsg { type: '__compositeReadback'; points: Array<[number, number]> }
 interface LoadStateMsg {
@@ -618,7 +632,7 @@ interface SetAgentUiSyncMsg { type: 'setAgentUiSync'; on: boolean }
  *  refreshDisplay). */
 interface RefreshAgentDisplayMsg { type: 'refreshAgentDisplay' }
 
-type WorkerMsg = InitMsg | StepMsg | PaintMsg | PaintManualMsg | ResetMsg | RecompileMsg | UpdateModelAttrsMsg | UpdateLookupTableMsg | ImportImageMsg | ImportGridValuesMsg | UpdateIndicatorsMsg | GetStateMsg | LoadStateMsg | ReadRegionMsg | WriteRegionMsg | ClearRegionMsg | SetUseWasmMsg | SetUseWebGPUMsg | ReadbackWebGPUMsg | ColorPassMsg | SetRecordingMsg | AttachCanvasMsg | RequestColorsSnapshotMsg | SetInspectCellsMsg | RefreshDisplayMsg | SeedAgentsMsg | CreateAgentMsg | KillAgentsMsg | PaintAgentsMsg | ClearAgentsMsg | ReadAgentsMsg | PasteAgentsMsg | FormBondMsg | BreakBondMsg | GetAgentStateMsg | MoveAgentsMsg | FormBondBatchMsg | SetAgentWasmBackedMsg | SetRngSeedMsg | SetSimLayersMsg | SetAgentSnapshotVelocityMsg | AttachAgentCanvasMsg | SetAgentCameraMsg | SetAgentUiSyncMsg | RefreshAgentDisplayMsg | E1bCountersMsg | CompositeReadbackMsg | AttachVoxelCanvasMsg | SetGridCameraMsg | SetGridUiSyncMsg | SetGridVizMsg | RefreshGridDisplayMsg | VoxelReadbackMsg;
+type WorkerMsg = InitMsg | StepMsg | PaintMsg | PaintManualMsg | ResetMsg | RecompileMsg | UpdateModelAttrsMsg | UpdateLookupTableMsg | ImportImageMsg | ImportGridValuesMsg | UpdateIndicatorsMsg | GetStateMsg | LoadStateMsg | ReadRegionMsg | WriteRegionMsg | ClearRegionMsg | SetUseWasmMsg | SetUseWebGPUMsg | ReadbackWebGPUMsg | ColorPassMsg | SetRecordingMsg | AttachCanvasMsg | RequestColorsSnapshotMsg | SetInspectCellsMsg | RefreshDisplayMsg | SeedAgentsMsg | CreateAgentMsg | KillAgentsMsg | PaintAgentsMsg | ClearAgentsMsg | ReadAgentsMsg | PasteAgentsMsg | FormBondMsg | BreakBondMsg | GetAgentStateMsg | MoveAgentsMsg | FormBondBatchMsg | SetAgentWasmBackedMsg | SetRngSeedMsg | SetSimLayersMsg | SetAgentSnapshotVelocityMsg | AttachAgentCanvasMsg | SetAgentCameraMsg | SetAgentUiSyncMsg | RefreshAgentDisplayMsg | E1bCountersMsg | GraphIndicatorStatsMsg | CompositeReadbackMsg | AttachVoxelCanvasMsg | SetGridCameraMsg | SetGridUiSyncMsg | SetGridVizMsg | RefreshGridDisplayMsg | VoxelReadbackMsg;
 
 // ---------------------------------------------------------------------------
 // State
@@ -3245,6 +3259,15 @@ let linkedDefs: Array<{
   trackedValues?: string[];
 }> = [];
 let hasSpatialIndicators = false;
+// GRA P6 — graph indicators. One entry per `kind: 'graph'` indicator; EMPTY for
+// every model that declares none, which is what makes the whole feature zero-cost
+// when unused (computeGraphIndicators returns on the length check before touching
+// the agent store). `graphPasses` is the DEV evidence for that claim, reported
+// through the __graphIndicatorStats probe.
+let graphDefs: Array<{ id: string; metric: GraphMetric }> = [];
+let graphResults: Record<string, number | Record<string, number>> = {};
+const graphPasses: GraphMetricPasses = { degree: 0, components: 0 };
+let graphComputeCalls = 0;
 let linkedAccumulators: Record<string, number | Record<string, number>> = {};
 // Linked + spatial results. Generation-axis linked indicators are number
 // (total) or Record<string,number> (frequency); spatial indicators are
@@ -4957,6 +4980,8 @@ function initIndicators(defs: IndicatorDef[]): void {
   standaloneIds = [];
   linkedDefs = [];
   hasSpatialIndicators = false;
+  graphDefs = [];
+  graphResults = {};
   linkedAccumulators = {};
 
   for (let i = 0; i < defs.length; i++) {
@@ -4997,6 +5022,14 @@ function initIndicators(defs: IndicatorDef[]): void {
         trackedValues: ind.trackedValues,
       });
       if (ind.xAxis === 'rows' || ind.xAxis === 'columns' || ind.xAxis === 'layers') hasSpatialIndicators = true;
+    } else if (ind.kind === 'graph') {
+      // GRA P6 — worker-computed graph-global metric. No compiler presence at
+      // all: nothing in a rule graph writes it, so it never occupies a
+      // cachedIndicators slot's VALUE (the slot still exists — the compiler's
+      // _indicatorIdx is the index into this same list — it just stays 0).
+      const metric = (GRAPH_METRICS as readonly string[]).includes(ind.graphMetric ?? '')
+        ? (ind.graphMetric as GraphMetric) : 'nodeCount';
+      graphDefs.push({ id: ind.id, metric });
     }
   }
   // Sparse incremental / batch-deferred indicator plumbing (defs changed).
@@ -5010,6 +5043,47 @@ function resetIndicators(): void {
   cachedIndicators.set(standaloneDefaults);
   linkedAccumulators = {};
   linkedResults = {};
+  graphResults = {};
+}
+
+/** GRA P6 — recompute the declared graph-global metrics over the agent store.
+ *
+ *  Called from `sendColors` (the ONE message-assembly point), so it runs at
+ *  exactly the granularity every consumer observes: after the batch's last
+ *  structural phase for a step, and after every mutation handler that refreshes
+ *  the display (reset / paint / seed / load state). "After the structural phase"
+ *  is what makes the reported graph the SETTLED one the user sees.
+ *
+ *  Zero cost when unused: a model with no graph indicator returns on the first
+ *  line, before touching the agent store — and `graphPasses` stays {0,0}, which
+ *  the __graphIndicatorStats probe reports as the evidence.
+ *
+ *  Freshness on the WebGPU agent target: see the header of `graphMetrics.ts` —
+ *  every field read here is CPU-authoritative, and the only path that can leave
+ *  the CPU mirror stale (the resident batch) requires `maxBonds === 0` and no
+ *  spawning, so none of it can have changed. */
+function computeGraphIndicators(): void {
+  if (graphDefs.length === 0) return;
+  graphComputeCalls++;
+  const s = agentStore;
+  if (!s) {
+    // No agent layer (or not initialised yet): report the empty graph rather
+    // than a stale value, so a metric never lies about a population that is gone.
+    for (const d of graphDefs) graphResults[d.id] = isGraphFrequencyMetric(d.metric) ? {} : 0;
+    return;
+  }
+  const vals = computeGraphMetrics(
+    {
+      highWater: s.highWater, maxBonds: s.maxBonds, liveCount: s.liveCount,
+      alive: s.alive, bondCount: s.bondCount, bondPartner: s.bondPartner,
+    },
+    graphDefs.map(d => d.metric),
+    graphPasses,
+  );
+  for (const d of graphDefs) {
+    const v = vals[d.metric];
+    graphResults[d.id] = v === undefined ? (isGraphFrequencyMetric(d.metric) ? {} : 0) : v;
+  }
 }
 
 /** WASM-path fallback. The JS-compiled step function contains injected
@@ -5313,8 +5387,12 @@ function sendColors(): void {
   // Only build indicators payload when there are entries (avoids overhead when no indicators)
   const hasStandalone = standaloneIds.length > 0;
   const hasLinked = linkedDefs.length > 0;
+  // GRA P6 — refresh the graph-global metrics from the SETTLED agent graph (the
+  // structural phase has already run for this batch). No-op when none declared.
+  computeGraphIndicators();
+  const hasGraph = graphDefs.length > 0;
   let indicators: Record<string, number | Record<string, number> | Record<string, number[]>> | undefined;
-  if (hasStandalone || hasLinked) {
+  if (hasStandalone || hasLinked || hasGraph) {
     indicators = {};
     for (const { idx, id } of standaloneIds) {
       indicators[id] = cachedIndicators[idx]!;
@@ -5337,6 +5415,10 @@ function sendColors(): void {
         indicators[id] = result;
       }
     }
+    // GRA P6 — graph metrics ride the SAME id-keyed payload, so every existing
+    // consumer (chart history, end conditions, the Overseer's O.indicator) reads
+    // them with no change: scalars are numbers, degreeHistogram is a frequency map.
+    for (const id of Object.keys(graphResults)) indicators[id] = graphResults[id]!;
   }
   // Build glyph payload when the model uses setCellGlyph AND there are any
   // non-zero entries. Quick-scan via a single-pass length-aware probe (cheap
@@ -7412,6 +7494,24 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       if (useWebGPU && webgpuRuntime?.stepReady) {
         seedRngState(webgpuRuntime, rngState[0]!);
       }
+      break;
+    }
+
+    case '__graphIndicatorStats': {
+      // GRA P6 DEV probe (verification only) — the "zero cost when unused" and
+      // "componentCount is opt-in" evidence. `calls` counts sendColors passes
+      // that reached the compute (0 when no graph indicator is declared);
+      // `degreePasses` / `componentPasses` count the O(N) and O(E·α) scans.
+      self.postMessage({
+        type: '__graphIndicatorStats',
+        defs: graphDefs.map(d => ({ id: d.id, metric: d.metric })),
+        calls: graphComputeCalls,
+        degreePasses: graphPasses.degree,
+        componentPasses: graphPasses.components,
+        results: graphResults,
+        hasAgentStore: !!agentStore,
+        agentStoreStale,
+      });
       break;
     }
 

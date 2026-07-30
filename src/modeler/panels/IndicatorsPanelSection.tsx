@@ -8,6 +8,7 @@ import type { ModelElementDragPayload } from '../vpl/modelElementDrag';
 import { setCurrentModelElementDrag } from '../vpl/graphState';
 import { useThemeTokens } from '../../styles/useThemeTokens';
 import { designTimeSeriesKeys, INDICATOR_HISTORY_HARD_CAP } from '../../simulator/indicatorChartSettings';
+import { GRAPH_METRICS, GRAPH_METRIC_INFO, DEFAULT_GRAPH_METRIC, graphMetricDataType, type GraphMetric } from '../../simulator/engine/graphMetrics';
 import { typeDisplayName } from '../../model/typeLabels';
 import { NumberField, InlineNumberInput } from '../vpl/widgets/InlineWidgets';
 import styles from './PanelContent.module.css';
@@ -73,6 +74,12 @@ export function IndicatorsPanelSection({ mode = 'list', selectedId, onSelect, hi
     ? cellAttrs.find(a => a.id === selected.linkedAttributeId)
     : undefined;
 
+  // GRA P6 — a graph indicator measures the bond-graph agent population, so it is
+  // meaningless without an agent layer. Gate the "+ Graph" affordance on the
+  // topology (an EXISTING one still edits, so a model that turns agents off
+  // doesn't silently lose its definitions).
+  const agentsOn = model.topologyMode?.agents === true;
+
   return (
     <>
     {mode !== 'detail' && (
@@ -98,7 +105,9 @@ export function IndicatorsPanelSection({ mode = 'list', selectedId, onSelect, hi
               title={`Drag to canvas to add a node that uses '${ind.name}'`}
             >
               <span className={styles.listItemName}>{ind.name}</span>
-              <span className={styles.listItemBadge}>{ind.kind === 'standalone' ? 'Standalone' : 'Linked'}</span>
+              <span className={styles.listItemBadge}>
+                {ind.kind === 'standalone' ? 'Standalone' : ind.kind === 'graph' ? 'Graph' : 'Linked'}
+              </span>
               <button className={styles.dragHandle} title="Drag to reorder"
                 onPointerDown={reorder.startDrag(ind.id)}
                 onClick={e => e.stopPropagation()}>⋮⋮</button>
@@ -110,6 +119,13 @@ export function IndicatorsPanelSection({ mode = 'list', selectedId, onSelect, hi
       <div className={styles.buttonRow}>
         <button className={styles.addButton} onClick={() => addIndicator('standalone')}>+ Standalone</button>
         <button className={styles.addButton} onClick={() => addIndicator('linked')}>+ Linked</button>
+        {agentsOn && (
+          <button
+            className={styles.addButton}
+            onClick={() => addIndicator('graph')}
+            title="Measure the bond-graph agent population: node/edge count, degree statistics, connected components"
+          >+ Graph</button>
+        )}
         <button className={styles.addButton} disabled={!selected} title={selected ? `Duplicate '${selected.name}'` : 'Select an indicator to duplicate'}
           onClick={() => { if (selected) duplicateIndicator(selected.id); }}>Duplicate</button>
       </div>
@@ -329,6 +345,41 @@ export function IndicatorsPanelSection({ mode = 'list', selectedId, onSelect, hi
               </>
             )}
 
+            {/* GRA P6 — the graph kind: pick WHICH graph-global quantity. The
+                metric decides the value's shape (scalar vs frequency map) and
+                its numeric flavour, so changing it also re-seeds dataType. */}
+            {selected.kind === 'graph' && (
+              <>
+                <div className={styles.field}>
+                  <label className={styles.fieldLabel}>Graph Metric</label>
+                  <select
+                    className={styles.selectInput}
+                    value={selected.graphMetric ?? DEFAULT_GRAPH_METRIC}
+                    onChange={e => {
+                      const m = e.target.value as GraphMetric;
+                      updateIndicator(selected.id, { graphMetric: m, dataType: graphMetricDataType(m) });
+                    }}
+                  >
+                    {GRAPH_METRICS.map(m => (
+                      <option key={m} value={m}>{GRAPH_METRIC_INFO[m].label}</option>
+                    ))}
+                  </select>
+                </div>
+                <span className={styles.sectionHelp} style={{ marginTop: -4 }}>
+                  {GRAPH_METRIC_INFO[(selected.graphMetric ?? DEFAULT_GRAPH_METRIC) as GraphMetric].hint}
+                </span>
+                {!agentsOn && (
+                  <span style={{ color: '#c8963c', fontSize: '0.66rem' }}>
+                    This model has no agent layer — the metric will read 0.
+                  </span>
+                )}
+              </>
+            )}
+
+            {/* Accumulation is meaningless for a graph metric: it is an
+                INSTANTANEOUS measurement of the settled graph, not a per-step
+                quantity to sum. Hidden rather than shown-and-inert. */}
+            {selected.kind !== 'graph' && (
             <div className={styles.field}>
               <label className={styles.fieldLabel}>Accumulation</label>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 2 }}>
@@ -352,6 +403,7 @@ export function IndicatorsPanelSection({ mode = 'list', selectedId, onSelect, hi
                 </label>
               </div>
             </div>
+            )}
 
             <ChartDefaultsEditor
               indicator={selected}

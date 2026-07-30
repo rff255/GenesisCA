@@ -14,6 +14,7 @@ import { isAgentGraphWasmSupported } from '../vpl/compiler/agentWasm/compile';
 import { isAgentGraphWebGPUSupported } from '../vpl/compiler/agentWebgpu/compile';
 import { AgentCapabilitiesSection } from './AgentCapabilitiesSection';
 import { resolveAgentProfile, applyCapabilityEdit } from '../../model/agentCapabilities';
+import { isGraphFrequencyMetric, type GraphMetric } from '../../simulator/engine/graphMetrics';
 import styles from './PanelContent.module.css';
 import { useState, type ReactNode } from 'react';
 
@@ -106,7 +107,12 @@ export function PropertiesPanelContent({ mode = 'list' }: PanelContentProps = {}
     // condition is immediately valid (not every user knows they need one).
     let category: string | undefined;
     let value = firstIndicator.defaultValue ?? '0';
-    if (firstIndicator.kind === 'linked' && firstIndicator.linkedAggregation === 'frequency') {
+    if (firstIndicator.kind === 'graph'
+        && isGraphFrequencyMetric((firstIndicator.graphMetric ?? 'nodeCount') as GraphMetric)) {
+      // GRA P6 — the degree histogram's categories are degrees; seed 0.
+      category = '0';
+      value = '0';
+    } else if (firstIndicator.kind === 'linked' && firstIndicator.linkedAggregation === 'frequency') {
       const linkedAttr = (model.attributes || []).find(a => a.id === firstIndicator.linkedAttributeId);
       if (linkedAttr?.type === 'bool') category = 'true';
       else if (linkedAttr?.type === 'tag') category = linkedAttr.tagOptions?.[0] ?? '';
@@ -852,11 +858,16 @@ export function PropertiesPanelContent({ mode = 'list' }: PanelContentProps = {}
                   <div data-reorder-list>
                   {(ec?.indicatorConditions || []).map((cond, condIdx, condArr) => {
                     const ind = (model.indicators || []).find(i => i.id === cond.indicatorId);
-                    const isFreq = ind?.kind === 'linked' && ind?.linkedAggregation === 'frequency';
-                    const linkedAttr = isFreq
+                    // GRA P6 — a frequency-shaped GRAPH metric (degree histogram)
+                    // is category-keyed like a linked-frequency indicator; its
+                    // keys are integers (degrees), so it reuses the integer widget.
+                    const isGraphFreq = ind?.kind === 'graph'
+                      && isGraphFrequencyMetric((ind.graphMetric ?? 'nodeCount') as GraphMetric);
+                    const isFreq = (ind?.kind === 'linked' && ind?.linkedAggregation === 'frequency') || isGraphFreq;
+                    const linkedAttr = isFreq && ind?.kind === 'linked'
                       ? (model.attributes || []).find(a => a.id === ind.linkedAttributeId)
                       : undefined;
-                    const freqKind = isFreq ? linkedAttr?.type : undefined; // 'bool'|'tag'|'integer'|'float'
+                    const freqKind = isGraphFreq ? 'integer' : isFreq ? linkedAttr?.type : undefined; // 'bool'|'tag'|'integer'|'float'
                     const floatFreqDisabled = freqKind === 'float';
                     const isDragging = ecReorder.dragState?.id === cond.id;
                     const srcIdx = ecReorder.dragState ? condArr.findIndex(c => c.id === ecReorder.dragState!.id) : -1;

@@ -20,6 +20,8 @@ import { is3dModelLike } from './compiler/niCodec';
 import { MULTI_ATTR_TYPES, MULTI_ATTR_SET_TYPES, multiAttrExtraCount, buildExtraSlotPorts, resolveSlotAttr } from './compiler/multiAttrExpand';
 import { buildCensusPorts, censusAttributes } from './compiler/censusExpand';
 import { buildBondAttrPorts } from './bondAttrPorts';
+import { isGraphFrequencyMetric, degreeHistogramKeys, type GraphMetric } from '../../simulator/engine/graphMetrics';
+import { resolveMaxBonds } from '../../model/centerBased';
 import { applyLookupAxisPorts } from './nodes/LookupInteractionNode';
 import {
   isConnectingGlobal,
@@ -2277,11 +2279,19 @@ function CaNodeComponent({ id, data }: NodeProps) {
           const eligible = (model.indicators || []).filter(i =>
             !(i.kind === 'linked' && i.xAxis && i.xAxis !== 'generation'));
           const sel = eligible.find(i => i.id === nodeData.config.indicatorId);
-          const isFreq = sel?.kind === 'linked' && (sel.linkedAggregation ?? 'frequency') === 'frequency';
-          const srcAttr = isFreq ? model.attributes.find(a => a.id === sel?.linkedAttributeId) : undefined;
-          const knownCats = srcAttr?.type === 'bool' ? ['false', 'true']
-            : srcAttr?.type === 'tag' ? (srcAttr.tagOptions ?? [])
+          // GRA P6 — a frequency-shaped GRAPH metric (the degree histogram) takes
+          // a category exactly like a linked-frequency indicator; its categories
+          // ARE design-time known (degree 0..maxBonds), so offer them as a list.
+          const graphCats = sel?.kind === 'graph'
+            && isGraphFrequencyMetric((sel.graphMetric ?? 'nodeCount') as GraphMetric)
+            ? degreeHistogramKeys(resolveMaxBonds(model.centerBased))
             : null;
+          const isFreq = (sel?.kind === 'linked' && (sel.linkedAggregation ?? 'frequency') === 'frequency')
+            || graphCats !== null;
+          const srcAttr = sel?.kind === 'linked' && isFreq ? model.attributes.find(a => a.id === sel?.linkedAttributeId) : undefined;
+          const knownCats = graphCats ?? (srcAttr?.type === 'bool' ? ['false', 'true']
+            : srcAttr?.type === 'tag' ? (srcAttr.tagOptions ?? [])
+            : null);
           return (
             <>
               <select

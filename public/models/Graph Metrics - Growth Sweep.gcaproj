@@ -1,0 +1,1105 @@
+{
+ "schemaVersion": 2,
+ "properties": {
+  "name": "Graph Metrics - Growth Sweep",
+  "modelAuthor": "Rodrigo F. Figueiredo",
+  "description": "The measurement half of the graph-rewriting research loop: six GRAPH INDICATORS (node count, edge count, mean/max degree, degree histogram, connected components) over a growing bond graph, plus an Overseer protocol that measures the growth law over 20 replicates and then sweeps 16 random rules.",
+  "ruleDescription": "THE MODEL. Sixteen scattered seed agents. Every step each agent rolls Bernoulli(p) (p = the live model attribute \"Divide Probability\") AND looks its own bond degree up in the \"Growth Rule\" lookup table; when both say yes it divides, with daughterBond = always. A division therefore adds exactly one node and exactly one edge, and nothing ever joins two lineages — so the sixteen seeds grow sixteen independent trees, which the Connected Components indicator reads back as a constant 16, and E = N - 16 exactly.\n\nTHE INDICATORS. One per metric, so the simulator charts the whole measurement surface live. Node/edge count, mean and max degree and the component count are scalars (sparklines); the Degree Histogram is frequency-shaped, so it renders through the same Bars / Lines / Stack charts a linked-frequency indicator uses. Edge count is computed via the handshake lemma (sum of degrees / 2) — the same identity the invariant harness checks, so the indicator and the invariant validate each other.\n\nTHE PROTOCOL (Overseer tab). Phase A measures the growth law: Randomize Table at density 1.0 opens every degree, then 20 replicates of Reset -> Run 40 -> Collect the node count, and the Journal logs mean and std. With p = 0.05 and N0 = 16 the expectation is 16 x 1.05^40 = 112.6. Phase B is the rule-space sweep: for each of 16 seeds, Randomize Table at density 0.5 (a DIFFERENT rule each time), Reset, Run 40, and collect N, E, mean degree and components — a rule -> outcome table you can export as CSV from the Experiments panel. The seed policy is sequential from base 90210, so the whole experiment reproduces exactly on every press of Run Experiment.\n\nCOMPILE TARGET. The agent layer runs on WebAssembly on purpose. The Overseer seed policy drives setRngSeed, which re-seeds the shared xorshift32 stream JS and WASM use; the WebGPU agent target seeds its per-agent PCG once at runtime creation, so a sweep there would not reproduce across runs. WASM keeps the experiment exact and is bit-identical to JS.",
+  "topology": "2d-grid",
+  "boundaryTreatment": "torus",
+  "updateMode": "synchronous",
+  "asyncScheme": "random-order",
+  "gridWidth": 120,
+  "gridHeight": 120,
+  "maxIterations": 100000,
+  "tags": [
+   "agents",
+   "graph rewriting",
+   "indicators",
+   "Overseer",
+   "statistics"
+  ],
+  "useWasm": true,
+  "useWebGPU": false
+ },
+ "attributes": [
+  {
+   "id": "growthRule",
+   "name": "Growth Rule",
+   "type": "lookupTable",
+   "description": "May an agent of this bond degree divide? One row per degree. Randomize it (here or from the Overseer) to sweep the rule space.",
+   "isModelAttribute": true,
+   "defaultValue": "0",
+   "valueType": "bool",
+   "axes": [
+    {
+     "name": "Degree",
+     "source": {
+      "kind": "intRange",
+      "min": 0,
+      "max": 12
+     }
+    }
+   ],
+   "tableData": [
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1
+   ],
+   "tableRoll": {
+    "seed": 1,
+    "density": 1
+   }
+  },
+  {
+   "id": "divideProb",
+   "name": "Divide Probability",
+   "type": "float",
+   "description": "Per-agent, per-step probability of attempting a division.",
+   "isModelAttribute": true,
+   "defaultValue": "0.05",
+   "hasBounds": true,
+   "min": 0,
+   "max": 0.3
+  }
+ ],
+ "neighborhoods": [],
+ "mappings": [],
+ "indicators": [
+  {
+   "id": "nodes",
+   "name": "nodes (N)",
+   "kind": "graph",
+   "graphMetric": "nodeCount",
+   "dataType": "integer",
+   "defaultValue": "0",
+   "accumulationMode": "per-generation",
+   "watched": true
+  },
+  {
+   "id": "edges",
+   "name": "edges (E)",
+   "kind": "graph",
+   "graphMetric": "edgeCount",
+   "dataType": "integer",
+   "defaultValue": "0",
+   "accumulationMode": "per-generation",
+   "watched": true
+  },
+  {
+   "id": "meanDeg",
+   "name": "mean degree",
+   "kind": "graph",
+   "graphMetric": "meanDegree",
+   "dataType": "float",
+   "defaultValue": "0",
+   "accumulationMode": "per-generation",
+   "watched": true
+  },
+  {
+   "id": "maxDeg",
+   "name": "max degree",
+   "kind": "graph",
+   "graphMetric": "maxDegree",
+   "dataType": "integer",
+   "defaultValue": "0",
+   "accumulationMode": "per-generation",
+   "watched": true
+  },
+  {
+   "id": "degHist",
+   "name": "degree histogram",
+   "kind": "graph",
+   "graphMetric": "degreeHistogram",
+   "dataType": "integer",
+   "defaultValue": "0",
+   "accumulationMode": "per-generation",
+   "watched": true
+  },
+  {
+   "id": "components",
+   "name": "components",
+   "kind": "graph",
+   "graphMetric": "componentCount",
+   "dataType": "integer",
+   "defaultValue": "0",
+   "accumulationMode": "per-generation",
+   "watched": true
+  }
+ ],
+ "graphNodes": [],
+ "graphEdges": [],
+ "macroDefs": [],
+ "topologyMode": {
+  "gridCells": false,
+  "agents": true
+ },
+ "centerBased": {
+  "enabled": true,
+  "agentTarget": "wasm",
+  "maxAgents": 1500,
+  "maxBonds": 12,
+  "worldWidth": 120,
+  "worldHeight": 120,
+  "seedCount": 16,
+  "seedPattern": "compact",
+  "defaultRadius": 1.2,
+  "growthRate": 0,
+  "repulsionStiffness": 1.5,
+  "adhesionStiffness": 0,
+  "interactionRange": 1.5,
+  "drag": 1,
+  "timeStep": 0.1,
+  "momentum": 0,
+  "maxSpeed": 0,
+  "neighbourQueryRadius": 4,
+  "useBondingPhysics": true,
+  "autoBond": false,
+  "bondStiffness": 1,
+  "bondRestLength": 2.6,
+  "formDistance": 1.15,
+  "breakDistance": 1.8,
+  "agentUpdateMode": "async",
+  "bondRequestDepth": 8,
+  "agentCapabilities": {
+   "motion": "force",
+   "body": true,
+   "collision": "soft",
+   "bonds": "physics",
+   "autoBond": false,
+   "growth": false,
+   "division": true,
+   "lifespan": false,
+   "populationBirth": false,
+   "populationDeath": false,
+   "sensing": false,
+   "sensingHeadingSource": "velocity",
+   "orientation": false,
+   "fieldCoupling": false,
+   "appearance": true
+  }
+ },
+ "agentAttributes": [],
+ "agentVariables": [],
+ "bondAttributes": [],
+ "agentMappings": [
+  {
+   "id": "degreeView",
+   "name": "Degree",
+   "isAttributeToColor": true,
+   "description": "Placeholder view — agents keep their default colour (the graph structure is what this model is about).",
+   "linked": false
+  }
+ ],
+ "agentGraphNodes": [
+  {
+   "id": "nms7vgw6v5gd7",
+   "type": "caNode",
+   "position": {
+    "x": 0,
+    "y": 200
+   },
+   "data": {
+    "nodeType": "behaviourStep",
+    "config": {}
+   }
+  },
+  {
+   "id": "nms7vgw6vd9yk",
+   "type": "caNode",
+   "position": {
+    "x": 0,
+    "y": 0
+   },
+   "data": {
+    "nodeType": "getModelAttribute",
+    "config": {
+     "attributeId": "divideProb"
+    }
+   }
+  },
+  {
+   "id": "nms7vgw6vtw7z",
+   "type": "caNode",
+   "position": {
+    "x": 250,
+    "y": 0
+   },
+   "data": {
+    "nodeType": "getRandom",
+    "config": {
+     "randomType": "bool"
+    }
+   }
+  },
+  {
+   "id": "nms7vgw6vdyqn",
+   "type": "caNode",
+   "position": {
+    "x": 0,
+    "y": 400
+   },
+   "data": {
+    "nodeType": "getBondDegree",
+    "config": {}
+   }
+  },
+  {
+   "id": "nms7vgw6vzn8e",
+   "type": "caNode",
+   "position": {
+    "x": 250,
+    "y": 400
+   },
+   "data": {
+    "nodeType": "lookupInteraction",
+    "config": {
+     "tableId": "growthRule"
+    }
+   }
+  },
+  {
+   "id": "nms7vgw6vxsmw",
+   "type": "caNode",
+   "position": {
+    "x": 500,
+    "y": 400
+   },
+   "data": {
+    "nodeType": "statement",
+    "config": {
+     "operation": ">",
+     "compareType": "numerical",
+     "_port_y": "0.5"
+    }
+   }
+  },
+  {
+   "id": "nms7vgw6vpcru",
+   "type": "caNode",
+   "position": {
+    "x": 750,
+    "y": 200
+   },
+   "data": {
+    "nodeType": "logicOperator",
+    "config": {
+     "operation": "AND"
+    }
+   }
+  },
+  {
+   "id": "nms7vgw6vw47g",
+   "type": "caNode",
+   "position": {
+    "x": 1000,
+    "y": 200
+   },
+   "data": {
+    "nodeType": "conditional",
+    "config": {}
+   }
+  },
+  {
+   "id": "nms7vgw6v2nve",
+   "type": "caNode",
+   "position": {
+    "x": 1250,
+    "y": 200
+   },
+   "data": {
+    "nodeType": "divideAgent",
+    "config": {
+     "axisSource": "tension",
+     "partition": "tension",
+     "daughterBond": "always"
+    }
+   }
+  }
+ ],
+ "agentGraphEdges": [
+  {
+   "id": "ems7vgw6vnj4h",
+   "source": "nms7vgw6vd9yk",
+   "target": "nms7vgw6vtw7z",
+   "sourceHandle": "output_value_value",
+   "targetHandle": "input_value_probability"
+  },
+  {
+   "id": "ems7vgw6v0hk6",
+   "source": "nms7vgw6vdyqn",
+   "target": "nms7vgw6vzn8e",
+   "sourceHandle": "output_value_value",
+   "targetHandle": "input_value_axis_0"
+  },
+  {
+   "id": "ems7vgw6vxt2k",
+   "source": "nms7vgw6vzn8e",
+   "target": "nms7vgw6vxsmw",
+   "sourceHandle": "output_value_value",
+   "targetHandle": "input_value_x"
+  },
+  {
+   "id": "ems7vgw6vvno1",
+   "source": "nms7vgw6vtw7z",
+   "target": "nms7vgw6vpcru",
+   "sourceHandle": "output_value_value",
+   "targetHandle": "input_value_a"
+  },
+  {
+   "id": "ems7vgw6vqiau",
+   "source": "nms7vgw6vxsmw",
+   "target": "nms7vgw6vpcru",
+   "sourceHandle": "output_value_result",
+   "targetHandle": "input_value_b"
+  },
+  {
+   "id": "ems7vgw6vcwvu",
+   "source": "nms7vgw6v5gd7",
+   "target": "nms7vgw6vw47g",
+   "sourceHandle": "output_flow_do",
+   "targetHandle": "input_flow_do"
+  },
+  {
+   "id": "ems7vgw6v2qdn",
+   "source": "nms7vgw6vpcru",
+   "target": "nms7vgw6vw47g",
+   "sourceHandle": "output_value_result",
+   "targetHandle": "input_value_condition"
+  },
+  {
+   "id": "ems7vgw6voiyo",
+   "source": "nms7vgw6vw47g",
+   "target": "nms7vgw6v2nve",
+   "sourceHandle": "output_flow_then",
+   "targetHandle": "input_flow_do"
+  }
+ ],
+ "overseerConfig": {
+  "enabled": true,
+  "seedPolicy": "sequential",
+  "baseSeed": 90210
+ },
+ "overseerGraphNodes": [
+  {
+   "id": "nms7vgw6vwyo4",
+   "type": "caNode",
+   "position": {
+    "x": 0,
+    "y": 300
+   },
+   "data": {
+    "nodeType": "experiment",
+    "config": {}
+   }
+  },
+  {
+   "id": "nms7vgw6vlm0r",
+   "type": "caNode",
+   "position": {
+    "x": 250,
+    "y": 300
+   },
+   "data": {
+    "nodeType": "ovClearSeries",
+    "config": {
+     "series": "N_T"
+    }
+   }
+  },
+  {
+   "id": "nms7vgw6veuwx",
+   "type": "caNode",
+   "position": {
+    "x": 500,
+    "y": 300
+   },
+   "data": {
+    "nodeType": "ovClearSeries",
+    "config": {
+     "series": "sweep_N"
+    }
+   }
+  },
+  {
+   "id": "nms7vgw6vvbkn",
+   "type": "caNode",
+   "position": {
+    "x": 750,
+    "y": 300
+   },
+   "data": {
+    "nodeType": "ovClearSeries",
+    "config": {
+     "series": "sweep_E"
+    }
+   }
+  },
+  {
+   "id": "nms7vgw6vvz2v",
+   "type": "caNode",
+   "position": {
+    "x": 1000,
+    "y": 300
+   },
+   "data": {
+    "nodeType": "ovClearSeries",
+    "config": {
+     "series": "sweep_meanDegree"
+    }
+   }
+  },
+  {
+   "id": "nms7vgw6vhyrm",
+   "type": "caNode",
+   "position": {
+    "x": 1250,
+    "y": 300
+   },
+   "data": {
+    "nodeType": "ovClearSeries",
+    "config": {
+     "series": "sweep_components"
+    }
+   }
+  },
+  {
+   "id": "nms7vgw6vjquf",
+   "type": "caNode",
+   "position": {
+    "x": 0,
+    "y": 500
+   },
+   "data": {
+    "nodeType": "ovRandomizeTable",
+    "config": {
+     "tableId": "growthRule",
+     "_port_seed": "1",
+     "_port_density": "1"
+    }
+   }
+  },
+  {
+   "id": "nms7vgw6vsc8a",
+   "type": "caNode",
+   "position": {
+    "x": 250,
+    "y": 500
+   },
+   "data": {
+    "nodeType": "ovLog",
+    "config": {
+     "text": "Phase A - growth law: 20 replicates, every degree may divide."
+    }
+   }
+  },
+  {
+   "id": "nms7vgw6vjssf",
+   "type": "caNode",
+   "position": {
+    "x": 500,
+    "y": 500
+   },
+   "data": {
+    "nodeType": "loop",
+    "config": {
+     "_port_count": "20"
+    }
+   }
+  },
+  {
+   "id": "nms7vgw6vuf33",
+   "type": "caNode",
+   "position": {
+    "x": 750,
+    "y": 600
+   },
+   "data": {
+    "nodeType": "ovResetBoard",
+    "config": {}
+   }
+  },
+  {
+   "id": "nms7vgw6vwb5k",
+   "type": "caNode",
+   "position": {
+    "x": 1000,
+    "y": 600
+   },
+   "data": {
+    "nodeType": "ovRunGenerations",
+    "config": {
+     "_port_count": "40"
+    }
+   }
+  },
+  {
+   "id": "nms7vgw6v5pn1",
+   "type": "caNode",
+   "position": {
+    "x": 1000,
+    "y": 800
+   },
+   "data": {
+    "nodeType": "ovReadIndicator",
+    "config": {
+     "indicatorId": "nodes",
+     "category": ""
+    }
+   }
+  },
+  {
+   "id": "nms7vgw6v1i3f",
+   "type": "caNode",
+   "position": {
+    "x": 1250,
+    "y": 600
+   },
+   "data": {
+    "nodeType": "ovCollectSample",
+    "config": {
+     "series": "N_T",
+     "scope": "experiment"
+    }
+   }
+  },
+  {
+   "id": "nms7vgw6voniu",
+   "type": "caNode",
+   "position": {
+    "x": 500,
+    "y": 100
+   },
+   "data": {
+    "nodeType": "ovSeriesStat",
+    "config": {
+     "series": "N_T",
+     "op": "mean"
+    }
+   }
+  },
+  {
+   "id": "nms7vgw6vsjhj",
+   "type": "caNode",
+   "position": {
+    "x": 750,
+    "y": 100
+   },
+   "data": {
+    "nodeType": "ovLog",
+    "config": {
+     "text": "O10 mean N at T=40: {value}  (expected N0*(1+p)^T)"
+    }
+   }
+  },
+  {
+   "id": "nms7vgw6v4m7d",
+   "type": "caNode",
+   "position": {
+    "x": 1000,
+    "y": 0
+   },
+   "data": {
+    "nodeType": "ovSeriesStat",
+    "config": {
+     "series": "N_T",
+     "op": "std"
+    }
+   }
+  },
+  {
+   "id": "nms7vgw6vnftd",
+   "type": "caNode",
+   "position": {
+    "x": 1250,
+    "y": 100
+   },
+   "data": {
+    "nodeType": "ovLog",
+    "config": {
+     "text": "O10 std: {value} (n = 20)"
+    }
+   }
+  },
+  {
+   "id": "nms7vgw6vfx0v",
+   "type": "caNode",
+   "position": {
+    "x": 0,
+    "y": 1000
+   },
+   "data": {
+    "nodeType": "ovLog",
+    "config": {
+     "text": "Phase B - rule sweep: 16 seeds x (Randomize -> Reset -> Run -> Measure)."
+    }
+   }
+  },
+  {
+   "id": "nms7vgw6vrnhm",
+   "type": "caNode",
+   "position": {
+    "x": 0,
+    "y": 1200
+   },
+   "data": {
+    "nodeType": "ovSweepValues",
+    "config": {
+     "mode": "list",
+     "list": "101, 202, 303, 404, 505, 606, 707, 808, 909, 1010, 1111, 1212, 1313, 1414, 1515, 1616"
+    }
+   }
+  },
+  {
+   "id": "nms7vgw6vq10o",
+   "type": "caNode",
+   "position": {
+    "x": 250,
+    "y": 1000
+   },
+   "data": {
+    "nodeType": "forEachInArray",
+    "config": {}
+   }
+  },
+  {
+   "id": "nms7vgw6vo6ex",
+   "type": "caNode",
+   "position": {
+    "x": 500,
+    "y": 1100
+   },
+   "data": {
+    "nodeType": "ovRandomizeTable",
+    "config": {
+     "tableId": "growthRule",
+     "_port_density": "0.5"
+    }
+   }
+  },
+  {
+   "id": "nms7vgw6vbjzw",
+   "type": "caNode",
+   "position": {
+    "x": 750,
+    "y": 1100
+   },
+   "data": {
+    "nodeType": "ovResetBoard",
+    "config": {}
+   }
+  },
+  {
+   "id": "nms7vgw6vyv9w",
+   "type": "caNode",
+   "position": {
+    "x": 1000,
+    "y": 1100
+   },
+   "data": {
+    "nodeType": "ovRunGenerations",
+    "config": {
+     "_port_count": "40"
+    }
+   }
+  },
+  {
+   "id": "nms7vgw6v453o",
+   "type": "caNode",
+   "position": {
+    "x": 1000,
+    "y": 1300
+   },
+   "data": {
+    "nodeType": "ovReadIndicator",
+    "config": {
+     "indicatorId": "nodes",
+     "category": ""
+    }
+   }
+  },
+  {
+   "id": "nms7vgw6vweki",
+   "type": "caNode",
+   "position": {
+    "x": 1000,
+    "y": 1400
+   },
+   "data": {
+    "nodeType": "ovReadIndicator",
+    "config": {
+     "indicatorId": "edges",
+     "category": ""
+    }
+   }
+  },
+  {
+   "id": "nms7vgw6vxalw",
+   "type": "caNode",
+   "position": {
+    "x": 1000,
+    "y": 1500
+   },
+   "data": {
+    "nodeType": "ovReadIndicator",
+    "config": {
+     "indicatorId": "meanDeg",
+     "category": ""
+    }
+   }
+  },
+  {
+   "id": "nms7vgw6vsquo",
+   "type": "caNode",
+   "position": {
+    "x": 1000,
+    "y": 1600
+   },
+   "data": {
+    "nodeType": "ovReadIndicator",
+    "config": {
+     "indicatorId": "components",
+     "category": ""
+    }
+   }
+  },
+  {
+   "id": "nms7vgw6vvoos",
+   "type": "caNode",
+   "position": {
+    "x": 1250,
+    "y": 1100
+   },
+   "data": {
+    "nodeType": "ovCollectSample",
+    "config": {
+     "series": "sweep_N",
+     "scope": "experiment"
+    }
+   }
+  },
+  {
+   "id": "nms7vgw6v4py2",
+   "type": "caNode",
+   "position": {
+    "x": 1500,
+    "y": 1100
+   },
+   "data": {
+    "nodeType": "ovCollectSample",
+    "config": {
+     "series": "sweep_E",
+     "scope": "experiment"
+    }
+   }
+  },
+  {
+   "id": "nms7vgw6vt1nv",
+   "type": "caNode",
+   "position": {
+    "x": 1750,
+    "y": 1100
+   },
+   "data": {
+    "nodeType": "ovCollectSample",
+    "config": {
+     "series": "sweep_meanDegree",
+     "scope": "experiment"
+    }
+   }
+  },
+  {
+   "id": "nms7vgw6vqf1z",
+   "type": "caNode",
+   "position": {
+    "x": 2000,
+    "y": 1100
+   },
+   "data": {
+    "nodeType": "ovCollectSample",
+    "config": {
+     "series": "sweep_components",
+     "scope": "experiment"
+    }
+   }
+  },
+  {
+   "id": "nms7vgw6vyt4e",
+   "type": "caNode",
+   "position": {
+    "x": 2250,
+    "y": 1100
+   },
+   "data": {
+    "nodeType": "ovLog",
+    "config": {
+     "text": "seed -> N = {value}"
+    }
+   }
+  },
+  {
+   "id": "nms7vgw6vxc3w",
+   "type": "caNode",
+   "position": {
+    "x": 500,
+    "y": 900
+   },
+   "data": {
+    "nodeType": "ovLog",
+    "config": {
+     "text": "Sweep complete - export the Series table as CSV from the panel."
+    }
+   }
+  }
+ ],
+ "overseerGraphEdges": [
+  {
+   "id": "ems7vgw6v5nyp",
+   "source": "nms7vgw6vwyo4",
+   "target": "nms7vgw6vlm0r",
+   "sourceHandle": "output_flow_do",
+   "targetHandle": "input_flow_do"
+  },
+  {
+   "id": "ems7vgw6v97sj",
+   "source": "nms7vgw6vlm0r",
+   "target": "nms7vgw6veuwx",
+   "sourceHandle": "output_flow_next",
+   "targetHandle": "input_flow_do"
+  },
+  {
+   "id": "ems7vgw6vj3v4",
+   "source": "nms7vgw6veuwx",
+   "target": "nms7vgw6vvbkn",
+   "sourceHandle": "output_flow_next",
+   "targetHandle": "input_flow_do"
+  },
+  {
+   "id": "ems7vgw6vgmhq",
+   "source": "nms7vgw6vvbkn",
+   "target": "nms7vgw6vvz2v",
+   "sourceHandle": "output_flow_next",
+   "targetHandle": "input_flow_do"
+  },
+  {
+   "id": "ems7vgw6v17f6",
+   "source": "nms7vgw6vvz2v",
+   "target": "nms7vgw6vhyrm",
+   "sourceHandle": "output_flow_next",
+   "targetHandle": "input_flow_do"
+  },
+  {
+   "id": "ems7vgw6v297o",
+   "source": "nms7vgw6vhyrm",
+   "target": "nms7vgw6vjquf",
+   "sourceHandle": "output_flow_next",
+   "targetHandle": "input_flow_do"
+  },
+  {
+   "id": "ems7vgw6vcyrj",
+   "source": "nms7vgw6vjquf",
+   "target": "nms7vgw6vsc8a",
+   "sourceHandle": "output_flow_next",
+   "targetHandle": "input_flow_do"
+  },
+  {
+   "id": "ems7vgw6vxw16",
+   "source": "nms7vgw6vsc8a",
+   "target": "nms7vgw6vjssf",
+   "sourceHandle": "output_flow_next",
+   "targetHandle": "input_flow_do"
+  },
+  {
+   "id": "ems7vgw6v8hvl",
+   "source": "nms7vgw6vjssf",
+   "target": "nms7vgw6vuf33",
+   "sourceHandle": "output_flow_body",
+   "targetHandle": "input_flow_do"
+  },
+  {
+   "id": "ems7vgw6vxrve",
+   "source": "nms7vgw6vuf33",
+   "target": "nms7vgw6vwb5k",
+   "sourceHandle": "output_flow_next",
+   "targetHandle": "input_flow_do"
+  },
+  {
+   "id": "ems7vgw6vyz1b",
+   "source": "nms7vgw6vwb5k",
+   "target": "nms7vgw6v1i3f",
+   "sourceHandle": "output_flow_next",
+   "targetHandle": "input_flow_do"
+  },
+  {
+   "id": "ems7vgw6vmi7x",
+   "source": "nms7vgw6v5pn1",
+   "target": "nms7vgw6v1i3f",
+   "sourceHandle": "output_value_value",
+   "targetHandle": "input_value_value"
+  },
+  {
+   "id": "ems7vgw6vasak",
+   "source": "nms7vgw6vjssf",
+   "target": "nms7vgw6vsjhj",
+   "sourceHandle": "output_flow_next",
+   "targetHandle": "input_flow_do"
+  },
+  {
+   "id": "ems7vgw6v5c9m",
+   "source": "nms7vgw6voniu",
+   "target": "nms7vgw6vsjhj",
+   "sourceHandle": "output_value_result",
+   "targetHandle": "input_value_value"
+  },
+  {
+   "id": "ems7vgw6vmu28",
+   "source": "nms7vgw6vsjhj",
+   "target": "nms7vgw6vnftd",
+   "sourceHandle": "output_flow_next",
+   "targetHandle": "input_flow_do"
+  },
+  {
+   "id": "ems7vgw6vlaib",
+   "source": "nms7vgw6v4m7d",
+   "target": "nms7vgw6vnftd",
+   "sourceHandle": "output_value_result",
+   "targetHandle": "input_value_value"
+  },
+  {
+   "id": "ems7vgw6vqtc6",
+   "source": "nms7vgw6vnftd",
+   "target": "nms7vgw6vfx0v",
+   "sourceHandle": "output_flow_next",
+   "targetHandle": "input_flow_do"
+  },
+  {
+   "id": "ems7vgw6vku7b",
+   "source": "nms7vgw6vfx0v",
+   "target": "nms7vgw6vq10o",
+   "sourceHandle": "output_flow_next",
+   "targetHandle": "input_flow_do"
+  },
+  {
+   "id": "ems7vgw6v0m6o",
+   "source": "nms7vgw6vrnhm",
+   "target": "nms7vgw6vq10o",
+   "sourceHandle": "output_value_values",
+   "targetHandle": "input_value_array"
+  },
+  {
+   "id": "ems7vgw6vg4c9",
+   "source": "nms7vgw6vq10o",
+   "target": "nms7vgw6vo6ex",
+   "sourceHandle": "output_flow_body",
+   "targetHandle": "input_flow_do"
+  },
+  {
+   "id": "ems7vgw6v4omo",
+   "source": "nms7vgw6vq10o",
+   "target": "nms7vgw6vo6ex",
+   "sourceHandle": "output_value_element",
+   "targetHandle": "input_value_seed"
+  },
+  {
+   "id": "ems7vgw6va69h",
+   "source": "nms7vgw6vo6ex",
+   "target": "nms7vgw6vbjzw",
+   "sourceHandle": "output_flow_next",
+   "targetHandle": "input_flow_do"
+  },
+  {
+   "id": "ems7vgw6vv0qt",
+   "source": "nms7vgw6vbjzw",
+   "target": "nms7vgw6vyv9w",
+   "sourceHandle": "output_flow_next",
+   "targetHandle": "input_flow_do"
+  },
+  {
+   "id": "ems7vgw6vuok5",
+   "source": "nms7vgw6vyv9w",
+   "target": "nms7vgw6vvoos",
+   "sourceHandle": "output_flow_next",
+   "targetHandle": "input_flow_do"
+  },
+  {
+   "id": "ems7vgw6vkjr6",
+   "source": "nms7vgw6vvoos",
+   "target": "nms7vgw6v4py2",
+   "sourceHandle": "output_flow_next",
+   "targetHandle": "input_flow_do"
+  },
+  {
+   "id": "ems7vgw6vy3n2",
+   "source": "nms7vgw6v4py2",
+   "target": "nms7vgw6vt1nv",
+   "sourceHandle": "output_flow_next",
+   "targetHandle": "input_flow_do"
+  },
+  {
+   "id": "ems7vgw6vh0w3",
+   "source": "nms7vgw6vt1nv",
+   "target": "nms7vgw6vqf1z",
+   "sourceHandle": "output_flow_next",
+   "targetHandle": "input_flow_do"
+  },
+  {
+   "id": "ems7vgw6vsnkh",
+   "source": "nms7vgw6v453o",
+   "target": "nms7vgw6vvoos",
+   "sourceHandle": "output_value_value",
+   "targetHandle": "input_value_value"
+  },
+  {
+   "id": "ems7vgw6vstur",
+   "source": "nms7vgw6vweki",
+   "target": "nms7vgw6v4py2",
+   "sourceHandle": "output_value_value",
+   "targetHandle": "input_value_value"
+  },
+  {
+   "id": "ems7vgw6vy3om",
+   "source": "nms7vgw6vxalw",
+   "target": "nms7vgw6vt1nv",
+   "sourceHandle": "output_value_value",
+   "targetHandle": "input_value_value"
+  },
+  {
+   "id": "ems7vgw6vcfjq",
+   "source": "nms7vgw6vsquo",
+   "target": "nms7vgw6vqf1z",
+   "sourceHandle": "output_value_value",
+   "targetHandle": "input_value_value"
+  },
+  {
+   "id": "ems7vgw6vjl03",
+   "source": "nms7vgw6vqf1z",
+   "target": "nms7vgw6vyt4e",
+   "sourceHandle": "output_flow_next",
+   "targetHandle": "input_flow_do"
+  },
+  {
+   "id": "ems7vgw6v7squ",
+   "source": "nms7vgw6v453o",
+   "target": "nms7vgw6vyt4e",
+   "sourceHandle": "output_value_value",
+   "targetHandle": "input_value_value"
+  },
+  {
+   "id": "ems7vgw6viw2n",
+   "source": "nms7vgw6vq10o",
+   "target": "nms7vgw6vxc3w",
+   "sourceHandle": "output_flow_next",
+   "targetHandle": "input_flow_do"
+  }
+ ]
+}

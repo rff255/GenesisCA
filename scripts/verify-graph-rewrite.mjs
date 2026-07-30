@@ -58,6 +58,11 @@ export { migrateForHarness } from '../src/dev/compileHarness.ts';
 export { agentAttrsOf, cellFieldAttrsOf } from '../src/model/attributeScope.ts';
 export { expandNeighbourCensus, buildCensusPorts, censusOptions, censusAttribute } from '../src/modeler/vpl/compiler/censusExpand.ts';
 export { getEffectivePorts } from '../src/modeler/vpl/effectivePorts.ts';
+export {
+  computeGraphMetrics, isGraphFrequencyMetric, graphMetricDataType, degreeHistogramKeys,
+  GRAPH_METRICS, GRAPH_METRIC_INFO, DEFAULT_GRAPH_METRIC,
+} from '../src/simulator/engine/graphMetrics.ts';
+export { designTimeSeriesKeys } from '../src/simulator/indicatorChartSettings.ts';
 `;
 const entryPath = join(ROOT, 'scripts', '__gra_entry.ts');
 writeFileSync(entryPath, ENTRY);
@@ -80,6 +85,8 @@ const {
   agentWebGPUExtrasOf, computeAgentWebGPULayout,
   compileAgentGraph, buildAgentAbiArgs, migrateForHarness, agentAttrsOf, cellFieldAttrsOf,
   expandNeighbourCensus, buildCensusPorts, censusOptions, censusAttribute, getEffectivePorts,
+  computeGraphMetrics, isGraphFrequencyMetric, graphMetricDataType, degreeHistogramKeys,
+  GRAPH_METRICS, GRAPH_METRIC_INFO, DEFAULT_GRAPH_METRIC, designTimeSeriesKeys,
 } = m;
 
 let pass = 0, fail = 0;
@@ -2312,6 +2319,447 @@ function buildDivideModel({ single = null } = {}) {
   };
 }
 
+// ===========================================================================
+// TIER I — GRAPH INDICATORS (P6): exactness, fragmentation, opt-in cost
+// ===========================================================================
+//
+// The exactness oracle. Every metric the worker ships is compared against an
+// INDEPENDENTLY WRITTEN recount here — deliberately using a DIFFERENT algorithm
+// shape where one exists (`refComponents` is a BFS flood fill, not a second
+// union-find), so a shared bug is implausible rather than merely unlikely.
+//
+// `edgeCount` IS invariant I1: the shipped metric computes Σ deg / 2 while the
+// reference counts DISTINCT unordered live pairs. Those two agree exactly iff the
+// handshake lemma holds — so the metric and the invariant validate each other.
+
+/** Reference node count — scan `alive` (the shipped metric uses the store's own
+ *  `liveCount`, so this also cross-checks that bookkeeping). */
+function refNodeCount(g) {
+  let n = 0;
+  for (let i = 0; i < g.highWater; i++) if (g.alive[i]) n++;
+  return n;
+}
+/** Reference edge count — DISTINCT unordered live pairs (not Σ deg / 2). */
+function refEdgeCount(g) {
+  const seen = new Set();
+  for (let i = 0; i < g.highWater; i++) {
+    if (!g.alive[i]) continue;
+    for (let k = 0; k < g.bondCount[i]; k++) {
+      const p = g.bondPartner[i * g.maxBonds + k];
+      if (p < 0 || p >= g.highWater || !g.alive[p] || p === i) continue;
+      seen.add(i < p ? `${i}:${p}` : `${p}:${i}`);
+    }
+  }
+  return seen.size;
+}
+/** Reference degree histogram — a DIRECT bondCount tally over live agents. */
+function refDegreeHistogram(g) {
+  const h = {};
+  for (let d = 0; d <= g.maxBonds; d++) h[String(d)] = 0;
+  for (let i = 0; i < g.highWater; i++) {
+    if (!g.alive[i]) continue;
+    h[String(g.bondCount[i])] = (h[String(g.bondCount[i])] ?? 0) + 1;
+  }
+  return h;
+}
+function refDegreeStats(g) {
+  let sum = 0, max = 0, n = 0;
+  for (let i = 0; i < g.highWater; i++) {
+    if (!g.alive[i]) continue;
+    n++; sum += g.bondCount[i];
+    if (g.bondCount[i] > max) max = g.bondCount[i];
+  }
+  return { mean: n > 0 ? sum / n : 0, max };
+}
+/** Reference connected components — BFS FLOOD FILL over an explicitly built
+ *  adjacency list. Structurally different from the shipped union-find, so the
+ *  two agreeing is real evidence rather than a mirror. */
+function refComponents(g) {
+  const adj = new Map();
+  const live = [];
+  for (let i = 0; i < g.highWater; i++) if (g.alive[i]) { live.push(i); adj.set(i, []); }
+  for (const i of live) {
+    for (let k = 0; k < g.bondCount[i]; k++) {
+      const p = g.bondPartner[i * g.maxBonds + k];
+      if (p < 0 || p >= g.highWater || !g.alive[p] || p === i) continue;
+      adj.get(i).push(p);
+    }
+  }
+  const seen = new Set();
+  let comps = 0;
+  for (const start of live) {
+    if (seen.has(start)) continue;
+    comps++;
+    const q = [start];
+    seen.add(start);
+    while (q.length) {
+      const v = q.pop();
+      for (const w of adj.get(v) ?? []) if (!seen.has(w)) { seen.add(w); q.push(w); }
+      // BFS/DFS over an undirected list: also walk the REVERSE direction so a
+      // one-sided bond still joins (matches the shipped union-both-ways rule).
+      for (const w of live) {
+        if (seen.has(w)) continue;
+        if ((adj.get(w) ?? []).includes(v)) { seen.add(w); q.push(w); }
+      }
+    }
+  }
+  return comps;
+}
+/** All six references at once, keyed like the shipped result object. */
+function refAllMetrics(g, liveCount) {
+  const st = refDegreeStats(g);
+  return {
+    nodeCount: liveCount ?? refNodeCount(g),
+    edgeCount: refEdgeCount(g),
+    meanDegree: st.mean,
+    maxDegree: st.max,
+    degreeHistogram: refDegreeHistogram(g),
+    componentCount: refComponents(g),
+  };
+}
+function sameMetric(a, b) {
+  if (typeof a === 'number' || typeof b === 'number') return Object.is(a, b);
+  const ka = Object.keys(a ?? {}).sort(), kb = Object.keys(b ?? {}).sort();
+  if (ka.join(',') !== kb.join(',')) return false;
+  return ka.every(k => a[k] === b[k]);
+}
+/** Compare the SHIPPED metrics against the references; returns null or a message. */
+function metricMismatch(view, ref) {
+  const got = computeGraphMetrics(view, GRAPH_METRICS);
+  for (const k of GRAPH_METRICS) {
+    if (!sameMetric(got[k], ref[k])) {
+      return `${k}: shipped ${JSON.stringify(got[k])} != reference ${JSON.stringify(ref[k])}`;
+    }
+  }
+  return null;
+}
+/** The normalised view straight off a live store (what the worker feeds). */
+function metricView(s) {
+  return {
+    highWater: s.highWater, maxBonds: s.maxBonds, liveCount: s.liveCount,
+    alive: s.alive, bondCount: s.bondCount, bondPartner: s.bondPartner,
+  };
+}
+/** A store of `n` seeded agents with a bond capacity of `mb`. */
+function metricStore(n, mb) {
+  const s = createAgentStore(bondCfg(Math.max(8, n + 8), mb), []);
+  seedAgents(s, Array.from({ length: n }, (_, i) => ({ x: 1 + (i % 8) * 2, y: 1 + Math.floor(i / 8) * 2 })), 0.5);
+  return s;
+}
+/** Deterministic LCG so the "random graph" fixture is reproducible. */
+function lcg(seed) {
+  let x = seed >>> 0;
+  return () => { x = (Math.imul(x, 1664525) + 1013904223) >>> 0; return x / 4294967296; };
+}
+
+function tierI() {
+  section('TIER I — graph indicators (P6): exactness vs an independent recount');
+
+  // ---- 1. exactness over a spread of graph shapes ------------------------
+  const fixtures = [];
+  {
+    // ring of 12 (every degree 2, one component)
+    const s = metricStore(12, 6);
+    for (let i = 0; i < 12; i++) formBond(s, i, (i + 1) % 12, 1, 0);
+    fixtures.push(['ring-12', s]);
+  }
+  {
+    // ring + chords: mixed degrees 2/3/4
+    const s = metricStore(12, 6);
+    for (let i = 0; i < 12; i++) formBond(s, i, (i + 1) % 12, 1, 0);
+    formBond(s, 0, 6, 1, 0); formBond(s, 2, 8, 1, 0); formBond(s, 0, 4, 1, 0);
+    fixtures.push(['ring-12 + 3 chords', s]);
+  }
+  {
+    // star: hub degree 7, seven leaves of degree 1
+    const s = metricStore(8, 8);
+    for (let i = 1; i < 8; i++) formBond(s, 0, i, 1, 0);
+    fixtures.push(['star K1,7', s]);
+  }
+  {
+    // five isolated agents — 0 edges, 5 components, the whole histogram at degree 0
+    fixtures.push(['5 isolated', metricStore(5, 4)]);
+  }
+  {
+    // two disjoint K4s — 2 components, 12 edges, every degree 3
+    const s = metricStore(8, 6);
+    for (const base of [0, 4]) {
+      for (let a = 0; a < 4; a++) for (let b = a + 1; b < 4; b++) formBond(s, base + a, base + b, 1, 0);
+    }
+    fixtures.push(['two disjoint K4', s]);
+  }
+  {
+    // a HOLEY store: kill scattered agents so `alive` has gaps and slots recycle
+    const s = metricStore(20, 6);
+    for (let i = 0; i < 20; i++) formBond(s, i, (i + 1) % 20, 1, 0);
+    for (const dead of [3, 4, 11, 17]) freeAgentSlot(s, dead);
+    fixtures.push(['ring-20 with 4 agents killed (holes + broken bonds)', s]);
+  }
+  {
+    // a pseudo-random graph
+    const s = metricStore(24, 6);
+    const rnd = lcg(0xC0FFEE);
+    for (let t = 0; t < 60; t++) {
+      const a = Math.floor(rnd() * 24), b = Math.floor(rnd() * 24);
+      if (a !== b) formBond(s, a, b, 1, 0);
+    }
+    fixtures.push(['random 24-node graph (seeded)', s]);
+  }
+  {
+    // the empty population (no agents at all)
+    fixtures.push(['empty population', metricStore(0, 4)]);
+  }
+
+  for (const [name, s] of fixtures) {
+    const g = storeGraph(s);
+    const ref = refAllMetrics(g);
+    const bad = metricMismatch(metricView(s), ref);
+    ok(bad === null, `exactness — ${name}: all six metrics match an independent recount`, bad ?? '');
+    // The store's own liveCount must agree with a scan of `alive` (the shipped
+    // nodeCount is O(1) from liveCount, so this is what makes it trustworthy).
+    ok(s.liveCount === refNodeCount(g), `  ${name}: store liveCount == alive scan (${s.liveCount})`);
+    // edgeCount IS I1 — Σ deg / 2 vs distinct pairs, plus the invariant itself.
+    let degSum = 0;
+    for (let i = 0; i < g.highWater; i++) if (g.alive[i]) degSum += g.bondCount[i];
+    ok(computeGraphMetrics(metricView(s), ['edgeCount']).edgeCount === degSum / 2
+      && degSum / 2 === ref.edgeCount && checkHandshake(g) === null,
+      `  ${name}: edgeCount == Σdeg/2 == |distinct pairs| (I1 holds)`);
+    // The histogram's counts must sum to N — a metric that dropped a bucket would
+    // still "look like a histogram".
+    const hist = computeGraphMetrics(metricView(s), ['degreeHistogram']).degreeHistogram;
+    const histSum = Object.values(hist).reduce((a, b) => a + b, 0);
+    ok(histSum === ref.nodeCount, `  ${name}: histogram totals N (${histSum})`);
+  }
+
+  // ---- 2. the getState PAYLOAD path gives identical numbers --------------
+  {
+    let bad = null;
+    for (const [name, s] of fixtures) {
+      const transfers = [];
+      const payload = serializeAgentStore(s, transfers);
+      const g = decodeAgentGraph(payload);
+      const fromPayload = computeGraphMetrics(
+        { highWater: g.highWater, maxBonds: g.maxBonds, alive: g.alive, bondCount: g.bondCount, bondPartner: g.bondPartner },
+        GRAPH_METRICS,
+      );
+      const fromStore = computeGraphMetrics(metricView(s), GRAPH_METRICS);
+      for (const k of GRAPH_METRICS) {
+        if (!sameMetric(fromPayload[k], fromStore[k])) { bad = `${name}/${k}: ${JSON.stringify(fromPayload[k])} != ${JSON.stringify(fromStore[k])}`; break; }
+      }
+      if (bad) break;
+    }
+    ok(bad === null, 'a `getState` payload gives the SAME metrics as the live store (the browser probe path)', bad ?? '');
+  }
+
+  // ---- 3. a FRAGMENTING graph: 1 → 2 → 1 → 3 ----------------------------
+  {
+    // two 6-cycles joined by two bridges
+    const s = metricStore(12, 6);
+    for (let i = 0; i < 6; i++) formBond(s, i, (i + 1) % 6, 1, 0);
+    for (let i = 6; i < 12; i++) formBond(s, i, 6 + ((i - 6 + 1) % 6), 1, 0);
+    formBond(s, 0, 6, 1, 0); formBond(s, 3, 9, 1, 0);
+    const comps = () => computeGraphMetrics(metricView(s), ['componentCount']).componentCount;
+    const refComps = () => refComponents(storeGraph(s));
+    ok(comps() === 1 && refComps() === 1, `joined: componentCount == 1 (got ${comps()})`);
+    breakBond(s, 0, 6);
+    ok(comps() === 1 && refComps() === 1, 'one bridge broken: still ONE component (the other bridge holds)');
+    breakBond(s, 3, 9);
+    ok(comps() === 2 && refComps() === 2, `both bridges broken: the graph FRAGMENTS to 2 (got ${comps()})`);
+    ok(checkHandshake(storeGraph(s)) === null && checkBondSymmetry(storeGraph(s)) === null,
+      'the fragmented graph still satisfies I1 + I2');
+    formBond(s, 1, 7, 1, 0);
+    ok(comps() === 1 && refComps() === 1, 're-joining anywhere returns it to ONE component');
+    // …and a THIRD piece: killing a cut vertex splits again.
+    breakBond(s, 1, 7);
+    freeAgentSlot(s, 0);
+    ok(comps() === refComps() && comps() >= 2,
+      `killing an agent tracks the split exactly (shipped ${comps()} == reference ${refComps()})`);
+    // A metric that always answered 1 would have passed the first check only.
+    ok(comps() !== 1, 'NEG: the metric is not a constant 1');
+  }
+
+  // ---- 4. opt-in cost: which passes actually run -------------------------
+  {
+    const s = fixtures[1][1];
+    const v = metricView(s);
+    const mk = () => ({ degree: 0, components: 0 });
+    let p = mk(); computeGraphMetrics(v, [], p);
+    ok(p.degree === 0 && p.components === 0 && Object.keys(computeGraphMetrics(v, [])).length === 0,
+      'zero metrics requested ⇒ NO passes at all (the shape of "zero cost when unused")');
+    p = mk(); computeGraphMetrics(v, ['nodeCount'], p);
+    ok(p.degree === 0 && p.components === 0, 'nodeCount alone ⇒ no degree scan, no union-find (O(1) from liveCount)');
+    p = mk(); computeGraphMetrics(v, ['componentCount'], p);
+    ok(p.degree === 0 && p.components === 1, 'componentCount alone ⇒ union-find ONLY (no degree scan)');
+    p = mk(); computeGraphMetrics(v, ['edgeCount', 'meanDegree', 'maxDegree', 'degreeHistogram'], p);
+    ok(p.degree === 1 && p.components === 0,
+      'all four degree metrics ⇒ ONE shared O(N) pass, and componentCount stays unpaid');
+    p = mk(); computeGraphMetrics(v, GRAPH_METRICS, p);
+    ok(p.degree === 1 && p.components === 1, 'everything ⇒ exactly one degree pass + one union-find');
+  }
+
+  // ---- 5. DATA-level negative controls ----------------------------------
+  {
+    const base = () => {
+      const s = metricStore(10, 6);
+      for (let i = 0; i < 10; i++) formBond(s, i, (i + 1) % 10, 1, 0);
+      return s;
+    };
+    {
+      const s = base();
+      const v = metricView(s);
+      s.bondCount[2] += 1;                       // phantom degree
+      ok(metricMismatch(v, refAllMetrics(storeGraph(s))) !== null,
+        'NEG: an inflated bondCount makes edgeCount disagree with the distinct-pair recount');
+    }
+    {
+      const s = base();
+      s.alive[4] = 0;                            // dead but liveCount not updated
+      ok(metricMismatch(metricView(s), refAllMetrics(storeGraph(s))) !== null,
+        'NEG: a stale liveCount is CAUGHT (nodeCount is O(1) from it, the reference scans `alive`)');
+    }
+    {
+      const s = base();
+      breakBond(s, 0, 1);
+      const before = computeGraphMetrics(metricView(base()), ['edgeCount']).edgeCount;
+      const after = computeGraphMetrics(metricView(s), ['edgeCount']).edgeCount;
+      ok(after === before - 1, `NEG: breaking ONE bond drops edgeCount by exactly 1 (${before} → ${after})`);
+    }
+    {
+      const s = base();
+      const h0 = computeGraphMetrics(metricView(s), ['degreeHistogram']).degreeHistogram;
+      breakBond(s, 0, 1);
+      const h1 = computeGraphMetrics(metricView(s), ['degreeHistogram']).degreeHistogram;
+      ok(h0['2'] === 10 && h1['2'] === 8 && h1['1'] === 2,
+        'NEG: the histogram MOVES the two endpoints from degree 2 to degree 1',
+        `${JSON.stringify(h0)} → ${JSON.stringify(h1)}`);
+    }
+  }
+
+  // ---- 5b. the MEASURED cost at a realistic population --------------------
+  // componentCount is the only non-trivial metric; the handoff requires its cost
+  // to be stated rather than assumed. Reported as info + a generous ceiling so a
+  // slow CI box can't turn a perf note into a red gate.
+  {
+    const N = 20000, MB = 6;
+    const s = createAgentStore(bondCfg(N + 64, MB), []);
+    seedAgents(s, Array.from({ length: N }, (_, i) => ({ x: 1 + (i % 200) * 0.3, y: 1 + Math.floor(i / 200) * 0.3 })), 0.5);
+    const rnd = lcg(0xBEEF);
+    let made = 0;
+    for (let t = 0; t < N * 3; t++) {
+      const a = Math.floor(rnd() * N), b = Math.floor(rnd() * N);
+      if (a !== b && formBond(s, a, b, 1, 0)) made++;
+    }
+    const v = metricView(s);
+    const time = (metrics) => {
+      computeGraphMetrics(v, metrics);                       // warm
+      const t0 = performance.now();
+      for (let r = 0; r < 20; r++) computeGraphMetrics(v, metrics);
+      return (performance.now() - t0) / 20;
+    };
+    const tDeg = time(['edgeCount', 'meanDegree', 'maxDegree', 'degreeHistogram']);
+    const tComp = time(['componentCount']);
+    const tAll = time(GRAPH_METRICS);
+    console.log(`      cost @ N=${N} live, E=${made}, maxBonds=${MB}:  degree pass ${tDeg.toFixed(3)} ms · componentCount ${tComp.toFixed(3)} ms · all six ${tAll.toFixed(3)} ms`);
+    ok(tComp < 100, `componentCount at ${N} agents / ${made} edges costs ${tComp.toFixed(3)} ms (well under a frame)`);
+    ok(computeGraphMetrics(v, ['componentCount']).componentCount === refComponents(storeGraph(s)),
+      '  …and is still EXACT at that scale (vs the BFS reference)');
+  }
+
+  // ---- 6. UI-facing derivations ------------------------------------------
+  {
+    ok(GRAPH_METRICS.length === 6 && GRAPH_METRICS.every(k => GRAPH_METRIC_INFO[k]?.label),
+      'every metric has a label + hint (the panel dropdown reads them)');
+    ok(isGraphFrequencyMetric('degreeHistogram') && GRAPH_METRICS.filter(isGraphFrequencyMetric).length === 1,
+      'degreeHistogram is the ONLY frequency-shaped metric (so the rest take the scalar chart path)');
+    ok(graphMetricDataType('meanDegree') === 'float'
+      && ['nodeCount', 'edgeCount', 'maxDegree', 'componentCount', 'degreeHistogram'].every(k => graphMetricDataType(k) === 'integer'),
+      'meanDegree formats as a decimal, the counts as integers');
+    ok(degreeHistogramKeys(4).join(',') === '0,1,2,3,4' && degreeHistogramKeys(0).join(',') === '0',
+      'the histogram categories are the FIXED window 0..maxBonds');
+    // designTimeSeriesKeys must give a graph SCALAR the 'value' key (before P6 it
+    // fell through to the linked branches and returned [] — no colour slot).
+    const mdl = { centerBased: bondCfg(64, 5), attributes: [] };
+    ok(designTimeSeriesKeys({ id: 'a', kind: 'graph', graphMetric: 'edgeCount', dataType: 'integer' }, mdl).join(',') === 'value',
+      'designTimeSeriesKeys: a graph SCALAR gets the value series');
+    ok(designTimeSeriesKeys({ id: 'b', kind: 'graph', graphMetric: 'degreeHistogram', dataType: 'integer' }, mdl).join(',') === '0,1,2,3,4,5',
+      'designTimeSeriesKeys: the histogram gets one stable series per degree (0..maxBonds)',
+      designTimeSeriesKeys({ id: 'b', kind: 'graph', graphMetric: 'degreeHistogram', dataType: 'integer' }, mdl).join(','));
+  }
+}
+
+/** SOURCE-mutation negative controls: patch `graphMetrics.ts` itself, rebuild it
+ *  in isolation (it has no imports), and prove the exactness oracle CATCHES each
+ *  mutation. A harness that only ever passes is worthless — this is what shows
+ *  the comparison above has teeth. */
+async function tierIMutants() {
+  section('TIER I — SOURCE-mutation negative controls on graphMetrics.ts');
+  const src = readFileSync(join(ROOT, 'src/simulator/engine/graphMetrics.ts'), 'utf8');
+
+  // FIXTURE 0 — a HEALTHY graph with holes and two components. The chord sits on
+  // agents 2/4, NOT on agent 0, so the first live agent's degree is deliberately
+  // NOT the maximum: a maxDegree mutant that latches the first value must fail.
+  const s0 = metricStore(16, 6);
+  for (let i = 0; i < 8; i++) formBond(s0, i, (i + 1) % 8, 1, 0);
+  for (let i = 8; i < 16; i++) formBond(s0, i, 8 + ((i - 8 + 1) % 8), 1, 0);
+  formBond(s0, 2, 4, 1, 0);
+  freeAgentSlot(s0, 6);                    // a hole ⇒ the alive check matters
+  const view0 = metricView(s0), ref0 = refAllMetrics(storeGraph(s0));
+  ok(metricMismatch(view0, ref0) === null, 'mutation fixture 0 (healthy, holed, 2 components) is EXACT before any mutation');
+  ok(s0.bondCount[0] < ref0.maxDegree, `  fixture 0: the FIRST live agent is not the max-degree one (${s0.bondCount[0]} < ${ref0.maxDegree})`);
+
+  // FIXTURE 1 — a path 0–1–2–3–4 with agent 2 marked dead but its bonds LEFT
+  // dangling (an I3-violating state produced only here, on purpose). Only
+  // `componentCount` is compared on it: the shipped code and the BFS reference
+  // both refuse to traverse a dead partner, so they agree at 2 components, while
+  // a mutant that drops the alive check walks straight through and reports 1.
+  const s1 = metricStore(5, 4);
+  for (let i = 0; i < 4; i++) formBond(s1, i, i + 1, 1, 0);
+  s1.alive[2] = 0; s1.liveCount -= 1;      // dangling by construction
+  const view1 = metricView(s1);
+  const refComps1 = refComponents(storeGraph(s1));
+  ok(computeGraphMetrics(view1, ['componentCount']).componentCount === refComps1 && refComps1 === 2,
+    'mutation fixture 1 (dangling dead agent): shipped and reference both report 2 components');
+
+  const MUTANTS = [
+    ['edgeCount forgets the /2 (double-counts every edge)',
+      'out.edgeCount = degSum / 2;', 'out.edgeCount = degSum;', 0, GRAPH_METRICS],
+    ['the degree scan skips the alive check (counts dead slots)',
+      'if (!alive[i]) continue;\n      const d = bondCount[i] as number;', 'const d = bondCount[i] as number;', 0, GRAPH_METRICS],
+    ['maxDegree latches the FIRST degree instead of the largest',
+      'if (d > maxDeg) maxDeg = d;', 'if (maxDeg === 0) maxDeg = d;', 0, GRAPH_METRICS],
+    ['meanDegree divides by highWater instead of the live count',
+      'out.meanDegree = live > 0 ? degSum / live : 0;', 'out.meanDegree = hw > 0 ? degSum / hw : 0;', 0, GRAPH_METRICS],
+    ['the union-find never decrements (every node its own component)',
+      '      comps--;', '      ;', 0, ['componentCount']],
+    ['componentCount unions across a DEAD partner',
+      'if (p < 0 || p >= hw || p === i || !alive[p]) continue;', 'if (p < 0 || p >= hw || p === i) continue;', 1, ['componentCount']],
+    ['the histogram drops the last bucket (degree == maxBonds)',
+      'for (let d = 0; d <= mb; d++) m[String(d)] = hist[d]!;', 'for (let d = 0; d < mb; d++) m[String(d)] = hist[d]!;', 0, GRAPH_METRICS],
+  ];
+  const FIXTURES = [
+    { view: view0, ref: ref0 },
+    { view: view1, ref: { componentCount: refComps1 } },
+  ];
+
+  for (let mi = 0; mi < MUTANTS.length; mi++) {
+    const [label, from, to, fx, metrics] = MUTANTS[mi];
+    if (!src.includes(from)) { ok(false, `mutant anchor not found: ${label}`, from); continue; }
+    const mutPath = join(dir, `mut_${mi}.ts`);
+    writeFileSync(mutPath, src.replace(from, to));
+    const outMut = join(dir, `mut_${mi}.mjs`);
+    await build({ entryPoints: [mutPath], bundle: true, format: 'esm', platform: 'node', outfile: outMut, logLevel: 'error', absWorkingDir: ROOT });
+    const mm = await import(pathToFileURL(outMut).href);
+    const { view, ref } = FIXTURES[fx];
+    const got = mm.computeGraphMetrics(view, metrics);
+    let caught = false, detail = '';
+    for (const k of metrics) {
+      if (!sameMetric(got[k], ref[k])) { caught = true; detail = `${k}: ${JSON.stringify(got[k])} vs ${JSON.stringify(ref[k])}`; break; }
+    }
+    ok(caught, `NEG (source mutant, fixture ${fx}): ${label} — CAUGHT by the exactness oracle`, caught ? '' : `no metric moved (${JSON.stringify(got)})`);
+    if (caught) console.log(`      ↳ ${detail}`);
+  }
+}
+
 tierA();
 tierB();
 await tierC();
@@ -2320,6 +2768,8 @@ tierE();
 tierF();
 tierG();
 tierH();
+tierI();
+await tierIMutants();
 
 console.log(`\n${fail === 0 ? 'GRAPH-REWRITE HARNESS ✓' : 'GRAPH-REWRITE HARNESS ✗'}  (${pass} passed, ${fail} failed)`);
 rmSync(entryPath, { force: true });
