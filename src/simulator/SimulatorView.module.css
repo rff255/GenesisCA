@@ -607,7 +607,10 @@
  * pill + the transport bar pill as two distinct flex items. */
 .transportBarRow {
   position: absolute;
-  bottom: var(--space-6);
+  /* Half the historical --space-6 (12px) inset — the bar sat further off the
+     canvas edge than it needed to. The bottom-right capture stack shares this
+     baseline so the two read as one row of chrome along the bottom edge. */
+  bottom: var(--space-3);
   left: 50%;
   transform: translateX(-50%);
   display: flex;
@@ -738,7 +741,32 @@
   height: 12px;
 }
 
-/* --- Top-left stats overlay (discreet, no background) --- */
+/* --- Bottom-right stack: the stats readout ABOVE the capture cluster --- */
+
+/* ONE bottom-anchored flex column owns both, so they can never overlap however
+ * many stat lines a model produces (agent models add several) — a second
+ * independently bottom-anchored overlay would collide the moment the stats grew.
+ * The column is tight around its children (align-items: flex-end + auto width),
+ * so it does not blanket the corner of the canvas; `data-sim-overlay` on the
+ * wrapper covers every descendant for the brush-passthrough rule. */
+.bottomRightStack {
+  position: absolute;
+  /* Bottom-ALIGNED with .transportBarRow (same --space-3 baseline) so the bar
+   * and the capture cluster read as one row of chrome along the canvas edge.
+   *
+   * They share a band, and the bar is CENTRED + content-sized while the cluster
+   * is right-anchored, so in principle they could meet. MEASURED: they only
+   * touch below ~430px of canvas width (see docs/PLAN_CAPTURE_UI.md "As built"),
+   * which the side panels' own minimum widths make unreachable in the app — so
+   * the collision is handled by NOT existing rather than by a permanent gap. */
+  bottom: var(--space-3);
+  right: var(--space-4);
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: var(--space-2);
+}
 
 .statsOverlay {
   /* Bottom-right corner — vertical column tucked against the right edge of the
@@ -746,13 +774,12 @@
    * the first entries. Right side is empty (the right-panel ear sits at the
    * top-right), so a low-key narrow strip down there reads cleanly.
    *
+   * Positioning now belongs to .bottomRightStack (above) — this element is a
+   * plain flow child of that column.
+   *
    * On hover the strip dims behind a 60% black backdrop so the text becomes
    * legible against busy cells. No backdrop otherwise — keeps the overlay
    * unobtrusive while the user is looking at the simulation itself. */
-  position: absolute;
-  bottom: var(--space-6);
-  right: var(--space-4);
-  z-index: 4;
   display: flex;
   flex-direction: column;
   align-items: flex-end;
@@ -767,6 +794,173 @@
 .statsOverlay:hover {
   background: rgba(0, 0, 0, 0.6);
   color: rgba(220, 230, 245, 0.95);
+}
+
+/* --- Capture cluster (screenshot + record + the settings chip) --------------
+ * The bottom-most element of the right-edge stack. Capture is OUTPUT, so it
+ * lives with the other readouts on the right edge rather than inline with the
+ * transport bar's playback (time) controls. */
+
+.captureCluster {
+  position: relative; /* anchors .capturePopover */
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  background: var(--color-bg-panel);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  padding: var(--space-2) var(--space-3);
+}
+
+/* The chip has its OWN relative wrapper (like the FPS / G-F readouts) so the
+   popover anchors to the chip rather than the whole cluster, and hovering the
+   camera / record buttons does not pop the settings open. */
+.captureChipWrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+/* The summary chip: a readout of the frozen-at-Start configuration AND the
+   popover trigger. Accent-coloured so the configuration stays glanceable. */
+.captureChip {
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-widget-border);
+  border-radius: var(--radius-md);
+  color: var(--color-accent);
+  font-size: var(--font-3xs);
+  cursor: pointer;
+  padding: var(--space-2) var(--space-3);
+  line-height: 1;
+  white-space: nowrap;
+  box-shadow: var(--shadow-button-inset);
+  transition: background var(--duration-base), border-color var(--duration-base);
+}
+
+.captureChip:hover:not(:disabled) {
+  background: var(--color-hover-bg);
+  border-color: var(--color-border-muted);
+}
+
+.captureChip:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* Opens UPWARD-LEFT from the bottom-right anchor. Flush against the trigger
+   (bottom: 100%, NO gap) — the popover opens on HOVER of the wrapper and
+   enter/leave are DOM-tree based, so a visual gap is a hit-test hole that
+   fires pointerleave while crossing into the popover. `right: 0` means it can
+   never overflow the right edge; max-height clamps it against a short canvas. */
+.capturePopover {
+  position: absolute;
+  bottom: 100%;
+  right: 0;
+  min-width: 250px;
+  max-height: calc(100vh - 140px);
+  overflow-y: auto;
+  padding: var(--space-4) var(--space-5);
+  background: var(--color-bg-panel);
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45);
+  z-index: 40;
+}
+
+.capturePopTitle {
+  font-size: var(--font-3xs);
+  letter-spacing: 0.8px;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+  margin-bottom: var(--space-3);
+}
+
+.captureRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-6);
+  padding: var(--space-1) 0;
+  font-size: var(--font-2xs);
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+}
+
+/* Inapplicable settings are DISABLED IN PLACE, never unmounted — stable
+   geometry, and the reason is stated instead of the control vanishing. */
+.captureRowDisabled {
+  opacity: 0.42;
+}
+
+.captureWhy {
+  font-size: var(--font-3xs);
+  color: var(--color-text-muted);
+  line-height: 1.4;
+  margin: 1px 0 var(--space-2);
+  white-space: normal;
+  max-width: 250px;
+}
+
+/* The applicable explanation and the disabled reason differ in length, so
+   swapping them would resize the popover and slide every row out from under the
+   cursor — the same class of defect as unmounting the control itself. Both
+   variants share ONE grid cell, so the box is always as tall as the TALLER of
+   the two and the geometry is EXACT regardless of which is showing. */
+.captureWhyStack {
+  display: grid;
+}
+
+.captureWhyStack > * {
+  grid-area: 1 / 1;
+}
+
+.captureWhyHidden {
+  visibility: hidden;
+}
+
+.captureSep {
+  height: 1px;
+  background: var(--color-border);
+  margin: var(--space-3) calc(-1 * var(--space-5));
+}
+
+/* A binary choice is a two-state SEGMENT, never a dropdown. */
+.captureSeg {
+  display: inline-flex;
+  border: 1px solid var(--color-widget-border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
+.captureSegBtn {
+  background: transparent;
+  border: none;
+  color: var(--color-text-muted);
+  font-size: var(--font-3xs);
+  line-height: 1;
+  padding: var(--space-2) var(--space-3);
+  cursor: pointer;
+  transition: background var(--duration-base), color var(--duration-base);
+}
+
+.captureSegBtn:hover:not(:disabled) {
+  background: var(--color-hover-bg);
+  color: var(--color-text-secondary);
+}
+
+.captureSegBtnOn {
+  background: var(--color-accent);
+  color: var(--color-bg-panel);
+  font-weight: 600;
+}
+
+.captureSegBtnOn:hover:not(:disabled) {
+  background: var(--color-accent);
+  color: var(--color-bg-panel);
+}
+
+.captureSegBtn:disabled {
+  cursor: default;
 }
 
 /* --- Zoom controls (bottom-left of canvas) --- */

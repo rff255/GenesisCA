@@ -215,12 +215,31 @@ function forceFrameOpaque(data: Uint8ClampedArray): void {
   for (let i = 3; i < data.length; i += 4) data[i] = 255;
 }
 
-/** Explicit high-contrast colours for the transport-bar <select> option popups
- *  (both shipped themes are dark). The `.transportBtn` class leaves options at the
- *  browser default (light text on a white OS popup → unreadable when expanded); a
- *  concrete dark bg + light text fixes it regardless of theme (CSS vars don't
- *  reliably reach native <option> popups, so these are concrete). */
-const PICK_OPT_STYLE: CSSProperties = { background: '#1b1d24', color: '#eaeaea' };
+/** A binary choice is a two-state SEGMENT, never a dropdown — the rule that came
+ *  out of the capture-controls reorganisation (a full <select> for an either/or
+ *  was the most wasteful control on the transport bar). Used by the capture
+ *  popover; `disabled` greys the whole segment IN PLACE (never unmounted) so the
+ *  popover's geometry is stable and the reason can be stated beneath it. */
+function captureSegment<T extends string>(
+  options: ReadonlyArray<{ label: string; value: T; disabled?: boolean }>,
+  value: T,
+  onPick: (v: T) => void,
+  disabled: boolean,
+) {
+  return (
+    <span className={styles.captureSeg}>
+      {options.map(o => (
+        <button
+          key={o.value}
+          type="button"
+          className={`${styles.captureSegBtn} ${value === o.value ? styles.captureSegBtnOn : ''}`}
+          disabled={disabled || o.disabled}
+          onClick={() => onPick(o.value)}
+        >{o.label}</button>
+      ))}
+    </span>
+  );
+}
 
 /** M1 (audit) — the direct-agent-render gate terms that a SOFT recompile can flip.
  *  Everything ELSE in the gate (topology, dimension, agent target, decoupling,
@@ -1003,18 +1022,30 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
     };
   }, [showInstructions]);
 
-  // --- Transport speed POPUP sliders (FPS / Gens-per-Frame) ----------------
+  // --- Canvas-overlay POPOVERS (FPS / Gens-per-Frame sliders, capture settings)
   // The inline sliders were replaced by compact readout buttons that open a
-  // small vertical-slider popover; one popover at a time. Session-only UI
+  // small popover; ONE popover at a time (hence the single state + the single
+  // wrapper ref, assigned to whichever is currently open). Session-only UI
   // state (the VALUES keep their existing persistence). Dismissed by a
   // capture-phase outside pointerdown (the context-menu pattern) or Escape.
-  const [speedPopup, setSpeedPopup] = useState<'fps' | 'gpf' | null>(null);
-  const speedPopupWrapRef = useRef<HTMLDivElement | null>(null);
+  const [overlayPopup, setOverlayPopup] = useState<'fps' | 'gpf' | 'capture' | null>(null);
+  const overlayPopupWrapRef = useRef<HTMLDivElement | null>(null);
+  // Bottom-band collision refs — declared up here because draw() (defined well
+  // above the effect that owns the logic) is the guaranteed re-check trigger.
+  // See the "Bottom-band collision" effect for what they do.
+  const canvasAreaRef = useRef<HTMLDivElement | null>(null);
+  const transportRowRef = useRef<HTMLDivElement | null>(null);
+  const bottomRightStackRef = useRef<HTMLDivElement | null>(null);
+  /** draw() calls this when the canvas container's width changed — the one
+   *  trigger guaranteed to fire on every real layout change. */
+  const measureCaptureCollisionRef = useRef<(() => void) | null>(null);
+  const captureCollisionWidthRef = useRef(0);
+
   useEffect(() => {
-    if (!speedPopup) return;
+    if (!overlayPopup) return;
     const onDown = (e: PointerEvent) => {
-      if (speedPopupWrapRef.current && !speedPopupWrapRef.current.contains(e.target as globalThis.Node)) {
-        setSpeedPopup(null);
+      if (overlayPopupWrapRef.current && !overlayPopupWrapRef.current.contains(e.target as globalThis.Node)) {
+        setOverlayPopup(null);
       }
     };
     const onKey = (e: KeyboardEvent) => {
@@ -1022,7 +1053,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
         // Capture-phase + stopPropagation so Esc closes the popover instead of
         // firing the simulator's Esc=reset shortcut (the shortcuts-overlay rule).
         e.stopPropagation();
-        setSpeedPopup(null);
+        setOverlayPopup(null);
       }
     };
     document.addEventListener('pointerdown', onDown, true);
@@ -1031,7 +1062,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       document.removeEventListener('pointerdown', onDown, true);
       document.removeEventListener('keydown', onKey, true);
     };
-  }, [speedPopup]);
+  }, [overlayPopup]);
   const indicatorValuesRef = useRef<Record<string, number | Record<string, number> | Record<string, number[]>>>({});
   // For scalar indicators: number[] of samples over time.
   // For linked-frequency indicators: Record<category, number[]> so each category
@@ -3481,6 +3512,19 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
   }, []);
 
   const draw = useCallback(() => {
+    // Bottom-band collision re-check (capture cluster vs the CENTRED transport
+    // bar). The container's width is what moves the bar's centre relative to the
+    // right-anchored cluster, and draw() already runs on every layout change
+    // (panel resize / collapse, window resize, tab switch), so this is the one
+    // trigger that is guaranteed to fire — the ResizeObserver in the effect is
+    // belt-and-braces. `clientWidth` on an already-laid-out element is cheap and
+    // the actual rect measurement only runs when the width really changed.
+    const capW = canvasAreaRef.current?.clientWidth ?? 0;
+    if (capW && capW !== captureCollisionWidthRef.current) {
+      captureCollisionWidthRef.current = capW;
+      measureCaptureCollisionRef.current?.();
+    }
+
     // 3D Grid CA: render the voxel volume via WebGL2 instead of the 2D blit.
     // Everything is read via refs (this callback has empty deps + ~20 call sites).
     if (is3dRef.current && gl3dRef.current) {
@@ -10563,6 +10607,62 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
   useEffect(() => { if (!overseerEnabled) setRightPanelTab('controls'); }, [overseerEnabled]);
   const [topBarOpen, setTopBarOpen] = useState(true);
   const [bottomBarOpen, setBottomBarOpen] = useState(true);
+  // --- Bottom-band collision: lift the capture stack over the transport bar ---
+  // The bar and the bottom-right stack share one baseline (they read as one row
+  // of chrome), but the bar is CENTRED + content-sized while the stack is
+  // right-anchored, so they meet once the canvas gets narrow. MEASURED on an
+  // agent model: they touch at a canvas width of 843 px (= barW + 2·(8 px inset
+  // + clusterW)) — a 1263 px window with both side panels open, i.e. an ordinary
+  // laptop, NOT an absurd width. So it is handled, but CONDITIONALLY: no
+  // permanent gap under the cluster, and no magic number — the lift is the
+  // measured bar height, applied only while the two actually overlap.
+  //
+  // The predicate is HORIZONTAL only, so it is stable once lifted (moving the
+  // stack up cannot change its left/right edges) — no oscillation.
+  const [captureStackLift, setCaptureStackLift] = useState(0);
+  useEffect(() => {
+    const measure = () => {
+      const stack = bottomRightStackRef.current;
+      const row = transportRowRef.current;
+      if (!stack) return;
+      // No bar (collapsed) → nothing to clear.
+      if (!row || row.offsetParent === null) { setCaptureStackLift(0); return; }
+      const s = stack.getBoundingClientRect();
+      const r = row.getBoundingClientRect();
+      if (s.width === 0 || r.width === 0) return; // hidden tab — keep the last value
+      const overlaps = r.right > s.left && s.right > r.left;
+      // 4px = the stack's own inter-element gap, reused as the bar clearance.
+      setCaptureStackLift(overlaps ? Math.round(r.height) + 4 : 0);
+    };
+    // A ResizeObserver can fire on a layout that has not fully settled (a
+    // viewport resize observed mid-reflow measured the OLD bar position and
+    // left the lift stuck on), so every trigger ALSO re-checks on the next
+    // frame. rAF-coalesced, so a resize drag costs one extra measure per frame.
+    let raf = 0;
+    const measureSoon = () => {
+      measure();
+      if (raf) return;
+      raf = requestAnimationFrame(() => { raf = 0; measure(); });
+    };
+    measureSoon();
+    measureCaptureCollisionRef.current = measureSoon;
+    // Observe BOTH sizes (label / collapse changes) AND the container (a panel
+    // resize moves the centred bar without changing anyone's size).
+    const ro = new ResizeObserver(measureSoon);
+    if (canvasAreaRef.current) ro.observe(canvasAreaRef.current);
+    if (transportRowRef.current) ro.observe(transportRowRef.current);
+    if (bottomRightStackRef.current) ro.observe(bottomRightStackRef.current);
+    window.addEventListener('resize', measureSoon);
+    return () => {
+      ro.disconnect();
+      window.removeEventListener('resize', measureSoon);
+      if (measureCaptureCollisionRef.current === measureSoon) measureCaptureCollisionRef.current = null;
+      if (raf) cancelAnimationFrame(raf);
+    };
+    // bottomBarOpen remounts the row, so the observer must re-bind to the new node.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bottomBarOpen, visible]);
+
   const leftPanelRef = useRef<HTMLDivElement>(null);
   const rightPanelRef = useRef<HTMLDivElement>(null);
   // Remembers panel + bar state before entering F-fullscreen so the toggle
@@ -10938,7 +11038,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       )}
 
       {/* === Canvas Area === */}
-      <div className={styles.canvasArea}>
+      <div className={styles.canvasArea} ref={canvasAreaRef}>
         {compileError && (
           <div className={styles.errorBanner} data-sim-overlay>
             {compileError}
@@ -10985,8 +11085,18 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
         <canvas ref={cursorNegCanvasRef} className={styles.canvas}
           style={{ position: 'absolute', left: 0, top: 0, pointerEvents: 'none', mixBlendMode: 'difference', display: is3D ? 'none' : undefined }} />
 
-        {/* Top-left stats (discreet, no background) */}
-        <div className={styles.statsOverlay} data-sim-overlay>
+        {/* Bottom-right stack — the stats readout ABOVE the capture cluster, in
+            ONE bottom-anchored flex column so the two can never overlap however
+            many stat lines a model produces (agent models add several).
+            `data-sim-overlay` on the wrapper covers every descendant, so a click
+            anywhere in here can never fall through and paint the canvas. */}
+        <div
+          className={styles.bottomRightStack}
+          ref={bottomRightStackRef}
+          style={captureStackLift ? { bottom: `calc(var(--space-3) + ${captureStackLift}px)` } : undefined}
+          data-sim-overlay
+        >
+        <div className={styles.statsOverlay}>
           <span>Gen {generation}</span>
           <span>{gridWidth.current || simWidth}&times;{gridHeight.current || simHeight}</span>
           <span>{actualFps} FPS</span>
@@ -11035,6 +11145,152 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
             </span>
           )}
           {isAgentModel && (agentsRef.current || agentDirectRenderActiveRef.current) && <span title="Live agents">{'\u25CF'} {agentDirectRenderActiveRef.current ? agentLiveCountRef.current : (agentsRef.current?.liveCount ?? 0)} agents</span>}
+        </div>
+
+        {/* \u2500\u2500 Capture cluster: screenshot + record + the settings chip \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+            Capture is OUTPUT, so it lives on the right edge with the readouts
+            rather than inline with the transport bar's playback (time) controls.
+            Only \uD83D\uDCF7 and \u23FA are pressed during a session; every configuration sits
+            behind the chip's popover, so the bar never carries (or reflows) it. */}
+        {(() => {
+          // `recordFormat` can never be 'webm' without WebCodecs (the state
+          // initialiser already falls back), but startRecording re-checks
+          // defensively \u2014 mirror that here so the chip can never advertise a
+          // format the recorder would not actually use.
+          const effWebm = recordFormat === 'webm' && webmAvailable;
+          const areaLabel = recordScope === 'simulation' ? 'sim' : 'view';
+          const chipParts = [
+            effWebm ? 'WebM' : 'GIF',
+            // In 3D the scene fills the frame \u2014 there is no separate area to name.
+            ...(is3D ? [] : [areaLabel]),
+            // Quality is a WebM-only concept (GIF has no keyframe structure).
+            ...(effWebm ? [recordQuality === 'archival' ? 'Arch' : 'Std'] : []),
+          ];
+          // Every setting is frozen from Start to Stop (the encoder requires it),
+          // so while recording the chip is a read-only readout of what is running.
+          const settingsLocked = recording || encodingWebM;
+          return (
+            <div className={styles.captureCluster}>
+              <button
+                className={styles.transportBtn}
+                onClick={handleScreenshot}
+                title={`Screenshot PNG${is3D ? '' : ` (${screenshotScope === 'simulation' ? 'simulation' : 'current view'})`} \u2014 settings in the chip to the right`}
+              >{'\uD83D\uDCF7'}</button>
+              {!recording ? (
+                <button
+                  className={styles.transportBtn}
+                  onClick={startRecording}
+                  disabled={encodingWebM}
+                  title={encodingWebM ? 'Encoding WebM\u2026' : `Record ${effWebm ? 'WebM' : 'GIF'} (${!is3D && recordScope === 'simulation' ? 'simulation' : 'current view'}) \u2014 settings in the chip to the right`}
+                  style={{ color: '#e05050' }}
+                >{'\u23FA'}</button>
+              ) : (
+                <button
+                  className={styles.transportBtn}
+                  onClick={stopRecording}
+                  title={`Stop & Save ${effWebm ? 'WebM' : 'GIF'} (${!is3D && recordScope === 'simulation' ? 'simulation' : 'current view'})${recordDroppedCount > 0 ? ` \u2014 ${recordDroppedCount} frame(s) skipped so far` : ''}${recordThrottled ? ' \u2014 the simulation is being held back while the encoder catches up' : ''}`}
+                  style={{ color: '#e05050' }}
+                >
+                  {'\u23F9'} {recordFrameCount}
+                  {recordDroppedCount > 0 && <span style={{ color: '#e0a050' }}>{' \u2212'}{recordDroppedCount}</span>}
+                  {recordThrottled ? ' \u23F3' : ''}
+                </button>
+              )}
+
+              {/* The chip = readout + popover trigger. Its OWN wrapper (like the
+                  FPS/G-F readouts) so hovering \uD83D\uDCF7 / \u23FA does not pop the settings
+                  open, and so the popover anchors to the chip itself. */}
+              <div
+                className={styles.captureChipWrap}
+                ref={overlayPopup === 'capture' ? overlayPopupWrapRef : undefined}
+                onPointerEnter={() => { if (!settingsLocked) setOverlayPopup('capture'); }}
+                onPointerLeave={() => setOverlayPopup(p => (p === 'capture' ? null : p))}
+              >
+                <button
+                  className={styles.captureChip}
+                  disabled={settingsLocked}
+                  onClick={() => setOverlayPopup(p => (p === 'capture' ? null : 'capture'))}
+                  title={settingsLocked
+                    ? 'Capture settings are locked for the whole run \u2014 the encoder needs the format, area and quality to hold from Start to Stop.'
+                    : 'Capture settings (screenshot area, recording format / area / quality / overload) \u2014 hover or click'}
+                >{chipParts.join(' \u00B7 ')} {'\u25BE'}</button>
+
+                {overlayPopup === 'capture' && !settingsLocked && (
+                  <div className={styles.capturePopover} data-sim-overlay>
+                    <div className={styles.capturePopTitle}>Capture</div>
+
+                    <div className={`${styles.captureRow} ${is3D ? styles.captureRowDisabled : ''}`}>
+                      <span>Screenshot area</span>
+                      {captureSegment(
+                        [{ label: 'View', value: 'view' as RecordScope }, { label: 'Simulation', value: 'simulation' as RecordScope }],
+                        is3D ? 'view' : screenshotScope,
+                        setScreenshotScope,
+                        is3D,
+                      )}
+                    </div>
+                    {is3D && <div className={styles.captureWhy}>A 3D scene fills the frame \u2014 there is no separate simulation crop.</div>}
+
+                    <div className={styles.captureSep} />
+
+                    <div className={styles.captureRow}>
+                      <span>Record format</span>
+                      {captureSegment(
+                        [{ label: 'WebM', value: 'webm' as RecordFormat, disabled: !webmAvailable }, { label: 'GIF', value: 'gif' as RecordFormat }],
+                        effWebm ? 'webm' : 'gif',
+                        setRecordFormat,
+                        false,
+                      )}
+                    </div>
+                    {!webmAvailable && <div className={styles.captureWhy}>WebM needs WebCodecs \u2014 not available in this browser. GIF is 256 colours, max 512 px, and keeps every frame in memory.</div>}
+
+                    <div className={`${styles.captureRow} ${is3D ? styles.captureRowDisabled : ''}`}>
+                      <span>Record area</span>
+                      {captureSegment(
+                        [{ label: 'View', value: 'view' as RecordScope }, { label: 'Simulation', value: 'simulation' as RecordScope }],
+                        is3D ? 'view' : recordScope,
+                        setRecordScope,
+                        is3D,
+                      )}
+                    </div>
+                    <div className={styles.captureWhy}>{is3D
+                      ? 'A 3D scene fills the frame — there is no separate simulation crop.'
+                      : 'Simulation: the whole grid / world framed to fit, independent of your zoom & pan. View: the display canvas exactly as shown.'}</div>
+
+                    <div className={styles.captureSep} />
+
+                    <div className={`${styles.captureRow} ${effWebm ? '' : styles.captureRowDisabled}`}>
+                      <span>Quality</span>
+                      {captureSegment(
+                        [{ label: 'Standard', value: 'standard' as RecordQuality }, { label: 'Archival', value: 'archival' as RecordQuality }],
+                        recordQuality,
+                        setRecordQuality,
+                        !effWebm,
+                      )}
+                    </div>
+                    <div className={styles.captureWhyStack}>
+                      <div className={`${styles.captureWhy} ${effWebm ? '' : styles.captureWhyHidden}`}>Standard: a keyframe every 30 frames \u2014 ~6\u00D7 smaller and ~3\u00D7 faster, so the run stays closer to full speed (scrubbing lands on 30-frame boundaries). Archival: every frame independently decodable, for frame-by-frame analysis.</div>
+                      <div className={`${styles.captureWhy} ${effWebm ? styles.captureWhyHidden : ''}`}>GIF has no keyframe structure \u2014 WebM only.</div>
+                    </div>
+
+                    <div className={`${styles.captureRow} ${effWebm ? '' : styles.captureRowDisabled}`}>
+                      <span>If the encoder lags</span>
+                      {captureSegment(
+                        [{ label: 'Skip frames', value: 'drop' as RecordOverload }, { label: 'Never skip', value: 'lossless' as RecordOverload }],
+                        recordOverload,
+                        setRecordOverload,
+                        !effWebm,
+                      )}
+                    </div>
+                    <div className={styles.captureWhyStack}>
+                      <div className={`${styles.captureWhy} ${effWebm ? '' : styles.captureWhyHidden}`}>Skip frames: the simulation keeps full speed and the frames it could not encode are left out (counted next to REC). Never skip: every captured frame is encoded and the simulation is held back until the encoder catches up.</div>
+                      <div className={`${styles.captureWhy} ${effWebm ? styles.captureWhyHidden : ''}`}>GIF buffers every frame; nothing can fall behind.</div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          );
+        })()}
         </div>
 
         {/* Author-written usage instructions \u2014 pill + dismissible card (only when
@@ -11188,7 +11444,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
 
         {/* Bottom overlay: attached ear pill + transport bar pill in a flex
             wrapper. Ear visually adjacent to (and separate from) the bar. */}
-        <div className={styles.transportBarRow} data-sim-overlay>
+        <div className={styles.transportBarRow} ref={transportRowRef} data-sim-overlay>
           <button
             className={styles.barAttachedEar}
             onClick={() => setBottomBarOpen(v => !v)}
@@ -11212,21 +11468,22 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
           <input ref={stateFileInputRef} type="file" accept=".gcastate" style={{ display: 'none' }} onChange={handleLoadState} />
           <div className={styles.transportDivider} />
 
-          {/* Speed controls (left side) \u2014 compact readout, click for the
-              vertical-slider popover. */}
+          {/* Speed readouts \u2014 FPS and Gens/Frame sit TOGETHER: they are the same
+              kind of setting (both open a vertical-slider popover) and used to be
+              at opposite ends of the bar with the capture controls between them. */}
           <div
             className={styles.transportSpeed}
-            ref={speedPopup === 'fps' ? speedPopupWrapRef : undefined}
+            ref={overlayPopup === 'fps' ? overlayPopupWrapRef : undefined}
             data-sim-overlay
-            onPointerEnter={() => setSpeedPopup('fps')}
-            onPointerLeave={() => setSpeedPopup(p => (p === 'fps' ? null : p))}
+            onPointerEnter={() => setOverlayPopup('fps')}
+            onPointerLeave={() => setOverlayPopup(p => (p === 'fps' ? null : p))}
           >
             <button
-              className={`${styles.transportBtn} ${speedPopup === 'fps' ? styles.zoomBtnActive : ''}`}
-              onClick={() => setSpeedPopup(p => (p === 'fps' ? null : 'fps'))}
+              className={`${styles.transportBtn} ${overlayPopup === 'fps' ? styles.zoomBtnActive : ''}`}
+              onClick={() => setOverlayPopup(p => (p === 'fps' ? null : 'fps'))}
               title="Display frame rate (frames per second) \u2014 hover or click to adjust"
             >FPS {unlimitedFps ? '\u221E' : targetFps}</button>
-            {speedPopup === 'fps' && (
+            {overlayPopup === 'fps' && (
               <div className={styles.speedPopup} data-sim-overlay>
                 <span className={styles.speedPopupValue}>{unlimitedFps ? '\u221E' : targetFps}</span>
                 <div className={styles.speedPopupSliderWrap}>
@@ -11241,122 +11498,21 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
               </div>
             )}
           </div>
-          <div className={styles.transportDivider} />
 
-          {/* Playback controls (center) */}
-          <button className={styles.transportBtn} onClick={() => setPlaying(true)} disabled={playing} title="Play (Enter)">&#9654;</button>
-          <button className={styles.transportBtn} onClick={() => setPlaying(false)} disabled={!playing} title="Pause (Enter)">&#9646;&#9646;</button>
-          <button className={styles.transportBtn} onClick={handleStep} title="Step (Space)">&#9654;|</button>
-          <button className={styles.transportBtn} onClick={handleReset} title="Reset (Esc)">&#9632;</button>
-          <button
-            className={styles.transportBtn}
-            onClick={handleScreenshot}
-            title={`Screenshot PNG${is3D ? '' : ` (${screenshotScope === 'simulation' ? 'simulation' : 'current view'})`}`}
-          >{'\uD83D\uDCF7'}</button>
-          {/* Screenshot capture scope \u2014 same dilemma as recording. Hidden in 3D
-              (no letterbox \u2192 simulation == current view). */}
-          {!is3D && (
-            <select
-              className={styles.transportBtn}
-              value={`png:${screenshotScope}`}
-              onChange={e => setScreenshotScope(e.target.value.split(':')[1] as RecordScope)}
-              title={'Screenshot scope \u2014 "current view" keeps the panel margins as shown; "simulation" crops to the area of interest'}
-              style={{ color: '#eaeaea', padding: '4px 4px', fontSize: '0.65rem' }}
-            >
-              <option value="png:view" style={PICK_OPT_STYLE}>PNG (current view)</option>
-              <option value="png:simulation" style={PICK_OPT_STYLE}>PNG (simulation)</option>
-            </select>
-          )}
-          {!recording ? (
-            <>
-              <button
-                className={styles.transportBtn}
-                onClick={startRecording}
-                disabled={encodingWebM}
-                title={encodingWebM ? 'Encoding WebM\u2026' : `Record ${recordFormat.toUpperCase()} (${!is3D && recordScope === 'simulation' ? 'simulation' : 'current view'})`}
-                style={{ color: '#e05050' }}
-              >{'\u23FA'}</button>
-              <select
-                className={styles.transportBtn}
-                value={`${recordFormat}:${is3D ? 'view' : recordScope}`}
-                onChange={e => {
-                  const [fmt, scope] = e.target.value.split(':') as [RecordFormat, RecordScope];
-                  setRecordFormat(fmt);
-                  // In 3D the scope is fixed to the full frame \u2014 don't overwrite the
-                  // user's 2D scope preference just because a format was picked here.
-                  if (!is3D) setRecordScope(scope);
-                }}
-                disabled={encodingWebM}
-                title={webmAvailable
-                  ? (is3D
-                    ? 'Recording format (a 3D scene fills the frame \u2014 no separate simulation crop)'
-                    : 'Recording format \u2014 "current view" keeps the panel margins as shown; "simulation" crops to the area of interest')
-                  : 'WebM not supported in this browser \u2014 use GIF instead'}
-                style={{ color: '#eaeaea', padding: '4px 4px', fontSize: '0.65rem' }}
-              >
-                {is3D ? (
-                  <>
-                    <option value="webm:view" disabled={!webmAvailable} style={PICK_OPT_STYLE}>WebM</option>
-                    <option value="gif:view" style={PICK_OPT_STYLE}>GIF</option>
-                  </>
-                ) : (
-                  <>
-                    <option value="webm:view" disabled={!webmAvailable} style={PICK_OPT_STYLE}>WebM (current view)</option>
-                    <option value="webm:simulation" disabled={!webmAvailable} style={PICK_OPT_STYLE}>WebM (simulation)</option>
-                    <option value="gif:view" style={PICK_OPT_STYLE}>GIF (current view)</option>
-                    <option value="gif:simulation" style={PICK_OPT_STYLE}>GIF (simulation)</option>
-                  </>
-                )}
-              </select>
-              {/* Quality + overload policy \u2014 WebM only (GIF has no GOP and no
-                  streaming encoder to fall behind), and only while NOT recording,
-                  so every recording choice locks together at Start. */}
-              {recordFormat === 'webm' && webmAvailable && (
-                <>
-                  <select
-                    className={styles.transportBtn}
-                    value={recordQuality}
-                    onChange={e => setRecordQuality(e.target.value as RecordQuality)}
-                    disabled={encodingWebM}
-                    title={'Recording quality \u2014 "Standard" keyframes every 30 frames: ~3.5\u00D7 smaller files and ~1.8\u00D7 faster encoding, so the simulation runs closer to full speed while recording (scrubbing lands on 30-frame boundaries). "Archival" makes every frame a keyframe: independently decodable for frame-by-frame analysis, scrub-exact, and no interframe prediction bleeding across previously-stable regions \u2014 but ~3.5\u00D7 larger and ~1.8\u00D7 slower.'}
-                    style={{ color: '#eaeaea', padding: '4px 4px', fontSize: '0.65rem' }}
-                  >
-                    <option value="standard" style={PICK_OPT_STYLE}>Standard</option>
-                    <option value="archival" style={PICK_OPT_STYLE}>Archival</option>
-                  </select>
-                  <select
-                    className={styles.transportBtn}
-                    value={recordOverload}
-                    onChange={e => setRecordOverload(e.target.value as 'drop' | 'lossless')}
-                    disabled={encodingWebM}
-                    title={'What gives when the encoder cannot keep up \u2014 "Skip frames" keeps the simulation at full speed and leaves those generations out of the video (skips are counted next to REC). "Never skip" encodes every captured frame and holds the simulation back until the encoder catches up: the run gets slower, the video loses nothing.'}
-                    style={{ color: '#eaeaea', padding: '4px 4px', fontSize: '0.65rem' }}
-                  >
-                    <option value="drop" style={PICK_OPT_STYLE}>Skip frames</option>
-                    <option value="lossless" style={PICK_OPT_STYLE}>Never skip</option>
-                  </select>
-                </>
-              )}
-            </>
-          ) : (
-            <button className={styles.transportBtn} onClick={stopRecording} title={`Stop & Save ${recordFormat.toUpperCase()} (${!is3D && recordScope === 'simulation' ? 'simulation' : 'current view'})`} style={{ color: '#e05050' }}>{'\u23F9'} {recordFrameCount}{recordThrottled ? ' \u23F3' : ''}</button>
-          )}
-          <div className={styles.transportDivider} />
-
-          {/* Gens/frame (right side) \u2014 compact readout, click for the popover. */}
+          {/* Gens/frame \u2014 compact readout, click for the popover. */}
           <div
             className={styles.transportSpeed}
-            ref={speedPopup === 'gpf' ? speedPopupWrapRef : undefined}
+            ref={overlayPopup === 'gpf' ? overlayPopupWrapRef : undefined}
             data-sim-overlay
-            onPointerEnter={() => setSpeedPopup('gpf')}
-            onPointerLeave={() => setSpeedPopup(p => (p === 'gpf' ? null : p))}
+            onPointerEnter={() => setOverlayPopup('gpf')}
+            onPointerLeave={() => setOverlayPopup(p => (p === 'gpf' ? null : p))}
           >
             <button
-              className={`${styles.transportBtn} ${speedPopup === 'gpf' ? styles.zoomBtnActive : ''}`}
-              onClick={() => setSpeedPopup(p => (p === 'gpf' ? null : 'gpf'))}
+              className={`${styles.transportBtn} ${overlayPopup === 'gpf' ? styles.zoomBtnActive : ''}`}
+              onClick={() => setOverlayPopup(p => (p === 'gpf' ? null : 'gpf'))}
               title="Generations simulated per displayed frame \u2014 hover or click to adjust"
             >G/F {unlimitedGens ? '\u221E' : gensPerFrame}</button>
-            {speedPopup === 'gpf' && (
+            {overlayPopup === 'gpf' && (
               <div className={styles.speedPopup} data-sim-overlay>
                 <span className={styles.speedPopupValue}>{unlimitedGens ? '\u221E' : gensPerFrame}</span>
                 <div className={styles.speedPopupSliderWrap}>
@@ -11369,6 +11525,13 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
               </div>
             )}
           </div>
+          <div className={styles.transportDivider} />
+
+          {/* Playback controls (center) */}
+          <button className={styles.transportBtn} onClick={() => setPlaying(true)} disabled={playing} title="Play (Enter)">&#9654;</button>
+          <button className={styles.transportBtn} onClick={() => setPlaying(false)} disabled={!playing} title="Pause (Enter)">&#9646;&#9646;</button>
+          <button className={styles.transportBtn} onClick={handleStep} title="Step (Space)">&#9654;|</button>
+          <button className={styles.transportBtn} onClick={handleReset} title="Reset (Esc)">&#9632;</button>
         </div>
 
         {playing && unlimitedGens && (

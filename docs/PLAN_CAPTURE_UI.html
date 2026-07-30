@@ -1,0 +1,247 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>GenesisCA — Capture controls: chosen design</title>
+<style>
+  :root{
+    --bg:#0c0d10; --panel:#16181d; --elev:#1c1f26; --border:#2a2e37;
+    --text:#d8dae0; --muted:#8a8f9a; --accent:#e8a13a; --rec:#e05050; --ok:#5bc98a;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;padding:32px 28px 64px;background:var(--bg);color:var(--text);
+       font-family:system-ui,-apple-system,"Segoe UI",sans-serif;font-size:14px;line-height:1.55}
+  .wrap{max-width:1080px;margin:0 auto}
+  h1{font-size:22px;margin:0 0 6px;letter-spacing:.2px}
+  h2{font-size:16px;margin:36px 0 4px;color:var(--accent);letter-spacing:.3px}
+  h2 .tag{font-size:11px;color:var(--muted);font-weight:400;letter-spacing:.4px;margin-left:8px}
+  h3{font-size:12px;margin:18px 0 6px;color:var(--muted);text-transform:uppercase;letter-spacing:.7px;font-weight:600}
+  p{margin:8px 0} .lead{color:var(--muted);max-width:80ch}
+  .rule{height:1px;background:var(--border);margin:26px 0 0}
+
+  .stage{background:#0a0b0e;border:1px solid var(--border);border-radius:10px;padding:20px 18px;margin:12px 0 6px;
+         background-image:radial-gradient(circle at 30% 20%,#12161c 0,#0a0b0e 60%)}
+  .bar{display:inline-flex;align-items:center;gap:4px;background:var(--panel);border:1px solid var(--border);
+       border-radius:9px;padding:5px 6px;box-shadow:0 4px 18px #0008}
+  .btn{display:inline-flex;align-items:center;justify-content:center;gap:4px;min-width:26px;height:24px;padding:0 6px;
+       background:transparent;border:1px solid var(--border);border-radius:5px;color:var(--text);font-size:11px;white-space:nowrap}
+  .btn.sel{background:#12141a;padding-right:16px;position:relative;color:#eaeaea}
+  .btn.sel::after{content:"▾";position:absolute;right:5px;font-size:9px;color:var(--muted)}
+  .btn.rec{color:var(--rec);border-color:#3a2626}
+  .btn.ghost{color:var(--muted)}
+  .div{width:1px;height:16px;background:var(--border);margin:0 3px}
+  .hl{outline:2px dashed var(--rec);outline-offset:3px;border-radius:7px}
+  .hl-ok{outline:2px dashed var(--ok);outline-offset:3px;border-radius:7px}
+  .cap{font-size:12px;color:var(--muted);margin:10px 0 0} .cap b{color:var(--text);font-weight:600}
+  .note{font-size:12px;color:var(--muted);border-left:2px solid var(--border);padding-left:10px;margin:12px 0}
+  .kbd{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:11px;background:#12141a;border:1px solid var(--border);
+       border-radius:3px;padding:0 4px}
+
+  /* ── canvas diagram ── */
+  .canvas{position:relative;height:340px;border:1px solid var(--border);border-radius:8px;overflow:hidden;
+          background:repeating-linear-gradient(90deg,#0e1116 0 12px,#0c0f13 12px 24px),
+                     repeating-linear-gradient(0deg,#0e1116 0 12px,#0c0f13 12px 24px)}
+  .canvas .lbl{position:absolute;font-size:10px;color:#5d6470;letter-spacing:.6px;text-transform:uppercase}
+  .ear{position:absolute;background:var(--elev);border:1px solid var(--border);color:var(--muted);font-size:11px;
+       padding:5px 3px;border-radius:0 5px 5px 0}
+  .zoomcol{position:absolute;bottom:60px;left:12px;display:flex;flex-direction:column;gap:3px}
+  .zoomcol .zb{width:26px;height:26px;display:flex;align-items:center;justify-content:center;background:var(--elev);
+               border:1px solid #33383f;border-radius:5px;color:var(--muted);font-size:12px}
+  .rightstack{position:absolute;bottom:12px;right:12px;display:flex;flex-direction:column;align-items:flex-end;gap:7px}
+  .stats{font-size:10.5px;color:#8f98a6;line-height:1.5;text-align:right;font-family:ui-monospace,Menlo,Consolas,monospace}
+  .capcluster{display:inline-flex;align-items:center;gap:4px;background:var(--panel);border:1px solid var(--border);
+              border-radius:7px;padding:4px 5px;box-shadow:0 4px 16px #0009}
+  .chip{background:#12141a;border:1px solid #33383f;border-radius:5px;color:var(--accent);font-size:10.5px;
+        padding:0 15px 0 6px;height:24px;display:inline-flex;align-items:center;position:relative}
+  .chip::after{content:"▾";position:absolute;right:4px;font-size:9px;color:var(--muted)}
+  .barmini{position:absolute;bottom:12px;left:50%;transform:translateX(-50%)}
+
+  /* ── popover ── */
+  .pop{display:inline-block;background:var(--elev);border:1px solid var(--border);border-radius:8px;
+       padding:10px 11px;box-shadow:0 12px 34px #000b;min-width:252px;vertical-align:top}
+  .pop h4{margin:0 0 8px;font-size:10px;letter-spacing:.8px;text-transform:uppercase;color:var(--muted);font-weight:600}
+  .row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:4px 0;font-size:12px}
+  .row .lab{color:var(--muted)} .row.dis{opacity:.42}
+  .seg{display:inline-flex;border:1px solid var(--border);border-radius:5px;overflow:hidden}
+  .seg span{padding:2px 8px;font-size:11px;color:var(--muted)}
+  .seg span.on{background:var(--accent);color:#16181d;font-weight:600}
+  .why{font-size:10.5px;color:#6f7580;margin:1px 0 6px;padding-left:2px}
+  .sep{height:1px;background:var(--border);margin:8px -11px}
+  .flexrow{display:flex;gap:22px;flex-wrap:wrap;align-items:flex-start}
+
+  table{border-collapse:collapse;width:100%;margin:12px 0 4px;font-size:12.5px}
+  th,td{border:1px solid var(--border);padding:7px 9px;text-align:left;vertical-align:top}
+  th{background:#13161b;color:var(--muted);font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.5px}
+  td.good{color:var(--ok)} td.bad{color:var(--rec)} td.mid{color:var(--accent)}
+  .rec-box{border:1px solid var(--accent);background:#1a1710;border-radius:8px;padding:14px 16px;margin:16px 0 0}
+  .rec-box h3{margin-top:0;color:var(--accent)}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1>Capture controls — chosen design</h1>
+  <p class="lead">
+    <b>Option C</b> (capture leaves the transport bar entirely) with <b>Option A's</b> summary chip + popover,
+    plus two adjustments: the capture cluster lives at the <b>bottom-right, beneath the stats readout</b> (not with the
+    bottom-left view cluster), and <b>G/F moves next to FPS</b> on the bar since they are the same kind of setting.
+  </p>
+
+  <!-- ═══════ BEFORE ═══════ -->
+  <h2>Before <span class="tag">2D · WebM selected</span></h2>
+  <div class="stage">
+    <div class="bar">
+      <span class="btn ghost">🖫</span><span class="btn ghost">🗁</span><span class="div"></span>
+      <span class="btn">FPS 60</span><span class="div"></span>
+      <span class="btn">▶</span><span class="btn">⏸</span><span class="btn">▶|</span><span class="btn">■</span>
+      <span class="hl" style="display:inline-flex;gap:4px;align-items:center">
+        <span class="btn">📷</span><span class="btn sel">PNG (simulation)</span><span class="btn rec">⏺</span>
+        <span class="btn sel">WebM (simulation)</span><span class="btn sel">Standard</span><span class="btn sel">Skip frames</span>
+      </span>
+      <span class="div"></span><span class="btn">G/F 1</span>
+    </div>
+    <p class="cap">Six capture controls (~470 px) wedged between Reset and G/F — and the last two <b>unmount for GIF</b>,
+      shifting everything to their right. FPS and G/F sit at opposite ends despite being the same kind of setting.</p>
+  </div>
+
+  <div class="rule"></div>
+
+  <!-- ═══════ AFTER: THE BAR ═══════ -->
+  <h2>After — the transport bar</h2>
+  <div class="stage">
+    <div class="bar">
+      <span class="btn ghost">🖫</span><span class="btn ghost">🗁</span><span class="div"></span>
+      <span class="hl-ok" style="display:inline-flex;gap:4px;align-items:center">
+        <span class="btn">FPS 60</span><span class="btn">G/F 1</span>
+      </span>
+      <span class="div"></span>
+      <span class="btn">▶</span><span class="btn">⏸</span><span class="btn">▶|</span><span class="btn">■</span>
+    </div>
+    <p class="cap">Pure playback + the two speed readouts, now adjacent (both open their existing vertical-slider
+      popovers). <b>Zero capture controls</b>; the bar loses ~470 px and never reflows.</p>
+  </div>
+
+  <!-- ═══════ AFTER: THE CANVAS ═══════ -->
+  <h2>After — where capture goes</h2>
+  <div class="stage">
+    <div class="canvas">
+      <span class="lbl" style="top:10px;left:14px">simulation canvas</span>
+      <span class="ear" style="top:14px;left:0">›</span>
+      <span class="ear" style="top:14px;right:0;border-radius:5px 0 0 5px">‹</span>
+
+      <!-- bottom-left: unchanged view cluster -->
+      <div class="zoomcol">
+        <span class="zb">+</span><span class="zb">−</span><span class="zb">⛶</span><span class="zb">▦</span><span class="zb">∞</span>
+      </div>
+      <span class="lbl" style="bottom:36px;left:46px;color:#4d545e">view controls — unchanged</span>
+
+      <!-- bottom-centre: transport bar -->
+      <div class="barmini">
+        <div class="bar" style="transform:scale(.92);transform-origin:bottom center">
+          <span class="btn ghost">🖫</span><span class="btn ghost">🗁</span><span class="div"></span>
+          <span class="btn">FPS 60</span><span class="btn">G/F 1</span><span class="div"></span>
+          <span class="btn">▶</span><span class="btn">⏸</span><span class="btn">▶|</span><span class="btn">■</span>
+        </div>
+      </div>
+
+      <!-- bottom-right: stats + capture -->
+      <div class="rightstack">
+        <div class="stats">
+          Gen 12 480<br>1 208 agents<br>58 fps · 16.9 ms<br>WASM · agents WebGPU
+        </div>
+        <div class="hl-ok">
+          <div class="capcluster">
+            <span class="btn">📷</span><span class="btn rec">⏺</span><span class="chip">WebM · sim · Std</span>
+          </div>
+        </div>
+      </div>
+    </div>
+    <p class="cap">Capture becomes the bottom-most element of the <b>right-edge stack</b>: the stats column (generation,
+      agents, fps, targets) sits directly above it. Output actions on the right, view actions on the left, time controls
+      in the middle.</p>
+  </div>
+  <div class="note">
+    The stats overlay is anchored to the bottom today, so it must be <b>lifted by the cluster's height</b> — the robust
+    form is one bottom-right flex column containing both, so the two can never overlap no matter how many stat lines a
+    model produces (agent models add several).
+  </div>
+
+  <!-- ═══════ THE POPOVER ═══════ -->
+  <h2>The chip and its popover</h2>
+  <div class="stage">
+    <div class="flexrow">
+      <div>
+        <div class="pop">
+          <h4>Capture</h4>
+          <div class="row"><span class="lab">Screenshot</span>
+            <span class="seg"><span>View</span><span class="on">Simulation</span></span></div>
+          <div class="sep"></div>
+          <div class="row"><span class="lab">Record format</span>
+            <span class="seg"><span class="on">WebM</span><span>GIF</span></span></div>
+          <div class="row"><span class="lab">Record area</span>
+            <span class="seg"><span>View</span><span class="on">Simulation</span></span></div>
+          <div class="row"><span class="lab">Quality</span>
+            <span class="seg"><span class="on">Standard</span><span>Archival</span></span></div>
+          <div class="why">Standard: keyframes every 30 frames — ~6× smaller, ~3× faster. Archival: every frame
+            independently decodable, for frame-by-frame analysis.</div>
+          <div class="row"><span class="lab">If the encoder lags</span>
+            <span class="seg"><span class="on">Skip frames</span><span>Never skip</span></span></div>
+          <div class="why">Never skip holds the simulation back rather than dropping frames.</div>
+        </div>
+        <p class="cap">Opens upward-left from the chip. Binary choices are <b>two-state segments</b>, never dropdowns.</p>
+      </div>
+      <div>
+        <div class="pop" style="min-width:236px">
+          <h4>Capture — GIF selected</h4>
+          <div class="row"><span class="lab">Record format</span>
+            <span class="seg"><span>WebM</span><span class="on">GIF</span></span></div>
+          <div class="row dis"><span class="lab">Quality</span>
+            <span class="seg"><span class="on">Standard</span><span>Archival</span></span></div>
+          <div class="why">GIF has no keyframe structure — WebM only.</div>
+          <div class="row dis"><span class="lab">If the encoder lags</span>
+            <span class="seg"><span class="on">Skip frames</span><span>Never skip</span></span></div>
+          <div class="why">GIF buffers every frame; nothing can fall behind.</div>
+        </div>
+        <p class="cap"><b>Disabled in place, never unmounted</b> — geometry stays fixed, and the reason is stated instead
+          of the control silently vanishing.</p>
+      </div>
+    </div>
+  </div>
+
+  <h3>While recording</h3>
+  <div class="stage">
+    <div class="capcluster">
+      <span class="btn">📷</span>
+      <span class="btn rec">⏹ 128 ⏳</span>
+      <span class="chip" style="opacity:.5">WebM · sim · Std</span>
+    </div>
+    <p class="cap">⏺ becomes ⏹ with the frame count (plus the skip count and the ⏳ throttle indicator). The chip keeps
+      showing the <b>frozen</b> configuration but its popover is disabled — settings stay locked from Start to Stop,
+      exactly as the encoder requires.</p>
+  </div>
+
+  <div class="rule"></div>
+
+  <h2>Why this shape <span class="tag">options considered</span></h2>
+  <table>
+    <tr><th>&nbsp;</th><th>Before</th><th>Chosen (C + A's chip)</th><th>A alone</th><th>B — right panel</th><th>D — dialog</th></tr>
+    <tr><td>Controls on the bar</td><td class="bad">6 (~470 px)</td><td class="good">0</td><td class="mid">3</td><td class="mid">2</td><td class="mid">3</td></tr>
+    <tr><td>Reflow on format change</td><td class="bad">yes</td><td class="good">no</td><td class="good">no</td><td class="good">no</td><td class="good">no</td></tr>
+    <tr><td>Config visible at a glance</td><td class="mid">as clutter</td><td class="good">the chip</td><td class="good">the chip</td><td class="bad">only if open</td><td class="bad">tooltip</td></tr>
+    <tr><td>Grouped by purpose</td><td class="bad">mixed with playback</td><td class="good">output on the right edge</td><td class="bad">still on the bar</td><td class="mid">in settings</td><td class="bad">still on the bar</td></tr>
+    <tr><td>Build cost</td><td>—</td><td class="good">low</td><td class="good">low</td><td class="good">low</td><td class="bad">high</td></tr>
+  </table>
+
+  <div class="rec-box">
+    <h3>Two rules that outlive this change</h3>
+    <p style="margin:0">
+      <b>1. Never unmount an inapplicable control</b> — disable it in place with a one-line reason, so overlay geometry
+      is stable and the user learns <em>why</em> instead of watching a control disappear.
+      <b>2. A binary choice is a two-state segment, not a dropdown</b> — a full <span class="kbd">&lt;select&gt;</span>
+      for an either/or was the most wasteful control on the bar.
+    </p>
+  </div>
+
+</div>
+</body>
+</html>
