@@ -16,5 +16,11 @@
     "name": "Decide Life State",
     "description": "",
     "file": "Game Of Life Core.gcamacro"
+  },
+  {
+    "key": "GRA Rule Table",
+    "name": "GRA Rule Table",
+    "description": "The graph-rewriting authoring idiom: neighbour census + own state → a rule table → one of {Idle, Divide, Die, Bond, Unbond}. Pick the census attribute, the own-state attribute and the Lookup Table after dropping.",
+    "file": "GRA Rule Table.gcamacro"
   }
 ]

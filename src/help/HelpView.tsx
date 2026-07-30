@@ -1583,6 +1583,43 @@ export function HelpView() {
               list. <strong>Set Velocity</strong> sets an agent&rsquo;s velocity directly (needs
               Momentum &gt; 0).</li>
           </ul>
+          <h3 className={styles.h3}>Neighbour Census &mdash; the input a graph rule reads</h3>
+          <p className={styles.p}>
+            A rule that runs on a <em>graph</em> cannot name its neighbours &mdash; there is no
+            lattice ordering, and every agent may have a different number of them. So the only
+            thing such a rule can legitimately read is an <strong>order-independent,
+            degree-tolerant summary</strong>: how many neighbours are in each state.
+            &ldquo;Two red, one blue, no green.&rdquo;
+          </p>
+          <p className={styles.p}>
+            <strong>Neighbour Census</strong> is that summary as a single node. Point it at a
+            <em> tag</em> or <em>binary</em> agent attribute and it grows{' '}
+            <strong>one output port per state value</strong>, labelled with the option name, plus
+            a <strong>Total</strong> (how many neighbours there are at all). Choose where the
+            neighbours come from: <strong>Bonded neighbours</strong> (the bonded 1-ring &mdash; the
+            graph proper) or <strong>Nearby agents</strong> (everything inside a radius). Without
+            it you would wire <em>Get Bonded Agents &rarr; Get Agents Attribute &rarr; Count
+            Matching</em> plus a constant <em>once for every state value</em>.
+          </p>
+          <p className={styles.p}>
+            Two things worth knowing. Ports you don&rsquo;t connect cost <strong>nothing</strong>
+            &mdash; only the counts you actually read are computed, so a five-state census used
+            for one state is as cheap as one count. And <strong>Total</strong> is the natural
+            &ldquo;do I have any neighbours at all?&rdquo; guard: an agent whose 1-ring is empty
+            usually has no rule to apply, so gating the rule on <em>Total &gt; 0</em> leaves it
+            untouched instead of treating it as surrounded by emptiness.
+          </p>
+          <p className={styles.p}>
+            The typical shape is <strong>census &rarr; rule table &rarr; verb</strong>: feed the
+            counts (and the agent&rsquo;s own state) into a tag-valued{' '}
+            <strong>Lookup Table</strong>, then <strong>Switch</strong> on the value it returns to
+            pick what to do &mdash; divide, die, bond, unbond, or nothing. The rule becomes a table
+            you can look at and re-roll with <em>Randomize</em>. Drop the{' '}
+            <strong>GRA Rule Table</strong> macro from the Palette to get that whole shape
+            pre-wired. See the <em>Life on Bonds</em> sample for a worked example: Conway&rsquo;s
+            Game of Life with each agent bonded to its eight neighbours, the rule read entirely
+            through one census node.
+          </p>
           <h3 className={styles.h3}>Spawning Agents (Create &rarr; Add, in either event)</h3>
           <p className={styles.p}>
             Beyond the <em>Seed Count</em> the engine lays down on Reset, you spawn agents

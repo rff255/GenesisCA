@@ -18,6 +18,7 @@ import { cellAttrsOf, cellFieldAttrsOf } from '../../model/attributeScope';
 import { vectorPortDims } from './compiler/vectorAttr';
 import { is3dModelLike } from './compiler/niCodec';
 import { MULTI_ATTR_TYPES, MULTI_ATTR_SET_TYPES, multiAttrExtraCount, buildExtraSlotPorts, resolveSlotAttr } from './compiler/multiAttrExpand';
+import { buildCensusPorts, censusAttributes } from './compiler/censusExpand';
 import { applyLookupAxisPorts } from './nodes/LookupInteractionNode';
 import {
   isConnectingGlobal,
@@ -514,6 +515,15 @@ function CaNodeComponent({ id, data }: NodeProps) {
     outputPorts = [...outputPorts, ...extraSlots.outputs];
   }
 
+  // Neighbour Census: one integer output per state value of the chosen tag/bool
+  // agent attribute, labelled with the option name, BEFORE the static Total.
+  // ONE shared builder with effectivePorts.ts (buildCensusPorts) so the render
+  // and the drag/drop port model can't drift. See censusExpand.ts.
+  if (nodeData.nodeType === 'neighbourCensus') {
+    const censusPorts = buildCensusPorts(nodeData.nodeType, nodeData.config, model);
+    outputPorts = [...censusPorts.outputs, ...outputPorts];
+  }
+
   // Table Lookup: shape the index inputs per the referenced table — legacy
   // 2-axis keeps Row/Col (axis_* dropped); a MULTI-AXIS table shows one input
   // per axis, labeled with the axis names. ONE shared shaper with
@@ -843,6 +853,10 @@ function CaNodeComponent({ id, data }: NodeProps) {
       // Field-bridge nodes target a CELL (field) attribute.
       const attr = cellAttrsOf(model).find(a => a.id === nodeData.config.attributeId);
       collapsedLabel = attr ? `${displayNodeLabel(def)} · ${attr.name}` : displayNodeLabel(def);
+    } else if (nodeData.nodeType === 'neighbourCensus') {
+      const attr = censusAttributes(model).find(a => a.id === nodeData.config.attributeId);
+      const src = nodeData.config.source === 'nearby' ? ' (nearby)' : '';
+      collapsedLabel = attr ? `Census · ${attr.name}${src}` : displayNodeLabel(def);
     } else if (nodeData.nodeType === 'setCellLooks') {
       const glyphTag = nodeData.config.useGlyph ? ' + glyph' : '';
       if (nodeData.config.mappingId === CURRENT_VIEWER_SENTINEL) {
@@ -1228,6 +1242,33 @@ function CaNodeComponent({ id, data }: NodeProps) {
             <option value="absolute">Absolute (position)</option>
             <option value="relative">Relative (from reference)</option>
           </select>
+        )}
+
+        {/* Neighbour Census (Graph-Rewriting Automata): the tag/bool AGENT attribute
+            whose state values become the output ports, plus the neighbour SOURCE
+            (the bonded 1-ring, or a proximity radius). Changing the attribute
+            re-derives the ports via buildCensusPorts. */}
+        {nodeData.nodeType === 'neighbourCensus' && (
+          <>
+            <select
+              className={styles.select}
+              value={(nodeData.config.attributeId as string) || ''}
+              onChange={e => updateConfig('attributeId', e.target.value)}
+            >
+              <option value="">Agent attribute (tag / binary)...</option>
+              {censusAttributes(model).map(a => (
+                <option key={a.id} value={a.id}>{a.name}</option>
+              ))}
+            </select>
+            <select
+              className={styles.select}
+              value={(nodeData.config.source as string) || 'bonded'}
+              onChange={e => updateConfig('source', e.target.value)}
+            >
+              <option value="bonded">Bonded neighbours (1-ring)</option>
+              <option value="nearby">Nearby agents (radius)</option>
+            </select>
+          </>
         )}
 
         {/* Field-bridge nodes (Bond-Graph Agents) reference a CELL attribute — the

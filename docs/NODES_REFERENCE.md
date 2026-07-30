@@ -4,11 +4,14 @@ This document catalogues every node in the GenesisCA Visual Programming Language
 describes the port type system, and flags redundancies or gaps. It is a working reference
 to inform future consolidation — it does **not** describe any committed refactoring.
 
-**Scope:** 146 registry node types across 7 categories (event, flow, data, logic, aggregation,
+**Scope:** 147 registry node types across 7 categories (event, flow, data, logic, aggregation,
 output, color) — 3 hidden from the Add Node menu (`macro` / `macroInput` / `macroOutput`),
-leaving **143 selectable** (**Apply Force To Agent** [`applyForceToAgent`] + **Apply Force To
+leaving **144 selectable** (**Neighbour Census** [`neighbourCensus`] is the newest — the
+neighbour-state multiset as one node with one labelled port per state value, the input a
+homogeneous GRAPH rule reads; lowered before compile so it costs no per-target emit;
+**Apply Force To Agent** [`applyForceToAgent`] + **Apply Force To
 Agents** [`applyForceToAgents`, the array-broadcast sibling, lowered to For Each → the single
-node] are the newest — add a force vector to ANOTHER agent (or every agent in an id array) by id,
+node] add a force vector to ANOTHER agent (or every agent in an id array) by id,
 the commutative cross-agent counterpart to Apply Force [race-free in both agent update modes];
 **Get Grid Dimensions** [`getGridDimensions`] —
 a UNIVERSAL node exposing the world's Width / Height / Depth (+ optional Center X/Y/Z = ⌊size/2⌋) on BOTH graphs;
@@ -21,7 +24,7 @@ from a seed for rule-space search] — see the dedicated section at the end of t
 Indicator
 nodes live within the `data` (readers) and `output` (writers) categories rather than a
 category of their own. The variegated-cells, local-variable, and Bond-Graph-Agent nodes
-appear in the editor only when their respective model feature is enabled (the 47 agent
+appear in the editor only when their respective model feature is enabled (the 48 agent
 nodes — §3.8 — only in a Bond-Graph-Agents model, and only on its Agents sub-tab, and each
 further gated to its **Agent Capability** so a paradigm shows only its relevant nodes; the
 20 Overseer nodes only in a model with the Overseer enabled, and only on its Overseer
@@ -346,6 +349,7 @@ exists purely to keep graphs readable without Sequence nodes. See
 | 119 | `applyForceToAgents` | Apply Force To Agents | `output` | Add the SAME force vector to EVERY agent in an id array — the broadcast sibling of Apply Force To Agent. Feed the `Agents` array from Get Nearby / Bonded / Filter Agents to push a whole sensed group at once. Also commutative → race-free in both update modes. | `I: DO` `I: Agents` (int **array**) `I: Force X` `I: Force Y` (float, inline); 3D adds `I: Force Z` / `O: NEXT` (flow) | **Pure editor sugar** — a shared pre-compile pass (`expandForceToAgents`) lowers it to `For Each In Array → Apply Force To Agent`, so it reuses the single node's emitters on all three targets (no new per-target code). Needs Motion = Force. `Force Z` hidden in 2D |
 | 93 | `setAgentAttribute` | Set Agent Attribute | `output` | Write an attribute on ANOTHER agent by id (the agent analogue of Set Neighbor Attribute By Index) — signal a neighbour. Extra attribute slots write several of that agent's attributes through the ONE shared Agent input. | `I: DO` `I: Agent` (int) `I: Value` (float, inline) + `I: value_N` per extra slot / `O: NEXT` (flow) | Requires `attributeId` (+ each slot's `attr_N`). Immediate single-buffer (async-style) write — use commutative patterns when order matters; id range-guarded |
 | 95 | `getBondedAgents` | Get Bonded Agents | `data` | This agent's bonded partners as an id array — the data sibling of For Each Bond. Filter / join / aggregate them exactly like Get Nearby Agents. | `O: Agents` (int **array**) | Per-agent (never hoisted). Reads the ragged bond store, keeping live partners only |
+| 120 | `neighbourCensus` | Neighbour Census | `aggregation` | The **multiset of neighbour states** — one labelled INTEGER output per state value of a tag/bool AGENT attribute, plus `Total`. The only legal input to a homogeneous GRAPH rule (a node cannot name its neighbours, so it may read only an order-independent, degree-tolerant aggregate). Replaces `Get Bonded Agents → Get Agents Attribute → Count Matching` wired once per state value. | `I: Radius` (float, inline — `nearby` source only) / `O: <option name>` (int) **per state value**, `O: Total` (int) | **Pure editor sugar** — a shared pre-compile pass (`expandNeighbourCensus`) lowers it to the gather + one Count Matching per **consumed** state port (+ Array Length for `Total`), so it reuses those emitters on all three targets (no new per-target code) and needs no supported-types entry. `source` = `bonded` (the 1-ring, default) or `nearby` (a radius). Requires a tag/bool agent attribute; the count ports are DYNAMIC (rebuilt from its options). Capability: Bonds **or** Sensing |
 | 96 | `filterAgents` | Filter Agents | `aggregation` | Keep the agents in an id array whose AGENT attribute passes a comparison — the agent analogue of Filter Neighbors over plain ids (no NeighborIndex codec). | `I: Agents` (int **array**) `I: Compare` (any, inline) / `O: Filtered` (int **array**), `O: Count` (int) | Multi-output. Requires `attributeId` + `operation` (==, !=, >, <, >=, <=); reads the agent SoA at `r_<attr>[id]` |
 | 97 | `joinAgents` | Join Agents | `aggregation` | Combine two agent id arrays by union (all unique) or intersection (in both) — e.g. nearby ∪ bonded, or nearby ∩ of-my-type. | `I: A` (int **array**) `I: B` (int **array**) / `O: Result` (int **array**), `O: Count` (int) | Multi-output. Requires `operation` (union / intersection); the empty sentinel is `-1` |
 | 98 | `pickRandomAgent` | Pick Random Agent | `aggregation` | Pick one id at random from an agent id array (e.g. Get Nearby / Filter Agents). The agent analogue of Pick Random Neighbor. | `I: Agents` (int **array**) / `O: Agent` (int) | Returns `-1` when empty. Shares the same `_rs` xorshift32 stream as Get Random (reproducible). Per-agent, impure |

@@ -50,6 +50,7 @@ import { expandMacros } from '../macroExpand';
 import { collapseReroutes } from '../rerouteCollapse';
 import { expandMultiAttrs } from '../multiAttrExpand';
 import { expandForceToAgents } from '../forceToAgentsExpand';
+import { expandNeighbourCensus } from '../censusExpand';
 import { expandComposites } from '../expandComposites';
 import { injectAgentLinkedOutputMappings } from '../agentLinkedOutputMappings';
 import { lowerVectorAttrs, expandVectorAttributes } from '../vectorAttr';
@@ -3154,6 +3155,11 @@ function flattenAgentGraph(nodes: GraphNode[], edges: GraphEdge[], model: CAMode
   if (expanded.error) return { nodes, edges, model, error: expanded.error };
   let n = expanded.nodes, e = expanded.edges;
   ({ nodes: n, edges: e } = collapseReroutes(n, e));
+  // Neighbour State Census → Get Bonded/Nearby Agents + Get Agents Attribute +
+  // one Count Matching per CONSUMED state port (+ Array Length for `total`) — all
+  // already supported, so the gate + emitter never see the census node and it runs
+  // on WebGPU with zero per-target emit. See censusExpand.ts.
+  ({ nodes: n, edges: e } = expandNeighbourCensus(n, e, model));
   // Apply Force To Agents (array broadcast) → For Each In Array → Apply Force To
   // Agent (both already supported), so the gate + emitter never see the array node.
   ({ nodes: n, edges: e } = expandForceToAgents(n, e, model));

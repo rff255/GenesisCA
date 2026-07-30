@@ -1,0 +1,622 @@
+{
+  "schemaVersion": 1,
+  "properties": {
+    "name": "Life on Bonds",
+    "description": "Conway's Game of Life as a GRAPH rule: each agent is bonded to its 8 Moore neighbours and reads its neighbours through a single Neighbour Census node — the multiset of neighbour states — instead of a lattice neighbourhood.",
+    "ruleDescription": "Agents sit on a 32x32 torus lattice and are bonded to their 8 Moore neighbours by the engine auto-bond (form multiplier 1.9 x contact 0.9 = 1.71, which admits the orthogonal neighbours at 1.0 and the diagonals at 1.414 but excludes the next ring at 2.0). One Neighbour Census node over the bool `alive` attribute yields the True count and the Total; the rule is next = (n == 3) OR (alive AND n == 2). Auto-bond runs in the structural phase at the END of a step, so generation 1 still sees an empty 1-ring — the rule is therefore gated on Total > 0 (an isolated node keeps its state), which makes generation 1 a pure topology bootstrap. From generation 2 on every agent has exactly 8 bonds and the dynamics are Conway exactly. Agents are pinned (bond stiffness 0, no collision, no growth, momentum 0) and updated synchronously. The agent target is WebAssembly rather than WebGPU on purpose: the census is exact on all three targets, but WebGPU does not double-buffer agent attributes for synchronous mode, so any neighbour-reading sync rule races there (a pre-existing limitation that affects the proximity-based Game of Life on Agents too).",
+    "instructions": "Press Play. Generation 1 only forms the bonds (the board is unchanged); Conway starts at generation 2. Open the Modeler > Agents graph to see the whole rule: one Neighbour Census node replaces the Get Bonded Agents -> Get Agents Attribute -> Count Matching chain you would otherwise wire once per state value.",
+    "author": "Conway",
+    "modelAuthor": "",
+    "tags": [
+      "agents",
+      "graph-rewriting",
+      "bonds",
+      "census",
+      "game-of-life"
+    ],
+    "dimension": "2d",
+    "gridWidth": 32,
+    "gridHeight": 32,
+    "gridDepth": 1,
+    "topology": "2d-grid",
+    "boundaryTreatment": "torus",
+    "updateMode": "synchronous",
+    "asyncScheme": "random-order",
+    "maxIterations": 0,
+    "useWasm": true,
+    "useWebGPU": false
+  },
+  "topologyMode": {
+    "gridCells": false,
+    "agents": true
+  },
+  "centerBased": {
+    "enabled": true,
+    "agentTarget": "wasm",
+    "maxAgents": 1040,
+    "maxBonds": 8,
+    "worldWidth": 32,
+    "worldHeight": 32,
+    "seedCount": 0,
+    "seedPattern": "scatter",
+    "defaultRadius": 0.45,
+    "growthRate": 0,
+    "repulsionStiffness": 0,
+    "adhesionStiffness": 0,
+    "interactionRange": 1.5,
+    "drag": 1,
+    "timeStep": 0.5,
+    "momentum": 0,
+    "maxSpeed": 0,
+    "neighbourQueryRadius": 2,
+    "customForcesOnly": true,
+    "useBondingPhysics": false,
+    "autoBond": true,
+    "bondStiffness": 0,
+    "bondRestLength": 1,
+    "formDistance": 1.9,
+    "breakDistance": 2.5,
+    "agentUpdateMode": "sync",
+    "agentCapabilities": {
+      "motion": "force",
+      "body": true,
+      "collision": "off",
+      "bonds": "physics",
+      "autoBond": true,
+      "growth": false,
+      "division": false,
+      "lifespan": false,
+      "populationBirth": false,
+      "populationDeath": false,
+      "sensing": false,
+      "sensingHeadingSource": "velocity",
+      "orientation": false,
+      "fieldCoupling": false,
+      "appearance": true
+    }
+  },
+  "attributes": [],
+  "agentAttributes": [
+    {
+      "id": "alive",
+      "name": "alive",
+      "type": "bool",
+      "description": "Game of Life cell state",
+      "isModelAttribute": false,
+      "defaultValue": "false"
+    }
+  ],
+  "neighborhoods": [],
+  "mappings": [],
+  "agentMappings": [
+    {
+      "id": "agentViz",
+      "name": "Life",
+      "description": "Alive = green",
+      "isAttributeToColor": true,
+      "linked": true,
+      "linkedAttributeId": "alive",
+      "linkedColors": {
+        "gradient": [
+          {
+            "position": 0,
+            "r": 22,
+            "g": 24,
+            "b": 34
+          },
+          {
+            "position": 1,
+            "r": 90,
+            "g": 225,
+            "b": 140
+          }
+        ]
+      }
+    }
+  ],
+  "variables": [],
+  "agentVariables": [
+    {
+      "id": "i",
+      "name": "i",
+      "description": "spawn counter",
+      "kind": "scalar",
+      "dataType": "integer",
+      "initialValue": "0"
+    }
+  ],
+  "indicators": [],
+  "graphNodes": [],
+  "graphEdges": [],
+  "agentGraphNodes": [
+    {
+      "id": "a0jdao",
+      "type": "caNode",
+      "position": {
+        "x": 0,
+        "y": 0
+      },
+      "data": {
+        "nodeType": "agentInit",
+        "config": {}
+      }
+    },
+    {
+      "id": "a15oop",
+      "type": "caNode",
+      "position": {
+        "x": 220,
+        "y": 0
+      },
+      "data": {
+        "nodeType": "loop",
+        "config": {
+          "_port_count": "1024"
+        }
+      }
+    },
+    {
+      "id": "a3qkyh",
+      "type": "caNode",
+      "position": {
+        "x": 440,
+        "y": -135
+      },
+      "data": {
+        "nodeType": "getVariable",
+        "config": {
+          "variableId": "i"
+        }
+      }
+    },
+    {
+      "id": "a43ac6",
+      "type": "caNode",
+      "position": {
+        "x": 660,
+        "y": -180
+      },
+      "data": {
+        "nodeType": "expression",
+        "config": {
+          "expression": "(a % 32) + 0.5",
+          "visibleCount": 1
+        }
+      }
+    },
+    {
+      "id": "a699m9",
+      "type": "caNode",
+      "position": {
+        "x": 660,
+        "y": -90
+      },
+      "data": {
+        "nodeType": "expression",
+        "config": {
+          "expression": "floor(a / 32) + 0.5",
+          "visibleCount": 1
+        }
+      }
+    },
+    {
+      "id": "a8q7hm",
+      "type": "caNode",
+      "position": {
+        "x": 880,
+        "y": 0
+      },
+      "data": {
+        "nodeType": "createAgent",
+        "config": {
+          "_port_radius": "0.45"
+        }
+      }
+    },
+    {
+      "id": "abbszy",
+      "type": "caNode",
+      "position": {
+        "x": 880,
+        "y": 135
+      },
+      "data": {
+        "nodeType": "getRandom",
+        "config": {
+          "randomType": "bool",
+          "_port_probability": "0.30"
+        }
+      }
+    },
+    {
+      "id": "achzz3",
+      "type": "caNode",
+      "position": {
+        "x": 1100,
+        "y": 45
+      },
+      "data": {
+        "nodeType": "setAgentAttribute",
+        "config": {
+          "attributeId": "alive"
+        }
+      }
+    },
+    {
+      "id": "afd9mu",
+      "type": "caNode",
+      "position": {
+        "x": 1320,
+        "y": 0
+      },
+      "data": {
+        "nodeType": "addAgentToWorld",
+        "config": {}
+      }
+    },
+    {
+      "id": "ahajsb",
+      "type": "caNode",
+      "position": {
+        "x": 1100,
+        "y": 225
+      },
+      "data": {
+        "nodeType": "getVariable",
+        "config": {
+          "variableId": "i"
+        }
+      }
+    },
+    {
+      "id": "aivixv",
+      "type": "caNode",
+      "position": {
+        "x": 1320,
+        "y": 225
+      },
+      "data": {
+        "nodeType": "arithmeticOperator",
+        "config": {
+          "operation": "add",
+          "_port_y": "1"
+        }
+      }
+    },
+    {
+      "id": "akq2qv",
+      "type": "caNode",
+      "position": {
+        "x": 1540,
+        "y": 225
+      },
+      "data": {
+        "nodeType": "setVariable",
+        "config": {
+          "variableId": "i"
+        }
+      }
+    },
+    {
+      "id": "aqgzhv",
+      "type": "caNode",
+      "position": {
+        "x": 0,
+        "y": 540
+      },
+      "data": {
+        "nodeType": "behaviourStep",
+        "config": {}
+      }
+    },
+    {
+      "id": "ar3mdk",
+      "type": "caNode",
+      "position": {
+        "x": 220,
+        "y": 540
+      },
+      "data": {
+        "nodeType": "neighbourCensus",
+        "config": {
+          "attributeId": "alive",
+          "source": "bonded"
+        }
+      }
+    },
+    {
+      "id": "as3ggz",
+      "type": "caNode",
+      "position": {
+        "x": 220,
+        "y": 405
+      },
+      "data": {
+        "nodeType": "getCellAttribute",
+        "config": {
+          "attributeId": "alive"
+        }
+      }
+    },
+    {
+      "id": "atc6lo",
+      "type": "caNode",
+      "position": {
+        "x": 660,
+        "y": 450
+      },
+      "data": {
+        "nodeType": "statement",
+        "config": {
+          "operation": "==",
+          "compareType": "numerical",
+          "_port_y": "3"
+        }
+      }
+    },
+    {
+      "id": "av1j5v",
+      "type": "caNode",
+      "position": {
+        "x": 660,
+        "y": 630
+      },
+      "data": {
+        "nodeType": "statement",
+        "config": {
+          "operation": "==",
+          "compareType": "numerical",
+          "_port_y": "2"
+        }
+      }
+    },
+    {
+      "id": "ax1cwh",
+      "type": "caNode",
+      "position": {
+        "x": 880,
+        "y": 585
+      },
+      "data": {
+        "nodeType": "logicOperator",
+        "config": {
+          "operation": "AND"
+        }
+      }
+    },
+    {
+      "id": "a10ocz2",
+      "type": "caNode",
+      "position": {
+        "x": 1100,
+        "y": 540
+      },
+      "data": {
+        "nodeType": "logicOperator",
+        "config": {
+          "operation": "OR"
+        }
+      }
+    },
+    {
+      "id": "a1361sb",
+      "type": "caNode",
+      "position": {
+        "x": 660,
+        "y": 765
+      },
+      "data": {
+        "nodeType": "statement",
+        "config": {
+          "operation": ">",
+          "compareType": "numerical",
+          "_port_y": "0"
+        }
+      }
+    },
+    {
+      "id": "a152ffl",
+      "type": "caNode",
+      "position": {
+        "x": 1320,
+        "y": 675
+      },
+      "data": {
+        "nodeType": "conditional",
+        "config": {}
+      }
+    },
+    {
+      "id": "a17i16c",
+      "type": "caNode",
+      "position": {
+        "x": 1540,
+        "y": 540
+      },
+      "data": {
+        "nodeType": "setAttribute",
+        "config": {
+          "attributeId": "alive"
+        }
+      }
+    }
+  ],
+  "agentGraphEdges": [
+    {
+      "id": "e2o9dr",
+      "source": "a0jdao",
+      "target": "a15oop",
+      "sourceHandle": "output_flow_do",
+      "targetHandle": "input_flow_do"
+    },
+    {
+      "id": "e5np3i",
+      "source": "a3qkyh",
+      "target": "a43ac6",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_a"
+    },
+    {
+      "id": "e7eyzu",
+      "source": "a3qkyh",
+      "target": "a699m9",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_a"
+    },
+    {
+      "id": "e9qw0p",
+      "source": "a43ac6",
+      "target": "a8q7hm",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_x"
+    },
+    {
+      "id": "eauz1k",
+      "source": "a699m9",
+      "target": "a8q7hm",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_y"
+    },
+    {
+      "id": "ed78po",
+      "source": "a8q7hm",
+      "target": "achzz3",
+      "sourceHandle": "output_value_handle",
+      "targetHandle": "input_value_agentId"
+    },
+    {
+      "id": "ee6aq8",
+      "source": "abbszy",
+      "target": "achzz3",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_value"
+    },
+    {
+      "id": "egxngr",
+      "source": "a8q7hm",
+      "target": "afd9mu",
+      "sourceHandle": "output_value_handle",
+      "targetHandle": "input_value_handle"
+    },
+    {
+      "id": "ejm6az",
+      "source": "ahajsb",
+      "target": "aivixv",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_x"
+    },
+    {
+      "id": "elk5p9",
+      "source": "aivixv",
+      "target": "akq2qv",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_value"
+    },
+    {
+      "id": "em80w7",
+      "source": "a15oop",
+      "target": "a8q7hm",
+      "sourceHandle": "output_flow_body",
+      "targetHandle": "input_flow_do"
+    },
+    {
+      "id": "enlim2",
+      "source": "a8q7hm",
+      "target": "achzz3",
+      "sourceHandle": "output_flow_next",
+      "targetHandle": "input_flow_do"
+    },
+    {
+      "id": "eo4upb",
+      "source": "achzz3",
+      "target": "afd9mu",
+      "sourceHandle": "output_flow_next",
+      "targetHandle": "input_flow_do"
+    },
+    {
+      "id": "ep4inj",
+      "source": "afd9mu",
+      "target": "akq2qv",
+      "sourceHandle": "output_flow_next",
+      "targetHandle": "input_flow_do"
+    },
+    {
+      "id": "euoegn",
+      "source": "ar3mdk",
+      "target": "atc6lo",
+      "sourceHandle": "output_value_count_1",
+      "targetHandle": "input_value_x"
+    },
+    {
+      "id": "ewj0wy",
+      "source": "ar3mdk",
+      "target": "av1j5v",
+      "sourceHandle": "output_value_count_1",
+      "targetHandle": "input_value_x"
+    },
+    {
+      "id": "eydrrc",
+      "source": "av1j5v",
+      "target": "ax1cwh",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_a"
+    },
+    {
+      "id": "eza45a",
+      "source": "as3ggz",
+      "target": "ax1cwh",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_b"
+    },
+    {
+      "id": "e11ivz0",
+      "source": "atc6lo",
+      "target": "a10ocz2",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_a"
+    },
+    {
+      "id": "e12qb79",
+      "source": "ax1cwh",
+      "target": "a10ocz2",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_b"
+    },
+    {
+      "id": "e145lst",
+      "source": "ar3mdk",
+      "target": "a1361sb",
+      "sourceHandle": "output_value_total",
+      "targetHandle": "input_value_x"
+    },
+    {
+      "id": "e16s2qq",
+      "source": "a1361sb",
+      "target": "a152ffl",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_condition"
+    },
+    {
+      "id": "e18a16p",
+      "source": "a10ocz2",
+      "target": "a17i16c",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_value"
+    },
+    {
+      "id": "e1997v1",
+      "source": "aqgzhv",
+      "target": "a152ffl",
+      "sourceHandle": "output_flow_do",
+      "targetHandle": "input_flow_do"
+    },
+    {
+      "id": "e1an5hu",
+      "source": "a152ffl",
+      "target": "a17i16c",
+      "sourceHandle": "output_flow_then",
+      "targetHandle": "input_flow_do"
+    }
+  ],
+  "macroDefs": []
+}

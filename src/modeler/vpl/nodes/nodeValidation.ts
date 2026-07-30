@@ -9,6 +9,7 @@ import { buildVarMap, parseExpression, clampVisibleCount } from '../compiler/exp
 import { getActiveGraphKind } from '../graphState';
 import { VECTOR_LOWERED } from '../compiler/vectorAttr';
 import { multiAttrSlotIndices, slotAttrKey } from '../compiler/multiAttrExpand';
+import { censusAttribute, censusOptions } from '../compiler/censusExpand';
 import { isMultiAxisTable, resolveAxes, MAX_LOOKUP_TABLE_ENTRIES } from '../compiler/variegation';
 import { is3dModelLike } from '../compiler/niCodec';
 
@@ -196,6 +197,29 @@ export function detectMissingConfig(
         issues.push('Connect an Agents input (e.g. from Get Nearby Agents or Get Bonded Agents)');
       }
       break;
+
+    case 'neighbourCensus': {
+      // The output ports ARE the attribute's state values, so an unset / removed /
+      // no-longer-enumerable attribute means the node has nothing to count.
+      if (!censusAttribute(config, model)) {
+        issues.push('Select a tag or binary agent attribute (its state values become the count ports)');
+      } else if (censusOptions(censusAttribute(config, model)).length === 0) {
+        issues.push('The chosen tag attribute has no options yet — add some to get count ports');
+      }
+      // The capability gate is TYPE-level (Bonds or Sensing), so it cannot tell the
+      // two sources apart. Badge the config-specific mismatch here instead: a
+      // bonded census in a bonds-off model reads an empty 1-ring every step, and a
+      // nearby census with Sensing off reads an empty proximity set.
+      const prof = model.centerBased?.agentCapabilities;
+      if (prof) {
+        if (config.source === 'nearby') {
+          if (!prof.sensing) issues.push('Nearby source needs the Sensing capability (Properties › Bond-Graph Agents)');
+        } else if (prof.bonds === 'off') {
+          issues.push('Bonded source needs the Bonds capability (Properties › Bond-Graph Agents)');
+        }
+      }
+      break;
+    }
 
     case 'joinAgents':
       if (isInputConnected('a') === false) issues.push('Connect input A');

@@ -840,6 +840,73 @@ function buildGroupOperandModel() {
   };
 }
 
+// Neighbour State Census over a 3-option TAG attribute (Graph-Rewriting Automata).
+// The node never reaches a compiler — `expandNeighbourCensus` lowers it into
+// Get Bonded Agents -> Get Agents Attribute -> one Count Matching per CONSUMED
+// state port (+ Array Length for Total) in ALL THREE agent front-ends. All three
+// counts AND the total are stored into SEPARATE agent attributes, so a mis-mapped
+// port (count_1's chain wired to count_2's output, say) shows as a mismatch rather
+// than cancelling out. Bonded (not proximity) so the invariant recount is exact.
+function buildCensusModel() {
+  const used = new Set();
+  const nid = (p) => { let id; do { id = p + Math.random().toString(36).slice(2, 8); } while (used.has(id)); used.add(id); return id; };
+  const aN = [], aEd = [];
+  const an = (t, c) => { const n = { id: nid('a'), type: 'caNode', position: { x: 0, y: 0 }, data: { nodeType: t, config: c } }; aN.push(n); return n; };
+  const aE = (s, sp, tt, tp, cat) => aEd.push({ id: nid('e'), source: s.id, target: tt.id, sourceHandle: `output_${cat}_${sp}`, targetHandle: `input_${cat}_${tp}` });
+  const bs = an('behaviourStep', {});
+  const census = an('neighbourCensus', { attributeId: 'kind', source: 'bonded' });
+  const set = an('setAttribute', { attributeId: 'c0', extraCount: 3, attr_2: 'c1', attr_3: 'c2', attr_4: 'tot' });
+  aE(census, 'count_0', set, 'value', 'value');
+  aE(census, 'count_1', set, 'value_2', 'value');
+  aE(census, 'count_2', set, 'value_3', 'value');
+  aE(census, 'total', set, 'value_4', 'value');
+  aE(bs, 'do', set, 'do', 'flow');
+  return {
+    schemaVersion: 1,
+    properties: { name: 'Neighbour Census Parity Test', dimension: '2d', gridWidth: 24, gridHeight: 24, gridDepth: 1, topology: '2d-grid', boundaryTreatment: 'torus', useWasm: false, useWebGPU: false },
+    topologyMode: { gridCells: false, agents: true },
+    centerBased: { enabled: true, maxAgents: 100, maxBonds: 4, worldWidth: 24, worldHeight: 24, seedCount: 40, seedPattern: 'scatter', defaultRadius: 0.5, growthRate: 0, repulsionStiffness: 0, adhesionStiffness: 0, interactionRange: 1.5, drag: 1, timeStep: 0.1, momentum: 0, maxSpeed: 0, neighbourQueryRadius: 8, useBondingPhysics: false, autoBond: false, bondStiffness: 0, bondRestLength: 1.5, formDistance: 1.2, breakDistance: 2.0, agentTarget: 'wasm', agentUpdateMode: 'async',
+      agentCapabilities: { motion: 'force', body: true, collision: 'off', bonds: 'data', autoBond: false, growth: false, division: false, lifespan: false, populationBirth: false, populationDeath: false, sensing: false, sensingHeadingSource: 'velocity', orientation: false, fieldCoupling: false, appearance: true } },
+    attributes: [], modelAttributes: [], neighborhoods: [],
+    agentAttributes: [
+      { id: 'kind', name: 'Kind', type: 'tag', defaultValue: '0', tagOptions: ['Red', 'Green', 'Blue'] },
+      { id: 'c0', name: 'C0', type: 'integer', defaultValue: '0' },
+      { id: 'c1', name: 'C1', type: 'integer', defaultValue: '0' },
+      { id: 'c2', name: 'C2', type: 'integer', defaultValue: '0' },
+      { id: 'tot', name: 'Tot', type: 'integer', defaultValue: '0' },
+    ],
+    variables: [], agentVariables: [], indicators: [], mappings: [],
+    graphNodes: [], graphEdges: [], agentGraphNodes: aN, agentGraphEdges: aEd, macroDefs: [],
+  };
+}
+
+// Recount the census from the store's OWN bond list. `kind` is seeded by the
+// harness and never written, so this is exact — and it fails even if BOTH targets
+// lower the census identically wrong (parity alone is a mirror test). The harness
+// seeds every agent attr with (i%5)-2, so `kind` spans -2..2 and the three tracked
+// options 0/1/2 each match a real subset.
+function censusInvariant(st) {
+  for (let i = 0; i < st.highWater; i++) {
+    if (!st.alive[i]) continue;
+    const want = [0, 0, 0];
+    let tot = 0;
+    const base = i * st.maxBonds;
+    for (let k = 0; k < st.bondCount[i]; k++) {
+      const p = st.bondPartner[base + k];
+      if (p < 0 || p >= st.highWater || !st.alive[p]) continue;
+      tot++;
+      const v = st.attrRead.kind[p];
+      if (v >= 0 && v <= 2) want[v]++;
+    }
+    const got = [st.attrRead.c0[i], st.attrRead.c1[i], st.attrRead.c2[i]];
+    for (let o = 0; o < 3; o++) {
+      if (got[o] !== want[o]) return `agent ${i}: count_${o} ${got[o]} !== recount ${want[o]}`;
+    }
+    if (st.attrRead.tot[i] !== tot) return `agent ${i}: total ${st.attrRead.tot[i]} !== recount ${tot}`;
+  }
+  return null;
+}
+
 // A deterministic ring + chord bond topology (identical on both stores). Every
 // agent gets 2-3 partners; positions are left as seeded (the rule is topological,
 // so geometry is irrelevant here).
@@ -917,6 +984,10 @@ entries.push({ name: '[synthetic] Curvature + bond currentLength (bonded, hypot�
 entries.push({
   name: '[synthetic] Group operand ports (wired compare / compareHigh / x)',
   raw: buildGroupOperandModel(), setup: setupRingBondStores, invariant: groupOperandInvariant,
+});
+entries.push({
+  name: '[synthetic] Neighbour Census (3-option tag over the bonded 1-ring)',
+  raw: buildCensusModel(), setup: setupRingBondStores, invariant: censusInvariant,
 });
 entries.push({ name: '[synthetic] Flow diamond (conditional → shared getRandom chain)', raw: buildDiamondModel() });
 entries.push({ name: '[synthetic] RNG draw order (branch draw + post-branch draws)', raw: buildRngOrderModel() });

@@ -1,0 +1,342 @@
+{
+  "schemaVersion": 1,
+  "name": "GRA Rule Table",
+  "description": "The graph-rewriting authoring idiom: neighbour census + own state → a rule table → one of {Idle, Divide, Die, Bond, Unbond}. Pick the census attribute, the own-state attribute and the Lookup Table after dropping.",
+  "macroDef": {
+    "id": "mac_gra_rule_table",
+    "name": "GRA Rule Table",
+    "nodes": [
+      {
+        "id": "n_gra0",
+        "type": "caNode",
+        "position": {
+          "x": 0,
+          "y": 220
+        },
+        "data": {
+          "nodeType": "macroInput",
+          "config": {
+            "macroDefId": "mac_gra_rule_table"
+          }
+        }
+      },
+      {
+        "id": "n_gra1",
+        "type": "caNode",
+        "position": {
+          "x": 1440,
+          "y": 220
+        },
+        "data": {
+          "nodeType": "macroOutput",
+          "config": {
+            "macroDefId": "mac_gra_rule_table"
+          }
+        }
+      },
+      {
+        "id": "n_gra2",
+        "type": "caNode",
+        "position": {
+          "x": 240,
+          "y": 0
+        },
+        "data": {
+          "nodeType": "getCellAttribute",
+          "config": {
+            "attributeId": ""
+          }
+        }
+      },
+      {
+        "id": "n_gra3",
+        "type": "caNode",
+        "position": {
+          "x": 240,
+          "y": 154
+        },
+        "data": {
+          "nodeType": "neighbourCensus",
+          "config": {
+            "attributeId": "",
+            "source": "bonded"
+          }
+        }
+      },
+      {
+        "id": "n_gra4",
+        "type": "caNode",
+        "position": {
+          "x": 576,
+          "y": 77
+        },
+        "data": {
+          "nodeType": "lookupInteraction",
+          "config": {
+            "tableId": ""
+          }
+        }
+      },
+      {
+        "id": "n_gra7",
+        "type": "caNode",
+        "position": {
+          "x": 864,
+          "y": 154
+        },
+        "data": {
+          "nodeType": "switch",
+          "config": {
+            "mode": "value",
+            "valueType": "integer",
+            "caseCount": 5,
+            "firstMatchOnly": true,
+            "_port_case_0_val": "0",
+            "_port_case_1_val": "1",
+            "_port_case_2_val": "2",
+            "_port_case_3_val": "3",
+            "_port_case_4_val": "4"
+          }
+        }
+      },
+      {
+        "id": "r_grab",
+        "type": "rerouteNode",
+        "position": {
+          "x": 1128,
+          "y": 22
+        },
+        "data": {
+          "nodeType": "reroute",
+          "portCategory": "flow",
+          "label": "Idle - no verb",
+          "config": {}
+        }
+      },
+      {
+        "id": "r_grad",
+        "type": "rerouteNode",
+        "position": {
+          "x": 1128,
+          "y": 121.00000000000001
+        },
+        "data": {
+          "nodeType": "reroute",
+          "portCategory": "flow",
+          "label": "Divide",
+          "config": {}
+        }
+      },
+      {
+        "id": "n_grae",
+        "type": "caNode",
+        "position": {
+          "x": 1320,
+          "y": 121.00000000000001
+        },
+        "data": {
+          "nodeType": "divideAgent",
+          "config": {}
+        }
+      },
+      {
+        "id": "r_grah",
+        "type": "rerouteNode",
+        "position": {
+          "x": 1128,
+          "y": 209.00000000000003
+        },
+        "data": {
+          "nodeType": "reroute",
+          "portCategory": "flow",
+          "label": "Die",
+          "config": {}
+        }
+      },
+      {
+        "id": "n_grai",
+        "type": "caNode",
+        "position": {
+          "x": 1320,
+          "y": 209.00000000000003
+        },
+        "data": {
+          "nodeType": "killAgent",
+          "config": {}
+        }
+      },
+      {
+        "id": "r_gral",
+        "type": "rerouteNode",
+        "position": {
+          "x": 1128,
+          "y": 297
+        },
+        "data": {
+          "nodeType": "reroute",
+          "portCategory": "flow",
+          "label": "Bond",
+          "config": {}
+        }
+      },
+      {
+        "id": "n_gram",
+        "type": "caNode",
+        "position": {
+          "x": 1320,
+          "y": 297
+        },
+        "data": {
+          "nodeType": "formBond",
+          "config": {}
+        }
+      },
+      {
+        "id": "r_grap",
+        "type": "rerouteNode",
+        "position": {
+          "x": 1128,
+          "y": 385.00000000000006
+        },
+        "data": {
+          "nodeType": "reroute",
+          "portCategory": "flow",
+          "label": "Unbond",
+          "config": {}
+        }
+      },
+      {
+        "id": "n_graq",
+        "type": "caNode",
+        "position": {
+          "x": 1320,
+          "y": 385.00000000000006
+        },
+        "data": {
+          "nodeType": "breakBond",
+          "config": {}
+        }
+      }
+    ],
+    "edges": [
+      {
+        "id": "e_gra5",
+        "source": "n_gra2",
+        "target": "n_gra4",
+        "sourceHandle": "output_value_value",
+        "targetHandle": "input_value_axis_0"
+      },
+      {
+        "id": "e_gra6",
+        "source": "n_gra3",
+        "target": "n_gra4",
+        "sourceHandle": "output_value_count_1",
+        "targetHandle": "input_value_axis_1"
+      },
+      {
+        "id": "e_gra8",
+        "source": "n_gra4",
+        "target": "n_gra7",
+        "sourceHandle": "output_value_value",
+        "targetHandle": "input_value_value"
+      },
+      {
+        "id": "e_gra9",
+        "source": "n_gra0",
+        "target": "n_gra7",
+        "sourceHandle": "output_flow_in_gra_do",
+        "targetHandle": "input_flow_check"
+      },
+      {
+        "id": "e_graa",
+        "source": "n_gra7",
+        "target": "n_gra1",
+        "sourceHandle": "output_flow_next",
+        "targetHandle": "input_flow_out_gra_next"
+      },
+      {
+        "id": "e_grac",
+        "source": "n_gra7",
+        "target": "r_grab",
+        "sourceHandle": "output_flow_case_0",
+        "targetHandle": "input_flow_in"
+      },
+      {
+        "id": "e_graf",
+        "source": "n_gra7",
+        "target": "r_grad",
+        "sourceHandle": "output_flow_case_1",
+        "targetHandle": "input_flow_in"
+      },
+      {
+        "id": "e_grag",
+        "source": "r_grad",
+        "target": "n_grae",
+        "sourceHandle": "output_flow_out",
+        "targetHandle": "input_flow_do"
+      },
+      {
+        "id": "e_graj",
+        "source": "n_gra7",
+        "target": "r_grah",
+        "sourceHandle": "output_flow_case_2",
+        "targetHandle": "input_flow_in"
+      },
+      {
+        "id": "e_grak",
+        "source": "r_grah",
+        "target": "n_grai",
+        "sourceHandle": "output_flow_out",
+        "targetHandle": "input_flow_do"
+      },
+      {
+        "id": "e_gran",
+        "source": "n_gra7",
+        "target": "r_gral",
+        "sourceHandle": "output_flow_case_3",
+        "targetHandle": "input_flow_in"
+      },
+      {
+        "id": "e_grao",
+        "source": "r_gral",
+        "target": "n_gram",
+        "sourceHandle": "output_flow_out",
+        "targetHandle": "input_flow_do"
+      },
+      {
+        "id": "e_grar",
+        "source": "n_gra7",
+        "target": "r_grap",
+        "sourceHandle": "output_flow_case_4",
+        "targetHandle": "input_flow_in"
+      },
+      {
+        "id": "e_gras",
+        "source": "r_grap",
+        "target": "n_graq",
+        "sourceHandle": "output_flow_out",
+        "targetHandle": "input_flow_do"
+      }
+    ],
+    "exposedInputs": [
+      {
+        "portId": "in_gra_do",
+        "label": "Do",
+        "dataType": "any",
+        "category": "flow",
+        "internalNodeId": "n_gra0",
+        "internalPortId": "in_gra_do"
+      }
+    ],
+    "exposedOutputs": [
+      {
+        "portId": "out_gra_next",
+        "label": "Next",
+        "dataType": "any",
+        "category": "flow",
+        "internalNodeId": "n_gra1",
+        "internalPortId": "out_gra_next"
+      }
+    ]
+  }
+}

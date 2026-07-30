@@ -122,7 +122,7 @@ The orchestrator updates this after reading each phase's Completion Report.
 
 | Phase | Handoff doc | State | Session | Commit | Notes |
 |---|---|---|---|---|---|
-| P1 Census + Rule Table | [HANDOFF_GRA_P1_CENSUS.md](HANDOFF_GRA_P1_CENSUS.md) | READY | — | — | no engine change; oracle = O7 differential vs shipped GoL-on-Agents |
+| P1 Census + Rule Table | [HANDOFF_GRA_P1_CENSUS.md](HANDOFF_GRA_P1_CENSUS.md) | **DONE** | 2026-07-30 | `2a8fb42` + `b519565` | Census + lowering on all 3 targets, `Life on Bonds`, GRA Rule Table macro, `verify-graph-rewrite.mjs` (58 checks). O7/O11/O3 + I1/I3/I4 green. **Two things to read**: (a) a pre-existing operand-port defect in BOTH agent `groupCounting`/`groupStatement` emitters was P1-blocking and is fixed in its own commit `2a8fb42`; (b) **`agentUpdateMode: 'sync'` is NOT honoured on the WebGPU agent target** — a pre-existing race that makes the SHIPPED census-free GoL-on-Agents wrong by 18/1024 cells there. **Decide before P3.** |
 | P2 Bond attrs (CPU) | [HANDOFF_GRA_P2_BOND_ATTRIBUTES.md](HANDOFF_GRA_P2_BOND_ATTRIBUTES.md) | READY | — | — | the recorded missing capability |
 | P3 Bond attrs (WebGPU) | *(refine after P2)* | BLOCKED | — | — | needs P2's layout decisions + D3 |
 | P4 Request queue + Rewire | *(refine first)* | PLANNED | — | — | the atomicity unblock; enables O5/O6 |

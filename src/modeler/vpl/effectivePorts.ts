@@ -21,6 +21,7 @@ import { getNodeDef } from './nodes/registry';
 import { clampVisibleCount } from './compiler/expression/parser';
 import { vectorPortDims } from './compiler/vectorAttr';
 import { MULTI_ATTR_TYPES, buildExtraSlotPorts } from './compiler/multiAttrExpand';
+import { buildCensusPorts } from './compiler/censusExpand';
 import { applyLookupAxisPorts } from './nodes/LookupInteractionNode';
 
 export interface EffectivePorts {
@@ -90,6 +91,15 @@ export function getEffectivePorts(
     const extra = buildExtraSlotPorts(nodeType, cfg, model);
     inputs = [...inputs, ...extra.inputs];
     outputs = [...outputs, ...extra.outputs];
+  }
+
+  // Neighbour Census: one integer output per state value of the chosen tag/bool
+  // agent attribute, labelled with the option name, BEFORE the static Total.
+  // Built by the shared helper so this file + CaNode can't drift (the
+  // buildExtraSlotPorts dual-consumption pattern). See censusExpand.ts.
+  if (nodeType === 'neighbourCensus') {
+    const extra = buildCensusPorts(nodeType, cfg, model);
+    outputs = [...extra.outputs, ...outputs];
   }
 
   // Table Lookup: shape the index inputs per the referenced table — legacy

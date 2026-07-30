@@ -28,6 +28,7 @@ import { GetNearbyAgentsNode } from './GetNearbyAgentsNode';
 import { GetAgentsInViewNode } from './GetAgentsInViewNode';
 import { SenseHemifieldNode } from './SenseHemifieldNode';
 import { GetBondedAgentsNode } from './GetBondedAgentsNode';
+import { NeighbourCensusNode } from './NeighbourCensusNode';
 import { AgentInitNode } from './AgentInitNode';
 import { CreateAgentNode } from './CreateAgentNode';
 import { AddAgentToWorldNode } from './AddAgentToWorldNode';
@@ -204,6 +205,9 @@ const ALL_NODES: NodeTypeDef[] = [
   GetAgentsInViewNode,
   SenseHemifieldNode,
   GetBondedAgentsNode,
+  // Graph-Rewriting Automata: the neighbour-state multiset. Lowered to the
+  // gather + Count Matching chain before compile (censusExpand.ts).
+  NeighbourCensusNode,
   GetAgentPositionNode,
   GetAgentOffsetNode,
   GetAgentAttributeNode,

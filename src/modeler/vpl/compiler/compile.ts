@@ -16,6 +16,7 @@ import { injectAgentLinkedOutputMappings } from './agentLinkedOutputMappings';
 import { collapseReroutes } from './rerouteCollapse';
 import { expandMultiAttrs } from './multiAttrExpand';
 import { expandForceToAgents } from './forceToAgentsExpand';
+import { expandNeighbourCensus } from './censusExpand';
 import { expandComposites } from './expandComposites';
 import { lowerVectorAttrs } from './vectorAttr';
 import { lowerFacingSource } from './facingSource';
@@ -2458,6 +2459,10 @@ export function compileAgentGraph(
     agentEdges = expanded.edges;
   }
   ({ nodes: agentNodes, edges: agentEdges } = collapseReroutes(agentNodes, agentEdges));
+  // Neighbour State Census → the gather + one Count Matching per CONSUMED state
+  // port (+ Array Length for `total`), so it reuses the existing emitters on every
+  // target (no new emit). See censusExpand.ts.
+  ({ nodes: agentNodes, edges: agentEdges } = expandNeighbourCensus(agentNodes, agentEdges, model));
   // Apply Force To Agents (array broadcast) → For Each In Array → Apply Force To
   // Agent, so it reuses the single node's emitters on every target (no new emit).
   ({ nodes: agentNodes, edges: agentEdges } = expandForceToAgents(agentNodes, agentEdges, model));

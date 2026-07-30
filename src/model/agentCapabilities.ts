@@ -25,7 +25,7 @@ export type AgentCapKey =
   | 'body' | 'growth' | 'division' | 'lifespan'
   | 'bonds' | 'bondsPhysics' | 'autoBond'
   | 'sensing' | 'orientation' | 'fieldCoupling'
-  | 'collision' | 'sensingOrCollision'
+  | 'collision' | 'sensingOrCollision' | 'bondsOrSensing'
   | 'motionMoving' | 'motionForce'
   | 'populationBirth' | 'populationDeath';
 
@@ -54,6 +54,11 @@ const CAP_REQS: Record<AgentCapKey, CapReq> = {
   fieldCoupling: { label: 'Field coupling', satisfied: p => p.fieldCoupling, widen: p => { p.fieldCoupling = true; } },
   collision: { label: 'Collision', satisfied: p => p.collision !== 'off', widen: p => { if (p.collision === 'off') p.collision = 'soft'; } },
   sensingOrCollision: { label: 'Collision or Sensing', satisfied: p => p.sensing || p.collision !== 'off', widen: p => { p.sensing = true; } },
+  // Disjunctive, like sensingOrCollision: the Neighbour Census reads EITHER the
+  // bonded 1-ring OR a proximity set, chosen by a per-node `source` config the
+  // type-keyed table cannot see. The config-specific mismatch (a bonded census in
+  // a bonds-off model) is badged by `detectMissingConfig` instead.
+  bondsOrSensing: { label: 'Bonds or Sensing', satisfied: p => p.bonds !== 'off' || p.sensing, widen: p => { if (p.bonds === 'off') p.bonds = 'data'; } },
   motionMoving: { label: 'Motion (Velocity / Force)', satisfied: p => p.motion !== 'static', widen: p => { if (p.motion === 'static') p.motion = 'force'; } },
   motionForce: { label: 'Motion = Force', satisfied: p => p.motion === 'force', widen: p => { p.motion = 'force'; } },
   populationBirth: { label: 'Population (birth)', satisfied: p => p.populationBirth, widen: p => { p.populationBirth = true; } },
@@ -86,6 +91,10 @@ export const AGENT_NODE_REQUIREMENT: Record<string, AgentCapKey> = {
   getBondDegree: 'bonds',
   getCurvature: 'bonds',
   getBondedAgents: 'bonds',
+  // The census reads the bonded 1-ring OR a proximity set (a per-node `source`
+  // config). The table is type-keyed, so it takes the DISJUNCTION and
+  // `detectMissingConfig` badges the config-specific mismatch.
+  neighbourCensus: 'bondsOrSensing',
   forEachBond: 'bonds',
   formBond: 'bonds',
   breakBond: 'bonds',
