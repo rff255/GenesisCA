@@ -13,6 +13,7 @@
 import { useEffect, useRef, useState } from 'react';
 import styles from './SimulatorView.module.css';
 import type { OverseerRuntime, OverseerSeries, OverseerSpatialSeries, SpatialAggregate, SpatialAxisMeta } from './engine/overseerRuntime';
+import { saveTextFile } from '../model/fileOperations';
 
 function fmt(n: number): string {
   if (!Number.isFinite(n)) return '—';
@@ -21,14 +22,13 @@ function fmt(n: number): string {
   return String(Math.round(n * 1000) / 1000);
 }
 
+/** Export a results file. Routes through `saveTextFile` so the desktop (Tauri)
+ *  build gets a real native Save As — a bare `<a download>` writes nothing at
+ *  all under WebView2. */
 function download(text: string, filename: string, mime: string): void {
-  const blob = new Blob([text], { type: mime });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = filename;
-  a.click();
-  setTimeout(() => URL.revokeObjectURL(url), 5000);
+  void saveTextFile(text, filename, mime).catch(err => {
+    console.error('Export failed', err);
+  });
 }
 
 export interface ExperimentsPanelProps {

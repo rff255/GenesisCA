@@ -21,6 +21,7 @@ import { CommentNodeComponent } from './CommentNodeComponent';
 import { GroupNodeComponent } from './GroupNodeComponent';
 import { RerouteNodeComponent } from './RerouteNodeComponent';
 import { useModel } from '../../model/ModelContext';
+import { saveTextFile } from '../../model/fileOperations';
 import { getNodeDef, getAllNodeDefs } from './nodes/registry';
 import { parseHandleId, handleId } from './types';
 import type { PortDef, NodeTypeDef } from './types';
@@ -2531,15 +2532,10 @@ export function GraphEditorInner() {
       macroDef: def,
     };
     const safeName = def.name.trim().replace(/[^a-z0-9-_ ]+/gi, '').replace(/\s+/g, '-').toLowerCase() || 'macro';
-    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `${safeName}.gcamacro`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+    // Via saveTextFile so the desktop (Tauri) build gets a real native Save As —
+    // a bare `<a download>` writes nothing at all under WebView2.
+    void saveTextFile(JSON.stringify(payload, null, 2), `${safeName}.gcamacro`, 'application/json')
+      .catch(err => console.error('Macro export failed', err));
     setContextMenu(null);
   }, [contextMenu, model.macroDefs]);
 

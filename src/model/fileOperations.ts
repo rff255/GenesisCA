@@ -205,31 +205,24 @@ export function modelFilename(model: CAModel): string {
   return `${base || 'model'}.gcaproj`;
 }
 
-/**
- * Save text to a file. In the native (Tauri) shell, open a real OS "Save As"
- * dialog and write via the host `save_text_file` command — the browser
- * blob-download path below is silently dropped by WebView2, so the file never
- * gets created. In the browser / installed PWA, fall back to the blob download.
- * Returns true if a file was written, false if the user cancelled the native
- * Save As dialog.
- */
-async function saveTextFile(content: string, filename: string, mime: string): Promise<boolean> {
-  const inTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
-  if (inTauri) {
-    const ext = filename.includes('.') ? filename.slice(filename.lastIndexOf('.') + 1) : '';
-    const [{ save }, { invoke }] = await Promise.all([
-      import('@tauri-apps/plugin-dialog'),
-      import('@tauri-apps/api/core'),
-    ]);
-    const path = await save({
-      defaultPath: filename,
-      filters: ext ? [{ name: ext.toUpperCase(), extensions: [ext] }] : [],
-    });
-    if (!path) return false; // user cancelled the Save As dialog
-    await invoke('save_text_file', { path, contents: content });
-    return true;
-  }
-  const blob = new Blob([content], { type: mime });
+/** True when running inside the Tauri native shell (WebView2 on Windows). */
+function inTauriShell(): boolean {
+  return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
+}
+
+/** Native Save As. Returns the chosen absolute path, or null if cancelled. */
+async function nativeSavePath(filename: string): Promise<string | null> {
+  const ext = filename.includes('.') ? filename.slice(filename.lastIndexOf('.') + 1) : '';
+  const { save } = await import('@tauri-apps/plugin-dialog');
+  const path = await save({
+    defaultPath: filename,
+    filters: ext ? [{ name: ext.toUpperCase(), extensions: [ext] }] : [],
+  });
+  return path ?? null;
+}
+
+/** The browser / PWA download path: an anchor click on an object URL. */
+function browserDownload(blob: Blob, filename: string): true {
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
@@ -239,6 +232,86 @@ async function saveTextFile(content: string, filename: string, mime: string): Pr
   document.body.removeChild(a);
   URL.revokeObjectURL(url);
   return true;
+}
+
+/**
+ * Save text to a file. In the native (Tauri) shell, open a real OS "Save As"
+ * dialog and write via the host `save_text_file` command — the browser
+ * blob-download path below is silently dropped by WebView2, so the file never
+ * gets created. In the browser / installed PWA, fall back to the blob download.
+ * Returns true if a file was written, false if the user cancelled the native
+ * Save As dialog.
+ *
+ * EVERY download in the app must go through this or `saveBinaryFile` — a bare
+ * `<a download>` writes nothing at all in the desktop build, silently.
+ */
+export async function saveTextFile(content: string, filename: string, mime: string): Promise<boolean> {
+  if (inTauriShell()) {
+    const path = await nativeSavePath(filename);
+    if (!path) return false; // user cancelled the Save As dialog
+    const { invoke } = await import('@tauri-apps/api/core');
+    await invoke('save_text_file', { path, contents: content });
+    return true;
+  }
+  return browserDownload(new Blob([content], { type: mime }), filename);
+}
+
+/** Header carrying the save-session token on each `save_binary_chunk` invoke.
+ *  Must match SAVE_TOKEN_HEADER in src-tauri/src/lib.rs. */
+const SAVE_TOKEN_HEADER = 'x-genesis-save-token';
+
+/** Bytes per native IPC chunk. Bounds peak memory on BOTH sides (the JS slice
+ *  and the Rust `Vec<u8>`), so file size is limited by DISK, not by RAM or by
+ *  any single-message IPC ceiling — a multi-hundred-MB recording streams
+ *  through in 8 MiB pieces. Larger = fewer round trips but a bigger transient. */
+const NATIVE_CHUNK_BYTES = 8 * 1024 * 1024;
+
+/**
+ * Save BINARY data to a file — the exact sibling of `saveTextFile`, and the
+ * only correct way to write a recording (.webm/.gif), a screenshot (.png), or
+ * any other non-text artefact.
+ *
+ * Native (Tauri): a real OS Save As dialog, then a chunked stream through
+ * `save_binary_begin` / `save_binary_chunk` / `save_binary_end`. Each chunk
+ * travels as the invoke RAW BODY (a `Uint8Array`), never as a JSON number
+ * array — the latter inflates ~4x and would make a large recording pathological.
+ * A failure mid-stream aborts the session, deleting the partial file.
+ *
+ * Browser / PWA: the historical blob download, byte-for-byte unchanged.
+ *
+ * Returns true if a file was written, false if the user cancelled Save As.
+ * THROWS on a real write failure so callers can tell "cancelled" (nothing
+ * written, by choice) apart from "failed" (something went wrong).
+ */
+export async function saveBinaryFile(
+  data: Blob | ArrayBuffer | Uint8Array,
+  filename: string,
+  mime = 'application/octet-stream',
+): Promise<boolean> {
+  const blob = data instanceof Blob ? data : new Blob([data as BlobPart], { type: mime });
+  if (!inTauriShell()) return browserDownload(blob, filename);
+
+  const path = await nativeSavePath(filename);
+  if (!path) return false; // user cancelled the Save As dialog
+  const { invoke } = await import('@tauri-apps/api/core');
+  const token = await invoke<number>('save_binary_begin', { path });
+  try {
+    // Slice the Blob per chunk rather than materialising the whole thing with
+    // one `arrayBuffer()` — a 1 GB recording must never need 1 GB of JS heap.
+    for (let off = 0; off < blob.size; off += NATIVE_CHUNK_BYTES) {
+      const end = Math.min(off + NATIVE_CHUNK_BYTES, blob.size);
+      const chunk = new Uint8Array(await blob.slice(off, end).arrayBuffer());
+      await invoke('save_binary_chunk', chunk, {
+        headers: { [SAVE_TOKEN_HEADER]: String(token) },
+      });
+    }
+    await invoke('save_binary_end', { token });
+    return true;
+  } catch (err) {
+    // Never leave a truncated file behind pretending to be a recording.
+    await invoke('save_binary_abort', { token }).catch(() => {});
+    throw err;
+  }
 }
 
 export function downloadJSON(content: string, filename: string): Promise<boolean> {

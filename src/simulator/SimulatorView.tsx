@@ -49,7 +49,7 @@ import { InspectCellPopover, InspectHoverLink, type InspectPopoverState } from '
 import { InspectAgentPopover, type AgentPopoverState } from './InspectAgentPopover';
 import { PresetSaveDialog } from './PresetSaveDialog';
 import { ConfirmDialog } from '../components/ConfirmDialog';
-import { serializeSimState, serializePreset, downloadStateFile, readStateFile, downloadPresetFile, readPresetFile, base64ToArrayBuffer, deserializeTypedArray, migrateSimulationStateV1toV2, deserializeAgentState } from '../model/fileOperations';
+import { serializeSimState, serializePreset, downloadStateFile, readStateFile, downloadPresetFile, readPresetFile, saveBinaryFile, base64ToArrayBuffer, deserializeTypedArray, migrateSimulationStateV1toV2, deserializeAgentState } from '../model/fileOperations';
 import type { Attribute, CAModel, IndicatorChartSettings, Preset, SimulationState } from '../model/types';
 import { decodeAttrValue } from '../model/attrValueEncoding';
 import { cbNum } from '../model/centerBased';
@@ -9565,7 +9565,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
         setEncodingWebM(true);
         try {
           const blob = await enc.finish();
-          triggerDownload(blob, `${fname}_recording.webm`);
+          await saveRecording(blob, `${fname}_recording.webm`);
         } catch (err) {
           console.error('WebM encode failed', err);
           alert(`WebM encode failed: ${err instanceof Error ? err.message : String(err)}`);
@@ -9579,7 +9579,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
         setEncodingWebM(true);
         try {
           const blob = await encodeFramesToWebM(pending, targetFpsRef.current || 30, recordQualityRef.current);
-          triggerDownload(blob, `${fname}_recording.webm`);
+          await saveRecording(blob, `${fname}_recording.webm`);
         } catch (err) {
           console.error('WebM encode failed', err);
           alert(`WebM encode failed: ${err instanceof Error ? err.message : String(err)}`);
@@ -9605,7 +9605,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       setEncodingWebM(true);
       try {
         const blob = await encodeFramesToWebM(frames, fps, recordQualityRef.current);
-        triggerDownload(blob, `${fname}_recording.webm`);
+        await saveRecording(blob, `${fname}_recording.webm`);
       } catch (err) {
         console.error('WebM encode failed', err);
         alert(`WebM encode failed: ${err instanceof Error ? err.message : String(err)}`);
@@ -9654,18 +9654,33 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       }
       gif.finish();
       const blob = new Blob([gif.bytes()], { type: 'image/gif' });
-      triggerDownload(blob, `${fname}_recording.gif`);
+      await saveRecording(blob, `${fname}_recording.gif`);
     }
     resetRecordingState();
   };
 
-  const triggerDownload = (blob: Blob, filename: string) => {
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = filename;
-    a.click();
-    URL.revokeObjectURL(url);
+  /** Write a finished recording/screenshot blob to disk. Routes through
+   *  `saveBinaryFile`, which is a plain blob download on the web but a real
+   *  native Save As in the Tauri shell — WebView2 silently drops `<a download>`,
+   *  so a bare anchor here would write NOTHING in the desktop build.
+   *  Returns true if a file was written; false if the user cancelled or the
+   *  write failed (the failure is surfaced as a toast, never swallowed). */
+  const triggerDownload = async (blob: Blob, filename: string): Promise<boolean> => {
+    try {
+      return await saveBinaryFile(blob, filename);
+    } catch (err) {
+      console.error('Save failed', err);
+      showAgentNotice(`Save failed: ${err instanceof Error ? err.message : String(err)}`);
+      return false;
+    }
+  };
+
+  /** Stop-and-Save tail: the encoder is already finished, so if the user
+   *  cancels Save As the bytes are gone. Say so rather than resetting silently. */
+  const saveRecording = async (blob: Blob, filename: string): Promise<void> => {
+    if (!await triggerDownload(blob, filename)) {
+      showAgentNotice('Recording discarded — save was cancelled');
+    }
   };
 
 
@@ -9878,14 +9893,12 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
   // then toBlob from there. Falls through to direct toBlob in JS/WASM modes.
   const screenshotPendingRef = useRef<((data: { w: number; h: number; colors?: Uint8ClampedArray }) => void) | null>(null);
   const handleScreenshot = () => {
+    // Via saveBinaryFile (native Save As in the Tauri shell, blob download on
+    // the web). Cancelling is silent — nothing was lost and a screenshot is
+    // trivially retaken; a real write FAILURE is surfaced.
     const downloadBlob = (blob: Blob) => {
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
       const name = model.properties.name.toLowerCase().replace(/\s+/g, '_').replace(/[^a-z0-9_]/g, '') || 'genesis';
-      a.href = url;
-      a.download = `${name}_gen${generationRef.current}.png`;
-      a.click();
-      URL.revokeObjectURL(url);
+      void triggerDownload(blob, `${name}_gen${generationRef.current}.png`);
     };
     // Mirrors the recording capture: one path for the DISPLAY the user sees, with the
     // chosen scope — "simulation" crops to the drawn world rectangle (no letterbox
