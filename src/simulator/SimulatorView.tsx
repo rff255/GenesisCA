@@ -11241,7 +11241,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
                         false,
                       )}
                     </div>
-                    {!webmAvailable && <div className={styles.captureWhy}>WebM needs WebCodecs \u2014 not available in this browser. GIF is 256 colours, max 512 px, and keeps every frame in memory.</div>}
+                    {!webmAvailable && <div className={styles.captureWhy}>WebM needs WebCodecs &mdash; not available in this browser. GIF is 256 colours, max 512 px, and keeps every frame in memory.</div>}
 
                     <div className={`${styles.captureRow} ${is3D ? styles.captureRowDisabled : ''}`}>
                       <span>Record area</span>
@@ -11253,7 +11253,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
                       )}
                     </div>
                     <div className={styles.captureWhy}>{is3D
-                      ? 'A 3D scene fills the frame — there is no separate simulation crop.'
+                      ? 'A 3D scene fills the frame &mdash; there is no separate simulation crop.'
                       : 'Simulation: the whole grid / world framed to fit, independent of your zoom & pan. View: the display canvas exactly as shown.'}</div>
 
                     <div className={styles.captureSep} />
@@ -11268,8 +11268,8 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
                       )}
                     </div>
                     <div className={styles.captureWhyStack}>
-                      <div className={`${styles.captureWhy} ${effWebm ? '' : styles.captureWhyHidden}`}>Standard: a keyframe every 30 frames \u2014 ~6\u00D7 smaller and ~3\u00D7 faster, so the run stays closer to full speed (scrubbing lands on 30-frame boundaries). Archival: every frame independently decodable, for frame-by-frame analysis.</div>
-                      <div className={`${styles.captureWhy} ${effWebm ? styles.captureWhyHidden : ''}`}>GIF has no keyframe structure \u2014 WebM only.</div>
+                      <div className={`${styles.captureWhy} ${effWebm ? '' : styles.captureWhyHidden}`}>Standard: a keyframe every 30 frames &mdash; ~6&times; smaller and ~3&times; faster, so the run stays closer to full speed (scrubbing lands on 30-frame boundaries). Archival: every frame independently decodable, for frame-by-frame analysis.</div>
+                      <div className={`${styles.captureWhy} ${effWebm ? styles.captureWhyHidden : ''}`}>GIF has no keyframe structure &mdash; WebM only.</div>
                     </div>
 
                     <div className={`${styles.captureRow} ${effWebm ? '' : styles.captureRowDisabled}`}>
