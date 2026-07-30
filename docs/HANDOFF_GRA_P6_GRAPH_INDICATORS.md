@@ -6,7 +6,7 @@
 §5 (I1 — which is also this phase's oracle) ·
 [PLAN_GRAPH_REWRITING_AGENTS.md](PLAN_GRAPH_REWRITING_AGENTS.md) §P6, §4 (O10).
 
-**State**: READY · **Depends on**: nothing structurally · **Blocks**: P7's Overseer sweep
+**State**: DONE (`cc524d4`) · **Depends on**: nothing structurally · **Blocks**: P7's Overseer sweep
 
 ---
 
@@ -134,7 +134,7 @@ leaving it usable, and say in your report where you put it.
 ## Completion Report — P6
 
 **State**: DONE
-**Commit(s)**: see the Status Board row in the master handoff
+**Commit(s)**: `cc524d4` — feat(gra): graph indicators - the agent tiers measurement layer + the Overseer rule-space sweep
 **Files touched** (`git diff --stat`, excluding docs):
 
 ```
