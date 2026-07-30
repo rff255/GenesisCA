@@ -6,7 +6,9 @@ import type { NodeTypeDef } from '../types';
  *  plain agent ids, read at `r_<attr>[id]`). Feed it Get Nearby Agents / Get
  *  Bonded Agents / Filter Agents; pipe the values into Aggregate / Group Counting
  *  / Group Reduce — this is what makes a totalistic CA over a grid of agents AND
- *  stigmergy density reductions composable. Per-agent, impure. JS-only. */
+ *  stigmergy density reductions composable. Per-agent, impure. Emitted on ALL
+ *  THREE agent targets (JS + WASM + WebGPU — see AGENT_WASM_SUPPORTED_TYPES /
+ *  AGENT_WEBGPU_SUPPORTED_TYPES; the older "JS-only" note was stale). */
 export const GetAgentsAttributeNode: NodeTypeDef = {
   type: 'getAgentsAttribute',
   label: 'Get Agents Attribute',

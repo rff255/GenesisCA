@@ -2218,10 +2218,15 @@ function emitGroupCounting(ctx: AgentWasmCtx, node: GraphNode, a: AgentArrayRef,
   const cfg = node.data.config as Record<string, unknown>;
   const cnt = em.allocLocal(I32); em.i32Const(0); em.localSet(cnt);
   const i = em.allocLocal(I32); em.i32Const(0); em.localSet(i);
-  const lo = em.allocLocal(F64); pushValueInputF64(ctx, node, 'value', 0); em.localSet(lo);
+  // The operand ports are `compare` / `compareHigh` — the ids GroupCountingNode
+  // DECLARES and the JS emitter reads. (They were `value` / `value2` here, which
+  // no port carries, so a WIRED comparison silently fell back to 0 on WASM while
+  // JS read the real value — a latent cross-target divergence; no shipped model
+  // used groupCounting on the AGENT graph, which is why it stayed hidden.)
+  const lo = em.allocLocal(F64); pushValueInputF64(ctx, node, 'compare', 0); em.localSet(lo);
   const hi = em.allocLocal(F64);
   const isBetween = op === 'between' || op === 'notBetween';
-  if (isBetween) { pushValueInputF64(ctx, node, 'value2', 0); em.localSet(hi); }
+  if (isBetween) { pushValueInputF64(ctx, node, 'compareHigh', 0); em.localSet(hi); }
   void cfg;
   em.block(() => { em.loop(() => {
     em.localGet(i); em.localGet(a.lenLocal); em.op(OP_I32_GE_S); em.brIf(1);
@@ -2255,7 +2260,9 @@ function emitCountPredicate(em: WasmEmitter, v: number, lo: number, hi: number, 
 /** Group Statement — allIs/noneIs/hasA/allGreater/anyGreater/allLesser/anyLesser. */
 function emitGroupStatement(ctx: AgentWasmCtx, node: GraphNode, a: AgentArrayRef, op: string): number {
   const em = ctx.em;
-  const thr = em.allocLocal(F64); pushValueInputF64(ctx, node, 'value', 0); em.localSet(thr);
+  // The operand port is `x` — the id GroupStatementNode DECLARES and the JS
+  // emitter reads (it was `value` here; see the emitGroupCounting note).
+  const thr = em.allocLocal(F64); pushValueInputF64(ctx, node, 'x', 0); em.localSet(thr);
   const acc = em.allocLocal(I32);
   const i = em.allocLocal(I32);
   // "all" ops start 1 (AND each match); "any"/hasA start 0 (OR each match).

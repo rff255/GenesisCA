@@ -1512,8 +1512,13 @@ function emitGroupOperator(ctx: AgentWgpuCtx, node: GraphNode, portId: string): 
 /** Group Counting — count array elements passing a comparison (scalar output). */
 function emitGroupCounting(ctx: AgentWgpuCtx, node: GraphNode): ValueRef {
   const op = (node.data.config?.['operation'] as string) || 'equals';
-  const v1 = inF32(ctx, node, 'value', 0);
-  const v2 = inF32(ctx, node, 'value2', 0);
+  // The operand ports are `compare` / `compareHigh` — the ids GroupCountingNode
+  // DECLARES and the JS emitter reads. (They were `value` / `value2` here, which
+  // no port carries, so a WIRED comparison silently fell back to 0 on WebGPU while
+  // JS read the real value — a latent cross-target divergence; no shipped model
+  // used groupCounting on the AGENT graph, which is why it stayed hidden.)
+  const v1 = inF32(ctx, node, 'compare', 0);
+  const v2 = inF32(ctx, node, 'compareHigh', 0);
   const src = ctx.adj.inputToSource.get(`${node.id}:values`);
   const cnt = fresh(ctx, 'gcCnt');
   ctx.lines.push(`  var ${cnt}: i32 = 0;`);
@@ -1536,7 +1541,9 @@ function emitGroupCounting(ctx: AgentWgpuCtx, node: GraphNode): ValueRef {
  *  combined with all/any/none semantics. */
 function emitGroupStatement(ctx: AgentWgpuCtx, node: GraphNode): ValueRef {
   const op = (node.data.config?.['operation'] as string) || 'anyIs';
-  const v1 = inF32(ctx, node, 'value', 0);
+  // The operand port is `x` — the id GroupStatementNode DECLARES and the JS
+  // emitter reads (it was `value` here; see the emitGroupCounting note).
+  const v1 = inF32(ctx, node, 'x', 0);
   const src = ctx.adj.inputToSource.get(`${node.id}:values`);
   const res = fresh(ctx, 'gsR');
   // ALL → start true, break-false on a failing element; ANY/HAS → start false,

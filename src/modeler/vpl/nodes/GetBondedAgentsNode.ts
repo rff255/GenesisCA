@@ -5,7 +5,9 @@ import type { NodeTypeDef } from '../types';
  *  array you can feed to Filter Agents / Join Agents / Get Agents Attribute /
  *  Aggregate, exactly like Get Nearby Agents. Relies on the engine's per-step
  *  stale-bond sweep (so the partner list is clean by behaviour time); the alive
- *  guard is defensive. Per-agent (never hoisted). JS-only this milestone. */
+ *  guard is defensive. Per-agent (never hoisted). Emitted on ALL THREE agent
+ *  targets (JS + WASM + WebGPU — see AGENT_WASM_SUPPORTED_TYPES /
+ *  AGENT_WEBGPU_SUPPORTED_TYPES; the older "JS-only" note was stale). */
 export const GetBondedAgentsNode: NodeTypeDef = {
   type: 'getBondedAgents',
   label: 'Get Bonded Agents',

@@ -778,6 +778,102 @@ function buildCurvatureModel() {
   };
 }
 
+// Group Counting / Group Assert OPERAND PORTS. The node defs declare `values` +
+// `compare` / `compareHigh` (Count Matching) and `values` + `x` (Group Assert),
+// and the JS emitter reads exactly those — but BOTH agent emitters once read
+// `value` / `value2`, which no port carries, so a WIRED operand silently fell
+// back to 0 on WASM and WebGPU while JS read the real value. No shipped model
+// used either node on the AGENT graph, so nothing caught it until the Neighbour
+// Census lowering (which synthesizes getConstant → groupCounting.compare) made
+// it load-bearing. This synthetic wires all three operands over a bonded 1-ring.
+//
+// It carries a VALUE invariant recounted from the store's OWN bond list, so it
+// fails even if BOTH targets read the wrong port identically (parity alone is a
+// mirror test). Bonded (not proximity) so the recount is exact integer work.
+function buildGroupOperandModel() {
+  const used = new Set();
+  const nid = (p) => { let id; do { id = p + Math.random().toString(36).slice(2, 8); } while (used.has(id)); used.add(id); return id; };
+  const aN = [], aEd = [];
+  const an = (t, c) => { const n = { id: nid('a'), type: 'caNode', position: { x: 0, y: 0 }, data: { nodeType: t, config: c } }; aN.push(n); return n; };
+  const aE = (s, sp, tt, tp, cat) => aEd.push({ id: nid('e'), source: s.id, target: tt.id, sourceHandle: `output_${cat}_${sp}`, targetHandle: `input_${cat}_${tp}` });
+  const bs = an('behaviourStep', {});
+  const gba = an('getBondedAgents', {});
+  const gaa = an('getAgentsAttribute', { attributeId: 'state' });
+  aE(gba, 'agents', gaa, 'agents', 'value');
+  // equals: count neighbours whose state == 1 (the wired `compare` operand).
+  const kEq = an('getConstant', { constType: 'integer', constValue: '1' });
+  const gcEq = an('groupCounting', { operation: 'equals' });
+  aE(gaa, 'values', gcEq, 'values', 'value');
+  aE(kEq, 'value', gcEq, 'compare', 'value');
+  // between: count neighbours with 0 <= state <= 2 (BOTH operand ports wired).
+  const kLo = an('getConstant', { constType: 'integer', constValue: '0' });
+  const kHi = an('getConstant', { constType: 'integer', constValue: '2' });
+  const gcBt = an('groupCounting', { operation: 'between', lowOp: '>=', highOp: '<=' });
+  aE(gaa, 'values', gcBt, 'values', 'value');
+  aE(kLo, 'value', gcBt, 'compare', 'value');
+  aE(kHi, 'value', gcBt, 'compareHigh', 'value');
+  // hasA: is any neighbour's state == -2 (the wired `x` operand)?
+  const kHas = an('getConstant', { constType: 'integer', constValue: '-2' });
+  const gs = an('groupStatement', { operation: 'hasA' });
+  aE(gaa, 'values', gs, 'values', 'value');
+  aE(kHas, 'value', gs, 'x', 'value');
+  const set = an('setAttribute', { attributeId: 'cEq', extraCount: 2, attr_2: 'cBt', attr_3: 'sHas' });
+  aE(gcEq, 'count', set, 'value', 'value');
+  aE(gcBt, 'count', set, 'value_2', 'value');
+  aE(gs, 'result', set, 'value_3', 'value');
+  aE(bs, 'do', set, 'do', 'flow');
+  return {
+    schemaVersion: 1,
+    properties: { name: 'Group Operand Ports Parity Test', dimension: '2d', gridWidth: 24, gridHeight: 24, gridDepth: 1, topology: '2d-grid', boundaryTreatment: 'torus', useWasm: false, useWebGPU: false },
+    topologyMode: { gridCells: false, agents: true },
+    centerBased: { enabled: true, maxAgents: 100, maxBonds: 4, worldWidth: 24, worldHeight: 24, seedCount: 40, seedPattern: 'scatter', defaultRadius: 0.5, growthRate: 0, repulsionStiffness: 0, adhesionStiffness: 0, interactionRange: 1.5, drag: 1, timeStep: 0.1, momentum: 0, maxSpeed: 0, neighbourQueryRadius: 8, useBondingPhysics: false, autoBond: false, bondStiffness: 0, bondRestLength: 1.5, formDistance: 1.2, breakDistance: 2.0, agentTarget: 'wasm', agentUpdateMode: 'async',
+      agentCapabilities: { motion: 'force', body: true, collision: 'off', bonds: 'data', autoBond: false, growth: false, division: false, lifespan: false, populationBirth: false, populationDeath: false, sensing: false, sensingHeadingSource: 'velocity', orientation: false, fieldCoupling: false, appearance: true } },
+    attributes: [], modelAttributes: [], neighborhoods: [],
+    agentAttributes: [
+      { id: 'state', name: 'State', type: 'integer', defaultValue: '0' },
+      { id: 'cEq', name: 'CountEq', type: 'integer', defaultValue: '0' },
+      { id: 'cBt', name: 'CountBetween', type: 'integer', defaultValue: '0' },
+      { id: 'sHas', name: 'HasMinus2', type: 'integer', defaultValue: '0' },
+    ],
+    variables: [], agentVariables: [], indicators: [], mappings: [],
+    graphNodes: [], graphEdges: [], agentGraphNodes: aN, agentGraphEdges: aEd, macroDefs: [],
+  };
+}
+
+// A deterministic ring + chord bond topology (identical on both stores). Every
+// agent gets 2-3 partners; positions are left as seeded (the rule is topological,
+// so geometry is irrelevant here).
+function setupRingBondStores(stores) {
+  for (const s of stores) {
+    for (let i = 0; i < s.highWater; i++) {
+      formBond(s, i, (i + 1) % s.highWater, 1.5, 0);
+      if (i % 3 === 0) formBond(s, i, (i + 5) % s.highWater, 1.5, 0);
+    }
+  }
+}
+
+// Recount the three group reductions straight from the store's OWN bond list.
+// `state` is seeded by the harness and never written, so this is exact.
+function groupOperandInvariant(st) {
+  for (let i = 0; i < st.highWater; i++) {
+    if (!st.alive[i]) continue;
+    let eq = 0, bt = 0, has = 0;
+    const base = i * st.maxBonds;
+    for (let k = 0; k < st.bondCount[i]; k++) {
+      const p = st.bondPartner[base + k];
+      if (p < 0 || p >= st.highWater || !st.alive[p]) continue;
+      const v = st.attrRead.state[p];
+      if (v === 1) eq++;
+      if (v >= 0 && v <= 2) bt++;
+      if (v === -2) has = 1;
+    }
+    if (st.attrRead.cEq[i] !== eq) return `agent ${i}: cEq ${st.attrRead.cEq[i]} !== recount ${eq}`;
+    if (st.attrRead.cBt[i] !== bt) return `agent ${i}: cBt ${st.attrRead.cBt[i]} !== recount ${bt}`;
+    if (st.attrRead.sHas[i] !== has) return `agent ${i}: sHas ${st.attrRead.sHas[i]} !== recount ${has}`;
+  }
+  return null;
+}
+
 // The curvature model's bond/position setup — runs IDENTICALLY on both stores
 // after seeding. Irregular (but deterministic) positions across the full torus,
 // chain + cross bonds so every agent has 2-4 partners; the modulo wrap puts
@@ -818,6 +914,10 @@ entries.push({ name: '[synthetic] Apply Force To Agents (array broadcast, lowere
 entries.push({ name: '[synthetic] Loop index output (value chain + branch + direct)', raw: buildLoopIndexModel() });
 entries.push({ name: '[synthetic] Vector Op rotate2d + rotateAxis (lowered, 3D)', raw: buildVectorRotateModel() });
 entries.push({ name: '[synthetic] Curvature + bond currentLength (bonded, hypot↔sqrt)', raw: buildCurvatureModel(), setup: setupCurvatureStores });
+entries.push({
+  name: '[synthetic] Group operand ports (wired compare / compareHigh / x)',
+  raw: buildGroupOperandModel(), setup: setupRingBondStores, invariant: groupOperandInvariant,
+});
 entries.push({ name: '[synthetic] Flow diamond (conditional → shared getRandom chain)', raw: buildDiamondModel() });
 entries.push({ name: '[synthetic] RNG draw order (branch draw + post-branch draws)', raw: buildRngOrderModel() });
 entries.push({ name: '[synthetic] Branch scope (value used inside AND after a branch)', raw: buildBranchScopeModel() });
