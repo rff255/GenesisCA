@@ -52,3 +52,6 @@ scripts/__*_entry.ts
 # Presentation viewer build artifacts
 dist-viewer/
 public/viewer-template.html
+
+# GRA milestone orchestration baselines (local only)
+.gra-baseline/

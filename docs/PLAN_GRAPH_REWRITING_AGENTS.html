@@ -1,0 +1,486 @@
+<meta charset="utf-8">
+<title>Graph-Rewriting Automata on the Bond-Graph Agent tier — illustrated plan</title>
+<style>
+  :root{
+    --bg:#0c0d10; --panel:#15171c; --panel2:#1b1e24; --line:#2a2e37;
+    --ink:#e6e8ee; --dim:#9aa1ad; --faint:#6b727e;
+    --accent:#e8a13a; --accent2:#4cc9f0; --ok:#66bb6a; --bad:#ef5350;
+    --teal:#00838f; --purple:#7e57c2; --pink:#ad1457;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:15px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+    padding:38px 22px 90px}
+  .wrap{max-width:1080px;margin:0 auto}
+  h1{font-size:27px;margin:0 0 6px;letter-spacing:-.02em}
+  h2{font-size:19px;margin:52px 0 4px;color:var(--accent);
+     border-bottom:1px solid var(--line);padding-bottom:7px}
+  h3{font-size:15px;margin:26px 0 6px;color:var(--accent2);font-weight:600}
+  p{margin:9px 0;color:var(--dim)}
+  .lede{font-size:16px;color:var(--ink);margin-bottom:4px}
+  code{background:#0a0b0e;border:1px solid var(--line);border-radius:4px;
+       padding:1px 5px;font:12.5px/1.5 ui-monospace,SFMono-Regular,Consolas,monospace;color:#d8dee9}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;
+        padding:18px 20px;margin:16px 0}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  .grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
+  @media(max-width:820px){.grid2,.grid3{grid-template-columns:1fr}}
+  .tag{display:inline-block;font-size:11px;letter-spacing:.06em;text-transform:uppercase;
+       padding:2px 8px;border-radius:99px;border:1px solid var(--line);color:var(--faint)}
+  .tag.now{color:var(--ok);border-color:#2c4a30;background:#132016}
+  .tag.new{color:var(--accent);border-color:#4a3a1c;background:#20180a}
+  .tag.gap{color:var(--bad);border-color:#4a2626;background:#200f0f}
+  table{width:100%;border-collapse:collapse;margin:12px 0;font-size:13.5px}
+  th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{color:var(--faint);font-weight:600;font-size:11.5px;letter-spacing:.05em;text-transform:uppercase}
+  td code{font-size:12px}
+  .cap{font-size:12.5px;color:var(--faint);margin-top:7px;font-style:italic}
+  svg{display:block;max-width:100%;height:auto}
+  .kbd{font:12px ui-monospace,monospace;background:#0a0b0e;border:1px solid var(--line);
+       border-radius:4px;padding:1px 6px;color:var(--accent2)}
+  .rule{border-left:3px solid var(--accent);padding:2px 0 2px 14px;margin:14px 0;color:var(--ink)}
+  ul{color:var(--dim);margin:8px 0;padding-left:20px} li{margin:4px 0}
+  .mono{font:12.5px/1.7 ui-monospace,SFMono-Regular,Consolas,monospace;
+        background:#0a0b0e;border:1px solid var(--line);border-radius:8px;
+        padding:13px 15px;color:#d8dee9;white-space:pre;overflow-x:auto}
+</style>
+<div class="wrap">
+
+<h1>Graph-Rewriting Automata on the Bond-Graph Agent tier</h1>
+<p class="lede">Illustrated plan. Design authority: <code>IMPACT_MAP_GRAPH_REWRITING_AGENTS.md</code>
+· Phases: <code>PLAN_GRAPH_REWRITING_AGENTS.md</code> · Execution: <code>HANDOFF_GRAPH_REWRITING_AGENTS.md</code></p>
+<p>A Graph-Rewriting Automaton evolves <em>the graph itself</em> by local rules. The agent tier is
+already ~70&nbsp;% of one. This plan closes four gaps and makes the authoring surface
+a <strong>table and a handful of verbs</strong> — never a gluing morphism.</p>
+
+<!-- ══════════════════════════════════════════════════════════ -->
+<h2>1 · The headline — one node replaces nine</h2>
+
+<p>A homogeneous rule on a graph can only read its neighbours as an
+<strong>order-independent multiset</strong> of states. Today that means hand-wiring a gather
+and a counter <em>per state value</em>.</p>
+
+<div class="card">
+<svg viewBox="0 0 1000 300" role="img" aria-label="Before: nine hand-wired nodes. After: one census node.">
+  <defs>
+    <marker id="ar" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto">
+      <path d="M0,0 L7,3 L0,6 z" fill="#4cc9f0"/></marker>
+    <marker id="arw" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto">
+      <path d="M0,0 L7,3 L0,6 z" fill="#e8a13a"/></marker>
+  </defs>
+
+  <text x="18" y="22" fill="#ef5350" font-size="12.5" font-weight="600" letter-spacing=".08em">TODAY — 9 NODES, 12 WIRES</text>
+  <rect x="14" y="34" width="452" height="248" rx="9" fill="#15171c" stroke="#2a2e37"/>
+
+  <g font-size="10.5" fill="#e6e8ee">
+    <rect x="30" y="52" width="120" height="30" rx="5" fill="#00838f" opacity=".85"/>
+    <text x="90" y="71" text-anchor="middle">Get Bonded Agents</text>
+    <rect x="30" y="98" width="120" height="30" rx="5" fill="#5e35b1" opacity=".85"/>
+    <text x="90" y="117" text-anchor="middle">Get Agents Attr</text>
+
+    <rect x="200" y="46" width="96" height="26" rx="5" fill="#e65100" opacity=".8"/>
+    <text x="248" y="63" text-anchor="middle">Count = 0</text>
+    <rect x="200" y="82" width="96" height="26" rx="5" fill="#e65100" opacity=".8"/>
+    <text x="248" y="99" text-anchor="middle">Count = 1</text>
+    <rect x="200" y="118" width="96" height="26" rx="5" fill="#e65100" opacity=".8"/>
+    <text x="248" y="135" text-anchor="middle">Count = 2</text>
+    <rect x="200" y="154" width="96" height="26" rx="5" fill="#e65100" opacity=".8"/>
+    <text x="248" y="171" text-anchor="middle">Count = 3</text>
+
+    <rect x="200" y="196" width="96" height="26" rx="5" fill="#37474f"/>
+    <text x="248" y="213" text-anchor="middle">const A</text>
+    <rect x="200" y="232" width="96" height="26" rx="5" fill="#37474f"/>
+    <text x="248" y="249" text-anchor="middle">const B …</text>
+  </g>
+  <g stroke="#4cc9f0" stroke-width="1.4" fill="none" opacity=".7" marker-end="url(#ar)">
+    <path d="M150,67 L162,67 L162,113 L 28,113" opacity="0"/>
+    <path d="M150,113 L175,113 L175,59 L196,59"/>
+    <path d="M150,113 L175,113 L175,95 L196,95"/>
+    <path d="M150,113 L175,113 L175,131 L196,131"/>
+    <path d="M150,113 L175,113 L175,167 L196,167"/>
+    <path d="M90,82 L90,98"/>
+    <path d="M296,209 L318,209 L318,72 L296,72" opacity=".45"/>
+    <path d="M296,245 L330,245 L330,108 L296,108" opacity=".45"/>
+  </g>
+  <text x="352" y="120" fill="#6b727e" font-size="11">…and one</text>
+  <text x="352" y="136" fill="#6b727e" font-size="11">more constant</text>
+  <text x="352" y="152" fill="#6b727e" font-size="11">per state.</text>
+
+  <text x="536" y="22" fill="#66bb6a" font-size="12.5" font-weight="600" letter-spacing=".08em">PHASE 1 — 1 NODE</text>
+  <rect x="532" y="34" width="452" height="248" rx="9" fill="#15171c" stroke="#2a2e37"/>
+
+  <rect x="600" y="86" width="200" height="132" rx="7" fill="#5e35b1" stroke="#7e57c2" stroke-width="1.5"/>
+  <rect x="600" y="86" width="200" height="30" rx="7" fill="#ffffff"/>
+  <text x="700" y="106" text-anchor="middle" font-size="12" font-weight="600" fill="#1e2a3a">Neighbour Census</text>
+  <text x="614" y="136" font-size="10.5" fill="#cfd4dd">attribute: state</text>
+  <text x="614" y="153" font-size="10.5" fill="#cfd4dd">source: bonded</text>
+  <g font-size="10.5" fill="#e6e8ee" text-anchor="end">
+    <text x="788" y="176">Empty</text><text x="788" y="192">Red</text>
+    <text x="788" y="208">Blue</text>
+  </g>
+  <g fill="#4cc9f0"><circle cx="800" cy="172" r="4"/><circle cx="800" cy="188" r="4"/><circle cx="800" cy="204" r="4"/></g>
+  <text x="700" y="248" text-anchor="middle" font-size="11" fill="#6b727e">one labelled output port per state value</text>
+</svg>
+<p class="cap">The census node <strong>lowers</strong> to exactly the nine nodes on the left before any
+compiler runs — the <code>expandComposites</code> pattern. Zero per-target emit; JS, WASM and
+WebGPU all work by construction, because each target's capability gate inspects the
+<em>flattened</em> graph.</p>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════ -->
+<h2>2 · The authoring model: census → table → verb</h2>
+
+<div class="card">
+<svg viewBox="0 0 1000 250" role="img" aria-label="Pipeline: census feeds a rule table which selects a verb.">
+  <rect x="20" y="66" width="196" height="112" rx="8" fill="#1b1e24" stroke="#7e57c2"/>
+  <text x="118" y="92" text-anchor="middle" font-size="13" fill="#e6e8ee" font-weight="600">Neighbour Census</text>
+  <text x="118" y="116" text-anchor="middle" font-size="11.5" fill="#9aa1ad">the 1-ring, as counts</text>
+  <text x="118" y="146" text-anchor="middle" font-size="12" fill="#4cc9f0" font-family="ui-monospace,monospace">2 red · 1 blue · 0 green</text>
+  <text x="118" y="196" text-anchor="middle" font-size="11" fill="#66bb6a">PHASE 1</text>
+
+  <path d="M222,122 L286,122" stroke="#e8a13a" stroke-width="2" marker-end="url(#arw)"/>
+
+  <rect x="292" y="52" width="240" height="140" rx="8" fill="#1b1e24" stroke="#e8a13a"/>
+  <text x="412" y="78" text-anchor="middle" font-size="13" fill="#e6e8ee" font-weight="600">N-D Lookup Table</text>
+  <text x="412" y="98" text-anchor="middle" font-size="11" fill="#9aa1ad">axes: own state × counts</text>
+  <text x="412" y="116" text-anchor="middle" font-size="11" fill="#9aa1ad">value type: <tspan fill="#e8a13a">tag</tspan></text>
+  <rect x="322" y="128" width="180" height="26" rx="5" fill="#0a0b0e" stroke="#2a2e37"/>
+  <text x="412" y="146" text-anchor="middle" font-size="11" fill="#e8a13a">🎲 Randomize · seed 318</text>
+  <text x="412" y="178" text-anchor="middle" font-size="11" fill="#66bb6a">ALREADY SHIPS</text>
+
+  <path d="M538,122 L602,122" stroke="#e8a13a" stroke-width="2" marker-end="url(#arw)"/>
+
+  <rect x="608" y="38" width="372" height="168" rx="8" fill="#1b1e24" stroke="#00838f"/>
+  <text x="794" y="62" text-anchor="middle" font-size="13" fill="#e6e8ee" font-weight="600">Switch on the verb</text>
+  <g font-size="11.5">
+    <rect x="628" y="76" width="150" height="26" rx="5" fill="#263238"/><text x="703" y="93" text-anchor="middle" fill="#9aa1ad">Idle</text>
+    <rect x="628" y="108" width="150" height="26" rx="5" fill="#ad1457" opacity=".85"/><text x="703" y="125" text-anchor="middle" fill="#fff">Divide Agent</text>
+    <rect x="628" y="140" width="150" height="26" rx="5" fill="#ad1457" opacity=".6"/><text x="703" y="157" text-anchor="middle" fill="#fff">Kill Agent</text>
+    <rect x="810" y="76" width="150" height="26" rx="5" fill="#00838f" opacity=".85"/><text x="885" y="93" text-anchor="middle" fill="#fff">Form Bond</text>
+    <rect x="810" y="108" width="150" height="26" rx="5" fill="#00838f" opacity=".85"/><text x="885" y="125" text-anchor="middle" fill="#fff">Break Bond</text>
+    <rect x="810" y="140" width="150" height="26" rx="5" fill="#00838f" stroke="#e8a13a" stroke-width="1.5"/><text x="885" y="157" text-anchor="middle" fill="#fff">Rewire Bond</text>
+  </g>
+  <text x="794" y="192" text-anchor="middle" font-size="11" fill="#9aa1ad">
+    5 of 6 ship today · <tspan fill="#e8a13a">Rewire = PHASE 4</tspan></text>
+</svg>
+<p class="cap">The rule is a <em>table you can look at</em>. Seeded Randomize rolls a new rule;
+the Overseer sweeps rule space and reports which rules grow, die, or blow up — which is
+literally the GRA research workflow.</p>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════ -->
+<h2>3 · The four gaps</h2>
+
+<table>
+<tr><th>Gap</th><th>What it means today</th><th>Consequence</th><th>Phase</th></tr>
+<tr>
+  <td><strong>G4 · census</strong></td>
+  <td>the neighbour multiset must be hand-wired per state</td>
+  <td>9 nodes before the rule starts</td><td><span class="tag new">P1</span></td>
+</tr>
+<tr>
+  <td><strong>G3 · bond attributes</strong></td>
+  <td><code>bondTypeLabel</code> exists in the store and the ABI — nothing exposes it</td>
+  <td>no edge state, no typed rules, no SDCA link variable</td><td><span class="tag new">P2 · P3</span></td>
+</tr>
+<tr>
+  <td><strong>G1 · one request slot</strong></td>
+  <td><code>_bondFormReq[idx]</code> is a single cell; a later call <em>replaces</em> the earlier one</td>
+  <td>a rewrite needing 2 adds + 1 drop takes 3 steps, and every intermediate state
+      <strong>violates the invariant the rule preserves</strong></td><td><span class="tag new">P4</span></td>
+</tr>
+<tr>
+  <td><strong>G2 · geometric division</strong></td>
+  <td>bonds go to the nearer daughter by <code>sign(dot(offset, axis))</code></td>
+  <td>GRA division is <em>defined</em> by which edges go where — the one thing you cannot say</td><td><span class="tag new">P5</span></td>
+</tr>
+</table>
+
+<!-- ══════════════════════════════════════════════════════════ -->
+<h2>4 · Bond attributes <span class="tag new">P2 · P3</span></h2>
+
+<div class="grid2">
+<div class="card">
+<h3>What lands</h3>
+<svg viewBox="0 0 460 258" role="img" aria-label="Bond attributes panel and the two new nodes.">
+  <rect x="8" y="8" width="200" height="242" rx="8" fill="#15171c" stroke="#2a2e37"/>
+  <text x="108" y="32" text-anchor="middle" font-size="12" fill="#e8a13a" font-weight="600">Attributes · Agents graph</text>
+  <line x1="20" y1="42" x2="196" y2="42" stroke="#2a2e37"/>
+  <text x="24" y="62" font-size="11" fill="#6b727e">AGENT ATTRIBUTES</text>
+  <rect x="24" y="70" width="168" height="22" rx="4" fill="#1b1e24"/><text x="34" y="85" font-size="11" fill="#cfd4dd">state (tag)</text>
+  <text x="24" y="118" font-size="11" fill="#6b727e">BOND ATTRIBUTES</text>
+  <rect x="24" y="126" width="168" height="22" rx="4" fill="#20180a" stroke="#4a3a1c"/>
+  <text x="34" y="141" font-size="11" fill="#e8a13a">kind (tag)</text>
+  <rect x="24" y="152" width="168" height="22" rx="4" fill="#20180a" stroke="#4a3a1c"/>
+  <text x="34" y="167" font-size="11" fill="#e8a13a">age (integer)</text>
+  <rect x="24" y="178" width="168" height="22" rx="4" fill="#20180a" stroke="#4a3a1c"/>
+  <text x="34" y="193" font-size="11" fill="#e8a13a">weight (decimal)</text>
+  <rect x="24" y="212" width="80" height="22" rx="4" fill="#1b1e24" stroke="#2a2e37"/>
+  <text x="64" y="227" text-anchor="middle" font-size="11" fill="#9aa1ad">+ Bond attr</text>
+
+  <rect x="232" y="34" width="216" height="82" rx="7" fill="#1b1e24" stroke="#00838f"/>
+  <rect x="232" y="34" width="216" height="26" rx="7" fill="#00838f"/>
+  <text x="340" y="52" text-anchor="middle" font-size="11.5" fill="#fff" font-weight="600">Get Bond Attribute</text>
+  <text x="246" y="78" font-size="10.5" fill="#9aa1ad">◦ Partner</text>
+  <text x="246" y="96" font-size="10.5" fill="#9aa1ad">attribute: kind</text>
+  <text x="434" y="87" text-anchor="end" font-size="10.5" fill="#e6e8ee">Value ◦</text>
+
+  <rect x="232" y="140" width="216" height="98" rx="7" fill="#1b1e24" stroke="#00838f"/>
+  <rect x="232" y="140" width="216" height="26" rx="7" fill="#00838f"/>
+  <text x="340" y="158" text-anchor="middle" font-size="11.5" fill="#fff" font-weight="600">Set Bond Attribute</text>
+  <text x="246" y="184" font-size="10.5" fill="#9aa1ad">▸ DO · Partner · Value</text>
+  <text x="246" y="204" font-size="10.5" fill="#9aa1ad">attribute: kind</text>
+  <text x="246" y="224" font-size="10" fill="#e8a13a">writes BOTH slots</text>
+</svg>
+</div>
+
+<div class="card">
+<h3>The invariant that makes it correct</h3>
+<p><strong>I2 — bond symmetry.</strong> A bond is one object stored twice. Every write must
+land in both slots, and every compaction must move all fields together.</p>
+<svg viewBox="0 0 460 176" role="img" aria-label="A bond stored in both agents' lists must agree on every field.">
+  <rect x="16" y="20" width="180" height="136" rx="8" fill="#15171c" stroke="#2a2e37"/>
+  <text x="106" y="42" text-anchor="middle" font-size="12" fill="#4cc9f0" font-weight="600">agent 7 · slot 2</text>
+  <g font-size="11" font-family="ui-monospace,monospace" fill="#cfd4dd">
+    <text x="30" y="68">partner  = 12</text><text x="30" y="88">rest     = 2.0</text>
+    <text x="30" y="108" fill="#e8a13a">kind     = apical</text><text x="30" y="128" fill="#e8a13a">age      = 41</text>
+  </g>
+  <rect x="264" y="20" width="180" height="136" rx="8" fill="#15171c" stroke="#2a2e37"/>
+  <text x="354" y="42" text-anchor="middle" font-size="12" fill="#4cc9f0" font-weight="600">agent 12 · slot 0</text>
+  <g font-size="11" font-family="ui-monospace,monospace" fill="#cfd4dd">
+    <text x="278" y="68">partner  = 7</text><text x="278" y="88">rest     = 2.0</text>
+    <text x="278" y="108" fill="#e8a13a">kind     = apical</text><text x="278" y="128" fill="#e8a13a">age      = 41</text>
+  </g>
+  <path d="M200,88 L258,88" stroke="#66bb6a" stroke-width="2"/>
+  <circle cx="230" cy="88" r="15" fill="#132016" stroke="#2c4a30"/>
+  <text x="230" y="93" text-anchor="middle" font-size="14" fill="#66bb6a">≡</text>
+</svg>
+<p class="cap">The highest-risk edit of P2 is the <strong>swap-with-last compaction</strong> in
+<code>breakBond</code> / <code>freeAgentSlot</code>. A field added to the store but missed there
+corrupts silently on the first bond removal. The 500-generation form/break audit is
+written <em>first</em>, and watched failing, before the store changes.</p>
+</div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════ -->
+<h2>5 · Atomicity — why one request slot blocks everything <span class="tag new">P4</span></h2>
+
+<div class="card">
+<svg viewBox="0 0 1000 220" role="img" aria-label="One request slot versus a bounded queue.">
+  <text x="18" y="20" fill="#ef5350" font-size="12.5" font-weight="600" letter-spacing=".08em">TODAY — 1 SLOT</text>
+  <rect x="14" y="32" width="452" height="170" rx="9" fill="#15171c" stroke="#2a2e37"/>
+  <text x="34" y="58" font-size="11.5" fill="#9aa1ad" font-family="ui-monospace,monospace">_bondFormReq[idx] = target + 1</text>
+  <rect x="34" y="72" width="140" height="30" rx="5" fill="#0a0b0e" stroke="#4a2626"/>
+  <text x="104" y="91" text-anchor="middle" font-size="11" fill="#ef5350">one i32 cell</text>
+  <text x="34" y="128" font-size="11.5" fill="#9aa1ad">Form Bond ×3 in one step ⇒</text>
+  <text x="34" y="148" font-size="11.5" fill="#ef5350">the last call wins. Two bonds silently lost.</text>
+  <text x="34" y="176" font-size="11.5" fill="#6b727e">A degree-preserving rewrite cannot be atomic,</text>
+  <text x="34" y="192" font-size="11.5" fill="#6b727e">so its invariant is untestable.</text>
+
+  <text x="536" y="20" fill="#66bb6a" font-size="12.5" font-weight="600" letter-spacing=".08em">PHASE 4 — BOUNDED QUEUE</text>
+  <rect x="532" y="32" width="452" height="170" rx="9" fill="#15171c" stroke="#2a2e37"/>
+  <text x="552" y="58" font-size="11.5" fill="#9aa1ad" font-family="ui-monospace,monospace">_bondReq[idx*D + cursor++]</text>
+  <g>
+    <rect x="552" y="72" width="60" height="30" rx="5" fill="#132016" stroke="#2c4a30"/><text x="582" y="91" text-anchor="middle" font-size="11" fill="#66bb6a">form</text>
+    <rect x="616" y="72" width="60" height="30" rx="5" fill="#132016" stroke="#2c4a30"/><text x="646" y="91" text-anchor="middle" font-size="11" fill="#66bb6a">break</text>
+    <rect x="680" y="72" width="60" height="30" rx="5" fill="#132016" stroke="#2c4a30"/><text x="710" y="91" text-anchor="middle" font-size="11" fill="#66bb6a">form</text>
+    <rect x="744" y="72" width="60" height="30" rx="5" fill="#0a0b0e" stroke="#2a2e37"/><text x="774" y="91" text-anchor="middle" font-size="11" fill="#6b727e">…</text>
+    <rect x="808" y="72" width="60" height="30" rx="5" fill="#0a0b0e" stroke="#2a2e37"/><text x="838" y="91" text-anchor="middle" font-size="11" fill="#6b727e">D=8</text>
+  </g>
+  <text x="552" y="128" font-size="11.5" fill="#9aa1ad">A whole neighbourhood rewrite lands in ONE step.</text>
+  <text x="552" y="148" font-size="11.5" fill="#e8a13a">Overflow rejects the excess op — never wraps,</text>
+  <text x="552" y="164" font-size="11.5" fill="#e8a13a">never half-applies (invariant I5).</text>
+  <text x="552" y="192" font-size="11.5" fill="#66bb6a">+ a single atomic <tspan font-weight="600">Rewire</tspan> verb.</text>
+</svg>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════ -->
+<h2>6 · Division becomes combinatorial <span class="tag new">P5</span></h2>
+
+<div class="card">
+<svg viewBox="0 0 1000 210" role="img" aria-label="Geometric partition versus per-bond assignment.">
+  <text x="18" y="20" fill="#9aa1ad" font-size="12.5" font-weight="600" letter-spacing=".08em">TODAY — GEOMETRIC</text>
+  <rect x="14" y="32" width="452" height="164" rx="9" fill="#15171c" stroke="#2a2e37"/>
+  <line x1="240" y1="52" x2="240" y2="180" stroke="#e8a13a" stroke-dasharray="5 4" opacity=".7"/>
+  <text x="248" y="66" font-size="10.5" fill="#e8a13a">tension axis</text>
+  <circle cx="192" cy="116" r="20" fill="#5e35b1"/><text x="192" y="121" text-anchor="middle" font-size="11" fill="#fff">A</text>
+  <circle cx="292" cy="116" r="20" fill="#5e35b1"/><text x="292" y="121" text-anchor="middle" font-size="11" fill="#fff">B</text>
+  <g stroke="#00838f" stroke-width="2">
+    <line x1="192" y1="116" x2="90" y2="76"/><line x1="192" y1="116" x2="90" y2="156"/>
+    <line x1="292" y1="116" x2="396" y2="76"/><line x1="292" y1="116" x2="396" y2="156"/>
+    <line x1="212" y1="116" x2="272" y2="116"/>
+  </g>
+  <g fill="#37474f"><circle cx="90" cy="76" r="11"/><circle cx="90" cy="156" r="11"/>
+    <circle cx="396" cy="76" r="11"/><circle cx="396" cy="156" r="11"/></g>
+  <text x="240" y="192" text-anchor="middle" font-size="11" fill="#6b727e">bonds go to the nearer daughter — you cannot name them</text>
+
+  <text x="536" y="20" fill="#66bb6a" font-size="12.5" font-weight="600" letter-spacing=".08em">PHASE 5 — PER-BOND ASSIGNMENT</text>
+  <rect x="532" y="32" width="452" height="164" rx="9" fill="#15171c" stroke="#2a2e37"/>
+  <text x="552" y="56" font-size="11" fill="#9aa1ad">Division Event · For Each Bond:</text>
+  <rect x="552" y="66" width="230" height="24" rx="5" fill="#1b1e24" stroke="#2a2e37"/>
+  <text x="562" y="83" font-size="10.5" fill="#cfd4dd">if kind = apical → Assign to <tspan fill="#66bb6a">A</tspan></text>
+  <rect x="552" y="94" width="230" height="24" rx="5" fill="#1b1e24" stroke="#2a2e37"/>
+  <text x="562" y="111" font-size="10.5" fill="#cfd4dd">if kind = basal → Assign to <tspan fill="#4cc9f0">B</tspan></text>
+  <rect x="552" y="122" width="230" height="24" rx="5" fill="#1b1e24" stroke="#2a2e37"/>
+  <text x="562" y="139" font-size="10.5" fill="#cfd4dd">else → <tspan fill="#e8a13a">both</tspan> / <tspan fill="#ef5350">drop</tspan></text>
+  <text x="552" y="172" font-size="11" fill="#9aa1ad">The gluing morphism, as a flow chain.</text>
+  <text x="552" y="188" font-size="11" fill="#6b727e">Modes: tension (default) · alternate · byBondAttribute · byRule</text>
+  <g stroke="#00838f" stroke-width="2" fill="none">
+    <path d="M812,70 L860,70"/><path d="M812,134 L860,134"/>
+  </g>
+  <circle cx="880" cy="70" r="15" fill="#2c4a30" stroke="#66bb6a"/><text x="880" y="75" text-anchor="middle" font-size="11" fill="#fff">A</text>
+  <circle cx="880" cy="134" r="15" fill="#123340" stroke="#4cc9f0"/><text x="880" y="139" text-anchor="middle" font-size="11" fill="#fff">B</text>
+</svg>
+<p class="cap"><code>tension</code> stays the default and must remain <strong>byte-identical</strong> —
+Growing Tissue is the regression.</p>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════ -->
+<h2>7 · How we know it is right — the test oracles</h2>
+
+<p>Every oracle below is either a <strong>lemma</strong> (true by construction, zero literature
+risk) or a <strong>differential test against already-verified shipped code</strong>. Nothing in
+the verification depends on recalling a paper correctly.</p>
+
+<div class="grid2">
+<div class="card">
+<h3>O1 — the handshake lemma <span class="tag now">every phase</span></h3>
+<svg viewBox="0 0 440 150" role="img" aria-label="Sum of degrees equals twice the edge count.">
+  <g stroke="#00838f" stroke-width="2.5">
+    <line x1="90" y1="46" x2="200" y2="46"/><line x1="200" y1="46" x2="200" y2="112"/>
+    <line x1="200" y1="112" x2="90" y2="112"/><line x1="90" y1="46" x2="90" y2="112"/>
+    <line x1="200" y1="46" x2="290" y2="79"/>
+  </g>
+  <g fill="#5e35b1" stroke="#7e57c2">
+    <circle cx="90" cy="46" r="15"/><circle cx="200" cy="46" r="15"/>
+    <circle cx="200" cy="112" r="15"/><circle cx="90" cy="112" r="15"/><circle cx="290" cy="79" r="15"/>
+  </g>
+  <g fill="#fff" font-size="11" text-anchor="middle">
+    <text x="90" y="51">2</text><text x="200" y="51">3</text>
+    <text x="200" y="117">2</text><text x="90" y="117">2</text><text x="290" y="84">1</text>
+  </g>
+  <text x="330" y="52" font-size="12" fill="#9aa1ad" font-family="ui-monospace,monospace">Σdeg</text>
+  <text x="330" y="72" font-size="12" fill="#66bb6a" font-family="ui-monospace,monospace">= 10</text>
+  <text x="330" y="100" font-size="12" fill="#9aa1ad" font-family="ui-monospace,monospace">2·|E|</text>
+  <text x="330" y="120" font-size="12" fill="#66bb6a" font-family="ui-monospace,monospace">= 10 ✓</text>
+</svg>
+<p class="cap">Checked every generation. Catches asymmetric bonds, half-applied
+form/break, and bonds not cleaned up on death — the entire bookkeeping bug class.</p>
+</div>
+
+<div class="card">
+<h3>O6 — cubic degree preservation <span class="tag new">P5 · P7</span></h3>
+<svg viewBox="0 0 440 150" role="img" aria-label="Triangle split preserves 3-regularity.">
+  <g stroke="#00838f" stroke-width="2.5">
+    <line x1="70" y1="75" x2="20" y2="35"/><line x1="70" y1="75" x2="20" y2="115"/><line x1="70" y1="75" x2="128" y2="75"/>
+  </g>
+  <circle cx="70" cy="75" r="16" fill="#ad1457"/><text x="70" y="80" text-anchor="middle" font-size="11" fill="#fff">v</text>
+  <g fill="#37474f"><circle cx="20" cy="35" r="9"/><circle cx="20" cy="115" r="9"/><circle cx="128" cy="75" r="9"/></g>
+  <text x="176" y="80" font-size="22" fill="#e8a13a">→</text>
+
+  <g stroke="#00838f" stroke-width="2.5">
+    <line x1="286" y1="45" x2="330" y2="75"/><line x1="330" y1="75" x2="286" y2="105"/><line x1="286" y1="105" x2="286" y2="45"/>
+    <line x1="286" y1="45" x2="234" y2="26"/><line x1="286" y1="105" x2="234" y2="124"/><line x1="330" y1="75" x2="392" y2="75"/>
+  </g>
+  <g fill="#5e35b1" stroke="#7e57c2">
+    <circle cx="286" cy="45" r="13"/><circle cx="286" cy="105" r="13"/><circle cx="330" cy="75" r="13"/>
+  </g>
+  <g fill="#fff" font-size="10" text-anchor="middle">
+    <text x="286" y="49">3</text><text x="286" y="109">3</text><text x="330" y="79">3</text>
+  </g>
+  <g fill="#37474f"><circle cx="234" cy="26" r="9"/><circle cx="234" cy="124" r="9"/><circle cx="392" cy="75" r="9"/></g>
+</svg>
+<div class="mono">triangle split :  ΔN = +2   ΔE = +3
+invariant     :  E == 3N/2
+check         :  3N/2 + 3 == 3(N+2)/2  ✓</div>
+<p class="cap">Every new node has 1 external + 2 triangle edges = degree&nbsp;3; the outer
+neighbours keep degree 3. So <code>min deg == max deg == 3</code> and <code>E == 3N/2</code> hold
+at every rule step — the end-to-end GRA test, and it only becomes satisfiable once
+P4 makes the operation atomic.</p>
+</div>
+</div>
+
+<div class="card">
+<h3>O7 — the strongest early oracle: differential vs. a shipped model <span class="tag new">P1</span></h3>
+<p>The library already ships <strong>Game of Life on Agents</strong>, which finds neighbours by
+<em>proximity</em>. Phase 1 ships <strong>Life on Bonds</strong>, which finds the same neighbours through
+<em>bonds</em> and counts them with the new census node. Same neighbour set ⇒ the two must
+produce <strong>cell-for-cell identical state sequences</strong> over 200 generations.</p>
+<p>Any divergence is a census bug, located immediately. No literature is involved, and
+the reference is code that is already verified. Backed up by the classic pattern
+oracles: block stable, blinker period 2, glider translates by (1,1) every 4 generations.</p>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════ -->
+<h2>8 · Phases</h2>
+
+<div class="card">
+<svg viewBox="0 0 1000 250" role="img" aria-label="Phase dependency graph.">
+  <defs><marker id="ap" markerWidth="9" markerHeight="9" refX="8" refY="3.4" orient="auto">
+    <path d="M0,0 L8,3.4 L0,6.8 z" fill="#6b727e"/></marker></defs>
+  <g font-size="11.5">
+    <rect x="16" y="30" width="196" height="56" rx="8" fill="#132016" stroke="#2c4a30"/>
+    <text x="114" y="52" text-anchor="middle" fill="#66bb6a" font-weight="600">P1 · Census + Rule Table</text>
+    <text x="114" y="72" text-anchor="middle" fill="#9aa1ad">no engine change · READY</text>
+
+    <rect x="16" y="106" width="196" height="56" rx="8" fill="#132016" stroke="#2c4a30"/>
+    <text x="114" y="128" text-anchor="middle" fill="#66bb6a" font-weight="600">P2 · Bond attrs (CPU)</text>
+    <text x="114" y="148" text-anchor="middle" fill="#9aa1ad">store + ABI + JS/WASM · READY</text>
+
+    <rect x="252" y="106" width="180" height="56" rx="8" fill="#1b1e24" stroke="#2a2e37"/>
+    <text x="342" y="128" text-anchor="middle" fill="#e6e8ee" font-weight="600">P3 · Bond attrs (WebGPU)</text>
+    <text x="342" y="148" text-anchor="middle" fill="#6b727e">refine after P2</text>
+
+    <rect x="252" y="30" width="180" height="56" rx="8" fill="#20180a" stroke="#4a3a1c"/>
+    <text x="342" y="52" text-anchor="middle" fill="#e8a13a" font-weight="600">P4 · Request queue</text>
+    <text x="342" y="72" text-anchor="middle" fill="#6b727e">+ Rewire · the unblock</text>
+
+    <rect x="472" y="30" width="180" height="56" rx="8" fill="#1b1e24" stroke="#2a2e37"/>
+    <text x="562" y="52" text-anchor="middle" fill="#e6e8ee" font-weight="600">P5 · Division partition</text>
+    <text x="562" y="72" text-anchor="middle" fill="#6b727e">per-bond assignment</text>
+
+    <rect x="472" y="106" width="180" height="56" rx="8" fill="#1b1e24" stroke="#2a2e37"/>
+    <text x="562" y="128" text-anchor="middle" fill="#e6e8ee" font-weight="600">P6 · Graph indicators</text>
+    <text x="562" y="148" text-anchor="middle" fill="#6b727e">+ Overseer sweep</text>
+
+    <rect x="692" y="68" width="180" height="56" rx="8" fill="#1b1e24" stroke="#2a2e37"/>
+    <text x="782" y="90" text-anchor="middle" fill="#e6e8ee" font-weight="600">P7 · Samples + docs</text>
+    <text x="782" y="110" text-anchor="middle" fill="#6b727e">Cubic GRA · SDCA</text>
+
+    <rect x="692" y="176" width="180" height="52" rx="8" fill="#15171c" stroke="#2a2e37" stroke-dasharray="4 4"/>
+    <text x="782" y="198" text-anchor="middle" fill="#6b727e" font-weight="600">P8 · Motif editor</text>
+    <text x="782" y="216" text-anchor="middle" fill="#6b727e">stretch — not scheduled</text>
+  </g>
+  <g stroke="#6b727e" stroke-width="1.6" fill="none" marker-end="url(#ap)">
+    <path d="M212,134 L246,134"/><path d="M432,58 L466,58"/>
+    <path d="M652,58 L672,58 L672,90 L686,90"/>
+    <path d="M652,134 L672,134 L672,102 L686,102"/>
+  </g>
+</svg>
+<p class="cap">One fresh session per phase. Each ends with a Completion Report; the
+orchestrator reads only that to decide whether to continue or re-plan. Phases marked
+<em>refine</em> get their handoff written just before launch, using what the preceding
+phase actually found.</p>
+</div>
+
+<div class="rule">
+<strong>The rule every phase obeys:</strong> land all three agent targets, or reject cleanly
+through the existing <strong>capability gate</strong> with a user-visible reason. Never a silent
+JS clamp. If an assumption in the handoff proves false — <strong>stop and report</strong>; the
+orchestrator re-plans.
+</div>
+
+<h2>9 · Deliberately out of scope</h2>
+<ul>
+  <li><strong>Rotation systems / planarity preservation</strong> — the bond store is a set with
+      swap-with-last compaction; there is no cyclic order around a node.</li>
+  <li><strong>Genus / Euler characteristic</strong> — depends on faces, hence on a rotation system.</li>
+  <li><strong>Motif matching beyond the 1-ring</strong> — avoiding subgraph isomorphism is the
+      whole reason this design stays simple.</li>
+  <li><strong>Hypergraph rewriting</strong> — hyperedges are not bonds.</li>
+  <li><strong>The cell-grid graph mode</strong> — that is <code>INVESTIGATION_GRAPH_CA.md</code>, a
+      different substrate whose CSR adjacency is the wrong structure for mutation.
+      This milestone is the answer to that document's Phase 6.</li>
+</ul>
+
+</div>
