@@ -123,7 +123,7 @@ there would land a generation late. Record it as a follow-up; do not attempt it.
 
 **State**: **DONE**
 
-**Commit(s)**: `<sha>` — `feat(agents): declarative division bond partition + the daughter-bond policy`
+**Commit(s)**: `031524e` — `feat(agents): declarative division bond partition + the daughter-bond policy`
 
 **Files touched**
 
