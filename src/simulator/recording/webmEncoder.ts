@@ -20,32 +20,141 @@ import { Muxer, ArrayBufferTarget } from 'webm-muxer';
 export type Vp9Choice = { codec: string; muxerCodec: string; label: string; bitrate: number; fps: number };
 
 /**
- * Frame widths at or above this are NOT offered VP9 profile 1 (4:4:4).
+ * Recording quality mode — the ONLY thing it changes is the keyframe cadence.
  *
- * MEASURED Chrome bug (Chrome 148, Windows), not a GenesisCA limitation:
- * Chrome's software VP9 **profile 1** encoder degenerates catastrophically at a
- * coded width of 960 — encoding a handful of frames froze the whole renderer for
- * over a minute, with the main thread starved after the FIRST frame. It is
- * width-driven, not size-driven, and `isConfigSupported` cheerfully reports the
- * configuration as supported:
+ *  - `standard` (DEFAULT): a keyframe every `GOP_STANDARD` frames. MEASURED on
+ *    150 dense Kelp War frames: **3.5x smaller and 1.8x faster to encode** than
+ *    all-intra at the same bitrate — the largest single lever available, and the
+ *    reason it is now the default (docs/INVESTIGATION_STREAMING_RECORDING.md §6).
+ *    A player must decode from the last keyframe, so scrubbing lands on 30-frame
+ *    boundaries.
+ *  - `archival`: every frame a keyframe (the historical behaviour). Frames stay
+ *    independently decodable — frame-by-frame analysis, scrub-exact, and no
+ *    interframe prediction bleeding across previously-stable regions, which on
+ *    CA content (a 1-cell change in an otherwise static field) is a real effect.
  *
- *   |    size   |   px  | profile | result                                    |
- *   |-----------|-------|---------|-------------------------------------------|
- *   | 898 x 821 |  737k | 1 4:4:4 | fine                                      |
- *   | 900 x 900 |  810k | 1 4:4:4 | fine — 124 ms/frame, 13 ms max main gap   |
- *   | 960 x 540 |  518k | 1 4:4:4 | FREEZE after 1 frame (fewest pixels!)     |
- *   | 960 x 960 |  922k | 1 4:4:4 | FREEZE after 1-2 frames                   |
- *   | 960 x 960 |  922k | 0 4:2:0 | fine — 124 ms/frame, 12 ms max main gap   |
- *
- * This matters because **960 is exactly GenesisCA's capture cap** (`RECORD_MAX`
- * and `renderSimulationFrame(960, …)`), so the default simulation scope lands on
- * width 960 constantly. The bug predates streaming — the buffered encoder hits it
- * at Stop, for the whole recording at once — so this guard fixes both paths.
- * Above the threshold we start at profile 0, which was measured to handle the
- * identical workload perfectly; the cost is 4:2:0 chroma subsampling on frames
- * that currently hang the browser.
+ * NB a DROPPED frame is harmless under BOTH modes: a drop happens before
+ * submission, so the encoder only ever sees the frames it was given, in order,
+ * and codes each delta against the previously SUBMITTED frame. Nothing can
+ * reference a frame that was never encoded — the sequence is shortened, not
+ * corrupted (verified by a VideoDecoder round-trip on a with-drops GOP-30 file).
  */
-export const VP9_444_MAX_WIDTH = 960;
+export type RecordQuality = 'standard' | 'archival';
+export const DEFAULT_RECORD_QUALITY: RecordQuality = 'standard';
+/** Keyframe interval for `standard`. 30 is what §6's measurement used. */
+export const GOP_STANDARD = 30;
+/** Frames between keyframes for a quality mode (1 = all-intra). */
+export function keyFrameIntervalFor(q: RecordQuality): number {
+  return q === 'archival' ? 1 : GOP_STANDARD;
+}
+
+/** VP9 codes width in 8-pixel units, so this is the width libvpx actually sees. */
+export function vp9CodedWidth(w: number): number {
+  return Math.ceil(w / 8) * 8;
+}
+
+/**
+ * Is VP9 profile 1 (4:4:4) SAFE at this frame width?
+ *
+ * MEASURED Chrome bug (Chrome 148, Windows), not a GenesisCA limitation. This
+ * REPLACED a `VP9_444_MAX_WIDTH = 960` max-width guard, which was the wrong
+ * SHAPE: a bisect of the original 900-OK / 960-FREEZE bracket showed the failure
+ * tracks the CODED WIDTH MODULO 32, not its magnitude — so widths far below 960
+ * (640! 864! 896!) froze under the old guard. 13 standalone measurements (no
+ * app, no simulation, no WebGPU — just VideoEncoder plus a 50 ms heartbeat),
+ * zero contradictions:
+ *
+ *   | w x h     | coded w | %32 | verdict | 6 frames  | heartbeats | max main gap |
+ *   |-----------|---------|-----|---------|-----------|------------|--------------|
+ *   |  640x640  |   640   |  0  | FREEZE  | 1 of 6/25s|      2     |      -       |
+ *   |  864x864  |   864   |  0  | FREEZE  | 1 of 6/25s|      3     |      -       |
+ *   |  880x880  |   880   | 16  | FAST    |   274 ms  |    648     |    69 ms     |
+ *   |  896x896  |   896   |  0  | FREEZE  | 1 of 6/25s|      3     |      -       |
+ *   |  900x900  |   904   |  8  | slow    |  4863 ms  |      8     |   1008 ms    |
+ *   |  912x912  |   912   | 16  | FAST    |   322 ms  |    679     |    71 ms     |
+ *   |  912x928  |   912   | 16  | FAST    |   313 ms  |    686     |    71 ms     |
+ *   |  914x914  |   920   | 24  | slow    |  4686 ms  |     36     |   1010 ms    |
+ *   |  920x920  |   920   | 24  | slow    |  5058 ms  |     67     |   1055 ms    |
+ *   |  921x921  |   928   |  0  | FREEZE  | 1 of 6/25s|      0     |      -       |
+ *   |  928x928  |   928   |  0  | FREEZE  | 1 of 6/25s|      0     |      -       |
+ *   |  928x540  |   928   |  0  | FREEZE  | 1 of 6/25s|      3     |      -       |
+ *   |  960x960  |   960   |  0  | FREEZE  | >150 s     |     0     |      -       |
+ *   | 1280x720 profile 0  |  0  | FAST    |   192 ms  |    903     |    70 ms     |
+ *
+ * Three regimes, by coded width mod 32:
+ *   0        -> FREEZE: the renderer is starved indefinitely and does NOT recover
+ *               (960x960 held for >150 s; only navigating away released it), and
+ *               `isConfigSupported` cheerfully reports `supported: true`.
+ *   16       -> FAST: ~50 ms/frame with the main thread responsive.
+ *   8 or 24  -> SLOW: ~800 ms/frame with ~1 s main-thread stalls — a regime the
+ *               original investigation never saw, because it only sampled 900/960.
+ *
+ * WIDTH-DRIVEN, confirmed twice: 928x540 (501k px) freezes while 920x920 (846k px)
+ * does not, and 912x**928** — a bad number in the HEIGHT — is fast.
+ *
+ * So this returns true only for the ONE measured-fast residue: merely avoiding
+ * the frozen class would leave half of all widths at 800 ms/frame, which is the
+ * same user-visible harm in slower motion. Everything else falls back to
+ * profile 0, which is IMMUNE (1280x720, the worst residue, was the fastest
+ * configuration measured); the cost is 4:2:0 chroma subsampling instead of a
+ * hung browser.
+ *
+ * The rule is inferred from one machine and one Chrome build and the cause
+ * (likely a libvpx tile/threading path) is unknown, so a different core count
+ * could shift it. The mitigation is that GenesisCA controls its own capture
+ * widths (RECORD_MAX / snapRecordWidth below) and the fallback is safe at the
+ * worst residue — anything unexpected degrades to 4:2:0, never to a freeze.
+ */
+export function isVp9Profile1Safe(w: number): boolean {
+  return vp9CodedWidth(w) % 32 === 16;
+}
+
+/**
+ * Long-edge cap for 2D recording capture.
+ *
+ * 912 rather than the historical 960 BECAUSE OF `isVp9Profile1Safe`: 912 is in
+ * the measured-FAST residue class (912 % 32 === 16) while 960 is in the FROZEN
+ * one, so today's default silently records in 4:2:0 — whose chroma subsampling
+ * bleeds exactly the 1-pixel colour transitions CA output is made of. 5% less
+ * linear resolution buys full-resolution chroma and a 15x faster encoder.
+ *
+ * In residue space `=== 16` is the MAXIMUM possible distance from the frozen
+ * class (16 coded pixels either side), and capture widths are snapped to exact
+ * multiples of 8, so rounding cannot drift across. That is a stronger guarantee
+ * than a linear margin — the failure is not linear in width.
+ */
+export const RECORD_MAX = 912;
+
+/**
+ * Long-edge cap for 3D recording capture.
+ *
+ * 3D `readPixels` returns the WHOLE WebGL drawing buffer (`cssW*dpr x cssH*dpr`)
+ * with no cap — measured 23 MB/frame at DPR 2 and 33 MB at 4K, the largest
+ * per-frame cost in the codebase, while the 2D paths have been capped all along.
+ *
+ * Deliberately NOT 912: 1280 keeps far more 3D detail, and 1280 % 32 === 0 means
+ * the guard routes it to profile 0 — which is the fastest configuration measured
+ * (32 ms/frame at 1280x720). So **3D records in 4:2:0**, which is the right trade:
+ * the alternative at this size is a frozen renderer. Screenshots are unaffected
+ * (they keep full display resolution).
+ */
+export const RECORD_MAX_3D = 1280;
+
+/**
+ * Lower `w` to the largest width whose CODED width is in the profile-1 FAST
+ * residue class, so an arbitrary capture size (a portrait canvas, a tall grid)
+ * still gets 4:4:4 instead of falling back to 4:2:0.
+ *
+ * Only engages above 320 px: below that the ≤31 px reduction would be a large
+ * relative change, and small frames are cheap to encode anyway (the guard simply
+ * sends them to profile 0). Callers must derive the height from the SAME scale
+ * so the aspect ratio is preserved exactly.
+ */
+export function snapRecordWidth(w: number): number {
+  if (!Number.isFinite(w) || w <= 320) return Math.max(1, Math.round(w));
+  const v = Math.floor((Math.floor(w) - 16) / 32) * 32 + 16;
+  return v >= 16 && v <= w ? v : Math.round(w);
+}
 
 export async function pickVp9Config(w: number, h: number, fps: number): Promise<Vp9Choice> {
   if (typeof VideoEncoder === 'undefined') {
@@ -63,9 +172,10 @@ export async function pickVp9Config(w: number, h: number, fps: number): Promise<
   // + 4:4:4 in WebCodecs is uneven — Chrome accepts it on most platforms; if it
   // doesn't we fall back to profile 0.
   const attempts = [
-    // Skipped entirely at/above VP9_444_MAX_WIDTH — see that constant: profile 1
-    // does not merely perform poorly there, it freezes the renderer.
-    ...(w < VP9_444_MAX_WIDTH
+    // Offered ONLY in the measured-fast coded-width residue — see
+    // `isVp9Profile1Safe`: elsewhere profile 1 does not merely perform poorly,
+    // it either freezes the renderer outright or runs at ~800 ms/frame.
+    ...(isVp9Profile1Safe(w)
       ? [{ codec: 'vp09.01.10.08.03', muxerCodec: 'V_VP9', label: 'VP9 profile 1 (4:4:4)' }]
       : []),
     { codec: 'vp09.00.10.08', muxerCodec: 'V_VP9', label: 'VP9 profile 0 (4:2:0)' },
@@ -125,7 +235,11 @@ export function vp9EncoderConfig(choice: Vp9Choice, w: number, h: number): Video
  *      4:2:0 colour subsampling can blur 1-pixel colour transitions on small
  *      grids, but it's still far better than the GIF path.
  */
-export async function encodeFramesToWebM(frames: ImageData[], fps: number): Promise<Blob> {
+export async function encodeFramesToWebM(
+  frames: ImageData[],
+  fps: number,
+  quality: RecordQuality = DEFAULT_RECORD_QUALITY,
+): Promise<Blob> {
   if (frames.length === 0) throw new Error('No frames to encode');
   if (typeof VideoEncoder === 'undefined') {
     throw new Error('WebCodecs VideoEncoder is not supported in this browser.');
@@ -168,6 +282,11 @@ export async function encodeFramesToWebM(frames: ImageData[], fps: number): Prom
   if (!ctx) throw new Error('Could not acquire 2D context for WebM encode canvas');
 
   const microsPerFrame = 1_000_000 / safeFps;
+  // The keyframe cadence is the ONE thing the quality mode changes, and it is
+  // read from the SAME shared helper the streaming encoder uses — so a buffered
+  // file and a streamed one are configured identically in every respect.
+  const gop = keyFrameIntervalFor(quality);
+  let emitted = 0;
   for (let i = 0; i < frames.length; i++) {
     if (encoderError) break;
     const frame = frames[i]!;
@@ -175,15 +294,17 @@ export async function encodeFramesToWebM(frames: ImageData[], fps: number): Prom
     if (frame.width !== w || frame.height !== h) continue;
     ctx.putImageData(frame, 0, 0);
     const videoFrame = new VideoFrame(canvas as CanvasImageSource, {
-      timestamp: Math.round(i * microsPerFrame),
+      timestamp: Math.round(emitted * microsPerFrame),
       duration: Math.round(microsPerFrame),
     });
-    // Force every frame to be a keyframe — at the bitrate above, the size
-    // overhead is acceptable, and on CA models even a 1-cell change can
-    // confuse interframe prediction enough to bleed across previously-stable
-    // regions. All-intra keeps frames independent and visually faithful.
-    encoder.encode(videoFrame, { keyFrame: true });
+    // `archival` forces every frame to be a keyframe: on CA models even a 1-cell
+    // change can confuse interframe prediction enough to bleed across
+    // previously-stable regions, and independent frames make per-frame analysis
+    // (and any dropped frame) trivially safe. `standard` keyframes every GOP for
+    // a 3.5x smaller, 1.8x faster encode.
+    encoder.encode(videoFrame, { keyFrame: emitted % gop === 0 });
     videoFrame.close();
+    emitted++;
   }
 
   await encoder.flush();

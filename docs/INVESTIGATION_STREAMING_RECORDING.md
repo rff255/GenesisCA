@@ -1,8 +1,11 @@
 # Investigation — Streaming / Incremental Video Recording
 
-**Status:** investigation complete; **Tier 1 recommended and implemented** (see the companion
-commit). Tier 2 specified, not implemented.
-**Date:** 2026-07-29 · **Branch:** `improvements`
+**Status:** investigation complete; **Tier 1 implemented**. Phases 2, 3 and the §6b follow-ups are
+implemented too — see [PLAN_RECORDING_OPTIONS.md](./PLAN_RECORDING_OPTIONS.md). **Tier 2 is
+DEFERRED BY DECISION** (§4, §7) — the user decided not to stream to disk; do not re-litigate it.
+**Read §6b with §6c: the profile-1 guard shipped by this investigation was later measured to be
+the wrong SHAPE, and §6c supersedes it.**
+**Date:** 2026-07-29 (§6c + status added 2026-07-30) · **Branch:** `improvements`
 **Goal:** make long, high-quality simulator recordings possible for scientific use, instead of
 running out of memory after roughly a minute.
 
@@ -499,6 +502,69 @@ characterise. Two follow-ups worth having: check whether the freeze reproduces o
 and Chrome versions (it may be a libvpx tiling/threading path specific to widths that are large
 multiples of 64), and consider filing it upstream.
 
+> **↓ THE FOLLOW-UP WAS DONE, AND IT FALSIFIED THE THRESHOLD MODEL ABOVE. READ §6c.**
+> The `VP9_444_MAX_WIDTH = 960` guard described here **does not work** — widths far *below* 960
+> freeze. It has been replaced.
+
+---
+
+## 6c. The bisect — §6b's threshold model was wrong (2026-07-30)
+
+Before choosing a new `RECORD_MAX`, the 900-OK / 960-FREEZE bracket of §6b was **bisected** with
+the same standalone probe (no app, no simulation, no WebGPU — `VideoEncoder` plus a 50 ms
+heartbeat; progress written to `localStorage` on every beat so a hard freeze still leaves a trail,
+and the freeze escaped by navigating away). Chrome 148 / Windows 10 / 32 GB.
+
+| w × h | coded w (`ceil(w/8)*8`) | coded w mod 32 | verdict | 6 frames | heartbeats | max main-thread gap |
+|---|---|---|---|---|---|---|
+| 640 × 640 | 640 | **0** | **FREEZE** | 1 of 6 in 25 s | 2 | — |
+| 864 × 864 | 864 | **0** | **FREEZE** | 1 of 6 in 25 s | 3 | — |
+| 880 × 880 | 880 | **16** | OK **fast** | **274 ms** (46 ms/f) | 648 | 69 ms |
+| 896 × 896 | 896 | **0** | **FREEZE** | 1 of 6 in 25 s | 3 | — |
+| 900 × 900 | 904 | 8 | OK *slow* | 4 863 ms (810 ms/f) | 8 | **1 008 ms** |
+| 912 × 912 | 912 | **16** | OK **fast** | **322 ms** (54 ms/f) | 679 | 71 ms |
+| 912 × 928 | 912 | **16** | OK **fast** | **313 ms** (52 ms/f) | 686 | 71 ms |
+| 914 × 914 | 920 | 24 | OK *slow* | 4 686 ms (781 ms/f) | 36 | **1 010 ms** |
+| 920 × 920 | 920 | 24 | OK *slow* | 5 058 ms (843 ms/f) | 67 | **1 055 ms** |
+| 921 × 921 | 928 | **0** | **FREEZE** | 1 of 6 in 25 s | 0 | — |
+| 928 × 928 | 928 | **0** | **FREEZE** | 1 of 6 in 25 s | 0 | — |
+| 928 × 540 | 928 | **0** | **FREEZE** | 1 of 6 in 25 s | 3 | — |
+| 960 × 960 | 960 | **0** | **FREEZE** (> 150 s; only released by navigating away) | 1 of 6 | 0 | — |
+| 1280 × 720 **profile 0** | 1280 | 0 | OK **fast** | **192 ms** (32 ms/f) | 903 | 70 ms |
+
+**The rule — 13 points, zero contradictions.** With `cw = ceil(w / 8) * 8`:
+
+```
+cw % 32 ===  0   →  FREEZE   (renderer starved indefinitely; does not recover)
+cw % 32 === 16   →  FAST     (~50 ms/frame, main thread responsive)
+cw % 32 ===  8   →  SLOW     (~800 ms/frame, ~1 s main-thread stalls)
+cw % 32 === 24   →  SLOW     (same)
+```
+
+Four corrections to §6b:
+
+1. **The shipped guard was the wrong *shape*, not merely the wrong number.** `w < 960` let 640,
+   864 and 896 through — all of which froze. §6b's own framing ("profile 1 does not merely perform
+   poorly at 960, it freezes") is right about 960 and wrong about everything below it.
+2. **A third regime exists that §6b never saw.** 900/914/920 "worked" — but at ~800 ms/frame with
+   1 s main-thread stalls, ~15× slower than 880/912. §6b sampled only 900 and 960, so it read a
+   step where there is a periodic pattern. A guard that merely avoided `≡ 0` would leave half of
+   all widths here.
+3. **Width-drive is confirmed twice over.** 928 × 540 (501 k px) freezes while 920 × 920 (846 k px)
+   does not, *and* 912 × **928** — a bad number in the height — is fast.
+4. **Profile 0 is immune**, measured at the worst residue (1280, ≡ 0) and the *fastest* of any
+   configuration tried. So the fallback is sound and a 3D cap may safely sit on a ≡ 0 width.
+
+**The replacement** (`isVp9Profile1Safe` in
+[webmEncoder.ts](../src/simulator/recording/webmEncoder.ts)) offers profile 1 only for
+`ceil(w/8)*8 % 32 === 16` — the one measured-fast class, not merely "not the frozen one", because
+the slow class is the same user-visible harm in slower motion. `RECORD_MAX` moved 960 → **912**
+(≡ 16), so the default 2D recording is now genuinely 4:4:4 instead of silently falling back to
+4:2:0; `snapRecordWidth` lowers arbitrary capture widths into the same class.
+
+**Still worth filing upstream** — this is a clean, minimal reproduction of a Chrome software-VP9
+profile-1 defect that `isConfigSupported` reports as supported.
+
 ---
 
 ## 7. Recommendation and phased plan
@@ -519,18 +585,30 @@ New `src/simulator/recording/webmStreamEncoder.ts` (a `WebMStreamEncoder` class:
 No behaviour change for GIF, for the 3D capture source, for the `willReadFrequently` discipline,
 or for the muxer/output configuration.
 
-**Phase 2 — cap the 3D capture resolution** (apply the 2D `RECORD_MAX` rule to
-`capture3dPixels` / `readPixels`, and avoid the double allocation in `readPixels`). Small,
-self-contained, removes the worst per-frame cost in the codebase. Arguably the highest
-value-per-line item in this whole document. Needs a mockup only if the cap is user-facing;
-as an internal cap matching 2D it is exempt.
+**Phase 2 — cap the 3D capture resolution. ✅ IMPLEMENTED** as `RECORD_MAX_3D = 1280` on the long
+edge, in the recording capture block only (screenshots keep full display resolution). Measured
+in situ: a 1480 × 964 drawing buffer is captured at 1280 × 834 — 25 % fewer bytes per frame at
+DPR 1, and ~81 % at DPR 2, where the uncapped cost was 23 MB/frame.
 
-**Phase 3 — a recording quality selector** (§6). Needs a mockup.
+**Phase 3 — a recording quality selector (§6). ✅ IMPLEMENTED**, with the default moved: GOP 30 is
+now `Standard` and all-intra is the opt-in `Archival`. Re-measured on 60 real Kelp War frames at
+810 × 912 through the shipped `encodeFramesToWebM`: **6.35× smaller (38.8 MB → 6.1 MB) and 3.06×
+faster (6 111 ms → 1 994 ms)** — a larger win than §6's 3.5× / 1.8×, which was measured at a
+different size. The bitrate rule is deliberately unchanged (§6's 40 Mbps option carries an
+unmeasured quality cost and remains a separate decision). Plan + mockup:
+[PLAN_RECORDING_OPTIONS.md](./PLAN_RECORDING_OPTIONS.md).
 
-**Phase 4 — Tier 2, stream to disk.** `showSaveFilePicker` at record start with an OPFS
-fallback, swapping the muxer target. Needs a mockup (new flow at record start), an OPFS orphan
-sweep, and a decision on the Tauri shell (a new binary-streaming Rust command, or accept Tier 1
-there).
+**Phase 4 — Tier 2, stream to disk. ⛔ DEFERRED BY DECISION — do not re-litigate.** The user
+decided against it. §4's measurements stand and remain the design of record should it ever be
+revisited, but it is not planned: Tier 1 already moved the ceiling from ~105 s to 4.4×–541×
+longer, and the GOP-30 default multiplies that again by ~6× on exactly the dense content that
+bounds it. The `ArrayBufferTarget` ~3× finalize spike (§3.1) is the residual cost that Tier 2
+would have removed, and it is accepted.
+
+**Also implemented alongside** (not phased here): an opt-in **lossless** overload policy — instead
+of dropping a frame the recorder holds the *step pipeline* until the encoder drains, answering §8
+question 1 with "both, drop remains the default". Measured on dense content: 0 dropped (vs 250)
+with the simulation running 4.92× slower.
 
 **On the illustrated-plan rule:** Phase 1 is exempt — it is a pure-internal pipeline change with
 identical user-visible behaviour, the one exception being the drop counter, which is an addition
@@ -540,22 +618,27 @@ self-contained HTML mockup alongside its plan at implementation time.
 
 ---
 
-## 8. Open questions for the user
+## 8. Open questions — ANSWERED (2026-07-30)
 
-1. **Is dropping frames acceptable** on dense/large models when the encoder cannot keep up, given
-   the alternative today is an OOM? The current implementation drops and reports; the other
-   option is to slow the *simulation* to the encoder's rate, which changes what "60 fps" means.
-2. **Quality vs. length.** §6 shows 3–3.5× smaller files are one setting away. Is the all-intra,
-   near-lossless default the right archival default, with a "long recording" mode alongside — or
-   should the default itself move?
-3. **Tier 2 destination.** File System Access (unbounded, Chromium-only, picker at record start)
-   or OPFS (no picker, 10 GB quota, download hand-off unproven)? Or both, with FSA preferred?
-4. **The Tauri shell** currently has only a text-only `save_text_file` command. Is a binary
-   streaming command worth adding, or should the native shell simply keep Tier 1?
-5. **3D capture resolution.** Capping it (matching 2D) changes the resolution of existing 3D
-   recordings. Cap it, make it a setting, or leave it uncapped and merely documented? Note the
-   2D cap is currently 960 — the exact width that trips the Chrome bug in §6b — so if a 3D cap is
-   added it should not be 960 either.
-6. **The Chrome VP9 profile-1 freeze (§6b)** — worth reproducing on your machines and filing
-   upstream? And is `VP9_444_MAX_WIDTH = 960` the right conservative line, or should GenesisCA
-   simply move `RECORD_MAX` off 960 so profile 1 stays available at the default scope?
+All six were answered by the user and implemented (or explicitly deferred) in
+[PLAN_RECORDING_OPTIONS.md](./PLAN_RECORDING_OPTIONS.md).
+
+1. **Is dropping frames acceptable?** → **Ship both.** Drop stays the default; an opt-in
+   *Never skip* mode holds the step pipeline until the encoder drains, so the *simulation* slows
+   instead. ✅ implemented. Measured: 0 dropped vs 250, at 4.92× slower simulation.
+2. **Quality vs. length — should the default move?** → **Yes, move it.** GOP 30 is now the
+   `Standard` default; all-intra is the opt-in `Archival` mode. ✅ implemented. Re-measured:
+   6.35× smaller, 3.06× faster.
+3. **Tier 2 destination?** → **Neither — deferred by decision.** ⛔ not implemented; see §7.
+4. **The Tauri binary-save command?** → owned by a separate workstream; nothing here touches
+   `src-tauri/` or `fileOperations.ts`.
+5. **3D capture resolution?** → **Cap it**, at 1280 on the long edge. ✅ implemented. Note the
+   consequence: 1280 ≡ 0 (mod 32), so the §6c guard routes 3D to profile 0 — **3D records in
+   4:2:0**, which is correct, because at that width profile 1 freezes the renderer and profile 0
+   was the fastest configuration measured.
+6. **Is `VP9_444_MAX_WIDTH = 960` the right line, or move `RECORD_MAX` off 960?** → **Both
+   premises were wrong.** The bisect (§6c) shows the failure is periodic in the coded width, not a
+   threshold, so the max-width guard was replaced by a residue test and `RECORD_MAX` moved to 912
+   (≡ 16 mod 32) — which is the answer to the *intent* of the question: the default recording now
+   genuinely uses 4:4:4 rather than silently falling back to 4:2:0. Filing upstream is still
+   worthwhile and still outstanding.

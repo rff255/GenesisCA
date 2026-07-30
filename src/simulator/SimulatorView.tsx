@@ -30,7 +30,10 @@ import { SpriteRegistry } from './spriteRegistry';
 import { ImageMappingDialog, type ImageMappingConfig } from './ImageMappingDialog';
 import { CsvImportDialog, type CsvImportResult } from './CsvImportDialog';
 import { GIFEncoder, quantize, applyPalette } from 'gifenc';
-import { encodeFramesToWebM, isWebMSupported } from './recording/webmEncoder';
+import {
+  encodeFramesToWebM, isWebMSupported, snapRecordWidth,
+  RECORD_MAX, RECORD_MAX_3D, DEFAULT_RECORD_QUALITY, type RecordQuality,
+} from './recording/webmEncoder';
 import { WebMStreamEncoder } from './recording/webmStreamEncoder';
 import { getGlyphTile } from './recording/glyphAtlas';
 import { IndicatorDisplay } from './IndicatorDisplay';
@@ -1302,8 +1305,53 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
   const webmStreamPendingRef = useRef<ImageData[]>([]);
   const recordDroppedRef = useRef(0);
   const [recordDroppedCount, setRecordDroppedCount] = useState(0);
+  /** How long the LOSSLESS step throttle may wait on the encoder before deciding
+   *  it is wedged rather than merely slow, degrading to dropping and saying so.
+   *  An order of magnitude past the worst measured per-frame encode (~800 ms on
+   *  dense content), so it can only fire on a genuine stall — never on
+   *  legitimate backpressure, which is what the mode exists to absorb. */
+  const LOSSLESS_STALL_MS = 8000;
   const [encodingWebM, setEncodingWebM] = useState(false);
   useEffect(() => { recordingRef.current = recording; }, [recording]);
+
+  // ── Recording quality (keyframe cadence) ────────────────────────────────────
+  // 'standard' = a keyframe every 30 frames: MEASURED 3.5x smaller and 1.8x
+  // faster to encode than all-intra, so the simulation also runs closer to full
+  // speed while recording. 'archival' = the historical all-intra, where every
+  // frame decodes independently (frame-by-frame analysis, scrub-exact, and no
+  // interframe prediction bleeding across previously-stable CA regions).
+  const [recordQuality, setRecordQuality] = useState<RecordQuality>(() =>
+    (saved.current.recordQuality as RecordQuality | undefined) === 'archival' ? 'archival' : DEFAULT_RECORD_QUALITY);
+  const recordQualityRef = useRef<RecordQuality>(recordQuality);
+  useEffect(() => { recordQualityRef.current = recordQuality; }, [recordQuality]);
+
+  // ── Overload policy: what gives when the encoder cannot keep up ──────────────
+  // 'drop' (default, the historical behaviour) — the encoder refuses a frame and
+  // the simulation keeps its speed; skips are counted next to REC.
+  // 'lossless' — every captured frame is encoded and the STEP PIPELINE is held
+  // back until the encoder drains, so the run gets slower and the video loses
+  // nothing. `draw()` is synchronous and cannot await the encoder, which is
+  // exactly why the throttle lives in the (already asynchronous) step chain.
+  type RecordOverload = 'drop' | 'lossless';
+  const [recordOverload, setRecordOverload] = useState<RecordOverload>(() =>
+    (saved.current.recordOverload as RecordOverload | undefined) === 'lossless' ? 'lossless' : 'drop');
+  const recordOverloadRef = useRef<RecordOverload>(recordOverload);
+  useEffect(() => { recordOverloadRef.current = recordOverload; }, [recordOverload]);
+  /** The policy in force for THIS run — locked at Start (like format/scope/quality)
+   *  and the only thing the throttle and the capture site consult. Degrades to
+   *  'drop' if the encoder ever stalls past LOSSLESS_STALL_MS. */
+  const recordOverloadActiveRef = useRef<RecordOverload>('drop');
+  /** When the step loop began waiting on the encoder (null = not waiting). */
+  const losslessWaitStartRef = useRef<number | null>(null);
+  /** True while the step loop is being held back — surfaced in the REC readout
+   *  so a deliberately slowed simulation never reads as a hang. */
+  const [recordThrottled, setRecordThrottled] = useState(false);
+  const recordThrottledRef = useRef(false);
+  const setRecordThrottledIfChanged = (v: boolean) => {
+    if (recordThrottledRef.current === v) return;
+    recordThrottledRef.current = v;
+    setRecordThrottled(v);
+  };
 
   /** Dispose of one finished capture frame: hand it to the streaming WebM
    *  encoder when one is (or can be) live, else retain it the historical way.
@@ -1312,9 +1360,13 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
    *  buffered) so the transport counters stay honest. */
   const acceptRecordedFrame = (frame: ImageData) => {
     if (recordStreamModeRef.current) {
+      // LOSSLESS: submit unconditionally. The step pipeline is what waits (see
+      // the rAF tick in the `stepped` handler), so the encoder queue is still
+      // bounded — the frame is simply never the thing that gets sacrificed.
+      const force = recordOverloadActiveRef.current === 'lossless';
       const enc = webmStreamRef.current;
       if (enc) {
-        if (enc.addFrame(frame)) recordCountRef.current += 1;
+        if (enc.addFrame(frame, force)) recordCountRef.current += 1;
         else recordDroppedRef.current += 1;
         return;
       }
@@ -1331,12 +1383,14 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
         // which silently retimed the whole file if the slider moved mid-record.
         webmStreamStateRef.current = 'creating';
         webmStreamPendingRef.current = [frame];
-        WebMStreamEncoder.create(frame.width, frame.height, targetFpsRef.current || 30).then(enc => {
+        WebMStreamEncoder.create(
+          frame.width, frame.height, targetFpsRef.current || 30, recordQualityRef.current,
+        ).then(enc => {
           if (!recordingRef.current || !recordStreamModeRef.current) { enc.cancel(); return; }
           webmStreamRef.current = enc;
           webmStreamStateRef.current = 'ready';
           for (const f of webmStreamPendingRef.current) {
-            if (enc.addFrame(f)) recordCountRef.current += 1;
+            if (enc.addFrame(f, force)) recordCountRef.current += 1;
             else recordDroppedRef.current += 1;
           }
           webmStreamPendingRef.current = [];
@@ -1366,7 +1420,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
           targetFps, unlimitedFps, gensPerFrame, unlimitedGens,
           activeViewer, brushColor, brushW, brushH, brushMapping, showBrushCursor, showGridlines, show2dAxes,
           brushShape, brushRadius, brushRingWidth, brushLineWidth, brush3dVolume, brushBoxDepth,
-          infinityCanvas, indicatorVizModes, recordFormat, recordScope, screenshotScope, brushSectionH, agentsFront3d,
+          infinityCanvas, indicatorVizModes, recordFormat, recordScope, recordQuality, recordOverload, screenshotScope, brushSectionH, agentsFront3d,
           light3d, cellGaps3d, agentMetaballs, agentGlow,
           agentBrushRadius, agentSeedDensity, agentSeedSpacing,
           agentBrushShape, agentBrushW, agentBrushH, agentBrushRingWidth, agentBrushLineWidth,
@@ -1382,7 +1436,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       } catch { /* localStorage full */ }
     }, 300);
     return () => clearTimeout(timer);
-  }, [targetFps, unlimitedFps, gensPerFrame, unlimitedGens, activeViewer, brushColor, brushW, brushH, brushMapping, showBrushCursor, showGridlines, show2dAxes, brushShape, brushRadius, brushRingWidth, brushLineWidth, brush3dVolume, brushBoxDepth, infinityCanvas, indicatorVizModes, recordFormat, recordScope, screenshotScope, brushSectionH, agentsFront3d, light3d, cellGaps3d, agentMetaballs, agentGlow, agentBrushRadius, agentSeedDensity, agentSeedSpacing, agentBrushShape, agentBrushW, agentBrushH, agentBrushRingWidth, agentBrushLineWidth, showCaGrid, showAgents, showBonds, simulateCells, simulateAgents, brushTarget, bg2d, agentOutlines, showVision, indicatorHiddenCategories, indicatorChartOverrides]);
+  }, [targetFps, unlimitedFps, gensPerFrame, unlimitedGens, activeViewer, brushColor, brushW, brushH, brushMapping, showBrushCursor, showGridlines, show2dAxes, brushShape, brushRadius, brushRingWidth, brushLineWidth, brush3dVolume, brushBoxDepth, infinityCanvas, indicatorVizModes, recordFormat, recordScope, recordQuality, recordOverload, screenshotScope, brushSectionH, agentsFront3d, light3d, cellGaps3d, agentMetaballs, agentGlow, agentBrushRadius, agentSeedDensity, agentSeedSpacing, agentBrushShape, agentBrushW, agentBrushH, agentBrushRingWidth, agentBrushLineWidth, showCaGrid, showAgents, showBonds, simulateCells, simulateAgents, brushTarget, bg2d, agentOutlines, showVision, indicatorHiddenCategories, indicatorChartOverrides]);
 
   // Manual Brush — signature-keyed merge effect. Re-derives `manualBrush`
   // whenever the cell attribute set (id+type) changes. Surviving attrs carry
@@ -2144,11 +2198,20 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
    *  Output is grid-aspect (W:H) → no letterbox margins by construction. Reads only refs.
    *  NB agent SPRITES / METABALLS / GLOW are drawn as plain circles here — use the
    *  "current view" scope for a WYSIWYG capture of those. Reuses `target` if given. */
-  const renderSimulationFrame = useCallback((maxSize: number, target?: HTMLCanvasElement): HTMLCanvasElement | null => {
+  const renderSimulationFrame = useCallback((maxSize: number, target?: HTMLCanvasElement, snapWidth = false): HTMLCanvasElement | null => {
     if (is3dRef.current) return null;
     const w = gridWidth.current, h = gridHeight.current;
     if (!w || !h) return null;
-    const scale = maxSize / Math.max(w, h);
+    let scale = maxSize / Math.max(w, h);
+    // Recording only (`snapWidth`): lower the width into the VP9 profile-1 fast
+    // residue class so the file keeps 4:4:4 chroma — see snapRecordWidth. The
+    // height comes from the SAME scale, so the aspect ratio is exact. Screenshots
+    // pass false and keep their requested size.
+    if (snapWidth) {
+      const wantW = Math.max(1, Math.round(w * scale));
+      const snapW = snapRecordWidth(wantW);
+      if (snapW !== wantW) scale = snapW / w;
+    }
     const outW = Math.max(1, Math.round(w * scale)), outH = Math.max(1, Math.round(h * scale));
     const off = target ?? document.createElement('canvas');
     if (off.width !== outW) off.width = outW;
@@ -2394,6 +2457,46 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
   /** Persistent scratch canvases for capture3dPixels (never displayed). */
   const capture3dScratchRef = useRef<HTMLCanvasElement | null>(null);
   const capture3dOverlayRef = useRef<HTMLCanvasElement | null>(null);
+  /** Persistent scratch canvases for downscaleCapture (never displayed). */
+  const downscaleSrcRef = useRef<HTMLCanvasElement | null>(null);
+  const downscaleDstRef = useRef<HTMLCanvasElement | null>(null);
+
+  /** Downscale a captured pixel block so its long edge is at most `maxSize`.
+   *
+   *  Used by the 3D recording path, whose source is the whole WebGL drawing
+   *  buffer (`cssW*dpr x cssH*dpr`, uncapped). Returns the input untouched when
+   *  it already fits, so a small viewport pays nothing.
+   *
+   *  Both scratch canvases are NEVER DISPLAYED, which is what makes the
+   *  `getImageData` here safe: doing that on a LIVE canvas de-optimises it out
+   *  of GPU acceleration permanently (~6x slower drawing, outliving the
+   *  recording). Same discipline as the 2D `recordScratchRef` path. */
+  const downscaleCapture = useCallback((
+    px: { data: Uint8ClampedArray; width: number; height: number },
+    maxSize: number,
+  ): { data: Uint8ClampedArray; width: number; height: number } => {
+    const long = Math.max(px.width, px.height);
+    if (long <= maxSize || long === 0) return px;
+    const s = maxSize / long;
+    const outW = Math.max(1, Math.round(px.width * s));
+    const outH = Math.max(1, Math.round(px.height * s));
+    let src = downscaleSrcRef.current;
+    if (!src) { src = document.createElement('canvas'); downscaleSrcRef.current = src; }
+    if (src.width !== px.width || src.height !== px.height) { src.width = px.width; src.height = px.height; }
+    const sctx = src.getContext('2d');
+    if (!sctx) return px;
+    sctx.putImageData(new ImageData(px.data, px.width, px.height), 0, 0);
+    let dst = downscaleDstRef.current;
+    if (!dst) { dst = document.createElement('canvas'); downscaleDstRef.current = dst; }
+    if (dst.width !== outW || dst.height !== outH) { dst.width = outW; dst.height = outH; }
+    const dctx = dst.getContext('2d', { willReadFrequently: true });
+    if (!dctx) return px;
+    dctx.imageSmoothingEnabled = true;
+    dctx.clearRect(0, 0, outW, outH);
+    dctx.drawImage(src, 0, 0, px.width, px.height, 0, 0, outW, outH);
+    const out = dctx.getImageData(0, 0, outW, outH);
+    return { data: out.data, width: outW, height: outH };
+  }, []);
 
   // Build full code display from all compiled functions
   const buildFullCode = useCallback((result: ReturnType<typeof compileGraph>) => {
@@ -4726,11 +4829,16 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
 
           if (is3dRef.current && gl3dRef.current) {
             // 3D: the scene fills the viewport (no letterbox) — both scopes capture
-            // the full GL display buffer.
+            // the full GL display buffer, DOWNSCALED to RECORD_MAX_3D on the long
+            // edge. Uncapped, readPixels returns cssW*dpr x cssH*dpr — measured
+            // 23 MB/frame at DPR 2 and 33 MB at 4K, the largest per-frame cost in
+            // the codebase (2D has been capped all along). Screenshots are NOT
+            // capped — they keep full display resolution.
             const px = capture3dPixels() ?? gl3dRef.current.readPixels();
-            if (!expected || (px.width === expected.w && px.height === expected.h)) {
-              forceFrameOpaque(px.data);
-              frame = new ImageData(px.data, px.width, px.height);
+            const scaled = downscaleCapture(px, RECORD_MAX_3D);
+            if (!expected || (scaled.width === expected.w && scaled.height === expected.h)) {
+              forceFrameOpaque(scaled.data);
+              frame = new ImageData(scaled.data, scaled.width, scaled.height);
             }
           } else if (recordScopeRef.current === 'simulation') {
             // "simulation": the WHOLE grid/world at a fit framing, INDEPENDENT of the
@@ -4739,7 +4847,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
             // (colours buffer for the grid + the agent snapshot), reusing a persistent
             // offscreen (RECORD_MAX-bounded). getImageData on a never-displayed canvas
             // is safe (no willReadFrequently de-opt).
-            const off = renderSimulationFrame(960, simCaptureRef.current ?? undefined);
+            const off = renderSimulationFrame(RECORD_MAX, simCaptureRef.current ?? undefined, true);
             if (off) {
               simCaptureRef.current = off;
               frame = off.getContext('2d')!.getImageData(0, 0, off.width, off.height);
@@ -4752,9 +4860,15 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
             const dc = canvasRef.current;
             let crop = recordCropRef.current;
             if (!crop) {
-              const RECORD_MAX = 960;
-              const s = Math.min(1, RECORD_MAX / Math.max(dc.width, dc.height));
-              crop = { outW: Math.max(1, Math.round(dc.width * s)), outH: Math.max(1, Math.round(dc.height * s)) };
+              // Fit to RECORD_MAX, then SNAP the width into the VP9 profile-1
+              // fast residue class so the recording keeps 4:4:4 chroma (see
+              // snapRecordWidth). The height is derived from the SAME scale, so
+              // the aspect ratio is preserved exactly.
+              let s = Math.min(1, RECORD_MAX / Math.max(dc.width, dc.height));
+              const wantW = Math.max(1, Math.round(dc.width * s));
+              const snapW = snapRecordWidth(wantW);
+              if (snapW !== wantW && dc.width > 0) s = snapW / dc.width;
+              crop = { outW: Math.max(1, snapW), outH: Math.max(1, Math.round(dc.height * s)) };
               recordCropRef.current = crop;
             }
             let rc = recordScratchRef.current;
@@ -4796,6 +4910,42 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
           const tick = () => {
             nextStepRaf.current = null;
             if (!playingRef.current) return;
+            // ── LOSSLESS overload policy ("never skip frames") ────────────────
+            // draw() is synchronous and cannot await the encoder — which is why
+            // the DROP policy exists at all. So "slow the simulation instead"
+            // lives HERE, in the one part of the loop that is already
+            // asynchronous: hold the next step batch until the encoder has room.
+            // A frame is captured exactly once per issued step, and a step is
+            // only issued when the queue is below the cap, so the queue stays
+            // bounded by CAP+1 — no unbounded (invisible) GPU-memory queue, and
+            // no frame ever refused.
+            if (recordingRef.current && recordOverloadActiveRef.current === 'lossless') {
+              const enc = webmStreamRef.current;
+              // Also hold while the async codec probe is still in flight: frames
+              // captured meanwhile go to the bounded pending array, and past its
+              // cap they would be DROPPED — which lossless mode promises not to
+              // do. A probe FAILURE clears recordStreamModeRef, so this can't
+              // latch on (and the stall timeout below covers a hung probe).
+              const creating = !enc && recordStreamModeRef.current
+                && webmStreamStateRef.current === 'creating';
+              if (enc ? !enc.readyForNextFrame() : creating) {
+                const now2 = performance.now();
+                if (losslessWaitStartRef.current == null) losslessWaitStartRef.current = now2;
+                if (now2 - losslessWaitStartRef.current < LOSSLESS_STALL_MS) {
+                  setRecordThrottledIfChanged(true);
+                  nextStepRaf.current = requestAnimationFrame(tick);
+                  return;
+                }
+                // An order of magnitude past the worst measured per-frame encode:
+                // the encoder is wedged, not merely slow. Degrade to dropping for
+                // the rest of the run rather than freezing the simulation, and
+                // say so once. Deliberately one-way, so it cannot flap.
+                recordOverloadActiveRef.current = 'drop';
+                showAgentNotice('Encoder stalled — recording switched to skipping frames');
+              }
+              losslessWaitStartRef.current = null;
+              setRecordThrottledIfChanged(false);
+            }
             const elapsed = performance.now() - lastStepSentTime.current;
             if (elapsed >= msPerFrame - 0.5) {
               sendNextStep();
@@ -9314,6 +9464,12 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
     } else {
       // Stop: cancel any pending rAF
       if (nextStepRaf.current != null) { cancelAnimationFrame(nextStepRaf.current); nextStepRaf.current = null; }
+      // A pause taken while the lossless throttle was holding would otherwise
+      // leave the "waiting for encoder" indicator latched on — the tick that
+      // clears it never runs again. (The encoder drains harmlessly while paused;
+      // no frames are captured.)
+      losslessWaitStartRef.current = null;
+      setRecordThrottledIfChanged(false);
     }
   }, [playing, sendNextStep]);
 
@@ -9362,17 +9518,23 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
     lastRecordCountSet.current = 0;
     recordCropRef.current = null;
     recordDimsRef.current = null;
+    recordOverloadActiveRef.current = 'drop';
+    losslessWaitStartRef.current = null;
+    setRecordThrottledIfChanged(false);
     setRecordFrameCount(0);
     setRecordDroppedCount(0);
   };
 
   const startRecording = () => {
     resetRecordingState();
-    // The format/scope select is only rendered while NOT recording, so both are
-    // effectively locked for the run — which is what lets us commit to a
-    // streaming WebM encoder here. GIF keeps the buffered path (gifenc needs the
-    // raw pixels of every frame to build its per-frame palette).
+    // The format / scope / quality / overload selects are only rendered while
+    // NOT recording, so all four are effectively locked for the run — which is
+    // what lets us commit to a streaming WebM encoder (and to a single overload
+    // policy) here. GIF keeps the buffered path (gifenc needs the raw pixels of
+    // every frame to build its per-frame palette), and has no encoder to be
+    // behind, so the overload policy is WebM-only.
     recordStreamModeRef.current = recordFormat === 'webm' && webmAvailable;
+    recordOverloadActiveRef.current = recordStreamModeRef.current ? recordOverloadRef.current : 'drop';
     setRecording(true);
     // Tell the worker to include the colors buffer in stepped messages so we
     // can capture frames under WebGPU direct render (where srcCanvas's 2D
@@ -9397,8 +9559,9 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       webmStreamPendingRef.current = [];
       webmStreamStateRef.current = 'idle';
       recordStreamModeRef.current = false;
+      const force = recordOverloadActiveRef.current === 'lossless';
       if (enc) {
-        for (const f of pending) { if (enc.addFrame(f)) recordCountRef.current += 1; else recordDroppedRef.current += 1; }
+        for (const f of pending) { if (enc.addFrame(f, force)) recordCountRef.current += 1; else recordDroppedRef.current += 1; }
         setEncodingWebM(true);
         try {
           const blob = await enc.finish();
@@ -9415,7 +9578,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
         // produces a file.
         setEncodingWebM(true);
         try {
-          const blob = await encodeFramesToWebM(pending, targetFpsRef.current || 30);
+          const blob = await encodeFramesToWebM(pending, targetFpsRef.current || 30, recordQualityRef.current);
           triggerDownload(blob, `${fname}_recording.webm`);
         } catch (err) {
           console.error('WebM encode failed', err);
@@ -9441,7 +9604,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
     if (format === 'webm') {
       setEncodingWebM(true);
       try {
-        const blob = await encodeFramesToWebM(frames, fps);
+        const blob = await encodeFramesToWebM(frames, fps, recordQualityRef.current);
         triggerDownload(blob, `${fname}_recording.webm`);
       } catch (err) {
         console.error('WebM encode failed', err);
@@ -10845,6 +11008,10 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
                   queue is full (dense content encodes slower than it is captured).
                   Never silent \u2014 the counter is the only place the user can see it. */}
               {recordDroppedCount > 0 && <span style={{ color: '#e0a050' }}> {'\u00B7'} {recordDroppedCount} dropped</span>}
+              {/* "Never skip" mode: the step pipeline is being held back so no
+                  frame is lost. Says so explicitly \u2014 a deliberately slowed
+                  simulation must never read as a hang. */}
+              {recordThrottled && <span style={{ color: '#e8a13a' }}> {'\u23F3'} waiting for encoder</span>}
             </span>
           )}
           {isAgentModel && (agentsRef.current || agentDirectRenderActiveRef.current) && <span title="Live agents">{'\u25CF'} {agentDirectRenderActiveRef.current ? agentLiveCountRef.current : (agentsRef.current?.liveCount ?? 0)} agents</span>}
@@ -11121,9 +11288,38 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
                   </>
                 )}
               </select>
+              {/* Quality + overload policy \u2014 WebM only (GIF has no GOP and no
+                  streaming encoder to fall behind), and only while NOT recording,
+                  so every recording choice locks together at Start. */}
+              {recordFormat === 'webm' && webmAvailable && (
+                <>
+                  <select
+                    className={styles.transportBtn}
+                    value={recordQuality}
+                    onChange={e => setRecordQuality(e.target.value as RecordQuality)}
+                    disabled={encodingWebM}
+                    title={'Recording quality \u2014 "Standard" keyframes every 30 frames: ~3.5\u00D7 smaller files and ~1.8\u00D7 faster encoding, so the simulation runs closer to full speed while recording (scrubbing lands on 30-frame boundaries). "Archival" makes every frame a keyframe: independently decodable for frame-by-frame analysis, scrub-exact, and no interframe prediction bleeding across previously-stable regions \u2014 but ~3.5\u00D7 larger and ~1.8\u00D7 slower.'}
+                    style={{ color: '#eaeaea', padding: '4px 4px', fontSize: '0.65rem' }}
+                  >
+                    <option value="standard" style={PICK_OPT_STYLE}>Standard</option>
+                    <option value="archival" style={PICK_OPT_STYLE}>Archival</option>
+                  </select>
+                  <select
+                    className={styles.transportBtn}
+                    value={recordOverload}
+                    onChange={e => setRecordOverload(e.target.value as 'drop' | 'lossless')}
+                    disabled={encodingWebM}
+                    title={'What gives when the encoder cannot keep up \u2014 "Skip frames" keeps the simulation at full speed and leaves those generations out of the video (skips are counted next to REC). "Never skip" encodes every captured frame and holds the simulation back until the encoder catches up: the run gets slower, the video loses nothing.'}
+                    style={{ color: '#eaeaea', padding: '4px 4px', fontSize: '0.65rem' }}
+                  >
+                    <option value="drop" style={PICK_OPT_STYLE}>Skip frames</option>
+                    <option value="lossless" style={PICK_OPT_STYLE}>Never skip</option>
+                  </select>
+                </>
+              )}
             </>
           ) : (
-            <button className={styles.transportBtn} onClick={stopRecording} title={`Stop & Save ${recordFormat.toUpperCase()} (${!is3D && recordScope === 'simulation' ? 'simulation' : 'current view'})`} style={{ color: '#e05050' }}>{'\u23F9'} {recordFrameCount}</button>
+            <button className={styles.transportBtn} onClick={stopRecording} title={`Stop & Save ${recordFormat.toUpperCase()} (${!is3D && recordScope === 'simulation' ? 'simulation' : 'current view'})`} style={{ color: '#e05050' }}>{'\u23F9'} {recordFrameCount}{recordThrottled ? ' \u23F3' : ''}</button>
           )}
           <div className={styles.transportDivider} />
 

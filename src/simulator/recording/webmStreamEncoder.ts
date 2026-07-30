@@ -1,5 +1,8 @@
+import {
+  pickVp9Config, vp9EncoderConfig, keyFrameIntervalFor,
+  DEFAULT_RECORD_QUALITY, type Vp9Choice, type RecordQuality,
+} from './webmEncoder';
 import { Muxer, ArrayBufferTarget } from 'webm-muxer';
-import { pickVp9Config, vp9EncoderConfig, type Vp9Choice } from './webmEncoder';
 
 /**
  * Streaming (encode-as-you-go) WebM recorder.
@@ -29,12 +32,24 @@ import { pickVp9Config, vp9EncoderConfig, type Vp9Choice } from './webmEncoder';
  * and forever (+7.5 frames/s), and queued `VideoFrame`s do NOT live on the JS
  * heap (GPU/media memory) — so an unbounded queue is an INVISIBLE memory sink,
  * strictly harder to diagnose than today's `RangeError`. The capture site is
- * synchronous (`draw()`) and cannot await, so the only available policy is to
- * DROP: `addFrame` returns false when the queue is full and the caller simply
- * skips that frame. Because every frame is a keyframe, a dropped frame cannot
- * corrupt its neighbours; and because timestamps are derived from the ENCODED
- * frame index, the file always plays at the nominal fps (a drop reads as a
- * skipped generation, not as wrong timing). The caller surfaces the drop count.
+ * synchronous (`draw()`) and cannot await, so the DEFAULT policy is to DROP:
+ * `addFrame` returns false when the queue is full and the caller simply skips
+ * that frame. Because timestamps are derived from the ENCODED frame index, the
+ * file always plays at the nominal fps (a drop reads as a skipped generation,
+ * not as wrong timing), and because a drop happens BEFORE submission the encoder
+ * only ever sees the frames it was given, in order — so the sequence is
+ * shortened, never corrupted, under any keyframe cadence. The caller surfaces
+ * the drop count.
+ *
+ * LOSSLESS ("never skip") is the opt-in alternative: the caller passes
+ * `force` to `addFrame`, which bypasses the cap and the duty gate so a captured
+ * frame is ALWAYS submitted, and then throttles its own step pipeline on
+ * `readyForNextFrame()` — slowing the SIMULATION rather than losing frames.
+ * Because a frame is captured exactly once per issued step and a step is only
+ * issued when the queue is below the cap, the queue stays bounded by CAP+1 and
+ * the invisible-memory hazard is avoided without ever refusing a frame.
+ * `LOSSLESS_HARD_CAP` is the backstop for callers that submit outside the
+ * throttled loop (a burst of manual Steps).
  */
 export class WebMStreamEncoder {
   /** Max frames allowed to sit in the encoder queue before we start dropping.
@@ -66,6 +81,16 @@ export class WebMStreamEncoder {
    *  that stays usable. Dropped frames are counted and surfaced. */
   static readonly DUTY_FACTOR = 1.5;
 
+  /** Absolute ceiling on the encoder queue in LOSSLESS mode.
+   *
+   *  In the throttled play loop this is unreachable — the caller holds the next
+   *  step until `readyForNextFrame()`, which keeps the queue at or below
+   *  `QUEUE_CAP`. It exists solely so submissions made OUTSIDE that loop (a
+   *  burst of manual Steps, which are user-driven and not throttled) cannot grow
+   *  the invisible GPU-memory queue without bound. Past it, even lossless mode
+   *  drops — and counts the drop, so it is never silent. */
+  static readonly LOSSLESS_HARD_CAP = 8;
+
   private readonly muxer: Muxer<ArrayBufferTarget>;
   private readonly encoder: VideoEncoder;
   private readonly microsPerFrame: number;
@@ -90,12 +115,18 @@ export class WebMStreamEncoder {
   readonly height: number;
   readonly fps: number;
   readonly codecLabel: string;
+  readonly quality: RecordQuality;
+  /** Frames between keyframes (1 = all-intra). From the SHARED helper, so a
+   *  streamed file is keyframed exactly like a buffered one. */
+  private readonly gop: number;
 
-  private constructor(w: number, h: number, choice: Vp9Choice) {
+  private constructor(w: number, h: number, choice: Vp9Choice, quality: RecordQuality) {
     this.width = w;
     this.height = h;
     this.fps = choice.fps;
     this.codecLabel = choice.label;
+    this.quality = quality;
+    this.gop = keyFrameIntervalFor(quality);
     this.microsPerFrame = 1_000_000 / choice.fps;
 
     this.muxer = new Muxer({
@@ -176,9 +207,12 @@ export class WebMStreamEncoder {
    * first frame or two while this resolves. Rejects if no configuration is
    * supported — the caller should then fall back to buffered recording.
    */
-  static async create(width: number, height: number, fps: number): Promise<WebMStreamEncoder> {
+  static async create(
+    width: number, height: number, fps: number,
+    quality: RecordQuality = DEFAULT_RECORD_QUALITY,
+  ): Promise<WebMStreamEncoder> {
     const choice = await pickVp9Config(width, height, fps);
-    return new WebMStreamEncoder(width, height, choice);
+    return new WebMStreamEncoder(width, height, choice, quality);
   }
 
   /** Frames actually handed to the encoder. */
@@ -189,23 +223,54 @@ export class WebMStreamEncoder {
   get bufferedBytes(): number { return this.chunkBytes; }
   /** Non-null once the encoder has reported an error; the recorder is then dead. */
   get error(): Error | null { return this.encoderError; }
+  /** Frames currently sitting in the encoder (GPU/media memory, not the JS heap). */
+  get queueSize(): number { return this.encoder.encodeQueueSize; }
+
+  /**
+   * Would `addFrame` accept a frame right now under the DROP policy?
+   *
+   * This is the accept predicate itself, exposed so the LOSSLESS caller can
+   * throttle its own (asynchronous) step pipeline on exactly the same condition
+   * the drop policy would have used to refuse — hold the simulation instead of
+   * losing the frame. Returns false once the recorder is dead, so a waiting
+   * caller is never left spinning on a finished encoder.
+   */
+  readyForNextFrame(): boolean {
+    if (this.finished || this.cancelled || this.encoderError) return false;
+    if (this.encoder.encodeQueueSize >= WebMStreamEncoder.QUEUE_CAP) return false;
+    if (this.avgEncodeMs > 0
+        && performance.now() - this.lastSubmitAt < this.avgEncodeMs * WebMStreamEncoder.DUTY_FACTOR) {
+      return false;
+    }
+    return true;
+  }
 
   /**
    * Submit one captured frame. Returns false if the frame was DROPPED (queue
    * full, encoder errored, or the recorder is already finished/cancelled) —
    * the caller should count it, not retry it.
    *
+   * `force` is LOSSLESS mode: bypass the queue cap and the duty gate so the
+   * frame is always submitted (the caller throttles its step pipeline on
+   * `readyForNextFrame()` instead). `LOSSLESS_HARD_CAP` still applies — an
+   * unbounded queue is invisible memory, so even lossless has a backstop.
+   *
    * Frames whose dimensions differ from the configured ones are refused: the
    * encoder is fixed-size, and the caller already locks dimensions on the first
    * captured frame.
    */
-  addFrame(frame: ImageData): boolean {
+  addFrame(frame: ImageData, force = false): boolean {
     if (this.finished || this.cancelled || this.encoderError) { this.droppedFrames++; return false; }
     if (frame.width !== this.width || frame.height !== this.height) { this.droppedFrames++; return false; }
-    if (this.encoder.encodeQueueSize >= WebMStreamEncoder.QUEUE_CAP) { this.droppedFrames++; return false; }
+    const cap = force ? WebMStreamEncoder.LOSSLESS_HARD_CAP : WebMStreamEncoder.QUEUE_CAP;
+    if (this.encoder.encodeQueueSize >= cap) { this.droppedFrames++; return false; }
     const now = performance.now();
     // Duty-cycle gate (see DUTY_FACTOR): never keep the encoder 100 % busy.
-    if (this.avgEncodeMs > 0 && now - this.lastSubmitAt < this.avgEncodeMs * WebMStreamEncoder.DUTY_FACTOR) {
+    // Skipped under `force` — in lossless mode the caller applies the very same
+    // gate to the STEP pipeline, so the encoder still gets its idle share; the
+    // frame just isn't the thing that gets sacrificed.
+    if (!force && this.avgEncodeMs > 0
+        && now - this.lastSubmitAt < this.avgEncodeMs * WebMStreamEncoder.DUTY_FACTOR) {
       this.droppedFrames++;
       return false;
     }
@@ -215,12 +280,11 @@ export class WebMStreamEncoder {
       Math.round(this.microsPerFrame),
     );
     try {
-      // Force every frame to be a keyframe — at this bitrate the size overhead
-      // is acceptable, and on CA models even a 1-cell change can confuse
-      // interframe prediction enough to bleed across previously-stable regions.
-      // All-intra keeps frames independent and visually faithful (and makes a
-      // dropped frame harmless).
-      this.encoder.encode(videoFrame, { keyFrame: true });
+      // Keyframe cadence per the quality mode: `archival` = every frame (frames
+      // stay independently decodable, no interframe prediction bleeding across
+      // previously-stable CA regions), `standard` = every GOP (3.5x smaller,
+      // 1.8x faster). A dropped frame is safe either way — see the class docs.
+      this.encoder.encode(videoFrame, { keyFrame: this.encodedIndex % this.gop === 0 });
     } catch (err) {
       this.encoderError = err instanceof Error ? err : new Error(String(err));
       videoFrame.close();
