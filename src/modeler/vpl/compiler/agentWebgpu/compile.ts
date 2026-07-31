@@ -42,7 +42,7 @@
 
 import type { GraphNode, GraphEdge, CAModel } from '../../../../model/types';
 import type { ValueRef, WgslType } from '../webgpu/compile';
-import { castTo } from '../webgpu/compile';
+import { castTo, WGSL_F32_MAX } from '../webgpu/compile';
 import { emitWgsl, wgslFloatLit } from '../expression/emitWgsl';
 import { buildVarMap, parseExpression, clampVisibleCount } from '../expression/parser';
 import { is3dModel } from '../compile';
@@ -1167,7 +1167,7 @@ function emitReadCellsUnder(ctx: AgentWgpuCtx, node: GraphNode): ValueRef {
   const out = fresh(ctx, 'rcu');
   const acc = fresh(ctx, 'rcuA'), n = fresh(ctx, 'rcuN'), rr = fresh(ctx, 'rcuR2');
   const cxL = fresh(ctx, 'rcuCx'), cyL = fresh(ctx, 'rcuCy'), rL = fresh(ctx, 'rcuRad');
-  const init = reduce === 'max' ? '-3.4028235e38' : reduce === 'min' ? '3.4028235e38' : '0.0';
+  const init = reduce === 'max' ? `-${WGSL_F32_MAX}` : reduce === 'min' ? WGSL_F32_MAX : '0.0';
   const accumLine = (val: string) => {
     if (reduce === 'max') ctx.lines.push(`        if (${val} > ${acc}) { ${acc} = ${val}; }`);
     else if (reduce === 'min') ctx.lines.push(`        if (${val} < ${acc}) { ${acc} = ${val}; }`);
@@ -1724,7 +1724,7 @@ function emitGroupOperator(ctx: AgentWgpuCtx, node: GraphNode, portId: string): 
         ctx.lines.push(`      if (${idxName} < 0 && ${arr.lenName} > 0) { ${idxName} = ${arr.lenName} - 1; ${resName} = f32(${arr.arrName}[${arr.lenName} - 1]); }`);
         ctx.lines.push(`    }`);
       } else {
-        const initBest = op === 'product' ? '1.0' : op === 'min' ? '3.4028235e38' : op === 'max' ? '-3.4028235e38' : '0.0';
+        const initBest = op === 'product' ? '1.0' : op === 'min' ? WGSL_F32_MAX : op === 'max' ? `-${WGSL_F32_MAX}` : '0.0';
         ctx.lines.push(`    ${best} = ${initBest};`);
         ctx.lines.push(`    for (var ${k}: i32 = 0; ${k} < ${arr.lenName}; ${k} = ${k} + 1) {`);
         ctx.lines.push(`      let ${ev}: f32 = f32(${arr.arrName}[${k}]);`);
@@ -2119,8 +2119,8 @@ function emitAggregate(ctx: AgentWgpuCtx, node: GraphNode): ValueRef {
   const acc = fresh(ctx, 'aggAcc');
   let init: string;
   if (op === 'product') init = '1.0';
-  else if (op === 'min') init = '3.4028235e38';
-  else if (op === 'max') init = '-3.4028235e38';
+  else if (op === 'min') init = WGSL_F32_MAX;
+  else if (op === 'max') init = `-${WGSL_F32_MAX}`;
   else init = '0.0'; // sum + average
   ctx.lines.push(`  var ${acc}: f32 = ${init};`);
   const k = fresh(ctx, 'aggK'), ev = fresh(ctx, 'aggV');

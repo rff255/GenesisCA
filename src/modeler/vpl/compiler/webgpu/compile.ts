@@ -359,6 +359,21 @@ function emitVar(ctx: CompileCtx, type: WgslType, expr: string, prefix: string =
   return { name, type };
 }
 
+/** The largest finite f32, as a WGSL float literal — the identity element for a `min`
+ *  fold (and negated, for `max`).
+ *
+ *  ⚠️ It MUST be written as this exact 17-digit decimal, NOT the rounded `3.4028235e38`.
+ *  WGSL parses a float literal to f64 and rejects it if that value exceeds f32::MAX:
+ *  `3.4028235e38` is 340282349999999991754788743781432688640, which is LARGER than
+ *  f32::MAX (340282346638528859811704183484516925440), so Naga rejects the shader with
+ *  "value … cannot be represented as 'f32'" — and the model silently falls back off the
+ *  WebGPU target. This spelling is the shortest decimal that round-trips f32::MAX
+ *  exactly, so the f64 pre-check passes. Verified on a real device.
+ *
+ *  Shared by the cell-grid and agent WebGPU compilers so the two cannot drift; guarded
+ *  by scripts/verify-wgsl-float-literals.mjs. */
+export const WGSL_F32_MAX = '3.4028234663852886e38';
+
 /** Coerce a ValueRef to the requested WGSL type.
  *  Exported for the Expression node's WGSL emitter (compiler/expression/emitWgsl.ts). */
 export function castTo(v: ValueRef, want: WgslType): string {
@@ -2536,8 +2551,8 @@ function emitAggregateOrCount(
   if (mode === 'count') initExpr = '0';
   else if (op === 'sum' || op === 'average') initExpr = '0.0';
   else if (op === 'product') initExpr = '1.0';
-  else if (op === 'min') initExpr = '3.4028235e38'; // max f32
-  else if (op === 'max') initExpr = '-3.4028235e38';
+  else if (op === 'min') initExpr = WGSL_F32_MAX;
+  else if (op === 'max') initExpr = `-${WGSL_F32_MAX}`;
   else if (op === 'and') initExpr = 'true';
   else if (op === 'or') initExpr = 'false';
   else { ctx.errors.push(`${mode}: unsupported op ${op}`); return null; }

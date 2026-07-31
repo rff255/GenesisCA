@@ -157,6 +157,38 @@ The orchestrator updates this after reading each phase's Completion Report.
 > census, lowered ⇒ zero per-target emit). The deferred list lives in the P7 Completion
 > Report; the shortest item is **`Break Bond Between`**.
 
+### Post-milestone fix — the WGSL f32-max literal (2026-07-31, user-reported)
+
+Switching `Cubic GRA` to the **WebGPU agent target** failed to build the runtime:
+
+```
+[agents] WebGPU runtime build failed, falling back to JS:
+[agents/webgpu] behaviour WGSL compile errors:
+  line 198: value 340282349999999991754788743781432688640.0 cannot be represented as 'f32'
+```
+
+**PRE-EXISTING, not caused by any phase.** Both WebGPU compilers seeded a `min`/`max`
+fold with `3.4028235e38` — the *rounded* spelling of f32::MAX, which as an f64 is
+LARGER than f32::MAX, so Naga rejects the entire shader and the model silently falls
+back to JS. Six emit sites, now all routed through one exported **`WGSL_F32_MAX`**
+(`'3.4028234663852886e38'`).
+
+**Why every gate missed it**: `check-compile-identity` hashes emitted TEXT and never
+hands it to a device, and the only shipped model using `aggregate.min` ships on the
+WASM agent target. `Ant Necrophoresis` was latently broken the same way (a
+`readCellsUnder` `max` reduce).
+
+**Now guarded** by [scripts/verify-wgsl-float-literals.mjs](../scripts/verify-wgsl-float-literals.mjs)
+(160 emitted WGSL surfaces × 29 models; `--self-test` is the negative control; a
+product-level control reverting one site reproduces the user's exact error at
+`Cubic GRA :: agent behaviour shader line 185`). **Verified**: the user's exact
+configuration device-compiles with **0 errors** on the behaviour shader and both force-pass
+variants, and in the app `Cubic GRA` on WebGPU holds **O6 across 30 consecutive samples
+from K4 (N=4, E=6) to N=324, E=486 = 3N/2, deg 3/3, 0 dangling, 0 asymmetry, 0 console
+errors**. Compile-identity footprint: **exactly 2 surfaces, each a one-line literal change.**
+**The general lesson: a numeric constant crossing into WGSL must respect f32, not f64 —
+emitted text that type-checks is not a shader that compiles.**
+
 **States**: READY (fully specified, launchable) · BLOCKED (needs a predecessor's
 findings) · PLANNED (specified in the plan, handoff not yet written) · IN PROGRESS ·
 DONE (Completion Report written + verified) · REPLANNED (assumption failed).
