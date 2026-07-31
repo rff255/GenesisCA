@@ -11,6 +11,7 @@ import { VECTOR_LOWERED } from '../compiler/vectorAttr';
 import { multiAttrSlotIndices, slotAttrKey } from '../compiler/multiAttrExpand';
 import { censusAttribute, censusOptions } from '../compiler/censusExpand';
 import { isGraphFrequencyMetric, type GraphMetric } from '../../../simulator/engine/graphMetrics';
+import { indicatorScalarBlocker } from '../../../model/indicatorValue';
 import { isMultiAxisTable, resolveAxes, MAX_LOOKUP_TABLE_ENTRIES } from '../compiler/variegation';
 import { is3dModelLike } from '../compiler/niCodec';
 
@@ -432,11 +433,22 @@ export function detectMissingConfig(
       }
       break;
 
-    case 'getIndicator':
     case 'setIndicator':
     case 'updateIndicator':
       if (!hasIndicator(config.indicatorId)) issues.push('Select an indicator');
       break;
+
+    // Get Indicator READS, so it accepts any indicator whose value is a single
+    // number (standalone / linked Total / a scalar graph metric). A frequency map,
+    // a degree histogram or a spatial curve has no single value to read — badge it
+    // with the shape rather than letting the node emit a meaningless slot read.
+    case 'getIndicator': {
+      const ind = (model.indicators || []).find(i => i.id === config.indicatorId);
+      if (!ind) { issues.push('Select an indicator'); break; }
+      const blocker = indicatorScalarBlocker(ind);
+      if (blocker) issues.push(`"${ind.name}" is ${blocker} — pick a single-value indicator`);
+      break;
+    }
 
     // Overseer nodes — required configs. (Series names are free strings with
     // defaults, so only the reference-typed configs badge.)

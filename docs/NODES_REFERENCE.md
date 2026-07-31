@@ -260,7 +260,7 @@ exists purely to keep graphs readable without Sequence nodes. See
 | 32 | `getFacingLabels` | Get Facing Labels | Resolve the two face labels touching at a 1-step encounter in a fixed direction — accounts for both cells' orientations and face patterns. | `O: My Face` `O: Their Face` (int) | **Variegated Cells only**; `directionTag` config; no neighborhood. Pair with `lookupInteraction` |
 | 33 | `getAllFacingLabels` | Get All Facing Labels | Two parallel arrays of face labels at each 1-step encounter — 8 slots (Moore N/NE/E/SE/S/SW/W/NW) or 4 slots (cardinal N/E/S/W) when `cardinalsOnly` is checked. | `O: My Faces` `O: Their Faces` (int arr) | **Variegated Cells only**. Pair with `aggregate`/`interactionTableMap` for energy sums or `forEachInArray` for per-direction logic |
 | 34 | `interactionTableMap` | Table Map | Vectorised `lookupInteraction`: indexes a Lookup Table model attribute by two parallel index arrays (rows + cols) → decimal array. | `I: Rows` `I: Cols` (int arr) / `O: Values` (float arr) | Works with or without Variegated Cells; pair with `aggregate.product` for `P_break = ∏ P_B`. Multi-axis tables supported only when they have exactly **2 axes** |
-| 35 | `getIndicator` | Get Indicator | Read a standalone indicator's value. | `O: Value` (any) | Requires `indicatorId` |
+| 35 | `getIndicator` | Get Indicator | Read an indicator whose value is a single number: standalone, linked **Total**, or a scalar **graph** metric. Frequency/histogram/spatial ones are offered but disabled. | `O: Value` (any) | Requires `indicatorId`; badges a non-scalar selection |
 
 ### 3.4 Logic & Math — `logic`
 

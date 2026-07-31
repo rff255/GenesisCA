@@ -265,6 +265,9 @@ interface InitMsg {
    *  pass skips its whole neighbour scan (~70% of a custom-force model's
    *  force-pass cost). Absent → true (the historical always-scan). */
   agentUsesDensity?: boolean;
+  /** Does any rule graph READ a computed (graph/linked) indicator? Drives the
+   *  per-generation refresh of the rule-readable indicator slots. */
+  rulesReadComputedIndicator?: boolean;
   /** PR7c GPU residency: the agent graph has NO structural / spawn / radius-write
    *  nodes (divideAgent, killAgent, formBond, breakBond, createAgent,
    *  addAgentToWorld, setAgentRadius, setTargetRadius) — one of the eligibility
@@ -353,7 +356,7 @@ interface PaintManualMsg {
   activeViewer: string;
 }
 interface ResetMsg { type: 'reset'; activeViewer: string; reqId?: number }
-interface RecompileMsg { type: 'recompile'; stepCode: string; initCode?: string; gridInitCode?: string; skipIsolatedEmpty?: SkipIsolatedEmptyConfig; inputColorCodes: Array<{ mappingId: string; code: string }>; outputMappingCodes: Array<{ mappingId: string; code: string }>; stopMessages?: string[]; updateMode: string; asyncScheme: string; wasmStepBytes?: Uint8Array; wasmStepError?: string; wasmExports?: string[]; viewerIds?: Record<string, number>; webgpuShaderCode?: string; webgpuShaderError?: string; webgpuEntryPoints?: WebGPUEntryPoints; webgpuLayout?: WebGPULayout; webgpuStopCheckInterval?: number; variegated?: VariegatedPayload; interactionTables?: InteractionTablePayload[]; agentBehaviourCode?: string; agentInitCode?: string; agentDivisionCode?: string; agentColorViewer?: string; agentOutputMappingCodes?: Array<{ mappingId: string; code: string }>; agentHasSprites?: boolean; agentBondReqSlots?: number; agentDividePartitions?: DividePartitionSpec[]; centerBased?: CenterBasedConfig; agentUsesField?: boolean; agentUsesDensity?: boolean; agentResidencyClean?: boolean; agentTarget?: 'js' | 'wasm' | 'webgpu'; agentWasmBytes?: Uint8Array; agentWasmViewerGuardIds?: string[]; agentLayoutExtras?: AgentLayoutExtras; agentWasmLayoutSig?: { maxHashBins: number; totalBytes: number }; agentWebgpuBehaviourShader?: string; agentWebgpuForceShader?: string; agentWebgpuMaxAgents?: number; agentWebgpuMaxHashBins?: number; agentWebgpuLayout?: AgentWebGPULayout; agentRenderLayout?: AgentWebGPULayout; agentWebgpuUsesI32Write?: boolean; agentWebgpuUsage?: { usesBondStore?: boolean; usesBondStoreWrite?: boolean; usesIndicators?: boolean; usesAux?: boolean; usesSpawn?: boolean; usesStop?: boolean; usesForceScatter?: boolean; usesGeneration?: boolean }; agentWebgpuOmShaders?: AgentOMShaderInput[] }
+interface RecompileMsg { type: 'recompile'; stepCode: string; initCode?: string; gridInitCode?: string; skipIsolatedEmpty?: SkipIsolatedEmptyConfig; inputColorCodes: Array<{ mappingId: string; code: string }>; outputMappingCodes: Array<{ mappingId: string; code: string }>; stopMessages?: string[]; updateMode: string; asyncScheme: string; wasmStepBytes?: Uint8Array; wasmStepError?: string; wasmExports?: string[]; viewerIds?: Record<string, number>; webgpuShaderCode?: string; webgpuShaderError?: string; webgpuEntryPoints?: WebGPUEntryPoints; webgpuLayout?: WebGPULayout; webgpuStopCheckInterval?: number; variegated?: VariegatedPayload; interactionTables?: InteractionTablePayload[]; agentBehaviourCode?: string; agentInitCode?: string; agentDivisionCode?: string; agentColorViewer?: string; agentOutputMappingCodes?: Array<{ mappingId: string; code: string }>; agentHasSprites?: boolean; agentBondReqSlots?: number; agentDividePartitions?: DividePartitionSpec[]; centerBased?: CenterBasedConfig; agentUsesField?: boolean; agentUsesDensity?: boolean; rulesReadComputedIndicator?: boolean; agentResidencyClean?: boolean; agentTarget?: 'js' | 'wasm' | 'webgpu'; agentWasmBytes?: Uint8Array; agentWasmViewerGuardIds?: string[]; agentLayoutExtras?: AgentLayoutExtras; agentWasmLayoutSig?: { maxHashBins: number; totalBytes: number }; agentWebgpuBehaviourShader?: string; agentWebgpuForceShader?: string; agentWebgpuMaxAgents?: number; agentWebgpuMaxHashBins?: number; agentWebgpuLayout?: AgentWebGPULayout; agentRenderLayout?: AgentWebGPULayout; agentWebgpuUsesI32Write?: boolean; agentWebgpuUsage?: { usesBondStore?: boolean; usesBondStoreWrite?: boolean; usesIndicators?: boolean; usesAux?: boolean; usesSpawn?: boolean; usesStop?: boolean; usesForceScatter?: boolean; usesGeneration?: boolean }; agentWebgpuOmShaders?: AgentOMShaderInput[] }
 interface UpdateLookupTableMsg {
   type: 'updateLookupTable';
   attrId: string;
@@ -2301,6 +2304,11 @@ function runAgentStep(): void {
   // wraps the frame). Per simulation step, so the animation only progresses while
   // the sim runs. Gated on the model having sprites.
   if (hasAgentSprites) advanceAgentSprites(s);
+
+  // Rule-readable indicators: refresh the graph-global metrics from the SETTLED
+  // graph so the NEXT generation's Get Indicator reads this generation's value.
+  // Gated - no-op unless a rule actually reads a computed indicator.
+  refreshRuleReadableIndicators();
 }
 
 /** PR7 G3-runtime ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â one agent generation on the WebGPU agent target. The GPU
@@ -2825,6 +2833,8 @@ async function runAgentStepWebGPUInner(gpuFieldBridge?: GpuFieldBridge | null): 
   // target), bonds form/break, killed agents recycle, and the divisionEvent fn
   // (also CPU/JS) reassigns daughters. A no-op for Boids (no structural requests).
   runAgentStructuralPhase();
+  // Same per-generation rule-readable indicator refresh as the CPU path.
+  refreshRuleReadableIndicators();
   return true;
 }
 
@@ -3343,7 +3353,11 @@ function startWebGPUInit(
       setupReductionPipelines(rt, linkedDefs);
       // Initial indicator values
       const vals: Record<string, number> = {};
-      for (const { idx, id } of standaloneIds) vals[id] = cachedIndicators[idx]!;
+      // EVERY indicator slot, not just the standalone ones: a rule can read a
+      // COMPUTED indicator's scalar (a graph metric / a linked Total), which
+      // syncComputedIndicatorScalars mirrors into cachedIndicators. A
+      // frequency/spatial indicator's slot stays 0, exactly as before.
+      for (const [id, idx] of indicatorSlotById) vals[id] = cachedIndicators[idx]!;
       uploadIndicators(rt, vals, isIntEncodedIndicator);
       // Run the active viewer's outputMapping + present (single encoder under
       // direct render ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â P6) so the canvas shows the initial state from the
@@ -3396,6 +3410,16 @@ let standalonePerGenIdx: number[] = [];
 // (idx, id) pairs for the standalone indicators only ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â used to build the outgoing
 // id-keyed payload that the UI consumes. Linked indicators come via linkedResults.
 let standaloneIds: Array<{ idx: number; id: string }> = [];
+// id -> slot for EVERY indicator (all kinds). `Get Indicator` compiles to
+// `_indicators[slot]`, so this is how a COMPUTED indicator's scalar value reaches
+// a rule (see syncComputedIndicatorScalars).
+let indicatorSlotById: Map<string, number> = new Map();
+// Set by refreshRuleReadableIndicators so sendColors does not recompute the graph
+// metrics a second time in the same generation. Cleared by sendColors.
+let graphResultsFreshForSend = false;
+// Does any rule graph READ a computed (graph / linked) indicator? Drives the
+// per-generation refresh; false ⇒ the historical once-per-batch schedule.
+let rulesReadComputedIndicator = false;
 let linkedDefs: Array<{
   id: string;
   accumulationMode: string;
@@ -4527,7 +4551,11 @@ function isIntEncodedIndicator(id: string): boolean {
 function syncIndicatorsCpuToGpu(): void {
   if (!webgpuRuntime || !webgpuRuntime.stepReady) return;
   const vals: Record<string, number> = {};
-  for (const { idx, id } of standaloneIds) vals[id] = cachedIndicators[idx]!;
+  // EVERY indicator slot, not just the standalone ones: a rule can read a
+  // COMPUTED indicator's scalar (a graph metric / a linked Total), which
+  // syncComputedIndicatorScalars mirrors into cachedIndicators. A
+  // frequency/spatial indicator's slot stays 0, exactly as before.
+  for (const [id, idx] of indicatorSlotById) vals[id] = cachedIndicators[idx]!;
   // Linked indicator atomic slots stay 0 ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â linked aggregation runs CPU-side
   // post-step from the readback attrs.
   uploadIndicators(webgpuRuntime, vals, isIntEncodedIndicator);
@@ -5164,6 +5192,7 @@ function initIndicators(defs: IndicatorDef[]): void {
   standaloneDefaults = new Float64Array(defs.length);
   standalonePerGenIdx = [];
   standaloneIds = [];
+  indicatorSlotById = new Map(defs.map((d, i) => [d.id, i] as const));
   linkedDefs = [];
   hasSpatialIndicators = false;
   graphDefs = [];
@@ -5270,6 +5299,52 @@ function computeGraphIndicators(): void {
     const v = vals[d.metric];
     graphResults[d.id] = v === undefined ? (isGraphFrequencyMetric(d.metric) ? {} : 0) : v;
   }
+}
+
+/** Mirror every COMPUTED indicator whose value is a single number (a scalar graph
+ *  metric, a linked `total`) into `cachedIndicators[slot]` — the one f64 slot per
+ *  indicator that `Get Indicator` compiles to on every target.
+ *
+ *  WHY: a rule could previously only read a STANDALONE indicator, because nothing
+ *  ever wrote the computed kinds into that slot. Every shipped agent/GRA model has
+ *  only graph + linked indicators, so Get Indicator was unusable there.
+ *
+ *  The RESULT's runtime shape is the classifier — a frequency map / degree
+ *  histogram / spatial curve is not a number, so it is skipped and its slot stays
+ *  at whatever it was (0). That matches `indicatorScalarBlocker` in
+ *  model/indicatorValue.ts, which is what the picker and the badge use, so the UI
+ *  can never offer a value the engine will not deliver.
+ *
+ *  Standalone slots are NEVER touched here — the graph owns those. */
+function syncComputedIndicatorScalars(): void {
+  if (indicatorSlotById.size === 0) return;
+  for (const id of Object.keys(graphResults)) {
+    const v = graphResults[id];
+    if (typeof v !== 'number') continue;
+    const slot = indicatorSlotById.get(id);
+    if (slot !== undefined) cachedIndicators[slot] = v;
+  }
+  for (const id of Object.keys(linkedResults)) {
+    const v = linkedResults[id];
+    if (typeof v !== 'number') continue;
+    const slot = indicatorSlotById.get(id);
+    if (slot !== undefined) cachedIndicators[slot] = v;
+  }
+}
+
+/** Per-GENERATION refresh of the rule-readable indicator slots, run at the tail of
+ *  a generation (after the structural phase = the settled graph). Gated on the
+ *  model's rules actually READING a computed indicator, so a model that only
+ *  CHARTS its graph metrics keeps paying the P6 once-per-batch cost.
+ *
+ *  Without this the value would refresh once per BATCH, so at 20 gens/frame a rule
+ *  gating on `nodes (N)` would read a number up to 20 generations old — a silent
+ *  coupling between a DISPLAY throughput setting and rule semantics. */
+function refreshRuleReadableIndicators(): void {
+  if (!rulesReadComputedIndicator) return;
+  computeGraphIndicators();
+  graphResultsFreshForSend = true;
+  syncComputedIndicatorScalars();
 }
 
 /** WASM-path fallback. The JS-compiled step function contains injected
@@ -5575,7 +5650,13 @@ function sendColors(): void {
   const hasLinked = linkedDefs.length > 0;
   // GRA P6 — refresh the graph-global metrics from the SETTLED agent graph (the
   // structural phase has already run for this batch). No-op when none declared.
-  computeGraphIndicators();
+  // Skipped when the per-generation refresh (rules read a computed indicator)
+  // already ran it for this generation — see refreshRuleReadableIndicators.
+  if (!graphResultsFreshForSend) computeGraphIndicators();
+  graphResultsFreshForSend = false;
+  // Mirror every scalar computed result into its rule-readable slot, so the NEXT
+  // step's Get Indicator sees it (one generation stale, exactly like `density`).
+  syncComputedIndicatorScalars();
   const hasGraph = graphDefs.length > 0;
   let indicators: Record<string, number | Record<string, number> | Record<string, number[]>> | undefined;
   if (hasStandalone || hasLinked || hasGraph) {
@@ -5923,6 +6004,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       agentsEnabled = !!msg.agents;
       agentUsesField = !!msg.agentUsesField;
       agentUsesDensity = msg.agentUsesDensity ?? true;
+      rulesReadComputedIndicator = !!msg.rulesReadComputedIndicator;
       agentGraphResidencyClean = !!msg.agentResidencyClean;
       centerBasedConfig = msg.centerBased ?? null;
       agentColorViewer = msg.agentColorViewer || '';
@@ -6610,6 +6692,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
         if (rc.centerBased) centerBasedConfig = rc.centerBased;
         if (rc.agentUsesField !== undefined) agentUsesField = !!rc.agentUsesField;
         if (rc.agentUsesDensity !== undefined) agentUsesDensity = !!rc.agentUsesDensity;
+        if (rc.rulesReadComputedIndicator !== undefined) rulesReadComputedIndicator = !!rc.rulesReadComputedIndicator;
         if (rc.agentResidencyClean !== undefined) agentGraphResidencyClean = !!rc.agentResidencyClean;
         if (rc.agentColorViewer !== undefined) agentColorViewer = rc.agentColorViewer || '';
         if (rc.agentHasSprites !== undefined) hasAgentSprites = !!rc.agentHasSprites;

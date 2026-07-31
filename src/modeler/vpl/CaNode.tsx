@@ -21,6 +21,7 @@ import { MULTI_ATTR_TYPES, MULTI_ATTR_SET_TYPES, multiAttrExtraCount, buildExtra
 import { buildCensusPorts, censusAttributes } from './compiler/censusExpand';
 import { buildBondAttrPorts } from './bondAttrPorts';
 import { isGraphFrequencyMetric, degreeHistogramKeys, type GraphMetric } from '../../simulator/engine/graphMetrics';
+import { indicatorScalarBlocker } from '../../model/indicatorValue';
 import { resolveMaxBonds } from '../../model/centerBased';
 import { applyLookupAxisPorts } from './nodes/LookupInteractionNode';
 import {
@@ -1921,7 +1922,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
           );
         })()}
 
-        {(nodeData.nodeType === 'getIndicator' || nodeData.nodeType === 'setIndicator') && (
+        {nodeData.nodeType === 'setIndicator' && (
           <select
             className={styles.select}
             value={(nodeData.config.indicatorId as string) || ''}
@@ -1933,6 +1934,31 @@ function CaNodeComponent({ id, data }: NodeProps) {
               .map(i => (
                 <option key={i.id} value={i.id}>{i.name}</option>
               ))}
+          </select>
+        )}
+
+        {/* Get Indicator READS, so it can read any indicator whose value is a
+            single number — standalone, a linked Total, or a scalar graph metric
+            (nodes / edges / mean degree / …). Frequency-shaped and spatial ones
+            are listed DISABLED with the reason rather than silently omitted:
+            omitting them is what made this node look broken on agent/GRA models,
+            whose indicators are all graph/linked. See model/indicatorValue.ts. */}
+        {nodeData.nodeType === 'getIndicator' && (
+          <select
+            className={styles.select}
+            value={(nodeData.config.indicatorId as string) || ''}
+            onChange={e => updateConfig('indicatorId', e.target.value)}
+          >
+            <option value="">Select...</option>
+            {(model.indicators || []).map(i => {
+              const blocker = indicatorScalarBlocker(i);
+              const kindTag = i.kind === 'standalone' ? '' : i.kind === 'graph' ? ' (graph)' : ' (linked)';
+              return (
+                <option key={i.id} value={i.id} disabled={blocker !== null} title={blocker ?? undefined}>
+                  {i.name}{kindTag}{blocker ? ' — ' + blocker : ''}
+                </option>
+              );
+            })}
           </select>
         )}
 

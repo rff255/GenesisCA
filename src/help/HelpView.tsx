@@ -394,6 +394,23 @@ export function HelpView() {
             and are readable from the Overseer with <strong>Read Indicator</strong>, which is how
             a rule-space sweep measures what a rewriting rule actually did.</li>
           </ul>
+          <p>
+            <strong>Feeding a measurement back into a rule.</strong> <strong>Get Indicator</strong>
+            reads any indicator whose value is a <em>single number</em> &mdash; standalone, a linked
+            <em> Total</em>, or a scalar graph metric &mdash; on the Cells graph and the Agents graph
+            alike, and on every compile target. So a rewriting rule can gate on its own
+            measurement (&quot;stop dividing past N nodes&quot;, &quot;modulate by mean degree&quot;).
+            Indicators with no single value &mdash; a frequency map, a degree histogram, a spatial
+            curve &mdash; are still listed in the picker but <em>disabled</em>, with the reason shown,
+            so it is always clear why one cannot be chosen. A computed value is read as of the
+            <em> end of the previous generation</em> (the same one-step lag as neighbour density),
+            and it is refreshed every generation &mdash; never once per frame &mdash; so the number a
+            rule sees never depends on the Gens/Frame setting. <strong>Set Indicator</strong> and
+            <strong> Update Indicator</strong> stay standalone-only: a linked or graph value is
+            computed from the model, so writing it would just be overwritten next generation.
+          </p>
+          <ul className={styles.list}>
+          </ul>
           <p className={styles.p}>
             Standalone and Linked indicators have an <strong>Accumulation Mode</strong>: &quot;Per
             Generation&quot; resets every step, while &quot;Accumulated&quot; keeps a running
@@ -971,7 +988,7 @@ export function HelpView() {
           <table className={styles.table}>
             <thead><tr><th>Node</th><th>Description</th></tr></thead>
             <tbody>
-              <tr><td>Get Indicator</td><td>Read the current value of a standalone indicator.</td></tr>
+              <tr><td>Get Indicator</td><td>Read an indicator whose value is a single number — standalone, a linked Total, or a scalar graph metric (nodes / edges / mean degree / max degree / components). Frequency maps, degree histograms and spatial curves are listed but disabled: they have no single value. A computed value is read as of the end of the previous generation.</td></tr>
               <tr><td>Set Indicator</td><td>Set a standalone indicator to a specific value.</td></tr>
               <tr><td>Update Indicator</td><td>Modify a standalone indicator based on its current value and an input (increment, decrement, max, min, toggle, OR, AND, next, previous).</td></tr>
             </tbody>

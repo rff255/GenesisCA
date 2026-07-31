@@ -8,6 +8,7 @@ import { IndicatorSpatialChart, compareSeriesKeys } from './IndicatorSpatialChar
 import { SCALAR_SERIES_KEY, mergeChartSettings, historyWindow, sliceWindow, INDICATOR_HISTORY_HARD_CAP } from './indicatorChartSettings';
 import { NumberField } from '../modeler/vpl/widgets/InlineWidgets';
 import { isGraphFrequencyMetric, GRAPH_METRIC_INFO, type GraphMetric } from './engine/graphMetrics';
+import { indicatorIsScalar, indicatorIsFrequencyShaped } from '../model/indicatorValue';
 import styles from './IndicatorDisplay.module.css';
 
 export type IndicatorVizMode = 'bars' | 'multiline' | 'stacked';
@@ -319,13 +320,10 @@ export function IndicatorDisplay({ indicators, values, history, generation, grid
         // histogram is frequency-shaped (bars / lines / stack), everything else
         // is a scalar sparkline. Definition-based like the linked flags, so the
         // header controls are discoverable before the first value arrives.
-        const isGraphFreq = ind.kind === 'graph'
-          && isGraphFrequencyMetric((ind.graphMetric ?? 'nodeCount') as GraphMetric);
-        const isFreqDef = !isSpatial
-          && ((ind.kind === 'linked' && ind.linkedAggregation === 'frequency') || isGraphFreq);
-        const isScalarDef = !isSpatial && (ind.kind === 'standalone'
-          || (ind.kind === 'linked' && ind.linkedAggregation !== 'frequency')
-          || (ind.kind === 'graph' && !isGraphFreq));
+        // The SAME shape rule Get Indicator's picker and validation use, so the
+        // chart branch and "can a rule read this?" can never drift apart.
+        const isFreqDef = indicatorIsFrequencyShaped(ind);
+        const isScalarDef = indicatorIsScalar(ind);
         // Effective chart settings: model defaults ⊕ simulator overrides.
         const chartFx = mergeChartSettings(ind.chartSettings, chartOverrides[ind.id]);
         const hasAnyChartSetting = ind.chartSettings !== undefined || chartOverrides[ind.id] !== undefined;

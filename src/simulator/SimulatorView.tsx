@@ -2803,6 +2803,39 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
     return scan(model.agentGraphNodes);
   }, [model.agentGraphNodes, model.topologyMode?.agents, model.macroDefs]);
 
+  // Does ANY rule graph read a COMPUTED (graph / linked) indicator via Get
+  // Indicator? Those values are produced once per rendered frame; when a rule
+  // consumes one the worker refreshes it once per GENERATION instead, so the
+  // number a rule sees can't silently depend on the gens/frame throughput
+  // setting. False ⇒ the historical per-batch schedule, zero added cost.
+  // Scans BOTH graphs (Get Indicator is universal) and is macro-aware, exactly
+  // like agentUsesField / agentUsesDensity.
+  const rulesReadComputedIndicator = useCallback((): boolean => {
+    const computed = new Set(
+      (model.indicators || []).filter(i => i.kind !== 'standalone').map(i => i.id),
+    );
+    if (computed.size === 0) return false;
+    const macroDefs = model.macroDefs || [];
+    const seen = new Set<string>();
+    const scan = (nodes?: typeof model.graphNodes): boolean => {
+      for (const n of nodes || []) {
+        const t = n.data?.nodeType as string;
+        const cfg = n.data?.config as Record<string, unknown> | undefined;
+        if (t === 'getIndicator' && computed.has(cfg?.indicatorId as string)) return true;
+        if (t === 'macro') {
+          const defId = cfg?.macroDefId as string | undefined;
+          if (defId && !seen.has(defId)) {
+            seen.add(defId);
+            const def = macroDefs.find(d => d.id === defId);
+            if (def && scan(def.nodes as typeof model.graphNodes)) return true;
+          }
+        }
+      }
+      return false;
+    };
+    return scan(model.graphNodes) || scan(model.agentGraphNodes as typeof model.graphNodes);
+  }, [model.indicators, model.graphNodes, model.agentGraphNodes, model.macroDefs]);
+
   // Draw using ImageData + zoom/pan transform
   /** Render the CURSOR LAYER — the cell-brush silhouette, the agent-brush
    *  footprint/scan-ring silhouettes (white, on the `cursorNeg` canvas whose CSS
@@ -5800,6 +5833,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       // readbacks). Cheap boolean — leave the JS/WASM grid path untouched.
       agentUsesField: agentUsesField(),
       agentUsesDensity: agentUsesDensity(),
+      rulesReadComputedIndicator: rulesReadComputedIndicator(),
       agentResidencyClean: agentResult.agentResidencyClean,
       // PR6b-1: the resolved agent compile target + the compiled WASM agent loop
       // bytes (only when 'wasm'). The worker backs the AgentStore on a
@@ -6268,6 +6302,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
         // PR5 (C-D1): re-detect on a graph-only edit (field nodes added/removed).
         agentUsesField: agentUsesField(),
         agentUsesDensity: agentUsesDensity(),
+      rulesReadComputedIndicator: rulesReadComputedIndicator(),
         agentResidencyClean: agentResult.agentResidencyClean,
         // PR6b-1: re-resolve the agent target + ship the WASM bytes on recompile.
         agentTarget: agentResult.agentTarget,
