@@ -167,6 +167,23 @@ export interface AgentWebGPURuntime {
    *  graph has no Apply Force To Agent. Zeroed (clearBuffer) before each behaviour
    *  dispatch; the force pass reads it (its binding 4) into the self-force seed. */
   forceScatterBuf: GPUBuffer | null;
+  /** THE ACTIVE WINDOW — the highest slot index the GPU buffers may hold live data
+   *  for. Every per-generation transfer covers `[0, gpuActiveHigh)` of each strided
+   *  run instead of the `maxAgents` CEILING.
+   *
+   *  WHY (measured, user-reported): `maxAgents` is a user-set ceiling, so a model
+   *  that grows to ~2 000 agents under a 60 000 ceiling was uploading, copying and
+   *  mapping ~15 MB of mostly-dead slots EVERY generation. On a bonded /
+   *  structurally-rewriting model — which can never be residency-eligible, so it
+   *  always takes the per-generation round-trip — that measured **47 ms/gen at
+   *  maxAgents 60 000 vs 10 ms/gen at 4 000, for the same population**. The window
+   *  makes the cost track the POPULATION, so the ceiling is free to be generous.
+   *
+   *  It only ever GROWS (slots the GPU has written must keep being refreshed, or a
+   *  dead slot's stale request lanes would be read back and drained). Slots it has
+   *  never covered are still the zero the buffer was created with, which is exactly
+   *  the "no requests, not alive" state the reconcile expects. */
+  gpuActiveHigh: number;
   /** L2 — Get Generation (binding 15): a single u32 holding the 0-based index of
    *  the generation being computed. ALWAYS created (4 bytes) because the resident
    *  `posCommit` pass bumps it unconditionally; only the BEHAVIOUR/OM bind-group
@@ -220,6 +237,12 @@ export interface AgentWebGPURuntime {
   f32Upload: Float32Array;
   i32Upload: Int32Array;
   aliveUpload: Uint32Array;
+  /** Cached compacted readback plan (rebuilt when the active window changes). */
+  f32ReadPlan?: AgentF32ReadPlan;
+  /** Reusable staging for the bond-store upload, grown to the active window (it
+   *  used to be a fresh Int32Array(bondStoreLen) — i.e. the maxAgents CEILING —
+   *  allocated on the per-generation path). */
+  bondStoreUpload?: Int32Array;
   /** maxHashBins + 1 + maxAgents i32 scratch for the hash upload. */
   hashUpload: Int32Array;
   /** G5 — scratch CPU buffers for the field read snapshot + the deposit init/readback. */
@@ -708,6 +731,8 @@ export async function createAgentWebGPURuntime(
     spawnCursorBuf, usesSpawn: hasSpawn, usesBondStoreWrite: bondStoreWrites,
     stopFlagBuf, usesStop: hasStop,
     forceScatterBuf,
+    // Fresh buffers are zero-initialised, so nothing is live yet.
+    gpuActiveHigh: 0,
     genCounterBuf, usesGeneration: hasGeneration,
     behaviourPipeline, forcePipeline, behaviourBindGroup, forceBindGroup,
     relaxCommitPipeline, relaxCommitBindGroup,
@@ -736,6 +761,77 @@ export async function createAgentWebGPURuntime(
 // Upload — pack the CPU AgentStore SoA into the strided GPU buffers.
 // ---------------------------------------------------------------------------
 
+/** THE COMPACTED READBACK PLAN. The f32 SoA is a set of STRIDED runs (run r lives
+ *  at `f32Base[r] .. +maxAgents`), so a windowed readback cannot be one prefix copy
+ *  — the live prefixes are scattered across the whole buffer. Instead each run's
+ *  live prefix is copied to its own slot in a COMPACTED staging buffer, and only
+ *  `totalElems` are mapped.
+ *
+ *  EVERY run is planned (the same field lists the upload walks), not just the ones
+ *  the reader happens to touch, so `compactBase` can never miss one — a missing
+ *  base would silently read a neighbouring run's data. `compactBase` throws rather
+ *  than returning undefined for exactly that reason. */
+interface AgentF32ReadPlan {
+  window: number;
+  totalElems: number;
+  /** gpu run base -> compacted run base */
+  base: Map<number, number>;
+  copies: Array<{ src: number; dst: number; elems: number }>;
+}
+
+function buildF32ReadPlan(rt: AgentWebGPURuntime, window: number): AgentF32ReadPlan {
+  const L = rt.layout;
+  const base = new Map<number, number>();
+  const copies: Array<{ src: number; dst: number; elems: number }> = [];
+  let cursor = 0;
+  const add = (gpuBase: number | undefined, perAgent: number): void => {
+    if (gpuBase === undefined || base.has(gpuBase)) return;
+    const elems = window * perAgent;
+    base.set(gpuBase, cursor);
+    if (elems > 0) copies.push({ src: gpuBase, dst: cursor, elems });
+    cursor += elems;
+  };
+  const f32Fields: readonly string[] = L.gridDepth > 1
+    ? [...AGENT_GPU_F32_FIELDS, ...AGENT_GPU_F32_FIELDS_3D]
+    : AGENT_GPU_F32_FIELDS;
+  for (const field of f32Fields) add(L.f32Base[field], AGENT_GPU_QUEUE_FIELDS.has(field) ? L.bondReqSlots : 1);
+  for (const id of L.agentAttrIds) { add(L.agentAttrBase[id], 1); add(L.agentAttrWriteBase[id], 1); }
+  for (const id of L.bondAttrIds) add(L.bondFormAttrBase[id], L.bondReqSlots);
+  return { window, totalElems: Math.max(1, cursor), base, copies };
+}
+
+function f32ReadPlan(rt: AgentWebGPURuntime, window: number): AgentF32ReadPlan {
+  const cached = rt.f32ReadPlan;
+  if (cached && cached.window === window) return cached;
+  const plan = buildF32ReadPlan(rt, window);
+  rt.f32ReadPlan = plan;
+  return plan;
+}
+
+/** Resolve a GPU run base to its compacted staging base. Throws on an unplanned
+ *  base — silently returning 0 would read a DIFFERENT run's values. */
+function compactBase(plan: AgentF32ReadPlan, gpuBase: number): number {
+  const b = plan.base.get(gpuBase);
+  if (b === undefined) throw new Error(`[agents/webgpu] readback plan is missing run base ${gpuBase}`);
+  return b;
+}
+
+/** Resolve THE ACTIVE WINDOW for a per-generation transfer — see
+ *  `AgentWebGPURuntime.gpuActiveHigh`. Monotonic: it is raised to the store's
+ *  highWater here so a grown population is covered, and `readbackAgentStep` raises
+ *  it again to the post-dispatch spawn cursor (the shader can bump-allocate slots
+ *  ABOVE highWater within a generation, and those must keep being refreshed
+ *  afterwards or their stale request lanes would be read back and drained).
+ *
+ *  Clamped to the layout ceiling: everything downstream indexes strided runs whose
+ *  stride IS maxAgents, so the window can never exceed it. */
+function agentActiveWindow(rt: AgentWebGPURuntime, highWater: number): number {
+  const ma = rt.layout.maxAgents;
+  const w = Math.min(ma, Math.max(rt.gpuActiveHigh, Math.max(0, highWater)));
+  rt.gpuActiveHigh = w;
+  return w;
+}
+
 /** Upload the per-agent f32 SoA (geometry + velocity + force + density), the i32
  *  SoA, and the alive mask (expanded to u32/agent). Called each step before the
  *  dispatch (positions evolve on the GPU but the structural phase / paint / seed
@@ -744,8 +840,21 @@ export async function createAgentWebGPURuntime(
  *  per-agent stream in place across steps (so successive steps draw fresh
  *  randomness; re-seeding every step would freeze the sequence). */
 export function uploadAgentSoA(rt: AgentWebGPURuntime, s: AgentStore): void {
-  const L = rt.layout, ma = L.maxAgents, hw = s.highWater;
+  const L = rt.layout, hw = s.highWater;
+  // THE ACTIVE WINDOW (see AgentWebGPURuntime.gpuActiveHigh). `ma` is the window,
+  // NOT L.maxAgents: every fill loop and every writeBuffer below covers only the
+  // live prefix of its strided run. It only grows, so a slot the GPU has ever
+  // written keeps being refreshed; slots past it are still the zero the buffer was
+  // created with. `hw` is clamped because a caller could hand a store whose
+  // highWater outran a stale layout.
+  const ma = agentActiveWindow(rt, hw);
   const f = rt.f32Upload, ix = rt.i32Upload, al = rt.aliveUpload;
+  /** Upload one strided run's live prefix. `perAgent` is 1 for a plain run and
+   *  `bondReqSlots` for a queue-shaped one. Element-indexed writeBuffer: both the
+   *  destination byte offset and the size stay 4-aligned by construction. */
+  const putF32 = (base: number, perAgent: number): void => {
+    rt.device.queue.writeBuffer(rt.agentF32Buf, base * 4, f, base, ma * perAgent);
+  };
   // f32 fields — map the CPU store array → the strided run at f32Base[field].
   // The 3D z fields are present in the layout (and the store) only when gridDepth>1.
   const f32Src: Record<string, Float64Array> = {
@@ -805,7 +914,24 @@ export function uploadAgentSoA(rt: AgentWebGPURuntime, s: AgentStore): void {
     if (base === undefined) continue;
     for (let i = 0, n = ma * L.bondReqSlots; i < n; i++) f[base + i] = 0;
   }
-  rt.device.queue.writeBuffer(rt.agentF32Buf, 0, f.buffer, f.byteOffset, f.byteLength);
+  // Per-RUN uploads of the live prefix, instead of one whole-buffer write sized by
+  // the maxAgents ceiling. ~30-50 small writeBuffer calls replace a single ~15 MB
+  // one at a 60 000 ceiling with ~2 000 agents.
+  for (const field of f32Fields) {
+    const base = L.f32Base[field];
+    if (base === undefined) continue;
+    putF32(base, AGENT_GPU_QUEUE_FIELDS.has(field) ? L.bondReqSlots : 1);
+  }
+  for (const id of L.agentAttrIds) {
+    const base = L.agentAttrBase[id]!;
+    putF32(base, 1);
+    const wbase = L.agentAttrWriteBase[id];
+    if (wbase !== undefined && wbase !== base) putF32(wbase, 1);
+  }
+  for (const id of L.bondAttrIds) {
+    const base = L.bondFormAttrBase[id];
+    if (base !== undefined) putF32(base, L.bondReqSlots);
+  }
 
   // i32 fields — lineage / bondCount.
   const i32Src: Record<string, Int32Array> = { lineage: s.lineage, bondCount: s.bondCount };
@@ -816,12 +942,15 @@ export function uploadAgentSoA(rt: AgentWebGPURuntime, s: AgentStore): void {
     for (let i = 0; i < hw; i++) ix[base + i] = src[i]!;
     for (let i = hw; i < ma; i++) ix[base + i] = 0;
   }
-  rt.device.queue.writeBuffer(rt.agentI32Buf, 0, ix.buffer, ix.byteOffset, ix.byteLength);
+  for (const field of AGENT_GPU_I32_FIELDS) {
+    const base = L.i32Base[field];
+    if (base !== undefined) rt.device.queue.writeBuffer(rt.agentI32Buf, base * 4, ix, base, ma);
+  }
 
   // alive mask → one u32/agent.
   for (let i = 0; i < hw; i++) al[i] = s.alive[i]!;
   for (let i = hw; i < ma; i++) al[i] = 0;
-  rt.device.queue.writeBuffer(rt.agentAliveBuf, 0, al.buffer, al.byteOffset, al.byteLength);
+  rt.device.queue.writeBuffer(rt.agentAliveBuf, 0, al, 0, ma);
 
   // Seed the GPU agentColors buffer from the CPU store BEFORE the behaviour
   // dispatch. A model whose agent behaviour has NO colour write (no Set Cell
@@ -1006,7 +1135,15 @@ export async function readbackAgentIndicators(
 export function uploadAgentBondStore(rt: AgentWebGPURuntime, s: AgentStore): void {
   const L = rt.layout, mb = L.maxBonds, S = L.bondSlotStride;
   if (!rt.bondStoreBuf || L.bondStoreLen === 0 || mb === 0) return;
-  const out = new Int32Array(L.bondStoreLen);
+  // THE ACTIVE WINDOW — one agent's block is `mb * S` ints, so only the live
+  // prefix is packed and uploaded (the ceiling's tail is already zero on the GPU
+  // and is never read: the shader's bond loops run to bondCount).
+  const win = agentActiveWindow(rt, s.highWater);
+  const outLen = Math.min(L.bondStoreLen, Math.max(1, win * mb * S));
+  const out = rt.bondStoreUpload && rt.bondStoreUpload.length >= outLen
+    ? rt.bondStoreUpload.subarray(0, outLen)
+    : (rt.bondStoreUpload = new Int32Array(outLen));
+  out.fill(0);
   const rb = new Float32Array(1), rv = new Int32Array(rb.buffer);
   const partner = s.bondPartner, rest = s.bondRestLength;
   const sStride = s.maxBonds; // the CPU store stride (== mb, but read it explicitly)
@@ -1033,7 +1170,7 @@ export function uploadAgentBondStore(rt: AgentWebGPURuntime, s: AgentStore): voi
       }
     }
   }
-  rt.device.queue.writeBuffer(rt.bondStoreBuf, 0, out.buffer, out.byteOffset, out.byteLength);
+  rt.device.queue.writeBuffer(rt.bondStoreBuf, 0, out, 0, outLen);
 }
 
 /** P3 — read the bond store's USER ATTRIBUTE lanes back into the CPU store after a
@@ -2132,7 +2269,13 @@ export async function debugReadCompositePixels(rt: AgentRenderSurface, gridColor
  *  Needed so a MUTATION-driven present (seed/edit) shows the CPU-computed colours
  *  (the GPU behaviour shader hasn't re-run since). */
 export function uploadAgentColors(rt: AgentRenderSurface, s: AgentStore): void {
-  const ma = rt.layout.maxAgents, hw = s.highWater;
+  const cap = rt.layout.maxAgents;
+  const hw = Math.min(s.highWater, cap);
+  // THE ACTIVE WINDOW. AgentRenderSurface is the narrow render-only shape, so it
+  // may not carry gpuActiveHigh — fall back to the ceiling for a pure render
+  // surface (its scratch is one run, not ~50, so the ceiling costs little there).
+  const grown = (rt as Partial<AgentWebGPURuntime>).gpuActiveHigh;
+  const ma = grown === undefined ? cap : Math.min(cap, Math.max(grown, hw));
   // Persistent scratch (audit M5) — a fresh allocation here ran on the per-frame
   // path. Slots past highWater are zeroed explicitly (a fresh array was
   // zero-filled by construction; agents beyond hw must stay transparent).
@@ -2145,7 +2288,7 @@ export function uploadAgentColors(rt: AgentRenderSurface, s: AgentStore): void {
     u[i] = ((c[ci]! & 0xff) | ((c[ci + 1]! & 0xff) << 8) | ((c[ci + 2]! & 0xff) << 16) | ((c[ci + 3]! & 0xff) << 24)) >>> 0;
   }
   if (hw < ma) u.fill(0, hw, ma);
-  rt.device.queue.writeBuffer(rt.agentColorsBuf, 0, u.buffer, u.byteOffset, u.byteLength);
+  rt.device.queue.writeBuffer(rt.agentColorsBuf, 0, u, 0, Math.max(1, ma));
 }
 
 /** Write the RenderView uniform + stash the clear colour / glow selection. */
@@ -2378,47 +2521,70 @@ function acquireStaging(rt: AgentWebGPURuntime, byteSize: number): PooledBuffer 
  *  merges into the shared stopFlag. */
 export async function readbackAgentStep(rt: AgentWebGPURuntime, s: AgentStore): Promise<{ spawnOverflow: boolean; agentStop: number }> {
   const L = rt.layout, hw = s.highWater;
-  const f32ByteLen = f32Bytes(L);
-  const colByteLen = colorsBytes(L);
   const wantI32 = rt.usesI32Write;
   const i32ByteLen = i32Bytes(L);
   const wantSpawn = rt.usesSpawn && !!rt.spawnCursorBuf;
   const wantStop = rt.usesStop && !!rt.stopFlagBuf;
-  const aliveByteLen = aliveBytes(L);
+
+  // --- THE ACTIVE WINDOW (see AgentWebGPURuntime.gpuActiveHigh).
+  // A spawning behaviour bump-allocates slots ABOVE highWater via the atomic
+  // spawn cursor, and the reconcile below reads [hw, cursor) — so the window is
+  // not knowable until the cursor is. Read that ONE u32 first (a 4-byte
+  // round-trip) and size everything else from it. A non-spawn model skips the
+  // extra round-trip entirely: its window is exactly highWater.
+  let cursorVal = 0;
+  const pooledCursor = wantSpawn ? acquireStaging(rt, 4) : null;
+  if (pooledCursor && rt.spawnCursorBuf) {
+    const encC = rt.device.createCommandEncoder({ label: 'agent-readback-cursor' });
+    encC.copyBufferToBuffer(rt.spawnCursorBuf, 0, pooledCursor.buffer, 0, 4);
+    rt.device.queue.submit([encC.finish()]);
+    await pooledCursor.buffer.mapAsync(GPUMapMode.READ, 0, 4);
+    cursorVal = new Uint32Array(pooledCursor.buffer.getMappedRange(0, 4))[0]! >>> 0;
+  }
+  // Raise the window to cover everything the dispatch may have touched, and KEEP
+  // it raised: a slot the GPU wrote must go on being refreshed by the upload, or
+  // its stale request lanes would be read back and drained on a later generation.
+  const win = agentActiveWindow(rt, Math.max(hw, Math.min(cursorVal, L.maxAgents)));
+  const plan = f32ReadPlan(rt, win);
+  const f32ByteLen = Math.max(4, plan.totalElems * 4);
+  const colByteLen = Math.max(4, win * 4);
+  const aliveByteLen = Math.max(4, win * 4);
+
   const pooledF = acquireStaging(rt, f32ByteLen);
   const stagingF = pooledF.buffer;
   const pooledC = acquireStaging(rt, colByteLen);
   const stagingC = pooledC.buffer;
   const pooledI = wantI32 ? acquireStaging(rt, i32ByteLen) : null;
   const pooledAlive = wantSpawn ? acquireStaging(rt, aliveByteLen) : null;
-  const pooledCursor = wantSpawn ? acquireStaging(rt, 4) : null;
   const pooledStop = wantStop ? acquireStaging(rt, 4) : null;
   const enc = rt.device.createCommandEncoder({ label: 'agent-readback-enc' });
-  enc.copyBufferToBuffer(rt.agentF32Buf, 0, stagingF, 0, f32ByteLen);
+  // One copy per RUN, into the compacted staging layout — instead of one copy of
+  // the whole maxAgents-sized buffer.
+  for (const c of plan.copies) enc.copyBufferToBuffer(rt.agentF32Buf, c.src * 4, stagingF, c.dst * 4, c.elems * 4);
   enc.copyBufferToBuffer(rt.agentColorsBuf, 0, stagingC, 0, colByteLen);
   if (pooledI) enc.copyBufferToBuffer(rt.agentI32Buf, 0, pooledI.buffer, 0, i32ByteLen);
   if (pooledAlive) enc.copyBufferToBuffer(rt.agentAliveBuf, 0, pooledAlive.buffer, 0, aliveByteLen);
-  if (pooledCursor && rt.spawnCursorBuf) enc.copyBufferToBuffer(rt.spawnCursorBuf, 0, pooledCursor.buffer, 0, 4);
   if (pooledStop && rt.stopFlagBuf) enc.copyBufferToBuffer(rt.stopFlagBuf, 0, pooledStop.buffer, 0, 4);
   rt.device.queue.submit([enc.finish()]);
   await stagingF.mapAsync(GPUMapMode.READ, 0, f32ByteLen);
   await stagingC.mapAsync(GPUMapMode.READ, 0, colByteLen);
   if (pooledI) await pooledI.buffer.mapAsync(GPUMapMode.READ, 0, i32ByteLen);
   if (pooledAlive) await pooledAlive.buffer.mapAsync(GPUMapMode.READ, 0, aliveByteLen);
-  if (pooledCursor) await pooledCursor.buffer.mapAsync(GPUMapMode.READ, 0, 4);
   if (pooledStop) await pooledStop.buffer.mapAsync(GPUMapMode.READ, 0, 4);
   const f = new Float32Array(stagingF.getMappedRange(0, f32ByteLen));
   const col = new Uint32Array(stagingC.getMappedRange(0, colByteLen));
-  const xB = L.f32Base['xNext']!, yB = L.f32Base['yNext']!;
-  const vxB = L.f32Base['vx']!, vyB = L.f32Base['vy']!;
-  const radB = L.f32Base['radius']!, denB = L.f32Base['density']!, ageB = L.f32Base['age']!;
+  // Every base below is rebased into the compacted staging buffer.
+  const CB = (b: number): number => compactBase(plan, b);
+  const xB = CB(L.f32Base['xNext']!), yB = CB(L.f32Base['yNext']!);
+  const vxB = CB(L.f32Base['vx']!), vyB = CB(L.f32Base['vy']!);
+  const radB = CB(L.f32Base['radius']!), denB = CB(L.f32Base['density']!), ageB = CB(L.f32Base['age']!);
   // 3D z fields (present only when gridDepth>1).
   const is3d = L.gridDepth > 1;
-  const zB = is3d ? L.f32Base['zNext']! : -1, vzB = is3d ? L.f32Base['vz']! : -1;
+  const zB = is3d ? CB(L.f32Base['zNext']!) : -1, vzB = is3d ? CB(L.f32Base['vz']!) : -1;
   // Structural-request bases (G4) — match AGENT_GPU_REQUEST_FIELDS / the emitters.
-  const drB = L.f32Base['divideRequest']!, daxB = L.f32Base['divideAxisX']!, dayB = L.f32Base['divideAxisY']!;
-  const dasymB = L.f32Base['divideAsym']!, bfrB = L.f32Base['bondFormReq']!, bflB = L.f32Base['bondFormL']!;
-  const bfkB = L.f32Base['bondFormK']!, bbrB = L.f32Base['bondBreakReq']!, krB = L.f32Base['killRequest']!;
+  const drB = CB(L.f32Base['divideRequest']!), daxB = CB(L.f32Base['divideAxisX']!), dayB = CB(L.f32Base['divideAxisY']!);
+  const dasymB = CB(L.f32Base['divideAsym']!), bfrB = CB(L.f32Base['bondFormReq']!), bflB = CB(L.f32Base['bondFormL']!);
+  const bfkB = CB(L.f32Base['bondFormK']!), bbrB = CB(L.f32Base['bondBreakReq']!), krB = CB(L.f32Base['killRequest']!);
   // P4 - queue entries per agent, shared by the GPU runs and the CPU arrays.
   const nq = Math.min(L.bondReqSlots, s.bondReqSlots);
   for (let i = 0; i < hw; i++) {
@@ -2463,7 +2629,7 @@ export async function readbackAgentStep(rt: AgentWebGPURuntime, s: AgentStore): 
   }
   // User AGENT attributes → the WRITE buffer (the caller swaps read↔write after).
   for (const id of L.agentAttrIds) {
-    const base = L.agentAttrBase[id]!;
+    const base = CB(L.agentAttrBase[id]!);
     const dst = s.attrWrite[id] as { [i: number]: number } | undefined;
     if (!dst) continue;
     const isInt = s.attrKind[id] !== 'float64';
@@ -2474,9 +2640,10 @@ export async function readbackAgentStep(rt: AgentWebGPURuntime, s: AgentStore): 
   // `formBond`, which stamps BOTH slots (I2). The CPU request cells are f64 and
   // hold the raw value; typing happens where the ragged region is written.
   for (const id of L.bondAttrIds) {
-    const base = L.bondFormAttrBase[id];
+    const rawBase = L.bondFormAttrBase[id];
     const dst = s.bondFormAttrs[id];
-    if (base === undefined || !dst) continue;
+    if (rawBase === undefined || !dst) continue;
+    const base = CB(rawBase);
     for (let i = 0; i < hw; i++) {
       if (!s.alive[i]) continue;
       const cb = i * s.bondReqSlots, gb = i * L.bondReqSlots;
@@ -2496,13 +2663,14 @@ export async function readbackAgentStep(rt: AgentWebGPURuntime, s: AgentStore): 
   let spawnOverflow = false;
   if (pooledAlive && pooledCursor) {
     const aliveArr = new Uint32Array(pooledAlive.buffer.getMappedRange(0, aliveByteLen));
-    const cursorArr = new Uint32Array(pooledCursor.buffer.getMappedRange(0, 4));
     const ma = L.maxAgents;
-    const cursor = cursorArr[0]! >>> 0;
+    // Read ABOVE, before the windowed copies were sized from it. getMappedRange
+    // must not be called twice for the same range, so reuse the value.
+    const cursor = cursorVal;
     if (cursor > ma) spawnOverflow = true;   // some Create Agent calls got no slot
     const end = Math.min(cursor, ma);
-    const x0 = L.f32Base['x']!, y0 = L.f32Base['y']!, z0 = is3d ? L.f32Base['z']! : -1;
-    const trB = L.f32Base['targetRadius']!;
+    const x0 = CB(L.f32Base['x']!), y0 = CB(L.f32Base['y']!), z0 = is3d ? CB(L.f32Base['z']!) : -1;
+    const trB = CB(L.f32Base['targetRadius']!);
     for (let k = hw; k < end; k++) {
       if (aliveArr[k] === 1) {
         // A committed newborn — initialise the CPU slot's identity (initAgentSlot
@@ -2514,7 +2682,7 @@ export async function readbackAgentStep(rt: AgentWebGPURuntime, s: AgentStore): 
         s.liveCount++;
         s.targetRadius[k] = f[trB + k]!;   // a Set Agent Radius by handle may have changed it
         for (const id of L.agentAttrIds) {
-          const base = L.agentAttrBase[id]!;
+          const base = CB(L.agentAttrBase[id]!);   // compacted staging, like every other read
           const dstR = s.attrRead[id] as { [i: number]: number } | undefined;
           const dstW = s.attrWrite[id] as { [i: number]: number } | undefined;
           if (!dstR) continue;
@@ -3057,12 +3225,17 @@ export function dispatchResidentBatch(rt: AgentWebGPURuntime, gens: number, high
  *  them. */
 export async function readbackAgentFrame(rt: AgentWebGPURuntime, s: AgentStore): Promise<void> {
   const L = rt.layout, hw = s.highWater;
-  const f32ByteLen = f32Bytes(L);
-  const colByteLen = colorsBytes(L);
+  // THE ACTIVE WINDOW + the compacted plan, same as readbackAgentStep. Residency
+  // excludes spawn, so the window is exactly the live population — no cursor
+  // round-trip is needed here.
+  const win = agentActiveWindow(rt, hw);
+  const plan = f32ReadPlan(rt, win);
+  const f32ByteLen = Math.max(4, plan.totalElems * 4);
+  const colByteLen = Math.max(4, win * 4);
   const pooledF = acquireStaging(rt, f32ByteLen);
   const pooledC = acquireStaging(rt, colByteLen);
   const enc = rt.device.createCommandEncoder({ label: 'agent-frame-readback' });
-  enc.copyBufferToBuffer(rt.agentF32Buf, 0, pooledF.buffer, 0, f32ByteLen);
+  for (const c of plan.copies) enc.copyBufferToBuffer(rt.agentF32Buf, c.src * 4, pooledF.buffer, c.dst * 4, c.elems * 4);
   enc.copyBufferToBuffer(rt.agentColorsBuf, 0, pooledC.buffer, 0, colByteLen);
   rt.device.queue.submit([enc.finish()]);
   await pooledF.buffer.mapAsync(GPUMapMode.READ, 0, f32ByteLen);
@@ -3070,10 +3243,11 @@ export async function readbackAgentFrame(rt: AgentWebGPURuntime, s: AgentStore):
   const f = new Float32Array(pooledF.buffer.getMappedRange(0, f32ByteLen));
   const col = new Uint32Array(pooledC.buffer.getMappedRange(0, colByteLen));
   const is3d = L.gridDepth > 1;
-  const xB = L.f32Base['x']!, yB = L.f32Base['y']!;
-  const vxB = L.f32Base['vx']!, vyB = L.f32Base['vy']!;
-  const radB = L.f32Base['radius']!, denB = L.f32Base['density']!, ageB = L.f32Base['age']!;
-  const zB = is3d ? L.f32Base['z']! : -1, vzB = is3d ? L.f32Base['vz']! : -1;
+  const CB = (b: number): number => compactBase(plan, b);
+  const xB = CB(L.f32Base['x']!), yB = CB(L.f32Base['y']!);
+  const vxB = CB(L.f32Base['vx']!), vyB = CB(L.f32Base['vy']!);
+  const radB = CB(L.f32Base['radius']!), denB = CB(L.f32Base['density']!), ageB = CB(L.f32Base['age']!);
+  const zB = is3d ? CB(L.f32Base['z']!) : -1, vzB = is3d ? CB(L.f32Base['vz']!) : -1;
   for (let i = 0; i < hw; i++) {
     if (!s.alive[i]) continue;
     s.x[i] = f[xB + i]!; s.y[i] = f[yB + i]!;
@@ -3090,7 +3264,7 @@ export async function readbackAgentFrame(rt: AgentWebGPURuntime, s: AgentStore):
   // User agent attributes — async single-buffer under residency eligibility, so
   // attrWrite aliases attrRead; write attrRead directly (no swap needed).
   for (const id of L.agentAttrIds) {
-    const base = L.agentAttrBase[id]!;
+    const base = CB(L.agentAttrBase[id]!);
     const dst = s.attrRead[id] as { [i: number]: number } | undefined;
     if (!dst) continue;
     const isInt = s.attrKind[id] !== 'float64';

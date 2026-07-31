@@ -2075,7 +2075,10 @@ export function HelpView() {
               past them <strong>rejects</strong> the new agent/bond (it never wraps or corrupts).
               <strong> Max Bonds / Agent can be 0</strong> for a pure-force / charged-particle
               model (no bonds at all); turning on Use bonding physics bumps it to a default if
-              it&rsquo;s still 0. Changing a ceiling re-initialises the engine.</li>
+              it&rsquo;s still 0. Changing a ceiling re-initialises the engine. A generous
+              <em> Max Agents</em> is cheap: memory is reserved for it, but the per-generation
+              work &mdash; including the WebGPU target&rsquo;s CPU&harr;GPU transfers &mdash;
+              tracks the LIVE population, not the ceiling.</li>
             <li><strong>Seeding</strong> &mdash; the <strong>Seed Count</strong> laid down on
               Reset (0 = seed by hand), the <strong>Default Radius</strong>, and the
               <strong> Seed Pattern</strong> (a compact centred blob for tissue, or scattered

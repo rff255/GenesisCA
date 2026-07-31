@@ -55,10 +55,13 @@ const readSrc = (rel) => {
  *  Brace-counting is string/comment-naive but sufficient here: every anchor below
  *  is a plain function body. Returns '' when the anchor is gone (⇒ the assertion
  *  fails loudly rather than silently passing). */
+// NB the brace search starts at the END of the match, so a regex can consume a
+// `): Promise<{ ... }>` RETURN TYPE and still land on the body brace. (Anchoring
+// at m.index made readbackAgentStep's "block" its return-type literal.)
 function blockAfter(src, startRe) {
   const m = startRe.exec(src);
   if (!m) return '';
-  let i = src.indexOf('{', m.index);
+  let i = src.indexOf('{', m.index + m[0].length);
   if (i < 0) return '';
   let depth = 0;
   for (let j = i; j < src.length; j++) {
@@ -505,6 +508,81 @@ check('runtime: uploadAgentSoA seeds the agent colour buffer [invisible-agents b
   check('SimulatorView: a worker reinit re-publishes the velocity request [snapshot-contents]',
     /showVisionRef\.current !== 'off'/.test(initBlock2)
     && /setAgentSnapshotVelocity', on: true/.test(initBlock2));
+}
+
+// B13 (THE ACTIVE WINDOW, user-reported: "on wasm the processing is much faster
+// than on webgpu (roughly 2x)").
+//
+// `maxAgents` is a USER-SET CEILING. Every per-generation CPU<->GPU transfer used
+// to be sized by it, so a model that grows to ~2 000 agents under a 60 000 ceiling
+// moved ~15 MB of mostly-dead slots EVERY generation. A bonded / structurally-
+// rewriting model can never be residency-eligible, so it always pays that.
+// MEASURED on the reporter's 3D Cubic GRA: 47 ms/gen -> 10.9 ms/gen (~4.4x) at
+// the SAME 60 000 ceiling, at a LARGER population.
+//
+// The window (`gpuActiveHigh`) must:
+//   - be MONOTONIC. A slot the GPU has written must keep being refreshed, or its
+//     stale request-queue lanes get read back and DRAINED on a later generation.
+//     Slots it never covered are still the zero the buffer was created with,
+//     which is exactly the "no requests, not alive" state the reconcile expects.
+//   - cover the post-dispatch SPAWN CURSOR, not just highWater: a spawning
+//     behaviour bump-allocates slots ABOVE highWater and the reconcile reads them.
+//   - drive a COMPACTED readback. The f32 SoA is strided runs, so a windowed
+//     readback cannot be one prefix copy; every run is planned, and an unplanned
+//     base must THROW rather than silently read a neighbouring run.
+{
+  const rt = readSrc('simulator/engine/agentWebgpuRuntime.ts');
+
+  check('runtime carries the active window [active-window]',
+    /gpuActiveHigh: number;/.test(rt) && /gpuActiveHigh: 0,/.test(rt));
+  const winFn = blockAfter(rt, /function agentActiveWindow\(/);
+  check('the window is MONOTONIC and ceiling-clamped [active-window]',
+    /Math\.max\(rt\.gpuActiveHigh/.test(winFn) && /Math\.min\(ma,/.test(winFn)
+    && /rt\.gpuActiveHigh = w/.test(winFn));
+
+  // Upload: no whole-buffer write may remain (those were sized by the ceiling).
+  const up = blockAfter(rt, /export function uploadAgentSoA\(/);
+  check('upload: windowed, not the maxAgents ceiling [active-window]',
+    /const ma = agentActiveWindow\(rt, hw\)/.test(up));
+  check('upload: per-RUN writes replaced the whole-buffer write [active-window]',
+    !/writeBuffer\(rt\.agentF32Buf, 0, f\.buffer/.test(up)
+    && !/writeBuffer\(rt\.agentI32Buf, 0, ix\.buffer/.test(up)
+    && /putF32\(base, AGENT_GPU_QUEUE_FIELDS\.has\(field\) \? L\.bondReqSlots : 1\)/.test(up));
+
+  // Readback: the compacted plan + the cursor-first sizing.
+  const plan = blockAfter(rt, /function buildF32ReadPlan\(/);
+  check('readback plan covers EVERY run, not just the ones read [active-window]',
+    /for \(const field of f32Fields\) add\(/.test(plan)
+    && /for \(const id of L\.agentAttrIds\) \{ add\(L\.agentAttrBase\[id\], 1\); add\(L\.agentAttrWriteBase\[id\], 1\); \}/.test(plan)
+    && /for \(const id of L\.bondAttrIds\) add\(L\.bondFormAttrBase\[id\]/.test(plan));
+  const cb = blockAfter(rt, /function compactBase\(/);
+  check('an unplanned run base THROWS (never silently reads a neighbour) [active-window]',
+    /throw new Error\(/.test(cb));
+  const rbs = blockAfter(rt, /export async function readbackAgentStep\([\s\S]*?\): Promise<\{[^}]*\}>/);
+  check('readback: the spawn cursor is read FIRST and sizes the window [active-window]',
+    /agent-readback-cursor/.test(rbs) && /agentActiveWindow\(rt, Math\.max\(hw, Math\.min\(cursorVal/.test(rbs));
+  check('readback: per-run compacted copies, not one whole-buffer copy [active-window]',
+    /for \(const c of plan\.copies\) enc\.copyBufferToBuffer\(rt\.agentF32Buf, c\.src \* 4/.test(rbs)
+    && !/copyBufferToBuffer\(rt\.agentF32Buf, 0, stagingF, 0, f32ByteLen\)/.test(rbs));
+  check('readback: every f32 base is rebased through the plan [active-window]',
+    /const CB = \(b: number\): number => compactBase\(plan, b\)/.test(rbs)
+    && /const xB = CB\(L\.f32Base\['xNext'\]!\)/.test(rbs)
+    && /const base = CB\(L\.agentAttrBase\[id\]!\)/.test(rbs));
+  check('readback: the cursor is NOT re-mapped a second time [active-window]',
+    !/cursorArr = new Uint32Array\(pooledCursor\.buffer\.getMappedRange/.test(rbs));
+
+  // The resident once-per-frame readback gets the same treatment.
+  const rbf = blockAfter(rt, /export async function readbackAgentFrame\(/);
+  check('resident frame readback is windowed + compacted too [active-window]',
+    /const win = agentActiveWindow\(rt, hw\)/.test(rbf)
+    && /for \(const c of plan\.copies\) enc\.copyBufferToBuffer/.test(rbf)
+    && /const CB = \(b: number\): number => compactBase\(plan, b\)/.test(rbf));
+
+  // The bond store is agent-major too — it must follow the window.
+  const bs = blockAfter(rt, /export function uploadAgentBondStore\(/);
+  check('bond-store upload is windowed [active-window]',
+    /const win = agentActiveWindow\(rt, s\.highWater\)/.test(bs)
+    && /writeBuffer\(rt\.bondStoreBuf, 0, out, 0, outLen\)/.test(bs));
 }
 
 // ---------------------------------------------------------------------------
