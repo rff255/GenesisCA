@@ -36,6 +36,7 @@ export const CENTER_BASED_DEFAULTS = {
   formDistance: 1.1,         // d_form, × contact distance (auto-bond within)
   breakDistance: 1.6,        // d_break, × contact distance (> d_form — hysteresis)
   positionalIterations: 2,   // Jacobi sweeps for the hard positional collision (more = tighter no-overlap packing)
+  layoutIterations: 1,       // force-pass runs per generation (1 = today's engine, byte-identical); see layoutIterationsOf
   chargeStrength: -3,        // k for the long-range charge (NEGATIVE = repulsive); see usesCharge
   chargeMaxDist: 0,          // 0 / absent ⇒ the DERIVED default 8 × bondRestLength (see chargeMaxDistOf)
   bondRequestDepth: 8,       // GRA P4 — per-agent structural-request QUEUE depth (form/break/rewire ops per generation)
@@ -176,6 +177,27 @@ export function chargeParamsOf(cfg: CenterBasedConfig | undefined | null): Charg
   const maxD = doCharge ? chargeMaxDistOf(cfg) : 0;
   const chargeMaxD2 = maxD * maxD;
   return { doCharge, chargeK: doCharge ? chargeStrengthOf(cfg) : 0, chargeMaxD2, chargeMinC: 1 / (1 + chargeMaxD2) };
+}
+
+// ---------------------------------------------------------------------------
+// L3 — LAYOUT ITERATIONS. How many times the force integrator runs per
+// generation. An ENGINE knob (numerical relaxation), never a graph node.
+// ---------------------------------------------------------------------------
+
+/** Hard ceiling on `layoutIterations` — the force pass is the most expensive
+ *  phase of a generation, so a mistyped 1000 must not hang the worker. 32 is far
+ *  past the useful range (the reference runs 2). */
+export const MAX_LAYOUT_ITERATIONS = 32;
+
+/** Force-pass iterations per generation. Absent / ≤ 1 ⇒ **1**, i.e. exactly
+ *  today's engine, byte-for-byte — there is no legacy fallback to get wrong.
+ *  Clamped to `[1, MAX_LAYOUT_ITERATIONS]` and floored, so every consumer (the JS
+ *  loop, the WASM dispatch, both GPU paths) resolves the SAME integer from the
+ *  SAME place and they cannot disagree about how many iterations a generation is. */
+export function layoutIterationsOf(cfg: CenterBasedConfig | undefined | null): number {
+  const v = cfg?.layoutIterations;
+  if (typeof v !== 'number' || !Number.isFinite(v)) return 1;
+  return Math.max(1, Math.min(MAX_LAYOUT_ITERATIONS, Math.floor(v)));
 }
 
 /** Resolve whether the engine runs its bond SPRINGS this model. Profile-aware:

@@ -33,7 +33,7 @@ import type { AgentStore } from './agentEngine';
 import { initAgentSlot, freeStagedSlot } from './agentEngine';
 import type { AgentWebGPULayout } from '../../modeler/vpl/compiler/agentWebgpu/layout';
 import { AGENT_GPU_F32_FIELDS, AGENT_GPU_F32_FIELDS_3D, AGENT_GPU_I32_FIELDS, AGENT_GPU_QUEUE_FIELDS, AGENT_GPU_REQUEST_FIELDS } from '../../modeler/vpl/compiler/agentWebgpu/layout';
-import { emitAgentForcePassWGSL, agentMirrorFields } from '../../modeler/vpl/compiler/agentWebgpu/forcePass';
+import { emitAgentForcePassWGSL, agentMirrorFields, emitForceControlStruct } from '../../modeler/vpl/compiler/agentWebgpu/forcePass';
 import { acquireSharedGpuDevice, releaseSharedGpuDevice } from './sharedGpuDevice';
 
 const REQUEST_FIELD_SET: ReadonlySet<string> = new Set(AGENT_GPU_REQUEST_FIELDS);
@@ -186,6 +186,18 @@ export interface AgentWebGPURuntime {
   forcePipeline: GPUComputePipeline;
   behaviourBindGroup: GPUBindGroup;
   forceBindGroup: GPUBindGroup;
+  /** L3 — the RELAX COMMIT, appended BETWEEN consecutive force passes when
+   *  `layoutIterations > 1`. It commits xNext→x (so the next force iteration
+   *  integrates from the moved positions) and undoes that iteration's `age += 1`
+   *  — nothing else. Deliberately NOT `posCommit`: that one also zeroes the force
+   *  accumulator (which would drop the generation's graph-authored Apply Force
+   *  after the first iteration) and bumps the GPU generation counter (which would
+   *  make `Get Generation` advance `layoutIterations` times per generation).
+   *  Reads `highWater` from the ForceControl uniform, which BOTH GPU paths write,
+   *  so one pipeline serves the per-gen dispatch and the resident batch.
+   *  null only if the pipeline failed to build (then the caller runs 1 iteration). */
+  relaxCommitPipeline: GPUComputePipeline | null;
+  relaxCommitBindGroup: GPUBindGroup | null;
   /** PX — the sync attribute-commit pass (write runs → read runs), appended to
    *  every `dispatchAgentStep` encoder. null unless `layout.syncAttrs` (an async
    *  model has one run per attribute, so there is nothing to commit). */
@@ -555,6 +567,46 @@ export async function createAgentWebGPURuntime(
   if (forceScatterBuf) forceBgEntries.push({ binding: 4, resource: { buffer: forceScatterBuf } });
   const forceBindGroup = device.createBindGroup({ label: 'agent-force-bg', layout: forceBGL, entries: forceBgEntries });
 
+  // --- L3 relax-commit pipeline (3 bindings: agentF32 rw, ForceControl uniform,
+  //     agentAlive r). Built unconditionally: it is one tiny shader, and building
+  //     it lazily would mean a model that only turns `layoutIterations` up in the
+  //     Properties panel could not use it without a runtime rebuild. It is only
+  //     ever DISPATCHED when layoutIterations > 1, so a default model pays nothing
+  //     beyond the build. ---
+  let relaxCommitPipeline: GPUComputePipeline | null = null;
+  let relaxCommitBindGroup: GPUBindGroup | null = null;
+  try {
+    const relaxModule = device.createShaderModule({ label: 'agent-relax-commit', code: emitRelaxCommitWGSL(layout) });
+    const rinfo = await relaxModule.getCompilationInfo();
+    const rerr = rinfo.messages.filter(m => m.type === 'error');
+    if (rerr.length) throw new Error(rerr.map(m => `${m.lineNum}:${m.linePos} ${m.message}`).join('; '));
+    const relaxBGL = device.createBindGroupLayout({
+      label: 'agent-relax-bgl',
+      entries: [
+        { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },
+        { binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'uniform' } },
+        { binding: 2, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },
+      ],
+    });
+    relaxCommitPipeline = await device.createComputePipelineAsync({
+      label: 'agent-relax-commit',
+      layout: device.createPipelineLayout({ label: 'agent-relax-pl', bindGroupLayouts: [relaxBGL] }),
+      compute: { module: relaxModule, entryPoint: 'relaxCommit' },
+    });
+    relaxCommitBindGroup = device.createBindGroup({
+      label: 'agent-relax-bg', layout: relaxBGL,
+      entries: [
+        { binding: 0, resource: { buffer: agentF32Buf } },
+        { binding: 1, resource: { buffer: forceControlBuf } },
+        { binding: 2, resource: { buffer: agentAliveBuf } },
+      ],
+    });
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.warn('[agents/webgpu] relax-commit pipeline build failed (layoutIterations clamps to 1): ' + ((e as Error)?.message || e));
+    relaxCommitPipeline = null; relaxCommitBindGroup = null;
+  }
+
   // --- PX attribute-commit pipeline (sync agent update only; 1 binding) ---
   // Built ONLY when the layout allocated distinct write runs, so an async model
   // creates no extra module/pipeline and its dispatch is unchanged.
@@ -658,6 +710,7 @@ export async function createAgentWebGPURuntime(
     forceScatterBuf,
     genCounterBuf, usesGeneration: hasGeneration,
     behaviourPipeline, forcePipeline, behaviourBindGroup, forceBindGroup,
+    relaxCommitPipeline, relaxCommitBindGroup,
     attrCommitPipeline, attrCommitBindGroup, attrCommitCount,
     omPipelines, activeOmMappingId: '',
     stagingPool: new Map(),
@@ -1249,7 +1302,7 @@ export function resetAgentStopFlag(rt: AgentWebGPURuntime): void {
   rt.device.queue.writeBuffer(rt.stopFlagBuf, 0, new Uint32Array([0]).buffer, 0, 4);
 }
 
-export function dispatchAgentStep(rt: AgentWebGPURuntime, highWater: number): void {
+export function dispatchAgentStep(rt: AgentWebGPURuntime, highWater: number, layoutIterations = 1): void {
   const enc = rt.device.createCommandEncoder({ label: 'agent-step-enc' });
   const total = Math.max(1, highWater);
   // Apply Force To Agent: zero the cross-agent force-scatter accumulator before the
@@ -1260,11 +1313,14 @@ export function dispatchAgentStep(rt: AgentWebGPURuntime, highWater: number): vo
   passB.setBindGroup(0, rt.behaviourBindGroup);
   dispatchAgents(passB, total);
   passB.end();
-  const passF = enc.beginComputePass({ label: 'agent-force-pass' });
-  passF.setPipeline(rt.forcePipeline);
-  passF.setBindGroup(0, rt.forceBindGroup);
-  dispatchAgents(passF, total);
-  passF.end();
+  // L3 — the force integrator, `layoutIterations` times, separated by relax
+  // commits. One iteration (the default) encodes exactly the single force pass
+  // this used to be. `readbackAgentStep` performs the FINAL xNext→x commit
+  // CPU-side, as before.
+  encodeForceIterations(rt, enc, total, layoutIterations, pass => {
+    pass.setPipeline(rt.forcePipeline);
+    pass.setBindGroup(0, rt.forceBindGroup);
+  });
   // PX — sync agent update: fold the attribute WRITE runs onto the READ runs. Passes
   // in one encoder execute in order, so this observes every behaviour write; the
   // force pass touches only geometry/velocity, never a user attribute, so its
@@ -2678,6 +2734,71 @@ ${RESIDENT_IDX}
 }`;
 }
 
+/** L3 — the RELAX COMMIT that separates two consecutive force passes of the SAME
+ *  generation (`layoutIterations > 1`). It does exactly two things:
+ *
+ *    1. commit xNext→x (+z) so the next force iteration integrates from the moved
+ *       positions — the GPU analogue of `swapPositions` inside the CPU loop;
+ *    2. `age -= 1`, undoing the `age += 1` the force pass it follows performed.
+ *       N force passes and N−1 relax commits leave `age` advanced by exactly ONE
+ *       per generation, which is what `myAge` (and Lifespan) mean.
+ *
+ *  It deliberately does NOT do what `posCommit` also does — zero the force
+ *  accumulator (that would discard the generation's graph-authored Apply Force
+ *  after the first iteration) or bump the generation counter (that would make
+ *  `Get Generation` tick `layoutIterations` times per generation, breaking the L2
+ *  semantics). Growth needs no correction here: the CPU scales the ramp rate by
+ *  1/iterations, which reaches the same target radius.
+ *
+ *  `highWater` comes from the ForceControl uniform (NOT HashParams) because both
+ *  GPU paths write ForceControl, so ONE pipeline serves the per-gen dispatch and
+ *  the resident batch. The alive mask is read so dead slots — which the force pass
+ *  returns from before its own `age += 1` — are left alone. */
+function emitRelaxCommitWGSL(layout: AgentWebGPULayout): string {
+  const is3d = layout.gridDepth > 1;
+  const xB = layout.f32Base['x']!, yB = layout.f32Base['y']!;
+  const xnB = layout.f32Base['xNext']!, ynB = layout.f32Base['yNext']!;
+  const zB = is3d ? layout.f32Base['z']! : 0, znB = is3d ? layout.f32Base['zNext']! : 0;
+  const ageB = layout.f32Base['age']!;
+  return `${emitForceControlStruct()}
+@group(0) @binding(0) var<storage, read_write> agentF32 : array<f32>;
+@group(0) @binding(1) var<uniform>             fc       : ForceControl;
+@group(0) @binding(2) var<storage, read>       agentAlive : array<u32>;
+@compute @workgroup_size(64)
+fn relaxCommit(${RESIDENT_ENTRY}) {
+${RESIDENT_IDX}
+  if (i >= fc.highWater) { return; }
+  agentF32[${xB}u + i] = agentF32[${xnB}u + i];
+  agentF32[${yB}u + i] = agentF32[${ynB}u + i];${is3d ? `
+  agentF32[${zB}u + i] = agentF32[${znB}u + i];` : ''}
+  if (agentAlive[i] != 0u) { agentF32[${ageB}u + i] = agentF32[${ageB}u + i] - 1.0; }
+}`;
+}
+
+/** L3 — append one force pass, plus the `iterations − 1` extra [relax-commit →
+ *  force] pairs, to an encoder. THE single place both GPU dispatch sites express
+ *  "run the force integrator N times per generation", so they cannot disagree.
+ *  `iterations` collapses to 1 when the relax-commit pipeline is unavailable, so a
+ *  build failure degrades to today's behaviour instead of skipping the commits and
+ *  silently integrating the same positions N times. */
+function encodeForceIterations(
+  rt: AgentWebGPURuntime, enc: GPUCommandEncoder, total: number, iterations: number,
+  setForce: (pass: GPUComputePassEncoder) => void,
+): void {
+  const canRelax = !!(rt.relaxCommitPipeline && rt.relaxCommitBindGroup);
+  const iters = canRelax ? Math.max(1, iterations) : 1;
+  for (let it = 0; it < iters; it++) {
+    if (it > 0) {
+      const pr = enc.beginComputePass({ label: 'agent-relax-commit' });
+      pr.setPipeline(rt.relaxCommitPipeline!); pr.setBindGroup(0, rt.relaxCommitBindGroup!);
+      dispatchAgents(pr, total); pr.end();
+    }
+    const pf = enc.beginComputePass({ label: 'agent-force-pass' });
+    setForce(pf);
+    dispatchAgents(pf, total); pf.end();
+  }
+}
+
 /** Lazily build the residency pipelines + buffers. Returns false (and latches
  *  residentBuildFailed) on any failure — the caller falls back to the per-gen
  *  path, never silently wrong.
@@ -2864,7 +2985,7 @@ export function uploadAgentHashParams(rt: AgentWebGPURuntime, highWater: number,
  *  [clear counts → count → scan → scatter] (hash build, when hashValid) →
  *  [clear forceScatter] → behaviour → force → posCommit. No CPU work between
  *  generations; the implicit inter-pass ordering provides the barriers. */
-export function dispatchResidentBatch(rt: AgentWebGPURuntime, gens: number, highWater: number, hp: ResidentHashParams): void {
+export function dispatchResidentBatch(rt: AgentWebGPURuntime, gens: number, highWater: number, hp: ResidentHashParams, layoutIterations = 1): void {
   const res = rt.resident;
   if (!res) throw new Error('resident pipelines not built');
   const enc = rt.device.createCommandEncoder({ label: 'agent-resident-batch' });
@@ -2886,13 +3007,18 @@ export function dispatchResidentBatch(rt: AgentWebGPURuntime, gens: number, high
     // B1: when the mirror was built (needScan), run the mirror-variant force pass
     // (coalesced neighbour reads from the bin-sorted mirror); else the shared
     // per-gen force pipeline (custom-force models — no scan, no mirror).
-    const pf = enc.beginComputePass({ label: 'agent-force-pass' });
-    if (res.forceMirrorPipeline && res.forceMirrorBind) {
-      pf.setPipeline(res.forceMirrorPipeline); pf.setBindGroup(0, res.forceMirrorBind);
-    } else {
-      pf.setPipeline(rt.forcePipeline); pf.setBindGroup(0, rt.forceBindGroup);
-    }
-    dispatchAgents(pf, total); pf.end();
+    // L3 — `layoutIterations` force passes, separated by relax commits. The hash
+    // built above is REUSED across the iterations (as on the CPU): rebuilding it
+    // per iteration would triple the pass count for a displacement far below one
+    // bin edge. posCommit still runs exactly ONCE per generation, below, so the
+    // generation counter and the force-accumulator reset stay per-generation.
+    encodeForceIterations(rt, enc, total, layoutIterations, pf => {
+      if (res.forceMirrorPipeline && res.forceMirrorBind) {
+        pf.setPipeline(res.forceMirrorPipeline); pf.setBindGroup(0, res.forceMirrorBind);
+      } else {
+        pf.setPipeline(rt.forcePipeline); pf.setBindGroup(0, rt.forceBindGroup);
+      }
+    });
     const pm = enc.beginComputePass({ label: 'agent-pos-commit' });
     pm.setPipeline(res.commitPipeline); pm.setBindGroup(0, res.commitBind); dispatchAgents(pm, total); pm.end();
     // PX — the attribute commit (sync agent update), per generation, exactly as the

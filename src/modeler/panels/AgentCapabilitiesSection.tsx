@@ -5,7 +5,7 @@ import {
   resolveAgentProfile, matchAgentPreset, applyCapabilityEdit, estimateAgentFootprint,
   type AgentPresetKey, type BoolCapKey,
 } from '../../model/agentCapabilities';
-import { cbNum, chargeStrengthOf, chargeMaxDistOf, CHARGE_MAX_DIST_REST_MULTIPLE } from '../../model/centerBased';
+import { cbNum, chargeStrengthOf, chargeMaxDistOf, CHARGE_MAX_DIST_REST_MULTIPLE, layoutIterationsOf, MAX_LAYOUT_ITERATIONS } from '../../model/centerBased';
 import { NumberField } from '../vpl/widgets/InlineWidgets';
 
 /** Model Properties → "Agent Capabilities" section. The preset picker + the
@@ -184,6 +184,26 @@ export function AgentCapabilitiesSection({
           );
         })}
       </div>
+
+      {/* Solver relaxation — an ENGINE knob, not a capability and not a graph node:
+          how many times the force integrator runs per generation. Sits outside the
+          capability list on purpose (nothing gates it, and it changes no semantics —
+          only how far the layout settles between rewrites). */}
+      <div style={{ fontSize: '0.6rem', color: '#888', textTransform: 'uppercase', letterSpacing: '0.05em', margin: '10px 0 4px' }}>Solver</div>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+        <span style={{ fontSize: '0.72rem', color: '#ddd' }} title="Force-pass runs per generation. Purely numerical relaxation — age, growth and the structural phase (bond form/break/rewire, division, death) still advance exactly ONCE per generation.">Layout iterations</span>
+        <NumberField
+          value={layoutIterationsOf(model.centerBased)}
+          onNumber={n => updateCenterBased({ layoutIterations: n })}
+          min={1} max={MAX_LAYOUT_ITERATIONS} integer step={1}
+          style={{ background: 'var(--color-bg-panel, #1a1a1a)', color: '#ddd', border: '1px solid var(--color-widget-border, #444)', borderRadius: 4, width: 64, fontSize: '0.66rem' }}
+        />
+      </div>
+      <span style={{ color: '#888', fontSize: '0.6rem', display: 'block', marginTop: 2 }}>
+        How many times the force integrator runs per generation (1 = one pass, the default). Raising it lets a
+        growing structure settle further per rewrite without inflating the generation counter — the rule's own
+        cadence (&ldquo;rewrite every Nth generation&rdquo;) belongs in the graph instead, as a Periodic Step.
+      </span>
 
       {/* Footprint readout — the cost of generality, bound to the profile. */}
       <div style={{ marginTop: 10, padding: '6px 8px', borderRadius: 4, background: 'var(--color-overlay-row, rgba(255,255,255,0.03))', border: '1px solid var(--color-border-muted, #2a2a2a)' }}>

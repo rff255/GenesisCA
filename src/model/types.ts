@@ -979,6 +979,27 @@ export interface CenterBasedConfig {
    *  resolves an isolated pair exactly; dense packing converges over a few).
    *  Absent ⇒ the engine default (2). Ignored for soft / off collision. */
   positionalIterations?: number;
+  /** L3 — how many times the FORCE PASS runs per generation (numerical relaxation).
+   *  Absent / 1 ⇒ exactly today's behaviour, byte-for-byte. > 1 lets the layout
+   *  settle further per rewrite without inflating the generation counter, which
+   *  matters for a growing bond graph: the reference layout engine runs ~120
+   *  relaxation iterations per second against a much slower rewrite rate, while
+   *  GenesisCA runs one force pass per generation.
+   *
+   *  This is an ENGINE knob, deliberately NOT a graph node — it is solver
+   *  relaxation, not rule logic, the same category as `positionalIterations`
+   *  (Impact Map §1.6: putting it in the graph would be like exposing an ODE's
+   *  step count as a node). The rule's OWN cadence — "rewrite every Nth
+   *  generation" — is model semantics and lives in the graph, as `Periodic Step`.
+   *
+   *  Semantics of the extra iterations: they are PURE RELAXATION. `age` and the
+   *  growth ramp still advance exactly ONCE per generation, and the structural
+   *  phase (the bond request-queue drain, division, death, auto-bond) still runs
+   *  exactly once per generation, after the last iteration. The graph-authored
+   *  Apply Force is held constant across the iterations (it is an external force
+   *  for that generation), and the spatial hash is built once per generation —
+   *  per-iteration displacement is tiny next to the bin edge. */
+  layoutIterations?: number;
   /** When true, the engine's built-in soft-sphere repulsion/adhesion is OFF —
    *  ALL motion comes from the graph's Apply Force (pure custom-force models
    *  like boids). LEGACY: superseded by `useBondingPhysics` (the inverse master

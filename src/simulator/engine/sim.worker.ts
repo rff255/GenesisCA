@@ -28,7 +28,7 @@ import { subAttrInfo, parentValueToInt } from '../../modeler/vpl/compiler/subAtt
 import { buildActiveOffsets, createActiveSet, rebuildActiveSet, applyTransition, compactActiveSet, type ActiveSet } from './activeSet';
 import { packNI, packNI3 } from '../../modeler/vpl/compiler/niCodec';
 import type { Attribute, CenterBasedConfig, SkipIsolatedEmptyConfig } from '../../model/types';
-import { cbNum, usesBondingPhysics, usesSoftCollision, usesPositionalCollision, usesEngineSprings, usesEngineGrowth, chargeBinEdgeOf, chargeParamsOf } from '../../model/centerBased';
+import { cbNum, usesBondingPhysics, usesSoftCollision, usesPositionalCollision, usesEngineSprings, usesEngineGrowth, chargeBinEdgeOf, chargeParamsOf, layoutIterationsOf } from '../../model/centerBased';
 import {
   createAgentStore, seedAgents, clearAgents, allocAgentSlot, initAgentSlot, freeAgentSlot, freeStagedSlot,
   snapshotAgentsForRender, advanceAgentSprites, serializeAgentStore, deserializeAgentStore, buildSpatialHash,
@@ -1760,7 +1760,11 @@ function runAgentStep(): void {
   // so this freezes growth without touching the ramp blocks below.
   const growthRate = usesEngineGrowth(cfg) ? Math.max(0, cbNum(cfg, 'growthRate')) : 0;
   const hw = s.highWater;
-  const x = s.x, y = s.y, z = s.z, rad = s.radius, alive = s.alive;
+  // `x`/`y`/`z` are LET, not const: the L3 layout-iteration loop below calls
+  // swapPositions between iterations, which on the JS path swaps the x/xNext
+  // REFERENCES — so these are re-read at the top of every iteration.
+  let x = s.x, y = s.y, z = s.z;
+  const rad = s.radius, alive = s.alive;
   const maxBonds = s.maxBonds;
   const momentum = Math.max(0, Math.min(0.999, cbNum(cfg, 'momentum')));
   const maxSpeed = Math.max(0, cbNum(cfg, 'maxSpeed'));
@@ -1794,6 +1798,10 @@ function runAgentStep(): void {
   // Charge needs the neighbour scan even when nothing else does (a pure charged
   // gas has no soft-sphere, no springs and no density consumer).
   const doScan = doForce || agentUsesDensity || doCharge;
+  // L3 — how many times the force integrator runs this generation (1 = the
+  // pre-L3 engine, exactly). Resolved from the ONE clamped resolver every
+  // surface reads, so the CPU and GPU paths cannot disagree about the count.
+  const layoutIters = layoutIterationsOf(cfg);
 
   // Reset the per-step force accumulator (Apply Force adds into it during
   // behaviour) BEFORE behaviour runs. forceZ is a memset of an always-zero-in-2D
@@ -1935,91 +1943,244 @@ function runAgentStep(): void {
   // the render snapshot, and the next step. No-op in async mode.
   swapAgentAttrs(s);
 
-  // W1 ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â THE FORCE PASS (the boost). When the WASM behaviour ran this step AND a
-  // force-pass export exists, run the WASM force integrator INSTEAD of the JS loop
-  // below ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â it reads/writes the SAME store memory (xNext/yNext[/zNext], vx/vy[/vz],
-  // density, radius) at the baked offsets, reusing the in-memory hash already
-  // copied in for the behaviour. f64 throughout ÃƒÂ¢Ã¢â‚¬Â¡Ã¢â‚¬â„¢ JSÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬ÂWASM bit-exact. Mirrored
-  // scalar-config ABI (see emitForcePass): the order here MUST match FORCE_PASS_PARAMS.
-  let ranForceWasm = false;
-  if (forcePassReady && agentForcePassWasmFn) {
-    try {
-      const dtOverEta = dt / eta;
-      agentForcePassWasmFn(
-        // `hw` (the PRE-behaviour bound), not the post-spawn `s.highWater`, so a
-        // mid-step-Created newborn (grow-allocated beyond `hw`) is NOT force-integrated
-        // the step it's born ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â it stays where Create placed it (matches the JS force
-        // loop, which also iterates `hw`). Identical for non-spawn (hw === s.highWater).
-        hw, fpHashValid, fpNBinsX, fpNBinsY, fpNBinsZ,
-        fpBinSizeX, fpBinSizeY, fpBinSizeZ,
-        dtOverEta, muR, muA, range, momentum, maxSpeed, growthRate,
-        W, H, D, bonding ? 1 : 0, torus ? 1 : 0,
-        fpOriginX, fpOriginY, fpOriginZ,
-        doCollision ? 1 : 0, springs ? 1 : 0, agentUsesDensity ? 1 : 0,
-        // L1 charge — ALWAYS appended, even when charge is off. The module declares
-        // these four params only when the model uses charge (so a charge-off module
-        // is byte-identical), and the WebAssembly JS API simply IGNORES arguments
-        // past a function's declared arity. Passing them unconditionally makes the
-        // one dangerous direction — a module that DECLARES them while the worker
-        // omits them, which would read `undefined` ⇒ NaN ⇒ poisoned forces —
-        // structurally impossible. (Asserted in scripts/parity-agent-force.mjs.)
-        doCharge ? 1 : 0, chargeK, chargeMaxD2, chargeMinC,
-      );
-      ranForceWasm = true;
-    } catch (e) {
-      self.postMessage({ type: 'error', message: '[agents] WASM force pass failed, falling back to JS: ' + ((e as Error)?.message || e) });
-      agentForcePassWasmFn = null;  // drop it; the JS loop below runs this step
+  // L3 - LAYOUT ITERATIONS. The force integrator runs `layoutIterations` times per
+  // generation (default 1 => this loop runs once and every line below is exactly the
+  // pre-L3 engine). The extra iterations are PURE RELAXATION: the behaviour ran once,
+  // above, and the structural phase - the bond request-queue drain, division, death,
+  // auto-bond - runs once, BELOW the loop. Running the drain per iteration would
+  // replay every queued Form/Break/Rewire and corrupt the graph, so the loop is kept
+  // tight around force + commit and nothing else.
+  //
+  // The graph-authored Apply Force (forceX/Y/Z) is NOT cleared between iterations -
+  // it is a constant external force for this generation, so every iteration re-seeds
+  // from it, exactly as one longer step would. The spatial hash is likewise built
+  // ONCE per generation: per-iteration displacement is tiny next to a bin edge, and
+  // rebuilding it would (a) cost a pass and (b) diverge from the GPU paths, which
+  // cannot rebuild a CPU-uploaded hash mid-encoder.
+  for (let _lit = 0; _lit < layoutIters; _lit++) {
+    // swapPositions swaps the x/xNext REFERENCES on the JS path, so re-read them
+    // at the top of every iteration - a stale local would integrate the previous
+    // iteration's buffer and silently freeze the layout.
+    x = s.x; y = s.y; z = s.z;
+    // Age + the growth ramp advance ONCE per generation, not once per iteration:
+    // the extra iterations are solver relaxation, not extra time.
+    //   growth: each iteration ramps by `rate / iterations`. The ramp is
+    //     `radius += sign(dd) * rate`, CLAMPED at the target and monotonic, so N
+    //     steps of rate/N move exactly `min(|dd|, rate)` toward the target - the
+    //     same end radius as one step of `rate`, with no extra uniform, no second
+    //     bind group and no per-target special case. `rate / 1` is exact, so the
+    //     default path is byte-identical.
+    //   age: every iteration's integrate block does `age += 1`; the extra ones are
+    //     undone once after the loop (and, on the GPU, by the relax-commit pass).
+    const growthIter = growthRate / layoutIters;
+    // W1 ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â THE FORCE PASS (the boost). When the WASM behaviour ran this step AND a
+    // force-pass export exists, run the WASM force integrator INSTEAD of the JS loop
+    // below ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â it reads/writes the SAME store memory (xNext/yNext[/zNext], vx/vy[/vz],
+    // density, radius) at the baked offsets, reusing the in-memory hash already
+    // copied in for the behaviour. f64 throughout ÃƒÂ¢Ã¢â‚¬Â¡Ã¢â‚¬â„¢ JSÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬ÂWASM bit-exact. Mirrored
+    // scalar-config ABI (see emitForcePass): the order here MUST match FORCE_PASS_PARAMS.
+    let ranForceWasm = false;
+    if (forcePassReady && agentForcePassWasmFn) {
+      try {
+        const dtOverEta = dt / eta;
+        agentForcePassWasmFn(
+          // `hw` (the PRE-behaviour bound), not the post-spawn `s.highWater`, so a
+          // mid-step-Created newborn (grow-allocated beyond `hw`) is NOT force-integrated
+          // the step it's born ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â it stays where Create placed it (matches the JS force
+          // loop, which also iterates `hw`). Identical for non-spawn (hw === s.highWater).
+          hw, fpHashValid, fpNBinsX, fpNBinsY, fpNBinsZ,
+          fpBinSizeX, fpBinSizeY, fpBinSizeZ,
+          dtOverEta, muR, muA, range, momentum, maxSpeed, growthIter,
+          W, H, D, bonding ? 1 : 0, torus ? 1 : 0,
+          fpOriginX, fpOriginY, fpOriginZ,
+          doCollision ? 1 : 0, springs ? 1 : 0, agentUsesDensity ? 1 : 0,
+          // L1 charge — ALWAYS appended, even when charge is off. The module declares
+          // these four params only when the model uses charge (so a charge-off module
+          // is byte-identical), and the WebAssembly JS API simply IGNORES arguments
+          // past a function's declared arity. Passing them unconditionally makes the
+          // one dangerous direction — a module that DECLARES them while the worker
+          // omits them, which would read `undefined` ⇒ NaN ⇒ poisoned forces —
+          // structurally impossible. (Asserted in scripts/parity-agent-force.mjs.)
+          doCharge ? 1 : 0, chargeK, chargeMaxD2, chargeMinC,
+        );
+        ranForceWasm = true;
+      } catch (e) {
+        self.postMessage({ type: 'error', message: '[agents] WASM force pass failed, falling back to JS: ' + ((e as Error)?.message || e) });
+        agentForcePassWasmFn = null;  // drop it; the JS loop below runs this step
+      }
     }
-  }
 
-  // Single neighbour pass: graph-authored force (forceX/Y[/Z] from Apply Force) +
-  // soft-sphere repulsion/adhesion (unless customForcesOnly) + bond springs +
-  // density (for next step), integrated into the xNext/yNext[/zNext] double-buffer.
-  // Branched on `is3d` ONCE (not per-line): the 2D else-branch is the EXACT
-  // current code, verbatim (the grid's literal-verbatim-2D-fast-path lesson ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â a
-  // branchless always-0-dz body would change the 2D arithmetic + stencil count).
-  // SKIPPED when the WASM force pass ran this step (W1).
-  if (ranForceWasm) {
-    // nothing ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â the WASM force pass already wrote xNext/yNext[/zNext], vx/vy[/vz],
-    // density, radius, and age into the store memory. swapPositions commits below.
-  } else if (is3d) {
-    const xN = s.xNext, yN = s.yNext, zN = s.zNext;
-    const vxArr = s.vx, vyArr = s.vy, vzArr = s.vz;
-    for (let i = 0; i < hw; i++) {
-      if (!alive[i]) { xN[i] = x[i]!; yN[i] = y[i]!; zN[i] = z[i]!; continue; }
-      const xi = x[i]!, yi = y[i]!, zi = z[i]!, ri = rad[i]!;
-      let fx = s.forceX[i]!, fy = s.forceY[i]!, fz = s.forceZ[i]!, dens = 0;
+    // Single neighbour pass: graph-authored force (forceX/Y[/Z] from Apply Force) +
+    // soft-sphere repulsion/adhesion (unless customForcesOnly) + bond springs +
+    // density (for next step), integrated into the xNext/yNext[/zNext] double-buffer.
+    // Branched on `is3d` ONCE (not per-line): the 2D else-branch is the EXACT
+    // current code, verbatim (the grid's literal-verbatim-2D-fast-path lesson ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â a
+    // branchless always-0-dz body would change the 2D arithmetic + stencil count).
+    // SKIPPED when the WASM force pass ran this step (W1).
+    if (ranForceWasm) {
+      // nothing ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â the WASM force pass already wrote xNext/yNext[/zNext], vx/vy[/vz],
+      // density, radius, and age into the store memory. swapPositions commits below.
+    } else if (is3d) {
+      const xN = s.xNext, yN = s.yNext, zN = s.zNext;
+      const vxArr = s.vx, vyArr = s.vy, vzArr = s.vz;
+      for (let i = 0; i < hw; i++) {
+        if (!alive[i]) { xN[i] = x[i]!; yN[i] = y[i]!; zN[i] = z[i]!; continue; }
+        const xi = x[i]!, yi = y[i]!, zi = z[i]!, ri = rad[i]!;
+        let fx = s.forceX[i]!, fy = s.forceY[i]!, fz = s.forceZ[i]!, dens = 0;
 
-      // --- neighbour pass: 3ÃƒÆ’Ã¢â‚¬â€3ÃƒÆ’Ã¢â‚¬â€3 stencil over the z-major hash, torus-wrapped ---
-      if (doScan && hash) {
-        const nBinsX = hash.nBinsX, nBinsY = hash.nBinsY, nBinsZ = hash.nBinsZ;
-        const binStart = hash.binStart, binAgents = hash.binAgents;
-        let bx = ((xi - hash.originX) / hash.binSizeX) | 0; if (bx < 0) bx = 0; else if (bx >= nBinsX) bx = nBinsX - 1;
-        let by = ((yi - hash.originY) / hash.binSizeY) | 0; if (by < 0) by = 0; else if (by >= nBinsY) by = nBinsY - 1;
-        let bz = ((zi - hash.originZ) / hash.binSizeZ) | 0; if (bz < 0) bz = 0; else if (bz >= nBinsZ) bz = nBinsZ - 1;
-        for (let ddz = -1; ddz <= 1; ddz++) {
+        // --- neighbour pass: 3ÃƒÆ’Ã¢â‚¬â€3ÃƒÆ’Ã¢â‚¬â€3 stencil over the z-major hash, torus-wrapped ---
+        if (doScan && hash) {
+          const nBinsX = hash.nBinsX, nBinsY = hash.nBinsY, nBinsZ = hash.nBinsZ;
+          const binStart = hash.binStart, binAgents = hash.binAgents;
+          let bx = ((xi - hash.originX) / hash.binSizeX) | 0; if (bx < 0) bx = 0; else if (bx >= nBinsX) bx = nBinsX - 1;
+          let by = ((yi - hash.originY) / hash.binSizeY) | 0; if (by < 0) by = 0; else if (by >= nBinsY) by = nBinsY - 1;
+          let bz = ((zi - hash.originZ) / hash.binSizeZ) | 0; if (bz < 0) bz = 0; else if (bz >= nBinsZ) bz = nBinsZ - 1;
+          for (let ddz = -1; ddz <= 1; ddz++) {
+            for (let ddy = -1; ddy <= 1; ddy++) {
+              for (let ddx = -1; ddx <= 1; ddx++) {
+                let nbx = bx + ddx, nby = by + ddy, nbz = bz + ddz;
+                if (torus) { nbx = ((nbx % nBinsX) + nBinsX) % nBinsX; nby = ((nby % nBinsY) + nBinsY) % nBinsY; nbz = ((nbz % nBinsZ) + nBinsZ) % nBinsZ; }
+                else { if (nbx < 0 || nbx >= nBinsX || nby < 0 || nby >= nBinsY || nbz < 0 || nbz >= nBinsZ) continue; }
+                const b = (nbz * nBinsY + nby) * nBinsX + nbx;
+                const end = binStart[b + 1]!;
+                for (let p = binStart[b]!; p < end; p++) {
+                  const j = binAgents[p]!;
+                  if (j === i) continue;
+                  let dx = x[j]! - xi, dy = y[j]! - yi, dz = z[j]! - zi;
+                  if (torus) {
+                    if (dx > halfW) dx -= W; else if (dx < -halfW) dx += W;
+                    if (dy > halfH) dy -= H; else if (dy < -halfH) dy += H;
+                    if (dz > halfD) dz -= D; else if (dz < -halfD) dz += D;
+                  }
+                  const d2 = dx * dx + dy * dy + dz * dz;
+                  // Charge FIRST — its cutoff is far wider than the soft-sphere's, so
+                  // it must be applied before `rmax` rejects the candidate.
+                  if (doCharge && d2 !== 0 && d2 <= chargeMaxD2) {
+                    const c = chargeK * (1 / (1 + d2) - chargeMinC);
+                    fx += c * dx; fy += c * dy; fz += c * dz;
+                  }
+                  const sij = ri + rad[j]!;
+                  const rmax = range * sij;
+                  if (d2 === 0 || d2 >= rmax * rmax) continue;
+                  dens++;
+                  if (doForce) {
+                    const d = Math.sqrt(d2);
+                    const F = ((d < sij) ? muRep : muAdh) * (d - sij);
+                    const k = F / d;
+                    fx += k * dx; fy += k * dy; fz += k * dz;
+                  }
+                }
+              }
+            }
+          }
+        } else if (doScan) {
+          for (let j = 0; j < hw; j++) {
+            if (j === i || !alive[j]) continue;
+            let dx = x[j]! - xi, dy = y[j]! - yi, dz = z[j]! - zi;
+            if (torus) {
+              if (dx > halfW) dx -= W; else if (dx < -halfW) dx += W;
+              if (dy > halfH) dy -= H; else if (dy < -halfH) dy += H;
+              if (dz > halfD) dz -= D; else if (dz < -halfD) dz += D;
+            }
+            const d2 = dx * dx + dy * dy + dz * dz;
+            if (doCharge && d2 !== 0 && d2 <= chargeMaxD2) {
+              const c = chargeK * (1 / (1 + d2) - chargeMinC);
+              fx += c * dx; fy += c * dy; fz += c * dz;
+            }
+            const sij = ri + rad[j]!;
+            const rmax = range * sij;
+            if (d2 === 0 || d2 >= rmax * rmax) continue;
+            dens++;
+            if (doForce) {
+              const d = Math.sqrt(d2);
+              const F = ((d < sij) ? muRep : muAdh) * (d - sij);
+              const k = F / d;
+              fx += k * dx; fy += k * dy; fz += k * dz;
+            }
+          }
+        }
+        if (doScan) s.density[i] = dens;
+
+        // --- bond springs ÃƒÅ½Ã‚Â»(lÃƒÂ¢Ã‹â€ Ã¢â‚¬â„¢L)Ãƒâ€šÃ‚Â·rÃƒÅ’Ã¢â‚¬Å¡ over the 3-vector (dangling-bond epoch ABI) ---
+        // Gated on the Bonds=Physics capability: Data bonds are connectivity edges
+        // that carry NO force (only Physics bonds are springs).
+        const bc = s.bondCount[i]!;
+        if (springs && bc > 0) {
+          const base = i * maxBonds;
+          for (let bk = 0; bk < bc; bk++) {
+            const p = s.bondPartner[base + bk]!;
+            if (p < 0 || p >= hw || !alive[p]) continue;
+            if (s.bondPartnerEpoch[base + bk] !== s.epoch[p]) continue;
+            let dx = x[p]! - xi, dy = y[p]! - yi, dz = z[p]! - zi;
+            if (torus) {
+              if (dx > halfW) dx -= W; else if (dx < -halfW) dx += W;
+              if (dy > halfH) dy -= H; else if (dy < -halfH) dy += H;
+              if (dz > halfD) dz -= D; else if (dz < -halfD) dz += D;
+            }
+            const d2b = dx * dx + dy * dy + dz * dz;
+            if (d2b === 0) continue;
+            const d = Math.sqrt(d2b);
+            const F = s.bondStiffness[base + bk]! * (d - s.bondRestLength[base + bk]!);
+            const k = F / d;
+            fx += k * dx; fy += k * dy; fz += k * dz;
+          }
+        }
+
+        // Integrate (3-vector); momentum 0 ÃƒÂ¢Ã¢â‚¬Â¡Ã¢â‚¬â„¢ overdamped; optional 3D-speed cap.
+        let vxi = momentum * vxArr[i]! + (dt / eta) * fx;
+        let vyi = momentum * vyArr[i]! + (dt / eta) * fy;
+        let vzi = momentum * vzArr[i]! + (dt / eta) * fz;
+        if (maxSpeed > 0) {
+          const sp = Math.sqrt(vxi * vxi + vyi * vyi + vzi * vzi);
+          if (sp > maxSpeed) { const sc = maxSpeed / sp; vxi *= sc; vyi *= sc; vzi *= sc; }
+        }
+        vxArr[i] = vxi; vyArr[i] = vyi; vzArr[i] = vzi;
+        let nx = xi + vxi, ny = yi + vyi, nz = zi + vzi;
+        if (torus) { nx = ((nx % W) + W) % W; ny = ((ny % H) + H) % H; nz = ((nz % D) + D) % D; }
+        else { nx = nx < 0 ? 0 : nx > W ? W : nx; ny = ny < 0 ? 0 : ny > H ? H : ny; nz = nz < 0 ? 0 : nz > D ? D : nz; }
+        xN[i] = nx; yN[i] = ny; zN[i] = nz;
+        s.age[i] = s.age[i]! + 1;
+        const tr = s.targetRadius[i]!;
+        const cur = s.radius[i]!;
+        if (tr !== cur) {
+          const dd = tr - cur;
+          s.radius[i] = Math.abs(dd) <= growthIter ? tr : cur + Math.sign(dd) * growthIter;
+        }
+      }
+    } else {
+      const xN = s.xNext, yN = s.yNext;
+      const vxArr = s.vx, vyArr = s.vy;
+      for (let i = 0; i < hw; i++) {
+        if (!alive[i]) { xN[i] = x[i]!; yN[i] = y[i]!; continue; }
+        const xi = x[i]!, yi = y[i]!, ri = rad[i]!;
+        // Start from the graph-authored force (Apply Force wrote it this step).
+        let fx = s.forceX[i]!, fy = s.forceY[i]!, dens = 0;
+
+        // --- neighbour pass: always counts density; applies soft-sphere force only
+        // when engineForces (customForcesOnly skips the built-in repulsion) ---
+        if (doScan && hash) {
+          const nBinsX = hash.nBinsX, nBinsY = hash.nBinsY;
+          const binStart = hash.binStart, binAgents = hash.binAgents;
+          let bx = ((xi - hash.originX) / hash.binSizeX) | 0; if (bx < 0) bx = 0; else if (bx >= nBinsX) bx = nBinsX - 1;
+          let by = ((yi - hash.originY) / hash.binSizeY) | 0; if (by < 0) by = 0; else if (by >= nBinsY) by = nBinsY - 1;
           for (let ddy = -1; ddy <= 1; ddy++) {
             for (let ddx = -1; ddx <= 1; ddx++) {
-              let nbx = bx + ddx, nby = by + ddy, nbz = bz + ddz;
-              if (torus) { nbx = ((nbx % nBinsX) + nBinsX) % nBinsX; nby = ((nby % nBinsY) + nBinsY) % nBinsY; nbz = ((nbz % nBinsZ) + nBinsZ) % nBinsZ; }
-              else { if (nbx < 0 || nbx >= nBinsX || nby < 0 || nby >= nBinsY || nbz < 0 || nbz >= nBinsZ) continue; }
-              const b = (nbz * nBinsY + nby) * nBinsX + nbx;
+              let nbx = bx + ddx, nby = by + ddy;
+              if (torus) { nbx = ((nbx % nBinsX) + nBinsX) % nBinsX; nby = ((nby % nBinsY) + nBinsY) % nBinsY; }
+              else { if (nbx < 0 || nbx >= nBinsX || nby < 0 || nby >= nBinsY) continue; }
+              const b = nby * nBinsX + nbx;
               const end = binStart[b + 1]!;
               for (let p = binStart[b]!; p < end; p++) {
                 const j = binAgents[p]!;
                 if (j === i) continue;
-                let dx = x[j]! - xi, dy = y[j]! - yi, dz = z[j]! - zi;
-                if (torus) {
-                  if (dx > halfW) dx -= W; else if (dx < -halfW) dx += W;
-                  if (dy > halfH) dy -= H; else if (dy < -halfH) dy += H;
-                  if (dz > halfD) dz -= D; else if (dz < -halfD) dz += D;
-                }
-                const d2 = dx * dx + dy * dy + dz * dz;
+                let dx = x[j]! - xi, dy = y[j]! - yi;
+                if (torus) { if (dx > halfW) dx -= W; else if (dx < -halfW) dx += W; if (dy > halfH) dy -= H; else if (dy < -halfH) dy += H; }
+                const d2 = dx * dx + dy * dy;
                 // Charge FIRST — its cutoff is far wider than the soft-sphere's, so
                 // it must be applied before `rmax` rejects the candidate.
                 if (doCharge && d2 !== 0 && d2 <= chargeMaxD2) {
                   const c = chargeK * (1 / (1 + d2) - chargeMinC);
-                  fx += c * dx; fy += c * dy; fz += c * dz;
+                  fx += c * dx; fy += c * dy;
                 }
                 const sij = ri + rad[j]!;
                 const rmax = range * sij;
@@ -2029,207 +2190,94 @@ function runAgentStep(): void {
                   const d = Math.sqrt(d2);
                   const F = ((d < sij) ? muRep : muAdh) * (d - sij);
                   const k = F / d;
-                  fx += k * dx; fy += k * dy; fz += k * dz;
+                  fx += k * dx; fy += k * dy;
                 }
               }
             }
           }
-        }
-      } else if (doScan) {
-        for (let j = 0; j < hw; j++) {
-          if (j === i || !alive[j]) continue;
-          let dx = x[j]! - xi, dy = y[j]! - yi, dz = z[j]! - zi;
-          if (torus) {
-            if (dx > halfW) dx -= W; else if (dx < -halfW) dx += W;
-            if (dy > halfH) dy -= H; else if (dy < -halfH) dy += H;
-            if (dz > halfD) dz -= D; else if (dz < -halfD) dz += D;
-          }
-          const d2 = dx * dx + dy * dy + dz * dz;
-          if (doCharge && d2 !== 0 && d2 <= chargeMaxD2) {
-            const c = chargeK * (1 / (1 + d2) - chargeMinC);
-            fx += c * dx; fy += c * dy; fz += c * dz;
-          }
-          const sij = ri + rad[j]!;
-          const rmax = range * sij;
-          if (d2 === 0 || d2 >= rmax * rmax) continue;
-          dens++;
-          if (doForce) {
-            const d = Math.sqrt(d2);
-            const F = ((d < sij) ? muRep : muAdh) * (d - sij);
-            const k = F / d;
-            fx += k * dx; fy += k * dy; fz += k * dz;
-          }
-        }
-      }
-      if (doScan) s.density[i] = dens;
-
-      // --- bond springs ÃƒÅ½Ã‚Â»(lÃƒÂ¢Ã‹â€ Ã¢â‚¬â„¢L)Ãƒâ€šÃ‚Â·rÃƒÅ’Ã¢â‚¬Å¡ over the 3-vector (dangling-bond epoch ABI) ---
-      // Gated on the Bonds=Physics capability: Data bonds are connectivity edges
-      // that carry NO force (only Physics bonds are springs).
-      const bc = s.bondCount[i]!;
-      if (springs && bc > 0) {
-        const base = i * maxBonds;
-        for (let bk = 0; bk < bc; bk++) {
-          const p = s.bondPartner[base + bk]!;
-          if (p < 0 || p >= hw || !alive[p]) continue;
-          if (s.bondPartnerEpoch[base + bk] !== s.epoch[p]) continue;
-          let dx = x[p]! - xi, dy = y[p]! - yi, dz = z[p]! - zi;
-          if (torus) {
-            if (dx > halfW) dx -= W; else if (dx < -halfW) dx += W;
-            if (dy > halfH) dy -= H; else if (dy < -halfH) dy += H;
-            if (dz > halfD) dz -= D; else if (dz < -halfD) dz += D;
-          }
-          const d2b = dx * dx + dy * dy + dz * dz;
-          if (d2b === 0) continue;
-          const d = Math.sqrt(d2b);
-          const F = s.bondStiffness[base + bk]! * (d - s.bondRestLength[base + bk]!);
-          const k = F / d;
-          fx += k * dx; fy += k * dy; fz += k * dz;
-        }
-      }
-
-      // Integrate (3-vector); momentum 0 ÃƒÂ¢Ã¢â‚¬Â¡Ã¢â‚¬â„¢ overdamped; optional 3D-speed cap.
-      let vxi = momentum * vxArr[i]! + (dt / eta) * fx;
-      let vyi = momentum * vyArr[i]! + (dt / eta) * fy;
-      let vzi = momentum * vzArr[i]! + (dt / eta) * fz;
-      if (maxSpeed > 0) {
-        const sp = Math.sqrt(vxi * vxi + vyi * vyi + vzi * vzi);
-        if (sp > maxSpeed) { const sc = maxSpeed / sp; vxi *= sc; vyi *= sc; vzi *= sc; }
-      }
-      vxArr[i] = vxi; vyArr[i] = vyi; vzArr[i] = vzi;
-      let nx = xi + vxi, ny = yi + vyi, nz = zi + vzi;
-      if (torus) { nx = ((nx % W) + W) % W; ny = ((ny % H) + H) % H; nz = ((nz % D) + D) % D; }
-      else { nx = nx < 0 ? 0 : nx > W ? W : nx; ny = ny < 0 ? 0 : ny > H ? H : ny; nz = nz < 0 ? 0 : nz > D ? D : nz; }
-      xN[i] = nx; yN[i] = ny; zN[i] = nz;
-      s.age[i] = s.age[i]! + 1;
-      const tr = s.targetRadius[i]!;
-      const cur = s.radius[i]!;
-      if (tr !== cur) {
-        const dd = tr - cur;
-        s.radius[i] = Math.abs(dd) <= growthRate ? tr : cur + Math.sign(dd) * growthRate;
-      }
-    }
-  } else {
-    const xN = s.xNext, yN = s.yNext;
-    const vxArr = s.vx, vyArr = s.vy;
-    for (let i = 0; i < hw; i++) {
-      if (!alive[i]) { xN[i] = x[i]!; yN[i] = y[i]!; continue; }
-      const xi = x[i]!, yi = y[i]!, ri = rad[i]!;
-      // Start from the graph-authored force (Apply Force wrote it this step).
-      let fx = s.forceX[i]!, fy = s.forceY[i]!, dens = 0;
-
-      // --- neighbour pass: always counts density; applies soft-sphere force only
-      // when engineForces (customForcesOnly skips the built-in repulsion) ---
-      if (doScan && hash) {
-        const nBinsX = hash.nBinsX, nBinsY = hash.nBinsY;
-        const binStart = hash.binStart, binAgents = hash.binAgents;
-        let bx = ((xi - hash.originX) / hash.binSizeX) | 0; if (bx < 0) bx = 0; else if (bx >= nBinsX) bx = nBinsX - 1;
-        let by = ((yi - hash.originY) / hash.binSizeY) | 0; if (by < 0) by = 0; else if (by >= nBinsY) by = nBinsY - 1;
-        for (let ddy = -1; ddy <= 1; ddy++) {
-          for (let ddx = -1; ddx <= 1; ddx++) {
-            let nbx = bx + ddx, nby = by + ddy;
-            if (torus) { nbx = ((nbx % nBinsX) + nBinsX) % nBinsX; nby = ((nby % nBinsY) + nBinsY) % nBinsY; }
-            else { if (nbx < 0 || nbx >= nBinsX || nby < 0 || nby >= nBinsY) continue; }
-            const b = nby * nBinsX + nbx;
-            const end = binStart[b + 1]!;
-            for (let p = binStart[b]!; p < end; p++) {
-              const j = binAgents[p]!;
-              if (j === i) continue;
-              let dx = x[j]! - xi, dy = y[j]! - yi;
-              if (torus) { if (dx > halfW) dx -= W; else if (dx < -halfW) dx += W; if (dy > halfH) dy -= H; else if (dy < -halfH) dy += H; }
-              const d2 = dx * dx + dy * dy;
-              // Charge FIRST — its cutoff is far wider than the soft-sphere's, so
-              // it must be applied before `rmax` rejects the candidate.
-              if (doCharge && d2 !== 0 && d2 <= chargeMaxD2) {
-                const c = chargeK * (1 / (1 + d2) - chargeMinC);
-                fx += c * dx; fy += c * dy;
-              }
-              const sij = ri + rad[j]!;
-              const rmax = range * sij;
-              if (d2 === 0 || d2 >= rmax * rmax) continue;
-              dens++;
-              if (doForce) {
-                const d = Math.sqrt(d2);
-                const F = ((d < sij) ? muRep : muAdh) * (d - sij);
-                const k = F / d;
-                fx += k * dx; fy += k * dy;
-              }
+        } else if (doScan) {
+          for (let j = 0; j < hw; j++) {
+            if (j === i || !alive[j]) continue;
+            let dx = x[j]! - xi, dy = y[j]! - yi;
+            if (torus) { if (dx > halfW) dx -= W; else if (dx < -halfW) dx += W; if (dy > halfH) dy -= H; else if (dy < -halfH) dy += H; }
+            const d2 = dx * dx + dy * dy;
+            if (doCharge && d2 !== 0 && d2 <= chargeMaxD2) {
+              const c = chargeK * (1 / (1 + d2) - chargeMinC);
+              fx += c * dx; fy += c * dy;
+            }
+            const sij = ri + rad[j]!;
+            const rmax = range * sij;
+            if (d2 === 0 || d2 >= rmax * rmax) continue;
+            dens++;
+            if (doForce) {
+              const d = Math.sqrt(d2);
+              const F = ((d < sij) ? muRep : muAdh) * (d - sij);
+              const k = F / d;
+              fx += k * dx; fy += k * dy;
             }
           }
         }
-      } else if (doScan) {
-        for (let j = 0; j < hw; j++) {
-          if (j === i || !alive[j]) continue;
-          let dx = x[j]! - xi, dy = y[j]! - yi;
-          if (torus) { if (dx > halfW) dx -= W; else if (dx < -halfW) dx += W; if (dy > halfH) dy -= H; else if (dy < -halfH) dy += H; }
-          const d2 = dx * dx + dy * dy;
-          if (doCharge && d2 !== 0 && d2 <= chargeMaxD2) {
-            const c = chargeK * (1 / (1 + d2) - chargeMinC);
-            fx += c * dx; fy += c * dy;
-          }
-          const sij = ri + rad[j]!;
-          const rmax = range * sij;
-          if (d2 === 0 || d2 >= rmax * rmax) continue;
-          dens++;
-          if (doForce) {
-            const d = Math.sqrt(d2);
-            const F = ((d < sij) ? muRep : muAdh) * (d - sij);
+        if (doScan) s.density[i] = dens;
+
+        // --- bond springs ÃƒÅ½Ã‚Â»(lÃƒÂ¢Ã‹â€ Ã¢â‚¬â„¢L)Ãƒâ€šÃ‚Â·rÃƒÅ’Ã¢â‚¬Å¡ (no-op until bonds exist). The partnerEpoch
+        // check is the dangling-bond ABI ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â a recycled slot's stale bond reads
+        // epoch-mismatch and is skipped. Gated on the Bonds=Physics capability
+        // (Data bonds are force-free edges). ---
+        const bc = s.bondCount[i]!;
+        if (springs && bc > 0) {
+          const base = i * maxBonds;
+          for (let bk = 0; bk < bc; bk++) {
+            const p = s.bondPartner[base + bk]!;
+            if (p < 0 || p >= hw || !alive[p]) continue;
+            if (s.bondPartnerEpoch[base + bk] !== s.epoch[p]) continue;
+            let dx = x[p]! - xi, dy = y[p]! - yi;
+            if (torus) { if (dx > halfW) dx -= W; else if (dx < -halfW) dx += W; if (dy > halfH) dy -= H; else if (dy < -halfH) dy += H; }
+            const d2b = dx * dx + dy * dy;
+            if (d2b === 0) continue;
+            const d = Math.sqrt(d2b);
+            const F = s.bondStiffness[base + bk]! * (d - s.bondRestLength[base + bk]!);
             const k = F / d;
             fx += k * dx; fy += k * dy;
           }
         }
-      }
-      if (doScan) s.density[i] = dens;
 
-      // --- bond springs ÃƒÅ½Ã‚Â»(lÃƒÂ¢Ã‹â€ Ã¢â‚¬â„¢L)Ãƒâ€šÃ‚Â·rÃƒÅ’Ã¢â‚¬Å¡ (no-op until bonds exist). The partnerEpoch
-      // check is the dangling-bond ABI ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â a recycled slot's stale bond reads
-      // epoch-mismatch and is skipped. Gated on the Bonds=Physics capability
-      // (Data bonds are force-free edges). ---
-      const bc = s.bondCount[i]!;
-      if (springs && bc > 0) {
-        const base = i * maxBonds;
-        for (let bk = 0; bk < bc; bk++) {
-          const p = s.bondPartner[base + bk]!;
-          if (p < 0 || p >= hw || !alive[p]) continue;
-          if (s.bondPartnerEpoch[base + bk] !== s.epoch[p]) continue;
-          let dx = x[p]! - xi, dy = y[p]! - yi;
-          if (torus) { if (dx > halfW) dx -= W; else if (dx < -halfW) dx += W; if (dy > halfH) dy -= H; else if (dy < -halfH) dy += H; }
-          const d2b = dx * dx + dy * dy;
-          if (d2b === 0) continue;
-          const d = Math.sqrt(d2b);
-          const F = s.bondStiffness[base + bk]! * (d - s.bondRestLength[base + bk]!);
-          const k = F / d;
-          fx += k * dx; fy += k * dy;
+        // Integrate: velocity = momentumÃƒâ€šÃ‚Â·velocity + (ÃƒÅ½Ã¢â‚¬Ât/ÃƒÅ½Ã‚Â·)Ãƒâ€šÃ‚Â·force; position += velocity.
+        // momentum 0 ÃƒÂ¢Ã¢â‚¬Â¡Ã¢â‚¬â„¢ vx = (ÃƒÅ½Ã¢â‚¬Ât/ÃƒÅ½Ã‚Â·)Ãƒâ€šÃ‚Â·fx, the original overdamped step (byte-identical
+        // for tissue); momentum > 0 carries inertia (flocking). Optional speed cap.
+        let vxi = momentum * vxArr[i]! + (dt / eta) * fx;
+        let vyi = momentum * vyArr[i]! + (dt / eta) * fy;
+        if (maxSpeed > 0) {
+          const sp = Math.sqrt(vxi * vxi + vyi * vyi);
+          if (sp > maxSpeed) { const sc = maxSpeed / sp; vxi *= sc; vyi *= sc; }
+        }
+        vxArr[i] = vxi; vyArr[i] = vyi;
+        let nx = xi + vxi;
+        let ny = yi + vyi;
+        if (torus) { nx = ((nx % W) + W) % W; ny = ((ny % H) + H) % H; }
+        else { nx = nx < 0 ? 0 : nx > W ? W : nx; ny = ny < 0 ? 0 : ny > H ? H : ny; }
+        xN[i] = nx; yN[i] = ny;
+        s.age[i] = s.age[i]! + 1;
+        // Growth: ramp radius toward the target set by Set Target Radius.
+        const tr = s.targetRadius[i]!;
+        const cur = s.radius[i]!;
+        if (tr !== cur) {
+          const dd = tr - cur;
+          s.radius[i] = Math.abs(dd) <= growthIter ? tr : cur + Math.sign(dd) * growthIter;
         }
       }
-
-      // Integrate: velocity = momentumÃƒâ€šÃ‚Â·velocity + (ÃƒÅ½Ã¢â‚¬Ât/ÃƒÅ½Ã‚Â·)Ãƒâ€šÃ‚Â·force; position += velocity.
-      // momentum 0 ÃƒÂ¢Ã¢â‚¬Â¡Ã¢â‚¬â„¢ vx = (ÃƒÅ½Ã¢â‚¬Ât/ÃƒÅ½Ã‚Â·)Ãƒâ€šÃ‚Â·fx, the original overdamped step (byte-identical
-      // for tissue); momentum > 0 carries inertia (flocking). Optional speed cap.
-      let vxi = momentum * vxArr[i]! + (dt / eta) * fx;
-      let vyi = momentum * vyArr[i]! + (dt / eta) * fy;
-      if (maxSpeed > 0) {
-        const sp = Math.sqrt(vxi * vxi + vyi * vyi);
-        if (sp > maxSpeed) { const sc = maxSpeed / sp; vxi *= sc; vyi *= sc; }
-      }
-      vxArr[i] = vxi; vyArr[i] = vyi;
-      let nx = xi + vxi;
-      let ny = yi + vyi;
-      if (torus) { nx = ((nx % W) + W) % W; ny = ((ny % H) + H) % H; }
-      else { nx = nx < 0 ? 0 : nx > W ? W : nx; ny = ny < 0 ? 0 : ny > H ? H : ny; }
-      xN[i] = nx; yN[i] = ny;
-      s.age[i] = s.age[i]! + 1;
-      // Growth: ramp radius toward the target set by Set Target Radius.
-      const tr = s.targetRadius[i]!;
-      const cur = s.radius[i]!;
-      if (tr !== cur) {
-        const dd = tr - cur;
-        s.radius[i] = Math.abs(dd) <= growthRate ? tr : cur + Math.sign(dd) * growthRate;
-      }
     }
+    // Commit positions (synchronous double-buffer swap; S11 helper ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â z swapped in 3D).
+    swapPositions(s, is3d);
   }
-  // Commit positions (synchronous double-buffer swap; S11 helper ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â z swapped in 3D).
-  swapPositions(s, is3d);
+  // Age advances ONCE per generation, not once per force iteration: every
+  // iteration's integrate block did `age += 1`, so undo the extra ones. Exact -
+  // ages are integers held in f64, and only ALIVE slots were incremented (the
+  // dead-slot branch continues before the increment). Skipped entirely at the
+  // default 1 iteration, so the pre-L3 path never touches this.
+  if (layoutIters > 1) {
+    const extra = layoutIters - 1;
+    for (let i = 0; i < hw; i++) if (alive[i]) s.age[i] = s.age[i]! - extra;
+  }
 
   // HARD positional collision (Collision capability = 'positional'): a rigid,
   // no-overlap position-projection constraint on the just-committed positions ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â
@@ -2527,7 +2575,7 @@ async function runAgentBatchResident(count: number, bumpGeneration: boolean = tr
     // later recompile starts reading it.
     uploadAgentGeneration(rt, generation);
     rt.device.pushErrorScope('validation');
-    dispatchResidentBatch(rt, count, hw, hp);
+    dispatchResidentBatch(rt, count, hw, hp, layoutIterationsOf(cfg));
     const dispatchErr = await rt.device.popErrorScope();
     if (dispatchErr) {
       self.postMessage({ type: 'error', message: '[agents][gpu] resident batch validation error: ' + dispatchErr.message });
@@ -2644,7 +2692,11 @@ async function runAgentStepWebGPUInner(gpuFieldBridge?: GpuFieldBridge | null): 
   uploadAgentForceControl(rt, hw, {
     hashValid, nBinsX: hash ? hash.nBinsX : 0, nBinsY: hash ? hash.nBinsY : 0,
     binSizeX: hash ? hash.binSizeX : 1, binSizeY: hash ? hash.binSizeY : 1,
-    dtOverEta: dt / eta, muR, muA, range, momentum, maxSpeed, growthRate,
+    dtOverEta: dt / eta, muR, muA, range, momentum, maxSpeed,
+    // L3 — the ramp rate is divided by the iteration count so the growth reached
+    // per GENERATION is unchanged however many force passes run (the same rule the
+    // CPU loop uses; `/ 1` is exact, so the default path is untouched).
+    growthRate: growthRate / layoutIterationsOf(cfg),
     fieldW: W, fieldH: H, bonding: bonding ? 1 : 0, doCollision: doCollision ? 1 : 0, doDensity: agentUsesDensity ? 1 : 0, torus: torus ? 1 : 0,
     ...chargeDispatchFields(cfg),
     nBinsZ: hash ? hash.nBinsZ : 1, binSizeZ: hash ? hash.binSizeZ : 1, fieldD: s.worldDepth,
@@ -2693,7 +2745,7 @@ async function runAgentStepWebGPUInner(gpuFieldBridge?: GpuFieldBridge | null): 
     // Error scope around the dispatch: a validation failure would otherwise be
     // SILENT (dropped work + a readback of unchanged state = frozen dynamics).
     rt.device.pushErrorScope('validation');
-    dispatchAgentStep(rt, hw);
+    dispatchAgentStep(rt, hw, layoutIterationsOf(cfg));
     const dispatchErr = await rt.device.popErrorScope();
     if (dispatchErr) {
       self.postMessage({ type: 'error', message: '[agents][gpu] dispatch validation error: ' + dispatchErr.message });

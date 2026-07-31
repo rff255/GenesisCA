@@ -64,7 +64,7 @@ export function agentMirrorFields(is3d: boolean): readonly string[] {
  *  two shaders stay decoupled). The field order MIRRORS the worker's write +
  *  `FORCE_PASS_PARAMS` (the WASM force-pass ABI) so the three force integrators
  *  read the same inputs. */
-function emitForceControlStruct(): string {
+export function emitForceControlStruct(): string {
   return `struct ForceControl {
   highWater  : u32,
   hashValid  : u32,
