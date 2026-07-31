@@ -242,12 +242,26 @@ never see it. Plus a **GPU-side generation counter** so the residency fast path 
 4. **A non-singleton event root is expressible** — trivially, because the lowering means the
    compilers never see one.
 
-**One REAL BUG surfaced and fixed** (not an assumption, but worth the same prominence): both
-agent gates early-outed on `nodes.find(behaviourStep)` over the **PRE-flatten** graph. A model
-made of Periodic Steps alone has no `behaviourStep` node yet, so it **compiled perfectly and
-was then rejected**, silently clamping to JS — exactly the failure mode invariant §0.3 exists
-to prevent. The early-out now accepts `behaviourStep || periodicStep`; the post-flatten lookup
-remains the real check.
+**TWO REAL BUGS surfaced and were fixed** (not assumptions, but worth the same prominence):
+
+1. Both agent gates early-outed on `nodes.find(behaviourStep)` over the **PRE-flatten**
+   graph. A model made of Periodic Steps alone has no `behaviourStep` node yet, so it
+   **compiled perfectly and was then rejected**, silently clamping to JS — exactly the failure
+   mode invariant §0.3 exists to prevent. The early-out now accepts
+   `behaviourStep || periodicStep`; the post-flatten lookup remains the real check.
+2. **The worker's DEV ABI-arity assertion (the B1 desync net) fired on EVERY agent model.**
+   It asserted `fn.length === args.length`, which the sanctioned param-gated/arg-always
+   asymmetry breaks by exactly one slot — so a *shipped* model with no cadence node posted
+   `ABI ARITY DESYNC: behaviour fn declares 63 params but buildAgentLoopArgs passes 64`. The
+   simulation was correct (an extra trailing arg is ignored — that is the whole point of the
+   direction), but a permanent false alarm on every agent model would have trained the next
+   reader to ignore the single highest-value safety net in this subsystem. It now accepts
+   `params === args` **or** `params === args - 1` and nothing else, so the dangerous direction
+   (`params > args`, where a declared param reads `undefined`) is still an error and a shifted
+   block still moves the count by more than one. **Found only by the final in-browser smoke
+   run on the shipped `Cubic GRA`** — every headless gate was green, because none of them
+   exercises the worker's runtime assertions. Pinned by three source invariants in
+   `test-rule-cadence.mjs`.
 
 ### Verification
 

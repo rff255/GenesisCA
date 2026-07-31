@@ -4837,15 +4837,23 @@ function compileAgentFns(behaviourCode?: string, initCode?: string, divisionCode
   // buffers, so its arg count is built with placeholder scalars.
   if (import.meta.env?.DEV && agentStore) {
     const s = agentStore;
+    // L2: the ARG side ALWAYS carries a trailing `_generation` while the PARAM side
+    // declares it only when the graph reads it (see agentAbi.ts `usesGeneration`).
+    // That asymmetry is deliberate and safe in exactly ONE direction, so the check
+    // accepts `params === args` or `params === args - 1` — and still catches every
+    // genuine desync: a shifted block moves the count by more than one, and
+    // `params > args` (the DANGEROUS direction, where a declared param would read
+    // `undefined`) stays an error.
+    const arityOk = (declared: number, want: number) => declared === want || declared === want - 1;
     if (agentBehaviourFn) {
       const want = buildAgentLoopArgs(s).length;
-      if (agentBehaviourFn.length !== want) {
+      if (!arityOk(agentBehaviourFn.length, want)) {
         self.postMessage({ type: 'error', message: `[agents] ABI ARITY DESYNC: behaviour fn declares ${agentBehaviourFn.length} params but buildAgentLoopArgs passes ${want} (buildAgentLoopParamsÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬ÂbuildAgentLoopArgs out of lockstep ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â the B1 hazard).` });
       }
     }
     if (agentDivisionFn) {
       const want = buildDivisionArgs(s, 0, 0, 0, 0).length;
-      if (agentDivisionFn.length !== want) {
+      if (!arityOk(agentDivisionFn.length, want)) {
         self.postMessage({ type: 'error', message: `[agents] ABI ARITY DESYNC: division fn declares ${agentDivisionFn.length} params but buildDivisionArgs passes ${want} (buildDivisionParamsÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬ÂbuildDivisionArgs out of lockstep ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â the B1 hazard).` });
       }
     }
@@ -4854,7 +4862,7 @@ function compileAgentFns(behaviourCode?: string, initCode?: string, divisionCode
       // buildAgentInitArgs). Dummy closures/seedBase just count the arg array ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â
       // buildAgentInitArgs never calls them while building the list.
       const want = buildAgentInitArgs(s, () => 0, () => {}, 0).length;
-      if (agentInitFn.length !== want) {
+      if (!arityOk(agentInitFn.length, want)) {
         self.postMessage({ type: 'error', message: `[agents] ABI ARITY DESYNC: init fn declares ${agentInitFn.length} params but buildAgentInitArgs passes ${want} (buildAgentInitParamsÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬ÂbuildAgentInitArgs out of lockstep ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â the B1 hazard).` });
       }
     }

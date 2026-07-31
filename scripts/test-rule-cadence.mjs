@@ -585,6 +585,17 @@ console.log('\n== ABI arity contract ==');
     const on3d = M.deriveAgentAbi(kind, { ...base, is3d: true, usesGeneration: true }).map(x => x.name);
     check(`${kind} 3D: _generation stays LAST, after the 3D block`, on3d[on3d.length - 1] === '_generation');
   }
+  // The worker's DEV arity assertion (the B1 desync net) had to learn about this
+  // asymmetry, or it fires on EVERY agent model that doesn't read the generation
+  // (caught by a real in-browser smoke run on the shipped Cubic GRA). It must
+  // tolerate EXACTLY one slot, and only in the safe direction.
+  const wsrc = readFileSync(join(ROOT, 'src/simulator/engine/sim.worker.ts'), 'utf8');
+  check('the worker arity assertion tolerates exactly one trailing slot',
+    /const arityOk = \(declared: number, want: number\) => declared === want \|\| declared === want - 1;/.test(wsrc));
+  check('all three ABI pairs go through arityOk',
+    (wsrc.match(/!arityOk\(/g) ?? []).length === 3, `${(wsrc.match(/!arityOk\(/g) ?? []).length} sites`);
+  check('the DANGEROUS direction (params > args) is still an error',
+    !/declared === want \+ 1/.test(wsrc));
 }
 
 console.log(failures === 0 ? '\nALL RULE-CADENCE CHECKS PASSED ✓' : `\n${failures} CHECK(S) FAILED ✗`);
