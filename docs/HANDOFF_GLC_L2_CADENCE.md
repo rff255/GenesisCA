@@ -141,7 +141,7 @@ removes the resident fast path from a whole class of models.
 ## Completion Report — L2
 
 **State**: DONE
-**Commit(s)**: `d6d5e39` — feat(agents): rule cadence — Get Generation + Periodic Step
+**Commit(s)**: `54fb4d5` — feat(agents): rule cadence - Get Generation + Periodic Step
 **Files touched**
 ```
  CLAUDE.md                                           | docs (new "Rule Cadence" section)
