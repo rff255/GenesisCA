@@ -4,6 +4,7 @@ import { InitEventNode } from './InitEventNode';
 import { GridInitEventNode } from './GridInitEventNode';
 import { SetCellAtPositionNode } from './SetCellAtPositionNode';
 import { BehaviourStepNode } from './BehaviourStepNode';
+import { PeriodicStepNode } from './PeriodicStepNode';
 import { GetSelfPositionNode } from './GetSelfPositionNode';
 import { GetSelfHandleNode } from './GetSelfHandleNode';
 import { GetRadiusNode } from './GetRadiusNode';
@@ -67,6 +68,7 @@ import { InteractionTableMapNode } from './InteractionTableMapNode';
 import { GetCellAttributeNode } from './GetCellAttributeNode';
 import { GetCellPositionNode } from './GetCellPositionNode';
 import { GetGridDimensionsNode } from './GetGridDimensionsNode';
+import { GetGenerationNode } from './GetGenerationNode';
 import { GetNeighborsAttributeNode } from './GetNeighborsAttributeNode';
 import { GetConstantNode } from './GetConstantNode';
 import { GetModelAttributeNode } from './GetModelAttributeNode';
@@ -185,6 +187,9 @@ const ALL_NODES: NodeTypeDef[] = [
   // Bond-Graph Agents — agent rule-graph event roots + read/request nodes
   // (gated by requirements.bondGraph; visible only on the Agents sub-tab).
   BehaviourStepNode,
+  // L2 — rule cadence: N per graph, lowered into the single Behaviour Step
+  // (periodicExpand.ts), so the compilers never see it.
+  PeriodicStepNode,
   DivisionEventNode,
   // Agent Output Mapping (A→C) — the agent analogue of OutputMapping; roots a
   // per-agent colour/exhibition pass (Standalone or the synthesized Linked one).
@@ -256,6 +261,7 @@ const ALL_NODES: NodeTypeDef[] = [
   GetCellAttributeNode,
   GetCellPositionNode,
   GetGridDimensionsNode,
+  GetGenerationNode,
   GetModelAttributeNode,
   GetNeighborsAttributeNode,
   GetNeighborAttributeByIndexNode,

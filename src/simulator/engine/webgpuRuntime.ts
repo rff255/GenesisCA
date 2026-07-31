@@ -1741,6 +1741,18 @@ export function uploadActiveViewer(rt: WebGPURuntime, viewerId: number): void {
   rt.device.queue.writeBuffer(rt.controlBuf, rt.layout.controlOffsets.activeViewer, buf);
 }
 
+/** L2 — Get Generation: write the current generation into the `control` storage
+ *  buffer (a word that already existed as padding, so nothing about the buffer
+ *  changes). The CELL grid dispatches one submit per generation and the worker's
+ *  `setGeneration` calls this on every counter move, so the shader always reads
+ *  the live value. (The AGENT resident batch cannot use this shape — see
+ *  agentWebgpuRuntime's genCounter.) */
+export function uploadCellGeneration(rt: WebGPURuntime, generation: number): void {
+  if (!rt.controlBuf) return;
+  const buf = new Uint32Array([Math.max(0, generation) >>> 0]);
+  rt.device.queue.writeBuffer(rt.controlBuf, rt.layout.controlOffsets.generation, buf);
+}
+
 export function resetStopFlag(rt: WebGPURuntime): void {
   if (!rt.controlBuf) return;
   const buf = new Uint32Array([0]);

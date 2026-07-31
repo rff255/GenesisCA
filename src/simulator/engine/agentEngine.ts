@@ -197,6 +197,14 @@ export interface AgentMemoryLayout {
    *  agent `idx` lives at `idx * bondReqSlots + c`. See
    *  [bondRequestQueue.ts](../../modeler/vpl/compiler/bondRequestQueue.ts). */
   bondReqSlots: number;
+  /** L2 — Get Generation: byte offset of a single f64 holding the 0-based index
+   *  of the generation being computed. The worker keeps a Float64Array VIEW here
+   *  and refreshes it whenever the counter moves, so the WASM agent behaviour
+   *  reads it with a plain `f64.load` and the 16-param behaviour SIGNATURE is
+   *  untouched. ALWAYS reserved (8 bytes) and appended dead LAST, so every offset
+   *  above is byte-identical — which is why the WASM agent surface needs no usage
+   *  gate: an unused generation emits no load and the module bytes are unchanged. */
+  generationOffset: number;
 }
 
 /** Sizing inputs for the FULL-COVERAGE WASM agent layout regions — the compiler +
@@ -492,6 +500,12 @@ export function computeAgentMemoryLayout(
     }
   }
 
+  // L2 — Get Generation: one f64 cell, appended after EVERY other region so no
+  // baked offset above can shift. Always reserved (8 bytes, negligible).
+  off = alignTo(off, 8);
+  const generationOffset = off;
+  off += 8;
+
   const totalBytes = alignTo(off, 8);
   const pages = Math.max(1, Math.ceil(totalBytes / 65536));
   return {
@@ -507,6 +521,7 @@ export function computeAgentMemoryLayout(
     fieldOffset, fieldTotal, fieldBytes,
     stopFlagOffset,
     bondAttrOffset, bondFormAttrOffset, bondReqSlots,
+    generationOffset,
   };
 }
 

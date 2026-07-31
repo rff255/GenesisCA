@@ -120,7 +120,11 @@ export interface WebGPULayout {
   /** Packed control buffer: activeViewer (i32) + stopFlag (atomic<u32>). */
   controlBytes: number;
   /** Byte offsets within the control buffer. */
-  controlOffsets: { activeViewer: number; stopFlag: number };
+  /** Byte offsets inside the `control` storage buffer. `generation` (L2 — Get
+   *  Generation) lands in the block's existing padding, so `controlBytes` is
+   *  unchanged and the buffer is always big enough whether or not the shader
+   *  declares the field. */
+  controlOffsets: { activeViewer: number; stopFlag: number; generation: number };
 
   // ---- Variegated Cells regions. All zero / empty when disabled. ----
 
@@ -269,7 +273,7 @@ export function computeWebGPULayout(model: CAModel): WebGPULayout {
 
   const rngStateBytes = total * 4;
 
-  const controlOffsets = { activeViewer: 0, stopFlag: 4 };
+  const controlOffsets = { activeViewer: 0, stopFlag: 4, generation: 8 };
   const controlBytes = 16; // 8 bytes used + padding to align
 
   // Variegated Cells: varAux is a small storage buffer holding the

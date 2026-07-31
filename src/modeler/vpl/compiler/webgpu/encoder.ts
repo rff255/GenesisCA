@@ -42,7 +42,11 @@ export function sanitiseWgslName(s: string): string {
 /** Bind-group declarations + Control struct + the shared PCG advance helper +
  *  the boundary-aware `nbrCellIdx` helper. Struct definitions must come before
  *  any `var` decl that references them. */
-export function emitBindings(layout: WebGPULayout): string {
+/** `withGeneration` (L2 — Get Generation) adds a third `Control` field the
+ *  worker refreshes whenever the counter moves. Gated on real usage because
+ *  the shader TEXT is byte-identity-checked; the buffer already reserves the
+ *  space, so nothing about the runtime changes when it is absent. */
+export function emitBindings(layout: WebGPULayout, withGeneration = false): string {
   // Uniform buffer must be at least 16 bytes (one vec4). Compute the f32-element
   // capacity so the WGSL declaration matches what the worker uploads.
   const modelAttrFloats = Math.max(4, Math.ceil(layout.modelAttrsBytes / 4));
@@ -185,7 +189,7 @@ fn nbrCellIdx(cellIdx: u32, baseOffset: u32, k: i32) -> i32 {
   return `// === Bindings ===
 struct Control {
   activeViewer : i32,
-  stopFlag     : atomic<u32>,
+  stopFlag     : atomic<u32>,${withGeneration ? '\n  generation   : u32,' : ''}
 };
 
 @group(0) @binding(0) var<storage, read>       attrsRead    : array<u32>;

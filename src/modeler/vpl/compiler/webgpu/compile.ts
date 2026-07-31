@@ -43,6 +43,7 @@ import { expandMultiAttrs } from '../multiAttrExpand';
 import { expandComposites } from '../expandComposites';
 import { lowerVectorAttrs } from '../vectorAttr';
 import { expandMacros } from '../macroExpand';
+import { cellUsesGeneration } from '../generationUse';
 import { computeVolatileHoist, computeVolatileValueClosure } from '../volatileHoist';
 import { makeProducesArray } from '../arrayRelay';
 import { subAttrInfo, subAttributesOf } from '../subAttribute';
@@ -2321,6 +2322,14 @@ const VALUE_NODE_EMITTERS: Record<string, NodeValueEmitter> = {
     setCachedPort(ctx, node.id, 'centerZ', emitLet(ctx, 'i32', `${Math.floor(ctx.layout.gridDepth / 2)}`, 'gdCZ'));
     return w;  // default 'value' port → width
   },
+
+  // -- Get Generation ------------------------------------------------------
+  // Read from the `control` storage buffer (the worker refreshes byte 8 whenever
+  // the counter moves). The cell grid dispatches one submit per generation, so a
+  // per-generation host write is enough here — unlike the AGENT resident batch,
+  // which encodes N generations into one submit and therefore needs a GPU-side
+  // counter (see agentWebgpuRuntime.ts posCommit).
+  getGeneration: ({ ctx }) => emitLet(ctx, 'i32', 'i32(control.generation)', 'gen'),
 };
 
 // ---------------------------------------------------------------------------
@@ -3907,6 +3916,12 @@ export function compileGraphWebGPU(
 
   const layout = computeWebGPULayout(model);
 
+  // L2 — Get Generation: declare `Control.generation` only when the graph reads
+  // it, so the shader TEXT (which IS byte-identity-checked) is unchanged for
+  // every model that doesn't. Computed from the PRE-expansion model so a
+  // getGeneration hiding inside a macro still counts. See generationUse.ts.
+  const cellGen = cellUsesGeneration(model);
+
   // Expand macro instances first so the rest of the compile sees a flat graph.
   const expanded = expandMacros(graphNodes, graphEdges, model);
   if (expanded.error) {
@@ -4011,11 +4026,11 @@ export function compileGraphWebGPU(
     const copy = emitPerCellCopyPreamble(layout);
     const stepBody = copy ? copy.replace(/\n$/, '') + '\n' : '\n';
     const stepCode = emitEntryPoint('step', layout.total, stepBody);
-    const sections: string[] = [emitBindings(layout), stepCode];
+    const sections: string[] = [emitBindings(layout, cellGen), stepCode];
     return { ...baseResult, shaderCode: sections.join('\n'), entryPoints: { step: 'step', outputMappings: [] } };
   }
 
-  const sections: string[] = [emitBindings(layout)];
+  const sections: string[] = [emitBindings(layout, cellGen)];
   // Compile the step entry. Use the first step node — additional ones are ignored
   // (matches JS/WASM behaviour).
   const stepEntry = compileEntry({

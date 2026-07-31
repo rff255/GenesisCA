@@ -201,6 +201,17 @@ export interface MemoryLayout {
   activeListOffset: number;
   /** Bytes reserved for the active list (`total × 4`; 0 when off). */
   activeListBytes: number;
+  /** L2 — Get Generation: byte offset of a single i32 holding the 0-based index
+   *  of the generation being computed. The worker keeps an Int32Array VIEW here
+   *  and refreshes it whenever the counter moves, so EVERY compiled entry point
+   *  (step / init / grid init / input colour / output mapping) can read it with a
+   *  plain `i32.load` and NO signature change.
+   *
+   *  ALWAYS reserved (8 bytes) and appended dead LAST, so every offset above is
+   *  byte-identical whether or not a model reads the generation — which is what
+   *  makes the WASM surface need no usage gate at all: an unused generation emits
+   *  no load, and the module bytes are unchanged. */
+  generationOffset: number;
 }
 
 export function alignTo(off: number, align: number): number {
@@ -459,6 +470,14 @@ export function computeMemoryLayout(
   const activeListBytes = (sparseStepping && gridCells) ? total * 4 : 0;
   off += activeListBytes;
 
+  // L2 — Get Generation: one i32 cell, appended after EVERY other region so no
+  // baked offset above can shift. Always reserved (8 bytes, negligible) so the
+  // layout is identical for models that read the generation and models that
+  // don't — only the presence of the LOAD differs.
+  off = alignTo(off, 8);
+  const generationOffset = off;
+  off += 8;
+
   const totalBytes = off;
   const pages = Math.max(1, Math.ceil(totalBytes / 65536));
   return {
@@ -482,6 +501,7 @@ export function computeMemoryLayout(
     sentinelIndex,
     sparseStepping: sparseStepping && gridCells,
     activeListOffset, activeListBytes,
+    generationOffset,
   };
 }
 

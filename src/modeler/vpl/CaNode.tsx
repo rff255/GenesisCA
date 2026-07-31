@@ -1613,6 +1613,23 @@ function CaNodeComponent({ id, data }: NodeProps) {
           );
         })()}
 
+        {nodeData.nodeType === 'periodicStep' && (
+          <>
+            <label style={{ fontSize: '0.6rem', color: '#999' }}>Period (generations)</label>
+            <InlineNumberInput
+              className={styles.input}
+              value={(nodeData.config.period as string) ?? '10'}
+              onChange={v => updateConfig('period', v)}
+            />
+            <label style={{ fontSize: '0.6rem', color: '#999' }}>Phase (0…Period−1)</label>
+            <InlineNumberInput
+              className={styles.input}
+              value={(nodeData.config.phase as string) ?? '0'}
+              onChange={v => updateConfig('phase', v)}
+            />
+          </>
+        )}
+
         {nodeData.nodeType === 'getAgentsInView' && (
           <>
             <label style={{ fontSize: '0.6rem', color: '#999' }}>Half-angle°</label>

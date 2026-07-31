@@ -890,6 +890,7 @@ export function HelpView() {
               <tr><td>Get Cell Attribute</td><td>Read the current cell&apos;s attribute value (e.g., &quot;alive&quot;). Supports multiple attribute <strong>slots</strong> (&quot;+ Attribute&quot;): one node reads several attributes, each through its own output port &mdash; no need for a separate Get node per attribute.</td></tr>
               <tr><td>Get Cell Position</td><td>Outputs the current cell&apos;s grid coordinates &mdash; <strong>Row</strong>, <strong>Col</strong>, and (in 3D) <strong>Layer</strong>. A controlled, own-cell-only break of locality so a cell can behave by where it is: spatial gradients, region-specific rules, or a coordinate-aware Output Mapping. Works in every event.</td></tr>
               <tr><td>Get Grid Dimensions</td><td>Outputs the <strong>size of the world</strong> &mdash; <strong>Width</strong>, <strong>Height</strong>, and (in 3D) <strong>Depth</strong>. Use it to write a rule that doesn&apos;t care how big the grid is: seed the middle, normalise a coordinate to 0&ndash;1, or fade by distance from an edge &mdash; instead of typing the numbers in and having them go silently wrong the moment you resize the grid. Tick <strong>Output center</strong> to also get the grid centre directly (<strong>Center X/Y</strong> = &lfloor;size&divide;2&rfloor;, plus <strong>Center Z</strong> in 3D) with no hand-wired &divide;2 arithmetic. Works in every event, and on the <strong>Agents</strong> graph too (there it&apos;s called <strong>Get World Dimensions</strong> &mdash; the agent world <em>is</em> the cell grid, so it reports the same numbers).</td></tr>
+              <tr><td>Get Generation</td><td>Outputs the <strong>current generation number</strong> (0-based &mdash; the first step after a Reset is 0). Use it to give a rule its own <strong>cadence</strong>: <code>Get Generation &rarr; Math (%) &rarr; Compare (==) &rarr; If/Then</code> runs a branch only every Nth generation. Works on the <strong>Cells</strong> graph and the <strong>Agents</strong> graph &mdash; both read one shared counter, so they always agree. In an <strong>Init event</strong> it reads 0 (Reset zeroes the counter before seeding); in a <strong>Division Event</strong> it reads the generation the division happened in. On the Agents graph, <strong>Periodic Step</strong> is this same gate as a ready-made event root.</td></tr>
               <tr><td>Get Model Attribute</td><td>Read a global model parameter. Supports multiple attribute slots (&quot;+ Attribute&quot;) &mdash; one node exposes several model parameters as separate output ports (a color parameter in a slot exposes its own R/G/B trio).</td></tr>
               <tr><td>Get Neighbors Attribute</td><td>Collect an attribute from all neighbors as an array.</td></tr>
               <tr><td>Get Neighbor Attr By Index</td><td>Read a cell attribute from ONE specific neighbor by index. Works in both sync and async modes.</td></tr>
@@ -1516,6 +1517,16 @@ export function HelpView() {
               <code> Z</code> in a 3D model) / <code>Radius</code> / <code>Area</code> /
               <code> Bond Degree</code> / <code>Age</code>. (Agents have <em>no built-in
               type</em> &mdash; describe an agent with your own Agent Attributes.)</li>
+            <li><strong>Periodic Step</strong> &mdash; an entry root that runs its chain
+              <strong> only every Nth generation</strong> (<code>generation % Period === Phase</code>).
+              Unlike Behaviour Step you may place <strong>several</strong>: two at Period 2 with
+              phases 0 and 1 alternate &mdash; states on even ticks, rewrites on odd &mdash; and
+              three at 1 / 5 / 50 give a fast, a medium and a slow clock in one model. A plain
+              Behaviour Step can sit alongside them; its chain still runs every generation.
+              Outputs <strong>Step Index</strong> = &lfloor;generation &divide; Period&rfloor;, the
+              rule-step counter. Why a root rather than wiring the modulo yourself: it gates the
+              state update and the rewrite on the <em>same</em> tick, which is what keeps a
+              periodic automaton faithful.</li>
             <li><strong>Get Self Position / Get Radius / Get Bond Degree / Neighbour Density</strong>
               &mdash; read the agent's geometry and its local crowding (how many other agents are
               within interaction range).</li>

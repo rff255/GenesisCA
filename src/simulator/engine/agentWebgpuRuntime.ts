@@ -167,6 +167,19 @@ export interface AgentWebGPURuntime {
    *  graph has no Apply Force To Agent. Zeroed (clearBuffer) before each behaviour
    *  dispatch; the force pass reads it (its binding 4) into the self-force seed. */
   forceScatterBuf: GPUBuffer | null;
+  /** L2 — Get Generation (binding 15): a single u32 holding the 0-based index of
+   *  the generation being computed. ALWAYS created (4 bytes) because the resident
+   *  `posCommit` pass bumps it unconditionally; only the BEHAVIOUR/OM bind-group
+   *  ENTRY is gated on real usage (a declared-but-unused storage global is stripped
+   *  by Naga, which would mismatch the reflected layout).
+   *
+   *  THE reason it is a storage buffer and not a Control uniform field:
+   *  `dispatchResidentBatch` encodes ALL N generations of a batch into ONE command
+   *  encoder and submits once, with no CPU touch point between generations — a
+   *  uniform written host-side would therefore be FROZEN for the whole batch, and
+   *  silently so (every single-step test would still pass). */
+  genCounterBuf: GPUBuffer;
+  usesGeneration: boolean;
 
   // --- pipelines ---
   behaviourPipeline: GPUComputePipeline;
@@ -338,6 +351,8 @@ export interface AgentRuntimeUsage {
   usesSpawn?: boolean;
   usesStop?: boolean;
   usesForceScatter?: boolean;
+  /** L2 — the behaviour reads Get Generation: bind the genCounter buffer (15). */
+  usesGeneration?: boolean;
   /** P3 — the behaviour WRITES the bond store (Set Bond Attribute): binding 11 is
    *  declared `read_write`, so its bind-group entry must be `storage` (not
    *  read-only) and the buffer needs COPY_SRC for the attribute-lane readback. */
@@ -357,6 +372,8 @@ export interface AgentOMShaderInput {
   usesBondStoreWrite?: boolean;
   usesIndicators: boolean;
   usesAux: boolean;
+  /** L2 — this OM colour pass reads Get Generation (binding 15). */
+  usesGeneration?: boolean;
 }
 
 /** A built OM colour-pass pipeline (shares the runtime's SoA/control buffers). */
@@ -423,6 +440,11 @@ export async function createAgentWebGPURuntime(
   const agentAliveBuf = mk('agentAlive', aliveBytes(layout), hasSpawn ? STORAGE : STORAGE_RO);
   const spawnCursorBuf = hasSpawn ? mk('agentSpawnCursor', 4, STORAGE) : null;
   const stopFlagBuf = hasStop ? mk('agentStopFlag', 4, STORAGE) : null;
+  // L2 — the generation counter. ALWAYS created: the resident posCommit pass bumps
+  // it unconditionally (one shader, no variants), and 4 bytes is free. COPY_SRC so a
+  // probe/test can read it back.
+  const hasGeneration = !!usage.usesGeneration;
+  const genCounterBuf = mk('agentGenCounter', 4, STORAGE);
   const hashBinsBuf = mk('agentHashBins', hashBytes(layout), STORAGE_RO);
   const controlBuf = mk('agentControl', CONTROL_BYTES, UNIFORM);
   const rngStateBuf = mk('agentRngState', rngBytes(layout), STORAGE);
@@ -480,6 +502,7 @@ export async function createAgentWebGPURuntime(
   if (spawnCursorBuf) behaviourEntries.push({ binding: 12, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } });
   if (stopFlagBuf) behaviourEntries.push({ binding: 13, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } });
   if (forceScatterBuf) behaviourEntries.push({ binding: 14, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } });
+  if (hasGeneration) behaviourEntries.push({ binding: 15, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } });
   const behaviourBGL = device.createBindGroupLayout({ label: 'agent-behaviour-bgl', entries: behaviourEntries });
   const behaviourPL = device.createPipelineLayout({ label: 'agent-behaviour-pl', bindGroupLayouts: [behaviourBGL] });
   const behaviourPipeline = await device.createComputePipelineAsync({
@@ -503,6 +526,7 @@ export async function createAgentWebGPURuntime(
   if (spawnCursorBuf) behaviourBgEntries.push({ binding: 12, resource: { buffer: spawnCursorBuf } });
   if (stopFlagBuf) behaviourBgEntries.push({ binding: 13, resource: { buffer: stopFlagBuf } });
   if (forceScatterBuf) behaviourBgEntries.push({ binding: 14, resource: { buffer: forceScatterBuf } });
+  if (hasGeneration) behaviourBgEntries.push({ binding: 15, resource: { buffer: genCounterBuf } });
   const behaviourBindGroup = device.createBindGroup({
     label: 'agent-behaviour-bg', layout: behaviourBGL, entries: behaviourBgEntries,
   });
@@ -596,6 +620,7 @@ export async function createAgentWebGPURuntime(
       if (input.usesAux && auxF32Buf) omEntries.push({ binding: 9, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } });
       if (input.usesIndicators && indicatorsBuf) omEntries.push({ binding: 10, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } });
       if (input.usesBondStore && bondStoreBuf) omEntries.push({ binding: 11, visibility: GPUShaderStage.COMPUTE, buffer: { type: input.usesBondStoreWrite ? 'storage' : 'read-only-storage' } });
+      if (input.usesGeneration) omEntries.push({ binding: 15, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } });
       const omBGL = device.createBindGroupLayout({ label: `agent-om-bgl-${input.mappingId}`, entries: omEntries });
       const omPL = device.createPipelineLayout({ label: `agent-om-pl-${input.mappingId}`, bindGroupLayouts: [omBGL] });
       const omPipeline = await device.createComputePipelineAsync({ label: `agent-om-${input.mappingId}`, layout: omPL, compute: { module, entryPoint: 'behaviour' } });
@@ -613,6 +638,7 @@ export async function createAgentWebGPURuntime(
       if (input.usesAux && auxF32Buf) omBgEntries.push({ binding: 9, resource: { buffer: auxF32Buf } });
       if (input.usesIndicators && indicatorsBuf) omBgEntries.push({ binding: 10, resource: { buffer: indicatorsBuf } });
       if (input.usesBondStore && bondStoreBuf) omBgEntries.push({ binding: 11, resource: { buffer: bondStoreBuf } });
+      if (input.usesGeneration) omBgEntries.push({ binding: 15, resource: { buffer: genCounterBuf } });
       const omBindGroup = device.createBindGroup({ label: `agent-om-bg-${input.mappingId}`, layout: omBGL, entries: omBgEntries });
       omPipelines.set(input.mappingId, { pipeline: omPipeline, bindGroup: omBindGroup });
     } catch (e) {
@@ -630,6 +656,7 @@ export async function createAgentWebGPURuntime(
     spawnCursorBuf, usesSpawn: hasSpawn, usesBondStoreWrite: bondStoreWrites,
     stopFlagBuf, usesStop: hasStop,
     forceScatterBuf,
+    genCounterBuf, usesGeneration: hasGeneration,
     behaviourPipeline, forcePipeline, behaviourBindGroup, forceBindGroup,
     attrCommitPipeline, attrCommitBindGroup, attrCommitCount,
     omPipelines, activeOmMappingId: '',
@@ -1198,6 +1225,21 @@ export function uploadAgentSpawnCursor(rt: AgentWebGPURuntime, highWater: number
   if (!rt.spawnCursorBuf) return;
   const u = new Uint32Array([highWater >>> 0]);
   rt.device.queue.writeBuffer(rt.spawnCursorBuf, 0, u.buffer, u.byteOffset, u.byteLength);
+}
+
+/** L2 — seed the GPU generation counter from the CPU's `generation`.
+ *
+ *  Called by BOTH agent GPU paths, and the difference is the whole point:
+ *   - the PER-GENERATION path calls it before every dispatch, so the counter is
+ *     simply the host value;
+ *   - the RESIDENT path calls it ONCE before a whole batch, and the per-generation
+ *     `posCommit` pass advances it GPU-side from there — which is why a rule
+ *     reading Get Generation sees N distinct values across an N-generation batch.
+ *  Always available (the buffer is unconditional); the behaviour only READS it
+ *  when the shader declared binding 15. */
+export function uploadAgentGeneration(rt: AgentWebGPURuntime, generation: number): void {
+  const u = new Uint32Array([Math.max(0, generation) >>> 0]);
+  rt.device.queue.writeBuffer(rt.genCounterBuf, 0, u.buffer, u.byteOffset, u.byteLength);
 }
 
 /** Reset the Stop Event flag to 0 before a dispatch (so the shader's first-match
@@ -2614,9 +2656,18 @@ function emitPosCommitWGSL(layout: AgentWebGPULayout): string {
   return `${HASH_PARAMS_WGSL}
 @group(0) @binding(0) var<storage, read_write> agentF32 : array<f32>;
 @group(0) @binding(1) var<uniform>             hp       : HashParams;
+@group(0) @binding(2) var<storage, read_write> genCounter : array<u32>;
 @compute @workgroup_size(64)
 fn posCommit(${RESIDENT_ENTRY}) {
 ${RESIDENT_IDX}
+  // L2 — THE residency fix. This is the only pass that runs exactly once per
+  // generation inside dispatchResidentBatch's single submit, so it owns the
+  // generation counter. ONE invocation writes it (no race), and it runs BEFORE the
+  // highWater guard so an empty population still advances the clock. WebGPU's
+  // implicit inter-pass ordering makes the bump visible to the NEXT generation's
+  // behaviour pass — which is what lets a rule reading Get Generation observe N
+  // distinct values across an N-generation batch instead of one frozen value.
+  if (i == 0u) { genCounter[0] = genCounter[0] + 1u; }
   if (i >= hp.highWater) { return; }
   agentF32[${xB}u + i] = agentF32[${xnB}u + i];
   agentF32[${yB}u + i] = agentF32[${ynB}u + i];${is3d ? `
@@ -2690,6 +2741,7 @@ export async function ensureAgentResident(rt: AgentWebGPURuntime, needScan = fal
     const commit = await mkPipe('agent-pos-commit', emitPosCommitWGSL(L), 'posCommit', [
       { binding: 0, visibility: S, buffer: { type: 'storage' } },
       { binding: 1, visibility: S, buffer: { type: 'uniform' } },
+      { binding: 2, visibility: S, buffer: { type: 'storage' } },
     ]);
     // The resident mirror force pass — reads neighbour fields from the mirror
     // (bindings 5/6). null when !needScan ⇒ the batch uses the shared rt.forcePipeline.
@@ -2748,6 +2800,7 @@ export async function ensureAgentResident(rt: AgentWebGPURuntime, needScan = fal
       commitBind: rt.device.createBindGroup({ label: 'agent-pos-commit-bg', layout: commit.bgl, entries: [
         { binding: 0, resource: { buffer: rt.agentF32Buf } },
         { binding: 1, resource: { buffer: hashParamsBuf } },
+        { binding: 2, resource: { buffer: rt.genCounterBuf } },
       ] }),
       countsBuf, cursorBuf, hashParamsBuf,
       hasMirror: needScan, sortedBuf, sortedIdBuf, forceMirrorPipeline, forceMirrorBind,

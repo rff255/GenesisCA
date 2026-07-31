@@ -1195,6 +1195,17 @@ const VALUE_NODE_EMITTERS: Record<string, NodeValueEmitter> = {
     return wRef;  // default 'value' port → width
   },
 
+  // Get Generation — an i32 read of the memory cell the worker refreshes
+  // whenever the generation counter moves (layout.generationOffset, appended at
+  // the very END of the layout so every other baked offset is untouched). No
+  // signature change on ANY entry point; a model that never places the node
+  // emits no load at all, so its module stays byte-identical.
+  getGeneration: ({ ctx }) => {
+    ctx.emitter.i32Const(0);
+    ctx.emitter.i32Load(ctx.layout.generationOffset, 2);
+    return storeResult(ctx.emitter, I32);
+  },
+
   getModelAttribute: ({ node, ctx }) => {
     const attrId = node.data.config.attributeId as string;
     const isColor = !!node.data.config.isColorAttr;

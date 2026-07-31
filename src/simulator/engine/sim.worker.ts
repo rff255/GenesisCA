@@ -18,7 +18,7 @@ import {
   readbackBatched, unpackAttrsFromReadback, unpackAttrFromReadback, resetStopFlag, seedRngState,
   setupReductionPipelines, dispatchReductions, setupDirectRender,
   dispatchInit, uploadOrientation, uploadFacePatternLookup, uploadInteractionTable,
-  clearGlyphBuffersWebGPU,
+  clearGlyphBuffersWebGPU, uploadCellGeneration,
   setupVoxelRender, uploadVoxelView, uploadVoxelViz, presentVoxels, destroyVoxelRender, debugReadVoxelInstances,
   type WebGPURuntime, type ReadbackRegion, type VoxelRenderView,
 } from './webgpuRuntime';
@@ -51,6 +51,7 @@ import { computeAgentWebGPULayout, type AgentWebGPULayout } from '../../modeler/
 import {
   createAgentWebGPURuntime, destroyAgentWebGPURuntime, uploadAgentSoA, uploadAgentHash,
   uploadAgentControl, uploadAgentForceControl, dispatchAgentStep, readbackAgentStep, uploadAgentSpawnCursor, resetAgentStopFlag,
+  uploadAgentGeneration,
   uploadAgentField, readbackAgentField,
   primeAgentFieldFromGrid, foldAgentFieldToGrid,
   uploadAgentAux, uploadAgentIndicators, readbackAgentIndicators, uploadAgentBondStore, readbackAgentBondStore,
@@ -318,7 +319,7 @@ interface InitMsg {
   agentWebgpuUsesI32Write?: boolean;
   /** Which universal bindings the shader actually declares (so the runtime binds
    *  matching entries ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â a declared-but-unused global is stripped ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ bind mismatch). */
-  agentWebgpuUsage?: { usesBondStore?: boolean; usesBondStoreWrite?: boolean; usesIndicators?: boolean; usesAux?: boolean; usesSpawn?: boolean; usesStop?: boolean; usesForceScatter?: boolean };
+  agentWebgpuUsage?: { usesBondStore?: boolean; usesBondStoreWrite?: boolean; usesIndicators?: boolean; usesAux?: boolean; usesSpawn?: boolean; usesStop?: boolean; usesForceScatter?: boolean; usesGeneration?: boolean };
   /** A1.5 — the per-mapping GPU Agent Output-Mapping colour-pass WGSL modules (the
    *  runtime builds one pipeline each; the active agent viewer selects which runs). */
   agentWebgpuOmShaders?: AgentOMShaderInput[];
@@ -352,7 +353,7 @@ interface PaintManualMsg {
   activeViewer: string;
 }
 interface ResetMsg { type: 'reset'; activeViewer: string; reqId?: number }
-interface RecompileMsg { type: 'recompile'; stepCode: string; initCode?: string; gridInitCode?: string; skipIsolatedEmpty?: SkipIsolatedEmptyConfig; inputColorCodes: Array<{ mappingId: string; code: string }>; outputMappingCodes: Array<{ mappingId: string; code: string }>; stopMessages?: string[]; updateMode: string; asyncScheme: string; wasmStepBytes?: Uint8Array; wasmStepError?: string; wasmExports?: string[]; viewerIds?: Record<string, number>; webgpuShaderCode?: string; webgpuShaderError?: string; webgpuEntryPoints?: WebGPUEntryPoints; webgpuLayout?: WebGPULayout; webgpuStopCheckInterval?: number; variegated?: VariegatedPayload; interactionTables?: InteractionTablePayload[]; agentBehaviourCode?: string; agentInitCode?: string; agentDivisionCode?: string; agentColorViewer?: string; agentOutputMappingCodes?: Array<{ mappingId: string; code: string }>; agentHasSprites?: boolean; agentBondReqSlots?: number; agentDividePartitions?: DividePartitionSpec[]; centerBased?: CenterBasedConfig; agentUsesField?: boolean; agentUsesDensity?: boolean; agentResidencyClean?: boolean; agentTarget?: 'js' | 'wasm' | 'webgpu'; agentWasmBytes?: Uint8Array; agentWasmViewerGuardIds?: string[]; agentLayoutExtras?: AgentLayoutExtras; agentWasmLayoutSig?: { maxHashBins: number; totalBytes: number }; agentWebgpuBehaviourShader?: string; agentWebgpuForceShader?: string; agentWebgpuMaxAgents?: number; agentWebgpuMaxHashBins?: number; agentWebgpuLayout?: AgentWebGPULayout; agentRenderLayout?: AgentWebGPULayout; agentWebgpuUsesI32Write?: boolean; agentWebgpuUsage?: { usesBondStore?: boolean; usesBondStoreWrite?: boolean; usesIndicators?: boolean; usesAux?: boolean; usesSpawn?: boolean; usesStop?: boolean; usesForceScatter?: boolean }; agentWebgpuOmShaders?: AgentOMShaderInput[] }
+interface RecompileMsg { type: 'recompile'; stepCode: string; initCode?: string; gridInitCode?: string; skipIsolatedEmpty?: SkipIsolatedEmptyConfig; inputColorCodes: Array<{ mappingId: string; code: string }>; outputMappingCodes: Array<{ mappingId: string; code: string }>; stopMessages?: string[]; updateMode: string; asyncScheme: string; wasmStepBytes?: Uint8Array; wasmStepError?: string; wasmExports?: string[]; viewerIds?: Record<string, number>; webgpuShaderCode?: string; webgpuShaderError?: string; webgpuEntryPoints?: WebGPUEntryPoints; webgpuLayout?: WebGPULayout; webgpuStopCheckInterval?: number; variegated?: VariegatedPayload; interactionTables?: InteractionTablePayload[]; agentBehaviourCode?: string; agentInitCode?: string; agentDivisionCode?: string; agentColorViewer?: string; agentOutputMappingCodes?: Array<{ mappingId: string; code: string }>; agentHasSprites?: boolean; agentBondReqSlots?: number; agentDividePartitions?: DividePartitionSpec[]; centerBased?: CenterBasedConfig; agentUsesField?: boolean; agentUsesDensity?: boolean; agentResidencyClean?: boolean; agentTarget?: 'js' | 'wasm' | 'webgpu'; agentWasmBytes?: Uint8Array; agentWasmViewerGuardIds?: string[]; agentLayoutExtras?: AgentLayoutExtras; agentWasmLayoutSig?: { maxHashBins: number; totalBytes: number }; agentWebgpuBehaviourShader?: string; agentWebgpuForceShader?: string; agentWebgpuMaxAgents?: number; agentWebgpuMaxHashBins?: number; agentWebgpuLayout?: AgentWebGPULayout; agentRenderLayout?: AgentWebGPULayout; agentWebgpuUsesI32Write?: boolean; agentWebgpuUsage?: { usesBondStore?: boolean; usesBondStoreWrite?: boolean; usesIndicators?: boolean; usesAux?: boolean; usesSpawn?: boolean; usesStop?: boolean; usesForceScatter?: boolean; usesGeneration?: boolean }; agentWebgpuOmShaders?: AgentOMShaderInput[] }
 interface UpdateLookupTableMsg {
   type: 'updateLookupTable';
   attrId: string;
@@ -674,6 +675,30 @@ let boundaryTreatment = 'torus';
 let updateMode = 'synchronous';
 let asyncScheme = 'random-order';
 let generation = 0;
+// --- L2 (Get Generation): the ONE seam that moves the generation counter ---
+// `generation` is read by four different mechanisms, so it is never assigned
+// directly: `setGeneration` / `advanceGeneration` keep every mirror in step.
+//   1. the JS args (`buildLoopArgs` / `buildAgentLoopArgs` read the variable);
+//   2. `generationCellView` — an Int32Array VIEW over wasmMemory at
+//      layout.generationOffset, which the CELL WASM entries load directly (so no
+//      entry-point signature changes);
+//   3. `generationAgentView` — the same idea in the wasmBacked AGENT memory (f64);
+//   4. the cell WebGPU `control.generation` word.
+// The AGENT WebGPU counter is deliberately NOT here: its resident batch advances
+// its own GPU-side counter inside one submit (see posCommit), and the dispatch
+// sites seed it explicitly.
+let generationCellView: Int32Array | null = null;
+let generationAgentView: Float64Array | null = null;
+function setGeneration(v: number): void {
+  generation = v;
+  if (generationCellView) generationCellView[0] = v;
+  if (generationAgentView) generationAgentView[0] = v;
+  if (webgpuRuntime) uploadCellGeneration(webgpuRuntime, v);
+}
+/** Named `advanceGeneration`, not `bumpGeneration`: `runAgentBatchResident`
+ *  already takes a BOOLEAN param called `bumpGeneration`, and a module function it
+ *  shadows would be a trap waiting to happen. */
+function advanceGeneration(by = 1): void { setGeneration(generation + by); }
 
 // SoA: one typed array per attribute, double-buffered (A = read, B = write)
 let attrsA: Record<string, ArrayLike<number> & { [i: number]: number; length: number }> = {};
@@ -970,7 +995,7 @@ let pendingAgentWebgpuMaxAgents = 0;
 let pendingAgentWebgpuMaxHashBins = 0;
 let pendingAgentWebgpuLayout: AgentWebGPULayout | null = null;
 let pendingAgentWebgpuUsesI32Write = false;
-let pendingAgentWebgpuUsage: { usesBondStore?: boolean; usesBondStoreWrite?: boolean; usesIndicators?: boolean; usesAux?: boolean; usesSpawn?: boolean; usesStop?: boolean; usesForceScatter?: boolean } = {};
+let pendingAgentWebgpuUsage: { usesBondStore?: boolean; usesBondStoreWrite?: boolean; usesIndicators?: boolean; usesAux?: boolean; usesSpawn?: boolean; usesStop?: boolean; usesForceScatter?: boolean; usesGeneration?: boolean } = {};
 /** A1.5 — the per-mapping GPU Agent Output-Mapping colour-pass shaders (held so
  *  buildAgentWebGPUIfNeeded builds one pipeline each on the agent runtime). */
 let pendingAgentWebgpuOmShaders: AgentOMShaderInput[] = [];
@@ -1188,6 +1213,13 @@ function initAgents(): void {
   // single 3D predicate: `store.worldDepth > 1 ÃƒÂ¢Ã…Â¸Ã‚Âº is3dModel(model)`. Do NOT read
   // the dormant config.worldDepth (S6) ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â that would reintroduce the desync B2 warns of.
   agentStore.worldDepth = depth;
+  // L2 — Get Generation on the WASM agent target: a Float64Array VIEW over the
+  // wasmBacked agent memory cell the behaviour loads from. Null on the plain-JS
+  // store (no memory), where the JS `_generation` ABI arg carries the value.
+  generationAgentView = (agentStore.wasmBacked && agentStore.memory && agentStore.layout)
+    ? new Float64Array(agentStore.memory.buffer, agentStore.layout.generationOffset, 1)
+    : null;
+  if (generationAgentView) generationAgentView[0] = generation;
   const seedCount = Math.max(0, Math.floor(cbNum(centerBasedConfig, 'seedCount')));
   if (seedCount > 0) {
     const r = cbNum(centerBasedConfig, 'defaultRadius');
@@ -1441,7 +1473,11 @@ function agentAbiShapeOfStore(s: AgentStore): AgentAbiShape {
   // `s.bondAttrSpecs` is built from the init message's `bondAttributes` through the
   // SAME `bondAttrsOf` filter the compiler uses (and is empty when maxBonds is 0),
   // so the `_bondAttr_<id>` block matches the compiled param list exactly.
-  return { is3d: s.worldDepth > 1, agentAttrs: s.attrSpecs, fieldAttrs: fieldSpecs, hasLookupTables, bondAttrs: s.bondAttrSpecs };
+  // L2 — `usesGeneration: true` ALWAYS on the ARG side (the compiler passes the
+  // graph's real answer on the PARAM side). Params ≤ args is the safe direction,
+  // so this makes the dangerous one — a declared `_generation` with no value —
+  // structurally impossible. See the note on AgentAbiShape.usesGeneration.
+  return { is3d: s.worldDepth > 1, agentAttrs: s.attrSpecs, fieldAttrs: fieldSpecs, hasLookupTables, bondAttrs: s.bondAttrSpecs, usesGeneration: true };
 }
 
 /** The shared runtime values (external caches) every kind resolves from ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â pulled
@@ -1457,6 +1493,7 @@ function agentAbiBaseRt(): Omit<AgentAbiRuntime, 'hash' | 'viewer'> {
     lookupTables: cachedInteractionTables,
     width, height, total, torus: boundaryTreatment === 'torus',
     fieldArray: (id: string) => readAttrs[id],
+    generation,   // L2 — the value behind `_generation` (see GetGenerationNode)
   };
 }
 
@@ -2483,6 +2520,12 @@ async function runAgentBatchResident(count: number, bumpGeneration: boolean = tr
     // A1.5 — the OM colour pass appended inside dispatchResidentBatch selects this
     // mapping (the active agent viewer; may have switched since the last batch).
     rt.activeOmMappingId = agentColorViewer;
+    // L2 — THE residency point. Seed the GPU counter ONCE for the whole batch; the
+    // per-generation posCommit pass advances it inside the single submit, so a rule
+    // reading Get Generation observes `generation … generation+count-1` rather than
+    // one frozen value. Unconditional (4 bytes) so the counter is correct even if a
+    // later recompile starts reading it.
+    uploadAgentGeneration(rt, generation);
     rt.device.pushErrorScope('validation');
     dispatchResidentBatch(rt, count, hw, hp);
     const dispatchErr = await rt.device.popErrorScope();
@@ -2509,7 +2552,7 @@ async function runAgentBatchResident(count: number, bumpGeneration: boolean = tr
     if (hasAgentSprites) for (let k = 0; k < count; k++) advanceAgentSprites(s);
     // D: a decoupled grid+agents batch counts the generation via the grid's cell
     // steps (bumpGeneration=false); an agents-only batch owns the count here.
-    if (bumpGeneration) generation += count;
+    if (bumpGeneration) setGeneration(generation + count);
     return true;
   } catch (e) {
     self.postMessage({ type: 'error', message: '[agents] resident batch failed, falling back: ' + ((e as Error)?.message || e) });
@@ -2643,6 +2686,9 @@ async function runAgentStepWebGPUInner(gpuFieldBridge?: GpuFieldBridge | null): 
     // createAgent bump-allocates newborns beyond the live range (the GPU analogue
     // of the grow-only `_agentCreate`). readbackAgentStep reconciles them below.
     if (rt.usesSpawn) uploadAgentSpawnCursor(rt, hw);
+    // L2 — Get Generation. The per-gen path has a CPU touch point per generation,
+    // so the host value is simply written before each dispatch.
+    if (rt.usesGeneration) uploadAgentGeneration(rt, generation);
     if (rt.usesStop) resetAgentStopFlag(rt);   // fresh first-match each step
     // Error scope around the dispatch: a validation failure would otherwise be
     // SILENT (dropped work + a readback of unchanged state = frozen dynamics).
@@ -3230,6 +3276,10 @@ function startWebGPUInit(
       uploadNeighborOffsets(rt);
       uploadModelAttrs(rt, cachedModelAttrs as Record<string, number>);
       uploadActiveViewer(rt, viewerIdMap[activeViewer] ?? -1);
+      // L2 — Get Generation: seed the control-buffer word. A REBUILT runtime has a
+      // zero-initialised buffer, so without this a soft recompile at generation 500
+      // would make the rule read 0 until the next counter move.
+      uploadCellGeneration(rt, generation);
       seedRngState(rt, rngState[0] ?? 0x12345678);
       // Variegated Cells: upload facePatternLookup + interaction tables +
       // initial orientation. setupBuffersAndPipelines already flipped
@@ -3526,7 +3576,7 @@ function initGrid(): void {
     glyphCodes = null;
     glyphColors = null;
   }
-  generation = 0;
+  setGeneration(0);
 
   // Variegated Cells ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â orientation views over wasmMemory. Same sentinel-aware
   // length as cell attrs. Sentinel cell at index `total` stays at 0 per spec
@@ -3557,6 +3607,12 @@ function initGrid(): void {
   // and WASM step (i32.store at stopFlagOffset). Reset to 0 on init.
   stopFlag = new Uint32Array(buf, wasmLayout.stopFlagOffset, 1);
   stopFlag[0] = 0;
+
+  // L2 — Get Generation. An Int32Array VIEW over the cell memory cell every WASM
+  // entry point loads from. Re-seeded here (a fresh memory) and refreshed by
+  // `setGeneration` from then on, so it can never drift from `generation`.
+  generationCellView = new Int32Array(buf, wasmLayout.generationOffset, 1);
+  generationCellView[0] = generation;
 
   // Order array ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â view over memory in BOTH modes (offset is reserved either way).
   // Async mode populates it (sequential then maybe shuffled); sync mode leaves it 0.
@@ -3722,6 +3778,10 @@ function buildLoopArgs(useActiveList: boolean = true): unknown[] {
     args.push(useList ? activeSet!.list : null);
     args.push(useList ? activeSet!.count : 0);
   }
+  // L2 — Get Generation, pushed UNCONDITIONALLY (compile.ts declares the param
+  // only when the graph reads it). Params ≤ args is the safe direction: an extra
+  // trailing arg is ignored, a missing param would read `undefined`.
+  args.push(generation);
   return args;
 }
 
@@ -3743,6 +3803,7 @@ function buildCellArgs(idx: number): unknown[] {
   if (variegated || hasLookupTables) {
     args.push(orientationReadView, orientationWriteView, facePatternLookup, cachedInteractionTables);
   }
+  args.push(generation);   // L2 — see buildLoopArgs
   return args;
 }
 
@@ -4182,7 +4243,7 @@ function runStep(deferIndicatorScan: boolean = false): void {
   // of the generation-axis linked path; written here (after accumulation) so it
   // is always a fresh per-step snapshot.
   if (hasSpatialIndicators && !deferScan) computeSpatialIndicators();
-  generation++;
+  advanceGeneration();
 }
 
 /**
@@ -4231,7 +4292,7 @@ function runStepWebGPU(): void {
   if (webgpuRuntime.layout.hasGlyphs) clearGlyphBuffersWebGPU(webgpuRuntime);
   dispatchStep(webgpuRuntime);
   gpuOwnsAttrs = true;
-  generation++;
+  advanceGeneration();
 }
 
 /** Dispatch the active viewer's outputMapping pipeline (writes to colors).
@@ -4697,7 +4758,7 @@ function resetGrid(): void {
     }
   }
   resetIndicators();
-  generation = 0;
+  setGeneration(0);
   // Under WebGPU the message handler is solely responsible for the post-mutation
   // visual update (uploadAttrs + runColorPassWebGPU). Refreshing colors here
   // would read the STALE GPU attrsRead ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â the CPU mutation hasn't been uploaded
@@ -6010,7 +6071,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
             const agentStopIdx = (agentStore && simulateAgents) ? drainAgentStop() : 0;
             if (simulateCells && gridCellsEnabled) runStepWebGPU();      // Layers panel / agents-only: freeze the cell step
             // agents-only / frozen grid: the agent step IS the generation.
-            else if (agentStore && simulateAgents) generation++;
+            else if (agentStore && simulateAgents) advanceGeneration();
             if (agentStopIdx !== 0) { stoppedByEvent = stopMessages[agentStopIdx - 1] ?? `Stop event #${agentStopIdx - 1}`; stopFlag[0] = 0; break; }
             const isLast = i === msg.count - 1;
             const shouldCheck = stopMessages.length > 0 && (k === 1 || isLast || (i % k) === (k - 1));
@@ -6115,7 +6176,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
             const agentStopIdx = (agentStore && simulateAgents) ? drainAgentStop() : 0;
             if (stepFn && simulateCells && gridCellsEnabled) runStep(true);
             // agents-only / frozen grid: the agent step IS the generation.
-            else if (simulateAgents) generation++;
+            else if (simulateAgents) advanceGeneration();
             if (agentStopIdx !== 0) { stoppedByEvent = stopMessages[agentStopIdx - 1] ?? `Stop event #${agentStopIdx - 1}`; stopFlag[0] = 0; break; }
             const rawStop = stopFlag[0] ?? 0;
             if (rawStop !== 0) {
@@ -6167,7 +6228,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
         // generation++ lives inside the CELL step ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â when the cell step didn't
         // run (agents-only model, or the Layers panel froze the grid) an agent
         // step still IS a generation, or the counter sits at 0 forever.
-        else if (agentStore && simulateAgents) generation++;
+        else if (agentStore && simulateAgents) advanceGeneration();
         if (agentStopIdx !== 0) { stoppedByEvent = stopMessages[agentStopIdx - 1] ?? `Stop event #${agentStopIdx - 1}`; stopFlag[0] = 0; break; }
         const rawStop = stopFlag[0] ?? 0;
         if (rawStop !== 0) {
@@ -7690,7 +7751,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       // State files restore the grid configuration, NOT the run history ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â
       // generation counter and indicator values reset to their init defaults
       // so the user can start fresh from a saved starting position.
-      generation = 0;
+      setGeneration(0);
       resetIndicators();
       linkedAccumulators = {};
       linkedResults = {};

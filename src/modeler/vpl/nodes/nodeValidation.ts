@@ -656,6 +656,23 @@ export function detectMissingConfig(
       }
       break;
     }
+    // L2 — Periodic Step. `period` must be ≥ 1: 0 makes `gen % period` a
+    // divide-by-zero, which the Math node maps to 0, so the gate would fire on
+    // every generation at phase 0 — wrong AND silent. `phase` is folded into
+    // [0, period) by the lowering, but a phase the user typed past the period is
+    // almost certainly a mistake, so say so.
+    case 'periodicStep': {
+      const period = Number(config.period);
+      if (!Number.isFinite(period) || Math.floor(period) < 1) {
+        issues.push('Period must be a whole number of 1 or more.');
+      } else {
+        const phase = Number(config.phase);
+        if (Number.isFinite(phase) && (phase < 0 || Math.floor(phase) >= Math.floor(period))) {
+          issues.push(`Phase must be between 0 and ${Math.floor(period) - 1} for a period of ${Math.floor(period)}.`);
+        }
+      }
+      break;
+    }
     case 'getAgentsInView':
     case 'senseHemifield': {
       // The FOV `facing` heading source reads a stored VECTOR agent attribute (a

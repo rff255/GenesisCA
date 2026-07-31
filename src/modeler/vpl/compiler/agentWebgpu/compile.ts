@@ -51,6 +51,7 @@ import { collapseReroutes } from '../rerouteCollapse';
 import { expandMultiAttrs } from '../multiAttrExpand';
 import { expandForceToAgents } from '../forceToAgentsExpand';
 import { expandNeighbourCensus } from '../censusExpand';
+import { expandPeriodicSteps } from '../periodicExpand';
 import { expandComposites } from '../expandComposites';
 import { BOND_REQ_ID_BIAS, BOND_REQ_NONE, bondReqSlotsForModel } from '../bondRequestQueue';
 import { dividePartitionCode, assignDividePartitionCodes } from '../dividePartition';
@@ -85,6 +86,7 @@ export const AGENT_WEBGPU_SUPPORTED_TYPES: ReadonlySet<string> = new Set<string>
   'getSelfPosition', 'getSelfHandle', 'getRadius', 'getAge', 'getBondDegree', 'neighbourDensity', 'getCurvature',
   // world size (the agent world IS the cell grid — control.fieldW/H/D)
   'getGridDimensions',
+  'getGeneration',
   // neighbour access
   'getNearbyAgents', 'getAgentsInView', 'senseHemifield', 'forEachInArray', 'getAgentOffset', 'getVelocity',
   'getAgentPosition', 'getAgentRadius', 'getAgentAttribute',
@@ -166,6 +168,13 @@ export interface AgentWebGPUResult {
    *  f32-bitcast atomic accumulator), zeros it each step, and the force pass adds it
    *  to each agent's self-force seed (its binding 4). */
   usesForceScatter?: boolean;
+  /** L2 — the graph reads Get Generation. The runtime then binds the
+   *  `genCounter` storage buffer (binding 15). A STORAGE buffer, not a uniform:
+   *  `dispatchResidentBatch` encodes every generation of a batch into ONE submit
+   *  with no CPU touch point between them, so a uniform-supplied generation would
+   *  be frozen for the whole batch. The per-generation `posCommit` pass bumps this
+   *  counter GPU-side instead. */
+  usesGeneration?: boolean;
   /** PR7c residency: the BEHAVIOUR emitted a structural-request writer
    *  (divideAgent / killAgent / formBond / breakBond) — per-generation CPU
    *  structural work ⇒ not residency-eligible. Scoped to behaviour-reachable
@@ -200,6 +209,8 @@ export interface AgentWebGPUOMShader {
   usesBondStoreWrite: boolean;
   usesIndicators: boolean;
   usesAux: boolean;
+  /** L2 — this OM colour pass reads Get Generation (binding 15). */
+  usesGeneration: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -347,6 +358,9 @@ interface AgentWgpuCtx {
   /** Set when an Apply Force To Agent emitter runs — declares the forceScatter
    *  atomic binding (14) + emits the forceScatterAdd f32-CAS helper. */
   usesForceScatter: boolean;
+  /** L2 — set when a Get Generation emitter runs; declares the genCounter
+   *  storage binding (15). */
+  usesGeneration: boolean;
   /** Active forEachBond iteration frames — the per-iteration value-output WGSL
    *  expressions (partnerId / restLength / currentLength / index). */
   forEachBondStack: Array<{ nodeId: string; partner: string; rest: string; cur: string; index: string }>;
@@ -548,6 +562,14 @@ function compileValueNode(ctx: AgentWgpuCtx, nodeId: string, portId: string): Va
     }
     case 'getBondDegree': {
       result = emitLet(ctx, 'f32', `f32(${i32At(ctx, 'bondCount', 'idx')})`, 'bd');
+      break;
+    }
+    // Get Generation — the GPU-side counter (binding 15). The resident batch's
+    // per-generation posCommit pass bumps it, so a multi-generation batch sees N
+    // DISTINCT values; the per-gen path has the host write it before each dispatch.
+    case 'getGeneration': {
+      ctx.usesGeneration = true;
+      result = emitLet(ctx, 'f32', 'f32(genCounter[0])', 'gen');
       break;
     }
     case 'getSelfHandle': {
@@ -3388,6 +3410,10 @@ function flattenAgentGraph(nodes: GraphNode[], edges: GraphEdge[], model: CAMode
   // already supported, so the gate + emitter never see the census node and it runs
   // on WebGPU with zero per-target emit. See censusExpand.ts.
   ({ nodes: n, edges: e } = expandNeighbourCensus(n, e, model));
+  // Periodic Step roots → Get Generation + Math(%) + Compare + If/Then hung off the
+  // single Behaviour Step, sequenced — all already supported, so the gate + emitter
+  // never see the periodicStep node. See periodicExpand.ts.
+  ({ nodes: n, edges: e } = expandPeriodicSteps(n, e, model));
   // Apply Force To Agents (array broadcast) → For Each In Array → Apply Force To
   // Agent (both already supported), so the gate + emitter never see the array node.
   ({ nodes: n, edges: e } = expandForceToAgents(n, e, model));
@@ -3475,7 +3501,13 @@ export function isAgentGraphWebGPUSupported(model: CAModel | undefined | null): 
   // have silently DROPPED its initial values on the GPU).
   const nodes = model.agentGraphNodes ?? [];
   const edges = model.agentGraphEdges ?? [];
-  if (!nodes.some(n => n.data.nodeType === 'behaviourStep')) return false;
+  // L2: a behaviour root may be SYNTHESIZED by the Periodic Step lowering
+  // (periodicExpand), so a graph made of Periodic Steps alone carries no
+  // `behaviourStep` node YET. This early-out only skips the flatten for a graph
+  // with no behaviour-like root at all; the post-flatten lookup below is the
+  // real check. Missing the periodicStep arm here silently clamped such a model
+  // to JS while it compiled perfectly — exactly the silent-clamp failure mode.
+  if (!nodes.some(n => n.data.nodeType === 'behaviourStep' || n.data.nodeType === 'periodicStep')) return false;
   const flat = flattenAgentGraph(nodes, edges, model);
   if (flat.error) return false;
 
@@ -3819,6 +3851,7 @@ export function compileAgentGraphWebGPU(
     usesBondStore: emit.usesBondStore, usesBondStoreWrite: emit.usesBondStoreWrite,
     usesIndicators: emit.usesIndicators, usesAux: emit.usesAux,
     usesSpawn: emit.usesSpawn, usesStop: emit.usesStop, usesForceScatter: emit.usesForceScatter,
+    usesGeneration: emit.usesGeneration,
     usesStructural: emit.usesStructural, usesRadiusWrite: emit.usesRadiusWrite,
     omShaders, omSupported,
   };
@@ -3836,6 +3869,7 @@ interface AgentRootModuleEmit {
   usesSpawn: boolean;
   usesStop: boolean;
   usesForceScatter: boolean;
+  usesGeneration: boolean;
   usesStructural: boolean;
   usesRadiusWrite: boolean;
 }
@@ -3885,6 +3919,7 @@ function emitAgentRootModule(
     usesSpawn: false,
     usesStop: false,
     usesForceScatter: false,
+    usesGeneration: false,
     usesStructural: false, usesRadiusWrite: false, usesBondReqQueue: false,
   };
 
@@ -4050,6 +4085,12 @@ function emitAgentRootModule(
   // it → a bind-group mismatch, like the other universal bindings).
   const hasForceScatter = ctx.usesForceScatter;
   if (hasForceScatter) fieldBindingLines.push('@group(0) @binding(14) var<storage, read_write> forceScatter : array<atomic<u32>>;');
+  // Get Generation (binding 15) — a single-word counter the resident batch bumps
+  // GPU-side (posCommit) and the per-gen path writes host-side. READ-ONLY here
+  // (only posCommit writes it). Declared ONLY when an emitter ran (else Naga
+  // strips it → a bind-group mismatch, like the other universal bindings).
+  const hasGeneration = ctx.usesGeneration;
+  if (hasGeneration) fieldBindingLines.push('@group(0) @binding(15) var<storage, read>       genCounter  : array<u32>;');
   // Each carries its OWN leading newline so the no-extra case inserts NOTHING (a
   // no-field Boids shader is then byte-identical to the pre-G5 template).
   const fieldBindings = fieldBindingLines.length > 0 ? '\n' + fieldBindingLines.join('\n') : '';
@@ -4088,6 +4129,7 @@ ${ctx.lines.join('\n')}
     usesBondStore: hasBondStore, usesBondStoreWrite: hasBondStore && ctx.usesBondStoreWrite,
     usesIndicators: hasIndicators, usesAux: hasAux,
     usesSpawn: hasSpawn, usesStop: hasStop, usesForceScatter: hasForceScatter,
+    usesGeneration: hasGeneration,
     usesStructural: ctx.usesStructural, usesRadiusWrite: ctx.usesRadiusWrite,
   };
 }
@@ -4140,6 +4182,7 @@ export function compileAgentOutputMappingsWebGPU(
       mappingId, code: emit.shaderCode,
       usesBondStore: emit.usesBondStore, usesBondStoreWrite: emit.usesBondStoreWrite,
       usesIndicators: emit.usesIndicators, usesAux: emit.usesAux,
+      usesGeneration: emit.usesGeneration,
     });
   }
   return { omShaders: shaders, omSupported: true };

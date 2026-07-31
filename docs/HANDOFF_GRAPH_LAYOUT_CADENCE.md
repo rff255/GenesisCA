@@ -88,7 +88,7 @@ both and serialising keeps the force pass under one editor at a time.
 | Phase | Handoff | State | Commit | Notes |
 |---|---|---|---|---|
 | L1 Charge force | [HANDOFF_GLC_L1_CHARGE.md](HANDOFF_GLC_L1_CHARGE.md) | **DONE** | `GRA` | overlap **99.2 % → 0.2 %**, nnb/bond **0.18 → 0.81**. No Barnes–Hut. Assumption 4 partially FALSE (ForceControl was NOT in the uniform harness — registered, additive, no redesign). **L3 must enlarge the sample worlds**: `Cubic GRA` is saturated (4.6 units/agent vs rest 5), so it stalls at 14.3 % overlap live |
-| L2 Cadence | [HANDOFF_GLC_L2_CADENCE.md](HANDOFF_GLC_L2_CADENCE.md) | READY | — | the GPU residency counter is the delicate part |
+| L2 Cadence | [HANDOFF_GLC_L2_CADENCE.md](HANDOFF_GLC_L2_CADENCE.md) | **DONE** | `GRA` | `Get Generation` (universal, 6 surfaces) + `Periodic Step` (agent root, N per graph, a pure lowering ⇒ zero per-target emit). The residency counter works: **20 distinct generations in one resident batch**, negative-controlled to `1`. All 4 assumptions HELD — and the memory-cell route made the two WASM surfaces need no usage gate at all. **Found + fixed a silent JS clamp**: both agent gates early-outed on a PRE-flatten `behaviourStep`, rejecting a Periodic-Step-only graph that compiled fine. **L3 must know the pinned semantics** (init reads 0; a division reads its own generation; an OM reads `g+1`) |
 | L3 Samples + knob | [HANDOFF_GLC_L3_SAMPLES.md](HANDOFF_GLC_L3_SAMPLES.md) | READY | — | the visible payoff + the Expression refactor |
 
 **States**: READY · IN PROGRESS · DONE · REPLANNED (assumption failed).

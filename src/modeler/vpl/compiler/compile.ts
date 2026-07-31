@@ -19,6 +19,8 @@ import { collapseReroutes } from './rerouteCollapse';
 import { expandMultiAttrs } from './multiAttrExpand';
 import { expandForceToAgents } from './forceToAgentsExpand';
 import { expandNeighbourCensus } from './censusExpand';
+import { expandPeriodicSteps } from './periodicExpand';
+import { cellUsesGeneration, agentUsesGeneration } from './generationUse';
 import { expandComposites } from './expandComposites';
 import { BOND_REQUEST_NODE_TYPES, bondReqSlotsForModel } from './bondRequestQueue';
 import { assignDividePartitionCodes, type DividePartitionSpec } from './dividePartition';
@@ -1438,6 +1440,11 @@ function buildLoopParams(model: CAModel): {
   // this. When the list is null (feature off / not built), the step runs the
   // full 0..total loop.
   if (sparseSteppingEnabled(model)) parts.push('_activeList', '_activeCount');
+  // L2 — Get Generation. Appended after EVERY other trailing block so the
+  // OFF-path signature is byte-identical. The worker's buildLoopArgs pushes the
+  // value UNCONDITIONALLY (an extra trailing arg is ignored; a missing param
+  // would read `undefined`), so only this side is gated.
+  if (cellUsesGeneration(model)) parts.push('_generation');
 
   return { params: parts.join(', '), cellAttrs, neighborhoods };
 }
@@ -1456,6 +1463,8 @@ function buildCellParams(model: CAModel): string {
   for (const n of neighborhoods) { parts.push(`nIdx_${n.id}`); parts.push(`nSz_${n.id}`); }
   parts.push('modelAttrs', 'colors', 'activeViewer', '_indicators', '_linkedResults', '_rngState', '_stopFlag', 'glyphCodes', 'glyphColors');
   if (variegated || hasLookupTables) parts.push('r_orientation', 'w_orientation', '_facePatternLookup', '_lookupTables');
+  // L2 — Get Generation, appended LAST (see buildLoopParams).
+  if (cellUsesGeneration(model)) parts.push('_generation');
   return parts.join(', ');
 }
 
@@ -2188,6 +2197,8 @@ export function compileGraph(
   // viewer switch, paint, reset/load). Appended LAST — OFF byte-identical.
   const omSparse = sparseSteppingEnabled(model);
   if (omSparse) omParamParts.push('_activeList', '_activeCount');
+  // L2 — Get Generation, appended LAST (see buildLoopParams).
+  if (cellUsesGeneration(model)) omParamParts.push('_generation');
   const omParams = omParamParts.join(', ');
 
   for (const omNode of outputMappingNodes) {
@@ -2405,6 +2416,15 @@ export function agentAbiShapeOf(model: CAModel): AgentAbiShape {
     // `agentAbiShapeOfStore` (which reads the store's `bondAttrSpecs`, built from
     // the SAME resolver) produces the identical ordered list.
     bondAttrs: bondAttrsOf(model),
+    // L2 — Get Generation. The ONE field whose PARAM side is gated while the ARG
+    // side is not: the worker (and the parity harness) always build the shape
+    // with `usesGeneration: true`, so the value is always passed and only the
+    // declaration is conditional. An extra trailing JS arg is ignored; a missing
+    // one would read `undefined` — so the dangerous direction is structurally
+    // impossible (the L1 `forcePassParamsFor` discipline). Gated because an
+    // unconditional field would change EVERY agent model's emitted param string
+    // and break the milestone's byte-identity gate.
+    usesGeneration: agentUsesGeneration(model),
   };
 }
 
@@ -2502,6 +2522,10 @@ export function compileAgentGraph(
   // port (+ Array Length for `total`), so it reuses the existing emitters on every
   // target (no new emit). See censusExpand.ts.
   ({ nodes: agentNodes, edges: agentEdges } = expandNeighbourCensus(agentNodes, agentEdges, model));
+  // Periodic Step roots → Get Generation + Math(%) + Compare + If/Then hung off
+  // the single Behaviour Step, sequenced. Zero per-target emit — see
+  // periodicExpand.ts. No-op when the graph has no Periodic Step.
+  ({ nodes: agentNodes, edges: agentEdges } = expandPeriodicSteps(agentNodes, agentEdges, model));
   // Apply Force To Agents (array broadcast) → For Each In Array → Apply Force To
   // Agent, so it reuses the single node's emitters on every target (no new emit).
   ({ nodes: agentNodes, edges: agentEdges } = expandForceToAgents(agentNodes, agentEdges, model));

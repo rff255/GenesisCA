@@ -108,6 +108,7 @@ import { collapseReroutes } from '../rerouteCollapse';
 import { expandMultiAttrs } from '../multiAttrExpand';
 import { expandForceToAgents } from '../forceToAgentsExpand';
 import { expandNeighbourCensus } from '../censusExpand';
+import { expandPeriodicSteps } from '../periodicExpand';
 import { expandComposites } from '../expandComposites';
 import { lowerVectorAttrs, expandVectorAttributes } from '../vectorAttr';
 import { lowerFacingSource } from '../facingSource';
@@ -143,6 +144,7 @@ export const AGENT_WASM_SUPPORTED_TYPES: ReadonlySet<string> = new Set<string>([
   'getSelfPosition', 'getRadius', 'getAge', 'getBondDegree', 'neighbourDensity', 'getCurvature',
   // world size (the agent world IS the cell grid — fieldW/fieldH/fieldD params)
   'getGridDimensions',
+  'getGeneration',
   // neighbour access
   'getSelfHandle',
   'getNearbyAgents', 'getAgentsInView', 'senseHemifield', 'forEachInArray', 'getAgentOffset', 'getVelocity',
@@ -885,6 +887,15 @@ function compileValueNode(ctx: AgentWasmCtx, nodeId: string, portId: string): Va
         em.localGet(dimLocal);
         if (isCenter) { em.f64Const(0.5); em.op(OP_F64_MUL); em.op(OP_F64_FLOOR); }
       });
+      break;
+    }
+    // Get Generation — an f64 read of the memory cell the worker refreshes
+    // whenever the generation counter moves (layout.generationOffset, appended at
+    // the very END of the agent layout). No change to the 16-param behaviour
+    // signature; an unused generation emits no load, so the module is
+    // byte-identical for every model that doesn't place the node.
+    case 'getGeneration': {
+      result = f64Result(() => { em.i32Const(0); em.f64Load(ctx.layout.generationOffset, 3); });
       break;
     }
     case 'getAge': {
@@ -4787,6 +4798,10 @@ function flattenAgentGraph(nodes: GraphNode[], edges: GraphEdge[], model: CAMode
   // already supported, so the gate + emitter never see the census node and it runs
   // on WASM with zero per-target emit. See censusExpand.ts.
   ({ nodes: n, edges: e } = expandNeighbourCensus(n, e, model));
+  // Periodic Step roots → Get Generation + Math(%) + Compare + If/Then hung off the
+  // single Behaviour Step, sequenced — all already supported, so the gate + emitter
+  // never see the periodicStep node. See periodicExpand.ts.
+  ({ nodes: n, edges: e } = expandPeriodicSteps(n, e, model));
   // Apply Force To Agents (array broadcast) → For Each In Array → Apply Force To
   // Agent (both already supported), so the gate + emitter never see the array node.
   ({ nodes: n, edges: e } = expandForceToAgents(n, e, model));
@@ -4860,8 +4875,13 @@ export function isAgentGraphWasmSupported(model: CAModel | undefined | null): bo
   if (!model || !model.topologyMode?.agents) return false;
   const nodes = model.agentGraphNodes ?? [];
   const edges = model.agentGraphEdges ?? [];
-  const behaviour = nodes.find(n => n.data.nodeType === 'behaviourStep');
-  if (!behaviour) return false;
+  // L2: a behaviour root may be SYNTHESIZED by the Periodic Step lowering
+  // (periodicExpand), so a graph made of Periodic Steps alone carries no
+  // `behaviourStep` node YET. This early-out only skips the flatten for a graph
+  // with no behaviour-like root at all; the post-flatten lookup below is the
+  // real check. Missing the periodicStep arm here silently clamped such a model
+  // to JS while it compiled perfectly — exactly the silent-clamp failure mode.
+  if (!nodes.some(n => n.data.nodeType === 'behaviourStep' || n.data.nodeType === 'periodicStep')) return false;
   const flat = flattenAgentGraph(nodes, edges, model);
   if (flat.error) return false;
   const adj = buildAdjacency(flat.nodes, flat.edges);

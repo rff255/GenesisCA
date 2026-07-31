@@ -41,6 +41,15 @@ export interface AgentAbiShape {
    *  applies that filter, so the descriptor needs no `gate` (see the note on the
    *  `gate` hook below). */
   bondAttrs?: ReadonlyArray<{ id: string }>;
+  /** L2 — the `_generation` scalar (Get Generation). **Asymmetric by design and
+   *  the ONLY field that is**: the COMPILER passes the graph's real answer (so a
+   *  graph that never reads the generation emits its historical param string and
+   *  stays byte-identical), while the WORKER and the parity harness always pass
+   *  `true` (so the value is always supplied). Params ≤ args is the safe
+   *  direction for a JS function — an extra trailing arg is ignored, a missing
+   *  param reads `undefined` — which makes the dangerous direction structurally
+   *  impossible. Appended at the VERY END of every kind, after the 3D block. */
+  usesGeneration?: boolean;
 }
 
 /** The runtime values the ARG resolvers pull from (the external caches the
@@ -73,6 +82,10 @@ export interface AgentAbiRuntime {
   idx?: number; daughterIndex?: number; axisX?: number; axisY?: number;
   // --- init-event extras (leading host closures + trailing seed base) ---
   agentCreate?: unknown; agentAddToWorld?: unknown; seedBase?: number;
+  /** L2 — the 0-based index of the generation being computed. See the pinned
+   *  semantics on GetGenerationNode: init events read 0, a division event reads
+   *  the generation it happened in, and cells + agents share one counter. */
+  generation?: number;
 }
 
 /** One ABI field: its param NAME + a runtime value resolver. `gate` (STEP 3+)
@@ -301,6 +314,12 @@ export function deriveAgentAbi(kind: AgentAbiKind, shape: AgentAbiShape, profile
       fields.push(F('_agentZ', 'f64[]', s => s.z));
     }
   }
+
+  // --- L2: the generation scalar, appended AFTER the 3D block (i.e. dead last on
+  // every kind) so a graph that doesn't read it keeps its historical signature.
+  // See the `usesGeneration` note on AgentAbiShape for why this is the one field
+  // whose param side is gated while its arg side is not.
+  if (shape.usesGeneration) fields.push(F('_generation', 'scalar', (_s, rt) => rt.generation ?? 0));
 
   return fields;
 }

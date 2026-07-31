@@ -57,7 +57,11 @@ function buildArgs(s, hash, ctx) {
   // `_bondAttr_<id>` + `_bondFormAttr_<id>` blocks land in the same slots the
   // compiled param list declares. Omitting it shifts EVERY later arg by the bond
   // count (the `r_`/`w_` block ends up reading the field block, etc.).
-  const shape = { is3d: s.worldDepth > 1, agentAttrs: s.attrSpecs, fieldAttrs: ctx.fieldSpecs, hasLookupTables: ctx.hasLookupTables, bondAttrs: s.bondAttrSpecs };
+  // L2: `usesGeneration: true` ALWAYS, mirroring the WORKER's shape builder (the
+  // compiler passes the graph's real answer on the PARAM side). Params ≤ args is
+  // the safe direction, so a trailing `_generation` the graph doesn't declare is
+  // simply ignored.
+  const shape = { is3d: s.worldDepth > 1, agentAttrs: s.attrSpecs, fieldAttrs: ctx.fieldSpecs, hasLookupTables: ctx.hasLookupTables, bondAttrs: s.bondAttrSpecs, usesGeneration: true };
   const rt = {
     hash, emptyI32: new Int32Array(0),
     modelAttrs: ctx.cachedModelAttrs, viewer: ctx.activeViewer,
@@ -66,6 +70,7 @@ function buildArgs(s, hash, ctx) {
     lookupTables: ctx.cachedInteractionTables,
     width: ctx.width, height: ctx.height, total: ctx.total, torus: ctx.torus,
     fieldArray: (id) => ctx.readAttrs[id],
+    generation: ctx.generation ?? 0,   // L2 — the value behind `_generation`
   };
   return buildAgentAbiArgs('loop', shape, s, rt);
 }
@@ -1485,6 +1490,115 @@ entries.push({
   },
 });
 
+
+// ---------------------------------------------------------------------------
+// L2 — RULE CADENCE: Get Generation + THREE Periodic Steps at once.
+//
+// Three things must hold, and only the first is parity:
+//   • JS and WASM read the SAME generation (`gen` is compared cell-for-cell);
+//   • each Periodic Step fires on EXACTLY its own schedule (the VALUE invariant
+//     below recomputes `generation % period === phase` independently — parity
+//     alone would pass happily if both targets fired every generation, which is
+//     precisely the failure a broken gate produces);
+//   • `Step Index` = floor(generation / period).
+// The five gates cover the always-on case, the classic two-phase alternation, a
+// phase-0 gate that is NOT always-on, and the exit gate's period-10 pair (phases
+// 0 and 3 — firing on 0/10/20 and 3/13/23 within the 30-step run).
+//
+// Each gate stamps the CURRENT generation into its own attribute, so that
+// attribute always holds the generation it LAST fired on. Checked every step,
+// that pins the schedule exactly in both directions: an extra firing shows up
+// immediately (the stamp is a generation the schedule does not contain) and a
+// missed one shows up immediately (the stamp lags). Stamping rather than
+// accumulating also keeps the invariant independent of the harness's attribute
+// seeding, which is a non-zero pattern.
+// ---------------------------------------------------------------------------
+const CADENCE_STEPS = [
+  { period: 1, phase: 0, hits: 'hitsA', idx: 'idxA' },   // always-on
+  { period: 2, phase: 1, hits: 'hitsB', idx: 'idxB' },   // the classic odd tick
+  { period: 3, phase: 0, hits: 'hitsC', idx: 'idxC' },   // a phase-0 gate that is NOT always-on
+  { period: 10, phase: 0, hits: 'hitsD', idx: 'idxD' },  // the exit gate's 0, 10, 20 …
+  { period: 10, phase: 3, hits: 'hitsE', idx: 'idxE' },  // …and its offset sibling 3, 13, 23 …
+];
+function buildCadenceModel() {
+  const used = new Set();
+  const nid = (p) => { let id; do { id = p + Math.random().toString(36).slice(2, 8); } while (used.has(id)); used.add(id); return id; };
+  const aN = [], aEd = [];
+  const an = (t, c) => { const n = { id: nid('a'), type: 'caNode', position: { x: 0, y: 0 }, data: { nodeType: t, config: c } }; aN.push(n); return n; };
+  const aE = (s, sp, tt, tp, cat) => aEd.push({ id: nid('e'), source: s.id, target: tt.id, sourceHandle: `output_${cat}_${sp}`, targetHandle: `input_${cat}_${tp}` });
+
+  // A plain Behaviour Step ALSO present: its unconditional chain must keep running
+  // every generation alongside the periodic ones (the lowering sequences them).
+  const bs = an('behaviourStep', {});
+  const gg = an('getGeneration', {});
+  const setGen = an('setAttribute', { attributeId: 'gen' });
+  aE(gg, 'value', setGen, 'value', 'value');
+  aE(bs, 'do', setGen, 'do', 'flow');
+
+  for (const { period, phase, hits, idx } of CADENCE_STEPS) {
+    const ps = an('periodicStep', { period: String(period), phase: String(phase) });
+    // Stamp the CURRENT generation — so this attribute holds the generation this
+    // gate last fired on. Shares the ONE Get Generation the graph already has.
+    const w = an('setAttribute', { attributeId: hits });
+    aE(gg, 'value', w, 'value', 'value');
+    aE(ps, 'do', w, 'do', 'flow');
+    // Step Index, recorded on the same firing generations.
+    const wi = an('setAttribute', { attributeId: idx });
+    aE(ps, 'stepIndex', wi, 'value', 'value');
+    aE(w, 'next', wi, 'do', 'flow');
+  }
+
+  return {
+    schemaVersion: 1,
+    properties: { name: 'Rule Cadence Parity Test', dimension: '2d', gridWidth: 24, gridHeight: 24, topology: '2d-grid', boundaryTreatment: 'torus', useWasm: false, useWebGPU: false },
+    topologyMode: { gridCells: false, agents: true },
+    centerBased: { enabled: true, maxAgents: 100, maxBonds: 0, worldWidth: 24, worldHeight: 24, seedCount: 40, seedPattern: 'scatter', defaultRadius: 0.5, growthRate: 0, repulsionStiffness: 0, adhesionStiffness: 0, interactionRange: 1.5, drag: 1, timeStep: 0.1, momentum: 0, maxSpeed: 0, neighbourQueryRadius: 8, useBondingPhysics: false, autoBond: false, agentTarget: 'wasm', agentUpdateMode: 'async',
+      agentCapabilities: { motion: 'static', body: true, collision: 'off', bonds: 'off', autoBond: false, growth: false, division: false, lifespan: false, populationBirth: false, populationDeath: false, sensing: false, sensingHeadingSource: 'velocity', orientation: false, fieldCoupling: false, appearance: true } },
+    attributes: [], modelAttributes: [], neighborhoods: [],
+    agentAttributes: [
+      { id: 'gen', name: 'Gen', type: 'float', defaultValue: '0' },
+      ...CADENCE_STEPS.flatMap(({ hits, idx }) => ([
+        { id: hits, name: hits, type: 'float', defaultValue: '0' },
+        { id: idx, name: idx, type: 'float', defaultValue: '0' },
+      ])),
+    ],
+    variables: [], agentVariables: [], indicators: [], mappings: [],
+    graphNodes: [], graphEdges: [], agentGraphNodes: aN, agentGraphEdges: aEd, macroDefs: [],
+  };
+}
+/** The VALUE invariant, recomputed from first principles (NOT from the emit):
+ *  after generation `step` (checked EVERY step, not just the last), every live
+ *  agent must hold
+ *    gen        = step                          (the generation it just saw)
+ *    hits_i     = the LAST g <= step with g % p_i === ph_i   (once it has fired)
+ *    idx_i      = floor(hits_i / p_i)
+ *  A gate that has not fired yet is skipped (its attribute still holds the
+ *  harness's seed). Recounting here is what distinguishes "the gate works" from
+ *  "both targets fired unconditionally", which parity cannot see. */
+function cadenceInvariant(st, step) {
+  const expect = { gen: step };
+  for (const { period, phase, hits, idx } of CADENCE_STEPS) {
+    let lastFire = -1;
+    for (let g = 0; g <= step; g++) if (g % period === phase) lastFire = g;
+    if (lastFire < 0) continue;    // not fired yet — the seed is still in place
+    expect[hits] = lastFire;
+    expect[idx] = Math.floor(lastFire / period);
+  }
+  for (let i = 0; i < st.highWater; i++) {
+    if (!st.alive[i]) continue;
+    for (const k of Object.keys(expect)) {
+      const got = st.attrRead[k][i];
+      if (got !== expect[k]) return `agent ${i}: ${k} ${got} !== expected ${expect[k]}`;
+    }
+  }
+  return null;
+}
+
+entries.push({
+  name: '[synthetic] Rule cadence (Get Generation + 5 Periodic Steps)',
+  raw: buildCadenceModel(), invariant: cadenceInvariant,
+});
+
 for (const { name: f, raw, setup, invariant } of entries) {
   const model = migrateForHarness(raw);
   if (!model?.topologyMode?.agents) continue;
@@ -1612,10 +1726,14 @@ for (const { name: f, raw, setup, invariant } of entries) {
     // --- JS behaviour on A ---
     rngState[0] = SEED + step;
     ctxA.rngState = rngState;
+    // L2 — the step index IS the generation (the worker's counter advances once
+    // per generation). JS takes it through the ABI arg; WASM through its memory cell.
+    ctxA.generation = step;
     jsFn(...buildArgs(A, hashA, ctxA));
     // --- WASM behaviour on B ---
     const Bbuf = B.memory.buffer, BL = B.layout;
     new Uint32Array(Bbuf, BL.rngStateOffset, 1)[0] = SEED + step;
+    new Float64Array(Bbuf, BL.generationOffset, 1)[0] = step;   // L2 — mirrors the worker's generationAgentView
     // copy hash in
     let hashValid = 0, nBinsX = 0, nBinsY = 0, nBinsZ = 0, bsx = 1, bsy = 1, bsz = 1, ox = 0, oy = 0, oz = 0;
     if (hashA) {
@@ -1666,7 +1784,9 @@ for (const { name: f, raw, setup, invariant } of entries) {
     // property (see the RNG-sharing synthetic) that must hold independently.
     if (invariant && mismatch === 0) {
       for (const [label, st] of [['js', A], ['wasm', B]]) {
-        const bad = invariant(st);
+        // `step` (the 0-based generation just run) is passed so a per-step
+        // invariant can assert a schedule; existing ones ignore it.
+        const bad = invariant(st, step);
         if (bad) { mismatch++; if (!firstField) firstField = `INVARIANT(${label}) ${bad}`; break; }
       }
     }

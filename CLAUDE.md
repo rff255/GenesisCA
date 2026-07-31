@@ -365,7 +365,7 @@ The app is functional with these major systems:
 ### Visual Programming Language (VPL)
 - `src/modeler/vpl/GraphEditor.tsx` — React Flow-based node graph editor
 - `src/modeler/vpl/CaNode.tsx` — Custom node component with per-type config UI
-- `src/modeler/vpl/nodes/` — 151 node types (148 selectable from the Add Node menu + 3 hidden macro boundary nodes), each in its own file with `compile()` method. Canonical list: `ALL_NODES` in [registry.ts](src/modeler/vpl/nodes/registry.ts). Async-only nodes (6): SetNeighborhoodAttribute, SetNeighborAttributeByIndex, MarkCellUpdated, SetFacingOrientation, SetNeighborOrientationByIndex, MoveSelfToNeighbor. Includes `StopEventNode` (flow input only, text widget for stop message — compiles to `if (_stopFlag[0] === 0) _stopFlag[0] = <1-based idx>;` first-match-wins; WASM emitter mirrors this via `i32.store` at `layout.stopFlagOffset`).
+- `src/modeler/vpl/nodes/` — 153 node types (150 selectable from the Add Node menu + 3 hidden macro boundary nodes), each in its own file with `compile()` method. Canonical list: `ALL_NODES` in [registry.ts](src/modeler/vpl/nodes/registry.ts). Async-only nodes (6): SetNeighborhoodAttribute, SetNeighborAttributeByIndex, MarkCellUpdated, SetFacingOrientation, SetNeighborOrientationByIndex, MoveSelfToNeighbor. Includes `StopEventNode` (flow input only, text widget for stop message — compiles to `if (_stopFlag[0] === 0) _stopFlag[0] = <1-based idx>;` first-match-wins; WASM emitter mirrors this via `i32.store` at `layout.stopFlagOffset`).
 - Five "event" entry-point nodes: GenerationStep (per-gen logic), InitEvent (runs once PER CELL on simulator Reset — see Variegated Cells section), **GridInit** (runs ONCE GLOBALLY on Reset — free-form procedural seeding; see the "Grid Init Event" section), InputMapping C→A (brush), OutputMapping A→C (color pass)
 - `src/modeler/vpl/compiler/compile.ts` — Two-pass compiler: hoists values, then emits flow
 - Multi-output nodes (InputColor, GetColorConstant, MacroNode, ColorScale, FilterNeighbors, JoinNeighbors, GetFacingLabels, BreakDownNeighborIndex, InitEvent, GetCellPosition, GroupOperator with position output) use `_v${nodeId}_${portId}` naming
@@ -2826,6 +2826,59 @@ A universal node's `compile()` has no idea which ROOT it sits under, but it must
 - **[scripts/test-grid-dimensions.mjs](scripts/test-grid-dimensions.mjs)** (the regression standard for this node): availability (universal / hidden on Overseer / Depth hidden in 2D); **cells 2D + 3D compiled AND RUN** — the JS step and a **real instantiated WASM module in Node** both leave every cell holding exactly W/H/D, JS↔WASM bit-identical; WGSL bakes the literals; **agents 2D + 3D** — the JS behaviour loop RUN (every agent holds W/H/D), the **Agent Init Event RUN through the real spawn idiom** (Create Agent lands at x=W, y=H, z=D — the `_fieldD`-absent trap), both agent gates accept the node, both modules/shaders compile.
 - **[scripts/parity-agent-wasm.mjs](scripts/parity-agent-wasm.mjs)**: a permanent synthetic 3D grid-dims agent model (`buildGridDimsModel`) → 13/13 JS↔WASM bit-parity. NB parity alone would pass if BOTH targets were wrong — the value assertions live in `test-grid-dimensions.mjs`.
 - **[scripts/check-compile-identity.mjs](scripts/check-compile-identity.mjs)**: all 23 library models byte-identical on every surface.
+
+---
+
+## Rule Cadence — `Get Generation` (universal) + `Periodic Step` (agents) — branch `GRA`
+
+Gives the rule graph control over **when** it runs. Cadence is *model semantics* — "rewrite the graph every 10th generation, update states on the others" is a property of the automaton, not an engine knob — so it lives in the graph. (The one thing that deliberately does NOT: how many times the *solver* iterates per generation. That is numerical relaxation, an engine knob, the same category as `positionalIterations`.) Design authority: [docs/IMPACT_MAP_GRAPH_LAYOUT_CADENCE.md](docs/IMPACT_MAP_GRAPH_LAYOUT_CADENCE.md) §1.6/§3; phase report [docs/HANDOFF_GLC_L2_CADENCE.md](docs/HANDOFF_GLC_L2_CADENCE.md).
+
+### `Get Generation` ([GetGenerationNode.ts](src/modeler/vpl/nodes/GetGenerationNode.ts)) — the primitive
+A **universal** value node (Cells AND Agents; not Overseer, which has its own `ovGetGeneration`) outputting the current generation. Before it there was NO way to read the generation from a cell or agent rule at all.
+
+**PINNED SEMANTICS (later work relies on these):**
+- **0-based, and it names the generation being computed NOW** — the first step after a Reset reads `0`. The worker increments at the END of a step, so every rule running during generation *g* reads exactly `g`.
+- **Init events read 0.** Reset zeroes the counter BEFORE the cell Init Event, the Grid Init Event and the Agent Init Event, so a seeding rule always sees 0 regardless of how long the previous run lasted.
+- **A Division Event reads the generation the division happened in** — it runs in the structural phase of generation *g*, after the behaviour and before the increment, so it reads the same *g* the behaviour that requested the division read.
+- **An Output Mapping reads the generation ABOUT TO BE computed** (`g+1` after generation *g*): the colour pass runs after the increment, on every target, so the cell OM, the agent OM and the resident-batch OM all agree.
+- **Cells and agents share ONE counter** (the worker's `generation`), bumped once per generation.
+
+### Threading — six surfaces, NO new per-target algorithm
+| surface | mechanism |
+|---|---|
+| Cell JS | a trailing `_generation` param on the step / per-cell / output-mapping signatures, appended LAST and **gated on real usage** (the sparse-stepping discipline) |
+| Cell WASM | an **i32 cell in `wasmMemory`** at `layout.generationOffset` |
+| Cell WebGPU | `Control.generation` (byte 8 of the existing 16-byte control block — no buffer change), declared only when read |
+| Agent JS | a trailing `_generation` ABI field ([agentAbi.ts](src/modeler/vpl/compiler/agentAbi.ts)) |
+| Agent WASM | an **f64 cell in the agent memory** at `layout.generationOffset` — the 16-param behaviour signature is untouched |
+| Agent WebGPU | a `genCounter` **STORAGE buffer** (binding 15), bumped GPU-side (see below) |
+
+**Why the two WASM surfaces need no usage gate at all:** the cell is appended at the very END of each memory layout, so every existing baked offset — and therefore every emitted instruction — is unchanged. A model that never places the node emits no load, and its module is byte-identical. One mechanism also serves EVERY cell entry point (step / init / grid init / input colour / output mapping) with zero signature changes.
+
+**The ONE asymmetric ABI field.** `AgentAbiShape.usesGeneration` gates the PARAM side (the compiler passes the graph's real answer, so an unusing model keeps its historical param string) while the **worker and the parity harness always pass `true`**, so the value is always supplied. `params ⊆ args` is the safe direction for a JS function — an extra trailing arg is ignored, a missing param reads `undefined` — which makes the dangerous direction structurally impossible (the L1 `forcePassParamsFor` discipline). Pinned by the arity-contract block in [scripts/test-rule-cadence.mjs](scripts/test-rule-cadence.mjs).
+
+**ONE seam moves the counter** ([sim.worker.ts](src/simulator/engine/sim.worker.ts)): `setGeneration` / `advanceGeneration` replace every `generation++` / `= 0` / `+= count`, and keep the JS variable, the two WASM memory views and the cell-WebGPU control word in step. (Named `advanceGeneration`, not `bumpGeneration`, because `runAgentBatchResident` already takes a BOOLEAN param called `bumpGeneration`.) The cell WebGPU word is also re-seeded when the runtime is (re)built — a rebuilt buffer is zero-initialised, so a soft recompile at generation 500 would otherwise read 0.
+
+### THE delicate point — GPU residency (why a STORAGE buffer, not a uniform)
+**Measured**: `dispatchResidentBatch` ([agentWebgpuRuntime.ts](src/simulator/engine/agentWebgpuRuntime.ts)) encodes **ALL N generations of a batch into ONE command encoder and submits once**, with no CPU touch point between generations. A generation supplied through the Control uniform would therefore be **frozen for the whole batch** — silently wrong, on that path only, and **invisible to any single-step test**.
+
+**The fix**: the per-generation **`posCommit`** pass (the only pass that already runs exactly once per generation inside that submit) owns the counter — `if (i == 0u) { genCounter[0] = genCounter[0] + 1u; }`, from ONE invocation (no race) and **before the `highWater` guard** so an empty population still advances the clock. WebGPU's implicit inter-pass ordering makes the bump visible to the next generation's behaviour pass. The host seeds the counter ONCE per batch (`uploadAgentGeneration`); the per-gen GPU path just writes it before each dispatch. **Residency is preserved** — reading the generation costs no readback and adds no eligibility term.
+
+The `genCounter` buffer is created UNCONDITIONALLY (4 bytes) because posCommit bumps it unconditionally — only the behaviour/OM **bind-group entry** is gated on `usesGeneration` (a declared-but-unused storage global is stripped by Naga, which would mismatch the reflected layout — the same rule as `usesSpawn`/`usesStop`/`usesForceScatter`).
+
+### `Periodic Step` ([PeriodicStepNode.ts](src/modeler/vpl/nodes/PeriodicStepNode.ts)) — the sugar
+An agent event root (`period` + `phase` + a `Step Index` = ⌊generation/period⌋ output) whose chain runs only when `generation % period === phase`. **Multiple per graph** — deliberately NOT in `SINGLETON_NODE_TYPES`. Two at period 2, phases 0 and 1, reproduce the classic "states on even ticks, rewrites on odd" alternation; gating the state update and the rewrite on the SAME tick is what makes a periodic automaton faithful, and that is the argument for the root over hand-wired modulo boilerplate.
+
+**Implemented as a pure pre-compile LOWERING** ([periodicExpand.ts](src/modeler/vpl/compiler/periodicExpand.ts)) into `Get Generation → Math(%) → Compare(==) → If/Then` hung off ONE `behaviourStep`, sequenced — the P1 census pattern, so **zero per-target emit**, all three targets by construction, and the capability gates + WASM/WebGPU supported-type sets never see a `periodicStep` node. Rules it keeps: deterministic synthetic ids; **ONE shared `Get Generation`** fanned out to every gate (accessor-CSE is OFF in async agent mode, so duplicates would not merge); `Step Index` synthesized only when consumed; **at most ONE `behaviourStep` in the output** (an existing one is REUSED, so the singleton the three agent compilers look up still holds); branch order = **the unconditional chain first, then the gates**, stated explicitly with a `sequence` rather than left to edge-array order. Hot-path no-op when the graph has none.
+
+**A silent-clamp bug this surfaced (fixed):** both agent gates early-outed on `nodes.find(behaviourStep)` over the **PRE-flatten** graph. A graph made of Periodic Steps alone has no `behaviourStep` node yet — so it compiled perfectly and was then rejected by the gate, silently clamping to JS. The early-out now accepts `behaviourStep || periodicStep`; the post-flatten lookup remains the real check.
+
+**Scope**: Periodic Step is agent-only (`requirements.bondGraph`). A CELL rule composes the same gate by hand from Get Generation, which is universal.
+
+### Verification
+[scripts/test-rule-cadence.mjs](scripts/test-rule-cadence.mjs) (107 checks): cells run on JS **and a REAL instantiated WASM module** in Node (2D + 3D, bit-identical); the OFF path emits no param / no WGSL field and keeps `generationOffset` last; the lowering's structure, multiplicity, ordering and clamping; cadence **by value** on the agent JS loop (period 10 fires on exactly 0/10/20/30; two phases alternate; three periods coexist while the unconditional chain still runs every generation); the pinned init/division semantics **run** and asserted; the agent WASM/WebGPU gates + emit; and the ABI arity contract. A permanent `[synthetic] Rule cadence (Get Generation + 5 Periodic Steps)` entry in [scripts/parity-agent-wasm.mjs](scripts/parity-agent-wasm.mjs) carries a **per-step VALUE invariant** that recomputes each gate's schedule independently (parity alone would pass if both targets fired unconditionally) — negative-controlled by making every gate always-on.
+
+**THE residency test (real GPU, in-browser)**: a residency-eligible WebGPU-agent model whose rule counts how many times the generation CHANGED, run as ONE 20-generation resident batch (`residentEligible: true`) — `changes 20`, `sum 190` (= Σ 0..19 exactly), `lastGen 19`, and a period-10 gate last firing at 10, all 8 agents agreeing, 0 errors; a second batch continued to `changes 40 / sum 780 / lastGen 39 / p10 30`. **Negative-controlled**: with the posCommit bump removed (uniform-equivalent) the SAME run reads `changes 1 / sum 0 / lastGen 0 / p10 0` — one frozen value. Cell WebGPU was verified on the real device too (`useWebGPUStatus ready:true`, all 256 cells === 4 after 5 generations).
 
 ---
 
