@@ -57,10 +57,24 @@ function auditModel(name, model) {
     ok(fields.every(f => VALID_CTYPES.has(f.cType)), `${name} ${kind}: all cTypes valid`);
 
     // (C) 2D is a strict prefix of 3D (append-only z-block).
-    const names2d = deriveAgentAbi(kind, { ...shape, is3d: false }).map(f => f.name);
-    const names3d = deriveAgentAbi(kind, { ...shape, is3d: true }).map(f => f.name);
+    //
+    // `_generation` (L2) is appended AFTER the 3D block — dead last on every kind,
+    // so a graph that does not read the generation keeps its historical signature.
+    // That makes it the ONE field that legitimately sits behind the z-block, so the
+    // prefix property is asserted on the ABI up to it, plus the separate (stronger)
+    // claim that when present it really is last on BOTH sides. Comparing the raw
+    // lists instead reports a false divergence for every cadence-using model — as
+    // it did the moment the first one shipped (`Cubic GRA`).
+    const TRAILING = '_generation';
+    const stripTrailing = (a) => (a[a.length - 1] === TRAILING ? a.slice(0, -1) : a);
+    const raw2d = deriveAgentAbi(kind, { ...shape, is3d: false }).map(f => f.name);
+    const raw3d = deriveAgentAbi(kind, { ...shape, is3d: true }).map(f => f.name);
+    ok(raw2d.includes(TRAILING) === raw3d.includes(TRAILING)
+      && (!raw2d.includes(TRAILING) || (raw2d[raw2d.length - 1] === TRAILING && raw3d[raw3d.length - 1] === TRAILING)),
+      `${name} ${kind}: ${TRAILING}, when present, is LAST in both 2D and 3D`);
+    const names2d = stripTrailing(raw2d), names3d = stripTrailing(raw3d);
     ok(names3d.length >= names2d.length && names3d.slice(0, names2d.length).join(',') === names2d.join(','),
-      `${name} ${kind}: 2D is a strict prefix of 3D`);
+      `${name} ${kind}: 2D is a strict prefix of 3D (up to the trailing ${TRAILING})`);
   }
 }
 

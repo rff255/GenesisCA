@@ -1474,6 +1474,47 @@ export function HelpView() {
             uniform packing: ~124 candidates/agent in 2D at 4&times; rest vs ~813 in 3D). In 3D
             start around <strong>4&times;</strong> the bond rest length rather than 8&times;.
           </p>
+          <p className={styles.p}>
+            <strong>Strength is a cheaper lever than reach &mdash; try it before widening the
+            cutoff.</strong> The hash bin edge <em>is</em> the cutoff, so doubling the reach
+            quadruples the candidates every agent examines, while making <em>k</em> more negative
+            costs nothing at all. Measured on the shipped <strong>Cubic GRA</strong>: a
+            4&times;-rest cutoff at <em>k</em> = &minus;10 gives the same layout quality as an
+            8&times;-rest cutoff at the default &minus;3, and runs <strong>2.6&times; faster</strong>.
+            If a structure still looks cramped, reach for the strength first.
+          </p>
+          <p className={styles.p}>
+            <strong>Two things charge cannot fix, and both are worth checking first.</strong> If
+            the <em>world</em> is too small the graph simply has nowhere to go &mdash; size it to
+            your agent <em>cap</em>, roughly{' '}
+            <code>side = sqrt(maxAgents &times; (bond rest &times; 1.45)&sup2;)</code>, since a
+            charged layout settles at about 1.45&times; the rest length per link. And if the rule
+            <em> rewrites</em> faster than the solver can untangle, no force helps: give the rule a{' '}
+            <strong>Periodic Step</strong> (rewrite every Nth generation) or raise{' '}
+            <strong>Layout iterations</strong> below.
+          </p>
+          <h3 className={styles.h3}>Layout iterations &mdash; more relaxation per generation</h3>
+          <p className={styles.p}>
+            <strong>Layout iterations</strong> (Properties &rarr; Bond-Graph Agents &rarr; Solver,
+            default <strong>1</strong>) runs the force integrator that many times per generation.
+            It is a solver setting, not rule logic &mdash; which is exactly why it is a knob here
+            and <em>not</em> a node in your graph: how many times the solver iterates is numerical
+            relaxation, the same category as Positional iterations. Everything that means one
+            generation still happens once: agent <strong>age</strong> advances by one, the growth
+            ramp advances by one step, and the structural phase (bond form / break / rewire,
+            division, death) runs exactly once, after the last iteration.
+          </p>
+          <p className={styles.p}>
+            It pairs with <strong>Periodic Step</strong> rather than replacing it. Raising layout
+            iterations gives the layout more time <em>without</em> changing what a generation
+            means &mdash; useful when your model counts generations (indicators, end conditions, an
+            Overseer budget). A Periodic Step instead slows the <em>rule</em> down, which is what
+            you want when the rule itself should tick more slowly than the physics. Relaxation
+            passes per rule step = <em>period</em> &times; <em>layout iterations</em>; the shipped{' '}
+            <strong>Cubic GRA</strong> uses a period of 2, and <strong>SDCA</strong> &mdash; whose
+            population is fixed, so there is no growth to outrun &mdash; uses 2 layout iterations
+            instead.
+          </p>
           <h3 className={styles.h3}>The Two-Graph Workflow (Cells vs Agents)</h3>
           <p className={styles.p}>
             With Agents on you author <strong>two rule graphs</strong> behind the same editor,
@@ -1698,7 +1739,10 @@ export function HelpView() {
             into three, and the whole rewrite lands in a single generation so the graph is
             <em> never</em> caught in a broken intermediate state. Its rule is two eight-cell tables
             you can re-roll, and its Overseer tab sweeps twelve random rules and reports which grow,
-            die or blow up. <strong>SDCA &mdash; Couplers and Decouplers</strong> is the classic
+            die or blow up. Its rule runs on <em>every second</em> generation (a Periodic Step),
+            so the generations in between are pure layout relaxation &mdash; which is why the
+            growing graph stays readable instead of collapsing into a blob.{' '}
+            <strong>SDCA &mdash; Couplers and Decouplers</strong> is the classic
             structurally-dynamic automaton: node values evolve over the links while the links
             themselves form and break according to those values, with a <em>hysteresis band</em>
             (couple above one threshold, decouple below a lower one) so edges do not chatter. Open

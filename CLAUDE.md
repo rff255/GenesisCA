@@ -2325,6 +2325,37 @@ cubic graph. **Never claim faithfulness to a specific paper for this model.**
   shared xorshift32 stream JS and WASM use, while the WebGPU agent target seeds its per-agent
   PCG once at runtime creation — a WebGPU sweep would not reproduce. Both gates ACCEPT the
   model; only the sweep's reproducibility motivates the choice.
+- **THE LAYOUT (L3) — three independent causes, all measured, all fixed.** Grown to N = 2000
+  at the model's own parameters, on the LIVE state (no free settle): **nnb/bond 0.10 → 0.67,
+  overlap 99.6 % → 0.0 %**. In the real browser at N ≈ 2500: **0.15 → 0.749** and
+  **99.5 % → 0.00 %**, at **2.8× the generations per second** (29.4 → 10.6 ms/generation).
+  1. **CHARGE ON, `k = −10`, cutoff `20` = 4 × bond rest.** **STRENGTH IS A CHEAPER LEVER
+     THAN REACH**, measured: the spatial-hash bin edge IS the cutoff, so doubling reach
+     quadruples the candidates the 3×3 stencil sweeps, while raising `|k|` costs nothing. A
+     4×-rest cutoff at −10 matches an 8×-rest cutoff at the default −3 on layout quality
+     (settled nnb/bond 0.72 vs 0.73) and runs **2.6× faster** (15 vs 40 ms/generation at
+     N = 2500). The Impact Map's "quality saturates by ~8× rest" sweep held `k` at −3; this
+     is the SECOND axis of that surface, not a contradiction of it.
+  2. **THE WORLD IS SIZED TO THE AGENT CAP, not to today's population**:
+     `side = ceil(sqrt(maxAgents × (rest × 1.45)²))` → **600** (1.45 = the measured settled
+     bond/rest under charge). The old 220 × 220 left 4.6 units per node against a bond rest
+     of 5 — SATURATED, and no repulsion strength can open a box with no room in it.
+  3. **CADENCE + NEWBORN PLACEMENT.** The WHOLE rule (priority roll, state, rewrite) hangs
+     off ONE **Periodic Step at period 2**, so the generation in between is pure relaxation
+     and state can never drift out of phase with structure — gating only the rewrite would
+     quietly build a DIFFERENT automaton. Period 2 is the measured knee: 1 / 2 / 3 / 4
+     relaxation passes per rewrite give live nnb/bond 0.59 / 0.65 / 0.68 / 0.71, and every
+     further pass costs a full force pass. Newborns start at the torus-shortest **MIDPOINT**
+     between the mother and the neighbour they inherit (Get Agent Position in RELATIVE mode,
+     so it is correct across a seam — hand-subtracting two absolute reads is not) instead of
+     at a fixed offset; on its own that moves live nnb/bond **0.47 → 0.59**.
+  **A generation is NOT a rule step in this model.** The Overseer budget is stated in
+  GENERATIONS (`T_RUN = 120 × PERIOD`), and `verify-graph-rewrite`'s Tier K reads the period
+  off the shipped file and scales its own budgets by it, so a future cadence retune cannot
+  silently shorten the headline O6 check.
+- **The rule graph uses `expression`, not chained `arithmeticOperator`** (L3): 10 Math nodes
+  → 7 Expressions. A PURE refactor — `(verb - 1 + 1) % 3` is the five-node chain written as
+  itself. O6 still holds at EVERY one of 440 generations (220 rule steps).
 
 #### `SDCA — Couplers and Decouplers` — Ilachinski & Halpern's dual coupling
 
@@ -2354,6 +2385,23 @@ feeding the other: `σᵢ' = f(σᵢ, #On in the bonded 1-ring)` and
   Agent → Add Agent To World → Set Agent Attribute draws positions AND the initial states
   from the shared xorshift32 stream, so the whole initial condition is reproducible.
 - **`agentTarget: 'webgpu'`** — the library policy, both gates accept, no sweep to reproduce.
+- **THE LAYOUT (L3): the same charge rule as the flagship, but the ENGINE knob instead of
+  cadence.** Charge on at `k = −10`, cutoff `28` = 4 × bond rest; the world sized to the cap
+  by the shared rule (`ceil(sqrt(400 × (7 × 1.45)²))` → **220**, was 110, i.e. 55 units² per
+  agent against a need of ~103 — the couplers were choosing partners inside a jam). **And
+  `layoutIterations: 2` rather than a Periodic Step — the split is deliberate.** A GROWING
+  graph must outrun its own rewriting, which is rule semantics, so the flagship uses cadence;
+  SDCA has a FIXED population that simply needs to settle, which is solver relaxation, so it
+  uses the engine knob and keeps one generation meaning one rule step (its hysteresis band is
+  a per-generation property, and its own rate semantics already live in the rule as Link
+  Rate). Between them the two samples demonstrate both halves of the milestone — and because
+  SDCA runs on the WebGPU agent target, it is also the shipped model that exercises the new
+  GPU relax-commit pass.
+- **The rule graph uses `expression`, not chained `arithmeticOperator`** (L3): 9 Math nodes
+  → 5 Expressions, including `lambda + rate * (d - lambda)` written as the formula the Rule
+  Description states. PURE: `(d-λ)*rate` and `rate*(d-λ)` are bit-identical (IEEE
+  multiplication is commutative) and `drive + agree * bonus` binds as the chain did. O8 and
+  I1–I4 still hold at every one of 500 generations.
 
 ### Verification of the samples — O6 and O8 (harness Tiers K and L)
 
@@ -2881,6 +2929,33 @@ An agent event root (`period` + `phase` + a `Step Index` = ⌊generation/period�
 [scripts/test-rule-cadence.mjs](scripts/test-rule-cadence.mjs) (107 checks): cells run on JS **and a REAL instantiated WASM module** in Node (2D + 3D, bit-identical); the OFF path emits no param / no WGSL field and keeps `generationOffset` last; the lowering's structure, multiplicity, ordering and clamping; cadence **by value** on the agent JS loop (period 10 fires on exactly 0/10/20/30; two phases alternate; three periods coexist while the unconditional chain still runs every generation); the pinned init/division semantics **run** and asserted; the agent WASM/WebGPU gates + emit; and the ABI arity contract. A permanent `[synthetic] Rule cadence (Get Generation + 5 Periodic Steps)` entry in [scripts/parity-agent-wasm.mjs](scripts/parity-agent-wasm.mjs) carries a **per-step VALUE invariant** that recomputes each gate's schedule independently (parity alone would pass if both targets fired unconditionally) — negative-controlled by making every gate always-on.
 
 **THE residency test (real GPU, in-browser)**: a residency-eligible WebGPU-agent model whose rule counts how many times the generation CHANGED, run as ONE 20-generation resident batch (`residentEligible: true`) — `changes 20`, `sum 190` (= Σ 0..19 exactly), `lastGen 19`, and a period-10 gate last firing at 10, all 8 agents agreeing, 0 errors; a second batch continued to `changes 40 / sum 780 / lastGen 39 / p10 30`. **Negative-controlled**: with the posCommit bump removed (uniform-equivalent) the SAME run reads `changes 1 / sum 0 / lastGen 0 / p10 0` — one frozen value. Cell WebGPU was verified on the real device too (`useWebGPUStatus ready:true`, all 256 cells === 4 after 5 generations).
+
+**An audit invariant this widened**: `_generation` is appended AFTER the 3D block (dead last on every ABI kind), so `audit-agent-layout.mjs`'s "2D is a strict prefix of 3D" check reports a false divergence for any cadence-using model — which nothing exercised until `Cubic GRA` shipped a Periodic Step in L3. The audit now strips a trailing `_generation` before the prefix comparison AND separately asserts that, when present, it is LAST on both sides (negative-controlled: making it 3D-only fails exactly that assertion).
+
+---
+
+## Layout Iterations — the solver-relaxation knob (branch `GRA`, L3)
+
+**`CenterBasedConfig.layoutIterations`** runs the agent FORCE INTEGRATOR N times per generation. Absent / 1 ⇒ **exactly today's engine, byte-for-byte**. Resolved by ONE clamped resolver, `layoutIterationsOf(cfg)` ([centerBased.ts](src/model/centerBased.ts)), which every surface reads so the CPU and GPU paths cannot disagree about the count (clamps to `[1, MAX_LAYOUT_ITERATIONS = 32]`, floors, and treats non-finite / non-number as 1 — a hand-edited `.gcaproj` cannot smuggle a count in). Edited in **Properties → Bond-Graph Agents → Solver**.
+
+**Why an engine knob and NOT a graph node** (Impact Map §1.6): how many times the *solver* iterates is numerical relaxation, not rule logic — the same category as the existing `positionalIterations`. Putting it in the graph would be like exposing an ODE's step count as a node. The rule's OWN cadence ("rewrite every Nth generation") IS model semantics and lives in the graph, as L2's `Periodic Step`. The two compose: relaxation passes per rewrite = `period × layoutIterations`.
+
+### THE invariant — once per generation stays once per generation
+The loop is kept TIGHT around **[force pass → position commit]** and nothing else, so the **structural phase** — the bond request-queue drain, division, death, auto-bond — still runs exactly ONCE, after it. Draining per iteration would REPLAY every queued Form / Break / Rewire and corrupt the graph silently, with no error anywhere; that is the easiest way to break this feature and it is pinned twice (a source invariant + O6 on the shipped model). Also outside the loop: the spatial hash build, the compiled behaviour, and the graph-force reset.
+
+- **The graph-authored Apply Force is NOT cleared between iterations** — it is a constant external force for that generation, so every iteration re-seeds from it.
+- **The hash is built ONCE per generation** on every target: per-iteration displacement is far below one bin edge, and the per-gen GPU path uploads a CPU-built hash it cannot rebuild mid-encoder.
+- **`age` advances exactly ONCE per generation.** Every force pass does `age += 1`; the CPU subtracts `iterations − 1` after the loop and the GPU relax-commit decrements as it goes (N passes, N−1 commits ⇒ net +1).
+- **Growth ramps at `rate / iterations`.** The ramp is `radius += sign(dd)·rate` CLAMPED at the target and monotonic, so N steps of `rate/N` reach exactly `min(|dd|, rate)` toward the target — the same end radius as one step of `rate`, with no extra uniform, no second bind group and no per-target special case. `rate / 1` is exact, so the default path is untouched.
+
+### Per target
+- **JS + WASM** ([sim.worker.ts](src/simulator/engine/sim.worker.ts) `runAgentStep`): a `for (_lit …)` loop around the WASM force dispatch AND both verbatim JS arms, ending in `swapPositions`. **`x`/`y`/`z` are re-read at the top of every iteration** — `swapPositions` swaps the array REFERENCES on the JS path, so a stale local would integrate the previous iteration's buffer and silently freeze the layout.
+- **WebGPU** ([agentWebgpuRuntime.ts](src/simulator/engine/agentWebgpuRuntime.ts)): a new **relax-commit** compute pass separates consecutive force passes, appended by ONE shared `encodeForceIterations` used by BOTH dispatch sites (`dispatchAgentStep` and `dispatchResidentBatch`), so they cannot disagree. It commits `xNext→x` (+z) and decrements `age`, and deliberately does **NOT** do what `posCommit` also does — zero the force accumulator (which would drop the generation's Apply Force after iteration 1) or bump the generation counter (which would make `Get Generation` tick `layoutIterations` times per generation, breaking the L2 semantics). It reads `highWater` from the **ForceControl** uniform (which both GPU paths write) so one pipeline serves both, and the alive mask so dead slots — which the force pass returns from before its own `age += 1` — are left alone. Built unconditionally (one tiny shader) but only ever DISPATCHED when `iterations > 1`; a build failure degrades to 1 iteration rather than to N uncommitted force passes.
+
+### Verification
+[scripts/test-layout-iterations.mjs](scripts/test-layout-iterations.mjs) — 46 checks: the resolver's clamping; **source invariants** proving what stays outside the loop (and the GPU relax-commit's two deliberate omissions); and the REAL WASM force pass showing N iterations track N single-iteration generations, age advancing by exactly 1 at 1 / 2 / 8 iterations, and the `rate/N` growth identity (Δ ≤ 2.2e-16 for grow, shrink and a target inside one step). **Negative-controlled**: moving `runAgentStructuralPhase()` inside the loop, and making the relax commit bump the generation counter, each fail exactly the invariant that names them.
+
+**Real GPU (in-browser), the decisive test** — from the SAME seeded initial condition on the WebGPU agent target: **A** (`layoutIterations 2`, 10 generations) vs **B** (`1`, 20 generations) vs **C** (`1`, 10 generations), all 20/20/10 force passes. RMS position difference **A↔B 0.19** vs **A↔C 1.03** (and B↔C 1.01) — A tracks B **5.4× closer** than it tracks C. If the relax commit were missing or broken, the two force passes would integrate from the same uncommitted positions and A would have tracked C instead. Shipped `SDCA` (WebGPU agent target, `layoutIterations 2`) runs 300 generations with 0 worker and 0 console errors.
 
 ---
 
