@@ -127,7 +127,7 @@ volume.** Measure it, report it, and document a practical 3D cutoff. Do not assu
 ## Completion Report — L1
 
 **State**: DONE
-**Commit(s)**: see `git log GRA` — `feat(agents): long-range charge force with a finite cutoff`
+**Commit(s)**: `226b5de` — feat(agents): long-range charge force with a finite cutoff
 **Files touched**
 ```
  CLAUDE.md                                              | docs
