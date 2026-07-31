@@ -593,8 +593,13 @@ async function makeRunner(rawModel, { W, H, withWasm = false } = {}) {
     indicators: new Float64Array(0), rngState, stopFlag: new Uint32Array(1),
     glyphCodes: new Uint32Array(1), glyphColors: new Uint32Array(1), lookupTables,
     width: W, height: H, total, torus, fieldArray: () => undefined,
+    generation: 0,
   };
-  const shape = { is3d: false, agentAttrs: A.attrSpecs, fieldAttrs: cellFieldAttrsOf(model), hasLookupTables };
+  // L2/L3 — the generation ALWAYS rides the arg list (params <= args is the safe
+  // direction; the compiler decides the PARAM side from the graph). Without it a
+  // cadence-gated rule reads `undefined % period`, never fires, and the tier
+  // silently passes on a model that did nothing at all.
+  const shape = { is3d: false, agentAttrs: A.attrSpecs, fieldAttrs: cellFieldAttrsOf(model), hasLookupTables, usesGeneration: true };
 
   /** Form the 8 Moore bonds of the lattice (what auto-bond builds at run time). */
   const bondMoore = () => {
@@ -636,12 +641,15 @@ async function makeRunner(rawModel, { W, H, withWasm = false } = {}) {
         const used = hash.binStart[nBins];
         if (used > 0) new Int32Array(buf, BL.hashBinAgentsOffset, used).set(hash.binAgents.subarray(0, used));
       }
+      // the WASM surfaces read the generation from a MEMORY CELL, not a param
+      new Uint32Array(buf, BL.generationOffset, 1)[0] = ctx.generation >>> 0;
       inst.behaviour(B.highWater, hv, nx, ny, nz, bx, by, bz, W, H, D, torus ? 1 : 0, ox, oy, oz);
     }
     if (syncAttrs) {
       for (const sp of A.attrSpecs) { const t = A.attrRead[sp.id]; A.attrRead[sp.id] = A.attrWrite[sp.id]; A.attrWrite[sp.id] = t; }
       if (B) for (const sp of B.attrSpecs) B.attrRead[sp.id].set(B.attrWrite[sp.id]);
     }
+    ctx.generation++;   // the worker bumps at the END of a step (L2 pinned semantics)
   };
 
   return { model, A, B, step, bondMoore, W, H };
@@ -3243,7 +3251,7 @@ function shippedRig(model, { seedSpecs = null } = {}) {
     indicators: new Float64Array(0), rngState, stopFlag: new Uint32Array(1),
     glyphCodes: new Uint32Array(1), glyphColors: new Uint32Array(1), lookupTables,
     width: W, height: H, total: 0, torus: model.properties.boundaryTreatment === 'torus',
-    fieldArray: () => undefined, seedBase: 0,
+    fieldArray: () => undefined, seedBase: 0, generation: 0,
     agentCreate: (x, y, z, rad) => {
       if (s.highWater >= s.maxAgents) return -1;
       const id = s.highWater++;
@@ -3260,11 +3268,16 @@ function shippedRig(model, { seedSpecs = null } = {}) {
   const shape = {
     is3d: false, agentAttrs: s.attrSpecs, bondAttrs: bondAttrsOf(model),
     fieldAttrs: cellFieldAttrsOf(model), hasLookupTables: Object.keys(lookupTables).length > 0,
+    // ALWAYS supplied (params <= args). A Periodic Step model whose generation
+    // arg is missing reads `undefined % period`, never fires, and every O6 check
+    // would then pass vacuously on a graph that did nothing.
+    usesGeneration: true,
   };
 
   const behaviour = eval(res.behaviourCode);
   const reset = (seed = 0x1234abcd) => {
     rngState[0] = seed >>> 0;
+    ctx.generation = 0;   // Reset zeroes the counter BEFORE the Init Event (L2)
     if (res.initCode) {
       staged.clear();
       // eslint-disable-next-line no-eval
@@ -3296,6 +3309,7 @@ function shippedRig(model, { seedSpecs = null } = {}) {
       }
     }
     const overflow = drainAgentBondRequests(s, 1);
+    ctx.generation++;   // bump at the END of the step, like the worker
     return { overflow, queued };
   };
 
@@ -3365,7 +3379,15 @@ function tierK() {
   section('TIER K — P7: the SHIPPED `Cubic GRA` — O6 at every generation');
 
   const model = loadShipped('Cubic GRA');
-  const GENS = 220;
+  // L3 — the rule now hangs off a Periodic Step, so a GENERATION is no longer a
+  // RULE STEP. Read the period off the shipped model and scale every generation
+  // budget by it, so this tier keeps exercising the SAME number of rewrites no
+  // matter how the sample's cadence is retuned (and a future period change cannot
+  // silently weaken the headline check into a shorter run).
+  const PERIOD = Math.max(1, Number(
+    model.agentGraphNodes.find(x => x.data.nodeType === 'periodicStep')?.data.config?.period ?? 1));
+  const RULE_STEPS = 220;
+  const GENS = RULE_STEPS * PERIOD;
 
   // --- 0. the shipped artefact's shape ------------------------------------
   {
@@ -3413,7 +3435,7 @@ function tierK() {
     `THE MILESTONE'S HEADLINE: O6 (min deg == max deg == 3 and E == 3N/2) holds at EVERY one of ${GENS} generations of the SHIPPED model`,
     String(run.bad));
   ok(run.splits >= 50,
-    `the run is not vacuous — ${run.splits} triangle splits actually happened (N ${4} -> ${run.N})`,
+    `the run is not vacuous — ${run.splits} triangle splits actually happened over ${RULE_STEPS} rule steps (N ${4} -> ${run.N})`,
     `${run.splits} splits`);
   ok(run.E === 3 * run.N / 2, `the final graph is cubic: N=${run.N}, E=${run.E} == 3N/2`);
   ok(run.adjacentSeen === null,
@@ -3432,9 +3454,9 @@ function tierK() {
   // run past the model's population guard. Split Rate is a live slider, so lower it
   // and run the long haul — same graph, same verbs, five hundred generations.
   {
-    const long = runCubic(model, 500, { splitRate: 0.004 });
+    const long = runCubic(model, 500 * PERIOD, { splitRate: 0.004 });
     ok(long.bad === null,
-      `O6 + I1-I5 hold at EVERY one of 500 generations at a slower Split Rate (N -> ${long.N}, ${long.splits} splits)`,
+      `O6 + I1-I5 hold at EVERY one of ${500 * PERIOD} generations (500 rule steps) at a slower Split Rate (N -> ${long.N}, ${long.splits} splits)`,
       String(long.bad));
     ok(long.splits > 20 && long.N === 4 + 2 * long.splits,
       'the long run is not vacuous and still applies every split whole', `${long.splits} splits, N=${long.N}`);

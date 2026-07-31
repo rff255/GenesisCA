@@ -107,13 +107,60 @@ function makeGraph() {
 }
 
 // --- tunables ----------------------------------------------------------------
-const W = 220, H = 220;
 const SEEDS = 4;              // K4 — the smallest cubic graph
 const MAX_BONDS = 3;          // TIGHT: nothing may transiently exceed cubic degree
 const RADIUS = 0.9;
 const REST = 5.0;             // bond rest length (the layout scale)
 const STIFF = 0.55;
 const SPLIT_RATE = 0.02;      // upper bound on the fraction of nodes rewriting per generation
+const MAX_AGENTS = 6000;
+
+// --- L3 LAYOUT (measured, not guessed — scripts/probe-graph-layout.mjs) -------
+//
+// THE WORLD SIZING RULE. A 3-regular graph laid out by the charge force settles
+// at a mean bond length of ~1.45 x rest, so each node needs about (rest*1.45)^2
+// of area. The world must hold the CAP, not the current population, or the graph
+// re-jams as it grows:
+//     side = ceil( sqrt( maxAgents * (rest * 1.45)^2 ) )
+//          = ceil( sqrt( 6000 * (5 * 1.45)^2 ) ) = 562  ->  600
+// The old 220 x 220 gave 4.6 units per agent against a bond rest of 5 at N~2300:
+// SATURATED, and no repulsion strength can open a box with no room in it (that is
+// the second, independent cause the impact map identified — the charge force
+// alone was never going to fix it).
+const W = 600, H = 600;
+
+// THE CHARGE. Measured on the real generative process (K4 -> 2500 by triangle
+// split at this model's own 2%/generation rate, through the shipped WASM force
+// pass), sweeping cutoff x strength:
+//
+//   world cutoff strength  settled nnb/bond  overlap%   live nnb  live ovl%  ms/gen
+//    220    off      -      0.15             99.6       0.10      99.6       34   <- shipped
+//    400    40      -3      0.73              0.2       0.56      13.0       40
+//    400    40      -6      0.81              0.0       0.66       2.1       32
+//    400    20      -3      0.57              0.6       0.44      56.1       23
+//    400    20     -10      0.72              0.0       0.59       2.2       15   <- chosen
+//
+// STRENGTH IS A CHEAPER LEVER THAN REACH. Doubling the cutoff quadruples the
+// candidates the 3x3 stencil visits (the bin edge IS the cutoff); raising |k|
+// costs nothing. A 4x-rest cutoff at k = -10 matches the quality of an 8x-rest
+// cutoff at the default k = -3 and runs 2.6x faster. The impact map's "quality
+// saturates by ~8x rest" sweep held k fixed at -3 — this is the second axis of
+// that surface, not a contradiction of it.
+const CHARGE_K = -10;
+const CHARGE_CUTOFF = REST * 4;   // 20 world units
+
+// THE CADENCE (L2). The whole rule — priority roll, state update and rewrite —
+// hangs off ONE Periodic Step, so a "rule step" is one generation of the
+// automaton and the generations in between are pure layout relaxation. Gating
+// only the rewrite would silently build a DIFFERENT automaton (states advancing
+// twice per rewrite), which is exactly the mistake Periodic Step exists to make
+// impossible.
+//
+// Period 2 is measured, not taste: relaxation ticks per rewrite of 1 / 2 / 3 / 4
+// give live nnb/bond 0.59 / 0.65 / 0.68 / 0.71 at 2.2 / 0.2 / 0.0 / 0.0 % overlap
+// — the knee is at 2, and every further tick costs a full force pass. It also
+// keeps the Overseer's generation budget honest (see T_RUN).
+const PERIOD = 2;
 
 // The two state values. `Active`/`Dormant` is the whole alphabet — an 8-cell rule
 // table you can read at a glance, which is the point of "census -> table -> verb".
@@ -125,7 +172,12 @@ const VERBS = ['Idle', 'Split A', 'Split B', 'Split C'];
 // =============================================================================
 const ag = makeGraph();
 
-const bs = ag.node('behaviourStep', {}, 0, 6);
+// THE ROOT IS A PERIODIC STEP, not a Behaviour Step: the automaton's clock runs
+// at half the physics clock, so every rule step gets PERIOD relaxation passes to
+// untangle what the previous rewrite tangled. Everything hangs off this one root
+// (priority roll, state, rewrite) so state and structure can never drift out of
+// phase with each other.
+const bs = ag.node('periodicStep', { period: PERIOD, phase: 0 }, 0, 6);
 
 // ---- 1. roll this generation's priority (read by neighbours NEXT generation) --
 const rnd = ag.node('getRandom', { randomType: 'float', min: '0', max: '1' }, 0, 0);
@@ -150,8 +202,10 @@ ag.vEdge(isSeed, 'result', branch, 'condition');
 // happen. Alternating their state by handle parity is the symmetry break; from
 // then on every split injects fresh Dormant nodes and the diversity sustains itself.
 const selfId = ag.node('getSelfHandle', {}, 3, 0);
-const parity = ag.node('arithmeticOperator', { operation: '%', _port_y: '2' }, 4, 0);
-ag.vEdge(selfId, 'handle', parity, 'x');
+const parity = ag.node('expression', {
+  expression: 'handle % 2', visibleCount: 1, _varName_a: 'handle',
+}, 4, 0);
+ag.vEdge(selfId, 'handle', parity, 'a');
 const seedState = ag.node('setAttribute', { attributeId: 'state' }, 5, 0);
 ag.vEdge(parity, 'result', seedState, 'value');
 ag.fEdge(branch, 'then', seedState, 'do');
@@ -225,16 +279,17 @@ ag.fEdge(setState, 'next', sw, 'check');
 // ---- 6. THE TRIANGLE SPLIT --------------------------------------------------
 // Split A/B/C = verb 1/2/3 = keep the neighbour at bond-list slot 0/1/2; the
 // other two are handed to the newborns.
-const keepIdx = ag.node('arithmeticOperator', { operation: '-', _port_y: '1' }, 8, 13);
-ag.vEdge(gatedVerb, 'result', keepIdx, 'x');
-const bRaw = ag.node('arithmeticOperator', { operation: '+', _port_y: '1' }, 9, 13);
-ag.vEdge(keepIdx, 'result', bRaw, 'x');
-const bIdx = ag.node('arithmeticOperator', { operation: '%', _port_y: '3' }, 10, 13);
-ag.vEdge(bRaw, 'result', bIdx, 'x');
-const cRaw = ag.node('arithmeticOperator', { operation: '+', _port_y: '2' }, 9, 14);
-ag.vEdge(keepIdx, 'result', cRaw, 'x');
-const cIdx = ag.node('arithmeticOperator', { operation: '%', _port_y: '3' }, 10, 14);
-ag.vEdge(cRaw, 'result', cIdx, 'x');
+// `verb - 1` is the 0-based bond slot to KEEP; the other two neighbours, handed
+// to the newborns, are at (keep + 1) % 3 and (keep + 2) % 3. Two Expression nodes
+// where five chained Math nodes used to sit — the same arithmetic, same order.
+const bIdx = ag.node('expression', {
+  expression: '(verb - 1 + 1) % 3', visibleCount: 1, _varName_a: 'verb',
+}, 9, 13);
+ag.vEdge(gatedVerb, 'result', bIdx, 'a');
+const cIdx = ag.node('expression', {
+  expression: '(verb - 1 + 2) % 3', visibleCount: 1, _varName_a: 'verb',
+}, 9, 14);
+ag.vEdge(gatedVerb, 'result', cIdx, 'a');
 
 const bAgent = ag.node('arrayElement', {}, 11, 13);
 ag.vEdge(bonded, 'agents', bAgent, 'array');
@@ -243,15 +298,40 @@ const cAgent = ag.node('arrayElement', {}, 11, 14);
 ag.vEdge(bonded, 'agents', cAgent, 'array');
 ag.vEdge(cIdx, 'result', cAgent, 'position');
 
+// ---- NEWBORN PLACEMENT: the parent MIDPOINT, not a fixed offset --------------
+// v2 inherits the edge to b, so it is born half way to b; v3 half way to c. The
+// old placement offset both newborns along a FIXED axis regardless of where b and
+// c actually were, so roughly half of all splits started with the newborn on the
+// far side of the mother from the neighbour it had to bond to — a stretched
+// spring pulling it straight back through the structure.
+//
+// Get Agent Position in RELATIVE mode gives the torus-SHORTEST vector from self
+// to the neighbour, so this is correct across a seam; hand-subtracting two
+// absolute reads would place a newborn on the wrong side of the world there.
+// The jitter (from this generation's priority roll, so it costs no extra node)
+// separates the two newborns when b and c happen to be nearly coincident, and is
+// mirrored between them so they never land on top of each other.
 const pos = ag.node('getSelfPosition', {}, 8, 5);
-const x2 = ag.node('arithmeticOperator', { operation: '+', _port_y: String(REST * 0.35) }, 9, 4);
-ag.vEdge(pos, 'x', x2, 'x');
-const y2 = ag.node('arithmeticOperator', { operation: '+', _port_y: String(REST * 0.22) }, 9, 5);
-ag.vEdge(pos, 'y', y2, 'x');
-const x3 = ag.node('arithmeticOperator', { operation: '-', _port_y: String(REST * 0.35) }, 9, 6);
-ag.vEdge(pos, 'x', x3, 'x');
-const y3 = ag.node('arithmeticOperator', { operation: '-', _port_y: String(REST * 0.22) }, 9, 7);
-ag.vEdge(pos, 'y', y3, 'x');
+const offB = ag.node('getAgentPosition', { mode: 'relative' }, 8, 3);
+ag.vEdge(bAgent, 'value', offB, 'agentId');
+const offC = ag.node('getAgentPosition', { mode: 'relative' }, 8, 7);
+ag.vEdge(cAgent, 'value', offC, 'agentId');
+
+const JITTER = REST * 0.12;
+const midpoint = (col, row, offNode, axis, sign) => {
+  const n = ag.node('expression', {
+    expression: `self + toward * 0.5 ${sign} (jitter - 0.5) * ${JITTER}`,
+    visibleCount: 3, _varName_a: 'self', _varName_b: 'toward', _varName_c: 'jitter',
+  }, col, row);
+  ag.vEdge(pos, axis, n, 'a');
+  ag.vEdge(offNode, axis, n, 'b');
+  ag.vEdge(myPrio, 'value', n, 'c');
+  return n;
+};
+const x2 = midpoint(9, 4, offB, 'x', '+');
+const y2 = midpoint(9, 5, offB, 'y', '+');
+const x3 = midpoint(9, 6, offC, 'x', '-');
+const y3 = midpoint(9, 7, offC, 'y', '-');
 
 const mk2 = ag.node('createAgent', { _port_radius: String(RADIUS) }, 10, 4);
 ag.vEdge(x2, 'result', mk2, 'x');
@@ -288,7 +368,11 @@ ag.fEdge(fb2, 'next', fb3, 'do');
 // =============================================================================
 // OVERSEER GRAPH — the rule-space sweep
 // =============================================================================
-const T_RUN = 120;
+// GENERATIONS, not rule steps. The rule runs on one generation in PERIOD, so a
+// budget of 240 generations is 120 rule steps — the same amount of rewriting the
+// pre-cadence sweep did, with the layout getting the generations in between.
+// (This is the Overseer-accounting point L2 flagged: always say which unit.)
+const T_RUN = 120 * PERIOD;
 const ov = makeGraph();
 
 const exp = ov.node('experiment', {}, 0, 3);
@@ -495,6 +579,23 @@ const properties = {
     'behaviour step.\n\n' +
     'THE INDICATORS. Node count, edge count, max degree and the degree histogram. A cubic graph reads ' +
     'max degree 3 with the entire histogram in bucket 3, and E = 3N/2 — the invariant, visible live.\n\n' +
+    'THE LAYOUT. A grown graph is only worth looking at if it can be read, and the engine\'s soft-sphere ' +
+    'repulsion reaches only 1.8 units — well inside a bond rest length of 5 — so a node pushes back only ' +
+    'once something is already on top of it. The long-range CHARGE force (Properties > Bond-Graph Agents) ' +
+    'is what holds the structure open: every pair within its cutoff repels, with the force falling ' +
+    'continuously to zero at the cutoff. A 4x-rest cutoff at strength -10 was measured against an ' +
+    '8x-rest cutoff at -3: the same layout quality, 2.6x cheaper, because the spatial-hash bin edge IS ' +
+    'the cutoff and the candidates it sweeps grow with its square. The world is sized to the agent CAP ' +
+    'rather than to today\'s population — a 220 x 220 torus left 4.6 units per node against a bond rest ' +
+    'of 5, and no repulsion strength can open a box with no room in it.\n\n' +
+    'THE CADENCE. The rule hangs off a PERIODIC STEP, not a Behaviour Step: it runs on one generation in ' +
+    'two, and the generation in between is pure layout relaxation. Growth otherwise outruns the force ' +
+    'solver — every split tangles a neighbourhood, and the next generation splits again before it has ' +
+    'untangled. Everything (priority roll, state update, rewrite) hangs off the SAME root, so state and ' +
+    'structure can never drift out of phase; gating only the rewrite would quietly build a different ' +
+    'automaton. Newborns are placed at the MIDPOINT between the mother and the neighbour they inherit, ' +
+    'rather than at a fixed offset, so a split no longer starts with a newborn on the far side of its ' +
+    'own new bond.\n\n' +
     'COMPILE TARGET. The agent layer runs on WebAssembly on purpose. The Overseer seed policy drives ' +
     'setRngSeed, which re-seeds the shared xorshift32 stream JS and WASM use; the WebGPU agent target ' +
     'seeds its per-agent PCG once at runtime creation, so a sweep there would not reproduce across ' +
@@ -503,6 +604,11 @@ const properties = {
     'Press Play. Four seed nodes wire themselves into a K4, then the graph grows by triangle splits ' +
     'while the force layout untangles it. Watch the indicators: max degree pins at 3 and E tracks 3N/2 ' +
     'exactly — that is the whole point.\n\n' +
+    'The rule runs on one generation in ' + PERIOD + ' (a Periodic Step), so the generations in between ' +
+    'are pure layout relaxation — a generation is NOT a rule step here, which is worth remembering when ' +
+    'reading the Overseer budget. Long-range charge repulsion is what holds the structure open; turn it ' +
+    'off in Properties > Bond-Graph Agents to see what this model looked like before, and why it needed ' +
+    'it.\n\n' +
     'Open the Attributes panel and press Randomize on Verb Rule or State Rule to roll a new automaton, ' +
     'or drag Split Rate to change how fast it grows. The Overseer tab runs the whole sweep: twelve ' +
     'rules, each reset to K4 and run for ' + T_RUN + ' generations, exported as a rule -> outcome table.',
@@ -533,7 +639,7 @@ const properties = {
 const centerBased = {
   enabled: true,
   agentTarget: 'wasm',
-  maxAgents: 6000,
+  maxAgents: MAX_AGENTS,
   maxBonds: MAX_BONDS,
   bondRequestDepth: 8,
   worldWidth: W,
@@ -560,8 +666,15 @@ const centerBased = {
   formDistance: 1.15,
   breakDistance: 1.8,
   agentUpdateMode: 'sync',
+  // L1 CHARGE — the long-range repulsion that holds the structure open. Without
+  // it the soft sphere only repels once two nodes are practically touching (below
+  // 1.8 units, against a bond rest of 5), so a growing graph collapses into a
+  // jammed blob: 99.6 % of nodes with an unrelated node inside contact distance.
+  chargeStrength: CHARGE_K,
+  chargeMaxDist: CHARGE_CUTOFF,
   agentCapabilities: {
     motion: 'force', body: true, collision: 'soft', bonds: 'physics', autoBond: false,
+    charge: 'on',
     growth: false, division: false, lifespan: false, populationBirth: true,
     populationDeath: false, sensing: true, sensingHeadingSource: 'velocity',
     orientation: false, fieldCoupling: false, appearance: true,

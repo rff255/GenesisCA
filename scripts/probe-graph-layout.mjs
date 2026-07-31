@@ -27,7 +27,7 @@
 //
 // Run:  node scripts/probe-graph-layout.mjs
 import { build } from 'esbuild';
-import { writeFileSync, rmSync, mkdtempSync } from 'fs';
+import { writeFileSync, readFileSync, rmSync, mkdtempSync } from 'fs';
 import { tmpdir } from 'os';
 import { join, dirname, resolve } from 'path';
 import { fileURLToPath, pathToFileURL } from 'url';
@@ -36,7 +36,7 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const ENTRY = `
 export { createAgentStore, buildSpatialHash, formBond, computeAgentMaxHashBins } from '../src/simulator/engine/agentEngine.ts';
 export { compileAgentGraphWasm, instantiateAgentWasm } from '../src/modeler/vpl/compiler/agentWasm/compile.ts';
-export { chargeParamsOf, chargeBinEdgeOf, cbNum } from '../src/model/centerBased.ts';
+export { chargeParamsOf, chargeBinEdgeOf, cbNum, layoutIterationsOf } from '../src/model/centerBased.ts';
 `;
 const dir = mkdtempSync(join(tmpdir(), 'gca-layout-'));
 const entryPath = join(ROOT, 'scripts', '__layout_entry.ts');
@@ -46,6 +46,7 @@ await build({ entryPoints: [entryPath], bundle: true, format: 'esm', platform: '
 const {
   createAgentStore, buildSpatialHash, formBond, computeAgentMaxHashBins,
   compileAgentGraphWasm, instantiateAgentWasm, chargeParamsOf, chargeBinEdgeOf, cbNum,
+  layoutIterationsOf,
 } = await import(pathToFileURL(outPath).href);
 
 const mulberry = seed => () => { seed |= 0; seed = (seed + 0x6D2B79F5) | 0; let t = Math.imul(seed ^ (seed >>> 15), 1 | seed); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
@@ -85,17 +86,23 @@ function copyHashIntoMemory(s, hash) {
   if (used > 0) new Int32Array(buf, L.hashBinAgentsOffset, used).set(hash.binAgents.subarray(0, used));
 }
 
-function metrics(s) {
+/** Torus-shortest delta along one axis (a no-op on a bounded world). Every
+ *  distance the metrics take must fold, or a torus model reads a wrapped pair as
+ *  world-sized and the numbers flatter it. */
+const wrapD = (d, span, torus) => { if (!torus) return d; const h = span / 2; return d > h ? d - span : d < -h ? d + span : d; };
+
+function metrics(s, W = Infinity, H = Infinity, torus = false) {
   const hw = s.highWater; let bsum = 0, bn = 0;
+  const dist = (i, j) => Math.hypot(wrapD(s.x[j] - s.x[i], W, torus), wrapD(s.y[j] - s.y[i], H, torus));
   for (let i = 0; i < hw; i++) { if (!s.alive[i]) continue; const b = i * s.maxBonds;
-    for (let k = 0; k < s.bondCount[i]; k++) { const j = s.bondPartner[b + k]; if (j < i) continue; bsum += Math.hypot(s.x[j] - s.x[i], s.y[j] - s.y[i]); bn++; } }
+    for (let k = 0; k < s.bondCount[i]; k++) { const j = s.bondPartner[b + k]; if (j < i) continue; bsum += dist(i, j); bn++; } }
   const bond = bn ? bsum / bn : 0;
   let nnbSum = 0, nnbN = 0, overlap = 0;
   for (let i = 0; i < hw; i++) {
     if (!s.alive[i]) continue;
     const ps = new Set(partners(s, i)); let best = Infinity;
     for (let j = 0; j < hw; j++) { if (j === i || !s.alive[j] || ps.has(j)) continue;
-      const d = Math.hypot(s.x[j] - s.x[i], s.y[j] - s.y[i]); if (d < best) best = d; }
+      const d = dist(i, j); if (d < best) best = d; }
     if (best < Infinity) { nnbSum += best; nnbN++; if (best < s.radius[i] * 2) overlap++; }
   }
   const nnb = nnbN ? nnbSum / nnbN : 0;
@@ -103,27 +110,33 @@ function metrics(s) {
 }
 
 // -- grow by triangle splits, relaxing between, through the REAL engine --------
-async function grow({ target, range, rest, chargeOn, chargeMaxDist, ticksPerSplitRound, label }) {
+async function grow({
+  target, range, rest, chargeOn, chargeMaxDist, ticksPerSplitRound, label,
+  // Optional — every default reproduces the historical rows exactly.
+  chargeStrength = -3, world = 4000, torus = false, splitFrac = 1 / 8,
+  midpointNewborns = false, radius = 0.9, stiff = 0.55, neighbourQueryRadius = 6,
+  settleTicks = 300, maxAgents = null,
+}) {
   const rnd = mulberry(99);
-  const MAX = target + 16, W = 4000, H = 4000, cx = W / 2, cy = H / 2;
+  const MAX = maxAgents ?? target + 16, W = world, H = world, cx = W / 2, cy = H / 2;
   const cfg = {
     enabled: true, maxAgents: MAX, maxBonds: 3, worldWidth: W, worldHeight: H, worldDepth: 1,
-    defaultRadius: 0.9, bondStiffness: 0.55, repulsionStiffness: 0.9, adhesionStiffness: 0,
+    defaultRadius: radius, bondStiffness: stiff, repulsionStiffness: 0.9, adhesionStiffness: 0,
     interactionRange: range, timeStep: 0.12, drag: 1, momentum: 0, maxSpeed: 0,
-    neighbourQueryRadius: 6, growthRate: 0, bondRestLength: rest,
+    neighbourQueryRadius, growthRate: 0, bondRestLength: rest,
     // The capability profile is what turns the charge on — the same `usesCharge`
     // gate the engine reads, so the compiler emits the charge params only here.
     agentCapabilities: chargeOn
       ? { motion: 'force', body: true, collision: 'soft', bonds: 'physics', charge: 'on' }
       : { motion: 'force', body: true, collision: 'soft', bonds: 'physics', charge: 'off' },
-    ...(chargeOn ? { chargeStrength: -3, chargeMaxDist } : {}),
+    ...(chargeOn ? { chargeStrength, chargeMaxDist } : {}),
   };
   const maxHashBins = computeAgentMaxHashBins(W, H, 1, cfg.interactionRange, cfg.defaultRadius, cfg.neighbourQueryRadius);
   const s = createAgentStore(cfg, [], { wasmBacked: true, maxHashBins });
   s.worldDepth = 1; s.dt = cfg.timeStep;
 
   const r = compileAgentGraphWasm(agentGraphNodes, agentGraphEdges, {
-    properties: { gridWidth: W, gridHeight: H, dimension: '2d', gridDepth: 1, boundaryTreatment: 'constant' },
+    properties: { gridWidth: W, gridHeight: H, dimension: '2d', gridDepth: 1, boundaryTreatment: torus ? 'torus' : 'constant' },
     topologyMode: { gridCells: false, agents: true },
     centerBased: cfg, agentGraphNodes, agentGraphEdges, agentVariables: [],
     graphNodes: [], graphEdges: [], macroDefs: [], variables: [], attributes: [], neighborhoods: [],
@@ -133,10 +146,10 @@ async function grow({ target, range, rest, chargeOn, chargeMaxDist, ticksPerSpli
   if (!forcePass) throw new Error('the agent module exported no forcePass');
 
   // K4 seed
-  for (let i = 0; i < 4; i++) { s.alive[i] = 1; s.epoch[i] = 1; s.radius[i] = 0.9; s.targetRadius[i] = 0.9;
+  for (let i = 0; i < 4; i++) { s.alive[i] = 1; s.epoch[i] = 1; s.radius[i] = radius; s.targetRadius[i] = radius;
     s.x[i] = cx + Math.cos(i * Math.PI / 2) * rest; s.y[i] = cy + Math.sin(i * Math.PI / 2) * rest; }
   s.highWater = 4; s.liveCount = 4;
-  for (let a = 0; a < 4; a++) for (let b = a + 1; b < 4; b++) formBond(s, a, b, rest, 0.55);
+  for (let a = 0; a < 4; a++) for (let b = a + 1; b < 4; b++) formBond(s, a, b, rest, stiff);
 
   // The engine's own resolvers decide the charge constants AND the bin edge — the
   // probe never recomputes them, so it cannot accidentally test a different force
@@ -144,11 +157,11 @@ async function grow({ target, range, rest, chargeOn, chargeMaxDist, ticksPerSpli
   const ch = chargeParamsOf(cfg);
   const binEdge = Math.max(cfg.interactionRange * 2 * cfg.defaultRadius, cfg.neighbourQueryRadius, chargeBinEdgeOf(cfg));
   const dtOverEta = cfg.timeStep / cfg.drag;
-  const alloc = () => { const id = s.highWater++; s.alive[id] = 1; s.epoch[id] = 1; s.radius[id] = 0.9; s.targetRadius[id] = 0.9; s.liveCount++; return id; };
+  const alloc = () => { const id = s.highWater++; s.alive[id] = 1; s.epoch[id] = 1; s.radius[id] = radius; s.targetRadius[id] = radius; s.liveCount++; return id; };
 
   let pairOps = 0, ticks = 0;
   const tick = () => {
-    const hash = buildSpatialHash(s, Math.max(1e-3, binEdge), W, H, 1, false, maxHashBins);
+    const hash = buildSpatialHash(s, Math.max(1e-3, binEdge), W, H, 1, torus, maxHashBins);
     s.forceX.fill(0, 0, s.highWater); s.forceY.fill(0, 0, s.highWater);
     copyHashIntoMemory(s, hash);
     forcePass(
@@ -156,7 +169,7 @@ async function grow({ target, range, rest, chargeOn, chargeMaxDist, ticksPerSpli
       hash ? hash.binSizeX : 1, hash ? hash.binSizeY : 1, hash ? hash.binSizeZ : 1,
       dtOverEta, cfg.repulsionStiffness, cfg.adhesionStiffness, cfg.interactionRange,
       cfg.momentum, cfg.maxSpeed, cfg.growthRate,
-      W, H, 1, /*bonding*/ 0, /*torus*/ 0,
+      W, H, 1, /*bonding*/ 0, torus ? 1 : 0,
       hash ? hash.originX : 0, hash ? hash.originY : 0, hash ? hash.originZ : 0,
       /*doCollision*/ 1, /*doSprings*/ 1, /*doDensity*/ 0,
       ch.doCharge ? 1 : 0, ch.chargeK, ch.chargeMaxD2, ch.chargeMinC,
@@ -173,7 +186,9 @@ async function grow({ target, range, rest, chargeOn, chargeMaxDist, ticksPerSpli
   while (s.liveCount < target) {
     // one split round: split a random independent set (spaced-out ids)
     const cand = []; for (let i = 0; i < s.highWater; i++) if (s.alive[i] && s.bondCount[i] === 3) cand.push(i);
-    const nSplit = Math.max(1, Math.min(cand.length >> 3, target - s.liveCount));
+    // `floor(len * 1/8)` is exactly the historical `len >> 3`, so the default rows
+    // below reproduce the pre-L3 numbers; `splitFrac` only bites when overridden.
+    const nSplit = Math.max(1, Math.min(Math.floor(cand.length * splitFrac), target - s.liveCount));
     const chosen = new Set();
     for (let t = 0; t < nSplit * 3 && chosen.size < nSplit; t++) {
       const i = cand[(rnd() * cand.length) | 0];
@@ -185,17 +200,41 @@ async function grow({ target, range, rest, chargeOn, chargeMaxDist, ticksPerSpli
       if (s.liveCount >= target) break;
       const [a, b, c] = partners(s, i);
       const j = alloc(), k = alloc();
-      // newborns placed near the mother (the reference seeds at the parent midpoint)
-      s.x[j] = s.x[i] + (rnd() - 0.5) * rest; s.y[j] = s.y[i] + (rnd() - 0.5) * rest;
-      s.x[k] = s.x[i] + (rnd() - 0.5) * rest; s.y[k] = s.y[i] + (rnd() - 0.5) * rest;
+      if (midpointNewborns) {
+        // The shipped placement (L3): each newborn starts at the torus-shortest
+        // MIDPOINT between the mother and the neighbour it inherits, plus a small
+        // mirrored jitter — so a split never begins with a newborn on the far side
+        // of its own new bond.
+        const mid = (t, axis) => {
+          const self = axis === 'x' ? s.x[i] : s.y[i];
+          const span = axis === 'x' ? W : H;
+          return self + wrapD((axis === 'x' ? s.x[t] : s.y[t]) - self, span, torus) * 0.5;
+        };
+        const jit = (rnd() - 0.5) * rest * 0.12;
+        s.x[j] = mid(b, 'x') + jit; s.y[j] = mid(b, 'y') + jit;
+        s.x[k] = mid(c, 'x') - jit; s.y[k] = mid(c, 'y') - jit;
+      } else {
+        // newborns placed near the mother (the PRE-L3 placement)
+        s.x[j] = s.x[i] + (rnd() - 0.5) * rest; s.y[j] = s.y[i] + (rnd() - 0.5) * rest;
+        s.x[k] = s.x[i] + (rnd() - 0.5) * rest; s.y[k] = s.y[i] + (rnd() - 0.5) * rest;
+      }
       breakPair(s, i, b); breakPair(s, i, c);
-      formBond(s, i, j, rest, 0.55); formBond(s, i, k, rest, 0.55); formBond(s, j, k, rest, 0.55);
-      formBond(s, j, b, rest, 0.55); formBond(s, k, c, rest, 0.55);
+      formBond(s, i, j, rest, stiff); formBond(s, i, k, rest, stiff); formBond(s, j, k, rest, stiff);
+      formBond(s, j, b, rest, stiff); formBond(s, k, c, rest, stiff);
     }
     for (let t = 0; t < ticksPerSplitRound; t++) tick();
   }
-  for (let t = 0; t < 300; t++) tick();
-  return { label, N: s.liveCount, ms: Date.now() - t0, nbrPerAgent: pairOps / Math.max(1, ticks) / Math.max(1, s.liveCount), ...metrics(s) };
+  // The LIVE picture — what the user actually sees while the model is growing.
+  // Reported alongside the settled numbers because a layout that only looks right
+  // after the growth stops is not the layout anyone opens the model to see.
+  const live = metrics(s, W, H, torus);
+  for (let t = 0; t < settleTicks; t++) tick();
+  return {
+    label, N: s.liveCount, ms: Date.now() - t0,
+    nbrPerAgent: pairOps / Math.max(1, ticks) / Math.max(1, s.liveCount),
+    liveRatio: live.ratio, liveOverlapPct: live.overlapPct,
+    ...metrics(s, W, H, torus),
+  };
 }
 
 const rest = 5, target = 1200;
@@ -300,8 +339,58 @@ for (const c of [{ is3d: false, cutoff: 20 }, { is3d: false, cutoff: 40 }, { is3
 }
 
 // ---------------------------------------------------------------------------
+// L3 — THE SHIPPED MODEL, at its OWN parameters. The sweep above answers "what
+// can this force do"; this answers "does the model the user opens actually lay
+// out". It reads `Cubic GRA.gcaproj` and takes EVERYTHING from it — world size,
+// torus, charge strength and cutoff, radius, rest length, stiffness, and the
+// relaxation-per-rewrite ratio (Periodic Step period x layoutIterations) — so a
+// retune that regresses the layout fails here by metric, not by eye.
+//
+// The split fraction is the model's own Split Rate: only an agent whose priority
+// is BOTH below Split Rate and the strict local minimum among its three
+// neighbours may rewrite, and for a small rate that is ~Split Rate of the
+// population per rule step.
+// ---------------------------------------------------------------------------
+const shipped = JSON.parse(readFileSync(join(ROOT, 'public', 'models', 'Cubic GRA.gcaproj'), 'utf8'));
+const scb = shipped.centerBased;
+const period = Math.max(1, Number(
+  shipped.agentGraphNodes.find(n => n.data.nodeType === 'periodicStep')?.data.config?.period ?? 1));
+const relaxPerRewrite = period * layoutIterationsOf(scb);
+const splitRate = Number(shipped.attributes.find(a => a.id === 'splitRate')?.defaultValue) || 0.02;
+const SHIPPED_TARGET = 2000;
+
+const shippedRow = await grow({
+  label: 'SHIPPED Cubic GRA, own parameters',
+  target: SHIPPED_TARGET,
+  maxAgents: cbNum(scb, 'maxAgents'),
+  range: cbNum(scb, 'interactionRange'),
+  rest: cbNum(scb, 'bondRestLength'),
+  radius: cbNum(scb, 'defaultRadius'),
+  stiff: cbNum(scb, 'bondStiffness'),
+  neighbourQueryRadius: cbNum(scb, 'neighbourQueryRadius'),
+  world: cbNum(scb, 'worldWidth'),
+  torus: shipped.properties.boundaryTreatment === 'torus',
+  chargeOn: scb.agentCapabilities?.charge === 'on',
+  chargeStrength: cbNum(scb, 'chargeStrength'),
+  chargeMaxDist: cbNum(scb, 'chargeMaxDist'),
+  ticksPerSplitRound: relaxPerRewrite,
+  splitFrac: splitRate,
+  midpointNewborns: true,
+  // NO free settle: the gate must hold on the LIVE picture, mid-growth, which is
+  // the only state anyone actually looks at.
+  settleTicks: 0,
+});
+
+console.log(`\nTHE SHIPPED MODEL — grown to N ${SHIPPED_TARGET} at its own parameters`);
+console.log(`  world ${cbNum(scb, 'worldWidth')}${shipped.properties.boundaryTreatment === 'torus' ? ' torus' : ''}`
+  + `  charge ${scb.agentCapabilities?.charge === 'on' ? `k=${cbNum(scb, 'chargeStrength')} cutoff ${cbNum(scb, 'chargeMaxDist')} (${(cbNum(scb, 'chargeMaxDist') / cbNum(scb, 'bondRestLength')).toFixed(1)}x rest)` : 'OFF'}`
+  + `  period ${period} x layoutIterations ${layoutIterationsOf(scb)} = ${relaxPerRewrite} relaxation passes per rewrite`);
+console.log(`  N ${shippedRow.N}   bond/rest ${(shippedRow.bond / cbNum(scb, 'bondRestLength')).toFixed(2)}`
+  + `   nnb/bond ${shippedRow.ratio.toFixed(2)}   overlap ${shippedRow.overlapPct.toFixed(1)}%`);
+
+// ---------------------------------------------------------------------------
 // THE GATE. The shipped (charge-off) row is the jammed baseline; the 8×-rest row
-// is the shipped default. Assert the fix rather than eyeballing the table.
+// is the sweep's reference point; the shipped-model row is the product.
 // ---------------------------------------------------------------------------
 const base = results[0], fix = results[2];
 let fail = 0;
@@ -311,6 +400,15 @@ gate('baseline (charge off) reproduces the jam', base.overlapPct > 90 && base.ra
   `overlap ${base.overlapPct.toFixed(1)}% (want >90), nnb/bond ${base.ratio.toFixed(2)} (want <0.2) — if this passes, the probe is no longer measuring the bug`);
 gate('charge at 8x rest opens the layout: overlap <= 1%', fix.overlapPct <= 1, `overlap ${fix.overlapPct.toFixed(1)}%`);
 gate('charge at 8x rest opens the layout: nnb/bond >= 0.6', fix.ratio >= 0.6, `nnb/bond ${fix.ratio.toFixed(2)}`);
+gate(`THE SHIPPED MODEL at N >= ${SHIPPED_TARGET}: overlap <= 1%`, shippedRow.overlapPct <= 1,
+  `overlap ${shippedRow.overlapPct.toFixed(1)}%`);
+gate(`THE SHIPPED MODEL at N >= ${SHIPPED_TARGET}: nnb/bond >= 0.6`, shippedRow.ratio >= 0.6,
+  `nnb/bond ${shippedRow.ratio.toFixed(2)}`);
+gate('the shipped model actually turned the charge on', scb.agentCapabilities?.charge === 'on',
+  'charge capability is off — the flagship would ship jammed again');
+gate('the shipped world holds the agent CAP at the settled spacing',
+  cbNum(scb, 'worldWidth') ** 2 >= cbNum(scb, 'maxAgents') * (cbNum(scb, 'bondRestLength') * 1.45) ** 2,
+  `world ${cbNum(scb, 'worldWidth')}^2 vs cap ${cbNum(scb, 'maxAgents')} x (${cbNum(scb, 'bondRestLength')} x 1.45)^2`);
 console.log(`\n${fail === 0 ? 'LAYOUT PROBE ✓' : `${fail} FAILED ✗`}`);
 rmSync(entryPath, { force: true }); rmSync(dir, { recursive: true, force: true });
 process.exit(fail === 0 ? 0 : 1);

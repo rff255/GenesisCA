@@ -84,12 +84,37 @@ function makeGraph() {
 }
 
 // --- tunables ----------------------------------------------------------------
-const W = 110, H = 110;
 const POP = 220;
+const MAX_AGENTS = 400;
 const MAX_BONDS = 6;
 const RADIUS = 1.1;
 const REST = 7.0;
 const STIFF = 0.35;
+
+// --- L3 LAYOUT ---------------------------------------------------------------
+// THE WORLD SIZING RULE (shared with Cubic GRA): a bonded cloud laid out by the
+// charge force settles at ~1.45 x the bond rest length, so each agent needs about
+// (rest * 1.45)^2 of area, and the world must hold the CAP, not today's count:
+//     side = ceil( sqrt( maxAgents * (rest * 1.45)^2 ) )
+//          = ceil( sqrt( 400 * (7 * 1.45)^2 ) ) = 204  ->  220
+// The old 110 x 110 gave 55 units^2 per agent against a bond rest of 7 (which
+// needs ~103), so the couplers were choosing partners inside a jam.
+const W = 220, H = 220;
+
+// THE CHARGE — same measured shape as the flagship: a 4x-rest cutoff with a
+// strong k beats an 8x-rest cutoff at the default k on BOTH quality and cost,
+// because the bin edge IS the cutoff and candidates grow with its square.
+const CHARGE_K = -10;
+const CHARGE_CUTOFF = REST * 4;   // 28 world units
+
+// SOLVER RELAXATION (L3). Two force passes per generation. SDCA is the model that
+// wants the ENGINE knob rather than a rule-graph Periodic Step: its population is
+// FIXED (no growth to outrun), its rule already carries its own rate semantics in
+// Link Rate, and its couplers decide by DISTANCE — so what it needs is a settled
+// cloud each generation, not a slower clock. Keeping the generation counter
+// meaning one rule step also keeps the hysteresis band (O8) a per-generation
+// property. The flagship Cubic GRA demonstrates the other half, cadence.
+const LAYOUT_ITERATIONS = 2;
 
 // =============================================================================
 // AGENT INIT EVENT — spawn the population from the graph
@@ -106,12 +131,16 @@ ag.fEdge(init, 'do', spawnLoop, 'do');
 
 const rx = ag.node('getRandom', { randomType: 'float', min: '0', max: '1' }, 2, -2);
 const ry = ag.node('getRandom', { randomType: 'float', min: '0', max: '1' }, 2, -1);
-const px = ag.node('arithmeticOperator', { operation: '*' }, 3, -2);
-ag.vEdge(rx, 'value', px, 'x');
-ag.vEdge(init, 'worldWidth', px, 'y');
-const py = ag.node('arithmeticOperator', { operation: '*' }, 3, -1);
-ag.vEdge(ry, 'value', py, 'x');
-ag.vEdge(init, 'worldHeight', py, 'y');
+const px = ag.node('expression', {
+  expression: 'u * width', visibleCount: 2, _varName_a: 'u', _varName_b: 'width',
+}, 3, -2);
+ag.vEdge(rx, 'value', px, 'a');
+ag.vEdge(init, 'worldWidth', px, 'b');
+const py = ag.node('expression', {
+  expression: 'u * height', visibleCount: 2, _varName_a: 'u', _varName_b: 'height',
+}, 3, -1);
+ag.vEdge(ry, 'value', py, 'a');
+ag.vEdge(init, 'worldHeight', py, 'b');
 
 const mk = ag.node('createAgent', { _port_radius: String(RADIUS) }, 4, 0);
 ag.vEdge(px, 'result', mk, 'x');
@@ -155,12 +184,16 @@ function driveFor(otherState, col, row) {
   const agree = ag.node('statement', { operation: '==', compareType: 'numerical' }, col, row);
   ag.vEdge(myState, 'value', agree, 'x');
   ag.vEdge(otherState, 'value', agree, 'y');
-  const bonus = ag.node('arithmeticOperator', { operation: '*' }, col + 1, row);
-  ag.vEdge(agree, 'result', bonus, 'x');
-  ag.vEdge(mBonus, 'value', bonus, 'y');
-  const d = ag.node('arithmeticOperator', { operation: '+' }, col + 2, row);
-  ag.vEdge(mDrive, 'value', d, 'x');
-  ag.vEdge(bonus, 'result', d, 'y');
+  // ONE Expression where a Multiply fed an Add. `drive + agree * bonus` binds
+  // exactly as the chain did (`*` before `+`), so this is the same arithmetic in
+  // the same order — a pure refactor, not a re-derivation.
+  const d = ag.node('expression', {
+    expression: 'drive + agree * bonus', visibleCount: 3,
+    _varName_a: 'drive', _varName_b: 'agree', _varName_c: 'bonus',
+  }, col + 1, row);
+  ag.vEdge(mDrive, 'value', d, 'a');
+  ag.vEdge(agree, 'result', d, 'b');
+  ag.vEdge(mBonus, 'value', d, 'c');
   return d;
 }
 
@@ -174,16 +207,17 @@ const dBond = driveFor(pState, 4, 10);
 
 const oldLambda = ag.node('getBondAttribute', { attributeId: 'strength' }, 4, 12);
 ag.vEdge(feBond, 'partnerId', oldLambda, 'partnerId');
-// lambda' = lambda + rate * (d - lambda)
-const delta = ag.node('arithmeticOperator', { operation: '-' }, 7, 12);
-ag.vEdge(dBond, 'result', delta, 'x');
-ag.vEdge(oldLambda, 'value', delta, 'y');
-const scaled = ag.node('arithmeticOperator', { operation: '*' }, 8, 12);
-ag.vEdge(delta, 'result', scaled, 'x');
-ag.vEdge(mRate, 'value', scaled, 'y');
-const newLambda = ag.node('arithmeticOperator', { operation: '+' }, 9, 12);
-ag.vEdge(oldLambda, 'value', newLambda, 'x');
-ag.vEdge(scaled, 'result', newLambda, 'y');
+// lambda' = lambda + rate * (d - lambda) — the formula the model's Rule
+// Description states, now written as itself instead of as three chained Math
+// nodes. `(d - lambda) * rate` and `rate * (d - lambda)` are bit-identical
+// (IEEE multiplication is commutative), so the refactor changes no decision.
+const newLambda = ag.node('expression', {
+  expression: 'lambda + rate * (d - lambda)', visibleCount: 3,
+  _varName_a: 'lambda', _varName_b: 'rate', _varName_c: 'd',
+}, 8, 12);
+ag.vEdge(oldLambda, 'value', newLambda, 'a');
+ag.vEdge(mRate, 'value', newLambda, 'b');
+ag.vEdge(dBond, 'result', newLambda, 'c');
 
 const writeLambda = ag.node('setBondAttribute', { attributeId: 'strength' }, 10, 11);
 ag.vEdge(feBond, 'partnerId', writeLambda, 'partnerId');
@@ -399,7 +433,7 @@ const properties = {
 const centerBased = {
   enabled: true,
   agentTarget: 'webgpu',
-  maxAgents: 400,
+  maxAgents: MAX_AGENTS,
   maxBonds: MAX_BONDS,
   bondRequestDepth: 16,
   worldWidth: W,
@@ -423,8 +457,16 @@ const centerBased = {
   formDistance: 1.15,
   breakDistance: 1.8,
   agentUpdateMode: 'sync',
+  // L1 CHARGE — the only engine force with reach beyond contact distance, and so
+  // the only one that can hold a bonded cloud open. Without it the couplers pick
+  // partners out of a jam where every agent touches every other.
+  chargeStrength: CHARGE_K,
+  chargeMaxDist: CHARGE_CUTOFF,
+  // L3 — two force passes per generation (see LAYOUT_ITERATIONS above).
+  layoutIterations: LAYOUT_ITERATIONS,
   agentCapabilities: {
     motion: 'force', body: true, collision: 'soft', bonds: 'physics', autoBond: false,
+    charge: 'on',
     growth: false, division: false, lifespan: false, populationBirth: true,
     populationDeath: false, sensing: true, sensingHeadingSource: 'velocity',
     orientation: false, fieldCoupling: false, appearance: true,
