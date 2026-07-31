@@ -111,7 +111,7 @@ copy), so a future regression in the force pass is caught by metric, not by eye.
 **Commit(s)**
 - `ed10907` — feat(agents): layoutIterations — run the force integrator N times per generation
 - `4713563` — feat(gra): retune the flagship samples for a readable layout, and refactor their Math chains to Expression
-- (this report + the docs sweep — final commit)
+- `6d907b9` — docs(glc): the L3 Completion Report, the docs sweep, and the ABI-audit prefix rule
 
 **Files touched**
 ```
