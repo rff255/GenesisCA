@@ -87,7 +87,7 @@ both and serialising keeps the force pass under one editor at a time.
 
 | Phase | Handoff | State | Commit | Notes |
 |---|---|---|---|---|
-| L1 Charge force | [HANDOFF_GLC_L1_CHARGE.md](HANDOFF_GLC_L1_CHARGE.md) | READY | — | measured: a 4–8× cutoff suffices, **no Barnes–Hut** |
+| L1 Charge force | [HANDOFF_GLC_L1_CHARGE.md](HANDOFF_GLC_L1_CHARGE.md) | **DONE** | `GRA` | overlap **99.2 % → 0.2 %**, nnb/bond **0.18 → 0.81**. No Barnes–Hut. Assumption 4 partially FALSE (ForceControl was NOT in the uniform harness — registered, additive, no redesign). **L3 must enlarge the sample worlds**: `Cubic GRA` is saturated (4.6 units/agent vs rest 5), so it stalls at 14.3 % overlap live |
 | L2 Cadence | [HANDOFF_GLC_L2_CADENCE.md](HANDOFF_GLC_L2_CADENCE.md) | READY | — | the GPU residency counter is the delicate part |
 | L3 Samples + knob | [HANDOFF_GLC_L3_SAMPLES.md](HANDOFF_GLC_L3_SAMPLES.md) | READY | — | the visible payoff + the Expression refactor |
 
@@ -107,9 +107,16 @@ engine force loop** and reports:
 | `nnb/bond` = nearest **non**-bonded ÷ bond | **≥ 0.6** | **0.06** |
 | `overlap%` | **~0** | **99.2** |
 
-The shipped baseline is `0.06 / 99.2 %`. **L1 must move it to ≥ 0.6 / ≤ 1 %.**
-Extend the probe to drive the REAL engine charge term (not its local copy) once L1
-lands, so it tests shipped code.
+**L1 DONE**: the probe now drives the REAL WASM force pass over a real
+`createAgentStore` (it used to carry its own copy of the force loop), and it
+**asserts** its own gate — including that the charge-off baseline is still jammed —
+exiting non-zero on failure. Post-rewiring the shipped baseline reads
+`0.18 / 99.2 %` rather than `0.06 / 99.2 %`: the old copy modelled a narrower
+repulsion than the engine has (`interactionRange` as an absolute distance rather
+than a multiplier of contact distance). **Trust the post-L1 numbers.** Charge at the
+default 8×-rest cutoff reaches `0.81 / 0.2 %`. The probe also reports a **3D cost
+table** — the stencil is a volume, so 3D costs ~6.6× 2D at the same cutoff and 3D
+models should start at ~4× the bond rest length.
 
 ### 3.2 The bin-edge trap test (L1)
 Place two agents at `0.9 × chargeMaxDist` apart with **no** bond and assert a non-zero

@@ -36,6 +36,8 @@ export const CENTER_BASED_DEFAULTS = {
   formDistance: 1.1,         // d_form, × contact distance (auto-bond within)
   breakDistance: 1.6,        // d_break, × contact distance (> d_form — hysteresis)
   positionalIterations: 2,   // Jacobi sweeps for the hard positional collision (more = tighter no-overlap packing)
+  chargeStrength: -3,        // k for the long-range charge (NEGATIVE = repulsive); see usesCharge
+  chargeMaxDist: 0,          // 0 / absent ⇒ the DERIVED default 8 × bondRestLength (see chargeMaxDistOf)
   bondRequestDepth: 8,       // GRA P4 — per-agent structural-request QUEUE depth (form/break/rewire ops per generation)
 } as const;
 
@@ -99,6 +101,81 @@ export function usesSoftCollision(cfg: CenterBasedConfig | undefined | null): bo
  *  integration). Distinct from soft; runs under any Motion (it edits positions). */
 export function usesPositionalCollision(cfg: CenterBasedConfig | undefined | null): boolean {
   return collisionMode(cfg) === 'positional';
+}
+
+// ---------------------------------------------------------------------------
+// L1 — the LONG-RANGE CHARGE force. The one engine force with reach BEYOND
+// contact distance, and therefore the only one that can hold a grown structure
+// open. Everything below is default-OFF and resolved from the profile, so a model
+// without the capability produces byte-identical code on every target.
+//
+// WHY IT EXISTS (measured, not reasoned — see docs/IMPACT_MAP_GRAPH_LAYOUT_CADENCE):
+// the soft-sphere repels only below `sij = ri + rj`, ATTRACTS from there to
+// `interactionRange × sij`, and is zero beyond — while bonds rest much further out.
+// So a node pushes back only once something is on top of it and a growing bond
+// graph collapses: 99.2 % of nodes ended up with an unrelated node inside contact
+// distance. Widening `interactionRange` does NOT help (it widens the SEARCH, not
+// the force, and past contact the sign flips to adhesion). Charge fixes it.
+// ---------------------------------------------------------------------------
+
+/** Resolve whether the engine runs the LONG-RANGE CHARGE pair force. Profile-aware
+ *  and, unlike the other physics resolvers, it has **no legacy fallback** — charge
+ *  is net-new, so a config without the capability (every pre-L1 `.gcaproj`) can only
+ *  ever resolve to `false` and stays byte-identical. An explicit-but-partial profile
+ *  (JSON that predates the field) reads `undefined !== 'on'` ⇒ off, by construction. */
+export function usesCharge(cfg: CenterBasedConfig | undefined | null): boolean {
+  return cfg?.agentCapabilities?.charge === 'on';
+}
+
+/** The charge strength `k` (negative = repulsive). Absent ⇒ the engine default. */
+export function chargeStrengthOf(cfg: CenterBasedConfig | undefined | null): number {
+  return cbNum(cfg, 'chargeStrength');
+}
+
+/** The charge CUTOFF distance. A stored positive value wins; otherwise the DERIVED
+ *  default `8 × bondRestLength` (DC6). Deliberately NOT a world-absolute constant:
+ *  the measured sweet spot is a MULTIPLE of the model's own bond rest length
+ *  (quality saturates by ~8×; unbounded merely inflates the layout), so the default
+ *  has to scale with the model. Always finite and > 0 so the `min_c` term and the
+ *  bin-edge widening below are well-defined. */
+export const CHARGE_MAX_DIST_REST_MULTIPLE = 8;
+export function chargeMaxDistOf(cfg: CenterBasedConfig | undefined | null): number {
+  const v = cfg?.chargeMaxDist;
+  if (typeof v === 'number' && Number.isFinite(v) && v > 0) return v;
+  return CHARGE_MAX_DIST_REST_MULTIPLE * Math.max(1e-6, cbNum(cfg, 'bondRestLength'));
+}
+
+/** THE TRAP, in one place: how far the spatial-hash bin edge must reach for the
+ *  charge force to be complete. The neighbour pass walks a 3×3(×3) stencil, so it
+ *  only ever sees pairs closer than ONE bin edge — if the edge does not cover
+ *  `chargeMaxDist`, every pair beyond it is invisible and the force is **silently
+ *  truncated**: the model looks plausible and the physics is wrong, with no error
+ *  anywhere. So every site that computes a bin edge for the force hash joins this
+ *  into its `max(...)`. Returns 0 when charge is off ⇒ the `max` is unchanged ⇒ the
+ *  hash geometry, and therefore every downstream result, is byte-identical.
+ *
+ *  Safe for the hash RESERVE by construction: the reserve
+ *  (`computeAgentMaxHashBins`) is computed from the SMALLEST possible edge, and a
+ *  LARGER edge only ever yields FEWER bins — so widening can never overflow it.
+ *  (The reserve itself must NOT be widened: it is baked into the agent memory
+ *  layout, so changing it would shift every offset past the hash region.) */
+export function chargeBinEdgeOf(cfg: CenterBasedConfig | undefined | null): number {
+  return usesCharge(cfg) ? chargeMaxDistOf(cfg) : 0;
+}
+
+/** The charge constants the force integrator actually consumes, PRECOMPUTED once
+ *  per step — the SINGLE source shared by the JS force loop, the WASM force-pass
+ *  arg list, and both WebGPU dispatch sites (per-gen + resident). Precomputing
+ *  `maxD2` and `minC` here (rather than in each integrator) is the same discipline
+ *  as `dtOverEta`: all four surfaces then fold bit-identical constants instead of
+ *  each re-deriving them, which is what makes JS↔WASM bit-parity hold. Charge off
+ *  ⇒ every field 0 ⇒ each surface's `doCharge` branch is never taken. */
+export interface ChargeParams { doCharge: boolean; chargeK: number; chargeMaxD2: number; chargeMinC: number }
+export function chargeParamsOf(cfg: CenterBasedConfig | undefined | null): ChargeParams {
+  const doCharge = usesCharge(cfg);
+  const maxD = doCharge ? chargeMaxDistOf(cfg) : 0;
+  const chargeMaxD2 = maxD * maxD;
+  return { doCharge, chargeK: doCharge ? chargeStrengthOf(cfg) : 0, chargeMaxD2, chargeMinC: 1 / (1 + chargeMaxD2) };
 }
 
 /** Resolve whether the engine runs its bond SPRINGS this model. Profile-aware:

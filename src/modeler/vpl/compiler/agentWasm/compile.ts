@@ -68,7 +68,7 @@
 import type { GraphNode, GraphEdge, CAModel } from '../../../../model/types';
 import { agentAttrsOf } from '../../../../model/attributeScope';
 import { modelAttrSlotKeys } from '../../../../model/attributeScope';
-import { resolveMaxBonds } from '../../../../model/centerBased';
+import { resolveMaxBonds, usesCharge } from '../../../../model/centerBased';
 import {
   I32, F64,
   leb128u,
@@ -4243,7 +4243,14 @@ function preEmitAgentValues(ctx: AgentWasmCtx, rootId: string): void {
 // profileless files fall back to `usesBondingPhysics` for all three ⇒ byte-identical.
 // ===========================================================================
 
-/** The force-pass params (the worker mirrors this order exactly). */
+/** The force-pass params (the worker mirrors this order exactly).
+ *
+ *  L1 APPENDS a 4-param charge block, but ONLY for a model that actually uses
+ *  charge (`forcePassParamsFor` below). That conditionality is what keeps a
+ *  charge-off module BYTE-IDENTICAL — the param list is part of the type section
+ *  and of the function's declared arity, so declaring the block unconditionally
+ *  would change every agent model's WASM bytes. Appending at the END means the
+ *  existing indices 0..25 never shift (P5's finding was about MID-LIST insertion). */
 const FORCE_PASS_PARAMS: ('i32' | 'f64')[] = [
   'i32', 'i32', 'i32', 'i32', 'i32',     // highWater, hashValid, nBinsX, nBinsY, nBinsZ
   'f64', 'f64', 'f64',                   // binSizeX, binSizeY, binSizeZ
@@ -4256,6 +4263,18 @@ const FORCE_PASS_PARAMS: ('i32' | 'f64')[] = [
   'i32',                                 // doDensity (P1: run the neighbour/density scan even with forces off — a density consumer exists)
 ];
 
+/** The CHARGE param block, appended only when the model uses long-range charge:
+ *  `doCharge : i32, chargeK, chargeMaxD2, chargeMinC : f64`. `chargeMaxD2`
+ *  (cutoff²) and `chargeMinC` (= 1/(1+cutoff²)) arrive PRECOMPUTED so JS and WASM
+ *  fold the identical constants and stay bit-exact — the same discipline as
+ *  `dtOverEta`. The worker ALWAYS passes these four (extra arguments past a WASM
+ *  function's arity are ignored), so the module and the worker can never desync in
+ *  the dangerous direction. */
+const CHARGE_PASS_PARAMS: ('i32' | 'f64')[] = ['i32', 'f64', 'f64', 'f64'];
+function forcePassParamsFor(charge: boolean): ('i32' | 'f64')[] {
+  return charge ? [...FORCE_PASS_PARAMS, ...CHARGE_PASS_PARAMS] : FORCE_PASS_PARAMS;
+}
+
 interface ForcePassParamIdx {
   highWater: number; hashValid: number; nBinsX: number; nBinsY: number; nBinsZ: number;
   binSizeX: number; binSizeY: number; binSizeZ: number;
@@ -4267,6 +4286,13 @@ interface ForcePassParamIdx {
   doCollision: number;
   doSprings: number;
   doDensity: number;
+  /** L1 charge — present (and the params declared) only when the model uses it.
+   *  `-1` marks the whole block absent, so `emitForcePass` emits no charge code
+   *  at all and the module is byte-identical to the pre-charge one. */
+  doCharge: number;
+  chargeK: number;
+  chargeMaxD2: number;
+  chargeMinC: number;
 }
 
 /** Emit the force-pass function body onto `em`. Reads the wasmBacked AgentStore at
@@ -4349,6 +4375,29 @@ function emitForcePass(em: WasmEmitter, layout: AgentMemoryLayout, is3d: boolean
         em.localGet(dy); em.localGet(dy); em.op(OP_F64_MUL); em.op(OP_F64_ADD);
         if (is3d) { em.localGet(dz); em.localGet(dz); em.op(OP_F64_MUL); em.op(OP_F64_ADD); }
         em.localSet(d2);
+        // --- L1 LONG-RANGE CHARGE (emitted only when the model uses it) ---
+        // Applied BEFORE the soft-sphere's `rmax` cutoff rejects the candidate:
+        // the charge cutoff is far wider, so riding inside the existing cutoff
+        // would silently clip it to the contact radius.
+        //   if (doCharge && d2 != 0 && d2 <= chargeMaxD2) {
+        //     c = chargeK * (1/(1+d2) - chargeMinC);
+        //     fx += c*dx; fy += c*dy [; fz += c*dz];
+        //   }
+        if (P.doCharge >= 0) {
+          em.localGet(P.doCharge);
+          em.localGet(d2); em.f64Const(0); em.op(OP_F64_NE); em.op(OP_I32_AND);
+          em.localGet(d2); em.localGet(P.chargeMaxD2); em.op(OP_F64_LE); em.op(OP_I32_AND);
+          em.ifThen(() => {
+            // cq = 1/(1+d2) - chargeMinC   (reuse the `d` scratch local — the
+            // soft-sphere block below re-assigns it before any read)
+            em.f64Const(1); em.f64Const(1); em.localGet(d2); em.op(OP_F64_ADD); em.op(OP_F64_DIV);
+            em.localGet(P.chargeMinC); em.op(OP_F64_SUB);
+            em.localGet(P.chargeK); em.op(OP_F64_MUL); em.localSet(kl);
+            em.localGet(fx); em.localGet(kl); em.localGet(dx); em.op(OP_F64_MUL); em.op(OP_F64_ADD); em.localSet(fx);
+            em.localGet(fy); em.localGet(kl); em.localGet(dy); em.op(OP_F64_MUL); em.op(OP_F64_ADD); em.localSet(fy);
+            if (is3d) { em.localGet(fz); em.localGet(kl); em.localGet(dz); em.op(OP_F64_MUL); em.op(OP_F64_ADD); em.localSet(fz); }
+          });
+        }
         // sij = ri + rad[j]; rmax = range * sij
         em.localGet(ri); pushF64Elem(em, off.rad, jL); em.op(OP_F64_ADD); em.localSet(sij);
         em.localGet(P.range); em.localGet(sij); em.op(OP_F64_MUL); em.localSet(rmax);
@@ -4452,6 +4501,10 @@ function emitForcePass(em: WasmEmitter, layout: AgentMemoryLayout, is3d: boolean
     //     last value, which nothing observes). Mirrors the JS/WGSL gates. ---
     em.localGet(P.bonding); em.localGet(P.doCollision); em.op(OP_I32_OR);
     em.localGet(P.doDensity); em.op(OP_I32_OR);
+    // Charge needs the neighbour scan too — a pure charged gas has no soft-sphere,
+    // no springs and no density consumer, so without this the scan (and therefore
+    // the charge force) would be skipped entirely.
+    if (P.doCharge >= 0) { em.localGet(P.doCharge); em.op(OP_I32_OR); }
     em.ifThen(() => {
       em.localGet(P.hashValid);
       em.ifThenElse(
@@ -5117,7 +5170,12 @@ export function compileAgentGraphWasm(
   // +3 imported funcs after pow..tanh: fmod (7) + agentCreate (8) + agentAddToWorld
   // (9). The two module-defined funcs then sit at funcIdx 10 (behaviour) + 11 (forcePass).
   const NUM_IMPORTED_FUNCS_FORCE = NUM_IMPORTED_FUNCS + 3; // 10 (incl. fmod + agentCreate + agentAddToWorld)
-  const fpEm = new WasmEmitter(FORCE_PASS_PARAMS.length);
+  // L1 — the charge param block is APPENDED only for a model that uses charge, so
+  // a charge-off module keeps its exact pre-charge type section + arity (the
+  // byte-identity gate). Indices 0..25 are unaffected either way.
+  const chargeOn = usesCharge(model.centerBased);
+  const forceParams = forcePassParamsFor(chargeOn);
+  const fpEm = new WasmEmitter(forceParams.length);
   const FP: ForcePassParamIdx = {
     highWater: 0, hashValid: 1, nBinsX: 2, nBinsY: 3, nBinsZ: 4,
     binSizeX: 5, binSizeY: 6, binSizeZ: 7,
@@ -5125,6 +5183,7 @@ export function compileAgentGraphWasm(
     W: 15, H: 16, D: 17, bonding: 18, torus: 19,
     originX: 20, originY: 21, originZ: 22,
     doCollision: 23, doSprings: 24, doDensity: 25,
+    doCharge: chargeOn ? 26 : -1, chargeK: 27, chargeMaxD2: 28, chargeMinC: 29,
   };
   let forceBody: Uint8Array;
   try {
@@ -5139,7 +5198,7 @@ export function compileAgentGraphWasm(
   const typeBehaviour = funcType(PARAMS.map(p => (p === 'i32' ? I32 : F64)), []);          // type 0
   const typePow = funcType([F64, F64], [F64]);                                              // type 1 — pow / fmod
   const typeUnary = funcType([F64], [F64]);                                                 // type 2 — exp/log/sin/cos/tan/tanh
-  const typeForce = funcType(FORCE_PASS_PARAMS.map(p => (p === 'i32' ? I32 : F64)), []);    // type 3 — forcePass
+  const typeForce = funcType(forceParams.map(p => (p === 'i32' ? I32 : F64)), []);          // type 3 — forcePass
   const typeCreate = funcType([F64, F64, F64, F64], [I32]);                                 // type 4 — env.agentCreate
   const typeAdd = funcType([I32], []);                                                      // type 5 — env.agentAddToWorld
   const TYPE_BEHAVIOUR = 0, TYPE_POW = 1, TYPE_UNARY = 2, TYPE_FORCE = 3, TYPE_CREATE = 4, TYPE_ADD = 5;

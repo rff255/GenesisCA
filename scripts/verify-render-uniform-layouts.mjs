@@ -144,13 +144,22 @@ const readSrc = (rel) => {
 
 // ---------------------------------------------------------------------------
 // The registry. EVERY WGSL uniform struct that is filled by a hand-written
-// TypedArray writer belongs here — that pairing is the whole bug class. A struct
-// whose members are baked into the shader source (the agent Control /
-// ForceControl uniforms, written field-by-field from the compiler's layout) is
-// out of scope; those cannot drift from a separate index table because there
-// isn't one.
+// TypedArray writer belongs here — that pairing is the whole bug class.
+//
+// The agent `Control` uniform stays out of scope: its member SET varies with the
+// compiled layout and it is written field-by-field from that same layout, so there
+// is no independent index table to drift from. `ForceControl` was excluded on the
+// same grounds, but that was WRONG and L1 fixed it: its field list is a fixed,
+// hand-written WGSL literal in one file and its writer is a hand-written table of
+// LITERAL indices (u[0], fl[6], …) in another — the exact pairing this harness
+// exists for, and the one with the widest blast radius (it is read by BOTH GPU
+// force pipelines, canonical and B1 mirror). `structFile` lets an entry name a
+// different file for the struct than for the writer.
 // ---------------------------------------------------------------------------
 const REGISTRY = [
+  { label: 'ForceControl (agent force pass — canonical + B1 mirror)', file: 'simulator/engine/agentWebgpuRuntime.ts',
+    structFile: 'modeler/vpl/compiler/agentWebgpu/forcePass.ts',
+    struct: 'ForceControl', writer: 'uploadAgentForceControl', bytesConst: 'FORCE_CONTROL_BYTES' },
   { label: 'VoxelView (L1 lattice voxel render)', file: 'simulator/engine/webgpuRuntime.ts',
     struct: 'VoxelView', writer: 'uploadVoxelView', bytesConst: 'VOXEL_VIEW_BYTES' },
   { label: 'RenderView3D (phase C agent spheres)', file: 'simulator/engine/agentWebgpuRuntime.ts',
@@ -166,7 +175,7 @@ for (const e of REGISTRY) {
   let parsed, written, declared;
   try {
     const src = readSrc(e.file);
-    parsed = parseWgslStruct(src, e.struct);
+    parsed = parseWgslStruct(readSrc(e.structFile ?? e.file), e.struct);
     written = parseWriterOffsets(src, e.writer);
     const bc = new RegExp(`${e.bytesConst}\\s*=\\s*(\\d+)`).exec(src);
     declared = bc ? Number(bc[1]) : null;

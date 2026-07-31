@@ -28,7 +28,7 @@ import { subAttrInfo, parentValueToInt } from '../../modeler/vpl/compiler/subAtt
 import { buildActiveOffsets, createActiveSet, rebuildActiveSet, applyTransition, compactActiveSet, type ActiveSet } from './activeSet';
 import { packNI, packNI3 } from '../../modeler/vpl/compiler/niCodec';
 import type { Attribute, CenterBasedConfig, SkipIsolatedEmptyConfig } from '../../model/types';
-import { cbNum, usesBondingPhysics, usesSoftCollision, usesPositionalCollision, usesEngineSprings, usesEngineGrowth } from '../../model/centerBased';
+import { cbNum, usesBondingPhysics, usesSoftCollision, usesPositionalCollision, usesEngineSprings, usesEngineGrowth, chargeBinEdgeOf, chargeParamsOf } from '../../model/centerBased';
 import {
   createAgentStore, seedAgents, clearAgents, allocAgentSlot, initAgentSlot, freeAgentSlot, freeStagedSlot,
   snapshotAgentsForRender, advanceAgentSprites, serializeAgentStore, deserializeAgentStore, buildSpatialHash,
@@ -1746,7 +1746,17 @@ function runAgentStep(): void {
   // axis fallback reads density), skip the WHOLE scan — measured ~70% of a
   // custom-force model's force-pass cost. density[] then keeps its last value,
   // which nothing observes (the inspector may show a stale/initial 0).
-  const doScan = doForce || agentUsesDensity;
+  // L1 — LONG-RANGE CHARGE. A repulsive `k·(1/(1+d²) − minC)·(pⱼ−pᵢ)` pair force
+  // with a FINITE cutoff, evaluated for every candidate the stencil yields BEFORE
+  // the soft-sphere's own (much smaller) `rmax` cutoff rejects it. It is the only
+  // engine force with reach past contact distance, so it is what holds a grown
+  // bond graph open. `minC` takes the force continuously to zero at the cutoff
+  // instead of stepping. Off ⇒ `doCharge` false ⇒ every added block is skipped and
+  // the loop is behaviour-identical to the pre-charge engine.
+  const { doCharge, chargeK, chargeMaxD2, chargeMinC } = chargeParamsOf(cfg);
+  // Charge needs the neighbour scan even when nothing else does (a pure charged
+  // gas has no soft-sphere, no springs and no density consumer).
+  const doScan = doForce || agentUsesDensity || doCharge;
 
   // Reset the per-step force accumulator (Apply Force adds into it during
   // behaviour) BEFORE behaviour runs. forceZ is a memset of an always-zero-in-2D
@@ -1761,7 +1771,13 @@ function runAgentStep(): void {
   // 3ÃƒÆ’Ã¢â‚¬â€3 stencil covers both the soft-sphere cutoff AND typical neighbour queries.
   let maxR = cbNum(cfg, 'defaultRadius');
   for (let i = 0; i < hw; i++) { if (alive[i] && rad[i]! > maxR) maxR = rad[i]!; }
-  const binEdge = Math.max(range * 2 * maxR, cbNum(cfg, 'neighbourQueryRadius'));
+  // The collision/query edge — what the soft-sphere and Get Nearby Agents need.
+  const collisionBinEdge = Math.max(range * 2 * maxR, cbNum(cfg, 'neighbourQueryRadius'));
+  // THE TRAP: the charge cutoff MUST join this max, or the 3×3(×3) stencil does not
+  // reach as far as the charge force claims to and every pair beyond one bin is
+  // silently dropped — plausible-looking, wrong physics, no error. `chargeBinEdgeOf`
+  // is 0 when charge is off, so this is byte-identical then.
+  const binEdge = Math.max(collisionBinEdge, chargeBinEdgeOf(cfg));
   const hash = buildSpatialHash(s, Math.max(1e-3, binEdge), W, H, D, boundaryTreatment === 'torus', agentHashReserve);
   currentAgentHash = hash;
 
@@ -1903,6 +1919,14 @@ function runAgentStep(): void {
         W, H, D, bonding ? 1 : 0, torus ? 1 : 0,
         fpOriginX, fpOriginY, fpOriginZ,
         doCollision ? 1 : 0, springs ? 1 : 0, agentUsesDensity ? 1 : 0,
+        // L1 charge — ALWAYS appended, even when charge is off. The module declares
+        // these four params only when the model uses charge (so a charge-off module
+        // is byte-identical), and the WebAssembly JS API simply IGNORES arguments
+        // past a function's declared arity. Passing them unconditionally makes the
+        // one dangerous direction — a module that DECLARES them while the worker
+        // omits them, which would read `undefined` ⇒ NaN ⇒ poisoned forces —
+        // structurally impossible. (Asserted in scripts/parity-agent-force.mjs.)
+        doCharge ? 1 : 0, chargeK, chargeMaxD2, chargeMinC,
       );
       ranForceWasm = true;
     } catch (e) {
@@ -1954,6 +1978,12 @@ function runAgentStep(): void {
                   if (dz > halfD) dz -= D; else if (dz < -halfD) dz += D;
                 }
                 const d2 = dx * dx + dy * dy + dz * dz;
+                // Charge FIRST — its cutoff is far wider than the soft-sphere's, so
+                // it must be applied before `rmax` rejects the candidate.
+                if (doCharge && d2 !== 0 && d2 <= chargeMaxD2) {
+                  const c = chargeK * (1 / (1 + d2) - chargeMinC);
+                  fx += c * dx; fy += c * dy; fz += c * dz;
+                }
                 const sij = ri + rad[j]!;
                 const rmax = range * sij;
                 if (d2 === 0 || d2 >= rmax * rmax) continue;
@@ -1978,6 +2008,10 @@ function runAgentStep(): void {
             if (dz > halfD) dz -= D; else if (dz < -halfD) dz += D;
           }
           const d2 = dx * dx + dy * dy + dz * dz;
+          if (doCharge && d2 !== 0 && d2 <= chargeMaxD2) {
+            const c = chargeK * (1 / (1 + d2) - chargeMinC);
+            fx += c * dx; fy += c * dy; fz += c * dz;
+          }
           const sij = ri + rad[j]!;
           const rmax = range * sij;
           if (d2 === 0 || d2 >= rmax * rmax) continue;
@@ -2067,6 +2101,12 @@ function runAgentStep(): void {
               let dx = x[j]! - xi, dy = y[j]! - yi;
               if (torus) { if (dx > halfW) dx -= W; else if (dx < -halfW) dx += W; if (dy > halfH) dy -= H; else if (dy < -halfH) dy += H; }
               const d2 = dx * dx + dy * dy;
+              // Charge FIRST — its cutoff is far wider than the soft-sphere's, so
+              // it must be applied before `rmax` rejects the candidate.
+              if (doCharge && d2 !== 0 && d2 <= chargeMaxD2) {
+                const c = chargeK * (1 / (1 + d2) - chargeMinC);
+                fx += c * dx; fy += c * dy;
+              }
               const sij = ri + rad[j]!;
               const rmax = range * sij;
               if (d2 === 0 || d2 >= rmax * rmax) continue;
@@ -2086,6 +2126,10 @@ function runAgentStep(): void {
           let dx = x[j]! - xi, dy = y[j]! - yi;
           if (torus) { if (dx > halfW) dx -= W; else if (dx < -halfW) dx += W; if (dy > halfH) dy -= H; else if (dy < -halfH) dy += H; }
           const d2 = dx * dx + dy * dy;
+          if (doCharge && d2 !== 0 && d2 <= chargeMaxD2) {
+            const c = chargeK * (1 / (1 + d2) - chargeMinC);
+            fx += c * dx; fy += c * dy;
+          }
           const sij = ri + rad[j]!;
           const rmax = range * sij;
           if (d2 === 0 || d2 >= rmax * rmax) continue;
@@ -2157,7 +2201,10 @@ function runAgentStep(): void {
   // sees the settled, non-overlapping positions.
   if (usesPositionalCollision(cfg)) {
     const iters = Math.max(1, Math.floor(cbNum(cfg, 'positionalIterations')));
-    resolvePositionalCollisions(s, iters, binEdge, agentHashReserve, W, H, D, is3d, torus);
+    // `collisionBinEdge`, NOT the charge-widened `binEdge`: the projection only ever
+    // needs to see pairs closer than the contact distance, so a charge-widened edge
+    // would make its bins needlessly coarse (same result, more candidates scanned).
+    resolvePositionalCollisions(s, iters, collisionBinEdge, agentHashReserve, W, H, D, is3d, torus);
   }
 
   // Post-step structural phase: bond form/break (Phase B), division + growth +
@@ -2182,6 +2229,15 @@ function runAgentStep(): void {
  *  the JS `runAgentStep()` for this step). The force pass + bond springs + the
  *  hash BUILD stay CPU-mirror with the JS path; the gate keeps bonds/division out
  *  of WebGPU-target graphs so the GPU force pass is exact for those models. */
+/** L1 — the charge fields of the WebGPU `ForceControl` uniform, in the shape both
+ *  GPU dispatch sites (the per-gen path and the resident batch) spread into their
+ *  `uploadAgentForceControl` call. One helper so the two can never disagree about
+ *  whether charge is on or what its constants are. */
+function chargeDispatchFields(cfg: CenterBasedConfig | null): { doCharge: number; chargeK: number; chargeMaxD2: number; chargeMinC: number } {
+  const c = chargeParamsOf(cfg);
+  return { doCharge: c.doCharge ? 1 : 0, chargeK: c.chargeK, chargeMaxD2: c.chargeMaxD2, chargeMinC: c.chargeMinC };
+}
+
 /** Per-indicator-slot int/tag flag (the same order the compiler resolved
  *  `_indicatorIdx` = the index into `indicatorsList`). int/tag standalone
  *  indicators are bitcast<i32>; everything else bitcast<f32>. */
@@ -2364,7 +2420,9 @@ async function runAgentBatchResident(count: number, bumpGeneration: boolean = tr
     // bin-sorted mirror + the resident force pass read neighbours from it. A
     // pure-custom-force model (Boids/PL) skips the scan ⇒ no mirror cost. STATIC
     // per model under residency eligibility (radius/config don't drift mid-batch).
-    const needScan = usesBondingPhysics(cfg) || usesSoftCollision(cfg) || agentUsesDensity;
+    // Charge joins it: a charged model runs the neighbour scan (over a WIDER stencil
+    // than anything else), so it is exactly the case the coalesced mirror helps most.
+    const needScan = usesBondingPhysics(cfg) || usesSoftCollision(cfg) || agentUsesDensity || chargeBinEdgeOf(cfg) > 0;
     if (!(await ensureAgentResident(rt, needScan))) return false;
     const hw = s.highWater;
     // Per-batch hash geometry — CPU-computed once (radius is static under the
@@ -2375,6 +2433,9 @@ async function runAgentBatchResident(count: number, bumpGeneration: boolean = tr
       width, height, depth,
       cbNum(cfg, 'interactionRange'), maxR, cbNum(cfg, 'neighbourQueryRadius'),
       rt.layout.maxHashBins,
+      // THE TRAP, resident path: the charge cutoff must widen the bin edge or the
+      // 3×3(×3) stencil silently truncates the force. 0 when charge is off.
+      chargeBinEdgeOf(cfg),
     );
     const torus = boundaryTreatment === 'torus';
     // Upload the CPU store ONLY when something mutated it since the last batch.
@@ -2409,6 +2470,7 @@ async function runAgentBatchResident(count: number, bumpGeneration: boolean = tr
       doCollision: usesSoftCollision(cfg) ? 1 : 0,
       doDensity: agentUsesDensity ? 1 : 0,
       torus: torus ? 1 : 0,
+      ...chargeDispatchFields(cfg),
       nBinsZ: hp.nBinsZ, binSizeZ: hp.binSizeZ, fieldD: s.worldDepth,
       originX: 0, originY: 0, originZ: 0,
     });
@@ -2490,7 +2552,9 @@ async function runAgentStepWebGPUInner(gpuFieldBridge?: GpuFieldBridge | null): 
   // behaviour + force passes query it (2D and 3D; the shaders carry the Z dims).
   let maxR = cbNum(cfg, 'defaultRadius');
   for (let i = 0; i < hw; i++) { if (alive[i] && rad[i]! > maxR) maxR = rad[i]!; }
-  const binEdge = Math.max(range * 2 * maxR, cbNum(cfg, 'neighbourQueryRadius'));
+  // THE TRAP, per-gen WebGPU path: the charge cutoff joins the max (0 when off).
+  const collisionBinEdge = Math.max(range * 2 * maxR, cbNum(cfg, 'neighbourQueryRadius'));
+  const binEdge = Math.max(collisionBinEdge, chargeBinEdgeOf(cfg));
   const hash = buildSpatialHash(s, Math.max(1e-3, binEdge), W, H, s.worldDepth, boundaryTreatment === 'torus', agentHashReserve);
   currentAgentHash = hash;
 
@@ -2539,6 +2603,7 @@ async function runAgentStepWebGPUInner(gpuFieldBridge?: GpuFieldBridge | null): 
     binSizeX: hash ? hash.binSizeX : 1, binSizeY: hash ? hash.binSizeY : 1,
     dtOverEta: dt / eta, muR, muA, range, momentum, maxSpeed, growthRate,
     fieldW: W, fieldH: H, bonding: bonding ? 1 : 0, doCollision: doCollision ? 1 : 0, doDensity: agentUsesDensity ? 1 : 0, torus: torus ? 1 : 0,
+    ...chargeDispatchFields(cfg),
     nBinsZ: hash ? hash.nBinsZ : 1, binSizeZ: hash ? hash.binSizeZ : 1, fieldD: s.worldDepth,
     originX: hash ? hash.originX : 0, originY: hash ? hash.originY : 0, originZ: hash ? hash.originZ : 0,
   });

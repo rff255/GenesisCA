@@ -5,7 +5,7 @@ import {
   resolveAgentProfile, matchAgentPreset, applyCapabilityEdit, estimateAgentFootprint,
   type AgentPresetKey, type BoolCapKey,
 } from '../../model/agentCapabilities';
-import { cbNum } from '../../model/centerBased';
+import { cbNum, chargeStrengthOf, chargeMaxDistOf, CHARGE_MAX_DIST_REST_MULTIPLE } from '../../model/centerBased';
 import { NumberField } from '../vpl/widgets/InlineWidgets';
 
 /** Model Properties → "Agent Capabilities" section. The preset picker + the
@@ -125,6 +125,50 @@ export function AgentCapabilitiesSection({
                     <option value="off">Off</option><option value="data">Data (edges)</option><option value="physics">Physics (springs)</option>
                   </select>
                 </div>{hint}
+              </div>
+            );
+          }
+          if (k === 'charge') {
+            // Long-range charge — a 2-state capability, so a checkbox like every
+            // other boolean row (Collision/Bonds only use selects because they are
+            // 3-state). Its two tuning knobs are revealed only when it is on.
+            const on = profile.charge === 'on';
+            return (
+              <div key={k}>
+                <label style={{ display: 'flex', alignItems: 'flex-start', gap: 6, cursor: 'pointer' }}>
+                  <input type="checkbox" checked={on} onChange={e => edit('charge', e.target.checked ? 'on' : 'off')} style={{ marginTop: 2 }} />
+                  <span>
+                    <span style={{ fontSize: '0.72rem', color: '#ddd' }}>{row.label}</span>
+                    <br /><span style={{ color: '#888', fontSize: '0.6rem' }}>{row.description}{row.requires && <em style={{ color: '#777' }}> · requires {row.requires}</em>}</span>
+                  </span>
+                </label>
+                {on && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 4, paddingLeft: 12 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+                      <span style={{ fontSize: '0.66rem', color: '#aaa' }} title="k in f = k·(1/(1+d²) − 1/(1+cutoff²))·(pⱼ − pᵢ). NEGATIVE = repulsive (the layout-opening case).">Charge strength</span>
+                      <NumberField
+                        value={chargeStrengthOf(model.centerBased)}
+                        onNumber={n => updateCenterBased({ chargeStrength: n })}
+                        step={0.5}
+                        style={{ background: 'var(--color-bg-panel, #1a1a1a)', color: '#ddd', border: '1px solid var(--color-widget-border, #444)', borderRadius: 4, width: 64, fontSize: '0.66rem' }}
+                      />
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+                      <span style={{ fontSize: '0.66rem', color: '#aaa' }} title="Cutoff distance in world units. Also widens the spatial-hash bin edge so the neighbour stencil actually covers it.">Charge cutoff</span>
+                      <NumberField
+                        value={chargeMaxDistOf(model.centerBased)}
+                        onNumber={n => updateCenterBased({ chargeMaxDist: n })}
+                        onClear={() => updateCenterBased({ chargeMaxDist: undefined })}
+                        min={0} step={1}
+                        style={{ background: 'var(--color-bg-panel, #1a1a1a)', color: '#ddd', border: '1px solid var(--color-widget-border, #444)', borderRadius: 4, width: 64, fontSize: '0.66rem' }}
+                      />
+                    </div>
+                    <span style={{ color: '#777', fontSize: '0.6rem' }}>
+                      Cutoff defaults to {CHARGE_MAX_DIST_REST_MULTIPLE}× the bond rest length ({(CHARGE_MAX_DIST_REST_MULTIPLE * cbNum(model.centerBased, 'bondRestLength')).toFixed(1)}) — clear the field to restore it.
+                      Quality saturates around there; a much larger cutoff only inflates the layout and costs more per step (in 3D the stencil is a VOLUME, so keep it tight).
+                    </span>
+                  </div>
+                )}
               </div>
             );
           }

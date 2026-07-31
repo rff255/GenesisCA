@@ -162,6 +162,12 @@ export function computeCapabilityClosure(input: AgentCapabilities): AgentCapabil
     // integration ⇒ needs only Body (it works under any Motion — it edits xNext).
     if (p.collision === 'soft') { p.body = true; if (p.motion !== 'force') p.motion = 'force'; }
     if (p.collision === 'positional') p.body = true;
+    // L1 — long-range charge is a FORCE, so it needs the force integrator. It needs
+    // no Body: charge acts between CENTRES and never reads a radius. Normalise an
+    // absent value (JSON that predates the field) to 'off' so a legacy profile still
+    // deep-equals its preset.
+    if (p.charge !== 'on') p.charge = 'off';
+    if (p.charge === 'on' && p.motion !== 'force') p.motion = 'force';
     // Growth + Division need Body.
     if (p.growth) p.body = true;
     if (p.division) p.body = true;
@@ -190,6 +196,7 @@ export function applyCapabilityEdit<K extends keyof AgentCapabilities>(
     if (p.bonds === 'physics') p.bonds = 'data';
     p.autoBond = false;
     if (p.collision === 'soft') p.collision = 'off';
+    p.charge = 'off';   // charge is a force — it cannot survive dropping below Motion=Force
   }
   if (key === 'bonds' && value !== 'physics') p.autoBond = false;
   return computeCapabilityClosure(p);
@@ -207,7 +214,7 @@ function preset(
   extra: Partial<AgentCapabilities>,
 ): AgentCapabilities {
   return computeCapabilityClosure({
-    motion, body, collision, bonds,
+    motion, body, collision, bonds, charge: 'off',
     autoBond: false, growth: false, division: false, lifespan: false,
     populationBirth: false, populationDeath: false, sensing: false,
     sensingHeadingSource: 'velocity', orientation: false, fieldCoupling: false,
@@ -255,6 +262,7 @@ export function defaultAgentCapabilities(): AgentCapabilities {
 
 function profilesEqual(a: AgentCapabilities, b: AgentCapabilities): boolean {
   return a.motion === b.motion && a.body === b.body && a.collision === b.collision
+    && a.charge === b.charge
     && a.bonds === b.bonds && a.autoBond === b.autoBond && a.growth === b.growth
     && a.division === b.division && a.lifespan === b.lifespan
     && a.populationBirth === b.populationBirth && a.populationDeath === b.populationDeath
@@ -318,7 +326,10 @@ export function inferAgentProfile(model: CAModel): AgentCapabilities {
   if (explicit) return computeCapabilityClosure(explicit);
   const cfg = model.centerBased;
   const p: AgentCapabilities = {
-    motion: 'static', body: false, collision: 'off', bonds: 'off',
+    // `charge` is net-new (L1), so NO legacy file can have used it: the inference
+    // has no signal to widen on and must always land on 'off' — which is what keeps
+    // every pre-L1 model byte-identical on all three targets.
+    motion: 'static', body: false, collision: 'off', bonds: 'off', charge: 'off',
     autoBond: false, growth: false, division: false, lifespan: false,
     populationBirth: false, populationDeath: false, sensing: false,
     sensingHeadingSource: 'velocity', orientation: false, fieldCoupling: false,
@@ -397,6 +408,7 @@ export interface CapabilityRowMeta {
 export const AGENT_CAPABILITY_ROWS: CapabilityRowMeta[] = [
   { key: 'body', label: 'Body / Extent', description: 'A radius surface, rendered as a disc/sphere. Unlocks Get / Set Agent Radius.' },
   { key: 'collision', label: 'Collision', description: 'Volume exclusion. Soft-sphere = a springy repulsion force (transient overlap; tune Repulsion Stiffness; needs Motion=Force). Positional = a rigid no-overlap constraint (billiard-ball; works under any Motion). Unlocks Neighbour Density.', requires: 'Body' },
+  { key: 'charge', label: 'Charge (long-range)', description: 'A repulsive 1/(1+d²) pair force with a finite cutoff — the only force with reach beyond contact distance, so it is what holds a grown bond graph OPEN instead of letting it collapse into a jammed blob. Tune Charge Strength (negative = repulsive) + Cutoff.', requires: 'Motion = Force' },
   { key: 'bonds', label: 'Bonds', description: 'Connectivity edges (Data — no forces) or spring physics (Physics — needs Motion=Force). Unlocks Form/Break Bond, For Each Bond, Get Bonded Agents.' },
   { key: 'autoBond', label: 'Auto-bond', description: 'Engine forms/breaks bonds by proximity (hysteresis).', requires: 'Bonds = Physics' },
   { key: 'growth', label: 'Growth', description: 'Radius ramps toward a target radius each step. Unlocks Set Target Radius.', requires: 'Body' },

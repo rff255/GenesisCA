@@ -91,6 +91,14 @@ export interface AgentForceDispatchParams {
    *  independently of bonding physics. Absent ⇒ falls back to `bonding`. */
   doCollision?: number;
   torus: number;
+  /** L1 long-range charge (absent ⇒ 0 ⇒ off ⇒ the shader's charge branch never
+   *  taken ⇒ behaviour-identical to the pre-charge force pass). `chargeMaxD2`
+   *  (cutoff²) and `chargeMinC` (= 1/(1+cutoff²)) arrive PRECOMPUTED, the same way
+   *  `dtOverEta` does, so all three targets fold identical constants. */
+  doCharge?: number;
+  chargeK?: number;
+  chargeMaxD2?: number;
+  chargeMinC?: number;
   /** 3D extents (default 1 ⇒ 2D — the z stencil / integration is gated off). */
   nBinsZ?: number;
   binSizeZ?: number;
@@ -305,9 +313,11 @@ function colorsBytes(layout: AgentWebGPULayout): number { return Math.max(4, lay
 // 16-byte aligned). Control was 14 u32/f32 (→64) + origin block = 80; ForceControl
 // was 21 (→80, with WGSL's 16-byte round-up) + origin block = 96.
 const CONTROL_BYTES = 80;
-// 25 scalar fields = 100 B; padded to 112 (16-aligned headroom). The WGSL
-// all-scalar struct's minBindingSize is 100 — a larger buffer is valid.
-const FORCE_CONTROL_BYTES = 112;
+// 29 scalar fields = 116 B; padded to 128 (16-aligned headroom — WebGPU requires a
+// uniform binding size that is a multiple of 16). The WGSL all-scalar struct's
+// minBindingSize is 116 — a larger buffer is valid. (Was 25 fields / 112 before L1
+// appended the four charge scalars.) Registered in verify-render-uniform-layouts.
+const FORCE_CONTROL_BYTES = 128;
 
 // ---------------------------------------------------------------------------
 // Create.
@@ -1019,6 +1029,11 @@ export function uploadAgentForceControl(rt: AgentWebGPURuntime, highWater: numbe
   fl[22] = fp.originZ ?? 0;
   u[23] = (fp.doCollision ?? fp.bonding) >>> 0; // Collision capability (repulsion); fallback to bonding for older callers
   u[24] = (fp.doDensity ?? 1) >>> 0; // P1: run the neighbour/density scan (absent → 1, the historical always-scan)
+  // L1 charge (absent → 0 ⇒ the shader's charge branch is never taken).
+  u[25] = (fp.doCharge ?? 0) >>> 0;
+  fl[26] = fp.chargeK ?? 0;
+  fl[27] = fp.chargeMaxD2 ?? 0;
+  fl[28] = fp.chargeMinC ?? 0;
   rt.device.queue.writeBuffer(rt.forceControlBuf, 0, ab);
 }
 
@@ -2752,9 +2767,15 @@ export function computeResidentHashParams(
   W: number, H: number, D: number,
   interactionRange: number, maxR: number, neighbourQueryRadius: number,
   maxBins: number,
+  /** L1 — the long-range charge cutoff, or 0 when charge is off. It MUST join the
+   *  bin-edge max: the force pass only ever sees pairs within one bin of the 3×3(×3)
+   *  stencil, so a bin edge narrower than the charge cutoff silently truncates the
+   *  force with no error anywhere. Widening is safe for the reserve — a LARGER edge
+   *  yields FEWER bins, and the coarsen loop below caps the count regardless. */
+  chargeMaxDist = 0,
 ): ResidentHashParams {
   const is3d = D > 1;
-  let edge = Math.max(1e-3, interactionRange * 2 * maxR, neighbourQueryRadius);
+  let edge = Math.max(1e-3, interactionRange * 2 * maxR, neighbourQueryRadius, chargeMaxDist);
   let nx = Math.max(1, Math.floor(W / edge));
   let ny = Math.max(1, Math.floor(H / edge));
   let nz = is3d ? Math.max(1, Math.floor(D / edge)) : 1;

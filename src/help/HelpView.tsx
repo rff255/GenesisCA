@@ -1409,7 +1409,7 @@ export function HelpView() {
             <strong>preset</strong> (Particle System, Boids, Vivarium, Morphogenesis, Social
             Network, CA-on-Agents) or toggle individual capabilities &mdash; <strong>Motion</strong>{' '}
             (Static / Velocity / Force), <strong>Body</strong>, <strong>Collision</strong>,{' '}
-            <strong>Bonds</strong> (Data edges / Physics springs), <strong>Growth</strong>,{' '}
+            <strong>Charge</strong>, <strong>Bonds</strong> (Data edges / Physics springs), <strong>Growth</strong>,{' '}
             <strong>Division</strong>, <strong>Lifespan</strong>, <strong>Population</strong>,{' '}
             <strong>Sensing</strong>, <strong>Orientation</strong>, and{' '}
             <strong>Field coupling</strong>. The palette, the <strong>Behaviour Step</strong>{' '}
@@ -1428,6 +1428,50 @@ export function HelpView() {
             <strong>Growth</strong> runs the radius ramp &mdash; each independently of the legacy
             &ldquo;Use bonding physics&rdquo; master toggle. <em>(The profile does not yet shrink
             the per-agent memory the engine allocates &mdash; that lands in a later phase.)</em>
+          </p>
+          <h3 className={styles.h3}>Charge &mdash; the long-range force that keeps a graph readable</h3>
+          <p className={styles.p}>
+            Every other engine force is <em>short</em>-range: soft-sphere repulsion only pushes
+            back once two agents are closer than their combined radii, and it turns to
+            <em> attraction</em> past that. So if your bonds rest at, say, 5 units while contact
+            distance is 1.8, an agent never resists anything until something is practically on top
+            of it &mdash; and a graph that keeps growing collapses into an unreadable jammed blob.
+            Widening <strong>Interaction range</strong> does <strong>not</strong> fix this: it
+            widens the <em>search</em>, not the force.
+          </p>
+          <p className={styles.p}>
+            <strong>Charge</strong> (Properties &rarr; Agent Capabilities, off by default) adds the
+            missing long-range term &mdash; a repulsion between every pair inside a{' '}
+            <strong>cutoff</strong>, falling off as <code>1/(1+d&sup2;)</code> and reaching exactly
+            zero at the cutoff. Two knobs appear when you turn it on:
+          </p>
+          <ul className={styles.ul}>
+            <li>
+              <strong>Charge strength</strong> &mdash; negative repels (the layout-opening case),
+              positive attracts. Default &minus;3.
+            </li>
+            <li>
+              <strong>Charge cutoff</strong> &mdash; how far the force reaches. Defaults to{' '}
+              <strong>8&times; your bond rest length</strong>; clear the field to restore that.
+              Layout quality saturates around there, so a much larger cutoff mostly just{' '}
+              <em>inflates</em> the whole structure while costing more per step.
+            </li>
+          </ul>
+          <p className={styles.p}>
+            Measured on a graph grown from K4 to 1200 nodes by triangle split: without charge{' '}
+            <strong>99.2%</strong> of nodes had an unrelated node inside contact distance, and
+            unrelated nodes sat ~16&times; closer than bonded partners. With charge at the default
+            cutoff that drops to <strong>~0%</strong>, and because the layout is no longer maximally
+            dense the simulation also runs <em>faster</em>. Charge needs{' '}
+            <strong>Motion = Force</strong> and runs on all three agent targets (JS, WebAssembly,
+            WebGPU) in both 2D and 3D.
+          </p>
+          <p className={styles.p}>
+            <strong>Cost &mdash; keep the 3D cutoff tighter.</strong> The neighbour search sweeps a
+            3&times;3 block of hash bins in 2D but a 3&times;3&times;3 <em>volume</em> in 3D, so at
+            the same cutoff a 3D model examines several times as many candidates (measured on a
+            uniform packing: ~124 candidates/agent in 2D at 4&times; rest vs ~813 in 3D). In 3D
+            start around <strong>4&times;</strong> the bond rest length rather than 8&times;.
           </p>
           <h3 className={styles.h3}>The Two-Graph Workflow (Cells vs Agents)</h3>
           <p className={styles.p}>

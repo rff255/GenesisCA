@@ -91,7 +91,34 @@ function emitForceControlStruct(): string {
   originZ    : f32,
   doCollision : u32,
   doDensity  : u32,
+  doCharge   : u32,
+  chargeK    : f32,
+  chargeMaxD2 : f32,
+  chargeMinC : f32,
 };`;
+}
+
+/** L1 — the LONG-RANGE CHARGE term, shared VERBATIM by the canonical neighbour
+ *  body and the B1 bin-sorted MIRROR body (one source, so the two force pipelines
+ *  cannot diverge — a term added to only one of them would be wrong exclusively
+ *  for the models that engage the mirror, which is the hardest kind of bug to see).
+ *
+ *  Emitted UNCONDITIONALLY and gated at RUNTIME on `fc.doCharge`, unlike the WASM
+ *  port which gates at compile time: the WASM param list is part of the module's
+ *  bytes (so it must stay conditional for byte-identity), whereas the shader text
+ *  is not compile-identity-checked, and a runtime gate means toggling charge never
+ *  rebuilds a pipeline. The branch is on a uniform, so it is perfectly coherent.
+ *
+ *  Placed BEFORE the soft-sphere's `rmax` test: the charge cutoff is far wider, so
+ *  evaluating it inside the existing cutoff would silently clip it to the contact
+ *  radius (the same class of mistake as forgetting the hash bin edge). */
+function chargeTerm(is3d: boolean): string {
+  const fz = is3d ? ' fz = fz + cq * dz;' : '';
+  return `
+          if (fc.doCharge != 0u && d2 != 0.0 && d2 <= fc.chargeMaxD2) {
+            let cq: f32 = fc.chargeK * (1.0 / (1.0 + d2) - fc.chargeMinC);
+            fx = fx + cq * dx; fy = fy + cq * dy;${fz}
+          }`;
 }
 
 /** Emit the standalone WGSL force-pass module for the given GPU agent layout.
@@ -133,7 +160,7 @@ export function emitAgentForcePassWGSL(layout: AgentWebGPULayout, usesForceScatt
         if (dx > hW) { dx = dx - fc.fieldW; } else if (dx < -hW) { dx = dx + fc.fieldW; }
         if (dy > hH) { dy = dy - fc.fieldH; } else if (dy < -hH) { dy = dy + fc.fieldH; }${dzWrap}
       }
-      let d2: f32 = ${d2Expr};
+      let d2: f32 = ${d2Expr};${chargeTerm(is3d).replace(/\n {10}/g, '\n      ')}
       let sij: f32 = ri + ${f32('radius', 'j')};
       let rmax: f32 = fc.range * sij;
       if (d2 != 0.0 && d2 < rmax * rmax) {
@@ -175,7 +202,7 @@ export function emitAgentForcePassWGSL(layout: AgentWebGPULayout, usesForceScatt
             if (dx > hW) { dx = dx - fc.fieldW; } else if (dx < -hW) { dx = dx + fc.fieldW; }
             if (dy > hH) { dy = dy - fc.fieldH; } else if (dy < -hH) { dy = dy + fc.fieldH; }${dzWrap}
           }
-          let d2: f32 = ${d2Expr};
+          let d2: f32 = ${d2Expr};${chargeTerm(is3d)}
           let sij: f32 = ri + ${sm('radius')};
           let rmax: f32 = fc.range * sij;
           if (d2 != 0.0 && d2 < rmax * rmax) {
@@ -304,7 +331,9 @@ fn forcePass(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(num_workgro
   // physics off + no node reads density + no division fallback), skip the
   // whole scan — it was ~70% of a custom-force model's force-pass cost.
   // density[i] then keeps its last value (nothing observes it).
-  if (fc.bonding != 0u || fc.doCollision != 0u || fc.doDensity != 0u) {
+  // (charge joins the gate: a pure charged gas has no soft-sphere, no springs and
+  // no density consumer, so without it the whole scan — and the charge — is skipped)
+  if (fc.bonding != 0u || fc.doCollision != 0u || fc.doDensity != 0u || fc.doCharge != 0u) {
     if (fc.hashValid != 0u) {
       // --- hash-bin stencil over the CSR hash, torus-wrapped ---${stencil}
     } else {

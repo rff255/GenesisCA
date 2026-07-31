@@ -126,5 +126,175 @@ volume.** Measure it, report it, and document a practical 3D cutoff. Do not assu
 
 ## Completion Report — L1
 
-*(fill in per the master handoff §5 template, and include the probe's
-before → after metrics — that is this phase's headline)*
+**State**: DONE
+**Commit(s)**: see `git log GRA` — `feat(agents): long-range charge force with a finite cutoff`
+**Files touched**
+```
+ CLAUDE.md                                              | docs
+ README.md                                              | docs
+ docs/HANDOFF_GLC_L1_CHARGE.md                          | this report
+ docs/HANDOFF_GRAPH_LAYOUT_CADENCE.md                   | status board
+ scripts/parity-agent-force.mjs                         | +11 charge combos, arity contract, bin-edge trap
+ scripts/probe-graph-layout.mjs                         | rewired onto the REAL engine + gate + 3D cost
+ scripts/verify-render-uniform-layouts.mjs              | ForceControl registered (+ structFile)
+ src/help/HelpView.tsx                                  | docs
+ src/model/agentCapabilities.ts                         | charge capability + closure + row
+ src/model/centerBased.ts                               | usesCharge / chargeParamsOf / chargeBinEdgeOf …
+ src/model/types.ts                                     | ChargeMode + config fields
+ src/modeler/panels/AgentCapabilitiesSection.tsx        | Charge block
+ src/modeler/vpl/compiler/agentWasm/compile.ts          | conditional params + charge emit
+ src/modeler/vpl/compiler/agentWebgpu/forcePass.ts      | charge in BOTH bodies + ForceControl
+ src/simulator/engine/agentWebgpuRuntime.ts             | uniform writer + resident bin edge
+ src/simulator/engine/sim.worker.ts                     | JS 2D+3D arms + all 3 hash sites + dispatch
+```
+
+### What shipped
+The long-range charge force, default OFF, on **all four force surfaces**:
+`f_ij = k·(1/(1+d²) − 1/(1+maxDist²))·(p_j − p_i)` for every pair within
+`chargeMaxDist`, evaluated **before** the soft-sphere's own much smaller `rmax`
+cutoff rejects the candidate (riding inside it would clip charge to the contact
+radius). **No Barnes–Hut, no octree, no new spatial structure** — one extra term in
+the fused pair loop each target already had, plus a widened hash bin edge.
+
+- **Capability** `AgentCapabilities.charge: 'off' | 'on'`; closure requires
+  `motion: 'force'`, and dropping Motion below Force turns it back off.
+- **Config** `chargeStrength` (default −3) + `chargeMaxDist` (**absent ⇒ a derived
+  `8 × bondRestLength`**, DC6 — verified live: the shipped `Cubic GRA`, whose
+  `chargeMaxDist` is absent, resolves to 40).
+- **Resolvers** (`centerBased.ts`): `usesCharge` · `chargeStrengthOf` ·
+  `chargeMaxDistOf` · `chargeBinEdgeOf` · `chargeParamsOf`. The last precomputes
+  `{doCharge, chargeK, chargeMaxD2, chargeMinC}` in ONE place — like `dtOverEta` —
+  so all four surfaces fold identical constants, which is what makes JS↔WASM
+  bit-parity hold rather than "happen to agree".
+- **THE trap**: `chargeBinEdgeOf` joins the `max` at all three hash sites
+  (`runAgentStep`, the per-gen WebGPU path, `computeResidentHashParams`). Positional
+  collision deliberately keeps the narrow edge. `computeAgentMaxHashBins` is
+  **untouched** — see the assumption note below.
+- **Surfaces**: JS (both verbatim arms × stencil + all-pairs = 4 sites), WASM
+  `emitForcePass`, the WGSL canonical body, and the **B1 mirror body** (a shared
+  `chargeTerm(is3d)` emits both GPU bodies so they cannot drift). Charge also joins
+  every scan gate — a pure charged gas has no soft-sphere, springs or density
+  consumer, so otherwise the whole neighbour pass would be skipped.
+
+### Decisions resolved (with reasoning)
+1. **WASM params are CONDITIONAL; WebGPU gates at RUNTIME.** The WASM param list is
+   part of the module's type section, so an unconditional block would change every
+   agent model's bytes and break byte-identity — hence `forcePassParamsFor(charge)`
+   appends 4 params only when used. The shader text is *not* compile-identity-checked,
+   so WGSL always declares the fields and branches on `fc.doCharge`: one shader serves
+   both states, toggling charge never rebuilds a pipeline, and the struct stays
+   statically parseable (which is what let it be registered in the uniform harness).
+2. **The worker always passes all 30 args.** A charge-off module declares 26 and the
+   JS API ignores the extras; this makes the *dangerous* direction — a module that
+   declares them while the worker omits them, yielding `undefined` ⇒ NaN ⇒ poisoned
+   forces — structurally impossible. Asserted rather than assumed.
+3. **The probe now drives shipped code.** It previously carried its own copy of the
+   force loop plus a hand-written charge term. A probe that measures its own
+   reimplementation cannot gate the product, so it now compiles and runs the real
+   WASM `forcePass` over a real `createAgentStore`.
+
+### Assumptions that proved FALSE
+**#4 was PARTIALLY false — and it did not change the design.**
+"`ForceControl` has room for two more scalars … and `verify-render-uniform-layouts.mjs`
+covers it."
+- *Room*: true (and for four, not two). 25 → 29 scalars; `FORCE_CONTROL_BYTES` 112 → 128.
+- *Covered*: **false.** The harness registry explicitly **excluded** ForceControl,
+  reasoning that structs "baked into the shader source … cannot drift from a separate
+  index table because there isn't one". That is right for the agent `Control` uniform
+  (its member set varies with the compiled layout) but **wrong for ForceControl**: a
+  fixed hand-written WGSL field list in one file plus a hand-written table of literal
+  indices (`u[0]`, `fl[6]`, …) in another is *exactly* the pairing the harness exists
+  for — and it is read by BOTH GPU force pipelines.
+- **Remedy (additive, no redesign)**: registered it, adding an optional `structFile`
+  for the two-file case. §2.3 of this handoff already said "register/verify the uniform
+  layout", so this completes the phase's own scope rather than expanding it.
+  Negative-controlled: dropping one charge write reports `unwritten: chargeMaxD2@108`.
+
+Assumptions **1, 2 and 3 held**, with two refinements worth recording:
+- **#1** — the fused pair loop is indeed the only place pair forces are summed, but it
+  is **five code paths, not four**: the JS 2D and 3D arms are separate *and* each has a
+  stencil + an all-pairs body, and the WGSL emitter contains two neighbour bodies
+  (canonical + mirror). `resolvePositionalCollisions` reuses `forceX/Y` as a *position*
+  accumulator, not a force sum, and `forceScatter` is a per-agent seed.
+- **#2** — widening the bin edge is safe for the reserve, but the reserve itself must
+  **NOT** be widened: `computeAgentMaxHashBins` feeds `computeAgentMemoryLayout`, so
+  changing it would shift every baked offset past the hash region. It is computed from
+  the *smallest* possible edge and a larger edge yields *fewer* bins, so leaving it
+  alone is both safe and byte-identical.
+
+### Verification
+| Gate | Result |
+|---|---|
+| `probe-graph-layout.mjs` (the oracle) | **✓** overlap 99.2 % → **0.2 %**, nnb/bond 0.18 → **0.81**; gate asserts all three conditions |
+| Bin-edge trap + negative control | **✓** widened edge feels the charge at 0.9× cutoff; the pre-L1 edge reads **exactly 0** |
+| B1 mirror vs canonical, charge on | **✓** real GPU, **maxDiff 0** over 8 agents (vx+vy), 0 validation errors |
+| Byte identity (charge off) | **✓** `check-compile-identity --compare .gra-baseline/compile-identity-L0.json` — 29 models, all surfaces unchanged |
+| `parity-agent-force.mjs` | **✓ 20 checks** — 11 new charge combos (on/off × 2D/3D × torus/bounded × collision on/off × charge-only), 0 mismatches; + the arity contract |
+| 3D | **✓** works (parity + shaders); cost measured, practical cutoff documented |
+| Real GPU | **✓** all 8 shader variants (2D/3D × mirror × scatter) compile 0 errors / 0 pipeline / 0 validation; a real dispatch matches the analytic force to **2.2e-8** and is exactly antisymmetric |
+| Real in-browser run | **✓** shipped `Cubic GRA`, WASM agent target, 240 generations, **0 worker + 0 console errors**, A/B below |
+| `tsc` · `npm run build` | ✓ · ✓ |
+| `parity-agent-wasm` · `check-agent-wasm-gate` · `audit-agent-layout` (192) · `test-agent-abi` (28) | ✓ ✓ ✓ ✓ |
+| `verify-graph-rewrite` (405) · `verify-agent-render` · `verify-render-uniform-layouts` · `test-agent-capabilities` (80) | ✓ ✓ ✓ ✓ |
+
+**Negative controls** (both proven to fail, then restored): dropping `− chargeMinC`
+from the WASM emit → 1500-3000 mismatches on every charge combo; dropping one charge
+write from `uploadAgentForceControl` → `unwritten: chargeMaxD2@108`.
+
+### Layout metrics — before → after
+**The probe (4000×4000, unsaturated), K4 → 1200 by triangle split, real WASM force pass:**
+
+| scenario | bond/rest | nnb/bond | overlap % | cand/agent |
+|---|---|---|---|---|
+| **SHIPPED (charge off)** | 1.04 | **0.18** | **99.2** | 8 |
+| charge −3, cutoff 20 (4× rest) | 1.29 | 0.66 | 0.0 | 6 |
+| **charge −3, cutoff 40 (8× rest) — the default** | 1.52 | **0.81** | **0.2** | 7 |
+| charge −3, cutoff 80 (16× rest) | 1.81 | 0.87 | 0.0 | 15 |
+| charge −3, cutoff 160 (32× rest) | 2.16 | 0.89 | 0.0 | 99 |
+
+> The baseline nnb/bond reads **0.18**, not the 0.06 in this handoff's §1. That is the
+> cost of the probe now driving the REAL engine instead of its own copy: the old copy
+> used `interactionRange` as an absolute *distance* (2.2) where the engine uses it as a
+> multiplier of contact distance (`2.2 × 1.8 = 3.96`), i.e. it modelled a narrower
+> repulsion than the engine actually has. The headline — **99.2 % overlap** — is
+> unchanged, and 0.18 is still far below the 0.6 "healthy" line. Trust these numbers
+> over the pre-L1 ones; they come from shipped code.
+
+**Live in-browser A/B, shipped `Cubic GRA` (220×220 torus, WASM agents, gen 240):**
+
+| | live | bond | nnb | nnb/bond | overlap % |
+|---|---|---|---|---|---|
+| charge OFF (shipped) | 4982 | 4.77 | 0.34 | **0.07** | **99.8** |
+| charge ON (derived 8× cutoff = 40) | 2278 | 5.74 | 2.68 | **0.47** | **14.3** |
+
+> **The residual 14.3 % is the SECOND, independent cause** the impact map identified
+> (§1.4), not a shortfall of the force: at 2278 agents a 220×220 torus gives 4.6
+> units/agent against a bond rest of 5, so the world is **saturated** and no repulsion
+> strength can open it. In the unsaturated probe world the same force reaches 0.2 %.
+> (The two runs also reach different N — a jammed graph satisfies the split predicate
+> differently — so read the ratios, not the populations.)
+
+### 3D cost — measured, and the practical cutoff
+Uniform packing, spacing = bond rest 5, 1728 agents, real WASM force pass:
+
+| dim | cutoff | cand/agent | ms/tick |
+|---|---|---|---|
+| 2D | 20 (4×) | 124 | 1.83 |
+| 2D | 40 (8×) | 427 | 5.42 |
+| **3D** | **20 (4×)** | **813** | **11.83** |
+| **3D** | **40 (8×)** | **1728** | **23.83** |
+
+The stencil is a 3×3×3 **volume**, so candidates grow with the CUBE of the cutoff:
+3D costs ~6.6× the 2D time at the same cutoff. At 8× rest in 3D the stencil already
+covers the entire population (1728 of 1728) — it has degenerated to all-pairs while
+buying nothing, since quality already saturates by 8× in 2D and 4× already gives
+0.66 nnb/bond. **Guidance shipped in the UI, Help and README: start 3D at ~4× the
+bond rest length, not 8×.**
+
+### Known gaps / follow-ups
+- **For L3**: the shipped `Cubic GRA` needs a **bigger (or unbounded) world** — charge
+  alone cannot open a saturated box (DC7). Its own `bondRestLength` is 5, so the derived
+  cutoff of 40 is sane; the world is the binding constraint.
+- **For L3**: no sample turns charge on yet — retuning them is explicitly L3's scope.
+- The probe's growth process still places newborns by hand; L3 owns newborn placement.
+- Barnes–Hut remains deferred (DC1). This implementation is its exactness reference.

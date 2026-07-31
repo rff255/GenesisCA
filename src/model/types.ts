@@ -856,6 +856,13 @@ export type CollisionMode = 'off' | 'soft' | 'positional';
  *  Data-vs-Physics choice is a real engine distinction — springs are gated on
  *  `usesEngineSprings` (bonds==='physics'), NOT the legacy bonding bundle. */
 export type BondsMode = 'off' | 'data' | 'physics';
+/** Long-range charge. `on` adds a repulsive pair force with a FINITE cutoff to the
+ *  fused neighbour pass — `f_ij = k·(1/(1+d²) − 1/(1+maxDist²))·(p_j − p_i)`, the
+ *  `− min_c` term taking it continuously to zero at the cutoff instead of stepping.
+ *  It is the ONLY force in the engine with reach beyond contact distance, so it is
+ *  what opens a grown bond graph (see `usesCharge` in centerBased.ts). Requires
+ *  Motion=Force. `off` (the default) is byte-identical to the pre-charge engine. */
+export type ChargeMode = 'off' | 'on';
 
 /** The declared capability set for a model's agents — the Agent Capability
  *  Profile. Additive on `CenterBasedConfig.agentCapabilities`; absent ⇒ a
@@ -868,6 +875,14 @@ export interface AgentCapabilities {
   body: boolean;
   /** Collision handling (needs Body; `soft` needs Motion=Force). */
   collision: CollisionMode;
+  /** LONG-RANGE charge — a repulsive `1/(1+d²)` pair force with a finite cutoff
+   *  (`chargeStrength` / `chargeMaxDist`), the force that can OPEN a grown
+   *  structure. The soft-sphere only pushes back BELOW contact distance, so a
+   *  bond-graph whose springs rest far past contact collapses into a jammed
+   *  packing; charge is what holds it open (measured: overlap 99.2 % → 0 %).
+   *  Needs Motion=Force (it is a force). Default `'off'` ⇒ absent on every
+   *  legacy file ⇒ byte-identical. */
+  charge: ChargeMode;
   /** Bonds (needs Position; `physics` needs Motion=Force). */
   bonds: BondsMode;
   /** Engine auto-forms/breaks bonds by proximity (requires bonds='physics'). */
@@ -946,6 +961,19 @@ export interface CenterBasedConfig {
   /** Optional speed cap (per step). 0 / absent = uncapped. Boids use it to keep
    *  a roughly constant cruising speed. */
   maxSpeed?: number;
+  /** LONG-RANGE charge strength `k` (`agentCapabilities.charge === 'on'`).
+   *  NEGATIVE = repulsive (the layout-opening case; absent ⇒ the engine default
+   *  −3). The pair force is `k·(1/(1+d²) − 1/(1+maxDist²))·(p_j − p_i)`, applied
+   *  to every pair within `chargeMaxDist` IN ADDITION to soft-sphere + springs. */
+  chargeStrength?: number;
+  /** Long-range charge CUTOFF distance (world units). Absent ⇒ a DERIVED default of
+   *  8 × `bondRestLength` — measured: layout quality saturates by ~8× the bond rest
+   *  length and an unbounded cutoff merely inflates the layout, which is exactly why
+   *  a plain cutoff force suffices and no Barnes–Hut tree is needed. It must NOT be
+   *  a world-absolute constant: it scales with the model's own bond length.
+   *  **It also widens the spatial-hash bin edge** (`chargeBinEdgeOf`) so the 3×3(×3)
+   *  stencil actually covers it — without that the force is silently truncated. */
+  chargeMaxDist?: number;
   /** Jacobi sweeps for the HARD positional collision (`agentCapabilities.collision
    *  === 'positional'`): more sweeps ⇒ tighter no-overlap packing (a single sweep
    *  resolves an isolated pair exactly; dense packing converges over a few).
