@@ -142,6 +142,7 @@ removes the resident fast path from a whole class of models.
 
 **State**: DONE
 **Commit(s)**: `54fb4d5` — feat(agents): rule cadence - Get Generation + Periodic Step
+`7b3cd87` — fix(agents): teach the DEV ABI-arity assertion about the generation asymmetry
 **Files touched**
 ```
  CLAUDE.md                                           | docs (new "Rule Cadence" section)
@@ -151,7 +152,7 @@ removes the resident fast path from a whole class of models.
  docs/NODES_REFERENCE.md                             | counts 151/148 -> 153/150 + 2 rows
  src/help/HelpView.tsx                               | docs
  scripts/parity-agent-wasm.mjs                       | the permanent cadence synthetic + value invariant
- scripts/test-rule-cadence.mjs                       | NEW — 107 checks
+ scripts/test-rule-cadence.mjs                       | NEW — 110 checks
  src/modeler/vpl/nodes/GetGenerationNode.ts          | NEW
  src/modeler/vpl/nodes/PeriodicStepNode.ts           | NEW
  src/modeler/vpl/compiler/generationUse.ts           | NEW — the ONE usage predicate
@@ -274,9 +275,10 @@ never see it. Plus a **GPU-side generation counter** so the residency fast path 
 | **Multiplicity** | **✓** 3 gates (periods 2/3/5) + an unconditional Behaviour Step chain: each fires on its own schedule and the unconditional chain still runs EVERY generation; exactly ONE `behaviourStep` in the lowered graph (the singleton rule holds), one shared `Get Generation`, 4-branch `Sequence` (`first/then/then_2/then_3`) |
 | **Init / division semantics** | **✓** run and asserted — division reads 17 when 17 is supplied; the Agent Init Event's created agent gets 0 |
 | **Cells too** | **✓** JS + a **REAL instantiated WASM module** in Node (2D 7×5 gen 42, 3D 6×4×3 gen 7 — every cell exact, JS↔WASM bit-identical) and the **real GPU** (`useWebGPUStatus ready:true`, all 256 cells === 4 after 5 generations) |
+| **Real in-browser smoke (shipped model)** | **✓** `Cubic GRA` — which has NO cadence nodes — loads and runs 40 generations (10 → 34 agents), **0 worker + 0 console errors**. This is the run that caught the arity-assertion false alarm above; pre-fix it posted on every load |
 | **Byte identity** | **✓** `check-compile-identity --compare .gra-baseline/compile-identity-L1.json` — 29 models, all surfaces unchanged |
 | **Parity** | **✓** `parity-agent-wasm` with the permanent `[synthetic] Rule cadence (Get Generation + 5 Periodic Steps)` entry carrying a per-step VALUE invariant; negative-controlled (always-firing gates → `hitsC 1 !== expected 0`) |
-| `test-rule-cadence.mjs` | **✓ 107 checks** |
+| `test-rule-cadence.mjs` | **✓ 110 checks** |
 | `tsc` · `npm run build` | ✓ · ✓ |
 | `check-agent-wasm-gate` · `audit-agent-layout` (192) · `test-agent-abi` (28) | ✓ ✓ ✓ |
 | `verify-graph-rewrite` (405) · `verify-agent-render` · `verify-render-uniform-layouts` · `parity-agent-force` (20) · `probe-graph-layout` | ✓ ✓ ✓ ✓ ✓ |
