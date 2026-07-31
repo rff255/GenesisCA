@@ -2475,7 +2475,37 @@ function buildGpuFieldBridge(): GpuFieldBridge | null {
  *  feature needs per-generation CPU work (structural phase, field bridge, sync
  *  attr swap, positional projection, stop drain, indicator sync) or CPU-visible
  *  per-gen state (spawn reconcile). Anything ineligible falls back to the
- *  per-generation GPU path — never silently wrong. */
+ *  per-generation GPU path — never silently wrong.
+ *
+ *  WHY A BONDED MODEL CAN NEVER BE RESIDENT (asked often enough to write down):
+ *  residency's whole value is that N generations are encoded into ONE queue
+ *  submit with NO CPU touch point between them — so anything needing the CPU
+ *  BETWEEN generations disqualifies it, by construction.
+ *
+ *  The STRUCTURAL PHASE (bond form/break/rewire, division, death, auto-bond, the
+ *  stale-bond sweep) is CPU/JS on EVERY target by design. A shader can only
+ *  REQUEST those ops (it writes flags into the request queue); applying them is
+ *  serial data-structure surgery, not per-agent parallel math:
+ *    - the bond store is RAGGED, with per-agent capacity, a free list and
+ *      epoch-stamped slot recycling. Removing a bond compacts by swapping with
+ *      the last slot (`moveBondSlot`), which moves BOTH endpoints' rows.
+ *    - division partitions a mother's bonds between two daughters via a
+ *      closed-form eigensolve, then rewires every partner.
+ *    - `partner` / `restLength` are CPU-OWNED — the shader never writes them, so
+ *      they would need uploading + reading back each generation regardless.
+ *  Hence the two independent terms below: `s.maxBonds === 0` (no bond store to
+ *  sync) and `agentGraphResidencyClean` (= !usesStructural && !usesRadiusWrite —
+ *  no Divide/Form/Break/Rewire/Kill reachable from the behaviour root).
+ *
+ *  For a GRA rule this is not incidental — THE REWIRING IS THE MODEL — so it can
+ *  never satisfy either term. Lifting it means porting the structural phase
+ *  itself: a parallel bond-store allocator/compactor, a GPU division partition,
+ *  and conflict resolution for concurrent rewires of a shared edge — plus its own
+ *  answer for invariant I5 (a rejected op leaves the graph EXACTLY as before),
+ *  which today is trivially satisfied because the CPU applies ops one at a time.
+ *  Until then a bonded model gets the per-generation GPU path (behaviour + force
+ *  still dispatch on the GPU), whose cost the ACTIVE WINDOW made track the live
+ *  population instead of the maxAgents ceiling. */
 function agentResidentEligible(): boolean {
   const s = agentStore, rt = agentWebgpuRuntime, cfg = centerBasedConfig;
   if (!s || !rt || !rt.ready || agentTarget !== 'webgpu' || !cfg) return false;

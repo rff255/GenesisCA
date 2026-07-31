@@ -2205,8 +2205,9 @@ export function HelpView() {
               forces, async attributes, no bonds/division/field coupling &mdash; the
               Particle-Life / Boids class) run whole frames <em>resident on the GPU</em>,
               tens of times faster than the CPU at 50k+ agents. Models outside that
-              class use the per-generation GPU path, where the CPU&harr;GPU transfer
-              often makes JS/WASM the faster choice below ~10k agents. One exception: a
+              class use the per-generation GPU path (see <em>Two GPU paths</em> below), where
+              the CPU&harr;GPU transfer each generation can still make JS/WASM the faster
+              choice at small populations. One exception: a
               field-coupled model (agents that read/write a cell field) whose grid is{' '}
               <em>also</em> on WebGPU and whose agent-accessible cell fields are all
               Decimal (float) bridges the field entirely GPU-side each step &mdash; no CPU
@@ -2242,6 +2243,46 @@ export function HelpView() {
               then; in the free-running fast path those are off (the spheres are opaque and
               always drawn under the overlays).</li>
           </ul>
+
+          <h3 className={styles.h3}>Two GPU paths &mdash; and why a bonded model takes the slower one</h3>
+          <p className={styles.p}>
+            The WebGPU agent target has <strong>two</strong> paths, and which one your model
+            gets is the biggest single performance fact about it:
+          </p>
+          <ul className={styles.list}>
+            <li><strong>Resident</strong> &mdash; a whole Gens/Frame batch is sent to the GPU
+              as <em>one</em> job and the CPU is not involved between generations at all; the
+              results come back once per <em>frame</em>. This is the tens-of-times-faster
+              path.</li>
+            <li><strong>Per generation</strong> &mdash; the behaviour and force passes still
+              run on the GPU, but each generation ends with a round-trip: the agent state is
+              sent up, stepped, and read back. Everything that is not eligible for residency
+              lands here.</li>
+          </ul>
+          <p className={styles.p}>
+            Residency&rsquo;s whole value is that <em>nothing</em> happens on the CPU between
+            generations &mdash; so any feature that needs the CPU there rules it out. The big
+            one is <strong>bonds</strong>. Forming, breaking, rewiring, dividing and dying all
+            happen in a <em>structural phase</em> that runs on the CPU on every compile
+            target: the graph can only <em>request</em> those operations, and applying them is
+            bookkeeping on a linked structure (reclaiming bond slots, splitting a dividing
+            agent&rsquo;s bonds between its daughters, rewiring every partner), not the kind
+            of uniform per-agent arithmetic a GPU runs well. So a model with a bond store, or
+            with Divide / Form Bond / Break Bond / Rewire Bond / Kill Agent in its behaviour,
+            takes the per-generation path by construction. The same is true of a field-coupled
+            model, synchronous agent attributes, positional collision, agent spawning, Stop
+            Events, and indicator accumulation.
+          </p>
+          <p className={styles.p}>
+            <strong>This is not a defect to work around, and nothing is silently wrong</strong>
+            &mdash; a graph-rewriting model is simply a different class of simulation from a
+            flock. Two things that <em>do</em> help: the per-generation transfer now scales
+            with your live population rather than the <em>Max Agents</em> ceiling (so a
+            generous ceiling costs nothing), and at small populations the{' '}
+            <strong>WebAssembly</strong> agent target is often faster still, because a CPU
+            target has no round-trip at all. Try both &mdash; the target chip in the
+            simulator&rsquo;s stats overlay shows which one is actually running.
+          </p>
         </section>
 
         {/* ============================================================ */}
