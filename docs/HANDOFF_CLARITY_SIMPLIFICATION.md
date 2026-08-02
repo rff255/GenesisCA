@@ -66,7 +66,7 @@ Status values: `pending` → `in progress` → `DONE (date, SHAs)` / `BLOCKED (r
 | Phase | Scope (proposal items) | Status |
 |---|---|---|
 | C1 | P2 Target Compatibility readout + P4 resolved-config annotations | DONE (2026-08-02, 4ddca6f) |
-| C2 | P3 Generation Pipeline panel (+ tempo tags) | pending |
+| C2 | P3 Generation Pipeline panel (+ tempo tags) | DONE (2026-08-02, 96e5652) |
 | C3 | P4 fast-path diagnostics popover + P8 generated capability docs | pending |
 | C4 | P1 engine enum + Auto + JS demotion + Show Code = JS reference | pending |
 | C5 | P10 reproducibility contract + Auto integration | pending |
@@ -275,7 +275,127 @@ Boids (motion/sensing active, bonds/growth struck), Growing Tissue (springs + gr
 division + structural active), Ant Necrophoresis (field deposit noted, sequential tag),
 GoL grid-only (short list), Cubic GRA (queue drain + cadence note). Evidence in report.
 
-*Completion Report: — to be appended by the phase session —*
+### Completion Report — C2 (2026-08-02)
+
+**Status: DONE.** Feature commit: **`96e5652`** *feat(clarity): generation-pipeline panel (C2)*
+on `GRA` (this report rides the follow-up docs commit, as C1 did). Not pushed, no version bump,
+no attribution lines. Plan + illustrated mockup:
+[PLAN_CLARITY_C2.md](PLAN_CLARITY_C2.md) / `.html`.
+
+#### What shipped
+
+1. **`src/model/generationPipeline.ts`** (new, pure) — `describeGenerationPipeline(model) →
+   PipelinePhase[]` in execution order, plus `describePipelineGroups(model)` (bracket headers
+   carrying their own resolved number) and `integrationFormula(cfg)`.
+   - **Every `active` bit and every number comes from the function the ENGINE consults**:
+     `usesSoftCollision` / `usesPositionalCollision` / `usesEngineSprings` / `usesEngineGrowth` /
+     `usesCharge` / `chargeParamsOf` / `chargeMaxDistOf` / `layoutIterationsOf` / `resolveMaxBonds` /
+     `cbNum` / **C1's `effectiveAgentDt`** / `sparseSteppingEnabled`. Nothing is re-derived.
+   - **Where a graph-content question HAS an engine usage gate, that gate is called** rather than
+     scanned locally: `agentGraphUsesBondRequests` (the gate that SIZES the request queue) drives the
+     drain row; `dividePartitionTableForModel` (the table the engine INDEXES at runtime) drives the
+     divisions row *and* its partition/daughter-bond detail; `periodicParams` (the lowering's own
+     clamp) produces the cadence note. The remaining content questions — "does the graph contain a
+     Kill Agent / a Division Event root / a sprite / an Output Mapping" — have no resolver (the
+     engine runs the phase and it no-ops), so they use the macro-aware `walkNodes` scan. **This split
+     is stated explicitly in the module header**, not left implicit.
+   - **Phase order read out of the shipped loops**, not invented: `runAgentStep` →
+     `runAgentStructuralPhase` → `runStep`, the step-message batch loop, and the reset handler's
+     `runInit` → `runGridInit` → `runAgentInit`. Agents step BEFORE cells; a field-using model gets
+     *"reads/writes the cell field here — your deposit is what the cell step below then sees"* on the
+     behaviour row, which is exactly WHY that order holds.
+   - `presentation?` ships **reserved and never written**, so C8 needs no shape change.
+2. **Properties → Generation Pipeline** (`GenerationPipelineBlock` in `PropertiesPanelContent.tsx`) —
+   its own `CollapsibleSection id="pipeline"` directly under Compatibility (C1: *which engine*;
+   C2: *what does it do*). Coloured left RAIL = owner attribution, per-row tempo CHIP, inactive rows
+   struck + dimmed as `off — needs <capability>`, consecutive same-group rows inside a dashed bracket
+   with the group's resolved number.
+3. **`scripts/test-generation-pipeline.mjs`** — **3400 checks**: activity ⇔ resolver over a
+   **288-combination** synthetic matrix; phase ORDER vs a hard-coded list (+ sub-lists must be ordered
+   projections); all 29 shipped models; per-model assertions for the five verification models; **six
+   negative controls**.
+4. **Docs sweep** — a CLAUDE.md section; HelpView's *"What runs each generation"* rendering
+   `<GenerationPipelineReference/>`, which calls **the same function** over a synthetic everything-on
+   model (`FULL_AGENT_PROFILE`), so there is **no hand-written duplicate table**; a README bullet.
+
+#### Verification evidence (real numbers / observations)
+
+**Gates** — `npx tsc -p tsconfig.app.json --noEmit` clean; `npm run build` clean;
+`check-compile-identity --compare` → **"BYTE-IDENTITY OK — 29 models, all surfaces unchanged"**;
+`verify-agent-render.mjs` → **AGENT RENDER-LAYER INVARIANTS ✓**; the new harness →
+**3400 passed, 0 failed · negative controls 6 caught, 0 missed**.
+
+**The read-only guarantee is structural**: `git diff --stat` touches only `CLAUDE.md`, `README.md`,
+`HelpView.tsx`, `PropertiesPanelContent.tsx` + the two new files. **No engine, compiler or worker file
+was opened for writing.**
+
+**The harness can genuinely fail — proven by SOURCE MUTATION**, not just by in-harness controls
+(a test that only ever passes proves nothing):
+- hard-coding `active: true` on the soft-collision row (the classic "parallel truth" drift) →
+  **198 failures** and the matching negative control stops being caught;
+- swapping the death/divide rows → the ORDER check fails with the **exact expected-vs-got diff**,
+  plus 5 downstream failures.
+Both mutations reverted; the harness is green again on the shipped source.
+
+**In-browser (dev server, real library models, real DOM reads).** The Browser pane reports
+`document.hidden === true` (the documented occluded-pane trap), so screenshots are unavailable and the
+evidence is DOM text + computed styles — which is the right evidence for a text/DOM feature.
+**0 console errors** across the whole session (fresh `console.error` hook after a reload, per the
+documented persistent-buffer caveat).
+- **Boids — Flocking** — `Integrate & commit positions · v = 0.9·v + (0.5/1)·ΣF · speed cap 1.1`;
+  **struck**: Soft-sphere collision *(needs Collision = Soft-sphere)*, Bond springs *(needs Bonds =
+  Physics)*, Growth ramp *(needs Growth)*, Divisions *(needs a Divide Agent node)*, Stale-bond sweep
+  *(needs Bonds)* — exactly the runbook expectation.
+- **Morphogenesis - Growing Tissue** — **21 phases**; springs `λ = 1.2 · rest length 1`, growth
+  `radius → target, 0.035 per generation`, divisions `bonds partitioned by tension axis · daughter–
+  daughter bond: auto`, auto-bond `form within 1.15×contact · break past 1.8×contact`, and the
+  integration formula **`v = 0·v + (0.0625/1)·ΣF`** — the **clamped** Δt (C1 independently reported
+  "effective Δt 0.0625 — clamped from 0.1"), so the panel shows what the integrator actually uses.
+- **Ant Necrophoresis** — behaviour row reads *"asynchronous (**sequential** — a write is visible to a
+  later agent this generation) · **reads/writes the cell field here — your deposit is what the cell
+  step below then sees**"*; both halves present with **agents before cells** verified in the live DOM.
+- **Game Of Life** — the grid-only **short list, 8 rows**, zero agent phases: Init/Grid Init (struck),
+  Shuffle order (struck — synchronous), *Your Generation Step graph*, Skip isolated empty cells
+  (struck), Double-buffer swap, Indicator aggregation (struck), Colour pass — cells.
+- **Cubic GRA** — `Drain bond-request queue · **up to 8 requests per agent per generation**, applied in
+  the order your graph issued them`; behaviour row carries **`cadence every 2`** (its Periodic Step,
+  via the lowering's own `periodicParams` clamp); charge `k = -10 · cutoff 20`; and the spatial-hash
+  row reads **`neighbour queries up to radius 6 (widened to the charge cutoff 20)`** — the documented
+  bin-edge TRAP made visible. Sync agent mode ⇒ prime/commit rows both active. 4 computed indicators.
+- **Owner attribution + tempo, measured**: on Cubic GRA the DOM carries **3 rails at `rgb(232,161,58)`
+  titled "Your graph"** and **18 at `rgb(107,114,128)`** titled "The engine"; chips count
+  18 × *per generation*, 1 × *per event*, 1 × *per frame*, 1 × *once per reset*, each with its
+  explanatory tooltip.
+- **Collapsible** — collapsing sets the body to `display:none` and writes
+  `genesisca_properties_collapsed = ["pipeline"]`; expanding restores it and writes `[]`.
+- **Help** — *"What runs each generation"* renders the derived 26-row list with owner + tempo per row.
+
+#### Deviations / decisions (no scope cuts)
+
+1. **Group headers ship as `describePipelineGroups(model)`, not a static const.** The spec's
+   `PipelinePhase` has no place for a group's own resolved number, and the force loop's `×N iterations`
+   must come from `layoutIterationsOf` like everything else. A companion function keeps that number on
+   the same single-source rule instead of the UI re-deriving it.
+2. **Two facts have no resolver and use a node scan** (Kill Agent / Division Event root / sprites /
+   Output Mappings). The runbook says activity must come from the resolvers; where the engine has no
+   resolver because the phase is simply a no-op without a request, a scan IS the source of truth. Both
+   the module header and CLAUDE.md say so explicitly, and the two cases that DO have engine usage gates
+   (`agentGraphUsesBondRequests`, `dividePartitionTableForModel`) call those gates rather than scanning.
+3. **`indicators` is one phase for both layers**, not split per layer — linked indicators aggregate
+   cell attributes and graph indicators measure the agent bond graph, so it belongs to neither half.
+4. **The Help reference lists every phase the engine can run, without the active/struck state** (some
+   are mutually exclusive — soft vs positional collision, sync swap vs async shuffle), and the caption
+   says so. Rendering one model's subset there would teach a smaller sequence than exists.
+
+#### Follow-ups for later phases (not defects)
+
+- **C8** sets `PipelinePhase.presentation` and adds the *"presentation only — does not affect your
+  rule"* label to the force/motion/layout rows. The field and the group ids are already in place.
+- **C3**'s diagnostics answer the runtime half ("did residency/sparse actually ENGAGE?"). C2
+  deliberately describes only what the model asks for; the two should read as a pair.
+- The proposal notes the worker could eventually ITERATE this table, making drift impossible. That is a
+  large engine refactor; v1 is a parallel description pinned by the harness — the fallback the proposal
+  itself names.
 
 ---
 
@@ -586,3 +706,10 @@ Protocol:
   Game of Life + a provoked demotion (amber chip) and its negative control. C2 (Generation
   Pipeline panel) may proceed — it can reuse C1's `diagnoseTargets` resolvers and the
   `effectiveAgentDt` helper for its resolved numbers.
+- 2026-08-02: **C2 DONE** (`96e5652`). Compile-identity byte-identical on all 29 models; the new
+  `test-generation-pipeline.mjs` green (3400 checks, 288-combination matrix, 6 negative controls) and
+  proven failable by two source mutations; verify-agent-render green. Verified in-browser on Boids,
+  Growing Tissue, Ant Necrophoresis, Game Of Life and Cubic GRA. C3 (fast-path diagnostics + generated
+  capability docs) may proceed — it owns the RUNTIME half of the same story (C2 describes what the
+  model asks for; C3 reports what actually engaged), and `PipelinePhase.presentation` is already
+  reserved for C8.
