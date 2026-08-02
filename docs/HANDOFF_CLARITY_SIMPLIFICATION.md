@@ -65,7 +65,7 @@ Status values: `pending` → `in progress` → `DONE (date, SHAs)` / `BLOCKED (r
 
 | Phase | Scope (proposal items) | Status |
 |---|---|---|
-| C1 | P2 Target Compatibility readout + P4 resolved-config annotations | pending |
+| C1 | P2 Target Compatibility readout + P4 resolved-config annotations | DONE (2026-08-02, 4ddca6f) |
 | C2 | P3 Generation Pipeline panel (+ tempo tags) | pending |
 | C3 | P4 fast-path diagnostics popover + P8 generated capability docs | pending |
 | C4 | P1 engine enum + Auto + JS demotion + Show Code = JS reference | pending |
@@ -121,7 +121,120 @@ WebGPU-agent model (Morphogenesis - Growing Tissue → ⚠ fast-path residency n
 model (Cubic GRA → runs-on-GPU ✓ + ⚠ notes — disproving the "bonds prevent WebGPU"
 misread), a clean sync grid model (Game of Life → all ✓). Evidence in the report.
 
-*Completion Report: — to be appended by the phase session —*
+### Completion Report — C1 (2026-08-02)
+
+**Status: DONE.** One commit: **`4ddca6f`** *feat(clarity): target-compatibility
+readout + resolved-config annotations (C1)* on `GRA` (not pushed, no version bump,
+no attribution lines). Plan + illustrated mockup: [PLAN_CLARITY_C1.md](PLAN_CLARITY_C1.md) / `.html`.
+
+#### What shipped
+
+1. **`src/model/targetDiagnosis.ts`** (new, pure) — `diagnoseTargets(model)` → per layer
+   (grid / agents) × per engine (js / wasm / webgpu) `{ ok, blockers, notes }` with
+   class-tagged reasons (`semantics` / `reproducibility` / `fastpath` / `capacity`), plus
+   each layer's `requested` / `resolved` / `demotionReason`. Every **verdict** is produced by
+   the enforcing function — `detectWebGPUIncompatibilities`, `detectWebGPUModelIncompatibilities`,
+   `detectWasmIncompatibilities`, `isAgentGraphWasmSupported`, `isAgentGraphWebGPUSupported`,
+   `agentTargetOf`, `residencyModelBlockers`, `resolveMaxBonds`. Nothing is re-implemented.
+   - A gate that early-outs unless its target is selected (`detectWebGPUModelIncompatibilities`)
+     is asked **hypothetically** via a shallow probe clone — otherwise the readout would say
+     "no problem" for every non-WebGPU model.
+   - **Reason texts are a diagnostic layer ON TOP of the verdict.** The agent gates return a
+     bare boolean, so a "no" is explained by reading the gates' OWN tables
+     (`AGENT_*_SUPPORTED_TYPES`, `AGENT_NEARBY_SCRATCH_SLOTS`=4, `AGENT_WEBGPU_NEARBY_SLOTS`=6)
+     plus exact detectors for the documented op-level fundamentals (median / uniform-random
+     aggregate, toggle/next/previous indicators, cross-agent overwrite to a WIRED non-spawn id —
+     mirroring the gate's own node types / port names / Create-Agent exemption), falling back to
+     a generic honest sentence. A reason can be unhelpfully generic, **never wrong about ✓/✗**.
+2. **`src/model/agentResidency.ts`** (new, pure) — `residencyModelBlockers(cfg, facts)`, the
+   MODEL half of `agentResidentEligible`. **The worker CALLS it** (keeping only its runtime
+   terms: `rt.ready`, resolved target, `simulateAgents`), so engine decision and user
+   explanation are ONE predicate; the main thread never imports the worker. Blockers ordered
+   most-fundamental-first. `bondSlots` is passed IN — the worker supplies its store's real
+   `s.maxBonds` (the actual allocation), the UI the prediction `resolveMaxBonds(cfg)`.
+3. **P4 core** — `effectiveAgentDt(cfg)` in `centerBased.ts` (the Mathias-2020 clamp extracted
+   verbatim; `clampAgentDt` now calls it, same operands/order); `capabilityClosureDrivers` in
+   `agentCapabilities.ts` (DERIVED by probing each capability through `computeCapabilityClosure`,
+   never a hand-written table); a collapsible **Compatibility** block in Properties; the
+   effective-Δt line; the `(required by …)` row suffixes; and the simulator chip amber for
+   **every** `resolved ≠ requested` state with the classified reason in its tooltip.
+4. **Docs sweep** — a CLAUDE.md section, HelpView *"Engine compatibility — three principles"* +
+   *"Nothing is resolved silently"*, a README bullet.
+
+#### Verification evidence (real numbers / observations)
+
+**Gates** — `npx tsc -p tsconfig.app.json --noEmit` clean; `npm run build` clean;
+`check-compile-identity --compare` → **"BYTE-IDENTITY OK — 29 models, all surfaces unchanged"**;
+`parity-agent-wasm.mjs` → **ALL AGENT SAMPLES: JS↔WASM BIT-PARITY ✓**; `parity-agent-force.mjs`
+→ **FORCE-PASS PARITY ✓ (20 checks)**; `verify-agent-render.mjs` → **AGENT RENDER-LAYER INVARIANTS ✓**.
+
+**Model sweep (all 29 library models)** — `verdict ⇔ blocker` consistency holds on every
+layer/engine (no "✗ with no reason", no "✓ with a blocker"). The four async grid models
+(Amphiphile, Chromatography, gas_particles, snake) are the ONLY grid-WebGPU ✗ — matching the
+library compile-target policy exactly. No model demotes (`requested === resolved` everywhere)
+except when deliberately provoked (below).
+
+**In-browser (dev server, real library models, real DOM reads).** Screenshots were unavailable
+(the Browser pane reports not-displayed — the documented occluded-pane trap), so evidence is
+DOM text + computed styles + worker messages, which is the right evidence for a text/DOM feature.
+- **Amphiphile** — `CA GRID / running WebAssembly`; **✗ WebGPU** with two **[S]** blockers
+  ("requires synchronous update mode…" + "Transfer Cell Attributes to Neighbor requires
+  asynchronous update mode"); ✓ WASM, ✓ JS.
+- **Morphogenesis - Growing Tissue** — `AGENTS / running WebGPU`; **✓ WebGPU** carrying **[R]**
+  statistical parity **and [F]** *"Not GPU-residency eligible — the behaviour graph rewrites
+  structure…"*. Δt row: **"→ effective Δt 0.0625 — clamped from 0.1 for stability (μ_eff = 3.2)"**
+  (matches the hand calculation 0.2/(2+1.2)). Closure annotations on 3 rows:
+  `Motion (required by Collision, Bonds, Auto-bond)`, `Body / Extent (required by Collision,
+  Growth, Division)`, `Bonds (required by Auto-bond)`.
+- **Cubic GRA** — `AGENTS / running WebAssembly`; **✓ WebGPU** + [R] + [F] residency note —
+  the direct in-UI disproof of *"bonds prevent WebGPU"*. Δt shows the non-binding bound
+  ("= 0.1379 — not binding here"), correctly unclamped.
+- **Game of Life** — `CA GRID / running WebGPU`; all three engines ✓.
+- **Amber chip** — provoked through the REAL radio: on Ant Necrophoresis, selecting the WebGPU
+  agent target (which its gate rejects) makes the readout show
+  `requested WebGPU → running Debug / Reference (JS)` with an **[S]** cross-agent-write blocker,
+  and the simulator chip becomes **`⚙ WASM · agents JS⚠`** in **`rgb(224,160,80)`** (#e0a050)
+  with the classified reason + "Full readout: Properties → Compatibility" in its tooltip.
+  **Negative control**: reloading the model fresh returns `⚙ WASM · agents WASM` in the default
+  grey `rgba(128,144,160,0.7)`, no ⚠, generic tooltip.
+- **Collapsible section** — collapsing hides the body (`display:none`) and writes
+  `genesisca_properties_collapsed = ["compatibility"]`; expanding restores it and writes `[]`.
+- **Behaviour unchanged at runtime** — Amphiphile steps generations 1–6; Growing Tissue runs to
+  generation 40 on the WebGPU agent target. The refactored worker predicate reports
+  `residentEligible: true` for **Boids** and `false` for **Growing Tissue** (via `__e1bCounters`),
+  matching both the pre-change documented behaviour and this phase's readout. **0 console errors**
+  across the whole session (fresh `console.error` hook, per the documented buffer caveat).
+- **Help** — the "Engine compatibility — three principles" and "Nothing is resolved silently"
+  subsections render in the Bond-Graph Agents chapter.
+
+#### Deviations / decisions (no scope cuts)
+
+1. **Section placement.** The spec said "Properties → Execution: a Compatibility block". It ships
+   as its OWN `CollapsibleSection id="compatibility"` placed **directly under Execution** (which it
+   explains) rather than nested inside that already-very-long body — same collapsible pattern,
+   better discoverability. Behaviourally identical to the spec's intent.
+2. **`detectWasmModelIncompatibilities` is deliberately NOT called.** It wraps the documented-
+   deprecated `detectAgentTargetRestriction`, which keys off the GRID flags and would falsely
+   block every agent model. The live per-node `detectWasmIncompatibilities` IS called, so a future
+   WASM-only gap surfaces with no edit to the diagnosis module.
+3. **Behaviour-scoped graph walks** were required for correctness: whole-graph scans wrongly
+   reported Particle Life as residency-ineligible (its Create Agent is in the **Init Event**, and
+   the compiler flags are behaviour-scoped) and named `agentInit` as an unsupported node type on
+   Ant Necrophoresis. `walkAgentBehaviourNodes` mirrors the compilers' `behaviourReachableNodeIds`
+   (flow edges out, value edges in); the FIELD term stays whole-graph, matching `agentUsesField`.
+4. **Ant Necrophoresis' agent WebGPU verdict is ✗** (cross-agent write to a wired id). That is the
+   pre-existing Cross-Agent Write Semantics gate, added after the CLAUDE.md line recording an
+   earlier GPU-live verification of that model; it is consistent with the model shipping on WASM.
+   C1 only surfaces it — no gate was changed.
+
+#### Follow-ups for later phases (not defects)
+
+- The residency facts are re-derived from node types in the UI rather than read from the WebGPU
+  agent compile result. **C3** adds a supported `getDiagnostics` worker message carrying the real
+  compiler flags — the readout's F-notes should then read from it (removing the conservative
+  approximation entirely).
+- `diagnoseTargets` runs both agent gates (each flattens the agent graph). Memoised on `model` in
+  both consumers; if a future phase calls it more often, share one memo.
 
 ---
 
@@ -468,3 +581,8 @@ Protocol:
 ## Orchestrator log
 
 - 2026-08-02: runbook created. Launching C1.
+- 2026-08-02: **C1 DONE** (`4ddca6f`). Compile-identity byte-identical on all 29 models; parity /
+  force / render harnesses green; verified in-browser on Amphiphile, Growing Tissue, Cubic GRA,
+  Game of Life + a provoked demotion (amber chip) and its negative control. C2 (Generation
+  Pipeline panel) may proceed — it can reuse C1's `diagnoseTargets` resolvers and the
+  `effectiveAgentDt` helper for its resolved numbers.
