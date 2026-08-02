@@ -67,7 +67,7 @@ Status values: `pending` → `in progress` → `DONE (date, SHAs)` / `BLOCKED (r
 |---|---|---|
 | C1 | P2 Target Compatibility readout + P4 resolved-config annotations | DONE (2026-08-02, 4ddca6f) |
 | C2 | P3 Generation Pipeline panel (+ tempo tags) | DONE (2026-08-02, 96e5652) |
-| C3 | P4 fast-path diagnostics popover + P8 generated capability docs | pending |
+| C3 | P4 fast-path diagnostics popover + P8 generated capability docs | DONE (2026-08-02, 2620d37) |
 | C4 | P1 engine enum + Auto + JS demotion + Show Code = JS reference | pending |
 | C5 | P10 reproducibility contract + Auto integration | pending |
 | C6 | P5 schema hygiene + update-mode vocabulary + loud-fallback completion | pending |
@@ -431,7 +431,154 @@ protocol addition); in-browser: popover on (a) Boids/WebGPU → residency engage
 (b) Growing Tissue/WebGPU → residency off "bonds"; (c) Accretor → sparse count matches the
 ◩ chip; (d) a forced fallback (DEV hook) → event logged + shown. `--check` green.
 
-*Completion Report: — to be appended by the phase session —*
+### Completion Report — C3 (2026-08-02)
+
+**Status: DONE.** Feature commit: **`2620d37`** *feat(clarity): fast-path diagnostics +
+generated capability docs (C3)* on `GRA` (this report rides the follow-up docs commit, as
+C1 and C2 did). Not pushed, no version bump, no attribution lines. Plan + illustrated
+mockup: [PLAN_CLARITY_C3.md](PLAN_CLARITY_C3.md) / `.html`.
+
+#### What shipped
+
+1. **`getDiagnostics` — a SUPPORTED worker message** (request/reply `getDiagnostics` →
+   `diagnostics`), sent when the popover opens plus a 700 ms poll while it is open.
+   **On demand only, never per step.** Every field is read from state the worker already
+   maintains; the reply costs one predicate evaluation. Additive — no existing message
+   shape touched.
+   - **The residency reason comes from the SAME predicate the engine decided with**: the
+     reply calls C1's `residencyModelBlockers` with the WORKER's facts — the compiler flags
+     it was handed (`rt.usesSpawn` / `rt.usesStop` / `rt.indicatorsBuf`) and the bond
+     capacity it actually ALLOCATED (`s.maxBonds`). This **discharges C1's own follow-up**
+     ("the residency facts are re-derived from node types in the UI … C3 adds a supported
+     `getDiagnostics` worker message carrying the real compiler flags"). Where the two
+     differ, the popover shows the worker's answer, because it is the one the engine acted on.
+   - **`residency.engaged` is a real counter** (`residentBatchCount`, bumped where
+     `runAgentBatchResident` SUCCEEDS), not the eligibility predicate — a model that
+     qualifies but whose pipeline build failed reads *eligible, not engaged* rather than lying.
+   - **`sieActiveCount()`** extracted out of `sendColors`, so the `◩ N active` chip and the
+     popover's Sparse row read ONE expression and cannot disagree.
+   - A path that does not APPLY reports **`n/a` with the reason**, never a fabricated blocker.
+2. **The runtime fallback log** — a capped `runtimeEvents` (40, oldest dropped) of
+   `{ gen, text }`. **`postFallback(message)`** replaces the bare error post at the **15
+   engine-fallback sites** (grid + agent WASM instantiate/compile/run, agent WebGPU
+   build/step/resident-batch, both hash-overflow fallbacks, every `[webgpu]` grid init
+   failure), keeping the banner and adding a durable record. Ordinary operational errors
+   (a failed colour pass, a readback that threw) are deliberately EXCLUDED — that is what
+   makes an empty Events list a meaningful statement.
+   - **Two genuinely silent sites closed**: `startWebGPUInit`'s `!shaderCode` arm set
+     `webgpuGridFailed` with no message at all, and the shared device's loss /
+     uncaptured-error hooks were console-only. `sharedGpuDevice.ts` is imported BY the
+     worker and must not import back, so it gained **`setSharedGpuEventSink(fn)`** — a
+     one-line seam; absent sink ⇒ exactly the previous behaviour. Uncaptured errors capped at 3.
+   - **Rate limiting reuses the EXISTING warn-once latches**, so a hash overflow logs once.
+3. **The diagnostics popover** on the `⚙` compile-target chip — Engine / Fast paths /
+   Events. Rows are green/grey, **never red**, with Principle 3 as the section footnote.
+   Joins the single-open `overlayPopup` state (inheriting outside-pointerdown + Escape);
+   geometry follows the capture-cluster lessons (own relative wrapper, upward-left and
+   flush, `max-height` + scroll, inside `data-sim-overlay`); opens on **click**, not hover.
+   `diagnostics` is cleared on **`modelVersion`** so a previous model's reading is never
+   shown as current.
+4. **P8 — [scripts/gen-capability-docs.mjs](../scripts/gen-capability-docs.mjs) →
+   [src/help/capabilityMatrix.gen.ts](../src/help/capabilityMatrix.gen.ts)** (committed),
+   with a `--check` staleness gate. HelpView renders four new blocks from it; the
+   hand-typed counts are gone.
+
+#### Verification evidence (real numbers / observations)
+
+**Gates** — `npx tsc -p tsconfig.app.json --noEmit` clean; `npm run build` clean;
+`check-compile-identity --compare` → **"BYTE-IDENTITY OK — 29 models, all surfaces
+unchanged"**; `parity-agent-wasm` → **ALL AGENT SAMPLES: JS↔WASM BIT-PARITY ✓**;
+`check-agent-wasm-gate` → **GATE✓ COMPILE✓ INST✓** on every sample; `verify-agent-render`
+→ **AGENT RENDER-LAYER INVARIANTS ✓**; `gen-capability-docs --check` green.
+
+**The `--check` gate is proven FAILABLE by a SOURCE mutation** (an in-file mutation alone
+would prove only that it diffs its own output): removing `'getNearbyAgents'` from
+`AGENT_WASM_SUPPORTED_TYPES` made it **exit 1** naming the exact drift
+(`committed "wasm": true / generated "wasm": false`, line 457); reverted → green again.
+A second control (hand-editing the committed count 53 → the stale 42 Help used to carry)
+was likewise caught at the exact line.
+
+**The first generated output caught two real defects — inspected, not assumed:**
+- the WebGPU-grid probe reported the three unconditional rejects as *config-dependent*
+  (the same reason recurs under every candidate op). Fixed by treating a rejection under
+  the BARE config as proof the reject does not depend on configuration.
+- the raw set delta listed `neighbourCensus`, `applyForceToAgents`, `periodicStep`,
+  `agentOutputMapping`, `agentInit` and `divisionEvent` as unsupported — **actively wrong
+  documentation**, the exact drift P8 exists to prevent. Fixed with three DERIVED
+  exemptions: `entryPoint` (`category === 'event'` — the gates walk the behaviour-reachable
+  cone, which never contains a root), `lowered` (**probed** by feeding each shipped
+  pre-compile transform a one-node graph and seeing whether the node survives), and
+  `cpuRoot`. After the exemptions **`setAgentSprite` is the single genuine gap on both
+  targets** — exactly the carve-out CLAUDE.md documents.
+
+**In-browser (dev server, real library models, real worker messages).** The Browser pane
+reports `document.hidden === true` (the documented occluded-pane trap), so screenshots are
+unavailable and the play loop is suspended; steps were driven one-per-reply through
+`window.__simWorker` per the documented recipe. Evidence is DOM text + worker replies —
+the right evidence for a text/DOM + protocol feature. **0 console errors** across the whole
+session (fresh `console.error` hook, per the persistent-buffer caveat).
+- **(a) Boids — Flocking, WebGPU agents → residency ENGAGED.** Popover: `GPU residency —
+  engaged (1 batches)`, `Direct render — agents → canvas`, no events. After driving 12
+  further batches the reply read `batches: 13` — the counter tracks real resident batches,
+  it is not the eligibility flag.
+- **(b) Morphogenesis — Growing Tissue, WebGPU agents → residency OFF with the reason.**
+  `Agents — WebGPU` (running on the GPU, disproving "bonds prevent WebGPU") while
+  `GPU residency — off — the behaviour graph rewrites structure (Divide / Form / Break /
+  Rewire / Kill Agent, or a radius write) — the structural phase is CPU work between
+  generations on every engine`.
+- **(c) Accretor → sparse count matches the ◩ chip.** The SHIPPED Accretor has
+  `skipIsolatedEmpty.enabled: false` (a deliberate config — it runs on WebGPU, where sparse
+  is a documented no-op), so it correctly reports *off — Skip Isolated Empty Cells is off
+  for this model*. To exercise the engaged state an in-memory variant (enabled + WASM grid,
+  60³; the shipped file untouched) gave chip `◩ 1,795 active (0.0%)` and popover
+  `Sparse stepping — 1,795 of 5,400,000 cells` — **identical numbers**, which is the shared
+  helper working.
+- **(d) A forced fallback is logged and shown.** A real, user-reachable configuration — an
+  ASYNC model (Amphiphile) with the WebGPU grid target selected — produced Engine
+  `WebGPU (failed — running on the CPU)` in amber with C1's classified `[S]` reason, and
+  Events `gen 0 · [webgpu] compile failed: WebGPU target requires synchronous update
+  mode…`. **No flooding**: the list stayed at exactly 1 across 250 step messages.
+- **The `modelVersion` reset was confirmed live** — loading a new model while the popover
+  was open switched it to *"Waiting for the simulation worker…"* rather than showing the
+  previous model's reading as current.
+- **Help renders the generated data**: `150 selectable node types (53 of them agent nodes,
+  20 Overseer nodes)`; a 53-row matrix (`Set Sprite` ✗/✗, `Division Event` —/—); the 5
+  grid rejects with correct conditions (3 *any configuration*, 2 op-specific); 10 capacity
+  limits with their real numbers (scratch slots 4, array-producer slots 6, array cap 2,048,
+  bond-request depth 8/64, hash bins 65,536, …).
+
+#### Deviations / decisions (no scope cuts)
+
+1. **The 40-entry cap is a structural safety net, not something I saturated — and the
+   reason is worth recording.** A model load TERMINATES and recreates the worker, so the
+   log is worker-scoped: 48 reloads of the deliberately-broken model left exactly **1**
+   event, because each fresh worker records its own. "This session" therefore means this
+   worker's life, which is the honest semantics; the cap protects a long-lived worker
+   taking repeated per-step fallbacks, which a normal session never approaches.
+2. **Rate limiting reuses the pre-existing warn-once latches** rather than adding a second
+   mechanism. Their one-time character is therefore inherited (those booleans already gated
+   the `error` post), not newly written — stated here rather than claimed as new evidence.
+3. **`postFallback` is scoped to ENGINE FALLBACKS**, not to every `error` post. There are
+   ~60 error sites in the worker; logging "paint readback failed" alongside "the GPU device
+   was lost" would make the Events list noise and destroy the meaning of an empty one.
+4. **The WebGPU grid reject set is probed with a candidate-operation list.** That list is
+   the probe's INPUT SPACE — the gate still produces every verdict — because
+   `detectWebGPUIncompatibilities` is an inline switch with no exported list and its
+   `updateIndicator` arm is config-dependent. Documented in the generator.
+5. **`docs/NODES_REFERENCE.md` per-node annotations are NOT regenerated** (the runbook
+   scopes P8 here to the Help matrix). Its target facts live in a prose *Notes* column, so
+   converting it is a separate migration; the generator is shaped to emit it later.
+6. **No toasts for fallback events** — the runbook assigns the UI half of loud fallbacks to
+   **C6**. C3 built the log C6 consumes.
+
+#### Follow-ups for later phases (not defects)
+
+- **C6** surfaces `runtimeEvents` as one-time toasts and adds its own "legacy physics flags
+  in effect" event; the log + the `postFallback` seam are in place for it.
+- The generated module also exports `AGENT_CAPABILITY_LIST` (the capability rows with their
+  descriptions), currently unused: HelpView still hand-lists the capabilities in prose.
+  A later docs pass can render that from the generated data too.
+- `NODES_REFERENCE.md` (see deviation 5) is the remaining half of P8.
 
 ---
 
@@ -713,3 +860,13 @@ Protocol:
   capability docs) may proceed — it owns the RUNTIME half of the same story (C2 describes what the
   model asks for; C3 reports what actually engaged), and `PipelinePhase.presentation` is already
   reserved for C8.
+- 2026-08-02: **C3 DONE** (`2620d37`). Compile-identity byte-identical on all 29 models; parity /
+  agent-wasm-gate / verify-agent-render green; the new `gen-capability-docs --check` gate green and
+  proven failable by a SOURCE mutation (dropping a node from `AGENT_WASM_SUPPORTED_TYPES` → exit 1
+  naming the drift). Verified in-browser on Boids (residency engaged, batches 1 → 13), Growing Tissue
+  (residency off with the structural blocker), an Accretor variant (sparse count identical to the ◩
+  chip), and a forced async-on-WebGPU fallback (logged + shown, no flooding across 250 step messages).
+  C1's residency approximation is now discharged — the popover reads the worker's real compiler flags.
+  C4 (the engine enum) may proceed; it should consume `getDiagnostics`'s resolved `engine.grid` /
+  `engine.agents` / `agentEngineActive` rather than re-deriving runtime state, and must regenerate
+  `capabilityMatrix.gen.ts` if it touches the gates (`node scripts/gen-capability-docs.mjs`).
