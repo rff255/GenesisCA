@@ -68,7 +68,7 @@ Status values: `pending` → `in progress` → `DONE (date, SHAs)` / `BLOCKED (r
 | C1 | P2 Target Compatibility readout + P4 resolved-config annotations | DONE (2026-08-02, 4ddca6f) |
 | C2 | P3 Generation Pipeline panel (+ tempo tags) | DONE (2026-08-02, 96e5652) |
 | C3 | P4 fast-path diagnostics popover + P8 generated capability docs | DONE (2026-08-02, 2620d37) |
-| C4 | P1 engine enum + Auto + JS demotion + Show Code = JS reference | pending |
+| C4 | P1 engine enum + Auto + JS demotion + Show Code = JS reference | DONE (2026-08-02, b0f43b9) |
 | C5 | P10 reproducibility contract + Auto integration | pending |
 | C6 | P5 schema hygiene + update-mode vocabulary + loud-fallback completion | pending |
 | C7 | P6 archetype-first New Model + P7 determinism (seeded scatter) | pending |
@@ -616,7 +616,149 @@ Verification: tsc/build; compile-identity byte-identical for ALL library models;
 gate green; in-browser: library models resolve unchanged; a New model shows
 "Auto → WebAssembly"; save→load round-trips.
 
-*Completion Report: — to be appended by the phase session —*
+### Completion Report — C4 (2026-08-02)
+
+**Status: DONE.** Feature commit: **`b0f43b9`** *feat(clarity): one Engine selector —
+auto | wasm | webgpu (+ Debug JS) (C4)* on `GRA` (this report rides the follow-up docs
+commit, as C1–C3 did). Not pushed, no version bump, no attribution lines. Plan +
+illustrated mockup: [PLAN_CLARITY_C4.md](PLAN_CLARITY_C4.md) / `.html`.
+
+#### What shipped
+
+1. **Schema + migration.** `ModelProperties.engine?: 'auto'|'wasm'|'webgpu'|'js'` and
+   `'auto'` on `CenterBasedConfig.agentTarget` ([types.ts](../src/model/types.ts)).
+   **`useWasm`/`useWebGPU` are NOT deleted — they become the RESOLVED MIRROR**, which is
+   the representation every downstream consumer already reads (worker init message, both
+   layout builders, the WebGPU/WASM node gates, the CaNode badge). That is what makes the
+   phase byte-identical AND what lets an older build open a file written by a newer one;
+   the removal schedule is recorded in CLAUDE.md and on the fields themselves.
+   [engineFieldMigration.ts](../src/model/engineFieldMigration.ts) (wired into `LOAD_MODEL`
+   + `migrateForHarness`) seeds the **explicit equivalent** of a legacy file's flags —
+   **a legacy file never becomes `'auto'`**. `EMPTY_MODEL.engine = 'auto'`,
+   `defaultCenterBasedConfig().agentTarget = 'auto'`.
+2. **`resolveEngines(model)`** ([engineResolution.ts](../src/model/engineResolution.ts)) —
+   the single source: per layer `{ selected, requested, resolved, reason, auto }`, every
+   verdict from the ENFORCING gate (C1's discipline), **memoised on the model object**
+   (WeakMap) so the per-node CaNode badge is O(1) rather than O(N²).
+   **`withResolvedEngine`** bakes the resolution into the mirror — deliberately the
+   **requested** engine, not the resolved one, so an explicit choice the gates reject is
+   still COMPILED and still fails loudly (that compile error is what produces C3's
+   fallback event; baking the demotion would have silently deleted it).
+3. **Consumers**: `withPipelineModel` in SimulatorView (init / soft recompile / Show Code),
+   `needsFullInit` (comparing the RESOLVED engines, so an `'auto'` model that re-picks
+   after a graph edit reinitialises), the C1 readout (whose grid WebGPU verdict now shares
+   `gridWebgpuBlockers` with the resolver, so verdict and explanation cannot disagree), the
+   simulator chip (**preferring C3's `getDiagnostics.engine`** when the worker has replied
+   — the runbook's C3 hand-off), the CaNode badge, and `serializeModel`.
+4. **UI**: one shared `EngineRadio` renders both layers — **Auto (recommended) /
+   WebAssembly / WebGPU** with **Debug / Reference (JS)** behind an **Advanced** reveal
+   (auto-open when JS is selected, so the selected option can never be hidden). Auto shows
+   a green `Auto → WebGPU` badge + the reason; a rejected explicit choice shows an amber
+   `WebGPU → running JS`. Everything in the panel that keyed off the raw mirror flags (the
+   async-mode greying, the WebGPU stop-check interval) now reads the RESOLVED engine.
+5. **Show Code always shows the JS reference source**, with a header naming the engine that
+   actually runs. The WebGPU compile still runs when WebGPU is resolved — its error must
+   keep surfacing — only the displayed text changed.
+6. **[scripts/test-engine-resolve.mjs](../scripts/test-engine-resolve.mjs)** — 367 checks.
+7. **Docs sweep** — a CLAUDE.md section (+ the "three targets" framing in the Graph→Compile
+   and WASM sections updated, not deleted), HelpView (a rewritten Engine bullet + a new
+   *"Auto — and why JS is not a peer"* subsection), a README bullet.
+
+#### Verification evidence (real numbers / observations)
+
+**Gates** — `npx tsc -p tsconfig.app.json --noEmit` clean; `npm run build` clean;
+`check-compile-identity --compare` → **"BYTE-IDENTITY OK — 29 models, all surfaces
+unchanged"**; `test-engine-resolve` → **367 passed, 0 failed · 3 negative controls caught**;
+`parity-agent-wasm` → **ALL AGENT SAMPLES: JS↔WASM BIT-PARITY ✓**; `check-agent-wasm-gate`
+→ **GATE✓ COMPILE✓ INST✓** on every sample; `verify-agent-render` → **✓**;
+`verify-render-uniform-layouts` → **✓**; `test-generation-pipeline` → **3400 passed**;
+`gen-capability-docs --check` green.
+
+**The new gate is proven FAILABLE by TWO SOURCE MUTATIONS** (an in-harness control alone
+only proves the harness can count):
+- removing the Overseer preference from `resolveGridLayer` → **3 failures** and its matching
+  negative control stops being caught;
+- mis-mapping `useWasm → 'js'` in the migration → **38 failures** across 9 models.
+Both reverted; green again on the shipped source.
+
+**In-browser (dev server, real library models, real clicks, real worker).** The Browser pane
+reports `document.hidden === true` (the documented occluded-pane trap), so screenshots are
+unavailable and the evidence is DOM text + computed styles + worker messages — the right
+evidence for a text/DOM feature. **0 console errors** across the whole session (fresh
+`console.error` hook, per the persistent-buffer caveat).
+- **Library models resolve UNCHANGED.** Accretor loads with **WebGPU** checked (its file's
+  `useWebGPU`), Amphiphile with **WebAssembly**, Cubic GRA's **Agent Engine** with
+  **WebAssembly** — and Cubic GRA's grid radio is correctly absent (agents-only).
+  A module-level sweep over Accretor / Amphiphile / Cubic GRA / Game Of Life confirmed
+  `legacy === resolved` on every one.
+- **Auto, through the real radio.** Accretor → Auto shows the green badge **`Auto → WebGPU`**
+  (`rgb(92,191,122)`) with *"Every WebGPU gate passes, so Auto runs the grid on the GPU."*,
+  the C1 readout switches to **`Auto → running WebGPU`**, and the **WebGPU stop-check field
+  becomes enabled** (it reads the resolved engine, so Auto lights up the same UI an explicit
+  pick does). Amphiphile → Auto shows **`Auto → WebAssembly`** with *"Auto picked
+  WebAssembly — WebGPU target requires synchronous update mode…"* and leaves the
+  Asynchronous radio enabled. Cubic GRA's agents → Auto shows **`Auto → WebAssembly`** with
+  the **Overseer** reason — the sweep-reproducibility exception, visible in the UI.
+- **A NEW model (File → New) shows `Auto → WebGPU`** — see deviation 1.
+- **The Advanced reveal works**: 3 radios before, 4 after clicking `▸ Advanced`, with
+  *Debug / Reference (JS)* the fourth.
+- **Show Code** renders `/* Reference semantics — the engine runs on WebGPU. … */` followed
+  by `// === Step Function ===` and the JS source — on a model running WebGPU.
+- **Behaviour unchanged at runtime**: Coagulation under `engine:'auto'` steps to
+  **generation 50** with the chip reading `⚙ WebGPU` in the neutral grey (no demotion);
+  Morphogenesis - Growing Tissue runs to **generation 145** on the WebGPU agent target with
+  the chip reading `⚙ agents WebGPU`.
+- **Save → load round-trip**, through the real `serializeModel`: a Cubic GRA with agents
+  flipped to Auto saves `engine:'wasm'` + `useWasm:true/useWebGPU:false` + a **concrete**
+  `agentTarget:'wasm'` (so an older build reads the same engine), and reloads to the same
+  engine.
+
+#### Deviations / decisions (no scope cuts)
+
+1. **A new model resolves `Auto → WebGPU`, not `Auto → WebAssembly`.** The runbook's
+   verification bullet expects WebAssembly, but the POLICY sentence — in both the proposal
+   (*"Auto = the library policy, codified: WebGPU where every gate passes, else WASM"*) and
+   this runbook's own §C4 — gives WebGPU for an empty synchronous grid, and **C5 states
+   explicitly that "the GRID stays WebGPU-eligible under exact"**, so resolving new models
+   to WASM here would be contradicted next phase. The policy wins; the expectation bullet
+   is the casualty, recorded here rather than quietly satisfied by inventing an extra
+   policy term.
+2. **`macroImport` is not a migration site.** The runbook lists it, but a `.gcamacro`
+   carries a `MacroDef`, which has no `properties` and no `centerBased` — there is nothing
+   to migrate. Stated in the migration module's header.
+3. **The legacy flags are kept as a resolved MIRROR rather than deleted**, per the runbook's
+   own "serialization writes BOTH … for one release cycle". This is also what makes the
+   byte-identity result achievable: every existing consumer keeps reading the exact value it
+   read before. `serializeModel` bakes the mirror so a saved file can never disagree with
+   the live resolution, and the removal schedule is documented.
+4. **`withResolvedEngine` bakes the REQUESTED engine, not the resolved one.** Baking the
+   demotion would stop SimulatorView compiling the requested target, and it is that
+   compile's ERROR that produces the user-visible message and C3's fallback event (C3
+   verified exactly this on an async model with WebGPU selected). Auto never picks a failing
+   engine, so the distinction only affects explicit choices — where preserving the loud
+   failure is the point.
+5. **Show Code is JS-only, so the emitted WGSL is no longer reachable from the UI.** That is
+   the spec (*"always shows the JS reference source"*), and it removes a real capability;
+   the shader remains available through the dev harness, and re-adding it as a read-only
+   Advanced view is recorded as a follow-up rather than smuggled in here.
+6. **Two copy fixes found by driving the real UI**: the agent WebGPU option inherited the
+   grid's "sync only" tag (wrong — the WebGPU agent target runs async models), so the tag
+   became a per-radio prop; and the Agents topology description still pointed at "the Agent
+   Compile Target below".
+
+#### Follow-ups for later phases (not defects)
+
+- **C5** replaces the Auto policy with the declared reproducibility contract; the Overseer
+  special case (currently two hard-coded branches in `resolveGridLayer` /
+  `resolveAgentLayer`) is exactly what it subsumes. `LayerResolution.reason` is already the
+  string the UI renders, so C5 changes the policy without touching the UI.
+- **Skip Isolated Empty Cells vs Auto**: Auto currently picks WebGPU on a model with sparse
+  stepping enabled, where the GPU ignores it. The reason string SAYS so rather than dropping
+  the fact, but a contract-aware Auto (C5) could weigh it — flagged, deliberately not
+  invented as an extra policy term here.
+- A read-only **WGSL inspector** (see deviation 5).
+- The mirror-flag REMOVAL (one release cycle out) — at that point `withResolvedEngine`
+  collapses to the `agentTarget` bake and every consumer must already read `resolveEngines`.
 
 ---
 
@@ -870,3 +1012,17 @@ Protocol:
   C4 (the engine enum) may proceed; it should consume `getDiagnostics`'s resolved `engine.grid` /
   `engine.agents` / `agentEngineActive` rather than re-deriving runtime state, and must regenerate
   `capabilityMatrix.gen.ts` if it touches the gates (`node scripts/gen-capability-docs.mjs`).
+- 2026-08-02: **C4 DONE** (`b0f43b9`). Compile-identity byte-identical on all 29 models; the new
+  `test-engine-resolve.mjs` green (367 checks, 3 negative controls) and proven failable by TWO SOURCE
+  MUTATIONS (dropping the Overseer preference → 3 failures; mis-mapping the migration → 38). parity /
+  agent-wasm-gate / verify-agent-render / render-uniform-layouts / generation-pipeline /
+  gen-capability-docs --check all green. Verified in-browser on Accretor, Amphiphile, Cubic GRA,
+  Growing Tissue, Coagulation and a File → New model: library models resolve UNCHANGED, Auto shows its
+  pick + reason (incl. the Overseer exception), the Advanced reveal holds Debug JS, Show Code carries
+  the reference header, and models still step (Coagulation gen 50 under Auto→WebGPU, Tissue gen 145 on
+  the WebGPU agent target), 0 console errors. **NB the one deviation C5 must absorb**: a NEW model
+  resolves `Auto → WebGPU`, not the WebAssembly this runbook's C4 bullet expected — the policy sentence
+  in the proposal AND §C4 says WebGPU-where-gates-pass, and C5's own spec keeps the grid
+  WebGPU-eligible under `exact`. C5 may proceed: it replaces the two hard-coded Overseer branches in
+  `resolveGridLayer`/`resolveAgentLayer` with the contract, and `LayerResolution.reason` is already the
+  string the UI renders, so the policy changes without touching the UI.
