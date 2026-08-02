@@ -1,5 +1,72 @@
-import { useCallback, useRef } from 'react';
+import { useCallback, useMemo, useRef } from 'react';
 import styles from './HelpView.module.css';
+import type { CAModel, GraphNode } from '../model/types';
+import { EMPTY_MODEL } from '../model/defaultModel';
+import { FULL_AGENT_PROFILE } from '../model/agentCapabilities';
+import {
+  describeGenerationPipeline, describePipelineGroups, TEMPO_LABEL,
+} from '../model/generationPipeline';
+
+// --- C2 (P3) — the "what runs each generation" reference ---------------------
+// DERIVED, never hand-written: the list below is produced by the SAME
+// `describeGenerationPipeline` the Properties panel renders, over a synthetic
+// model with every capability switched on (so the reference shows the FULL
+// sequence, whereas a real model shows its own subset). A phase added to the
+// engine description therefore appears here automatically — there is no
+// duplicate table to fall out of sync.
+const refNode = (id: string, nodeType: string): GraphNode =>
+  ({ id, type: 'caNode', position: { x: 0, y: 0 }, data: { nodeType, config: {} } });
+
+const REFERENCE_MODEL: CAModel = {
+  ...EMPTY_MODEL,
+  properties: { ...EMPTY_MODEL.properties, updateMode: 'synchronous' },
+  topologyMode: { gridCells: true, agents: true },
+  graphNodes: [refNode('s', 'step'), refNode('i', 'initEvent'), refNode('gi', 'gridInit')],
+  agentGraphNodes: [
+    refNode('b', 'behaviourStep'), refNode('ai', 'agentInit'), refNode('de', 'divisionEvent'),
+    refNode('fb', 'formBond'), refNode('ka', 'killAgent'), refNode('da', 'divideAgent'),
+  ],
+  centerBased: {
+    enabled: true, maxAgents: 1000, maxBonds: 8,
+    worldWidth: 100, worldHeight: 100,
+    autoBond: true, growthRate: 0.02, agentUpdateMode: 'sync',
+    // The shipped everything-on profile, so a NEW capability appears in this
+    // reference automatically instead of needing a hand-edit here.
+    agentCapabilities: { ...FULL_AGENT_PROFILE, charge: 'on' },
+  },
+  sprites: [{ id: 'sp', name: 'ref', dataUrl: '', mimeType: 'image/png' }],
+  indicators: [{ id: 'ind', name: 'ref', kind: 'linked', dataType: 'integer', defaultValue: '0', accumulationMode: 'per-generation', watched: false }],
+  mappings: [refMapping('om')],
+  agentMappings: [refMapping('aom')],
+};
+
+function refMapping(id: string) {
+  return {
+    id, name: 'ref', description: '', isAttributeToColor: true, linked: true,
+    redDescription: '', greenDescription: '', blueDescription: '',
+  };
+}
+
+function GenerationPipelineReference() {
+  const phases = useMemo(() => describeGenerationPipeline(REFERENCE_MODEL), []);
+  const groups = useMemo(() => describePipelineGroups(REFERENCE_MODEL), []);
+  let lastGroup: string | undefined;
+  return (
+    <ol className={styles.list}>
+      {phases.map(p => {
+        const head = p.group && p.group !== lastGroup ? groups[p.group]?.title : null;
+        lastGroup = p.group;
+        return (
+          <li key={p.id}>
+            {head && <><em>{head} &mdash;</em>{' '}</>}
+            <strong style={p.owner === 'graph' ? { color: '#e8a13a' } : undefined}>{p.title}</strong>
+            {' '}<span style={{ opacity: 0.7 }}>({TEMPO_LABEL[p.tempo]}{p.owner === 'graph' ? ', your graph' : ''})</span>
+          </li>
+        );
+      })}
+    </ol>
+  );
+}
 
 const sections = [
   { id: 'intro', label: 'What is GenesisCA' },
@@ -1459,6 +1526,41 @@ export function HelpView() {
             &ldquo;(required by &hellip;)&rdquo; naming what to switch off to release them. And the
             simulator&rsquo;s <code>&#x2699;</code> target chip turns amber whenever the engine is
             <em> not</em> running the target you asked for &mdash; hover it for the reason.
+          </p>
+          <h3 className={styles.h3}>What runs each generation</h3>
+          <p className={styles.p}>
+            A CA-grid generation is easy to picture: <em>your Generation Step graph is the rule</em>,
+            and the engine only double-buffers and runs the colour pass. An <strong>agent</strong>{' '}
+            generation is a longer sequence, and only two or three of its phases are your graphs.
+            <strong> Properties &rarr; Generation Pipeline</strong> lists it for <em>your</em> model:
+            in execution order, with each phase marked as <em>your graph</em> or <em>the engine</em>,
+            tagged with how often it runs, and showing the resolved numbers it reads (the actual
+            &Delta;t, momentum, stiffnesses, iteration count). Phases that are off for your model stay
+            visible, struck through, naming the capability that would switch them on &mdash; so
+            &ldquo;is the engine doing something I didn&rsquo;t ask for?&rdquo; is answerable at a glance.
+          </p>
+          <p className={styles.p}>
+            Every phase the engine can run, in execution order. No single model uses them all &mdash;
+            some are mutually exclusive (soft-sphere <em>or</em> positional collision; a synchronous
+            double-buffer swap <em>or</em> an asynchronous shuffle) &mdash; so your model will show a
+            subset, with the rest struck through:
+          </p>
+          <GenerationPipelineReference />
+          <p className={styles.p}>
+            The <strong>tempo</strong> tag matters as much as the order. <em>Per generation</em> is the
+            hot path &mdash; it runs once for every generation, so N times per rendered frame.
+            <em> Per event</em> runs only when its event happens (your Division Event fires once per
+            daughter, per division). <em>Per frame</em> is amortized by Gens/Frame, so the colour
+            passes are orchestration rather than hot-path work. <em>Once per reset</em> is the cold
+            path &mdash; a one-time seeding loop. Agents step <em>before</em> cells because that is the
+            closed loop: an agent samples the field as of the previous cell step, deposits into it,
+            and the cell rule then incorporates that deposit.
+          </p>
+          <p className={styles.p}>
+            The panel is read-only and comes from the same resolvers the engine consults, so it
+            cannot drift from what actually runs. It describes what the model <em>asks for</em>;
+            whether a speed path engaged at runtime is a separate question (see the three principles
+            above).
           </p>
           <h3 className={styles.h3}>Enabling Agents</h3>
           <p className={styles.p}>

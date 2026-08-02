@@ -8,6 +8,10 @@ import {
   diagnoseTargets, ENGINE_LABEL, REASON_CLASS_TAG, REASON_CLASS_TITLE,
   type Reason, type ReasonClass,
 } from '../../model/targetDiagnosis';
+import {
+  describeGenerationPipeline, describePipelineGroups, TEMPO_LABEL, TEMPO_TITLE,
+  type PipelinePhase, type PhaseTempo,
+} from '../../model/generationPipeline';
 import { IndicatorsPanelSection } from './IndicatorsPanelSection';
 import { useDetailSelection, type PanelContentProps } from '../ModelerDetailContext';
 import { useListReorder } from './useListReorder';
@@ -133,6 +137,112 @@ function CompatibilityBlock({ model }: { model: CAModel }) {
         <b>S</b> semantics (the engine cannot express it) · <b>R</b> reproducibility (runs, not bit-reproducibly) ·
         {' '}<b>F</b> fast path (same results, different speed) · <b>C</b> capacity (a limit with a number).
         Computed from the same checks the compilers enforce. See Help → Bond-Graph Agents → Engine compatibility.
+      </span>
+    </div>
+  );
+}
+
+// --- C2 (P3) — the Generation Pipeline readout ------------------------------
+// The ordered, read-only answer to "what happens each generation for THIS
+// model?". Owner attribution (your graph vs the engine) is the point, so it is
+// carried by a coloured left rail; the tempo chip answers "is this the hot
+// path?"; inactive phases stay VISIBLE, struck, naming the capability that
+// turns them on (seeing that bond springs exist and are off IS the clarity
+// win). Every bit of it comes from `describeGenerationPipeline`, which reads
+// the engine's own resolvers — see that module's header.
+const TEMPO_STYLE: Record<PhaseTempo, { color: string; border: string; bg: string }> = {
+  generation: { color: '#9fd4a8', border: '#38553f', bg: '#16211a' },
+  event: { color: '#d7b98a', border: '#5a482c', bg: '#201c14' },
+  frame: { color: '#93c2e8', border: '#2f4a63', bg: '#131c25' },
+  reset: { color: '#c4a9de', border: '#4b3a5e', bg: '#1c1723' },
+};
+
+function TempoChip({ tempo }: { tempo: PhaseTempo }) {
+  const s = TEMPO_STYLE[tempo];
+  return (
+    <span
+      title={TEMPO_TITLE[tempo]}
+      style={{
+        flex: '0 0 auto', fontSize: '0.5rem', letterSpacing: '0.03em', lineHeight: 1.6,
+        padding: '0 4px', borderRadius: 3, whiteSpace: 'nowrap', textTransform: 'uppercase',
+        color: s.color, border: `1px solid ${s.border}`, background: s.bg,
+      }}
+    >{TEMPO_LABEL[tempo]}</span>
+  );
+}
+
+function PhaseRow({ phase, index }: { phase: PipelinePhase; index: number }) {
+  const isGraph = phase.owner === 'graph';
+  const off = !phase.active;
+  return (
+    <div style={{ display: 'flex', gap: 7, alignItems: 'stretch', padding: '3px 0', opacity: off ? 0.62 : 1 }}>
+      <span
+        title={isGraph ? 'Your graph' : 'The engine'}
+        style={{ flex: '0 0 3px', borderRadius: 2, background: isGraph ? '#e8a13a' : '#6b7280' }}
+      />
+      <span style={{ flex: '0 0 15px', textAlign: 'right', color: '#6a6f78', fontSize: '0.52rem', lineHeight: 1.9, fontVariantNumeric: 'tabular-nums' }}>
+        {index}
+      </span>
+      <span style={{ flex: 1, minWidth: 0 }}>
+        <span style={{ display: 'flex', gap: 6, alignItems: 'baseline', justifyContent: 'space-between' }}>
+          <span style={{
+            fontSize: '0.64rem',
+            color: off ? '#6a6f78' : (isGraph ? '#e8a13a' : '#dfe2e8'),
+            fontWeight: isGraph ? 600 : 400,
+            textDecoration: off ? 'line-through' : undefined,
+          }}>{phase.title}</span>
+          <TempoChip tempo={phase.tempo} />
+        </span>
+        {off
+          ? <span style={{ display: 'block', fontSize: '0.56rem', color: '#a8746e', marginTop: 1 }}>off — needs {phase.capability}</span>
+          : phase.detail && <span style={{ display: 'block', fontSize: '0.56rem', color: '#8a8f99', marginTop: 1 }}>{phase.detail}</span>}
+      </span>
+    </div>
+  );
+}
+
+function GenerationPipelineBlock({ model }: { model: CAModel }) {
+  // Both are pure model derivations; the phase walk is macro-aware, so memoise.
+  const phases = useMemo(() => describeGenerationPipeline(model), [model]);
+  const groups = useMemo(() => describePipelineGroups(model), [model]);
+  if (phases.length === 0) return null;
+
+  // Render consecutive same-group phases inside one bracket.
+  const blocks: Array<{ group?: string; phases: PipelinePhase[] }> = [];
+  for (const p of phases) {
+    const last = blocks[blocks.length - 1];
+    if (last && last.group === p.group) last.phases.push(p);
+    else blocks.push({ group: p.group, phases: [p] });
+  }
+  let n = 0;
+
+  return (
+    <div className={styles.fieldGroup}>
+      <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', fontSize: '0.56rem', color: '#8a8f99', paddingBottom: 5, borderBottom: '1px solid #22252c', marginBottom: 3 }}>
+        <span><i style={{ display: 'inline-block', width: 3, height: 10, borderRadius: 2, background: '#e8a13a', verticalAlign: -1, marginRight: 4 }} />your graph</span>
+        <span><i style={{ display: 'inline-block', width: 3, height: 10, borderRadius: 2, background: '#6b7280', verticalAlign: -1, marginRight: 4 }} />engine</span>
+        <span style={{ color: '#6a6f78' }}>struck = off for this model</span>
+      </div>
+
+      {blocks.map((b, bi) => {
+        const rows = b.phases.map(p => <PhaseRow key={p.id} phase={p} index={++n} />);
+        if (!b.group) return <div key={bi}>{rows}</div>;
+        const g = groups[b.group];
+        return (
+          <div key={bi} style={{ margin: '5px 0 4px 9px', paddingLeft: 8, borderLeft: '1px dashed #333842' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', fontSize: '0.56rem', color: '#8a8f99', padding: '1px 0 2px', letterSpacing: '0.03em' }}>
+              <span>{g?.title ?? b.group}</span>
+              {g?.detail && <b style={{ color: '#aeb3bc', fontWeight: 600 }}>{g.detail}</b>}
+            </div>
+            {rows}
+          </div>
+        );
+      })}
+
+      <span style={{ color: '#777', fontSize: '0.58rem', display: 'block', fontStyle: 'italic', borderTop: '1px solid #22252c', paddingTop: 6, marginTop: 6 }}>
+        Order and activity come from the same resolvers the engine consults, so this list cannot
+        drift from what runs. <b>Per frame</b> phases are amortized by Gens/Frame; <b>per event</b>
+        {' '}phases run only when the event happens. Read-only — it explains the settings above.
       </span>
     </div>
   );
@@ -1117,6 +1227,14 @@ export function PropertiesPanelContent({ mode = 'list' }: PanelContentProps = {}
           inside the (already long) Execution body. */}
       <CollapsibleSection id="compatibility" title="Compatibility">
         <CompatibilityBlock model={model} />
+      </CollapsibleSection>
+
+      {/* C2 (P3) — what actually happens each generation for THIS model.
+          Directly under Compatibility: C1 answers "which engine?", C2 answers
+          "what does it do?". Shown for every model — a grid-only model simply
+          gets the short list. */}
+      <CollapsibleSection id="pipeline" title="Generation Pipeline">
+        <GenerationPipelineBlock model={model} />
       </CollapsibleSection>
 
       <CollapsibleSection id="indicators" title="Indicators" bare>
