@@ -43,6 +43,21 @@ let acquiring: Promise<SharedGpuDevice | null> | null = null;
  *  rebuilds/target-flips because the singleton is reused). */
 let adapterRequestCount = 0;
 
+// --- C3 (P4): the runtime-event sink -----------------------------------------
+// Device loss and uncaptured device errors were CONSOLE-ONLY — the one class of
+// engine degradation with no user-visible trace whatsoever. The worker's
+// diagnostics log wants them, but this module is imported BY the worker and must
+// not import back, so the worker INSTALLS a sink instead (a one-line seam, no new
+// dependency direction). Absent sink ⇒ exactly the previous behaviour.
+type GpuEventSink = (text: string) => void;
+let eventSink: GpuEventSink | null = null;
+/** Install the diagnostics sink (the worker calls this once at module init). */
+export function setSharedGpuEventSink(fn: GpuEventSink | null): void { eventSink = fn; }
+/** Uncaptured errors can repeat every frame — cap what reaches the log so one
+ *  bad dispatch cannot evict the whole event history. */
+const UNCAPTURED_LOG_CAP = 3;
+let uncapturedLogged = 0;
+
 /** True when WebGPU is present in this context. */
 function gpuAvailable(): boolean {
   return typeof navigator !== 'undefined' && !!(navigator as Navigator & { gpu?: unknown }).gpu;
@@ -85,8 +100,14 @@ async function requestSharedDevice(): Promise<SharedGpuDevice | null> {
     // removed). Without these a failing dispatch is SILENT (dropped work + a
     // readback of unchanged state = "frozen / wrong dynamics, zero errors").
     device.addEventListener('uncapturederror', (ev: Event) => {
+      const m = (ev as GPUUncapturedErrorEvent).error.message;
       // eslint-disable-next-line no-console
-      console.error('[webgpu] uncaptured device error:', (ev as GPUUncapturedErrorEvent).error.message);
+      console.error('[webgpu] uncaptured device error:', m);
+      if (uncapturedLogged < UNCAPTURED_LOG_CAP) {
+        uncapturedLogged++;
+        eventSink?.(`[webgpu] uncaptured device error: ${m}`);
+        if (uncapturedLogged === UNCAPTURED_LOG_CAP) eventSink?.('[webgpu] further uncaptured device errors suppressed (see the console).');
+      }
     });
     void device.lost.then((info) => {
       // reason 'destroyed' = our own release-at-refcount-zero teardown, not a
@@ -95,6 +116,7 @@ async function requestSharedDevice(): Promise<SharedGpuDevice | null> {
       if (info.reason === 'destroyed') return;
       // eslint-disable-next-line no-console
       console.error(`[webgpu] shared device lost (${info.reason}): ${info.message}`);
+      eventSink?.(`[webgpu] the GPU device was lost (${info.reason}) — the simulation continues on the CPU engine. ${info.message}`);
     });
     return { device, adapter };
   } catch {

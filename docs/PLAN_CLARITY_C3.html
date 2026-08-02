@@ -1,0 +1,306 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>C3 — Fast-path diagnostics popover + generated capability docs</title>
+<style>
+  :root{
+    --bg:#0c0d10; --panel:#15171c; --elev:#1b1e25; --border:#2a2f39;
+    --border-muted:#22262e; --text:#dfe5ef; --muted:#8b93a3; --dim:#6b7280;
+    --accent:#e8a13a; --amber:#e0a050; --green:#5cbf7a; --cyan:#4cc9f0;
+    --red:#e05050;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);
+       font:14px/1.55 -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;padding:28px}
+  h1{font-size:20px;margin:0 0 4px;color:var(--accent)}
+  h2{font-size:15px;margin:34px 0 10px;color:var(--text);
+     border-bottom:1px solid var(--border);padding-bottom:6px}
+  h3{font-size:13px;margin:20px 0 8px;color:var(--muted);
+     text-transform:uppercase;letter-spacing:.7px}
+  p{color:var(--muted);max-width:74ch;margin:8px 0}
+  code{background:var(--elev);border:1px solid var(--border-muted);border-radius:3px;
+       padding:1px 5px;font-size:12px;color:#cfd6e4}
+  .sub{color:var(--dim);font-size:12px}
+  .grid{display:flex;gap:26px;flex-wrap:wrap;align-items:flex-start}
+  .col{flex:1 1 380px;min-width:340px}
+
+  /* ---------- simulated canvas corner ---------- */
+  .canvas{position:relative;background:#101319;border:1px solid var(--border);
+          border-radius:8px;height:320px;overflow:hidden;
+          background-image:radial-gradient(circle at 30% 40%,#16202c 0,#0d1015 60%)}
+  .cells{position:absolute;inset:0;opacity:.5;
+         background-image:
+           repeating-linear-gradient(0deg,#1a2230 0 1px,transparent 1px 14px),
+           repeating-linear-gradient(90deg,#1a2230 0 1px,transparent 1px 14px)}
+  .stack{position:absolute;bottom:12px;right:16px;display:flex;flex-direction:column;
+         align-items:flex-end;gap:8px;z-index:5}
+  .stats{display:flex;flex-direction:column;align-items:flex-end;gap:3px;
+         padding:4px 8px;border-radius:4px;font-size:10.5px;
+         color:rgba(220,230,245,.95);background:rgba(0,0,0,.6)}
+  .chipwrap{position:relative;display:flex;align-items:center}
+  .chip{cursor:pointer;border-radius:3px;padding:1px 4px;margin:-1px -4px}
+  .chip:hover{background:rgba(255,255,255,.07)}
+  .chip.amber{color:var(--amber)}
+
+  /* ---------- the popover ---------- */
+  .pop{position:absolute;bottom:100%;right:0;min-width:310px;max-width:340px;
+       background:var(--panel);border:1px solid var(--border);border-radius:6px;
+       box-shadow:0 4px 14px rgba(0,0,0,.45);padding:12px 14px;text-align:left;
+       z-index:40;font-size:11.5px;color:var(--text)}
+  .popTitle{font-size:9.5px;letter-spacing:.8px;text-transform:uppercase;
+            color:var(--dim);margin:0 0 7px}
+  .popTitle+.popTitle{margin-top:0}
+  .sep{height:1px;background:var(--border);margin:11px -14px}
+  .row{display:flex;align-items:baseline;justify-content:space-between;gap:14px;
+       padding:2px 0;white-space:nowrap}
+  .row .k{color:var(--muted)}
+  .row .v{font-variant-numeric:tabular-nums}
+  .v.on{color:var(--green)}
+  .v.off{color:var(--dim)}
+  .v.amber{color:var(--amber)}
+  .why{color:var(--dim);font-size:10.5px;line-height:1.45;white-space:normal;
+       margin:0 0 5px;padding-left:2px}
+  .foot{color:var(--dim);font-size:10px;line-height:1.45;white-space:normal;
+        margin-top:8px;font-style:italic}
+  .ev{color:var(--amber);font-size:10.5px;line-height:1.5;white-space:normal;
+      display:flex;gap:7px;padding:2px 0}
+  .ev .gen{color:var(--dim);font-variant-numeric:tabular-nums;flex:0 0 auto}
+  .none{color:var(--dim);font-size:10.5px;font-style:italic}
+
+  /* ---------- generic ---------- */
+  .card{background:var(--panel);border:1px solid var(--border);border-radius:6px;
+        padding:14px 16px;margin:10px 0}
+  table{width:100%;border-collapse:collapse;font-size:12px;margin:8px 0}
+  th{text-align:left;color:var(--muted);font-weight:600;border-bottom:1px solid var(--border);
+     padding:5px 8px;font-size:11px}
+  td{padding:5px 8px;border-bottom:1px solid var(--border-muted);vertical-align:top;
+     color:#c6cedb}
+  td.c{text-align:center}
+  .yes{color:var(--green)} .no{color:var(--red)} .na{color:var(--dim)}
+  .tag{display:inline-block;border-radius:3px;padding:0 5px;font-size:10px;
+       border:1px solid var(--border);color:var(--muted);margin-right:5px}
+  .tag.f{border-color:#2f5d3d;color:var(--green)}
+  .tag.s{border-color:#5d3030;color:#e08080}
+  .tag.r{border-color:#4a4630;color:var(--amber)}
+  .tag.c{border-color:#2f4a5d;color:var(--cyan)}
+  .flow{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:12px 0}
+  .box{background:var(--elev);border:1px solid var(--border);border-radius:5px;
+       padding:8px 11px;font-size:11.5px}
+  .box b{color:var(--accent);font-weight:600}
+  .arrow{color:var(--dim);font-size:16px}
+  .note{border-left:2px solid var(--accent);padding:2px 0 2px 12px;margin:12px 0;
+        color:var(--muted);font-size:12.5px;max-width:74ch}
+  ul{color:var(--muted);max-width:74ch;padding-left:20px}
+  li{margin:4px 0}
+</style>
+</head>
+<body>
+
+<h1>C3 — Fast-path diagnostics popover + generated capability docs</h1>
+<p class="sub">Illustrated plan for <code>PLAN_CLARITY_C3.md</code>. Proposal items P4 (rest) and P8.
+C1 = which engine · C2 = what it does each generation · <b>C3 = what actually engaged, and why not.</b></p>
+
+<div class="note">
+  Class <b>F</b> (fast-path eligibility) is the last of the four limitation classes still invisible.
+  It is never an error: an ineligible model computes <em>exactly</em> the same thing, just slower.
+  The popover therefore uses <span class="yes">green</span> / <span class="na">grey</span> — never red.
+</div>
+
+<h2>1. Before → after</h2>
+<div class="grid">
+
+  <div class="col">
+    <h3>Before — the chip is a dead end</h3>
+    <div class="canvas">
+      <div class="cells"></div>
+      <div class="stack">
+        <div class="stats">
+          <span>Gen 1204</span>
+          <span>120&times;120</span>
+          <span>60 FPS</span>
+          <span>1204 g/s</span>
+          <span>⚙ WASM · agents WebGPU</span>
+          <span>◩ 41,332 active (11.5%)</span>
+        </div>
+      </div>
+    </div>
+    <p class="sub">The chip names the engines and (since C1) turns amber on a demotion — but
+      whether residency / sparse / direct render / the field bridge <em>engaged</em> is
+      unanswerable. The DEV probes that know exist only for harnesses.</p>
+  </div>
+
+  <div class="col">
+    <h3>After — click the chip</h3>
+    <div class="canvas">
+      <div class="cells"></div>
+      <div class="stack">
+        <div class="stats">
+          <span>Gen 1204</span>
+          <span>120&times;120</span>
+          <span>60 FPS</span>
+          <span>1204 g/s</span>
+          <span class="chipwrap">
+            <span class="chip">⚙ WASM · agents WebGPU</span>
+            <div class="pop">
+              <div class="popTitle">Engine</div>
+              <div class="row"><span class="k">CA grid</span><span class="v">WebAssembly</span></div>
+              <div class="row"><span class="k">Agents</span><span class="v">WebGPU</span></div>
+
+              <div class="sep"></div>
+              <div class="popTitle">Fast paths</div>
+              <div class="row"><span class="k">GPU residency</span><span class="v on">engaged</span></div>
+              <div class="row"><span class="k">Sparse stepping</span><span class="v off">off</span></div>
+              <div class="why">not configured for this model</div>
+              <div class="row"><span class="k">GPU field bridge</span><span class="v off">off</span></div>
+              <div class="why">the agent layer is not coupled to a cell field</div>
+              <div class="row"><span class="k">Direct render</span><span class="v on">agents → canvas</span></div>
+              <div class="foot">Speed paths are eligibility, not correctness — an ineligible
+                model computes exactly the same thing, just slower.</div>
+
+              <div class="sep"></div>
+              <div class="popTitle">Events</div>
+              <div class="none">No runtime fallbacks this session.</div>
+            </div>
+          </span>
+          <span>◩ 41,332 active (11.5%)</span>
+        </div>
+      </div>
+    </div>
+    <p class="sub">Opens upward-left, <b>flush</b> against the chip (a visual gap is a hit-test hole).
+      One popover at a time — it joins the existing <code>overlayPopup</code> state, so it inherits
+      outside-pointerdown + Escape dismissal for free.</p>
+  </div>
+</div>
+
+<h2>2. The three states a fast-path row can show</h2>
+<div class="grid">
+  <div class="col">
+    <h3>Engaged — Boids on WebGPU agents</h3>
+    <div class="card" style="max-width:340px">
+      <div class="popTitle">Fast paths</div>
+      <div class="row"><span class="k">GPU residency</span><span class="v on">engaged</span></div>
+      <div class="why">whole batches run in one GPU submit — no per-generation CPU round-trip</div>
+    </div>
+  </div>
+  <div class="col">
+    <h3>Off with a reason — Growing Tissue</h3>
+    <div class="card" style="max-width:340px">
+      <div class="popTitle">Fast paths</div>
+      <div class="row"><span class="k">GPU residency</span><span class="v off">off</span></div>
+      <div class="why">the behaviour graph rewrites structure (Divide / Form / Break / Rewire /
+        Kill Agent, or a radius write) — the structural phase is CPU work between generations
+        on every engine</div>
+    </div>
+    <p class="sub">The text is <b>the worker's own first blocker</b>, from the shared
+      <code>residencyModelBlockers</code> predicate <code>agentResidentEligible()</code> itself
+      calls — not a UI re-derivation.</p>
+  </div>
+</div>
+
+<h2>3. Events — the silent fallbacks become a record</h2>
+<div class="card" style="max-width:360px">
+  <div class="popTitle">Engine</div>
+  <div class="row"><span class="k">CA grid</span><span class="v">WebAssembly</span></div>
+  <div class="row"><span class="k">Agents</span>
+    <span class="v amber">WebGPU → JS ⚠</span></div>
+  <div class="why">requested WebGPU, running Debug / Reference (JS)</div>
+  <div class="sep"></div>
+  <div class="popTitle">Events</div>
+  <div class="ev"><span class="gen">gen 812</span>
+    <span>[agents] WebGPU step failed, falling back to JS: device lost</span></div>
+  <div class="ev"><span class="gen">gen 0</span>
+    <span>[agents] spatial hash (144 bins) exceeds the WASM reserve (36); this step runs on JS.</span></div>
+</div>
+<p>Each entry is <code>{ generation, text }</code>, appended at the fallback site, capped at 40
+  (oldest dropped). Sites that could fire every step reuse their <b>existing warn-once latch</b>,
+  so a hash overflow logs <em>once</em>, not 10 000 times.</p>
+
+<h3>Where the log is appended</h3>
+<table>
+  <tr><th>Site</th><th>Today</th><th>After C3</th></tr>
+  <tr><td>grid WASM instantiate / compile fail</td><td>transient <code>error</code> banner</td><td>banner <b>+ logged</b></td></tr>
+  <tr><td>agent WASM instantiate / layout mismatch / run throw</td><td>transient banner</td><td>banner <b>+ logged</b></td></tr>
+  <tr><td>agent WebGPU build fail / step fail</td><td>transient banner</td><td>banner <b>+ logged</b></td></tr>
+  <tr><td>spatial-hash overflow (WASM &amp; GPU reserves)</td><td>banner, once</td><td>banner + logged, <b>once</b></td></tr>
+  <tr><td><code>webgpuGridFailed</code> — the <em>silent</em> arms</td><td class="no">nothing at all</td><td class="yes">logged</td></tr>
+  <tr><td>shared GPU device lost / uncaptured error</td><td class="no"><code>console.error</code> only</td><td class="yes">logged (via an event sink)</td></tr>
+</table>
+<p class="sub"><code>sharedGpuDevice.ts</code> is imported <em>by</em> the worker, so it cannot import back.
+  It gains a one-line optional <code>setSharedGpuEventSink(fn)</code> seam instead — no new dependency direction.</p>
+
+<h2>4. Protocol — on demand, never per step</h2>
+<div class="flow">
+  <div class="box">popover opens</div><span class="arrow">→</span>
+  <div class="box"><b>getDiagnostics</b></div><span class="arrow">→</span>
+  <div class="box">worker reads its<br>EXISTING state</div><span class="arrow">→</span>
+  <div class="box"><b>diagnostics</b></div><span class="arrow">→</span>
+  <div class="box">render</div>
+</div>
+<p>Additive: a new case in the message switch, no existing message shape touched
+  (<code>verify-agent-render.mjs</code> stays green). Every field is read from state the worker
+  already maintains — <code>agentResidentEligible()</code>, <code>sieParamsPresent</code>,
+  the E1b counters, <code>agentRenderActive</code> / <code>agentCompositeActive</code> — plus the
+  new event log. <b>Zero simulation-behaviour change</b>: only array pushes, counter bumps and
+  a message case.</p>
+
+<div class="note">
+  <b>Runtime truth wins.</b> C1's readout approximates the residency facts from node types
+  (its own report flags this as C3's follow-up). The worker knows <code>usesSpawn</code> /
+  <code>usesStop</code> / <code>indicatorsBuf</code> / <code>maxBonds</code> <em>as allocated</em>,
+  so where the two disagree the popover shows the worker's answer.
+</div>
+
+<h2>5. P8 — the capability matrix, generated</h2>
+<div class="flow">
+  <div class="box"><b>AGENT_NODE_REQUIREMENT</b><br><span class="sub">node → capability</span></div>
+  <div class="box"><b>registry</b><br><span class="sub">every node def</span></div>
+  <div class="box"><b>AGENT_WASM_SUPPORTED_TYPES</b><br><span class="sub">the WASM gate's own set</span></div>
+  <div class="box"><b>AGENT_WEBGPU_SUPPORTED_TYPES</b><br><span class="sub">the WebGPU gate's own set</span></div>
+  <div class="box"><b>capacity constants</b><br><span class="sub">slots, caps, depths</span></div>
+</div>
+<div class="flow">
+  <span class="arrow">↓</span>
+  <div class="box"><b>scripts/gen-capability-docs.mjs</b>
+    <span class="sub">— esbuild-bundles the TS sources, the repo's established pattern</span></div>
+  <span class="arrow">→</span>
+  <div class="box"><b>src/help/capabilityMatrix.gen.ts</b> <span class="sub">(committed)</span></div>
+  <span class="arrow">→</span>
+  <div class="box">HelpView renders it</div>
+</div>
+
+<h3>The reject deltas are COMPUTED, never listed</h3>
+<table>
+  <tr><th>Node</th><th class="c">JS</th><th class="c">WASM</th><th class="c">WebGPU</th><th>Capability</th></tr>
+  <tr><td>Get Nearby Agents</td><td class="c yes">✓</td><td class="c yes">✓</td><td class="c yes">✓</td><td>sensing</td></tr>
+  <tr><td>Divide Agent</td><td class="c yes">✓</td><td class="c yes">✓</td><td class="c yes">✓</td><td>division</td></tr>
+  <tr><td>Set Agent Sprite</td><td class="c yes">✓</td><td class="c no">✗</td><td class="c no">✗</td><td>appearance</td></tr>
+</table>
+<p class="sub">Illustrative rows only — the real table is emitted from the sets above, so a node
+  added to the catalogue and forgotten in a supported set shows up as <span class="no">✗</span>
+  on the next run instead of drifting silently.</p>
+
+<h3>Numbers stop being hand-typed</h3>
+<p>Help currently asserts <em>"around 115 selectable node types (42 of them agent nodes)"</em> while
+  <code>NODES_REFERENCE.md</code> says <em>150 selectable, 53 agent</em> — the two documents already
+  disagree. Generated counts end that class of bug. The capacity constants
+  (<code>AGENT_NEARBY_SCRATCH_SLOTS</code>, <code>AGENT_WEBGPU_NEARBY_SLOTS</code>,
+  <code>AGENT_GPU_ARRAY_CAP</code>, the bond-request queue depth) are emitted <b>with their values</b>,
+  which is exactly what Class C promises: <em>a limit always stated with its number.</em></p>
+
+<h3><code>--check</code> is a gate</h3>
+<p>Regenerates in memory and diffs against the committed module; non-zero exit when stale. Adding a
+  node without updating the docs becomes a failing check rather than silent drift — the whole point
+  of P8, since hand-maintained tables are how the present drift happened.</p>
+
+<h2>6. Out of scope this phase</h2>
+<ul>
+  <li><b>Toasts for fallback events</b> — C6 owns the UI half of loud fallbacks. C3 builds the log it consumes.</li>
+  <li><b>Any engine / resolver / emit change</b> — compile-identity must stay byte-identical on all 29 models.</li>
+  <li><b><code>NODES_REFERENCE.md</code> regeneration</b> — its per-node target facts live in a prose
+    Notes column; converting that is a separate migration. The generator is shaped so a later phase can emit it.</li>
+</ul>
+
+</body>
+</html>

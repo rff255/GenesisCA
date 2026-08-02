@@ -796,6 +796,122 @@
   color: rgba(220, 230, 245, 0.95);
 }
 
+/* --- C3 (P4): fast-path diagnostics popover ---------------------------------
+ * Anchored on the compile-target chip in the stats strip. Same geometry rules as
+ * .capturePopover: opens UPWARD-LEFT and FLUSH against its trigger (a visual gap
+ * is a hit-test hole), right-aligned so it can never overflow the canvas edge,
+ * max-height clamped so a long event list cannot exceed a short canvas.
+ *
+ * Unlike the capture chip this opens on CLICK, not hover: the stats strip is a
+ * passive readout the cursor crosses on its way to the transport bar. */
+.diagChipWrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.diagChip {
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  padding: 1px 4px;
+  margin: -1px -4px;
+  transition: background var(--duration-base);
+}
+
+.diagChip:hover {
+  background: rgba(255, 255, 255, 0.09);
+}
+
+.diagPopover {
+  position: absolute;
+  bottom: 100%;
+  right: 0;
+  min-width: 290px;
+  max-width: 340px;
+  max-height: calc(100vh - 160px);
+  overflow-y: auto;
+  padding: var(--space-4) var(--space-5);
+  background: var(--color-bg-panel);
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45);
+  text-align: left;
+  color: var(--color-text-primary);
+  cursor: default;
+  z-index: 40;
+}
+
+.diagTitle {
+  font-size: var(--font-3xs);
+  letter-spacing: 0.8px;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+  margin-bottom: var(--space-2);
+}
+
+.diagRow {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-5);
+  padding: 1px 0;
+  font-size: var(--font-2xs);
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+}
+
+/* The reason a fast path is off / an engine was demoted. Wraps (unlike the row
+   above) — a blocker sentence is a full explanation, not a label. */
+.diagWhy {
+  font-size: var(--font-3xs);
+  color: var(--color-text-muted);
+  line-height: 1.42;
+  white-space: normal;
+  margin: 0 0 var(--space-2);
+}
+
+.diagOn { color: var(--color-success, #5cbf7a); }
+.diagOff { color: var(--color-text-muted); }
+.diagAmber { color: #e0a050; }
+
+.diagSep {
+  height: 1px;
+  background: var(--color-border);
+  margin: var(--space-3) calc(-1 * var(--space-5));
+}
+
+/* Principle 3, restated where a user might otherwise read "off" as "broken". */
+.diagFoot {
+  font-size: var(--font-3xs);
+  color: var(--color-text-muted);
+  line-height: 1.42;
+  white-space: normal;
+  font-style: italic;
+  margin-top: var(--space-2);
+}
+
+.diagEvent {
+  display: flex;
+  gap: var(--space-3);
+  font-size: var(--font-3xs);
+  color: #e0a050;
+  line-height: 1.45;
+  white-space: normal;
+  padding: 1px 0;
+}
+
+.diagEventGen {
+  color: var(--color-text-muted);
+  font-variant-numeric: tabular-nums;
+  flex: 0 0 auto;
+}
+
+.diagNone {
+  font-size: var(--font-3xs);
+  color: var(--color-text-muted);
+  font-style: italic;
+}
+
 /* --- Capture cluster (screenshot + record + the settings chip) --------------
  * The bottom-most element of the right-edge stack. Capture is OUTPUT, so it
  * lives with the other readouts on the right edge rather than inline with the

@@ -73,6 +73,14 @@
   margin: var(--space-10) 0 var(--space-4);
 }
 
+/* One level under .h3 — used by the generated capability matrix's sub-tables. */
+.h4 {
+  font-size: var(--font-md);
+  font-weight: 600;
+  color: var(--color-text-subtle);
+  margin: var(--space-8) 0 var(--space-3);
+}
+
 .p {
   font-size: var(--font-md);
   color: var(--color-text-secondary);
@@ -139,6 +147,25 @@
 .table th:first-child {
   white-space: nowrap;
   width: 1%;
+}
+
+/* C3 (P8): the generated capability matrix. `.table` pins its first column
+   narrow and lets the SECOND column take the rest — right for a two-column
+   Node/Description table, wrong here, where columns 3-4 are single glyphs. The
+   support columns are therefore clamped so the capability column keeps the
+   slack, and the matrix is long enough to want a compact row height. */
+.matrix td,
+.matrix th {
+  padding-top: var(--space-1);
+  padding-bottom: var(--space-1);
+}
+
+.matrix td:nth-child(3),
+.matrix th:nth-child(3),
+.matrix td:nth-child(4),
+.matrix th:nth-child(4) {
+  width: 1%;
+  white-space: nowrap;
 }
 
 .subtitle {

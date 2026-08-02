@@ -67,7 +67,7 @@ import {
 // E1 device-leak metric (DEV/verification only — surfaced through the __e1bCounters
 // probe so the "one adapter, balanced refcount" claim is reproducible from the
 // committed tree; a page-side import() would get a DIFFERENT module instance).
-import { sharedGpuRefCount, sharedGpuAdapterRequestCount } from './sharedGpuDevice';
+import { sharedGpuRefCount, sharedGpuAdapterRequestCount, setSharedGpuEventSink } from './sharedGpuDevice';
 
 /** A camera/graphics view is either the 2D disc view or the Phase C 3D sphere view
  *  (distinguished by `mode: '3d'`). One setAgentCamera message carries either. */
@@ -423,6 +423,12 @@ interface GetStateMsg { type: 'getState' }
 interface SetRngSeedMsg { type: 'setRngSeed'; seed: number }
 /** E1b DEV probe (verification only; the app never sends it). */
 interface E1bCountersMsg { type: '__e1bCounters' }
+/** C3 (P4) — the SUPPORTED fast-path diagnostics request. Unlike the `__`-prefixed
+ *  probes above this is a first-class message the app sends when the user opens
+ *  the diagnostics popover (and while it stays open). ON DEMAND ONLY — never per
+ *  step: every field is read from state the worker already maintains, so the
+ *  reply costs one predicate evaluation. */
+interface GetDiagnosticsMsg { type: 'getDiagnostics' }
 /** GRA P6 DEV probe: the graph-indicator work counters — the EVIDENCE for
  *  "zero cost when unused" (a model with no graph indicator reports 0/0/0) and
  *  for "componentCount is opt-in" (its union-find pass counter stays 0 unless an
@@ -639,7 +645,70 @@ interface SetAgentUiSyncMsg { type: 'setAgentUiSync'; on: boolean }
  *  refreshDisplay). */
 interface RefreshAgentDisplayMsg { type: 'refreshAgentDisplay' }
 
-type WorkerMsg = InitMsg | StepMsg | PaintMsg | PaintManualMsg | ResetMsg | RecompileMsg | UpdateModelAttrsMsg | UpdateLookupTableMsg | ImportImageMsg | ImportGridValuesMsg | UpdateIndicatorsMsg | GetStateMsg | LoadStateMsg | ReadRegionMsg | WriteRegionMsg | ClearRegionMsg | SetUseWasmMsg | SetUseWebGPUMsg | ReadbackWebGPUMsg | ColorPassMsg | SetRecordingMsg | AttachCanvasMsg | RequestColorsSnapshotMsg | SetInspectCellsMsg | RefreshDisplayMsg | SeedAgentsMsg | CreateAgentMsg | KillAgentsMsg | PaintAgentsMsg | ClearAgentsMsg | ReadAgentsMsg | PasteAgentsMsg | FormBondMsg | BreakBondMsg | GetAgentStateMsg | MoveAgentsMsg | FormBondBatchMsg | SetAgentWasmBackedMsg | SetRngSeedMsg | SetSimLayersMsg | SetAgentSnapshotVelocityMsg | AttachAgentCanvasMsg | SetAgentCameraMsg | SetAgentUiSyncMsg | RefreshAgentDisplayMsg | E1bCountersMsg | GraphIndicatorStatsMsg | CompositeReadbackMsg | AttachVoxelCanvasMsg | SetGridCameraMsg | SetGridUiSyncMsg | SetGridVizMsg | RefreshGridDisplayMsg | VoxelReadbackMsg;
+type WorkerMsg = InitMsg | StepMsg | PaintMsg | PaintManualMsg | ResetMsg | RecompileMsg | UpdateModelAttrsMsg | UpdateLookupTableMsg | ImportImageMsg | ImportGridValuesMsg | UpdateIndicatorsMsg | GetStateMsg | LoadStateMsg | ReadRegionMsg | WriteRegionMsg | ClearRegionMsg | SetUseWasmMsg | SetUseWebGPUMsg | ReadbackWebGPUMsg | ColorPassMsg | SetRecordingMsg | AttachCanvasMsg | RequestColorsSnapshotMsg | SetInspectCellsMsg | RefreshDisplayMsg | SeedAgentsMsg | CreateAgentMsg | KillAgentsMsg | PaintAgentsMsg | ClearAgentsMsg | ReadAgentsMsg | PasteAgentsMsg | FormBondMsg | BreakBondMsg | GetAgentStateMsg | MoveAgentsMsg | FormBondBatchMsg | SetAgentWasmBackedMsg | SetRngSeedMsg | SetSimLayersMsg | SetAgentSnapshotVelocityMsg | AttachAgentCanvasMsg | SetAgentCameraMsg | SetAgentUiSyncMsg | RefreshAgentDisplayMsg | GetDiagnosticsMsg | E1bCountersMsg | GraphIndicatorStatsMsg | CompositeReadbackMsg | AttachVoxelCanvasMsg | SetGridCameraMsg | SetGridUiSyncMsg | SetGridVizMsg | RefreshGridDisplayMsg | VoxelReadbackMsg;
+
+// ---------------------------------------------------------------------------
+// C3 (P4) — RUNTIME FALLBACK LOG
+//
+// Every place the engine quietly runs something OTHER than what the model asked
+// for. Most of these sites already post a transient `error` message (a banner
+// the user dismisses or never sees) and a few — the silent `webgpuGridFailed`
+// arms, and the shared device's loss/uncaptured-error hooks — reach only the
+// console. A banner answers "what just happened"; this log answers "did anything
+// degrade during this run?", which is the question the diagnostics popover asks
+// minutes later.
+//
+// Sites that CAN fire every generation reuse their existing warn-once latch, so
+// a hash overflow logs once, not ten thousand times. Capped + oldest-dropped so
+// a pathological session cannot grow it without bound.
+// ---------------------------------------------------------------------------
+
+/** Newest-last. Read only by the `getDiagnostics` reply. */
+const runtimeEvents: Array<{ gen: number; text: string }> = [];
+const RUNTIME_EVENT_CAP = 40;
+
+/** Record a fallback / degradation. Call it ALONGSIDE whatever the site already
+ *  posts — never instead of it (the banner is immediate, the log is durable). */
+function logRuntimeEvent(text: string): void {
+  runtimeEvents.push({ gen: generation, text });
+  if (runtimeEvents.length > RUNTIME_EVENT_CAP) runtimeEvents.shift();
+}
+
+/** An ENGINE FALLBACK: the worker is about to run a different engine / path than
+ *  the model asked for. Posts the usual transient banner AND records it.
+ *
+ *  Deliberately NOT used for ordinary operational errors (a failed colour pass, a
+ *  readback that threw) — those are already surfaced and are not "we are running
+ *  something else now". Keeping the log to genuine fallbacks is what makes an
+ *  empty Events list a meaningful statement. */
+function postFallback(message: string): void {
+  logRuntimeEvent(message);
+  self.postMessage({ type: 'error', message });
+}
+
+// Device loss / uncaptured device errors are raised on the SHARED device, which
+// cannot import this module (it is imported by it) — so it takes a sink.
+setSharedGpuEventSink(logRuntimeEvent);
+
+/** "Skip Isolated Empty Cells" observability — the live active-cell count.
+ *  `undefined` = the feature is off. `-1` = configured but NOT engaged (invalid
+ *  config / excluded combination / the WebGPU target, whose GPU dispatch runs the
+ *  full grid and never maintains the CPU active set), so the full loop is running
+ *  — without the WebGPU arm this reported a STALE init-time count while the GPU
+ *  evolved the grid. Otherwise the number of cells stepped this generation.
+ *
+ *  C3: extracted from `sendColors` so the `◩ N active` stats chip and the
+ *  diagnostics popover read ONE expression and cannot disagree. */
+function sieActiveCount(): number | undefined {
+  if (!sieParamsPresent) return undefined;
+  return (activeSet && !(useWebGPU && webgpuRuntime?.stepReady)) ? activeSet.count : -1;
+}
+
+/** How many step batches actually ran fully GPU-resident. `agentResidentEligible`
+ *  says the model QUALIFIES; this says a batch really took that path (a build or
+ *  dispatch failure falls through to the per-generation loop). "Engaged" in the
+ *  diagnostics popover means this counter moved. */
+let residentBatchCount = 0;
 
 // ---------------------------------------------------------------------------
 // State
@@ -665,7 +734,7 @@ let bondAttrs: AttrDef[] = [];
  *  `readAttrs`, the CELL SoA). Mirrors `cellFieldAttrsOf` in the compiler. */
 let fieldSpecs: AttrDef[] = [];
 
-/** Flatten a 3D cell coordinate to its SoA index. In 2D (depth===1, layer===0)
+/** Flatten a 3D cell coordinate to its SoA index. In 2D (depth===1, layer===0);
  *  this is `row*width+col`, byte-identical to the historical 2D math. */
 function cellIndexOf(layer: number, row: number, col: number): number {
   return (layer * height + row) * width + col;
@@ -1310,7 +1379,7 @@ function instantiateAgentWasmIfNeeded(): void {
   // on the same wasmBacked views (proven safe — the agentWasmBackedDev path).
   const sig = pendingAgentWasmLayoutSig;
   if (sig && store.layout && (sig.maxHashBins !== store.layout.maxHashBins || sig.totalBytes !== store.layout.totalBytes)) {
-    self.postMessage({ type: 'error', message: `[agents] compiled WASM layout (hash ${sig.maxHashBins}, ${sig.totalBytes} B) does not match the worker store layout (hash ${store.layout.maxHashBins}, ${store.layout.totalBytes} B) — agent loop runs on JS. This is a compile/worker dims desync; please report it.` });
+    postFallback(`[agents] compiled WASM layout (hash ${sig.maxHashBins}, ${sig.totalBytes} B) does not match the worker store layout (hash ${store.layout.maxHashBins}, ${store.layout.totalBytes} B) — agent loop runs on JS. This is a compile/worker dims desync; please report it.`);
     return;
   }
   const bytes = pendingAgentWasmBytes;
@@ -1326,7 +1395,7 @@ function instantiateAgentWasmIfNeeded(): void {
     } catch (e) {
       agentBehaviourWasmFn = null;
       agentForcePassWasmFn = null;
-      self.postMessage({ type: 'error', message: '[agents] WASM instantiate failed, falling back to JS: ' + ((e as Error)?.message || e) });
+      postFallback('[agents] WASM instantiate failed, falling back to JS: ' + ((e as Error)?.message || e));
     }
   })();
 }
@@ -1423,7 +1492,7 @@ function buildAgentWebGPUIfNeeded(): void {
       }
     } catch (e) {
       agentWebgpuRuntime = null;
-      self.postMessage({ type: 'error', message: '[agents] WebGPU runtime build failed, falling back to JS: ' + ((e as Error)?.message || e) });
+      postFallback('[agents] WebGPU runtime build failed, falling back to JS: ' + ((e as Error)?.message || e));
     }
   })();
 }
@@ -1877,7 +1946,7 @@ function runAgentStep(): void {
       // WASM module's binStart view can't hold it). Loud once, then per-step quiet.
       if (!agentWasmHashOverflowWarned) {
         agentWasmHashOverflowWarned = true;
-        self.postMessage({ type: 'error', message: `[agents] spatial hash (${hash!.nBinsX * hash!.nBinsY * hash!.nBinsZ} bins) exceeds the WASM reserve (${s.layout.maxHashBins}); this step runs on JS.` });
+        postFallback(`[agents] spatial hash (${hash!.nBinsX * hash!.nBinsY * hash!.nBinsZ} bins) exceeds the WASM reserve (${s.layout.maxHashBins}); this step runs on JS.`);
       }
       if (agentBehaviourFn) { try { runBehaviourJs(); ranWasm = true; } catch { agentBehaviourFn = null; } }
     } else {
@@ -1923,7 +1992,7 @@ function runAgentStep(): void {
         fpBinSizeX = binSizeX; fpBinSizeY = binSizeY; fpBinSizeZ = binSizeZ;
         fpOriginX = originX; fpOriginY = originY; fpOriginZ = originZ;
       } catch (e) {
-        self.postMessage({ type: 'error', message: '[agents] WASM behaviour run failed, falling back to JS: ' + ((e as Error)?.message || e) });
+        postFallback('[agents] WASM behaviour run failed, falling back to JS: ' + ((e as Error)?.message || e));
         agentBehaviourWasmFn = null;
         agentForcePassWasmFn = null;  // W1 ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â drop the force pass too; this step runs fully on JS
         if (agentBehaviourFn) { try { runBehaviourJs(); ranWasm = true; } catch { agentBehaviourFn = null; } }
@@ -2012,7 +2081,7 @@ function runAgentStep(): void {
         );
         ranForceWasm = true;
       } catch (e) {
-        self.postMessage({ type: 'error', message: '[agents] WASM force pass failed, falling back to JS: ' + ((e as Error)?.message || e) });
+        postFallback('[agents] WASM force pass failed, falling back to JS: ' + ((e as Error)?.message || e));
         agentForcePassWasmFn = null;  // drop it; the JS loop below runs this step
       }
     }
@@ -2645,9 +2714,10 @@ async function runAgentBatchResident(count: number, bumpGeneration: boolean = tr
     // D: a decoupled grid+agents batch counts the generation via the grid's cell
     // steps (bumpGeneration=false); an agents-only batch owns the count here.
     if (bumpGeneration) setGeneration(generation + count);
+    residentBatchCount++;   // C3: "engaged" = a batch really took this path
     return true;
   } catch (e) {
-    self.postMessage({ type: 'error', message: '[agents] resident batch failed, falling back: ' + ((e as Error)?.message || e) });
+    postFallback('[agents] resident batch failed, falling back: ' + ((e as Error)?.message || e));
     agentGpuUploadPending = true;
     return false;
   } finally {
@@ -2703,7 +2773,7 @@ async function runAgentStepWebGPUInner(gpuFieldBridge?: GpuFieldBridge | null): 
   if (hash && !hashFits) {
     if (!agentWebgpuHashOverflowWarned) {
       agentWebgpuHashOverflowWarned = true;
-      self.postMessage({ type: 'error', message: `[agents] spatial hash (${hash.nBinsX * hash.nBinsY * hash.nBinsZ} bins) exceeds the WebGPU reserve (${rt.layout.maxHashBins}); this step runs on JS.` });
+      postFallback(`[agents] spatial hash (${hash.nBinsX * hash.nBinsY * hash.nBinsZ} bins) exceeds the WebGPU reserve (${rt.layout.maxHashBins}); this step runs on JS.`);
     }
     return false;
   }
@@ -2841,7 +2911,7 @@ async function runAgentStepWebGPUInner(gpuFieldBridge?: GpuFieldBridge | null): 
     // runtime a reinit had just installed. Only a genuine failure of the runtime we
     // actually ran on surfaces an error + tears it down.
     if (agentWebgpuRuntime === rt) {
-      self.postMessage({ type: 'error', message: '[agents] WebGPU step failed, falling back to JS: ' + ((e as Error)?.message || e) });
+      postFallback('[agents] WebGPU step failed, falling back to JS: ' + ((e as Error)?.message || e));
       destroyAgentWebGPURuntime(agentWebgpuRuntime); agentWebgpuRuntime = null;
       agentRenderActive = false; agentStoreStale = false; agentCompositeActive = false;   // A1: runtime gone → render off
     }
@@ -3317,13 +3387,17 @@ function startWebGPUInit(
     destroyWebGPURuntime(webgpuRuntime);
     webgpuRuntime = null;
     webgpuGridFailed = true;
-    self.postMessage({ type: 'error', message: '[webgpu] compile failed: ' + shaderError });
+    postFallback('[webgpu] compile failed: ' + shaderError);
     return;
   }
   if (!shaderCode || !entryPoints || !layout) {
     destroyWebGPURuntime(webgpuRuntime);
     webgpuRuntime = null;
     webgpuGridFailed = true;
+    // C3: this arm posts NOTHING (the compiler declined to emit a shader for a
+    // reason it reported elsewhere), so it was the one webgpuGridFailed path with
+    // no user-visible trace at all. Log it — the grid is now on JS/WASM.
+    logRuntimeEvent('[webgpu] the grid shader was not produced for this model — the CA grid runs on the CPU engine.');
     return;
   }
   // Pipeline cache: when the new shader is byte-identical to the running one,
@@ -3345,7 +3419,7 @@ function startWebGPUInit(
   webgpuRuntime = null;
   if (!isWebGPUAvailable()) {
     webgpuGridFailed = true;
-    self.postMessage({ type: 'error', message: '[webgpu] navigator.gpu unavailable in this worker context' });
+    postFallback('[webgpu] navigator.gpu unavailable in this worker context');
     return;
   }
   // The promise is intentionally not awaited here ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â init runs in the background
@@ -3421,7 +3495,7 @@ function startWebGPUInit(
       webgpuRuntime = null;
       webgpuGridFailed = true;
       const msg = (e instanceof Error) ? e.message : String(e);
-      self.postMessage({ type: 'error', message: '[webgpu] init failed: ' + msg });
+      postFallback('[webgpu] init failed: ' + msg);
       self.postMessage({ type: 'useWebGPUStatus', enabled: useWebGPU, ready: false, directRender: false });
     });
 }
@@ -3950,7 +4024,7 @@ function tryInstantiateWasmModule(bytes: Uint8Array | undefined, exportNames: st
       wasmInputColorFns = {};
       wasmOutputMappingFns = {};
       wasmInitFn = null;
-      self.postMessage({ type: 'error', message: '[wasm] instantiate failed: ' + (err?.message || err) });
+      postFallback('[wasm] instantiate failed: ' + (err?.message || err));
     },
   );
 }
@@ -5750,9 +5824,7 @@ function sendColors(): void {
   // grid and never maintains the CPU active set — so the full loop is running).
   // Undefined when off. Without the WebGPU arm this showed a STALE init-time
   // count while the GPU evolved the grid.
-  const sieActive = sieParamsPresent
-    ? ((activeSet && !(useWebGPU && webgpuRuntime?.stepReady)) ? activeSet.count : -1)
-    : undefined;
+  const sieActive = sieActiveCount();
   let agentsPayload: ReturnType<typeof snapshotAgentsForRender> | undefined;
   // A1 direct render: in FREE mode (render active + UI-sync off) the GPU renders
   // the frame, so ship NO agents payload — just a live-count scalar (stats chip).
@@ -6093,7 +6165,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       useWebGPU = wantWebGPU;
       if (gridCellsEnabled) tryInstantiateWasmModule(msg.wasmStepBytes, msg.wasmExports);
       if (msg.wasmStepError && wantWasm) {
-        self.postMessage({ type: 'error', message: '[wasm] compile failed, falling back to JS: ' + msg.wasmStepError });
+        postFallback('[wasm] compile failed, falling back to JS: ' + msg.wasmStepError);
       }
       // Async-init the WebGPU runtime when the user has it selected. Starts the
       // adapter/device handshake; runStep() falls through to JS/WASM until
@@ -6789,7 +6861,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       // the compiler layout carries nbr tables the worker layout omits).
       if (gridCellsEnabled) tryInstantiateWasmModule((msg as RecompileMsg).wasmStepBytes, (msg as RecompileMsg).wasmExports);
       if ((msg as RecompileMsg).wasmStepError && gridCellsEnabled) {
-        self.postMessage({ type: 'error', message: '[wasm] recompile failed, falling back to JS: ' + (msg as RecompileMsg).wasmStepError });
+        postFallback('[wasm] recompile failed, falling back to JS: ' + (msg as RecompileMsg).wasmStepError);
       }
       // Wave 3: rebuild WebGPU runtime when the shader source arrives. Only
       // re-init when there's a non-empty shader payload AND the user has
@@ -7816,6 +7888,85 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
         results: graphResults,
         hasAgentStore: !!agentStore,
         agentStoreStale,
+      });
+      break;
+    }
+
+    case 'getDiagnostics': {
+      // C3 (P4) — the SUPPORTED fast-path diagnostics reply. Every field is read
+      // from state the worker ALREADY maintains; nothing here computes anything
+      // the engine does not compute anyway, and nothing here runs per step.
+      //
+      // Class F is "eligibility, not correctness": an ineligible model computes
+      // exactly the same thing, only slower. So a fast path that is off is never
+      // an error — it is a fact with a reason, and the reason comes from the SAME
+      // predicate the engine decided with (residencyModelBlockers), not from a
+      // second description that could drift.
+      const cfg = centerBasedConfig;
+      const s = agentStore, rt = agentWebgpuRuntime;
+      // The MODEL half of residency, asked with the WORKER's facts — the compiler
+      // flags it was handed and the bond capacity it actually ALLOCATED. This is
+      // strictly better-informed than the main thread's node-type approximation
+      // (C1's own report flags replacing that as this phase's job), so where the
+      // two differ the popover shows this answer.
+      const resBlockers = (s && cfg) ? residencyModelBlockers(cfg, {
+        residencyClean: agentGraphResidencyClean,
+        usesField: agentUsesField,
+        hasAgentAccessibleField: fieldSpecs.length > 0,
+        usesSpawn: !!rt?.usesSpawn,
+        usesStop: !!rt?.usesStop,
+        usesIndicators: !!rt?.indicatorsBuf,
+        hasStopMessages: stopMessages.length > 0,
+        bondSlots: s.maxBonds,
+      }) : [];
+      // Residency is a WebGPU-agent path; on any other target the honest answer is
+      // "not applicable", not "blocked by your model".
+      const residencyApplicable = agentsEnabled && agentTarget === 'webgpu';
+      const sie = sieActiveCount();
+      // Which display path is presenting. `agentCompositeActive` (grid+agents on
+      // ONE worker-rendered canvas) is checked first because it implies the agent
+      // render is active too.
+      const directRenderMode =
+        agentCompositeActive ? 'composite'
+        : agentRenderActive ? 'agents'
+        : voxelRenderOn() ? 'voxels'
+        : webgpuRuntime?.directRender ? 'grid'
+        : 'off';
+      self.postMessage({
+        type: 'diagnostics',
+        residency: {
+          applicable: residencyApplicable,
+          eligible: agentResidentEligible(),
+          engaged: residentBatchCount > 0,
+          batches: residentBatchCount,
+          firstBlocker: residencyApplicable
+            ? (resBlockers[0]?.text ?? (simulateAgents ? undefined : 'the Agents layer is paused (Layers → Simulate)'))
+            : undefined,
+        },
+        sparse: {
+          configured: sieParamsPresent,
+          // -1 = configured but not engaged (see sieActiveCount).
+          active: sie !== undefined && sie >= 0,
+          count: sie !== undefined && sie >= 0 ? sie : null,
+          total,
+        },
+        fieldBridge: {
+          applicable: (rt?.layout.fieldReadLen ?? 0) > 0 || (rt?.layout.fieldWriteLen ?? 0) > 0,
+          eligible: agentFieldBridgeGpuEligible(),
+          gpuGens: e1bGpuBridgeGenCount,
+          cpuGens: e1bCpuBridgeFallbackCount,
+        },
+        directRender: { mode: directRenderMode },
+        engine: {
+          // The worker's RESOLVED view, including its own safety-net demotions —
+          // deliberately not the model's request.
+          grid: gridCellsEnabled ? (useWebGPU ? (webgpuRuntime?.stepReady ? 'webgpu' : 'webgpu-failed') : useWasm ? 'wasm' : 'js') : null,
+          agents: agentsEnabled ? agentTarget : null,
+          agentEngineActive: agentsEnabled
+            ? (agentTarget === 'webgpu' ? (rt?.ready ? 'webgpu' : 'js') : agentTarget === 'wasm' ? (agentBehaviourWasmFn ? 'wasm' : 'js') : 'js')
+            : null,
+          fallbackEvents: runtimeEvents.map(e => ({ gen: e.gen, text: e.text })),
+        },
       });
       break;
     }

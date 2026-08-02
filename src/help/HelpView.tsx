@@ -6,6 +6,9 @@ import { FULL_AGENT_PROFILE } from '../model/agentCapabilities';
 import {
   describeGenerationPipeline, describePipelineGroups, TEMPO_LABEL,
 } from '../model/generationPipeline';
+import {
+  AGENT_NODE_MATRIX, WEBGPU_GRID_REJECTS, CAPACITY_LIMITS, NODE_COUNTS,
+} from './capabilityMatrix.gen';
 
 // --- C2 (P3) — the "what runs each generation" reference ---------------------
 // DERIVED, never hand-written: the list below is produced by the SAME
@@ -65,6 +68,88 @@ function GenerationPipelineReference() {
         );
       })}
     </ol>
+  );
+}
+
+// --- C3 (P8) — the engine capability matrix ---------------------------------
+// GENERATED, never hand-written. `capabilityMatrix.gen.ts` is emitted by
+// `node scripts/gen-capability-docs.mjs` from the tables the engine enforces
+// with — the node registry, AGENT_NODE_REQUIREMENT, each agent target's OWN
+// supported-type set, the WebGPU grid gate (probed, not transcribed) and the
+// capacity constants. `--check` fails when the committed module is stale, so a
+// node added to the catalogue cannot leave this table behind.
+//
+// Before this, Help claimed "around 115 selectable node types (42 agent)" while
+// NODES_REFERENCE.md claimed 150 / 53. Both were typed by hand.
+
+/** Per-target support cell. `exempt` = outside the set but running anyway (an
+ *  event root, a lowered node, or a by-design CPU root) — NOT a gap. */
+function SupportCell({ status }: { status: 'yes' | 'exempt' | 'no' }) {
+  if (status === 'yes') return <span style={{ color: '#5cbf7a' }} title="Compiles on this engine">&#10003;</span>;
+  if (status === 'no') return <span style={{ color: '#e07070' }} title="Not ported to this engine — using it clamps the agent layer to a CPU engine">&#10007;</span>;
+  return <span style={{ opacity: 0.6 }} title="Runs on this engine anyway — it is an entry-point root, is lowered to other nodes before compiling, or runs on the CPU by design on every engine">&mdash;</span>;
+}
+
+function CapabilityMatrixReference() {
+  const rows = useMemo(
+    () => [...AGENT_NODE_MATRIX].sort((a, b) => a.label.localeCompare(b.label)),
+    [],
+  );
+  return (
+    <table className={`${styles.table} ${styles.matrix}`}>
+      <thead>
+        <tr>
+          <th>Agent node</th>
+          <th>Needs capability</th>
+          <th style={{ textAlign: 'center' }}>WASM</th>
+          <th style={{ textAlign: 'center' }}>WebGPU</th>
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map(r => (
+          <tr key={r.type}>
+            <td>{r.label}</td>
+            <td>{r.capabilityLabel ?? <span style={{ opacity: 0.55 }}>always available</span>}</td>
+            <td style={{ textAlign: 'center' }}><SupportCell status={r.wasmStatus} /></td>
+            <td style={{ textAlign: 'center' }}><SupportCell status={r.webgpuStatus} /></td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
+
+function GridRejectReference() {
+  return (
+    <table className={styles.table}>
+      <thead><tr><th>Node</th><th>Rejected when</th><th>Why</th></tr></thead>
+      <tbody>
+        {WEBGPU_GRID_REJECTS.map((r, i) => (
+          <tr key={`${r.type}-${i}`}>
+            <td>{r.label}</td>
+            <td>{r.condition || <em>any configuration</em>}</td>
+            <td>{r.reason}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
+
+function CapacityLimitsReference() {
+  return (
+    <table className={styles.table}>
+      <thead><tr><th>Limit</th><th>Value</th><th>What it bounds</th></tr></thead>
+      <tbody>
+        {CAPACITY_LIMITS.map(l => (
+          <tr key={l.key}>
+            <td>{l.label}</td>
+            <td style={{ fontVariantNumeric: 'tabular-nums' }}>{l.value.toLocaleString()}</td>
+            <td>{l.note}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
   );
 }
 
@@ -929,9 +1014,13 @@ export function HelpView() {
         <section id="help-nodes" className={styles.section}>
           <h2 className={styles.h2}>Node Types Reference</h2>
           <p className={styles.p}>
-            GenesisCA provides around 115 selectable node types (42 of them agent nodes) organized into the categories below.
+            GenesisCA provides <strong>{NODE_COUNTS.selectable} selectable node types</strong>{' '}
+            ({NODE_COUNTS.agent} of them agent nodes, {NODE_COUNTS.overseer} Overseer nodes)
+            organized into the categories below.
             The palette only shows the ones available for your model &mdash; async-only and
             Variegated-Cells nodes are hidden until you enable those features.
+            {' '}<em>(These counts are generated from the node registry itself, so they cannot
+            drift &mdash; see &ldquo;Engine capability matrix&rdquo; below.)</em>
           </p>
 
           <h3 className={styles.h3}>
@@ -1503,8 +1592,8 @@ export function HelpView() {
             Each reason in the Compatibility block carries its class: <strong>S</strong> semantics
             (a blocker &mdash; principle 1), <strong>R</strong> reproducibility (a note &mdash;
             principle 2), <strong>F</strong> fast path (a note &mdash; principle 3), and
-            <strong> C</strong> capacity (a resource limit, always stated <em>with its number</em>,
-            e.g. &ldquo;the WASM agent scratch budget is 4&rdquo;).
+            <strong> C</strong> capacity (a resource limit, always stated <em>with its number</em>
+            &mdash; every one of them is tabulated under &ldquo;Engine capability matrix&rdquo; below).
           </p>
           <p className={styles.p}>
             A common misreading this clears up: <em>bonds do not prevent WebGPU</em>. A bonded or
@@ -1527,6 +1616,72 @@ export function HelpView() {
             simulator&rsquo;s <code>&#x2699;</code> target chip turns amber whenever the engine is
             <em> not</em> running the target you asked for &mdash; hover it for the reason.
           </p>
+
+          <h3 className={styles.h3}>Which fast paths actually engaged</h3>
+          <p className={styles.p}>
+            Compatibility answers <em>which engine can run this</em>; the Generation Pipeline answers{' '}
+            <em>what a generation does</em>. Both describe what your model <em>asks for</em>. To see
+            what the engine <em>actually did</em>, click the <code>&#x2699;</code> target chip in the
+            simulator&rsquo;s bottom-right readout. The diagnostics popover reports, for the run in
+            progress:
+          </p>
+          <ul className={styles.list}>
+            <li><strong>Engine</strong> &mdash; the resolved engine per layer, and (in amber) any
+              layer whose loop fell back at <em>runtime</em> rather than at compile time.</li>
+            <li><strong>Fast paths</strong> &mdash; GPU residency, sparse stepping, the GPU field
+              bridge and direct render, each either <em>engaged</em> (with its number: batches,
+              cells, generations) or <em>off</em> followed by the <strong>first blocking reason</strong>.
+              That reason comes from the same predicate the engine decided with, so it cannot drift.</li>
+            <li><strong>Events</strong> &mdash; every fallback since the model loaded: a failed WASM
+              instantiate, a lost GPU device, a spatial hash that outgrew its reserve. These used to
+              reach only a transient banner or the browser console; now they persist, so you can ask
+              &ldquo;did anything degrade during that run?&rdquo; after the fact.</li>
+          </ul>
+          <p className={styles.p}>
+            A fast path that is off is <em>never</em> an error &mdash; principle 3 again: it computes
+            exactly the same thing, only slower. The popover is requested on demand and costs nothing
+            while closed.
+          </p>
+
+          <h3 className={styles.h3}>Engine capability matrix</h3>
+          <p className={styles.p}>
+            Which agent nodes each engine compiles, and which capability reveals each node in the
+            palette. <strong>This table is generated from the compilers&rsquo; own lookup tables</strong>{' '}
+            (the node registry, the capability requirements, and each target&rsquo;s supported-type
+            set), so it is definitionally in sync with what is enforced &mdash; a node added to the
+            catalogue appears here automatically, and a build check fails if it does not.
+          </p>
+          <p className={styles.p}>
+            <span style={{ color: '#5cbf7a' }}>&#10003;</span> compiles on that engine.{' '}
+            <span style={{ color: '#e07070' }}>&#10007;</span> not ported &mdash; placing it in the
+            behaviour graph clamps that layer to a CPU engine (the result is identical, the speed is
+            not). <span style={{ opacity: 0.6 }}>&mdash;</span> runs there anyway: it is an
+            entry-point root, it is rewritten into other nodes before compiling, or it runs on the
+            CPU by design on <em>every</em> engine (the Division Event and Agent Init Event always do).
+          </p>
+          <CapabilityMatrixReference />
+          <p className={styles.p}>
+            Of {NODE_COUNTS.agent} agent nodes, {NODE_COUNTS.agentOnWasm} compile on WebAssembly and{' '}
+            {NODE_COUNTS.agentOnWebgpu} on WebGPU; {NODE_COUNTS.agentGapsWasm} and{' '}
+            {NODE_COUNTS.agentGapsWebgpu} respectively are genuine gaps, the rest being roots,
+            lowered nodes, or the {NODE_COUNTS.agentCpuRoots} always-CPU roots.
+          </p>
+
+          <h4 className={styles.h4}>What the WebGPU CA grid rejects</h4>
+          <p className={styles.p}>
+            The grid engine&rsquo;s complete reject list &mdash; every one an instance of principle 1
+            (the GPU runs parallel rules only). Asynchronous update mode is rejected at the model
+            level for the same reason.
+          </p>
+          <GridRejectReference />
+
+          <h4 className={styles.h4}>Capacity limits</h4>
+          <p className={styles.p}>
+            Class-C bounds, each with its actual number. Exceeding one never corrupts a result: the
+            engine either clamps to a CPU path or rejects the excess with a notice.
+          </p>
+          <CapacityLimitsReference />
+
           <h3 className={styles.h3}>What runs each generation</h3>
           <p className={styles.p}>
             A CA-grid generation is easy to picture: <em>your Generation Step graph is the rule</em>,

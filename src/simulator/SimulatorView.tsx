@@ -518,6 +518,38 @@ export interface AgentStateResponse {
   bondAttrs?: Array<Record<string, number>>;
 }
 
+/** C3 (P4) — the worker's `getDiagnostics` reply: which FAST PATHS actually
+ *  engaged this run, and every engine fallback recorded since load.
+ *
+ *  Fast paths are Class F — eligibility, not correctness. An ineligible model
+ *  computes exactly the same thing, only slower, so nothing here is ever an
+ *  error. Each `firstBlocker` comes from the SAME predicate the engine decided
+ *  with, so the reason shown and the decision taken cannot drift. */
+export interface WorkerDiagnostics {
+  type: 'diagnostics';
+  residency: {
+    /** False ⇒ this path does not apply to the model at all (not a blocker). */
+    applicable: boolean;
+    eligible: boolean;
+    /** A batch really ran resident (a build/dispatch failure falls through). */
+    engaged: boolean;
+    batches: number;
+    firstBlocker?: string;
+  };
+  sparse: { configured: boolean; active: boolean; count: number | null; total: number };
+  fieldBridge: { applicable: boolean; eligible: boolean; gpuGens: number; cpuGens: number };
+  directRender: { mode: 'off' | 'grid' | 'agents' | 'composite' | 'voxels' };
+  engine: {
+    /** The worker's RESOLVED targets, including its own safety-net demotions. */
+    grid: 'js' | 'wasm' | 'webgpu' | 'webgpu-failed' | null;
+    agents: 'js' | 'wasm' | 'webgpu' | null;
+    /** What the agent loop is REALLY running (a failed WASM instantiate / GPU
+     *  build leaves the resolved target set while the JS fn does the work). */
+    agentEngineActive: 'js' | 'wasm' | 'webgpu' | null;
+    fallbackEvents: Array<{ gen: number; text: string }>;
+  };
+}
+
 const MANUAL_BRUSH_KEY_PREFIX = 'genesisca_manual_brush_v1:';
 function manualBrushStorageKey(modelName: string): string {
   // Models don't have a stable id field, so we key on the user-visible name.
@@ -804,6 +836,168 @@ const HoverCoordsChip = memo(function HoverCoordsChip() {
     : <span title="Brush footprint at the hovered cell">Cells ({info.x0},{info.y0}) {'→'} ({info.x1},{info.y1})</span>;
 });
 
+// --- C3 (P4): the fast-path diagnostics popover ------------------------------
+// C1 answered "which engine CAN run this?" and C2 "what does a generation DO?";
+// both describe what the model ASKS FOR. This answers the runtime half — which
+// speed paths actually ENGAGED, why not, and whether anything quietly degraded.
+//
+// Class F is eligibility, not correctness: a model that misses a fast path
+// computes exactly the same thing, only slower. So rows are green/grey, never
+// red, and the section carries that sentence as its footnote.
+
+const ENGINE_SHORT: Record<string, string> = {
+  js: 'Debug / Reference (JS)', wasm: 'WebAssembly', webgpu: 'WebGPU',
+  'webgpu-failed': 'WebGPU (failed — running on the CPU)',
+};
+
+/** One fast-path row: engaged (green) or off + the reason (grey). A path that
+ *  does not APPLY to this model says so rather than inventing a blocker. */
+function DiagPath({ label, applicable, engaged, why, detail }: {
+  label: string; applicable: boolean; engaged: boolean; why?: string; detail?: string;
+}) {
+  return (
+    <>
+      <div className={styles.diagRow}>
+        <span>{label}</span>
+        <span className={engaged ? styles.diagOn : styles.diagOff}>
+          {!applicable ? 'n/a' : engaged ? (detail ?? 'engaged') : 'off'}
+        </span>
+      </div>
+      {why && <div className={styles.diagWhy}>{why}</div>}
+    </>
+  );
+}
+
+const DiagnosticsPopover = memo(function DiagnosticsPopover({ diag, demotions, gridFailed }: {
+  diag: WorkerDiagnostics | null;
+  demotions: string[];
+  gridFailed: boolean;
+}) {
+  if (!diag) {
+    return (
+      <div className={styles.diagPopover}>
+        <div className={styles.diagTitle}>Diagnostics</div>
+        <div className={styles.diagNone}>Waiting for the simulation worker…</div>
+      </div>
+    );
+  }
+  const { residency, sparse, fieldBridge, directRender, engine } = diag;
+  // The worker reports what it is REALLY running; a mismatch with the resolved
+  // target means a runtime fallback (a failed WASM instantiate / GPU build)
+  // rather than a compile-gate demotion, so it is worth showing separately.
+  const agentDegraded = !!engine.agents && !!engine.agentEngineActive && engine.agents !== engine.agentEngineActive;
+  const dr = directRender.mode;
+  return (
+    <div className={styles.diagPopover}>
+      <div className={styles.diagTitle}>Engine</div>
+      {engine.grid && (
+        <div className={styles.diagRow}>
+          <span>CA grid</span>
+          <span className={engine.grid === 'webgpu-failed' ? styles.diagAmber : undefined}>
+            {ENGINE_SHORT[engine.grid] ?? engine.grid}
+          </span>
+        </div>
+      )}
+      {engine.agents && (
+        <div className={styles.diagRow}>
+          <span>Agents</span>
+          <span className={agentDegraded ? styles.diagAmber : undefined}>
+            {agentDegraded
+              ? `${ENGINE_SHORT[engine.agents]} → ${ENGINE_SHORT[engine.agentEngineActive!]}`
+              : ENGINE_SHORT[engine.agents] ?? engine.agents}
+          </span>
+        </div>
+      )}
+      {agentDegraded && (
+        <div className={styles.diagWhy}>
+          The agent loop fell back at runtime — see Events below.
+        </div>
+      )}
+      {/* Compile-gate demotions come from C1's diagnosis (the same gates the
+          compilers enforce); the worker cannot know what was REQUESTED. */}
+      {demotions.length > 0 && !gridFailed && (
+        <div className={styles.diagWhy}>
+          {demotions[0]!.split('\n').slice(-1)[0]} — full readout in Properties → Compatibility.
+        </div>
+      )}
+
+      <div className={styles.diagSep} />
+      <div className={styles.diagTitle}>Fast paths</div>
+      <DiagPath
+        label="GPU residency"
+        applicable={residency.applicable}
+        engaged={residency.engaged}
+        detail={residency.engaged ? `engaged (${residency.batches} batches)` : undefined}
+        why={
+          !residency.applicable
+            ? 'only applies to the WebGPU agent engine'
+            : residency.engaged
+              ? undefined
+              : (residency.firstBlocker ?? (residency.eligible
+                  ? 'eligible — no batch has run this way yet (press Play)'
+                  : undefined))
+        }
+      />
+      <DiagPath
+        label="Sparse stepping"
+        applicable={sparse.configured}
+        engaged={sparse.active}
+        detail={sparse.count !== null
+          ? `${sparse.count.toLocaleString()} of ${sparse.total.toLocaleString()} cells`
+          : undefined}
+        why={
+          !sparse.configured
+            ? 'Skip Isolated Empty Cells is off for this model'
+            : sparse.active
+              ? undefined
+              : 'configured, but not engaged for this run — the full grid is being processed'
+        }
+      />
+      <DiagPath
+        label="GPU field bridge"
+        applicable={fieldBridge.applicable}
+        engaged={fieldBridge.gpuGens > 0}
+        detail={fieldBridge.gpuGens > 0 ? `${fieldBridge.gpuGens.toLocaleString()} generations` : undefined}
+        why={
+          !fieldBridge.applicable
+            ? 'the agent layer is not coupled to a cell field'
+            : fieldBridge.gpuGens > 0
+              ? undefined
+              : 'the field crosses the bus on the CPU — it needs a WebGPU grid AND WebGPU agents sharing one device, with every agent-accessible cell attribute a Decimal'
+        }
+      />
+      <DiagPath
+        label="Direct render"
+        applicable
+        engaged={dr !== 'off'}
+        detail={
+          dr === 'composite' ? 'grid + agents, one canvas'
+          : dr === 'agents' ? 'agents → canvas'
+          : dr === 'voxels' ? 'voxels → canvas'
+          : dr === 'grid' ? 'grid → canvas'
+          : undefined
+        }
+        why={dr === 'off' ? 'frames are drawn on the main thread from a colours readback' : undefined}
+      />
+      <div className={styles.diagFoot}>
+        Speed paths are eligibility, not correctness — a model that misses one computes
+        exactly the same thing, just slower.
+      </div>
+
+      <div className={styles.diagSep} />
+      <div className={styles.diagTitle}>Events</div>
+      {engine.fallbackEvents.length === 0
+        ? <div className={styles.diagNone}>No runtime fallbacks this session.</div>
+        : [...engine.fallbackEvents].reverse().map((e, i) => (
+          <div className={styles.diagEvent} key={i}>
+            <span className={styles.diagEventGen}>gen {e.gen}</span>
+            <span>{e.text}</span>
+          </div>
+        ))}
+    </div>
+  );
+});
+
 /**
  *  `hideInstructionsPill` — the standalone-simulation VIEWER shell
  *  ([src/viewer/ViewerApp.tsx]) renders its OWN top-left "ⓘ Info" button
@@ -1043,8 +1237,25 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
   // wrapper ref, assigned to whichever is currently open). Session-only UI
   // state (the VALUES keep their existing persistence). Dismissed by a
   // capture-phase outside pointerdown (the context-menu pattern) or Escape.
-  const [overlayPopup, setOverlayPopup] = useState<'fps' | 'gpf' | 'capture' | null>(null);
+  const [overlayPopup, setOverlayPopup] = useState<'fps' | 'gpf' | 'capture' | 'diagnostics' | null>(null);
   const overlayPopupWrapRef = useRef<HTMLDivElement | null>(null);
+  // C3 (P4) — the fast-path diagnostics reply (worker `getDiagnostics`). Held in
+  // React state because the popover renders from it; requested ON DEMAND only
+  // (open + a slow poll while open), never per step.
+  const [diagnostics, setDiagnostics] = useState<WorkerDiagnostics | null>(null);
+  // A different model ⇒ the previous reading describes a simulation that no
+  // longer exists. `modelVersion` bumps on exactly LOAD_MODEL / NEW_MODEL (the
+  // documented "a different model now" seam — a model EDIT must not clear it).
+  useEffect(() => { setDiagnostics(null); }, [modelVersion]);
+  useEffect(() => {
+    if (overlayPopup !== 'diagnostics') return;
+    const ask = () => workerRef.current?.postMessage({ type: 'getDiagnostics' });
+    ask();
+    // Slow poll so a value that changes while the user watches (a resident batch
+    // engaging, a new fallback event) updates without a per-step message.
+    const h = window.setInterval(ask, 700);
+    return () => window.clearInterval(h);
+  }, [overlayPopup]);
   // Bottom-band collision refs — declared up here because draw() (defined well
   // above the effect that owns the logic) is the guaranteed re-check trigger.
   // See the "Bottom-band collision" effect for what they do.
@@ -5082,6 +5293,9 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
           workerRef.current?.postMessage({ type: 'killAgents', ids: pend.ids, activeViewer: activeViewerRef.current });
         }
       }
+    } else if (msg.type === 'diagnostics') {
+      // C3 — reply to the on-demand `getDiagnostics` request (the popover).
+      setDiagnostics(msg as unknown as WorkerDiagnostics);
     } else if (msg.type === 'error') {
       setCompileError(msg.message as string);
       pendingStep.current = false;
@@ -11197,16 +11411,31 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
               const a = compileTargetInfo.agents === 'webgpu' ? 'WebGPU' : compileTargetInfo.agents === 'wasm' ? 'WASM' : 'JS';
               parts.push(`agents ${a}`);
             }
-            const title = failed
+            const title = (failed
               ? 'The selected WebGPU grid target failed to initialise on this device — the simulation falls back to JavaScript where possible (see the error notice). Change the Compile Target in Properties → Execution.'
               : demoted
                 ? `${compileTargetInfo.demotions.join('\n\n')}\n\nFull readout: Properties → Compatibility.`
-                : 'Compile target(s) in use — selected in Properties → Execution. The Compatibility block in Properties lists what each engine can run and why.';
+                : 'Compile target(s) in use — selected in Properties → Execution. The Compatibility block in Properties lists what each engine can run and why.')
+              + '\n\nClick for the fast-path diagnostics (what actually engaged this run).';
+            // C3 (P4): the chip is now also the diagnostics trigger. Its own
+            // relative wrapper anchors the popover to the chip rather than to the
+            // whole stats strip.
             return (
-              <span
-                style={amber ? { color: '#e0a050' } : undefined}
-                title={title}
-              >{'⚙'} {parts.join(' · ')}{demoted && !failed ? '⚠' : ''}</span>
+              <span className={styles.diagChipWrap} ref={overlayPopup === 'diagnostics' ? overlayPopupWrapRef : undefined}>
+                <span
+                  className={styles.diagChip}
+                  style={amber ? { color: '#e0a050' } : undefined}
+                  title={title}
+                  onClick={() => setOverlayPopup(p => (p === 'diagnostics' ? null : 'diagnostics'))}
+                >{'⚙'} {parts.join(' · ')}{demoted && !failed ? '⚠' : ''}</span>
+                {overlayPopup === 'diagnostics' && (
+                  <DiagnosticsPopover
+                    diag={diagnostics}
+                    demotions={compileTargetInfo.demotions}
+                    gridFailed={failed}
+                  />
+                )}
+              </span>
             );
           })()}
           {sieActiveRef.current !== null && (
