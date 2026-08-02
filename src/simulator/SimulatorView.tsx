@@ -19,6 +19,9 @@ import type { SpriteAtlasInput, Light3D, Metaballs3D, AutoZoom3D } from './rende
 import type { VoxelRenderView } from './engine/webgpuRuntime';
 import { LightBallWidget } from './LightBallWidget';
 import { agentTargetOf, resolveMaxBonds } from '../model/centerBased';
+// C1 (P2/P4) — the compile-target chip's amber state + its reason come from the
+// same gate-backed diagnosis the Properties Compatibility block renders.
+import { diagnoseTargets, ENGINE_LABEL, REASON_CLASS_TAG } from '../model/targetDiagnosis';
 import { bondAttrsOf } from '../model/attributeScope';
 import { compileAgentGraphWasmForModel, isAgentGraphWasmSupported, buildAgentLayoutExtras } from '../modeler/vpl/compiler/agentWasm/compile';
 import { bondReqSlotsForModel } from '../modeler/vpl/compiler/bondRequestQueue';
@@ -959,7 +962,14 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
     const agents = model.topologyMode?.agents
       ? agentTargetOf(model.centerBased, isAgentGraphWasmSupported(model), isAgentGraphWebGPUSupported(model))
       : null;
-    return { gridCellsOn, grid, agents };
+    // C1 (P4) — the chip must be amber for EVERY resolved ≠ requested state, not
+    // just a failed WebGPU device. `diagnoseTargets` calls the same gates, so the
+    // chip's reason and the Properties readout are one truth.
+    const diagnosis = diagnoseTargets(model);
+    const demotions = diagnosis.layers
+      .filter(l => l.demotionReason)
+      .map(l => `${l.label}: requested ${ENGINE_LABEL[l.requested]} → running ${ENGINE_LABEL[l.resolved]}.\n[${REASON_CLASS_TAG[l.demotionReason!.class]}] ${l.demotionReason!.text}`);
+    return { gridCellsOn, grid, agents, demotions };
   }, [model]);
   // 'pending' until the worker acks; 'failed' when useWebGPUStatus reports
   // ready:false while WebGPU is the selected grid target (device/init failure —
@@ -11176,19 +11186,27 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
           <span>{actualGps} g/s</span>
           {(compileTargetInfo.gridCellsOn || compileTargetInfo.agents) && (() => {
             const failed = compileTargetInfo.grid === 'WebGPU' && gridWebgpuStatusRef.current === 'failed';
+            // C1 (P4): amber whenever the ENGINE is not running what the model
+            // asked for — a runtime device failure OR a compile-gate demotion
+            // (which used to reach only the console).
+            const demoted = compileTargetInfo.demotions.length > 0;
+            const amber = failed || demoted;
             const parts: string[] = [];
             if (compileTargetInfo.gridCellsOn) parts.push(failed ? 'WebGPU✗' : compileTargetInfo.grid);
             if (compileTargetInfo.agents) {
               const a = compileTargetInfo.agents === 'webgpu' ? 'WebGPU' : compileTargetInfo.agents === 'wasm' ? 'WASM' : 'JS';
               parts.push(`agents ${a}`);
             }
+            const title = failed
+              ? 'The selected WebGPU grid target failed to initialise on this device — the simulation falls back to JavaScript where possible (see the error notice). Change the Compile Target in Properties → Execution.'
+              : demoted
+                ? `${compileTargetInfo.demotions.join('\n\n')}\n\nFull readout: Properties → Compatibility.`
+                : 'Compile target(s) in use — selected in Properties → Execution. The Compatibility block in Properties lists what each engine can run and why.';
             return (
               <span
-                style={failed ? { color: '#e0a050' } : undefined}
-                title={failed
-                  ? 'The selected WebGPU grid target failed to initialise on this device — the simulation falls back to JavaScript where possible (see the error notice). Change the Compile Target in Properties → Execution.'
-                  : 'Compile target(s) in use — selected in Properties → Execution. Unsupported features clamp to JavaScript automatically.'}
-              >{'⚙'} {parts.join(' · ')}</span>
+                style={amber ? { color: '#e0a050' } : undefined}
+                title={title}
+              >{'⚙'} {parts.join(' · ')}{demoted && !failed ? '⚠' : ''}</span>
             );
           })()}
           {sieActiveRef.current !== null && (

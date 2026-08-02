@@ -28,7 +28,10 @@ import { subAttrInfo, parentValueToInt } from '../../modeler/vpl/compiler/subAtt
 import { buildActiveOffsets, createActiveSet, rebuildActiveSet, applyTransition, compactActiveSet, type ActiveSet } from './activeSet';
 import { packNI, packNI3 } from '../../modeler/vpl/compiler/niCodec';
 import type { Attribute, CenterBasedConfig, SkipIsolatedEmptyConfig } from '../../model/types';
-import { cbNum, usesBondingPhysics, usesSoftCollision, usesPositionalCollision, usesEngineSprings, usesEngineGrowth, chargeBinEdgeOf, chargeParamsOf, layoutIterationsOf } from '../../model/centerBased';
+import { cbNum, usesBondingPhysics, usesSoftCollision, usesPositionalCollision, usesEngineSprings, usesEngineGrowth, chargeBinEdgeOf, chargeParamsOf, layoutIterationsOf, effectiveAgentDt } from '../../model/centerBased';
+// C1 — the MODEL-derivable half of residency eligibility, shared with the
+// Properties compatibility readout so the engine and the explanation agree.
+import { residencyModelBlockers } from '../../model/agentResidency';
 import {
   createAgentStore, seedAgents, clearAgents, allocAgentSlot, initAgentSlot, freeAgentSlot, freeStagedSlot,
   snapshotAgentsForRender, advanceAgentSprites, serializeAgentStore, deserializeAgentStore, buildSpatialHash,
@@ -1642,10 +1645,11 @@ function buildAgentLoopArgs(
  *  parameter change (the silent-drift hazard). */
 function clampAgentDt(): void {
   if (!agentStore || !centerBasedConfig) return;
-  const muR = cbNum(centerBasedConfig, 'repulsionStiffness');
-  const lambda = cbNum(centerBasedConfig, 'bondStiffness');
-  const muEff = Math.max(1e-6, muR + lambda);
-  agentStore.dt = Math.min(cbNum(centerBasedConfig, 'timeStep'), 0.2 / muEff);
+  // C1 (P4): the arithmetic lives in `effectiveAgentDt` (model/centerBased.ts) so
+  // the Properties readout resolves the SAME number from the SAME place — the
+  // engine keeps this exact value (same operands, same order), the UI gains the
+  // ability to explain it.
+  agentStore.dt = effectiveAgentDt(centerBasedConfig).dt;
 }
 
 /** Commit the position double-buffer (x ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬Â xNext, y ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬Â yNext, and z ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬Â zNext in
@@ -2509,25 +2513,27 @@ function buildGpuFieldBridge(): GpuFieldBridge | null {
 function agentResidentEligible(): boolean {
   const s = agentStore, rt = agentWebgpuRuntime, cfg = centerBasedConfig;
   if (!s || !rt || !rt.ready || agentTarget !== 'webgpu' || !cfg) return false;
-  return (
-    agentGraphResidencyClean
-    // D: field-DECOUPLED, not agents-only. The agent layer never touches a cell
-    // field, so a grid+agents model is two INDEPENDENT sims sharing a viewport —
-    // the agents run resident (one submit) while the grid steps by its own JS/WASM
-    // per-gen path (the resident branch interleaves them; see the `step` handler).
-    // The predicate is general: no field node reachable (agentUsesField) AND no
-    // cell attr grants agent access (fieldSpecs). Replaces the agents-only proxy.
-    && !agentUsesField
-    && fieldSpecs.length === 0
-    && simulateAgents
-    && cfg.agentUpdateMode !== 'sync'          // async single-buffer attrs on the GPU
-    && !usesPositionalCollision(cfg)           // CPU projection pass is per-gen
-    && !usesEngineSprings(cfg) && s.maxBonds === 0   // no bond store / auto-bond scan
-    && !(usesEngineGrowth(cfg) && cbNum(cfg, 'growthRate') > 0)  // radius static ⇒ hash edge static
-    && !rt.usesSpawn && !rt.usesStop
-    && !rt.indicatorsBuf                        // indicator accumulation needs per-gen sync
-    && stopMessages.length === 0
-  );
+  // RUNTIME-only term (the Simulate-agents layer toggle): nothing outside the
+  // worker can know it, so it stays here.
+  if (!simulateAgents) return false;
+  // Every MODEL-derivable term lives in `residencyModelBlockers`
+  // (model/agentResidency.ts), which the Properties compatibility readout calls
+  // with the same facts — so the engine's decision and the explanation the user
+  // reads are ONE predicate (the resolveMaxBonds single-source discipline).
+  // D: field-DECOUPLED, not agents-only. The agent layer never touches a cell
+  // field, so a grid+agents model is two INDEPENDENT sims sharing a viewport —
+  // the agents run resident (one submit) while the grid steps by its own JS/WASM
+  // per-gen path (the resident branch interleaves them; see the `step` handler).
+  return residencyModelBlockers(cfg, {
+    residencyClean: agentGraphResidencyClean,
+    usesField: agentUsesField,
+    hasAgentAccessibleField: fieldSpecs.length > 0,
+    usesSpawn: !!rt.usesSpawn,
+    usesStop: !!rt.usesStop,
+    usesIndicators: !!rt.indicatorsBuf,   // indicator accumulation needs per-gen sync
+    hasStopMessages: stopMessages.length > 0,
+    bondSlots: s.maxBonds,                // the ACTUAL allocation, not a re-derivation
+  }).length === 0;
 }
 
 /** Run `count` generations fully GPU-resident (one submit) + one frame readback.

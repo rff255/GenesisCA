@@ -3,6 +3,7 @@ import type { CAModel, CenterBasedConfig, AgentCapabilities, CollisionMode, Bond
 import {
   AGENT_PRESETS, AGENT_PRESET_META, AGENT_CAPABILITY_ROWS, HIDDEN_CAP_ROWS_V1,
   resolveAgentProfile, matchAgentPreset, applyCapabilityEdit, estimateAgentFootprint,
+  capabilityClosureDrivers, capabilityRowLabel,
   type AgentPresetKey, type BoolCapKey,
 } from '../../model/agentCapabilities';
 import { cbNum, chargeStrengthOf, chargeMaxDistOf, CHARGE_MAX_DIST_REST_MULTIPLE, layoutIterationsOf, MAX_LAYOUT_ITERATIONS } from '../../model/centerBased';
@@ -26,6 +27,22 @@ export function AgentCapabilitiesSection({
     set(applyCapabilityEdit(profile, key, value));
 
   const selStyle: CSSProperties = { fontSize: '0.66rem', background: 'var(--color-bg-panel, #1a1a1a)', color: '#ddd', border: '1px solid var(--color-widget-border, #444)', borderRadius: 4, padding: '1px 4px' };
+
+  // C1 (P4 — no silent resolution): which capabilities were auto-enabled BY the
+  // closure, and by what. DERIVED from `computeCapabilityClosure` itself (probe
+  // each enabled capability in isolation and see what it forces), so this can
+  // never go stale against the real dependency rules.
+  const drivers = capabilityClosureDrivers(profile);
+  const requiredBy = (key: keyof AgentCapabilities) => {
+    const d = drivers[key];
+    if (!d || d.length === 0) return null;
+    return (
+      <span
+        style={{ color: 'var(--color-accent)', fontSize: '0.6rem' }}
+        title={`Turned on automatically because ${d.map(capabilityRowLabel).join(' / ')} require${d.length === 1 ? 's' : ''} it. Turning ${d.length === 1 ? 'that' : 'those'} off releases it.`}
+      > (required by {d.map(capabilityRowLabel).join(', ')})</span>
+    );
+  };
 
   const presetDesc = activePreset === 'custom'
     ? 'A custom mix — edit any toggle and the picker stays on Custom.'
@@ -58,7 +75,7 @@ export function AgentCapabilitiesSection({
       <span style={{ color: '#888', fontSize: '0.62rem', display: 'block', marginBottom: 8 }}>{presetDesc}</span>
 
       {/* Motion — a segmented control (revealed for every agent model). */}
-      <div style={{ fontSize: '0.6rem', color: '#888', textTransform: 'uppercase', letterSpacing: '0.05em', margin: '4px 0 4px' }}>Motion</div>
+      <div style={{ fontSize: '0.6rem', color: '#888', textTransform: 'uppercase', letterSpacing: '0.05em', margin: '4px 0 4px' }}>Motion{requiredBy('motion')}</div>
       <div style={{ display: 'flex', gap: 4, marginBottom: 8 }}>
         {(['static', 'velocity', 'force'] as MotionMode[]).map(mode => (
           <button
@@ -89,7 +106,7 @@ export function AgentCapabilitiesSection({
             return (
               <div key={k}>
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
-                  <span style={{ fontSize: '0.72rem', color: '#ddd' }}>{row.label}</span>
+                  <span style={{ fontSize: '0.72rem', color: '#ddd' }}>{row.label}{requiredBy(k)}</span>
                   <select value={profile.collision} onChange={e => edit('collision', e.target.value as CollisionMode)} style={selStyle}>
                     <option value="off">Off</option><option value="soft">Soft-sphere (force)</option><option value="positional">Positional (hard)</option>
                   </select>
@@ -112,7 +129,7 @@ export function AgentCapabilitiesSection({
             return (
               <div key={k}>
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
-                  <span style={{ fontSize: '0.72rem', color: '#ddd' }}>{row.label}</span>
+                  <span style={{ fontSize: '0.72rem', color: '#ddd' }}>{row.label}{requiredBy(k)}</span>
                   <select value={profile.bonds} onChange={e => {
                     const v = e.target.value as BondsMode;
                     const next = applyCapabilityEdit(profile, 'bonds', v);
@@ -138,7 +155,7 @@ export function AgentCapabilitiesSection({
                 <label style={{ display: 'flex', alignItems: 'flex-start', gap: 6, cursor: 'pointer' }}>
                   <input type="checkbox" checked={on} onChange={e => edit('charge', e.target.checked ? 'on' : 'off')} style={{ marginTop: 2 }} />
                   <span>
-                    <span style={{ fontSize: '0.72rem', color: '#ddd' }}>{row.label}</span>
+                    <span style={{ fontSize: '0.72rem', color: '#ddd' }}>{row.label}{requiredBy(k)}</span>
                     <br /><span style={{ color: '#888', fontSize: '0.6rem' }}>{row.description}{row.requires && <em style={{ color: '#777' }}> · requires {row.requires}</em>}</span>
                   </span>
                 </label>
@@ -177,7 +194,7 @@ export function AgentCapabilitiesSection({
             <label key={k} style={{ display: 'flex', alignItems: 'flex-start', gap: 6, cursor: 'pointer' }}>
               <input type="checkbox" checked={!!profile[bk]} onChange={e => edit(bk, e.target.checked)} style={{ marginTop: 2 }} />
               <span>
-                <span style={{ fontSize: '0.72rem', color: '#ddd' }}>{row.label}</span>
+                <span style={{ fontSize: '0.72rem', color: '#ddd' }}>{row.label}{requiredBy(bk)}</span>
                 <br /><span style={{ color: '#888', fontSize: '0.6rem' }}>{row.description}{row.requires && <em style={{ color: '#777' }}> · requires {row.requires}</em>}</span>
               </span>
             </label>

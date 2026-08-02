@@ -1411,6 +1411,55 @@ export function HelpView() {
             <em>Apply Force To Agent</em> is exempt: adding a force is commutative, so it&rsquo;s safe in
             both modes.
           </p>
+          <h3 className={styles.h3}>Engine compatibility &mdash; three principles</h3>
+          <p className={styles.p}>
+            Every &ldquo;X doesn&rsquo;t work on Y&rdquo; in GenesisCA follows from three sentences.
+            <strong> Properties &rarr; Compatibility</strong> shows, for this model, which engines each
+            layer (CA grid / agents) can use and why not the others &mdash; computed from the same
+            checks the compilers enforce, so it can never drift from what actually happens.
+          </p>
+          <ol className={styles.list}>
+            <li><strong>Sequential vs parallel.</strong> A rule is <em>sequential</em> when a write is
+              visible to a later cell or agent in the <em>same</em> generation (asynchronous mode,
+              neighbour writes, cross-agent overwrites, order-dependent indicator ops). The CPU
+              engines run sequential <em>and</em> parallel rules; <strong>the GPU runs only parallel
+              ones</strong>. Every hard block is this one sentence.</li>
+            <li><strong>CPU is exact; GPU is statistical.</strong> JavaScript and WebAssembly use f64
+              math and one shared seeded stream, so runs are bit-reproducible and <em>Set Random
+              Seed</em> pins them (which is what Overseer sweeps, oracles and replays need). WebGPU
+              uses f32 and a per-thread RNG &mdash; statistically equivalent, never bitwise.</li>
+            <li><strong>Speed paths are eligibility, not correctness.</strong> GPU residency, sparse
+              stepping, direct render and the GPU field bridge change milliseconds per generation,
+              never results. A model that misses one computes exactly the same thing, just slower.</li>
+          </ol>
+          <p className={styles.p}>
+            Each reason in the Compatibility block carries its class: <strong>S</strong> semantics
+            (a blocker &mdash; principle 1), <strong>R</strong> reproducibility (a note &mdash;
+            principle 2), <strong>F</strong> fast path (a note &mdash; principle 3), and
+            <strong> C</strong> capacity (a resource limit, always stated <em>with its number</em>,
+            e.g. &ldquo;the WASM agent scratch budget is 4&rdquo;).
+          </p>
+          <p className={styles.p}>
+            A common misreading this clears up: <em>bonds do not prevent WebGPU</em>. A bonded or
+            graph-rewriting model runs on the WebGPU agent target perfectly well &mdash; it just
+            forfeits <em>GPU residency</em> (class F), because applying a bond form/break/rewire or a
+            division is serial data-structure surgery that happens on the CPU between generations,
+            so each generation pays a round-trip instead of a whole frame running in one submit. At
+            small populations WebAssembly is often faster for exactly that reason. Separately,
+            <em> Cubic GRA</em> ships on WebAssembly because its Overseer sweep needs seed
+            reproducibility (class R) &mdash; a different fact that used to look like the same one.
+          </p>
+          <h3 className={styles.h3}>Nothing is resolved silently</h3>
+          <p className={styles.p}>
+            Wherever the engine resolves a value differently from what you wrote, the panel shows the
+            resolved value <em>and the reason</em>. <strong>Time Step &Delta;t</strong> is
+            auto-clamped for stability (&Delta;t &le; 0.2 / (Repulsion &mu; + Bond &lambda;)) &mdash;
+            when the clamp bites, the effective number and &mu;<sub>eff</sub> are shown under the
+            field. <strong>Capability rows</strong> that a dependency turned on are marked
+            &ldquo;(required by &hellip;)&rdquo; naming what to switch off to release them. And the
+            simulator&rsquo;s <code>&#x2699;</code> target chip turns amber whenever the engine is
+            <em> not</em> running the target you asked for &mdash; hover it for the reason.
+          </p>
           <h3 className={styles.h3}>Enabling Agents</h3>
           <p className={styles.p}>
             In <strong>Properties &rarr; Execution &rarr; Topology</strong>, tick

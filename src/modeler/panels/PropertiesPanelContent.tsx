@@ -1,14 +1,18 @@
 import { useModel } from '../../model/ModelContext';
 import type {
-  BoundaryTreatment, UpdateMode, AsyncScheme,
+  BoundaryTreatment, UpdateMode, AsyncScheme, CAModel,
   EndConditions, EndConditionOp, IndicatorEndCondition,
   SkipIsolatedEmptyConfig,
 } from '../../model/types';
+import {
+  diagnoseTargets, ENGINE_LABEL, REASON_CLASS_TAG, REASON_CLASS_TITLE,
+  type Reason, type ReasonClass,
+} from '../../model/targetDiagnosis';
 import { IndicatorsPanelSection } from './IndicatorsPanelSection';
 import { useDetailSelection, type PanelContentProps } from '../ModelerDetailContext';
 import { useListReorder } from './useListReorder';
 import { NumberField } from '../vpl/widgets/InlineWidgets';
-import { cbNum, usesBondingPhysics, resolveMaxBonds, BOND_REQUEST_DEPTH_MAX, CENTER_BASED_DEFAULTS } from '../../model/centerBased';
+import { cbNum, usesBondingPhysics, resolveMaxBonds, effectiveAgentDt, BOND_REQUEST_DEPTH_MAX, CENTER_BASED_DEFAULTS } from '../../model/centerBased';
 import type { CenterBasedNumericKey } from '../../model/centerBased';
 import { isAgentGraphWasmSupported } from '../vpl/compiler/agentWasm/compile';
 import { isAgentGraphWebGPUSupported } from '../vpl/compiler/agentWebgpu/compile';
@@ -16,7 +20,7 @@ import { AgentCapabilitiesSection } from './AgentCapabilitiesSection';
 import { resolveAgentProfile, applyCapabilityEdit } from '../../model/agentCapabilities';
 import { isGraphFrequencyMetric, type GraphMetric } from '../../simulator/engine/graphMetrics';
 import styles from './PanelContent.module.css';
-import { useState, type ReactNode } from 'react';
+import { useMemo, useState, type ReactNode } from 'react';
 
 function newCondId(): string {
   return `ec_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`;
@@ -65,6 +69,73 @@ function CollapsibleSection({ id, title, bare = false, children }: {
   const body = <div style={collapsed ? { display: 'none' } : undefined}>{children}</div>;
   if (bare) return <>{titleRow}{body}</>;
   return <div className={styles.section}>{titleRow}{body}</div>;
+}
+
+// --- C1 (P2) — Target Compatibility readout ---------------------------------
+// Which engines this model can use, per layer, and WHY not the others. Every
+// verdict comes from `diagnoseTargets`, which calls the REAL gates — so this can
+// never drift from what the engine does. Read-only: it explains the radios
+// above, it never blocks a choice.
+const REASON_CLASS_COLOR: Record<ReasonClass, string> = {
+  semantics: '#e0605a', reproducibility: '#5aa9e0', fastpath: '#8a8f99', capacity: '#e0a050',
+};
+
+function ReasonLine({ reason }: { reason: Reason }) {
+  return (
+    <div style={{ display: 'flex', gap: 6, alignItems: 'flex-start', fontSize: '0.62rem', color: '#b9bdc5' }}>
+      <span
+        title={REASON_CLASS_TITLE[reason.class]}
+        style={{
+          flex: '0 0 auto', fontSize: '0.54rem', fontWeight: 700, lineHeight: 1.35, marginTop: 1,
+          padding: '0 3px', borderRadius: 3, border: `1px solid ${REASON_CLASS_COLOR[reason.class]}`,
+          color: REASON_CLASS_COLOR[reason.class],
+        }}
+      >{REASON_CLASS_TAG[reason.class]}</span>
+      <span>{reason.text}</span>
+    </div>
+  );
+}
+
+function CompatibilityBlock({ model }: { model: CAModel }) {
+  // The agent gates flatten the agent graph, so memoise on the model.
+  const diagnosis = useMemo(() => diagnoseTargets(model), [model]);
+  if (diagnosis.layers.length === 0) return null;
+  return (
+    <div className={styles.fieldGroup}>
+      {diagnosis.layers.map(layer => (
+        <div key={layer.layer} style={{ marginBottom: 12 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 8, marginBottom: 4 }}>
+            <span style={{ fontSize: '0.6rem', color: '#b58fd6', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{layer.label}</span>
+            <span style={{ fontSize: '0.62rem', color: layer.demotionReason ? '#e0a050' : '#888' }}>
+              {layer.requested === layer.resolved
+                ? <>running <b style={{ color: '#ddd' }}>{ENGINE_LABEL[layer.resolved]}</b></>
+                : <>requested <b>{ENGINE_LABEL[layer.requested]}</b> → running <b>{ENGINE_LABEL[layer.resolved]}</b></>}
+            </span>
+          </div>
+          {layer.verdicts.map(v => (
+            <div key={v.engine} style={{ display: 'flex', gap: 7, alignItems: 'flex-start', padding: '4px 0', borderTop: '1px solid #22252c' }}>
+              <span style={{ flex: '0 0 12px', textAlign: 'center', fontWeight: 700, fontSize: '0.72rem', lineHeight: 1.5, color: v.ok ? '#5cc27a' : '#e0605a' }}>
+                {v.ok ? '✓' : '✗'}
+              </span>
+              <span style={{ flex: '0 0 92px', fontSize: '0.66rem', color: '#ddd' }}>
+                {ENGINE_LABEL[v.engine]}
+                {v.engine === layer.resolved && <span style={{ display: 'block', color: '#888', fontSize: '0.58rem' }}>running</span>}
+              </span>
+              <span style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 3 }}>
+                {v.blockers.map((r, i) => <ReasonLine key={`b${i}`} reason={r} />)}
+                {v.notes.map((r, i) => <ReasonLine key={`n${i}`} reason={r} />)}
+              </span>
+            </div>
+          ))}
+        </div>
+      ))}
+      <span style={{ color: '#777', fontSize: '0.58rem', display: 'block', fontStyle: 'italic', borderTop: '1px solid #22252c', paddingTop: 6 }}>
+        <b>S</b> semantics (the engine cannot express it) · <b>R</b> reproducibility (runs, not bit-reproducibly) ·
+        {' '}<b>F</b> fast path (same results, different speed) · <b>C</b> capacity (a limit with a number).
+        Computed from the same checks the compilers enforce. See Help → Bond-Graph Agents → Engine compatibility.
+      </span>
+    </div>
+  );
 }
 
 export function PropertiesPanelContent({ mode = 'list' }: PanelContentProps = {}) {
@@ -773,7 +844,26 @@ export function PropertiesPanelContent({ mode = 'list' }: PanelContentProps = {}
                 {Row('Momentum', NF('momentum', { min: 0, max: 0.999, step: 0.05 }), '0 = overdamped (tissue); ~0.9 = flocking inertia.')}
                 {Row('Max Speed', NF('maxSpeed', { min: 0, step: 0.1 }), 'Per-step speed cap (0 = uncapped).')}
                 {Row('Neighbour Query Radius', NF('neighbourQueryRadius', { min: 1, step: 0.5 }), 'Get Nearby Agents radius the spatial-hash bin is sized to cover.')}
-                {Row('Time Step Δt', NF('timeStep', { min: 0.001, step: 0.05 }), 'Auto-clamped against the stability bound.')}
+                {/* C1 (P4) — no silent resolution: when the stability bound
+                    actually REDUCES Δt, show the number the engine runs and why.
+                    `effectiveAgentDt` is the same helper the worker's
+                    clampAgentDt calls, so the two cannot disagree. */}
+                {Row('Time Step Δt', NF('timeStep', { min: 0.001, step: 0.05 }))}
+                {(() => {
+                  const eff = effectiveAgentDt(cb);
+                  return (
+                    <div style={{ marginTop: -6, marginBottom: 8 }}>
+                      {eff.clamped && (
+                        <span style={{ color: '#e0a050', fontSize: '0.62rem', display: 'block' }}>
+                          → effective Δt <b>{Number(eff.dt.toPrecision(4))}</b> — clamped from {eff.requested} for stability (μ_eff = {Number(eff.muEff.toPrecision(4))})
+                        </span>
+                      )}
+                      <span style={{ color: '#888', fontSize: '0.62rem', display: 'block' }}>
+                        Auto-clamped against the stability bound Δt ≤ 0.2 / (Repulsion μ + Bond λ){eff.clamped ? '.' : ` = ${Number(eff.bound.toPrecision(4))} — not binding here.`}
+                      </span>
+                    </div>
+                  );
+                })()}
                 {Row('Drag η', NF('drag', { min: 0.01, step: 0.1 }), 'Overdamped drag (scales force → velocity).')}
 
                 {/* Use bonding physics master toggle (req 10). OFF = no engine
@@ -1019,6 +1109,14 @@ export function PropertiesPanelContent({ mode = 'list' }: PanelContentProps = {}
             )}
           </div>
         </div>
+      </CollapsibleSection>
+
+      {/* C1 (P2) — which engines this model can use, and why not the others.
+          Sits directly under Execution because it explains the Compile Target
+          radios there; kept as its OWN collapsible section rather than nested
+          inside the (already long) Execution body. */}
+      <CollapsibleSection id="compatibility" title="Compatibility">
+        <CompatibilityBlock model={model} />
       </CollapsibleSection>
 
       <CollapsibleSection id="indicators" title="Indicators" bare>

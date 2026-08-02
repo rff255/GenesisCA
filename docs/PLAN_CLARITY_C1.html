@@ -1,0 +1,273 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>C1 — Target Compatibility readout + resolved-config annotations (mockup)</title>
+<style>
+  :root{
+    --bg:#0c0d10; --panel:#15171c; --panel2:#1a1d23; --border:#2a2e37; --muted:#888;
+    --text:#dcdfe4; --accent:#e8a13a; --ok:#5cc27a; --bad:#e0605a; --warn:#e0a050;
+    --cls-s:#e0605a; --cls-r:#5aa9e0; --cls-f:#8a8f99; --cls-c:#e0a050;
+    --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);
+       font:14px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;padding:28px}
+  h1{font-size:20px;margin:0 0 4px;color:var(--accent)}
+  h2{font-size:15px;margin:34px 0 10px;padding-bottom:6px;border-bottom:1px solid var(--border)}
+  h3{font-size:12.5px;margin:20px 0 8px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em}
+  p.sub{color:var(--muted);margin:0 0 18px;font-size:13px}
+  .grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(330px,1fr));gap:16px;align-items:start}
+  .panel{background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:12px 14px}
+  .panelTitle{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px;
+              display:flex;align-items:center;gap:6px;cursor:pointer}
+  .chev{color:var(--muted)}
+  .layerHead{display:flex;justify-content:space-between;align-items:baseline;gap:8px;
+             font-size:11px;letter-spacing:.05em;text-transform:uppercase;color:#b58fd6;margin:10px 0 6px}
+  .layerHead .req{color:var(--muted);text-transform:none;letter-spacing:0;font-size:11px}
+  .layerHead .req b{color:var(--text);font-weight:600}
+  .row{display:flex;gap:8px;align-items:flex-start;padding:5px 0;border-top:1px solid #22252c}
+  .row:first-of-type{border-top:none}
+  .mark{width:14px;flex:0 0 14px;text-align:center;font-weight:700;line-height:1.5}
+  .ok{color:var(--ok)} .bad{color:var(--bad)} .warnc{color:var(--warn)}
+  .eng{width:104px;flex:0 0 104px;font-size:12.5px}
+  .eng small{display:block;color:var(--muted);font-size:10.5px}
+  .reasons{flex:1;min-width:0;display:flex;flex-direction:column;gap:4px}
+  .reason{display:flex;gap:6px;align-items:flex-start;font-size:11.5px;color:#b9bdc5}
+  .tag{flex:0 0 auto;font:600 9.5px/1.35 var(--mono);padding:1px 4px;border-radius:3px;
+       border:1px solid currentColor;margin-top:1px}
+  .t-s{color:var(--cls-s)} .t-r{color:var(--cls-r)} .t-f{color:var(--cls-f)} .t-c{color:var(--cls-c)}
+  .plain{color:var(--muted);font-size:11.5px}
+  .foot{margin-top:10px;padding-top:8px;border-top:1px solid #22252c;color:#777;font-size:10.5px;font-style:italic}
+  .field{display:flex;justify-content:space-between;align-items:center;gap:8px;font-size:12px;margin-top:8px}
+  .num{background:#111318;border:1px solid #3a3f49;border-radius:4px;padding:2px 6px;width:66px;
+       text-align:right;font:12px var(--mono);color:var(--text)}
+  .hint{color:var(--muted);font-size:10.5px;display:block;margin-top:2px}
+  .resolved{display:block;margin-top:3px;font-size:10.5px;color:var(--warn)}
+  .capRow{display:flex;gap:6px;align-items:flex-start;font-size:12px;margin-top:7px}
+  .capRow input{margin-top:3px}
+  .drv{color:var(--accent);font-size:10.5px}
+  .capHint{color:var(--muted);font-size:10.5px;display:block}
+  .chip{display:inline-flex;gap:6px;align-items:center;background:rgba(0,0,0,.55);
+        border-radius:4px;padding:3px 7px;font:11.5px var(--mono)}
+  .chipAmber{color:var(--warn)}
+  .tip{margin-top:6px;background:#0f1116;border:1px solid var(--border);border-radius:6px;
+       padding:7px 9px;font-size:11px;color:#b9bdc5;max-width:430px}
+  .before{border-left:3px solid #4a4f59}
+  .after{border-left:3px solid var(--accent)}
+  .lbl{font:600 10px/1 var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--muted);
+       margin-bottom:6px;display:block}
+  table{border-collapse:collapse;width:100%;font-size:12px;margin-top:6px}
+  th,td{border:1px solid var(--border);padding:5px 8px;text-align:left;vertical-align:top}
+  th{color:var(--muted);font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.04em}
+  code{font:11.5px var(--mono);color:#c7cbd3;background:#0f1116;padding:1px 4px;border-radius:3px}
+</style>
+</head>
+<body>
+
+<h1>C1 — Target Compatibility readout + resolved-config annotations</h1>
+<p class="sub">Read-only clarity phase. Every verdict below is computed by the function that
+<em>enforces</em> it, so the readout cannot drift from the engine. Nothing here changes behaviour.</p>
+
+<h2>1. The four limitation classes (the tags used everywhere)</h2>
+<div class="panel">
+  <table>
+    <tr><th style="width:60px">Tag</th><th style="width:150px">Class</th><th>Means</th><th style="width:150px">Effect on the verdict</th></tr>
+    <tr><td><span class="tag t-s">S</span></td><td>Semantics</td>
+        <td>The engine's execution model <em>cannot express</em> the rule (Principle 1: CPU runs sequential <em>and</em> parallel; the GPU runs only parallel).</td>
+        <td><b class="bad">Blocker</b> — ✗</td></tr>
+    <tr><td><span class="tag t-r">R</span></td><td>Reproducibility</td>
+        <td>Runs correctly, but not bit-reproducibly (Principle 2: CPU is exact, GPU is statistical).</td>
+        <td>Note — still ✓</td></tr>
+    <tr><td><span class="tag t-f">F</span></td><td>Fast path</td>
+        <td>Runs identically either way; only ms/generation differ (Principle 3).</td>
+        <td>Note — never an error</td></tr>
+    <tr><td><span class="tag t-c">C</span></td><td>Capacity</td>
+        <td>A resource bound with a number, not a concept.</td>
+        <td>Blocker <em>with the number stated</em></td></tr>
+  </table>
+</div>
+
+<h2>2. Properties → Execution → Compatibility (new collapsible block)</h2>
+
+<div class="grid2">
+
+  <!-- Amphiphile -->
+  <div class="panel">
+    <div class="panelTitle"><span class="chev">▾</span>Compatibility</div>
+    <div style="font-size:11px;color:var(--muted);margin-bottom:4px">Model: <b style="color:var(--text)">Amphiphile</b> — asynchronous grid CA</div>
+    <div class="layerHead"><span>CA Grid</span><span class="req">requested <b>WebAssembly</b></span></div>
+    <div class="row"><span class="mark ok">✓</span><span class="eng">WebAssembly<small>running</small></span>
+      <span class="reasons"><span class="plain">Exact &amp; seedable — bit-identical to the JS reference.</span></span></div>
+    <div class="row"><span class="mark bad">✗</span><span class="eng">WebGPU</span>
+      <span class="reasons">
+        <span class="reason"><span class="tag t-s">S</span><span>This model is <b>Asynchronous</b> (sequential): a write must be visible to a later cell in the <em>same</em> generation. The GPU runs cells in parallel, so sequential semantics cannot be expressed.</span></span>
+        <span class="reason"><span class="tag t-s">S</span><span><b>Transfer Cell Attributes to Neighbor</b> writes a neighbouring cell — sequential-only.</span></span>
+      </span></div>
+    <div class="row"><span class="mark ok">✓</span><span class="eng">Debug (JS)</span>
+      <span class="reasons"><span class="plain">Reference semantics — readable in Show Code, slower.</span></span></div>
+    <div class="foot">S = semantics · R = reproducibility · F = fast path · C = capacity. See Help → Engine compatibility.</div>
+  </div>
+
+  <!-- Growing Tissue -->
+  <div class="panel">
+    <div class="panelTitle"><span class="chev">▾</span>Compatibility</div>
+    <div style="font-size:11px;color:var(--muted);margin-bottom:4px">Model: <b style="color:var(--text)">Morphogenesis — Growing Tissue</b> — agents-only, bonded</div>
+    <div class="layerHead"><span>Agents</span><span class="req">requested <b>WebGPU</b> → running <b>WebGPU</b></span></div>
+    <div class="row"><span class="mark ok">✓</span><span class="eng">WebAssembly</span>
+      <span class="reasons"><span class="plain">Exact &amp; seedable — bit-parity with the JS reference; the whole node catalogue runs.</span></span></div>
+    <div class="row"><span class="mark ok">✓</span><span class="eng">WebGPU<small>running</small></span>
+      <span class="reasons">
+        <span class="reason"><span class="tag t-r">R</span><span>Statistical parity — f32 math and a per-agent RNG stream. Same distribution, never bitwise; <code>setRngSeed</code> does not pin a run.</span></span>
+        <span class="reason"><span class="tag t-f">F</span><span><b>Not GPU-residency eligible</b>: the model uses bonds (bond store allocated), so each generation pays a CPU↔GPU round-trip instead of one submit per frame. Correctness is unaffected — at these populations WASM is often faster.</span></span>
+      </span></div>
+    <div class="row"><span class="mark ok">✓</span><span class="eng">Debug (JS)</span>
+      <span class="reasons"><span class="plain">Reference semantics.</span></span></div>
+    <div class="foot">The engine still runs it on WebGPU — the ⚠ notes are speed and tolerance, not errors.</div>
+  </div>
+
+  <!-- Cubic GRA -->
+  <div class="panel">
+    <div class="panelTitle"><span class="chev">▾</span>Compatibility</div>
+    <div style="font-size:11px;color:var(--muted);margin-bottom:4px">Model: <b style="color:var(--text)">Cubic GRA</b> — graph-rewriting agents</div>
+    <div class="layerHead"><span>Agents</span><span class="req">requested <b>WebAssembly</b> → running <b>WebAssembly</b></span></div>
+    <div class="row"><span class="mark ok">✓</span><span class="eng">WebAssembly<small>running</small></span>
+      <span class="reasons"><span class="plain">Exact &amp; seedable — required by this model's Overseer sweep (<code>setRngSeed</code> must pin each replicate).</span></span></div>
+    <div class="row"><span class="mark ok">✓</span><span class="eng">WebGPU</span>
+      <span class="reasons">
+        <span class="reason"><span class="tag t-r">R</span><span>Statistical parity — f32 + per-agent RNG.</span></span>
+        <span class="reason"><span class="tag t-f">F</span><span>Not residency eligible: the behaviour graph rewrites the bond graph (Form / Break / Rewire).</span></span>
+      </span></div>
+    <div class="row"><span class="mark ok">✓</span><span class="eng">Debug (JS)</span>
+      <span class="reasons"><span class="plain">Reference semantics.</span></span></div>
+    <div class="foot">This block is the direct answer to “bonds prevent WebGPU”: they don't — they forfeit the <em>residency</em> fast path.</div>
+  </div>
+
+  <!-- GoL -->
+  <div class="panel">
+    <div class="panelTitle"><span class="chev">▾</span>Compatibility</div>
+    <div style="font-size:11px;color:var(--muted);margin-bottom:4px">Model: <b style="color:var(--text)">Game of Life</b> — synchronous grid CA</div>
+    <div class="layerHead"><span>CA Grid</span><span class="req">requested <b>WebGPU</b> → running <b>WebGPU</b></span></div>
+    <div class="row"><span class="mark ok">✓</span><span class="eng">WebAssembly</span><span class="reasons"><span class="plain">Exact &amp; seedable.</span></span></div>
+    <div class="row"><span class="mark ok">✓</span><span class="eng">WebGPU<small>running</small></span>
+      <span class="reasons"><span class="reason"><span class="tag t-r">R</span><span>Statistical parity — f32 math + a per-cell RNG stream.</span></span></span></div>
+    <div class="row"><span class="mark ok">✓</span><span class="eng">Debug (JS)</span><span class="reasons"><span class="plain">Reference semantics.</span></span></div>
+    <div class="foot">Every engine available — the ordinary case, and now visibly so.</div>
+  </div>
+</div>
+
+<h3>Capacity blocker — the number is stated</h3>
+<div class="panel" style="max-width:640px">
+  <div class="row"><span class="mark bad">✗</span><span class="eng">WebAssembly</span>
+    <span class="reasons"><span class="reason"><span class="tag t-c">C</span>
+      <span>7 simultaneous neighbour-query producers (Get Nearby Agents / Get Agents In View) — the WASM agent scratch budget is <b>4</b>. Reduce the queries or reuse one result.</span></span></span></div>
+</div>
+
+<h2>3. P4 — no silent resolution</h2>
+
+<div class="grid2">
+  <div class="panel before">
+    <span class="lbl">Before — Δt</span>
+    <div class="field"><span>Time Step Δt</span><input class="num" value="0.1" readonly></div>
+    <span class="hint">Auto-clamped against the stability bound.</span>
+    <p class="hint" style="margin-top:10px;color:#7a7f88">Clamped against <em>what</em>, to <em>what</em>? The engine
+      actually runs 0.0625 and never says so.</p>
+  </div>
+  <div class="panel after">
+    <span class="lbl">After — Δt</span>
+    <div class="field"><span>Time Step Δt</span><input class="num" value="0.1" readonly></div>
+    <span class="resolved">→ effective Δt <b>0.0625</b> — clamped from 0.1 for stability (μ_eff = 3.2)</span>
+    <span class="hint">Auto-clamped against the stability bound: Δt ≤ 0.2 / (Repulsion μ + Bond λ).</span>
+  </div>
+
+  <div class="panel before">
+    <span class="lbl">Before — capability closure</span>
+    <div class="capRow"><input type="checkbox" checked disabled><span><span>Body / Extent</span>
+      <span class="capHint">A radius surface, rendered as a disc/sphere.</span></span></div>
+    <div class="capRow"><input type="checkbox" checked disabled><span><span>Charge (long-range)</span>
+      <span class="capHint">A repulsive 1/(1+d²) pair force · requires Motion = Force</span></span></div>
+    <p class="hint" style="margin-top:10px;color:#7a7f88">Ticking Collision silently turned Body on. Untick it and
+      it comes back — with no explanation.</p>
+  </div>
+  <div class="panel after">
+    <span class="lbl">After — capability closure</span>
+    <div class="capRow"><input type="checkbox" checked disabled><span>
+      <span>Body / Extent <span class="drv">(required by Collision)</span></span>
+      <span class="capHint">A radius surface, rendered as a disc/sphere.</span></span></div>
+    <div class="capRow"><input type="checkbox" checked disabled><span><span>Charge (long-range)</span>
+      <span class="capHint">A repulsive 1/(1+d²) pair force · requires Motion = Force</span></span></div>
+    <p class="hint" style="margin-top:10px;color:#7a7f88">Derived from the closure itself — not a hand-written table,
+      so it can never go stale.</p>
+  </div>
+</div>
+
+<h3>Simulator target chip — total amber coverage</h3>
+<div class="grid2">
+  <div class="panel before">
+    <span class="lbl">Before</span>
+    <div class="chip"><span>⚙</span><span>WASM · agents JS</span></div>
+    <p class="hint" style="margin-top:8px;color:#7a7f88">The user asked for WebGPU agents. A gate clamped them to JS.
+      The chip reads like everything is normal; the only trace is a console warning.</p>
+  </div>
+  <div class="panel after">
+    <span class="lbl">After</span>
+    <div class="chip chipAmber"><span>⚙</span><span>WASM · agents JS⚠</span></div>
+    <div class="tip"><b>Agents: requested WebGPU → running JS.</b><br>
+      <span style="color:var(--cls-c)">[C]</span> 7 neighbour-query producers exceed the WebGPU agent array-producer
+      budget of 6.<br>
+      <span style="color:var(--muted)">Open Properties → Execution → Compatibility for the full readout.</span></div>
+  </div>
+</div>
+
+<h2>4. Data flow — one source, three surfaces</h2>
+<svg viewBox="0 0 900 260" width="100%" style="max-width:900px;background:var(--panel);border:1px solid var(--border);border-radius:8px">
+  <defs>
+    <marker id="a" markerWidth="9" markerHeight="9" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6 z" fill="#5a6270"/>
+    </marker>
+  </defs>
+  <g font-family="ui-monospace,Menlo,Consolas,monospace" font-size="11.5">
+    <!-- gates -->
+    <rect x="18" y="20" width="230" height="150" rx="6" fill="#11141a" stroke="#2a2e37"/>
+    <text x="30" y="40" fill="#888" font-size="10">THE REAL GATES (unchanged)</text>
+    <text x="30" y="62" fill="#dcdfe4">detectWebGPUIncompatibilities</text>
+    <text x="30" y="80" fill="#dcdfe4">detectWebGPUModelIncompat…</text>
+    <text x="30" y="98" fill="#dcdfe4">isAgentGraphWasmSupported</text>
+    <text x="30" y="116" fill="#dcdfe4">isAgentGraphWebGPUSupported</text>
+    <text x="30" y="134" fill="#dcdfe4">agentTargetOf · resolveMaxBonds</text>
+    <text x="30" y="152" fill="#dcdfe4">residencyModelBlockers ★</text>
+
+    <path d="M252,95 L318,95" stroke="#5a6270" stroke-width="1.4" marker-end="url(#a)"/>
+
+    <rect x="322" y="60" width="212" height="70" rx="6" fill="#1c1710" stroke="#e8a13a"/>
+    <text x="334" y="82" fill="#e8a13a" font-size="10">NEW · PURE</text>
+    <text x="334" y="102" fill="#dcdfe4">diagnoseTargets(model)</text>
+    <text x="334" y="120" fill="#8a8f99" font-size="10">→ verdicts + classified reasons</text>
+
+    <path d="M538,95 L600,52" stroke="#5a6270" stroke-width="1.4" marker-end="url(#a)"/>
+    <path d="M538,95 L600,95" stroke="#5a6270" stroke-width="1.4" marker-end="url(#a)"/>
+    <path d="M538,95 L600,138" stroke="#5a6270" stroke-width="1.4" marker-end="url(#a)"/>
+
+    <rect x="606" y="28" width="272" height="46" rx="6" fill="#11141a" stroke="#2a2e37"/>
+    <text x="618" y="48" fill="#dcdfe4">Properties → Compatibility block</text>
+    <text x="618" y="64" fill="#8a8f99" font-size="10">✓ / ✗ / ⚠ per engine per layer</text>
+
+    <rect x="606" y="76" width="272" height="40" rx="6" fill="#11141a" stroke="#2a2e37"/>
+    <text x="618" y="101" fill="#dcdfe4">Simulator chip + tooltip (amber)</text>
+
+    <rect x="606" y="118" width="272" height="40" rx="6" fill="#11141a" stroke="#2a2e37"/>
+    <text x="618" y="143" fill="#8a8f99">C3 diagnostics popover (later phase)</text>
+
+    <!-- worker -->
+    <rect x="18" y="192" width="516" height="50" rx="6" fill="#11141a" stroke="#2a2e37"/>
+    <text x="30" y="212" fill="#888" font-size="10">WORKER — consumes the SAME helpers (★), so the two cannot drift</text>
+    <text x="30" y="230" fill="#dcdfe4">agentResidentEligible() · clampAgentDt() → effectiveAgentDt()</text>
+    <path d="M148,190 L148,172" stroke="#5a6270" stroke-width="1.4" marker-end="url(#a)"/>
+  </g>
+</svg>
+
+<p class="sub" style="margin-top:12px">★ The residency terms and the Δt clamp are <em>extracted</em>, not copied:
+the worker imports the same pure functions the readout does. The worker is never imported into the main thread.</p>
+
+</body>
+</html>

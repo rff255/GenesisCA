@@ -283,6 +283,44 @@ export function resolveBondRequestDepth(cfg: CenterBasedConfig | undefined | nul
   return Math.min(BOND_REQUEST_DEPTH_MAX, Math.max(1, v));
 }
 
+// ---------------------------------------------------------------------------
+// C1 (P4 — "no silent resolution") — the EFFECTIVE force-integration timestep.
+// ---------------------------------------------------------------------------
+
+/** The clamped force-integration timestep, plus everything needed to EXPLAIN the
+ *  clamp. The Mathias-2020 monotonicity bound for a linear spring `F = μ(d−s)` is
+ *  `Δt*_mono = 1/(2·μ_eff)`, so `Δt ← min(Δt_user, 0.4·Δt*_mono) = 0.2/μ_eff`
+ *  with `μ_eff = μ_R + λ_max` (see CENTER_BASED_DEFAULTS' header).
+ *
+ *  Extracted from the worker's `clampAgentDt` (which now calls this) so the
+ *  Properties readout and the engine resolve the SAME number from the SAME
+ *  place — the `resolveMaxBonds` single-source discipline. The arithmetic is
+ *  verbatim (same operands, same order), so the engine is byte-identical.
+ *
+ *  `clamped` is true only when the bound actually REDUCES the user's value, so
+ *  a model sitting exactly on the bound reads as unclamped (nothing to explain). */
+export interface EffectiveAgentDt {
+  /** `timeStep` as the user wrote it (or the engine default). */
+  requested: number;
+  /** What the integrator actually uses. */
+  dt: number;
+  /** μ_eff = repulsion μ_R + bond λ (floored at 1e-6 so the bound is finite). */
+  muEff: number;
+  /** The stability bound 0.2 / μ_eff. */
+  bound: number;
+  /** True iff the bound reduced `requested`. */
+  clamped: boolean;
+}
+export function effectiveAgentDt(cfg: CenterBasedConfig | undefined | null): EffectiveAgentDt {
+  const muR = cbNum(cfg, 'repulsionStiffness');
+  const lambda = cbNum(cfg, 'bondStiffness');
+  const muEff = Math.max(1e-6, muR + lambda);
+  const requested = cbNum(cfg, 'timeStep');
+  const bound = 0.2 / muEff;
+  const dt = Math.min(requested, bound);
+  return { requested, dt, muEff, bound, clamped: dt < requested };
+}
+
 /** Resolve the agent-engine compile target, CLAMPED to what's actually
  *  implemented. The agent loop (`compileAgentGraph`) emits JS by default; WASM
  *  (PR6) and WebGPU (PR7) run only the supported node subsets. This is the C-D4

@@ -203,6 +203,91 @@ export function applyCapabilityEdit<K extends keyof AgentCapabilities>(
 }
 
 // ---------------------------------------------------------------------------
+// C1 (P4 — "no silent resolution") — WHY a capability is on.
+//
+// Ticking Collision = Soft silently turns Body + Motion = Force on. The panel
+// showed the result with no cause. These helpers DERIVE the cause from
+// `computeCapabilityClosure` itself — never a hand-written dependency table —
+// so a future edit to the closure updates the annotations for free.
+// ---------------------------------------------------------------------------
+
+/** The all-off baseline every driver probe starts from. Deliberately NOT run
+ *  through the closure: it must be the true zero so a probe's closure delta is
+ *  attributable entirely to the ONE capability the probe sets. */
+function offCapabilityBaseline(): AgentCapabilities {
+  return {
+    motion: 'static', body: false, collision: 'off', charge: 'off', bonds: 'off',
+    autoBond: false, growth: false, division: false, lifespan: false,
+    populationBirth: false, populationDeath: false, sensing: false,
+    sensingHeadingSource: 'velocity', orientation: false, fieldCoupling: false,
+    appearance: false,
+  };
+}
+
+/** Ranks the ordered (3-state) capability values so "did the closure RAISE it?"
+ *  is decidable for modes as well as booleans. Anything unlisted is boolean. */
+function capStrength(profile: AgentCapabilities, key: keyof AgentCapabilities): number {
+  const v = profile[key] as unknown;
+  if (key === 'motion') return v === 'force' ? 2 : v === 'velocity' ? 1 : 0;
+  if (key === 'bonds') return v === 'physics' ? 2 : v === 'data' ? 1 : 0;
+  if (key === 'collision') return v === 'positional' ? 2 : v === 'soft' ? 1 : 0;
+  if (key === 'charge') return v === 'on' ? 1 : 0;
+  if (key === 'sensingHeadingSource') return v === 'velocity' ? 0 : 1;
+  return v === true ? 1 : 0;
+}
+
+/** The capability rows a driver probe may report (the ones the panel renders +
+ *  motion, which is its own segmented control). `sensingHeadingSource` and
+ *  `appearance` are excluded as drivers: the first is a sub-choice of Sensing,
+ *  the second gates nothing structural. */
+const CLOSURE_PROBE_KEYS: ReadonlyArray<keyof AgentCapabilities> = [
+  'motion', 'body', 'collision', 'charge', 'bonds', 'autoBond', 'growth',
+  'division', 'lifespan', 'populationBirth', 'populationDeath', 'sensing',
+  'orientation', 'fieldCoupling', 'sensingHeadingSource',
+];
+
+/** For each capability that is ON in `profile`, which OTHER enabled capabilities
+ *  FORCE it on (via `computeCapabilityClosure`). Derivation: close a baseline
+ *  containing ONLY capability J at the profile's value and see which other keys
+ *  the closure raised — those are J's hard requirements. Inverting that gives,
+ *  per row, its drivers.
+ *
+ *  The result drives the Properties "(required by X)" annotations, so a row the
+ *  user cannot meaningfully turn off says so, and names what is holding it. */
+export function capabilityClosureDrivers(
+  profile: AgentCapabilities,
+): Partial<Record<keyof AgentCapabilities, Array<keyof AgentCapabilities>>> {
+  const out: Partial<Record<keyof AgentCapabilities, Array<keyof AgentCapabilities>>> = {};
+  for (const driver of CLOSURE_PROBE_KEYS) {
+    // Only an ENABLED capability can be forcing anything.
+    if (capStrength(profile, driver) === 0) continue;
+    const probe = offCapabilityBaseline();
+    (probe as unknown as Record<string, unknown>)[driver as string] = profile[driver];
+    const closed = computeCapabilityClosure(probe);
+    for (const forced of CLOSURE_PROBE_KEYS) {
+      if (forced === driver) continue;
+      // The closure raised `forced` above the baseline AND the live profile has
+      // it at least that strong ⇒ this driver is (one reason) it is on.
+      if (capStrength(closed, forced) > 0 && capStrength(profile, forced) >= capStrength(closed, forced)) {
+        (out[forced] ??= []).push(driver);
+      }
+    }
+  }
+  return out;
+}
+
+/** Human label for a capability row — reads `AGENT_CAPABILITY_ROWS` (declared
+ *  below) so the annotation and the row it names can never disagree; falls back
+ *  to the key for the few non-row capabilities (motion). */
+export function capabilityRowLabel(key: keyof AgentCapabilities): string {
+  const row = AGENT_CAPABILITY_ROWS.find(r => r.key === key);
+  if (row) return row.label;
+  if (key === 'motion') return 'Motion';
+  if (key === 'sensingHeadingSource') return 'FOV heading source';
+  return String(key);
+}
+
+// ---------------------------------------------------------------------------
 // Presets — named paradigm profiles. `Full` ≡ `Morphogenesis` (deep-equal).
 // ---------------------------------------------------------------------------
 
