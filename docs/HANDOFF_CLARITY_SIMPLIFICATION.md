@@ -69,7 +69,7 @@ Status values: `pending` → `in progress` → `DONE (date, SHAs)` / `BLOCKED (r
 | C2 | P3 Generation Pipeline panel (+ tempo tags) | DONE (2026-08-02, 96e5652) |
 | C3 | P4 fast-path diagnostics popover + P8 generated capability docs | DONE (2026-08-02, 2620d37) |
 | C4 | P1 engine enum + Auto + JS demotion + Show Code = JS reference | DONE (2026-08-02, b0f43b9) |
-| C5 | P10 reproducibility contract + Auto integration | pending |
+| C5 | P10 reproducibility contract + Auto integration | DONE (2026-08-02, 59afc6b) |
 | C6 | P5 schema hygiene + update-mode vocabulary + loud-fallback completion | pending |
 | C7 | P6 archetype-first New Model + P7 determinism (seeded scatter) | pending |
 | C8 | P9 presentational-geometry taint check + pipeline label | pending |
@@ -791,7 +791,166 @@ each contract matches the spec matrix; in-browser: Particle Life (webgpu agents)
 Statistical inferred + Auto keeps GPU; flipping to Exact re-resolves Auto→WASM with the
 reason shown; Cubic GRA (exact + Overseer) resolves WASM via the contract reason.
 
-*Completion Report: — to be appended by the phase session —*
+### Completion Report — C5 (2026-08-02)
+
+**Status: DONE.** One commit: **`59afc6b`** *feat(clarity): declared reproducibility
+contract — Exact | Statistical (C5)* on `GRA` (not pushed, no version bump, no attribution
+lines). Plan + illustrated mockup: [PLAN_CLARITY_C5.md](PLAN_CLARITY_C5.md) / `.html`.
+
+#### What shipped
+
+1. **Schema** — `ModelProperties.reproducibility?: 'exact' | 'statistical'`, absent ⇒
+   `'exact'`. **Exact** = bit-reproducible trajectories (a fixed seed pins a run);
+   **Statistical** = runs are draws from the same distribution, sweeps use repeats +
+   aggregates. The proposal's **guardrail** ships as UI copy: *Statistical covers stochastic
+   variance around the SAME rule — it never licenses answering a different question.*
+2. **[reproducibility.ts](../src/model/reproducibility.ts)** (new, pure) — `reproducibilityOf`,
+   the shared copy (`REPRODUCIBILITY_LABEL/SUMMARY/GUARDRAIL`), `inferContract`,
+   `engineHonoursContract` / `contractViolationFor`, `describeSweepMethodology`. The violation
+   predicate is **told what RESOLVED** rather than resolving anything itself — the caller
+   passes `resolveEngines`' answer, so there is exactly one resolution in the system.
+   Deliberately import-free of `engineResolution` (which imports `reproducibilityOf` from
+   here) — one-way, no cycle, mirroring the C4 `engineFieldMigration` split.
+3. **[reproducibilityMigration.ts](../src/model/reproducibilityMigration.ts)** (new) — wired
+   into `LOAD_MODEL` + `migrateForHarness` **after** `migrateEngineField`. Infers
+   **`'statistical'` iff the RESOLVED agent engine is WebGPU**, reading `resolveEngines`
+   rather than re-deriving it. Idempotent, stable, and it never re-infers a contract the user
+   declared. Over the shipped library: **11 statistical / 18 exact**.
+4. **Auto integration** ([engineResolution.ts](../src/model/engineResolution.ts)) — C4's two
+   hard-coded `if (overseerConfig.enabled) pick = 'wasm'` branches are **gone**; the Overseer
+   no longer appears in the resolution at all. `EngineResolution` gained `contract`, and
+   `LayerResolution` a `contractViolation`.
+
+   | contract | layer | Auto picks |
+   |---|---|---|
+   | any | grid | WebGPU if every grid gate passes, else WASM — **contract-independent** |
+   | exact | agents | WASM if its gate passes, else JS |
+   | statistical | agents | WebGPU → WASM → JS |
+
+5. **UI** — a **Reproducibility** radio opening Properties → Execution (above Update Mode /
+   Engine because it now governs them; outside the grid-cells gate, since it matters most for
+   an agents-only model); a contract chip + an `[R]` note + an amber layer line in the C1
+   Compatibility readout; the violation appended to the simulator `⚙` chip's tooltip via C1's
+   **existing** amber `demotions` channel (one mechanism, no new state or colour); and a
+   one-line **methodology** note in the Overseer Experiments panel.
+6. **Docs sweep** — a CLAUDE.md section (+ the C4 Auto-policy table rewritten and the Overseer
+   sweep bullet cross-linked, historical prose kept), HelpView (*"Reproducibility: Exact or
+   Statistical"* + an Overseer cross-reference paragraph), a README bullet.
+
+#### THE ASYMMETRY — the load-bearing fact, and it is measured
+
+The two GPU layers are **not** equally reproducible, which is why the contract is not simply
+"no GPU". Both facts are already recorded in `CLAUDE.md`; C5 only reads them:
+
+| | seeded how | `setRngSeed` reaches it? | verdict |
+|---|---|---|---|
+| **WebGPU grid** | per-CELL PCG from a global seed | **yes** — the handler re-derives via `seedRngState` | reproducible **on this device** (measured: *WebGPU 460.8 ± 15.707 reproducible* across presses of a 5-run sweep) ⇒ **honours Exact** |
+| **WebGPU agents** | per-AGENT PCG, **once at runtime creation** | **no** | a sweep does not reproduce ⇒ **cannot honour Exact** |
+
+This is corroborated by the library itself: the documented sweep exceptions (`Cubic GRA`,
+`Graph Metrics - Growth Sweep`) are **agent**-target exceptions, while `GoL Replicate
+Statistics` — a grid Overseer model — **ships on WebGPU**.
+
+#### Verification evidence (real numbers / observations)
+
+**Gates** — `npx tsc -p tsconfig.app.json --noEmit` clean; `npm run build` clean;
+`check-compile-identity --compare` → **"BYTE-IDENTITY OK — 29 models, all surfaces
+unchanged"**; `test-engine-resolve` → **719 passed, 0 failed · 6 negative controls caught**;
+`test-generation-pipeline` → **3400 passed**; `parity-agent-wasm` → **ALL AGENT SAMPLES:
+JS↔WASM BIT-PARITY ✓**; `check-agent-wasm-gate` → **GATE✓ COMPILE✓ INST✓** on every sample;
+`verify-agent-render` → **✓**; `gen-capability-docs --check` green.
+
+**The read-only guarantee is structural**: `git diff --stat` touches the two new model
+modules, the two migration call sites, `engineResolution` / `targetDiagnosis` / `types`, and
+three UI files. **No compiler, worker or engine file was opened for writing.**
+
+**The gate is proven FAILABLE by TWO SOURCE MUTATIONS** (an in-harness control alone only
+proves the harness can count):
+- making `inferContract` a constant `'exact'` → **14 failures**, including the per-model
+  inference checks *and* `no contract violation on a shipped model` firing on all 11
+  GPU-agent samples (the inference and the violation predicate cross-check each other);
+- making the agent Auto policy ignore the contract (`const exact = false`) → **30 failures**
+  and its matching negative control stops being caught.
+Both reverted; green again on the shipped source.
+
+**In-browser (dev server, real library models, real clicks, real worker).** The Browser pane
+reports `document.hidden === true` (the documented occluded-pane trap), so screenshots are
+unavailable and the evidence is DOM text + computed styles + worker messages — the right
+evidence for a text/DOM feature. **0 console errors** across the session (fresh
+`console.error` hook, per the persistent-buffer caveat).
+- **Particle Life** (WebGPU agents) loads with **Statistical** checked — the migration
+  inferred it — and its agent engine unchanged at the shipped explicit WebGPU.
+- **Auto under Statistical keeps the GPU**: flipping the Agent Engine to Auto shows
+  **`Auto → WebGPU`** with *"This model declares Statistical and the GPU can run this agent
+  graph, so Auto picks WebGPU."*
+- **Flipping the contract to Exact re-resolves Auto** to **`Auto → WebAssembly`** with
+  *"This model declares Exact, so Auto keeps agents on WebAssembly… (The WebGPU agent engine
+  seeds its per-agent RNG once at start-up and Set Random Seed never reaches it.)"*
+- **The violation, all three surfaces**: with Exact declared and WebGPU explicitly selected,
+  the radio shows the amber ⚠ sentence; the Compatibility readout reads
+  `AGENTS · Exact · running WebGPU` with the violation as an `[R]` note on the **still-✓**
+  WebGPU verdict plus the `⚠ Contract:` layer line; and the simulator chip becomes
+  **`⚙ agents WebGPU⚠`** in **`rgb(224,160,80)`** with `⚠ Reproducibility contract (exact):`
+  in its tooltip. **Negative control**: reloading Particle Life fresh (statistical inferred)
+  returns the chip to `⚙ agents WebGPU` in the default grey `rgba(128,144,160,0.7)`, no ⚠, no
+  contract text.
+- **Cubic GRA** (exact + Overseer) loads with **Exact** checked and its explicit WebAssembly
+  agent engine **unchanged** (coherence). Flipping it to Auto gives **`Auto → WebAssembly`**
+  whose reason **names the contract and does NOT mention the Overseer** — the runbook's
+  headline C5 requirement. Flipping its contract to Statistical then gives **`Auto → WebGPU`**,
+  which the old special case forbade: the Overseer case is genuinely subsumed, not
+  re-implemented.
+- **All three methodology forms, live**: Cubic GRA (exact, all-CPU) → *"Exact contract — Set
+  Random Seed pins each run bit-exactly; two presses of Run Experiment produce identical
+  numbers."*; the same model under Statistical → *"…runs are draws from one distribution. Use
+  repeats + aggregates… a single run is not a result."*; **GoL Replicate Statistics** (exact,
+  WebGPU grid) → *"…pins a run on this device. A layer runs on the GPU in f32, so these
+  numbers are engine- and device-specific: do not compare them against a CPU run."* — and its
+  chip stays **grey `⚙ WebGPU`**, i.e. the GPU grid is correctly **not** a violation.
+- **Behaviour unchanged at runtime**: GoL Replicate Statistics steps to **generation 40**
+  through the real worker after the contract migration.
+- **Help** renders *"Reproducibility: Exact or Statistical"* and the Overseer cross-reference.
+
+#### Deviations / decisions (no scope cuts)
+
+1. **THE ONE DEVIATION — the Overseer clause is honoured on the AGENT layer only; a grid
+   Overseer model under Exact keeps WebGPU.** The runbook says *"an Overseer-enabled model
+   under exact resolves CPU"*, which for the grid would contradict its own neighbouring
+   sentence (*"the GRID stays WebGPU-eligible under exact"*) — and, more importantly, it is
+   not true: `setRngSeed` **does** re-derive the grid's per-cell streams, a WebGPU grid sweep
+   was measured reproducing across presses, and the library ships exactly such a model on
+   WebGPU. Asserting otherwise would have put an amber "cannot honour Exact" note on
+   `GoL Replicate Statistics`, which demonstrably can. The clause is fully honoured where it
+   is true — under Exact the **agents** land on CPU, which is the requirement the special case
+   stood in for, and `Cubic GRA` (the runbook's own verification model) resolves WASM via the
+   contract reason. **Consequence**: the C4 test's synthetic expectation *"`GoL Replicate
+   Statistics` flipped to Auto → wasm"* becomes `webgpu`, updated with its justification in
+   the script. **No shipped model's resolution changes** — that expectation was a what-if, not
+   the coherence requirement.
+2. **The grid's Auto policy is contract-INDEPENDENT**, and the contract appears only in the
+   *reason string* when it picks WebGPU under Exact (documenting the asymmetry where the user
+   meets it) rather than as a second policy branch that never fires.
+3. **C1's grid-WebGPU `[R]` note was factually corrected** in passing: it claimed *"a fixed
+   seed does not reproduce a run exactly"*, which the `setRngSeed` fix had already made false
+   for the GRID. It now states the honest per-device version. In scope because the contract is
+   precisely about this claim.
+4. **A violation is a note, never a blocker**, and it is surfaced on the WebGPU *verdict row*
+   whenever the contract is Exact — not only once that engine is the resolved one — so the
+   consequence of picking it is visible **before** it is picked.
+5. **The chip reuses C1's amber `demotions` channel** rather than adding a second amber
+   mechanism: a resolved engine that cannot honour the declared contract is the same class of
+   surprise as a demotion (the model claims a guarantee it does not deliver).
+
+#### Follow-ups for later phases (not defects)
+
+- **C7** seeds the contract per archetype (`statistical` for *Particle system* / *Flocking*),
+  which is exactly the inference this phase encodes — the field and its default are in place.
+- The Overseer's own `seedPolicy` and the contract are now adjacent concepts stated in two
+  places (the Overseer config block and the Execution radio). A later pass could show the
+  contract chip inside the Overseer block too; the string is already shared.
+- C4's noted *Skip Isolated Empty Cells vs Auto* question is untouched — a contract-aware Auto
+  could weigh it, but sparse stepping is a **fast path** (Class F), not a reproducibility
+  concern, so it does not belong to this contract.
 
 ---
 
@@ -1026,3 +1185,18 @@ Protocol:
   WebGPU-eligible under `exact`. C5 may proceed: it replaces the two hard-coded Overseer branches in
   `resolveGridLayer`/`resolveAgentLayer` with the contract, and `LayerResolution.reason` is already the
   string the UI renders, so the policy changes without touching the UI.
+- 2026-08-02: **C5 DONE** (`59afc6b`). Compile-identity byte-identical on all 29 models; `test-engine-resolve`
+  extended to **719 checks / 6 negative controls** and proven failable by TWO SOURCE MUTATIONS (a constant
+  `inferContract` → 14 failures; Auto ignoring the contract → 30). parity-agent-wasm / check-agent-wasm-gate /
+  verify-agent-render / test-generation-pipeline / gen-capability-docs --check all green. Verified in-browser on
+  Particle Life (Statistical inferred; Auto keeps the GPU; flipping to Exact re-resolves `Auto → WebAssembly`
+  with the contract reason), a provoked violation (amber in the radio, the readout and the ⚙ chip) with its
+  negative control, Cubic GRA (Exact + Overseer → WASM **via the contract reason, with no mention of the
+  Overseer**; declaring Statistical releases the GPU — the special case is subsumed, not re-implemented), and all
+  three Overseer methodology forms. **NB the one deviation C6+ should know about**: the Overseer clause is
+  honoured on the AGENT layer only — a grid Overseer model under Exact keeps WebGPU, because `setRngSeed` DOES
+  re-derive the grid's per-cell streams (measured: a 5-run sweep reproduced) and the library ships exactly such a
+  model (`GoL Replicate Statistics`) on WebGPU; asserting otherwise would have flagged a shipped model that
+  demonstrably reproduces. C6 may proceed — it inherits a `contract`-carrying `resolveEngines` (its `reason` /
+  `contractViolation` strings are already what the UI renders) and C3's `runtimeEvents` log for the loud-fallback
+  UI; its update-mode vocabulary work should reuse the doctrine wording the contract copy now shares.
