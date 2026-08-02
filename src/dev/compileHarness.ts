@@ -19,6 +19,7 @@ import { migrateAgentAttributeSplit } from '../model/agentAttributeSplitMigratio
 import { migrateVariableScopeSplit } from '../model/variableScopeMigration';
 import { migrateAgentTypeRemoval } from '../model/agentTypeRemovalMigration';
 import { migrateAgentCapabilities } from '../model/agentCapabilities';
+import { migrateEngineField } from '../model/engineFieldMigration';
 import { compileGraph, compileAgentGraph } from '../modeler/vpl/compiler/compile';
 import { compileGraphWasm } from '../modeler/vpl/compiler/wasm/compile';
 import { computeLayoutFromModel, buildViewerIds } from '../modeler/vpl/compiler/wasm/layout';
@@ -179,5 +180,9 @@ export function migrateForHarness(m: CAModel): CAModel {
   // Agent Capability Profiles: seed an explicit profile via the usage-widened
   // inference (mirrors LOAD_MODEL) so the audit + parity harness see it.
   m = migrateAgentCapabilities(m);
+  // C4 (P1): seed an explicit `properties.engine` from the legacy flags
+  // (mirrors LOAD_MODEL). Byte-identical by construction — the mapping is the
+  // explicit equivalent of what the file already does.
+  m = migrateEngineField(m);
   return m;
 }

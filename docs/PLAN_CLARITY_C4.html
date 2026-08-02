@@ -1,0 +1,342 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>C4 — One Engine selector (Auto / WebAssembly / WebGPU + Debug JS)</title>
+<style>
+  :root{
+    --bg:#0c0d10; --panel:#15171c; --elev:#1b1e25; --border:#2a2f39;
+    --border-muted:#22262e; --text:#dfe5ef; --muted:#8b93a3; --dim:#6b7280;
+    --accent:#e8a13a; --amber:#e0a050; --green:#5cbf7a; --cyan:#4cc9f0;
+    --red:#e05050; --violet:#b58fd6;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);
+       font:14px/1.55 -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;padding:28px}
+  h1{font-size:20px;margin:0 0 4px;color:var(--accent)}
+  h2{font-size:15px;margin:34px 0 10px;color:var(--text);
+     border-bottom:1px solid var(--border);padding-bottom:6px}
+  h3{font-size:13px;margin:20px 0 8px;color:var(--muted);
+     text-transform:uppercase;letter-spacing:.7px}
+  p{color:var(--muted);max-width:76ch;margin:8px 0}
+  code{background:var(--elev);border:1px solid var(--border-muted);border-radius:3px;
+       padding:1px 5px;font-size:12px;color:#cfd6e4}
+  .sub{color:var(--dim);font-size:12px}
+  .grid{display:flex;gap:26px;flex-wrap:wrap;align-items:flex-start}
+  .col{flex:1 1 400px;min-width:360px}
+
+  /* ---------- properties panel ---------- */
+  .panel{background:var(--panel);border:1px solid var(--border);border-radius:8px;
+         padding:12px 14px;font-size:12.5px}
+  .panelTitle{font-size:10px;letter-spacing:.09em;text-transform:uppercase;color:var(--dim);
+              margin:0 0 8px}
+  .fieldLabel{font-size:11px;color:#b7bfcd;font-weight:600;display:block;margin-bottom:6px}
+  .hr{border-top:1px solid #333;margin:12px 0 10px}
+  .opt{display:flex;gap:7px;align-items:flex-start;margin:0 0 7px}
+  .radio{width:12px;height:12px;border-radius:50%;border:1px solid #6d7686;flex:0 0 auto;
+         margin-top:3px;position:relative;background:#0f1116}
+  .radio.on{border-color:var(--accent)}
+  .radio.on::after{content:'';position:absolute;inset:2.5px;border-radius:50%;background:var(--accent)}
+  .optTitle{font-size:12px;color:var(--text);font-weight:600}
+  .optHint{color:#888;font-size:10.5px;display:block;line-height:1.45}
+  .rowHead{display:flex;align-items:center;justify-content:space-between;gap:8px}
+  .autoBadge{font-size:10px;padding:2px 7px;border-radius:10px;font-weight:600;
+             border:1px solid rgba(92,191,122,.45);background:rgba(92,191,122,.13);color:var(--green)}
+  .autoBadge.amber{border-color:rgba(224,160,80,.45);background:rgba(224,160,80,.13);color:var(--amber)}
+  .reason{font-size:10.5px;color:#9aa3b2;background:var(--elev);border:1px solid var(--border-muted);
+          border-left:2px solid var(--green);border-radius:0 4px 4px 0;padding:5px 8px;margin:2px 0 9px 19px}
+  .reason.amber{border-left-color:var(--amber)}
+  .adv{margin-top:6px;border-top:1px dashed var(--border);padding-top:8px}
+  .advHead{font-size:10.5px;color:var(--dim);cursor:pointer;user-select:none}
+  .advBody{margin-top:8px;padding-left:10px;border-left:1px solid var(--border-muted)}
+  .muteBox{opacity:.62}
+  .tag{display:inline-block;font-size:9px;padding:1px 5px;border-radius:3px;border:1px solid var(--border);
+       color:var(--dim);margin-left:6px;vertical-align:1px}
+
+  .before .radio.on{border-color:#6d7686}
+  .before .radio.on::after{background:#8b93a3}
+
+  /* ---------- code panel ---------- */
+  pre{background:#0e1015;border:1px solid var(--border);border-radius:6px;padding:10px 12px;
+      font:11.5px/1.5 ui-monospace,SFMono-Regular,Consolas,monospace;color:#c3ccdb;overflow:auto;margin:6px 0}
+  .cm{color:#6b7a8f}.kw{color:#c792ea}.st{color:#a5d6a7}.fn{color:#82aaff}
+
+  table{border-collapse:collapse;width:100%;font-size:11.5px;margin:8px 0}
+  th,td{border:1px solid var(--border-muted);padding:5px 8px;text-align:left;vertical-align:top}
+  th{background:var(--elev);color:var(--muted);font-weight:600;font-size:10.5px;
+     text-transform:uppercase;letter-spacing:.05em}
+  td code{font-size:11px}
+  .ok{color:var(--green)}.no{color:var(--red)}.warn{color:var(--amber)}
+
+  .note{border-left:3px solid var(--accent);background:rgba(232,161,58,.06);
+        padding:8px 12px;border-radius:0 4px 4px 0;margin:12px 0;font-size:12px;color:#c6cede;max-width:80ch}
+  .legend{display:flex;gap:14px;flex-wrap:wrap;font-size:11px;color:var(--dim);margin-top:6px}
+</style>
+</head>
+<body>
+
+<h1>C4 — One <strong>Engine</strong> selector: Auto | WebAssembly | WebGPU (+ Debug JS)</h1>
+<p class="sub">Proposal item P1 · phase C4 · plan: <code>PLAN_CLARITY_C4.md</code></p>
+
+<p>The user declares an <em>intent</em> (<code>Auto</code>) or an <em>engine</em>. One pure function
+resolves the intent, and the radio, the compile paths, the compatibility readout, the chip and the
+worker all read that single answer.</p>
+
+<h2>1 · The radio — before / after</h2>
+<div class="grid">
+
+  <div class="col">
+    <h3>Before — two booleans, three peers</h3>
+    <div class="panel before">
+      <div class="panelTitle">Properties › Execution</div>
+      <label class="fieldLabel">Compile Target</label>
+      <div class="opt"><span class="radio on"></span><span>
+        <span class="optTitle">WebAssembly (default)</span>
+        <span class="optHint">Hand-compiled WASM module — typically several times faster than JS on dense neighborhoods.</span></span></div>
+      <div class="opt"><span class="radio"></span><span>
+        <span class="optTitle">WebGPU (sync only)</span>
+        <span class="optHint">WGSL compute shaders on the GPU — designed for very large grids…</span></span></div>
+      <div class="opt"><span class="radio"></span><span>
+        <span class="optTitle">Debug / Reference (JS)</span>
+        <span class="optHint">Plain JavaScript compile target. Slower but human-readable in Show Code…</span></span></div>
+      <div class="optHint" style="margin-top:8px">Targets are mutually exclusive. Switching restarts the simulator.</div>
+    </div>
+    <p class="sub">Every model picks by hand. The library's own policy — “WebGPU where the gates pass,
+    else WASM” — exists only in a docs paragraph and in 29 hand-set flags. JS looks like a peer.</p>
+  </div>
+
+  <div class="col">
+    <h3>After — an intent, resolved and shown</h3>
+    <div class="panel">
+      <div class="panelTitle">Properties › Execution</div>
+      <div class="rowHead"><label class="fieldLabel" style="margin:0">Engine</label>
+        <span class="autoBadge">Auto → WebGPU</span></div>
+      <div style="height:6px"></div>
+      <div class="opt"><span class="radio on"></span><span>
+        <span class="optTitle">Auto <span style="color:var(--green);font-weight:400">(recommended)</span></span>
+        <span class="optHint">Picks the fastest engine this model can use, and re-picks as you edit.</span></span></div>
+      <div class="reason">Every WebGPU gate passes, so Auto picks the GPU.</div>
+      <div class="opt"><span class="radio"></span><span>
+        <span class="optTitle">WebAssembly</span>
+        <span class="optHint">Exact and seedable (f64, one shared stream) — bit-identical to the JS reference.</span></span></div>
+      <div class="opt"><span class="radio"></span><span>
+        <span class="optTitle">WebGPU <span class="tag">sync only</span></span>
+        <span class="optHint">WGSL compute shaders. Statistical parity — f32 + per-cell RNG.</span></span></div>
+      <div class="adv">
+        <div class="advHead">▸ Advanced</div>
+      </div>
+    </div>
+    <p class="sub">JS is one disclosure away, labelled for what it is. The badge is the
+    <em>resolution</em>, never a promise — it is computed from the same gates that enforce it.</p>
+  </div>
+</div>
+
+<h2>2 · Auto states</h2>
+<div class="grid">
+  <div class="col">
+    <h3>Async model — the GPU cannot express it</h3>
+    <div class="panel">
+      <div class="rowHead"><label class="fieldLabel" style="margin:0">Engine</label>
+        <span class="autoBadge">Auto → WebAssembly</span></div>
+      <div style="height:6px"></div>
+      <div class="opt"><span class="radio on"></span><span>
+        <span class="optTitle">Auto <span style="color:var(--green);font-weight:400">(recommended)</span></span></span></div>
+      <div class="reason">WebGPU target requires synchronous update mode — Auto picked WebAssembly.</div>
+    </div>
+  </div>
+  <div class="col">
+    <h3>Overseer sweep — reproducibility wins</h3>
+    <div class="panel">
+      <div class="rowHead"><label class="fieldLabel" style="margin:0">Engine</label>
+        <span class="autoBadge">Auto → WebAssembly</span></div>
+      <div style="height:6px"></div>
+      <div class="opt"><span class="radio on"></span><span>
+        <span class="optTitle">Auto <span style="color:var(--green);font-weight:400">(recommended)</span></span></span></div>
+      <div class="reason">This model runs Overseer experiments — Auto keeps it on a CPU engine so
+        Set Random Seed pins a run and sweeps reproduce.</div>
+    </div>
+  </div>
+  <div class="col">
+    <h3>Explicit engine the gates reject</h3>
+    <div class="panel">
+      <div class="rowHead"><label class="fieldLabel" style="margin:0">Engine</label>
+        <span class="autoBadge amber">WebGPU → running JS</span></div>
+      <div style="height:6px"></div>
+      <div class="opt"><span class="radio"></span><span><span class="optTitle">Auto (recommended)</span></span></div>
+      <div class="opt"><span class="radio"></span><span><span class="optTitle">WebAssembly</span></span></div>
+      <div class="opt"><span class="radio on"></span><span><span class="optTitle">WebGPU <span class="tag">sync only</span></span></span></div>
+      <div class="reason amber">[S] WebGPU target requires synchronous update mode. Full readout:
+        Properties → Compatibility.</div>
+    </div>
+    <p class="sub">An explicit choice is never overridden silently — it compiles, fails loudly
+    (C3 logs the fallback event) and the chip goes amber. Auto simply never lands here.</p>
+  </div>
+</div>
+
+<h3>The Advanced reveal</h3>
+<div class="grid">
+  <div class="col">
+    <div class="panel">
+      <div class="adv" style="margin-top:0;border-top:none;padding-top:0">
+        <div class="advHead">▾ Advanced</div>
+        <div class="advBody">
+          <div class="opt"><span class="radio on"></span><span>
+            <span class="optTitle">Debug / Reference (JS)</span>
+            <span class="optHint">Readable &amp; breakpointable, slow. The semantic reference the other
+              engines are bit-tested against. Not a production engine.</span></span></div>
+        </div>
+      </div>
+    </div>
+    <p class="sub">Collapsed by default; auto-opens when JS is the current selection, so the selected
+    option can never be hidden.</p>
+  </div>
+  <div class="col">
+    <h3>Agents get the identical treatment</h3>
+    <div class="panel">
+      <div class="rowHead"><label class="fieldLabel" style="margin:0;color:var(--violet)">Agent Engine</label>
+        <span class="autoBadge">Auto → WebGPU</span></div>
+      <div style="height:6px"></div>
+      <div class="opt"><span class="radio on"></span><span><span class="optTitle">Auto (recommended)</span>
+        <span class="optHint">Independent of the grid engine — a WebGPU grid can drive WASM agents.</span></span></div>
+      <div class="reason">This agent graph runs on the GPU; Auto picks it.</div>
+      <div class="opt"><span class="radio"></span><span><span class="optTitle">WebAssembly</span></span></div>
+      <div class="opt"><span class="radio"></span><span><span class="optTitle">WebGPU</span></span></div>
+      <div class="adv"><div class="advHead">▸ Advanced</div></div>
+    </div>
+  </div>
+</div>
+
+<h2>3 · Show Code — always the reference</h2>
+<div class="grid">
+  <div class="col">
+    <h3>Before — the panel followed the engine</h3>
+<pre><span class="cm">/* WebAssembly target selected.
+ * The compiled module is a binary WASM blob — not human-readable.
+ * Switch to "Debug / Reference (JS)" in Model Properties to inspect
+ * generated code.
+ */</span></pre>
+    <p class="sub">Reading your own rule meant <em>changing the engine</em> — and then running a
+    different one than you were debugging.</p>
+  </div>
+  <div class="col">
+    <h3>After — one source, with the engine named</h3>
+<pre><span class="cm">/* Reference semantics — the engine runs WebGPU.
+ * This is the JS reference source: the definition of what your
+ * graph means. WebAssembly is verified bit-identical to it;
+ * WebGPU is statistically equivalent (f32 + per-cell RNG).
+ */</span>
+(<span class="kw">function</span>(total, r_alive, w_alive, nIdx_moore, …) {
+  <span class="kw">for</span> (<span class="kw">let</span> idx = <span class="st">0</span>; idx &lt; total; idx++) {
+    …
+</pre>
+  </div>
+</div>
+
+<h2>4 · Where the answer comes from</h2>
+<svg viewBox="0 0 980 300" width="100%" style="max-width:980px;background:#0e1015;border:1px solid var(--border);border-radius:8px">
+  <defs>
+    <marker id="a" markerWidth="9" markerHeight="9" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L8,3 z" fill="#5b6472"/></marker>
+    <marker id="ag" markerWidth="9" markerHeight="9" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L8,3 z" fill="#e8a13a"/></marker>
+  </defs>
+  <style>
+    .bx{fill:#171a21;stroke:#2a2f39}
+    .bxa{fill:#1d1a13;stroke:#e8a13a}
+    .t{fill:#dfe5ef;font:12px -apple-system,Segoe UI,sans-serif}
+    .s{fill:#8b93a3;font:10px -apple-system,Segoe UI,sans-serif}
+    .l{stroke:#5b6472;stroke-width:1.2;fill:none}
+    .lg{stroke:#e8a13a;stroke-width:1.4;fill:none}
+  </style>
+
+  <rect class="bx" x="16" y="18" width="180" height="66" rx="6"/>
+  <text class="t" x="30" y="42">model.properties.engine</text>
+  <text class="s" x="30" y="60">'auto' | 'wasm' | 'webgpu' | 'js'</text>
+  <text class="s" x="30" y="74">centerBased.agentTarget</text>
+
+  <rect class="bx" x="16" y="112" width="180" height="76" rx="6"/>
+  <text class="t" x="30" y="136">The real gates</text>
+  <text class="s" x="30" y="152">detectWebGPU*Incompatibilities</text>
+  <text class="s" x="30" y="166">isAgentGraphWasm/WebGPUSupported</text>
+  <text class="s" x="30" y="180">agentTargetOf</text>
+
+  <rect class="bx" x="16" y="216" width="180" height="56" rx="6"/>
+  <text class="t" x="30" y="240">overseerConfig.enabled</text>
+  <text class="s" x="30" y="258">the Auto policy's one exception</text>
+
+  <rect class="bxa" x="268" y="96" width="196" height="104" rx="8"/>
+  <text class="t" x="286" y="124" style="fill:#e8a13a">resolveEngines(model)</text>
+  <text class="s" x="286" y="144">selected → requested → resolved</text>
+  <text class="s" x="286" y="160">+ reason</text>
+  <text class="s" x="286" y="180">memoised per model object</text>
+
+  <path class="l" d="M196,51 C236,51 236,120 264,128" marker-end="url(#a)"/>
+  <path class="l" d="M196,150 L264,148" marker-end="url(#a)"/>
+  <path class="l" d="M196,244 C236,244 236,180 264,172" marker-end="url(#a)"/>
+
+  <rect class="bx" x="556" y="14" width="228" height="44" rx="6"/>
+  <text class="t" x="572" y="34">Engine radio + Auto badge</text>
+  <text class="s" x="572" y="50">Properties → Execution</text>
+
+  <rect class="bx" x="556" y="70" width="228" height="44" rx="6"/>
+  <text class="t" x="572" y="90">withResolvedEngine(model)</text>
+  <text class="s" x="572" y="106">bakes the legacy mirror flags</text>
+
+  <rect class="bx" x="556" y="126" width="228" height="44" rx="6"/>
+  <text class="t" x="572" y="146">C1 readout · chip · CaNode badge</text>
+  <text class="s" x="572" y="162">requested vs resolved, everywhere</text>
+
+  <rect class="bx" x="556" y="182" width="228" height="44" rx="6"/>
+  <text class="t" x="572" y="202">serializeModel</text>
+  <text class="s" x="572" y="218">writes engine + the mirror in sync</text>
+
+  <rect class="bx" x="556" y="238" width="228" height="46" rx="6"/>
+  <text class="t" x="572" y="258">Show Code</text>
+  <text class="s" x="572" y="274">JS reference + “the engine runs X”</text>
+
+  <path class="lg" d="M464,132 C516,132 508,36 552,36" marker-end="url(#ag)"/>
+  <path class="lg" d="M464,140 C516,140 512,92 552,92" marker-end="url(#ag)"/>
+  <path class="lg" d="M464,148 L552,148" marker-end="url(#ag)"/>
+  <path class="lg" d="M464,156 C516,156 512,204 552,204" marker-end="url(#ag)"/>
+  <path class="lg" d="M464,164 C516,164 508,260 552,260" marker-end="url(#ag)"/>
+
+  <rect class="bx" x="828" y="70" width="136" height="44" rx="6"/>
+  <text class="t" x="844" y="90">worker + compilers</text>
+  <text class="s" x="844" y="106">unchanged — concrete flags</text>
+  <path class="l" d="M784,92 L824,92" marker-end="url(#a)"/>
+</svg>
+<div class="legend">
+  <span>⟶ inputs</span><span style="color:var(--accent)">⟶ the one answer, fanned out</span>
+</div>
+
+<h2>5 · Migration — a legacy file never becomes Auto</h2>
+<table>
+  <tr><th>file has</th><th><code>engine</code> after load</th><th>mirror after <code>withResolvedEngine</code></th><th>behaviour</th></tr>
+  <tr><td><code>useWebGPU: true</code></td><td><code>'webgpu'</code></td><td>useWebGPU ✓ / useWasm ✗</td><td class="ok">byte-identical</td></tr>
+  <tr><td><code>useWasm: true</code></td><td><code>'wasm'</code></td><td>useWasm ✓ / useWebGPU ✗</td><td class="ok">byte-identical</td></tr>
+  <tr><td>neither</td><td><code>'js'</code></td><td>both ✗</td><td class="ok">byte-identical</td></tr>
+  <tr><td>both (hand-edited)</td><td><code>'webgpu'</code></td><td>useWebGPU ✓ / useWasm ✗</td><td class="ok">matches the worker's existing safety net</td></tr>
+  <tr><td><code>agentTarget</code> absent</td><td>untouched (absent)</td><td>—</td><td class="ok">still resolves to JS, as before</td></tr>
+  <tr><td>NEW model</td><td><code>'auto'</code></td><td>from the resolution</td><td class="warn">new default</td></tr>
+</table>
+
+<div class="note">
+  <strong>The mirror is not dead weight.</strong> <code>useWasm</code>/<code>useWebGPU</code> stay as
+  the <em>resolved</em> representation every existing consumer already reads — the worker init
+  message, both layout builders, the WebGPU/WASM node gates, the CaNode badge. That is what makes
+  this phase byte-identical, and what lets an older build open a file written by the new one. The
+  removal schedule lives in CLAUDE.md.
+</div>
+
+<h2>6 · Auto policy this phase</h2>
+<table>
+  <tr><th>layer</th><th>policy (in order)</th></tr>
+  <tr><td>grid</td><td>Overseer enabled ⇒ <strong>WebAssembly</strong> · else <strong>WebGPU</strong> when every grid gate passes · else <strong>WebAssembly</strong></td></tr>
+  <tr><td>agents</td><td>Overseer enabled ⇒ WASM if its gate passes, else JS · else <strong>WebGPU</strong> if its gate passes · else <strong>WASM</strong> if its gate passes · else <strong>JS</strong></td></tr>
+</table>
+<p class="sub">C5 replaces this with the declared reproducibility contract: <em>Auto = the fastest
+engine that satisfies the model's contract</em>, and the Overseer special case stops being special.</p>
+
+</body>
+</html>

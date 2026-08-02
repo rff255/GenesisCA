@@ -5,6 +5,7 @@ import { getNodeDef } from './nodes/registry';
 import { CURRENT_VIEWER_SENTINEL } from './nodes/SetCellLooksNode';
 import { ARITHMETIC_UNARY_OPS } from './nodes/ArithmeticOperatorNode';
 import { detectMissingConfig, detectCapabilityRequirements, detectWebGPUIncompatibilities, detectWasmIncompatibilities, countMacroSubgraphIssues, detectAgentInitContextIssue } from './nodes/nodeValidation';
+import { resolveEngines } from '../../model/engineResolution';
 import { INTERPOLATION_METHODS, INTERPOLATION_SHORT_LABELS, DEFAULT_INTERPOLATION_METHOD } from './nodes/interpolationMethods';
 import type { InterpolationMethod } from './nodes/interpolationMethods';
 import { buildVarMap, parseExpression, clampVisibleCount, VISIBLE_PORT_IDS, MAX_VISIBLE } from './compiler/expression/parser';
@@ -601,8 +602,12 @@ function CaNodeComponent({ id, data }: NodeProps) {
   // sees them in the modeler before hitting the runtime compile error.
   const configIssues = useMemo(
     () => {
-      const useWebGPU = !!model.properties.useWebGPU;
-      const useWasm = !!model.properties.useWasm && !useWebGPU;
+      // C4 - badge for the engine that will actually RUN. Under `engine: 'auto'`
+      // the legacy mirror flags can lag a graph edit, so read the resolution
+      // (memoised per model object, so this stays O(1) per node).
+      const resolvedGrid = resolveEngines(model).grid.resolved;
+      const useWebGPU = resolvedGrid === 'webgpu';
+      const useWasm = resolvedGrid === 'wasm';
       const base = detectMissingConfig(nodeData.nodeType, nodeData.config, model, connectedInputHandles);
       const capability = detectCapabilityRequirements(nodeData.nodeType, model);
       // Init-vs-Behaviour footgun: a per-agent (self) node wired into the Agent
@@ -660,8 +665,13 @@ function CaNodeComponent({ id, data }: NodeProps) {
       model.agentVariables,
       model.agentAttributes,
       model.topologyMode,
+      // C4: the resolved grid engine - Auto re-picks as the graph is edited, so
+      // the selection AND the inputs the Auto policy reads are the real dependency.
+      model.properties.engine,
       model.properties.useWebGPU,
       model.properties.useWasm,
+      model.overseerConfig?.enabled,
+      model.graphNodes,
       model.properties.updateMode,
       model.properties.dimension,
       model.variegatedCells?.enabled,

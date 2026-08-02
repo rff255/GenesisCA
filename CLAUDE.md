@@ -100,11 +100,11 @@ Both modes coexist in one app. The user can seamlessly switch between editing an
 
 This is the critical performance decision. At 5000×5000 (25M cells), the update function runs 25M times per generation.
 
-**Approach: Compile the node graph at edit time to one of three targets.** Selectable per-model via the Compile Target radio in Properties → Execution.
+**Approach: Compile the node graph at edit time to one of three ENGINES.** Chosen per model by the **Engine** radio in Properties → Execution — `Auto` (the default for new models) / WebAssembly / WebGPU, with **Debug (JS)** behind an Advanced reveal. See the "One Engine selector" section for the enum, the Auto policy and `resolveEngines`.
 
-- **WebAssembly (default).** Hand-emitted WASM module, typically several times faster than JS on dense neighborhoods. Production target for most models.
+- **WebAssembly.** Hand-emitted WASM module, typically several times faster than JS on dense neighborhoods. Production engine for most models; exact + seedable (f64, one shared stream), bit-identical to the JS reference.
 - **WebGPU.** WGSL compute shaders dispatched on the GPU. Best for very large grids and math-heavy per-cell work. Requires synchronous mode + a browser with WebGPU support.
-- **Debug / Reference (JS).** Plain JavaScript via `new Function(...)`. Slower than WASM, but its source is readable in the simulator's Show Code panel — useful for prototyping new node types and verifying parity with the other targets.
+- **Debug / Reference (JS).** Plain JavaScript via `new Function(...)`. The **semantic reference** the other two are verified against, the always-runnable fallback, and the source **Show Code always displays** (whatever engine runs) — but the slowest, so it is demoted behind Advanced rather than offered as a peer.
 
 Each node type defines `compile()` (JS) plus per-target emitters (WASM / WGSL). The JS compiler:
 1. Topologically sorts the graph
@@ -744,7 +744,7 @@ The third `Indicator.kind`, `'graph'`: a **graph-global** quantity over the bond
 
 ## WASM Compile Target (Wave 2 — current default)
 
-WASM is the default compile target for new models (`EMPTY_MODEL.properties.useWasm = true` in [defaultModel.ts](src/model/defaultModel.ts)). Full node-catalogue coverage including the multi-source `groupOperator.random` path. The Properties radio orders targets as **WebAssembly (default) / WebGPU / Debug & Reference (JS)**.
+WASM has full node-catalogue coverage including the multi-source `groupOperator.random` path. **C4 note**: new models no longer name WASM directly — `EMPTY_MODEL.properties.engine = 'auto'` and the Auto policy picks WebGPU where the gates pass, else WASM (`useWasm: true` remains in EMPTY_MODEL only as the static legacy MIRROR). The Properties radio reads **Auto (recommended) / WebAssembly / WebGPU**, with Debug (JS) behind Advanced.
 
 - 4-file structure under `src/modeler/vpl/compiler/wasm/`: `encoder.ts` (hand-rolled WASM binary encoder, no wabt.js), `layout.ts` (memory layout: attrs/colors/nbrs/modelAttrs/indicators/rngState/activeViewer/order/scratch), `emitter.ts` (`WasmEmitter` class + `ValueRef`/`ArrayRef` types), `compile.ts` (orchestrator + per-node emitters)
 - One module exports all entry points: `step`, `inputColor_<sanitisedMappingId>`, `outputMapping_<sanitisedMappingId>`. Host math functions WASM lacks native opcodes for are imported from JS (`env.pow/exp/log/sin/cos/tan/tanh`) at contiguous funcIdx `POW_FUNC_IDX=0 … TANH_FUNC_IDX=6` (`NUM_IMPORTED_FUNCS=7`); module-defined funcs start at funcIdx `NUM_IMPORTED_FUNCS` (export funcIdx = `NUM_IMPORTED_FUNCS + i`). The import-entry order, the `*_FUNC_IDX` consts, and `instantiateWasmModule`'s `env` object MUST stay in sync. sqrt/abs/floor/ceil/min/max use native f64 intrinsics. The Math node (`arithmeticOperator`) and Expression node share this transcendental set: JS emits `Math.*`, WGSL uses native intrinsics, WASM calls the imports — adding one means editing `expression/parser.ts` (FN_ARITY), all three `expression/emit{JS,Wasm,Wgsl}.ts`, `ArithmeticOperatorNode.ts` (+ `ARITHMETIC_UNARY_OPS` if unary) and its WASM/WebGPU emitters in `wasm/compile.ts` + `webgpu/compile.ts`, plus (WASM only) a new import entry + `*_FUNC_IDX` const + `env` entry. `log` = natural log.
@@ -922,6 +922,56 @@ Emits a **committed** module HelpView imports, built from the tables the engine 
 - HelpView gains **"Which fast paths actually engaged"**, **"Engine capability matrix"** (`CapabilityMatrixReference`, 53 rows), **"What the WebGPU CA grid rejects"** and **"Capacity limits"** (every Class-C bound with its real number — the promise the doctrine makes). `docs/NODES_REFERENCE.md` per-node annotations are OUT OF SCOPE this phase (its target facts live in a prose Notes column); the generator is shaped so a later phase can emit that table from the same data.
 
 **Run after any change to the gates, the registry, the capability table or the capacity constants: `node scripts/gen-capability-docs.mjs --check`.**
+
+---
+
+## One Engine selector: `auto | wasm | webgpu` (+ Debug JS) (C4 — branch `GRA`)
+
+Phase C4 of the Clarity & Simplification initiative ([HANDOFF_CLARITY_SIMPLIFICATION.md](docs/HANDOFF_CLARITY_SIMPLIFICATION.md) §C4, implementing [PROPOSAL_CLARITY_SIMPLIFICATION.md](docs/PROPOSAL_CLARITY_SIMPLIFICATION.md) **P1**; plan + mockup [docs/PLAN_CLARITY_C4.md](docs/PLAN_CLARITY_C4.md)/`.html`). **`check-compile-identity`: 29 models byte-identical on every surface.**
+
+**The gap it closes.** The grid engine was TWO booleans kept mutually exclusive by the UI (plus a worker safety net for hand-edited files that set both), the agent engine a separate enum, and neither had an "I don't care, pick the fast one" option — so **the library's own compile-target policy ("WebGPU where the gates pass, else WASM") was applied by hand, per model, and was invisible to the user**. JS sat in the list as a peer of the production engines even though it exists to be the readable reference.
+
+### Schema — `engine` is the choice, `useWasm`/`useWebGPU` are its MIRROR
+- **`ModelProperties.engine?: EngineChoice`** (`'auto' | 'wasm' | 'webgpu' | 'js'`) and **`CenterBasedConfig.agentTarget`** gains `'auto'` ([types.ts](src/model/types.ts)).
+- **`useWasm` / `useWebGPU` are NOT deleted** — they become the RESOLVED MIRROR, which is the representation every downstream consumer already reads (the worker init message, `computeLayoutFromModel`, the WebGPU/WASM node gates, `detectWebGPU*Incompatibilities`). Keeping them is what makes this phase byte-identical AND lets an OLDER build open a file written by a newer one. **REMOVAL SCHEDULE: one release cycle of back-compat, then the mirror goes and `engine` is the only representation.** In-app code should read `resolveEngines(model)`, never the raw flags.
+- **Migration** [engineFieldMigration.ts](src/model/engineFieldMigration.ts) (`LOAD_MODEL` + `migrateForHarness`): absent `engine` → the EXPLICIT equivalent of the flags (`useWebGPU → 'webgpu'`, else `useWasm → 'wasm'`, else `'js'`; WebGPU wins when both are set, mirroring the worker's own safety net). **A legacy file NEVER becomes `'auto'`** — that is the whole byte-identity argument. `agentTarget` is deliberately left ALONE (absent already resolves to `'js'`). Idempotent, same-reference when unchanged. **NOT wired into `macroImport`**: a `.gcamacro` carries a `MacroDef`, which has no `properties`/`centerBased` — nothing to migrate.
+- Defaults: `EMPTY_MODEL.engine = 'auto'`, `defaultCenterBasedConfig().agentTarget = 'auto'`.
+
+### `resolveEngines(model)` — the single source ([engineResolution.ts](src/model/engineResolution.ts))
+Returns per layer `{ selected, requested, resolved, reason, auto }` — **selected** = what the user picked (may be `'auto'`), **requested** = the engine that selection asks for (for Auto, its pick), **resolved** = what will actually run after the gates demote. Every verdict comes from the ENFORCING function (`detectWebGPUModelIncompatibilities`, `detectWebGPUIncompatibilities`, `isAgentGraphWasmSupported`, `isAgentGraphWebGPUSupported`, `agentTargetOf`) — the C1 discipline, so the displayed resolution cannot drift from the engine's decision. **MEMOISED on the model object** (WeakMap): the reducer makes a new model object per edit, so it evaluates once per model version and is shared by every caller — including the per-node CaNode badge, which would otherwise be O(N²).
+
+**Auto policy THIS phase** (C5 replaces it with the declared reproducibility contract, and the Overseer case stops being special):
+
+| layer | policy, in order |
+|---|---|
+| grid | `overseerConfig.enabled` ⇒ **WASM** (sweeps need CPU seed reproducibility) · else **WebGPU** when every grid gate passes · else **WASM** |
+| agents | Overseer ⇒ WASM if its gate passes, else JS · else **WebGPU** if its gate passes · else **WASM** if its gate passes · else **JS** |
+
+A new (empty, synchronous) model therefore resolves **Auto → WebGPU**. When Auto picks WebGPU on a model with **Skip Isolated Empty Cells** enabled, the reason says so (the GPU ignores sparse stepping) rather than dropping the fact silently.
+
+**`withResolvedEngine(model)`** bakes the resolution into the mirror + a concrete `agentTarget`. It bakes the **requested** engine, NOT the resolved one: for an EXPLICIT choice the requested target must still be COMPILED, because that compile's error is what produces the user-visible message and C3's fallback event. Auto never picks a failing engine, so requested ≡ resolved there. Returns the SAME reference when nothing changes (memoisation + effect deps untouched). Applied by **`withPipelineModel`** in [SimulatorView.tsx](src/simulator/SimulatorView.tsx) (the model handed to the compilers/worker at init, soft recompile and Show Code) and inside **`serializeModel`** (so a saved file's mirror always matches the live resolution).
+
+### Consumers
+| consumer | reads |
+|---|---|
+| SimulatorView init / recompile / `compileAgentModel` | `withPipelineModel` → the existing flags, unchanged downstream |
+| `needsFullInit` | the RESOLVED grid + agent engine (an `'auto'` model that re-picks after a graph edit MUST reinitialise — a soft recompile would leave the worker on the previous engine's buffers) |
+| simulator chip | C3 `getDiagnostics.engine.grid/agents` once the worker has replied (its own safety nets included), else the model-side resolution |
+| C1 `diagnoseTargets` | `resolveEngines` for selected/requested/resolved; the grid WebGPU verdict now shares `gridWebgpuBlockers` with the resolver, so verdict and explanation cannot disagree |
+| CaNode badge | `resolveEngines(model).grid.resolved` — badges describe the engine that will RUN |
+| `serializeModel` | bakes the mirror before writing |
+| worker | unchanged — it receives concrete flags / a concrete `agentTarget` |
+
+`agentTargetOf` gained an `'auto'` arm (webgpu → wasm → js by gate) purely as the **file-load safety net** for a config that reaches the engine un-baked; the model-level policy (including the Overseer preference, which needs the whole model) lives in `resolveEngines`.
+
+### UI + Show Code
+The Properties radio is **Engine: Auto (recommended) / WebAssembly / WebGPU**, with **Debug / Reference (JS)** behind an **Advanced** reveal (collapsed by default, auto-open when JS is the current selection so the selected option is never hidden). Auto shows a badge with its resolution (`Auto → WebGPU`) plus the reason underneath; an explicit choice the gates reject shows an amber `WebGPU → running JS`. The agent radio is identical (`Agent Engine`). One shared `EngineRadio` component renders both. Everything that used to key off the raw mirror flags in this panel (the async-mode greying, the WebGPU stop-check interval) now reads the RESOLVED engine, so `Auto → WebGPU` lights up the same UI an explicit pick does.
+
+**Show Code always shows the JS reference source**, with a header naming the engine that actually runs (`referenceSourceFor`). The JS compile IS the semantics — WASM is verified bit-identical to it, WebGPU statistically equivalent — so reading your own rule must never require switching the engine you run on (before this, two of three engines showed no source at all and the third meant debugging a different engine than you ran). The WebGPU compile still runs when WebGPU is resolved, because its ERROR must keep surfacing; only the displayed text changed. **Consequence: the emitted WGSL is no longer reachable from the UI** (it remains available through the dev harness) — re-adding it as a read-only Advanced view is a possible follow-up.
+
+### Gate — [scripts/test-engine-resolve.mjs](scripts/test-engine-resolve.mjs)
+367 checks. Over EVERY `public/models/*.gcaproj`: the migrated `engine` equals the engine the file's own flags asked for (computed independently in the script, so a change to `engineFromLegacyFlags` cannot mask a regression), re-baking restores those exact flags, `agentTarget` is untouched, and the resolved agent engine equals the pre-change `agentTargetOf` answer. Plus the Auto policy (new model → WebGPU; async → WASM; Overseer → WASM; agents auto over WebGPU-supported / WASM-only / **both-gates-reject** graphs — the last built by adding a `setAgentSprite` node, the documented single gap on both agent targets), the save→load round-trip of `engine` + mirror, an OLD-shape file (no `engine`) loading identically, and 3 negative controls. **Proven failable by SOURCE MUTATION**: removing the Overseer preference → 3 failures + its control stops being caught; mis-mapping `useWasm → 'js'` in the migration → 38 failures.
+
 
 ---
 

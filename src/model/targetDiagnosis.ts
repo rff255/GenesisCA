@@ -29,15 +29,13 @@
 //   C capacity        — a resource bound with a NUMBER (blocker, number stated)
 // ===========================================================================
 
-import type { CAModel, CenterBasedConfig, GraphNode } from './types';
+import type { CAModel, CenterBasedConfig, EngineChoice, EngineId, GraphNode } from './types';
 import type { NodeConfig } from '../modeler/vpl/types';
-import { agentTargetOf, resolveMaxBonds } from './centerBased';
+import { resolveMaxBonds } from './centerBased';
+import { resolveEngines, gridWebgpuBlockers } from './engineResolution';
 import { cellFieldAttrsOf } from './attributeScope';
 import { residencyModelBlockers, type ResidencyGraphFacts } from './agentResidency';
-import {
-  detectWebGPUIncompatibilities, detectWasmIncompatibilities,
-  detectWebGPUModelIncompatibilities,
-} from '../modeler/vpl/nodes/nodeValidation';
+import { detectWasmIncompatibilities } from '../modeler/vpl/nodes/nodeValidation';
 import { isAgentGraphWasmSupported, AGENT_WASM_SUPPORTED_TYPES } from '../modeler/vpl/compiler/agentWasm/compile';
 import { isAgentGraphWebGPUSupported, AGENT_WEBGPU_SUPPORTED_TYPES, AGENT_WEBGPU_NEARBY_SLOTS } from '../modeler/vpl/compiler/agentWebgpu/compile';
 import { AGENT_NEARBY_SCRATCH_SLOTS } from '../simulator/engine/agentEngine';
@@ -47,7 +45,7 @@ import { AGENT_NEARBY_SCRATCH_SLOTS } from '../simulator/engine/agentEngine';
 // ---------------------------------------------------------------------------
 
 export type ReasonClass = 'semantics' | 'reproducibility' | 'fastpath' | 'capacity';
-export type EngineId = 'js' | 'wasm' | 'webgpu';
+export type { EngineId, EngineChoice } from './types';
 export type LayerId = 'grid' | 'agents';
 
 export interface Reason {
@@ -68,7 +66,9 @@ export interface EngineVerdict {
 export interface LayerDiagnosis {
   layer: LayerId;
   label: string;
-  /** What the model asks for. */
+  /** C4 — what the user SELECTED (may be `'auto'`). */
+  selected: EngineChoice;
+  /** What that selection asks for (for `'auto'`, the engine Auto picked). */
   requested: EngineId;
   /** What the engine will actually run (the real resolver / gate). */
   resolved: EngineId;
@@ -193,16 +193,9 @@ function dedupe(reasons: Reason[]): Reason[] {
 // CA-grid layer
 // ---------------------------------------------------------------------------
 
-function gridRequestedEngine(model: CAModel): EngineId {
-  // Mirrors the worker's mutual-exclusion safety net (WebGPU wins if a
-  // hand-edited file sets both) so the readout describes what would run.
-  if (model.properties.useWebGPU) return 'webgpu';
-  if (model.properties.useWasm) return 'wasm';
-  return 'js';
-}
-
 function diagnoseGrid(model: CAModel): LayerDiagnosis {
-  const requested = gridRequestedEngine(model);
+  // C4 — `resolveEngines` is the single source for selected/requested/resolved.
+  const res = resolveEngines(model).grid;
 
   // --- JS: the reference. Full coverage by construction. -------------------
   const js: EngineVerdict = {
@@ -221,18 +214,16 @@ function diagnoseGrid(model: CAModel): LayerDiagnosis {
     notes: [R('reproducibility', 'Exact and seedable — f64 math on one shared seeded stream, bit-identical to the JS reference.')],
   };
 
-  // --- WebGPU: the model-level gate + the per-node gate, both asked with a
-  //     probe clone that has WebGPU selected (the model gate early-outs
-  //     otherwise), so the answer is "could you?" rather than "did you?". ----
-  const probe: CAModel = { ...model, properties: { ...model.properties, useWebGPU: true } };
+  // --- WebGPU: the SAME blocker collection the resolution decides on, so the
+  //     verdict and its explanation can never disagree. (`gridWebgpuBlockers`
+  //     asks both gates with a WebGPU-selected probe clone — the model gate
+  //     early-outs otherwise — so the answer is "could you?", not "did you?".)
   const gpuBlockers: Reason[] = [];
-  const modelIssue = detectWebGPUModelIncompatibilities(probe);
-  if (modelIssue) {
-    gpuBlockers.push(R('semantics', `${modelIssue} ${PRINCIPLE_SEQUENTIAL}`));
+  {
+    const b = gridWebgpuBlockers(model);
+    if (b.modelIssue) gpuBlockers.push(R('semantics', `${b.modelIssue} ${PRINCIPLE_SEQUENTIAL}`));
+    for (const msg of b.nodeIssues) gpuBlockers.push(R('semantics', msg));
   }
-  walkNodes(model.graphNodes, model, (t, cfg) => {
-    for (const msg of detectWebGPUIncompatibilities(t, cfg, probe)) gpuBlockers.push(R('semantics', msg));
-  });
   const gpuNotes: Reason[] = [
     R('reproducibility', 'Statistical parity — f32 math and a per-cell RNG stream. Statistically equivalent to the CPU engines, never bit-identical, and a fixed seed does not reproduce a run exactly.'),
   ];
@@ -246,11 +237,15 @@ function diagnoseGrid(model: CAModel): LayerDiagnosis {
   const verdicts = [wasm, webgpu, js];
   const byId: Record<EngineId, EngineVerdict> = { js, wasm, webgpu };
   // The compilers return an error for a rejected target and the worker stays on
-  // JS (the always-runnable fallback) — the documented grid demotion.
-  const resolved: EngineId = byId[requested].ok ? requested : 'js';
-  const demotionReason = resolved !== requested ? byId[requested].blockers[0] : undefined;
+  // JS (the always-runnable fallback) — the documented grid demotion, decided by
+  // `resolveEngines`. Auto never lands here (it only ever picks a passing engine).
+  const demotionReason = res.resolved !== res.requested ? byId[res.requested].blockers[0] : undefined;
 
-  return { layer: 'grid', label: 'CA Grid', requested, resolved, demotionReason, verdicts };
+  return {
+    layer: 'grid', label: 'CA Grid',
+    selected: res.selected, requested: res.requested, resolved: res.resolved,
+    demotionReason, verdicts,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -338,12 +333,12 @@ function webgpuAgentFundamentals(model: CAModel): Reason[] {
 
 function diagnoseAgents(model: CAModel): LayerDiagnosis {
   const cfg: CenterBasedConfig | undefined = model.centerBased;
-  const requested: EngineId = (cfg?.agentTarget as EngineId | undefined) ?? 'js';
+  // C4 — selected / requested / resolved all come from the one resolver.
+  const res = resolveEngines(model).agents!;
 
   // THE GATES — authoritative for every verdict below.
   const wasmSupported = isAgentGraphWasmSupported(model);
   const webgpuSupported = isAgentGraphWebGPUSupported(model);
-  const resolved = agentTargetOf(cfg, wasmSupported, webgpuSupported);
 
   const producers = countAgentArrayProducers(model);
 
@@ -405,9 +400,13 @@ function diagnoseAgents(model: CAModel): LayerDiagnosis {
 
   const verdicts = [wasm, webgpu, js];
   const byId: Record<EngineId, EngineVerdict> = { js, wasm, webgpu };
-  const demotionReason = resolved !== requested ? byId[requested].blockers[0] : undefined;
+  const demotionReason = res.resolved !== res.requested ? byId[res.requested].blockers[0] : undefined;
 
-  return { layer: 'agents', label: 'Agents', requested, resolved, demotionReason, verdicts };
+  return {
+    layer: 'agents', label: 'Agents',
+    selected: res.selected, requested: res.requested, resolved: res.resolved,
+    demotionReason, verdicts,
+  };
 }
 
 /** The residency facts this module can derive from the MODEL alone. Mirrors what

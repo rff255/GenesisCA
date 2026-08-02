@@ -61,6 +61,11 @@ export function defaultCenterBasedConfig(): CenterBasedConfig {
     worldWidth: CENTER_BASED_DEFAULTS.worldWidth,
     worldHeight: CENTER_BASED_DEFAULTS.worldHeight,
     useBondingPhysics: false,
+    // C4 (P1): a freshly-enabled Agents topology declares an INTENT — Auto picks
+    // the fastest agent engine this graph can use (resolved + displayed by
+    // `resolveEngines`). Existing files keep whatever they stored; the migration
+    // deliberately does NOT flip them to 'auto'.
+    agentTarget: 'auto',
   };
 }
 
@@ -345,6 +350,16 @@ export function agentTargetOf(
   webgpuSupported = false,
 ): 'js' | 'wasm' | 'webgpu' {
   const t = cfg?.agentTarget;
+  if (t === 'auto') {
+    // C4 (P1) — the file-load SAFETY NET for an 'auto' config that reaches the
+    // engine un-baked. The model-level Auto policy (including the Overseer
+    // preference, which needs the whole model) lives in `resolveEngines`, and
+    // `withResolvedEngine` bakes a concrete target before any compile path calls
+    // this — so this arm is a fallback, not the policy.
+    if (webgpuSupported) return 'webgpu';
+    if (wasmSupported) return 'wasm';
+    return 'js';
+  }
   if (t === 'js') return 'js';
   if (t === 'wasm') {
     // PR6b: the WASM agent loop exists for the supported node subset. Run on

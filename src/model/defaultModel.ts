@@ -18,6 +18,12 @@ export const EMPTY_MODEL: CAModel = {
     gridDepth: 1,
     maxIterations: 1000,
     tags: [],
+    // C4 (P1): new models declare an INTENT, not an engine — Auto picks the
+    // fastest engine the model can use and re-picks as the model is edited.
+    engine: 'auto',
+    // The legacy MIRROR of `engine` (see ModelProperties). A static default has
+    // to pick something; WASM is the always-runnable one, and the real value is
+    // baked by `withResolvedEngine` at every consumption point + at save time.
     useWasm: true,
     dimension: '2d',
   },

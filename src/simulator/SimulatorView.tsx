@@ -2,7 +2,7 @@ import { memo, useCallback, useEffect, useMemo, useReducer, useRef, useState, us
 import { useModel } from '../model/ModelContext';
 import { hexToRgba, rgbaToHex, OPAQUE } from '../model/colorHex';
 import { ColorField } from '../modeler/vpl/widgets/ColorField';
-import { compileGraph, compileAgentGraph } from '../modeler/vpl/compiler/compile';
+import { compileGraph, compileAgentGraph, type CompileResult } from '../modeler/vpl/compiler/compile';
 import { expandVectorAttributes, encodeAttrSets, decodeVectorFromValues } from '../modeler/vpl/compiler/vectorAttr';
 import { hasGlyphsInModel } from '../modeler/vpl/compiler/glyphsUsage';
 import { CURRENT_VIEWER_SENTINEL } from '../modeler/vpl/nodes/SetCellLooksNode';
@@ -19,6 +19,7 @@ import type { SpriteAtlasInput, Light3D, Metaballs3D, AutoZoom3D } from './rende
 import type { VoxelRenderView } from './engine/webgpuRuntime';
 import { LightBallWidget } from './LightBallWidget';
 import { agentTargetOf, resolveMaxBonds } from '../model/centerBased';
+import { resolveEngines, withResolvedEngine, ENGINE_CHOICE_LABEL } from '../model/engineResolution';
 // C1 (P2/P4) — the compile-target chip's amber state + its reason come from the
 // same gate-backed diagnosis the Properties Compatibility block renders.
 import { diagnoseTargets, ENGINE_LABEL, REASON_CLASS_TAG } from '../model/targetDiagnosis';
@@ -659,6 +660,50 @@ function withEffectiveNeighborhoods(model: CAModel): CAModel {
   };
 }
 
+/** C4 (P1) — the model as the COMPILE/SIM PIPELINE must see it: effective
+ *  neighbourhoods (above) + the ENGINE resolution baked into the legacy mirror
+ *  (`useWasm` / `useWebGPU` / a concrete `centerBased.agentTarget`).
+ *
+ *  Baking here is what lets `engine: 'auto'` work with ZERO changes downstream:
+ *  the compilers, the worker init message and both layout builders keep reading
+ *  the representation they always read, and an `'auto'` model that re-resolves
+ *  after a graph edit reaches them correctly without any state write. Returns
+ *  the same reference when neither transform applies (every legacy model). */
+function withPipelineModel(model: CAModel): CAModel {
+  return withResolvedEngine(withEffectiveNeighborhoods(model));
+}
+
+/** C4 (P1) — Show Code always shows the **JS reference source**, whatever engine
+ *  the model runs on, with a header naming that engine.
+ *
+ *  Why: the JS compile IS the definition of what a graph means — WASM is verified
+ *  bit-identical to it by the permanent parity harness, and WebGPU is
+ *  statistically equivalent. Before this, reading your own rule meant SWITCHING
+ *  THE ENGINE (and then debugging a different one than you were running), and two
+ *  of the three engines showed no source at all. */
+function referenceSourceFor(
+  model: CAModel,
+  result: CompileResult,
+  buildFullCode: (r: CompileResult) => string,
+): string {
+  const res = resolveEngines(model);
+  const grid = ENGINE_CHOICE_LABEL[res.grid.resolved];
+  const agents = res.agents ? ENGINE_CHOICE_LABEL[res.agents.resolved] : null;
+  const running = agents
+    ? `the grid on ${grid}, agents on ${agents}`
+    : `on ${grid}`;
+  return (
+    `/* Reference semantics — the engine runs ${running}.\n` +
+    ` *\n` +
+    ` * This is the JS reference source: the definition of what your graph means.\n` +
+    ` * WebAssembly is verified bit-identical to it (the permanent parity harness);\n` +
+    ` * WebGPU is statistically equivalent (f32 math + a per-cell/per-agent RNG).\n` +
+    ` * The engine you run does not change these semantics, so this panel does not\n` +
+    ` * change with it.\n` +
+    ` */\n\n`
+  ) + buildFullCode(result);
+}
+
 // Build the runtime model-attribute value map from each model attribute's
 // declared default. Shared by worker init and the "Reset to Default" button.
 function computeDefaultModelAttrs(attributes: Attribute[]): Record<string, number> {
@@ -1152,10 +1197,12 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
   // fell back / errored) so the chip stays honest about silent demotions.
   const compileTargetInfo = useMemo(() => {
     const gridCellsOn = model.topologyMode?.gridCells !== false;
-    const grid = model.properties.useWebGPU ? 'WebGPU' : model.properties.useWasm ? 'WASM' : 'JS';
-    const agents = model.topologyMode?.agents
-      ? agentTargetOf(model.centerBased, isAgentGraphWasmSupported(model), isAgentGraphWebGPUSupported(model))
-      : null;
+    // C4 — the RESOLVED engine per layer, from the single resolver (`resolveEngines`),
+    // so the chip, the Properties readout and the compile paths cannot disagree.
+    // Under `engine: 'auto'` this is Auto's pick.
+    const res = resolveEngines(model);
+    const grid = res.grid.resolved === 'webgpu' ? 'WebGPU' : res.grid.resolved === 'wasm' ? 'WASM' : 'JS';
+    const agents = model.topologyMode?.agents ? res.agents!.resolved : null;
     // C1 (P4) — the chip must be amber for EVERY resolved ≠ requested state, not
     // just a failed WebGPU device. `diagnoseTargets` calls the same gates, so the
     // chip's reason and the Properties readout are one truth.
@@ -2780,43 +2827,33 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
 
   // Compile graph (deps include indicator watched state since it affects compiled code).
   // Always returns the JS CompileResult — it's the universal fallback for the worker
-  // and the Show Code source when JS is the selected target. The Show Code panel
-  // displays whichever artefact matches the currently-selected compile target:
-  //   - JS selected      → readable JS source from buildFullCode
-  //   - WebGPU selected  → WGSL shader source (an extra compile pass; only when active)
-  //   - WASM selected    → placeholder string (binary, not human-readable)
+  // AND, since C4, the ONE thing Show Code displays: the JS source IS the semantics
+  // (WASM is verified bit-identical to it; WebGPU is statistically equivalent), so
+  // reading your own rule must never require switching the engine you run on. The
+  // WebGPU compile still runs when WebGPU is the resolved engine — its ERROR has to
+  // keep surfacing — only the displayed text changed.
   const compileModel = useCallback(() => {
-    const m = withEffectiveNeighborhoods(model);
+    const m = withPipelineModel(model);
     const result = compileGraph(m.graphNodes, m.graphEdges, m);
     // Agents-only model (Grid Cells disabled): there is no cell graph, so the cell
     // compiler's "No nodes / No Step node" error is EXPECTED — suppress it (the
     // worker skips the cell step via gridCells). Agent compile errors still surface
     // via the worker `error` message.
     const gridOn = model.topologyMode?.gridCells !== false;
-    if (model.properties.useWebGPU) {
+    setCompiledCode(referenceSourceFor(model, result, buildFullCode));
+    if (m.properties.useWebGPU) {
       try {
         const wgpu = compileGraphWebGPU(m.graphNodes, m.graphEdges, m);
-        setCompiledCode(wgpu.shaderCode || '(no shader emitted)');
         setCompileError(gridOn ? (wgpu.error || result.error || '') : '');
       } catch (e) {
-        setCompiledCode('');
         setCompileError(gridOn ? String((e as Error)?.message || e) : '');
       }
-    } else if (model.properties.useWasm) {
-      setCompiledCode(
-        '/* WebAssembly target selected.\n' +
-        ' * The compiled module is a binary WASM blob — not human-readable.\n' +
-        ' * Switch to "Debug / Reference (JS)" in Model Properties to inspect generated code.\n' +
-        ' */'
-      );
-      setCompileError(gridOn ? (result.error ?? '') : '');
     } else {
-      setCompiledCode(buildFullCode(result));
       setCompileError(gridOn ? (result.error ?? '') : '');
     }
     return result;
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [model.graphNodes, model.graphEdges, model.neighborhoods, model.indicators, model.properties.useWasm, model.properties.useWebGPU, model.topologyMode?.gridCells, buildFullCode]);
+  }, [model, buildFullCode]);
 
   // Bond-Graph Agents: compile the agent rule graph (the second graph). JS-only
   // (Decision D-TARGET). PR-A2 returns a placeholder (agents seed + render but
@@ -5716,7 +5753,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
     // a runtime function arg), but WebGPU bakes `total` into the WGSL bounds
     // check — without this override the shader rejects half the cells after a
     // resize-to-larger and the simulator looks half-frozen.
-    const effModel = withEffectiveNeighborhoods(model);
+    const effModel = withPipelineModel(model);
     // 3D Grid CA: the resize panel can also override depth (d3 above). Bake
     // gridDepth + dimension into the compiler model too so WebGPU's baked `total`
     // and the 3D decode match (WASM takes total at runtime, but the codec/decode
@@ -6285,8 +6322,12 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       || prev.properties.boundaryTreatment !== model.properties.boundaryTreatment
       || prev.properties.updateMode !== model.properties.updateMode
       || prev.properties.asyncScheme !== model.properties.asyncScheme
-      || prev.properties.useWasm !== model.properties.useWasm
-      || prev.properties.useWebGPU !== model.properties.useWebGPU
+      // C4 — compare the RESOLVED grid engine, not the raw mirror flags: under
+      // `engine: 'auto'` a graph edit can change which engine runs without
+      // touching a flag, and that MUST reinitialise (a soft recompile would keep
+      // the worker on the previous engine's buffers). For an explicit engine
+      // this is exactly the old flag comparison.
+      || resolveEngines(prev).grid.requested !== resolveEngines(model).grid.requested
       || !attrsStructurallyEqual(prev.attributes, model.attributes)
       || variegatedLayoutKey(prev) !== variegatedLayoutKey(model)
       || prev.neighborhoods !== model.neighborhoods
@@ -6322,7 +6363,10 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       // PR5: the Agent Compile Target is independent of the grid target. Changing
       // it switches the agent driver's memory residency (Phase F: JS↔WASM↔WebGPU),
       // so it needs a full reinit, not a soft recompile (mirrors useWasm/useWebGPU).
-      || (prev.centerBased?.agentTarget ?? 'js') !== (model.centerBased?.agentTarget ?? 'js')
+      // C4 — compare the RESOLVED target for the same reason as the grid above:
+      // `agentTarget: 'auto'` re-picks as the agent graph is edited. Identical to
+      // the old comparison for an explicit target.
+      || (resolveEngines(prev).agents?.requested ?? 'js') !== (resolveEngines(model).agents?.requested ?? 'js')
       // The Agent Update Mode (sync/async — independent of the grid's updateMode)
       // changes the attribute-buffer allocation (double- vs single-buffered) in
       // createAgentStore, so it needs a full reinit too.
@@ -6401,7 +6445,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       // full-reinit dimsModel (W/H + gridDepth + dimension).
       const curD = gridDepth.current;
       const modelDepth = model.properties.dimension === '3d' ? Math.max(1, model.properties.gridDepth ?? 1) : 1;
-      const effModel = withEffectiveNeighborhoods(model);
+      const effModel = withPipelineModel(model);
       let dimsModel = (model.properties.gridWidth === curW && model.properties.gridHeight === curH && modelDepth === curD)
         ? effModel
         : { ...effModel, properties: { ...effModel.properties, gridWidth: curW, gridHeight: curH, gridDepth: curD, dimension: curD > 1 ? '3d' as const : effModel.properties.dimension } };
@@ -6416,28 +6460,18 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       // dims-derived regions, so they must see the same override the grid
       // compilers get (the resize hash-reserve/offset-desync fix).
       const agentResult = compileAgentModel(result.stopMessages.length, dimsModel);
-      // Show Code follows the selected target — same dispatch as compileModel().
+      // C4 — Show Code is ALWAYS the JS reference source (same as compileModel()).
       // Agents-only model → suppress the expected cell "No nodes / No Step" error.
       const gridOn = dimsModel.topologyMode?.gridCells !== false;
+      setCompiledCode(referenceSourceFor(model, result, buildFullCode));
       if (dimsModel.properties.useWebGPU) {
         try {
           const wgpu = compileGraphWebGPU(dimsModel.graphNodes, dimsModel.graphEdges, dimsModel);
-          setCompiledCode(wgpu.shaderCode || '(no shader emitted)');
           setCompileError(gridOn ? (wgpu.error || result.error || '') : '');
         } catch (e) {
-          setCompiledCode('');
           setCompileError(gridOn ? String((e as Error)?.message || e) : '');
         }
-      } else if (dimsModel.properties.useWasm) {
-        setCompiledCode(
-          '/* WebAssembly target selected.\n' +
-          ' * The compiled module is a binary WASM blob — not human-readable.\n' +
-          ' * Switch to "Debug / Reference (JS)" in Model Properties to inspect generated code.\n' +
-          ' */'
-        );
-        setCompileError(gridOn ? (result.error ?? '') : '');
       } else {
-        setCompiledCode(buildFullCode(result));
         setCompileError(gridOn ? (result.error ?? '') : '');
       }
       // Surface the AGENT graph's compile error too (mirrors the init path).
@@ -11399,17 +11433,26 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
           <span>{actualFps} FPS</span>
           <span>{actualGps} g/s</span>
           {(compileTargetInfo.gridCellsOn || compileTargetInfo.agents) && (() => {
-            const failed = compileTargetInfo.grid === 'WebGPU' && gridWebgpuStatusRef.current === 'failed';
+            // C4 — prefer the WORKER's own resolved view when it has replied
+            // (C3's `getDiagnostics`), because it includes the worker-side safety
+            // nets the model cannot predict; fall back to the model-side
+            // resolution before the first reply. One label, one source at a time.
+            const wGrid = diagnostics?.engine?.grid ?? null;
+            const wAgents = diagnostics?.engine?.agents ?? null;
+            const failed = wGrid ? wGrid === 'webgpu-failed'
+              : compileTargetInfo.grid === 'WebGPU' && gridWebgpuStatusRef.current === 'failed';
             // C1 (P4): amber whenever the ENGINE is not running what the model
             // asked for — a runtime device failure OR a compile-gate demotion
             // (which used to reach only the console).
             const demoted = compileTargetInfo.demotions.length > 0;
             const amber = failed || demoted;
+            const label = (e: string) => (e === 'webgpu' ? 'WebGPU' : e === 'wasm' ? 'WASM' : 'JS');
             const parts: string[] = [];
-            if (compileTargetInfo.gridCellsOn) parts.push(failed ? 'WebGPU✗' : compileTargetInfo.grid);
+            if (compileTargetInfo.gridCellsOn) {
+              parts.push(failed ? 'WebGPU✗' : label(wGrid ?? compileTargetInfo.grid.toLowerCase()));
+            }
             if (compileTargetInfo.agents) {
-              const a = compileTargetInfo.agents === 'webgpu' ? 'WebGPU' : compileTargetInfo.agents === 'wasm' ? 'WASM' : 'JS';
-              parts.push(`agents ${a}`);
+              parts.push(`agents ${label(wAgents ?? compileTargetInfo.agents)}`);
             }
             const title = (failed
               ? 'The selected WebGPU grid target failed to initialise on this device — the simulation falls back to JavaScript where possible (see the error notice). Change the Compile Target in Properties → Execution.'

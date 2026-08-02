@@ -340,6 +340,12 @@ export type Topology = '2d-grid';
  *  engine is dimension-agnostic (`total = W*H*D`, a 3-tuple offset table, a
  *  `_layer` decode); only the renderer differs. */
 export type Dimension = '2d' | '3d';
+/** C4 (P1) — a compile ENGINE, per layer. `'js'` is the readable semantic
+ *  reference (and the always-runnable fallback), not a production choice. */
+export type EngineId = 'js' | 'wasm' | 'webgpu';
+/** What the user SELECTED for a layer: a concrete engine, or `'auto'` = "the
+ *  fastest engine this model can use", resolved + displayed by `resolveEngines`. */
+export type EngineChoice = EngineId | 'auto';
 export type UpdateMode = 'synchronous' | 'asynchronous';
 export type AsyncScheme = 'random-order' | 'random-independent' | 'cyclic';
 
@@ -411,17 +417,38 @@ export interface ModelProperties {
   thumbnail?: string;
   /** Optional simulator auto-pause rules. Undefined = disabled. */
   endConditions?: EndConditions;
+  /** C4 (P1) — the CA-grid ENGINE the user selected. `'auto'` means "pick the
+   *  fastest engine this model can use" and is resolved (and DISPLAYED) by
+   *  `resolveEngines` in [engineResolution.ts](engineResolution.ts); the other
+   *  three name an engine explicitly. Absent ⇒ `migrateEngineField` derives the
+   *  EXPLICIT equivalent of the legacy `useWebGPU`/`useWasm` flags on load, so a
+   *  legacy file behaves byte-identically and never silently becomes `'auto'`.
+   *
+   *  This is the field the UI writes. `useWasm`/`useWebGPU` below are its
+   *  RESOLVED MIRROR (see their doc comments). */
+  engine?: EngineChoice;
   /** Wave 2: when true, the simulator runs the WASM-compiled step instead of
-   *  the JS-compiled step. **Default for new models** (EMPTY_MODEL sets it true).
-   *  The WASM compiler falls back to JS silently if the graph references a node
-   *  type whose WASM emit is not implemented (rare — node coverage is complete);
-   *  the user can flip this off at any time to force JS. */
+   *  the JS-compiled step.
+   *
+   *  **C4: this is now the RESOLVED MIRROR of `engine`, not the user's choice.**
+   *  It is kept because it is the representation every downstream consumer
+   *  already reads (the worker init message, `computeLayoutFromModel`, the
+   *  WebGPU/WASM node gates, the CaNode badge), which is what makes the engine
+   *  enum byte-identical for existing models AND lets an older build open a file
+   *  written by a newer one. `withResolvedEngine(model)` bakes it from `engine`
+   *  at every consumption point and at save time. In-app code should read
+   *  `resolveEngines(model)` rather than this flag; the flag may lag a graph edit
+   *  on an `'auto'` model until the next engine write / save.
+   *  REMOVAL SCHEDULE: one release cycle of back-compat, then the mirror goes and
+   *  `engine` becomes the only representation. */
   useWasm?: boolean;
   /** Wave 3: when true, the simulator runs the WGSL-compiled compute shaders
-   *  on WebGPU. Mutually exclusive with useWasm — the UI enforces this via a
-   *  3-way radio (JS / WASM / WebGPU); a worker-side safety net prefers
-   *  WebGPU when both flags are somehow set on a loaded file. Sync mode only:
-   *  the UI greys out the async controls when this is on. */
+   *  on WebGPU. Mutually exclusive with useWasm — the UI enforces this via the
+   *  Engine radio; a worker-side safety net prefers WebGPU when both flags are
+   *  somehow set on a loaded file. Sync mode only: the UI greys out the async
+   *  controls when this is on.
+   *
+   *  **C4: the RESOLVED MIRROR of `engine`** — see `useWasm` above. */
   useWebGPU?: boolean;
   /** WebGPU only: how often (in generations) to read the GPU stop-flag back
    *  to CPU during a step batch. Each readback is a mapAsync round-trip that
@@ -1053,12 +1080,15 @@ export interface CenterBasedConfig {
    *  cluster; explicit Form Bond / Break Bond nodes + the glue brush give
    *  per-rule control on top. */
   autoBond?: boolean;
-  /** Agent-engine compile target, INDEPENDENT of the grid target
-   *  (model.properties.useWasm/useWebGPU). 'js' (default) until Phase F ports
-   *  compileAgentGraph to WASM/WebGPU. Grid and agents can differ:
-   *  e.g. grid='webgpu' (diffusion) + agentTarget='wasm' (async agents).
-   *  Resolved (and clamped to what's implemented) via `agentTargetOf`. */
-  agentTarget?: 'js' | 'wasm' | 'webgpu';
+  /** Agent ENGINE, INDEPENDENT of the grid engine (`properties.engine`). Grid
+   *  and agents can differ: e.g. a WebGPU grid (diffusion) driving WASM agents.
+   *
+   *  C4 (P1): `'auto'` = "the fastest engine this agent graph can use", resolved
+   *  + displayed by `resolveEngines`. Absent ⇒ the historical `'js'` resolution
+   *  (migration deliberately does NOT flip existing files to `'auto'`).
+   *  A concrete value is clamped to what the graph actually supports by
+   *  `agentTargetOf` (the file-load safety net). */
+  agentTarget?: EngineChoice;
   /** Agent update synchronicity, INDEPENDENT of the grid's
    *  `model.properties.updateMode`. The user can run a synchronous grid rule
    *  with asynchronous agents, and vice versa.

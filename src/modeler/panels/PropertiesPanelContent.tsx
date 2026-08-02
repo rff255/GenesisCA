@@ -2,7 +2,7 @@ import { useModel } from '../../model/ModelContext';
 import type {
   BoundaryTreatment, UpdateMode, AsyncScheme, CAModel,
   EndConditions, EndConditionOp, IndicatorEndCondition,
-  SkipIsolatedEmptyConfig,
+  SkipIsolatedEmptyConfig, EngineChoice, EngineId,
 } from '../../model/types';
 import {
   diagnoseTargets, ENGINE_LABEL, REASON_CLASS_TAG, REASON_CLASS_TITLE,
@@ -21,6 +21,7 @@ import type { CenterBasedNumericKey } from '../../model/centerBased';
 import { isAgentGraphWasmSupported } from '../vpl/compiler/agentWasm/compile';
 import { isAgentGraphWebGPUSupported } from '../vpl/compiler/agentWebgpu/compile';
 import { AgentCapabilitiesSection } from './AgentCapabilitiesSection';
+import { resolveEngines, engineFlags, type LayerResolution } from '../../model/engineResolution';
 import { resolveAgentProfile, applyCapabilityEdit } from '../../model/agentCapabilities';
 import { isGraphFrequencyMetric, type GraphMetric } from '../../simulator/engine/graphMetrics';
 import styles from './PanelContent.module.css';
@@ -75,6 +76,99 @@ function CollapsibleSection({ id, title, bare = false, children }: {
   return <div className={styles.section}>{titleRow}{body}</div>;
 }
 
+// --- C4 (P1) — the ENGINE radio ---------------------------------------------
+// One control per layer: an INTENT (`Auto`) or an engine. Auto shows what it
+// resolved to and why, so the pick is never silent. JS is demoted behind an
+// "Advanced" reveal — it is the readable semantic reference (and the fallback
+// engine), not a production choice.
+const ENGINE_LABEL_SHORT: Record<EngineId, string> = { js: 'JS', wasm: 'WebAssembly', webgpu: 'WebGPU' };
+
+function EngineRadio({ name, label, labelColor, res, onSelect, hints, webgpuTag, footer }: {
+  /** Radio group name — must differ between the grid and agent radios. */
+  name: string;
+  label: string;
+  labelColor?: string;
+  res: LayerResolution;
+  onSelect: (choice: EngineChoice) => void;
+  /** Per-engine descriptions (live, so they can reflect this model's gates). */
+  hints: Record<EngineChoice, string>;
+  /** Small tag next to WebGPU. The GRID's WebGPU engine is synchronous-only;
+   *  the AGENT one is not (it runs async agent models), so the tag is per-radio. */
+  webgpuTag?: string;
+  footer?: ReactNode;
+}) {
+  // Manual toggle, but ALWAYS open when JS is the current selection — otherwise
+  // the selected option would be hidden inside a collapsed reveal.
+  const [advOpenState, setAdvOpen] = useState(false);
+  const advOpen = advOpenState || res.selected === 'js';
+  const demoted = res.resolved !== res.requested;
+  const badge = res.auto
+    ? { text: `Auto → ${ENGINE_LABEL_SHORT[res.resolved]}`, amber: false }
+    : demoted
+      ? { text: `${ENGINE_LABEL_SHORT[res.requested]} → running ${ENGINE_LABEL_SHORT[res.resolved]}`, amber: true }
+      : null;
+  const Option = ({ value, title, tag }: { value: EngineChoice; title: string; tag?: string }) => (
+    <label style={{ display: 'flex', alignItems: 'flex-start', gap: 6, cursor: 'pointer', fontSize: '0.72rem' }}>
+      <input
+        type="radio"
+        name={name}
+        checked={res.selected === value}
+        onChange={() => onSelect(value)}
+        style={{ marginTop: 2 }}
+      />
+      <span>
+        <strong>{title}</strong>
+        {tag && <span style={{ marginLeft: 5, fontSize: '0.56rem', color: '#888', border: '1px solid #3a3f49', borderRadius: 3, padding: '0 4px' }}>{tag}</span>}
+        <br />
+        <span style={{ color: '#888', fontSize: '0.66rem' }}>{hints[value]}</span>
+      </span>
+    </label>
+  );
+  return (
+    <div style={{ marginTop: 14, borderTop: '1px solid #333', paddingTop: 10 }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 6 }}>
+        <label className={styles.fieldLabel} style={{ margin: 0, color: labelColor }}>{label}</label>
+        {badge && (
+          <span
+            title={res.reason || undefined}
+            style={{
+              fontSize: '0.58rem', fontWeight: 700, padding: '1px 6px', borderRadius: 9,
+              border: `1px solid ${badge.amber ? 'rgba(224,160,80,.45)' : 'rgba(92,191,122,.45)'}`,
+              background: badge.amber ? 'rgba(224,160,80,.13)' : 'rgba(92,191,122,.13)',
+              color: badge.amber ? '#e0a050' : '#5cbf7a', whiteSpace: 'nowrap',
+            }}
+          >{badge.text}</span>
+        )}
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 2 }}>
+        <Option value="auto" title="Auto" tag="recommended" />
+        {res.reason && (
+          <div style={{
+            fontSize: '0.62rem', color: '#9aa3b2', background: '#1b1e25',
+            border: '1px solid #22262e', borderLeft: `2px solid ${demoted ? '#e0a050' : '#5cbf7a'}`,
+            borderRadius: '0 4px 4px 0', padding: '4px 7px', margin: '-2px 0 2px 19px',
+          }}>{res.reason}</div>
+        )}
+        <Option value="wasm" title="WebAssembly" />
+        <Option value="webgpu" title="WebGPU" tag={webgpuTag} />
+        <div style={{ marginTop: 4, borderTop: '1px dashed #2f343d', paddingTop: 7 }}>
+          <span
+            onClick={() => setAdvOpen(o => !o)}
+            style={{ fontSize: '0.62rem', color: '#888', cursor: 'pointer', userSelect: 'none' }}
+            title="Engines for debugging, not for running models"
+          >{advOpen ? '▾' : '▸'} Advanced</span>
+          {advOpen && (
+            <div style={{ marginTop: 7, paddingLeft: 9, borderLeft: '1px solid #22262e' }}>
+              <Option value="js" title="Debug / Reference (JS)" />
+            </div>
+          )}
+        </div>
+      </div>
+      {footer}
+    </div>
+  );
+}
+
 // --- C1 (P2) — Target Compatibility readout ---------------------------------
 // Which engines this model can use, per layer, and WHY not the others. Every
 // verdict comes from `diagnoseTargets`, which calls the REAL gates — so this can
@@ -111,8 +205,10 @@ function CompatibilityBlock({ model }: { model: CAModel }) {
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 8, marginBottom: 4 }}>
             <span style={{ fontSize: '0.6rem', color: '#b58fd6', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{layer.label}</span>
             <span style={{ fontSize: '0.62rem', color: layer.demotionReason ? '#e0a050' : '#888' }}>
+              {/* C4 — name the SELECTION as well as the outcome, so "Auto" is
+                  never mistaken for an engine of its own. */}
               {layer.requested === layer.resolved
-                ? <>running <b style={{ color: '#ddd' }}>{ENGINE_LABEL[layer.resolved]}</b></>
+                ? <>{layer.selected === 'auto' && <span style={{ color: '#5cbf7a' }}>Auto → </span>}running <b style={{ color: '#ddd' }}>{ENGINE_LABEL[layer.resolved]}</b></>
                 : <>requested <b>{ENGINE_LABEL[layer.requested]}</b> → running <b>{ENGINE_LABEL[layer.resolved]}</b></>}
             </span>
           </div>
@@ -260,6 +356,11 @@ export function PropertiesPanelContent({ mode = 'list' }: PanelContentProps = {}
   // 3D Grid CA / Bond-Graph Morphogenesis (M0a) mode state.
   const topo = model.topologyMode ?? { gridCells: true, agents: false };
   const is3d = (properties.dimension ?? '2d') === '3d';
+  // C4 (P1) — the resolved engine per layer, from the ONE resolver. Everything
+  // that used to key off the raw `useWebGPU` / `useWasm` mirror flags reads this
+  // instead, so `engine: 'auto'` lights up the same UI an explicit pick does.
+  const engines = useMemo(() => resolveEngines(model), [model]);
+  const gridIsWebgpu = engines.grid.resolved === 'webgpu';
   const ecReorder = useListReorder(
     properties.endConditions?.indicatorConditions || [],
     reorderEndConditions,
@@ -438,7 +539,7 @@ export function PropertiesPanelContent({ mode = 'list' }: PanelContentProps = {}
           <div className={styles.field}>
             <label className={styles.fieldLabel}>Update Mode</label>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 2 }}>
-              <label style={{ display: 'flex', alignItems: 'flex-start', gap: 6, cursor: properties.useWebGPU ? 'not-allowed' : 'pointer', fontSize: '0.72rem', opacity: properties.useWebGPU ? 0.55 : 1 }}>
+              <label style={{ display: 'flex', alignItems: 'flex-start', gap: 6, cursor: gridIsWebgpu ? 'not-allowed' : 'pointer', fontSize: '0.72rem', opacity: gridIsWebgpu ? 0.55 : 1 }}>
                 <input
                   type="radio"
                   name="updateMode"
@@ -456,15 +557,15 @@ export function PropertiesPanelContent({ mode = 'list' }: PanelContentProps = {}
                 </span>
               </label>
               <label
-                style={{ display: 'flex', alignItems: 'flex-start', gap: 6, cursor: properties.useWebGPU ? 'not-allowed' : 'pointer', fontSize: '0.72rem', opacity: properties.useWebGPU ? 0.55 : 1 }}
-                title={properties.useWebGPU ? 'WebGPU target requires synchronous update mode (cells run in parallel on the GPU).' : undefined}
+                style={{ display: 'flex', alignItems: 'flex-start', gap: 6, cursor: gridIsWebgpu ? 'not-allowed' : 'pointer', fontSize: '0.72rem', opacity: gridIsWebgpu ? 0.55 : 1 }}
+                title={gridIsWebgpu ? 'This model runs on WebGPU, where cells update in parallel — asynchronous mode is a CPU-engine rule.' : undefined}
               >
                 <input
                   type="radio"
                   name="updateMode"
                   value="asynchronous"
                   checked={properties.updateMode === 'asynchronous'}
-                  disabled={!!properties.useWebGPU}
+                  disabled={gridIsWebgpu}
                   onChange={() => updateProperties({ updateMode: 'asynchronous' as UpdateMode })}
                   style={{ marginTop: 2 }}
                 />
@@ -478,7 +579,7 @@ export function PropertiesPanelContent({ mode = 'list' }: PanelContentProps = {}
               </label>
             </div>
           </div>
-          {properties.updateMode === 'asynchronous' && !properties.useWebGPU && (
+          {properties.updateMode === 'asynchronous' && !gridIsWebgpu && (
             <div className={styles.field}>
               <label className={styles.fieldLabel}>Asynchronous Update Scheme</label>
               <select
@@ -503,69 +604,49 @@ export function PropertiesPanelContent({ mode = 'list' }: PanelContentProps = {}
             </div>
           )}
 
-          <div style={{ marginTop: 14, borderTop: '1px solid #333', paddingTop: 10 }}>
-            <label className={styles.fieldLabel} style={{ marginBottom: 4 }}>Compile Target</label>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 2 }}>
-              <label style={{ display: 'flex', alignItems: 'flex-start', gap: 6, cursor: 'pointer', fontSize: '0.72rem' }}>
-                <input
-                  type="radio"
-                  name="compileTarget"
-                  checked={!!properties.useWasm && !properties.useWebGPU}
-                  onChange={() => updateProperties({ useWasm: true, useWebGPU: false })}
-                  style={{ marginTop: 2 }}
-                />
-                <span>
-                  <strong>WebAssembly (default)</strong>
-                  <br />
-                  <span style={{ color: '#888', fontSize: '0.66rem' }}>
-                    Hand-compiled WASM module — typically several times faster than JS on dense neighborhoods. Production target for most models.
-                  </span>
-                </span>
-              </label>
-              <label style={{ display: 'flex', alignItems: 'flex-start', gap: 6, cursor: 'pointer', fontSize: '0.72rem' }}>
-                <input
-                  type="radio"
-                  name="compileTarget"
-                  checked={!!properties.useWebGPU}
-                  onChange={() => updateProperties({ useWebGPU: true, useWasm: false, updateMode: 'synchronous' })}
-                  style={{ marginTop: 2 }}
-                />
-                <span>
-                  <strong>WebGPU (sync only)</strong>
-                  <br />
-                  <span style={{ color: '#888', fontSize: '0.66rem' }}>
-                    WGSL compute shaders on the GPU — designed for very large grids and math-heavy per-cell work. Requires synchronous update mode. Browser must support WebGPU (Chrome 127+, Firefox 141+, Safari 17.4+).{is3d ? ' In 3D, the GPU runs the simulation while the voxel renderer reads colours back each step.' : ''}
-                  </span>
-                </span>
-              </label>
-              <label style={{ display: 'flex', alignItems: 'flex-start', gap: 6, cursor: 'pointer', fontSize: '0.72rem' }}>
-                <input
-                  type="radio"
-                  name="compileTarget"
-                  checked={!properties.useWasm && !properties.useWebGPU}
-                  onChange={() => updateProperties({ useWasm: false, useWebGPU: false })}
-                  style={{ marginTop: 2 }}
-                />
-                <span>
-                  <strong>Debug / Reference (JS)</strong>
-                  <br />
-                  <span style={{ color: '#888', fontSize: '0.66rem' }}>
-                    Plain JavaScript compile target. Slower but human-readable in Show Code, with full node coverage. Useful for prototyping and verifying WASM/WebGPU parity.
-                  </span>
-                </span>
-              </label>
-            </div>
-            <span style={{ color: '#888', fontSize: '0.62rem', marginTop: 6, display: 'block' }}>
-              Targets are mutually exclusive. Switching restarts the simulator (grid state is lost).
-            </span>
-            {/* B4B — WebGPU stop-check interval. Greyed unless WebGPU is selected. */}
+          {/* C4 (P1) — the ENGINE radio. `Auto` declares an INTENT and shows
+              what it resolved to; JS sits behind the Advanced reveal. The
+              selection writes `properties.engine` AND its legacy mirror
+              (useWasm/useWebGPU) in one dispatch, so an older build opening the
+              file — and every consumer that still reads the flags — sees the
+              same engine. Picking WebGPU explicitly also forces synchronous
+              update mode, exactly as the old radio did. */}
+          <EngineRadio
+            name="compileTarget"
+            label="Engine"
+            webgpuTag="sync only"
+            res={engines.grid}
+            onSelect={choice => {
+              const flags = engineFlags(
+                choice === 'auto' ? resolveEngines({ ...model, properties: { ...properties, engine: 'auto' } }).grid.requested : choice,
+              );
+              updateProperties(choice === 'webgpu'
+                ? { engine: choice, ...flags, updateMode: 'synchronous' }
+                : { engine: choice, ...flags });
+            }}
+            hints={{
+              auto: 'Picks the fastest engine this model can use, and re-picks as you edit. Never picks an engine the model cannot run on.',
+              wasm: 'Hand-compiled WASM module — typically several times faster than JS on dense neighborhoods, and exact: f64 math on one shared seeded stream, bit-identical to the JS reference.',
+              webgpu: 'WGSL compute shaders on the GPU — for very large grids and math-heavy per-cell work. Requires synchronous update mode and a browser with WebGPU. Statistical parity: f32 math + a per-cell RNG, so a fixed seed does not reproduce a run exactly.'
+                + (is3d ? ' In 3D, the GPU runs the simulation while the voxel renderer reads colours back each step.' : ''),
+              js: 'The readable semantic reference — breakpointable in devtools and the source Show Code displays, but the slowest engine. The other engines are verified against it. Not a production choice.',
+            }}
+            footer={(
+              <span style={{ color: '#888', fontSize: '0.62rem', marginTop: 6, display: 'block' }}>
+                Switching restarts the simulator (grid state is lost). The Compatibility block below lists what each engine can run, and why.
+              </span>
+            )}
+          />
+          <div>
+            {/* B4B — WebGPU stop-check interval. Greyed unless the RESOLVED grid
+                engine is WebGPU (so it lights up under `Auto → WebGPU` too). */}
             <div
               className={styles.field}
-              style={{ marginTop: 10, opacity: properties.useWebGPU ? 1 : 0.45 }}
+              style={{ marginTop: 10, opacity: gridIsWebgpu ? 1 : 0.45 }}
               title={
-                properties.useWebGPU
+                gridIsWebgpu
                   ? 'Check stop events every N generations. Higher = faster on WebGPU but may overshoot a stop event by up to N-1 generations. JS / WASM ignore this.'
-                  : 'WebGPU only — enable WebGPU above to use this setting.'
+                  : 'WebGPU only — this model does not run on WebGPU.'
               }
             >
               <label className={styles.fieldLabel}>WebGPU stop-check interval</label>
@@ -573,7 +654,7 @@ export function PropertiesPanelContent({ mode = 'list' }: PanelContentProps = {}
                 className={styles.numberInput}
                 min={1}
                 integer
-                disabled={!properties.useWebGPU}
+                disabled={!gridIsWebgpu}
                 value={properties.webgpuStopCheckInterval ?? 1}
                 onNumber={n => updateProperties({ webgpuStopCheckInterval: n })}
               />
@@ -733,7 +814,7 @@ export function PropertiesPanelContent({ mode = 'list' }: PanelContentProps = {}
                   <strong>Bond-Graph Agents</strong>
                   <br />
                   <span style={{ color: '#888', fontSize: '0.66rem' }}>
-                    Off-lattice agents that float in continuous space, joined by bonds that grow and divide into shape (morphogenesis). Adds a second <strong>Agents</strong> rule graph (switch graphs from the tab strip above the canvas). Agents run on the selected Agent Compile Target below (JS / WebAssembly / WebGPU).
+                    Off-lattice agents that float in continuous space, joined by bonds that grow and divide into shape (morphogenesis). Adds a second <strong>Agents</strong> rule graph (switch graphs from the tab strip above the canvas). Agents run on their own <strong>Agent Engine</strong> below (Auto / WebAssembly / WebGPU, plus Debug JS under Advanced), independent of the grid&apos;s.
                   </span>
                 </span>
               </label>
@@ -875,51 +956,39 @@ export function PropertiesPanelContent({ mode = 'list' }: PanelContentProps = {}
                   Independent of the grid&apos;s Update Mode. Positions are snapshot-integrated in both modes; this governs attribute read/write visibility.
                 </span>
 
-                {/* Agent Compile Target — INDEPENDENT of the grid's Compile Target
-                    radio above. JS = full coverage. WASM = FULL coverage with JS
-                    bit-parity (the whole catalogue; 2-5x faster on heavy rules);
-                    clamps to JS only on the array-scratch-slot budget. WebGPU
-                    (full coverage, 2D+3D, f32/statistical parity) builds a dedicated
-                    agent GPU runtime + dispatches behaviour + force shaders per step,
-                    else falls back to JS. */}
-                <div style={{ fontSize: '0.6rem', color: '#888', textTransform: 'uppercase', letterSpacing: '0.05em', margin: '6px 0 4px' }}>Agent Compile Target</div>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 5, marginTop: 2, marginBottom: 4 }}>
-                  {([
-                    ['js', 'Debug / Reference (JS)', 'Plain JavaScript agent engine — full node coverage. The agent loop is O(N) via the spatial hash.', false],
-                    ['wasm', 'WebAssembly', agentWasmSupported
-                      ? 'This agent graph runs on WebAssembly with JS bit-parity (the whole node catalogue is supported). Independent of the grid target; typically 2-5x faster than JS for heavy per-agent rules.'
-                      : 'Selectable, but this graph has too many simultaneous Get-Nearby-Agents producers for the WASM scratch budget, so it falls back to JS.', false],
-                    ['webgpu', 'WebGPU', agentWebgpuSupported
-                      ? 'This agent graph runs on WebGPU — the behaviour + force passes dispatch on the GPU. Eligible models (custom forces, async attributes, no bonds/division/field coupling — the Particle Life / Boids class) run whole frames RESIDENT on the GPU (hash built on-GPU, one readback per frame) — tens of times faster than the CPU at large populations. Other models use the per-generation path, which pays a CPU↔GPU upload/readback each step — that traffic now tracks the LIVE population, not the Max Agents ceiling, so a generous ceiling is free; below a few thousand agents JS/WASM is still usually faster. Exception: a field-coupled model whose grid is ALSO on WebGPU and whose agent-accessible cell fields are all Decimal (float) bridges the field GPU-side each step (no CPU field copy) — roughly 2x faster than the CPU bridge. Falls back to JS if WebGPU is unavailable.'
-                        + ((model.bondAttributes?.length ?? 0) > 0
-                          ? ' BOND ATTRIBUTES run on the GPU too (P3). One caveat: when BOTH endpoints of a bond write the same attribute in the SAME step, which write lands is ORDER-UNDEFINED on the GPU (the CPU targets are sequential, so the higher-id endpoint wins there). Write from one side only (the owner-id idiom), or make the rule symmetric so both endpoints compute the same value — the SDCA link rule is symmetric.'
-                          : '')
-                      : 'Selectable, but this graph uses one of the few WebGPU-fundamental rejects (median / uniform-random aggregate, toggle/next/previous indicator ops, a cross-agent overwrite write to a wired agent id — order-dependent under parallel threads — or too many array producers), so it falls back to JS.', false],
-                  ] as const).map(([val, title, hint, disabled]) => (
-                    <label
-                      key={val}
-                      style={{ display: 'flex', alignItems: 'flex-start', gap: 6, cursor: disabled ? 'not-allowed' : 'pointer', fontSize: '0.72rem', opacity: disabled ? 0.5 : 1 }}
-                      title={undefined}
-                    >
-                      <input
-                        type="radio"
-                        name="agentCompileTarget"
-                        disabled={disabled}
-                        checked={(cb?.agentTarget ?? 'js') === val}
-                        onChange={() => updateCenterBased({ agentTarget: val })}
-                        style={{ marginTop: 2 }}
-                      />
-                      <span>
-                        <strong>{title}</strong>
-                        <br />
-                        <span style={{ color: '#888', fontSize: '0.66rem' }}>{hint}</span>
+                {/* C4 (P1) - the AGENT ENGINE radio, INDEPENDENT of the grid's.
+                    Same control, same Auto semantics: Auto picks WebGPU when the
+                    agent gates pass, else WASM, else JS - and prefers a CPU engine
+                    when the model runs Overseer experiments (sweeps need seed
+                    reproducibility). The hints stay LIVE per model: they name what
+                    this graph can actually do on each engine. */}
+                {engines.agents && (
+                  <EngineRadio
+                    name="agentCompileTarget"
+                    label="Agent Engine"
+                    labelColor="#b58fd6"
+                    res={engines.agents}
+                    onSelect={choice => updateCenterBased({ agentTarget: choice })}
+                    hints={{
+                      auto: 'Picks the fastest agent engine this graph can use, and re-picks as you edit the agent rule.',
+                      wasm: agentWasmSupported
+                        ? 'This agent graph runs on WebAssembly with JS bit-parity (the whole node catalogue is supported). Typically 2-5x faster than JS for heavy per-agent rules.'
+                        : 'Selectable, but this graph has too many simultaneous Get-Nearby-Agents producers for the WASM scratch budget, so it falls back to JS.',
+                      webgpu: agentWebgpuSupported
+                        ? 'This agent graph runs on WebGPU - the behaviour + force passes dispatch on the GPU. Eligible models (custom forces, async attributes, no bonds/division/field coupling - the Particle Life / Boids class) run whole frames RESIDENT on the GPU: tens of times faster at large populations. Other models use the per-generation path, which pays a CPU-GPU round-trip each step (now sized by the LIVE population, not the Max Agents ceiling); below a few thousand agents JS/WASM is usually faster. Statistical parity: f32 + a per-agent RNG, so Set Random Seed does not pin a run.'
+                          + ((model.bondAttributes?.length ?? 0) > 0
+                            ? ' BOND ATTRIBUTES run on the GPU too (P3). One caveat: when BOTH endpoints of a bond write the same attribute in the SAME step, which write lands is ORDER-UNDEFINED on the GPU (the CPU engines are sequential, so the higher-id endpoint wins there). Write from one side only (the owner-id idiom), or make the rule symmetric so both endpoints compute the same value - the SDCA link rule is symmetric.'
+                            : '')
+                        : 'Selectable, but this graph uses one of the few WebGPU-fundamental rejects (median / uniform-random aggregate, toggle/next/previous indicator ops, a cross-agent overwrite aimed at a wired agent id - order-dependent under parallel threads - or too many array producers), so it falls back to JS.',
+                      js: 'The reference agent engine - full node coverage, and the source Show Code displays. The agent loop is already O(N) via the spatial hash, so JS is workable at small populations.',
+                    }}
+                    footer={(
+                      <span style={{ color: '#888', fontSize: '0.62rem', display: 'block', marginTop: 6, marginBottom: 4 }}>
+                        Independent of the grid&apos;s Engine. The grid and agents can run on different engines (e.g. WebGPU grid diffusion + WASM agents).
                       </span>
-                    </label>
-                  ))}
-                </div>
-                <span style={{ color: '#888', fontSize: '0.62rem', display: 'block', marginBottom: 4 }}>
-                  Independent of the grid&apos;s Compile Target. The grid and agents can run on different targets (e.g. WebGPU grid diffusion + WASM agents).
-                </span>
+                    )}
+                  />
+                )}
                 <div style={{ fontSize: '0.6rem', color: '#888', textTransform: 'uppercase', letterSpacing: '0.05em', margin: '6px 0 4px' }}>Capacity</div>
                 {Row('Max Agents', NF('maxAgents', { min: 1, integer: true }), 'Over-allocated ceiling; overflow rejects (never wraps). Changing it re-inits the engine.')}
                 {Row('Max Bonds / Agent', NF('maxBonds', { min: 0, integer: true }), '0 = no bonds (pure-force / charged-particle models); the bond store is then not allocated.')}

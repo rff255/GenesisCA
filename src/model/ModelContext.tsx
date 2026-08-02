@@ -46,6 +46,7 @@ import { migrateSetCellLooksNodes } from './setCellLooksMigration';
 import { migrateAgentAttributeSplit } from './agentAttributeSplitMigration';
 import { migrateAgentTypeRemoval } from './agentTypeRemovalMigration';
 import { migrateVariableScopeSplit } from './variableScopeMigration';
+import { migrateEngineField } from './engineFieldMigration';
 import { clearAllSavedGraphViewports, setSavedCurrentScope } from '../modeler/vpl/graphState';
 
 // ---------------------------------------------------------------------------
@@ -1601,6 +1602,11 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
       // behaviour-preserving profile). MUST run AFTER the agent-attribute/variable
       // splits (the inference scans the agent graph node types). No-op otherwise.
       m = migrateAgentCapabilities(m);
+      // C4 (P1): seed an EXPLICIT `properties.engine` from the legacy
+      // useWebGPU/useWasm flags. A legacy file gets the explicit equivalent of
+      // what it already does — it never becomes 'auto' — so its behaviour and
+      // every byte the compilers emit for it are unchanged. Idempotent.
+      m = migrateEngineField(m);
       // 3D model with 2D-authored neighbourhoods (e.g. a file whose dimension was
       // hand-edited, or saved mid-flip by an older build): seed coords3d = coords
       // with dl=0 so the slice editor + the NI codec pre-pass see the same cells

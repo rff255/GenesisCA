@@ -1,6 +1,7 @@
 import { SCHEMA_VERSION } from './schema';
 import type { CAModel, SimulationState, SerializedTypedArray, Attribute, Preset } from './types';
 import { packNI, INVALID_NI } from '../modeler/vpl/compiler/niCodec';
+import { withResolvedEngine } from './engineResolution';
 
 /** Wave A.6: migrate one v1 NeighborIndex value (slot-index string) to a
  *  v2 packed (dr, dc) i32 string using the attribute's neighborhood hint.
@@ -194,7 +195,12 @@ function stringifyCompact(value: unknown, indent = 2, level = 0, parentKey: stri
 }
 
 export function serializeModel(model: CAModel): string {
-  return stringifyCompact(model);
+  // C4 (P1): write `engine` AND its legacy mirror (`useWasm`/`useWebGPU`) in
+  // sync. `withResolvedEngine` bakes the mirror from the live resolution, so an
+  // 'auto' model saves the engine it actually resolves to and an OLDER build
+  // (which knows only the flags) opens the file and runs the same engine.
+  // Identity for every explicit choice — the flags already match.
+  return stringifyCompact(withResolvedEngine(model));
 }
 
 export function modelFilename(model: CAModel): string {
