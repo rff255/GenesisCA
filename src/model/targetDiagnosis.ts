@@ -29,10 +29,11 @@
 //   C capacity        — a resource bound with a NUMBER (blocker, number stated)
 // ===========================================================================
 
-import type { CAModel, CenterBasedConfig, EngineChoice, EngineId, GraphNode } from './types';
+import type { CAModel, CenterBasedConfig, EngineChoice, EngineId, GraphNode, ReproducibilityContract } from './types';
 import type { NodeConfig } from '../modeler/vpl/types';
 import { resolveMaxBonds } from './centerBased';
 import { resolveEngines, gridWebgpuBlockers } from './engineResolution';
+import { contractViolationFor, reproducibilityOf } from './reproducibility';
 import { cellFieldAttrsOf } from './attributeScope';
 import { residencyModelBlockers, type ResidencyGraphFacts } from './agentResidency';
 import { detectWasmIncompatibilities } from '../modeler/vpl/nodes/nodeValidation';
@@ -74,11 +75,17 @@ export interface LayerDiagnosis {
   resolved: EngineId;
   /** Set only when `resolved !== requested` — the first blocking reason. */
   demotionReason?: Reason;
+  /** C5 (P10) — set when the RESOLVED engine cannot honour the model's declared
+   *  reproducibility contract. Not a blocker: the engine runs, it just delivers
+   *  a weaker guarantee than the model claims. Straight from `resolveEngines`. */
+  contractViolation?: Reason;
   verdicts: EngineVerdict[];
 }
 
 export interface TargetDiagnosis {
   layers: LayerDiagnosis[];
+  /** C5 (P10) — the declared contract every verdict above was read against. */
+  contract: ReproducibilityContract;
 }
 
 export const ENGINE_LABEL: Record<EngineId, string> = {
@@ -224,8 +231,14 @@ function diagnoseGrid(model: CAModel): LayerDiagnosis {
     if (b.modelIssue) gpuBlockers.push(R('semantics', `${b.modelIssue} ${PRINCIPLE_SEQUENTIAL}`));
     for (const msg of b.nodeIssues) gpuBlockers.push(R('semantics', msg));
   }
+  // C5 — the honest per-device statement. The grid's per-cell PCG IS re-derived
+  // by `setRngSeed` (the worker handler writes the WASM cell AND calls
+  // `seedRngState`), so a fixed seed DOES reproduce a grid run on this device —
+  // measured on a 5-run Overseer sweep. What f32 costs is comparability with the
+  // CPU engines and across devices. This is why Exact still allows the GPU grid
+  // while it rejects the GPU agent engine (see reproducibility.ts).
   const gpuNotes: Reason[] = [
-    R('reproducibility', 'Statistical parity — f32 math and a per-cell RNG stream. Statistically equivalent to the CPU engines, never bit-identical, and a fixed seed does not reproduce a run exactly.'),
+    R('reproducibility', 'Statistical parity vs the CPU engines — f32 math and a per-cell RNG stream, so the numbers are never bit-identical to WASM/JS and may differ on another device. A fixed seed DOES reproduce a run on this device (Set Random Seed re-derives the per-cell streams), so Exact still allows the GPU here.'),
   ];
   if (model.properties.skipIsolatedEmpty?.enabled) {
     gpuNotes.push(R('fastpath', 'Skip Isolated Empty Cells is ignored on WebGPU — the GPU runs the whole grid every generation (same results, no sparse speed-up).'));
@@ -385,6 +398,10 @@ function diagnoseAgents(model: CAModel): LayerDiagnosis {
   const gpuNotes: Reason[] = [];
   if (webgpuSupported) {
     gpuNotes.push(R('reproducibility', 'Statistical parity — f32 math and a per-agent RNG stream. Statistically equivalent to the CPU engines, never bit-identical; Set Random Seed does not pin a run, so Overseer sweeps do not reproduce here.'));
+    // C5 — say so on the ENGINE row too, so the consequence of picking it is
+    // visible before it is picked (not only once it is the resolved engine).
+    const contractNote = contractViolationFor('agents', 'webgpu', reproducibilityOf(model));
+    if (contractNote) gpuNotes.push(R('reproducibility', contractNote));
     // Class F — residency, from the SAME predicate the worker uses.
     const facts = residencyFactsFromModel(model);
     const blockers = residencyModelBlockers(cfg, facts);
@@ -405,7 +422,9 @@ function diagnoseAgents(model: CAModel): LayerDiagnosis {
   return {
     layer: 'agents', label: 'Agents',
     selected: res.selected, requested: res.requested, resolved: res.resolved,
-    demotionReason, verdicts,
+    demotionReason,
+    contractViolation: res.contractViolation ? R('reproducibility', res.contractViolation) : undefined,
+    verdicts,
   };
 }
 
@@ -466,5 +485,5 @@ export function diagnoseTargets(model: CAModel): TargetDiagnosis {
   const layers: LayerDiagnosis[] = [];
   if (model.topologyMode?.gridCells !== false) layers.push(diagnoseGrid(model));
   if (model.topologyMode?.agents) layers.push(diagnoseAgents(model));
-  return { layers };
+  return { layers, contract: reproducibilityOf(model) };
 }

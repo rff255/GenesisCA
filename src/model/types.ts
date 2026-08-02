@@ -346,6 +346,18 @@ export type EngineId = 'js' | 'wasm' | 'webgpu';
 /** What the user SELECTED for a layer: a concrete engine, or `'auto'` = "the
  *  fastest engine this model can use", resolved + displayed by `resolveEngines`. */
 export type EngineChoice = EngineId | 'auto';
+/** C5 (P10) — how much run-to-run variance this model tolerates, DECLARED rather
+ *  than inherited from which engine happens to be selected.
+ *
+ *  `'exact'`       bit-reproducible trajectories: a fixed seed pins a run, so
+ *                  oracles, replays and differential comparisons hold.
+ *  `'statistical'` runs are draws from the same distribution; sweeps use N
+ *                  repeats + aggregates (mean / std / ci95).
+ *
+ *  It is an input to `Auto` (see `resolveEngines`), never an override of an
+ *  explicit engine choice. GUARDRAIL: Statistical covers stochastic variance
+ *  around the SAME rule — it never licenses answering a different question. */
+export type ReproducibilityContract = 'exact' | 'statistical';
 export type UpdateMode = 'synchronous' | 'asynchronous';
 export type AsyncScheme = 'random-order' | 'random-independent' | 'cyclic';
 
@@ -427,6 +439,16 @@ export interface ModelProperties {
    *  This is the field the UI writes. `useWasm`/`useWebGPU` below are its
    *  RESOLVED MIRROR (see their doc comments). */
   engine?: EngineChoice;
+  /** C5 (P10) — the declared REPRODUCIBILITY CONTRACT. Absent ⇒ `'exact'`
+   *  (the safe default, and what every legacy CPU model already delivers);
+   *  `migrateReproducibilityField` infers `'statistical'` on load for a file
+   *  whose RESOLVED agent engine is WebGPU, i.e. one that already runs with
+   *  per-agent-RNG variance.
+   *
+   *  Consumed by `resolveEngines` (Auto picks the fastest engine that satisfies
+   *  it) and displayed everywhere the engine is. See
+   *  [reproducibility.ts](reproducibility.ts). */
+  reproducibility?: ReproducibilityContract;
   /** Wave 2: when true, the simulator runs the WASM-compiled step instead of
    *  the JS-compiled step.
    *

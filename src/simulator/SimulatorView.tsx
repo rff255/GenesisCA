@@ -20,6 +20,7 @@ import type { VoxelRenderView } from './engine/webgpuRuntime';
 import { LightBallWidget } from './LightBallWidget';
 import { agentTargetOf, resolveMaxBonds } from '../model/centerBased';
 import { resolveEngines, withResolvedEngine, ENGINE_CHOICE_LABEL } from '../model/engineResolution';
+import { describeSweepMethodology } from '../model/reproducibility';
 // C1 (P2/P4) — the compile-target chip's amber state + its reason come from the
 // same gate-backed diagnosis the Properties Compatibility block renders.
 import { diagnoseTargets, ENGINE_LABEL, REASON_CLASS_TAG } from '../model/targetDiagnosis';
@@ -1210,7 +1211,13 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
     const demotions = diagnosis.layers
       .filter(l => l.demotionReason)
       .map(l => `${l.label}: requested ${ENGINE_LABEL[l.requested]} → running ${ENGINE_LABEL[l.resolved]}.\n[${REASON_CLASS_TAG[l.demotionReason!.class]}] ${l.demotionReason!.text}`);
-    return { gridCellsOn, grid, agents, demotions };
+    // C5 (P10) — a RESOLVED engine that cannot honour the declared contract is
+    // the same class of surprise as a demotion (the model claims a guarantee it
+    // does not deliver), so it rides the SAME amber channel: one mechanism.
+    const contractIssues = diagnosis.layers
+      .filter(l => l.contractViolation)
+      .map(l => `${l.label}: ${l.contractViolation!.text}`);
+    return { gridCellsOn, grid, agents, demotions, contractIssues, contract: diagnosis.contract };
   }, [model]);
   // 'pending' until the worker acks; 'failed' when useWebGPUStatus reports
   // ready:false while WebGPU is the selected grid target (device/init failure —
@@ -11445,7 +11452,10 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
             // asked for — a runtime device failure OR a compile-gate demotion
             // (which used to reach only the console).
             const demoted = compileTargetInfo.demotions.length > 0;
-            const amber = failed || demoted;
+            // C5 — a live contract violation is amber too (the model declares a
+            // guarantee the running engine cannot deliver).
+            const contractIssues = compileTargetInfo.contractIssues;
+            const amber = failed || demoted || contractIssues.length > 0;
             const label = (e: string) => (e === 'webgpu' ? 'WebGPU' : e === 'wasm' ? 'WASM' : 'JS');
             const parts: string[] = [];
             if (compileTargetInfo.gridCellsOn) {
@@ -11459,6 +11469,9 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
               : demoted
                 ? `${compileTargetInfo.demotions.join('\n\n')}\n\nFull readout: Properties → Compatibility.`
                 : 'Compile target(s) in use — selected in Properties → Execution. The Compatibility block in Properties lists what each engine can run and why.')
+              + (contractIssues.length > 0
+                ? `\n\n⚠ Reproducibility contract (${compileTargetInfo.contract}):\n${contractIssues.join('\n\n')}`
+                : '')
               + '\n\nClick for the fast-path diagnostics (what actually engaged this run).';
             // C3 (P4): the chip is now also the diagnostics trigger. Its own
             // relative wrapper anchors the popover to the chip rather than to the
@@ -11470,7 +11483,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
                   style={amber ? { color: '#e0a050' } : undefined}
                   title={title}
                   onClick={() => setOverlayPopup(p => (p === 'diagnostics' ? null : 'diagnostics'))}
-                >{'⚙'} {parts.join(' · ')}{demoted && !failed ? '⚠' : ''}</span>
+                >{'⚙'} {parts.join(' · ')}{(demoted || contractIssues.length > 0) && !failed ? '⚠' : ''}</span>
                 {overlayPopup === 'diagnostics' && (
                   <DiagnosticsPopover
                     diag={diagnostics}
@@ -12860,6 +12873,16 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
               compileError={overseerCompiled.error}
               hasExperiment={!!overseerCompiled.driverCode}
               modelName={model.properties.name}
+              methodology={(() => {
+                // C5 (P10) — derived from the DECLARED contract + the engines
+                // that actually resolved (never re-derived in the panel).
+                const r = resolveEngines(model);
+                return describeSweepMethodology(
+                  r.contract,
+                  { grid: r.grid.resolved, agents: r.agents?.resolved ?? null },
+                  r.agents?.contractViolation ?? r.grid.contractViolation ?? null,
+                );
+              })()}
               spatialMeta={(indicatorId: string) => {
                 // Axis metadata for the spatial aggregate charts (X labels).
                 const ind = (model.indicators || []).find(i => i.id === indicatorId);

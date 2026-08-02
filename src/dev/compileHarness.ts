@@ -20,6 +20,7 @@ import { migrateVariableScopeSplit } from '../model/variableScopeMigration';
 import { migrateAgentTypeRemoval } from '../model/agentTypeRemovalMigration';
 import { migrateAgentCapabilities } from '../model/agentCapabilities';
 import { migrateEngineField } from '../model/engineFieldMigration';
+import { migrateReproducibilityField } from '../model/reproducibilityMigration';
 import { compileGraph, compileAgentGraph } from '../modeler/vpl/compiler/compile';
 import { compileGraphWasm } from '../modeler/vpl/compiler/wasm/compile';
 import { computeLayoutFromModel, buildViewerIds } from '../modeler/vpl/compiler/wasm/layout';
@@ -184,5 +185,8 @@ export function migrateForHarness(m: CAModel): CAModel {
   // (mirrors LOAD_MODEL). Byte-identical by construction — the mapping is the
   // explicit equivalent of what the file already does.
   m = migrateEngineField(m);
+  // C5 (P10): seed the declared reproducibility contract (mirrors LOAD_MODEL).
+  // Records what the file already does — it never changes a resolved engine.
+  m = migrateReproducibilityField(m);
   return m;
 }

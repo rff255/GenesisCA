@@ -1623,8 +1623,52 @@ export function HelpView() {
             so each generation pays a round-trip instead of a whole frame running in one submit. At
             small populations WebAssembly is often faster for exactly that reason. Separately,
             <em> Cubic GRA</em> ships on WebAssembly because its Overseer sweep needs seed
-            reproducibility (class R) &mdash; a different fact that used to look like the same one.
+            reproducibility (class R) &mdash; a different fact that used to look like the same one,
+            and one you now declare directly (next section).
           </p>
+
+          <h3 className={styles.h3}>Reproducibility: Exact or Statistical</h3>
+          <p className={styles.p}>
+            How much run-to-run variance your model tolerates is a property of the <em>model</em>,
+            not of which radio button you pressed. Declare it in
+            <strong> Properties &rarr; Execution &rarr; Reproducibility</strong>, and
+            <strong> Auto</strong> becomes one sentence: <em>the fastest engine that satisfies this
+            model&rsquo;s contract</em>.
+          </p>
+          <ul className={styles.list}>
+            <li><strong>Exact</strong> (the default) &mdash; bit-reproducible trajectories. A fixed
+              seed pins a run, so oracles, replays and differential comparisons hold. Auto keeps
+              agents on a CPU engine.</li>
+            <li><strong>Statistical</strong> &mdash; runs are draws from the same distribution;
+              sweeps use N repeats and aggregates (<em>Collect Sample</em> &rarr; <em>Series
+              Stat</em>: mean / std / ci95). Auto may use the GPU agent engine.</li>
+          </ul>
+          <p className={styles.p}>
+            <strong>The guardrail</strong>: Statistical covers <em>stochastic variance around the
+            same rule</em>. It never licenses answering a different question &mdash; a rule whose
+            discrete decisions would change is not a candidate.
+          </p>
+          <p className={styles.p}>
+            <strong>Why Exact still allows the GPU for the CA grid but not for agents.</strong> The
+            two GPU layers seed their randomness differently. The <em>grid</em> gives every cell a
+            PCG stream derived from one global seed, and <em>Set Random Seed</em> re-derives those
+            streams &mdash; so a fixed seed <em>does</em> reproduce a grid run on this device (an
+            Overseer sweep on the WebGPU grid reproduces press-to-press). The <em>agent</em> engine
+            seeds its per-agent streams <em>once, when the GPU runtime is created</em>, and Set
+            Random Seed never reaches them &mdash; so two presses of Run Experiment give different
+            numbers. Exact therefore rules out the GPU agent engine and leaves the grid free. In both
+            cases the GPU works in f32, so its numbers are never bit-identical to the CPU engines and
+            may differ on another device: don&rsquo;t compare a GPU run against a CPU run.
+          </p>
+          <p className={styles.p}>
+            Auto never picks an engine that breaks the contract. If you <em>explicitly</em> choose
+            one that does &mdash; the WebGPU agent engine under Exact &mdash; nothing is overridden:
+            it runs, and the Compatibility block plus the simulator&rsquo;s <code>&#x2699;</code>
+            chip carry an amber note naming both ways out (switch the engine, or declare
+            Statistical). Loading an older file infers the contract: <em>Statistical</em> if its
+            agents already run on the GPU, otherwise <em>Exact</em>.
+          </p>
+
           <h3 className={styles.h3}>Nothing is resolved silently</h3>
           <p className={styles.p}>
             Wherever the engine resolves a value differently from what you wrote, the panel shows the
@@ -2694,6 +2738,21 @@ export function HelpView() {
             target difference). See the <strong>GoL Replicate Statistics</strong> library
             sample for the canonical loop&nbsp;&rarr;&nbsp;collect&nbsp;&rarr;&nbsp;aggregate
             idiom.
+          </p>
+          <p className={styles.p}>
+            <strong>What a sweep&rsquo;s numbers mean depends on the model&rsquo;s declared
+            reproducibility contract</strong> (Properties &rarr; Execution &mdash; see
+            &ldquo;Reproducibility: Exact or Statistical&rdquo; in the Bond-Graph Agents
+            chapter), and the panel states it in one line above the Journal. Under
+            <strong> Exact</strong> a seed pins each run, so two presses of Run Experiment
+            produce identical numbers &mdash; unless a layer runs on the GPU, where the run is
+            pinned on <em>this</em> device but its f32 numbers are engine- and
+            device-specific and must not be compared against a CPU run. Under
+            <strong> Statistical</strong> a single run is not a result: use repeats and
+            aggregates (Collect Sample &rarr; Series Stat &mdash; mean / std / ci95), which
+            is the more honest methodology for a stochastic model anyway. If the model
+            declares Exact while an engine that cannot honour it is explicitly selected,
+            the line turns amber and says so.
           </p>
         </section>
 

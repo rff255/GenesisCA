@@ -2,8 +2,11 @@ import { useModel } from '../../model/ModelContext';
 import type {
   BoundaryTreatment, UpdateMode, AsyncScheme, CAModel,
   EndConditions, EndConditionOp, IndicatorEndCondition,
-  SkipIsolatedEmptyConfig, EngineChoice, EngineId,
+  SkipIsolatedEmptyConfig, EngineChoice, EngineId, ReproducibilityContract,
 } from '../../model/types';
+import {
+  REPRODUCIBILITY_LABEL, REPRODUCIBILITY_SUMMARY, REPRODUCIBILITY_GUARDRAIL,
+} from '../../model/reproducibility';
 import {
   diagnoseTargets, ENGINE_LABEL, REASON_CLASS_TAG, REASON_CLASS_TITLE,
   type Reason, type ReasonClass,
@@ -82,6 +85,60 @@ function CollapsibleSection({ id, title, bare = false, children }: {
 // "Advanced" reveal — it is the readable semantic reference (and the fallback
 // engine), not a production choice.
 const ENGINE_LABEL_SHORT: Record<EngineId, string> = { js: 'JS', wasm: 'WebAssembly', webgpu: 'WebGPU' };
+
+// --- C5 (P10) — the declared REPRODUCIBILITY CONTRACT ------------------------
+// Placed at the TOP of Execution because it now GOVERNS the Engine radios below:
+// `Auto` reads as "the fastest engine that satisfies this contract". A violation
+// (an explicit engine the contract cannot cover) shows amber right here rather
+// than only in the Compatibility readout further down.
+const CONTRACT_ORDER: ReproducibilityContract[] = ['exact', 'statistical'];
+
+function ReproducibilityRadio({ contract, violation, onSelect }: {
+  contract: ReproducibilityContract;
+  violation: string | null;
+  onSelect: (c: ReproducibilityContract) => void;
+}) {
+  return (
+    <div className={styles.field}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+        <label className={styles.fieldLabel} style={{ margin: 0 }}>Reproducibility</label>
+        <span style={{
+          fontSize: '0.58rem', fontWeight: 700, padding: '1px 6px', borderRadius: 9, whiteSpace: 'nowrap',
+          border: `1px solid ${contract === 'exact' ? 'rgba(92,191,122,.45)' : 'rgba(90,169,224,.45)'}`,
+          background: contract === 'exact' ? 'rgba(92,191,122,.13)' : 'rgba(90,169,224,.13)',
+          color: contract === 'exact' ? '#5cbf7a' : '#5aa9e0',
+        }}>{REPRODUCIBILITY_LABEL[contract]}</span>
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 6 }}>
+        {CONTRACT_ORDER.map(c => (
+          <label key={c} style={{ display: 'flex', alignItems: 'flex-start', gap: 6, cursor: 'pointer', fontSize: '0.72rem' }}>
+            <input
+              type="radio"
+              name="reproducibility"
+              checked={contract === c}
+              onChange={() => onSelect(c)}
+              style={{ marginTop: 2 }}
+            />
+            <span>
+              <strong>{REPRODUCIBILITY_LABEL[c]}</strong>
+              <br />
+              <span style={{ color: '#888', fontSize: '0.66rem' }}>{REPRODUCIBILITY_SUMMARY[c]}</span>
+            </span>
+          </label>
+        ))}
+      </div>
+      <span style={{ color: '#777', fontSize: '0.62rem', fontStyle: 'italic', display: 'block', marginTop: 5 }}>
+        {REPRODUCIBILITY_GUARDRAIL}
+      </span>
+      {violation && (
+        <div style={{
+          fontSize: '0.62rem', color: '#e8c08a', background: 'rgba(224,160,80,.09)',
+          border: '1px solid rgba(224,160,80,.4)', borderRadius: 5, padding: '5px 8px', marginTop: 6,
+        }}>⚠ {violation}</div>
+      )}
+    </div>
+  );
+}
 
 function EngineRadio({ name, label, labelColor, res, onSelect, hints, webgpuTag, footer }: {
   /** Radio group name — must differ between the grid and agent radios. */
@@ -204,6 +261,15 @@ function CompatibilityBlock({ model }: { model: CAModel }) {
         <div key={layer.layer} style={{ marginBottom: 12 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 8, marginBottom: 4 }}>
             <span style={{ fontSize: '0.6rem', color: '#b58fd6', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{layer.label}</span>
+            {/* C5 — the declared contract, right where the engine outcome is
+                stated: these two lines are one sentence ("Exact, running WASM"). */}
+            <span style={{
+              marginRight: 'auto', fontSize: '0.54rem', fontWeight: 700, padding: '0 5px', borderRadius: 8,
+              border: `1px solid ${diagnosis.contract === 'exact' ? 'rgba(92,191,122,.4)' : 'rgba(90,169,224,.4)'}`,
+              color: diagnosis.contract === 'exact' ? '#5cbf7a' : '#5aa9e0', whiteSpace: 'nowrap',
+            }} title="The model's declared reproducibility contract (Properties → Execution).">
+              {REPRODUCIBILITY_LABEL[diagnosis.contract]}
+            </span>
             <span style={{ fontSize: '0.62rem', color: layer.demotionReason ? '#e0a050' : '#888' }}>
               {/* C4 — name the SELECTION as well as the outcome, so "Auto" is
                   never mistaken for an engine of its own. */}
@@ -227,6 +293,15 @@ function CompatibilityBlock({ model }: { model: CAModel }) {
               </span>
             </div>
           ))}
+          {/* C5 — the layer-level amber line: the engine that IS running cannot
+              honour the declared contract. Never a blocker (it runs) — a
+              mismatch between what the model claims and what it delivers. */}
+          {layer.contractViolation && (
+            <div style={{
+              marginTop: 5, fontSize: '0.62rem', color: '#e8c08a', background: 'rgba(224,160,80,.09)',
+              border: '1px solid rgba(224,160,80,.4)', borderRadius: 5, padding: '5px 8px',
+            }}>⚠ <b>Contract:</b> {layer.contractViolation.text}</div>
+          )}
         </div>
       ))}
       <span style={{ color: '#777', fontSize: '0.58rem', display: 'block', fontStyle: 'italic', borderTop: '1px solid #22252c', paddingTop: 6 }}>
@@ -532,6 +607,16 @@ export function PropertiesPanelContent({ mode = 'list' }: PanelContentProps = {}
 
       <CollapsibleSection id="execution" title="Execution">
         <div className={styles.fieldGroup}>
+          {/* C5 (P10) — the declared reproducibility contract. FIRST in the
+              section and OUTSIDE the grid-cells gate: it governs the Engine
+              radios below (Auto = the fastest engine that satisfies it) and it
+              matters most for an agents-only model, where the GPU agent engine
+              is the one thing Exact rules out. */}
+          <ReproducibilityRadio
+            contract={engines.contract}
+            violation={engines.agents?.contractViolation ?? engines.grid.contractViolation ?? null}
+            onSelect={c => updateProperties({ reproducibility: c })}
+          />
           {/* Cell-grid execution — the GRID's update mode + compile target. Hidden
               for an agents-only model (no lattice to simulate); the agent layer's
               own update mode + compile target live in the Bond-Graph Agents block. */}

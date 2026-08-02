@@ -1,0 +1,360 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>C5 — The declared reproducibility contract (Exact | Statistical)</title>
+<style>
+  :root{
+    --bg:#0c0d10; --panel:#15171c; --elev:#1b1e25; --border:#2a2f39;
+    --border-muted:#22262e; --text:#dfe5ef; --muted:#8b93a3; --dim:#6b7280;
+    --accent:#e8a13a; --amber:#e0a050; --green:#5cbf7a; --cyan:#4cc9f0;
+    --red:#e05050; --violet:#b58fd6; --blue:#5aa9e0;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);
+       font:14px/1.55 -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;padding:28px}
+  h1{font-size:20px;margin:0 0 4px;color:var(--accent)}
+  h2{font-size:15px;margin:34px 0 10px;color:var(--text);
+     border-bottom:1px solid var(--border);padding-bottom:6px}
+  h3{font-size:13px;margin:20px 0 8px;color:var(--muted);
+     text-transform:uppercase;letter-spacing:.7px}
+  p{color:var(--muted);max-width:78ch;margin:8px 0}
+  code{background:var(--elev);border:1px solid var(--border-muted);border-radius:3px;
+       padding:1px 5px;font-size:12px;color:#cfd6e4}
+  .sub{color:var(--dim);font-size:12px}
+  .grid{display:flex;gap:26px;flex-wrap:wrap;align-items:flex-start}
+  .col{flex:1 1 400px;min-width:350px}
+
+  .panel{background:var(--panel);border:1px solid var(--border);border-radius:8px;
+         padding:12px 14px;font-size:12.5px}
+  .panelTitle{font-size:10px;letter-spacing:.09em;text-transform:uppercase;color:var(--dim);
+              margin:0 0 8px}
+  .fieldLabel{font-size:11px;color:#b7bfcd;font-weight:600;display:block;margin-bottom:6px}
+  .hr{border-top:1px solid #333;margin:12px 0 10px}
+  .opt{display:flex;gap:7px;align-items:flex-start;margin:0 0 8px}
+  .radio{width:12px;height:12px;border-radius:50%;border:1px solid #6d7686;flex:0 0 auto;
+         margin-top:3px;position:relative;background:#0f1116}
+  .radio.on{border-color:var(--accent)}
+  .radio.on::after{content:'';position:absolute;inset:2.5px;border-radius:50%;background:var(--accent)}
+  .optTitle{font-size:12px;color:var(--text);font-weight:600}
+  .optHint{color:#888;font-size:10.5px;display:block;line-height:1.45}
+  .rowHead{display:flex;align-items:center;justify-content:space-between;gap:8px}
+  .chip{font-size:10px;padding:2px 7px;border-radius:10px;font-weight:600;white-space:nowrap}
+  .chipGreen{border:1px solid rgba(92,191,122,.45);background:rgba(92,191,122,.13);color:var(--green)}
+  .chipAmber{border:1px solid rgba(224,160,80,.45);background:rgba(224,160,80,.13);color:var(--amber)}
+  .chipBlue{border:1px solid rgba(90,169,224,.45);background:rgba(90,169,224,.13);color:var(--blue)}
+  .why{font-size:10.5px;color:#9aa3b2;background:#1b1e25;border:1px solid #22262e;
+       border-radius:0 4px 4px 0;padding:5px 8px;margin:-2px 0 8px 19px}
+  .whyGreen{border-left:2px solid var(--green)}
+  .whyAmber{border-left:2px solid var(--amber)}
+  .guard{font-size:10.5px;color:#8b93a3;font-style:italic;margin:2px 0 0 19px}
+
+  table{border-collapse:collapse;width:100%;font-size:12px;margin:10px 0 4px}
+  th,td{border:1px solid var(--border-muted);padding:6px 9px;text-align:left;vertical-align:top}
+  th{background:var(--elev);color:#b7bfcd;font-weight:600;font-size:11px;
+     text-transform:uppercase;letter-spacing:.05em}
+  td{color:var(--muted)}
+  td b{color:var(--text)}
+  .ok{color:var(--green);font-weight:700}
+  .no{color:var(--red);font-weight:700}
+
+  .verd{display:flex;gap:7px;align-items:flex-start;padding:5px 0;border-top:1px solid #22252c}
+  .mark{flex:0 0 12px;text-align:center;font-weight:700;font-size:12px}
+  .eng{flex:0 0 96px;font-size:11px;color:#ddd}
+  .engSub{display:block;color:#888;font-size:9.5px}
+  .reasons{flex:1;min-width:0;display:flex;flex-direction:column;gap:3px}
+  .reason{display:flex;gap:6px;align-items:flex-start;font-size:10.5px;color:#b9bdc5}
+  .tag{flex:0 0 auto;font-size:9px;font-weight:700;line-height:1.4;margin-top:1px;
+       padding:0 3px;border-radius:3px}
+  .tagR{border:1px solid var(--blue);color:var(--blue)}
+  .tagS{border:1px solid var(--red);color:var(--red)}
+  .tagF{border:1px solid #8a8f99;color:#8a8f99}
+  .layerHead{display:flex;justify-content:space-between;align-items:baseline;gap:8px;margin:0 0 4px}
+  .layerName{font-size:10px;color:var(--violet);text-transform:uppercase;letter-spacing:.05em}
+
+  .note{border-radius:5px;padding:7px 10px;font-size:11px;line-height:1.5;margin:8px 0}
+  .noteAmber{border:1px solid rgba(224,160,80,.4);background:rgba(224,160,80,.09);color:#e8c08a}
+  .noteBlue{border:1px solid rgba(90,169,224,.35);background:rgba(90,169,224,.08);color:#a8cbe8}
+  .noteGreen{border:1px solid rgba(92,191,122,.35);background:rgba(92,191,122,.08);color:#a5d9b6}
+
+  .flow{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:12px 0}
+  .box{border:1px solid var(--border);background:var(--elev);border-radius:6px;
+       padding:7px 11px;font-size:11.5px;color:#cfd6e4}
+  .box b{color:var(--text)}
+  .arrow{color:var(--dim);font-size:16px}
+  .stat{background:var(--panel);border:1px solid var(--border);border-radius:6px;
+        padding:8px 11px;font-size:11px;color:var(--muted);display:inline-block;margin:4px 8px 4px 0}
+  .stat b{color:var(--text);font-size:13px;display:block}
+  .expPanel{background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:10px 12px}
+  .btnRow{display:flex;gap:6px;margin:6px 0}
+  .btn{flex:1;text-align:center;border:1px solid var(--border);background:#1a1d23;border-radius:4px;
+       padding:5px;font-size:11px;color:#cfd6e4}
+  .del{text-decoration:line-through;opacity:.5}
+</style>
+</head>
+<body>
+
+<h1>C5 — The declared reproducibility contract</h1>
+<p class="sub">P10 of the Clarity &amp; Simplification proposal · phase C5 ·
+  written plan: <code>PLAN_CLARITY_C5.md</code></p>
+
+<p>Run-to-run tolerance stops being a side-effect of which radio you pressed and becomes a
+   <b>declared model property</b>. <code>Auto</code> then reads as one sentence:
+   <i>the fastest engine that satisfies this model's declared contract</i> — and C4's
+   hard-coded <code>if (overseerConfig.enabled) pick = 'wasm'</code> special case dissolves into it.</p>
+
+<div class="flow">
+  <div class="box"><b>Before</b><br><span class="sub">pick the WebGPU agent radio</span></div>
+  <span class="arrow">→</span>
+  <div class="box">silently accept<br><span class="sub">"a seed will not reproduce this run"</span></div>
+  <span class="arrow">·</span>
+  <div class="box" style="border-color:var(--green)"><b>After</b><br><span class="sub">declare <i>Statistical</i></span></div>
+  <span class="arrow">→</span>
+  <div class="box" style="border-color:var(--green)">Auto uses the GPU<br><span class="sub">variance is visible + intended</span></div>
+</div>
+
+<!-- ============================================================= -->
+<h2>1 · Properties → Execution — the new radio, at the top of the section</h2>
+<p>Placed <b>above</b> Update Mode and Engine because it now governs them: the contract is
+   an input to <code>Auto</code>, not a consequence of it.</p>
+
+<div class="grid">
+  <div class="col">
+    <h3>Exact — the default</h3>
+    <div class="panel">
+      <p class="panelTitle">Execution</p>
+      <div class="rowHead">
+        <span class="fieldLabel" style="margin:0">Reproducibility</span>
+        <span class="chip chipGreen">Exact</span>
+      </div>
+      <div style="margin-top:8px">
+        <div class="opt">
+          <span class="radio on"></span>
+          <span>
+            <span class="optTitle">Exact</span>
+            <span class="optHint">Bit-reproducible: a fixed seed pins a run, so oracles, replays and
+              differential comparisons hold. Auto keeps agents on a CPU engine.</span>
+          </span>
+        </div>
+        <div class="opt">
+          <span class="radio"></span>
+          <span>
+            <span class="optTitle">Statistical</span>
+            <span class="optHint">Runs are draws from the same distribution; sweeps use repeats +
+              aggregates. Auto may use the GPU agent engine (f32, per-agent RNG).</span>
+          </span>
+        </div>
+        <div class="guard">Statistical covers stochastic variance around the <b>same</b> rule —
+          never a different question.</div>
+      </div>
+      <div class="hr"></div>
+      <div class="rowHead">
+        <span class="fieldLabel" style="margin:0">Agent Engine</span>
+        <span class="chip chipGreen">Auto → WASM</span>
+      </div>
+      <div class="opt" style="margin-top:6px"><span class="radio on"></span>
+        <span><span class="optTitle">Auto</span></span></div>
+      <div class="why whyGreen">This model declares <b>Exact</b>, so Auto keeps agents on WebAssembly —
+        the WebGPU agent engine seeds a per-agent RNG once at start-up and Set Random Seed never reaches it.</div>
+    </div>
+  </div>
+
+  <div class="col">
+    <h3>Statistical — the GPU-population case</h3>
+    <div class="panel">
+      <p class="panelTitle">Execution</p>
+      <div class="rowHead">
+        <span class="fieldLabel" style="margin:0">Reproducibility</span>
+        <span class="chip chipBlue">Statistical</span>
+      </div>
+      <div style="margin-top:8px">
+        <div class="opt">
+          <span class="radio"></span>
+          <span><span class="optTitle">Exact</span>
+          <span class="optHint">Bit-reproducible: a fixed seed pins a run…</span></span>
+        </div>
+        <div class="opt">
+          <span class="radio on"></span>
+          <span><span class="optTitle">Statistical</span>
+          <span class="optHint">Runs are draws from the same distribution; sweeps use repeats + aggregates.</span></span>
+        </div>
+      </div>
+      <div class="hr"></div>
+      <div class="rowHead">
+        <span class="fieldLabel" style="margin:0">Agent Engine</span>
+        <span class="chip chipGreen">Auto → WebGPU</span>
+      </div>
+      <div class="opt" style="margin-top:6px"><span class="radio on"></span>
+        <span><span class="optTitle">Auto</span></span></div>
+      <div class="why whyGreen">This model declares <b>Statistical</b> and the GPU can run this agent graph,
+        so Auto picks WebGPU.</div>
+    </div>
+  </div>
+</div>
+
+<!-- ============================================================= -->
+<h2>2 · The policy — what Auto picks under each contract</h2>
+
+<table>
+  <tr><th>Contract</th><th>Layer</th><th>Auto picks</th><th>Why</th></tr>
+  <tr>
+    <td rowspan="2"><b>Exact</b></td>
+    <td>CA grid</td>
+    <td><b>WebGPU</b> if every grid gate passes, else WASM</td>
+    <td>The GPU grid seeds a <b>per-cell</b> PCG and <code>setRngSeed</code> re-derives those
+        streams — a fixed seed <i>does</i> reproduce a run on this device.</td>
+  </tr>
+  <tr>
+    <td>Agents</td>
+    <td><b>WASM</b> if its gate passes, else JS</td>
+    <td>The GPU agent engine seeds its per-agent PCG <b>once at runtime creation</b>;
+        <code>setRngSeed</code> never reaches it.</td>
+  </tr>
+  <tr>
+    <td rowspan="2"><b>Statistical</b></td>
+    <td>CA grid</td>
+    <td><b>WebGPU</b> if every grid gate passes, else WASM</td>
+    <td>Unchanged — the grid policy is contract-independent.</td>
+  </tr>
+  <tr>
+    <td>Agents</td>
+    <td><b>WebGPU</b> → WASM → JS</td>
+    <td>The library policy: fastest engine the gates accept.</td>
+  </tr>
+</table>
+
+<p><b>The asymmetry is the point</b> — and it is measured, not assumed. A 5-run Overseer
+   sweep on the WebGPU <i>grid</i> reproduced (<code>460.8 ± 15.707</code>, identical across
+   presses), while the documented library exceptions that force CPU for sweep reproducibility
+   (Cubic GRA, Graph Metrics) are <i>agent</i>-target exceptions.</p>
+
+<h3>The Overseer special case dissolves</h3>
+<table>
+  <tr><th></th><th>C4 (today)</th><th>C5 (this phase)</th></tr>
+  <tr><td>Mechanism</td>
+      <td class="del">two hard-coded <code>if (overseerConfig.enabled)</code> branches</td>
+      <td>the declared contract — no mention of the Overseer in the resolution</td></tr>
+  <tr><td>Cubic GRA (agents, Overseer)</td>
+      <td>WASM <span class="sub">— "sweeps need CPU reproducibility"</span></td>
+      <td>WASM <span class="sub">— "this model declares Exact…"</span> <span class="ok">same engine</span></td></tr>
+  <tr><td>An Overseer model declaring <b>Statistical</b></td>
+      <td>forced to WASM regardless</td>
+      <td>keeps the GPU + the panel states the methodology</td></tr>
+</table>
+
+<!-- ============================================================= -->
+<h2>3 · Compatibility readout (C1) — the contract chip and the violation note</h2>
+<p>An <b>explicit</b> engine that cannot honour the declared contract is not a blocker — it
+   runs. It gets an <b>[R]</b> note and an amber line, and the layer header carries the contract.</p>
+
+<div class="panel" style="max-width:640px">
+  <p class="panelTitle">Compatibility</p>
+  <div class="layerHead">
+    <span class="layerName">Agents</span>
+    <span style="display:flex;gap:6px;align-items:center">
+      <span class="chip chipGreen" style="font-size:9px;padding:1px 6px">Exact</span>
+      <span style="font-size:10.5px;color:#888">running <b style="color:#ddd">WebGPU</b></span>
+    </span>
+  </div>
+  <div class="verd">
+    <span class="mark ok">✓</span>
+    <span class="eng">WebAssembly</span>
+    <span class="reasons">
+      <span class="reason"><span class="tag tagR">R</span>
+        <span>Exact and seedable — f64 math on one shared seeded stream, bit-identical to the JS reference.</span></span>
+    </span>
+  </div>
+  <div class="verd">
+    <span class="mark ok">✓</span>
+    <span class="eng">WebGPU<span class="engSub">running</span></span>
+    <span class="reasons">
+      <span class="reason"><span class="tag tagR">R</span>
+        <span>Statistical parity — f32 math and a per-agent RNG stream.</span></span>
+      <span class="reason"><span class="tag tagR">R</span>
+        <span style="color:#e8c08a"><b>This model declares Exact</b>, but the WebGPU agent engine seeds
+        its per-agent RNG once when it starts and Set Random Seed never reaches it, so a fixed seed does
+        not reproduce a run. Switch the Agent Engine to Auto or WebAssembly, or declare Statistical.</span></span>
+    </span>
+  </div>
+</div>
+
+<div class="note noteAmber" style="max-width:640px">
+  ⚠ <b>Contract:</b> Agents run on WebGPU, which cannot honour the declared <b>Exact</b> contract.
+</div>
+<p class="sub">The same sentence rides the simulator's <code>⚙</code> chip tooltip (which is already
+   amber for every resolved ≠ requested state — no new state, no new colour).</p>
+
+<!-- ============================================================= -->
+<h2>4 · Overseer Experiments — the methodology line</h2>
+<p>One line under Run / Abort, derived from the contract + the resolved engines. It answers
+   the only question that matters before you read a number off a sweep:
+   <i>is a single run a result?</i></p>
+
+<div class="grid">
+  <div class="col">
+    <div class="expPanel">
+      <p class="panelTitle">Overseer Experiments</p>
+      <div class="btnRow"><span class="btn">▶ Run Experiment</span><span class="btn">■ Abort</span></div>
+      <div class="note noteBlue">
+        <b>Statistical contract</b> — runs are draws from one distribution. Use repeats +
+        aggregates (Collect Sample → Series Stat: mean / std / ci95); a single run is not a result.
+      </div>
+    </div>
+  </div>
+  <div class="col">
+    <div class="expPanel">
+      <p class="panelTitle">Overseer Experiments</p>
+      <div class="btnRow"><span class="btn">▶ Run Experiment</span><span class="btn">■ Abort</span></div>
+      <div class="note noteGreen">
+        <b>Exact contract</b> — Set Random Seed pins each run bit-exactly; two presses of
+        Run Experiment produce identical numbers.
+      </div>
+    </div>
+  </div>
+</div>
+<p class="sub">A third form covers <b>Exact with a GPU layer</b>: <i>“…pins a run on this device.
+   The GPU is f32, so these numbers are engine- and device-specific: don't compare them against a
+   CPU run.”</i> A live contract violation replaces the line with its amber text.</p>
+
+<!-- ============================================================= -->
+<h2>5 · Migration — and the coherence requirement</h2>
+
+<p><b>Infer <code>statistical</code> iff the model's RESOLVED agent engine is WebGPU</b>; everything
+   else <code>exact</code>. Over the shipped library:</p>
+
+<div>
+  <span class="stat"><b>11</b>statistical <span class="sub">(resolved agents = WebGPU)</span></span>
+  <span class="stat"><b>18</b>exact</span>
+  <span class="stat"><b>0</b>engine resolutions changed</span>
+</div>
+
+<table>
+  <tr><th>statistical</th><th>exact (a sample)</th></tr>
+  <tr>
+    <td>Boids - Flocking · Boids - Hemifield Vision · Chemotaxis - Aggregation ·
+        Game of Life on Agents · Life on Bonds · Morphogenesis - 3D / Differential / Growing Tissue ·
+        Particle Life · Particle Life 3D · SDCA</td>
+    <td>Accretor · Amphiphile · <b>Ant Necrophoresis</b> (WASM agents) · <b>Cubic GRA</b> (WASM agents,
+        Overseer) · <b>Graph Metrics</b> · Game Of Life · GoL Replicate Statistics · Gray-Scott · … </td>
+  </tr>
+</table>
+
+<div class="note noteGreen" style="max-width:78ch">
+  <b>Coherence holds structurally.</b> Every shipped file carries an <b>explicit</b> engine on
+  both layers (C4's migration never produces <code>'auto'</code>), so the resolution takes the
+  explicit branch — which the contract does not touch. The contract only ever changes what
+  <b>Auto</b> picks. The 11 inferred-statistical models are precisely the ones already running
+  on the GPU: the inference <i>records</i> what they already do. The gate asserts this model by
+  model, both layers.
+</div>
+
+<!-- ============================================================= -->
+<h2>6 · What this phase does NOT touch</h2>
+<p>No compiler, worker or engine file is opened for writing — the contract is a resolution +
+   display property. <code>check-compile-identity</code> must report all 29 models byte-identical.
+   The engine's own safety nets, the worker demotions, and every explicit engine choice behave
+   exactly as before.</p>
+
+</body>
+</html>

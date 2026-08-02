@@ -14,6 +14,7 @@ import { useEffect, useRef, useState } from 'react';
 import styles from './SimulatorView.module.css';
 import type { OverseerRuntime, OverseerSeries, OverseerSpatialSeries, SpatialAggregate, SpatialAxisMeta } from './engine/overseerRuntime';
 import { saveTextFile } from '../model/fileOperations';
+import type { SweepMethodology } from '../model/reproducibility';
 
 function fmt(n: number): string {
   if (!Number.isFinite(n)) return '—';
@@ -43,9 +44,19 @@ export interface ExperimentsPanelProps {
   modelName: string;
   /** Axis metadata for a spatial indicator (chart X labels). */
   spatialMeta?: (indicatorId: string) => SpatialAxisMeta | null;
+  /** C5 (P10) — the methodology this model's declared reproducibility contract
+   *  implies for a sweep. Derived by the parent from `describeSweepMethodology`
+   *  (contract + the RESOLVED engines), so the panel never re-derives it. */
+  methodology?: SweepMethodology | null;
   onRun: () => void;
   onAbort: () => void;
 }
+
+const METHODOLOGY_STYLE: Record<SweepMethodology['tone'], { border: string; bg: string; color: string }> = {
+  exact: { border: 'rgba(92,191,122,.35)', bg: 'rgba(92,191,122,.08)', color: '#a5d9b6' },
+  statistical: { border: 'rgba(90,169,224,.35)', bg: 'rgba(90,169,224,.08)', color: '#a8cbe8' },
+  warn: { border: 'rgba(224,160,80,.4)', bg: 'rgba(224,160,80,.09)', color: '#e8c08a' },
+};
 
 const KIND_COLOR: Record<string, string> = {
   text: 'inherit',
@@ -306,7 +317,7 @@ function SpatialAggregateChart({ chart, entries, meta, version }: {
 }
 
 export function ExperimentsPanel(props: ExperimentsPanelProps) {
-  const { runtime, running, compileError, hasExperiment, modelName, spatialMeta, onRun, onAbort } = props;
+  const { runtime, running, compileError, hasExperiment, modelName, spatialMeta, methodology, onRun, onAbort } = props;
   const journalRef = useRef<HTMLDivElement | null>(null);
   // Per-series chart mode (histogram vs run-sequence); defaults to histogram.
   const [scalarModes, setScalarModes] = useState<Record<string, ScalarChartMode>>({});
@@ -372,6 +383,18 @@ export function ExperimentsPanel(props: ExperimentsPanelProps) {
             ■ Abort
           </button>
         </div>
+        {/* C5 (P10) — the methodology the declared contract implies. It answers
+            the one question you must settle BEFORE reading a number off a sweep:
+            is a single run a result, or only a draw? */}
+        {methodology && (() => {
+          const s = METHODOLOGY_STYLE[methodology.tone];
+          return (
+            <div style={{
+              border: `1px solid ${s.border}`, background: s.bg, color: s.color,
+              borderRadius: 5, padding: '5px 8px', fontSize: '0.64rem', lineHeight: 1.5,
+            }}>{methodology.tone === 'warn' ? '⚠ ' : ''}{methodology.text}</div>
+          );
+        })()}
         {(running || runtime) && (
           <div style={{ color: '#888' }}>
             {running ? '● running — ' : runtime?.outcome ? `${runtime.outcome} — ` : ''}

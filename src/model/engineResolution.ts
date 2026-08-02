@@ -15,13 +15,25 @@
 // `isAgentGraphWebGPUSupported`, `agentTargetOf`. Nothing here re-derives a gate,
 // so the displayed resolution cannot drift from the engine's own decision.
 //
-// AUTO POLICY THIS PHASE (C5 replaces it with the declared reproducibility
-// contract, and the Overseer special case stops being special):
+// AUTO POLICY (C5, P10) — *the fastest engine that satisfies the model's
+// DECLARED REPRODUCIBILITY CONTRACT* (`reproducibilityOf`):
 //
-//   grid    Overseer enabled ⇒ WASM (sweeps need CPU seed reproducibility)
-//           else WebGPU when every grid gate passes, else WASM
-//   agents  Overseer enabled ⇒ WASM if its gate passes, else JS
-//           else WebGPU if its gate passes, else WASM if its gate passes, else JS
+//   grid    WebGPU when every grid gate passes, else WASM.
+//           CONTRACT-INDEPENDENT: the GPU grid seeds a per-CELL PCG and
+//           `setRngSeed` re-derives those streams, so a fixed seed reproduces a
+//           run on this device — it HONOURS Exact. (f32 means the numbers are
+//           engine- and device-specific; the reason string says so.)
+//   agents  exact       ⇒ WASM if its gate passes, else JS.
+//           statistical ⇒ WebGPU if its gate passes, else WASM, else JS.
+//           The GPU agent engine seeds its per-agent PCG ONCE at runtime
+//           creation and `setRngSeed` never reaches it, so it cannot honour
+//           Exact. See [reproducibility.ts](reproducibility.ts) for the measured
+//           asymmetry between the two GPU layers.
+//
+// C4's hard-coded `if (overseerConfig.enabled) pick = 'wasm'` special case is
+// GONE: under Exact the agents already land on CPU, which is the requirement it
+// was standing in for, and the grid Overseer sample ships on WebGPU precisely
+// because a grid sweep does reproduce there.
 //
 // `resolveEngines` is MEMOISED on the model object (WeakMap). The reducer creates
 // a new model object per edit, so this evaluates once per model version and is
@@ -29,10 +41,11 @@
 // otherwise make it O(N²).
 // ===========================================================================
 
-import type { CAModel, CenterBasedConfig, EngineChoice, EngineId, GraphNode } from './types';
+import type { CAModel, CenterBasedConfig, EngineChoice, EngineId, GraphNode, ReproducibilityContract } from './types';
 import type { NodeConfig } from '../modeler/vpl/types';
 import { agentTargetOf } from './centerBased';
 import { engineFromLegacyFlags } from './engineFieldMigration';
+import { contractViolationFor, reproducibilityOf } from './reproducibility';
 import {
   detectWebGPUIncompatibilities, detectWebGPUModelIncompatibilities,
 } from '../modeler/vpl/nodes/nodeValidation';
@@ -57,12 +70,18 @@ export interface LayerResolution {
   reason: string;
   /** Convenience: `selected === 'auto'`. */
   auto: boolean;
+  /** C5 (P10) — set when the RESOLVED engine cannot honour the model's declared
+   *  reproducibility contract. Never blocks anything (the engine runs); it is an
+   *  amber note. Always absent under `'auto'`, which consults the contract. */
+  contractViolation?: string;
 }
 
 export interface EngineResolution {
   grid: LayerResolution;
   /** Present only when the Agents topology is on. */
   agents?: LayerResolution;
+  /** C5 (P10) — the contract this resolution was computed against. */
+  contract: ReproducibilityContract;
 }
 
 export const ENGINE_CHOICE_LABEL: Record<EngineChoice, string> = {
@@ -155,11 +174,14 @@ export function gridWebgpuOk(model: CAModel): boolean {
 // Resolution
 // ---------------------------------------------------------------------------
 
-const AUTO_OVERSEER_GRID = 'This model runs Overseer experiments, so Auto keeps the grid on a CPU engine — Set Random Seed pins a run there and sweeps reproduce.';
-const AUTO_OVERSEER_AGENTS = 'This model runs Overseer experiments, so Auto keeps agents on a CPU engine — the GPU seeds a per-agent RNG once, so sweeps would not reproduce.';
 const AUTO_GRID_GPU = 'Every WebGPU gate passes, so Auto runs the grid on the GPU.';
+// C5 — the asymmetry, stated where the user meets it: Exact still allows the GPU
+// GRID, because the grid's RNG is seeded per cell and `setRngSeed` reaches it.
+const AUTO_GRID_GPU_EXACT = ' Exact still allows the GPU here: the grid seeds a per-cell RNG that Set Random Seed re-derives, so a fixed seed reproduces a run on this device (the f32 numbers are engine- and device-specific — do not compare them against a CPU run).';
 const AUTO_GRID_SPARSE = ' Note: Skip Isolated Empty Cells is ignored on WebGPU — the GPU runs the whole grid every generation.';
-const AUTO_AGENTS_GPU = 'This agent graph runs on the GPU, so Auto picks WebGPU.';
+const AUTO_AGENTS_GPU = 'This model declares Statistical and the GPU can run this agent graph, so Auto picks WebGPU.';
+const AUTO_AGENTS_EXACT = 'This model declares Exact, so Auto keeps agents on WebAssembly — exact, seedable and bit-identical to the JS reference. (The WebGPU agent engine seeds its per-agent RNG once at start-up and Set Random Seed never reaches it.)';
+const AUTO_AGENTS_EXACT_JS = 'This model declares Exact, so Auto keeps agents off the GPU — and the WASM agent engine cannot run this graph, so it falls back to the JS reference engine.';
 const AUTO_AGENTS_WASM = 'The GPU cannot run this agent graph, so Auto picks WebAssembly — exact, seedable and bit-identical to the JS reference.';
 const AUTO_AGENTS_JS = 'Neither compiled agent engine can run this graph, so Auto falls back to the JS reference engine.';
 
@@ -167,13 +189,12 @@ function resolveGridLayer(model: CAModel): LayerResolution {
   const selected = selectedGridEngine(model);
 
   if (selected === 'auto') {
-    const overseer = !!model.overseerConfig?.enabled;
-    if (overseer) {
-      return { selected, requested: 'wasm', resolved: 'wasm', reason: AUTO_OVERSEER_GRID, auto: true };
-    }
+    // The GRID policy is contract-INDEPENDENT (see the module header): the GPU
+    // grid honours Exact. The contract only changes what the reason SAYS.
     if (gridWebgpuOk(model)) {
       const sparse = model.properties.skipIsolatedEmpty?.enabled ? AUTO_GRID_SPARSE : '';
-      return { selected, requested: 'webgpu', resolved: 'webgpu', reason: AUTO_GRID_GPU + sparse, auto: true };
+      const contract = reproducibilityOf(model) === 'exact' ? AUTO_GRID_GPU_EXACT : '';
+      return { selected, requested: 'webgpu', resolved: 'webgpu', reason: AUTO_GRID_GPU + contract + sparse, auto: true };
     }
     const b = gridWebgpuBlockers(model);
     const why = b.modelIssue ?? b.nodeIssues[0] ?? 'a WebGPU gate rejects this model';
@@ -204,12 +225,15 @@ function resolveAgentLayer(model: CAModel): LayerResolution {
   const webgpuOk = isAgentGraphWebGPUSupported(model);
 
   if (selected === 'auto') {
-    const overseer = !!model.overseerConfig?.enabled;
+    // C5 — the DECLARED CONTRACT decides whether the GPU is a candidate at all.
+    // Exact cannot be honoured by the WebGPU agent engine (per-agent RNG seeded
+    // once, `setRngSeed` never reaches it), so Auto never offers it there.
+    const exact = reproducibilityOf(model) === 'exact';
     let pick: EngineId;
     let reason: string;
-    if (overseer) {
+    if (exact) {
       pick = wasmOk ? 'wasm' : 'js';
-      reason = AUTO_OVERSEER_AGENTS;
+      reason = wasmOk ? AUTO_AGENTS_EXACT : AUTO_AGENTS_EXACT_JS;
     } else if (webgpuOk) {
       pick = 'webgpu'; reason = AUTO_AGENTS_GPU;
     } else if (wasmOk) {
@@ -237,8 +261,18 @@ const cache = new WeakMap<CAModel, EngineResolution>();
 export function resolveEngines(model: CAModel): EngineResolution {
   const hit = cache.get(model);
   if (hit) return hit;
-  const out: EngineResolution = { grid: resolveGridLayer(model) };
+  const contract = reproducibilityOf(model);
+  const out: EngineResolution = { grid: resolveGridLayer(model), contract };
   if (model.topologyMode?.agents) out.agents = resolveAgentLayer(model);
+  // C5 — flag a RESOLVED engine that cannot honour the declared contract. The
+  // predicate is told what resolved rather than resolving anything itself, so
+  // there is exactly one resolution in the system. Auto consults the contract,
+  // so this can only ever fire on an explicit choice.
+  for (const [layer, r] of [['grid', out.grid], ['agents', out.agents]] as const) {
+    if (!r) continue;
+    const v = contractViolationFor(layer, r.resolved, contract);
+    if (v) r.contractViolation = v;
+  }
   cache.set(model, out);
   return out;
 }
