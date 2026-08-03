@@ -1853,6 +1853,48 @@ export function HelpView() {
             whether a speed path engaged at runtime is a separate question (see the three principles
             above).
           </p>
+
+          <h3 className={styles.h3}>Is the layout part of your rule, or just how it looks?</h3>
+          <p className={styles.p}>
+            The force / motion / layout phases above are the biggest block of engine behaviour you
+            did not write. For many models they decide <em>only where things sit</em> &mdash; the
+            emergent behaviour would be identical under any layout. GenesisCA works that out from
+            your graphs and says so: those phases carry a{' '}
+            <strong>presentation</strong> tag and the line{' '}
+            <em>&ldquo;presentation only &mdash; does not affect your rule&rdquo;</em>, and{' '}
+            <strong>Properties &rarr; Compatibility</strong> opens with{' '}
+            <strong>Layout is presentation</strong>.
+          </p>
+          <p className={styles.p}>
+            The test is <strong>dataflow</strong>, not &ldquo;does the graph contain a position
+            node&rdquo;. Geometry is presentation as long as no path leads from a{' '}
+            <em>geometry read</em> &mdash; positions, offsets, velocities, curvature, proximity
+            queries (Get Nearby Agents, Get Agents In View, Sense Hemifield, Neighbour Density, a
+            <em> nearby</em> Neighbour Census), field samples at the agent&rsquo;s location, a
+            bond&rsquo;s current length &mdash; into <em>non-geometric state</em>: an attribute or
+            indicator write, a Stop Event, a field deposit, or the condition/target of a structural
+            verb. Geometry that feeds only <strong>Apply Force</strong>,{' '}
+            <strong>Set Velocity</strong>, <strong>Set Agent Position / Radius</strong>,{' '}
+            <strong>Set Target Radius</strong> or a colour keeps geometry in a closed loop and stays
+            presentation &mdash; placing a newborn at the midpoint between two agents is the classic
+            example. Two engine settings count as reading geometry with no wire to follow:{' '}
+            <strong>Auto-bond</strong> (the engine bonds by distance, so the topology your rule reads
+            was built from where agents sit) and a <strong>Divide Agent</strong> using the{' '}
+            <em>tension</em> partition (geometry decides which bonds each daughter keeps).
+          </p>
+          <p className={styles.p}>
+            <strong>Reading a position is a promotion, not a problem.</strong> A model that does it
+            is fully supported and behaves exactly as before &mdash; it simply means the layout
+            physics are <em>part of what your simulation computes</em> rather than how it looks, so
+            the readout says <strong>Layout is part of your rule</strong> and shows you the exact
+            path that made it so (e.g.{' '}
+            <em>Get Nearby Agents &rarr; For Each In Array &rarr; Form Bond &middot; targetAgent</em>).
+            Among the shipped samples, <em>Boids</em> and <em>Particle Life</em> are presentation
+            (their sensing feeds only forces), while <em>Cubic GRA</em> and <em>SDCA</em> are not:
+            both bond agents chosen by a proximity query. The check is deliberately conservative
+            &mdash; anything it cannot prove clean it treats as part of the rule.
+          </p>
+
           <h3 className={styles.h3}>Enabling Agents</h3>
           <p className={styles.p}>
             In <strong>Properties &rarr; Execution &rarr; Topology</strong>, tick

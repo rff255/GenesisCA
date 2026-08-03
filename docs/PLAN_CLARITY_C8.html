@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>C8 — Presentational-geometry taint check (P9)</title>
+<style>
+  :root{--bg:#0c0d10;--panel:#14161b;--line:#22252c;--txt:#dfe2e8;--dim:#8a8f99;--faint:#6a6f78;
+        --accent:#e8a13a;--good:#5cbf7a;--goodsoft:#8fd6a4;--bad:#e0605a;--eng:#6b7280;--blue:#5aa9e0;}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--txt);font:14px/1.55 -apple-system,Segoe UI,Roboto,sans-serif;padding:28px 20px 60px}
+  .wrap{max-width:1080px;margin:0 auto}
+  h1{font-size:1.5rem;margin:0 0 4px}
+  h2{font-size:1rem;margin:34px 0 10px;padding-bottom:5px;border-bottom:1px solid var(--line);color:var(--accent);letter-spacing:.02em}
+  p{color:var(--dim);margin:8px 0}
+  .lead{color:var(--txt)}
+  code{background:#1b1e24;padding:1px 5px;border-radius:3px;font-size:.85em;color:#cfd4dc}
+  .cols{display:grid;grid-template-columns:repeat(auto-fit,minmax(330px,1fr));gap:16px;margin-top:12px}
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:12px 14px}
+  .panel h3{margin:0 0 8px;font-size:.72rem;text-transform:uppercase;letter-spacing:.06em;color:var(--faint);font-weight:600}
+  /* pipeline row mock */
+  .row{display:flex;gap:7px;align-items:stretch;padding:4px 0}
+  .rail{flex:0 0 3px;border-radius:2px;background:var(--eng)}
+  .rail.graph{background:var(--accent)}
+  .num{flex:0 0 15px;text-align:right;color:var(--faint);font-size:.62rem;line-height:1.9;font-variant-numeric:tabular-nums}
+  .body{flex:1;min-width:0}
+  .titleline{display:flex;gap:6px;align-items:baseline;justify-content:space-between}
+  .ttl{font-size:.78rem;color:var(--txt)}
+  .detail{display:block;font-size:.68rem;color:var(--dim);margin-top:1px}
+  .pres{display:block;font-size:.68rem;color:#7fae8c;font-style:italic;margin-top:1px}
+  .chip{flex:0 0 auto;font-size:.58rem;letter-spacing:.03em;line-height:1.6;padding:0 4px;border-radius:3px;
+        white-space:nowrap;text-transform:uppercase;color:#9fd4a8;border:1px solid #38553f;background:#16211a}
+  .chip.presentation{margin-left:auto;color:var(--goodsoft);border-color:#35553d;background:#14201a}
+  .bracket{margin:5px 0 4px 9px;padding-left:8px;border-left:1px dashed #333842}
+  .ghdr{display:flex;justify-content:space-between;font-size:.68rem;color:var(--dim);padding:1px 0 2px}
+  /* notes */
+  .note{margin:6px 0;font-size:.76rem;border-radius:5px;padding:6px 9px}
+  .note.good{color:#a8d8b4;background:rgba(92,191,122,.08);border:1px solid rgba(92,191,122,.35)}
+  .note.plain{color:#b9bdc5;background:rgba(255,255,255,.03);border:1px solid #2a2e36}
+  .note b.g{color:var(--good)} .note b.p{color:var(--txt)}
+  .wit{display:block;margin-top:3px;color:var(--faint)}
+  .wit span{color:#aeb3bc}
+  table{width:100%;border-collapse:collapse;margin-top:10px;font-size:.78rem}
+  th,td{text-align:left;padding:5px 8px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{color:var(--faint);font-weight:600;font-size:.68rem;text-transform:uppercase;letter-spacing:.05em}
+  td.v{white-space:nowrap;font-weight:600}
+  .ok{color:var(--good)} .no{color:var(--dim)}
+  .legend{display:flex;gap:14px;flex-wrap:wrap;font-size:.68rem;color:var(--dim);padding-bottom:5px;border-bottom:1px solid var(--line);margin-bottom:4px}
+  .sw{display:inline-block;width:3px;height:10px;border-radius:2px;vertical-align:-1px;margin-right:4px}
+  /* dataflow diagram */
+  .flow{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:.74rem;margin:6px 0}
+  .nd{border:1px solid var(--line);background:#1b1e24;border-radius:5px;padding:3px 8px;color:#cfd4dc;white-space:nowrap}
+  .nd.src{border-color:var(--blue);color:#bcdcf4}
+  .nd.sink-bad{border-color:var(--bad);color:#f0b3b0}
+  .nd.sink-ok{border-color:var(--good);color:#b6e4c4}
+  .ar{color:var(--faint)}
+  .verdict{font-weight:700;padding:1px 7px;border-radius:9px;font-size:.7rem}
+  .verdict.ok{color:var(--good);border:1px solid rgba(92,191,122,.4)}
+  .verdict.no{color:#c9a8a5;border:1px solid rgba(224,96,90,.35)}
+</style>
+</head>
+<body><div class="wrap">
+
+<h1>C8 — Presentational geometry: the taint check + the pipeline label</h1>
+<p class="lead">Proposal item <b>P9</b>, detection only. Nothing in the engine changes; the phase makes one
+property <em>visible</em>: does the layout physics decide anything, or only where things sit?</p>
+
+<h2>1. The framing — a GRANT of freedoms, not a gate</h2>
+<div class="cols">
+  <div class="panel">
+    <h3>When the check passes</h3>
+    <div class="note good"><b class="g">Layout is presentation</b> — No rule in this model reads geometry into a
+      decision, so the layout physics only decide where things sit — never what the simulation computes.</div>
+    <p>Green, informative. The force block collapses into one honest sentence.</p>
+  </div>
+  <div class="panel">
+    <h3>When it does not</h3>
+    <div class="note plain"><b class="p">Layout is part of your rule</b> — This model reads geometry into its rule,
+      so the layout physics are part of what the simulation computes — not just how it looks.
+      <span class="wit">e.g. <span>Get Nearby Agents · agents → For Each In Array → Form Bond · targetAgent</span></span></div>
+    <p><b>Not a warning.</b> Reading a position is a <em>promotion</em>: the model is fully supported and stays in
+      today's exact, seeded, lockstep regime. Grey, with the witness that made it so.</p>
+  </div>
+</div>
+
+<h2>2. The pipeline rows — before / after</h2>
+<div class="cols">
+  <div class="panel">
+    <h3>Before (C2)</h3>
+    <div class="legend"><span><i class="sw" style="background:var(--accent)"></i>your graph</span>
+      <span><i class="sw" style="background:var(--eng)"></i>engine</span>
+      <span style="color:var(--faint)">struck = off for this model</span></div>
+    <div class="bracket">
+      <div class="ghdr"><span>Engine forces &amp; motion</span><b style="color:#aeb3bc">×1 iteration</b></div>
+      <div class="row"><span class="rail"></span><span class="num">9</span><span class="body">
+        <span class="titleline"><span class="ttl">Soft-sphere collision</span><span class="chip">per generation</span></span>
+        <span class="detail">repulsion μ_R = 0.5 · range 1.5×contact</span></span></div>
+      <div class="row"><span class="rail"></span><span class="num">10</span><span class="body">
+        <span class="titleline"><span class="ttl">Integrate &amp; commit positions</span><span class="chip">per generation</span></span>
+        <span class="detail">v = 0.9·v + (0.05/1)·ΣF · speed cap 2</span></span></div>
+    </div>
+  </div>
+  <div class="panel">
+    <h3>After (C8) — a presentational model</h3>
+    <div class="legend"><span><i class="sw" style="background:var(--accent)"></i>your graph</span>
+      <span><i class="sw" style="background:var(--eng)"></i>engine</span>
+      <span style="color:var(--faint)">struck = off for this model</span>
+      <span style="color:var(--goodsoft)">presentation = decides only where things sit</span></div>
+    <div class="bracket">
+      <div class="ghdr"><span>Engine forces &amp; motion</span><b style="color:#aeb3bc">×1 iteration</b></div>
+      <div class="row"><span class="rail"></span><span class="num">9</span><span class="body">
+        <span class="titleline"><span class="ttl">Soft-sphere collision</span><span class="chip presentation">presentation</span><span class="chip">per generation</span></span>
+        <span class="detail">repulsion μ_R = 0.5 · range 1.5×contact</span>
+        <span class="pres">presentation only — does not affect your rule</span></span></div>
+      <div class="row"><span class="rail"></span><span class="num">10</span><span class="body">
+        <span class="titleline"><span class="ttl">Integrate &amp; commit positions</span><span class="chip presentation">presentation</span><span class="chip">per generation</span></span>
+        <span class="detail">v = 0.9·v + (0.05/1)·ΣF · speed cap 2</span>
+        <span class="pres">presentation only — does not affect your rule</span></span></div>
+    </div>
+    <p style="font-size:.72rem">Only the <b>movers</b> are marked — force reset, charge, collision, springs,
+      integration, growth, positional projection. Never a cell, colour or init phase.</p>
+  </div>
+</div>
+
+<h2>3. The criterion is DATAFLOW TAINT, not "no position-reading node"</h2>
+<div class="panel">
+  <div class="flow"><span class="nd src">Get Self Position</span><span class="ar">→</span>
+    <span class="nd">Expression</span><span class="ar">→</span>
+    <span class="nd sink-ok">Create Agent · x</span><span class="ar">⇒</span>
+    <span class="verdict ok">PRESENTATIONAL</span></div>
+  <p style="margin-top:0">The <b>Cubic-GRA-midpoint rule</b>: geometry into a position write is a closed loop. The
+    emergent topology is identical under any layout — only <em>where things sit</em> differs.</p>
+  <div class="flow"><span class="nd src">Get Nearby Agents</span><span class="ar">→</span>
+    <span class="nd">For Each In Array</span><span class="ar">→</span>
+    <span class="nd sink-bad">Form Bond · targetAgent</span><span class="ar">⇒</span>
+    <span class="verdict no">geometry → topology</span></div>
+  <div class="flow"><span class="nd src">Neighbour Density</span><span class="ar">→</span>
+    <span class="nd">Compare</span><span class="ar">⇒ decides whether to run ⇒</span>
+    <span class="nd sink-bad">Divide Agent</span><span class="ar">⇒</span>
+    <span class="verdict no">a geometric DECISION</span></div>
+  <p>A branch <em>condition</em> taints even when the value written is a constant. Local variables are
+    <b>conduits</b>, not sinks — taint flows through them (which is exactly what keeps Boids clean).</p>
+</div>
+
+<h2>4. What taints with no wire to follow</h2>
+<div class="cols">
+  <div class="panel"><h3>Auto-bond</h3>
+    <p>The engine forms and breaks bonds <b>by distance</b>, so the topology the rule reads was built from where
+      agents sit. <code>Life on Bonds</code> has a perfectly clean rule graph and is tainted by this alone.</p></div>
+  <div class="panel"><h3>Divide Agent · tension partition</h3>
+    <p>The mother's bonds are split by the <b>tension axis</b> — geometry decides which bonds each daughter keeps.
+      The <code>alternate</code> partition is slot-based and does not taint.</p></div>
+  <div class="panel"><h3>Field deposits</h3>
+    <p><code>Secrete To Field</code> / <code>Affect Cells Under</code> land on the cells <em>under the agent</em>, so
+      WHERE it is decides which cells change — tainting even with a constant value.</p></div>
+</div>
+
+<h2>5. The shipped library, as audited</h2>
+<table>
+  <tr><th>Model</th><th>Verdict</th><th>Why</th></tr>
+  <tr><td>Boids — Flocking</td><td class="v ok">presentation</td><td class="no">proximity + offsets + velocity → local variables → Apply Force only</td></tr>
+  <tr><td>Boids — Hemifield Vision</td><td class="v ok">presentation</td><td class="no">FOV + hemifield counts → local variables → Apply Force only</td></tr>
+  <tr><td>Particle Life · Particle Life 3D</td><td class="v ok">presentation</td><td class="no">proximity + offsets + species table → Apply Force / Set Velocity only</td></tr>
+  <tr><td>Cubic GRA</td><td class="v no">part of the rule</td><td class="no">K4 bootstrap: Get Nearby Agents → Form Bond · targetAgent</td></tr>
+  <tr><td>SDCA — Couplers and Decouplers</td><td class="v no">part of the rule</td><td class="no">the COUPLERS half bonds agents inside a coupling radius</td></tr>
+  <tr><td>Game of Life on Agents</td><td class="v no">part of the rule</td><td class="no">proximity count → Set Attribute “alive”</td></tr>
+  <tr><td>Life on Bonds</td><td class="v no">part of the rule</td><td class="no">auto-bond (the rule graph itself is clean)</td></tr>
+  <tr><td>Ant Necrophoresis · Chemotaxis</td><td class="v no">part of the rule</td><td class="no">field reads / deposits at the agent's position</td></tr>
+  <tr><td>the three Morphogenesis tissues · Graph Metrics</td><td class="v no">part of the rule</td><td class="no">tension partition + auto-bond + density/radius → Divide Agent</td></tr>
+</table>
+<p><b>Cubic GRA and SDCA came out tainted</b>, against the runbook's prior expectation — both bond agents chosen by a
+  proximity query, which is geometry → topology by the runbook's own criterion. The hand-audit wins; the finding is
+  recorded in the Completion Report.</p>
+
+<h2>6. Out of scope</h2>
+<p>Layout cadence decoupling, render-side layout, and the explicit-consent door for position-reading models.
+  C8 only makes the property visible — the freedoms it unlocks come later.</p>
+
+</div></body></html>

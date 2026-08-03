@@ -15,6 +15,10 @@ import {
   describeGenerationPipeline, describePipelineGroups, TEMPO_LABEL, TEMPO_TITLE,
   type PipelinePhase, type PhaseTempo,
 } from '../../model/generationPipeline';
+import {
+  analyzeGeometryTaint, PRESENTATION_ONLY_LABEL, PRESENTATION_ONLY_EXPLAINER,
+  GEOMETRY_PROMOTED_EXPLAINER,
+} from '../vpl/compiler/geometryTaint';
 import { IndicatorsPanelSection } from './IndicatorsPanelSection';
 import { useDetailSelection, type PanelContentProps } from '../ModelerDetailContext';
 import { useListReorder } from './useListReorder';
@@ -304,11 +308,43 @@ function CompatibilityBlock({ model }: { model: CAModel }) {
           )}
         </div>
       ))}
+      <GeometryTaintNote model={model} />
       <span style={{ color: '#777', fontSize: '0.58rem', display: 'block', fontStyle: 'italic', borderTop: '1px solid #22252c', paddingTop: 6 }}>
         <b>S</b> semantics (the engine cannot express it) · <b>R</b> reproducibility (runs, not bit-reproducibly) ·
         {' '}<b>F</b> fast path (same results, different speed) · <b>C</b> capacity (a limit with a number).
         Computed from the same checks the compilers enforce. See Help → Bond-Graph Agents → Engine compatibility.
       </span>
+    </div>
+  );
+}
+
+// --- C8 (P9) — is the layout presentation, or part of the rule? -------------
+// Deliberately NOT styled as a warning in either state. P9 is a GRANT OF
+// FREEDOMS: reading a position is a PROMOTION (the layout physics become part of
+// what the simulation computes), not a defect. So the presentational case is
+// green + informative and the promoted case is plain grey with its witness.
+function GeometryTaintNote({ model }: { model: CAModel }) {
+  // The analyzer flattens the agent graph (macros + reroutes), so memoise it on
+  // the model exactly like the gates above.
+  const taint = useMemo(() => analyzeGeometryTaint(model), [model]);
+  if (!taint.applicable) return null;
+  const good = taint.presentational;
+  return (
+    <div style={{
+      marginTop: 4, marginBottom: 8, fontSize: '0.62rem', borderRadius: 5, padding: '5px 8px',
+      color: good ? '#a8d8b4' : '#b9bdc5',
+      background: good ? 'rgba(92,191,122,.08)' : 'rgba(255,255,255,.03)',
+      border: `1px solid ${good ? 'rgba(92,191,122,.35)' : '#2a2e36'}`,
+    }}>
+      <b style={{ color: good ? '#5cbf7a' : '#dfe2e8' }}>
+        {good ? 'Layout is presentation' : 'Layout is part of your rule'}
+      </b>{' — '}
+      {good ? PRESENTATION_ONLY_EXPLAINER : GEOMETRY_PROMOTED_EXPLAINER}
+      {!good && taint.witness && (
+        <span style={{ display: 'block', marginTop: 3, color: '#8a8f99' }}>
+          e.g. <span style={{ color: '#aeb3bc' }}>{taint.witness.summary}</span>
+        </span>
+      )}
     </div>
   );
 }
@@ -362,11 +398,27 @@ function PhaseRow({ phase, index }: { phase: PipelinePhase; index: number }) {
             fontWeight: isGraph ? 600 : 400,
             textDecoration: off ? 'line-through' : undefined,
           }}>{phase.title}</span>
+          {/* C8 (P9) — this phase only decides WHERE things sit. */}
+          {phase.presentation && (
+            <span
+              title={PRESENTATION_ONLY_EXPLAINER}
+              style={{
+                flex: '0 0 auto', marginLeft: 'auto', fontSize: '0.5rem', letterSpacing: '0.03em',
+                lineHeight: 1.6, padding: '0 4px', borderRadius: 3, whiteSpace: 'nowrap',
+                textTransform: 'uppercase', color: '#8fd6a4', border: '1px solid #35553d', background: '#14201a',
+              }}
+            >presentation</span>
+          )}
           <TempoChip tempo={phase.tempo} />
         </span>
         {off
           ? <span style={{ display: 'block', fontSize: '0.56rem', color: '#a8746e', marginTop: 1 }}>off — needs {phase.capability}</span>
           : phase.detail && <span style={{ display: 'block', fontSize: '0.56rem', color: '#8a8f99', marginTop: 1 }}>{phase.detail}</span>}
+        {phase.presentation && (
+          <span style={{ display: 'block', fontSize: '0.56rem', color: '#7fae8c', fontStyle: 'italic', marginTop: 1 }}>
+            {PRESENTATION_ONLY_LABEL}
+          </span>
+        )}
       </span>
     </div>
   );
@@ -377,6 +429,7 @@ function GenerationPipelineBlock({ model }: { model: CAModel }) {
   const phases = useMemo(() => describeGenerationPipeline(model), [model]);
   const groups = useMemo(() => describePipelineGroups(model), [model]);
   if (phases.length === 0) return null;
+  const anyPresentation = phases.some(p => p.presentation);
 
   // Render consecutive same-group phases inside one bracket.
   const blocks: Array<{ group?: string; phases: PipelinePhase[] }> = [];
@@ -393,6 +446,7 @@ function GenerationPipelineBlock({ model }: { model: CAModel }) {
         <span><i style={{ display: 'inline-block', width: 3, height: 10, borderRadius: 2, background: '#e8a13a', verticalAlign: -1, marginRight: 4 }} />your graph</span>
         <span><i style={{ display: 'inline-block', width: 3, height: 10, borderRadius: 2, background: '#6b7280', verticalAlign: -1, marginRight: 4 }} />engine</span>
         <span style={{ color: '#6a6f78' }}>struck = off for this model</span>
+        {anyPresentation && <span style={{ color: '#8fd6a4' }}>presentation = decides only where things sit</span>}
       </div>
 
       {blocks.map((b, bi) => {

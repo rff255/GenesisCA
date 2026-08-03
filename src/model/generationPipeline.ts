@@ -54,6 +54,7 @@ import { agentGraphUsesBondRequests } from '../modeler/vpl/compiler/bondRequestQ
 import { dividePartitionTableForModel } from '../modeler/vpl/compiler/dividePartition';
 import { sparseSteppingEnabled } from '../modeler/vpl/compiler/sparseStepping';
 import { periodicParams } from '../modeler/vpl/compiler/periodicExpand';
+import { analyzeGeometryTaint } from '../modeler/vpl/compiler/geometryTaint';
 
 // ---------------------------------------------------------------------------
 // Shape
@@ -86,9 +87,11 @@ export interface PipelinePhase {
   /** Groups consecutive phases under a bracket in the UI (the force-iteration
    *  loop and the structural phase). */
   group?: string;
-  /** RESERVED for C8 (the presentational-geometry taint check) — it sets this
-   *  on the force/motion/layout phases so they can render "presentation only —
-   *  does not affect your rule". C2 never writes it. */
+  /** C8 (P9) — set on the force / motion / layout phases when
+   *  `analyzeGeometryTaint` finds that no rule reads geometry into a decision.
+   *  Those phases then decide only WHERE things sit, so the UI renders
+   *  "presentation only — does not affect your rule". Absent/false means
+   *  geometry is load-bearing (a promotion, not a problem — see P9). */
   presentation?: boolean;
 }
 
@@ -117,6 +120,16 @@ export function describePipelineGroups(model: CAModel): Record<string, PipelineG
     },
   };
 }
+
+/** C8 (P9) — the phases that MOVE things: the force-iteration loop plus the
+ *  positional-collision projection. When the taint check passes, these are the
+ *  block P9 calls presentation ("where things sit"), so they carry the label.
+ *  The spatial hash is deliberately NOT here — it is a query structure the
+ *  RULE also uses (a proximity query reads it), not a mover. */
+export const PRESENTATION_PHASE_IDS: ReadonlySet<string> = new Set([
+  'agent.forceReset', 'agent.charge', 'agent.softCollision', 'agent.springs',
+  'agent.integrate', 'agent.growth', 'agent.positional',
+]);
 
 export const TEMPO_LABEL: Record<PhaseTempo, string> = {
   generation: 'per generation',
@@ -472,6 +485,16 @@ export function describeGenerationPipeline(model: CAModel): PipelinePhase[] {
         ? `${ams.length} agent view${ams.length === 1 ? '' : 's'} — otherwise agents are coloured by Set Cell Looks in the behaviour`
         : undefined,
     });
+  }
+
+  // C8 (P9) — when no rule reads geometry into a decision, the movers above are
+  // presentation. The verdict comes from `analyzeGeometryTaint`, which is the
+  // single source for it (the C1 readout and Help read the same function).
+  if (agentsOn) {
+    const taint = analyzeGeometryTaint(model);
+    if (taint.applicable && taint.presentational) {
+      for (const p of out) if (PRESENTATION_PHASE_IDS.has(p.id)) p.presentation = true;
+    }
   }
 
   return out;

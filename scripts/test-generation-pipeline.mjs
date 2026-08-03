@@ -25,7 +25,7 @@ import { fileURLToPath, pathToFileURL } from 'url';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const ENTRY = `
-export { describeGenerationPipeline, describePipelineGroups, integrationFormula } from '../src/model/generationPipeline.ts';
+export { describeGenerationPipeline, describePipelineGroups, integrationFormula, PRESENTATION_PHASE_IDS } from '../src/model/generationPipeline.ts';
 export {
   cbNum, effectiveAgentDt, layoutIterationsOf, resolveMaxBonds,
   usesCharge, chargeParamsOf, usesEngineGrowth, usesEngineSprings,
@@ -329,7 +329,14 @@ const EXPECTED_ORDER_BOTH = [
   ok(phases.every(p => p.owner === 'graph' || p.owner === 'engine'), 'every phase has a valid owner');
   ok(new Set(phases.map(p => p.id)).size === phases.length, 'phase ids are unique');
   ok(phases.every(p => p.active || p.capability), 'every INACTIVE phase names what turns it on');
-  ok(phases.every(p => p.presentation === undefined), 'C2 never sets `presentation` (reserved for C8)');
+  // C8 (P9) now WRITES `presentation`, but only on the mover phases and only when
+  // the taint check passes. `both` has a bare Behaviour Step with no geometry read,
+  // so it IS presentational — the invariant that must hold either way is that no
+  // phase OUTSIDE the mover set is ever marked (the cell half especially).
+  ok(phases.every(p => p.presentation === undefined || M.PRESENTATION_PHASE_IDS.has(p.id)),
+    'only the force/motion/layout phases may carry `presentation` (C8)');
+  ok(phases.filter(p => p.id.startsWith('cell.') || p.id.startsWith('color.') || p.id.startsWith('init.'))
+    .every(p => p.presentation === undefined), 'cell / colour / init phases are never `presentation`');
   // The reset roots really are the cold path, the colour passes really are per frame.
   const idx = Object.fromEntries(phases.map((p, i) => [p.id, i]));
   ok(phases.filter(p => p.tempo === 'reset').every(p => idx[p.id] < idx['agent.behaviour']),
