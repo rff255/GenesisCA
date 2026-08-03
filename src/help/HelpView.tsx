@@ -1928,8 +1928,12 @@ export function HelpView() {
             balls; tune with <em>Positional iterations</em>) &mdash; <strong>Bonds = Physics</strong>{' '}
             makes bonds spring (Data bonds are force-free edges), and{' '}
             <strong>Growth</strong> runs the radius ramp &mdash; each independently of the legacy
-            &ldquo;Use bonding physics&rdquo; master toggle. <em>(The profile does not yet shrink
-            the per-agent memory the engine allocates &mdash; that lands in a later phase.)</em>
+            &ldquo;Use bonding physics&rdquo; master toggle. The profile also <strong>shrinks the
+            per-agent memory the engine allocates</strong>: a capability that is off, and whose field
+            no node reads, is simply <em>not allocated</em> &mdash; sprite state (36 B/agent), age,
+            target radius and neighbour density all drop out, and the footprint readout shows what
+            you saved. The gate is widened by ACTUAL USE, so a node you left on the canvas keeps its
+            field; if a field really is gone, reading it yields 0 rather than breaking.
           </p>
           <h3 className={styles.h3}>Charge &mdash; the long-range force that keeps a graph readable</h3>
           <p className={styles.p}>
@@ -2567,7 +2571,18 @@ export function HelpView() {
               Reset (0 = seed by hand), the <strong>Default Radius</strong>, and the
               <strong> Seed Pattern</strong> (a compact centred blob for tissue, or scattered
               across the world for flocking / aggregation).</li>
-            <li><strong>Motion</strong> (always shown &mdash; it governs how <em>your</em> forces
+            <li><strong>Motion mode</strong> (Properties &rarr; Agent Capabilities) &mdash; what the
+              ENGINE is allowed to move. <strong>Force</strong> (the default) integrates
+              <code>v = momentum&middot;v + (&Delta;t/&eta;)&middot;&Sigma;F</code> and then
+              <code>x += v</code>. <strong>Velocity</strong> seeds <em>no</em> engine force and just
+              advances <code>x += v</code>, so a <strong>Set Velocity</strong> genuinely coasts
+              (under Force a momentum-0 model wipes it the same step). <strong>Static</strong> moves
+              nothing at all &mdash; the force pass <em>and</em> the position commit are both
+              skipped, so positions change only when your graph writes them with
+              <strong>Set Agent Position</strong> (this is how <em>Ant Necrophoresis</em> walks its
+              ants cell by cell). All three run on JS, WebAssembly and WebGPU.</li>
+            <li><strong>Motion parameters</strong> (shown whenever motion is not Static &mdash; they
+              govern how <em>your</em> forces
               integrate) &mdash; <strong>Momentum</strong> (velocity persistence: 0 = overdamped
               tissue, ~0.9 = flocking inertia), <strong>Max Speed</strong>, <strong>Neighbour
               Query Radius</strong> (sizes the spatial hash so Get Nearby Agents within it stays

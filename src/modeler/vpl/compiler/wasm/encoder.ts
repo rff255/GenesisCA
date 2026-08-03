@@ -248,6 +248,8 @@ export const OP_F64_LT = byte(0x63);
 export const OP_F64_GT = byte(0x64);
 export const OP_F64_LE = byte(0x65);
 export const OP_F64_GE = byte(0x66);
+/** `drop` — pop and discard the top stack value (0x1a). */
+export const OP_DROP = byte(0x1a);
 export const OP_F64_ABS = byte(0x99);
 export const OP_F64_NEG = byte(0x9a);
 // Per WebAssembly binary spec: f64.ceil = 0x9b, f64.floor = 0x9c, f64.trunc = 0x9d.

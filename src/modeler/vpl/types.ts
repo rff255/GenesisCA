@@ -95,6 +95,13 @@ export interface CompileContext {
    *  the universal nodes that read the same thing from a different ABI on the two
    *  graphs (Get Grid Dimensions). Absent/false on cell roots. */
   agentGraph?: boolean;
+  /** C9 / STEP 4 — which OPTIONAL per-agent SoA field groups this model allocates
+   *  (`resolveAgentFieldGates(model)`). A gated-OFF group's ABI params are DROPPED,
+   *  so an emitter that would read one MUST emit the typed default (0) instead of a
+   *  dangling identifier — THE SAFETY CATCH. Writes need no guard: a dropped field
+   *  is a zero-length typed array and `a[i] = v` on one is a silent no-op.
+   *  Absent ⇒ everything allocated (the pre-C9 emit, byte-for-byte). */
+  agentGates?: import('../../model/agentFieldGating').AgentFieldGates;
   /** Graph-Rewriting Automata (P2): the model's BOND attributes (per-EDGE state),
    *  in `bondAttrsOf(model)` order, each with its default already encoded to the
    *  NUMBER the ragged region stores. Get/Set Bond Attribute + Form Bond read it to

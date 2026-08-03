@@ -18,5 +18,9 @@ export const GetAgeNode: NodeTypeDef = {
     { id: 'value', label: 'Age', kind: 'output', category: 'value', dataType: 'integer' },
   ],
   defaultConfig: {},
-  compile: (nodeId) => `const _v${nodeId} = _agentAge[idx];\n`,
+  // C9 SAFETY CATCH: with the Lifespan field gated off there is no `_agentAge`
+  // param, so emit the typed default rather than a dangling identifier. The gate
+  // is usage-widened ON THIS NODE, so this is the defensive second line.
+  compile: (nodeId, _config, _inputs, _boundary, ctx) =>
+    `const _v${nodeId} = ${ctx?.agentGates && !ctx.agentGates.age ? '0' : '_agentAge[idx]'};\n`,
 };

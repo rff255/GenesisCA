@@ -19,5 +19,8 @@ export const SetTargetRadiusNode: NodeTypeDef = {
     { id: 'value', label: 'Target', kind: 'input', category: 'value', dataType: 'float', inlineWidget: 'number', defaultValue: '1' },
   ],
   defaultConfig: {},
-  compile: (_nodeId, _config, inputs) => `_agentTargetRadius[idx] = ${inputs['value'] || '1'};\n`,
+  // C9 SAFETY CATCH: with the Growth field gated off there is no
+  // `_agentTargetRadius` param and no ramp to feed, so the write is dropped.
+  compile: (_nodeId, _config, inputs, _boundary, ctx) =>
+    (ctx?.agentGates && !ctx.agentGates.targetRadius ? '' : `_agentTargetRadius[idx] = ${inputs['value'] || '1'};\n`),
 };

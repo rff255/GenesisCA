@@ -26,6 +26,9 @@ export const SetAgentRadiusNode: NodeTypeDef = {
     const guard = (ctx?.agentRoot === 'init' || ctx?.agentRoot === 'behaviour')
       ? `__sr >= 0 && __sr < _agentMaxAgents`
       : `__sr >= 0 && __sr < highWater && _alive[__sr]`;
-    return `{ const __sr = ${id}; const __rv = ${inputs['radius'] || '1'}; if (${guard}) { _agentRadius[__sr] = __rv; _agentTargetRadius[__sr] = __rv; } }\n`;
+    // C9 SAFETY CATCH: drop the target-radius half when that field is gated off
+    // (no param to write); the real radius write is unconditional.
+    const tgt = (ctx?.agentGates && !ctx.agentGates.targetRadius) ? '' : ' _agentTargetRadius[__sr] = __rv;';
+    return `{ const __sr = ${id}; const __rv = ${inputs['radius'] || '1'}; if (${guard}) { _agentRadius[__sr] = __rv;${tgt} } }\n`;
   },
 };

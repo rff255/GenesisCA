@@ -22,6 +22,7 @@
 
 import type { AgentStore } from '../../../simulator/engine/agentEngine';
 import type { AgentCapabilities } from '../../../model/types';
+import { normalizeFieldGates, type AgentFieldGates } from '../../../model/agentFieldGating';
 
 export type AgentAbiKind = 'loop' | 'division' | 'init';
 
@@ -50,6 +51,13 @@ export interface AgentAbiShape {
    *  param reads `undefined` — which makes the dangerous direction structurally
    *  impossible. Appended at the VERY END of every kind, after the 3D block. */
   usesGeneration?: boolean;
+  /** C9 / STEP 4 — which OPTIONAL per-agent SoA field groups this model allocates
+   *  (`resolveAgentFieldGates(model)`). A gated-OFF group's params are DROPPED
+   *  from every kind, and the compilers emit the typed default (0) for a read of
+   *  the corresponding field. ABSENT ⇒ everything on ⇒ byte-identical to pre-C9.
+   *  The sprite block is the big one (5 params, 36 B/agent) and is the ONLY group
+   *  that costs no baked byte on any target — it is plain JS arrays. */
+  gates?: AgentFieldGates;
 }
 
 /** The runtime values the ARG resolvers pull from (the external caches the
@@ -119,6 +127,11 @@ export function deriveAgentAbi(kind: AgentAbiKind, shape: AgentAbiShape, profile
   void profile;
   const { is3d, agentAttrs, fieldAttrs, hasLookupTables } = shape;
   const bondAttrs = shape.bondAttrs ?? [];
+  // C9 / STEP 4 — the optional field groups. Absent ⇒ all on ⇒ the pre-C9 param
+  // list, byte-for-byte. (Deliberately NOT the `gate(profile)` hook below: the
+  // SHAPE is the gate, exactly as P2's bond block established — every call site
+  // already produces a shape, and none produces a profile.)
+  const gates = normalizeFieldGates(shape.gates);
   const fields: AgentAbiField[] = [];
 
   // --- leading positional args (division / init) ---
@@ -150,16 +163,15 @@ export function deriveAgentAbi(kind: AgentAbiKind, shape: AgentAbiShape, profile
     F('_agentX', 'f64[]', s => s.x),
     F('_agentY', 'f64[]', s => s.y),
     F('_agentRadius', 'f64[]', s => s.radius),
-    F('_agentTargetRadius', 'f64[]', s => s.targetRadius),
-    F('_agentAge', 'f64[]', s => s.age),
-    F('_agentLineage', 'i32[]', s => s.lineage),
   );
+  if (gates.targetRadius) fields.push(F('_agentTargetRadius', 'f64[]', s => s.targetRadius));
+  if (gates.age) fields.push(F('_agentAge', 'f64[]', s => s.age));
+  fields.push(F('_agentLineage', 'i32[]', s => s.lineage));
   // init omits bondCount/density (its writable geometry set is smaller).
+  // `_agentBondCount` is a CORE reduction and stays even with Bonds off (B1a).
   if (kind === 'loop' || kind === 'division') {
-    fields.push(
-      F('_agentBondCount', 'i32[]', s => s.bondCount),
-      F('_agentDensity', 'f64[]', s => s.density),
-    );
+    fields.push(F('_agentBondCount', 'i32[]', s => s.bondCount));
+    if (gates.density) fields.push(F('_agentDensity', 'f64[]', s => s.density));
   }
   fields.push(
     F('_agentVX', 'f64[]', s => s.vx),
@@ -263,12 +275,19 @@ export function deriveAgentAbi(kind: AgentAbiKind, shape: AgentAbiShape, profile
     F('_stopFlag', 'obj', (_s, rt) => rt.stopFlag),
     F('glyphCodes', 'obj', (_s, rt) => rt.glyphCodes),
     F('glyphColors', 'obj', (_s, rt) => rt.glyphColors),
-    F('spriteIds', 'i32[]', s => s.spriteIds),
-    F('spriteFrames', 'f64[]', s => s.spriteFrames),
-    F('spriteSpeeds', 'f64[]', s => s.spriteSpeeds),
-    F('spriteRotations', 'f64[]', s => s.spriteRotations),
-    F('spriteScales', 'f64[]', s => s.spriteScales),
   );
+  // C9 — the SPRITE block. 5 params / 36 B per agent, and the only gate-able
+  // group with no baked byte on any target (plain JS arrays; `setAgentSprite` has
+  // no WASM/WebGPU emit), so dropping it is a pure ABI + allocation win.
+  if (gates.sprites) {
+    fields.push(
+      F('spriteIds', 'i32[]', s => s.spriteIds),
+      F('spriteFrames', 'f64[]', s => s.spriteFrames),
+      F('spriteSpeeds', 'f64[]', s => s.spriteSpeeds),
+      F('spriteRotations', 'f64[]', s => s.spriteRotations),
+      F('spriteScales', 'f64[]', s => s.spriteScales),
+    );
+  }
 
   // --- lookup tables (pinned slot after glyphColors, before the field block) ---
   if (hasLookupTables) fields.push(F('_lookupTables', 'obj', (_s, rt) => rt.lookupTables));

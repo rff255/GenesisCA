@@ -61,7 +61,10 @@ function buildArgs(s, hash, ctx) {
   // compiler passes the graph's real answer on the PARAM side). Params ≤ args is
   // the safe direction, so a trailing `_generation` the graph doesn't declare is
   // simply ignored.
-  const shape = { is3d: s.worldDepth > 1, agentAttrs: s.attrSpecs, fieldAttrs: ctx.fieldSpecs, hasLookupTables: ctx.hasLookupTables, bondAttrs: s.bondAttrSpecs, usesGeneration: true };
+  // C9 / STEP 4: the gates ride the STORE (the record it actually allocated),
+  // exactly as the worker's `agentAbiShapeOfStore` will — so the harness cannot
+  // build an arg list for a different field set than the store has.
+  const shape = { is3d: s.worldDepth > 1, agentAttrs: s.attrSpecs, fieldAttrs: ctx.fieldSpecs, hasLookupTables: ctx.hasLookupTables, bondAttrs: s.bondAttrSpecs, usesGeneration: true, gates: s.fieldGates };
   const rt = {
     hash, emptyI32: new Int32Array(0),
     modelAttrs: ctx.cachedModelAttrs, viewer: ctx.activeViewer,
@@ -1673,8 +1676,11 @@ for (const { name: f, raw, setup, invariant } of entries) {
   // number to every target). Without it the plain store would fall back to the
   // config depth while the wasmBacked one uses the usage-gated layout value.
   const bondReqSlots = layoutExtras.bondReqSlots ?? 1;
-  const A = createAgentStore(cfg, specs, { wasmBacked: false, syncAttrs, bondAttrSpecs: bondSpecs, bondReqSlots });
-  const B = createAgentStore(cfg, specs, { wasmBacked: true, syncAttrs, maxHashBins: cMaxHashBins, layoutExtras, bondAttrSpecs: bondSpecs, bondReqSlots });
+  // C9 / STEP 4 — BOTH stores use the model's resolved gates (the same record the
+  // compiler baked into `layoutExtras`), so the plain and wasmBacked layouts agree.
+  const fieldGates = layoutExtras?.fieldGates;
+  const A = createAgentStore(cfg, specs, { wasmBacked: false, syncAttrs, bondAttrSpecs: bondSpecs, bondReqSlots, fieldGates });
+  const B = createAgentStore(cfg, specs, { wasmBacked: true, syncAttrs, maxHashBins: cMaxHashBins, layoutExtras, bondAttrSpecs: bondSpecs, bondReqSlots, fieldGates });
   for (const s of [A, B]) { s.worldWidth = W; s.worldHeight = H; s.worldDepth = D; }
 
   // Seed identical agents (deterministic compact grid).

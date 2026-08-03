@@ -69,6 +69,7 @@ import type { GraphNode, GraphEdge, CAModel } from '../../../../model/types';
 import { agentAttrsOf } from '../../../../model/attributeScope';
 import { modelAttrSlotKeys } from '../../../../model/attributeScope';
 import { resolveMaxBonds, usesCharge } from '../../../../model/centerBased';
+import { resolveAgentFieldGates, motionModeCode } from '../../../../model/agentFieldGating';
 import {
   I32, F64,
   leb128u,
@@ -80,6 +81,7 @@ import {
   OP_I32_AND, OP_I32_OR, OP_I32_XOR, OP_I32_SHL, OP_I32_SHR_U,
   OP_F64_ADD, OP_F64_SUB, OP_F64_MUL, OP_F64_DIV,
   OP_F64_ABS, OP_F64_NEG, OP_F64_SQRT, OP_F64_MIN, OP_F64_MAX, OP_F64_FLOOR, OP_F64_CEIL,
+  OP_DROP,
   OP_F64_EQ, OP_F64_NE, OP_F64_LT, OP_F64_GT, OP_F64_LE, OP_F64_GE,
   OP_F64_CONVERT_I32_S, OP_F64_CONVERT_I32_U, OP_I32_TRUNC_F64_S, OP_I32_TRUNC_SAT_F64_S, OP_SELECT,
   opCall,
@@ -858,7 +860,7 @@ function compileValueNode(ctx: AgentWasmCtx, nodeId: string, portId: string): Va
           pushF64Elem(em, ctx.layout.f64['radius']!, ctx.idxLocal);
           em.op(OP_F64_MUL); em.f64Const(Math.PI); em.op(OP_F64_MUL);
         }
-        else if (portId === 'myAge') pushF64Elem(em, ctx.layout.f64['age']!, ctx.idxLocal);
+        else if (portId === 'myAge') gatedF64Read(em, ctx.layout.f64['age'], ctx.idxLocal);
         else if (portId === 'myBondDegree') { em.localGet(ctx.idxLocal); em.i32Const(4); em.op(OP_I32_MUL); em.i32Const(ctx.layout.i32['bondCount']!); em.op(OP_I32_ADD); em.i32Load(); em.i32ToF64(); }
         else em.f64Const(0);
       });
@@ -899,7 +901,7 @@ function compileValueNode(ctx: AgentWasmCtx, nodeId: string, portId: string): Va
       break;
     }
     case 'getAge': {
-      result = f64Result(() => pushF64Elem(em, ctx.layout.f64['age']!, ctx.idxLocal));
+      result = f64Result(() => gatedF64Read(em, ctx.layout.f64['age'], ctx.idxLocal));
       break;
     }
     case 'getConstant': {
@@ -983,7 +985,7 @@ function compileValueNode(ctx: AgentWasmCtx, nodeId: string, portId: string): Va
       break;
     }
     case 'neighbourDensity': {
-      result = f64Result(() => pushF64Elem(em, ctx.layout.f64['density']!, ctx.idxLocal));
+      result = f64Result(() => gatedF64Read(em, ctx.layout.f64['density'], ctx.idxLocal));
       break;
     }
     case 'getCurvature': {
@@ -2637,9 +2639,15 @@ function compileFlowNode(ctx: AgentWasmCtx, nodeId: string): void {
       break;
     }
     case 'setTargetRadius': {
+      // C9 SAFETY CATCH: no target-radius field ⇒ no ramp to feed ⇒ drop the write
+      // (the value input is still evaluated for its side effects / RNG order).
+      if (ctx.layout.f64['targetRadius'] === undefined) {
+        pushValueInputF64(ctx, node, 'value', 1); em.op(OP_DROP);
+      } else {
       pushF64ElemAddr(em, ctx.layout.f64['targetRadius']!, ctx.idxLocal);
       pushValueInputF64(ctx, node, 'value', 1);
       em.f64Store();
+      }
       compileFlowChain(ctx, node.id, 'next');
       break;
     }
@@ -2734,7 +2742,7 @@ function compileFlowNode(ctx: AgentWasmCtx, nodeId: string): void {
       emitGuardedAgentWrite(ctx, node, 'agentId', (aLocal) => {
         const rv = em.allocLocal(F64); pushValueInputF64(ctx, node, 'radius', 1); em.localSet(rv);
         pushF64ElemAddr(em, ctx.layout.f64['radius']!, aLocal); em.localGet(rv); em.f64Store();
-        pushF64ElemAddr(em, ctx.layout.f64['targetRadius']!, aLocal); em.localGet(rv); em.f64Store();
+        if (ctx.layout.f64['targetRadius'] !== undefined) { pushF64ElemAddr(em, ctx.layout.f64['targetRadius']!, aLocal); em.localGet(rv); em.f64Store(); }
       });
       compileFlowChain(ctx, node.id, 'next');
       break;
@@ -4313,7 +4321,26 @@ interface ForcePassParamIdx {
  *  `fmodFuncIdx` is the host `env.fmod = (a,b)=>a%b` import — used for the torus
  *  position wrap so it is BIT-EXACT to JS's native `%` (WASM has no f64 rem opcode;
  *  reconstructing `a - trunc(a/b)*b` rounds twice and would drift). */
-function emitForcePass(em: WasmEmitter, layout: AgentMemoryLayout, is3d: boolean, P: ForcePassParamIdx, fmodFuncIdx: number): void {
+/** C9 / STEP 6 — the motion mode is a MODEL property, so the force pass is
+ *  emitted as one of three compile-time variants rather than gated on a runtime
+ *  param: `force` (2) is the historical body, byte-for-byte; `velocity` (1) drops
+ *  the momentum + force term and integrates the graph-set velocity; `static` (0)
+ *  omits the integrate + position write entirely (and the worker skips the
+ *  position commit with it). A runtime param would add an ABI slot for a value
+ *  that cannot change without a recompile — the `chargeOn` precedent decides the
+ *  param LIST at compile time for exactly this reason. */
+/** C9 / STEP 4 — THE SAFETY CATCH (WASM). A gated-OFF optional field has NO
+ *  layout offset, so a read must push the typed default instead of loading from
+ *  `undefined`, and a write must be skipped. `gatedF64Read` / `gatedF64Write`
+ *  are the ONLY way those three fields are touched in the behaviour emitters. */
+function gatedF64Read(em: WasmEmitter, off: number | undefined, idxLocal: number): void {
+  if (off === undefined) { em.f64Const(0); return; }
+  pushF64Elem(em, off, idxLocal);
+}
+
+function emitForcePass(em: WasmEmitter, layout: AgentMemoryLayout, is3d: boolean, P: ForcePassParamIdx, fmodFuncIdx: number, motionMode = 2): void {
+  const doForces = motionMode === 2;
+  const doCommit = motionMode !== 0;
   const L = layout;
   const aliveOff = L.u8['alive']!;
   // half-spans: halfW = W / 2 (mirrors JS `W / 2` exactly).
@@ -4343,7 +4370,10 @@ function emitForcePass(em: WasmEmitter, layout: AgentMemoryLayout, is3d: boolean
     xN: L.f64['xNext']!, yN: L.f64['yNext']!, zN: L.f64['zNext']!,
     vx: L.f64['vx']!, vy: L.f64['vy']!, vz: L.f64['vz']!,
     fX: L.f64['forceX']!, fY: L.f64['forceY']!, fZ: L.f64['forceZ']!,
-    rad: L.f64['radius']!, tgt: L.f64['targetRadius']!, age: L.f64['age']!, dens: L.f64['density']!,
+    // C9 / STEP 4 — `targetRadius` / `age` / `density` are OPTIONAL: a gated-OFF
+    // field has NO layout offset, and `-1` is the "omit this block" signal (the
+    // safety catch — emitting a load at `undefined` would poison the module).
+    rad: L.f64['radius']!, tgt: L.f64['targetRadius'] ?? -1, age: L.f64['age'] ?? -1, dens: L.f64['density'] ?? -1,
   };
 
   // --- the torus fold of a delta `dLocal` against span `spanLocal` + its half
@@ -4533,8 +4563,8 @@ function emitForcePass(em: WasmEmitter, layout: AgentMemoryLayout, is3d: boolean
           });
         },
       );
-      // density[i] = dens
-      addr(off.dens, i); em.localGet(dens); em.f64Store();
+      // density[i] = dens  (C9: skipped when the field is gated off)
+      if (off.dens >= 0) { addr(off.dens, i); em.localGet(dens); em.f64Store(); }
     });
 
     // --- bond springs (gated on the Bonds=Physics capability && bondCount>0;
@@ -4547,9 +4577,18 @@ function emitForcePass(em: WasmEmitter, layout: AgentMemoryLayout, is3d: boolean
     em.ifThen(() => emitBondSprings());
 
     // --- integrate: vxi = momentum*vx[i] + dtOverEta*fx; ... ; maxSpeed cap ---
-    em.localGet(P.momentum); pushF64Elem(em, off.vx, i); em.op(OP_F64_MUL); em.localGet(P.dtOverEta); em.localGet(fx); em.op(OP_F64_MUL); em.op(OP_F64_ADD); em.localSet(vxi);
-    em.localGet(P.momentum); pushF64Elem(em, off.vy, i); em.op(OP_F64_MUL); em.localGet(P.dtOverEta); em.localGet(fy); em.op(OP_F64_MUL); em.op(OP_F64_ADD); em.localSet(vyi);
-    if (is3d) { em.localGet(P.momentum); pushF64Elem(em, off.vz, i); em.op(OP_F64_MUL); em.localGet(P.dtOverEta); em.localGet(fz); em.op(OP_F64_MUL); em.op(OP_F64_ADD); em.localSet(vzi); }
+    // C9 / STEP 6: Velocity mode coasts on the graph-set velocity (no momentum,
+    // no force term); Static skips the whole block (see `doCommit` below).
+    if (doCommit) {
+    if (doForces) {
+      em.localGet(P.momentum); pushF64Elem(em, off.vx, i); em.op(OP_F64_MUL); em.localGet(P.dtOverEta); em.localGet(fx); em.op(OP_F64_MUL); em.op(OP_F64_ADD); em.localSet(vxi);
+      em.localGet(P.momentum); pushF64Elem(em, off.vy, i); em.op(OP_F64_MUL); em.localGet(P.dtOverEta); em.localGet(fy); em.op(OP_F64_MUL); em.op(OP_F64_ADD); em.localSet(vyi);
+      if (is3d) { em.localGet(P.momentum); pushF64Elem(em, off.vz, i); em.op(OP_F64_MUL); em.localGet(P.dtOverEta); em.localGet(fz); em.op(OP_F64_MUL); em.op(OP_F64_ADD); em.localSet(vzi); }
+    } else {
+      pushF64Elem(em, off.vx, i); em.localSet(vxi);
+      pushF64Elem(em, off.vy, i); em.localSet(vyi);
+      if (is3d) { pushF64Elem(em, off.vz, i); em.localSet(vzi); }
+    }
     // if (maxSpeed > 0) { sp = sqrt(v·v); if (sp > maxSpeed) { sc = maxSpeed/sp; v *= sc } }
     em.localGet(P.maxSpeed); em.f64Const(0); em.op(OP_F64_GT);
     em.ifThen(() => {
@@ -4592,12 +4631,14 @@ function emitForcePass(em: WasmEmitter, layout: AgentMemoryLayout, is3d: boolean
     addr(off.xN, i); em.localGet(nx); em.f64Store();
     addr(off.yN, i); em.localGet(ny); em.f64Store();
     if (is3d) { addr(off.zN, i); em.localGet(nz); em.f64Store(); }
+    }  // end `doCommit` (C9 / STEP 6)
 
-    // age[i] = age[i] + 1
-    addr(off.age, i); pushF64Elem(em, off.age, i); em.f64Const(1); em.op(OP_F64_ADD); em.f64Store();
+    // age[i] = age[i] + 1  (C9: skipped when the Lifespan field is gated off)
+    if (off.age >= 0) { addr(off.age, i); pushF64Elem(em, off.age, i); em.f64Const(1); em.op(OP_F64_ADD); em.f64Store(); }
 
     // growth: tr=targetRadius[i]; cur=radius[i]; if (tr !== cur) { dd=tr-cur;
     //   radius[i] = abs(dd)<=growthRate ? tr : cur + sign(dd)*growthRate }
+    if (off.tgt >= 0) {
     pushF64Elem(em, off.tgt, i); em.localSet(tr);
     pushF64Elem(em, off.rad, i); em.localSet(cur);
     em.localGet(tr); em.localGet(cur); em.op(OP_F64_NE);
@@ -4618,6 +4659,7 @@ function emitForcePass(em: WasmEmitter, layout: AgentMemoryLayout, is3d: boolean
       );
       addr(off.rad, i); em.localGet(stepRad); em.f64Store();
     });
+    }  // end `off.tgt >= 0` (C9 / STEP 4)
   }
 
   // --- the 3×3(×3) hash stencil over the in-memory binStart/binAgents ---
@@ -5207,7 +5249,7 @@ export function compileAgentGraphWasm(
   };
   let forceBody: Uint8Array;
   try {
-    emitForcePass(fpEm, agentLayout, is3d, FP, FMOD_FUNC_IDX);
+    emitForcePass(fpEm, agentLayout, is3d, FP, FMOD_FUNC_IDX, motionModeCode(model.centerBased));
     forceBody = fpEm.buildBody();
   } catch (e) {
     return empty('agentWasm forcePass: ' + String((e as Error)?.message || e));
@@ -5357,6 +5399,10 @@ export function buildAgentLayoutExtras(model: CAModel): AgentLayoutExtras {
     // is shipped) so the stride the emitters bake and the store's array shapes
     // can never disagree — the baked-offset lockstep.
     bondReqSlots: bondReqSlotsForModel(model),
+    // C9 / STEP 4 — the optional-field gates. Shipped to the worker on the SAME
+    // object the WASM layout is built from, so the baked offsets and the store's
+    // views are one record (the bondReqSlots precedent).
+    fieldGates: resolveAgentFieldGates(model),
   };
 }
 

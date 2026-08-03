@@ -10,6 +10,16 @@
 
 ## 0. Verdict — GO-WITH-FIXES (hardened)
 
+> **STATUS (2026-08-03): the milestone is COMPLETE.** STEP 0-5 shipped earlier; **STEP 4 (profile-gated
+> SoA fields) and STEP 6 (the Static / Velocity motion integrator) shipped as Clarity phase C9** on branch
+> `GRA` — see [HANDOFF_CLARITY_SIMPLIFICATION.md](HANDOFF_CLARITY_SIMPLIFICATION.md) §C9 and the
+> "STEP 4 + STEP 6 — SHIPPED (C9)" section of the repo `CLAUDE.md`. Deviations from the plan below, all
+> documented there: the `AGENT_*_FIELDS` reorder was NOT needed (the gates simply skip a field, and a
+> given profile produces one consistent layout at every mirror); the gate hook is `AgentAbiShape.gates`
+> rather than the per-field `gate(profile)` closure (the SHAPE is the gate — the P2 bond-block precedent);
+> and the WebGPU agent SoA layout stays UNGATED by choice (its runs are a per-generation mirror, not the
+> model's memory), though its emitters carry the safety catch.
+
 The architecture is sound and *is* the codebase's own trajectory (`type`-removal, `maxBonds=0`, `useBondingPhysics`, `hasLookupTables`, `agentAccess`, `gridCells`, `is3d` are real precedents). Both audits agree the split is clean: **STEP 0 + STEP 1 (editor-surface gating, no SoA/engine change) can proceed and deliver the entire clarity win at near-zero risk** — the compiler stays unconditional, so those steps are provably behaviour-preserving. Everything heavier is gated behind three prerequisites the hardening review made concrete: **(1)** a *layout-agnostic* shared ABI descriptor + a **field-order** audit (not arity-only); **(2)** the complete **mode-aware dependency graph** as one source-of-truth consumed at three gates; **(3)** a **usage-widened** migration. Before the first real SoA gate (STEP 3) add the **structural-phase sub-step refactor**, **macro-internals re-validation**, and the **linked-mapping gate**. Before STEP 4, **reorder the interleaved `AGENT_*_FIELDS`** to append-at-stable-slot. WebGPU needs its **own L∞ harness** (bit-parity is impossible).
 
 ---
@@ -221,7 +231,7 @@ Every engine-touching step: `npx tsc -b` + `npm run build` clean; `parity-agent-
 - [ ] **B1a · `_agentBondCount` stays in all 3 CPU ABI mirrors even when Bonds=off** — it is a core reduction; deleting it shifts every downstream param. *(STEP 3, `test-bondcount-param-invariant`.)*
 - [ ] **B2 · `runAgentStructuralPhase` refactored into capability-gated sub-steps** — `killRequest`/`divideRequest`/`bondFormReq` reads go OOB the moment allocation is gated. *(STEP 3.)*
 - [ ] **B3 · CPU and GPU layouts driven by the same predicates** — separate ordered lists; the audit checks field *sets* match. *(S2/S6.)*
-- [ ] **B4 · Motion/Body stay always-allocated in v1** — no `Static` path exists; SoA-gating is STEP 6.
+- [x] **B4 · Motion/Body stay always-allocated in v1** — no `Static` path exists; SoA-gating is STEP 6.
 - [ ] **B5 · Macro internals re-validated after `expandMacros`** — a `Divide`/`Form Bond` inside a macro bypasses palette gating; informational badge in STEP 1, blocking from STEP 3. *(STEP 1/3.)*
 - [ ] **B6 · Linked agent output mappings on gated attributes gated** — a mapping on `radius`/`age` with the capability off dangles (`_undef`); skip/error + a model badge. *(STEP 1.)*
 - [ ] **M1 · Versioned `AgentStatePayload`** — reject incompatible-profile loads loudly.

@@ -27,6 +27,7 @@
 // ===========================================================================
 
 import type { CenterBasedConfig } from '../../model/types';
+import { normalizeFieldGates, type AgentFieldGates } from '../../model/agentFieldGating';
 import { cbNum, resolveBondRequestDepth, resolveMaxBonds } from '../../model/centerBased';
 import { BOND_REQ_ID_BIAS } from '../../modeler/vpl/compiler/bondRequestQueue';
 import type { DividePartitionSpec } from '../../modeler/vpl/compiler/dividePartition';
@@ -242,6 +243,12 @@ export interface AgentLayoutExtras {
    *  SHIPPED to the worker, so the compiler's baked stride and the store's array
    *  shapes derive from one number. */
   bondReqSlots?: number;
+  /** C9 / STEP 4 — which OPTIONAL per-agent field groups to allocate
+   *  (`resolveAgentFieldGates(model)`). ABSENT ⇒ all on ⇒ byte-identical to
+   *  pre-C9. `createAgentStore`'s `opts.fieldGates` OVERRIDES this (the
+   *  `syncAttrs` / `bondAttrSpecs` / `bondReqSlots` precedent) so the allocated
+   *  arrays and the baked offsets are computed from ONE record. */
+  fieldGates?: AgentFieldGates;
 }
 
 /** The number of `getNearbyAgents` scratch buffers the wasmBacked agent layout
@@ -284,6 +291,14 @@ export function computeAgentMaxHashBins(
   // with the world size (the "arbitrary limit scaling the volume up" report).
   return Math.min(AGENT_HASH_BIN_CAP, nx * ny * nz);
 }
+
+/** C9 / STEP 4 — the OPTIONAL per-agent f64 fields, each keyed by its gate. A
+ *  gated-OFF field is omitted from the layout entirely (no offset, no bytes) and
+ *  its store array is ZERO-LENGTH — on which `a[i] = v` is a silent no-op, so
+ *  every engine WRITE needs no guard; only reads do (`?? 0`). */
+const AGENT_F64_GATED: Record<string, keyof AgentFieldGates> = {
+  targetRadius: 'targetRadius', age: 'age', density: 'density',
+};
 
 const AGENT_F64_FIELDS = [
   'x', 'y', 'z', 'xNext', 'yNext', 'zNext', 'vx', 'vy', 'vz',
@@ -349,8 +364,15 @@ export function computeAgentMemoryLayout(
   // P4 — the request-queue stride (D+1). 1 ⇒ the pre-P4 single-slot layout, so
   // every offset below is byte-identical for a model that uses no queue verb.
   const bondReqSlots = Math.max(1, Math.floor(extras.bondReqSlots ?? 1));
+  // C9 / STEP 4 — the optional-field gates. ABSENT ⇒ all on ⇒ every offset below
+  // is byte-identical to pre-C9 (the model that keeps all four groups).
+  const gates = normalizeFieldGates(extras.fieldGates);
   // Per-agent Float64 (8-aligned, maxAgents*8 each; the queue fields ×bondReqSlots)
   for (const name of AGENT_F64_FIELDS) {
+    // C9 — a gated-OFF optional field reserves NO bytes and gets NO offset, so
+    // `layout.f64[name] === undefined` is the emitters' "read the default" signal.
+    const gk = AGENT_F64_GATED[name];
+    if (gk && !gates[gk]) continue;
     off = alignTo(off, 8);
     f64[name] = off;
     off += maxAgents * (AGENT_REQUEST_QUEUE_FIELDS.has(name) ? bondReqSlots : 1) * 8;
@@ -691,6 +713,10 @@ export interface AgentStore {
    *  (JS) path — the WASM minimal emitter set writes no user attrs, so the mode is
    *  moot there. */
   syncAttrs: boolean;
+  /** C9 / STEP 4 — which OPTIONAL field groups this store allocated. A gated-OFF
+   *  group's arrays are ZERO-LENGTH; consult this before READING one (writes are
+   *  silent no-ops). The ONE record the layout, the views and the ABI all used. */
+  fieldGates: AgentFieldGates;
 }
 
 /** Options for `createAgentStore`. `wasmBacked` (default false) relocates the
@@ -727,6 +753,12 @@ export interface CreateAgentStoreOpts {
    *  EVERY target — the same number the emitters bake. Absent ⇒ derived from the
    *  config's own depth. */
   bondReqSlots?: number;
+  /** C9 / STEP 4 — the AUTHORITATIVE optional-field gates for this store: they
+   *  override `layoutExtras.fieldGates` so the allocated arrays and the baked
+   *  offsets come from ONE record (the `syncAttrs` / `bondReqSlots` precedent).
+   *  Shipped by the main thread as `resolveAgentFieldGates(model)` on EVERY
+   *  target. Absent ⇒ all groups allocated (byte-identical to pre-C9). */
+  fieldGates?: AgentFieldGates;
 }
 
 /** Allocate the agent store once from the model's center-based config + agent
@@ -758,6 +790,10 @@ export function createAgentStore(
     opts?.bondReqSlots ?? opts?.layoutExtras?.bondReqSlots ?? (resolveBondRequestDepth(config) + 1),
   ));
 
+  // C9 / STEP 4 — the optional-field gates. The explicit opt wins over the
+  // (WASM-only) layout extras so the arrays below and the baked offsets are one
+  // record; absent ⇒ everything allocated (pre-C9 byte-identical).
+  const fieldGates = normalizeFieldGates(opts?.fieldGates ?? opts?.layoutExtras?.fieldGates);
   const wasmBacked = !!opts?.wasmBacked;
   // FULL-COVERAGE: sync attrs now apply on BOTH paths (the whole-catalogue WASM
   // module writes user attrs, so sync mode needs a distinct attr-write region —
@@ -784,14 +820,20 @@ export function createAgentStore(
   // Queue-shaped fields get `maxAgents * bondReqSlots` elements; everything else
   // keeps `maxAgents` (ONE list — AGENT_REQUEST_QUEUE_FIELDS — drives both the
   // baked offsets and these views, so they cannot disagree).
-  const lenOf = (name: string) => maxAgents * (AGENT_REQUEST_QUEUE_FIELDS.has(name) ? bondReqSlots : 1);
+  // A gated-OFF optional field allocates ZERO elements. Writes to a zero-length
+  // typed array are silent no-ops, so no engine write site needs a guard.
+  const lenOf = (name: string) => {
+    const gk = AGENT_F64_GATED[name];
+    if (gk && !fieldGates[gk]) return 0;
+    return maxAgents * (AGENT_REQUEST_QUEUE_FIELDS.has(name) ? bondReqSlots : 1);
+  };
 
   if (wasmBacked) {
-    const extras: AgentLayoutExtras = { ...(opts?.layoutExtras ?? {}), syncAttrs, bondAttrSpecs, bondReqSlots };
+    const extras: AgentLayoutExtras = { ...(opts?.layoutExtras ?? {}), syncAttrs, bondAttrSpecs, bondReqSlots, fieldGates };
     layout = computeAgentMemoryLayout(maxAgents, maxBonds, attrSpecs, Math.max(0, Math.floor(opts?.maxHashBins ?? 0)), extras);
     memory = new WebAssembly.Memory({ initial: layout.pages });
     const buf = memory.buffer;
-    f64 = (name) => new Float64Array(buf, layout!.f64[name]!, lenOf(name));
+    f64 = (name) => new Float64Array(buf, layout!.f64[name] ?? 0, lenOf(name));
     i32 = (name) => new Int32Array(buf, layout!.i32[name]!, lenOf(name));
     u8 = (name) => new Uint8Array(buf, layout!.u8[name]!, maxAgents);
     bondI32 = (name) => new Int32Array(buf, layout!.bondI32[name]!, maxAgents * maxBonds);
@@ -940,11 +982,15 @@ export function createAgentStore(
     colors: colorsArr(),
     // Persistent display sprite state — plain arrays regardless of backing (the JS
     // node + engine advance are the only writers). All 0: no sprite, frame 0, hold.
-    spriteIds: new Int32Array(maxAgents),
-    spriteFrames: new Float64Array(maxAgents),
-    spriteSpeeds: new Float64Array(maxAgents),
-    spriteRotations: new Float64Array(maxAgents),
-    spriteScales: new Float64Array(maxAgents),
+    // C9 / STEP 4 — the sprite block (36 B/agent) is ZERO-LENGTH when the model
+    // carries no sprite assets and no Set Agent Sprite node. Every write site
+    // (initAgentSlot / divideAgent) is a silent no-op on a zero-length array, and
+    // `advanceAgentSprites` / the render snapshot are already gated on sprites.
+    spriteIds: new Int32Array(fieldGates.sprites ? maxAgents : 0),
+    spriteFrames: new Float64Array(fieldGates.sprites ? maxAgents : 0),
+    spriteSpeeds: new Float64Array(fieldGates.sprites ? maxAgents : 0),
+    spriteRotations: new Float64Array(fieldGates.sprites ? maxAgents : 0),
+    spriteScales: new Float64Array(fieldGates.sprites ? maxAgents : 0),
     attrSpecs,
     attrRead, attrWrite, attrKind,
     highWater: 0,
@@ -956,6 +1002,7 @@ export function createAgentStore(
     memory,
     layout,
     syncAttrs,
+    fieldGates,
   };
 }
 

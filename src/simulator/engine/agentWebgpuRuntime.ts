@@ -110,6 +110,13 @@ export interface AgentForceDispatchParams {
   /** P1: run the neighbour/density scan. 0 ⇒ skip it entirely (engine physics
    *  off AND nothing reads density). Absent ⇒ 1 (the historical always-scan). */
   doDensity?: number;
+  /** C9 / STEP 6 — the resolved MOTION mode: 0 static | 1 velocity | 2 force.
+   *  Absent ⇒ 2 (the historical engine). `static` makes the shader write neither
+   *  the velocity nor `xNext`, and the caller must skip the CPU position commit
+   *  with it (`readbackAgentStep({ commitPositions: false })`) — the two MUST be
+   *  skipped together or a graph `Set Agent Position` write is reverted by a
+   *  stale `xNext` (the documented Ant Necrophoresis hazard). */
+  motionMode?: number;
 }
 
 interface PooledBuffer { buffer: GPUBuffer; size: number; inUse: boolean }
@@ -1251,6 +1258,8 @@ export function uploadAgentForceControl(rt: AgentWebGPURuntime, highWater: numbe
   fl[26] = fp.chargeK ?? 0;
   fl[27] = fp.chargeMaxD2 ?? 0;
   fl[28] = fp.chargeMinC ?? 0;
+  // C9 / STEP 6 (absent ⇒ 2 = force = the historical engine).
+  u[29] = (fp.motionMode ?? 2) >>> 0;
   rt.device.queue.writeBuffer(rt.forceControlBuf, 0, ab);
 }
 
@@ -2870,7 +2879,7 @@ ${RESIDENT_IDX}
  *  per-gen path did this CPU-side before every upload; without it the
  *  behaviour's `applyForce +=` accumulates across generations unboundedly
  *  (the resident-path "no flocking" bug). */
-function emitPosCommitWGSL(layout: AgentWebGPULayout): string {
+function emitPosCommitWGSL(layout: AgentWebGPULayout, motionMode = 2): string {
   const is3d = layout.gridDepth > 1;
   const xB = layout.f32Base['x']!, yB = layout.f32Base['y']!;
   const xnB = layout.f32Base['xNext']!, ynB = layout.f32Base['yNext']!;
@@ -2893,9 +2902,14 @@ ${RESIDENT_IDX}
   // distinct values across an N-generation batch instead of one frozen value.
   if (i == 0u) { genCounter[0] = genCounter[0] + 1u; }
   if (i >= hp.highWater) { return; }
-  agentF32[${xB}u + i] = agentF32[${xnB}u + i];
+  ${motionMode === 0 ? `// C9 / STEP 6 (Static): the force pass writes NO xNext, so committing it would
+  // revert a graph Set Agent Position write. Refresh the BACK buffer from the live
+  // x instead, keeping the double buffer coherent with zero engine motion.
+  agentF32[${xnB}u + i] = agentF32[${xB}u + i];
+  agentF32[${ynB}u + i] = agentF32[${yB}u + i];${is3d ? `
+  agentF32[${znB}u + i] = agentF32[${zB}u + i];` : ''}` : `agentF32[${xB}u + i] = agentF32[${xnB}u + i];
   agentF32[${yB}u + i] = agentF32[${ynB}u + i];${is3d ? `
-  agentF32[${zB}u + i] = agentF32[${znB}u + i];` : ''}
+  agentF32[${zB}u + i] = agentF32[${znB}u + i];` : ''}`}
   agentF32[${fxB}u + i] = 0.0;
   agentF32[${fyB}u + i] = 0.0;${is3d ? `
   agentF32[${fzB}u + i] = 0.0;` : ''}
@@ -2979,7 +2993,7 @@ function encodeForceIterations(
  *  batch uses the shared per-gen `rt.forcePipeline` (zero mirror cost).
  *  `needScan` is a STATIC per-model property (its gates don't change under the
  *  residency-eligibility conditions), so the first-build memoization is safe. */
-export async function ensureAgentResident(rt: AgentWebGPURuntime, needScan = false): Promise<boolean> {
+export async function ensureAgentResident(rt: AgentWebGPURuntime, needScan = false, motionMode = 2): Promise<boolean> {
   if (rt.resident) return true;
   if (rt.residentBuildFailed) return false;
   try {
@@ -3027,7 +3041,7 @@ export async function ensureAgentResident(rt: AgentWebGPURuntime, needScan = fal
       scatterEntries.push({ binding: 6, visibility: S, buffer: { type: 'storage' } });
     }
     const scatter = await mkPipe('agent-hash-scatter', emitHashScatterWGSL(L, needScan), 'hashScatter', scatterEntries);
-    const commit = await mkPipe('agent-pos-commit', emitPosCommitWGSL(L), 'posCommit', [
+    const commit = await mkPipe('agent-pos-commit', emitPosCommitWGSL(L, motionMode), 'posCommit', [
       { binding: 0, visibility: S, buffer: { type: 'storage' } },
       { binding: 1, visibility: S, buffer: { type: 'uniform' } },
       { binding: 2, visibility: S, buffer: { type: 'storage' } },

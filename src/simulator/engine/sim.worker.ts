@@ -29,6 +29,7 @@ import { buildActiveOffsets, createActiveSet, rebuildActiveSet, applyTransition,
 import { packNI, packNI3 } from '../../modeler/vpl/compiler/niCodec';
 import type { Attribute, CenterBasedConfig, SkipIsolatedEmptyConfig } from '../../model/types';
 import { cbNum, usesBondingPhysics, usesSoftCollision, usesPositionalCollision, usesEngineSprings, usesEngineGrowth, chargeBinEdgeOf, chargeParamsOf, layoutIterationsOf, effectiveAgentDt, legacyPhysicsFlagsInEffect } from '../../model/centerBased';
+import { normalizeFieldGates, ALL_FIELD_GATES_ON, motionModeCode, type AgentFieldGates } from '../../model/agentFieldGating';
 // C1 — the MODEL-derivable half of residency eligibility, shared with the
 // Properties compatibility readout so the engine and the explanation agree.
 import { residencyModelBlockers } from '../../model/agentResidency';
@@ -249,6 +250,11 @@ interface InitMsg {
    *  lockstep). `1` (a model whose agent graph uses no queue verb) is the pre-P4
    *  single-slot shape. */
   agentBondReqSlots?: number;
+  /** C9 / STEP 4 — which OPTIONAL per-agent SoA field groups this model
+   *  allocates (`resolveAgentFieldGates(model)` on the MAIN thread). SHIPPED,
+   *  never recomputed here, so the worker's store and the compiler's baked
+   *  offsets / param list are one record. Absent ⇒ all groups (pre-C9). */
+  agentFieldGates?: AgentFieldGates;
   /** P5 — the DIVISION BOND PARTITION table (one entry per DISTINCT Divide Agent
    *  partition spec, in the compiler's first-encounter order). The compiled agent
    *  code writes a 1-based code into `divideRequest`; the structural phase looks
@@ -359,7 +365,7 @@ interface PaintManualMsg {
   activeViewer: string;
 }
 interface ResetMsg { type: 'reset'; activeViewer: string; reqId?: number }
-interface RecompileMsg { type: 'recompile'; stepCode: string; initCode?: string; gridInitCode?: string; skipIsolatedEmpty?: SkipIsolatedEmptyConfig; inputColorCodes: Array<{ mappingId: string; code: string }>; outputMappingCodes: Array<{ mappingId: string; code: string }>; stopMessages?: string[]; updateMode: string; asyncScheme: string; wasmStepBytes?: Uint8Array; wasmStepError?: string; wasmExports?: string[]; viewerIds?: Record<string, number>; webgpuShaderCode?: string; webgpuShaderError?: string; webgpuEntryPoints?: WebGPUEntryPoints; webgpuLayout?: WebGPULayout; webgpuStopCheckInterval?: number; variegated?: VariegatedPayload; interactionTables?: InteractionTablePayload[]; agentBehaviourCode?: string; agentInitCode?: string; agentDivisionCode?: string; agentColorViewer?: string; agentOutputMappingCodes?: Array<{ mappingId: string; code: string }>; agentHasSprites?: boolean; agentBondReqSlots?: number; agentDividePartitions?: DividePartitionSpec[]; centerBased?: CenterBasedConfig; agentUsesField?: boolean; agentUsesDensity?: boolean; rulesReadComputedIndicator?: boolean; agentResidencyClean?: boolean; agentTarget?: 'js' | 'wasm' | 'webgpu'; agentWasmBytes?: Uint8Array; agentWasmViewerGuardIds?: string[]; agentLayoutExtras?: AgentLayoutExtras; agentWasmLayoutSig?: { maxHashBins: number; totalBytes: number }; agentWebgpuBehaviourShader?: string; agentWebgpuForceShader?: string; agentWebgpuMaxAgents?: number; agentWebgpuMaxHashBins?: number; agentWebgpuLayout?: AgentWebGPULayout; agentRenderLayout?: AgentWebGPULayout; agentWebgpuUsesI32Write?: boolean; agentWebgpuUsage?: { usesBondStore?: boolean; usesBondStoreWrite?: boolean; usesIndicators?: boolean; usesAux?: boolean; usesSpawn?: boolean; usesStop?: boolean; usesForceScatter?: boolean; usesGeneration?: boolean }; agentWebgpuOmShaders?: AgentOMShaderInput[] }
+interface RecompileMsg { type: 'recompile'; stepCode: string; initCode?: string; gridInitCode?: string; skipIsolatedEmpty?: SkipIsolatedEmptyConfig; inputColorCodes: Array<{ mappingId: string; code: string }>; outputMappingCodes: Array<{ mappingId: string; code: string }>; stopMessages?: string[]; updateMode: string; asyncScheme: string; wasmStepBytes?: Uint8Array; wasmStepError?: string; wasmExports?: string[]; viewerIds?: Record<string, number>; webgpuShaderCode?: string; webgpuShaderError?: string; webgpuEntryPoints?: WebGPUEntryPoints; webgpuLayout?: WebGPULayout; webgpuStopCheckInterval?: number; variegated?: VariegatedPayload; interactionTables?: InteractionTablePayload[]; agentBehaviourCode?: string; agentInitCode?: string; agentDivisionCode?: string; agentColorViewer?: string; agentOutputMappingCodes?: Array<{ mappingId: string; code: string }>; agentHasSprites?: boolean; agentBondReqSlots?: number; agentFieldGates?: AgentFieldGates; agentDividePartitions?: DividePartitionSpec[]; centerBased?: CenterBasedConfig; agentUsesField?: boolean; agentUsesDensity?: boolean; rulesReadComputedIndicator?: boolean; agentResidencyClean?: boolean; agentTarget?: 'js' | 'wasm' | 'webgpu'; agentWasmBytes?: Uint8Array; agentWasmViewerGuardIds?: string[]; agentLayoutExtras?: AgentLayoutExtras; agentWasmLayoutSig?: { maxHashBins: number; totalBytes: number }; agentWebgpuBehaviourShader?: string; agentWebgpuForceShader?: string; agentWebgpuMaxAgents?: number; agentWebgpuMaxHashBins?: number; agentWebgpuLayout?: AgentWebGPULayout; agentRenderLayout?: AgentWebGPULayout; agentWebgpuUsesI32Write?: boolean; agentWebgpuUsage?: { usesBondStore?: boolean; usesBondStoreWrite?: boolean; usesIndicators?: boolean; usesAux?: boolean; usesSpawn?: boolean; usesStop?: boolean; usesForceScatter?: boolean; usesGeneration?: boolean }; agentWebgpuOmShaders?: AgentOMShaderInput[] }
 interface UpdateLookupTableMsg {
   type: 'updateLookupTable';
   attrId: string;
@@ -1038,6 +1044,8 @@ let hasAgentSprites = false;
  *  `createAgentStore`, so the store's request arrays and the emitted stride are
  *  ONE number (the baked-offset lockstep). 1 = the pre-P4 single-slot shape. */
 let agentBondReqSlots = 1;
+/** C9 / STEP 4 — the SHIPPED optional-field gates (see AgentFieldGates). */
+let agentFieldGates: AgentFieldGates = ALL_FIELD_GATES_ON;
 /** P5 — the DIVISION BOND PARTITION table the compiler shipped (index = the
  *  `divideRequest` code minus 1). Empty ⇒ every division takes
  *  `DEFAULT_DIVIDE_PARTITION`, the pre-P5 geometric split. */
@@ -1308,7 +1316,7 @@ function initAgents(): void {
   const layoutExtras: AgentLayoutExtras | undefined = wantWasmBacked
     ? { ...(pendingAgentLayoutExtras ?? {}), fieldTotal: width * height * depth, syncAttrs: wantSyncAttrs }
     : undefined;
-  agentStore = createAgentStore(centerBasedConfig, buildAgentAttrSpecs(), { wasmBacked: wantWasmBacked, syncAttrs: wantSyncAttrs, maxHashBins: agentMaxHashBins, layoutExtras, bondAttrSpecs: buildBondAttrSpecs(), bondReqSlots: agentBondReqSlots });
+  agentStore = createAgentStore(centerBasedConfig, buildAgentAttrSpecs(), { wasmBacked: wantWasmBacked, syncAttrs: wantSyncAttrs, maxHashBins: agentMaxHashBins, layoutExtras, bondAttrSpecs: buildBondAttrSpecs(), bondReqSlots: agentBondReqSlots, fieldGates: agentFieldGates });
   // The agent world IS the grid coordinate frame (1:1, Decision D-FIELD): agent
   // (x,y) are in CELL units so they map onto the grid + the screen with the same
   // transform the cell blit uses. (worldWidth/Height in the config are reserved
@@ -1586,7 +1594,11 @@ function agentAbiShapeOfStore(s: AgentStore): AgentAbiShape {
   // graph's real answer on the PARAM side). Params ≤ args is the safe direction,
   // so this makes the dangerous one — a declared `_generation` with no value —
   // structurally impossible. See the note on AgentAbiShape.usesGeneration.
-  return { is3d: s.worldDepth > 1, agentAttrs: s.attrSpecs, fieldAttrs: fieldSpecs, hasLookupTables, bondAttrs: s.bondAttrSpecs, usesGeneration: true };
+  // C9 / STEP 4: the gates come from the STORE — the record it actually
+  // ALLOCATED — so the arg list can never describe a different field set than
+  // the store has. (The store got them from the SHIPPED `agentFieldGates`, the
+  // same record the compiler used for the param list.)
+  return { is3d: s.worldDepth > 1, agentAttrs: s.attrSpecs, fieldAttrs: fieldSpecs, hasLookupTables, bondAttrs: s.bondAttrSpecs, usesGeneration: true, gates: s.fieldGates };
 }
 
 /** The shared runtime values (external caches) every kind resolves from ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â pulled
@@ -1853,8 +1865,18 @@ function runAgentStep(): void {
   // Velocity. Resolved with the customForcesOnly back-compat fallback so legacy
   // files are byte-identical (their bonding-physics models keep all four; their
   // custom-force models never used springs/growth/auto-bond anyway).
-  const bonding = usesBondingPhysics(cfg);
-  const springs = usesEngineSprings(cfg);   // bond springs ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â the Bonds=Physics capability (decoupled from the legacy bundle)
+  // C9 / STEP 6 -- THE MOTION MODE. `force` (the default, and every legacy file)
+  // is the historical engine, byte-for-byte. `velocity` integrates the velocity
+  // the graph SET but seeds no engine forces. `static` moves nothing: the force
+  // accumulation, the integrate block AND the position commit are all skipped --
+  // they MUST be skipped TOGETHER, because `swapPositions` copies the stale
+  // `xNext` over `x` and would otherwise revert every `Set Agent Position` write
+  // (the documented Ant Necrophoresis hazard).
+  const motionMode = motionModeCode(cfg);   // 0 static | 1 velocity | 2 force
+  const doForces = motionMode === 2;
+  const doCommit = motionMode !== 0;
+  const bonding = usesBondingPhysics(cfg) && doForces;
+  const springs = usesEngineSprings(cfg) && doForces;   // bond springs ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â the Bonds=Physics capability (decoupled from the legacy bundle)
   const muR = cbNum(cfg, 'repulsionStiffness');
   const muA = cbNum(cfg, 'adhesionStiffness');
   const range = cbNum(cfg, 'interactionRange');
@@ -1887,7 +1909,7 @@ function runAgentStep(): void {
   // (bonding physics). `doForce` runs the neighbour force block when EITHER is on.
   // For every shipped sample doCollision === engineForces, so muRep/muAdh reduce to
   // muR/muA and this is byte-identical (verified by the force-pass parity harness).
-  const doCollision = usesSoftCollision(cfg);   // SOFT-sphere repulsion force (positional collision runs a separate projection pass below)
+  const doCollision = usesSoftCollision(cfg) && doForces;   // SOFT-sphere repulsion force (positional collision runs a separate projection pass below)
   const muRep = doCollision ? muR : 0;
   const muAdh = engineForces ? muA : 0;
   const doForce = doCollision || engineForces;
@@ -1904,14 +1926,17 @@ function runAgentStep(): void {
   // bond graph open. `minC` takes the force continuously to zero at the cutoff
   // instead of stepping. Off ⇒ `doCharge` false ⇒ every added block is skipped and
   // the loop is behaviour-identical to the pre-charge engine.
-  const { doCharge, chargeK, chargeMaxD2, chargeMinC } = chargeParamsOf(cfg);
+  const { doCharge: chargeResolved, chargeK, chargeMaxD2, chargeMinC } = chargeParamsOf(cfg);
+  const doCharge = chargeResolved && doForces;   // C9: no engine force under velocity/static
   // Charge needs the neighbour scan even when nothing else does (a pure charged
   // gas has no soft-sphere, no springs and no density consumer).
   const doScan = doForce || agentUsesDensity || doCharge;
   // L3 — how many times the force integrator runs this generation (1 = the
   // pre-L3 engine, exactly). Resolved from the ONE clamped resolver every
   // surface reads, so the CPU and GPU paths cannot disagree about the count.
-  const layoutIters = layoutIterationsOf(cfg);
+  // Under Static there is nothing to relax, so the solver runs a single pass
+  // (which then only advances age / the growth ramp / the density scan).
+  const layoutIters = doCommit ? layoutIterationsOf(cfg) : 1;
 
   // Reset the per-step force accumulator (Apply Force adds into it during
   // behaviour) BEFORE behaviour runs. forceZ is a memset of an always-zero-in-2D
@@ -2237,24 +2262,34 @@ function runAgentStep(): void {
         }
 
         // Integrate (3-vector); momentum 0 ÃƒÂ¢Ã¢â‚¬Â¡Ã¢â‚¬â„¢ overdamped; optional 3D-speed cap.
-        let vxi = momentum * vxArr[i]! + (dt / eta) * fx;
-        let vyi = momentum * vyArr[i]! + (dt / eta) * fy;
-        let vzi = momentum * vzArr[i]! + (dt / eta) * fz;
-        if (maxSpeed > 0) {
-          const sp = Math.sqrt(vxi * vxi + vyi * vyi + vzi * vzi);
-          if (sp > maxSpeed) { const sc = maxSpeed / sp; vxi *= sc; vyi *= sc; vzi *= sc; }
+        // C9 / STEP 6: Static never reaches here (the whole commit is skipped
+        // below); Velocity keeps the graph-set velocity and only advances the
+        // position, so `Set Velocity` coasts instead of being wiped by momentum.
+        if (doCommit) {
+          let vxi = doForces ? momentum * vxArr[i]! + (dt / eta) * fx : vxArr[i]!;
+          let vyi = doForces ? momentum * vyArr[i]! + (dt / eta) * fy : vyArr[i]!;
+          let vzi = doForces ? momentum * vzArr[i]! + (dt / eta) * fz : vzArr[i]!;
+          if (maxSpeed > 0) {
+            const sp = Math.sqrt(vxi * vxi + vyi * vyi + vzi * vzi);
+            if (sp > maxSpeed) { const sc = maxSpeed / sp; vxi *= sc; vyi *= sc; vzi *= sc; }
+          }
+          vxArr[i] = vxi; vyArr[i] = vyi; vzArr[i] = vzi;
+          let nx = xi + vxi, ny = yi + vyi, nz = zi + vzi;
+          if (torus) { nx = ((nx % W) + W) % W; ny = ((ny % H) + H) % H; nz = ((nz % D) + D) % D; }
+          else { nx = nx < 0 ? 0 : nx > W ? W : nx; ny = ny < 0 ? 0 : ny > H ? H : ny; nz = nz < 0 ? 0 : nz > D ? D : nz; }
+          xN[i] = nx; yN[i] = ny; zN[i] = nz;
         }
-        vxArr[i] = vxi; vyArr[i] = vyi; vzArr[i] = vzi;
-        let nx = xi + vxi, ny = yi + vyi, nz = zi + vzi;
-        if (torus) { nx = ((nx % W) + W) % W; ny = ((ny % H) + H) % H; nz = ((nz % D) + D) % D; }
-        else { nx = nx < 0 ? 0 : nx > W ? W : nx; ny = ny < 0 ? 0 : ny > H ? H : ny; nz = nz < 0 ? 0 : nz > D ? D : nz; }
-        xN[i] = nx; yN[i] = ny; zN[i] = nz;
         s.age[i] = s.age[i]! + 1;
-        const tr = s.targetRadius[i]!;
-        const cur = s.radius[i]!;
-        if (tr !== cur) {
-          const dd = tr - cur;
-          s.radius[i] = Math.abs(dd) <= growthIter ? tr : cur + Math.sign(dd) * growthIter;
+        // C9 / STEP 4: `growthIter > 0` is EXACTLY the old no-op condition (a zero
+        // rate leaves `cur + sign(dd)*0 === cur`), and it is what keeps the ramp
+        // from reading a GATED-OFF `targetRadius` (which would be `undefined`).
+        if (growthIter > 0) {
+          const tr = s.targetRadius[i]!;
+          const cur = s.radius[i]!;
+          if (tr !== cur) {
+            const dd = tr - cur;
+            s.radius[i] = Math.abs(dd) <= growthIter ? tr : cur + Math.sign(dd) * growthIter;
+          }
         }
       }
     } else {
@@ -2354,30 +2389,40 @@ function runAgentStep(): void {
         // Integrate: velocity = momentumÃƒâ€šÃ‚Â·velocity + (ÃƒÅ½Ã¢â‚¬Ât/ÃƒÅ½Ã‚Â·)Ãƒâ€šÃ‚Â·force; position += velocity.
         // momentum 0 ÃƒÂ¢Ã¢â‚¬Â¡Ã¢â‚¬â„¢ vx = (ÃƒÅ½Ã¢â‚¬Ât/ÃƒÅ½Ã‚Â·)Ãƒâ€šÃ‚Â·fx, the original overdamped step (byte-identical
         // for tissue); momentum > 0 carries inertia (flocking). Optional speed cap.
-        let vxi = momentum * vxArr[i]! + (dt / eta) * fx;
-        let vyi = momentum * vyArr[i]! + (dt / eta) * fy;
-        if (maxSpeed > 0) {
-          const sp = Math.sqrt(vxi * vxi + vyi * vyi);
-          if (sp > maxSpeed) { const sc = maxSpeed / sp; vxi *= sc; vyi *= sc; }
+        // C9 / STEP 6 -- see the 3D arm: Static skips the commit entirely,
+        // Velocity coasts on the graph-set velocity.
+        if (doCommit) {
+          let vxi = doForces ? momentum * vxArr[i]! + (dt / eta) * fx : vxArr[i]!;
+          let vyi = doForces ? momentum * vyArr[i]! + (dt / eta) * fy : vyArr[i]!;
+          if (maxSpeed > 0) {
+            const sp = Math.sqrt(vxi * vxi + vyi * vyi);
+            if (sp > maxSpeed) { const sc = maxSpeed / sp; vxi *= sc; vyi *= sc; }
+          }
+          vxArr[i] = vxi; vyArr[i] = vyi;
+          let nx = xi + vxi;
+          let ny = yi + vyi;
+          if (torus) { nx = ((nx % W) + W) % W; ny = ((ny % H) + H) % H; }
+          else { nx = nx < 0 ? 0 : nx > W ? W : nx; ny = ny < 0 ? 0 : ny > H ? H : ny; }
+          xN[i] = nx; yN[i] = ny;
         }
-        vxArr[i] = vxi; vyArr[i] = vyi;
-        let nx = xi + vxi;
-        let ny = yi + vyi;
-        if (torus) { nx = ((nx % W) + W) % W; ny = ((ny % H) + H) % H; }
-        else { nx = nx < 0 ? 0 : nx > W ? W : nx; ny = ny < 0 ? 0 : ny > H ? H : ny; }
-        xN[i] = nx; yN[i] = ny;
         s.age[i] = s.age[i]! + 1;
-        // Growth: ramp radius toward the target set by Set Target Radius.
-        const tr = s.targetRadius[i]!;
-        const cur = s.radius[i]!;
-        if (tr !== cur) {
-          const dd = tr - cur;
-          s.radius[i] = Math.abs(dd) <= growthIter ? tr : cur + Math.sign(dd) * growthIter;
+        // Growth: ramp radius toward the target set by Set Target Radius. The
+        // `growthIter > 0` guard is the old no-op condition made explicit (C9).
+        if (growthIter > 0) {
+          const tr = s.targetRadius[i]!;
+          const cur = s.radius[i]!;
+          if (tr !== cur) {
+            const dd = tr - cur;
+            s.radius[i] = Math.abs(dd) <= growthIter ? tr : cur + Math.sign(dd) * growthIter;
+          }
         }
       }
     }
     // Commit positions (synchronous double-buffer swap; S11 helper ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â z swapped in 3D).
-    swapPositions(s, is3d);
+    // C9 / STEP 6: under Static the commit is SKIPPED so `x` stays the single
+    // live buffer and a `Set Agent Position` write is not reverted by a stale
+    // `xNext` (the Ant Necrophoresis hazard).
+    if (doCommit) swapPositions(s, is3d);
   }
   // Age advances ONCE per generation, not once per force iteration: every
   // iteration's integrate block did `age += 1`, so undo the extra ones. Exact -
@@ -2655,7 +2700,9 @@ async function runAgentBatchResident(count: number, bumpGeneration: boolean = tr
     // Charge joins it: a charged model runs the neighbour scan (over a WIDER stencil
     // than anything else), so it is exactly the case the coalesced mirror helps most.
     const needScan = usesBondingPhysics(cfg) || usesSoftCollision(cfg) || agentUsesDensity || chargeBinEdgeOf(cfg) > 0;
-    if (!(await ensureAgentResident(rt, needScan))) return false;
+    // C9 / STEP 6 - the resident posCommit is compiled for the motion mode too
+    // (Static refreshes the BACK buffer instead of committing a stale xNext).
+    if (!(await ensureAgentResident(rt, needScan, motionModeCode(cfg)))) return false;
     const hw = s.highWater;
     // Per-batch hash geometry — CPU-computed once (radius is static under the
     // eligibility gate, so maxR can't drift mid-batch).
@@ -2702,6 +2749,7 @@ async function runAgentBatchResident(count: number, bumpGeneration: boolean = tr
       doCollision: usesSoftCollision(cfg) ? 1 : 0,
       doDensity: agentUsesDensity ? 1 : 0,
       torus: torus ? 1 : 0,
+      motionMode: motionModeCode(cfg),   // C9 / STEP 6
       ...chargeDispatchFields(cfg),
       nBinsZ: hp.nBinsZ, binSizeZ: hp.binSizeZ, fieldD: s.worldDepth,
       originX: 0, originY: 0, originZ: 0,
@@ -2765,10 +2813,19 @@ async function runAgentStepWebGPUInner(gpuFieldBridge?: GpuFieldBridge | null): 
   const rt = agentWebgpuRuntime;
   if (!s || !rt || !rt.ready) return false;
   const cfg = centerBasedConfig;
-  const bonding = usesBondingPhysics(cfg);
+  // C9 / STEP 6 - under Static the shader writes NO xNext, and readbackAgentStep
+  // commits xNext into x. Refresh the back buffer from the LIVE x before the
+  // upload so that commit is an identity and a graph Set Agent Position write
+  // survives (the Ant Necrophoresis hazard, GPU edition).
+  const gpuMotionMode = motionModeCode(cfg);
+  if (gpuMotionMode === 0) {
+    s.xNext.set(s.x); s.yNext.set(s.y);
+    if (s.worldDepth > 1) s.zNext.set(s.z);
+  }
+  const bonding = usesBondingPhysics(cfg) && gpuMotionMode === 2;
   const muR = cbNum(cfg, 'repulsionStiffness');
   const muA = cbNum(cfg, 'adhesionStiffness');
-  const doCollision = usesSoftCollision(cfg);   // SOFT-sphere repulsion force (positional collision runs a separate projection pass below)
+  const doCollision = usesSoftCollision(cfg) && gpuMotionMode === 2;   // SOFT-sphere repulsion (C9: no engine force under velocity/static)
   const range = cbNum(cfg, 'interactionRange');
   const eta = Math.max(1e-6, cbNum(cfg, 'drag'));
   const torus = boundaryTreatment === 'torus';
@@ -2846,6 +2903,7 @@ async function runAgentStepWebGPUInner(gpuFieldBridge?: GpuFieldBridge | null): 
     // CPU loop uses; `/ 1` is exact, so the default path is untouched).
     growthRate: growthRate / layoutIterationsOf(cfg),
     fieldW: W, fieldH: H, bonding: bonding ? 1 : 0, doCollision: doCollision ? 1 : 0, doDensity: agentUsesDensity ? 1 : 0, torus: torus ? 1 : 0,
+    motionMode: gpuMotionMode,   // C9 / STEP 6
     ...chargeDispatchFields(cfg),
     nBinsZ: hash ? hash.nBinsZ : 1, binSizeZ: hash ? hash.binSizeZ : 1, fieldD: s.worldDepth,
     originX: hash ? hash.originX : 0, originY: hash ? hash.originY : 0, originZ: hash ? hash.originZ : 0,
@@ -6199,6 +6257,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       agentColorViewer = msg.agentColorViewer || '';
       hasAgentSprites = !!msg.agentHasSprites;
       agentBondReqSlots = Math.max(1, Math.floor(msg.agentBondReqSlots ?? 1));
+      agentFieldGates = normalizeFieldGates(msg.agentFieldGates);
       agentDividePartitions = msg.agentDividePartitions ?? [];
       // PR6b-1 / PR7: resolve the agent target + stash the per-target payload
       // BEFORE initAgents (which reads agentTarget to decide whether to back the
@@ -6892,6 +6951,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
         // a later reinit (reset / dims change) in lockstep with the code just
         // recompiled, rather than re-allocating against the previous stride.
         if (rc.agentBondReqSlots !== undefined) agentBondReqSlots = Math.max(1, Math.floor(rc.agentBondReqSlots));
+        if (rc.agentFieldGates !== undefined) agentFieldGates = normalizeFieldGates(rc.agentFieldGates);
         // P5 — the partition table rides EVERY recompile (a partition-mode edit is
         // a graph-only change, so it must not need a full reinit to take effect).
         agentDividePartitions = rc.agentDividePartitions ?? [];
@@ -7885,7 +7945,10 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
         x: s.x[id]!, y: s.y[id]!, z: s.worldDepth > 1 ? s.z[id]! : undefined,
         vx: s.vx[id]!, vy: s.vy[id]!, vz: s.worldDepth > 1 ? s.vz[id]! : undefined,
         radius: s.radius[id]!, lineage: s.lineage[id]!,
-        age: s.age[id]!, bondDegree: s.bondCount[id]!, density: s.density[id]!,
+        // C9 / STEP 4: a gated-OFF field is a zero-length array, so its read is
+        // `undefined` — report the typed default rather than showing `undefined`
+        // in the inspector (THE SAFETY CATCH on the engine side).
+        age: s.age[id] ?? 0, bondDegree: s.bondCount[id]!, density: s.density[id] ?? 0,
         attrs, bonds,
         ...(bondAttrValues.length > 0 ? { bondAttrs: bondAttrValues } : {}),
       });

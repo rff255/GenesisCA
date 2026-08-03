@@ -27,6 +27,7 @@ import { diagnoseTargets, ENGINE_LABEL, REASON_CLASS_TAG } from '../model/target
 import { bondAttrsOf } from '../model/attributeScope';
 import { compileAgentGraphWasmForModel, isAgentGraphWasmSupported, buildAgentLayoutExtras } from '../modeler/vpl/compiler/agentWasm/compile';
 import { bondReqSlotsForModel } from '../modeler/vpl/compiler/bondRequestQueue';
+import { resolveAgentFieldGates, motionModeCode } from '../model/agentFieldGating';
 import type { DividePartitionSpec } from '../modeler/vpl/compiler/dividePartition';
 import type { AgentLayoutExtras } from './engine/agentEngine';
 import { compileAgentGraphWebGPUForModel, isAgentGraphWebGPUSupported } from '../modeler/vpl/compiler/agentWebgpu/compile';
@@ -6121,6 +6122,10 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       // Shipped on every target so the store's array shapes and the emitters'
       // baked stride are ONE number (bondReqSlotsForModel is the single source).
       agentBondReqSlots: bondReqSlotsForModel(model),
+      // C9 / STEP 4 - the optional-field gates, SHIPPED (never recomputed in the
+      // worker) so the store's arrays, the WASM baked offsets and the compiled
+      // param list are one record.
+      agentFieldGates: resolveAgentFieldGates(model),
       agentDividePartitions: agentResult.dividePartitions,
       // PR5 (C-D1): whether the agent graph reads/writes the cell field. Drives
       // the WebGPU-grid field bridge (a no-field model does 0 per-step
@@ -6377,6 +6382,14 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       // Toggling the CA-grid topology changes whether the worker builds the
       // neighbour tables + runs the cell step — a structural reinit.
       || (prev.topologyMode?.gridCells !== false) !== (model.topologyMode?.gridCells !== false)
+      // C9 / STEP 4 - the optional-field gates decide the agent SoA LAYOUT (which
+      // fields exist and therefore every offset after them), so a change is
+      // structural: a soft recompile would leave the store laid out one way and
+      // the freshly compiled module baking the other.
+      || JSON.stringify(resolveAgentFieldGates(prev)) !== JSON.stringify(resolveAgentFieldGates(model))
+      // C9 / STEP 6 - the motion mode is baked into the WASM force pass + the
+      // resident posCommit shader, so it is structural too.
+      || motionModeCode(prev.centerBased) !== motionModeCode(model.centerBased)
       || (prev.centerBased?.maxAgents ?? 0) !== (model.centerBased?.maxAgents ?? 0)
       // Compare the PROFILE-AWARE effective bond stride (STEP 3): the Bonds
       // capability drops maxBonds to 0 WITHOUT changing `centerBased.maxBonds`, so
@@ -6588,6 +6601,10 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       // Shipped on every target so the store's array shapes and the emitters'
       // baked stride are ONE number (bondReqSlotsForModel is the single source).
       agentBondReqSlots: bondReqSlotsForModel(model),
+      // C9 / STEP 4 - the optional-field gates, SHIPPED (never recomputed in the
+      // worker) so the store's arrays, the WASM baked offsets and the compiled
+      // param list are one record.
+      agentFieldGates: resolveAgentFieldGates(model),
       agentDividePartitions: agentResult.dividePartitions,
         centerBased: model.centerBased,
         // PR5 (C-D1): re-detect on a graph-only edit (field nodes added/removed).

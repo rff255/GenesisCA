@@ -388,6 +388,18 @@ function f32At(ctx: AgentWgpuCtx, field: string, idxExpr: string): string {
   return base === 0 ? `agentF32[${idxExpr}]` : `agentF32[${base}u + ${idxExpr}]`;
 }
 
+/** C9 / STEP 4 — does this layout ALLOCATE the (optional) field? A gated-OFF
+ *  group has no `f32Base` entry, so a read must emit the typed default and a
+ *  write must be dropped — THE SAFETY CATCH on the WebGPU agent target. */
+function hasF32(ctx: AgentWgpuCtx, field: string): boolean {
+  return ctx.layout.f32Base[field] !== undefined;
+}
+
+/** A gated READ: the field's value, or `0.0` when the group is gated off. */
+function gatedF32(ctx: AgentWgpuCtx, field: string, idxExpr: string): string {
+  return hasF32(ctx, field) ? f32At(ctx, field, idxExpr) : '0.0';
+}
+
 /** P4 — the WGSL address of the CURRENT queue entry in a QUEUE-shaped request run
  *  (`base + idx * bondReqSlots + slot`). The GPU mirror of the JS `_bq` index and
  *  the WASM `entry` local, so the three targets address the same entry. `brqC` is
@@ -557,7 +569,7 @@ function compileValueNode(ctx: AgentWgpuCtx, nodeId: string, portId: string): Va
       break;
     }
     case 'getAge': {
-      result = emitLet(ctx, 'f32', f32At(ctx, 'age', 'idx'), 'age');
+      result = emitLet(ctx, 'f32', gatedF32(ctx, 'age', 'idx'), 'age');
       break;
     }
     case 'getBondDegree': {
@@ -579,7 +591,7 @@ function compileValueNode(ctx: AgentWgpuCtx, nodeId: string, portId: string): Va
     }
     case 'neighbourDensity': {
       // The engine reduction `density` (other agents within the cutoff), read as f32.
-      result = emitLet(ctx, 'f32', f32At(ctx, 'density', 'idx'), 'nd');
+      result = emitLet(ctx, 'f32', gatedF32(ctx, 'density', 'idx'), 'nd');
       break;
     }
     case 'getCellAttribute': {
@@ -796,7 +808,7 @@ function emitBehaviourStep(ctx: AgentWgpuCtx, portId: string): ValueRef {
       const r = f32At(ctx, 'radius', 'idx');
       return emitLet(ctx, 'f32', `(3.14159265358979 * ${r} * ${r})`, 'myA');
     }
-    case 'myAge': return emitLet(ctx, 'f32', f32At(ctx, 'age', 'idx'), 'myG');
+    case 'myAge': return emitLet(ctx, 'f32', gatedF32(ctx, 'age', 'idx'), 'myG');
     case 'myBondDegree': return emitLet(ctx, 'f32', `f32(${i32At(ctx, 'bondCount', 'idx')})`, 'myBd');
     default: return { expr: '0.0', type: 'f32' };
   }
@@ -2220,7 +2232,8 @@ function compileFlowNode(ctx: AgentWgpuCtx, nodeId: string): void {
     }
     case 'setTargetRadius': {
       ctx.usesRadiusWrite = true;
-      ctx.lines.push(`  ${f32At(ctx, 'targetRadius', 'idx')} = ${inF32(ctx, node, 'value', 1)};`);
+      // C9 SAFETY CATCH: no target-radius run ⇒ no ramp to feed ⇒ drop the write.
+      if (hasF32(ctx, 'targetRadius')) ctx.lines.push(`  ${f32At(ctx, 'targetRadius', 'idx')} = ${inF32(ctx, node, 'value', 1)};`);
       compileFlowChain(ctx, node.id, 'next');
       break;
     }
@@ -2351,7 +2364,8 @@ function compileFlowNode(ctx: AgentWgpuCtx, nodeId: string): void {
       const sr = fresh(ctx, 'sr'), rv = fresh(ctx, 'srV');
       ctx.lines.push(`  { let ${sr}: i32 = ${id}; let ${rv}: f32 = ${inF32(ctx, node, 'radius', 1)};`);
       // Range-only guard — see setAgentAttribute (a staged spawn handle must be settable).
-      ctx.lines.push(`    if (${sr} >= 0 && ${sr} < i32(control.maxAgents)) { ${f32At(ctx, 'radius', `u32(${sr})`)} = ${rv}; ${f32At(ctx, 'targetRadius', `u32(${sr})`)} = ${rv}; } }`);
+      const srTgt = hasF32(ctx, 'targetRadius') ? ` ${f32At(ctx, 'targetRadius', `u32(${sr})`)} = ${rv};` : '';
+      ctx.lines.push(`    if (${sr} >= 0 && ${sr} < i32(control.maxAgents)) { ${f32At(ctx, 'radius', `u32(${sr})`)} = ${rv};${srTgt} } }`);
       compileFlowChain(ctx, node.id, 'next');
       break;
     }
@@ -2473,10 +2487,11 @@ function compileFlowNode(ctx: AgentWgpuCtx, nodeId: string): void {
       ctx.lines.push(`    ${f32At(ctx, 'x', raw)} = ${x}; ${f32At(ctx, 'xNext', raw)} = ${x};`);
       ctx.lines.push(`    ${f32At(ctx, 'y', raw)} = ${y}; ${f32At(ctx, 'yNext', raw)} = ${y};`);
       if (z) ctx.lines.push(`    ${f32At(ctx, 'z', raw)} = ${z}; ${f32At(ctx, 'zNext', raw)} = ${z};`);
-      ctx.lines.push(`    ${f32At(ctx, 'radius', raw)} = ${r}; ${f32At(ctx, 'targetRadius', raw)} = ${r};`);
+      const spawnTgt = hasF32(ctx, 'targetRadius') ? ` ${f32At(ctx, 'targetRadius', raw)} = ${r};` : '';
+      ctx.lines.push(`    ${f32At(ctx, 'radius', raw)} = ${r};${spawnTgt}`);
       ctx.lines.push(`    ${f32At(ctx, 'vx', raw)} = 0.0; ${f32At(ctx, 'vy', raw)} = 0.0;`);
       if (z) ctx.lines.push(`    ${f32At(ctx, 'vz', raw)} = 0.0;`);
-      ctx.lines.push(`    ${f32At(ctx, 'age', raw)} = 0.0;`);
+      if (hasF32(ctx, 'age')) ctx.lines.push(`    ${f32At(ctx, 'age', raw)} = 0.0;`);
       // Reset the child's agent attributes to their compile-time defaults (the
       // GPU analogue of initAgentSlot's attr reset — the CPU never runs it here).
       // A later Set Agent Attribute by handle overrides, exactly like the JS path.

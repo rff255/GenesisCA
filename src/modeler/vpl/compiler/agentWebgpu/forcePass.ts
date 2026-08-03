@@ -95,6 +95,11 @@ export function emitForceControlStruct(): string {
   chargeK    : f32,
   chargeMaxD2 : f32,
   chargeMinC : f32,
+  // C9 / STEP 6 — 0 static | 1 velocity | 2 force. Appended LAST so every
+  // existing member's byte offset is unchanged. Gated at RUNTIME (the shader text
+  // is not compile-identity-checked and a uniform branch is perfectly coherent) —
+  // the same convention doCharge uses.
+  motionMode : u32,
 };`;
 }
 
@@ -283,7 +288,7 @@ export function emitAgentForcePassWGSL(layout: AgentWebGPULayout, usesForceScatt
     } }`;
 
   // Velocity integration (z added in 3D) + the speed cap + position wrap/clamp.
-  const vz3 = is3d ? `\n  var vzi: f32 = fc.momentum * ${f32('vz', 'i')} + fc.dtOverEta * fz;` : '';
+  const vz3 = is3d ? `\n  var vzi: f32 = select(${f32('vz', 'i')}, fc.momentum * ${f32('vz', 'i')} + fc.dtOverEta * fz, fc.motionMode == 2u);` : '';
   const speed = is3d
     ? `sqrt(vxi * vxi + vyi * vyi + vzi * vzi)`
     : `sqrt(vxi * vxi + vyi * vyi)`;
@@ -294,7 +299,19 @@ export function emitAgentForcePassWGSL(layout: AgentWebGPULayout, usesForceScatt
     nz = ((nz % fc.fieldD) + fc.fieldD) % fc.fieldD;` : '';
   const clampZ = is3d ? `
     nz = clamp(nz, 0.0, fc.fieldD);` : '';
-  const setZNext = is3d ? `\n  ${f32('zNext', 'i')} = nz;` : '';
+  const setZNext = is3d ? `\n    ${f32('zNext', 'i')} = nz;` : '';
+  // C9 / STEP 4 — THE SAFETY CATCH on the GPU: a gated-OFF optional field has no
+  // run in the layout, so its block is simply not emitted.
+  const ageLine = layout.f32Base['age'] !== undefined
+    ? `${f32('age', 'i')} = ${f32('age', 'i')} + 1.0;` : '';
+  const growthBlock = layout.f32Base['targetRadius'] !== undefined ? `
+  // Growth ramp toward targetRadius (no-op when growthRate==0, e.g. boids).
+  let tr: f32 = ${f32('targetRadius', 'i')};
+  let cur: f32 = ${f32('radius', 'i')};
+  if (tr != cur && fc.growthRate > 0.0) {
+    let dd: f32 = tr - cur;
+    ${f32('radius', 'i')} = select(cur + sign(dd) * fc.growthRate, tr, abs(dd) <= fc.growthRate);
+  }` : '';
 
   return `${emitForceControlStruct()}
 
@@ -341,39 +358,40 @@ fn forcePass(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(num_workgro
       for (var j: u32 = 0u; j < fc.highWater; j = j + 1u) {${neighbourBody}
       }
     }
-    ${f32('density', 'i')} = dens;
+    ${layout.f32Base['density'] !== undefined ? `${f32('density', 'i')} = dens;` : ''}
   }
 
   // Integrate: v = momentum·v + (dt/eta)·F; optional speed cap; x += v; wrap/clamp.
-  var vxi: f32 = fc.momentum * ${f32('vx', 'i')} + fc.dtOverEta * fx;
-  var vyi: f32 = fc.momentum * ${f32('vy', 'i')} + fc.dtOverEta * fy;${vz3}
+  // C9 / STEP 6: under velocity the engine seeds no force, so the graph-set
+  // velocity is carried through unchanged (a genuine coast); under static the
+  // whole block below is skipped and the worker skips the position commit too.
+  var vxi: f32 = select(${f32('vx', 'i')}, fc.momentum * ${f32('vx', 'i')} + fc.dtOverEta * fx, fc.motionMode == 2u);
+  var vyi: f32 = select(${f32('vy', 'i')}, fc.momentum * ${f32('vy', 'i')} + fc.dtOverEta * fy, fc.motionMode == 2u);${vz3}
   if (fc.maxSpeed > 0.0) {
     let sp: f32 = ${speed};
     if (sp > fc.maxSpeed) { let sc: f32 = fc.maxSpeed / sp; vxi = vxi * sc; vyi = vyi * sc;${capZ} }
   }
-  ${f32('vx', 'i')} = vxi;
-  ${f32('vy', 'i')} = vyi;${setVz}
+  // C9 / STEP 6: static (0) writes NO velocity and NO position -- the worker
+  // skips the position commit with it, so x stays the single live buffer and a
+  // graph Set Agent Position write is not reverted by a stale xNext.
+  if (fc.motionMode != 0u) {
+    ${f32('vx', 'i')} = vxi;
+    ${f32('vy', 'i')} = vyi;${setVz}
 
-  var nx: f32 = xi + vxi;
-  var ny: f32 = yi + vyi;${nz3}
-  if (fc.torus != 0u) {
-    nx = ((nx % fc.fieldW) + fc.fieldW) % fc.fieldW;
-    ny = ((ny % fc.fieldH) + fc.fieldH) % fc.fieldH;${wrapZ}
-  } else {
-    nx = clamp(nx, 0.0, fc.fieldW);
-    ny = clamp(ny, 0.0, fc.fieldH);${clampZ}
+    var nx: f32 = xi + vxi;
+    var ny: f32 = yi + vyi;${nz3}
+    if (fc.torus != 0u) {
+      nx = ((nx % fc.fieldW) + fc.fieldW) % fc.fieldW;
+      ny = ((ny % fc.fieldH) + fc.fieldH) % fc.fieldH;${wrapZ}
+    } else {
+      nx = clamp(nx, 0.0, fc.fieldW);
+      ny = clamp(ny, 0.0, fc.fieldH);${clampZ}
+    }
+    ${f32('xNext', 'i')} = nx;
+    ${f32('yNext', 'i')} = ny;${setZNext}
   }
-  ${f32('xNext', 'i')} = nx;
-  ${f32('yNext', 'i')} = ny;${setZNext}
-  ${f32('age', 'i')} = ${f32('age', 'i')} + 1.0;
-
-  // Growth ramp toward targetRadius (no-op when growthRate==0, e.g. boids).
-  let tr: f32 = ${f32('targetRadius', 'i')};
-  let cur: f32 = ${f32('radius', 'i')};
-  if (tr != cur && fc.growthRate > 0.0) {
-    let dd: f32 = tr - cur;
-    ${f32('radius', 'i')} = select(cur + sign(dd) * fc.growthRate, tr, abs(dd) <= fc.growthRate);
-  }
+  ${ageLine}
+${growthBlock}
 }
 `;
 }

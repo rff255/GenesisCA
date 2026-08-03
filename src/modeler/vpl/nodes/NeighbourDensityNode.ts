@@ -17,5 +17,8 @@ export const NeighbourDensityNode: NodeTypeDef = {
     { id: 'value', label: 'Density', kind: 'output', category: 'value', dataType: 'integer' },
   ],
   defaultConfig: {},
-  compile: (nodeId) => `const _v${nodeId} = _agentDensity[idx];\n`,
+  // C9 SAFETY CATCH: the density field's gate INCLUDES this node, so an off gate
+  // means nothing ever computes density — read the typed default.
+  compile: (nodeId, _config, _inputs, _boundary, ctx) =>
+    `const _v${nodeId} = ${ctx?.agentGates && !ctx.agentGates.density ? '0' : '_agentDensity[idx]'};\n`,
 };

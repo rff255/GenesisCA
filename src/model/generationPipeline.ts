@@ -44,6 +44,7 @@
 
 import type { CAModel, CenterBasedConfig, GraphNode } from './types';
 import type { NodeConfig } from '../modeler/vpl/types';
+import { agentMotionMode, motionIntegrates, motionAppliesForces } from './agentFieldGating';
 import {
   cbNum, effectiveAgentDt, layoutIterationsOf, resolveMaxBonds,
   usesCharge, chargeParamsOf, chargeMaxDistOf,
@@ -219,6 +220,10 @@ function num(v: number): string {
  *  shared helper — the same value `clampAgentDt` gives the integrator), so a
  *  clamped model shows what actually runs rather than what was typed. */
 export function integrationFormula(cfg: CenterBasedConfig | undefined | null): string {
+  // C9 / STEP 6 — the motion mode decides whether there IS an integration.
+  const mode = agentMotionMode(cfg);
+  if (mode === 'static') return 'nothing moves — positions change only when your graph writes them';
+  if (mode === 'velocity') return 'x += v — the velocity your graph set, no engine force';
   const momentum = Math.max(0, Math.min(0.999, cbNum(cfg, 'momentum')));
   const eta = Math.max(1e-6, cbNum(cfg, 'drag'));
   const maxSpeed = Math.max(0, cbNum(cfg, 'maxSpeed'));
@@ -292,7 +297,8 @@ export function describeGenerationPipeline(model: CAModel): PipelinePhase[] {
 
     push({
       id: 'agent.forceReset', title: 'Reset force accumulators', owner: 'engine', tempo: 'generation',
-      active: true,
+      // C9 / STEP 6 — only Force motion accumulates engine forces at all.
+      active: motionAppliesForces(cfg), capability: 'Motion = Force',
       detail: 'per-generation forces start at zero — your Apply Force adds into them',
     });
     push({
@@ -355,8 +361,11 @@ export function describeGenerationPipeline(model: CAModel): PipelinePhase[] {
         : undefined,
     });
     push({
+      // C9 / STEP 6 — under Motion = Static the engine writes no position at all
+      // (the force pass AND the position commit are both skipped), so the row is
+      // OFF and names the capability that turns it back on.
       id: 'agent.integrate', title: 'Integrate & commit positions', owner: 'engine', tempo: 'generation',
-      group: 'forces', active: true,
+      group: 'forces', active: motionIntegrates(cfg), capability: 'Motion (Velocity or Force)',
       detail: integrationFormula(cfg),
     });
     push({

@@ -82,11 +82,17 @@ export const SetAgentSpriteNode: NodeTypeDef = {
       ? (staged ? `_t >= 0 && _t < _agentMaxAgents` : `_t >= 0 && _t < highWater && _alive[_t]`)
       : null;
 
+    // C9 SAFETY CATCH: with the sprite block gated off there are no
+    // `spriteIds`/`spriteFrames`/… params (36 B/agent reclaimed), so every sprite
+    // facet is dropped. The gate is usage-widened ON THIS NODE, so an off gate
+    // means the model has no sprite assets AND no Set Agent Sprite — the ALPHA
+    // facet writes `colors`, which is always allocated, so it survives.
+    const noSprites = !!ctx?.agentGates && !ctx.agentGates.sprites;
     const body: string[] = [];
-    if (config.setSprite !== false) body.push(`spriteIds[_t] = ${Number(config._spriteSlot) || 0};`);
-    if (config.setFrame) body.push(`spriteFrames[_t] = (${inputs['frame'] || '0'});`);
-    if (config.setSpeed) body.push(`spriteSpeeds[_t] = (${inputs['speed'] || '0'});`);
-    if (config.setRotation) {
+    if (!noSprites && config.setSprite !== false) body.push(`spriteIds[_t] = ${Number(config._spriteSlot) || 0};`);
+    if (!noSprites && config.setFrame) body.push(`spriteFrames[_t] = (${inputs['frame'] || '0'});`);
+    if (!noSprites && config.setSpeed) body.push(`spriteSpeeds[_t] = (${inputs['speed'] || '0'});`);
+    if (!noSprites && config.setRotation) {
       if (config.rotationMode === 'vector') {
         // Align the art to a direction vector (compass degrees, 0 = up/north,
         // clockwise); leave the rotation unchanged for a zero vector.
@@ -95,7 +101,7 @@ export const SetAgentSpriteNode: NodeTypeDef = {
         body.push(`spriteRotations[_t] = (${inputs['rotation'] || '0'});`);
       }
     }
-    if (config.setScale) body.push(`spriteScales[_t] = (${inputs['scale'] || '1'});`);
+    if (!noSprites && config.setScale) body.push(`spriteScales[_t] = (${inputs['scale'] || '1'});`);
     // Alpha = the agent colour's A byte (colors is Uint8ClampedArray → clamps).
     if (config.setAlpha) body.push(`colors[_t * 4 + 3] = (${inputs['alpha'] || '255'});`);
     if (body.length === 0) return '';

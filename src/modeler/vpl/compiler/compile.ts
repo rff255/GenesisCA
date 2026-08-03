@@ -1,5 +1,6 @@
 ﻿import type { GraphNode, GraphEdge, CAModel } from '../../../model/types';
 import { agentAttrsOf, bondAttrsOf, cellFieldAttrsOf } from '../../../model/attributeScope';
+import { resolveAgentFieldGates } from '../../../model/agentFieldGating';
 import { encodeAttrValue } from '../../../model/attrValueEncoding';
 import { buildAgentAbiParams, type AgentAbiShape } from './agentAbi';
 import { getAllNodeDefs, getNodeDef } from '../nodes/registry';
@@ -473,6 +474,12 @@ function compileRoot(
     // emitters bake. ONE source (`bondReqSlotsForModel`), shared with the store's
     // array shapes and the WASM / WebGPU layouts.
     bondReqSlots: model ? bondReqSlotsForModel(model) : 1,
+    // C9 / STEP 4 — THE SAFETY CATCH. A gated-OFF group's ABI params are dropped,
+    // so a node that would read one must emit the typed default (0) instead of a
+    // dangling `_agentAge[idx]`. The gates are usage-widened, so this only ever
+    // fires for a node the widening deliberately does not cover (a defensive
+    // second line, not the primary mechanism).
+    agentGates: model ? resolveAgentFieldGates(model) : undefined,
   };
 
   const compiled = new Set<string>();
@@ -2425,6 +2432,10 @@ export function agentAbiShapeOf(model: CAModel): AgentAbiShape {
     // unconditional field would change EVERY agent model's emitted param string
     // and break the milestone's byte-identity gate.
     usesGeneration: agentUsesGeneration(model),
+    // C9 / STEP 4 — the optional SoA field groups. The WORKER derives the same
+    // answer from the gates SHIPPED on the init message (never recomputed there),
+    // so the param list and the arg list cannot disagree.
+    gates: resolveAgentFieldGates(model),
   };
 }
 
@@ -2680,6 +2691,9 @@ export function compileAgentGraph(
   const scratchDecls = scratchNodes.map(s => buildScratchDecl(s, model));
   const { params } = buildAgentLoopParams(model);
   const bsId = behaviourNode.id;
+  // C9 / STEP 4 — the optional-field gates, so the behaviourStep preamble emits
+  // the typed default for a group whose ABI params were dropped.
+  const gates = resolveAgentFieldGates(model);
   const is3d = is3dModel(model);  // 3D: un-hide the agent-node z ports + emit the z preamble.
   // Local Variables — per-agent scratch (the agent analogue of the cell-step
   // injection). Array allocations hoist to function scope; scalar lets + array
@@ -2716,7 +2730,9 @@ export function compileAgentGraph(
     `    const _v${bsId}_myRadius = _agentRadius[idx];`,
     `    const _v${bsId}_myArea = Math.PI * _agentRadius[idx] * _agentRadius[idx];`,
     `    const _v${bsId}_myBondDegree = _agentBondCount[idx];`,
-    `    const _v${bsId}_myAge = _agentAge[idx];`,
+    // C9 SAFETY CATCH: `_agentAge` is dropped when the Lifespan field is gated
+    // off (the gate is widened by a WIRED myAge, so this only fires unwired).
+    `    const _v${bsId}_myAge = ${gates.age ? '_agentAge[idx]' : '0'};`,
     ...valueLines,
     '',
     ...flowLines,
