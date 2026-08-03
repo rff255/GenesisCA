@@ -73,7 +73,7 @@ Status values: `pending` → `in progress` → `DONE (date, SHAs)` / `BLOCKED (r
 | C6 | P5 schema hygiene + update-mode vocabulary + loud-fallback completion | DONE (2026-08-03, 1bc1465) |
 | C7 | P6 archetype-first New Model + P7 determinism (seeded scatter) | DONE (2026-08-03, 02ad2ec) |
 | C8 | P9 presentational-geometry taint check + pipeline label | DONE (2026-08-03, fd7ec90) |
-| C9 | Capability STEP 4/6 — Static motion integrator + SoA field gating | pending |
+| C9 | Capability STEP 4/6 — Static motion integrator + SoA field gating | DONE (2026-08-03, b1279da) |
 | C10 | P11a deterministic Barnes-Hut global charge (all targets) | pending |
 | C11 | P11b adaptive spatial index (benchmark-gated investigation) | pending |
 
@@ -1588,7 +1588,200 @@ Scope + order:
    pass (C3 diagnostics row shows it; measure the per-gen delta).
 4. Docs sweep incl. rewriting the CLAUDE.md STEP 4/6 "deferred" sections.
 
-*Completion Report: — to be appended by the phase session —*
+### Completion Report — C9 (2026-08-03)
+
+**Status: DONE.** Feature commit: **`b1279da`** *feat(clarity): profile-gated agent SoA
+fields + the Static integrator (C9)* on `GRA` (this report rides the follow-up docs commit,
+as C1–C8 did). Not pushed, no version bump, no attribution lines. Plan + **impact map**
+(written first, per the house rule for engine-layout changes):
+[PLAN_CLARITY_C9.md](PLAN_CLARITY_C9.md).
+
+#### What shipped
+
+1. **`src/model/agentFieldGating.ts`** (new, pure) — the ONE source for BOTH halves:
+   `resolveAgentFieldGates(model)` (which optional per-agent fields exist) and
+   `agentMotionMode` / `motionIntegrates` / `motionAppliesForces` / `motionModeCode`.
+2. **STEP 4 — four optional field groups gated by CAPABILITY *or USAGE***: `sprites`
+   (36 B/agent; the only group with no baked byte on any target — plain JS arrays),
+   `age`, `targetRadius`, `density` (8 B each).
+   - **THE SAFETY CATCH is one uniform representation: a dropped field is a ZERO-LENGTH
+     typed array, never `undefined`.** On a zero-length `TypedArray` `a[i] = v` is a
+     **silent no-op**, so every engine WRITE (`initAgentSlot`, `divideAgent`'s daughter
+     seeding, `paintAgents`, and `deserializeAgentStore`'s `copyInto`, which already clamps
+     to `min(dst, src)`) needs **no guard at all**. Only READS do, and all three agent
+     compilers emit the typed default for them — JS via `ctx.agentGates` (the node emitters
+     + the `behaviourStep.myAge` preamble), WASM via `ctx.layout.f64[f] === undefined`
+     (`gatedF64Read`; the writes are skipped), WebGPU via `hasF32` / `gatedF32`. The catch
+     was built and gate-tested BEFORE any field was dropped, per the runbook order.
+   - **Usage widening**: `age` = `lifespan || getAge || a WIRED behaviourStep.myAge`;
+     `targetRadius` = `growth || usesEngineGrowth(cfg) || setTargetRadius || setAgentRadius`;
+     `density` = **deliberately the neighbour-SCAN predicate** (`neighbourDensity ||
+     divideAgent || usesSoftCollision || usesBondingPhysics || usesCharge`), because that
+     scan is the field's only writer, so density-off means the scan never runs and nothing
+     writes it on any target; `sprites` = `model.sprites.length > 0 || setAgentSprite`.
+   - **The lockstep**: the resolved record is **SHIPPED** on the init/recompile message as
+     `agentFieldGates` (the `agentBondReqSlots` precedent) into
+     `createAgentStore({ fieldGates })` and onto `store.fieldGates`, and
+     `computeAgentMemoryLayout` reads it off `AgentLayoutExtras.fieldGates` (filled by
+     `buildAgentLayoutExtras` from the same resolver). It is also in `needsFullInit` — the
+     gates decide byte offsets, so a change is structural.
+3. **STEP 6 — `Motion: Static | Velocity | Force` drives the ENGINE on all three targets.**
+   Force = the historical integrator byte-for-byte; Velocity advances `x += v` with the
+   velocity the graph SET and seeds no engine force (so `Set Velocity` genuinely coasts);
+   Static moves nothing — the force accumulation, the integrate block **and the position
+   commit** are all skipped. WASM emits one of three **compile-time** variants
+   (`emitForcePass(…, motionMode)`); WebGPU gates at runtime on a new
+   `ForceControl.motionMode` (appended last, `FORCE_CONTROL_BYTES` unchanged); the resident
+   `posCommit` is compiled for the mode (Static writes `xNext = x`), and the per-gen GPU path
+   refreshes `s.xNext` from the live `s.x` before the upload so the readback commit is an
+   identity.
+4. **C2 pipeline integration** — `Reset force accumulators` is off unless Motion = Force;
+   `Integrate & commit positions` is off under Static with the detail *"nothing moves —
+   positions change only when your graph writes them"* (Velocity shows `x += v`).
+5. **`scripts/test-c9-gates.mjs`** (new, 413 checks) + the docs sweep (CLAUDE.md's STEP 4/6
+   "deferred" section rewritten as DONE, HelpView, README, and a status banner on
+   `HANDOFF_AGENT_CAPABILITY_PROFILES.md`).
+
+#### ⚠ THE HAZARD THE RUNBOOK DID NOT NAME — and the bug verification caught
+
+- **`Ant Necrophoresis` SHIPS `motion: 'static'`** and moves its ants with `Set Agent
+  Position`. CLAUDE.md's own Ant section recorded that its inert force pass **"MUST run"**,
+  because `swapPositions` copies `xNext` over `x` every step. So the naive "skip the force
+  pass under Static" would have **reverted every graph position write** and frozen the model.
+  The force pass and the position commit are therefore skipped **together**, on all three
+  targets — that coupling is the load-bearing design decision of STEP 6.
+- **A real ABI desync, found by in-browser verification, not by any harness.** The gates ride
+  `AgentAbiShape`, and the worker's `agentAbiShapeOfStore` was missing `gates` — so the
+  compiler built a SHORTER param list than the worker's arg list and every later arg shifted.
+  Ant Necrophoresis' Agent Init Event died with *"Cannot read properties of undefined
+  (reading '0')"* (`_rngState` off the end of the arg list) and zero agents spawned.
+  **`audit-agent-layout` cannot catch this class** — it compares compile's params against the
+  descriptor using the SAME shape, so a shape field missing at ONE site is invisible to it.
+  Fixed, and pinned permanently by **tier D** of the new harness (a source invariant over all
+  three shape builders).
+
+#### Verification evidence (real numbers / observations)
+
+**Gates** — `npx tsc -p tsconfig.app.json --noEmit` clean; `npm run build` clean;
+`test-c9-gates` **413 passed, 0 failed**; `parity-agent-wasm` **ALL AGENT SAMPLES: JS↔WASM
+BIT-PARITY ✓** (23 entries); `parity-agent-force` **✓ (20 checks)**; `check-agent-wasm-gate`
+**GATE✓ COMPILE✓ INST✓** on every sample; `audit-agent-layout` **✓ (240 checks)**;
+`test-agent-abi` **28 ✓**; `verify-agent-render` **✓**; `verify-render-uniform-layouts` **✓**
+(the ForceControl writer vs its WGSL struct, with the new `motionMode`);
+`test-generation-pipeline` **3401 passed · 6 controls caught**; `test-geometry-taint`
+**210 ✓**; `test-engine-resolve` **719 ✓**; `test-agent-capabilities` **202 ✓**;
+`test-bonds-allocation` **19 ✓**; `test-positional-collision` **6 ✓**;
+`check-no-unseeded-random` OK; `gen-capability-docs --check` up to date.
+
+**THE HARNESS CAN GENUINELY FAIL — proven by SOURCE MUTATION**: disabling the layout's gate
+skip (`if (false && gk && !gates[gk]) continue;`) gave **38 failures**; forcing the WGSL
+commit gate open (`if (true)` in place of `if (fc.motionMode != 0u)`) flipped the
+emitted-shader check to false. Both reverted; green again on the shipped source.
+
+**COMPILE-IDENTITY — 28 diffs, every one enumerated and deliberate.** They are exactly
+`agent.behaviourCode` + `agent.wasm.bytes` for the **14 shipped agent models** — and nothing
+else: **no grid surface (`js.stepCode` / `wasm.bytes` / `webgpu.shader`), no
+`agent.webgpu.shader`, no overseer driver moved.** The cause is uniform and measured per
+model:
+
+| model | sprites | age | targetRadius | density | f64 B/agent reclaimed | motion |
+|---|---|---|---|---|---|---|
+| Ant Necrophoresis | ✗ | ✗ | ✗ | ✗ | 24 | **static** |
+| Boids — Flocking | ✗ | ✗ | ✗ | ✗ | 24 | force |
+| Boids — Hemifield Vision | ✗ | ✗ | ✗ | ✓ | 16 | force |
+| Chemotaxis — Aggregation | ✗ | ✗ | ✗ | ✓ | 16 | force |
+| Cubic GRA | ✗ | ✗ | ✗ | ✓ | 16 | force |
+| Game of Life on Agents | ✗ | ✗ | ✗ | ✗ | 24 | **static** |
+| Graph Metrics — Growth Sweep | ✗ | ✗ | ✗ | ✓ | 16 | force |
+| Life on Bonds | ✗ | ✗ | ✗ | ✗ | 24 | force |
+| Morphogenesis — 3D Tissue | ✗ | ✗ | ✓ | ✓ | 8 | force |
+| Morphogenesis — Differential Tissue | ✗ | ✗ | ✓ | ✓ | 8 | force |
+| Morphogenesis — Growing Tissue | ✗ | ✗ | ✓ | ✓ | 8 | force |
+| Particle Life | ✗ | ✗ | ✗ | ✗ | 24 | force |
+| Particle Life 3D | ✗ | ✗ | ✗ | ✗ | 24 | force |
+| SDCA — Couplers and Decouplers | ✗ | ✗ | ✗ | ✓ | 16 | force |
+
+**No shipped agent model has sprites**, so all 14 drop the 5 sprite ABI params (hence the
+`behaviourCode` change), and all 14 drop at least one f64 field (hence the `wasm.bytes`
+change: the baked offsets move). The three tissues keep `targetRadius` (Growth); the eight
+models whose neighbour scan runs keep `density`. **Behaviour is preserved**: the gated-off
+fields were provably unwritten (the scan predicate) or their consumer was already a no-op
+(`growthRate === 0` makes the ramp `cur + sign(dd)·0 === cur` — the new `growthIter > 0`
+guard is that condition made explicit). The one observable is that `age` freezes at 0 on
+models that never read it, visible only in the agent inspector, which now reports the typed
+default rather than `undefined`.
+
+**In-browser (dev server, real library models, real worker).** The Browser pane reports
+`document.hidden === true` — the documented occluded-pane trap — so the play loop is
+suspended and screenshots are unavailable; steps were driven one-per-reply through
+`window.__simWorker` and read back with `getState` / `getDiagnostics`, which is the right
+evidence for an engine/ABI change. **0 console errors and 0 worker `error` messages across
+the whole session** (fresh `console.error` hook after a reload, per the persistent-buffer
+caveat).
+
+- **Ant Necrophoresis (WASM agents, `motion: static`) — THE HAZARD MODEL.** 120 ants; over
+  300 generations **114 of 120 moved**, i.e. the `Set Agent Position` writes survive the
+  step, and **every position is still exactly integral** (`fractionalPos: 0` — the model's
+  own discrete-cell invariant). The gated arrays are genuinely gone in the live store:
+  `age`, `targetRadius`, `density` and `spriteIds` all read **length 0** off `getState`.
+- **Boids — Flocking, WebGPU agents (force)** — 260 agents, polarization **0 → 0.9987**.
+- **Boids — Flocking, JS agents (force)** — polarization **0.9982** (the third target).
+- **Game of Life on Agents, WebGPU agents (`motion: static`)** — 1024 agents; alive counts
+  evolve **304 → 352 → 282 → 284** over three single steps (a genuine Conway trajectory)
+  while **not one coordinate changed** — static really is static, and the rule still runs.
+- **Morphogenesis — Growing Tissue, WebGPU agents (force + Growth)** — **12 → 768 agents,
+  3616 edges**, the growth ramp active (radius 1.6 → 2.7087) and `targetRadius` correctly
+  **allocated at full length (768)** — the gate keeps what the model needs.
+- **THE MOTION MATRIX on the real GPU**, same model + same seed, only the mode changed
+  (max per-agent displacement over 200 generations):
+  **force `149.05` · velocity `1.4e-5` · static `5e-6`.** The force run is the positive
+  control proving the measurement can see motion; the other two are the f32 round-trip
+  floor. *(A first attempt used exact `!==` and reported "all 520 coordinates changed" on
+  WebGPU — that was the f64→f32→f64 readback, not motion. Measuring the magnitude instead
+  of equality is what made the answer honest.)*
+- **JS and WASM freeze exactly** under the same Static configuration: **0 of 520 coordinates
+  changed** (f64 throughout, so no round-trip floor).
+
+#### Deviations / decisions (documented, no scope cuts)
+
+1. **The `AGENT_*_FIELDS` reorder (the handoff's STEP 4 prerequisite) was NOT needed, and is
+   not done.** Its purpose was to keep offsets stable ACROSS profiles; the actual requirement
+   is only that a GIVEN profile produces one consistent layout at every mirror, which the
+   shipped record guarantees. Skipping it avoids a second, independent offset change.
+2. **The gate is `AgentAbiShape.gates`, not the per-field `gate(profile)` closure** the STEP-0
+   descriptor reserved. That hook stays unused for the reason P2 already recorded: **the SHAPE
+   is the gate** — every call site produces a shape and none produces a profile.
+3. **The WebGPU agent SoA layout is deliberately left UNGATED** (its emitters do carry the
+   safety catch). Its runs are a per-generation mirror re-uploaded from the CPU store, not
+   where agents live, so there is no memory win; gating them would additionally have to move
+   the windowed upload/readback plan (`buildF32ReadPlan`, whose `compactBase` THROWS on an
+   unplanned base) — a real corruption risk for zero benefit. Flipping it on later is a
+   layout-only change.
+4. **WASM uses a compile-time motion variant instead of the runbook's "APPENDED forcePass
+   param".** The motion mode is a MODEL property that cannot change without a recompile —
+   exactly the reasoning behind `forcePassParamsFor(chargeOn)` deciding the param LIST at
+   compile time — so a runtime param would add an ABI slot (and an arity contract to police)
+   for a constant. The conditional-arity contract is therefore untouched, and
+   `parity-agent-force`'s existing arity assertions still hold.
+5. **The static/velocity synthetic lives in the NEW `test-c9-gates.mjs`, not in
+   `parity-agent-wasm.mjs`.** That harness runs the BEHAVIOUR function only; the motion mode
+   affects only the FORCE pass, so an entry there would not exercise it. The new harness
+   asserts POSITIONS (with value invariants) and additionally covers what parity cannot: the
+   gated layout matrix and the shape-builder mirror rule. `parity-agent-wasm` WAS updated to
+   thread the store's gates, so all 23 of its entries now run against gated stores.
+6. **`density`'s gate is the scan predicate, not "is there a reader"** — deliberately wider,
+   because a model whose scan runs must have somewhere to put the count.
+
+#### Follow-ups (not defects)
+
+- **The WebGPU agent SoA layout gate** (deviation 3) — the emitters are ready; it needs the
+  windowed upload/readback plan to learn about absent runs, plus real-GPU verification.
+- **Motion = Static could skip the force DISPATCH entirely** on the GPU paths (today the
+  shader runs and no-ops). Cheap, but it needs its own measurement to be worth claiming.
+- **`Body` (velocity / force / radius) is still always allocated** — the original STEP 6
+  named it, §C9 did not, and it would drag the render snapshot, `getAgentState`, serialize
+  and all three integrators into a second layout change.
+
 
 ---
 
@@ -1653,6 +1846,24 @@ Protocol:
 ## Orchestrator log
 
 - 2026-08-02: runbook created. Launching C1.
+- 2026-08-03: **C9 DONE** (`b1279da`). The deferred-XL engine phase: STEP 4 (profile-gated agent
+  SoA fields, capability OR usage) + STEP 6 (the Static / Velocity motion integrator on all three
+  agent targets). **Compile-identity moved 28 surfaces, all enumerated and deliberate**: exactly
+  `agent.behaviourCode` + `agent.wasm.bytes` for the 14 shipped agent models (none has sprites, so
+  all drop the 5 sprite ABI params, and all drop >=1 f64 field, so the baked offsets move). NO grid
+  surface, NO `agent.webgpu.shader`, NO overseer driver changed. All 15 standing gates green; the
+  new `test-c9-gates.mjs` is 413 checks in four tiers and was proven failable by two SOURCE
+  mutations. Verified in-browser on Ant Necrophoresis (WASM/static), Boids (WebGPU + JS/force),
+  GoL-on-Agents (WebGPU/static), Growing Tissue (WebGPU/force+growth) and a three-mode GPU matrix
+  (displacement 149.05 force / 1.4e-5 velocity / 5e-6 static), 0 console + 0 worker errors.
+  **TWO FINDINGS worth carrying**: (1) `Ant Necrophoresis` ships `motion:'static'` and moves its
+  ants with Set Agent Position, so the force pass and the position COMMIT must be skipped TOGETHER
+  or every graph write is reverted — the runbook did not name this; (2) a real ABI desync (the
+  worker's `agentAbiShapeOfStore` missing `gates`) that `audit-agent-layout` structurally cannot
+  catch, now pinned by tier D of the new harness. **C10 may proceed** — note it will add force-law
+  terms to the same three force passes C9 just gated, so it should read `motionAppliesForces` /
+  `motionModeCode` rather than re-deriving, and the WebGPU `ForceControl` now ends at
+  `motionMode` (u[29]) inside the unchanged 128-byte block.
 - 2026-08-03: **C8 DONE** (`fd7ec90`). Compile-identity byte-identical on all 29 models (zero emit
   impact by construction — no engine/compiler/worker file touched); the new taint harness is 210
   checks with 6 in-harness controls and 5 SOURCE-MUTATION controls all caught; every standing gate
