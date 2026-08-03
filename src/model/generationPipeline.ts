@@ -47,7 +47,7 @@ import type { NodeConfig } from '../modeler/vpl/types';
 import { agentMotionMode, motionIntegrates, motionAppliesForces } from './agentFieldGating';
 import {
   cbNum, effectiveAgentDt, layoutIterationsOf, resolveMaxBonds,
-  usesCharge, chargeParamsOf, chargeMaxDistOf,
+  usesCharge, chargeParamsOf, chargeMaxDistOf, usesGlobalCharge, chargeThetaOf,
   usesEngineGrowth, usesEngineSprings, usesPositionalCollision, usesSoftCollision,
   usesBondingPhysics,
 } from './centerBased';
@@ -287,13 +287,17 @@ export function describeGenerationPipeline(model: CAModel): PipelinePhase[] {
     const bonds = resolveMaxBonds(cfg);
     const springs = usesEngineSprings(cfg);
     const charge = usesCharge(cfg);
+    // C10 — GLOBAL charge does NOT ride the stencil (the octree carries it), so it
+    // neither widens the bin edge nor joins the scan gate.
+    const chargeGlobal = usesGlobalCharge(cfg);
+    const chargeCutoff = charge && !chargeGlobal;
     const softCollision = usesSoftCollision(cfg);
     const positional = usesPositionalCollision(cfg);
     const growthOn = usesEngineGrowth(cfg) && cbNum(cfg, 'growthRate') > 0;
     const usesDensity = hasAny(content.agent, 'neighbourDensity', 'divideAgent');
     // The neighbour scan runs when ANY of its three consumers do — the worker's
     // own `doScan = doForce || agentUsesDensity || doCharge`.
-    const scan = softCollision || usesBondingPhysics(cfg) || usesDensity || charge;
+    const scan = softCollision || usesBondingPhysics(cfg) || usesDensity || chargeCutoff;
 
     push({
       id: 'agent.forceReset', title: 'Reset force accumulators', owner: 'engine', tempo: 'generation',
@@ -305,7 +309,7 @@ export function describeGenerationPipeline(model: CAModel): PipelinePhase[] {
       id: 'agent.spatialHash', title: 'Build spatial hash', owner: 'engine', tempo: 'generation',
       active: true,
       detail: `neighbour queries up to radius ${num(cbNum(cfg, 'neighbourQueryRadius'))}${
-        scan && charge ? ` (widened to the charge cutoff ${num(chargeMaxDistOf(cfg))})` : ''
+        scan && chargeCutoff ? ` (widened to the charge cutoff ${num(chargeMaxDistOf(cfg))})` : ''
       } · O(N), not O(N²)`,
     });
     push({
@@ -342,9 +346,12 @@ export function describeGenerationPipeline(model: CAModel): PipelinePhase[] {
     push({
       id: 'agent.charge', title: 'Long-range charge', owner: 'engine', tempo: 'generation',
       group: 'forces', active: charge, capability: 'Charge',
-      detail: charge
-        ? `k = ${num(chargeParamsOf(cfg).chargeK)} · cutoff ${num(chargeMaxDistOf(cfg))} (the only engine force with reach past contact)`
-        : undefined,
+      detail: !charge ? undefined
+        : chargeGlobal
+          // The whole point of the mode: unbounded reach, so it is NOT described
+          // in terms of a cutoff it does not have.
+          ? `k = ${num(chargeParamsOf(cfg).chargeK)} · GLOBAL (Barnes–Hut θ = ${num(chargeThetaOf(cfg))}) — every pair interacts, summed through a deterministic octree`
+          : `k = ${num(chargeParamsOf(cfg).chargeK)} · cutoff ${num(chargeMaxDistOf(cfg))} (the only engine force with reach past contact)`,
     });
     push({
       id: 'agent.softCollision', title: 'Soft-sphere collision', owner: 'engine', tempo: 'generation',

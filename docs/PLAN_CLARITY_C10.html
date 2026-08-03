@@ -1,0 +1,155 @@
+<meta charset="utf-8">
+<title>C10 — Charge range: Cutoff / Global (Barnes-Hut)</title>
+<style>
+  :root { --bg:#0c0d10; --panel:#16181d; --border:#2b2f38; --text:#dcdde1; --dim:#8b8f99; --accent:#e8a13a; --ok:#5ec27a; }
+  * { box-sizing:border-box }
+  body { margin:0; padding:32px; background:var(--bg); color:var(--text);
+         font:14px/1.55 -apple-system,Segoe UI,Roboto,sans-serif }
+  h1 { font-size:20px; margin:0 0 4px } h2 { font-size:14px; margin:34px 0 10px; color:var(--accent);
+       text-transform:uppercase; letter-spacing:.08em }
+  .sub { color:var(--dim); margin:0 0 8px }
+  .row { display:flex; gap:24px; flex-wrap:wrap; align-items:flex-start }
+  .panel { background:var(--panel); border:1px solid var(--border); border-radius:8px; padding:14px 16px; width:360px }
+  .panel h3 { margin:0 0 10px; font-size:12px; letter-spacing:.06em; color:var(--dim); text-transform:uppercase }
+  .cap { display:flex; gap:7px; align-items:flex-start; margin-bottom:6px }
+  .cap input { margin-top:3px }
+  .capname { font-size:12.5px } .capdesc { font-size:10.5px; color:#82868f; display:block }
+  .knobs { padding-left:20px; display:flex; flex-direction:column; gap:6px; margin-top:5px }
+  .knob { display:flex; align-items:center; justify-content:space-between; gap:10px }
+  .knob span { font-size:11px; color:#a6a9b1 }
+  .fld { background:#1a1a1a; color:#ddd; border:1px solid #444; border-radius:4px; font-size:11px;
+         padding:2px 5px; width:76px; text-align:right }
+  select.fld { width:120px; text-align:left }
+  .note { font-size:10.5px; color:#777; line-height:1.5 }
+  .new { outline:1.5px dashed var(--accent); outline-offset:3px; border-radius:5px }
+  .tag { display:inline-block; background:rgba(232,161,58,.15); color:var(--accent); border:1px solid rgba(232,161,58,.4);
+         border-radius:3px; font-size:9.5px; padding:0 5px; margin-left:6px; vertical-align:1px; letter-spacing:.04em }
+  table { border-collapse:collapse; margin-top:10px; font-size:12px }
+  th,td { border:1px solid var(--border); padding:6px 11px; text-align:left; vertical-align:top }
+  th { color:var(--dim); font-weight:600; font-size:11px; text-transform:uppercase; letter-spacing:.05em }
+  code { background:#1e2129; border-radius:3px; padding:1px 5px; font-size:11.5px; color:#c8cad0 }
+  .arr { color:var(--dim); font-size:26px; align-self:center; padding:0 4px }
+  svg text { font:11px -apple-system,Segoe UI,sans-serif; fill:var(--text) }
+</style>
+
+<h1>C10 · Charge range — Cutoff / Global (Barnes-Hut θ)</h1>
+<p class="sub">Properties → Bond-Graph Agents → Agent Capabilities → <b>Long-range charge</b>.
+Two new rows, revealed only when charge is on. Absent config ⇒ Cutoff ⇒ byte-identical.</p>
+
+<h2>Before → After</h2>
+<div class="row">
+  <div class="panel">
+    <h3>Before (L1, shipped)</h3>
+    <label class="cap"><input type="checkbox" checked>
+      <span><span class="capname">Long-range charge</span>
+      <span class="capdesc">A repulsive 1/(1+d²) force with reach past contact · requires Motion = Force</span></span></label>
+    <div class="knobs">
+      <div class="knob"><span>Charge strength</span><input class="fld" value="-10"></div>
+      <div class="knob"><span>Charge cutoff</span><input class="fld" value="20"></div>
+      <p class="note">Cutoff defaults to 8× the bond rest length (40.0) — clear the field to restore it.
+        Quality saturates around there; a much larger cutoff only inflates the layout and costs more per step.</p>
+    </div>
+  </div>
+
+  <div class="arr">→</div>
+
+  <div class="panel">
+    <h3>After — range = Cutoff (unchanged behaviour)</h3>
+    <label class="cap"><input type="checkbox" checked>
+      <span><span class="capname">Long-range charge</span>
+      <span class="capdesc">A repulsive 1/(1+d²) force with reach past contact · requires Motion = Force</span></span></label>
+    <div class="knobs">
+      <div class="knob new"><span>Charge range <span class="tag">NEW</span></span>
+        <select class="fld"><option>Cutoff (hash)</option><option>Global (Barnes-Hut)</option></select></div>
+      <div class="knob"><span>Charge strength</span><input class="fld" value="-10"></div>
+      <div class="knob"><span>Charge cutoff</span><input class="fld" value="20"></div>
+      <p class="note">Cutoff defaults to 8× the bond rest length (40.0) — clear the field to restore it.</p>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h3>After — range = Global</h3>
+    <label class="cap"><input type="checkbox" checked>
+      <span><span class="capname">Long-range charge</span>
+      <span class="capdesc">A repulsive 1/(1+d²) force with reach past contact · requires Motion = Force</span></span></label>
+    <div class="knobs">
+      <div class="knob new"><span>Charge range</span>
+        <select class="fld"><option selected>Global (Barnes-Hut)</option><option>Cutoff (hash)</option></select></div>
+      <div class="knob"><span>Charge strength</span><input class="fld" value="-10"></div>
+      <div class="knob new"><span>Accuracy θ <span class="tag">NEW</span></span><input class="fld" value="0.9"></div>
+      <p class="note"><b>The cutoff field is gone</b> — it means nothing under Global, so it is hidden rather
+        than shown inert (the <code>hiddenPorts</code> doctrine).<br>
+        Every pair interacts; distant groups are approximated by their centre of mass when
+        <code>extent² &lt; θ²·d²</code>. Smaller θ = more exact + slower. Deterministic: same
+        positions ⇒ bit-identical forces.</p>
+    </div>
+  </div>
+</div>
+
+<h2>What changes in the engine</h2>
+<div class="row" style="align-items:center">
+<svg width="720" height="230" viewBox="0 0 720 230">
+  <rect x="0" y="0" width="340" height="230" rx="8" fill="#16181d" stroke="#2b2f38"/>
+  <rect x="380" y="0" width="340" height="230" rx="8" fill="#16181d" stroke="#2b2f38"/>
+  <text x="16" y="24" style="fill:#8b8f99;letter-spacing:.06em">CUTOFF — pair term in the hash stencil</text>
+  <text x="396" y="24" style="fill:#e8a13a;letter-spacing:.06em">GLOBAL — one octree traversal per agent</text>
+
+  <!-- cutoff -->
+  <circle cx="120" cy="130" r="52" fill="none" stroke="#3a5f8a" stroke-dasharray="4 3"/>
+  <circle cx="120" cy="130" r="6" fill="#e8a13a"/>
+  <g fill="#5ec27a">
+    <circle cx="92"  cy="102" r="4"/><circle cx="150" cy="112" r="4"/><circle cx="106" cy="163" r="4"/>
+    <circle cx="156" cy="156" r="4"/><circle cx="86"  cy="140" r="4"/>
+  </g>
+  <g fill="#4a4d55">
+    <circle cx="240" cy="70" r="4"/><circle cx="262" cy="120" r="4"/><circle cx="248" cy="176" r="4"/>
+    <circle cx="286" cy="96" r="4"/><circle cx="292" cy="152" r="4"/><circle cx="215" cy="205" r="4"/>
+  </g>
+  <text x="196" y="132" style="fill:#6a6d75;font-size:10.5px">not seen</text>
+  <text x="16" y="212" style="fill:#8b8f99;font-size:10.5px">bin edge widened to the cutoff · beyond it: zero force</text>
+
+  <!-- global -->
+  <circle cx="470" cy="130" r="6" fill="#e8a13a"/>
+  <g fill="#5ec27a">
+    <circle cx="444" cy="104" r="4"/><circle cx="500" cy="114" r="4"/><circle cx="456" cy="162" r="4"/>
+    <circle cx="504" cy="158" r="4"/><circle cx="438" cy="140" r="4"/>
+  </g>
+  <rect x="588" y="52" width="86" height="76" fill="none" stroke="#e8a13a" stroke-dasharray="3 3"/>
+  <rect x="588" y="140" width="60" height="60" fill="none" stroke="#e8a13a" stroke-dasharray="3 3"/>
+  <g fill="#5ec27a" opacity=".55">
+    <circle cx="606" cy="70" r="3.5"/><circle cx="646" cy="86" r="3.5"/><circle cx="620" cy="112" r="3.5"/>
+    <circle cx="660" cy="110" r="3.5"/><circle cx="604" cy="160" r="3.5"/><circle cx="632" cy="186" r="3.5"/>
+  </g>
+  <circle cx="631" cy="90" r="7" fill="#e8a13a" opacity=".85"/>
+  <circle cx="618" cy="173" r="6" fill="#e8a13a" opacity=".85"/>
+  <line x1="478" y1="128" x2="622" y2="93"  stroke="#e8a13a" stroke-width="1.3"/>
+  <line x1="478" y1="133" x2="610" y2="170" stroke="#e8a13a" stroke-width="1.3"/>
+  <line x1="476" y1="126" x2="497" y2="116" stroke="#5ec27a" stroke-width="1.1"/>
+  <line x1="464" y1="126" x2="447" y2="107" stroke="#5ec27a" stroke-width="1.1"/>
+  <text x="396" y="212" style="fill:#8b8f99;font-size:10.5px">near = exact pairs · far = one centre-of-mass term per node</text>
+</svg>
+</div>
+
+<h2>Delivery matrix</h2>
+<table>
+  <tr><th>Target</th><th>Tree build</th><th>Traversal</th><th>Numerics</th></tr>
+  <tr><td>JS agents</td><td rowspan="3">ONE TypeScript build in <code>agentEngine.ts</code>, once per generation
+      (the <code>buildSpatialHash</code> precedent)</td>
+      <td>the JS force loop, both 2D and 3D arms</td><td>f64 — <b>bit-identical to WASM</b></td></tr>
+  <tr><td>WASM agents</td><td>emitted in <code>forcePass</code>, reading the tree at baked
+      offsets in the shared agent memory</td><td>f64 — <b>bit-identical to JS</b></td></tr>
+  <tr><td>WebGPU agents</td><td>WGSL, in <b>both</b> force bodies (canonical + B1 mirror) from one shared emitter</td>
+      <td>f32 — statistical, as the target already offers</td></tr>
+</table>
+
+<h2>Consequences shown elsewhere in the UI</h2>
+<table>
+  <tr><th>Surface</th><th>Under Global</th></tr>
+  <tr><td>C2 Generation Pipeline → <i>Long-range charge</i></td>
+      <td><code>k = −10 · global (Barnes-Hut θ = 0.9) — every pair interacts</code></td></tr>
+  <tr><td>C2 Generation Pipeline → <i>Build spatial hash</i></td>
+      <td>no longer claims a charge-widened bin edge (global does not use the stencil)</td></tr>
+  <tr><td>C3 diagnostics → GPU residency</td>
+      <td><code>off</code> — “charge range is Global — the Barnes-Hut tree is rebuilt on the CPU each generation”</td></tr>
+  <tr><td>C1 compatibility readout</td><td>the same reason as a Class-F note (runs, just not resident)</td></tr>
+</table>

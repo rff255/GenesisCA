@@ -100,6 +100,13 @@ export function emitForceControlStruct(): string {
   // is not compile-identity-checked and a uniform branch is perfectly coherent) —
   // the same convention doCharge uses.
   motionMode : u32,
+  // C10 / P11a - GLOBAL (Barnes-Hut) charge. chargeGlobal selects the LAW: when
+  // it is 1 the CUTOFF pair term above is inert (doCharge is 0) and the whole
+  // charge comes from the tree traversal. Appended LAST, so every existing
+  // member's byte offset is unchanged; FORCE_CONTROL_BYTES grows 128 -> 144.
+  chargeGlobal : u32,
+  chargeTheta2 : f32,
+  treeNodeCount : u32,
 };`;
 }
 
@@ -124,6 +131,88 @@ function chargeTerm(is3d: boolean): string {
             let cq: f32 = fc.chargeK * (1.0 / (1.0 + d2) - fc.chargeMinC);
             fx = fx + cq * dx; fy = fy + cq * dy;${fz}
           }`;
+}
+
+/** C10 / P11a - the GLOBAL (Barnes-Hut) charge traversal, shared VERBATIM by the
+ *  canonical neighbour path and the B1 bin-sorted MIRROR path for the same reason
+ *  `chargeTerm` is: a term added to only ONE of the two force pipelines would be
+ *  wrong exclusively for the models that engage the mirror, which is the hardest
+ *  kind of bug to see. (The traversal itself reads the tree, not the neighbour
+ *  list, so it is identical either way - but it is emitted from one place so it
+ *  CANNOT drift.)
+ *
+ *  It mirrors the CPU block: walk the node array with SKIP LINKS, collapse a node
+ *  to one centre-of-mass body when `w^2 < theta^2 * l^2`, otherwise descend (and
+ *  sum a leaf's points exactly); accumulate UNSCALED and multiply by `chargeK`
+ *  once at the end. f32 here, so this is statistical parity with the CPU targets -
+ *  the documented WebGPU stance, not a defect.
+ *
+ *  Emitted only when the layout reserved tree nodes (i.e. the model runs global
+ *  charge); the bindings are declared under the same condition, so a cutoff/off
+ *  model's shader is byte-identical (the Naga stripped-binding discipline). */
+function chargeTreeTraversal(layout: AgentWebGPULayout, is3d: boolean, indent: string): string {
+  if (layout.chargeTreeNodes <= 0) return '';
+  const tf = (base: number, e: string) => (base === 0 ? `chargeTreeF32[${e}]` : `chargeTreeF32[${base}u + ${e}]`);
+  const ti = (base: number, e: string) => (base === 0 ? `chargeTreeI32[${e}]` : `chargeTreeI32[${base}u + ${e}]`);
+  const dz = is3d ? `
+    var ndz: f32 = ${tf(layout.treeNodeCzBase, 'ni')} - zi;` : '';
+  const dzFold = is3d ? `
+      if (ndz > hD) { ndz = ndz - fc.fieldD; } else if (ndz < -hD) { ndz = ndz + fc.fieldD; }` : '';
+  const l2e = is3d ? 'ndx * ndx + ndy * ndy + ndz * ndz' : 'ndx * ndx + ndy * ndy';
+  const accZ = is3d ? ' tfz = tfz + c * ndz;' : '';
+  const pdz = is3d ? `
+          var pdz: f32 = ${tf(layout.treeSortedZBase, 'p')} - zi;` : '';
+  const pdzFold = is3d ? `
+            if (pdz > hD) { pdz = pdz - fc.fieldD; } else if (pdz < -hD) { pdz = pdz + fc.fieldD; }` : '';
+  const pl2e = is3d ? 'pdx * pdx + pdy * pdy + pdz * pdz' : 'pdx * pdx + pdy * pdy';
+  const paccZ = is3d ? ' tfz = tfz + pc * pdz;' : '';
+  const tfzDecl = is3d ? `
+  var tfz: f32 = 0.0;` : '';
+  const applyZ = is3d ? `
+  fz = fz + fc.chargeK * tfz;` : '';
+  const body = `
+  // --- C10: GLOBAL (Barnes-Hut) charge ---
+  var tfx: f32 = 0.0;
+  var tfy: f32 = 0.0;${tfzDecl}
+  var ni: u32 = 0u;
+  loop {
+    if (ni >= fc.treeNodeCount) { break; }
+    var ndx: f32 = ${tf(layout.treeNodeCxBase, 'ni')} - xi;
+    var ndy: f32 = ${tf(layout.treeNodeCyBase, 'ni')} - yi;${dz}
+    if (fc.torus != 0u) {
+      if (ndx > hW) { ndx = ndx - fc.fieldW; } else if (ndx < -hW) { ndx = ndx + fc.fieldW; }
+      if (ndy > hH) { ndy = ndy - fc.fieldH; } else if (ndy < -hH) { ndy = ndy + fc.fieldH; }${dzFold}
+    }
+    let l2: f32 = ${l2e};
+    let w: f32 = ${tf(layout.treeNodeExtBase, 'ni')};
+    if (w * w < fc.chargeTheta2 * l2) {
+      let c: f32 = f32(${ti(layout.treeNodeEndBase, 'ni')} - ${ti(layout.treeNodeStartBase, 'ni')}) / (1.0 + l2);
+      tfx = tfx + c * ndx; tfy = tfy + c * ndy;${accZ}
+      ni = u32(${ti(layout.treeNodeNextBase, 'ni')});
+    } else {
+      if (u32(${ti(layout.treeNodeNextBase, 'ni')}) == ni + 1u) {
+        let pEnd: u32 = u32(${ti(layout.treeNodeEndBase, 'ni')});
+        var p: u32 = u32(${ti(layout.treeNodeStartBase, 'ni')});
+        loop {
+          if (p >= pEnd) { break; }
+          var pdx: f32 = ${tf(layout.treeSortedXBase, 'p')} - xi;
+          var pdy: f32 = ${tf(layout.treeSortedYBase, 'p')} - yi;${pdz}
+          if (fc.torus != 0u) {
+            if (pdx > hW) { pdx = pdx - fc.fieldW; } else if (pdx < -hW) { pdx = pdx + fc.fieldW; }
+            if (pdy > hH) { pdy = pdy - fc.fieldH; } else if (pdy < -hH) { pdy = pdy + fc.fieldH; }${pdzFold}
+          }
+          let pc: f32 = 1.0 / (1.0 + ${pl2e});
+          tfx = tfx + pc * pdx; tfy = tfy + pc * pdy;${paccZ}
+          p = p + 1u;
+        }
+      }
+      ni = ni + 1u;
+    }
+  }
+  fx = fx + fc.chargeK * tfx;
+  fy = fy + fc.chargeK * tfy;${applyZ}`;
+  const NL = String.fromCharCode(10);
+  return `${NL}  if (fc.chargeGlobal != 0u) {` + body.split(NL).join(NL + indent) + `${NL}  }`;
 }
 
 /** Emit the standalone WGSL force-pass module for the given GPU agent layout.
@@ -318,7 +407,7 @@ export function emitAgentForcePassWGSL(layout: AgentWebGPULayout, usesForceScatt
 @group(0) @binding(0) var<storage, read_write> agentF32   : array<f32>;
 @group(0) @binding(1) var<storage, read>       agentAlive : array<u32>;
 @group(0) @binding(2) var<storage, read>       hashBins   : array<i32>;
-@group(0) @binding(3) var<uniform>             fc         : ForceControl;${usesForceScatter ? '\n@group(0) @binding(4) var<storage, read>       forceScatter : array<u32>;' : ''}${mirror ? '\n@group(0) @binding(5) var<storage, read>       sorted     : array<f32>;\n@group(0) @binding(6) var<storage, read>       sortedId   : array<u32>;' : ''}
+@group(0) @binding(3) var<uniform>             fc         : ForceControl;${usesForceScatter ? '\n@group(0) @binding(4) var<storage, read>       forceScatter : array<u32>;' : ''}${mirror ? '\n@group(0) @binding(5) var<storage, read>       sorted     : array<f32>;\n@group(0) @binding(6) var<storage, read>       sortedId   : array<u32>;' : ''}${layout.chargeTreeNodes > 0 ? '\n@group(0) @binding(7) var<storage, read>       chargeTreeF32 : array<f32>;\n@group(0) @binding(8) var<storage, read>       chargeTreeI32 : array<i32>;' : ''}
 
 @compute @workgroup_size(64)
 fn forcePass(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(num_workgroups) nwg: vec3<u32>) {
@@ -360,6 +449,7 @@ fn forcePass(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(num_workgro
     }
     ${layout.f32Base['density'] !== undefined ? `${f32('density', 'i')} = dens;` : ''}
   }
+${chargeTreeTraversal(layout, is3d, '  ')}
 
   // Integrate: v = momentum·v + (dt/eta)·F; optional speed cap; x += v; wrap/clamp.
   // C9 / STEP 6: under velocity the engine seeds no force, so the graph-set

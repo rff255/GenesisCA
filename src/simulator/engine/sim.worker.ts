@@ -28,7 +28,7 @@ import { subAttrInfo, parentValueToInt } from '../../modeler/vpl/compiler/subAtt
 import { buildActiveOffsets, createActiveSet, rebuildActiveSet, applyTransition, compactActiveSet, type ActiveSet } from './activeSet';
 import { packNI, packNI3 } from '../../modeler/vpl/compiler/niCodec';
 import type { Attribute, CenterBasedConfig, SkipIsolatedEmptyConfig } from '../../model/types';
-import { cbNum, usesBondingPhysics, usesSoftCollision, usesPositionalCollision, usesEngineSprings, usesEngineGrowth, chargeBinEdgeOf, chargeParamsOf, layoutIterationsOf, effectiveAgentDt, legacyPhysicsFlagsInEffect } from '../../model/centerBased';
+import { cbNum, usesBondingPhysics, usesSoftCollision, usesPositionalCollision, usesEngineSprings, usesEngineGrowth, chargeBinEdgeOf, chargeParamsOf, usesGlobalCharge, layoutIterationsOf, effectiveAgentDt, legacyPhysicsFlagsInEffect } from '../../model/centerBased';
 import { normalizeFieldGates, ALL_FIELD_GATES_ON, motionModeCode, type AgentFieldGates } from '../../model/agentFieldGating';
 // C1 — the MODEL-derivable half of residency eligibility, shared with the
 // Properties compatibility readout so the engine and the explanation agree.
@@ -36,6 +36,7 @@ import { residencyModelBlockers } from '../../model/agentResidency';
 import {
   createAgentStore, seedAgents, clearAgents, allocAgentSlot, initAgentSlot, freeAgentSlot, freeStagedSlot,
   snapshotAgentsForRender, advanceAgentSprites, serializeAgentStore, deserializeAgentStore, buildSpatialHash,
+  buildAgentOctree,
   resolvePositionalCollisions,
   formBond, breakBond, drainAgentBondRequests, hasBond, sweepStaleBonds, divideAgent,
   primeAgentAttrWrite, swapAgentAttrs, computeAgentMaxHashBins, AGENT_HASH_BIN_CAP,
@@ -55,7 +56,7 @@ import { computeAgentWebGPULayout, type AgentWebGPULayout } from '../../modeler/
 import {
   createAgentWebGPURuntime, destroyAgentWebGPURuntime, uploadAgentSoA, uploadAgentHash,
   uploadAgentControl, uploadAgentForceControl, dispatchAgentStep, readbackAgentStep, uploadAgentSpawnCursor, resetAgentStopFlag,
-  uploadAgentGeneration,
+  uploadAgentGeneration, uploadAgentChargeTree,
   uploadAgentField, readbackAgentField,
   primeAgentFieldFromGrid, foldAgentFieldToGrid,
   uploadAgentAux, uploadAgentIndicators, readbackAgentIndicators, uploadAgentBondStore, readbackAgentBondStore,
@@ -1096,6 +1097,9 @@ let agentForcePassWasmFn: ((...args: number[]) => void) | null = null;
 /** AW-HASH fits-check: warn once when the per-step hash overflows the WASM reserve
  *  (the step then runs on JS ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â never silently wrong). */
 let agentWasmHashOverflowWarned = false;
+/** C10 - warn-once latch for a Barnes-Hut tree that overflows the GPU reserve
+ *  (the `agentWasmHashOverflowWarned` precedent: loud once, then quiet). */
+let agentGpuChargeTreeWarned = false;
 
 /** PR7 G3-runtime ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â the dedicated agent WebGPU runtime (its own device, separate
  *  from the grid's `webgpuRuntime`). When `agentTarget === 'webgpu'` AND this is
@@ -1926,10 +1930,18 @@ function runAgentStep(): void {
   // bond graph open. `minC` takes the force continuously to zero at the cutoff
   // instead of stepping. Off ⇒ `doCharge` false ⇒ every added block is skipped and
   // the loop is behaviour-identical to the pre-charge engine.
-  const { doCharge: chargeResolved, chargeK, chargeMaxD2, chargeMinC } = chargeParamsOf(cfg);
+  const { doCharge: chargeResolved, chargeK, chargeMaxD2, chargeMinC, doChargeTree: treeResolved, chargeTheta2 } = chargeParamsOf(cfg);
   const doCharge = chargeResolved && doForces;   // C9: no engine force under velocity/static
+  // C10 / P11a — GLOBAL charge: the same law WITHOUT a cutoff (`min_c = 0`),
+  // summed over EVERY pair via a Barnes–Hut octree instead of the stencil. The two
+  // are mutually exclusive by construction (`chargeParamsOf` turns the pair term
+  // off under global), so the force can never be counted twice.
+  const doChargeTree = treeResolved && doForces;
   // Charge needs the neighbour scan even when nothing else does (a pure charged
-  // gas has no soft-sphere, no springs and no density consumer).
+  // gas has no soft-sphere, no springs and no density consumer). GLOBAL charge
+  // does NOT join this gate — the tree carries it, so a pure global-charge gas
+  // skips the neighbour pass entirely (which, with the un-widened bin edge, is
+  // the whole point of not riding the stencil).
   const doScan = doForce || agentUsesDensity || doCharge;
   // L3 — how many times the force integrator runs this generation (1 = the
   // pre-L3 engine, exactly). Resolved from the ONE clamped resolver every
@@ -1960,6 +1972,11 @@ function runAgentStep(): void {
   const binEdge = Math.max(collisionBinEdge, chargeBinEdgeOf(cfg));
   const hash = buildSpatialHash(s, Math.max(1e-3, binEdge), W, H, D, boundaryTreatment === 'torus', agentHashReserve);
   currentAgentHash = hash;
+  // C10 — the Barnes–Hut octree for GLOBAL charge, built ONCE per generation from
+  // the same positions the hash saw (and, like the hash, before the behaviour, so
+  // the force pass and every target read one settled structure). ONE TypeScript
+  // build; the WASM path copies it into memory and the GPU path uploads it.
+  const chargeTree = doChargeTree ? buildAgentOctree(s, is3d, s.layout?.chargeTreeNodes || undefined) : null;
 
   // Compiled behaviour (reads positions + the PREVIOUS step's density ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â a
   // one-step lag, the cost of fusing density into the single neighbour pass;
@@ -2029,6 +2046,25 @@ function runAgentStep(): void {
           // binAgents holds liveCount entries grouped by bin (= binStart[nBins]).
           const used = hash.binStart[nBins]!;
           if (used > 0) new Int32Array(buf, L.hashBinAgentsOffset, used).set(hash.binAgents.subarray(0, used));
+        }
+        // C10 - copy the Barnes-Hut octree into the reserved regions (the AW-HASH
+        // copy, one structure over). Only the LIVE prefix of each array is copied;
+        // the WASM traversal never reads past treeNodeCount / pointCount. The tree
+        // regions exist only when the model uses GLOBAL charge, so this is skipped
+        // (and reserves nothing) for every other model.
+        if (chargeTree && L.chargeTreeNodes > 0) {
+          const nN = Math.min(chargeTree.nodeCount, L.chargeTreeNodes);
+          const nP = Math.min(chargeTree.pointCount, s.maxAgents);
+          new Float64Array(buf, L.treeSortedXOffset, nP).set(chargeTree.sortedX.subarray(0, nP));
+          new Float64Array(buf, L.treeSortedYOffset, nP).set(chargeTree.sortedY.subarray(0, nP));
+          new Float64Array(buf, L.treeSortedZOffset, nP).set(chargeTree.sortedZ.subarray(0, nP));
+          new Float64Array(buf, L.treeNodeCxOffset, nN).set(chargeTree.nodeCx.subarray(0, nN));
+          new Float64Array(buf, L.treeNodeCyOffset, nN).set(chargeTree.nodeCy.subarray(0, nN));
+          new Float64Array(buf, L.treeNodeCzOffset, nN).set(chargeTree.nodeCz.subarray(0, nN));
+          new Float64Array(buf, L.treeNodeExtOffset, nN).set(chargeTree.nodeExt.subarray(0, nN));
+          new Int32Array(buf, L.treeNodeStartOffset, nN).set(chargeTree.nodeStart.subarray(0, nN));
+          new Int32Array(buf, L.treeNodeEndOffset, nN).set(chargeTree.nodeEnd.subarray(0, nN));
+          new Int32Array(buf, L.treeNodeNextOffset, nN).set(chargeTree.nodeNext.subarray(0, nN));
         }
         // FULL-COVERAGE: copy the EXTERNAL regions (model attrs / indicators /
         // lookup tables / cell fields) into the reserved in-memory regions the WASM
@@ -2137,6 +2173,10 @@ function runAgentStep(): void {
           // omits them, which would read `undefined` ⇒ NaN ⇒ poisoned forces —
           // structurally impossible. (Asserted in scripts/parity-agent-force.mjs.)
           doCharge ? 1 : 0, chargeK, chargeMaxD2, chargeMinC,
+          // C10 - the GLOBAL block, likewise ALWAYS passed (a cutoff/off module
+          // declares fewer params and simply ignores these two).
+          doChargeTree && chargeTree ? Math.min(chargeTree.nodeCount, s.layout?.chargeTreeNodes ?? 0) : 0,
+          chargeTheta2,
         );
         ranForceWasm = true;
       } catch (e) {
@@ -2235,6 +2275,55 @@ function runAgentStep(): void {
           }
         }
         if (doScan) s.density[i] = dens;
+
+        // --- C10 / P11a - GLOBAL charge: one Barnes-Hut traversal --------------
+        // Walks the node array with SKIP LINKS: a node whose extent is small
+        // relative to its distance (`w**2 < theta**2 * l**2`) collapses to ONE
+        // centre-of-mass term carrying its whole mass; otherwise we descend
+        // (`ni + 1` is its first child) and a LEAF (`next === ni+1`) sums its
+        // points exactly. Self lands in a leaf with `d = 0`, whose term is
+        // `1 * 0 = 0` - exact, so no self-check is needed. `chargeK` multiplies
+        // ONCE at the end (the reference's `applyChargeForces`), which is cheaper
+        // AND is the arithmetic the WASM/WGSL ports mirror. Deltas use the SAME
+        // minimum-image torus fold as every other engine force.
+        if (doChargeTree && chargeTree) {
+          const tSX = chargeTree.sortedX, tSY = chargeTree.sortedY, tSZ = chargeTree.sortedZ;
+          const nSt = chargeTree.nodeStart, nEn = chargeTree.nodeEnd, nNx = chargeTree.nodeNext;
+          const nCx = chargeTree.nodeCx, nCy = chargeTree.nodeCy, nCz = chargeTree.nodeCz, nEx = chargeTree.nodeExt;
+          const nodeN = chargeTree.nodeCount;
+          let tfx = 0, tfy = 0, tfz = 0;
+          for (let ni = 0; ni < nodeN;) {
+            let ndx = nCx[ni]! - xi, ndy = nCy[ni]! - yi, ndz = nCz[ni]! - zi;
+            if (torus) {
+              if (ndx > halfW) ndx -= W; else if (ndx < -halfW) ndx += W;
+              if (ndy > halfH) ndy -= H; else if (ndy < -halfH) ndy += H;
+              if (ndz > halfD) ndz -= D; else if (ndz < -halfD) ndz += D;
+            }
+            const l2 = ndx * ndx + ndy * ndy + ndz * ndz;
+            const w = nEx[ni]!;
+            if (w * w < chargeTheta2 * l2) {
+              const c = (nEn[ni]! - nSt[ni]!) / (1 + l2);
+              tfx += c * ndx; tfy += c * ndy; tfz += c * ndz;
+              ni = nNx[ni]!;
+            } else {
+              if (nNx[ni]! === ni + 1) {
+                const pEnd = nEn[ni]!;
+                for (let p = nSt[ni]!; p < pEnd; p++) {
+                  let pdx = tSX[p]! - xi, pdy = tSY[p]! - yi, pdz = tSZ[p]! - zi;
+                  if (torus) {
+                    if (pdx > halfW) pdx -= W; else if (pdx < -halfW) pdx += W;
+                    if (pdy > halfH) pdy -= H; else if (pdy < -halfH) pdy += H;
+                    if (pdz > halfD) pdz -= D; else if (pdz < -halfD) pdz += D;
+                  }
+                  const pc = 1 / (1 + pdx * pdx + pdy * pdy + pdz * pdz);
+                  tfx += pc * pdx; tfy += pc * pdy; tfz += pc * pdz;
+                }
+              }
+              ni++;
+            }
+          }
+          fx += chargeK * tfx; fy += chargeK * tfy; fz += chargeK * tfz;
+        }
 
         // --- bond springs ÃƒÅ½Ã‚Â»(lÃƒÂ¢Ã‹â€ Ã¢â‚¬â„¢L)Ãƒâ€šÃ‚Â·rÃƒÅ’Ã¢â‚¬Å¡ over the 3-vector (dangling-bond epoch ABI) ---
         // Gated on the Bonds=Physics capability: Data bonds are connectivity edges
@@ -2364,6 +2453,53 @@ function runAgentStep(): void {
         }
         if (doScan) s.density[i] = dens;
 
+        // --- C10 / P11a - GLOBAL charge: one Barnes-Hut traversal --------------
+        // Walks the node array with SKIP LINKS: a node whose extent is small
+        // relative to its distance (`w**2 < theta**2 * l**2`) collapses to ONE
+        // centre-of-mass term carrying its whole mass; otherwise we descend
+        // (`ni + 1` is its first child) and a LEAF (`next === ni+1`) sums its
+        // points exactly. Self lands in a leaf with `d = 0`, whose term is
+        // `1 * 0 = 0` - exact, so no self-check is needed. `chargeK` multiplies
+        // ONCE at the end (the reference's `applyChargeForces`), which is cheaper
+        // AND is the arithmetic the WASM/WGSL ports mirror. Deltas use the SAME
+        // minimum-image torus fold as every other engine force.
+        if (doChargeTree && chargeTree) {
+          const tSX = chargeTree.sortedX, tSY = chargeTree.sortedY;
+          const nSt = chargeTree.nodeStart, nEn = chargeTree.nodeEnd, nNx = chargeTree.nodeNext;
+          const nCx = chargeTree.nodeCx, nCy = chargeTree.nodeCy, nEx = chargeTree.nodeExt;
+          const nodeN = chargeTree.nodeCount;
+          let tfx = 0, tfy = 0;
+          for (let ni = 0; ni < nodeN;) {
+            let ndx = nCx[ni]! - xi, ndy = nCy[ni]! - yi;
+            if (torus) {
+              if (ndx > halfW) ndx -= W; else if (ndx < -halfW) ndx += W;
+              if (ndy > halfH) ndy -= H; else if (ndy < -halfH) ndy += H;
+            }
+            const l2 = ndx * ndx + ndy * ndy;
+            const w = nEx[ni]!;
+            if (w * w < chargeTheta2 * l2) {
+              const c = (nEn[ni]! - nSt[ni]!) / (1 + l2);
+              tfx += c * ndx; tfy += c * ndy;
+              ni = nNx[ni]!;
+            } else {
+              if (nNx[ni]! === ni + 1) {
+                const pEnd = nEn[ni]!;
+                for (let p = nSt[ni]!; p < pEnd; p++) {
+                  let pdx = tSX[p]! - xi, pdy = tSY[p]! - yi;
+                  if (torus) {
+                    if (pdx > halfW) pdx -= W; else if (pdx < -halfW) pdx += W;
+                    if (pdy > halfH) pdy -= H; else if (pdy < -halfH) pdy += H;
+                  }
+                  const pc = 1 / (1 + pdx * pdx + pdy * pdy);
+                  tfx += pc * pdx; tfy += pc * pdy;
+                }
+              }
+              ni++;
+            }
+          }
+          fx += chargeK * tfx; fy += chargeK * tfy;
+        }
+
         // --- bond springs ÃƒÅ½Ã‚Â»(lÃƒÂ¢Ã‹â€ Ã¢â‚¬â„¢L)Ãƒâ€šÃ‚Â·rÃƒÅ’Ã¢â‚¬Å¡ (no-op until bonds exist). The partnerEpoch
         // check is the dangling-bond ABI ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â a recycled slot's stale bond reads
         // epoch-mismatch and is skipped. Gated on the Bonds=Physics capability
@@ -2478,9 +2614,15 @@ function runAgentStep(): void {
  *  GPU dispatch sites (the per-gen path and the resident batch) spread into their
  *  `uploadAgentForceControl` call. One helper so the two can never disagree about
  *  whether charge is on or what its constants are. */
-function chargeDispatchFields(cfg: CenterBasedConfig | null): { doCharge: number; chargeK: number; chargeMaxD2: number; chargeMinC: number } {
+function chargeDispatchFields(cfg: CenterBasedConfig | null): { doCharge: number; chargeK: number; chargeMaxD2: number; chargeMinC: number; chargeGlobal: number; chargeTheta2: number } {
   const c = chargeParamsOf(cfg);
-  return { doCharge: c.doCharge ? 1 : 0, chargeK: c.chargeK, chargeMaxD2: c.chargeMaxD2, chargeMinC: c.chargeMinC };
+  // C10 - `chargeGlobal` selects the LAW; `treeNodeCount` is supplied per dispatch
+  // by the caller (it depends on the tree actually built + uploaded this step, so
+  // a failed/oversized upload leaves it 0 and the traversal is simply not taken).
+  return {
+    doCharge: c.doCharge ? 1 : 0, chargeK: c.chargeK, chargeMaxD2: c.chargeMaxD2, chargeMinC: c.chargeMinC,
+    chargeGlobal: c.doChargeTree ? 1 : 0, chargeTheta2: c.chargeTheta2,
+  };
 }
 
 /** Per-indicator-slot int/tag flag (the same order the compiler resolved
@@ -2751,6 +2893,10 @@ async function runAgentBatchResident(count: number, bumpGeneration: boolean = tr
       torus: torus ? 1 : 0,
       motionMode: motionModeCode(cfg),   // C9 / STEP 6
       ...chargeDispatchFields(cfg),
+      // C10 - GLOBAL charge is a residency BLOCKER (the tree is CPU-built per
+      // generation), so this path is unreachable for such a model. Pin both to 0
+      // so the spread can never claim a traversal the batch has no tree for.
+      chargeGlobal: 0, treeNodeCount: 0,
       nBinsZ: hp.nBinsZ, binSizeZ: hp.binSizeZ, fieldD: s.worldDepth,
       originX: 0, originY: 0, originZ: 0,
     });
@@ -2833,6 +2979,21 @@ async function runAgentStepWebGPUInner(gpuFieldBridge?: GpuFieldBridge | null): 
   const growthRate = usesEngineGrowth(cfg) ? Math.max(0, cbNum(cfg, 'growthRate')) : 0;
   const hw = s.highWater;
   const alive = s.alive, rad = s.radius;
+  // C10 / P11a - GLOBAL charge on the GPU: build the octree on the CPU (the ONE
+  // build, shared with JS/WASM) and upload it, exactly as the spatial hash is
+  // built on the CPU and uploaded. `uploadAgentChargeTree` returns false when the
+  // runtime has no tree buffers or the tree overflows the reserve, and then the
+  // count stays 0 so the shader takes NO traversal rather than walking a truncated
+  // tree (never silently wrong).
+  let gpuChargeTreeNodes = 0;
+  if (usesGlobalCharge(cfg) && gpuMotionMode === 2) {
+    const tree = buildAgentOctree(s, s.worldDepth > 1, rt.layout.chargeTreeNodes || undefined);
+    if (tree && uploadAgentChargeTree(rt, tree)) gpuChargeTreeNodes = tree.nodeCount;
+    else if (tree && !agentGpuChargeTreeWarned) {
+      agentGpuChargeTreeWarned = true;
+      postFallback(`[agents] the Barnes-Hut tree (${tree.nodeCount} nodes) exceeds the GPU reserve (${rt.layout.chargeTreeNodes}); global charge is skipped on the GPU this step.`);
+    }
+  }
   const momentum = Math.max(0, Math.min(0.999, cbNum(cfg, 'momentum')));
   const maxSpeed = Math.max(0, cbNum(cfg, 'maxSpeed'));
   const dt = s.dt;
@@ -2905,6 +3066,13 @@ async function runAgentStepWebGPUInner(gpuFieldBridge?: GpuFieldBridge | null): 
     fieldW: W, fieldH: H, bonding: bonding ? 1 : 0, doCollision: doCollision ? 1 : 0, doDensity: agentUsesDensity ? 1 : 0, torus: torus ? 1 : 0,
     motionMode: gpuMotionMode,   // C9 / STEP 6
     ...chargeDispatchFields(cfg),
+    // C10 - the CPU-built octree, uploaded for THIS generation. A missing/oversized
+    // tree leaves BOTH the count and the flag at 0, so the shader takes no
+    // traversal rather than walking a truncated one, and no probe can read
+    // "global charge on" while there is no tree to walk (the fits-check
+    // discipline the hash upload already uses; the overflow is warned once).
+    chargeGlobal: gpuChargeTreeNodes > 0 ? 1 : 0,
+    treeNodeCount: gpuChargeTreeNodes,
     nBinsZ: hash ? hash.nBinsZ : 1, binSizeZ: hash ? hash.binSizeZ : 1, fieldD: s.worldDepth,
     originX: hash ? hash.originX : 0, originY: hash ? hash.originY : 0, originZ: hash ? hash.originZ : 0,
   });

@@ -6,7 +6,7 @@ import {
   capabilityClosureDrivers, capabilityRowLabel,
   type AgentPresetKey, type BoolCapKey,
 } from '../../model/agentCapabilities';
-import { cbNum, chargeStrengthOf, chargeMaxDistOf, CHARGE_MAX_DIST_REST_MULTIPLE, layoutIterationsOf, MAX_LAYOUT_ITERATIONS } from '../../model/centerBased';
+import { cbNum, chargeStrengthOf, chargeMaxDistOf, CHARGE_MAX_DIST_REST_MULTIPLE, layoutIterationsOf, MAX_LAYOUT_ITERATIONS, chargeRangeOf, chargeThetaOf, MIN_CHARGE_THETA, MAX_CHARGE_THETA } from '../../model/centerBased';
 import { NumberField } from '../vpl/widgets/InlineWidgets';
 
 /** Model Properties → "Agent Capabilities" section. The preset picker + the
@@ -161,6 +161,22 @@ export function AgentCapabilitiesSection({
                 </label>
                 {on && (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 4, paddingLeft: 12 }}>
+                    {/* C10 / P11a — WHICH charge law runs. Cutoff is the L1 pair
+                        force truncated at `chargeMaxDist`; Global drops the cutoff
+                        and sums EVERY pair through a deterministic Barnes–Hut
+                        octree. A different LAW, not a speed-up — the trajectory
+                        differs, and the file records the choice. */}
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+                      <span style={{ fontSize: '0.66rem', color: '#aaa' }} title="How far the charge reaches. Cutoff = a finite-range pair force evaluated in the neighbour stencil. Global = every pair interacts, summed with a Barnes-Hut tree (still fully deterministic on the CPU engines).">Charge range</span>
+                      <select
+                        value={chargeRangeOf(model.centerBased)}
+                        onChange={e => updateCenterBased({ chargeRange: e.target.value === 'global' ? 'global' : 'cutoff' })}
+                        style={{ ...selStyle, width: 132 }}
+                      >
+                        <option value="cutoff">Cutoff (hash)</option>
+                        <option value="global">Global (Barnes-Hut)</option>
+                      </select>
+                    </div>
                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
                       <span style={{ fontSize: '0.66rem', color: '#aaa' }} title="k in f = k·(1/(1+d²) − 1/(1+cutoff²))·(pⱼ − pᵢ). NEGATIVE = repulsive (the layout-opening case).">Charge strength</span>
                       <NumberField
@@ -170,20 +186,46 @@ export function AgentCapabilitiesSection({
                         style={{ background: 'var(--color-bg-panel, #1a1a1a)', color: '#ddd', border: '1px solid var(--color-widget-border, #444)', borderRadius: 4, width: 64, fontSize: '0.66rem' }}
                       />
                     </div>
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
-                      <span style={{ fontSize: '0.66rem', color: '#aaa' }} title="Cutoff distance in world units. Also widens the spatial-hash bin edge so the neighbour stencil actually covers it.">Charge cutoff</span>
-                      <NumberField
-                        value={chargeMaxDistOf(model.centerBased)}
-                        onNumber={n => updateCenterBased({ chargeMaxDist: n })}
-                        onClear={() => updateCenterBased({ chargeMaxDist: undefined })}
-                        min={0} step={1}
-                        style={{ background: 'var(--color-bg-panel, #1a1a1a)', color: '#ddd', border: '1px solid var(--color-widget-border, #444)', borderRadius: 4, width: 64, fontSize: '0.66rem' }}
-                      />
-                    </div>
-                    <span style={{ color: '#777', fontSize: '0.6rem' }}>
-                      Cutoff defaults to {CHARGE_MAX_DIST_REST_MULTIPLE}× the bond rest length ({(CHARGE_MAX_DIST_REST_MULTIPLE * cbNum(model.centerBased, 'bondRestLength')).toFixed(1)}) — clear the field to restore it.
-                      Quality saturates around there; a much larger cutoff only inflates the layout and costs more per step (in 3D the stencil is a VOLUME, so keep it tight).
-                    </span>
+                    {/* The cutoff means NOTHING under Global, so it is hidden
+                        rather than shown inert (the `hiddenPorts` doctrine); theta
+                        takes its place. */}
+                    {chargeRangeOf(model.centerBased) === 'cutoff' ? (
+                      <>
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+                          <span style={{ fontSize: '0.66rem', color: '#aaa' }} title="Cutoff distance in world units. Also widens the spatial-hash bin edge so the neighbour stencil actually covers it.">Charge cutoff</span>
+                          <NumberField
+                            value={chargeMaxDistOf(model.centerBased)}
+                            onNumber={n => updateCenterBased({ chargeMaxDist: n })}
+                            onClear={() => updateCenterBased({ chargeMaxDist: undefined })}
+                            min={0} step={1}
+                            style={{ background: 'var(--color-bg-panel, #1a1a1a)', color: '#ddd', border: '1px solid var(--color-widget-border, #444)', borderRadius: 4, width: 64, fontSize: '0.66rem' }}
+                          />
+                        </div>
+                        <span style={{ color: '#777', fontSize: '0.6rem' }}>
+                          Cutoff defaults to {CHARGE_MAX_DIST_REST_MULTIPLE}× the bond rest length ({(CHARGE_MAX_DIST_REST_MULTIPLE * cbNum(model.centerBased, 'bondRestLength')).toFixed(1)}) — clear the field to restore it.
+                          A much larger cutoff inflates the layout and costs more per step (in 3D the stencil is a VOLUME, so keep it tight) — if a growing graph outruns it, Global is the answer, not a bigger number.
+                        </span>
+                      </>
+                    ) : (
+                      <>
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+                          <span style={{ fontSize: '0.66rem', color: '#aaa' }} title="Barnes-Hut opening angle. A group of agents is collapsed to one centre-of-mass body when extent² < θ²·d². Smaller = more exact and slower.">Accuracy θ</span>
+                          <NumberField
+                            value={chargeThetaOf(model.centerBased)}
+                            onNumber={n => updateCenterBased({ chargeTheta: n })}
+                            onClear={() => updateCenterBased({ chargeTheta: undefined })}
+                            min={MIN_CHARGE_THETA} max={MAX_CHARGE_THETA} step={0.1}
+                            style={{ background: 'var(--color-bg-panel, #1a1a1a)', color: '#ddd', border: '1px solid var(--color-widget-border, #444)', borderRadius: 4, width: 64, fontSize: '0.66rem' }}
+                          />
+                        </div>
+                        <span style={{ color: '#777', fontSize: '0.6rem' }}>
+                          Every pair interacts; distant groups are approximated by their centre of mass. Unlike a cutoff this does not
+                          stop working as the graph grows. Approximate is not the same as random — the CPU engines are bit-reproducible,
+                          so a fixed seed still replays exactly. θ is part of the force law your file records.
+                          GPU residency is off while Global is on (the tree is rebuilt on the CPU each generation).
+                        </span>
+                      </>
+                    )}
                   </div>
                 )}
               </div>

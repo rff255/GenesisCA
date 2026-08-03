@@ -1,4 +1,4 @@
-import type { CenterBasedConfig } from './types';
+import type { CenterBasedConfig, ChargeRange } from './types';
 
 /** Bond-Graph Agents — engine defaults for every live-tunable / ceiling field
  *  on `CenterBasedConfig`. Single source of truth shared by the worker (the
@@ -181,6 +181,48 @@ export function chargeMaxDistOf(cfg: CenterBasedConfig | undefined | null): numb
   return CHARGE_MAX_DIST_REST_MULTIPLE * Math.max(1e-6, cbNum(cfg, 'bondRestLength'));
 }
 
+// ---------------------------------------------------------------------------
+// C10 / P11a — CHARGE RANGE: cutoff (L1) vs GLOBAL (deterministic Barnes–Hut).
+//
+// `cutoff` is the shipped pair force, truncated at `chargeMaxDist` and evaluated
+// inside the neighbour stencil. `global` is a DIFFERENT LAW: no cutoff at all
+// (`min_c = 0`), every pair contributes, and the sum is θ-approximated by an
+// octree traversal instead of a stencil walk. The two consequences that ripple
+// everywhere:
+//   • the cutoff PAIR TERM is off under global (`ChargeParams.doCharge`), so the
+//     force is never double-counted;
+//   • `chargeBinEdgeOf` returns 0 under global — the stencil carries no charge, so
+//     widening it would be pure cost (and 3D cost grows with the CUBE of the edge).
+// ---------------------------------------------------------------------------
+
+/** Which charge law this model runs. Absent ⇒ `'cutoff'` ⇒ byte-identical to L1. */
+export function chargeRangeOf(cfg: CenterBasedConfig | undefined | null): ChargeRange {
+  return cfg?.chargeRange === 'global' ? 'global' : 'cutoff';
+}
+
+/** True when the engine runs the GLOBAL (Barnes–Hut) charge law. Requires the
+ *  Charge capability itself — the range is a property OF charge, not a substitute
+ *  for it, so a charge-off model can never resolve to global. */
+export function usesGlobalCharge(cfg: CenterBasedConfig | undefined | null): boolean {
+  return usesCharge(cfg) && chargeRangeOf(cfg) === 'global';
+}
+
+/** The Barnes–Hut opening angle θ. A node is accepted as one centre-of-mass body
+ *  when `extent² < θ²·d²`; smaller ⇒ more exact + slower. Absent ⇒ 0.9 (znah's
+ *  reference value). CLAMPED rather than validated: θ is part of the declared force
+ *  law that a `.gcaproj` records, so a hand-edited or out-of-range value must
+ *  resolve to something runnable, never throw. The upper bound also keeps the
+ *  traversal sane — at very large θ the tree is barely opened and the "law" stops
+ *  resembling the pair sum at all. */
+export const DEFAULT_CHARGE_THETA = 0.9;
+export const MIN_CHARGE_THETA = 0.1;
+export const MAX_CHARGE_THETA = 1.5;
+export function chargeThetaOf(cfg: CenterBasedConfig | undefined | null): number {
+  const v = cfg?.chargeTheta;
+  const t = typeof v === 'number' && Number.isFinite(v) ? v : DEFAULT_CHARGE_THETA;
+  return Math.min(MAX_CHARGE_THETA, Math.max(MIN_CHARGE_THETA, t));
+}
+
 /** THE TRAP, in one place: how far the spatial-hash bin edge must reach for the
  *  charge force to be complete. The neighbour pass walks a 3×3(×3) stencil, so it
  *  only ever sees pairs closer than ONE bin edge — if the edge does not cover
@@ -196,7 +238,10 @@ export function chargeMaxDistOf(cfg: CenterBasedConfig | undefined | null): numb
  *  (The reserve itself must NOT be widened: it is baked into the agent memory
  *  layout, so changing it would shift every offset past the hash region.) */
 export function chargeBinEdgeOf(cfg: CenterBasedConfig | undefined | null): number {
-  return usesCharge(cfg) ? chargeMaxDistOf(cfg) : 0;
+  // C10: GLOBAL charge does not ride the stencil at all (the octree carries it),
+  // so it must NOT widen the edge — the widening exists solely to make the pair
+  // term complete, and in 3D the candidate count grows with the CUBE of the edge.
+  return usesCharge(cfg) && !usesGlobalCharge(cfg) ? chargeMaxDistOf(cfg) : 0;
 }
 
 /** The charge constants the force integrator actually consumes, PRECOMPUTED once
@@ -206,12 +251,37 @@ export function chargeBinEdgeOf(cfg: CenterBasedConfig | undefined | null): numb
  *  as `dtOverEta`: all four surfaces then fold bit-identical constants instead of
  *  each re-deriving them, which is what makes JS↔WASM bit-parity hold. Charge off
  *  ⇒ every field 0 ⇒ each surface's `doCharge` branch is never taken. */
-export interface ChargeParams { doCharge: boolean; chargeK: number; chargeMaxD2: number; chargeMinC: number }
+export interface ChargeParams {
+  /** Run the CUTOFF pair term inside the neighbour stencil. Deliberately keeps its
+   *  exact pre-C10 meaning, so every existing consumer is unchanged: it is FALSE
+   *  under global charge (whose term lives in the tree traversal instead), which is
+   *  what stops the force being counted twice. */
+  doCharge: boolean;
+  chargeK: number;
+  chargeMaxD2: number;
+  chargeMinC: number;
+  /** C10 — run the GLOBAL Barnes–Hut traversal instead of the pair term. */
+  doChargeTree: boolean;
+  /** C10 — θ², precomputed here (the `dtOverEta` discipline) so all four force
+   *  surfaces fold the identical constant and JS↔WASM bit-parity holds. */
+  chargeTheta2: number;
+}
 export function chargeParamsOf(cfg: CenterBasedConfig | undefined | null): ChargeParams {
-  const doCharge = usesCharge(cfg);
+  const on = usesCharge(cfg);
+  const global = usesGlobalCharge(cfg);
+  // The pair term runs for CUTOFF charge only.
+  const doCharge = on && !global;
   const maxD = doCharge ? chargeMaxDistOf(cfg) : 0;
   const chargeMaxD2 = maxD * maxD;
-  return { doCharge, chargeK: doCharge ? chargeStrengthOf(cfg) : 0, chargeMaxD2, chargeMinC: 1 / (1 + chargeMaxD2) };
+  const theta = chargeThetaOf(cfg);
+  return {
+    doCharge,
+    // `chargeK` is read by BOTH laws, so it follows the capability, not the range.
+    chargeK: on ? chargeStrengthOf(cfg) : 0,
+    chargeMaxD2, chargeMinC: 1 / (1 + chargeMaxD2),
+    doChargeTree: global,
+    chargeTheta2: global ? theta * theta : 0,
+  };
 }
 
 // ---------------------------------------------------------------------------

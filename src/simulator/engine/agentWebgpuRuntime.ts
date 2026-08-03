@@ -99,6 +99,13 @@ export interface AgentForceDispatchParams {
   chargeK?: number;
   chargeMaxD2?: number;
   chargeMinC?: number;
+  /** C10 / P11a - GLOBAL (Barnes-Hut) charge. When 1 the CUTOFF pair term is off
+   *  (`doCharge` is 0) and the charge comes from the uploaded octree instead;
+   *  `treeNodeCount` bounds the traversal, `chargeTheta2` is the opening angle
+   *  squared (precomputed, like `chargeMaxD2`). Absent => 0 => no traversal. */
+  chargeGlobal?: number;
+  chargeTheta2?: number;
+  treeNodeCount?: number;
   /** 3D extents (default 1 ⇒ 2D — the z stencil / integration is gated off). */
   nBinsZ?: number;
   binSizeZ?: number;
@@ -174,6 +181,13 @@ export interface AgentWebGPURuntime {
    *  graph has no Apply Force To Agent. Zeroed (clearBuffer) before each behaviour
    *  dispatch; the force pass reads it (its binding 4) into the self-force seed. */
   forceScatterBuf: GPUBuffer | null;
+  /** C10 / P11a — the uploaded Barnes–Hut octree (GLOBAL charge only; null
+   *  otherwise, and then the force shader declares no tree bindings either). */
+  chargeTreeF32Buf: GPUBuffer | null;
+  chargeTreeI32Buf: GPUBuffer | null;
+  /** Reusable staging for the per-generation tree upload. */
+  chargeTreeUploadF32: Float32Array | null;
+  chargeTreeUploadI32: Int32Array | null;
   /** THE ACTIVE WINDOW — the highest slot index the GPU buffers may hold live data
    *  for. Every per-generation transfer covers `[0, gpuActiveHigh)` of each strided
    *  run instead of the `maxAgents` CEILING.
@@ -372,7 +386,10 @@ const CONTROL_BYTES = 80;
 // uniform binding size that is a multiple of 16). The WGSL all-scalar struct's
 // minBindingSize is 116 — a larger buffer is valid. (Was 25 fields / 112 before L1
 // appended the four charge scalars.) Registered in verify-render-uniform-layouts.
-const FORCE_CONTROL_BYTES = 128;
+// C10: 33 scalars -> 132 B, rounded to the uniform's 16-byte alignment. (Was 128
+// for the 30 scalars through C9's `motionMode`.) The uniform-layout harness pins
+// this against the WGSL struct.
+const FORCE_CONTROL_BYTES = 144;
 
 // ---------------------------------------------------------------------------
 // Create.
@@ -492,6 +509,13 @@ export async function createAgentWebGPURuntime(
   const rngStateBuf = mk('agentRngState', rngBytes(layout), STORAGE);
   const agentColorsBuf = mk('agentColors', colorsBytes(layout), STORAGE);
   const forceControlBuf = mk('agentForceControl', FORCE_CONTROL_BYTES, UNIFORM);
+  // C10 / P11a — the CPU-built Barnes–Hut octree, re-uploaded each generation (the
+  // `uploadAgentHash` precedent). Created ONLY when the layout reserved nodes (i.e.
+  // the model runs GLOBAL charge); the shader declares bindings 7/8 under the same
+  // condition, so a cutoff/off model has neither buffers nor bindings.
+  const hasChargeTree = layout.chargeTreeNodes > 0;
+  const chargeTreeF32Buf = hasChargeTree ? mk('agentChargeTreeF32', Math.max(4, layout.chargeTreeF32Len * 4), STORAGE_RO) : null;
+  const chargeTreeI32Buf = hasChargeTree ? mk('agentChargeTreeI32', Math.max(4, layout.chargeTreeI32Len * 4), STORAGE_RO) : null;
   // G5 field bridge — created only when the model has agent-accessible cell attrs.
   const hasFieldRead = layout.fieldReadLen > 0;
   const hasFieldWrite = layout.fieldWriteLen > 0;
@@ -582,6 +606,10 @@ export async function createAgentWebGPURuntime(
     { binding: 3, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'uniform' } },
   ];
   if (forceScatterBuf) forceEntries.push({ binding: 4, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } });
+  if (chargeTreeF32Buf && chargeTreeI32Buf) {
+    forceEntries.push({ binding: 7, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } });
+    forceEntries.push({ binding: 8, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } });
+  }
   const forceBGL = device.createBindGroupLayout({ label: 'agent-force-bgl', entries: forceEntries });
   const forcePL = device.createPipelineLayout({ label: 'agent-force-pl', bindGroupLayouts: [forceBGL] });
   const forcePipeline = await device.createComputePipelineAsync({
@@ -595,6 +623,10 @@ export async function createAgentWebGPURuntime(
     { binding: 3, resource: { buffer: forceControlBuf } },
   ];
   if (forceScatterBuf) forceBgEntries.push({ binding: 4, resource: { buffer: forceScatterBuf } });
+  if (chargeTreeF32Buf && chargeTreeI32Buf) {
+    forceBgEntries.push({ binding: 7, resource: { buffer: chargeTreeF32Buf } });
+    forceBgEntries.push({ binding: 8, resource: { buffer: chargeTreeI32Buf } });
+  }
   const forceBindGroup = device.createBindGroup({ label: 'agent-force-bg', layout: forceBGL, entries: forceBgEntries });
 
   // --- L3 relax-commit pipeline (3 bindings: agentF32 rw, ForceControl uniform,
@@ -738,6 +770,9 @@ export async function createAgentWebGPURuntime(
     spawnCursorBuf, usesSpawn: hasSpawn, usesBondStoreWrite: bondStoreWrites,
     stopFlagBuf, usesStop: hasStop,
     forceScatterBuf,
+    chargeTreeF32Buf, chargeTreeI32Buf,
+    chargeTreeUploadF32: hasChargeTree ? new Float32Array(Math.max(1, layout.chargeTreeF32Len)) : null,
+    chargeTreeUploadI32: hasChargeTree ? new Int32Array(Math.max(1, layout.chargeTreeI32Len)) : null,
     // Fresh buffers are zero-initialised, so nothing is live yet.
     gpuActiveHigh: 0,
     genCounterBuf, usesGeneration: hasGeneration,
@@ -1012,6 +1047,46 @@ export function uploadAgentHash(
   return true;
 }
 
+/** C10 / P11a — upload the CPU-built Barnes–Hut octree for this generation (the
+ *  `uploadAgentHash` precedent: one CPU structure, one write per buffer). Packs
+ *  the tree's LIVE prefix into the layout's runs; the shader never reads past
+ *  `treeNodeCount` / the live point count, so the tails stay whatever they were.
+ *  Returns false when the runtime has no tree buffers (a non-global model) or the
+ *  tree overflows the reserve — the caller then leaves `chargeGlobal` at 0 rather
+ *  than dispatching a traversal over a truncated tree. */
+export function uploadAgentChargeTree(
+  rt: AgentWebGPURuntime,
+  tree: {
+    nodeCount: number; pointCount: number;
+    sortedX: Float64Array; sortedY: Float64Array; sortedZ: Float64Array;
+    nodeCx: Float64Array; nodeCy: Float64Array; nodeCz: Float64Array; nodeExt: Float64Array;
+    nodeStart: Int32Array; nodeEnd: Int32Array; nodeNext: Int32Array;
+  } | null,
+): boolean {
+  const L = rt.layout;
+  if (!tree || !rt.chargeTreeF32Buf || !rt.chargeTreeI32Buf || !rt.chargeTreeUploadF32 || !rt.chargeTreeUploadI32) return false;
+  const nN = tree.nodeCount, nP = tree.pointCount;
+  if (nN > L.chargeTreeNodes || nP > L.maxAgents) return false;
+  const f = rt.chargeTreeUploadF32, i = rt.chargeTreeUploadI32;
+  for (let k = 0; k < nN; k++) {
+    f[L.treeNodeCxBase + k] = tree.nodeCx[k]!;
+    f[L.treeNodeCyBase + k] = tree.nodeCy[k]!;
+    f[L.treeNodeCzBase + k] = tree.nodeCz[k]!;
+    f[L.treeNodeExtBase + k] = tree.nodeExt[k]!;
+    i[L.treeNodeStartBase + k] = tree.nodeStart[k]!;
+    i[L.treeNodeEndBase + k] = tree.nodeEnd[k]!;
+    i[L.treeNodeNextBase + k] = tree.nodeNext[k]!;
+  }
+  for (let k = 0; k < nP; k++) {
+    f[L.treeSortedXBase + k] = tree.sortedX[k]!;
+    f[L.treeSortedYBase + k] = tree.sortedY[k]!;
+    f[L.treeSortedZBase + k] = tree.sortedZ[k]!;
+  }
+  rt.device.queue.writeBuffer(rt.chargeTreeF32Buf, 0, f.buffer, f.byteOffset, Math.max(4, L.chargeTreeF32Len * 4));
+  rt.device.queue.writeBuffer(rt.chargeTreeI32Buf, 0, i.buffer, i.byteOffset, Math.max(4, L.chargeTreeI32Len * 4));
+  return true;
+}
+
 /** Write the behaviour Control uniform (highWater + hash dims + world bounds +
  *  bond capacity + the 3D hash/field extents). Field order MIRRORS
  *  `emitControlStruct` in compile.ts. */
@@ -1260,6 +1335,10 @@ export function uploadAgentForceControl(rt: AgentWebGPURuntime, highWater: numbe
   fl[28] = fp.chargeMinC ?? 0;
   // C9 / STEP 6 (absent ⇒ 2 = force = the historical engine).
   u[29] = (fp.motionMode ?? 2) >>> 0;
+  // C10 / P11a — GLOBAL charge (absent ⇒ 0 ⇒ the traversal branch is never taken).
+  u[30] = (fp.chargeGlobal ?? 0) >>> 0;
+  fl[31] = fp.chargeTheta2 ?? 0;
+  u[32] = (fp.treeNodeCount ?? 0) >>> 0;
   rt.device.queue.writeBuffer(rt.forceControlBuf, 0, ab);
 }
 
@@ -3061,6 +3140,14 @@ export async function ensureAgentResident(rt: AgentWebGPURuntime, needScan = fal
       if (usesScatterFC) forceEntries.push({ binding: 4, visibility: S, buffer: { type: 'read-only-storage' } });
       forceEntries.push({ binding: 5, visibility: S, buffer: { type: 'read-only-storage' } });
       forceEntries.push({ binding: 6, visibility: S, buffer: { type: 'read-only-storage' } });
+      // C10 — the shared emitter declares bindings 7/8 whenever the layout
+      // reserved tree nodes, so the MIRROR pipeline must supply them too or its
+      // bind group mismatches. (A global-charge model is not residency-eligible
+      // today, so this is defence in depth against the two paths drifting.)
+      if (rt.chargeTreeF32Buf && rt.chargeTreeI32Buf) {
+        forceEntries.push({ binding: 7, visibility: S, buffer: { type: 'read-only-storage' } });
+        forceEntries.push({ binding: 8, visibility: S, buffer: { type: 'read-only-storage' } });
+      }
       const fm = await mkPipe('agent-force-mirror', emitAgentForcePassWGSL(L, usesScatterFC, true), 'forcePass', forceEntries);
       forceMirrorPipeline = fm.pipe;
       const fmEntries: GPUBindGroupEntry[] = [
@@ -3072,6 +3159,10 @@ export async function ensureAgentResident(rt: AgentWebGPURuntime, needScan = fal
       if (usesScatterFC && rt.forceScatterBuf) fmEntries.push({ binding: 4, resource: { buffer: rt.forceScatterBuf } });
       fmEntries.push({ binding: 5, resource: { buffer: sortedBuf! } });
       fmEntries.push({ binding: 6, resource: { buffer: sortedIdBuf! } });
+      if (rt.chargeTreeF32Buf && rt.chargeTreeI32Buf) {
+        fmEntries.push({ binding: 7, resource: { buffer: rt.chargeTreeF32Buf } });
+        fmEntries.push({ binding: 8, resource: { buffer: rt.chargeTreeI32Buf } });
+      }
       forceMirrorBind = rt.device.createBindGroup({ label: 'agent-force-mirror-bg', layout: fm.bgl, entries: fmEntries });
     }
     const scatterBgEntries: GPUBindGroupEntry[] = [

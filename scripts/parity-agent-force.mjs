@@ -19,7 +19,7 @@ import { fileURLToPath, pathToFileURL } from 'url';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const ENTRY = `
-export { createAgentStore, computeAgentMaxHashBins, buildSpatialHash, seedAgents } from '../src/simulator/engine/agentEngine.ts';
+export { createAgentStore, computeAgentMaxHashBins, buildSpatialHash, seedAgents, buildAgentOctree, agentOctreeNodeReserve } from '../src/simulator/engine/agentEngine.ts';
 export { compileAgentGraphWasm, instantiateAgentWasm } from '../src/modeler/vpl/compiler/agentWasm/compile.ts';
 `;
 const dir = mkdtempSync(join(tmpdir(), 'gca-fp-'));
@@ -28,7 +28,7 @@ writeFileSync(entryPath, ENTRY);
 const outPath = join(dir, 'bundle.mjs');
 await build({ entryPoints: [entryPath], bundle: true, format: 'esm', platform: 'node', outfile: outPath, logLevel: 'error', absWorkingDir: process.cwd() });
 const mod = await import(pathToFileURL(outPath).href);
-const { createAgentStore, seedAgents, buildSpatialHash, compileAgentGraphWasm, instantiateAgentWasm, computeAgentMaxHashBins } = mod;
+const { createAgentStore, seedAgents, buildSpatialHash, compileAgentGraphWasm, instantiateAgentWasm, computeAgentMaxHashBins, buildAgentOctree, agentOctreeNodeReserve } = mod;
 
 const W = 40, H = 40;
 const baseCfg = {
@@ -42,7 +42,7 @@ const baseCfg = {
 // The FULL force-pass ABI (mirrors FORCE_PASS_PARAMS in agentWasm/compile.ts), plus
 // L1's appended 4-param CHARGE block. The worker passes the charge block
 // UNCONDITIONALLY (see the extra-args assertion below), so this mirror does too.
-const forceArgs = (s, hash, cfg, dtOverEta, bonding, doCollision, torus, doDensity = true, ch = OFF_CHARGE, dims = { W, H, D: 1 }) => ([
+const forceArgs = (s, hash, cfg, dtOverEta, bonding, doCollision, torus, doDensity = true, ch = OFF_CHARGE, dims = { W, H, D: 1 }, tree = null) => ([
   s.highWater, hash ? 1 : 0, hash ? hash.nBinsX : 0, hash ? hash.nBinsY : 0, hash ? hash.nBinsZ : 0,
   hash ? hash.binSizeX : 1, hash ? hash.binSizeY : 1, hash ? hash.binSizeZ : 1,
   dtOverEta, cfg.repulsionStiffness, cfg.adhesionStiffness, cfg.interactionRange,
@@ -52,15 +52,25 @@ const forceArgs = (s, hash, cfg, dtOverEta, bonding, doCollision, torus, doDensi
   doCollision ? 1 : 0, bonding ? 1 : 0 /*doSprings — no bonds in this harness (bc=0), so inert*/,
   doDensity ? 1 : 0 /*P1: run the neighbour/density scan*/,
   ch.doCharge ? 1 : 0, ch.chargeK, ch.chargeMaxD2, ch.chargeMinC,   // L1 charge block
+  // C10 GLOBAL block — ALWAYS passed, like the L1 block (a 26/30-param module
+  // ignores the extras; the dangerous direction is structurally impossible).
+  tree ? Math.min(tree.nodeCount, s.layout?.chargeTreeNodes ?? 0) : 0, ch.chargeTheta2 ?? 0,
 ]);
 
 /** Build the charge constants exactly the way the engine's `chargeParamsOf` does
  *  (precomputed cutoff² + minC, so JS and WASM fold identical constants). */
 const mkCharge = (k, maxDist) => {
   const chargeMaxD2 = maxDist * maxDist;
-  return { doCharge: true, chargeK: k, chargeMaxD2, chargeMinC: 1 / (1 + chargeMaxD2) };
+  return { doCharge: true, chargeK: k, chargeMaxD2, chargeMinC: 1 / (1 + chargeMaxD2), doChargeTree: false, chargeTheta2: 0 };
 };
-const OFF_CHARGE = { doCharge: false, chargeK: 0, chargeMaxD2: 0, chargeMinC: 1 };
+const OFF_CHARGE = { doCharge: false, chargeK: 0, chargeMaxD2: 0, chargeMinC: 1, doChargeTree: false, chargeTheta2: 0 };
+/** C10 — GLOBAL (Barnes-Hut) charge: no cutoff at all, so the CUTOFF pair term is
+ *  OFF (`doCharge: false`) and the whole force comes from the tree traversal.
+ *  Mirrors `chargeParamsOf` exactly. */
+const mkGlobalCharge = (k, theta) => ({
+  doCharge: false, chargeK: k, chargeMaxD2: 0, chargeMinC: 1,
+  doChargeTree: true, chargeTheta2: theta * theta,
+});
 
 // Verbatim JS force loop — matches the CURRENT sim.worker.ts runAgentStep
 // (doForce = doCollision||engineForces; muRep = doCollision?muR:0; muAdh = engineForces?muA:0).
@@ -68,7 +78,7 @@ const OFF_CHARGE = { doCharge: false, chargeK: 0, chargeMaxD2: 0, chargeMinC: 1 
 // always 0, so the 2D arm's arithmetic + stencil count stay exactly the 2D ones.
 // L1: the charge term sits BEFORE the soft-sphere's rmax cutoff (its own cutoff is
 // much wider), mirroring the engine.
-function jsForceLoop(s, hash, cfg, dtOverEta, bonding, doCollision, torus, doDensity = true, ch = OFF_CHARGE, is3d = false) {
+function jsForceLoop(s, hash, cfg, dtOverEta, bonding, doCollision, torus, doDensity = true, ch = OFF_CHARGE, is3d = false, tree = null) {
   const hw = s.highWater, x = s.x, y = s.y, z = s.z, rad = s.radius, alive = s.alive;
   const xN = s.xNext, yN = s.yNext, zN = s.zNext, vxArr = s.vx, vyArr = s.vy, vzArr = s.vz;
   const W2 = s.worldWidth, H2 = s.worldHeight, D2 = s.worldDepth;
@@ -78,7 +88,7 @@ function jsForceLoop(s, hash, cfg, dtOverEta, bonding, doCollision, torus, doDen
   const engineForces = bonding;
   const muRep = doCollision ? muR : 0, muAdh = engineForces ? muA : 0;
   const doForce = doCollision || engineForces;
-  const { doCharge, chargeK, chargeMaxD2, chargeMinC } = ch;
+  const { doCharge, chargeK, chargeMaxD2, chargeMinC, doChargeTree = false, chargeTheta2 = 0 } = ch;
   const doScan = doForce || doDensity || doCharge;   // P1 + L1: charge needs the scan too
   for (let i = 0; i < hw; i++) {
     if (!alive[i]) { xN[i] = x[i]; yN[i] = y[i]; if (is3d) zN[i] = z[i]; continue; }
@@ -132,6 +142,51 @@ function jsForceLoop(s, hash, cfg, dtOverEta, bonding, doCollision, torus, doDen
       for (let j = 0; j < hw; j++) { if (alive[j]) interact(j); }
     }
     if (doScan) s.density[i] = dens;
+    // C10 / P11a - the GLOBAL (Barnes-Hut) traversal, a verbatim mirror of the
+    // worker's block (accumulate unscaled, multiply by k ONCE at the end).
+    if (doChargeTree && tree) {
+      const tSX = tree.sortedX, tSY = tree.sortedY, tSZ = tree.sortedZ;
+      const nSt = tree.nodeStart, nEn = tree.nodeEnd, nNx = tree.nodeNext;
+      const nCx = tree.nodeCx, nCy = tree.nodeCy, nCz = tree.nodeCz, nEx = tree.nodeExt;
+      const nodeN = tree.nodeCount;
+      let tfx = 0, tfy = 0, tfz = 0;
+      for (let ni = 0; ni < nodeN;) {
+        let ndx = nCx[ni] - xi, ndy = nCy[ni] - yi, ndz = is3d ? nCz[ni] - zi : 0;
+        if (torus) {
+          if (ndx > halfW) ndx -= W2; else if (ndx < -halfW) ndx += W2;
+          if (ndy > halfH) ndy -= H2; else if (ndy < -halfH) ndy += H2;
+          if (is3d) { if (ndz > halfD) ndz -= D2; else if (ndz < -halfD) ndz += D2; }
+        }
+        const l2 = is3d ? ndx * ndx + ndy * ndy + ndz * ndz : ndx * ndx + ndy * ndy;
+        const w = nEx[ni];
+        if (w * w < chargeTheta2 * l2) {
+          const c = (nEn[ni] - nSt[ni]) / (1 + l2);
+          tfx += c * ndx; tfy += c * ndy; if (is3d) tfz += c * ndz;
+          ni = nNx[ni];
+        } else {
+          if (nNx[ni] === ni + 1) {
+            const pEnd = nEn[ni];
+            for (let pp = nSt[ni]; pp < pEnd; pp++) {
+              let pdx = tSX[pp] - xi, pdy = tSY[pp] - yi, pdz = is3d ? tSZ[pp] - zi : 0;
+              if (torus) {
+                if (pdx > halfW) pdx -= W2; else if (pdx < -halfW) pdx += W2;
+                if (pdy > halfH) pdy -= H2; else if (pdy < -halfH) pdy += H2;
+                if (is3d) { if (pdz > halfD) pdz -= D2; else if (pdz < -halfD) pdz += D2; }
+              }
+              // THE ASSOCIATION ORDER IS LOAD-BEARING (f64 addition is not
+              // associative): the worker evaluates `1 + a + b [+ c]` strictly
+              // left-to-right, so the mirror must too — `1 + (a + b)` diverges.
+              const pc = is3d
+                ? 1 / (1 + pdx * pdx + pdy * pdy + pdz * pdz)
+                : 1 / (1 + pdx * pdx + pdy * pdy);
+              tfx += pc * pdx; tfy += pc * pdy; if (is3d) tfz += pc * pdz;
+            }
+          }
+          ni++;
+        }
+      }
+      fx += chargeK * tfx; fy += chargeK * tfy; if (is3d) fz += chargeK * tfz;
+    }
     let vxi = momentum * vxArr[i] + dtOverEta * fx;
     let vyi = momentum * vyArr[i] + dtOverEta * fy;
     let vzi = is3d ? momentum * vzArr[i] + dtOverEta * fz : 0;
@@ -150,6 +205,25 @@ function jsForceLoop(s, hash, cfg, dtOverEta, bonding, doCollision, torus, doDen
     }
     xN[i] = nx; yN[i] = ny; if (is3d) zN[i] = nz;
   }
+}
+
+/** C10 - copy the engine-built octree into the module's reserved regions (the
+ *  AW-HASH copy, one structure over). Mirrors the worker exactly. */
+function copyTreeIntoMemory(s, tree) {
+  if (!tree || !s.layout || !s.layout.chargeTreeNodes) return;
+  const buf = s.memory.buffer, L = s.layout;
+  const nN = Math.min(tree.nodeCount, L.chargeTreeNodes);
+  const nP = Math.min(tree.pointCount, s.maxAgents);
+  new Float64Array(buf, L.treeSortedXOffset, nP).set(tree.sortedX.subarray(0, nP));
+  new Float64Array(buf, L.treeSortedYOffset, nP).set(tree.sortedY.subarray(0, nP));
+  new Float64Array(buf, L.treeSortedZOffset, nP).set(tree.sortedZ.subarray(0, nP));
+  new Float64Array(buf, L.treeNodeCxOffset, nN).set(tree.nodeCx.subarray(0, nN));
+  new Float64Array(buf, L.treeNodeCyOffset, nN).set(tree.nodeCy.subarray(0, nN));
+  new Float64Array(buf, L.treeNodeCzOffset, nN).set(tree.nodeCz.subarray(0, nN));
+  new Float64Array(buf, L.treeNodeExtOffset, nN).set(tree.nodeExt.subarray(0, nN));
+  new Int32Array(buf, L.treeNodeStartOffset, nN).set(tree.nodeStart.subarray(0, nN));
+  new Int32Array(buf, L.treeNodeEndOffset, nN).set(tree.nodeEnd.subarray(0, nN));
+  new Int32Array(buf, L.treeNodeNextOffset, nN).set(tree.nodeNext.subarray(0, nN));
 }
 
 function copyHashIntoMemory(s, hash) {
@@ -191,8 +265,12 @@ async function runCombo(name, bonding, doCollision, doDensity = true, opts = {})
   const cfg = { ...baseCfg, worldDepth: D };
   const attrSpecs = [];
   const maxHashBins = computeAgentMaxHashBins(W, H, D, cfg.interactionRange, cfg.defaultRadius, cfg.neighbourQueryRadius);
+  // C10 - the tree regions exist only for a GLOBAL-charge model, and the RESERVE
+  // must be the SAME number the compiler bakes (`buildAgentLayoutExtras` derives it
+  // from `agentOctreeNodeReserve`) or the offsets desync.
+  const treeNodes = charge.doChargeTree ? agentOctreeNodeReserve(cfg.maxAgents) : 0;
   const sJS = createAgentStore(cfg, attrSpecs); sJS.worldDepth = D; sJS.dt = cfg.timeStep;
-  const sW = createAgentStore(cfg, attrSpecs, { wasmBacked: true, maxHashBins }); sW.worldDepth = D; sW.dt = cfg.timeStep;
+  const sW = createAgentStore(cfg, attrSpecs, { wasmBacked: true, maxHashBins, layoutExtras: { chargeTreeNodes: treeNodes } }); sW.worldDepth = D; sW.dt = cfg.timeStep;
 
   // seed 60 agents heavily overlapping in a tight blob (many within one contact dist)
   let seed = 987654321; const rnd = () => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff; };
@@ -206,7 +284,15 @@ async function runCombo(name, bonding, doCollision, doDensity = true, opts = {})
     // The capability profile is what makes the compiler EMIT the charge params —
     // the same `usesCharge` gate the engine reads, so the module and the arg list
     // can only agree if the feature is actually wired end to end.
-    centerBased: { ...cfg, agentCapabilities: charge.doCharge ? { motion: 'force', charge: 'on' } : undefined },
+    centerBased: {
+      ...cfg,
+      agentCapabilities: (charge.doCharge || charge.doChargeTree) ? { motion: 'force', charge: 'on' } : undefined,
+      // C10 - `chargeRange: 'global'` is what makes `buildAgentLayoutExtras` reserve
+      // the tree regions AND `emitForcePass` emit the traversal instead of the pair
+      // term, so the module and this harness's JS mirror can only agree if the whole
+      // feature is wired end to end.
+      ...(charge.doChargeTree ? { chargeRange: 'global', chargeTheta: Math.sqrt(charge.chargeTheta2) } : {}),
+    },
     agentGraphNodes, agentGraphEdges, agentVariables: [],
     graphNodes: [], graphEdges: [], macroDefs: [], variables: [], attributes: [], neighborhoods: [],
   }, sW.layout);
@@ -214,6 +300,8 @@ async function runCombo(name, bonding, doCollision, doDensity = true, opts = {})
   const inst = await instantiateAgentWasm(r.bytes, sW.memory);
   const fpFn = inst.forcePass;
 
+  // C10: only the CUTOFF law widens the edge (`chargeBinEdgeOf` returns 0 under
+  // global — the tree carries the charge, so the stencil need not reach).
   const binEdge = Math.max(
     cfg.interactionRange * 2 * cfg.defaultRadius, cfg.neighbourQueryRadius,
     charge.doCharge ? Math.sqrt(charge.chargeMaxD2) : 0,
@@ -223,15 +311,25 @@ async function runCombo(name, bonding, doCollision, doDensity = true, opts = {})
   const STEPS = 25;
   let mism = 0;
   for (let step = 0; step < STEPS; step++) {
-    const hashJS = buildSpatialHash(sJS, Math.max(1e-3, binEdge), W, H, D, tor);
+    // THE RESERVE MUST BE PASSED (the probe harness already does): in a BOUNDED
+    // world the bbox-anchored hash uses `floor(ext/edge)+1` bins per axis, which
+    // can EXCEED the torus-derived `computeAgentMaxHashBins` reserve the module
+    // was laid out with — and `copyHashIntoMemory` would then write past
+    // `binStart` into the next region. The engine is safe (the worker's
+    // `fits`-check falls back to JS); this harness had no such guard, so it must
+    // build a hash that fits instead. Passing it also keeps BOTH sides on one hash.
+    const hashJS = buildSpatialHash(sJS, Math.max(1e-3, binEdge), W, H, D, tor, maxHashBins);
+    const treeJS = charge.doChargeTree ? buildAgentOctree(sJS, is3d, treeNodes) : null;
     sJS.forceX.fill(0, 0, sJS.highWater); sJS.forceY.fill(0, 0, sJS.highWater); sJS.forceZ.fill(0, 0, sJS.highWater);
-    jsForceLoop(sJS, hashJS, cfg, dtOverEta, bonding, doCollision, tor, doDensity, charge, is3d);
+    jsForceLoop(sJS, hashJS, cfg, dtOverEta, bonding, doCollision, tor, doDensity, charge, is3d, treeJS);
     { const t = sJS.x; sJS.x = sJS.xNext; sJS.xNext = t; const t2 = sJS.y; sJS.y = sJS.yNext; sJS.yNext = t2; if (is3d) { const t3 = sJS.z; sJS.z = sJS.zNext; sJS.zNext = t3; } }
 
-    const hashW = buildSpatialHash(sW, Math.max(1e-3, binEdge), W, H, D, tor);
+    const hashW = buildSpatialHash(sW, Math.max(1e-3, binEdge), W, H, D, tor, maxHashBins);
+    const treeW = charge.doChargeTree ? buildAgentOctree(sW, is3d, treeNodes) : null;
     sW.forceX.fill(0, 0, sW.highWater); sW.forceY.fill(0, 0, sW.highWater); sW.forceZ.fill(0, 0, sW.highWater);
     copyHashIntoMemory(sW, hashW);
-    fpFn(...forceArgs(sW, hashW, cfg, dtOverEta, bonding, doCollision, tor, doDensity, charge, dims));
+    copyTreeIntoMemory(sW, treeW);
+    fpFn(...forceArgs(sW, hashW, cfg, dtOverEta, bonding, doCollision, tor, doDensity, charge, dims, treeW));
     sW.x.set(sW.xNext); sW.y.set(sW.yNext); if (is3d) sW.z.set(sW.zNext);
 
     for (let i = 0; i < sJS.highWater; i++) {
@@ -283,6 +381,106 @@ await runCombo('charge 3D bounded, charge-only', false, false, false, { charge: 
 // verbatim code path in BOTH the engine and this harness).
 await runCombo('no-charge 3D torus, collision=1', false, true, true, { is3d: true });
 
+// ---------------------------------------------------------------------------
+// C10 / P11a — the GLOBAL (Barnes-Hut) charge combos. This is a DIFFERENT LAW,
+// not a faster cutoff: no `maxDist` test at all, `min_c = 0`, and the sum comes
+// from an octree traversal instead of the stencil. The whole determinism claim
+// rests on JS and WASM walking the SAME tree in the SAME order, so it has to hold
+// bit-exactly across dimensions, boundaries, theta values and every other gate.
+// ---------------------------------------------------------------------------
+console.log('\nC10 global (Barnes-Hut) charge combos (2D/3D x torus/bounded x theta x collision on/off):');
+const GB = mkGlobalCharge(-3, 0.9);
+await runCombo('global 2D torus,   collision=0', false, false, true, { charge: GB });
+await runCombo('global 2D torus,   collision=1', false, true, true, { charge: GB });
+await runCombo('global 2D bounded, collision=0', false, false, true, { charge: GB, torus: false });
+await runCombo('global 2D bounded, collision=1', false, true, true, { charge: GB, torus: false });
+await runCombo('global 2D torus,   bonding=1 (adhesion + global charge)', true, true, true, { charge: GB });
+await runCombo('global 3D torus,   collision=0', false, false, true, { charge: GB, is3d: true });
+await runCombo('global 3D torus,   collision=1', false, true, true, { charge: GB, is3d: true });
+await runCombo('global 3D bounded, collision=1', false, true, true, { charge: GB, is3d: true, torus: false });
+// theta sweep — a SMALLER theta opens more nodes (more exact, deeper traversal), a
+// LARGER one collapses more; both must stay bit-identical across the two targets.
+await runCombo('global 2D torus,   theta 0.3 (near-exact)', false, true, true, { charge: mkGlobalCharge(-3, 0.3) });
+await runCombo('global 2D torus,   theta 1.4 (coarse)', false, true, true, { charge: mkGlobalCharge(-3, 1.4) });
+await runCombo('global 3D bounded, theta 0.3 (near-exact)', false, true, true, { charge: mkGlobalCharge(-3, 0.3), is3d: true, torus: false });
+// Global charge is the ONLY active term: no collision, no bonding, no density.
+// Under global the charge does NOT join the scan gate (the tree carries it), so
+// this exercises the path where the neighbour pass is skipped entirely.
+await runCombo('global-only   (collision=0, bonding=0, doDensity=0)', false, false, false, { charge: GB });
+await runCombo('global-only 3D bounded', false, false, false, { charge: mkGlobalCharge(-3, 0.9), is3d: true, torus: false });
+
+// ---------------------------------------------------------------------------
+// C10 — THE VALUE INVARIANT. Parity is a MIRROR test: it passes happily if BOTH
+// targets are equally wrong (a traversal that never runs sums zero on both). So
+// assert what the tree is FOR — that it approximates the exact all-pairs global
+// sum, and that theta actually controls how well. A brute-force O(N^2) reference
+// over the same positions is the oracle; the tree must land within a theta-scaled
+// tolerance of it, and a SMALLER theta must be STRICTLY more accurate.
+// ---------------------------------------------------------------------------
+console.log('\nC10 value invariant (tree vs exact all-pairs global sum):');
+{
+  const cfgV = { ...baseCfg, worldDepth: 1 };
+  const sV = createAgentStore(cfgV, []); sV.worldDepth = 1; sV.dt = cfgV.timeStep;
+  let sd = 24680; const rr = () => { sd = (sd * 1103515245 + 12345) & 0x7fffffff; return sd / 0x7fffffff; };
+  const spec = [];
+  for (let i = 0; i < 240; i++) spec.push({ x: rr() * W, y: rr() * H, z: 0, radius: 0.5 });
+  seedAgents(sV, spec, 0.5);
+  const hw = sV.highWater;
+  // EXACT: every pair, no cutoff, min_c = 0 — the law global charge claims to run.
+  const exact = [];
+  for (let i = 0; i < hw; i++) {
+    let ex = 0, ey = 0;
+    for (let j = 0; j < hw; j++) {
+      if (j === i) continue;
+      const dx = sV.x[j] - sV.x[i], dy = sV.y[j] - sV.y[i];
+      const c = 1 / (1 + dx * dx + dy * dy);
+      ex += c * dx; ey += c * dy;
+    }
+    exact.push([ex, ey]);
+  }
+  const treeErr = (theta) => {
+    const t = buildAgentOctree(sV, false, agentOctreeNodeReserve(cfgV.maxAgents));
+    const th2 = theta * theta;
+    let num = 0, den = 0, maxAbs = 0;
+    for (let i = 0; i < hw; i++) {
+      const xi = sV.x[i], yi = sV.y[i];
+      let tfx = 0, tfy = 0;
+      for (let ni = 0; ni < t.nodeCount;) {
+        const ndx = t.nodeCx[ni] - xi, ndy = t.nodeCy[ni] - yi;
+        const l2 = ndx * ndx + ndy * ndy, w = t.nodeExt[ni];
+        if (w * w < th2 * l2) {
+          const c = (t.nodeEnd[ni] - t.nodeStart[ni]) / (1 + l2);
+          tfx += c * ndx; tfy += c * ndy; ni = t.nodeNext[ni];
+        } else {
+          if (t.nodeNext[ni] === ni + 1) {
+            for (let p = t.nodeStart[ni]; p < t.nodeEnd[ni]; p++) {
+              const pdx = t.sortedX[p] - xi, pdy = t.sortedY[p] - yi;
+              const pc = 1 / (1 + pdx * pdx + pdy * pdy);
+              tfx += pc * pdx; tfy += pc * pdy;
+            }
+          }
+          ni++;
+        }
+      }
+      const [ex, ey] = exact[i];
+      num += Math.hypot(tfx - ex, tfy - ey); den += Math.hypot(ex, ey);
+      maxAbs = Math.max(maxAbs, Math.hypot(tfx, tfy));
+    }
+    return { rel: num / Math.max(1e-12, den), maxAbs };
+  };
+  const eFine = treeErr(0.2), eCoarse = treeErr(1.4);
+  checks++;
+  // (a) the force is REAL (a no-op traversal would give maxAbs 0);
+  // (b) a near-exact theta tracks the brute-force sum closely;
+  // (c) theta genuinely controls accuracy (fine strictly better than coarse).
+  if (eFine.maxAbs > 1e-6 && eFine.rel < 0.02 && eCoarse.rel > eFine.rel) {
+    console.log(`  ✓ tree ≈ exact all-pairs: rel err ${(eFine.rel * 100).toFixed(3)}% at θ=0.2 vs ${(eCoarse.rel * 100).toFixed(2)}% at θ=1.4 (θ controls accuracy; |f|max ${eFine.maxAbs.toExponential(2)})`);
+  } else {
+    console.log(`  ✗ tree vs exact: θ=0.2 rel ${eFine.rel}, θ=1.4 rel ${eCoarse.rel}, |f|max ${eFine.maxAbs} — want a real, theta-controlled approximation`);
+    fail++;
+  }
+}
+
 // BEHAVIOUR: collision-only must SEPARATE the blob; neither must NOT.
 console.log('\nBehaviour (the user-reported pass-through):');
 const dCol = sCollisionOnly ? minPairDist(sCollisionOnly) : 0;
@@ -314,22 +512,29 @@ console.log('\nL1 structural:');
   });
   const sOff = createAgentStore(cfg, [], { wasmBacked: true, maxHashBins }); sOff.worldDepth = 1; sOff.dt = cfg.timeStep;
   const sOn = createAgentStore(cfg, [], { wasmBacked: true, maxHashBins }); sOn.worldDepth = 1; sOn.dt = cfg.timeStep;
+  const sGl = createAgentStore(cfg, [], { wasmBacked: true, maxHashBins, layoutExtras: { chargeTreeNodes: agentOctreeNodeReserve(cfg.maxAgents) } }); sGl.worldDepth = 1; sGl.dt = cfg.timeStep;
   const rOff = compileAgentGraphWasm(agentGraphNodes, agentGraphEdges, model(undefined), sOff.layout);
   const rOn = compileAgentGraphWasm(agentGraphNodes, agentGraphEdges, model({ motion: 'force', charge: 'on' }), sOn.layout);
+  // C10 — the GLOBAL module declares a THIRD arity (32). `model()` only sets the
+  // capability, so the range rides on the config object below.
+  const globalModel = model({ motion: 'force', charge: 'on' });
+  globalModel.centerBased = { ...globalModel.centerBased, chargeRange: 'global', chargeTheta: 0.9 };
+  const rGl = compileAgentGraphWasm(agentGraphNodes, agentGraphEdges, globalModel, sGl.layout);
   checks++;
-  if (rOff.error || rOn.error) { console.log(`  ✗ conditional arity: compile error`); fail++; }
+  if (rOff.error || rOn.error || rGl.error) { console.log(`  ✗ conditional arity: compile error`); fail++; }
   else {
     const instOff = await instantiateAgentWasm(rOff.bytes, sOff.memory);
     const instOn = await instantiateAgentWasm(rOn.bytes, sOn.memory);
-    const nOff = instOff.forcePass.length, nOn = instOn.forcePass.length;
+    const instGl = await instantiateAgentWasm(rGl.bytes, sGl.memory);
+    const nOff = instOff.forcePass.length, nOn = instOn.forcePass.length, nGl = instGl.forcePass.length;
     // Seed one agent so a call actually executes the loop body.
     seedAgents(sOff, [{ x: W / 2, y: H / 2, radius: 0.5 }], 0.5);
     let threw = null;
     try { instOff.forcePass(...forceArgs(sOff, null, cfg, cfg.timeStep, false, true, true, true, mkCharge(-3, 6))); }
     catch (e) { threw = e; }
-    const ok = nOff === 26 && nOn === 30 && threw === null;
-    if (ok) console.log(`  ✓ conditional arity: charge-off module declares ${nOff} params, charge-on ${nOn}; passing all 30 to the 26-param export is accepted (extras ignored)`);
-    else { console.log(`  ✗ conditional arity: off=${nOff} (want 26), on=${nOn} (want 30), extra-arg call ${threw ? 'THREW: ' + threw.message : 'ok'}`); fail++; }
+    const ok = nOff === 26 && nOn === 30 && nGl === 32 && threw === null;
+    if (ok) console.log(`  ✓ conditional arity: charge-off module declares ${nOff} params, cutoff ${nOn}, GLOBAL ${nGl}; passing all 32 to the 26-param export is accepted (extras ignored)`);
+    else { console.log(`  ✗ conditional arity: off=${nOff} (want 26), cutoff=${nOn} (want 30), global=${nGl} (want 32), extra-arg call ${threw ? 'THREW: ' + threw.message : 'ok'}`); fail++; }
   }
 }
 

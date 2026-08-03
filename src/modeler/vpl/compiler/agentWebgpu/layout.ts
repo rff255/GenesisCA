@@ -181,6 +181,15 @@ export interface AgentWebGPULayout {
   /** Total i32 elements in `hashBins`. */
   hashLen: number;
 
+  // --- C10 / P11a: the uploaded Barnes-Hut octree (GLOBAL charge only) ---
+  /** Node reserve. 0 => no tree buffers, no bindings, byte-identical shader. */
+  chargeTreeNodes: number;
+  treeNodeCxBase: number; treeNodeCyBase: number; treeNodeCzBase: number; treeNodeExtBase: number;
+  treeSortedXBase: number; treeSortedYBase: number; treeSortedZBase: number;
+  chargeTreeF32Len: number;
+  treeNodeStartBase: number; treeNodeEndBase: number; treeNodeNextBase: number;
+  chargeTreeI32Len: number;
+
   // --- field bridge (G5) ---
   /** Grid width (cells per row). The field index is `row·gridWidth + col`. */
   gridWidth: number;
@@ -311,6 +320,9 @@ export interface AgentWebGPUExtras {
    *  pre-P4 single-slot runs, so every base after them (and the whole emitted
    *  shader) is byte-identical. */
   bondReqSlots?: number;
+  /** C10 / P11a - the Barnes-Hut octree node reserve for GLOBAL charge. 0 /
+   *  absent => no tree runs, no bindings, and the emitted shader is unchanged. */
+  chargeTreeNodes?: number;
 }
 
 /** Compute the GPU agent storage layout. Pure (no GPU calls). The optional
@@ -370,6 +382,28 @@ export function computeAgentWebGPULayout(
   const hashBinAgentsBase = hb > 0 ? hb + 1 : 0;
   const hashLen = hb > 0 ? hb + 1 + ma : 0;
 
+  // --- C10 / P11a: the CPU-built Barnes-Hut octree, uploaded per generation ---
+  // Two buffers (the `uploadAgentHash` precedent), each a set of contiguous runs:
+  //   chargeTreeF32 : nodeCx | nodeCy | nodeCz | nodeExt   (maxNodes each)
+  //                   then sortedX | sortedY | sortedZ     (maxAgents each)
+  //   chargeTreeI32 : nodeStart | nodeEnd | nodeNext       (maxNodes each)
+  // 0 nodes => both lengths 0 => the bindings are not declared at all (the Naga
+  // stripped-binding discipline) and the emitted shader is byte-identical.
+  const ctn = Math.max(0, Math.floor(extras.chargeTreeNodes ?? 0));
+  const chargeTreeNodes = ctn;
+  const treeNodeCxBase = 0;
+  const treeNodeCyBase = ctn;
+  const treeNodeCzBase = ctn * 2;
+  const treeNodeExtBase = ctn * 3;
+  const treeSortedXBase = ctn * 4;
+  const treeSortedYBase = ctn * 4 + ma;
+  const treeSortedZBase = ctn * 4 + ma * 2;
+  const chargeTreeF32Len = ctn > 0 ? ctn * 4 + ma * 3 : 0;
+  const treeNodeStartBase = 0;
+  const treeNodeEndBase = ctn;
+  const treeNodeNextBase = ctn * 2;
+  const chargeTreeI32Len = ctn > 0 ? ctn * 3 : 0;
+
   // --- field bridge layout (3D-aware: fieldTotal = W·H·D) ---
   const gridWidth = Math.max(1, Math.floor(field?.gridWidth ?? 1));
   const gridHeight = Math.max(1, Math.floor(field?.gridHeight ?? 1));
@@ -423,6 +457,10 @@ export function computeAgentWebGPULayout(
     maxAgents: ma, maxHashBins: hb,
     f32Base, i32Base, agentAttrIds: [...agentAttrIds], agentAttrBase, agentAttrWriteBase, syncAttrs, f32Len, i32Len,
     hashBinStartBase, hashBinAgentsBase, hashLen,
+    chargeTreeNodes,
+    treeNodeCxBase, treeNodeCyBase, treeNodeCzBase, treeNodeExtBase,
+    treeSortedXBase, treeSortedYBase, treeSortedZBase, chargeTreeF32Len,
+    treeNodeStartBase, treeNodeEndBase, treeNodeNextBase, chargeTreeI32Len,
     gridWidth, gridHeight, fieldTotal,
     fieldReadAttrs, fieldWriteAttrs, fieldReadBase, fieldWriteBase,
     fieldReadLen, fieldWriteLen,

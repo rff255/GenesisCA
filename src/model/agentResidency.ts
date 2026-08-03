@@ -23,7 +23,7 @@
 
 import type { CenterBasedConfig } from './types';
 import {
-  cbNum, usesEngineGrowth, usesEngineSprings, usesPositionalCollision,
+  cbNum, usesEngineGrowth, usesEngineSprings, usesPositionalCollision, usesGlobalCharge,
 } from './centerBased';
 
 /** Facts about the compiled agent graph that residency depends on. The worker
@@ -96,6 +96,13 @@ export function residencyModelBlockers(
   // 4. Synchronous agent attributes need the CPU-side double-buffer swap.
   if (cfg?.agentUpdateMode === 'sync') {
     out.push({ key: 'syncAttrs', text: 'Agent Update Mode is Synchronous — the attribute double-buffer is committed per generation' });
+  }
+  // 4b. C10 — GLOBAL charge rebuilds a Barnes–Hut octree on the CPU every
+  //     generation and uploads it, which is precisely the per-generation CPU
+  //     touch point residency exists to remove. (A GPU tree BUILD would lift
+  //     this; it is a recorded follow-up, not a gap being hidden.)
+  if (usesGlobalCharge(cfg)) {
+    out.push({ key: 'chargeGlobal', text: 'Charge range is Global (Barnes–Hut) — the tree is rebuilt on the CPU and uploaded every generation' });
   }
   // 5. The hard positional projection is a CPU pass after integration.
   if (usesPositionalCollision(cfg)) {

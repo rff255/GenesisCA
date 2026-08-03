@@ -34,7 +34,7 @@ import { fileURLToPath, pathToFileURL } from 'url';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const ENTRY = `
-export { createAgentStore, buildSpatialHash, formBond, computeAgentMaxHashBins } from '../src/simulator/engine/agentEngine.ts';
+export { createAgentStore, buildSpatialHash, formBond, computeAgentMaxHashBins, buildAgentOctree, agentOctreeNodeReserve } from '../src/simulator/engine/agentEngine.ts';
 export { compileAgentGraphWasm, instantiateAgentWasm } from '../src/modeler/vpl/compiler/agentWasm/compile.ts';
 export { chargeParamsOf, chargeBinEdgeOf, cbNum, layoutIterationsOf } from '../src/model/centerBased.ts';
 `;
@@ -46,7 +46,7 @@ await build({ entryPoints: [entryPath], bundle: true, format: 'esm', platform: '
 const {
   createAgentStore, buildSpatialHash, formBond, computeAgentMaxHashBins,
   compileAgentGraphWasm, instantiateAgentWasm, chargeParamsOf, chargeBinEdgeOf, cbNum,
-  layoutIterationsOf,
+  layoutIterationsOf, buildAgentOctree, agentOctreeNodeReserve,
 } = await import(pathToFileURL(outPath).href);
 
 const mulberry = seed => () => { seed |= 0; seed = (seed + 0x6D2B79F5) | 0; let t = Math.imul(seed ^ (seed >>> 15), 1 | seed); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
@@ -77,6 +77,23 @@ const agentGraphEdges = [fe('beh', 'output_flow_do', 'af', 'input_flow_do')];
 
 /** Copy the CPU-built hash into the module's reserved in-memory views — exactly
  *  what `runAgentStep` does before calling the WASM force pass (AW-HASH). */
+/** C10 - copy the engine-built octree into the module's reserved regions (the
+ *  AW-HASH copy, one structure over) - exactly what `runAgentStep` does. */
+function copyTreeIntoMemory(s, tree) {
+  const buf = s.memory.buffer, L = s.layout;
+  const nN = Math.min(tree.nodeCount, L.chargeTreeNodes), nP = Math.min(tree.pointCount, s.maxAgents);
+  new Float64Array(buf, L.treeSortedXOffset, nP).set(tree.sortedX.subarray(0, nP));
+  new Float64Array(buf, L.treeSortedYOffset, nP).set(tree.sortedY.subarray(0, nP));
+  new Float64Array(buf, L.treeSortedZOffset, nP).set(tree.sortedZ.subarray(0, nP));
+  new Float64Array(buf, L.treeNodeCxOffset, nN).set(tree.nodeCx.subarray(0, nN));
+  new Float64Array(buf, L.treeNodeCyOffset, nN).set(tree.nodeCy.subarray(0, nN));
+  new Float64Array(buf, L.treeNodeCzOffset, nN).set(tree.nodeCz.subarray(0, nN));
+  new Float64Array(buf, L.treeNodeExtOffset, nN).set(tree.nodeExt.subarray(0, nN));
+  new Int32Array(buf, L.treeNodeStartOffset, nN).set(tree.nodeStart.subarray(0, nN));
+  new Int32Array(buf, L.treeNodeEndOffset, nN).set(tree.nodeEnd.subarray(0, nN));
+  new Int32Array(buf, L.treeNodeNextOffset, nN).set(tree.nodeNext.subarray(0, nN));
+}
+
 function copyHashIntoMemory(s, hash) {
   if (!hash) return;
   const buf = s.memory.buffer, L = s.layout;
@@ -116,6 +133,8 @@ async function grow({
   chargeStrength = -3, world = 4000, torus = false, splitFrac = 1 / 8,
   midpointNewborns = false, radius = 0.9, stiff = 0.55, neighbourQueryRadius = 6,
   settleTicks = 300, maxAgents = null,
+  // C10 — GLOBAL (Barnes-Hut) charge instead of the finite cutoff.
+  chargeGlobal = false, theta = 0.9,
 }) {
   const rnd = mulberry(99);
   const MAX = maxAgents ?? target + 16, W = world, H = world, cx = W / 2, cy = H / 2;
@@ -130,9 +149,13 @@ async function grow({
       ? { motion: 'force', body: true, collision: 'soft', bonds: 'physics', charge: 'on' }
       : { motion: 'force', body: true, collision: 'soft', bonds: 'physics', charge: 'off' },
     ...(chargeOn ? { chargeStrength, chargeMaxDist } : {}),
+    // C10 — the range is what selects the LAW (and what makes the compiler emit
+    // the tree traversal + reserve the tree regions).
+    ...(chargeOn && chargeGlobal ? { chargeRange: 'global', chargeTheta: theta } : {}),
   };
   const maxHashBins = computeAgentMaxHashBins(W, H, 1, cfg.interactionRange, cfg.defaultRadius, cfg.neighbourQueryRadius);
-  const s = createAgentStore(cfg, [], { wasmBacked: true, maxHashBins });
+  const treeNodes = chargeOn && chargeGlobal ? agentOctreeNodeReserve(MAX) : 0;
+  const s = createAgentStore(cfg, [], { wasmBacked: true, maxHashBins, layoutExtras: { chargeTreeNodes: treeNodes } });
   s.worldDepth = 1; s.dt = cfg.timeStep;
 
   const r = compileAgentGraphWasm(agentGraphNodes, agentGraphEdges, {
@@ -162,8 +185,11 @@ async function grow({
   let pairOps = 0, ticks = 0;
   const tick = () => {
     const hash = buildSpatialHash(s, Math.max(1e-3, binEdge), W, H, 1, torus, maxHashBins);
+    // C10 - the octree is rebuilt every tick, exactly as the worker does.
+    const tree = treeNodes > 0 ? buildAgentOctree(s, false, treeNodes) : null;
     s.forceX.fill(0, 0, s.highWater); s.forceY.fill(0, 0, s.highWater);
     copyHashIntoMemory(s, hash);
+    if (tree) copyTreeIntoMemory(s, tree);
     forcePass(
       s.highWater, hash ? 1 : 0, hash ? hash.nBinsX : 0, hash ? hash.nBinsY : 0, hash ? hash.nBinsZ : 0,
       hash ? hash.binSizeX : 1, hash ? hash.binSizeY : 1, hash ? hash.binSizeZ : 1,
@@ -173,6 +199,7 @@ async function grow({
       hash ? hash.originX : 0, hash ? hash.originY : 0, hash ? hash.originZ : 0,
       /*doCollision*/ 1, /*doSprings*/ 1, /*doDensity*/ 0,
       ch.doCharge ? 1 : 0, ch.chargeK, ch.chargeMaxD2, ch.chargeMinC,
+      tree ? Math.min(tree.nodeCount, treeNodes) : 0, ch.chargeTheta2 ?? 0,
     );
     s.x.set(s.xNext); s.y.set(s.yNext);
     // Cost model: the 3×3 stencil visits every agent in the 9 bins around each
@@ -230,7 +257,7 @@ async function grow({
   const live = metrics(s, W, H, torus);
   for (let t = 0; t < settleTicks; t++) tick();
   return {
-    label, N: s.liveCount, ms: Date.now() - t0,
+    label, N: s.liveCount, ms: Date.now() - t0, ticks,
     nbrPerAgent: pairOps / Math.max(1, ticks) / Math.max(1, s.liveCount),
     liveRatio: live.ratio, liveOverlapPct: live.overlapPct,
     ...metrics(s, W, H, torus),
@@ -389,6 +416,53 @@ console.log(`  N ${shippedRow.N}   bond/rest ${(shippedRow.bond / cbNum(scb, 'bo
   + `   nnb/bond ${shippedRow.ratio.toFixed(2)}   overlap ${shippedRow.overlapPct.toFixed(1)}%`);
 
 // ---------------------------------------------------------------------------
+// C10 / P11a - THE BENCHMARK GATE: GLOBAL (Barnes-Hut) charge vs the TUNED CUTOFF.
+//
+// L1 measured that layout quality SATURATES around an 8x-bond-rest cutoff and
+// recorded "no Barnes-Hut tree is needed". C10 must confront that with numbers
+// rather than assume the tree wins, so this compares the two LAWS at equal N,
+// equal tick budget and equal seeding, on the grown-GRA blob:
+//
+//   cutoff  = charge k=-3, cutoff 8x rest  (the L1 recommendation)
+//   global  = charge k=-3, chargeRange global, theta 0.9  (znah's reference value)
+//
+// Reported: the layout metrics (nnb/bond, overlap%) and ms/tick (the cost). The
+// DECISION RULE was fixed before the numbers were taken (see PLAN_CLARITY_C10):
+// global must measurably improve the unfolding metrics within a sane per-step
+// budget to be offered as a recommended path; otherwise it ships as an explicit
+// force-law OPTION and the docs say so honestly.
+// ---------------------------------------------------------------------------
+console.log('\nC10 - GLOBAL (Barnes-Hut) charge vs the TUNED CUTOFF (same N, same ticks, same seed)');
+console.log('  law                          N     bond   nnb/bond   overlap%    ms/tick');
+console.log('  ' + '-'.repeat(74));
+const benchRows = [];
+for (const N of [2500, 5000, 20000]) {
+  // World scaled to the population the way the shipped models scale to their cap
+  // (side = sqrt(cap * (rest*1.45)^2)), so density is comparable across sizes.
+  const world = Math.ceil(Math.sqrt(N * (rest * 1.45) ** 2));
+  for (const mode of ['cutoff', 'global']) {
+    const o = await grow({
+      label: mode, target: N, rest, range: 2.2, ticksPerSplitRound: 4,
+      chargeOn: true, chargeStrength: -3,
+      chargeMaxDist: mode === 'cutoff' ? 8 * rest : 0,
+      chargeGlobal: mode === 'global', theta: 0.9,
+      world, torus: false, splitFrac: 1 / 8, midpointNewborns: true,
+      settleTicks: 0, maxAgents: N + 64,
+    });
+    benchRows.push({ ...o, mode, target: N });
+    console.log(`  ${(mode + ' @ N=' + N).padEnd(24)} ${String(o.N).padStart(6)} ${(o.bond / rest).toFixed(2).padStart(8)} ${o.ratio.toFixed(2).padStart(10)} ${o.overlapPct.toFixed(1).padStart(10)} ${(o.ms / Math.max(1, o.ticks)).toFixed(2).padStart(10)}`);
+  }
+}
+console.log('\n  verdict per size (global vs cutoff):');
+for (const N of [2500, 5000, 20000]) {
+  const c = benchRows.find(r => r.mode === 'cutoff' && r.target === N);
+  const g = benchRows.find(r => r.mode === 'global' && r.target === N);
+  const dRatio = g.ratio - c.ratio, dOv = g.overlapPct - c.overlapPct;
+  const costX = (g.ms / Math.max(1, g.ticks)) / Math.max(1e-9, c.ms / Math.max(1, c.ticks));
+  console.log(`    N=${String(N).padEnd(6)} nnb/bond ${dRatio >= 0 ? '+' : ''}${dRatio.toFixed(3)}   overlap ${dOv >= 0 ? '+' : ''}${dOv.toFixed(2)} pts   cost x${costX.toFixed(2)}`);
+}
+
+// ---------------------------------------------------------------------------
 // THE GATE. The shipped (charge-off) row is the jammed baseline; the 8×-rest row
 // is the sweep's reference point; the shipped-model row is the product.
 // ---------------------------------------------------------------------------
@@ -406,6 +480,20 @@ gate(`THE SHIPPED MODEL at N >= ${SHIPPED_TARGET}: nnb/bond >= 0.6`, shippedRow.
   `nnb/bond ${shippedRow.ratio.toFixed(2)}`);
 gate('the shipped model actually turned the charge on', scb.agentCapabilities?.charge === 'on',
   'charge capability is off — the flagship would ship jammed again');
+// C10 - THE BENCHMARK GATE. Global must measurably beat the tuned cutoff on the
+// unfolding metrics at EVERY measured size, within a sane cost multiple. If this
+// ever fails, the honest answer is to stop recommending global - not to relax it.
+for (const N of [2500, 5000, 20000]) {
+  const c = benchRows.find(r => r.mode === 'cutoff' && r.target === N);
+  const g = benchRows.find(r => r.mode === 'global' && r.target === N);
+  const costX = (g.ms / Math.max(1, g.ticks)) / Math.max(1e-9, c.ms / Math.max(1, c.ticks));
+  gate(`C10 N=${N}: global unfolds better than the tuned cutoff (nnb/bond)`, g.ratio > c.ratio,
+    `global ${g.ratio.toFixed(3)} vs cutoff ${c.ratio.toFixed(3)}`);
+  gate(`C10 N=${N}: global does not increase overlap`, g.overlapPct <= c.overlapPct + 0.5,
+    `global ${g.overlapPct.toFixed(1)}% vs cutoff ${c.overlapPct.toFixed(1)}%`);
+  gate(`C10 N=${N}: global costs at most 3x the cutoff per tick`, costX <= 3,
+    `x${costX.toFixed(2)} (${(g.ms / g.ticks).toFixed(2)} vs ${(c.ms / c.ticks).toFixed(2)} ms/tick)`);
+}
 gate('the shipped world holds the agent CAP at the settled spacing',
   cbNum(scb, 'worldWidth') ** 2 >= cbNum(scb, 'maxAgents') * (cbNum(scb, 'bondRestLength') * 1.45) ** 2,
   `world ${cbNum(scb, 'worldWidth')}^2 vs cap ${cbNum(scb, 'maxAgents')} x (${cbNum(scb, 'bondRestLength')} x 1.45)^2`);

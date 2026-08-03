@@ -30,11 +30,14 @@ writeFileSync(ep, `
 export { deriveAgentAbi } from '../src/modeler/vpl/compiler/agentAbi.ts';
 export { buildAgentLoopParams, buildDivisionParams, buildAgentInitParams, agentAbiShapeOf } from '../src/modeler/vpl/compiler/compile.ts';
 export { migrateForHarness } from '../src/dev/compileHarness.ts';
+export { computeAgentMemoryLayout, agentOctreeNodeReserve } from '../src/simulator/engine/agentEngine.ts';
+export { computeAgentWebGPULayout } from '../src/modeler/vpl/compiler/agentWebgpu/layout.ts';
 `);
 const out = join(dir, 'b.mjs');
 await build({ entryPoints: [ep], bundle: true, format: 'esm', platform: 'node', outfile: out, logLevel: 'error', absWorkingDir: process.cwd() });
 const m = await import(pathToFileURL(out).href);
-const { deriveAgentAbi, buildAgentLoopParams, buildDivisionParams, buildAgentInitParams, agentAbiShapeOf, migrateForHarness } = m;
+const { deriveAgentAbi, buildAgentLoopParams, buildDivisionParams, buildAgentInitParams, agentAbiShapeOf, migrateForHarness,
+  computeAgentMemoryLayout, agentOctreeNodeReserve, computeAgentWebGPULayout } = m;
 
 const VALID_CTYPES = new Set(['f64[]', 'i32[]', 'u8[]', 'u32[]', 'clamped[]', 'scalar', 'obj', 'fn']);
 const PARAM_FN = { loop: (model) => buildAgentLoopParams(model).params, division: buildDivisionParams, init: buildAgentInitParams };
@@ -105,6 +108,64 @@ for (const is3d of [false, true]) {
   });
   auditModel(`synthetic ${is3d ? '3D' : '2D'}`, model);
   n++;
+}
+
+
+// ---------------------------------------------------------------------------
+// C10 / P11a - THE OCTREE REGIONS. The tree lives in the agent memory at baked
+// offsets (WASM) and in two GPU buffers (WebGPU). Both are appended LAST and
+// reserved ONLY for a GLOBAL-charge model, so the audit proves exactly two
+// things: (a) a model WITHOUT global charge is byte-identical (the regions add
+// nothing at all and move no existing offset), and (b) a model WITH it lays out
+// non-overlapping, correctly sized, in-bounds runs on BOTH targets.
+// ---------------------------------------------------------------------------
+{
+  const MA = 128, NODES = agentOctreeNodeReserve(MA);
+  const base = computeAgentMemoryLayout(MA, 0, [], 64, {});
+  const tree = computeAgentMemoryLayout(MA, 0, [], 64, { chargeTreeNodes: NODES });
+
+  ok(base.chargeTreeNodes === 0, 'C10 WASM layout: charge-off reserves 0 tree nodes');
+  ok(base.totalBytes < tree.totalBytes, 'C10 WASM layout: the tree regions cost bytes only under global charge');
+  ok(base.generationOffset === tree.generationOffset, 'C10 WASM layout: appending the tree moves no existing offset (generationOffset)');
+  ok(base.hashBinStartOffset === tree.hashBinStartOffset, 'C10 WASM layout: appending the tree moves no existing offset (hashBinStartOffset)');
+  ok(base.stopFlagOffset === tree.stopFlagOffset, 'C10 WASM layout: appending the tree moves no existing offset (stopFlagOffset)');
+
+  const runs = [
+    ['sortedX', tree.treeSortedXOffset, MA * 8, 8], ['sortedY', tree.treeSortedYOffset, MA * 8, 8], ['sortedZ', tree.treeSortedZOffset, MA * 8, 8],
+    ['nodeCx', tree.treeNodeCxOffset, NODES * 8, 8], ['nodeCy', tree.treeNodeCyOffset, NODES * 8, 8],
+    ['nodeCz', tree.treeNodeCzOffset, NODES * 8, 8], ['nodeExt', tree.treeNodeExtOffset, NODES * 8, 8],
+    ['nodeStart', tree.treeNodeStartOffset, NODES * 4, 4], ['nodeEnd', tree.treeNodeEndOffset, NODES * 4, 4], ['nodeNext', tree.treeNodeNextOffset, NODES * 4, 4],
+  ];
+  ok(tree.chargeTreeNodes === NODES, 'C10 WASM layout: the node reserve is the shared agentOctreeNodeReserve');
+  for (const [name, off, bytes, align] of runs) {
+    ok(off + bytes <= tree.totalBytes, `C10 WASM layout: ${name} fits inside totalBytes`);
+    ok(off % align === 0, `C10 WASM layout: ${name} is ${align}-byte aligned`);
+  }
+  for (let i = 0; i < runs.length; i++) for (let j = i + 1; j < runs.length; j++) {
+    const a = runs[i], b = runs[j];
+    ok(a[1] + a[2] <= b[1] || b[1] + b[2] <= a[1], `C10 WASM layout: ${a[0]} and ${b[0]} do not overlap`);
+  }
+
+  const gOff = computeAgentWebGPULayout(MA, 64, undefined, [], {});
+  const gOn = computeAgentWebGPULayout(MA, 64, undefined, [], { chargeTreeNodes: NODES });
+  ok(gOff.chargeTreeNodes === 0 && gOff.chargeTreeF32Len === 0 && gOff.chargeTreeI32Len === 0,
+    'C10 WebGPU layout: charge-off declares no tree runs (=> no bindings => byte-identical shader)');
+  ok(gOff.f32Len === gOn.f32Len && gOff.i32Len === gOn.i32Len,
+    'C10 WebGPU layout: the tree lives in its OWN buffers - the agent SoA runs are untouched');
+  ok(gOn.chargeTreeF32Len === NODES * 4 + MA * 3, 'C10 WebGPU layout: the f32 tree buffer holds 4 node runs + 3 point runs');
+  ok(gOn.chargeTreeI32Len === NODES * 3, 'C10 WebGPU layout: the i32 tree buffer holds 3 node runs');
+  const gRuns = [
+    ['cx', gOn.treeNodeCxBase, NODES], ['cy', gOn.treeNodeCyBase, NODES], ['cz', gOn.treeNodeCzBase, NODES], ['ext', gOn.treeNodeExtBase, NODES],
+    ['sx', gOn.treeSortedXBase, MA], ['sy', gOn.treeSortedYBase, MA], ['sz', gOn.treeSortedZBase, MA],
+  ];
+  for (const g of gRuns) ok(g[1] + g[2] <= gOn.chargeTreeF32Len, `C10 WebGPU layout: ${g[0]} run fits the f32 buffer`);
+  for (let i = 0; i < gRuns.length; i++) for (let j = i + 1; j < gRuns.length; j++) {
+    const a = gRuns[i], b = gRuns[j];
+    ok(a[1] + a[2] <= b[1] || b[1] + b[2] <= a[1], `C10 WebGPU layout: ${a[0]} and ${b[0]} runs do not overlap`);
+  }
+  const gI = [['start', gOn.treeNodeStartBase], ['end', gOn.treeNodeEndBase], ['next', gOn.treeNodeNextBase]];
+  for (const g of gI) ok(g[1] + NODES <= gOn.chargeTreeI32Len, `C10 WebGPU layout: ${g[0]} run fits the i32 buffer`);
+  ok(new Set(gI.map(x => x[1])).size === 3, 'C10 WebGPU layout: the three i32 node runs are distinct');
 }
 
 console.log(`\naudited ${n} agent models × 3 kinds — ${checks} checks`);

@@ -70,7 +70,8 @@ import { colorScaleHasAlpha, readColorScaleStops, type ColorScaleStop } from '..
 import { viewCosHalf } from '../../nodes/GetAgentsInViewNode';
 import { resolveKeyLabels, resolveAxes, isMultiAxisTable } from '../variegation';
 import { computeAgentWebGPULayout, type AgentWebGPULayout } from './layout';
-import { resolveMaxBonds } from '../../../../model/centerBased';
+import { resolveMaxBonds, usesGlobalCharge } from '../../../../model/centerBased';
+import { agentOctreeNodeReserve } from '../../../../simulator/engine/agentEngine';
 import { encodeAttrValue } from '../../../../model/attrValueEncoding';
 
 /** The node types this compiler can emit to WGSL. A model whose agent graph uses
@@ -4288,7 +4289,14 @@ export function agentWebGPUExtrasOf(model: CAModel) {
   // every emitted stride are one number (and a model with no queue verb keeps the
   // pre-P4 single-slot runs, hence a byte-identical shader).
   const bondReqSlots = bondReqSlotsForModel(model);
-  return { modelAttrKeys, lookupTables, indicatorCount, maxBonds, gridDepth, syncAttrs, bondAttrs, bondReqSlots };
+  // C10 / P11a — the Barnes–Hut node reserve, ONLY for a GLOBAL-charge model.
+  // Derived from the SAME `agentOctreeNodeReserve` the CPU store + the WASM layout
+  // use, so the uploaded tree and the shader's runs agree by construction. 0 for
+  // every other model ⇒ no runs, no bindings, byte-identical shader.
+  const chargeTreeNodes = usesGlobalCharge(model.centerBased)
+    ? agentOctreeNodeReserve(Math.max(1, Math.floor((model.centerBased?.maxAgents as number) ?? 2000)))
+    : 0;
+  return { modelAttrKeys, lookupTables, indicatorCount, maxBonds, gridDepth, syncAttrs, bondAttrs, bondReqSlots, chargeTreeNodes };
 }
 
 /** Convenience for the DEV harness: derive the GPU agent layout from a model +

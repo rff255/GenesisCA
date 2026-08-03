@@ -905,6 +905,13 @@ export type CollisionMode = 'off' | 'soft' | 'positional';
  *  Data-vs-Physics choice is a real engine distinction — springs are gated on
  *  `usesEngineSprings` (bonds==='physics'), NOT the legacy bonding bundle. */
 export type BondsMode = 'off' | 'data' | 'physics';
+/** C10 / P11a — the REACH of the long-range charge, i.e. which charge LAW runs.
+ *  `cutoff` (the default; absent ⇒ this) is the L1 finite-cutoff pair force
+ *  evaluated inside the neighbour stencil. `global` drops the cutoff and evaluates
+ *  every pair through a deterministic Barnes–Hut octree (`CenterBasedConfig.
+ *  chargeTheta`). Approximate ≠ nondeterministic: the CPU tree is bit-reproducible;
+ *  θ changes WHICH law you run, not whether it repeats. */
+export type ChargeRange = 'cutoff' | 'global';
 /** Long-range charge. `on` adds a repulsive pair force with a FINITE cutoff to the
  *  fused neighbour pass — `f_ij = k·(1/(1+d²) − 1/(1+maxDist²))·(p_j − p_i)`, the
  *  `− min_c` term taking it continuously to zero at the cutoff instead of stepping.
@@ -1015,14 +1022,30 @@ export interface CenterBasedConfig {
    *  −3). The pair force is `k·(1/(1+d²) − 1/(1+maxDist²))·(p_j − p_i)`, applied
    *  to every pair within `chargeMaxDist` IN ADDITION to soft-sphere + springs. */
   chargeStrength?: number;
-  /** Long-range charge CUTOFF distance (world units). Absent ⇒ a DERIVED default of
-   *  8 × `bondRestLength` — measured: layout quality saturates by ~8× the bond rest
-   *  length and an unbounded cutoff merely inflates the layout, which is exactly why
-   *  a plain cutoff force suffices and no Barnes–Hut tree is needed. It must NOT be
-   *  a world-absolute constant: it scales with the model's own bond length.
+  /** Long-range charge CUTOFF distance (world units) — used by `chargeRange:
+   *  'cutoff'` only. Absent ⇒ a DERIVED default of 8 × `bondRestLength`: measured,
+   *  layout quality saturates by ~8× the bond rest length and a larger cutoff mostly
+   *  inflates the layout. It must NOT be a world-absolute constant: it scales with
+   *  the model's own bond length.
    *  **It also widens the spatial-hash bin edge** (`chargeBinEdgeOf`) so the 3×3(×3)
    *  stencil actually covers it — without that the force is silently truncated. */
   chargeMaxDist?: number;
+  /** C10 / P11a — WHICH CHARGE LAW runs. `'cutoff'` (absent ⇒ this, so every
+   *  pre-C10 file is byte-identical) is the L1 pair force evaluated inside the
+   *  neighbour stencil and truncated at `chargeMaxDist`. `'global'` drops the cutoff
+   *  entirely (`min_c = 0`) and evaluates EVERY pair through a deterministic
+   *  Barnes–Hut octree — the unbounded reach a finite-cutoff hash structurally
+   *  cannot express. It is a different LAW, not a speed-up of the same one: a model
+   *  that switches follows a different trajectory (and says so in its file), exactly
+   *  as changing any other physics parameter does. Still fully deterministic on the
+   *  CPU targets — same positions ⇒ same Morton order ⇒ bit-identical forces. */
+  chargeRange?: ChargeRange;
+  /** Barnes–Hut opening angle for `chargeRange: 'global'`. A node is treated as a
+   *  single centre-of-mass body when `extent² < θ²·d²`; smaller θ ⇒ more exact and
+   *  slower. Absent ⇒ 0.9 (the reference value). Clamped to
+   *  [`MIN_CHARGE_THETA`, `MAX_CHARGE_THETA`] by `chargeThetaOf` — θ is part of the
+   *  declared law, so an out-of-range value must resolve, never throw. */
+  chargeTheta?: number;
   /** Jacobi sweeps for the HARD positional collision (`agentCapabilities.collision
    *  === 'positional'`): more sweeps ⇒ tighter no-overlap packing (a single sweep
    *  resolves an isolated pair exactly; dense packing converges over a few).

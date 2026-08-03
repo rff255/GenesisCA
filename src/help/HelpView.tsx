@@ -1998,6 +1998,49 @@ export function HelpView() {
             <strong>Periodic Step</strong> (rewrite every Nth generation) or raise{' '}
             <strong>Layout iterations</strong> below.
           </p>
+          <h3 className={styles.h3}>Charge range &mdash; Cutoff or Global (Barnes&ndash;Hut)</h3>
+          <p className={styles.p}>
+            <strong>Charge range</strong> (Properties &rarr; Bond-Graph Agents, inside the charge
+            block) chooses <em>which law</em> the charge runs, not how fast it runs.{' '}
+            <strong>Cutoff</strong> is the force described above: every pair inside{' '}
+            <em>charge cutoff</em> repels, and nothing beyond it does.{' '}
+            <strong>Global (Barnes&ndash;Hut)</strong> removes the cutoff entirely &mdash;{' '}
+            <em>every</em> pair interacts, with distant groups approximated by their centre of mass
+            when <code>extent&sup2; &lt; &theta;&sup2;&middot;d&sup2;</code>. Smaller{' '}
+            <strong>&theta;</strong> is more exact and slower; the default 0.9 is the usual choice.
+          </p>
+          <p className={styles.p}>
+            <strong>Why it matters: a cutoff cannot open a graph that outgrows it</strong>, however
+            you tune it. Measured on a growing GRA blob in a world scaled to its population, with
+            the same seed and the same number of relaxation ticks &mdash; nearest-non-bonded /
+            bond length (higher is better) and the share of nodes with an unrelated node inside
+            contact distance:
+          </p>
+          <ul className={styles.ul}>
+            <li><strong>N = 2 500</strong> &mdash; cutoff 0.53 / 16.9 % overlap &rarr; global{' '}
+              <strong>0.83 / 4.2 %</strong>, at <strong>0.61&times;</strong> the cost per tick</li>
+            <li><strong>N = 5 000</strong> &mdash; cutoff 0.47 / 37.9 % &rarr; global{' '}
+              <strong>0.82 / 4.9 %</strong>, at <strong>0.61&times;</strong></li>
+            <li><strong>N = 20 000</strong> &mdash; cutoff 0.37 / 82.1 % &rarr; global{' '}
+              <strong>0.81 / 4.4 %</strong>, at <strong>0.73&times;</strong></li>
+          </ul>
+          <p className={styles.p}>
+            The shape is what counts: the cutoff law <em>degrades</em> as the graph grows while the
+            global one holds flat. It is also <em>cheaper</em> here, because a wide cutoff forces a
+            wide neighbour-search grid while the tree does not. For a small or sparse model the
+            cutoff remains the simpler, perfectly good choice &mdash; and every shipped model keeps
+            it.
+          </p>
+          <p className={styles.p}>
+            <strong>Approximate is not the same as random.</strong> The tree is rebuilt from the
+            positions with a canonical ordering, so the JS and WebAssembly engines produce{' '}
+            <em>bit-identical</em> forces every run: a fixed seed still replays exactly and an
+            Overseer sweep still reproduces. &theta; changes which law you run, not whether it
+            repeats. (WebGPU is f32, so it is statistically equivalent &mdash; the same deal that
+            target already offers.) One cost to know about: while Global is on, the GPU{' '}
+            <em>residency</em> fast path is off, because the tree is rebuilt on the CPU each
+            generation &mdash; the diagnostics popover says so.
+          </p>
           <h3 className={styles.h3}>Layout iterations &mdash; more relaxation per generation</h3>
           <p className={styles.p}>
             <strong>Layout iterations</strong> (Properties &rarr; Bond-Graph Agents &rarr; Solver,

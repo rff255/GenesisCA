@@ -68,7 +68,7 @@
 import type { GraphNode, GraphEdge, CAModel } from '../../../../model/types';
 import { agentAttrsOf } from '../../../../model/attributeScope';
 import { modelAttrSlotKeys } from '../../../../model/attributeScope';
-import { resolveMaxBonds, usesCharge } from '../../../../model/centerBased';
+import { resolveMaxBonds, usesCharge, usesGlobalCharge } from '../../../../model/centerBased';
 import { resolveAgentFieldGates, motionModeCode } from '../../../../model/agentFieldGating';
 import {
   I32, F64,
@@ -127,7 +127,7 @@ import { encodeAttrValue } from '../../../../model/attrValueEncoding';
 import {
   computeAgentMemoryLayout, computeAgentMaxHashBins, AGENT_NEARBY_SCRATCH_SLOTS,
   type AgentAttrSpec, type AgentMemoryLayout, type AgentLayoutExtras,
-  agentAttrKind, bondAttrKind,
+  agentAttrKind, bondAttrKind, agentOctreeNodeReserve,
 } from '../../../../simulator/engine/agentEngine';
 
 /** The node types the WASM agent compiler can emit. FULL-COVERAGE: a model whose
@@ -4290,7 +4290,16 @@ const FORCE_PASS_PARAMS: ('i32' | 'f64')[] = [
  *  function's arity are ignored), so the module and the worker can never desync in
  *  the dangerous direction. */
 const CHARGE_PASS_PARAMS: ('i32' | 'f64')[] = ['i32', 'f64', 'f64', 'f64'];
-function forcePassParamsFor(charge: boolean): ('i32' | 'f64')[] {
+/** C10 / P11a — the GLOBAL (Barnes–Hut) block, appended after the charge block for
+ *  a model whose `chargeRange` is `'global'`: `treeNodeCount : i32, chargeTheta2 :
+ *  f64`. The tree itself lives in the agent memory at baked layout offsets (the
+ *  AW-HASH precedent), so only these two scalars need to ride the call. Same
+ *  conditional-arity contract: the worker ALWAYS passes all 32 args, and a module
+ *  that declares 26 or 30 simply ignores the extras — so the dangerous direction
+ *  (a module declaring params the worker omits) remains structurally impossible. */
+const CHARGE_GLOBAL_PASS_PARAMS: ('i32' | 'f64')[] = ['i32', 'f64'];
+function forcePassParamsFor(charge: boolean, global = false): ('i32' | 'f64')[] {
+  if (global) return [...FORCE_PASS_PARAMS, ...CHARGE_PASS_PARAMS, ...CHARGE_GLOBAL_PASS_PARAMS];
   return charge ? [...FORCE_PASS_PARAMS, ...CHARGE_PASS_PARAMS] : FORCE_PASS_PARAMS;
 }
 
@@ -4312,6 +4321,11 @@ interface ForcePassParamIdx {
   chargeK: number;
   chargeMaxD2: number;
   chargeMinC: number;
+  /** C10 — GLOBAL charge. `-1` marks the block absent (the emitter then emits no
+   *  tree traversal at all). Present only for `chargeRange: 'global'`, where the
+   *  CUTOFF pair term is NOT emitted — the two laws are mutually exclusive. */
+  chargeTreeNodes: number;
+  chargeTheta2: number;
 }
 
 /** Emit the force-pass function body onto `em`. Reads the wasmBacked AgentStore at
@@ -4364,6 +4378,15 @@ function emitForcePass(em: WasmEmitter, layout: AgentMemoryLayout, is3d: boolean
   const vxi = em.allocLocal(F64), vyi = em.allocLocal(F64), vzi = em.allocLocal(F64), sp = em.allocLocal(F64), sc = em.allocLocal(F64);
   const nx = em.allocLocal(F64), ny = em.allocLocal(F64), nz = em.allocLocal(F64);
   const tr = em.allocLocal(F64), cur = em.allocLocal(F64), dd = em.allocLocal(F64), stepRad = em.allocLocal(F64);
+  // C10 — the Barnes–Hut traversal's scratch. Allocated ONLY under global charge:
+  // `em.allocLocal` changes the module's local section, so an unconditional
+  // allocation would move every other model's bytes (the L1 `chargeOn` precedent).
+  const treeOn = P.chargeTreeNodes >= 0;
+  const tni = treeOn ? em.allocLocal(I32) : -1;
+  const tp = treeOn ? em.allocLocal(I32) : -1, tpEnd = treeOn ? em.allocLocal(I32) : -1;
+  const tndx = treeOn ? em.allocLocal(F64) : -1, tndy = treeOn ? em.allocLocal(F64) : -1, tndz = treeOn ? em.allocLocal(F64) : -1;
+  const tl2 = treeOn ? em.allocLocal(F64) : -1, tw = treeOn ? em.allocLocal(F64) : -1, tc = treeOn ? em.allocLocal(F64) : -1;
+  const tfx = treeOn ? em.allocLocal(F64) : -1, tfy = treeOn ? em.allocLocal(F64) : -1, tfz = treeOn ? em.allocLocal(F64) : -1;
 
   const off = {
     x: L.f64['x']!, y: L.f64['y']!, z: L.f64['z']!,
@@ -4568,6 +4591,13 @@ function emitForcePass(em: WasmEmitter, layout: AgentMemoryLayout, is3d: boolean
     });
 
     // --- bond springs (gated on the Bonds=Physics capability && bondCount>0;
+    // --- C10 / P11a — GLOBAL charge: the Barnes–Hut traversal (mirrors the JS
+    //     block in runAgentStep line-for-line, including the accumulate-then-scale
+    //     order, so the two stay f64 bit-identical). Emitted ONLY for
+    //     `chargeRange: 'global'`, which is also the only case where the CUTOFF
+    //     pair term above is NOT emitted. ---
+    if (P.chargeTreeNodes >= 0) emitChargeTree();
+
     //     Data bonds are force-free edges) ---
     // bc = bondCount[i]
     em.localGet(i); em.i32Const(4); em.op(OP_I32_MUL); em.i32Const(L.i32['bondCount']!); em.op(OP_I32_ADD); em.i32Load(); em.localSet(bc);
@@ -4731,6 +4761,120 @@ function emitForcePass(em: WasmEmitter, layout: AgentMemoryLayout, is3d: boolean
         em.ifThen(() => { em.localGet(nL); em.i32Const(1); em.op(OP_I32_SUB); em.localSet(outLocal); });
       },
     );
+  }
+
+  // --- C10 / P11a — the GLOBAL (Barnes–Hut) charge traversal ------------------
+  // A line-for-line mirror of the JS block in `runAgentStep`, including the
+  // accumulate-unscaled-then-multiply-by-k order, so the two are f64 bit-identical.
+  // The tree lives in the agent memory at the layout's baked offsets (copied there
+  // by the worker before the call, exactly like the spatial hash), so this reads
+  // the SAME bytes the JS traversal reads.
+  //
+  //   for (ni = 0; ni < treeNodeCount; ) {
+  //     d = nodeC[ni] - self;  (torus-folded)   l2 = d·d;   w = nodeExt[ni];
+  //     if (w*w < theta2*l2) { c = (end-start)/(1+l2); tf += c*d; ni = next[ni]; }
+  //     else { if (next[ni] == ni+1) for (p in [start,end)) { pd = sorted[p]-self;
+  //              (folded)  pc = 1/(1+pd·pd);  tf += pc*pd; }
+  //            ni++; }
+  //   }
+  //   f += chargeK * tf;
+  function emitChargeTree(): void {
+    const tCx = L.treeNodeCxOffset, tCy = L.treeNodeCyOffset, tCz = L.treeNodeCzOffset;
+    const tExt = L.treeNodeExtOffset;
+    const tStart = L.treeNodeStartOffset, tEnd = L.treeNodeEndOffset, tNext = L.treeNodeNextOffset;
+    const sX = L.treeSortedXOffset, sY = L.treeSortedYOffset, sZ = L.treeSortedZOffset;
+
+    em.f64Const(0); em.localSet(tfx);
+    em.f64Const(0); em.localSet(tfy);
+    if (is3d) { em.f64Const(0); em.localSet(tfz); }
+    em.i32Const(0); em.localSet(tni);
+    em.block(() => {
+      em.loop(() => {
+        // while (tni < treeNodeCount)
+        em.localGet(tni); em.localGet(P.chargeTreeNodes); em.op(OP_I32_GE_S); em.brIf(1);
+        // d = nodeCentre[tni] - self
+        pushF64Elem(em, tCx, tni); em.localGet(xi); em.op(OP_F64_SUB); em.localSet(tndx);
+        pushF64Elem(em, tCy, tni); em.localGet(yi); em.op(OP_F64_SUB); em.localSet(tndy);
+        if (is3d) { pushF64Elem(em, tCz, tni); em.localGet(zi); em.op(OP_F64_SUB); em.localSet(tndz); }
+        em.localGet(P.torus);
+        em.ifThen(() => {
+          foldDelta(tndx, P.W, halfW);
+          foldDelta(tndy, P.H, halfH);
+          if (is3d) foldDelta(tndz, P.D, halfD);
+        });
+        // l2 = d·d
+        em.localGet(tndx); em.localGet(tndx); em.op(OP_F64_MUL);
+        em.localGet(tndy); em.localGet(tndy); em.op(OP_F64_MUL); em.op(OP_F64_ADD);
+        if (is3d) { em.localGet(tndz); em.localGet(tndz); em.op(OP_F64_MUL); em.op(OP_F64_ADD); }
+        em.localSet(tl2);
+        pushF64Elem(em, tExt, tni); em.localSet(tw);
+        // if (w*w < theta2*l2) — accept the node as ONE centre-of-mass body
+        em.localGet(tw); em.localGet(tw); em.op(OP_F64_MUL);
+        em.localGet(P.chargeTheta2); em.localGet(tl2); em.op(OP_F64_MUL);
+        em.op(OP_F64_LT);
+        em.ifThenElse(
+          () => {
+            // c = (end - start) / (1 + l2)
+            pushI32Elem(em, tEnd, tni); pushI32Elem(em, tStart, tni); em.op(OP_I32_SUB);
+            em.op(OP_F64_CONVERT_I32_S);
+            em.f64Const(1); em.localGet(tl2); em.op(OP_F64_ADD); em.op(OP_F64_DIV);
+            em.localSet(tc);
+            em.localGet(tfx); em.localGet(tc); em.localGet(tndx); em.op(OP_F64_MUL); em.op(OP_F64_ADD); em.localSet(tfx);
+            em.localGet(tfy); em.localGet(tc); em.localGet(tndy); em.op(OP_F64_MUL); em.op(OP_F64_ADD); em.localSet(tfy);
+            if (is3d) { em.localGet(tfz); em.localGet(tc); em.localGet(tndz); em.op(OP_F64_MUL); em.op(OP_F64_ADD); em.localSet(tfz); }
+            // ni = next[ni]  (the SKIP LINK — jump past this whole subtree)
+            pushI32Elem(em, tNext, tni); em.localSet(tni);
+          },
+          () => {
+            // too close: if it is a LEAF (next === ni+1) sum its points exactly
+            pushI32Elem(em, tNext, tni);
+            em.localGet(tni); em.i32Const(1); em.op(OP_I32_ADD);
+            em.op(OP_I32_EQ);
+            em.ifThen(() => {
+              pushI32Elem(em, tStart, tni); em.localSet(tp);
+              pushI32Elem(em, tEnd, tni); em.localSet(tpEnd);
+              em.block(() => {
+                em.loop(() => {
+                  em.localGet(tp); em.localGet(tpEnd); em.op(OP_I32_GE_S); em.brIf(1);
+                  pushF64Elem(em, sX, tp); em.localGet(xi); em.op(OP_F64_SUB); em.localSet(tndx);
+                  pushF64Elem(em, sY, tp); em.localGet(yi); em.op(OP_F64_SUB); em.localSet(tndy);
+                  if (is3d) { pushF64Elem(em, sZ, tp); em.localGet(zi); em.op(OP_F64_SUB); em.localSet(tndz); }
+                  em.localGet(P.torus);
+                  em.ifThen(() => {
+                    foldDelta(tndx, P.W, halfW);
+                    foldDelta(tndy, P.H, halfH);
+                    if (is3d) foldDelta(tndz, P.D, halfD);
+                  });
+                  // pc = 1 / (1 + pdx*pdx + pdy*pdy [+ pdz*pdz])
+                  // THE ASSOCIATION ORDER IS LOAD-BEARING: JS evaluates this
+                  // left-to-right as `((1 + a) + b) + c`, and f64 addition is not
+                  // associative, so folding it as `1 + (a + b + c)` diverges by an
+                  // ULP that the integrator then amplifies. (Found by the parity
+                  // harness: 2D bounded mismatched while torus/3D happened not to.)
+                  em.f64Const(1);
+                  em.f64Const(1);
+                  em.localGet(tndx); em.localGet(tndx); em.op(OP_F64_MUL); em.op(OP_F64_ADD);
+                  em.localGet(tndy); em.localGet(tndy); em.op(OP_F64_MUL); em.op(OP_F64_ADD);
+                  if (is3d) { em.localGet(tndz); em.localGet(tndz); em.op(OP_F64_MUL); em.op(OP_F64_ADD); }
+                  em.op(OP_F64_DIV); em.localSet(tc);
+                  em.localGet(tfx); em.localGet(tc); em.localGet(tndx); em.op(OP_F64_MUL); em.op(OP_F64_ADD); em.localSet(tfx);
+                  em.localGet(tfy); em.localGet(tc); em.localGet(tndy); em.op(OP_F64_MUL); em.op(OP_F64_ADD); em.localSet(tfy);
+                  if (is3d) { em.localGet(tfz); em.localGet(tc); em.localGet(tndz); em.op(OP_F64_MUL); em.op(OP_F64_ADD); em.localSet(tfz); }
+                  em.localGet(tp); em.i32Const(1); em.op(OP_I32_ADD); em.localSet(tp);
+                  em.br(0);
+                });
+              });
+            });
+            em.localGet(tni); em.i32Const(1); em.op(OP_I32_ADD); em.localSet(tni);
+          },
+        );
+        em.br(0);
+      });
+    });
+    // f += chargeK * tf  (scaled ONCE, mirroring the JS block)
+    em.localGet(fx); em.localGet(P.chargeK); em.localGet(tfx); em.op(OP_F64_MUL); em.op(OP_F64_ADD); em.localSet(fx);
+    em.localGet(fy); em.localGet(P.chargeK); em.localGet(tfy); em.op(OP_F64_MUL); em.op(OP_F64_ADD); em.localSet(fy);
+    if (is3d) { em.localGet(fz); em.localGet(P.chargeK); em.localGet(tfz); em.op(OP_F64_MUL); em.op(OP_F64_ADD); em.localSet(fz); }
   }
 
   // --- bond springs over the agent's bond list (mirrors the JS bond block) ---
@@ -5236,7 +5380,12 @@ export function compileAgentGraphWasm(
   // a charge-off module keeps its exact pre-charge type section + arity (the
   // byte-identity gate). Indices 0..25 are unaffected either way.
   const chargeOn = usesCharge(model.centerBased);
-  const forceParams = forcePassParamsFor(chargeOn);
+  // C10 — GLOBAL charge appends a second block and swaps WHICH charge code the
+  // emitter produces: the tree traversal INSTEAD of the cutoff pair term (never
+  // both — that would double-count the force). `doCharge: -1` is what tells
+  // `emitForcePass` to omit the pair term even though its param slot still exists.
+  const chargeGlobal = usesGlobalCharge(model.centerBased);
+  const forceParams = forcePassParamsFor(chargeOn, chargeGlobal);
   const fpEm = new WasmEmitter(forceParams.length);
   const FP: ForcePassParamIdx = {
     highWater: 0, hashValid: 1, nBinsX: 2, nBinsY: 3, nBinsZ: 4,
@@ -5245,7 +5394,8 @@ export function compileAgentGraphWasm(
     W: 15, H: 16, D: 17, bonding: 18, torus: 19,
     originX: 20, originY: 21, originZ: 22,
     doCollision: 23, doSprings: 24, doDensity: 25,
-    doCharge: chargeOn ? 26 : -1, chargeK: 27, chargeMaxD2: 28, chargeMinC: 29,
+    doCharge: chargeOn && !chargeGlobal ? 26 : -1, chargeK: 27, chargeMaxD2: 28, chargeMinC: 29,
+    chargeTreeNodes: chargeGlobal ? 30 : -1, chargeTheta2: 31,
   };
   let forceBody: Uint8Array;
   try {
@@ -5403,6 +5553,10 @@ export function buildAgentLayoutExtras(model: CAModel): AgentLayoutExtras {
     // object the WASM layout is built from, so the baked offsets and the store's
     // views are one record (the bondReqSlots precedent).
     fieldGates: resolveAgentFieldGates(model),
+    // C10 / P11a — the Barnes–Hut octree node reserve, ONLY for a model that runs
+    // the GLOBAL charge law. 0 otherwise ⇒ the tree regions reserve zero bytes ⇒
+    // every cutoff/charge-off model's layout (and therefore WASM bytes) unchanged.
+    chargeTreeNodes: usesGlobalCharge(model.centerBased) ? agentOctreeNodeReserve(maxAgents) : 0,
   };
 }
 

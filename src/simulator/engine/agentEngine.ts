@@ -206,6 +206,19 @@ export interface AgentMemoryLayout {
    *  above is byte-identical — which is why the WASM agent surface needs no usage
    *  gate: an unused generation emits no load and the module bytes are unchanged. */
   generationOffset: number;
+  /** C10 / P11a — the Barnes–Hut octree node RESERVE (0 ⇒ the tree regions are not
+   *  reserved at all and the offsets below are meaningless; that is the state of
+   *  every model that does not use GLOBAL charge, which is why their layouts stay
+   *  byte-identical). */
+  chargeTreeNodes: number;
+  /** Morton-SORTED positions, `maxAgents` f64 each (z all-zero in 2D). */
+  treeSortedXOffset: number; treeSortedYOffset: number; treeSortedZOffset: number;
+  /** Per-node centre of mass + bbox extent, `chargeTreeNodes` f64 each. */
+  treeNodeCxOffset: number; treeNodeCyOffset: number; treeNodeCzOffset: number;
+  treeNodeExtOffset: number;
+  /** Per-node point range + SKIP LINK, `chargeTreeNodes` i32 each. `next === n+1`
+   *  is the leaf test; `mass === end - start`. */
+  treeNodeStartOffset: number; treeNodeEndOffset: number; treeNodeNextOffset: number;
 }
 
 /** Sizing inputs for the FULL-COVERAGE WASM agent layout regions — the compiler +
@@ -249,6 +262,14 @@ export interface AgentLayoutExtras {
    *  `syncAttrs` / `bondAttrSpecs` / `bondReqSlots` precedent) so the allocated
    *  arrays and the baked offsets are computed from ONE record. */
   fieldGates?: AgentFieldGates;
+  /** C10 / P11a — the Barnes–Hut octree NODE RESERVE for GLOBAL charge. 0 / absent
+   *  ⇒ NO tree regions are reserved at all, so every model that does not use global
+   *  charge keeps a byte-identical layout (and therefore byte-identical WASM). Set
+   *  from `agentOctreeNodeReserve(maxAgents)` by `buildAgentLayoutExtras` when
+   *  `usesGlobalCharge(cfg)`, and mirrored into the store by `createAgentStore` —
+   *  the compiler bakes offsets from this number, so the two MUST derive it from
+   *  the same resolver. */
+  chargeTreeNodes?: number;
 }
 
 /** The number of `getNearbyAgents` scratch buffers the wasmBacked agent layout
@@ -528,6 +549,29 @@ export function computeAgentMemoryLayout(
   const generationOffset = off;
   off += 8;
 
+  // --- C10 / P11a — the BARNES–HUT OCTREE regions (GLOBAL charge only) --------
+  // Appended after EVERY existing region and reserved ONLY when the model uses
+  // global charge (`chargeTreeNodes > 0`), so a cutoff/off model keeps a
+  // byte-identical layout. The worker COPIES the engine-built tree in here before
+  // the WASM force pass, exactly like the AW-HASH copy; the WASM traversal then
+  // reads it at these baked offsets, so JS and WASM walk the same numbers.
+  //   • sorted positions (3 × maxAgents f64) — Morton order; z is all-zero in 2D
+  //   • node start/end/next (3 × nodes i32) — `next` is the SKIP LINK
+  //   • node centre-of-mass x/y/z + extent (4 × nodes f64)
+  const chargeTreeNodes = Math.max(0, Math.floor(extras.chargeTreeNodes ?? 0));
+  off = alignTo(off, 8);
+  const treeSortedXOffset = off; off += chargeTreeNodes > 0 ? maxAgents * 8 : 0;
+  const treeSortedYOffset = off; off += chargeTreeNodes > 0 ? maxAgents * 8 : 0;
+  const treeSortedZOffset = off; off += chargeTreeNodes > 0 ? maxAgents * 8 : 0;
+  const treeNodeCxOffset = off; off += chargeTreeNodes * 8;
+  const treeNodeCyOffset = off; off += chargeTreeNodes * 8;
+  const treeNodeCzOffset = off; off += chargeTreeNodes * 8;
+  const treeNodeExtOffset = off; off += chargeTreeNodes * 8;
+  off = alignTo(off, 4);
+  const treeNodeStartOffset = off; off += chargeTreeNodes * 4;
+  const treeNodeEndOffset = off; off += chargeTreeNodes * 4;
+  const treeNodeNextOffset = off; off += chargeTreeNodes * 4;
+
   const totalBytes = alignTo(off, 8);
   const pages = Math.max(1, Math.ceil(totalBytes / 65536));
   return {
@@ -544,6 +588,10 @@ export function computeAgentMemoryLayout(
     stopFlagOffset,
     bondAttrOffset, bondFormAttrOffset, bondReqSlots,
     generationOffset,
+    chargeTreeNodes,
+    treeSortedXOffset, treeSortedYOffset, treeSortedZOffset,
+    treeNodeCxOffset, treeNodeCyOffset, treeNodeCzOffset, treeNodeExtOffset,
+    treeNodeStartOffset, treeNodeEndOffset, treeNodeNextOffset,
   };
 }
 
@@ -1954,6 +2002,259 @@ export interface SpatialHash {
 /** Per-store reusable scratch so the hash doesn't allocate every step. */
 interface HashScratch { binStart: Int32Array; binAgents: Int32Array; cursor: Int32Array; }
 const hashScratchMap = new WeakMap<AgentStore, HashScratch>();
+
+// ===========================================================================
+// C10 / P11a — THE DETERMINISTIC BARNES–HUT OCTREE (global charge).
+//
+// Built ONCE per generation in TypeScript and then TRAVERSED by each target:
+// JS reads these arrays directly, the WASM force pass reads a COPY of them at
+// baked offsets in the shared agent memory, and the WebGPU force pass reads an
+// upload of them. That seam is deliberate and mirrors `buildSpatialHash`: the
+// BUILD is where two implementations would drift (bbox reduction, float→int
+// quantization, sort tie-break, split order) and it runs once per generation;
+// the TRAVERSAL is the hot part and is pure arithmetic over shared bytes, which
+// is exactly the shape the force pass already keeps bit-identical.
+//
+// DETERMINISM rests on four things, all of them structural:
+//   1. Morton quantization is a pure function of the positions.
+//   2. The sort is ORDER-CANONICAL — ties in the code are broken by the agent's
+//      canonical id, so the permutation is a TOTAL order and cannot depend on the
+//      sorting algorithm. Realised as a stable LSD radix sort seeded from an
+//      id-ordered array (no comparator, no library sort).
+//   3. The build is a deterministic DFS with a node-count CAP that degrades a
+//      node to a LEAF when the reserve runs out. A leaf is MORE exact (it sums
+//      its points pairwise), so the cap can never make a result wrong — only
+//      slower — and it bites at exactly the same place every run.
+//   4. The traversal is a fixed-order walk (nodeI ascending via skip links, leaf
+//      points in sorted order), so the f64 accumulation order matches on JS+WASM.
+// ===========================================================================
+
+/** The tree, in the flat form all three targets consume. Node `n` covers the
+ *  half-open range `[start[n], end[n])` of the MORTON-SORTED point arrays; `mass`
+ *  is that range's length. `next[n]` is the SKIP LINK — the index of the next node
+ *  after this whole subtree — so a traversal that accepts a node jumps straight
+ *  past its children, and `next[n] === n + 1` is exactly the "is a leaf" test. */
+export interface AgentOctree {
+  /** Number of live points indexed (= the alive count at build time). */
+  pointCount: number;
+  /** Number of nodes built (≤ the reserve). */
+  nodeCount: number;
+  /** Morton-sorted positions (`pointCount` entries used). `sortedZ` is all-zero in
+   *  2D — the tree is 3D-native and a 2D model is simply the z = 0 slice, so there
+   *  is ONE build path and no 2D special case. */
+  sortedX: Float64Array; sortedY: Float64Array; sortedZ: Float64Array;
+  nodeStart: Int32Array; nodeEnd: Int32Array; nodeNext: Int32Array;
+  /** Node CENTRE OF MASS (the mean of its points). */
+  nodeCx: Float64Array; nodeCy: Float64Array; nodeCz: Float64Array;
+  /** Node EXTENT — the largest side of the bounding box of its points. Compared
+   *  against θ²·d² to decide whether the node may be collapsed to one body. */
+  nodeExt: Float64Array;
+}
+
+interface OctreeScratch extends AgentOctree {
+  morton: Uint32Array; order: Int32Array; tmp: Int32Array; counts: Int32Array;
+  px: Float64Array; py: Float64Array; pz: Float64Array;
+  nodeLevel: Int32Array; nodeParent: Int32Array;
+  nodeMinX: Float64Array; nodeMinY: Float64Array; nodeMinZ: Float64Array;
+  nodeMaxX: Float64Array; nodeMaxY: Float64Array; nodeMaxZ: Float64Array;
+  capacityPoints: number; capacityNodes: number;
+}
+const octreeScratchMap = new WeakMap<AgentStore, OctreeScratch>();
+
+/** Leaf capacity + depth limit (znah's reference values). A node with at most
+ *  `LEAF` points, or at the depth limit, stops splitting. */
+export const OCTREE_LEAF_SIZE = 16;
+export const OCTREE_MAX_LEVEL = 10;
+
+/** The node reserve for `maxAgents` agents. The DFS degrades to a leaf when this
+ *  runs out (correct, just less approximated), so this is a performance budget and
+ *  not a correctness bound. Measured node counts on real grown graphs sit far
+ *  below `N` (a balanced octree with leaf capacity 16 has roughly N/8 nodes); the
+ *  generous `N + 64` covers deep chains from heavy clustering. */
+export function agentOctreeNodeReserve(maxAgents: number): number {
+  return Math.max(1, Math.floor(maxAgents)) + 64;
+}
+
+/** Spread the low 10 bits of `x` into every third bit (the Morton interleave). */
+function dilate3(x: number): number {
+  let v = x & 0x3ff;
+  v = (v | (v << 16)) & 0x30000ff;
+  v = (v | (v << 8)) & 0x300f00f;
+  v = (v | (v << 4)) & 0x30c30c3;
+  v = (v | (v << 2)) & 0x9249249;
+  return v >>> 0;
+}
+
+/** Build the per-generation Barnes–Hut octree over the store's LIVE agents.
+ *  Returns null when there is nothing to build (no live agents) — the callers
+ *  then simply add no charge this generation. Reuses per-store scratch so a
+ *  steady-state generation allocates nothing. */
+export function buildAgentOctree(store: AgentStore, is3d: boolean, nodeReserve?: number): AgentOctree | null {
+  const hw = store.highWater, alive = store.alive;
+  const x = store.x, y = store.y, z = store.z;
+  const maxPoints = Math.max(1, store.maxAgents);
+  const maxNodes = Math.max(1, Math.floor(nodeReserve ?? agentOctreeNodeReserve(store.maxAgents)));
+
+  let sc = octreeScratchMap.get(store);
+  if (!sc || sc.capacityPoints < maxPoints || sc.capacityNodes < maxNodes) {
+    sc = {
+      pointCount: 0, nodeCount: 0,
+      sortedX: new Float64Array(maxPoints), sortedY: new Float64Array(maxPoints), sortedZ: new Float64Array(maxPoints),
+      nodeStart: new Int32Array(maxNodes), nodeEnd: new Int32Array(maxNodes), nodeNext: new Int32Array(maxNodes),
+      nodeCx: new Float64Array(maxNodes), nodeCy: new Float64Array(maxNodes), nodeCz: new Float64Array(maxNodes),
+      nodeExt: new Float64Array(maxNodes),
+      morton: new Uint32Array(maxPoints), order: new Int32Array(maxPoints), tmp: new Int32Array(maxPoints),
+      counts: new Int32Array(1024),
+      px: new Float64Array(maxPoints), py: new Float64Array(maxPoints), pz: new Float64Array(maxPoints),
+      nodeLevel: new Int32Array(maxNodes), nodeParent: new Int32Array(maxNodes),
+      nodeMinX: new Float64Array(maxNodes), nodeMinY: new Float64Array(maxNodes), nodeMinZ: new Float64Array(maxNodes),
+      nodeMaxX: new Float64Array(maxNodes), nodeMaxY: new Float64Array(maxNodes), nodeMaxZ: new Float64Array(maxNodes),
+      capacityPoints: maxPoints, capacityNodes: maxNodes,
+    };
+    octreeScratchMap.set(store, sc);
+  }
+
+  // --- gather the live points in CANONICAL id order (so the radix sort's
+  //     stability makes the final order exactly (morton, id)) ------------------
+  const px = sc.px, py = sc.py, pz = sc.pz;
+  let n = 0;
+  let minX = Infinity, minY = Infinity, minZ = Infinity;
+  let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
+  for (let i = 0; i < hw; i++) {
+    if (!alive[i]) continue;
+    const xi = x[i]!, yi = y[i]!, zi = is3d ? z[i]! : 0;
+    px[n] = xi; py[n] = yi; pz[n] = zi;
+    if (xi < minX) minX = xi; if (xi > maxX) maxX = xi;
+    if (yi < minY) minY = yi; if (yi > maxY) maxY = yi;
+    if (zi < minZ) minZ = zi; if (zi > maxZ) maxZ = zi;
+    n++;
+  }
+  if (n === 0) return null;
+
+  // --- Morton codes over the cube that bounds the population ------------------
+  // A CUBE (one `extent` for all three axes) keeps the octant split isotropic, so
+  // the node extent used by the θ test means the same thing on every axis.
+  let extent = maxX - minX;
+  if (maxY - minY > extent) extent = maxY - minY;
+  if (maxZ - minZ > extent) extent = maxZ - minZ;
+  const loX = (minX + maxX) * 0.5 - extent * 0.5;
+  const loY = (minY + maxY) * 0.5 - extent * 0.5;
+  const loZ = (minZ + maxZ) * 0.5 - extent * 0.5;
+  const scale = 1023 / (extent + 1e-8);
+  const morton = sc.morton;
+  for (let i = 0; i < n; i++) {
+    // `| 0` after the multiply: the product is finite and in [0, 1023] by
+    // construction (extent bounds every delta), so the truncation is exact.
+    const ix = ((px[i]! - loX) * scale) | 0;
+    const iy = ((py[i]! - loY) * scale) | 0;
+    const iz = ((pz[i]! - loZ) * scale) | 0;
+    morton[i] = (dilate3(ix) | (dilate3(iy) << 1) | (dilate3(iz) << 2)) >>> 0;
+  }
+
+  // --- ORDER-CANONICAL sort: stable LSD radix over 3 × 10 bits ---------------
+  // Seeded with the identity permutation (= canonical id order) and stable at
+  // every pass, so equal codes keep id order. No comparator ⇒ the result cannot
+  // depend on a sort implementation, which is what makes the whole law replayable.
+  let order = sc.order, tmp = sc.tmp;
+  const counts = sc.counts;
+  for (let i = 0; i < n; i++) order[i] = i;
+  for (let shift = 0; shift < 30; shift += 10) {
+    counts.fill(0);
+    for (let i = 0; i < n; i++) counts[(morton[order[i]!]! >>> shift) & 1023]!++;
+    let sum = 0;
+    for (let b = 0; b < 1024; b++) { const c = counts[b]!; counts[b] = sum; sum += c; }
+    for (let i = 0; i < n; i++) { const o = order[i]!; tmp[counts[(morton[o]! >>> shift) & 1023]!++] = o; }
+    const swap = order; order = tmp; tmp = swap;
+  }
+
+  // --- materialise the sorted positions + sorted codes ------------------------
+  const sortedX = sc.sortedX, sortedY = sc.sortedY, sortedZ = sc.sortedZ;
+  // `tmp` is free after the last radix swap — reuse it to hold the SORTED codes so
+  // the octant counting below reads them contiguously (Int32 holds 30 bits fine).
+  const codes = tmp;
+  for (let i = 0; i < n; i++) {
+    const o = order[i]!;
+    sortedX[i] = px[o]!; sortedY[i] = py[o]!; sortedZ[i] = pz[o]!;
+    codes[i] = morton[o]!;
+  }
+
+  // --- build the nodes (DFS; children emitted contiguously in octant order) ---
+  const nodeStart = sc.nodeStart, nodeEnd = sc.nodeEnd, nodeNext = sc.nodeNext;
+  const nodeLevel = sc.nodeLevel, nodeParent = sc.nodeParent;
+  let nodeCount = 0;
+  // The octant histogram is PER LEVEL, not one shared array: `buildNode` recurses
+  // between reading the counts and consuming them, so a single shared histogram
+  // would be clobbered by the child call (a silent mis-split, not a crash).
+  const oct = OCT_COUNTS;
+  const buildNode = (level: number, start: number, end: number, parentIdx: number): void => {
+    const ni = nodeCount++;
+    nodeStart[ni] = start; nodeEnd[ni] = end; nodeLevel[ni] = level; nodeParent[ni] = parentIdx;
+    // LEAF when small enough, at the depth limit, or when the node reserve is
+    // exhausted (the degradation: a leaf is exact, just slower).
+    if (end - start <= OCTREE_LEAF_SIZE || level >= OCTREE_MAX_LEVEL || nodeCount + 8 > maxNodes) {
+      nodeNext[ni] = nodeCount;
+      return;
+    }
+    const shift = (OCTREE_MAX_LEVEL - level - 1) * 3;
+    const base = level * 8;
+    for (let o = 0; o < 8; o++) oct[base + o] = 0;
+    for (let i = start; i < end; i++) oct[base + ((codes[i]! >>> shift) & 7)]!++;
+    let s = start;
+    for (let o = 0; o < 8; o++) {
+      const c = oct[base + o]!;
+      if (c > 0) { buildNode(level + 1, s, s + c, ni); s += c; }
+    }
+    nodeNext[ni] = nodeCount;
+  };
+  buildNode(0, 0, n, 0);
+
+  // --- accumulate centre of mass + bbox extent, children → parents ------------
+  const nodeCx = sc.nodeCx, nodeCy = sc.nodeCy, nodeCz = sc.nodeCz, nodeExt = sc.nodeExt;
+  const mnX = sc.nodeMinX, mnY = sc.nodeMinY, mnZ = sc.nodeMinZ;
+  const mxX = sc.nodeMaxX, mxY = sc.nodeMaxY, mxZ = sc.nodeMaxZ;
+  for (let i = 0; i < nodeCount; i++) {
+    nodeCx[i] = 0; nodeCy[i] = 0; nodeCz[i] = 0;
+    mnX[i] = Infinity; mnY[i] = Infinity; mnZ[i] = Infinity;
+    mxX[i] = -Infinity; mxY[i] = -Infinity; mxZ[i] = -Infinity;
+  }
+  // Reverse order: a child always has a HIGHER index than its parent (DFS emits
+  // the parent first), so walking down accumulates leaves before their ancestors.
+  for (let ni = nodeCount - 1; ni >= 0; ni--) {
+    if (nodeNext[ni] === ni + 1) {          // leaf → sum its own points
+      for (let i = nodeStart[ni]!; i < nodeEnd[ni]!; i++) {
+        const ax = sortedX[i]!, ay = sortedY[i]!, az = sortedZ[i]!;
+        nodeCx[ni]! += ax; nodeCy[ni]! += ay; nodeCz[ni]! += az;
+        if (ax < mnX[ni]!) mnX[ni] = ax; if (ax > mxX[ni]!) mxX[ni] = ax;
+        if (ay < mnY[ni]!) mnY[ni] = ay; if (ay > mxY[ni]!) mxY[ni] = ay;
+        if (az < mnZ[ni]!) mnZ[ni] = az; if (az > mxZ[ni]!) mxZ[ni] = az;
+      }
+    }
+    const p = nodeParent[ni]!;
+    if (p === ni) continue;                  // the root is its own parent
+    nodeCx[p]! += nodeCx[ni]!; nodeCy[p]! += nodeCy[ni]!; nodeCz[p]! += nodeCz[ni]!;
+    if (mnX[ni]! < mnX[p]!) mnX[p] = mnX[ni]!; if (mxX[ni]! > mxX[p]!) mxX[p] = mxX[ni]!;
+    if (mnY[ni]! < mnY[p]!) mnY[p] = mnY[ni]!; if (mxY[ni]! > mxY[p]!) mxY[p] = mxY[ni]!;
+    if (mnZ[ni]! < mnZ[p]!) mnZ[p] = mnZ[ni]!; if (mxZ[ni]! > mxZ[p]!) mxZ[p] = mxZ[ni]!;
+  }
+  for (let ni = 0; ni < nodeCount; ni++) {
+    const mass = nodeEnd[ni]! - nodeStart[ni]!;
+    nodeCx[ni]! /= mass; nodeCy[ni]! /= mass; nodeCz[ni]! /= mass;
+    let e = mxX[ni]! - mnX[ni]!;
+    const ey = mxY[ni]! - mnY[ni]!, ez = mxZ[ni]! - mnZ[ni]!;
+    if (ey > e) e = ey; if (ez > e) e = ez;
+    nodeExt[ni] = e;
+  }
+
+  sc.pointCount = n; sc.nodeCount = nodeCount;
+  // `order`/`tmp` may have been swapped an odd number of times — put the scratch
+  // references back so the next call reuses both buffers.
+  sc.order = order; sc.tmp = tmp;
+  return sc;
+}
+/** Per-LEVEL octant histograms (8 per level), hoisted so the recursive build
+ *  allocates nothing. Indexed `level * 8 + octant` — see the note in `buildNode`
+ *  about why a single shared histogram would be wrong. */
+const OCT_COUNTS = new Int32Array(8 * (OCTREE_MAX_LEVEL + 2));
 
 export function buildSpatialHash(
   store: AgentStore, binSize: number, W: number, H: number, D: number,
