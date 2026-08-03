@@ -72,7 +72,7 @@ Status values: `pending` → `in progress` → `DONE (date, SHAs)` / `BLOCKED (r
 | C5 | P10 reproducibility contract + Auto integration | DONE (2026-08-02, 59afc6b) |
 | C6 | P5 schema hygiene + update-mode vocabulary + loud-fallback completion | DONE (2026-08-03, 1bc1465) |
 | C7 | P6 archetype-first New Model + P7 determinism (seeded scatter) | DONE (2026-08-03, 02ad2ec) |
-| C8 | P9 presentational-geometry taint check + pipeline label | pending |
+| C8 | P9 presentational-geometry taint check + pipeline label | DONE (2026-08-03, fd7ec90) |
 | C9 | Capability STEP 4/6 — Static motion integrator + SoA field gating | pending |
 | C10 | P11a deterministic Barnes-Hut global charge (all targets) | pending |
 | C11 | P11b adaptive spatial index (benchmark-gated investigation) | pending |
@@ -1357,7 +1357,203 @@ Verification: tsc/build; compile-identity 100% (zero emit impact); harness green
 verdicts matching the recorded hand-audit; in-browser: label present on a presentational
 model, absent on a tainted one.
 
-*Completion Report: — to be appended by the phase session —*
+### Completion Report — C8 (2026-08-03)
+
+**Status: DONE.** Feature commit: **`fd7ec90`** *feat(clarity): presentational-geometry taint
+check + pipeline label (C8)* on `GRA` (this report rides the follow-up docs commit, as C1/C2 did).
+Not pushed, no version bump, no attribution lines. Plan + illustrated mockup:
+[PLAN_CLARITY_C8.md](PLAN_CLARITY_C8.md) / `.html`.
+
+#### What shipped
+
+1. **`src/modeler/vpl/compiler/geometryTaint.ts`** (new, pure) —
+   `analyzeGeometryTaint(model) → { applicable, presentational, witness?, witnesses[] }`.
+   `applicable` is false for a grid-only model (no layout physics ⇒ the question is meaningless)
+   and an inapplicable model is never `presentational`. The module header carries the full
+   source / sink / exemption tables; the design points:
+   - **The criterion is DATAFLOW TAINT**, evaluated as a **fixpoint over (value taint ⇄ flow-gate
+     taint)** — necessary because a local variable written under a geometry-dependent branch is
+     tainted even when the value itself is a constant.
+   - **Port-level granularity**, not node-level: `forEachBond.currentLength` is a distance while
+     `partnerId` out of the same node is topology; `behaviourStep.myX/Y/Z` are geometry while
+     `myBondDegree` is not.
+   - **THE CONSERVATIVE DEFAULT IS AN INVERSION**: the module allowlists the geometry-only sinks
+     and pure control flow; **any other flow node taints**. A future state-writing node taints from
+     the day it is added unless someone deliberately allowlists it. Same for an unexpandable macro.
+   - **Local variables are CONDUITS, not sinks** (per-agent per-step scratch) — this is exactly
+     what keeps Boids presentational: geometry → 7 accumulators → Apply Force.
+   - **Engine-geometric config** comes from the engine's own resolvers — `usesEngineSprings ∧
+     autoBond ∧ resolveMaxBonds > 0` (the same expression the pipeline panel uses) and
+     `dividePartitionFromConfig(...).mode === 'tension'` on a **reachable** Divide Agent.
+   - **Flattening** via `expandMacros` + `collapseReroutes` — the two structural transforms every
+     compiler front-end runs first — so macro internals and reroute relays are analysed for real
+     rather than treated as opaque. All **five** agent roots are walked.
+   - **Witnesses are readable and classified** (`dataflow` | `condition` | `location` |
+     `engine-config`); the first step names the PORT that made it geometry.
+2. **`PipelinePhase.presentation`** — `describeGenerationPipeline` sets it on
+   `PRESENTATION_PHASE_IDS` (force reset, charge, soft collision, springs, integrate, growth,
+   positional projection). The **spatial hash is deliberately NOT a mover** — it is a query
+   structure the RULE also reads.
+3. **UI** — `PhaseRow` renders a green `presentation` chip (tooltip = the explainer) plus the
+   italic *"presentation only — does not affect your rule"*; the pipeline legend gains an entry;
+   `GeometryTaintNote` in the C1 Compatibility readout renders green **"Layout is presentation"**
+   or grey **"Layout is part of your rule"** + the first witness. `PRESENTATION_ONLY_LABEL` /
+   `PRESENTATION_ONLY_EXPLAINER` / `GEOMETRY_PROMOTED_EXPLAINER` are exported so the UI, Help and
+   the harness share one string.
+4. **`scripts/test-geometry-taint.mjs`** — 210 checks (below).
+5. **Docs sweep** — a CLAUDE.md section, a Help section *"Is the layout part of your rule, or just
+   how it looks?"*, a README bullet.
+
+#### THE HAND-AUDIT (performed BEFORE the analyzer was written; it is what the harness encodes)
+
+Method: a throwaway dumper over `migrateForHarness(model)` printed every shipped agent model's
+node-type census, its full labelled edge list, its non-empty node configs, and the resolved
+`autoBond` / `resolveMaxBonds` / `dividePartitionTableForModel`. Each model was then read by hand
+against the criterion. 14 agent models; the other 15 shipped models are grid-only ⇒ inapplicable.
+
+| Model | Verdict | Reason found by hand |
+|---|---|---|
+| Ant Necrophoresis | **tainted** | `Read Cells Under "corpse"` → expression → Value Switch → Compare → Logic gates the pick/drop that writes `carrying`; and `Affect Cells Under` deposits at the position |
+| Boids — Flocking | **presentation** | `Get Nearby Agents` → For Each → `Get Agent Offset` / `Get Velocity` → 7 local variables → **`Apply Force` only** (no attribute write anywhere) |
+| Boids — Hemifield Vision | **presentation** | `Get Agents In View` + `Sense Hemifield` ×2 → local variables → `Apply Force` ×2 |
+| Chemotaxis — Aggregation | **tainted** | `Secrete To Field "chemical"` (deposit at the position); its `Field Gradient → Apply Force` half is clean |
+| **Cubic GRA** | **tainted** | K4 bootstrap: `Get Nearby Agents` → `For Each.element` → **`Form Bond.targetAgent`**, gated on `myBondDegree == 0` |
+| Game of Life on Agents | **tainted** | `Get Nearby Agents` → `Get Agents Attribute "alive"` → `Aggregate(sum)` → Compare/Logic → `Set Attribute "alive"` |
+| Graph Metrics — Growth Sweep | **tainted** | `divideAgent` partition = `tension` (the rule itself reads only bond degree — topology) |
+| Life on Bonds | **tainted** | **auto-bond alone** — the rule graph is entirely clean (census over BONDED, `total > 0` gate), but the engine builds the Moore ring by distance |
+| Morphogenesis — 3D Tissue | **tainted** | auto-bond + tension partition + (`myRadius`, `Neighbour Density`) → conditional → `Divide Agent` |
+| Morphogenesis — Differential Tissue | **tainted** | same three reasons |
+| Morphogenesis — Growing Tissue | **tainted** | auto-bond + tension partition + `myRadius` → Compare → `Divide Agent` |
+| Particle Life | **presentation** | `Get Nearby Agents` → offsets + a species `Table Lookup` → **`Apply Force` / `Set Velocity` only** |
+| Particle Life 3D | **presentation** | same shape, 3D |
+| **SDCA — Couplers and Decouplers** | **tainted** | the COUPLERS half: `Get Nearby Agents(couplingRadius)` → `For Each.element` → **`Form Bond.targetAgent`** |
+
+**The analyzer reproduced all 14 verdicts on its first run**, and the witness it prints for each
+tainted model is the same path the audit found.
+
+#### ⚠ THE FINDING — Cubic GRA and SDCA are TAINTED, against the runbook's expectation
+
+§C8 expected both to be presentational and named three things to verify. **All three check out**:
+their `neighbourCensus` really is `source: 'bonded'`, neither has a `tension` partition (neither
+has a Divide Agent at all), and `autoBond` is `false` on both. **But none of those three covers a
+proximity-seeded Form Bond**, which both models have — and which is *geometry → topology* by the
+runbook's own stated criterion (*"a Form Bond whose target came from getNearbyAgents = geometry →
+topology ⇒ tainted"*). The runbook is internally inconsistent for these two models; per its own
+instruction the audit wins.
+
+**And the verdict is substantively right, not a technicality.** Cubic GRA's K4 bootstrap fires on
+generation 1 while the four seeds are still settling; if the layout ticked on its own cadence, the
+positions at bootstrap time would differ and the K4 could form differently (or incompletely).
+SDCA's coupling *is* the Ilachinski–Halpern model — proximity decides which pairs may couple, which
+is precisely why "where things sit" is load-bearing there. Granting either the P9 freedoms would
+have been wrong.
+
+Net effect: **4 of 14 shipped agent models are presentational**, so the feature is neither vacuous
+nor universally true — which is the useful outcome.
+
+#### Verification evidence (real numbers / observations)
+
+**Gates** — `npx tsc -p tsconfig.app.json --noEmit` clean; `npm run build` clean;
+`check-compile-identity --compare` → **"BYTE-IDENTITY OK — 29 models, all surfaces unchanged"**
+(re-run after the docs sweep); `test-geometry-taint` **210 passed, 0 failed · 6 controls caught,
+0 missed**; `test-generation-pipeline` **3401 passed, 0 failed · 6 caught, 0 missed`;
+`test-engine-resolve` **719 passed, 0 failed`; `parity-agent-wasm` **JS↔WASM BIT-PARITY ✓**;
+`check-agent-wasm-gate` GATE✓ COMPILE✓ INST✓; `verify-agent-render` ✓;
+`test-agent-capabilities` **202 passed**; `test-archetypes` **201 passed**;
+`check-no-unseeded-random` OK; `gen-capability-docs --check` up to date.
+
+**The read-only guarantee is structural**: `git show --stat fd7ec90` touches only `CLAUDE.md`,
+`README.md`, `HelpView.tsx`, `PropertiesPanelContent.tsx`, `generationPipeline.ts`,
+`test-generation-pipeline.mjs` + the four new files. **No engine, compiler or worker file was
+opened for writing.**
+
+**THE HARNESS CAN GENUINELY FAIL — proven by SOURCE MUTATION** (`--mutate`), five patches to
+`geometryTaint.ts`, each applied and reverted:
+
+| mutation | result |
+|---|---|
+| make every unknown flow node clean (drop the attribute-write sink) | **CAUGHT** — 18 failures |
+| treat Apply Force as a tainting sink (break the closed-loop rule) | **CAUGHT** — 19 failures |
+| drop the `createAgent.{x,y,z,radius}` exemption (break the Cubic-GRA-midpoint rule) | **CAUGHT** — 1 failure |
+| ignore auto-bond | **CAUGHT** — 7 failures |
+| make branch conditions never taint | **CAUGHT** — 6 failures |
+
+**5 caught, 0 missed**; the suite is green again on the shipped source.
+
+**In-browser** (dev server on :51730, real library models, real DOM + computed styles). The Browser
+pane reports `document.hidden === true` — the documented occluded-pane trap — so screenshots are
+unavailable and the evidence is DOM text and computed style, which is the right evidence for a
+text/DOM feature. **0 console errors** across the whole session (fresh `console.error` hook after a
+reload, per the documented persistent-buffer caveat), over 6 model loads.
+
+- **Particle Life** (presentational) — **7 `presentation` chips** on exactly
+  `[2 Reset force accumulators, 7 Long-range charge, 8 Soft-sphere collision, 9 Bond springs,
+  10 Integrate & commit positions, 11 Growth ramp, 12 Positional collision projection]`, **7**
+  occurrences of *"presentation only — does not affect your rule"*, the legend entry
+  *"presentation = decides only where things sit"*, and the chip tooltip carrying the explainer.
+  The C1 note reads **"Layout is presentation — No rule in this model reads geometry into a
+  decision…"** with computed `border-color: rgba(92,191,122,.35)` / `background:
+  rgba(92,191,122,.08)` (the green, informative styling).
+- **Boids — Flocking** (presentational) — 7 chips, 7 labels, the same green note.
+- **Morphogenesis — Growing Tissue** (tainted) — **0 chips, 0 labels, no legend entry**, and the
+  note reads **"Layout is part of your rule — …"** with computed `border-color: rgb(42,46,54)` /
+  `background: rgba(255,255,255,.03)` (grey, NOT amber — the promotion framing), followed by
+  *"e.g. Auto-bond forms and breaks bonds BY DISTANCE — the topology your rule reads is built from
+  where agents sit."*
+- **Cubic GRA** and **SDCA** (tainted) — 0 chips, 0 labels, and both carry the witness
+  *"Get Nearby Agents · agents → For Each In Array → Form Bond · targetAgent"* — the in-app
+  confirmation of the finding above.
+- **Help** — the new *"Is the layout part of your rule, or just how it looks?"* section renders
+  under *What runs each generation*.
+
+#### Deviations / decisions (documented, no scope cuts)
+
+1. **RADIUS is a gated addition to the runbook's source list.** `getRadius` / `getAgentRadius` /
+   `behaviourStep.myRadius|myArea` / `divisionEvent.myArea` count as geometry **iff
+   `usesEngineGrowth(cfg) && growthRate > 0`** — because the growth ramp writes the radius INSIDE
+   the force-iteration loop (C2 puts `agent.growth` in the `forces` group), i.e. inside the very
+   block P9 decouples; with growth off the radius only changes when the graph writes it, so
+   reading it is an ordinary state read. Resolver-driven, so it cannot drift. **It changes no
+   shipped verdict** (the three tissues that read `myRadius` are tainted twice over anyway) — it
+   is there so the criterion is right, not to move an answer.
+2. **Macros are ANALYSED, not blanket-tainted.** §C8 says "unknown constructs/macros → taint";
+   since `expandMacros` is available and is what the compilers themselves run, flattening is
+   strictly more precise AND still conservative. A macro that *cannot* be expanded (recursion
+   depth, missing definition) does taint, with a witness saying so.
+3. **The verdict is a three-state answer, not a boolean**: `applicable` distinguishes "the layout
+   is presentation" from "this model has no layout". A grid-only model reporting
+   `presentational: true` would have been vacuously true and misleading in the UI.
+4. **Field deposits taint UNCONDITIONALLY**, on their LOCATION rather than their value — their own
+   witness class (`location`). A constant-valued `Secrete To Field` still makes which cells change
+   depend on where the agent is, and the cell rule then reads those cells.
+5. **The cell graph is deliberately not walked**, with the reason stated in the module header: a
+   lattice cell's position is fixed, so no cell node is a geometry source, and the one coupling
+   (the field bridge) is caught at the deposit on the agent side before it becomes cell state.
+6. **The in-browser presentational model is Particle Life / Boids, not Cubic GRA or SDCA** — the
+   runbook's suggested subjects turned out tainted (the finding above), so the label had to be
+   demonstrated on a model that actually earns it. Both directions are shown on five models.
+7. **A full interaction mockup was judged unwarranted** and the judgment is recorded in
+   §5 of the plan doc: the change is two text additions (a chip + a note) inside two blocks that
+   already shipped with their own illustrated mockups, with no new panel, control, interaction or
+   layout. `PLAN_CLARITY_C8.html` therefore shows the before/after rows and the criterion rather
+   than a panel walkthrough.
+8. **C2's harness assertion was updated, not deleted**: *"C2 never sets `presentation`"* became
+   *"only the force/motion/layout phases may carry `presentation`"* plus *"cell / colour / init
+   phases are never `presentation`"* — so the field stays pinned to the mover set.
+
+#### Follow-ups for later phases (not defects)
+
+- **The freedoms themselves are unbuilt.** C8 only detects. Ticking the layout on its own cadence
+  or keeping it GPU-side with no readback is later work, and it now has a machine-checkable
+  precondition plus a per-model answer to gate on.
+- **The P9 explicit-consent door** (a position-reading model opting into the freedoms knowingly)
+  is deliberately absent per the runbook's autonomy note. When it lands it should read off
+  `witnesses` so the consent dialog can name exactly what the user is waiving.
+- **A "near-miss" readout** — "this model would be presentational but for auto-bond" — would be a
+  cheap, high-value addition for the tissue class, since `witnesses` already carries every reason
+  separately.
+- **C9's Static integrator interacts with this**: a `motion: 'static'` model has no layout physics
+  to speak of, so `PRESENTATION_PHASE_IDS` may want to fold into whatever C9 does to those rows.
 
 ---
 
@@ -1457,6 +1653,15 @@ Protocol:
 ## Orchestrator log
 
 - 2026-08-02: runbook created. Launching C1.
+- 2026-08-03: **C8 DONE** (`fd7ec90`). Compile-identity byte-identical on all 29 models (zero emit
+  impact by construction — no engine/compiler/worker file touched); the new taint harness is 210
+  checks with 6 in-harness controls and 5 SOURCE-MUTATION controls all caught; every standing gate
+  green. Verified in-browser on 5 models, both label states, 0 console errors. **Finding for later
+  phases: `Cubic GRA` and `SDCA` are TAINTED, not presentational** — both seed bonds from a
+  proximity query (geometry → topology), which the runbook's three named checks did not cover; the
+  hand-audit table is in the C8 report. 4 of 14 shipped agent models are presentational (Boids ×2,
+  Particle Life ×2). C9 may proceed; note its Static-integrator work interacts with
+  `PRESENTATION_PHASE_IDS`.
 - 2026-08-02: **C1 DONE** (`4ddca6f`). Compile-identity byte-identical on all 29 models; parity /
   force / render harnesses green; verified in-browser on Amphiphile, Growing Tissue, Cubic GRA,
   Game of Life + a provoked demotion (amber chip) and its negative control. C2 (Generation
