@@ -70,7 +70,7 @@ Status values: `pending` → `in progress` → `DONE (date, SHAs)` / `BLOCKED (r
 | C3 | P4 fast-path diagnostics popover + P8 generated capability docs | DONE (2026-08-02, 2620d37) |
 | C4 | P1 engine enum + Auto + JS demotion + Show Code = JS reference | DONE (2026-08-02, b0f43b9) |
 | C5 | P10 reproducibility contract + Auto integration | DONE (2026-08-02, 59afc6b) |
-| C6 | P5 schema hygiene + update-mode vocabulary + loud-fallback completion | pending |
+| C6 | P5 schema hygiene + update-mode vocabulary + loud-fallback completion | DONE (2026-08-03, 1bc1465) |
 | C7 | P6 archetype-first New Model + P7 determinism (seeded scatter) | pending |
 | C8 | P9 presentational-geometry taint check + pipeline label | pending |
 | C9 | Capability STEP 4/6 — Static motion integrator + SoA field gating | pending |
@@ -981,7 +981,157 @@ logic untouched — only event emission added); in-browser: force each fallback 
 one toast + Events row + amber chip; a hand-stripped legacy-flag file fires the "resave to
 bake" event; after resave it is gone.
 
-*Completion Report: — to be appended by the phase session —*
+### Completion Report — C6 (2026-08-03)
+
+**Status: DONE.** Feature commit: **`1bc1465`** *feat(clarity): schema hygiene +
+update-mode vocabulary + loud fallbacks (C6)* on `GRA` (this report rides the follow-up
+docs commit, as C1–C5 did). Not pushed, no version bump, no attribution lines. Plan +
+illustrated mockup: [PLAN_CLARITY_C6.md](PLAN_CLARITY_C6.md) / `.html`.
+
+**Mockup judgment (§1.4 asks for it either way):** two deliverables are copy-only and
+would be exempt; the third changes an observable behaviour on a shared surface (a
+fallback stops painting the red banner and becomes an amber toast), so a small
+before/after mockup was produced.
+
+#### What shipped
+
+1. **The capability profile is authoritative — each half VERIFIED, not assumed.**
+   - **LOAD always seeds it.** `LOAD_MODEL` calls `migrateAgentCapabilities`
+     unconditionally, and the earlier guard `if (topologyMode.agents && !centerBased)
+     centerBased = defaultCenterBasedConfig()` guarantees the object it seeds into
+     exists. The **viewer** goes through the same reducer (`ViewerApp` → `loadModel`),
+     so an exported presentation is covered.
+   - **SAVE always writes it.** `serializeModel` → `stringifyCompact` is a whole-object
+     walker with no field picking; `withResolvedEngine` spreads `centerBased`.
+   - **No `src/` path writes `customForcesOnly`** — it is read exactly ONCE, in
+     `usesBondingPhysics`. Only the generator scripts still emit it into the fixtures
+     they author; left alone (shipped configs are deliberate, and the field is inert
+     once a profile is present). Now gate-asserted.
+   - **`legacyPhysicsFlagsInEffect(cfg)`** ([centerBased.ts](../src/model/centerBased.ts))
+     is the observation seam: the **exact union of the two fallback conditions, derived
+     from the same field tests** — `!agentCapabilities` (what `usesEngineSprings` /
+     `usesEngineGrowth` branch on, per OBJECT) OR `collision` not one of the three
+     literals (what `collisionMode` branches on, per FIELD). `usesBondingPhysics` is
+     deliberately EXCLUDED: it has no capability control, so it is not a fallback but
+     the only mechanism. The worker calls it once per worker
+     (`checkLegacyPhysicsFlags`, latched, after `centerBasedConfig` is assigned in
+     `init` AND `recompile`) and emits the C3 event. **Zero resolver logic touched.**
+2. **A real hole this closed (a finding, not a planned deliverable).** A **PARTIAL**
+   profile (`{ motion: 'force' }`) is truthy, so the old migration early-returned and
+   let it through — and `collisionMode`, which falls back per FIELD, then silently
+   resolved that model's collision from the legacy flags. Worse, `serializeModel` wrote
+   the partial profile straight back, so the event's own advice ("re-save to bake the
+   profile") would **not** have fixed it. `migrateAgentCapabilities` now COMPLETES an
+   existing profile from the SAME inference the absent case uses, explicit keys winning
+   — **behaviour-preserving by construction** (for a complete profile every inferred key
+   is overwritten; the only key the shipped library omits is the net-new `charge`, which
+   inference sets to `'off'`, already what `usesCharge`'s strict `=== 'on'` resolves).
+   Confirmed by measurement first: across the 8 shipped models with an explicit profile,
+   the closure's only delta was `charge:'off'`.
+3. **Update-mode vocabulary** — both radios carry Principle 1's words; reject texts
+   realigned in `detectWebGPUModelIncompatibilities` (the sentence C1's readout shows)
+   and the WebGPU grid engine hint; the agent sync hint dropped its stale *"required by
+   the forthcoming WebGPU agent target"*.
+4. **Loud fallbacks, UI side** — `postFallback` posts `{ …, fallback: true, gen }`; the
+   main thread splits the `error` branch into a de-duplicated one-time amber toast +
+   `runtimeFallbackCount` (which keeps the ⚙ chip amber, with the count in the tooltip)
+   versus the unchanged red banner. `pendingStep.current = false` runs in BOTH branches.
+   Both reset on `modelVersion`. The shared-GPU event sink is promoted to `postFallback`.
+
+#### Deviations / decisions (documented, no scope cuts)
+
+1. **The agent radio's Asynchronous subtitle is NOT the runbook's verbatim text.**
+   *"(sequential — CPU engines only)"* is exactly right for the grid (WebGPU rejects
+   async at the model level) but **FALSE for agents**: `Morphogenesis - Growing Tissue`
+   ships async agents ON WebGPU. What the parallel GPU cannot honour is a cross-agent
+   OVERWRITE (`isAgentGraphWebGPUSupported` rejects precisely that), so the subtitle
+   reads *"(sequential — a cross-agent write needs a CPU engine)"* — same vocabulary,
+   true consequence.
+2. **The per-node texts in `detectWebGPUIncompatibilities` were left unchanged.** They
+   are CAPTURED by `check-compile-identity` as `webgpu.error` (Amphiphile,
+   Chromatography, gas_particles carry them in the baseline), so rewording them would
+   fail the byte-identity gate for a cosmetic gain — and they already carry the doctrine
+   (*"WebGPU runs cells in parallel; …"*). **General rule now recorded in CLAUDE.md: a
+   compiler-visible error STRING is a captured surface — treat it like emitted code.**
+3. **`webgpuGridFailed`'s "shader not produced" arm stays log-only**, honouring C3's
+   deliberate choice (the compiler already reports that reason through the
+   compile-error path; a second toast would double-report).
+4. **The legacy-flags event is a TRIPWIRE, not a routine notice.** Because deliverable 2
+   closed the partial-profile hole, no app path can now reach the engine profileless —
+   which is the P5 goal. The seam remains as the guard that fires if a future path
+   regresses, and is verified by stripping the profile at the worker boundary (below).
+5. **`usesBondingPhysics` is NOT on the removal list** — it is still the only control
+   for adhesion `μ_A`. The three divergent fallback predicates in `centerBased.ts` were
+   deliberately NOT unified (that would change resolution for partial profiles and the
+   byte-identity gate forbids it); the divergence is recorded in CLAUDE.md so the
+   removal phase unifies them on purpose.
+
+#### Verification evidence (real numbers / observations)
+
+**Gates** — `npx tsc -p tsconfig.app.json --noEmit` clean; `npm run build` clean;
+`check-compile-identity --compare` → **"BYTE-IDENTITY OK — 29 models, all surfaces
+unchanged"** (re-run after EVERY step, including the migration change);
+`parity-agent-wasm` → **ALL AGENT SAMPLES: JS↔WASM BIT-PARITY ✓**; `parity-agent-force`
+→ **20 checks ✓**; `check-agent-wasm-gate` → **GATE✓ COMPILE✓ INST✓**;
+`verify-agent-render` ✓; `verify-render-uniform-layouts` ✓; `test-engine-resolve` →
+**719 passed, 6 negative controls caught**; `test-generation-pipeline` → **3400 passed,
+6 caught**; `test-agent-abi` → 28 ✓; `audit-agent-layout` ✓; `gen-capability-docs
+--check` green.
+
+**`test-agent-capabilities` grew 76 → 202 checks** with the new §8 authority section, and
+**both of its negative controls are proven by SOURCE MUTATION**: making
+`legacyPhysicsFlagsInEffect` always-false → **15 failures** naming every NEG check;
+adding `customForcesOnly:` to `defaultCenterBasedConfig` → the write guard fails naming
+the exact file and line. Both reverted; 202/202 after.
+
+**In-browser** (dev server, real library models, real worker messages). The Browser pane
+reports `document.hidden === true` (the documented occluded-pane trap), so evidence is
+DOM + worker protocol, which is the right evidence for a text/DOM + protocol feature.
+**0 console errors** across the whole session (fresh `console.error` hook).
+- **Both radio subtitles render** (Ant Necrophoresis, a grid+agents model, so both are
+  present): grid → `Synchronous (parallel — runs on all engines)` /
+  `Asynchronous (sequential — CPU engines only)`; agents →
+  `Synchronous (parallel — runs on all engines)` /
+  `Asynchronous (sequential — a cross-agent write needs a CPU engine)`. The WebGPU
+  engine hint reads *"Runs parallel rules only, so it needs Synchronous update mode"*.
+- **A REAL fallback, end to end** (Amphiphile with the WebGPU engine — an async model, a
+  user-reachable configuration): the worker posted `fallback: true`, an **amber toast
+  appeared** (captured by a MutationObserver: `⚠ [webgpu] compile failed: Asynchronous
+  is the SEQUENTIAL update mode…` — the realigned doctrine text), the chip turned amber
+  (`⚙ JS⚠`, `rgb(224,160,80)`) with *"⚠ 1 runtime fallback this session"* in its tooltip,
+  and the popover's **Events** row carried it.
+- **De-duplication + distinctness** (six further messages, verbatim from real
+  `postFallback` sites, delivered through the live worker's message channel): sampling
+  the live toast text — *before* any → `null`; after message C → the C toast; 4 s later →
+  `null` (auto-dismissed); **re-posting C → `null` (no re-toast)**; a distinct message D
+  → the D toast. The chip counter moved `1 → 3 → 5 → 7` for distinct messages and **did
+  not move for either repeat**.
+- **The legacy-flags seam fires** — the profile stripped from the OUTGOING worker payload
+  (exactly the seam's boundary; everything downstream is the real worker + real
+  handler): the worker posted *"[agents] legacy physics flags in effect — … Re-save the
+  model to bake the profile."*, the chip went amber (`⚙ agents WebGPU⚠`), and the Events
+  row shows it. **And it is gone once the profile is present**: reloading the same model
+  normally gives **0 fallbacks**, a neutral grey chip (`rgba(128,144,160,0.7)`) and no
+  fallback line in the tooltip — the non-regression that matters, since `Morphogenesis -
+  Growing Tissue` is one of the 6 shipped agent models with NO `agentCapabilities` on
+  disk.
+- **A compile-time / model-level clamp shows amber but never toasts** (a C5 contract
+  violation: Exact + the WebGPU agent engine): `⚙ agents WebGPU⚠` amber with the
+  contract line in the tooltip, **0 fallback posts, no toast**, no "runtime fallback"
+  line — the runbook's "no toast for compile-time clamps" rule, observed.
+
+#### Follow-ups for later phases (not defects)
+
+- **The removal schedule is now written down in CLAUDE.md.** The `?? legacy` arms are
+  deletable one release after the shipped generators emit `agentCapabilities` (6 of 14
+  agent models still rely on load-time inference). Doing so should also unify the three
+  divergent fallback predicates in `centerBased.ts`, deliberately.
+- **An Adhesion capability** would let `useBondingPhysics` join the removal list; today
+  it is the only control for `μ_A`.
+- The worker's `legacyPhysicsNoticeSent` latch is per-WORKER (C3's Events log has the
+  same scope), so a full reinit can re-post the notice; the main-thread per-message
+  de-dupe absorbs it, so the user still sees exactly one toast. Observed: 2 worker posts
+  → chip count 1.
 
 ---
 
@@ -1200,3 +1350,27 @@ Protocol:
   demonstrably reproduces. C6 may proceed — it inherits a `contract`-carrying `resolveEngines` (its `reason` /
   `contractViolation` strings are already what the UI renders) and C3's `runtimeEvents` log for the loud-fallback
   UI; its update-mode vocabulary work should reuse the doctrine wording the contract copy now shares.
+
+- **2026-08-03 — C6 DONE** (`1bc1465`). P5 + the P4 completion. `check-compile-identity` byte-identical (29
+  models) at every step; tsc / build / parity-agent-wasm / parity-agent-force / check-agent-wasm-gate /
+  verify-agent-render / verify-render-uniform-layouts / test-engine-resolve / test-generation-pipeline /
+  test-agent-abi / audit-agent-layout / gen-capability-docs --check all green. `test-agent-capabilities` grew
+  76 → 202 checks with an authority section (load/save round-trip, fixed point, the write guard), both negative
+  controls proven by SOURCE MUTATION. Verified in-browser: both radio subtitles; a REAL fallback (async model +
+  WebGPU) producing an amber toast + amber chip + Events row; de-dupe (a repeat re-toasts NOT, the chip counter
+  does not move); the legacy-flags seam firing when a profileless config reaches the worker AND being silent
+  once the profile is present; and a compile-time clamp going amber WITHOUT a toast. **Three things C7+ should
+  know.** (1) **A compiler-visible error STRING is a captured surface** — `check-compile-identity` stores
+  `webgpu.error` / `js.error`, so the per-node reject texts in `detectWebGPUIncompatibilities` could NOT be
+  reworded; only the non-captured model-level sentence was. Treat error text like emitted code. (2) The phase
+  found and closed a real hole beyond its brief: a **PARTIAL** `agentCapabilities` object is truthy, so the
+  migration used to let it through and `collisionMode` (which falls back per FIELD) silently resolved from the
+  legacy flags — and saving wrote the partial profile back, so the event's own "re-save to bake it" advice was
+  false. `migrateAgentCapabilities` now COMPLETES an existing profile from the same inference the absent case
+  uses (explicit keys win), which is behaviour-preserving by construction and measured byte-identical.
+  Consequence: **no app path can now reach the engine profileless**, so the legacy event is a tripwire rather
+  than a routine notice. (3) The runbook's verbatim *"Asynchronous (sequential — CPU engines only)"* is FALSE
+  for the AGENT radio (Growing Tissue ships async agents on WebGPU); it reads *"a cross-agent write needs a CPU
+  engine"* there. C7 may proceed — the toast/chip channel (`fallback: true`) and `legacyPhysicsFlagsInEffect`
+  are in place, and the legacy-read REMOVAL SCHEDULE is now written down in CLAUDE.md (note `useBondingPhysics`
+  is NOT on it: it is still the only control for adhesion μ_A).
