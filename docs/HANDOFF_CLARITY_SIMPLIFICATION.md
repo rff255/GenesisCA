@@ -75,7 +75,10 @@ Status values: `pending` → `in progress` → `DONE (date, SHAs)` / `BLOCKED (r
 | C8 | P9 presentational-geometry taint check + pipeline label | DONE (2026-08-03, fd7ec90) |
 | C9 | Capability STEP 4/6 — Static motion integrator + SoA field gating | DONE (2026-08-03, b1279da) |
 | C10 | P11a deterministic Barnes-Hut global charge (all targets) | DONE (2026-08-03, 5b35016) |
-| C11 | P11b adaptive spatial index (benchmark-gated investigation) | pending |
+| C11 | P11b adaptive spatial index (benchmark-gated investigation) | DONE (2026-08-03, 93ac131) — **MEASURED, NOT SHIPPED** (the gate failed, by design) |
+
+**All 11 phases complete.** The initiative is closed; see the C11 Completion Report
+for the final full-suite sweep and the follow-ups left for the user.
 
 ---
 
@@ -2063,13 +2066,235 @@ Protocol:
    selection displayed in C3 diagnostics, full harness sweep.
 4. Docs sweep either way.
 
-*Completion Report: — to be appended by the phase session —*
+### Completion Report — C11 (2026-08-03) — THE FINAL PHASE
+
+**Status: DONE — and the deliverable is a MEASURED "NO".** Feature commit
+**`93ac131`** *feat(clarity): measure the adaptive spatial index; surface the
+all-pairs bail (C11)* on `GRA` (this report rides the follow-up docs commit, as
+C1–C10 did). Not pushed, no version bump, no attribution lines. The user's
+pre-existing `public/models/Particle Life.gcaproj` modification was left untouched
+and uncommitted. Full record: [INVESTIGATION_ADAPTIVE_INDEX.md](INVESTIGATION_ADAPTIVE_INDEX.md).
+
+**No adaptive index was shipped. That is the protocol working, not a shortfall** —
+the decision rule was fixed before any number was taken and the numbers failed it.
+
+#### THE BENCHMARK GATE — and why it failed
+
+[scripts/bench-spatial-index.mjs](../scripts/bench-spatial-index.mjs) (new) runs three
+contenders per fixture, each doing one generation's work (index build + one query per
+agent): **hash-shared** (the SHIPPED path — one hash at the engine's real bin edge,
+queried with the stencil transcribed from `GetNearbyAgentsNode`'s emit, including its
+all-pairs fallback), **hash-tuned** (a second hash at the QUERY radius — the cheap
+alternative a tree must beat to be worth building), and **tree** (**C10's
+`buildAgentOctree` reused unmodified**, per the orchestrator's note — it is already
+order-canonical, 3D-native, and its per-node bboxes are exactly the pruning structure
+a range query wants — plus an exact bbox-pruned range query with the standard
+fully-inside shortcut and minimum-image query replication for the torus).
+
+**Exactness is asserted, not assumed**: every fixture compares all three contenders'
+neighbour sets per agent, sorted; the script exits non-zero on any difference.
+**Result: ALL FIXTURES IDENTICAL, on both full runs.**
+
+**The structural finding that decided it.** GenesisCA's hash is not a fixed-bin hash:
+the worker sizes its bin edge at `max(interactionRange·2·maxR, neighbourQueryRadius,
+chargeBinEdgeOf)`, so the 3×3(×3) stencil always spans ≥ 3r and the over-scan is a
+**CONSTANT ≈2.9× (2D) / ≈6.4× (3D), independent of r/spacing**. The mechanism by which
+trees normally overtake a hash is simply absent.
+
+| regime | tree vs shipped hash | occupied by a shipped model? |
+|---|---|---|
+| uniform, r/spacing ≤ 5 | 0.31×–1.19× (hash wins/ties) | **YES — all of them** (max r/spacing = **3.27**) |
+| uniform, r/spacing 10 / 15 (2D) | 1.70–1.95× / 2.01–3.11× | No |
+| uniform 3D, r/spacing 5 / 10 | 2.04–2.07× / 3.09–3.21× | No |
+| torus cluster, world ×16 / ×64 | 1.96–2.04× / **10.23–11.16×** | No (needs > ~256 bins/axis for the 65 536-bin cap to coarsen; widest shipped is 30) |
+| shipped-shaped (GRA / SDCA / Boids / PL) | **0.46×–1.18×**, or inside the noise floor | YES |
+
+Two honesty controls are built into the harness and both mattered. **A noise floor**:
+rows where `sharedEdge === queryR` construct two *identical* hashes, so their ratio
+must be 1.00 — observed spread **0.72×–1.57×**, worst at small absolute times, which
+disqualifies the `SDCA-like 1.51×/1.57×` row (total wall clock 0.35–0.62 ms). **Work
+counts** (candidates examined — implementation-independent): the tree's realised
+speedup is consistently *far below* its candidate advantage (9.6× candidates → 2.0×
+time), i.e. traversal bookkeeping eats most of the algorithmic edge — and on the 2D
+shipped shapes a **per-radius HASH examines fewer candidates than the tree does**
+(GRA-like 3.7 vs 14.4; SDCA-like 4.8 vs 10.8). **The one shipped-shaped fixture that
+appeared to clear the bar — PL-like at 2.07× — measured 1.14× on a second full run.**
+
+⇒ **every regime where the tree clearly wins is either unoccupied by the library or
+won more cheaply by a hash built at the right radius.** Not shipped; retry
+preconditions in the investigation doc §9.
+
+#### THE FINDING THAT MATTERED — a shipped model silently running all-pairs
+
+`buildSpatialHash` returns `null` when the world is under **3 bins wide on any axis**
+(correct — a wrapping 3-wide stencil would visit a bin twice and double-count), and
+every emitted query then takes its all-pairs fallback. **The shipped `Particle Life
+3D` sits exactly there**: a 160×110×70 torus with `neighbourQueryRadius: 24` gives
+`floor(70/24) = 2` bins in z ⇒ **6×4×2 ⇒ all-pairs, every generation, on every target,
+with nothing reporting it**. Measured **43.6 ms vs 5.5 ms** of queries at its shipped
+N = 1200. `computeResidentHashParams` carries the identical rule, so the GPU-resident
+batch bails too.
+
+So C11's one shipped change is a **diagnostics row**, not an index: `getDiagnostics`
+gained a `spatialIndex` block recorded **at the build sites** (`noteAgentHash` for both
+`buildSpatialHash` calls **and an equivalent record inside the resident batch**, which
+builds its hash GPU-side and never reaches that function — a first version reported
+`applicable: false` for precisely the model the row exists for), and the C3 popover
+shows **Agent neighbour index**. **Deliberately not a toast**: an all-pairs index is
+harmless on a small model, so the passive P4 surface is the honest placement.
+
+#### A STANDING GATE WAS RED ON THE BASE COMMIT (found, diagnosed, repaired)
+
+`scripts/verify-graph-rewrite.mjs` — the 12-tier GRA harness — **crashed on `b1710d9`**
+(`TypeError: Cannot create property '0' on string ''`), reproduced with C11's changes
+stashed. Cause: **C9 made the agent ABI profile-gated**, and the gated fields
+(`_agentTargetRadius` / `_agentAge` / `_agentDensity`) are **MID-LIST**, so the
+harness's two ungated stores/shapes produced MORE args than the compiled param list and
+**every later argument shifted** — the viewer string `''` landed where `_rngState`
+belongs. The worker (`agentAbiShapeOfStore`) and `parity-agent-wasm` both pass
+`s.fieldGates`; this harness is the **FOURTH mirror** and never got it. Repaired in
+both rigs (`resolveAgentFieldGates(model)` / `layoutExtras.fieldGates`).
+
+**The crash was masking 7 further failures** — O7 JS↔WASM bit-identity, three O11
+oscillator checks, the O3 negative control, and both nearby-census checks — all of
+which are the same shift seen through the JS behaviour reading shifted arrays. After
+the repair: **405 passed, 0 failed**. **The ENGINE was never affected** (the worker and
+`parity-agent-wasm` pass gates correctly, and both were green throughout); only the
+harness mirror was stale. *Generalise: `audit-agent-layout` checks the four sites it
+knows about — a harness that hand-builds an ABI shape is a mirror too, and a mid-list
+gated field shifts silently rather than dropping a trailing arg.*
+
+#### Verification evidence
+
+**FINAL FULL-SUITE SWEEP — every gate re-run after the last edit, all green:**
+
+| gate | result |
+|---|---|
+| `tsc -p tsconfig.app.json --noEmit` | clean |
+| `npm run build` | clean |
+| `check-compile-identity --compare` | **BYTE-IDENTITY OK — 29 models, all surfaces unchanged** (baseline captured at session start, before any edit) |
+| `parity-agent-wasm` | ALL AGENT SAMPLES: JS↔WASM BIT-PARITY ✓ |
+| `parity-agent-force` | FORCE-PASS PARITY ✓ (34 checks) |
+| `check-agent-wasm-gate` | GATE✓ COMPILE✓ INST✓ (all samples) |
+| `audit-agent-layout` | AGENT ABI FIELD-ORDER AUDIT ✓ |
+| `test-agent-abi` | 28 passed, 0 failed |
+| `verify-agent-render` | AGENT RENDER-LAYER INVARIANTS ✓ |
+| `verify-render-uniform-layouts` | GPU UNIFORM LAYOUTS ✓ |
+| `test-c9-gates` | 413 passed, 0 failed |
+| `test-engine-resolve` | 719 passed, 0 failed · 6 controls caught |
+| `test-generation-pipeline` | 3401 passed, 0 failed · 6 controls caught |
+| `test-geometry-taint` | 210 passed, 0 failed · 6 controls caught |
+| `test-agent-capabilities` | 202 passed, 0 failed |
+| `test-archetypes` | 201 checks passed |
+| `check-no-unseeded-random` | OK |
+| `gen-capability-docs --check` | up to date (53 agent nodes, 5 grid rejects, 10 limits) |
+| **`verify-graph-rewrite`** | **405 passed, 0 failed** (was CRASHING before this phase's repair) |
+| `probe-graph-layout` | LAYOUT PROBE ✓ |
+
+**In-browser (dev server, real models, real worker, real WebGPU; 0 console errors).**
+The Browser pane reports not-displayed, so evidence is worker protocol + DOM text —
+the right evidence for a diagnostics row.
+- **Particle Life 3D** (shipped file, real file-input load, WebGPU agent target,
+  **GPU-resident batch engaged**) reports `spatialIndex: { built: false, binEdge:
+  26.67, reason: "the world (160x110x70) is under 3 bins wide on some axis at the
+  resolved bin edge (bins 6x4x2)" }`, and the popover renders *"Agent neighbour index
+  — off — every neighbour query is running all-pairs — … The bin edge is the LARGEST
+  of interaction range x 2 x radius, Neighbour Query Radius and the charge cutoff;
+  lowering whichever dominates lets the hash build."*
+- **The advice is ACTIONABLE, measured**: the same model reloaded with
+  `neighbourQueryRadius` 24 → 16 (what its graph actually queries with) reports
+  `built: true, 240 bins of 16.0` (10×6×4). **The shipped model was NOT retuned** —
+  shipped-configs-are-deliberate; this was a probe and the change is the user's call.
+- **Positive control — Boids — Flocking**: `spatial hash, 64 bins of 15.0`, matching
+  its 8×8 row in the stats table.
+- The popover's other rows (residency engaged 1 batch, sparse n/a, field bridge n/a,
+  direct render agents → canvas) are unchanged.
+
+#### Deviations / decisions (documented, no scope cuts)
+
+1. **A dedicated script rather than extending `bench-agent-engine.mjs`** (the runbook
+   allows either). `bench-agent-engine` is the per-PHASE profiler for a whole
+   generation; this needs a different unit (one index, one query shape) and its own
+   exactness assertion. Both remain useful and neither perturbs the other.
+2. **A third contender was added — `hash-tuned`.** The runbook specifies hash vs tree.
+   Measuring a *per-radius hash* alongside is what turned "the tree wins 5× on PL3D"
+   into "a one-line hash change wins 7.9× there", which is the difference between
+   shipping a backend and not. A two-contender benchmark would have produced a
+   defensible but wrong conclusion.
+3. **One diagnostics row WAS shipped**, though the phase's headline outcome is "no
+   engine change". It is not an index and changes no simulation behaviour
+   (`git diff --stat` = `sim.worker.ts` + `SimulatorView.tsx` + docs/help;
+   compile-identity byte-identical). Leaving a measured, silent, shipped fast-path
+   loss unreported would have contradicted the entire initiative.
+4. **The GRA harness repair was taken on** rather than merely reported. It is
+   verification tooling, not `src/`, and leaving the milestone's own 405-check gate
+   dead through the final phase — while *reporting* a green suite — was not defensible.
+5. **`Particle Life 3D` was not retuned**, and neither was any other model.
+
+#### Follow-ups left for the user (none is a defect in this phase)
+
+- **`Particle Life 3D`'s `neighbourQueryRadius`.** Lowering 24 → 16 restores a real
+  spatial hash (measured). Purely the user's call; the diagnostics row now says so.
+- **A per-radius ("tuned") hash as a real feature** — the cheapest form of "adaptive
+  index", and the only contender that beat the shipped path on shipped shapes. Not
+  shipped because its wins are sub-5 ms gathers whose benefit has not been shown to
+  reach a whole generation, and it costs a second O(N) build per step. §9.4 of the
+  investigation is the precondition list.
+- **`computeAgentMaxHashBins` under-reserves for BOUNDED worlds** (carried over from
+  C10, still open; engine-safe via the worker's fits-check).
+- **A GPU tree BUILD** (C10's follow-up) would lift global charge's residency blocker.
+
+---
+
+## Closing note — the initiative is complete
+
+Eleven phases, C1 → C11, all `DONE`. Wave 1 (C1–C3) made the engine's decisions
+inspectable without changing one, Wave 2 (C4–C6) consolidated the schema behind them,
+Wave 3 (C7–C9) finished explicitness and paid off the deferred-XL capability work, and
+Wave 4 (C10–C11) took the geometry track: one measured YES that shipped a new force
+law, and one measured NO that shipped a benchmark and a diagnostics row instead. Both
+outcomes came from the same rule applied before the numbers existed.
 
 ---
 
 ## Orchestrator log
 
 - 2026-08-02: runbook created. Launching C1.
+- 2026-08-03: **C11 DONE** (`93ac131`) — **and with it the ENTIRE INITIATIVE. All 11
+  phases complete; no phase is left open.** P11b was benchmark-gated and **THE GATE
+  FAILED, which is the protocol working**: no adaptive index shipped. The new
+  `scripts/bench-spatial-index.mjs` pits the shipped hash against a per-radius hash and
+  an exact bbox-pruned range query over **C10's octree, reused unmodified**, asserting
+  IDENTICAL neighbour sets everywhere (they are, on both full runs). **The structural
+  reason**: GenesisCA's hash sizes its bin edge to the query radius, so its over-scan is
+  a CONSTANT ~2.9×/6.4× and the mechanism by which trees overtake a fixed-bin hash is
+  absent. The hash wins or ties to r/spacing ≈ 5 and loses past ≈ 10 — **no shipped
+  model exceeds 3.27**; the tree's ≥1.5× wins live only in unoccupied regimes (large
+  radius; a torus wide enough for the 65 536-bin cap to coarsen, where it reaches 10×).
+  The single shipped-shaped fixture that looked like a win (2.07×) **fell to 1.14× on a
+  second run**, and work counts show the realised speedup is far below the
+  candidate-count advantage while a per-radius HASH examines fewer candidates than the
+  tree on the 2D shipped shapes. **THE FINDING THAT MATTERED**: the shipped
+  `Particle Life 3D` (160×110×70 torus, `neighbourQueryRadius` 24 ⇒ `floor(70/24) = 2`
+  bins in z) **cannot build a hash and runs ALL-PAIRS on every target, silently** —
+  43.6 ms vs 5.5 ms of queries at N=1200. The bail is CORRECT and the fix is not a tree
+  (a hash at the query radius wins more), so C11 shipped a **diagnostics row** instead:
+  a `spatialIndex` block recorded at the build sites **including the GPU-resident batch,
+  which builds its hash GPU-side and never reaches `buildSpatialHash`** — the trap a
+  first version fell into, reporting "n/a" for exactly the model the row exists for.
+  Verified in-browser that the advice is actionable (`nqr` 24 → 16 ⇒ 240 bins of 16.0);
+  **the shipped model was NOT retuned**. **ALSO: a standing gate was RED on the base
+  commit** — `verify-graph-rewrite` was CRASHING (reproduced with C11 stashed) because
+  **C9's profile-gated ABI fields are MID-LIST** and this harness is a FOURTH ABI mirror
+  that never got `gates`, so its args out-numbered the compiled params and everything
+  shifted; the crash **masked 7 further failures**. Repaired in both rigs → **405
+  passed, 0 failed**; the engine was never affected. Compile-identity **byte-identical
+  on all 29 models**, and all 20 standing gates green in the final sweep. **Two lessons
+  worth carrying**: (1) a benchmark needs the CHEAP alternative as a third contender —
+  two contenders here would have justified a whole backend that a one-line hash change
+  beats; (2) `audit-agent-layout` guards the four sites it knows about, but **any
+  harness that hand-builds an ABI shape is a mirror too**, and a mid-list gated field
+  shifts silently rather than dropping a trailing argument.
 - 2026-08-03: **C10 DONE** (`5b35016`). P11a — "Charge range: Cutoff | Global (Barnes-Hut θ)" as an
   explicit force-law option, deterministic on the CPU pair, delivered on all three agent targets.
   **THE BENCHMARK GATE PASSED AND INVERTED L1's PREDICTION**: on the grown GRA blob at equal
