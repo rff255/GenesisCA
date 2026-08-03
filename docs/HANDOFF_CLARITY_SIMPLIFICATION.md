@@ -71,7 +71,7 @@ Status values: `pending` → `in progress` → `DONE (date, SHAs)` / `BLOCKED (r
 | C4 | P1 engine enum + Auto + JS demotion + Show Code = JS reference | DONE (2026-08-02, b0f43b9) |
 | C5 | P10 reproducibility contract + Auto integration | DONE (2026-08-02, 59afc6b) |
 | C6 | P5 schema hygiene + update-mode vocabulary + loud-fallback completion | DONE (2026-08-03, 1bc1465) |
-| C7 | P6 archetype-first New Model + P7 determinism (seeded scatter) | pending |
+| C7 | P6 archetype-first New Model + P7 determinism (seeded scatter) | DONE (2026-08-03, 02ad2ec) |
 | C8 | P9 presentational-geometry taint check + pipeline label | pending |
 | C9 | Capability STEP 4/6 — Static motion integrator + SoA field gating | pending |
 | C10 | P11a deterministic Barnes-Hut global charge (all targets) | pending |
@@ -1160,7 +1160,165 @@ explicitly — confirm unaffected); in-browser: each archetype creates the expec
 (assert via the C1/C2 panels); a scatter model: two Resets at a fixed seed → IDENTICAL
 initial positions (worker readback), `setRngSeed` pins them; grep gate green.
 
-*Completion Report: — to be appended by the phase session —*
+### Completion Report — C7 (2026-08-03)
+
+**Status: DONE.** Commit **`02ad2ec`** *feat(clarity): archetype-first New Model + seeded
+engine draws (C7)* on `GRA` (feature + docs in one commit; this report rides the follow-up
+docs commit, as C1–C6 did). Not pushed, no version bump, no attribution lines. Plan +
+illustrated mockup: [PLAN_CLARITY_C7.md](PLAN_CLARITY_C7.md) / `.html`.
+
+#### What shipped
+
+1. **P6 — the New Model chooser** ([archetypes.ts](../src/model/archetypes.ts) +
+   [NewModelDialog.tsx](../src/components/NewModelDialog.tsx)). Eight cards; each seeds
+   topology, dimension, the agent capability profile, `engine: 'auto'` and the contract.
+   **No new schema** — `NEW_MODEL` gained an optional `seed: CAModel` (absent ⇒
+   `EMPTY_MODEL`) and `newModel(seed?)` carries it. `buildArchetypeModel('empty')` returns
+   `EMPTY_MODEL` **itself** (object identity), so today's New is one click away and is what
+   the gate asserts.
+2. **P7 — `nextRandom()`** replaced `Math.random()` at the three sim-semantic worker sites:
+   `initAgents`' scatter placement, `initGrid`'s cyclic order shuffle, and `runStep`'s
+   per-step `random-order` / `random-independent` order. Plus the `rngCellView` lockstep
+   below.
+3. **`scripts/check-no-unseeded-random.mjs`** — allowlist-with-a-reason grep gate, which
+   ALSO fails on a **stale** allowlist entry (a file with no draw left silently protects a
+   future one).
+4. **`scripts/test-archetypes.mjs`** (201 checks) — the P6 drift guard.
+5. **Docs sweep**: CLAUDE.md (new C7 section + Project-Structure tree + the state-management
+   bullet + **two now-false claims corrected**, see below), HelpView (a "Starting a model —
+   the archetype chooser" section under The Modeler, a "What a seed actually pins" section
+   under Bond-Graph Agents, and the stale Overseer scatter caveat rewritten), README (the
+   New-model bullet, the async update-schemes bullet, the agent config-panel bullet).
+
+#### THE FINDING — there are TWO RNG cells, and the naive P7 fix was a silent no-op on WASM
+
+The JS-compiled step reads/writes the module-level `rngState`; the **WASM**-compiled step
+loads/stores its own `_rs` in `wasmMemory` at `layout.rngStateOffset`. They were synced only
+at `initGrid` and by `setRngSeed`. A `nextRandom()` that touched only `rngState` therefore
+advanced a stream **nothing else consumed** on a WASM-target model — the shuffle looked
+seeded and was not.
+
+Measured directly with a temporary worker probe (added, used, removed): after
+`setRngSeed(4242)` + one step, `js = 3748443150` while `wasm` was **still `4242`**. The fix:
+`nextRandom()` READS whichever cell the ACTIVE engine advances (`rngCellView && wasmStepFn` ⇒
+the WASM cell, else `rngState`) and WRITES **both** — the discipline `setRngSeed` already
+used. `initGrid` also now publishes the seed to the WASM cell **after** the order block, so
+the cyclic shuffle's draws are not left stale for the Init Event that runs next.
+
+**Verification lesson worth keeping**: the async order shuffle is **in place over the running
+permutation**, so two shuffles taken at different points in a session have different INPUTS —
+comparing them proves nothing about the seed. The decisive test is predicting the result.
+
+#### Deviations / decisions (documented, no scope cuts)
+
+1. **The GRA card seeds a CUSTOM profile, not `AGENT_PRESETS.socialGraph`** (the runbook
+   suggested "Social Graph or the closest bonds-data profile"). Audited: both shipped GRA
+   flagships (`Cubic GRA`, `SDCA`) run `motion:force · body · collision:soft · bonds:physics
+   · charge:ON · sensing` (and `division:false` — their split is Create Agent + Rewire).
+   `socialGraph` is `static / no body / bonds:data / charge:off`, i.e. **no layout at all**:
+   a graph seeded from it renders as a pile and the entire L1 charge force is off. No shipped
+   GRA model uses it. `GRA_PROFILE` deep-equals no named preset, so the picker reads
+   **Custom** — exactly what those two flagships read today. Adding a 7th preset was
+   considered and rejected (a shared table feeding the Properties picker +
+   `test-agent-capabilities`; re-labelling two shipped models is outside C7's scope).
+2. **The async order shuffle is IN SCOPE and was seeded**, not just scatter. §C7 says "ANY
+   other `Math.random()` in engine seeding/sim-semantic paths", and P7's own claim ("Reset
+   reproduces exactly on the CPU engines") is FALSE for every asynchronous model while the
+   visit order is unseeded. Behaviour change documented: async trajectories differ once; they
+   were never reproducible before.
+3. **The session seed stays `Date.now()`-derived and Reset does not re-seed.** A constant
+   session seed would make every user's first run of every stochastic model identical — a far
+   larger change than P7 asks for. And Reset re-rolling matches the *documented* behaviour of
+   the cell Init Event's `getRandom`; agent scatter now MATCHES the cell side instead of
+   contradicting it. Pinning is `setRngSeed` then Reset — the Overseer's own protocol.
+4. **`useBondingPhysics` is DERIVED** from the seeded profile
+   (`collision !== 'off' || bonds === 'physics' || growth`) rather than typed in beside it: it
+   is the panel's progressive-disclosure switch while the ENGINE is profile-driven, and
+   seeding them independently is how they drift. Gate-asserted per card.
+5. **A C1 defect this feature made prominent, fixed here** (scope expansion, deliberate): an
+   agent graph with **no behaviour root yet** — the state EVERY freshly created agent model is
+   in — made both gates early-out, and C1's fall-through then invented a
+   capacity/fundamentals blocker ("too many simultaneous Get-Nearby-Agents producers"). Both
+   the Compatibility readout and the Agent Engine hints now name the real cause. Mirrors
+   `isAgentGraphWasmSupported`'s own early-out (incl. the `periodicStep` arm).
+6. **Card names are seeded** ("Untitled Flocking Model", …). It is the standard
+   new-from-template behaviour and it is the only visible effect the *Classic CA (2D)* card
+   would otherwise have (its config is identical to Empty — the empty model IS a 2D grid CA).
+   `Empty` keeps `EMPTY_MODEL`'s "Untitled Model" exactly.
+7. **Two now-false claims in CLAUDE.md were corrected, not left standing**: the GRA-sample
+   note that "`seedPattern: 'scatter'` places seeds with `Math.random()` … deliberately", and
+   the SDCA note that scatter "sits outside the replayable stream". Both now state the C7
+   fix while preserving the reasoning that still matters (a degree-reading rule is
+   geometry-coupled, so `compact` remains the simplest thing to sweep over). Help's Overseer
+   caveat likewise.
+
+#### Verification evidence (real numbers / observations)
+
+**Gates** — `npx tsc -p tsconfig.app.json --noEmit` clean; `npm run build` clean;
+`check-compile-identity --compare` → **"BYTE-IDENTITY OK — 29 models, all surfaces
+unchanged"** (re-run after the P6 change, after the P7 change, and after the `nextRandom`
+lockstep fix); `test-archetypes` **201 ✓**; `check-no-unseeded-random` **OK (32 allowlisted
+draws in 13 files)**; `parity-agent-wasm` → **ALL AGENT SAMPLES: JS↔WASM BIT-PARITY ✓**;
+`parity-agent-force` **20 ✓**; `check-agent-wasm-gate` **GATE✓ COMPILE✓ INST✓**;
+`verify-agent-render` ✓; `test-engine-resolve` **719 passed, 6 negative controls caught**;
+`test-generation-pipeline` **3400 passed, 6 caught**; `test-agent-capabilities` **202 ✓**;
+`gen-capability-docs --check` green.
+
+**Negative controls, by SOURCE MUTATION** (applied, observed, reverted): dropping the tissue
+card's `maxBonds` → `test-archetypes` fails with `tissue: bond store allocated
+(resolveMaxBonds 0)` — the exact silent failure the gate exists for. Putting a
+`Math.random()` back in the worker's order shuffle → the grep gate fails naming
+`sim.worker.ts:4326`. Adding a bogus allowlist entry → the stale-entry check fails naming it.
+
+**In-browser** (dev server, real worker; the pane reports `document.hidden === true` — the
+documented occluded-pane trap — so evidence is DOM + worker protocol + worker-buffer
+readback, which is the right evidence for a dialog + a seeding change). **0 console errors**
+on a fresh load through a complete New → Bonded tissue flow (fresh `console.error` hook).
+
+- **All 8 archetypes created through the real File ▾ → New → card → Create flow**, each
+  asserted through the C1 Compatibility readout / C2 Generation Pipeline / the Properties
+  fields: `Classic CA` 100×100 2D exact **Auto → WebGPU** · `3D CA` **50×50×50**, 3D radio
+  checked, exact, Auto → WebGPU · `Particle system` 120×120, seed **300**, maxAgents 1000,
+  maxBonds **0**, **Statistical**, **Scatter**, preset description = *Particle System*,
+  Forces rows shown · `Flocking` 120×120, seed 260, **Statistical**, Scatter, preset =
+  *Boids / Flocking*, Forces rows **hidden** · `Bonded tissue` 100×100, seed 12, maxBonds
+  **8**, **auto-bond checked**, Compact, preset = *Morphogenesis / Cells* · `GRA` 200×200,
+  seed 4, maxBonds 8, **Charge strength/cutoff rows present**, auto-bond off, preset =
+  **Custom**, and the simulator readout showed **`● 4 agents`** (the seed reached the
+  engine) · `CA on agents` 60×60, seed 256, preset = *CA on Agents*, `useBondingPhysics`
+  checkbox **false** and no Forces rows (the derived rule, checked directly) · `Empty` →
+  **"Untitled Model"**, no agent section, 100×100, exact.
+- **The unsaved-changes flow**: with a dirty model, New raises *"Discard unsaved changes? …
+  Create new"* verbatim; **Cancel keeps the model**; **accepting it opens the CHOOSER** (not
+  a create), and **Esc-cancelling the chooser after accepting still keeps the model** — the
+  documented semantic.
+- **P7 scatter determinism, agent SoA read back from the worker** (Flocking archetype, 260
+  agents): `setRngSeed(12345)` + Reset, three times interleaved with a different seed →
+  **0 of 260 agents differ** each time (first agent `92.12488980777562, 47.84003277402371`,
+  reproduced across a full page reload and the `nextRandom` fix); seed `999` → **all 260
+  differ**. Element-wise at seed 777: `sameSeedDiffs 0 / 260`, and a Reset **without**
+  re-seeding → `260 / 260` differ (the documented "Reset advances the stream").
+- **P7 async order determinism — the decisive test** (gas_particles, async `random-order`,
+  WASM target): all **10 000** entries of the worker's post-step order array are reproduced
+  EXACTLY by an independent in-page re-implementation of xorshift32(13/17/5) + Fisher–Yates
+  seeded with 4242 over the pre-step permutation — `firstDiff: -1`. The predicted RNG state
+  after the shuffle, **3748443150**, equals what the worker reported. Before the lockstep
+  fix, the same probe showed the WASM cell frozen at the seed while the JS cell advanced.
+- **Help renders both new sections** and the stale scatter caveat is gone
+  (`staleScatter: false`).
+
+#### Follow-ups for later phases (not defects)
+
+- **`src/simulator/engine/SimEngine.ts` is dead code** — imported by nothing (verified), and
+  the only reason it needs an allowlist entry in the new gate. A deletion candidate for a
+  future hygiene pass (it is named in CLAUDE.md's Project Structure tree).
+- **A "Simulation seed" control** (P7's optional half) is NOT shipped: seeding is still
+  reachable only through the Overseer's seed policy or a raw `setRngSeed`. Surfacing one
+  control that unifies `setRngSeed` + table rolls + spawn would complete the reproducibility
+  story in one place.
+- **`Classic CA (2D)` and `Empty` differ only by name.** If a future phase wants starter
+  CONTENT (a Moore neighbourhood + an `alive` attribute + a linked colour view), the card is
+  the natural home; C7 deliberately seeded configuration only, per the runbook.
 
 ---
 
@@ -1374,3 +1532,27 @@ Protocol:
   engine"* there. C7 may proceed — the toast/chip channel (`fallback: true`) and `legacyPhysicsFlagsInEffect`
   are in place, and the legacy-read REMOVAL SCHEDULE is now written down in CLAUDE.md (note `useBondingPhysics`
   is NOT on it: it is still the only control for adhesion μ_A).
+- **2026-08-03 — C7 DONE** (`02ad2ec`). P6 archetype chooser + P7 seeded engine draws.
+  `check-compile-identity` 29 models byte-identical; two new gates
+  (`test-archetypes.mjs` 201 checks, `check-no-unseeded-random.mjs`), both proven failable
+  by SOURCE MUTATION; every existing harness green. In-browser: all 8 archetypes created
+  through the real File ▾ → New flow and asserted via the C1/C2 panels + Properties (incl.
+  `● 4 agents` reaching the engine on the GRA card and `Empty` reproducing today's New); the
+  unsaved-changes confirm still guards New, and cancelling the chooser AFTER accepting it
+  keeps the model; seeded scatter reproduces 0/260 diffs at a fixed seed and 260/260 at a
+  different one; the async order array is reproduced EXACTLY (10 000/10 000) by an
+  independent re-implementation seeded the same way. **Four things C8+ should know.**
+  (1) **There are TWO RNG cells** — `rngState` (JS step) and the WASM memory cell (WASM
+  step), synced only at `initGrid` and `setRngSeed`. The naive P7 fix advanced only the
+  former and was a SILENT NO-OP on WASM (measured: `js 3748443150` vs `wasm 4242` after one
+  step). `nextRandom()` now reads whichever cell the ACTIVE engine advances and writes both;
+  any future engine-side draw must go through it. (2) The async order shuffle is **in place
+  over the running permutation**, so comparing two shuffles taken at different points in a
+  session compares different INPUTS — verify by PREDICTING the result, not by repeating the
+  seed mid-session. (3) The GRA archetype seeds a **Custom** profile, not `socialGraph`: the
+  audit found both shipped GRA flagships run force/body/soft/physics-bonds/charge-on and
+  `socialGraph` has no layout at all. If C8's taint check wants a "typical GRA config",
+  `GRA_PROFILE` in `archetypes.ts` is it. (4) C7 also fixed a C1 reason this feature made
+  prominent: an agent graph with **no behaviour root yet** (every freshly created agent
+  model) used to report an invented capacity/fundamentals blocker; it now names the real
+  cause. C8 may proceed.
