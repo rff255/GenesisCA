@@ -74,7 +74,7 @@ Status values: `pending` → `in progress` → `DONE (date, SHAs)` / `BLOCKED (r
 | C7 | P6 archetype-first New Model + P7 determinism (seeded scatter) | DONE (2026-08-03, 02ad2ec) |
 | C8 | P9 presentational-geometry taint check + pipeline label | DONE (2026-08-03, fd7ec90) |
 | C9 | Capability STEP 4/6 — Static motion integrator + SoA field gating | DONE (2026-08-03, b1279da) |
-| C10 | P11a deterministic Barnes-Hut global charge (all targets) | pending |
+| C10 | P11a deterministic Barnes-Hut global charge (all targets) | DONE (2026-08-03, 5b35016) |
 | C11 | P11b adaptive spatial index (benchmark-gated investigation) | pending |
 
 ---
@@ -1816,7 +1816,231 @@ Scope:
    option in relevant model descriptions only if unambiguous.
 6. Harnesses + docs sweep per §1.
 
-*Completion Report: — to be appended by the phase session —*
+### Completion Report — C10 (2026-08-03)
+
+**Status: DONE.** Feature commit **`5b35016`** *feat(clarity): deterministic Barnes-Hut
+GLOBAL charge, all agent targets (C10)* on `GRA` (this report rides the follow-up docs
+commit, as C1–C9 did). Not pushed, no version bump, no attribution lines. The user's
+pre-existing `public/models/Particle Life.gcaproj` modification was left untouched and
+uncommitted. Impact map + plan (written FIRST, per the house rule):
+[PLAN_CLARITY_C10.md](PLAN_CLARITY_C10.md) / `.html`.
+
+#### THE BENCHMARK GATE — it passed, and it inverted L1's own prediction
+
+The decision rule was fixed in the plan **before** the numbers were taken. L1 had measured
+that layout quality "saturates by ~8× the bond rest length" and recorded in CLAUDE.md that
+*"no Barnes–Hut tree is needed"*. C10 re-measured that claim at scale rather than assuming
+either way — `probe-graph-layout.mjs` grows the GRA blob at N ≈ 2.5k / 5k / 20k in a world
+scaled to the population (`side = √(N·(rest·1.45)²)`), same seed, same split fraction, same
+tick budget, k = −3 for both, and the ONLY difference is the law:
+
+| N | bond/rest | nnb/bond (↑ better) | overlap % (↓ better) | ms/tick |
+|---|---|---|---|---|
+| 2 500 · cutoff 8× rest | 0.95 | 0.53 | 16.9 | 6.38 |
+| 2 500 · **global θ 0.9** | 1.36 | **0.83** | **4.2** | **3.98** |
+| 5 000 · cutoff 8× rest | 0.90 | 0.47 | 37.9 | 21.14 |
+| 5 000 · **global θ 0.9** | 1.35 | **0.82** | **4.9** | **13.87** |
+| 20 000 · cutoff 8× rest | 0.83 | 0.37 | 82.1 | 236.17 |
+| 20 000 · **global θ 0.9** | 1.34 | **0.81** | **4.4** | **163.05** |
+
+Verdicts: **nnb/bond +0.300 / +0.351 / +0.445**, **overlap −12.7 / −33.1 / −77.8 points**,
+**cost ×0.62 / ×0.66 / ×0.69**. (The quality metrics are deterministic and reproduced
+exactly across two full runs; the ms/tick ratios varied 0.61–0.73× run to run — quote the
+range, not a single figure.)
+
+**The SHAPE is the finding, not the deltas.** The cutoff law *degrades* as N grows
+(nnb/bond 0.53 → 0.37, overlap 17 % → 82 %) while global holds flat (0.83 → 0.81, ~4 %).
+That is the P11 claim made measurable: **a finite cutoff cannot open a graph that outgrows
+it, however it is tuned** — which is why this is a new capability rather than a speedup. It
+is also *cheaper*, because at an 8×-rest cutoff the hash bin edge IS the cutoff, so the 3×3
+stencil sweeps a 120×120 area in a dense world while the tree stays O(N log N).
+
+**Why this does not contradict L1**: L1's sweep ran at N = 1200 in a 4000-wide world (very
+sparse) with 8 relaxation ticks per split round. Both statements are true of their own
+regime, and CLAUDE.md now says so in both places. ⇒ **gate PASSED ⇒ the UI ships enabled.**
+
+#### What shipped
+
+1. **Schema** — `ChargeRange = 'cutoff' | 'global'`; `CenterBasedConfig.chargeRange?` +
+   `chargeTheta?`. Absent ⇒ `cutoff` ⇒ byte-identical, **no migration** (charge is net-new
+   since L1, so no shipped file can carry the field).
+2. **Resolvers** ([centerBased.ts](../src/model/centerBased.ts)) — `chargeRangeOf` /
+   `usesGlobalCharge` / `chargeThetaOf` (CLAMPED to [0.1, 1.5], never throwing: θ is part of
+   a declared law a `.gcaproj` records). `ChargeParams` gains `doChargeTree` + `chargeTheta2`
+   (precomputed, the `dtOverEta` discipline). **`doCharge` keeps its exact pre-C10 meaning —
+   "run the CUTOFF pair term" — and is FALSE under global**, which is what makes
+   double-counting structurally impossible and leaves every existing consumer unchanged.
+   **`chargeBinEdgeOf` returns 0 under global**: the stencil carries no charge, so widening
+   it would be pure cost (in 3D the candidate count grows with the CUBE of the edge).
+3. **Engine** — `buildAgentOctree` ([agentEngine.ts](../src/simulator/engine/agentEngine.ts)):
+   Morton codes over the bounding CUBE, an **order-canonical stable LSD radix sort** (3 ×
+   10-bit passes seeded from an id-ordered array ⇒ exactly `(morton, id)` with no comparator),
+   a deterministic DFS with per-LEVEL octant histograms, centre-of-mass + bbox-extent
+   accumulation, and skip links (`next[n] === n+1` IS the leaf test). Reuses per-store
+   scratch, so a steady-state generation allocates nothing.
+4. **CPU pair (JS + WASM), bit-parity mandatory** — the traversal runs in both verbatim JS
+   arms (2D + 3D) and in `emitForcePass` as a **compile-time variant** that emits the tree
+   **instead of** the pair term. Conditional arity gains a third value: **26 / 30 / 32**
+   params (charge off / cutoff / global; the global block is `treeNodeCount:i32,
+   chargeTheta2:f64`). The worker always passes 32; extras past a module's arity are ignored,
+   so the dangerous direction stays impossible.
+5. **WebGPU** — the CPU-built tree is uploaded per generation (`uploadAgentChargeTree`, the
+   `uploadAgentHash` precedent) into TWO new bindings (**7** f32 runs, **8** i32 runs)
+   declared only when the layout reserved nodes (Naga stripped-binding discipline). The
+   traversal is emitted by **ONE shared helper** used by BOTH the canonical and the B1 mirror
+   bodies — the rule `chargeTerm` already follows. `ForceControl` gains 3 fields;
+   **`FORCE_CONTROL_BYTES` 128 → 144**, covered by the uniform-layout registry. A failed or
+   oversized upload leaves BOTH `chargeGlobal` and `treeNodeCount` at 0 (warned once), so the
+   shader never walks a truncated tree.
+6. **Residency** — global charge is a blocker (`residencyModelBlockers` key `chargeGlobal`,
+   text *"the tree is rebuilt on the CPU and uploaded every generation"*), surfaced in C1's
+   readout and C3's diagnostics. **GPU tree BUILD is a recorded follow-up, not a hidden gap.**
+7. **C2 pipeline** — `agent.charge` reports `k = −10 · GLOBAL (Barnes–Hut θ = 0.9) — every
+   pair interacts, summed through a deterministic octree`, and the hash phase stops claiming
+   a charge-widened bin edge under global.
+8. **UI** — a **Charge range** select + (under Global) an **Accuracy θ** field, with the
+   cutoff field HIDDEN under Global rather than shown inert (the `hiddenPorts` doctrine).
+9. **Docs sweep** — CLAUDE.md (a new "Charge RANGE" section + an explicit ⚠️ correction on
+   L1's "no Barnes–Hut is needed" bullet, so the two regimes read together), HelpView (a
+   "Charge range" subsection with the benchmark and the determinism framing), README.
+
+#### THE SEAM DECISION (the runbook asked for it to be justified)
+
+**Engine-TS build + per-target traversal**, not an emitted build. The BUILD is where two
+implementations drift — a bbox reduction, a float→int quantization, a sort tie-break, a
+recursive split order — and it runs **once per generation**; the TRAVERSAL is the hot part
+and is pure arithmetic over shared bytes, which is exactly the shape the force pass already
+keeps bit-identical. So the single implementation sits where the risk is and the mirrored
+one where it is cheap. It is also literally the `buildSpatialHash` precedent (built in TS,
+copied into WASM memory, uploaded to the GPU). An emitted build would triple the surface
+that must agree on Morton quantization for zero measured benefit.
+
+#### TWO REAL BUGS THE HARNESS CAUGHT (neither was in the runbook)
+
+1. **f64 ASSOCIATION ORDER IS LOAD-BEARING.** JS evaluates `1 + a + b [+ c]` strictly
+   left-to-right; the first WASM emit folded it as `1 + (a + b + c)`. Same value in exact
+   arithmetic, one ULP apart in f64 — and the integrator amplifies it. It surfaced as **4
+   mismatches in *2D bounded* only**, while torus and 3D happened not to differ; the fix had
+   to canonicalise the worker, the WASM emit AND the harness's own mirror (which had picked
+   the other association). **Generalise: emitted arithmetic must mirror the JS ASSOCIATION,
+   not merely its value.**
+2. **A latent defect in `parity-agent-force.mjs` itself.** It called `buildSpatialHash`
+   WITHOUT the reserve, so in a BOUNDED world the bbox-anchored hash (`floor(ext/edge)+1`
+   bins per axis) could exceed the torus-derived `computeAgentMaxHashBins` reserve the module
+   was laid out with, and `copyHashIntoMemory` then wrote past `binStart` into the next
+   region. The ENGINE is safe (the worker's `fits`-check falls back to JS); the harness had
+   no such guard. Only the global combos exposed it, because they are the first combos whose
+   agents spread far enough. Fixed by passing the reserve (as `probe-graph-layout` already
+   did).
+
+#### Verification evidence (all re-run immediately before committing)
+
+**Gates** — `tsc -p tsconfig.app.json --noEmit` clean; `npm run build` clean;
+**`check-compile-identity --compare`: 29 models, ALL SURFACES UNCHANGED** (baseline captured
+from the untouched tree at session start — mtime-confirmed to predate every source edit);
+`parity-agent-force` **34 checks ✓**; `parity-agent-wasm` **ALL AGENT SAMPLES: JS↔WASM
+BIT-PARITY ✓**; `audit-agent-layout` **347 checks ✓**; `test-c9-gates` **413 ✓**;
+`verify-render-uniform-layouts` ✓ (the widened `ForceControl`); `verify-agent-render` ✓;
+`test-generation-pipeline` **3401 ✓ · 6 controls caught**; `test-geometry-taint` **210 ✓**;
+`test-engine-resolve` **719 ✓**; `test-agent-capabilities` **202 ✓**; `test-agent-abi`
+**28 ✓**; `check-agent-wasm-gate` GATE✓ COMPILE✓ INST✓; `check-no-unseeded-random` OK;
+`test-archetypes` **201 ✓**; `gen-capability-docs --check` up to date;
+`probe-graph-layout` **LAYOUT PROBE ✓** (all L1 gates + the 9 new C10 gates).
+
+**COMPILE-IDENTITY — ZERO moved surfaces, and the enumeration is why.** Every mechanism is
+usage-gated on `usesGlobalCharge`, which no shipped model sets:
+- `AgentLayoutExtras.chargeTreeNodes = 0` ⇒ the 10 WASM tree regions reserve **0 bytes** and
+  are appended AFTER every existing region ⇒ no baked offset moves ⇒ `agent.wasm.bytes`
+  unchanged.
+- `forcePassParamsFor(charge, /*global*/ false)` returns the pre-C10 list ⇒ the type section
+  and declared arity are unchanged; `P.chargeTreeNodes === -1` ⇒ **no traversal is emitted**
+  and no locals are allocated (an unconditional `em.allocLocal` would have moved every
+  module's bytes — the L1 `chargeOn` precedent).
+- `layout.chargeTreeNodes === 0` ⇒ the WGSL declares no bindings 7/8 and emits no traversal.
+  (The `ForceControl` struct did gain 3 members, but the force-pass shader is **not** a
+  captured surface — `check-compile-identity` captures `agent.webgpu.shader` (behaviour) and
+  `agent.webgpu.om`, verified by inspection of the script.)
+- `chargeParamsOf`'s four pre-existing fields keep their exact values for cutoff/off models.
+
+**JS↔WASM bit-parity — 13 new global combos, 0 mismatches over 25 steps each**: 2D torus
+collision 0/1, 2D bounded collision 0/1, 2D torus + bonding/adhesion, 3D torus collision 0/1,
+3D bounded collision 1, θ = 0.3 (2D torus) / θ = 1.4 (2D torus) / θ = 0.3 (3D bounded),
+global-only (no collision/bonding/density) in 2D and 3D. Plus the **32-param arity contract**
+(26 / 30 / 32, and passing all 32 to the 26-param export is accepted).
+
+**THE VALUE INVARIANT — because parity is a mirror test.** Parity would pass happily if BOTH
+targets summed zero, so the harness also compares the tree against a brute-force O(N²) exact
+all-pairs sum over 240 agents: **relative error 0.013 % at θ = 0.2 vs 3.76 % at θ = 1.4**
+(|f|max 9.6). That asserts three things at once — the force is real, it tracks the law it
+claims to run, and **θ genuinely controls accuracy**.
+
+**Harnesses proven failable by SOURCE MUTATION**: aliasing two octree runs in
+`computeAgentMemoryLayout` (`treeSortedYOffset = treeSortedXOffset`) makes
+`audit-agent-layout` report 2 failures; reverted, green again. (The association-order bug and
+the harness reserve bug above are two more instances of these gates catching real defects
+rather than confirming a prior belief.)
+
+**Real GPU (in-browser, occluded pane ⇒ protocol + buffer readbacks, not composited pixels)**
+— **all 12 force-shader variants compile with 0 errors** on a real device (2D / 3D /
+no-tree × mirror on-off × force-scatter on-off), with bindings 7/8 present iff the layout
+reserved nodes. A **real dispatch** (200 agents, 33 tree nodes, bounded world, momentum 0 and
+dtOverEta 1 so `vx` IS the force) matches the CPU f64 traversal to **max relative error
+2.6e-6, mean 2.1e-7** — pure f32 rounding — with **0 validation errors**.
+
+**In-browser, real worker, real model** — a `Cubic GRA` variant with `chargeRange: 'global'`
+loaded through the real file input (WASM agent target): **6 → 26 agents over 120
+generations**, every tracked agent moving (mean displacement 15.0, max 27.4, 0 NaN), and the
+automaton's own invariant intact: **min degree = max degree = 3, E = 39 = 3N/2**. The
+Properties **Charge range** select shows both options and flips **Cutoff ⇄ Global
+bidirectionally** — under Global the *Charge cutoff* field disappears and *Accuracy θ*
+appears, and the C2 pipeline detail swaps between `k = −10 · cutoff 20 (…)` and `k = −10 ·
+GLOBAL (Barnes–Hut θ = 0.9) — every pair interacts, summed through a deterministic octree`.
+The Help tab renders the new "Charge range" subsection with its table. **0 console errors**
+across the whole session.
+
+*(One measurement lesson worth carrying: `getState`'s agent payload ships raw `ArrayBuffer`s,
+not typed arrays. A first probe compared `a.x[i]` directly, got `NaN`, and reported "0 agents
+moved" — an artifact of the probe, not the engine. Decode before measuring.)*
+
+#### Deviations / decisions (documented, no scope cuts)
+
+1. **`doCharge` was NOT generalised into a tri-state.** Keeping it as exactly "run the cutoff
+   pair term" leaves every existing consumer (JS, WASM, both GPU dispatch sites, the C2
+   pipeline) unchanged and makes double-counting impossible by construction.
+2. **`ForceControl` grew to 144 bytes rather than packing the mode into `doCharge`.** Three
+   explicit fields are clearer, the harness pins them, and 16 bytes of uniform is free.
+3. **The B1 MIRROR force pipeline binds the tree too**, even though a global-charge model is
+   never residency-eligible today. The shared emitter declares bindings 7/8 whenever the
+   layout reserved nodes, so the two pipelines must agree or the bind group mismatches —
+   defence in depth against exactly the drift the shared emitter exists to prevent.
+4. **Self-interaction is NOT excluded** — the reference behaviour. A node containing the agent
+   can pass the θ test (its centre of mass can sit up to ≈ `extent·√3` from a contained
+   point); leaf-level self is *exactly* zero (`d = 0 ⇒ c·d = 0`), so the error is confined to
+   the far field, which is what θ names. Documented rather than silently "fixed", since a
+   bbox containment test would change the law.
+5. **The node reserve is `maxAgents + 64` with a LEAF degradation** rather than a proven
+   worst-case bound. A node that runs out of reserve becomes a leaf, which sums its points
+   exactly — so the cap can make the result *slower*, never *wrong*, and it bites at the same
+   place every run (determinism preserved). Measured node counts on real blobs sit far below
+   N (33 nodes for 200 agents).
+6. **Torus uses the minimum-image convention**, the same fold every other engine force uses.
+   A node straddling the seam has a large extent, fails θ, and is descended to leaves where
+   the fold is exact — graceful, not silent.
+7. **No shipped model was retuned** (shipped-configs-are-deliberate). The benchmark suggests
+   Global would suit `Cubic GRA` and `SDCA` as they grow, but that is the user's call, so
+   their descriptions were left alone.
+
+#### Follow-ups (not defects)
+
+- **A GPU tree BUILD** would lift the residency blocker (the only reason global charge forfeits
+  residency). Needs a parallel Morton sort + node accumulation on the GPU, and its own
+  determinism story — which is precisely why it was not smuggled in here.
+- **`computeAgentMaxHashBins` under-reserves for BOUNDED worlds** (`floor(ext/edge)+1` per
+  axis can exceed the torus-derived `floor(W/edge)`). The engine is safe — the worker's
+  `fits`-check falls back to JS, loudly, once — but it means a bounded model can silently
+  lose the WASM force pass for a step. Pre-existing, surfaced here, out of C10's scope.
+- **θ has no per-model guidance yet.** 0.9 is the reference value and the benchmark used it
+  throughout; a "θ vs quality vs cost" sweep would let the UI recommend rather than default.
 
 ---
 
@@ -1846,6 +2070,32 @@ Protocol:
 ## Orchestrator log
 
 - 2026-08-02: runbook created. Launching C1.
+- 2026-08-03: **C10 DONE** (`5b35016`). P11a — "Charge range: Cutoff | Global (Barnes-Hut θ)" as an
+  explicit force-law option, deterministic on the CPU pair, delivered on all three agent targets.
+  **THE BENCHMARK GATE PASSED AND INVERTED L1's PREDICTION**: on the grown GRA blob at equal
+  seed/ticks in a world scaled to the population, global beats the tuned 8×-rest cutoff on every
+  axis at every size AND costs less per tick — nnb/bond 0.53→0.83 (N 2.5k), 0.47→0.82 (5k),
+  0.37→0.81 (20k); overlap 16.9→4.2 %, 37.9→4.9 %, 82.1→4.4 %; cost ×0.62/×0.66/×0.69. The SHAPE is
+  the finding: the cutoff law degrades as N grows while global holds flat, i.e. a finite cutoff
+  cannot open a graph that outgrows it however it is tuned. CLAUDE.md's L1 "no Barnes-Hut is
+  needed" bullet now carries an explicit ⚠️ pointing at the new section, since both statements are
+  true of their own regime (L1 measured N=1200 in a very sparse world). **Compile-identity: ZERO
+  moved surfaces on all 29 models** — every mechanism is usage-gated (0 reserved bytes, the pre-C10
+  WASM param list, no GPU bindings declared), enumerated in the report. All 17 standing gates green;
+  `parity-agent-force` 20→34 checks and `audit-agent-layout` 240→347, the latter proven failable by
+  a source mutation. Real GPU: all 12 force-shader variants compile 0 errors and a real dispatch
+  matches the CPU traversal to 2.6e-6 (f32); in-browser a global-charge `Cubic GRA` grows 6→26
+  agents with the cubic invariant intact (deg 3/3, E = 3N/2), 0 console errors. **TWO FINDINGS worth
+  carrying**: (1) **f64 ASSOCIATION ORDER is load-bearing** — `1 + a + b` folded as `1 + (a + b)` in
+  the WASM emit diverges by an ULP the integrator amplifies, and it showed up in *2D bounded only*
+  while torus and 3D happened not to differ; emitted arithmetic must mirror the JS association, not
+  just its value. (2) `parity-agent-force` had a latent defect the new combos exposed — it built the
+  spatial hash WITHOUT the reserve, so a bounded world's bbox hash could overrun `binStart` into the
+  next region (the engine is safe via the worker's fits-check; the harness had no guard). **C11 may
+  proceed** — note its exact-tree prototype can reuse `buildAgentOctree` (it is already
+  order-canonical and 3D-native), and that `computeAgentMaxHashBins` under-reserves for BOUNDED
+  worlds (recorded as a follow-up, engine-safe but it costs a bounded model its WASM force pass for
+  that step).
 - 2026-08-03: **C9 DONE** (`b1279da`). The deferred-XL engine phase: STEP 4 (profile-gated agent
   SoA fields, capability OR usage) + STEP 6 (the Static / Velocity motion integrator on all three
   agent targets). **Compile-identity moved 28 surfaces, all enumerated and deliberate**: exactly
