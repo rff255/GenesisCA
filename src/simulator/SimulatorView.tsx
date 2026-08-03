@@ -541,6 +541,10 @@ export interface WorkerDiagnostics {
   };
   sparse: { configured: boolean; active: boolean; count: number | null; total: number };
   fieldBridge: { applicable: boolean; eligible: boolean; gpuGens: number; cpuGens: number };
+  /** C11 — did the agent spatial hash BUILD, or is every neighbour query running
+   *  the all-pairs fallback? Recorded at the worker's build site. Absent on a
+   *  worker that predates C11 (the popover then simply omits the row). */
+  spatialIndex?: { applicable: boolean; built: boolean; binEdge: number; bins: number; reserve: number; reason?: string };
   directRender: { mode: 'off' | 'grid' | 'agents' | 'composite' | 'voxels' };
   engine: {
     /** The worker's RESOLVED targets, including its own safety-net demotions. */
@@ -928,7 +932,7 @@ const DiagnosticsPopover = memo(function DiagnosticsPopover({ diag, demotions, g
       </div>
     );
   }
-  const { residency, sparse, fieldBridge, directRender, engine } = diag;
+  const { residency, sparse, fieldBridge, directRender, engine, spatialIndex } = diag;
   // The worker reports what it is REALLY running; a mismatch with the resolved
   // target means a runtime fallback (a failed WASM instantiate / GPU build)
   // rather than a compile-gate demotion, so it is worth showing separately.
@@ -1013,6 +1017,28 @@ const DiagnosticsPopover = memo(function DiagnosticsPopover({ diag, demotions, g
               : 'the field crosses the bus on the CPU — it needs a WebGPU grid AND WebGPU agents sharing one device, with every agent-accessible cell attribute a Decimal'
         }
       />
+      {/* C11 — the agent neighbour index. The hash is near-optimal for the radii
+          real models use (measured: docs/INVESTIGATION_ADAPTIVE_INDEX.md), but
+          it cannot tile a world that is under 3 bins wide at its bin edge, and
+          the emitted queries then silently run ALL-PAIRS. That is the one case
+          worth naming, so this row exists to name it. */}
+      {spatialIndex && (
+        <DiagPath
+          label="Agent neighbour index"
+          applicable={spatialIndex.applicable}
+          engaged={spatialIndex.built}
+          detail={spatialIndex.built
+            ? `spatial hash, ${spatialIndex.bins.toLocaleString()} bins of ${spatialIndex.binEdge.toFixed(1)}`
+            : undefined}
+          why={
+            !spatialIndex.applicable
+              ? 'this model has no agent layer'
+              : spatialIndex.built
+                ? undefined
+                : `every neighbour query is running all-pairs — ${spatialIndex.reason ?? 'the hash could not be built'}. The bin edge is the LARGEST of interaction range x 2 x radius, Neighbour Query Radius and the charge cutoff; lowering whichever dominates lets the hash build.`
+          }
+        />
+      )}
       <DiagPath
         label="Direct render"
         applicable

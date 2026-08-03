@@ -1026,6 +1026,27 @@ let currentAgentHash: SpatialHash | null = null;
  *  buildSpatialHash coarsens its bin edge to fit this, so the per-step hash cost
  *  is bounded regardless of the world size. Set in initAgents from the LIVE dims. */
 let agentHashReserve = AGENT_HASH_BIN_CAP;
+/** C11 — the agent spatial index's LAST decision, read only by the
+ *  `getDiagnostics` reply. `buildSpatialHash` returns null for a world it cannot
+ *  tile at the bin edge (under 3 bins on some axis) or for a bounded world with
+ *  no live agents, and every emitted query then takes its ALL-PAIRS fallback —
+ *  correct, but O(N-squared) and, before this, completely invisible. Recorded at
+ *  the two per-generation build sites (JS/WASM and the per-gen WebGPU path); the
+ *  reason is derived where W/H/D + the edge are already in scope. */
+let agentHashStatus: { built: boolean; binEdge: number; bins: number; reason?: string } | null = null;
+function noteAgentHash(hash: SpatialHash | null, binEdge: number, W: number, H: number, D: number, liveCount: number): void {
+  if (hash) {
+    agentHashStatus = { built: true, binEdge, bins: hash.nBinsX * hash.nBinsY * hash.nBinsZ };
+    return;
+  }
+  // buildSpatialHash returns null in exactly two cases, so this is exhaustive.
+  agentHashStatus = {
+    built: false, binEdge, bins: 0,
+    reason: liveCount === 0
+      ? 'no live agents'
+      : `the world (${W}x${H}${D > 1 ? 'x' + D : ''}) is under 3 bins wide on some axis at a bin edge of ${binEdge.toFixed(2)}`,
+  };
+}
 const EMPTY_I32 = new Int32Array(0);
 /** Compiled Division Event function (single-agent; runs per daughter after a
  *  division). Null when the agent graph has no divisionEvent root. */
@@ -1972,6 +1993,7 @@ function runAgentStep(): void {
   const binEdge = Math.max(collisionBinEdge, chargeBinEdgeOf(cfg));
   const hash = buildSpatialHash(s, Math.max(1e-3, binEdge), W, H, D, boundaryTreatment === 'torus', agentHashReserve);
   currentAgentHash = hash;
+  noteAgentHash(hash, Math.max(1e-3, binEdge), W, H, D, s.liveCount);
   // C10 — the Barnes–Hut octree for GLOBAL charge, built ONCE per generation from
   // the same positions the hash saw (and, like the hash, before the behaviour, so
   // the force pass and every target read one settled structure). ONE TypeScript
@@ -2858,6 +2880,16 @@ async function runAgentBatchResident(count: number, bumpGeneration: boolean = tr
       // 3×3(×3) stencil silently truncates the force. 0 when charge is off.
       chargeBinEdgeOf(cfg),
     );
+    // C11 — the resident batch builds its hash GPU-side, so it never reaches
+    // `noteAgentHash`; record its verdict here or a resident model would report a
+    // stale (or absent) index. `computeResidentHashParams` applies the SAME
+    // 3-bins-per-axis rule, so an all-pairs resident batch is reported as one.
+    agentHashStatus = hp.hashValid
+      ? { built: true, binEdge: hp.binSizeX, bins: hp.nBinsX * hp.nBinsY * hp.nBinsZ }
+      : {
+          built: false, binEdge: hp.binSizeX, bins: 0,
+          reason: `the world (${width}x${height}${depth > 1 ? 'x' + depth : ''}) is under 3 bins wide on some axis at the resolved bin edge (bins ${hp.nBinsX}x${hp.nBinsY}${depth > 1 ? 'x' + hp.nBinsZ : ''})`,
+        };
     const torus = boundaryTreatment === 'torus';
     // Upload the CPU store ONLY when something mutated it since the last batch.
     // The force accumulators are zeroed first (a JS fallback step may have left
@@ -3014,6 +3046,7 @@ async function runAgentStepWebGPUInner(gpuFieldBridge?: GpuFieldBridge | null): 
   const binEdge = Math.max(collisionBinEdge, chargeBinEdgeOf(cfg));
   const hash = buildSpatialHash(s, Math.max(1e-3, binEdge), W, H, s.worldDepth, boundaryTreatment === 'torus', agentHashReserve);
   currentAgentHash = hash;
+  noteAgentHash(hash, Math.max(1e-3, binEdge), W, H, s.worldDepth, s.liveCount);
 
   // Prime the sync attr write buffer (no-op in async agent mode). Keeps the CPU
   // attr-buffer invariant the structural phase / snapshot read.
@@ -8269,6 +8302,11 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
           gpuGens: e1bGpuBridgeGenCount,
           cpuGens: e1bCpuBridgeFallbackCount,
         },
+        // C11 — the agent spatial index. Recorded at the build site (never
+        // re-derived), so "hash" vs "all-pairs" is the decision the engine took.
+        spatialIndex: agentHashStatus
+          ? { applicable: true, built: agentHashStatus.built, binEdge: agentHashStatus.binEdge, bins: agentHashStatus.bins, reserve: agentHashReserve, reason: agentHashStatus.reason }
+          : { applicable: false, built: false, binEdge: 0, bins: 0, reserve: agentHashReserve },
         directRender: { mode: directRenderMode },
         engine: {
           // The worker's RESOLVED view, including its own safety-net demotions —

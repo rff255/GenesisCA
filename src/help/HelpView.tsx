@@ -1754,9 +1754,19 @@ export function HelpView() {
             <li><strong>Engine</strong> &mdash; the resolved engine per layer, and (in amber) any
               layer whose loop fell back at <em>runtime</em> rather than at compile time.</li>
             <li><strong>Fast paths</strong> &mdash; GPU residency, sparse stepping, the GPU field
-              bridge and direct render, each either <em>engaged</em> (with its number: batches,
-              cells, generations) or <em>off</em> followed by the <strong>first blocking reason</strong>.
-              That reason comes from the same predicate the engine decided with, so it cannot drift.</li>
+              bridge, the agent neighbour index and direct render, each either <em>engaged</em> (with
+              its number: batches, cells, generations, bins) or <em>off</em> followed by the{' '}
+              <strong>first blocking reason</strong>. That reason comes from the same predicate the
+              engine decided with, so it cannot drift.</li>
+            <li><strong>Agent neighbour index</strong> is worth knowing about specifically. Agent
+              neighbour queries run against a uniform spatial hash whose bin edge is the{' '}
+              <em>largest</em> radius anything needs &mdash; interaction range &times; 2 &times;
+              radius, Neighbour Query Radius, or the charge cutoff. If the world is under{' '}
+              <strong>3 bins wide on any axis</strong> at that edge, the hash cannot be built (a
+              wrapping stencil would count a neighbour twice), and every query falls back to
+              comparing <em>all pairs</em> &mdash; correct, but quadratic. This row names that, and
+              names the setting to lower. A 3D world is the usual case: a large Neighbour Query
+              Radius easily exceeds a third of a shallow depth.</li>
             <li><strong>Events</strong> &mdash; every fallback since the model loaded: a failed WASM
               instantiate, a lost GPU device, a spatial hash that outgrew its reserve. These used to
               reach only a transient banner or the browser console; now they persist, so you can ask

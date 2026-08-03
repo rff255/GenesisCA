@@ -56,6 +56,7 @@ export { compileAgentGraph } from '../src/modeler/vpl/compiler/compile.ts';
 export { resolveAxes } from '../src/modeler/vpl/compiler/variegation.ts';
 export { buildAgentAbiArgs } from '../src/modeler/vpl/compiler/agentAbi.ts';
 export { migrateForHarness } from '../src/dev/compileHarness.ts';
+export { resolveAgentFieldGates } from '../src/model/agentFieldGating.ts';
 export { agentAttrsOf, cellFieldAttrsOf } from '../src/model/attributeScope.ts';
 export { expandNeighbourCensus, buildCensusPorts, censusOptions, censusAttribute } from '../src/modeler/vpl/compiler/censusExpand.ts';
 export { getEffectivePorts } from '../src/modeler/vpl/effectivePorts.ts';
@@ -86,6 +87,7 @@ const {
   compileAgentGraphWebGPUForModel, isAgentGraphWebGPUSupported, compileAgentGraphWebGPU,
   agentWebGPUExtrasOf, computeAgentWebGPULayout,
   compileAgentGraph, resolveAxes, buildAgentAbiArgs, migrateForHarness, agentAttrsOf, cellFieldAttrsOf,
+  resolveAgentFieldGates,
   expandNeighbourCensus, buildCensusPorts, censusOptions, censusAttribute, getEffectivePorts,
   computeGraphMetrics, isGraphFrequencyMetric, graphMetricDataType, degreeHistogramKeys,
   GRAPH_METRICS, GRAPH_METRIC_INFO, DEFAULT_GRAPH_METRIC, designTimeSeriesKeys,
@@ -558,7 +560,13 @@ async function makeRunner(rawModel, { W, H, withWasm = false } = {}) {
   const layoutExtras = { ...buildAgentLayoutExtras(model), fieldTotal: 0, syncAttrs };
   const bondReqSlots = layoutExtras.bondReqSlots ?? 1;
   const stores = [];
-  const A = createAgentStore(cfg, specs, { wasmBacked: false, syncAttrs, bondReqSlots });
+  // C9 — the plain store MUST use the same field gating the wasmBacked one gets
+  // via `layoutExtras` (buildAgentLayoutExtras resolves it from the model). The
+  // gated fields are MID-LIST in the ABI, so an ungated store here disagrees with
+  // the compiled param list and every later argument shifts — silently, since a
+  // shifted typed array is still an object.
+  const fieldGates = layoutExtras.fieldGates;
+  const A = createAgentStore(cfg, specs, { wasmBacked: false, syncAttrs, bondReqSlots, fieldGates });
   stores.push(A);
   let B = null, inst = null;
   if (withWasm && wasmR && !wasmR.error && wasmR.bytes.length) {
@@ -599,7 +607,7 @@ async function makeRunner(rawModel, { W, H, withWasm = false } = {}) {
   // direction; the compiler decides the PARAM side from the graph). Without it a
   // cadence-gated rule reads `undefined % period`, never fires, and the tier
   // silently passes on a model that did nothing at all.
-  const shape = { is3d: false, agentAttrs: A.attrSpecs, fieldAttrs: cellFieldAttrsOf(model), hasLookupTables, usesGeneration: true };
+  const shape = { is3d: false, agentAttrs: A.attrSpecs, fieldAttrs: cellFieldAttrsOf(model), hasLookupTables, usesGeneration: true, gates: fieldGates };
 
   /** Form the 8 Moore bonds of the lattice (what auto-bond builds at run time). */
   const bondMoore = () => {
@@ -3217,7 +3225,14 @@ function shippedRig(model, { seedSpecs = null } = {}) {
   const res = compileAgentGraph(model.agentGraphNodes ?? [], model.agentGraphEdges ?? [], model, 0);
   if (res.error) throw new Error(`JS agent compile: ${res.error}`);
 
-  const s = createAgentStore(cfg, specs, { wasmBacked: false, syncAttrs, bondReqSlots, bondAttrSpecs: bondSpecs });
+  // C9 gates optional per-agent SoA fields (targetRadius / age / density) on the
+  // capability profile OR a graph usage, and `compileAgentGraph` derives its param
+  // list from `resolveAgentFieldGates(model)`. The store MUST be built from the
+  // same resolution or its ABI args disagree with those params — and because the
+  // gated fields are MID-LIST, the mismatch SHIFTS every later argument rather
+  // than dropping a trailing one.
+  const fieldGates = resolveAgentFieldGates(model);
+  const s = createAgentStore(cfg, specs, { wasmBacked: false, syncAttrs, bondReqSlots, bondAttrSpecs: bondSpecs, fieldGates });
   s.worldWidth = W; s.worldHeight = H; s.worldDepth = D;
 
   const r = cbNum(cfg, 'defaultRadius', 0.5);
@@ -3272,6 +3287,15 @@ function shippedRig(model, { seedSpecs = null } = {}) {
     // arg is missing reads `undefined % period`, never fires, and every O6 check
     // would then pass vacuously on a graph that did nothing.
     usesGeneration: true,
+    // C9 made the ABI PROFILE-GATED (`_agentTargetRadius` / `_agentAge` /
+    // `_agentDensity` appear only when the capability or a usage asks for them),
+    // and those are MID-LIST — so a shape without `gates` produces MORE args than
+    // the compiled fn has params and every later argument shifts. On the shipped
+    // Cubic GRA (no growth capability) that put the viewer string where
+    // `_rngState` belongs and the whole tier crashed. The worker
+    // (`agentAbiShapeOfStore`) and `parity-agent-wasm` both pass `s.fieldGates`;
+    // this is the THIRD mirror and must too.
+    gates: s.fieldGates,
   };
 
   const behaviour = eval(res.behaviourCode);
