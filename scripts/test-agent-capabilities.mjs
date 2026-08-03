@@ -16,6 +16,8 @@ const ENTRY = `
 export * from '../src/model/agentCapabilities.ts';
 export { migrateForHarness } from '../src/dev/compileHarness.ts';
 export { getAllNodeDefs } from '../src/modeler/vpl/nodes/registry.ts';
+export { legacyPhysicsFlagsInEffect } from '../src/model/centerBased.ts';
+export { serializeModel } from '../src/model/fileOperations.ts';
 `;
 const dir = mkdtempSync(join(tmpdir(), 'gca-caps-'));
 const entryPath = join(ROOT, 'scripts', '__caps_entry.ts');
@@ -29,6 +31,7 @@ const {
   nodeSatisfiesCapabilities, agentNodeRequirement, AGENT_NODE_REQUIREMENT,
   estimateAgentFootprint, applyCapabilityEdit, defaultAgentCapabilities,
   migrateForHarness, getAllNodeDefs,
+  legacyPhysicsFlagsInEffect, serializeModel,
 } = m;
 
 let pass = 0, fail = 0;
@@ -117,6 +120,86 @@ const RESERVED = new Set(['spawnAgent', 'spawnEvent', 'getAgentsInView', 'senseH
 for (const t of Object.keys(AGENT_NODE_REQUIREMENT)) {
   ok(knownNodeTypes.has(t) || RESERVED.has(t), `requirement key '${t}' is a real or reserved node type`);
 }
+
+// --- 8. C6 (P5) — THE CAPABILITY PROFILE IS AUTHORITATIVE. ---------------------
+// The claim under test: a model that goes through the app never lets the legacy
+// `customForcesOnly` / `useBondingPhysics` flags decide its physics, because
+// LOAD seeds a profile and SAVE writes it back. `legacyPhysicsFlagsInEffect` is
+// the exact union of the resolvers' fallback conditions, so asserting it false
+// after migration IS the claim — not a proxy for it.
+let authorityChecked = 0;
+for (const f of files) {
+  let raw; try { raw = JSON.parse(readFileSync(join(modelsDir, f), 'utf8')); } catch { continue; }
+  const loaded = migrateForHarness(raw);
+  if (!loaded?.topologyMode?.agents) {
+    // A non-agent model has no centerBased at all ⇒ nothing legacy to resolve.
+    ok(!legacyPhysicsFlagsInEffect(loaded?.centerBased), `${f}: non-agent model — no legacy physics resolution`);
+    continue;
+  }
+  authorityChecked++;
+  // (a) LOAD: after migration, no capability-gated resolver takes a legacy arm.
+  ok(!legacyPhysicsFlagsInEffect(loaded.centerBased), `${f}: LOAD leaves no legacy arm in effect`);
+  // (b) SAVE: serializeModel writes centerBased verbatim, so the profile survives.
+  const reparsed = JSON.parse(serializeModel(loaded));
+  ok(!!reparsed.centerBased?.agentCapabilities, `${f}: SAVE writes agentCapabilities`);
+  ok(eq(reparsed.centerBased.agentCapabilities, loaded.centerBased.agentCapabilities), `${f}: SAVE preserves the profile exactly`);
+  ok(!legacyPhysicsFlagsInEffect(reparsed.centerBased), `${f}: the saved file needs no legacy arm`);
+  // (c) The round-trip is a FIXED POINT: re-loading the saved file changes nothing.
+  const reloaded = migrateForHarness(reparsed);
+  ok(eq(reloaded.centerBased.agentCapabilities, loaded.centerBased.agentCapabilities), `${f}: load→save→load is idempotent`);
+  // (d) NEGATIVE CONTROL — strip the profile (a hand-edited file) and the legacy
+  //     arms DO decide; migrating it again puts the profile back. Without this,
+  //     (a) could pass because the predicate is stuck at false.
+  const stripped = JSON.parse(serializeModel(loaded));
+  delete stripped.centerBased.agentCapabilities;
+  ok(legacyPhysicsFlagsInEffect(stripped.centerBased), `${f}: NEG stripped profile ⇒ legacy arms in effect`);
+  ok(!legacyPhysicsFlagsInEffect(migrateForHarness(stripped).centerBased), `${f}: re-migrating the stripped file bakes it again`);
+}
+ok(authorityChecked >= 8, `authority checked on ${authorityChecked} agent models (>=8)`);
+// (d2) The PARTIAL-profile hole: a hand-edited `{ motion:'force' }` is TRUTHY, so it
+//      used to slip past the migration and let collisionMode (which falls back
+//      per-FIELD) resolve from the legacy flags — and saving wrote it straight back,
+//      so "re-save to bake it" would not have fixed it. The migration now normalises
+//      an EXISTING profile through the closure, which closes it.
+{
+  const base = files.map(f => { try { return JSON.parse(readFileSync(join(modelsDir, f), 'utf8')); } catch { return null; } })
+    .find(r => r?.topologyMode?.agents);
+  ok(!!base, 'found an agent model to build the partial-profile case from');
+  if (base) {
+    const partial = JSON.parse(JSON.stringify(base));
+    partial.centerBased.agentCapabilities = { motion: 'force' };
+    ok(legacyPhysicsFlagsInEffect(partial.centerBased), 'NEG a PARTIAL profile trips the predicate before migration');
+    const fixed = migrateForHarness(partial);
+    ok(!legacyPhysicsFlagsInEffect(fixed.centerBased), 'migration normalises a partial profile (closes the hole)');
+    ok(eq(fixed.centerBased.agentCapabilities, computeCapabilityClosure(fixed.centerBased.agentCapabilities)),
+      'the normalised profile is a closure fixed point');
+    // and it SAVES normalised, so re-loading it stays fixed.
+    ok(!legacyPhysicsFlagsInEffect(JSON.parse(serializeModel(fixed)).centerBased), 're-saving a repaired file keeps it repaired');
+  }
+}
+// A PARTIAL profile (no `collision` key) still trips the predicate — collisionMode
+// falls back per-FIELD, not per-object, so "has a profile" is not sufficient.
+ok(legacyPhysicsFlagsInEffect({ agentCapabilities: { motion: 'force' } }), 'partial profile (no collision) ⇒ legacy arm in effect');
+ok(!legacyPhysicsFlagsInEffect(null), 'no centerBased ⇒ nothing legacy in effect');
+
+// (e) No SAVE path writes the legacy flag. The app must never re-emit
+//     `customForcesOnly`; only the generator scripts (which author shipped
+//     fixtures by hand) still do. Guards the "stop writing it on save" rule.
+const srcDir = join(ROOT, 'src');
+const walk = (d) => readdirSync(d, { withFileTypes: true }).flatMap(e =>
+  e.isDirectory() ? walk(join(d, e.name)) : [join(d, e.name)]);
+const writers = [];
+for (const p of walk(srcDir)) {
+  if (!/\.(ts|tsx)$/.test(p)) continue;
+  for (const line of readFileSync(p, 'utf8').split('\n')) {
+    // a WRITE looks like `customForcesOnly:` / `customForcesOnly =`; a read is
+    // `cfg?.customForcesOnly`. Comments are skipped.
+    const s = line.trim();
+    if (s.startsWith('*') || s.startsWith('//')) continue;
+    if (/customForcesOnly\s*[:=][^=]/.test(s)) writers.push(`${p}: ${s}`);
+  }
+}
+ok(writers.length === 0, `no src/ path WRITES customForcesOnly (found: ${writers.join(' | ')})`);
 
 console.log(`\n${fail === 0 ? 'ALL CAPABILITY TESTS PASS ✓' : 'SOME FAILED ✗'}  (${pass} passed, ${fail} failed)`);
 rmSync(entryPath, { force: true });

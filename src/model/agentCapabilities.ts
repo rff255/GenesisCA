@@ -450,12 +450,37 @@ export function inferAgentProfile(model: CAModel): AgentCapabilities {
 /** LOAD_MODEL migration: seed an explicit Agent Capability Profile on an agent
  *  model that has none, via the usage-widened inference (so legacy files load
  *  with an honest, behaviour-preserving profile and every gate is thereafter
- *  O(1)). No-op for non-agent models + models that already carry a profile.
- *  Mutates + returns the model (mirrors the other `migrate*` helpers). */
+ *  O(1)). No-op for non-agent models.
+ *  Mutates + returns the model (mirrors the other `migrate*` helpers).
+ *
+ *  C6 (P5): a profile that IS present is COMPLETED rather than passed through
+ *  untouched. A hand-edited file can carry a PARTIAL profile (say
+ *  `{ motion: 'force' }`), which is truthy — so the old early return let it
+ *  through, and `collisionMode`, which falls back per-FIELD, then silently
+ *  resolved that model's collision from the legacy flags. Worse, saving wrote the
+ *  partial profile straight back, so "re-save to bake the profile" would not have
+ *  fixed it.
+ *
+ *  The gaps are filled from the SAME inference the fully-absent case uses (the
+ *  legacy flags + the node-usage scan), with the explicit keys winning — so the
+ *  completed profile resolves exactly the way the legacy arms would have. That
+ *  makes this BEHAVIOUR-PRESERVING by construction, not by measurement: for a
+ *  complete profile every inferred key is overwritten, and the only key the
+ *  shipped library omits is the net-new `charge`, which inference sets to `'off'`
+ *  — already what `usesCharge` (strict `=== 'on'`, no fallback) resolves. */
 export function migrateAgentCapabilities(model: CAModel): CAModel {
   if (!model.topologyMode?.agents || !model.centerBased) return model;
-  if (model.centerBased.agentCapabilities) return model;
-  model.centerBased = { ...model.centerBased, agentCapabilities: inferAgentProfile(model) };
+  const caps = model.centerBased.agentCapabilities;
+  let next: AgentCapabilities;
+  if (!caps) {
+    next = inferAgentProfile(model);
+  } else {
+    // `inferAgentProfile` short-circuits on an explicit profile, so infer against a
+    // shallow clone WITHOUT one to get the from-scratch baseline to fill from.
+    const bare = { ...model, centerBased: { ...model.centerBased, agentCapabilities: undefined } };
+    next = computeCapabilityClosure({ ...inferAgentProfile(bare), ...caps });
+  }
+  model.centerBased = { ...model.centerBased, agentCapabilities: next };
   return model;
 }
 

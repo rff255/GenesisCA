@@ -1,0 +1,154 @@
+<meta charset="utf-8">
+<title>C6 — schema hygiene · vocabulary · loud fallbacks</title>
+<style>
+  :root{--bg:#0c0d10;--panel:#15171c;--line:#282c34;--fg:#d8dae0;--dim:#8a8f99;--acc:#e8a13a;--red:#e05252;--ok:#5fbf7f}
+  *{box-sizing:border-box}
+  body{margin:0;padding:28px;background:var(--bg);color:var(--fg);font:14px/1.55 -apple-system,Segoe UI,Roboto,sans-serif}
+  h1{font-size:20px;margin:0 0 4px}
+  h2{font-size:14px;text-transform:uppercase;letter-spacing:.08em;color:var(--acc);margin:34px 0 12px;border-bottom:1px solid var(--line);padding-bottom:6px}
+  p.lead{color:var(--dim);margin:0 0 8px;max-width:80ch}
+  .cols{display:flex;gap:18px;flex-wrap:wrap;align-items:flex-start}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:14px 16px;flex:1 1 380px;min-width:340px}
+  .tag{display:inline-block;font-size:10px;letter-spacing:.09em;text-transform:uppercase;padding:2px 7px;border-radius:10px;margin-bottom:10px}
+  .before{background:#3a2020;color:#e39898;border:1px solid #5c2f2f}
+  .after{background:#2a2416;color:var(--acc);border:1px solid #5c4520}
+  .radio{display:flex;gap:8px;align-items:flex-start;margin:9px 0}
+  .dot{width:12px;height:12px;border-radius:50%;border:1px solid #6a7180;margin-top:3px;flex:0 0 auto}
+  .dot.on{border-color:var(--acc);background:radial-gradient(circle,var(--acc) 0 40%,transparent 41%)}
+  .sub{color:#9a9a9a}
+  .hint{color:#888;font-size:11.5px;display:block;margin-top:1px}
+  .canvas{position:relative;background:#07080a;border:1px solid var(--line);border-radius:6px;height:190px;overflow:hidden;margin-top:6px}
+  .banner{position:absolute;left:0;right:0;top:0;background:#3b1e1e;color:#f0b3b3;border-bottom:1px solid #6d2c2c;font-size:11.5px;padding:6px 10px}
+  .toast{position:absolute;left:50%;top:38px;transform:translateX(-50%);background:rgba(232,161,58,.95);color:#0d1117;padding:6px 14px;border-radius:6px;font-size:12px;font-weight:500;box-shadow:0 2px 8px rgba(0,0,0,.45);display:flex;gap:8px;max-width:88%}
+  .stats{position:absolute;right:8px;bottom:8px;font:11px ui-monospace,Menlo,monospace;color:#7d838f;text-align:right;line-height:1.5}
+  .chip{display:inline-block;border:1px solid var(--line);border-radius:4px;padding:1px 6px;background:#131519;cursor:pointer}
+  .chip.amber{color:#e0a050;border-color:#4a3a20}
+  .fade{color:#5a606b}
+  .pop{position:absolute;right:8px;bottom:34px;width:280px;background:#111319;border:1px solid var(--line);border-radius:6px;padding:9px 11px;font-size:11px}
+  .pop b{display:block;color:var(--acc);font-size:10px;letter-spacing:.08em;text-transform:uppercase;margin:7px 0 4px;font-weight:600}
+  .pop b:first-child{margin-top:0}
+  .ev{display:flex;gap:7px;color:#b9bec8;padding:2px 0;border-top:1px solid #1e2128}
+  .ev span:first-child{color:#6c727d;flex:0 0 auto}
+  table{border-collapse:collapse;width:100%;font-size:12.5px;margin-top:6px}
+  th,td{border:1px solid var(--line);padding:6px 9px;text-align:left;vertical-align:top}
+  th{background:#181b21;color:var(--acc);font-size:11px;text-transform:uppercase;letter-spacing:.06em}
+  code{background:#1b1e24;padding:1px 5px;border-radius:3px;font-size:12px;color:#c9d3e0}
+  .flow{display:flex;gap:8px;align-items:center;flex-wrap:wrap;font-size:12px;margin-top:8px}
+  .box{background:#181b21;border:1px solid var(--line);border-radius:5px;padding:6px 10px}
+  .box.hi{border-color:var(--acc);color:var(--acc)}
+  .arrow{color:var(--dim)}
+  .note{color:var(--dim);font-size:12px;margin-top:10px;max-width:82ch}
+</style>
+
+<h1>C6 — schema hygiene · update-mode vocabulary · loud fallbacks</h1>
+<p class="lead">P5 + the P4 completion. One mechanism per concept; every silent demotion becomes loud.</p>
+
+<h2>1 · A runtime fallback is not a compile error</h2>
+<div class="cols">
+  <div class="card">
+    <span class="tag before">before</span>
+    <div class="canvas">
+      <div class="banner">[agents] WASM instantiate failed, falling back to JS: CompileError…</div>
+      <div class="stats">
+        Gen 1,204 · 60 fps<br>
+        <span class="chip">⚙ WASM · agents WASM</span>
+      </div>
+    </div>
+    <p class="note">A graceful degradation paints the <em>red persistent</em> banner — the same
+      surface a genuine compile error uses. The ⚙ chip stays neutral, so once the banner is
+      overwritten there is no trace at all unless the user happens to open the popover.</p>
+  </div>
+  <div class="card">
+    <span class="tag after">after</span>
+    <div class="canvas">
+      <div class="toast"><span>⚠</span><span>[agents] WASM instantiate failed, falling back to JS: CompileError…</span></div>
+      <div class="pop">
+        <b>Engine</b>
+        <div class="ev" style="border:0"><span style="flex:1">Agents</span><span style="color:#e0a050">WASM → JS</span></div>
+        <b>Events</b>
+        <div class="ev"><span>gen 0</span><span>[agents] WASM instantiate failed, falling back to JS…</span></div>
+      </div>
+      <div class="stats">
+        Gen 1,204 · 60 fps<br>
+        <span class="chip amber">⚙ WASM · agents JS ⚠</span>
+      </div>
+    </div>
+    <p class="note">One amber toast (3.5 s, auto-dismiss), the ⚙ chip <em>stays</em> amber for the
+      session, and the Events list keeps the durable record. Re-occurrences of the same message
+      never re-toast.</p>
+  </div>
+</div>
+
+<div class="flow">
+  <div class="box">worker <code>postFallback()</code></div><span class="arrow">→</span>
+  <div class="box">log to <code>runtimeEvents</code></div><span class="arrow">+</span>
+  <div class="box hi">post <code>{ type:'error', fallback:true, gen }</code></div><span class="arrow">→</span>
+  <div class="box hi">toast (de-duped)</div><span class="arrow">+</span>
+  <div class="box hi">amber chip</div>
+</div>
+<p class="note">The push is new. C3's log is <em>pull-only</em> (refreshed only while the popover is
+  open), so the chip could never know. <code>pendingStep.current = false</code> still runs in both
+  branches — the step pipeline is untouched.</p>
+
+<h2>2 · The update-mode radios learn Principle 1</h2>
+<div class="cols">
+  <div class="card">
+    <span class="tag before">before</span>
+    <div class="radio"><span class="dot on"></span><span><b>Synchronous</b>
+      <span class="hint">All cells read from the previous generation and write to the next simultaneously. Classic CA behavior.</span></span></div>
+    <div class="radio"><span class="dot"></span><span><b>Asynchronous</b>
+      <span class="hint">Cells update one at a time using a single buffer…</span></span></div>
+    <p class="note">Nothing at the point of choice says which engines each mode can run on.</p>
+  </div>
+  <div class="card">
+    <span class="tag after">after</span>
+    <div class="radio"><span class="dot on"></span><span><b>Synchronous</b> <span class="sub">(parallel — runs on all engines)</span>
+      <span class="hint">All cells read from the previous generation and write to the next simultaneously. Classic CA behavior.</span></span></div>
+    <div class="radio"><span class="dot"></span><span><b>Asynchronous</b> <span class="sub">(sequential — CPU engines only)</span>
+      <span class="hint">Cells update one at a time using a single buffer…</span></span></div>
+    <p class="note">The same words the Compatibility readout uses, so the control and the verdict
+      agree. The <em>agent</em> radio gets the matching pair with its own true consequence
+      (below) — verbatim reuse there would be wrong.</p>
+  </div>
+</div>
+
+<table>
+  <tr><th>radio</th><th>Synchronous</th><th>Asynchronous</th></tr>
+  <tr><td>CA grid <code>updateMode</code></td><td>(parallel — runs on all engines)</td><td>(sequential — CPU engines only)</td></tr>
+  <tr><td>Agents <code>agentUpdateMode</code></td><td>(parallel — runs on all engines)</td><td>(sequential — a cross-agent write needs a CPU engine)</td></tr>
+</table>
+<p class="note"><b>Why they differ.</b> An async <em>grid</em> is rejected by WebGPU at the model level,
+  full stop. An async <em>agent</em> model does run on the GPU — <em>Morphogenesis – Growing Tissue</em>
+  ships that way; what the parallel GPU cannot honour is a cross-agent OVERWRITE, whose landing
+  order only the sequential CPU engines define.</p>
+
+<h2>3 · The capability profile is authoritative — and says so when it isn't</h2>
+<div class="flow">
+  <div class="box">legacy <code>.gcaproj</code><br><span class="fade">customForcesOnly</span></div><span class="arrow">→</span>
+  <div class="box">LOAD_MODEL<br><span class="fade">migrateAgentCapabilities</span></div><span class="arrow">→</span>
+  <div class="box hi">profile seeded</div><span class="arrow">→</span>
+  <div class="box">SAVE<br><span class="fade">centerBased verbatim</span></div><span class="arrow">→</span>
+  <div class="box hi">profile baked</div>
+</div>
+<div class="cols" style="margin-top:12px">
+  <div class="card">
+    <span class="tag after">the one case that still uses the legacy arms</span>
+    <div class="canvas" style="height:120px">
+      <div class="toast" style="top:16px"><span>⚠</span><span>[agents] legacy physics flags in effect — this model has no Agent
+        Capability Profile… Re-save the model to bake the profile.</span></div>
+      <div class="stats"><span class="chip amber">⚙ agents WASM ⚠</span></div>
+    </div>
+    <p class="note">Only a <em>hand-edited</em> or script-built file can reach the engine without a
+      profile. <code>legacyPhysicsFlagsInEffect()</code> is the exact union of the resolvers' own
+      fallback conditions — pure observation, no resolver logic touched.</p>
+  </div>
+  <div class="card">
+    <span class="tag after">removal schedule</span>
+    <table style="margin-top:0">
+      <tr><th>field</th><th>status</th></tr>
+      <tr><td><code>customForcesOnly</code></td><td>read once, in <code>usesBondingPhysics</code>. No <code>src/</code> path writes it (asserted).</td></tr>
+      <tr><td><code>useBondingPhysics</code></td><td>still the ONLY control for adhesion μ_A — not a fallback, so not on the removal list yet.</td></tr>
+      <tr><td>the <code>?? legacy</code> arms</td><td>deletable one release after every shipped model carries a profile; the event above is how a straggler announces itself.</td></tr>
+    </table>
+  </div>
+</div>

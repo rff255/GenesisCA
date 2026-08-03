@@ -109,6 +109,36 @@ export function usesPositionalCollision(cfg: CenterBasedConfig | undefined | nul
   return collisionMode(cfg) === 'positional';
 }
 
+/** C6 (P5) — OBSERVATION ONLY: did a capability-gated resolver actually fall back
+ *  to the legacy physics flags for this config?
+ *
+ *  The Agent Capability Profile is the authoritative source of engine physics.
+ *  `LOAD_MODEL` seeds one on every agent model (`migrateAgentCapabilities` →
+ *  `inferAgentProfile`) and `serializeModel` writes `centerBased` verbatim, so a
+ *  loaded-then-saved file always carries an explicit profile. The `?? legacy` arms
+ *  below therefore only ever decide behaviour for a file that reached the engine
+ *  WITHOUT going through the migration — a hand-edited `.gcaproj`, or a config
+ *  synthesised by a script.
+ *
+ *  This predicate is the EXACT UNION of the two fallback conditions above, derived
+ *  from the same field tests (never a re-implementation of the rules):
+ *    - `usesEngineSprings` / `usesEngineGrowth` take their legacy arm iff the whole
+ *      `agentCapabilities` object is absent;
+ *    - `collisionMode` takes its legacy arm iff `agentCapabilities.collision` is not
+ *      one of the three literals (so a partial profile counts too).
+ *  `usesBondingPhysics` (the adhesion μ_A knob) is deliberately EXCLUDED: it has no
+ *  capability control at all, so it is not a fallback — it is the only mechanism.
+ *  See the "legacy physics flags" removal schedule in CLAUDE.md.
+ *
+ *  Adding this function changes NOTHING about how any resolver resolves. */
+export function legacyPhysicsFlagsInEffect(cfg: CenterBasedConfig | undefined | null): boolean {
+  if (!cfg) return false;
+  const caps = cfg.agentCapabilities;
+  if (!caps) return true;
+  const c = caps.collision;
+  return !(c === 'off' || c === 'soft' || c === 'positional');
+}
+
 // ---------------------------------------------------------------------------
 // L1 — the LONG-RANGE CHARGE force. The one engine force with reach BEYOND
 // contact distance, and therefore the only one that can hold a grown structure

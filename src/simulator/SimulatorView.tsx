@@ -1301,6 +1301,18 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
   // longer exists. `modelVersion` bumps on exactly LOAD_MODEL / NEW_MODEL (the
   // documented "a different model now" seam — a model EDIT must not clear it).
   useEffect(() => { setDiagnostics(null); }, [modelVersion]);
+  // C6 (P4) — the RUNTIME-fallback tally, fed by the worker's `fallback: true`
+  // posts (a PUSH, unlike the pull-only Events list which only refreshes while
+  // the popover is open). It exists so the ⚙ chip can go amber the instant the
+  // engine stops running what the model asked for, without polling. The Set is
+  // the per-session toast de-dupe: one toast per distinct message, however many
+  // times the worker re-reports it.
+  const [runtimeFallbackCount, setRuntimeFallbackCount] = useState(0);
+  const runtimeFallbackSeen = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    setRuntimeFallbackCount(0);
+    runtimeFallbackSeen.current = new Set();
+  }, [modelVersion]);
   useEffect(() => {
     if (overlayPopup !== 'diagnostics') return;
     const ask = () => workerRef.current?.postMessage({ type: 'getDiagnostics' });
@@ -5341,7 +5353,21 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       // C3 — reply to the on-demand `getDiagnostics` request (the popover).
       setDiagnostics(msg as unknown as WorkerDiagnostics);
     } else if (msg.type === 'error') {
-      setCompileError(msg.message as string);
+      // C6 (P4) — an ENGINE FALLBACK is not a compile error: the model still
+      // runs, on a different engine/path. It gets a ONE-TIME amber toast (per
+      // distinct message, per model) + the amber ⚙ chip + a durable Events row,
+      // instead of the red persistent banner. Everything else about the `error`
+      // message is unchanged — notably the step-pipeline unblock below.
+      if ((msg as { fallback?: boolean }).fallback) {
+        const text = String(msg.message ?? '');
+        if (!runtimeFallbackSeen.current.has(text)) {
+          runtimeFallbackSeen.current.add(text);
+          showAgentNotice(text);
+        }
+        setRuntimeFallbackCount(runtimeFallbackSeen.current.size);
+      } else {
+        setCompileError(msg.message as string);
+      }
       pendingStep.current = false;
     } else if (msg.type === 'ready') {
       pendingStep.current = false;
@@ -11455,7 +11481,11 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
             // C5 — a live contract violation is amber too (the model declares a
             // guarantee the running engine cannot deliver).
             const contractIssues = compileTargetInfo.contractIssues;
-            const amber = failed || demoted || contractIssues.length > 0;
+            // C6 (P4) — a RUNTIME fallback keeps the chip amber for the rest of
+            // the session too. Driven by the pushed `fallback: true` posts, so it
+            // is live without polling (the Events list only refreshes while the
+            // popover is open). Reset by `modelVersion` with the rest.
+            const amber = failed || demoted || contractIssues.length > 0 || runtimeFallbackCount > 0;
             const label = (e: string) => (e === 'webgpu' ? 'WebGPU' : e === 'wasm' ? 'WASM' : 'JS');
             const parts: string[] = [];
             if (compileTargetInfo.gridCellsOn) {
@@ -11472,6 +11502,9 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
               + (contractIssues.length > 0
                 ? `\n\n⚠ Reproducibility contract (${compileTargetInfo.contract}):\n${contractIssues.join('\n\n')}`
                 : '')
+              + (runtimeFallbackCount > 0
+                ? `\n\n⚠ ${runtimeFallbackCount} runtime fallback${runtimeFallbackCount === 1 ? '' : 's'} this session — the engine is running a different path than requested. See Events below.`
+                : '')
               + '\n\nClick for the fast-path diagnostics (what actually engaged this run).';
             // C3 (P4): the chip is now also the diagnostics trigger. Its own
             // relative wrapper anchors the popover to the chip rather than to the
@@ -11483,7 +11516,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
                   style={amber ? { color: '#e0a050' } : undefined}
                   title={title}
                   onClick={() => setOverlayPopup(p => (p === 'diagnostics' ? null : 'diagnostics'))}
-                >{'⚙'} {parts.join(' · ')}{(demoted || contractIssues.length > 0) && !failed ? '⚠' : ''}</span>
+                >{'⚙'} {parts.join(' · ')}{(demoted || contractIssues.length > 0 || runtimeFallbackCount > 0) && !failed ? '⚠' : ''}</span>
                 {overlayPopup === 'diagnostics' && (
                   <DiagnosticsPopover
                     diag={diagnostics}

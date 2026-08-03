@@ -1190,7 +1190,10 @@ export function detectAgentTargetRestriction(model: CAModel): string | null {
 export function detectWebGPUModelIncompatibilities(model: CAModel): string | null {
   if (!model.properties.useWebGPU) return null;
   if (model.properties.updateMode === 'asynchronous') {
-    return 'WebGPU target requires synchronous update mode. Switch to Synchronous in Model Properties or change target.';
+    // C6 (P5) — the doctrine vocabulary (Principle 1): asynchronous IS the
+    // sequential mode, and the GPU runs only parallel rules. Same words as the
+    // Update Mode radio's subtitle, so the readout and the control agree.
+    return 'Asynchronous is the SEQUENTIAL update mode (a write is visible to a later cell in the same generation), and WebGPU runs cells in parallel. Switch to Synchronous in Model Properties, or run this model on a CPU engine (WebAssembly / Debug JS).';
   }
   return null;
 }

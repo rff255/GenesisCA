@@ -1205,6 +1205,17 @@ export function HelpView() {
             both synchronous (classic) and asynchronous update modes.
           </p>
           <p className={styles.p}>
+            The two radios in Properties label themselves with the engine consequence, in the words
+            of <em>principle 1</em>: <strong>Synchronous</strong> is the <em>parallel</em> mode and{' '}
+            <strong>runs on all engines</strong>; <strong>Asynchronous</strong> is the{' '}
+            <em>sequential</em> mode &mdash; a write is visible to a later cell in the <em>same</em>{' '}
+            generation &mdash; so for the CA grid it is <strong>CPU engines only</strong>. The{' '}
+            <em>agent</em> layer has its own, independent Update Mode radio, and its asynchronous
+            consequence is narrower: an async agent model does run on WebGPU (Growing Tissue ships
+            that way); what the parallel GPU cannot honour is a <em>cross-agent write</em>, whose
+            landing order only the sequential CPU engines define.
+          </p>
+          <p className={styles.p}>
             <strong>Asynchronous mode</strong> (set in Model Properties &gt; Execution) updates
             cells one at a time using a single buffer, so each cell sees previous
             updates within the same generation. Combined with the expanded <em>Writability</em> rules
@@ -1705,6 +1716,17 @@ export function HelpView() {
             A fast path that is off is <em>never</em> an error &mdash; principle 3 again: it computes
             exactly the same thing, only slower. The popover is requested on demand and costs nothing
             while closed.
+          </p>
+          <p className={styles.p}>
+            You do not have to open the popover to find out that something degraded. The first time
+            the engine falls back at runtime it raises a <strong>one-time amber toast</strong> naming
+            what happened, and the <code>&#x2699;</code> chip <em>stays</em> amber (with a{' '}
+            <code>&#x26a0;</code>) for the rest of the session, its tooltip counting the fallbacks. A
+            fallback repeating never re-toasts &mdash; one notice per distinct message. Note the
+            deliberate split: a fallback is <em>not</em> a compile error (your model still runs, on a
+            different engine or path), so it no longer paints the red error banner; and a
+            <em> compile-time</em> restriction is a property of the model rather than an event, so it
+            shows in the Compatibility readout and never toasts at all.
           </p>
 
           <h3 className={styles.h3}>Engine capability matrix</h3>
@@ -2472,6 +2494,16 @@ export function HelpView() {
               <strong> Growth</strong> the radius ramp.</em> With both this toggle and the physics
               capabilities off, agents move only by your Apply Force / Set Velocity.</li>
           </ul>
+          <p className={styles.p}>
+            <strong>The Capability Profile is the authoritative source of engine physics.</strong>{' '}
+            Every model gets one when it loads &mdash; an older file that predates the profile has one
+            <em> inferred</em> from what it does (its physics flags plus a scan of the nodes its agent
+            graph actually uses, so the inference can never hide a node you use), and saving bakes
+            that profile into the file. The old <em>Use bonding physics</em> pair survives only as a
+            fallback for a hand-edited file; if one ever reaches the engine, a notice says so and asks
+            you to re-save. Adhesion is the exception worth knowing: it is still driven by that
+            toggle alone, because no capability governs it yet.
+          </p>
           <p className={styles.p}>
             In the Simulator, the <strong>Agents</strong> panel (docked in the right side panel)
             holds a <strong>Layers</strong> grid &mdash; independently <strong>Show</strong> (render)

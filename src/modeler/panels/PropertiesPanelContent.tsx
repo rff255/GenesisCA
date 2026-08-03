@@ -634,7 +634,10 @@ export function PropertiesPanelContent({ mode = 'list' }: PanelContentProps = {}
                   style={{ marginTop: 2 }}
                 />
                 <span>
-                  <strong>Synchronous</strong>
+                  {/* C6 (P5) — the doctrine subtitle: teach the engine consequence
+                      at the point of choice, in Principle 1's own words. The same
+                      pair labels the Agent Update Mode radio below. */}
+                  <strong>Synchronous</strong> <em style={{ color: '#9a9a9a', fontStyle: 'normal' }}>(parallel — runs on all engines)</em>
                   <br />
                   <span style={{ color: '#888', fontSize: '0.66rem' }}>
                     All cells read from the previous generation and write to the next simultaneously. Classic CA behavior.
@@ -655,7 +658,7 @@ export function PropertiesPanelContent({ mode = 'list' }: PanelContentProps = {}
                   style={{ marginTop: 2 }}
                 />
                 <span>
-                  <strong>Asynchronous</strong>
+                  <strong>Asynchronous</strong> <em style={{ color: '#9a9a9a', fontStyle: 'normal' }}>(sequential — CPU engines only)</em>
                   <br />
                   <span style={{ color: '#888', fontSize: '0.66rem' }}>
                     Cells update one at a time using a single buffer. Each cell sees previous updates within the same generation. Enables number-conserving models.
@@ -712,7 +715,7 @@ export function PropertiesPanelContent({ mode = 'list' }: PanelContentProps = {}
             hints={{
               auto: 'Picks the fastest engine this model can use, and re-picks as you edit. Never picks an engine the model cannot run on.',
               wasm: 'Hand-compiled WASM module — typically several times faster than JS on dense neighborhoods, and exact: f64 math on one shared seeded stream, bit-identical to the JS reference.',
-              webgpu: 'WGSL compute shaders on the GPU — for very large grids and math-heavy per-cell work. Requires synchronous update mode and a browser with WebGPU. Statistical parity: f32 math + a per-cell RNG, so a fixed seed does not reproduce a run exactly.'
+              webgpu: 'WGSL compute shaders on the GPU — for very large grids and math-heavy per-cell work. Runs parallel rules only, so it needs Synchronous update mode, plus a browser with WebGPU. Statistical parity: f32 math + a per-cell RNG, so a fixed seed does not reproduce a run exactly.'
                 + (is3d ? ' In 3D, the GPU runs the simulation while the voxel renderer reads colours back each step.' : ''),
               js: 'The readable semantic reference — breakpointable in devtools and the source Show Code displays, but the slowest engine. The other engines are verified against it. Not a production choice.',
             }}
@@ -1021,10 +1024,16 @@ export function PropertiesPanelContent({ mode = 'list' }: PanelContentProps = {}
                     needsFullInit). */}
                 <div style={{ fontSize: '0.6rem', color: '#888', textTransform: 'uppercase', letterSpacing: '0.05em', margin: '6px 0 4px' }}>Agent Update Mode</div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 5, marginTop: 2, marginBottom: 4 }}>
+                  {/* C6 (P5) — the same doctrine vocabulary as the grid's Update
+                      Mode radio above. The agent CONSEQUENCE differs from the
+                      grid's, so the subtitle states it accurately: an async AGENT
+                      model DOES run on WebGPU (Growing Tissue ships that way) —
+                      what the parallel GPU cannot honour is a cross-agent
+                      OVERWRITE, whose order the sequential CPU engines define. */}
                   {([
-                    ['async', 'Asynchronous', 'Single-buffered attributes — a Set Agent Attribute to a neighbour is immediately visible to a later agent this step (sequential).'],
-                    ['sync', 'Synchronous', 'Double-buffered attributes — every agent reads the previous step; writes are swapped in at the step’s end (parallel / snapshot semantics; required by the forthcoming WebGPU agent target).'],
-                  ] as const).map(([val, title, hint]) => (
+                    ['async', 'Asynchronous', '(sequential — a cross-agent write needs a CPU engine)', 'Single-buffered attributes — a Set Agent Attribute to a neighbour is immediately visible to a later agent this step (sequential).'],
+                    ['sync', 'Synchronous', '(parallel — runs on all engines)', 'Double-buffered attributes — every agent reads the previous step; writes are swapped in at the step’s end (parallel / snapshot semantics). All three agent engines honour it.'],
+                  ] as const).map(([val, title, sub, hint]) => (
                     <label key={val} style={{ display: 'flex', alignItems: 'flex-start', gap: 6, cursor: 'pointer', fontSize: '0.72rem' }}>
                       <input
                         type="radio"
@@ -1033,7 +1042,7 @@ export function PropertiesPanelContent({ mode = 'list' }: PanelContentProps = {}
                         onChange={() => updateCenterBased({ agentUpdateMode: val })}
                         style={{ marginTop: 2 }}
                       />
-                      <span><strong>{title}</strong><br /><span style={{ color: '#888', fontSize: '0.66rem' }}>{hint}</span></span>
+                      <span><strong>{title}</strong> <em style={{ color: '#9a9a9a', fontStyle: 'normal' }}>{sub}</em><br /><span style={{ color: '#888', fontSize: '0.66rem' }}>{hint}</span></span>
                     </label>
                   ))}
                 </div>

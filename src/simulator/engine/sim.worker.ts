@@ -28,7 +28,7 @@ import { subAttrInfo, parentValueToInt } from '../../modeler/vpl/compiler/subAtt
 import { buildActiveOffsets, createActiveSet, rebuildActiveSet, applyTransition, compactActiveSet, type ActiveSet } from './activeSet';
 import { packNI, packNI3 } from '../../modeler/vpl/compiler/niCodec';
 import type { Attribute, CenterBasedConfig, SkipIsolatedEmptyConfig } from '../../model/types';
-import { cbNum, usesBondingPhysics, usesSoftCollision, usesPositionalCollision, usesEngineSprings, usesEngineGrowth, chargeBinEdgeOf, chargeParamsOf, layoutIterationsOf, effectiveAgentDt } from '../../model/centerBased';
+import { cbNum, usesBondingPhysics, usesSoftCollision, usesPositionalCollision, usesEngineSprings, usesEngineGrowth, chargeBinEdgeOf, chargeParamsOf, layoutIterationsOf, effectiveAgentDt, legacyPhysicsFlagsInEffect } from '../../model/centerBased';
 // C1 — the MODEL-derivable half of residency eligibility, shared with the
 // Properties compatibility readout so the engine and the explanation agree.
 import { residencyModelBlockers } from '../../model/agentResidency';
@@ -683,12 +683,38 @@ function logRuntimeEvent(text: string): void {
  *  empty Events list a meaningful statement. */
 function postFallback(message: string): void {
   logRuntimeEvent(message);
-  self.postMessage({ type: 'error', message });
+  // C6 (P4) — `fallback: true` routes this on the main thread to a ONE-TIME amber
+  // toast + the amber chip instead of the red compile-error banner: a graceful
+  // degradation is not a compile error, and the durable record is the Events list.
+  // The `error` type is kept so every existing consumer (notably the step-pipeline
+  // unblock) behaves exactly as before.
+  self.postMessage({ type: 'error', message, fallback: true, gen: generation });
 }
 
 // Device loss / uncaptured device errors are raised on the SHARED device, which
-// cannot import this module (it is imported by it) — so it takes a sink.
-setSharedGpuEventSink(logRuntimeEvent);
+// cannot import this module (it is imported by it) — so it takes a sink. C6: the
+// sink is `postFallback`, not the bare logger — a lost GPU device is the loudest
+// fallback there is and used to reach only the console + the (pull-only) log.
+setSharedGpuEventSink(postFallback);
+
+/** C6 (P5) — announce ONCE per worker that this model reached the engine without
+ *  an Agent Capability Profile, so the legacy `customForcesOnly` /
+ *  `useBondingPhysics` flags decided its physics. Every model loaded through the
+ *  app is migrated (`LOAD_MODEL` → `migrateAgentCapabilities`) and re-saved with an
+ *  explicit profile, so this only fires for a hand-edited / script-built file.
+ *  Pure observation — `legacyPhysicsFlagsInEffect` reads the same fields the
+ *  resolvers branch on and changes no resolution. */
+let legacyPhysicsNoticeSent = false;
+function checkLegacyPhysicsFlags(): void {
+  if (legacyPhysicsNoticeSent) return;
+  if (!agentsEnabled || !legacyPhysicsFlagsInEffect(centerBasedConfig)) return;
+  legacyPhysicsNoticeSent = true;
+  postFallback(
+    '[agents] legacy physics flags in effect — this model has no Agent Capability Profile, '
+    + 'so collision / bond springs / growth are resolved from the old customForcesOnly / '
+    + 'useBondingPhysics fields. Re-save the model to bake the profile.',
+  );
+}
 
 /** "Skip Isolated Empty Cells" observability — the live active-cell count.
  *  `undefined` = the feature is off. `-1` = configured but NOT engaged (invalid
@@ -6115,6 +6141,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       rulesReadComputedIndicator = !!msg.rulesReadComputedIndicator;
       agentGraphResidencyClean = !!msg.agentResidencyClean;
       centerBasedConfig = msg.centerBased ?? null;
+      checkLegacyPhysicsFlags();   // C6 (P5) — one-time per worker
       agentColorViewer = msg.agentColorViewer || '';
       hasAgentSprites = !!msg.agentHasSprites;
       agentBondReqSlots = Math.max(1, Math.floor(msg.agentBondReqSlots ?? 1));
@@ -6798,6 +6825,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       {
         const rc = msg as RecompileMsg;
         if (rc.centerBased) centerBasedConfig = rc.centerBased;
+        checkLegacyPhysicsFlags();   // C6 (P5) — one-time per worker
         if (rc.agentUsesField !== undefined) agentUsesField = !!rc.agentUsesField;
         if (rc.agentUsesDensity !== undefined) agentUsesDensity = !!rc.agentUsesDensity;
         if (rc.rulesReadComputedIndicator !== undefined) rulesReadComputedIndicator = !!rc.rulesReadComputedIndicator;

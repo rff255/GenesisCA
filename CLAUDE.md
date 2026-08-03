@@ -1010,6 +1010,58 @@ C4's migration deliberately never produces `'auto'`, so every shipped file carri
 
 ---
 
+## Schema hygiene + update-mode vocabulary + loud fallbacks (C6 — branch `GRA`)
+
+Phase C6 of the Clarity & Simplification initiative ([HANDOFF_CLARITY_SIMPLIFICATION.md](docs/HANDOFF_CLARITY_SIMPLIFICATION.md) §C6, implementing [PROPOSAL_CLARITY_SIMPLIFICATION.md](docs/PROPOSAL_CLARITY_SIMPLIFICATION.md) **P5** + the **P4** completion; plan + mockup [docs/PLAN_CLARITY_C6.md](docs/PLAN_CLARITY_C6.md)/`.html`). **`check-compile-identity`: 29 models byte-identical on every surface** — no resolver's logic or signature changed; the phase adds observation, copy and one message field.
+
+### THE AGENT CAPABILITY PROFILE IS AUTHORITATIVE (P5) — verified, not assumed
+The claim P5 rests on is that engine physics has ONE source. Each half was checked rather than asserted:
+- **LOAD always seeds it.** `LOAD_MODEL` calls `migrateAgentCapabilities` unconditionally, and the earlier guard `if (topologyMode.agents && !centerBased) centerBased = defaultCenterBasedConfig()` guarantees the object it seeds into exists. A non-agent model has no `centerBased` and needs none. The **viewer** goes through the same reducer (`ViewerApp` calls `loadModel`), so an exported presentation is covered too.
+- **SAVE always writes it.** `serializeModel` → `stringifyCompact` is a whole-object walker with **no field picking**; `withResolvedEngine` spreads `centerBased`. So load → save **bakes** the inferred profile into the file (a deliberate one-way bake, not a byte-identical round-trip, for a legacy file).
+- **Nothing in `src/` writes `customForcesOnly`.** It is read exactly ONCE, in `usesBondingPhysics` ([centerBased.ts](src/model/centerBased.ts)). Only the generator scripts still emit it into the shipped fixtures they author — left alone (shipped model configs are deliberate; the field is inert once a profile is present).
+
+**`legacyPhysicsFlagsInEffect(cfg)`** ([centerBased.ts](src/model/centerBased.ts)) is the OBSERVATION seam: true iff a capability-gated resolver actually took its legacy arm. It is the **exact union of the two fallback conditions, derived from the same field tests** — `!agentCapabilities` (what `usesEngineSprings` / `usesEngineGrowth` branch on, per-OBJECT) OR `collision` not one of the three literals (what `collisionMode` branches on, per-FIELD — so a PARTIAL profile trips it too). **`usesBondingPhysics` is deliberately excluded**: it has no capability control, so it is not a fallback — it is the only mechanism (see the removal schedule). The worker calls it once per worker (`checkLegacyPhysicsFlags`, latched, after `centerBasedConfig` is assigned in `init` AND `recompile`) and emits the C3 event *"legacy physics flags in effect — … Re-save the model to bake the profile."* **Only a hand-edited / script-built file can trigger it**; every model loaded through the app is migrated first (asserted per shipped model in the harness).
+
+**LEGACY-READ REMOVAL SCHEDULE** (the P5 commitment, recorded so a later phase can execute it):
+
+| field / arm | status | when it can go |
+|---|---|---|
+| `customForcesOnly` | READ once (`usesBondingPhysics`); **no `src/` write** (gate-asserted) | with the arms below — it has no other reader |
+| the `?? legacy` arms in `collisionMode` / `usesEngineSprings` / `usesEngineGrowth` / `resolveMaxBonds` | fire only for a profileless config, which now announces itself | **one release after** the shipped generators emit `agentCapabilities` (6 of 14 agent models still rely on load-time inference) |
+| `useBondingPhysics` | **NOT on the list** — still the ONLY control for adhesion `μ_A`, which no capability gates | needs an Adhesion capability first |
+
+**Three distinct fallback predicates coexist** in `centerBased.ts` (per-field literal in `collisionMode`; presence-of-object in `usesEngineSprings`/`usesEngineGrowth`; `!== 'off'` on a possibly-undefined field in `resolveMaxBonds`; strict `=== 'on'` with NO fallback in `usesCharge`). C6 does **not** unify them — that would change resolution for partial profiles, and the byte-identity gate forbids it. `legacyPhysicsFlagsInEffect` covers the first two (the ones a whole model can trip); the divergence is recorded here so the removal phase unifies them deliberately.
+
+### Update-mode vocabulary (P5) — the doctrine at the point of choice
+Both radios carry Principle 1's words as a subtitle:
+
+| radio | Synchronous | Asynchronous |
+|---|---|---|
+| CA grid `updateMode` | *(parallel — runs on all engines)* | *(sequential — CPU engines only)* |
+| Agents `agentUpdateMode` | *(parallel — runs on all engines)* | *(sequential — a cross-agent write needs a CPU engine)* |
+
+**The agent row deliberately differs, and the difference is load-bearing.** The runbook proposed the identical pair; verbatim it would be FALSE for agents — an async agent model **does** run on WebGPU (`Morphogenesis - Growing Tissue` ships exactly that way). What the parallel GPU cannot honour is a cross-agent **OVERWRITE**, whose landing order only the sequential CPU engines define (`isAgentGraphWebGPUSupported` rejects precisely that, per the "Cross-Agent Write Semantics" section). The subtitle keeps the vocabulary and states the true consequence. The agent sync hint also dropped its stale *"required by the forthcoming WebGPU agent target"* (PX shipped sync on the GPU; **all three** agent engines honour the mode).
+- Reject texts realigned: `detectWebGPUModelIncompatibilities` (the sentence C1's readout shows for an async model) and the WebGPU grid engine hint.
+- **The per-node texts in `detectWebGPUIncompatibilities` are LEFT ALONE ON PURPOSE.** They are CAPTURED by `check-compile-identity` as `webgpu.error` (Amphiphile / Chromatography / gas_particles carry them in the baseline), so rewording them would fail the byte-identity gate for a cosmetic gain — and they already carry the doctrine (*"WebGPU runs cells in parallel; …"*). **General rule: a compiler-visible error STRING is a captured surface — treat it like emitted code.**
+
+### Loud fallbacks, UI side (P4; C3 built the worker log)
+`postFallback` now posts `{ type: 'error', message, fallback: true, gen }`. The main thread's `error` branch splits:
+- **`fallback`** → a ONE-TIME amber toast (the `showAgentNotice` pattern; de-duplicated per DISTINCT message per model by a `Set` ref) + `runtimeFallbackCount`, which keeps the ⚙ chip amber (and its `⚠`) for the rest of the session, with the count in the tooltip. **Not** the red banner.
+- otherwise → unchanged (`setCompileError`).
+- `pendingStep.current = false` runs in BOTH branches — the step-pipeline unblock is untouched, which is why the `error` type was kept rather than a new message type.
+- Both the count and the de-dupe set reset on **`modelVersion`**, alongside `diagnostics`.
+
+**Why a PUSH was needed at all:** C3's `runtimeEvents` is **pull-only** — the main thread requests `getDiagnostics` only while the popover is open, so the chip could never learn about a fallback. The pushed flag drives the toast AND the chip; the Events list remains the durable record. A graceful degradation is also not a *compile error*, so painting the red persistent banner for it was a mis-signal.
+
+**The shared-GPU event sink is promoted** from `logRuntimeEvent` to `postFallback` (`setSharedGpuEventSink(postFallback)`) — a lost device / uncaptured device error is the loudest fallback there is and previously reached only the console plus the pull-only log. Uncaptured errors stay capped at 3.
+
+**Deliberately NOT toasted:** the `webgpuGridFailed` "shader was not produced" arm stays log-only (C3's choice — the compiler already reports that reason through the compile-error path; a second toast would double-report), and **compile-time gate clamps show in the C1 readout only**, per the runbook — they are a property of the model, not an event.
+
+### Gate — [scripts/test-agent-capabilities.mjs](scripts/test-agent-capabilities.mjs) §8 (76 → **197** checks)
+Per shipped agent model: LOAD leaves no legacy arm in effect · SAVE writes AND preserves the profile exactly · the saved file needs no legacy arm · **load→save→load is a fixed point** · **NEG** stripping the profile makes the legacy arms fire again and re-migrating bakes it back. Plus: a PARTIAL profile (no `collision`) still trips the predicate; `null` config does not; and **no `src/` path writes `customForcesOnly`** (comment-skipping line scan). **Both negative controls proven by SOURCE MUTATION**: making `legacyPhysicsFlagsInEffect` always-false → 15 failures naming every NEG check; adding `customForcesOnly:` to `defaultCenterBasedConfig` → the write-guard names the file and line. Run it after any change to the profile lifecycle, the resolvers' fallback arms, or the save path.
+
+---
+
 ## RGBA Colours (alpha through the colour-producer chain — branch `presentation_export`)
 
 Alpha flows end-to-end from every colour **producer** to the `colors` buffer, on all five compilers (JS / WASM / WebGPU × cell + agent), 2D + 3D, grid + agents. Impact map + illustrated plan: [docs/IMPACT_MAP_RGBA_COLORS.md](docs/IMPACT_MAP_RGBA_COLORS.md) / [PLAN_RGBA_COLORS.md](docs/PLAN_RGBA_COLORS.md) (+ `.html`).
