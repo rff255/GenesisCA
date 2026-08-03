@@ -1,0 +1,391 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>C7 — Archetype-first New Model + determinism (mockup)</title>
+<style>
+  :root{
+    --bg:#0c0d10; --panel:#15171c; --elev:#1b1e25; --border:#2a2f3a; --muted:#8b94a3;
+    --text:#e6e9ef; --dim:#a8b0bd; --accent:#e8a13a; --accent-soft:rgba(232,161,58,.14);
+    --ok:#6fce8f; --warn:#e0a050; --info:#4cc9f0; --mono:ui-monospace,Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);
+       font:14px/1.55 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;padding:32px 24px 80px}
+  .wrap{max-width:1120px;margin:0 auto}
+  h1{font-size:22px;margin:0 0 4px}
+  h2{font-size:15px;margin:38px 0 10px;padding-bottom:6px;border-bottom:1px solid var(--border);
+     letter-spacing:.02em;text-transform:uppercase;color:var(--dim);font-weight:600}
+  h3{font-size:13px;margin:22px 0 8px;color:var(--accent);font-weight:600}
+  p{color:var(--dim);margin:8px 0}
+  code,.mono{font-family:var(--mono);font-size:12px}
+  .sub{color:var(--muted);margin:0 0 8px}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+  @media(max-width:840px){.grid2{grid-template-columns:1fr}}
+
+  /* ---- app-ish chrome ---- */
+  .app{border:1px solid var(--border);border-radius:10px;overflow:hidden;background:var(--panel)}
+  .nav{display:flex;align-items:center;gap:10px;padding:7px 12px;background:#101216;
+       border-bottom:1px solid var(--border);font-size:12px}
+  .logo{width:16px;height:16px;border-radius:3px;background:var(--accent);opacity:.9}
+  .navbtn{padding:3px 9px;border:1px solid transparent;border-radius:5px;color:var(--dim)}
+  .navbtn.on{border-color:var(--border);background:var(--elev);color:var(--text)}
+  .canvas{height:180px;background:
+      repeating-linear-gradient(0deg,#0e1014 0 15px,#101319 15px 30px),
+      repeating-linear-gradient(90deg,rgba(255,255,255,.02) 0 15px,transparent 15px 30px);
+      position:relative}
+
+  /* ---- dropdown ---- */
+  .menu{position:absolute;top:0;left:44px;background:var(--elev);border:1px solid var(--border);
+        border-radius:7px;padding:4px;min-width:150px;box-shadow:0 8px 28px rgba(0,0,0,.55);font-size:12px}
+  .menu div{padding:5px 10px;border-radius:4px;color:var(--dim)}
+  .menu div.hi{background:var(--accent-soft);color:var(--accent)}
+
+  /* ---- modal ---- */
+  .modalWrap{position:relative;height:100%}
+  .scrim{position:absolute;inset:0;background:rgba(0,0,0,.55)}
+  .modal{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);
+         width:min(760px,94%);background:var(--elev);border:1px solid var(--border);
+         border-radius:10px;box-shadow:0 16px 48px rgba(0,0,0,.6)}
+  .modal .ttl{padding:12px 16px;border-bottom:1px solid var(--border);font-weight:600}
+  .modal .ttl small{display:block;font-weight:400;color:var(--muted);font-size:11.5px;margin-top:2px}
+  .modal .bd{padding:14px 16px}
+  .modal .act{display:flex;justify-content:flex-end;gap:8px;padding:10px 16px;border-top:1px solid var(--border)}
+  .btn{padding:5px 14px;border-radius:6px;font-size:12.5px;border:1px solid var(--border);
+       background:transparent;color:var(--dim)}
+  .btn.pri{background:var(--accent);border-color:var(--accent);color:#151515;font-weight:600}
+
+  /* ---- cards ---- */
+  .cards{display:grid;grid-template-columns:repeat(4,1fr);gap:9px}
+  @media(max-width:720px){.cards{grid-template-columns:repeat(2,1fr)}}
+  .card{border:1px solid var(--border);border-radius:8px;background:#14161c;padding:9px;
+        display:flex;flex-direction:column;gap:6px;min-height:132px}
+  .card.sel{border-color:var(--accent);background:var(--accent-soft);
+            box-shadow:0 0 0 1px var(--accent) inset}
+  .card .nm{font-size:12.5px;font-weight:600;color:var(--text);line-height:1.25}
+  .card .ds{font-size:10.5px;color:var(--muted);line-height:1.35;flex:1}
+  .card svg{display:block;margin:0 auto}
+  .tags{display:flex;flex-wrap:wrap;gap:3px}
+  .tag{font-size:9px;padding:1px 5px;border-radius:9px;border:1px solid var(--border);
+       color:var(--muted);letter-spacing:.02em}
+  .tag.st{border-color:rgba(76,201,240,.5);color:var(--info)}
+  .tag.ag{border-color:rgba(111,206,143,.45);color:var(--ok)}
+
+  /* ---- tables ---- */
+  table{border-collapse:collapse;width:100%;font-size:12px;margin:8px 0}
+  th,td{border:1px solid var(--border);padding:5px 8px;text-align:left;vertical-align:top}
+  th{background:#101216;color:var(--dim);font-weight:600}
+  td.mono{font-family:var(--mono);font-size:11px;color:var(--dim)}
+  .yes{color:var(--ok)} .no{color:#e07a7a} .amb{color:var(--warn)}
+
+  .cols{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  @media(max-width:840px){.cols{grid-template-columns:1fr}}
+  .box{border:1px solid var(--border);border-radius:8px;background:var(--panel);padding:12px 14px}
+  .box h4{margin:0 0 6px;font-size:12px;color:var(--dim);text-transform:uppercase;letter-spacing:.04em}
+  .box.bad{border-color:rgba(224,122,122,.35)}
+  .box.good{border-color:rgba(111,206,143,.35)}
+  pre{background:#0e1014;border:1px solid var(--border);border-radius:6px;padding:10px;
+      overflow:auto;font-family:var(--mono);font-size:11.5px;color:var(--dim);margin:8px 0}
+  .k{color:var(--accent)} .c{color:#5f6b7d} .s{color:var(--ok)}
+  .note{border-left:3px solid var(--accent);padding:6px 0 6px 12px;color:var(--dim);
+        background:linear-gradient(90deg,var(--accent-soft),transparent);border-radius:0 6px 6px 0;margin:10px 0}
+  .flow{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:11.5px;color:var(--dim);margin:8px 0}
+  .step{border:1px solid var(--border);border-radius:6px;padding:5px 9px;background:#14161c}
+  .step.hi{border-color:var(--accent);color:var(--accent)}
+  .arrow{color:var(--muted)}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1>C7 — Archetype-first New Model <span style="color:var(--muted)">(P6)</span> + determinism <span style="color:var(--muted)">(P7)</span></h1>
+  <p class="sub">Clarity &amp; Simplification, phase C7. Companion to <code>PLAN_CLARITY_C7.md</code>.</p>
+
+  <!-- ============ P6 ============ -->
+  <h2>P6 — File ▾ → New now asks what you are building</h2>
+
+  <div class="cols">
+    <div class="box bad">
+      <h4>Before</h4>
+      <p style="margin-top:0">One outcome: an empty 2D grid. Everything else is assembled knob by knob,
+        across six panels, in an order nothing states.</p>
+      <div class="flow">
+        <span class="step">File ▾ → New</span><span class="arrow">→</span>
+        <span class="step">empty 2D grid</span><span class="arrow">→</span>
+        <span class="step">Properties: topology</span><span class="arrow">→</span>
+        <span class="step">capability preset</span><span class="arrow">→</span>
+        <span class="step">contract</span><span class="arrow">→</span>
+        <span class="step">seed count / pattern</span>
+      </div>
+    </div>
+    <div class="box good">
+      <h4>After</h4>
+      <p style="margin-top:0">One click states the intent; the seeds land in the panels they belong to
+        and every one of them stays editable.</p>
+      <div class="flow">
+        <span class="step">File ▾ → New</span><span class="arrow">→</span>
+        <span class="step hi">archetype chooser</span><span class="arrow">→</span>
+        <span class="step">a model that already matches the paradigm</span>
+      </div>
+    </div>
+  </div>
+
+  <h3>The dialog</h3>
+  <div class="app">
+    <div class="nav">
+      <span class="logo"></span><b style="font-size:12px">GenesisCA</b>
+      <span class="navbtn on">File ▾</span><span class="navbtn">Library</span>
+      <span style="flex:1"></span>
+      <span class="navbtn">Modeler</span><span class="navbtn on">Simulator</span>
+    </div>
+    <div class="canvas modalWrap">
+      <div class="scrim"></div>
+      <div class="modal">
+        <div class="ttl">New model
+          <small>Pick a starting point. Everything a card sets is editable afterwards — these are seeds, not a wizard.</small>
+        </div>
+        <div class="bd">
+          <div class="cards">
+
+            <div class="card sel">
+              <svg width="46" height="30" viewBox="0 0 46 30" aria-hidden="true">
+                <g fill="none" stroke="#e8a13a" stroke-width="1">
+                  <rect x="9" y="4" width="28" height="22" opacity=".5"/>
+                  <path d="M16 4v22M23 4v22M30 4v22M9 11h28M9 18h28" opacity=".28"/>
+                </g>
+                <rect x="16" y="11" width="7" height="7" fill="#e8a13a" opacity=".85"/>
+                <rect x="23" y="18" width="7" height="7" fill="#e8a13a" opacity=".55"/>
+              </svg>
+              <div class="nm">Classic CA (2D)</div>
+              <div class="ds">A 2D lattice of cells with a Generation Step rule.</div>
+              <div class="tags"><span class="tag">grid</span><span class="tag">2D</span><span class="tag">exact</span></div>
+            </div>
+
+            <div class="card">
+              <svg width="46" height="30" viewBox="0 0 46 30" aria-hidden="true">
+                <g fill="none" stroke="#e8a13a" stroke-width="1" opacity=".55">
+                  <path d="M14 8h18v14H14zM20 4h18v14H20M14 8l6-4M32 8l6-4M32 22l6-4"/>
+                </g>
+                <rect x="19" y="12" width="6" height="6" fill="#e8a13a" opacity=".8"/>
+                <rect x="25" y="9" width="6" height="6" fill="#e8a13a" opacity=".45"/>
+              </svg>
+              <div class="nm">3D CA</div>
+              <div class="ds">A voxel volume — same rules, one more axis.</div>
+              <div class="tags"><span class="tag">grid</span><span class="tag">3D 50³</span><span class="tag">exact</span></div>
+            </div>
+
+            <div class="card">
+              <svg width="46" height="30" viewBox="0 0 46 30" aria-hidden="true">
+                <g fill="#4cc9f0" opacity=".85">
+                  <circle cx="12" cy="9" r="2.6"/><circle cx="22" cy="6" r="2.6"/><circle cx="33" cy="11" r="2.6"/>
+                  <circle cx="16" cy="19" r="2.6"/><circle cx="27" cy="21" r="2.6"/><circle cx="36" cy="22" r="2.6"/>
+                </g>
+                <g stroke="#4cc9f0" stroke-width=".7" opacity=".3">
+                  <path d="M12 9l10-3M33 11l-11-5M16 19l11 2"/>
+                </g>
+              </svg>
+              <div class="nm">Particle system</div>
+              <div class="ds">Force-driven points with soft-sphere collision. N-body / SPH-lite.</div>
+              <div class="tags"><span class="tag ag">agents</span><span class="tag">Particle</span><span class="tag st">statistical</span></div>
+            </div>
+
+            <div class="card">
+              <svg width="46" height="30" viewBox="0 0 46 30" aria-hidden="true">
+                <g fill="#6fce8f" opacity=".9">
+                  <path d="M10 14l7-3-1 3 1 3z"/><path d="M20 9l7-3-1 3 1 3z"/>
+                  <path d="M21 21l7-3-1 3 1 3z"/><path d="M31 15l7-3-1 3 1 3z"/>
+                </g>
+              </svg>
+              <div class="nm">Flocking</div>
+              <div class="ds">Sensing + steering forces + facing — cohesion, separation, alignment.</div>
+              <div class="tags"><span class="tag ag">agents</span><span class="tag">Boids</span><span class="tag st">statistical</span></div>
+            </div>
+
+            <div class="card">
+              <svg width="46" height="30" viewBox="0 0 46 30" aria-hidden="true">
+                <g stroke="#e8a13a" stroke-width=".9" opacity=".45" fill="none">
+                  <path d="M17 10l6-4 7 5-3 8-8 1z"/>
+                </g>
+                <g fill="#e8a13a" opacity=".8">
+                  <circle cx="17" cy="10" r="3.4"/><circle cx="23" cy="6" r="3.4"/>
+                  <circle cx="30" cy="11" r="3.4"/><circle cx="27" cy="19" r="3.4"/><circle cx="19" cy="20" r="3.4"/>
+                </g>
+              </svg>
+              <div class="nm">Bonded tissue</div>
+              <div class="ds">Soft-body cells: bonded, growing, dividing tissue on a morphogen field.</div>
+              <div class="tags"><span class="tag ag">agents</span><span class="tag">Morphogenesis</span><span class="tag">exact</span></div>
+            </div>
+
+            <div class="card">
+              <svg width="46" height="30" viewBox="0 0 46 30" aria-hidden="true">
+                <g stroke="#c792ea" stroke-width=".9" opacity=".6" fill="none">
+                  <path d="M13 8l9 3 9-4M22 11l-4 10 12 1M31 7l-1 15M13 8l5 13"/>
+                </g>
+                <g fill="#c792ea" opacity=".9">
+                  <circle cx="13" cy="8" r="2.4"/><circle cx="22" cy="11" r="2.4"/><circle cx="31" cy="7" r="2.4"/>
+                  <circle cx="18" cy="21" r="2.4"/><circle cx="30" cy="22" r="2.4"/>
+                </g>
+              </svg>
+              <div class="nm">Graph automaton (GRA)</div>
+              <div class="ds">Nodes joined by bonds that the rule rewrites — census → table → verb.</div>
+              <div class="tags"><span class="tag ag">agents</span><span class="tag amb">custom profile</span><span class="tag">exact</span></div>
+            </div>
+
+            <div class="card">
+              <svg width="46" height="30" viewBox="0 0 46 30" aria-hidden="true">
+                <g fill="#4cc9f0" opacity=".75">
+                  <circle cx="14" cy="8" r="2.2"/><circle cx="22" cy="8" r="2.2"/><circle cx="30" cy="8" r="2.2"/>
+                  <circle cx="14" cy="15" r="2.2"/><circle cx="22" cy="15" r="2.2" opacity="1" fill="#e8a13a"/><circle cx="30" cy="15" r="2.2"/>
+                  <circle cx="14" cy="22" r="2.2"/><circle cx="22" cy="22" r="2.2"/><circle cx="30" cy="22" r="2.2"/>
+                </g>
+              </svg>
+              <div class="nm">CA on agents</div>
+              <div class="ds">A fixed lattice of static agents running a totalistic rule by sensing.</div>
+              <div class="tags"><span class="tag ag">agents</span><span class="tag">CA-on-Agents</span><span class="tag">exact</span></div>
+            </div>
+
+            <div class="card">
+              <svg width="46" height="30" viewBox="0 0 46 30" aria-hidden="true">
+                <rect x="10" y="5" width="26" height="20" fill="none" stroke="#8b94a3"
+                      stroke-width="1" stroke-dasharray="3 3" opacity=".6"/>
+              </svg>
+              <div class="nm">Empty</div>
+              <div class="ds">Today's New, unchanged — a bare 2D grid, nothing seeded.</div>
+              <div class="tags"><span class="tag">grid</span><span class="tag">2D</span></div>
+            </div>
+
+          </div>
+        </div>
+        <div class="act">
+          <button class="btn">Cancel</button>
+          <button class="btn pri">Create</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="note">
+    <b>Esc / Cancel / backdrop</b> closes without touching the current model — even if the
+    unsaved-changes confirmation was already accepted. <b>Empty</b> produces
+    <code>EMPTY_MODEL</code> verbatim, so today's behaviour is one click away and is what the
+    verification asserts field-for-field.
+  </div>
+
+  <h3>What each card seeds</h3>
+  <table>
+    <tr><th>Card</th><th>Topology</th><th>Grid / world</th><th>Capability profile</th><th>centerBased seeds</th><th>Contract</th></tr>
+    <tr><td>Classic CA (2D)</td><td>grid</td><td class="mono">2D 100×100</td><td>—</td><td>—</td><td>exact</td></tr>
+    <tr><td>3D CA</td><td>grid</td><td class="mono">3D 50×50×50</td><td>—</td><td>—</td><td>exact</td></tr>
+    <tr><td>Particle system</td><td>agents</td><td class="mono">120×120</td><td class="mono">particle</td><td class="mono">seed 300 · scatter · physics on</td><td class="st">statistical</td></tr>
+    <tr><td>Flocking</td><td>agents</td><td class="mono">120×120</td><td class="mono">boids</td><td class="mono">seed 260 · scatter</td><td class="st">statistical</td></tr>
+    <tr><td>Bonded tissue</td><td>agents</td><td class="mono">100×100</td><td class="mono">morphogenesis</td><td class="mono">seed 12 · compact · maxBonds 8 · auto-bond</td><td>exact</td></tr>
+    <tr><td>Graph automaton</td><td>agents</td><td class="mono">200×200</td><td class="mono">GRA (custom)</td><td class="mono">seed 4 · compact · maxBonds 8 · charge on</td><td>exact</td></tr>
+    <tr><td>CA on agents</td><td>agents</td><td class="mono">60×60</td><td class="mono">caOnAgents</td><td class="mono">seed 256 · compact</td><td>exact</td></tr>
+    <tr><td>Empty</td><td>grid</td><td class="mono">2D 100×100</td><td>—</td><td>—</td><td>exact</td></tr>
+  </table>
+  <p style="font-size:11.5px">Every card also sets <code>engine: 'auto'</code> — C4's Auto then
+     resolves the fastest engine the model can actually use, and displays which one it picked.
+     The grid dimensions on an agents card are the <b>agent world</b>: the agent frame IS the
+     grid frame, 1:1.</p>
+
+  <h3>Why the GRA card does not use the <code>socialGraph</code> preset</h3>
+  <div class="cols">
+    <div class="box bad">
+      <h4>socialGraph — what the name suggests</h4>
+      <pre><span class="k">motion</span>   static     <span class="c">// nothing moves</span>
+<span class="k">body</span>     false      <span class="c">// no radius</span>
+<span class="k">collision</span> off
+<span class="k">bonds</span>    data       <span class="c">// edges, no springs</span>
+<span class="k">charge</span>   off        <span class="c">// no unfolding</span></pre>
+      <p style="margin-bottom:0">A graph is created and then renders as a pile: the layout physics
+         the L1 charge work exists for is entirely off. <b>No shipped GRA model uses this.</b></p>
+    </div>
+    <div class="box good">
+      <h4>What <code>Cubic GRA</code> and <code>SDCA</code> actually run</h4>
+      <pre><span class="k">motion</span>   force
+<span class="k">body</span>     true
+<span class="k">collision</span> soft
+<span class="k">bonds</span>    physics
+<span class="k">charge</span>   <span class="s">on</span>         <span class="c">// long-range unfolding</span>
+<span class="k">sensing</span>  true      <span class="c">// the neighbour census</span>
+<span class="k">division</span> false     <span class="c">// split = Create + Rewire</span></pre>
+      <p style="margin-bottom:0">The card seeds this. It matches no named preset, so the Properties
+         chip reads <b>Custom</b> — exactly what those two shipped flagships read today.</p>
+    </div>
+  </div>
+
+  <!-- ============ P7 ============ -->
+  <h2>P7 — the last unseeded draws join the seeded stream</h2>
+
+  <p>Everything a rule does has been drawn from one seeded xorshift32 stream for a long time.
+     Three <em>engine</em> paths were not — and two of them decide the initial condition and the
+     visit order, i.e. the two things a reproducible run depends on most.</p>
+
+  <table>
+    <tr><th>Site</th><th>What it decides</th><th>Before</th><th>After</th></tr>
+    <tr><td class="mono">initAgents · seedPattern 'scatter'</td><td>where every agent starts</td>
+        <td class="no">Math.random()</td><td class="yes">shared stream</td></tr>
+    <tr><td class="mono">initGrid · asyncScheme 'cyclic'</td><td>the fixed visit order</td>
+        <td class="no">Math.random()</td><td class="yes">shared stream</td></tr>
+    <tr><td class="mono">runStep · 'random-order' / 'random-independent'</td><td>the per-generation visit order</td>
+        <td class="no">Math.random()</td><td class="yes">shared stream</td></tr>
+    <tr><td class="mono">SimulatorView · agent brush</td><td>a hand-drawn stroke</td>
+        <td colspan="2" class="amb">allowlisted — never replayed on Reset, and seeding it would make a
+            <em>repeated</em> stroke lay down an identical cluster</td></tr>
+    <tr><td class="mono">SimEngine.ts · randomize</td><td>—</td>
+        <td colspan="2" class="amb">allowlisted — imported by nothing (legacy reference engine)</td></tr>
+    <tr><td class="mono">id generation, 🎲 seed buttons</td><td>identity / a seed value</td>
+        <td colspan="2" class="amb">allowlisted — not simulation</td></tr>
+  </table>
+
+  <h3>Where the draws land</h3>
+  <div class="flow">
+    <span class="step">setRngSeed(S)</span><span class="arrow">→</span>
+    <span class="step hi">initGrid — cyclic order</span><span class="arrow">→</span>
+    <span class="step hi">initAgents — scatter</span><span class="arrow">→</span>
+    <span class="step">Init Events</span><span class="arrow">→</span>
+    <span class="step hi">runStep — async order</span><span class="arrow">→</span>
+    <span class="step">your rule's Get Random</span>
+  </div>
+  <p style="font-size:11.5px">One stream, one order. The JS step reads
+     <code>_rngState[0]</code> at entry and writes it back at exit; the WASM path copies the same
+     cell in immediately before each call and reads it back after — so a draw taken in worker JS
+     <em>before</em> the step is seen by both engines and JS↔WASM parity holds by construction.</p>
+
+  <div class="cols">
+    <div class="box">
+      <h4>The honest behaviour change</h4>
+      <p style="margin-top:0">Scatter layouts and async visit orders <b>differ once</b> from before.
+         They were <b>never</b> reproducible, so nothing that was pinned becomes unpinned.</p>
+      <pre><span class="c">// before — a different board every time, seed or not</span>
+setRngSeed(7); reset() <span class="c">→ board A</span>
+setRngSeed(7); reset() <span class="c">→ board B ✗</span>
+
+<span class="c">// after</span>
+setRngSeed(7); reset() <span class="c">→ board A</span>
+setRngSeed(7); reset() <span class="c">→ board A ✓</span>
+setRngSeed(8); reset() <span class="c">→ board C ✓</span></pre>
+    </div>
+    <div class="box">
+      <h4>Two things deliberately unchanged</h4>
+      <p style="margin-top:0"><b>The session seed stays <code>Date.now()</code>-derived.</b> A constant
+         would make every user's first run of every stochastic model identical — a far bigger change
+         than P7 asks for. Determinism is something you <em>ask for</em>.</p>
+      <p><b>Reset does not re-seed.</b> The stream advances across Resets — which is already the
+         documented behaviour of the cell Init Event's Get Random. Agent scatter now <em>matches</em>
+         the cell side instead of contradicting it. Pinning is <code>setRngSeed</code> then Reset —
+         the protocol the Overseer already uses.</p>
+    </div>
+  </div>
+
+  <h3>The gate</h3>
+  <pre>$ node scripts/check-no-unseeded-random.mjs
+<span class="s">OK</span> — no unseeded Math.random() in simulation-semantic paths (7 allowlisted)
+
+<span class="c">// negative control: add one to the worker's step path</span>
+<span class="no">FAIL</span> src/simulator/engine/sim.worker.ts:4281
+      Math.random() in a simulation-semantic path — use the seeded stream (nextRandom()).</pre>
+
+</div>
+</body>
+</html>

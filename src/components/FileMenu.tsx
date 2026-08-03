@@ -12,6 +12,8 @@ import type { SimulationState, CAModel } from '../model/types';
 import { SaveProjectDialog, type SaveOptions } from './SaveProjectDialog';
 import { ExportPresentationDialog, type ExportPresentationOptions } from './ExportPresentationDialog';
 import { ConfirmDialog } from './ConfirmDialog';
+import { NewModelDialog } from './NewModelDialog';
+import { buildArchetypeModel, type ArchetypeId } from '../model/archetypes';
 import styles from './FileMenu.module.css';
 
 /** Confirm dialog payload — set when an action needs user confirmation
@@ -67,6 +69,7 @@ export function FileMenu({ onNew, onLoaded }: {
   modelRef.current = model;
   const [saveDialogOpen, setSaveDialogOpen] = useState(false);
   const [exportDialogOpen, setExportDialogOpen] = useState(false);
+  const [newDialogOpen, setNewDialogOpen] = useState(false);
   const [pendingConfirm, setPendingConfirm] = useState<PendingConfirm>(null);
   // File dropdown open state. Closes on any outside press or Escape.
   const [open, setOpen] = useState(false);
@@ -98,17 +101,28 @@ export function FileMenu({ onNew, onLoaded }: {
   /** Close the menu, then run the chosen action. */
   const runItem = (fn: () => void) => { setOpen(false); fn(); };
 
+  /** C7 (P6): New opens the archetype chooser — AFTER the unsaved-changes
+   *  confirmation, so the destructive confirmation still guards the destructive
+   *  act and cancelling the chooser keeps the current model even though the
+   *  confirm was already accepted. (Ordering it the other way would ask the user
+   *  to make a choice that might then be thrown away.) */
   const handleNew = () => {
     if (isDirty) {
       setPendingConfirm({
         title: 'Discard unsaved changes?',
         message: 'You have unsaved changes that will be lost if you create a new model.',
         confirmLabel: 'Create new',
-        onConfirm: () => { setPendingConfirm(null); newModel(); onNew?.(); },
+        onConfirm: () => { setPendingConfirm(null); setNewDialogOpen(true); },
       });
       return;
     }
-    newModel();
+    setNewDialogOpen(true);
+  };
+
+  /** `'empty'` builds EMPTY_MODEL verbatim, so the historical New is one click. */
+  const doCreateArchetype = (id: ArchetypeId) => {
+    setNewDialogOpen(false);
+    newModel(buildArchetypeModel(id));
     onNew?.();
   };
 
@@ -275,6 +289,12 @@ export function FileMenu({ onNew, onLoaded }: {
           danger
           onConfirm={pendingConfirm.onConfirm}
           onCancel={() => setPendingConfirm(null)}
+        />
+      )}
+      {newDialogOpen && (
+        <NewModelDialog
+          onCreate={doCreateArchetype}
+          onCancel={() => setNewDialogOpen(false)}
         />
       )}
     </div>

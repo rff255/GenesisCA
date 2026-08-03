@@ -248,7 +248,10 @@ type ModelAction =
   | { type: 'DUPLICATE_INDICATOR'; sourceId: string }
   | { type: 'REMOVE_INDICATOR'; id: string }
   | { type: 'UPDATE_INDICATOR'; id: string; changes: Partial<Indicator> }
-  | { type: 'NEW_MODEL' }
+  /** C7 (P6): an optional archetype SEED model. Absent ⇒ EMPTY_MODEL (today's
+   *  New, byte-for-byte). The seed is an ordinary CAModel built by
+   *  `buildArchetypeModel` — no new schema, everything editable afterwards. */
+  | { type: 'NEW_MODEL'; seed?: CAModel }
   | { type: 'LOAD_MODEL'; model: CAModel; fileName?: string }
   | { type: 'MARK_SAVED'; fileName?: string; saveOptions?: SaveOptionsState }
   | { type: 'SET_SIMULATION_STATE'; state: SimulationState | undefined }
@@ -1493,7 +1496,7 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
       };
 
     case 'NEW_MODEL':
-      return { model: EMPTY_MODEL, isDirty: false, modelVersion: state.modelVersion + 1, loadedFileName: null, lastSaveOptions: null };
+      return { model: action.seed ?? EMPTY_MODEL, isDirty: false, modelVersion: state.modelVersion + 1, loadedFileName: null, lastSaveOptions: null };
 
     case 'LOAD_MODEL': {
       let m = action.model;
@@ -2017,7 +2020,9 @@ export interface ModelContextValue {
   duplicateIndicator: (sourceId: string) => void;
   removeIndicator: (id: string) => void;
   updateIndicator: (id: string, changes: Partial<Indicator>) => void;
-  newModel: () => void;
+  /** C7 (P6): pass an archetype seed model to start from a paradigm instead of
+   *  the empty 2D grid. No argument = today's New (EMPTY_MODEL). */
+  newModel: (seed?: CAModel) => void;
   loadModel: (model: CAModel, fileName?: string) => void;
   markSaved: (fileName?: string, saveOptions?: SaveOptionsState) => void;
   setSimulationState: (state: SimulationState | undefined) => void;
@@ -2240,7 +2245,7 @@ export function ModelProvider({ children }: { children: ReactNode }) {
       dispatch({ type: 'UPDATE_INDICATOR', id, changes }),
     [],
   );
-  const newModel = useCallback(() => {
+  const newModel = useCallback((seed?: CAModel) => {
     // Clear every cached GraphEditor viewport and scope so the next
     // ModelerView mount auto-fits the fresh graph from root scope, instead
     // of restoring pan/zoom that was appropriate for the previous model's
@@ -2248,7 +2253,7 @@ export function ModelProvider({ children }: { children: ReactNode }) {
     // that no longer exists in the new model).
     clearAllSavedGraphViewports();
     setSavedCurrentScope(['root']);
-    dispatch({ type: 'NEW_MODEL' });
+    dispatch({ type: 'NEW_MODEL', seed });
   }, []);
   const loadModel = useCallback(
     (model: CAModel, fileName?: string) => {

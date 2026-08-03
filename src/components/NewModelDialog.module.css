@@ -1,0 +1,83 @@
+/* C7 (P6) — the New Model archetype chooser. Rides SaveProjectDialog.module.css
+   for the backdrop / card chrome / action buttons; this module only adds the
+   wider shell and the card grid. */
+
+.wide {
+  width: 760px;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: var(--space-4);
+}
+
+@media (max-width: 760px) {
+  .grid { grid-template-columns: repeat(2, 1fr); }
+}
+
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-height: 138px;
+  padding: var(--space-4);
+  text-align: left;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-panel);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  transition: border-color var(--duration-base), background var(--duration-base);
+}
+
+.card:hover {
+  border-color: var(--color-border-muted);
+}
+
+.card.selected {
+  border-color: var(--color-accent);
+  background: var(--color-accent-soft);
+  box-shadow: inset 0 0 0 1px var(--color-accent);
+}
+
+.card:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 1px;
+}
+
+.icon {
+  display: block;
+  margin: 0 auto;
+  flex: none;
+}
+
+.name {
+  font-size: var(--font-sm);
+  font-weight: 600;
+  color: var(--color-text-primary);
+  line-height: 1.25;
+}
+
+.desc {
+  font-size: var(--font-xs);
+  color: var(--color-text-tertiary);
+  line-height: 1.35;
+  flex: 1;
+}
+
+.tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+}
+
+.tag {
+  font-size: 0.6rem;
+  padding: 1px 5px;
+  border-radius: 9px;
+  border: 1px solid var(--color-border);
+  color: var(--color-text-tertiary);
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}

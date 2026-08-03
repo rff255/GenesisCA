@@ -988,6 +988,13 @@ export function PropertiesPanelContent({ mode = 'list' }: PanelContentProps = {}
             // catalogue minus the documented fundamentals). When false, picking
             // WebGPU is honest but the engine falls back to JS (agentTargetOf clamps).
             const agentWebgpuSupported = isAgentGraphWebGPUSupported(model);
+            // C7: an agent graph with no behaviour root YET (every freshly
+            // created agent model). Both gates early-out on exactly this, so
+            // naming it keeps the hints from inventing a capacity / fundamentals
+            // reason for a graph that simply has no rule in it.
+            const agentGraphEmpty = !(model.agentGraphNodes ?? []).some(
+              n => n.data.nodeType === 'behaviourStep' || n.data.nodeType === 'periodicStep');
+            const noRuleYetHint = 'The Agents graph has no Behaviour Step (or Periodic Step) yet, so there is no per-agent rule to compile. Add one and this re-evaluates.';
             const num = (k: CenterBasedNumericKey) => cbNum(cb, k);
             const NF = (k: CenterBasedNumericKey, opts?: { min?: number; max?: number; step?: number; integer?: boolean }) => (
               <NumberField
@@ -1067,12 +1074,14 @@ export function PropertiesPanelContent({ mode = 'list' }: PanelContentProps = {}
                       auto: 'Picks the fastest agent engine this graph can use, and re-picks as you edit the agent rule.',
                       wasm: agentWasmSupported
                         ? 'This agent graph runs on WebAssembly with JS bit-parity (the whole node catalogue is supported). Typically 2-5x faster than JS for heavy per-agent rules.'
+                        : agentGraphEmpty ? noRuleYetHint
                         : 'Selectable, but this graph has too many simultaneous Get-Nearby-Agents producers for the WASM scratch budget, so it falls back to JS.',
                       webgpu: agentWebgpuSupported
                         ? 'This agent graph runs on WebGPU - the behaviour + force passes dispatch on the GPU. Eligible models (custom forces, async attributes, no bonds/division/field coupling - the Particle Life / Boids class) run whole frames RESIDENT on the GPU: tens of times faster at large populations. Other models use the per-generation path, which pays a CPU-GPU round-trip each step (now sized by the LIVE population, not the Max Agents ceiling); below a few thousand agents JS/WASM is usually faster. Statistical parity: f32 + a per-agent RNG, so Set Random Seed does not pin a run.'
                           + ((model.bondAttributes?.length ?? 0) > 0
                             ? ' BOND ATTRIBUTES run on the GPU too (P3). One caveat: when BOTH endpoints of a bond write the same attribute in the SAME step, which write lands is ORDER-UNDEFINED on the GPU (the CPU engines are sequential, so the higher-id endpoint wins there). Write from one side only (the owner-id idiom), or make the rule symmetric so both endpoints compute the same value - the SDCA link rule is symmetric.'
                             : '')
+                        : agentGraphEmpty ? noRuleYetHint
                         : 'Selectable, but this graph uses one of the few WebGPU-fundamental rejects (median / uniform-random aggregate, toggle/next/previous indicator ops, a cross-agent overwrite aimed at a wired agent id - order-dependent under parallel threads - or too many array producers), so it falls back to JS.',
                       js: 'The reference agent engine - full node coverage, and the source Show Code displays. The agent loop is already O(N) via the spatial hash, so JS is workable at small populations.',
                     }}

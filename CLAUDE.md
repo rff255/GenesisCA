@@ -193,6 +193,7 @@ genesis-ca/
 │   ├── App.tsx
 │   ├── components/
 │   │   ├── FileMenu.tsx              # New/Save/Load buttons
+│   │   ├── NewModelDialog.tsx        # C7 (P6): the File→New archetype chooser (cards → one seeded NEW_MODEL)
 │   │   ├── InstallButton.tsx         # Navbar PWA install affordance (beforeinstallprompt/appinstalled)
 │   │   └── navStyles.ts              # Shared navbar icon-button style (shortcuts, Install)
 │   ├── modeler/
@@ -275,6 +276,7 @@ genesis-ca/
 │   │   ├── typeLabels.ts             # typeDisplayName(): 'bool'→Binary, 'float'→Decimal (UI-only names)
 │   │   ├── macroImport.ts            # cloneMacroWithFreshIds — ID regen for macro imports; countMacroInstances — linked-copy count
 │   │   ├── defaultModel.ts           # EMPTY_MODEL (for New + the initial state on every app load)
+│   │   ├── archetypes.ts             # C7 (P6): MODEL_ARCHETYPES + buildArchetypeModel — the New-model seeds (pure)
 │   │   ├── agentCapabilities.ts      # Agent Capability Profiles: presets + dependency closure + node→capability table + usage-widened migration inference + footprint estimate (the single source of truth)
 │   │   ├── fileOperations.ts         # .gcaproj save/load/download + .gcastate serialization
 │   │   ├── agentTypeRemovalMigration.ts # Strips the removed built-in agent `type` from legacy files (setAgentType nodes, createAgent _port_type, behaviourStep myType edges); wired into LOAD_MODEL + macroImport + the dev harness
@@ -295,7 +297,9 @@ genesis-ca/
 │   ├── gen-sdca.mjs                  # GRA flagship: Ilachinski-Halpern dual coupling + the hysteresis band
 │   ├── gen-life-on-bonds.mjs         # GRA: Conway via the Neighbour Census over a bonded Moore ring (the O7 differential oracle)
 │   ├── gen-graph-metrics-sweep.mjs   # GRA: the measurement half — six graph indicators + the Overseer sweep protocol
-│   └── verify-graph-rewrite.mjs      # THE GRA harness: I1-I7 + oracles O3/O5/O6/O7/O8/O9/O11, 12 tiers, every check negative-controlled
+│   ├── verify-graph-rewrite.mjs      # THE GRA harness: I1-I7 + oracles O3/O5/O6/O7/O8/O9/O11, 12 tiers, every check negative-controlled
+│   ├── test-archetypes.mjs           # C7 (P6): the New-model seeds — Empty IS EMPTY_MODEL, per-card coherence, migration+resolution
+│   └── check-no-unseeded-random.mjs  # C7 (P7): no Math.random() on a simulation-semantic path (allowlist + stale-entry check)
 ├── src-tauri/                        # Tauri v2 native-shell scaffold (Cargo.toml, tauri.conf.json, src/, icons/) — build needs Rust
 ├── docs/
 │   ├── IMPACT_MAP_PWA_INSTALL.md     # PWA install + offline impact map (+ PLAN_PWA_INSTALL.md/.html)
@@ -354,7 +358,7 @@ The app is functional with these major systems:
 
 ### State Management
 - `src/model/ModelContext.tsx` — React Context + useReducer holding entire CAModel
-- `src/model/defaultModel.ts` — `EMPTY_MODEL` seeds the app on every load
+- `src/model/defaultModel.ts` — `EMPTY_MODEL` seeds the app on every load; `src/model/archetypes.ts` (C7/P6) builds the File→New archetype seeds on top of it (`buildArchetypeModel('empty')` returns `EMPTY_MODEL` itself)
 - `src/model/fileOperations.ts` — Save (.gcaproj) / Load / Download utilities
 - No model auto-save / auto-restore across reloads — stripping partial state (`simulationState` / `presets` were too big for the ~5 MB localStorage quota) led to misleading restore-then-silently-lose-preset/grid flows. Explicit `.gcaproj` save only.
 - `beforeunload` warning (ModelContext) fires when `state.isDirty` is true so accidental close/reload prompts the user. `isDirty` is reset by `NEW_MODEL`, `LOAD_MODEL`, and `MARK_SAVED` (FileMenu's Save handler calls `markSaved()` after a successful download).
@@ -1059,6 +1063,42 @@ Both radios carry Principle 1's words as a subtitle:
 
 ### Gate — [scripts/test-agent-capabilities.mjs](scripts/test-agent-capabilities.mjs) §8 (76 → **197** checks)
 Per shipped agent model: LOAD leaves no legacy arm in effect · SAVE writes AND preserves the profile exactly · the saved file needs no legacy arm · **load→save→load is a fixed point** · **NEG** stripping the profile makes the legacy arms fire again and re-migrating bakes it back. Plus: a PARTIAL profile (no `collision`) still trips the predicate; `null` config does not; and **no `src/` path writes `customForcesOnly`** (comment-skipping line scan). **Both negative controls proven by SOURCE MUTATION**: making `legacyPhysicsFlagsInEffect` always-false → 15 failures naming every NEG check; adding `customForcesOnly:` to `defaultCenterBasedConfig` → the write-guard names the file and line. Run it after any change to the profile lifecycle, the resolvers' fallback arms, or the save path.
+
+---
+
+## Archetype-first New Model (P6) + determinism (P7) (C7 — branch `GRA`)
+
+Phase C7 of the Clarity & Simplification initiative ([HANDOFF_CLARITY_SIMPLIFICATION.md](docs/HANDOFF_CLARITY_SIMPLIFICATION.md) §C7, implementing [PROPOSAL_CLARITY_SIMPLIFICATION.md](docs/PROPOSAL_CLARITY_SIMPLIFICATION.md) **P6** + **P7**; plan + mockup [docs/PLAN_CLARITY_C7.md](docs/PLAN_CLARITY_C7.md)/`.html`). **`check-compile-identity`: 29 models byte-identical on every surface** (no compiler file is touched — P6 is model state, P7 is worker runtime).
+
+### P6 — the New Model chooser ([archetypes.ts](src/model/archetypes.ts) + [NewModelDialog.tsx](src/components/NewModelDialog.tsx))
+`File ▾ → New` opens a card grid instead of always producing `EMPTY_MODEL`. A card is a **SEED, not a wizard**: it dispatches ONE `NEW_MODEL` carrying a fully-formed `CAModel` and every field it set stays editable in the panel it belongs to. **No new schema** — `NEW_MODEL` just gained an optional `seed` (absent ⇒ `EMPTY_MODEL`, today's New byte-for-byte), and `newModel(seed?)` carries it.
+
+| Card | Topology | Grid / agent world | Capability profile | Contract |
+|---|---|---|---|---|
+| Classic CA (2D) | grid | 2D 100×100 | — | exact |
+| 3D CA | grid | 3D 50×50×50 | — | exact |
+| Particle system | agents | 120×120 · 300 seeded · scatter | `AGENT_PRESETS.particle` | **statistical** |
+| Flocking | agents | 120×120 · 260 seeded · scatter | `AGENT_PRESETS.boids` | **statistical** |
+| Bonded tissue / morphogenesis | agents | 100×100 · 12 · compact · maxBonds 8 · auto-bond | `AGENT_PRESETS.morphogenesis` | exact |
+| Graph automaton (GRA) | agents | 200×200 · 4 · compact · maxBonds 8 · charge on | `GRA_PROFILE` (Custom) | exact |
+| CA on agents | agents | 60×60 · 256 · compact | `AGENT_PRESETS.caOnAgents` | exact |
+| Empty | grid | 2D 100×100 | — | (absent ⇒ exact) |
+
+Every card also sets `engine: 'auto'` (C4 then resolves + displays the pick — a fresh grid model reads **Auto → WebGPU**). The grid dimensions on an agents card ARE the agent world (the agent frame IS the grid frame 1:1, Decision D-FIELD), so `worldWidth/Height` are seeded to match.
+- **Particle system + Flocking declare `statistical`** (C5): a large interchangeable population is the shape that wants the WebGPU agent target, whose per-agent PCG is seeded once at runtime creation and cannot be pinned by `setRngSeed`. Declaring it up front lets Auto pick the GPU **without a contract violation**.
+- **The GRA card seeds a CUSTOM profile, not `socialGraph`** — a documented deviation from the runbook's suggestion, decided by auditing the shipped flagships. `Cubic GRA` and `SDCA` both run `motion:force · body · collision:soft · bonds:physics · charge:ON · sensing` (and `division:false` — their split is Create Agent + Rewire). `socialGraph` is `static / no body / bonds:data / charge:off`, i.e. **no layout at all**, so a graph seeded from it renders as a pile and the whole L1 charge force is off; no shipped GRA model uses it. `GRA_PROFILE` deep-equals no named preset, so the Properties preset chip reads **Custom** — exactly what those two flagships read today. (Adding a 7th preset was rejected: `AGENT_PRESETS` feeds the Properties picker + `test-agent-capabilities`, and re-labelling two shipped models is outside C7's scope.)
+- **`useBondingPhysics` is DERIVED, never typed in beside the profile** (`collision !== 'off' || bonds === 'physics' || growth`). It is the panel's progressive-disclosure switch while the ENGINE has been profile-driven since the honest-controls pass; seeding the two independently is exactly how they drift. Likewise **`maxBonds` must be seeded for a bonded archetype**: `resolveMaxBonds` returns 0 when the ceiling is 0 EVEN IF the profile says `bonds:'physics'`, so leaving `defaultCenterBasedConfig()`'s 0 would silently give a tissue no bond store.
+- **The unsaved-changes flow is unchanged and the chooser opens AFTER it** ([FileMenu.tsx](src/components/FileMenu.tsx) `handleNew`): the `isDirty` branch still raises the in-app `ConfirmDialog`, whose `onConfirm` now opens the chooser instead of calling `newModel()`. So the destructive confirmation still guards the destructive act, AND cancelling the chooser (Esc / backdrop / Cancel) keeps the current model even though the confirm was already accepted. Ordering it the other way would ask the user to choose something that might then be thrown away.
+- **Gate**: [scripts/test-archetypes.mjs](scripts/test-archetypes.mjs) (201 checks) — `'empty'` IS `EMPTY_MODEL` (object identity + deep-equal); per card the topology/dimension/preset-match/engine/contract; a real volume for 3D; the two silent failures above; every seed survives `migrateForHarness` unchanged and resolves with no contract violation; both C1/C2 panels can describe it. Negative-controlled by SOURCE MUTATION (dropping the tissue bond ceiling → `tissue: bond store allocated (resolveMaxBonds 0)`).
+
+### P7 — determinism: every simulation-semantic draw is seeded
+**`nextRandom()`** ([sim.worker.ts](src/simulator/engine/sim.worker.ts), next to `rngState`) draws from the SHARED stream with the exact xorshift32 (13/17/5) the compiled code uses. It replaced `Math.random()` at the three **sim-semantic** worker sites: `initAgents`' **`seedPattern: 'scatter'`** placement (2 draws/agent in 2D, 3 in 3D), `initGrid`'s **`asyncScheme: 'cyclic'`** one-time order shuffle, and `runStep`'s per-step **`random-order` Fisher–Yates + `random-independent`** picks. The async order was the bigger hole: P7's own claim ("Reset reproduces exactly on the CPU engines") is *false for every asynchronous model* while the visit order is unseeded.
+- **THE TRAP (found by verification, and it is the whole reason the fix works): `rngState` and the WASM memory cell are TWO cells.** The JS-compiled step reads/writes the module-level `rngState`; the WASM-compiled step loads/stores its own `_rs` in `wasmMemory` at `layout.rngStateOffset`. They were synced only at `initGrid` and by `setRngSeed`. A `nextRandom()` that only touched `rngState` therefore ran on a stream **nothing else consumed** on a WASM model — measured directly with a temporary probe: after `setRngSeed(4242)` + one step, `js = 3748443150` while `wasm` was still `4242`. So `nextRandom` READS whichever cell the ACTIVE engine advances (`rngCellView && wasmStepFn` ⇒ the WASM cell, else `rngState`) and WRITES **both** — the same discipline `setRngSeed` already used. `rngCellView` is the module-level view assigned in `initGrid`.
+- **`initGrid` publishes the RNG to the WASM cell AFTER the order block**, not before: the cyclic shuffle now advances the stream, and syncing first would leave the WASM cell `total` draws stale for the Init Event that runs next.
+- **The behaviour change, stated honestly**: scatter layouts and async visit orders **differ once** from before — they are drawn from the shared stream instead of the platform RNG. They were **never** reproducible before, so nothing that was pinned becomes unpinned.
+- **Two things deliberately unchanged.** The module-load seed stays `Date.now()`-derived (a constant would make every user's first run of every stochastic model identical — a far bigger change than P7 asks for; determinism is something you ASK for). And **Reset does not re-seed** — the stream advances across Resets, which is already the documented behaviour of the cell Init Event's `getRandom`; agent scatter now MATCHES the cell side instead of contradicting it. Pinning is `setRngSeed` then Reset — the protocol the Overseer already uses.
+- **The async order shuffle is IN PLACE over the running permutation**, so "same seed ⇒ same order" holds from the same starting permutation (a full re-init gives one). Comparing two shuffles taken at different points in a session compares different inputs, not different seeds — a real trap when verifying this.
+- **Gate**: [scripts/check-no-unseeded-random.mjs](scripts/check-no-unseeded-random.mjs) — greps `src/` for `Math.random`/`crypto.getRandomValues`, subtracts an explicit **allowlist with a reason per file** (id generation; the 🎲 buttons, which GENERATE a seed the model stores; the agent BRUSH, whose stroke Reset never replays and where seeding would make a *repeated* stroke lay down an identical cluster; the unreferenced legacy `SimEngine.ts`), and additionally fails on a **stale** allowlist entry (a file with no draw left silently protects a future one). Both failure modes proven by mutation.
 
 ---
 
@@ -2531,7 +2571,7 @@ The MEASUREMENT half of the GRA research loop. The mechanism lives in the **"Gra
 Sixteen seed agents; each step every agent rolls Bernoulli(p) AND looks its own bond degree up in a 1-axis **rule table**, dividing when both agree (`daughterBond: always`). A division therefore adds exactly one node and exactly one edge and nothing ever joins two lineages, so the model carries **three structural laws the indicators read back directly**: `E = N − 16`, `componentCount ≡ 16`, and `E[N_t] = 16·(1+p)^t`. All six metrics are declared, so the simulator charts the whole measurement surface live. The Overseer graph is the research protocol in two phases — **A** the growth law (Randomize at density 1.0 ⇒ every degree may divide ⇒ p is the only factor; 20 replicates of Reset → Run 40 → Collect N) and **B** the rule sweep (16 seeds × Randomize at density 0.5 → Reset → Run 40 → Collect N/E/mean degree/components), exportable as CSV.
 
 #### Two findings worth carrying forward
-- **A reproducible experiment needs a reproducible INITIAL CONDITION.** `seedPattern: 'scatter'` places seeds with **`Math.random()`** ([sim.worker.ts](src/simulator/engine/sim.worker.ts) `initAgents`, deliberately — "seeding is a one-time setup, not part of the replayable step"). That is invisible to a rule whose decisions ignore geometry, but a rule that reads **bond degree** is geometry-coupled: degree comes from the division bond-partition, which is computed from the TENSION AXIS, i.e. from positions. **Measured**: with `scatter`, Phase A (a degree-INDEPENDENT rule) reproduced exactly across runs while Phase B did not; with `compact` (a deterministic lattice) two full runs export **byte-identical CSV**. Any Overseer sweep must seed deterministically (`compact`, or spawn in an Agent Init Event).
+- **A reproducible experiment needs a reproducible INITIAL CONDITION.** `seedPattern: 'scatter'` USED to place seeds with **`Math.random()`** ([sim.worker.ts](src/simulator/engine/sim.worker.ts) `initAgents`) — that was the P6/P7 finding, and **C7 FIXED it**: scatter now draws from the shared seeded stream, so `setRngSeed(S)` + Reset reproduces the layout exactly (see "Determinism — every simulation-semantic draw is seeded"). The finding's REASONING still matters and is why this model ships `compact`: a rule that reads **bond degree** is geometry-coupled (degree comes from the division bond-partition, computed from the TENSION AXIS, i.e. from positions), so an initial condition that varies at all varies the result. **Measured at the time**: with the then-unseeded `scatter`, Phase A (a degree-INDEPENDENT rule) reproduced exactly across runs while Phase B did not; with `compact` (a deterministic lattice) two full runs export **byte-identical CSV**. Post-C7 either pattern reproduces under a fixed seed; `compact` additionally does not consume the stream, so it is still the simplest thing to sweep over.
 - **Sweep on JS/WASM, not the WebGPU agent target.** The Overseer's seed policy drives `setRngSeed`, which re-seeds the shared xorshift32 stream JS and WASM use. The WebGPU agent target's per-agent PCG is seeded ONCE at runtime creation (`seedAgentRng(rt, 0x1234abcd)` in [agentWebgpuRuntime.ts](src/simulator/engine/agentWebgpuRuntime.ts)) and `setRngSeed` never reaches it, so a WebGPU-agent experiment does not reproduce across two presses of Run Experiment. Hence the sample's `agentTarget: 'wasm'` — a deliberate, documented exception to the library's WebGPU-where-gated-in policy (both gates DO accept the model). **Since C5 this fact IS the reproducibility contract** (see "The declared reproducibility contract"): a model declaring `exact` has Auto keep its agents on a CPU engine for exactly this reason, and the Experiments panel states the resulting methodology. NB the same is NOT true of the WebGPU **grid**, whose per-cell streams `setRngSeed` does re-derive — which is why `GoL Replicate Statistics` ships a grid Overseer sweep on WebGPU.
 
 #### Verification
@@ -2665,7 +2705,7 @@ feeding the other: `σᵢ' = f(σᵢ, #On in the bonded 1-ring)` and
   effective rate is `1−(1−r)²`. The fixed point is unchanged. Making bond attributes
   synchronous is an **all-three-targets change of its own** — do not schedule the GPU half.
 - **The population is spawned from the Agent Init Event**, not by `seedPattern: 'scatter'`
-  (which uses `Math.random()` and sits outside the replayable stream): a Loop over Create
+  (which at the time sat outside the replayable stream — C7 has since seeded it): a Loop over Create
   Agent → Add Agent To World → Set Agent Attribute draws positions AND the initial states
   from the shared xorshift32 stream, so the whole initial condition is reproducible.
 - **`agentTarget: 'webgpu'`** — the library policy, both gates accept, no sweep to reproduce.

@@ -306,6 +306,37 @@ export function HelpView() {
             area for the Visual Programming graph editor.
           </p>
 
+          <h3 className={styles.h3}>Starting a model &mdash; the archetype chooser</h3>
+          <p className={styles.p}>
+            <strong>File &rarr; New</strong> asks what you are building rather than always handing
+            you an empty 2D grid. Each card <em>seeds</em> a coherent starting point &mdash;
+            topology and dimension, the agent capability profile, <em>Engine: Auto</em>, and the
+            reproducibility contract &mdash; and every field it sets stays editable afterwards in
+            the panel it belongs to. These are seeds, not a wizard.
+          </p>
+          <ul className={styles.list}>
+            <li><strong>Classic CA (2D)</strong> / <strong>3D CA</strong> &mdash; a lattice of
+              cells; the 3D card starts a 50&times;50&times;50 volume.</li>
+            <li><strong>Particle system</strong> &mdash; force-driven points with soft-sphere
+              collision. Declares <em>Statistical</em>, so Auto may use the GPU agent engine.</li>
+            <li><strong>Flocking</strong> &mdash; sensing + steering forces + facing (the Boids
+              profile). Also <em>Statistical</em>.</li>
+            <li><strong>Bonded tissue / morphogenesis</strong> &mdash; the full soft-body cell:
+              bonded, growing, dividing tissue with auto-bond and a bond store.</li>
+            <li><strong>Graph automaton (GRA)</strong> &mdash; nodes joined by bonds the rule
+              rewrites, with the long-range charge that keeps a grown graph open. Its profile is a
+              custom mix (the shape the shipped GRA samples use), so the preset picker reads
+              <em> Custom</em>.</li>
+            <li><strong>CA on agents</strong> &mdash; a fixed lattice of static agents running a
+              totalistic rule by sensing.</li>
+            <li><strong>Empty</strong> &mdash; a bare 2D grid with nothing seeded.</li>
+          </ul>
+          <p className={styles.p}>
+            On an agents card the grid width/height are the <em>agent world</em>: the agent frame is
+            the grid frame, one to one. If the current model has unsaved changes you are still asked
+            to confirm first &mdash; and cancelling the chooser afterwards keeps your model.
+          </p>
+
           <h3 className={styles.h3}>Info Panel (I)</h3>
           <p className={styles.p}>
             The model&apos;s presentation metadata, kept in its own tab separate from the
@@ -1680,6 +1711,25 @@ export function HelpView() {
             agents already run on the GPU, otherwise <em>Exact</em>.
           </p>
 
+          <h3 className={styles.h3}>What a seed actually pins</h3>
+          <p className={styles.p}>
+            Every simulation decision &mdash; your rule&rsquo;s <em>Get Random</em>, the engine&rsquo;s
+            agent <strong>seed pattern</strong>, and the <strong>asynchronous visit order</strong>{' '}
+            &mdash; draws from ONE seeded stream. So on the CPU engines,{' '}
+            <em>Set Random Seed</em> followed by <strong>Reset</strong> reproduces a run exactly:
+            the same starting layout, the same order the cells are visited, the same trajectory.
+            (Both the agent <em>scatter</em> pattern and the async order used to sit outside that
+            stream and could never be pinned; they now join it.)
+          </p>
+          <p className={styles.p}>
+            Two things this deliberately does <em>not</em> do. A fresh session starts from a random
+            seed, so a stochastic model still surprises you the first time &mdash; determinism is
+            something you <em>ask for</em>. And <strong>Reset does not re-seed</strong>: the stream
+            keeps advancing, so pressing Reset twice re-rolls (exactly as a per-cell{' '}
+            <em>Get Random</em> in an Init Event has always done). To pin a run, set the seed and{' '}
+            <em>then</em> Reset &mdash; which is what the Overseer&rsquo;s seed policy does for you.
+          </p>
+
           <h3 className={styles.h3}>Nothing is resolved silently</h3>
           <p className={styles.p}>
             Wherever the engine resolves a value differently from what you wrote, the panel shows the
@@ -2212,12 +2262,12 @@ export function HelpView() {
             Run &rarr; Collect(node count, edge count, mean degree, components) &rarr; Log &#125;</em>,
             then export the rule &rarr; outcome table as CSV. The{' '}
             <em>Graph Metrics &mdash; Growth Sweep</em> sample ships exactly that, together with a
-            20-replicate measurement of the growth law. Two practical notes if you build your own:
-            an experiment is only reproducible if its <em>initial condition</em> is &mdash; the
-            <em>scatter</em> seed pattern places agents with an unseeded random, so use{' '}
-            <em>compact</em> (or spawn deterministically in the Agent Init Event); and the seed
-            policy re-seeds the shared random stream that the JS and WebAssembly agent targets
-            use, so run sweeps on one of those rather than WebGPU.
+            20-replicate measurement of the growth law. One practical note if you build your own:
+            the seed policy re-seeds the shared random stream that the JS and WebAssembly agent
+            targets use, so run sweeps on one of those rather than WebGPU (whose per-agent RNG is
+            seeded once at creation). The <em>initial condition</em> itself is no longer a caveat
+            &mdash; both seed patterns now draw from that same seeded stream, so a fixed seed pins
+            the starting layout too.
           </p>
           <h3 className={styles.h3}>Bond Attributes &mdash; state that lives on the edge</h3>
           <p className={styles.p}>

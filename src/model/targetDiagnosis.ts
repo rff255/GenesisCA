@@ -355,6 +355,18 @@ function diagnoseAgents(model: CAModel): LayerDiagnosis {
 
   const producers = countAgentArrayProducers(model);
 
+  // C7: an agent graph with NO behaviour root yet — the state EVERY freshly
+  // created agent model (archetype or a hand-enabled Agents topology) is in.
+  // Both compiled gates early-out on exactly this test, so without naming it the
+  // fall-through below invents a capacity / fundamentals reason for a graph that
+  // simply has no rule yet: technically a correct ✗, actively misleading as an
+  // explanation. Mirrors `isAgentGraphWasmSupported`'s own early-out (top-level
+  // nodes; a Periodic Step SYNTHESIZES a behaviour root at compile time).
+  const noBehaviourRoot = !(model.agentGraphNodes ?? []).some(
+    n => n.data.nodeType === 'behaviourStep' || n.data.nodeType === 'periodicStep');
+  const emptyGraphReason = () => R('fastpath',
+    'The Agents graph has no Behaviour Step (or Periodic Step) yet, so there is no per-agent rule to compile. Add one and this re-evaluates.');
+
   const js: EngineVerdict = {
     engine: 'js', ok: true, blockers: [],
     notes: [R('fastpath', 'Reference semantics — full node coverage. The agent loop is already O(N) via the spatial hash, so JS is a reasonable engine at small populations.')],
@@ -363,7 +375,9 @@ function diagnoseAgents(model: CAModel): LayerDiagnosis {
   // --- WASM: full catalogue; the ONLY clamp is the scratch-slot budget. -----
   const wasmBlockers: Reason[] = [];
   if (!wasmSupported) {
-    if (producers.nearby > AGENT_NEARBY_SCRATCH_SLOTS) {
+    if (noBehaviourRoot) {
+      wasmBlockers.push(emptyGraphReason());
+    } else if (producers.nearby > AGENT_NEARBY_SCRATCH_SLOTS) {
       wasmBlockers.push(R('capacity', `${producers.nearby} simultaneous neighbour-query producers (Get Nearby Agents / Get Agents In View) — the WASM agent scratch budget is ${AGENT_NEARBY_SCRATCH_SLOTS}. Reuse one query result instead of repeating the query.`));
     } else {
       const unsupported = unsupportedAgentTypes(model, AGENT_WASM_SUPPORTED_TYPES);
@@ -381,7 +395,9 @@ function diagnoseAgents(model: CAModel): LayerDiagnosis {
 
   // --- WebGPU: the gate decides; the fundamentals scan explains. ------------
   const gpuBlockers: Reason[] = [];
-  if (!webgpuSupported) {
+  if (!webgpuSupported && noBehaviourRoot) {
+    gpuBlockers.push(emptyGraphReason());
+  } else if (!webgpuSupported) {
     const fundamentals = webgpuAgentFundamentals(model);
     if (producers.allProducers > AGENT_WEBGPU_NEARBY_SLOTS) {
       gpuBlockers.push(R('capacity', `${producers.allProducers} agent-array producers — the WebGPU agent register budget is ${AGENT_WEBGPU_NEARBY_SLOTS}. (A Neighbour Census counts as two.)`));

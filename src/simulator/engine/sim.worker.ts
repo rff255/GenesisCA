@@ -789,6 +789,12 @@ let generation = 0;
 // its own GPU-side counter inside one submit (see posCommit), and the dispatch
 // sites seed it explicitly.
 let generationCellView: Int32Array | null = null;
+/** C7 (P7) - VIEW over the WASM cell-grid RNG cell (layout.rngStateOffset), the
+ *  stream the WASM-compiled step actually reads and writes. Kept in lockstep with
+ *  the JS-side `rngState` by `nextRandom` + `setRngSeed`, so an engine-side draw
+ *  (the async visit order, agent scatter seeding) lands on whichever cell the
+ *  ACTIVE engine consumes. Null until initGrid allocates the memory. */
+let rngCellView: Uint32Array | null = null;
 let generationAgentView: Float64Array | null = null;
 function setGeneration(v: number): void {
   generation = v;
@@ -1330,18 +1336,20 @@ function initAgents(): void {
     if (centerBasedConfig.seedPattern === 'scatter') {
       // Dispersed: uniformly random across the world (flocking, chemotaxis
       // aggregation ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â populations that START spread and self-organize). Seeding
-      // is a one-time setup, not part of the replayable step, so Math.random is
-      // fine here (unlike the deterministic per-step xorshift stream).
+      // is a one-time setup, but it IS the initial condition — so C7 (P7) draws
+      // it from the SHARED seeded stream (`nextRandom`), not `Math.random`.
+      // `setRngSeed(S)` + Reset therefore reproduces the scatter exactly (2 draws
+      // per agent in 2D, 3 in 3D, taken here at init/Reset before any step).
       const margin = 2 * r;
       const sx = Math.max(0, ww - 2 * margin), sy = Math.max(0, wh - 2 * margin);
       if (is3d) {
         const sz = Math.max(0, D - 2 * margin);
         for (let i = 0; i < seedCount; i++) {
-          specs.push({ x: margin + Math.random() * sx, y: margin + Math.random() * sy, z: margin + Math.random() * sz, radius: r });
+          specs.push({ x: margin + nextRandom() * sx, y: margin + nextRandom() * sy, z: margin + nextRandom() * sz, radius: r });
         }
       } else {
         for (let i = 0; i < seedCount; i++) {
-          specs.push({ x: margin + Math.random() * sx, y: margin + Math.random() * sy, radius: r });
+          specs.push({ x: margin + nextRandom() * sx, y: margin + nextRandom() * sy, radius: r });
         }
       }
     } else if (is3d) {
@@ -3203,6 +3211,38 @@ function syncModelAttrsToMemory(): void {
 // the random stream advances as the user expects. Seeded once with a non-zero value.
 const rngState = new Uint32Array(1);
 rngState[0] = (Date.now() * 0x9e3779b9) >>> 0 || 0x12345678;
+
+/** C7 (P7) — determinism. Draw ONE value in [0,1) from the SHARED seeded stream,
+ *  advancing it with the EXACT xorshift32 (13/17/5) the compiled JS/WASM code
+ *  uses. This is how ENGINE-side draws (agent scatter seeding, the async cell
+ *  visit order) join the stream instead of calling `Math.random()`, so
+ *  `setRngSeed(S)` + Reset reproduces a run exactly on the CPU engines.
+ *
+ *  WHY IT IS PARITY-SAFE: `rngState` is the one shared cell — the JS step reads
+ *  `_rngState[0]` into `_rs` at entry and writes it back at exit, and the WASM
+ *  path copies `rngState[0]` into the module's memory cell immediately before
+ *  each call and reads it back after. So a draw taken here (always BEFORE the
+ *  step function runs) is seen identically by both engines.
+ *
+ *  NB the module-load seed stays `Date.now()`-derived on purpose: determinism is
+ *  something you ASK for (`setRngSeed`, the protocol the Overseer already uses),
+ *  not something that makes every user's first run of every stochastic model
+ *  identical. And Reset does NOT re-seed — the stream advances across Resets,
+ *  matching the documented behaviour of the cell Init Event's Get Random. */
+function nextRandom(): number {
+  // READ the cell the ACTIVE engine advances: the WASM module owns the in-memory
+  // cell (it loads/stores its own `_rs` there), the JS-compiled step owns
+  // `rngState`. Reading the wrong one makes an engine-side draw run on a stream
+  // nothing else touches - which is exactly how a seeded run stops reproducing.
+  let s = ((rngCellView && wasmStepFn) ? rngCellView[0]! : rngState[0]!) || 0x12345678;
+  s = (s ^ (s << 13)) >>> 0;
+  s = (s ^ (s >>> 17)) >>> 0;
+  s = (s ^ (s << 5)) >>> 0;
+  // WRITE both, the same discipline `setRngSeed` uses, so the two never drift.
+  rngState[0] = s;
+  if (rngCellView) rngCellView[0] = s;
+  return s / 4294967296;
+}
 let stepFn: Function | null = null;
 let inputColorFns: Array<{ mappingId: string; fn: Function }> = [];
 let outputMappingFns: Array<{ mappingId: string; fn: Function }> = [];
@@ -3811,9 +3851,12 @@ function initGrid(): void {
   }
 
   // RNG state lives in memory at layout.rngStateOffset (Uint32Array of length 1).
-  // Sync the existing seed into memory so WASM and JS share the same starting state.
+  // Sync the existing seed into memory so WASM and JS share the same starting
+  // state. The write happens AFTER the order-array block below: C7 (P7) draws the
+  // cyclic shuffle from the shared stream, so syncing before it would leave the
+  // WASM cell `total` draws stale for the Init Event that runs next.
   const rngView = new Uint32Array(buf, wasmLayout.rngStateOffset, 1);
-  rngView[0] = rngState[0]!;
+  rngCellView = rngView;
 
   // Stop-event flag view ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â shared between JS step (writes via `_stopFlag[0]=idx`)
   // and WASM step (i32.store at stopFlagOffset). Reset to 0 on init.
@@ -3833,10 +3876,12 @@ function initGrid(): void {
   if (isAsync && gridCellsEnabled) {
     orderArray = new Int32Array(buf, wasmLayout.orderOffset, total);
     for (let i = 0; i < total; i++) orderArray[i] = i;
-    // For cyclic scheme, shuffle once at init and reuse
+    // For cyclic scheme, shuffle once at init and reuse. C7 (P7): drawn from the
+    // SHARED seeded stream so the fixed visit order is reproducible under
+    // `setRngSeed`.
     if (asyncScheme === 'cyclic') {
       for (let i = total - 1; i > 0; i--) {
-        const j = (Math.random() * (i + 1)) | 0;
+        const j = (nextRandom() * (i + 1)) | 0;
         const tmp = orderArray[i]!; orderArray[i] = orderArray[j]!; orderArray[j] = tmp;
       }
     }
@@ -3846,6 +3891,10 @@ function initGrid(): void {
     orderArray = null;
     skippedArray = null;
   }
+
+  // Now that any init-time draws (the cyclic shuffle) have advanced the stream,
+  // publish it to the WASM memory cell.
+  rngView[0] = rngState[0]!;
 }
 
 /** Constant boundary: write each attr's boundary value (falls back to default
@@ -4271,18 +4320,23 @@ function runStep(deferIndicatorScan: boolean = false): void {
     writeAttrs = attrsB;
   }
 
-  // Async mode: shuffle/populate order array before each step
+  // Async mode: shuffle/populate order array before each step.
+  // C7 (P7): both schemes draw from the SHARED seeded stream (nextRandom), taken
+  // HERE - before the step function runs, which is what lets the JS step
+  // (_rngState[0] at entry) and the WASM step (the memory cell copied in right
+  // before the call) see the same advanced state. Without this an ASYNCHRONOUS
+  // model could never reproduce, seed or no seed.
   if (updateMode === 'asynchronous' && orderArray) {
     if (asyncScheme === 'random-order') {
       // Fisher-Yates shuffle ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â every cell updates exactly once in random order
       for (let i = total - 1; i > 0; i--) {
-        const j = (Math.random() * (i + 1)) | 0;
+        const j = (nextRandom() * (i + 1)) | 0;
         const tmp = orderArray[i]!; orderArray[i] = orderArray[j]!; orderArray[j] = tmp;
       }
     } else if (asyncScheme === 'random-independent') {
       // N=total random picks with replacement
       for (let i = 0; i < total; i++) {
-        orderArray[i] = (Math.random() * total) | 0;
+        orderArray[i] = (nextRandom() * total) | 0;
       }
     }
     // 'cyclic': orderArray stays as shuffled at init ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â no per-step work
