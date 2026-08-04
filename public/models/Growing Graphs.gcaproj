@@ -1,0 +1,2580 @@
+{
+ "schemaVersion": 2,
+ "properties": {
+  "name": "Growing Graphs",
+  "modelAuthor": "Rodrigo F. Figueiredo",
+  "description": "Binary cubic graph-rewriting automata after Paul Cousin, ported from Alex Mordvintsev's (znah) Growing Graphs demo. Every node carries one bit and exactly three neighbours; one 16-bit integer defines both the state rule and the division rule, and the triangle split keeps the graph 3-regular forever. Twelve presets carry the published rules.",
+  "ruleDescription": "CREDIT. The automaton family is Paul Cousin's binary cubic Graph-Rewriting Automata; this model is a port of Alex Mordvintsev's (znah) \"Growing Graphs\" demo, znah.net/graphs, and the twelve presets are that demo's published rule table.\n\nTHE RULE. Every node is 3-regular and holds one bit. Per rule tick a node computes\n    r = own state x 4 + (number of ON neighbours)          r in 0..7\n    next state = bit r of the rule integer\n    divide     = bit r+8 of the rule integer\nso a whole automaton is ONE 16-bit number. The two lookup tables in the Attributes panel ARE that number: each is 2 x 4 over [own state] x [ON neighbours], row-major, so a table cell's flat index is exactly r and its value is exactly the corresponding bit. Load a preset to see a published rule; Randomize a table to roll a new one.\n\nTHE TRIANGLE SPLIT. A flagged node v(a, b, c) becomes v, j, k: v keeps a, j takes b, k takes c, and the three of them close a triangle. Every one of them has one external edge plus two triangle edges = degree 3, so dN = +2, dE = +3 and E = 3N/2 survives (3N/2 + 3 = 3(N+2)/2). The daughters inherit the mother's post-update state. In GenesisCA that is five queued operations from the mother's own behaviour in ONE generation — two Rewire Bonds and three Form Bond Betweens (Create Agent and Add Agent To World are host calls that consume no queue slot). Peak degree during the drain is exactly 3, which is why Max Bonds is a tight 3.\n\nTHE INITIAL CONDITION IS EXACT. The reference implementation always seeds the same 10-node cubic graph — a 10-cycle plus the chords {0,2} {1,4} {3,6} {5,8} {7,9} — with the states [0,0,0,1,0,1,0,1,1,1]. Here the Agent Init Event places ten agents on a circle and reads their states from a handle-indexed table; the wiring happens on the first behaviour step (Form Bond writes the acting agent's request queue, so it is invalid in an Init Event), gated on bond degree 0 so it runs exactly once. Each node requests bonds to (h+1) mod 10, (h+9) mod 10 and its chord partner; Form Bond is symmetric and an existing bond is an idempotent no-op, so the thirty requests settle to precisely the reference graph's fifteen edges.\n\nTHE TWO PHASES ARE THE REFERENCE'S TWO PHASES. The reference alternates a STATE tick and a DIVISION tick, and the division tick does not re-read the states — it replays the flags the state tick computed. Here that is two Periodic Steps of period 2, one rooted at each phase, so ONE generation is ONE reference tick: phase 0 runs the census, writes the next state and records the division intent; phase 1 splits the flagged nodes, and the daughters inherit the state phase 0 committed. Synchronous agent update is what makes phase 0 a true synchronous CA — the census reads the previous generation through the double buffer.\n\nTHE ONE SEMANTIC DEVIATION, STATED PLAINLY. The reference divides every flagged node within a tick, sequentially, including ADJACENT ones. GenesisCA's structural request queue cannot do that: the mother's Rewire needs its edge to b to still exist when the queue drains, and a splitting b would already have re-pointed it away. So this port splits an INDEPENDENT SET per tick, and a suppressed node is simply re-evaluated next tick — exactly as the reference recomputes its flags every phase 0.\n\nHOW BIG IS THAT DEVIATION? Smaller than it sounds, and measurably so. For a rule whose divide bit fires only when a node is OFF with all three neighbours ON, two flagged nodes cannot be adjacent at all — a flagged neighbour would have to be ON (as seen from me) and OFF (as seen from itself) at the same time — so the independent set is the whole flagged set and this port reproduces the reference node count EXACTLY, cycle for cycle. That is verified for \"quadratic\" and \"exp tree\" over a hundred cycles. Where a rule CAN flag two neighbours at once — \"meduza\" is one — the trajectory genuinely differs. So: exact for one class of rules, qualitatively faithful for the rest.\n\nHOW THE INDEPENDENT SET IS CHOSEN, AND WHY IT HAD TO BE INTENT-AWARE. The state tick stores the division intent and its tie-break in ONE number, the agent attribute \"prio\": a flagged node stores a random roll in [0, 1), an unflagged one stores that roll plus 2. The division tick then splits a node only if its value is below 1.5 (it was flagged) AND strictly below every bonded neighbour's (it won the contest). Strict inequality cannot hold both ways, so the splitters are pairwise non-adjacent for any rolls; and a node that did not want to split sits above 2, so it never blocks anyone. That last part is not a nicety. The obvious version of the gate — compare raw rolls, flagged or not — makes a flagged node wait until it is the local minimum among ALL its neighbours, which discards roughly three quarters of the splits even when the flagged nodes are already pairwise non-adjacent, and for several published rules that is enough to drop the automaton into its absorbing all-OFF configuration and stop it dead.\n\nTHE CADENCE. Both phases carry rule work, so the force solver gets its headroom from three force passes per generation (six per full reference tick) rather than from idle generations.\n\nTHE LAYOUT. Long-range GLOBAL charge: every pair repels, summed through a deterministic Barnes-Hut octree rather than cut off at a radius. That matches the reference demo's own n-body layout, and it is what a growing graph needs — a finite cutoff degrades as the population rises while global holds its quality flat.\n\nCOMPILE TARGET. Engine is set to Auto with an Exact reproducibility contract, so the agent layer resolves to WebAssembly: the WebGPU agent target seeds its per-agent RNG once at runtime creation, so a fixed seed would not replay there. Everything else about the model runs on all three agent targets.",
+  "instructions": "Press Play. Ten seed nodes wire themselves into the reference implementation's exact starting graph, then the automaton grows by triangle splits while the force layout untangles it. Watch the indicators: max degree pins at 3 and E tracks 3N/2 exactly, forever.\n\nThe two viewers are the point. \"Birth generation\" is the reference demo's look — each node coloured by when it was born, so the structure reads as its own growth history. \"State\" shows the single bit the rule runs on.\n\nOpen the Presets list and load the published rules: quadratic grows steadily, meduza and exp tree take completely different shapes, and the mutation presets keep rules alive that stall without noise. Mutation Rate is a live slider — nudge it on a stalled rule and watch it restart. In the Attributes panel, Randomize either rule table to roll an automaton nobody has seen; the seed and density are stored, so an interesting one reproduces exactly.\n\nOne generation is one reference tick, alternating a state phase and a division phase, so the node count moves on every other generation. The simulation pauses at 6000 nodes so a runaway rule can never reach the agent cap.",
+  "topology": "2d-grid",
+  "boundaryTreatment": "constant",
+  "updateMode": "synchronous",
+  "asyncScheme": "random-order",
+  "gridWidth": 800,
+  "gridHeight": 800,
+  "maxIterations": 100000,
+  "tags": [
+   "agents",
+   "graph rewriting",
+   "GRA",
+   "cubic",
+   "znah"
+  ],
+  "engine": "auto",
+  "reproducibility": "exact",
+  "useWasm": true,
+  "useWebGPU": false,
+  "endConditions": {
+   "enabled": true,
+   "indicatorConditions": [
+    {
+     "id": "capGuard",
+     "indicatorId": "nodes",
+     "op": ">=",
+     "value": "6000"
+    }
+   ]
+  }
+ },
+ "attributes": [
+  {
+   "id": "ruleNext",
+   "name": "Next State",
+   "type": "lookupTable",
+   "isModelAttribute": true,
+   "defaultValue": "0",
+   "description": "What does a node BECOME, given its own bit and how many of its three neighbours are ON? Row-major, so the flat cell index is exactly the reference implementation's case index r = own*4 + onCount, and this table IS the low byte of the rule integer, bit for bit. Randomize it to roll a new automaton (the presets carry the published rules).",
+   "valueType": "bool",
+   "axes": [
+    {
+     "name": "Own state",
+     "source": {
+      "kind": "intRange",
+      "min": 0,
+      "max": 1
+     }
+    },
+    {
+     "name": "ON neighbours",
+     "source": {
+      "kind": "intRange",
+      "min": 0,
+      "max": 3
+     }
+    }
+   ],
+   "tableData": [
+    0,
+    1,
+    1,
+    0,
+    0,
+    0,
+    0,
+    1
+   ],
+   "tableRoll": {
+    "seed": 2182,
+    "density": 0.5
+   }
+  },
+  {
+   "id": "ruleDivide",
+   "name": "Divide",
+   "type": "lookupTable",
+   "isModelAttribute": true,
+   "defaultValue": "0",
+   "description": "Does a node SPLIT, given the same two inputs? This table is the HIGH byte of the rule integer (bit r+8). A flagged node performs the triangle split, which keeps the graph 3-regular. The reference generator sets only one or two of these eight bits at random, so a low Randomize density is the honest way to explore rule space here.",
+   "valueType": "bool",
+   "axes": [
+    {
+     "name": "Own state",
+     "source": {
+      "kind": "intRange",
+      "min": 0,
+      "max": 1
+     }
+    },
+    {
+     "name": "ON neighbours",
+     "source": {
+      "kind": "intRange",
+      "min": 0,
+      "max": 3
+     }
+    }
+   ],
+   "tableData": [
+    0,
+    0,
+    0,
+    1,
+    0,
+    0,
+    0,
+    0
+   ],
+   "tableRoll": {
+    "seed": 2182,
+    "density": 0.25
+   }
+  },
+  {
+   "id": "mutationRate",
+   "name": "Mutation Rate",
+   "type": "float",
+   "isModelAttribute": true,
+   "description": "Per node, per rule tick, the probability that the new state is FLIPPED after the table decided it — the reference implementation's flipProb. Several published rules need it: they stall into a fixed point without noise and grow indefinitely with a little.",
+   "defaultValue": "0",
+   "hasBounds": true,
+   "min": 0,
+   "max": 0.01
+  },
+  {
+   "id": "chordPartner",
+   "name": "Seed Chords",
+   "type": "lookupTable",
+   "isModelAttribute": true,
+   "defaultValue": "0",
+   "description": "BOOTSTRAP HELPER, not part of the rule. The chord of the initial 10-node cubic graph: node h bonds to (h+1) mod 10, (h+9) mod 10 and chordPartner[h]. The map is an involution, so the 30 symmetric Form Bond requests settle to exactly the reference graph's 15 edges.",
+   "valueType": "integer",
+   "axes": [
+    {
+     "name": "Seed handle",
+     "source": {
+      "kind": "intRange",
+      "min": 0,
+      "max": 9
+     }
+    }
+   ],
+   "tableData": [
+    2,
+    4,
+    0,
+    6,
+    1,
+    8,
+    3,
+    9,
+    5,
+    7
+   ]
+  },
+  {
+   "id": "initState",
+   "name": "Seed States",
+   "type": "lookupTable",
+   "isModelAttribute": true,
+   "defaultValue": "0",
+   "description": "BOOTSTRAP HELPER, not part of the rule. The reference implementation's initial state vector [0,0,0,1,0,1,0,1,1,1], indexed by the seed handle.",
+   "valueType": "bool",
+   "axes": [
+    {
+     "name": "Seed handle",
+     "source": {
+      "kind": "intRange",
+      "min": 0,
+      "max": 9
+     }
+    }
+   ],
+   "tableData": [
+    0,
+    0,
+    0,
+    1,
+    0,
+    1,
+    0,
+    1,
+    1,
+    1
+   ]
+  }
+ ],
+ "neighborhoods": [],
+ "mappings": [],
+ "indicators": [
+  {
+   "id": "nodes",
+   "name": "nodes (N)",
+   "kind": "graph",
+   "graphMetric": "nodeCount",
+   "dataType": "integer",
+   "defaultValue": "0",
+   "accumulationMode": "per-generation",
+   "watched": true
+  },
+  {
+   "id": "edges",
+   "name": "edges (E)",
+   "kind": "graph",
+   "graphMetric": "edgeCount",
+   "dataType": "integer",
+   "defaultValue": "0",
+   "accumulationMode": "per-generation",
+   "watched": true
+  },
+  {
+   "id": "maxDeg",
+   "name": "max degree",
+   "kind": "graph",
+   "graphMetric": "maxDegree",
+   "dataType": "integer",
+   "defaultValue": "0",
+   "accumulationMode": "per-generation",
+   "watched": true
+  }
+ ],
+ "graphNodes": [],
+ "graphEdges": [],
+ "macroDefs": [],
+ "topologyMode": {
+  "gridCells": false,
+  "agents": true
+ },
+ "centerBased": {
+  "enabled": true,
+  "agentTarget": "auto",
+  "maxAgents": 12000,
+  "maxBonds": 3,
+  "bondRequestDepth": 8,
+  "worldWidth": 800,
+  "worldHeight": 800,
+  "seedCount": 0,
+  "seedPattern": "compact",
+  "defaultRadius": 0.9,
+  "growthRate": 0,
+  "repulsionStiffness": 0.9,
+  "adhesionStiffness": 0,
+  "interactionRange": 2.2,
+  "drag": 1,
+  "timeStep": 0.12,
+  "momentum": 0,
+  "maxSpeed": 0,
+  "neighbourQueryRadius": 6,
+  "useBondingPhysics": true,
+  "autoBond": false,
+  "bondStiffness": 0.55,
+  "bondRestLength": 5,
+  "formDistance": 1.15,
+  "breakDistance": 1.8,
+  "agentUpdateMode": "sync",
+  "chargeStrength": -10,
+  "chargeRange": "global",
+  "chargeTheta": 0.9,
+  "layoutIterations": 3,
+  "agentCapabilities": {
+   "motion": "force",
+   "body": true,
+   "collision": "soft",
+   "bonds": "physics",
+   "autoBond": false,
+   "charge": "on",
+   "growth": false,
+   "division": false,
+   "lifespan": true,
+   "populationBirth": true,
+   "populationDeath": false,
+   "sensing": true,
+   "sensingHeadingSource": "velocity",
+   "orientation": false,
+   "fieldCoupling": false,
+   "appearance": true
+  }
+ },
+ "agentAttributes": [
+  {
+   "id": "state",
+   "name": "state",
+   "type": "bool",
+   "defaultValue": "false",
+   "description": "The node's single bit — the alphabet the census counts and both rule tables are keyed by."
+  },
+  {
+   "id": "prio",
+   "name": "prio",
+   "type": "float",
+   "defaultValue": "2.5",
+   "description": "The division intent AND its tie-break in one number, written by the state tick and read by the division tick: a flagged node stores its random roll in [0, 1), an unflagged one stores roll + 2. A node splits only if its value is below 1.5 (it was flagged) and strictly below every bonded neighbour's (it won the contest), so the splitters are pairwise non-adjacent while a neighbour that does not want to split never blocks anyone. The default is a non-splitter value, so a newborn can never look flagged before its first state tick."
+  }
+ ],
+ "agentVariables": [],
+ "bondAttributes": [],
+ "agentMappings": [
+  {
+   "id": "birthView",
+   "name": "Birth generation",
+   "isAttributeToColor": true,
+   "description": "The reference demo's look: colour by the generation a node was born in, normalised by the current generation, so the oldest core is deep indigo and the growing frontier is bright.",
+   "linked": false
+  },
+  {
+   "id": "stateView",
+   "name": "State",
+   "isAttributeToColor": true,
+   "description": "The node bit: OFF / ON.",
+   "linked": true,
+   "linkedAttributeId": "state",
+   "linkedColors": {
+    "gradient": [
+     {
+      "position": 0,
+      "r": 52,
+      "g": 60,
+      "b": 84
+     },
+     {
+      "position": 1,
+      "r": 250,
+      "g": 208,
+      "b": 100
+     }
+    ]
+   }
+  }
+ ],
+ "agentGraphNodes": [
+  {
+   "id": "nmse77l3y33hu",
+   "type": "caNode",
+   "position": {
+    "x": 0,
+    "y": 0
+   },
+   "data": {
+    "nodeType": "agentInit",
+    "config": {}
+   }
+  },
+  {
+   "id": "nmse77l3ytypi",
+   "type": "caNode",
+   "position": {
+    "x": 240,
+    "y": 0
+   },
+   "data": {
+    "nodeType": "loop",
+    "config": {
+     "mode": "count",
+     "_port_count": "10"
+    }
+   }
+  },
+  {
+   "id": "nmse77l3ze4xs",
+   "type": "caNode",
+   "position": {
+    "x": 480,
+    "y": -95
+   },
+   "data": {
+    "nodeType": "expression",
+    "config": {
+     "expression": "w * 0.5 + w * 0.03 * cos(0.628318530717959 * h)",
+     "visibleCount": 2,
+     "_varName_a": "h",
+     "_varName_b": "w"
+    }
+   }
+  },
+  {
+   "id": "nmse77l3ztndx",
+   "type": "caNode",
+   "position": {
+    "x": 480,
+    "y": 95
+   },
+   "data": {
+    "nodeType": "expression",
+    "config": {
+     "expression": "t * 0.5 + t * 0.03 * sin(0.628318530717959 * h)",
+     "visibleCount": 2,
+     "_varName_a": "h",
+     "_varName_b": "t"
+    }
+   }
+  },
+  {
+   "id": "nmse77l3z9me8",
+   "type": "caNode",
+   "position": {
+    "x": 720,
+    "y": 0
+   },
+   "data": {
+    "nodeType": "createAgent",
+    "config": {
+     "_port_radius": "0.9"
+    }
+   }
+  },
+  {
+   "id": "nmse77l3zg7mw",
+   "type": "caNode",
+   "position": {
+    "x": 960,
+    "y": 0
+   },
+   "data": {
+    "nodeType": "addAgentToWorld",
+    "config": {}
+   }
+  },
+  {
+   "id": "nmse77l3z026r",
+   "type": "caNode",
+   "position": {
+    "x": 720,
+    "y": 190
+   },
+   "data": {
+    "nodeType": "lookupInteraction",
+    "config": {
+     "tableId": "initState"
+    }
+   }
+  },
+  {
+   "id": "nmse77l3zwh18",
+   "type": "caNode",
+   "position": {
+    "x": 1200,
+    "y": 0
+   },
+   "data": {
+    "nodeType": "setAgentAttribute",
+    "config": {
+     "attributeId": "state"
+    }
+   }
+  },
+  {
+   "id": "nmse77l3z8s3j",
+   "type": "caNode",
+   "position": {
+    "x": 0,
+    "y": 380
+   },
+   "data": {
+    "nodeType": "behaviourStep",
+    "config": {}
+   }
+  },
+  {
+   "id": "nmse77l3zwm5a",
+   "type": "caNode",
+   "position": {
+    "x": 0,
+    "y": 570
+   },
+   "data": {
+    "nodeType": "getBondDegree",
+    "config": {}
+   }
+  },
+  {
+   "id": "nmse77l3zzhey",
+   "type": "caNode",
+   "position": {
+    "x": 240,
+    "y": 570
+   },
+   "data": {
+    "nodeType": "statement",
+    "config": {
+     "operation": "==",
+     "compareType": "numerical",
+     "_port_y": "0"
+    }
+   }
+  },
+  {
+   "id": "nmse77l3z4v6d",
+   "type": "caNode",
+   "position": {
+    "x": 480,
+    "y": 380
+   },
+   "data": {
+    "nodeType": "conditional",
+    "config": {}
+   }
+  },
+  {
+   "id": "nmse77l3zwxjg",
+   "type": "caNode",
+   "position": {
+    "x": 480,
+    "y": 190
+   },
+   "data": {
+    "nodeType": "getSelfHandle",
+    "config": {}
+   }
+  },
+  {
+   "id": "nmse77l3zy0k5",
+   "type": "caNode",
+   "position": {
+    "x": 720,
+    "y": 285
+   },
+   "data": {
+    "nodeType": "expression",
+    "config": {
+     "expression": "(h + 1) % 10",
+     "visibleCount": 1,
+     "_varName_a": "h"
+    }
+   }
+  },
+  {
+   "id": "nmse77l3zfipk",
+   "type": "caNode",
+   "position": {
+    "x": 720,
+    "y": 380
+   },
+   "data": {
+    "nodeType": "expression",
+    "config": {
+     "expression": "(h + 9) % 10",
+     "visibleCount": 1,
+     "_varName_a": "h"
+    }
+   }
+  },
+  {
+   "id": "nmse77l3zz6v6",
+   "type": "caNode",
+   "position": {
+    "x": 720,
+    "y": 475
+   },
+   "data": {
+    "nodeType": "lookupInteraction",
+    "config": {
+     "tableId": "chordPartner"
+    }
+   }
+  },
+  {
+   "id": "nmse77l3z5y5d",
+   "type": "caNode",
+   "position": {
+    "x": 960,
+    "y": 285
+   },
+   "data": {
+    "nodeType": "formBond",
+    "config": {
+     "_port_restLength": "5",
+     "_port_stiffness": "0.55"
+    }
+   }
+  },
+  {
+   "id": "nmse77l3zxs0f",
+   "type": "caNode",
+   "position": {
+    "x": 960,
+    "y": 380
+   },
+   "data": {
+    "nodeType": "formBond",
+    "config": {
+     "_port_restLength": "5",
+     "_port_stiffness": "0.55"
+    }
+   }
+  },
+  {
+   "id": "nmse77l3zexa1",
+   "type": "caNode",
+   "position": {
+    "x": 960,
+    "y": 475
+   },
+   "data": {
+    "nodeType": "formBond",
+    "config": {
+     "_port_restLength": "5",
+     "_port_stiffness": "0.55"
+    }
+   }
+  },
+  {
+   "id": "nmse77l3zm6uy",
+   "type": "caNode",
+   "position": {
+    "x": 0,
+    "y": 855
+   },
+   "data": {
+    "nodeType": "periodicStep",
+    "config": {
+     "period": 2,
+     "phase": 0
+    }
+   }
+  },
+  {
+   "id": "nmse77l3z6uz8",
+   "type": "caNode",
+   "position": {
+    "x": 0,
+    "y": 1045
+   },
+   "data": {
+    "nodeType": "neighbourCensus",
+    "config": {
+     "attributeId": "state",
+     "source": "bonded"
+    }
+   }
+  },
+  {
+   "id": "nmse77l3zxm0k",
+   "type": "caNode",
+   "position": {
+    "x": 0,
+    "y": 1140
+   },
+   "data": {
+    "nodeType": "getCellAttribute",
+    "config": {
+     "attributeId": "state"
+    }
+   }
+  },
+  {
+   "id": "nmse77l3zaf55",
+   "type": "caNode",
+   "position": {
+    "x": 240,
+    "y": 1045
+   },
+   "data": {
+    "nodeType": "statement",
+    "config": {
+     "operation": ">",
+     "compareType": "numerical",
+     "_port_y": "0"
+    }
+   }
+  },
+  {
+   "id": "nmse77l3zi27s",
+   "type": "caNode",
+   "position": {
+    "x": 480,
+    "y": 855
+   },
+   "data": {
+    "nodeType": "conditional",
+    "config": {}
+   }
+  },
+  {
+   "id": "nmse77l3zwpyj",
+   "type": "caNode",
+   "position": {
+    "x": 720,
+    "y": 1045
+   },
+   "data": {
+    "nodeType": "lookupInteraction",
+    "config": {
+     "tableId": "ruleNext"
+    }
+   }
+  },
+  {
+   "id": "nmse77l3zjweh",
+   "type": "caNode",
+   "position": {
+    "x": 720,
+    "y": 1140
+   },
+   "data": {
+    "nodeType": "getRandom",
+    "config": {
+     "randomType": "float",
+     "min": "0",
+     "max": "1"
+    }
+   }
+  },
+  {
+   "id": "nmse77l3z5oml",
+   "type": "caNode",
+   "position": {
+    "x": 720,
+    "y": 1235
+   },
+   "data": {
+    "nodeType": "getModelAttribute",
+    "config": {
+     "attributeId": "mutationRate"
+    }
+   }
+  },
+  {
+   "id": "nmse77l3z23u0",
+   "type": "caNode",
+   "position": {
+    "x": 960,
+    "y": 1140
+   },
+   "data": {
+    "nodeType": "statement",
+    "config": {
+     "operation": "<",
+     "compareType": "numerical"
+    }
+   }
+  },
+  {
+   "id": "nmse77l3zirs3",
+   "type": "caNode",
+   "position": {
+    "x": 1200,
+    "y": 1045
+   },
+   "data": {
+    "nodeType": "expression",
+    "config": {
+     "expression": "s + f * (1 - 2 * s)",
+     "visibleCount": 2,
+     "_varName_a": "s",
+     "_varName_b": "f"
+    }
+   }
+  },
+  {
+   "id": "nmse77l3z45jv",
+   "type": "caNode",
+   "position": {
+    "x": 1440,
+    "y": 855
+   },
+   "data": {
+    "nodeType": "setAttribute",
+    "config": {
+     "attributeId": "state"
+    }
+   }
+  },
+  {
+   "id": "nmse77l3zuu1a",
+   "type": "caNode",
+   "position": {
+    "x": 720,
+    "y": 1425
+   },
+   "data": {
+    "nodeType": "lookupInteraction",
+    "config": {
+     "tableId": "ruleDivide"
+    }
+   }
+  },
+  {
+   "id": "nmse77l3zceln",
+   "type": "caNode",
+   "position": {
+    "x": 720,
+    "y": 1520
+   },
+   "data": {
+    "nodeType": "getRandom",
+    "config": {
+     "randomType": "float",
+     "min": "0",
+     "max": "1"
+    }
+   }
+  },
+  {
+   "id": "nmse77l3zsjtm",
+   "type": "caNode",
+   "position": {
+    "x": 1200,
+    "y": 1425
+   },
+   "data": {
+    "nodeType": "expression",
+    "config": {
+     "expression": "roll + (1 - d) * 2",
+     "visibleCount": 2,
+     "_varName_a": "roll",
+     "_varName_b": "d"
+    }
+   }
+  },
+  {
+   "id": "nmse77l3ze2e8",
+   "type": "caNode",
+   "position": {
+    "x": 1440,
+    "y": 1140
+   },
+   "data": {
+    "nodeType": "setAttribute",
+    "config": {
+     "attributeId": "prio"
+    }
+   }
+  },
+  {
+   "id": "nmse77l3zqbse",
+   "type": "caNode",
+   "position": {
+    "x": 0,
+    "y": 1520
+   },
+   "data": {
+    "nodeType": "periodicStep",
+    "config": {
+     "period": 2,
+     "phase": 1
+    }
+   }
+  },
+  {
+   "id": "nmse77l3zsd5j",
+   "type": "caNode",
+   "position": {
+    "x": 0,
+    "y": 1710
+   },
+   "data": {
+    "nodeType": "getCellAttribute",
+    "config": {
+     "attributeId": "prio"
+    }
+   }
+  },
+  {
+   "id": "nmse77l3zmrdm",
+   "type": "caNode",
+   "position": {
+    "x": 240,
+    "y": 1710
+   },
+   "data": {
+    "nodeType": "statement",
+    "config": {
+     "operation": "<",
+     "compareType": "numerical",
+     "_port_y": "1.5"
+    }
+   }
+  },
+  {
+   "id": "nmse77l3zrk3n",
+   "type": "caNode",
+   "position": {
+    "x": 0,
+    "y": 1615
+   },
+   "data": {
+    "nodeType": "getBondedAgents",
+    "config": {}
+   }
+  },
+  {
+   "id": "nmse77l3zb53o",
+   "type": "caNode",
+   "position": {
+    "x": 240,
+    "y": 1615
+   },
+   "data": {
+    "nodeType": "getAgentsAttribute",
+    "config": {
+     "attributeId": "prio"
+    }
+   }
+  },
+  {
+   "id": "nmse77l3zv2ug",
+   "type": "caNode",
+   "position": {
+    "x": 480,
+    "y": 1615
+   },
+   "data": {
+    "nodeType": "aggregate",
+    "config": {
+     "operation": "min"
+    }
+   }
+  },
+  {
+   "id": "nmse77l3z8dla",
+   "type": "caNode",
+   "position": {
+    "x": 720,
+    "y": 1615
+   },
+   "data": {
+    "nodeType": "statement",
+    "config": {
+     "operation": "<",
+     "compareType": "numerical"
+    }
+   }
+  },
+  {
+   "id": "nmse77l3zrbzz",
+   "type": "caNode",
+   "position": {
+    "x": 720,
+    "y": 1710
+   },
+   "data": {
+    "nodeType": "statement",
+    "config": {
+     "operation": "==",
+     "compareType": "numerical",
+     "_port_y": "3"
+    }
+   }
+  },
+  {
+   "id": "nmse77l3zqsja",
+   "type": "caNode",
+   "position": {
+    "x": 1200,
+    "y": 1520
+   },
+   "data": {
+    "nodeType": "logicOperator",
+    "config": {
+     "operation": "AND"
+    }
+   }
+  },
+  {
+   "id": "nmse77l3z5hge",
+   "type": "caNode",
+   "position": {
+    "x": 1440,
+    "y": 1520
+   },
+   "data": {
+    "nodeType": "logicOperator",
+    "config": {
+     "operation": "AND"
+    }
+   }
+  },
+  {
+   "id": "nmse77l3zu75h",
+   "type": "caNode",
+   "position": {
+    "x": 1680,
+    "y": 1520
+   },
+   "data": {
+    "nodeType": "conditional",
+    "config": {}
+   }
+  },
+  {
+   "id": "nmse77l3znktl",
+   "type": "caNode",
+   "position": {
+    "x": 1680,
+    "y": 1805
+   },
+   "data": {
+    "nodeType": "getCellAttribute",
+    "config": {
+     "attributeId": "state"
+    }
+   }
+  },
+  {
+   "id": "nmse77l3zpe2x",
+   "type": "caNode",
+   "position": {
+    "x": 240,
+    "y": 1900
+   },
+   "data": {
+    "nodeType": "arrayElement",
+    "config": {
+     "_port_position": "1"
+    }
+   }
+  },
+  {
+   "id": "nmse77l3zyzrm",
+   "type": "caNode",
+   "position": {
+    "x": 240,
+    "y": 1995
+   },
+   "data": {
+    "nodeType": "arrayElement",
+    "config": {
+     "_port_position": "2"
+    }
+   }
+  },
+  {
+   "id": "nmse77l3z72kr",
+   "type": "caNode",
+   "position": {
+    "x": 1920,
+    "y": 1900
+   },
+   "data": {
+    "nodeType": "getSelfPosition",
+    "config": {}
+   }
+  },
+  {
+   "id": "nmse77l3zte3d",
+   "type": "caNode",
+   "position": {
+    "x": 1920,
+    "y": 1710
+   },
+   "data": {
+    "nodeType": "getAgentPosition",
+    "config": {
+     "mode": "relative"
+    }
+   }
+  },
+  {
+   "id": "nmse77l3zm7ho",
+   "type": "caNode",
+   "position": {
+    "x": 1920,
+    "y": 2090
+   },
+   "data": {
+    "nodeType": "getAgentPosition",
+    "config": {
+     "mode": "relative"
+    }
+   }
+  },
+  {
+   "id": "nmse77l3zboqu",
+   "type": "caNode",
+   "position": {
+    "x": 2160,
+    "y": 1710
+   },
+   "data": {
+    "nodeType": "expression",
+    "config": {
+     "expression": "self + toward * 0.5 + (jitter - 0.5) * 0.6",
+     "visibleCount": 3,
+     "_varName_a": "self",
+     "_varName_b": "toward",
+     "_varName_c": "jitter"
+    }
+   }
+  },
+  {
+   "id": "nmse77l3z9xit",
+   "type": "caNode",
+   "position": {
+    "x": 2160,
+    "y": 1805
+   },
+   "data": {
+    "nodeType": "expression",
+    "config": {
+     "expression": "self + toward * 0.5 + (jitter - 0.5) * 0.6",
+     "visibleCount": 3,
+     "_varName_a": "self",
+     "_varName_b": "toward",
+     "_varName_c": "jitter"
+    }
+   }
+  },
+  {
+   "id": "nmse77l3z2szk",
+   "type": "caNode",
+   "position": {
+    "x": 2160,
+    "y": 1995
+   },
+   "data": {
+    "nodeType": "expression",
+    "config": {
+     "expression": "self + toward * 0.5 - (jitter - 0.5) * 0.6",
+     "visibleCount": 3,
+     "_varName_a": "self",
+     "_varName_b": "toward",
+     "_varName_c": "jitter"
+    }
+   }
+  },
+  {
+   "id": "nmse77l3z6c47",
+   "type": "caNode",
+   "position": {
+    "x": 2160,
+    "y": 2090
+   },
+   "data": {
+    "nodeType": "expression",
+    "config": {
+     "expression": "self + toward * 0.5 - (jitter - 0.5) * 0.6",
+     "visibleCount": 3,
+     "_varName_a": "self",
+     "_varName_b": "toward",
+     "_varName_c": "jitter"
+    }
+   }
+  },
+  {
+   "id": "nmse77l3zg1vp",
+   "type": "caNode",
+   "position": {
+    "x": 2400,
+    "y": 1710
+   },
+   "data": {
+    "nodeType": "createAgent",
+    "config": {
+     "_port_radius": "0.9"
+    }
+   }
+  },
+  {
+   "id": "nmse77l3zja7y",
+   "type": "caNode",
+   "position": {
+    "x": 2640,
+    "y": 1710
+   },
+   "data": {
+    "nodeType": "addAgentToWorld",
+    "config": {}
+   }
+  },
+  {
+   "id": "nmse77l3zdqax",
+   "type": "caNode",
+   "position": {
+    "x": 2880,
+    "y": 1710
+   },
+   "data": {
+    "nodeType": "setAgentAttribute",
+    "config": {
+     "attributeId": "state"
+    }
+   }
+  },
+  {
+   "id": "nmse77l3zej7e",
+   "type": "caNode",
+   "position": {
+    "x": 2400,
+    "y": 1995
+   },
+   "data": {
+    "nodeType": "createAgent",
+    "config": {
+     "_port_radius": "0.9"
+    }
+   }
+  },
+  {
+   "id": "nmse77l3zcror",
+   "type": "caNode",
+   "position": {
+    "x": 2640,
+    "y": 1995
+   },
+   "data": {
+    "nodeType": "addAgentToWorld",
+    "config": {}
+   }
+  },
+  {
+   "id": "nmse77l3z5yf4",
+   "type": "caNode",
+   "position": {
+    "x": 2880,
+    "y": 1995
+   },
+   "data": {
+    "nodeType": "setAgentAttribute",
+    "config": {
+     "attributeId": "state"
+    }
+   }
+  },
+  {
+   "id": "nmse77l40t1vx",
+   "type": "caNode",
+   "position": {
+    "x": 3120,
+    "y": 1710
+   },
+   "data": {
+    "nodeType": "rewireBond",
+    "config": {
+     "_port_restLength": "5",
+     "_port_stiffness": "0.55"
+    }
+   }
+  },
+  {
+   "id": "nmse77l40sgt3",
+   "type": "caNode",
+   "position": {
+    "x": 3120,
+    "y": 1805
+   },
+   "data": {
+    "nodeType": "rewireBond",
+    "config": {
+     "_port_restLength": "5",
+     "_port_stiffness": "0.55"
+    }
+   }
+  },
+  {
+   "id": "nmse77l4039mb",
+   "type": "caNode",
+   "position": {
+    "x": 3120,
+    "y": 1900
+   },
+   "data": {
+    "nodeType": "formBondBetween",
+    "config": {
+     "_port_restLength": "5",
+     "_port_stiffness": "0.55"
+    }
+   }
+  },
+  {
+   "id": "nmse77l408ya9",
+   "type": "caNode",
+   "position": {
+    "x": 3120,
+    "y": 1995
+   },
+   "data": {
+    "nodeType": "formBondBetween",
+    "config": {
+     "_port_restLength": "5",
+     "_port_stiffness": "0.55"
+    }
+   }
+  },
+  {
+   "id": "nmse77l406z9o",
+   "type": "caNode",
+   "position": {
+    "x": 3120,
+    "y": 2090
+   },
+   "data": {
+    "nodeType": "formBondBetween",
+    "config": {
+     "_port_restLength": "5",
+     "_port_stiffness": "0.55"
+    }
+   }
+  },
+  {
+   "id": "nmse77l40x492",
+   "type": "caNode",
+   "position": {
+    "x": 0,
+    "y": 2375
+   },
+   "data": {
+    "nodeType": "agentOutputMapping",
+    "config": {
+     "mappingId": "birthView"
+    }
+   }
+  },
+  {
+   "id": "nmse77l40nkg9",
+   "type": "caNode",
+   "position": {
+    "x": 0,
+    "y": 2470
+   },
+   "data": {
+    "nodeType": "getGeneration",
+    "config": {}
+   }
+  },
+  {
+   "id": "nmse77l40y8an",
+   "type": "caNode",
+   "position": {
+    "x": 0,
+    "y": 2565
+   },
+   "data": {
+    "nodeType": "getAge",
+    "config": {}
+   }
+  },
+  {
+   "id": "nmse77l40wfxl",
+   "type": "caNode",
+   "position": {
+    "x": 240,
+    "y": 2470
+   },
+   "data": {
+    "nodeType": "expression",
+    "config": {
+     "expression": "(g - a) / (g + 1)",
+     "visibleCount": 2,
+     "_varName_a": "g",
+     "_varName_b": "a"
+    }
+   }
+  },
+  {
+   "id": "nmse77l40hksd",
+   "type": "caNode",
+   "position": {
+    "x": 480,
+    "y": 2470
+   },
+   "data": {
+    "nodeType": "colorScale",
+    "config": {
+     "method": "linear",
+     "stopCount": 5,
+     "stop_0_position": "0",
+     "stop_0_r": "16",
+     "stop_0_g": "10",
+     "stop_0_b": "60",
+     "stop_1_position": "0.35",
+     "stop_1_r": "90",
+     "stop_1_g": "30",
+     "stop_1_b": "150",
+     "stop_2_position": "0.65",
+     "stop_2_r": "215",
+     "stop_2_g": "60",
+     "stop_2_b": "135",
+     "stop_3_position": "0.88",
+     "stop_3_r": "250",
+     "stop_3_g": "150",
+     "stop_3_b": "80",
+     "stop_4_position": "1",
+     "stop_4_r": "255",
+     "stop_4_g": "245",
+     "stop_4_b": "200"
+    }
+   }
+  },
+  {
+   "id": "nmse77l4055ze",
+   "type": "caNode",
+   "position": {
+    "x": 720,
+    "y": 2375
+   },
+   "data": {
+    "nodeType": "setCellLooks",
+    "config": {
+     "mappingId": "birthView",
+     "useGlyph": false,
+     "setBackground": true,
+     "fallbackToGlyphColor": false
+    }
+   }
+  }
+ ],
+ "agentGraphEdges": [
+  {
+   "id": "emse77l3z42zb",
+   "source": "nmse77l3y33hu",
+   "target": "nmse77l3ytypi",
+   "sourceHandle": "output_flow_do",
+   "targetHandle": "input_flow_do"
+  },
+  {
+   "id": "emse77l3z53qn",
+   "source": "nmse77l3ytypi",
+   "target": "nmse77l3ze4xs",
+   "sourceHandle": "output_value_index",
+   "targetHandle": "input_value_a"
+  },
+  {
+   "id": "emse77l3zknlf",
+   "source": "nmse77l3y33hu",
+   "target": "nmse77l3ze4xs",
+   "sourceHandle": "output_value_worldWidth",
+   "targetHandle": "input_value_b"
+  },
+  {
+   "id": "emse77l3ztnk0",
+   "source": "nmse77l3ytypi",
+   "target": "nmse77l3ztndx",
+   "sourceHandle": "output_value_index",
+   "targetHandle": "input_value_a"
+  },
+  {
+   "id": "emse77l3z35m6",
+   "source": "nmse77l3y33hu",
+   "target": "nmse77l3ztndx",
+   "sourceHandle": "output_value_worldHeight",
+   "targetHandle": "input_value_b"
+  },
+  {
+   "id": "emse77l3zg6i1",
+   "source": "nmse77l3ze4xs",
+   "target": "nmse77l3z9me8",
+   "sourceHandle": "output_value_result",
+   "targetHandle": "input_value_x"
+  },
+  {
+   "id": "emse77l3z9ze2",
+   "source": "nmse77l3ztndx",
+   "target": "nmse77l3z9me8",
+   "sourceHandle": "output_value_result",
+   "targetHandle": "input_value_y"
+  },
+  {
+   "id": "emse77l3zbeep",
+   "source": "nmse77l3z9me8",
+   "target": "nmse77l3zg7mw",
+   "sourceHandle": "output_value_handle",
+   "targetHandle": "input_value_handle"
+  },
+  {
+   "id": "emse77l3zubg7",
+   "source": "nmse77l3ytypi",
+   "target": "nmse77l3z026r",
+   "sourceHandle": "output_value_index",
+   "targetHandle": "input_value_axis_0"
+  },
+  {
+   "id": "emse77l3zh4sg",
+   "source": "nmse77l3z9me8",
+   "target": "nmse77l3zwh18",
+   "sourceHandle": "output_value_handle",
+   "targetHandle": "input_value_agentId"
+  },
+  {
+   "id": "emse77l3z9ftg",
+   "source": "nmse77l3z026r",
+   "target": "nmse77l3zwh18",
+   "sourceHandle": "output_value_value",
+   "targetHandle": "input_value_value"
+  },
+  {
+   "id": "emse77l3z24e3",
+   "source": "nmse77l3ytypi",
+   "target": "nmse77l3z9me8",
+   "sourceHandle": "output_flow_body",
+   "targetHandle": "input_flow_do"
+  },
+  {
+   "id": "emse77l3z60va",
+   "source": "nmse77l3z9me8",
+   "target": "nmse77l3zg7mw",
+   "sourceHandle": "output_flow_next",
+   "targetHandle": "input_flow_do"
+  },
+  {
+   "id": "emse77l3z1g7c",
+   "source": "nmse77l3zg7mw",
+   "target": "nmse77l3zwh18",
+   "sourceHandle": "output_flow_next",
+   "targetHandle": "input_flow_do"
+  },
+  {
+   "id": "emse77l3zw3mu",
+   "source": "nmse77l3zwm5a",
+   "target": "nmse77l3zzhey",
+   "sourceHandle": "output_value_value",
+   "targetHandle": "input_value_x"
+  },
+  {
+   "id": "emse77l3zhmhx",
+   "source": "nmse77l3z8s3j",
+   "target": "nmse77l3z4v6d",
+   "sourceHandle": "output_flow_do",
+   "targetHandle": "input_flow_check"
+  },
+  {
+   "id": "emse77l3zzqis",
+   "source": "nmse77l3zzhey",
+   "target": "nmse77l3z4v6d",
+   "sourceHandle": "output_value_result",
+   "targetHandle": "input_value_condition"
+  },
+  {
+   "id": "emse77l3z7en7",
+   "source": "nmse77l3zwxjg",
+   "target": "nmse77l3zy0k5",
+   "sourceHandle": "output_value_handle",
+   "targetHandle": "input_value_a"
+  },
+  {
+   "id": "emse77l3zus3b",
+   "source": "nmse77l3zwxjg",
+   "target": "nmse77l3zfipk",
+   "sourceHandle": "output_value_handle",
+   "targetHandle": "input_value_a"
+  },
+  {
+   "id": "emse77l3zod42",
+   "source": "nmse77l3zwxjg",
+   "target": "nmse77l3zz6v6",
+   "sourceHandle": "output_value_handle",
+   "targetHandle": "input_value_axis_0"
+  },
+  {
+   "id": "emse77l3z2idp",
+   "source": "nmse77l3zy0k5",
+   "target": "nmse77l3z5y5d",
+   "sourceHandle": "output_value_result",
+   "targetHandle": "input_value_targetAgent"
+  },
+  {
+   "id": "emse77l3z18d5",
+   "source": "nmse77l3zfipk",
+   "target": "nmse77l3zxs0f",
+   "sourceHandle": "output_value_result",
+   "targetHandle": "input_value_targetAgent"
+  },
+  {
+   "id": "emse77l3zj73d",
+   "source": "nmse77l3zz6v6",
+   "target": "nmse77l3zexa1",
+   "sourceHandle": "output_value_value",
+   "targetHandle": "input_value_targetAgent"
+  },
+  {
+   "id": "emse77l3z3s95",
+   "source": "nmse77l3z4v6d",
+   "target": "nmse77l3z5y5d",
+   "sourceHandle": "output_flow_then",
+   "targetHandle": "input_flow_do"
+  },
+  {
+   "id": "emse77l3zbhko",
+   "source": "nmse77l3z5y5d",
+   "target": "nmse77l3zxs0f",
+   "sourceHandle": "output_flow_next",
+   "targetHandle": "input_flow_do"
+  },
+  {
+   "id": "emse77l3zc7py",
+   "source": "nmse77l3zxs0f",
+   "target": "nmse77l3zexa1",
+   "sourceHandle": "output_flow_next",
+   "targetHandle": "input_flow_do"
+  },
+  {
+   "id": "emse77l3zbymf",
+   "source": "nmse77l3z6uz8",
+   "target": "nmse77l3zaf55",
+   "sourceHandle": "output_value_total",
+   "targetHandle": "input_value_x"
+  },
+  {
+   "id": "emse77l3zpxr3",
+   "source": "nmse77l3zm6uy",
+   "target": "nmse77l3zi27s",
+   "sourceHandle": "output_flow_do",
+   "targetHandle": "input_flow_check"
+  },
+  {
+   "id": "emse77l3z24kk",
+   "source": "nmse77l3zaf55",
+   "target": "nmse77l3zi27s",
+   "sourceHandle": "output_value_result",
+   "targetHandle": "input_value_condition"
+  },
+  {
+   "id": "emse77l3zmuep",
+   "source": "nmse77l3zxm0k",
+   "target": "nmse77l3zwpyj",
+   "sourceHandle": "output_value_value",
+   "targetHandle": "input_value_axis_0"
+  },
+  {
+   "id": "emse77l3z6wvp",
+   "source": "nmse77l3z6uz8",
+   "target": "nmse77l3zwpyj",
+   "sourceHandle": "output_value_count_1",
+   "targetHandle": "input_value_axis_1"
+  },
+  {
+   "id": "emse77l3zjfz9",
+   "source": "nmse77l3zjweh",
+   "target": "nmse77l3z23u0",
+   "sourceHandle": "output_value_value",
+   "targetHandle": "input_value_x"
+  },
+  {
+   "id": "emse77l3zarbh",
+   "source": "nmse77l3z5oml",
+   "target": "nmse77l3z23u0",
+   "sourceHandle": "output_value_value",
+   "targetHandle": "input_value_y"
+  },
+  {
+   "id": "emse77l3zpkgy",
+   "source": "nmse77l3zwpyj",
+   "target": "nmse77l3zirs3",
+   "sourceHandle": "output_value_value",
+   "targetHandle": "input_value_a"
+  },
+  {
+   "id": "emse77l3z3h40",
+   "source": "nmse77l3z23u0",
+   "target": "nmse77l3zirs3",
+   "sourceHandle": "output_value_result",
+   "targetHandle": "input_value_b"
+  },
+  {
+   "id": "emse77l3zvxk7",
+   "source": "nmse77l3zirs3",
+   "target": "nmse77l3z45jv",
+   "sourceHandle": "output_value_result",
+   "targetHandle": "input_value_value"
+  },
+  {
+   "id": "emse77l3z844t",
+   "source": "nmse77l3zi27s",
+   "target": "nmse77l3z45jv",
+   "sourceHandle": "output_flow_then",
+   "targetHandle": "input_flow_do"
+  },
+  {
+   "id": "emse77l3zw38f",
+   "source": "nmse77l3zxm0k",
+   "target": "nmse77l3zuu1a",
+   "sourceHandle": "output_value_value",
+   "targetHandle": "input_value_axis_0"
+  },
+  {
+   "id": "emse77l3znfiq",
+   "source": "nmse77l3z6uz8",
+   "target": "nmse77l3zuu1a",
+   "sourceHandle": "output_value_count_1",
+   "targetHandle": "input_value_axis_1"
+  },
+  {
+   "id": "emse77l3z9ns5",
+   "source": "nmse77l3zceln",
+   "target": "nmse77l3zsjtm",
+   "sourceHandle": "output_value_value",
+   "targetHandle": "input_value_a"
+  },
+  {
+   "id": "emse77l3z5h87",
+   "source": "nmse77l3zuu1a",
+   "target": "nmse77l3zsjtm",
+   "sourceHandle": "output_value_value",
+   "targetHandle": "input_value_b"
+  },
+  {
+   "id": "emse77l3z8wfv",
+   "source": "nmse77l3zsjtm",
+   "target": "nmse77l3ze2e8",
+   "sourceHandle": "output_value_result",
+   "targetHandle": "input_value_value"
+  },
+  {
+   "id": "emse77l3zwmbi",
+   "source": "nmse77l3z45jv",
+   "target": "nmse77l3ze2e8",
+   "sourceHandle": "output_flow_next",
+   "targetHandle": "input_flow_do"
+  },
+  {
+   "id": "emse77l3zkhk2",
+   "source": "nmse77l3zsd5j",
+   "target": "nmse77l3zmrdm",
+   "sourceHandle": "output_value_value",
+   "targetHandle": "input_value_x"
+  },
+  {
+   "id": "emse77l3zlejd",
+   "source": "nmse77l3zrk3n",
+   "target": "nmse77l3zb53o",
+   "sourceHandle": "output_value_agents",
+   "targetHandle": "input_value_agents"
+  },
+  {
+   "id": "emse77l3zgfmy",
+   "source": "nmse77l3zb53o",
+   "target": "nmse77l3zv2ug",
+   "sourceHandle": "output_value_values",
+   "targetHandle": "input_value_values"
+  },
+  {
+   "id": "emse77l3z52vu",
+   "source": "nmse77l3zsd5j",
+   "target": "nmse77l3z8dla",
+   "sourceHandle": "output_value_value",
+   "targetHandle": "input_value_x"
+  },
+  {
+   "id": "emse77l3zny8x",
+   "source": "nmse77l3zv2ug",
+   "target": "nmse77l3z8dla",
+   "sourceHandle": "output_value_result",
+   "targetHandle": "input_value_y"
+  },
+  {
+   "id": "emse77l3z7a3l",
+   "source": "nmse77l3zwm5a",
+   "target": "nmse77l3zrbzz",
+   "sourceHandle": "output_value_value",
+   "targetHandle": "input_value_x"
+  },
+  {
+   "id": "emse77l3zj0td",
+   "source": "nmse77l3zmrdm",
+   "target": "nmse77l3zqsja",
+   "sourceHandle": "output_value_result",
+   "targetHandle": "input_value_a"
+  },
+  {
+   "id": "emse77l3z2oqy",
+   "source": "nmse77l3z8dla",
+   "target": "nmse77l3zqsja",
+   "sourceHandle": "output_value_result",
+   "targetHandle": "input_value_b"
+  },
+  {
+   "id": "emse77l3zrjvc",
+   "source": "nmse77l3zqsja",
+   "target": "nmse77l3z5hge",
+   "sourceHandle": "output_value_result",
+   "targetHandle": "input_value_a"
+  },
+  {
+   "id": "emse77l3zix0g",
+   "source": "nmse77l3zrbzz",
+   "target": "nmse77l3z5hge",
+   "sourceHandle": "output_value_result",
+   "targetHandle": "input_value_b"
+  },
+  {
+   "id": "emse77l3zkqt4",
+   "source": "nmse77l3zqbse",
+   "target": "nmse77l3zu75h",
+   "sourceHandle": "output_flow_do",
+   "targetHandle": "input_flow_check"
+  },
+  {
+   "id": "emse77l3z5dcb",
+   "source": "nmse77l3z5hge",
+   "target": "nmse77l3zu75h",
+   "sourceHandle": "output_value_result",
+   "targetHandle": "input_value_condition"
+  },
+  {
+   "id": "emse77l3z5i3f",
+   "source": "nmse77l3zrk3n",
+   "target": "nmse77l3zpe2x",
+   "sourceHandle": "output_value_agents",
+   "targetHandle": "input_value_array"
+  },
+  {
+   "id": "emse77l3zl6ie",
+   "source": "nmse77l3zrk3n",
+   "target": "nmse77l3zyzrm",
+   "sourceHandle": "output_value_agents",
+   "targetHandle": "input_value_array"
+  },
+  {
+   "id": "emse77l3zbv3p",
+   "source": "nmse77l3zpe2x",
+   "target": "nmse77l3zte3d",
+   "sourceHandle": "output_value_value",
+   "targetHandle": "input_value_agentId"
+  },
+  {
+   "id": "emse77l3zz52j",
+   "source": "nmse77l3zyzrm",
+   "target": "nmse77l3zm7ho",
+   "sourceHandle": "output_value_value",
+   "targetHandle": "input_value_agentId"
+  },
+  {
+   "id": "emse77l3zxb2t",
+   "source": "nmse77l3z72kr",
+   "target": "nmse77l3zboqu",
+   "sourceHandle": "output_value_x",
+   "targetHandle": "input_value_a"
+  },
+  {
+   "id": "emse77l3zhl9z",
+   "source": "nmse77l3zte3d",
+   "target": "nmse77l3zboqu",
+   "sourceHandle": "output_value_x",
+   "targetHandle": "input_value_b"
+  },
+  {
+   "id": "emse77l3zm8qr",
+   "source": "nmse77l3zsd5j",
+   "target": "nmse77l3zboqu",
+   "sourceHandle": "output_value_value",
+   "targetHandle": "input_value_c"
+  },
+  {
+   "id": "emse77l3z6qgg",
+   "source": "nmse77l3z72kr",
+   "target": "nmse77l3z9xit",
+   "sourceHandle": "output_value_y",
+   "targetHandle": "input_value_a"
+  },
+  {
+   "id": "emse77l3z5nsv",
+   "source": "nmse77l3zte3d",
+   "target": "nmse77l3z9xit",
+   "sourceHandle": "output_value_y",
+   "targetHandle": "input_value_b"
+  },
+  {
+   "id": "emse77l3znph8",
+   "source": "nmse77l3zsd5j",
+   "target": "nmse77l3z9xit",
+   "sourceHandle": "output_value_value",
+   "targetHandle": "input_value_c"
+  },
+  {
+   "id": "emse77l3zyzt2",
+   "source": "nmse77l3z72kr",
+   "target": "nmse77l3z2szk",
+   "sourceHandle": "output_value_x",
+   "targetHandle": "input_value_a"
+  },
+  {
+   "id": "emse77l3zb0xc",
+   "source": "nmse77l3zm7ho",
+   "target": "nmse77l3z2szk",
+   "sourceHandle": "output_value_x",
+   "targetHandle": "input_value_b"
+  },
+  {
+   "id": "emse77l3zafn1",
+   "source": "nmse77l3zsd5j",
+   "target": "nmse77l3z2szk",
+   "sourceHandle": "output_value_value",
+   "targetHandle": "input_value_c"
+  },
+  {
+   "id": "emse77l3zfsr7",
+   "source": "nmse77l3z72kr",
+   "target": "nmse77l3z6c47",
+   "sourceHandle": "output_value_y",
+   "targetHandle": "input_value_a"
+  },
+  {
+   "id": "emse77l3zo65l",
+   "source": "nmse77l3zm7ho",
+   "target": "nmse77l3z6c47",
+   "sourceHandle": "output_value_y",
+   "targetHandle": "input_value_b"
+  },
+  {
+   "id": "emse77l3z8emu",
+   "source": "nmse77l3zsd5j",
+   "target": "nmse77l3z6c47",
+   "sourceHandle": "output_value_value",
+   "targetHandle": "input_value_c"
+  },
+  {
+   "id": "emse77l3zpt8s",
+   "source": "nmse77l3zboqu",
+   "target": "nmse77l3zg1vp",
+   "sourceHandle": "output_value_result",
+   "targetHandle": "input_value_x"
+  },
+  {
+   "id": "emse77l3zqbfe",
+   "source": "nmse77l3z9xit",
+   "target": "nmse77l3zg1vp",
+   "sourceHandle": "output_value_result",
+   "targetHandle": "input_value_y"
+  },
+  {
+   "id": "emse77l3zcmnv",
+   "source": "nmse77l3zg1vp",
+   "target": "nmse77l3zja7y",
+   "sourceHandle": "output_value_handle",
+   "targetHandle": "input_value_handle"
+  },
+  {
+   "id": "emse77l3zzfof",
+   "source": "nmse77l3zg1vp",
+   "target": "nmse77l3zdqax",
+   "sourceHandle": "output_value_handle",
+   "targetHandle": "input_value_agentId"
+  },
+  {
+   "id": "emse77l3zcypm",
+   "source": "nmse77l3znktl",
+   "target": "nmse77l3zdqax",
+   "sourceHandle": "output_value_value",
+   "targetHandle": "input_value_value"
+  },
+  {
+   "id": "emse77l3zanfb",
+   "source": "nmse77l3z2szk",
+   "target": "nmse77l3zej7e",
+   "sourceHandle": "output_value_result",
+   "targetHandle": "input_value_x"
+  },
+  {
+   "id": "emse77l3z33bb",
+   "source": "nmse77l3z6c47",
+   "target": "nmse77l3zej7e",
+   "sourceHandle": "output_value_result",
+   "targetHandle": "input_value_y"
+  },
+  {
+   "id": "emse77l3zh8tp",
+   "source": "nmse77l3zej7e",
+   "target": "nmse77l3zcror",
+   "sourceHandle": "output_value_handle",
+   "targetHandle": "input_value_handle"
+  },
+  {
+   "id": "emse77l3zm50j",
+   "source": "nmse77l3zej7e",
+   "target": "nmse77l3z5yf4",
+   "sourceHandle": "output_value_handle",
+   "targetHandle": "input_value_agentId"
+  },
+  {
+   "id": "emse77l3z6d47",
+   "source": "nmse77l3znktl",
+   "target": "nmse77l3z5yf4",
+   "sourceHandle": "output_value_value",
+   "targetHandle": "input_value_value"
+  },
+  {
+   "id": "emse77l40cvba",
+   "source": "nmse77l3zpe2x",
+   "target": "nmse77l40t1vx",
+   "sourceHandle": "output_value_value",
+   "targetHandle": "input_value_fromAgent"
+  },
+  {
+   "id": "emse77l40yp31",
+   "source": "nmse77l3zg1vp",
+   "target": "nmse77l40t1vx",
+   "sourceHandle": "output_value_handle",
+   "targetHandle": "input_value_toAgent"
+  },
+  {
+   "id": "emse77l40apt3",
+   "source": "nmse77l3zyzrm",
+   "target": "nmse77l40sgt3",
+   "sourceHandle": "output_value_value",
+   "targetHandle": "input_value_fromAgent"
+  },
+  {
+   "id": "emse77l40vwfr",
+   "source": "nmse77l3zej7e",
+   "target": "nmse77l40sgt3",
+   "sourceHandle": "output_value_handle",
+   "targetHandle": "input_value_toAgent"
+  },
+  {
+   "id": "emse77l407ibb",
+   "source": "nmse77l3zpe2x",
+   "target": "nmse77l4039mb",
+   "sourceHandle": "output_value_value",
+   "targetHandle": "input_value_agentA"
+  },
+  {
+   "id": "emse77l40t0nv",
+   "source": "nmse77l3zg1vp",
+   "target": "nmse77l4039mb",
+   "sourceHandle": "output_value_handle",
+   "targetHandle": "input_value_agentB"
+  },
+  {
+   "id": "emse77l4068lq",
+   "source": "nmse77l3zyzrm",
+   "target": "nmse77l408ya9",
+   "sourceHandle": "output_value_value",
+   "targetHandle": "input_value_agentA"
+  },
+  {
+   "id": "emse77l40z61y",
+   "source": "nmse77l3zej7e",
+   "target": "nmse77l408ya9",
+   "sourceHandle": "output_value_handle",
+   "targetHandle": "input_value_agentB"
+  },
+  {
+   "id": "emse77l407ca2",
+   "source": "nmse77l3zg1vp",
+   "target": "nmse77l406z9o",
+   "sourceHandle": "output_value_handle",
+   "targetHandle": "input_value_agentA"
+  },
+  {
+   "id": "emse77l408jho",
+   "source": "nmse77l3zej7e",
+   "target": "nmse77l406z9o",
+   "sourceHandle": "output_value_handle",
+   "targetHandle": "input_value_agentB"
+  },
+  {
+   "id": "emse77l40jc30",
+   "source": "nmse77l3zu75h",
+   "target": "nmse77l3zg1vp",
+   "sourceHandle": "output_flow_then",
+   "targetHandle": "input_flow_do"
+  },
+  {
+   "id": "emse77l406otq",
+   "source": "nmse77l3zg1vp",
+   "target": "nmse77l3zja7y",
+   "sourceHandle": "output_flow_next",
+   "targetHandle": "input_flow_do"
+  },
+  {
+   "id": "emse77l40q4j1",
+   "source": "nmse77l3zja7y",
+   "target": "nmse77l3zdqax",
+   "sourceHandle": "output_flow_next",
+   "targetHandle": "input_flow_do"
+  },
+  {
+   "id": "emse77l40c3uj",
+   "source": "nmse77l3zdqax",
+   "target": "nmse77l3zej7e",
+   "sourceHandle": "output_flow_next",
+   "targetHandle": "input_flow_do"
+  },
+  {
+   "id": "emse77l406v0e",
+   "source": "nmse77l3zej7e",
+   "target": "nmse77l3zcror",
+   "sourceHandle": "output_flow_next",
+   "targetHandle": "input_flow_do"
+  },
+  {
+   "id": "emse77l40amiw",
+   "source": "nmse77l3zcror",
+   "target": "nmse77l3z5yf4",
+   "sourceHandle": "output_flow_next",
+   "targetHandle": "input_flow_do"
+  },
+  {
+   "id": "emse77l40d7yv",
+   "source": "nmse77l3z5yf4",
+   "target": "nmse77l40t1vx",
+   "sourceHandle": "output_flow_next",
+   "targetHandle": "input_flow_do"
+  },
+  {
+   "id": "emse77l40pb6f",
+   "source": "nmse77l40t1vx",
+   "target": "nmse77l40sgt3",
+   "sourceHandle": "output_flow_next",
+   "targetHandle": "input_flow_do"
+  },
+  {
+   "id": "emse77l4057me",
+   "source": "nmse77l40sgt3",
+   "target": "nmse77l4039mb",
+   "sourceHandle": "output_flow_next",
+   "targetHandle": "input_flow_do"
+  },
+  {
+   "id": "emse77l40oeeu",
+   "source": "nmse77l4039mb",
+   "target": "nmse77l408ya9",
+   "sourceHandle": "output_flow_next",
+   "targetHandle": "input_flow_do"
+  },
+  {
+   "id": "emse77l40i2p9",
+   "source": "nmse77l408ya9",
+   "target": "nmse77l406z9o",
+   "sourceHandle": "output_flow_next",
+   "targetHandle": "input_flow_do"
+  },
+  {
+   "id": "emse77l40xqpu",
+   "source": "nmse77l40nkg9",
+   "target": "nmse77l40wfxl",
+   "sourceHandle": "output_value_value",
+   "targetHandle": "input_value_a"
+  },
+  {
+   "id": "emse77l40jt59",
+   "source": "nmse77l40y8an",
+   "target": "nmse77l40wfxl",
+   "sourceHandle": "output_value_value",
+   "targetHandle": "input_value_b"
+  },
+  {
+   "id": "emse77l4025yn",
+   "source": "nmse77l40wfxl",
+   "target": "nmse77l40hksd",
+   "sourceHandle": "output_value_result",
+   "targetHandle": "input_value_t"
+  },
+  {
+   "id": "emse77l40qxml",
+   "source": "nmse77l40hksd",
+   "target": "nmse77l4055ze",
+   "sourceHandle": "output_value_r",
+   "targetHandle": "input_value_r"
+  },
+  {
+   "id": "emse77l40wkye",
+   "source": "nmse77l40hksd",
+   "target": "nmse77l4055ze",
+   "sourceHandle": "output_value_g",
+   "targetHandle": "input_value_g"
+  },
+  {
+   "id": "emse77l402lh3",
+   "source": "nmse77l40hksd",
+   "target": "nmse77l4055ze",
+   "sourceHandle": "output_value_b",
+   "targetHandle": "input_value_b"
+  },
+  {
+   "id": "emse77l40q2l9",
+   "source": "nmse77l40x492",
+   "target": "nmse77l4055ze",
+   "sourceHandle": "output_flow_do",
+   "targetHandle": "input_flow_do"
+  }
+ ],
+ "presets": [
+  {
+   "id": "preset_mse77l40hqy2",
+   "name": "quadratic",
+   "description": "Rule 2182 (0x886), no mutation",
+   "state": {
+    "schemaVersion": 2,
+    "lookupTableData": {
+     "ruleNext": [
+      0,
+      1,
+      1,
+      0,
+      0,
+      0,
+      0,
+      1
+     ],
+     "ruleDivide": [
+      0,
+      0,
+      0,
+      1,
+      0,
+      0,
+      0,
+      0
+     ]
+    },
+    "modelAttrs": {
+     "mutationRate": 0
+    }
+   },
+   "createdAt": 1754000000000
+  },
+  {
+   "id": "preset_mse77l40ji7q",
+   "name": "quadratic - mutations",
+   "description": "Rule 2182 (0x886), mutation 0.00005",
+   "state": {
+    "schemaVersion": 2,
+    "lookupTableData": {
+     "ruleNext": [
+      0,
+      1,
+      1,
+      0,
+      0,
+      0,
+      0,
+      1
+     ],
+     "ruleDivide": [
+      0,
+      0,
+      0,
+      1,
+      0,
+      0,
+      0,
+      0
+     ]
+    },
+    "modelAttrs": {
+     "mutationRate": 0.00005
+    }
+   },
+   "createdAt": 1754000001000
+  },
+  {
+   "id": "preset_mse77l40rilz",
+   "name": "two branches",
+   "description": "Rule 3260 (0xCBC), no mutation",
+   "state": {
+    "schemaVersion": 2,
+    "lookupTableData": {
+     "ruleNext": [
+      0,
+      0,
+      1,
+      1,
+      1,
+      1,
+      0,
+      1
+     ],
+     "ruleDivide": [
+      0,
+      0,
+      1,
+      1,
+      0,
+      0,
+      0,
+      0
+     ]
+    },
+    "modelAttrs": {
+     "mutationRate": 0
+    }
+   },
+   "createdAt": 1754000002000
+  },
+  {
+   "id": "preset_mse77l40d90a",
+   "name": "branching",
+   "description": "Rule 6259 (0x1873), mutation 0.0001",
+   "state": {
+    "schemaVersion": 2,
+    "lookupTableData": {
+     "ruleNext": [
+      1,
+      1,
+      0,
+      0,
+      1,
+      1,
+      1,
+      0
+     ],
+     "ruleDivide": [
+      0,
+      0,
+      0,
+      1,
+      1,
+      0,
+      0,
+      0
+     ]
+    },
+    "modelAttrs": {
+     "mutationRate": 0.0001
+    }
+   },
+   "createdAt": 1754000003000
+  },
+  {
+   "id": "preset_mse77l4028mf",
+   "name": "meduza",
+   "description": "Rule 2502 (0x9C6), no mutation",
+   "state": {
+    "schemaVersion": 2,
+    "lookupTableData": {
+     "ruleNext": [
+      0,
+      1,
+      1,
+      0,
+      0,
+      0,
+      1,
+      1
+     ],
+     "ruleDivide": [
+      1,
+      0,
+      0,
+      1,
+      0,
+      0,
+      0,
+      0
+     ]
+    },
+    "modelAttrs": {
+     "mutationRate": 0
+    }
+   },
+   "createdAt": 1754000004000
+  },
+  {
+   "id": "preset_mse77l40ssle",
+   "name": "exp tree",
+   "description": "Rule 2236 (0x8BC), no mutation",
+   "state": {
+    "schemaVersion": 2,
+    "lookupTableData": {
+     "ruleNext": [
+      0,
+      0,
+      1,
+      1,
+      1,
+      1,
+      0,
+      1
+     ],
+     "ruleDivide": [
+      0,
+      0,
+      0,
+      1,
+      0,
+      0,
+      0,
+      0
+     ]
+    },
+    "modelAttrs": {
+     "mutationRate": 0
+    }
+   },
+   "createdAt": 1754000005000
+  },
+  {
+   "id": "preset_mse77l40k3gp",
+   "name": "exp hyper",
+   "description": "Rule 618 (0x26A), no mutation",
+   "state": {
+    "schemaVersion": 2,
+    "lookupTableData": {
+     "ruleNext": [
+      0,
+      1,
+      0,
+      1,
+      0,
+      1,
+      1,
+      0
+     ],
+     "ruleDivide": [
+      0,
+      1,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+     ]
+    },
+    "modelAttrs": {
+     "mutationRate": 0
+    }
+   },
+   "createdAt": 1754000006000
+  },
+  {
+   "id": "preset_mse77l40867s",
+   "name": "exp fractal",
+   "description": "Rule 649 (0x289), no mutation",
+   "state": {
+    "schemaVersion": 2,
+    "lookupTableData": {
+     "ruleNext": [
+      1,
+      0,
+      0,
+      1,
+      0,
+      0,
+      0,
+      1
+     ],
+     "ruleDivide": [
+      0,
+      1,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+     ]
+    },
+    "modelAttrs": {
+     "mutationRate": 0
+    }
+   },
+   "createdAt": 1754000007000
+  },
+  {
+   "id": "preset_mse77l40mpcq",
+   "name": "exp symmetry",
+   "description": "Rule 1111 (0x457), no mutation",
+   "state": {
+    "schemaVersion": 2,
+    "lookupTableData": {
+     "ruleNext": [
+      1,
+      1,
+      1,
+      0,
+      1,
+      0,
+      1,
+      0
+     ],
+     "ruleDivide": [
+      0,
+      0,
+      1,
+      0,
+      0,
+      0,
+      0,
+      0
+     ]
+    },
+    "modelAttrs": {
+     "mutationRate": 0
+    }
+   },
+   "createdAt": 1754000008000
+  },
+  {
+   "id": "preset_mse77l40bm4m",
+   "name": "robust linear",
+   "description": "Rule 22220 (0x56CC), mutation 0.001",
+   "state": {
+    "schemaVersion": 2,
+    "lookupTableData": {
+     "ruleNext": [
+      0,
+      0,
+      1,
+      1,
+      0,
+      0,
+      1,
+      1
+     ],
+     "ruleDivide": [
+      0,
+      1,
+      1,
+      0,
+      1,
+      0,
+      1,
+      0
+     ]
+    },
+    "modelAttrs": {
+     "mutationRate": 0.001
+    }
+   },
+   "createdAt": 1754000009000
+  },
+  {
+   "id": "preset_mse77l40lgp0",
+   "name": "stable explosion",
+   "description": "Rule 8690 (0x21F2), mutation 0.001",
+   "state": {
+    "schemaVersion": 2,
+    "lookupTableData": {
+     "ruleNext": [
+      0,
+      1,
+      0,
+      0,
+      1,
+      1,
+      1,
+      1
+     ],
+     "ruleDivide": [
+      1,
+      0,
+      0,
+      0,
+      0,
+      1,
+      0,
+      0
+     ]
+    },
+    "modelAttrs": {
+     "mutationRate": 0.001
+    }
+   },
+   "createdAt": 1754000010000
+  },
+  {
+   "id": "preset_mse77l40magj",
+   "name": "fancy tentacles",
+   "description": "Rule 17953 (0x4621), mutation 0.00005",
+   "state": {
+    "schemaVersion": 2,
+    "lookupTableData": {
+     "ruleNext": [
+      1,
+      0,
+      0,
+      0,
+      0,
+      1,
+      0,
+      0
+     ],
+     "ruleDivide": [
+      0,
+      1,
+      1,
+      0,
+      0,
+      0,
+      1,
+      0
+     ]
+    },
+    "modelAttrs": {
+     "mutationRate": 0.00005
+    }
+   },
+   "createdAt": 1754000011000
+  }
+ ]
+}

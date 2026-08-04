@@ -71,6 +71,41 @@ console.log(`\n=== 1. Legacy fidelity over ${files.length} shipped models ===`);
 const perModel = [];
 for (const f of files) {
   const raw = load(f);
+
+  // A model that DECLARES `properties.engine` is not a legacy file, so the
+  // legacy-fidelity assertions below (which derive the expected engine from the
+  // useWasm/useWebGPU mirror) do not apply to it — they are about what the C4
+  // MIGRATION does to a file that predates the field. Such a model gets the
+  // assertions that DO apply: the migration must leave its declaration alone,
+  // and — when it declares `auto` — the resolution must actually be an auto one
+  // that honours its reproducibility contract.
+  if (raw.properties.engine !== undefined) {
+    const migrated = migrateForHarness(clone(raw));
+    eq(migrated.properties.engine, raw.properties.engine, `${f}: migration leaves an explicit engine untouched`);
+    eq(migrated.centerBased?.agentTarget, raw.centerBased?.agentTarget, `${f}: migration leaves an explicit agentTarget untouched`);
+    const res = resolveEngines(migrated);
+    eq(res.grid.selected, raw.properties.engine, `${f}: the resolution reports the declared selection`);
+    eq(res.grid.auto, raw.properties.engine === 'auto', `${f}: grid auto flag matches the declaration`);
+    if (migrated.topologyMode?.agents) {
+      eq(res.agents?.auto, raw.centerBased?.agentTarget === 'auto', `${f}: agents auto flag matches the declaration`);
+      ok(res.agents?.resolved === 'js' || res.agents?.resolved === 'wasm' || res.agents?.resolved === 'webgpu',
+        `${f}: the agent layer resolves to a real engine`);
+      // Auto consults the contract, so an AUTO model can never violate it.
+      if (res.agents?.auto) ok(!res.agents?.contractViolation, `${f}: an auto agent layer never violates its own contract`);
+      // Exact means the agents must land on a CPU engine (the GPU agent RNG
+      // cannot be seeded) — the C5 asymmetry, asserted on a real shipped file.
+      if (res.agents?.auto && reproducibilityOf(migrated) === 'exact') {
+        ok(res.agents?.resolved !== 'webgpu', `${f}: an Exact contract keeps auto agents off the GPU`);
+      }
+    }
+    // The contract is a DECLARATION here, not an inference, so it must survive
+    // the migration verbatim.
+    eq(reproducibilityOf(migrated), raw.properties.reproducibility ?? reproducibilityOf(migrated),
+      `${f}: migration leaves an explicit reproducibility contract untouched`);
+    perModel.push({ f, grid: raw.properties.engine, agents: raw.centerBased?.agentTarget ?? null, contract: reproducibilityOf(migrated) });
+    continue;
+  }
+
   // What the file asks for TODAY, straight from the flags (the pre-C4 rule,
   // written out here so a change to `engineFromLegacyFlags` cannot mask a
   // regression — this is the independent reference, not a call into the code).

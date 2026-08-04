@@ -64,6 +64,7 @@ const AUDIT = {
   'Cubic GRA':                          { presentational: false, via: ['dataflow'],              note: 'K4 bootstrap: Get Nearby Agents → For Each → Form Bond.targetAgent (geometry → topology)' },
   'Game of Life on Agents':             { presentational: false, via: ['dataflow'],              note: 'Get Nearby Agents → Get Agents Attribute → Aggregate → Set Attribute "alive"' },
   'Graph Metrics - Growth Sweep':       { presentational: false, via: ['engine-config'],         note: 'Divide Agent partition = tension' },
+  'Growing Graphs':                     { presentational: true,  via: [],                        note: 'the rule is purely topological (census over BONDED + handle-indexed bootstrap tables); geometry only reaches Create Agent x/y, which is a geometry-only sink' },
   'Life on Bonds':                      { presentational: false, via: ['engine-config'],         note: 'auto-bond builds the bonded ring BY DISTANCE (the rule graph itself is clean)' },
   'Morphogenesis - 3D Tissue':          { presentational: false, via: ['engine-config', 'condition'], note: 'auto-bond + tension partition + (radius, density) → Divide Agent' },
   'Morphogenesis - Differential Tissue':{ presentational: false, via: ['engine-config', 'condition'], note: 'auto-bond + tension partition + (radius, density) → Divide Agent' },

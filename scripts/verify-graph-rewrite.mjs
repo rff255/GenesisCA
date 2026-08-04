@@ -3697,6 +3697,221 @@ function tierL() {
   }
 }
 
+// ===========================================================================
+// TIER M — the SHIPPED `Growing Graphs`: an EXACTNESS oracle against the
+// reference implementation (znah's js/graph.js, Paul Cousin's binary cubic GRA).
+//
+// This is the strongest fidelity check in the harness, and it is possible only
+// because the reference is 40 lines: for a rule whose divide bit fires ONLY at
+// r = 3 (own OFF, all three neighbours ON), two flagged nodes CANNOT be adjacent
+// — a flagged neighbour would have to be simultaneously ON (from my side) and
+// OFF (from its own). The port's independent-set gate therefore suppresses
+// NOTHING for such a rule, so N(t) must match the reference EXACTLY, not merely
+// qualitatively. Two published rules are checked cycle by cycle.
+//
+// It also pins the bootstrap: the shipped model must build precisely the
+// reference's 10-node seed graph (a 10-cycle plus five chords = 15 edges) and
+// its exact initial state vector, from a handle-indexed lookup table.
+// ===========================================================================
+
+/** The reference implementation, transcribed from js/graph.js (mutation off —
+ *  the oracle rules are deterministic). Deliberately a SEPARATE implementation
+ *  from anything under test: it is the ground truth, not a mirror. */
+function refCurveGG(rule, cycles, limit = 12000) {
+  const NN = 3, CaseN = (NN + 1) * 2;
+  const nodes = [[9,1,2],[0,2,4],[1,3,0],[2,4,6],[3,5,1],[4,6,8],[5,7,3],[6,8,9],[7,9,5],[8,0,7]].map(a => a.slice());
+  const states = [0,0,0,1,0,1,0,1,1,1];
+  let dividing = [];
+  const out = [];
+  for (let c = 1; c <= cycles; c++) {
+    // phase 0 — states + flags
+    const cases = nodes.map((node, i) => node.reduce((a, j) => a + states[j], 0) + states[i] * (NN + 1));
+    cases.forEach((r, i) => { states[i] = (rule >> r) & 1; dividing[i] = (rule >> (r + CaseN)) & 1; });
+    // phase 1 — divide
+    for (let i = 0; i < dividing.length; ++i) {
+      if (nodes.length >= limit) break;
+      if (!dividing[i]) continue;
+      const [a, b, cc] = nodes[i];
+      const j = nodes.length, k = j + 1;
+      nodes[i][0] = a; nodes[i][1] = j; nodes[i][2] = k;
+      nodes.push([i, b, k]); nodes.push([i, j, cc]);
+      states.push(states[i], states[i]);
+      nodes[b][nodes[b].indexOf(i)] = j;
+      nodes[cc][nodes[cc].indexOf(i)] = k;
+      dividing[i] = 0;
+    }
+    out.push(nodes.length);
+  }
+  return out;
+}
+
+/** Apply one of the shipped presets (both rule tables + the mutation rate) to a
+ *  clone of the model, exactly as loading it in the simulator would. */
+function withPresetGG(model, name) {
+  const m = cloneModel(model);
+  const p = (model.presets ?? []).find(x => x.name === name);
+  if (!p) throw new Error(`no preset "${name}"`);
+  for (const [tid, data] of Object.entries(p.state.lookupTableData ?? {})) {
+    m.attributes.find(a => a.id === tid).tableData = data.slice();
+  }
+  for (const [k, v] of Object.entries(p.state.modelAttrs ?? {})) {
+    m.attributes.find(a => a.id === k).defaultValue = String(v);
+  }
+  return m;
+}
+
+function tierM() {
+  section('TIER M — the SHIPPED `Growing Graphs` — exactness against the reference');
+  const model = loadShipped('Growing Graphs');
+
+  // --- the rule tables ARE the rule integer, bit for bit -------------------
+  // Row-major over [own state 0..1] x [ON neighbours 0..3] means the flat cell
+  // index IS the reference's case index r = own*4 + onCount. If the stride order
+  // ever flipped, the tables would silently address a TRANSPOSED rule.
+  for (const id of ['ruleNext', 'ruleDivide']) {
+    const attr = model.attributes.find(a => a.id === id);
+    const ax = resolveAxes(attr, model);
+    ok(JSON.stringify(ax.dims) === '[2,4]', `${id}: axes are [own 0..1] x [on 0..3]`, JSON.stringify(ax.dims));
+    ok(JSON.stringify(ax.strides) === '[4,1]', `${id}: row-major stride => flat index == r = own*4 + onCount`, JSON.stringify(ax.strides));
+  }
+  {
+    const R = 2182;   // the shipped default ('quadratic')
+    const next = model.attributes.find(a => a.id === 'ruleNext').tableData;
+    const div = model.attributes.find(a => a.id === 'ruleDivide').tableData;
+    let bad = 0;
+    for (let r = 0; r < 8; r++) {
+      if (next[r] !== ((R >> r) & 1)) bad++;
+      if (div[r] !== ((R >> (r + 8)) & 1)) bad++;
+    }
+    ok(bad === 0, `the default tables are rule ${R} bit for bit (low byte = next state, high byte = divide)`);
+    // every preset must decode the same way
+    let badP = 0;
+    for (const p of model.presets ?? []) {
+      const m = /^Rule (\d+)/.exec(p.description ?? '');
+      if (!m) { badP++; continue; }
+      const Rp = Number(m[1]);
+      const n = p.state.lookupTableData?.ruleNext, d = p.state.lookupTableData?.ruleDivide;
+      for (let r = 0; r < 8; r++) {
+        if (n?.[r] !== ((Rp >> r) & 1)) badP++;
+        if (d?.[r] !== ((Rp >> (r + 8)) & 1)) badP++;
+      }
+    }
+    ok(badP === 0, `all ${(model.presets ?? []).length} presets decode to their stated rule integer`);
+  }
+
+  // --- the bootstrap builds the reference's EXACT seed graph ---------------
+  {
+    const rig = shippedRig(model);
+    rig.reset();
+    ok(rig.store.liveCount === 10, 'the Agent Init Event places exactly 10 seeds', String(rig.store.liveCount));
+    const st = Array.from({ length: 10 }, (_, i) => rig.store.attrRead.state[i]);
+    ok(JSON.stringify(st) === '[0,0,0,1,0,1,0,1,1,1]', 'seed states == the reference state vector', JSON.stringify(st));
+    rig.step();   // generation 0 wires the graph (Form Bond queues, the drain applies)
+    const g = decodeAgentGraph(rig.store);
+    const got = edgeSet(g);
+    const CH = [2, 4, 0, 6, 1, 8, 3, 9, 5, 7];
+    const want = new Set();
+    // NB the key format must match `edgeSet`'s (`lo:hi`), or a mismatch here is
+    // a formatting artefact rather than a real structural difference.
+    for (let h = 0; h < 10; h++) {
+      const a = [h, (h + 1) % 10].sort((p, q) => p - q); want.add(`${a[0]}:${a[1]}`);
+      const b = [h, CH[h]].sort((p, q) => p - q); want.add(`${b[0]}:${b[1]}`);
+    }
+    const missing = [...want].filter(e => !got.has(e));
+    const extra = [...got].filter(e => !want.has(e));
+    ok(want.size === 15 && got.size === 15 && missing.length === 0 && extra.length === 0,
+      'the bootstrap builds EXACTLY the reference\'s 15 edges (10-cycle + 5 chords)',
+      `got ${got.size} missing=[${missing}] extra=[${extra}]`);
+    ok(checkDegreeRegular(g, 3) === null, 'every seed has degree exactly 3');
+    ok(checkHandshake(g) === null && checkNoDangling(g) === null && checkBondSymmetry(g) === null,
+      'I1 / I3 / I2 hold on the seed graph');
+  }
+
+  // --- THE EXACTNESS ORACLE ------------------------------------------------
+  // The port's rule cycle n runs at generations 2n / 2n+1: generation 0 wires
+  // the seed graph and generation 1 has no stored intent yet, so the first
+  // sampled cycle is the bootstrap and is dropped.
+  const CYC = 100;
+  const myCurve = (m, cycles) => {
+    const rig = shippedRig(m); rig.reset();
+    const out = [];
+    for (let g = 1; g <= 2 * (cycles + 1); g++) { rig.step(); if (g % 2 === 0) out.push(rig.store.liveCount); }
+    return out.slice(1);
+  };
+  for (const [name, rule] of [['quadratic', 2182], ['exp tree', 2236]]) {
+    const mine = myCurve(withPresetGG(model, name), CYC);
+    const ref = refCurveGG(rule, CYC);
+    let firstDiff = -1;
+    for (let i = 0; i < CYC; i++) if (mine[i] !== ref[i]) { firstDiff = i; break; }
+    ok(firstDiff === -1,
+      `"${name}" (rule ${rule}): N(t) matches the reference EXACTLY for ${CYC} cycles (N=${ref[CYC - 1]})`,
+      firstDiff >= 0 ? `first divergence at cycle ${firstDiff + 1}: ${mine[firstDiff]} vs ${ref[firstDiff]}` : '');
+  }
+  // NEG: the oracle is not vacuous — a rule whose flagged nodes CAN be adjacent
+  // is throttled by the gate, so it must NOT match. (`meduza`, rule 2502, fires
+  // its divide bit for an ON node too, so two flagged nodes can be neighbours.)
+  {
+    const mine = myCurve(withPresetGG(model, 'meduza'), 40);
+    const ref = refCurveGG(2502, 40);
+    ok(mine.some((v, i) => v !== ref[i]),
+      'NEG: a rule with ADJACENT flagged nodes does NOT match the reference — the oracle has teeth');
+  }
+  // NEG (source mutation): revert the priority to the obvious-but-wrong form —
+  // a bare roll, with no division intent folded in — and the SAME oracle must
+  // fail. This is what makes the intent-aware gate demonstrably load-bearing
+  // rather than a stylistic choice: without it a flagged node waits behind
+  // neighbours that never wanted to split.
+  {
+    const m = withPresetGG(model, 'quadratic');
+    const prioNode = m.agentGraphNodes.find(n => n.data.nodeType === 'expression'
+      && String(n.data.config.expression).includes('roll'));
+    ok(!!prioNode, 'NEG setup: found the priority expression node');
+    if (prioNode) {
+      prioNode.data.config = { ...prioNode.data.config, expression: 'roll + d * 0' };
+      const mine = myCurve(m, 40);
+      const ref = refCurveGG(2182, 40);
+      ok(mine.some((v, i) => v !== ref[i]),
+        'NEG (mutant): an intent-BLIND priority breaks the exactness oracle',
+        `mine ${mine[39]} vs ref ${ref[39]}`);
+    }
+  }
+
+  // --- O6 at every generation, over several published rules ----------------
+  for (const name of ['quadratic', 'meduza', 'exp tree', 'branching']) {
+    const rig = shippedRig(withPresetGG(model, name));
+    rig.reset();
+    let bad = null;
+    for (let gen = 1; gen <= 240 && !bad; gen++) {
+      const { overflow } = rig.step();
+      if (overflow) { bad = `gen ${gen}: request queue OVERFLOW`; break; }
+      const g = decodeAgentGraph(rig.store);
+      bad = checkHandshake(g) ?? checkNoDangling(g) ?? checkCapacity(g) ?? checkBondSymmetry(g);
+      if (bad) { bad = `gen ${gen}: ${bad}`; break; }
+      const reg = checkDegreeRegular(g, 3);
+      if (reg) { bad = `gen ${gen}: O6 — ${reg}`; break; }
+      const E = edgeSet(g).size, N = rig.store.liveCount;
+      if (E !== 3 * N / 2) { bad = `gen ${gen}: E=${E} != 3N/2 (N=${N})`; break; }
+    }
+    ok(bad === null,
+      `"${name}": O6 (deg 3, E = 3N/2) + I1-I4 hold at EVERY one of 240 generations -> N=${rig.store.liveCount}`,
+      String(bad));
+  }
+
+  // --- the published rules are genuinely DIFFERENT automata ----------------
+  {
+    const outcomes = {};
+    for (const name of ['quadratic', 'meduza', 'exp tree', 'branching', 'stable explosion', 'exp hyper']) {
+      const rig = shippedRig(withPresetGG(model, name));
+      rig.reset();
+      for (let g = 0; g < 160; g++) rig.step();
+      outcomes[name] = rig.store.liveCount;
+    }
+    ok(new Set(Object.values(outcomes)).size >= 5,
+      `the presets produce distinct outcomes after 160 generations: ${JSON.stringify(outcomes)}`);
+    ok(outcomes['quadratic'] > 200, 'quadratic grows steadily from the 10-node seed', String(outcomes['quadratic']));
+  }
+}
+
 tierA();
 tierB();
 await tierC();
@@ -3710,6 +3925,7 @@ tierI();
 await tierIMutants();
 tierK();
 tierL();
+tierM();
 
 console.log(`\n${fail === 0 ? 'GRAPH-REWRITE HARNESS ✓' : 'GRAPH-REWRITE HARNESS ✗'}  (${pass} passed, ${fail} failed)`);
 rmSync(entryPath, { force: true });
