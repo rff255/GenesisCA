@@ -67,9 +67,14 @@ const OFF_CHARGE = { doCharge: false, chargeK: 0, chargeMaxD2: 0, chargeMinC: 1,
 /** C10 — GLOBAL (Barnes-Hut) charge: no cutoff at all, so the CUTOFF pair term is
  *  OFF (`doCharge: false`) and the whole force comes from the tree traversal.
  *  Mirrors `chargeParamsOf` exactly. */
-const mkGlobalCharge = (k, theta) => ({
-  doCharge: false, chargeK: k, chargeMaxD2: 0, chargeMinC: 1,
-  doChargeTree: true, chargeTheta2: theta * theta,
+// GLOBAL charge. `maxDist` absent ⇒ the un-cut law C10 shipped: chargeMaxD2 =
+// Infinity, chargeMinC = 0, which is exactly what `chargeParamsOf` resolves and
+// what makes the culled arithmetic collapse to the un-culled arithmetic bit-exactly.
+// A finite `maxDist` truncates the tree sum the way the reference does.
+const mkGlobalCharge = (k, theta, maxDist = Infinity) => ({
+  doCharge: false, chargeK: k, chargeMaxD2: maxDist * maxDist,
+  chargeMinC: 1 / (1 + maxDist * maxDist),
+  doChargeTree: true, chargeTheta2: theta * theta, chargeMaxDist: maxDist,
 });
 
 // Verbatim JS force loop — matches the CURRENT sim.worker.ts runAgentStep
@@ -160,11 +165,16 @@ function jsForceLoop(s, hash, cfg, dtOverEta, bonding, doCollision, torus, doDen
         const l2 = is3d ? ndx * ndx + ndy * ndy + ndz * ndz : ndx * ndx + ndy * ndy;
         const w = nEx[ni];
         if (w * w < chargeTheta2 * l2) {
-          const c = (nEn[ni] - nSt[ni]) / (1 + l2);
-          tfx += c * ndx; tfy += c * ndy; if (is3d) tfz += c * ndz;
+          // The optional GLOBAL CUTOFF. `chargeMaxD2` is Infinity (and `chargeMinC`
+          // 0) for an un-cut global model, so this is a bit-exact no-op there.
+          if (l2 < chargeMaxD2) {
+            const mass = nEn[ni] - nSt[ni];
+            const c = mass / (1 + l2) - mass * chargeMinC;
+            tfx += c * ndx; tfy += c * ndy; if (is3d) tfz += c * ndz;
+          }
           ni = nNx[ni];
         } else {
-          if (nNx[ni] === ni + 1) {
+          if (nNx[ni] === ni + 1 && l2 < chargeMaxD2) {
             const pEnd = nEn[ni];
             for (let pp = nSt[ni]; pp < pEnd; pp++) {
               let pdx = tSX[pp] - xi, pdy = tSY[pp] - yi, pdz = is3d ? tSZ[pp] - zi : 0;
@@ -176,9 +186,12 @@ function jsForceLoop(s, hash, cfg, dtOverEta, bonding, doCollision, torus, doDen
               // THE ASSOCIATION ORDER IS LOAD-BEARING (f64 addition is not
               // associative): the worker evaluates `1 + a + b [+ c]` strictly
               // left-to-right, so the mirror must too — `1 + (a + b)` diverges.
-              const pc = is3d
+              // The cull test gets its OWN sum; the denominator keeps the verbatim
+              // left-to-right association above.
+              if ((is3d ? pdx * pdx + pdy * pdy + pdz * pdz : pdx * pdx + pdy * pdy) >= chargeMaxD2) continue;
+              const pc = (is3d
                 ? 1 / (1 + pdx * pdx + pdy * pdy + pdz * pdz)
-                : 1 / (1 + pdx * pdx + pdy * pdy);
+                : 1 / (1 + pdx * pdx + pdy * pdy)) - chargeMinC;
               tfx += pc * pdx; tfy += pc * pdy; if (is3d) tfz += pc * pdz;
             }
           }
@@ -291,7 +304,13 @@ async function runCombo(name, bonding, doCollision, doDensity = true, opts = {})
       // the tree regions AND `emitForcePass` emit the traversal instead of the pair
       // term, so the module and this harness's JS mirror can only agree if the whole
       // feature is wired end to end.
-      ...(charge.doChargeTree ? { chargeRange: 'global', chargeTheta: Math.sqrt(charge.chargeTheta2) } : {}),
+      ...(charge.doChargeTree ? {
+        chargeRange: 'global', chargeTheta: Math.sqrt(charge.chargeTheta2),
+        // The optional GLOBAL cutoff — a FINITE value is what makes `emitForcePass`
+        // emit the cull variant, so a mismatch between the module and this harness's
+        // JS mirror can only be silent if the whole feature is wired end to end.
+        ...(Number.isFinite(charge.chargeMaxDist) ? { chargeMaxDist: charge.chargeMaxDist } : {}),
+      } : {}),
     },
     agentGraphNodes, agentGraphEdges, agentVariables: [],
     graphNodes: [], graphEdges: [], macroDefs: [], variables: [], attributes: [], neighborhoods: [],
@@ -409,6 +428,20 @@ await runCombo('global 3D bounded, theta 0.3 (near-exact)', false, true, true, {
 await runCombo('global-only   (collision=0, bonding=0, doDensity=0)', false, false, false, { charge: GB });
 await runCombo('global-only 3D bounded', false, false, false, { charge: mkGlobalCharge(-3, 0.9), is3d: true, torus: false });
 
+// C10 follow-up — the GLOBAL law with a FINITE CUTOFF. The blob spans ~4 units, so
+// 1.5 genuinely culls (node accepts, whole leaves and individual points all get
+// rejected) while 3.0 culls only the far tail — both must stay bit-identical, and
+// the module here compiles its CUTOFF variant while the JS mirror runs one code path.
+console.log('\nC10 follow-up: GLOBAL charge with a finite CUTOFF (2D/3D x torus/bounded x tight/loose):');
+await runCombo('global+cutoff 1.5, 2D torus,   collision=0', false, false, true, { charge: mkGlobalCharge(-3, 0.9, 1.5) });
+await runCombo('global+cutoff 1.5, 2D torus,   collision=1', false, true, true, { charge: mkGlobalCharge(-3, 0.9, 1.5) });
+await runCombo('global+cutoff 3.0, 2D bounded, collision=1', false, true, true, { charge: mkGlobalCharge(-3, 0.9, 3.0), torus: false });
+await runCombo('global+cutoff 1.5, 2D torus,   bonding=1', true, true, true, { charge: mkGlobalCharge(-3, 0.9, 1.5) });
+await runCombo('global+cutoff 1.5, 3D torus,   collision=1', false, true, true, { charge: mkGlobalCharge(-3, 0.9, 1.5), is3d: true });
+await runCombo('global+cutoff 3.0, 3D bounded, collision=0', false, false, true, { charge: mkGlobalCharge(-3, 0.9, 3.0), is3d: true, torus: false });
+await runCombo('global+cutoff 1.5, theta 0.3 (near-exact)', false, true, true, { charge: mkGlobalCharge(-3, 0.3, 1.5) });
+await runCombo('global+cutoff-only (collision=0, bonding=0, doDensity=0)', false, false, false, { charge: mkGlobalCharge(-3, 0.9, 2.0) });
+
 // ---------------------------------------------------------------------------
 // C10 — THE VALUE INVARIANT. Parity is a MIRROR test: it passes happily if BOTH
 // targets are equally wrong (a traversal that never runs sums zero on both). So
@@ -477,6 +510,96 @@ console.log('\nC10 value invariant (tree vs exact all-pairs global sum):');
     console.log(`  ✓ tree ≈ exact all-pairs: rel err ${(eFine.rel * 100).toFixed(3)}% at θ=0.2 vs ${(eCoarse.rel * 100).toFixed(2)}% at θ=1.4 (θ controls accuracy; |f|max ${eFine.maxAbs.toExponential(2)})`);
   } else {
     console.log(`  ✗ tree vs exact: θ=0.2 rel ${eFine.rel}, θ=1.4 rel ${eCoarse.rel}, |f|max ${eFine.maxAbs} — want a real, theta-controlled approximation`);
+    fail++;
+  }
+
+  // ---------------------------------------------------------------------------
+  // C10 follow-up — THE CUTOFF VALUE INVARIANT. The parity combos above would pass
+  // just as happily if the cull never fired (both targets would then be equally
+  // un-culled), so assert what the cutoff is FOR: the traversal must reproduce the
+  // brute-force TRUNCATED pair sum `Σ_{l<R} (1/(1+l²) − 1/(1+R²))·d`, and that sum
+  // must differ MATERIALLY from the un-cut one — the negative control.
+  // ---------------------------------------------------------------------------
+  // NB the cull is applied at NODE granularity (an accepted node's whole mass is
+  // in or out on its CENTRE's distance), exactly as the reference does it — so the
+  // traversal approximates the truncated sum with an error that θ controls, rather
+  // than reproducing it exactly. The invariant is therefore stated as convergence,
+  // plus the two end-points that can only hold if the cull is real and correct.
+  const brute = (R) => {
+    const R2 = R * R, minC = 1 / (1 + R2), out = [];
+    for (let i = 0; i < hw; i++) {
+      let ex = 0, ey = 0;
+      for (let j = 0; j < hw; j++) {
+        if (j === i) continue;
+        const dx = sV.x[j] - sV.x[i], dy = sV.y[j] - sV.y[i];
+        const l2 = dx * dx + dy * dy;
+        if (l2 >= R2) continue;
+        ex += (1 / (1 + l2) - minC) * dx; ey += (1 / (1 + l2) - minC) * dy;
+      }
+      out.push([ex, ey]);
+    }
+    return out;
+  };
+  const treeCut = (R, theta) => {
+    const t = buildAgentOctree(sV, false, agentOctreeNodeReserve(cfgV.maxAgents));
+    const th2 = theta * theta, R2 = R * R, minC = 1 / (1 + R2), out = [];
+    for (let i = 0; i < hw; i++) {
+      const xi = sV.x[i], yi = sV.y[i];
+      let tfx = 0, tfy = 0;
+      for (let ni = 0; ni < t.nodeCount;) {
+        const ndx = t.nodeCx[ni] - xi, ndy = t.nodeCy[ni] - yi;
+        const l2 = ndx * ndx + ndy * ndy, w = t.nodeExt[ni];
+        if (w * w < th2 * l2) {
+          if (l2 < R2) {
+            const mass = t.nodeEnd[ni] - t.nodeStart[ni];
+            const c = mass / (1 + l2) - mass * minC;
+            tfx += c * ndx; tfy += c * ndy;
+          }
+          ni = t.nodeNext[ni];
+        } else {
+          if (t.nodeNext[ni] === ni + 1 && l2 < R2) {
+            for (let p = t.nodeStart[ni]; p < t.nodeEnd[ni]; p++) {
+              const pdx = t.sortedX[p] - xi, pdy = t.sortedY[p] - yi;
+              if (pdx * pdx + pdy * pdy >= R2) continue;
+              tfx += (1 / (1 + pdx * pdx + pdy * pdy) - minC) * pdx;
+              tfy += (1 / (1 + pdx * pdx + pdy * pdy) - minC) * pdy;
+            }
+          }
+          ni++;
+        }
+      }
+      out.push([tfx, tfy]);
+    }
+    return out;
+  };
+  const relTo = (a, b) => {
+    let num = 0, den = 0;
+    for (let i = 0; i < hw; i++) { num += Math.hypot(a[i][0] - b[i][0], a[i][1] - b[i][1]); den += Math.hypot(b[i][0], b[i][1]); }
+    return num / Math.max(1e-12, den);
+  };
+  const Rtight = W * 0.12, Rmid = W * 0.4, Rhuge = Math.hypot(W, H) * 4;
+  // (1) A cutoff wider than the whole world must be INERT — the traversal has to land
+  //     on the un-cut answer. A cull that wrongly rejects in-range work cannot survive
+  //     this.
+  const relInert = relTo(treeCut(Rhuge, 0.2), exact);
+  // (2) A tight cutoff must genuinely CHANGE the answer. If the cull never fired this
+  //     would be ~0 — the negative control.
+  const relChanged = relTo(brute(Rtight), exact);
+  // (3) The traversal must follow the TRUNCATED law, not the un-cut one: at the tight
+  //     R it is far closer to `brute(R)` than to `exact`. (It does not REPRODUCE
+  //     brute(R): the cull is applied at NODE granularity — an accepted node, and a
+  //     whole leaf, is in or out on its CENTRE's distance — exactly as the reference
+  //     does it, so a boundary shell of width ~ the node extent is mis-assigned.)
+  const relToTrunc = relTo(treeCut(Rtight, 0.2), brute(Rtight));
+  const relToUncut = relTo(treeCut(Rtight, 0.2), exact);
+  // (4) MONOTONE IN R: widening the cutoff must move the answer toward the un-cut law.
+  const mTight = relTo(treeCut(Rtight, 0.2), exact);
+  const mMid = relTo(treeCut(Rmid, 0.2), exact);
+  checks++;
+  if (relInert < 0.02 && relChanged > 0.5 && relToTrunc < relToUncut * 0.6 && mTight > mMid && mMid > relInert) {
+    console.log(`  ✓ cutoff tree: a world-sized cutoff is INERT (${(relInert * 100).toFixed(3)}% off the un-cut law); a tight one changes the answer by ${(relChanged * 100).toFixed(0)}%; it tracks the TRUNCATED law (${(relToTrunc * 100).toFixed(1)}%) far better than the un-cut one (${(relToUncut * 100).toFixed(0)}%); monotone in R (${(mTight * 100).toFixed(0)}% → ${(mMid * 100).toFixed(0)}% → ${(relInert * 100).toFixed(2)}%)`);
+  } else {
+    console.log(`  ✗ cutoff tree: inert ${relInert}, changed ${relChanged}, toTrunc ${relToTrunc} vs toUncut ${relToUncut}, monotone ${mTight}/${mMid}/${relInert}`);
     fail++;
   }
 }

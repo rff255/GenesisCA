@@ -244,26 +244,45 @@ const DEFAULT_FLIP = 0;
 // affected rows. O6 is checked after every generation, so an over-bond is still
 // caught — one layer later than a tight capacity would have caught it.
 const MAX_BONDS = 4;
-const RADIUS = 0.9;
+// PURELY VISUAL. Collision is OFF (the reference has none), so nothing in the
+// engine reads a radius — the old RADIUS_MAX bound existed to keep the soft-sphere
+// search complete inside one hash bin and no longer applies. Sized to the layout
+// scale (REST 25) so a node reads as a node rather than a speck.
+const RADIUS = 4.5;
 // THE PRIORITY BANDS (see the header). Both are integers below 2^24, so they are
 // exact in f32 as well as f64 and no contest can turn on a rounding artefact.
 //   flagged   -> the agent's own handle, in [0, MAX_AGENTS)
 //   unflagged -> PRIO_UNFLAGGED, also what a splitter writes to consume its latch
 const PRIO_UNFLAGGED = 1e6;
 const PRIO_FLAG_LIMIT = 1e5;    // "still latched" test; MAX_AGENTS << this << PRIO_UNFLAGGED
-// THE VISUAL NODE RADIUS is a live slider, and its UPPER BOUND is not cosmetic.
-// The spatial hash bin edge is max(interactionRange * 2 * defaultRadius,
-// neighbourQueryRadius) = max(3.96, 6) = 6, and the 3x3 stencil only guarantees
-// to find a pair within ONE bin edge — so the soft-collision search stays
-// complete only while interactionRange * (r_i + r_j) <= 6, i.e. r <= 1.36.
-const RADIUS_MIN = 0.2, RADIUS_MAX = 1.35;
+// THE VISUAL NODE RADIUS is a live slider. Its bound is now purely aesthetic:
+// with Collision OFF (znah's regime) no engine force reads the radius, so the old
+// hash-bin-completeness ceiling is gone. Sized in the REST-25 scale.
+const RADIUS_MIN = 1, RADIUS_MAX = 8;
 // The growth ramp exists ONLY to carry the Node Radius slider onto the agents
 // (Set Target Radius is the self-relative writer; see the behaviour graph). The
 // ramp is `radius += sign(dd) * rate`, CLAMPED at the target, so any rate above
 // the whole slider range lands in one generation instead of easing in.
-const GROWTH_RATE = 2;
-const REST = 5.0;               // bond rest length (the layout scale)
-const STIFF = 0.55;
+const GROWTH_RATE = 10;
+// =============================================================================
+// THE PHYSICS REGIME IS znah's, PARAMETER FOR PARAMETER.
+// =============================================================================
+// The port's topology was already exact; its LAYOUT was not, and the cause was a
+// scale mismatch rather than a tuning one. The charge law `k·(1/(1+d²) − minC)·d`
+// has a BUILT-IN length scale (the knee at d = 1), so the same k means something
+// completely different at a different bond rest length. The dimensionless ratio
+// that decides the regime is the charge force at rest over the spring's own
+// restoring scale, `|k| / (λ·(1+r²))`:
+//
+//     reference   |k|=3   λ=0.5   r=25   ->  3/(0.5·626)  = 0.0096   (bonds sit ~1% above rest)
+//     port (was)  |k|=10  λ=0.55  r=5    ->  10/(0.55·26) = 0.699    (bonds sit ~48% above rest)
+//
+// i.e. the port's charge was ~73× stronger relative to its springs and the bond
+// network was permanently inflated — which is what "it doesn't look like znah's"
+// was. Adopting the reference's own numbers (rest 25, λ 0.5, k −3, cutoff 2000)
+// puts the model back in its regime instead of near the knee.
+const REST = 25.0;              // znah's linkDistance — the layout scale
+const STIFF = 0.5;              // znah's linkStrength
 const NODE_CAP = 10000;         // the end-condition guard — znah's own demo scale
 // A generation can at most split a maximal independent set, so N can at most
 // DOUBLE in one generation, and the end condition is evaluated after the
@@ -337,7 +356,11 @@ const PERIOD = 1 + DIVISION_ROUNDS;
 // ONE force pass per generation. PERIOD grew from 2 to 9, so the layout still
 // gets 9 passes per reference tick — MORE relaxation per rewrite than the old
 // 2 x 3 cadence gave — at a third of the per-generation cost.
-const LAYOUT_ITERATIONS = 1;
+// znah's `tickSteps = 2`: TWO force-integration passes per octree build. Our
+// per-iteration spring re-reads the moved positions, which is the Jacobi analogue
+// of the reference's two Gauss-Seidel link passes (see the residual note in the
+// physics table below).
+const LAYOUT_ITERATIONS = 2;
 
 // THE WORLD IS SIZED FROM A MEASURED EXTENT, not from the packing rule the other
 // GRA models use. That rule ("side = sqrt(N) * rest * 1.45") assumes a layout
@@ -359,14 +382,27 @@ const LAYOUT_ITERATIONS = 1;
 // Enlarging a bounded world is otherwise free — the spatial hash anchors on the
 // agents' bounding box (and is capped at AGENT_HASH_BIN_CAP regardless) and the
 // charge octree is built over the population, not the world.
-const W = 12000, H = 12000;
+// re-measured under the znah regime — see MEASURED EXTENTS below.
+const W = 60000, H = 60000;
 
-// GLOBAL charge (C10). No cutoff term: every pair contributes, summed through a
-// deterministic Barnes-Hut octree at theta = 0.9.
-const CHARGE_K = -10;
-const CHARGE_THETA = 0.9;
+// GLOBAL charge (C10) with znah's own CUTOFF. `chargeMaxDist` under `global` is a
+// C10 follow-up: the coefficient becomes `1/(1+l²) − 1/(1+R²)` and nodes/points
+// beyond R are culled, exactly as the reference's `calcMultibodyForce` does it.
+// WHY IT MATTERS: without a cutoff the far field of N distant nodes sums to ≈ N/l,
+// which GROWS with the population — so an un-cut law inflates a growing graph
+// without bound. R = 2000 = 80 rest lengths pins the scale.
+const CHARGE_K = -3;            // znah's chargeStrength
+const CHARGE_MAX_DIST = 2000;   // znah's chargeMaxDist
+const CHARGE_THETA = 0.9;       // znah's Barnes-Hut theta (theta² = 0.81 in main.c)
 
-const JITTER = REST * 0.12;
+// znah seeds a newborn at `(rnd() + p_mother + p_inherited)/2` with
+// `rnd() = Math.random() − 0.5`, i.e. the MIDPOINT plus ±0.25 ABSOLUTE units — a
+// symmetry breaker worth ~1% of the rest length, not a fraction of it. Our
+// `(jitter − 0.5) * JITTER` with `jitter ∈ [0,1)` reproduces that amplitude.
+// DEVIATION (documented): we draw ONE value per split and apply it as ±(j,j) to the
+// two daughters rather than four independent per-axis draws — one RNG draw instead
+// of four, same magnitude, still a symmetry breaker.
+const JITTER = 0.5;
 
 // =============================================================================
 // AGENT GRAPH
@@ -384,15 +420,22 @@ const init = ag.node('agentInit', {}, 0, 0);
 const spawn = ag.node('loop', { mode: 'count', _port_count: String(SEEDS) }, 1, 0);
 ag.fEdge(init, 'do', spawn, 'do');
 
+// The ring RADIUS is derived from the BOND REST LENGTH, not from the world: a
+// 10-cycle whose links want to be REST long has circumference 10·REST, so the
+// natural radius is 10·REST/2π. (It used to be 3% of the world width, which made
+// the physical scale of the seed ring depend on an unrelated setting — at the new
+// world size that would have started every bond ~50× its rest length.) The world
+// dims still feed the CENTRE, so a simulator Resize re-centres the seeds.
+const SEED_RING_R = (SEEDS * REST / (2 * Math.PI)).toFixed(6);
 const TAU_OVER_N = (2 * Math.PI / SEEDS).toFixed(15);
 const px = ag.node('expression', {
-  expression: `w * 0.5 + w * 0.03 * cos(${TAU_OVER_N} * h)`,
+  expression: `w * 0.5 + ${SEED_RING_R} * cos(${TAU_OVER_N} * h)`,
   visibleCount: 2, _varName_a: 'h', _varName_b: 'w',
 }, 2, -1);
 ag.vEdge(spawn, 'index', px, 'a');
 ag.vEdge(init, 'worldWidth', px, 'b');
 const py = ag.node('expression', {
-  expression: `t * 0.5 + t * 0.03 * sin(${TAU_OVER_N} * h)`,
+  expression: `t * 0.5 + ${SEED_RING_R} * sin(${TAU_OVER_N} * h)`,
   visibleCount: 2, _varName_a: 'h', _varName_b: 't',
 }, 2, 1);
 ag.vEdge(spawn, 'index', py, 'a');
@@ -1071,23 +1114,48 @@ const properties = {
     'or look at it, then raise it and the automaton resumes exactly where it stopped (0 means ' +
     'unlimited). Freezing part-way through a tick is safe because the cubic invariant holds at every ' +
     'generation, not only at tick boundaries. "Node Radius" resizes every node live; its upper bound ' +
-    'is where the spatial-hash stencil would stop finding every colliding pair, not an arbitrary cap. ' +
+    'is purely cosmetic now that collision is off, so its bound is aesthetic, not a physics limit. ' +
     'Neither is part of the rule, so loading a preset leaves both where you put them.\n\n' +
     'THE CADENCE. One reference tick is ' + PERIOD + ' generations, so the force solver gets ' + (PERIOD * LAYOUT_ITERATIONS) + ' force ' +
     'passes per rewrite — more relaxation per rewrite than a two-generation cadence gives, at a ' +
     'lower per-generation cost.\n\n' +
-    'THE LAYOUT. Long-range GLOBAL charge: every pair repels, summed through a deterministic ' +
-    'Barnes-Hut octree rather than cut off at a radius. That matches the reference demo\'s own ' +
-    'n-body layout, and it is what a growing graph needs — a finite cutoff degrades as the ' +
-    'population rises while global holds its quality flat. Because that charge has no cutoff the ' +
-    'structure inflates well past bond-rest spacing, and how far depends on the shape a rule grows, ' +
-    'so the world is sized from a MEASURED extent rather than from a packing formula: grown to the ' +
-    NODE_CAP + '-node cap inside a deliberately oversized world, meduza spans 4639 x 4075 units, exp tree ' +
-    '5231 x 5497 and the stringiest rule in the catalogue, Rule 17957, 8378 x 8234. The shipped ' +
-    'world is ' + W + ' — over twice the extent of the compact-blob rules and clear of the stringiest ' +
-    'one — and a run to the cap was verified with zero agents on the boundary. It is not made ' +
-    'larger than that on purpose: the view fits the world, so an oversized world would leave the ' +
-    'interesting early growth a speck.\n\n' +
+    'THE PHYSICS IS THE REFERENCE DEMO, PARAMETER FOR PARAMETER. Bond rest length ' + REST + ', spring ' +
+    'stiffness ' + STIFF + ', long-range charge k = ' + CHARGE_K + ' truncated at ' + CHARGE_MAX_DIST + ', Barnes-Hut theta ' + CHARGE_THETA + ', ' +
+    'momentum 0.9 (a velocity decay of 0.1 in the demo), no speed cap, no collision, and an effective ' +
+    'integration step of exactly 1 — the demo adds each force impulse straight to the velocity ' +
+    'and moves by it, with no dt at all.\n\n' +
+    'WHY THOSE NUMBERS AND NOT OTHERS. The charge law k*(1/(1+d^2) - minC) has a length scale built ' +
+    'into it (the knee sits at d = 1), so the SAME k means something completely different at a ' +
+    'different bond rest length. What decides whether the springs or the charge win is the ' +
+    'dimensionless |k| / (lambda * (1 + rest^2)): the reference runs 3/(0.5*626) = 0.0096, while an ' +
+    'earlier version of this port ran rest 5 with k -10, i.e. 10/(0.55*26) = 0.70 — seventy-three ' +
+    'times more charge-dominated. Its bonds therefore sat about half again past their rest length and ' +
+    'the whole graph read as inflated. Adopting the reference scale puts the model back in its ' +
+    'regime instead of near the knee.\n\n' +
+    'THE CHARGE HAS A CUTOFF, and it is not a detail. Summed over every pair, the far field of N ' +
+    'distant nodes adds up to roughly N/l — which GROWS with the population, so an uncut law inflates ' +
+    'a growing graph without bound. The reference culls at ' + CHARGE_MAX_DIST + ' (eighty rest lengths) and takes the ' +
+    'coefficient continuously to zero there rather than stepping; this model does the same, through ' +
+    'the same deterministic Barnes-Hut octree.\n\n' +
+    'HOW CLOSE IT GETS, MEASURED. Relaxing the identical grown graph under both force laws and ' +
+    'comparing the distributions that decide the look: with the reference link solve reduced to ' +
+    'the single accumulation this engine performs, bond length agrees to 0.7-2.5 %, nearest ' +
+    'non-bonded distance to 3-4 %, hub ring spacing to 0.5-9 % and overall extent to 0.2-11 % across ' +
+    'three rules of different shape. The force law is therefore the same law. What remains is the ' +
+    'link SOLVER: the reference sweeps its edge list twice, forward then backward, on predicted ' +
+    'positions — a semi-implicit solve that is stiffer than an explicit one at the same stiffness, so ' +
+    'its layout settles 13-25 % tighter. That cannot be matched by raising the stiffness (the ' +
+    'explicit integrator goes unstable past about 0.6 on a cubic graph at this step and momentum, ' +
+    'which is presumably why the reference chose 0.5) nor by adding passes, and a sequential ' +
+    'edge-list sweep is not something the per-agent parallel force pass shared by all three compile ' +
+    'targets can express. Since the difference is very close to a uniform scale factor, and the view ' +
+    'is fitted anyway, what a viewer can actually see — the scale-free packing and ring ratios — ' +
+    'agrees to within 4-11 %.\n\n' +
+    'THE WORLD is ' + W + ' units across, measured rather than assumed: grown in the app to four thousand ' +
+    'nodes the structure spans about 8500 x 7000 with a sevenfold margin and nothing touching the ' +
+    'boundary. The bounds exist only so nothing can be clamped; the reference has none and fits its ' +
+    'view to the structure instead, which is why the first few dozen nodes start small here — zoom ' +
+    'in, or let it grow.\n\n' +
     'COMPILE TARGET. Engine is set to Auto with an Exact reproducibility contract, so the agent ' +
     'layer resolves to WebAssembly: the WebGPU agent target seeds its per-agent RNG once at runtime ' +
     'creation, so a fixed seed would not replay there. Everything else about the model runs on all ' +
@@ -1156,29 +1224,49 @@ const centerBased = {
   seedPattern: 'compact',
   defaultRadius: RADIUS,
   growthRate: GROWTH_RATE,
-  repulsionStiffness: 0.9,
+  // COLLISION IS OFF (znah has none), so the soft-sphere never runs and these two
+  // are inert. repulsionStiffness is 0 rather than left at its default because
+  // `effectiveAgentDt`'s stability bound reads it UNCONDITIONALLY (mu_eff = mu_R + lambda)
+  // — a non-zero value there would clamp dt for a force the model never applies.
+  repulsionStiffness: 0,
   adhesionStiffness: 0,
   interactionRange: 2.2,
-  drag: 1,
-  timeStep: 0.12,
-  momentum: 0,
-  maxSpeed: 0,
-  neighbourQueryRadius: 6,
-  useBondingPhysics: true,
+  // THE EFFECTIVE STEP IS 1, which is what znah's integrator does: it adds the
+  // per-step force impulse straight to the velocity (`vel += F`) and then moves by
+  // it (`points += vel`), i.e. there is no dt/eta at all. Ours is
+  // `v = momentum·v + (dt/eta)·F`, so dt/eta must be exactly 1 — and it cannot be
+  // reached by setting timeStep alone, because the Mathias bound CLAMPS
+  // dt to 0.2/mu_eff. With mu_eff = 0 + 0.5 the bound is exactly 0.4, so timeStep 0.4
+  // is admitted unclamped and drag 0.4 makes dt/eta = 0.4/0.4 = 1 exactly.
+  drag: 0.4,
+  timeStep: 0.4,
+  // znah's `velocityDecay = 0.1` => `vel *= 0.9` after every move. Substituting
+  // w = u + F (his pre-decay velocity) into his loop gives w' = 0.9·w + F(x'),
+  // x' = x + w — the SAME recursion as ours at dt/eta = 1, so momentum IS 1 - decay.
+  momentum: 0.9,
+  maxSpeed: 0,                  // znah caps nothing
+  // Inert: nothing queries the hash (the rule's census is over BONDED partners and
+  // the global charge rides the octree, not the stencil). Sized to the layout scale
+  // only so the per-generation hash build stays cheap.
+  neighbourQueryRadius: REST * 2,
+  // FALSE so the neighbour scan is skipped ENTIRELY (`doScan` = force || density ||
+  // cutoff-charge, and global charge does not join it). The bond springs are gated
+  // on the Bonds=Physics capability, INDEPENDENTLY of this flag, so they still run.
+  useBondingPhysics: false,
   autoBond: false,
   bondStiffness: STIFF,
   bondRestLength: REST,
   formDistance: 1.15,
   breakDistance: 1.8,
   agentUpdateMode: 'sync',
-  // C10 — GLOBAL charge (deterministic Barnes-Hut). No cutoff: every pair
-  // contributes. `chargeMaxDist` is unused in this mode and is left off.
+  // C10 + follow-up — GLOBAL charge (deterministic Barnes-Hut) WITH znah's cutoff.
   chargeStrength: CHARGE_K,
   chargeRange: 'global',
+  chargeMaxDist: CHARGE_MAX_DIST,
   chargeTheta: CHARGE_THETA,
   layoutIterations: LAYOUT_ITERATIONS,
   agentCapabilities: {
-    motion: 'force', body: true, collision: 'soft', bonds: 'physics', autoBond: false,
+    motion: 'force', body: true, collision: 'off', bonds: 'physics', autoBond: false,
     charge: 'on',
     // LIFESPAN is on because the "Birth generation" viewer reads Get Age — the
     // capability gate would otherwise hide a node this model actually uses.

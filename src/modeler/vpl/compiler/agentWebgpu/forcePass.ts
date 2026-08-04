@@ -186,11 +186,18 @@ function chargeTreeTraversal(layout: AgentWebGPULayout, is3d: boolean, indent: s
     let l2: f32 = ${l2e};
     let w: f32 = ${tf(layout.treeNodeExtBase, 'ni')};
     if (w * w < fc.chargeTheta2 * l2) {
-      let c: f32 = f32(${ti(layout.treeNodeEndBase, 'ni')} - ${ti(layout.treeNodeStartBase, 'ni')}) / (1.0 + l2);
-      tfx = tfx + c * ndx; tfy = tfy + c * ndy;${accZ}
+      // The CUTOFF cull. Runtime-gated on the uniform (the WASM port gates at compile
+      // time for byte-identity; a shader has no such constraint and a uniform branch
+      // is perfectly coherent). An un-cut global model uploads maxD2 = +inf and
+      // minC = 0, so the test is always-true and the subtraction is a no-op.
+      if (l2 < fc.chargeMaxD2) {
+        let mass: f32 = f32(${ti(layout.treeNodeEndBase, 'ni')} - ${ti(layout.treeNodeStartBase, 'ni')});
+        let c: f32 = mass / (1.0 + l2) - mass * fc.chargeMinC;
+        tfx = tfx + c * ndx; tfy = tfy + c * ndy;${accZ}
+      }
       ni = u32(${ti(layout.treeNodeNextBase, 'ni')});
     } else {
-      if (u32(${ti(layout.treeNodeNextBase, 'ni')}) == ni + 1u) {
+      if (u32(${ti(layout.treeNodeNextBase, 'ni')}) == ni + 1u && l2 < fc.chargeMaxD2) {
         let pEnd: u32 = u32(${ti(layout.treeNodeEndBase, 'ni')});
         var p: u32 = u32(${ti(layout.treeNodeStartBase, 'ni')});
         loop {
@@ -201,8 +208,11 @@ function chargeTreeTraversal(layout: AgentWebGPULayout, is3d: boolean, indent: s
             if (pdx > hW) { pdx = pdx - fc.fieldW; } else if (pdx < -hW) { pdx = pdx + fc.fieldW; }
             if (pdy > hH) { pdy = pdy - fc.fieldH; } else if (pdy < -hH) { pdy = pdy + fc.fieldH; }${pdzFold}
           }
-          let pc: f32 = 1.0 / (1.0 + ${pl2e});
-          tfx = tfx + pc * pdx; tfy = tfy + pc * pdy;${paccZ}
+          let pl2: f32 = ${pl2e};
+          if (pl2 < fc.chargeMaxD2) {
+            let pc: f32 = 1.0 / (1.0 + pl2) - fc.chargeMinC;
+            tfx = tfx + pc * pdx; tfy = tfy + pc * pdy;${paccZ}
+          }
           p = p + 1u;
         }
       }

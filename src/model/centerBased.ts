@@ -195,6 +195,27 @@ export function chargeMaxDistOf(cfg: CenterBasedConfig | undefined | null): numb
 //     widening it would be pure cost (and 3D cost grows with the CUBE of the edge).
 // ---------------------------------------------------------------------------
 
+/** The GLOBAL charge's optional CUTOFF distance. Unlike `chargeMaxDistOf` (the
+ *  cutoff law, which DERIVES `8 × bondRestLength` when unset) global has **no
+ *  derived default**: absent / 0 ⇒ `Infinity` ⇒ every pair contributes, which is
+ *  the law C10 shipped, behaviour-identical.
+ *
+ *  A stored positive value truncates the tree sum exactly the way the reference
+ *  implementation does (`calcMultibodyForce`): the coefficient becomes
+ *  `1/(1+l²) − 1/(1+maxDist²)` so it reaches zero CONTINUOUSLY at the cutoff, and
+ *  nodes/leaf points beyond it are culled. That matters at scale — without it the
+ *  far field of N distant nodes sums to ≈ N/l, which grows with the population and
+ *  INFLATES the layout without bound.
+ *
+ *  `Infinity` is the deliberate sentinel rather than a flag: `l² < Infinity` is
+ *  always true and `1/(1+Infinity) = 0`, and `x − 0 === x` bit-exactly for every
+ *  finite x — so the culled formula collapses to the un-culled one with no second
+ *  code path and no drift between the three targets. */
+export function chargeGlobalMaxDistOf(cfg: CenterBasedConfig | undefined | null): number {
+  const v = cfg?.chargeMaxDist;
+  return typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : Infinity;
+}
+
 /** Which charge law this model runs. Absent ⇒ `'cutoff'` ⇒ byte-identical to L1. */
 export function chargeRangeOf(cfg: CenterBasedConfig | undefined | null): ChargeRange {
   return cfg?.chargeRange === 'global' ? 'global' : 'cutoff';
@@ -258,7 +279,13 @@ export interface ChargeParams {
    *  what stops the force being counted twice. */
   doCharge: boolean;
   chargeK: number;
+  /** The squared cutoff BOTH laws read. Cutoff law ⇒ `chargeMaxDistOf²`. GLOBAL ⇒
+   *  `chargeGlobalMaxDistOf²`, i.e. `Infinity` unless the model set one. Charge off
+   *  ⇒ 0 (inert, as before). */
   chargeMaxD2: number;
+  /** `1/(1+maxD2)` — the term that takes the coefficient continuously to zero at the
+   *  cutoff. 0 under an un-cut GLOBAL law (`1/(1+Infinity)`), which is what makes the
+   *  culled arithmetic collapse to the un-culled arithmetic bit-exactly. */
   chargeMinC: number;
   /** C10 — run the GLOBAL Barnes–Hut traversal instead of the pair term. */
   doChargeTree: boolean;
@@ -271,7 +298,9 @@ export function chargeParamsOf(cfg: CenterBasedConfig | undefined | null): Charg
   const global = usesGlobalCharge(cfg);
   // The pair term runs for CUTOFF charge only.
   const doCharge = on && !global;
-  const maxD = doCharge ? chargeMaxDistOf(cfg) : 0;
+  // The cutoff law DERIVES a default (8 × rest); the global law does not (absent ⇒
+  // Infinity ⇒ every pair, exactly the law C10 shipped). Charge off ⇒ 0, inert.
+  const maxD = global ? chargeGlobalMaxDistOf(cfg) : doCharge ? chargeMaxDistOf(cfg) : 0;
   const chargeMaxD2 = maxD * maxD;
   const theta = chargeThetaOf(cfg);
   return {

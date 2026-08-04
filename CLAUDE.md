@@ -297,7 +297,9 @@ genesis-ca/
 │   ├── gen-sdca.mjs                  # GRA flagship: Ilachinski-Halpern dual coupling + the hysteresis band
 │   ├── gen-life-on-bonds.mjs         # GRA: Conway via the Neighbour Census over a bonded Moore ring (the O7 differential oracle)
 │   ├── gen-graph-metrics-sweep.mjs   # GRA: the measurement half — six graph indicators + the Overseer sweep protocol
-│   ├── verify-graph-rewrite.mjs      # THE GRA harness: I1-I7 + oracles O3/O5/O6/O7/O8/O9/O11, 12 tiers, every check negative-controlled
+│   ├── gen-growing-graphs.mjs        # GRA: Cousin's binary cubic GRA, ported from znah's demo (topology AND physics)
+│   ├── verify-graph-rewrite.mjs      # THE GRA harness: I1-I7 + oracles O3/O5/O6/O7/O8/O9/O11, 13 tiers, every check negative-controlled
+│   ├── test-growing-graphs-physics.mjs # Growing Graphs LAYOUT parity: our real force pass vs a Node port of znah's force.js/main.c
 │   ├── bench-spatial-index.mjs       # C11: shipped hash vs a per-radius hash vs an exact octree range query (+ --stats: every shipped model's radius/density)
 │   ├── test-archetypes.mjs           # C7 (P6): the New-model seeds — Empty IS EMPTY_MODEL, per-card coherence, migration+resolution
 │   └── check-no-unseeded-random.mjs  # C7 (P7): no Math.random() on a simulation-semantic path (allowlist + stale-entry check)
@@ -3019,27 +3021,77 @@ never claim more fidelity than the measured result below.**
   above the whole slider range, so it lands in one generation) — **not** Set Agent Radius by id,
   whose wired Agent port is exactly what the synchronous cross-agent write gate rejects, correctly
   (it cannot know statically that Get Self Handle is self-targeted). Its upper bound **1.35** is
-  not cosmetic: the hash bin edge is `max(interactionRange·2·defaultRadius, neighbourQueryRadius)`
-  = 6, and the 3×3 stencil only guarantees a pair within one bin edge, so the soft-collision
-  search stays complete only while `interactionRange·(r_i+r_j) ≤ 6`. The `growth` capability is on
+  PURELY COSMETIC since the physics-parity pass (Collision is OFF, so no engine force reads a
+  radius and the old hash-completeness ceiling no longer applies). The `growth` capability is on
   ONLY to carry this; nothing in the rule reads a radius, so the C8 geometry verdict is unchanged.
-- **THE FIRST SHIPPED MODEL ON `chargeRange: 'global'`** (C10's deterministic Barnes-Hut,
-  θ = 0.9). znah's own layout is an unbounded n-body repulsion with a quadtree, and C10's
-  benchmark says the same thing for a GROWING graph: a finite cutoff degrades as N rises while
-  global holds flat and costs less. `layoutIterations: 1` — the 9-generation period already
-  gives 9 force passes per reference tick (vs 6 under the old 2×3 cadence).
-- **THE WORLD IS SIZED FROM A MEASURED EXTENT, not from the `sqrt(N)·rest·1.45` packing rule
-  the other GRA models use.** That rule assumes bond-rest spacing; GLOBAL charge has no cutoff,
-  so the repulsion an outer node feels grows with the whole population and the structure
-  inflates far past it — and how far depends on the SHAPE a rule grows, not just on N. Measured
-  in the real worker at the 10 000-node cap inside a deliberately oversized world: `meduza`
-  4639×4075, `exp tree` 5231×5497, `Rule 17957` **8378×8234** (the stringiest in the
-  catalogue). The shipped world is **12000×12000** — 2.6× the compact-blob rules, 1.4× the
-  worst — and a full run to the cap has **0 agents on the boundary**. It is deliberately NOT
-  larger: the view fits the world, so an oversized world leaves the interesting early growth a
-  speck (16000 was tried and rejected for exactly that). Enlarging a bounded world is otherwise
-  free (the hash anchors on the agents' bbox and is capped at `AGENT_HASH_BIN_CAP`; the charge
-  octree is built over the population).
+
+#### THE PHYSICS IS znah's, PARAMETER FOR PARAMETER (the layout-fidelity pass)
+The topology was already exact (Tier M) while the LAYOUT still did not look like the reference, and
+the cause was a **scale mismatch, not a tuning one**. Every row below was checked against
+`graphs-main/js/force.js` + `src/main.c`; the acceptance measurement is
+[scripts/test-growing-graphs-physics.mjs](scripts/test-growing-graphs-physics.mjs), which relaxes the
+SAME grown graph under both force laws and reads every parameter off the shipped `.gcaproj`.
+
+| what | reference | ours (shipped) | note |
+|---|---|---|---|
+| bond rest length | `linkDistance` **25** | `bondRestLength` **25** | was 5 |
+| spring stiffness | `linkStrength` **0.5** | `bondStiffness` **0.5** | was 0.55 |
+| spring law | `s = (l−L)/l·λ`, applied ±FULLY to both endpoints | `F = λ(l−L)·r̂` per endpoint | same magnitude |
+| spring SOLVER | **2 Gauss-Seidel sweeps** (fwd+bwd) on PREDICTED positions `pos+vel`, `l²` floored at 1 | ONE Jacobi accumulation per force iteration | **the one residual — see below** |
+| charge law | `c = mass·(1/(1+l²) − 1/(1+R²))` on the RAW displacement | identical | ✓ |
+| charge k | `chargeStrength` **−3** | `chargeStrength` **−3** | was −10 |
+| charge cutoff | `chargeMaxDist` **2000**, culled inside the traversal | `chargeMaxDist` **2000** under `chargeRange:'global'` | **the engine addition** |
+| Barnes-Hut θ | `theta2 = 0.81` ⇒ **0.9** | `chargeTheta` **0.9** | ✓ |
+| tree rebuild | once per FRAME, before `tickSteps` | once per GENERATION, before the iteration loop | ✓ |
+| integration | `vel += F; pos += vel; vel *= 0.9` — **no dt at all** | `v = momentum·v + (dt/η)·F; x += v` | equivalent iff dt/η = 1 |
+| momentum | `1 − velocityDecay` = **0.9** | `momentum` **0.9** | was 0 |
+| effective step | 1 | `timeStep 0.4 / drag 0.4` ⇒ **exactly 1** | see the clamp trick |
+| speed cap | none | `maxSpeed 0` (uncapped) | ✓ |
+| collision | **none** | `collision:'off'`, `repulsionStiffness 0` | was `soft`, 0.9 |
+| solver passes/step | `tickSteps` **2** | `layoutIterations` **2** | was 1 |
+| newborn placement | mean of `[mother, inherited]` + `±0.5` ABSOLUTE | midpoint + `±0.25` (one draw, applied ±diagonally) | was `±0.3` = 6% of rest |
+| world bounds | **none** (the view auto-fits the extent) | bounded 60000², measured so nothing clamps | |
+
+- **THE ONE NUMBER THAT EXPLAINS THE OLD LOOK.** The charge law has a length scale BUILT IN (the
+  knee at `d = 1`), so the same `k` means something completely different at a different rest
+  length. The regime is the dimensionless **`|k| / (λ·(1+rest²))`**: the reference's is
+  `3/(0.5·626) = 0.0096`; the port's was `10/(0.55·26) = 0.699` — **73× more charge-dominated**,
+  so its bonds sat ~48% past rest and the graph read as permanently inflated. The harness asserts
+  this ratio as a pure CONFIG check, which catches the defect without needing a run.
+- **THE dt/η = 1 TRICK, because it cannot be reached by `timeStep` alone.** `effectiveAgentDt`
+  CLAMPS `dt` to `0.2/μ_eff` with `μ_eff = repulsionStiffness + bondStiffness` — read
+  UNCONDITIONALLY, even with collision off. So `repulsionStiffness: 0` (honest — nothing uses it)
+  gives `μ_eff = 0.5`, bound `0.4`; `timeStep 0.4` is then admitted UNCLAMPED and `drag 0.4` makes
+  `dt/η = 0.4/0.4 = 1` exactly. Verified live: the C1 row reads `requested 0.4 · dt 0.4 · μ_eff 0.5
+  · clamped false`.
+- **`useBondingPhysics: false` is a PERFORMANCE choice, not a physics one.** Springs ride the
+  Bonds=Physics capability independently, so turning the legacy bundle off costs nothing and makes
+  `doScan` false — the whole neighbour pass is skipped (global charge does not join that gate).
+- **THE SEED RING is derived from the REST LENGTH** (`10·REST/2π ≈ 39.8`), not from 3% of the world
+  as before. The world dims still set the CENTRE, so a Resize re-centres; but a world-relative ring
+  would have started every bond ~50× its rest length at the new world size.
+- **THE RESIDUAL, NAMED AND MEASURED: the link SOLVER, and it is not closable here.** With the
+  reference's link solve reduced to OUR single Jacobi accumulation (the harness's `--ref-jacobi`
+  control) the two land on each other — **bond length 0.7–2.5%, nearest non-bonded 3.2–4.0%, hub
+  ring spacing 0.5–8.8%, extent 0.2–11.4%** across three shape-different rules. So the force LAW is
+  identical; a two-body bonded pair settles at **25.237332 in both, to six decimals**. What is left
+  is that two GS sweeps on predicted positions are a SEMI-IMPLICIT solve, stiffer at the same λ, so
+  the reference settles **13–25% tighter**. It cannot be compensated: raising λ makes the explicit
+  integrator UNSTABLE (measured — λ ≥ 0.7 diverges on a cubic graph at dt/η = 1 and momentum 0.9,
+  because the graph Laplacian's top eigenvalue is 6 and the loop gain passes 2; **0.5 is already at
+  the edge, which is presumably why the reference chose it**), and adding Jacobi passes does not
+  help (2/4/8 give the same answer — only the residual net force drops, 6.8 → 0.5). A true
+  edge-list Gauss-Seidel sweep is inherently SEQUENTIAL and cannot be expressed by the per-agent
+  parallel force pass all three targets share. Since the difference is close to a uniform SCALE
+  factor and the view is fitted anyway, the harness gates on the **scale-free** ratios, which agree
+  to **3.2–11.2% (packing)** and **3.9–10.1% (ring spacing)**.
+- **THE WORLD (60000²) IS MEASURED IN THE APP, not from the harness.** The harness grows the whole
+  topology at once and relaxes from a near-origin start, which produces a violent transient
+  overshoot (rule 2502 measured 74 307 at 400 frames, contracting to 25 971 by 1200) — useless for
+  sizing. The real model grows INCREMENTALLY: measured in the live worker at **N = 4062 the
+  structure spans 8451 × 7040 with a 7.1× margin and 0 agents on the boundary**. Bounds exist only
+  so nothing can be clamped; the reference has none and fits its view to the structure, which is
+  why the first few dozen nodes are small here.
 - **`NODE_CAP` 10000 with `maxAgents` 24000 — the 2× margin is REQUIRED, not padding.** A
   generation can split at most a maximal independent set, so N can at most DOUBLE in one
   generation, and the end condition is evaluated *after* the generation that crossed the cap.
@@ -3062,7 +3114,7 @@ never claim more fidelity than the measured result below.**
   BONDED neighbours, a handle-indexed bootstrap), and the only geometry read feeds Create
   Agent's x/y, a geometry-only sink. Confirmed live: the C2 pipeline panel tags the force
   phases *presentation only — does not affect your rule* alongside
-  `k = -10 · GLOBAL (Barnes–Hut θ = 0.9)`.
+  `k = -3 · GLOBAL (Barnes–Hut θ = 0.9) — summed through a deterministic octree, truncated at 2000`.
 - **The `lifespan` capability is ON because the "Birth generation" viewer reads Get Age.**
   `test-agent-capabilities.mjs` caught the omission ("migration HIDES a used node 'getAge'") —
   a real model bug, since the capability gate would have hidden a node the model uses. The
@@ -3206,6 +3258,27 @@ The agent engine had **no force with reach beyond contact distance**, so any mod
 **This is a different LAW, not a speed-up of the same one.** `global` drops the cutoff entirely (`min_c = 0`) and sums **every** pair through a Barnes–Hut octree; a model that switches follows a different trajectory and its `.gcaproj` records the choice, exactly as changing any other physics parameter does.
 
 - **Approximate ≠ nondeterministic.** Same positions ⇒ same Morton codes ⇒ same order-canonical traversal ⇒ **bit-identical forces** on the CPU engines, so a fixed seed still replays and an Overseer sweep still reproduces. θ changes *which* law you run, not whether it repeats.
+- **GLOBAL TAKES AN OPTIONAL CUTOFF (a later follow-up, shipped).** `chargeMaxDist` under
+  `chargeRange:'global'` truncates the tree sum exactly the way the reference implementation
+  (`calcMultibodyForce`) does: the coefficient becomes `1/(1+l²) − 1/(1+R²)` so it reaches zero
+  CONTINUOUSLY at `R`, and nodes / whole leaves / individual points beyond `R` are culled at the
+  same NODE granularity the reference uses. **Why it matters:** the far field of N distant nodes
+  sums to ≈ `N/l`, which GROWS with the population — so the un-cut law inflates a *growing* graph
+  without bound. **`chargeGlobalMaxDistOf` resolves absent/0 to `Infinity`, deliberately**: `l² <
+  Infinity` is always true and `1/(1+Infinity) = 0`, and `x − 0 === x` bit-exactly, so the culled
+  arithmetic COLLAPSES to the un-culled one with no second code path and no cross-target drift.
+  (Contrast `chargeMaxDistOf`, the CUTOFF law's resolver, which derives `8 × rest` when unset —
+  global has no derived default because "every pair" is the law C10 shipped.) Per target: **JS**
+  emits the cull unconditionally (behaviour-identical at Infinity); **WASM** gates it at COMPILE
+  time on a finite cutoff (`allocLocal` + instructions change the bytes, so an un-cut global model
+  stays byte-identical — the `chargeOn` precedent) and allocates its `mass` temporary only then;
+  **WGSL** gates at RUNTIME on the uniform (its text is not identity-checked, and `chargeMaxD2`
+  uploads as f32 `Infinity`). `chargeBinEdgeOf` is UNCHANGED — global still never widens the hash
+  stencil, because the octree carries it. Covered by 8 new `parity-agent-force` combos
+  (2D/3D × torus/bounded × tight/loose × θ) plus a VALUE invariant asserting a world-sized cutoff
+  is INERT (1.0% off the un-cut law), a tight one CHANGES the answer (98%), the traversal tracks
+  the TRUNCATED sum far better than the un-cut one (37% vs 99%), and the result is MONOTONE in R.
+  **Negative-controlled by source mutation**: disabling the WASM cull emit fails all 8 combos.
 - **THE BENCHMARK GATE decided this ships enabled, and it inverted L1's prediction.** [probe-graph-layout.mjs](scripts/probe-graph-layout.mjs) grows the GRA blob at N ≈ 2.5k / 5k / 20k in a world scaled to the population (`side = √(N·(rest·1.45)²)`), same ticks + seed + splits, and compares the tuned 8×-rest cutoff against θ = 0.9 global. Global wins on **every** axis at **every** size — and is **cheaper**:
 
   | N | nnb/bond (cutoff → global) | overlap % (cutoff → global) | ms/tick (cutoff → global) |

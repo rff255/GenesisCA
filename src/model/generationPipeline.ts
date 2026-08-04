@@ -47,7 +47,7 @@ import type { NodeConfig } from '../modeler/vpl/types';
 import { agentMotionMode, motionIntegrates, motionAppliesForces } from './agentFieldGating';
 import {
   cbNum, effectiveAgentDt, layoutIterationsOf, resolveMaxBonds,
-  usesCharge, chargeParamsOf, chargeMaxDistOf, usesGlobalCharge, chargeThetaOf,
+  usesCharge, chargeParamsOf, chargeMaxDistOf, chargeGlobalMaxDistOf, usesGlobalCharge, chargeThetaOf,
   usesEngineGrowth, usesEngineSprings, usesPositionalCollision, usesSoftCollision,
   usesBondingPhysics,
 } from './centerBased';
@@ -348,9 +348,13 @@ export function describeGenerationPipeline(model: CAModel): PipelinePhase[] {
       group: 'forces', active: charge, capability: 'Charge',
       detail: !charge ? undefined
         : chargeGlobal
-          // The whole point of the mode: unbounded reach, so it is NOT described
-          // in terms of a cutoff it does not have.
-          ? `k = ${num(chargeParamsOf(cfg).chargeK)} · GLOBAL (Barnes–Hut θ = ${num(chargeThetaOf(cfg))}) — every pair interacts, summed through a deterministic octree`
+          // GLOBAL sums through the octree rather than the stencil. Its cutoff is
+          // OPTIONAL (absent ⇒ genuinely every pair), so the sentence has to say
+          // which of the two laws is running rather than assume the unbounded one.
+          ? `k = ${num(chargeParamsOf(cfg).chargeK)} · GLOBAL (Barnes–Hut θ = ${num(chargeThetaOf(cfg))}) — summed through a deterministic octree, ${
+            Number.isFinite(chargeGlobalMaxDistOf(cfg))
+              ? `truncated at ${num(chargeGlobalMaxDistOf(cfg))}`
+              : 'every pair interacts (no cutoff)'}`
           : `k = ${num(chargeParamsOf(cfg).chargeK)} · cutoff ${num(chargeMaxDistOf(cfg))} (the only engine force with reach past contact)`,
     });
     push({

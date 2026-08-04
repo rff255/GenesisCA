@@ -68,7 +68,7 @@
 import type { GraphNode, GraphEdge, CAModel } from '../../../../model/types';
 import { agentAttrsOf } from '../../../../model/attributeScope';
 import { modelAttrSlotKeys } from '../../../../model/attributeScope';
-import { resolveMaxBonds, usesCharge, usesGlobalCharge } from '../../../../model/centerBased';
+import { resolveMaxBonds, usesCharge, usesGlobalCharge, chargeParamsOf } from '../../../../model/centerBased';
 import { resolveAgentFieldGates, motionModeCode } from '../../../../model/agentFieldGating';
 import {
   I32, F64,
@@ -4385,7 +4385,15 @@ function gatedF64Read(em: WasmEmitter, off: number | undefined, idxLocal: number
   pushF64Elem(em, off, idxLocal);
 }
 
-function emitForcePass(em: WasmEmitter, layout: AgentMemoryLayout, is3d: boolean, P: ForcePassParamIdx, fmodFuncIdx: number, motionMode = 2): void {
+function emitForcePass(
+  em: WasmEmitter, layout: AgentMemoryLayout, is3d: boolean, P: ForcePassParamIdx,
+  fmodFuncIdx: number, motionMode = 2,
+  /** C10 follow-up — emit the GLOBAL traversal's CUTOFF cull (`l² < chargeMaxD2`
+   *  plus the `− minC` term that takes the coefficient continuously to zero there).
+   *  A COMPILE-TIME variant on purpose: an un-cut global model emits the verbatim
+   *  pre-cutoff traversal and its bytes are byte-identical. */
+  chargeGlobalCutoff = false,
+): void {
   const doForces = motionMode === 2;
   const doCommit = motionMode !== 0;
   const L = layout;
@@ -4420,6 +4428,10 @@ function emitForcePass(em: WasmEmitter, layout: AgentMemoryLayout, is3d: boolean
   const tndx = treeOn ? em.allocLocal(F64) : -1, tndy = treeOn ? em.allocLocal(F64) : -1, tndz = treeOn ? em.allocLocal(F64) : -1;
   const tl2 = treeOn ? em.allocLocal(F64) : -1, tw = treeOn ? em.allocLocal(F64) : -1, tc = treeOn ? em.allocLocal(F64) : -1;
   const tfx = treeOn ? em.allocLocal(F64) : -1, tfy = treeOn ? em.allocLocal(F64) : -1, tfz = treeOn ? em.allocLocal(F64) : -1;
+  // The cutoff variant's `mass` temporary. Allocated ONLY under the cutoff, because
+  // `allocLocal` changes the module bytes even for a local nothing reads — that
+  // gate is what makes an un-cut global model byte-identical.
+  const tMass = treeOn && chargeGlobalCutoff ? em.allocLocal(F64) : -1;
 
   const off = {
     x: L.f64['x']!, y: L.f64['y']!, z: L.f64['z']!,
@@ -4847,14 +4859,33 @@ function emitForcePass(em: WasmEmitter, layout: AgentMemoryLayout, is3d: boolean
         em.op(OP_F64_LT);
         em.ifThenElse(
           () => {
-            // c = (end - start) / (1 + l2)
-            pushI32Elem(em, tEnd, tni); pushI32Elem(em, tStart, tni); em.op(OP_I32_SUB);
-            em.op(OP_F64_CONVERT_I32_S);
-            em.f64Const(1); em.localGet(tl2); em.op(OP_F64_ADD); em.op(OP_F64_DIV);
-            em.localSet(tc);
-            em.localGet(tfx); em.localGet(tc); em.localGet(tndx); em.op(OP_F64_MUL); em.op(OP_F64_ADD); em.localSet(tfx);
-            em.localGet(tfy); em.localGet(tc); em.localGet(tndy); em.op(OP_F64_MUL); em.op(OP_F64_ADD); em.localSet(tfy);
-            if (is3d) { em.localGet(tfz); em.localGet(tc); em.localGet(tndz); em.op(OP_F64_MUL); em.op(OP_F64_ADD); em.localSet(tfz); }
+            // c = mass/(1 + l2) [- mass*minC], accumulated only inside the cutoff.
+            // The CUTOFF variant mirrors the reference's `calcMultibodyForce`: an
+            // accepted-but-too-far node contributes nothing, and the skip link fires
+            // regardless. `mass/(1+l2) - mass*minC` (rather than the reference's
+            // `mass*(1/(1+l2) - minC)`) is deliberate: with minC = 0 it is bit-exactly
+            // the pre-cutoff expression, which is what lets the JS arm stay
+            // variant-free and still agree with the un-cut WASM module.
+            const emitAccept = () => {
+              pushI32Elem(em, tEnd, tni); pushI32Elem(em, tStart, tni); em.op(OP_I32_SUB);
+              em.op(OP_F64_CONVERT_I32_S);
+              if (chargeGlobalCutoff) {
+                em.localSet(tMass);
+                em.localGet(tMass);
+                em.f64Const(1); em.localGet(tl2); em.op(OP_F64_ADD); em.op(OP_F64_DIV);
+                em.localGet(tMass); em.localGet(P.chargeMinC); em.op(OP_F64_MUL); em.op(OP_F64_SUB);
+              } else {
+                em.f64Const(1); em.localGet(tl2); em.op(OP_F64_ADD); em.op(OP_F64_DIV);
+              }
+              em.localSet(tc);
+              em.localGet(tfx); em.localGet(tc); em.localGet(tndx); em.op(OP_F64_MUL); em.op(OP_F64_ADD); em.localSet(tfx);
+              em.localGet(tfy); em.localGet(tc); em.localGet(tndy); em.op(OP_F64_MUL); em.op(OP_F64_ADD); em.localSet(tfy);
+              if (is3d) { em.localGet(tfz); em.localGet(tc); em.localGet(tndz); em.op(OP_F64_MUL); em.op(OP_F64_ADD); em.localSet(tfz); }
+            };
+            if (chargeGlobalCutoff) {
+              em.localGet(tl2); em.localGet(P.chargeMaxD2); em.op(OP_F64_LT);
+              em.ifThen(emitAccept);
+            } else emitAccept();
             // ni = next[ni]  (the SKIP LINK — jump past this whole subtree)
             pushI32Elem(em, tNext, tni); em.localSet(tni);
           },
@@ -4863,6 +4894,11 @@ function emitForcePass(em: WasmEmitter, layout: AgentMemoryLayout, is3d: boolean
             pushI32Elem(em, tNext, tni);
             em.localGet(tni); em.i32Const(1); em.op(OP_I32_ADD);
             em.op(OP_I32_EQ);
+            if (chargeGlobalCutoff) {
+              // ... and the leaf itself is within the cutoff (the reference culls the
+              // whole leaf on the NODE's distance before summing its points).
+              em.localGet(tl2); em.localGet(P.chargeMaxD2); em.op(OP_F64_LT); em.op(OP_I32_AND);
+            }
             em.ifThen(() => {
               pushI32Elem(em, tStart, tni); em.localSet(tp);
               pushI32Elem(em, tEnd, tni); em.localSet(tpEnd);
@@ -4884,15 +4920,28 @@ function emitForcePass(em: WasmEmitter, layout: AgentMemoryLayout, is3d: boolean
                   // associative, so folding it as `1 + (a + b + c)` diverges by an
                   // ULP that the integrator then amplifies. (Found by the parity
                   // harness: 2D bounded mismatched while torus/3D happened not to.)
-                  em.f64Const(1);
-                  em.f64Const(1);
-                  em.localGet(tndx); em.localGet(tndx); em.op(OP_F64_MUL); em.op(OP_F64_ADD);
-                  em.localGet(tndy); em.localGet(tndy); em.op(OP_F64_MUL); em.op(OP_F64_ADD);
-                  if (is3d) { em.localGet(tndz); em.localGet(tndz); em.op(OP_F64_MUL); em.op(OP_F64_ADD); }
-                  em.op(OP_F64_DIV); em.localSet(tc);
-                  em.localGet(tfx); em.localGet(tc); em.localGet(tndx); em.op(OP_F64_MUL); em.op(OP_F64_ADD); em.localSet(tfx);
-                  em.localGet(tfy); em.localGet(tc); em.localGet(tndy); em.op(OP_F64_MUL); em.op(OP_F64_ADD); em.localSet(tfy);
-                  if (is3d) { em.localGet(tfz); em.localGet(tc); em.localGet(tndz); em.op(OP_F64_MUL); em.op(OP_F64_ADD); em.localSet(tfz); }
+                  const emitPoint = () => {
+                    em.f64Const(1);
+                    em.f64Const(1);
+                    em.localGet(tndx); em.localGet(tndx); em.op(OP_F64_MUL); em.op(OP_F64_ADD);
+                    em.localGet(tndy); em.localGet(tndy); em.op(OP_F64_MUL); em.op(OP_F64_ADD);
+                    if (is3d) { em.localGet(tndz); em.localGet(tndz); em.op(OP_F64_MUL); em.op(OP_F64_ADD); }
+                    em.op(OP_F64_DIV);
+                    if (chargeGlobalCutoff) { em.localGet(P.chargeMinC); em.op(OP_F64_SUB); }
+                    em.localSet(tc);
+                    em.localGet(tfx); em.localGet(tc); em.localGet(tndx); em.op(OP_F64_MUL); em.op(OP_F64_ADD); em.localSet(tfx);
+                    em.localGet(tfy); em.localGet(tc); em.localGet(tndy); em.op(OP_F64_MUL); em.op(OP_F64_ADD); em.localSet(tfy);
+                    if (is3d) { em.localGet(tfz); em.localGet(tc); em.localGet(tndz); em.op(OP_F64_MUL); em.op(OP_F64_ADD); em.localSet(tfz); }
+                  };
+                  if (chargeGlobalCutoff) {
+                    // The cull test gets its OWN sum (a + b [+ c]); the coefficient's
+                    // denominator keeps the verbatim `((1 + a) + b) + c` association.
+                    em.localGet(tndx); em.localGet(tndx); em.op(OP_F64_MUL);
+                    em.localGet(tndy); em.localGet(tndy); em.op(OP_F64_MUL); em.op(OP_F64_ADD);
+                    if (is3d) { em.localGet(tndz); em.localGet(tndz); em.op(OP_F64_MUL); em.op(OP_F64_ADD); }
+                    em.localGet(P.chargeMaxD2); em.op(OP_F64_LT);
+                    em.ifThen(emitPoint);
+                  } else emitPoint();
                   em.localGet(tp); em.i32Const(1); em.op(OP_I32_ADD); em.localSet(tp);
                   em.br(0);
                 });
@@ -5432,7 +5481,15 @@ export function compileAgentGraphWasm(
   };
   let forceBody: Uint8Array;
   try {
-    emitForcePass(fpEm, agentLayout, is3d, FP, FMOD_FUNC_IDX, motionModeCode(model.centerBased));
+    // The GLOBAL-charge CUTOFF is a COMPILE-TIME variant, not a runtime branch: an
+    // un-cut global model (`chargeMaxDist` absent / 0 ⇒ Infinity) emits the verbatim
+    // pre-cutoff traversal, so its bytes are byte-identical. The JS arm reaches the
+    // same numbers without a variant because `l² < Infinity` is always true and
+    // `x − 0 === x` bit-exactly — the two therefore still agree bit-for-bit.
+    emitForcePass(
+      fpEm, agentLayout, is3d, FP, FMOD_FUNC_IDX, motionModeCode(model.centerBased),
+      chargeGlobal && Number.isFinite(chargeParamsOf(model.centerBased).chargeMaxD2),
+    );
     forceBody = fpEm.buildBody();
   } catch (e) {
     return empty('agentWasm forcePass: ' + String((e as Error)?.message || e));

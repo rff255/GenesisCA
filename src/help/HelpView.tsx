@@ -2367,6 +2367,34 @@ export function HelpView() {
             mutation-free published rule reproduces the reference node count <em>exactly</em>,
             cycle for cycle &mdash; including the rules a single-round drain could not follow at all.
           </p>
+          <p className={styles.p}>
+            Its <strong>layout</strong> is the reference&rsquo;s too, parameter for parameter &mdash;
+            and that turned out to matter more than any single number. The long-range charge law{' '}
+            <code>k&thinsp;&middot;&thinsp;(1/(1+d&sup2;) &minus; minC)</code> has a length scale
+            baked into it (the knee sits at <code>d = 1</code>), so the <em>same</em> k means
+            something completely different at a different bond rest length. What actually decides
+            whether the springs or the charge win is the dimensionless{' '}
+            <code>|k| / (&lambda;&thinsp;(1+rest&sup2;))</code>: the reference runs 0.0096, while an
+            earlier version of this port ran a rest length of 5 with k = &minus;10, i.e. 0.70 &mdash;
+            seventy-three times more charge-dominated. Its bonds sat about half again past their rest
+            length and the graph read as permanently inflated. It now runs the reference&rsquo;s own
+            scale (rest 25, stiffness 0.5, k = &minus;3 truncated at 2000, momentum 0.9, no collision,
+            no speed cap, and an effective integration step of exactly 1).
+          </p>
+          <p className={styles.p}>
+            One difference is left, and it is a <em>solver</em> difference rather than a force one.
+            The reference sweeps its edge list twice per step, forward then backward, on{' '}
+            <em>predicted</em> positions &mdash; a semi-implicit solve that is stiffer than the single
+            accumulation a per-agent force pass can do, so its layout settles 13&ndash;25&thinsp;%
+            tighter. Reduce the reference to the same single pass and the two agree to
+            0.7&ndash;2.5&thinsp;% on bond length; a lone bonded pair settles at the identical
+            distance to six decimals. It cannot be tuned away &mdash; raising the stiffness makes an
+            explicit integrator diverge on a cubic graph, and adding passes changes nothing &mdash;
+            and a sequential edge-list sweep is not something a parallel force pass can express. Since
+            the difference is close to a uniform scale factor and the view is fitted anyway, what you
+            can actually see (how densely non-neighbours pack, how the rings around a hub space out)
+            agrees to within about a tenth.
+          </p>
           <h3 className={styles.h3}>Neighbour Census &mdash; the input a graph rule reads</h3>
           <p className={styles.p}>
             A rule that runs on a <em>graph</em> cannot name its neighbours &mdash; there is no

@@ -2324,11 +2324,17 @@ function runAgentStep(): void {
             const l2 = ndx * ndx + ndy * ndy + ndz * ndz;
             const w = nEx[ni]!;
             if (w * w < chargeTheta2 * l2) {
-              const c = (nEn[ni]! - nSt[ni]!) / (1 + l2);
-              tfx += c * ndx; tfy += c * ndy; tfz += c * ndz;
+              // The cutoff cull. `chargeMaxD2` is Infinity unless the model set a
+              // global cutoff, so the test is always-true and `- mass*minC` is
+              // `- 0` = a bit-exact no-op then (see chargeGlobalMaxDistOf).
+              if (l2 < chargeMaxD2) {
+                const mass = nEn[ni]! - nSt[ni]!;
+                const c = mass / (1 + l2) - mass * chargeMinC;
+                tfx += c * ndx; tfy += c * ndy; tfz += c * ndz;
+              }
               ni = nNx[ni]!;
             } else {
-              if (nNx[ni]! === ni + 1) {
+              if (nNx[ni]! === ni + 1 && l2 < chargeMaxD2) {
                 const pEnd = nEn[ni]!;
                 for (let p = nSt[ni]!; p < pEnd; p++) {
                   let pdx = tSX[p]! - xi, pdy = tSY[p]! - yi, pdz = tSZ[p]! - zi;
@@ -2337,7 +2343,11 @@ function runAgentStep(): void {
                     if (pdy > halfH) pdy -= H; else if (pdy < -halfH) pdy += H;
                     if (pdz > halfD) pdz -= D; else if (pdz < -halfD) pdz += D;
                   }
-                  const pc = 1 / (1 + pdx * pdx + pdy * pdy + pdz * pdz);
+                  // The cull test gets its OWN sum; the coefficient's denominator
+                  // stays the VERBATIM `1 + a + b + c` — f64 addition is not
+                  // associative and the WASM port mirrors that exact association.
+                  if (pdx * pdx + pdy * pdy + pdz * pdz >= chargeMaxD2) continue;
+                  const pc = 1 / (1 + pdx * pdx + pdy * pdy + pdz * pdz) - chargeMinC;
                   tfx += pc * pdx; tfy += pc * pdy; tfz += pc * pdz;
                 }
               }
@@ -2500,11 +2510,16 @@ function runAgentStep(): void {
             const l2 = ndx * ndx + ndy * ndy;
             const w = nEx[ni]!;
             if (w * w < chargeTheta2 * l2) {
-              const c = (nEn[ni]! - nSt[ni]!) / (1 + l2);
-              tfx += c * ndx; tfy += c * ndy;
+              // The cutoff cull — see the 3D arm. `chargeMaxD2` is Infinity unless
+              // the model set a global cutoff, so this is a bit-exact no-op then.
+              if (l2 < chargeMaxD2) {
+                const mass = nEn[ni]! - nSt[ni]!;
+                const c = mass / (1 + l2) - mass * chargeMinC;
+                tfx += c * ndx; tfy += c * ndy;
+              }
               ni = nNx[ni]!;
             } else {
-              if (nNx[ni]! === ni + 1) {
+              if (nNx[ni]! === ni + 1 && l2 < chargeMaxD2) {
                 const pEnd = nEn[ni]!;
                 for (let p = nSt[ni]!; p < pEnd; p++) {
                   let pdx = tSX[p]! - xi, pdy = tSY[p]! - yi;
@@ -2512,7 +2527,8 @@ function runAgentStep(): void {
                     if (pdx > halfW) pdx -= W; else if (pdx < -halfW) pdx += W;
                     if (pdy > halfH) pdy -= H; else if (pdy < -halfH) pdy += H;
                   }
-                  const pc = 1 / (1 + pdx * pdx + pdy * pdy);
+                  if (pdx * pdx + pdy * pdy >= chargeMaxD2) continue;
+                  const pc = 1 / (1 + pdx * pdx + pdy * pdy) - chargeMinC;
                   tfx += pc * pdx; tfy += pc * pdy;
                 }
               }
