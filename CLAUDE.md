@@ -370,7 +370,7 @@ The app is functional with these major systems:
 ### Visual Programming Language (VPL)
 - `src/modeler/vpl/GraphEditor.tsx` — React Flow-based node graph editor
 - `src/modeler/vpl/CaNode.tsx` — Custom node component with per-type config UI
-- `src/modeler/vpl/nodes/` — 153 node types (150 selectable from the Add Node menu + 3 hidden macro boundary nodes), each in its own file with `compile()` method. Canonical list: `ALL_NODES` in [registry.ts](src/modeler/vpl/nodes/registry.ts). Async-only nodes (6): SetNeighborhoodAttribute, SetNeighborAttributeByIndex, MarkCellUpdated, SetFacingOrientation, SetNeighborOrientationByIndex, MoveSelfToNeighbor. Includes `StopEventNode` (flow input only, text widget for stop message — compiles to `if (_stopFlag[0] === 0) _stopFlag[0] = <1-based idx>;` first-match-wins; WASM emitter mirrors this via `i32.store` at `layout.stopFlagOffset`).
+- `src/modeler/vpl/nodes/` — 154 node types (151 selectable from the Add Node menu + 3 hidden macro boundary nodes), each in its own file with `compile()` method. Canonical list: `ALL_NODES` in [registry.ts](src/modeler/vpl/nodes/registry.ts). Async-only nodes (6): SetNeighborhoodAttribute, SetNeighborAttributeByIndex, MarkCellUpdated, SetFacingOrientation, SetNeighborOrientationByIndex, MoveSelfToNeighbor. Includes `StopEventNode` (flow input only, text widget for stop message — compiles to `if (_stopFlag[0] === 0) _stopFlag[0] = <1-based idx>;` first-match-wins; WASM emitter mirrors this via `i32.store` at `layout.stopFlagOffset`).
 - Five "event" entry-point nodes: GenerationStep (per-gen logic), InitEvent (runs once PER CELL on simulator Reset — see Variegated Cells section), **GridInit** (runs ONCE GLOBALLY on Reset — free-form procedural seeding; see the "Grid Init Event" section), InputMapping C→A (brush), OutputMapping A→C (color pass)
 - `src/modeler/vpl/compiler/compile.ts` — Two-pass compiler: hoists values, then emits flow
 - Multi-output nodes (InputColor, GetColorConstant, MacroNode, ColorScale, FilterNeighbors, JoinNeighbors, GetFacingLabels, BreakDownNeighborIndex, InitEvent, GetCellPosition, GroupOperator with position output) use `_v${nodeId}_${portId}` naming
@@ -2571,6 +2571,88 @@ From `v₁`'s behaviour, with `maxBonds` a TIGHT **3** (nothing transiently exce
 
 **Real worker + real GPU** — a throwaway K4-seeded triangle-split model (generated → measured → deleted): **all three agent targets produced the IDENTICAL sequence**, 54 splits over 55 generations, **O6 (`min deg == max deg == 3` and `E == 3N/2`) TRUE at EVERY generation** together with I1–I4, ending at N=112 / E=168 = 3·112/2, with **0 worker errors and 0 console errors** (chip read `agents JS` / `agents WASM` / `agents WebGPU`).
 
+### G1 finished — `Transfer Bond` (third-party IN-PLACE partner replacement)
+
+**The last piece of slot-order fidelity, and the one edge case Rewire could not express.**
+`rewireBond(me, b → to)` is break + form AT THE REQUESTER, and the engine's `breakBond` compacts
+by swapping the LAST slot into the freed one while `formBond` APPENDS — so a rewire **SCRAMBLES
+THE THIRD PARTY'S SLOT ORDER** (and attaches the new partner to the REQUESTER, never to `b`).
+Reference graph-automaton implementations reconnect a displaced neighbour with a single
+**in-place** overwrite (`node[node.indexOf(i)] = j`). Slot order is not cosmetic: a cubic split
+keeps slot 0 and hands slots 1 and 2 to its daughters, so a scrambled receiver propagates into
+every later split and into the embedding forever. Design note: [HANDOFF_CLARITY_SIMPLIFICATION.md](docs/HANDOFF_CLARITY_SIMPLIFICATION.md) §3.B9.
+
+**The verb.** `transferBond(me, b, to)` — rewrite `b`'s slot holding `me` IN PLACE to `to`
+(position preserved); `me` loses `b` through ordinary compaction; `to` APPENDS the mirror slot.
+Degrees: `b` unchanged, `me` −1, `to` +1.
+
+#### THE ENCODING — the NEGATIVE FORM lane, the mirror image of Form Between's marker
+Form Between took the break lane's sign; the FORM lane's sign was still free (Form / Break /
+Rewire / Form Between never write it negative). So **`fl < 0` ⇒ TRANSFER**, with `bl = b + 2`
+(the third party) and `fl = −(to + 2)`; the requester is implicit. **Zero new fields, zero moved
+offsets, queue stride / ABI / layouts untouched** — the same argument P4b made, and the reason
+`check-compile-identity` reports every model byte-identical after the verb lands.
+
+| verb | `bondBreakReq` | `bondFormReq` |
+|---|---|---|
+| Form(self→t) | `NONE` (+1) | `t+2` \| `NONE` |
+| Break(self,t) | `t+2` \| `NONE` | `NONE` (+1) |
+| Rewire(from→to) | `from+2` \| `NONE` — **> 0** | `to+2` \| `NONE` — **> 0** |
+| FormBetween(a,b) | `−(a+2)` \| `−NONE` — **< 0** | `b+2` \| `NONE` |
+| **Transfer(b,→to)** | `b+2` \| `NONE` — **> 0** | **`−(to+2)` \| `−NONE` — < 0** |
+
+⚠️ **DECODE ORDER IS LOAD-BEARING.** The `fl < 0` branch must sit immediately after the existing
+`bl < 0` branch in `drainAgentBondRequests`. Fall through and `to` decodes to −1, the entry lands
+in the plain-BREAK arm with `from = b`, and **the transfer silently degrades to a bare Break** —
+an edge vanishes with no error anywhere. Proven by source mutation: disabling the branch fails 41
+harness checks. An unresolvable transfer writes `NONE` / `−NONE`, still non-zero on both lanes
+(so it cannot truncate the queue) and still `fl < 0` (so it decodes as a no-op transfer, not a
+Break).
+
+#### THE BOND KEEPS ITS VALUES (a deliberate deviation from the B9 assessment)
+It is the SAME edge re-pointed, so the rewritten slot at `b` retains its rest length, stiffness,
+type label and every bond attribute, and the slot appended at `to` is stamped with those SAME
+values — which is what makes **I2** hold by construction. Per-edge state therefore travels WITH
+the edge, which is the semantically useful behaviour for a rewriting rule. Consequently the node
+has **no rest-length / stiffness / bond-attribute ports** and is **NOT** in `BOND_ATTR_PORT_TYPES`
+(B9's assessment expected it to seed attributes like a Form); and the emitters skip the form-half
+parameter cells entirely, exactly as `break` does — the drain reads them for neither.
+
+#### I5 / I2 — the whole-op pre-check list ([agentEngine.ts](src/simulator/engine/agentEngine.ts) `transferBond`)
+All BEFORE any write, so a rejection leaves the graph EXACTLY as it was: `me` / `b` / `to` live,
+in range and pairwise distinct; **`b↔me` must EXIST** (else it is a bare form at `to`, silently
+raising a degree); **`b↔to` must NOT already exist** — the in-place rewrite would give `b` two
+slots pointing at `to`, a DOUBLE EDGE no compaction path can undo; `to` must have room (`me`
+needs no capacity check — it only loses). **I3**: `b`'s slot is OVERWRITTEN, never blanked, so it
+is never transiently dangling.
+
+#### All-target emit
+One emitter per target, mirroring Form Between with the negation moved to the other lane: JS
+([bondRequestEmitJS.ts](src/modeler/vpl/compiler/bondRequestEmitJS.ts) `'transfer'`), WASM
+(`emitBondRequest`, `0 - x` via `OP_I32_SUB` — the encoder has no negate op), WebGPU
+(`f32(-select(…))`). **WebGPU still needs NO atomics** — the entry rides the requesting agent's
+own rows and the two ids are PAYLOAD, not addresses. Registered in `BOND_REQUEST_NODE_TYPES` (so
+the usage gate sizes the queue), both `AGENT_*_SUPPORTED_TYPES`, `AGENT_NODE_REQUIREMENT` →
+`bonds`, `nodeValidation`'s init-invalid set, `geometryTaint`'s `STRUCTURAL_VERBS`,
+`targetDiagnosis`'s residency `STRUCTURAL` set and the registry.
+
+#### Verification
+- **`verify-graph-rewrite.mjs` Tier N** (new, 539 total): the slot POSITION preserved at the third
+  party with its siblings untouched (the point of the verb) + a REWIRE control proving the two
+  verbs build DIFFERENT graphs; the decode-order trap, both ways; **I5 across ten rejection paths**
+  (no such edge / would-double-edge / full / dead / out of range / every self-alias / unresolvable)
+  each asserting the graph is EXACTLY the pre-op graph, that not one uninvolved slot moved, and
+  that a probe op queued AFTER the rejection still applies (no truncation); **I2 + KEEP-VALUES**
+  across rest length, stiffness and both bond-attribute kinds; multi-op in one generation; and the
+  emitted shape + both agent gates on all three targets. **Two SOURCE-MUTATION controls, both
+  caught**: disabling the `fl < 0` decode → 41 failures; replacing the in-place rewrite with
+  break+form → exactly the two position checks.
+- **`parity-agent-wasm.mjs`** gained a permanent `[synthetic] TRANSFER Bond` entry placing a
+  Transfer and a Rewire carrying THE SAME TWO IDS side by side. **Negative-controlled both ways**:
+  dropping the negation on WASM only is caught by parity (`js=-4 wasm=4`); dropping it on BOTH
+  targets passes parity and is caught by the **value invariant** (`formLane 4 !== -4`), which
+  recomputes the whole expected queue independently.
+
 ### G2 closed — the DIVISION BOND PARTITION
 
 `divideAgent` split a mother's bonds between its two daughters purely **geometrically** (`sign(dot(offset, m̂))`). A graph-rewriting rule is *defined* by which EDGES go to which daughter, so geometry is exactly the thing a user cannot say. P5 lets the user **name** the partition, plus decision **D4** (the daughter–daughter bond policy). Runbook: [docs/HANDOFF_GRA_P5_DIVISION_PARTITION.md](docs/HANDOFF_GRA_P5_DIVISION_PARTITION.md).
@@ -2793,7 +2875,7 @@ never claim more fidelity than the measured result below.**
   adjacency (`reconnect` mutates a partner's list, so a later splitter sees the updated
   neighbourhood). A latch is consumed exactly once and newborns never divide in the same tick
   (`dividing.length` is frozen at the tick boundary). GenesisCA's structural request queue
-  drains in PARALLEL and two ADJACENT splitters corrupt each other (the mother's Rewire needs
+  drains in PARALLEL and two ADJACENT splitters corrupt each other (the mother's Transfer needs
   its edge to `b` to still exist at drain time), so one generation can only split an
   INDEPENDENT SET. The model therefore spends **PERIOD = 1 + K generations per reference tick**:
   a Periodic Step at phase 0 does census → next state (+ mutation) → **latch**, then K
@@ -2811,9 +2893,10 @@ never claim more fidelity than the measured result below.**
   (**6 rather than 8**) — unsurprising, since ascending handle IS the order the reference
   divides in. **K stays 8** (not the measured 6) so the drain carries a margin of two for a rule
   nobody has rolled yet, and so PERIOD stays 9 — the cadence the layout's force-pass budget and
-  the measured world extent were both established against. Tier M now asserts
-  `deepest < ROUNDS`, so a retune that cut K down onto the measured depth fails.
-  `LAYOUT_ITERATIONS` is 1: the layout gets 9 force passes per reference tick at a third of the
+  the measured world extent were both established against. **⚠️ That table was measured against
+  the REWIRE split and no longer holds — see the Transfer bullets below: with the faithful slot
+  order the drain does not finish at ANY K, so Tier M asserts a leftover RATE rather than zero
+  and K stays 8 because raising it does not help.** `LAYOUT_ITERATIONS` is 1: the layout gets 9 force passes per reference tick at a third of the
   per-generation cost of the old 2×3 cadence.
 - **THE LATCH *IS* THE PRIORITY, AND THE PRIORITY IS THE AGENT'S HANDLE.** The gate must be
   INTENT-AWARE (below), so the flag and the tie-break live in the same number; a second boolean
@@ -2853,36 +2936,55 @@ never claim more fidelity than the measured result below.**
   residual "miss" is the cycle in which the reference's own node limit stops it. `quadratic`
   and `exp tree` stay **100/100 at BOTH K**, which is the regression proof that the extra
   no-op rounds change nothing for the rules that never needed them.
-- **SLOT ORDER IS THE FIDELITY FRONTIER, and three of the four rows a split touches are now
-  EXACT.** A bond APPENDS to both endpoints' lists, so a node's slot order is its incident edges
-  sorted by formation time — and the split reads slot 0 (kept) and slots 1/2 (handed to the
-  daughters), so slot order propagates into the embedding forever. The split's **operation order
-  is therefore not free**: `rewire(b→j)` · `rewire(c→k)` · `between(b,j)` · **`between(j,k)`** ·
-  `between(c,k)` yields `mother = [a,j,k]`, `j = [i,b,k]`, `k = [i,j,c]` — znah's three rows
-  verbatim. Issuing `between(j,k)` LAST instead (the original order) gives `k = [i,c,j]`. Peak
-  degree during the drain is still exactly 3 at every step, so `maxBonds` stays a tight 3.
-  Tier M asserts all three rows through the real engine and negative-controls the op order.
-- **THE ONE REMAINING STRUCTURAL DIFFERENCE — the REWIRE RECEIVER, and it needs an engine verb.**
-  znah's `reconnect(b, i, j)` is `node[node.indexOf(i)] = j`, an **in-place** overwrite that
-  preserves position. GenesisCA's `rewireBond` is break + form: the break swap-removes (the LAST
-  entry jumps into the freed slot) and the form appends, so `b`'s list comes out **reordered
-  unless the mother happened to sit in its last slot**. The neighbour SET is right, the order is
-  not, and the next split reads slots 1/2 — so it compounds. **Measured**: the labelled graph now
-  tracks the reference exactly for **9 cycles on `quadratic` / 5 on `exp tree` / 2 on `meduza`**
-  (all were **1** before this pass), and the reference's habit of concentrating splits into a few
-  long-lived hubs is *partly* reproduced — on `meduza` the busiest node splits **11** times
-  against the reference's **35** (hubs with ≥3 splits: 1 → 3, reference 33), while `quadratic`
-  moved slightly the OTHER way on hub count (73 → 54, reference 139). **So: real but partial and
-  non-uniform — do not claim the shape is reproduced.** What IS reproduced exactly at N ≈ 3000 on
-  all three rules is the graph's **eccentricity from the core** (60 / 48 / 61, matching the
-  reference), i.e. the gross extent was already right. Closing the rest needs a **third-party
-  in-place TRANSFER verb** — designed and assessed in the follow-ups register
-  ([HANDOFF_CLARITY_SIMPLIFICATION.md](docs/HANDOFF_CLARITY_SIMPLIFICATION.md) §3.B9), which also
-  re-derives why the full-fidelity op order needs `maxBonds 4`.
-- **The other residuals, stated honestly.** N(t) cannot diverge from split ORDER (each latch is
-  consumed exactly once either way), so the mutation-free deviation is **zero**. A node still
-  latched after round K would be re-latched by the next state tick — measured at **0.0000 %** for
-  the published rules. A rule WITH mutation cannot match at all (the reference flips on
+- **SLOT ORDER IS THE FIDELITY FRONTIER, and ALL FOUR rows a split touches are now EXACT.** A
+  bond APPENDS to both endpoints' lists, so a node's slot order is its incident edges sorted by
+  formation time — and the split reads slot 0 (kept) and slots 1/2 (handed to the daughters), so
+  slot order propagates into the embedding forever. The split's **operation order is therefore
+  not free**: `form(i,j)` · **`transfer(b, i→j)`** · `form(i,k)` · `between(j,k)` ·
+  **`transfer(c, i→k)`** yields `mother = [a,j,k]`, `j = [i,b,k]`, `k = [i,j,c]` **and** both
+  receivers `nodes[b][indexOf(i)] = j` / `nodes[c][indexOf(i)] = k` — znah's division, verbatim,
+  every row. Tier M asserts all four through the real engine, expressing the receiver rows as the
+  reference's own `reconnect` rather than a transcribed answer, and negative-controls them by
+  putting the split back on **Rewire** (a source mutation that scrambles a receiver).
+- **`maxBonds` IS 4, AND THAT IS THE PRICE OF THE LAST ROW.** The mother transiently reaches
+  degree 4 at the two `form(i,·)` steps. A capacity-safe order does exist at `maxBonds 3` (shed
+  before gaining), but it hands daughter `j` its slot 0 as `b` rather than `i` — one daughter's
+  order breaks. So 3 keeps the tight "nothing may transiently exceed cubic degree" guard and gets
+  3 of the 4 rows; 4 gets all four, and O6 (asserted after EVERY generation) still catches an
+  over-bond, one layer later.
+- **WHAT THE TRANSFER VERB BOUGHT, MEASURED** (against a transcription of the reference, 100
+  reference ticks, 6000-node cap; Rewire split → Transfer split):
+
+  | | quadratic | exp tree | meduza |
+  |---|---|---|---|
+  | LABELLED edge set identical to the reference | 43.5 % → **100.0 %** | 22.0 % → **100.0 %** | 47.7 % → **79.2 %** |
+  | max splits by one node (ref) | 5 → 5 (5) | 5 → 5 (5) | 15 → **49** (49) |
+  | nodes splitting ≥ 3× (ref) | 4 → 9 (8) | 25 → 16 (15) | 3 → **46** (46) |
+  | share of splits in the top 5 % (ref) | 25.7 % → 31.1 % (31.8 %) | 29.0 % → 30.3 % (31.7 %) | 12.0 % → **48.2 %** (48.2 %) |
+
+  On `quadratic` and `exp tree` the port's edge set is now **IDENTICAL to the reference's, edge
+  for edge at the same node ids** — full labelled isomorphism, not just N(t). And `meduza`'s hub
+  structure — the thing the port visibly lacked, and the user's original observation — now
+  matches the reference **exactly** on all three hub statistics.
+- **⚠️ WHAT IT COST: the drain no longer provably finishes, and ONE published rule loses its N(t)
+  exactness.** A latched node may split only when its handle is below every bonded neighbour's,
+  so a path of flagged nodes with ASCENDING handles drains ONE PER ROUND and the rounds a tick
+  needs are the longest such chain. Rewire used to SCRAMBLE each receiver's slot order, which
+  broke those chains up by accident; Transfer reproduces the reference's adjacency and with it
+  the reference's own long flagged chains. **Raising K does not fix it** — measured on the same
+  five-rule set, leftovers persist at K = 8 / 10 / 12 / 16 / 24 / 40 alike, and for `exp hyper`
+  the divergence merely slides from cycle 26 (K=8) to 28 (K=12) to 30 (K=20). The reference has
+  no such limit: it divides sequentially in index order, so one pass covers any chain length, and
+  only a sequential drain could match that. **So K stays 8** (the cadence the layout budget was
+  tuned against) and the residue is pinned rather than chased: over the 18 mutation-free
+  published rules at 100 ticks, **17/18 match N(t) exactly** (was 18/18); the exception is
+  `exp hyper`, exact for its first 26 cycles. Every rule, that one included, stays exactly
+  3-regular with `E = 3N/2` throughout. Tier M now asserts a leftover RATE (`< 5 %`, measured
+  ~0.94 %) instead of zero, and pins `exp hyper`'s divergence floor so a change that makes it
+  worse — or that fixes it — is noticed.
+- **The other residuals, stated honestly.** A node still latched after round K is re-latched by
+  the next state tick, i.e. it divides a tick late — measured at **~0.94 %** of latches, and that
+  is exactly the mechanism behind the one `exp hyper` deviation above. A rule WITH mutation cannot match at all (the reference flips on
   `Math.random`, the port on the seeded shared stream) — a different noise realisation, not a
   fidelity gap, and the oracle excludes those 5 presets for that reason.
 - **THE INITIAL CONDITION IS THE REFERENCE'S, EXACTLY — INCLUDING 9 OF THE 10 SLOT ORDERS.**
@@ -2904,7 +3006,8 @@ never claim more fidelity than the measured result below.**
   round; here node 0 gets `[next, chord, prev]`. Tier M asserts the 9/10 count, WHICH node is the
   exception, and negative-controls it (giving each chord to its LOWER endpoint drops it to 4/10 —
   which is what the pre-2026-08-04 bootstrap produced).
-- **The split is Cubic GRA's 5 queue ops at a tight `maxBonds: 3`**, with the mother keeping bond
+- **The split is FIVE queue ops** (2 Form Bond + 2 Transfer Bond + 1 Form Bond Between — Create
+  Agent / Add Agent To World are host calls consuming no queue slot), with the mother keeping bond
   slot 0 — and unlike Cubic GRA that is **NOT** an arbitrary choice here: slot 0 is `a`, the
   neighbour znah's mother keeps, so the fixed orientation is what makes the mother's row match.
 - **TWO LIVE PRESENTATION SLIDERS** (both bounded model attributes, deliberately absent from the

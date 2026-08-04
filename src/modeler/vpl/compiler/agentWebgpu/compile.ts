@@ -114,7 +114,7 @@ export const AGENT_WEBGPU_SUPPORTED_TYPES: ReadonlySet<string> = new Set<string>
   // indicators
   'getIndicator', 'setIndicator', 'updateIndicator',
   // structural writes (G4 — the post-step CPU structural phase reads the requests)
-  'divideAgent', 'formBond', 'breakBond', 'rewireBond', 'formBondBetween', 'killAgent',
+  'divideAgent', 'formBond', 'breakBond', 'rewireBond', 'formBondBetween', 'transferBond', 'killAgent',
   // mid-step graph-authored spawning (Create Agent → set-by-handle → Add To World,
   // exactly as in the Init Event — an atomic bump allocator gives the handle a real
   // slot id, so the by-id setters write the newborn directly; CPU-reconciled).
@@ -1532,7 +1532,7 @@ function emitGetBondAttribute(ctx: AgentWgpuCtx, node: GraphNode): ValueRef {
  *  and the emit is sequential within a thread, so nothing races. (Contrast Apply
  *  Force To Agent, which scatters into ANOTHER agent's slot and therefore does use
  *  an atomic CAS.) */
-function emitBondRequest(ctx: AgentWgpuCtx, node: GraphNode, verb: 'form' | 'break' | 'rewire' | 'between'): void {
+function emitBondRequest(ctx: AgentWgpuCtx, node: GraphNode, verb: 'form' | 'break' | 'rewire' | 'between' | 'transfer'): void {
   ctx.usesStructural = true;
   ctx.usesBondReqQueue = true;
   const slots = Math.max(1, ctx.layout.bondReqSlots);
@@ -1564,6 +1564,16 @@ function emitBondRequest(ctx: AgentWgpuCtx, node: GraphNode, verb: 'form' | 'bre
     ctx.lines.push(`  let ${ok}: bool = (${a} >= 0) && (${b} >= 0);`);
     ctx.lines.push(`  ${reqAt(ctx, 'bondBreakReq', e)} = f32(-select(${BOND_REQ_NONE}, ${a} + ${BOND_REQ_ID_BIAS}, ${ok}));`);
     ctx.lines.push(`  ${reqAt(ctx, 'bondFormReq', e)} = f32(select(${BOND_REQ_NONE}, ${b} + ${BOND_REQ_ID_BIAS}, ${ok}));`);
+  } else if (verb === 'transfer') {
+    // B9 — TRANSFER: the mirror image of Form Between's marker, the op kind rides
+    // the sign of the FORM lane. Still NO atomics: the thread writes only its OWN
+    // agent's rows — the two ids are PAYLOAD, not addresses.
+    const p = fresh(ctx, 'brqP'), t = fresh(ctx, 'brqT'), ok = fresh(ctx, 'brqOk');
+    ctx.lines.push(`  let ${p}: i32 = ${castTo(resolveValueInput(ctx, node, 'partnerAgent', -1), 'i32')};`);
+    ctx.lines.push(`  let ${t}: i32 = ${castTo(resolveValueInput(ctx, node, 'toAgent', -1), 'i32')};`);
+    ctx.lines.push(`  let ${ok}: bool = (${p} >= 0) && (${t} >= 0);`);
+    ctx.lines.push(`  ${reqAt(ctx, 'bondBreakReq', e)} = f32(select(${BOND_REQ_NONE}, ${p} + ${BOND_REQ_ID_BIAS}, ${ok}));`);
+    ctx.lines.push(`  ${reqAt(ctx, 'bondFormReq', e)} = f32(-select(${BOND_REQ_NONE}, ${t} + ${BOND_REQ_ID_BIAS}, ${ok}));`);
   } else {
     const t = fresh(ctx, 'brqT');
     ctx.lines.push(`  let ${t}: i32 = ${castTo(resolveValueInput(ctx, node, 'targetAgent', -1), 'i32')};`);
@@ -1579,7 +1589,10 @@ function emitBondRequest(ctx: AgentWgpuCtx, node: GraphNode, verb: 'form' | 'bre
       ctx.lines.push(`  ${reqAt(ctx, 'bondFormReq', e)} = ${BOND_REQ_NONE}.0;`);
     }
   }
-  if (verb !== 'break') {
+  // Break has no form half; TRANSFER re-points an EXISTING edge and keeps its
+  // values, so neither writes the form-half cells (the CPU drain reads them for
+  // neither) — the JS and WASM emitters take the identical exemption.
+  if (verb !== 'break' && verb !== 'transfer') {
     ctx.lines.push(`  ${reqAt(ctx, 'bondFormL', e)} = ${inF32(ctx, node, 'restLength', 0)};`);
     ctx.lines.push(`  ${reqAt(ctx, 'bondFormK', e)} = ${inF32(ctx, node, 'stiffness', 0)};`);
     // P3 — the new bond's INITIAL attribute values, one f32 cell per QUEUE ENTRY.
@@ -2433,10 +2446,12 @@ function compileFlowNode(ctx: AgentWgpuCtx, nodeId: string): void {
     case 'formBond':
     case 'breakBond':
     case 'rewireBond':
-    case 'formBondBetween': {
+    case 'formBondBetween':
+    case 'transferBond': {
       emitBondRequest(ctx, node, node.data.nodeType === 'formBond' ? 'form'
         : node.data.nodeType === 'breakBond' ? 'break'
-        : node.data.nodeType === 'formBondBetween' ? 'between' : 'rewire');
+        : node.data.nodeType === 'formBondBetween' ? 'between'
+        : node.data.nodeType === 'transferBond' ? 'transfer' : 'rewire');
       compileFlowChain(ctx, node.id, 'next');
       break;
     }

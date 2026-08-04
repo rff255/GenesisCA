@@ -455,7 +455,7 @@ function diagnoseAgents(model: CAModel): LayerDiagnosis {
  *  never promise one the engine will not take. */
 function residencyFactsFromModel(model: CAModel): ResidencyGraphFacts {
   const FIELD = new Set(['sampleField', 'fieldGradient', 'readCellsUnder', 'affectCellsUnder', 'secreteToField']);
-  const STRUCTURAL = new Set(['divideAgent', 'formBond', 'breakBond', 'rewireBond', 'formBondBetween', 'killAgent']);
+  const STRUCTURAL = new Set(['divideAgent', 'formBond', 'breakBond', 'rewireBond', 'formBondBetween', 'transferBond', 'killAgent']);
   const RADIUS_WRITE = new Set(['setAgentRadius', 'setTargetRadius']);
   const INDICATORS = new Set(['getIndicator', 'setIndicator', 'updateIndicator']);
   let structural = false, radiusWrite = false;

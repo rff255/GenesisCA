@@ -14,7 +14,7 @@
 import type { CompileContext } from '../types';
 import { BOND_REQ_ID_BIAS, BOND_REQ_NONE } from './bondRequestQueue';
 
-export type BondRequestVerb = 'form' | 'break' | 'rewire' | 'between';
+export type BondRequestVerb = 'form' | 'break' | 'rewire' | 'between' | 'transfer';
 
 /** Emit one queue append. `inputs` are the node's resolved value inputs. */
 export function emitBondRequestJS(
@@ -48,6 +48,17 @@ export function emitBondRequestJS(
     L.push(`  const _bqOk = _bqA >= 0 && _bqB >= 0;`);
     L.push(`  _bondBreakReq[_bq] = _bqOk ? -(_bqA + ${BOND_REQ_ID_BIAS}) : ${-BOND_REQ_NONE};`);
     L.push(`  _bondFormReq[_bq] = _bqOk ? _bqB + ${BOND_REQ_ID_BIAS} : ${BOND_REQ_NONE};`);
+  } else if (verb === 'transfer') {
+    // B9 — TRANSFER: the mirror image of Form Between's marker. The op kind rides
+    // the SIGN of the FORM lane (negative), which no other verb ever writes, so it
+    // again costs no new field and moves no baked offset. Both ids must resolve or
+    // the entry is an explicit no-op — still (NONE, −NONE) so it stays non-zero
+    // AND still decodes as a transfer rather than falling into the break arm.
+    L.push(`  const _bqP = (${inputs['partnerAgent'] || '-1'}) | 0;`);
+    L.push(`  const _bqT = (${inputs['toAgent'] || '-1'}) | 0;`);
+    L.push(`  const _bqOk = _bqP >= 0 && _bqT >= 0;`);
+    L.push(`  _bondBreakReq[_bq] = _bqOk ? _bqP + ${BOND_REQ_ID_BIAS} : ${BOND_REQ_NONE};`);
+    L.push(`  _bondFormReq[_bq] = _bqOk ? -(_bqT + ${BOND_REQ_ID_BIAS}) : ${-BOND_REQ_NONE};`);
   } else {
     const port = 'targetAgent';
     L.push(`  const _bqT = (${inputs[port] || '-1'}) | 0;`);
@@ -63,7 +74,10 @@ export function emitBondRequestJS(
       L.push(`  _bondFormReq[_bq] = ${BOND_REQ_NONE};`);
     }
   }
-  if (verb !== 'break') {
+  // Break has no form half; TRANSFER re-points an EXISTING edge and keeps its
+  // values (read off the partner's slot at drain time), so neither writes the
+  // form-half parameter cells — and the drain never reads them for either.
+  if (verb !== 'break' && verb !== 'transfer') {
     // The FORM half's parameters (0 ⇒ the engine defaults: contact distance / λ).
     L.push(`  _bondFormL[_bq] = ${inputs['restLength'] || '0'};`);
     L.push(`  _bondFormK[_bq] = ${inputs['stiffness'] || '0'};`);

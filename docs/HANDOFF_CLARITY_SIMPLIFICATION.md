@@ -2281,10 +2281,40 @@ Report carries the full context) — this section is the ONE place to come back 
 | B5 | **Adaptive-index RETRY PRECONDITIONS** — revisit only if a model class emerges with r/spacing ≥ 10 at N ≥ 10k, torus worlds > 256 bins/axis (the coarsening regime, where the tree reaches 10×), or non-uniform per-agent radii. | C11 | INVESTIGATION_ADAPTIVE_INDEX.md |
 | B6 | **Emitted-WGSL viewer** — Show Code now always shows the JS reference (C4), so the WGSL is no longer reachable from the UI (dev harness only). Re-add as a read-only Advanced view. | C4 | §C4 report deviation 4 |
 | B7 | **Per-model θ guidance for global charge** (chargeTheta defaults to 0.9; accuracy spans 0.013%@0.2 → 3.76%@1.4). A hint or per-archetype default. | C10 | §C10 report |
+| B10 | **A genuinely SEQUENTIAL division drain for `Growing Graphs`.** The independent-set round drain needs one round per link of an ascending-handle flagged chain, and B9's faithful adjacency reproduces the reference's own long chains — so the drain no longer finishes at any K and one published rule (`exp hyper`) loses its N(t) exactness from cycle 26. The reference divides sequentially in index order, so one pass covers any chain; matching that needs a serial drain the parallel structural phase cannot express today. | B9, 2026-08-04 | §3.B9 status note; Tier M pins the residue |
 | B8 | **WebGPU agent SoA layout stays UNGATED** (C9's deliberate carve-out — it's a transient per-generation mirror, and gating it would move the windowed readback plan). Flipping it on later is a layout-only change; the emitters already carry the safety catch. | C9 | §C9 report deviations |
-| B9 | **`Transfer Bond` — a third-party IN-PLACE rewire verb** (the last piece of znah slot-order fidelity). See the design note directly below. | Growing Graphs fidelity, 2026-08-04 | §3.B9 note |
+| ~~B9~~ | ~~**`Transfer Bond` — a third-party IN-PLACE rewire verb**~~ — **SHIPPED 2026-08-04.** The verb exists on all three agent targets and `Growing Graphs` uses it; the design note below is kept as the record, with the SHIPPED deltas called out inline. | Growing Graphs fidelity, 2026-08-04 | §3.B9 note |
 
-#### B9 — `Transfer Bond`, the in-place third-party rewire (assessment, not a plan)
+#### B9 — `Transfer Bond`, the in-place third-party rewire — **SHIPPED**
+
+> **STATUS: SHIPPED 2026-08-04.** The assessment below is preserved as written; four things
+> turned out differently and are recorded here so the note is not read as current spec.
+>
+> 1. **The bond KEEPS its values** (rest length, stiffness, every bond attribute) — it is the
+>    same edge re-pointed. So the node has NO rest-length / stiffness / bond-attribute ports and
+>    is **NOT** in `BOND_ATTR_PORT_TYPES`, contrary to the "All-target emit" paragraph below.
+>    That is also what makes I2 hold by construction: the mirror slot appended at the new partner
+>    is stamped with the values read off the rewritten slot.
+> 2. **`maxBonds 4` was adopted for `Growing Graphs`**, and the op order used is
+>    `form(i,j)` · `transfer(b,i→j)` · `form(i,k)` · `between(j,k)` · `transfer(c,i→k)` — the two
+>    outer edges are self-relative Form Bonds, not Form Betweens. Same five queue ops, same
+>    result, same transient degree 4.
+> 3. **THE MEASURED OUTCOME.** Gain: all four adjacency rows a split touches are now the
+>    reference's exactly; the LABELLED edge set is **100 % identical** to the reference's on
+>    `quadratic` and `exp tree` (43.5 % / 22.0 % before) and 79.2 % on `meduza` (47.7 %); and
+>    `meduza`'s hub structure — the user's original observation — matches **exactly** (max splits
+>    by one node 15 → 49 against the reference's 49; nodes splitting ≥3× 3 → 46 against 46; top-5 %
+>    share 12.0 % → 48.2 % against 48.2 %).
+> 4. **THE COST, which the plan did not anticipate.** The faithful adjacency reproduces the
+>    reference's long flagged chains, and the independent-set round drain needs one round per
+>    chain link. So the drain no longer finishes at ANY K (measured: leftovers persist at
+>    K = 8/10/12/16/24/40; `exp hyper`'s divergence merely slides from cycle 26 to 30), and the
+>    N(t) oracle went **18/18 → 17/18** — `exp hyper` parts company at cycle 26. Every rule still
+>    stays exactly 3-regular with E = 3N/2. Tier M now asserts a leftover RATE (< 5 %, measured
+>    0.94 %) and pins `exp hyper`'s exactness floor. Closing it needs a genuinely sequential
+>    drain, which the parallel engine cannot express — recorded as a NEW follow-up, not fixed.
+
+##### The original assessment (kept for the record)
 
 **The gap it closes.** GenesisCA's `rewireBond(a, from → to)` is *break + form* at `a`, and `breakBond`
 compacts by swapping the LAST slot into the freed one while `formBond` APPENDS. So a rewire

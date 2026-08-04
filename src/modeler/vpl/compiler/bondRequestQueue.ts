@@ -46,12 +46,13 @@
 // (the constraint P5 hit and documented). Instead the kind rides the SIGN of the
 // break lane, which costs ZERO new fields and therefore moves ZERO offsets:
 //
-//   verb            bondBreakReq            bondFormReq
-//   ─────────────── ─────────────────────── ────────────────────────
-//   Form(self→t)    NONE  (+1)              t+2   | NONE
-//   Break(self,t)   t+2   | NONE            NONE  (+1)
-//   Rewire(from→to) from+2 | NONE  (>0)     to+2  | NONE
-//   FormBetween(a,b) −(a+2) | −NONE  (<0)   b+2   | NONE
+//   verb              bondBreakReq            bondFormReq
+//   ───────────────── ─────────────────────── ────────────────────────
+//   Form(self→t)      NONE  (+1)              t+2   | NONE
+//   Break(self,t)     t+2   | NONE            NONE  (+1)
+//   Rewire(from→to)   from+2 | NONE  (>0)     to+2  | NONE   (>0)
+//   FormBetween(a,b)  −(a+2) | −NONE  (<0)    b+2   | NONE   (>0)
+//   Transfer(b,→to)   b+2   | NONE   (>0)     −(to+2) | −NONE (<0)
 //
 // A NEGATIVE break lane means "this entry is a Form Between"; its magnitude decodes
 // with the same `+2` bias. Every lane is signed on every target (`bondFormReq` /
@@ -62,6 +63,31 @@
 // (−1) and `NONE` (+1), which is still non-zero on both lanes — so it cannot
 // truncate the queue — and decodes to a<0 / b<0, i.e. an explicit no-op entry.
 // The drain's terminator test (`bl === 0 && fl === 0`) is untouched.
+//
+// ─────────────────────────────────────────────────────────────────────────────
+// TRANSFER — the third-party IN-PLACE rewire, on the mirror-image sign.
+//
+// `transferBond(b, me → to)` hands the requesting agent's edge with `b` over to
+// `to`, rewriting `b`'s slot IN PLACE so `b`'s ordering is preserved (znah's
+// `node[node.indexOf(i)] = j`). Rewire is break+form at the REQUESTER, which
+// scrambles the receiver's slot order — the one remaining structural difference
+// the `Growing Graphs` port had against its reference.
+//
+// It needs the same two ids Form Between does, so it needs its own marker, and
+// the break lane's sign is taken. The FORM lane's sign is still free (a Form,
+// Break, Rewire or Form Between never writes it negative), so
+// **`fl < 0` ⇒ TRANSFER**: `bl = b + 2` (the third party) and `fl = −(to + 2)`;
+// the requester is implicit. Zero new fields, zero moved offsets, and the queue
+// stride / ABI / layouts are untouched — the same argument P4b made.
+//
+// ⚠️ DECODE ORDER IS LOAD-BEARING. The `fl < 0` branch must sit immediately after
+// the existing `bl < 0` branch. Fall through and `to = fl − 2` goes negative,
+// the entry lands in the plain-BREAK arm with `from = b`, and the transfer
+// silently degrades to a bare Break — an edge vanishes with no error anywhere.
+//
+// An unresolvable transfer writes `NONE` (+1) / `−NONE` (−1): still non-zero on
+// both lanes (so it cannot truncate), still `fl < 0` (so it decodes as a
+// TRANSFER, not as a bare Break of `b`), and both ids decode to −1 ⇒ a no-op.
 //
 // BYTE IDENTITY. `bondReqSlotsForModel` returns **1** for a model whose agent
 // graph contains none of the three verbs, which reproduces the pre-P4 layout
@@ -75,7 +101,7 @@ import { resolveBondRequestDepth } from '../../../model/centerBased';
 /** The flow nodes that append an entry to the queue. Adding a verb means adding
  *  it HERE (so the layout sizes the queue) and to each target's emitter. */
 export const BOND_REQUEST_NODE_TYPES: ReadonlySet<string> = new Set([
-  'formBond', 'breakBond', 'rewireBond', 'formBondBetween',
+  'formBond', 'breakBond', 'rewireBond', 'formBondBetween', 'transferBond',
 ]);
 
 /** Lane value meaning "this side of the entry is unused" (a plain Form has no
@@ -87,6 +113,10 @@ export const BOND_REQ_ID_BIAS = 2;
  *  encoding table in this file's header). A negative break lane is the ONLY thing
  *  that distinguishes a Form Between from a Rewire, since both fill both lanes. */
 export const BOND_REQ_BETWEEN_SIGN = -1;
+/** The op-kind marker for TRANSFER: the FORM lane is NEGATED (the mirror image of
+ *  Form Between's negated break lane — see the encoding table above). A negative
+ *  form lane is the ONLY thing distinguishing a Transfer from a Rewire. */
+export const BOND_REQ_TRANSFER_SIGN = -1;
 
 /** Does this model's AGENT graph use any queue verb? Scans the top-level agent
  *  graph AND every macro definition's nodes — a macro instance on the agent graph

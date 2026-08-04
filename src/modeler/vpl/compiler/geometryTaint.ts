@@ -60,7 +60,7 @@
 //     deposit LOCATION is the agent's position, and the cell rule then reads that
 //     cell, so the closed agent↔grid loop is geometry → cell state by construction)
 //   · structural verbs — divideAgent, killAgent, formBond, breakBond, rewireBond,
-//     formBondBetween, createAgent, addAgentToWorld — tainted when their flow
+//     formBondBetween, transferBond, createAgent, addAgentToWorld — tainted when their flow
 //     CONDITION cone is tainted or a partner/target id is geometry-derived
 //   · ANY OTHER FLOW NODE. The allowlist below names the geometry-only sinks;
 //     everything else with a flow port taints. That inversion is what makes the
@@ -228,7 +228,7 @@ const VARIABLE_WRITES = new Set(['setVariable', 'setArrayElement']);
  *  agent id, but their geometry-only value ports (below) are exempt. */
 const STRUCTURAL_VERBS = new Set([
   'divideAgent', 'killAgent', 'formBond', 'breakBond', 'rewireBond',
-  'formBondBetween', 'createAgent', 'addAgentToWorld',
+  'formBondBetween', 'transferBond', 'createAgent', 'addAgentToWorld',
 ]);
 
 /** Value INPUT ports that carry geometry into an otherwise-tainting verb and
@@ -261,6 +261,7 @@ const SINK_KIND: Record<string, string> = {
   breakBond: 'breaks a bond',
   rewireBond: 'moves a bond',
   formBondBetween: 'bonds two other agents',
+  transferBond: 'hands a bond to a new partner',
   createAgent: 'creates an agent',
   addAgentToWorld: 'adds an agent to the world',
 };
@@ -288,7 +289,8 @@ const NODE_LABEL: Record<string, string> = {
   updateIndicator: 'Update Indicator', stopEvent: 'Stop Event',
   divideAgent: 'Divide Agent', killAgent: 'Kill Agent', formBond: 'Form Bond',
   breakBond: 'Break Bond', rewireBond: 'Rewire Bond',
-  formBondBetween: 'Form Bond Between', createAgent: 'Create Agent',
+  formBondBetween: 'Form Bond Between', transferBond: 'Transfer Bond',
+  createAgent: 'Create Agent',
   addAgentToWorld: 'Add Agent To World', setVariable: 'Set Variable',
   setArrayElement: 'Set Array Element', getVariable: 'Get Variable',
   aggregate: 'Aggregate', groupOperator: 'Group Reduce', statement: 'Compare',

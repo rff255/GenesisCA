@@ -1462,6 +1462,119 @@ entries.push({
   name: '[synthetic] Form Bond BETWEEN (sign-encoded op kind vs Rewire, same ids)',
   raw: buildFormBetweenModel(), setup: setupBondAttrStores, invariant: formBetweenInvariant,
 });
+
+// ---------------------------------------------------------------------------
+// B9 — TRANSFER BOND: the op kind rides the sign of the FORM lane (the mirror
+// image of Form Between). The synthetic deliberately places a Transfer and a
+// Rewire carrying THE SAME TWO IDS side by side, so a target that dropped the
+// negation would make the two entries byte-identical.
+// ---------------------------------------------------------------------------
+function buildTransferBondModel() {
+  const used = new Set();
+  const nid = (p) => { let id; do { id = p + Math.random().toString(36).slice(2, 8); } while (used.has(id)); used.add(id); return id; };
+  const aN = [], aEd = [];
+  const an = (t, c) => { const n = { id: nid('a'), type: 'caNode', position: { x: 0, y: 0 }, data: { nodeType: t, config: c } }; aN.push(n); return n; };
+  const aE = (s, sp, tt, tp, cat) => aEd.push({ id: nid('e'), source: s.id, target: tt.id, sourceHandle: `output_${cat}_${sp}`, targetHandle: `input_${cat}_${tp}` });
+  const gsh = an('getSelfHandle', {});
+  const off = (k) => { const n = an('arithmeticOperator', { operation: '+', _port_y: String(k) }); aE(gsh, 'value', n, 'x', 'value'); return n; };
+
+  const bs = an('behaviourStep', {});
+  // 0 - Transfer(partner = self+1, to = self+2)   NEGATIVE FORM lane
+  const tr = an('transferBond', {});
+  // 1 - Rewire(self+1 -> self+2)                  POSITIVE both lanes, SAME ids
+  const rw = an('rewireBond', { _port_restLength: '7', _port_stiffness: '11', _port_bondAttr_bw: '32' });
+  // 2 - Transfer with an unresolvable partner  -> (NONE, -NONE), still non-zero
+  const trBad = an('transferBond', {});
+  // 3..5 - a loop of Transfers (each entry addresses its own slot)
+  const lp = an('loop', { mode: 'count', _port_count: '3' });
+  const lpTr = an('transferBond', {});
+
+  aE(bs, 'do', tr, 'do', 'flow');
+  aE(off(1), 'result', tr, 'partnerAgent', 'value');
+  aE(off(2), 'result', tr, 'toAgent', 'value');
+  aE(tr, 'next', rw, 'do', 'flow');
+  aE(off(1), 'result', rw, 'fromAgent', 'value');
+  aE(off(2), 'result', rw, 'toAgent', 'value');
+  aE(rw, 'next', trBad, 'do', 'flow');
+  aE(off(-1000), 'result', trBad, 'partnerAgent', 'value');
+  aE(off(5), 'result', trBad, 'toAgent', 'value');
+  aE(trBad, 'next', lp, 'do', 'flow');
+  aE(lp, 'body', lpTr, 'do', 'flow');
+  const a200 = off(200), b300 = off(300);
+  const aIdx = an('arithmeticOperator', { operation: '+' });
+  aE(a200, 'result', aIdx, 'x', 'value'); aE(lp, 'index', aIdx, 'y', 'value');
+  const bIdx = an('arithmeticOperator', { operation: '+' });
+  aE(b300, 'result', bIdx, 'x', 'value'); aE(lp, 'index', bIdx, 'y', 'value');
+  aE(aIdx, 'result', lpTr, 'partnerAgent', 'value');
+  aE(bIdx, 'result', lpTr, 'toAgent', 'value');
+
+  return {
+    schemaVersion: 1,
+    properties: { name: 'Transfer Bond Parity Test', dimension: '2d', gridWidth: 24, gridHeight: 24, gridDepth: 1, topology: '2d-grid', boundaryTreatment: 'torus', useWasm: false, useWebGPU: false },
+    topologyMode: { gridCells: false, agents: true },
+    centerBased: { enabled: true, maxAgents: 100, maxBonds: 6, worldWidth: 24, worldHeight: 24, seedCount: 40, seedPattern: 'scatter', defaultRadius: 0.5, growthRate: 0, repulsionStiffness: 0, adhesionStiffness: 0, interactionRange: 1.5, drag: 1, timeStep: 0.1, momentum: 0, maxSpeed: 0, neighbourQueryRadius: 8, useBondingPhysics: false, autoBond: false, bondStiffness: 0, bondRestLength: 1.5, formDistance: 1.2, breakDistance: 2.0, agentTarget: 'wasm', agentUpdateMode: 'async',
+      agentCapabilities: { motion: 'force', body: true, collision: 'off', bonds: 'data', autoBond: false, growth: false, division: false, lifespan: false, populationBirth: false, populationDeath: false, sensing: false, sensingHeadingSource: 'velocity', orientation: false, fieldCoupling: false, appearance: true } },
+    attributes: [], modelAttributes: [], neighborhoods: [],
+    agentAttributes: [],
+    bondAttributes: [{ id: 'bw', name: 'BondW', type: 'float', defaultValue: '0' }],
+    variables: [], agentVariables: [], indicators: [], mappings: [],
+    graphNodes: [], graphEdges: [], agentGraphNodes: aN, agentGraphEdges: aEd, macroDefs: [],
+  };
+}
+
+/** THE VALUE INVARIANT — the expected queue is recomputed INDEPENDENTLY from the
+ *  agent index, so both targets writing the same WRONG lanes still fail. It pins
+ *  the SIGN specifically: entries 0 and 1 carry the same ids and must differ ONLY
+ *  in the FORM lane's sign (drop it and the two entries become identical — which
+ *  in the engine means a Transfer silently applying as a Rewire). It also pins
+ *  that a Transfer writes NO form-half parameters: it re-points an EXISTING edge
+ *  and keeps its values, so entry 0's L/K/attr cells stay at their reset zeros
+ *  while the Rewire beside it writes 7/11/32. */
+function transferBondInvariant(st) {
+  const NONE = 1, BIAS = 2;
+  const slots = st.bondReqSlots, depth = slots - 1;
+  if (slots !== 9) return `bondReqSlots ${slots} !== 9 (default depth 8 + the overflow bucket)`;
+  for (let i = 0; i < st.highWater; i++) {
+    if (!st.alive[i]) continue;
+    const b = i * slots;
+    // [breakLane, formLane, L, K, bondAttr bw]  (null = not asserted)
+    const want = [
+      [i + 1 + BIAS, -(i + 2 + BIAS), 0, 0, 0],        // 0  transfer(self+1 -> self+2)  FORM NEGATIVE
+      [i + 1 + BIAS, i + 2 + BIAS, 7, 11, 32],         // 1  rewire  (SAME ids)          FORM POSITIVE
+      [NONE, -NONE, 0, 0, 0],                          // 2  transfer with unresolvable partner
+      [i + 200 + BIAS, -(i + 300 + BIAS), 0, 0, 0],    // 3  loop k=0
+      [i + 201 + BIAS, -(i + 301 + BIAS), 0, 0, 0],    // 4  loop k=1
+      [i + 202 + BIAS, -(i + 302 + BIAS), 0, 0, 0],    // 5  loop k=2
+      [0, 0, 0, 0, null], [0, 0, 0, 0, null], [0, 0, 0, 0, null],   // 6..8 never written
+    ];
+    for (let c = 0; c < slots; c++) {
+      const [wb, wf, wl, wk, wa] = want[c];
+      if (st.bondBreakReq[b + c] !== wb) return `agent ${i} entry ${c}: breakLane ${st.bondBreakReq[b + c]} !== ${wb}`;
+      if (st.bondFormReq[b + c] !== wf) return `agent ${i} entry ${c}: formLane ${st.bondFormReq[b + c]} !== ${wf}`;
+      if (st.bondFormL[b + c] !== wl) return `agent ${i} entry ${c}: L ${st.bondFormL[b + c]} !== ${wl}`;
+      if (st.bondFormK[b + c] !== wk) return `agent ${i} entry ${c}: K ${st.bondFormK[b + c]} !== ${wk}`;
+      if (wa !== null && st.bondFormAttrs.bw[b + c] !== wa) return `agent ${i} entry ${c}: bondAttr bw ${st.bondFormAttrs.bw[b + c]} !== ${wa}`;
+    }
+    // THE OP-KIND BIT: same ids, opposite FORM signs. If a target dropped the
+    // negation the two entries would be byte-identical and this is what notices.
+    if (st.bondFormReq[b] !== -st.bondFormReq[b + 1]) {
+      return `agent ${i}: the Transfer and Rewire FORM lanes are not sign-opposites (${st.bondFormReq[b]} vs ${st.bondFormReq[b + 1]})`;
+    }
+    if (!(st.bondFormReq[b] < 0)) return `agent ${i}: the Transfer form lane is not NEGATIVE`;
+    if (!(st.bondFormReq[b + 1] > 0)) return `agent ${i}: the Rewire form lane is not POSITIVE`;
+    if (!(st.bondBreakReq[b] > 0)) return `agent ${i}: the Transfer BREAK lane must stay POSITIVE (a negative one is a Form Between)`;
+    // The terminator rule: a written entry must never read as empty (0,0).
+    for (let c = 0; c < 6 && c < depth; c++) {
+      if (st.bondBreakReq[b + c] === 0 && st.bondFormReq[b + c] === 0) return `agent ${i} entry ${c} reads as EMPTY (queue truncation)`;
+    }
+  }
+  return null;
+}
+
+entries.push({
+  name: '[synthetic] TRANSFER Bond (sign-encoded op kind vs Rewire, same ids)',
+  raw: buildTransferBondModel(), setup: setupBondAttrStores, invariant: transferBondInvariant,
+});
 entries.push({
   name: '[synthetic] Division partition (two Divide Agent nodes, distinct codes)',
   raw: buildDividePartitionModel(), setup: setupBondAttrStores, invariant: dividePartitionInvariant,

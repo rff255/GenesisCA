@@ -2335,11 +2335,24 @@ export function HelpView() {
             own <code>h+1</code> edge, and a chord is issued by its higher endpoint), which
             reproduces the reference&rsquo;s slot order for nine of the ten seeds &mdash; the tenth is
             provably impossible, because &ldquo;previous edge before next edge&rdquo; at every node
-            of a cycle is a contradiction. The split&rsquo;s five queued operations are ordered so both
-            daughters come out in the reference&rsquo;s exact order. And the division priority is the
-            agent&rsquo;s own <em>handle</em> rather than a random roll, which makes the drain
-            deterministic and, since handles are allocated in order and nothing dies, reproduces the
-            reference&rsquo;s own ascending index walk.
+            of a cycle is a contradiction. The split&rsquo;s five queued operations are ordered so
+            that <em>all four</em> adjacency rows it touches &mdash; the mother, both daughters and
+            each displaced neighbour &mdash; come out in the reference&rsquo;s exact order. And the
+            division priority is the agent&rsquo;s own <em>handle</em> rather than a random roll,
+            which makes the drain deterministic and, since handles are allocated in order and
+            nothing dies, reproduces the reference&rsquo;s own ascending index walk.
+          </p>
+          <p className={styles.p}>
+            The two displaced neighbours are why <strong>Transfer Bond</strong> exists.{' '}
+            <em>Rewire Bond</em> moves one of your own bonds to a new partner, but it does so by
+            breaking and re-forming &mdash; and a break compacts the other agent&rsquo;s list by
+            swapping its last entry into the freed slot, so the <em>other</em> agent&rsquo;s order is
+            scrambled. Transfer Bond overwrites that slot where it stands, so the partner keeps its
+            ordering and the bond keeps its rest length, stiffness and attributes (it is the same
+            edge re-pointed, not a new one). With it, the port&rsquo;s graph on two of the published
+            rules is now identical to the reference&rsquo;s <em>edge for edge, at the same node
+            numbers</em>, and the reference&rsquo;s habit of concentrating splits into a few
+            long-lived hubs &mdash; very visible in <em>meduza</em> &mdash; is reproduced exactly.
           </p>
           <p className={styles.p}>
             It is also the clearest example of <strong>fitting a sequential rule onto a parallel

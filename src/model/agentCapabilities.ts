@@ -103,6 +103,9 @@ export const AGENT_NODE_REQUIREMENT: Record<string, AgentCapKey> = {
   // Graph-Rewriting Automata (P4b): bond two OTHER agents (the third-party edge a
   // self-to-target Form Bond cannot make).
   formBondBetween: 'bonds',
+  // Graph-Rewriting Automata (B9): hand an edge to a new partner, rewriting the
+  // third party's slot IN PLACE (order-preserving, unlike Rewire).
+  transferBond: 'bonds',
   // Graph-Rewriting Automata (P2): per-EDGE user state. No bonds ⇒ no edges to
   // carry it (and the store allocates zero bond-attribute bytes).
   getBondAttribute: 'bonds',

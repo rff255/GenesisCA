@@ -1419,6 +1419,76 @@ export function rewireBond(
   return true;
 }
 
+/** TRANSFER — hand agent `me`'s edge with `b` over to `to`, rewriting `b`'s slot
+ *  **IN PLACE** so `b`'s adjacency ORDER is preserved. The third-party sibling of
+ *  `rewireBond`, and the reason it exists:
+ *
+ *  `rewireBond(me, b → to)` is break+form AT `me`, and the engine's `breakBond`
+ *  compacts by swapping the LAST slot into the freed one while `formBond`
+ *  APPENDS. So a rewire SCRAMBLES THE THIRD PARTY'S SLOT ORDER (and attaches the
+ *  new partner to the REQUESTER, not to `b`). znah's `reconnect` is
+ *  `node[node.indexOf(i)] = j` — a single in-place overwrite. Slot order is not
+ *  cosmetic for a graph automaton: a cubic split keeps slot 0 and hands slots 1
+ *  and 2 to its daughters, so a scrambled receiver propagates into every later
+ *  split and into the embedding forever.
+ *
+ *  **THE BOND KEEPS ITS VALUES.** It is the SAME edge re-pointed, so the rewritten
+ *  slot at `b` retains its rest length, stiffness, type label and every bond
+ *  attribute, and the slot appended at `to` is stamped with those SAME values —
+ *  which is what makes invariant **I2** (both sides of a bond agree on every
+ *  per-slot field) hold by construction. Per-edge state therefore travels with
+ *  the edge, which is the semantically useful behaviour for a rewriting rule.
+ *  (The node consequently has no rest-length / stiffness / bond-attribute ports:
+ *  there is nothing for the caller to supply.)
+ *
+ *  ATOMICITY (invariant **I5**) — fully pre-checked, so a rejection leaves the
+ *  graph EXACTLY as it was:
+ *   • `me`, `b`, `to` all live and in range, and pairwise distinct;
+ *   • **`b↔me` must EXIST** (else this would be a bare form at `to`, silently
+ *     RAISING a degree — what a degree-preserving rule forbids);
+ *   • **`b↔to` must NOT already exist** — the in-place rewrite would give `b` two
+ *     slots pointing at `to`, a DOUBLE EDGE that I1/I2 would then report as
+ *     corruption (and which no compaction path can undo);
+ *   • `to` must have room. `me` needs no capacity check — it only loses.
+ *
+ *  **I3**: `b`'s slot is OVERWRITTEN, never blanked, so it is never transiently
+ *  dangling. Degrees: `b` unchanged, `me` −1, `to` +1.
+ *
+ *  Returns true when the transfer was applied. */
+export function transferBond(store: AgentStore, me: number, b: number, to: number): boolean {
+  const s = store, hw = s.highWater, mb = s.maxBonds;
+  if (me < 0 || me >= hw || !s.alive[me]) return false;
+  if (b < 0 || b >= hw || !s.alive[b]) return false;
+  if (to < 0 || to >= hw || !s.alive[to]) return false;
+  if (b === me || b === to || to === me) return false;
+  // Locate the slot at `b` holding `me` — the position the whole verb exists to
+  // preserve — while checking the same row for `to` (the double-edge gate).
+  const bBase = b * mb, bn = s.bondCount[b]!;
+  let p = -1;
+  for (let k = 0; k < bn; k++) {
+    const q = s.bondPartner[bBase + k]!;
+    if (q === me) p = bBase + k;
+    else if (q === to) return false;   // b↔to already exists ⇒ would DOUBLE-EDGE
+  }
+  if (p < 0) return false;             // b↔me does not exist ⇒ would be a bare form
+  if (s.bondCount[to]! >= mb) return false;
+  // ---- past every gate: apply. Read the edge's values off b's slot FIRST, so
+  // the appended slot at `to` is stamped identically (I2).
+  const L = s.bondRestLength[p]!, K = s.bondStiffness[p]!, label = s.bondTypeLabel[p]!;
+  const specs = s.bondAttrSpecs;
+  const vals = specs.length > 0 ? new Float64Array(specs.length) : null;
+  if (vals) for (let i = 0; i < specs.length; i++) vals[i] = (s.bondAttrs[specs[i]!.id]! as Uint8Array)[p]!;
+  // 1. b's slot, IN PLACE — only the partner identity changes.
+  s.bondPartner[p] = to;
+  s.bondPartnerEpoch[p] = s.epoch[to]!;
+  // 2. `me` loses its side through ordinary compaction (it is the requester,
+  //    whose own order the verb makes no promise about).
+  removeBondSlot(s, me, b);
+  // 3. `to` appends the mirror slot with the SAME per-slot values (I2).
+  addBondSlot(s, to, b, L, K, label, vals);
+  return true;
+}
+
 /** P4 — DRAIN one step's STRUCTURAL REQUEST QUEUE: apply every agent's queued bond
  *  Form / Break / Rewire entries, IN SLOT ORDER (= the order the rule issued them),
  *  and clear the queue. Returns true when at least one agent overflowed (the caller
@@ -1440,6 +1510,11 @@ export function rewireBond(
  *  joins two newborns, neither of which is `self`). It rides the REQUESTING agent's
  *  own queue, so no thread ever writes another thread's rows and the WebGPU emit
  *  still needs no atomics.
+ *
+ *  B9: a NEGATIVE FORM lane marks a **TRANSFER** — hand this agent's edge with the
+ *  named third party over to a new partner, rewriting the third party's slot IN
+ *  PLACE (see `transferBond`). Decoded immediately after the Form Between branch;
+ *  falling through would turn it into a bare Break.
  *
  *  P2: a form half's INITIAL bond-attribute values ride the per-entry
  *  `bondFormAttrs[<id>][base + c]` cells; `formBond` / `rewireBond` stamp the SAME
@@ -1486,6 +1561,17 @@ export function drainAgentBondRequests(store: AgentStore, lambda: number): boole
           // list full ⇒ nothing added on either side) — invariant I5 for free.
           formBond(s, a, b, L, K, 0, bondFormVals);
         }
+        continue;
+      }
+      // B9 — TRANSFER, the mirror-image marker: a NEGATIVE FORM lane. It MUST be
+      // decoded here, immediately after the Form Between branch: fall through and
+      // `to` decodes to −1, the entry lands in the plain-BREAK arm below with
+      // `from = b`, and the transfer silently degrades to a bare Break (an edge
+      // vanishes, no error anywhere). `transferBond` is the whole-op gate.
+      if (fl < 0) {
+        const tb = bl >= BOND_REQ_ID_BIAS ? bl - BOND_REQ_ID_BIAS : -1;
+        const tto = -fl >= BOND_REQ_ID_BIAS ? -fl - BOND_REQ_ID_BIAS : -1;
+        if (tb >= 0 && tto >= 0) transferBond(s, i, tb, tto);
         continue;
       }
       const from = bl >= BOND_REQ_ID_BIAS ? bl - BOND_REQ_ID_BIAS : -1;

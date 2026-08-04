@@ -65,7 +65,7 @@
  * flag is consumed exactly once; newborns never divide in the same tick.
  *
  * GenesisCA's structural request queue drains in parallel, and two ADJACENT
- * splitters corrupt each other (the mother's Rewire needs its edge to b to still
+ * splitters corrupt each other (the mother's Transfer needs its edge to b to still
  * exist when the queue drains, and a splitting b would have re-pointed it away).
  * So one generation can only ever split an INDEPENDENT SET. The port therefore
  * spends SEVERAL generations on one reference tick:
@@ -83,23 +83,26 @@
  * flagged node eventually consumes it, dN per reference tick equals the
  * reference's exactly, provided the drain FINISHES inside K rounds.
  *
- * WHY K ROUNDS SUFFICE, and why K is small. A node loses a round only if a
- * bonded neighbour holds a lower priority; the minimum of every connected
- * flagged component therefore always wins, and when it splits it stops being
- * flagged AND hands two of its three edges to fresh unflagged daughters — so
- * each round strips flagged edges rather than merely reordering them. At degree
- * 3 the flagged conflict graph collapses in a handful of rounds. K is chosen by
- * MEASUREMENT, not by theory: see the leftover-flag numbers in the model's Rule
- * Description and in verify-graph-rewrite.mjs Tier M.
+ * WHAT K COSTS, AND WHY IT IS NOT A CURE. A node loses a round only if a bonded
+ * neighbour holds a lower priority, so a path of flagged nodes with ASCENDING
+ * handles drains ONE PER ROUND and the rounds a tick needs are the longest such
+ * chain. The reference has no such limit: it divides sequentially in index
+ * order, so one pass covers a chain of any length. K is therefore chosen by
+ * MEASUREMENT (see the K block in TUNABLES) and it does NOT make the drain
+ * finish — raising it only postpones the residue.
  *
- * THE RESIDUAL DEVIATION, STATED HONESTLY. A node still latched after round K
- * is simply re-latched by the next state tick (the state tick OVERWRITES the
- * latch, exactly as the reference recomputes its flags every phase 0). At the
- * measured leftover rate that is a rare event; it is a deviation all the same.
- * And which neighbour a daughter inherits depends on bond-slot order, which the
- * round-based drain orders differently from the reference's index walk — so the
- * claim is SEMANTIC faithfulness (every flagged node divides, against live
- * adjacency), never bit-identity of the labelled graph.
+ * THE RESIDUAL DEVIATION, STATED HONESTLY. A node still latched after round K is
+ * simply re-latched by the next state tick (the state tick OVERWRITES the latch,
+ * exactly as the reference recomputes its flags every phase 0), i.e. it divides
+ * a tick late. Measured over the eighteen mutation-free published rules, that
+ * costs exactly ONE of them its N(t) exactness: `exp hyper`, from cycle 26. The
+ * other seventeen match the reference cycle for cycle, and every rule stays
+ * exactly 3-regular with E = 3N/2 throughout.
+ *
+ * The LABELLED graph, by contrast, is now the reference's: all four adjacency
+ * rows a split touches match slot for slot (see the split block), so on
+ * `quadratic` and `exp tree` the port's edge set is IDENTICAL to the
+ * reference's, edge for edge at the same node ids.
  *
  * THE LATCH IS THE PRIORITY, and that is the load-bearing detail. The gate must
  * be INTENT-AWARE: the obvious version — every node takes a priority, split iff
@@ -236,7 +239,11 @@ const DEFAULT_FLIP = 0;
 // =============================================================================
 // TUNABLES
 // =============================================================================
-const MAX_BONDS = 3;            // TIGHT: nothing may transiently exceed cubic degree
+// 4, not 3: the full-fidelity split order (below) takes the mother to degree 4
+// transiently, which is the price of the reference's EXACT slot order on all four
+// affected rows. O6 is checked after every generation, so an over-bond is still
+// caught — one layer later than a tight capacity would have caught it.
+const MAX_BONDS = 4;
 const RADIUS = 0.9;
 // THE PRIORITY BANDS (see the header). Both are integers below 2^24, so they are
 // exact in f32 as well as f64 and no contest can turn on a rounding artefact.
@@ -262,7 +269,7 @@ const NODE_CAP = 10000;         // the end-condition guard — znah's own demo s
 // DOUBLE in one generation, and the end condition is evaluated after the
 // generation that crossed the cap. maxAgents therefore has to be >= 2 x the cap
 // or a pathological all-flagged rule could reach the ceiling, where Create Agent
-// returns -1, the split's Rewire finds no target and the graph stops being cubic.
+// returns -1, the split's Transfer is rejected and the graph stops being cubic.
 const MAX_AGENTS = 24000;
 // K — the number of DIVISION ROUNDS per reference tick. Chosen by measurement:
 // the point at which the drain provably FINISHES, plus a margin.
@@ -295,6 +302,36 @@ const MAX_AGENTS = 24000;
 // diverge from the reference by cycle 5 at K = 4 while the average still reads
 // 0.23 %. K is the point where the drain finishes, not where the average looks
 // small.
+//
+// ⚠️ RE-MEASURED AGAIN after the split moved to the Transfer verb (below), and
+// THE TABLE ABOVE NO LONGER HOLDS: the drain does not finish at ANY K.
+//
+// A latched node may split only when its handle is below every bonded
+// neighbour's, so a path of flagged nodes with ASCENDING handles drains one per
+// round; the rounds a tick needs are the longest such chain. Rewire used to
+// SCRAMBLE each receiver's slot order, which broke those chains up by accident.
+// Transfer reproduces the reference's adjacency exactly — and with it the
+// reference's own long flagged chains. Measured on the same five-rule set
+// (40 ticks, 6000-node cap): leftovers at K = 8 / 10 / 12 / 16 / 24 / 40 alike,
+// and for `exp hyper` specifically the divergence merely slides from cycle 26
+// (K = 8) to 28 (K = 12) to 30 (K = 20). The reference has no such limit — it
+// divides sequentially in index order, so one pass covers any chain length, and
+// only a sequential drain could match that.
+//
+// WHAT IT COSTS, MEASURED, over the 18 mutation-free published rules at 100
+// reference ticks (6000-node cap):
+//     Rewire split (before)   18/18 match N(t) exactly
+//     Transfer split (now)    17/18 — `exp hyper` parts company at cycle 26
+// WHAT IT BUYS, over the same runs — the LABELLED graph, edge for edge:
+//     quadratic   43.5 % -> 100.0 %      identical to the reference's own edges
+//     exp tree    22.0 % -> 100.0 %
+//     meduza      47.7 % ->  79.2 %
+// and meduza's hub structure, which is what the port visibly lacked:
+//     max splits by one node   15 -> 49  (reference 49)
+//     nodes that split >= 3x    3 -> 46  (reference 46)
+//     share of splits in top 5 %  12.0 % -> 48.2 %  (reference 48.2 %)
+// So K stays 8, and the residue is documented + pinned by the harness rather
+// than chased with a larger cadence that does not fix it.
 const DIVISION_ROUNDS = Math.max(1, Number(process.env.GG_ROUNDS) || 8);
 const PERIOD = 1 + DIVISION_ROUNDS;
 // ONE force pass per generation. PERIOD grew from 2 to 9, so the layout still
@@ -611,11 +648,9 @@ ag.vEdge(gate3, 'result', splitIf, 'condition');
 // reference's `states.push(states[i], states[i])`.
 const stateNow = ag.node('getCellAttribute', { attributeId: 'state' }, 7, 19);
 
-// 5. THE TRIANGLE SPLIT — 5 queue ops, maxBonds 3
-// The mother keeps bond slot 0 and hands slots 1 and 2 to the daughters. WHICH
-// slot is kept is irrelevant to the resulting graph: all three post-split nodes
-// sit on the triangle with one external edge each, so permuting {a,b,c} among
-// them gives an isomorphic graph.
+// 5. THE TRIANGLE SPLIT — 5 queue ops, maxBonds 4
+// The mother keeps bond slot 0 and hands slots 1 and 2 to the daughters, exactly
+// as the reference does; the two Transfers keep the receivers' own orders too.
 const bAgent = ag.node('arrayElement', { _port_position: '1' }, 1, 20);
 ag.vEdge(bonded, 'agents', bAgent, 'array');
 const cAgent = ag.node('arrayElement', { _port_position: '2' }, 1, 21);
@@ -692,11 +727,17 @@ const bondOp = (col, row, type, wire) => {
   wire(n);
   return n;
 };
-const rwB = bondOp(13, 18, 'rewireBond', n => { ag.vEdge(bAgent, 'value', n, 'fromAgent'); ag.vEdge(mkJ, 'handle', n, 'toAgent'); });
-const rwC = bondOp(13, 19, 'rewireBond', n => { ag.vEdge(cAgent, 'value', n, 'fromAgent'); ag.vEdge(mkK, 'handle', n, 'toAgent'); });
-const fbB = bondOp(13, 20, 'formBondBetween', n => { ag.vEdge(bAgent, 'value', n, 'agentA'); ag.vEdge(mkJ, 'handle', n, 'agentB'); });
-const fbC = bondOp(13, 21, 'formBondBetween', n => { ag.vEdge(cAgent, 'value', n, 'agentA'); ag.vEdge(mkK, 'handle', n, 'agentB'); });
-const fbJK = bondOp(13, 22, 'formBondBetween', n => { ag.vEdge(mkJ, 'handle', n, 'agentA'); ag.vEdge(mkK, 'handle', n, 'agentB'); });
+// THE FIVE OPS, in the order that reproduces the reference EXACTLY (see the block
+// below the flow wiring for the slot-by-slot derivation). A Transfer rewrites the
+// third party's slot IN PLACE, which is what preserves b's and c's own ordering —
+// a Rewire would have compacted them.
+const fbJ = bondOp(13, 18, 'formBond', n => { ag.vEdge(mkJ, 'handle', n, 'targetAgent'); });
+const trB = ag.node('transferBond', {}, 13, 19);
+ag.vEdge(bAgent, 'value', trB, 'partnerAgent'); ag.vEdge(mkJ, 'handle', trB, 'toAgent');
+const fbK = bondOp(13, 20, 'formBond', n => { ag.vEdge(mkK, 'handle', n, 'targetAgent'); });
+const fbJK = bondOp(13, 21, 'formBondBetween', n => { ag.vEdge(mkJ, 'handle', n, 'agentA'); ag.vEdge(mkK, 'handle', n, 'agentB'); });
+const trC = ag.node('transferBond', {}, 13, 22);
+ag.vEdge(cAgent, 'value', trC, 'partnerAgent'); ag.vEdge(mkK, 'handle', trC, 'toAgent');
 
 // CONSUME THE LATCH. Written last so nothing in the split chain reads a
 // post-write value (synchronous agent attributes double-buffer, so this is
@@ -704,29 +745,45 @@ const fbJK = bondOp(13, 22, 'formBondBetween', n => { ag.vEdge(mkJ, 'handle', n,
 // just beat need to see that it no longer blocks them).
 const clearPrio = ag.node('setAttribute', { attributeId: 'prio', _port_value: String(PRIO_UNFLAGGED) }, 14, 22);
 
-// THE OP ORDER IS THE DAUGHTERS' SLOT ORDER, so it is not free. A bond APPENDS
-// to both endpoints' lists, so the five ops decide what each newborn's slots 0/1/2
-// hold — and the split reads slots 1 and 2 to pick which neighbours the NEXT
-// generation of daughters inherits. With Form Between(j,k) issued LAST, k came
-// out [i, c, j] where the reference builds [i, j, c]; issuing it BEFORE
-// Form Between(c, k) puts both daughters on the reference's exact order:
-//     j = [i, b, k]     (rewire's form half, then b, then the triangle edge)
-//     k = [i, j, c]     (rewire's form half, then the triangle edge, then c)
-// Peak degree during the drain is still exactly 3 at every step, so maxBonds
-// stays a tight 3: after fbJK, j is full (i, b, k) and k holds (i, j) with one
-// slot left for c.
+// THE OP ORDER IS EVERY NODE'S SLOT ORDER, so it is not free. A bond APPENDS to
+// both endpoints' lists and a break COMPACTS by swapping the last slot into the
+// freed one, so the five ops decide what the mother, both daughters AND the two
+// receivers end up holding — and the split reads slot 0 (kept) and slots 1 and 2
+// (handed to the daughters), so the order propagates into every later split.
+//
+// Trace it, with i = [a, b, c] and maxBonds 4:
+//   1  Form Bond(i, j)        i = [a,b,c,j]        j = [i]
+//   2  Transfer(b, i -> j)    b's slot holding i becomes j IN PLACE (b's order kept);
+//                             i drops b — swap-with-last pulls j into slot 1 —
+//                             i = [a,j,c]          j = [i,b]
+//   3  Form Bond(i, k)        i = [a,j,c,k]        k = [i]
+//   4  Form Between(j, k)     j = [i,b,k]          k = [i,j]
+//   5  Transfer(c, i -> k)    c's slot holding i becomes k IN PLACE (c's order kept);
+//                             i drops c — swap-with-last pulls k into slot 2 —
+//                             i = [a,j,k]          k = [i,j,c]
+//
+// which is znah's division verbatim:  nodes[i] = [a,j,k]; push([i,b,k]);
+// push([i,j,c]); nodes[b][indexOf(i)] = j; nodes[c][indexOf(i)] = k.
+//
+// MAX BONDS IS 4, NOT 3, AND THAT IS THE PRICE OF THE LAST ROW. The mother
+// transiently reaches degree 4 at steps 1 and 3. A capacity-safe order does exist
+// at maxBonds 3 (shed before gaining), but it hands j its slot 0 as `b` rather
+// than `i`, i.e. one daughter's order breaks. So 3 keeps the tight "nothing may
+// transiently exceed cubic degree" guard and gets 3 of the 4 lists exact; 4 gets
+// all four. O6 is asserted at EVERY generation either way, so an over-bond is
+// still caught — one layer later.
 ag.fEdge(splitIf, 'then', mkJ, 'do');
 ag.fEdge(mkJ, 'next', addJ, 'do');
 ag.fEdge(addJ, 'next', stJ, 'do');
 ag.fEdge(stJ, 'next', mkK, 'do');
 ag.fEdge(mkK, 'next', addK, 'do');
 ag.fEdge(addK, 'next', stK, 'do');
-ag.fEdge(stK, 'next', rwB, 'do');
-ag.fEdge(rwB, 'next', rwC, 'do');
-ag.fEdge(rwC, 'next', fbB, 'do');
-ag.fEdge(fbB, 'next', fbJK, 'do');
-ag.fEdge(fbJK, 'next', fbC, 'do');
-ag.fEdge(fbC, 'next', clearPrio, 'do');
+ag.fEdge(stK, 'next', fbJ, 'do');
+ag.fEdge(fbJ, 'next', trB, 'do');
+ag.fEdge(trB, 'next', fbK, 'do');
+ag.fEdge(fbK, 'next', fbJK, 'do');
+ag.fEdge(fbJK, 'next', trC, 'do');
+ag.fEdge(trC, 'next', clearPrio, 'do');
 
 // -----------------------------------------------------------------------------
 // AGENT OUTPUT MAPPING — "Birth generation", znah's signature look
@@ -928,9 +985,11 @@ const properties = {
     'c, and the three of them close a triangle. Every one of them has one external edge plus two ' +
     'triangle edges = degree 3, so dN = +2, dE = +3 and E = 3N/2 survives (3N/2 + 3 = 3(N+2)/2). ' +
     'The daughters inherit the mother\'s post-update state. In GenesisCA that is five queued ' +
-    'operations from the mother\'s own behaviour in ONE generation — two Rewire Bonds and three ' +
-    'Form Bond Betweens (Create Agent and Add Agent To World are host calls that consume no queue ' +
-    'slot). Peak degree during the drain is exactly 3, which is why Max Bonds is a tight 3.\n\n' +
+    'operations from the mother\'s own behaviour in ONE generation — two Form Bonds, two Transfer ' +
+    'Bonds and one Form Bond Between (Create Agent and Add Agent To World are host calls that ' +
+    'consume no queue slot). The mother transiently reaches degree 4 while it holds a new daughter ' +
+    'and the old neighbour at once, which is why Max Bonds is 4; the cubic invariant is checked ' +
+    'after every generation regardless.\n\n' +
     'THE INITIAL CONDITION IS EXACT, SLOT ORDER INCLUDED. The reference implementation always seeds ' +
     'the same 10-node cubic graph — a 10-cycle plus the chords {0,2} {1,4} {3,6} {5,8} {7,9} — with ' +
     'the states [0,0,0,1,0,1,0,1,1,1], and every one of its adjacency rows reads [prev, next, chord]. ' +
@@ -955,7 +1014,7 @@ const properties = {
     'neighbourhood. A latch is consumed exactly once, and nodes born in the tick do not divide in ' +
     'it.\n\n' +
     'GenesisCA\'s structural request queue drains in parallel, and two ADJACENT splitters would ' +
-    'corrupt each other (the mother\'s Rewire needs its edge to b to still exist when the queue ' +
+    'corrupt each other (the mother\'s Transfer needs its edge to b to still exist when the queue ' +
     'drains, and a splitting b would already have re-pointed it away). So a single generation can ' +
     'only split an INDEPENDENT SET, and one reference tick becomes ' + PERIOD + ' generations: one STATE ' +
     'tick that latches the flags, then ' + DIVISION_ROUNDS + ' DIVISION ROUNDS. Each round splits the latched nodes ' +
@@ -963,30 +1022,32 @@ const properties = {
     'theirs and try again in the next round, against the adjacency the winners just rewrote. That ' +
     'is the reference\'s mutated-adjacency drain, executed in independent-set rounds instead of in ' +
     'index order.\n\n' +
-    'HOW FAITHFUL IS IT? Node count per reference tick is the reference\'s: measured against a ' +
-    'transcription of the reference implementation, all eighteen mutation-free published rules match ' +
-    'cycle for cycle — including "meduza", whose flagged nodes CAN be adjacent and which an earlier ' +
-    'single-round port could not follow at all.\n\n' +
-    'Beyond the node count, three of the four adjacency rows a split touches are now the ' +
-    'reference\'s EXACTLY, slot order included: the mother keeps slot 0 and becomes [a, j, k], ' +
-    'daughter j is [i, b, k] and daughter k is [i, j, c]. That is what the operation order buys — ' +
-    'every bond appends, so issuing the closing triangle edge before or after the second daughter\'s ' +
-    'external edge decides which of them lands in which slot.\n\n' +
-    'ONE STRUCTURAL DIFFERENCE REMAINS, and it is worth naming precisely. The reference reconnects a ' +
-    'displaced neighbour IN PLACE — it overwrites the slot that pointed at the mother. GenesisCA\'s ' +
-    'Rewire Bond is a break plus a form, and a break compacts by moving the list\'s last entry into ' +
-    'the freed slot while a form appends — so the two neighbours handed to the daughters come out ' +
-    'reordered unless the mother happened to occupy their last slot. Their SET of neighbours is ' +
-    'right; the order is not, and because the next split reads slots 1 and 2, the difference ' +
-    'compounds. Measured effect: the labelled graph now tracks the reference exactly for several ' +
-    'cycles (nine on "quadratic", five on "exp tree") where before it diverged at the first, and the ' +
-    'reference\'s habit of concentrating splits into a few long-lived hubs is partly reproduced but ' +
-    'not fully — on "meduza" the busiest node now splits 11 times against the reference\'s 35. ' +
-    'Closing it needs a new engine verb (an in-place third-party transfer), not a change to this ' +
-    'model.\n\n' +
-    'One residual deviation on the drain, stated plainly: a node still latched after the last ' +
-    'division round would be re-latched by the next state tick rather than splitting late. Measured ' +
-    'over all eighteen deterministic rules that never happens at the shipped number of rounds.\n\n' +
+    'HOW FAITHFUL IS IT? ALL FOUR adjacency rows a split touches are the reference\'s EXACTLY, slot ' +
+    'order included: the mother keeps slot 0 and becomes [a, j, k], daughter j is [i, b, k], ' +
+    'daughter k is [i, j, c], and each displaced neighbour has the slot that pointed at the mother ' +
+    'OVERWRITTEN IN PLACE — the reference\'s own reconnect. The last of those is what the Transfer ' +
+    'Bond verb exists for: Rewire Bond is a break plus a form, and a break compacts by moving the ' +
+    'list\'s last entry into the freed slot, so it reordered the receiver. The operation order is ' +
+    'not free either — every bond appends, so issuing the closing triangle edge before or after the ' +
+    'second daughter\'s external edge decides which of them lands in which slot.\n\n' +
+    'Measured against a transcription of the reference implementation, over 100 reference ticks ' +
+    '(6000-node cap): the LABELLED graph — edge for edge, at the same node ids — is now IDENTICAL ' +
+    'to the reference\'s on "quadratic" and "exp tree" (both were 43.5 % and 22.0 % before), and ' +
+    '79.2 % identical on "meduza" (47.7 % before). The reference\'s habit of concentrating splits ' +
+    'into a few long-lived hubs, which the port visibly lacked, is now reproduced exactly on ' +
+    '"meduza": the busiest node splits 49 times against the reference\'s 49 (it was 15), 46 nodes ' +
+    'split three or more times against 46 (it was 3), and the top 5 % of nodes account for 48.2 % ' +
+    'of all splits against 48.2 % (it was 12.0 %).\n\n' +
+    'THE ONE DEVIATION, stated plainly. Node count per reference tick matches cycle for cycle on ' +
+    'seventeen of the eighteen mutation-free published rules. The exception is "exp hyper", which ' +
+    'parts company after 26 cycles, and the cause is the drain rather than the split: a latched node ' +
+    'may divide only when its handle is below every bonded neighbour\'s, so a path of flagged nodes ' +
+    'with ascending handles drains one per round. The reference has no such limit — it divides ' +
+    'sequentially in index order, so one pass covers a chain of any length. "exp hyper" flags ' +
+    'essentially every node, and its chains outrun the eight division rounds; raising the round ' +
+    'count only postpones the divergence (measured: cycle 26 at eight rounds, 28 at twelve, 30 at ' +
+    'twenty), so the round count stays where the layout budget put it and the residue is documented ' +
+    'instead. Every rule, "exp hyper" included, stays exactly 3-regular with E = 3N/2 throughout.\n\n' +
     'HOW THE INDEPENDENT SET IS CHOSEN, AND WHY IT HAD TO BE INTENT-AWARE. The latch and its ' +
     'tie-break live in ONE agent attribute, "prio": a flagged node stores its OWN HANDLE, an ' +
     'unflagged one stores a large sentinel. A division round splits a node only if its value is below ' +
@@ -999,8 +1060,7 @@ const properties = {
     'lowest handle always winning is exactly the ascending index walk the reference itself divides ' +
     'in, since handles are allocated 0, 1, 2, ... and nothing ever dies here. An earlier version ' +
     'rolled a random priority, so which neighbour each daughter inherited (and therefore the whole ' +
-    'embedding) changed from run to run. It also drains SHALLOWER: measured over all eighteen ' +
-    'deterministic rules, the deepest chain needs six rounds where the random roll needed eight.\n\n' +
+    'embedding) changed from run to run.\n\n' +
     'The intent-aware banding is not a nicety either. The obvious version of the gate — compare bare ' +
     'priorities, flagged or not — makes a flagged node wait until it is the local minimum among ALL ' +
     'its neighbours, which discards roughly three quarters of the splits even when the flagged nodes ' +
@@ -1072,7 +1132,7 @@ const properties = {
   useWasm: true,
   useWebGPU: false,
   // THE CAPACITY GUARD, load-bearing for the cubic invariant: at the agent cap a
-  // Create Agent returns -1, the split's Rewire finds no target and degrades to a
+  // Create Agent returns -1, the split's Transfer finds no target and is rejected,
   // bare break, and the graph stops being 3-regular. A generation can at most
   // split a maximal independent set, i.e. at most double N, so pausing at
   // NODE_CAP with maxAgents >= 2 x NODE_CAP cannot be crossed.
@@ -1125,7 +1185,7 @@ const centerBased = {
     // GROWTH is on only to carry the Node Radius slider (Set Target Radius +
     // a snap-rate ramp). Nothing in the rule reads a radius, so the C8 geometry
     // verdict is unaffected; DIVISION stays off — the split is Create Agent +
-    // Rewire, never the engine's Divide Agent.
+    // Form/Transfer Bond, never the engine's Divide Agent.
     growth: true, division: false, lifespan: true, populationBirth: true,
     populationDeath: false, sensing: true, sensingHeadingSource: 'velocity',
     orientation: false, fieldCoupling: false, appearance: true,
