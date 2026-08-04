@@ -2,7 +2,7 @@
 /**
  * Generates public/models/Growing Graphs.gcaproj — a port of Alex Mordvintsev's
  * (znah) "Growing Graphs" demo (znah.net/graphs), i.e. Paul Cousin's BINARY
- * CUBIC graph-rewriting automata, with znah's rule presets.
+ * CUBIC graph-rewriting automata, with znah's full published rule catalogue.
  *
  * ── THE RULE, verbatim from the reference implementation ─────────────────────
  * Every node is 3-regular and carries ONE BIT of state. Per rule tick:
@@ -40,54 +40,73 @@
  * on bond degree 0 (a branch that runs exactly once, since every later agent is
  * born with degree 3).
  *
- * ── THE TWO PHASES ARE THE REFERENCE'S TWO PHASES ───────────────────────────
- * znah alternates a STATE tick and a DIVISION tick, and the division tick does
- * NOT re-read the states — it replays the `dividing` flags the state tick
- * computed. That maps onto two Periodic Steps of period 2, one at each phase, so
- * ONE GenesisCA generation is ONE reference `grow()` call:
+ * ── LATCH + MULTI-ROUND DRAIN: znah's division semantics, faithfully ─────────
+ * The reference's phase 1 walks the flags its phase 0 LATCHED and divides EVERY
+ * flagged node, sequentially, each one reading the LIVE adjacency — so a node
+ * whose neighbour already split divides against its UPDATED neighbourhood. A
+ * flag is consumed exactly once; newborns never divide in the same tick.
  *
- *   phase 0  census -> r -> next state (+ mutation), and the division intent
- *            stored in `prio`
- *   phase 1  split the flagged nodes; daughters inherit the mother's committed
- *            state
+ * GenesisCA's structural request queue drains in parallel, and two ADJACENT
+ * splitters corrupt each other (the mother's Rewire needs its edge to b to still
+ * exist when the queue drains, and a splitting b would have re-pointed it away).
+ * So one generation can only ever split an INDEPENDENT SET. The port therefore
+ * spends SEVERAL generations on one reference tick:
  *
- * ── THE ONE SEMANTIC DEVIATION, STATED HONESTLY ─────────────────────────────
- * znah divides ALL flagged nodes sequentially within a tick, including ADJACENT
- * ones. GenesisCA's structural request queue cannot: the mother's Rewire needs
- * its edge to b to still exist when the queue drains, and a splitting b would
- * have re-pointed it away. So this port splits an INDEPENDENT SET per tick.
- * A suppressed node is simply re-evaluated next tick, exactly as the reference
- * recomputes its flags every phase 0.
+ *     phase 0            the STATE tick: census -> r -> next state (+ mutation),
+ *                        and LATCH the divide bit into `prio` (see below)
+ *     phases 1 .. K      DIVISION ROUNDS: every still-latched node that wins the
+ *                        intent-aware contest among its bonded neighbours splits
+ *                        and CLEARS its own latch; the losers keep theirs and
+ *                        try again next round, against the adjacency the winners
+ *                        just rewrote
  *
- * HOW BIG IS THE DEVIATION? For a rule whose divide bit fires only at r = 3
- * (own OFF, three ON neighbours) two flagged nodes CANNOT be adjacent — a
- * flagged neighbour would have to be ON (from my side) and OFF (from its own) at
- * once — so the gate suppresses NOTHING and the port reproduces the reference
- * N(t) EXACTLY. Measured: `quadratic` (2182) and `exp tree` (2236) match cycle
- * for cycle over 100 cycles (verify-graph-rewrite.mjs Tier M). Where a rule CAN
- * flag two neighbours at once — `meduza` is one — the trajectory genuinely
- * differs. So: exact for one class of rules, qualitatively faithful for the
- * rest. Do not overclaim beyond that.
+ * That is znah's mutated-adjacency drain, executed in independent-set rounds
+ * instead of in index order. Because a flag is consumed exactly once and every
+ * flagged node eventually consumes it, dN per reference tick equals the
+ * reference's exactly, provided the drain FINISHES inside K rounds.
  *
- * THE GATE HAD TO BE INTENT-AWARE, and this is the load-bearing detail. The
- * obvious version — every node rolls a priority, split iff you are the strict
- * local minimum — costs roughly three quarters of the splits EVEN WHEN THE
- * FLAGGED NODES ARE ALREADY PAIRWISE NON-ADJACENT, because it makes a flagged
- * node wait its turn behind neighbours that never wanted to split. Measured on
- * `quadratic`, which cannot have two adjacent flagged nodes at all (a flagged
- * node is OFF with three ON neighbours, so a flagged neighbour would have to be
- * both), that did not merely slow growth: the automaton fell into its absorbing
- * all-OFF configuration and stopped at 16 nodes against the reference's 854.
- * So the priority carries the INTENT: a flagged node stores its roll in [0, 1),
- * an unflagged one stores roll + 2, and the division tick requires "below 1.5"
- * (I was flagged) AND "strictly below every neighbour's" (I won the contest).
- * A non-splitter is above 2 and therefore never blocks anyone, so a set of
- * non-adjacent flagged nodes ALL split — the reference behaviour, exactly.
+ * WHY K ROUNDS SUFFICE, and why K is small. A node loses a round only if a
+ * bonded neighbour holds a lower priority; the minimum of every connected
+ * flagged component therefore always wins, and when it splits it stops being
+ * flagged AND hands two of its three edges to fresh unflagged daughters — so
+ * each round strips flagged edges rather than merely reordering them. At degree
+ * 3 the flagged conflict graph collapses in a handful of rounds. K is chosen by
+ * MEASUREMENT, not by theory: see the leftover-flag numbers in the model's Rule
+ * Description and in verify-graph-rewrite.mjs Tier M.
+ *
+ * THE RESIDUAL DEVIATION, STATED HONESTLY. A node still latched after round K
+ * is simply re-latched by the next state tick (the state tick OVERWRITES the
+ * latch, exactly as the reference recomputes its flags every phase 0). At the
+ * measured leftover rate that is a rare event; it is a deviation all the same.
+ * And which neighbour a daughter inherits depends on bond-slot order, which the
+ * round-based drain orders differently from the reference's index walk — so the
+ * claim is SEMANTIC faithfulness (every flagged node divides, against live
+ * adjacency), never bit-identity of the labelled graph.
+ *
+ * THE LATCH IS THE PRIORITY, and that is the load-bearing detail. The gate must
+ * be INTENT-AWARE: the obvious version — every node rolls a priority, split iff
+ * you are the strict local minimum — makes a flagged node wait behind neighbours
+ * that never wanted to split, which costs roughly three quarters of the splits
+ * EVEN WHEN THE FLAGGED NODES ARE ALREADY PAIRWISE NON-ADJACENT. Measured on
+ * `quadratic`, that did not merely slow growth: the automaton fell into its
+ * absorbing all-OFF configuration and stopped at 16 nodes against the
+ * reference's 854. So the flag and the tie-break live in ONE number:
+ *     prio = roll        in [0, 1)   flagged
+ *     prio = roll + 2    in [2, 3)   not flagged
+ * a node splits iff prio < 1.5 AND prio < every bonded neighbour's, and a
+ * splitter writes prio = 2.5 — which BOTH clears its latch and stops it blocking
+ * the neighbours it just failed to let through. A separate boolean `flagged`
+ * would duplicate what `prio < 1.5` already says and could drift from it.
+ *
+ * The priority is rolled ONCE per reference tick, not per round: clearing the
+ * winner's latch is what changes the contest, so re-rolling would only churn the
+ * shared RNG stream.
  *
  * ── THE CADENCE ─────────────────────────────────────────────────────────────
- * Both phases carry rule work, so the layout gets its headroom from
- * `layoutIterations: 3` (three force passes per generation, six per full
- * reference tick) rather than from idle generations.
+ * One reference tick is PERIOD = 1 + K generations, so the layout gets
+ * PERIOD x layoutIterations force passes per rewrite — more relaxation per
+ * rewrite than the old 2-generation cadence gave, at a LOWER per-generation
+ * cost.
  *
  * ── THE LAYOUT: GLOBAL CHARGE ───────────────────────────────────────────────
  * The first shipped model to use `chargeRange: 'global'` (C10's deterministic
@@ -97,6 +116,7 @@
  * 0.37 from N 2.5k to 20k) while global holds flat at ~0.81 AND runs cheaper.
  *
  * Re-run after a tweak:  node scripts/gen-growing-graphs.mjs
+ * `GG_ROUNDS=<n>` overrides K — the hook the K measurement drives.
  * Re-running preserves any saved simulationState + library thumbnail.
  */
 import { writeFileSync, readFileSync, existsSync, mkdirSync } from 'node:fs';
@@ -152,8 +172,8 @@ const nextBits = R => Array.from({ length: 8 }, (_, r) => (R >> r) & 1);
 /** divide bits: table[r] = (R >> (r + 8)) & 1  (CaseN = (NN+1)*2 = 8). */
 const divideBits = R => Array.from({ length: 8 }, (_, r) => (R >> (r + 8)) & 1);
 
-/** znah's `presets` table, verbatim (js/app.js). */
-const PRESETS = [
+/** znah's NAMED `presets` table, verbatim (js/app.js), in its own order. */
+const NAMED_PRESETS = [
   { name: 'quadratic', rule: 2182, flip: 0 },
   { name: 'quadratic - mutations', rule: 2182, flip: 5e-5 },
   { name: 'two branches', rule: 3260, flip: 0 },
@@ -167,6 +187,21 @@ const PRESETS = [
   { name: 'stable explosion', rule: 8690, flip: 1e-3 },
   { name: 'fancy tentacles', rule: 17953, flip: 5e-5 },
 ];
+/** znah's `rules` dropdown — the CURATED catalogue, 22 rules (js/app.js line 18).
+ *  Eleven of them have no preset name; those ship here as "Rule <n>". */
+const RULE_CATALOGUE = [
+  2502, 6259, 0x426, 0x8a2, 0x8ae, 0x886, 0x887, 0x8bc, 0x457, 0x26a, 0x409,
+  0x1016, 0x897, 0x4625, 0x4621, 0x6621, 0x56cc, 0xcbc, 0x3051, 0x1082, 0x289, 0x21f2,
+];
+const namedRules = new Set(NAMED_PRESETS.map(p => p.rule));
+/** The unnamed remainder, ascending — one preset each, no mutation (the
+ *  dropdown carries no flipProb for them either; Mutation Rate stays live). */
+const NUMBERED_PRESETS = [...new Set(RULE_CATALOGUE)]
+  .filter(r => !namedRules.has(r))
+  .sort((a, b) => a - b)
+  .map(rule => ({ name: `Rule ${rule}`, rule, flip: 0 }));
+const PRESETS = [...NAMED_PRESETS, ...NUMBERED_PRESETS];
+
 const DEFAULT_RULE = 2182;      // 'quadratic' — the demo's own default
 const DEFAULT_FLIP = 0;
 
@@ -177,19 +212,58 @@ const MAX_BONDS = 3;            // TIGHT: nothing may transiently exceed cubic d
 const RADIUS = 0.9;
 const REST = 5.0;               // bond rest length (the layout scale)
 const STIFF = 0.55;
-const MAX_AGENTS = 12000;
-const NODE_CAP = 6000;          // the end-condition guard (a 2x margin on MAX_AGENTS)
-// THE CADENCE IS THE REFERENCE'S OWN PHASE ALTERNATION. Period 2 with a rule
-// rooted at EACH phase means one GenesisCA generation is one reference `grow()`
-// call: phase 0 updates states and records the division intent, phase 1 divides.
-const PERIOD = 2;
-const LAYOUT_ITERATIONS = 3;    // force passes per generation
+const NODE_CAP = 10000;         // the end-condition guard — znah's own demo scale
+// A generation can at most split a maximal independent set, so N can at most
+// DOUBLE in one generation, and the end condition is evaluated after the
+// generation that crossed the cap. maxAgents therefore has to be >= 2 x the cap
+// or a pathological all-flagged rule could reach the ceiling, where Create Agent
+// returns -1, the split's Rewire finds no target and the graph stops being cubic.
+const MAX_AGENTS = 24000;
+// K — the number of DIVISION ROUNDS per reference tick. Chosen by measurement:
+// the smallest K whose leftover-flag rate is negligible (see the header).
+// MEASURED over all 18 mutation-free published rules, 100 reference ticks each
+// (scripts/verify-graph-rewrite.mjs Tier M pins the headline numbers):
+//     K     leftover latches     rules matching the reference N(t)
+//     1        31.71 %           8 / 18       <- the old single-round port
+//     2         8.53 %          10 / 18
+//     4         0.55 %          10 / 18
+//     6         0.02 %          10 / 18
+//     8         0.00 %          18 / 18
+//    10         0.00 %          18 / 18       <- no deeper drain exists
+// The deepest drain any published rule needs is 8 rounds (K = 10 never uses a
+// ninth), and only at K = 8 does EVERY deterministic rule reproduce the
+// reference cycle for cycle. A sub-1% leftover rate arrives much earlier, but
+// leftovers are not evenly spread: they concentrate in the deep-chain rules
+// (17957, 26145), which diverge by cycle 2 at K = 4. So K is the point where the
+// drain provably finishes, not the point where the average looks small.
+const DIVISION_ROUNDS = Math.max(1, Number(process.env.GG_ROUNDS) || 8);
+const PERIOD = 1 + DIVISION_ROUNDS;
+// ONE force pass per generation. PERIOD grew from 2 to 9, so the layout still
+// gets 9 passes per reference tick — MORE relaxation per rewrite than the old
+// 2 x 3 cadence gave — at a third of the per-generation cost.
+const LAYOUT_ITERATIONS = 1;
 
-// THE WORLD SIZING RULE (shared with Cubic GRA / SDCA): a graph laid out by the
-// charge force settles at ~1.45 x the bond rest length, so each node needs about
-// (rest * 1.45)^2 of area and the world must hold the CAP, not today's count:
-//     side = ceil( sqrt( 12000 * (5 * 1.45)^2 ) ) = 795  ->  800
-const W = 800, H = 800;
+// THE WORLD IS SIZED FROM A MEASURED EXTENT, not from the packing rule the other
+// GRA models use. That rule ("side = sqrt(N) * rest * 1.45") assumes a layout
+// whose spacing is set by the bond rest length; GLOBAL charge has no cutoff, so
+// the repulsion an outer node feels grows with the whole population and the
+// structure inflates far past that — and its extent depends on the SHAPE the
+// rule grows, not just on N. Measured in the real worker (WASM agent target) by
+// growing to the 10 000-node cap inside a deliberately oversized world, so the
+// boundary never touched the result:
+//
+//     meduza       N = 10610   extent 4639 x 4075     0 agents clamped   2.6x margin
+//     exp tree     N = 10930   extent 5231 x 5497     0 agents clamped   2.2x margin
+//     Rule 17957   N = 10002   extent 8378 x 8234     0 agents clamped   1.4x margin  <- worst
+//
+// so 12000 clears every one of them — over twice the extent of the compact-blob
+// rules and still clear of the stringiest one in the catalogue. It is NOT sized
+// larger than that on purpose: the world is what the view fits, so an oversized
+// world leaves the interesting early growth (a few hundred nodes) a speck.
+// Enlarging a bounded world is otherwise free — the spatial hash anchors on the
+// agents' bounding box (and is capped at AGENT_HASH_BIN_CAP regardless) and the
+// charge octree is built over the population, not the world.
+const W = 12000, H = 12000;
 
 // GLOBAL charge (C10). No cutoff term: every pair contributes, summed through a
 // deterministic Barnes-Hut octree at theta = 0.9.
@@ -248,10 +322,11 @@ ag.fEdge(mkSeed, 'next', addSeed, 'do');
 ag.fEdge(addSeed, 'next', seedState, 'do');
 
 // -----------------------------------------------------------------------------
-// BEHAVIOUR STEP — the one-shot wiring of the exact znah seed graph
+// BEHAVIOUR STEP — the one-shot bootstrap, then the DIVISION ROUNDS
 // -----------------------------------------------------------------------------
-// This root runs EVERY generation (not on the rule cadence) but its whole body
-// is gated on bond degree 0, so it fires exactly once per seed, on generation 0.
+// This root runs EVERY generation. Its first branch (the bootstrap wiring) is
+// gated on bond degree 0, so it fires exactly once per seed, on generation 0.
+// Its DONE continuation carries the division rounds — see below.
 const bs = ag.node('behaviourStep', {}, 0, 4);
 const deg = ag.node('getBondDegree', {}, 0, 6);
 const isUnwired = ag.node('statement', { operation: '==', compareType: 'numerical', _port_y: '0' }, 1, 6);
@@ -288,7 +363,7 @@ ag.fEdge(wire2, 'next', wire3, 'do');
 // -----------------------------------------------------------------------------
 // Computes r from the CURRENT states (synchronous update means the census reads
 // the previous generation through the double buffer), writes the next state, and
-// stores the division intent + its tie-break in ONE number: see `prio` below.
+// LATCHES the division intent + its tie-break into ONE number: see `prio` below.
 const stateTick = ag.node('periodicStep', { period: PERIOD, phase: 0 }, 0, 9);
 
 const census = ag.node('neighbourCensus', { attributeId: 'state', source: 'bonded' }, 0, 11);
@@ -323,16 +398,18 @@ const setState = ag.node('setAttribute', { attributeId: 'state' }, 6, 9);
 ag.vEdge(nextState, 'result', setState, 'value');
 ag.fEdge(ruleIf, 'then', setState, 'do');
 
-// 2. the DIVISION INTENT, stored as a single number
+// 2. LATCH the division intent, stored as a single number
 //
-// THE PRIORITY ENCODES BOTH THE FLAG AND THE TIE-BREAK, and that is what makes
-// the independent-set gate cost nothing when it is not needed:
+// THE PRIORITY ENCODES BOTH THE LATCH AND THE TIE-BREAK, and that is what makes
+// the independent-set drain cost nothing when it is not needed:
 //     prio = roll             in [0, 1)   when the divide bit fired
 //     prio = roll + 2         in [2, 3)   when it did not
-// so at the DIVISION tick a node splits iff its stored priority is below 1.5
-// (it was flagged) AND strictly below every bonded neighbour's (it wins the
+// so in a DIVISION ROUND a node splits iff its stored priority is below 1.5 (it
+// is still latched) AND strictly below every bonded neighbour's (it wins the
 // contest). A neighbour that did not want to split carries a value above 2 and
-// therefore never blocks anyone.
+// therefore never blocks anyone. A splitter writes 2.5, which BOTH consumes its
+// latch and stops it blocking the neighbours it beat — that write is what lets
+// the losers through in a LATER round of the same tick.
 //
 // This is the fix for the obvious-but-wrong version of the gate. Comparing raw
 // rolls — flagged or not — makes a node wait until it is the local minimum among
@@ -354,11 +431,21 @@ ag.vEdge(prioVal, 'result', setPrio, 'value');
 ag.fEdge(setState, 'next', setPrio, 'do');
 
 // -----------------------------------------------------------------------------
-// PERIODIC STEP, PHASE 1 — the DIVISION tick (the reference's phase 1)
+// DIVISION ROUNDS — every phase of the period EXCEPT 0
 // -----------------------------------------------------------------------------
-// The reference's division phase does not re-read the states either: it replays
-// the flags the state tick computed. Here those flags live in `prio`.
-const divideTick = ag.node('periodicStep', { period: PERIOD, phase: 1 }, 0, 16);
+// Hand-gated on `generation % PERIOD != 0` rather than rooted at K separate
+// Periodic Steps: the flow walk INLINES a node's body once per incoming path, so
+// K periodic roots pointing at one split chain would emit K copies of it. One
+// gate, one copy.
+const roundGen = ag.node('getGeneration', {}, 0, 16);
+const roundPhase = ag.node('arithmeticOperator', { operation: '%', _port_y: String(PERIOD) }, 1, 16);
+ag.vEdge(roundGen, 'value', roundPhase, 'x');
+const isRound = ag.node('statement', { operation: '!=', compareType: 'numerical', _port_y: '0' }, 2, 16);
+ag.vEdge(roundPhase, 'result', isRound, 'x');
+const roundIf = ag.node('conditional', {}, 3, 16);
+// The bootstrap branch's DONE continuation: same root, next in flow order.
+ag.fEdge(wireIf, 'next', roundIf, 'check');
+ag.vEdge(isRound, 'result', roundIf, 'condition');
 
 const myPrio = ag.node('getCellAttribute', { attributeId: 'prio' }, 0, 18);
 const wasFlagged = ag.node('statement', { operation: '<', compareType: 'numerical', _port_y: '1.5' }, 1, 18);
@@ -384,10 +471,10 @@ ag.vEdge(gate1, 'result', gate2, 'a');
 ag.vEdge(isCubic, 'result', gate2, 'b');
 
 const splitIf = ag.node('conditional', {}, 7, 16);
-ag.fEdge(divideTick, 'do', splitIf, 'check');
+ag.fEdge(roundIf, 'then', splitIf, 'check');
 ag.vEdge(gate2, 'result', splitIf, 'condition');
 
-// The daughters inherit the mother's state, which by the division tick IS the
+// The daughters inherit the mother's state, which by the division rounds IS the
 // post-update (post-mutation) state the state tick committed — exactly the
 // reference's `states.push(states[i], states[i])`.
 const stateNow = ag.node('getCellAttribute', { attributeId: 'state' }, 7, 19);
@@ -437,7 +524,10 @@ ag.vEdge(mkJ, 'handle', addJ, 'handle');
 // Daughters inherit the mother's POST-update (and post-mutation) state, exactly
 // as znah's `states.push(states[i], states[i])` does in its division phase. The
 // target is a one-hop Create Agent handle, so this is the documented spawn-
-// configuration exemption from the synchronous cross-agent write gate.
+// configuration exemption from the synchronous cross-agent write gate. Their
+// `prio` is the attribute DEFAULT (2.5, a non-splitter), so a newborn can never
+// divide in a later round of the SAME tick — the reference freezes its flag
+// array at the tick boundary for exactly the same reason.
 const stJ = ag.node('setAgentAttribute', { attributeId: 'state' }, 12, 18);
 ag.vEdge(mkJ, 'handle', stJ, 'agentId');
 ag.vEdge(stateNow, 'value', stJ, 'value');
@@ -462,6 +552,12 @@ const fbB = bondOp(13, 20, 'formBondBetween', n => { ag.vEdge(bAgent, 'value', n
 const fbC = bondOp(13, 21, 'formBondBetween', n => { ag.vEdge(cAgent, 'value', n, 'agentA'); ag.vEdge(mkK, 'handle', n, 'agentB'); });
 const fbJK = bondOp(13, 22, 'formBondBetween', n => { ag.vEdge(mkJ, 'handle', n, 'agentA'); ag.vEdge(mkK, 'handle', n, 'agentB'); });
 
+// CONSUME THE LATCH. Written last so nothing in the split chain reads a
+// post-write value (synchronous agent attributes double-buffer, so this is
+// visible from the NEXT round — which is exactly when the neighbours this node
+// just beat need to see that it no longer blocks them).
+const clearPrio = ag.node('setAttribute', { attributeId: 'prio', _port_value: '2.5' }, 14, 22);
+
 ag.fEdge(splitIf, 'then', mkJ, 'do');
 ag.fEdge(mkJ, 'next', addJ, 'do');
 ag.fEdge(addJ, 'next', stJ, 'do');
@@ -473,6 +569,7 @@ ag.fEdge(rwB, 'next', rwC, 'do');
 ag.fEdge(rwC, 'next', fbB, 'do');
 ag.fEdge(fbB, 'next', fbC, 'do');
 ag.fEdge(fbC, 'next', fbJK, 'do');
+ag.fEdge(fbJK, 'next', clearPrio, 'do');
 
 // -----------------------------------------------------------------------------
 // AGENT OUTPUT MAPPING — "Birth generation", znah's signature look
@@ -578,12 +675,15 @@ const agentAttributes = [
   {
     id: 'prio', name: 'prio', type: 'float', defaultValue: '2.5',
     description:
-      'The division intent AND its tie-break in one number, written by the state tick and read by ' +
-      'the division tick: a flagged node stores its random roll in [0, 1), an unflagged one stores ' +
-      'roll + 2. A node splits only if its value is below 1.5 (it was flagged) and strictly below ' +
-      'every bonded neighbour\'s (it won the contest), so the splitters are pairwise non-adjacent ' +
-      'while a neighbour that does not want to split never blocks anyone. The default is a ' +
-      'non-splitter value, so a newborn can never look flagged before its first state tick.',
+      'The LATCHED division intent AND its tie-break in one number. The state tick writes it: a ' +
+      'flagged node stores its random roll in [0, 1), an unflagged one stores roll + 2. Each of ' +
+      'the ' + DIVISION_ROUNDS + ' division rounds that follow splits a node only if its value is below 1.5 (still ' +
+      'latched) and strictly below every bonded neighbour\'s (it won the contest); a splitter then ' +
+      'writes 2.5, which consumes its latch AND stops it blocking the neighbours it beat, so they ' +
+      'split in a later round of the same tick against the adjacency it just rewrote. Strict ' +
+      'inequality cannot hold both ways, so the splitters of any one round are pairwise ' +
+      'non-adjacent. The default 2.5 is a non-splitter value, so a newborn can never divide in a ' +
+      'later round of the tick it was born in.',
   },
 ];
 
@@ -631,11 +731,12 @@ const properties = {
     'Binary cubic graph-rewriting automata after Paul Cousin, ported from Alex Mordvintsev\'s ' +
     '(znah) Growing Graphs demo. Every node carries one bit and exactly three neighbours; one ' +
     '16-bit integer defines both the state rule and the division rule, and the triangle split keeps ' +
-    'the graph 3-regular forever. Twelve presets carry the published rules.',
+    'the graph 3-regular forever. All ' + PRESETS.length + ' rules of the demo\'s catalogue ship as presets.',
   ruleDescription:
     'CREDIT. The automaton family is Paul Cousin\'s binary cubic Graph-Rewriting Automata; this ' +
     'model is a port of Alex Mordvintsev\'s (znah) "Growing Graphs" demo, znah.net/graphs, and the ' +
-    'twelve presets are that demo\'s published rule table.\n\n' +
+    'presets are that demo\'s published rule catalogue — its twelve named rules plus the eleven ' +
+    'further rules its dropdown offers, which ship here under their rule number.\n\n' +
     'THE RULE. Every node is 3-regular and holds one bit. Per rule tick a node computes\n' +
     '    r = own state x 4 + (number of ON neighbours)          r in 0..7\n' +
     '    next state = bit r of the rule integer\n' +
@@ -659,44 +760,61 @@ const properties = {
     'degree 0 so it runs exactly once. Each node requests bonds to (h+1) mod 10, (h+9) mod 10 and ' +
     'its chord partner; Form Bond is symmetric and an existing bond is an idempotent no-op, so the ' +
     'thirty requests settle to precisely the reference graph\'s fifteen edges.\n\n' +
-    'THE TWO PHASES ARE THE REFERENCE\'S TWO PHASES. The reference alternates a STATE tick and a ' +
-    'DIVISION tick, and the division tick does not re-read the states — it replays the flags the ' +
-    'state tick computed. Here that is two Periodic Steps of period 2, one rooted at each phase, so ' +
-    'ONE generation is ONE reference tick: phase 0 runs the census, writes the next state and ' +
-    'records the division intent; phase 1 splits the flagged nodes, and the daughters inherit the ' +
-    'state phase 0 committed. Synchronous agent update is what makes phase 0 a true synchronous CA ' +
-    '— the census reads the previous generation through the double buffer.\n\n' +
-    'THE ONE SEMANTIC DEVIATION, STATED PLAINLY. The reference divides every flagged node within a ' +
-    'tick, sequentially, including ADJACENT ones. GenesisCA\'s structural request queue cannot do ' +
-    'that: the mother\'s Rewire needs its edge to b to still exist when the queue drains, and a ' +
-    'splitting b would already have re-pointed it away. So this port splits an INDEPENDENT SET per ' +
-    'tick, and a suppressed node is simply re-evaluated next tick — exactly as the reference ' +
-    'recomputes its flags every phase 0.\n\n' +
-    'HOW BIG IS THAT DEVIATION? Smaller than it sounds, and measurably so. For a rule whose divide ' +
-    'bit fires only when a node is OFF with all three neighbours ON, two flagged nodes cannot be ' +
-    'adjacent at all — a flagged neighbour would have to be ON (as seen from me) and OFF (as seen ' +
-    'from itself) at the same time — so the independent set is the whole flagged set and this port ' +
-    'reproduces the reference node count EXACTLY, cycle for cycle. That is verified for "quadratic" ' +
-    'and "exp tree" over a hundred cycles. Where a rule CAN flag two neighbours at once — "meduza" ' +
-    'is one — the trajectory genuinely differs. So: exact for one class of rules, qualitatively ' +
-    'faithful for the rest.\n\n' +
-    'HOW THE INDEPENDENT SET IS CHOSEN, AND WHY IT HAD TO BE INTENT-AWARE. The state tick stores ' +
-    'the division intent and its tie-break in ONE number, the agent attribute "prio": a flagged node ' +
-    'stores a random roll in [0, 1), an unflagged one stores that roll plus 2. The division tick ' +
-    'then splits a node only if its value is below 1.5 (it was flagged) AND strictly below every ' +
-    'bonded neighbour\'s (it won the contest). Strict inequality cannot hold both ways, so the ' +
-    'splitters are pairwise non-adjacent for any rolls; and a node that did not want to split sits ' +
-    'above 2, so it never blocks anyone. That last part is not a nicety. The obvious version of the ' +
-    'gate — compare raw rolls, flagged or not — makes a flagged node wait until it is the local ' +
-    'minimum among ALL its neighbours, which discards roughly three quarters of the splits even when ' +
-    'the flagged nodes are already pairwise non-adjacent, and for several published rules that is ' +
-    'enough to drop the automaton into its absorbing all-OFF configuration and stop it dead.\n\n' +
-    'THE CADENCE. Both phases carry rule work, so the force solver gets its headroom from three ' +
-    'force passes per generation (six per full reference tick) rather than from idle generations.\n\n' +
+    'LATCH AND DRAIN — THE REFERENCE\'S DIVISION SEMANTICS. The reference alternates a STATE tick ' +
+    'and a DIVISION tick. Its division tick does not re-read the states: it walks the flags the ' +
+    'state tick LATCHED and divides every one of them, sequentially, each node reading the LIVE ' +
+    'adjacency — so a node whose neighbour has already split divides against its updated ' +
+    'neighbourhood. A latch is consumed exactly once, and nodes born in the tick do not divide in ' +
+    'it.\n\n' +
+    'GenesisCA\'s structural request queue drains in parallel, and two ADJACENT splitters would ' +
+    'corrupt each other (the mother\'s Rewire needs its edge to b to still exist when the queue ' +
+    'drains, and a splitting b would already have re-pointed it away). So a single generation can ' +
+    'only split an INDEPENDENT SET, and one reference tick becomes ' + PERIOD + ' generations: one STATE ' +
+    'tick that latches the flags, then ' + DIVISION_ROUNDS + ' DIVISION ROUNDS. Each round splits the latched nodes ' +
+    'that win the contest among their bonded neighbours and clears their latch; the losers keep ' +
+    'theirs and try again in the next round, against the adjacency the winners just rewrote. That ' +
+    'is the reference\'s mutated-adjacency drain, executed in independent-set rounds instead of in ' +
+    'index order.\n\n' +
+    'HOW FAITHFUL IS IT? Because a latch is consumed exactly once and the drain finishes, the node ' +
+    'count per reference tick is the reference\'s. Measured against a transcription of the ' +
+    'reference implementation: "quadratic" and "exp tree" — rules whose flagged nodes can never be ' +
+    'adjacent — match cycle for cycle over 100 cycles, and so does "meduza", whose flagged nodes ' +
+    'CAN be adjacent and which the earlier single-round port could not follow at all. What remains ' +
+    'order-dependent is which neighbour a daughter inherits: the rounds pick winners by random ' +
+    'priority where the reference walks node indices, so the two graphs are built from the same ' +
+    'operations in a different order. The claim is semantic faithfulness — every latched node ' +
+    'divides, against live adjacency — not bit-identity of the labelled graph.\n\n' +
+    'One residual deviation, stated plainly: a node still latched after the last division round is ' +
+    're-latched by the next state tick rather than splitting late. Measurement puts that at a small ' +
+    'fraction of a percent of latches for the published rules, which is why the number of rounds is ' +
+    'what it is.\n\n' +
+    'HOW THE INDEPENDENT SET IS CHOSEN, AND WHY IT HAD TO BE INTENT-AWARE. The latch and its ' +
+    'tie-break live in ONE agent attribute, "prio": a flagged node stores a random roll in [0, 1), ' +
+    'an unflagged one stores that roll plus 2. A division round splits a node only if its value is ' +
+    'below 1.5 (still latched) AND strictly below every bonded neighbour\'s (it won the contest); ' +
+    'the splitter then writes 2.5, which consumes the latch and stops it blocking the neighbours it ' +
+    'beat. Strict inequality cannot hold both ways, so one round\'s splitters are pairwise ' +
+    'non-adjacent for any rolls; and a node that did not want to split sits above 2, so it never ' +
+    'blocks anyone. That last part is not a nicety. The obvious version of the gate — compare raw ' +
+    'rolls, flagged or not — makes a flagged node wait until it is the local minimum among ALL its ' +
+    'neighbours, which discards roughly three quarters of the splits even when the flagged nodes ' +
+    'are already pairwise non-adjacent, and for several published rules that is enough to drop the ' +
+    'automaton into its absorbing all-OFF configuration and stop it dead.\n\n' +
+    'THE CADENCE. One reference tick is ' + PERIOD + ' generations, so the force solver gets ' + (PERIOD * LAYOUT_ITERATIONS) + ' force ' +
+    'passes per rewrite — more relaxation per rewrite than a two-generation cadence gives, at a ' +
+    'lower per-generation cost.\n\n' +
     'THE LAYOUT. Long-range GLOBAL charge: every pair repels, summed through a deterministic ' +
     'Barnes-Hut octree rather than cut off at a radius. That matches the reference demo\'s own ' +
     'n-body layout, and it is what a growing graph needs — a finite cutoff degrades as the ' +
-    'population rises while global holds its quality flat.\n\n' +
+    'population rises while global holds its quality flat. Because that charge has no cutoff the ' +
+    'structure inflates well past bond-rest spacing, and how far depends on the shape a rule grows, ' +
+    'so the world is sized from a MEASURED extent rather than from a packing formula: grown to the ' +
+    NODE_CAP + '-node cap inside a deliberately oversized world, meduza spans 4639 x 4075 units, exp tree ' +
+    '5231 x 5497 and the stringiest rule in the catalogue, Rule 17957, 8378 x 8234. The shipped ' +
+    'world is ' + W + ' — over twice the extent of the compact-blob rules and clear of the stringiest ' +
+    'one — and a run to the cap was verified with zero agents on the boundary. It is not made ' +
+    'larger than that on purpose: the view fits the world, so an oversized world would leave the ' +
+    'interesting early growth a speck.\n\n' +
     'COMPILE TARGET. Engine is set to Auto with an Exact reproducibility contract, so the agent ' +
     'layer resolves to WebAssembly: the WebGPU agent target seeds its per-agent RNG once at runtime ' +
     'creation, so a fixed seed would not replay there. Everything else about the model runs on all ' +
@@ -710,12 +828,16 @@ const properties = {
     'the single bit the rule runs on.\n\n' +
     'Open the Presets list and load the published rules: quadratic grows steadily, meduza and exp ' +
     'tree take completely different shapes, and the mutation presets keep rules alive that stall ' +
-    'without noise. Mutation Rate is a live slider — nudge it on a stalled rule and watch it ' +
+    'without noise. The twelve named rules come first, then the demo\'s eleven further rules under ' +
+    'their rule number. Mutation Rate is a live slider — nudge it on a stalled rule and watch it ' +
     'restart. In the Attributes panel, Randomize either rule table to roll an automaton nobody has ' +
     'seen; the seed and density are stored, so an interesting one reproduces exactly.\n\n' +
-    'One generation is one reference tick, alternating a state phase and a division phase, so the ' +
-    'node count moves on every other generation. The simulation pauses at ' + NODE_CAP + ' nodes so ' +
-    'a runaway rule can never reach the agent cap.',
+    'One reference tick is ' + PERIOD + ' generations: a state tick that latches which nodes will divide, then ' +
+    DIVISION_ROUNDS + ' division rounds that drain those latches a non-adjacent set at a time, so the node count ' +
+    'climbs over several generations and then pauses while the next state is computed. The ' +
+    'simulation stops at ' + NODE_CAP + ' nodes.\n\n' +
+    'The world is big enough that a full-grown structure never reaches its edge, so while the graph ' +
+    'is still young it is small in the view — scroll to zoom in on it, and back out as it grows.',
   topology: '2d-grid',
   boundaryTreatment: 'constant',
   updateMode: 'synchronous',
@@ -733,8 +855,9 @@ const properties = {
   useWebGPU: false,
   // THE CAPACITY GUARD, load-bearing for the cubic invariant: at the agent cap a
   // Create Agent returns -1, the split's Rewire finds no target and degrades to a
-  // bare break, and the graph stops being 3-regular. Pausing at half the cap
-  // leaves a margin the fastest possible growth cannot cross in one generation.
+  // bare break, and the graph stops being 3-regular. A generation can at most
+  // split a maximal independent set, i.e. at most double N, so pausing at
+  // NODE_CAP with maxAgents >= 2 x NODE_CAP cannot be crossed.
   endConditions: {
     enabled: true,
     indicatorConditions: [
@@ -824,5 +947,7 @@ writeFileSync(OUT, JSON.stringify(model, null, 1));
 console.log(`wrote ${OUT}`);
 console.log(`  agent graph: ${ag.nodes.length} nodes / ${ag.edges.length} edges`);
 console.log(`  seeds ${SEEDS} (10-cycle + 5 chords = 15 edges)  maxBonds ${MAX_BONDS}  split = 5 queue ops`);
+console.log(`  cadence: PERIOD ${PERIOD} = 1 state tick + ${DIVISION_ROUNDS} division rounds`);
 console.log(`  default rule ${DEFAULT_RULE}  next=[${nextBits(DEFAULT_RULE)}]  divide=[${divideBits(DEFAULT_RULE)}]`);
-console.log(`  presets: ${presets.length}`);
+console.log(`  presets: ${presets.length} (${NAMED_PRESETS.length} named + ${NUMBERED_PRESETS.length} numbered)`);
+console.log(`  world ${W}x${H}  cap ${NODE_CAP} nodes  maxAgents ${MAX_AGENTS}`);

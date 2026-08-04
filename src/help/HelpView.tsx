@@ -2314,11 +2314,25 @@ export function HelpView() {
             defines the whole automaton &mdash; the low byte says what a node becomes, the high byte
             says whether it splits, both indexed by <code>own bit &times; 4 + ON neighbours</code>.
             The two rule tables in the Attributes panel <em>are</em> that integer, cell for cell, and
-            twelve presets carry the published rules. It also shows the pattern for reproducing a
-            published initial condition exactly: two handle-indexed lookup tables and a bootstrap
-            branch gated on bond degree 0 rebuild the reference&rsquo;s precise ten-node seed graph.
-            Its second viewer, <em>Birth generation</em>, colours each node by when it was born, so
-            the structure reads as its own growth history.
+            the demo&rsquo;s whole published catalogue ships as presets &mdash; its twelve named rules
+            first, then the eleven further rules of its dropdown under their rule number. It also
+            shows the pattern for reproducing a published initial condition exactly: two
+            handle-indexed lookup tables and a bootstrap branch gated on bond degree 0 rebuild the
+            reference&rsquo;s precise ten-node seed graph. Its second viewer, <em>Birth generation</em>,
+            colours each node by when it was born, so the structure reads as its own growth history.
+          </p>
+          <p className={styles.p}>
+            It is also the clearest example of <strong>fitting a sequential rule onto a parallel
+            engine</strong>. The reference divides <em>every</em> flagged node within a tick, one
+            after another, each reading the adjacency the previous splits left behind. GenesisCA&rsquo;s
+            structural request queue drains in parallel, and two <em>adjacent</em> splitters would
+            corrupt each other &mdash; so the model latches the flags in a state tick and then drains
+            them over several <strong>division rounds</strong>, each round splitting a non-adjacent
+            set and clearing its latch so the losers get their turn next round, against the
+            adjacency the winners just rewrote. One reference tick is one state tick plus eight
+            rounds. Because a latch is consumed exactly once and the drain finishes, every
+            mutation-free published rule reproduces the reference node count <em>exactly</em>,
+            cycle for cycle &mdash; including the rules a single-round drain could not follow at all.
           </p>
           <h3 className={styles.h3}>Neighbour Census &mdash; the input a graph rule reads</h3>
           <p className={styles.p}>

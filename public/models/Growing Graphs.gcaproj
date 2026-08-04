@@ -3,15 +3,15 @@
  "properties": {
   "name": "Growing Graphs",
   "modelAuthor": "Rodrigo F. Figueiredo",
-  "description": "Binary cubic graph-rewriting automata after Paul Cousin, ported from Alex Mordvintsev's (znah) Growing Graphs demo. Every node carries one bit and exactly three neighbours; one 16-bit integer defines both the state rule and the division rule, and the triangle split keeps the graph 3-regular forever. Twelve presets carry the published rules.",
-  "ruleDescription": "CREDIT. The automaton family is Paul Cousin's binary cubic Graph-Rewriting Automata; this model is a port of Alex Mordvintsev's (znah) \"Growing Graphs\" demo, znah.net/graphs, and the twelve presets are that demo's published rule table.\n\nTHE RULE. Every node is 3-regular and holds one bit. Per rule tick a node computes\n    r = own state x 4 + (number of ON neighbours)          r in 0..7\n    next state = bit r of the rule integer\n    divide     = bit r+8 of the rule integer\nso a whole automaton is ONE 16-bit number. The two lookup tables in the Attributes panel ARE that number: each is 2 x 4 over [own state] x [ON neighbours], row-major, so a table cell's flat index is exactly r and its value is exactly the corresponding bit. Load a preset to see a published rule; Randomize a table to roll a new one.\n\nTHE TRIANGLE SPLIT. A flagged node v(a, b, c) becomes v, j, k: v keeps a, j takes b, k takes c, and the three of them close a triangle. Every one of them has one external edge plus two triangle edges = degree 3, so dN = +2, dE = +3 and E = 3N/2 survives (3N/2 + 3 = 3(N+2)/2). The daughters inherit the mother's post-update state. In GenesisCA that is five queued operations from the mother's own behaviour in ONE generation — two Rewire Bonds and three Form Bond Betweens (Create Agent and Add Agent To World are host calls that consume no queue slot). Peak degree during the drain is exactly 3, which is why Max Bonds is a tight 3.\n\nTHE INITIAL CONDITION IS EXACT. The reference implementation always seeds the same 10-node cubic graph — a 10-cycle plus the chords {0,2} {1,4} {3,6} {5,8} {7,9} — with the states [0,0,0,1,0,1,0,1,1,1]. Here the Agent Init Event places ten agents on a circle and reads their states from a handle-indexed table; the wiring happens on the first behaviour step (Form Bond writes the acting agent's request queue, so it is invalid in an Init Event), gated on bond degree 0 so it runs exactly once. Each node requests bonds to (h+1) mod 10, (h+9) mod 10 and its chord partner; Form Bond is symmetric and an existing bond is an idempotent no-op, so the thirty requests settle to precisely the reference graph's fifteen edges.\n\nTHE TWO PHASES ARE THE REFERENCE'S TWO PHASES. The reference alternates a STATE tick and a DIVISION tick, and the division tick does not re-read the states — it replays the flags the state tick computed. Here that is two Periodic Steps of period 2, one rooted at each phase, so ONE generation is ONE reference tick: phase 0 runs the census, writes the next state and records the division intent; phase 1 splits the flagged nodes, and the daughters inherit the state phase 0 committed. Synchronous agent update is what makes phase 0 a true synchronous CA — the census reads the previous generation through the double buffer.\n\nTHE ONE SEMANTIC DEVIATION, STATED PLAINLY. The reference divides every flagged node within a tick, sequentially, including ADJACENT ones. GenesisCA's structural request queue cannot do that: the mother's Rewire needs its edge to b to still exist when the queue drains, and a splitting b would already have re-pointed it away. So this port splits an INDEPENDENT SET per tick, and a suppressed node is simply re-evaluated next tick — exactly as the reference recomputes its flags every phase 0.\n\nHOW BIG IS THAT DEVIATION? Smaller than it sounds, and measurably so. For a rule whose divide bit fires only when a node is OFF with all three neighbours ON, two flagged nodes cannot be adjacent at all — a flagged neighbour would have to be ON (as seen from me) and OFF (as seen from itself) at the same time — so the independent set is the whole flagged set and this port reproduces the reference node count EXACTLY, cycle for cycle. That is verified for \"quadratic\" and \"exp tree\" over a hundred cycles. Where a rule CAN flag two neighbours at once — \"meduza\" is one — the trajectory genuinely differs. So: exact for one class of rules, qualitatively faithful for the rest.\n\nHOW THE INDEPENDENT SET IS CHOSEN, AND WHY IT HAD TO BE INTENT-AWARE. The state tick stores the division intent and its tie-break in ONE number, the agent attribute \"prio\": a flagged node stores a random roll in [0, 1), an unflagged one stores that roll plus 2. The division tick then splits a node only if its value is below 1.5 (it was flagged) AND strictly below every bonded neighbour's (it won the contest). Strict inequality cannot hold both ways, so the splitters are pairwise non-adjacent for any rolls; and a node that did not want to split sits above 2, so it never blocks anyone. That last part is not a nicety. The obvious version of the gate — compare raw rolls, flagged or not — makes a flagged node wait until it is the local minimum among ALL its neighbours, which discards roughly three quarters of the splits even when the flagged nodes are already pairwise non-adjacent, and for several published rules that is enough to drop the automaton into its absorbing all-OFF configuration and stop it dead.\n\nTHE CADENCE. Both phases carry rule work, so the force solver gets its headroom from three force passes per generation (six per full reference tick) rather than from idle generations.\n\nTHE LAYOUT. Long-range GLOBAL charge: every pair repels, summed through a deterministic Barnes-Hut octree rather than cut off at a radius. That matches the reference demo's own n-body layout, and it is what a growing graph needs — a finite cutoff degrades as the population rises while global holds its quality flat.\n\nCOMPILE TARGET. Engine is set to Auto with an Exact reproducibility contract, so the agent layer resolves to WebAssembly: the WebGPU agent target seeds its per-agent RNG once at runtime creation, so a fixed seed would not replay there. Everything else about the model runs on all three agent targets.",
-  "instructions": "Press Play. Ten seed nodes wire themselves into the reference implementation's exact starting graph, then the automaton grows by triangle splits while the force layout untangles it. Watch the indicators: max degree pins at 3 and E tracks 3N/2 exactly, forever.\n\nThe two viewers are the point. \"Birth generation\" is the reference demo's look — each node coloured by when it was born, so the structure reads as its own growth history. \"State\" shows the single bit the rule runs on.\n\nOpen the Presets list and load the published rules: quadratic grows steadily, meduza and exp tree take completely different shapes, and the mutation presets keep rules alive that stall without noise. Mutation Rate is a live slider — nudge it on a stalled rule and watch it restart. In the Attributes panel, Randomize either rule table to roll an automaton nobody has seen; the seed and density are stored, so an interesting one reproduces exactly.\n\nOne generation is one reference tick, alternating a state phase and a division phase, so the node count moves on every other generation. The simulation pauses at 6000 nodes so a runaway rule can never reach the agent cap.",
+  "description": "Binary cubic graph-rewriting automata after Paul Cousin, ported from Alex Mordvintsev's (znah) Growing Graphs demo. Every node carries one bit and exactly three neighbours; one 16-bit integer defines both the state rule and the division rule, and the triangle split keeps the graph 3-regular forever. All 23 rules of the demo's catalogue ship as presets.",
+  "ruleDescription": "CREDIT. The automaton family is Paul Cousin's binary cubic Graph-Rewriting Automata; this model is a port of Alex Mordvintsev's (znah) \"Growing Graphs\" demo, znah.net/graphs, and the presets are that demo's published rule catalogue — its twelve named rules plus the eleven further rules its dropdown offers, which ship here under their rule number.\n\nTHE RULE. Every node is 3-regular and holds one bit. Per rule tick a node computes\n    r = own state x 4 + (number of ON neighbours)          r in 0..7\n    next state = bit r of the rule integer\n    divide     = bit r+8 of the rule integer\nso a whole automaton is ONE 16-bit number. The two lookup tables in the Attributes panel ARE that number: each is 2 x 4 over [own state] x [ON neighbours], row-major, so a table cell's flat index is exactly r and its value is exactly the corresponding bit. Load a preset to see a published rule; Randomize a table to roll a new one.\n\nTHE TRIANGLE SPLIT. A flagged node v(a, b, c) becomes v, j, k: v keeps a, j takes b, k takes c, and the three of them close a triangle. Every one of them has one external edge plus two triangle edges = degree 3, so dN = +2, dE = +3 and E = 3N/2 survives (3N/2 + 3 = 3(N+2)/2). The daughters inherit the mother's post-update state. In GenesisCA that is five queued operations from the mother's own behaviour in ONE generation — two Rewire Bonds and three Form Bond Betweens (Create Agent and Add Agent To World are host calls that consume no queue slot). Peak degree during the drain is exactly 3, which is why Max Bonds is a tight 3.\n\nTHE INITIAL CONDITION IS EXACT. The reference implementation always seeds the same 10-node cubic graph — a 10-cycle plus the chords {0,2} {1,4} {3,6} {5,8} {7,9} — with the states [0,0,0,1,0,1,0,1,1,1]. Here the Agent Init Event places ten agents on a circle and reads their states from a handle-indexed table; the wiring happens on the first behaviour step (Form Bond writes the acting agent's request queue, so it is invalid in an Init Event), gated on bond degree 0 so it runs exactly once. Each node requests bonds to (h+1) mod 10, (h+9) mod 10 and its chord partner; Form Bond is symmetric and an existing bond is an idempotent no-op, so the thirty requests settle to precisely the reference graph's fifteen edges.\n\nLATCH AND DRAIN — THE REFERENCE'S DIVISION SEMANTICS. The reference alternates a STATE tick and a DIVISION tick. Its division tick does not re-read the states: it walks the flags the state tick LATCHED and divides every one of them, sequentially, each node reading the LIVE adjacency — so a node whose neighbour has already split divides against its updated neighbourhood. A latch is consumed exactly once, and nodes born in the tick do not divide in it.\n\nGenesisCA's structural request queue drains in parallel, and two ADJACENT splitters would corrupt each other (the mother's Rewire needs its edge to b to still exist when the queue drains, and a splitting b would already have re-pointed it away). So a single generation can only split an INDEPENDENT SET, and one reference tick becomes 9 generations: one STATE tick that latches the flags, then 8 DIVISION ROUNDS. Each round splits the latched nodes that win the contest among their bonded neighbours and clears their latch; the losers keep theirs and try again in the next round, against the adjacency the winners just rewrote. That is the reference's mutated-adjacency drain, executed in independent-set rounds instead of in index order.\n\nHOW FAITHFUL IS IT? Because a latch is consumed exactly once and the drain finishes, the node count per reference tick is the reference's. Measured against a transcription of the reference implementation: \"quadratic\" and \"exp tree\" — rules whose flagged nodes can never be adjacent — match cycle for cycle over 100 cycles, and so does \"meduza\", whose flagged nodes CAN be adjacent and which the earlier single-round port could not follow at all. What remains order-dependent is which neighbour a daughter inherits: the rounds pick winners by random priority where the reference walks node indices, so the two graphs are built from the same operations in a different order. The claim is semantic faithfulness — every latched node divides, against live adjacency — not bit-identity of the labelled graph.\n\nOne residual deviation, stated plainly: a node still latched after the last division round is re-latched by the next state tick rather than splitting late. Measurement puts that at a small fraction of a percent of latches for the published rules, which is why the number of rounds is what it is.\n\nHOW THE INDEPENDENT SET IS CHOSEN, AND WHY IT HAD TO BE INTENT-AWARE. The latch and its tie-break live in ONE agent attribute, \"prio\": a flagged node stores a random roll in [0, 1), an unflagged one stores that roll plus 2. A division round splits a node only if its value is below 1.5 (still latched) AND strictly below every bonded neighbour's (it won the contest); the splitter then writes 2.5, which consumes the latch and stops it blocking the neighbours it beat. Strict inequality cannot hold both ways, so one round's splitters are pairwise non-adjacent for any rolls; and a node that did not want to split sits above 2, so it never blocks anyone. That last part is not a nicety. The obvious version of the gate — compare raw rolls, flagged or not — makes a flagged node wait until it is the local minimum among ALL its neighbours, which discards roughly three quarters of the splits even when the flagged nodes are already pairwise non-adjacent, and for several published rules that is enough to drop the automaton into its absorbing all-OFF configuration and stop it dead.\n\nTHE CADENCE. One reference tick is 9 generations, so the force solver gets 9 force passes per rewrite — more relaxation per rewrite than a two-generation cadence gives, at a lower per-generation cost.\n\nTHE LAYOUT. Long-range GLOBAL charge: every pair repels, summed through a deterministic Barnes-Hut octree rather than cut off at a radius. That matches the reference demo's own n-body layout, and it is what a growing graph needs — a finite cutoff degrades as the population rises while global holds its quality flat. Because that charge has no cutoff the structure inflates well past bond-rest spacing, and how far depends on the shape a rule grows, so the world is sized from a MEASURED extent rather than from a packing formula: grown to the 10000-node cap inside a deliberately oversized world, meduza spans 4639 x 4075 units, exp tree 5231 x 5497 and the stringiest rule in the catalogue, Rule 17957, 8378 x 8234. The shipped world is 12000 — over twice the extent of the compact-blob rules and clear of the stringiest one — and a run to the cap was verified with zero agents on the boundary. It is not made larger than that on purpose: the view fits the world, so an oversized world would leave the interesting early growth a speck.\n\nCOMPILE TARGET. Engine is set to Auto with an Exact reproducibility contract, so the agent layer resolves to WebAssembly: the WebGPU agent target seeds its per-agent RNG once at runtime creation, so a fixed seed would not replay there. Everything else about the model runs on all three agent targets.",
+  "instructions": "Press Play. Ten seed nodes wire themselves into the reference implementation's exact starting graph, then the automaton grows by triangle splits while the force layout untangles it. Watch the indicators: max degree pins at 3 and E tracks 3N/2 exactly, forever.\n\nThe two viewers are the point. \"Birth generation\" is the reference demo's look — each node coloured by when it was born, so the structure reads as its own growth history. \"State\" shows the single bit the rule runs on.\n\nOpen the Presets list and load the published rules: quadratic grows steadily, meduza and exp tree take completely different shapes, and the mutation presets keep rules alive that stall without noise. The twelve named rules come first, then the demo's eleven further rules under their rule number. Mutation Rate is a live slider — nudge it on a stalled rule and watch it restart. In the Attributes panel, Randomize either rule table to roll an automaton nobody has seen; the seed and density are stored, so an interesting one reproduces exactly.\n\nOne reference tick is 9 generations: a state tick that latches which nodes will divide, then 8 division rounds that drain those latches a non-adjacent set at a time, so the node count climbs over several generations and then pauses while the next state is computed. The simulation stops at 10000 nodes.\n\nThe world is big enough that a full-grown structure never reaches its edge, so while the graph is still young it is small in the view — scroll to zoom in on it, and back out as it grows.",
   "topology": "2d-grid",
   "boundaryTreatment": "constant",
   "updateMode": "synchronous",
   "asyncScheme": "random-order",
-  "gridWidth": 800,
-  "gridHeight": 800,
+  "gridWidth": 12000,
+  "gridHeight": 12000,
   "maxIterations": 100000,
   "tags": [
    "agents",
@@ -31,7 +31,7 @@
      "id": "capGuard",
      "indicatorId": "nodes",
      "op": ">=",
-     "value": "6000"
+     "value": "10000"
     }
    ]
   }
@@ -237,11 +237,11 @@
  "centerBased": {
   "enabled": true,
   "agentTarget": "auto",
-  "maxAgents": 12000,
+  "maxAgents": 24000,
   "maxBonds": 3,
   "bondRequestDepth": 8,
-  "worldWidth": 800,
-  "worldHeight": 800,
+  "worldWidth": 12000,
+  "worldHeight": 12000,
   "seedCount": 0,
   "seedPattern": "compact",
   "defaultRadius": 0.9,
@@ -264,7 +264,7 @@
   "chargeStrength": -10,
   "chargeRange": "global",
   "chargeTheta": 0.9,
-  "layoutIterations": 3,
+  "layoutIterations": 1,
   "agentCapabilities": {
    "motion": "force",
    "body": true,
@@ -297,7 +297,7 @@
    "name": "prio",
    "type": "float",
    "defaultValue": "2.5",
-   "description": "The division intent AND its tie-break in one number, written by the state tick and read by the division tick: a flagged node stores its random roll in [0, 1), an unflagged one stores roll + 2. A node splits only if its value is below 1.5 (it was flagged) and strictly below every bonded neighbour's (it won the contest), so the splitters are pairwise non-adjacent while a neighbour that does not want to split never blocks anyone. The default is a non-splitter value, so a newborn can never look flagged before its first state tick."
+   "description": "The LATCHED division intent AND its tie-break in one number. The state tick writes it: a flagged node stores its random roll in [0, 1), an unflagged one stores roll + 2. Each of the 8 division rounds that follow splits a node only if its value is below 1.5 (still latched) and strictly below every bonded neighbour's (it won the contest); a splitter then writes 2.5, which consumes its latch AND stops it blocking the neighbours it beat, so they split in a later round of the same tick against the adjacency it just rewrote. Strict inequality cannot hold both ways, so the splitters of any one round are pairwise non-adjacent. The default 2.5 is a non-splitter value, so a newborn can never divide in a later round of the tick it was born in."
   }
  ],
  "agentVariables": [],
@@ -337,7 +337,7 @@
  ],
  "agentGraphNodes": [
   {
-   "id": "nmse77l3y33hu",
+   "id": "nmsed690slskp",
    "type": "caNode",
    "position": {
     "x": 0,
@@ -349,7 +349,7 @@
    }
   },
   {
-   "id": "nmse77l3ytypi",
+   "id": "nmsed690svweg",
    "type": "caNode",
    "position": {
     "x": 240,
@@ -364,7 +364,7 @@
    }
   },
   {
-   "id": "nmse77l3ze4xs",
+   "id": "nmsed690sm24b",
    "type": "caNode",
    "position": {
     "x": 480,
@@ -381,7 +381,7 @@
    }
   },
   {
-   "id": "nmse77l3ztndx",
+   "id": "nmsed690s24mi",
    "type": "caNode",
    "position": {
     "x": 480,
@@ -398,7 +398,7 @@
    }
   },
   {
-   "id": "nmse77l3z9me8",
+   "id": "nmsed690se42x",
    "type": "caNode",
    "position": {
     "x": 720,
@@ -412,7 +412,7 @@
    }
   },
   {
-   "id": "nmse77l3zg7mw",
+   "id": "nmsed690sr5ud",
    "type": "caNode",
    "position": {
     "x": 960,
@@ -424,7 +424,7 @@
    }
   },
   {
-   "id": "nmse77l3z026r",
+   "id": "nmsed690sx3p0",
    "type": "caNode",
    "position": {
     "x": 720,
@@ -438,7 +438,7 @@
    }
   },
   {
-   "id": "nmse77l3zwh18",
+   "id": "nmsed690siuzd",
    "type": "caNode",
    "position": {
     "x": 1200,
@@ -452,7 +452,7 @@
    }
   },
   {
-   "id": "nmse77l3z8s3j",
+   "id": "nmsed690srkrx",
    "type": "caNode",
    "position": {
     "x": 0,
@@ -464,7 +464,7 @@
    }
   },
   {
-   "id": "nmse77l3zwm5a",
+   "id": "nmsed690sg2qc",
    "type": "caNode",
    "position": {
     "x": 0,
@@ -476,7 +476,7 @@
    }
   },
   {
-   "id": "nmse77l3zzhey",
+   "id": "nmsed690sc5xw",
    "type": "caNode",
    "position": {
     "x": 240,
@@ -492,7 +492,7 @@
    }
   },
   {
-   "id": "nmse77l3z4v6d",
+   "id": "nmsed690sx6jl",
    "type": "caNode",
    "position": {
     "x": 480,
@@ -504,7 +504,7 @@
    }
   },
   {
-   "id": "nmse77l3zwxjg",
+   "id": "nmsed690spkvp",
    "type": "caNode",
    "position": {
     "x": 480,
@@ -516,7 +516,7 @@
    }
   },
   {
-   "id": "nmse77l3zy0k5",
+   "id": "nmsed690siucz",
    "type": "caNode",
    "position": {
     "x": 720,
@@ -532,7 +532,7 @@
    }
   },
   {
-   "id": "nmse77l3zfipk",
+   "id": "nmsed690s75dc",
    "type": "caNode",
    "position": {
     "x": 720,
@@ -548,7 +548,7 @@
    }
   },
   {
-   "id": "nmse77l3zz6v6",
+   "id": "nmsed690shutn",
    "type": "caNode",
    "position": {
     "x": 720,
@@ -562,7 +562,7 @@
    }
   },
   {
-   "id": "nmse77l3z5y5d",
+   "id": "nmsed690s8pze",
    "type": "caNode",
    "position": {
     "x": 960,
@@ -577,7 +577,7 @@
    }
   },
   {
-   "id": "nmse77l3zxs0f",
+   "id": "nmsed690svunr",
    "type": "caNode",
    "position": {
     "x": 960,
@@ -592,7 +592,7 @@
    }
   },
   {
-   "id": "nmse77l3zexa1",
+   "id": "nmsed690sl8bi",
    "type": "caNode",
    "position": {
     "x": 960,
@@ -607,7 +607,7 @@
    }
   },
   {
-   "id": "nmse77l3zm6uy",
+   "id": "nmsed690s3tr9",
    "type": "caNode",
    "position": {
     "x": 0,
@@ -616,13 +616,13 @@
    "data": {
     "nodeType": "periodicStep",
     "config": {
-     "period": 2,
+     "period": 9,
      "phase": 0
     }
    }
   },
   {
-   "id": "nmse77l3z6uz8",
+   "id": "nmsed690slo8y",
    "type": "caNode",
    "position": {
     "x": 0,
@@ -637,7 +637,7 @@
    }
   },
   {
-   "id": "nmse77l3zxm0k",
+   "id": "nmsed690s97eh",
    "type": "caNode",
    "position": {
     "x": 0,
@@ -651,7 +651,7 @@
    }
   },
   {
-   "id": "nmse77l3zaf55",
+   "id": "nmsed690s3tty",
    "type": "caNode",
    "position": {
     "x": 240,
@@ -667,7 +667,7 @@
    }
   },
   {
-   "id": "nmse77l3zi27s",
+   "id": "nmsed690s1qxf",
    "type": "caNode",
    "position": {
     "x": 480,
@@ -679,7 +679,7 @@
    }
   },
   {
-   "id": "nmse77l3zwpyj",
+   "id": "nmsed690suee7",
    "type": "caNode",
    "position": {
     "x": 720,
@@ -693,7 +693,7 @@
    }
   },
   {
-   "id": "nmse77l3zjweh",
+   "id": "nmsed690s2pg0",
    "type": "caNode",
    "position": {
     "x": 720,
@@ -709,7 +709,7 @@
    }
   },
   {
-   "id": "nmse77l3z5oml",
+   "id": "nmsed690sy8v9",
    "type": "caNode",
    "position": {
     "x": 720,
@@ -723,7 +723,7 @@
    }
   },
   {
-   "id": "nmse77l3z23u0",
+   "id": "nmsed690sdmg4",
    "type": "caNode",
    "position": {
     "x": 960,
@@ -738,7 +738,7 @@
    }
   },
   {
-   "id": "nmse77l3zirs3",
+   "id": "nmsed690sxhk2",
    "type": "caNode",
    "position": {
     "x": 1200,
@@ -755,7 +755,7 @@
    }
   },
   {
-   "id": "nmse77l3z45jv",
+   "id": "nmsed690sw6hj",
    "type": "caNode",
    "position": {
     "x": 1440,
@@ -769,7 +769,7 @@
    }
   },
   {
-   "id": "nmse77l3zuu1a",
+   "id": "nmsed690sava4",
    "type": "caNode",
    "position": {
     "x": 720,
@@ -783,7 +783,7 @@
    }
   },
   {
-   "id": "nmse77l3zceln",
+   "id": "nmsed690soooa",
    "type": "caNode",
    "position": {
     "x": 720,
@@ -799,7 +799,7 @@
    }
   },
   {
-   "id": "nmse77l3zsjtm",
+   "id": "nmsed690snn4j",
    "type": "caNode",
    "position": {
     "x": 1200,
@@ -816,7 +816,7 @@
    }
   },
   {
-   "id": "nmse77l3ze2e8",
+   "id": "nmsed690slz26",
    "type": "caNode",
    "position": {
     "x": 1440,
@@ -830,22 +830,62 @@
    }
   },
   {
-   "id": "nmse77l3zqbse",
+   "id": "nmsed690sdt88",
    "type": "caNode",
    "position": {
     "x": 0,
     "y": 1520
    },
    "data": {
-    "nodeType": "periodicStep",
+    "nodeType": "getGeneration",
+    "config": {}
+   }
+  },
+  {
+   "id": "nmsed690swl2s",
+   "type": "caNode",
+   "position": {
+    "x": 240,
+    "y": 1520
+   },
+   "data": {
+    "nodeType": "arithmeticOperator",
     "config": {
-     "period": 2,
-     "phase": 1
+     "operation": "%",
+     "_port_y": "9"
     }
    }
   },
   {
-   "id": "nmse77l3zsd5j",
+   "id": "nmsed690sjz03",
+   "type": "caNode",
+   "position": {
+    "x": 480,
+    "y": 1520
+   },
+   "data": {
+    "nodeType": "statement",
+    "config": {
+     "operation": "!=",
+     "compareType": "numerical",
+     "_port_y": "0"
+    }
+   }
+  },
+  {
+   "id": "nmsed690sce1t",
+   "type": "caNode",
+   "position": {
+    "x": 720,
+    "y": 1520
+   },
+   "data": {
+    "nodeType": "conditional",
+    "config": {}
+   }
+  },
+  {
+   "id": "nmsed690sqcah",
    "type": "caNode",
    "position": {
     "x": 0,
@@ -859,7 +899,7 @@
    }
   },
   {
-   "id": "nmse77l3zmrdm",
+   "id": "nmsed690swb2w",
    "type": "caNode",
    "position": {
     "x": 240,
@@ -875,7 +915,7 @@
    }
   },
   {
-   "id": "nmse77l3zrk3n",
+   "id": "nmsed690snd6d",
    "type": "caNode",
    "position": {
     "x": 0,
@@ -887,7 +927,7 @@
    }
   },
   {
-   "id": "nmse77l3zb53o",
+   "id": "nmsed690s2nmh",
    "type": "caNode",
    "position": {
     "x": 240,
@@ -901,7 +941,7 @@
    }
   },
   {
-   "id": "nmse77l3zv2ug",
+   "id": "nmsed690syzmr",
    "type": "caNode",
    "position": {
     "x": 480,
@@ -915,7 +955,7 @@
    }
   },
   {
-   "id": "nmse77l3z8dla",
+   "id": "nmsed690s07g2",
    "type": "caNode",
    "position": {
     "x": 720,
@@ -930,7 +970,7 @@
    }
   },
   {
-   "id": "nmse77l3zrbzz",
+   "id": "nmsed690s2yhh",
    "type": "caNode",
    "position": {
     "x": 720,
@@ -946,7 +986,7 @@
    }
   },
   {
-   "id": "nmse77l3zqsja",
+   "id": "nmsed690s19oi",
    "type": "caNode",
    "position": {
     "x": 1200,
@@ -960,7 +1000,7 @@
    }
   },
   {
-   "id": "nmse77l3z5hge",
+   "id": "nmsed690sjrno",
    "type": "caNode",
    "position": {
     "x": 1440,
@@ -974,7 +1014,7 @@
    }
   },
   {
-   "id": "nmse77l3zu75h",
+   "id": "nmsed690s4ofv",
    "type": "caNode",
    "position": {
     "x": 1680,
@@ -986,7 +1026,7 @@
    }
   },
   {
-   "id": "nmse77l3znktl",
+   "id": "nmsed690s6fyd",
    "type": "caNode",
    "position": {
     "x": 1680,
@@ -1000,7 +1040,7 @@
    }
   },
   {
-   "id": "nmse77l3zpe2x",
+   "id": "nmsed690s3hxi",
    "type": "caNode",
    "position": {
     "x": 240,
@@ -1014,7 +1054,7 @@
    }
   },
   {
-   "id": "nmse77l3zyzrm",
+   "id": "nmsed690sf1tf",
    "type": "caNode",
    "position": {
     "x": 240,
@@ -1028,7 +1068,7 @@
    }
   },
   {
-   "id": "nmse77l3z72kr",
+   "id": "nmsed690s1e8w",
    "type": "caNode",
    "position": {
     "x": 1920,
@@ -1040,7 +1080,7 @@
    }
   },
   {
-   "id": "nmse77l3zte3d",
+   "id": "nmsed690s8bxx",
    "type": "caNode",
    "position": {
     "x": 1920,
@@ -1054,7 +1094,7 @@
    }
   },
   {
-   "id": "nmse77l3zm7ho",
+   "id": "nmsed690sa443",
    "type": "caNode",
    "position": {
     "x": 1920,
@@ -1068,7 +1108,7 @@
    }
   },
   {
-   "id": "nmse77l3zboqu",
+   "id": "nmsed690sgd5i",
    "type": "caNode",
    "position": {
     "x": 2160,
@@ -1086,7 +1126,7 @@
    }
   },
   {
-   "id": "nmse77l3z9xit",
+   "id": "nmsed690ss2i8",
    "type": "caNode",
    "position": {
     "x": 2160,
@@ -1104,7 +1144,7 @@
    }
   },
   {
-   "id": "nmse77l3z2szk",
+   "id": "nmsed690s01q4",
    "type": "caNode",
    "position": {
     "x": 2160,
@@ -1122,7 +1162,7 @@
    }
   },
   {
-   "id": "nmse77l3z6c47",
+   "id": "nmsed690sqlg0",
    "type": "caNode",
    "position": {
     "x": 2160,
@@ -1140,7 +1180,7 @@
    }
   },
   {
-   "id": "nmse77l3zg1vp",
+   "id": "nmsed690s3utf",
    "type": "caNode",
    "position": {
     "x": 2400,
@@ -1154,7 +1194,7 @@
    }
   },
   {
-   "id": "nmse77l3zja7y",
+   "id": "nmsed690svmxe",
    "type": "caNode",
    "position": {
     "x": 2640,
@@ -1166,7 +1206,7 @@
    }
   },
   {
-   "id": "nmse77l3zdqax",
+   "id": "nmsed690sg14b",
    "type": "caNode",
    "position": {
     "x": 2880,
@@ -1180,7 +1220,7 @@
    }
   },
   {
-   "id": "nmse77l3zej7e",
+   "id": "nmsed690sg5a3",
    "type": "caNode",
    "position": {
     "x": 2400,
@@ -1194,7 +1234,7 @@
    }
   },
   {
-   "id": "nmse77l3zcror",
+   "id": "nmsed690sk1k8",
    "type": "caNode",
    "position": {
     "x": 2640,
@@ -1206,7 +1246,7 @@
    }
   },
   {
-   "id": "nmse77l3z5yf4",
+   "id": "nmsed690st8dz",
    "type": "caNode",
    "position": {
     "x": 2880,
@@ -1220,7 +1260,7 @@
    }
   },
   {
-   "id": "nmse77l40t1vx",
+   "id": "nmsed690s7zsm",
    "type": "caNode",
    "position": {
     "x": 3120,
@@ -1235,7 +1275,7 @@
    }
   },
   {
-   "id": "nmse77l40sgt3",
+   "id": "nmsed690tz5bb",
    "type": "caNode",
    "position": {
     "x": 3120,
@@ -1250,7 +1290,7 @@
    }
   },
   {
-   "id": "nmse77l4039mb",
+   "id": "nmsed690ttwv8",
    "type": "caNode",
    "position": {
     "x": 3120,
@@ -1265,7 +1305,7 @@
    }
   },
   {
-   "id": "nmse77l408ya9",
+   "id": "nmsed690thlxq",
    "type": "caNode",
    "position": {
     "x": 3120,
@@ -1280,7 +1320,7 @@
    }
   },
   {
-   "id": "nmse77l406z9o",
+   "id": "nmsed690t594d",
    "type": "caNode",
    "position": {
     "x": 3120,
@@ -1295,7 +1335,22 @@
    }
   },
   {
-   "id": "nmse77l40x492",
+   "id": "nmsed690taccf",
+   "type": "caNode",
+   "position": {
+    "x": 3360,
+    "y": 2090
+   },
+   "data": {
+    "nodeType": "setAttribute",
+    "config": {
+     "attributeId": "prio",
+     "_port_value": "2.5"
+    }
+   }
+  },
+  {
+   "id": "nmsed690tif9j",
    "type": "caNode",
    "position": {
     "x": 0,
@@ -1309,7 +1364,7 @@
    }
   },
   {
-   "id": "nmse77l40nkg9",
+   "id": "nmsed690t5whq",
    "type": "caNode",
    "position": {
     "x": 0,
@@ -1321,7 +1376,7 @@
    }
   },
   {
-   "id": "nmse77l40y8an",
+   "id": "nmsed690tbaiy",
    "type": "caNode",
    "position": {
     "x": 0,
@@ -1333,7 +1388,7 @@
    }
   },
   {
-   "id": "nmse77l40wfxl",
+   "id": "nmsed690t3j97",
    "type": "caNode",
    "position": {
     "x": 240,
@@ -1350,7 +1405,7 @@
    }
   },
   {
-   "id": "nmse77l40hksd",
+   "id": "nmsed690tizut",
    "type": "caNode",
    "position": {
     "x": 480,
@@ -1385,7 +1440,7 @@
    }
   },
   {
-   "id": "nmse77l4055ze",
+   "id": "nmsed690t8vnm",
    "type": "caNode",
    "position": {
     "x": 720,
@@ -1404,772 +1459,807 @@
  ],
  "agentGraphEdges": [
   {
-   "id": "emse77l3z42zb",
-   "source": "nmse77l3y33hu",
-   "target": "nmse77l3ytypi",
+   "id": "emsed690sq5cw",
+   "source": "nmsed690slskp",
+   "target": "nmsed690svweg",
    "sourceHandle": "output_flow_do",
    "targetHandle": "input_flow_do"
   },
   {
-   "id": "emse77l3z53qn",
-   "source": "nmse77l3ytypi",
-   "target": "nmse77l3ze4xs",
+   "id": "emsed690s3ro1",
+   "source": "nmsed690svweg",
+   "target": "nmsed690sm24b",
    "sourceHandle": "output_value_index",
    "targetHandle": "input_value_a"
   },
   {
-   "id": "emse77l3zknlf",
-   "source": "nmse77l3y33hu",
-   "target": "nmse77l3ze4xs",
+   "id": "emsed690sgyq7",
+   "source": "nmsed690slskp",
+   "target": "nmsed690sm24b",
    "sourceHandle": "output_value_worldWidth",
    "targetHandle": "input_value_b"
   },
   {
-   "id": "emse77l3ztnk0",
-   "source": "nmse77l3ytypi",
-   "target": "nmse77l3ztndx",
+   "id": "emsed690so3br",
+   "source": "nmsed690svweg",
+   "target": "nmsed690s24mi",
    "sourceHandle": "output_value_index",
    "targetHandle": "input_value_a"
   },
   {
-   "id": "emse77l3z35m6",
-   "source": "nmse77l3y33hu",
-   "target": "nmse77l3ztndx",
+   "id": "emsed690sx52u",
+   "source": "nmsed690slskp",
+   "target": "nmsed690s24mi",
    "sourceHandle": "output_value_worldHeight",
    "targetHandle": "input_value_b"
   },
   {
-   "id": "emse77l3zg6i1",
-   "source": "nmse77l3ze4xs",
-   "target": "nmse77l3z9me8",
+   "id": "emsed690sym4z",
+   "source": "nmsed690sm24b",
+   "target": "nmsed690se42x",
    "sourceHandle": "output_value_result",
    "targetHandle": "input_value_x"
   },
   {
-   "id": "emse77l3z9ze2",
-   "source": "nmse77l3ztndx",
-   "target": "nmse77l3z9me8",
+   "id": "emsed690szgq4",
+   "source": "nmsed690s24mi",
+   "target": "nmsed690se42x",
    "sourceHandle": "output_value_result",
    "targetHandle": "input_value_y"
   },
   {
-   "id": "emse77l3zbeep",
-   "source": "nmse77l3z9me8",
-   "target": "nmse77l3zg7mw",
+   "id": "emsed690s73l2",
+   "source": "nmsed690se42x",
+   "target": "nmsed690sr5ud",
    "sourceHandle": "output_value_handle",
    "targetHandle": "input_value_handle"
   },
   {
-   "id": "emse77l3zubg7",
-   "source": "nmse77l3ytypi",
-   "target": "nmse77l3z026r",
+   "id": "emsed690skwg5",
+   "source": "nmsed690svweg",
+   "target": "nmsed690sx3p0",
    "sourceHandle": "output_value_index",
    "targetHandle": "input_value_axis_0"
   },
   {
-   "id": "emse77l3zh4sg",
-   "source": "nmse77l3z9me8",
-   "target": "nmse77l3zwh18",
+   "id": "emsed690s6tg0",
+   "source": "nmsed690se42x",
+   "target": "nmsed690siuzd",
    "sourceHandle": "output_value_handle",
    "targetHandle": "input_value_agentId"
   },
   {
-   "id": "emse77l3z9ftg",
-   "source": "nmse77l3z026r",
-   "target": "nmse77l3zwh18",
+   "id": "emsed690s9hsc",
+   "source": "nmsed690sx3p0",
+   "target": "nmsed690siuzd",
    "sourceHandle": "output_value_value",
    "targetHandle": "input_value_value"
   },
   {
-   "id": "emse77l3z24e3",
-   "source": "nmse77l3ytypi",
-   "target": "nmse77l3z9me8",
+   "id": "emsed690s1vhw",
+   "source": "nmsed690svweg",
+   "target": "nmsed690se42x",
    "sourceHandle": "output_flow_body",
    "targetHandle": "input_flow_do"
   },
   {
-   "id": "emse77l3z60va",
-   "source": "nmse77l3z9me8",
-   "target": "nmse77l3zg7mw",
+   "id": "emsed690s23kr",
+   "source": "nmsed690se42x",
+   "target": "nmsed690sr5ud",
    "sourceHandle": "output_flow_next",
    "targetHandle": "input_flow_do"
   },
   {
-   "id": "emse77l3z1g7c",
-   "source": "nmse77l3zg7mw",
-   "target": "nmse77l3zwh18",
+   "id": "emsed690s904k",
+   "source": "nmsed690sr5ud",
+   "target": "nmsed690siuzd",
    "sourceHandle": "output_flow_next",
    "targetHandle": "input_flow_do"
   },
   {
-   "id": "emse77l3zw3mu",
-   "source": "nmse77l3zwm5a",
-   "target": "nmse77l3zzhey",
+   "id": "emsed690sjs5o",
+   "source": "nmsed690sg2qc",
+   "target": "nmsed690sc5xw",
    "sourceHandle": "output_value_value",
    "targetHandle": "input_value_x"
   },
   {
-   "id": "emse77l3zhmhx",
-   "source": "nmse77l3z8s3j",
-   "target": "nmse77l3z4v6d",
+   "id": "emsed690s7zcj",
+   "source": "nmsed690srkrx",
+   "target": "nmsed690sx6jl",
    "sourceHandle": "output_flow_do",
    "targetHandle": "input_flow_check"
   },
   {
-   "id": "emse77l3zzqis",
-   "source": "nmse77l3zzhey",
-   "target": "nmse77l3z4v6d",
+   "id": "emsed690s766b",
+   "source": "nmsed690sc5xw",
+   "target": "nmsed690sx6jl",
    "sourceHandle": "output_value_result",
    "targetHandle": "input_value_condition"
   },
   {
-   "id": "emse77l3z7en7",
-   "source": "nmse77l3zwxjg",
-   "target": "nmse77l3zy0k5",
+   "id": "emsed690srrjj",
+   "source": "nmsed690spkvp",
+   "target": "nmsed690siucz",
    "sourceHandle": "output_value_handle",
    "targetHandle": "input_value_a"
   },
   {
-   "id": "emse77l3zus3b",
-   "source": "nmse77l3zwxjg",
-   "target": "nmse77l3zfipk",
+   "id": "emsed690so05t",
+   "source": "nmsed690spkvp",
+   "target": "nmsed690s75dc",
    "sourceHandle": "output_value_handle",
    "targetHandle": "input_value_a"
   },
   {
-   "id": "emse77l3zod42",
-   "source": "nmse77l3zwxjg",
-   "target": "nmse77l3zz6v6",
+   "id": "emsed690signu",
+   "source": "nmsed690spkvp",
+   "target": "nmsed690shutn",
    "sourceHandle": "output_value_handle",
    "targetHandle": "input_value_axis_0"
   },
   {
-   "id": "emse77l3z2idp",
-   "source": "nmse77l3zy0k5",
-   "target": "nmse77l3z5y5d",
+   "id": "emsed690s4080",
+   "source": "nmsed690siucz",
+   "target": "nmsed690s8pze",
    "sourceHandle": "output_value_result",
    "targetHandle": "input_value_targetAgent"
   },
   {
-   "id": "emse77l3z18d5",
-   "source": "nmse77l3zfipk",
-   "target": "nmse77l3zxs0f",
+   "id": "emsed690s1bog",
+   "source": "nmsed690s75dc",
+   "target": "nmsed690svunr",
    "sourceHandle": "output_value_result",
    "targetHandle": "input_value_targetAgent"
   },
   {
-   "id": "emse77l3zj73d",
-   "source": "nmse77l3zz6v6",
-   "target": "nmse77l3zexa1",
+   "id": "emsed690ssfrl",
+   "source": "nmsed690shutn",
+   "target": "nmsed690sl8bi",
    "sourceHandle": "output_value_value",
    "targetHandle": "input_value_targetAgent"
   },
   {
-   "id": "emse77l3z3s95",
-   "source": "nmse77l3z4v6d",
-   "target": "nmse77l3z5y5d",
+   "id": "emsed690s5rtc",
+   "source": "nmsed690sx6jl",
+   "target": "nmsed690s8pze",
    "sourceHandle": "output_flow_then",
    "targetHandle": "input_flow_do"
   },
   {
-   "id": "emse77l3zbhko",
-   "source": "nmse77l3z5y5d",
-   "target": "nmse77l3zxs0f",
+   "id": "emsed690s3lch",
+   "source": "nmsed690s8pze",
+   "target": "nmsed690svunr",
    "sourceHandle": "output_flow_next",
    "targetHandle": "input_flow_do"
   },
   {
-   "id": "emse77l3zc7py",
-   "source": "nmse77l3zxs0f",
-   "target": "nmse77l3zexa1",
+   "id": "emsed690s2yjm",
+   "source": "nmsed690svunr",
+   "target": "nmsed690sl8bi",
    "sourceHandle": "output_flow_next",
    "targetHandle": "input_flow_do"
   },
   {
-   "id": "emse77l3zbymf",
-   "source": "nmse77l3z6uz8",
-   "target": "nmse77l3zaf55",
+   "id": "emsed690so8h8",
+   "source": "nmsed690slo8y",
+   "target": "nmsed690s3tty",
    "sourceHandle": "output_value_total",
    "targetHandle": "input_value_x"
   },
   {
-   "id": "emse77l3zpxr3",
-   "source": "nmse77l3zm6uy",
-   "target": "nmse77l3zi27s",
+   "id": "emsed690sn5sq",
+   "source": "nmsed690s3tr9",
+   "target": "nmsed690s1qxf",
    "sourceHandle": "output_flow_do",
    "targetHandle": "input_flow_check"
   },
   {
-   "id": "emse77l3z24kk",
-   "source": "nmse77l3zaf55",
-   "target": "nmse77l3zi27s",
+   "id": "emsed690sj0e8",
+   "source": "nmsed690s3tty",
+   "target": "nmsed690s1qxf",
    "sourceHandle": "output_value_result",
    "targetHandle": "input_value_condition"
   },
   {
-   "id": "emse77l3zmuep",
-   "source": "nmse77l3zxm0k",
-   "target": "nmse77l3zwpyj",
+   "id": "emsed690shjxs",
+   "source": "nmsed690s97eh",
+   "target": "nmsed690suee7",
    "sourceHandle": "output_value_value",
    "targetHandle": "input_value_axis_0"
   },
   {
-   "id": "emse77l3z6wvp",
-   "source": "nmse77l3z6uz8",
-   "target": "nmse77l3zwpyj",
+   "id": "emsed690s366k",
+   "source": "nmsed690slo8y",
+   "target": "nmsed690suee7",
    "sourceHandle": "output_value_count_1",
    "targetHandle": "input_value_axis_1"
   },
   {
-   "id": "emse77l3zjfz9",
-   "source": "nmse77l3zjweh",
-   "target": "nmse77l3z23u0",
+   "id": "emsed690sdvay",
+   "source": "nmsed690s2pg0",
+   "target": "nmsed690sdmg4",
    "sourceHandle": "output_value_value",
    "targetHandle": "input_value_x"
   },
   {
-   "id": "emse77l3zarbh",
-   "source": "nmse77l3z5oml",
-   "target": "nmse77l3z23u0",
+   "id": "emsed690sf7fo",
+   "source": "nmsed690sy8v9",
+   "target": "nmsed690sdmg4",
    "sourceHandle": "output_value_value",
    "targetHandle": "input_value_y"
   },
   {
-   "id": "emse77l3zpkgy",
-   "source": "nmse77l3zwpyj",
-   "target": "nmse77l3zirs3",
+   "id": "emsed690shfoe",
+   "source": "nmsed690suee7",
+   "target": "nmsed690sxhk2",
    "sourceHandle": "output_value_value",
    "targetHandle": "input_value_a"
   },
   {
-   "id": "emse77l3z3h40",
-   "source": "nmse77l3z23u0",
-   "target": "nmse77l3zirs3",
+   "id": "emsed690s718r",
+   "source": "nmsed690sdmg4",
+   "target": "nmsed690sxhk2",
    "sourceHandle": "output_value_result",
    "targetHandle": "input_value_b"
   },
   {
-   "id": "emse77l3zvxk7",
-   "source": "nmse77l3zirs3",
-   "target": "nmse77l3z45jv",
+   "id": "emsed690sul41",
+   "source": "nmsed690sxhk2",
+   "target": "nmsed690sw6hj",
    "sourceHandle": "output_value_result",
    "targetHandle": "input_value_value"
   },
   {
-   "id": "emse77l3z844t",
-   "source": "nmse77l3zi27s",
-   "target": "nmse77l3z45jv",
+   "id": "emsed690s2bf4",
+   "source": "nmsed690s1qxf",
+   "target": "nmsed690sw6hj",
    "sourceHandle": "output_flow_then",
    "targetHandle": "input_flow_do"
   },
   {
-   "id": "emse77l3zw38f",
-   "source": "nmse77l3zxm0k",
-   "target": "nmse77l3zuu1a",
+   "id": "emsed690s195b",
+   "source": "nmsed690s97eh",
+   "target": "nmsed690sava4",
    "sourceHandle": "output_value_value",
    "targetHandle": "input_value_axis_0"
   },
   {
-   "id": "emse77l3znfiq",
-   "source": "nmse77l3z6uz8",
-   "target": "nmse77l3zuu1a",
+   "id": "emsed690st51l",
+   "source": "nmsed690slo8y",
+   "target": "nmsed690sava4",
    "sourceHandle": "output_value_count_1",
    "targetHandle": "input_value_axis_1"
   },
   {
-   "id": "emse77l3z9ns5",
-   "source": "nmse77l3zceln",
-   "target": "nmse77l3zsjtm",
+   "id": "emsed690siuom",
+   "source": "nmsed690soooa",
+   "target": "nmsed690snn4j",
    "sourceHandle": "output_value_value",
    "targetHandle": "input_value_a"
   },
   {
-   "id": "emse77l3z5h87",
-   "source": "nmse77l3zuu1a",
-   "target": "nmse77l3zsjtm",
+   "id": "emsed690sho4s",
+   "source": "nmsed690sava4",
+   "target": "nmsed690snn4j",
    "sourceHandle": "output_value_value",
    "targetHandle": "input_value_b"
   },
   {
-   "id": "emse77l3z8wfv",
-   "source": "nmse77l3zsjtm",
-   "target": "nmse77l3ze2e8",
+   "id": "emsed690seawm",
+   "source": "nmsed690snn4j",
+   "target": "nmsed690slz26",
    "sourceHandle": "output_value_result",
    "targetHandle": "input_value_value"
   },
   {
-   "id": "emse77l3zwmbi",
-   "source": "nmse77l3z45jv",
-   "target": "nmse77l3ze2e8",
+   "id": "emsed690ssik9",
+   "source": "nmsed690sw6hj",
+   "target": "nmsed690slz26",
    "sourceHandle": "output_flow_next",
    "targetHandle": "input_flow_do"
   },
   {
-   "id": "emse77l3zkhk2",
-   "source": "nmse77l3zsd5j",
-   "target": "nmse77l3zmrdm",
+   "id": "emsed690swpgh",
+   "source": "nmsed690sdt88",
+   "target": "nmsed690swl2s",
    "sourceHandle": "output_value_value",
    "targetHandle": "input_value_x"
   },
   {
-   "id": "emse77l3zlejd",
-   "source": "nmse77l3zrk3n",
-   "target": "nmse77l3zb53o",
+   "id": "emsed690sjnc5",
+   "source": "nmsed690swl2s",
+   "target": "nmsed690sjz03",
+   "sourceHandle": "output_value_result",
+   "targetHandle": "input_value_x"
+  },
+  {
+   "id": "emsed690si9fg",
+   "source": "nmsed690sx6jl",
+   "target": "nmsed690sce1t",
+   "sourceHandle": "output_flow_next",
+   "targetHandle": "input_flow_check"
+  },
+  {
+   "id": "emsed690sm1eq",
+   "source": "nmsed690sjz03",
+   "target": "nmsed690sce1t",
+   "sourceHandle": "output_value_result",
+   "targetHandle": "input_value_condition"
+  },
+  {
+   "id": "emsed690sqk8u",
+   "source": "nmsed690sqcah",
+   "target": "nmsed690swb2w",
+   "sourceHandle": "output_value_value",
+   "targetHandle": "input_value_x"
+  },
+  {
+   "id": "emsed690sam42",
+   "source": "nmsed690snd6d",
+   "target": "nmsed690s2nmh",
    "sourceHandle": "output_value_agents",
    "targetHandle": "input_value_agents"
   },
   {
-   "id": "emse77l3zgfmy",
-   "source": "nmse77l3zb53o",
-   "target": "nmse77l3zv2ug",
+   "id": "emsed690sc0ew",
+   "source": "nmsed690s2nmh",
+   "target": "nmsed690syzmr",
    "sourceHandle": "output_value_values",
    "targetHandle": "input_value_values"
   },
   {
-   "id": "emse77l3z52vu",
-   "source": "nmse77l3zsd5j",
-   "target": "nmse77l3z8dla",
+   "id": "emsed690snqdv",
+   "source": "nmsed690sqcah",
+   "target": "nmsed690s07g2",
    "sourceHandle": "output_value_value",
    "targetHandle": "input_value_x"
   },
   {
-   "id": "emse77l3zny8x",
-   "source": "nmse77l3zv2ug",
-   "target": "nmse77l3z8dla",
+   "id": "emsed690sj580",
+   "source": "nmsed690syzmr",
+   "target": "nmsed690s07g2",
    "sourceHandle": "output_value_result",
    "targetHandle": "input_value_y"
   },
   {
-   "id": "emse77l3z7a3l",
-   "source": "nmse77l3zwm5a",
-   "target": "nmse77l3zrbzz",
+   "id": "emsed690smeft",
+   "source": "nmsed690sg2qc",
+   "target": "nmsed690s2yhh",
    "sourceHandle": "output_value_value",
    "targetHandle": "input_value_x"
   },
   {
-   "id": "emse77l3zj0td",
-   "source": "nmse77l3zmrdm",
-   "target": "nmse77l3zqsja",
+   "id": "emsed690sq0ul",
+   "source": "nmsed690swb2w",
+   "target": "nmsed690s19oi",
    "sourceHandle": "output_value_result",
    "targetHandle": "input_value_a"
   },
   {
-   "id": "emse77l3z2oqy",
-   "source": "nmse77l3z8dla",
-   "target": "nmse77l3zqsja",
+   "id": "emsed690szhzc",
+   "source": "nmsed690s07g2",
+   "target": "nmsed690s19oi",
    "sourceHandle": "output_value_result",
    "targetHandle": "input_value_b"
   },
   {
-   "id": "emse77l3zrjvc",
-   "source": "nmse77l3zqsja",
-   "target": "nmse77l3z5hge",
+   "id": "emsed690s9sf2",
+   "source": "nmsed690s19oi",
+   "target": "nmsed690sjrno",
    "sourceHandle": "output_value_result",
    "targetHandle": "input_value_a"
   },
   {
-   "id": "emse77l3zix0g",
-   "source": "nmse77l3zrbzz",
-   "target": "nmse77l3z5hge",
+   "id": "emsed690sw5i4",
+   "source": "nmsed690s2yhh",
+   "target": "nmsed690sjrno",
    "sourceHandle": "output_value_result",
    "targetHandle": "input_value_b"
   },
   {
-   "id": "emse77l3zkqt4",
-   "source": "nmse77l3zqbse",
-   "target": "nmse77l3zu75h",
-   "sourceHandle": "output_flow_do",
+   "id": "emsed690sdall",
+   "source": "nmsed690sce1t",
+   "target": "nmsed690s4ofv",
+   "sourceHandle": "output_flow_then",
    "targetHandle": "input_flow_check"
   },
   {
-   "id": "emse77l3z5dcb",
-   "source": "nmse77l3z5hge",
-   "target": "nmse77l3zu75h",
+   "id": "emsed690slpwn",
+   "source": "nmsed690sjrno",
+   "target": "nmsed690s4ofv",
    "sourceHandle": "output_value_result",
    "targetHandle": "input_value_condition"
   },
   {
-   "id": "emse77l3z5i3f",
-   "source": "nmse77l3zrk3n",
-   "target": "nmse77l3zpe2x",
+   "id": "emsed690sc6c0",
+   "source": "nmsed690snd6d",
+   "target": "nmsed690s3hxi",
    "sourceHandle": "output_value_agents",
    "targetHandle": "input_value_array"
   },
   {
-   "id": "emse77l3zl6ie",
-   "source": "nmse77l3zrk3n",
-   "target": "nmse77l3zyzrm",
+   "id": "emsed690sqqpr",
+   "source": "nmsed690snd6d",
+   "target": "nmsed690sf1tf",
    "sourceHandle": "output_value_agents",
    "targetHandle": "input_value_array"
   },
   {
-   "id": "emse77l3zbv3p",
-   "source": "nmse77l3zpe2x",
-   "target": "nmse77l3zte3d",
+   "id": "emsed690sjj38",
+   "source": "nmsed690s3hxi",
+   "target": "nmsed690s8bxx",
    "sourceHandle": "output_value_value",
    "targetHandle": "input_value_agentId"
   },
   {
-   "id": "emse77l3zz52j",
-   "source": "nmse77l3zyzrm",
-   "target": "nmse77l3zm7ho",
+   "id": "emsed690s65ld",
+   "source": "nmsed690sf1tf",
+   "target": "nmsed690sa443",
    "sourceHandle": "output_value_value",
    "targetHandle": "input_value_agentId"
   },
   {
-   "id": "emse77l3zxb2t",
-   "source": "nmse77l3z72kr",
-   "target": "nmse77l3zboqu",
+   "id": "emsed690scwau",
+   "source": "nmsed690s1e8w",
+   "target": "nmsed690sgd5i",
    "sourceHandle": "output_value_x",
    "targetHandle": "input_value_a"
   },
   {
-   "id": "emse77l3zhl9z",
-   "source": "nmse77l3zte3d",
-   "target": "nmse77l3zboqu",
+   "id": "emsed690su08r",
+   "source": "nmsed690s8bxx",
+   "target": "nmsed690sgd5i",
    "sourceHandle": "output_value_x",
    "targetHandle": "input_value_b"
   },
   {
-   "id": "emse77l3zm8qr",
-   "source": "nmse77l3zsd5j",
-   "target": "nmse77l3zboqu",
+   "id": "emsed690sy46p",
+   "source": "nmsed690sqcah",
+   "target": "nmsed690sgd5i",
    "sourceHandle": "output_value_value",
    "targetHandle": "input_value_c"
   },
   {
-   "id": "emse77l3z6qgg",
-   "source": "nmse77l3z72kr",
-   "target": "nmse77l3z9xit",
+   "id": "emsed690s6imr",
+   "source": "nmsed690s1e8w",
+   "target": "nmsed690ss2i8",
    "sourceHandle": "output_value_y",
    "targetHandle": "input_value_a"
   },
   {
-   "id": "emse77l3z5nsv",
-   "source": "nmse77l3zte3d",
-   "target": "nmse77l3z9xit",
+   "id": "emsed690slxqf",
+   "source": "nmsed690s8bxx",
+   "target": "nmsed690ss2i8",
    "sourceHandle": "output_value_y",
    "targetHandle": "input_value_b"
   },
   {
-   "id": "emse77l3znph8",
-   "source": "nmse77l3zsd5j",
-   "target": "nmse77l3z9xit",
+   "id": "emsed690s322t",
+   "source": "nmsed690sqcah",
+   "target": "nmsed690ss2i8",
    "sourceHandle": "output_value_value",
    "targetHandle": "input_value_c"
   },
   {
-   "id": "emse77l3zyzt2",
-   "source": "nmse77l3z72kr",
-   "target": "nmse77l3z2szk",
+   "id": "emsed690sdabo",
+   "source": "nmsed690s1e8w",
+   "target": "nmsed690s01q4",
    "sourceHandle": "output_value_x",
    "targetHandle": "input_value_a"
   },
   {
-   "id": "emse77l3zb0xc",
-   "source": "nmse77l3zm7ho",
-   "target": "nmse77l3z2szk",
+   "id": "emsed690scqpe",
+   "source": "nmsed690sa443",
+   "target": "nmsed690s01q4",
    "sourceHandle": "output_value_x",
    "targetHandle": "input_value_b"
   },
   {
-   "id": "emse77l3zafn1",
-   "source": "nmse77l3zsd5j",
-   "target": "nmse77l3z2szk",
+   "id": "emsed690sun6d",
+   "source": "nmsed690sqcah",
+   "target": "nmsed690s01q4",
    "sourceHandle": "output_value_value",
    "targetHandle": "input_value_c"
   },
   {
-   "id": "emse77l3zfsr7",
-   "source": "nmse77l3z72kr",
-   "target": "nmse77l3z6c47",
+   "id": "emsed690slgk4",
+   "source": "nmsed690s1e8w",
+   "target": "nmsed690sqlg0",
    "sourceHandle": "output_value_y",
    "targetHandle": "input_value_a"
   },
   {
-   "id": "emse77l3zo65l",
-   "source": "nmse77l3zm7ho",
-   "target": "nmse77l3z6c47",
+   "id": "emsed690s3ifw",
+   "source": "nmsed690sa443",
+   "target": "nmsed690sqlg0",
    "sourceHandle": "output_value_y",
    "targetHandle": "input_value_b"
   },
   {
-   "id": "emse77l3z8emu",
-   "source": "nmse77l3zsd5j",
-   "target": "nmse77l3z6c47",
+   "id": "emsed690s6b1i",
+   "source": "nmsed690sqcah",
+   "target": "nmsed690sqlg0",
    "sourceHandle": "output_value_value",
    "targetHandle": "input_value_c"
   },
   {
-   "id": "emse77l3zpt8s",
-   "source": "nmse77l3zboqu",
-   "target": "nmse77l3zg1vp",
+   "id": "emsed690s34zz",
+   "source": "nmsed690sgd5i",
+   "target": "nmsed690s3utf",
    "sourceHandle": "output_value_result",
    "targetHandle": "input_value_x"
   },
   {
-   "id": "emse77l3zqbfe",
-   "source": "nmse77l3z9xit",
-   "target": "nmse77l3zg1vp",
+   "id": "emsed690spg4t",
+   "source": "nmsed690ss2i8",
+   "target": "nmsed690s3utf",
    "sourceHandle": "output_value_result",
    "targetHandle": "input_value_y"
   },
   {
-   "id": "emse77l3zcmnv",
-   "source": "nmse77l3zg1vp",
-   "target": "nmse77l3zja7y",
+   "id": "emsed690sz616",
+   "source": "nmsed690s3utf",
+   "target": "nmsed690svmxe",
    "sourceHandle": "output_value_handle",
    "targetHandle": "input_value_handle"
   },
   {
-   "id": "emse77l3zzfof",
-   "source": "nmse77l3zg1vp",
-   "target": "nmse77l3zdqax",
+   "id": "emsed690si8o1",
+   "source": "nmsed690s3utf",
+   "target": "nmsed690sg14b",
    "sourceHandle": "output_value_handle",
    "targetHandle": "input_value_agentId"
   },
   {
-   "id": "emse77l3zcypm",
-   "source": "nmse77l3znktl",
-   "target": "nmse77l3zdqax",
+   "id": "emsed690saere",
+   "source": "nmsed690s6fyd",
+   "target": "nmsed690sg14b",
    "sourceHandle": "output_value_value",
    "targetHandle": "input_value_value"
   },
   {
-   "id": "emse77l3zanfb",
-   "source": "nmse77l3z2szk",
-   "target": "nmse77l3zej7e",
+   "id": "emsed690stggq",
+   "source": "nmsed690s01q4",
+   "target": "nmsed690sg5a3",
    "sourceHandle": "output_value_result",
    "targetHandle": "input_value_x"
   },
   {
-   "id": "emse77l3z33bb",
-   "source": "nmse77l3z6c47",
-   "target": "nmse77l3zej7e",
+   "id": "emsed690snnqx",
+   "source": "nmsed690sqlg0",
+   "target": "nmsed690sg5a3",
    "sourceHandle": "output_value_result",
    "targetHandle": "input_value_y"
   },
   {
-   "id": "emse77l3zh8tp",
-   "source": "nmse77l3zej7e",
-   "target": "nmse77l3zcror",
+   "id": "emsed690socdg",
+   "source": "nmsed690sg5a3",
+   "target": "nmsed690sk1k8",
    "sourceHandle": "output_value_handle",
    "targetHandle": "input_value_handle"
   },
   {
-   "id": "emse77l3zm50j",
-   "source": "nmse77l3zej7e",
-   "target": "nmse77l3z5yf4",
+   "id": "emsed690saebu",
+   "source": "nmsed690sg5a3",
+   "target": "nmsed690st8dz",
    "sourceHandle": "output_value_handle",
    "targetHandle": "input_value_agentId"
   },
   {
-   "id": "emse77l3z6d47",
-   "source": "nmse77l3znktl",
-   "target": "nmse77l3z5yf4",
+   "id": "emsed690sgu4n",
+   "source": "nmsed690s6fyd",
+   "target": "nmsed690st8dz",
    "sourceHandle": "output_value_value",
    "targetHandle": "input_value_value"
   },
   {
-   "id": "emse77l40cvba",
-   "source": "nmse77l3zpe2x",
-   "target": "nmse77l40t1vx",
+   "id": "emsed690tk6x1",
+   "source": "nmsed690s3hxi",
+   "target": "nmsed690s7zsm",
    "sourceHandle": "output_value_value",
    "targetHandle": "input_value_fromAgent"
   },
   {
-   "id": "emse77l40yp31",
-   "source": "nmse77l3zg1vp",
-   "target": "nmse77l40t1vx",
+   "id": "emsed690t8eut",
+   "source": "nmsed690s3utf",
+   "target": "nmsed690s7zsm",
    "sourceHandle": "output_value_handle",
    "targetHandle": "input_value_toAgent"
   },
   {
-   "id": "emse77l40apt3",
-   "source": "nmse77l3zyzrm",
-   "target": "nmse77l40sgt3",
+   "id": "emsed690t1ekw",
+   "source": "nmsed690sf1tf",
+   "target": "nmsed690tz5bb",
    "sourceHandle": "output_value_value",
    "targetHandle": "input_value_fromAgent"
   },
   {
-   "id": "emse77l40vwfr",
-   "source": "nmse77l3zej7e",
-   "target": "nmse77l40sgt3",
+   "id": "emsed690t1gtx",
+   "source": "nmsed690sg5a3",
+   "target": "nmsed690tz5bb",
    "sourceHandle": "output_value_handle",
    "targetHandle": "input_value_toAgent"
   },
   {
-   "id": "emse77l407ibb",
-   "source": "nmse77l3zpe2x",
-   "target": "nmse77l4039mb",
+   "id": "emsed690thnpx",
+   "source": "nmsed690s3hxi",
+   "target": "nmsed690ttwv8",
    "sourceHandle": "output_value_value",
    "targetHandle": "input_value_agentA"
   },
   {
-   "id": "emse77l40t0nv",
-   "source": "nmse77l3zg1vp",
-   "target": "nmse77l4039mb",
+   "id": "emsed690trk17",
+   "source": "nmsed690s3utf",
+   "target": "nmsed690ttwv8",
    "sourceHandle": "output_value_handle",
    "targetHandle": "input_value_agentB"
   },
   {
-   "id": "emse77l4068lq",
-   "source": "nmse77l3zyzrm",
-   "target": "nmse77l408ya9",
+   "id": "emsed690t2i3a",
+   "source": "nmsed690sf1tf",
+   "target": "nmsed690thlxq",
    "sourceHandle": "output_value_value",
    "targetHandle": "input_value_agentA"
   },
   {
-   "id": "emse77l40z61y",
-   "source": "nmse77l3zej7e",
-   "target": "nmse77l408ya9",
+   "id": "emsed690tbtu7",
+   "source": "nmsed690sg5a3",
+   "target": "nmsed690thlxq",
    "sourceHandle": "output_value_handle",
    "targetHandle": "input_value_agentB"
   },
   {
-   "id": "emse77l407ca2",
-   "source": "nmse77l3zg1vp",
-   "target": "nmse77l406z9o",
+   "id": "emsed690tnpps",
+   "source": "nmsed690s3utf",
+   "target": "nmsed690t594d",
    "sourceHandle": "output_value_handle",
    "targetHandle": "input_value_agentA"
   },
   {
-   "id": "emse77l408jho",
-   "source": "nmse77l3zej7e",
-   "target": "nmse77l406z9o",
+   "id": "emsed690tma0o",
+   "source": "nmsed690sg5a3",
+   "target": "nmsed690t594d",
    "sourceHandle": "output_value_handle",
    "targetHandle": "input_value_agentB"
   },
   {
-   "id": "emse77l40jc30",
-   "source": "nmse77l3zu75h",
-   "target": "nmse77l3zg1vp",
+   "id": "emsed690t9fln",
+   "source": "nmsed690s4ofv",
+   "target": "nmsed690s3utf",
    "sourceHandle": "output_flow_then",
    "targetHandle": "input_flow_do"
   },
   {
-   "id": "emse77l406otq",
-   "source": "nmse77l3zg1vp",
-   "target": "nmse77l3zja7y",
+   "id": "emsed690t6t7y",
+   "source": "nmsed690s3utf",
+   "target": "nmsed690svmxe",
    "sourceHandle": "output_flow_next",
    "targetHandle": "input_flow_do"
   },
   {
-   "id": "emse77l40q4j1",
-   "source": "nmse77l3zja7y",
-   "target": "nmse77l3zdqax",
+   "id": "emsed690t48ny",
+   "source": "nmsed690svmxe",
+   "target": "nmsed690sg14b",
    "sourceHandle": "output_flow_next",
    "targetHandle": "input_flow_do"
   },
   {
-   "id": "emse77l40c3uj",
-   "source": "nmse77l3zdqax",
-   "target": "nmse77l3zej7e",
+   "id": "emsed690t4oyh",
+   "source": "nmsed690sg14b",
+   "target": "nmsed690sg5a3",
    "sourceHandle": "output_flow_next",
    "targetHandle": "input_flow_do"
   },
   {
-   "id": "emse77l406v0e",
-   "source": "nmse77l3zej7e",
-   "target": "nmse77l3zcror",
+   "id": "emsed690tk7r8",
+   "source": "nmsed690sg5a3",
+   "target": "nmsed690sk1k8",
    "sourceHandle": "output_flow_next",
    "targetHandle": "input_flow_do"
   },
   {
-   "id": "emse77l40amiw",
-   "source": "nmse77l3zcror",
-   "target": "nmse77l3z5yf4",
+   "id": "emsed690to8pg",
+   "source": "nmsed690sk1k8",
+   "target": "nmsed690st8dz",
    "sourceHandle": "output_flow_next",
    "targetHandle": "input_flow_do"
   },
   {
-   "id": "emse77l40d7yv",
-   "source": "nmse77l3z5yf4",
-   "target": "nmse77l40t1vx",
+   "id": "emsed690trcq4",
+   "source": "nmsed690st8dz",
+   "target": "nmsed690s7zsm",
    "sourceHandle": "output_flow_next",
    "targetHandle": "input_flow_do"
   },
   {
-   "id": "emse77l40pb6f",
-   "source": "nmse77l40t1vx",
-   "target": "nmse77l40sgt3",
+   "id": "emsed690t0hc7",
+   "source": "nmsed690s7zsm",
+   "target": "nmsed690tz5bb",
    "sourceHandle": "output_flow_next",
    "targetHandle": "input_flow_do"
   },
   {
-   "id": "emse77l4057me",
-   "source": "nmse77l40sgt3",
-   "target": "nmse77l4039mb",
+   "id": "emsed690tumta",
+   "source": "nmsed690tz5bb",
+   "target": "nmsed690ttwv8",
    "sourceHandle": "output_flow_next",
    "targetHandle": "input_flow_do"
   },
   {
-   "id": "emse77l40oeeu",
-   "source": "nmse77l4039mb",
-   "target": "nmse77l408ya9",
+   "id": "emsed690tdb0u",
+   "source": "nmsed690ttwv8",
+   "target": "nmsed690thlxq",
    "sourceHandle": "output_flow_next",
    "targetHandle": "input_flow_do"
   },
   {
-   "id": "emse77l40i2p9",
-   "source": "nmse77l408ya9",
-   "target": "nmse77l406z9o",
+   "id": "emsed690tkm08",
+   "source": "nmsed690thlxq",
+   "target": "nmsed690t594d",
    "sourceHandle": "output_flow_next",
    "targetHandle": "input_flow_do"
   },
   {
-   "id": "emse77l40xqpu",
-   "source": "nmse77l40nkg9",
-   "target": "nmse77l40wfxl",
+   "id": "emsed690t4fic",
+   "source": "nmsed690t594d",
+   "target": "nmsed690taccf",
+   "sourceHandle": "output_flow_next",
+   "targetHandle": "input_flow_do"
+  },
+  {
+   "id": "emsed690t7fp1",
+   "source": "nmsed690t5whq",
+   "target": "nmsed690t3j97",
    "sourceHandle": "output_value_value",
    "targetHandle": "input_value_a"
   },
   {
-   "id": "emse77l40jt59",
-   "source": "nmse77l40y8an",
-   "target": "nmse77l40wfxl",
+   "id": "emsed690tia6m",
+   "source": "nmsed690tbaiy",
+   "target": "nmsed690t3j97",
    "sourceHandle": "output_value_value",
    "targetHandle": "input_value_b"
   },
   {
-   "id": "emse77l4025yn",
-   "source": "nmse77l40wfxl",
-   "target": "nmse77l40hksd",
+   "id": "emsed690t282p",
+   "source": "nmsed690t3j97",
+   "target": "nmsed690tizut",
    "sourceHandle": "output_value_result",
    "targetHandle": "input_value_t"
   },
   {
-   "id": "emse77l40qxml",
-   "source": "nmse77l40hksd",
-   "target": "nmse77l4055ze",
+   "id": "emsed690tqatf",
+   "source": "nmsed690tizut",
+   "target": "nmsed690t8vnm",
    "sourceHandle": "output_value_r",
    "targetHandle": "input_value_r"
   },
   {
-   "id": "emse77l40wkye",
-   "source": "nmse77l40hksd",
-   "target": "nmse77l4055ze",
+   "id": "emsed690ttm31",
+   "source": "nmsed690tizut",
+   "target": "nmsed690t8vnm",
    "sourceHandle": "output_value_g",
    "targetHandle": "input_value_g"
   },
   {
-   "id": "emse77l402lh3",
-   "source": "nmse77l40hksd",
-   "target": "nmse77l4055ze",
+   "id": "emsed690tjs9t",
+   "source": "nmsed690tizut",
+   "target": "nmsed690t8vnm",
    "sourceHandle": "output_value_b",
    "targetHandle": "input_value_b"
   },
   {
-   "id": "emse77l40q2l9",
-   "source": "nmse77l40x492",
-   "target": "nmse77l4055ze",
+   "id": "emsed690tvktz",
+   "source": "nmsed690tif9j",
+   "target": "nmsed690t8vnm",
    "sourceHandle": "output_flow_do",
    "targetHandle": "input_flow_do"
   }
  ],
  "presets": [
   {
-   "id": "preset_mse77l40hqy2",
+   "id": "preset_msed690t2vil",
    "name": "quadratic",
    "description": "Rule 2182 (0x886), no mutation",
    "state": {
@@ -2203,7 +2293,7 @@
    "createdAt": 1754000000000
   },
   {
-   "id": "preset_mse77l40ji7q",
+   "id": "preset_msed690uvv49",
    "name": "quadratic - mutations",
    "description": "Rule 2182 (0x886), mutation 0.00005",
    "state": {
@@ -2237,7 +2327,7 @@
    "createdAt": 1754000001000
   },
   {
-   "id": "preset_mse77l40rilz",
+   "id": "preset_msed690uhsbq",
    "name": "two branches",
    "description": "Rule 3260 (0xCBC), no mutation",
    "state": {
@@ -2271,7 +2361,7 @@
    "createdAt": 1754000002000
   },
   {
-   "id": "preset_mse77l40d90a",
+   "id": "preset_msed690uvtq1",
    "name": "branching",
    "description": "Rule 6259 (0x1873), mutation 0.0001",
    "state": {
@@ -2305,7 +2395,7 @@
    "createdAt": 1754000003000
   },
   {
-   "id": "preset_mse77l4028mf",
+   "id": "preset_msed690urqeb",
    "name": "meduza",
    "description": "Rule 2502 (0x9C6), no mutation",
    "state": {
@@ -2339,7 +2429,7 @@
    "createdAt": 1754000004000
   },
   {
-   "id": "preset_mse77l40ssle",
+   "id": "preset_msed690uh3v6",
    "name": "exp tree",
    "description": "Rule 2236 (0x8BC), no mutation",
    "state": {
@@ -2373,7 +2463,7 @@
    "createdAt": 1754000005000
   },
   {
-   "id": "preset_mse77l40k3gp",
+   "id": "preset_msed690uczkl",
    "name": "exp hyper",
    "description": "Rule 618 (0x26A), no mutation",
    "state": {
@@ -2407,7 +2497,7 @@
    "createdAt": 1754000006000
   },
   {
-   "id": "preset_mse77l40867s",
+   "id": "preset_msed690ua8fb",
    "name": "exp fractal",
    "description": "Rule 649 (0x289), no mutation",
    "state": {
@@ -2441,7 +2531,7 @@
    "createdAt": 1754000007000
   },
   {
-   "id": "preset_mse77l40mpcq",
+   "id": "preset_msed690uoig0",
    "name": "exp symmetry",
    "description": "Rule 1111 (0x457), no mutation",
    "state": {
@@ -2475,7 +2565,7 @@
    "createdAt": 1754000008000
   },
   {
-   "id": "preset_mse77l40bm4m",
+   "id": "preset_msed690uy1qn",
    "name": "robust linear",
    "description": "Rule 22220 (0x56CC), mutation 0.001",
    "state": {
@@ -2509,7 +2599,7 @@
    "createdAt": 1754000009000
   },
   {
-   "id": "preset_mse77l40lgp0",
+   "id": "preset_msed690ubakb",
    "name": "stable explosion",
    "description": "Rule 8690 (0x21F2), mutation 0.001",
    "state": {
@@ -2543,7 +2633,7 @@
    "createdAt": 1754000010000
   },
   {
-   "id": "preset_mse77l40magj",
+   "id": "preset_msed690um0f5",
    "name": "fancy tentacles",
    "description": "Rule 17953 (0x4621), mutation 0.00005",
    "state": {
@@ -2575,6 +2665,380 @@
     }
    },
    "createdAt": 1754000011000
+  },
+  {
+   "id": "preset_msed690uz2hs",
+   "name": "Rule 1033",
+   "description": "Rule 1033 (0x409), no mutation",
+   "state": {
+    "schemaVersion": 2,
+    "lookupTableData": {
+     "ruleNext": [
+      1,
+      0,
+      0,
+      1,
+      0,
+      0,
+      0,
+      0
+     ],
+     "ruleDivide": [
+      0,
+      0,
+      1,
+      0,
+      0,
+      0,
+      0,
+      0
+     ]
+    },
+    "modelAttrs": {
+     "mutationRate": 0
+    }
+   },
+   "createdAt": 1754000012000
+  },
+  {
+   "id": "preset_msed690ux8v8",
+   "name": "Rule 1062",
+   "description": "Rule 1062 (0x426), no mutation",
+   "state": {
+    "schemaVersion": 2,
+    "lookupTableData": {
+     "ruleNext": [
+      0,
+      1,
+      1,
+      0,
+      0,
+      1,
+      0,
+      0
+     ],
+     "ruleDivide": [
+      0,
+      0,
+      1,
+      0,
+      0,
+      0,
+      0,
+      0
+     ]
+    },
+    "modelAttrs": {
+     "mutationRate": 0
+    }
+   },
+   "createdAt": 1754000013000
+  },
+  {
+   "id": "preset_msed690uiqgt",
+   "name": "Rule 2183",
+   "description": "Rule 2183 (0x887), no mutation",
+   "state": {
+    "schemaVersion": 2,
+    "lookupTableData": {
+     "ruleNext": [
+      1,
+      1,
+      1,
+      0,
+      0,
+      0,
+      0,
+      1
+     ],
+     "ruleDivide": [
+      0,
+      0,
+      0,
+      1,
+      0,
+      0,
+      0,
+      0
+     ]
+    },
+    "modelAttrs": {
+     "mutationRate": 0
+    }
+   },
+   "createdAt": 1754000014000
+  },
+  {
+   "id": "preset_msed690uw27q",
+   "name": "Rule 2199",
+   "description": "Rule 2199 (0x897), no mutation",
+   "state": {
+    "schemaVersion": 2,
+    "lookupTableData": {
+     "ruleNext": [
+      1,
+      1,
+      1,
+      0,
+      1,
+      0,
+      0,
+      1
+     ],
+     "ruleDivide": [
+      0,
+      0,
+      0,
+      1,
+      0,
+      0,
+      0,
+      0
+     ]
+    },
+    "modelAttrs": {
+     "mutationRate": 0
+    }
+   },
+   "createdAt": 1754000015000
+  },
+  {
+   "id": "preset_msed690uzai6",
+   "name": "Rule 2210",
+   "description": "Rule 2210 (0x8A2), no mutation",
+   "state": {
+    "schemaVersion": 2,
+    "lookupTableData": {
+     "ruleNext": [
+      0,
+      1,
+      0,
+      0,
+      0,
+      1,
+      0,
+      1
+     ],
+     "ruleDivide": [
+      0,
+      0,
+      0,
+      1,
+      0,
+      0,
+      0,
+      0
+     ]
+    },
+    "modelAttrs": {
+     "mutationRate": 0
+    }
+   },
+   "createdAt": 1754000016000
+  },
+  {
+   "id": "preset_msed690u9b76",
+   "name": "Rule 2222",
+   "description": "Rule 2222 (0x8AE), no mutation",
+   "state": {
+    "schemaVersion": 2,
+    "lookupTableData": {
+     "ruleNext": [
+      0,
+      1,
+      1,
+      1,
+      0,
+      1,
+      0,
+      1
+     ],
+     "ruleDivide": [
+      0,
+      0,
+      0,
+      1,
+      0,
+      0,
+      0,
+      0
+     ]
+    },
+    "modelAttrs": {
+     "mutationRate": 0
+    }
+   },
+   "createdAt": 1754000017000
+  },
+  {
+   "id": "preset_msed690usdup",
+   "name": "Rule 4118",
+   "description": "Rule 4118 (0x1016), no mutation",
+   "state": {
+    "schemaVersion": 2,
+    "lookupTableData": {
+     "ruleNext": [
+      0,
+      1,
+      1,
+      0,
+      1,
+      0,
+      0,
+      0
+     ],
+     "ruleDivide": [
+      0,
+      0,
+      0,
+      0,
+      1,
+      0,
+      0,
+      0
+     ]
+    },
+    "modelAttrs": {
+     "mutationRate": 0
+    }
+   },
+   "createdAt": 1754000018000
+  },
+  {
+   "id": "preset_msed690ulsdx",
+   "name": "Rule 4226",
+   "description": "Rule 4226 (0x1082), no mutation",
+   "state": {
+    "schemaVersion": 2,
+    "lookupTableData": {
+     "ruleNext": [
+      0,
+      1,
+      0,
+      0,
+      0,
+      0,
+      0,
+      1
+     ],
+     "ruleDivide": [
+      0,
+      0,
+      0,
+      0,
+      1,
+      0,
+      0,
+      0
+     ]
+    },
+    "modelAttrs": {
+     "mutationRate": 0
+    }
+   },
+   "createdAt": 1754000019000
+  },
+  {
+   "id": "preset_msed690u17ja",
+   "name": "Rule 12369",
+   "description": "Rule 12369 (0x3051), no mutation",
+   "state": {
+    "schemaVersion": 2,
+    "lookupTableData": {
+     "ruleNext": [
+      1,
+      0,
+      0,
+      0,
+      1,
+      0,
+      1,
+      0
+     ],
+     "ruleDivide": [
+      0,
+      0,
+      0,
+      0,
+      1,
+      1,
+      0,
+      0
+     ]
+    },
+    "modelAttrs": {
+     "mutationRate": 0
+    }
+   },
+   "createdAt": 1754000020000
+  },
+  {
+   "id": "preset_msed690u6atk",
+   "name": "Rule 17957",
+   "description": "Rule 17957 (0x4625), no mutation",
+   "state": {
+    "schemaVersion": 2,
+    "lookupTableData": {
+     "ruleNext": [
+      1,
+      0,
+      1,
+      0,
+      0,
+      1,
+      0,
+      0
+     ],
+     "ruleDivide": [
+      0,
+      1,
+      1,
+      0,
+      0,
+      0,
+      1,
+      0
+     ]
+    },
+    "modelAttrs": {
+     "mutationRate": 0
+    }
+   },
+   "createdAt": 1754000021000
+  },
+  {
+   "id": "preset_msed690ufpwo",
+   "name": "Rule 26145",
+   "description": "Rule 26145 (0x6621), no mutation",
+   "state": {
+    "schemaVersion": 2,
+    "lookupTableData": {
+     "ruleNext": [
+      1,
+      0,
+      0,
+      0,
+      0,
+      1,
+      0,
+      0
+     ],
+     "ruleDivide": [
+      0,
+      1,
+      1,
+      0,
+      0,
+      1,
+      1,
+      0
+     ]
+    },
+    "modelAttrs": {
+     "mutationRate": 0
+    }
+   },
+   "createdAt": 1754000022000
   }
  ]
 }

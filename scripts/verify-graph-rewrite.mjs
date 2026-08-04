@@ -3702,12 +3702,21 @@ function tierL() {
 // reference implementation (znah's js/graph.js, Paul Cousin's binary cubic GRA).
 //
 // This is the strongest fidelity check in the harness, and it is possible only
-// because the reference is 40 lines: for a rule whose divide bit fires ONLY at
-// r = 3 (own OFF, all three neighbours ON), two flagged nodes CANNOT be adjacent
-// — a flagged neighbour would have to be simultaneously ON (from my side) and
-// OFF (from its own). The port's independent-set gate therefore suppresses
-// NOTHING for such a rule, so N(t) must match the reference EXACTLY, not merely
-// qualitatively. Two published rules are checked cycle by cycle.
+// because the reference is 40 lines. Its division phase LATCHES the flags its
+// state phase computed and then divides EVERY flagged node, sequentially, each
+// one reading the LIVE adjacency. The port cannot do that in one generation —
+// two ADJACENT splitters corrupt each other's queued Rewire — so it drains the
+// latches over K INDEPENDENT-SET ROUNDS: one reference tick is PERIOD = 1 + K
+// generations. Because a latch is consumed exactly once and the drain finishes,
+// N(t) must match the reference EXACTLY for every deterministic rule, not just
+// for the rules whose flagged nodes happen to be pairwise non-adjacent.
+//
+// The BUDGETS ARE READ OFF THE SHIPPED FILE (the Cubic GRA / Tier K precedent):
+// a later cadence retune cannot silently shorten these checks.
+//
+// A rule WITH mutation is deliberately excluded from the oracle: the reference
+// flips on Math.random and the port on the seeded shared stream, so the two run
+// different noise realisations — a difference in inputs, not in fidelity.
 //
 // It also pins the bootstrap: the shipped model must build precisely the
 // reference's 10-node seed graph (a 10-cycle plus five chords = 15 edges) and
@@ -3760,9 +3769,45 @@ function withPresetGG(model, name) {
   return m;
 }
 
+/** How many live agents still carry a LATCHED division intent (`prio < 1.5`)? */
+function countLatchedGG(s) {
+  let n = 0;
+  for (let i = 0; i < s.highWater; i++) if (s.alive[i] && s.attrRead.prio[i] < 1.5) n++;
+  return n;
+}
+
+/** Re-cadence a model to PERIOD = 1 + k. The period appears in exactly two
+ *  places: the state tick's Periodic Step and the division gate's
+ *  `generation % PERIOD`. Used ONLY by the negative controls — k = 1 reproduces
+ *  the single-round port this phase replaced. */
+function withPeriodGG(m, k) {
+  const out = cloneModel(m);
+  const P = 1 + k;
+  for (const n of out.agentGraphNodes) {
+    if (n.data.nodeType === 'periodicStep') n.data.config = { ...n.data.config, period: P };
+    if (n.data.nodeType === 'arithmeticOperator' && n.data.config.operation === '%') {
+      n.data.config = { ...n.data.config, _port_y: String(P) };
+    }
+  }
+  return out;
+}
+
 function tierM() {
   section('TIER M — the SHIPPED `Growing Graphs` — exactness against the reference');
   const model = loadShipped('Growing Graphs');
+
+  // --- the cadence, read off the shipped file ------------------------------
+  const PERIOD = Math.max(2, Number(
+    model.agentGraphNodes.find(n => n.data.nodeType === 'periodicStep')?.data.config?.period ?? 2));
+  const ROUNDS = PERIOD - 1;
+  {
+    const gate = model.agentGraphNodes.find(n =>
+      n.data.nodeType === 'arithmeticOperator' && n.data.config.operation === '%');
+    ok(!!gate && Number(gate.data.config._port_y) === PERIOD,
+      `the division-round gate uses the SAME period as the state tick (${PERIOD})`,
+      `gate % ${gate?.data.config._port_y} vs periodicStep period ${PERIOD}`);
+    ok(ROUNDS >= 1, `the cadence is 1 state tick + ${ROUNDS} division rounds`);
+  }
 
   // --- the rule tables ARE the rule integer, bit for bit -------------------
   // Row-major over [own state 0..1] x [ON neighbours 0..3] means the flat cell
@@ -3799,6 +3844,36 @@ function tierM() {
     ok(badP === 0, `all ${(model.presets ?? []).length} presets decode to their stated rule integer`);
   }
 
+  // --- the preset list IS znah's full catalogue ----------------------------
+  // js/app.js ships a 12-entry named `presets` map AND a 22-entry `rules`
+  // dropdown; the eleven rules that have no name ship here as "Rule <n>".
+  {
+    const NAMED = ['quadratic', 'quadratic - mutations', 'two branches', 'branching', 'meduza',
+      'exp tree', 'exp hyper', 'exp fractal', 'exp symmetry', 'robust linear',
+      'stable explosion', 'fancy tentacles'];
+    const CATALOGUE = [2502, 6259, 0x426, 0x8a2, 0x8ae, 0x886, 0x887, 0x8bc, 0x457, 0x26a, 0x409,
+      0x1016, 0x897, 0x4625, 0x4621, 0x6621, 0x56cc, 0xcbc, 0x3051, 0x1082, 0x289, 0x21f2];
+    const presets = model.presets ?? [];
+    const ruleOf = (p) => Number(/^Rule (\d+)/.exec(p.description ?? '')?.[1]);
+    ok(presets.length === 23, 'the model ships 23 presets (12 named + 11 numbered)', String(presets.length));
+    ok(JSON.stringify(presets.slice(0, 12).map(p => p.name)) === JSON.stringify(NAMED),
+      'the 12 NAMED presets come first, in the reference demo\'s own order',
+      JSON.stringify(presets.slice(0, 12).map(p => p.name)));
+    const numbered = presets.slice(12);
+    ok(numbered.every(p => p.name === `Rule ${ruleOf(p)}`),
+      'every remaining preset is named for its rule integer');
+    const nums = numbered.map(ruleOf);
+    ok(JSON.stringify(nums) === JSON.stringify([...nums].sort((a, b) => a - b)),
+      'the numbered presets are in ascending rule order', JSON.stringify(nums));
+    // EVERY rule of the reference catalogue is reachable, and nothing extra.
+    const covered = new Set(presets.map(ruleOf));
+    const missing = [...new Set(CATALOGUE)].filter(r => !covered.has(r));
+    const extra = [...covered].filter(r => !CATALOGUE.includes(r));
+    ok(missing.length === 0 && extra.length === 0,
+      `every one of the reference dropdown's ${new Set(CATALOGUE).size} rules ships as a preset, and nothing else`,
+      `missing=[${missing}] extra=[${extra}]`);
+  }
+
   // --- the bootstrap builds the reference's EXACT seed graph ---------------
   {
     const rig = shippedRig(model);
@@ -3827,34 +3902,79 @@ function tierM() {
       'I1 / I3 / I2 hold on the seed graph');
   }
 
-  // --- THE EXACTNESS ORACLE ------------------------------------------------
-  // The port's rule cycle n runs at generations 2n / 2n+1: generation 0 wires
-  // the seed graph and generation 1 has no stored intent yet, so the first
-  // sampled cycle is the bootstrap and is dropped.
-  const CYC = 100;
-  const myCurve = (m, cycles) => {
+  // --- THE DRAIN COMPLETES — the justification for K -----------------------
+  // A latch that survives all K rounds is silently re-latched by the next state
+  // tick, which is the ONE residual deviation from the reference. K was chosen
+  // as the smallest value that drives the leftover count to ZERO; assert it, so
+  // a cadence retune that reintroduces leftovers fails here.
+  //
+  // ALIGNMENT: generations 0..PERIOD-1 are the bootstrap cycle (generation 0 is
+  // phase 0, but the seeds are still unwired so nothing is latched). After it,
+  // generation ≡ 0 (mod PERIOD) is a state tick.
+  const runCycles = (m, cycles, { cap = 1e9, onCycle = null } = {}) => {
     const rig = shippedRig(m); rig.reset();
-    const out = [];
-    for (let g = 1; g <= 2 * (cycles + 1); g++) { rig.step(); if (g % 2 === 0) out.push(rig.store.liveCount); }
-    return out.slice(1);
+    for (let g = 0; g < PERIOD; g++) rig.step();           // the bootstrap cycle
+    const s = rig.store, curve = [];
+    for (let c = 0; c < cycles; c++) {
+      rig.step();                                          // phase 0 — the STATE tick
+      const latched = countLatchedGG(s);
+      for (let r = 1; r <= ROUNDS; r++) rig.step();         // phases 1..K — the DRAIN
+      if (onCycle) onCycle({ cycle: c, latched, leftover: countLatchedGG(s), store: s });
+      curve.push(s.liveCount);
+      if (s.liveCount > cap) break;
+    }
+    return curve;
   };
-  for (const [name, rule] of [['quadratic', 2182], ['exp tree', 2236]]) {
-    const mine = myCurve(withPresetGG(model, name), CYC);
-    const ref = refCurveGG(rule, CYC);
+  {
+    let latched = 0, leftover = 0;
+    for (const name of ['meduza', 'Rule 17957', 'Rule 26145', 'exp hyper', 'two branches']) {
+      runCycles(withPresetGG(model, name), 40, {
+        cap: 6000, onCycle: (o) => { latched += o.latched; leftover += o.leftover; },
+      });
+    }
+    ok(leftover === 0,
+      `the ${ROUNDS}-round drain consumes EVERY latch: 0 of ${latched} survived into the next state tick`,
+      `${leftover} leftovers`);
+    ok(latched > 1000, `the drain check is not vacuous — ${latched} latches were raised`);
+  }
+
+  // --- THE EXACTNESS ORACLE ------------------------------------------------
+  // One reference tick is PERIOD generations. Every DETERMINISTIC published rule
+  // must match cycle for cycle — including the rules whose flagged nodes CAN be
+  // adjacent, which the single-round port could not follow at all.
+  const oracleRules = [
+    ['quadratic', 2182, 100],       // regression: independent flags, matched before this phase too
+    ['exp tree', 2236, 100],        // regression: same class
+    ['meduza', 2502, 55],           // THE GAP — adjacent flags
+    ['Rule 17957', 17957, 60],      // the deepest drain in the catalogue (8 rounds)
+    ['Rule 26145', 26145, 60],      // ditto
+  ];
+  for (const [name, rule, cyc] of oracleRules) {
+    const mine = runCycles(withPresetGG(model, name), cyc);
+    const ref = refCurveGG(rule, cyc);
+    const n = Math.min(mine.length, ref.length, cyc);
     let firstDiff = -1;
-    for (let i = 0; i < CYC; i++) if (mine[i] !== ref[i]) { firstDiff = i; break; }
+    for (let i = 0; i < n; i++) if (mine[i] !== ref[i]) { firstDiff = i; break; }
     ok(firstDiff === -1,
-      `"${name}" (rule ${rule}): N(t) matches the reference EXACTLY for ${CYC} cycles (N=${ref[CYC - 1]})`,
+      `"${name}" (rule ${rule}): N(t) matches the reference EXACTLY for ${n} cycles (N=${ref[n - 1]})`,
       firstDiff >= 0 ? `first divergence at cycle ${firstDiff + 1}: ${mine[firstDiff]} vs ${ref[firstDiff]}` : '');
   }
-  // NEG: the oracle is not vacuous — a rule whose flagged nodes CAN be adjacent
-  // is throttled by the gate, so it must NOT match. (`meduza`, rule 2502, fires
-  // its divide bit for an ON node too, so two flagged nodes can be neighbours.)
+  // NEG (source mutation): collapse the cadence to a SINGLE division round — the
+  // port this phase replaced — and the same oracle must fail for a rule whose
+  // flagged nodes can be adjacent. This is what makes the multi-round drain
+  // demonstrably load-bearing: `meduza` diverges within a couple of cycles.
   {
-    const mine = myCurve(withPresetGG(model, 'meduza'), 40);
-    const ref = refCurveGG(2502, 40);
-    ok(mine.some((v, i) => v !== ref[i]),
-      'NEG: a rule with ADJACENT flagged nodes does NOT match the reference — the oracle has teeth');
+    const one = withPeriodGG(withPresetGG(model, 'meduza'), 1);
+    const rig = shippedRig(one); rig.reset();
+    for (let g = 0; g < 2; g++) rig.step();                 // the bootstrap cycle at PERIOD 2
+    const mine = [];
+    for (let c = 0; c < 20; c++) { rig.step(); rig.step(); mine.push(rig.store.liveCount); }
+    const ref = refCurveGG(2502, 20);
+    let firstDiff = -1;
+    for (let i = 0; i < 20; i++) if (mine[i] !== ref[i]) { firstDiff = i; break; }
+    ok(firstDiff >= 0,
+      `NEG (mutant): with ONE division round "meduza" diverges from the reference at cycle ${firstDiff + 1}`,
+      'a single round matched — the drain rounds are not being tested');
   }
   // NEG (source mutation): revert the priority to the obvious-but-wrong form —
   // a bare roll, with no division intent folded in — and the SAME oracle must
@@ -3868,7 +3988,7 @@ function tierM() {
     ok(!!prioNode, 'NEG setup: found the priority expression node');
     if (prioNode) {
       prioNode.data.config = { ...prioNode.data.config, expression: 'roll + d * 0' };
-      const mine = myCurve(m, 40);
+      const mine = runCycles(m, 40);
       const ref = refCurveGG(2182, 40);
       ok(mine.some((v, i) => v !== ref[i]),
         'NEG (mutant): an intent-BLIND priority breaks the exactness oracle',
@@ -3877,11 +3997,19 @@ function tierM() {
   }
 
   // --- O6 at every generation, over several published rules ----------------
-  for (const name of ['quadratic', 'meduza', 'exp tree', 'branching']) {
+  // The budget is stated in REFERENCE TICKS and scaled by the shipped period, so
+  // a cadence retune cannot silently shorten it.
+  // The four NUMBERED rules are here on purpose: this phase added eleven presets
+  // that nothing else exercises, and a catalogue entry that decoded to a broken
+  // automaton would otherwise ship silently.
+  const O6_TICKS = 30;
+  for (const name of ['quadratic', 'meduza', 'exp tree', 'branching',
+    'Rule 1033', 'Rule 4226', 'Rule 12369', 'Rule 17957']) {
     const rig = shippedRig(withPresetGG(model, name));
     rig.reset();
     let bad = null;
-    for (let gen = 1; gen <= 240 && !bad; gen++) {
+    const gens = O6_TICKS * PERIOD;
+    for (let gen = 1; gen <= gens && !bad; gen++) {
       const { overflow } = rig.step();
       if (overflow) { bad = `gen ${gen}: request queue OVERFLOW`; break; }
       const g = decodeAgentGraph(rig.store);
@@ -3893,22 +4021,31 @@ function tierM() {
       if (E !== 3 * N / 2) { bad = `gen ${gen}: E=${E} != 3N/2 (N=${N})`; break; }
     }
     ok(bad === null,
-      `"${name}": O6 (deg 3, E = 3N/2) + I1-I4 hold at EVERY one of 240 generations -> N=${rig.store.liveCount}`,
+      `"${name}": O6 (deg 3, E = 3N/2) + I1-I4 hold at EVERY one of ${gens} generations (${O6_TICKS} ticks) -> N=${rig.store.liveCount}`,
       String(bad));
   }
 
   // --- the published rules are genuinely DIFFERENT automata ----------------
+  // Six of them, INCLUDING two of the numbered ones this phase added, so a
+  // catalogue entry that silently decoded to the same automaton would show up.
   {
     const outcomes = {};
-    for (const name of ['quadratic', 'meduza', 'exp tree', 'branching', 'stable explosion', 'exp hyper']) {
+    for (const name of ['quadratic', 'meduza', 'exp tree', 'branching', 'stable explosion',
+      'exp hyper', 'Rule 1033', 'Rule 2222', 'Rule 12369', 'Rule 17957']) {
       const rig = shippedRig(withPresetGG(model, name));
       rig.reset();
-      for (let g = 0; g < 160; g++) rig.step();
+      for (let g = 0; g < 20 * PERIOD; g++) rig.step();
       outcomes[name] = rig.store.liveCount;
     }
-    ok(new Set(Object.values(outcomes)).size >= 5,
-      `the presets produce distinct outcomes after 160 generations: ${JSON.stringify(outcomes)}`);
-    ok(outcomes['quadratic'] > 200, 'quadratic grows steadily from the 10-node seed', String(outcomes['quadratic']));
+    ok(new Set(Object.values(outcomes)).size >= 7,
+      `the presets produce distinct outcomes after ${20 * PERIOD} generations: ${JSON.stringify(outcomes)}`);
+    // Calibrated against the reference rather than a magic threshold, so the
+    // number cannot silently drift with the cadence.
+    const q20 = refCurveGG(2182, 20)[19];
+    ok(outcomes['quadratic'] === q20,
+      `quadratic grows from the 10-node seed to the reference's own N after 20 ticks (${q20})`,
+      String(outcomes['quadratic']));
+    ok(outcomes['Rule 17957'] > 200, 'a NUMBERED catalogue rule grows too', String(outcomes['Rule 17957']));
   }
 }
 

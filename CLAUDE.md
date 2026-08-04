@@ -2771,11 +2771,13 @@ feeding the other: `σᵢ' = f(σᵢ, #On in the bonded 1-ring)` and
 #### `Growing Graphs` — Paul Cousin's binary cubic GRA, ported from znah's demo
 
 A port of **Alex Mordvintsev's (znah) "Growing Graphs"** demo (znah.net/graphs) of **Paul
-Cousin's** binary cubic Graph-Rewriting Automata, with that demo's twelve published rule
-presets. Generator: [scripts/gen-growing-graphs.mjs](scripts/gen-growing-graphs.mjs); the
-reference implementation is `js/graph.js` (80 lines) + `js/app.js` in the `graphs-main` tree.
-**Credit the lineage in this order — Cousin defines the automata, Mordvintsev's demo is what
-this reproduces — and never claim more fidelity than the measured result below.**
+Cousin's** binary cubic Graph-Rewriting Automata, with that demo's FULL published rule
+catalogue — its 12 NAMED presets plus the 11 further rules of its `rules` dropdown, which ship
+as `Rule <n>` (23 presets: named first in znah's order, then numbered ascending). Generator:
+[scripts/gen-growing-graphs.mjs](scripts/gen-growing-graphs.mjs); the reference implementation
+is `js/graph.js` (80 lines) + `js/app.js` in the `graphs-main` tree. **Credit the lineage in
+this order — Cousin defines the automata, Mordvintsev's demo is what this reproduces — and
+never claim more fidelity than the measured result below.**
 
 - **THE WHOLE AUTOMATON IS ONE 16-BIT INTEGER**, and the two rule tables ARE that integer,
   bit for bit: `r = own*4 + (ON neighbours)` (r ∈ 0..7), `nextState = (R >> r) & 1`,
@@ -2785,12 +2787,34 @@ this reproduces — and never claim more fidelity than the measured result below
   not assumed: Tier M asserts `resolveAxes(...).strides === [4, 1]` on both tables (a
   transposed table would silently address a different rule) and re-derives every preset's
   cells from its stated rule integer.
-- **THE TWO PERIODIC STEPS ARE THE REFERENCE'S TWO PHASES.** znah alternates a STATE tick and
-  a DIVISION tick, and the division tick does not re-read the states — it replays the flags
-  the state tick computed. So the model roots a Periodic Step at **each** phase of period 2,
-  and **one GenesisCA generation is one reference `grow()` call**. Phase 0: census → next
-  state (+ mutation) + the division intent. Phase 1: split. Daughters inherit the state
-  phase 0 committed.
+- **LATCH + MULTI-ROUND DRAIN — the reference's division semantics, and the reason the port is
+  now faithful for EVERY rule.** znah's phase 0 LATCHES the divide bits; its phase 1 walks that
+  latch array and divides **every** flagged node, sequentially, each one reading the **LIVE**
+  adjacency (`reconnect` mutates a partner's list, so a later splitter sees the updated
+  neighbourhood). A latch is consumed exactly once and newborns never divide in the same tick
+  (`dividing.length` is frozen at the tick boundary). GenesisCA's structural request queue
+  drains in PARALLEL and two ADJACENT splitters corrupt each other (the mother's Rewire needs
+  its edge to `b` to still exist at drain time), so one generation can only split an
+  INDEPENDENT SET. The model therefore spends **PERIOD = 1 + K generations per reference tick**:
+  a Periodic Step at phase 0 does census → next state (+ mutation) → **latch**, then K
+  **DIVISION ROUNDS** each split the still-latched winners and CLEAR their latch, so the losers
+  win a later round *against the adjacency the winners just rewrote*. That IS znah's
+  mutated-adjacency drain, executed in rounds instead of index order.
+- **K = 8, CHOSEN BY MEASUREMENT** (all 18 mutation-free published rules × 100 reference ticks,
+  through the real compiled behaviour): leftover latches **31.71 % at K=1 → 8.53 % (K=2) →
+  0.55 % (K=4) → 0.02 % (K=6) → 0.00 % (K=8)**, and K=10 never uses a ninth round, so 8 is the
+  deepest drain the catalogue needs. **A sub-1 % leftover rate arrives much earlier but is the
+  WRONG criterion**: leftovers concentrate in the deep-chain rules (17957, 26145), which
+  diverge from the reference by cycle 2 at K=4. The rules matching the reference go
+  **8/18 (K=1) → 10/18 (K=2..6) → 18/18 (K=8)**. `LAYOUT_ITERATIONS` dropped 3 → 1 to pay for
+  the longer period: the layout still gets 9 force passes per reference tick (vs 6 before) at a
+  third of the per-generation cost.
+- **THE LATCH *IS* THE PRIORITY** — a deliberate deviation from a separate `flagged` bool. The
+  gate must be INTENT-AWARE (below), so the flag and the tie-break have to live in the same
+  number; a second boolean would duplicate `prio < 1.5` and could drift from it. A splitter
+  writes `prio = 2.5`, which **both** consumes its latch **and** stops it blocking the
+  neighbours it beat — that single write is what makes the later rounds work. The priority is
+  rolled ONCE per tick, not per round (clearing the winner's latch is what changes the contest).
 - **THE INTENT-AWARE PRIORITY IS THE LOAD-BEARING DESIGN DETAIL, and the obvious version is
   measurably WRONG.** Cubic GRA's gate — everyone rolls a priority, split iff you are the
   strict local minimum — makes a flagged node wait behind neighbours that **never wanted to
@@ -2798,20 +2822,36 @@ this reproduces — and never claim more fidelity than the measured result below
   non-adjacent*. For `quadratic` (2182) that did not merely slow growth: the automaton fell
   into its absorbing all-OFF configuration and **stopped at 16 nodes against the reference's
   854**. The fix folds the INTENT into the same number the tie-break uses: `prio = roll` in
-  [0,1) when flagged, `roll + 2` otherwise, and the division tick requires **`prio < 1.5`**
-  (I was flagged) **AND** `prio < min(neighbour prio)` (I won the contest). A non-splitter
+  [0,1) when flagged, `roll + 2` otherwise, and a division round requires **`prio < 1.5`**
+  (still latched) **AND** `prio < min(neighbour prio)` (I won the contest). A non-splitter
   sits above 2 and can never block anyone. **Safety is unchanged** — two adjacent splitters
-  would need `p_i < p_j` and `p_j < p_i`. The agent attribute's DEFAULT is 2.5 (a
-  non-splitter value) so a newborn can never look flagged before its first state tick.
-- **THE EXACTNESS RESULT — the honest claim, and it is stronger than "qualitatively
-  faithful".** For a rule whose divide bit fires only at `r = 3` (own OFF, all three
-  neighbours ON) two flagged nodes **cannot** be adjacent — a flagged neighbour would have to
-  be ON (from my side) and OFF (from its own) at once — so the independent-set gate suppresses
-  NOTHING and the port reproduces the reference N(t) **EXACTLY, cycle for cycle**. Measured on
-  `quadratic` (2182) and `exp tree` (2236): 100 cycles, zero divergence. Where a rule CAN flag
-  two neighbours at once (`meduza`, 2502) the trajectory genuinely differs. **So: exact for
-  one class of rules, qualitatively faithful for the rest — say exactly that.** The deviation
-  also makes those rules' trajectories seed-dependent, which the reference's are not.
+  would need `p_i < p_j` and `p_j < p_i`. The agent attribute's DEFAULT is 2.5 (a non-splitter
+  value), which is also what stops a daughter dividing in a later round of the tick it was
+  born in — the analogue of the reference freezing its flag array.
+- **THE DIVISION ROUNDS ARE HAND-GATED (`generation % PERIOD != 0`), NOT K Periodic Steps.**
+  The flow walk INLINES a node's body once per incoming path, so K periodic roots pointing at
+  one split chain would emit K copies of it. One `getGeneration → Math(%) → Compare(!=) → If`
+  hung off the behaviour root's DONE continuation, one copy. The state tick stays a real
+  Periodic Step (phase 0), so the cadence is still visible in the C2 pipeline panel.
+- **THE FIDELITY RESULT — measured, and much stronger than the first port's.** With the drain,
+  N(t) matches the reference cycle for cycle for **every mutation-free published rule**, up to
+  whichever side hits a node cap first. The gap this closed, K=1 → K=8 (100 cycles, cap 20 000):
+  `meduza` **1/100 exact → 88/89** (deviation 84.0 % @25 and 92.2 % @50 → **0.00 % at both**);
+  `Rule 17957` **0/21 → 100/100** (2223 % off → 0.00 %); `Rule 26145` **0/22 → 100/100**;
+  `exp hyper` 0/67 → 42/43; `exp symmetry` 6/77 → 55/56; `Rule 1062` 5/60 → 56/57 — every
+  residual "miss" is the cycle in which the reference's own node limit stops it. `quadratic`
+  and `exp tree` stay **100/100 at BOTH K**, which is the regression proof that the extra
+  no-op rounds change nothing for the rules that never needed them.
+- **WHAT REMAINS ORDER-DEPENDENT, stated honestly.** N(t) cannot diverge from split ORDER
+  (each latch is consumed exactly once either way), so the mutation-free deviation is **zero**.
+  What differs is **which neighbour a daughter inherits**: the rounds pick winners by random
+  priority where the reference walks node indices, so the two graphs are built from the same
+  operations in a different order. The claim is **semantic faithfulness**, never bit-identity
+  of the labelled graph. Second residual: a node still latched after round K is re-latched by
+  the next state tick — measured at **0.0000 %** of latches for the published rules, but it is
+  a deviation all the same. A rule WITH mutation cannot match at all (the reference flips on
+  `Math.random`, the port on the seeded shared stream) — a different noise realisation, not a
+  fidelity gap, and the oracle excludes those 5 presets for that reason.
 - **THE INITIAL CONDITION IS THE REFERENCE'S, EXACTLY.** znah always seeds the same 10-node
   cubic graph — a 10-cycle plus the chords {0,2} {1,4} {3,6} {5,8} {7,9}, states
   `[0,0,0,1,0,1,0,1,1,1]`. The chord map is an **involution**, so it ships as a 1-axis
@@ -2831,9 +2871,26 @@ this reproduces — and never claim more fidelity than the measured result below
 - **THE FIRST SHIPPED MODEL ON `chargeRange: 'global'`** (C10's deterministic Barnes-Hut,
   θ = 0.9). znah's own layout is an unbounded n-body repulsion with a quadtree, and C10's
   benchmark says the same thing for a GROWING graph: a finite cutoff degrades as N rises while
-  global holds flat and costs less. Bounded 800×800 world (sized to the 12000-agent cap by the
-  shared rule), `layoutIterations: 3` — both phases carry rule work, so the solver's headroom
-  comes from force passes rather than idle generations.
+  global holds flat and costs less. `layoutIterations: 1` — the 9-generation period already
+  gives 9 force passes per reference tick (vs 6 under the old 2×3 cadence).
+- **THE WORLD IS SIZED FROM A MEASURED EXTENT, not from the `sqrt(N)·rest·1.45` packing rule
+  the other GRA models use.** That rule assumes bond-rest spacing; GLOBAL charge has no cutoff,
+  so the repulsion an outer node feels grows with the whole population and the structure
+  inflates far past it — and how far depends on the SHAPE a rule grows, not just on N. Measured
+  in the real worker at the 10 000-node cap inside a deliberately oversized world: `meduza`
+  4639×4075, `exp tree` 5231×5497, `Rule 17957` **8378×8234** (the stringiest in the
+  catalogue). The shipped world is **12000×12000** — 2.6× the compact-blob rules, 1.4× the
+  worst — and a full run to the cap has **0 agents on the boundary**. It is deliberately NOT
+  larger: the view fits the world, so an oversized world leaves the interesting early growth a
+  speck (16000 was tried and rejected for exactly that). Enlarging a bounded world is otherwise
+  free (the hash anchors on the agents' bbox and is capped at `AGENT_HASH_BIN_CAP`; the charge
+  octree is built over the population).
+- **`NODE_CAP` 10000 with `maxAgents` 24000 — the 2× margin is REQUIRED, not padding.** A
+  generation can split at most a maximal independent set, so N can at most DOUBLE in one
+  generation, and the end condition is evaluated *after* the generation that crossed the cap.
+  At the ceiling `Create Agent` returns −1, the split's Rewire finds no target and the graph
+  stops being cubic — so `maxAgents ≥ 2 × NODE_CAP` is what makes the cubic invariant
+  unbreakable. Verified in the app: Play pauses at **N = 10114**, E = 15171 = 3N/2, max degree 3.
 - **THE FIRST SHIPPED MODEL ON `engine: 'auto'`** (C4) with `reproducibility: 'exact'` (C5).
   Verified in the real app: the chip reads **`agents WASM`** and the Properties Engine row
   reads **`Auto → WebAssembly`** with the reason *"This model declares Exact, so Auto keeps
@@ -2856,10 +2913,13 @@ this reproduces — and never claim more fidelity than the measured result below
   a real model bug, since the capability gate would have hidden a node the model uses. The
   viewer is a STANDALONE agent Output Mapping colouring by `(generation − age) / (generation
   + 1)` through a Color Scale, reproducing znah's growth-history look.
-- **12 presets**, each carrying both rule tables as `lookupTableData` plus
-  `modelAttrs.mutationRate`. Verified end-to-end in the browser: loading `branching` posts
-  `updateModelAttrs {mutationRate: 0.0001}` and both tables matching rule 6259's bits exactly
-  (recomputed independently in the page).
+- **23 presets** (the 12 named ones in znah's own order, then the 11 unnamed rules of its
+  dropdown as `Rule <n>`, ascending), each carrying both rule tables as `lookupTableData` plus
+  `modelAttrs.mutationRate`. Tier M asserts the list IS the reference catalogue — nothing
+  missing, nothing extra, named-first, numbered ascending, every entry decoding to its stated
+  rule integer. Verified end-to-end in the browser by clicking the real Load buttons WHILE
+  PLAYING: `Rule 17957 / 12369 / 2222 / 4226` and `quadratic` each post `updateLookupTable`
+  payloads matching that rule's bits exactly (recomputed independently in the page).
 
 ### Verification of the samples — O6, O8 and the exactness oracle (harness Tiers K, L and M)
 
@@ -2880,24 +2940,35 @@ this reproduces — and never claim more fidelity than the measured result below
   with the link count changing on 496 of them (not a fixed point). **In the real app**
   (WebGPU agent target) the same five-step manoeuvre reproduced exactly: 0 → 0 → 293 → **293**
   → 0, and the single-threshold control collapsed to 0.
-- **THE EXACTNESS ORACLE, in the SHIPPED `Growing Graphs` (Tier M)**: for the two rules whose
-  flagged set is provably independent, N(t) matches the reference implementation **cycle for
-  cycle over 100 cycles** — `quadratic` (2182) ending at 588, `exp tree` (2236) at 2408, zero
-  divergence. The reference is transcribed into the tier as a SEPARATE implementation (it is
-  the ground truth, not a mirror of anything under test). **Negative-controlled twice**:
-  `meduza`, whose flagged nodes CAN be adjacent, must NOT match (so the oracle has teeth), and
-  a **source mutant** that reverts the priority to the intent-blind form breaks the oracle —
-  which is what makes the intent-aware gate demonstrably load-bearing rather than a stylistic
-  choice. The same tier pins the bootstrap by SET COMPARISON (exactly the reference's 15
-  edges, its exact state vector), the table stride order, every preset's rule integer, and O6
-  + I1–I4 at every one of 240 generations across four published rules.
+- **THE EXACTNESS ORACLE, in the SHIPPED `Growing Graphs` (Tier M)**: N(t) matches the
+  reference implementation **cycle for cycle** for `quadratic` (2182, 100 cycles → 588),
+  `exp tree` (2236, 100 → 2408), **`meduza` (2502, 55 → 7518)**, **`Rule 17957` (60 → 3234)**
+  and **`Rule 26145` (60 → 3298)** — i.e. including the rules whose flagged nodes CAN be
+  adjacent, which the pre-drain port could not follow. The reference is transcribed into the
+  tier as a SEPARATE implementation (the ground truth, not a mirror of anything under test).
+  **ALL BUDGETS ARE READ OFF THE SHIPPED FILE** (`PERIOD` from the state tick's Periodic Step,
+  cross-checked against the division gate's `% PERIOD`), the Cubic-GRA/Tier-K precedent, so a
+  cadence retune cannot silently shorten a check. **Negative-controlled twice**: a source
+  mutant that collapses the cadence to a SINGLE division round makes `meduza` diverge at cycle
+  2 (the old behaviour — this is what proves the drain rounds are load-bearing), and a mutant
+  that reverts the priority to the intent-blind form breaks the oracle. The same tier pins the
+  bootstrap by SET COMPARISON (exactly the reference's 15 edges, its exact state vector), the
+  table stride order, the preset catalogue (23, named-first, numbered ascending, complete and
+  with nothing extra), **the drain completing (0 of 9069 latches survive a tick)**, and O6 +
+  I1–I4 at every one of 270 generations (30 reference ticks) across eight published rules —
+  four of them the NEW numbered ones, so a broken catalogue entry cannot ship silently.
 - **`Growing Graphs` in the real app** (WASM agent target, real worker, 0 console errors):
-  the chip reads `agents WASM`; at generation 201 N = 578 / E = 867 = 3N/2 / max degree 3 —
-  and **N = 578 at generation 200 is exactly what the headless run produced**. Loading the
-  `branching` preset posts the right tables + mutation rate; that rule then sits at a
-  mutation-starved fixed point of 26 nodes until the **live Mutation Rate slider** is raised
-  to 0.01, at which point it resumes to 1804 nodes with the cubic invariant intact — the
-  behaviour the model's own Instructions describe.
+  the chip reads `agents WASM`; **Play grows `meduza` to the cap and STOPS there — N = 10114,
+  E = 15171 = 3N/2, max degree 3**, with the *Birth generation* viewer rendering the growth
+  history (indigo core → bright frontier). **Scale runs to the 10 000-node cap** on the shipped
+  file: `meduza` N = 10278 at generation 585 (65 ticks), **6.28 ms/generation**;
+  `Rule 17957` N = 10002 at generation 1620 (180 ticks), **7.44 ms/generation** — both with
+  `E = 3N/2`, min = max degree 3, 0 dangling, 0 asymmetric bonds, **0 agents on the boundary**,
+  0 queue overflows, 0 worker errors. Switching presets (incl. numbered ones) mid-play posts
+  the right tables. **NB the Library card is served through the SW runtime cache** — a probe
+  that regenerates the model on disk and then clicks the card can silently load the PREVIOUS
+  copy (it did here: 12 presets instead of 23); purge the cache entry or load the file through
+  the File-menu input.
 - **Overseer sweep, in the real panel**: 12 rules × `ovRunUntilStop(120)` in 1.7 s;
   `ovRandomizeTable` re-rolls BOTH tables and journals every `{seed, density}`; N spans 4..274
   (rules that die, grow and blow up) while the `maxDegree` series reads **mean 3, std 0, min
