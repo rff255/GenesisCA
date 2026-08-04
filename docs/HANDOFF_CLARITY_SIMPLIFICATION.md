@@ -2257,6 +2257,51 @@ outcomes came from the same rule applied before the numbers existed.
 
 ---
 
+## §3 — FOLLOW-UPS REGISTER (post-initiative)
+
+The consolidated list of everything the eleven phases deliberately deferred, left to the
+user, or recorded as future work. Each item names its source phase (whose Completion
+Report carries the full context) — this section is the ONE place to come back to.
+
+### A. User decisions (shipped-model tuning — the user's call, never auto-applied)
+
+| # | Item | Source | Context |
+|---|---|---|---|
+| A1 | **`Particle Life 3D` `neighbourQueryRadius` 24 → 16** — at 24, `floor(70/24) = 2` z-bins puts the hash under the 3-bin minimum, so the model runs ALL-PAIRS on every target (43.6 vs 5.5 ms of queries at N=1200). 16 restores a real hash (240 bins of 16.0, verified in-app); the graph only queries at 16 anyway. The C3/C11 diagnostics `spatialIndex` row now names this live. | C11 | INVESTIGATION_ADAPTIVE_INDEX.md §"the finding" |
+| A2 | **Flip `Cubic GRA` / `SDCA` to `chargeRange: 'global'`** — the C10 benchmark says global BH is strictly better for the GRA regime (nnb/bond 0.37→0.81, overlap 82%→4% at N=20k, ~30% cheaper), but shipped configs are deliberate; only the option note was added to descriptions. | C10 | §C10 report, benchmark table |
+
+### B. Engine / feature follow-ups (real work, each needs its own plan when picked up)
+
+| # | Item | Source | Context |
+|---|---|---|---|
+| B1 | **GPU tree BUILD for global charge** — the octree is CPU-built + uploaded per generation (the hash precedent), so a residency-eligible model using global charge falls back to the per-gen path. A GPU-side build (Morton sort + node accumulation in compute) would lift the residency blocker. | C10 | §C10 report; the diagnostics reason + C1 note mark the fallback |
+| B2 | **P9's actual FREEDOMS — layout cadence/location decoupling** for taint-clean (presentational) models: tick layout per rendered frame or keep it GPU-side with no readback. C8 shipped detection + labels only. Includes the explicit-consent door (should read `witnesses`) and a "would be presentational but for X" near-miss line in the readout. | C8 / proposal P9 | §C8 report follow-ups |
+| B3 | **A per-radius "tuned" hash** — the only contender that beat the shipped path on shipped-shaped fixtures in C11's benchmark; preconditions + numbers in the investigation. | C11 | INVESTIGATION_ADAPTIVE_INDEX.md §9 |
+| B4 | **`computeAgentMaxHashBins` under-reserves for BOUNDED worlds** — the bbox-anchored hash can exceed the reserve computed from world dims; pre-existing, engine-SAFE (the worker fits-check falls back per step), but the fallback costs perf and the reserve should account for bbox anchoring. | C10 | §C10 report (found while fixing the same defect in parity-agent-force) |
+| B5 | **Adaptive-index RETRY PRECONDITIONS** — revisit only if a model class emerges with r/spacing ≥ 10 at N ≥ 10k, torus worlds > 256 bins/axis (the coarsening regime, where the tree reaches 10×), or non-uniform per-agent radii. | C11 | INVESTIGATION_ADAPTIVE_INDEX.md |
+| B6 | **Emitted-WGSL viewer** — Show Code now always shows the JS reference (C4), so the WGSL is no longer reachable from the UI (dev harness only). Re-add as a read-only Advanced view. | C4 | §C4 report deviation 4 |
+| B7 | **Per-model θ guidance for global charge** (chargeTheta defaults to 0.9; accuracy spans 0.013%@0.2 → 3.76%@1.4). A hint or per-archetype default. | C10 | §C10 report |
+| B8 | **WebGPU agent SoA layout stays UNGATED** (C9's deliberate carve-out — it's a transient per-generation mirror, and gating it would move the windowed readback plan). Flipping it on later is a layout-only change; the emitters already carry the safety catch. | C9 | §C9 report deviations |
+
+### C. Schema / cleanup schedule
+
+| # | Item | Source | Context |
+|---|---|---|---|
+| C-1 | **Legacy engine-flag mirror removal** — `useWasm`/`useWebGPU` are kept as the resolved mirror for ONE release cycle of back-compat; after that, `engine` is the only representation. | C4 | §C4 report; serialization writes both |
+| C-2 | **Legacy physics-flag READ removal** — the `?? legacy` arms in `collisionMode`/`usesEngineSprings`/`usesEngineGrowth`/`resolveMaxBonds` can go one release after the shipped generators emit `agentCapabilities` (6 of 14 agent gen-scripts still rely on load-time inference). `customForcesOnly` goes with them (single read site). The three DIVERGENT fallback predicates in centerBased.ts must be unified DELIBERATELY at that point (unifying now would change partial-profile resolution). `useBondingPhysics` is NOT on this list — it still solely controls adhesion μ_A; needs an Adhesion capability first. | C6 | §C6 report, removal schedule |
+| C-3 | **P8's remaining half** — docs/NODES_REFERENCE.md per-node target/capability annotations are still hand-written (its facts live in a prose Notes column); the generator is shaped to emit that table later. | C3 | §C3 report |
+| C-4 | **`SimEngine.ts` is dead code** (unreferenced legacy fallback engine) — deletion candidate. | C7 | §C7 report follow-ups |
+
+### D. Smaller UX candidates
+
+| # | Item | Source |
+|---|---|---|
+| D1 | A unified user-visible "Simulation seed" control (setRngSeed + table rolls + spawn in one place) — proposal P7's optional half. | C7 |
+| D2 | Starter CONTENT for the `Classic CA (2D)` archetype (today it differs from Empty only by name — the natural home for a seeded example rule). | C7 |
+| D3 | From the znah case study (proposal Appendix B): a built-in "birth generation" colour view preset + an optional bloom post-pass + an art/autonomous Overseer preset (stall-detecting rule explorer). | proposal |
+
+---
+
 ## Orchestrator log
 
 - 2026-08-02: runbook created. Launching C1.
