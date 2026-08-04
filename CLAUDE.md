@@ -2328,8 +2328,8 @@ live **force-directed embedding for free**, which most GRA tooling has to bolt o
 | G4 | no neighbour-state **census** as a first-class value | the `neighbourCensus` node, LOWERED to existing nodes ⇒ zero per-target emit |
 
 **The invariants are the contract** (Impact Map §5), machine-checked by
-[scripts/verify-graph-rewrite.mjs](scripts/verify-graph-rewrite.mjs) — **405 checks, twelve
-tiers (A…L), every invariant negative-controlled**: I1 handshake (`Σdeg == 2|E|`), I2 bond
+[scripts/verify-graph-rewrite.mjs](scripts/verify-graph-rewrite.mjs) — **427 checks, thirteen
+tiers (A…M), every invariant negative-controlled**: I1 handshake (`Σdeg == 2|E|`), I2 bond
 symmetry (every per-slot field agrees in BOTH rows), I3 no dangling, I4 capacity, I5
 atomicity (a rejected op leaves the graph EXACTLY as before), I6 degree preservation, I7
 conservation across division. Tiers K and L load the SHIPPED sample `.gcaproj` files and run
@@ -2626,10 +2626,11 @@ Sixteen seed agents; each step every agent rolls Bernoulli(p) AND looks its own 
 
 ### The flagship samples
 
-Two shipped library models. Both are agents-only, synchronous, and carry graph indicators;
-both compile and run on **all three agent targets** (their generators are
-[scripts/gen-cubic-gra.mjs](scripts/gen-cubic-gra.mjs) and [scripts/gen-sdca.mjs](scripts/gen-sdca.mjs),
-and the harness's Tiers K/L load the generated `.gcaproj` directly).
+Three shipped library models. All are agents-only, synchronous, and carry graph indicators;
+all compile and run on **all three agent targets** (their generators are
+[scripts/gen-cubic-gra.mjs](scripts/gen-cubic-gra.mjs), [scripts/gen-sdca.mjs](scripts/gen-sdca.mjs)
+and [scripts/gen-growing-graphs.mjs](scripts/gen-growing-graphs.mjs), and the harness's Tiers K/L/M
+load the generated `.gcaproj` directly).
 
 #### `Cubic GRA` — a 3-regular graph that rewrites itself while STAYING 3-regular
 
@@ -2767,7 +2768,100 @@ feeding the other: `σᵢ' = f(σᵢ, #On in the bonded 1-ring)` and
   multiplication is commutative) and `drive + agree * bonus` binds as the chain did. O8 and
   I1–I4 still hold at every one of 500 generations.
 
-### Verification of the samples — O6 and O8 (harness Tiers K and L)
+#### `Growing Graphs` — Paul Cousin's binary cubic GRA, ported from znah's demo
+
+A port of **Alex Mordvintsev's (znah) "Growing Graphs"** demo (znah.net/graphs) of **Paul
+Cousin's** binary cubic Graph-Rewriting Automata, with that demo's twelve published rule
+presets. Generator: [scripts/gen-growing-graphs.mjs](scripts/gen-growing-graphs.mjs); the
+reference implementation is `js/graph.js` (80 lines) + `js/app.js` in the `graphs-main` tree.
+**Credit the lineage in this order — Cousin defines the automata, Mordvintsev's demo is what
+this reproduces — and never claim more fidelity than the measured result below.**
+
+- **THE WHOLE AUTOMATON IS ONE 16-BIT INTEGER**, and the two rule tables ARE that integer,
+  bit for bit: `r = own*4 + (ON neighbours)` (r ∈ 0..7), `nextState = (R >> r) & 1`,
+  `divide = (R >> (r+8)) & 1`. Both tables are 2×4 over `[own state intRange 0..1] ×
+  [ON neighbours intRange 0..3]`, and **row-major means the flat cell index IS `r`** — so a
+  preset is just `R` sliced into two 8-entry bool arrays, with no translation layer. Verified,
+  not assumed: Tier M asserts `resolveAxes(...).strides === [4, 1]` on both tables (a
+  transposed table would silently address a different rule) and re-derives every preset's
+  cells from its stated rule integer.
+- **THE TWO PERIODIC STEPS ARE THE REFERENCE'S TWO PHASES.** znah alternates a STATE tick and
+  a DIVISION tick, and the division tick does not re-read the states — it replays the flags
+  the state tick computed. So the model roots a Periodic Step at **each** phase of period 2,
+  and **one GenesisCA generation is one reference `grow()` call**. Phase 0: census → next
+  state (+ mutation) + the division intent. Phase 1: split. Daughters inherit the state
+  phase 0 committed.
+- **THE INTENT-AWARE PRIORITY IS THE LOAD-BEARING DESIGN DETAIL, and the obvious version is
+  measurably WRONG.** Cubic GRA's gate — everyone rolls a priority, split iff you are the
+  strict local minimum — makes a flagged node wait behind neighbours that **never wanted to
+  split**, discarding ~¾ of the splits *even when the flagged nodes are already pairwise
+  non-adjacent*. For `quadratic` (2182) that did not merely slow growth: the automaton fell
+  into its absorbing all-OFF configuration and **stopped at 16 nodes against the reference's
+  854**. The fix folds the INTENT into the same number the tie-break uses: `prio = roll` in
+  [0,1) when flagged, `roll + 2` otherwise, and the division tick requires **`prio < 1.5`**
+  (I was flagged) **AND** `prio < min(neighbour prio)` (I won the contest). A non-splitter
+  sits above 2 and can never block anyone. **Safety is unchanged** — two adjacent splitters
+  would need `p_i < p_j` and `p_j < p_i`. The agent attribute's DEFAULT is 2.5 (a
+  non-splitter value) so a newborn can never look flagged before its first state tick.
+- **THE EXACTNESS RESULT — the honest claim, and it is stronger than "qualitatively
+  faithful".** For a rule whose divide bit fires only at `r = 3` (own OFF, all three
+  neighbours ON) two flagged nodes **cannot** be adjacent — a flagged neighbour would have to
+  be ON (from my side) and OFF (from its own) at once — so the independent-set gate suppresses
+  NOTHING and the port reproduces the reference N(t) **EXACTLY, cycle for cycle**. Measured on
+  `quadratic` (2182) and `exp tree` (2236): 100 cycles, zero divergence. Where a rule CAN flag
+  two neighbours at once (`meduza`, 2502) the trajectory genuinely differs. **So: exact for
+  one class of rules, qualitatively faithful for the rest — say exactly that.** The deviation
+  also makes those rules' trajectories seed-dependent, which the reference's are not.
+- **THE INITIAL CONDITION IS THE REFERENCE'S, EXACTLY.** znah always seeds the same 10-node
+  cubic graph — a 10-cycle plus the chords {0,2} {1,4} {3,6} {5,8} {7,9}, states
+  `[0,0,0,1,0,1,0,1,1,1]`. The chord map is an **involution**, so it ships as a 1-axis
+  **handle-indexed lookup table** (`chordPartner`), with a second one (`initState`) for the
+  states. The Agent Init Event places ten agents on a circle sized from the LIVE world dims
+  and reads their states from the table; the **wiring** happens on the first behaviour step
+  (Form Bond writes the acting agent's request queue, so it is invalid in an Init Event),
+  gated on bond degree 0 so it runs exactly once. Each node requests `(h+1)%10`, `(h+9)%10`
+  and `chord[h]`; Form Bond is symmetric and an existing bond is an idempotent no-op, so the
+  **30 requests settle to precisely 15 edges with no agent ever exceeding maxBonds 3**
+  (verified by set comparison, not by counting).
+- **The split is Cubic GRA's 5 queue ops at a tight `maxBonds: 3`**, but with a FIXED
+  orientation (the mother keeps bond slot 0) rather than a Split A/B/C verb: which neighbour
+  is kept is **irrelevant to the resulting graph** — all three post-split nodes sit on the
+  triangle with one external edge each, so permuting {a,b,c} among them is an isomorphism, and
+  since all three carry the same state the labelled graph is isomorphic too.
+- **THE FIRST SHIPPED MODEL ON `chargeRange: 'global'`** (C10's deterministic Barnes-Hut,
+  θ = 0.9). znah's own layout is an unbounded n-body repulsion with a quadtree, and C10's
+  benchmark says the same thing for a GROWING graph: a finite cutoff degrades as N rises while
+  global holds flat and costs less. Bounded 800×800 world (sized to the 12000-agent cap by the
+  shared rule), `layoutIterations: 3` — both phases carry rule work, so the solver's headroom
+  comes from force passes rather than idle generations.
+- **THE FIRST SHIPPED MODEL ON `engine: 'auto'`** (C4) with `reproducibility: 'exact'` (C5).
+  Verified in the real app: the chip reads **`agents WASM`** and the Properties Engine row
+  reads **`Auto → WebAssembly`** with the reason *"This model declares Exact, so Auto keeps
+  agents on WebAssembly"*. **This is what made `test-engine-resolve.mjs` §1 need a branch**:
+  that sweep asserts LEGACY fidelity (`migrated.engine === the engine the flags asked for`,
+  and *"a legacy file must NOT become 'auto'"*), which is a statement about the C4
+  **migration**, not about what a model may declare. A file that already carries
+  `properties.engine` now takes an explicit-declaration branch instead: the migration must
+  leave it untouched, the auto flags must match the declaration, and an Exact contract must
+  keep auto agents off the GPU. All 6 of the sweep's negative controls still fire, and the
+  new branch was shown non-vacuous by flipping the model's contract to `statistical` (the
+  check count drops 719 → 718 — the Exact assertion is the one that stops applying).
+- **Geometry verdict: PRESENTATIONAL** (C8) — the rule is purely topological (a census over
+  BONDED neighbours, a handle-indexed bootstrap), and the only geometry read feeds Create
+  Agent's x/y, a geometry-only sink. Confirmed live: the C2 pipeline panel tags the force
+  phases *presentation only — does not affect your rule* alongside
+  `k = -10 · GLOBAL (Barnes–Hut θ = 0.9)`.
+- **The `lifespan` capability is ON because the "Birth generation" viewer reads Get Age.**
+  `test-agent-capabilities.mjs` caught the omission ("migration HIDES a used node 'getAge'") —
+  a real model bug, since the capability gate would have hidden a node the model uses. The
+  viewer is a STANDALONE agent Output Mapping colouring by `(generation − age) / (generation
+  + 1)` through a Color Scale, reproducing znah's growth-history look.
+- **12 presets**, each carrying both rule tables as `lookupTableData` plus
+  `modelAttrs.mutationRate`. Verified end-to-end in the browser: loading `branching` posts
+  `updateModelAttrs {mutationRate: 0.0001}` and both tables matching rule 6259's bits exactly
+  (recomputed independently in the page).
+
+### Verification of the samples — O6, O8 and the exactness oracle (harness Tiers K, L and M)
 
 - **O6, the milestone's headline result, in the SHIPPED `Cubic GRA`**: `min degree == max
   degree == 3` AND `E == 3N/2` at **EVERY** generation — 220 generations at the shipped Split
@@ -2786,6 +2880,24 @@ feeding the other: `σᵢ' = f(σᵢ, #On in the bonded 1-ring)` and
   with the link count changing on 496 of them (not a fixed point). **In the real app**
   (WebGPU agent target) the same five-step manoeuvre reproduced exactly: 0 → 0 → 293 → **293**
   → 0, and the single-threshold control collapsed to 0.
+- **THE EXACTNESS ORACLE, in the SHIPPED `Growing Graphs` (Tier M)**: for the two rules whose
+  flagged set is provably independent, N(t) matches the reference implementation **cycle for
+  cycle over 100 cycles** — `quadratic` (2182) ending at 588, `exp tree` (2236) at 2408, zero
+  divergence. The reference is transcribed into the tier as a SEPARATE implementation (it is
+  the ground truth, not a mirror of anything under test). **Negative-controlled twice**:
+  `meduza`, whose flagged nodes CAN be adjacent, must NOT match (so the oracle has teeth), and
+  a **source mutant** that reverts the priority to the intent-blind form breaks the oracle —
+  which is what makes the intent-aware gate demonstrably load-bearing rather than a stylistic
+  choice. The same tier pins the bootstrap by SET COMPARISON (exactly the reference's 15
+  edges, its exact state vector), the table stride order, every preset's rule integer, and O6
+  + I1–I4 at every one of 240 generations across four published rules.
+- **`Growing Graphs` in the real app** (WASM agent target, real worker, 0 console errors):
+  the chip reads `agents WASM`; at generation 201 N = 578 / E = 867 = 3N/2 / max degree 3 —
+  and **N = 578 at generation 200 is exactly what the headless run produced**. Loading the
+  `branching` preset posts the right tables + mutation rate; that rule then sits at a
+  mutation-starved fixed point of 26 nodes until the **live Mutation Rate slider** is raised
+  to 0.01, at which point it resumes to 1804 nodes with the cubic invariant intact — the
+  behaviour the model's own Instructions describe.
 - **Overseer sweep, in the real panel**: 12 rules × `ovRunUntilStop(120)` in 1.7 s;
   `ovRandomizeTable` re-rolls BOTH tables and journals every `{seed, density}`; N spans 4..274
   (rules that die, grow and blow up) while the `maxDegree` series reads **mean 3, std 0, min

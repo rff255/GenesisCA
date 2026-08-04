@@ -2298,7 +2298,7 @@ Report carries the full context) — this section is the ONE place to come back 
 |---|---|---|
 | D1 | A unified user-visible "Simulation seed" control (setRngSeed + table rolls + spawn in one place) — proposal P7's optional half. | C7 |
 | D2 | Starter CONTENT for the `Classic CA (2D)` archetype (today it differs from Empty only by name — the natural home for a seeded example rule). | C7 |
-| D3 | From the znah case study (proposal Appendix B): a built-in "birth generation" colour view preset + an optional bloom post-pass + an art/autonomous Overseer preset (stall-detecting rule explorer). | proposal |
+| D3 | From the znah case study (proposal Appendix B): a built-in "birth generation" colour view preset + an optional bloom post-pass + an art/autonomous Overseer preset (stall-detecting rule explorer). **PARTIAL — the birth-generation view now SHIPS**, as a standalone agent Output Mapping in the `Growing Graphs` library sample (Get Generation − Get Age → Color Scale → Set Cell Looks). It is a per-model graph, not a built-in preset, so the "built-in" half stands; the **bloom post-pass** and the **autonomous/stall-detecting Overseer preset** are both untouched. | proposal |
 
 ---
 

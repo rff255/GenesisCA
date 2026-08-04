@@ -2306,6 +2306,20 @@ export function HelpView() {
             (couple above one threshold, decouple below a lower one) so edges do not chatter. Open
             either one and read its Instructions pill.
           </p>
+          <p className={styles.p}>
+            <strong>Growing Graphs</strong> is the third, and the one to open first if you want to
+            see how small a graph-rewriting automaton can be. It is a port of Alex Mordvintsev&rsquo;s
+            demo of Paul Cousin&rsquo;s <em>binary cubic</em> automata: every node holds{' '}
+            <em>one bit</em> and exactly three neighbours, and a single <em>16-bit integer</em>{' '}
+            defines the whole automaton &mdash; the low byte says what a node becomes, the high byte
+            says whether it splits, both indexed by <code>own bit &times; 4 + ON neighbours</code>.
+            The two rule tables in the Attributes panel <em>are</em> that integer, cell for cell, and
+            twelve presets carry the published rules. It also shows the pattern for reproducing a
+            published initial condition exactly: two handle-indexed lookup tables and a bootstrap
+            branch gated on bond degree 0 rebuild the reference&rsquo;s precise ten-node seed graph.
+            Its second viewer, <em>Birth generation</em>, colours each node by when it was born, so
+            the structure reads as its own growth history.
+          </p>
           <h3 className={styles.h3}>Neighbour Census &mdash; the input a graph rule reads</h3>
           <p className={styles.p}>
             A rule that runs on a <em>graph</em> cannot name its neighbours &mdash; there is no
