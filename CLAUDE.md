@@ -2800,34 +2800,45 @@ never claim more fidelity than the measured result below.**
   **DIVISION ROUNDS** each split the still-latched winners and CLEAR their latch, so the losers
   win a later round *against the adjacency the winners just rewrote*. That IS znah's
   mutated-adjacency drain, executed in rounds instead of index order.
-- **K = 8, CHOSEN BY MEASUREMENT** (all 18 mutation-free published rules × 100 reference ticks,
-  through the real compiled behaviour): leftover latches **31.71 % at K=1 → 8.53 % (K=2) →
-  0.55 % (K=4) → 0.02 % (K=6) → 0.00 % (K=8)**, and K=10 never uses a ninth round, so 8 is the
-  deepest drain the catalogue needs. **A sub-1 % leftover rate arrives much earlier but is the
-  WRONG criterion**: leftovers concentrate in the deep-chain rules (17957, 26145), which
-  diverge from the reference by cycle 2 at K=4. The rules matching the reference go
-  **8/18 (K=1) → 10/18 (K=2..6) → 18/18 (K=8)**. `LAYOUT_ITERATIONS` dropped 3 → 1 to pay for
-  the longer period: the layout still gets 9 force passes per reference tick (vs 6 before) at a
-  third of the per-generation cost.
-- **THE LATCH *IS* THE PRIORITY** — a deliberate deviation from a separate `flagged` bool. The
-  gate must be INTENT-AWARE (below), so the flag and the tie-break have to live in the same
-  number; a second boolean would duplicate `prio < 1.5` and could drift from it. A splitter
-  writes `prio = 2.5`, which **both** consumes its latch **and** stops it blocking the
-  neighbours it beat — that single write is what makes the later rounds work. The priority is
-  rolled ONCE per tick, not per round (clearing the winner's latch is what changes the contest).
-- **THE INTENT-AWARE PRIORITY IS THE LOAD-BEARING DESIGN DETAIL, and the obvious version is
-  measurably WRONG.** Cubic GRA's gate — everyone rolls a priority, split iff you are the
-  strict local minimum — makes a flagged node wait behind neighbours that **never wanted to
-  split**, discarding ~¾ of the splits *even when the flagged nodes are already pairwise
-  non-adjacent*. For `quadratic` (2182) that did not merely slow growth: the automaton fell
-  into its absorbing all-OFF configuration and **stopped at 16 nodes against the reference's
-  854**. The fix folds the INTENT into the same number the tie-break uses: `prio = roll` in
-  [0,1) when flagged, `roll + 2` otherwise, and a division round requires **`prio < 1.5`**
-  (still latched) **AND** `prio < min(neighbour prio)` (I won the contest). A non-splitter
-  sits above 2 and can never block anyone. **Safety is unchanged** — two adjacent splitters
-  would need `p_i < p_j` and `p_j < p_i`. The agent attribute's DEFAULT is 2.5 (a non-splitter
-  value), which is also what stops a daughter dividing in a later round of the tick it was
-  born in — the analogue of the reference freezing its flag array.
+- **K = 8, CHOSEN BY MEASUREMENT — RE-MEASURED after the priority became the HANDLE** (all 18
+  mutation-free published rules × 100 reference ticks, through the real compiled behaviour):
+  leftover latches **29.30 % at K=1 → 6.33 % (K=2) → 0.23 % (K=4) → 0.00 % (K=6)**, and
+  **K=16 never uses a seventh round**, re-confirmed at the 10 000-node cap over 120 ticks
+  (55 039 latches). Rules matching the reference: **9/18 (K=1) → 15/18 (K=2, K=4) → 18/18
+  (K≥6)**. **The worry that motivated the re-measurement did not materialise**: a deterministic
+  ascending order could in principle line up a DESCENDING chain of flagged neighbours and drain
+  one per round, but handle order in fact needs SHALLOWER drains than the random roll did
+  (**6 rather than 8**) — unsurprising, since ascending handle IS the order the reference
+  divides in. **K stays 8** (not the measured 6) so the drain carries a margin of two for a rule
+  nobody has rolled yet, and so PERIOD stays 9 — the cadence the layout's force-pass budget and
+  the measured world extent were both established against. Tier M now asserts
+  `deepest < ROUNDS`, so a retune that cut K down onto the measured depth fails.
+  `LAYOUT_ITERATIONS` is 1: the layout gets 9 force passes per reference tick at a third of the
+  per-generation cost of the old 2×3 cadence.
+- **THE LATCH *IS* THE PRIORITY, AND THE PRIORITY IS THE AGENT'S HANDLE.** The gate must be
+  INTENT-AWARE (below), so the flag and the tie-break live in the same number; a second boolean
+  would duplicate `prio < PRIO_FLAG_LIMIT` and could drift from it. Flagged ⇒ `prio = handle`
+  (∈ [0, maxAgents)); unflagged ⇒ `prio = PRIO_UNFLAGGED` (1e6), which is also what a splitter
+  writes — **both** consuming its latch **and** unblocking the neighbours it beat, the single
+  write that makes the later rounds work. **Both constants are integers below 2²⁴, so they are
+  exact in f32 as well as f64** and no contest can turn on a rounding artefact on the WebGPU
+  agent target. **The handle IS znah's node index** (Create Agent allocates ascending; nothing
+  dies here), so the lowest-handle-wins rule reproduces the reference's index walk. An earlier
+  version rolled a random priority: the within-tick split order — and therefore which neighbour
+  each daughter inherited, and therefore the whole embedding — varied run to run. Tier M asserts
+  three different RNG seeds now produce the **identical labelled graph**.
+- **THE INTENT-AWARE BANDING IS THE LOAD-BEARING DESIGN DETAIL, and the obvious version is
+  measurably WRONG.** Cubic GRA's gate — everyone takes a priority, split iff you are the strict
+  local minimum — makes a flagged node wait behind neighbours that **never wanted to split**,
+  discarding ~¾ of the splits *even when the flagged nodes are already pairwise non-adjacent*.
+  For `quadratic` (2182) that did not merely slow growth: the automaton fell into its absorbing
+  all-OFF configuration and **stopped at 16 nodes against the reference's 854**. So a division
+  round requires **`prio < 1e5`** (still latched) **AND** `prio < min(neighbour prio)` (I won the
+  contest); a non-splitter sits at 1e6 and can never block anyone. **Safety is unchanged** — two
+  adjacent splitters would need `p_i < p_j` and `p_j < p_i`, and handles are unique so strict
+  inequality always resolves. The agent attribute's DEFAULT is `PRIO_UNFLAGGED`, which is also
+  what stops a daughter dividing in a later round of the tick it was born in — the analogue of
+  the reference freezing its flag array.
 - **THE DIVISION ROUNDS ARE HAND-GATED (`generation % PERIOD != 0`), NOT K Periodic Steps.**
   The flow walk INLINES a node's body once per incoming path, so K periodic roots pointing at
   one split chain would emit K copies of it. One `getGeneration → Math(%) → Compare(!=) → If`
@@ -2842,32 +2853,73 @@ never claim more fidelity than the measured result below.**
   residual "miss" is the cycle in which the reference's own node limit stops it. `quadratic`
   and `exp tree` stay **100/100 at BOTH K**, which is the regression proof that the extra
   no-op rounds change nothing for the rules that never needed them.
-- **WHAT REMAINS ORDER-DEPENDENT, stated honestly.** N(t) cannot diverge from split ORDER
-  (each latch is consumed exactly once either way), so the mutation-free deviation is **zero**.
-  What differs is **which neighbour a daughter inherits**: the rounds pick winners by random
-  priority where the reference walks node indices, so the two graphs are built from the same
-  operations in a different order. The claim is **semantic faithfulness**, never bit-identity
-  of the labelled graph. Second residual: a node still latched after round K is re-latched by
-  the next state tick — measured at **0.0000 %** of latches for the published rules, but it is
-  a deviation all the same. A rule WITH mutation cannot match at all (the reference flips on
+- **SLOT ORDER IS THE FIDELITY FRONTIER, and three of the four rows a split touches are now
+  EXACT.** A bond APPENDS to both endpoints' lists, so a node's slot order is its incident edges
+  sorted by formation time — and the split reads slot 0 (kept) and slots 1/2 (handed to the
+  daughters), so slot order propagates into the embedding forever. The split's **operation order
+  is therefore not free**: `rewire(b→j)` · `rewire(c→k)` · `between(b,j)` · **`between(j,k)`** ·
+  `between(c,k)` yields `mother = [a,j,k]`, `j = [i,b,k]`, `k = [i,j,c]` — znah's three rows
+  verbatim. Issuing `between(j,k)` LAST instead (the original order) gives `k = [i,c,j]`. Peak
+  degree during the drain is still exactly 3 at every step, so `maxBonds` stays a tight 3.
+  Tier M asserts all three rows through the real engine and negative-controls the op order.
+- **THE ONE REMAINING STRUCTURAL DIFFERENCE — the REWIRE RECEIVER, and it needs an engine verb.**
+  znah's `reconnect(b, i, j)` is `node[node.indexOf(i)] = j`, an **in-place** overwrite that
+  preserves position. GenesisCA's `rewireBond` is break + form: the break swap-removes (the LAST
+  entry jumps into the freed slot) and the form appends, so `b`'s list comes out **reordered
+  unless the mother happened to sit in its last slot**. The neighbour SET is right, the order is
+  not, and the next split reads slots 1/2 — so it compounds. **Measured**: the labelled graph now
+  tracks the reference exactly for **9 cycles on `quadratic` / 5 on `exp tree` / 2 on `meduza`**
+  (all were **1** before this pass), and the reference's habit of concentrating splits into a few
+  long-lived hubs is *partly* reproduced — on `meduza` the busiest node splits **11** times
+  against the reference's **35** (hubs with ≥3 splits: 1 → 3, reference 33), while `quadratic`
+  moved slightly the OTHER way on hub count (73 → 54, reference 139). **So: real but partial and
+  non-uniform — do not claim the shape is reproduced.** What IS reproduced exactly at N ≈ 3000 on
+  all three rules is the graph's **eccentricity from the core** (60 / 48 / 61, matching the
+  reference), i.e. the gross extent was already right. Closing the rest needs a **third-party
+  in-place TRANSFER verb** — designed and assessed in the follow-ups register
+  ([HANDOFF_CLARITY_SIMPLIFICATION.md](docs/HANDOFF_CLARITY_SIMPLIFICATION.md) §3.B9), which also
+  re-derives why the full-fidelity op order needs `maxBonds 4`.
+- **The other residuals, stated honestly.** N(t) cannot diverge from split ORDER (each latch is
+  consumed exactly once either way), so the mutation-free deviation is **zero**. A node still
+  latched after round K would be re-latched by the next state tick — measured at **0.0000 %** for
+  the published rules. A rule WITH mutation cannot match at all (the reference flips on
   `Math.random`, the port on the seeded shared stream) — a different noise realisation, not a
   fidelity gap, and the oracle excludes those 5 presets for that reason.
-- **THE INITIAL CONDITION IS THE REFERENCE'S, EXACTLY.** znah always seeds the same 10-node
-  cubic graph — a 10-cycle plus the chords {0,2} {1,4} {3,6} {5,8} {7,9}, states
-  `[0,0,0,1,0,1,0,1,1,1]`. The chord map is an **involution**, so it ships as a 1-axis
+- **THE INITIAL CONDITION IS THE REFERENCE'S, EXACTLY — INCLUDING 9 OF THE 10 SLOT ORDERS.**
+  znah always seeds the same 10-node cubic graph — a 10-cycle plus the chords {0,2} {1,4} {3,6}
+  {5,8} {7,9}, states `[0,0,0,1,0,1,0,1,1,1]` — and **every row is literally
+  `[prev, next, chord]`**. The chord map is an **involution**, so it ships as a 1-axis
   **handle-indexed lookup table** (`chordPartner`), with a second one (`initState`) for the
-  states. The Agent Init Event places ten agents on a circle sized from the LIVE world dims
-  and reads their states from the table; the **wiring** happens on the first behaviour step
-  (Form Bond writes the acting agent's request queue, so it is invalid in an Init Event),
-  gated on bond degree 0 so it runs exactly once. Each node requests `(h+1)%10`, `(h+9)%10`
-  and `chord[h]`; Form Bond is symmetric and an existing bond is an idempotent no-op, so the
-  **30 requests settle to precisely 15 edges with no agent ever exceeding maxBonds 3**
-  (verified by set comparison, not by counting).
-- **The split is Cubic GRA's 5 queue ops at a tight `maxBonds: 3`**, but with a FIXED
-  orientation (the mother keeps bond slot 0) rather than a Split A/B/C verb: which neighbour
-  is kept is **irrelevant to the resulting graph** — all three post-split nodes sit on the
-  triangle with one external edge each, so permuting {a,b,c} among them is an isomorphism, and
-  since all three carry the same state the labelled graph is isomorphic too.
+  states. The Agent Init Event places ten agents on a circle sized from the LIVE world dims and
+  reads their states from the table; the **wiring** happens on the first behaviour step (Form Bond
+  writes the acting agent's request queue, so it is invalid in an Init Event), gated on bond
+  degree 0 so it runs exactly once. **The formation order is SCRIPTED**, since the drain applies
+  queues in ascending agent order: agent `h` forms only its own `(h+1)` edge (nobody forms a
+  `prev` edge — the previous agent already did) and issues its chord **only when it is the HIGHER
+  endpoint**. That lays the cycle down as e0…e9 with each chord immediately after both its
+  endpoints' cycle edges ⇒ **9 of 10 rows match znah exactly**.
+  **THE TENTH IS PROVABLY IMPOSSIBLE, not a shortfall**: node `h`'s prev-edge is `e(h-1)` and its
+  next-edge is `e(h)`, so `[prev, next]` for every `h` at once needs
+  `t(e9) < t(e0) < … < t(e9)` — a cycle. Exactly one node must carry its cycle edges the other way
+  round; here node 0 gets `[next, chord, prev]`. Tier M asserts the 9/10 count, WHICH node is the
+  exception, and negative-controls it (giving each chord to its LOWER endpoint drops it to 4/10 —
+  which is what the pre-2026-08-04 bootstrap produced).
+- **The split is Cubic GRA's 5 queue ops at a tight `maxBonds: 3`**, with the mother keeping bond
+  slot 0 — and unlike Cubic GRA that is **NOT** an arbitrary choice here: slot 0 is `a`, the
+  neighbour znah's mother keeps, so the fixed orientation is what makes the mother's row match.
+- **TWO LIVE PRESENTATION SLIDERS** (both bounded model attributes, deliberately absent from the
+  presets so loading a rule never moves them). **Max Generations** gates BOTH the state tick and
+  the division rounds (`0` = unlimited), freezing the automaton while the force layout, the render
+  and every other control keep running; freezing part-way through a tick is safe **because O6
+  holds at every generation, not only at tick boundaries**. **Node Radius** is written by every
+  agent every generation via **Set Target Radius** + a snap-rate growth ramp (`growthRate 2`,
+  above the whole slider range, so it lands in one generation) — **not** Set Agent Radius by id,
+  whose wired Agent port is exactly what the synchronous cross-agent write gate rejects, correctly
+  (it cannot know statically that Get Self Handle is self-targeted). Its upper bound **1.35** is
+  not cosmetic: the hash bin edge is `max(interactionRange·2·defaultRadius, neighbourQueryRadius)`
+  = 6, and the 3×3 stencil only guarantees a pair within one bin edge, so the soft-collision
+  search stays complete only while `interactionRange·(r_i+r_j) ≤ 6`. The `growth` capability is on
+  ONLY to carry this; nothing in the rule reads a radius, so the C8 geometry verdict is unchanged.
 - **THE FIRST SHIPPED MODEL ON `chargeRange: 'global'`** (C10's deterministic Barnes-Hut,
   θ = 0.9). znah's own layout is an unbounded n-body repulsion with a quadtree, and C10's
   benchmark says the same thing for a GROWING graph: a finite cutoff degrades as N rises while

@@ -3769,12 +3769,24 @@ function withPresetGG(model, name) {
   return m;
 }
 
-/** How many live agents still carry a LATCHED division intent (`prio < 1.5`)? */
-function countLatchedGG(s) {
+/** How many live agents still carry a LATCHED division intent? The threshold is
+ *  READ OFF THE SHIPPED FILE (the `prio < PRIO_FLAG_LIMIT` statement node), so a
+ *  later change to the priority banding cannot leave this measuring nothing. */
+function flagLimitGG(model) {
+  const n = model.agentGraphNodes.find(x => x.data.nodeType === 'statement'
+    && x.data.config.operation === '<' && Number(x.data.config._port_y) > 1);
+  if (!n) throw new Error('Tier M: could not find the prio flag-limit statement node');
+  return Number(n.data.config._port_y);
+}
+function countLatchedGG(s, limit) {
   let n = 0;
-  for (let i = 0; i < s.highWater; i++) if (s.alive[i] && s.attrRead.prio[i] < 1.5) n++;
+  for (let i = 0; i < s.highWater; i++) if (s.alive[i] && s.attrRead.prio[i] < limit) n++;
   return n;
 }
+/** Agent `i`'s bond list IN SLOT ORDER — what the split reads (the mother keeps
+ *  slot 0 and hands slots 1 and 2 to its daughters), so it is the thing the
+ *  fidelity work is actually about. */
+const slotsGG = (s, i) => Array.from({ length: s.bondCount[i] }, (_, k) => s.bondPartner[i * s.maxBonds + k]);
 
 /** Re-cadence a model to PERIOD = 1 + k. The period appears in exactly two
  *  places: the state tick's Periodic Step and the division gate's
@@ -3792,9 +3804,35 @@ function withPeriodGG(m, k) {
   return out;
 }
 
+/** Swap the LAST TWO links of a flow chain of `type` nodes — the negative control
+ *  for the split's operation order (see the slot-order block below). */
+function swapLastTwoFlowGG(model, type) {
+  const out = cloneModel(model);
+  const ids = out.agentGraphNodes.filter(n => n.data.nodeType === type).map(n => n.id);
+  const set = new Set(ids);
+  // the chain: n.next -> m.do among `ids`
+  const nextOf = new Map();
+  for (const e of out.agentGraphEdges) {
+    if (set.has(e.source) && set.has(e.target) && e.sourceHandle.endsWith('_next')) nextOf.set(e.source, e.target);
+  }
+  const heads = ids.filter(i => ![...nextOf.values()].includes(i));
+  const chain = [heads[0]];
+  while (nextOf.has(chain[chain.length - 1])) chain.push(nextOf.get(chain[chain.length - 1]));
+  if (chain.length < 3) throw new Error(`Tier M: expected a ${type} chain of >= 3, got ${chain.length}`);
+  const [a, b, c] = chain.slice(-3);
+  const tail = out.agentGraphEdges.find(e => e.source === c && e.sourceHandle.endsWith('_next'));
+  for (const e of out.agentGraphEdges) {
+    if (e.source === a && e.target === b) e.target = c;
+    else if (e.source === b && e.target === c) { e.source = c; e.target = b; }
+  }
+  if (tail) tail.source = b;
+  return out;
+}
+
 function tierM() {
   section('TIER M — the SHIPPED `Growing Graphs` — exactness against the reference');
   const model = loadShipped('Growing Graphs');
+  const FLAG_LIMIT = flagLimitGG(model);
 
   // --- the cadence, read off the shipped file ------------------------------
   const PERIOD = Math.max(2, Number(
@@ -3900,6 +3938,90 @@ function tierM() {
     ok(checkDegreeRegular(g, 3) === null, 'every seed has degree exactly 3');
     ok(checkHandshake(g) === null && checkNoDangling(g) === null && checkBondSymmetry(g) === null,
       'I1 / I3 / I2 hold on the seed graph');
+
+    // --- and in the reference's SLOT ORDER, which is not decoration ---------
+    // A bond APPENDS to both endpoints' lists, so a node's slot order is its
+    // three incident edges sorted by formation time — and the split reads slot 0
+    // (kept) and slots 1/2 (handed to the daughters), so the order propagates
+    // into the structure forever. The bootstrap therefore scripts a GLOBAL
+    // formation order: every agent forms only its own `next` edge, and a chord is
+    // issued by its HIGHER endpoint.
+    const REF_SEED = [[9,1,2],[0,2,4],[1,3,0],[2,4,6],[3,5,1],[4,6,8],[5,7,3],[6,8,9],[7,9,5],[8,0,7]];
+    const orders = Array.from({ length: 10 }, (_, h) => slotsGG(rig.store, h));
+    const matches = orders.filter((o, h) => JSON.stringify(o) === JSON.stringify(REF_SEED[h])).length;
+    ok(matches === 9, 'the bootstrap reproduces the reference SLOT ORDER for 9 of the 10 seeds',
+      `${matches}/10: ${JSON.stringify(orders)}`);
+    // THE TENTH IS PROVABLY IMPOSSIBLE, and asserting WHICH one pins the proof:
+    // node h's prev-edge is e(h-1) and its next-edge is e(h), so [prev, next] for
+    // every h at once would need t(e9) < t(e0) < ... < t(e9). Exactly one node
+    // must carry its two cycle edges the other way round.
+    // Node 0's prev-edge e9 is issued by agent 9, i.e. LAST of all fifteen, so it
+    // lands in slot 2 and the chord takes slot 1: [next, chord, prev].
+    ok(JSON.stringify(orders[0]) === JSON.stringify([1, 2, 9]),
+      'node 0 is the one provable exception ([next, chord, prev] — the cycle admits no consistent ordering)',
+      JSON.stringify(orders[0]));
+    // NEG: give each chord to its LOWER endpoint instead, so a chord can land
+    // before a cycle edge, and the count must drop.
+    {
+      const mutated = cloneModel(model);
+      // The chord-ownership test is the one Compare whose `x` comes from the
+      // chordPartner lookup (several nodes share op '<' with both ports wired).
+      const chordLut = mutated.agentGraphNodes.find(n => n.data.nodeType === 'lookupInteraction'
+        && n.data.config.tableId === 'chordPartner');
+      const cmpId = mutated.agentGraphEdges.find(e => e.source === chordLut?.id
+        && e.targetHandle === 'input_value_x')?.target;
+      const cmp = mutated.agentGraphNodes.find(n => n.id === cmpId && n.data.nodeType === 'statement');
+      if (cmp) cmp.data.config = { ...cmp.data.config, operation: '>' };
+      const r2 = shippedRig(mutated); r2.reset(); r2.step();
+      const m2 = Array.from({ length: 10 }, (_, h) => slotsGG(r2.store, h))
+        .filter((o, h) => JSON.stringify(o) === JSON.stringify(REF_SEED[h])).length;
+      ok(!!cmp && m2 < 9, `NEG (mutant): giving each chord to its LOWER endpoint drops the slot-order match to ${m2}/10`);
+    }
+  }
+
+  // --- THE SPLIT BUILDS THE REFERENCE'S EXACT LOCAL STRUCTURE --------------
+  // znah's division is  nodes[i] = [a,j,k];  push([i,b,k]);  push([i,j,c]).
+  // Ours is five queued ops, and because every bond APPENDS, the OP ORDER is
+  // what decides the daughters' slot order. Assert all three lists through the
+  // real engine, and negative-control the op order that produces them.
+  {
+    const runOneSplit = (m) => {
+      const rig = shippedRig(m); rig.reset();
+      for (let g = 0; g < PERIOD; g++) rig.step();
+      for (let c = 0; c < 8; c++) {
+        rig.step();                                   // state tick
+        for (let r = 1; r <= ROUNDS; r++) {
+          const s = rig.store, hw = s.highWater;
+          const pre = Array.from({ length: hw }, (_, i) => slotsGG(s, i));
+          rig.step();
+          for (let i = 0; i < hw; i++) {
+            const now = slotsGG(s, i);
+            const fresh = now.filter(p => p >= hw);
+            if (fresh.length !== 2) continue;
+            const [a, b, cc] = pre[i];
+            const j = Math.min(...fresh), k = Math.max(...fresh);
+            return { i, a, b, c: cc, j, k, mother: now, dj: slotsGG(s, j), dk: slotsGG(s, k) };
+          }
+        }
+      }
+      return null;
+    };
+    const sp = runOneSplit(withPresetGG(model, 'quadratic'));
+    ok(!!sp, 'a split was observed');
+    if (sp) {
+      ok(JSON.stringify(sp.mother) === JSON.stringify([sp.a, sp.j, sp.k]),
+        `the MOTHER keeps slot 0 and takes [a, j, k] — the reference's own row`, JSON.stringify(sp.mother));
+      ok(JSON.stringify(sp.dj) === JSON.stringify([sp.i, sp.b, sp.k]),
+        `daughter j is [i, b, k]`, JSON.stringify(sp.dj));
+      ok(JSON.stringify(sp.dk) === JSON.stringify([sp.i, sp.j, sp.c]),
+        `daughter k is [i, j, c]`, JSON.stringify(sp.dk));
+    }
+    // NEG (source mutation): issue Form Between(j,k) LAST again — the order this
+    // session changed — and daughter k comes out [i, c, j] instead of [i, j, c].
+    const sp2 = runOneSplit(swapLastTwoFlowGG(withPresetGG(model, 'quadratic'), 'formBondBetween'));
+    ok(!!sp2 && JSON.stringify(sp2.dk) !== JSON.stringify([sp2.i, sp2.j, sp2.c]),
+      'NEG (mutant): swapping the last two Form Between ops breaks daughter k\'s slot order',
+      sp2 ? JSON.stringify(sp2.dk) : 'no split');
   }
 
   // --- THE DRAIN COMPLETES — the justification for K -----------------------
@@ -3911,31 +4033,64 @@ function tierM() {
   // ALIGNMENT: generations 0..PERIOD-1 are the bootstrap cycle (generation 0 is
   // phase 0, but the seeds are still unwired so nothing is latched). After it,
   // generation ≡ 0 (mod PERIOD) is a state tick.
-  const runCycles = (m, cycles, { cap = 1e9, onCycle = null } = {}) => {
-    const rig = shippedRig(m); rig.reset();
+  const runCycles = (m, cycles, { cap = 1e9, onCycle = null, seed } = {}) => {
+    const rig = shippedRig(m); seed === undefined ? rig.reset() : rig.reset(seed);
     for (let g = 0; g < PERIOD; g++) rig.step();           // the bootstrap cycle
     const s = rig.store, curve = [];
     for (let c = 0; c < cycles; c++) {
       rig.step();                                          // phase 0 — the STATE tick
-      const latched = countLatchedGG(s);
-      for (let r = 1; r <= ROUNDS; r++) rig.step();         // phases 1..K — the DRAIN
-      if (onCycle) onCycle({ cycle: c, latched, leftover: countLatchedGG(s), store: s });
+      const latched = countLatchedGG(s, FLAG_LIMIT);
+      let deepest = 0;
+      for (let r = 1; r <= ROUNDS; r++) {                   // phases 1..K — the DRAIN
+        const before = countLatchedGG(s, FLAG_LIMIT);
+        rig.step();
+        if (before > 0 && countLatchedGG(s, FLAG_LIMIT) < before) deepest = r;
+      }
+      if (onCycle) onCycle({ cycle: c, latched, deepest, leftover: countLatchedGG(s, FLAG_LIMIT), store: s });
       curve.push(s.liveCount);
       if (s.liveCount > cap) break;
     }
     return curve;
   };
   {
-    let latched = 0, leftover = 0;
+    let latched = 0, leftover = 0, deepest = 0;
     for (const name of ['meduza', 'Rule 17957', 'Rule 26145', 'exp hyper', 'two branches']) {
       runCycles(withPresetGG(model, name), 40, {
-        cap: 6000, onCycle: (o) => { latched += o.latched; leftover += o.leftover; },
+        cap: 6000,
+        onCycle: (o) => { latched += o.latched; leftover += o.leftover; deepest = Math.max(deepest, o.deepest); },
       });
     }
     ok(leftover === 0,
       `the ${ROUNDS}-round drain consumes EVERY latch: 0 of ${latched} survived into the next state tick`,
       `${leftover} leftovers`);
     ok(latched > 1000, `the drain check is not vacuous — ${latched} latches were raised`);
+    // K CARRIES A MARGIN, and the margin is the point: with the priority now the
+    // agent HANDLE the drain finishes SHALLOWER than the random roll needed (6
+    // rounds against 8), so K = 8 leaves room for a rule nobody has rolled yet.
+    // Asserting `deepest < ROUNDS` fails if a retune ever cut K to the measured
+    // depth — a drain sitting exactly on its measured maximum has no margin.
+    ok(deepest > 0 && deepest < ROUNDS,
+      `the deepest drain any of these rules needs is ${deepest} of ${ROUNDS} rounds — K keeps a margin of ${ROUNDS - deepest}`,
+      `deepest ${deepest}, ROUNDS ${ROUNDS}`);
+  }
+
+  // --- THE DRAIN IS DETERMINISTIC ------------------------------------------
+  // The priority IS the handle, so which nodes win a round no longer depends on
+  // the shared RNG stream: a mutation-free rule must produce the SAME labelled
+  // graph from any seed. (It used to be a random roll, which made the within-tick
+  // split order — and therefore the whole embedding — vary run to run.)
+  {
+    const dump = (seed) => {
+      const rig = shippedRig(withPresetGG(model, 'meduza'));
+      rig.reset(seed);
+      for (let g = 0; g < PERIOD * 12; g++) rig.step();
+      const s = rig.store;
+      return { n: s.liveCount, adj: Array.from({ length: s.highWater }, (_, i) => slotsGG(s, i).join(',')).join('|') };
+    };
+    const a = dump(0x1234abcd), b = dump(0xdeadbeef), c = dump(1);
+    ok(a.n > 40 && a.adj === b.adj && a.adj === c.adj,
+      `three different RNG seeds produce the IDENTICAL labelled graph (N=${a.n}) — the drain order is the handle, not a roll`,
+      `${a.n} / ${b.n} / ${c.n}`);
   }
 
   // --- THE EXACTNESS ORACLE ------------------------------------------------
@@ -3983,11 +4138,14 @@ function tierM() {
   // neighbours that never wanted to split.
   {
     const m = withPresetGG(model, 'quadratic');
+    // The priority expression bands the handle: `h * d + (1 - d) * UNFLAGGED`.
     const prioNode = m.agentGraphNodes.find(n => n.data.nodeType === 'expression'
-      && String(n.data.config.expression).includes('roll'));
+      && /\bh\b/.test(String(n.data.config.expression)) && /\bd\b/.test(String(n.data.config.expression)));
     ok(!!prioNode, 'NEG setup: found the priority expression node');
     if (prioNode) {
-      prioNode.data.config = { ...prioNode.data.config, expression: 'roll + d * 0' };
+      // Drop the banding: EVERY node stores its handle, flagged or not, so a
+      // flagged node must now also out-rank neighbours that never wanted to split.
+      prioNode.data.config = { ...prioNode.data.config, expression: 'h + d * 0' };
       const mine = runCycles(m, 40);
       const ref = refCurveGG(2182, 40);
       ok(mine.some((v, i) => v !== ref[i]),

@@ -2282,6 +2282,70 @@ Report carries the full context) — this section is the ONE place to come back 
 | B6 | **Emitted-WGSL viewer** — Show Code now always shows the JS reference (C4), so the WGSL is no longer reachable from the UI (dev harness only). Re-add as a read-only Advanced view. | C4 | §C4 report deviation 4 |
 | B7 | **Per-model θ guidance for global charge** (chargeTheta defaults to 0.9; accuracy spans 0.013%@0.2 → 3.76%@1.4). A hint or per-archetype default. | C10 | §C10 report |
 | B8 | **WebGPU agent SoA layout stays UNGATED** (C9's deliberate carve-out — it's a transient per-generation mirror, and gating it would move the windowed readback plan). Flipping it on later is a layout-only change; the emitters already carry the safety catch. | C9 | §C9 report deviations |
+| B9 | **`Transfer Bond` — a third-party IN-PLACE rewire verb** (the last piece of znah slot-order fidelity). See the design note directly below. | Growing Graphs fidelity, 2026-08-04 | §3.B9 note |
+
+#### B9 — `Transfer Bond`, the in-place third-party rewire (assessment, not a plan)
+
+**The gap it closes.** GenesisCA's `rewireBond(a, from → to)` is *break + form* at `a`, and `breakBond`
+compacts by swapping the LAST slot into the freed one while `formBond` APPENDS. So a rewire
+**scrambles the RECEIVER's slot order**: `from`'s list loses `a` from slot *p*, the last entry jumps into
+*p*, and the new partner lands at the end. znah's `reconnect(b, i, j)` is `node[node.indexOf(i)] = j` —
+a single **in-place** overwrite that preserves position. Slot order is not cosmetic: the triangle split
+keeps slot 0 and hands slots 1 and 2 to its daughters, so a receiver's scrambled order propagates into
+every later split. This is the ONE remaining structural difference in the `Growing Graphs` port after
+the 2026-08-04 fidelity pass (mother, both daughters and 9/10 of the bootstrap now match exactly).
+
+**The verb.** `transferBond(b, me → to)`: rewrite `b`'s slot that holds `me` **in place** to `to`
+(position, and therefore `b`'s ordering, preserved); `me` loses `b` through ordinary compaction (`me` is
+the mother, whose whole row is rewritten anyway); `to` appends `b`. Net: edge `(me,b)` → `(to,b)`;
+degrees `b` unchanged, `me` −1, `to` +1.
+
+**Encoding — the unused NEGATIVE FORM lane, the P4b sign-trick precedent.** Today the break lane's sign
+is the op-kind marker (`bl < 0` ⇒ Form Between) and the form lane is never negative. So
+`fl < 0` ⇒ TRANSFER, with `bl = b + 2` (the third party) and `fl = −(to + 2)`; `me` is the requesting
+agent, implicit. **Zero new fields, zero moved offsets, and the queue stride / ABI / layouts are all
+untouched** — the same reason P4b rode the break lane's sign. The "never write 0" rule survives (an
+unresolvable transfer writes `+NONE` / `−NONE`). ⚠️ **Decode order is load-bearing:** the `fl < 0` branch
+must come immediately after the existing `bl < 0` branch — fall through and `to = fl − 2` goes negative,
+the entry lands in the plain-break arm, and the transfer silently degrades to a bare Break (an edge
+vanishes, no error anywhere).
+
+**I5 / I2 pre-check list** (all before ANY write — whole-op-or-nothing): `b`, `me`, `to` live and in
+range; `b ≠ me`, `b ≠ to`, `to ≠ me`; **`b↔me` must EXIST** (else it is a bare form at `to`, silently
+raising a degree); **`b↔to` must NOT already exist** (the in-place rewrite would give `b` two slots
+pointing at `to` — a double edge that I1/I2 would then report as corruption); `to` must have room.
+`me` needs no capacity check (it only loses). **I2**: the rewritten slot at `b` and the appended slot at
+`to` must carry IDENTICAL per-slot values (partner, epoch, rest length, stiffness, every bond
+attribute) — the discipline `formBond`'s `attrValues` already enforces. **I3**: `b`'s slot is
+overwritten, never blanked, so it is never transiently dangling.
+
+**MAX BONDS 4 IS REQUIRED for the full-fidelity order, and this was re-derived rather than assumed.**
+With transfer available, the exact reference construction is
+`formBetween(i,j)` → `transfer(b, i→j)` → `formBetween(i,k)` → `formBetween(j,k)` → `transfer(c, i→k)`,
+which yields `i = [a,j,k]`, `j = [i,b,k]`, `k = [i,j,c]` and both receivers order-preserved — but `i`
+transiently reaches **degree 4** at the two `formBetween(i,·)` steps. At `maxBonds 3` a capacity-safe
+order does exist (transfer first, so `i` sheds before it gains — still 5 queue ops, peak degree 3), but
+then `j`'s first slot is `b` rather than `i`, i.e. `j = [b,i,k]`: **one daughter's order breaks**. So the
+trade is explicit — 3 keeps the tight "nothing may transiently exceed cubic degree" guard and gets 3 of
+the 4 lists exact; 4 gets all four and costs ~672 KB at `maxAgents 24000` plus the loss of that guard
+(O6 at every generation still catches an over-bond, one layer later).
+
+**All-target emit.** One new `transferBond` node → `BOND_REQUEST_NODE_TYPES` (so the usage gate sizes
+the queue), `BOND_ATTR_PORT_TYPES` (it forms a bond at `to`, so it seeds bond attributes), both agent
+`AGENT_*_SUPPORTED_TYPES`, `AGENT_NODE_REQUIREMENT → bonds`, the registry and `nodeValidation`'s
+init-invalid set. Emitters: `bondRequestEmitJS.ts` plus `emitBondRequest` in `agentWasm/` and
+`agentWebgpu/` — each only writes the two lanes with the new sign, and **WebGPU still needs no atomics**
+(the entry rides the requesting agent's own rows, exactly like Form Between). Engine: one
+`transferBond()` beside `rewireBond()` and one branch in `drainAgentBondRequests`. Harness: a Tier-G-shaped
+block (I5 on every rejection path, I2 across all per-slot fields, and — the point of the verb — the slot
+POSITION preserved at `b`), plus a permanent `parity-agent-wasm` synthetic whose value invariant
+recomputes the expected queue independently.
+
+**Cubic-GRA caveat.** Adding a verb leaves `rewireBond` untouched, so `Cubic GRA`, `SDCA` and
+`Life on Bonds` are byte-identical and Tier K/L are unaffected. **Changing `rewireBond` itself to be
+in-place at the receiver would NOT be** — `Cubic GRA`'s split uses Rewire, so its labelled graph (and
+Tier K's growth numbers) would move even though O6 would still hold. Adding is the cheap path; adopting
+it in existing models is then a separate, opt-in, per-model decision.
 
 ### C. Schema / cleanup schedule
 

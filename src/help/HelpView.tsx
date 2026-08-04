@@ -2320,6 +2320,26 @@ export function HelpView() {
             handle-indexed lookup tables and a bootstrap branch gated on bond degree 0 rebuild the
             reference&rsquo;s precise ten-node seed graph. Its second viewer, <em>Birth generation</em>,
             colours each node by when it was born, so the structure reads as its own growth history.
+            Two sliders are there for looking rather than for the rule: <em>Max Generations</em>{' '}
+            freezes the automaton at a generation you pick while the force layout keeps untangling
+            (0 means unlimited, and raising it resumes exactly where it stopped), and{' '}
+            <em>Node Radius</em> resizes every node live.
+          </p>
+          <p className={styles.p}>
+            It is also where <strong>bond slot order</strong> stops being an implementation detail.
+            A bond appends to both endpoints&rsquo; lists, so a node&rsquo;s slots are its edges in
+            formation order &mdash; and a split keeps slot 0 and hands slots 1 and 2 to its two
+            daughters, so that order decides which neighbour each daughter inherits and propagates
+            into the shape forever. Three things follow, all visible in the model: the bootstrap
+            forms its fifteen bonds in a <em>scripted</em> global order (each agent forms only its
+            own <code>h+1</code> edge, and a chord is issued by its higher endpoint), which
+            reproduces the reference&rsquo;s slot order for nine of the ten seeds &mdash; the tenth is
+            provably impossible, because &ldquo;previous edge before next edge&rdquo; at every node
+            of a cycle is a contradiction. The split&rsquo;s five queued operations are ordered so both
+            daughters come out in the reference&rsquo;s exact order. And the division priority is the
+            agent&rsquo;s own <em>handle</em> rather than a random roll, which makes the drain
+            deterministic and, since handles are allocated in order and nothing dies, reproduces the
+            reference&rsquo;s own ascending index walk.
           </p>
           <p className={styles.p}>
             It is also the clearest example of <strong>fitting a sequential rule onto a parallel

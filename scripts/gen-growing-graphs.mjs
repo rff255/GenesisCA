@@ -23,16 +23,34 @@
  * That is why the port needs no translation layer: a preset is just R sliced
  * into two 8-entry bool arrays.
  *
- * ── THE INITIAL CONDITION IS EXACT ──────────────────────────────────────────
+ * ── THE INITIAL CONDITION IS EXACT, SLOT ORDER INCLUDED ─────────────────────
  * znah seeds the SAME 10-node cubic graph every run:
  *   nodes = [[9,1,2],[0,2,4],[1,3,0],[2,4,6],[3,5,1],[4,6,8],[5,7,3],[6,8,9],[7,9,5],[8,0,7]]
  *   states = [0,0,0,1,0,1,0,1,1,1]
- * which is a 10-cycle plus the five chords {0,2} {1,4} {3,6} {5,8} {7,9}. The
- * chord map is an INVOLUTION, so it is reproduced here by a 1-axis lookup table
- * indexed by the agent HANDLE: node h bonds to (h+1)%10, (h+9)%10 and chord[h].
- * Form Bond is symmetric and an already-bonded pair is an idempotent no-op, so
- * all 30 requests settle to exactly the 15 znah edges with no agent ever
- * exceeding maxBonds 3. The states come from a second handle-indexed table.
+ * which is a 10-cycle plus the five chords {0,2} {1,4} {3,6} {5,8} {7,9}, and
+ * EVERY row is literally [prev, next, chord]. The chord map is an INVOLUTION,
+ * so it is reproduced here by a 1-axis lookup table indexed by the agent HANDLE.
+ *
+ * THE SLOT ORDER MATTERS, so the bonds are formed in a SCRIPTED GLOBAL ORDER.
+ * A bond APPENDS to both endpoints' lists, so a node's slot order is its three
+ * incident edges sorted by formation time — and slot order is what the split
+ * reads (the mother keeps slot 0 and hands slots 1 and 2 to its daughters), so
+ * it propagates into the geometry forever. The drain applies queues in ASCENDING
+ * AGENT ORDER, so a global order is scripted by choosing WHICH agent issues each
+ * bond:
+ *     agent h  issues  form(h+1)                       ALWAYS   (the cycle edge)
+ *     agent h  issues  form(chord[h])  iff chord[h] < h         (the chord)
+ * i.e. the higher endpoint owns each chord and nobody issues its `prev` edge
+ * (the previous agent already did, as its `next`). That lays the ten cycle edges
+ * down in order e0, e1, ... e9 with each chord landing right after both its
+ * endpoints' cycle edges, which reproduces [prev, next, chord] for NINE of the
+ * ten nodes.
+ *
+ * NODE 0 CANNOT MATCH, and that is a proof, not a shortfall. Node h's prev-edge
+ * is e(h-1) and its next-edge is e(h), so [prev, next] for EVERY h would need
+ * t(e9) < t(e0) < t(e1) < ... < t(e9) — a cycle. Exactly one node must carry its
+ * cycle edges the other way round; here it is node 0, which gets [1, 9, 2]
+ * instead of [9, 1, 2].
  *
  * Form Bond writes the acting agent's REQUEST QUEUE, so it is invalid in the
  * Agent Init Event: the Init Event only places the ten agents on a circle and
@@ -84,23 +102,33 @@
  * adjacency), never bit-identity of the labelled graph.
  *
  * THE LATCH IS THE PRIORITY, and that is the load-bearing detail. The gate must
- * be INTENT-AWARE: the obvious version — every node rolls a priority, split iff
+ * be INTENT-AWARE: the obvious version — every node takes a priority, split iff
  * you are the strict local minimum — makes a flagged node wait behind neighbours
  * that never wanted to split, which costs roughly three quarters of the splits
  * EVEN WHEN THE FLAGGED NODES ARE ALREADY PAIRWISE NON-ADJACENT. Measured on
  * `quadratic`, that did not merely slow growth: the automaton fell into its
  * absorbing all-OFF configuration and stopped at 16 nodes against the
  * reference's 854. So the flag and the tie-break live in ONE number:
- *     prio = roll        in [0, 1)   flagged
- *     prio = roll + 2    in [2, 3)   not flagged
- * a node splits iff prio < 1.5 AND prio < every bonded neighbour's, and a
- * splitter writes prio = 2.5 — which BOTH clears its latch and stops it blocking
- * the neighbours it just failed to let through. A separate boolean `flagged`
- * would duplicate what `prio < 1.5` already says and could drift from it.
+ *     prio = the agent's own HANDLE   in [0, maxAgents)   flagged
+ *     prio = PRIO_UNFLAGGED (1e6)                          not flagged
+ * a node splits iff prio < PRIO_FLAG_LIMIT (1e5, i.e. it is still latched) AND
+ * prio < every bonded neighbour's, and a splitter writes PRIO_UNFLAGGED — which
+ * BOTH clears its latch and stops it blocking the neighbours it failed to let
+ * through. A separate boolean `flagged` would duplicate what `prio < 1e5`
+ * already says and could drift from it.
  *
- * The priority is rolled ONCE per reference tick, not per round: clearing the
- * winner's latch is what changes the contest, so re-rolling would only churn the
- * shared RNG stream.
+ * THE PRIORITY IS THE HANDLE, so the drain order is DETERMINISTIC ASCENDING
+ * HANDLE — which is exactly the reference's index walk, because Create Agent
+ * allocates 0, 1, 2, ... and this model never kills an agent, so handle ==
+ * znah's node index. An earlier port used a random roll here; that made the
+ * within-tick split order (and therefore which neighbour each daughter inherits,
+ * and therefore the whole embedding) vary run to run. Handles are unique, so the
+ * strict inequality still resolves every contest and one round's splitters are
+ * still pairwise non-adjacent.
+ *
+ * The constants are chosen to be EXACT IN f32 as well as f64 (the WebGPU agent
+ * target stores agent attributes as f32): every value in play is an integer
+ * below 2^24, so no comparison can be decided by a rounding artefact.
  *
  * ── THE CADENCE ─────────────────────────────────────────────────────────────
  * One reference tick is PERIOD = 1 + K generations, so the layout gets
@@ -210,6 +238,23 @@ const DEFAULT_FLIP = 0;
 // =============================================================================
 const MAX_BONDS = 3;            // TIGHT: nothing may transiently exceed cubic degree
 const RADIUS = 0.9;
+// THE PRIORITY BANDS (see the header). Both are integers below 2^24, so they are
+// exact in f32 as well as f64 and no contest can turn on a rounding artefact.
+//   flagged   -> the agent's own handle, in [0, MAX_AGENTS)
+//   unflagged -> PRIO_UNFLAGGED, also what a splitter writes to consume its latch
+const PRIO_UNFLAGGED = 1e6;
+const PRIO_FLAG_LIMIT = 1e5;    // "still latched" test; MAX_AGENTS << this << PRIO_UNFLAGGED
+// THE VISUAL NODE RADIUS is a live slider, and its UPPER BOUND is not cosmetic.
+// The spatial hash bin edge is max(interactionRange * 2 * defaultRadius,
+// neighbourQueryRadius) = max(3.96, 6) = 6, and the 3x3 stencil only guarantees
+// to find a pair within ONE bin edge — so the soft-collision search stays
+// complete only while interactionRange * (r_i + r_j) <= 6, i.e. r <= 1.36.
+const RADIUS_MIN = 0.2, RADIUS_MAX = 1.35;
+// The growth ramp exists ONLY to carry the Node Radius slider onto the agents
+// (Set Target Radius is the self-relative writer; see the behaviour graph). The
+// ramp is `radius += sign(dd) * rate`, CLAMPED at the target, so any rate above
+// the whole slider range lands in one generation instead of easing in.
+const GROWTH_RATE = 2;
 const REST = 5.0;               // bond rest length (the layout scale)
 const STIFF = 0.55;
 const NODE_CAP = 10000;         // the end-condition guard — znah's own demo scale
@@ -220,22 +265,36 @@ const NODE_CAP = 10000;         // the end-condition guard — znah's own demo s
 // returns -1, the split's Rewire finds no target and the graph stops being cubic.
 const MAX_AGENTS = 24000;
 // K — the number of DIVISION ROUNDS per reference tick. Chosen by measurement:
-// the smallest K whose leftover-flag rate is negligible (see the header).
-// MEASURED over all 18 mutation-free published rules, 100 reference ticks each
-// (scripts/verify-graph-rewrite.mjs Tier M pins the headline numbers):
-//     K     leftover latches     rules matching the reference N(t)
-//     1        31.71 %           8 / 18       <- the old single-round port
-//     2         8.53 %          10 / 18
-//     4         0.55 %          10 / 18
-//     6         0.02 %          10 / 18
-//     8         0.00 %          18 / 18
-//    10         0.00 %          18 / 18       <- no deeper drain exists
-// The deepest drain any published rule needs is 8 rounds (K = 10 never uses a
-// ninth), and only at K = 8 does EVERY deterministic rule reproduce the
-// reference cycle for cycle. A sub-1% leftover rate arrives much earlier, but
-// leftovers are not evenly spread: they concentrate in the deep-chain rules
-// (17957, 26145), which diverge by cycle 2 at K = 4. So K is the point where the
-// drain provably finishes, not the point where the average looks small.
+// the point at which the drain provably FINISHES, plus a margin.
+//
+// RE-MEASURED after the priority became the agent's HANDLE (it was a random roll,
+// which ordered the rounds differently and therefore drained differently). All 18
+// mutation-free published rules, 100 reference ticks each, capped at 6000 nodes:
+//     K     leftover latches      rules matching the reference N(t)   deepest round used
+//     1     13048 / 44529 = 29.30 %      9 / 18                        1
+//     2      2429 / 38347 =  6.33 %     15 / 18                        2
+//     4        81 / 35144 =  0.23 %     15 / 18                        4
+//     6         0 / 35148 =  0.00 %     18 / 18                        6
+//     8         0 / 35148 =  0.00 %     18 / 18                        6
+//    16         0 / 35148 =  0.00 %     18 / 18                        6   <- no deeper drain exists
+// and re-run at the 10 000-node cap over 120 ticks (55 039 latches): still zero
+// leftovers and still a deepest drain of 6.
+//
+// The worry that motivated the re-measurement — that a deterministic ascending
+// order could line up a DESCENDING chain of flagged neighbours and drain one per
+// round — does not materialise; handle order needs SHALLOWER drains than the
+// random roll did (6 rather than 8), which is unsurprising given that ascending
+// handle IS the order the reference itself divides in.
+//
+// K stays at 8 rather than dropping to the measured 6: that leaves a margin of
+// two for a rule nobody has rolled yet (Randomize makes new automata reachable
+// from the UI), and it keeps PERIOD at 9 — the cadence the layout's force-pass
+// budget and the measured world extent below were both established against.
+// Note the leftover rate alone would have justified K = 4; it does not, because
+// leftovers concentrate in the deep-chain rules (17957, 26145, exp hyper), which
+// diverge from the reference by cycle 5 at K = 4 while the average still reads
+// 0.23 %. K is the point where the drain finishes, not where the average looks
+// small.
 const DIVISION_ROUNDS = Math.max(1, Number(process.env.GG_ROUNDS) || 8);
 const PERIOD = 1 + DIVISION_ROUNDS;
 // ONE force pass per generation. PERIOD grew from 2 to 9, so the layout still
@@ -302,9 +361,15 @@ const py = ag.node('expression', {
 ag.vEdge(spawn, 'index', py, 'a');
 ag.vEdge(init, 'worldHeight', py, 'b');
 
-const mkSeed = ag.node('createAgent', { _port_radius: String(RADIUS) }, 3, 0);
+// Born at the CURRENT Node Radius, so a seed never pops from the default to the
+// slider's value one generation later. Its own `getModelAttribute` node: value
+// nodes are emitted per ROOT, and sharing one across the Init Event and the
+// behaviour step would only obscure that.
+const initRad = ag.node('getModelAttribute', { attributeId: 'nodeRadius' }, 2, 2);
+const mkSeed = ag.node('createAgent', {}, 3, 0);
 ag.vEdge(px, 'result', mkSeed, 'x');
 ag.vEdge(py, 'result', mkSeed, 'y');
+ag.vEdge(initRad, 'value', mkSeed, 'radius');
 const addSeed = ag.node('addAgentToWorld', {}, 4, 0);
 ag.vEdge(mkSeed, 'handle', addSeed, 'handle');
 
@@ -332,31 +397,84 @@ const deg = ag.node('getBondDegree', {}, 0, 6);
 const isUnwired = ag.node('statement', { operation: '==', compareType: 'numerical', _port_y: '0' }, 1, 6);
 ag.vEdge(deg, 'value', isUnwired, 'x');
 const wireIf = ag.node('conditional', {}, 2, 4);
-ag.fEdge(bs, 'do', wireIf, 'check');
 ag.vEdge(isUnwired, 'result', wireIf, 'condition');
 
+// THE SCRIPTED FORMATION ORDER (see the header). Every agent forms its own
+// `next` edge and NOBODY forms a `prev` edge — the previous agent already did.
+// A chord is owned by its HIGHER endpoint. Because the drain applies queues in
+// ascending agent order, that lays the cycle down as e0, e1, ... e9 with each
+// chord immediately after both its endpoints' cycle edges, which is znah's
+// [prev, next, chord] for nine of the ten nodes (node 0 is the provable
+// exception — the cyclic ordering constraint has no solution).
 const selfH = ag.node('getSelfHandle', {}, 2, 2);
 const nbNext = ag.node('expression', {
   expression: `(h + 1) % ${SEEDS}`, visibleCount: 1, _varName_a: 'h',
 }, 3, 3);
 ag.vEdge(selfH, 'handle', nbNext, 'a');
-const nbPrev = ag.node('expression', {
-  expression: `(h + ${SEEDS - 1}) % ${SEEDS}`, visibleCount: 1, _varName_a: 'h',
-}, 3, 4);
-ag.vEdge(selfH, 'handle', nbPrev, 'a');
 const lutChord = ag.node('lookupInteraction', { tableId: 'chordPartner' }, 3, 5);
 ag.vEdge(selfH, 'handle', lutChord, 'axis_0');
 
 const bondCfg = { _port_restLength: String(REST), _port_stiffness: String(STIFF) };
-const wire1 = ag.node('formBond', { ...bondCfg }, 4, 3);
-ag.vEdge(nbNext, 'result', wire1, 'targetAgent');
-const wire2 = ag.node('formBond', { ...bondCfg }, 4, 4);
-ag.vEdge(nbPrev, 'result', wire2, 'targetAgent');
-const wire3 = ag.node('formBond', { ...bondCfg }, 4, 5);
-ag.vEdge(lutChord, 'value', wire3, 'targetAgent');
-ag.fEdge(wireIf, 'then', wire1, 'do');
-ag.fEdge(wire1, 'next', wire2, 'do');
-ag.fEdge(wire2, 'next', wire3, 'do');
+const wireNext = ag.node('formBond', { ...bondCfg }, 4, 3);
+ag.vEdge(nbNext, 'result', wireNext, 'targetAgent');
+// The chord is issued ONLY by the higher endpoint, so it lands after BOTH its
+// endpoints' cycle edges and therefore in slot 2 at both of them.
+const ownsChord = ag.node('statement', { operation: '<', compareType: 'numerical' }, 4, 5);
+ag.vEdge(lutChord, 'value', ownsChord, 'x');
+ag.vEdge(selfH, 'handle', ownsChord, 'y');
+const chordIf = ag.node('conditional', {}, 5, 4);
+ag.vEdge(ownsChord, 'result', chordIf, 'condition');
+const wireChord = ag.node('formBond', { ...bondCfg }, 6, 5);
+ag.vEdge(lutChord, 'value', wireChord, 'targetAgent');
+ag.fEdge(wireIf, 'then', wireNext, 'do');
+ag.fEdge(wireNext, 'next', chordIf, 'check');
+ag.fEdge(chordIf, 'then', wireChord, 'do');
+
+// -----------------------------------------------------------------------------
+// LIVE NODE RADIUS — a presentation knob, written every generation
+// -----------------------------------------------------------------------------
+// Every agent re-asserts the bounded model attribute on every generation, so the
+// slider is live. It heads the behaviour chain, so it applies even while the
+// graph is frozen by Max Generations below.
+//
+// SET TARGET RADIUS, not Set Agent Radius by id. The by-id setter would need its
+// Agent port wired, and a wired non-spawn id is exactly what the synchronous
+// cross-agent write gate rejects (it cannot know statically that Get Self Handle
+// is self-targeted, and being conservative there is right). Set Target Radius is
+// self-relative by construction; the engine's growth ramp then moves the actual
+// radius, and GROWTH_RATE is set above the whole slider range so it lands in one
+// generation rather than easing in.
+//
+// Presentation only in intent, but NOT free: soft collision reads the radius,
+// which is why the slider's upper bound is exactly where the spatial-hash
+// stencil would stop finding every colliding pair.
+const radAttr = ag.node('getModelAttribute', { attributeId: 'nodeRadius' }, 1, 1);
+const setRad = ag.node('setTargetRadius', {}, 2, 1);
+ag.vEdge(radAttr, 'value', setRad, 'value');
+ag.fEdge(bs, 'do', setRad, 'do');
+ag.fEdge(setRad, 'next', wireIf, 'check');
+
+// -----------------------------------------------------------------------------
+// MAX GENERATIONS — freeze the AUTOMATON, keep the layout running
+// -----------------------------------------------------------------------------
+// `evolve` gates the state tick AND every division round, so past the limit the
+// graph stops rewriting while the force solver, the render and every slider keep
+// working — the "let it settle / look at it" control. 0 means unlimited.
+//
+// Freezing at an arbitrary GENERATION (rather than at a whole reference tick) is
+// safe because O6 holds at every generation: a division round is complete in
+// itself, so whenever it stops the graph is 3-regular with E = 3N/2. Any latches
+// still outstanding simply wait; unfreezing drains them in the next rounds.
+const maxGenAttr = ag.node('getModelAttribute', { attributeId: 'maxGen' }, 0, 14);
+const genNode = ag.node('getGeneration', {}, 0, 15);
+const capOff = ag.node('statement', { operation: '<', compareType: 'numerical', _port_y: '1' }, 1, 14);
+ag.vEdge(maxGenAttr, 'value', capOff, 'x');
+const underCap = ag.node('statement', { operation: '<', compareType: 'numerical' }, 1, 15);
+ag.vEdge(genNode, 'value', underCap, 'x');
+ag.vEdge(maxGenAttr, 'value', underCap, 'y');
+const evolve = ag.node('logicOperator', { operation: 'OR' }, 2, 14);
+ag.vEdge(capOff, 'result', evolve, 'a');
+ag.vEdge(underCap, 'result', evolve, 'b');
 
 // -----------------------------------------------------------------------------
 // PERIODIC STEP, PHASE 0 — the STATE tick (the reference's phase 0)
@@ -373,9 +491,12 @@ const own = ag.node('getCellAttribute', { attributeId: 'state' }, 0, 12);
 // bootstrap has wired anything.
 const wired = ag.node('statement', { operation: '>', compareType: 'numerical', _port_y: '0' }, 1, 11);
 ag.vEdge(census, 'total', wired, 'x');
+const runTick = ag.node('logicOperator', { operation: 'AND' }, 2, 10);
+ag.vEdge(wired, 'result', runTick, 'a');
+ag.vEdge(evolve, 'result', runTick, 'b');
 const ruleIf = ag.node('conditional', {}, 2, 9);
 ag.fEdge(stateTick, 'do', ruleIf, 'check');
-ag.vEdge(wired, 'result', ruleIf, 'condition');
+ag.vEdge(runTick, 'result', ruleIf, 'condition');
 
 // 1. the STATE rule + the mutation
 const lutNext = ag.node('lookupInteraction', { tableId: 'ruleNext' }, 3, 11);
@@ -402,29 +523,36 @@ ag.fEdge(ruleIf, 'then', setState, 'do');
 //
 // THE PRIORITY ENCODES BOTH THE LATCH AND THE TIE-BREAK, and that is what makes
 // the independent-set drain cost nothing when it is not needed:
-//     prio = roll             in [0, 1)   when the divide bit fired
-//     prio = roll + 2         in [2, 3)   when it did not
-// so in a DIVISION ROUND a node splits iff its stored priority is below 1.5 (it
-// is still latched) AND strictly below every bonded neighbour's (it wins the
-// contest). A neighbour that did not want to split carries a value above 2 and
-// therefore never blocks anyone. A splitter writes 2.5, which BOTH consumes its
-// latch and stops it blocking the neighbours it beat — that write is what lets
-// the losers through in a LATER round of the same tick.
+//     prio = the agent's own HANDLE   in [0, maxAgents)   when the divide bit fired
+//     prio = PRIO_UNFLAGGED (1e6)                          when it did not
+// so in a DIVISION ROUND a node splits iff its stored priority is below
+// PRIO_FLAG_LIMIT (1e5 — it is still latched) AND strictly below every bonded
+// neighbour's (it wins the contest). A neighbour that did not want to split
+// carries 1e6 and therefore never blocks anyone. A splitter writes 1e6, which
+// BOTH consumes its latch and stops it blocking the neighbours it beat — that
+// write is what lets the losers through in a LATER round of the same tick.
 //
-// This is the fix for the obvious-but-wrong version of the gate. Comparing raw
-// rolls — flagged or not — makes a node wait until it is the local minimum among
-// ALL its neighbours, which throws away roughly three quarters of the splits
-// even when the flagged nodes are already pairwise non-adjacent. For most of the
-// published rules that does not merely slow growth, it changes the trajectory:
-// the automaton reaches its absorbing all-OFF configuration and stops for good.
+// USING THE HANDLE rather than a random roll makes the drain order DETERMINISTIC
+// ASCENDING HANDLE, which is exactly the reference's index walk (handle == znah
+// node index: Create Agent allocates ascending and nothing ever dies here). With
+// a random roll the within-tick order — and therefore which neighbour each
+// daughter inherits, and therefore the embedding — varied run to run.
+//
+// The intent-aware banding is the fix for the obvious-but-wrong version of the
+// gate. Comparing bare priorities — flagged or not — makes a node wait until it
+// is the local minimum among ALL its neighbours, which throws away roughly three
+// quarters of the splits even when the flagged nodes are already pairwise
+// non-adjacent. For most of the published rules that does not merely slow
+// growth, it changes the trajectory: the automaton reaches its absorbing all-OFF
+// configuration and stops for good.
 const lutDiv = ag.node('lookupInteraction', { tableId: 'ruleDivide' }, 3, 15);
 ag.vEdge(own, 'value', lutDiv, 'axis_0');
 ag.vEdge(census, 'count_1', lutDiv, 'axis_1');
-const prioRoll = ag.node('getRandom', { randomType: 'float', min: '0', max: '1' }, 3, 16);
 const prioVal = ag.node('expression', {
-  expression: 'roll + (1 - d) * 2', visibleCount: 2, _varName_a: 'roll', _varName_b: 'd',
+  expression: `h * d + (1 - d) * ${PRIO_UNFLAGGED}`,
+  visibleCount: 2, _varName_a: 'h', _varName_b: 'd',
 }, 5, 15);
-ag.vEdge(prioRoll, 'value', prioVal, 'a');
+ag.vEdge(selfH, 'handle', prioVal, 'a');
 ag.vEdge(lutDiv, 'value', prioVal, 'b');
 const setPrio = ag.node('setAttribute', { attributeId: 'prio' }, 6, 12);
 ag.vEdge(prioVal, 'result', setPrio, 'value');
@@ -437,9 +565,8 @@ ag.fEdge(setState, 'next', setPrio, 'do');
 // Periodic Steps: the flow walk INLINES a node's body once per incoming path, so
 // K periodic roots pointing at one split chain would emit K copies of it. One
 // gate, one copy.
-const roundGen = ag.node('getGeneration', {}, 0, 16);
 const roundPhase = ag.node('arithmeticOperator', { operation: '%', _port_y: String(PERIOD) }, 1, 16);
-ag.vEdge(roundGen, 'value', roundPhase, 'x');
+ag.vEdge(genNode, 'value', roundPhase, 'x');
 const isRound = ag.node('statement', { operation: '!=', compareType: 'numerical', _port_y: '0' }, 2, 16);
 ag.vEdge(roundPhase, 'result', isRound, 'x');
 const roundIf = ag.node('conditional', {}, 3, 16);
@@ -448,7 +575,7 @@ ag.fEdge(wireIf, 'next', roundIf, 'check');
 ag.vEdge(isRound, 'result', roundIf, 'condition');
 
 const myPrio = ag.node('getCellAttribute', { attributeId: 'prio' }, 0, 18);
-const wasFlagged = ag.node('statement', { operation: '<', compareType: 'numerical', _port_y: '1.5' }, 1, 18);
+const wasFlagged = ag.node('statement', { operation: '<', compareType: 'numerical', _port_y: String(PRIO_FLAG_LIMIT) }, 1, 18);
 ag.vEdge(myPrio, 'value', wasFlagged, 'x');
 
 const bonded = ag.node('getBondedAgents', {}, 0, 17);
@@ -469,10 +596,15 @@ ag.vEdge(isLocalMin, 'result', gate1, 'b');
 const gate2 = ag.node('logicOperator', { operation: 'AND' }, 6, 16);
 ag.vEdge(gate1, 'result', gate2, 'a');
 ag.vEdge(isCubic, 'result', gate2, 'b');
+// The Max Generations freeze applies to the DIVISION rounds as well as the state
+// tick, or a frozen graph would keep draining latches for K more generations.
+const gate3 = ag.node('logicOperator', { operation: 'AND' }, 6, 17);
+ag.vEdge(gate2, 'result', gate3, 'a');
+ag.vEdge(evolve, 'result', gate3, 'b');
 
 const splitIf = ag.node('conditional', {}, 7, 16);
 ag.fEdge(roundIf, 'then', splitIf, 'check');
-ag.vEdge(gate2, 'result', splitIf, 'condition');
+ag.vEdge(gate3, 'result', splitIf, 'condition');
 
 // The daughters inherit the mother's state, which by the division rounds IS the
 // post-update (post-mutation) state the state tick committed — exactly the
@@ -491,10 +623,22 @@ ag.vEdge(bonded, 'agents', cAgent, 'array');
 
 // NEWBORN PLACEMENT: the MIDPOINT between the mother and the neighbour the
 // newborn inherits, so a split never starts with a daughter on the far side of
-// the mother from its own new bond. Get Agent Position in RELATIVE mode gives
-// the shortest offset (and is correct across a torus seam); the jitter comes
-// from this tick's priority roll, mirrored between the two daughters so they
-// never land on top of each other.
+// the mother from its own new bond — the reference's own layout hint (force.js
+// `updateData` seeds a newborn at the mean of [mother, inherited neighbour]).
+// Get Agent Position in RELATIVE mode gives the shortest offset (and is correct
+// across a torus seam).
+//
+// THE JITTER IS DERIVED FROM THE HANDLE, not drawn. The reference adds a random
+// offset here; this model declares an Exact reproducibility contract, so it uses
+// a golden-ratio hash of the mother's handle instead — same decorrelating
+// effect, but a Reset replays byte for byte. (It used to reuse the priority
+// roll, which the handle band above no longer keeps in [0, 1).) The two
+// daughters take opposite signs, so a mother whose two neighbours happen to be
+// collinear with it still separates them.
+const jitterSrc = ag.node('expression', {
+  expression: 'h * 0.6180339887498949 % 1', visibleCount: 1, _varName_a: 'h',
+}, 8, 16);
+ag.vEdge(selfH, 'handle', jitterSrc, 'a');
 const selfPos = ag.node('getSelfPosition', {}, 8, 20);
 const offB = ag.node('getAgentPosition', { mode: 'relative' }, 8, 18);
 ag.vEdge(bAgent, 'value', offB, 'agentId');
@@ -508,7 +652,7 @@ const midpoint = (col, row, offNode, axis, sign) => {
   }, col, row);
   ag.vEdge(selfPos, axis, n, 'a');
   ag.vEdge(offNode, axis, n, 'b');
-  ag.vEdge(myPrio, 'value', n, 'c');
+  ag.vEdge(jitterSrc, 'result', n, 'c');
   return n;
 };
 const x2 = midpoint(9, 18, offB, 'x', '+');
@@ -516,9 +660,10 @@ const y2 = midpoint(9, 19, offB, 'y', '+');
 const x3 = midpoint(9, 21, offC, 'x', '-');
 const y3 = midpoint(9, 22, offC, 'y', '-');
 
-const mkJ = ag.node('createAgent', { _port_radius: String(RADIUS) }, 10, 18);
+const mkJ = ag.node('createAgent', {}, 10, 18);
 ag.vEdge(x2, 'result', mkJ, 'x');
 ag.vEdge(y2, 'result', mkJ, 'y');
+ag.vEdge(radAttr, 'value', mkJ, 'radius');
 const addJ = ag.node('addAgentToWorld', {}, 11, 18);
 ag.vEdge(mkJ, 'handle', addJ, 'handle');
 // Daughters inherit the mother's POST-update (and post-mutation) state, exactly
@@ -532,9 +677,10 @@ const stJ = ag.node('setAgentAttribute', { attributeId: 'state' }, 12, 18);
 ag.vEdge(mkJ, 'handle', stJ, 'agentId');
 ag.vEdge(stateNow, 'value', stJ, 'value');
 
-const mkK = ag.node('createAgent', { _port_radius: String(RADIUS) }, 10, 21);
+const mkK = ag.node('createAgent', {}, 10, 21);
 ag.vEdge(x3, 'result', mkK, 'x');
 ag.vEdge(y3, 'result', mkK, 'y');
+ag.vEdge(radAttr, 'value', mkK, 'radius');
 const addK = ag.node('addAgentToWorld', {}, 11, 21);
 ag.vEdge(mkK, 'handle', addK, 'handle');
 const stK = ag.node('setAgentAttribute', { attributeId: 'state' }, 12, 21);
@@ -556,8 +702,19 @@ const fbJK = bondOp(13, 22, 'formBondBetween', n => { ag.vEdge(mkJ, 'handle', n,
 // post-write value (synchronous agent attributes double-buffer, so this is
 // visible from the NEXT round — which is exactly when the neighbours this node
 // just beat need to see that it no longer blocks them).
-const clearPrio = ag.node('setAttribute', { attributeId: 'prio', _port_value: '2.5' }, 14, 22);
+const clearPrio = ag.node('setAttribute', { attributeId: 'prio', _port_value: String(PRIO_UNFLAGGED) }, 14, 22);
 
+// THE OP ORDER IS THE DAUGHTERS' SLOT ORDER, so it is not free. A bond APPENDS
+// to both endpoints' lists, so the five ops decide what each newborn's slots 0/1/2
+// hold — and the split reads slots 1 and 2 to pick which neighbours the NEXT
+// generation of daughters inherits. With Form Between(j,k) issued LAST, k came
+// out [i, c, j] where the reference builds [i, j, c]; issuing it BEFORE
+// Form Between(c, k) puts both daughters on the reference's exact order:
+//     j = [i, b, k]     (rewire's form half, then b, then the triangle edge)
+//     k = [i, j, c]     (rewire's form half, then the triangle edge, then c)
+// Peak degree during the drain is still exactly 3 at every step, so maxBonds
+// stays a tight 3: after fbJK, j is full (i, b, k) and k holds (i, j) with one
+// slot left for c.
 ag.fEdge(splitIf, 'then', mkJ, 'do');
 ag.fEdge(mkJ, 'next', addJ, 'do');
 ag.fEdge(addJ, 'next', stJ, 'do');
@@ -567,9 +724,9 @@ ag.fEdge(addK, 'next', stK, 'do');
 ag.fEdge(stK, 'next', rwB, 'do');
 ag.fEdge(rwB, 'next', rwC, 'do');
 ag.fEdge(rwC, 'next', fbB, 'do');
-ag.fEdge(fbB, 'next', fbC, 'do');
-ag.fEdge(fbC, 'next', fbJK, 'do');
-ag.fEdge(fbJK, 'next', clearPrio, 'do');
+ag.fEdge(fbB, 'next', fbJK, 'do');
+ag.fEdge(fbJK, 'next', fbC, 'do');
+ag.fEdge(fbC, 'next', clearPrio, 'do');
 
 // -----------------------------------------------------------------------------
 // AGENT OUTPUT MAPPING — "Birth generation", znah's signature look
@@ -647,6 +804,26 @@ const attributes = [
     defaultValue: String(DEFAULT_FLIP), hasBounds: true, min: 0, max: 0.01,
   },
   {
+    id: 'maxGen', name: 'Max Generations', type: 'integer', isModelAttribute: true,
+    description:
+      'FREEZE THE AUTOMATON at this generation, keeping everything else alive: the force layout keeps ' +
+      'relaxing, the render keeps drawing and every other slider keeps working — the graph simply stops ' +
+      'rewriting. 0 means unlimited. It gates the state tick AND the division rounds, so nothing is left ' +
+      'half-drained; and because the cubic invariant holds at EVERY generation (not only at tick ' +
+      'boundaries), freezing part-way through a tick still leaves a valid 3-regular graph. Raise it again ' +
+      'and the automaton resumes from exactly where it stopped.',
+    defaultValue: '0', hasBounds: true, min: 0, max: 5000,
+  },
+  {
+    id: 'nodeRadius', name: 'Node Radius', type: 'float', isModelAttribute: true,
+    description:
+      'How big the nodes are drawn, live. Written to every agent on every generation, so dragging it ' +
+      'takes effect immediately. It is not purely cosmetic — the soft-collision force reads the radius — ' +
+      'and the upper bound is exactly where the spatial-hash stencil would stop finding every colliding ' +
+      'pair, not an arbitrary cap. Bond rest length is ' + REST + ' for scale.',
+    defaultValue: String(RADIUS), hasBounds: true, min: RADIUS_MIN, max: RADIUS_MAX,
+  },
+  {
     id: 'chordPartner', name: 'Seed Chords', type: 'lookupTable', isModelAttribute: true, defaultValue: '0',
     description:
       'BOOTSTRAP HELPER, not part of the rule. The chord of the initial 10-node cubic graph: ' +
@@ -673,17 +850,19 @@ const agentAttributes = [
     description: 'The node\'s single bit — the alphabet the census counts and both rule tables are keyed by.',
   },
   {
-    id: 'prio', name: 'prio', type: 'float', defaultValue: '2.5',
+    id: 'prio', name: 'prio', type: 'float', defaultValue: String(PRIO_UNFLAGGED),
     description:
       'The LATCHED division intent AND its tie-break in one number. The state tick writes it: a ' +
-      'flagged node stores its random roll in [0, 1), an unflagged one stores roll + 2. Each of ' +
-      'the ' + DIVISION_ROUNDS + ' division rounds that follow splits a node only if its value is below 1.5 (still ' +
+      'flagged node stores its OWN HANDLE (below ' + PRIO_FLAG_LIMIT + '), an unflagged one stores ' + PRIO_UNFLAGGED + '. Each of ' +
+      'the ' + DIVISION_ROUNDS + ' division rounds that follow splits a node only if its value is below ' + PRIO_FLAG_LIMIT + ' (still ' +
       'latched) and strictly below every bonded neighbour\'s (it won the contest); a splitter then ' +
-      'writes 2.5, which consumes its latch AND stops it blocking the neighbours it beat, so they ' +
-      'split in a later round of the same tick against the adjacency it just rewrote. Strict ' +
-      'inequality cannot hold both ways, so the splitters of any one round are pairwise ' +
-      'non-adjacent. The default 2.5 is a non-splitter value, so a newborn can never divide in a ' +
-      'later round of the tick it was born in.',
+      'writes ' + PRIO_UNFLAGGED + ', which consumes its latch AND stops it blocking the neighbours it beat, so they ' +
+      'split in a later round of the same tick against the adjacency it just rewrote. Handles are ' +
+      'unique, so strict inequality always resolves and the splitters of any one round are pairwise ' +
+      'non-adjacent — and because the winner is always the LOWEST handle, the drain order is the ' +
+      'reference implementation\'s own ascending index walk rather than a random one. The default ' +
+      'is a non-splitter value, so a newborn can never divide in a later round of the tick it was ' +
+      'born in.',
   },
 ];
 
@@ -752,14 +931,23 @@ const properties = {
     'operations from the mother\'s own behaviour in ONE generation — two Rewire Bonds and three ' +
     'Form Bond Betweens (Create Agent and Add Agent To World are host calls that consume no queue ' +
     'slot). Peak degree during the drain is exactly 3, which is why Max Bonds is a tight 3.\n\n' +
-    'THE INITIAL CONDITION IS EXACT. The reference implementation always seeds the same 10-node ' +
-    'cubic graph — a 10-cycle plus the chords {0,2} {1,4} {3,6} {5,8} {7,9} — with the states ' +
-    '[0,0,0,1,0,1,0,1,1,1]. Here the Agent Init Event places ten agents on a circle and reads their ' +
-    'states from a handle-indexed table; the wiring happens on the first behaviour step (Form Bond ' +
-    'writes the acting agent\'s request queue, so it is invalid in an Init Event), gated on bond ' +
-    'degree 0 so it runs exactly once. Each node requests bonds to (h+1) mod 10, (h+9) mod 10 and ' +
-    'its chord partner; Form Bond is symmetric and an existing bond is an idempotent no-op, so the ' +
-    'thirty requests settle to precisely the reference graph\'s fifteen edges.\n\n' +
+    'THE INITIAL CONDITION IS EXACT, SLOT ORDER INCLUDED. The reference implementation always seeds ' +
+    'the same 10-node cubic graph — a 10-cycle plus the chords {0,2} {1,4} {3,6} {5,8} {7,9} — with ' +
+    'the states [0,0,0,1,0,1,0,1,1,1], and every one of its adjacency rows reads [prev, next, chord]. ' +
+    'Here the Agent Init Event places ten agents on a circle and reads their states from a ' +
+    'handle-indexed table; the wiring happens on the first behaviour step (Form Bond writes the acting ' +
+    'agent\'s request queue, so it is invalid in an Init Event), gated on bond degree 0 so it runs ' +
+    'exactly once.\n\n' +
+    'The ORDER those bonds form in matters, because a bond appends to both endpoints\' lists and the ' +
+    'split reads slot 0 (kept) and slots 1 and 2 (handed to the daughters) — so a node\'s slot order ' +
+    'propagates into the structure forever. The requests are therefore scripted into a global order: ' +
+    'each agent forms only its own (h+1) edge, nobody forms a (h-1) edge (the previous agent already ' +
+    'did), and a chord is issued by its HIGHER endpoint. Because the engine drains request queues in ' +
+    'ascending agent order, that lays the ten cycle edges down in order with each chord landing right ' +
+    'after both its endpoints\' cycle edges — reproducing [prev, next, chord] for NINE of the ten ' +
+    'nodes. The tenth cannot be done: node h\'s prev-edge is edge (h-1) and its next-edge is edge h, ' +
+    'so [prev, next] everywhere at once would require edge 9 before edge 0 before ... before edge 9. ' +
+    'Exactly one node must carry its cycle edges the other way round, and here it is node 0.\n\n' +
     'LATCH AND DRAIN — THE REFERENCE\'S DIVISION SEMANTICS. The reference alternates a STATE tick ' +
     'and a DIVISION tick. Its division tick does not re-read the states: it walks the flags the ' +
     'state tick LATCHED and divides every one of them, sequentially, each node reading the LIVE ' +
@@ -775,31 +963,56 @@ const properties = {
     'theirs and try again in the next round, against the adjacency the winners just rewrote. That ' +
     'is the reference\'s mutated-adjacency drain, executed in independent-set rounds instead of in ' +
     'index order.\n\n' +
-    'HOW FAITHFUL IS IT? Because a latch is consumed exactly once and the drain finishes, the node ' +
-    'count per reference tick is the reference\'s. Measured against a transcription of the ' +
-    'reference implementation: "quadratic" and "exp tree" — rules whose flagged nodes can never be ' +
-    'adjacent — match cycle for cycle over 100 cycles, and so does "meduza", whose flagged nodes ' +
-    'CAN be adjacent and which the earlier single-round port could not follow at all. What remains ' +
-    'order-dependent is which neighbour a daughter inherits: the rounds pick winners by random ' +
-    'priority where the reference walks node indices, so the two graphs are built from the same ' +
-    'operations in a different order. The claim is semantic faithfulness — every latched node ' +
-    'divides, against live adjacency — not bit-identity of the labelled graph.\n\n' +
-    'One residual deviation, stated plainly: a node still latched after the last division round is ' +
-    're-latched by the next state tick rather than splitting late. Measurement puts that at a small ' +
-    'fraction of a percent of latches for the published rules, which is why the number of rounds is ' +
-    'what it is.\n\n' +
+    'HOW FAITHFUL IS IT? Node count per reference tick is the reference\'s: measured against a ' +
+    'transcription of the reference implementation, all eighteen mutation-free published rules match ' +
+    'cycle for cycle — including "meduza", whose flagged nodes CAN be adjacent and which an earlier ' +
+    'single-round port could not follow at all.\n\n' +
+    'Beyond the node count, three of the four adjacency rows a split touches are now the ' +
+    'reference\'s EXACTLY, slot order included: the mother keeps slot 0 and becomes [a, j, k], ' +
+    'daughter j is [i, b, k] and daughter k is [i, j, c]. That is what the operation order buys — ' +
+    'every bond appends, so issuing the closing triangle edge before or after the second daughter\'s ' +
+    'external edge decides which of them lands in which slot.\n\n' +
+    'ONE STRUCTURAL DIFFERENCE REMAINS, and it is worth naming precisely. The reference reconnects a ' +
+    'displaced neighbour IN PLACE — it overwrites the slot that pointed at the mother. GenesisCA\'s ' +
+    'Rewire Bond is a break plus a form, and a break compacts by moving the list\'s last entry into ' +
+    'the freed slot while a form appends — so the two neighbours handed to the daughters come out ' +
+    'reordered unless the mother happened to occupy their last slot. Their SET of neighbours is ' +
+    'right; the order is not, and because the next split reads slots 1 and 2, the difference ' +
+    'compounds. Measured effect: the labelled graph now tracks the reference exactly for several ' +
+    'cycles (nine on "quadratic", five on "exp tree") where before it diverged at the first, and the ' +
+    'reference\'s habit of concentrating splits into a few long-lived hubs is partly reproduced but ' +
+    'not fully — on "meduza" the busiest node now splits 11 times against the reference\'s 35. ' +
+    'Closing it needs a new engine verb (an in-place third-party transfer), not a change to this ' +
+    'model.\n\n' +
+    'One residual deviation on the drain, stated plainly: a node still latched after the last ' +
+    'division round would be re-latched by the next state tick rather than splitting late. Measured ' +
+    'over all eighteen deterministic rules that never happens at the shipped number of rounds.\n\n' +
     'HOW THE INDEPENDENT SET IS CHOSEN, AND WHY IT HAD TO BE INTENT-AWARE. The latch and its ' +
-    'tie-break live in ONE agent attribute, "prio": a flagged node stores a random roll in [0, 1), ' +
-    'an unflagged one stores that roll plus 2. A division round splits a node only if its value is ' +
-    'below 1.5 (still latched) AND strictly below every bonded neighbour\'s (it won the contest); ' +
-    'the splitter then writes 2.5, which consumes the latch and stops it blocking the neighbours it ' +
-    'beat. Strict inequality cannot hold both ways, so one round\'s splitters are pairwise ' +
-    'non-adjacent for any rolls; and a node that did not want to split sits above 2, so it never ' +
-    'blocks anyone. That last part is not a nicety. The obvious version of the gate — compare raw ' +
-    'rolls, flagged or not — makes a flagged node wait until it is the local minimum among ALL its ' +
-    'neighbours, which discards roughly three quarters of the splits even when the flagged nodes ' +
+    'tie-break live in ONE agent attribute, "prio": a flagged node stores its OWN HANDLE, an ' +
+    'unflagged one stores a large sentinel. A division round splits a node only if its value is below ' +
+    'the flag limit (still latched) AND strictly below every bonded neighbour\'s (it won the ' +
+    'contest); the splitter then writes the sentinel, which consumes the latch and stops it blocking ' +
+    'the neighbours it beat. Handles are unique, so strict inequality always resolves and one ' +
+    'round\'s splitters are pairwise non-adjacent; and a node that did not want to split sits at the ' +
+    'sentinel, so it never blocks anyone.\n\n' +
+    'Using the HANDLE rather than a random roll is what makes the drain deterministic — and the ' +
+    'lowest handle always winning is exactly the ascending index walk the reference itself divides ' +
+    'in, since handles are allocated 0, 1, 2, ... and nothing ever dies here. An earlier version ' +
+    'rolled a random priority, so which neighbour each daughter inherited (and therefore the whole ' +
+    'embedding) changed from run to run. It also drains SHALLOWER: measured over all eighteen ' +
+    'deterministic rules, the deepest chain needs six rounds where the random roll needed eight.\n\n' +
+    'The intent-aware banding is not a nicety either. The obvious version of the gate — compare bare ' +
+    'priorities, flagged or not — makes a flagged node wait until it is the local minimum among ALL ' +
+    'its neighbours, which discards roughly three quarters of the splits even when the flagged nodes ' +
     'are already pairwise non-adjacent, and for several published rules that is enough to drop the ' +
     'automaton into its absorbing all-OFF configuration and stop it dead.\n\n' +
+    'TWO LIVE CONTROLS. "Max Generations" freezes the automaton at a chosen generation while the ' +
+    'force layout, the render and every other slider keep running — set it, let the structure settle ' +
+    'or look at it, then raise it and the automaton resumes exactly where it stopped (0 means ' +
+    'unlimited). Freezing part-way through a tick is safe because the cubic invariant holds at every ' +
+    'generation, not only at tick boundaries. "Node Radius" resizes every node live; its upper bound ' +
+    'is where the spatial-hash stencil would stop finding every colliding pair, not an arbitrary cap. ' +
+    'Neither is part of the rule, so loading a preset leaves both where you put them.\n\n' +
     'THE CADENCE. One reference tick is ' + PERIOD + ' generations, so the force solver gets ' + (PERIOD * LAYOUT_ITERATIONS) + ' force ' +
     'passes per rewrite — more relaxation per rewrite than a two-generation cadence gives, at a ' +
     'lower per-generation cost.\n\n' +
@@ -832,6 +1045,11 @@ const properties = {
     'their rule number. Mutation Rate is a live slider — nudge it on a stalled rule and watch it ' +
     'restart. In the Attributes panel, Randomize either rule table to roll an automaton nobody has ' +
     'seen; the seed and density are stored, so an interesting one reproduces exactly.\n\n' +
+    'Two more sliders are for looking rather than for the rule. Max Generations freezes the ' +
+    'automaton at a generation you choose while the layout keeps untangling — the way to let a shape ' +
+    'settle before judging it; put it back to 0 (or raise it) and growth resumes from where it ' +
+    'stopped. Node Radius resizes every node live, from pinpricks to fat beads on a bond length of ' +
+    REST + '.\n\n' +
     'One reference tick is ' + PERIOD + ' generations: a state tick that latches which nodes will divide, then ' +
     DIVISION_ROUNDS + ' division rounds that drain those latches a non-adjacent set at a time, so the node count ' +
     'climbs over several generations and then pauses while the next state is computed. The ' +
@@ -877,7 +1095,7 @@ const centerBased = {
   seedCount: 0,                 // the Agent Init Event places the ten seeds
   seedPattern: 'compact',
   defaultRadius: RADIUS,
-  growthRate: 0,
+  growthRate: GROWTH_RATE,
   repulsionStiffness: 0.9,
   adhesionStiffness: 0,
   interactionRange: 2.2,
@@ -904,7 +1122,11 @@ const centerBased = {
     charge: 'on',
     // LIFESPAN is on because the "Birth generation" viewer reads Get Age — the
     // capability gate would otherwise hide a node this model actually uses.
-    growth: false, division: false, lifespan: true, populationBirth: true,
+    // GROWTH is on only to carry the Node Radius slider (Set Target Radius +
+    // a snap-rate ramp). Nothing in the rule reads a radius, so the C8 geometry
+    // verdict is unaffected; DIVISION stays off — the split is Create Agent +
+    // Rewire, never the engine's Divide Agent.
+    growth: true, division: false, lifespan: true, populationBirth: true,
     populationDeath: false, sensing: true, sensingHeadingSource: 'velocity',
     orientation: false, fieldCoupling: false, appearance: true,
   },
