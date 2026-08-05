@@ -1201,6 +1201,14 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
   // 2D axes indicator (origin + row/col growth arrows, the 2D sibling of the
   // 3D Axes toggle). Declared ABOVE the settings-persist effect (TDZ trap).
   const [show2dAxes, setShow2dAxes] = useState((saved.current.show2dAxes as boolean) ?? false);
+  // 2D smooth scaling (anti-aliasing) for the GRID upscale. Default OFF — the
+  // nearest-neighbour blit is what keeps discrete cells crisp, and every existing
+  // model must render byte-identically. ON is for continuous-valued fields
+  // (Gray-Scott, MNCA) where the interpolated upscale reads as a smooth field.
+  // Applies ONLY to the CPU/direct-render grid blit (a grid-res source upscaled by
+  // drawImage); see the toggle's own gating for the paths that can't honour it.
+  // Declared ABOVE the settings-persist effect (TDZ trap).
+  const [smoothScaling, setSmoothScaling] = useState((saved.current.smoothScaling as boolean) ?? false);
   // Inspect mode — toolbar toggle making plain LMB inspect (see inspectModeRef).
   const [inspectMode, setInspectMode] = useState(false);
   // Infinity canvas: when the model uses torus boundary, the grid tiles into the
@@ -1788,7 +1796,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       try {
         localStorage.setItem(SIM_SETTINGS_KEY, JSON.stringify({
           targetFps, unlimitedFps, gensPerFrame, unlimitedGens,
-          activeViewer, brushColor, brushW, brushH, brushMapping, showBrushCursor, showGridlines, show2dAxes,
+          activeViewer, brushColor, brushW, brushH, brushMapping, showBrushCursor, showGridlines, show2dAxes, smoothScaling,
           brushShape, brushRadius, brushRingWidth, brushLineWidth, brush3dVolume, brushBoxDepth,
           infinityCanvas, indicatorVizModes, recordFormat, recordScope, recordQuality, recordOverload, screenshotScope, brushSectionH, agentsFront3d,
           light3d, cellGaps3d, agentMetaballs, agentGlow,
@@ -1806,7 +1814,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       } catch { /* localStorage full */ }
     }, 300);
     return () => clearTimeout(timer);
-  }, [targetFps, unlimitedFps, gensPerFrame, unlimitedGens, activeViewer, brushColor, brushW, brushH, brushMapping, showBrushCursor, showGridlines, show2dAxes, brushShape, brushRadius, brushRingWidth, brushLineWidth, brush3dVolume, brushBoxDepth, infinityCanvas, indicatorVizModes, recordFormat, recordScope, recordQuality, recordOverload, screenshotScope, brushSectionH, agentsFront3d, light3d, cellGaps3d, agentMetaballs, agentGlow, agentBrushRadius, agentSeedDensity, agentSeedSpacing, agentBrushShape, agentBrushW, agentBrushH, agentBrushRingWidth, agentBrushLineWidth, showCaGrid, showAgents, showBonds, simulateCells, simulateAgents, brushTarget, bg2d, agentOutlines, showVision, indicatorHiddenCategories, indicatorChartOverrides]);
+  }, [targetFps, unlimitedFps, gensPerFrame, unlimitedGens, activeViewer, brushColor, brushW, brushH, brushMapping, showBrushCursor, showGridlines, show2dAxes, smoothScaling, brushShape, brushRadius, brushRingWidth, brushLineWidth, brush3dVolume, brushBoxDepth, infinityCanvas, indicatorVizModes, recordFormat, recordScope, recordQuality, recordOverload, screenshotScope, brushSectionH, agentsFront3d, light3d, cellGaps3d, agentMetaballs, agentGlow, agentBrushRadius, agentSeedDensity, agentSeedSpacing, agentBrushShape, agentBrushW, agentBrushH, agentBrushRingWidth, agentBrushLineWidth, showCaGrid, showAgents, showBonds, simulateCells, simulateAgents, brushTarget, bg2d, agentOutlines, showVision, indicatorHiddenCategories, indicatorChartOverrides]);
 
   // Manual Brush — signature-keyed merge effect. Re-derives `manualBrush`
   // whenever the cell attribute set (id+type) changes. Surviving attrs carry
@@ -2600,7 +2608,13 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       const tctx = tmp.getContext('2d');
       if (tctx) {
         tctx.putImageData(new ImageData(new Uint8ClampedArray(new Uint8ClampedArray(colors.buffer, colors.byteOffset, w * h * 4)), w, h), 0, 0);
+        // Honour the display's Smooth-scaling toggle so a simulation-scope
+        // capture looks like what the user sees (scoped + restored: the agent
+        // layer below stays crisp). Default OFF ⇒ unchanged nearest-neighbour.
+        const smooth = smoothScalingRef.current;
+        if (smooth) ctx.imageSmoothingEnabled = true;
         ctx.drawImage(tmp, 0, 0, outW, outH);
+        if (smooth) ctx.imageSmoothingEnabled = false;
       }
     } else if (isAgentModelRef.current && !showGrid && bg2dRef.current) {
       ctx.fillStyle = bg2dRef.current;
@@ -2752,6 +2766,12 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
   const pendingAgentRenderCanvas = useRef<HTMLCanvasElement | null>(null);
   // Whether the pending attach requested the E2 composite (world-sized canvas).
   const pendingAgentCompositeRef = useRef<boolean>(false);
+  // Render mirror of agentCompositeActiveRef — the E2 composite renders the GRID
+  // layer in the WORKER at DISPLAY resolution with a NEAREST sampler, so the
+  // main thread's Smooth-scaling flag structurally cannot reach it. The toggle is
+  // HIDDEN while this is on rather than shown-and-inert. Assigned in the SAME
+  // statements as the ref so the two cannot drift.
+  const [compositeGridActive, setCompositeGridActive] = useState(false);
   // The display pixel size the agent render canvas was attached at (a parent
   // resize past this needs a fresh re-attach — transferred canvas dims are fixed).
   const agentRenderCanvasDimsRef = useRef<{ w: number; h: number }>({ w: 0, h: 0 });
@@ -4601,6 +4621,15 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       ctx.drawImage(agentRenderCanvasRef.current!, 0, 0, parentW, parentH);
       postAgentCamera();
     } else if (showGrid2d && blitSource) {
+      // Smooth scaling (anti-aliasing) of the GRID upscale, opt-in. Scoped to
+      // this blit and restored right after, so glyph tiles / sprites / the
+      // cursor overlay keep the crisp default. `blitSource` is always a
+      // GRID-RESOLUTION canvas (the CPU srcCanvas, the glyph-fallback canvas, or
+      // the WebGPU direct-render OffscreenCanvas — all w×h), so drawImage here is
+      // a genuine upscale and smoothing is meaningful. Default OFF ⇒ the
+      // historical nearest-neighbour blit, byte-identical.
+      const smooth = smoothScalingRef.current;
+      if (smooth) ctx.imageSmoothingEnabled = true;
       if (infinity) {
         // Snap each tile's left/top edges to integer pixels and derive width/height
         // from the difference with the NEXT tile's left/top. This guarantees that
@@ -4619,6 +4648,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       } else {
         ctx.drawImage(blitSource, ox, oy, scaledW, scaledH);
       }
+      if (smooth) ctx.imageSmoothingEnabled = false;
     }
 
     // Glyph overlay (after colour blit, before gridlines + cursor). Skipped for
@@ -5698,6 +5728,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
         // just treat it as a plain A1 direct render (no re-attach needed; the canvas
         // is display-sized in both cases now).
         agentCompositeActiveRef.current = !!pendingAgentCompositeRef.current && !!msg.composite;
+        setCompositeGridActive(agentCompositeActiveRef.current);
         if (pendingAgentCompositeRef.current && !msg.composite) agentCompositeEligibleRef.current = false;
         pendingAgentCompositeRef.current = false;
         // Send the initial camera + draw so the canvas shows the current frame.
@@ -5718,6 +5749,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
         // agentsRef otherwise froze the display on an ancient frame).
         agentDirectRenderActiveRef.current = false;
         agentCompositeActiveRef.current = false;
+        setCompositeGridActive(false);
         const p = pendingAgentRenderCanvas.current;
         if (p?.parentElement) p.parentElement.removeChild(p);
         pendingAgentRenderCanvas.current = null;
@@ -6069,6 +6101,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       agentRenderModelTermsOk(model.sprites, model.agentMappings, agentResult.agentTarget, agentResult.agentWebgpuOmSupported);
     agentCompositeEligibleRef.current = agentComposite;
     agentCompositeActiveRef.current = false;
+    setCompositeGridActive(false);
     agentDirectRenderActiveRef.current = false;
     pendingAgentRenderCanvas.current = null;
     pendingAgentCanvasAttach.current = agentRenderEligible || agentComposite;
@@ -8094,6 +8127,10 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
   // ref (stale for that call) — the post-sync draw here makes the toggle land
   // immediately even while paused.
   useEffect(() => { show2dAxesRef.current = show2dAxes; draw(); }, [show2dAxes, draw]);
+  // 2D smooth scaling (anti-aliasing) — same sync+redraw discipline as the axes
+  // toggle above (the onClick's draw() runs before this effect syncs the ref).
+  const smoothScalingRef = useRef(false);
+  useEffect(() => { smoothScalingRef.current = smoothScaling; draw(); }, [smoothScaling, draw]);
   // Inspect mode (toolbar toggle): plain LMB inspects cells/agents — the
   // keyboard-free equivalent of Shift+LMB (both 2D and 3D read the ref in
   // their pointer handlers). Session-only, never persisted.
@@ -12153,6 +12190,21 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
               onClick={() => { setShow2dAxes(v => !v); draw(); }}
               title="Toggle axes — marks the grid origin (cell 0,0) and the row/column growth directions (columns red → right, rows green → down)"
             >&#x22BE;</button>
+          )}
+          {/* Smooth scaling (anti-aliasing) of the grid upscale. Shown only where
+              the MAIN THREAD does that upscale: 2D (3D already renders with MSAA)
+              + the model HAS a CA grid + not the E2 composite (whose grid layer is
+              drawn in the worker at display res with a NEAREST sampler). Hidden —
+              not disabled — in the paths that structurally can't honour it. */}
+          {!is3D && gridCellsOn && !compositeGridActive && (
+            <button
+              className={`${styles.zoomBtn} ${smoothScaling ? styles.zoomBtnActive : ''}`}
+              onClick={() => { setSmoothScaling(v => !v); }}
+              title={smoothScaling
+                ? 'Smooth scaling (anti-aliasing) ON — the grid is interpolated when zoomed in. Best for continuous fields; click to restore crisp cells.'
+                : 'Smooth scaling (anti-aliasing) — interpolate the grid instead of drawing hard-edged cells. Best for continuous-valued fields (reaction-diffusion, MNCA).'}
+              aria-label="Toggle smooth scaling (anti-aliasing)"
+            >&#x224B;</button>
           )}
           <button
             className={`${styles.zoomBtn} ${infinityCanvas ? styles.zoomBtnActive : ''}`}
