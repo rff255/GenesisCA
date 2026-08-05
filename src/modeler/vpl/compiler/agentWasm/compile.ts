@@ -102,6 +102,13 @@ const FMOD_FUNC_IDX = NUM_IMPORTED_FUNCS; // = 7
  *  Init Event uses, so JS↔WASM behaviour-Create is bit-identical. */
 const AGENT_CREATE_FUNC_IDX = NUM_IMPORTED_FUNCS + 1; // = 8
 const AGENT_ADD_FUNC_IDX = NUM_IMPORTED_FUNCS + 2;    // = 9
+/** `env.atan2` — CONDITIONAL, appended after agentAddToWorld and imported ONLY
+ *  when a reachable Set Agent Sprite uses the VECTOR rotation mode (the one facet
+ *  that needs an inverse tangent; WASM has no atan2 opcode). Adding an import
+ *  shifts the module's own function indices, so making it conditional is what
+ *  keeps every model that does NOT use it byte-identical — the same
+ *  conditional-arity discipline as `forcePassParamsFor(chargeOn)`. */
+const AGENT_ATAN2_FUNC_IDX = NUM_IMPORTED_FUNCS + 3;  // = 10 (only when imported)
 import { emitWasm } from '../expression/emitWasm';
 import { buildVarMap, parseExpression, clampVisibleCount } from '../expression/parser';
 import { is3dModel } from '../compile';
@@ -186,6 +193,10 @@ export const AGENT_WASM_SUPPORTED_TYPES: ReadonlySet<string> = new Set<string>([
   'getIndicator', 'setIndicator', 'updateIndicator',
   // writes (SoA / request)
   'applyForce', 'applyForceToAgent', 'setTargetRadius',
+  // sprite display state — the five buffers live in the shared agent memory (see
+  // the sprite block in computeAgentMemoryLayout), so a sprite-driving BEHAVIOUR
+  // graph runs on WASM instead of clamping the whole model to JS.
+  'setAgentSprite',
   // layout-agnostic value/flow utility (operate on the f64 stack / locals)
   'getConstant', 'arithmeticOperator', 'expression', 'statement', 'logicOperator', 'getRandom',
   // flow
@@ -347,6 +358,10 @@ interface AgentWasmCtx {
   activeViewerIdxLocal: number;
   /** Ordered non-sentinel setCellLooks mappingIds (the viewer-guard table). */
   viewerGuardIds: string[];
+  /** true → `env.atan2` IS imported (a reachable Set Agent Sprite uses VECTOR
+   *  rotation), so `AGENT_ATAN2_FUNC_IDX` is callable and the module's own funcs
+   *  shift by one. Precomputed before emit, exactly like `viewerGuardIds`. */
+  usesAtan2: boolean;
   /** Async read-after-write hazard cone (pure scalar chains only): NOT top-
    *  hoisted; emitted ONCE immediately before the flow node in hazardEmitBefore
    *  — the SAME LCA position JS's volatileHoist uses, keeping bit-parity. */
@@ -2778,6 +2793,11 @@ function compileFlowNode(ctx: AgentWasmCtx, nodeId: string): void {
       compileFlowChain(ctx, node.id, 'next');
       break;
     }
+    case 'setAgentSprite': {
+      emitSetAgentSprite(ctx, node);
+      compileFlowChain(ctx, node.id, 'next');
+      break;
+    }
     case 'setAttribute': {
       // On the AGENT graph: write the agent SoA at idx (D-IDX). w_<attr>[idx].
       const attrId = (node.data.config?.['attributeId'] as string) || '';
@@ -2902,6 +2922,86 @@ function compileFlowNode(ctx: AgentWasmCtx, nodeId: string): void {
     default:
       throw new Error(`agentWasm: unsupported flow node '${type}'`);
   }
+}
+
+/** Set Agent Sprite — the WASM mirror of `SetAgentSpriteNode.compile`, facet for
+ *  facet. The five sprite buffers are VIEWS over this same agent memory (see the
+ *  sprite block in `computeAgentMemoryLayout`), so a write here is the write JS
+ *  would have made and the JS engine's `advanceAgentSprites` reads it back.
+ *
+ *  TARGET mirrors JS exactly: `agentId` unwired → the current-loop agent (`idx`,
+ *  unguarded — it is live by construction); wired → that id under the RANGE-ONLY
+ *  guard the other by-id setters use, so a freshly Created (staged, alive=0) agent
+ *  can be configured on its handle.
+ *
+ *  C9 SAFETY CATCH: with the sprites gate off no region is reserved, so every
+ *  sprite facet is DROPPED (`layout.spritesReserved === false`) — the same shape
+ *  as `layout.f64[name] === undefined` for the gated f64 group. The ALPHA facet
+ *  writes `colors`, which is always allocated, so it survives either way. */
+function emitSetAgentSprite(ctx: AgentWasmCtx, node: GraphNode): void {
+  const em = ctx.em;
+  const cfg = node.data.config ?? {};
+  const L = ctx.layout;
+  const spr = L.spritesReserved;
+  const wired = !!ctx.adj.inputToSource.get(`${node.id}:agentId`);
+
+  // Nothing to write → emit nothing at all (matches the JS `body.length === 0`).
+  const wantsSprite = spr && cfg['setSprite'] !== false;
+  const wantsFrame = spr && !!cfg['setFrame'];
+  const wantsSpeed = spr && !!cfg['setSpeed'];
+  const wantsRot = spr && !!cfg['setRotation'];
+  const wantsScale = spr && !!cfg['setScale'];
+  const wantsAlpha = !!cfg['setAlpha'];
+  if (!wantsSprite && !wantsFrame && !wantsSpeed && !wantsRot && !wantsScale && !wantsAlpha) return;
+
+  const writes = (aLocal: number) => {
+    if (wantsSprite) {
+      pushI32ElemAddr(em, L.spriteIdsOffset, aLocal);
+      em.i32Const(Number(cfg['_spriteSlot']) || 0);
+      em.i32Store();
+    }
+    if (wantsFrame) { pushF64ElemAddr(em, L.spriteFramesOffset, aLocal); pushValueInputF64(ctx, node, 'frame', 0); em.f64Store(); }
+    if (wantsSpeed) { pushF64ElemAddr(em, L.spriteSpeedsOffset, aLocal); pushValueInputF64(ctx, node, 'speed', 0); em.f64Store(); }
+    if (wantsRot) {
+      if (cfg['rotationMode'] === 'vector') {
+        // Align the art to a direction vector — compass degrees, 0 = up/north,
+        // clockwise: atan2(dx, -dy) * 180/PI. A ZERO vector leaves the rotation
+        // untouched (the JS `if (_dx !== 0 || _dy !== 0)` guard).
+        const dx = em.allocLocal(F64); pushValueInputF64(ctx, node, 'dirX', 0); em.localSet(dx);
+        const dy = em.allocLocal(F64); pushValueInputF64(ctx, node, 'dirY', 0); em.localSet(dy);
+        em.localGet(dx); em.f64Const(0); em.op(OP_F64_NE);
+        em.localGet(dy); em.f64Const(0); em.op(OP_F64_NE);
+        em.op(OP_I32_OR);
+        em.ifThen(() => {
+          pushF64ElemAddr(em, L.spriteRotationsOffset, aLocal);
+          em.localGet(dx);
+          em.localGet(dy); em.op(OP_F64_NEG);
+          em.emit(opCall(AGENT_ATAN2_FUNC_IDX));
+          em.f64Const(180); em.op(OP_F64_MUL);
+          em.f64Const(Math.PI); em.op(OP_F64_DIV);
+          em.f64Store();
+        });
+      } else {
+        pushF64ElemAddr(em, L.spriteRotationsOffset, aLocal); pushValueInputF64(ctx, node, 'rotation', 0); em.f64Store();
+      }
+    }
+    if (wantsScale) { pushF64ElemAddr(em, L.spriteScalesOffset, aLocal); pushValueInputF64(ctx, node, 'scale', 1); em.f64Store(); }
+    if (wantsAlpha) {
+      // colours are Uint8ClampedArray on the JS side; i32.store8 TRUNCATES rather
+      // than clamping, so clamp to [0,255] first to keep the two identical.
+      em.i32Const(L.colorsOffset);
+      em.localGet(aLocal); em.i32Const(4); em.op(OP_I32_MUL); em.op(OP_I32_ADD);
+      em.i32Const(3); em.op(OP_I32_ADD);
+      const a = em.allocLocal(F64); pushValueInputF64(ctx, node, 'alpha', 255); em.localSet(a);
+      em.localGet(a); em.f64Const(0); em.op(OP_F64_MAX);
+      em.f64Const(255); em.op(OP_F64_MIN);
+      em.op(OP_I32_TRUNC_SAT_F64_S);
+      em.i32Store8();
+    }
+  };
+
+  if (!wired) { writes(ctx.idxLocal); return; }
+  emitGuardedAgentWrite(ctx, node, 'agentId', writes);
 }
 
 /** Resolve `agentId`, guard (range + alive in behaviour; range-only in init), run
@@ -5242,6 +5342,16 @@ export function compileAgentGraphWasm(
     if (mid && mid !== '__current__' && !viewerGuardIds.includes(mid)) viewerGuardIds.push(mid);
   }
 
+  // `env.atan2` is imported ONLY for a reachable Set Agent Sprite in VECTOR
+  // rotation mode — see AGENT_ATAN2_FUNC_IDX. Scanned here (before emit) because
+  // the import list is assembled at the very end but the emitter needs to know
+  // whether the call index is live.
+  let usesAtan2 = false;
+  for (const id of reachable) {
+    const n = adj.nodeMap.get(id); if (!n || n.data.nodeType !== 'setAgentSprite') continue;
+    if (n.data.config?.['setRotation'] && n.data.config?.['rotationMode'] === 'vector') { usesAtan2 = true; break; }
+  }
+
   // Behaviour signature (the worker's call MIRRORS this — see runAgentStep):
   //   (highWater, hashValid, nBinsX, nBinsY, nBinsZ : i32,
   //    binSizeX, binSizeY, binSizeZ : f64,
@@ -5279,6 +5389,7 @@ export function compileAgentGraphWasm(
     originXLocal: P_originX, originYLocal: P_originY, originZLocal: P_originZ,
     activeViewerIdxLocal: P_activeViewerIdx,
     viewerGuardIds,
+    usesAtan2,
     hazardPinned: new Set<string>(),
     hazardEmitBefore: new Map<string, string[]>(),
     bondReqCursorLocal: -1,
@@ -5511,14 +5622,19 @@ export function compileAgentGraphWasm(
   // Unified spawning host imports — funcIdx AGENT_CREATE_FUNC_IDX (8) / AGENT_ADD_FUNC_IDX (9).
   const agentCreateImport = importEntry('env', 'agentCreate', importFuncDesc(TYPE_CREATE));
   const agentAddImport = importEntry('env', 'agentAddToWorld', importFuncDesc(TYPE_ADD));
+  // CONDITIONAL — appended LAST so every existing import index is unchanged, and
+  // omitted entirely (module byte-identical) when no reachable Set Agent Sprite
+  // uses vector rotation. `(f64,f64)->f64`, so it reuses TYPE_POW.
+  const atan2Imports = ctx.usesAtan2 ? [importEntry('env', 'atan2', importFuncDesc(TYPE_POW))] : [];
+  const funcBase = NUM_IMPORTED_FUNCS_FORCE + atan2Imports.length;
 
   const bytes = buildModule({
     types: [typeBehaviour, typePow, typeUnary, typeForce, typeCreate, typeAdd],
-    imports: [memImport, powImport, ...unaryImports, fmodImport, agentCreateImport, agentAddImport],
+    imports: [memImport, powImport, ...unaryImports, fmodImport, agentCreateImport, agentAddImport, ...atan2Imports],
     funcs: [leb128u(TYPE_BEHAVIOUR), leb128u(TYPE_FORCE)],
     exports: [
-      exportEntry('behaviour', EXPORT_FUNC, NUM_IMPORTED_FUNCS_FORCE + 0),
-      exportEntry('forcePass', EXPORT_FUNC, NUM_IMPORTED_FUNCS_FORCE + 1),
+      exportEntry('behaviour', EXPORT_FUNC, funcBase + 0),
+      exportEntry('forcePass', EXPORT_FUNC, funcBase + 1),
     ],
     code: [body, forceBody],
   });
@@ -5558,6 +5674,10 @@ export async function instantiateAgentWasm(
       fmod: (a: number, b: number): number => a % b,
       // Unified spawning host imports (funcIdx 8 / 9).
       agentCreate, agentAddToWorld,
+      // Set Agent Sprite's VECTOR rotation mode (funcIdx 10). Supplying it
+      // unconditionally is free — WebAssembly only looks up imports the module
+      // actually DECLARES, and the module declares it only when it is used.
+      atan2: Math.atan2,
     },
   };
   const mod = await WebAssembly.instantiate(bytes, importObj);

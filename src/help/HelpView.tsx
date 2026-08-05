@@ -2716,6 +2716,25 @@ export function HelpView() {
             runs once, not per-agent; for seed-painted agents put the node in an Output Mapping
             graph.)
           </p>
+          <p className={styles.p}>
+            <strong>Sprites and the engine.</strong> Set Agent Sprite runs on the <strong>JS and
+            WebAssembly</strong> agent engines &mdash; the five per-agent sprite buffers live in the
+            same shared agent memory as every other agent field, so a sprite-driving
+            <strong> Behaviour</strong> graph compiles to WASM like any other setter.
+            <strong> WebGPU is the exception</strong>: the sprite buffers have no GPU-side mirror,
+            so a Set Agent Sprite reachable from the Behaviour Step clamps a WebGPU-target model
+            to JS (Properties&nbsp;&rarr;&nbsp;Compatibility names the node as the reason). The fix
+            is free: put the node in an <strong>Agent Output Mapping</strong> graph instead.
+            Output-Mapping passes are JS on <em>every</em> agent target, so the behaviour keeps
+            running on WebGPU while the sprites still animate. That is also the natural home for
+            it &mdash; choosing how an agent <em>looks</em> is a presentation concern.
+          </p>
+          <p className={styles.p}>
+            <strong>A note on speed.</strong> Sprites are drawn by the CPU overlay (the GPU
+            direct-render path draws discs only), so a sprite model&rsquo;s frame cost is dominated
+            by the <em>drawing</em>, not the agent step. Switching engines helps a heavy per-agent
+            rule or a large population; it will not move a small sprite flock much.
+          </p>
           <h3 className={styles.h3}>The Config Panel</h3>
           <p className={styles.p}>
             The <strong>Bond-Graph Agents</strong> block (Properties, shown when Agents is on)

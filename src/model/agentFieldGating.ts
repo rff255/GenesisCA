@@ -44,8 +44,10 @@ import { usesEngineGrowth, usesSoftCollision, usesBondingPhysics, usesCharge } f
  *  compiled reads emit the typed default. */
 export interface AgentFieldGates {
   /** `spriteIds` / `spriteFrames` / `spriteSpeeds` / `spriteRotations` /
-   *  `spriteScales` — 36 B/agent, and the ONLY group that lives purely in plain
-   *  JS arrays (no WASM offset, no GPU run), so gating it moves no baked byte. */
+   *  `spriteScales` — 36 B/agent. They now have a WASM region (the sprite block
+   *  in `computeAgentMemoryLayout`, which is what lets Set Agent Sprite emit on
+   *  the WASM agent target) but still no GPU run. The block is appended AFTER
+   *  every other region, so gating it moves no offset that is already baked. */
   sprites: boolean;
   /** `age` — 8 B. Written by the force pass on all three targets. */
   age: boolean;

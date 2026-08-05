@@ -27,12 +27,18 @@ import type { NodeTypeDef } from '../types';
  *  that writes the agent colour afterwards overrides it). Unticked facets are
  *  left untouched.
  *
- *  Writes the JS-engine per-agent display buffers (`spriteIds`/`spriteFrames`/
- *  `spriteSpeeds`/`spriteRotations`/`spriteScales`) so it has NO WASM/WebGPU emit
- *  — the engine advance + these writes are JS on every agent target. Placed in the
- *  Behaviour graph on a WASM/WebGPU agent target it clamps that behaviour to JS;
- *  the Output-Mapping usage (the intended one) is unaffected. `requirements.
- *  bondGraph` → Agents sub-tab only. */
+ *  Writes the per-agent display buffers `spriteIds`/`spriteFrames`/`spriteSpeeds`/
+ *  `spriteRotations`/`spriteScales` (+ the agent colour's A byte for the alpha
+ *  facet). Those five live in the SHARED agent memory (the sprite block in
+ *  `computeAgentMemoryLayout`, reserved only when the C9 `sprites` gate is on), so
+ *  this node EMITS ON WASM: a sprite-driving BEHAVIOUR graph runs on the WASM
+ *  agent target instead of clamping the whole model to JS.
+ *
+ *  WebGPU is still the exception — the sprite buffers have no GPU-side mirror, so
+ *  a behaviour-reachable Set Agent Sprite clamps a WebGPU-target model to JS (the
+ *  Compatibility readout names the node). Putting it in an Agent OUTPUT MAPPING
+ *  graph avoids that entirely: OM passes are JS on EVERY agent target, so the
+ *  behaviour keeps running on WebGPU. `requirements.bondGraph` → Agents tab only. */
 export const SetAgentSpriteNode: NodeTypeDef = {
   type: 'setAgentSprite',
   label: 'Set Agent Sprite',

@@ -748,12 +748,12 @@ export const AGENT_NODE_MATRIX: CapabilityNodeRow[] = [
     "category": "color",
     "capability": null,
     "capabilityLabel": null,
-    "wasm": false,
+    "wasm": true,
     "webgpu": false,
     "entryPoint": false,
     "lowered": false,
     "cpuRoot": false,
-    "wasmStatus": "no",
+    "wasmStatus": "yes",
     "webgpuStatus": "no"
   },
   {
@@ -917,11 +917,11 @@ export const NODE_COUNTS = {
   "selectable": 151,
   "agent": 54,
   "overseer": 20,
-  "agentOnWasm": 47,
+  "agentOnWasm": 48,
   "agentOnWebgpu": 48,
   "agentCpuRoots": 4,
   "agentLowered": 3,
-  "agentGapsWasm": 1,
+  "agentGapsWasm": 0,
   "agentGapsWebgpu": 1
 } as const;
 

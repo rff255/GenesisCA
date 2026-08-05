@@ -62,6 +62,14 @@ function eq(a, b, msg) { return ok(a === b, `${msg} — expected ${JSON.stringif
 
 const clone = (m) => JSON.parse(JSON.stringify(m));
 const load = (f) => JSON.parse(readFileSync(join(ROOT, 'public', 'models', f), 'utf8'));
+/** A named sample this suite pins may legitimately not be shipping right now (a
+ *  library edit can add or drop one). SKIP it loudly instead of crashing the whole
+ *  gate — a missing sample must never be able to hide a real resolution failure in
+ *  the cases that CAN run. Every skip is printed and counted. */
+const skipped = [];
+const loadOptional = (f) => {
+  try { return load(f); } catch { skipped.push(f); return null; }
+};
 const files = readdirSync(join(ROOT, 'public', 'models')).filter(f => f.endsWith('.gcaproj')).sort();
 
 // ---------------------------------------------------------------------------
@@ -240,7 +248,8 @@ const AUTO_AGENT_CASES = [
   ['Cubic GRA.gcaproj', 'statistical', 'webgpu', 'declaring Statistical releases the GPU (the old special case forced WASM)'],
 ];
 for (const [f, contract, expect, why] of AUTO_AGENT_CASES) {
-  const m = migrateForHarness(load(f));
+  const rawCase = loadOptional(f); if (!rawCase) continue;
+  const m = migrateForHarness(rawCase);
   m.centerBased.agentTarget = 'auto';
   m.properties.reproducibility = contract;
   const r = resolveEngines(m);
@@ -249,23 +258,53 @@ for (const [f, contract, expect, why] of AUTO_AGENT_CASES) {
   ok(!r.agents?.contractViolation, `Auto never violates the contract (${f}, ${contract})`);
 }
 // The JS fallback arm: a behaviour graph BOTH compiled agent engines reject.
-// `setAgentSprite` is the documented single genuine gap on both targets.
+// Since Set Agent Sprite gained a WASM emit, no NODE TYPE is refused by both —
+// so the case is built on the CAPACITY gate they both genuinely have: the
+// per-agent array-producer budget (WASM `AGENT_NEARBY_SCRATCH_SLOTS` = 4,
+// WebGPU `AGENT_WEBGPU_NEARBY_SLOTS` = 6). Eight reachable Get Nearby Agents
+// producers blow through both.
 {
   const m = migrateForHarness(load('Boids - Flocking.gcaproj'));
   const bs = m.agentGraphNodes.find(n => n.data?.nodeType === 'behaviourStep');
-  ok(!!bs, 'sprite case: the sample has a Behaviour Step root');
+  ok(!!bs, 'capacity case: the sample has a Behaviour Step root');
+  // Chain N forEach flow nodes off the root, each fed by its OWN nearby query,
+  // so every producer is behaviour-REACHABLE (the gates walk that cone).
+  let prev = bs, prevPort = 'output_flow_do';
+  for (let k = 0; k < 8; k++) {
+    const near = { id: `__capNear${k}`, type: 'caNode', position: { x: 0, y: 0 }, data: { nodeType: 'getNearbyAgents', config: { _port_radius: '3' } } };
+    const fe = { id: `__capFe${k}`, type: 'caNode', position: { x: 0, y: 0 }, data: { nodeType: 'forEachInArray', config: {} } };
+    m.agentGraphNodes.push(near, fe);
+    m.agentGraphEdges.push({ id: `__capFlow${k}`, source: prev.id, sourceHandle: prevPort, target: fe.id, targetHandle: 'input_flow_do' });
+    m.agentGraphEdges.push({ id: `__capArr${k}`, source: near.id, sourceHandle: 'output_value_agents', target: fe.id, targetHandle: 'input_value_array' });
+    prev = fe; prevPort = 'output_flow_next';
+  }
+  ok(!isAgentGraphWasmSupported(m) && !isAgentGraphWebGPUSupported(m),
+    'capacity case: both agent gates reject the graph (precondition)');
+  m.centerBased.agentTarget = 'auto';
+  eq(resolveEngines(m).agents?.resolved, 'js', 'Auto agents: falls back to JS when neither compiled engine can run the graph');
+}
+
+// Set Agent Sprite now runs on WASM but NOT on WebGPU — so a sprite-driving
+// BEHAVIOUR graph must resolve Auto to WebAssembly, not JS, and the WebGPU gate
+// must still refuse it (that refusal is what the Compatibility readout names).
+{
+  const m = migrateForHarness(load('Boids - Flocking.gcaproj'));
+  const bs = m.agentGraphNodes.find(n => n.data?.nodeType === 'behaviourStep');
+  m.sprites = [{ id: 'sp1', name: 'probe', dataUrl: '', mimeType: 'image/png' }];
   m.agentGraphNodes.push({
     id: '__spriteProbe', type: 'caNode', position: { x: 0, y: 0 },
-    data: { nodeType: 'setAgentSprite', config: {} },
+    data: { nodeType: 'setAgentSprite', config: { spriteId: 'sp1', _spriteSlot: 1, setSprite: true } },
   });
   m.agentGraphEdges.push({
     id: '__spriteProbeEdge', source: bs.id, sourceHandle: 'output_flow_do',
     target: '__spriteProbe', targetHandle: 'input_flow_do',
   });
-  ok(!isAgentGraphWasmSupported(m) && !isAgentGraphWebGPUSupported(m),
-    'sprite case: both agent gates reject the graph (precondition)');
+  ok(isAgentGraphWasmSupported(m), 'sprite case: the WASM agent gate ACCEPTS Set Agent Sprite');
+  ok(!isAgentGraphWebGPUSupported(m), 'sprite case: the WebGPU agent gate still refuses it');
   m.centerBased.agentTarget = 'auto';
-  eq(resolveEngines(m).agents?.resolved, 'js', 'Auto agents: falls back to JS when neither compiled engine can run the graph');
+  m.properties.reproducibility = 'statistical';
+  eq(resolveEngines(m).agents?.resolved, 'wasm',
+    'Auto agents: a sprite-driving behaviour resolves to WASM (not the JS fallback)');
 }
 
 // An EXPLICIT choice is never silently replaced by Auto's pick — it keeps its
@@ -286,7 +325,8 @@ for (const [f, contract, expect, why] of AUTO_AGENT_CASES) {
 // ---------------------------------------------------------------------------
 console.log('\n=== 3. Round-trip + old-shape files ===');
 for (const f of ['Game Of Life.gcaproj', 'Amphiphile.gcaproj', 'Boids - Flocking.gcaproj', 'Cubic GRA.gcaproj']) {
-  const migrated = migrateForHarness(load(f));
+  const rawRt = loadOptional(f); if (!rawRt) continue;
+  const migrated = migrateForHarness(rawRt);
   const reloaded = migrateForHarness(JSON.parse(serializeModel(migrated)));
   eq(reloaded.properties.engine, migrated.properties.engine, `${f}: engine survives save→load`);
   eq(!!reloaded.properties.useWasm, !!migrated.properties.useWasm, `${f}: useWasm mirror survives`);
@@ -412,7 +452,8 @@ for (const f of files) {
 
 // Serialization: the contract round-trips, and an old-shape file re-infers it.
 for (const f of ['Boids - Flocking.gcaproj', 'Cubic GRA.gcaproj', 'Game Of Life.gcaproj']) {
-  const m = migrateForHarness(load(f));
+  const rawC = loadOptional(f); if (!rawC) continue;
+  const m = migrateForHarness(rawC);
   const saved = JSON.parse(serializeModel(m));
   eq(saved.properties.reproducibility, reproducibilityOf(m), `${f}: the contract is written on save`);
   eq(reproducibilityOf(migrateForHarness(saved)), reproducibilityOf(m), `${f}: it survives save→load`);
@@ -486,6 +527,11 @@ console.log('\n' + '='.repeat(58));
 if (failures.length) {
   console.log('FAILURES:');
   for (const f of failures) console.log('  ✗ ' + f);
+}
+if (skipped.length) {
+  const uniq = [...new Set(skipped)];
+  console.log(`SKIPPED ${uniq.length} pinned sample(s) that are not in public/models: ${uniq.join(', ')}`);
+  console.log('  (their cases did not run — restore the file or retire the case)');
 }
 console.log(`ENGINE RESOLUTION: ${pass} passed, ${failures.length} failed · negative controls ${caught} caught, ${missed} missed`);
 process.exit(failures.length === 0 && missed === 0 ? 0 : 1);

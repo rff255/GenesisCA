@@ -219,6 +219,17 @@ export interface AgentMemoryLayout {
   /** Per-node point range + SKIP LINK, `chargeTreeNodes` i32 each. `next === n+1`
    *  is the leaf test; `mass === end - start`. */
   treeNodeStartOffset: number; treeNodeEndOffset: number; treeNodeNextOffset: number;
+  /** Sprite display state — reserved ONLY when the C9 `sprites` gate is on, so a
+   *  sprite-free model's layout is byte-identical. `false` ⇒ the five offsets are
+   *  meaningless and the WASM emitter must drop every sprite facet (the C9 safety
+   *  catch, mirroring `layout.f64[name] === undefined` for the gated f64 group). */
+  spritesReserved: boolean;
+  /** `maxAgents` i32 (0 = no sprite, ≥1 = 1-based slot into `model.sprites`). */
+  spriteIdsOffset: number;
+  /** `maxAgents` f64 each: current frame (fractional), frames/step, facing in
+   *  COMPASS degrees, per-agent size multiplier (0 = use the asset's scale). */
+  spriteFramesOffset: number; spriteSpeedsOffset: number;
+  spriteRotationsOffset: number; spriteScalesOffset: number;
 }
 
 /** Sizing inputs for the FULL-COVERAGE WASM agent layout regions — the compiler +
@@ -572,6 +583,24 @@ export function computeAgentMemoryLayout(
   const treeNodeEndOffset = off; off += chargeTreeNodes * 4;
   const treeNodeNextOffset = off; off += chargeTreeNodes * 4;
 
+  // --- SPRITE display state (appended after EVERY existing region) ------------
+  // The five per-agent sprite buffers used to be plain JS arrays — the ONE field
+  // group with no baked byte on any target — which is exactly why Set Agent
+  // Sprite had no WASM emit and clamped a behaviour graph to JS. Giving them a
+  // region makes the WASM module and the JS engine read/write the SAME bytes, so
+  // the node emits like any other setter. Reserved ONLY when the sprites gate is
+  // on (`model.sprites` non-empty OR the graph sets one), so every sprite-free
+  // model keeps a byte-identical layout; and appended LAST so even a model that
+  // DOES carry sprites shifts no offset that is already baked into a module.
+  const spriteN = gates.sprites ? maxAgents : 0;
+  off = alignTo(off, 8);
+  const spriteFramesOffset = off; off += spriteN * 8;
+  const spriteSpeedsOffset = off; off += spriteN * 8;
+  const spriteRotationsOffset = off; off += spriteN * 8;
+  const spriteScalesOffset = off; off += spriteN * 8;
+  off = alignTo(off, 4);
+  const spriteIdsOffset = off; off += spriteN * 4;
+
   const totalBytes = alignTo(off, 8);
   const pages = Math.max(1, Math.ceil(totalBytes / 65536));
   return {
@@ -592,6 +621,9 @@ export function computeAgentMemoryLayout(
     treeSortedXOffset, treeSortedYOffset, treeSortedZOffset,
     treeNodeCxOffset, treeNodeCyOffset, treeNodeCzOffset, treeNodeExtOffset,
     treeNodeStartOffset, treeNodeEndOffset, treeNodeNextOffset,
+    spritesReserved: spriteN > 0,
+    spriteIdsOffset, spriteFramesOffset, spriteSpeedsOffset,
+    spriteRotationsOffset, spriteScalesOffset,
   };
 }
 
@@ -876,6 +908,13 @@ export function createAgentStore(
     return maxAgents * (AGENT_REQUEST_QUEUE_FIELDS.has(name) ? bondReqSlots : 1);
   };
 
+  // Sprite display buffers — VIEWS over the shared agent memory under a WASM
+  // target (so the WASM Set Agent Sprite emit and the JS engine advance agree on
+  // every byte), plain arrays otherwise. Zero-length when the sprites gate is off.
+  const spriteLen = () => (fieldGates.sprites ? maxAgents : 0);
+  let spriteF64: (which: 'spriteFramesOffset' | 'spriteSpeedsOffset' | 'spriteRotationsOffset' | 'spriteScalesOffset') => Float64Array;
+  let spriteI32: () => Int32Array;
+
   if (wasmBacked) {
     const extras: AgentLayoutExtras = { ...(opts?.layoutExtras ?? {}), syncAttrs, bondAttrSpecs, bondReqSlots, fieldGates };
     layout = computeAgentMemoryLayout(maxAgents, maxBonds, attrSpecs, Math.max(0, Math.floor(opts?.maxHashBins ?? 0)), extras);
@@ -894,6 +933,8 @@ export function createAgentStore(
       if (kind === 'int32') return new Int32Array(buf, o, maxAgents);
       return new Float64Array(buf, o, maxAgents);
     };
+    spriteF64 = (which) => new Float64Array(buf, layout![which], spriteLen());
+    spriteI32 = () => new Int32Array(buf, layout!.spriteIdsOffset, spriteLen());
   } else {
     f64 = (name) => new Float64Array(lenOf(name));
     i32 = (name) => new Int32Array(lenOf(name));
@@ -903,6 +944,8 @@ export function createAgentStore(
     freeListArr = () => new Int32Array(maxAgents);
     colorsArr = () => new Uint8ClampedArray(maxAgents * 4);
     attrArr = (_id, kind) => makeArray(kind, maxAgents);
+    spriteF64 = () => new Float64Array(spriteLen());
+    spriteI32 = () => new Int32Array(spriteLen());
   }
 
   const attrRead: Record<string, AgentTypedArray> = {};
@@ -1028,17 +1071,20 @@ export function createAgentStore(
     bondFormK: f64('bondFormK'),
     bondBreakReq: i32('bondBreakReq'),
     colors: colorsArr(),
-    // Persistent display sprite state — plain arrays regardless of backing (the JS
-    // node + engine advance are the only writers). All 0: no sprite, frame 0, hold.
+    // Persistent display sprite state. All 0: no sprite, frame 0, hold.
     // C9 / STEP 4 — the sprite block (36 B/agent) is ZERO-LENGTH when the model
     // carries no sprite assets and no Set Agent Sprite node. Every write site
     // (initAgentSlot / divideAgent) is a silent no-op on a zero-length array, and
     // `advanceAgentSprites` / the render snapshot are already gated on sprites.
-    spriteIds: new Int32Array(fieldGates.sprites ? maxAgents : 0),
-    spriteFrames: new Float64Array(fieldGates.sprites ? maxAgents : 0),
-    spriteSpeeds: new Float64Array(fieldGates.sprites ? maxAgents : 0),
-    spriteRotations: new Float64Array(fieldGates.sprites ? maxAgents : 0),
-    spriteScales: new Float64Array(fieldGates.sprites ? maxAgents : 0),
+    // Under a WASM agent target these are VIEWS over the shared agent memory (see
+    // the sprite block in computeAgentMemoryLayout), so the WASM `setAgentSprite`
+    // emit and the JS engine advance write the SAME bytes — which is what lets a
+    // sprite-driving BEHAVIOUR graph run on WASM instead of clamping to JS.
+    spriteIds: spriteI32(),
+    spriteFrames: spriteF64('spriteFramesOffset'),
+    spriteSpeeds: spriteF64('spriteSpeedsOffset'),
+    spriteRotations: spriteF64('spriteRotationsOffset'),
+    spriteScales: spriteF64('spriteScalesOffset'),
     attrSpecs,
     attrRead, attrWrite, attrKind,
     highWater: 0,

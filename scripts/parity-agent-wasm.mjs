@@ -370,6 +370,86 @@ function buildApplyForceToAgentsModel() {
   };
 }
 
+// Synthetic: Set Agent Sprite on the WASM agent target. Exercises EVERY facet in
+// the one place that used to clamp a whole model to JS — the BEHAVIOUR graph:
+//   • the CURRENT-agent form (agentId unwired → idx, unguarded), all facets on,
+//     with the VECTOR rotation mode (the `env.atan2` conditional import);
+//   • the BY-ID form (agentId wired to self+1 → the range guard), angle rotation.
+// A per-step VALUE invariant recomputes the expected state independently, because
+// parity alone would pass happily if BOTH targets wrote nothing at all.
+function buildSpriteModel() {
+  const used = new Set();
+  const nid = (p) => { let id; do { id = p + Math.random().toString(36).slice(2, 8); } while (used.has(id)); used.add(id); return id; };
+  const aN = [], aEd = [];
+  const an = (t, c) => { const n = { id: nid('a'), type: 'caNode', position: { x: 0, y: 0 }, data: { nodeType: t, config: c } }; aN.push(n); return n; };
+  const aE = (s, sp, tt, tp, cat) => aEd.push({ id: nid('e'), source: s.id, target: tt.id, sourceHandle: `output_${cat}_${sp}`, targetHandle: `input_${cat}_${tp}` });
+
+  const bs = an('behaviourStep', {});
+  // Self-targeted: every facet, VECTOR rotation from the agent's own velocity.
+  const vel = an('getVelocity', {});
+  const selfSpr = an('setAgentSprite', {
+    spriteId: 's1', _spriteSlot: 1,
+    setSprite: true, setFrame: true, setSpeed: true, setRotation: true, rotationMode: 'vector',
+    setScale: true, setAlpha: true,
+    _port_frame: '2', _port_speed: '0.25', _port_scale: '1.75', _port_alpha: '137',
+  });
+  aE(bs, 'do', selfSpr, 'do', 'flow');
+  aE(vel, 'vx', selfSpr, 'dirX', 'value');
+  aE(vel, 'vy', selfSpr, 'dirY', 'value');
+  // By-id: target self+1 (some ids land out of range → the guard must reject).
+  const gsh = an('getSelfHandle', {});
+  const plus1 = an('arithmeticOperator', { operation: '+', _port_y: '1' });
+  aE(gsh, 'value', plus1, 'x', 'value');
+  const idSpr = an('setAgentSprite', {
+    spriteId: 's1', _spriteSlot: 1,
+    setSprite: false, setFrame: false, setSpeed: false, setRotation: true, rotationMode: 'angle',
+    setScale: true, setAlpha: false, _port_rotation: '42.5', _port_scale: '0.5',
+  });
+  aE(selfSpr, 'next', idSpr, 'do', 'flow');
+  aE(plus1, 'result', idSpr, 'agentId', 'value');
+
+  return {
+    schemaVersion: 1,
+    properties: { name: 'Set Agent Sprite Parity Test', dimension: '2d', gridWidth: 24, gridHeight: 24, gridDepth: 1, topology: '2d-grid', boundaryTreatment: 'torus', useWasm: false, useWebGPU: false },
+    topologyMode: { gridCells: false, agents: true },
+    sprites: [{ id: 's1', name: 'probe', dataUrl: '', mimeType: 'image/png' }],
+    centerBased: { enabled: true, maxAgents: 100, maxBonds: 0, worldWidth: 24, worldHeight: 24, seedCount: 40, seedPattern: 'scatter', defaultRadius: 0.5, growthRate: 0, repulsionStiffness: 0, adhesionStiffness: 0, interactionRange: 1.5, drag: 1, timeStep: 0.1, momentum: 0.9, maxSpeed: 0, neighbourQueryRadius: 8, useBondingPhysics: false, autoBond: false, agentTarget: 'wasm', agentUpdateMode: 'async',
+      agentCapabilities: { motion: 'force', body: true, collision: 'off', bonds: 'off', autoBond: false, growth: false, division: false, lifespan: false, populationBirth: false, populationDeath: false, sensing: false, sensingHeadingSource: 'velocity', orientation: false, fieldCoupling: false, appearance: true } },
+    attributes: [], modelAttributes: [], neighborhoods: [],
+    agentAttributes: [],
+    variables: [], agentVariables: [], indicators: [], mappings: [],
+    graphNodes: [], graphEdges: [], agentGraphNodes: aN, agentGraphEdges: aEd, macroDefs: [],
+  };
+}
+
+/** VALUE invariant for the sprite synthetic — recomputed independently of the
+ *  emitters, so "both targets wrote nothing" cannot pass. Every live agent must
+ *  carry the self-targeted facets; agent 0 (never a by-id target of any live
+ *  agent below it) additionally pins the un-overwritten self values. */
+function spriteInvariant(st) {
+  const hw = st.highWater;
+  if (st.spriteIds.length === 0) return 'sprite block not allocated (gate off?)';
+  for (let i = 0; i < hw; i++) {
+    if (!st.alive[i]) continue;
+    if (st.spriteIds[i] !== 1) return `spriteIds[${i}] = ${st.spriteIds[i]} !== 1`;
+    if (st.spriteSpeeds[i] !== 0.25) return `spriteSpeeds[${i}] = ${st.spriteSpeeds[i]} !== 0.25`;
+    // frame is SET to 2 each step, then the engine advance is NOT run by the
+    // harness (behaviour only), so it stays exactly 2.
+    if (st.spriteFrames[i] !== 2) return `spriteFrames[${i}] = ${st.spriteFrames[i]} !== 2`;
+    // alpha: the self-targeted facet writes 137 into the colour's A byte.
+    if (st.colors[i * 4 + 3] !== 137) return `colors[${i}].a = ${st.colors[i * 4 + 3]} !== 137`;
+    // scale: agent i is ALSO written by agent i-1's by-id node (0.5) when that
+    // agent is live; otherwise it keeps its own self-targeted 1.75. Both are
+    // legal — assert it is one of the two, never a default.
+    const s = st.spriteScales[i];
+    if (s !== 1.75 && s !== 0.5) return `spriteScales[${i}] = ${s} (expected 1.75 or 0.5)`;
+    // rotation: the by-id node writes 42.5; otherwise the vector mode's atan2.
+    const r = st.spriteRotations[i];
+    if (!Number.isFinite(r)) return `spriteRotations[${i}] = ${r} (not finite)`;
+  }
+  return null;
+}
+
 // Synthetic: an agent flow DIAMOND. A conditional (gated on Get Cell Attribute
 // `sel` >= 0) whose `then` and `else` branches each write a DISTINCT `mark`, and
 // BOTH flow into a SHARED downstream chain: applyForce(fx = sel*0.01, a PURE value
@@ -1231,6 +1311,10 @@ entries.push({ name: '[synthetic] Get Grid Dimensions (3D world W/H/D + centres)
 entries.push({ name: '[synthetic] Apply Force To Agent (pairwise scatter)', raw: buildApplyForceToAgentModel() });
 entries.push({ name: '[synthetic] Apply Force To Agents (array broadcast, lowered)', raw: buildApplyForceToAgentsModel() });
 entries.push({ name: '[synthetic] Loop index output (value chain + branch + direct)', raw: buildLoopIndexModel() });
+entries.push({
+  name: '[synthetic] Set Agent Sprite (all facets, self + by-id, vector rotation)',
+  raw: buildSpriteModel(), invariant: spriteInvariant,
+});
 entries.push({ name: '[synthetic] Vector Op rotate2d + rotateAxis (lowered, 3D)', raw: buildVectorRotateModel() });
 entries.push({ name: '[synthetic] Curvature + bond currentLength (bonded, hypot↔sqrt)', raw: buildCurvatureModel(), setup: setupCurvatureStores });
 entries.push({
@@ -1910,6 +1994,15 @@ for (const { name: f, raw, setup, invariant } of entries) {
       }
     }
     cmpArr('colors', A.colors, B.colors, hw * 4);
+    // Sprite display state — a WASM-target store backs these on the shared agent
+    // memory (the layout's sprite block), so Set Agent Sprite's WASM emit must
+    // land on exactly the bytes the JS node would have written. Zero-length on
+    // both stores for a sprite-free model, so these are no-ops there.
+    cmpArr('spriteIds', A.spriteIds, B.spriteIds, Math.min(A.spriteIds.length, hw));
+    cmpArr('spriteFrames', A.spriteFrames, B.spriteFrames, Math.min(A.spriteFrames.length, hw));
+    cmpArr('spriteSpeeds', A.spriteSpeeds, B.spriteSpeeds, Math.min(A.spriteSpeeds.length, hw));
+    cmpArr('spriteRotations', A.spriteRotations, B.spriteRotations, Math.min(A.spriteRotations.length, hw));
+    cmpArr('spriteScales', A.spriteScales, B.spriteScales, Math.min(A.spriteScales.length, hw));
     for (const spec of fieldSpecs) if (spec.agentAccess === 'readWrite') cmpArr('field_' + spec.id, readAttrs[spec.id], readAttrsB[spec.id], total);
     // RNG stream parity
     const bRng = new Uint32Array(B.memory.buffer, BL.rngStateOffset, 1)[0];
