@@ -1473,10 +1473,13 @@ export function HelpView() {
             <strong>Cell gaps</strong> toggle (the 3D analogue of the 2D gridlines: ON — the
             default — leaves a small gap between adjacent cells so the lattice reads; OFF renders
             cells flush against each other as one seamless solid volume), a
-            <strong>Draw agents in front</strong> toggle (agent models — ON draws the agents over
-            the CA-grid voxels regardless of depth, since the grid usually surrounds them; uncheck
-            for normal depth occlusion between the two layers when the grid field is sparse; the
-            axes / grid / bounds / brush plane always occlude normally either way), a
+            <strong>Draw agents in front</strong> toggle (models with <em>both</em> layers — ON
+            draws the agents over the CA-grid voxels regardless of depth, since the grid usually
+            surrounds them; uncheck for normal depth occlusion between the two layers when the grid
+            field is sparse; the axes / grid / bounds / brush plane always occlude normally either
+            way. An agents-only model has no voxels to be in front of, so the toggle is not shown
+            there &mdash; nor are <strong>Cell gaps</strong> and <strong>Occlusion</strong>, which
+            are voxel-only), a
             <strong>Metaballs</strong> block (agent models — see below), a
             <strong>Background</strong> colour (off = transparent), a
             <strong>Lighting</strong> block, and
@@ -2780,7 +2783,10 @@ export function HelpView() {
             clicked agent via <em>Apply</em>, or on every agent under the footprint),
             <strong> Glue</strong> / <strong>Cut</strong> (bond/unbond two clicked agents), and
             <strong> Bond&nbsp;paint</strong> (auto-glue agents a stroke passes near).
-            <span className={styles.kbd}>Alt</span>+scroll cycles through the modes.
+            The last three appear only on a model whose <strong>Bonds</strong> capability is on
+            (Properties &rsaquo; Bond-Graph Agents) &mdash; without a bond store there is nothing
+            for them to do, so they are left out rather than shown doing nothing.
+            <span className={styles.kbd}>Alt</span>+scroll cycles through the modes shown.
             With the agent brush active (2D), <span className={styles.kbd}>Ctrl+C</span> /
             <span className={styles.kbd}>Ctrl+X</span> <strong>copy / cut the agents under the
             brush footprint</strong> (positions relative to the cursor, radius, velocity, and all
@@ -3088,6 +3094,17 @@ export function HelpView() {
             divider sits between the brush area and the Indicators &mdash; drag it to give
             the indicators more room (double-click to reset it to fit-the-brush).
           </p>
+          <p className={styles.p}>
+            <strong>What you see is what this model can do.</strong> A control the current
+            model / view could not act on is <em>not shown</em> &mdash; gridlines without a
+            CA grid, the infinity canvas in 3D, agent Glue/Cut/Bond without bonds, agent
+            outlines while Metaballs replaces the bodies, and so on. A control that is only
+            <em>temporarily</em> unavailable stays visible but greyed out with the reason in
+            its tooltip &mdash; the capture settings while a recording is running, the
+            infinity canvas on a non-torus boundary, the WebM-only quality rows under GIF.
+            So an enabled control always does something, and a greyed one always tells you
+            what to change.
+          </p>
 
           <h3 className={styles.h3}>Canvas Controls</h3>
           <ul className={styles.list}>
@@ -3103,6 +3120,11 @@ export function HelpView() {
               (vertical); Circle = radius; Ring = radius (horizontal) / band width (vertical);
               Line = thickness.</li>
             <li><strong>Zoom buttons</strong> (+/&minus;/fit/gridlines/axes/smooth scaling/infinity) &mdash; Bottom-left of the canvas.
+              Each button is shown only where it can actually do something: the
+              <strong>gridlines</strong> toggle needs a 2D model with a CA grid (in 3D its
+              analogue is the 3D View panel&rsquo;s <strong>Cell gaps</strong>; an agents-only
+              model has no grid to line), and <strong>&infin;</strong> is 2D-only because the
+              voxel renderer draws the volume once and never tiles it.
               The <strong>&infin;</strong> button (only enabled on torus-boundary models) tiles the grid
               across the viewport so you can pan endlessly across the wrap seams; the brush wraps with it.
               The <strong>axes</strong> toggle (2D) marks the grid origin (cell 0,0) with the row/column

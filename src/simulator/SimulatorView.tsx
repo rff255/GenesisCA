@@ -624,6 +624,16 @@ const LAYOUT_RESIZE_SETTLE_MS = 140;
  *  by the mode-button row and the wheel-cycle handlers so they can't drift. */
 const AGENT_BRUSH_MODES: ReadonlyArray<'add' | 'remove' | 'move' | 'edit' | 'glue' | 'cut' | 'bond'> =
   ['add', 'remove', 'move', 'edit', 'glue', 'cut', 'bond'];
+/** The three modes that act ONLY through the bond store. A model whose Bonds
+ *  capability is Off has `resolveMaxBonds === 0` ⇒ a zero-length store ⇒ every
+ *  formBond/breakBond is rejected, so these are STRUCTURALLY inert there — they
+ *  are dropped from the button row AND from the Alt+wheel cycle rather than left
+ *  clickable and silently doing nothing (the same predicate already hides the
+ *  Layers "Bonds" row). */
+const BOND_BRUSH_MODES: ReadonlySet<string> = new Set(['glue', 'cut', 'bond']);
+function agentBrushModesFor(bondsAvailable: boolean): typeof AGENT_BRUSH_MODES {
+  return bondsAvailable ? AGENT_BRUSH_MODES : AGENT_BRUSH_MODES.filter(m => !BOND_BRUSH_MODES.has(m));
+}
 
 /** Build a bounded wireframe OUTLINE of a 3D brush footprint at a plane cell, as
  *  cell-space line segments (a flat Float32Array of [col,row,layer, col,row,layer …]
@@ -2501,6 +2511,17 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
   const [agentBrushMode, setAgentBrushMode] = useState<AgentBrushMode>('add');
   const agentBrushModeRef = useRef<AgentBrushMode>('add');
   agentBrushModeRef.current = agentBrushMode;
+  // Which modes this model can actually perform — Glue / Cut / Bond need a bond
+  // store, so they vanish for a Bonds=Off model (Particle Life, Boids, …). The
+  // ref keeps the two Alt+wheel cycle handlers on the same list as the buttons.
+  const bondsAvailable = resolveMaxBonds(model.centerBased) > 0;
+  const agentBrushModes = useMemo(() => agentBrushModesFor(bondsAvailable), [bondsAvailable]);
+  const agentBrushModesRef = useRef(agentBrushModes); agentBrushModesRef.current = agentBrushModes;
+  // A model swap can strand the selection on a mode the new model cannot do
+  // (the brush mode is session state, not per-model) — fall back to Add.
+  useEffect(() => {
+    if (!agentBrushModes.includes(agentBrushModeRef.current)) setAgentBrushMode('add');
+  }, [agentBrushModes]);
   const agentGlueAnchorRef = useRef<number>(-1);
   const agentBrushRadiusRef = useRef(agentBrushRadius); agentBrushRadiusRef.current = agentBrushRadius;
   const agentSeedDensityRef = useRef(agentSeedDensity); agentSeedDensityRef.current = agentSeedDensity;
@@ -2768,8 +2789,9 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
    *  agent snapshot (circles + bonds). So it works on every compile target incl. WebGPU
    *  direct render / composite (which otherwise only expose the current-view framing).
    *  Output is grid-aspect (W:H) → no letterbox margins by construction. Reads only refs.
-   *  NB agent SPRITES / METABALLS / GLOW are drawn as plain circles here — use the
-   *  "current view" scope for a WYSIWYG capture of those. Reuses `target` if given. */
+   *  NB agent SPRITES / METABALLS are drawn as plain circles here — use the "current
+   *  view" scope for a WYSIWYG capture of those. Glow IS reproduced (it shares the
+   *  display overlay's drawAgentGlow). Reuses `target` if given. */
   const renderSimulationFrame = useCallback((maxSize: number, target?: HTMLCanvasElement, snapWidth = false): HTMLCanvasElement | null => {
     if (is3dRef.current) return null;
     const w = gridWidth.current, h = gridHeight.current;
@@ -7756,7 +7778,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       // brush targets agents — a fast keyboard-free way to switch actions.
       if (e.altKey && isAgentModelRef.current && brushTargetRef.current === 'agents') {
         e.stopPropagation();
-        const modes = AGENT_BRUSH_MODES, i = modes.indexOf(agentBrushModeRef.current);
+        const modes = agentBrushModesRef.current, i = modes.indexOf(agentBrushModeRef.current);
         setAgentBrushMode(modes[(((i < 0 ? 0 : i) + (e.deltaY > 0 ? 1 : -1)) + modes.length) % modes.length]!);
         agentGlueAnchorRef.current = -1; agentLineAnchorRef.current = null; agentLine3dAnchorRef.current = null;
         draw();
@@ -9546,7 +9568,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       // Alt+wheel cycles the agent brush mode (add → remove → move → …) when the
       // brush targets agents — a fast keyboard-free way to switch actions.
       if (e.altKey && isAgentModelRef.current && brushTargetRef.current === 'agents') {
-        const modes = AGENT_BRUSH_MODES, i = modes.indexOf(agentBrushModeRef.current);
+        const modes = agentBrushModesRef.current, i = modes.indexOf(agentBrushModeRef.current);
         setAgentBrushMode(modes[(((i < 0 ? 0 : i) + (e.deltaY > 0 ? 1 : -1)) + modes.length) % modes.length]!);
         agentGlueAnchorRef.current = -1; agentLineAnchorRef.current = null; agentLine3dAnchorRef.current = null;
         draw();
@@ -12394,11 +12416,17 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
               : 'Inspect cells/agents on click (equivalent to Shift+Click)'}
             aria-label="Toggle inspect mode"
           >&#x24D8;</button>
-          <button
-            className={`${styles.zoomBtn} ${showGridlines ? styles.zoomBtnActive : ''}`}
-            onClick={() => { setShowGridlines(v => !v); draw(); }}
-            title="Toggle gridlines"
-          >#</button>
+          {/* Gridlines — drawn ONLY by the 2D cell-grid path (`showGrid2d &&
+              showGridlinesRef`), so they are structurally inert in 3D (whose
+              analogue is the 3D View panel's "Cell gaps") and for an agents-only
+              model (no grid to line). Hidden, not disabled, in both. */}
+          {!is3D && gridCellsOn && (
+            <button
+              className={`${styles.zoomBtn} ${showGridlines ? styles.zoomBtnActive : ''}`}
+              onClick={() => { setShowGridlines(v => !v); draw(); }}
+              title="Toggle gridlines"
+            >#</button>
+          )}
           {!is3D && (
             <button
               className={`${styles.zoomBtn} ${show2dAxes ? styles.zoomBtnActive : ''}`}
@@ -12421,17 +12449,24 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
               aria-label="Toggle smooth scaling (anti-aliasing)"
             >&#x224B;</button>
           )}
-          <button
-            className={`${styles.zoomBtn} ${infinityCanvas ? styles.zoomBtnActive : ''}`}
-            onClick={() => { setInfinityCanvas(v => !v); }}
-            disabled={model.properties.boundaryTreatment !== 'torus'}
-            title={
-              model.properties.boundaryTreatment === 'torus'
-                ? 'Infinity canvas (tile the grid across the viewport)'
-                : 'Infinity canvas — only available with Torus boundary'
-            }
-            style={{ opacity: model.properties.boundaryTreatment === 'torus' ? 1 : 0.4 }}
-          >&infin;</button>
+          {/* Infinity canvas — tiling is a 2D draw-path concept (the voxel renderer
+              draws the volume once and never wraps it), so the button is hidden in
+              3D. In 2D it stays visible-but-DISABLED without a Torus boundary: that
+              is one Boundary change away in the Settings panel, so the reason is
+              worth showing. (Structurally impossible → hide; a setting away → disable.) */}
+          {!is3D && (
+            <button
+              className={`${styles.zoomBtn} ${infinityCanvas ? styles.zoomBtnActive : ''}`}
+              onClick={() => { setInfinityCanvas(v => !v); }}
+              disabled={model.properties.boundaryTreatment !== 'torus'}
+              title={
+                model.properties.boundaryTreatment === 'torus'
+                  ? 'Infinity canvas (tile the grid across the viewport)'
+                  : 'Infinity canvas — only available with Torus boundary'
+              }
+              style={{ opacity: model.properties.boundaryTreatment === 'torus' ? 1 : 0.4 }}
+            >&infin;</button>
+          )}
           <button
             className={styles.zoomBtn}
             onClick={toggleCanvasFullscreen}
@@ -12571,8 +12606,12 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
                     Cell gaps
                   </label>
                 )}
-                {/* Draw agents in front (agent models only) */}
-                {isAgentModel && (
+                {/* Draw agents in front — it clears the depth buffer between the
+                    VOXEL pass and the agent pass, so it needs both layers: on an
+                    agents-only model there are no voxels to be in front of (the
+                    helper overlays get their depth restored either way), i.e. the
+                    toggle is a pure no-op. Hidden there. */}
+                {isAgentModel && gridCellsOn && (
                   <label style={row} title="Draw agents over the CA-grid voxels regardless of depth (the grid usually surrounds them). Uncheck for normal depth occlusion between the two layers — useful when the grid field is sparse. Axes / grid / bounds / brush plane always occlude normally.">
                     <input type="checkbox" checked={agentsFront3d} onChange={e => setAgentsFront3d(e.target.checked)} />
                     Draw agents in front
@@ -12823,7 +12862,13 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
               {/* Agent disc outlines — 2D: the dark contour stroke around each
                   circle (drawn only when a disc is >= 2px); 3D: a matching dark
                   silhouette rim on the sphere impostors (SPHERE_FS uOutline).
-                  Optional so dense populations can render as clean solid dots. */}
+                  Optional so dense populations can render as clean solid dots.
+                  METABALLS REPLACE the outlined bodies on BOTH paths — the 2D goo
+                  pass explicitly skips the stroke (`pass !== 'goo'`) and the 3D
+                  render swaps renderAgents() for renderMetaballs() — and sprites
+                  never carry one, so with metaballs on the toggle can do nothing.
+                  Hidden then, rather than left clickable and inert. */}
+              {!agentMetaballs.enabled && (
               <div>
                 <div style={{ fontSize: '0.6rem', color: 'var(--color-text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 4 }}>Outlines</div>
                 <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.66rem' }}
@@ -12832,6 +12877,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
                   <span style={{ color: 'var(--color-text-muted)' }}>Outline agents</span>
                 </label>
               </div>
+              )}
               {/* Hemifield / vision-cone display — draws the FOV sensing nodes'
                   cones (Get Agents In View / Sense Hemifield) on the 2D overlay,
                   for the inspected agent or all agents. Heading = the agent's
@@ -13167,9 +13213,11 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
                       </div>
                     )}
                   </>)}
-                  {/* Mode row — the brush actions (labels via textTransform:capitalize). */}
+                  {/* Mode row — the brush actions (labels via textTransform:capitalize).
+                      Glue / Cut / Bond are absent for a Bonds=Off model (they could
+                      only ever no-op there); see agentBrushModesFor. */}
                   <div style={{ display: 'flex', gap: 3, flexWrap: 'wrap' }}>
-                    {AGENT_BRUSH_MODES.map(m => (
+                    {agentBrushModes.map(m => (
                       <button
                         key={m}
                         onClick={() => { setAgentBrushMode(m); agentGlueAnchorRef.current = -1; agentLineAnchorRef.current = null; agentLine3dAnchorRef.current = null; draw(); }}
