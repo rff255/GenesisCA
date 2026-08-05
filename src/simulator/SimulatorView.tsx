@@ -120,9 +120,13 @@ function sanitizeAgentMetaballs(raw: unknown): Metaballs3D {
   };
 }
 
-/** A1 direct-agent-render "Glow" graphics option (genesisca_sim_settings.agentGlow).
- *  Renders ONLY on the WebGPU direct-render path (additive radial falloff per
- *  agent); the CPU overlay ignores it. Persisted as a simulator setting. */
+/** Agent "Glow" graphics option (genesisca_sim_settings.agentGlow) — an additive
+ *  radial falloff per agent. Rendered on BOTH 2D agent paths: the WebGPU
+ *  direct-render / E2-composite disc pipeline (agentWebgpuRuntime's
+ *  renderGlowPipeline) and the CPU overlay (drawAgentGlow below), so a bonded
+ *  model — which is excluded from direct render because the GPU pass draws no
+ *  bond lines — glows too. 3D is not supported yet (the UI is `!is3D`-gated; see
+ *  docs/HANDOFF_AGENT_GLOW_3D.md). Persisted as a simulator setting. */
 interface AgentGlow { on: boolean; size: number; intensity: number; steepness: number }
 const DEFAULT_AGENT_GLOW: AgentGlow = { on: false, size: 8, intensity: 0.6, steepness: 2 };
 function sanitizeAgentGlow(raw: unknown): AgentGlow {
@@ -137,6 +141,119 @@ function sanitizeAgentGlow(raw: unknown): AgentGlow {
     intensity: num(r.intensity, d.intensity, 0, 4),
     steepness: num(r.steepness, d.steepness, 0.1, 8),
   };
+}
+
+// --- CPU-overlay glow: pre-rasterised radial sprites -----------------------
+// The WGSL glow FS is `intensity * pow(max(0, 1 - d), steepness)` over a quad
+// enlarged by `glowSize`, additive-blended. Canvas2D has no shader, so the same
+// profile is baked ONCE into a radial-gradient sprite per (quantised colour,
+// integer glow radius) and blitted per agent under `globalCompositeOperation =
+// 'lighter'` (literally additive, like the GPU's src=ONE/dst=ONE blend). A fresh
+// createRadialGradient per agent per frame is unusable at the ~10k-node scale a
+// bonded GRA model reaches — the cache is the whole point (same reasoning as the
+// glyph tile cache). Colour is quantised to 5 bits/channel (≤3/255 error, invisible
+// in a glow) so a Color-Scale agent viewer with hundreds of distinct colours still
+// collapses to a handful of sprites.
+const GLOW_SPRITES = new Map<number, HTMLCanvasElement>();
+let glowSpriteSig = '';
+/** Above this the sprite is drawn straight (no cache entry) — a 128px-radius
+ *  sprite is already 256×256, and at that zoom only a handful of agents fit. */
+const GLOW_MAX_CACHED_R = 128;
+/** Measured headroom: the shipped `Growing Graphs` at its 10k-node cap groups
+ *  into 224 distinct (colour, radius) discs, so the cache must comfortably
+ *  exceed that or a wide Color-Scale agent viewer would thrash (one canvas per
+ *  agent per frame). Overflow evicts OLDEST-first (Map insertion order), never
+ *  wholesale. */
+const GLOW_SPRITE_CACHE_MAX = 1024;
+const GLOW_GRADIENT_STOPS = 32;
+
+/** Paint the alpha profile `unit * (1 - t)^steepness` into a 2R×2R sprite. */
+function paintGlowSprite(c2: CanvasRenderingContext2D, R: number, r: number, g: number, b: number, unit: number, steepness: number): void {
+  const grad = c2.createRadialGradient(R, R, 0, R, R, R);
+  for (let s = 0; s <= GLOW_GRADIENT_STOPS; s++) {
+    const t = s / GLOW_GRADIENT_STOPS;
+    const a = unit * Math.pow(Math.max(0, 1 - t), steepness);
+    grad.addColorStop(t, `rgba(${r},${g},${b},${a.toFixed(4)})`);
+  }
+  c2.fillStyle = grad;
+  c2.fillRect(0, 0, R * 2, R * 2);
+}
+
+/** A 2R×2R additive-glow sprite for a quantised colour. Null only when the
+ *  radius is degenerate. `unit` is the PER-DRAW peak alpha (see drawAgentGlow's
+ *  multi-pass trick for intensity > 1). */
+function glowSpriteFor(r: number, g: number, b: number, R: number, unit: number, steepness: number): HTMLCanvasElement | null {
+  if (R < 1) return null;
+  const sig = `${unit}|${steepness}`;
+  if (sig !== glowSpriteSig) { GLOW_SPRITES.clear(); glowSpriteSig = sig; }
+  const qr = r >> 3, qg = g >> 3, qb = b >> 3;
+  const key = ((qr << 10) | (qg << 5) | qb) * 1024 + R;
+  const cached = R <= GLOW_MAX_CACHED_R ? GLOW_SPRITES.get(key) : undefined;
+  if (cached) return cached;
+  const cv = document.createElement('canvas');
+  cv.width = R * 2; cv.height = R * 2;
+  const c2 = cv.getContext('2d');
+  if (!c2) return null;
+  // Paint with the QUANTISED colour so the cached sprite matches its key.
+  paintGlowSprite(c2, R, (qr << 3) | 4, (qg << 3) | 4, (qb << 3) | 4, unit, steepness);
+  if (R <= GLOW_MAX_CACHED_R) {
+    while (GLOW_SPRITES.size >= GLOW_SPRITE_CACHE_MAX) {
+      const oldest = GLOW_SPRITES.keys().next();
+      if (oldest.done) break;
+      GLOW_SPRITES.delete(oldest.value);
+    }
+    GLOW_SPRITES.set(key, cv);
+  }
+  return cv;
+}
+
+/** The CPU-overlay additive glow pass — the sibling of the WGSL glow pipeline.
+ *  Drawn AFTER the bonds + discs (the draw order docs/HANDOFF_AGENT_GLOW_3D.md
+ *  specifies for the queued 3D glow: opaque bodies → additive glow → overlays),
+ *  so a graph model keeps its bond lines and node discs legible and gains a
+ *  bright additive core + halo. `tiles` carries the infinity-mode tile origins.
+ *  Per-agent alpha 0 is skipped (the GPU VS culls those quads too). */
+function drawAgentGlow(
+  ctx: CanvasRenderingContext2D,
+  snap: { x: ArrayLike<number>; y: ArrayLike<number>; radius: ArrayLike<number>; alive: ArrayLike<number>; colors: ArrayLike<number>; highWater: number },
+  scale: number,
+  tiles: ReadonlyArray<readonly [number, number]>,
+  clipW: number,
+  clipH: number,
+  glow: AgentGlow,
+): void {
+  if (!glow.on || glow.intensity <= 0 || glow.size < 0) return;
+  const { x: ax, y: ay, radius: ar, alive: aal, colors: acol, highWater: hw } = snap;
+  if (hw === 0) return;
+  // A Canvas2D alpha caps at 1, while the GPU's `intensity * …` may exceed it and
+  // saturates only in the framebuffer. 'lighter' is truly additive, so drawing the
+  // sprite ceil(intensity) times at intensity/ceil reproduces the GPU exactly —
+  // and costs nothing at the default intensity 0.6 (one pass).
+  const passes = Math.max(1, Math.ceil(glow.intensity));
+  const unit = glow.intensity / passes;
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter';
+  let curAlpha = 1;
+  for (const [tileOx, tileOy] of tiles) {
+    for (let i = 0; i < hw; i++) {
+      if (!aal[i]) continue;
+      const c = i * 4;
+      const a = acol[c + 3] ?? 255;
+      if (a <= 0) continue;
+      const radPx = Math.max(1.2, ar[i]! * scale);
+      const R = Math.round(radPx + glow.size);
+      if (R < 1) continue;
+      const cx = tileOx + ax[i]! * scale;
+      const cy = tileOy + ay[i]! * scale;
+      if (cx + R < 0 || cx - R > clipW || cy + R < 0 || cy - R > clipH) continue;
+      const sp = glowSpriteFor(acol[c]!, acol[c + 1]!, acol[c + 2]!, R, unit, glow.steepness);
+      if (!sp) continue;
+      const want = a / 255;
+      if (want !== curAlpha) { ctx.globalAlpha = want; curAlpha = want; }
+      for (let p = 0; p < passes; p++) ctx.drawImage(sp, cx - R, cy - R);
+    }
+  }
+  ctx.restore();
 }
 
 /** The 2D metaball ("gooey") SVG filter — blur + a steep alpha threshold applied
@@ -2657,6 +2774,9 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
             ctx.stroke();
           }
         }
+        // Same additive glow pass the display overlay runs, so a simulation-scope
+        // screenshot / recording matches what the user sees. One world tile.
+        drawAgentGlow(ctx, snap, scale, [[0, 0] as const], outW, outH, agentGlowRef.current);
       }
     }
     return off;
@@ -4542,6 +4662,19 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
         } else {
           forTiles('all');
         }
+      }
+      // Additive glow — the CPU sibling of the WGSL renderGlowPipeline, so a
+      // BONDED model (excluded from direct render because the GPU pass draws no
+      // bond lines) glows too. Last in the scene pass = on top of bonds + discs.
+      const glowCfg = agentGlowRef.current;
+      if (glowCfg.on && glowCfg.intensity > 0) {
+        const tiles: Array<readonly [number, number]> = [];
+        if (infinity) {
+          for (let ty = tyMin; ty <= tyMax; ty++)
+            for (let tx = txMin; tx <= txMax; tx++)
+              tiles.push([ox + tx * scaledW, oy + ty * scaledH] as const);
+        } else { tiles.push([ox, oy] as const); }
+        drawAgentGlow(ctx, snap, scale, tiles, parentW, parentH, glowCfg);
       }
       // The agent-brush cursor + highlight visuals (hover/edit/area rings, the
       // footprint + bond-ring silhouettes, the glue anchor) moved to the cursor
@@ -12637,16 +12770,17 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
                 </label>
               </div>
               )}
-              {/* A1 direct-render Glow — additive radial falloff per agent. Renders
-                  ONLY on the WebGPU direct-render path (agents-only, 2D). */}
+              {/* Glow — an additive radial falloff per agent, on BOTH 2D paths:
+                  the WebGPU direct-render / composite disc pipeline AND the CPU
+                  overlay (drawAgentGlow), so bonded models glow too. 3D pending. */}
               {!is3D && (
               <div>
                 <div style={{ fontSize: '0.6rem', color: 'var(--color-text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 4 }}>Glow</div>
                 <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.66rem' }}
-                  title="Render each agent as an additive radial glow (WebGPU direct render only — agents-only 2D models on the WebGPU agent target). The CPU overlay path ignores this.">
+                  title="Add an additive radial glow around each agent. Works on every 2D agent model — the WebGPU direct-render path draws it in the shader, and bonded / sprite / metaball models get the same effect from the CPU overlay. Not available in 3D yet.">
                   <input type="checkbox" checked={agentGlow.on}
                     onChange={e => setAgentGlow(g => ({ ...g, on: e.target.checked }))} />
-                  <span style={{ color: 'var(--color-text-muted)' }}>Glow (WebGPU direct render)</span>
+                  <span style={{ color: 'var(--color-text-muted)' }}>Glow agents</span>
                 </label>
                 {agentGlow.on && (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 4 }}>

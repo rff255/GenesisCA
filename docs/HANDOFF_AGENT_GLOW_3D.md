@@ -13,10 +13,21 @@ the 2D glow you are matching), and whatever the lattice **L1** report says about
 the 3D render seam after it lands.
 
 **Objective**: the Glow graphics option (`genesisca_sim_settings.agentGlow
-{on,size,intensity,steepness}`) currently renders ONLY for 2D agents on the
-WebGPU direct-render path; its UI is gated `{!is3D && …}` in
-[SimulatorView.tsx](../src/simulator/SimulatorView.tsx). Give 3D agent models the
-same option, with the SAME look and the SAME parameters.
+{on,size,intensity,steepness}`) renders for 2D agents only; its UI is gated
+`{!is3D && …}` in [SimulatorView.tsx](../src/simulator/SimulatorView.tsx). Give
+3D agent models the same option, with the SAME look and the SAME parameters.
+
+> **UPDATE (branch `updates`)** — 2D is now covered on BOTH paths: the WGSL
+> pipeline described below AND a Canvas2D sibling (`drawAgentGlow` in
+> SimulatorView.tsx) for the CPU overlay, so bonded / sprite / metaball /
+> field-coupled 2D models glow too. That directly ANSWERS §2 below for the 2D
+> case and is the precedent for 3D: the CPU overlay's answer was *implement the
+> same falloff in the other renderer*, which is exactly what gl3d needs. Two
+> details that carry over: the CPU pass draws glow **on top of** the opaque
+> bodies (the draw order §"Design" already specifies here), and `intensity > 1`
+> is reproduced by drawing the sprite `ceil(intensity)` times at
+> `intensity/ceil(intensity)` rather than clamping. The note below that "the CPU
+> 2D overlay still ignores glow" is now OBSOLETE.
 
 ---
 
@@ -58,8 +69,8 @@ same option, with the SAME look and the SAME parameters.
   present (`glowOn/glowSize/glowIntensity/glowSteepness`, ~:1178) — they are
   threaded for 2D and can be reused unchanged.
 - **UI**: drop the `{!is3D && …}` gate; retitle the tooltip (it currently says
-  "agents-only 2D models"). The CPU 2D overlay still ignores glow — keep that
-  documented.
+  "Not available in 3D yet"). The 2D CPU overlay already draws glow (see the
+  UPDATE above) — the 3D CPU-side equivalent is gl3d.
 
 ## Verification
 - Standard gates: tsc, build, `parity-agent-wasm`, `parity-agent-force`,
