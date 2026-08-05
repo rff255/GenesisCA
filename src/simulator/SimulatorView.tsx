@@ -10580,11 +10580,20 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
     recordStreamModeRef.current = recordFormat === 'webm' && webmAvailable;
     recordOverloadActiveRef.current = recordStreamModeRef.current ? recordOverloadRef.current : 'drop';
     setRecording(true);
-    // Tell the worker to include the colors buffer in stepped messages so we
-    // can capture frames under WebGPU direct render (where srcCanvas's 2D
-    // context is unavailable on the main thread). No-op on JS / WASM paths
-    // — those already send colors every frame.
-    workerRef.current?.postMessage({ type: 'setRecording', enabled: true });
+    // Tell the worker whether this run consumes the CPU colours mirror, so it can
+    // override the GPU display fast paths that skip the readback (2D direct
+    // render, the E2 grid+agents composite, ∞ gens/frame). ONLY the "simulation"
+    // scope does: it re-renders the whole grid from `colors` here on the main
+    // thread. "Current view" reads the display canvas — which every GPU path
+    // already presents into — so it keeps the no-readback fast path. The scope is
+    // locked for the run (the settings chip is disabled while recording), which
+    // is what makes this one post at Start correct. No-op on JS/WASM grids —
+    // those already send colors every frame.
+    workerRef.current?.postMessage({
+      type: 'setRecording',
+      enabled: true,
+      needColors: !is3dRef.current && recordScopeRef.current === 'simulation',
+    });
   };
 
   const stopRecording = async () => {
@@ -10971,10 +10980,36 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
     // "simulation": the WHOLE grid/world at a fit framing, independent of the current
     // zoom/pan (renders from the colours buffer + agent snapshot — see
     // renderSimulationFrame). A fresh offscreen (one-shot; toBlob is async).
+    // ⚠ A screenshot never sets the worker's `recording` flag, so on every path
+    // where the GPU owns the grid display the CPU colours mirror is STALE (2D
+    // direct render) or was never shipped at all (the E2 grid+agents composite):
+    // the capture would draw a grid frozen at whatever was last shipped, or none.
+    // Pull one fresh readback first — one-shot, off the per-frame path.
     if (screenshotScopeRef.current === 'simulation') {
       const w = gridWidth.current || 1, h = gridHeight.current || 1;
-      const off = renderSimulationFrame(Math.min(2048, Math.max(720, Math.max(w, h))));
-      if (off) off.toBlob(blob => { if (blob) downloadBlob(blob); }, 'image/png');
+      const shoot = () => {
+        const off = renderSimulationFrame(Math.min(2048, Math.max(720, Math.max(w, h))));
+        if (off) off.toBlob(blob => { if (blob) downloadBlob(blob); }, 'image/png');
+      };
+      const gridStale = gridCellsOnRef.current
+        && (directRenderActiveRef.current || agentCompositeActiveRef.current)
+        && !!workerRef.current;
+      if (gridStale && !screenshotPendingRef.current) {
+        screenshotPendingRef.current = (data) => {
+          // Dimension guard: a resize could have landed between request and reply.
+          if (data.colors && data.w === gridWidth.current && data.h === gridHeight.current) {
+            colorsRef.current = data.colors;
+          }
+          shoot();
+        };
+        workerRef.current!.postMessage({ type: 'requestColorsSnapshot', tag: 'screenshot' });
+        // Safety net: never leave the screenshot hanging on a lost reply.
+        window.setTimeout(() => {
+          if (screenshotPendingRef.current) { screenshotPendingRef.current = null; shoot(); }
+        }, 2000);
+        return;
+      }
+      shoot();
       return;
     }
     // "current view": the display canvas exactly as shown (zoom / pan / margins).

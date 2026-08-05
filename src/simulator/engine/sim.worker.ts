@@ -511,7 +511,7 @@ interface ColorPassMsg { type: 'colorPass'; activeViewer: string }
  *  under WebGPU direct render (where srcCanvas's 2D context is unavailable
  *  on the main thread). Cost (the per-frame readback) is paid only while
  *  recording. */
-interface SetRecordingMsg { type: 'setRecording'; enabled: boolean }
+interface SetRecordingMsg { type: 'setRecording'; enabled: boolean; needColors?: boolean }
 /** Late-binding canvas attach: the main thread defers transferControlToOffscreen
  *  until the WebGPU runtime is confirmed ready, so the JS-fallback period during
  *  init can still putImageData onto a regular canvas. Worker switches to direct
@@ -3750,10 +3750,18 @@ let useWasm = false;
 // step still runs on JS/WASM even when the user has WebGPU selected. This
 // validates the entire control plane without needing buffer/pipeline machinery.
 let useWebGPU = false;
-// GIF recording toggle. When true and direct render is active, sendColors
-// includes the colors buffer (extra readback per frame) so main thread can
-// capture frames. Otherwise direct render skips the colors transfer.
+// Recording toggle (GIF / WebM). Set by `setRecording`.
 let recording = false;
+/** Does the ACTIVE capture CONSUME the CPU colours mirror every frame?
+ *  TRUE for the "simulation" capture scope: the main thread re-renders the whole
+ *  grid at a fit framing from `colors` (renderSimulationFrame), so every GPU
+ *  display fast path that skips the readback must be overridden for the run.
+ *  FALSE for "current view" (it reads the DISPLAY canvas, which every GPU path
+ *  already presents into) and for 3D — so a view-scope recording keeps the
+ *  no-readback fast path instead of paying a full W·H·4 readback + transfer per
+ *  frame for bytes nobody reads. Absent on the message ⇒ true, so an older main
+ *  thread keeps the historical always-readback behaviour. */
+let recordingNeedsColors = false;
 let webgpuRuntime: WebGPURuntime | null = null;
 // Monotonic counter ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â bumped at the start of every startWebGPUInit. The
 // async init's `.then` captures the value at submit time and bails if it no
@@ -4514,6 +4522,19 @@ function gridDisplayOwnedByGpu(): boolean {
  *  keep refreshing even when the main thread asked to skip the colour pass. */
 function voxelDisplayLive(): boolean { return voxelRenderOn() && !gridUiSync; }
 
+/** True when the CPU `colours` mirror is (or may be) STALE because the GPU owns
+ *  the grid display and the per-step readback was therefore skipped. A strict
+ *  SUPERSET of gridDisplayOwnedByGpu(): the E2 single-canvas composite also
+ *  suppresses the readback (its grid layer samples `colorsBuf` straight on the
+ *  GPU) yet is NOT a "direct render" — `webgpuRuntime.directRender` is false for
+ *  an agent model, because the grid canvas attach is gated on !agentModel.
+ *  Every CPU consumer of the colours (a capture, a one-shot snapshot) must force
+ *  a readback when this is true, or it renders from a mirror thousands of
+ *  generations old — the "the GIF records the agents but not the grid" bug. */
+function gridColorsMirrorStale(): boolean {
+  return !!useWebGPU && !!webgpuRuntime?.stepReady && (gridDisplayOwnedByGpu() || agentCompositeActive);
+}
+
 /** Re-present the voxel frame from the live GPU colours buffer. Called from every
  *  path that refreshes colours (step-batch tail, mutation tails, colour pass,
  *  camera, attach, refresh). No-op unless the voxel render is wired up. */
@@ -5156,7 +5177,11 @@ async function finalizeStepWebGPU(opts: { needAttrs?: boolean; needColors?: bool
   // voxel render in free mode owns the display exactly like 2D direct render, so
   // the colours never need to reach the CPU. STRUCTURALLY IDENTICAL — the
   // selective watched-attr readback and the reductions path below are untouched.
-  const wantColors = (opts.needColors !== false) && (!gridDisplayOwnedByGpu() || recording || inspectCellIdxs.length > 0);
+  // `recordingNeedsColors` (not the raw `recording`) is the capture term: only
+  // the SIMULATION capture scope re-renders the grid from this mirror on the
+  // main thread. A "current view" recording reads the display canvas the GPU
+  // already presents into, so it must NOT re-arm the per-frame readback.
+  const wantColors = (opts.needColors !== false) && (!gridDisplayOwnedByGpu() || recordingNeedsColors || inspectCellIdxs.length > 0);
   // P5 ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â only read back indicators that the UI/end-conditions actually
   // consume. A model can declare 10 indicators with `watched=false` and they
   // ALL stayed in the readback path before, paying the per-frame mapAsync
@@ -6308,12 +6333,17 @@ function sendColors(): void {
   // mirror via readback so the main thread can capture frames.
   // E2 composite: the shared canvas already holds grid+agents (composited above
   // via presentAgentsIfActive) — ship no grid `colors`; the main thread blits the
-  // composite. Recording captures the DISPLAY canvas (which holds the composite),
-  // so no colors readback is needed even under recording.
+  // composite.
   // L1: the 3D voxel render in free mode is the same deal — the worker already
   // presented the frame into the transferred canvas, so ship no `colors` (they
   // were never read back either; see finalizeStepWebGPU's wantColors).
-  if ((gridDisplayOwnedByGpu() && !recording) || agentCompositeActive) {
+  // ⚠ The capture escape hatch applies to BOTH families. It used to cover only
+  // gridDisplayOwnedByGpu(), so under the E2 composite (a 2D grid+agents model
+  // with both layers on WebGPU — Chemotaxis) the colours were suppressed even
+  // while recording, and the simulation-scope capture — which re-renders the
+  // grid from this mirror — drew agents over a grid frozen at whatever was last
+  // shipped: the reported "the GIF records the agents but not the grid".
+  if ((gridDisplayOwnedByGpu() || agentCompositeActive) && !recordingNeedsColors) {
     if (glyphsPayload) {
       self.postMessage(
         { type: 'stepped', generation, indicators, sieActive, reqId: ackId, glyphCodes: glyphsPayload.codes, glyphColors: glyphsPayload.colors, agents: agentsPayload, agentLiveCount },
@@ -6838,7 +6868,11 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
           // step shader itself may have written to the colors buffer via
           // SetColorViewer-in-step (e.g. MNCA's "Case Colored"). Either way we
           // read the GPU colors buffer back ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â that's the canonical source.
-          if (!msg.skipColorPass) runColorPassWebGPU();
+          // A simulation-scope capture RE-RENDERS the grid from the CPU colours
+          // mirror, so it needs the colour pass to have run AND the readback to
+          // happen — both display fast paths (skipColorPass at ∞ gens/frame, and
+          // the E2 composite's no-readback) are overridden for the run.
+          if (!msg.skipColorPass || recordingNeedsColors) runColorPassWebGPU();
           // L1 REGRESSION FIX (the "canvas turns black" report). `skipColorPass`
           // (unlimited gens/frame) is a throughput request aimed at the CPU display
           // pipeline — the main thread also skips its draw. But in FREE mode the
@@ -6850,12 +6884,17 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
           // whole display here, so refresh + present ONCE PER BATCH (never per
           // generation): one colour-pass dispatch + one indirect draw per frame,
           // which is both cheap and strictly better than a frozen display.
-          else if (voxelDisplayLive()) runColorPassWebGPU({ skipReductions: true });
+          // The E2 grid+agents composite is the SAME deal as the voxel canvas: a
+          // real DOM canvas the browser composites, whose grid layer samples
+          // `colorsBuf` — so skipping the colour pass freezes the grid half of
+          // the display while the sim runs on. Refresh ONCE PER BATCH (never per
+          // generation), exactly like L1's voxel arm.
+          else if (voxelDisplayLive() || agentCompositeActive) runColorPassWebGPU({ skipReductions: true });
           // E2 composite: the grid layer is composited into the shared canvas from
           // the GPU colorsBuf (grid-present pass) — so SKIP the per-gen colors
           // readback (the CPU win). sendColors ships no `colors` + does the composite
           // present (grid + agents). Else the two-canvas / readback path (unchanged).
-          await finalizeStepWebGPU({ needColors: !agentCompositeActive && !msg.skipColorPass });
+          await finalizeStepWebGPU({ needColors: recordingNeedsColors || (!agentCompositeActive && !msg.skipColorPass) });
           sendColors();
           if (stoppedByEvent !== null) {
             self.postMessage({ type: 'stopEvent', message: stoppedByEvent, reqId: msg.reqId });
@@ -7524,6 +7563,8 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
 
     case 'setRecording': {
       recording = !!msg.enabled;
+      // Absent ⇒ true (back-compat with a main thread that doesn't send it).
+      recordingNeedsColors = recording && (msg.needColors !== false);
       break;
     }
 
@@ -7549,8 +7590,10 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       const tag = msg.tag ?? '';
       const rt = webgpuRuntime;
       // L1: the voxel render leaves the CPU colours mirror stale exactly like 2D
-      // direct render, so it needs the same one-shot readback before snapshotting.
-      if (useWebGPU && rt?.stepReady && (rt.directRender || rt.voxelRender)) {
+      // direct render, so it needs the same one-shot readback before snapshotting
+      // — and so does the E2 composite, which is neither (gridColorsMirrorStale
+      // is the one predicate covering all three).
+      if (rt && gridColorsMirrorStale()) {
         void (async () => {
           try {
             await readbackColors(rt, colors);
