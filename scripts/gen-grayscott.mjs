@@ -207,6 +207,8 @@ vEdge(vColor, 'b', vSetViewer, 'b');
 // =============================================================================
 
 const properties = {
+  // Authored creation date — the Models Library card stamp + Newest/Oldest sort.
+  createdDate: '2026-05-14',
   name: 'Gray-Scott Reaction-Diffusion',
   author: 'Peter Gray & Stephen K. Scott (1983); 9-point CA form per Karl Sims',
   modelAuthor: 'Rodrigo F. Figueiredo',

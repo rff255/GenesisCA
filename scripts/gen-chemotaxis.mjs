@@ -92,6 +92,8 @@ const chemMappingId = newId('map');
 const model = {
   schemaVersion: 1,
   properties: {
+    // Authored creation date — the Models Library card stamp + Newest/Oldest sort.
+    createdDate: '2026-06-22',
     name: 'Chemotaxis — Aggregation',
     description: 'Slime-mould / Keller-Segel aggregation: agents secrete a chemical into the grid (the field), it diffuses (WASM cell CA), and agents climb its gradient — spontaneous aggregation into spots. Showcases the agent↔grid feedback + the WASM-decoupled field.',
     ruleDescription: 'The cell CA diffuses + decays a `chemical` field each generation (runs on WASM). Each agent secretes into the field (Secrete To Field), reads the local gradient (Field Gradient) and applies a force up it (Apply Force) + a little wander; engine repulsion keeps cells apart. Diffusion makes a cluster a chemical peak, recruiting more agents — positive feedback drives aggregation.',

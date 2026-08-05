@@ -1,6 +1,7 @@
 {
   "schemaVersion": 2,
   "properties": {
+    "createdDate": "2026-06-18",
     "name": "Life3D",
     "author": "Carter Bays (3D Life rule 5766)",
     "modelAuthor": "Rodrigo F. Figueiredo",

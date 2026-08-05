@@ -1,6 +1,7 @@
 {
   "schemaVersion": 2,
   "properties": {
+    "createdDate": "2026-07-12",
     "name": "GoL Replicate Statistics",
     "author": "John Conway (Game of Life)",
     "modelAuthor": "Rodrigo F. Figueiredo",

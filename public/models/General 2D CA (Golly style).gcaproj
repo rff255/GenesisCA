@@ -1,6 +1,7 @@
 {
   "schemaVersion": 2,
   "properties": {
+    "createdDate": "2026-07-05",
     "name": "General 2D CA (Golly style)",
     "author": "",
     "modelAuthor": "Rodrigo F. Figueiredo",

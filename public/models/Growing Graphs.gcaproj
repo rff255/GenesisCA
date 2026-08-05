@@ -1,6 +1,7 @@
 {
   "schemaVersion": 2,
   "properties": {
+    "createdDate": "2026-08-04",
     "name": "Growing Graphs",
     "modelAuthor": "Rodrigo F. Figueiredo",
     "description": "Binary cubic graph-rewriting automata after Paul Cousin, ported from Alex Mordvintsev's (znah) Growing Graphs demo. Every node carries one bit and exactly three neighbours; one 16-bit integer defines both the state rule and the division rule, and the triangle split keeps the graph 3-regular forever. All 23 rules of the demo's catalogue ship as presets.",

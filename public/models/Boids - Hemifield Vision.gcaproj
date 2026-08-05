@@ -1,6 +1,7 @@
 {
   "schemaVersion": 1,
   "properties": {
+    "createdDate": "2026-07-28",
     "name": "Boids — Hemifield Vision",
     "description": "Braitenberg-style flocking: agents steer purely by how many neighbours they see on their LEFT vs RIGHT, through three differently-coloured vision cones.",
     "ruleDescription": "Two Sense Hemifield nodes give left/right agent counts in a wide NEAR cone and a narrow FAR cone. The turn signal KFAR*(Lfar-Rfar) - KNEAR*(Lnear-Rnear) is applied as a force along the heading’s left normal (-vy, vx), so an agent veers toward distant company and away from crowding. A Get Agents In View cone adds velocity matching over the agents actually ahead, and a self-propulsion term holds a cruise speed. No engine physics at all — collision, bonds and growth are off; the graph IS the whole rule.",

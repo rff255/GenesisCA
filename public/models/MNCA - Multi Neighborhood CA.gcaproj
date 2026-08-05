@@ -1,6 +1,7 @@
 {
   "schemaVersion": 1,
   "properties": {
+    "createdDate": "2026-04-20",
     "name": "MNCA",
     "author": "Slackermanz",
     "description": "Multiple Neighborhoods Cellular Automata\n\nhttps://softologyblog.wordpress.com/2018/03/09/multiple-neighborhoods-cellular-automata/",

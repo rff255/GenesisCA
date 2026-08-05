@@ -1,6 +1,7 @@
 {
   "schemaVersion": 1,
   "properties": {
+    "createdDate": "2026-04-23",
     "name": "Gas Particles",
     "author": "Rodrigo F. Figueiredo",
     "description": "Experiment with mass conservation using Asynchronous CA. ",

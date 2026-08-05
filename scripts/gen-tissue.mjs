@@ -106,6 +106,8 @@ fEdge(condD, 'then', saMat, 'do');
 const model = {
   schemaVersion: 1,
   properties: {
+    // Authored creation date — the Models Library card stamp + Newest/Oldest sort.
+    createdDate: '2026-06-22',
     name: 'Morphogenesis — Differential Tissue',
     description: 'Developmental tissue with agent specialization: asymmetric division (self-renewal + differentiation), contact inhibition, and a colour-coded maturity gradient — a self-limiting tissue, not a uniform blob.',
     ruleDescription: 'Each cell has a maturity (lineage depth). Division is asymmetric (Division Event): daughter 0 keeps the mother maturity (self-renewal), daughter 1 advances. A cell divides only while grown, uncrowded (Neighbour Density cap — contact inhibition) and uncommitted (maturity < ' + MAX_MATURITY + '). A persistent stem pool proliferates at the edge; cells differentiate inward; terminal cells stop. Colour = maturity stage.',

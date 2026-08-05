@@ -1,6 +1,7 @@
 {
   "schemaVersion": 2,
   "properties": {
+    "createdDate": "2026-05-14",
     "name": "Gray-Scott Reaction-Diffusion",
     "author": "Peter Gray & Stephen K. Scott (1983); 9-point CA form per Karl Sims",
     "modelAuthor": "Rodrigo F. Figueiredo",

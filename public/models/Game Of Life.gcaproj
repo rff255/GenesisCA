@@ -1,6 +1,7 @@
 {
   "schemaVersion": 1,
   "properties": {
+    "createdDate": "2026-04-07",
     "name": "Game of Life",
     "author": "John Conway",
     "description": "A zero-player game where evolution is determined by the initial state. Each cell is either alive or dead, and its next state depends on the number of alive neighbors.",

@@ -1,6 +1,7 @@
 {
   "schemaVersion": 2,
   "properties": {
+    "createdDate": "2026-05-22",
     "name": "Chromatography (Kier, Cheng & Karnes 2000)",
     "author": "Lemont B. Kier, Chao-Kun Cheng, H. Thomas Karnes",
     "modelAuthor": "Rodrigo F. Figueiredo",

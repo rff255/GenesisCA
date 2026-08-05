@@ -1,6 +1,7 @@
 {
   "schemaVersion": 2,
   "properties": {
+    "createdDate": "2026-04-16",
     "name": "Elementary 1D CA",
     "author": "Stephen Wolfram",
     "description": "Demonstrating the simulation of any 1D Elementary CA in a 2D space in a simple manner. Use the rule you want. By default rule 30 ( 00011110 )",

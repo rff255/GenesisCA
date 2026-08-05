@@ -464,6 +464,8 @@ groupNode('Init Event — injection band (near the top) → column bulk + detect
 // MODEL DEFINITION (non-graph parts)
 // =============================================================================
 const properties = {
+  // Authored creation date — the Models Library card stamp + Newest/Oldest sort.
+  createdDate: '2026-05-22',
   name: 'Chromatography (Kier, Cheng & Karnes 2000)',
   author: 'Lemont B. Kier, Chao-Kun Cheng, H. Thomas Karnes',
   modelAuthor: 'Rodrigo F. Figueiredo',

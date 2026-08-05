@@ -196,6 +196,8 @@ const W = 80, H = 80;
 const model = {
   schemaVersion: 1,
   properties: {
+    // Authored creation date — the Models Library card stamp + Newest/Oldest sort.
+    createdDate: '2026-06-24',
     name: 'Ant Necrophoresis',
     description: 'Worker ants cluster scattered corpses into cemeteries by a density-dependent pick-up / drop rule — stigmergy through the agent↔grid field bridge. Corpses are discrete items and the total is exactly conserved.',
     ruleDescription: [

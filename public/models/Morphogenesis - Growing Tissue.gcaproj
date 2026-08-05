@@ -1,6 +1,7 @@
 {
   "schemaVersion": 2,
   "properties": {
+    "createdDate": "2026-06-22",
     "name": "Morphogenesis — Growing Tissue",
     "author": "Bond-Graph Agents",
     "modelAuthor": "GenesisCA",

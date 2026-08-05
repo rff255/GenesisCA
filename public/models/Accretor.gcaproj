@@ -1,6 +1,7 @@
 {
   "schemaVersion": 2,
   "properties": {
+    "createdDate": "2026-07-12",
     "name": "Accretor",
     "author": "Erwin Driessens & Maria Verstappen (Accretor); via Softology (2018)",
     "modelAuthor": "Rodrigo F. Figueiredo",

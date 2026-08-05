@@ -1,6 +1,7 @@
 {
   "schemaVersion": 2,
   "properties": {
+    "createdDate": "2026-04-14",
     "name": "Wireworld (expanded)",
     "author": "Brian Silverman",
     "description": "Based on the classic Wireworld model (https://en.wikipedia.org/wiki/Wireworld). To facilitate experiments, I added two new cell types: Pulsar (that produces charges), and Switch (that gates charges). Each with their own controllable latency.",

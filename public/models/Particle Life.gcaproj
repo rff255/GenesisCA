@@ -1,6 +1,7 @@
 {
   "schemaVersion": 1,
   "properties": {
+    "createdDate": "2026-07-21",
     "name": "Particle Life",
     "description": "The classic Particle Life sandbox: K species, a signed attraction/repulsion matrix, per-pair min/max radii — chase spirals, membranes and cell-like blobs emerge from one table.",
     "ruleDescription": "Each particle sums a pairwise force over neighbours within queryRadius: below the pair’s attractMin the force is always repulsive (repel·(d/minR−1)); between attractMin and attractMax it follows a tent peaking at the midpoint with height rules[my][their] ∈ [−1,1]. Velocity keeps friction·v each step (graph-side Set Velocity; engine momentum 1). All three tables are live — edit them (or Randomize with a signed range) while playing. rules is ASYMMETRIC: A may chase B while B flees A, which is where the endless pursuit dynamics come from. Presets carry named matrices (snake / rock–paper–scissors / symmetric clusters). N applies on Reset.",

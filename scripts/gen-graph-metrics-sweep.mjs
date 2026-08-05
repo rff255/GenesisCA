@@ -203,6 +203,8 @@ ov.fEdge(forEach, 'next', doneLog, 'do');
 // NON-GRAPH MODEL PARTS
 // =============================================================================
 const properties = {
+  // Authored creation date — the Models Library card stamp + Newest/Oldest sort.
+  createdDate: '2026-07-30',
   name: 'Graph Metrics - Growth Sweep',
   modelAuthor: 'Rodrigo F. Figueiredo',
   description:

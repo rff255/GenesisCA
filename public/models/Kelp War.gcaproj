@@ -1,6 +1,7 @@
 {
   "schemaVersion": 2,
   "properties": {
+    "createdDate": "2026-05-26",
     "name": "Kelp War",
     "author": "Rodrigo F. Figueiredo",
     "modelAuthor": "Rodrigo F. Figueiredo",

@@ -530,6 +530,8 @@ const indicators = [
 ];
 
 const properties = {
+  // Authored creation date — the Models Library card stamp + Newest/Oldest sort.
+  createdDate: '2026-07-30',
   name: 'Cubic GRA',
   modelAuthor: 'Rodrigo F. Figueiredo',
   description:

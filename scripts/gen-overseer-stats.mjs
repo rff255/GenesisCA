@@ -128,6 +128,8 @@ ov.vEdge(stdStat, 'result', logStd, 'value');
 // NON-GRAPH MODEL PARTS
 // =============================================================================
 const properties = {
+  // Authored creation date — the Models Library card stamp + Newest/Oldest sort.
+  createdDate: '2026-07-12',
   name: 'GoL Replicate Statistics',
   author: 'John Conway (Game of Life)',
   modelAuthor: 'Rodrigo F. Figueiredo',

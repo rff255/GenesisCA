@@ -309,6 +309,8 @@ function buildModel(is3d) {
   return {
     schemaVersion: 1,
     properties: {
+      // Authored creation date — the Models Library card stamp + Newest/Oldest sort.
+      createdDate: '2026-07-21',
       name: `Particle Life${dim}`,
       description: `The classic Particle Life sandbox${dim ? ' in a 3D volume' : ''}: K species, a signed attraction/repulsion matrix, per-pair min/max radii — chase spirals, membranes and cell-like blobs emerge from one table.`,
       ruleDescription:

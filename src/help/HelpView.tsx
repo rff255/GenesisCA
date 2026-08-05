@@ -342,13 +342,15 @@ export function HelpView() {
             The model&apos;s presentation metadata, kept in its own tab separate from the
             model&apos;s behavior: <strong>Name</strong>, <strong>Rule Author</strong>,{' '}
             <strong>GenesisCA Project Author</strong>, <strong>Summary</strong>,{' '}
-            <strong>Rule Description</strong>, tags, and an optional <strong>Thumbnail</strong>.
+            <strong>Rule Description</strong>, an optional <strong>Creation date</strong>, tags,
+            and an optional <strong>Thumbnail</strong>.
           </p>
           <ul className={styles.list}>
             <li><strong>Rule Author</strong> &mdash; originator of the CA rule (domain expert/researcher).</li>
             <li><strong>GenesisCA Project Author</strong> &mdash; who built this particular GenesisCA project file.</li>
             <li><strong>Summary</strong> &mdash; a short blurb; this is what appears on the model&apos;s Models Library card.</li>
             <li><strong>Rule Description</strong> &mdash; a longer free-form field to elaborate on how the rule works and document anything else worth keeping. Not shown on Library cards.</li>
+            <li><strong>Creation date</strong> (optional) &mdash; when the model was made, as a plain date you set yourself (a <strong>Today</strong> button fills in the current date, <strong>Clear</strong> removes it). It travels inside the <code>.gcaproj</code>, appears on the model&apos;s Models Library card next to its grid size, drives the library&apos;s <em>Newest</em> / <em>Oldest</em> sort, and shows in a standalone export&apos;s About panel. It is deliberately <em>authored</em> rather than taken from the file: a file&apos;s timestamp changes every time it is rebuilt, copied or checked out, so it would say nothing about the model. Leave it blank and no date is shown anywhere &mdash; the model just sorts last under Newest/Oldest.</li>
             <li><strong>Simulator Instructions</strong> &mdash; optional usage notes for the people RUNNING the model (how to interact, what to try, what to look for). When present, the Simulator shows an <strong>&#x24D8; Instructions</strong> pill at the canvas&apos;s top-left that opens them in a dismissible card (line breaks preserved); standalone <code>.html</code> exports show them in the viewer&apos;s About panel too.</li>
             <li><strong>Thumbnail</strong> (optional) &mdash; attach a PNG, JPEG, GIF or WebP image, <em>or a WebM video clip</em> (up to 2&nbsp;MB) &mdash; the Simulator records WebM, so a short recording makes a natural thumbnail. It travels inside the <code>.gcaproj</code> file. When the model is shipped as part of the Models Library, hovering its card shows a floating preview; animated GIFs / WebPs play natively, and a WebM clip plays on loop (muted, no controls). The one place a clip is skipped is the <code>og:image</code> social tag of a standalone export &mdash; link scrapers need an image &mdash; everything else (the panel preview, the Library popover, the exported viewer&apos;s About panel) plays it.</li>
           </ul>
@@ -3497,8 +3499,10 @@ export function HelpView() {
             filter, <strong>CA Grid / Agents</strong> topology filters (independent
             <em> toggles</em>, since a model can run both layers at once &mdash; each one
             requires that layer, and both together find the models that couple a grid with
-            agents), a <strong>sort</strong> order (name, newest / oldest by the model file's
-            last-updated date, or largest grid), and a <strong>Group by category</strong> view
+            agents), a <strong>sort</strong> order (name, newest / oldest by each model&apos;s
+            authored <strong>creation date</strong>, or largest grid &mdash; models with no
+            creation date carry no date stamp and sort last either way), and a
+            <strong> Group by category</strong> view
             that sections the cards by each model's primary tag. Your choices persist across
             sessions. Cards are uniform-sized and always show <strong>all of a model's
             tags</strong> (the tag rows wrap; the clipped description yields the space, since

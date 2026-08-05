@@ -4,6 +4,7 @@ import { SimulatorView } from '../simulator/SimulatorView';
 import { serializeModel, modelFilename, downloadJSON } from '../model/fileOperations';
 import { ThumbMedia } from '../components/ThumbMedia';
 import type { CAModel } from '../model/types';
+import { formatCreatedDate } from '../model/createdDate';
 
 const GENESIS_URL = 'https://genesisca.online';
 
@@ -186,6 +187,11 @@ function AboutOverlay({ model }: { model: CAModel }) {
                 <div style={{ marginTop: 10, display: 'grid', gridTemplateColumns: 'auto 1fr', columnGap: 10, rowGap: 3 }}>
                   <Meta label="Rule author" value={p.author} />
                   <Meta label="Project author" value={p.modelAuthor} />
+                  {/* Only when authored — a model with no creation date should
+                      show nothing rather than a permanent em-dash row. */}
+                  {formatCreatedDate(p.createdDate, true) && (
+                    <Meta label="Created" value={formatCreatedDate(p.createdDate, true)} />
+                  )}
                 </div>
                 {(p.tags || []).length > 0 && (
                   <div style={{ marginTop: 10, display: 'flex', gap: 6, flexWrap: 'wrap' }}>

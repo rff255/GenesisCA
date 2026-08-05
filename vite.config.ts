@@ -2,7 +2,7 @@ import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import { VitePWA } from 'vite-plugin-pwa'
 import { viteSingleFile } from 'vite-plugin-singlefile'
-import { readdirSync, readFileSync, writeFileSync, existsSync, mkdirSync, unlinkSync, statSync } from 'fs'
+import { readdirSync, readFileSync, writeFileSync, existsSync, mkdirSync, unlinkSync } from 'fs'
 import { join, resolve, dirname } from 'path'
 import { fileURLToPath } from 'url'
 import type { Plugin } from 'vite'
@@ -85,10 +85,13 @@ function modelsLibraryPlugin(): Plugin {
           dimension: is3d ? '3d' : '2d',
           hasGrid: topo.gridCells !== false,
           hasAgents: topo.agents === true,
-          // File mtime (epoch ms) — powers the library's Newest/Oldest sort +
-          // the card date stamp. The .gcaproj files are committed, so this is
-          // the last-edited date of the shipped model.
-          modified: (() => { try { return statSync(join(modelsDir, file)).mtimeMs; } catch { return 0; } })(),
+          // AUTHORED creation date (`YYYY-MM-DD`) from properties.createdDate —
+          // powers the library's Newest/Oldest sort + the card date stamp.
+          // Deliberately NOT the file's mtime (nor birthtime): both churn on
+          // every build / checkout, so a derived date said "when this working
+          // copy was written", never "when the model was made". Absent → the
+          // key is omitted and the card shows no date at all.
+          ...(/^\d{4}-\d{2}-\d{2}$/.test(props.createdDate) ? { createdDate: props.createdDate } : {}),
           ...(thumbnail ? { thumbnail } : {}),
         };
       } catch {

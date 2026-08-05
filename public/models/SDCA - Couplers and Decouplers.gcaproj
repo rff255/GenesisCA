@@ -1,6 +1,7 @@
 {
  "schemaVersion": 2,
  "properties": {
+  "createdDate": "2026-07-30",
   "name": "SDCA - Couplers and Decouplers",
   "modelAuthor": "Rodrigo F. Figueiredo",
   "description": "A structurally dynamic cellular automaton after Ilachinski and Halpern (1987): a value rule and a link rule, dual-coupled, so the values evolve on the topology while the topology evolves on the values. Couplers add links, decouplers remove them, and the Nowotny-Requardt hysteresis band keeps an edge from chattering. The link value lives on the bond itself, as a bond attribute.",

@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { CAModel } from '../model/types';
+import { createdDateTimestamp, formatCreatedDate } from '../model/createdDate';
 import { ThumbMedia } from '../components/ThumbMedia';
 import styles from './ModelsLibrary.module.css';
 
@@ -19,8 +20,12 @@ interface LibraryEntry {
    *  Absent on an older index.json → grid on, agents off (the schema default). */
   hasGrid?: boolean;
   hasAgents?: boolean;
-  /** File mtime (epoch ms) — powers the Newest/Oldest sort + the date stamp. */
-  modified?: number;
+  /** The model's AUTHORED creation date (`YYYY-MM-DD`, from
+   *  `properties.createdDate`) — powers the Newest/Oldest sort + the card date
+   *  stamp. Absent when the author never set one: the card then shows NO date
+   *  and the entry sorts last under Newest/Oldest, because the alternative
+   *  (the file's mtime, which every build churns) was actively misleading. */
+  createdDate?: string;
   /** Sidecar filename (e.g. `"Game Of Life.gcaproj.thumb.gif"`, or `.thumb.webm`
    *  for a video thumbnail) emitted by the Vite plugin. Absent when the source
    *  .gcaproj has no embedded thumbnail. */
@@ -84,16 +89,25 @@ function cellCount(e: LibraryEntry): number {
   return e.gridSize.split('x').reduce((acc, part) => acc * (Number(part) || 1), 1);
 }
 
-function fmtDate(ms: number | undefined, long: boolean): string {
-  if (!ms) return '';
-  try {
-    const d = new Date(ms);
-    return long
-      ? d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })
-      : d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
-  } catch {
-    return '';
-  }
+const byName = (a: LibraryEntry, b: LibraryEntry) =>
+  a.name.localeCompare(b.name, undefined, { sensitivity: 'base' });
+
+/** Sortable timestamp for a card's authored creation date (null when unset). */
+function createdTs(e: LibraryEntry): number | null {
+  return createdDateTimestamp(e.createdDate);
+}
+
+/**
+ * Newest/Oldest comparator. Entries with NO authored date sort LAST in BOTH
+ * directions (then by name) — an undated model has no place on a time axis, and
+ * pretending it does is exactly the misleading behaviour the mtime stamp had.
+ */
+function byCreated(a: LibraryEntry, b: LibraryEntry, newestFirst: boolean): number {
+  const ta = createdTs(a), tb = createdTs(b);
+  if (ta === null && tb === null) return byName(a, b);
+  if (ta === null) return 1;
+  if (tb === null) return -1;
+  return (newestFirst ? tb - ta : ta - tb) || byName(a, b);
 }
 
 // ---------------------------------------------------------------------------
@@ -341,12 +355,10 @@ export function ModelsLibrary({ onLoadModel }: Props) {
       }
       return true;
     });
-    const byName = (a: LibraryEntry, b: LibraryEntry) =>
-      a.name.localeCompare(b.name, undefined, { sensitivity: 'base' });
     switch (prefs.sort) {
       case 'name-desc': out.sort((a, b) => byName(b, a)); break;
-      case 'newest': out.sort((a, b) => (b.modified ?? 0) - (a.modified ?? 0) || byName(a, b)); break;
-      case 'oldest': out.sort((a, b) => (a.modified ?? 0) - (b.modified ?? 0) || byName(a, b)); break;
+      case 'newest': out.sort((a, b) => byCreated(a, b, true)); break;
+      case 'oldest': out.sort((a, b) => byCreated(a, b, false)); break;
       case 'grid-desc': out.sort((a, b) => cellCount(b) - cellCount(a) || byName(a, b)); break;
       default: out.sort(byName);
     }
@@ -446,9 +458,12 @@ export function ModelsLibrary({ onLoadModel }: Props) {
             >{t.label}</span>
           );
         })}
-        <span className={styles.gridSize} title={entry.modified ? `Last updated ${fmtDate(entry.modified, true)}` : undefined}>
+        <span
+          className={styles.gridSize}
+          title={entry.createdDate ? `Created ${formatCreatedDate(entry.createdDate, true)}` : undefined}
+        >
           {entry.gridSize.replace(/x/g, '×')}
-          {entry.modified ? ` · ${fmtDate(entry.modified, false)}` : ''}
+          {entry.createdDate ? ` · ${formatCreatedDate(entry.createdDate, false)}` : ''}
         </span>
       </div>
     </div>

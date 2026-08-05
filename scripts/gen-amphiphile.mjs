@@ -680,6 +680,8 @@ groupNode(
 // MODEL DEFINITION (non-graph parts)
 // =============================================================================
 const properties = {
+  // Authored creation date — the Models Library card stamp + Newest/Oldest sort.
+  createdDate: '2026-05-17',
   name: 'Amphiphile micelle formation (Kier book Example 5.3)',
   author: 'GenesisCA',
   modelAuthor: 'Rodrigo F. Figueiredo',

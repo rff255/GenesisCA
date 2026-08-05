@@ -1,6 +1,7 @@
 {
   "schemaVersion": 2,
   "properties": {
+    "createdDate": "2026-05-17",
     "name": "Amphiphile micelle formation (Kier book Example 5.3)",
     "author": "Kier, Seybold & Cheng",
     "modelAuthor": "Rodrigo F. Figueiredo",

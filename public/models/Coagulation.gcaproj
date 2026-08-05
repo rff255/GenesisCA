@@ -1,6 +1,7 @@
 {
   "schemaVersion": 1,
   "properties": {
+    "createdDate": "2026-04-08",
     "name": "Coagulation",
     "author": "Castiel & Rodrigo F. Figueiredo",
     "description": "Similar scaffolding to that of Game of Life, in which cells are alive or dead, but with different neighborhood and different under-overpopulation constants.",

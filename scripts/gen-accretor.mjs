@@ -403,6 +403,8 @@ const RULE_TOTAL = ruleAxes.reduce((a, ax) => a * (ax.source.max - ax.source.min
 const ruleData = randomFillTableData(RULE_TOTAL, RULE_SEED, RULE_DENSITY, STATES.length - 1);
 
 const properties = {
+  // Authored creation date — the Models Library card stamp + Newest/Oldest sort.
+  createdDate: '2026-07-12',
   name: 'Accretor',
   author: 'Erwin Driessens & Maria Verstappen (Accretor); via Softology (2018)',
   modelAuthor: 'Rodrigo F. Figueiredo',

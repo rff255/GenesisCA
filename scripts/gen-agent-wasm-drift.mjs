@@ -84,6 +84,8 @@ fEdge(af, 'next', str, 'do');
 const model = {
   schemaVersion: 1,
   properties: {
+    // Authored creation date — the Models Library card stamp + Newest/Oldest sort.
+    createdDate: '2026-06-23',
     name: 'Agent WASM Drift Test',
     description: 'Minimal deterministic agents (spring toward centre) — the JS↔WASM agent-loop bit-parity vehicle for PR6b-1.',
     ruleDescription: 'Each agent reads its own position, computes a centre-pulling force ((centre − pos)·k), and applies it. No RNG, no neighbours, no bonds — fully deterministic, so JS and WASM agent loops must be bit-identical.',

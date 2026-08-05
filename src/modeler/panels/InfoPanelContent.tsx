@@ -4,6 +4,7 @@ import { ThumbMedia } from '../../components/ThumbMedia';
 import {
   THUMBNAIL_ACCEPT, THUMBNAIL_FORMATS_LABEL, THUMBNAIL_MAX_BYTES,
 } from '../../model/thumbnail';
+import { todayCreatedDate } from '../../model/createdDate';
 import type { PanelContentProps } from '../ModelerDetailContext';
 import styles from './PanelContent.module.css';
 
@@ -77,6 +78,40 @@ export function InfoPanelContent(_props: PanelContentProps = {}) {
               onChange={e => updateProperties({ modelAuthor: e.target.value })}
               placeholder="Who built this GenesisCA project"
             />
+          </div>
+          <div className={styles.field}>
+            <label className={styles.fieldLabel}>Creation date</label>
+            <div style={{ display: 'flex', gap: 4 }}>
+              <input
+                className={styles.textInput}
+                style={{ flex: 1, colorScheme: 'dark' }}
+                type="date"
+                value={properties.createdDate ?? ''}
+                onChange={e => updateProperties({ createdDate: e.target.value || undefined })}
+              />
+              <button
+                className={styles.addButton}
+                style={{ flex: 'none', padding: '2px 8px', fontSize: '0.68rem' }}
+                title="Set to today"
+                onClick={() => updateProperties({ createdDate: todayCreatedDate() })}
+              >
+                Today
+              </button>
+              {properties.createdDate && (
+                <button
+                  className={styles.deleteButton}
+                  style={{ flex: 'none', padding: '2px 8px', fontSize: '0.68rem' }}
+                  title="Clear the creation date"
+                  onClick={() => updateProperties({ createdDate: undefined })}
+                >
+                  Clear
+                </button>
+              )}
+            </div>
+            <span style={{ color: '#8090a0', fontSize: '0.62rem' }}>
+              When this model was made. Shown on its Models Library card and used by the
+              Newest/Oldest sort. Left blank, no date is shown.
+            </span>
           </div>
           <div className={styles.field}>
             <label className={styles.fieldLabel}>Summary</label>

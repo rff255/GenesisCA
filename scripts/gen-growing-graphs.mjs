@@ -1004,6 +1004,8 @@ const presets = PRESETS.map((p, i) => ({
 }));
 
 const properties = {
+  // Authored creation date — the Models Library card stamp + Newest/Oldest sort.
+  createdDate: '2026-08-04',
   name: 'Growing Graphs',
   modelAuthor: 'Rodrigo F. Figueiredo',
   description:

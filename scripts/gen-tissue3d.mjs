@@ -108,6 +108,8 @@ fEdge(condD, 'then', saMat, 'do');
 const model = {
   schemaVersion: 1,
   properties: {
+    // Authored creation date — the Models Library card stamp + Newest/Oldest sort.
+    createdDate: '2026-06-22',
     name: 'Morphogenesis — 3D Tissue',
     description: 'Developmental tissue in a 3D volume: asymmetric division (self-renewal + differentiation), contact inhibition, and a colour-coded maturity gradient — a self-limiting 3D tissue dividing along its mechanical (tension) axis.',
     ruleDescription: 'The 3D analog of Differential Tissue. Each cell has a maturity (lineage depth). Division is asymmetric (Division Event): daughter 0 keeps the mother maturity (self-renewal), daughter 1 advances. A cell divides only while grown, uncrowded (Neighbour Density cap — contact inhibition) and uncommitted (maturity < ' + MAX_MATURITY + '). Cells divide along the engine 3×3 tension-axis eigensolve, growing a connected 3D tissue. Colour = maturity stage.',

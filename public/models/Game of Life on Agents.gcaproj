@@ -1,6 +1,7 @@
 {
   "schemaVersion": 1,
   "properties": {
+    "createdDate": "2026-06-24",
     "name": "Game of Life on Agents",
     "description": "Conway's Game of Life running on a grid of AGENTS — the genericity proof of the agent platform. A totalistic CA rule via Get Nearby Agents → Get Agents Attribute → Aggregate, with the grid spawned by the Agent Init Event.",
     "ruleDescription": "Each static agent counts its live Moore neighbours (Get Nearby Agents within radius 1.5 → Get Agents Attribute(alive) → Aggregate sum) and applies the Game of Life rule (born on 3, survive on 2–3). The W×H grid is spawned in the Agent Init Event with Create Agent / Add Agent To World; agents are pinned (customForcesOnly + momentum 0) and updated synchronously.",

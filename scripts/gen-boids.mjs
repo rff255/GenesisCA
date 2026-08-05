@@ -166,6 +166,8 @@ fEdge(af, 'next', afW, 'do');
 const model = {
   schemaVersion: 1,
   properties: {
+    // Authored creation date — the Models Library card stamp + Newest/Oldest sort.
+    createdDate: '2026-06-22',
     name: 'Boids — Flocking',
     description: 'Reynolds boids: separation + alignment + cohesion via Get Nearby Agents + Apply Force. Hundreds of agents flock with graph-authored forces (no engine repulsion).',
     ruleDescription: 'Each agent queries flock-mates within a radius (Get Nearby Agents), averages their position (cohesion) and velocity (alignment), sums inverse-distance away-vectors (separation), and steers with Apply Force. Motion is pure custom force (momentum gives inertia, maxSpeed caps the cruise).',

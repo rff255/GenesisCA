@@ -413,6 +413,15 @@ export interface ModelProperties {
    *  model, what to try, what to look for. Plain text; line breaks preserved.
    *  Additive + optional, so old files load unchanged. */
   instructions?: string;
+  /** Authored creation date as an ISO calendar date (`YYYY-MM-DD`). Set by the
+   *  model author in the Info panel; powers the Models Library card stamp and
+   *  its Newest/Oldest sort. Deliberately AUTHORED, not derived: the file's
+   *  mtime (and birthtime) churn on every build / checkout, so a derived date
+   *  says nothing about when the model was actually made. Absent → no date is
+   *  shown anywhere (silence beats a misleading number). See
+   *  [createdDate.ts](./createdDate.ts). Additive + optional; old files load
+   *  unchanged. */
+  createdDate?: string;
   topology: Topology;
   boundaryTreatment: BoundaryTreatment;
   updateMode: UpdateMode;

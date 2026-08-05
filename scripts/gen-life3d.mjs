@@ -137,6 +137,8 @@ vEdge(omAlpha, 'result', looks, 'a');
 // B. NON-GRAPH MODEL PARTS
 // =============================================================================
 const properties = {
+  // Authored creation date — the Models Library card stamp + Newest/Oldest sort.
+  createdDate: '2026-06-18',
   name: 'Life3D',
   author: "Carter Bays (3D Life rule 5766)",
   modelAuthor: 'Rodrigo F. Figueiredo',

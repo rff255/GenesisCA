@@ -1,6 +1,7 @@
 {
  "schemaVersion": 2,
  "properties": {
+  "createdDate": "2026-07-30",
   "name": "Graph Metrics - Growth Sweep",
   "modelAuthor": "Rodrigo F. Figueiredo",
   "description": "The measurement half of the graph-rewriting research loop: six GRAPH INDICATORS (node count, edge count, mean/max degree, degree histogram, connected components) over a growing bond graph, plus an Overseer protocol that measures the growth law over 20 replicates and then sweeps 16 random rules.",
