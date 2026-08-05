@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useMemo, useReducer, useRef, useState, useSyncExternalStore, type CSSProperties } from 'react';
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, useSyncExternalStore, type CSSProperties } from 'react';
 import { useModel } from '../model/ModelContext';
 import { hexToRgba, rgbaToHex, OPAQUE } from '../model/colorHex';
 import { ColorField } from '../modeler/vpl/widgets/ColorField';
@@ -416,6 +416,13 @@ export const MANUAL_BRUSH_MAPPING_ID = '__manual__';
 /** Stable empty footprint array (avoids a new [] per frame when 3D hover is off). */
 const EMPTY_HOVER_CELLS: ReadonlyArray<{ layer: number; row: number; col: number }> = [];
 const EMPTY_AGENT_RINGS: ReadonlyArray<{ x: number; y: number; z: number; radius: number }> = [];
+
+/** How long a CONTINUOUS layout resize (a splitter drag) is considered "in
+ *  flight". The canvas backing store tracks it every frame; only the
+ *  direct-render OffscreenCanvas RE-ATTACH is held off for this long after the
+ *  last size change, so a drag costs ONE attach instead of one per frame.
+ *  Short enough that the crisp re-attach lands as soon as the user stops. */
+const LAYOUT_RESIZE_SETTLE_MS = 140;
 
 /** The agent-brush modes, in cycle order (Alt+scroll steps through them). Shared
  *  by the mode-button row and the wheel-cycle handlers so they can't drift. */
@@ -1359,6 +1366,17 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
    *  trigger guaranteed to fire on every real layout change. */
   const measureCaptureCollisionRef = useRef<(() => void) | null>(null);
   const captureCollisionWidthRef = useRef(0);
+  /** While a CONTINUOUS layout resize is in flight (a splitter drag), this holds
+   *  the `performance.now()` after which the direct-render OffscreenCanvas
+   *  re-attach may run again — see `scheduleLayoutDraw`. A transferred canvas has
+   *  FIXED dims, so tracking the drag exactly would mean one transfer + one
+   *  worker pipeline rebuild PER FRAME; instead the worker-presented canvas is
+   *  blitted SCALED to the new size for the duration (the layers that are already
+   *  `width/height: 100%` scale themselves) and exactly ONE re-attach runs once
+   *  the size settles. 0 = no resize in flight (attach immediately). */
+  const layoutResizeUntilRef = useRef(0);
+  /** True while a continuous resize defers the re-attach (see above). */
+  const resizeAttachDeferred = () => performance.now() < layoutResizeUntilRef.current;
 
   useEffect(() => {
     if (!overlayPopup) return;
@@ -3890,12 +3908,14 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
         const dims = agentRenderCanvasDimsRef.current;
         // Re-attach only on a REAL size change (an occluded pane measures 0×0 — the
         // A1/A2 storm guard). A fresh transferred canvas is needed (dims are fixed).
-        if ((dims.w !== cssW || dims.h !== cssH) && cssW >= 2 && cssH >= 2) {
+        if ((dims.w !== cssW || dims.h !== cssH) && cssW >= 2 && cssH >= 2 && !resizeAttachDeferred()) {
           // Re-attach WITHOUT falling back — the OLD sphere canvas is CSS-
           // stretched (width/height 100%) and keeps compositing the worker's
           // presents until the ack commits the fresh one. Flipping to the gl3d
           // snapshot path here rendered an ANCIENT snapshot (free mode) — the
           // reported frozen-frame-on-panel-resize.
+          // Deferred while a splitter drag is in flight (the CSS-stretched
+          // canvas already tracks the new box) → ONE attach per settled size.
           maybeAttachAgentCanvas(true);
         }
       }
@@ -3920,12 +3940,13 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
         const dims = voxelCanvasDimsRef.current;
         // Re-attach only on a REAL size change (an occluded pane measures 0×0 —
         // the A1/A2 attach-storm guard). The transferred canvas has fixed dims.
-        if ((dims.w !== cssW || dims.h !== cssH) && cssW >= 2 && cssH >= 2) {
+        if ((dims.w !== cssW || dims.h !== cssH) && cssW >= 2 && cssH >= 2 && !resizeAttachDeferred()) {
           // Re-attach WITHOUT falling back — the OLD voxel canvas is CSS-
           // stretched and keeps compositing the worker's presents until the ack
           // commits the fresh one. Flipping to the gl3d colours path here
           // rendered ANCIENT colours (free mode ships none) — the reported
           // frozen-frame-on-panel-resize (Accretor-class models).
+          // Deferred during a splitter drag → ONE attach per settled size.
           maybeAttachVoxelCanvas(true);
         }
       }
@@ -4562,14 +4583,20 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       // a degenerate parent (occluded pane) keeps the current canvas. Gridlines +
       // brush cursor overlay on top below.
       const dims = agentRenderCanvasDimsRef.current;
-      if ((dims.w !== parentW || dims.h !== parentH) && parentW >= 2 && parentH >= 2) {
+      if ((dims.w !== parentW || dims.h !== parentH) && parentW >= 2 && parentH >= 2 && !resizeAttachDeferred()) {
         // Re-attach WITHOUT falling back — keep blitting the OLD (still worker-
         // presented) composite until the ack commits the fresh one. Dropping to
         // the CPU paths here showed a frozen outdated grid+agents frame for the
         // whole handshake (free mode ships neither colours nor snapshots).
+        // Deferred during a splitter drag → ONE attach per settled size.
         maybeAttachAgentCanvas(true);
       }
-      ctx.drawImage(agentRenderCanvasRef.current!, 0, 0);
+      // SCALED, not 1:1: while the re-attach is pending (mid-drag, or the
+      // handshake gap) the transferred canvas still carries the OLD dims, and a
+      // 1:1 blit would letterbox/clip it. Scaling keeps the live image filling
+      // the new box at the right aspect (momentarily soft) until the fresh
+      // canvas lands. A no-op once the dims match — the usual case.
+      ctx.drawImage(agentRenderCanvasRef.current!, 0, 0, parentW, parentH);
       postAgentCamera();
     } else if (showGrid2d && blitSource) {
       if (infinity) {
@@ -4654,13 +4681,14 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       // hundreds/sec while stepping hidden, e.g. an Overseer run in a hidden
       // tab). A degenerate parent keeps the current canvas; the first visible
       // draw sees the true size and does one clean re-attach.
-      if ((dims.w !== parentW || dims.h !== parentH) && parentW >= 2 && parentH >= 2) {
+      if ((dims.w !== parentW || dims.h !== parentH) && parentW >= 2 && parentH >= 2 && !resizeAttachDeferred()) {
         // Re-attach WITHOUT falling back: the OLD canvas keeps receiving the
         // worker's presents until the fresh one is committed by the ack, so we
-        // keep blitting it (slightly mis-sized) instead of dropping to the CPU
-        // overlay — whose snapshot is ANCIENT in free mode (UI-sync off), which
-        // showed a frozen outdated frame for the whole handshake (the reported
-        // panel-resize freeze on Particle Life-class models).
+        // keep blitting it (SCALED — see the blit below) instead of dropping to
+        // the CPU overlay — whose snapshot is ANCIENT in free mode (UI-sync
+        // off), which showed a frozen outdated frame for the whole handshake
+        // (the reported panel-resize freeze on Particle Life-class models).
+        // Deferred during a splitter drag → ONE attach per settled size.
         maybeAttachAgentCanvas(true);
       }
       postAgentCamera();
@@ -4696,7 +4724,10 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
     if (agentComposite) {
       // agents drawn by the composite blit above
     } else if (agentDirect) {
-      if (showAgentsRef.current) ctx.drawImage(agentRenderCanvasRef.current!, 0, 0);
+      // SCALED (see the composite blit above): a no-op when the transferred
+      // canvas already matches, and keeps the live image filling the new box
+      // while a re-attach is pending (mid-drag / handshake gap).
+      if (showAgentsRef.current) ctx.drawImage(agentRenderCanvasRef.current!, 0, 0, parentW, parentH);
     } else if (showAgentsRef.current) {
       drawAgentsOverlay();
     }
@@ -6736,6 +6767,83 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
     window.addEventListener('resize', draw);
     return () => window.removeEventListener('resize', draw);
   }, [draw]);
+
+  // --- LAYOUT resize → immediate canvas re-size + redraw ---
+  //
+  // draw() is the ONE place that re-sizes every backing store (2D
+  // `canvas.width = parentW` + the cursor overlays, gl3d's
+  // `r.resize(cssW, cssH, dpr)`) AND does the direct-render OffscreenCanvas
+  // re-attach — but it only ran on step messages, canvas interactions and
+  // WINDOW resize. A side-panel splitter drag, or collapsing/expanding a panel
+  // or bar, changes the canvas's CSS size WITHOUT a window resize, so the CSS
+  // box grew/shrank while the backing store kept its old dimensions: the
+  // browser stretched the stale bitmap and it STAYED distorted until something
+  // else happened to call draw() (the next step message, or a click on the
+  // canvas). On a PAUSED sim that was indefinite — the reported "shrinks and
+  // remains like that until some interaction triggers a refresh".
+  //
+  // Three triggers, all funnelling into the same redraw:
+  //   1. the panel/bar collapse state (a LAYOUT effect → resized before paint,
+  //      so the stale bitmap is never even shown stretched for one frame);
+  //   2. the splitter drag handlers, which mutate `panel.style.width` directly
+  //      and so produce no React update at all;
+  //   3. a ResizeObserver on the canvas CONTAINER as the general catch-all
+  //      (browser zoom, font metrics, devtools, any future chrome).
+  // 1+2 are what make the fix independent of ResizeObserver delivery; 3 is what
+  // makes it complete.
+  const layoutDrawRaf = useRef(0);
+  const layoutSettleTimer = useRef(0);
+  /** rAF-coalesced canvas re-size + redraw, for CONTINUOUS layout changes (a
+   *  splitter drag). One draw per frame at most — exactly what a PLAYING sim
+   *  already does.
+   *
+   *  It ALSO opens the `layoutResizeUntilRef` window, which holds OFF the
+   *  direct-render OffscreenCanvas re-attach for the duration: a transferred
+   *  canvas has fixed dims, so tracking a drag exactly would mean one transfer
+   *  + one worker pipeline rebuild per frame (MEASURED: 26 `attachAgentCanvas`
+   *  messages over a 30-move drag on Particle Life). Instead the worker-
+   *  presented canvas is blitted SCALED (2D) / stretched by CSS (the 3D sphere
+   *  + voxel layers are `width/height: 100%`) so the picture stays right-sized
+   *  throughout, and the trailing timer below fires exactly ONE re-attach once
+   *  the size settles. */
+  const scheduleLayoutDraw = useCallback(() => {
+    layoutResizeUntilRef.current = performance.now() + LAYOUT_RESIZE_SETTLE_MS;
+    if (layoutSettleTimer.current) clearTimeout(layoutSettleTimer.current);
+    layoutSettleTimer.current = window.setTimeout(() => {
+      layoutSettleTimer.current = 0;
+      layoutResizeUntilRef.current = 0;   // window closed → the attach may run
+      const area = canvasAreaRef.current;
+      if (!area || area.clientWidth < 2 || area.clientHeight < 2) return;
+      drawRef.current();
+    }, LAYOUT_RESIZE_SETTLE_MS + 20);
+    if (layoutDrawRaf.current) return;
+    layoutDrawRaf.current = requestAnimationFrame(() => {
+      layoutDrawRaf.current = 0;
+      const area = canvasAreaRef.current;
+      // A hidden SimulatorView (always mounted behind `display: none`) and an
+      // occluded pane both measure 0×0 — never churn the attach paths on that;
+      // the first real measurement once it comes back draws once.
+      if (!area || area.clientWidth < 2 || area.clientHeight < 2) return;
+      drawRef.current();
+    });
+  }, []);
+  useEffect(() => () => {
+    if (layoutDrawRaf.current) cancelAnimationFrame(layoutDrawRaf.current);
+    if (layoutSettleTimer.current) clearTimeout(layoutSettleTimer.current);
+  }, []);
+
+  // (1) lives further down, next to the panel/bar state it depends on.
+
+  // (3) The catch-all. The observed element is the one draw() measures; the
+  // canvases are `width/height: 100%` inside it and it is `overflow: hidden`,
+  // so they can never feed back into its size (no observer loop).
+  useEffect(() => {
+    const area = canvasAreaRef.current;
+    if (!area || typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(scheduleLayoutDraw);
+    ro.observe(area);
+    return () => ro.disconnect();
+  }, [scheduleLayoutDraw]);
 
   // 3D Grid CA: create / dispose the WebGL2 voxel renderer when entering / leaving
   // a 3D model. The renderer binds to the sibling GL canvas; draw() routes to it
@@ -11014,6 +11122,24 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
   useEffect(() => { if (!overseerEnabled) setRightPanelTab('controls'); }, [overseerEnabled]);
   const [topBarOpen, setTopBarOpen] = useState(true);
   const [bottomBarOpen, setBottomBarOpen] = useState(true);
+
+  // (1) of the LAYOUT-resize triggers (see `scheduleLayoutDraw` above) — the
+  // panel / bar collapse state and the right-panel tab swap. DIRECT (not
+  // rAF-coalesced) and in a LAYOUT effect, so the canvas is re-sized and
+  // repainted in the very frame the layout changed: a discrete one-shot change
+  // needs no throttling, and doing it before paint means the stale bitmap is
+  // never shown stretched at all. Deliberately NOT dependent on ResizeObserver
+  // delivery.
+  useLayoutEffect(() => {
+    const area = canvasAreaRef.current;
+    if (!area || area.clientWidth < 2 || area.clientHeight < 2) return;
+    // A discrete change is the FINAL size — close any drag deferral so the
+    // direct-render re-attach runs now (a splitter drag that ends in a
+    // snap-close lands here and must not wait out the settle window).
+    layoutResizeUntilRef.current = 0;
+    drawRef.current();
+  }, [visible, leftPanelOpen, rightPanelOpen, topBarOpen, bottomBarOpen, rightPanelTab]);
+
   // --- Bottom-band collision: lift the capture stack over the transport bar ---
   // The bar and the bottom-right stack share one baseline (they read as one row
   // of chrome), but the bar is CENTRED + content-sized while the stack is
@@ -11151,6 +11277,11 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
                 lastW = Math.max(DRAG_MIN, startW + (ev.clientX - startX));
                 panel.style.width = lastW + 'px';
                 panel.style.minWidth = lastW + 'px';
+                // (2) of the LAYOUT-resize triggers: this mutates the DOM
+                // directly (no React update), so nothing else would re-size the
+                // canvas backing store until the next step/interaction — the
+                // canvas would stretch for the whole drag. rAF-coalesced.
+                scheduleLayoutDraw();
               };
               const onUp = () => {
                 document.removeEventListener('mousemove', onMove);
@@ -12319,6 +12450,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
               const onMove = (ev: MouseEvent) => {
                 lastW = Math.max(DRAG_MIN, startW - (ev.clientX - startX));
                 panel.style.width = lastW + 'px';
+                scheduleLayoutDraw();   // (2) — see the left panel's handle
               };
               const onUp = () => {
                 document.removeEventListener('mousemove', onMove);
