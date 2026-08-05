@@ -5385,6 +5385,22 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
     cursorDrawRaf.current = requestAnimationFrame(() => { cursorDrawRaf.current = null; drawCursorLayer(); });
   }, [drawCursorLayer]);
   useEffect(() => { gensPerFrameRef.current = unlimitedGens ? 100 : gensPerFrame; }, [gensPerFrame, unlimitedGens]);
+
+  // Lowering G/F must take effect NOW, not one batch from now. `gensPerFrame` is
+  // read at sendNextStep time, so a reduction otherwise only applies to the NEXT
+  // batch — and at a high G/F that next batch is exactly the multi-second one the
+  // user is trying to escape ("difficult to lower the G/F to a more reasonable
+  // value"). Cutting the in-flight batch short makes the new value the very next
+  // thing that happens. Only on a DECREASE: raising G/F asks for more work, and
+  // truncating the current batch to deliver it would be perverse.
+  const prevGensPerFrameRef = useRef(gensPerFrame);
+  useEffect(() => {
+    const prev = prevGensPerFrameRef.current;
+    prevGensPerFrameRef.current = gensPerFrame;
+    if (gensPerFrame < prev && playingRef.current && !overseerRunningRef.current) {
+      workerRef.current?.postMessage({ type: 'cancelStep' });
+    }
+  }, [gensPerFrame]);
   useEffect(() => { targetFpsRef.current = unlimitedFps ? 999999 : targetFps; }, [targetFps, unlimitedFps]);
   useEffect(() => { unlimitedFpsRef.current = unlimitedFps; }, [unlimitedFps]);
   useEffect(() => { unlimitedGensRef.current = unlimitedGens; }, [unlimitedGens]);
@@ -10483,6 +10499,15 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
     } else {
       // Stop: cancel any pending rAF
       if (nextStepRaf.current != null) { cancelAnimationFrame(nextStepRaf.current); nextStepRaf.current = null; }
+      // ...and ask the worker to cut the batch that is ALREADY RUNNING short.
+      // Pause is main-thread state, so without this the simulation keeps going
+      // until the in-flight batch finishes — at a high G/F that is the whole
+      // batch (measured 1.6 s on a 700x700 WebGPU model, >14 s on a 600x600 async
+      // CPU one). The worker stops at its next chunk boundary and still posts its
+      // one `stepped`, so nothing downstream changes. This is the single seam for
+      // EVERY pause path (button, Enter, Esc/Reset, an end condition, a Stop
+      // Event) because they all route through setPlaying(false).
+      workerRef.current?.postMessage({ type: 'cancelStep' });
       // A pause taken while the lossless throttle was holding would otherwise
       // leave the "waiting for encoder" indicator latched on — the tick that
       // clears it never runs again. (The encoder drains harmlessly while paused;

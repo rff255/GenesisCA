@@ -3119,6 +3119,14 @@ export function HelpView() {
             click a speed readout to open a vertical slider popover
             (Esc, an outside click, or moving away closes it; the &infin; checkbox keeps
             its meaning, and grabbing the slider while &infin; is on unticks it).
+            A high Gens/Frame no longer costs you the controls: the worker runs a
+            batch in short time-budgeted chunks, so <strong>Pause and a lowered
+            Gens/Frame take effect in about a tenth of a second</strong> however long
+            the batch would have been, and the page keeps repainting throughout
+            (before, a multi-second batch had to finish first, and on the WebGPU
+            grid it could also stall the browser&apos;s compositor so the whole UI
+            appeared frozen). The batch still reports one frame, so nothing about
+            indicators, recording or experiments changes.
             Capture (screenshot / recording) is <em>output</em>, so it lives in its own
             cluster at the <strong>bottom-right of the canvas, under the stats
             readout</strong> &mdash; see &ldquo;Where the capture controls live&rdquo; below.

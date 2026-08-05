@@ -343,6 +343,13 @@ interface InitMsg {
 // can match its batch acks and never mistake a residual play-pipeline /
 // mutation `stepped` for one of its own.
 interface StepMsg { type: 'step'; count: number; activeViewer: string; skipColorPass?: boolean; reqId?: number }
+/** Ask the in-flight step batch to stop at its next CHUNK BOUNDARY (see
+ *  STEP_CHUNK_BUDGET_MS). Pure control plane: it touches no simulation state, so
+ *  it is the ONE message handled ahead of the async-batch deferral guard —
+ *  deferring it would replay it after the batch it was meant to shorten. The
+ *  batch still posts exactly one `stepped`; it just carries fewer generations.
+ *  An Overseer batch (reqId set) is a FIXED-count run and ignores it. */
+interface CancelStepMsg { type: 'cancelStep' }
 interface PaintMsg {
   type: 'paint';
   /** `layer` (absent ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ 0) is the 3D Z coordinate; 2D paints omit it. */
@@ -674,7 +681,7 @@ interface SetAgentUiSyncMsg { type: 'setAgentUiSync'; on: boolean }
  *  refreshDisplay). */
 interface RefreshAgentDisplayMsg { type: 'refreshAgentDisplay' }
 
-type WorkerMsg = InitMsg | StepMsg | PaintMsg | PaintManualMsg | ResetMsg | RecompileMsg | UpdateModelAttrsMsg | UpdateLookupTableMsg | ImportImageMsg | ImportGridValuesMsg | UpdateIndicatorsMsg | GetStateMsg | LoadStateMsg | ReadRegionMsg | WriteRegionMsg | ClearRegionMsg | SetUseWasmMsg | SetUseWebGPUMsg | ReadbackWebGPUMsg | ColorPassMsg | SetRecordingMsg | AttachCanvasMsg | RequestColorsSnapshotMsg | SetInspectCellsMsg | RefreshDisplayMsg | SeedAgentsMsg | CreateAgentMsg | KillAgentsMsg | PaintAgentsMsg | ClearAgentsMsg | ReadAgentsMsg | PasteAgentsMsg | FormBondMsg | BreakBondMsg | GetAgentStateMsg | MoveAgentsMsg | NudgeAgentsMsg | SetAgentWasmBackedMsg | SetRngSeedMsg | SetSimLayersMsg | SetAgentSnapshotVelocityMsg | AttachAgentCanvasMsg | SetAgentCameraMsg | SetAgentUiSyncMsg | RefreshAgentDisplayMsg | GetDiagnosticsMsg | E1bCountersMsg | GraphIndicatorStatsMsg | CompositeReadbackMsg | AttachVoxelCanvasMsg | SetGridCameraMsg | SetGridUiSyncMsg | SetGridVizMsg | RefreshGridDisplayMsg | VoxelReadbackMsg;
+type WorkerMsg = InitMsg | StepMsg | CancelStepMsg | PaintMsg | PaintManualMsg | ResetMsg | RecompileMsg | UpdateModelAttrsMsg | UpdateLookupTableMsg | ImportImageMsg | ImportGridValuesMsg | UpdateIndicatorsMsg | GetStateMsg | LoadStateMsg | ReadRegionMsg | WriteRegionMsg | ClearRegionMsg | SetUseWasmMsg | SetUseWebGPUMsg | ReadbackWebGPUMsg | ColorPassMsg | SetRecordingMsg | AttachCanvasMsg | RequestColorsSnapshotMsg | SetInspectCellsMsg | RefreshDisplayMsg | SeedAgentsMsg | CreateAgentMsg | KillAgentsMsg | PaintAgentsMsg | ClearAgentsMsg | ReadAgentsMsg | PasteAgentsMsg | FormBondMsg | BreakBondMsg | GetAgentStateMsg | MoveAgentsMsg | NudgeAgentsMsg | SetAgentWasmBackedMsg | SetRngSeedMsg | SetSimLayersMsg | SetAgentSnapshotVelocityMsg | AttachAgentCanvasMsg | SetAgentCameraMsg | SetAgentUiSyncMsg | RefreshAgentDisplayMsg | GetDiagnosticsMsg | E1bCountersMsg | GraphIndicatorStatsMsg | CompositeReadbackMsg | AttachVoxelCanvasMsg | SetGridCameraMsg | SetGridUiSyncMsg | SetGridVizMsg | RefreshGridDisplayMsg | VoxelReadbackMsg;
 
 // ---------------------------------------------------------------------------
 // C3 (P4) — RUNTIME FALLBACK LOG
@@ -2731,6 +2738,50 @@ function endAsyncStepBatch(): void {
   const q = deferredDuringAsyncBatch;
   deferredDuringAsyncBatch = [];
   for (const m of q) self.onmessage!.call(self as never, { data: m } as MessageEvent<WorkerMsg>);
+}
+
+// ── Interruptible step batches (the high-G/F responsiveness fix) ────────────
+/** A step batch runs `count` generations back to back. At a high gens/frame that
+ *  is SECONDS of uninterrupted work, and the measurements that motivated this
+ *  showed it costs the user two different things:
+ *    1. CONTROL LATENCY. Pause / a lower G/F / any mutation can only land after
+ *       the whole batch (they are main-thread state or deferred messages), so
+ *       the user clicks Pause and waits — measured 1.6 s on a 700² WebGPU model
+ *       and >14 s on a 600² async CPU model, both at G/F 200.
+ *    2. FRAME STARVATION on the WebGPU grid. With no stop events the batch never
+ *       awaits, so ~200 compute dispatches are encoded as fast as JS can submit
+ *       them; the GPU queue saturates and the browser cannot COMPOSITE —
+ *       measured rAF gaps of 2589 ms with the main thread only 4 % busy. Nothing
+ *       repaints, so the whole page (nav/transport bar included) reads as frozen.
+ *       A CPU-target batch of the same length showed 64 fps / 93 ms worst gap,
+ *       which is what identifies this half as GPU-specific.
+ *  So every batch loop now runs in TIME-BUDGETED CHUNKS: it yields to the event
+ *  loop (and, on the GPU, waits for submitted work to drain) roughly every
+ *  STEP_CHUNK_BUDGET_MS. That gives the compositor a slot, lets queued messages
+ *  land, and bounds cancel latency — without changing what a batch computes. */
+const STEP_CHUNK_BUDGET_MS = 32;
+
+/** Set by `cancelStep`, cleared at the top of every batch. */
+let stepCancelRequested = false;
+
+/** A MessageChannel round-trip is a macrotask with no timer clamping (~0.05 ms
+ *  vs setTimeout's 1–4 ms), so yielding ~30×/s costs well under 1 % of a long
+ *  batch while still draining the task queue. */
+const stepYieldChannel = new MessageChannel();
+let stepYieldResolve: (() => void) | null = null;
+stepYieldChannel.port1.onmessage = () => { const r = stepYieldResolve; stepYieldResolve = null; r?.(); };
+function yieldToEventLoop(): Promise<void> {
+  return new Promise<void>(resolve => { stepYieldResolve = resolve; stepYieldChannel.port2.postMessage(0); });
+}
+
+/** Per-batch chunk pacer. `due()` is a pure time check so the hot loop pays one
+ *  performance.now() per generation and nothing else. */
+function makeChunkPacer() {
+  let mark = performance.now();
+  return {
+    due(): boolean { return performance.now() - mark >= STEP_CHUNK_BUDGET_MS; },
+    reset(): void { mark = performance.now(); },
+  };
 }
 
 function flushDeferredAgentGpuMsgs(): void {
@@ -6307,6 +6358,37 @@ function sendColors(): void {
 self.onmessage = (e: MessageEvent<WorkerMsg>) => {
   const msg = e.data;
 
+  // THE ONE MESSAGE THAT MUST NOT BE DEFERRED. `cancelStep` exists to shorten
+  // the batch that is running RIGHT NOW, so pushing it onto the deferral queue
+  // below would replay it after that batch had already finished — a no-op. It is
+  // safe ahead of every guard precisely because it is pure control plane: it
+  // sets a flag the batch loops poll at their chunk boundaries and touches no
+  // grid, agent or GPU state.
+  if (msg.type === 'cancelStep') {
+    stepCancelRequested = true;
+    // ...and DISCARD play-loop step batches that were already queued when the
+    // cancel arrived. The main thread can legitimately have more than one batch
+    // outstanding: every `sendColors()` posts a `stepped`, including ones from
+    // init / reset / a colour pass / a mutation, and the play loop's handler
+    // treats any `stepped` as "my batch finished" — it clears `pendingStep` and
+    // issues another step. Harmless while batches simply run back to back, but
+    // once a batch can be CANCELLED that stale queued batch is replayed straight
+    // afterwards and runs to completion, so the user sees Pause take effect and
+    // then the simulation lurch forward by a whole batch anyway (measured: a
+    // 3.2 s stall with 200 extra generations after a cancel that had correctly
+    // cut its own batch to 54). Filtering here — at the moment the cancel is
+    // processed — removes exactly the batches issued under the intent the user
+    // just revoked; a step that arrives AFTER this point is the new intent and
+    // is kept. Overseer batches (reqId set) are never dropped: the runtime is
+    // awaiting that exact reqId and would hang.
+    if (deferredDuringAsyncBatch.length > 0) {
+      deferredDuringAsyncBatch = deferredDuringAsyncBatch.filter(
+        m => m.type !== 'step' || m.reqId !== undefined,
+      );
+    }
+    return;
+  }
+
   // P0: an ASYNC step batch is running (WebGPU grid / WebGPU agents) — defer
   // EVERYTHING until it settles, reproducing the synchronous batch loop's
   // can't-be-interleaved semantics (see endAsyncStepBatch). Without this, a
@@ -6610,6 +6692,14 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       activeViewer = msg.activeViewer; syncActiveViewerToMemory();
       if (webgpuActive && webgpuRuntime) uploadActiveViewer(webgpuRuntime, viewerIdMap[activeViewer] ?? -1);
 
+      // Interruptible batches: a fresh slate per batch, and only the PLAY loop's
+      // batches may be shortened. An Overseer batch carries a reqId and is a
+      // FIXED-count run (ovRunGenerations is the ensemble's fixed developmental
+      // time point — a short batch would silently bias the statistics), so it
+      // yields for responsiveness but never cancels.
+      stepCancelRequested = false;
+      const cancellable = msg.reqId === undefined;
+
       if (webgpuActive) {
         // Async WebGPU path: dispatch N steps + finalize each (we need stop-flag
         // readback per-step to honour the same first-stop-wins semantics as JS).
@@ -6625,7 +6715,33 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
           // sees any pending stop within this batch (otherwise the play loop
           // would advance past it).
           const k = Math.max(1, webgpuStopCheckInterval | 0);
+          // ── GPU chunk boundary (frame starvation + cancel latency) ────────
+          // THE MEASUREMENT THAT SHAPES THIS: without a stop event this loop
+          // never awaits, so it ENCODES all `count` generations in a few ms and
+          // the batch's whole wall time is the GPU draining inside the final
+          // finalize. A wall-clock pacer therefore never fires here — the
+          // boundary has to be driven by how much work has been SUBMITTED, not
+          // by how long JS has been running. Draining every `gensPerDrain`
+          // generations applies real backpressure, which is what lets the
+          // browser composite (measured 2589 ms with no frames served before).
+          // `gensPerDrain` is measured, not guessed: after each drain we know
+          // what those generations actually cost on the GPU and extrapolate to
+          // STEP_CHUNK_BUDGET_MS, so a cheap grid keeps long chunks (and a batch
+          // that fits in one chunk never drains at all) while an expensive one
+          // self-limits to a single generation.
+          let sinceDrain = 0;
+          let gensPerDrain = 4;
           for (let i = 0; i < msg.count; i++) {
+            if (sinceDrain >= gensPerDrain) {
+              const drainT0 = performance.now();
+              if (webgpuRuntime) { try { await webgpuRuntime.device.queue.onSubmittedWorkDone(); } catch { /* device lost — the dispatch below reports it */ } }
+              const drainMs = performance.now() - drainT0;
+              await yieldToEventLoop();
+              if (cancellable && stepCancelRequested) break;
+              gensPerDrain = Math.max(1, Math.min(64, Math.round(sinceDrain * STEP_CHUNK_BUDGET_MS / Math.max(drainMs, 0.25))));
+              sinceDrain = 0;
+            }
+            sinceDrain++;
             // Bond-Graph Agents on a WebGPU grid (PR5 ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â independent targets,
             // C-D1). ONE generation = the closed agentÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬Âgrid loop, same ordering
             // as the JS/WASM branch (agents step BEFORE the cell step), but with
@@ -6761,6 +6877,8 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       if (agentStore && agentTarget === 'webgpu' && agentWebgpuRuntime) {
         asyncStepBatchInFlight = true;   // P0: no message may interleave this batch
         (async () => {
+          // Generations still owed when a resident slice bails part-way through.
+          let remainingCount = msg.count;
           // PR7c: fully GPU-resident batch when the model qualifies — one queue
           // submit for ALL generations + one per-frame readback (no per-gen CPU
           // work). On any failure fall through to the per-generation path below.
@@ -6773,10 +6891,34 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
             // counts ONCE per gen: the resident batch skips its own bump and the
             // cell-step loop does it (agents-only ⇒ gridSteps false ⇒ batch counts).
             const gridSteps = gridCellsEnabled && simulateCells && !!stepFn;
-            const ok = await runAgentBatchResident(msg.count, !gridSteps);
-            if (ok) {
+            // The resident batch's value is ONE submit for many generations, so
+            // it is also the worst frame-starver at a high G/F. Slice it into
+            // ~STEP_CHUNK_BUDGET_MS worth of generations instead: residency is
+            // preserved WITHIN a slice (the submit + the once-per-frame readback
+            // still cover many generations), while the compositor and any queued
+            // `cancelStep` get a slot between slices. `slice` is measured, not
+            // guessed — the first one is deliberately small and each subsequent
+            // size is extrapolated from the previous slice's real cost, so a
+            // cheap model still runs long slices and an expensive one self-limits.
+            let doneGens = 0;
+            let slice = Math.min(msg.count, 8);
+            let residentOk = true;
+            while (doneGens < msg.count) {
+              const n = Math.min(slice, msg.count - doneGens);
+              const t0 = performance.now();
+              residentOk = await runAgentBatchResident(n, !gridSteps);
+              if (!residentOk) break;   // fall through to the per-gen path for the REMAINDER
+              if (gridSteps) for (let i = 0; i < n; i++) runStep(true);
+              doneGens += n;
+              const dt = performance.now() - t0;
+              slice = Math.max(1, Math.min(msg.count, Math.round(n * STEP_CHUNK_BUDGET_MS / Math.max(dt, 0.25))));
+              if (doneGens < msg.count) {
+                await yieldToEventLoop();
+                if (cancellable && stepCancelRequested) break;
+              }
+            }
+            if (residentOk) {
               if (gridSteps) {
-                for (let i = 0; i < msg.count; i++) runStep(true);
                 // Deferred indicator scan (runStep used deferIndicatorScan): one
                 // O(total) scan at the batch tail, identical to per-gen scanning
                 // (only the last gen's values are observed).
@@ -6791,9 +6933,22 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
               sendColors();
               return;
             }
+            // A slice FAILED: the generations it did are already committed, so the
+            // per-gen fallback below must only cover what is left.
+            remainingCount = msg.count - doneGens;
           }
           let stoppedByEvent: string | null = null;
-          for (let i = 0; i < msg.count; i++) {
+          const pacer = makeChunkPacer();
+          for (let i = 0; i < remainingCount; i++) {
+            // Chunk boundary — this loop already awaits a readback per generation
+            // (so the GPU never runs away here), but a 200-generation batch is
+            // still one uninterruptible unit of work: yield so a queued
+            // `cancelStep` can land and the main thread can repaint.
+            if (i > 0 && pacer.due()) {
+              await yieldToEventLoop();
+              if (cancellable && stepCancelRequested) break;
+              pacer.reset();
+            }
             if (simulateAgents) {
               const ran = await runAgentStepWebGPU();
               if (!ran) runAgentStep();   // GPU bailed (hash overflow / failure) ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ JS this step
@@ -6836,9 +6991,11 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
         break;
       }
 
-      let stoppedByEvent: string | null = null;
-      for (let i = 0; i < msg.count; i++) {
-        // Bond-Graph Agents ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â one generation = the closed agentÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬Âgrid loop:
+      // ONE generation of the JS/WASM path, extracted VERBATIM so the
+      // synchronous single-step path and the chunked multi-generation path below
+      // cannot drift. Returns the stop message when a Stop Event fired, else null.
+      const runOneGeneration = (): string | null => {
+        // Bond-Graph AgentsÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â one generation = the closed agentÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬Âgrid loop:
         //  (gather) agents SampleField the grid as of the previous cell step,
         //  (behave) run behaviourStep + integrate forces + the structural phase,
         //  (deposit) AffectCellsUnder / SecreteToField write the cell READ
@@ -6858,31 +7015,70 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
         // run (agents-only model, or the Layers panel froze the grid) an agent
         // step still IS a generation, or the counter sits at 0 forever.
         else if (agentStore && simulateAgents) advanceGeneration();
-        if (agentStopIdx !== 0) { stoppedByEvent = stopMessages[agentStopIdx - 1] ?? `Stop event #${agentStopIdx - 1}`; stopFlag[0] = 0; break; }
+        if (agentStopIdx !== 0) { stopFlag[0] = 0; return stopMessages[agentStopIdx - 1] ?? `Stop event #${agentStopIdx - 1}`; }
         const rawStop = stopFlag[0] ?? 0;
         if (rawStop !== 0) {
           const idx = rawStop - 1;
-          stoppedByEvent = stopMessages[idx] ?? `Stop event #${idx}`;
           stopFlag[0] = 0;
-          break;
+          return stopMessages[idx] ?? `Stop event #${idx}`;
         }
+        return null;
+      };
+
+      // The batch TAIL. A chunk boundary is NOT a batch boundary: the indicator
+      // scan, the colour pass and the single `stepped` all still happen exactly
+      // once, here, at the true end of the batch — so chunking changes nothing an
+      // observer (chart history, end conditions, recording, the Overseer) can see.
+      const finishBatch = (stoppedByEvent: string | null): void => {
+        // Deferred indicator scan (see runStep's deferIndicatorScan): one O(total)
+        // scan at the batch tail instead of per generation — runs on the FINAL
+        // post-batch state, identical to what per-gen scanning would have shipped.
+        if (indicatorScanPending) {
+          if (linkedDefs.length > 0) computeLinkedIndicatorsFromBuffer();
+          if (hasSpatialIndicators) computeSpatialIndicators();
+          indicatorScanPending = false;
+        }
+        // Post-step-batch colour pass: sparse-safe ("Skip Isolated Empty Cells") —
+        // only steps ran since the last pass, so inactive cells' colours are
+        // provably unchanged. Every other runColorPass call site stays FULL.
+        if (stepFn && gridCellsEnabled && !msg.skipColorPass) runColorPass(true);
+        sendColors();
+        if (stoppedByEvent !== null) {
+          self.postMessage({ type: 'stopEvent', message: stoppedByEvent, reqId: msg.reqId });
+        }
+      };
+
+      if (msg.count > 1) {
+        // Multi-generation batch — run it in time-budgeted chunks so Pause, a
+        // lower G/F and every queued mutation land within ~one chunk instead of
+        // waiting out the whole batch (measured >14 s on a 600x600 async CPU model
+        // at G/F 200). The deferral this arms is NOT a new restriction: in the old
+        // fully-synchronous loop those same messages simply waited in the event
+        // loop until the batch's task ended, and `endAsyncStepBatch` replays them
+        // in order after `stepped` is posted — the same observable sequence.
+        asyncStepBatchInFlight = true;   // P0: no message may interleave this batch
+        (async () => {
+          let stoppedByEvent: string | null = null;
+          const pacer = makeChunkPacer();
+          for (let i = 0; i < msg.count; i++) {
+            if (i > 0 && pacer.due()) {
+              await yieldToEventLoop();
+              if (cancellable && stepCancelRequested) break;
+              pacer.reset();
+            }
+            stoppedByEvent = runOneGeneration();
+            if (stoppedByEvent !== null) break;
+          }
+          finishBatch(stoppedByEvent);
+        })().catch(e => {
+          self.postMessage({ type: 'error', message: 'Step batch failed: ' + ((e as Error)?.message || e) });
+        }).finally(endAsyncStepBatch);
+        break;
       }
-      // Deferred indicator scan (see runStep's deferIndicatorScan): one O(total)
-      // scan at the batch tail instead of per generation — runs on the FINAL
-      // post-batch state, identical to what per-gen scanning would have shipped.
-      if (indicatorScanPending) {
-        if (linkedDefs.length > 0) computeLinkedIndicatorsFromBuffer();
-        if (hasSpatialIndicators) computeSpatialIndicators();
-        indicatorScanPending = false;
-      }
-      // Post-step-batch colour pass: sparse-safe ("Skip Isolated Empty Cells") —
-      // only steps ran since the last pass, so inactive cells' colours are
-      // provably unchanged. Every other runColorPass call site stays FULL.
-      if (stepFn && gridCellsEnabled && !msg.skipColorPass) runColorPass(true);
-      sendColors();
-      if (stoppedByEvent !== null) {
-        self.postMessage({ type: 'stopEvent', message: stoppedByEvent, reqId: msg.reqId });
-      }
+
+      // G/F 1 (the default): the historical fully-synchronous path, untouched —
+      // no promise, no deferral, no chunk bookkeeping.
+      finishBatch(runOneGeneration());
       break;
     }
 
