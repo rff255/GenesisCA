@@ -1666,6 +1666,15 @@ export function HelpView() {
             &mdash; every one of them is tabulated under &ldquo;Engine capability matrix&rdquo; below).
           </p>
           <p className={styles.p}>
+            <strong>Copying the readout.</strong> Compatibility and Generation Pipeline are read-only
+            reports you will often want to paste into a bug report or a chat. Their text is freely
+            selectable, and each section header carries a <code>&#x29C9; Copy</code> button that
+            renders the <em>whole</em> section as clean plain text &mdash; every engine verdict with
+            its class-tagged reasons, or every pipeline phase with its owner, tempo and detail
+            (inactive phases included, as &ldquo;off &mdash; needs X&rdquo;). The text is built from
+            the same data the panel draws, so a pasted report always matches what you were looking at.
+          </p>
+          <p className={styles.p}>
             A common misreading this clears up: <em>bonds do not prevent WebGPU</em>. A bonded or
             graph-rewriting model runs on the WebGPU agent target perfectly well &mdash; it just
             forfeits <em>GPU residency</em> (class F), because applying a bond form/break/rewire or a

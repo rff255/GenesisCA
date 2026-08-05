@@ -35,6 +35,61 @@
   color: var(--color-text-muted, #8fa3b8);
 }
 
+/* A small ghost action pinned to the right of a collapsible section's title row
+ * (currently the Copy buttons on the read-only Compatibility / Generation
+ * Pipeline readouts). It lives INSIDE the click-to-toggle header, so its own
+ * handler must stopPropagation — see CopyButton in PropertiesPanelContent. */
+.sectionAction {
+  margin-left: auto;
+  flex: 0 0 auto;
+  padding: 1px 6px;
+  background: transparent;
+  /* --color-widget-border is the canonical input/button outline token (the one
+   * .textInput uses); the GLYPH takes --color-text-tertiary rather than
+   * --color-text-muted for the reason recorded on .dragHandle below — muted
+   * collapses on both shipped panel surfaces, tertiary reads clearly on both
+   * (Nocturne #908d83 on #16181d, Blender #989898 on #3d3d3d). */
+  border: 1px solid var(--color-widget-border);
+  border-radius: var(--radius-sm);
+  color: var(--color-text-tertiary);
+  font-family: inherit;
+  font-size: 0.56rem;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: none;
+  line-height: 1.7;
+  cursor: pointer;
+  transition: color var(--duration-base), border-color var(--duration-base), background var(--duration-base);
+}
+.sectionAction:hover {
+  color: var(--color-emphasis);
+  border-color: var(--color-accent);
+  background: var(--color-accent-soft);
+}
+.sectionActionDone {
+  color: #5cbf7a;
+  border-color: rgba(92, 191, 122, 0.5);
+  background: rgba(92, 191, 122, 0.12);
+}
+.sectionActionFail {
+  color: #e0605a;
+  border-color: rgba(224, 96, 90, 0.5);
+  background: rgba(224, 96, 90, 0.12);
+}
+
+/* Read-only informational readouts (Compatibility / Generation Pipeline) whose
+ * text users copy into bug reports and chats. Selection already worked — the
+ * only `user-select: none` in this panel is on the click-to-toggle section
+ * TITLE rows — but pinning it here makes the intent explicit and insulates the
+ * blocks from any future inherited `none`, and the text cursor advertises that
+ * the region is selectable. Applied to READOUT bodies only, never to a region
+ * containing sliders / reorder handles / drag targets. */
+.selectableText {
+  user-select: text;
+  -webkit-user-select: text;
+  cursor: text;
+}
+
 /* Group heading — a more prominent divider than .sectionTitle, used to separate
  * top-level layers of a panel (e.g. "CA Grid" vs "Agents" in the Mappings panel
  * when a model has both topologies). */

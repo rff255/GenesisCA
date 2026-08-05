@@ -32,7 +32,7 @@ import { resolveEngines, engineFlags, type LayerResolution } from '../../model/e
 import { resolveAgentProfile, applyCapabilityEdit } from '../../model/agentCapabilities';
 import { isGraphFrequencyMetric, type GraphMetric } from '../../simulator/engine/graphMetrics';
 import styles from './PanelContent.module.css';
-import { useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react';
 
 function newCondId(): string {
   return `ec_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`;
@@ -58,12 +58,16 @@ function writeCollapsed(id: string, collapsed: boolean) {
     localStorage.setItem(COLLAPSE_LS_KEY, JSON.stringify([...s]));
   } catch { /* storage unavailable — session-only collapse */ }
 }
-function CollapsibleSection({ id, title, bare = false, children }: {
+function CollapsibleSection({ id, title, bare = false, action, children }: {
   id: string;
   title: string;
   /** bare: no own `.section` wrapper — the child brings its own section chrome
    *  (the IndicatorsPanelSection case, with its internal title suppressed). */
   bare?: boolean;
+  /** Optional right-aligned control in the title row (the Copy buttons on the
+   *  read-only readouts). It sits INSIDE the click-to-toggle header, so the
+   *  control's own onClick must stopPropagation — see CopyButton. */
+  action?: ReactNode;
   children: ReactNode;
 }) {
   const [collapsed, setCollapsed] = useState(() => readCollapsedSet().has(id));
@@ -76,11 +80,71 @@ function CollapsibleSection({ id, title, bare = false, children }: {
     >
       <span className={styles.sectionChevron} style={collapsed ? { transform: 'rotate(-90deg)' } : undefined}>▾</span>
       {title}
+      {action}
     </div>
   );
   const body = <div style={collapsed ? { display: 'none' } : undefined}>{children}</div>;
   if (bare) return <>{titleRow}{body}</>;
   return <div className={styles.section}>{titleRow}{body}</div>;
+}
+
+// --- Copy-to-clipboard action -----------------------------------------------
+// The Compatibility / Generation Pipeline readouts are the two things users
+// paste into bug reports and chats. Their text was always SELECTABLE (the only
+// `user-select: none` in this panel is on the click-to-toggle section titles),
+// but hand-dragging a selection over them yields a jumbled string: the content
+// is a dense stack of flex rows whose ✓/✗ marks, S/R/F/C class tags, tempo
+// chips and row indices interleave with the prose, in a ~300px column that has
+// to autoscroll. So each section also gets a Copy button that renders the WHOLE
+// section as clean plain text FROM THE SAME DATA the components render (never
+// by scraping the DOM — a DOM scrape would drift the moment a chip moves).
+//
+// `getText` is called ONLY on click, so the (macro-aware, gate-calling) model
+// derivations cost nothing per render — no second useMemo beside the block's.
+function legacyCopy(text: string): boolean {
+  try {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.setAttribute('readonly', '');
+    ta.style.cssText = 'position:fixed;top:-1000px;opacity:0';
+    document.body.appendChild(ta);
+    ta.select();
+    const ok = document.execCommand('copy');
+    document.body.removeChild(ta);
+    return ok;
+  } catch { return false; }
+}
+
+function CopyButton({ getText, title }: { getText: () => string; title: string }) {
+  const [state, setState] = useState<'idle' | 'ok' | 'fail'>('idle');
+  const timer = useRef<number | null>(null);
+  useEffect(() => () => { if (timer.current !== null) window.clearTimeout(timer.current); }, []);
+  const flash = (s: 'ok' | 'fail') => {
+    setState(s);
+    if (timer.current !== null) window.clearTimeout(timer.current);
+    timer.current = window.setTimeout(() => { setState('idle'); timer.current = null; }, 1500);
+  };
+  const onClick = (e: ReactMouseEvent) => {
+    // The title row toggles the section — this button must not collapse it.
+    e.stopPropagation();
+    const text = getText();
+    // navigator.clipboard needs a secure context (localhost counts); the
+    // textarea+execCommand fallback covers a plain-http LAN preview.
+    if (navigator.clipboard?.writeText) {
+      navigator.clipboard.writeText(text).then(() => flash('ok'), () => flash(legacyCopy(text) ? 'ok' : 'fail'));
+    } else {
+      flash(legacyCopy(text) ? 'ok' : 'fail');
+    }
+  };
+  const cls = state === 'ok' ? styles.sectionActionDone : state === 'fail' ? styles.sectionActionFail : '';
+  return (
+    <button
+      type="button"
+      className={`${styles.sectionAction} ${cls}`}
+      onClick={onClick}
+      title={state === 'fail' ? 'Copy failed — select the text and copy manually' : title}
+    >{state === 'ok' ? '✓ Copied' : state === 'fail' ? '✗ Failed' : '⧉ Copy'}</button>
+  );
 }
 
 // --- C4 (P1) — the ENGINE radio ---------------------------------------------
@@ -255,12 +319,52 @@ function ReasonLine({ reason }: { reason: Reason }) {
   );
 }
 
+const COMPAT_LEGEND =
+  'Legend: S semantics (the engine cannot express it) · R reproducibility (runs, not bit-reproducibly) · '
+  + 'F fast path (same results, different speed) · C capacity (a limit with a number).';
+
+/** The Compatibility section as clean plain text — the copy-button counterpart
+ *  of `CompatibilityBlock`, built from the SAME `diagnoseTargets` /
+ *  `analyzeGeometryTaint` results (kept directly beside it so a change to one
+ *  is a change under the other's nose). Called on click only. */
+function compatibilityToText(model: CAModel): string {
+  const diagnosis = diagnoseTargets(model);
+  const out: string[] = [];
+  out.push(`Compatibility — ${model.properties.name || 'Untitled Model'}`);
+  out.push(`Reproducibility contract: ${REPRODUCIBILITY_LABEL[diagnosis.contract]}`);
+  for (const layer of diagnosis.layers) {
+    out.push('');
+    const status = layer.requested === layer.resolved
+      ? `${layer.selected === 'auto' ? 'Auto → ' : ''}running ${ENGINE_LABEL[layer.resolved]}`
+      : `requested ${ENGINE_LABEL[layer.requested]} → running ${ENGINE_LABEL[layer.resolved]}`;
+    out.push(`${layer.label.toUpperCase()} — ${status}`);
+    for (const v of layer.verdicts) {
+      out.push(`  ${v.ok ? '✓' : '✗'} ${ENGINE_LABEL[v.engine]}${v.engine === layer.resolved ? '  (running)' : ''}`);
+      for (const r of [...v.blockers, ...v.notes]) {
+        out.push(`      [${REASON_CLASS_TAG[r.class]}] ${r.text}`);
+      }
+    }
+    if (layer.contractViolation) out.push(`  ⚠ Contract: ${layer.contractViolation.text}`);
+  }
+  const taint = analyzeGeometryTaint(model);
+  if (taint.applicable) {
+    out.push('');
+    out.push(`${taint.presentational ? 'Layout is presentation' : 'Layout is part of your rule'} — `
+      + (taint.presentational ? PRESENTATION_ONLY_EXPLAINER : GEOMETRY_PROMOTED_EXPLAINER));
+    if (!taint.presentational && taint.witness) out.push(`  e.g. ${taint.witness.summary}`);
+  }
+  out.push('');
+  out.push(COMPAT_LEGEND);
+  out.push('Computed from the same checks the compilers enforce.');
+  return out.join('\n');
+}
+
 function CompatibilityBlock({ model }: { model: CAModel }) {
   // The agent gates flatten the agent graph, so memoise on the model.
   const diagnosis = useMemo(() => diagnoseTargets(model), [model]);
   if (diagnosis.layers.length === 0) return null;
   return (
-    <div className={styles.fieldGroup}>
+    <div className={`${styles.fieldGroup} ${styles.selectableText}`}>
       {diagnosis.layers.map(layer => (
         <div key={layer.layer} style={{ marginBottom: 12 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 8, marginBottom: 4 }}>
@@ -424,6 +528,42 @@ function PhaseRow({ phase, index }: { phase: PipelinePhase; index: number }) {
   );
 }
 
+/** The Generation Pipeline section as clean plain text — the copy-button
+ *  counterpart of `GenerationPipelineBlock`, built from the SAME
+ *  `describeGenerationPipeline` / `describePipelineGroups` results. Grouped
+ *  phases keep their bracket as a header line + an extra indent, so the force
+ *  loop still reads as a loop. Called on click only. */
+function pipelineToText(model: CAModel): string {
+  const phases = describeGenerationPipeline(model);
+  const groups = describePipelineGroups(model);
+  const out: string[] = [];
+  out.push(`Generation Pipeline — ${model.properties.name || 'Untitled Model'}`);
+  out.push('Legend: [graph] = your graph · [engine] = the engine · "off — needs X" = inactive for this model.');
+  out.push('');
+  let lastGroup: string | undefined;
+  let n = 0;
+  let anyPresentation = false;
+  for (const p of phases) {
+    if (p.group !== lastGroup) {
+      if (p.group) {
+        const g = groups[p.group];
+        out.push(`  -- ${g?.title ?? p.group}${g?.detail ? ` (${g.detail})` : ''} --`);
+      }
+      lastGroup = p.group;
+    }
+    const pad = p.group ? '    ' : '  ';
+    const tags = `(${TEMPO_LABEL[p.tempo]})${p.presentation ? '  [presentation]' : ''}`;
+    if (p.presentation) anyPresentation = true;
+    out.push(`${pad}${String(++n).padStart(2, ' ')}. ${p.owner === 'graph' ? '[graph] ' : '[engine]'} ${p.title}  ${tags}`);
+    if (!p.active) out.push(`${pad}      off — needs ${p.capability ?? 'a capability'}`);
+    else if (p.detail) out.push(`${pad}      ${p.detail}`);
+  }
+  out.push('');
+  if (anyPresentation) out.push(`[presentation] = ${PRESENTATION_ONLY_LABEL}. ${PRESENTATION_ONLY_EXPLAINER}`);
+  out.push('Order and activity come from the same resolvers the engine consults, so this list cannot drift from what runs.');
+  return out.join('\n');
+}
+
 function GenerationPipelineBlock({ model }: { model: CAModel }) {
   // Both are pure model derivations; the phase walk is macro-aware, so memoise.
   const phases = useMemo(() => describeGenerationPipeline(model), [model]);
@@ -441,7 +581,7 @@ function GenerationPipelineBlock({ model }: { model: CAModel }) {
   let n = 0;
 
   return (
-    <div className={styles.fieldGroup}>
+    <div className={`${styles.fieldGroup} ${styles.selectableText}`}>
       <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', fontSize: '0.56rem', color: '#8a8f99', paddingBottom: 5, borderBottom: '1px solid #22252c', marginBottom: 3 }}>
         <span><i style={{ display: 'inline-block', width: 3, height: 10, borderRadius: 2, background: '#e8a13a', verticalAlign: -1, marginRight: 4 }} />your graph</span>
         <span><i style={{ display: 'inline-block', width: 3, height: 10, borderRadius: 2, background: '#6b7280', verticalAlign: -1, marginRight: 4 }} />engine</span>
@@ -1451,7 +1591,11 @@ export function PropertiesPanelContent({ mode = 'list' }: PanelContentProps = {}
           Sits directly under Execution because it explains the Compile Target
           radios there; kept as its OWN collapsible section rather than nested
           inside the (already long) Execution body. */}
-      <CollapsibleSection id="compatibility" title="Compatibility">
+      <CollapsibleSection
+        id="compatibility"
+        title="Compatibility"
+        action={<CopyButton title="Copy the whole compatibility report as plain text" getText={() => compatibilityToText(model)} />}
+      >
         <CompatibilityBlock model={model} />
       </CollapsibleSection>
 
@@ -1459,7 +1603,11 @@ export function PropertiesPanelContent({ mode = 'list' }: PanelContentProps = {}
           Directly under Compatibility: C1 answers "which engine?", C2 answers
           "what does it do?". Shown for every model — a grid-only model simply
           gets the short list. */}
-      <CollapsibleSection id="pipeline" title="Generation Pipeline">
+      <CollapsibleSection
+        id="pipeline"
+        title="Generation Pipeline"
+        action={<CopyButton title="Copy the whole generation pipeline as plain text" getText={() => pipelineToText(model)} />}
+      >
         <GenerationPipelineBlock model={model} />
       </CollapsibleSection>
 
