@@ -1897,6 +1897,25 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
     (saved.current.screenshotScope as RecordScope | undefined) === 'view' ? 'view' : 'simulation');
   const screenshotScopeRef = useRef<RecordScope>(screenshotScope);
   useEffect(() => { screenshotScopeRef.current = screenshotScope; }, [screenshotScope]);
+  // Cursor / highlight overlays in a capture. Since the cursor-overlay rework the
+  // brush cursor and the highlight rings live on TWO dedicated canvases ABOVE the
+  // scene canvas (`cursorNeg` = white silhouettes composited by the CSS
+  // mix-blend-mode: difference, `cursorHl` = the coloured rings), so a capture —
+  // which reads the SCENE canvas — never contains them. Opt-in to composite them
+  // back in. ONE three-state ladder rather than two booleans: the rings mark what
+  // the brush would affect, so "cursor without rings" is not a state anyone wants,
+  // and a monotone Off < Highlights < All axis fits one popover row.
+  //   off        — today's behaviour, byte-identical
+  //   highlights — the coloured rings only (hovered / edit target / area / inspect)
+  //   all        — the rings AND the negative brush-cursor silhouette
+  // 2D only, VIEW scope only — see compositeCaptureOverlays.
+  type CaptureOverlayMode = 'off' | 'highlights' | 'all';
+  const [captureOverlays, setCaptureOverlays] = useState<CaptureOverlayMode>(() => {
+    const s = saved.current.captureOverlays as CaptureOverlayMode | undefined;
+    return s === 'highlights' || s === 'all' ? s : 'off';
+  });
+  const captureOverlaysRef = useRef<CaptureOverlayMode>(captureOverlays);
+  useEffect(() => { captureOverlaysRef.current = captureOverlays; }, [captureOverlays]);
   // "current view" scope: the OUTPUT dims are locked at the first captured frame (the
   // encoder needs a constant frame size) so a panel resize mid-record can't change them.
   // The "simulation" scope uses renderSimulationFrame (deterministic grid-aspect dims),
@@ -2048,7 +2067,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
           targetFps, unlimitedFps, gensPerFrame, unlimitedGens,
           activeViewer, brushColor, brushW, brushH, brushMapping, showBrushCursor, showGridlines, show2dAxes, smoothScaling,
           brushShape, brushRadius, brushRingWidth, brushLineWidth, brush3dVolume, brushBoxDepth,
-          infinityCanvas, indicatorVizModes, recordFormat, recordScope, recordQuality, recordOverload, screenshotScope, brushSectionH, agentsFront3d,
+          infinityCanvas, indicatorVizModes, recordFormat, recordScope, recordQuality, recordOverload, screenshotScope, captureOverlays, brushSectionH, agentsFront3d,
           light3d, cellGaps3d, agentMetaballs, agentGlow,
           agentBrushRadius, agentSeedDensity, agentSeedSpacing, agentNudgeIntensity,
           agentBrushShape, agentBrushW, agentBrushH, agentBrushRingWidth, agentBrushLineWidth,
@@ -2064,7 +2083,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       } catch { /* localStorage full */ }
     }, 300);
     return () => clearTimeout(timer);
-  }, [targetFps, unlimitedFps, gensPerFrame, unlimitedGens, activeViewer, brushColor, brushW, brushH, brushMapping, showBrushCursor, showGridlines, show2dAxes, smoothScaling, brushShape, brushRadius, brushRingWidth, brushLineWidth, brush3dVolume, brushBoxDepth, infinityCanvas, indicatorVizModes, recordFormat, recordScope, recordQuality, recordOverload, screenshotScope, brushSectionH, agentsFront3d, light3d, cellGaps3d, agentMetaballs, agentGlow, agentBrushRadius, agentSeedDensity, agentSeedSpacing, agentNudgeIntensity, agentBrushShape, agentBrushW, agentBrushH, agentBrushRingWidth, agentBrushLineWidth, showCaGrid, showAgents, showBonds, simulateCells, simulateAgents, brushTarget, bg2d, agentOutlines, showVision, indicatorHiddenCategories, indicatorChartOverrides]);
+  }, [targetFps, unlimitedFps, gensPerFrame, unlimitedGens, activeViewer, brushColor, brushW, brushH, brushMapping, showBrushCursor, showGridlines, show2dAxes, smoothScaling, brushShape, brushRadius, brushRingWidth, brushLineWidth, brush3dVolume, brushBoxDepth, infinityCanvas, indicatorVizModes, recordFormat, recordScope, recordQuality, recordOverload, screenshotScope, captureOverlays, brushSectionH, agentsFront3d, light3d, cellGaps3d, agentMetaballs, agentGlow, agentBrushRadius, agentSeedDensity, agentSeedSpacing, agentNudgeIntensity, agentBrushShape, agentBrushW, agentBrushH, agentBrushRingWidth, agentBrushLineWidth, showCaGrid, showAgents, showBonds, simulateCells, simulateAgents, brushTarget, bg2d, agentOutlines, showVision, indicatorHiddenCategories, indicatorChartOverrides]);
 
   // Manual Brush — signature-keyed merge effect. Re-derives `manualBrush`
   // whenever the cell attribute set (id+type) changes. Surviving attrs carry
@@ -3727,6 +3746,41 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       hlCtx.beginPath(); hlCtx.arc(cx, cy, rad, 0, Math.PI * 2);
       hlCtx.strokeStyle = 'rgba(232, 161, 58, 0.95)'; hlCtx.lineWidth = 2; hlCtx.setLineDash([4, 3]); hlCtx.stroke(); hlCtx.setLineDash([]);
     }
+  }, []);
+
+  /** Composite the CURSOR OVERLAY LAYERS onto a capture (opt-in, `captureOverlays`).
+   *  The two overlay canvases sit ABOVE the scene canvas and are what the user SEES,
+   *  but a capture reads the SCENE canvas — so a recording / screenshot has never
+   *  contained the brush cursor or the highlight rings. This replays the browser's
+   *  own compositing onto the destination context:
+   *    • `cursorHl` — coloured rings, normal source-over (what the compositor does).
+   *    • `cursorNeg` — white-on-transparent silhouettes whose CSS
+   *      `mix-blend-mode: difference` produces the negative-cursor look. Canvas2D's
+   *      `globalCompositeOperation = 'difference'` is the same blend, and because
+   *      the layer is transparent everywhere else (difference with 0 is identity)
+   *      only the silhouette pixels are inverted — exactly the on-screen result.
+   *  VIEW-SCOPE ONLY, by construction: this is a VIEW-space overlay (its pixels are
+   *  positioned by the live pan/zoom), while the "simulation" scope renders a fit
+   *  framing of the whole world — pasting view-space pixels onto a differently-framed
+   *  image would put the cursor in the wrong place. 2D only: in 3D the brush outline
+   *  / hover cells / inspect rings are drawn INSIDE the gl3d scene, so they are
+   *  already in every 3D capture.
+   *  `dw`/`dh` are the destination size; the overlays are `parentW × parentH`, the
+   *  same dims as the display canvas, so a scaled capture scales them identically.
+   *  drawImage from a live canvas is a texture READ — it does not de-optimise the
+   *  source (the recording-slowdown rule bans getImageData, not drawImage). */
+  const compositeCaptureOverlays = useCallback((ctx: CanvasRenderingContext2D, dw: number, dh: number) => {
+    const mode = captureOverlaysRef.current;
+    if (mode === 'off' || is3dRef.current) return;
+    const hl = cursorHlCanvasRef.current;
+    if (hl && hl.width > 0 && hl.height > 0) ctx.drawImage(hl, 0, 0, hl.width, hl.height, 0, 0, dw, dh);
+    if (mode !== 'all') return;
+    const neg = cursorNegCanvasRef.current;
+    if (!neg || neg.width <= 0 || neg.height <= 0) return;
+    const prev = ctx.globalCompositeOperation;
+    ctx.globalCompositeOperation = 'difference';
+    ctx.drawImage(neg, 0, 0, neg.width, neg.height, 0, 0, dw, dh);
+    ctx.globalCompositeOperation = prev;
   }, []);
 
   // A1 — compute the agent RenderView (camera + tiling + graphics) from the SAME
@@ -5769,6 +5823,10 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
               rctx.imageSmoothingEnabled = crop.outW !== dc.width || crop.outH !== dc.height;
               rctx.clearRect(0, 0, crop.outW, crop.outH);
               rctx.drawImage(dc, 0, 0, dc.width, dc.height, 0, 0, crop.outW, crop.outH);
+              // Opt-in: replay the cursor / highlight overlay layers the compositor
+              // draws on top of this canvas (see compositeCaptureOverlays). Off by
+              // default, so the historical frame is byte-identical.
+              compositeCaptureOverlays(rctx, crop.outW, crop.outH);
               frame = rctx.getImageData(0, 0, crop.outW, crop.outH);
               // Opacify: the 2D canvas is cleared transparent, so margins / translucent
               // cells would otherwise leave GIF frame-disposal trails / let the page show
@@ -11068,6 +11126,9 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
     const octx = off.getContext('2d');
     if (!octx) return;
     octx.drawImage(dc, 0, 0);
+    // Opt-in: replay the cursor / highlight overlay layers (see
+    // compositeCaptureOverlays). Off by default — the historical PNG is unchanged.
+    compositeCaptureOverlays(octx, off.width, off.height);
     off.toBlob(blob => { if (blob) downloadBlob(blob); }, 'image/png');
   };
 
@@ -12307,12 +12368,21 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
           // format the recorder would not actually use.
           const effWebm = recordFormat === 'webm' && webmAvailable;
           const areaLabel = recordScope === 'simulation' ? 'sim' : 'view';
+          // The cursor / highlight overlay layers can only be composited onto a
+          // VIEW-area 2D capture (see compositeCaptureOverlays) \u2014 with both areas
+          // set to Simulation, or in 3D, the control has nothing to act on, so it
+          // is disabled IN PLACE with the reason stated beneath (never unmounted).
+          const overlaysBothSim = screenshotScope === 'simulation' && recordScope === 'simulation';
+          const overlaysUnavailable = is3D || overlaysBothSim;
           const chipParts = [
             effWebm ? 'WebM' : 'GIF',
             // In 3D the scene fills the frame \u2014 there is no separate area to name.
             ...(is3D ? [] : [areaLabel]),
             // Quality is a WebM-only concept (GIF has no keyframe structure).
             ...(effWebm ? [recordQuality === 'archival' ? 'Arch' : 'Std'] : []),
+            // Locked from Start to Stop like everything else here, so the chip has
+            // to say whether the run is capturing the cursor layers.
+            ...(!overlaysUnavailable && captureOverlays !== 'off' ? [captureOverlays === 'all' ? '+cursor' : '+rings'] : []),
           ];
           // Every setting is frozen from Start to Stop (the encoder requires it),
           // so while recording the chip is a read-only readout of what is running.
@@ -12403,6 +12473,31 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
                     <div className={styles.captureWhy}>{is3D
                       ? 'A 3D scene fills the frame &mdash; there is no separate simulation crop.'
                       : 'Simulation: the whole grid / world framed to fit, independent of your zoom & pan. View: the display canvas exactly as shown.'}</div>
+
+                    {/* The brush cursor and the highlight rings live on overlay
+                        canvases ABOVE the scene, so a capture never contains them.
+                        Opt-in to composite them back in. VIEW area only (the
+                        overlay is positioned by the live pan/zoom, so it cannot be
+                        pasted onto the fit-framed Simulation image) and 2D only
+                        (3D draws its brush visuals into the scene itself). */}
+                    <div className={`${styles.captureRow} ${overlaysUnavailable ? styles.captureRowDisabled : ''}`}>
+                      <span>Cursor &amp; highlights</span>
+                      {captureSegment(
+                        [
+                          { label: 'Off', value: 'off' as CaptureOverlayMode },
+                          { label: 'Highlights', value: 'highlights' as CaptureOverlayMode },
+                          { label: 'All', value: 'all' as CaptureOverlayMode },
+                        ],
+                        captureOverlays,
+                        setCaptureOverlays,
+                        overlaysUnavailable,
+                      )}
+                    </div>
+                    <div className={styles.captureWhyStack}>
+                      <div className={`${styles.captureWhy} ${is3D ? '' : styles.captureWhyHidden}`}>In 3D the brush outline, hovered cells and inspect rings are drawn into the scene itself &mdash; every 3D capture already includes them.</div>
+                      <div className={`${styles.captureWhy} ${!is3D && overlaysBothSim ? '' : styles.captureWhyHidden}`}>The cursor is a view overlay &mdash; set an area above to View to include it.</div>
+                      <div className={`${styles.captureWhy} ${overlaysUnavailable ? styles.captureWhyHidden : ''}`}>Highlights: the coloured hover / selection / inspect rings. All: those plus the negative brush-cursor silhouette. Added to View-area captures only.</div>
+                    </div>
 
                     <div className={styles.captureSep} />
 
