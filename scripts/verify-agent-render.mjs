@@ -585,6 +585,82 @@ check('runtime: uploadAgentSoA seeds the agent colour buffer [invisible-agents b
     && /writeBuffer\(rt\.bondStoreBuf, 0, out, 0, outLen\)/.test(bs));
 }
 
+// B14 (THE PASSIVE-HOVER PIN, user-reported: "just having the cursor on top of
+// the simulation drags the performance down ... even if the user is not actually
+// interacting ... when it doesn't even change the highlight").
+//
+// The agent UI-sync hover want-term used to be a bare "agent brush armed + cursor
+// over the canvas". On an AGENTS-ONLY model `brushTarget` is FORCED to 'agents',
+// so that reduced to "cursor over the canvas" — and the DEFAULT brush mode (add)
+// reads NOTHING from the snapshot. Resting the cursor therefore held the
+// per-frame GPU readback + snapshot ship forever. Measured on Particle Life
+// (WebGPU agents, free-running): worker turnaround median 4.1 → 9.5 ms, mean
+// 5.4 → 19.9, p90 5.7 → 89.2, throughput −25%, a snapshot on 487/487 frames.
+//
+// Two independent guards, and BOTH matter: the mode predicate (a passive hover in
+// a non-reading mode must never pin) and the idle backstop (3 s of a motionless
+// cursor releases the pin even in a reading mode, clearing the stale-dependent
+// visuals so nothing wrong is left drawn).
+{
+  const sv = readSrc('simulator/SimulatorView.tsx');
+
+  check('the state-reading brush modes are an explicit set EXCLUDING add [hover-pin]',
+    /const AGENT_BRUSH_MODES_NEEDING_STATE: ReadonlySet<string> = new Set\(\['remove', 'move', 'edit', 'glue', 'cut', 'bond'\]\)/.test(sv));
+
+  const needs = blockAfter(sv, /const agentHoverNeedsState = useCallback\(/);
+  check('the predicate consults the brush MODE, not just the target [hover-pin]',
+    /AGENT_BRUSH_MODES_NEEDING_STATE\.has\(agentBrushModeRef\.current\)/.test(needs));
+  check('inspect (toggle or Shift) arms REGARDLESS of the brush target [hover-pin]',
+    /if \(inspectModeRef\.current \|\| shiftDownRef\.current\) return true;/.test(needs)
+    && needs.indexOf('inspectModeRef') < needs.indexOf("brushTargetRef.current !== 'agents'"));
+
+  // The want-term must AND both guards — dropping either one restores the bug.
+  const want = blockAfter(sv, /const updateAgentUiSync = useCallback\(/);
+  check('the hover want-term ANDs the predicate AND the idle flag [hover-pin]',
+    /agentHoverNeedsState\(\) && agentHoverActiveRef\.current/.test(want));
+  check('the hover want-term still covers BOTH canvases [hover-pin]',
+    /agentCursorWorldRef\.current != null \|\| \(is3dRef\.current && glPointerOverRef\.current\)/.test(want));
+
+  // The backstop must CLEAR what it stops refreshing — the hovered-agent ring and
+  // the area highlight are drawn from the LIVE snapshot every frame, so leaving
+  // them would drift off the agents they name.
+  const note = blockAfter(sv, /const noteHoverActivity = useCallback\(/);
+  check('the idle backstop clears the stale-dependent hover visuals [hover-pin]',
+    /agentHoverActiveRef\.current = false;/.test(note)
+    && /agentHoverIdRef\.current = -1/.test(note)
+    && /agentAreaHoverIdsRef\.current = \[\]/.test(note));
+  check('the idle backstop re-evaluates the driver on expiry [hover-pin]',
+    /if \(agentDirectRenderActiveRef\.current\) updateAgentUiSync\(\);\s*\n\s*\};/.test(note));
+
+  // Every activity source must re-arm, or the pin stays down while the user works.
+  check('the 2D move re-arms BEFORE the coalesced hover work [hover-pin]',
+    /noteHoverActivity\(\);\s*\n\s*scheduleHoverWork\(\);/.test(sv));
+  // NB the anchors deliberately STOP before the arrow's `{` — blockAfter looks
+  // for the next `{` AFTER the match, so including it would scan an inner block.
+  const down2d = blockAfter(sv, /const handleMouseDown = \(e: MouseEvent\) =>/);
+  check('the 2D press re-arms [hover-pin]', /noteHoverActivity\(\);/.test(down2d));
+  const wheel2d = blockAfter(sv, /const handleWheel = \(e: WheelEvent\) =>/);
+  check('the 2D wheel re-arms [hover-pin]', /noteHoverActivity\(\);/.test(wheel2d));
+  const move3d = blockAfter(sv, /const onMove = \(e: PointerEvent\) =>/);
+  check('the 3D move re-arms [hover-pin]', /noteHoverActivity\(\);/.test(move3d));
+  check('the 3D canvas enter re-arms [hover-pin]',
+    /glPointerOverRef\.current = true; noteHoverActivity\(\);/.test(sv));
+
+  // Shift is the inspect modifier on both canvases and its pick reads the
+  // snapshot — arming on the MODIFIER is what keeps Shift+LMB correct in `add`.
+  check('Shift is tracked at the window level and re-evaluates the driver [hover-pin]',
+    /shiftDownRef\.current = e\.shiftKey;[\s\S]{0,400}?if \(e\.shiftKey\) noteHoverActivity\(\);\s*\n\s*if \(agentDirectRenderActiveRef\.current\) updateAgentUiSync\(\);/.test(sv)
+    && /window\.addEventListener\('keydown', onKey\)/.test(sv)
+    && /window\.addEventListener\('keyup', onKey\)/.test(sv));
+  check('a blur drops the Shift latch [hover-pin]',
+    /const onBlur = \(\) => \{[\s\S]{0,200}shiftDownRef\.current = false;/.test(sv));
+
+  // The predicate reads REFS, which only catch up on the next render — the state
+  // effect must therefore re-run when the mode / inspect toggle / target changes.
+  check('a mode / inspect / target change re-evaluates the driver [hover-pin]',
+    /useEffect\(\(\) => \{ updateAgentUiSync\(\); \}, \[[^\]]*agentBrushMode, inspectMode, brushTarget, updateAgentUiSync\]\)/.test(sv));
+}
+
 // ---------------------------------------------------------------------------
 // TIER C — browser probes (printed; only reachable with a live GPUDevice)
 // ---------------------------------------------------------------------------

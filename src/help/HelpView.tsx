@@ -1786,6 +1786,20 @@ export function HelpView() {
             while closed.
           </p>
           <p className={styles.p}>
+            <strong>Hovering an agent model does not cost anything by itself.</strong> When the
+            agent layer renders straight from the GPU, the page normally never sees the agent
+            positions at all &mdash; which is where the speed comes from. Some things genuinely need
+            them back on the page each frame, and those hand the frame back: an open inspector,
+            recording, the vision-cone display, metaballs, being paused, and an{' '}
+            <em>agent brush that highlights agents</em> &mdash; Remove, Move, Edit, Glue, Cut and
+            Bond all ring the agents they would touch, and Shift (or the{' '}
+            <code>&#x24D8;</code> Inspect toggle) picks one. The default <strong>Add</strong> brush
+            highlights nothing, so simply resting the cursor over the simulation in Add mode is free.
+            And whatever the mode, if the cursor does not move for <strong>3 seconds</strong> the
+            highlights are dropped and the fast path resumes on its own; the moment you move again
+            they come straight back.
+          </p>
+          <p className={styles.p}>
             You do not have to open the popover to find out that something degraded. The first time
             the engine falls back at runtime it raises a <strong>one-time amber toast</strong> naming
             what happened, and the <code>&#x2699;</code> chip <em>stays</em> amber (with a{' '}

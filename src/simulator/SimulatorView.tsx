@@ -634,6 +634,20 @@ const BOND_BRUSH_MODES: ReadonlySet<string> = new Set(['glue', 'cut', 'bond']);
 function agentBrushModesFor(bondsAvailable: boolean): typeof AGENT_BRUSH_MODES {
   return bondsAvailable ? AGENT_BRUSH_MODES : AGENT_BRUSH_MODES.filter(m => !BOND_BRUSH_MODES.has(m));
 }
+/** The agent-brush modes that READ the CPU agent snapshot while merely hovering:
+ *  the hovered-agent pick ring, the area-affected highlight, and the id scans the
+ *  press itself runs. `add` is the one mode that reads NOTHING — its seed points
+ *  are scattered from the cursor by pure geometry (`agentSeedInShape` /
+ *  `agentSeedPoints` / `agentSeedInLine` never touch `agentsRef`), and its cursor
+ *  is the shape silhouette, also pure geometry. It is also the DEFAULT mode, which
+ *  is why a passive hover used to cost a per-frame GPU readback for nothing — see
+ *  `agentHoverNeedsState`. */
+const AGENT_BRUSH_MODES_NEEDING_STATE: ReadonlySet<string> = new Set(['remove', 'move', 'edit', 'glue', 'cut', 'bond']);
+/** IDLE BACKSTOP: a cursor that has not moved (or been pressed / scrolled / had a
+ *  modifier pressed) over a simulation canvas for this long is not interacting, so
+ *  the agent UI-sync hover pin is released and the stale-dependent hover visuals
+ *  are cleared. Any pointer activity re-arms it instantly. */
+const AGENT_HOVER_IDLE_MS = 3000;
 
 /** Build a bounded wireframe OUTLINE of a 3D brush footprint at a plane cell, as
  *  cell-space line segments (a flat Float32Array of [col,row,layer, col,row,layer …]
@@ -2663,6 +2677,18 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
   // hover deliberately does NOT pin — see updateGridUiSync.
   const glGestureActiveRef = useRef(false);
   const glShiftDownRef = useRef(false);
+  // Shift held anywhere (dimension-agnostic). Shift+LMB is the INSPECT gesture on
+  // BOTH canvases, and its pick reads the CPU agent snapshot — so the UI-sync
+  // driver arms the snapshot the moment the modifier goes down, before the press.
+  // (`glShiftDownRef` above stays the 3D-canvas-scoped signal the grid driver uses.)
+  const shiftDownRef = useRef(false);
+  // Timestamp of the last cursor ACTIVITY over a simulation canvas (move / press /
+  // wheel / modifier), and whether that activity is still within
+  // AGENT_HOVER_IDLE_MS. The agent UI-sync driver's hover term ANDs the flag —
+  // see `noteHoverActivity` (the IDLE BACKSTOP).
+  const hoverActivityAtRef = useRef(0);
+  const agentHoverActiveRef = useRef(false);
+  const hoverIdleTimerRef = useRef(0);
   const hoverCells3dRef = useRef<ReadonlyArray<{ layer: number; row: number; col: number }>>([]);
   // 3D Line tool: first click stages a plane-cell anchor (no paint); the second
   // click draws the capsule line between them. null = no staged anchor.
@@ -3760,12 +3786,41 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
     });
   }, [computeAgentRenderView]);
 
+  // Does the agent brush's CURRENT state actually consume the CPU agent snapshot
+  // while hovering? Only then is pinning UI-sync (a per-frame GPU readback + a
+  // full snapshot ship) earned.
+  //
+  // THE BUG THIS CLOSES: the hover term used to be a bare "agent brush armed +
+  // cursor over the canvas", which the grid driver's comment described as already
+  // narrow because it "ANDs an armed agent brush". It is not narrow at all — an
+  // AGENTS-ONLY model FORCES `brushTarget` to 'agents' (there is no grid layer to
+  // point at), so simply RESTING the cursor anywhere over the canvas pinned the
+  // readback path for as long as it sat there, in the DEFAULT brush mode, which
+  // reads nothing. Reported as "just having the cursor on top of the simulation
+  // drags the performance down ... even when it doesn't change any highlight".
+  // Measured on Particle Life (WebGPU agents, free-running): worker turnaround
+  // median 4.1 ms → 9.5 ms, mean 5.4 → 19.9, p90 5.7 → 89.2, throughput −25%,
+  // with a snapshot on 487 of 487 frames instead of 0.
+  const agentHoverNeedsState = useCallback(() => {
+    if (!isAgentModelRef.current) return false;
+    // Inspect: the toolbar toggle makes plain LMB inspect, and Shift+LMB always
+    // does — both pick through `pickAgentAt` (2D) / gl3d's colour-id pick FBO (3D),
+    // which read the snapshot. Arm on the MODIFIER, not on the press, so the fresh
+    // snapshot is in hand by the time the click lands. NOT gated on the brush
+    // target: agent inspect fires on any agent model, whichever layer the brush
+    // points at (`isAgentModelRef` is the branch condition at both press sites).
+    if (inspectModeRef.current || shiftDownRef.current) return true;
+    if (brushTargetRef.current !== 'agents') return false;
+    return AGENT_BRUSH_MODES_NEEDING_STATE.has(agentBrushModeRef.current);
+  }, []);
+
   // A1 UI-sync driver: while ON the worker reads GPU agent state back each frame
   // and ships the render snapshot (features that need CPU state); while OFF the
   // resident batch free-runs. ON iff a feature is (or may be) reading agent
-  // state: paused, recording, a pinned/sweep inspector, an edit target, the agent
-  // brush armed + hovering, or a CPU-only visual (metaballs) suppressing direct
-  // render. Debounced OFF by ~300 ms so brush strokes don't thrash.
+  // state: paused, recording, a pinned/sweep inspector, an edit target, a
+  // state-reading agent brush hovering, or a CPU-only visual (metaballs)
+  // suppressing direct render. Debounced OFF by ~300 ms so brush strokes don't
+  // thrash.
   const updateAgentUiSync = useCallback(() => {
     if (!agentDirectRenderActiveRef.current || !workerRef.current) return;
     const want =
@@ -3777,10 +3832,12 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       || agentMetaballsRef.current.enabled
       // Vision-cone display reads the agent snapshot every frame.
       || showVisionRef.current !== 'off'
-      || (brushTargetRef.current === 'agents' && agentCursorWorldRef.current != null)
-      // Phase C: 3D agent brush armed + pointer over the gl canvas → frame mode so
-      // the gl3d pick FBO (reads the snapshot) resolves agents.
-      || (is3dRef.current && brushTargetRef.current === 'agents' && glPointerOverRef.current);
+      // Hover: BOTH canvases. The pointer must be over the canvas (2D: a cursor
+      // world point; 3D: the gl enter/leave flag), the current brush/inspect state
+      // must actually READ the snapshot, and the cursor must have been ACTIVE
+      // recently (the idle backstop below).
+      || ((agentCursorWorldRef.current != null || (is3dRef.current && glPointerOverRef.current))
+          && agentHoverNeedsState() && agentHoverActiveRef.current);
     const w = workerRef.current;
     if (want) {
       if (agentUiSyncTimerRef.current) { clearTimeout(agentUiSyncTimerRef.current); agentUiSyncTimerRef.current = 0; }
@@ -3791,7 +3848,51 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
         if (agentUiSyncPostedRef.current) { agentUiSyncPostedRef.current = false; workerRef.current?.postMessage({ type: 'setAgentUiSync', on: false }); }
       }, 300);
     }
-  }, []);
+  }, [agentHoverNeedsState]);
+
+  // THE IDLE BACKSTOP. Call on ANY cursor activity over a simulation canvas
+  // (move, press, wheel, a modifier going down) — it stamps the activity clock,
+  // re-arms the hover pin and (re)schedules the expiry.
+  //
+  // On expiry the hover pin is released AND the two stale-dependent hover visuals
+  // are cleared: the hovered-agent ring and the area-affected highlight are drawn
+  // at positions read from the LIVE snapshot every frame, so once the snapshot
+  // stops refreshing they would drift off the agents they name. Clearing them is
+  // what makes releasing honest — nothing wrong is left on screen. The plain
+  // footprint silhouette is pure geometry and stays.
+  //
+  // RESIDUAL, documented: a press that follows ≥3 s of a LITERALLY motionless
+  // cursor in a state-reading mode acts on a snapshot up to one debounce older
+  // than live. Any aiming movement at all re-arms first (this is called from the
+  // raw mousemove, before the coalesced hover work), so the window is narrow, and
+  // the user asked for exactly this trade ("at least automatically stop
+  // processing ... after 3s of idle cursor").
+  // Called from RAW pointer handlers (125–1000 Hz), so the timer is only touched
+  // when the flag is down — otherwise this is a single timestamp write and the
+  // already-armed timer re-checks the stamp when it fires (a trailing timer).
+  const noteHoverActivity = useCallback(() => {
+    hoverActivityAtRef.current = performance.now();
+    if (agentHoverActiveRef.current && hoverIdleTimerRef.current) return;
+    agentHoverActiveRef.current = true;
+    if (hoverIdleTimerRef.current) { clearTimeout(hoverIdleTimerRef.current); hoverIdleTimerRef.current = 0; }
+    const expire = () => {
+      hoverIdleTimerRef.current = 0;
+      const idleFor = performance.now() - hoverActivityAtRef.current;
+      if (idleFor < AGENT_HOVER_IDLE_MS - 1) {
+        // Activity landed since this timer was armed — trail it.
+        hoverIdleTimerRef.current = window.setTimeout(expire, AGENT_HOVER_IDLE_MS - idleFor);
+        return;
+      }
+      agentHoverActiveRef.current = false;
+      let cleared = false;
+      if (agentHoverIdRef.current !== -1) { agentHoverIdRef.current = -1; cleared = true; }
+      if (agentAreaHoverIdsRef.current.length) { agentAreaHoverIdsRef.current = []; cleared = true; }
+      if (cleared) drawCursorLayer();
+      if (agentDirectRenderActiveRef.current) updateAgentUiSync();
+    };
+    hoverIdleTimerRef.current = window.setTimeout(expire, AGENT_HOVER_IDLE_MS);
+    if (agentDirectRenderActiveRef.current) updateAgentUiSync();
+  }, [updateAgentUiSync, drawCursorLayer]);
 
   // (Re)attach the agent render canvas: transfer a display-sized OffscreenCanvas
   // and ask the worker to set up direct render. Safe to call whenever the agent
@@ -7406,6 +7507,8 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
     };
     const onDown = (e: PointerEvent) => {
       if ((e.target as HTMLElement)?.closest?.('[data-sim-overlay]')) return;
+      // A press is cursor activity — re-arm the agent hover pin (IDLE BACKSTOP).
+      noteHoverActivity();
       // L1: pin the grid's frame mode for this gesture ONLY when the gesture can
       // PICK — gl3d's colour-id pick() (3D cell inspect) resolves against the CPU
       // instance buffer that only frame mode refreshes, and the pick fires on the
@@ -7587,6 +7690,8 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
     let hover3dPending: { x: number; y: number } | null = null;
     let hover3dRaf = 0;
     const onMove = (e: PointerEvent) => {
+      // Cursor activity — re-arm the agent UI-sync hover pin (IDLE BACKSTOP).
+      noteHoverActivity();
       // Track drag distance BEFORE the inspect-armed early-return, so onUp can
       // discard a Shift+LMB that turned into a drag (mirrors the 2D sweep
       // inspector's `!moved` discard) instead of pinning a popover at release.
@@ -7723,9 +7828,11 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       draw();
     };
     const onEnter = () => {
-      // Phase C: pointer entered the 3D canvas — if the agent brush is armed, flip
-      // to frame mode (gl3d full render + snapshot) so picks work.
-      if (!glPointerOverRef.current) { glPointerOverRef.current = true; if (agentDirectRenderActiveRef.current) updateAgentUiSync(); if (voxelRenderActiveRef.current) updateGridUiSync(); }
+      // Phase C: pointer entered the 3D canvas — if a state-reading agent brush /
+      // inspect is armed, flip to frame mode (gl3d full render + snapshot) so
+      // picks work. `noteHoverActivity` re-arms the idle backstop and calls the
+      // driver, so no separate updateAgentUiSync is needed for the agent layer.
+      if (!glPointerOverRef.current) { glPointerOverRef.current = true; noteHoverActivity(); if (voxelRenderActiveRef.current) updateGridUiSync(); }
     };
     const onLeave = () => {
       if (glPointerOverRef.current) { glPointerOverRef.current = false; if (agentDirectRenderActiveRef.current) updateAgentUiSync(); if (voxelRenderActiveRef.current) updateGridUiSync(); }
@@ -7774,6 +7881,8 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
     };
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
+      // Scrolling is cursor activity — re-arm the hover pin (IDLE BACKSTOP).
+      noteHoverActivity();
       // Alt+wheel cycles the agent brush mode (add → remove → move → …) when the
       // brush targets agents — a fast keyboard-free way to switch actions.
       if (e.altKey && isAgentModelRef.current && brushTargetRef.current === 'agents') {
@@ -7879,6 +7988,15 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       directActive: agentDirectRenderActiveRef.current,
       compositeActive: agentCompositeActiveRef.current,
       metaballs: agentMetaballsRef.current.enabled,
+      // The UI-sync hover pin (DEV): whether the driver has posted UI-sync ON,
+      // whether the current brush/inspect state genuinely READS the snapshot, and
+      // whether the idle backstop still counts the cursor as active. Lets a probe
+      // tell "the hover pin is holding the readback path" apart from any other
+      // want-term without inferring it from message volume.
+      uiSyncOn: agentUiSyncPostedRef.current,
+      hoverNeedsState: agentHoverNeedsState(),
+      hoverActive: agentHoverActiveRef.current,
+      idleForMs: Math.round(performance.now() - hoverActivityAtRef.current),
     });
     // FOLLOW MODE state (DEV/verification only, same rationale as
     // __agentRenderState): the camera the tracker writes lives in refs, so a
@@ -8335,7 +8453,11 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
   useEffect(() => { draw(); }, [agentGlow, draw]);
   // A1: re-evaluate UI-sync on state-signal changes (pause / recording / inspector
   // / edit target / metaballs suppression). Hover-during-play is handled per-frame.
-  useEffect(() => { updateAgentUiSync(); }, [playing, recording, agentInspectIds, editTargetId, agentMetaballs.enabled, updateAgentUiSync]);
+  // `agentBrushMode` / `inspectMode` / `brushTarget` are in the dep list because
+  // `agentHoverNeedsState` reads their REFS, which only catch up on the next
+  // render — without this an Alt+wheel mode cycle (or the Inspect toggle) into a
+  // state-reading mode would not arm the snapshot until the next pointer move.
+  useEffect(() => { updateAgentUiSync(); }, [playing, recording, agentInspectIds, editTargetId, agentMetaballs.enabled, agentBrushMode, inspectMode, brushTarget, updateAgentUiSync]);
   // L1: the GRID sibling — re-evaluate the voxel UI-sync on every state signal that
   // needs the CPU colours mirror. `alpha3d` is the ONLY remaining FRAME-MODE-ONLY
   // visual (the WGSL pass does not back-to-front sort): turning it on pins UI-sync
@@ -8373,6 +8495,40 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
   // their pointer handlers). Session-only, never persisted.
   const inspectModeRef = useRef(false);
   useEffect(() => { inspectModeRef.current = inspectMode; }, [inspectMode]);
+  // Shift is the inspect MODIFIER on both canvases, and the inspect pick reads the
+  // CPU agent snapshot — so track it at the window level and arm the agent UI-sync
+  // pin the instant it goes down, BEFORE the Shift+LMB press whose pick needs it.
+  // (Without this, Shift+clicking an agent in the default Add brush mode — which
+  // otherwise reads nothing — would pick from a snapshot that stopped refreshing.)
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.shiftKey === shiftDownRef.current) return;
+      shiftDownRef.current = e.shiftKey;
+      // Re-arm the idle clock (pressing a modifier is intent), then ALWAYS
+      // re-evaluate — `noteHoverActivity` short-circuits when the clock is already
+      // armed, and the want-term just changed under it.
+      if (e.shiftKey) noteHoverActivity();
+      if (agentDirectRenderActiveRef.current) updateAgentUiSync();
+    };
+    // A blur (alt-tab) never delivers the keyup — drop the modifier so it can't latch.
+    const onBlur = () => {
+      if (!shiftDownRef.current) return;
+      shiftDownRef.current = false;
+      if (agentDirectRenderActiveRef.current) updateAgentUiSync();
+    };
+    window.addEventListener('keydown', onKey);
+    window.addEventListener('keyup', onKey);
+    window.addEventListener('blur', onBlur);
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      window.removeEventListener('keyup', onKey);
+      window.removeEventListener('blur', onBlur);
+      // Never leave the modifier latched or the idle timer running past unmount.
+      shiftDownRef.current = false;
+      if (hoverIdleTimerRef.current) { clearTimeout(hoverIdleTimerRef.current); hoverIdleTimerRef.current = 0; }
+      agentHoverActiveRef.current = false;
+    };
+  }, [noteHoverActivity, updateAgentUiSync]);
   // Middle-click autoscroll — origin/cursor are canvas-local pixel coords.
   // When origin is non-null we're in autoscroll mode; the rAF loop pans by a
   // velocity proportional to (cursor - origin) and the draw() function paints
@@ -9565,6 +9721,9 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
     const handleWheel = (e: WheelEvent) => {
       if ((e.target as HTMLElement).closest('[data-sim-overlay]')) return;
       e.preventDefault();
+      // Scrolling is cursor activity — re-arm the hover pin (IDLE BACKSTOP). Also
+      // covers the Alt+wheel mode cycle below, whose new mode may need the snapshot.
+      noteHoverActivity();
       // Alt+wheel cycles the agent brush mode (add → remove → move → …) when the
       // brush targets agents — a fast keyboard-free way to switch actions.
       if (e.altKey && isAgentModelRef.current && brushTargetRef.current === 'agents') {
@@ -9675,6 +9834,8 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       // gl-canvas onDown.) Do NOT preventDefault here (that would re-suppress it).
       const focused = document.activeElement as HTMLElement | null;
       if (focused && (focused.tagName === 'INPUT' || focused.tagName === 'TEXTAREA' || focused.tagName === 'SELECT' || focused.isContentEditable)) focused.blur();
+      // A press is cursor activity — re-arm the hover pin (see the IDLE BACKSTOP).
+      noteHoverActivity();
 
       // Middle-click toggles autoscroll mode. Any other button while autoscroll
       // is active just exits and consumes the click — matches browser autoscroll
@@ -10019,6 +10180,10 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       lastHoverClient.current.x = e.clientX;
       lastHoverClient.current.y = e.clientY;
       lastHoverClient.current.buttons = e.buttons;
+      // The cursor MOVED — re-arm the agent UI-sync hover pin BEFORE the coalesced
+      // hover work runs, so an aiming movement has the snapshot flowing again by
+      // the time the press lands (see noteHoverActivity's IDLE BACKSTOP).
+      noteHoverActivity();
       scheduleHoverWork();
 
       // Agent-brush DRAG actions (LMB held) — these stay raw (each already
