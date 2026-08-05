@@ -350,7 +350,7 @@ export function HelpView() {
             <li><strong>Summary</strong> &mdash; a short blurb; this is what appears on the model&apos;s Models Library card.</li>
             <li><strong>Rule Description</strong> &mdash; a longer free-form field to elaborate on how the rule works and document anything else worth keeping. Not shown on Library cards.</li>
             <li><strong>Simulator Instructions</strong> &mdash; optional usage notes for the people RUNNING the model (how to interact, what to try, what to look for). When present, the Simulator shows an <strong>&#x24D8; Instructions</strong> pill at the canvas&apos;s top-left that opens them in a dismissible card (line breaks preserved); standalone <code>.html</code> exports show them in the viewer&apos;s About panel too.</li>
-            <li><strong>Thumbnail</strong> (optional) &mdash; attach a PNG, JPEG, GIF, or WebP image (up to 2&nbsp;MB). It travels inside the <code>.gcaproj</code> file. When the model is shipped as part of the Models Library, hovering its card shows a floating preview; animated GIFs / WebPs play natively.</li>
+            <li><strong>Thumbnail</strong> (optional) &mdash; attach a PNG, JPEG, GIF or WebP image, <em>or a WebM video clip</em> (up to 2&nbsp;MB) &mdash; the Simulator records WebM, so a short recording makes a natural thumbnail. It travels inside the <code>.gcaproj</code> file. When the model is shipped as part of the Models Library, hovering its card shows a floating preview; animated GIFs / WebPs play natively, and a WebM clip plays on loop (muted, no controls). The one place a clip is skipped is the <code>og:image</code> social tag of a standalone export &mdash; link scrapers need an image &mdash; everything else (the panel preview, the Library popover, the exported viewer&apos;s About panel) plays it.</li>
           </ul>
 
           <h3 className={styles.h3}>Properties Panel (P)</h3>
@@ -3505,8 +3505,8 @@ export function HelpView() {
             hovering reveals it anyway). Hovering opens a <strong>preview panel centered right
             on the card</strong>: the title + full description on the left (when too long for
             the panel it <strong>slowly auto-scrolls</strong>, holds, and loops) and the model's
-            thumbnail on the right, side by side &mdash; clicks pass straight through it, so the
-            card stays clickable. A model's mode shows as a coloured <strong>badge</strong> &mdash;
+            thumbnail on the right, side by side (an animated GIF/WebP or a WebM clip plays)
+            &mdash; clicks pass straight through it, so the card stays clickable. A model's mode shows as a coloured <strong>badge</strong> &mdash;
             <strong> 3D</strong> (amber) and <strong>Agents</strong> (green) &mdash; and each badge
             behaves like a tag: click it to filter, and it also appears in the category dropdown
             and as a grouping section (2D and CA-Grid, the defaults, stay unbadged). 3D models

@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { CAModel } from '../model/types';
+import { ThumbMedia } from '../components/ThumbMedia';
 import styles from './ModelsLibrary.module.css';
 
 interface LibraryEntry {
@@ -20,8 +21,9 @@ interface LibraryEntry {
   hasAgents?: boolean;
   /** File mtime (epoch ms) — powers the Newest/Oldest sort + the date stamp. */
   modified?: number;
-  /** Sidecar filename (e.g. `"Game Of Life.gcaproj.thumb.gif"`) emitted by the
-   *  Vite plugin. Absent when the source .gcaproj has no embedded thumbnail. */
+  /** Sidecar filename (e.g. `"Game Of Life.gcaproj.thumb.gif"`, or `.thumb.webm`
+   *  for a video thumbnail) emitted by the Vite plugin. Absent when the source
+   *  .gcaproj has no embedded thumbnail. */
   thumbnail?: string;
 }
 
@@ -569,7 +571,7 @@ export function ModelsLibrary({ onLoadModel }: Props) {
         >
           <PopoverDescPane title={hover.name} text={hover.description} />
           {hover.thumbnail && (
-            <img src={hover.thumbnail} alt="" className={styles.previewThumb} />
+            <ThumbMedia src={hover.thumbnail} className={styles.previewThumb} />
           )}
         </div>
       )}

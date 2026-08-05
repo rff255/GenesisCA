@@ -23,7 +23,7 @@ function modelsLibraryPlugin(): Plugin {
   function cleanThumbnails(dir: string): void {
     if (!existsSync(dir)) return;
     for (const f of readdirSync(dir)) {
-      if (/\.thumb\.(png|jpe?g|gif|webp)$/i.test(f)) {
+      if (/\.thumb\.(png|jpe?g|gif|webp|webm)$/i.test(f)) {
         try { unlinkSync(join(dir, f)); } catch { /* ok */ }
       }
     }
@@ -31,14 +31,18 @@ function modelsLibraryPlugin(): Plugin {
 
   function extractThumbnail(file: string, dataUrl: unknown, outDir: string): string | null {
     if (typeof dataUrl !== 'string') return null;
-    const m = /^data:(image\/(png|jpeg|gif|webp));base64,(.+)$/i.exec(dataUrl);
+    // `video/webm` is accepted alongside the still-image types — the simulator
+    // records WebM, so a recording is a natural thumbnail. NB `.webp` (still)
+    // and `.webm` (clip) differ only in the last character.
+    const m = /^data:((?:image\/(?:png|jpeg|gif|webp))|video\/webm);base64,(.+)$/i.exec(dataUrl);
     if (!m) return null;
     const mime = (m[1] || '').toLowerCase();
-    const payload = m[3] || '';
+    const payload = m[2] || '';
     if (!mime || !payload) return null;
     const ext = mime === 'image/png' ? '.png'
               : mime === 'image/jpeg' ? '.jpg'
               : mime === 'image/gif' ? '.gif'
+              : mime === 'video/webm' ? '.webm'
               : '.webp';
     const sidecar = `${file}.thumb${ext}`;
     try {
@@ -272,7 +276,7 @@ export default defineConfig(({ command, mode }) => {
             // so precache them only for the build — otherwise Workbox warns they
             // match nothing during `vite dev`.
             ...(command === 'build'
-              ? ['models/index.json', 'models/*.thumb.{gif,png,jpg,jpeg,webp}', 'macros/index.json', 'macros/*.gcamacro']
+              ? ['models/index.json', 'models/*.thumb.{gif,png,jpg,jpeg,webp,webm}', 'macros/index.json', 'macros/*.gcamacro']
               : []),
           ],
           navigateFallback: `${base}index.html`,
@@ -291,7 +295,7 @@ export default defineConfig(({ command, mode }) => {
               options: { cacheName: 'gca-models' },
             },
             {
-              urlPattern: ({ url }: { url: URL }) => /\.thumb\.(gif|png|jpe?g|webp)$/.test(url.pathname),
+              urlPattern: ({ url }: { url: URL }) => /\.thumb\.(gif|png|jpe?g|webp|webm)$/.test(url.pathname),
               handler: 'CacheFirst',
               options: {
                 cacheName: 'gca-thumbnails',

@@ -424,8 +424,10 @@ export interface ModelProperties {
   gridDepth?: number;
   maxIterations: number;
   tags: string[];
-  /** Optional preview image (PNG/JPEG/GIF/WebP, <=2 MB) as a data URL. Shown
-   *  on hover in the Models Library. Travels inside the .gcaproj file. */
+  /** Optional preview media (PNG/JPEG/GIF/WebP image, or a `video/webm` clip —
+   *  e.g. a simulator recording, <=2 MB) as a data URL. Shown on hover in the
+   *  Models Library. Travels inside the .gcaproj file. Render sites must go
+   *  through `<ThumbMedia>` — an `<img>` cannot display a WebM clip. */
   thumbnail?: string;
   /** Optional simulator auto-pause rules. Undefined = disabled. */
   endConditions?: EndConditions;

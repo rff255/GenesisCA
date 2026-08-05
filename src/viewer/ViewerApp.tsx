@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useModel } from '../model/ModelContext';
 import { SimulatorView } from '../simulator/SimulatorView';
 import { serializeModel, modelFilename, downloadJSON } from '../model/fileOperations';
+import { ThumbMedia } from '../components/ThumbMedia';
 import type { CAModel } from '../model/types';
 
 const GENESIS_URL = 'https://genesisca.online';
@@ -170,9 +171,8 @@ function AboutOverlay({ model }: { model: CAModel }) {
             {/* Header */}
             <div style={{ display: 'flex', alignItems: 'flex-start', gap: 18, padding: '22px 24px 16px' }}>
               {p.thumbnail && (
-                <img
+                <ThumbMedia
                   src={p.thumbnail}
-                  alt=""
                   style={{ width: 104, height: 104, borderRadius: 12, objectFit: 'cover', flex: 'none', imageRendering: 'pixelated', border: '1px solid var(--color-border, #2a2e37)' }}
                 />
               )}

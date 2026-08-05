@@ -195,6 +195,7 @@ genesis-ca/
 │   │   ├── FileMenu.tsx              # New/Save/Load buttons
 │   │   ├── NewModelDialog.tsx        # C7 (P6): the File→New archetype chooser (cards → one seeded NEW_MODEL)
 │   │   ├── InstallButton.tsx         # Navbar PWA install affordance (beforeinstallprompt/appinstalled)
+│   │   ├── ThumbMedia.tsx            # The ONE model-thumbnail renderer — <video> for a WebM clip, <img> otherwise
 │   │   └── navStyles.ts              # Shared navbar icon-button style (shortcuts, Install)
 │   ├── modeler/
 │   │   ├── ActivityBar.tsx           # Left panel-switch tabs — floating "ear-tab" icon pills (SVG icons)
@@ -274,6 +275,7 @@ genesis-ca/
 │   ├── model/
 │   │   ├── ModelContext.tsx           # React Context + useReducer
 │   │   ├── typeLabels.ts             # typeDisplayName(): 'bool'→Binary, 'float'→Decimal (UI-only names)
+│   │   ├── thumbnail.ts              # Thumbnail media rules: accept list, size cap, isVideoThumbnail (WebM)
 │   │   ├── macroImport.ts            # cloneMacroWithFreshIds — ID regen for macro imports; countMacroInstances — linked-copy count
 │   │   ├── defaultModel.ts           # EMPTY_MODEL (for New + the initial state on every app load)
 │   │   ├── archetypes.ts             # C7 (P6): MODEL_ARCHETYPES + buildArchetypeModel — the New-model seeds (pure)
@@ -722,10 +724,12 @@ The third `Indicator.kind`, `'graph'`: a **graph-global** quantity over the bond
 - No def-switching dropdown — a macro instance can't be repointed to a different existing MacroDef from the UI (only linked-copy / make-independent).
 
 ### Thumbnails
-- `ModelProperties.thumbnail?: string` stores a PNG/JPEG/GIF/WebP data URL (≤2 MB, validated in `PropertiesPanelContent`). Travels inside `.gcaproj` — no sidecar for user-saved files.
-- `modelsLibraryPlugin` in `vite.config.ts` extracts `properties.thumbnail` from each library `.gcaproj` into `<file>.thumb.<ext>` sidecars, records the sidecar path in `index.json`, and sweeps stale `*.thumb.*` on every run. Sidecars are gitignored (`public/models/*.thumb.{png,jpg,jpeg,gif,webp}`).
-- Plugin runs only at `configureServer` / `closeBundle` — adding a thumbnail to a library `.gcaproj` while the dev server is running requires a restart before it shows up.
-- `ModelsLibrary` renders a fixed-position TWO-PANE popover on `onMouseEnter` — [title + auto-scrolling description | thumbnail], both 320×240, side by side — centered ON the hovered card (both axes, overlaying it; viewport-clamped near edges; `pointer-events: none` keeps the card's hover + clicks working underneath); `image-rendering: pixelated` + `object-fit: contain` so small grid GIFs scale up crisply. No thumbnail → description pane alone; neither → no popover.
+- `ModelProperties.thumbnail?: string` stores a PNG/JPEG/GIF/WebP **or `video/webm`** data URL (≤2 MB, validated in [InfoPanelContent.tsx](src/modeler/panels/InfoPanelContent.tsx)). Travels inside `.gcaproj` — no sidecar for user-saved files. **The schema is unchanged (still one data URL string)**; WebM is accepted because the simulator RECORDS WebM, so a short recording is the most natural thumbnail a model can carry.
+- **AN `<img>` CANNOT DISPLAY A WEBM — every render site MUST go through [`<ThumbMedia>`](src/components/ThumbMedia.tsx)**, the ONE place the branch lives (a `<video autoPlay loop muted playsInline>` vs an `<img>`; the caller's `className`/`style` apply to both, so sizing/`object-fit` rules are shared). `muted` + `playsInline` are REQUIRED for autoplay without a user gesture, and `controls` is deliberately absent (a thumbnail is decoration, not a player). The three consumers: the Info panel preview, the Models Library hover popover, and the standalone viewer's About panel. [thumbnail.ts](src/model/thumbnail.ts) owns `isVideoThumbnail` (`data:video/…` for embedded URLs, an exact `.webm` extension for library sidecars — NB `.webp` (still) and `.webm` (clip) differ only in the last character), plus the shared `THUMBNAIL_ACCEPT` / `THUMBNAIL_MAX_BYTES` / `THUMBNAIL_FORMATS_LABEL`.
+- **The ONE graceful degradation: the presentation export's `og:image`.** [exportPresentation.ts](src/export/exportPresentation.ts) gates on `thumb.startsWith('data:image/')`, so a WebM thumbnail is simply SKIPPED for the social tags (a link scraper needs an image) while still travelling inside the embedded model and playing in the viewer's About panel. Verified through the real export: `og:title` present, `og:image`/`twitter:image` absent.
+- `modelsLibraryPlugin` in `vite.config.ts` extracts `properties.thumbnail` from each library `.gcaproj` into `<file>.thumb.<ext>` sidecars, records the sidecar path in `index.json`, and sweeps stale `*.thumb.*` on every run. Sidecars are gitignored (`public/models/*.thumb.{png,jpg,jpeg,gif,webp,webm}`). **The extension list appears in FIVE places that must stay in sync**: the plugin's `cleanThumbnails` sweep regex, its `extractThumbnail` data-URL regex + ext map, the PWA `globPatterns` precache entry, the PWA `runtimeCaching` thumb regex, and `.gitignore`.
+- Plugin runs only at `configureServer` / `closeBundle` — adding a thumbnail to a library `.gcaproj` while the dev server is running requires a restart before it shows up. **Pre-existing dev-server gotcha (bit the WebM verification):** a sidecar written during `configureServer` can miss Vite's initial public-dir scan, so on the FIRST dev start after a NEW sidecar appears the request falls through to the SPA `index.html` (`content-type: text/html`) instead of the file. A second restart fixes it; the production build is unaffected (it copies `public/` into `dist/`). If a thumbnail mysteriously 404s-as-HTML in dev, restart before debugging the code.
+- `ModelsLibrary` renders a fixed-position TWO-PANE popover on `onMouseEnter` — [title + auto-scrolling description | thumbnail], both 320×240, side by side — centered ON the hovered card (both axes, overlaying it; viewport-clamped near edges; `pointer-events: none` keeps the card's hover + clicks working underneath); `image-rendering: pixelated` + `object-fit: contain` so small grid GIFs scale up crisply (a WebM clip inherits the same box + fit).
 
 ### UpdateAttribute Node
 - Complements SetAttribute: in-place modify via increment/decrement/max/min (int/float), toggle/or/and (bool), next/previous (tag)

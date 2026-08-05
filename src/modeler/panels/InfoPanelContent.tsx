@@ -1,10 +1,11 @@
 import { useRef, useState, type ChangeEvent } from 'react';
 import { useModel } from '../../model/ModelContext';
+import { ThumbMedia } from '../../components/ThumbMedia';
+import {
+  THUMBNAIL_ACCEPT, THUMBNAIL_FORMATS_LABEL, THUMBNAIL_MAX_BYTES,
+} from '../../model/thumbnail';
 import type { PanelContentProps } from '../ModelerDetailContext';
 import styles from './PanelContent.module.css';
-
-const THUMBNAIL_MAX_BYTES = 2 * 1024 * 1024; // 2 MB
-const THUMBNAIL_ACCEPT = 'image/png,image/jpeg,image/gif,image/webp';
 
 /** Model "Info" panel — presentation metadata only (name, authors, description,
  *  thumbnail, tags). Split out of the Properties panel so Properties is left with
@@ -121,7 +122,7 @@ export function InfoPanelContent(_props: PanelContentProps = {}) {
             />
             {properties.thumbnail ? (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 6, alignItems: 'flex-start' }}>
-                <img
+                <ThumbMedia
                   src={properties.thumbnail}
                   alt="Model thumbnail"
                   style={{
@@ -152,11 +153,12 @@ export function InfoPanelContent(_props: PanelContentProps = {}) {
                 style={{ flex: 'none', alignSelf: 'flex-start', padding: '4px 10px', fontSize: '0.72rem' }}
                 onClick={() => thumbInputRef.current?.click()}
               >
-                Choose Image/GIF…
+                Choose Image/GIF/WebM…
               </button>
             )}
             <span style={{ color: '#8090a0', fontSize: '0.62rem' }}>
-              PNG, JPEG, GIF, or WebP — up to 2 MB. Shown on hover in the Models Library.
+              {THUMBNAIL_FORMATS_LABEL} — up to 2 MB. Shown on hover in the Models Library.
+              A WebM clip (e.g. a simulator recording) plays on loop.
             </span>
             {thumbError && (
               <span style={{ color: '#e05050', fontSize: '0.65rem' }}>{thumbError}</span>

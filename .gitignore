@@ -41,6 +41,7 @@ public/models/*.thumb.jpg
 public/models/*.thumb.jpeg
 public/models/*.thumb.gif
 public/models/*.thumb.webp
+public/models/*.thumb.webm
 
 # Bond-Graph Agents dev test fixtures
 public/agents-test.gcaproj

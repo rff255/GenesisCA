@@ -66,6 +66,9 @@ function buildSocialMetaTags(model: CAModel): string {
   const author = [p.author, p.modelAuthor].filter(Boolean).join(', ');
   if (author) lines.push(`<meta name="author" content="${escapeHtml(author)}" />`);
   const thumb = p.thumbnail;
+  // `data:image/` only — a WebM video thumbnail is deliberately SKIPPED here
+  // (og:image must be an image; scrapers can't render a clip). The clip still
+  // travels in the embedded model and shows in the viewer's About panel.
   if (thumb && thumb.startsWith('data:image/') && thumb.length <= OG_THUMBNAIL_MAX_CHARS) {
     lines.push(`<meta property="og:image" content="${escapeHtml(thumb)}" />`);
     lines.push(`<meta name="twitter:image" content="${escapeHtml(thumb)}" />`);
