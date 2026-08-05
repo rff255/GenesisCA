@@ -276,9 +276,10 @@ export function deriveAgentAbi(kind: AgentAbiKind, shape: AgentAbiShape, profile
     F('glyphCodes', 'obj', (_s, rt) => rt.glyphCodes),
     F('glyphColors', 'obj', (_s, rt) => rt.glyphColors),
   );
-  // C9 — the SPRITE block. 5 params / 36 B per agent, and the only gate-able
-  // group with no baked byte on any target (plain JS arrays; `setAgentSprite` has
-  // no WASM/WebGPU emit), so dropping it is a pure ABI + allocation win.
+  // C9 — the SPRITE block. 5 params / 36 B per agent. These are the JS ABI half;
+  // the same gate also reserves the WASM sprite region and the five GPU
+  // `AGENT_GPU_SPRITE_FIELDS` runs (both appended last), so `setAgentSprite` emits
+  // on every agent target and dropping the group is a clean ABI + allocation win.
   if (gates.sprites) {
     fields.push(
       F('spriteIds', 'i32[]', s => s.spriteIds),

@@ -87,6 +87,24 @@ export const AGENT_GPU_QUEUE_FIELDS: ReadonlySet<string> = new Set([
   'bondFormReq', 'bondBreakReq', 'bondFormL', 'bondFormK',
 ]);
 
+/** The SPRITE display runs — `spriteIds` / `spriteFrames` / `spriteSpeeds` /
+ *  `spriteRotations` / `spriteScales`, one f32 run each, APPENDED AFTER every
+ *  other run and reserved ONLY when the C9 `sprites` field gate is on.
+ *
+ *  They live in `agentF32` (binding 0) rather than a binding of their own, so
+ *  Set Agent Sprite needs NO new binding and the Naga stripped-binding discipline
+ *  is not in play. `spriteIds` is a slot INDEX (a small integer, exact in f32 well
+ *  past any plausible sprite count); the other four are display quantities the
+ *  render already consumes as f32, so storing them at f32 costs nothing visible —
+ *  see `uploadAgentSoA` for the documented precision note.
+ *
+ *  Appending LAST is what keeps every existing base — and therefore every emitted
+ *  shader — byte-identical for a sprite-free model, exactly as the WASM sprite
+ *  block does in `computeAgentMemoryLayout`. */
+export const AGENT_GPU_SPRITE_FIELDS = [
+  'spriteIds', 'spriteFrames', 'spriteSpeeds', 'spriteRotations', 'spriteScales',
+] as const;
+
 /** Per-agent i32 fields (identity / reductions the behaviour reads). */
 export const AGENT_GPU_I32_FIELDS = [
   'lineage', 'bondCount',
@@ -267,6 +285,13 @@ export interface AgentWebGPULayout {
    *  included). Entry `c` of agent `idx` in a queue-shaped run is
    *  `base + idx * bondReqSlots + c`. `1` ⇒ the pre-P4 single-slot runs. */
   bondReqSlots: number;
+  /** The five `AGENT_GPU_SPRITE_FIELDS` runs exist (the C9 `sprites` gate is on).
+   *  FALSE ⇒ no runs, no bases, and the Set Agent Sprite emitter drops every
+   *  sprite facet — THE SAFETY CATCH, the same shape as `layout.f32Base[f] ===
+   *  undefined` for the other gated groups (and the mirror of the WASM layout's
+   *  `spritesReserved`). The ALPHA facet survives either way: it writes
+   *  `agentColors`, which is always allocated. */
+  spritesReserved: boolean;
 }
 
 /** **THE** bond-slot stride helper: `[partner, restBits, ...attrs]`. Exported so
@@ -323,6 +348,18 @@ export interface AgentWebGPUExtras {
   /** C10 / P11a - the Barnes-Hut octree node reserve for GLOBAL charge. 0 /
    *  absent => no tree runs, no bindings, and the emitted shader is unchanged. */
   chargeTreeNodes?: number;
+  /** The C9 `sprites` field gate (`resolveAgentFieldGates(model).sprites`) — the
+   *  SINGLE source every layout mirror derives this group from (agentFieldGating.ts
+   *  site 3). True ⇒ reserve the five `AGENT_GPU_SPRITE_FIELDS` runs so Set Agent
+   *  Sprite can emit on the WebGPU agent target.
+   *
+   *  ABSENT ⇒ FALSE here, deliberately inverting `normalizeFieldGates`' absent⇒on
+   *  convention: this file's every other optional block is absent⇒off (bondAttrs,
+   *  chargeTreeNodes, syncAttrs), and the callers that pass no extras
+   *  (`SimulatorView`'s minimal render-only layout, the worker's fallback) compile
+   *  no shader — so absent⇒off keeps them byte-identical instead of silently
+   *  reserving runs nothing addresses. */
+  sprites?: boolean;
 }
 
 /** Compute the GPU agent storage layout. Pure (no GPU calls). The optional
@@ -370,6 +407,13 @@ export function computeAgentWebGPULayout(
   const bondAttrsIn = extras.bondAttrs ?? [];
   const bondFormAttrBase: Record<string, number> = {};
   for (const a of bondAttrsIn) { bondFormAttrBase[a.id] = off; f32Base[`bondFormAttr_${a.id}`] = off; off += ma * bondReqSlots; }
+  // SPRITE display runs — APPENDED LAST (after every other run, including the P3
+  // bond-form request runs), so a sprite-free model's bases — and therefore its
+  // emitted shader — are byte-identical, and a model that DOES carry sprites moves
+  // no base an already-compiled shader baked. Gated on the C9 `sprites` gate, the
+  // same predicate the CPU store + the WASM layout use.
+  const spritesReserved = !!extras.sprites;
+  if (spritesReserved) { for (const f of AGENT_GPU_SPRITE_FIELDS) { f32Base[f] = off; off += ma; } }
   const f32Len = off;
 
   const i32Base: Record<string, number> = {};
@@ -468,6 +512,6 @@ export function computeAgentWebGPULayout(
     modelAttrKeys: [...modelAttrKeys], lookupTableIds,
     indicatorCount, maxBonds, bondStoreLen,
     bondSlotStride, bondAttrIds, bondAttrWord, bondAttrIsFloat, bondFormAttrBase,
-    bondReqSlots,
+    bondReqSlots, spritesReserved,
   };
 }

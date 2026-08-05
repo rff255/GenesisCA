@@ -32,7 +32,7 @@
 import type { AgentStore } from './agentEngine';
 import { initAgentSlot, freeStagedSlot } from './agentEngine';
 import type { AgentWebGPULayout } from '../../modeler/vpl/compiler/agentWebgpu/layout';
-import { AGENT_GPU_F32_FIELDS, AGENT_GPU_F32_FIELDS_3D, AGENT_GPU_I32_FIELDS, AGENT_GPU_QUEUE_FIELDS, AGENT_GPU_REQUEST_FIELDS } from '../../modeler/vpl/compiler/agentWebgpu/layout';
+import { AGENT_GPU_F32_FIELDS, AGENT_GPU_F32_FIELDS_3D, AGENT_GPU_I32_FIELDS, AGENT_GPU_QUEUE_FIELDS, AGENT_GPU_REQUEST_FIELDS, AGENT_GPU_SPRITE_FIELDS } from '../../modeler/vpl/compiler/agentWebgpu/layout';
 import { emitAgentForcePassWGSL, agentMirrorFields, emitForceControlStruct } from '../../modeler/vpl/compiler/agentWebgpu/forcePass';
 import { acquireSharedGpuDevice, releaseSharedGpuDevice } from './sharedGpuDevice';
 
@@ -176,6 +176,12 @@ export interface AgentWebGPURuntime {
    *  the worker merges it into the shared stopFlag. */
   stopFlagBuf: GPUBuffer | null;
   usesStop: boolean;
+  /** The behaviour writes per-agent SPRITE state (Set Agent Sprite) — the five
+   *  `AGENT_GPU_SPRITE_FIELDS` runs are seeded before every dispatch and read back
+   *  after. No binding of its own (the runs live in `agentF32`). It ALSO blocks
+   *  GPU residency (see `residencyModelBlockers`' `sprites` term): the CPU owns
+   *  sprite state between generations. */
+  usesSpriteWrite: boolean;
   /** Apply Force To Agent (binding 14) — an f32-bitcast atomic force-scatter
    *  accumulator (X/Y[/Z] regions strided by maxAgents). null when the behaviour
    *  graph has no Apply Force To Agent. Zeroed (clearBuffer) before each behaviour
@@ -416,6 +422,13 @@ export interface AgentRuntimeUsage {
    *  declared `read_write`, so its bind-group entry must be `storage` (not
    *  read-only) and the buffer needs COPY_SRC for the attribute-lane readback. */
   usesBondStoreWrite?: boolean;
+  /** The behaviour writes per-agent SPRITE state (Set Agent Sprite). Declares NO
+   *  binding — the five runs live in `agentF32` — but it turns the sprite
+   *  round-trip ON: the runs are SEEDED from the CPU store before every dispatch
+   *  and read back after. Both halves are required together: the shader writes only
+   *  the TICKED facets, so an un-seeded run would be read back as 0 and clobber the
+   *  CPU's correct value (a spriteId of 0 = "no sprite" ⇒ agents drawn as discs). */
+  usesSpriteWrite?: boolean;
 }
 
 /** A1.5 — one Agent Output-Mapping GPU colour pass: its WGSL module + the
@@ -769,6 +782,11 @@ export async function createAgentWebGPURuntime(
     auxF32Buf, indicatorsBuf, bondStoreBuf,
     spawnCursorBuf, usesSpawn: hasSpawn, usesBondStoreWrite: bondStoreWrites,
     stopFlagBuf, usesStop: hasStop,
+    // The sprite round-trip needs the layout to have RESERVED the runs (the C9
+    // gate). `usesSpriteWrite ⇒ reserved` by construction (the gate is usage-
+    // widened on the very node that sets this flag), but AND-ing it keeps a
+    // hand-edited / mismatched layout from addressing a run that does not exist.
+    usesSpriteWrite: !!usage.usesSpriteWrite && layout.spritesReserved,
     forceScatterBuf,
     chargeTreeF32Buf, chargeTreeI32Buf,
     chargeTreeUploadF32: hasChargeTree ? new Float32Array(Math.max(1, layout.chargeTreeF32Len)) : null,
@@ -839,7 +857,19 @@ function buildF32ReadPlan(rt: AgentWebGPURuntime, window: number): AgentF32ReadP
   for (const field of f32Fields) add(L.f32Base[field], AGENT_GPU_QUEUE_FIELDS.has(field) ? L.bondReqSlots : 1);
   for (const id of L.agentAttrIds) { add(L.agentAttrBase[id], 1); add(L.agentAttrWriteBase[id], 1); }
   for (const id of L.bondAttrIds) add(L.bondFormAttrBase[id], L.bondReqSlots);
+  // The SPRITE runs are planned under exactly the predicate that UPLOADS them
+  // (`spriteRunsActive`), so the plan still covers precisely what crosses the bus
+  // in both directions — and `compactBase` still throws for anything else.
+  if (spriteRunsActive(rt)) for (const field of AGENT_GPU_SPRITE_FIELDS) add(L.f32Base[field], 1);
   return { window, totalElems: Math.max(1, cursor), base, copies };
+}
+
+/** Does this runtime round-trip the five SPRITE runs? ONE predicate, consulted by
+ *  the upload, the read plan and both readbacks — they must agree or the readback
+ *  reads a run the upload never seeded (and the shader writes only the TICKED
+ *  facets, so an unseeded run would come back as 0 and wipe the CPU's sprite id). */
+function spriteRunsActive(rt: AgentWebGPURuntime): boolean {
+  return rt.usesSpriteWrite && rt.layout.spritesReserved;
 }
 
 function f32ReadPlan(rt: AgentWebGPURuntime, window: number): AgentF32ReadPlan {
@@ -956,6 +986,31 @@ export function uploadAgentSoA(rt: AgentWebGPURuntime, s: AgentStore): void {
     if (base === undefined) continue;
     for (let i = 0, n = ma * L.bondReqSlots; i < n; i++) f[base + i] = 0;
   }
+  // SPRITE runs — SEEDED from the CPU store, which OWNS sprite state between
+  // generations (`advanceAgentSprites` ticks frame += speed, `initAgentSlot`
+  // clears a recycled slot, `divideAgent` hands a daughter its mother's sprite).
+  // The shader writes only the facets its Set Agent Sprite nodes tick, so an
+  // un-seeded run would be read back as 0 and clobber the CPU value.
+  //
+  // PRECISION: `spriteIds` is a slot index (exact in f32 far past any plausible
+  // sprite count) and the other four are DISPLAY quantities the renderer already
+  // consumes as f32 — a frame counter, compass degrees, a size multiplier. The
+  // f64→f32 round-trip is therefore invisible; it is the same statistical-parity
+  // stance the rest of the WebGPU agent SoA takes.
+  if (spriteRunsActive(rt)) {
+    const spriteSrc: Record<string, ArrayLike<number>> = {
+      spriteIds: s.spriteIds, spriteFrames: s.spriteFrames, spriteSpeeds: s.spriteSpeeds,
+      spriteRotations: s.spriteRotations, spriteScales: s.spriteScales,
+    };
+    for (const field of AGENT_GPU_SPRITE_FIELDS) {
+      const base = L.f32Base[field];
+      if (base === undefined) continue;
+      const src = spriteSrc[field];
+      const n = src ? Math.min(hw, src.length) : 0;   // 0-length when the C9 gate dropped it CPU-side
+      for (let i = 0; i < n; i++) f[base + i] = src![i]!;
+      for (let i = n; i < ma; i++) f[base + i] = 0;
+    }
+  }
   // Per-RUN uploads of the live prefix, instead of one whole-buffer write sized by
   // the maxAgents ceiling. ~30-50 small writeBuffer calls replace a single ~15 MB
   // one at a 60 000 ceiling with ~2 000 agents.
@@ -973,6 +1028,12 @@ export function uploadAgentSoA(rt: AgentWebGPURuntime, s: AgentStore): void {
   for (const id of L.bondAttrIds) {
     const base = L.bondFormAttrBase[id];
     if (base !== undefined) putF32(base, L.bondReqSlots);
+  }
+  if (spriteRunsActive(rt)) {
+    for (const field of AGENT_GPU_SPRITE_FIELDS) {
+      const base = L.f32Base[field];
+      if (base !== undefined) putF32(base, 1);
+    }
   }
 
   // i32 fields — lineage / bondCount.
@@ -2801,6 +2862,29 @@ export async function readbackAgentStep(rt: AgentWebGPURuntime, s: AgentStore): 
       for (let c = 0; c < nq; c++) dst[cb + c] = f[base + gb + c]!;
     }
   }
+  // SPRITE runs → back into the CPU arrays (Set Agent Sprite writes them GPU-side;
+  // the CPU's `advanceAgentSprites` then ticks the frame for this generation, the
+  // same order `runAgentStep` uses on JS/WASM). Only when the round-trip is on —
+  // the plan planned exactly these runs under the same predicate.
+  if (spriteRunsActive(rt)) {
+    const spriteDst: Record<string, { arr: { [i: number]: number; length: number }; int: boolean } | undefined> = {
+      spriteIds: { arr: s.spriteIds, int: true },
+      spriteFrames: { arr: s.spriteFrames, int: false },
+      spriteSpeeds: { arr: s.spriteSpeeds, int: false },
+      spriteRotations: { arr: s.spriteRotations, int: false },
+      spriteScales: { arr: s.spriteScales, int: false },
+    };
+    for (const field of AGENT_GPU_SPRITE_FIELDS) {
+      const rawBase = L.f32Base[field]; const d = spriteDst[field];
+      if (rawBase === undefined || !d || d.arr.length === 0) continue;
+      const base = CB(rawBase);
+      const n = Math.min(hw, d.arr.length);
+      for (let i = 0; i < n; i++) {
+        if (!s.alive[i]) continue;
+        d.arr[i] = d.int ? Math.round(f[base + i]!) : f[base + i]!;
+      }
+    }
+  }
   // (No i32 SoA readback: the agent i32 fields — lineage / bondCount — are
   // CPU-owned + uploaded read-only. There is no built-in agent "type" any more,
   // and no behaviour node writes the i32 SoA.)
@@ -2840,6 +2924,18 @@ export async function readbackAgentStep(rt: AgentWebGPURuntime, s: AgentStore): 
           const isInt = s.attrKind[id] !== 'float64';
           const v = isInt ? Math.round(f[base + k]!) : f[base + k]!;
           dstR[k] = v; if (dstW) dstW[k] = v;
+        }
+        // …and its SPRITE state, for the same reason: `initAgentSlot` just cleared
+        // it, so a Set Agent Sprite on the newborn's Create handle would be lost.
+        if (spriteRunsActive(rt)) {
+          const sB = L.f32Base['spriteIds'];
+          if (sB !== undefined && s.spriteIds.length > k) {
+            s.spriteIds[k] = Math.round(f[CB(sB) + k]!);
+            s.spriteFrames[k] = f[CB(L.f32Base['spriteFrames']!) + k]!;
+            s.spriteSpeeds[k] = f[CB(L.f32Base['spriteSpeeds']!) + k]!;
+            s.spriteRotations[k] = f[CB(L.f32Base['spriteRotations']!) + k]!;
+            s.spriteScales[k] = f[CB(L.f32Base['spriteScales']!) + k]!;
+          }
         }
       } else {
         // Staged (Created) but never Added — a hole. Recycle its slot (bumps epoch,
@@ -3437,6 +3533,24 @@ export async function readbackAgentFrame(rt: AgentWebGPURuntime, s: AgentStore):
     if (!dst) continue;
     const isInt = s.attrKind[id] !== 'float64';
     for (let i = 0; i < hw; i++) { if (!s.alive[i]) continue; dst[i] = isInt ? Math.round(f[base + i]!) : f[base + i]!; }
+  }
+  // SPRITE runs — symmetric with `readbackAgentStep`. `usesSpriteWrite` is a
+  // residency BLOCKER, so a sprite-writing behaviour never reaches this path
+  // today; keeping the copy here means a future residency widening inherits the
+  // correct semantics instead of silently dropping the shader's sprite writes.
+  if (spriteRunsActive(rt)) {
+    const ids = L.f32Base['spriteIds'];
+    if (ids !== undefined && s.spriteIds.length > 0) {
+      const bI = CB(ids), bF = CB(L.f32Base['spriteFrames']!), bS = CB(L.f32Base['spriteSpeeds']!);
+      const bR = CB(L.f32Base['spriteRotations']!), bC = CB(L.f32Base['spriteScales']!);
+      const n = Math.min(hw, s.spriteIds.length);
+      for (let i = 0; i < n; i++) {
+        if (!s.alive[i]) continue;
+        s.spriteIds[i] = Math.round(f[bI + i]!);
+        s.spriteFrames[i] = f[bF + i]!; s.spriteSpeeds[i] = f[bS + i]!;
+        s.spriteRotations[i] = f[bR + i]!; s.spriteScales[i] = f[bC + i]!;
+      }
+    }
   }
   pooledF.buffer.unmap();
   pooledC.buffer.unmap();

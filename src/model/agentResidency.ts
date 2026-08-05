@@ -47,6 +47,13 @@ export interface ResidencyGraphFacts {
   usesStop: boolean;
   /** The behaviour shader reads/writes indicators (accumulation needs per-gen sync). */
   usesIndicators: boolean;
+  /** The behaviour graph writes per-agent SPRITE state (Set Agent Sprite). The
+   *  ENGINE owns sprite state between generations — `advanceAgentSprites` ticks
+   *  `frame += speed` once per generation on the CPU — so a whole-batch submit,
+   *  which has no CPU touch point between generations, cannot interleave the
+   *  shader's writes with that tick. Absent ⇒ false (a caller that predates this
+   *  term keeps today's verdict). */
+  usesSpriteWrite?: boolean;
   /** The model declares Stop Event messages (cell and/or agent). */
   hasStopMessages: boolean;
   /** Allocated bond slots per agent. The WORKER passes its store's real
@@ -121,6 +128,9 @@ export function residencyModelBlockers(
   }
   if (facts.usesIndicators) {
     out.push({ key: 'indicators', text: 'the behaviour graph reads or writes indicators — accumulators are synced per generation' });
+  }
+  if (facts.usesSpriteWrite) {
+    out.push({ key: 'sprites', text: 'the behaviour graph sets agent sprites — the engine advances sprite frames on the CPU once per generation, so the batch cannot run without a per-generation touch point' });
   }
   return out;
 }

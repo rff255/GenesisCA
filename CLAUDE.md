@@ -986,7 +986,7 @@ Click the `⚙` compile-target chip (C1 already made it amber on any demotion). 
 Emits a **committed** module HelpView imports, built from the tables the engine enforces with: `AGENT_NODE_REQUIREMENT`, the node registry, `AGENT_WASM_SUPPORTED_TYPES` / `AGENT_WEBGPU_SUPPORTED_TYPES`, `detectWebGPUIncompatibilities`, and the capacity constants. Node-only, using the repo's established esbuild-bundle pattern for importing TS. **`--check` regenerates in memory and fails on drift** (naming the first differing line) — adding a node without regenerating is a red gate, not silent rot.
 - **The reject sets are COMPUTED, never listed**: a per-target reject is `registry agent nodes − SUPPORTED_TYPES`.
 - **The WebGPU grid reject set is PROBED, not transcribed** — `detectWebGPUIncompatibilities` is an inline switch, not an exported list, so the generator ASKS it: every node × a bare config (catches unconditional rejects) × a candidate-operation list (catches config-dependent ones). The candidate list is the probe's INPUT SPACE; the gate produces every verdict. **The bare-config probe is what distinguishes an unconditional reject from a conditional one** — without it the same reason recurs under every candidate op and a node rejected in all configurations reads as config-dependent (caught by inspecting the first generated output).
-- **A node outside a supported set is NOT automatically a gap**, and saying so would be exactly the drift P8 exists to stop. Three DERIVED exemptions: **entryPoint** (`category === 'event'` — the gates walk the behaviour-reachable cone, which never contains a root), **lowered** (**probed**: feed each shipped pre-compile transform — `expandNeighbourCensus` / `expandForceToAgents` / `expandPeriodicSteps` — a one-node graph and see whether the node survives), and **cpuRoot** (`AGENT_WASM_CPU_ROOT_TYPES`). Each row carries `wasmStatus`/`webgpuStatus` = `yes` | `exempt` | `no`. After the exemptions, **`setAgentSprite` is the single genuine gap on WebGPU** (it emits on WASM — see “Set Agent Sprite on the WASM agent target”), so the generated counts read `agentGapsWasm: 0`.
+- **A node outside a supported set is NOT automatically a gap**, and saying so would be exactly the drift P8 exists to stop. Three DERIVED exemptions: **entryPoint** (`category === 'event'` — the gates walk the behaviour-reachable cone, which never contains a root), **lowered** (**probed**: feed each shipped pre-compile transform — `expandNeighbourCensus` / `expandForceToAgents` / `expandPeriodicSteps` — a one-node graph and see whether the node survives), and **cpuRoot** (`AGENT_WASM_CPU_ROOT_TYPES`). Each row carries `wasmStatus`/`webgpuStatus` = `yes` | `exempt` | `no`. After the exemptions there is **NO genuine gap on either agent target** — `setAgentSprite` was the last one and it now emits on WASM AND WebGPU (see “Set Agent Sprite on the WASM agent target” + “… on the WebGPU agent target”), so the generated counts read `agentGapsWasm: 0` and `agentGapsWebgpu: 0`.
 - **Counts stop being hand-typed.** Help said "around 115 selectable node types (42 agent)" while `NODES_REFERENCE.md` said 150 / 53 — both typed by hand, both free to rot. It now renders the generated `150 / 53 / 20`.
 - HelpView gains **"Which fast paths actually engaged"**, **"Engine capability matrix"** (`CapabilityMatrixReference`, 53 rows), **"What the WebGPU CA grid rejects"** and **"Capacity limits"** (every Class-C bound with its real number — the promise the doctrine makes). `docs/NODES_REFERENCE.md` per-node annotations are OUT OF SCOPE this phase (its target facts live in a prose Notes column); the generator is shaped so a later phase can emit that table from the same data.
 
@@ -2034,7 +2034,7 @@ Plan + illustrated mockup: [docs/PLAN_AGENT_OUTPUT_MAPPINGS_SPRITES.md](docs/PLA
 - **PLAYBACK IS LOGIC-DRIVEN, NOT a simulator transport** (the core correction): the **Set Agent Sprite** node ([SetAgentSpriteNode.ts](src/modeler/vpl/nodes/SetAgentSpriteNode.ts), `requirements.bondGraph`) carries **independently-tickable facets** — *Change sprite* (config `setSprite` + `spriteId` picker), *Set frame* (config `setFrame` + the `frame` input — jump/reset), *Set speed* (config `setSpeed` + the `speed` input — frames per step, **negative = reverse**, 0 = hold). `hiddenPorts` shows the frame/speed inputs only when their facet is ticked. Tick only what you want to change (swap sprite but keep frame/speed; only change speed; reset to frame 0; …). The node writes the per-agent display buffers; a pre-resolve in `compileAgentGraph` bakes `spriteId` → a 1-based `_spriteSlot` into `model.sprites` (0 = none/clear).
 - **Persistent per-agent state + engine advance** ([agentEngine.ts](src/simulator/engine/agentEngine.ts)): `AgentStore.spriteIds: Int32Array` (0=none, ≥1=slot) + `spriteFrames: Float64Array` (current frame, fractional) + `spriteSpeeds: Float64Array` (frames/step). PLAIN arrays regardless of backing (never wasm/webgpu-backed — only the JS node + engine touch them); reset to 0 in `initAgentSlot` (recycled slots don't inherit a stale sprite). **`advanceAgentSprites(store)`** does `frame += speed` for every live agent with a sprite, called per step from `runAgentStep` (and after `runAgentStepWebGPU`), gated on `hasAgentSprites` — so the animation only progresses while the sim runs (logic-driven). Unbounded by design (the render floors + wraps/clamps). The 3 buffers ride the agent loop ABI (`buildAgentLoopParams` ↔ the worker's `buildAgentLoopArgs`/`buildDivisionArgs`/`buildAgentInitArgs`, after `glyphColors`); the WASM/WebGPU behaviour ABIs are untouched (JS-only param list). The snapshot ships `spriteIds`+`spriteFrames` ONLY when `hasAgentSprites` (the z/vz "A1" length-0 gate → non-sprite agent models byte-identical); `spriteSpeeds` stays worker-side. `agentHasSprites` rides `init`/`recompile` (from `(model.sprites?.length ?? 0) > 0`).
 - **Render** ([SimulatorView.tsx](src/simulator/SimulatorView.tsx) `drawAgentsOverlay`): when the snapshot's `spriteIds[i] > 0` and the sprite is decoded, blit the frame `floor(spriteFrames[i])` wrapped (loop) / clamped (once, per the sprite's `loop` flag), aspect-preserved, sized to the agent diameter × the sprite `scale`, alpha = the agent colour's A; else the existing filled circle. Bonds draw under sprites; recording/screenshot capture the display canvas → sprites for free. There is **NO simulator playback panel + NO playback rAF** (a draft built under the wrong model was removed).
-- **All-target story**: Set Agent Sprite runs on **JS and WASM** — the five sprite buffers live in the shared agent memory (see “Set Agent Sprite on the WASM agent target”), so a sprite-driving BEHAVIOUR graph compiles to WASM like any other setter. **WebGPU is the exception** (no GPU-side sprite mirror), so a behaviour-reachable Set Agent Sprite clamps a WebGPU-target model to JS; in an Agent Output Mapping graph (the intended use) it's all-target-clean (the OM pass is JS on every agent target, and the gates inspect only behaviour-reachable nodes). Sprites render in BOTH the 2D overlay AND the **3D voxel view** (the 3D billboard pass below).
+- **All-target story**: Set Agent Sprite runs on **all three agent targets** — the five sprite buffers live in the shared agent memory on JS/WASM (see “Set Agent Sprite on the WASM agent target”) and get their own `agentF32` runs on the GPU (see “… on the WebGPU agent target”), so a sprite-driving BEHAVIOUR graph compiles like any other setter and never clamps the model. The one fast path it forfeits is **GPU residency** (the CPU ticks `frame += speed` once per generation); an Agent Output Mapping graph avoids even that, since OM passes are CPU-side on every agent target. Sprites render in BOTH the 2D overlay AND the **3D voxel view** (the 3D billboard pass below).
 - **Verified**: tsc + `npm run build` clean; GoL + Life3D byte-clean on all 3 targets; Boids agent behaviour unregressed; a standalone agent OM graph compiles (writes `spriteIds`/`spriteSpeeds`/`colors`) + the linked path synthesizes; **runtime end-to-end** (Boids + a Set Agent Sprite OM pass, real worker): all 260 agents got `spriteId=1`, the frame advanced exactly `0.5`/step (the engine advance from the node-set speed), the snapshot shipped both buffers, the render drew sprites (canvas pixel-sample: 157k sprite-colour pixels, 0 default-circle pixels), 0 console errors. Catalogue: **115 selectable** node types (118 − 3 hidden macro), **42 agent** nodes.
 
 ### 3D agent sprites — the WebGL2 billboard pass (branch `absorb_old_automatosgt`)
@@ -2263,12 +2263,9 @@ WASM; the generated capability matrix reads **`agentGapsWasm: 0`**.
   targets the current-loop agent UNGUARDED (it is live by construction) while a wired one takes
   the range-only guard the other by-id setters use; and the alpha byte is CLAMPED to [0,255]
   before `i32.store8`, because `store8` truncates where the JS `Uint8ClampedArray` clamps.
-- **WebGPU still clamps, deliberately** — the sprite buffers have no GPU-side mirror, and
-  adding one means new bindings + per-generation readback for a pure DISPLAY layer. The C1
-  Compatibility readout already names the node ("the agent graph uses a node the WebGPU agent
-  shader does not emit (setAgentSprite)"), and the free workaround is documented in Help + the
-  node description: put it in an **Agent Output Mapping** graph, whose passes are JS on every
-  agent target, and the behaviour keeps running on WebGPU.
+- **WebGPU clamped at the time, deliberately** — the sprite buffers had no GPU-side mirror,
+  and adding one meant new runs + a per-generation round-trip for a pure DISPLAY layer. That
+  clamp is **GONE**: see “Set Agent Sprite on the WebGPU agent target” below.
 - **Gates**: `check-compile-identity` 29 models byte-identical; a permanent
   `[synthetic] Set Agent Sprite (all facets, self + by-id, vector rotation)` entry in
   [parity-agent-wasm.mjs](scripts/parity-agent-wasm.mjs) with a **VALUE invariant** that
@@ -2280,6 +2277,103 @@ WASM; the generated capability matrix reads **`agentGapsWasm: 0`**.
   distinct colours in a 147-px blob — a textured sprite, not a flat disc) and animate, and an
   interleaved A/B shows WASM neutral-to-marginally-faster (2.69/2.71 vs 2.72/2.74 ms/frame at
   100 agents — as documented, the WASM win needs a heavy per-agent rule or a large population).
+
+### Set Agent Sprite on the WebGPU agent target (branch `updates`)
+
+The LAST agent-target node gap. `setAgentSprite` emitted on JS and WASM but not on the GPU
+(no sprite mirror there), so a **behaviour-reachable** Set Agent Sprite clamped a
+WebGPU-target model to JS — the C1 readout literally said *"the agent graph uses a node the
+WebGPU agent shader does not emit (setAgentSprite)"*. It now emits; the generated capability
+matrix reads **`agentGapsWebgpu: 0`** and the reject set is the documented fundamentals only.
+**There was never a fundamental incompatibility** — sprite state is per-agent, own-slot (or
+spawn-handle / range-guarded by-id) writes, exactly the parallel-safe shape every other agent
+setter has. It was an effort-scope decision, and this closes it.
+
+- **Five `agentF32` RUNS, no new binding** (`AGENT_GPU_SPRITE_FIELDS` in
+  [agentWebgpu/layout.ts](src/modeler/vpl/compiler/agentWebgpu/layout.ts)): `spriteIds` /
+  `spriteFrames` / `spriteSpeeds` / `spriteRotations` / `spriteScales`, one run each, **APPENDED
+  AFTER every existing run** (including the P3 bond-form request runs) and reserved **only when
+  the C9 `sprites` gate is on**. Appending last is what keeps a sprite-free model's bases — and
+  therefore its emitted shader — byte-identical; riding `agentF32` is what keeps the Naga
+  stripped-binding discipline out of it entirely. `AgentWebGPULayout.spritesReserved` is the
+  emitter's C9 SAFETY CATCH (the mirror of the WASM layout's flag): gate off ⇒ every sprite
+  facet is dropped, while the ALPHA facet survives because it writes `agentColors`, always
+  allocated. **This also wires `agentFieldGating.ts` site 3**, which that file's header had
+  claimed (`AgentWebGPUExtras.fieldGates`) but nothing implemented, because the group had no GPU
+  run at all. `AgentWebGPUExtras.sprites` defaults to **OFF** when absent — deliberately
+  inverting `normalizeFieldGates`' absent⇒on convention, because every other optional block in
+  that file is absent⇒off and the two callers that pass no extras (SimulatorView's minimal
+  render-only layout, the worker's fallback) compile no shader.
+- **f32, and that is honest for this group.** `spriteIds` is a slot INDEX (exact in f32 far past
+  any plausible sprite count, rounded on readback) and the other four are DISPLAY quantities the
+  renderer already consumes as f32 — a frame counter, compass degrees, a size multiplier. Same
+  statistical-parity stance as the rest of the WebGPU agent SoA.
+- **THE CPU STAYS AUTHORITATIVE BETWEEN GENERATIONS, so the round-trip is a PAIR.**
+  `advanceAgentSprites` ticks `frame += speed` once per generation, `initAgentSlot` clears a
+  recycled slot and `divideAgent` hands a daughter its mother's sprite — all CPU. So
+  `uploadAgentSoA` **SEEDS** the five runs from the store and `readbackAgentStep` /
+  `readbackAgentFrame` copy them back. **Both halves are mandatory together**: the shader writes
+  only the TICKED facets, so an un-seeded run would be read back as 0 and clobber the CPU value
+  (a `spriteId` of 0 means "no sprite" ⇒ the agents silently render as plain discs). ONE
+  predicate — **`spriteRunsActive(rt)`** = `rt.usesSpriteWrite && layout.spritesReserved` —
+  gates the plan, the fill, the writeBuffer, both readbacks and the spawn-reconcile overlay, so
+  they cannot drift; `buildF32ReadPlan` adds the runs under that SAME predicate, keeping the
+  "the plan covers exactly what crosses the bus" invariant `compactBase` throws for.
+- **`usesSpriteWrite` is set by a SPRITE-RUN write only, never by the ALPHA facet alone** (alpha
+  writes `agentColors`, which every path already round-trips) — so an alpha-only node costs no
+  extra traffic and does not block residency.
+- **THE SPAWN RECONCILE OVERLAYS SPRITE STATE.** A newborn goes through `initAgentSlot`, which
+  CLEARS sprites — so a Set Agent Sprite on a Create Agent handle would be lost. The reconcile
+  now copies the five GPU values for `[hw, cursor)` exactly as it already does for the agent
+  attributes and `targetRadius`.
+- **RESIDENCY IS BLOCKED, narrowly and by DESIGN** (`residencyModelBlockers` key `sprites`,
+  mirrored model-side in `residencyFactsFromModel`). A resident batch encodes N generations into
+  ONE submit with NO CPU touch point, so the per-generation `advanceAgentSprites` tick could not
+  interleave with the shader's writes. The term is `usesSpriteWrite`, **not "the model has
+  sprites"**: a model whose sprite state is set in an Agent Output Mapping (or not at all) keeps
+  residency exactly as before. Advancing frames GPU-side in `posCommit` was considered and NOT
+  taken: sprite models are draw-bound and can never take the GPU direct-render path anyway (see
+  the section below), so the win would be nil.
+- **DELIBERATELY NOT EMITTED IN AN AGENT OUTPUT MAPPING MODULE** (`agentSubsetSupported`'s new
+  `scope: 'behaviour' | 'om'` param). An OM module is dispatched ONLY inside
+  `dispatchResidentBatch`, while every other path colours agents through the CPU
+  `runAgentColorPass` — and the sprite round-trip is keyed on the BEHAVIOUR flag, so an OM-only
+  write would simply be lost. Rejecting it keeps today's OM semantics EXACTLY (an OM with a
+  sprite node ⇒ `omSupported: false` ⇒ the CPU overlay, where the node has always worked) and
+  costs nothing user-visible: an OM-only usage never clamped the agent TARGET in the first place.
+- **Gates**: `check-compile-identity` — **29 models, and the ONLY diff is `Boids - Flocking`'s
+  `agent.webgpu.shader` / `agent.webgpu.error`** (empty + "unsupported node 'setAgentSprite'" →
+  a real shader), i.e. the single shipped model that carries a sprite; every other model is
+  byte-identical on every surface. A new
+  [scripts/test-agent-sprite-webgpu.mjs](scripts/test-agent-sprite-webgpu.mjs) (50 checks, seven
+  tiers: layout / gate / emit / C9 catch / OM scope / residency / runtime source invariants),
+  **negative-controlled three ways by source mutation** — dropping the OM reject, dropping the
+  sprite `writeBuffer` (caught by the 6-site count), and reserving the runs unconditionally.
+  `gen-capability-docs --check` regenerated. `test-engine-resolve`'s WASM-accepts/WebGPU-refuses
+  asymmetry case was built on this very node, so it is rebuilt on the CONTRACT (Statistical ⇒
+  WebGPU, Exact ⇒ WASM) — that took the suite from 7 failures to 1, the remainder being the
+  PRE-EXISTING `Boids - Flocking` contract-re-inference case (the shipped file carries
+  `reproducibility: 'statistical'` with an explicit `agentTarget: 'wasm'`) plus the pre-existing
+  SKIP of the deleted `Cubic GRA.gcaproj`.
+- **Verified on the REAL GPU** (in-browser; the pane is occluded, so pixel evidence comes from
+  `getImageData` rather than a screenshot): the reporter's sprite boids model on
+  `agentTarget: 'webgpu'` flips the C1 readout from `✗ WebGPU — … does not emit
+  (setAgentSprite)` to **`✓ WebGPU  running`**, the chip reads `agents WebGPU`,
+  `getDiagnostics` reports `agentEngineActive: 'webgpu'` with **`fallbackEvents: []`** (no
+  silent demotion) and `residency.eligible: false` with the sprite blocker as its first reason.
+  Sprite ids reach all 100 agents (`spriteIds = 1`) and **frames ADVANCE every generation**
+  (0.005 → 1.706 over 13 generations; **608 generations with 0 worker and 0 console errors**,
+  frames finite at ~153–158). Cross-target: the same model on WASM reaches 1.73 vs the GPU's
+  1.71 at generation 13 — statistically equivalent, as documented. Pixels: a single agent's
+  blob is a 20×20-px region with **90 distinct colours** (993 distinct over 27.5 k lit pixels
+  for the whole flock) — textured sprite art, not a flat disc. **All facets on the real device**:
+  a synthetic probe wiring `dirX = handle - 3`, `dirY = 2` produced rotations matching the
+  hand-computed `atan2(id-3, -2)·180/π` **exactly on all 8 agents (max error 0)** and
+  identically on WASM; the alpha facet round-tripped 200; and a **by-handle spawn** wrote the
+  newborn's `spriteId 1` / rotation 135° / scale 3.5 through the reconcile overlay. Regressions:
+  **Particle Life** (non-sprite, WebGPU) still reports `residency eligible + engaged` with
+  `directRender: agents`, and the shipped **Boids - Flocking** on WASM still runs 260 agents with
+  sprites (2271 distinct colours) and 0 errors.
 
 #### Sprite models are DRAW-bound, and Glow is now a real cost on them
 Measured on a 100-agent sprite boids model at FPS ∞ / G/F 1 (1900×1000 pane, 100 Hz display):
@@ -4044,7 +4138,7 @@ Nine small independent features/UX items from the TODO triage. All additive; the
 
 - **Math node floor / ceil / round ops (all 5 emit surfaces)** — added to `arithmeticOperator` on JS cell ([ArithmeticOperatorNode.ts](src/modeler/vpl/nodes/ArithmeticOperatorNode.ts)), WASM cell, WebGPU cell, agentWasm, agentWebgpu (+ the CaNode op dropdown and `ARITHMETIC_UNARY_OPS`, which `hiddenPorts` + the collapsed label consume). **The parity rule: `round` emits `floor(x + 0.5)` on EVERY target** — never JS `Math.round` / WASM `f64.nearest` / WGSL `round()` (banker's rounding diverges on .5 cases) — the SAME convention the Expression node's `round()` already used (its emitters were the reference; no Expression change was needed, `floor/ceil/round` were already there). floor/ceil use native intrinsics (WASM opcodes 0x9C/0x9B — no new host imports; `OP_F64_CEIL` added to the wasm + agentWasm import lists). No `trunc` — the op set deliberately mirrors the Expression function set. Verified by [scripts/test-math-int-ops.mjs](scripts/test-math-int-ops.mjs): JS + a REAL instantiated WASM module in Node produce the hand-computed values (incl. round(2.5)=3, round(−2.5)=−2) bit-identically; WGSL emit checked for `floor(`/`ceil(`/the `floor(x + 0.5)` form and the ABSENCE of `round(`.
 - **Lookup-table random-fill Min for Integer/Tag values** — `tableRoll.min?` ([types.ts](src/model/types.ts)) + `TableFillPolicy.intMin?` ([variegation.ts](src/modeler/vpl/compiler/variegation.ts) `randomFillTableData`): integer/tag entries draw uniform over `[intMin, valueCount]`; **absent (or 1) ⇒ bit-identical to the historical `1 + floor(next()*count)` draw** (same single RNG advance, proven in the extended [scripts/test-ndtable.mjs](scripts/test-ndtable.mjs) — old seeds keep reproducing their tables). With a min the raw (unclamped) max is used, so negative integer ranges (−5..−2) work; degenerate min > max collapses to min; tag min is an option INDEX (0 admits the "empty" option 0 into rolls). Editor: a Min `NumberField` in [LookupTableEditor.tsx](src/modeler/panels/LookupTableEditor.tsx)'s Randomize block for integer AND tag (integer Max lost its ≥1 clamp); the roll stores `min` (integer + tag). The Overseer `ovRandomizeTable` dep in SimulatorView passes `intMin: attr.tableRoll?.min` so a runtime re-roll reproduces the editor's policy.
-- **Set Agent Sprite `setAlpha` facet** ([SetAgentSpriteNode.ts](src/modeler/vpl/nodes/SetAgentSpriteNode.ts) + the CaNode checkbox): writes the agent COLOUR's alpha byte `colors[_t*4+3]` (Uint8ClampedArray clamps) — the same alpha the sprite render already multiplies by, so it fades/hides sprites per agent with zero new SoA/ABI; a later colour pass (agent OM) overrides it, documented in the tooltip/Help. Emitted on JS and WASM like the other facets (the alpha byte lives in `colors`, which is allocated on every target); WebGPU still clamps — see “Set Agent Sprite on the WASM agent target”.
+- **Set Agent Sprite `setAlpha` facet** ([SetAgentSpriteNode.ts](src/modeler/vpl/nodes/SetAgentSpriteNode.ts) + the CaNode checkbox): writes the agent COLOUR's alpha byte `colors[_t*4+3]` (Uint8ClampedArray clamps) — the same alpha the sprite render already multiplies by, so it fades/hides sprites per agent with zero new SoA/ABI; a later colour pass (agent OM) overrides it, documented in the tooltip/Help. Emitted on all three agent targets like the other facets (the alpha byte lives in `colors`, which is allocated everywhere; on the GPU it is a packed read-modify-write of `agentColors[t]`).
 - **Browser back exits the macro view** ([GraphEditor.tsx](src/modeler/vpl/GraphEditor.tsx)): one same-document `history.pushState` entry per macro level, RECONCILED from `currentScope` in an effect (enter pushes; a UI exit — breadcrumb/Undo Macro — consumes entries via one `history.go(delta)` with a `suppressPopRef` token so its popstate doesn't double-exit); the `popstate` listener pops exactly one level when inside a macro (decrementing `historyDepthRef` BEFORE the scope change so the reconcile effect no-ops) and no-ops at root (normal history behaviour). Orphaned entries after an unmount mid-macro are harmless (same-document state pops the app ignores); a remount re-pushes for the restored scope.
 - **Renameable reroute labels** ([RerouteNodeComponent.tsx](src/modeler/vpl/RerouteNodeComponent.tsx)): the node context menu's Rename already worked for reroutes (`data.label`, wholesale-serialized) — the label just wasn't RENDERED. Now a small muted `.label` pinned above the dot (pointer-events none; `.reroute` gained `position: relative`), shown when non-empty; the tooltip carries it too. **A NEW reroute defaults its label to the relayed PORT's name** (`defaultRerouteLabel` in [GraphEditor.tsx](src/modeler/vpl/GraphEditor.tsx), applied by both creation paths via `makeRerouteNode`'s optional label param): a reroute of a reroute inherits THAT reroute's (possibly user-renamed) label, and an UNNAMED upstream reroute is walked past to the original port (cycle-guarded). Verified in-app: `Get Cell Attribute.value` → reroute labeled "Value", chained reroute inherits it.
 - **Collapsible Properties sections** ([PropertiesPanelContent.tsx](src/modeler/panels/PropertiesPanelContent.tsx) `CollapsibleSection` + `.sectionTitleCollapsible`/`.sectionChevron` in PanelContent.module.css): Structure / Execution / Indicators / Variegated collapse via their title row (chevron). Collapsed bodies stay **MOUNTED** (`display: none`) — the Indicators list is a controlled master-detail child whose selection/effects must not reset. Persisted as a string[] in `localStorage['genesisca_properties_collapsed']` keyed by stable ids. `IndicatorsPanelSection` gained a `hideTitle` prop (the wrapper renders the title; `bare` variant avoids double `.section` chrome).

@@ -459,7 +459,7 @@ function residencyFactsFromModel(model: CAModel): ResidencyGraphFacts {
   const RADIUS_WRITE = new Set(['setAgentRadius', 'setTargetRadius']);
   const INDICATORS = new Set(['getIndicator', 'setIndicator', 'updateIndicator']);
   let structural = false, radiusWrite = false;
-  let usesSpawn = false, usesStop = false, usesIndicators = false;
+  let usesSpawn = false, usesStop = false, usesIndicators = false, usesSpriteWrite = false;
   // BEHAVIOUR-scoped, exactly like the compiler flags these mirror: an Init-Event
   // spawn / a Division-Event write is CPU-compiled on every engine and does NOT
   // block residency (Particle Life spawns its whole population in Init and IS
@@ -470,6 +470,11 @@ function residencyFactsFromModel(model: CAModel): ResidencyGraphFacts {
     if (t === 'createAgent' || t === 'addAgentToWorld') usesSpawn = true;
     if (t === 'stopEvent') usesStop = true;
     if (INDICATORS.has(t)) usesIndicators = true;
+    // Mirrors the WebGPU compiler's `usesSpriteWrite`: the engine ticks sprite
+    // frames on the CPU once per generation, so a sprite-writing behaviour cannot
+    // run a whole batch in one submit. (Conservative: the compiler flag is set only
+    // when a facet actually WRITES a sprite run, this fires on the node alone.)
+    if (t === 'setAgentSprite') usesSpriteWrite = true;
   });
   // The FIELD bridge is whole-graph: the worker's `agentUsesField` scans the
   // entire agent graph (any field node forces the per-generation CPU↔GPU field
@@ -485,7 +490,7 @@ function residencyFactsFromModel(model: CAModel): ResidencyGraphFacts {
     residencyClean: !structural && !radiusWrite,
     usesField,
     hasAgentAccessibleField: cellFieldAttrsOf(model).length > 0,
-    usesSpawn, usesStop, usesIndicators, hasStopMessages,
+    usesSpawn, usesStop, usesIndicators, usesSpriteWrite, hasStopMessages,
     bondSlots: resolveMaxBonds(model.centerBased),
   };
 }

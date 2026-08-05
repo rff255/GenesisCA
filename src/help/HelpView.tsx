@@ -2726,17 +2726,21 @@ export function HelpView() {
             graph.)
           </p>
           <p className={styles.p}>
-            <strong>Sprites and the engine.</strong> Set Agent Sprite runs on the <strong>JS and
-            WebAssembly</strong> agent engines &mdash; the five per-agent sprite buffers live in the
-            same shared agent memory as every other agent field, so a sprite-driving
-            <strong> Behaviour</strong> graph compiles to WASM like any other setter.
-            <strong> WebGPU is the exception</strong>: the sprite buffers have no GPU-side mirror,
-            so a Set Agent Sprite reachable from the Behaviour Step clamps a WebGPU-target model
-            to JS (Properties&nbsp;&rarr;&nbsp;Compatibility names the node as the reason). The fix
-            is free: put the node in an <strong>Agent Output Mapping</strong> graph instead.
-            Output-Mapping passes are JS on <em>every</em> agent target, so the behaviour keeps
-            running on WebGPU while the sprites still animate. That is also the natural home for
-            it &mdash; choosing how an agent <em>looks</em> is a presentation concern.
+            <strong>Sprites and the engine.</strong> Set Agent Sprite runs on <strong>all three
+            agent engines &mdash; JS, WebAssembly and WebGPU</strong>. The five per-agent sprite
+            buffers live in the same shared agent memory as every other agent field on the CPU
+            engines, and get their own runs in the GPU agent buffer, so a sprite-driving
+            <strong> Behaviour</strong> graph compiles like any other setter and never clamps the
+            model to a slower engine.
+            <br /><br />
+            One fast path is unavailable: a sprite-writing Behaviour graph is not
+            <strong> GPU-residency</strong> eligible, because the engine advances
+            <em> frame&nbsp;+=&nbsp;speed</em> on the CPU once per generation and a resident batch
+            runs a whole frame in a single GPU submit with no per-generation touch point. The model
+            still runs on the GPU, one generation per dispatch. Putting the node in an
+            <strong> Agent Output Mapping</strong> graph avoids even that &mdash; Output-Mapping
+            passes are CPU-side on every agent target &mdash; and it is the natural home for it
+            anyway: choosing how an agent <em>looks</em> is a presentation concern.
           </p>
           <p className={styles.p}>
             <strong>A note on speed.</strong> Sprites are drawn by the CPU overlay (the GPU

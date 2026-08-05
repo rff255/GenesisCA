@@ -284,27 +284,36 @@ for (const [f, contract, expect, why] of AUTO_AGENT_CASES) {
   eq(resolveEngines(m).agents?.resolved, 'js', 'Auto agents: falls back to JS when neither compiled engine can run the graph');
 }
 
-// Set Agent Sprite now runs on WASM but NOT on WebGPU — so a sprite-driving
-// BEHAVIOUR graph must resolve Auto to WebAssembly, not JS, and the WebGPU gate
-// must still refuse it (that refusal is what the Compatibility readout names).
+// Set Agent Sprite now runs on EVERY agent target (the last node gap closed), so a
+// sprite-driving BEHAVIOUR graph must not clamp anything: both gates accept it and
+// Auto follows the CONTRACT (Statistical ⇒ WebGPU, Exact ⇒ WASM), exactly like a
+// sprite-free graph.
 {
-  const m = migrateForHarness(load('Boids - Flocking.gcaproj'));
-  const bs = m.agentGraphNodes.find(n => n.data?.nodeType === 'behaviourStep');
-  m.sprites = [{ id: 'sp1', name: 'probe', dataUrl: '', mimeType: 'image/png' }];
-  m.agentGraphNodes.push({
-    id: '__spriteProbe', type: 'caNode', position: { x: 0, y: 0 },
-    data: { nodeType: 'setAgentSprite', config: { spriteId: 'sp1', _spriteSlot: 1, setSprite: true } },
-  });
-  m.agentGraphEdges.push({
-    id: '__spriteProbeEdge', source: bs.id, sourceHandle: 'output_flow_do',
-    target: '__spriteProbe', targetHandle: 'input_flow_do',
-  });
+  const mk = () => {
+    const m = migrateForHarness(load('Boids - Flocking.gcaproj'));
+    const bs = m.agentGraphNodes.find(n => n.data?.nodeType === 'behaviourStep');
+    m.sprites = [{ id: 'sp1', name: 'probe', dataUrl: '', mimeType: 'image/png' }];
+    m.agentGraphNodes.push({
+      id: '__spriteProbe', type: 'caNode', position: { x: 0, y: 0 },
+      data: { nodeType: 'setAgentSprite', config: { spriteId: 'sp1', _spriteSlot: 1, setSprite: true } },
+    });
+    m.agentGraphEdges.push({
+      id: '__spriteProbeEdge', source: bs.id, sourceHandle: 'output_flow_do',
+      target: '__spriteProbe', targetHandle: 'input_flow_do',
+    });
+    m.centerBased.agentTarget = 'auto';
+    return m;
+  };
+  const m = mk();
   ok(isAgentGraphWasmSupported(m), 'sprite case: the WASM agent gate ACCEPTS Set Agent Sprite');
-  ok(!isAgentGraphWebGPUSupported(m), 'sprite case: the WebGPU agent gate still refuses it');
-  m.centerBased.agentTarget = 'auto';
+  ok(isAgentGraphWebGPUSupported(m), 'sprite case: the WebGPU agent gate ACCEPTS it too');
   m.properties.reproducibility = 'statistical';
-  eq(resolveEngines(m).agents?.resolved, 'wasm',
-    'Auto agents: a sprite-driving behaviour resolves to WASM (not the JS fallback)');
+  eq(resolveEngines(m).agents?.resolved, 'webgpu',
+    'Auto agents: a sprite-driving behaviour under Statistical resolves to WebGPU');
+  const mx = mk();
+  mx.properties.reproducibility = 'exact';
+  eq(resolveEngines(mx).agents?.resolved, 'wasm',
+    'Auto agents: the same graph under Exact resolves to WASM (the contract, not the node)');
 }
 
 // An EXPLICIT choice is never silently replaced by Auto's pick — it keeps its

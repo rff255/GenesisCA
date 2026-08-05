@@ -29,16 +29,17 @@ import type { NodeTypeDef } from '../types';
  *
  *  Writes the per-agent display buffers `spriteIds`/`spriteFrames`/`spriteSpeeds`/
  *  `spriteRotations`/`spriteScales` (+ the agent colour's A byte for the alpha
- *  facet). Those five live in the SHARED agent memory (the sprite block in
- *  `computeAgentMemoryLayout`, reserved only when the C9 `sprites` gate is on), so
- *  this node EMITS ON WASM: a sprite-driving BEHAVIOUR graph runs on the WASM
- *  agent target instead of clamping the whole model to JS.
+ *  facet). Those five live in the SHARED agent memory on the CPU engines (the
+ *  sprite block in `computeAgentMemoryLayout`) and in their own `agentF32` runs on
+ *  the GPU (`AGENT_GPU_SPRITE_FIELDS`), both reserved only when the C9 `sprites`
+ *  gate is on — so this node EMITS ON ALL THREE AGENT TARGETS and never clamps a
+ *  model to a slower engine.
  *
- *  WebGPU is still the exception — the sprite buffers have no GPU-side mirror, so
- *  a behaviour-reachable Set Agent Sprite clamps a WebGPU-target model to JS (the
- *  Compatibility readout names the node). Putting it in an Agent OUTPUT MAPPING
- *  graph avoids that entirely: OM passes are JS on EVERY agent target, so the
- *  behaviour keeps running on WebGPU. `requirements.bondGraph` → Agents tab only. */
+ *  The one fast path it forfeits is GPU RESIDENCY: the engine ticks
+ *  `frame += speed` on the CPU once per generation, and a resident batch runs a
+ *  whole frame in one submit with no per-generation touch point. An Agent OUTPUT
+ *  MAPPING graph avoids even that (OM passes are CPU-side on every agent target)
+ *  and is the natural home for it anyway. `requirements.bondGraph` → Agents tab. */
 export const SetAgentSpriteNode: NodeTypeDef = {
   type: 'setAgentSprite',
   label: 'Set Agent Sprite',

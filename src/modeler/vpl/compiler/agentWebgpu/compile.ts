@@ -72,6 +72,7 @@ import { resolveKeyLabels, resolveAxes, isMultiAxisTable } from '../variegation'
 import { computeAgentWebGPULayout, type AgentWebGPULayout } from './layout';
 import { resolveMaxBonds, usesGlobalCharge } from '../../../../model/centerBased';
 import { agentOctreeNodeReserve } from '../../../../simulator/engine/agentEngine';
+import { resolveAgentFieldGates } from '../../../../model/agentFieldGating';
 import { encodeAttrValue } from '../../../../model/attrValueEncoding';
 
 /** The node types this compiler can emit to WGSL. A model whose agent graph uses
@@ -105,6 +106,11 @@ export const AGENT_WEBGPU_SUPPORTED_TYPES: ReadonlySet<string> = new Set<string>
   // agent attributes (Get/Set/Update Attribute on the agent SoA)
   'getCellAttribute', 'setAttribute', 'updateAttribute', 'setAgentAttribute',
   'setVelocity', 'setAgentPosition', 'setAgentRadius',
+  // sprite display state — the five runs live in agentF32 (AGENT_GPU_SPRITE_FIELDS,
+  // reserved on the C9 sprites gate), so a sprite-driving BEHAVIOUR graph runs on
+  // WebGPU instead of clamping the whole model to JS. Deliberately NOT emitted in
+  // an Agent OUTPUT MAPPING module — see agentSubsetSupported's `scope` param.
+  'setAgentSprite',
   // field bridge (G5 — the closed agent↔grid morphogen feedback)
   'sampleField', 'fieldGradient', 'readCellsUnder',
   'affectCellsUnder', 'secreteToField',
@@ -176,6 +182,14 @@ export interface AgentWebGPUResult {
    *  be frozen for the whole batch. The per-generation `posCommit` pass bumps this
    *  counter GPU-side instead. */
   usesGeneration?: boolean;
+  /** The BEHAVIOUR graph writes per-agent SPRITE state (Set Agent Sprite). No new
+   *  binding — the five runs live in `agentF32` — but the runtime must SEED them
+   *  before the dispatch and read them back after, because the CPU owns sprite
+   *  state between generations (`advanceAgentSprites` / `initAgentSlot` /
+   *  `divideAgent`). It is also a residency blocker: a whole-batch submit has no
+   *  CPU touch point, so the per-generation frame advance and the shader's writes
+   *  could not interleave correctly. */
+  usesSpriteWrite?: boolean;
   /** PR7c residency: the BEHAVIOUR emitted a structural-request writer
    *  (divideAgent / killAgent / formBond / breakBond) — per-generation CPU
    *  structural work ⇒ not residency-eligible. Scoped to behaviour-reachable
@@ -362,6 +376,14 @@ interface AgentWgpuCtx {
   /** L2 — set when a Get Generation emitter runs; declares the genCounter
    *  storage binding (15). */
   usesGeneration: boolean;
+  /** Set when a Set Agent Sprite emitter WROTE one of the five sprite runs. It
+   *  declares no binding (the runs live in agentF32); it is the RUNTIME's signal
+   *  to seed those runs before the dispatch and read them back after — and, since
+   *  the CPU is authoritative for sprite state between generations, the residency
+   *  blocker that keeps a sprite-writing behaviour off the whole-batch path.
+   *  The ALPHA facet alone does NOT set it (it writes `agentColors`, which every
+   *  path already round-trips). */
+  usesSpriteWrite: boolean;
   /** Active forEachBond iteration frames — the per-iteration value-output WGSL
    *  expressions (partnerId / restLength / currentLength / index). */
   forEachBondStack: Array<{ nodeId: string; partner: string; rest: string; cur: string; index: string }>;
@@ -2383,6 +2405,11 @@ function compileFlowNode(ctx: AgentWgpuCtx, nodeId: string): void {
       compileFlowChain(ctx, node.id, 'next');
       break;
     }
+    case 'setAgentSprite': {
+      emitSetAgentSprite(ctx, node);
+      compileFlowChain(ctx, node.id, 'next');
+      break;
+    }
     case 'setIndicator': {
       const slot = node.data.config?.['_indicatorIdx'];
       const off = typeof slot === 'number' ? slot : -1;
@@ -2769,6 +2796,90 @@ function emitSetCellLooks(ctx: AgentWgpuCtx, node: GraphNode): void {
   const aInline = getInlineNum(node, 'a', 255);
   const ae = (!aSrc && aInline === 255) ? '255u' : `u32(clamp(${castTo(resolveValueInput(ctx, node, 'a', 255), 'i32')}, 0, 255))`;
   ctx.lines.push(`  agentColors[idx] = (${re}) | ((${ge}) << 8u) | ((${be}) << 16u) | (${ae} << 24u);`);
+}
+
+/** Set Agent Sprite — the WGSL mirror of `SetAgentSpriteNode.compile` (and of the
+ *  WASM `emitSetAgentSprite`), facet for facet.
+ *
+ *  The five sprite runs live in `agentF32` (AGENT_GPU_SPRITE_FIELDS, appended last
+ *  and reserved on the C9 `sprites` gate), so this needs NO new binding. The CPU
+ *  stays authoritative for sprite state BETWEEN generations — `advanceAgentSprites`
+ *  ticks `frame += speed`, `initAgentSlot` clears a recycled slot, `divideAgent`
+ *  hands a daughter its mother's sprite — so the runtime SEEDS the runs before the
+ *  dispatch and reads them back after (`rt.usesSpriteWrite`), exactly the way the
+ *  agent-attribute runs round-trip.
+ *
+ *  TARGET mirrors JS/WASM exactly: `agentId` unwired → the current-loop agent
+ *  (`idx`, UNGUARDED — the entry point already returned for a dead / out-of-range
+ *  invocation, so it is live by construction); wired → that id under the RANGE-ONLY
+ *  guard the other by-id setters use, so a freshly Created (staged, alive = 0)
+ *  agent can be configured on its handle.
+ *
+ *  C9 SAFETY CATCH: with the sprites gate off no runs are reserved
+ *  (`layout.spritesReserved === false`), so every sprite facet is DROPPED — the
+ *  same shape as `layout.f32Base[f] === undefined` for the other gated groups. The
+ *  ALPHA facet writes `agentColors`, always allocated, so it survives either way. */
+function emitSetAgentSprite(ctx: AgentWgpuCtx, node: GraphNode): void {
+  const cfg = (node.data.config ?? {}) as Record<string, unknown>;
+  const spr = ctx.layout.spritesReserved;
+  const wantsSprite = spr && cfg['setSprite'] !== false;
+  const wantsFrame = spr && !!cfg['setFrame'];
+  const wantsSpeed = spr && !!cfg['setSpeed'];
+  const wantsRot = spr && !!cfg['setRotation'];
+  const wantsScale = spr && !!cfg['setScale'];
+  const wantsAlpha = !!cfg['setAlpha'];
+  // Nothing to write → emit NOTHING (matches the JS `body.length === 0` early-out).
+  if (!wantsSprite && !wantsFrame && !wantsSpeed && !wantsRot && !wantsScale && !wantsAlpha) return;
+  if (wantsSprite || wantsFrame || wantsSpeed || wantsRot || wantsScale) ctx.usesSpriteWrite = true;
+  const vectorRot = wantsRot && cfg['rotationMode'] === 'vector';
+
+  // Resolve EVERY input before the guard block opens. A resolved value may push its
+  // own `let` lines, and those must not be stranded inside this node's `if` (the
+  // `setAgentRadius` shape) — a sibling branch could legitimately share them.
+  const wired = !!ctx.adj.inputToSource.get(`${node.id}:agentId`);
+  const rawId = wired ? fresh(ctx, 'sasT') : '';
+  if (wired) ctx.lines.push(`  let ${rawId}: i32 = ${castTo(resolveValueInput(ctx, node, 'agentId', -1), 'i32')};`);
+  const frameV = wantsFrame ? emitLet(ctx, 'f32', inF32(ctx, node, 'frame', 0), 'sasFr').expr : '';
+  const speedV = wantsSpeed ? emitLet(ctx, 'f32', inF32(ctx, node, 'speed', 0), 'sasSp').expr : '';
+  const rotV = (wantsRot && !vectorRot) ? emitLet(ctx, 'f32', inF32(ctx, node, 'rotation', 0), 'sasRo').expr : '';
+  const dxV = vectorRot ? emitLet(ctx, 'f32', inF32(ctx, node, 'dirX', 0), 'sasDx').expr : '';
+  const dyV = vectorRot ? emitLet(ctx, 'f32', inF32(ctx, node, 'dirY', 0), 'sasDy').expr : '';
+  const scaleV = wantsScale ? emitLet(ctx, 'f32', inF32(ctx, node, 'scale', 1), 'sasSc').expr : '';
+  const alphaV = wantsAlpha
+    ? emitLet(ctx, 'i32', `clamp(${castTo(resolveValueInput(ctx, node, 'alpha', 255), 'i32')}, 0, 255)`, 'sasAl').expr
+    : '';
+
+  const body = (t: string): void => {
+    if (wantsSprite) ctx.lines.push(`    ${f32At(ctx, 'spriteIds', t)} = ${wgslFloatLit(Number(cfg['_spriteSlot']) || 0)};`);
+    if (wantsFrame) ctx.lines.push(`    ${f32At(ctx, 'spriteFrames', t)} = ${frameV};`);
+    if (wantsSpeed) ctx.lines.push(`    ${f32At(ctx, 'spriteSpeeds', t)} = ${speedV};`);
+    if (wantsRot) {
+      if (vectorRot) {
+        // Align the art to a direction vector — compass degrees, 0 = up/north,
+        // clockwise: atan2(dx, -dy) * 180/PI (WGSL's atan2(y, x) takes the same
+        // argument order as Math.atan2). A ZERO vector leaves the rotation
+        // untouched — the JS `if (_dx !== 0 || _dy !== 0)` guard.
+        ctx.lines.push(`    if (${dxV} != 0.0 || ${dyV} != 0.0) { ${f32At(ctx, 'spriteRotations', t)} = atan2(${dxV}, -(${dyV})) * 180.0 / 3.14159265358979; }`);
+      } else {
+        ctx.lines.push(`    ${f32At(ctx, 'spriteRotations', t)} = ${rotV};`);
+      }
+    }
+    if (wantsScale) ctx.lines.push(`    ${f32At(ctx, 'spriteScales', t)} = ${scaleV};`);
+    if (wantsAlpha) {
+      // The agent colour's ALPHA byte — a read-modify-write of the packed u32 the
+      // render + the readback already use (r | g<<8 | b<<16 | a<<24), so it lands
+      // in the same place JS's `colors[_t * 4 + 3]` does. Clamped like the WASM
+      // sibling (i32 truncation, matching emitSetCellLooks' alpha).
+      ctx.lines.push(`    agentColors[${t}] = (agentColors[${t}] & 0x00ffffffu) | (u32(${alphaV}) << 24u);`);
+    }
+  };
+
+  if (!wired) { ctx.lines.push('  {'); body('idx'); ctx.lines.push('  }'); return; }
+  // Range-only guard — see setAgentPosition (a staged spawn handle must be settable).
+  const t = fresh(ctx, 'sasI');
+  ctx.lines.push(`  if (${rawId} >= 0 && ${rawId} < i32(control.maxAgents)) { let ${t}: u32 = u32(${rawId});`);
+  body(t);
+  ctx.lines.push(`  }`);
 }
 
 // ---------------------------------------------------------------------------
@@ -3560,13 +3671,25 @@ export function isAgentGraphWebGPUSupported(model: CAModel | undefined | null): 
  *  policy — a model with a GPU behaviour but an unsupported OM keeps its
  *  behaviour on the GPU + the CPU overlay render (OM support is a SEPARATE flag,
  *  never the behaviour verdict). `flatNodes` is the whole flat graph (for the
- *  edge gates' source/consumer lookups); `reachNodes` is the scoped cone. */
-function agentSubsetSupported(reachNodes: GraphNode[], edges: GraphEdge[], flatNodes: GraphNode[], model: CAModel): boolean {
+ *  edge gates' source/consumer lookups); `reachNodes` is the scoped cone.
+ *
+ *  `scope` is 'behaviour' by default; 'om' additionally rejects `setAgentSprite`.
+ *  THE REASON: an OM module is dispatched only inside `dispatchResidentBatch`
+ *  (after the generation loop), while every OTHER path colours agents through the
+ *  CPU `runAgentColorPass`. Emitting sprite writes there would make sprite state
+ *  land GPU-side on one path and CPU-side on the other — and the runtime's sprite
+ *  round-trip is keyed on the BEHAVIOUR flag, so an OM-only write would simply be
+ *  lost. Rejecting it keeps today's OM semantics EXACTLY (an OM with a sprite node
+ *  ⇒ `omSupported: false` ⇒ the CPU overlay, where the node has always worked) and
+ *  costs nothing user-visible: an OM-only usage never clamped the WebGPU agent
+ *  TARGET in the first place — only the behaviour gate ever did. */
+function agentSubsetSupported(reachNodes: GraphNode[], edges: GraphEdge[], flatNodes: GraphNode[], model: CAModel, scope: 'behaviour' | 'om' = 'behaviour'): boolean {
   let arrayProducerCount = 0;
   for (const n of reachNodes) {
     const t = n.data.nodeType;
     if (t === 'macroInput' || t === 'macroOutput' || t === 'macro') return false;
     if (!AGENT_WEBGPU_SUPPORTED_TYPES.has(t)) return false;
+    if (scope === 'om' && t === 'setAgentSprite') return false;
     const cfg = (n.data.config ?? {}) as Record<string, unknown>;
     if (isAgentArrayProducer(t)) arrayProducerCount++;
     if (t === 'aggregate') {
@@ -3882,7 +4005,7 @@ export function compileAgentGraphWebGPU(
     usesBondStore: emit.usesBondStore, usesBondStoreWrite: emit.usesBondStoreWrite,
     usesIndicators: emit.usesIndicators, usesAux: emit.usesAux,
     usesSpawn: emit.usesSpawn, usesStop: emit.usesStop, usesForceScatter: emit.usesForceScatter,
-    usesGeneration: emit.usesGeneration,
+    usesGeneration: emit.usesGeneration, usesSpriteWrite: emit.usesSpriteWrite,
     usesStructural: emit.usesStructural, usesRadiusWrite: emit.usesRadiusWrite,
     omShaders, omSupported,
   };
@@ -3901,6 +4024,10 @@ interface AgentRootModuleEmit {
   usesStop: boolean;
   usesForceScatter: boolean;
   usesGeneration: boolean;
+  /** A Set Agent Sprite emitter wrote one of the five sprite runs — the runtime
+   *  must seed + read them back, and residency is blocked (see `usesSpriteWrite`
+   *  on `AgentWgpuCtx`). */
+  usesSpriteWrite: boolean;
   usesStructural: boolean;
   usesRadiusWrite: boolean;
 }
@@ -3951,6 +4078,7 @@ function emitAgentRootModule(
     usesStop: false,
     usesForceScatter: false,
     usesGeneration: false,
+    usesSpriteWrite: false,
     usesStructural: false, usesRadiusWrite: false, usesBondReqQueue: false,
   };
 
@@ -4160,7 +4288,7 @@ ${ctx.lines.join('\n')}
     usesBondStore: hasBondStore, usesBondStoreWrite: hasBondStore && ctx.usesBondStoreWrite,
     usesIndicators: hasIndicators, usesAux: hasAux,
     usesSpawn: hasSpawn, usesStop: hasStop, usesForceScatter: hasForceScatter,
-    usesGeneration: hasGeneration,
+    usesGeneration: hasGeneration, usesSpriteWrite: ctx.usesSpriteWrite,
     usesStructural: ctx.usesStructural, usesRadiusWrite: ctx.usesRadiusWrite,
   };
 }
@@ -4204,7 +4332,7 @@ export function compileAgentOutputMappingsWebGPU(
     const reachNodes = nodes.filter(n => reachable.has(n.id));
     // Same reject policy as the behaviour gate (factored) — unsupported ⇒ the whole
     // OM feature clamps to the CPU overlay (never a per-mapping partial).
-    if (!agentSubsetSupported(reachNodes, edges, nodes, m)) return { omShaders: [], omSupported: false };
+    if (!agentSubsetSupported(reachNodes, edges, nodes, m, 'om')) return { omShaders: [], omSupported: false };
     let emit: AgentRootModuleEmit;
     try {
       emit = emitAgentRootModule(root, 'do', nodes, edges, m, layout, reachable, 'behaviour');
@@ -4311,7 +4439,12 @@ export function agentWebGPUExtrasOf(model: CAModel) {
   const chargeTreeNodes = usesGlobalCharge(model.centerBased)
     ? agentOctreeNodeReserve(Math.max(1, Math.floor((model.centerBased?.maxAgents as number) ?? 2000)))
     : 0;
-  return { modelAttrKeys, lookupTables, indicatorCount, maxBonds, gridDepth, syncAttrs, bondAttrs, bondReqSlots, chargeTreeNodes };
+  // C9 / STEP 4 — the SPRITE runs, from the SAME `resolveAgentFieldGates` resolver
+  // the CPU store and the WASM layout read (agentFieldGating.ts site 3, previously
+  // documented but unwired because the group had no GPU run at all). Off ⇒ no runs
+  // ⇒ the emitter's safety catch drops every sprite facet ⇒ byte-identical shader.
+  const sprites = resolveAgentFieldGates(model).sprites;
+  return { modelAttrKeys, lookupTables, indicatorCount, maxBonds, gridDepth, syncAttrs, bondAttrs, bondReqSlots, chargeTreeNodes, sprites };
 }
 
 /** Convenience for the DEV harness: derive the GPU agent layout from a model +

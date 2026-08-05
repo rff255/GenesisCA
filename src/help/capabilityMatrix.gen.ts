@@ -749,12 +749,12 @@ export const AGENT_NODE_MATRIX: CapabilityNodeRow[] = [
     "capability": null,
     "capabilityLabel": null,
     "wasm": true,
-    "webgpu": false,
+    "webgpu": true,
     "entryPoint": false,
     "lowered": false,
     "cpuRoot": false,
     "wasmStatus": "yes",
-    "webgpuStatus": "no"
+    "webgpuStatus": "yes"
   },
   {
     "type": "setBondAttribute",
@@ -918,11 +918,11 @@ export const NODE_COUNTS = {
   "agent": 54,
   "overseer": 20,
   "agentOnWasm": 48,
-  "agentOnWebgpu": 48,
+  "agentOnWebgpu": 49,
   "agentCpuRoots": 4,
   "agentLowered": 3,
   "agentGapsWasm": 0,
-  "agentGapsWebgpu": 1
+  "agentGapsWebgpu": 0
 } as const;
 
 /** The agent capability rows, in the order the Properties panel lists them. */
