@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useId, useRef } from 'react';
+import { LIGHT_BALL_MAX_R } from './render/gl3d';
 
 interface Props {
   /** Light position on the unit disc (view space: +x right, +y up). The
@@ -9,7 +10,10 @@ interface Props {
   onChange: (bx: number, by: number) => void;
 }
 
-const DOT_R = 0.9;  // dot travel radius as a fraction of the ball radius
+/** Dot travel radius as a fraction of the ball radius. Defined in gl3d.ts so
+ *  DEFAULT_LIGHT3D (which sits at this exact radius, top-left) and this clamp
+ *  can never drift apart. */
+const DOT_R = LIGHT_BALL_MAX_R;
 
 /** Draggable "sun position" ball — the standard light-direction widget: a
  *  shaded sphere whose highlight follows the light dot. Drag the dot (or click

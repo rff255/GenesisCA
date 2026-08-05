@@ -1492,7 +1492,10 @@ export function HelpView() {
             <strong> View</strong> anchors the light to the camera, so shading stays constant
             while you orbit (headlight style); <strong>World</strong> fixes it in the scene, so
             orbiting sweeps the lit side (sun style) &mdash; switching modes never jumps the
-            current shading. <strong>Reset</strong> restores the default light. Two optional
+            current shading. The <em>default</em> is a <strong>View</strong>-anchored key light at
+            the ball&rsquo;s far <strong>top-left</strong>, so a fresh 3D model is lit from above-left
+            no matter which way you orbit. <strong>Reset</strong> restores that default light (your
+            own saved lighting is kept until you press it). Two optional
             <strong> global lighting</strong> toggles make cells and agents shade each other
             instead of each surface being lit only on its own: <strong>Shadows</strong> casts real
             shadows (voxels and agents shadow each other) and <strong>Occlusion</strong> darkens

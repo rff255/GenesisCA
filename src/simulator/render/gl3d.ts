@@ -232,8 +232,13 @@ interface SpriteSlotMeta {
  *    every frame, so shading stays constant while orbiting (headlight/matcap).
  *  - `mode: 'world'` uses the stored world-space unit vector (wx, wy, wz): the
  *    light is fixed in the SCENE, so orbiting sweeps the lit side (sun-style).
- *  The DEFAULT reproduces the historical hardcoded shade exactly (world light
- *  normalize(0.4, 0.8, 0.6), lum = 0.45 + 0.55·max(0, n·L), no specular). */
+ *  The DEFAULT is a VIEW-anchored key light at the ball's MAX TOP-LEFT point
+ *  (user-requested, 2026-08): the classic top-left three-quarter key that reads
+ *  as "lit from above-left" from whatever angle you orbit to. Its intensities
+ *  are still the historical ones (lum = 0.45 + 0.55·max(0, n·L), no specular);
+ *  only the light's ANCHOR + DIRECTION changed. `wx/wy/wz` keep the historical
+ *  world vector normalize(0.4, 0.8, 0.6) as the world-mode fallback (a
+ *  camera→world switch recomputes them from the live camera basis anyway). */
 export interface Light3D {
   mode: 'camera' | 'world';
   /** Light-ball widget position (unit disc, view space: +x right, +y up).
@@ -259,9 +264,17 @@ export interface Light3D {
 
 /** norm(0.4, 0.8, 0.6) — the exact light the shaders used to hardcode. */
 const DEF_L = Math.hypot(0.4, 0.8, 0.6);
+/** The light-ball dot's travel radius as a fraction of the ball radius — the
+ *  clamp `LightBallWidget` applies to a drag. Lives here (not in the widget) so
+ *  the DEFAULT below and the widget's clamp are ONE number: the default sits at
+ *  the ball's very edge, and a widget re-tune can never leave it out of range. */
+export const LIGHT_BALL_MAX_R = 0.9;
+/** The ball's MAX TOP-LEFT point: the 45° top-left direction at the edge of the
+ *  dot's travel disc (bx² + by² = LIGHT_BALL_MAX_R²). */
+const TL = LIGHT_BALL_MAX_R * Math.SQRT1_2;
 export const DEFAULT_LIGHT3D: Readonly<Light3D> = Object.freeze({
-  mode: 'world' as const,
-  bx: -0.2, by: 0.55,
+  mode: 'camera' as const,
+  bx: -TL, by: TL,
   wx: 0.4 / DEF_L, wy: 0.8 / DEF_L, wz: 0.6 / DEF_L,
   ambient: 0.45, diffuse: 0.55, specular: 0,
   shadows: false, shadowStrength: 0.6, ao: false, aoStrength: 0.7,

@@ -78,7 +78,9 @@ function loadSimSettings(): Record<string, unknown> {
 
 /** Validate a persisted 3D lighting config (genesisca_sim_settings.light3d) —
  *  every field range-clamped, anything malformed falls back to the default
- *  (which reproduces the historical hardcoded shade exactly). */
+ *  (a VIEW-anchored key light at the ball's max top-left point). A SAVED value
+ *  is always preserved: only a missing/malformed field takes the default, so a
+ *  user who already tuned their light keeps it across this default change. */
 function sanitizeLight3d(raw: unknown): Light3D {
   const d = DEFAULT_LIGHT3D;
   if (!raw || typeof raw !== 'object') return { ...d };
@@ -86,7 +88,7 @@ function sanitizeLight3d(raw: unknown): Light3D {
   const num = (v: unknown, dv: number, lo: number, hi: number) =>
     typeof v === 'number' && Number.isFinite(v) ? Math.max(lo, Math.min(hi, v)) : dv;
   return {
-    mode: r.mode === 'camera' ? 'camera' : 'world',
+    mode: r.mode === 'camera' || r.mode === 'world' ? r.mode : d.mode,
     bx: num(r.bx, d.bx, -1, 1),
     by: num(r.by, d.by, -1, 1),
     wx: num(r.wx, d.wx, -1, 1),
