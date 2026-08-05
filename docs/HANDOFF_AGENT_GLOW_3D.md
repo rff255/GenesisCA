@@ -13,7 +13,7 @@ the 2D glow you are matching), and whatever the lattice **L1** report says about
 the 3D render seam after it lands.
 
 **Objective**: the Glow graphics option (`genesisca_sim_settings.agentGlow
-{on,size,intensity,steepness}`) renders for 2D agents only; its UI is gated
+{on,size,intensity,steepness,core}`) renders for 2D agents only; its UI is gated
 `{!is3D && …}` in [SimulatorView.tsx](../src/simulator/SimulatorView.tsx). Give
 3D agent models the same option, with the SAME look and the SAME parameters.
 
@@ -28,6 +28,30 @@ the 3D render seam after it lands.
 > is reproduced by drawing the sprite `ceil(intensity)` times at
 > `intensity/ceil(intensity)` rather than clamping. The note below that "the CPU
 > 2D overlay still ignores glow" is now OBSOLETE.
+>
+> **UPDATE 2 (branch `updates`) — THE 2D SHAPE CHANGED; MATCH THE NEW ONE.**
+> Glow is no longer one falloff from the centre. It is a **SOLID (opaque) CORE
+> plus an additive halo drawn UNDER it**, with a fourth parameter `core ∈ [0,1]`
+> (`agentGlow {on,size,intensity,steepness,core}`):
+> - `coreR = radPx + core*glowSize`, `R = radPx + glowSize`; `core = 0` (the
+>   default) ⇒ the core is exactly the agent's own body.
+> - the halo profile is remapped over the **band outside the core**:
+>   `t = clamp((1 - d) / (1 - coreR/R), 0, 1)`, `g = intensity * pow(t, steepness)`
+>   — NOT `pow(1 - d, steepness)`. Inside the core it plateaus at `intensity`.
+> - draw order per renderer is **halo (additive, depth-write off) FIRST, opaque
+>   body OVER it** — the reverse of the "bodies → glow" order §"Design" states
+>   below. That inversion is the entire point: an additive layer on top of the
+>   body ADDS the body's own colour to itself, which is what made clusters blow
+>   out and lone agents dim (the reported bug). For 3D this means: opaque spheres
+>   pass ordering must put the additive halo **before** the opaque spheres, or
+>   equivalently let the depth-tested opaque spheres overwrite it.
+> - the GPU 2D path now issues TWO draws (glow pipeline then plain pipeline) from
+>   two entry-point pairs (`vsGlow`/`fsGlow`, `vsMain`/`fsMain`) sharing one
+>   `buildVert(vi, inst, halo)`; `RenderView.glowCore` was APPENDED LAST so no
+>   existing member moved. Mirror that structure in the sphere pass.
+> - the CPU 2D path draws an opaque core disc of radius `coreR` **only when
+>   `core > 0`** (at 0 the agent's own body IS the core), so sprites/metaballs
+>   are untouched by default. gl3d should follow the same rule.
 
 ---
 

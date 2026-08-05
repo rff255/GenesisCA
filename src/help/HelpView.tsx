@@ -2888,18 +2888,24 @@ export function HelpView() {
               &mdash; bond lines are drawn by the regular agent overlay, which this fast
               path replaces.</li>
             <li><strong>Glow.</strong> The <strong>Glow agents</strong> Graphics option
-              (in the 2D agent controls) surrounds every agent with an additive radial halo
-              &mdash; <em>Size</em> is the extra halo radius in pixels, <em>Intensity</em>
-              its brightness, <em>Falloff</em> how tightly it hugs the agent. It works on
-              <em>every</em> 2D agent model and every agent target: on the direct-render
-              path the shader draws it, and everywhere else (bonded graphs and tissues,
-              sprites, metaballs, field-coupled models) the regular agent overlay draws the
-              same halo on top of the discs and bonds. Because the halos <em>add</em>, dense
-              clusters saturate to white &mdash; which is exactly what makes a growing graph
-              read as a glowing nebula. It is a per-agent drawing cost, so on very large
-              populations expect a slower display (measured ~30&nbsp;ms per frame at 10&nbsp;000
-              agents on the overlay path); the simulation itself is unaffected. Not available
-              in 3D yet.</li>
+              (in the 2D agent controls) gives every agent a <strong>solid core</strong> with
+              an additive halo around it &mdash; <em>Size</em> is the extra halo radius in
+              pixels, <em>Core</em> how far the solid colour reaches into that halo,
+              <em>Intensity</em> the halo&apos;s brightness, <em>Falloff</em> how fast it
+              fades across the band outside the core. The core is drawn <em>opaque</em>, so
+              it is never washed out by a neighbour&apos;s halo nor dimmed by a low
+              intensity: a dense cluster can glow as bright as you like while an isolated
+              agent still reads as a crisp, true-coloured dot &mdash; you no longer have to
+              choose between the two. At <em>Core&nbsp;0</em> (the default) the core is the
+              agent&apos;s own disc and the halo sits entirely outside it; raise Core to grow
+              a solid nucleus out into the halo band. It works on <em>every</em> 2D agent
+              model and every agent target: on the direct-render path the shader draws the
+              halo and the core as two passes, and everywhere else (bonded graphs and
+              tissues, sprites, metaballs, field-coupled models) the regular agent overlay
+              draws the halo under the discs and bonds for the same result. It is a per-agent
+              drawing cost, so on very large populations expect a slower display (measured
+              ~30&nbsp;ms per frame at 10&nbsp;000 agents on the overlay path); the
+              simulation itself is unaffected. Not available in 3D yet.</li>
             <li><strong>Direct agent render &mdash; 3D.</strong> The same fast path works
               for <em>3D</em> agents-only models: while you just watch, the worker draws the
               agents as GPU spheres and the 3D viewport draws only the overlays (axes,

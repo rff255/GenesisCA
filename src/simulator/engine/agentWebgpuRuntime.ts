@@ -1674,6 +1674,13 @@ export interface AgentRenderView {
   bgG: number;
   bgB: number;
   bgA: number;
+  /** Solid-core fraction of the glow band (0..1) — the SOLID (opaque, never
+   *  added-out) body radius is `radPx + glowCore * glowSize`, and the additive
+   *  halo falls off from there to `radPx + glowSize`. 0 ⇒ the core is exactly the
+   *  agent disc. APPENDED LAST on purpose so every pre-existing member keeps its
+   *  byte offset (the ForceControl.motionMode / VoxelView precedent); the
+   *  verify-render-uniform-layouts harness pairs struct ⇄ writer by offset. */
+  glowCore: number;
   // E2 composite only (CPU-side flags — NOT part of the RENDER_VIEW byte layout,
   // ignored by uploadAgentRenderView): the per-layer Show toggles. `showGrid` off
   // → skip the grid pass (agent pass clears to bg*); `showAgents` off → skip the
@@ -1708,10 +1715,24 @@ const RENDER_VIEW_WGSL = `struct RenderView {
   bgG           : f32,
   bgB           : f32,
   bgA           : f32,
+  glowCore      : f32,
 };`;
 
 /** Build the agent render module (VS pulls x/y/radius from agentF32 + packed
- *  RGBA from agentColors; FS = disc SDF + optional outline rim OR additive glow).
+ *  RGBA from agentColors). TWO entry-point pairs, drawn as TWO passes when Glow
+ *  is on (see presentAgentsEncode):
+ *
+ *    vsGlow/fsGlow — the additive HALO, over a quad enlarged to `radPx+glowSize`.
+ *    vsMain/fsMain — the SOLID CORE disc (premultiplied source-over), radius
+ *                    `radPx + glowCore*glowSize`, + the optional outline rim.
+ *
+ *  HALO FIRST, CORE OVER IT. Glow used to REPLACE the disc (one additive draw
+ *  from the centre out), so an isolated agent had no solid body at all — its
+ *  centre read as `intensity·colour`, which is dim at low intensity and blows
+ *  clusters to white at high intensity. That is the trade the Core slider
+ *  removes: the core is opaque, so it can never be added out or faded out, and
+ *  the additive falloff only spans the band OUTSIDE it (t is remapped over
+ *  [coreFrac, 1] instead of [0, 1]), where accumulation is what you want.
  *  The f32 field bases are baked from the layout (like emitBinOf). */
 function agentRenderWGSL(layout: AgentWebGPULayout): string {
   const xB = layout.f32Base['x']!, yB = layout.f32Base['y']!, rB = layout.f32Base['radius']!;
@@ -1723,14 +1744,17 @@ function agentRenderWGSL(layout: AgentWebGPULayout): string {
 @group(0) @binding(3) var<uniform>       rv          : RenderView;
 
 struct VSOut {
-  @builtin(position) pos   : vec4<f32>,
-  @location(0)       uv    : vec2<f32>,
-  @location(1)       col   : vec4<f32>,
-  @location(2)       radPx : f32,
+  @builtin(position) pos      : vec4<f32>,
+  @location(0)       uv       : vec2<f32>,
+  @location(1)       col      : vec4<f32>,
+  @location(2)       radPx    : f32,
+  @location(3)       coreFrac : f32,
 };
 
-@vertex
-fn vsMain(@builtin(vertex_index) vi: u32, @builtin(instance_index) inst: u32) -> VSOut {
+// One vertex builder, two quad sizes: halo=true widens the quad to the full
+// glow radius; otherwise it is the solid-core radius. (NB this WGSL lives in a
+// TS template literal - never put a backtick in these comments.)
+fn buildVert(vi: u32, inst: u32, halo: bool) -> VSOut {
   var out: VSOut;
   let hw: u32 = max(1u, rv.highWater);
   let agent: u32 = inst % hw;
@@ -1751,6 +1775,7 @@ fn vsMain(@builtin(vertex_index) vi: u32, @builtin(instance_index) inst: u32) ->
     out.uv = vec2<f32>(0.0, 0.0);
     out.col = vec4<f32>(0.0, 0.0, 0.0, 0.0);
     out.radPx = 0.0;
+    out.coreFrac = 0.0;
     return out;
   }
   let ax: f32 = agentF32[${at(xB)}];
@@ -1766,38 +1791,65 @@ fn vsMain(@builtin(vertex_index) vi: u32, @builtin(instance_index) inst: u32) ->
   // near-empty quad on the fast path while the CPU path still showed a dot. The
   // FS rim band derives from in.radPx, so it stays consistent with the same rule.
   let radPx: f32 = max(ar * rv.scalePx, 1.2);
-  var half: f32 = radPx;
-  if (rv.glowOn != 0u) { half = half + rv.glowSize; }
+  // The SOLID (opaque) body radius: the plain disc when glow is off, grown into
+  // the halo band by Core when it is on.
+  var coreR: f32 = radPx;
+  if (rv.glowOn != 0u) { coreR = radPx + clamp(rv.glowCore, 0.0, 1.0) * rv.glowSize; }
+  let outerR: f32 = max(0.001, radPx + rv.glowSize);
+  var half: f32 = coreR;
+  if (halo) { half = outerR; }
   let sx: f32 = px + corner.x * half;
   let sy: f32 = py + corner.y * half;
   out.pos = vec4<f32>(sx / rv.canvasW * 2.0 - 1.0, 1.0 - sy / rv.canvasH * 2.0, 0.0, 1.0);
   out.uv = corner;
   out.col = vec4<f32>(f32(packed & 0xffu) / 255.0, f32((packed >> 8u) & 0xffu) / 255.0, f32((packed >> 16u) & 0xffu) / 255.0, a);
-  out.radPx = radPx;
+  out.radPx = half;
+  // Where the core ends, in the HALO quad's uv units (only the halo FS reads it).
+  out.coreFrac = clamp(coreR / outerR, 0.0, 1.0);
   return out;
 }
 
+@vertex
+fn vsMain(@builtin(vertex_index) vi: u32, @builtin(instance_index) inst: u32) -> VSOut {
+  return buildVert(vi, inst, false);
+}
+
+@vertex
+fn vsGlow(@builtin(vertex_index) vi: u32, @builtin(instance_index) inst: u32) -> VSOut {
+  return buildVert(vi, inst, true);
+}
+
+// The SOLID core disc — premultiplied source-over, so it is never added out.
 @fragment
 fn fsMain(in: VSOut) -> @location(0) vec4<f32> {
   let d: f32 = length(in.uv);
-  if (rv.glowOn != 0u) {
-    // Additive radial glow across the enlarged quad (selected by the glow pipeline).
-    let t: f32 = max(0.0, 1.0 - d);
-    let g: f32 = rv.glowIntensity * pow(t, max(0.01, rv.glowSteepness));
-    return vec4<f32>(in.col.rgb * g, g);
-  }
   if (d > 1.0) { discard; }
   var rgb: vec3<f32> = in.col.rgb;
   let a: f32 = in.col.a;
   if (rv.outlineOn != 0u) {
     // Match the 2D overlay rim rule (stampBatchedTile): darken the outer
-    // min(1.5px, 0.25*rad) band by ×0.60.
+    // min(1.5px, 0.25*rad) band by ×0.60. in.radPx is the DRAWN body radius
+    // (== radPx when glow is off, the core radius when it is on), so the rim
+    // always hugs the silhouette the user sees.
     let radPx: f32 = max(0.001, in.radPx);
     let rim: f32 = min(1.5, 0.25 * radPx) / radPx;
     if (d > 1.0 - rim) { rgb = rgb * 0.60; }
   }
   // Premultiplied output (the canvas is configured 'premultiplied').
   return vec4<f32>(rgb * a, a);
+}
+
+// The additive HALO — zero at the outer edge, full at the core edge. The
+// falloff is remapped over the BAND [coreFrac, 1] so the whole dynamic range
+// lands outside the solid core instead of being spent inside the body.
+@fragment
+fn fsGlow(in: VSOut) -> @location(0) vec4<f32> {
+  let d: f32 = length(in.uv);
+  if (d > 1.0) { discard; }
+  let band: f32 = max(1.0e-4, 1.0 - in.coreFrac);
+  let t: f32 = clamp((1.0 - d) / band, 0.0, 1.0);
+  let g: f32 = rv.glowIntensity * pow(t, max(0.01, rv.glowSteepness));
+  return vec4<f32>(in.col.rgb * g, g);
 }`;
 }
 
@@ -2064,10 +2116,10 @@ async function buildAgentDiscPipelines(rt: AgentRenderSurface): Promise<boolean>
     ],
   });
   const pl = rt.device.createPipelineLayout({ label: 'agent-render-pl', bindGroupLayouts: [bgl] });
-  const mkPipe = (label: string, blend: GPUBlendState): GPURenderPipeline => rt.device.createRenderPipeline({
+  const mkPipe = (label: string, blend: GPUBlendState, vs: string, fs: string): GPURenderPipeline => rt.device.createRenderPipeline({
     label, layout: pl,
-    vertex: { module, entryPoint: 'vsMain' },
-    fragment: { module, entryPoint: 'fsMain', targets: [{ format, blend }] },
+    vertex: { module, entryPoint: vs },
+    fragment: { module, entryPoint: fs, targets: [{ format, blend }] },
     primitive: { topology: 'triangle-strip' },
   });
   const plainBlend: GPUBlendState = {
@@ -2083,8 +2135,8 @@ async function buildAgentDiscPipelines(rt: AgentRenderSurface): Promise<boolean>
   // on the SAME surface — release the previous view uniform instead of orphaning it.
   if (rt.renderViewBuf) { try { rt.renderViewBuf.destroy(); } catch { /* non-fatal */ } }
   rt.renderViewBuf = renderViewBuf;
-  rt.renderPlainPipeline = mkPipe('agent-render-plain', plainBlend);
-  rt.renderGlowPipeline = mkPipe('agent-render-glow', glowBlend);
+  rt.renderPlainPipeline = mkPipe('agent-render-plain', plainBlend, 'vsMain', 'fsMain');
+  rt.renderGlowPipeline = mkPipe('agent-render-glow', glowBlend, 'vsGlow', 'fsGlow');
   rt.renderBindGroup = rt.device.createBindGroup({
     label: 'agent-render-bg', layout: bgl,
     entries: [
@@ -2303,10 +2355,13 @@ export function presentCompositeEncode(rt: AgentRenderSurface, enc: GPUCommandEn
       colorAttachments: [{ view, loadOp: showGrid ? 'load' : 'clear', storeOp: 'store', clearValue: { r: cr, g: cg, b: cb, a: ca } }],
     });
     if (showAgents) {
-      ap.setPipeline(rt.renderGlow ? rt.renderGlowPipeline! : rt.renderPlainPipeline!);
       ap.setBindGroup(0, rt.renderBindGroup);
       const copies = Math.max(1, rt.renderCopiesX ?? 1) * Math.max(1, rt.renderCopiesY ?? 1);
-      ap.draw(4, Math.max(1, hw) * copies);
+      const insts = Math.max(1, hw) * copies;
+      // Additive halo UNDER the opaque core (see agentRenderWGSL).
+      if (rt.renderGlow) { ap.setPipeline(rt.renderGlowPipeline!); ap.draw(4, insts); }
+      ap.setPipeline(rt.renderPlainPipeline!);
+      ap.draw(4, insts);
     }
     ap.end();
   }
@@ -2392,12 +2447,15 @@ export function uploadAgentRenderView(rt: AgentRenderSurface, v: AgentRenderView
   u[12] = v.outlineOn >>> 0; u[13] = v.glowOn >>> 0;
   fl[14] = v.glowSize; fl[15] = v.glowIntensity; fl[16] = v.glowSteepness;
   fl[17] = v.bgR; fl[18] = v.bgG; fl[19] = v.bgB; fl[20] = v.bgA;
+  fl[21] = v.glowCore;
   rt.device.queue.writeBuffer(rt.renderViewBuf, 0, ab);
   // Clear colour is applied CPU-side (loadOp clear); store premultiplied so the
   // premultiplied canvas composites the background correctly.
   const a = v.bgA;
   rt.renderClear = [v.bgR * a, v.bgG * a, v.bgB * a, a];
-  rt.renderGlow = v.glowOn !== 0;
+  // The HALO pass is skipped when it would contribute nothing — a zero band or a
+  // zero intensity. (The core pass always draws; that IS the agent body.)
+  rt.renderGlow = v.glowOn !== 0 && v.glowSize > 0 && v.glowIntensity > 0;
   rt.renderCopiesX = Math.max(1, v.copiesX | 0);
   rt.renderCopiesY = Math.max(1, v.copiesY | 0);
 }
@@ -2429,10 +2487,15 @@ export function presentAgentsEncode(rt: AgentRenderSurface, enc: GPUCommandEncod
     label: 'agent-present',
     colorAttachments: [{ view, loadOp: 'clear', storeOp: 'store', clearValue: { r: cr, g: cg, b: cb, a: ca } }],
   });
-  pass.setPipeline(rt.renderGlow ? rt.renderGlowPipeline! : rt.renderPlainPipeline!);
   pass.setBindGroup(0, rt.renderBindGroup);
   const copies = Math.max(1, rt.renderCopiesX ?? 1) * Math.max(1, rt.renderCopiesY ?? 1);
-  pass.draw(4, Math.max(1, hw) * copies);
+  const insts = Math.max(1, hw) * copies;
+  // TWO passes when Glow is on: the additive halo FIRST, the opaque core over it
+  // (see agentRenderWGSL). Glow used to REPLACE the disc, which is exactly why an
+  // isolated agent had no crisp body.
+  if (rt.renderGlow) { pass.setPipeline(rt.renderGlowPipeline!); pass.draw(4, insts); }
+  pass.setPipeline(rt.renderPlainPipeline!);
+  pass.draw(4, insts);
   pass.end();
 }
 

@@ -120,15 +120,24 @@ function sanitizeAgentMetaballs(raw: unknown): Metaballs3D {
   };
 }
 
-/** Agent "Glow" graphics option (genesisca_sim_settings.agentGlow) — an additive
- *  radial falloff per agent. Rendered on BOTH 2D agent paths: the WebGPU
+/** Agent "Glow" graphics option (genesisca_sim_settings.agentGlow) — a SOLID CORE
+ *  plus an additive halo around it. Rendered on BOTH 2D agent paths: the WebGPU
  *  direct-render / E2-composite disc pipeline (agentWebgpuRuntime's
  *  renderGlowPipeline) and the CPU overlay (drawAgentGlow below), so a bonded
  *  model — which is excluded from direct render because the GPU pass draws no
  *  bond lines — glows too. 3D is not supported yet (the UI is `!is3D`-gated; see
- *  docs/HANDOFF_AGENT_GLOW_3D.md). Persisted as a simulator setting. */
-interface AgentGlow { on: boolean; size: number; intensity: number; steepness: number }
-const DEFAULT_AGENT_GLOW: AgentGlow = { on: false, size: 8, intensity: 0.6, steepness: 2 };
+ *  docs/HANDOFF_AGENT_GLOW_3D.md). Persisted as a simulator setting.
+ *
+ *  `core` ∈ [0,1] is the SOLID radius as a fraction of the glow BAND: the opaque
+ *  body runs to `radPx + core*size` and the additive falloff spans from there to
+ *  `radPx + size`. 0 (the default) ⇒ the core is exactly the agent disc — solid
+ *  body, halo outside it. The core is drawn OPAQUE (source-over) on both paths,
+ *  so it can never be added out by an overlapping neighbour's halo nor faded out
+ *  by a low intensity: cluster halos accumulate while every agent, isolated or
+ *  not, keeps a crisp true-colour centre. That trade — legible clusters OR
+ *  visible lone agents, never both — is the whole reason this knob exists. */
+interface AgentGlow { on: boolean; size: number; intensity: number; steepness: number; core: number }
+const DEFAULT_AGENT_GLOW: AgentGlow = { on: false, size: 8, intensity: 0.6, steepness: 2, core: 0 };
 function sanitizeAgentGlow(raw: unknown): AgentGlow {
   const d = DEFAULT_AGENT_GLOW;
   if (!raw || typeof raw !== 'object') return { ...d };
@@ -140,6 +149,7 @@ function sanitizeAgentGlow(raw: unknown): AgentGlow {
     size: num(r.size, d.size, 0, 64),
     intensity: num(r.intensity, d.intensity, 0, 4),
     steepness: num(r.steepness, d.steepness, 0.1, 8),
+    core: num(r.core, d.core, 0, 1),
   };
 }
 
@@ -167,24 +177,44 @@ const GLOW_MAX_CACHED_R = 128;
 const GLOW_SPRITE_CACHE_MAX = 1024;
 const GLOW_GRADIENT_STOPS = 32;
 
-/** Paint the alpha profile `unit * (1 - t)^steepness` into a 2R×2R sprite. */
-function paintGlowSprite(c2: CanvasRenderingContext2D, R: number, r: number, g: number, b: number, unit: number, steepness: number): void {
+/** The solid-core radius as a FRACTION of the full glow radius R, for an agent
+ *  whose halo band is `size` px wide (so its disc radius is R − size). Mirrors
+ *  the WGSL VS's `coreR / outerR`. Clamped below 1 so the falloff band never
+ *  collapses to nothing. */
+function glowCoreFrac(R: number, size: number, core: number): number {
+  if (R <= 0 || size <= 0) return 0;
+  return Math.max(0, Math.min(0.98, 1 - (size * (1 - core)) / R));
+}
+
+/** Paint the additive HALO alpha profile into a 2R×2R sprite: a flat `unit`
+ *  plateau inside the core, then `unit * t^steepness` with t remapped over the
+ *  band OUTSIDE it — the Canvas2D twin of fsGlow. (The plateau is hidden under
+ *  the opaque body for an opaque agent; it keeps the profile continuous at the
+ *  core edge and reads correctly under a translucent one.) */
+function paintGlowSprite(c2: CanvasRenderingContext2D, R: number, r: number, g: number, b: number, unit: number, steepness: number, coreFrac: number): void {
   const grad = c2.createRadialGradient(R, R, 0, R, R, R);
+  const band = Math.max(1e-4, 1 - coreFrac);
   for (let s = 0; s <= GLOW_GRADIENT_STOPS; s++) {
     const t = s / GLOW_GRADIENT_STOPS;
-    const a = unit * Math.pow(Math.max(0, 1 - t), steepness);
+    const u = Math.max(0, Math.min(1, (1 - t) / band));
+    const a = unit * Math.pow(u, steepness);
     grad.addColorStop(t, `rgba(${r},${g},${b},${a.toFixed(4)})`);
   }
+  // A gradient stop exactly AT the core edge, so the plateau's outer boundary is
+  // sharp regardless of where the 32 uniform stops happen to land.
+  if (coreFrac > 0 && coreFrac < 1) grad.addColorStop(coreFrac, `rgba(${r},${g},${b},${unit.toFixed(4)})`);
   c2.fillStyle = grad;
   c2.fillRect(0, 0, R * 2, R * 2);
 }
 
-/** A 2R×2R additive-glow sprite for a quantised colour. Null only when the
+/** A 2R×2R additive-halo sprite for a quantised colour. Null only when the
  *  radius is degenerate. `unit` is the PER-DRAW peak alpha (see drawAgentGlow's
- *  multi-pass trick for intensity > 1). */
-function glowSpriteFor(r: number, g: number, b: number, R: number, unit: number, steepness: number): HTMLCanvasElement | null {
+ *  multi-pass trick for intensity > 1). `size`/`core` ride the cache SIGNATURE
+ *  (they are per-frame globals) and together with R fix the core fraction, so
+ *  the key stays (quantised colour, R). */
+function glowSpriteFor(r: number, g: number, b: number, R: number, unit: number, steepness: number, size: number, core: number): HTMLCanvasElement | null {
   if (R < 1) return null;
-  const sig = `${unit}|${steepness}`;
+  const sig = `${unit}|${steepness}|${size}|${core}`;
   if (sig !== glowSpriteSig) { GLOW_SPRITES.clear(); glowSpriteSig = sig; }
   const qr = r >> 3, qg = g >> 3, qb = b >> 3;
   const key = ((qr << 10) | (qg << 5) | qb) * 1024 + R;
@@ -195,7 +225,7 @@ function glowSpriteFor(r: number, g: number, b: number, R: number, unit: number,
   const c2 = cv.getContext('2d');
   if (!c2) return null;
   // Paint with the QUANTISED colour so the cached sprite matches its key.
-  paintGlowSprite(c2, R, (qr << 3) | 4, (qg << 3) | 4, (qb << 3) | 4, unit, steepness);
+  paintGlowSprite(c2, R, (qr << 3) | 4, (qg << 3) | 4, (qb << 3) | 4, unit, steepness, glowCoreFrac(R, size, core));
   if (R <= GLOW_MAX_CACHED_R) {
     while (GLOW_SPRITES.size >= GLOW_SPRITE_CACHE_MAX) {
       const oldest = GLOW_SPRITES.keys().next();
@@ -207,11 +237,19 @@ function glowSpriteFor(r: number, g: number, b: number, R: number, unit: number,
   return cv;
 }
 
-/** The CPU-overlay additive glow pass — the sibling of the WGSL glow pipeline.
- *  Drawn AFTER the bonds + discs (the draw order docs/HANDOFF_AGENT_GLOW_3D.md
- *  specifies for the queued 3D glow: opaque bodies → additive glow → overlays),
- *  so a graph model keeps its bond lines and node discs legible and gains a
- *  bright additive core + halo. `tiles` carries the infinity-mode tile origins.
+/** The CPU-overlay glow pass — the sibling of the WGSL glow/plain pipeline pair.
+ *  Drawn AFTER the bonds but BEFORE the agent bodies (discs / sprites / the goo
+ *  blob), which is what makes the SOLID CORE work: the additive halo goes down
+ *  first and the opaque body lands on top of it, so an isolated agent always
+ *  shows a crisp true-colour centre while overlapping halos still accumulate.
+ *  (It used to run LAST, adding onto the discs — that additive wash over the
+ *  body is exactly the "impossible to see clusters AND lone agents" complaint.)
+ *
+ *  Two sub-passes: the additive halo ('lighter'), then — only when Core > 0 — an
+ *  opaque core disc of radius `radPx + core*size`, which extends the solid body
+ *  out into the halo band. At Core = 0 the second pass is skipped entirely and
+ *  the agent's own disc IS the core, so sprites and the metaball blob are
+ *  untouched by default. `tiles` carries the infinity-mode tile origins.
  *  Per-agent alpha 0 is skipped (the GPU VS culls those quads too). */
 function drawAgentGlow(
   ctx: CanvasRenderingContext2D,
@@ -231,26 +269,65 @@ function drawAgentGlow(
   // and costs nothing at the default intensity 0.6 (one pass).
   const passes = Math.max(1, Math.ceil(glow.intensity));
   const unit = glow.intensity / passes;
+  const core = Math.max(0, Math.min(1, glow.core));
+  const haloOn = glow.size > 0;
   ctx.save();
-  ctx.globalCompositeOperation = 'lighter';
-  let curAlpha = 1;
-  for (const [tileOx, tileOy] of tiles) {
+  if (haloOn) {
+    ctx.globalCompositeOperation = 'lighter';
+    let curAlpha = 1;
+    for (const [tileOx, tileOy] of tiles) {
+      for (let i = 0; i < hw; i++) {
+        if (!aal[i]) continue;
+        const c = i * 4;
+        const a = acol[c + 3] ?? 255;
+        if (a <= 0) continue;
+        const radPx = Math.max(1.2, ar[i]! * scale);
+        const R = Math.round(radPx + glow.size);
+        if (R < 1) continue;
+        const cx = tileOx + ax[i]! * scale;
+        const cy = tileOy + ay[i]! * scale;
+        if (cx + R < 0 || cx - R > clipW || cy + R < 0 || cy - R > clipH) continue;
+        const sp = glowSpriteFor(acol[c]!, acol[c + 1]!, acol[c + 2]!, R, unit, glow.steepness, glow.size, core);
+        if (!sp) continue;
+        const want = a / 255;
+        if (want !== curAlpha) { ctx.globalAlpha = want; curAlpha = want; }
+        for (let p = 0; p < passes; p++) ctx.drawImage(sp, cx - R, cy - R);
+      }
+    }
+  }
+  // The SOLID core extension (Core > 0 only) — opaque source-over, so it is never
+  // added out. Batched by colour: one path + one fill per distinct RGBA.
+  if (core > 0 && haloOn) {
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.globalAlpha = 1;
+    const byColour = new Map<number, number[]>();
     for (let i = 0; i < hw; i++) {
       if (!aal[i]) continue;
       const c = i * 4;
-      const a = acol[c + 3] ?? 255;
-      if (a <= 0) continue;
-      const radPx = Math.max(1.2, ar[i]! * scale);
-      const R = Math.round(radPx + glow.size);
-      if (R < 1) continue;
-      const cx = tileOx + ax[i]! * scale;
-      const cy = tileOy + ay[i]! * scale;
-      if (cx + R < 0 || cx - R > clipW || cy + R < 0 || cy - R > clipH) continue;
-      const sp = glowSpriteFor(acol[c]!, acol[c + 1]!, acol[c + 2]!, R, unit, glow.steepness);
-      if (!sp) continue;
-      const want = a / 255;
-      if (want !== curAlpha) { ctx.globalAlpha = want; curAlpha = want; }
-      for (let p = 0; p < passes; p++) ctx.drawImage(sp, cx - R, cy - R);
+      if ((acol[c + 3] ?? 255) <= 0) continue;
+      const key = ((acol[c]! << 24) | (acol[c + 1]! << 16) | (acol[c + 2]! << 8) | (acol[c + 3] ?? 255)) >>> 0;
+      let arr = byColour.get(key);
+      if (!arr) { arr = []; byColour.set(key, arr); }
+      arr.push(i);
+    }
+    const coreExtra = core * glow.size;
+    for (const [key, idxs] of byColour) {
+      ctx.beginPath();
+      let any = false;
+      for (const [tileOx, tileOy] of tiles) {
+        for (const i of idxs) {
+          const rad = Math.max(1.2, ar[i]! * scale) + coreExtra;
+          const cx = tileOx + ax[i]! * scale;
+          const cy = tileOy + ay[i]! * scale;
+          if (cx + rad < 0 || cx - rad > clipW || cy + rad < 0 || cy - rad > clipH) continue;
+          ctx.moveTo(cx + rad, cy);   // break the subpath — else arc() chords from the previous arc
+          ctx.arc(cx, cy, rad, 0, Math.PI * 2);
+          any = true;
+        }
+      }
+      if (!any) continue;
+      ctx.fillStyle = `rgba(${(key >>> 24) & 0xff},${(key >>> 16) & 0xff},${(key >>> 8) & 0xff},${((key & 0xff) / 255).toFixed(4)})`;
+      ctx.fill();
     }
   }
   ctx.restore();
@@ -2759,6 +2836,10 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
           ctx.lineWidth = Math.max(1, scale * 0.18);
           ctx.stroke();
         }
+        // Same glow pass the display overlay runs (bonds → halo → bodies), so a
+        // simulation-scope screenshot / recording matches what the user sees and
+        // keeps its solid cores. One world tile.
+        drawAgentGlow(ctx, snap, scale, [[0, 0] as const], outW, outH, agentGlowRef.current);
         const outlines = agentOutlinesRef.current;
         for (let i = 0; i < hw; i++) {
           if (!aal[i]) continue;
@@ -2774,9 +2855,6 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
             ctx.stroke();
           }
         }
-        // Same additive glow pass the display overlay runs, so a simulation-scope
-        // screenshot / recording matches what the user sees. One world tile.
-        drawAgentGlow(ctx, snap, scale, [[0, 0] as const], outW, outH, agentGlowRef.current);
       }
     }
     return off;
@@ -3613,6 +3691,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       copiesX, copiesY, startX, startY,
       outlineOn: agentOutlinesRef.current ? 1 : 0,
       glowOn: glow.on ? 1 : 0, glowSize: glow.size, glowIntensity: glow.intensity, glowSteepness: glow.steepness,
+      glowCore: glow.core,
       bgR, bgG, bgB, bgA,
     };
     // E2 DISPLAY-res composite: the canvas is display-sized and the worker draws the
@@ -3642,7 +3721,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       const v3 = view as AgentRenderView3D, v2 = view as AgentRenderView;
       const key = v3.mode === '3d'
         ? '3d|' + v3.mvp.join(',') + `|${v3.camForwardX}|${v3.lightX}|${v3.lightY}|${v3.lightZ}|${v3.ambient}|${v3.diffuse}|${v3.specular}|${v3.outlineOn}|${v3.bgR}|${v3.bgG}|${v3.bgB}|${v3.bgA}|${v3.halfX}|${v3.halfY}|${v3.halfZ}`
-        : `${v2.scalePx}|${v2.oxPx}|${v2.oyPx}|${v2.canvasW}|${v2.canvasH}|${v2.startX}|${v2.startY}|${v2.copiesX}|${v2.copiesY}|${v2.outlineOn}|${v2.glowOn}|${v2.glowSize}|${v2.glowIntensity}|${v2.glowSteepness}|${v2.bgR}|${v2.bgG}|${v2.bgB}|${v2.bgA}|${v2.showGrid ? 1 : 0}|${v2.showAgents ? 1 : 0}`;
+        : `${v2.scalePx}|${v2.oxPx}|${v2.oyPx}|${v2.canvasW}|${v2.canvasH}|${v2.startX}|${v2.startY}|${v2.copiesX}|${v2.copiesY}|${v2.outlineOn}|${v2.glowOn}|${v2.glowSize}|${v2.glowIntensity}|${v2.glowSteepness}|${v2.glowCore}|${v2.bgR}|${v2.bgG}|${v2.bgB}|${v2.bgA}|${v2.showGrid ? 1 : 0}|${v2.showAgents ? 1 : 0}`;
       if (key === lastAgentCameraKeyRef.current) return;
       lastAgentCameraKeyRef.current = key;
       workerRef.current.postMessage({ type: 'setAgentCamera', view });
@@ -4439,6 +4518,21 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
           for (let ty = tyMin; ty <= tyMax; ty++) for (let tx = txMin; tx <= txMax; tx++) drawBonds(ox + tx * scaledW, oy + ty * scaledH);
         } else { drawBonds(ox, oy); }
       }
+      // Glow — the CPU sibling of the WGSL halo+core pipeline pair, so a BONDED
+      // model (excluded from direct render because the GPU pass draws no bond
+      // lines) glows too. Runs AFTER the bonds and BEFORE the bodies: the halo is
+      // additive and must sit UNDER the discs/sprites/blob, or it washes the very
+      // cores it is meant to frame (that wash is the reported bug).
+      const glowCfg = agentGlowRef.current;
+      if (glowCfg.on && glowCfg.intensity > 0) {
+        const gTiles: Array<readonly [number, number]> = [];
+        if (infinity) {
+          for (let ty = tyMin; ty <= tyMax; ty++)
+            for (let tx = txMin; tx <= txMax; tx++)
+              gTiles.push([ox + tx * scaledW, oy + ty * scaledH] as const);
+        } else { gTiles.push([ox, oy] as const); }
+        drawAgentGlow(ctx, snap, scale, gTiles, parentW, parentH, glowCfg);
+      }
       // Sprites (optional exhibition layer): when the active agent OM pass wrote a
       // per-agent sprite slot, draw the sprite's current frame instead of a circle.
       // spriteIds is length-0 for non-sprite models (then everyone draws a circle).
@@ -4663,19 +4757,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
           forTiles('all');
         }
       }
-      // Additive glow — the CPU sibling of the WGSL renderGlowPipeline, so a
-      // BONDED model (excluded from direct render because the GPU pass draws no
-      // bond lines) glows too. Last in the scene pass = on top of bonds + discs.
-      const glowCfg = agentGlowRef.current;
-      if (glowCfg.on && glowCfg.intensity > 0) {
-        const tiles: Array<readonly [number, number]> = [];
-        if (infinity) {
-          for (let ty = tyMin; ty <= tyMax; ty++)
-            for (let tx = txMin; tx <= txMax; tx++)
-              tiles.push([ox + tx * scaledW, oy + ty * scaledH] as const);
-        } else { tiles.push([ox, oy] as const); }
-        drawAgentGlow(ctx, snap, scale, tiles, parentW, parentH, glowCfg);
-      }
+      // (The glow pass ran ABOVE, between the bonds and the bodies — see there.)
       // The agent-brush cursor + highlight visuals (hover/edit/area rings, the
       // footprint + bond-ring silhouettes, the glue anchor) moved to the cursor
       // overlay layer — see drawCursorLayer. The scene pass draws only agents+bonds.
@@ -12770,14 +12852,14 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
                 </label>
               </div>
               )}
-              {/* Glow — an additive radial falloff per agent, on BOTH 2D paths:
-                  the WebGPU direct-render / composite disc pipeline AND the CPU
-                  overlay (drawAgentGlow), so bonded models glow too. 3D pending. */}
+              {/* Glow — a SOLID CORE plus an additive halo around it, on BOTH 2D
+                  paths: the WebGPU direct-render / composite disc pipeline AND the
+                  CPU overlay (drawAgentGlow), so bonded models glow too. 3D pending. */}
               {!is3D && (
               <div>
                 <div style={{ fontSize: '0.6rem', color: 'var(--color-text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 4 }}>Glow</div>
                 <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.66rem' }}
-                  title="Add an additive radial glow around each agent. Works on every 2D agent model — the WebGPU direct-render path draws it in the shader, and bonded / sprite / metaball models get the same effect from the CPU overlay. Not available in 3D yet.">
+                  title="Give each agent a solid core with an additive halo around it. The core is opaque, so it is never washed out by neighbouring halos — clusters can glow bright while a lone agent still reads as a crisp dot. Works on every 2D agent model: the WebGPU direct-render path draws it in the shader, and bonded / sprite / metaball models get the same effect from the CPU overlay. Not available in 3D yet.">
                   <input type="checkbox" checked={agentGlow.on}
                     onChange={e => setAgentGlow(g => ({ ...g, on: e.target.checked }))} />
                   <span style={{ color: 'var(--color-text-muted)' }}>Glow agents</span>
@@ -12791,13 +12873,19 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
                         onChange={e => setAgentGlow(g => ({ ...g, size: Number(e.target.value) }))} />
                     </label>
                     <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.66rem' }}
-                      title="Glow intensity — brightness of the additive halo.">
+                      title="Core size — how far the SOLID, opaque agent colour reaches into the halo. 0 = the core is the agent's own disc (halo entirely outside it); 1 = the whole glow radius is solid. The core is never added out by an overlapping halo nor faded out by a low intensity, so raise it when isolated agents need to stay visible while clusters glow.">
+                      <span style={{ fontSize: '0.6rem', color: 'var(--color-text-muted)', width: 48, flex: '0 0 auto' }}>Core</span>
+                      <input type="range" min={0} max={1} step={0.05} value={agentGlow.core} style={{ flex: 1, minWidth: 0 }}
+                        onChange={e => setAgentGlow(g => ({ ...g, core: Number(e.target.value) }))} />
+                    </label>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.66rem' }}
+                      title="Glow intensity — brightness of the additive halo. The solid core is unaffected.">
                       <span style={{ fontSize: '0.6rem', color: 'var(--color-text-muted)', width: 48, flex: '0 0 auto' }}>Intensity</span>
                       <input type="range" min={0} max={3} step={0.05} value={agentGlow.intensity} style={{ flex: 1, minWidth: 0 }}
                         onChange={e => setAgentGlow(g => ({ ...g, intensity: Number(e.target.value) }))} />
                     </label>
                     <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.66rem' }}
-                      title="Glow falloff — higher = tighter core, lower = softer spread.">
+                      title="Glow falloff — how fast the halo fades across the band outside the core. Higher = tighter, lower = softer spread.">
                       <span style={{ fontSize: '0.6rem', color: 'var(--color-text-muted)', width: 48, flex: '0 0 auto' }}>Falloff</span>
                       <input type="range" min={0.3} max={6} step={0.1} value={agentGlow.steepness} style={{ flex: 1, minWidth: 0 }}
                         onChange={e => setAgentGlow(g => ({ ...g, steepness: Number(e.target.value) }))} />
