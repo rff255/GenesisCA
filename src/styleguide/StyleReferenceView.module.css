@@ -660,11 +660,12 @@
 }
 
 .demoDragHandle {
-  color: var(--color-border-muted);
+  color: var(--color-text-tertiary);
   cursor: grab;
   user-select: none;
   font-size: 0.95rem;
-  width: 14px;
+  letter-spacing: -0.08em;
+  width: 16px;
   text-align: center;
 }
 

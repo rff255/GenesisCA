@@ -1396,33 +1396,50 @@
   padding: var(--space-2) 0;
 }
 
-/* Reorderable list rows (Presets) — mirrors the modeler panels' reorder UX. */
+/* Reorderable list rows (Presets) — mirrors the modeler panels' reorder UX.
+ * Keep in lockstep with .dragHandle in modeler/panels/PanelContent.module.css;
+ * see the note there on why the glyph colour must be a TEXT token, never
+ * --color-border-muted (invisible on Nocturne, darker-than-bg on Blender). */
 .dragHandle {
   flex-shrink: 0;
   margin-left: var(--space-1);
   padding: 0 var(--space-1);
   background: transparent;
   border: none;
-  color: var(--color-border-muted);
+  border-radius: var(--radius-sm);
+  color: var(--color-text-tertiary);
   font-size: 0.95rem;
   line-height: 1;
+  letter-spacing: -0.08em;
   cursor: grab;
   touch-action: none;
   user-select: none;
-  transition: color var(--duration-base);
-  width: 14px;
-  height: 20px;
+  transition: color var(--duration-base), background var(--duration-base);
+  width: 16px;
+  height: 22px;
   display: flex;
   align-items: center;
   justify-content: center;
 }
 
+/* Hover brightens the glyph; the accent rides in the pill tint only — see the
+ * note in PanelContent.module.css (an accent-coloured glyph drops to 1.95:1 on
+ * Blender, i.e. dimmer on hover than at rest). */
 .dragHandle:hover {
   color: var(--color-emphasis);
+  background: var(--color-accent-soft);
+}
+
+.dragHandle:focus-visible {
+  outline: none;
+  color: var(--color-emphasis);
+  box-shadow: 0 0 0 1px var(--color-accent);
 }
 
 .dragHandle:active {
   cursor: grabbing;
+  color: var(--color-emphasis);
+  background: var(--color-accent-soft);
 }
 
 .dropIndicatorBefore {

@@ -225,33 +225,55 @@
   flex-shrink: 0;
 }
 
-/* Drag handle for reorderable list rows. Anchored at the far right. */
+/* Drag handle for reorderable list rows. Anchored at the far right.
+ * The glyph colour MUST be a TEXT token, never a border one: --color-border-muted
+ * is #20232a on Nocturne's #16181d panel (invisible) and #353535 on Blender's
+ * #3d3d3d panel (DARKER than the surface behind it), which made the affordance
+ * unreadable in both shipped themes. --color-text-tertiary reads clearly while
+ * staying subordinate to the row's name. */
 .dragHandle {
   flex-shrink: 0;
   margin-left: var(--space-1);
   padding: 0 var(--space-1);
   background: transparent;
   border: none;
-  color: var(--color-border-muted);
+  border-radius: var(--radius-sm);
+  color: var(--color-text-tertiary);
   font-size: 0.95rem;
   line-height: 1;
+  letter-spacing: -0.08em;
   cursor: grab;
   touch-action: none;
   user-select: none;
-  transition: color var(--duration-base);
-  width: 14px;
-  height: 20px;
+  transition: color var(--duration-base), background var(--duration-base);
+  width: 16px;
+  height: 22px;
   display: flex;
   align-items: center;
   justify-content: center;
 }
 
+/* Hover BRIGHTENS the glyph and lets --color-accent-soft carry the accent hue
+ * as a tint. Colouring the glyph itself with --color-accent looks right on
+ * Nocturne (6.08:1) but COLLAPSES on Blender, whose accent #4772b3 lands at
+ * 1.95:1 on the pill — i.e. hovering would make the handle *less* legible than
+ * at rest. --color-emphasis rises above the resting state in both themes
+ * (Nocturne 5.35 -> 7.39, Blender 3.77 -> 6.13). */
 .dragHandle:hover {
   color: var(--color-emphasis);
+  background: var(--color-accent-soft);
+}
+
+.dragHandle:focus-visible {
+  outline: none;
+  color: var(--color-emphasis);
+  box-shadow: 0 0 0 1px var(--color-accent);
 }
 
 .dragHandle:active {
   cursor: grabbing;
+  color: var(--color-emphasis);
+  background: var(--color-accent-soft);
 }
 
 /* Drop-indicator line drawn above a row during drag */
