@@ -34,12 +34,24 @@ import { Muxer, ArrayBufferTarget } from 'webm-muxer';
  * strictly harder to diagnose than today's `RangeError`. The capture site is
  * synchronous (`draw()`) and cannot await, so the DEFAULT policy is to DROP:
  * `addFrame` returns false when the queue is full and the caller simply skips
- * that frame. Because timestamps are derived from the ENCODED frame index, the
- * file always plays at the nominal fps (a drop reads as a skipped generation,
- * not as wrong timing), and because a drop happens BEFORE submission the encoder
- * only ever sees the frames it was given, in order — so the sequence is
- * shortened, never corrupted, under any keyframe cadence. The caller surfaces
- * the drop count.
+ * that frame. Because a drop happens BEFORE submission the encoder only ever
+ * sees the frames it was given, in order — so the sequence is shortened, never
+ * corrupted, under any keyframe cadence. The caller surfaces the drop count.
+ *
+ * TIMING — the file is timed from the WALL CLOCK, not from the frame index.
+ * Every frame carries the `performance.now()` at which it was CAPTURED and the
+ * block timestamp is that offset from the first frame, so a recording always
+ * lasts exactly as long as the session that produced it. This replaced
+ * `timestamp = encodedIndex x 1/fps`, whose premise — that the pipeline sustains
+ * the nominal fps — is false on anything but the cheapest content: measured on
+ * Particle Life at 912x804, capture managed ~16 fps and the encoder ~5, so a
+ * 10 s recording declared at 61 fps produced a **0.75 s** file playing 13x too
+ * fast (Growing Graphs 19x, Game of Life 5x, and the "simulation" scope 22x).
+ * With real timestamps the same run is a 10 s file at ~5 fps: choppier where
+ * frames were dropped, but real time and complete end to end — and a drop now
+ * reads as the pause it actually was instead of silently speeding the whole
+ * video up. Fast content where the encoder keeps up is unaffected (consecutive
+ * captures are ~1/fps apart, which is what the index formula produced anyway).
  *
  * LOSSLESS ("never skip") is the opt-in alternative: the caller passes
  * `force` to `addFrame`, which bypasses the cap and the duty gate so a captured
@@ -110,6 +122,10 @@ export class WebMStreamEncoder {
   private readonly inFlight: number[] = [];
   private avgEncodeMs = 0;
   private lastSubmitAt = 0;
+  /** Capture time (ms) of the FIRST submitted frame — the file's time origin. */
+  private firstCaptureMs = -1;
+  /** Timestamp (us) of the last submitted frame; timestamps must strictly increase. */
+  private lastTimestampUs = -1;
 
   readonly width: number;
   readonly height: number;
@@ -258,8 +274,15 @@ export class WebMStreamEncoder {
    * Frames whose dimensions differ from the configured ones are refused: the
    * encoder is fixed-size, and the caller already locks dimensions on the first
    * captured frame.
+   *
+   * `captureTimeMs` is the `performance.now()` at which the frame was CAPTURED,
+   * and it is what the block timestamp is derived from (see the class docs).
+   * It must be passed by the caller rather than read here, because frames held
+   * during the async codec probe are submitted in a BURST once it resolves —
+   * timing those at submission would compress the first few frames of every
+   * recording into a millisecond. Omitted, it falls back to "now".
    */
-  addFrame(frame: ImageData, force = false): boolean {
+  addFrame(frame: ImageData, force = false, captureTimeMs?: number): boolean {
     if (this.finished || this.cancelled || this.encoderError) { this.droppedFrames++; return false; }
     if (frame.width !== this.width || frame.height !== this.height) { this.droppedFrames++; return false; }
     const cap = force ? WebMStreamEncoder.LOSSLESS_HARD_CAP : WebMStreamEncoder.QUEUE_CAP;
@@ -274,11 +297,24 @@ export class WebMStreamEncoder {
       this.droppedFrames++;
       return false;
     }
-    const videoFrame = this.makeVideoFrame(
-      frame,
-      Math.round(this.encodedIndex * this.microsPerFrame),
-      Math.round(this.microsPerFrame),
+    // Wall-clock timing: the block timestamp is this frame's capture time
+    // relative to the first frame's, so the file lasts as long as the recording
+    // did whatever rate the pipeline actually sustained. Strictly increasing by
+    // construction (`performance.now()` is monotonic) but forced anyway — two
+    // captures inside the same microsecond would otherwise be rejected by the
+    // encoder. The per-frame `duration` is a hint only (block spacing is what
+    // players use); the previous gap is a far better estimate of it than a
+    // nominal 1/fps once the encoder is behind.
+    const captureMs = captureTimeMs ?? now;
+    if (this.firstCaptureMs < 0) this.firstCaptureMs = captureMs;
+    const timestamp = Math.max(
+      this.lastTimestampUs + 1,
+      Math.round((captureMs - this.firstCaptureMs) * 1000),
     );
+    const duration = this.lastTimestampUs >= 0
+      ? Math.max(1, timestamp - this.lastTimestampUs)
+      : Math.round(this.microsPerFrame);
+    const videoFrame = this.makeVideoFrame(frame, timestamp, duration);
     try {
       // Keyframe cadence per the quality mode: `archival` = every frame (frames
       // stay independently decodable, no interframe prediction bleeding across
@@ -294,6 +330,7 @@ export class WebMStreamEncoder {
     videoFrame.close();
     this.inFlight.push(now);
     this.lastSubmitAt = now;
+    this.lastTimestampUs = timestamp;
     this.encodedIndex++;
     return true;
   }

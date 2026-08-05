@@ -54,6 +54,33 @@ export function vp9CodedWidth(w: number): number {
 }
 
 /**
+ * Upper bound on the NOMINAL frame rate a recording may declare.
+ *
+ * The caller passes the simulator's FPS *slider*, and that slider has an
+ * "unlimited" position which resolves to the sentinel **999999** — a value that
+ * is not a frame rate at all. Unclamped it reached BOTH derived quantities and
+ * broke each of them outright:
+ *   - `bitrate = w x h x fps x 6` became **4.4 Tbit/s** at 912x804, which
+ *     collapsed the encoder's rate control (measured: 71 frames in 0.13 MB,
+ *     vs 9.3 MB for the same content at a finite fps), and
+ *   - the fallback timing base `1e6 / fps` became **1 microsecond**, so the
+ *     whole file's blocks landed inside ~70 us and `<video>` reported
+ *     `duration = NaN` — an unplayable file.
+ *
+ * 120 rather than 60 so a genuinely high-refresh capture is not retimed; every
+ * realistic capture rate is far below it. Below 1 fps is equally meaningless
+ * (a zero or negative slider would divide by zero), so both ends are clamped.
+ */
+export const MAX_RECORD_FPS = 120;
+
+/** Clamp an arbitrary caller-supplied frame rate into a usable one. The ONE
+ *  place both encoders (and the GIF delay) sanitise the FPS slider. */
+export function clampRecordFps(fps: number): number {
+  if (!Number.isFinite(fps) || fps <= 0) return 30;
+  return Math.min(MAX_RECORD_FPS, Math.max(1, fps));
+}
+
+/**
  * Is VP9 profile 1 (4:4:4) SAFE at this frame width?
  *
  * MEASURED Chrome bug (Chrome 148, Windows), not a GenesisCA limitation. This
@@ -160,7 +187,10 @@ export async function pickVp9Config(w: number, h: number, fps: number): Promise<
   if (typeof VideoEncoder === 'undefined') {
     throw new Error('WebCodecs VideoEncoder is not supported in this browser.');
   }
-  const safeFps = fps > 0 && Number.isFinite(fps) ? fps : 30;
+  // The caller hands us the FPS *slider*, whose "unlimited" position is a
+  // 999999 sentinel — see `clampRecordFps` for what that did to the bitrate
+  // and to the frame timing before it was clamped.
+  const safeFps = clampRecordFps(fps);
   // Pick a near-lossless bitrate. RGB at 8 bpp × pixels × fps is the raw
   // upper bound; VP9 with intra-heavy keyframing reaches visually lossless
   // around 4-6 bpp × fps for sharp content. We target 6 bpp × fps with a
@@ -239,6 +269,11 @@ export async function encodeFramesToWebM(
   frames: ImageData[],
   fps: number,
   quality: RecordQuality = DEFAULT_RECORD_QUALITY,
+  /** Wall-clock capture time (ms, `performance.now()`) of each frame, parallel
+   *  to `frames`. When supplied the file is timed from these instead of from
+   *  the nominal fps, so it plays back at the speed it was captured — see
+   *  `WebMStreamEncoder.addFrame` for why that matters. */
+  captureTimesMs?: number[],
 ): Promise<Blob> {
   if (frames.length === 0) throw new Error('No frames to encode');
   if (typeof VideoEncoder === 'undefined') {
@@ -286,17 +321,27 @@ export async function encodeFramesToWebM(
   // read from the SAME shared helper the streaming encoder uses — so a buffered
   // file and a streamed one are configured identically in every respect.
   const gop = keyFrameIntervalFor(quality);
+  const useRealTimes = !!captureTimesMs && captureTimesMs.length === frames.length;
+  const baseMs = useRealTimes ? captureTimesMs![0]! : 0;
   let emitted = 0;
+  let lastTs = -1;
   for (let i = 0; i < frames.length; i++) {
     if (encoderError) break;
     const frame = frames[i]!;
     // Defensive: skip frames that don't match the leader's dimensions.
     if (frame.width !== w || frame.height !== h) continue;
     ctx.putImageData(frame, 0, 0);
-    const videoFrame = new VideoFrame(canvas as CanvasImageSource, {
-      timestamp: Math.round(emitted * microsPerFrame),
-      duration: Math.round(microsPerFrame),
-    });
+    // Real capture times when we have them (so the file lasts as long as the
+    // recording did), else the historical constant-rate fallback. `VideoEncoder`
+    // requires strictly increasing timestamps, hence the max().
+    const timestamp = useRealTimes
+      ? Math.max(lastTs + 1, Math.round((captureTimesMs![i]! - baseMs) * 1000))
+      : Math.round(emitted * microsPerFrame);
+    const duration = useRealTimes && lastTs >= 0
+      ? Math.max(1, timestamp - lastTs)
+      : Math.round(microsPerFrame);
+    lastTs = timestamp;
+    const videoFrame = new VideoFrame(canvas as CanvasImageSource, { timestamp, duration });
     // `archival` forces every frame to be a keyframe: on CA models even a 1-cell
     // change can confuse interframe prediction enough to bleed across
     // previously-stable regions, and independent frames make per-frame analysis

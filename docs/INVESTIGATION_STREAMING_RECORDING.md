@@ -243,8 +243,18 @@ That makes dropped frames a user-visible possibility on dense/large models. Miti
 
 * a generous cap (**8**) — at 0.1 s/frame that is ~0.8 s of buffered work, so ordinary jitter
   never drops anything;
-* timestamps derived from the **encoded** frame index, so the video always plays at the nominal
-  fps and a drop shows up as a skipped generation rather than as wrong timing;
+* ~~timestamps derived from the **encoded** frame index, so the video always plays at the nominal
+  fps and a drop shows up as a skipped generation rather than as wrong timing;~~
+  **SUPERSEDED (2026-08-05).** This shipped and was wrong: it assumes the pipeline sustains the
+  nominal fps, and on anything heavier than a small grid it does not — measured at the shipped
+  defaults, Particle Life view-scope encoded ~4.7 of 61 nominal fps, so a 10 s recording became a
+  **0.75 s file playing 13× too fast** (Growing Graphs 19×, the simulation scope 22×, Game of Life
+  5×). Frames are now stamped with their **wall-clock capture time**, so a recording always lasts
+  as long as the session that produced it and a drop reads as the pause it was. See CLAUDE.md's
+  "THE FILE IS TIMED FROM THE WALL CLOCK" bullet.
+* the *"if the queue is full, skip this frame entirely (do not even `getImageData`)"* recommendation
+  above was NOT implemented at the time — it landed with the timing fix, and now guards the whole
+  capture on `readyForNextFrame()`;
 * the drop count is surfaced in the transport counter (`REC 1200f · 37 dropped`) so it is never
   silent.
 
