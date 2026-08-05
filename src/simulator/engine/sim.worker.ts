@@ -38,7 +38,7 @@ import {
   snapshotAgentsForRender, advanceAgentSprites, serializeAgentStore, deserializeAgentStore, buildSpatialHash,
   buildAgentOctree,
   resolvePositionalCollisions,
-  formBond, breakBond, drainAgentBondRequests, hasBond, sweepStaleBonds, divideAgent,
+  formBond, breakBond, drainAgentBondRequests, sweepStaleBonds, divideAgent,
   primeAgentAttrWrite, swapAgentAttrs, computeAgentMaxHashBins, AGENT_HASH_BIN_CAP,
   type AgentStore, type AgentSeedSpec, type AgentStatePayload, type AgentAttrSpec, type SpatialHash,
   type AgentLayoutExtras,
@@ -573,9 +573,31 @@ interface GetAgentStateMsg { type: 'getAgentState'; id: number }
  *  xNext/yNext so the next integration doesn't snap back; wraps/clamps to the
  *  world per `torus`. */
 interface MoveAgentsMsg { type: 'moveAgents'; moves: Array<{ id: number; x: number; y: number; z?: number }>; torus: boolean; activeViewer: string }
-/** Form many bonds at once (the Bond-paint brush). Loops formBond; idempotent
- *  (an existing bond is not duplicated). */
-interface FormBondBatchMsg { type: 'formBondBatch'; pairs: Array<[number, number]>; activeViewer: string }
+/** Push / Pull brush: RADIALLY displace every live agent within `radius` of a
+ *  brush centre, with the magnitude falling off linearly to zero at the rim —
+ *  the "shove things aside / gather them in" counterpart to Move (which is a
+ *  rigid, distance-independent translation of a footprint).
+ *
+ *  `strength` is SIGNED and already carries the caller's frame dt: it is the
+ *  world-unit displacement applied AT THE CENTRE for this tick (+ = outward =
+ *  push, - = inward = pull). Scaling by dt on the main thread is what makes the
+ *  Intensity setting frame-rate independent (a 144 Hz display would otherwise
+ *  push 2.4x faster than a 60 Hz one).
+ *
+ *  Writes x AND xNext (the moveAgents discipline — writing only x lets the next
+ *  position commit snap the agent back) and wraps/clamps per `torus`. Position
+ *  only, NO velocity kick: a kick accumulates (at momentum 0.9 a sustained hold
+ *  converges to ~10x the per-frame step; at momentum 1.0 boundedness depends on
+ *  the model's own graph-side friction), whereas a displacement is well defined
+ *  for every Motion mode, momentum value and compile target.
+ *
+ *  ONE handler serves 2D and 3D — `z` is read only when worldDepth > 1. */
+interface NudgeAgentsMsg {
+  type: 'nudgeAgents';
+  x: number; y: number; z?: number;
+  radius: number; strength: number;
+  torus: boolean; activeViewer: string;
+}
 /** Allocate a single agent (free-list first). REJECTS + surfaces on overflow. */
 interface CreateAgentMsg {
   type: 'createAgent';
@@ -652,7 +674,7 @@ interface SetAgentUiSyncMsg { type: 'setAgentUiSync'; on: boolean }
  *  refreshDisplay). */
 interface RefreshAgentDisplayMsg { type: 'refreshAgentDisplay' }
 
-type WorkerMsg = InitMsg | StepMsg | PaintMsg | PaintManualMsg | ResetMsg | RecompileMsg | UpdateModelAttrsMsg | UpdateLookupTableMsg | ImportImageMsg | ImportGridValuesMsg | UpdateIndicatorsMsg | GetStateMsg | LoadStateMsg | ReadRegionMsg | WriteRegionMsg | ClearRegionMsg | SetUseWasmMsg | SetUseWebGPUMsg | ReadbackWebGPUMsg | ColorPassMsg | SetRecordingMsg | AttachCanvasMsg | RequestColorsSnapshotMsg | SetInspectCellsMsg | RefreshDisplayMsg | SeedAgentsMsg | CreateAgentMsg | KillAgentsMsg | PaintAgentsMsg | ClearAgentsMsg | ReadAgentsMsg | PasteAgentsMsg | FormBondMsg | BreakBondMsg | GetAgentStateMsg | MoveAgentsMsg | FormBondBatchMsg | SetAgentWasmBackedMsg | SetRngSeedMsg | SetSimLayersMsg | SetAgentSnapshotVelocityMsg | AttachAgentCanvasMsg | SetAgentCameraMsg | SetAgentUiSyncMsg | RefreshAgentDisplayMsg | GetDiagnosticsMsg | E1bCountersMsg | GraphIndicatorStatsMsg | CompositeReadbackMsg | AttachVoxelCanvasMsg | SetGridCameraMsg | SetGridUiSyncMsg | SetGridVizMsg | RefreshGridDisplayMsg | VoxelReadbackMsg;
+type WorkerMsg = InitMsg | StepMsg | PaintMsg | PaintManualMsg | ResetMsg | RecompileMsg | UpdateModelAttrsMsg | UpdateLookupTableMsg | ImportImageMsg | ImportGridValuesMsg | UpdateIndicatorsMsg | GetStateMsg | LoadStateMsg | ReadRegionMsg | WriteRegionMsg | ClearRegionMsg | SetUseWasmMsg | SetUseWebGPUMsg | ReadbackWebGPUMsg | ColorPassMsg | SetRecordingMsg | AttachCanvasMsg | RequestColorsSnapshotMsg | SetInspectCellsMsg | RefreshDisplayMsg | SeedAgentsMsg | CreateAgentMsg | KillAgentsMsg | PaintAgentsMsg | ClearAgentsMsg | ReadAgentsMsg | PasteAgentsMsg | FormBondMsg | BreakBondMsg | GetAgentStateMsg | MoveAgentsMsg | NudgeAgentsMsg | SetAgentWasmBackedMsg | SetRngSeedMsg | SetSimLayersMsg | SetAgentSnapshotVelocityMsg | AttachAgentCanvasMsg | SetAgentCameraMsg | SetAgentUiSyncMsg | RefreshAgentDisplayMsg | GetDiagnosticsMsg | E1bCountersMsg | GraphIndicatorStatsMsg | CompositeReadbackMsg | AttachVoxelCanvasMsg | SetGridCameraMsg | SetGridUiSyncMsg | SetGridVizMsg | RefreshGridDisplayMsg | VoxelReadbackMsg;
 
 // ---------------------------------------------------------------------------
 // C3 (P4) — RUNTIME FALLBACK LOG
@@ -2676,8 +2698,8 @@ function agentWebgpuIndicatorIsInt(): boolean[] {
  *  `readbackAgentField` (cell fields) overwrites the CPU arrays with
  *  pre-mutation GPU values. Deferred + replayed right after the step settles. */
 const AGENT_GPU_DEFER_TYPES = new Set<string>([
-  'seedAgents', 'createAgent', 'killAgents', 'paintAgents', 'moveAgents', 'pasteAgents',
-  'formBond', 'formBondBatch', 'breakBond', 'clearAgents',
+  'seedAgents', 'createAgent', 'killAgents', 'paintAgents', 'moveAgents', 'nudgeAgents', 'pasteAgents',
+  'formBond', 'breakBond', 'clearAgents',
   'paint', 'paintManual', 'writeRegion', 'clearRegion', 'importGridValues',
 ]);
 let agentGpuStepInFlight = false;
@@ -8198,19 +8220,67 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       sendColors();
       break;
     }
-    case 'formBondBatch': {
-      // Bond-paint brush: form many bonds at once. formBond is idempotent (it
-      // rejects a duplicate via hasBond internally) ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â re-batching the same pair
-      // does not double-bond.
+    case 'nudgeAgents': {
+      // Push / Pull brush: radial displacement with a linear falloff to zero at
+      // the rim. `strength` is signed and already dt-scaled (see NudgeAgentsMsg):
+      //   falloff = 1 - d/radius        step = |strength| * falloff
+      //   push:  x += step * outward
+      //   pull:  x -= min(step, d) * outward   (never overshoots the centre)
       activeViewer = msg.activeViewer; syncActiveViewerToMemory();
-      if (agentStore) {
-        const s = agentStore, lambda = cbNum(centerBasedConfig, 'bondStiffness');
-        for (const [a, b] of msg.pairs) {
-          if (a < 0 || b < 0 || a >= s.highWater || b >= s.highWater || a === b) continue;
-          if (!s.alive[a] || !s.alive[b] || hasBond(s, a, b)) continue;
-          const L = s.radius[a]! + s.radius[b]!;
-          formBond(s, a, b, L, lambda);
+      if (agentStore && msg.radius > 0 && msg.strength !== 0 && Number.isFinite(msg.strength)) {
+        const s = agentStore, W = s.worldWidth, H = s.worldHeight, D = s.worldDepth;
+        const is3d = D > 1;
+        const R = msg.radius, R2 = R * R;
+        const cx = msg.x, cy = msg.y, cz = msg.z ?? 0;
+        const outward = msg.strength > 0;      // + = push, - = pull
+        const mag = Math.abs(msg.strength);
+        const hw = W / 2, hh = H / 2, hd = D / 2;
+        for (let id = 0; id < s.highWater; id++) {
+          if (!s.alive[id]) continue;
+          // Offset FROM the centre TO the agent, folded torus-shortest so a brush
+          // straddling the seam acts on the near copy (the agentDelta discipline).
+          let dx = s.x[id]! - cx, dy = s.y[id]! - cy, dz = is3d ? s.z[id]! - cz : 0;
+          if (msg.torus) {
+            if (dx > hw) dx -= W; else if (dx < -hw) dx += W;
+            if (dy > hh) dy -= H; else if (dy < -hh) dy += H;
+            if (is3d) { if (dz > hd) dz -= D; else if (dz < -hd) dz += D; }
+          }
+          const d2 = dx * dx + dy * dy + dz * dz;
+          if (d2 > R2) continue;
+          const d = Math.sqrt(d2);
+          const step = mag * (1 - d / R);
+          if (step <= 0) continue;
+          let ux: number, uy: number, uz: number, move: number;
+          if (d > 1e-9) {
+            ux = dx / d; uy = dy / d; uz = dz / d;
+            // Pull clamps to the distance, so an agent lands ON the centre at
+            // worst instead of shooting through it and oscillating.
+            move = outward ? step : -Math.min(step, d);
+          } else {
+            // Exactly at the centre there is no outward direction. Push gives it a
+            // DETERMINISTIC golden-angle direction derived from the id, so a pile
+            // sitting on the cursor still explodes outward (and reproducibly);
+            // pull leaves it alone (it is already at the target).
+            if (!outward) continue;
+            const a = id * 2.39996322972865332;      // golden angle, radians
+            if (is3d) {
+              // Fibonacci sphere: a deterministic, well-spread unit direction.
+              const t = ((id % 1024) + 0.5) / 1024, zc = 1 - 2 * t, rr = Math.sqrt(Math.max(0, 1 - zc * zc));
+              ux = Math.cos(a) * rr; uy = Math.sin(a) * rr; uz = zc;
+            } else { ux = Math.cos(a); uy = Math.sin(a); uz = 0; }
+            move = step;
+          }
+          let nx = s.x[id]! + ux * move, ny = s.y[id]! + uy * move;
+          if (msg.torus) { nx = ((nx % W) + W) % W; ny = ((ny % H) + H) % H; }
+          else { nx = Math.max(0, Math.min(W, nx)); ny = Math.max(0, Math.min(H, ny)); }
+          s.x[id] = nx; s.y[id] = ny; s.xNext[id] = nx; s.yNext[id] = ny;
+          if (is3d) {
+            let nz = s.z[id]! + uz * move;
+            if (msg.torus) nz = ((nz % D) + D) % D; else nz = Math.max(0, Math.min(D, nz));
+            s.z[id] = nz; s.zNext[id] = nz;
+          }
         }
+        runAgentColorPass();
       }
       sendColors();
       break;

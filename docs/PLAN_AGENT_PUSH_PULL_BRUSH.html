@@ -1,0 +1,363 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Agent brush — drop Bond, add Push / Pull</title>
+<style>
+  :root{
+    --bg:#0c0d10; --panel:#15171c; --panel2:#1b1e24; --line:#2b2f38;
+    --text:#e6e8ec; --muted:#9aa1ad; --accent:#e8a13a; --accent-soft:#3a2c14;
+    --push:#faa84e; --pull:#38c8dc; --bad:#e05a5a; --ok:#6bd48a;
+    --mono:'SFMono-Regular',Consolas,'Liberation Mono',Menlo,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);
+    font:14px/1.55 -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;padding:28px 20px 60px}
+  .wrap{max-width:1080px;margin:0 auto}
+  h1{font-size:23px;margin:0 0 4px;letter-spacing:.2px}
+  h2{font-size:15px;margin:34px 0 12px;color:var(--accent);
+    border-bottom:1px solid var(--line);padding-bottom:6px;letter-spacing:.3px}
+  h3{font-size:13px;margin:18px 0 8px;color:var(--text)}
+  p{margin:8px 0;color:var(--muted)}
+  .sub{color:var(--muted);margin:0 0 6px}
+  code{font-family:var(--mono);font-size:12px;background:#000;padding:1px 5px;border-radius:3px;color:#cfd6e2}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:14px 16px;margin:12px 0}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  .grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
+  @media(max-width:820px){.grid2,.grid3{grid-template-columns:1fr}}
+  table{border-collapse:collapse;width:100%;font-size:12.5px;margin:6px 0}
+  th,td{border:1px solid var(--line);padding:6px 9px;text-align:left;vertical-align:top}
+  th{background:var(--panel2);color:var(--accent);font-weight:600}
+  td{color:var(--muted)}
+  .tag{display:inline-block;font-size:10.5px;font-weight:700;letter-spacing:.4px;
+    padding:2px 7px;border-radius:20px;text-transform:uppercase}
+  .tag.rm{background:#3a1a1a;color:#f0908f;border:1px solid #6d2b2b}
+  .tag.add{background:#14331f;color:var(--ok);border:1px solid #2c6440}
+  .tag.keep{background:#1d2330;color:#8fb4e6;border:1px solid #33507c}
+  ul{margin:6px 0 6px 18px;padding:0;color:var(--muted)}
+  li{margin:4px 0}
+  .btnrow{display:flex;gap:5px;flex-wrap:wrap;margin:8px 0}
+  .mbtn{padding:4px 11px;border-radius:5px;border:1px solid #3b414c;background:transparent;
+    color:var(--muted);font-size:11.5px;font-weight:600;text-transform:capitalize}
+  .mbtn.on{border-color:var(--accent);background:var(--accent-soft);color:var(--accent)}
+  .mbtn.gone{border-color:#6d2b2b;color:#f0908f;text-decoration:line-through;opacity:.75}
+  .mbtn.new{border-color:#2c6440;background:#14331f;color:var(--ok)}
+  .fieldrow{display:flex;align-items:center;gap:7px;margin:5px 0;font-size:11.5px;color:var(--muted)}
+  .fieldrow .lbl{width:64px;color:var(--muted)}
+  .num{border:1px solid #3b414c;border-radius:4px;background:#0a0b0e;color:var(--text);
+    padding:2px 7px;font-family:var(--mono);font-size:11.5px;min-width:56px;display:inline-block}
+  .panelmock{background:var(--panel2);border:1px solid var(--line);border-radius:6px;padding:11px 12px}
+  .panelmock .hd{font-size:11px;font-weight:700;letter-spacing:.5px;color:var(--accent);
+    text-transform:uppercase;margin-bottom:8px}
+  .note{border-left:3px solid var(--accent);background:#1a170f;padding:9px 12px;border-radius:0 5px 5px 0;
+    margin:12px 0;color:#e2d3b4;font-size:12.5px}
+  .note b{color:var(--accent)}
+  figcaption{font-size:11.5px;color:var(--muted);text-align:center;margin-top:6px}
+  pre{background:#000;border:1px solid var(--line);border-radius:6px;padding:11px 13px;overflow-x:auto;
+    font-family:var(--mono);font-size:12px;color:#cfd6e2;margin:8px 0}
+  .cmt{color:#6b7280}
+  .kw{color:#c586c0}.fn{color:#dcdcaa}.num2{color:#b5cea8}.str{color:#ce9178}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>Agent brush — drop <span style="color:var(--bad)">Bond</span>, add <span style="color:var(--push)">Push</span> / <span style="color:var(--pull)">Pull</span></h1>
+<p class="sub">Simulator › Agent Brush · branch <code>updates</code></p>
+
+<!-- ─────────────────────────── BEFORE / AFTER ─────────────────────────── -->
+<h2>1 · The mode row, before and after</h2>
+<div class="grid2">
+  <div class="card">
+    <h3 style="color:#f0908f">Before</h3>
+    <div class="btnrow">
+      <span class="mbtn on">add</span><span class="mbtn">remove</span><span class="mbtn">move</span>
+      <span class="mbtn">edit</span><span class="mbtn">glue</span><span class="mbtn">cut</span>
+      <span class="mbtn gone">bond</span>
+    </div>
+    <p style="font-size:12.5px">
+      <b style="color:#f0908f">bond</b> dragged a disc and auto-glued every pair inside it
+      that was <em>already</em> within <code>formDistance × contact</code>. Needed a bonded
+      model, needed the agents to already touch, and Glue covers the deliberate case —
+      almost no applications.
+    </p>
+  </div>
+  <div class="card">
+    <h3 style="color:var(--ok)">After</h3>
+    <div class="btnrow">
+      <span class="mbtn on">add</span><span class="mbtn">remove</span><span class="mbtn">move</span>
+      <span class="mbtn">edit</span><span class="mbtn new">push</span><span class="mbtn new">pull</span>
+      <span class="mbtn">glue</span><span class="mbtn">cut</span>
+    </div>
+    <p style="font-size:12.5px">
+      <b style="color:var(--ok)">push</b> / <b style="color:var(--ok)">pull</b> work on
+      <em>every</em> agent model (no bond store needed). Glue / Cut keep their existing
+      “hidden when Bonds = Off” gating. Alt+wheel cycles the new order.
+    </p>
+  </div>
+</div>
+
+<!-- ─────────────────────────── THE LAW ─────────────────────────── -->
+<h2>2 · The law — magnitude falls off with distance from the centre</h2>
+
+<div class="grid2">
+  <div class="card">
+    <figure style="margin:0">
+      <svg viewBox="0 0 360 250" width="100%" role="img" aria-label="Push: agents displaced outward, longest arrows near the centre">
+        <defs>
+          <radialGradient id="gPush" cx="50%" cy="50%" r="50%">
+            <stop offset="0%" stop-color="#faa84e" stop-opacity=".30"/>
+            <stop offset="100%" stop-color="#faa84e" stop-opacity="0"/>
+          </radialGradient>
+          <marker id="hPush" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto">
+            <path d="M0,0 L7,3.5 L0,7 z" fill="#faa84e"/>
+          </marker>
+        </defs>
+        <circle cx="180" cy="118" r="96" fill="url(#gPush)"/>
+        <circle cx="180" cy="118" r="96" fill="none" stroke="#faa84e" stroke-width="1.6"/>
+        <!-- direction ticks -->
+        <g stroke="#faa84e" stroke-width="1.4" marker-end="url(#hPush)" opacity=".85">
+          <line x1="180" y1="66"  x2="180" y2="33"/>
+          <line x1="217" y1="81"  x2="240" y2="58"/>
+          <line x1="232" y1="118" x2="265" y2="118"/>
+          <line x1="217" y1="155" x2="240" y2="178"/>
+          <line x1="180" y1="170" x2="180" y2="203"/>
+          <line x1="143" y1="155" x2="120" y2="178"/>
+          <line x1="128" y1="118" x2="95"  y2="118"/>
+          <line x1="143" y1="81"  x2="120" y2="58"/>
+        </g>
+        <!-- agents: origin (hollow) → displaced (solid), arrow length ∝ closeness -->
+        <g>
+          <!-- near centre: long -->
+          <circle cx="186" cy="112" r="5" fill="none" stroke="#5b6472" stroke-dasharray="2 2"/>
+          <line x1="191" y1="108" x2="228" y2="80" stroke="#faa84e" stroke-width="2" marker-end="url(#hPush)"/>
+          <circle cx="236" cy="74" r="5" fill="#faa84e"/>
+          <!-- mid: medium -->
+          <circle cx="152" cy="150" r="5" fill="none" stroke="#5b6472" stroke-dasharray="2 2"/>
+          <line x1="148" y1="154" x2="128" y2="174" stroke="#faa84e" stroke-width="2" marker-end="url(#hPush)"/>
+          <circle cx="122" cy="180" r="5" fill="#faa84e"/>
+          <!-- near rim: tiny -->
+          <circle cx="248" cy="160" r="5" fill="none" stroke="#5b6472" stroke-dasharray="2 2"/>
+          <line x1="252" y1="164" x2="259" y2="171" stroke="#faa84e" stroke-width="2" marker-end="url(#hPush)"/>
+          <circle cx="263" cy="175" r="5" fill="#faa84e"/>
+          <!-- outside: untouched -->
+          <circle cx="308" cy="60" r="5" fill="#5b6472"/>
+          <circle cx="60"  cy="212" r="5" fill="#5b6472"/>
+        </g>
+        <circle cx="180" cy="118" r="2.5" fill="#faa84e"/>
+        <text x="180" y="240" text-anchor="middle" fill="#faa84e" font-size="13" font-weight="700">PUSH — solid ring, ticks outward</text>
+      </svg>
+      <figcaption>Displacement is longest at the centre, zero at the rim, nothing outside.</figcaption>
+    </figure>
+  </div>
+
+  <div class="card">
+    <figure style="margin:0">
+      <svg viewBox="0 0 360 250" width="100%" role="img" aria-label="Pull: agents displaced inward, longest arrows near the centre">
+        <defs>
+          <radialGradient id="gPull" cx="50%" cy="50%" r="50%">
+            <stop offset="0%" stop-color="#38c8dc" stop-opacity=".30"/>
+            <stop offset="100%" stop-color="#38c8dc" stop-opacity="0"/>
+          </radialGradient>
+          <marker id="hPull" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto">
+            <path d="M0,0 L7,3.5 L0,7 z" fill="#38c8dc"/>
+          </marker>
+        </defs>
+        <circle cx="180" cy="118" r="96" fill="url(#gPull)"/>
+        <circle cx="180" cy="118" r="96" fill="none" stroke="#38c8dc" stroke-width="1.6" stroke-dasharray="6 5"/>
+        <g stroke="#38c8dc" stroke-width="1.4" marker-end="url(#hPull)" opacity=".85">
+          <line x1="180" y1="33"  x2="180" y2="66"/>
+          <line x1="240" y1="58"  x2="217" y2="81"/>
+          <line x1="265" y1="118" x2="232" y2="118"/>
+          <line x1="240" y1="178" x2="217" y2="155"/>
+          <line x1="180" y1="203" x2="180" y2="170"/>
+          <line x1="120" y1="178" x2="143" y2="155"/>
+          <line x1="95"  y1="118" x2="128" y2="118"/>
+          <line x1="120" y1="58"  x2="143" y2="81"/>
+        </g>
+        <g>
+          <circle cx="228" cy="80" r="5" fill="none" stroke="#5b6472" stroke-dasharray="2 2"/>
+          <line x1="223" y1="85" x2="192" y2="109" stroke="#38c8dc" stroke-width="2" marker-end="url(#hPull)"/>
+          <circle cx="187" cy="113" r="5" fill="#38c8dc"/>
+          <circle cx="128" cy="174" r="5" fill="none" stroke="#5b6472" stroke-dasharray="2 2"/>
+          <line x1="133" y1="169" x2="151" y2="151" stroke="#38c8dc" stroke-width="2" marker-end="url(#hPull)"/>
+          <circle cx="155" cy="147" r="5" fill="#38c8dc"/>
+          <circle cx="259" cy="171" r="5" fill="none" stroke="#5b6472" stroke-dasharray="2 2"/>
+          <line x1="255" y1="167" x2="250" y2="162" stroke="#38c8dc" stroke-width="2" marker-end="url(#hPull)"/>
+          <circle cx="247" cy="159" r="5" fill="#38c8dc"/>
+          <circle cx="308" cy="60" r="5" fill="#5b6472"/>
+          <circle cx="60"  cy="212" r="5" fill="#5b6472"/>
+        </g>
+        <circle cx="180" cy="118" r="2.5" fill="#38c8dc"/>
+        <text x="180" y="240" text-anchor="middle" fill="#38c8dc" font-size="13" font-weight="700">PULL — dashed ring, ticks inward</text>
+      </svg>
+      <figcaption>Same falloff, inward — and clamped so nothing overshoots past the centre.</figcaption>
+    </figure>
+  </div>
+</div>
+
+<pre><span class="cmt">// per live agent within `radius` of the brush centre, d = torus-shortest distance</span>
+<span class="kw">const</span> falloff = <span class="num2">1</span> - d / radius;                 <span class="cmt">// 1 at the centre → 0 at the rim</span>
+<span class="kw">const</span> step    = intensity * dt * falloff;      <span class="cmt">// world units THIS tick</span>
+push: x += step * outward;
+pull: x -= <span class="fn">Math.min</span>(step, d) * outward;         <span class="cmt">// never overshoots the centre</span>
+<span class="cmt">// then wrap (torus) / clamp (bounded), writing BOTH x and xNext</span></pre>
+
+<div class="note">
+  <b>Intensity is world units per second at the centre.</b> The caller pre-multiplies by the
+  frame <code>dt</code> (clamped to 100&nbsp;ms) before posting — otherwise a 144&nbsp;Hz display
+  would push 2.4× faster than a 60&nbsp;Hz one for the same setting.
+</div>
+
+<h3>Move vs Push / Pull</h3>
+<table>
+  <tr><th></th><th>Move</th><th>Push / Pull</th></tr>
+  <tr><td>region</td><td>any brush shape (rect / circle / ring / line)</td><td>a radial disc (2D) or ball (3D)</td></tr>
+  <tr><td>magnitude</td><td>the drag delta — identical for every agent</td><td>∝ closeness to the centre, 0 at the rim</td></tr>
+  <tr><td>needs a drag</td><td>yes (it follows the pointer)</td><td>no — holding still keeps acting</td></tr>
+  <tr><td>feel</td><td>“pick this clump up and put it there”</td><td>“shove things aside” / “gather them in”</td></tr>
+</table>
+
+<!-- ─────────────────────────── PANEL ─────────────────────────── -->
+<h2>3 · The panel — one genuinely new control</h2>
+<div class="grid3">
+  <div class="panelmock">
+    <div class="hd">Agent Brush — add</div>
+    <div class="fieldrow"><span class="lbl">Shape</span>▢ ● ◌ ╱</div>
+    <div class="fieldrow"><span class="lbl">Radius</span><span class="num">8</span></div>
+    <div class="btnrow" style="margin:8px 0 6px">
+      <span class="mbtn on">add</span><span class="mbtn">remove</span><span class="mbtn">push</span><span class="mbtn">pull</span>
+    </div>
+    <div class="fieldrow"><span class="lbl">Density</span><span class="num">0.05</span></div>
+    <div class="fieldrow"><span class="lbl">Spacing</span><span class="num">6</span></div>
+    <p style="font-size:11px;margin:6px 0 0">unchanged</p>
+  </div>
+  <div class="panelmock" style="border-color:var(--push)">
+    <div class="hd" style="color:var(--push)">Agent Brush — push</div>
+    <div class="btnrow" style="margin:0 0 6px">
+      <span class="mbtn">add</span><span class="mbtn">remove</span><span class="mbtn on" style="border-color:var(--push);background:#3a2a14;color:var(--push)">push</span><span class="mbtn">pull</span>
+    </div>
+    <div class="fieldrow"><span class="lbl">Radius</span><span class="num">8</span></div>
+    <div class="fieldrow"><span class="lbl">Intensity</span><span class="num">10</span></div>
+    <p style="font-size:11px;margin:6px 0 0;color:var(--push)">
+      No Shape row — a radial force needs a centre + a radius, so push/pull always use a disc.
+      Ctrl+LMB-drag resizes <em>that</em> radius here.
+    </p>
+  </div>
+  <div class="panelmock" style="border-color:var(--pull)">
+    <div class="hd" style="color:var(--pull)">Agent Brush — pull</div>
+    <div class="btnrow" style="margin:0 0 6px">
+      <span class="mbtn">add</span><span class="mbtn">remove</span><span class="mbtn">push</span><span class="mbtn on" style="border-color:var(--pull);background:#0f2e33;color:var(--pull)">pull</span>
+    </div>
+    <div class="fieldrow"><span class="lbl">Radius</span><span class="num">8</span></div>
+    <div class="fieldrow"><span class="lbl">Intensity</span><span class="num">10</span></div>
+    <p style="font-size:11px;margin:6px 0 0;color:var(--pull)">
+      Same two fields; only the sign of the displacement differs.
+      Both persist in <code>genesisca_sim_settings</code>.
+    </p>
+  </div>
+</div>
+
+<!-- ─────────────────────────── FLOW ─────────────────────────── -->
+<h2>4 · Control flow — one rAF loop, one worker message, every target</h2>
+<div class="card">
+  <svg viewBox="0 0 1000 300" width="100%" role="img" aria-label="Pointer down starts an rAF loop that posts nudgeAgents to the worker, which displaces the CPU agent store; all three agent targets read it back">
+    <defs>
+      <marker id="ar" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto">
+        <path d="M0,0 L9,4.5 L0,9 z" fill="#7b8494"/>
+      </marker>
+      <marker id="arA" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto">
+        <path d="M0,0 L9,4.5 L0,9 z" fill="#e8a13a"/>
+      </marker>
+    </defs>
+    <!-- main thread band -->
+    <rect x="8" y="14" width="470" height="272" rx="8" fill="#15171c" stroke="#2b2f38"/>
+    <text x="22" y="34" fill="#9aa1ad" font-size="11" font-weight="700" letter-spacing=".6">MAIN THREAD</text>
+
+    <rect x="26" y="48" width="196" height="46" rx="6" fill="#1b1e24" stroke="#3b414c"/>
+    <text x="124" y="68" text-anchor="middle" fill="#e6e8ec" font-size="12" font-weight="600">2D pointerdown</text>
+    <text x="124" y="84" text-anchor="middle" fill="#9aa1ad" font-size="10.5">screenToWorld → centre</text>
+
+    <rect x="26" y="106" width="196" height="46" rx="6" fill="#1b1e24" stroke="#3b414c"/>
+    <text x="124" y="126" text-anchor="middle" fill="#e6e8ec" font-size="12" font-weight="600">3D pointerdown</text>
+    <text x="124" y="142" text-anchor="middle" fill="#9aa1ad" font-size="10.5">pickCell → col,row,layer</text>
+
+    <rect x="262" y="70" width="196" height="70" rx="6" fill="#3a2c14" stroke="#e8a13a"/>
+    <text x="360" y="94" text-anchor="middle" fill="#e8a13a" font-size="12" font-weight="700">nudge rAF loop</text>
+    <text x="360" y="111" text-anchor="middle" fill="#e2d3b4" font-size="10.5">≤ 1 post / frame</text>
+    <text x="360" y="127" text-anchor="middle" fill="#e2d3b4" font-size="10.5">strength = ±I · dt</text>
+
+    <line x1="222" y1="71" x2="256" y2="93"  stroke="#7b8494" stroke-width="1.5" marker-end="url(#ar)"/>
+    <line x1="222" y1="129" x2="256" y2="117" stroke="#7b8494" stroke-width="1.5" marker-end="url(#ar)"/>
+
+    <rect x="262" y="160" width="196" height="42" rx="6" fill="#1b1e24" stroke="#3b414c"/>
+    <text x="360" y="180" text-anchor="middle" fill="#e6e8ec" font-size="11.5">pointerup / mode switch</text>
+    <text x="360" y="195" text-anchor="middle" fill="#9aa1ad" font-size="10.5">cancels the loop</text>
+    <line x1="360" y1="158" x2="360" y2="144" stroke="#7b8494" stroke-width="1.5" marker-end="url(#ar)"/>
+
+    <rect x="26" y="216" width="432" height="56" rx="6" fill="#1b1e24" stroke="#3b414c"/>
+    <text x="242" y="236" text-anchor="middle" fill="#e6e8ec" font-size="11.5" font-weight="600">cursor layer — ring + direction ticks, affected-agent rings</text>
+    <text x="242" y="253" text-anchor="middle" fill="#9aa1ad" font-size="10.5">reads the render snapshot (highlight only — the effect never does)</text>
+    <text x="242" y="267" text-anchor="middle" fill="#9aa1ad" font-size="10.5">push = amber · pull = teal</text>
+
+    <!-- worker band -->
+    <rect x="522" y="14" width="470" height="272" rx="8" fill="#15171c" stroke="#2b2f38"/>
+    <text x="536" y="34" fill="#9aa1ad" font-size="11" font-weight="700" letter-spacing=".6">SIM WORKER</text>
+
+    <rect x="556" y="56" width="400" height="60" rx="6" fill="#3a2c14" stroke="#e8a13a"/>
+    <text x="756" y="80" text-anchor="middle" fill="#e8a13a" font-size="12.5" font-weight="700">case 'nudgeAgents'</text>
+    <text x="756" y="99" text-anchor="middle" fill="#e2d3b4" font-size="10.5">radial displacement → s.x / s.xNext (+ z when 3D), wrap/clamp</text>
+
+    <line x1="462" y1="105" x2="550" y2="86" stroke="#e8a13a" stroke-width="2" marker-end="url(#arA)"/>
+    <text x="506" y="78" text-anchor="middle" fill="#e8a13a" font-size="10" font-weight="700">postMessage</text>
+
+    <rect x="556" y="134" width="400" height="44" rx="6" fill="#1b1e24" stroke="#3b414c"/>
+    <text x="756" y="152" text-anchor="middle" fill="#e6e8ec" font-size="11.5" font-weight="600">AGENT_GPU_DEFER_TYPES</text>
+    <text x="756" y="168" text-anchor="middle" fill="#9aa1ad" font-size="10.5">deferred during an in-flight GPU readback · sets agentGpuUploadPending</text>
+    <line x1="756" y1="118" x2="756" y2="132" stroke="#7b8494" stroke-width="1.5" marker-end="url(#ar)"/>
+
+    <g>
+      <rect x="556" y="200" width="122" height="46" rx="6" fill="#14331f" stroke="#2c6440"/>
+      <text x="617" y="222" text-anchor="middle" fill="#6bd48a" font-size="11.5" font-weight="700">JS</text>
+      <text x="617" y="237" text-anchor="middle" fill="#8fc9a4" font-size="10">reads the store</text>
+
+      <rect x="695" y="200" width="122" height="46" rx="6" fill="#14331f" stroke="#2c6440"/>
+      <text x="756" y="222" text-anchor="middle" fill="#6bd48a" font-size="11.5" font-weight="700">WASM</text>
+      <text x="756" y="237" text-anchor="middle" fill="#8fc9a4" font-size="10">same views</text>
+
+      <rect x="834" y="200" width="122" height="46" rx="6" fill="#14331f" stroke="#2c6440"/>
+      <text x="895" y="222" text-anchor="middle" fill="#6bd48a" font-size="11.5" font-weight="700">WebGPU</text>
+      <text x="895" y="237" text-anchor="middle" fill="#8fc9a4" font-size="10">re-uploaded</text>
+    </g>
+    <line x1="617" y1="180" x2="617" y2="198" stroke="#7b8494" stroke-width="1.5" marker-end="url(#ar)"/>
+    <line x1="756" y1="180" x2="756" y2="198" stroke="#7b8494" stroke-width="1.5" marker-end="url(#ar)"/>
+    <line x1="895" y1="180" x2="895" y2="198" stroke="#7b8494" stroke-width="1.5" marker-end="url(#ar)"/>
+    <text x="756" y="268" text-anchor="middle" fill="#9aa1ad" font-size="10.5">2D and 3D are ONE handler — z is read only when worldDepth &gt; 1</text>
+  </svg>
+</div>
+
+<!-- ─────────────────────────── CHANGES ─────────────────────────── -->
+<h2>5 · What changes in the code</h2>
+<table>
+  <tr><th style="width:96px">action</th><th>site</th><th>note</th></tr>
+  <tr><td><span class="tag rm">remove</span></td><td><code>'bond'</code> from <code>AGENT_BRUSH_MODES</code>, <code>AgentBrushMode</code>, <code>BOND_BRUSH_MODES</code>, <code>AGENT_BRUSH_MODES_NEEDING_STATE</code></td><td>Glue/Cut keep the Bonds-off gating</td></tr>
+  <tr><td><span class="tag rm">remove</span></td><td><code>scanBondPairsAt</code> · <code>scanBondPairs3d</code> · <code>flushBondBatch</code> · <code>pendingBondPairs</code> · the <code>'agentBond'</code> drag state · the scan-ring cursor · the Bond Radius field</td><td>all bond-brush-only</td></tr>
+  <tr><td><span class="tag rm">remove</span></td><td><code>formBondBatch</code> — the worker case, the message interface, the <code>WorkerMsg</code> union member, the defer-set entry</td><td>nothing else posted it; single <code>formBond</code>/<code>breakBond</code> (Glue/Cut) stay</td></tr>
+  <tr><td><span class="tag keep">keep</span></td><td><code>agentsInRadiusAt</code> · <code>agentsInRadius3dAt</code></td><td>were Bond's scan collectors → now Push/Pull's highlight collectors</td></tr>
+  <tr><td><span class="tag add">add</span></td><td><code>'push'</code> / <code>'pull'</code> modes + <code>agentNudgeIntensity</code> state (persisted)</td><td>ungated — every agent model</td></tr>
+  <tr><td><span class="tag add">add</span></td><td>worker <code>nudgeAgents</code> + its <code>AGENT_GPU_DEFER_TYPES</code> entry</td><td>the whole engine surface of the feature</td></tr>
+  <tr><td><span class="tag add">add</span></td><td>the shared nudge rAF loop (2D + 3D), the ring/tick cursor, the affected-agent highlight, the Ctrl-drag radius override</td><td>UI only</td></tr>
+</table>
+
+<div class="note">
+  <b>Why no velocity kick.</b> It would feel more like a force, but it accumulates: at
+  momentum&nbsp;0.9 a sustained hold converges to ~10× the per-frame step, and at
+  momentum&nbsp;1.0 (Particle Life) boundedness depends entirely on the model's own
+  graph-side friction. A position displacement is well defined for every Motion mode
+  (<code>static</code>&nbsp;/&nbsp;<code>velocity</code>&nbsp;/&nbsp;<code>force</code>), every
+  momentum value and every compile target — the same contract Move already has.
+</div>
+
+</div>
+</body>
+</html>

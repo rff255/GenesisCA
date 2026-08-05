@@ -622,15 +622,21 @@ const LAYOUT_RESIZE_SETTLE_MS = 140;
 
 /** The agent-brush modes, in cycle order (Alt+scroll steps through them). Shared
  *  by the mode-button row and the wheel-cycle handlers so they can't drift. */
-const AGENT_BRUSH_MODES: ReadonlyArray<'add' | 'remove' | 'move' | 'edit' | 'glue' | 'cut' | 'bond'> =
-  ['add', 'remove', 'move', 'edit', 'glue', 'cut', 'bond'];
-/** The three modes that act ONLY through the bond store. A model whose Bonds
+const AGENT_BRUSH_MODES: ReadonlyArray<'add' | 'remove' | 'move' | 'edit' | 'push' | 'pull' | 'glue' | 'cut'> =
+  ['add', 'remove', 'move', 'edit', 'push', 'pull', 'glue', 'cut'];
+/** The two modes that act ONLY through the bond store. A model whose Bonds
  *  capability is Off has `resolveMaxBonds === 0` ⇒ a zero-length store ⇒ every
  *  formBond/breakBond is rejected, so these are STRUCTURALLY inert there — they
  *  are dropped from the button row AND from the Alt+wheel cycle rather than left
  *  clickable and silently doing nothing (the same predicate already hides the
- *  Layers "Bonds" row). */
-const BOND_BRUSH_MODES: ReadonlySet<string> = new Set(['glue', 'cut', 'bond']);
+ *  Layers "Bonds" row). Push/Pull are deliberately NOT here: they displace
+ *  positions, so they work on every agent model. */
+const BOND_BRUSH_MODES: ReadonlySet<string> = new Set(['glue', 'cut']);
+/** The RADIAL-force modes (Push / Pull). They ignore the brush SHAPE — a radial
+ *  force needs a centre and a radius, so they always act over a plain disc (2D) /
+ *  ball (3D) of `agentBrushRadius`, and the panel shows Radius + Intensity
+ *  instead of the shape row. */
+const NUDGE_BRUSH_MODES: ReadonlySet<string> = new Set(['push', 'pull']);
 function agentBrushModesFor(bondsAvailable: boolean): typeof AGENT_BRUSH_MODES {
   return bondsAvailable ? AGENT_BRUSH_MODES : AGENT_BRUSH_MODES.filter(m => !BOND_BRUSH_MODES.has(m));
 }
@@ -641,8 +647,14 @@ function agentBrushModesFor(bondsAvailable: boolean): typeof AGENT_BRUSH_MODES {
  *  `agentSeedPoints` / `agentSeedInLine` never touch `agentsRef`), and its cursor
  *  is the shape silhouette, also pure geometry. It is also the DEFAULT mode, which
  *  is why a passive hover used to cost a per-frame GPU readback for nothing — see
- *  `agentHoverNeedsState`. */
-const AGENT_BRUSH_MODES_NEEDING_STATE: ReadonlySet<string> = new Set(['remove', 'move', 'edit', 'glue', 'cut', 'bond']);
+ *  `agentHoverNeedsState`.
+ *
+ *  Push/Pull are here for their HIGHLIGHT only — the effect itself is entirely
+ *  worker-side (a `nudgeAgents` post carries a centre + a radius, never an id
+ *  list), but the ring drawn over every agent the disc will move reads the
+ *  snapshot. The 3 s idle backstop caps that cost, so paying it buys the
+ *  see-what-you'll-move affordance the other area modes already have. */
+const AGENT_BRUSH_MODES_NEEDING_STATE: ReadonlySet<string> = new Set(['remove', 'move', 'edit', 'push', 'pull', 'glue', 'cut']);
 /** IDLE BACKSTOP: a cursor that has not moved (or been pressed / scrolled / had a
  *  modifier pressed) over a simulation canvas for this long is not interacting, so
  *  the agent UI-sync hover pin is released and the stale-dependent hover visuals
@@ -1688,6 +1700,11 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
   const [agentBrushRadius, setAgentBrushRadius] = useState<number>((saved.current.agentBrushRadius as number) ?? 8);
   const [agentSeedDensity, setAgentSeedDensity] = useState<number>((saved.current.agentSeedDensity as number) ?? 0.05);
   const [agentSeedSpacing, setAgentSeedSpacing] = useState<number>((saved.current.agentSeedSpacing as number) ?? 6);
+  // Push / Pull strength, in WORLD UNITS PER SECOND at the centre of the disc
+  // (the falloff scales it to 0 at the rim). Per-second, not per-frame: the
+  // sender multiplies by the frame dt, so the same setting feels identical at
+  // 60 Hz and 144 Hz.
+  const [agentNudgeIntensity, setAgentNudgeIntensity] = useState<number>((saved.current.agentNudgeIntensity as number) ?? 10);
   // Agent brush SHAPE + per-shape params (mirror the CA-grid brush): rect W/H,
   // circle radius (agentBrushRadius above), ring radius + width, line width. The
   // agent world is continuous, so these are world-unit footprints tested
@@ -2018,7 +2035,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
           brushShape, brushRadius, brushRingWidth, brushLineWidth, brush3dVolume, brushBoxDepth,
           infinityCanvas, indicatorVizModes, recordFormat, recordScope, recordQuality, recordOverload, screenshotScope, brushSectionH, agentsFront3d,
           light3d, cellGaps3d, agentMetaballs, agentGlow,
-          agentBrushRadius, agentSeedDensity, agentSeedSpacing,
+          agentBrushRadius, agentSeedDensity, agentSeedSpacing, agentNudgeIntensity,
           agentBrushShape, agentBrushW, agentBrushH, agentBrushRingWidth, agentBrushLineWidth,
           showCaGrid, showAgents, showBonds, simulateCells, simulateAgents, brushTarget, bg2d, agentOutlines, showVision,
           indicatorHiddenCategories: Object.fromEntries(
@@ -2032,7 +2049,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       } catch { /* localStorage full */ }
     }, 300);
     return () => clearTimeout(timer);
-  }, [targetFps, unlimitedFps, gensPerFrame, unlimitedGens, activeViewer, brushColor, brushW, brushH, brushMapping, showBrushCursor, showGridlines, show2dAxes, smoothScaling, brushShape, brushRadius, brushRingWidth, brushLineWidth, brush3dVolume, brushBoxDepth, infinityCanvas, indicatorVizModes, recordFormat, recordScope, recordQuality, recordOverload, screenshotScope, brushSectionH, agentsFront3d, light3d, cellGaps3d, agentMetaballs, agentGlow, agentBrushRadius, agentSeedDensity, agentSeedSpacing, agentBrushShape, agentBrushW, agentBrushH, agentBrushRingWidth, agentBrushLineWidth, showCaGrid, showAgents, showBonds, simulateCells, simulateAgents, brushTarget, bg2d, agentOutlines, showVision, indicatorHiddenCategories, indicatorChartOverrides]);
+  }, [targetFps, unlimitedFps, gensPerFrame, unlimitedGens, activeViewer, brushColor, brushW, brushH, brushMapping, showBrushCursor, showGridlines, show2dAxes, smoothScaling, brushShape, brushRadius, brushRingWidth, brushLineWidth, brush3dVolume, brushBoxDepth, infinityCanvas, indicatorVizModes, recordFormat, recordScope, recordQuality, recordOverload, screenshotScope, brushSectionH, agentsFront3d, light3d, cellGaps3d, agentMetaballs, agentGlow, agentBrushRadius, agentSeedDensity, agentSeedSpacing, agentNudgeIntensity, agentBrushShape, agentBrushW, agentBrushH, agentBrushRingWidth, agentBrushLineWidth, showCaGrid, showAgents, showBonds, simulateCells, simulateAgents, brushTarget, bg2d, agentOutlines, showVision, indicatorHiddenCategories, indicatorChartOverrides]);
 
   // Manual Brush — signature-keyed merge effect. Re-derives `manualBrush`
   // whenever the cell attribute set (id+type) changes. Surviving attrs carry
@@ -2519,13 +2536,13 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
   const spriteAtlasDirtyRef = useRef(true);
   // Agent brush: the LMB action on the canvas for an agent model (only active
   // when brushTarget === 'agents'). Add/Remove/Move/Edit honour the Single/Area
-  // scope + the shape footprint; Glue/Cut stage a first agent then bond/unbond to
-  // the second; Bond auto-bonds near agents under the brush.
-  type AgentBrushMode = 'add' | 'remove' | 'move' | 'edit' | 'glue' | 'cut' | 'bond';
+  // scope + the shape footprint; Push/Pull radially displace agents inside a disc
+  // while held; Glue/Cut stage a first agent then bond/unbond to the second.
+  type AgentBrushMode = 'add' | 'remove' | 'move' | 'edit' | 'push' | 'pull' | 'glue' | 'cut';
   const [agentBrushMode, setAgentBrushMode] = useState<AgentBrushMode>('add');
   const agentBrushModeRef = useRef<AgentBrushMode>('add');
   agentBrushModeRef.current = agentBrushMode;
-  // Which modes this model can actually perform — Glue / Cut / Bond need a bond
+  // Which modes this model can actually perform — Glue / Cut need a bond
   // store, so they vanish for a Bonds=Off model (Particle Life, Boids, …). The
   // ref keeps the two Alt+wheel cycle handlers on the same list as the buttons.
   const bondsAvailable = resolveMaxBonds(model.centerBased) > 0;
@@ -2579,8 +2596,17 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
   const draggingAgentStartRef = useRef<{ x: number; y: number } | null>(null);
   const pendingMovesRef = useRef<Array<{ id: number; x: number; y: number; z?: number }> | null>(null);
   const pendingMoveRaf = useRef<number | null>(null);
-  // PR4 — Bond-paint: the set of pairs queued from the current stroke (dedup'd).
-  const pendingBondPairs = useRef<Set<string>>(new Set());
+  // Push / Pull brush: the LIVE brush centre while the button is held (world
+  // coords; z only in 3D), the rAF token of the loop that posts one `nudgeAgents`
+  // per frame, and the timestamp the frame dt is measured from.
+  //
+  // A LOOP, not a per-pointermove post: a radial nudge must keep acting while the
+  // cursor is HELD STILL (that is most of how it is used), and one message per
+  // frame is the same rAF-batching discipline the seed / move drags use.
+  const nudgeCenterRef = useRef<{ x: number; y: number; z?: number } | null>(null);
+  const nudgeRafRef = useRef<number | null>(null);
+  const nudgeLastTsRef = useRef<number>(0);
+  const agentNudgeIntensityRef = useRef(agentNudgeIntensity); agentNudgeIntensityRef.current = agentNudgeIntensity;
   // The TRANSIENT sweep popover, mirrored for the pointer handlers (which are
   // registered once per effect run and must read the live value).
   // NB assigned SYNCHRONOUSLY by openAgentInspector / clear / commit (a fast
@@ -3582,9 +3608,10 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       }
     }
     // Area-affected agents — every agent the current footprint would touch
-    // (Remove/Move/Edit, Area scope; Bond's scan disc), colour-coded per mode.
-    if (showAgentCursor && snap && ((aScope === 'area' && (mode === 'remove' || mode === 'move' || mode === 'edit')) || mode === 'bond') && agentAreaHoverIdsRef.current.length) {
-      const rgb = mode === 'remove' ? '240, 90, 90' : mode === 'edit' ? '171, 123, 255' : mode === 'bond' ? '38, 198, 218' : '76, 201, 240';
+    // (Remove/Move/Edit, Area scope; Push/Pull's radial disc), colour-coded per mode.
+    if (showAgentCursor && snap && ((aScope === 'area' && (mode === 'remove' || mode === 'move' || mode === 'edit')) || NUDGE_BRUSH_MODES.has(mode)) && agentAreaHoverIdsRef.current.length) {
+      const rgb = mode === 'remove' ? '240, 90, 90' : mode === 'edit' ? '171, 123, 255'
+        : mode === 'push' ? '250, 168, 78' : mode === 'pull' ? '56, 200, 220' : '76, 201, 240';
       hlCtx.save();
       hlCtx.strokeStyle = `rgba(${rgb}, 0.95)`;
       hlCtx.fillStyle = `rgba(${rgb}, 0.22)`;
@@ -3633,22 +3660,43 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       negCtx.setLineDash([]);
       negCtx.restore();
     }
-    // Bond scan-radius cursor — a dashed circle of the scan radius (negative layer).
-    if (showAgentCursor && mode === 'bond' && cursorW && agentBrushRadiusRef.current > 0) {
+    // Push / Pull effect cursor — the disc the radial nudge acts over: a ring
+    // (SOLID for push, DASHED for pull) plus 8 radial ticks with a chevron at the
+    // leading end, so the DIRECTION is readable at a glance without reading the
+    // mode buttons. Negative-silhouette layer, like every other brush cursor.
+    if (showAgentCursor && NUDGE_BRUSH_MODES.has(mode) && cursorW && agentBrushRadiusRef.current > 0) {
       const rr = agentBrushRadiusRef.current * scale;
+      const out = mode === 'push';
+      // Ticks live inside the ring so they never read as part of a neighbouring
+      // tile's cursor; the chevron marks where the motion is HEADED.
+      const t0 = rr * 0.52, t1 = rr * 0.9;
+      const head = Math.min(5, Math.max(2.5, rr * 0.12));
       negCtx.save();
       negCtx.strokeStyle = '#ffffff';
       negCtx.lineWidth = 1.5;
-      negCtx.setLineDash([2, 3]);
       const drawRing = (tileOx: number, tileOy: number) => {
         const cx = tileOx + cursorW.x * scale, cy = tileOy + cursorW.y * scale;
         if (cx + rr < 0 || cx - rr > parentW || cy + rr < 0 || cy - rr > parentH) return;
+        negCtx.setLineDash(out ? [] : [5, 4]);
         negCtx.beginPath(); negCtx.arc(cx, cy, rr, 0, Math.PI * 2); negCtx.stroke();
+        negCtx.setLineDash([]);
+        if (rr < 10) return;                       // too small to read — ring only
+        negCtx.beginPath();
+        for (let k = 0; k < 8; k++) {
+          const a = (k / 8) * Math.PI * 2, ux = Math.cos(a), uy = Math.sin(a);
+          const sr = out ? t0 : t1, er = out ? t1 : t0;   // start → end (the travel)
+          const sx = cx + ux * sr, sy = cy + uy * sr, ex = cx + ux * er, ey = cy + uy * er;
+          negCtx.moveTo(sx, sy); negCtx.lineTo(ex, ey);
+          // Chevron at the END: two short strokes swept back along the travel.
+          const dir = out ? 1 : -1, px = -uy, py = ux;
+          negCtx.moveTo(ex, ey); negCtx.lineTo(ex - ux * head * dir + px * head * 0.6, ey - uy * head * dir + py * head * 0.6);
+          negCtx.moveTo(ex, ey); negCtx.lineTo(ex - ux * head * dir - px * head * 0.6, ey - uy * head * dir - py * head * 0.6);
+        }
+        negCtx.stroke();
       };
       if (infinity) {
         for (let ty = tyMin; ty <= tyMax; ty++) for (let tx = txMin; tx <= txMax; tx++) drawRing(ox + tx * scaledW, oy + ty * scaledH);
       } else { drawRing(ox, oy); }
-      negCtx.setLineDash([]);
       negCtx.restore();
     }
     // Glue/Cut staged-anchor ring + a dashed line to the cursor (highlight layer).
@@ -4347,7 +4395,9 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
             bw = agentBrushWRef.current; bh = agentBrushHRef.current;
             rad = agentBrushRadiusRef.current; rw = Math.max(1, agentBrushRingWidthRef.current); lw = agentBrushLineWidthRef.current;
             anchor = agentLine3dAnchorRef.current;
-            if (m === 'bond') { shp = 'circle'; }                                // scan-radius ring
+            // Push/Pull act over a BALL of the radius — the volumetric outline is
+            // exactly the region the nudge will touch.
+            if (NUDGE_BRUSH_MODES.has(m)) { shp = 'circle'; anchor = null; fixedHalf = Math.max(0.5, rad); }
             else if (m === 'glue' || m === 'cut') { shp = 'circle'; rad = 1; anchor = null; }  // small cursor dot
             // The 3D agent footprint is ALWAYS a volumetric solid (sphere/box through
             // the depth — see agentsInShape3dAt / agentSeedInShape3dAt), NOT gated on
@@ -7320,7 +7370,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
     if (!is3D) return;
     const glc = glCanvasRef.current;
     if (!glc) return;
-    let active: 'orbit' | 'pan' | 'brush' | 'inspect' | 'inspectAgent' | 'resize' | 'agentSeed' | 'agentKill' | 'agentMove' | 'agentGroupMove' | 'agentEdit' | 'agentBond' | null = null;
+    let active: 'orbit' | 'pan' | 'brush' | 'inspect' | 'inspectAgent' | 'resize' | 'agentSeed' | 'agentKill' | 'agentMove' | 'agentGroupMove' | 'agentEdit' | 'agentNudge' | null = null;
     let lastX = 0, lastY = 0, downX = 0, downY = 0, moved = false;
     // AGENT sweep (active === 'inspectAgent'): the agent picked at press + whether
     // the drag ever re-targeted a DIFFERENT agent — the discard rule is
@@ -7429,15 +7479,15 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       const mode = agentBrushModeRef.current;
       const aShape = agentBrushShapeRef.current;
       const aScope = (mode === 'move' && aShape === 'line') ? 'single' : agentBrushScopeRef.current;
-      const want = brushTargetRef.current === 'agents' && (mode === 'remove' || mode === 'glue' || mode === 'cut' || mode === 'move' || mode === 'edit' || mode === 'bond');
+      const want = brushTargetRef.current === 'agents' && (mode === 'remove' || mode === 'glue' || mode === 'cut' || mode === 'move' || mode === 'edit' || NUDGE_BRUSH_MODES.has(mode));
       if (!want || !snap) {
         if (hoverAgents3dRef.current.length === 0) return false;
         hoverAgents3dRef.current = EMPTY_AGENT_RINGS; return true;
       }
       const hasZ = snap.z.length > 0;
-      // Bond: highlight every agent inside the scan ball on the plane (the pairs
-      // that could get bonded), mirroring the 2D bond hover.
-      if (mode === 'bond') {
+      // Push/Pull: highlight every agent inside the effect BALL on the plane (the
+      // ones the hold will displace), mirroring the 2D disc hover.
+      if (NUDGE_BRUSH_MODES.has(mode)) {
         const hit = pickCell(clientX, clientY);
         const ids = hit ? agentsInRadius3dAt(hit, agentBrushRadiusRef.current) : [];
         const rings = ids.map(id => ({ x: snap.x[id]!, y: snap.y[id]!, z: hasZ ? snap.z[id]! : 0, radius: snap.radius[id]! }));
@@ -7657,11 +7707,12 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
             agentGlueAnchorRef.current = -1;
           }
           draw();
-        } else if (mode === 'bond') {
-          // Bond-paint: scan the plane ball for near pairs on the drag, flush on up.
-          pendingBondPairs.current.clear();
+        } else if (mode === 'push' || mode === 'pull') {
+          // Push / Pull: start the continuous radial-nudge loop at the plane-picked
+          // cell. The agent world IS the grid frame 1:1, so {col,row,layer} is
+          // already the world centre the worker expects.
           const hit = pickCell(e.clientX, e.clientY);
-          if (hit) { scanBondPairs3d(hit); active = 'agentBond'; } else active = null;
+          if (hit) { active = 'agentNudge'; startNudgeLoop({ x: hit.col, y: hit.row, z: hit.layer }); } else active = null;
         } else { active = 'agentSeed'; addAgents3d(e.clientX, e.clientY, aScope); } // (unreached — all modes handled)
       }
       else if (e.button === 0 && brushShapeRef.current === 'line') {
@@ -7768,7 +7819,10 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
         const totDx = e.clientX - resizeStart.x, totDy = e.clientY - resizeStart.y;
         const maxW = (gridWidth.current || simWidth) * 2, maxH = (gridHeight.current || simHeight) * 2;
         const rzA = resizeStart.agent;
-        const shape = rzA ? agentBrushShapeRef.current : brushShapeRef.current;
+        // Push/Pull ignore the shape — Ctrl-drag resizes THEIR disc radius.
+        const shape = rzA
+          ? (NUDGE_BRUSH_MODES.has(agentBrushModeRef.current) ? 'circle' : agentBrushShapeRef.current)
+          : brushShapeRef.current;
         const setRadius = rzA ? setAgentBrushRadius : setBrushRadius;
         const setRingW = rzA ? setAgentBrushRingWidth : setBrushRingWidth;
         const setLineW = rzA ? setAgentBrushLineWidth : setBrushLineWidth;
@@ -7792,7 +7846,12 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       if (active === 'agentSeed') { if (agentBrushScopeRef.current === 'area' && agentBrushShapeRef.current !== 'line') addAgents3d(e.clientX, e.clientY, 'area'); updateHover(e.clientX, e.clientY); draw(); return; }
       if (active === 'agentKill') { removeAgents3d(e.clientX, e.clientY, agentBrushScopeRef.current); updateHover(e.clientX, e.clientY); updateAgentHover(e.clientX, e.clientY); draw(); return; }
       if (active === 'agentEdit') { editAgents3d(e.clientX, e.clientY); updateHover(e.clientX, e.clientY); draw(); return; }
-      if (active === 'agentBond') { const hit = pickCell(e.clientX, e.clientY); if (hit) scanBondPairs3d(hit); updateHover(e.clientX, e.clientY); updateAgentHover(e.clientX, e.clientY); draw(); return; }
+      if (active === 'agentNudge') {
+        // Re-aim the running loop (it posts on its own rAF, not per move).
+        const hit = pickCell(e.clientX, e.clientY);
+        if (hit) nudgeCenterRef.current = { x: hit.col, y: hit.row, z: hit.layer };
+        updateHover(e.clientX, e.clientY); updateAgentHover(e.clientX, e.clientY); draw(); return;
+      }
       if (active === 'agentGroupMove') {
         const g = agentGroupMoveRef.current, hit = pickCell(e.clientX, e.clientY);
         if (g && hit) {
@@ -7870,7 +7929,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       // derives them from the open popovers + the live snapshot every frame.
       if (active === 'agentMove') { agentDragId = -1; draw(); }
       if (active === 'agentGroupMove') { agentGroupMoveRef.current = null; }
-      if (active === 'agentBond') { flushBondBatch(); draw(); }
+      if (active === 'agentNudge') { stopNudgeLoop(); draw(); }
       active = null;
       last3dHitRef.current = null;
       // L1: the gesture is over — release the frame-mode pin (debounced OFF).
@@ -9036,67 +9095,49 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
     workerRef.current?.postMessage({ type: 'moveAgents', moves, torus: boundaryTreatmentRef.current === 'torus', activeViewer: activeViewerRef.current });
   }, []);
 
-  // PR4 — Bond-paint: scan the agents within the brush radius of a screen point
-  // and queue every adjacent pair within formDistance·contact that isn't already
-  // bonded (the engine's auto-bond threshold). Pairs are dedup'd in a Set keyed
-  // by the ordered id pair; flushed on pointer-up.
-  const scanBondPairsAt = useCallback((clientX: number, clientY: number) => {
-    const snap = agentsRef.current;
-    if (!snap || snap.highWater === 0) return;
-    const wpt = screenToWorld(clientX, clientY);
-    if (!wpt) return;
-    const W = gridWidth.current, H = gridHeight.current;
-    const torus = boundaryTreatmentRef.current === 'torus';
-    const cb = model.centerBased;
-    const fMul = cbNum(cb, 'formDistance');
-    const brushR = agentBrushRadiusRef.current;
-    // Existing bonds from the render snapshot (skip re-queueing them).
-    const bonded = new Set<string>();
-    const bonds = snap.bonds;
-    if (bonds) for (let b = 0; b < bonds.length; b += 2) {
-      const i = bonds[b]!, j = bonds[b + 1]!;
-      bonded.add(i < j ? `${i}:${j}` : `${j}:${i}`);
-    }
-    const torusDist2 = (i: number, j: number): number => {
-      let dx = snap.x[i]! - snap.x[j]!, dy = snap.y[i]! - snap.y[j]!;
-      if (torus && W > 0 && H > 0) {
-        if (dx > W / 2) dx -= W; else if (dx < -W / 2) dx += W;
-        if (dy > H / 2) dy -= H; else if (dy < -H / 2) dy += H;
-      }
-      return dx * dx + dy * dy;
-    };
-    // Collect agents under the brush, then queue near pairs among them.
-    const under: number[] = [];
-    for (let i = 0; i < snap.highWater; i++) {
-      if (!snap.alive[i]) continue;
-      let dx = snap.x[i]! - wpt.x, dy = snap.y[i]! - wpt.y;
-      if (torus && W > 0 && H > 0) {
-        if (dx > W / 2) dx -= W; else if (dx < -W / 2) dx += W;
-        if (dy > H / 2) dy -= H; else if (dy < -H / 2) dy += H;
-      }
-      if (dx * dx + dy * dy <= brushR * brushR) under.push(i);
-    }
-    for (let a = 0; a < under.length; a++) {
-      for (let b = a + 1; b < under.length; b++) {
-        const i = under[a]!, j = under[b]!;
-        const key = i < j ? `${i}:${j}` : `${j}:${i}`;
-        if (bonded.has(key) || pendingBondPairs.current.has(key)) continue;
-        // Per-pair contact distance = sum of the two radii (mirrors the engine's
-        // auto-bond: form within formDistance × contact).
-        const thr = fMul * (snap.radius[i]! + snap.radius[j]!);
-        if (torusDist2(i, j) <= thr * thr) pendingBondPairs.current.add(key);
-      }
-    }
-  }, [screenToWorld, model.centerBased]);
+  // ------- Push / Pull brush: the continuous radial-nudge loop -------
+  // ONE loop serves both dimensions: the 2D handler seeds `nudgeCenterRef` from
+  // screenToWorld, the 3D one from the plane pick (the agent world IS the grid
+  // frame 1:1, so a {col,row,layer} cell is already a world point). It posts at
+  // most one `nudgeAgents` per frame from the LAST known centre - so holding the
+  // button still keeps pushing, and a 1 kHz pointer stream cannot flood the
+  // worker. `strength` carries the frame dt so Intensity means the same thing at
+  // any refresh rate; the dt is clamped so a background tab cannot bank a huge
+  // displacement into the frame after it is re-shown.
+  const stopNudgeLoop = useCallback(() => {
+    if (nudgeRafRef.current != null) { cancelAnimationFrame(nudgeRafRef.current); nudgeRafRef.current = null; }
+    nudgeCenterRef.current = null;
+    nudgeLastTsRef.current = 0;
+  }, []);
 
-  const flushBondBatch = useCallback(() => {
-    const pairs: Array<[number, number]> = [];
-    for (const key of pendingBondPairs.current) {
-      const [a, b] = key.split(':').map(Number);
-      pairs.push([a!, b!]);
-    }
-    pendingBondPairs.current.clear();
-    if (pairs.length > 0) workerRef.current?.postMessage({ type: 'formBondBatch', pairs, activeViewer: activeViewerRef.current });
+  const nudgeTickRef = useRef<(ts: number) => void>(() => {});
+  nudgeTickRef.current = (ts: number) => {
+    if (nudgeRafRef.current == null) return;                 // stopped between frames
+    nudgeRafRef.current = requestAnimationFrame(t => nudgeTickRef.current(t));
+    const c = nudgeCenterRef.current;
+    const mode = agentBrushModeRef.current;
+    if (!c || (mode !== 'push' && mode !== 'pull')) return;
+    const last = nudgeLastTsRef.current;
+    nudgeLastTsRef.current = ts;
+    const dt = last > 0 ? Math.min(0.1, (ts - last) / 1000) : 1 / 60;
+    const radius = agentBrushRadiusRef.current;
+    const intensity = agentNudgeIntensityRef.current;
+    if (!(radius > 0) || !(intensity > 0)) return;
+    const strength = (mode === 'push' ? 1 : -1) * intensity * dt;
+    workerRef.current?.postMessage({
+      type: 'nudgeAgents',
+      x: c.x, y: c.y, ...(c.z !== undefined ? { z: c.z } : {}),
+      radius, strength,
+      torus: boundaryTreatmentRef.current === 'torus',
+      activeViewer: activeViewerRef.current,
+    });
+  };
+
+  const startNudgeLoop = useCallback((centre: { x: number; y: number; z?: number }) => {
+    nudgeCenterRef.current = centre;
+    nudgeLastTsRef.current = 0;                                // first tick uses 1/60
+    if (nudgeRafRef.current != null) return;
+    nudgeRafRef.current = requestAnimationFrame(t => nudgeTickRef.current(t));
   }, []);
 
   // ------- Agent brush shapes (Add / Remove / Move / Edit footprint) -------
@@ -9148,9 +9189,9 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
     }
     return ids;
   }, [agentShapeMetrics, agentDelta]);
-  /** Live agent ids within a plain radius disc of (cx,cy) — the Bond brush's scan
-   *  region (Bond ignores the shape; its radius = how far apart two agents can be
-   *  and still get auto-bonded). Torus-aware. */
+  /** Live agent ids within a plain radius disc of (cx,cy) — the Push/Pull effect
+   *  region (those modes ignore the shape: a radial force needs a centre and a
+   *  radius, so they always act over a disc). Torus-aware. */
   const agentsInRadiusAt = useCallback((cx: number, cy: number, radius: number): number[] => {
     const snap = agentsRef.current;
     if (!snap || snap.highWater === 0 || radius <= 0) return [];
@@ -9287,7 +9328,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
     return ids;
   }, [agentShapeMetrics, agentProj3d]);
   /** Live agent ids within a 3D ball of `radius` around a plane-pick cell — the
-   *  Bond brush's scan region (3D sibling of agentsInRadiusAt). Torus-aware via
+   *  Push/Pull effect region (3D sibling of agentsInRadiusAt). Torus-aware via
    *  agentProj3d's shortest-offset fold. */
   const agentsInRadius3dAt = useCallback((hit: Cell3, radius: number): number[] => {
     const snap = agentsRef.current;
@@ -9300,36 +9341,6 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
     }
     return ids;
   }, [agentProj3d]);
-  /** 3D Bond-brush scan: queue every not-yet-bonded pair of agents within the
-   *  scan ball that is close enough to touch (formDistance × summed radii) — the
-   *  3D sibling of scanBondPairsAt. Torus-aware; feeds the same pendingBondPairs +
-   *  formBondBatch flush. */
-  const scanBondPairs3d = useCallback((hit: Cell3) => {
-    const snap = agentsRef.current;
-    if (!snap || snap.highWater === 0) return;
-    const W = gridWidth.current, H = gridHeight.current, D = gridDepth.current;
-    const torus = boundaryTreatmentRef.current === 'torus';
-    const hasZ = snap.z.length > 0;
-    const fMul = formDistanceRef.current;
-    const brushR = agentBrushRadiusRef.current;
-    const bonded = new Set<string>();
-    const bonds = snap.bonds;
-    if (bonds) for (let b = 0; b < bonds.length; b += 2) { const i = bonds[b]!, j = bonds[b + 1]!; bonded.add(i < j ? `${i}:${j}` : `${j}:${i}`); }
-    const dist2 = (i: number, j: number): number => {
-      let dx = snap.x[i]! - snap.x[j]!, dy = snap.y[i]! - snap.y[j]!, dz = (hasZ ? snap.z[i]! : 0) - (hasZ ? snap.z[j]! : 0);
-      if (torus) { if (dx > W / 2) dx -= W; else if (dx < -W / 2) dx += W; if (dy > H / 2) dy -= H; else if (dy < -H / 2) dy += H; if (D > 1) { if (dz > D / 2) dz -= D; else if (dz < -D / 2) dz += D; } }
-      return dx * dx + dy * dy + dz * dz;
-    };
-    const under = agentsInRadius3dAt(hit, brushR);
-    for (let a = 0; a < under.length; a++) {
-      for (let b = a + 1; b < under.length; b++) {
-        const i = under[a]!, j = under[b]!, key = i < j ? `${i}:${j}` : `${j}:${i}`;
-        if (bonded.has(key) || pendingBondPairs.current.has(key)) continue;
-        const thr = fMul * (snap.radius[i]! + snap.radius[j]!);
-        if (dist2(i, j) <= thr * thr) pendingBondPairs.current.add(key);
-      }
-    }
-  }, [agentsInRadius3dAt]);
   /** Seed points scattered in the 3D shape around a plane-pick cell. Circle reuses
    *  agentSeedPoints3d (ball / flat disc). Others rejection-sample the plane frame;
    *  the "volumetric" toggle extrudes along the fixed axis (else w=0 → on the plane). */
@@ -9981,12 +9992,12 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
               canvasAgentBrushActive.current = true;
             }
           }
-        } else if (mode === 'bond') {
-          // Bond-paint: start a stroke; pairs are scanned + queued on drag, flushed
-          // on pointer-up.
-          pendingBondPairs.current.clear();
-          canvasAgentBrushActive.current = true;
-          scanBondPairsAt(e.clientX, e.clientY);
+        } else if (mode === 'push' || mode === 'pull') {
+          // Push / Pull: start the continuous radial-nudge loop at the cursor. It
+          // keeps acting while the button is held even if the cursor never moves;
+          // the drag branch below just re-aims it.
+          const wpt = screenToWorld(e.clientX, e.clientY);
+          if (wpt) { canvasAgentBrushActive.current = true; startNudgeLoop({ x: wpt.x, y: wpt.y }); }
         }
         return;
       }
@@ -10136,8 +10147,9 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
           agentAreaHoverIdsRef.current = (mode === 'move' && agentGroupMoveRef.current)
             ? agentGroupMoveRef.current.members.map(m => m.id)
             : (wpt ? agentsInShapeAt(wpt.x, wpt.y) : []);
-        } else if (mode === 'bond') {
-          // Bond scans a plain radius disc (not the shape) for near pairs.
+        } else if (NUDGE_BRUSH_MODES.has(mode)) {
+          // Push/Pull act over a plain radius disc (not the shape) — highlight
+          // every agent the hold will displace.
           agentAreaHoverIdsRef.current = wpt ? agentsInRadiusAt(wpt.x, wpt.y, agentBrushRadiusRef.current) : [];
         } else if (agentAreaHoverIdsRef.current.length) {
           agentAreaHoverIdsRef.current = [];
@@ -10218,8 +10230,11 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
               pendingMovesRef.current = [{ id: draggingAgentRef.current, x: wpt.x, y: wpt.y }];
               if (pendingMoveRaf.current == null) pendingMoveRaf.current = requestAnimationFrame(flushMoveBatch);
             }
-          } else if (mode === 'bond') {
-            scanBondPairsAt(e.clientX, e.clientY);
+          } else if (mode === 'push' || mode === 'pull') {
+            // Re-aim the running nudge loop (it posts on its OWN rAF, so this is
+            // a pointer-cheap ref write, not a message).
+            const wpt = screenToWorld(e.clientX, e.clientY);
+            if (wpt) nudgeCenterRef.current = { x: wpt.x, y: wpt.y };
           } else if (mode === 'add' && scope === 'area' && shape !== 'line') {
             const wpt = screenToWorld(e.clientX, e.clientY);
             const last = lastSeedWorldRef.current;
@@ -10317,7 +10332,11 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
         const maxW = (gridWidth.current || simWidth) * 2;
         const maxH = (gridHeight.current || simHeight) * 2;
         const rz = isResizingBrush;
-        const shape = rz.agent ? agentBrushShapeRef.current : brushShapeRef.current;
+        // Push/Pull ignore the shape (they act over a plain disc), so Ctrl-drag
+        // resizes THEIR radius whatever shape happens to be selected.
+        const shape = rz.agent
+          ? (NUDGE_BRUSH_MODES.has(agentBrushModeRef.current) ? 'circle' : agentBrushShapeRef.current)
+          : brushShapeRef.current;
         const setRadius = rz.agent ? setAgentBrushRadius : setBrushRadius;
         const setRingW = rz.agent ? setAgentBrushRingWidth : setBrushRingWidth;
         const setLineW = rz.agent ? setAgentBrushLineWidth : setBrushLineWidth;
@@ -10390,7 +10409,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
         lastSeedWorldRef.current = null;
         flushSeedBatch();
         flushMoveBatch();
-        flushBondBatch();
+        stopNudgeLoop();
         if (draggingAgentRef.current >= 0) { draggingAgentRef.current = -1; draggingAgentStartRef.current = null; }
         agentGroupMoveRef.current = null;
       }
@@ -10455,7 +10474,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       if (cursorDrawRaf.current != null) { cancelAnimationFrame(cursorDrawRaf.current); cursorDrawRaf.current = null; }
       if (hoverWorkRaf.current != null) { cancelAnimationFrame(hoverWorkRaf.current); hoverWorkRaf.current = null; }
     };
-  }, [draw, scheduleCursorDraw, paintAt, paintLine, screenToGrid, flushPaintBatch, commitInspectPopover, screenToWorld, pickAgentAt, seedAgentsAt, agentSeedPoints, flushSeedBatch, killAgentsInRadius, openAgentInspector, flushMoveBatch, scanBondPairsAt, flushBondBatch, agentsInShapeAt, agentsInRadiusAt, agentSeedInShape, agentSeedInLine, agentLineMembers, applyAgentEditToIds, cancelFollow]);
+  }, [draw, scheduleCursorDraw, paintAt, paintLine, screenToGrid, flushPaintBatch, commitInspectPopover, screenToWorld, pickAgentAt, seedAgentsAt, agentSeedPoints, flushSeedBatch, killAgentsInRadius, openAgentInspector, flushMoveBatch, startNudgeLoop, stopNudgeLoop, agentsInShapeAt, agentsInRadiusAt, agentSeedInShape, agentSeedInLine, agentLineMembers, applyAgentEditToIds, cancelFollow]);
 
   // Play: kick-start the step pipeline (worker message handler chains subsequent steps)
   useEffect(() => {
@@ -13379,7 +13398,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
                     )}
                   </>)}
                   {/* Mode row — the brush actions (labels via textTransform:capitalize).
-                      Glue / Cut / Bond are absent for a Bonds=Off model (they could
+                      Glue / Cut are absent for a Bonds=Off model (they could
                       only ever no-op there); see agentBrushModesFor. */}
                   <div style={{ display: 'flex', gap: 3, flexWrap: 'wrap' }}>
                     {agentBrushModes.map(m => (
@@ -13391,9 +13410,10 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
                           m === 'remove' ? 'Remove agents — size 0: the nearest; sized: all in the footprint' :
                           m === 'move' ? 'Move — size 0: drag one agent; sized: rigid-drag a footprint of agents (RMB cancels)' :
                           m === 'edit' ? 'Edit agent properties — size 0: click an agent, adjust, Apply; sized: stamp onto all in the footprint' :
+                          m === 'push' ? 'Push — hold to shove agents AWAY from the cursor; strongest at the centre, zero at the rim' :
+                          m === 'pull' ? 'Pull — hold to gather agents TOWARD the cursor; strongest at the centre, zero at the rim' :
                           m === 'glue' ? 'Click two agents to bond them' :
-                          m === 'cut' ? 'Click two bonded agents to unbond them' :
-                          'Drag to bond agent pairs within the scan radius that are close enough to touch (needs Max Bonds ≥ 1 in Properties › Bond-Graph Agents)'
+                          'Click two bonded agents to unbond them'
                         }
                         style={{
                           padding: '3px 8px', borderRadius: 'var(--radius-sm)', cursor: 'pointer', textTransform: 'capitalize',
@@ -13438,12 +13458,24 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
                       )}
                     </div>
                   )}
-                  {/* Bond: the auto-bond scan radius. */}
-                  {agentBrushMode === 'bond' && (
-                    <label style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                      <span style={{ width: 54, color: 'var(--color-text-muted)' }}>Radius</span>
-                      <NumberField value={agentBrushRadius} onNumber={v => setAgentBrushRadius(v)} min={0} step={1} />
-                    </label>
+                  {/* Push / Pull: the effect disc radius + the strength. No shape row —
+                      a radial force needs a centre and a radius, so these modes always
+                      act over a disc (2D) / ball (3D); Ctrl+LMB-drag resizes it. */}
+                  {NUDGE_BRUSH_MODES.has(agentBrushMode) && (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                      <label style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                        <span style={{ width: 54, color: 'var(--color-text-muted)' }}>Radius</span>
+                        <NumberField value={agentBrushRadius} onNumber={v => setAgentBrushRadius(v)} min={0} step={1} />
+                      </label>
+                      <label style={{ display: 'flex', alignItems: 'center', gap: 4 }} title="World units per second at the centre of the disc — the displacement falls off linearly to zero at the rim.">
+                        <span style={{ width: 54, color: 'var(--color-text-muted)' }}>Intensity</span>
+                        <NumberField value={agentNudgeIntensity} onNumber={v => setAgentNudgeIntensity(Math.max(0, v))} min={0} step={1} />
+                      </label>
+                      <div style={{ fontSize: '0.62rem', color: 'var(--color-text-muted)' }}>
+                        Hold to {agentBrushMode === 'push' ? 'shove agents away from' : 'gather agents toward'} the cursor —
+                        strongest at the centre, zero at the rim.
+                      </div>
+                    </div>
                   )}
                   {/* Edit: which properties to overwrite + Apply (single scope). */}
                   {agentBrushMode === 'edit' && (

@@ -1791,8 +1791,8 @@ export function HelpView() {
             positions at all &mdash; which is where the speed comes from. Some things genuinely need
             them back on the page each frame, and those hand the frame back: an open inspector,
             recording, the vision-cone display, metaballs, being paused, and an{' '}
-            <em>agent brush that highlights agents</em> &mdash; Remove, Move, Edit, Glue, Cut and
-            Bond all ring the agents they would touch, and Shift (or the{' '}
+            <em>agent brush that highlights agents</em> &mdash; Remove, Move, Edit, Push, Pull,
+            Glue and Cut all ring the agents they would touch, and Shift (or the{' '}
             <code>&#x24D8;</code> Inspect toggle) picks one. The default <strong>Add</strong> brush
             highlights nothing, so simply resting the cursor over the simulation in Add mode is free.
             And whatever the mode, if the cursor does not move for <strong>3 seconds</strong> the
@@ -2795,12 +2795,31 @@ export function HelpView() {
             footprint of agents; right-click cancels), <strong>Edit</strong> (overwrite chosen
             properties &mdash; agent attributes plus radius / velocity / position &mdash; on the
             clicked agent via <em>Apply</em>, or on every agent under the footprint),
-            <strong> Glue</strong> / <strong>Cut</strong> (bond/unbond two clicked agents), and
-            <strong> Bond&nbsp;paint</strong> (auto-glue agents a stroke passes near).
-            The last three appear only on a model whose <strong>Bonds</strong> capability is on
+            <strong> Push</strong> / <strong>Pull</strong> (see below), and
+            <strong> Glue</strong> / <strong>Cut</strong> (bond/unbond two clicked agents).
+            The last two appear only on a model whose <strong>Bonds</strong> capability is on
             (Properties &rsaquo; Bond-Graph Agents) &mdash; without a bond store there is nothing
             for them to do, so they are left out rather than shown doing nothing.
             <span className={styles.kbd}>Alt</span>+scroll cycles through the modes shown.
+          </p>
+          <p className={styles.p}>
+            <strong>Push</strong> and <strong>Pull</strong> are a <em>physical</em> way to shove a
+            running population around &mdash; the counterpart to Move, which translates a whole
+            footprint rigidly. Hold the button and every agent inside a disc (2D) or ball (3D)
+            around the cursor is displaced <em>radially</em>, away from it (Push) or toward it
+            (Pull), with the magnitude falling off linearly from the centre to <em>zero at the
+            rim</em>. They keep acting while the button is held even if the cursor never moves, and
+            they work on <em>every</em> agent model (no bonds needed) on every agent engine, while
+            playing or paused. A radial force needs a centre and a radius, so these two ignore the
+            brush shape: the panel shows a <em>Radius</em> (the disc, also what
+            <span className={styles.kbd}>Ctrl</span>+drag resizes in these modes) and an
+            <em> Intensity</em> in world units per second at the centre &mdash; frame-rate
+            independent, so the same setting feels identical at 60 and 144&nbsp;Hz. The cursor is a
+            ring (solid for Push, dashed for Pull) with arrows showing the direction, and every
+            agent the hold will move is ringed. Pull never overshoots past the centre, and Push
+            piles agents up just inside the rim (where the falloff reaches zero).
+          </p>
+          <p className={styles.p}>
             With the agent brush active (2D), <span className={styles.kbd}>Ctrl+C</span> /
             <span className={styles.kbd}>Ctrl+X</span> <strong>copy / cut the agents under the
             brush footprint</strong> (positions relative to the cursor, radius, velocity, and all
@@ -3111,7 +3130,7 @@ export function HelpView() {
           <p className={styles.p}>
             <strong>What you see is what this model can do.</strong> A control the current
             model / view could not act on is <em>not shown</em> &mdash; gridlines without a
-            CA grid, the infinity canvas in 3D, agent Glue/Cut/Bond without bonds, agent
+            CA grid, the infinity canvas in 3D, agent Glue/Cut without bonds, agent
             outlines while Metaballs replaces the bodies, and so on. A control that is only
             <em>temporarily</em> unavailable stays visible but greyed out with the reason in
             its tooltip &mdash; the capture settings while a recording is running, the
