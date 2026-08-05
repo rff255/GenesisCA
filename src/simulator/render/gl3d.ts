@@ -337,6 +337,68 @@ export function panCamera(cam: Camera3D, dxPx: number, dyPx: number, scale: numb
   cam.target[2] += (-dxPx * right[2] + dyPx * up[2]) * scale;
 }
 
+/** Absolute floor for the near plane — the historical fixed value, used verbatim
+ *  whenever the camera is inside the scene's bounding sphere (see sceneNearPlane). */
+export const MIN_NEAR_PLANE = 0.05;
+
+/** How far the scene reaches TOWARD the camera, measured from the target along the
+ *  view axis — i.e. a lower bound on the view-space z of anything any of the three
+ *  renderers draws through the scene matrix.
+ *
+ *  The volume is an axis-aligned box centred on world (0,0,0) (the Z-up remap), so
+ *  its exact support along a direction is `Σ half_i·|forward_i|` — much tighter than
+ *  the half-DIAGONAL for anything but a corner-on view (a 600³ cube seen down an axis
+ *  reaches 300, not 520), which is what keeps the near plane useful at close zoom.
+ *  Padded by the axis/bounds overlays' grid-scaled extension (`ext` — must match
+ *  renderOverlays / renderAxisLabels / the worker's buildVoxelOverlayVerts) and by
+ *  |target|, since panning moves the volume off the view axis. Using the magnitude
+ *  rather than the signed projection is deliberately conservative: it never shrinks
+ *  the reach when the user pans the volume behind the camera. The gizmo draws through
+ *  its own ortho and the axis labels in NDC, so neither is covered here. */
+function sceneReachTowardCamera(
+  W: number, H: number, D: number, target: readonly [number, number, number],
+  forward: readonly [number, number, number],
+): number {
+  const ext = 1.2 + Math.max(W, H, D) * 0.02;
+  const support = 0.5 * (W * Math.abs(forward[0]) + H * Math.abs(forward[1]) + D * Math.abs(forward[2]));
+  return support + ext + Math.hypot(target[0], target[1], target[2]);
+}
+
+/** THE NEAR PLANE IS ADAPTIVE, AND THAT IS WHAT MAKES DEPTH USABLE WHEN ZOOMED OUT.
+ *
+ *  A perspective depth buffer's WORLD-space resolution is Δz ≈ z²/(near·2^bits), so
+ *  with a FIXED near (this used to be a hard-coded 0.05) the quantum grows with the
+ *  SQUARE of the camera distance. On a large world that is catastrophic: a 600-unit
+ *  Graph-Rewriting world at the DEFAULT dist 1.9 gave a 1.55-unit quantum against
+ *  ~0.7-unit agent radii — i.e. an agent sphere's front surface and the bonds ending
+ *  at its centre landed in the SAME 24-bit bucket, so every bond punched straight
+ *  through every node (measured: 83% of the node ink lost to the bond mesh, rising
+ *  to 96% zoomed out). The same collapse degraded voxel/agent interleaving and the
+ *  colour-id pick.
+ *
+ *  Scaling `near` with the distance to the nearest geometry keeps the quantum at
+ *  ~1e-3 world units at EVERY zoom (a >1000x improvement at dist 1.9).
+ *
+ *  THE 0.25 FACTOR IS LOAD-BEARING, not a taste knob. The worker's WGSL passes feed
+ *  this SAME GL-convention matrix straight into WebGPU, whose clip volume keeps only
+ *  z_clip ∈ [0, w] — i.e. it discards the GL frustum's near HALF, everything closer
+ *  than the z_ndc = 0 plane at 2·f·n/(f+n) ≈ 2·near. Taking a QUARTER of the
+ *  clearance therefore puts that plane at ~half the distance to the nearest thing we
+ *  draw, keeping a 2x margin before anything could be clipped in free mode. Never
+ *  raise it past 0.5 without also remapping z in every WGSL vertex shader.
+ *
+ *  When the camera sits INSIDE the scene's reach (close zoom) there is no clearance
+ *  to scale — geometry can be arbitrarily close — so it floors at MIN_NEAR_PLANE,
+ *  reproducing the historical projection exactly. That is the one regime the old
+ *  fixed near was already adequate for, and the regime users report looks correct. */
+export function sceneNearPlane(
+  r: number, W: number, H: number, D: number,
+  target: readonly [number, number, number], forward: readonly [number, number, number],
+): number {
+  const clearance = r - sceneReachTowardCamera(W, H, D, target, forward);
+  return Math.max(MIN_NEAR_PLANE, clearance * 0.25);
+}
+
 /** The scene view-projection matrix + camera basis — the SINGLE source both the
  *  WebGL2 renderer (setCamera below) AND the worker's WGSL sphere pass (Phase C)
  *  derive from, so the two renderers can NEVER disagree on projection. `mvp` is a
@@ -352,7 +414,7 @@ export function sceneCameraMatrices(
   const t = cam.target;
   const eye: [number, number, number] = [t[0] + r * dir[0], t[1] + r * dir[1], t[2] + r * dir[2]];
   const forward: [number, number, number] = [-dir[0], -dir[1], -dir[2]];
-  const proj = mat4Perspective(Math.PI / 4, aspect || 1, 0.05, r * 8 + 100);
+  const proj = mat4Perspective(Math.PI / 4, aspect || 1, sceneNearPlane(r, W, H, D, t, forward), r * 8 + 100);
   // Camera "roll" at the ±Depth POVs — WORLD_UP (+Z) parallel to the view →
   // lookAt degenerate. Y-up so top matches the 2D CA (identical to setCamera).
   const up: [number, number, number] = Math.abs(forward[2]) > 0.999
@@ -1877,6 +1939,18 @@ export class Gl3DRenderer {
     }
     // Bonds: Z-up remapped endpoint pairs. Fold across the ±W/±H/±D seams when the
     // model is a torus so a seam-crossing bond draws as a short segment (RR-G4).
+    //
+    // BONDS MEET THE AGENT SURFACE, NOT ITS CENTRE — each end is pulled back by that
+    // agent's radius. GL rasterises a line at a MINIMUM of one pixel however far away
+    // it is, while an agent's disc shrinks with distance, so a centre-to-centre bond
+    // covers its own endpoints' discs outright once an agent is only a pixel or two
+    // across — which on a dense graph (every node carrying several bonds) is exactly
+    // the "bonds blanket every agent when zoomed out" the depth fix alone cannot
+    // reach, because that ink is geometrically ON the agent rather than mis-sorted.
+    // Trimming is also simply the more correct ball-and-stick geometry: the segment
+    // now starts where the sphere ends. Clamped to 45% per side so an overlapping
+    // pair (centre distance < r_i + r_j) shortens toward its midpoint instead of
+    // inverting into a backwards segment.
     const bonds = snap.bonds;
     if (bonds && bonds.length > 0) {
       const hx = (this.W - 1) / 2, hy = (this.H - 1) / 2, hz = (this.D - 1) / 2;
@@ -1893,8 +1967,20 @@ export class Gl3DRenderer {
           if (jy - iy > H / 2) jy -= H; else if (jy - iy < -H / 2) jy += H;
           if (Dd > 1) { if (jz - iz > Dd / 2) jz -= Dd; else if (jz - iz < -Dd / 2) jz += Dd; }
         }
-        verts[p++] = ix - hx; verts[p++] = hy - iy; verts[p++] = hz - iz; verts[p++] = col[0]; verts[p++] = col[1]; verts[p++] = col[2];
-        verts[p++] = jx - hx; verts[p++] = hy - jy; verts[p++] = hz - jz; verts[p++] = col[0]; verts[p++] = col[1]; verts[p++] = col[2];
+        let ax = ix, ay = iy, az = iz, bx = jx, by = jy, bz = jz;
+        const dx = jx - ix, dy = jy - iy, dz = jz - iz;
+        const len = Math.hypot(dx, dy, dz);
+        if (len > 1e-6) {
+          const cap = len * 0.45;
+          // A sprite-agent's stored radius is negative (it flags the billboard pass),
+          // so take the magnitude — the billboard's half-extent is the right trim.
+          const ti = Math.min(Math.abs(snap.radius[i]!), cap) / len;
+          const tj = Math.min(Math.abs(snap.radius[j]!), cap) / len;
+          ax += dx * ti; ay += dy * ti; az += dz * ti;
+          bx -= dx * tj; by -= dy * tj; bz -= dz * tj;
+        }
+        verts[p++] = ax - hx; verts[p++] = hy - ay; verts[p++] = hz - az; verts[p++] = col[0]; verts[p++] = col[1]; verts[p++] = col[2];
+        verts[p++] = bx - hx; verts[p++] = hy - by; verts[p++] = hz - bz; verts[p++] = col[0]; verts[p++] = col[1]; verts[p++] = col[2];
       }
       this.bondVerts = verts;
     } else {
@@ -1934,10 +2020,16 @@ export class Gl3DRenderer {
     gl.uniform1i(gl.getUniformLocation(this.spriteProg, 'uAtlas'), 0);
     // Transparent-agent-friendly: depth-test on (occlude behind spheres/voxels),
     // depth-write off, alpha blend. Fully-transparent texels are discarded in the FS.
+    // LEQUAL for the same reason the sphere pass uses it — a sprite-agent's
+    // billboard sits AT the agent centre, i.e. exactly the depth its own bonds
+    // carry, so under GL_LESS every bond would cover every sprite (see the
+    // agent-surface depth rule above).
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
     gl.depthMask(false);
+    this.beginSurfaceDepth();
     gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, this.spriteInstanceCount);
+    this.endSurfaceDepth();
     gl.depthMask(true);
     gl.disable(gl.BLEND);
     gl.bindTexture(gl.TEXTURE_2D_ARRAY, null);
@@ -1996,6 +2088,44 @@ export class Gl3DRenderer {
     this.drawLines(this.bondVerts, this.gl.LINES, this.mvp, 1, this.clip.enabled ? this.clip : null);
   }
 
+  /* --- THE AGENT-SURFACE DEPTH RULE (bond-vs-sphere occlusion at zoom-out) ---
+   *
+   *  A bond is a LINE between two agent CENTRES; an agent is a sphere impostor
+   *  whose FS writes its FRONT SURFACE depth (centre − radius along the view).
+   *  Bonds draw FIRST (see render()), so a sphere standing in front of a bond
+   *  must WIN the depth test to cover it — and the only margin it has is the
+   *  agent's `radius`.
+   *
+   *  The depth buffer's WORLD-space quantum grows with the SQUARE of the camera
+   *  distance:  Δz ≈ z² / (near · 2²⁴), and `near` is a fixed 0.05 in
+   *  sceneCameraMatrices (deliberately tiny — the worker's WGSL passes feed the
+   *  SAME GL-convention matrix straight into WebGPU, whose clip volume keeps only
+   *  z_ndc ≥ 0, i.e. everything past ≈2·near; raising `near` there would clip
+   *  geometry in free mode). So past roughly
+   *
+   *      dist ≈ sqrt(radius · 2²⁴ · near) / maxGridDim
+   *
+   *  — ≈5.8 for the shipped 200³ Morphogenesis 3D Tissue (radius 1.6) — the
+   *  sphere's front surface and the bond quantize into the SAME 24-bit bucket.
+   *  Under the default GL_LESS the sphere fragment is then REJECTED and the bond,
+   *  already in the buffer, shows through: zoomed out, the bond mesh blankets
+   *  EVERY agent.
+   *
+   *  Fix: the agent-surface passes compare LEQUAL, so a tie resolves in the
+   *  SURFACE's favour. That is exactly right and never over-reaches, because the
+   *  window-depth mapping is strictly INCREASING in eye distance — a genuinely
+   *  nearer point can never land in a LARGER bucket, hence
+   *  bucket(sphereFront) ≤ bucket(bondPoint) ALWAYS. A bond genuinely in FRONT of
+   *  a sphere by more than one quantum still wins (strictly smaller bucket ⇒ the
+   *  sphere fails LEQUAL); only the sub-quantum ambiguity, where the two occupy
+   *  the same place to within the buffer's resolution, now favours the agent.
+   *
+   *  SCOPED to the agent surfaces (spheres / metaballs / sprites) and restored
+   *  afterwards: left on globally, the BOND pass — which draws after the voxels —
+   *  would win ties against the CA-grid cubes and bleed through the volume. */
+  private beginSurfaceDepth(): void { this.gl.depthFunc(this.gl.LEQUAL); }
+  private endSurfaceDepth(): void { this.gl.depthFunc(this.gl.LESS); }
+
   /** Draw the agent sphere impostors via instanced billboards. Opaque agents
    *  render depth-write-on; translucent agents (alpha blend) sort back-to-front
    *  + depth-write-off (Option A — the cube path's blend rule). */
@@ -2014,7 +2144,9 @@ export class Gl3DRenderer {
       gl.disable(gl.BLEND);
       gl.depthMask(true);
     }
+    this.beginSurfaceDepth();   // spheres beat the bonds on a quantized tie
     gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, this.agentInstanceCount);
+    this.endSurfaceDepth();
     gl.depthMask(true);
     gl.disable(gl.BLEND);
     gl.bindVertexArray(null);
@@ -2252,7 +2384,10 @@ export class Gl3DRenderer {
     gl.activeTexture(gl.TEXTURE0 + Gl3DRenderer.META_ALPHA_TEX_UNIT);
     gl.bindTexture(gl.TEXTURE_3D, translucent && this.metaAlphaTex ? this.metaAlphaTex : this.ensureMetaAlphaDummy());
     gl.uniform1i(gl.getUniformLocation(this.metaProg, 'uAlphaField'), Gl3DRenderer.META_ALPHA_TEX_UNIT);
+    // The blob is the agent surface here — same tie rule as the sphere pass.
+    this.beginSurfaceDepth();
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+    this.endSurfaceDepth();
     gl.depthMask(true);
     gl.disable(gl.BLEND);
     gl.bindTexture(gl.TEXTURE_3D, null);

@@ -2782,7 +2782,12 @@ export function HelpView() {
             can freeze one layer and watch the other, or hide a layer to declutter (freezing agents
             also stops their cell-field deposits). Models whose <em>Bonds</em> capability isn&apos;t
             Off also get a <strong>Bonds</strong> row (Show only, 2D and 3D) to toggle the bond-link
-            display &mdash; display-only, the bond physics keeps simulating &mdash; and the
+            display &mdash; display-only, the bond physics keeps simulating. In 3D a bond is drawn
+            from one agent&apos;s <em>surface</em> to the other&apos;s (not centre to centre) and is
+            depth-sorted against the agent spheres at every zoom level, so agents in front of a bond
+            always cover it. On a dense graph zoomed far out an agent can still shrink below one
+            pixel while every bond line stays a pixel wide &mdash; if the mesh gets hard to read
+            there, zoom in or untick <strong>Bonds</strong>. Alongside it sits the
             <strong> Agent Brush</strong>,
             which mirrors the CA-grid brush: a <em>shape</em> (square / circle / ring / line, with a
             size row and <span className={styles.kbd}>Ctrl</span>+drag resize) and a
