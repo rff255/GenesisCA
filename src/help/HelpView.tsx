@@ -3000,10 +3000,16 @@ export function HelpView() {
               path replaces.</li>
             <li><strong>Glow.</strong> The <strong>Glow agents</strong> Graphics option
               (in the 2D agent controls) gives every agent a <strong>solid core</strong> with
-              an additive halo around it &mdash; <em>Size</em> is the extra halo radius in
+              a soft halo around it &mdash; <em>Size</em> is the extra halo radius in
               pixels, <em>Core</em> how far the solid colour reaches into that halo,
               <em>Intensity</em> the halo&apos;s brightness, <em>Falloff</em> how fast it
-              fades across the band outside the core. The core is drawn <em>opaque</em>, so
+              fades across the band outside the core. Overlapping halos blend by
+              <em>screen</em>, so they approach full brightness smoothly instead of clipping:
+              a dense cluster keeps a readable gradient and its colour instead of flattening
+              into a hard-edged white patch, while a lone agent&apos;s halo looks exactly as
+              it always did. Past <em>Intensity</em>&nbsp;1 the halo cannot get brighter than
+              the agent&apos;s colour &mdash; it widens the band that reaches it. The core is
+              drawn <em>opaque</em>, so
               it is never washed out by a neighbour&apos;s halo nor dimmed by a low
               intensity: a dense cluster can glow as bright as you like while an isolated
               agent still reads as a crisp, true-coloured dot &mdash; you no longer have to

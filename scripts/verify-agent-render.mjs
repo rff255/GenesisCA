@@ -728,6 +728,73 @@ check('runtime: uploadAgentSoA seeds the agent colour buffer [invisible-agents b
     /await buildAgentDiscPipelines\(rt\)/.test(blockAfter(rt, /async function setupAgentCompositeRender\(/)));
 }
 
+// B16 (THE GLOW HALO BLEND, user-reported: "find a better way to blend the glow
+// halos to avoid this oversaturated look and contrast artifacts where there is a
+// high density", with a ~27k-agent Particle Life screenshot).
+//
+// The halo was PURE ADDITIVE on both paths (GPU src=ONE/dst=ONE, Canvas2D
+// 'lighter'). Additive CLIPS each channel independently at 1, so a dense field
+// got (a) a hard iso-line where the sum crossed 1, with a flat plateau inside it,
+// and (b) a hue collapse to white as the remaining channels finished saturating.
+// SCREEN — out = s + d*(1-s) — approaches full brightness asymptotically instead.
+//
+// MEASURED, same frame, same agents. CPU overlay (Growing Graphs, 10 004 agents,
+// intensity 0.6, the additive arm replayed by remapping the composite op so ONLY
+// the blend differs): halo pixels with a channel clipped at 255 47.30% -> 6.11%,
+// near-white (all three >= 254) 20.29% -> 0.06%, distinct RGB 8875 -> 14509.
+// GPU (the SHIPPED fsGlow text rendered to a texture under both blends, 4000
+// agents, 6 hues): clipped 40.58% -> 0.61%, near-white 28.79% -> 0.30%, distinct
+// 43624 -> 68567, and the longest CLIPPED RUN across the blob's centre scanline
+// 178 px -> 4 px (that run IS the reported plateau). An isolated agent is
+// BIT-IDENTICAL (screen over an empty backdrop is s + 0 = additive): 0 differing
+// pixels for one agent and for two non-overlapping agents.
+{
+  const rt = readSrc('simulator/engine/agentWebgpuRuntime.ts');
+  const disc = blockAfter(rt, /async function buildAgentDiscPipelines\(/);
+  const glowBlend = disc.slice(disc.indexOf('const glowBlend'), disc.indexOf('const renderViewBuf'));
+
+  check('the GPU halo blends SCREEN, not additive [glow-blend]',
+    /srcFactor: 'one', dstFactor: 'one-minus-src', operation: 'add'/.test(glowBlend)
+    && !/dstFactor: 'one',/.test(glowBlend));
+  // Screen's own alpha rule IS source-over — what keeps the transparent agent
+  // canvas compositing correctly over the page and over the E2 grid layer.
+  check('the halo alpha uses the source-over rule [glow-blend]',
+    /alpha: \{ srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' \}/.test(glowBlend));
+
+  // LOAD-BEARING, not tidiness: the dst factor is (1 - src), so an emitted value
+  // above 1 makes it NEGATIVE and the halo subtracts the backdrop. Intensity goes
+  // to 4, so without the clamp this is reachable from the shipped UI.
+  const wgsl = blockAfter(rt, /function agentRenderWGSL\(/);
+  const fsGlow = wgsl.slice(wgsl.indexOf('fn fsGlow'));
+  check('fsGlow clamps the emitted halo value to [0,1] [glow-blend]',
+    /let g: f32 = clamp\(rv\.glowIntensity \* pow\(t, max\(0\.01, rv\.glowSteepness\)\), 0\.0, 1\.0\);/.test(fsGlow));
+
+  // The CPU overlay is the SAME math: Canvas2D 'screen' expands to s + d - s*d on
+  // premultiplied colours with source-over alpha, i.e. the GPU blend term for term.
+  const sv = readSrc('simulator/SimulatorView.tsx');
+  // NB the anchor must clear the WHOLE signature: drawAgentGlow's `snap` param is
+  // an inline object TYPE, so a bare `function drawAgentGlow\(` anchor makes
+  // blockAfter return that type literal instead of the function body.
+  const glow = blockAfter(sv, /function drawAgentGlow\([\s\S]{0,800}?\): void /);
+  check('the CPU overlay halo blends screen, not lighter [glow-blend]',
+    /ctx\.globalCompositeOperation = 'screen';/.test(glow)
+    && !/globalCompositeOperation = 'lighter'/.test(glow));
+  // The core sub-pass must stay source-over — that is the SOLID CORE invariant
+  // (fully-opaque body pixels bit-identical glow ON vs OFF; measured 6006 body
+  // pixels, 0 differing, max delta 0 on Ant Necrophoresis with the grid hidden).
+  check('the CPU core sub-pass stays source-over [glow-blend]',
+    /ctx\.globalCompositeOperation = 'source-over';/.test(glow));
+  // ONE pass. The old ceil(intensity)-passes trick was exact only under a truly
+  // additive blend; under screen repeated passes COMPOUND (1-(1-u)^n) instead of
+  // summing, so it would silently mean something else.
+  check('the CPU overlay draws each halo sprite exactly ONCE [glow-blend]',
+    /ctx\.drawImage\(sp, cx - R, cy - R\);/.test(glow) && !/for \(let p = 0; p < passes/.test(glow));
+  // The sprite bake carries the shader's clamp, so the two paths share a profile.
+  const paint = blockAfter(sv, /function paintGlowSprite\(/);
+  check('the sprite bake clamps the profile like fsGlow [glow-blend]',
+    /const a = Math\.min\(1, unit \* Math\.pow\(u, steepness\)\);/.test(paint));
+}
+
 // ---------------------------------------------------------------------------
 // TIER C — browser probes (printed; only reachable with a live GPUDevice)
 // ---------------------------------------------------------------------------

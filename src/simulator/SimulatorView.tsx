@@ -121,7 +121,7 @@ function sanitizeAgentMetaballs(raw: unknown): Metaballs3D {
 }
 
 /** Agent "Glow" graphics option (genesisca_sim_settings.agentGlow) — a SOLID CORE
- *  plus an additive halo around it. Rendered on BOTH 2D agent paths: the WebGPU
+ *  plus a SCREEN-blended halo around it. Rendered on BOTH 2D agent paths: the WebGPU
  *  direct-render / E2-composite disc pipeline (agentWebgpuRuntime's
  *  renderGlowPipeline) and the CPU overlay (drawAgentGlow below), so a bonded
  *  model — which is excluded from direct render because the GPU pass draws no
@@ -129,7 +129,7 @@ function sanitizeAgentMetaballs(raw: unknown): Metaballs3D {
  *  docs/HANDOFF_AGENT_GLOW_3D.md). Persisted as a simulator setting.
  *
  *  `core` ∈ [0,1] is the SOLID radius as a fraction of the glow BAND: the opaque
- *  body runs to `radPx + core*size` and the additive falloff spans from there to
+ *  body runs to `radPx + core*size` and the halo falloff spans from there to
  *  `radPx + size`. 0 (the default) ⇒ the core is exactly the agent disc — solid
  *  body, halo outside it. The core is drawn OPAQUE (source-over) on both paths,
  *  so it can never be added out by an overlapping neighbour's halo nor faded out
@@ -154,11 +154,13 @@ function sanitizeAgentGlow(raw: unknown): AgentGlow {
 }
 
 // --- CPU-overlay glow: pre-rasterised radial sprites -----------------------
-// The WGSL glow FS is `intensity * pow(max(0, 1 - d), steepness)` over a quad
-// enlarged by `glowSize`, additive-blended. Canvas2D has no shader, so the same
+// The WGSL glow FS is `min(1, intensity * pow(max(0, 1 - d), steepness))` over a
+// quad enlarged by `glowSize`, SCREEN-blended. Canvas2D has no shader, so the same
 // profile is baked ONCE into a radial-gradient sprite per (quantised colour,
 // integer glow radius) and blitted per agent under `globalCompositeOperation =
-// 'lighter'` (literally additive, like the GPU's src=ONE/dst=ONE blend). A fresh
+// 'screen'`. Canvas2D's 'screen' expands to exactly `s + d - s*d` on PREMULTIPLIED
+// colours with source-over alpha, which is the GPU's one/one-minus-src blend term
+// for term — so the two paths are the same math, not merely similar. A fresh
 // createRadialGradient per agent per frame is unusable at the ~10k-node scale a
 // bonded GRA model reaches — the cache is the whole point (same reasoning as the
 // glyph tile cache). Colour is quantised to 5 bits/channel (≤3/255 error, invisible
@@ -186,30 +188,45 @@ function glowCoreFrac(R: number, size: number, core: number): number {
   return Math.max(0, Math.min(0.98, 1 - (size * (1 - core)) / R));
 }
 
-/** Paint the additive HALO alpha profile into a 2R×2R sprite: a flat `unit`
- *  plateau inside the core, then `unit * t^steepness` with t remapped over the
- *  band OUTSIDE it — the Canvas2D twin of fsGlow. (The plateau is hidden under
+/** Paint the HALO alpha profile into a 2R×2R sprite: a flat plateau inside the
+ *  core, then `min(1, unit * t^steepness)` with t remapped over the band OUTSIDE
+ *  it — the Canvas2D twin of fsGlow, CLAMP INCLUDED. (The plateau is hidden under
  *  the opaque body for an opaque agent; it keeps the profile continuous at the
- *  core edge and reads correctly under a translucent one.) */
+ *  core edge and reads correctly under a translucent one.)
+ *
+ *  The clamp is what lets ONE pass carry any intensity: a Canvas2D alpha caps at
+ *  1 and the shader now clamps too, so the whole profile is expressible directly
+ *  and the old ceil(intensity)-passes trick (exact only under a truly additive
+ *  blend) is gone. Its kink gets its own stop so the 32 uniform samples cannot
+ *  round the plateau's edge off. */
 function paintGlowSprite(c2: CanvasRenderingContext2D, R: number, r: number, g: number, b: number, unit: number, steepness: number, coreFrac: number): void {
   const grad = c2.createRadialGradient(R, R, 0, R, R, R);
   const band = Math.max(1e-4, 1 - coreFrac);
+  const peak = Math.min(1, unit);
   for (let s = 0; s <= GLOW_GRADIENT_STOPS; s++) {
     const t = s / GLOW_GRADIENT_STOPS;
     const u = Math.max(0, Math.min(1, (1 - t) / band));
-    const a = unit * Math.pow(u, steepness);
+    const a = Math.min(1, unit * Math.pow(u, steepness));
     grad.addColorStop(t, `rgba(${r},${g},${b},${a.toFixed(4)})`);
+  }
+  // Where the clamp bites (intensity > 1): u = (1/unit)^(1/steepness) ⇒ the radius
+  // at which the profile leaves 1. Without this stop the linear interpolation
+  // between two uniform samples cuts the corner off that plateau.
+  if (unit > 1) {
+    const uKink = Math.pow(1 / unit, 1 / Math.max(0.01, steepness));
+    const tKink = 1 - uKink * band;
+    if (tKink > 0 && tKink < 1) grad.addColorStop(tKink, `rgba(${r},${g},${b},1.0000)`);
   }
   // A gradient stop exactly AT the core edge, so the plateau's outer boundary is
   // sharp regardless of where the 32 uniform stops happen to land.
-  if (coreFrac > 0 && coreFrac < 1) grad.addColorStop(coreFrac, `rgba(${r},${g},${b},${unit.toFixed(4)})`);
+  if (coreFrac > 0 && coreFrac < 1) grad.addColorStop(coreFrac, `rgba(${r},${g},${b},${peak.toFixed(4)})`);
   c2.fillStyle = grad;
   c2.fillRect(0, 0, R * 2, R * 2);
 }
 
-/** A 2R×2R additive-halo sprite for a quantised colour. Null only when the
- *  radius is degenerate. `unit` is the PER-DRAW peak alpha (see drawAgentGlow's
- *  multi-pass trick for intensity > 1). `size`/`core` ride the cache SIGNATURE
+/** A 2R×2R halo sprite for a quantised colour. Null only when the
+ *  radius is degenerate. `unit` is the profile's UNCLAMPED peak (= the intensity;
+ *  paintGlowSprite clamps it). `size`/`core` ride the cache SIGNATURE
  *  (they are per-frame globals) and together with R fix the core fraction, so
  *  the key stays (quantised colour, R). */
 function glowSpriteFor(r: number, g: number, b: number, R: number, unit: number, steepness: number, size: number, core: number): HTMLCanvasElement | null {
@@ -239,13 +256,13 @@ function glowSpriteFor(r: number, g: number, b: number, R: number, unit: number,
 
 /** The CPU-overlay glow pass — the sibling of the WGSL glow/plain pipeline pair.
  *  Drawn AFTER the bonds but BEFORE the agent bodies (discs / sprites / the goo
- *  blob), which is what makes the SOLID CORE work: the additive halo goes down
+ *  blob), which is what makes the SOLID CORE work: the halo goes down
  *  first and the opaque body lands on top of it, so an isolated agent always
  *  shows a crisp true-colour centre while overlapping halos still accumulate.
- *  (It used to run LAST, adding onto the discs — that additive wash over the
+ *  (It used to run LAST, blending onto the discs — that wash over the
  *  body is exactly the "impossible to see clusters AND lone agents" complaint.)
  *
- *  Two sub-passes: the additive halo ('lighter'), then — only when Core > 0 — an
+ *  Two sub-passes: the halo ('screen'), then — only when Core > 0 — an
  *  opaque core disc of radius `radPx + core*size`, which extends the solid body
  *  out into the halo band. At Core = 0 the second pass is skipped entirely and
  *  the agent's own disc IS the core, so sprites and the metaball blob are
@@ -263,17 +280,22 @@ function drawAgentGlow(
   if (!glow.on || glow.intensity <= 0 || glow.size < 0) return;
   const { x: ax, y: ay, radius: ar, alive: aal, colors: acol, highWater: hw } = snap;
   if (hw === 0) return;
-  // A Canvas2D alpha caps at 1, while the GPU's `intensity * …` may exceed it and
-  // saturates only in the framebuffer. 'lighter' is truly additive, so drawing the
-  // sprite ceil(intensity) times at intensity/ceil reproduces the GPU exactly —
-  // and costs nothing at the default intensity 0.6 (one pass).
-  const passes = Math.max(1, Math.ceil(glow.intensity));
-  const unit = glow.intensity / passes;
+  // ONE pass at the full intensity: the profile is CLAMPED at 1 on both paths now
+  // (fsGlow clamps g; paintGlowSprite clamps the baked alpha), so a Canvas2D alpha
+  // expresses it directly. The old ceil(intensity)-passes trick reproduced the
+  // unclamped additive sum exactly, but under 'screen' repeated passes COMPOUND
+  // (1-(1-u)^n) rather than sum — so it would no longer mean what it meant, and it
+  // is unnecessary once the shader clamps.
+  const unit = glow.intensity;
   const core = Math.max(0, Math.min(1, glow.core));
   const haloOn = glow.size > 0;
   ctx.save();
   if (haloOn) {
-    ctx.globalCompositeOperation = 'lighter';
+    // SCREEN, not 'lighter' — see the GPU's glowBlend: additive CLIPS each channel
+    // at 255 independently, so a dense cluster showed a hard iso-line plateau and
+    // a hue collapse to white past it. Screen saturates asymptotically instead,
+    // and is second-order-identical to additive wherever accumulation is light.
+    ctx.globalCompositeOperation = 'screen';
     let curAlpha = 1;
     for (const [tileOx, tileOy] of tiles) {
       for (let i = 0; i < hw; i++) {
@@ -291,7 +313,7 @@ function drawAgentGlow(
         if (!sp) continue;
         const want = a / 255;
         if (want !== curAlpha) { ctx.globalAlpha = want; curAlpha = want; }
-        for (let p = 0; p < passes; p++) ctx.drawImage(sp, cx - R, cy - R);
+        ctx.drawImage(sp, cx - R, cy - R);
       }
     }
   }
@@ -4778,8 +4800,8 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       }
       // Glow — the CPU sibling of the WGSL halo+core pipeline pair, so a BONDED
       // model (excluded from direct render because the GPU pass draws no bond
-      // lines) glows too. Runs AFTER the bonds and BEFORE the bodies: the halo is
-      // additive and must sit UNDER the discs/sprites/blob, or it washes the very
+      // lines) glows too. Runs AFTER the bonds and BEFORE the bodies: the halo
+      // must sit UNDER the discs/sprites/blob, or it washes the very
       // cores it is meant to frame (that wash is the reported bug).
       const glowCfg = agentGlowRef.current;
       if (glowCfg.on && glowCfg.intensity > 0) {
@@ -13310,14 +13332,14 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
                 </label>
               </div>
               )}
-              {/* Glow — a SOLID CORE plus an additive halo around it, on BOTH 2D
+              {/* Glow — a SOLID CORE plus a screen-blended halo around it, on BOTH 2D
                   paths: the WebGPU direct-render / composite disc pipeline AND the
                   CPU overlay (drawAgentGlow), so bonded models glow too. 3D pending. */}
               {!is3D && (
               <div>
                 <div style={{ fontSize: '0.6rem', color: 'var(--color-text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 4 }}>Glow</div>
                 <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.66rem' }}
-                  title="Give each agent a solid core with an additive halo around it. The core is opaque, so it is never washed out by neighbouring halos — clusters can glow bright while a lone agent still reads as a crisp dot. Works on every 2D agent model: the WebGPU direct-render path draws it in the shader, and bonded / sprite / metaball models get the same effect from the CPU overlay. Not available in 3D yet.">
+                  title="Give each agent a solid core with a soft halo around it. The core is opaque, so it is never washed out by neighbouring halos — clusters can glow bright while a lone agent still reads as a crisp dot. Works on every 2D agent model: the WebGPU direct-render path draws it in the shader, and bonded / sprite / metaball models get the same effect from the CPU overlay. Not available in 3D yet.">
                   <input type="checkbox" checked={agentGlow.on}
                     onChange={e => setAgentGlow(g => ({ ...g, on: e.target.checked }))} />
                   <span style={{ color: 'var(--color-text-muted)' }}>Glow agents</span>
@@ -13337,7 +13359,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
                         onChange={e => setAgentGlow(g => ({ ...g, core: Number(e.target.value) }))} />
                     </label>
                     <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.66rem' }}
-                      title="Glow intensity — brightness of the additive halo. The solid core is unaffected.">
+                      title="Glow intensity — brightness of the halo. Past 1 it widens the band that reaches full colour. The solid core is unaffected.">
                       <span style={{ fontSize: '0.6rem', color: 'var(--color-text-muted)', width: 48, flex: '0 0 auto' }}>Intensity</span>
                       <input type="range" min={0} max={3} step={0.05} value={agentGlow.intensity} style={{ flex: 1, minWidth: 0 }}
                         onChange={e => setAgentGlow(g => ({ ...g, intensity: Number(e.target.value) }))} />

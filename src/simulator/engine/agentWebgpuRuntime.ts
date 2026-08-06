@@ -288,7 +288,7 @@ export interface AgentWebGPURuntime {
   renderCtx?: GPUCanvasContext | null;
   /** The RenderView uniform (camera + tiling + outline/glow/bg). */
   renderViewBuf?: GPUBuffer | null;
-  /** Two pipelines from one module: plain (premultiplied-alpha) + glow (additive). */
+  /** Two pipelines from one module: plain (premultiplied-alpha) + glow (screen). */
   renderPlainPipeline?: GPURenderPipeline | null;
   renderGlowPipeline?: GPURenderPipeline | null;
   renderBindGroup?: GPUBindGroup | null;
@@ -1783,7 +1783,8 @@ const RENDER_VIEW_WGSL = `struct RenderView {
  *  RGBA from agentColors). TWO entry-point pairs, drawn as TWO passes when Glow
  *  is on (see presentAgentsEncode):
  *
- *    vsGlow/fsGlow — the additive HALO, over a quad enlarged to `radPx+glowSize`.
+ *    vsGlow/fsGlow — the SCREEN-blended HALO, over a quad enlarged to
+ *                    `radPx+glowSize` (see glowBlend in buildAgentDiscPipelines).
  *    vsMain/fsMain — the SOLID CORE disc (premultiplied source-over), radius
  *                    `radPx + glowCore*glowSize`, + the optional outline rim.
  *
@@ -1791,8 +1792,8 @@ const RENDER_VIEW_WGSL = `struct RenderView {
  *  from the centre out), so an isolated agent had no solid body at all — its
  *  centre read as `intensity·colour`, which is dim at low intensity and blows
  *  clusters to white at high intensity. That is the trade the Core slider
- *  removes: the core is opaque, so it can never be added out or faded out, and
- *  the additive falloff only spans the band OUTSIDE it (t is remapped over
+ *  removes: the core is opaque, so it can never be washed out or faded out, and
+ *  the falloff only spans the band OUTSIDE it (t is remapped over
  *  [coreFrac, 1] instead of [0, 1]), where accumulation is what you want.
  *  The f32 field bases are baked from the layout (like emitBinOf). */
 function agentRenderWGSL(layout: AgentWebGPULayout): string {
@@ -1920,19 +1921,26 @@ fn fsMain(in: VSOut) -> @location(0) vec4<f32> {
   return vec4<f32>(rgb * a, a);
 }
 
-// The additive HALO — zero at the outer edge, full at the core edge. The
+// The SCREEN-blended HALO — zero at the outer edge, full at the core edge. The
 // falloff is remapped over the BAND [coreFrac, 1] so the whole dynamic range
 // lands outside the solid core instead of being spent inside the body. It needs
 // no coverage ramp of its own: t (and therefore the emitted alpha) already
 // reaches zero CONTINUOUSLY at d == 1, so the halo edge was never aliased. The
 // discard just trims the AA pad ring the vertex builder now adds.
+//
+// g IS CLAMPED TO [0,1], AND THAT IS LOAD-BEARING UNDER SCREEN, not tidiness:
+// the blend's dst factor is (1 - src), so an emitted value above 1 makes the
+// factor NEGATIVE and the halo SUBTRACTS the backdrop instead of brightening it.
+// Intensity > 1 therefore no longer means "brighter than the colour" (screen has
+// no such state) — it WIDENS the band that reaches full colour, which is the
+// monotone reading of "more intense" that survives a saturating blend.
 @fragment
 fn fsGlow(in: VSOut) -> @location(0) vec4<f32> {
   let d: f32 = length(in.uv);
   if (d > 1.0) { discard; }
   let band: f32 = max(1.0e-4, 1.0 - in.coreFrac);
   let t: f32 = clamp((1.0 - d) / band, 0.0, 1.0);
-  let g: f32 = rv.glowIntensity * pow(t, max(0.01, rv.glowSteepness));
+  let g: f32 = clamp(rv.glowIntensity * pow(t, max(0.01, rv.glowSteepness)), 0.0, 1.0);
   return vec4<f32>(in.col.rgb * g, g);
 }`;
 }
@@ -2210,9 +2218,19 @@ async function buildAgentDiscPipelines(rt: AgentRenderSurface): Promise<boolean>
     color: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
     alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
   };
+  // SCREEN, not additive: out = s + d*(1 - s). The halo used to be src=ONE/dst=ONE,
+  // which CLIPS each channel independently at 1 — so a dense cluster hit a hard
+  // iso-line where the sum crossed 1 (a visible contrast plateau) and, past it, the
+  // channels finished saturating one by one and the hue collapsed to white. Screen
+  // approaches full brightness ASYMPTOTICALLY (N stacked halos give 1-(1-x)^N per
+  // channel), so there is no plateau boundary and a saturated colour keeps its hue
+  // far longer. At low accumulation s*d is second-order, so a single halo — and a
+  // sparse field — is near-identical to the additive look. The alpha factor is the
+  // standard source-over rule, which is screen's own alpha and is what keeps the
+  // transparent agent canvas compositing correctly over the page / the grid layer.
   const glowBlend: GPUBlendState = {
-    color: { srcFactor: 'one', dstFactor: 'one', operation: 'add' },
-    alpha: { srcFactor: 'one', dstFactor: 'one', operation: 'add' },
+    color: { srcFactor: 'one', dstFactor: 'one-minus-src', operation: 'add' },
+    alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
   };
   const renderViewBuf = rt.device.createBuffer({ label: 'agent-render-view', size: RENDER_VIEW_BYTES, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
   // Audit L5: a re-attach (every real display-size change) rebuilds the pipelines
@@ -2442,7 +2460,7 @@ export function presentCompositeEncode(rt: AgentRenderSurface, enc: GPUCommandEn
       ap.setBindGroup(0, rt.renderBindGroup);
       const copies = Math.max(1, rt.renderCopiesX ?? 1) * Math.max(1, rt.renderCopiesY ?? 1);
       const insts = Math.max(1, hw) * copies;
-      // Additive halo UNDER the opaque core (see agentRenderWGSL).
+      // Screen-blended halo UNDER the opaque core (see agentRenderWGSL).
       if (rt.renderGlow) { ap.setPipeline(rt.renderGlowPipeline!); ap.draw(4, insts); }
       ap.setPipeline(rt.renderPlainPipeline!);
       ap.draw(4, insts);
@@ -2574,7 +2592,7 @@ export function presentAgentsEncode(rt: AgentRenderSurface, enc: GPUCommandEncod
   pass.setBindGroup(0, rt.renderBindGroup);
   const copies = Math.max(1, rt.renderCopiesX ?? 1) * Math.max(1, rt.renderCopiesY ?? 1);
   const insts = Math.max(1, hw) * copies;
-  // TWO passes when Glow is on: the additive halo FIRST, the opaque core over it
+  // TWO passes when Glow is on: the screen-blended halo FIRST, the opaque core over it
   // (see agentRenderWGSL). Glow used to REPLACE the disc, which is exactly why an
   // isolated agent had no crisp body.
   if (rt.renderGlow) { pass.setPipeline(rt.renderGlowPipeline!); pass.draw(4, insts); }
