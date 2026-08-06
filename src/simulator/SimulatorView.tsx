@@ -1597,7 +1597,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
   // wrapper ref, assigned to whichever is currently open). Session-only UI
   // state (the VALUES keep their existing persistence). Dismissed by a
   // capture-phase outside pointerdown (the context-menu pattern) or Escape.
-  const [overlayPopup, setOverlayPopup] = useState<'fps' | 'gpf' | 'capture' | 'diagnostics' | null>(null);
+  const [overlayPopup, setOverlayPopup] = useState<'fps' | 'gpf' | 'capture' | 'shot' | 'diagnostics' | null>(null);
   const overlayPopupWrapRef = useRef<HTMLDivElement | null>(null);
   // C3 (P4) — the fast-path diagnostics reply (worker `getDiagnostics`). Held in
   // React state because the popover renders from it; requested ON DEMAND only
@@ -1919,22 +1919,28 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
     if (saved2 === 'gif') return 'gif';
     return webmAvailable ? 'webm' : 'gif';
   });
-  // Capture scope: "simulation" crops the recording to the drawn world rectangle
-  // (no letterbox margins — the area of interest); "view" records the whole
-  // display canvas exactly as shown (with margins / pan / zoom). Applies uniformly
-  // to every model type + compile target (2D grid, grid+agents, agents-only, 3D).
+  // Capture area: "simulation" frames the WHOLE grid / world to fit, independent
+  // of the current zoom & pan (no letterbox margins — the area of interest);
+  // "view" captures the whole display canvas exactly as shown (with margins /
+  // pan / zoom). Applies uniformly to every model type + compile target (2D grid,
+  // grid+agents, agents-only, 3D).
+  //
+  // ONE scope for BOTH screenshots and recordings. They used to be two
+  // independent preferences (`recordScope` + `screenshotScope`), which meant the
+  // same question — "what am I framing?" — had to be answered twice, in two rows
+  // of one popover, and the two could silently disagree about what a capture of
+  // this model means. MIGRATION: seed from whichever legacy key exists (recording
+  // first — it is the setting a user is most likely to have tuned deliberately).
+  // The legacy keys are simply no longer written after the first persist.
   type RecordScope = 'view' | 'simulation';
-  const [recordScope, setRecordScope] = useState<RecordScope>(() =>
-    (saved.current.recordScope as RecordScope | undefined) === 'view' ? 'view' : 'simulation');
-  const recordScopeRef = useRef<RecordScope>(recordScope);
-  useEffect(() => { recordScopeRef.current = recordScope; }, [recordScope]);
-  // Screenshot shares the same scope dilemma as recording — "simulation" crops to
-  // the drawn world rectangle, "view" is the whole canvas as shown. Separate
-  // preference from the recording scope (persisted independently).
-  const [screenshotScope, setScreenshotScope] = useState<RecordScope>(() =>
-    (saved.current.screenshotScope as RecordScope | undefined) === 'view' ? 'view' : 'simulation');
-  const screenshotScopeRef = useRef<RecordScope>(screenshotScope);
-  useEffect(() => { screenshotScopeRef.current = screenshotScope; }, [screenshotScope]);
+  const [captureScope, setCaptureScope] = useState<RecordScope>(() => {
+    const pick = (v: unknown): RecordScope | null =>
+      v === 'view' ? 'view' : v === 'simulation' ? 'simulation' : null;
+    const s = saved.current;
+    return pick(s.captureScope) ?? pick(s.recordScope) ?? pick(s.screenshotScope) ?? 'simulation';
+  });
+  const captureScopeRef = useRef<RecordScope>(captureScope);
+  useEffect(() => { captureScopeRef.current = captureScope; }, [captureScope]);
   // Cursor / highlight overlays in a capture. Since the cursor-overlay rework the
   // brush cursor and the highlight rings live on TWO dedicated canvases ABOVE the
   // scene canvas (`cursorNeg` = white silhouettes composited by the CSS
@@ -2105,7 +2111,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
           targetFps, unlimitedFps, gensPerFrame, unlimitedGens,
           activeViewer, brushColor, brushW, brushH, brushMapping, showBrushCursor, showGridlines, show2dAxes, smoothScaling,
           brushShape, brushRadius, brushRingWidth, brushLineWidth, brush3dVolume, brushBoxDepth,
-          infinityCanvas, indicatorVizModes, recordFormat, recordScope, recordQuality, recordOverload, screenshotScope, captureOverlays, brushSectionH, agentsFront3d,
+          infinityCanvas, indicatorVizModes, recordFormat, captureScope, recordQuality, recordOverload, captureOverlays, brushSectionH, agentsFront3d,
           light3d, cellGaps3d, agentMetaballs, agentGlow,
           agentBrushRadius, agentSeedDensity, agentSeedSpacing, agentNudgeIntensity,
           agentBrushShape, agentBrushW, agentBrushH, agentBrushRingWidth, agentBrushLineWidth,
@@ -2121,7 +2127,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       } catch { /* localStorage full */ }
     }, 300);
     return () => clearTimeout(timer);
-  }, [targetFps, unlimitedFps, gensPerFrame, unlimitedGens, activeViewer, brushColor, brushW, brushH, brushMapping, showBrushCursor, showGridlines, show2dAxes, smoothScaling, brushShape, brushRadius, brushRingWidth, brushLineWidth, brush3dVolume, brushBoxDepth, infinityCanvas, indicatorVizModes, recordFormat, recordScope, recordQuality, recordOverload, screenshotScope, captureOverlays, brushSectionH, agentsFront3d, light3d, cellGaps3d, agentMetaballs, agentGlow, agentBrushRadius, agentSeedDensity, agentSeedSpacing, agentNudgeIntensity, agentBrushShape, agentBrushW, agentBrushH, agentBrushRingWidth, agentBrushLineWidth, showCaGrid, showAgents, showBonds, simulateCells, simulateAgents, brushTarget, bg2d, agentOutlines, showVision, indicatorHiddenCategories, indicatorChartOverrides]);
+  }, [targetFps, unlimitedFps, gensPerFrame, unlimitedGens, activeViewer, brushColor, brushW, brushH, brushMapping, showBrushCursor, showGridlines, show2dAxes, smoothScaling, brushShape, brushRadius, brushRingWidth, brushLineWidth, brush3dVolume, brushBoxDepth, infinityCanvas, indicatorVizModes, recordFormat, captureScope, recordQuality, recordOverload, captureOverlays, brushSectionH, agentsFront3d, light3d, cellGaps3d, agentMetaballs, agentGlow, agentBrushRadius, agentSeedDensity, agentSeedSpacing, agentNudgeIntensity, agentBrushShape, agentBrushW, agentBrushH, agentBrushRingWidth, agentBrushLineWidth, showCaGrid, showAgents, showBonds, simulateCells, simulateAgents, brushTarget, bg2d, agentOutlines, showVision, indicatorHiddenCategories, indicatorChartOverrides]);
 
   // Manual Brush — signature-keyed merge effect. Re-derives `manualBrush`
   // whenever the cell attribute set (id+type) changes. Surviving attrs carry
@@ -2413,7 +2419,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
         applySimulationState(p.state, { adaptDims: true });
         return 'ok' as const;
       },
-      screenshot: () => handleScreenshot(),
+      screenshot: () => handleScreenshot('save'),
       startRecording: () => startRecording(),
       stopRecording: () => stopRecording(),
       modelAttrsSnapshot: () => ({ ...runtimeModelAttrsLatest.current }),
@@ -5822,7 +5828,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
               forceFrameOpaque(scaled.data);
               frame = new ImageData(scaled.data, scaled.width, scaled.height);
             }
-          } else if (recordScopeRef.current === 'simulation') {
+          } else if (captureScopeRef.current === 'simulation') {
             // "simulation": the WHOLE grid/world at a fit framing, INDEPENDENT of the
             // current zoom/pan — so it captures the entire simulation no matter how far
             // you've zoomed in to inspect a part. Rendered on the main thread from data
@@ -10734,7 +10740,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
     workerRef.current?.postMessage({
       type: 'setRecording',
       enabled: true,
-      needColors: !is3dRef.current && recordScopeRef.current === 'simulation',
+      needColors: !is3dRef.current && captureScopeRef.current === 'simulation',
     });
   };
 
@@ -11101,11 +11107,34 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
   // worker for a fresh colors snapshot, paint it onto an offscreen 2D canvas,
   // then toBlob from there. Falls through to direct toBlob in JS/WASM modes.
   const screenshotPendingRef = useRef<((data: { w: number; h: number; colors?: Uint8ClampedArray }) => void) | null>(null);
-  const handleScreenshot = () => {
-    // Via saveBinaryFile (native Save As in the Tauri shell, blob download on
-    // the web). Cancelling is silent — nothing was lost and a screenshot is
+  /** What a finished screenshot blob is FOR. The capture pipeline below is
+   *  identical for both — they diverge only at the final disposition, which is
+   *  why it is a parameter rather than a second copy of the capture logic. */
+  type ScreenshotAction = 'save' | 'copy';
+  /** Copy: write the PNG straight to the clipboard instead of the file system.
+   *  Needs a secure context AND a focused document, and WebView2 (the Tauri
+   *  shell) may refuse `clipboard.write` outright — every refusal is TOASTED,
+   *  never silent, because "nothing happened" is indistinguishable from a
+   *  successful copy until the user tries to paste. */
+  const copyBlobToClipboard = async (blob: Blob): Promise<void> => {
+    try {
+      if (typeof ClipboardItem === 'undefined' || !navigator.clipboard?.write) {
+        throw new Error('the clipboard image API is not available here');
+      }
+      await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
+      showAgentNotice('Screenshot copied to the clipboard');
+    } catch (err) {
+      console.error('Screenshot copy failed', err);
+      showAgentNotice(`Copy failed — ${err instanceof Error ? err.message : String(err)}`);
+    }
+  };
+  const handleScreenshot = (action: ScreenshotAction = 'save') => {
+    // Save: via saveBinaryFile (native Save As in the Tauri shell, blob download
+    // on the web). Cancelling is silent — nothing was lost and a screenshot is
     // trivially retaken; a real write FAILURE is surfaced.
+    // Copy: the same blob, to the clipboard.
     const downloadBlob = (blob: Blob) => {
+      if (action === 'copy') { void copyBlobToClipboard(blob); return; }
       const name = model.properties.name.toLowerCase().replace(/\s+/g, '_').replace(/[^a-z0-9_]/g, '') || 'genesis';
       void triggerDownload(blob, `${name}_gen${generationRef.current}.png`);
     };
@@ -11134,7 +11163,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
     // direct render) or was never shipped at all (the E2 grid+agents composite):
     // the capture would draw a grid frozen at whatever was last shipped, or none.
     // Pull one fresh readback first — one-shot, off the per-frame path.
-    if (screenshotScopeRef.current === 'simulation') {
+    if (captureScopeRef.current === 'simulation') {
       const w = gridWidth.current || 1, h = gridHeight.current || 1;
       const shoot = () => {
         const off = renderSimulationFrame(Math.min(2048, Math.max(720, Math.max(w, h))));
@@ -12413,13 +12442,13 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
           // defensively \u2014 mirror that here so the chip can never advertise a
           // format the recorder would not actually use.
           const effWebm = recordFormat === 'webm' && webmAvailable;
-          const areaLabel = recordScope === 'simulation' ? 'sim' : 'view';
+          const areaLabel = captureScope === 'simulation' ? 'sim' : 'view';
           // The cursor / highlight overlay layers can only be composited onto a
-          // VIEW-area 2D capture (see compositeCaptureOverlays) \u2014 with both areas
-          // set to Simulation, or in 3D, the control has nothing to act on, so it
-          // is disabled IN PLACE with the reason stated beneath (never unmounted).
-          const overlaysBothSim = screenshotScope === 'simulation' && recordScope === 'simulation';
-          const overlaysUnavailable = is3D || overlaysBothSim;
+          // VIEW-area 2D capture (see compositeCaptureOverlays) \u2014 with the capture
+          // area set to Simulation, or in 3D, the control has nothing to act on, so
+          // it is disabled IN PLACE with the reason stated beneath (never unmounted).
+          const overlaysSimArea = captureScope === 'simulation';
+          const overlaysUnavailable = is3D || overlaysSimArea;
           const chipParts = [
             effWebm ? 'WebM' : 'GIF',
             // In 3D the scene fills the frame \u2014 there is no separate area to name.
@@ -12435,24 +12464,51 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
           const settingsLocked = recording || encodingWebM;
           return (
             <div className={styles.captureCluster}>
-              <button
-                className={styles.transportBtn}
-                onClick={handleScreenshot}
-                title={`Screenshot PNG${is3D ? '' : ` (${screenshotScope === 'simulation' ? 'simulation' : 'current view'})`} \u2014 settings in the chip to the right`}
-              >{'\uD83D\uDCF7'}</button>
+              {/* Screenshot: a plain CLICK saves, unchanged. Hover or right-click
+                  opens the two dispositions \u2014 Save (identical to the click) and
+                  Copy (the same PNG, to the clipboard). Its OWN relative wrapper
+                  so the menu anchors to the camera button and hovering it cannot
+                  pop the settings chip's popover open instead. */}
+              <div
+                className={styles.captureBtnWrap}
+                ref={overlayPopup === 'shot' ? overlayPopupWrapRef : undefined}
+                onPointerEnter={() => setOverlayPopup('shot')}
+                onPointerLeave={() => setOverlayPopup(p => (p === 'shot' ? null : p))}
+                onContextMenu={e => { e.preventDefault(); setOverlayPopup(p => (p === 'shot' ? null : 'shot')); }}
+              >
+                <button
+                  className={styles.transportBtn}
+                  onClick={() => { setOverlayPopup(null); handleScreenshot('save'); }}
+                  title={`Screenshot PNG${is3D ? '' : ` (${captureScope === 'simulation' ? 'simulation' : 'current view'})`} \u2014 click to save, hover or right-click for Save / Copy; area in the chip to the right`}
+                >{'\uD83D\uDCF7'}</button>
+                {overlayPopup === 'shot' && (
+                  <div className={styles.shotMenu} data-sim-overlay>
+                    <button
+                      className={styles.shotMenuItem}
+                      onClick={() => { setOverlayPopup(null); handleScreenshot('save'); }}
+                      title="Save the PNG to a file (same as clicking the camera)"
+                    >Save{'\u2026'}</button>
+                    <button
+                      className={styles.shotMenuItem}
+                      onClick={() => { setOverlayPopup(null); handleScreenshot('copy'); }}
+                      title="Copy the PNG to the clipboard instead of saving a file"
+                    >Copy</button>
+                  </div>
+                )}
+              </div>
               {!recording ? (
                 <button
                   className={styles.transportBtn}
                   onClick={startRecording}
                   disabled={encodingWebM}
-                  title={encodingWebM ? 'Encoding WebM\u2026' : `Record ${effWebm ? 'WebM' : 'GIF'} (${!is3D && recordScope === 'simulation' ? 'simulation' : 'current view'}) \u2014 settings in the chip to the right`}
+                  title={encodingWebM ? 'Encoding WebM\u2026' : `Record ${effWebm ? 'WebM' : 'GIF'} (${!is3D && captureScope === 'simulation' ? 'simulation' : 'current view'}) \u2014 settings in the chip to the right`}
                   style={{ color: '#e05050' }}
                 >{'\u23FA'}</button>
               ) : (
                 <button
                   className={styles.transportBtn}
                   onClick={stopRecording}
-                  title={`Stop & Save ${effWebm ? 'WebM' : 'GIF'} (${!is3D && recordScope === 'simulation' ? 'simulation' : 'current view'})${recordDroppedCount > 0 ? ` \u2014 ${recordDroppedCount} frame(s) skipped so far` : ''}${recordThrottled ? ' \u2014 the simulation is being held back while the encoder catches up' : ''}`}
+                  title={`Stop & Save ${effWebm ? 'WebM' : 'GIF'} (${!is3D && captureScope === 'simulation' ? 'simulation' : 'current view'})${recordDroppedCount > 0 ? ` \u2014 ${recordDroppedCount} frame(s) skipped so far` : ''}${recordThrottled ? ' \u2014 the simulation is being held back while the encoder catches up' : ''}`}
                   style={{ color: '#e05050' }}
                 >
                   {'\u23F9'} {recordFrameCount}
@@ -12476,49 +12532,30 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
                   onClick={() => setOverlayPopup(p => (p === 'capture' ? null : 'capture'))}
                   title={settingsLocked
                     ? 'Capture settings are locked for the whole run \u2014 the encoder needs the format, area and quality to hold from Start to Stop.'
-                    : 'Capture settings (screenshot area, recording format / area / quality / overload) \u2014 hover or click'}
+                    : 'Capture settings (capture area for screenshots & recordings, recording format / quality / overload) \u2014 hover or click'}
                 >{chipParts.join(' \u00B7 ')} {'\u25BE'}</button>
 
                 {overlayPopup === 'capture' && !settingsLocked && (
                   <div className={styles.capturePopover} data-sim-overlay>
                     <div className={styles.capturePopTitle}>Capture</div>
 
+                    {/* ONE area for BOTH screenshots and recordings \u2014 "what am I
+                        framing?" is the same question whichever button you press,
+                        so it is asked once. It leads the popover for the same
+                        reason, with the recording-only settings below the rule. */}
                     <div className={`${styles.captureRow} ${is3D ? styles.captureRowDisabled : ''}`}>
-                      <span>Screenshot area</span>
+                      <span>Capture area</span>
                       {captureSegment(
                         [{ label: 'View', value: 'view' as RecordScope }, { label: 'Simulation', value: 'simulation' as RecordScope }],
-                        is3D ? 'view' : screenshotScope,
-                        setScreenshotScope,
+                        is3D ? 'view' : captureScope,
+                        setCaptureScope,
                         is3D,
                       )}
                     </div>
-                    {is3D && <div className={styles.captureWhy}>A 3D scene fills the frame \u2014 there is no separate simulation crop.</div>}
-
-                    <div className={styles.captureSep} />
-
-                    <div className={styles.captureRow}>
-                      <span>Record format</span>
-                      {captureSegment(
-                        [{ label: 'WebM', value: 'webm' as RecordFormat, disabled: !webmAvailable }, { label: 'GIF', value: 'gif' as RecordFormat }],
-                        effWebm ? 'webm' : 'gif',
-                        setRecordFormat,
-                        false,
-                      )}
+                    <div className={styles.captureWhyStack}>
+                      <div className={`${styles.captureWhy} ${is3D ? '' : styles.captureWhyHidden}`}>A 3D scene fills the frame &mdash; there is no separate simulation crop.</div>
+                      <div className={`${styles.captureWhy} ${is3D ? styles.captureWhyHidden : ''}`}>Applies to screenshots and recordings alike. Simulation: the whole grid / world framed to fit, independent of your zoom &amp; pan. View: the display canvas exactly as shown.</div>
                     </div>
-                    {!webmAvailable && <div className={styles.captureWhy}>WebM needs WebCodecs &mdash; not available in this browser. GIF is 256 colours, max 512 px, and keeps every frame in memory.</div>}
-
-                    <div className={`${styles.captureRow} ${is3D ? styles.captureRowDisabled : ''}`}>
-                      <span>Record area</span>
-                      {captureSegment(
-                        [{ label: 'View', value: 'view' as RecordScope }, { label: 'Simulation', value: 'simulation' as RecordScope }],
-                        is3D ? 'view' : recordScope,
-                        setRecordScope,
-                        is3D,
-                      )}
-                    </div>
-                    <div className={styles.captureWhy}>{is3D
-                      ? 'A 3D scene fills the frame &mdash; there is no separate simulation crop.'
-                      : 'Simulation: the whole grid / world framed to fit, independent of your zoom & pan. View: the display canvas exactly as shown.'}</div>
 
                     {/* The brush cursor and the highlight rings live on overlay
                         canvases ABOVE the scene, so a capture never contains them.
@@ -12541,11 +12578,22 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
                     </div>
                     <div className={styles.captureWhyStack}>
                       <div className={`${styles.captureWhy} ${is3D ? '' : styles.captureWhyHidden}`}>In 3D the brush outline, hovered cells and inspect rings are drawn into the scene itself &mdash; every 3D capture already includes them.</div>
-                      <div className={`${styles.captureWhy} ${!is3D && overlaysBothSim ? '' : styles.captureWhyHidden}`}>The cursor is a view overlay &mdash; set an area above to View to include it.</div>
+                      <div className={`${styles.captureWhy} ${!is3D && overlaysSimArea ? '' : styles.captureWhyHidden}`}>The cursor is a view overlay &mdash; set the capture area above to View to include it.</div>
                       <div className={`${styles.captureWhy} ${overlaysUnavailable ? styles.captureWhyHidden : ''}`}>Highlights: the coloured hover / selection / inspect rings. All: those plus the negative brush-cursor silhouette. Added to View-area captures only.</div>
                     </div>
 
                     <div className={styles.captureSep} />
+
+                    <div className={styles.captureRow}>
+                      <span>Record format</span>
+                      {captureSegment(
+                        [{ label: 'WebM', value: 'webm' as RecordFormat, disabled: !webmAvailable }, { label: 'GIF', value: 'gif' as RecordFormat }],
+                        effWebm ? 'webm' : 'gif',
+                        setRecordFormat,
+                        false,
+                      )}
+                    </div>
+                    {!webmAvailable && <div className={styles.captureWhy}>WebM needs WebCodecs &mdash; not available in this browser. GIF is 256 colours, max 512 px, and keeps every frame in memory.</div>}
 
                     <div className={`${styles.captureRow} ${effWebm ? '' : styles.captureRowDisabled}`}>
                       <span>Quality</span>

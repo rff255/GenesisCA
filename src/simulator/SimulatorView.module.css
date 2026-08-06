@@ -937,6 +937,54 @@
   align-items: center;
 }
 
+/* Same idea for the camera button: its Save / Copy menu anchors to the button,
+   and hovering it opens THAT menu rather than the settings popover. */
+.captureBtnWrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+/* Screenshot disposition menu (Save / Copy). Opens UPWARD from the camera
+   button and FLUSH against it (bottom: 100%, NO gap) — it opens on hover, and
+   pointerenter/leave are DOM-tree based, so a visual gap would be a hit-test
+   hole that dismisses the menu while the cursor crosses into it. `left: 0`
+   grows rightward over the rest of the cluster, which is already at the canvas
+   edge, so it can never overflow. */
+.shotMenu {
+  position: absolute;
+  bottom: 100%;
+  left: 0;
+  display: flex;
+  flex-direction: column;
+  min-width: 92px;
+  padding: var(--space-2);
+  background: var(--color-bg-panel);
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45);
+  z-index: 40;
+}
+
+.shotMenuItem {
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-sm);
+  color: var(--color-text-secondary);
+  font-size: var(--font-2xs);
+  line-height: 1;
+  text-align: left;
+  white-space: nowrap;
+  padding: var(--space-2) var(--space-3);
+  cursor: pointer;
+  transition: background var(--duration-base), color var(--duration-base);
+}
+
+.shotMenuItem:hover {
+  background: var(--color-hover-bg);
+  color: var(--color-text-primary);
+}
+
 /* The summary chip: a readout of the frozen-at-Start configuration AND the
    popover trigger. Accent-coloured so the configuration stays glanceable. */
 .captureChip {
