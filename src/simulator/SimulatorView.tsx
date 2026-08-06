@@ -637,6 +637,16 @@ const BOND_BRUSH_MODES: ReadonlySet<string> = new Set(['glue', 'cut']);
  *  ball (3D) of `agentBrushRadius`, and the panel shows Radius + Intensity
  *  instead of the shape row. */
 const NUDGE_BRUSH_MODES: ReadonlySet<string> = new Set(['push', 'pull']);
+/** Ctrl+LMB drag in a NUDGE mode is TWO-AXIS: horizontal → Radius (the same
+ *  `dx / 5` feel every other shape's primary size uses), vertical → Intensity.
+ *  UP = stronger, matching the secondary axis of every other shape (ring width,
+ *  rect H), which all read `start - round(dy / 5)`. The radius clamp is the
+ *  shared `maxW`; intensity gets its own ceiling, which is ONE number shared by
+ *  the drag, the panel field's `max` AND the clamp applied to the persisted value
+ *  at load — otherwise a legacy value above the cap would be snapped down by the
+ *  first pixel of a drag. ~800 px of travel spans 0 → 160 at this scale. */
+const NUDGE_INTENSITY_DRAG_PX = 5;
+const NUDGE_INTENSITY_DRAG_MAX = 200;
 function agentBrushModesFor(bondsAvailable: boolean): typeof AGENT_BRUSH_MODES {
   return bondsAvailable ? AGENT_BRUSH_MODES : AGENT_BRUSH_MODES.filter(m => !BOND_BRUSH_MODES.has(m));
 }
@@ -1704,7 +1714,13 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
   // (the falloff scales it to 0 at the rim). Per-second, not per-frame: the
   // sender multiplies by the frame dt, so the same setting feels identical at
   // 60 Hz and 144 Hz.
-  const [agentNudgeIntensity, setAgentNudgeIntensity] = useState<number>((saved.current.agentNudgeIntensity as number) ?? 10);
+  // Clamped on LOAD as well as on edit so the panel field and the Ctrl-drag share
+  // ONE ceiling — otherwise a legacy persisted value above it would be snapped
+  // down by the first pixel of a retune drag.
+  const [agentNudgeIntensity, setAgentNudgeIntensity] = useState<number>(() => {
+    const v = saved.current.agentNudgeIntensity as number | undefined;
+    return typeof v === 'number' && Number.isFinite(v) ? Math.max(0, Math.min(NUDGE_INTENSITY_DRAG_MAX, v)) : 10;
+  });
   // Agent brush SHAPE + per-shape params (mirror the CA-grid brush): rect W/H,
   // circle radius (agentBrushRadius above), ring radius + width, line width. The
   // agent world is continuous, so these are world-unit footprints tested
@@ -7491,7 +7507,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
     // PR5 3D agent move: the agent picked at drag-start (-1 = none).
     let agentDragId = -1;
     // Ctrl+LMB-drag brush resize (mirrors the 2D canvas): captured at drag start.
-    const resizeStart = { x: 0, y: 0, agent: false, w: 0, h: 0, radius: 0, ringW: 0, lineW: 0 };
+    const resizeStart = { x: 0, y: 0, agent: false, w: 0, h: 0, radius: 0, ringW: 0, lineW: 0, intensity: 0 };
     const maxDim = () => Math.max(gridWidth.current, gridHeight.current, gridDepth.current, 1);
     type Cell = { layer: number; row: number; col: number };
     const pickCell = (clientX: number, clientY: number): Cell | null => {
@@ -7735,6 +7751,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
         resizeStart.radius = rzAgent ? agentBrushRadiusRef.current : brushRadiusRef.current;
         resizeStart.ringW = rzAgent ? agentBrushRingWidthRef.current : brushRingWidthRef.current;
         resizeStart.lineW = rzAgent ? agentBrushLineWidthRef.current : brushLineWidthRef.current;
+        resizeStart.intensity = agentNudgeIntensityRef.current;
       }
       else if (e.button === 0 && (e.shiftKey || inspectModeRef.current)) {
         // Shift+LMB (or the toolbar Inspect toggle) → inspect. In an agent model,
@@ -7930,16 +7947,19 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
         const totDx = e.clientX - resizeStart.x, totDy = e.clientY - resizeStart.y;
         const maxW = (gridWidth.current || simWidth) * 2, maxH = (gridHeight.current || simHeight) * 2;
         const rzA = resizeStart.agent;
-        // Push/Pull ignore the shape — Ctrl-drag resizes THEIR disc radius.
-        const shape = rzA
-          ? (NUDGE_BRUSH_MODES.has(agentBrushModeRef.current) ? 'circle' : agentBrushShapeRef.current)
-          : brushShapeRef.current;
+        const shape = rzA ? agentBrushShapeRef.current : brushShapeRef.current;
         const setRadius = rzA ? setAgentBrushRadius : setBrushRadius;
         const setRingW = rzA ? setAgentBrushRingWidth : setBrushRingWidth;
         const setLineW = rzA ? setAgentBrushLineWidth : setBrushLineWidth;
         const setW = rzA ? setAgentBrushW : setBrushW;
         const setH = rzA ? setAgentBrushH : setBrushH;
-        if (shape === 'circle') setRadius(Math.max(0, Math.min(maxW, resizeStart.radius + Math.round(totDx / 5))));
+        // Push/Pull ignore the shape — the two axes carry Radius (dx) and
+        // Intensity (dy, up = stronger) instead. Mirrors the 2D canvas exactly.
+        if (rzA && NUDGE_BRUSH_MODES.has(agentBrushModeRef.current)) {
+          setAgentBrushRadius(Math.max(0, Math.min(maxW, resizeStart.radius + Math.round(totDx / 5))));
+          setAgentNudgeIntensity(Math.max(0, Math.min(NUDGE_INTENSITY_DRAG_MAX, resizeStart.intensity - Math.round(totDy / NUDGE_INTENSITY_DRAG_PX))));
+        }
+        else if (shape === 'circle') setRadius(Math.max(0, Math.min(maxW, resizeStart.radius + Math.round(totDx / 5))));
         else if (shape === 'ring') {
           setRadius(Math.max(0, Math.min(maxW, resizeStart.radius + Math.round(totDx / 5))));
           setRingW(Math.max(1, Math.min(maxH, resizeStart.ringW - Math.round(totDy / 5))));
@@ -9886,7 +9906,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       draw();
     };
 
-    const isResizingBrush = { active: false, agent: false, startX: 0, startY: 0, startW: 0, startH: 0, startRadius: 0, startRingW: 0, startLineW: 0 };
+    const isResizingBrush = { active: false, agent: false, startX: 0, startY: 0, startW: 0, startH: 0, startRadius: 0, startRingW: 0, startLineW: 0, startIntensity: 0 };
     let canvasBrushActive = false; // true only when LMB started on canvas, not overlay
 
     // Middle-click autoscroll: rAF loop pans by (cursor - origin) each frame.
@@ -10151,6 +10171,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
         isResizingBrush.startRadius = rzAgent ? agentBrushRadiusRef.current : brushRadiusRef.current;
         isResizingBrush.startRingW = rzAgent ? agentBrushRingWidthRef.current : brushRingWidthRef.current;
         isResizingBrush.startLineW = rzAgent ? agentBrushLineWidthRef.current : brushLineWidthRef.current;
+        isResizingBrush.startIntensity = agentNudgeIntensityRef.current;
         container.style.cursor = 'nwse-resize';
       } else if (e.button === 0 && brushShapeRef.current === 'line') {
         // Line tool: two clicks define the segment. First click stages the
@@ -10443,17 +10464,20 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
         const maxW = (gridWidth.current || simWidth) * 2;
         const maxH = (gridHeight.current || simHeight) * 2;
         const rz = isResizingBrush;
-        // Push/Pull ignore the shape (they act over a plain disc), so Ctrl-drag
-        // resizes THEIR radius whatever shape happens to be selected.
-        const shape = rz.agent
-          ? (NUDGE_BRUSH_MODES.has(agentBrushModeRef.current) ? 'circle' : agentBrushShapeRef.current)
-          : brushShapeRef.current;
+        const shape = rz.agent ? agentBrushShapeRef.current : brushShapeRef.current;
         const setRadius = rz.agent ? setAgentBrushRadius : setBrushRadius;
         const setRingW = rz.agent ? setAgentBrushRingWidth : setBrushRingWidth;
         const setLineW = rz.agent ? setAgentBrushLineWidth : setBrushLineWidth;
         const setW = rz.agent ? setAgentBrushW : setBrushW;
         const setH = rz.agent ? setAgentBrushH : setBrushH;
-        if (shape === 'circle') {
+        if (rz.agent && NUDGE_BRUSH_MODES.has(agentBrushModeRef.current)) {
+          // Push/Pull ignore the SHAPE (they act over a plain disc), so the two
+          // drag axes carry their two real parameters instead: dx → the effect
+          // radius, dy (up) → the intensity. NB Ctrl+LMB opens a resize, never a
+          // nudge, so this retunes the NEXT hold — not one already in flight.
+          setAgentBrushRadius(Math.max(0, Math.min(maxW, rz.startRadius + Math.round(dx / 5))));
+          setAgentNudgeIntensity(Math.max(0, Math.min(NUDGE_INTENSITY_DRAG_MAX, rz.startIntensity - Math.round(dy / NUDGE_INTENSITY_DRAG_PX))));
+        } else if (shape === 'circle') {
           setRadius(Math.max(0, Math.min(maxW, rz.startRadius + Math.round(dx / 5))));
         } else if (shape === 'ring') {
           setRadius(Math.max(0, Math.min(maxW, rz.startRadius + Math.round(dx / 5))));
@@ -13660,20 +13684,22 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
                   )}
                   {/* Push / Pull: the effect disc radius + the strength. No shape row —
                       a radial force needs a centre and a radius, so these modes always
-                      act over a disc (2D) / ball (3D); Ctrl+LMB-drag resizes it. */}
+                      act over a disc (2D) / ball (3D). Ctrl+LMB-drag retunes BOTH:
+                      horizontal → Radius, vertical → Intensity (up = stronger). */}
                   {NUDGE_BRUSH_MODES.has(agentBrushMode) && (
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-                      <label style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                      <label style={{ display: 'flex', alignItems: 'center', gap: 4 }} title="Ctrl+LMB-drag on the canvas: drag sideways to resize.">
                         <span style={{ width: 54, color: 'var(--color-text-muted)' }}>Radius</span>
                         <NumberField value={agentBrushRadius} onNumber={v => setAgentBrushRadius(v)} min={0} step={1} />
                       </label>
-                      <label style={{ display: 'flex', alignItems: 'center', gap: 4 }} title="World units per second at the centre of the disc — the displacement falls off linearly to zero at the rim.">
+                      <label style={{ display: 'flex', alignItems: 'center', gap: 4 }} title="World units per second at the centre of the disc — the displacement falls off linearly to zero at the rim. Ctrl+LMB-drag on the canvas: drag up to strengthen.">
                         <span style={{ width: 54, color: 'var(--color-text-muted)' }}>Intensity</span>
-                        <NumberField value={agentNudgeIntensity} onNumber={v => setAgentNudgeIntensity(Math.max(0, v))} min={0} step={1} />
+                        <NumberField value={agentNudgeIntensity} onNumber={v => setAgentNudgeIntensity(Math.max(0, Math.min(NUDGE_INTENSITY_DRAG_MAX, v)))} min={0} max={NUDGE_INTENSITY_DRAG_MAX} step={1} />
                       </label>
                       <div style={{ fontSize: '0.62rem', color: 'var(--color-text-muted)' }}>
                         Hold to {agentBrushMode === 'push' ? 'shove agents away from' : 'gather agents toward'} the cursor —
                         strongest at the centre, zero at the rim.
+                        <br />Ctrl+drag: ↔ radius, ↕ intensity.
                       </div>
                     </div>
                   )}

@@ -37,7 +37,7 @@ const GROUPS: { title: string; rows: Row[] }[] = [
       ['F', 'Fullscreen canvas (toggle panels)'],
       ['Ctrl + C / V / X', 'Copy / paste / cut cells'],
       ['Ctrl + wheel', 'Cycle input mappings'],
-      ['Ctrl + drag', 'Resize brush'],
+      ['Ctrl + drag', 'Resize brush (Push / Pull: ↔ radius, ↕ intensity)'],
       ['Shift + click', 'Inspect cell'],
       ['Right-click drag', 'Pan the grid'],
     ],
