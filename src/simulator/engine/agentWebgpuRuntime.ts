@@ -1857,12 +1857,20 @@ fn buildVert(vi: u32, inst: u32, halo: bool) -> VSOut {
   var coreR: f32 = radPx;
   if (rv.glowOn != 0u) { coreR = radPx + clamp(rv.glowCore, 0.0, 1.0) * rv.glowSize; }
   let outerR: f32 = max(0.001, radPx + rv.glowSize);
-  var half: f32 = coreR;
+  var half: f32 = max(0.001, coreR);
   if (halo) { half = outerR; }
-  let sx: f32 = px + corner.x * half;
-  let sy: f32 = py + corner.y * half;
+  // ANTI-ALIASING PAD. The FS coverage ramp straddles d == 1 (half a pixel in,
+  // half a pixel out), but the quad CIRCUMSCRIBES the disc - they are tangent at
+  // the four axis points, so without a pad the outer half of the ramp would be
+  // clipped exactly there and the silhouette would keep four hard notches. Grow
+  // the quad by one pixel and rescale uv so d == 1 still marks the DRAWN radius
+  // (out.radPx stays the UNPADDED radius, so the outline band is unaffected).
+  // The extra ring of fragments discards at cov == 0.
+  let padded: f32 = half + 1.0;
+  let sx: f32 = px + corner.x * padded;
+  let sy: f32 = py + corner.y * padded;
   out.pos = vec4<f32>(sx / rv.canvasW * 2.0 - 1.0, 1.0 - sy / rv.canvasH * 2.0, 0.0, 1.0);
-  out.uv = corner;
+  out.uv = corner * (padded / half);
   out.col = vec4<f32>(f32(packed & 0xffu) / 255.0, f32((packed >> 8u) & 0xffu) / 255.0, f32((packed >> 16u) & 0xffu) / 255.0, a);
   out.radPx = half;
   // Where the core ends, in the HALO quad's uv units (only the halo FS reads it).
@@ -1884,17 +1892,29 @@ fn vsGlow(@builtin(vertex_index) vi: u32, @builtin(instance_index) inst: u32) ->
 @fragment
 fn fsMain(in: VSOut) -> @location(0) vec4<f32> {
   let d: f32 = length(in.uv);
-  if (d > 1.0) { discard; }
+  // ANTI-ALIASING - analytic edge coverage, ALWAYS ON. fwidth(d) is the per-pixel
+  // step of d, so this is a one-pixel linear coverage ramp centred on the true
+  // silhouette (cov == 0.5 exactly at d == 1) - the same half-in/half-out coverage
+  // Canvas2D's arc fill already produces on the CPU overlay. Without it the rim is
+  // a binary discard and the disc reads SERRATED, which is the whole difference
+  // users saw between an overlay model and a direct-render one. Computed BEFORE
+  // any discard so the derivative is taken in uniform control flow.
+  let pxw: f32 = max(fwidth(d), 1.0e-5);
+  let cov: f32 = clamp((1.0 - d) / pxw + 0.5, 0.0, 1.0);
+  if (cov <= 0.0) { discard; }
   var rgb: vec3<f32> = in.col.rgb;
-  let a: f32 = in.col.a;
+  let a: f32 = in.col.a * cov;
   if (rv.outlineOn != 0u) {
     // Match the 2D overlay rim rule (stampBatchedTile): darken the outer
     // min(1.5px, 0.25*rad) band by ×0.60. in.radPx is the DRAWN body radius
     // (== radPx when glow is off, the core radius when it is on), so the rim
-    // always hugs the silhouette the user sees.
+    // always hugs the silhouette the user sees. Feathered with the SAME
+    // derivative, so the band reads like the antialiased stroke() the overlay
+    // draws instead of a second hard step inside the body.
     let radPx: f32 = max(0.001, in.radPx);
     let rim: f32 = min(1.5, 0.25 * radPx) / radPx;
-    if (d > 1.0 - rim) { rgb = rgb * 0.60; }
+    let t: f32 = clamp((d - (1.0 - rim)) / pxw + 0.5, 0.0, 1.0);
+    rgb = rgb * mix(1.0, 0.60, t);
   }
   // Premultiplied output (the canvas is configured 'premultiplied').
   return vec4<f32>(rgb * a, a);
@@ -1902,7 +1922,10 @@ fn fsMain(in: VSOut) -> @location(0) vec4<f32> {
 
 // The additive HALO — zero at the outer edge, full at the core edge. The
 // falloff is remapped over the BAND [coreFrac, 1] so the whole dynamic range
-// lands outside the solid core instead of being spent inside the body.
+// lands outside the solid core instead of being spent inside the body. It needs
+// no coverage ramp of its own: t (and therefore the emitted alpha) already
+// reaches zero CONTINUOUSLY at d == 1, so the halo edge was never aliased. The
+// discard just trims the AA pad ring the vertex builder now adds.
 @fragment
 fn fsGlow(in: VSOut) -> @location(0) vec4<f32> {
   let d: f32 = length(in.uv);

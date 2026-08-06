@@ -3248,16 +3248,29 @@ export function HelpView() {
               <code>R&nbsp;(n)</code> label carrying the dimension count &mdash; matching the 3D
               view&rsquo;s axis colours (whose axes likewise carry C/R/D letters + counts at the tips).
               Drawn on top of the agent layer so nothing covers it.
-              The <strong>&#x224B; smooth scaling (anti-aliasing)</strong> toggle interpolates the grid
+              The <strong>&#x224B; smooth grid scaling</strong> toggle interpolates the grid
               when it is scaled up instead of drawing hard-edged cells &mdash; <em>off</em> by default,
               because crisp cells are what a discrete CA should look like, but a real win for
               continuous-valued fields (Gray-Scott, MNCA) where the smoothed upscale reads as an
-              actual field. It applies to the grid layer only (glyphs, agents, gridlines and the
+              actual field. It applies to the <em>cell</em> layer only (glyphs, gridlines and the
               brush cursor stay crisp), and a simulation-scope screenshot/recording follows it too.
               The button is hidden where the main thread doesn&rsquo;t do that upscale: in 3D
               (which already renders with hardware MSAA), on an agents-only model (no grid), and on
               a grid+agents model running the single-canvas WebGPU composite (whose grid layer is
               drawn in the worker at display resolution).</li>
+            <li><strong>Agent bodies are always antialiased</strong> &mdash; there is no toggle,
+              because there is nothing to switch off. A 2D agent disc gets a one-pixel coverage
+              ramp on its contour on <em>every</em> path: the CPU overlay draws it with Canvas2D,
+              and the GPU disc shader (used by the direct render and by the single-canvas composite)
+              computes the same half-in/half-out coverage analytically from the screen-space
+              derivative of the radius. Earlier builds ended the GPU silhouette with a hard
+              cut, so a direct-render model (Particle Life, and every WebGPU grid+agents model)
+              looked serrated while an overlay model looked smooth &mdash; that inconsistency is
+              gone. Agent <em>outlines</em> are feathered the same way. In 3D the sphere impostors
+              still have a hard silhouette on both the frame-mode and free-mode paths; a
+              coverage fix there needs multisampling with alpha-to-coverage on both renderers at
+              once (they must stay identical across the free/frame flip), so it is a separate
+              change.</li>
             <li><strong>Compile-target chip</strong> &mdash; the top-left stats overlay shows which
               compile target is running (<code>&#x2699; WASM</code>, <code>WebGPU</code>, <code>JS</code>,
               plus <code>agents &hellip;</code> for agent models). If the selected WebGPU target fails to

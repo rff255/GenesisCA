@@ -664,6 +664,70 @@ check('runtime: uploadAgentSoA seeds the agent colour buffer [invisible-agents b
     /useEffect\(\(\) => \{ updateAgentUiSync\(\); \}, \[[^\]]*agentBrushMode, inspectMode, brushTarget, updateAgentUiSync\]\)/.test(sv));
 }
 
+// B15 (THE DISC EDGE COVERAGE, user-reported: "anti-aliasing should be offered on
+// agents models as well ... the contours of the agents appear serrated").
+//
+// The 2D agent disc FS used to end its silhouette with a bare `if (d > 1.0)
+// { discard; }` — a BINARY edge with no coverage. Measured on a real device with
+// the shipped shader (radius 12): 0 partial-coverage pixels and 0 distinct partial
+// alphas, the centre scanline stepping 255 → 0 in one pixel; the CPU overlay path
+// (Canvas2D arc fill) produced 2084 partial pixels over 54 alpha levels on the same
+// app. THAT inconsistency is what users saw — an overlay model looked smooth and a
+// direct-render one (Particle Life, and every E2 composite model) looked jagged.
+//
+// After: 100 partial pixels / 30 alpha levels, with the coverage-weighted area
+// landing on pi*r^2 to within 0.02% (448 → 452.30 vs 452.39) — the ramp is
+// calibrated, not merely blurred — and the fully-opaque body BIT-IDENTICAL.
+//
+// ONE shader module feeds A1 (direct render), A2 (snapshot-fed) and the E2
+// composite, so all three inherit this. Every check below pins a line whose
+// absence restores a specific defect.
+{
+  const rt = readSrc('simulator/engine/agentWebgpuRuntime.ts');
+  const wgsl = blockAfter(rt, /function agentRenderWGSL\(/);
+
+  // The derivative MUST be taken before any discard — WGSL requires derivative
+  // builtins in uniform control flow.
+  check('fsMain takes fwidth(d) BEFORE any discard [disc-aa]',
+    /let pxw: f32 = max\(fwidth\(d\), 1\.0e-5\);[\s\S]{0,200}?let cov: f32 = clamp\(\(1\.0 - d\) \/ pxw \+ 0\.5, 0\.0, 1\.0\);[\s\S]{0,80}?if \(cov <= 0\.0\) \{ discard; \}/.test(wgsl));
+  // The coverage must reach the OUTPUT — folding it into alpha only would leave
+  // the premultiplied colour over-bright at the rim (a bright fringe).
+  check('the coverage folds into alpha AND the premultiplied rgb [disc-aa]',
+    /let a: f32 = in\.col\.a \* cov;/.test(wgsl)
+    && /return vec4<f32>\(rgb \* a, a\);/.test(wgsl));
+  // The old hard step must be GONE from the core FS (fsGlow keeps its own discard:
+  // its falloff already reaches zero at d == 1, so it was never aliased).
+  const fsMain = wgsl.slice(wgsl.indexOf('fn fsMain'), wgsl.indexOf('fn fsGlow'));
+  check('fsMain no longer ends the silhouette with a bare hard discard [disc-aa]',
+    !/if \(d > 1\.0\) \{ discard; \}/.test(fsMain));
+
+  // The quad CIRCUMSCRIBES the disc, so the two halves of the pad are a PAIR:
+  // padding without the uv rescale shrinks the drawn disc; rescaling without the
+  // pad clips the outer half of the ramp at the four tangent points (four notches).
+  check('the quad carries a one-pixel AA pad [disc-aa]',
+    /let padded: f32 = half \+ 1\.0;/.test(wgsl)
+    && /corner\.x \* padded/.test(wgsl) && /corner\.y \* padded/.test(wgsl));
+  check('uv is rescaled so d == 1 still marks the drawn radius [disc-aa]',
+    /out\.uv = corner \* \(padded \/ half\);/.test(wgsl));
+  check('out.radPx stays the UNPADDED radius (the outline band must not move) [disc-aa]',
+    /out\.radPx = half;/.test(wgsl) && !/out\.radPx = padded/.test(wgsl));
+  check('the pad divisor cannot be zero [disc-aa]',
+    /var half: f32 = max\(0\.001, coreR\);/.test(wgsl));
+
+  // The outline band is a second hard step inside the body; the CPU overlay draws
+  // it as an antialiased stroke(), so it is feathered with the SAME derivative.
+  check('the outline band is feathered with the same derivative [disc-aa]',
+    /let t: f32 = clamp\(\(d - \(1\.0 - rim\)\) \/ pxw \+ 0\.5, 0\.0, 1\.0\);/.test(wgsl)
+    && /rgb = rgb \* mix\(1\.0, 0\.60, t\);/.test(wgsl));
+
+  // ONE module builder → A1/A2 and E2 cannot drift apart on the edge policy.
+  const disc = blockAfter(rt, /async function buildAgentDiscPipelines\(/);
+  check('one module feeds both disc pipelines [disc-aa]',
+    /createShaderModule\(\{ code: agentRenderWGSL\(rt\.layout\) \}\)/.test(disc));
+  check('the E2 composite builds its disc pipelines from that same builder [disc-aa]',
+    /await buildAgentDiscPipelines\(rt\)/.test(blockAfter(rt, /async function setupAgentCompositeRender\(/)));
+}
+
 // ---------------------------------------------------------------------------
 // TIER C — browser probes (printed; only reachable with a live GPUDevice)
 // ---------------------------------------------------------------------------

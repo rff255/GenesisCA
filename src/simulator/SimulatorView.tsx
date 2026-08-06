@@ -12842,19 +12842,23 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
               title="Toggle axes — marks the grid origin (cell 0,0) and the row/column growth directions (columns red → right, rows green → down)"
             >&#x22BE;</button>
           )}
-          {/* Smooth scaling (anti-aliasing) of the grid upscale. Shown only where
-              the MAIN THREAD does that upscale: 2D (3D already renders with MSAA)
-              + the model HAS a CA grid + not the E2 composite (whose grid layer is
-              drawn in the worker at display res with a NEAREST sampler). Hidden —
-              not disabled — in the paths that structurally can't honour it. */}
+          {/* Smooth scaling of the CELL-GRID upscale. Shown only where the MAIN
+              THREAD does that upscale: 2D (3D already renders with MSAA) + the
+              model HAS a CA grid + not the E2 composite (whose grid layer is drawn
+              in the worker at display res with a NEAREST sampler). Hidden — not
+              disabled — in the paths that structurally can't honour it.
+              NB it is deliberately GRID-only and there is no agent counterpart:
+              agent BODIES are antialiased unconditionally on every path (Canvas2D
+              coverage on the CPU overlay, fwidth edge coverage in the GPU disc
+              shader), so a toggle for them would have nothing to switch off. */}
           {!is3D && gridCellsOn && !compositeGridActive && (
             <button
               className={`${styles.zoomBtn} ${smoothScaling ? styles.zoomBtnActive : ''}`}
               onClick={() => { setSmoothScaling(v => !v); }}
               title={smoothScaling
-                ? 'Smooth scaling (anti-aliasing) ON — the grid is interpolated when zoomed in. Best for continuous fields; click to restore crisp cells.'
-                : 'Smooth scaling (anti-aliasing) — interpolate the grid instead of drawing hard-edged cells. Best for continuous-valued fields (reaction-diffusion, MNCA).'}
-              aria-label="Toggle smooth scaling (anti-aliasing)"
+                ? 'Smooth grid scaling ON — cells are interpolated when zoomed in. Best for continuous fields; click to restore crisp cells. (Agent bodies are always smooth.)'
+                : 'Smooth grid scaling — interpolate the cells instead of drawing hard-edged blocks. Best for continuous-valued fields (reaction-diffusion, MNCA). (Agent bodies are always smooth.)'}
+              aria-label="Toggle smooth grid scaling"
             >&#x224B;</button>
           )}
           {/* Infinity canvas — tiling is a 2D draw-path concept (the voxel renderer
