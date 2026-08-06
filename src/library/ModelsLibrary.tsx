@@ -153,11 +153,23 @@ function effectiveTags(e: LibraryEntry): EffTag[] {
   return [...synth, ...authored];
 }
 
+/** The chip class for an effective tag — SHARED by the card's meta block and
+ *  the hover popover's tags row, so the two renderings can never drift. */
+function tagChipClass(kind: TagKind, active: boolean, extra = ''): string {
+  const base = kind === 'dim3d'
+    ? `${styles.dimBadge} ${active ? styles.dimBadgeActive : ''}`
+    : kind === 'agents'
+      ? `${styles.agentBadge} ${active ? styles.agentBadgeActive : ''}`
+      : `${styles.tag} ${active ? styles.tagActive : ''}`;
+  return extra ? `${base} ${extra}` : base;
+}
+
 // ---------------------------------------------------------------------------
 // Hover preview popover: a two-pane panel — [title + description | thumbnail]
 // side by side, SAME size — centered horizontally on the card and placed just
 // ABOVE it (flips below when there's no room). Models without a thumbnail get
-// the description pane alone.
+// the description pane alone. A full-width TAGS footer runs under both panes
+// (see the popover render for why it has to exist).
 // ---------------------------------------------------------------------------
 const POPOVER_GAP = 8;
 
@@ -172,6 +184,9 @@ interface HoverState {
   name: string;
   description: string;
   thumbnail?: string;
+  /** The SAME effective tags the card renders (`effTagsById`), so the popover's
+   *  chips and the card's chips can never disagree. */
+  tags: EffTag[];
   cardRect: CardRect;
 }
 
@@ -279,6 +294,10 @@ export function ModelsLibrary({ onLoadModel }: Props) {
   const [hover, setHover] = useState<HoverState | null>(null);
   const [popoverPos, setPopoverPos] = useState<{ top: number; left: number } | null>(null);
   const popoverRef = useRef<HTMLDivElement>(null);
+  /** The element of the currently-hovered card — the leave guard below needs it
+   *  to tell "the pointer moved between the card and its popover" (keep the
+   *  preview) from "the pointer left both" (drop it). */
+  const hoverCardElRef = useRef<HTMLElement | null>(null);
 
   // The popover is rendered first (invisible), measured, then positioned — the
   // only way to place a content-sized box exactly without guessing its size
@@ -394,7 +413,16 @@ export function ModelsLibrary({ onLoadModel }: Props) {
   };
 
   const handleCardEnter = (entry: LibraryEntry, el: HTMLElement) => {
+    // Already showing for this card — the pointer just came back from the
+    // popover (its tag chips take pointer events, so leaving one re-enters the
+    // card). Re-building the hover state here would needlessly re-measure.
+    if (hoveredId === entry.id) { hoverCardElRef.current = el; return; }
     setHoveredId(entry.id);
+    hoverCardElRef.current = el;
+    // NOTE the show-condition deliberately does NOT include tags: the popover's
+    // tags row exists because the popover COVERS the card's own chips, so a
+    // model with tags but neither description nor thumbnail gets no popover —
+    // and its card chips stay clickable exactly as before.
     if (!entry.thumbnail && !entry.description.trim()) { setHover(null); return; }
     const base = import.meta.env.BASE_URL ?? '/';
     const r = el.getBoundingClientRect();
@@ -403,13 +431,32 @@ export function ModelsLibrary({ onLoadModel }: Props) {
       name: entry.name,
       description: entry.description,
       thumbnail: entry.thumbnail ? `${base}models/${entry.thumbnail}` : undefined,
+      tags: effTagsById.get(entry.id) ?? [],
       cardRect: { top: r.top, bottom: r.bottom, left: r.left, right: r.right },
     });
   };
 
-  const handleCardLeave = () => {
+  /**
+   * Leave handler shared by the card AND the popover. The popover's tag chips
+   * are the ONE part of it that takes pointer events, so moving the pointer
+   * onto a chip fires the CARD's mouseleave (the chip is not in the card's DOM
+   * subtree) and moving off it fires the POPOVER's — clearing on either would
+   * unmount the popover, put the pointer back over the card, re-mount it, and
+   * flicker forever. So the preview survives any move BETWEEN the two, and
+   * drops only when the pointer leaves both.
+   *
+   * ⚠ Reads the NATIVE event's relatedTarget: React SYNTHESIZES enter/leave
+   * from mouseover/mouseout, and the `relatedTarget` it puts on the synthetic
+   * event is not always a DOM node (`contains` then throws). The native
+   * mouseout's relatedTarget is always an Element or null.
+   */
+  const handleCardLeave = (e: React.MouseEvent) => {
+    const related = e.nativeEvent.relatedTarget;
+    const node = related instanceof globalThis.Node ? related : null;
+    if (node && (popoverRef.current?.contains(node) || hoverCardElRef.current?.contains(node))) return;
     setHoveredId(null);
     setHover(null);
+    hoverCardElRef.current = null;
   };
 
   /** Toggle the category filter from a card's tag chip. */
@@ -442,22 +489,14 @@ export function ModelsLibrary({ onLoadModel }: Props) {
           are clickable and toggle the SAME category filter, and highlight when
           they're the active one — so a badge behaves exactly like a tag. */}
       <div className={styles.cardMeta}>
-        {(effTagsById.get(entry.id) ?? []).map(t => {
-          const active = prefs.tag === t.key;
-          const cls = t.kind === 'dim3d'
-            ? `${styles.dimBadge} ${active ? styles.dimBadgeActive : ''}`
-            : t.kind === 'agents'
-              ? `${styles.agentBadge} ${active ? styles.agentBadgeActive : ''}`
-              : `${styles.tag} ${active ? styles.tagActive : ''}`;
-          return (
-            <span
-              key={t.key}
-              className={cls}
-              title={`Filter by "${t.label}"`}
-              onClick={e => { e.stopPropagation(); toggleTagFilter(t.key); }}
-            >{t.label}</span>
-          );
-        })}
+        {(effTagsById.get(entry.id) ?? []).map(t => (
+          <span
+            key={t.key}
+            className={tagChipClass(t.kind, prefs.tag === t.key)}
+            title={`Filter by "${t.label}"`}
+            onClick={e => { e.stopPropagation(); toggleTagFilter(t.key); }}
+          >{t.label}</span>
+        ))}
         <span
           className={styles.gridSize}
           title={entry.createdDate ? `Created ${formatCreatedDate(entry.createdDate, true)}` : undefined}
@@ -583,10 +622,32 @@ export function ModelsLibrary({ onLoadModel }: Props) {
               ? { top: popoverPos.top, left: popoverPos.left }
               : { visibility: 'hidden' }
           }
+          onMouseLeave={handleCardLeave}
         >
-          <PopoverDescPane title={hover.name} text={hover.description} />
-          {hover.thumbnail && (
-            <ThumbMedia src={hover.thumbnail} className={styles.previewThumb} />
+          <div className={styles.previewPanes}>
+            <PopoverDescPane title={hover.name} text={hover.description} />
+            {hover.thumbnail && (
+              <ThumbMedia src={hover.thumbnail} className={styles.previewThumb} />
+            )}
+          </div>
+          {/* Tags footer. The popover sits ON the card, so it COVERS the card's
+              own (clickable) tag chips — without this row you can see a model's
+              tags while hovering but not click them. The chips are the ONE part
+              of the popover that takes pointer events (`.previewTag`); the row's
+              gaps and everything else stay `pointer-events: none`, so a click
+              anywhere else still falls through to the card and loads the model.
+              They toggle the SAME category filter as the card's chips. */}
+          {hover.tags.length > 0 && (
+            <div className={styles.previewTags}>
+              {hover.tags.map(t => (
+                <span
+                  key={t.key}
+                  className={tagChipClass(t.kind, prefs.tag === t.key, styles.previewTag)}
+                  title={`Filter by "${t.label}"`}
+                  onClick={e => { e.stopPropagation(); toggleTagFilter(t.key); }}
+                >{t.label}</span>
+              ))}
+            </div>
           )}
         </div>
       )}

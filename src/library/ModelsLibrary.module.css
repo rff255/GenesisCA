@@ -316,13 +316,15 @@
 
 /* Hover preview: TWO same-size panes side by side — [title + description]
  * on the left (auto-scrolls when too long for the pane) and the thumbnail on
- * the right — centered horizontally on the card and placed just ABOVE it
- * (flips below near the viewport top). Models without a thumbnail show the
- * description pane alone. `pointer-events: none` keeps the card's hover
- * intact if it ever overlaps near an edge. */
+ * the right — centered ON the card, with a full-width TAGS footer under them.
+ * Models without a thumbnail show the description pane alone.
+ * `pointer-events: none` keeps the card's hover + click intact underneath; the
+ * tag chips (.previewTag) are the ONE carve-out, since the popover covers the
+ * card's own chips. */
 .previewPopover {
   position: fixed;
   display: flex;
+  flex-direction: column;
   align-items: stretch;
   max-width: calc(100vw - 16px);
   max-height: calc(100vh - 16px);
@@ -333,6 +335,32 @@
   z-index: 1000;
   pointer-events: none;
   overflow: hidden;
+}
+
+/* The two panes, side by side (the popover itself is now a column so the tags
+ * footer can span both). */
+.previewPanes {
+  display: flex;
+  align-items: stretch;
+}
+
+/* Tags footer — the same chips the card's meta block renders, so the model's
+ * categories stay clickable while the popover covers the card. The row itself
+ * stays click-through; only the chips take pointer events. */
+.previewTags {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
+  padding: var(--space-4) var(--space-8);
+  border-top: 1px solid var(--color-border-muted);
+  background: var(--color-overlay-row);
+  pointer-events: none;
+}
+
+.previewTag {
+  pointer-events: auto;
+  cursor: pointer;
 }
 
 /* Both panes are the SAME fixed size so the pair reads as one balanced panel

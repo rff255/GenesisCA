@@ -3638,8 +3638,11 @@ export function HelpView() {
             hovering reveals it anyway). Hovering opens a <strong>preview panel centered right
             on the card</strong>: the title + full description on the left (when too long for
             the panel it <strong>slowly auto-scrolls</strong>, holds, and loops) and the model's
-            thumbnail on the right, side by side (an animated GIF/WebP or a WebM clip plays)
-            &mdash; clicks pass straight through it, so the card stays clickable. A model's mode shows as a coloured <strong>badge</strong> &mdash;
+            thumbnail on the right, side by side (an animated GIF/WebP or a WebM clip plays),
+            with the model&apos;s <strong>tags along the bottom</strong> &mdash; clicks pass straight
+            through the panel, so the card underneath stays clickable, and those tag chips are the
+            one exception: they take the click and filter by that tag, exactly like the chips on the
+            card the panel is covering. A model's mode shows as a coloured <strong>badge</strong> &mdash;
             <strong> 3D</strong> (amber) and <strong>Agents</strong> (green) &mdash; and each badge
             behaves like a tag: click it to filter, and it also appears in the category dropdown
             and as a grouping section (2D and CA-Grid, the defaults, stay unbadged). 3D models
