@@ -37,7 +37,8 @@ export interface ModelArchetype {
  *
  *  The runbook suggested `AGENT_PRESETS.socialGraph` ("or the closest bonds-data
  *  profile"), but the audit says otherwise: both shipped graph-rewriting models
- *  (`Cubic GRA`, `SDCA — Couplers and Decouplers`) run
+ *  (`SDCA — Couplers and Decouplers`, and `Cubic GRA` before it was retired
+ *  from the library) run
  *  `motion:force · body · collision:soft · bonds:physics · charge:ON · sensing`,
  *  and NOT `division` (their triangle split is Create Agent + Rewire, not Divide
  *  Agent). `socialGraph` is `static / no body / bonds:data / charge:off`, i.e. it

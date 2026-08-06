@@ -244,8 +244,8 @@ const AUTO_AGENT_CASES = [
   ['Boids - Flocking.gcaproj', 'exact', 'wasm', 'declares Exact — the GPU agent RNG cannot be seeded'],
   ['Ant Necrophoresis.gcaproj', 'statistical', 'wasm', 'the GPU rejects it (cross-agent write to a wired id)'],
   ['Ant Necrophoresis.gcaproj', 'exact', 'wasm', 'Exact keeps it on the CPU too'],
-  ['Cubic GRA.gcaproj', 'exact', 'wasm', 'declares Exact — the Overseer sweep reproduces on the CPU'],
-  ['Cubic GRA.gcaproj', 'statistical', 'webgpu', 'declaring Statistical releases the GPU (the old special case forced WASM)'],
+  ['SDCA - Couplers and Decouplers.gcaproj', 'exact', 'wasm', 'declares Exact — a CPU engine is the only one that pins a run'],
+  ['SDCA - Couplers and Decouplers.gcaproj', 'statistical', 'webgpu', 'declaring Statistical releases the GPU (the old Overseer special case forced WASM)'],
 ];
 for (const [f, contract, expect, why] of AUTO_AGENT_CASES) {
   const rawCase = loadOptional(f); if (!rawCase) continue;
@@ -333,7 +333,7 @@ for (const [f, contract, expect, why] of AUTO_AGENT_CASES) {
 // 3 — save → load round-trip, and an OLD-shape file
 // ---------------------------------------------------------------------------
 console.log('\n=== 3. Round-trip + old-shape files ===');
-for (const f of ['Game Of Life.gcaproj', 'Amphiphile.gcaproj', 'Boids - Flocking.gcaproj', 'Cubic GRA.gcaproj']) {
+for (const f of ['Game Of Life.gcaproj', 'Amphiphile.gcaproj', 'Boids - Flocking.gcaproj', 'SDCA - Couplers and Decouplers.gcaproj']) {
   const rawRt = loadOptional(f); if (!rawRt) continue;
   const migrated = migrateForHarness(rawRt);
   const reloaded = migrateForHarness(JSON.parse(serializeModel(migrated)));
@@ -459,8 +459,18 @@ for (const f of files) {
   eq(bad.text, 'BOOM', 'methodology: the violation text is shown verbatim');
 }
 
-// Serialization: the contract round-trips, and an old-shape file re-infers it.
-for (const f of ['Boids - Flocking.gcaproj', 'Cubic GRA.gcaproj', 'Game Of Life.gcaproj']) {
+// Serialization: the contract round-trips, and an old-shape file falls back to
+// the INFERENCE.
+//
+// NB the DECLARED contract and the inference are not always equal, and that is
+// legitimate rather than a defect: the inference records what a file already
+// DOES (statistical iff the resolved agent engine is WebGPU), while an author
+// may pin an EXPLICIT engine and still declare the weaker guarantee — the
+// shipped `Boids - Flocking` declares Statistical while pinning its agents to
+// WASM. C5 makes such a combination a NOTE, never an error (a CPU engine
+// honours Statistical trivially), so the strip case is asserted against the
+// inference and the DECLARED value is what the round-trip above must preserve.
+for (const f of ['Boids - Flocking.gcaproj', 'SDCA - Couplers and Decouplers.gcaproj', 'Game Of Life.gcaproj']) {
   const rawC = loadOptional(f); if (!rawC) continue;
   const m = migrateForHarness(rawC);
   const saved = JSON.parse(serializeModel(m));
@@ -468,12 +478,13 @@ for (const f of ['Boids - Flocking.gcaproj', 'Cubic GRA.gcaproj', 'Game Of Life.
   eq(reproducibilityOf(migrateForHarness(saved)), reproducibilityOf(m), `${f}: it survives save→load`);
   const oldShape = JSON.parse(serializeModel(m));
   delete oldShape.properties.reproducibility;
-  eq(reproducibilityOf(migrateForHarness(oldShape)), reproducibilityOf(m),
-    `${f}: an old-shape file re-infers the SAME contract`);
+  const inferred = inferContract(resolveEngines(m).agents?.resolved ?? 'js');
+  eq(reproducibilityOf(migrateForHarness(oldShape)), inferred,
+    `${f}: an old-shape file falls back to the inference`);
 }
 // A user's explicit choice is never re-inferred away.
 {
-  const m = migrateForHarness(load('Boids - Flocking.gcaproj'));   // infers statistical
+  const m = migrateForHarness(load('Particle Life.gcaproj'));   // infers statistical
   m.properties.reproducibility = 'exact';
   eq(reproducibilityOf(migrateReproducibilityField(m)), 'exact',
     'a declared contract is preserved, never re-inferred');
@@ -525,8 +536,13 @@ control('a constant contract inference', () => {
 });
 // (f) C5 — COHERENCE: a contract that leaked into the EXPLICIT branch would move
 //     a shipped model's engine. This is the check that guards the whole phase.
+//     THE SAMPLE MUST ACTUALLY PIN WEBGPU AGENTS, or the wrong expectation holds
+//     by accident and the control silently stops controlling (which is exactly
+//     what happened when `Boids - Flocking` was re-pinned to WASM).
+eq(migrateForHarness(load('Particle Life.gcaproj')).centerBased?.agentTarget, 'webgpu',
+  'control (f) premise: the sample pins WebGPU agents');
 control('the contract leaking into an explicit engine choice', () => {
-  const m = migrateForHarness(load('Boids - Flocking.gcaproj'));   // explicit webgpu agents
+  const m = migrateForHarness(load('Particle Life.gcaproj'));   // explicit webgpu agents
   m.properties.reproducibility = 'exact';
   eq(resolveEngines(m).agents?.resolved, 'wasm', 'control: explicit webgpu demoted by the contract');
 });

@@ -1681,8 +1681,8 @@ export function HelpView() {
             division is serial data-structure surgery that happens on the CPU between generations,
             so each generation pays a round-trip instead of a whole frame running in one submit. At
             small populations WebAssembly is often faster for exactly that reason. Separately,
-            <em> Cubic GRA</em> ships on WebAssembly because its Overseer sweep needs seed
-            reproducibility (class R) &mdash; a different fact that used to look like the same one,
+            <em> Graph Metrics &mdash; Growth Sweep</em> ships on WebAssembly because its
+            Overseer sweep needs seed reproducibility (class R) &mdash; a different fact that used to look like the same one,
             and one you now declare directly (next section).
           </p>
 
@@ -1931,8 +1931,8 @@ export function HelpView() {
             path that made it so (e.g.{' '}
             <em>Get Nearby Agents &rarr; For Each In Array &rarr; Form Bond &middot; targetAgent</em>).
             Among the shipped samples, <em>Boids</em> and <em>Particle Life</em> are presentation
-            (their sensing feeds only forces), while <em>Cubic GRA</em> and <em>SDCA</em> are not:
-            both bond agents chosen by a proximity query. The check is deliberately conservative
+            (their sensing feeds only forces), while <em>SDCA</em> is not: it bonds agents chosen
+            by a proximity query. The check is deliberately conservative
             &mdash; anything it cannot prove clean it treats as part of the rule.
           </p>
 
@@ -2024,7 +2024,7 @@ export function HelpView() {
             <strong>Strength is a cheaper lever than reach &mdash; try it before widening the
             cutoff.</strong> The hash bin edge <em>is</em> the cutoff, so doubling the reach
             quadruples the candidates every agent examines, while making <em>k</em> more negative
-            costs nothing at all. Measured on the shipped <strong>Cubic GRA</strong>: a
+            costs nothing at all. Measured on a growing bonded graph: a
             4&times;-rest cutoff at <em>k</em> = &minus;10 gives the same layout quality as an
             8&times;-rest cutoff at the default &minus;3, and runs <strong>2.6&times; faster</strong>.
             If a structure still looks cramped, reach for the strength first.
@@ -2100,7 +2100,8 @@ export function HelpView() {
             Overseer budget). A Periodic Step instead slows the <em>rule</em> down, which is what
             you want when the rule itself should tick more slowly than the physics. Relaxation
             passes per rule step = <em>period</em> &times; <em>layout iterations</em>; the shipped{' '}
-            <strong>Cubic GRA</strong> uses a period of 2, and <strong>SDCA</strong> &mdash; whose
+            <strong>Growing Graphs</strong> hangs its whole rule off a Periodic Step, and{' '}
+            <strong>SDCA</strong> &mdash; whose
             population is fixed, so there is no growth to outrun &mdash; uses 2 layout iterations
             instead.
           </p>
@@ -2323,14 +2324,13 @@ export function HelpView() {
             you can watch one and paint into it.
           </p>
           <p className={styles.p}>
-            Two library models are the worked examples. <strong>Cubic GRA</strong> keeps a
-            3-regular graph 3-regular while it grows: a &ldquo;triangle split&rdquo; turns one node
-            into three, and the whole rewrite lands in a single generation so the graph is
-            <em> never</em> caught in a broken intermediate state. Its rule is two eight-cell tables
-            you can re-roll, and its Overseer tab sweeps twelve random rules and reports which grow,
-            die or blow up. Its rule runs on <em>every second</em> generation (a Periodic Step),
-            so the generations in between are pure layout relaxation &mdash; which is why the
-            growing graph stays readable instead of collapsing into a blob.{' '}
+            Two library models are the worked examples. <strong>Growing Graphs</strong> keeps a
+            3-regular graph 3-regular while it grows: a split turns one node into three, and the
+            whole rewrite lands in a single generation so the graph is <em>never</em> caught in a
+            broken intermediate state. Its rule is two eight-cell tables you can re-roll, and it
+            runs on a <em>Periodic Step</em>, so the generations in between are pure layout
+            relaxation &mdash; which is why the growing graph stays readable instead of collapsing
+            into a blob.{' '}
             <strong>SDCA &mdash; Couplers and Decouplers</strong> is the classic
             structurally-dynamic automaton: node values evolve over the links while the links
             themselves form and break according to those values, with a <em>hysteresis band</em>
@@ -2338,7 +2338,7 @@ export function HelpView() {
             either one and read its Instructions pill.
           </p>
           <p className={styles.p}>
-            <strong>Growing Graphs</strong> is the third, and the one to open first if you want to
+            <strong>Growing Graphs</strong> is also the one to open first if you want to
             see how small a graph-rewriting automaton can be. It is a port of Alex Mordvintsev&rsquo;s
             demo of Paul Cousin&rsquo;s <em>binary cubic</em> automata: every node holds{' '}
             <em>one bit</em> and exactly three neighbours, and a single <em>16-bit integer</em>{' '}

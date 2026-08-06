@@ -61,7 +61,6 @@ const AUDIT = {
   'Boids - Flocking':                   { presentational: true,  via: [],                        note: 'proximity + offsets + velocity → local variables → Apply Force only' },
   'Boids - Hemifield Vision':           { presentational: true,  via: [],                        note: 'FOV + hemifield counts → local variables → Apply Force only' },
   'Chemotaxis - Aggregation':           { presentational: false, via: ['location'],              note: 'Secrete To Field deposits into the cell field at the agent position' },
-  'Cubic GRA':                          { presentational: false, via: ['dataflow'],              note: 'K4 bootstrap: Get Nearby Agents → For Each → Form Bond.targetAgent (geometry → topology)' },
   'Game of Life on Agents':             { presentational: false, via: ['dataflow'],              note: 'Get Nearby Agents → Get Agents Attribute → Aggregate → Set Attribute "alive"' },
   'Graph Metrics - Growth Sweep':       { presentational: false, via: ['engine-config'],         note: 'Divide Agent partition = tension' },
   'Growing Graphs':                     { presentational: true,  via: [],                        note: 'the rule is purely topological (census over BONDED + handle-indexed bootstrap tables); geometry only reaches Create Agent x/y, which is a geometry-only sink' },
@@ -359,8 +358,10 @@ async function runSuite(M, { quiet = false, showWitness = false } = {}) {
   // === 4. IN-HARNESS NEGATIVE CONTROLS ====================================
   // Deliberately wrong expectations that MUST be caught by the same helpers.
   const controls = [
-    ['Cubic GRA is presentational', () => {
-      const model = M.migrateForHarness(JSON.parse(readFileSync(join(modelsDir, 'Cubic GRA.gcaproj'), 'utf8')));
+    // (this control used to name `Cubic GRA`, retired from the shipped library;
+    //  SDCA is the same shape — a dataflow-tainted proximity→Form Bond model)
+    ['SDCA is presentational', () => {
+      const model = M.migrateForHarness(JSON.parse(readFileSync(join(modelsDir, 'SDCA - Couplers and Decouplers.gcaproj'), 'utf8')));
       return M.analyzeGeometryTaint(model).presentational === true;
     }],
     ['Boids is tainted', () => {

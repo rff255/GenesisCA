@@ -366,54 +366,17 @@ for (const c of [{ is3d: false, cutoff: 20 }, { is3d: false, cutoff: 40 }, { is3
 }
 
 // ---------------------------------------------------------------------------
-// L3 — THE SHIPPED MODEL, at its OWN parameters. The sweep above answers "what
-// can this force do"; this answers "does the model the user opens actually lay
-// out". It reads `Cubic GRA.gcaproj` and takes EVERYTHING from it — world size,
-// torus, charge strength and cutoff, radius, rest length, stiffness, and the
-// relaxation-per-rewrite ratio (Periodic Step period x layoutIterations) — so a
-// retune that regresses the layout fails here by metric, not by eye.
-//
-// The split fraction is the model's own Split Rate: only an agent whose priority
-// is BOTH below Split Rate and the strict local minimum among its three
-// neighbours may rewrite, and for a small rate that is ~Split Rate of the
-// population per rule step.
+// L3's SHIPPED-MODEL SECTION IS RETIRED. It grew `Cubic GRA` at its own
+// parameters and gated the result, but that model was removed from the library
+// (commit 9c3807d) and the probe's growth model IS its triangle split, so the
+// section cannot simply be pointed at another sample: the thresholds below were
+// calibrated against Cubic GRA's rest length, radius and split rate (measured on
+// `Growing Graphs`, whose split and scale differ, the same gates read 27.6%
+// overlap / 0.50 nnb-per-bond and would fail for reasons that are not defects).
+// `scripts/gen-cubic-gra.mjs` regenerates the model if the measurement is wanted
+// again. The parameter SWEEP above and the C10 benchmark gate below — the parts
+// that measure the FORCE rather than one artefact — are unaffected.
 // ---------------------------------------------------------------------------
-const shipped = JSON.parse(readFileSync(join(ROOT, 'public', 'models', 'Cubic GRA.gcaproj'), 'utf8'));
-const scb = shipped.centerBased;
-const period = Math.max(1, Number(
-  shipped.agentGraphNodes.find(n => n.data.nodeType === 'periodicStep')?.data.config?.period ?? 1));
-const relaxPerRewrite = period * layoutIterationsOf(scb);
-const splitRate = Number(shipped.attributes.find(a => a.id === 'splitRate')?.defaultValue) || 0.02;
-const SHIPPED_TARGET = 2000;
-
-const shippedRow = await grow({
-  label: 'SHIPPED Cubic GRA, own parameters',
-  target: SHIPPED_TARGET,
-  maxAgents: cbNum(scb, 'maxAgents'),
-  range: cbNum(scb, 'interactionRange'),
-  rest: cbNum(scb, 'bondRestLength'),
-  radius: cbNum(scb, 'defaultRadius'),
-  stiff: cbNum(scb, 'bondStiffness'),
-  neighbourQueryRadius: cbNum(scb, 'neighbourQueryRadius'),
-  world: cbNum(scb, 'worldWidth'),
-  torus: shipped.properties.boundaryTreatment === 'torus',
-  chargeOn: scb.agentCapabilities?.charge === 'on',
-  chargeStrength: cbNum(scb, 'chargeStrength'),
-  chargeMaxDist: cbNum(scb, 'chargeMaxDist'),
-  ticksPerSplitRound: relaxPerRewrite,
-  splitFrac: splitRate,
-  midpointNewborns: true,
-  // NO free settle: the gate must hold on the LIVE picture, mid-growth, which is
-  // the only state anyone actually looks at.
-  settleTicks: 0,
-});
-
-console.log(`\nTHE SHIPPED MODEL — grown to N ${SHIPPED_TARGET} at its own parameters`);
-console.log(`  world ${cbNum(scb, 'worldWidth')}${shipped.properties.boundaryTreatment === 'torus' ? ' torus' : ''}`
-  + `  charge ${scb.agentCapabilities?.charge === 'on' ? `k=${cbNum(scb, 'chargeStrength')} cutoff ${cbNum(scb, 'chargeMaxDist')} (${(cbNum(scb, 'chargeMaxDist') / cbNum(scb, 'bondRestLength')).toFixed(1)}x rest)` : 'OFF'}`
-  + `  period ${period} x layoutIterations ${layoutIterationsOf(scb)} = ${relaxPerRewrite} relaxation passes per rewrite`);
-console.log(`  N ${shippedRow.N}   bond/rest ${(shippedRow.bond / cbNum(scb, 'bondRestLength')).toFixed(2)}`
-  + `   nnb/bond ${shippedRow.ratio.toFixed(2)}   overlap ${shippedRow.overlapPct.toFixed(1)}%`);
 
 // ---------------------------------------------------------------------------
 // C10 / P11a - THE BENCHMARK GATE: GLOBAL (Barnes-Hut) charge vs the TUNED CUTOFF.
@@ -464,7 +427,7 @@ for (const N of [2500, 5000, 20000]) {
 
 // ---------------------------------------------------------------------------
 // THE GATE. The shipped (charge-off) row is the jammed baseline; the 8×-rest row
-// is the sweep's reference point; the shipped-model row is the product.
+// is the sweep's reference point (the shipped-model row was retired above).
 // ---------------------------------------------------------------------------
 const base = results[0], fix = results[2];
 let fail = 0;
@@ -474,12 +437,6 @@ gate('baseline (charge off) reproduces the jam', base.overlapPct > 90 && base.ra
   `overlap ${base.overlapPct.toFixed(1)}% (want >90), nnb/bond ${base.ratio.toFixed(2)} (want <0.2) — if this passes, the probe is no longer measuring the bug`);
 gate('charge at 8x rest opens the layout: overlap <= 1%', fix.overlapPct <= 1, `overlap ${fix.overlapPct.toFixed(1)}%`);
 gate('charge at 8x rest opens the layout: nnb/bond >= 0.6', fix.ratio >= 0.6, `nnb/bond ${fix.ratio.toFixed(2)}`);
-gate(`THE SHIPPED MODEL at N >= ${SHIPPED_TARGET}: overlap <= 1%`, shippedRow.overlapPct <= 1,
-  `overlap ${shippedRow.overlapPct.toFixed(1)}%`);
-gate(`THE SHIPPED MODEL at N >= ${SHIPPED_TARGET}: nnb/bond >= 0.6`, shippedRow.ratio >= 0.6,
-  `nnb/bond ${shippedRow.ratio.toFixed(2)}`);
-gate('the shipped model actually turned the charge on', scb.agentCapabilities?.charge === 'on',
-  'charge capability is off — the flagship would ship jammed again');
 // C10 - THE BENCHMARK GATE. Global must measurably beat the tuned cutoff on the
 // unfolding metrics at EVERY measured size, within a sane cost multiple. If this
 // ever fails, the honest answer is to stop recommending global - not to relax it.
@@ -494,9 +451,6 @@ for (const N of [2500, 5000, 20000]) {
   gate(`C10 N=${N}: global costs at most 3x the cutoff per tick`, costX <= 3,
     `x${costX.toFixed(2)} (${(g.ms / g.ticks).toFixed(2)} vs ${(c.ms / c.ticks).toFixed(2)} ms/tick)`);
 }
-gate('the shipped world holds the agent CAP at the settled spacing',
-  cbNum(scb, 'worldWidth') ** 2 >= cbNum(scb, 'maxAgents') * (cbNum(scb, 'bondRestLength') * 1.45) ** 2,
-  `world ${cbNum(scb, 'worldWidth')}^2 vs cap ${cbNum(scb, 'maxAgents')} x (${cbNum(scb, 'bondRestLength')} x 1.45)^2`);
 console.log(`\n${fail === 0 ? 'LAYOUT PROBE ✓' : `${fail} FAILED ✗`}`);
 rmSync(entryPath, { force: true }); rmSync(dir, { recursive: true, force: true });
 process.exit(fail === 0 ? 0 : 1);

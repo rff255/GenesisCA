@@ -410,12 +410,14 @@ const P = (f) => M.describeGenerationPipeline(loaded[f]);
   ok(byId(g)['cell.swap'].active, 'GoL: double-buffer swap active (synchronous)');
   ok(g.length <= 10, `GoL: short list (${g.length} phases)`);
 
-  // Cubic GRA — structural queue drain + a Periodic Step cadence.
-  const c = byId(P('Cubic GRA.gcaproj'));
-  ok(c['structural.drain'].active, 'Cubic GRA: bond-request queue drain ACTIVE');
-  ok(/\d+ requests per agent/.test(c['structural.drain'].detail), `Cubic GRA: drain states its depth (got "${c['structural.drain'].detail}")`);
-  ok(/cadence/.test(c['agent.behaviour'].detail), `Cubic GRA: behaviour notes its cadence (got "${c['agent.behaviour'].detail}")`);
-  ok(c['agent.charge'].active, 'Cubic GRA: long-range charge ACTIVE');
+  // Growing Graphs — structural queue drain + a Periodic Step cadence + charge.
+  // (This block used to pin `Cubic GRA`, which was retired from the shipped
+  //  library; Growing Graphs carries the same four properties.)
+  const c = byId(P('Growing Graphs.gcaproj'));
+  ok(c['structural.drain'].active, 'Growing Graphs: bond-request queue drain ACTIVE');
+  ok(/\d+ requests per agent/.test(c['structural.drain'].detail), `Growing Graphs: drain states its depth (got "${c['structural.drain'].detail}")`);
+  ok(/cadence/.test(c['agent.behaviour'].detail), `Growing Graphs: behaviour notes its cadence (got "${c['agent.behaviour'].detail}")`);
+  ok(c['agent.charge'].active, 'Growing Graphs: long-range charge ACTIVE');
 }
 
 // ---------------------------------------------------------------------------

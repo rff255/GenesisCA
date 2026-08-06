@@ -148,7 +148,9 @@ ok(withInds > 0, `${withInds} shipped models declare indicators`);
 console.log(`  note frequency/spatial-only models (no single-number indicator to read): ${unusable.length ? unusable.join(', ') : 'none'}`);
 // The regression itself: under the OLD standalone-only rule, the agent/GRA models had none.
 {
-  const gra = ['Cubic GRA', 'SDCA - Couplers and Decouplers', 'Graph Metrics - Growth Sweep']
+  // (`Cubic GRA` was retired from the shipped library — the filter below already
+  //  adapts, but the list should not name a model that no longer ships.)
+  const gra = ['SDCA - Couplers and Decouplers', 'Graph Metrics - Growth Sweep', 'Growing Graphs']
     .filter(n => files.includes(n + '.gcaproj'));
   let oldRuleEmpty = 0, newRuleOk = 0;
   for (const n of gra) {

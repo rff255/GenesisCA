@@ -22,9 +22,9 @@
 //   WebGPU AGENTS  per-AGENT PCG seeded ONCE at runtime creation; `setRngSeed`
 //                  never reaches it, so an Overseer sweep does not reproduce
 //                  across two presses of Run Experiment. This is exactly why the
-//                  library's documented sweep exceptions (Cubic GRA, Graph
-//                  Metrics) are AGENT-target exceptions, while the grid Overseer
-//                  sample ships on WebGPU.
+//                  library's documented sweep exception (Graph Metrics) is an
+//                  AGENT-target exception, while the grid Overseer sample ships
+//                  on WebGPU.
 //                  ⇒ CANNOT honour Exact.
 //
 // So: Exact keeps AGENTS on a CPU engine and leaves the GRID free.

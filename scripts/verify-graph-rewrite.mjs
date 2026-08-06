@@ -3184,11 +3184,10 @@ async function tierIMutants() {
 }
 
 // ===========================================================================
-// TIER K / L — P7: the two SHIPPED flagship samples, run through their OWN
-// compiled behaviour over a real agent store and a real structural drain.
+// TIER L — P7: a SHIPPED flagship sample, run through its OWN compiled
+// behaviour over a real agent store and a real structural drain.
 //
-//   K  `Cubic GRA`  — O6 (`min deg == max deg == 3` and `E == 3N/2`) at EVERY
-//      generation of the shipped model, negative-controlled TWO ways.
+//   (Tier K pinned `Cubic GRA`, retired from the library — see the note below.)
 //   L  `SDCA - Couplers and Decouplers` — O8 (the Nowotny-Requardt hysteresis
 //      band: no flicker inside the band; exactly invariant when the thresholds
 //      never fire), with a single-threshold control that DOES flicker.
@@ -3255,6 +3254,23 @@ function shippedRig(model, { seedSpecs = null } = {}) {
     if (a.type === 'lookupTable') { if (Array.isArray(a.tableData)) lookupTables[a.id] = Float64Array.from(a.tableData); }
     else modelAttrs[a.id] = Number(a.defaultValue) || 0;
   }
+  // RULE-READABLE INDICATORS. `Get Indicator` compiles to `_indicators[<slot>]`
+  // where the slot is the indicator's INDEX in `model.indicators`, and the worker
+  // mirrors every COMPUTED metric whose result is a single number into that slot
+  // once per generation (`refreshRuleReadableIndicators`). A rig that passed a
+  // zero-length buffer read `undefined` for such a node, so a rule gated on e.g.
+  // `nodes (N) <= cap` silently never fired — the shipped `Growing Graphs` node
+  // cap is exactly that shape. Mirror the worker instead.
+  const allIndicators = model.indicators ?? [];
+  const indicators = new Float64Array(Math.max(1, allIndicators.length));
+  const graphSlots = allIndicators
+    .map((ind, i) => ({ i, metric: ind.graphMetric ?? 'nodeCount', kind: ind.kind }))
+    .filter(x => x.kind === 'graph' && !isGraphFrequencyMetric(x.metric));
+  const refreshIndicators = () => {
+    if (!graphSlots.length) return;
+    const got = computeGraphMetrics(metricView(s), graphSlots.map(g => g.metric));
+    for (const g of graphSlots) if (typeof got[g.metric] === 'number') indicators[g.i] = got[g.metric];
+  };
   const rngState = new Uint32Array(1);
   const hashReserve = computeAgentMaxHashBins(W, H, D, cbNum(cfg, 'interactionRange', 1.5), r, cbNum(cfg, 'neighbourQueryRadius', 5));
   const binEdge = Math.max(1e-3, cbNum(cfg, 'interactionRange', 1.5) * 2 * r, cbNum(cfg, 'neighbourQueryRadius', 5));
@@ -3263,7 +3279,7 @@ function shippedRig(model, { seedSpecs = null } = {}) {
   const staged = new Set();
   const ctx = {
     hash: null, emptyI32: new Int32Array(0), modelAttrs, viewer: '',
-    indicators: new Float64Array(0), rngState, stopFlag: new Uint32Array(1),
+    indicators, rngState, stopFlag: new Uint32Array(1),
     glyphCodes: new Uint32Array(1), glyphColors: new Uint32Array(1), lookupTables,
     width: W, height: H, total: 0, torus: model.properties.boundaryTreatment === 'torus',
     fieldArray: () => undefined, seedBase: 0, generation: 0,
@@ -3311,6 +3327,7 @@ function shippedRig(model, { seedSpecs = null } = {}) {
       // sync mode: the Init Event wrote the WRITE buffer; commit it (worker parity).
       if (syncAttrs) for (const sp of s.attrSpecs) s.attrRead[sp.id].set(s.attrWrite[sp.id]);
     }
+    refreshIndicators();
   };
 
   /** One generation. Returns { overflow, queued } — `queued` is the set of agents
@@ -3334,63 +3351,19 @@ function shippedRig(model, { seedSpecs = null } = {}) {
     }
     const overflow = drainAgentBondRequests(s, 1);
     ctx.generation++;   // bump at the END of the step, like the worker
+    refreshIndicators();   // the worker refreshes at the generation tail
     return { overflow, queued };
   };
 
   return { model, store: s, step, reset, modelAttrs, compiled: res };
 }
-
-/** Are any two members of `ids` bonded to each other in `g`? (The independent-set
- *  property the Cubic GRA's priority gate exists to guarantee.) */
-function adjacentPairIn(g, ids) {
-  const set = new Set(ids);
-  for (const i of ids) {
-    for (let k = 0; k < g.bondCount[i]; k++) {
-      const p = g.bondPartner[i * g.maxBonds + k];
-      if (set.has(p)) return `${i} and ${p}`;
-    }
-  }
-  return null;
-}
-
-/** Run the shipped Cubic GRA for `gens` generations, checking O6 + I1–I5 after
- *  EVERY one. Returns a report instead of asserting, so the negative controls can
- *  reuse it and demand a FAILURE. */
-function runCubic(model, gens, { checkIndependent = true, splitRate = null } = {}) {
-  const rig = shippedRig(model);
-  rig.reset();
-  if (splitRate !== null) rig.modelAttrs.splitRate = splitRate;
-  let bad = null, splits = 0, maxQueued = 0, adjacentSeen = null;
-  let prevN = rig.store.liveCount;
-  for (let gen = 1; gen <= gens && !bad; gen++) {
-    // A SNAPSHOT, not a view: `decodeAgentGraph` hands back live typed arrays, so
-    // reading it after the drain would describe the POST-step graph and the
-    // independent-set check would compare the wrong adjacency.
-    const live = decodeAgentGraph(rig.store);
-    const preGraph = {
-      highWater: live.highWater, maxBonds: live.maxBonds,
-      alive: live.alive.slice(), bondCount: live.bondCount.slice(), bondPartner: live.bondPartner.slice(),
-    };
-    const { overflow, queued } = rig.step();
-    if (overflow) { bad = `gen ${gen}: request queue OVERFLOW`; break; }
-    if (checkIndependent && queued.size > 1) {
-      const adj = adjacentPairIn(preGraph, [...queued]);
-      if (adj && !adjacentSeen) adjacentSeen = `gen ${gen}: agents ${adj} both raised requests`;
-    }
-    maxQueued = Math.max(maxQueued, queued.size);
-    const g = decodeAgentGraph(rig.store);
-    const inv = checkHandshake(g) ?? checkNoDangling(g) ?? checkCapacity(g) ?? checkBondSymmetry(g);
-    if (inv) { bad = `gen ${gen}: ${inv}`; break; }
-    const reg = checkDegreeRegular(g, 3);
-    if (reg) { bad = `gen ${gen}: O6 — ${reg}`; break; }
-    const E = edgeSet(g).size, N = rig.store.liveCount;
-    if (E !== 3 * N / 2) { bad = `gen ${gen}: E=${E} != 3N/2 (N=${N})`; break; }
-    if (N > prevN) splits += (N - prevN) / 2;
-    prevN = N;
-  }
-  return { bad, splits, N: rig.store.liveCount, E: edgeSet(decodeAgentGraph(rig.store)).size, maxQueued, adjacentSeen, rig };
-}
-
+/* TIER K RETIRED — it pinned the shipped `Cubic GRA`, which the author removed
+ * from the library (commit 9c3807d). Its coverage survives elsewhere: Tier J's
+ * triangle-split gate asserts O6 + I1-I4 after EVERY one of 60 synthetic splits
+ * (with the no-Form-Between negative control that proves the check is real), and
+ * Tier M asserts O6 + I1-I4 at every generation of the SHIPPED `Growing Graphs`
+ * across eight published rules. `scripts/gen-cubic-gra.mjs` still regenerates the
+ * model if it is ever restored. */
 /** Structural surgery on a loaded model, for the negative controls. */
 const cloneModel = (m) => migrateForHarness(JSON.parse(JSON.stringify(m)));
 const findNode = (m, pred) => m.agentGraphNodes.find(pred);
@@ -3399,143 +3372,6 @@ function dropNode(m, id) {
   m.agentGraphEdges = m.agentGraphEdges.filter(e => e.source !== id && e.target !== id);
 }
 
-function tierK() {
-  section('TIER K — P7: the SHIPPED `Cubic GRA` — O6 at every generation');
-
-  const model = loadShipped('Cubic GRA');
-  // L3 — the rule now hangs off a Periodic Step, so a GENERATION is no longer a
-  // RULE STEP. Read the period off the shipped model and scale every generation
-  // budget by it, so this tier keeps exercising the SAME number of rewrites no
-  // matter how the sample's cadence is retuned (and a future period change cannot
-  // silently weaken the headline check into a shorter run).
-  const PERIOD = Math.max(1, Number(
-    model.agentGraphNodes.find(x => x.data.nodeType === 'periodicStep')?.data.config?.period ?? 1));
-  const RULE_STEPS = 220;
-  const GENS = RULE_STEPS * PERIOD;
-
-  // --- 0. the shipped artefact's shape ------------------------------------
-  {
-    ok(model.centerBased.maxBonds === 3,
-      'the shipped model runs at a TIGHT maxBonds 3 (nothing may transiently exceed cubic degree)',
-      String(model.centerBased.maxBonds));
-    ok(bondReqSlotsForModel(model) >= 6,
-      'the request queue reserves at least the split\'s 5 ops + the overflow bucket',
-      String(bondReqSlotsForModel(model)));
-    ok(model.centerBased.seedPattern === 'compact',
-      'the seed pattern is COMPACT (scatter uses Math.random and would not reproduce — P6)');
-    ok(model.centerBased.agentUpdateMode === 'sync',
-      'agent attributes are SYNCHRONOUS — every node reads the same generation, which is what makes the priority gate an independent set');
-    const verbs = model.attributes.find(a => a.id === 'ruleVerb');
-    const rv = resolveAxes(verbs, model);
-    ok(verbs.valueType === 'tag' && rv.dims.length === 2 && rv.total === 8,
-      'the verb rule is a TAG-valued 2-axis table of 8 cells', `${verbs.valueType} dims ${rv.dims}`);
-    ok(rv.axes[0].labels.join(',') === 'Dormant,Active',
-      'axis 0 resolves against the AGENT tag attribute (Dormant/Active)', rv.axes[0].labels.join(','));
-    ok(model.agentGraphNodes.some(n => n.data.nodeType === 'switch'),
-      'the verb reaches a Switch (the census -> table -> Switch -> verb idiom)');
-    ok(model.agentGraphNodes.filter(n => n.data.nodeType === 'formBondBetween').length === 3
-      && model.agentGraphNodes.filter(n => n.data.nodeType === 'rewireBond').length === 2,
-      'the split is expressed as 2 Rewire Bond + 3 Form Bond Between');
-  }
-
-  // --- 1. all three agent targets accept + compile the shipped graph -------
-  {
-    ok(isAgentGraphWasmSupported(model), 'the WASM agent gate accepts the shipped Cubic GRA');
-    ok(isAgentGraphWebGPUSupported(model), 'the WebGPU agent gate accepts the shipped Cubic GRA');
-    const w = compileAgentGraphWasmForModel(model);
-    ok(!w.error && w.bytes.length > 0, 'it compiles on the WASM agent target', String(w.error));
-    const g = compileAgentGraphWebGPUForModel(model);
-    ok(!g.error && (g.shaderCode || '').length > 0, 'it compiles on the WebGPU agent target', String(g.error));
-    for (const n of model.agentGraphNodes) {
-      const iss = detectMissingConfig(n.data.nodeType, n.data.config ?? {}, model);
-      if (iss && iss.length) { ok(false, `node ${n.data.nodeType} validates clean`, iss.join('; ')); return; }
-    }
-    ok(true, 'every node in the shipped agent graph validates clean');
-  }
-
-  // --- 2. THE HEADLINE — O6 over >= 220 generations ------------------------
-  const run = runCubic(model, GENS);
-  ok(run.bad === null,
-    `THE MILESTONE'S HEADLINE: O6 (min deg == max deg == 3 and E == 3N/2) holds at EVERY one of ${GENS} generations of the SHIPPED model`,
-    String(run.bad));
-  ok(run.splits >= 50,
-    `the run is not vacuous — ${run.splits} triangle splits actually happened over ${RULE_STEPS} rule steps (N ${4} -> ${run.N})`,
-    `${run.splits} splits`);
-  ok(run.E === 3 * run.N / 2, `the final graph is cubic: N=${run.N}, E=${run.E} == 3N/2`);
-  ok(run.adjacentSeen === null,
-    'the priority gate really is an INDEPENDENT SET — no two ADJACENT agents ever raised structural requests in the same generation',
-    String(run.adjacentSeen));
-  ok(run.maxQueued > 1, `several agents rewrite per generation at peak (max ${run.maxQueued}) — the gate is a set, not a singleton`);
-  // I5, observably: EVERY split applied WHOLE. A half-applied one would put N and
-  // E off the closed form even while the graph stayed internally consistent.
-  ok(run.N === 4 + 2 * run.splits && run.E === 6 + 3 * run.splits,
-    `I5: every split applied WHOLE — N = 4 + 2t and E = 6 + 3t exactly (t=${run.splits})`,
-    `N=${run.N} E=${run.E}`);
-
-  // --- 2b. >= 500 generations, at a slower Split Rate ----------------------
-  //
-  // The rule grows exponentially, so 500 generations at the shipped default would
-  // run past the model's population guard. Split Rate is a live slider, so lower it
-  // and run the long haul — same graph, same verbs, five hundred generations.
-  {
-    const long = runCubic(model, 500 * PERIOD, { splitRate: 0.004 });
-    ok(long.bad === null,
-      `O6 + I1-I5 hold at EVERY one of ${500 * PERIOD} generations (500 rule steps) at a slower Split Rate (N -> ${long.N}, ${long.splits} splits)`,
-      String(long.bad));
-    ok(long.splits > 20 && long.N === 4 + 2 * long.splits,
-      'the long run is not vacuous and still applies every split whole', `${long.splits} splits, N=${long.N}`);
-  }
-
-  // --- 3. NEGATIVE CONTROL A — drop the v2-v3 edge -------------------------
-  //
-  // P4b's decisive control, now on the SHIPPED graph: remove ONLY the Form Bond
-  // Between that closes the triangle. Everything P4's verbs alone could express
-  // survives, the graph stays perfectly CONSISTENT — and O6 breaks. That is what
-  // proves this tier tests O6 and not something weaker.
-  {
-    const m = cloneModel(model);
-    const mkIds = new Set(m.agentGraphNodes.filter(n => n.data.nodeType === 'createAgent').map(n => n.id));
-    const closing = findNode(m, n => {
-      if (n.data.nodeType !== 'formBondBetween') return false;
-      const ins = m.agentGraphEdges.filter(e => e.target === n.id && e.targetHandle.startsWith('input_value_agent'));
-      return ins.length === 2 && ins.every(e => mkIds.has(e.source));
-    });
-    ok(!!closing, 'control A setup: found the Form Bond Between whose BOTH endpoints are newborns');
-    if (closing) {
-      dropNode(m, closing.id);
-      const bad = runCubic(m, 40, { checkIndependent: false });
-      ok(bad.bad !== null && /O6|3N\/2/.test(bad.bad),
-        'NEG A: without the v2-v3 edge the split BREAKS O6 — the gate is not vacuous', String(bad.bad));
-      // ...and the graph is still internally consistent, so ONLY O6 failed.
-      const rig2 = shippedRig(m); rig2.reset();
-      for (let i = 0; i < 40; i++) rig2.step();
-      const g2 = decodeAgentGraph(rig2.store);
-      ok((checkHandshake(g2) ?? checkNoDangling(g2) ?? checkCapacity(g2) ?? checkBondSymmetry(g2)) === null,
-        'NEG A: I1-I4 stay GREEN under the control — only the degree invariant fails');
-    }
-  }
-
-  // --- 4. NEGATIVE CONTROL B — disable the independent-set gate ------------
-  //
-  // Force the Value Switch's condition to a constant true, so EVERY agent whose
-  // table says Split actually splits, adjacency notwithstanding. Adjacent
-  // rewriters collide (one re-points an edge the other's Rewire still needs) and
-  // O6 must break — which is what makes the priority gate load-bearing rather
-  // than decorative.
-  {
-    const m = cloneModel(model);
-    const vs = findNode(m, n => n.data.nodeType === 'valueSwitch');
-    ok(!!vs, 'control B setup: found the gate Value Switch');
-    if (vs) {
-      m.agentGraphEdges = m.agentGraphEdges.filter(e => !(e.target === vs.id && e.targetHandle === 'input_value_condition'));
-      vs.data.config = { ...vs.data.config, _port_condition: 'true' };
-      const r = runCubic(m, 60, { checkIndependent: false });
-      ok(r.bad !== null,
-        'NEG B: with the priority gate disabled, adjacent rewriters collide and the graph stops being cubic',
-        String(r.bad));
-    }
-  }
-}
 
 function tierL() {
   section('TIER L — P7: the SHIPPED `SDCA` — O8, the hysteresis band');
@@ -4157,15 +3993,24 @@ function tierM() {
     ok(JSON.stringify(ax.strides) === '[4,1]', `${id}: row-major stride => flat index == r = own*4 + onCount`, JSON.stringify(ax.strides));
   }
   {
-    const R = 2182;   // the shipped default ('quadratic')
+    // The default tables must DECODE to a 16-bit rule integer that the shipped
+    // preset catalogue actually contains. Pinning one specific number here would
+    // only pin whichever rule the author last chose as the default (it has been
+    // 2182 and 3260); what must hold is that the encoding is the reference's —
+    // low byte = next state, high byte = divide, flat index = r — and that the
+    // default is a coherent catalogue rule rather than an arbitrary bit pattern.
     const next = model.attributes.find(a => a.id === 'ruleNext').tableData;
     const div = model.attributes.find(a => a.id === 'ruleDivide').tableData;
-    let bad = 0;
-    for (let r = 0; r < 8; r++) {
-      if (next[r] !== ((R >> r) & 1)) bad++;
-      if (div[r] !== ((R >> (r + 8)) & 1)) bad++;
-    }
-    ok(bad === 0, `the default tables are rule ${R} bit for bit (low byte = next state, high byte = divide)`);
+    let R = 0;
+    for (let r = 0; r < 8; r++) { R |= (next[r] & 1) << r; R |= (div[r] & 1) << (r + 8); }
+    const catalogue = new Set((model.presets ?? [])
+      .map(p => /^Rule (\d+)/.exec(p.description ?? ''))
+      .filter(Boolean).map(m2 => Number(m2[1])));
+    ok(next.every(v => v === 0 || v === 1) && div.every(v => v === 0 || v === 1),
+      'the default tables are BITS (low byte = next state, high byte = divide)');
+    ok(catalogue.has(R),
+      `the default tables decode to a rule the shipped catalogue carries (got ${R})`,
+      [...catalogue].join(','));
     // every preset must decode the same way
     let badP = 0;
     for (const p of model.presets ?? []) {
@@ -4571,7 +4416,6 @@ tierH();
 tierJ();
 tierI();
 await tierIMutants();
-tierK();
 tierL();
 tierN();
 tierM();
