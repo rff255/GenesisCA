@@ -116,7 +116,7 @@ Build a model's update rule as a node graph — wire reads, math, conditions and
 
 ### Define the whole model, not just the rule
 
-Cells carry as many attributes as you like (binary, integer, decimal, tag, colour, vector, neighbour handle). Neighbourhoods are drawn on a grid — or generated parametrically in 3D — and colour mappings translate state into pixels and pixels back into state, either auto-generated from a single attribute or authored as their own graph.
+Cells carry as many attributes as you like (binary, integer, decimal, tag, colour, vector, neighbour handle). Neighbourhoods are generated parametrically from a named shape (Moore, von Neumann, disk, ring, range-N) in both 2D and 3D, or drawn by hand on a grid, and colour mappings translate state into pixels and pixels back into state, either auto-generated from a single attribute or authored as their own graph.
 
 ### Three engines, one choice
 

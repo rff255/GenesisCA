@@ -430,8 +430,35 @@ export function HelpView() {
             for quick variations.
           </p>
           <p className={styles.p}>
+            <strong>Parametric shape</strong> &mdash; the block above the grid generates a named
+            neighbourhood in one click, the 2D counterpart of the 3D parametric editor:
+          </p>
+          <ul className={styles.ul}>
+            <li><strong>Moore</strong> (box, L&infin;) &mdash; radius 1 gives the classic 8
+              surrounding cells.</li>
+            <li><strong>von Neumann</strong> (diamond, L1) &mdash; radius 1 gives the 4 cardinal
+              neighbours, radius 2 gives 12.</li>
+            <li><strong>Disk</strong> (filled disc, L2) &mdash; every cell within the radius,
+              rounded to the nearest cell.</li>
+            <li><strong>Range-N</strong> &mdash; a radius plus a <em>metric</em> selector
+              (L&infin; / L1 / L2), so one entry reproduces the box / diamond / disc families
+              (Larger-than-Life style).</li>
+            <li><strong>Ring</strong> &mdash; an annulus at a radius, with a width (MNCA-style
+              rings without drawing two circles).</li>
+          </ul>
+          <p className={styles.p}>
+            The hint under the button previews how many cells the current settings would
+            generate. <strong>Generate shape</strong> replaces the current cells and clears any
+            cell tags (a regenerated shape renumbers every cell, and tags are keyed by
+            position in that list); the centre cell is a separate flag and is left untouched.
+            The grid&apos;s margin grows automatically when a shape reaches past it, so nothing
+            is ever generated outside the visible grid. Editing the grid by hand afterwards
+            drops the stored shape &mdash; the summary then reads <em>custom</em> &mdash; so the
+            remembered parameters can never disagree with the cells they claim to describe.
+          </p>
+          <p className={styles.p}>
             <strong>Drawing tools</strong> &mdash; the row of buttons above the grid speeds up
-            big neighborhoods (MNCA-style radii and rings):
+            hand-tuning and big neighborhoods (MNCA-style radii and rings):
           </p>
           <ul className={styles.ul}>
             <li><strong>Point</strong> &mdash; the classic one-click-per-cell edit.</li>
@@ -1430,6 +1457,12 @@ export function HelpView() {
               axis-plane mirrors (H / V / L) and right-click per-cell tags, for hand-tuned
               shapes.</li>
           </ul>
+          <p className={styles.p}>
+            A 2D model gets the same parametric generator (Moore / von&nbsp;Neumann / Disk /
+            Range-N / Ring) above its grid editor &mdash; see <em>Neighborhoods Panel</em>
+            above. Both dimensions share one shape generator, so a 2D shape is exactly the
+            <code>dl = 0</code> slice of its 3D namesake.
+          </p>
           <p className={styles.p}>
             The direct <em>NeighborIndex</em> node family (Get/Set Neighbor Attribute By
             Index, Neighbor Index From Offset, etc.) works in 3D too &mdash; in a 3D model

@@ -8,6 +8,7 @@ import type { ModelElementDragPayload } from '../vpl/modelElementDrag';
 import { setCurrentModelElementDrag } from '../vpl/graphState';
 import { NumberField } from '../vpl/widgets/InlineWidgets';
 import { Neighborhood3DEditor } from './Neighborhood3DEditor';
+import { Neighborhood2DParametric } from './Neighborhood2DParametric';
 import styles from './PanelContent.module.css';
 
 function handleNeighborhoodDragStart(neighborhoodId: string) {
@@ -146,7 +147,9 @@ function cellEffect(mode: PaintMode, isActive: boolean): 'add' | 'remove' | 'non
  *  unmark = deactivate only, toggle = flip each; a covered center cell drives
  *  includeCentralCell the same way). Tag keys are coord-array INDICES, so
  *  removals must remap surviving tags — this helper is the single place that
- *  does it (the one-cell Point click routes through here too). */
+ *  does it (the one-cell Point click routes through here too). It also clears
+ *  `shape`: a hand edit means the coords no longer match the parametric spec
+ *  that generated them (mirrors the 3D slice editor's applySlice3d). */
 function applyCellsChanges(
   nbh: Neighborhood,
   cells: Array<[number, number]>,
@@ -179,6 +182,9 @@ function applyCellsChanges(
   });
   newCoords.push(...toAdd);
   const changes: Partial<Neighborhood> = { coords: newCoords };
+  // Only a real coord change invalidates the stored parametric spec — toggling
+  // the central cell (a separate flag the generator never touches) must not.
+  if (toAdd.length > 0 || removeKeys.size > 0) changes.shape = undefined;
   if (nbh.tags) changes.tags = newTags;
   if (centerEffect === 'add') changes.includeCentralCell = true;
   else if (centerEffect === 'remove') changes.includeCentralCell = false;
@@ -409,6 +415,16 @@ export function NeighborhoodsPanelContent({ mode = 'list' }: PanelContentProps =
 
           {!is3d && (
           <div className={styles.gridContainer}>
+            {/* Parametric generator — the 2D counterpart of the 3D editor's
+                Parametric block. key: the form seeds its state from `selected`
+                at mount only, so remount on selection change (same rule as the
+                3D editor) or a stale form could overwrite B with A's spec. */}
+            <Neighborhood2DParametric
+              key={selected.id}
+              selected={selected}
+              updateNeighborhood={updateNeighborhood}
+            />
+
             <div className={styles.gridControls}>
               <label className={styles.fieldLabel}>Margin</label>
               <NumberField

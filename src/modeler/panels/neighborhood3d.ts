@@ -39,8 +39,13 @@ export function generateCoords3d(spec: NeighborhoodShapeSpec): Coord3[] {
     const r = Math.max(0, Math.floor(spec.radius));
     const w = Math.max(1, Math.floor(spec.width ?? 1));
     const half = w / 2;
-    for (let a = -r; a <= r; a++) {
-      for (let b = -r; b <= r; b++) {
+    // Scan the box that can actually CONTAIN the shape, not just ±radius: a ring
+    // reaches out to r + half, so a width ≥ 2 annulus was previously truncated at
+    // the ±r box (e.g. r=3 w=2 silently dropped (±4,0) and (0,±4)). A disk keeps
+    // ±r — its own `dist <= r + 0.5` predicate can never admit a cell at r + 1.
+    const scan = spec.kind === 'ring' ? Math.ceil(r + half) : r;
+    for (let a = -scan; a <= scan; a++) {
+      for (let b = -scan; b <= scan; b++) {
         const dist = Math.sqrt(a * a + b * b);
         const keep = spec.kind === 'disk' ? dist <= r + 0.5 : Math.abs(dist - r) <= half;
         if (!keep) continue;
