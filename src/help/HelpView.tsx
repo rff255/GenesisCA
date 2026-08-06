@@ -3601,10 +3601,11 @@ export function HelpView() {
             <li><strong>mappings</strong> &mdash; Color mapping definitions for visualization and interaction.</li>
             <li><strong>graphNodes / graphEdges</strong> &mdash; The VPL node graph (positions, connections, config).</li>
             <li><strong>macroDefs</strong> &mdash; Macro subgraph definitions.</li>
-            <li><strong>simulationState</strong> (optional) &mdash; Embedded simulation snapshot. Clicking <strong>Save</strong> opens a small dialog with two checkboxes:
+            <li><strong>simulationState</strong> (optional) &mdash; Embedded simulation snapshot. Clicking <strong>Save</strong> opens a small dialog with a last chance to correct the model&rsquo;s presentation fields &mdash; <em>Name</em>, <em>Rule Author</em> and <em>GenesisCA Project Author</em>, prefilled from the model and identical to the ones in the Modeler&rsquo;s Info panel. Anything you change there is <strong>written back to the model</strong>, not just into the file being written, and the default filename follows the edited name. A model must have a name, so Save stays disabled while that field is empty. Below the fields are the include-what checkboxes:
               <ul>
                 <li><em>Include simulator controls</em> &mdash; playback speed, brush size/color, selected input/output mapping, runtime model-attribute values.</li>
                 <li><em>Include board state</em> &mdash; full cell grid snapshot: attributes, generation counter, indicator values, colors.</li>
+                <li><em>Include model presets</em> &mdash; the saved parameter (and optional grid) snapshots; checked by default whenever the model already has presets.</li>
               </ul>
               These two default to reflect the loaded model instead of following a program-wide last choice: when a model already carries an embedded snapshot they mirror it, and a fresh model (no embedded snapshot) defaults both on so evolving a board or tuning attributes and then saving still captures that work. Unchecking both still saves a valid <code>.gcaproj</code> &mdash; it just contains only the model definition.
             </li>

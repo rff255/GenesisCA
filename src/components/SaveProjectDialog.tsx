@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import styles from './SaveProjectDialog.module.css';
 
 export interface SaveOptions {
@@ -7,40 +7,75 @@ export interface SaveOptions {
   includePresets: boolean;
 }
 
+/** The presentation fields the Save dialog lets the user correct on the way out.
+ *  They are MODEL properties (the Info panel edits the same three), so a change
+ *  here is written back to the model — see FileMenu's doSave. */
+export interface SaveMetadata {
+  name: string;
+  author: string;
+  modelAuthor: string;
+}
+
 interface Props {
   initial: SaveOptions;
-  onConfirm: (opts: SaveOptions) => void;
+  /** Live model presentation values, read fresh every time the dialog opens
+   *  (the parent mounts it conditionally, so the useState seeds are never stale). */
+  initialMeta: SaveMetadata;
+  onConfirm: (opts: SaveOptions, meta: SaveMetadata) => void;
   onCancel: () => void;
   /** Uncontrolled local state is fine for a tiny dialog. Parent re-mounts it each time. */
 }
 
-export function SaveProjectDialog({ initial, onConfirm, onCancel }: Props) {
+export function SaveProjectDialog({ initial, initialMeta, onConfirm, onCancel }: Props) {
   // Track choices in local state via refs on the checkboxes directly (minimal state).
   // We rely on a small piece of controlled state via a wrapper.
-  return <SaveProjectDialogInner initial={initial} onConfirm={onConfirm} onCancel={onCancel} />;
+  return (
+    <SaveProjectDialogInner
+      initial={initial}
+      initialMeta={initialMeta}
+      onConfirm={onConfirm}
+      onCancel={onCancel}
+    />
+  );
 }
 
-function SaveProjectDialogInner({ initial, onConfirm, onCancel }: Props) {
-  // Close on Escape
+function SaveProjectDialogInner({ initial, initialMeta, onConfirm, onCancel }: Props) {
+  const [name, setName] = useState(initialMeta.name);
+  const [author, setAuthor] = useState(initialMeta.author);
+  const [modelAuthor, setModelAuthor] = useState(initialMeta.modelAuthor);
+  // An empty name would strip the navbar title AND collapse the derived filename
+  // to `model.gcaproj`, so Save is barred until the field carries something.
+  const canSave = name.trim().length > 0;
+
+  const readOpts = (): SaveOptions => ({
+    includeControls: (document.getElementById('save-opt-controls') as HTMLInputElement | null)?.checked ?? initial.includeControls,
+    includeGrid: (document.getElementById('save-opt-grid') as HTMLInputElement | null)?.checked ?? initial.includeGrid,
+    includePresets: (document.getElementById('save-opt-presets') as HTMLInputElement | null)?.checked ?? initial.includePresets,
+  });
+  const readMeta = (): SaveMetadata => ({
+    name: name.trim(),
+    author: author.trim(),
+    modelAuthor: modelAuthor.trim(),
+  });
+
+  // Close on Escape / confirm on Enter. Deliberately re-registered every render:
+  // the handler closes over the live field values, and a listener swap is far
+  // cheaper than threading refs through a dialog this small.
   useEffect(() => {
     const h = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onCancel();
       if (e.key === 'Enter') {
-        const c = (document.getElementById('save-opt-controls') as HTMLInputElement | null)?.checked ?? initial.includeControls;
-        const g = (document.getElementById('save-opt-grid') as HTMLInputElement | null)?.checked ?? initial.includeGrid;
-        const p = (document.getElementById('save-opt-presets') as HTMLInputElement | null)?.checked ?? initial.includePresets;
-        onConfirm({ includeControls: c, includeGrid: g, includePresets: p });
+        if (!canSave) return;
+        onConfirm(readOpts(), readMeta());
       }
     };
     window.addEventListener('keydown', h);
     return () => window.removeEventListener('keydown', h);
-  }, [initial, onConfirm, onCancel]);
+  });
 
   const handleSave = () => {
-    const c = (document.getElementById('save-opt-controls') as HTMLInputElement).checked;
-    const g = (document.getElementById('save-opt-grid') as HTMLInputElement).checked;
-    const p = (document.getElementById('save-opt-presets') as HTMLInputElement).checked;
-    onConfirm({ includeControls: c, includeGrid: g, includePresets: p });
+    if (!canSave) return;
+    onConfirm(readOpts(), readMeta());
   };
 
   return (
@@ -48,6 +83,43 @@ function SaveProjectDialogInner({ initial, onConfirm, onCancel }: Props) {
       <div className={styles.dialog} onClick={e => e.stopPropagation()}>
         <div className={styles.title}>Save Project</div>
         <div className={styles.body}>
+          <div className={styles.fields}>
+            <div className={styles.field}>
+              <label className={styles.fieldLabel} htmlFor="save-meta-name">Name</label>
+              <input
+                id="save-meta-name"
+                className={styles.textInput}
+                type="text"
+                value={name}
+                onChange={e => setName(e.target.value)}
+              />
+            </div>
+            <div className={styles.field}>
+              <label className={styles.fieldLabel} htmlFor="save-meta-author">Rule Author</label>
+              <input
+                id="save-meta-author"
+                className={styles.textInput}
+                type="text"
+                value={author}
+                placeholder="Originator of the CA rule"
+                onChange={e => setAuthor(e.target.value)}
+              />
+            </div>
+            <div className={styles.field}>
+              <label className={styles.fieldLabel} htmlFor="save-meta-model-author">GenesisCA Project Author</label>
+              <input
+                id="save-meta-model-author"
+                className={styles.textInput}
+                type="text"
+                value={modelAuthor}
+                placeholder="Who built this GenesisCA project"
+                onChange={e => setModelAuthor(e.target.value)}
+              />
+            </div>
+            <div className={styles.fieldsHint}>
+              Edits here are written back to the model, not just to the saved file.
+            </div>
+          </div>
           <label className={styles.row}>
             <input id="save-opt-controls" type="checkbox" defaultChecked={initial.includeControls} />
             <div>
@@ -72,7 +144,14 @@ function SaveProjectDialogInner({ initial, onConfirm, onCancel }: Props) {
         </div>
         <div className={styles.actions}>
           <button className={styles.btnSecondary} onClick={onCancel}>Cancel</button>
-          <button className={styles.btnPrimary} onClick={handleSave}>Save</button>
+          <button
+            className={styles.btnPrimary}
+            disabled={!canSave}
+            title={canSave ? undefined : 'The model needs a name'}
+            onClick={handleSave}
+          >
+            Save
+          </button>
         </div>
       </div>
     </div>

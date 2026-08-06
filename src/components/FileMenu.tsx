@@ -8,8 +8,8 @@ import {
   readModelFile,
 } from '../model/fileOperations';
 import { buildPresentationHtml, presentationFilename } from '../export/exportPresentation';
-import type { SimulationState, CAModel } from '../model/types';
-import { SaveProjectDialog, type SaveOptions } from './SaveProjectDialog';
+import type { SimulationState, CAModel, ModelProperties } from '../model/types';
+import { SaveProjectDialog, type SaveOptions, type SaveMetadata } from './SaveProjectDialog';
 import { ExportPresentationDialog, type ExportPresentationOptions } from './ExportPresentationDialog';
 import { ConfirmDialog } from './ConfirmDialog';
 import { NewModelDialog } from './NewModelDialog';
@@ -63,7 +63,7 @@ export function FileMenu({ onNew, onLoaded }: {
    *  Simulator tab and shows the load-confirmation toast). */
   onLoaded?: (modelName: string) => void;
 } = {}) {
-  const { model, isDirty, newModel, loadModel, markSaved, lastSaveOptions } = useModel();
+  const { model, isDirty, newModel, loadModel, markSaved, lastSaveOptions, updateProperties } = useModel();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const modelRef = useRef(model);
   modelRef.current = model;
@@ -130,8 +130,26 @@ export function FileMenu({ onNew, onLoaded }: {
     setSaveDialogOpen(true);
   };
 
-  const doSave = async (opts: SaveOptions) => {
+  const doSave = async (opts: SaveOptions, meta: SaveMetadata) => {
     setSaveDialogOpen(false);
+
+    // The dialog's Name / Rule Author / Project Author fields edit MODEL
+    // properties (the same three the Info panel owns), so a change made on the
+    // way out must land in the app state too — not only in the written file.
+    // `updateProperties` is a dispatch (async React state), so reading `model`
+    // back here would still see the pre-edit values: build the edits ONCE, hand
+    // them to the reducer AND fold them into the object we serialize, so the
+    // file and the app can never disagree. An empty name is barred by the
+    // dialog, so `metaEdits.name` is only ever a real replacement.
+    const metaEdits: Partial<ModelProperties> = {};
+    {
+      const p = modelRef.current.properties;
+      if (meta.name && meta.name !== p.name) metaEdits.name = meta.name;
+      if (meta.author !== (p.author ?? '')) metaEdits.author = meta.author;
+      if (meta.modelAuthor !== (p.modelAuthor ?? '')) metaEdits.modelAuthor = meta.modelAuthor;
+    }
+    const hasMetaEdits = Object.keys(metaEdits).length > 0;
+    if (hasMetaEdits) updateProperties(metaEdits);
 
     // Ask simulator to capture the requested pieces into model context and wait.
     // The simulator passes the captured SimulationState back through the resolve
@@ -159,12 +177,16 @@ export function FileMenu({ onNew, onLoaded }: {
     const stateForFile = wantsAny
       ? (captured ?? latest.simulationState)
       : undefined;
-    let toSerialize = { ...latest, simulationState: stateForFile };
+    let toSerialize: CAModel = { ...latest, simulationState: stateForFile };
+    if (hasMetaEdits) {
+      toSerialize = { ...toSerialize, properties: { ...toSerialize.properties, ...metaEdits } };
+    }
     if (!opts.includePresets) {
       toSerialize = { ...toSerialize, presets: undefined };
     }
     const json = serializeModel(toSerialize);
-    const filename = modelFilename(latest);
+    // Derive the default filename from the EDITED name, not the stale one.
+    const filename = modelFilename(toSerialize);
     // Native (Tauri) shows a Save As dialog; only mark saved if the user picked
     // a path (didn't cancel). Browser download always resolves true.
     const saved = await downloadJSON(json, filename);
@@ -260,6 +282,11 @@ export function FileMenu({ onNew, onLoaded }: {
       {saveDialogOpen && (
         <SaveProjectDialog
           initial={lastSaveOptions ?? deriveSaveOptions(model)}
+          initialMeta={{
+            name: model.properties.name ?? '',
+            author: model.properties.author ?? '',
+            modelAuthor: model.properties.modelAuthor ?? '',
+          }}
           onConfirm={doSave}
           onCancel={() => setSaveDialogOpen(false)}
         />
