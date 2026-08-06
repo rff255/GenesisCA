@@ -554,7 +554,7 @@ A `step` batch runs `count` generations back to back. At a high Gens/Frame that 
 - Nullish coalescing: never mix `??` with `||` or comparison operators without explicit parens — Babel/esbuild will warn or error.
 - Simulator lifecycle: SimulatorView is always-mounted (wrapped in `display:none` div when not visible). Simulation auto-pauses when leaving the tab. Canvas redraws via `requestAnimationFrame` when `visible` transitions to true. The `useEffect([model, compileModel])` fires on every model change (even while hidden), handling full reinit or soft recompile as appropriate. When `model.indicators` changes during soft recompile, an `updateIndicators` message is sent to the worker alongside the `recompile` message.
 - Simulator save integration: FileMenu dispatches `genesis-capture-sim-state` CustomEvent with `detail.resolve` callback. SimulatorView captures worker state via `getState` and calls `resolve()` after `setSimulationState()`. FileMenu `await`s the Promise before serializing. 5-second safety timeout.
-- Copy/paste: Ctrl+C/V/X + context menu. Module-level `clipboard` variable, strips macroInput/macroOutput, remaps IDs
+- Copy/paste: Ctrl+C/V/X + context menu. Strips macroInput/macroOutput, remaps IDs. **The clipboard SPANS BROWSER TABS** — see the "Cross-tab graph clipboard" section below.
 - Group paste: parentId must be remapped to new IDs, children keep relative positions, groups sorted before children
 - React StrictMode double-mount: effects run mount→cleanup→mount in dev. When terminating resources (Web Workers), always null out the ref (`workerRef.current = null`) after `.terminate()` so the second mount detects it needs a fresh init instead of reusing a dead reference.
 - Indicator values use a ref (`indicatorValuesRef`) not React state — avoids extra re-renders on every worker step message. The existing `setGeneration` re-render reads the ref naturally.
@@ -1867,6 +1867,83 @@ Movable relay dots placed on a wire (Blender / Unreal blueprint style) so users 
 - Wired into all three compilers BEFORE linked-OM / CSE / `buildAdjacency` so nothing downstream sees a reroute: **JS** at the top of `compileGraph` (+ also collapse each `MacroDef`'s internal graph, since JS inlines macros lazily); **WASM** / **WebGPU** right after `expandMacros` (so in-macro reroutes, now flattened, collapse for free). `A → R → B` compiles byte-identically to `A → B`. Verified: collapse unit (chain / fan-out / dangling / no-op), JS full-compile byte-identical on Game of Life, and WASM + WebGPU worker runs of a reroute model with zero errors.
 
 ---
+
+## Cross-tab graph clipboard (copy/paste BETWEEN models — branch `updates`)
+
+Copying a piece of graph in one tab and pasting it into a **different model open in
+another tab** — the small-scale alternative to the save-a-`.gcamacro` /
+import-a-`.gcamacro` round trip the user previously had to perform for two nodes.
+Editor-layer only: **no compiler / worker / engine file is touched**, so compile
+identity holds by construction.
+
+### Transport — TWO copies, and the fresher one wins ([graphClipboard.ts](src/modeler/vpl/graphClipboard.ts))
+Copy/cut writes the **in-memory** module-level clipboard (the historical same-tab
+path) **AND** a serialized payload under `localStorage['genesisca_graph_clipboard_v1']`
+(same-origin tabs share it; it also survives a reload). Both carry the SAME `at`
+stamp, and `readGraphClipboard()` returns the newer — **memory wins a tie**, so a
+same-tab flow is unchanged, while a copy performed in another tab afterwards has a
+later stamp and wins. **No `storage` event listener**: both the paste and the pane
+context menu read lazily, so a tab that never copied anything still lights up Paste.
+- **Payload** `{ v: 1, at, kind, nodes, edges, macroDefs? }`. `kind` keeps the
+  existing graph-kind rule verbatim (a `cells` payload pastes only on Cells; the
+  cross-kind case renders the same DISABLED *"Paste (from X graph)"* item — now with
+  an **Overseer** label, which the old two-way ternary mislabelled as "Agents").
+- **Malformed entries are IGNORED, never thrown from** — `validate()` shape-checks
+  `v`/`at`/`kind`/`nodes`/`edges` and the parse is wrapped, because the pane menu
+  reads the clipboard **during render**. A corrupt entry falls back to the in-memory
+  clipboard. The parse is cached by the raw string so a re-render of an open menu
+  does not re-parse a large payload.
+- **Size guard `MAX_STORED_CHARS` (2 MB)**: past it the write is SKIPPED **and the
+  existing key is REMOVED** (so another tab can never paste a stale selection
+  believing it is this copy) with one `console.warn`; the in-memory clipboard still
+  holds it, so same-tab paste is unaffected. `setItem` is also try/caught (quota /
+  private mode).
+
+### MacroDefs travel with the selection
+A copied `macro` node's `config.macroDefId` names a def in the SOURCE model, which
+the pasting tab cannot reach — so **`collectMacroDefBundle` walks the referenced defs
+TRANSITIVELY** (a macro nested inside a macro travels too; `seen` guards a cycle) and
+bundles them into the payload.
+- **Paste is per-node and per-def**: a def **this model already has** takes today's
+  path unchanged (`importMacro(srcDef)` once per pasted node = independent copies —
+  the Undo-Macro rationale). A def it has **never seen** comes from the bundle: the
+  defs referenced from INSIDE the bundle (`nestedMacroDefIds`) are cloned **once per
+  paste and shared**, then the directly-referenced def is cloned **per node**,
+  mirroring the local rule.
+- **The nested import is TWO-PHASE** — every clone's id is registered before
+  `remapNestedMacroRefs` retargets the references, because a nested def can itself
+  nest another. `cloneMacroWithFreshIds` regenerates ids but does NOT rewrite a
+  nested `macroDefId` (correct for the same-model case, where the nested def exists),
+  which is exactly why the remap is needed here.
+- A bundled def that is missing (hand-edited payload) leaves the instance pointing at
+  its stale id and badging — never a crash.
+
+### Dangling model-element references are EXPECTED
+A pasted node may name an attribute / neighborhood / mapping / indicator / variable id
+the target model lacks. That is the **macro-import experience**: `detectMissingConfig`
+badges it (verified: a Game-of-Life `getCellAttribute` pasted into Wireworld shows the
+amber `!` with *"Select an attribute"* and the dropdown offers Wireworld's attributes).
+**No name-based auto-mapping** — deliberately out of scope; a possible follow-up.
+
+### Same-tab behaviour is preserved exactly
+The singleton-root strip (`step`/`initEvent`/`behaviourStep`/…) still MUTATES the
+in-memory clipboard when the paste consumed it (`setMemoryClipboardNodes`); a payload
+read from storage belongs to another tab and is left alone. Everything downstream —
+the id remap, the group `style`/`zIndex` rebuild, the edge rewrite — is the original
+code operating on a payload variable instead of the module global.
+
+### Verified (two real tabs, real UI)
+Tab A = Game of Life, tab B = Extended Wireworld, both on the Cells graph: 4 wired
+nodes cross-paste with fresh ids and all 3 edges intact; a **macro** pastes with its
+def imported (entering it in B shows the 7 internal nodes and the Palette's *Project
+Macros* lists it); a **nested** macro round-trips (`Root › Outer Nest › Decide Life
+State`) with the inner reference retargeted at a fresh id; a mixed selection (group +
+children + comment + reroute + macro) round-trips with sizes/labels/text preserved and
+the `step` singleton correctly DROPPED; the **freshness rule** holds (tab B pastes tab
+A's newer copy over its own older in-memory one); cross-kind shows the disabled item
+and Ctrl+V is a no-op; a fresh third tab that never copied shows an ENABLED Paste and
+pastes; four malformed payloads are ignored with no throw; the 2.6 MB guard removes
+the key, warns once, and still pastes in-tab. Zero console errors in all three tabs.
 
 ## Composite Value Types — Vector & Color + Get Self Handle
 

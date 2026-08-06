@@ -31,7 +31,16 @@ import { getEffectivePorts } from './effectivePorts';
 import { vectorPortDims } from './compiler/vectorAttr';
 import { slotVectorDims } from './compiler/multiAttrExpand';
 import type { GraphNode, GraphEdge, CAModel } from '../../model/types';
-import type { MacroPort } from '../../model/types';
+import type { MacroDef, MacroPort } from '../../model/types';
+import { cloneMacroWithFreshIds } from '../../model/macroImport';
+import {
+  collectMacroDefBundle,
+  nestedMacroDefIds,
+  readGraphClipboard,
+  remapNestedMacroRefs,
+  setMemoryClipboardNodes,
+  writeGraphClipboard,
+} from './graphClipboard';
 import { computeAlignmentSnap, sameGuides } from './alignmentSnap';
 import type { AlignGuides, AlignTarget } from './alignmentSnap';
 import { useThemeTokens } from '../../styles/useThemeTokens';
@@ -56,15 +65,17 @@ const nodeTypes: NodeTypes = {
 };
 
 // ---------------------------------------------------------------------------
-// Clipboard for copy/paste (module-level, persists across re-renders)
+// Clipboard for copy/paste — see graphClipboard.ts. It spans BROWSER TABS
+// (localStorage) so a selection copied in one model pastes into another; the
+// payload carries the graph KIND it was copied from, because the lattice /
+// agent / overseer node sets are disjoint and a cross-kind paste would land a
+// node that carries a validation badge and fails to compile.
 // ---------------------------------------------------------------------------
 
-let clipboard: { nodes: GraphNode[]; edges: GraphEdge[] } | null = null;
-// Bond-Graph Agents: the graph kind the clipboard was copied FROM, so a paste
-// into the other graph kind (a lattice node into the Agents graph, or vice
-// versa) is rejected — the node sets are disjoint and would carry a validation
-// badge / fail to compile.
-let clipboardGraphKind: 'cells' | 'agents' | 'overseer' = 'cells';
+/** User-facing name of a graph kind (the cross-kind Paste explanation). */
+function graphKindLabel(kind: ActiveGraphKind): string {
+  return kind === 'cells' ? 'Cells' : kind === 'agents' ? 'Agents' : 'Overseer';
+}
 
 import { setIsConnecting, setConnectingFrom, setShowPortLabels, showPortLabelsGlobal, showGridGlobal, setShowGrid as setShowGridGlobal, snapEnabledGlobal, setSnapEnabled as setSnapEnabledGlobal, setConnectedHandlesFromEdges, setConnectionHazards, getSavedGraphViewport, setSavedGraphViewport, savedCurrentScope, setSavedCurrentScope, subscribeCurrentModelElementDrag, setCompatibleHandlesForDrag, clearCompatibleHandlesForDrag, setCurrentModelElementDrag, compatibleHandlesForDrag, currentModelElementDrag, setQuickAddApi, setActiveGraphKind, displayNodeLabel, displayNodeDescription, type ActiveGraphKind } from './graphState';
 import { modelerUiState } from '../modelerUiState';
@@ -2673,16 +2684,29 @@ export function GraphEditorInner() {
     const copyEdges = toGraphEdges(
       edges.filter(e => selectedIds.has(e.source) && selectedIds.has(e.target)),
     );
-    clipboard = { nodes: copyNodes, edges: copyEdges };
-    clipboardGraphKind = activeGraphRef.current;
-  }, [nodes, edges]);
+    // Bundle the MacroDefs the copied instances reference (transitively) so a
+    // paste in ANOTHER tab — whose model has never seen them — can import them.
+    const bundle = collectMacroDefBundle(copyNodes, model.macroDefs || []);
+    writeGraphClipboard({
+      kind: activeGraphRef.current,
+      nodes: copyNodes,
+      edges: copyEdges,
+      macroDefs: bundle.length > 0 ? bundle : undefined,
+    });
+  }, [nodes, edges, model.macroDefs]);
 
   const handlePaste = useCallback(() => {
-    if (!clipboard || clipboard.nodes.length === 0) return;
+    // The fresher of this tab's clipboard and the one shared through
+    // localStorage — so a selection copied in another tab (another model)
+    // pastes here.
+    const clip = readGraphClipboard();
+    if (!clip || clip.payload.nodes.length === 0) return;
     // Bond-Graph Agents: reject a cross-graph paste — the lattice + agent node
     // sets are disjoint, so a lattice node pasted into the Agents graph (or vice
     // versa) would carry a validation badge and fail to compile.
-    if (clipboardGraphKind !== activeGraphRef.current) return;
+    if (clip.payload.kind !== activeGraphRef.current) return;
+    let clipNodes = clip.payload.nodes;
+    const clipEdges = clip.payload.edges;
     // Singleton event roots — drop any clipboard copy of one already present in
     // the current graph (step/initEvent on Cells; behaviourStep/divisionEvent/
     // agentInit on Agents).
@@ -2691,20 +2715,21 @@ export function GraphEditorInner() {
         n => (n.data as Record<string, unknown>)?.nodeType === singleton,
       );
       if (present) {
-        clipboard = {
-          nodes: clipboard.nodes.filter(n => (n.data as Record<string, unknown>)?.nodeType !== singleton),
-          edges: clipboard.edges,
-        };
-        if (clipboard.nodes.length === 0) return;
+        clipNodes = clipNodes.filter(n => (n.data as Record<string, unknown>)?.nodeType !== singleton);
+        // Historical behaviour: the in-memory clipboard permanently loses the
+        // dropped singleton. A payload read from storage belongs to another tab
+        // and is left alone.
+        if (clip.source === 'memory') setMemoryClipboardNodes(clipNodes);
+        if (clipNodes.length === 0) return;
       }
     }
     pushCurrentSnapshot();
 
     // Compute clipboard top-left corner — paste anchors top-left at cursor
     let cx = 0, cy = 0;
-    if (clipboard.nodes.length > 0) {
+    if (clipNodes.length > 0) {
       let minX = Infinity, minY = Infinity;
-      for (const n of clipboard.nodes) {
+      for (const n of clipNodes) {
         minX = Math.min(minX, n.position.x);
         minY = Math.min(minY, n.position.y);
       }
@@ -2738,7 +2763,7 @@ export function GraphEditorInner() {
     // Build old → new ID mapping
     const idMap = new Map<string, string>();
     const existingIds = new Set(nodes.map(n => n.id));
-    for (const n of clipboard.nodes) {
+    for (const n of clipNodes) {
       let newId = `n${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`;
       while (existingIds.has(newId) || idMap.has(newId)) {
         newId = `n${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`;
@@ -2747,27 +2772,61 @@ export function GraphEditorInner() {
       existingIds.add(newId);
     }
 
-    // For every macro instance in the clipboard, clone its MacroDef so each
-    // pasted copy gets its own independent definition. Multiple pastes of the
-    // same source macro each get their own def too (one clone per pasted node).
-    // Without this, Undo Macro on a pasted instance would remove the shared
-    // def and silently break the original (and any other paste).
-    const macroDefRemap = new Map<string, string>(); // oldDefId → newDefId per node
-    for (const n of clipboard.nodes) {
-      const nt = (n.data as Record<string, unknown>)?.nodeType;
-      if (nt !== 'macro') continue;
+    // Macro instances. A def THIS model already has is cloned once per pasted
+    // node, so each copy gets its own independent definition (multiple pastes of
+    // the same source macro likewise) — without that, Undo Macro on a pasted
+    // instance would remove the shared def and silently break the original.
+    // A def this model has never seen — a paste from another tab's model — comes
+    // from the payload's bundle instead: the defs nested INSIDE the bundle are
+    // imported once and shared by this paste, then the directly-referenced def is
+    // cloned per node, mirroring the local rule.
+    const localDefs = model.macroDefs || [];
+    const bundleById = new Map((clip.payload.macroDefs ?? []).map(d => [d.id, d]));
+    const macroNodes = clipNodes.filter(n => (n.data as Record<string, unknown>)?.nodeType === 'macro');
+    const defIdOf = (n: GraphNode): string | undefined => {
       const cfg = (n.data as Record<string, unknown>).config as Record<string, unknown> | undefined;
-      const oldDefId = cfg?.macroDefId as string | undefined;
-      if (!oldDefId) continue;
-      const srcDef = (model.macroDefs || []).find(m => m.id === oldDefId);
-      if (!srcDef) continue;
-      const newDefId = importMacro(srcDef);
-      // Key by the per-node old id so multiple pasted copies of the same source
-      // macro instance each get their own def (importMacro called once per node).
-      macroDefRemap.set(n.id, newDefId);
+      const id = cfg?.macroDefId;
+      return typeof id === 'string' && id ? id : undefined;
+    };
+    const nestedRemap = new Map<string, string>(); // bundled def id → imported def id
+    const hasForeign = macroNodes.some(n => {
+      const id = defIdOf(n);
+      return !!id && !localDefs.some(m => m.id === id) && bundleById.has(id);
+    });
+    if (hasForeign) {
+      const fresh: MacroDef[] = [];
+      for (const id of nestedMacroDefIds([...bundleById.values()])) {
+        if (localDefs.some(m => m.id === id)) { nestedRemap.set(id, id); continue; } // already here
+        const src = bundleById.get(id);
+        if (!src) continue;
+        const clone = cloneMacroWithFreshIds(src);
+        nestedRemap.set(id, clone.id);
+        fresh.push(clone);
+      }
+      // Second pass — a nested def can itself nest another, so every id must be
+      // registered before the references are retargeted.
+      for (const d of fresh) addMacro(remapNestedMacroRefs(d, nestedRemap));
     }
 
-    const pastedRFNodes: Node[] = clipboard.nodes.map(n => {
+    const macroDefRemap = new Map<string, string>(); // pasted node id → new def id
+    for (const n of macroNodes) {
+      const oldDefId = defIdOf(n);
+      if (!oldDefId) continue;
+      const srcDef = localDefs.find(m => m.id === oldDefId);
+      if (srcDef) {
+        // Key by the per-node old id so multiple pasted copies of the same source
+        // macro instance each get their own def (importMacro called once per node).
+        macroDefRemap.set(n.id, importMacro(srcDef));
+        continue;
+      }
+      const foreign = bundleById.get(oldDefId);
+      if (!foreign) continue; // def unavailable — the instance keeps its stale id and badges
+      const clone = remapNestedMacroRefs(cloneMacroWithFreshIds(foreign), nestedRemap);
+      addMacro(clone);
+      macroDefRemap.set(n.id, clone.id);
+    }
+
+    const pastedRFNodes: Node[] = clipNodes.map(n => {
       const clonedData = JSON.parse(JSON.stringify(n.data)) as Record<string, unknown>;
       delete clonedData.parentId; // legacy hygiene — groups no longer own children
       const newDefId = macroDefRemap.get(n.id);
@@ -2785,7 +2844,7 @@ export function GraphEditorInner() {
     });
 
     const pasteTs = Date.now().toString(36);
-    const pastedRFEdges: Edge[] = clipboard.edges
+    const pastedRFEdges: Edge[] = clipEdges
       .filter(e => idMap.has(e.source) && idMap.has(e.target))
       .map((e, i) => ({
         id: `e_${pasteTs}_${i}_${Math.random().toString(36).slice(2, 5)}`,
@@ -2801,7 +2860,7 @@ export function GraphEditorInner() {
     setNodes(nds => [...nds.map(n => ({ ...n, selected: false })), ...pastedRFNodes]);
     setEdges(eds => [...eds.map(e => ({ ...e, selected: false })), ...pastedRFEdges]);
     scheduleSync();
-  }, [nodes, setNodes, setEdges, scheduleSync, importMacro, model.macroDefs]);
+  }, [nodes, setNodes, setEdges, scheduleSync, importMacro, addMacro, model.macroDefs]);
 
   const duplicateSelection = useCallback(() => {
     const selected = nodes.filter(n => n.selected);
@@ -4156,17 +4215,23 @@ export function GraphEditorInner() {
           {/* PANE context menu */}
           {contextMenu.target.type === 'pane' && (
             <>
-              {clipboard && clipboard.nodes.length > 0 && (
-                clipboardGraphKind === activeGraphRef.current ? (
-                  <button className={styles.contextItem} onClick={e => { e.stopPropagation(); handlePaste(); setContextMenu(null); }}>Paste</button>
-                ) : (
-                  // Cross-graph clipboard: show WHY paste is unavailable instead
-                  // of a silently no-op'ing item (handlePaste rejects it anyway).
-                  <button className={styles.contextItem} disabled title={`Copied from the ${clipboardGraphKind === 'cells' ? 'Cells' : 'Agents'} graph — the node sets are separate`}>
-                    Paste (from {clipboardGraphKind === 'cells' ? 'Cells' : 'Agents'} graph)
+              {(() => {
+                // Consults BOTH transports, so Paste lights up in a tab that
+                // never copied anything (the copy happened in another tab).
+                const clip = readGraphClipboard();
+                if (!clip || clip.payload.nodes.length === 0) return null;
+                if (clip.payload.kind === activeGraphRef.current) {
+                  return <button className={styles.contextItem} onClick={e => { e.stopPropagation(); handlePaste(); setContextMenu(null); }}>Paste</button>;
+                }
+                // Cross-graph clipboard: show WHY paste is unavailable instead
+                // of a silently no-op'ing item (handlePaste rejects it anyway).
+                const from = graphKindLabel(clip.payload.kind);
+                return (
+                  <button className={styles.contextItem} disabled title={`Copied from the ${from} graph — the node sets are separate`}>
+                    Paste (from {from} graph)
                   </button>
-                )
-              )}
+                );
+              })()}
               <button className={styles.contextItem} onClick={e => { e.stopPropagation(); addCommentNode(); }}>
                 Add Comment
               </button>

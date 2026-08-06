@@ -21,7 +21,7 @@ const GROUPS: { title: string; rows: Row[] }[] = [
       ['F', 'Fullscreen graph (toggle panels)'],
       ['Ctrl + Z', 'Undo'],
       ['Ctrl + Shift + Z', 'Redo'],
-      ['Ctrl + C / V / X', 'Copy / paste / cut nodes'],
+      ['Ctrl + C / V / X', 'Copy / paste / cut nodes (also between browser tabs)'],
       ['Ctrl + D', 'Duplicate nodes'],
       ['Ctrl + drag', 'Align while dragging'],
       ['Right-click', 'Context / add-node menu'],
