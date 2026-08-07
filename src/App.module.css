@@ -84,6 +84,20 @@
   transition: color var(--duration-base), background var(--duration-base), border-color var(--duration-base);
 }
 
+/* The two work-MODE tabs (Modeler / Simulator) carry an icon next to the label.
+   A modifier rather than a change to .navButton so the text-only navbar buttons
+   (Library / Help / Style Reference) keep their exact layout. The 14px icon is
+   below the text line box, so the buttons don't grow. */
+.navModeButton {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.navModeButton svg {
+  flex-shrink: 0;
+}
+
 .navButton:hover {
   color: var(--color-text-secondary);
   background: var(--color-overlay-hover-weak);

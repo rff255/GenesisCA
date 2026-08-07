@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import type { ReactNode } from 'react';
 import { ModelProvider, useModel } from './model/ModelContext';
 import { readModelFile } from './model/fileOperations';
 import { registerSW } from 'virtual:pwa-register';
@@ -17,6 +18,28 @@ import type { CAModel } from './model/types';
 import styles from './App.module.css';
 
 type AppMode = 'modeler' | 'simulator' | 'help' | 'library' | 'styleref';
+
+/* The two work-MODE tabs carry icons — they're the most important structural
+ * switch in the app, so they read as a pair of glyphs rather than two words in a
+ * row of words. Stroked `currentColor` at 14px, matching the ActivityBar /
+ * navbar SVG vocabulary, so the active/inactive + per-theme colors apply for
+ * free. Small enough (14 < the ~15px text line box) that the buttons don't grow. */
+const modeIcon = (children: ReactNode) => (
+  <svg
+    width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+    strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"
+  >
+    {children}
+  </svg>
+);
+/** Modeler — a node graph: two boxes joined by an elbow wire. */
+const MODELER_ICON = modeIcon(
+  <><rect x="2.5" y="3.5" width="8" height="6" rx="1.5" /><rect x="13.5" y="14.5" width="8" height="6" rx="1.5" /><path d="M10.5 6.5h1.5a2.5 2.5 0 0 1 2.5 2.5v8.5" /></>,
+);
+/** Simulator — a canvas with a play triangle: run the model. */
+const SIMULATOR_ICON = modeIcon(
+  <><rect x="2.5" y="4" width="19" height="16" rx="2" /><polygon points="10,9 15.5,12 10,15" fill="currentColor" stroke="none" /></>,
+);
 
 function AppInner() {
   // Every tab/reload lands on the Library — it's the natural starting point for
@@ -257,13 +280,13 @@ function AppInner() {
         {/* Center: application modes (Blender-style), centered in the free space */}
         <div className={styles.navCenter}>
           <button
-            className={`${styles.navButton} ${mode === 'modeler' ? styles.navButtonActive : ''}`}
+            className={`${styles.navButton} ${styles.navModeButton} ${mode === 'modeler' ? styles.navButtonActive : ''}`}
             onClick={() => setMode('modeler')}
-          >Modeler</button>
+          >{MODELER_ICON}Modeler</button>
           <button
-            className={`${styles.navButton} ${mode === 'simulator' ? styles.navButtonActive : ''}`}
+            className={`${styles.navButton} ${styles.navModeButton} ${mode === 'simulator' ? styles.navButtonActive : ''}`}
             onClick={() => setMode('simulator')}
-          >Simulator</button>
+          >{SIMULATOR_ICON}Simulator</button>
         </div>
 
         {/* Right: app-level controls */}
