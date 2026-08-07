@@ -2591,37 +2591,51 @@ function CaNodeComponent({ id, data }: NodeProps) {
           />
         )}
 
-        {nodeData.nodeType === 'getRandom' && (
-          <>
-            <select
-              className={styles.select}
-              value={(nodeData.config.randomType as string) || 'float'}
-              onChange={e => updateConfig('randomType', e.target.value)}
-            >
-              <option value="bool">Binary</option>
-              <option value="integer">Integer</option>
-              <option value="float">Decimal</option>
-              <option value="orientation">Orientation</option>
-              <option value="options">Options</option>
-            </select>
-            {(nodeData.config.randomType === 'integer' || nodeData.config.randomType === 'float') && (
-              <>
-                <InlineNumberInput
-                  className={styles.input}
-                  placeholder="min"
-                  value={(nodeData.config.min as string) || '0'}
-                  onChange={v => updateConfig('min', v)}
-                />
-                <InlineNumberInput
-                  className={styles.input}
-                  placeholder="max"
-                  value={(nodeData.config.max as string) || '1'}
-                  onChange={v => updateConfig('max', v)}
-                />
-              </>
-            )}
-          </>
-        )}
+        {nodeData.nodeType === 'getRandom' && (() => {
+          // Min / Max / Mean / Std Dev / Norm / Angle / Span are PORTS now (they
+          // carry their own inline widgets), so the body holds only the two
+          // MODE selectors — the shape of the port set, not its values.
+          const rType = (nodeData.config.randomType as string) || 'float';
+          return (
+            <>
+              <select
+                className={styles.select}
+                value={rType}
+                onChange={e => updateConfig('randomType', e.target.value)}
+              >
+                <option value="bool">Binary</option>
+                <option value="integer">Integer</option>
+                <option value="float">Decimal</option>
+                <option value="orientation">Orientation</option>
+                <option value="options">Options</option>
+                <option value="vector">Vector</option>
+              </select>
+              {rType === 'float' && (
+                <select
+                  className={styles.select}
+                  title="Uniform: every value in [Min, Max) equally likely. Normal: a Gaussian bell around Mean (2 RNG draws). Exponential: waiting times with the given Mean (long tail)."
+                  value={(nodeData.config.distribution as string) || 'uniform'}
+                  onChange={e => updateConfig('distribution', e.target.value)}
+                >
+                  <option value="uniform">Uniform</option>
+                  <option value="normal">Normal (Gaussian)</option>
+                  <option value="exponential">Exponential</option>
+                </select>
+              )}
+              {rType === 'vector' && (
+                <select
+                  className={styles.select}
+                  title="Where the random direction is centred: a compass Angle° (0° = north / up, 90° = east) or a wired reference direction."
+                  value={(nodeData.config.refSource as string) || 'angle'}
+                  onChange={e => updateConfig('refSource', e.target.value)}
+                >
+                  <option value="angle">Around an angle</option>
+                  <option value="vector">Around a direction</option>
+                </select>
+              )}
+            </>
+          );
+        })()}
 
         {nodeData.nodeType === 'getColorConstant' && (() => {
           const r = parseInt(String(nodeData.config.r ?? '128'), 10) || 0;

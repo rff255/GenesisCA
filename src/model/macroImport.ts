@@ -1,6 +1,7 @@
 import type { MacroDef, MacroPort, GraphNode, GraphEdge } from './types';
 import { migrateColorInterpolationInMacroDef } from './colorScaleMigration';
 import { migrateTagConstantInMacroDef } from './tagConstantMigration';
+import { migrateGetRandomRangeInMacroDef } from './getRandomRangeMigration';
 import { migrateMoveSelfToNeighborInMacroDef } from './moveSelfToNeighborMigration';
 import { migrateSetCellLooksInMacroDef } from './setCellLooksMigration';
 import { migrateAgentTypeRemovalInMacroDef } from './agentTypeRemovalMigration';
@@ -33,9 +34,11 @@ export function cloneMacroWithFreshIds(rawIn: MacroDef): MacroDef {
   // Rewrite any legacy colorInterpolation / tagConstant / moveSelfToNeighbor
   // nodes inside the source MacroDef BEFORE the id remap. All migrations are
   // idempotent — they return the same reference when no matching nodes exist.
-  const raw = migrateAgentTypeRemovalInMacroDef(migrateSetCellLooksInMacroDef(migrateMoveSelfToNeighborInMacroDef(
-    migrateTagConstantInMacroDef(migrateColorInterpolationInMacroDef(rawIn)),
-  )));
+  const raw = migrateGetRandomRangeInMacroDef(
+    migrateAgentTypeRemovalInMacroDef(migrateSetCellLooksInMacroDef(migrateMoveSelfToNeighborInMacroDef(
+      migrateTagConstantInMacroDef(migrateColorInterpolationInMacroDef(rawIn)),
+    ))),
+  );
   const newMacroId = genId('mac');
   const idMap = new Map<string, string>();
   const mapId = (oldId: string): string => {

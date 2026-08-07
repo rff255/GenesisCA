@@ -62,6 +62,9 @@ import { canonicalizeAccessorEdges } from '../accessorCSE';
 import { computeAsyncReadWriteHazards } from '../asyncWriteHazard';
 import { computeVolatileHoist } from '../volatileHoist';
 import { getNodeDef } from '../../nodes/registry';
+import {
+  randomDistribution, randomRefSource, RANDOM_DEG2RAD, RANDOM_TAU, RANDOM_LEN_EPS,
+} from '../../nodes/GetRandomNode';
 import { cellFieldAttrsOf, cellFieldWriteAttrsOf, agentAttrsOf, bondAttrsOf } from '../../../../model/attributeScope';
 import { modelAttrSlotKeys } from '../../../../model/attributeScope';
 import { categoricalHasAlpha, readCategoricalEntries, readCategoricalDefault, type CategoricalEntry } from '../../nodes/CategoricalColorNode';
@@ -729,7 +732,7 @@ function compileValueNode(ctx: AgentWgpuCtx, nodeId: string, portId: string): Va
       break;
     }
     case 'getRandom': {
-      result = emitGetRandom(ctx, node);
+      result = emitGetRandom(ctx, node, portId);
       break;
     }
     case 'getVariable': {
@@ -975,13 +978,33 @@ function compileExpression(ctx: AgentWgpuCtx, node: GraphNode): ValueRef {
 /** Get Random — float / integer / orientation / bool / options. Per-agent
  *  PCG keyed by `idx` (the lattice grid model — statistical parity, NOT bit-exact
  *  vs JS/WASM's shared xorshift32 stream; the documented WebGPU constraint). */
-function emitGetRandom(ctx: AgentWgpuCtx, node: GraphNode): ValueRef {
+function emitGetRandom(ctx: AgentWgpuCtx, node: GraphNode, portId: string = 'value'): ValueRef {
   const cfg = node.data.config as Record<string, unknown> | undefined;
   const t = (cfg?.['randomType'] as string) || (cfg?.['mode'] as string) || 'float';
-  const minRaw = cfg?.['min']; const maxRaw = cfg?.['max'];
-  const minN = typeof minRaw === 'number' ? minRaw : parseFloat(String(minRaw ?? '0')) || 0;
-  const maxN = typeof maxRaw === 'number' ? maxRaw : parseFloat(String(maxRaw ?? '1')) || 1;
+  const dist = randomDistribution(cfg, t);
+  // Min / Max are PORTS. Unwired ⇒ fold the span at COMPILE time (byte-identical
+  // to the pre-port shader); a WIRED bound takes the runtime path.
+  const wired = (pid: string): boolean => !!ctx.adj.inputToSource.get(`${node.id}:${pid}`);
+  const rangeConst = !wired('min') && !wired('max');
+  const minN = getInlineNum(node, 'min', 0);
+  const maxN = getInlineNum(node, 'max', 1);
   const r = 'rand_f32(idx)';
+  if (t === 'vector') return emitGetRandomVector(ctx, node, portId);
+  if (t === 'float' && dist === 'normal') {
+    // Box-Muller — EXACTLY two draws (each `rand_f32` advances the per-agent
+    // PCG once). `1 - u` keeps log's argument in (0, 1].
+    const p = fresh(ctx, 'rnrm');
+    ctx.lines.push(`  let ${p}u: f32 = ${r};`);
+    ctx.lines.push(`  let ${p}w: f32 = ${r};`);
+    ctx.lines.push(`  let ${p}z: f32 = sqrt(-2.0 * log(1.0 - ${p}u)) * cos(${wgslFloatLit(RANDOM_TAU)} * ${p}w);`);
+    return emitLet(ctx, 'f32', `(${inF32(ctx, node, 'mean', 0)} + ${inF32(ctx, node, 'stddev', 1)} * ${p}z)`, 'rn');
+  }
+  if (t === 'float' && dist === 'exponential') {
+    // Inverse-CDF, ONE draw: mean * -ln(1 - u). No divide ⇒ no ÷0 guard.
+    const p = fresh(ctx, 'rexp');
+    ctx.lines.push(`  let ${p}u: f32 = ${r};`);
+    return emitLet(ctx, 'f32', `(${inF32(ctx, node, 'mean', 0)} * -log(1.0 - ${p}u))`, 're');
+  }
   if (t === 'options') {
     // One option picked uniformly; Fallback when empty (previously gate-rejected
     // → JS clamp). Multi-source scalars pick via a compile-time if/else chain;
@@ -1021,6 +1044,10 @@ function emitGetRandom(ctx: AgentWgpuCtx, node: GraphNode): ValueRef {
     return emitLet(ctx, 'f32', `select(0.0, 1.0, (${r} < ${castTo(probRef, 'f32')}))`, 'rb');
   }
   if (t === 'integer') {
+    if (!rangeConst) {
+      const mn = inF32(ctx, node, 'min', 0), mx = inF32(ctx, node, 'max', 1);
+      return emitLet(ctx, 'f32', `(floor(${r} * ((${mx}) - (${mn}) + 1.0)) + (${mn}))`, 'ri');
+    }
     const span = maxN - minN + 1;
     return emitLet(ctx, 'f32', `(floor(${r} * ${wgslFloatLit(span)}) + ${wgslFloatLit(minN)})`, 'ri');
   }
@@ -1028,7 +1055,45 @@ function emitGetRandom(ctx: AgentWgpuCtx, node: GraphNode): ValueRef {
     return emitLet(ctx, 'f32', `f32(i32(${r} * 4.0) & 3)`, 'ro');
   }
   // float: uniform * (max - min) + min
+  if (!rangeConst) {
+    const mn = inF32(ctx, node, 'min', 0), mx = inF32(ctx, node, 'max', 1);
+    return emitLet(ctx, 'f32', `(${r} * ((${mx}) - (${mn})) + (${mn}))`, 'rf');
+  }
   return emitLet(ctx, 'f32', `(${r} * ${wgslFloatLit(maxN - minN)} + ${wgslFloatLit(minN)})`, 'rf');
+}
+
+/** Get Random, VECTOR mode (multi-output x / y). ONE draw → an angular offset
+ *  uniform in ±Span°/2, applied as a screen-clockwise ROTATION of the reference
+ *  unit vector. Compass convention: 0° = north = -y, 90° = east = +x. */
+function emitGetRandomVector(ctx: AgentWgpuCtx, node: GraphNode, portId: string): ValueRef {
+  const cachedSibling = ctx.valueCache.get(`${node.id}:x`);
+  if (cachedSibling !== undefined) return ctx.valueCache.get(`${node.id}:${portId}`) ?? cachedSibling;
+  const cfg = node.data.config as Record<string, unknown> | undefined;
+  const p = fresh(ctx, 'rvec');
+  ctx.lines.push(`  let ${p}p: f32 = (rand_f32(idx) - 0.5) * (${inF32(ctx, node, 'span', 360)}) * ${wgslFloatLit(RANDOM_DEG2RAD)};`);
+  ctx.lines.push(`  let ${p}c: f32 = cos(${p}p);`);
+  ctx.lines.push(`  let ${p}s: f32 = sin(${p}p);`);
+  if (randomRefSource(cfg) === 'vector') {
+    ctx.lines.push(`  let ${p}dx: f32 = ${inF32(ctx, node, 'dirX', 0)};`);
+    ctx.lines.push(`  let ${p}dy: f32 = ${inF32(ctx, node, 'dirY', -1)};`);
+    ctx.lines.push(`  let ${p}l: f32 = sqrt(${p}dx * ${p}dx + ${p}dy * ${p}dy);`);
+    ctx.lines.push(`  let ${p}i: f32 = 1.0 / max(${p}l, ${wgslFloatLit(RANDOM_LEN_EPS)});`);
+    ctx.lines.push(`  let ${p}fx: f32 = ${p}dx * ${p}i;`);
+    ctx.lines.push(`  let ${p}fy: f32 = select(-1.0, ${p}dy * ${p}i, ${p}l > 0.0);`);
+  } else {
+    ctx.lines.push(`  let ${p}a: f32 = (${inF32(ctx, node, 'angle', 0)}) * ${wgslFloatLit(RANDOM_DEG2RAD)};`);
+    ctx.lines.push(`  let ${p}fx: f32 = sin(${p}a);`);
+    ctx.lines.push(`  let ${p}fy: f32 = -cos(${p}a);`);
+  }
+  const norm = inF32(ctx, node, 'norm', 1);
+  ctx.lines.push(`  let ${p}x: f32 = (${norm}) * (${p}fx * ${p}c - ${p}fy * ${p}s);`);
+  ctx.lines.push(`  let ${p}y: f32 = (${norm}) * (${p}fx * ${p}s + ${p}fy * ${p}c);`);
+  const refs: Record<string, ValueRef> = {
+    x: { expr: `${p}x`, type: 'f32' },
+    y: { expr: `${p}y`, type: 'f32' },
+  };
+  for (const k of Object.keys(refs)) ctx.valueCache.set(`${node.id}:${k}`, refs[k]!);
+  return refs[portId] ?? refs['x']!;
 }
 
 /** Categorical Color — integer index → flat RGB from an N-entry palette (no

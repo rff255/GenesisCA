@@ -1899,6 +1899,100 @@ function cadenceInvariant(st, step) {
   return null;
 }
 
+
+// ---------------------------------------------------------------------------
+// GET RANDOM overhaul: parameterised INTERVALS (Min/Max as ports, inline AND
+// wired), DISTRIBUTIONS (normal = 2 draws, exponential = 1) and the VECTOR mode
+// (multi-output X/Y). Parity pins the draw ORDER + the emitted arithmetic; the
+// VALUE invariant below is stream-INDEPENDENT (it uses degenerate parameters
+// whose answer is exact, plus range/norm laws) because parity alone would pass
+// happily if BOTH targets drew the wrong number of times in the same way.
+// ---------------------------------------------------------------------------
+function buildGetRandomModel() {
+  const used = new Set();
+  const nid = (p) => { let id; do { id = p + Math.random().toString(36).slice(2, 8); } while (used.has(id)); used.add(id); return id; };
+  const aN = [], aEd = [];
+  const an = (t, c) => { const n = { id: nid('a'), type: 'caNode', position: { x: 0, y: 0 }, data: { nodeType: t, config: c } }; aN.push(n); return n; };
+  const aE = (s, sp, tt, tp, cat) => aEd.push({ id: nid('e'), source: s.id, target: tt.id, sourceHandle: `output_${cat}_${sp}`, targetHandle: `input_${cat}_${tp}` });
+  const bs = an('behaviourStep', {});
+  let prev = bs, prevPort = 'do';
+  const chain = (rndCfg, attrId, port, extraWires) => {
+    const rnd = an('getRandom', rndCfg);
+    for (const w of (extraWires || [])) aE(w[0], w[1], rnd, w[2], 'value');
+    const set = an('setAttribute', { attributeId: attrId });
+    aE(rnd, port || 'value', set, 'value', 'value');
+    aE(prev, prevPort, set, 'do', 'flow');
+    prev = set; prevPort = 'next';
+    return rnd;
+  };
+  const alsoY = (rnd, attrId) => {
+    const set = an('setAttribute', { attributeId: attrId });
+    aE(rnd, 'y', set, 'value', 'value');
+    aE(prev, prevPort, set, 'do', 'flow');
+    prev = set; prevPort = 'next';
+  };
+  // 1. Decimal / uniform, INLINE interval [10, 20).
+  chain({ randomType: 'float', distribution: 'uniform', _port_min: '10', _port_max: '20' }, 'uniIn');
+  // 2. Decimal / uniform, WIRED interval [-5, -1) - the runtime-span path.
+  const cLo = an('getConstant', { constType: 'float', constValue: '-5' });
+  const cHi = an('getConstant', { constType: 'float', constValue: '-1' });
+  chain({ randomType: 'float', distribution: 'uniform' }, 'uniW', 'value', [[cLo, 'value', 'min'], [cHi, 'value', 'max']]);
+  // 3. Decimal / normal with stddev 0 - DETERMINISTICALLY the mean, and still
+  //    exactly TWO draws (the stream advance is what parity pins).
+  chain({ randomType: 'float', distribution: 'normal', _port_mean: '7', _port_stddev: '0' }, 'norm0');
+  // 4. Decimal / normal, a real bell.
+  chain({ randomType: 'float', distribution: 'normal', _port_mean: '0', _port_stddev: '1' }, 'normS');
+  // 5. Decimal / exponential, mean 3 (never negative).
+  chain({ randomType: 'float', distribution: 'exponential', _port_mean: '3' }, 'expo');
+  // 6. Integer with a WIRED lower bound.
+  const cIlo = an('getConstant', { constType: 'integer', constValue: '4' });
+  chain({ randomType: 'integer', _port_max: '9' }, 'intW', 'value', [[cIlo, 'value', 'min']]);
+  // 7. Vector, ANGLE reference, span 0 => exactly due east at |v| = 2.
+  alsoY(chain({ randomType: 'vector', refSource: 'angle', _port_norm: '2', _port_angle: '90', _port_span: '0' }, 'vAx', 'x'), 'vAy');
+  // 8. Vector, WIRED direction (0, -1) = north, span 0 => exactly (0, -3).
+  alsoY(chain({ randomType: 'vector', refSource: 'vector', _port_norm: '3', _port_dirX: '0', _port_dirY: '-1', _port_span: '0' }, 'vDx', 'x'), 'vDy');
+  // 9. Vector, FULL span - direction random, but the NORM is a law.
+  alsoY(chain({ randomType: 'vector', refSource: 'angle', _port_norm: '5', _port_span: '360' }, 'vFx', 'x'), 'vFy');
+  const attr = (id) => ({ id, name: id, type: 'float', defaultValue: '0' });
+  return {
+    schemaVersion: 1,
+    properties: { name: 'Get Random Parity Test', dimension: '2d', gridWidth: 24, gridHeight: 24, topology: '2d-grid', boundaryTreatment: 'torus', useWasm: false, useWebGPU: false },
+    topologyMode: { gridCells: false, agents: true },
+    centerBased: { enabled: true, maxAgents: 100, maxBonds: 0, worldWidth: 24, worldHeight: 24, seedCount: 40, seedPattern: 'scatter', defaultRadius: 0.5, growthRate: 0, repulsionStiffness: 0, adhesionStiffness: 0, interactionRange: 1.5, drag: 1, timeStep: 0.1, momentum: 0, maxSpeed: 0, neighbourQueryRadius: 8, useBondingPhysics: false, autoBond: false, agentTarget: 'wasm', agentUpdateMode: 'async',
+      agentCapabilities: { motion: 'static', body: true, collision: 'off', bonds: 'off', autoBond: false, growth: false, division: false, lifespan: false, populationBirth: false, populationDeath: false, sensing: false, sensingHeadingSource: 'velocity', orientation: false, fieldCoupling: false, appearance: true } },
+    attributes: [], modelAttributes: [], neighborhoods: [],
+    agentAttributes: ['uniIn', 'uniW', 'norm0', 'normS', 'expo', 'intW', 'vAx', 'vAy', 'vDx', 'vDy', 'vFx', 'vFy'].map(attr),
+    variables: [], agentVariables: [], indicators: [], mappings: [],
+    graphNodes: [], graphEdges: [], agentGraphNodes: aN, agentGraphEdges: aEd, macroDefs: [],
+  };
+}
+
+/** Stream-INDEPENDENT value laws for the Get Random synthetic. */
+function getRandomInvariant(st) {
+  const A = st.attrRead;
+  const near = (a, b, eps) => Math.abs(a - b) <= eps;
+  for (let i = 0; i < st.highWater; i++) {
+    if (!st.alive[i]) continue;
+    if (!(A.uniIn[i] >= 10 && A.uniIn[i] < 20)) return `agent ${i}: inline interval ${A.uniIn[i]} outside [10, 20)`;
+    if (!(A.uniW[i] >= -5 && A.uniW[i] < -1)) return `agent ${i}: WIRED interval ${A.uniW[i]} outside [-5, -1)`;
+    if (A.norm0[i] !== 7) return `agent ${i}: normal(mean 7, sd 0) = ${A.norm0[i]}, must be exactly 7`;
+    if (!Number.isFinite(A.normS[i]) || Math.abs(A.normS[i]) > 12) return `agent ${i}: normal draw ${A.normS[i]} implausible`;
+    if (!(A.expo[i] >= 0) || !Number.isFinite(A.expo[i])) return `agent ${i}: exponential draw ${A.expo[i]} must be >= 0`;
+    if (!(A.intW[i] >= 4 && A.intW[i] <= 9) || A.intW[i] !== Math.floor(A.intW[i])) return `agent ${i}: wired integer ${A.intW[i]} outside 4..9`;
+    // Compass: 0 deg = north = -y, 90 deg = east = +x.
+    if (!near(A.vAx[i], 2, 1e-12) || !near(A.vAy[i], 0, 1e-12)) return `agent ${i}: angle-90 span-0 vector (${A.vAx[i]}, ${A.vAy[i]}) must be (2, 0)`;
+    if (A.vDx[i] !== 0 || A.vDy[i] !== -3) return `agent ${i}: dir(0,-1) span-0 vector (${A.vDx[i]}, ${A.vDy[i]}) must be exactly (0, -3)`;
+    const n2 = A.vFx[i] * A.vFx[i] + A.vFy[i] * A.vFy[i];
+    if (!near(n2, 25, 1e-9)) return `agent ${i}: full-span vector norm^2 ${n2} must be 25`;
+  }
+  return null;
+}
+
+entries.push({
+  name: '[synthetic] Get Random (intervals, normal/exponential, vector)',
+  raw: buildGetRandomModel(), invariant: getRandomInvariant,
+});
+
 entries.push({
   name: '[synthetic] Rule cadence (Get Generation + 5 Periodic Steps)',
   raw: buildCadenceModel(), invariant: cadenceInvariant,

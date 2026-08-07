@@ -31,14 +31,17 @@ import {
   OP_F64_MAX, OP_F64_MIN, OP_F64_MUL, OP_F64_NE, OP_F64_SQRT, OP_F64_SUB,
   OP_I32_ADD, OP_I32_AND, OP_I32_DIV_S, OP_I32_EQ, OP_I32_EQZ, OP_I32_GE_S,
   OP_I32_GT_S, OP_I32_LT_S, OP_I32_MUL, OP_I32_OR, OP_I32_REM_S, OP_I32_SHL,
-  OP_I32_SHR_S, OP_I32_SHR_U, OP_I32_SUB, OP_I32_XOR, OP_SELECT,
+  OP_I32_SHR_S, OP_I32_SHR_U, OP_I32_SUB, OP_I32_XOR, OP_F64_NEG, OP_SELECT,
   buildModule, byte, exportEntry, EXPORT_FUNC, funcType, importEntry,
   importFuncDesc, importMemoryDesc, leb128u,
 } from './encoder';
 import { INVALID_NI, packNI, packNI3, NI_ARRAY_PRODUCERS } from '../niCodec';
 import {
-  WasmEmitter, ArrayRef, LocalRef, ValueRef, pushValueAs,
+  WasmEmitter, ArrayRef, LocalRef, ValueRef, pushValueAs, isInline,
 } from './emitter';
+import {
+  randomDistribution, randomRefSource, RANDOM_DEG2RAD, RANDOM_TAU, RANDOM_LEN_EPS,
+} from '../../nodes/GetRandomNode';
 import type { MemoryLayout } from './layout';
 import { classifyLoopInvariant } from '../loopInvariant';
 import { getInlineValue, parseInlineNum } from '../inlinePort';
@@ -1531,51 +1534,160 @@ const VALUE_NODE_EMITTERS: Record<string, NodeValueEmitter> = {
 
   // -- Random (xorshift32, similar to JS GetRandomNode) --
   getRandom: ({ node, ctx, inputs }) => {
+    const cfg = node.data.config as unknown as Record<string, unknown>;
     const t = (node.data.config.randomType as string) || 'float';
-    const minRaw = node.data.config.min;
-    const maxRaw = node.data.config.max;
-    const minN = typeof minRaw === 'number' ? minRaw : parseFloat(String(minRaw ?? '0')) || 0;
-    const maxN = typeof maxRaw === 'number' ? maxRaw : parseFloat(String(maxRaw ?? '1')) || 1;
+    const dist = randomDistribution(cfg, t);
+    // Min / Max are PORTS now. Unwired ⇒ an InlineRef carrying the widget value,
+    // which keeps the historical COMPILE-TIME fold (`f64Const(max - min)`) and
+    // therefore the byte-identical module; a WIRED port takes the runtime path.
+    const minRef = inputs['min'] ?? ({ inline: true, value: 0, valtype: F64 } as ValueRef);
+    const maxRef = inputs['max'] ?? ({ inline: true, value: 1, valtype: F64 } as ValueRef);
+    const minN = isInline(minRef) ? minRef.value : 0;
+    const maxN = isInline(maxRef) ? maxRef.value : 1;
+    const rangeConst = isInline(minRef) && isInline(maxRef);
 
-    // Load _rs from memory[rngStateOffset] (uint32)
-    const rsLocal = ctx.emitter.allocLocal(I32);
-    ctx.emitter.i32Const(0);
-    ctx.emitter.i32Load(ctx.layout.rngStateOffset, 2);
-    ctx.emitter.localSet(rsLocal);
+    /** Load → advance → store the shared xorshift32 state, leaving the uniform
+     *  [0, 1) f64 on the stack. Called ONCE for every mode except the normal
+     *  distribution's Box-Muller pair (exactly two calls — never a loop). */
+    const drawUniform = (): void => {
+      // Load _rs from memory[rngStateOffset] (uint32)
+      const rsLocal = ctx.emitter.allocLocal(I32);
+      ctx.emitter.i32Const(0);
+      ctx.emitter.i32Load(ctx.layout.rngStateOffset, 2);
+      ctx.emitter.localSet(rsLocal);
 
-    // Advance: _rs = (_rs ^ (_rs << 13)) >>> 0; etc.
-    // Step 1: _rs ^= _rs << 13
-    ctx.emitter.localGet(rsLocal);
-    ctx.emitter.localGet(rsLocal);
-    ctx.emitter.i32Const(13);
-    ctx.emitter.emit(byte(0x74)); // OP_I32_SHL
-    ctx.emitter.emit(byte(0x73)); // OP_I32_XOR
-    ctx.emitter.localSet(rsLocal);
-    // Step 2: _rs ^= _rs >>> 17
-    ctx.emitter.localGet(rsLocal);
-    ctx.emitter.localGet(rsLocal);
-    ctx.emitter.i32Const(17);
-    ctx.emitter.emit(byte(0x76)); // OP_I32_SHR_U
-    ctx.emitter.emit(byte(0x73)); // OP_I32_XOR
-    ctx.emitter.localSet(rsLocal);
-    // Step 3: _rs ^= _rs << 5
-    ctx.emitter.localGet(rsLocal);
-    ctx.emitter.localGet(rsLocal);
-    ctx.emitter.i32Const(5);
-    ctx.emitter.emit(byte(0x74)); // OP_I32_SHL
-    ctx.emitter.emit(byte(0x73)); // OP_I32_XOR
-    ctx.emitter.localSet(rsLocal);
-    // Store back to memory
-    ctx.emitter.i32Const(0);
-    ctx.emitter.localGet(rsLocal);
-    ctx.emitter.i32Store(ctx.layout.rngStateOffset, 2);
+      // Advance: _rs = (_rs ^ (_rs << 13)) >>> 0; etc.
+      // Step 1: _rs ^= _rs << 13
+      ctx.emitter.localGet(rsLocal);
+      ctx.emitter.localGet(rsLocal);
+      ctx.emitter.i32Const(13);
+      ctx.emitter.emit(byte(0x74)); // OP_I32_SHL
+      ctx.emitter.emit(byte(0x73)); // OP_I32_XOR
+      ctx.emitter.localSet(rsLocal);
+      // Step 2: _rs ^= _rs >>> 17
+      ctx.emitter.localGet(rsLocal);
+      ctx.emitter.localGet(rsLocal);
+      ctx.emitter.i32Const(17);
+      ctx.emitter.emit(byte(0x76)); // OP_I32_SHR_U
+      ctx.emitter.emit(byte(0x73)); // OP_I32_XOR
+      ctx.emitter.localSet(rsLocal);
+      // Step 3: _rs ^= _rs << 5
+      ctx.emitter.localGet(rsLocal);
+      ctx.emitter.localGet(rsLocal);
+      ctx.emitter.i32Const(5);
+      ctx.emitter.emit(byte(0x74)); // OP_I32_SHL
+      ctx.emitter.emit(byte(0x73)); // OP_I32_XOR
+      ctx.emitter.localSet(rsLocal);
+      // Store back to memory
+      ctx.emitter.i32Const(0);
+      ctx.emitter.localGet(rsLocal);
+      ctx.emitter.i32Store(ctx.layout.rngStateOffset, 2);
 
-    // Compute float value: (_rs >>> 0) / 2^32. Use unsigned f64.convert_i32_u.
-    ctx.emitter.localGet(rsLocal);
-    ctx.emitter.op(OP_F64_CONVERT_I32_U);
-    ctx.emitter.f64Const(4294967296);
-    ctx.emitter.op(OP_F64_DIV);
+      // Compute float value: (_rs >>> 0) / 2^32. Use unsigned f64.convert_i32_u.
+      ctx.emitter.localGet(rsLocal);
+      ctx.emitter.op(OP_F64_CONVERT_I32_U);
+      ctx.emitter.f64Const(4294967296);
+      ctx.emitter.op(OP_F64_DIV);
+    };
+    drawUniform();
     // Now stack has uniform [0, 1) float
+
+    if (t === 'vector') {
+      // ONE draw → an angular offset uniform in ±Span°/2, applied as a
+      // screen-clockwise ROTATION of the reference unit vector. Rotating (rather
+      // than adding to a computed reference ANGLE) is what keeps the wired-
+      // direction path free of atan2, which this module does not import.
+      const em = ctx.emitter;
+      const uL = em.allocLocal(F64); em.localSet(uL);
+      const push = (portId: string, dflt: number): void =>
+        pushValueAs(em, inputs[portId] ?? ({ inline: true, value: dflt, valtype: F64 } as ValueRef), F64);
+      // phi = (u - 0.5) * span * DEG2RAD
+      const phiL = em.allocLocal(F64);
+      em.localGet(uL); em.f64Const(0.5); em.op(OP_F64_SUB);
+      push('span', 360); em.op(OP_F64_MUL);
+      em.f64Const(RANDOM_DEG2RAD); em.op(OP_F64_MUL);
+      em.localSet(phiL);
+      const cL = em.allocLocal(F64);
+      em.localGet(phiL); em.emit(byte(0x10), leb128u(COS_FUNC_IDX)); em.localSet(cL);
+      const sL = em.allocLocal(F64);
+      em.localGet(phiL); em.emit(byte(0x10), leb128u(SIN_FUNC_IDX)); em.localSet(sL);
+      // Reference unit vector.
+      const fxL = em.allocLocal(F64), fyL = em.allocLocal(F64);
+      if (randomRefSource(cfg) === 'vector') {
+        const dxL = em.allocLocal(F64), dyL = em.allocLocal(F64);
+        push('dirX', 0); em.localSet(dxL);
+        push('dirY', -1); em.localSet(dyL);
+        const lenL = em.allocLocal(F64);
+        em.localGet(dxL); em.localGet(dxL); em.op(OP_F64_MUL);
+        em.localGet(dyL); em.localGet(dyL); em.op(OP_F64_MUL); em.op(OP_F64_ADD);
+        em.op(OP_F64_SQRT); em.localSet(lenL);
+        // inv = 1 / max(len, eps) — the eps guard makes a zero direction give
+        // (0, 0) rather than NaN, so the north fallback is a single select.
+        const invL = em.allocLocal(F64);
+        em.f64Const(1);
+        em.localGet(lenL); em.f64Const(RANDOM_LEN_EPS); em.op(OP_F64_MAX);
+        em.op(OP_F64_DIV); em.localSet(invL);
+        em.localGet(dxL); em.localGet(invL); em.op(OP_F64_MUL); em.localSet(fxL);
+        // fy = len > 0 ? dy * inv : -1
+        em.localGet(dyL); em.localGet(invL); em.op(OP_F64_MUL);
+        em.f64Const(-1);
+        em.localGet(lenL); em.f64Const(0); em.op(OP_F64_GT);
+        em.op(OP_SELECT); em.localSet(fyL);
+      } else {
+        const aL = em.allocLocal(F64);
+        push('angle', 0); em.f64Const(RANDOM_DEG2RAD); em.op(OP_F64_MUL); em.localSet(aL);
+        em.localGet(aL); em.emit(byte(0x10), leb128u(SIN_FUNC_IDX)); em.localSet(fxL);
+        em.localGet(aL); em.emit(byte(0x10), leb128u(COS_FUNC_IDX)); em.op(OP_F64_NEG); em.localSet(fyL);
+      }
+      // x = norm * (fx*c - fy*s);  y = norm * (fx*s + fy*c)
+      const xL = em.allocLocal(F64), yL = em.allocLocal(F64);
+      push('norm', 1);
+      em.localGet(fxL); em.localGet(cL); em.op(OP_F64_MUL);
+      em.localGet(fyL); em.localGet(sL); em.op(OP_F64_MUL); em.op(OP_F64_SUB);
+      em.op(OP_F64_MUL); em.localSet(xL);
+      push('norm', 1);
+      em.localGet(fxL); em.localGet(sL); em.op(OP_F64_MUL);
+      em.localGet(fyL); em.localGet(cL); em.op(OP_F64_MUL); em.op(OP_F64_ADD);
+      em.op(OP_F64_MUL); em.localSet(yL);
+      const xRef: LocalRef = { localIdx: xL, valtype: F64 };
+      setCachedPort(ctx, node.id, 'x', xRef);
+      setCachedPort(ctx, node.id, 'y', { localIdx: yL, valtype: F64 });
+      return xRef; // default port → x (parity with the other multi-output emitters)
+    }
+
+    if (t === 'float' && dist === 'normal') {
+      // Box-Muller — EXACTLY two draws. `1 - u` keeps log's argument in (0, 1].
+      const em = ctx.emitter;
+      const u1L = em.allocLocal(F64); em.localSet(u1L);
+      drawUniform();
+      const u2L = em.allocLocal(F64); em.localSet(u2L);
+      // z = sqrt(-2 * log(1 - u1)) * cos(TAU * u2)
+      em.f64Const(-2);
+      em.f64Const(1); em.localGet(u1L); em.op(OP_F64_SUB);
+      em.emit(byte(0x10), leb128u(LOG_FUNC_IDX));
+      em.op(OP_F64_MUL); em.op(OP_F64_SQRT);
+      em.f64Const(RANDOM_TAU); em.localGet(u2L); em.op(OP_F64_MUL);
+      em.emit(byte(0x10), leb128u(COS_FUNC_IDX));
+      em.op(OP_F64_MUL);
+      const zL = em.allocLocal(F64); em.localSet(zL);
+      // mean + stddev * z
+      pushValueAs(em, inputs['mean'] ?? ({ inline: true, value: 0, valtype: F64 } as ValueRef), F64);
+      pushValueAs(em, inputs['stddev'] ?? ({ inline: true, value: 1, valtype: F64 } as ValueRef), F64);
+      em.localGet(zL); em.op(OP_F64_MUL); em.op(OP_F64_ADD);
+      return storeResult(em, F64);
+    }
+
+    if (t === 'float' && dist === 'exponential') {
+      // Inverse-CDF, ONE draw: mean * -ln(1 - u). No divide ⇒ no ÷0 guard.
+      const em = ctx.emitter;
+      const uL = em.allocLocal(F64); em.localSet(uL);
+      pushValueAs(em, inputs['mean'] ?? ({ inline: true, value: 0, valtype: F64 } as ValueRef), F64);
+      em.f64Const(1); em.localGet(uL); em.op(OP_F64_SUB);
+      em.emit(byte(0x10), leb128u(LOG_FUNC_IDX));
+      em.op(OP_F64_NEG);
+      em.op(OP_F64_MUL);
+      return storeResult(em, F64);
+    }
 
     if (t === 'bool') {
       // probability < random ? 0 : 1   (JS does: random < prob ? 1 : 0)
@@ -1588,6 +1700,16 @@ const VALUE_NODE_EMITTERS: Record<string, NodeValueEmitter> = {
       return storeResult(ctx.emitter, I32);
     } else if (t === 'integer') {
       // Math.floor(random * (max - min + 1)) + min
+      if (!rangeConst) {
+        // A wired bound ⇒ compute the span at runtime, in f64 (mirrors the JS
+        // emit exactly, including a fractional Min the const path would trunc).
+        const em = ctx.emitter;
+        pushValueAs(em, maxRef, F64); pushValueAs(em, minRef, F64); em.op(OP_F64_SUB);
+        em.f64Const(1); em.op(OP_F64_ADD);
+        em.op(OP_F64_MUL); em.op(OP_F64_FLOOR);
+        pushValueAs(em, minRef, F64); em.op(OP_F64_ADD);
+        return storeResult(em, F64);
+      }
       ctx.emitter.f64Const(maxN - minN + 1);
       ctx.emitter.op(OP_F64_MUL);
       // Truncate via f64 -> i32 (for non-negative values, trunc == floor)
@@ -1697,6 +1819,13 @@ const VALUE_NODE_EMITTERS: Record<string, NodeValueEmitter> = {
       return { localIdx: accLocal, valtype: accValtype };
     } else {
       // random * (max - min) + min
+      if (!rangeConst) {
+        const em = ctx.emitter;
+        pushValueAs(em, maxRef, F64); pushValueAs(em, minRef, F64); em.op(OP_F64_SUB);
+        em.op(OP_F64_MUL);
+        pushValueAs(em, minRef, F64); em.op(OP_F64_ADD);
+        return storeResult(em, F64);
+      }
       ctx.emitter.f64Const(maxN - minN);
       ctx.emitter.op(OP_F64_MUL);
       ctx.emitter.f64Const(minN);

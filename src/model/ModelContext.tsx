@@ -40,6 +40,7 @@ import { resolveAxes, remapTableDataAxis, remapTableDataForAxesChange } from '..
 import { cloneMacroWithFreshIds } from './macroImport';
 import { migrateColorInterpolationNodes } from './colorScaleMigration';
 import { migrateTagConstantNodes } from './tagConstantMigration';
+import { migrateGetRandomRange } from './getRandomRangeMigration';
 import { migrateLookupTables } from './lookupTableMigration';
 import { migrateMoveSelfToNeighborNodes } from './moveSelfToNeighborMigration';
 import { migrateSetCellLooksNodes } from './setCellLooksMigration';
@@ -1593,6 +1594,11 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
       // `type` input, behaviourStep `myType`-out edges (agent graph + macroDefs).
       // Idempotent; no-op for non-agent + already-clean models.
       m = migrateAgentTypeRemoval(m);
+      // Get Random's interval moved from `config.min`/`config.max` to real
+      // `min`/`max` INPUT PORTS — re-key the legacy values onto `_port_min` /
+      // `_port_max` (cells + agents + overseer + macroDefs). Value-for-value, so
+      // the emitted code is unchanged. Idempotent.
+      m = migrateGetRandomRange(m);
       // Generic Agent Platform: split legacy agent-state cell attributes into
       // the dedicated agentAttributes[] set + set agentAccess on cell attrs the
       // agent graph reads/writes as a field. No-op for non-agent + already-split

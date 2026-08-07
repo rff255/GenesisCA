@@ -171,6 +171,11 @@ export function compileOverseerGraph(
     if (t === 'getModelAttribute' && src?.data.config.isColorAttr) {
       return { ref: `_v${srcId}_${portId}`, kind: 'emit' };
     }
+    // Get Random is single-output EXCEPT in `vector` mode, whose X / Y
+    // components resolve via the `_v<id>_<port>` convention.
+    if (t === 'getRandom' && src?.data.config.randomType === 'vector') {
+      return { ref: `_v${srcId}_${portId}`, kind: 'emit' };
+    }
     return { ref: `_v${srcId}`, kind: 'emit' };
   }
 

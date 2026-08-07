@@ -106,6 +106,9 @@ const AGENT_ROOT_TYPES = new Set(['behaviourStep', 'divisionEvent', 'agentInit',
 function isMultiOutput(data: { nodeType: string; config: Record<string, string | number | boolean> }): boolean {
   if (MULTI_OUTPUT_TYPES.has(data.nodeType)) return true;
   if (data.nodeType === 'getModelAttribute' && data.config.isColorAttr) return true;
+  // Get Random is single-output (`value`) in every mode EXCEPT `vector`, whose
+  // X / Y components resolve via the `_v<id>_<port>` convention.
+  if (data.nodeType === 'getRandom' && data.config.randomType === 'vector') return true;
   if (data.nodeType === 'groupStatement' || data.nodeType === 'groupCounting'
     || data.nodeType === 'groupOperator') return true;
   // filterNeighbors and joinNeighbors expose `result` (kept NI array) and

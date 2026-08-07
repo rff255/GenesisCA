@@ -34,6 +34,9 @@ import {
   detectWebGPUIncompatibilities, detectWebGPUModelIncompatibilities,
 } from '../../nodes/nodeValidation';
 import { getInlineValue, parseInlineNum } from '../inlinePort';
+import {
+  randomDistribution, randomRefSource, RANDOM_DEG2RAD, RANDOM_TAU, RANDOM_LEN_EPS,
+} from '../../nodes/GetRandomNode';
 import { INVALID_NI, packNI, packNI3, NI_ARRAY_PRODUCERS } from '../niCodec';
 import { analyzeSinkScopes, CELL_TOP, type ScopeId, type SinkAnalysisResult } from '../sinkAnalysis';
 import { canonicalizeAccessorEdges } from '../accessorCSE';
@@ -1686,18 +1689,84 @@ const VALUE_NODE_EMITTERS: Record<string, NodeValueEmitter> = {
   },
 
   getRandom: ({ node, ctx, inputs }) => {
+    const cfg = node.data.config as unknown as Record<string, unknown>;
     const t = (node.data.config.randomType as string) || 'float';
-    const minRaw = node.data.config.min;
-    const maxRaw = node.data.config.max;
-    const minN = typeof minRaw === 'number' ? minRaw : (parseFloat(String(minRaw ?? '0')) || 0);
-    const maxN = typeof maxRaw === 'number' ? maxRaw : (parseFloat(String(maxRaw ?? '1')) || 1);
+    const dist = randomDistribution(cfg, t);
+    // Min / Max are PORTS. `inputs` carries an inline CONSTANT for an unwired
+    // port, so wiredness is read off inputToSource — an unwired range keeps the
+    // historical compile-time fold (`max - min` baked into the literal) and
+    // therefore the byte-identical shader; a wired one goes runtime.
+    // WGSL needs a decimal point (or an exponent) for a float literal.
+    const wgslFloatLit = (n: number): string => (Number.isInteger(n) ? `${n}.0` : `${n}`);
+    const wired = (portId: string): boolean => !!ctx.inputToSource.get(`${node.id}:${portId}`);
+    const inlineNum = (portId: string, dflt: number): number => {
+      const port = getNodeDef('getRandom')?.ports.find(p => p.id === portId);
+      return parseInlineNum(port ? getInlineValue(port, node.data.config) : undefined, dflt);
+    };
+    const wiredRange = wired('min') || wired('max');
+    const minN = inlineNum('min', 0);
+    const maxN = inlineNum('max', 1);
+    const inF = (portId: string, dflt: number): string => {
+      const r = inputs[portId];
+      return r && wired(portId) ? castTo(r, 'f32') : wgslFloatLit(inlineNum(portId, dflt));
+    };
+    const minX = inF('min', 0);
+    const maxX = inF('max', 1);
     const rExpr = `rand_f32(idx)`;
+    if (t === 'vector') {
+      // ONE draw → an angular offset uniform in ±Span°/2, applied as a
+      // screen-clockwise ROTATION of the reference unit vector (no atan2 needed
+      // for the wired-direction path). Multi-output: cache x AND y.
+      const p = fresh(ctx, 'rvec');
+      ctx.lines.push(`  let ${p}p: f32 = ((${rExpr}) - 0.5) * (${inF('span', 360)}) * ${wgslFloatLit(RANDOM_DEG2RAD)};`);
+      ctx.lines.push(`  let ${p}c: f32 = cos(${p}p);`);
+      ctx.lines.push(`  let ${p}s: f32 = sin(${p}p);`);
+      if (randomRefSource(cfg) === 'vector') {
+        ctx.lines.push(`  let ${p}dx: f32 = ${inF('dirX', 0)};`);
+        ctx.lines.push(`  let ${p}dy: f32 = ${inF('dirY', -1)};`);
+        ctx.lines.push(`  let ${p}l: f32 = sqrt(${p}dx * ${p}dx + ${p}dy * ${p}dy);`);
+        ctx.lines.push(`  let ${p}i: f32 = 1.0 / max(${p}l, ${wgslFloatLit(RANDOM_LEN_EPS)});`);
+        ctx.lines.push(`  let ${p}fx: f32 = ${p}dx * ${p}i;`);
+        ctx.lines.push(`  let ${p}fy: f32 = select(-1.0, ${p}dy * ${p}i, ${p}l > 0.0);`);
+      } else {
+        ctx.lines.push(`  let ${p}a: f32 = (${inF('angle', 0)}) * ${wgslFloatLit(RANDOM_DEG2RAD)};`);
+        ctx.lines.push(`  let ${p}fx: f32 = sin(${p}a);`);
+        ctx.lines.push(`  let ${p}fy: f32 = -cos(${p}a);`);
+      }
+      const norm = inF('norm', 1);
+      ctx.lines.push(`  let ${p}x: f32 = (${norm}) * (${p}fx * ${p}c - ${p}fy * ${p}s);`);
+      ctx.lines.push(`  let ${p}y: f32 = (${norm}) * (${p}fx * ${p}s + ${p}fy * ${p}c);`);
+      const xRef: ValueRef = { expr: `${p}x`, type: 'f32' };
+      setCachedPort(ctx, node.id, 'x', xRef);
+      setCachedPort(ctx, node.id, 'y', { expr: `${p}y`, type: 'f32' });
+      return xRef;
+    }
+    if (t === 'float' && dist === 'normal') {
+      // Box-Muller — EXACTLY two draws (`rand_f32` advances the per-cell PCG
+      // once per occurrence). `1 - u` keeps log's argument in (0, 1].
+      const p = fresh(ctx, 'rnrm');
+      ctx.lines.push(`  let ${p}u: f32 = ${rExpr};`);
+      ctx.lines.push(`  let ${p}w: f32 = ${rExpr};`);
+      ctx.lines.push(`  let ${p}z: f32 = sqrt(-2.0 * log(1.0 - ${p}u)) * cos(${wgslFloatLit(RANDOM_TAU)} * ${p}w);`);
+      return emitLet(ctx, 'f32', `((${inF('mean', 0)}) + (${inF('stddev', 1)}) * ${p}z)`, 'rn');
+    }
+    if (t === 'float' && dist === 'exponential') {
+      // Inverse-CDF, ONE draw: mean * -ln(1 - u). No divide ⇒ no ÷0 guard.
+      const p = fresh(ctx, 'rexp');
+      ctx.lines.push(`  let ${p}u: f32 = ${rExpr};`);
+      return emitLet(ctx, 'f32', `((${inF('mean', 0)}) * -log(1.0 - ${p}u))`, 're');
+    }
     if (t === 'bool') {
       const prob = inputs['probability'];
       const probExpr = prob ? castTo(prob, 'f32') : '0.5';
       return emitLet(ctx, 'bool', `(${rExpr} < ${probExpr})`, 'rb');
     }
     if (t === 'integer') {
+      if (wiredRange) {
+        // A wired bound ⇒ compute the span at runtime, in f32 (mirrors JS
+        // `Math.floor(u * (max - min + 1)) + min`).
+        return emitLet(ctx, 'f32', `(floor(${rExpr} * ((${maxX}) - (${minX}) + 1.0)) + (${minX}))`, 'ri');
+      }
       const span = maxN - minN + 1;
       const lit = `${span}.0`;
       return emitLet(ctx, 'i32', `(i32(${rExpr} * ${lit}) + ${minN | 0})`, 'ri');
@@ -1774,6 +1843,9 @@ const VALUE_NODE_EMITTERS: Record<string, NodeValueEmitter> = {
       const idxName = fresh(ctx, 'roI');
       ctx.lines.push(`  let ${idxName}: i32 = i32(${rExpr} * ${N}.0);`);
       return emitLet(ctx, 'f32', `${arrName}[${idxName}]`, 'rom');
+    }
+    if (wiredRange) {
+      return emitLet(ctx, 'f32', `((${rExpr} * ((${maxX}) - (${minX}))) + (${minX}))`, 'rf');
     }
     const span = maxN - minN;
     const sl = Number.isInteger(span) ? `${span}.0` : `${span}`;

@@ -88,6 +88,9 @@ import {
 } from '../wasm/encoder';
 import { WasmEmitter, isInline, type ValueRef, type LocalRef } from '../wasm/emitter';
 import { POW_FUNC_IDX, EXP_FUNC_IDX, LOG_FUNC_IDX, SIN_FUNC_IDX, COS_FUNC_IDX, TAN_FUNC_IDX, TANH_FUNC_IDX, NUM_IMPORTED_FUNCS } from '../wasm/compile';
+import {
+  randomDistribution, randomRefSource, RANDOM_DEG2RAD, RANDOM_TAU, RANDOM_LEN_EPS,
+} from '../../nodes/GetRandomNode';
 import { computeAsyncReadWriteHazards } from '../asyncWriteHazard';
 import { computeVolatileHoist } from '../volatileHoist';
 import { getNodeDef } from '../../nodes/registry';
@@ -976,6 +979,9 @@ function compileValueNode(ctx: AgentWasmCtx, nodeId: string, portId: string): Va
       break;
     }
     case 'getRandom': {
+      // Vector mode is MULTI-OUTPUT (x / y) and caches both ports itself.
+      const rt = (node.data.config?.['randomType'] as string) || '';
+      if (rt === 'vector') { result = emitGetRandomVector(ctx, node, portId); break; }
       result = f64Result(() => emitGetRandom(ctx, node));
       break;
     }
@@ -1385,18 +1391,23 @@ function compileExpression(ctx: AgentWasmCtx, node: GraphNode): ValueRef {
   return emitWasm(res.ast, ctx.em, inputs);
 }
 
-/** Get Random — float / integer / orientation / bool / options. Mirrors the
- *  lattice WASM getRandom xorshift32 + JS GetRandomNode exactly: the SAME
- *  constants (13/17/5) on the in-register `_rs` local (read once at function
- *  top, stored back at the end). Leaves an f64 on the stack. */
+/** Get Random — float (uniform / normal / exponential) / integer / orientation /
+ *  bool / options / vector. Mirrors the lattice WASM getRandom xorshift32 + JS
+ *  GetRandomNode exactly: the SAME constants (13/17/5) on the in-register `_rs`
+ *  local (read once at function top, stored back at the end). Leaves an f64 on
+ *  the stack; the multi-output `vector` mode is handled by its own wrapper. */
 function emitGetRandom(ctx: AgentWasmCtx, node: GraphNode): void {
   const em = ctx.em;
   const cfg = node.data.config as Record<string, unknown> | undefined;
   // The Boids node uses `mode` (not `randomType`); accept either key, default float.
   const t = (cfg?.['randomType'] as string) || (cfg?.['mode'] as string) || 'float';
-  const minRaw = cfg?.['min']; const maxRaw = cfg?.['max'];
-  const minN = typeof minRaw === 'number' ? minRaw : parseFloat(String(minRaw ?? '0')) || 0;
-  const maxN = typeof maxRaw === 'number' ? maxRaw : parseFloat(String(maxRaw ?? '1')) || 1;
+  const dist = randomDistribution(cfg, t);
+  // Min / Max are PORTS. Unwired ⇒ fold the span at COMPILE time (byte-identical
+  // to the pre-port module); a WIRED bound takes the runtime path.
+  const wired = (portId: string): boolean => !!ctx.adj.inputToSource.get(`${node.id}:${portId}`);
+  const rangeConst = !wired('min') && !wired('max');
+  const minN = getInlineNum(node, 'min', 0);
+  const maxN = getInlineNum(node, 'max', 1);
   const rs = ctx.rsLocal;
   const advance = (): void => {
     // _rs ^= _rs << 13; _rs ^= _rs >>> 17; _rs ^= _rs << 5 (in-register).
@@ -1447,17 +1458,123 @@ function emitGetRandom(ctx: AgentWasmCtx, node: GraphNode): void {
                                      // convert here made the module fail WASM
                                      // type validation → silent JS fallback)
   } else if (t === 'integer') {
-    em.f64Const(maxN - minN + 1); em.op(OP_F64_MUL);
-    em.op(OP_F64_FLOOR);
-    em.f64Const(minN); em.op(OP_F64_ADD);
+    if (rangeConst) {
+      em.f64Const(maxN - minN + 1); em.op(OP_F64_MUL);
+      em.op(OP_F64_FLOOR);
+      em.f64Const(minN); em.op(OP_F64_ADD);
+    } else {
+      pushValueInputF64(ctx, node, 'max', 1); pushValueInputF64(ctx, node, 'min', 0); em.op(OP_F64_SUB);
+      em.f64Const(1); em.op(OP_F64_ADD);
+      em.op(OP_F64_MUL); em.op(OP_F64_FLOOR);
+      pushValueInputF64(ctx, node, 'min', 0); em.op(OP_F64_ADD);
+    }
   } else if (t === 'orientation') {
     em.f64Const(4); em.op(OP_F64_MUL); em.op(OP_F64_FLOOR);
     // & 3 — via i32 round-trip
     em.op(OP_I32_TRUNC_F64_S); em.i32Const(3); em.op(OP_I32_AND); em.i32ToF64();
+  } else if (t === 'float' && dist === 'normal') {
+    // Box-Muller — EXACTLY two draws. Stack currently holds u1; draw u2, then
+    // z = sqrt(-2*log(1-u1)) * cos(TAU*u2), result = mean + stddev*z.
+    const u1L = em.allocLocal(F64); em.localSet(u1L);
+    advance();
+    const u2L = em.allocLocal(F64);
+    em.localGet(rs); em.op(OP_F64_CONVERT_I32_U); em.f64Const(4294967296); em.op(OP_F64_DIV); em.localSet(u2L);
+    pushValueInputF64(ctx, node, 'mean', 0);
+    pushValueInputF64(ctx, node, 'stddev', 1);
+    em.f64Const(-2);
+    em.f64Const(1); em.localGet(u1L); em.op(OP_F64_SUB);
+    em.emit(opCall(LOG_FUNC_IDX));
+    em.op(OP_F64_MUL); em.op(OP_F64_SQRT);
+    em.f64Const(RANDOM_TAU); em.localGet(u2L); em.op(OP_F64_MUL);
+    em.emit(opCall(COS_FUNC_IDX));
+    em.op(OP_F64_MUL);          // z
+    em.op(OP_F64_MUL);          // stddev * z
+    em.op(OP_F64_ADD);          // mean + stddev*z
+  } else if (t === 'float' && dist === 'exponential') {
+    // Inverse-CDF, ONE draw: mean * -ln(1 - u). No divide ⇒ no ÷0 guard.
+    const uL = em.allocLocal(F64); em.localSet(uL);
+    pushValueInputF64(ctx, node, 'mean', 0);
+    em.f64Const(1); em.localGet(uL); em.op(OP_F64_SUB);
+    em.emit(opCall(LOG_FUNC_IDX));
+    em.op(OP_F64_NEG);
+    em.op(OP_F64_MUL);
   } else {
     // float: uniform * (max - min) + min
-    em.f64Const(maxN - minN); em.op(OP_F64_MUL); em.f64Const(minN); em.op(OP_F64_ADD);
+    if (rangeConst) {
+      em.f64Const(maxN - minN); em.op(OP_F64_MUL); em.f64Const(minN); em.op(OP_F64_ADD);
+    } else {
+      pushValueInputF64(ctx, node, 'max', 1); pushValueInputF64(ctx, node, 'min', 0); em.op(OP_F64_SUB);
+      em.op(OP_F64_MUL);
+      pushValueInputF64(ctx, node, 'min', 0); em.op(OP_F64_ADD);
+    }
   }
+}
+
+/** Get Random, VECTOR mode (multi-output). ONE draw → an angular offset uniform
+ *  in ±Span°/2, applied as a screen-clockwise ROTATION of the reference unit
+ *  vector — which is what keeps the wired-direction path free of atan2 (that
+ *  import is conditional, and rotating needs only sin/cos of the OFFSET).
+ *  Compass convention: 0° = north = -y, 90° = east = +x. */
+function emitGetRandomVector(ctx: AgentWasmCtx, node: GraphNode, portId: string): ValueRef {
+  const cachedSibling = ctx.valueCache.get(`${node.id}:x`);
+  if (cachedSibling !== undefined) return ctx.valueCache.get(`${node.id}:${portId}`) ?? cachedSibling;
+  const em = ctx.em;
+  const cfg = node.data.config as Record<string, unknown> | undefined;
+  const rs = ctx.rsLocal;
+  // advance + uniform (identical constants to emitGetRandom's advance()).
+  em.localGet(rs); em.localGet(rs); em.i32Const(13); em.op(OP_I32_SHL); em.op(OP_I32_XOR); em.localSet(rs);
+  em.localGet(rs); em.localGet(rs); em.i32Const(17); em.op(OP_I32_SHR_U); em.op(OP_I32_XOR); em.localSet(rs);
+  em.localGet(rs); em.localGet(rs); em.i32Const(5); em.op(OP_I32_SHL); em.op(OP_I32_XOR); em.localSet(rs);
+  const uL = em.allocLocal(F64);
+  em.localGet(rs); em.op(OP_F64_CONVERT_I32_U); em.f64Const(4294967296); em.op(OP_F64_DIV); em.localSet(uL);
+  // phi = (u - 0.5) * span * DEG2RAD
+  const phiL = em.allocLocal(F64);
+  em.localGet(uL); em.f64Const(0.5); em.op(OP_F64_SUB);
+  pushValueInputF64(ctx, node, 'span', 360); em.op(OP_F64_MUL);
+  em.f64Const(RANDOM_DEG2RAD); em.op(OP_F64_MUL); em.localSet(phiL);
+  const cL = em.allocLocal(F64);
+  em.localGet(phiL); em.emit(opCall(COS_FUNC_IDX)); em.localSet(cL);
+  const sL = em.allocLocal(F64);
+  em.localGet(phiL); em.emit(opCall(SIN_FUNC_IDX)); em.localSet(sL);
+  const fxL = em.allocLocal(F64), fyL = em.allocLocal(F64);
+  if (randomRefSource(cfg) === 'vector') {
+    const dxL = em.allocLocal(F64), dyL = em.allocLocal(F64);
+    pushValueInputF64(ctx, node, 'dirX', 0); em.localSet(dxL);
+    pushValueInputF64(ctx, node, 'dirY', -1); em.localSet(dyL);
+    const lenL = em.allocLocal(F64);
+    em.localGet(dxL); em.localGet(dxL); em.op(OP_F64_MUL);
+    em.localGet(dyL); em.localGet(dyL); em.op(OP_F64_MUL); em.op(OP_F64_ADD);
+    em.op(OP_F64_SQRT); em.localSet(lenL);
+    const invL = em.allocLocal(F64);
+    em.f64Const(1);
+    em.localGet(lenL); em.f64Const(RANDOM_LEN_EPS); em.op(OP_F64_MAX);
+    em.op(OP_F64_DIV); em.localSet(invL);
+    em.localGet(dxL); em.localGet(invL); em.op(OP_F64_MUL); em.localSet(fxL);
+    em.localGet(dyL); em.localGet(invL); em.op(OP_F64_MUL);
+    em.f64Const(-1);
+    em.localGet(lenL); em.f64Const(0); em.op(OP_F64_GT);
+    em.op(OP_SELECT); em.localSet(fyL);
+  } else {
+    const aL = em.allocLocal(F64);
+    pushValueInputF64(ctx, node, 'angle', 0); em.f64Const(RANDOM_DEG2RAD); em.op(OP_F64_MUL); em.localSet(aL);
+    em.localGet(aL); em.emit(opCall(SIN_FUNC_IDX)); em.localSet(fxL);
+    em.localGet(aL); em.emit(opCall(COS_FUNC_IDX)); em.op(OP_F64_NEG); em.localSet(fyL);
+  }
+  const xL = em.allocLocal(F64), yL = em.allocLocal(F64);
+  pushValueInputF64(ctx, node, 'norm', 1);
+  em.localGet(fxL); em.localGet(cL); em.op(OP_F64_MUL);
+  em.localGet(fyL); em.localGet(sL); em.op(OP_F64_MUL); em.op(OP_F64_SUB);
+  em.op(OP_F64_MUL); em.localSet(xL);
+  pushValueInputF64(ctx, node, 'norm', 1);
+  em.localGet(fxL); em.localGet(sL); em.op(OP_F64_MUL);
+  em.localGet(fyL); em.localGet(cL); em.op(OP_F64_MUL); em.op(OP_F64_ADD);
+  em.op(OP_F64_MUL); em.localSet(yL);
+  const refs: Record<string, ValueRef> = {
+    x: { localIdx: xL, valtype: F64 },
+    y: { localIdx: yL, valtype: F64 },
+  };
+  for (const k of Object.keys(refs)) ctx.valueCache.set(`${node.id}:${k}`, refs[k]!);
+  return refs[portId] ?? refs['x']!;
 }
 
 /** Get Agent Offset — torus-shortest (dX, dY[, dZ]) + Distance from self to a
