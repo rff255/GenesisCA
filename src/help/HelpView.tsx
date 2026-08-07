@@ -346,7 +346,7 @@ export function HelpView() {
             and an optional <strong>Thumbnail</strong>.
           </p>
           <ul className={styles.list}>
-            <li><strong>Rule Author</strong> &mdash; originator of the CA rule (domain expert/researcher).</li>
+            <li><strong>Rule Author</strong> &mdash; originator of the rule/formalism/paper (domain expert/researcher).</li>
             <li><strong>GenesisCA Project Author</strong> &mdash; who built this particular GenesisCA project file.</li>
             <li><strong>Summary</strong> &mdash; a short blurb; this is what appears on the model&apos;s Models Library card.</li>
             <li><strong>Rule Description</strong> &mdash; a longer free-form field to elaborate on how the rule works and document anything else worth keeping. Not shown on Library cards.</li>

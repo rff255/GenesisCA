@@ -101,7 +101,7 @@ function SaveProjectDialogInner({ initial, initialMeta, onConfirm, onCancel }: P
                 className={styles.textInput}
                 type="text"
                 value={author}
-                placeholder="Originator of the CA rule"
+                placeholder="Originator of the rule/formalism/paper"
                 onChange={e => setAuthor(e.target.value)}
               />
             </div>

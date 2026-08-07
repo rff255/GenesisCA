@@ -67,7 +67,7 @@ export function InfoPanelContent(_props: PanelContentProps = {}) {
               className={styles.textInput}
               value={properties.author}
               onChange={e => updateProperties({ author: e.target.value })}
-              placeholder="Originator of the CA rule"
+              placeholder="Originator of the rule/formalism/paper"
             />
           </div>
           <div className={styles.field}>
