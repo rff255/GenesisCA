@@ -2241,12 +2241,19 @@ export function HelpView() {
               still agent (zero heading) sees all around; 180° is the full omnidirectional radius. Ideal
               for predators/prey that only react to what's in front of them.</li>
             <li><strong>Sense Hemifield</strong> &mdash; the Braitenberg <strong>Left / Right</strong>
-              sensor: it runs the same vision cone but returns two counts &mdash; how many neighbours
-              fall to the <em>left</em> of the heading versus the <em>right</em>. Steer by
+              sensor: it runs the same vision cone but splits it &mdash; which neighbours fall to the
+              <em> left</em> of the heading versus the <em>right</em>. Steer by
               <em>Left &minus; Right</em> to turn toward (or away from) the crowded side &mdash;
               taxis and flocking asymmetry emerge from those two numbers alone. Same two knobs as
               above: the <em>Radius</em> input sets how far it senses, <em>Half-angle°</em> how wide
-              (the 90° default is a 180° front hemisphere). The
+              (the 90° default is a 180° front hemisphere). Besides the two counts it also outputs
+              the two <strong>id arrays</strong> &mdash; <em>Left Agents</em> and
+              <em> Right Agents</em> &mdash; so you can <em>act</em> on a side, not merely measure
+              it: feed one to <em>For Each In Array</em>, <em>Get Agents Attribute</em>,
+              <em> Filter Agents</em> or <em>Aggregate</em> to push only the neighbours on your left,
+              or read the average speed of the ones on your right. The arrays are exactly the set
+              the counts count (a side&apos;s length always equals its count), and an array output
+              you leave unwired costs nothing at all. The
               <em> Boids &mdash; Hemifield Vision</em> sample is built entirely from these counts.</li>
             <li><strong>Seeing the cones</strong> &mdash; when a model uses either FOV node, the
               Simulator&apos;s agent controls (2D) gain a <strong>Show vision</strong> selector that

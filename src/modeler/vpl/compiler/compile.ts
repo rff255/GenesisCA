@@ -5,6 +5,7 @@ import { encodeAttrValue } from '../../../model/attrValueEncoding';
 import { buildAgentAbiParams, type AgentAbiShape } from './agentAbi';
 import { getAllNodeDefs, getNodeDef } from '../nodes/registry';
 import { CURRENT_VIEWER_SENTINEL } from '../nodes/SetCellLooksNode';
+import { hemifieldArraysUsed } from '../nodes/SenseHemifieldNode';
 import { parseHandleId, type CompileContext } from '../types';
 import { classifyLoopInvariant } from './loopInvariant';
 import { safeId } from './identifierSafe';
@@ -960,9 +961,19 @@ function compileRoot(
     }
 
     // For aggregation nodes, pass whether indexes output is connected (for optimization)
-    const compileConfig = (node.data.nodeType === 'groupStatement' || node.data.nodeType === 'groupCounting')
+    let compileConfig = (node.data.nodeType === 'groupStatement' || node.data.nodeType === 'groupCounting')
       ? { ...node.data.config, _indexesConnected: needsIndexes }
       : node.data.config;
+    // Sense Hemifield is a CONDITIONAL array producer: it emits an id array only
+    // for a side some consumer reads (`hemifieldArraysUsed`, derived from the flat
+    // edge list — the SAME predicate the WASM/WebGPU emitters, the WebGPU
+    // array-producer budget and the slot assignment use, so the three targets can
+    // never disagree). Unconsumed ⇒ nothing emitted ⇒ byte-identical to the
+    // pre-arrays code.
+    if (node.data.nodeType === 'senseHemifield') {
+      const used = hemifieldArraysUsed(nodeId, graphEdges);
+      compileConfig = { ...compileConfig, _leftAgentsUsed: used.left, _rightAgentsUsed: used.right };
+    }
     const code = def.compile(nodeId, compileConfig, inputVars, model?.properties.boundaryTreatment, ctx);
     if (code) {
       // Loop-invariant nodes (e.g. modelAttrs reads + arithmetic over them)

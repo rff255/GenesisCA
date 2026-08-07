@@ -173,6 +173,15 @@ function buildFOVModel() {
 // Sense Hemifield: the L/R Braitenberg reduction over the SAME cone gather. Stores
 // BOTH outputs in separate integer attrs so a left/right swap (or a per-target cross
 // divergence) is caught bit-for-bit. Wired heading (1,0) so the split is deterministic.
+//
+// It ALSO CONSUMES both id ARRAYS (`Left Agents` / `Right Agents`): a For Each over
+// each side sums the neighbour ids into `sumL`/`sumR` (through a Local Variable),
+// and Array Length re-reads each side's length into `lenL`/`lenR`. So the model
+// covers the whole conditional-array-producer path — the shared single gather, the
+// array scratch (the WASM bump slab / the WGSL var<function> slot), the array cache
+// and the count-IS-the-length invariant. `hemifieldInvariant` recomputes all six
+// values independently, because parity alone would pass if BOTH targets summed
+// nothing.
 function buildHemifieldModel() {
   const used = new Set();
   const nid = (p) => { let id; do { id = p + Math.random().toString(36).slice(2, 8); } while (used.has(id)); used.add(id); return id; };
@@ -187,6 +196,54 @@ function buildHemifieldModel() {
   aE(setL, 'next', setR, 'do', 'flow');
   aE(sh, 'leftCount', setL, 'value', 'value');
   aE(sh, 'rightCount', setR, 'value', 'value');
+
+  // --- the ARRAY side: For Each over each half, summing the neighbour ids ---
+  // (a Local Variable accumulator — the canonical "act on the agents this side"
+  // idiom, and the shape that exercises the array scratch + the array cache.)
+  const zeroL = an('setVariable', { variableId: 'accL', _port_value: '0' });
+  const zeroR = an('setVariable', { variableId: 'accR', _port_value: '0' });
+  const feL = an('forEachInArray', {});
+  const feR = an('forEachInArray', {});
+  aE(sh, 'leftAgents', feL, 'array', 'value');
+  aE(sh, 'rightAgents', feR, 'array', 'value');
+  const addL = an('setVariable', { variableId: 'accL' });
+  const addR = an('setVariable', { variableId: 'accR' });
+  const gvL = an('getVariable', { variableId: 'accL' });
+  const gvR = an('getVariable', { variableId: 'accR' });
+  const sumExprL = an('expression', { expression: 'a + b', visibleCount: 2 });
+  const sumExprR = an('expression', { expression: 'a + b', visibleCount: 2 });
+  aE(gvL, 'value', sumExprL, 'a', 'value');
+  aE(feL, 'element', sumExprL, 'b', 'value');
+  aE(sumExprL, 'result', addL, 'value', 'value');
+  aE(gvR, 'value', sumExprR, 'a', 'value');
+  aE(feR, 'element', sumExprR, 'b', 'value');
+  aE(sumExprR, 'result', addR, 'value', 'value');
+  aE(feL, 'body', addL, 'do', 'flow');
+  aE(feR, 'body', addR, 'do', 'flow');
+  // Array Length on both sides (must equal the counts).
+  const alL = an('arrayLength', {});
+  const alR = an('arrayLength', {});
+  aE(sh, 'leftAgents', alL, 'array', 'value');
+  aE(sh, 'rightAgents', alR, 'array', 'value');
+  const setSumL = an('setAttribute', { attributeId: 'sumL' });
+  const setSumR = an('setAttribute', { attributeId: 'sumR' });
+  const setLenL = an('setAttribute', { attributeId: 'lenL' });
+  const setLenR = an('setAttribute', { attributeId: 'lenR' });
+  const gvL2 = an('getVariable', { variableId: 'accL' });
+  const gvR2 = an('getVariable', { variableId: 'accR' });
+  aE(gvL2, 'value', setSumL, 'value', 'value');
+  aE(gvR2, 'value', setSumR, 'value', 'value');
+  aE(alL, 'length', setLenL, 'value', 'value');
+  aE(alR, 'length', setLenR, 'value', 'value');
+  // flow: counts -> zero the accumulators -> the two loops -> store sums + lengths
+  aE(setR, 'next', zeroL, 'do', 'flow');
+  aE(zeroL, 'next', zeroR, 'do', 'flow');
+  aE(zeroR, 'next', feL, 'do', 'flow');
+  aE(feL, 'next', feR, 'do', 'flow');
+  aE(feR, 'next', setSumL, 'do', 'flow');
+  aE(setSumL, 'next', setSumR, 'do', 'flow');
+  aE(setSumR, 'next', setLenL, 'do', 'flow');
+  aE(setLenL, 'next', setLenR, 'do', 'flow');
   return {
     schemaVersion: 1,
     properties: { name: 'Hemifield Parity Test', dimension: '2d', gridWidth: 24, gridHeight: 24, gridDepth: 1, topology: '2d-grid', boundaryTreatment: 'torus', useWasm: false, useWebGPU: false },
@@ -194,10 +251,58 @@ function buildHemifieldModel() {
     centerBased: { enabled: true, maxAgents: 100, maxBonds: 0, worldWidth: 24, worldHeight: 24, seedCount: 40, seedPattern: 'scatter', defaultRadius: 0.5, growthRate: 0, repulsionStiffness: 2, adhesionStiffness: 0, interactionRange: 1.5, drag: 1, timeStep: 0.1, momentum: 0, maxSpeed: 0, neighbourQueryRadius: 8, useBondingPhysics: false, autoBond: false, agentTarget: 'wasm', agentUpdateMode: 'async',
       agentCapabilities: { motion: 'force', body: true, collision: 'off', bonds: 'off', autoBond: false, growth: false, division: false, lifespan: false, populationBirth: false, populationDeath: false, sensing: true, sensingHeadingSource: 'velocity', orientation: false, fieldCoupling: false, appearance: true } },
     attributes: [], modelAttributes: [], neighborhoods: [],
-    agentAttributes: [{ id: 'countL', name: 'CountL', type: 'integer', defaultValue: '0' }, { id: 'countR', name: 'CountR', type: 'integer', defaultValue: '0' }],
-    variables: [], agentVariables: [], indicators: [], mappings: [],
+    agentAttributes: [
+      { id: 'countL', name: 'CountL', type: 'integer', defaultValue: '0' },
+      { id: 'countR', name: 'CountR', type: 'integer', defaultValue: '0' },
+      { id: 'sumL', name: 'SumL', type: 'float', defaultValue: '0' },
+      { id: 'sumR', name: 'SumR', type: 'float', defaultValue: '0' },
+      { id: 'lenL', name: 'LenL', type: 'integer', defaultValue: '0' },
+      { id: 'lenR', name: 'LenR', type: 'integer', defaultValue: '0' },
+    ],
+    variables: [],
+    agentVariables: [
+      { id: 'accL', name: 'AccL', kind: 'scalar', dataType: 'float', initialValue: '0' },
+      { id: 'accR', name: 'AccR', kind: 'scalar', dataType: 'float', initialValue: '0' },
+    ],
+    indicators: [], mappings: [],
     graphNodes: [], graphEdges: [], agentGraphNodes: aN, agentGraphEdges: aEd, macroDefs: [],
   };
+}
+
+/** Recompute the hemifield L/R partition from the STORE (positions + the wired
+ *  heading + the cone), independently of the emitted code: every alive agent's
+ *  in-view neighbours split by `cross = hx*dy - hy*dx >= 0`, then
+ *    countL/countR === the recount,  sumL/sumR === the sum of that half's ids,
+ *    lenL/lenR    === countL/countR  (the array IS exactly the counted set).
+ *  Parity alone would pass if BOTH targets summed nothing, so these are VALUES. */
+function hemifieldInvariant(st) {
+  const R = 6, R2 = R * R, W = 24, H = 24, hW = W / 2, hH = H / 2;
+  const hx = 1, hy = 0;                            // the wired heading
+  const cosHalf = Math.cos((90 * Math.PI) / 180);  // halfAngle 90
+  const hm = Math.sqrt(hx * hx + hy * hy);
+  for (let i = 0; i < st.highWater; i++) {
+    if (!st.alive[i]) continue;
+    let cl = 0, cr = 0, sl = 0, sr = 0;
+    for (let j = 0; j < st.highWater; j++) {
+      if (j === i || !st.alive[j]) continue;
+      let dx = st.x[j] - st.x[i], dy = st.y[j] - st.y[i];
+      if (dx > hW) dx -= W; else if (dx < -hW) dx += W;
+      if (dy > hH) dy -= H; else if (dy < -hH) dy += H;
+      const d2 = dx * dx + dy * dy;
+      if (d2 > R2) continue;
+      const dot = hx * dx + hy * dy;
+      if (!(dot >= (cosHalf * hm) * Math.sqrt(d2))) continue;
+      if (hx * dy - hy * dx >= 0) { cl++; sl += j; } else { cr++; sr += j; }
+    }
+    const a = st.attrRead;
+    if (a.countL[i] !== cl) return `agent ${i}: countL ${a.countL[i]} !== recount ${cl}`;
+    if (a.countR[i] !== cr) return `agent ${i}: countR ${a.countR[i]} !== recount ${cr}`;
+    if (a.sumL[i] !== sl) return `agent ${i}: sumL ${a.sumL[i]} !== recount ${sl}`;
+    if (a.sumR[i] !== sr) return `agent ${i}: sumR ${a.sumR[i]} !== recount ${sr}`;
+    if (a.lenL[i] !== cl) return `agent ${i}: leftAgents.length ${a.lenL[i]} !== leftCount ${cl}`;
+    if (a.lenR[i] !== cr) return `agent ${i}: rightAgents.length ${a.lenR[i]} !== rightCount ${cr}`;
+  }
+  return null;
 }
 
 // Multi-attribute SLOTS parity vehicle (multiAttrExpand.ts): one multi-slot Set
@@ -1305,7 +1410,7 @@ for (const f of files) {
 }
 entries.push({ name: '[synthetic] Field3D (all 5 field nodes, 3D)', raw: build3DFieldModel() });
 entries.push({ name: '[synthetic] FOV cone (Get Agents In View)', raw: buildFOVModel() });
-entries.push({ name: '[synthetic] Hemifield (Sense Hemifield L/R)', raw: buildHemifieldModel() });
+entries.push({ name: '[synthetic] Hemifield (L/R counts + both id ARRAYS)', raw: buildHemifieldModel(), invariant: hemifieldInvariant });
 entries.push({ name: '[synthetic] Multi-attribute slots (Get/Set + by-id)', raw: buildMultiAttrModel() });
 entries.push({ name: '[synthetic] Get Grid Dimensions (3D world W/H/D + centres)', raw: buildGridDimsModel() });
 entries.push({ name: '[synthetic] Apply Force To Agent (pairwise scatter)', raw: buildApplyForceToAgentModel() });

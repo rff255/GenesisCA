@@ -127,6 +127,7 @@ import { colorScaleHasAlpha, readColorScaleStops, type ColorScaleStop } from '..
 import { categoricalHasAlpha, readCategoricalEntries, readCategoricalDefault, type CategoricalEntry } from '../../nodes/CategoricalColorNode';
 import { colorConstantHasAlpha } from '../../nodes/GetColorConstantNode';
 import { viewCosHalf } from '../../nodes/GetAgentsInViewNode';
+import { hemifieldArraysUsed, HEMIFIELD_LEFT_ARRAY, HEMIFIELD_RIGHT_ARRAY, HEMIFIELD_ARRAY_PORTS } from '../../nodes/SenseHemifieldNode';
 import { cellFieldAttrsOf, bondAttrsOf } from '../../../../model/attributeScope';
 import { BOND_REQ_ID_BIAS, BOND_REQ_NONE, BOND_REQUEST_NODE_TYPES, bondReqSlotsForModel } from '../bondRequestQueue';
 import { dividePartitionCode, assignDividePartitionCodes } from '../dividePartition';
@@ -309,6 +310,10 @@ interface AgentArrayRef {
 
 interface AgentWasmCtx {
   adj: Adjacency;
+  /** The FLAT (post-lowering) edge list the adjacency was built from. Kept so an
+   *  emitter can ask an edge-derived shared predicate (e.g. `hemifieldArraysUsed`)
+   *  the SAME question the gates / slot assignment ask, from the SAME input. */
+  flatEdges: GraphEdge[];
   layout: AgentMemoryLayout;
   model: CAModel;
   is3d: boolean;
@@ -1931,7 +1936,19 @@ function emitCurvature(ctx: AgentWasmCtx): void {
 const AGENT_ARRAY_PRODUCERS = new Set<string>([
   'getNearbyAgents', 'getAgentsInView', 'getBondedAgents', 'getAgentsAttribute',
   'filterAgents', 'joinAgents', 'pickNRandomAgents', 'getVariable',
+  // CONDITIONAL producer: only its two ARRAY ports (see isAgentArrayPort) — its
+  // leftCount / rightCount are ordinary scalars and must NOT route to the array
+  // path (they would silently resolve to the whole id array).
+  'senseHemifield',
 ]);
+
+/** TRUE iff `(nodeType, portId)` is an ARRAY-valued OUTPUT. Guards the array
+ *  routing for a node with BOTH array and scalar outputs (Sense Hemifield), where
+ *  the type-level `AGENT_ARRAY_PRODUCERS` membership alone is not enough. */
+function isAgentArrayPort(nodeType: string, portId: string): boolean {
+  if (nodeType === 'senseHemifield') return HEMIFIELD_ARRAY_PORTS.includes(portId);
+  return true;
+}
 
 /** Resolve a value input port that carries an ARRAY. Returns the producer's
  *  AgentArrayRef, OR (for multi-source scalars) materialises them into a fresh
@@ -1947,7 +1964,7 @@ function resolveInputArray(ctx: AgentWasmCtx, node: GraphNode, portId: string): 
   if (sources.length === 1) {
     const s = sources[0]!;
     const src = ctx.adj.nodeMap.get(s.nodeId);
-    if (src && AGENT_ARRAY_PRODUCERS.has(src.data.nodeType)) {
+    if (src && AGENT_ARRAY_PRODUCERS.has(src.data.nodeType) && isAgentArrayPort(src.data.nodeType, s.portId)) {
       return compileArrayNode(ctx, s.nodeId, s.portId);
     }
     // a single SCALAR source → a length-1 array (matches JS `[scalar]`).
@@ -1989,6 +2006,7 @@ function compileArrayNode(ctx: AgentWasmCtx, nodeId: string, portId: string): Ag
       ref = { offsetLocal: baseLocal, lenLocal, elemBytes: 4, isF64: false };
       break;
     }
+    case 'senseHemifield': ref = emitSenseHemifieldArray(ctx, node, portId); break;
     case 'getBondedAgents': ref = emitBondedAgents(ctx, node); break;
     case 'getAgentsAttribute': ref = emitAgentsAttribute(ctx, node); break;
     case 'filterAgents': ref = emitFilterAgents(ctx, node); break;
@@ -3880,18 +3898,28 @@ function emitNearbyFill(ctx: AgentWasmCtx, naNode: GraphNode): { baseLocal: numb
   return { baseLocal, lenLocal };
 }
 
-/** Sense Hemifield (the Braitenberg L/R sensor) — one gather pass into TWO i32
- *  counters (no scratch array; not an array producer). Reuses the SAME stencil +
- *  cone gate as emitNearbyFill; each in-view neighbour is split by the sign of the
- *  heading-relative cross product (2D: hx·dy−hy·dx; 3D: the triple product against a
- *  +Z up-reference, swapped to +Y for a near-vertical heading). Mirrors
- *  SenseHemifieldNode's JS emit EXACTLY (op order + the 0.81 up-swap literal) for
- *  bit-parity. Multi-output: leftCount / rightCount cached under the valueCache. */
-function emitSenseHemifield(ctx: AgentWasmCtx, node: GraphNode, portId: string): ValueRef {
+/** Sense Hemifield (the Braitenberg L/R sensor) — ONE gather pass into TWO i32
+ *  counters, and (only for a side some consumer reads) TWO id ARRAYS. Reuses the
+ *  SAME stencil + cone gate as emitNearbyFill; each in-view neighbour is split by
+ *  the sign of the heading-relative cross product (2D: hx·dy−hy·dx; 3D: the triple
+ *  product against a +Z up-reference, swapped to +Y for a near-vertical heading).
+ *  Mirrors SenseHemifieldNode's JS emit EXACTLY (op order + the 0.81 up-swap
+ *  literal) for bit-parity. Multi-output: leftCount / rightCount in the valueCache,
+ *  leftAgents / rightAgents in the arrayCache.
+ *
+ *  ARRAY SCRATCH — the bump-pointer slab, NOT a nearby-scratch slot. The arrays
+ *  ride the general per-agent array scratch (`allocScratch`, the same region
+ *  getBondedAgents / filterAgents / getAgentsAttribute use), sized by the
+ *  `highWater` upper bound; they do NOT consume one of the
+ *  AGENT_NEARBY_SCRATCH_SLOTS (4) baked-offset buffers, so the WASM capacity gate
+ *  is unchanged. The COUNT local doubles as the array's write index AND its
+ *  length, so `leftAgents.length === leftCount` holds by construction. An
+ *  unconsumed side allocates nothing and emits no instruction — a counts-only
+ *  node is byte-identical to the pre-arrays module. */
+function emitSenseHemifieldGather(ctx: AgentWasmCtx, node: GraphNode): void {
   const em = ctx.em;
   const L = ctx.layout;
-  const cached = ctx.valueCache.get(`${node.id}:leftCount`);
-  if (cached !== undefined) return ctx.valueCache.get(`${node.id}:${portId}`) ?? cached;
+  const used = hemifieldArraysUsed(node.id, ctx.flatEdges);
 
   const leftL = em.allocLocal(I32); em.i32Const(0); em.localSet(leftL);
   const rightL = em.allocLocal(I32); em.i32Const(0); em.localSet(rightL);
@@ -3929,6 +3957,12 @@ function emitSenseHemifield(ctx: AgentWasmCtx, node: GraphNode, portId: string):
     em.f64Const(0.81); em.localGet(hm2L); em.op(OP_F64_MUL);
     em.op(OP_F64_GT); em.localSet(upYL);
   }
+
+  // Array scratch for the CONSUMED sides only (the bump-pointer slab; capacity =
+  // highWater, the max possible in-view neighbour count). Nothing is emitted for
+  // an unconsumed side.
+  const leftArr = used.left ? allocScratch(ctx, ctx.highWaterLocal, 4, false) : null;
+  const rightArr = used.right ? allocScratch(ctx, ctx.highWaterLocal, 4, false) : null;
 
   const aliveOff = L.u8['alive']!;
   const test = (jL: number) => {
@@ -3972,8 +4006,16 @@ function emitSenseHemifield(ctx: AgentWasmCtx, node: GraphNode, portId: string):
           }
           em.localGet(crossL); em.f64Const(0); em.op(OP_F64_GE);
           em.ifThenElse(
-            () => { em.localGet(leftL); em.i32Const(1); em.op(OP_I32_ADD); em.localSet(leftL); },
-            () => { em.localGet(rightL); em.i32Const(1); em.op(OP_I32_ADD); em.localSet(rightL); },
+            () => {
+              // The push uses the count as its index, THEN the count bumps — so
+              // the array's length IS the count (they cannot disagree).
+              if (leftArr) { storeArrayElemAddr(em, leftArr, leftL); em.localGet(jL); em.i32Store(); }
+              em.localGet(leftL); em.i32Const(1); em.op(OP_I32_ADD); em.localSet(leftL);
+            },
+            () => {
+              if (rightArr) { storeArrayElemAddr(em, rightArr, rightL); em.localGet(jL); em.i32Store(); }
+              em.localGet(rightL); em.i32Const(1); em.op(OP_I32_ADD); em.localSet(rightL);
+            },
           );
         };
         // if (d2 <= r2) { cone gate → doTally }
@@ -4012,7 +4054,27 @@ function emitSenseHemifield(ctx: AgentWasmCtx, node: GraphNode, portId: string):
     rightCount: { localIdx: rightL, valtype: I32 },
   };
   for (const k of Object.keys(refs)) ctx.valueCache.set(`${node.id}:${k}`, refs[k]!);
-  return refs[portId] ?? refs['leftCount']!;
+  if (leftArr) ctx.arrayCache.set(`${node.id}:${HEMIFIELD_LEFT_ARRAY}`, { offsetLocal: leftArr.offsetLocal, lenLocal: leftL, elemBytes: 4, isF64: false });
+  if (rightArr) ctx.arrayCache.set(`${node.id}:${HEMIFIELD_RIGHT_ARRAY}`, { offsetLocal: rightArr.offsetLocal, lenLocal: rightL, elemBytes: 4, isF64: false });
+}
+
+/** Sense Hemifield, VALUE side (leftCount / rightCount). Runs the gather once. */
+function emitSenseHemifield(ctx: AgentWasmCtx, node: GraphNode, portId: string): ValueRef {
+  const cached = ctx.valueCache.get(`${node.id}:leftCount`);
+  if (cached === undefined) emitSenseHemifieldGather(ctx, node);
+  const want = ctx.valueCache.get(`${node.id}:${portId}`);
+  return want ?? ctx.valueCache.get(`${node.id}:leftCount`)!;
+}
+
+/** Sense Hemifield, ARRAY side (leftAgents / rightAgents). Runs the SAME single
+ *  gather; an unwired side has no cached ref, so it degrades to an empty array
+ *  (defensive — the dispatch is only reached for a wired port). */
+function emitSenseHemifieldArray(ctx: AgentWasmCtx, node: GraphNode, portId: string): AgentArrayRef {
+  if (ctx.valueCache.get(`${node.id}:leftCount`) === undefined) emitSenseHemifieldGather(ctx, node);
+  const ref = ctx.arrayCache.get(`${node.id}:${portId}`);
+  if (ref) return ref;
+  const lenL = ctx.em.allocLocal(I32); ctx.em.i32Const(0); ctx.em.localSet(lenL);
+  return allocScratch(ctx, lenL, 4, false);
 }
 
 /** The 3×3[×3] hash-bin stencil over the in-memory binStart/binAgents, torus-
@@ -4312,6 +4374,14 @@ function preEmitAgentValues(ctx: AgentWasmCtx, rootId: string): void {
     if (inProgress.has(id)) return false;
     const node = nodeMap.get(id); if (!node) return false;
     if (AGENT_VALUE_NO_HOIST.has(node.data.nodeType)) { hoistable.set(id, false); return false; }
+    // A Sense Hemifield with a WIRED array port is an array producer, and array
+    // producers emit at their use site (through compileArrayNode), never at
+    // loop-top. Per-NODE rather than per-type so a counts-only hemifield keeps
+    // hoisting exactly as before (byte-identical).
+    if (node.data.nodeType === 'senseHemifield') {
+      const u = hemifieldArraysUsed(id, ctx.flatEdges);
+      if (u.left || u.right) { hoistable.set(id, false); return false; }
+    }
     if (ctx.volatileNodes.has(id)) { hoistable.set(id, false); return false; }
     // Hazard-pinned reads emit at their LCA flow position, never at loop-top.
     if (ctx.hazardPinned.has(id)) { hoistable.set(id, false); return false; }
@@ -5369,7 +5439,7 @@ export function compileAgentGraphWasm(
   const P_activeViewerIdx = 15;
 
   const ctx: AgentWasmCtx = {
-    adj, layout: agentLayout, model, is3d, em,
+    adj, flatEdges: edges, layout: agentLayout, model, is3d, em,
     rsLocal: -1, idxLocal: -1,
     varLocals: new Map<string, number>(),
     arrayVarLocals: new Map<string, AgentArrayRef>(),

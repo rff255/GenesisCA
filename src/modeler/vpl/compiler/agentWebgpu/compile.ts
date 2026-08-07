@@ -68,6 +68,7 @@ import { categoricalHasAlpha, readCategoricalEntries, readCategoricalDefault, ty
 import { colorConstantHasAlpha } from '../../nodes/GetColorConstantNode';
 import { colorScaleHasAlpha, readColorScaleStops, type ColorScaleStop } from '../../nodes/ColorScaleNode';
 import { viewCosHalf } from '../../nodes/GetAgentsInViewNode';
+import { hemifieldArraysUsed, hemifieldArraySlotCount, HEMIFIELD_LEFT_ARRAY, HEMIFIELD_RIGHT_ARRAY, HEMIFIELD_ARRAY_PORTS } from '../../nodes/SenseHemifieldNode';
 import { resolveKeyLabels, resolveAxes, isMultiAxisTable } from '../variegation';
 import { computeAgentWebGPULayout, type AgentWebGPULayout } from './layout';
 import { resolveMaxBonds, usesGlobalCharge } from '../../../../model/centerBased';
@@ -299,6 +300,10 @@ interface AgentArrayRef {
 
 interface AgentWgpuCtx {
   adj: Adjacency;
+  /** The FLAT (post-lowering) edge list the adjacency was built from — so an
+   *  emitter can ask an edge-derived shared predicate (`hemifieldArraysUsed`) the
+   *  SAME question the capacity gate and the slot assignment ask. */
+  flatEdges: GraphEdge[];
   layout: AgentWebGPULayout;
   is3d: boolean;
   /** The WGSL line buffer the current emit appends to (function body). */
@@ -984,7 +989,8 @@ function emitGetRandom(ctx: AgentWgpuCtx, node: GraphNode): ValueRef {
     const fb = castTo(resolveValueInput(ctx, node, 'fallback', 0), 'f32');
     const sources = ctx.adj.inputToSources.get(`${node.id}:options`) ?? [];
     const singleProducer = sources.length === 1
-      && isAgentArrayProducer(ctx.adj.nodeMap.get(sources[0]!.nodeId)?.data.nodeType ?? '');
+      && isAgentArrayProducer(ctx.adj.nodeMap.get(sources[0]!.nodeId)?.data.nodeType ?? '')
+      && isAgentArrayPort(ctx.adj.nodeMap.get(sources[0]!.nodeId)?.data.nodeType ?? '', sources[0]!.portId);
     const res = fresh(ctx, 'ropt');
     if (singleProducer || (sources.length === 0 && ctx.adj.inputToSource.get(`${node.id}:options`))) {
       const arr = resolveInputArray(ctx, node, 'options');
@@ -1754,7 +1760,7 @@ function emitGroupOperator(ctx: AgentWgpuCtx, node: GraphNode, portId: string): 
   ctx.lines.push(`  var ${resName}: f32 = 0.0; var ${idxName}: i32 = -1;`);
   if (src) {
     const srcNode = ctx.adj.nodeMap.get(src.nodeId);
-    if (srcNode && isAgentArrayProducer(srcNode.data.nodeType)) {
+    if (srcNode && isAgentArrayProducer(srcNode.data.nodeType) && isAgentArrayPort(srcNode.data.nodeType, src.portId)) {
       const arr = compileArrayNode(ctx, src.nodeId, src.portId);
       const k = fresh(ctx, 'goK'), ev = fresh(ctx, 'goV'), cnt = fresh(ctx, 'goCnt'), sum = fresh(ctx, 'goSum');
       const best = fresh(ctx, 'goBest');
@@ -1814,7 +1820,7 @@ function emitGroupCounting(ctx: AgentWgpuCtx, node: GraphNode): ValueRef {
   ctx.lines.push(`  var ${cnt}: i32 = 0;`);
   if (src) {
     const srcNode = ctx.adj.nodeMap.get(src.nodeId);
-    if (srcNode && isAgentArrayProducer(srcNode.data.nodeType)) {
+    if (srcNode && isAgentArrayProducer(srcNode.data.nodeType) && isAgentArrayPort(srcNode.data.nodeType, src.portId)) {
       const arr = compileArrayNode(ctx, src.nodeId, src.portId);
       const k = fresh(ctx, 'gcK'), ev = fresh(ctx, 'gcV');
       ctx.lines.push(`  for (var ${k}: i32 = 0; ${k} < ${arr.lenName}; ${k} = ${k} + 1) {`);
@@ -1844,7 +1850,7 @@ function emitGroupStatement(ctx: AgentWgpuCtx, node: GraphNode): ValueRef {
   ctx.lines.push(`  var ${res}: bool = ${startTrue ? 'true' : 'false'};`);
   if (src) {
     const srcNode = ctx.adj.nodeMap.get(src.nodeId);
-    if (srcNode && isAgentArrayProducer(srcNode.data.nodeType)) {
+    if (srcNode && isAgentArrayProducer(srcNode.data.nodeType) && isAgentArrayPort(srcNode.data.nodeType, src.portId)) {
       const arr = compileArrayNode(ctx, src.nodeId, src.portId);
       const k = fresh(ctx, 'gsK'), ev = fresh(ctx, 'gsV');
       const elemPred = groupStatementElemCmp(op, ev, v1);
@@ -1898,10 +1904,23 @@ function groupStatementElemCmp(op: string, e: string, v1: string): string {
 const AGENT_ARRAY_PRODUCERS: ReadonlySet<string> = new Set<string>([
   'getNearbyAgents', 'getAgentsInView', 'getAgentsAttribute', 'filterAgents', 'joinAgents', 'pickNRandomAgents',
   'getBondedAgents',
+  // CONDITIONAL producer: only its two ARRAY ports (see isAgentArrayPort) — its
+  // leftCount / rightCount are ordinary scalars and must NOT route to the array
+  // path. It also consumes 0/1/2 scratch slots (not the flat 1 every other
+  // producer costs) — see hemifieldArraySlotCount, used by BOTH the capacity gate
+  // and the slot assignment.
+  'senseHemifield',
 ]);
 
 function isAgentArrayProducer(nodeType: string): boolean {
   return AGENT_ARRAY_PRODUCERS.has(nodeType);
+}
+
+/** TRUE iff `(nodeType, portId)` is an ARRAY-valued OUTPUT. Guards the array
+ *  routing for a node with BOTH array and scalar outputs (Sense Hemifield). */
+function isAgentArrayPort(nodeType: string, portId: string): boolean {
+  if (nodeType === 'senseHemifield') return HEMIFIELD_ARRAY_PORTS.includes(portId);
+  return true;
 }
 
 /** Per-thread scratch CAPACITY for the agent-array producers. WGSL
@@ -1944,6 +1963,7 @@ function compileArrayNode(ctx: AgentWgpuCtx, nodeId: string, portId: string): Ag
   switch (type) {
     case 'getNearbyAgents':
     case 'getAgentsInView': ref = emitNearbyFill(ctx, node); break; // getAgentsInView injects the cone; getNearbyAgents WGSL is byte-identical
+    case 'senseHemifield': ref = emitSenseHemifieldArray(ctx, node, portId); break;
     case 'getAgentsAttribute': ref = emitGetAgentsAttribute(ctx, node); break;
     case 'filterAgents': ref = emitFilterAgents(ctx, node); break;
     case 'joinAgents': ref = emitJoinAgents(ctx, node); break;
@@ -1964,7 +1984,7 @@ function resolveInputArray(ctx: AgentWgpuCtx, node: GraphNode, portId: string): 
   const src = ctx.adj.inputToSource.get(`${node.id}:${portId}`);
   if (!src) return null;
   const srcNode = ctx.adj.nodeMap.get(src.nodeId);
-  if (!srcNode || !isAgentArrayProducer(srcNode.data.nodeType)) {
+  if (!srcNode || !isAgentArrayProducer(srcNode.data.nodeType) || !isAgentArrayPort(srcNode.data.nodeType, src.portId)) {
     throw new Error(`agentWebgpu: array input "${portId}" must come from an agent-array producer (got ${srcNode?.data.nodeType}).`);
   }
   return compileArrayNode(ctx, src.nodeId, src.portId);
@@ -2147,7 +2167,7 @@ function emitAggregate(ctx: AgentWgpuCtx, node: GraphNode): ValueRef {
   const src = ctx.adj.inputToSource.get(`${node.id}:values`);
   if (!src) return emitLet(ctx, 'f32', '0.0', 'agg');
   const srcNode = ctx.adj.nodeMap.get(src.nodeId);
-  if (!srcNode || !isAgentArrayProducer(srcNode.data.nodeType)) {
+  if (!srcNode || !isAgentArrayProducer(srcNode.data.nodeType) || !isAgentArrayPort(srcNode.data.nodeType, src.portId)) {
     throw new Error(`agentWebgpu: aggregate "values" must come from an agent-array producer (got ${srcNode?.data.nodeType}).`);
   }
   const arr = compileArrayNode(ctx, src.nodeId, src.portId);
@@ -2974,17 +2994,28 @@ function emitNearbyFill(ctx: AgentWgpuCtx, naNode: GraphNode): AgentArrayRef {
   return { arrName, lenName, elemType: 'i32' };
 }
 
-/** Sense Hemifield (the Braitenberg L/R sensor) — one gather pass into TWO i32
- *  counters (no scratch array; a plain multi-output value node). Reuses the SAME
- *  stencil + cone gate as emitNearbyFill; each in-view neighbour is split by the
- *  sign of the heading-relative cross product (2D: hx·dy−hy·dx; 3D: the triple
+/** Sense Hemifield (the Braitenberg L/R sensor) — ONE gather pass into TWO i32
+ *  counters, and (only for a side some consumer reads) TWO id ARRAYS. Reuses the
+ *  SAME stencil + cone gate as emitNearbyFill; each in-view neighbour is split by
+ *  the sign of the heading-relative cross product (2D: hx·dy−hy·dx; 3D: the triple
  *  product against a +Z up-reference, swapped to +Y for a near-vertical heading —
  *  `select(+Z form, +Y form, upY)`). f32 ⇒ a boundary statistical difference vs
- *  JS/WASM (the documented WebGPU stance). Multi-output: leftCount / rightCount. */
-function emitSenseHemifield(ctx: AgentWgpuCtx, node: GraphNode, portId: string): ValueRef {
+ *  JS/WASM (the documented WebGPU stance). Multi-output: leftCount / rightCount in
+ *  the value cache, leftAgents / rightAgents in the array cache.
+ *
+ *  SLOT BUDGET — a CONSUMED array port takes one `var<function>` scratch slot, an
+ *  unconsumed one takes NONE (so a counts-only node costs 0 slots and emits the
+ *  pre-arrays shader verbatim). `hemifieldArraySlotCount` is the single term BOTH
+ *  the capacity gate and the slot ASSIGNMENT use, so they cannot drift.
+ *  Like every other GPU array producer the fill is capped at AGENT_GPU_ARRAY_CAP:
+ *  past the cap the ARRAY truncates while the COUNT stays exact, so the reported
+ *  length is `min(count, cap)` (a documented GPU capacity bound). */
+function emitSenseHemifieldGather(ctx: AgentWgpuCtx, node: GraphNode): void {
   const is3d = ctx.is3d;
-  const cached = ctx.valueCache.get(`${node.id}:leftCount`);
-  if (cached !== undefined) return ctx.valueCache.get(`${node.id}:${portId}`) ?? cached;
+  const used = hemifieldArraysUsed(node.id, ctx.flatEdges);
+  const cap = arrCapOf(ctx);
+  const leftArr = used.left ? arraySlotName(ctx, `${node.id}:${HEMIFIELD_LEFT_ARRAY}`).arrName : null;
+  const rightArr = used.right ? arraySlotName(ctx, `${node.id}:${HEMIFIELD_RIGHT_ARRAY}`).arrName : null;
 
   const left = fresh(ctx, 'shL'), right = fresh(ctx, 'shR'), cr = fresh(ctx, 'shCr');
   ctx.lines.push(`  var ${left}: i32 = 0; var ${right}: i32 = 0;`);
@@ -3035,7 +3066,11 @@ function emitSenseHemifield(ctx: AgentWgpuCtx, node: GraphNode, portId: string):
     const cross = is3d
       ? `select(${hx} * ${dy} - ${hy} * ${dx}, ${hz} * ${dx} - ${hx} * ${dz}, ${upY})`
       : `${hx} * ${dy} - ${hy} * ${dx}`;
-    const tally = `{ let ${cr}: f32 = ${cross}; if (${cr} >= 0.0) { ${left} = ${left} + 1; } else { ${right} = ${right} + 1; } }`;
+    // The push uses the count as its index, THEN the count bumps — so the array
+    // is exactly the counted set (truncated at the cap, where the count keeps going).
+    const pushL = leftArr ? ` if (${left} < ${cap}) { ${leftArr}[${left}] = i32(${j}); }` : '';
+    const pushR = rightArr ? ` if (${right} < ${cap}) { ${rightArr}[${right}] = i32(${j}); }` : '';
+    const tally = `{ let ${cr}: f32 = ${cross}; if (${cr} >= 0.0) {${pushL} ${left} = ${left} + 1; } else {${pushR} ${right} = ${right} + 1; } }`;
     ctx.lines.push(`      if (${d2} <= ${r2}) {`);
     if (omni) {
       ctx.lines.push(`        ${tally}`);
@@ -3060,7 +3095,34 @@ function emitSenseHemifield(ctx: AgentWgpuCtx, node: GraphNode, portId: string):
     rightCount: { expr: right, type: 'i32' },
   };
   for (const k of Object.keys(refs)) ctx.valueCache.set(`${node.id}:${k}`, refs[k]!);
-  return refs[portId] ?? refs['leftCount']!;
+  // The array LENGTH is the count clamped to the scratch cap (the count itself
+  // stays exact — only the stored ids truncate).
+  if (leftArr) {
+    const lLen = fresh(ctx, 'shLLen');
+    ctx.lines.push(`  let ${lLen}: i32 = min(${left}, ${cap});`);
+    ctx.arrayCache.set(`${node.id}:${HEMIFIELD_LEFT_ARRAY}`, { arrName: leftArr, lenName: lLen, elemType: 'i32' });
+  }
+  if (rightArr) {
+    const rLen = fresh(ctx, 'shRLen');
+    ctx.lines.push(`  let ${rLen}: i32 = min(${right}, ${cap});`);
+    ctx.arrayCache.set(`${node.id}:${HEMIFIELD_RIGHT_ARRAY}`, { arrName: rightArr, lenName: rLen, elemType: 'i32' });
+  }
+}
+
+/** Sense Hemifield, VALUE side (leftCount / rightCount). Runs the gather once. */
+function emitSenseHemifield(ctx: AgentWgpuCtx, node: GraphNode, portId: string): ValueRef {
+  if (ctx.valueCache.get(`${node.id}:leftCount`) === undefined) emitSenseHemifieldGather(ctx, node);
+  return ctx.valueCache.get(`${node.id}:${portId}`) ?? ctx.valueCache.get(`${node.id}:leftCount`)!;
+}
+
+/** Sense Hemifield, ARRAY side (leftAgents / rightAgents). Runs the SAME single
+ *  gather. Only reachable for a WIRED array port (that wire is what allocated the
+ *  slot), so a missing ref is a structural error, not a runtime state. */
+function emitSenseHemifieldArray(ctx: AgentWgpuCtx, node: GraphNode, portId: string): AgentArrayRef {
+  if (ctx.valueCache.get(`${node.id}:leftCount`) === undefined) emitSenseHemifieldGather(ctx, node);
+  const ref = ctx.arrayCache.get(`${node.id}:${portId}`);
+  if (!ref) throw new Error(`agentWebgpu: Sense Hemifield '${portId}' has no scratch slot (unwired array port).`);
+  return ref;
 }
 
 /** The 3×3 (2D) / 3×3×3 (3D) hash-bin stencil over the in-buffer binStart/binAgents
@@ -3442,6 +3504,14 @@ function preEmitAgentValues(ctx: AgentWgpuCtx, rootId: string): void {
     const node = nodeMap.get(id);
     if (!node) return false;
     if (AGENT_VALUE_NO_HOIST.has(node.data.nodeType)) { hoistable.set(id, false); return false; }
+    // A Sense Hemifield with a WIRED array port IS an array producer, and array
+    // producers emit at their use site (compileArrayNode), never at function-top.
+    // Per-NODE rather than per-type so a counts-only hemifield keeps hoisting
+    // exactly as before (byte-identical shader).
+    if (node.data.nodeType === 'senseHemifield') {
+      const u = hemifieldArraysUsed(id, ctx.flatEdges);
+      if (u.left || u.right) { hoistable.set(id, false); return false; }
+    }
     if (ctx.volatileNodes.has(id)) { hoistable.set(id, false); return false; }
     // Hazard-pinned reads emit at their LCA flow position, never at function-top.
     if (ctx.hazardPinned.has(id)) { hoistable.set(id, false); return false; }
@@ -3691,7 +3761,10 @@ function agentSubsetSupported(reachNodes: GraphNode[], edges: GraphEdge[], flatN
     if (!AGENT_WEBGPU_SUPPORTED_TYPES.has(t)) return false;
     if (scope === 'om' && t === 'setAgentSprite') return false;
     const cfg = (n.data.config ?? {}) as Record<string, unknown>;
-    if (isAgentArrayProducer(t)) arrayProducerCount++;
+    // Sense Hemifield costs one slot per CONSUMED array port (0 when only its
+    // counts are read) — the SAME term the slot assignment uses.
+    if (t === 'senseHemifield') arrayProducerCount += hemifieldArraySlotCount(n.id, edges);
+    else if (isAgentArrayProducer(t)) arrayProducerCount++;
     if (t === 'aggregate') {
       // median / uniform-random need a sort / RNG-pick path the agent shader
       // doesn't have (the lone genuinely-fundamental aggregate cases, same as the
@@ -3792,7 +3865,11 @@ function agentSubsetSupported(reachNodes: GraphNode[], edges: GraphEdge[], flatN
     // source for arrayElement / arrayLength / forEach.
     const isArrayVarSrc = srcNode.data.nodeType === 'getVariable'
       && (model.agentVariables ?? []).some(v => v.id === (srcNode.data.config?.['variableId'] as string) && v.kind === 'array');
-    if (!isAgentArrayProducer(srcNode.data.nodeType) && !isArrayVarSrc) return false;
+    // A Sense Hemifield COUNT port is a plain scalar, not an array source.
+    const srcPort = parseHandle(e.sourceHandle)?.portId ?? '';
+    const isProducerPort = isAgentArrayProducer(srcNode.data.nodeType)
+      && isAgentArrayPort(srcNode.data.nodeType, srcPort);
+    if (!isProducerPort && !isArrayVarSrc) return false;
   }
   return true;
 }
@@ -3980,7 +4057,8 @@ export function compileAgentGraphWebGPU(
     if (!reachable.has(n.id)) continue;
     seen.add(n.data.nodeType);
     if (!AGENT_WEBGPU_SUPPORTED_TYPES.has(n.data.nodeType)) return empty(`agentWebgpu: unsupported node '${n.data.nodeType}' (falls back to JS).`);
-    if (isAgentArrayProducer(n.data.nodeType)) arrayProducerCount++;
+    if (n.data.nodeType === 'senseHemifield') arrayProducerCount += hemifieldArraySlotCount(n.id, edges);
+    else if (isAgentArrayProducer(n.data.nodeType)) arrayProducerCount++;
   }
   if (arrayProducerCount > AGENT_WEBGPU_NEARBY_SLOTS) return empty(`agentWebgpu: too many agent-array producers (${arrayProducerCount} > ${AGENT_WEBGPU_NEARBY_SLOTS} slots).`);
 
@@ -4058,7 +4136,7 @@ function emitAgentRootModule(
   const bondAttrDefault = new Map<string, number>();
   for (const a of bondAttrsOf(model)) bondAttrDefault.set(a.id, encodeAttrValue(a));
   const ctx: AgentWgpuCtx = {
-    adj, layout, is3d: layout.gridDepth > 1,
+    adj, flatEdges: edges, layout, is3d: layout.gridDepth > 1,
     lines: [], uid: 0,
     agentAttrType, agentAttrDefault, bondAttrDefault,
     varNames: new Map<string, string>(),
@@ -4088,6 +4166,15 @@ function emitAgentRootModule(
   let i32Slots = 0, f32Slots = 0;
   for (const n of nodes) {
     if (!reachable.has(n.id) || !isAgentArrayProducer(n.data.nodeType)) continue;
+    // Sense Hemifield is CONDITIONAL: one i32 slot per CONSUMED array port (0/1/2),
+    // keyed per PORT. The SAME `hemifieldArraysUsed` the capacity gate + the
+    // emitter consult, so gate ≡ assignment ≡ emit by construction.
+    if (n.data.nodeType === 'senseHemifield') {
+      const used = hemifieldArraysUsed(n.id, edges);
+      if (used.left) ctx.arrayScratchSlot.set(`${n.id}:${HEMIFIELD_LEFT_ARRAY}`, { slot: i32Slots++, elemType: 'i32' });
+      if (used.right) ctx.arrayScratchSlot.set(`${n.id}:${HEMIFIELD_RIGHT_ARRAY}`, { slot: i32Slots++, elemType: 'i32' });
+      continue;
+    }
     // getAgentsAttribute → f32 (gathered attr values); all others → i32 (id arrays).
     const elemType: WgslType = n.data.nodeType === 'getAgentsAttribute' ? 'f32' : 'i32';
     if (elemType === 'f32') ctx.arrayScratchSlot.set(n.id, { slot: f32Slots++, elemType });
