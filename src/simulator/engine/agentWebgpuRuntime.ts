@@ -35,6 +35,7 @@ import type { AgentWebGPULayout } from '../../modeler/vpl/compiler/agentWebgpu/l
 import { AGENT_GPU_F32_FIELDS, AGENT_GPU_F32_FIELDS_3D, AGENT_GPU_I32_FIELDS, AGENT_GPU_QUEUE_FIELDS, AGENT_GPU_REQUEST_FIELDS, AGENT_GPU_SPRITE_FIELDS } from '../../modeler/vpl/compiler/agentWebgpu/layout';
 import { emitAgentForcePassWGSL, agentMirrorFields, emitForceControlStruct } from '../../modeler/vpl/compiler/agentWebgpu/forcePass';
 import { acquireSharedGpuDevice, releaseSharedGpuDevice } from './sharedGpuDevice';
+import { buildSceneWireframeVerts, type SceneViz } from './sceneWireframe';
 import { GLOW_TONE_EXPOSURE } from '../glowTone';
 
 const REQUEST_FIELD_SET: ReadonlySet<string> = new Set(AGENT_GPU_REQUEST_FIELDS);
@@ -312,6 +313,20 @@ export interface AgentWebGPURuntime {
   renderDepthTex?: GPUTexture | null;
   renderDepthW?: number;
   renderDepthH?: number;
+  // Scene-anchored wireframes (bounds / floor grid / origin axes), drawn in the
+  // SAME render pass + depth buffer as the spheres so agents in front occlude
+  // them — the agent-sphere sibling of the L1 voxel line pass. Geometry comes
+  // from the SHARED buildSceneWireframeVerts (mirrors gl3d's renderOverlays).
+  renderLinePipeline?: GPURenderPipeline | null;
+  renderLineBindGroup?: GPUBindGroup | null;
+  renderLineBuf?: GPUBuffer | null;
+  renderLineCount?: number;
+  renderLineSig?: string;
+  /** Which wireframe groups to draw (mirrors the panel's Viz3D toggles). */
+  renderViz?: SceneViz;
+  /** (W-1)/2, (H-1)/2, (D-1)/2 from the last RenderView3D — the ONLY source the
+   *  line geometry derives its dims from, so lines and spheres share one frame. */
+  renderHalf3D?: [number, number, number];
   // E2 — single-canvas composite (2D grid+agents, WebGPU grid). The canvas is
   // DISPLAY-sized; one encoder presents the grid layer (a fullscreen triangle whose
   // FS INVERTS the camera — display pixel → world coord → cell → grid `colorsBuf`,
@@ -1709,6 +1724,20 @@ export interface AgentRenderSurface {
   renderDepthTex?: GPUTexture | null;
   renderDepthW?: number;
   renderDepthH?: number;
+  // Scene-anchored wireframes (bounds / floor grid / origin axes), drawn in the
+  // SAME render pass + depth buffer as the spheres so agents in front occlude
+  // them — the agent-sphere sibling of the L1 voxel line pass. Geometry comes
+  // from the SHARED buildSceneWireframeVerts (mirrors gl3d's renderOverlays).
+  renderLinePipeline?: GPURenderPipeline | null;
+  renderLineBindGroup?: GPUBindGroup | null;
+  renderLineBuf?: GPUBuffer | null;
+  renderLineCount?: number;
+  renderLineSig?: string;
+  /** Which wireframe groups to draw (mirrors the panel's Viz3D toggles). */
+  renderViz?: SceneViz;
+  /** (W-1)/2, (H-1)/2, (D-1)/2 from the last RenderView3D — the ONLY source the
+   *  line geometry derives its dims from, so lines and spheres share one frame. */
+  renderHalf3D?: [number, number, number];
   // E2 — single-canvas composite (2D grid+agents, WebGPU grid). The canvas is
   // DISPLAY-sized; one encoder presents the grid layer (a fullscreen triangle whose
   // FS INVERTS the camera — display pixel → world coord → cell → grid `colorsBuf`,
@@ -2162,6 +2191,82 @@ fn fsMain(in: VSOut) -> FSOut {
 }`;
 }
 
+/** Scene-anchored wireframe overlays (bounds box / floor grid / origin axes) for
+ *  the 3D agent free mode, drawn in the SAME render pass + depth buffer as the
+ *  sphere impostors so agents in front occlude them. Reuses the RenderView3D
+ *  uniform (mvp @0) — no new uniform, no RenderView3D widening (which would move
+ *  every later member; see verify-render-uniform-layouts.mjs). Line-list; pos +
+ *  colour vertex attributes; depth-test ON + depth-write ON.
+ *
+ *  THE BUG THIS CLOSES: gl3d in `overlaysOnly` mode composites on a canvas ABOVE
+ *  the sphere canvas with a transparent clear, so anything it drew there had NO
+ *  depth relationship with the spheres — the floor grid / bounds / axes always
+ *  painted IN FRONT of the agents. Reported as "move the cursor out of the canvas
+ *  and the grid starts being drawn in front of the agents" (leaving the canvas
+ *  releases the UI-sync pin ⇒ free mode ⇒ the two-canvas split). */
+const AGENT_LINE_WGSL = `${RENDER_VIEW_3D_WGSL}
+@group(0) @binding(0) var<uniform> rv : RenderView3D;
+struct LOut { @builtin(position) pos : vec4<f32>, @location(0) color : vec3<f32> };
+@vertex
+fn vsLine(@location(0) p : vec3<f32>, @location(1) c : vec3<f32>) -> LOut {
+  var out : LOut;
+  var q : vec4<f32> = rv.mvp * vec4<f32>(p, 1.0);
+  // DEPTH-CONVENTION MATCH — the load-bearing line of this pass. mvp is a
+  // GL-convention projection (NDC z in [-1,1]) and the SPHERE fragment shader
+  // writes its own depth as (clip.z/clip.w)*0.5 + 0.5, i.e. remapped to [0,1].
+  // A rasterizer-generated depth is clip.z/clip.w with NO remap, so leaving this
+  // out puts the lines in a DIFFERENT depth space from the spheres: every line
+  // reads as nearer than it is and wins against ~29% of a sphere's pixels (found
+  // by pixel probe, not by inspection). q.z = (q.z + q.w)*0.5 is the standard
+  // GL-to-WebGPU clip-z remap, making the rasterized depth exactly the sphere's
+  // formula. (The voxel line pass needs no such remap — its cubes use rasterizer
+  // depth too, so both sides already share one convention.)
+  q.z = (q.z + q.w) * 0.5;
+  out.pos = q;
+  out.color = c;
+  return out;
+}
+@fragment
+fn fsLine(in : LOut) -> @location(0) vec4<f32> {
+  // Opaque lines; the canvas is premultiplied-alpha, alpha 1 ⇒ colour as-is.
+  return vec4<f32>(in.color, 1.0);
+}`;
+
+/** Set which scene wireframes the 3D agent render draws (mirrors the panel's
+ *  Viz3D axes/grid/bounds). Clears the geometry cache so the next present
+ *  rebuilds. The agent sibling of uploadVoxelViz. */
+export function uploadAgentViz(rt: AgentRenderSurface, viz: SceneViz): void {
+  rt.renderViz = { axes: !!viz.axes, grid: !!viz.grid, bounds: !!viz.bounds };
+  rt.renderLineSig = '';   // force a rebuild on the next present
+}
+
+/** (Re)build the wireframe vertex buffer when the viz flags or the world dims
+ *  change. No-op when the signature is unchanged. The dims come from the LAST
+ *  RenderView3D's half-extents (W = 2·halfX + 1, exact for integer dims), so the
+ *  lines and the spheres can never disagree about the world frame. */
+function ensureAgentLineBuffer(rt: AgentRenderSurface): void {
+  // No camera yet (the attach presents once before the first setAgentCamera) —
+  // the world dims are unknown, so draw nothing rather than a degenerate 1×1×1
+  // box at the origin for that one frame.
+  if (!rt.renderHalf3D) { rt.renderLineCount = 0; return; }
+  const [hx, hy, hz] = rt.renderHalf3D;
+  const viz = rt.renderViz ?? { axes: false, grid: false, bounds: false };
+  const sig = `${viz.axes ? 1 : 0}${viz.grid ? 1 : 0}${viz.bounds ? 1 : 0}|${hx}|${hy}|${hz}`;
+  if (sig === rt.renderLineSig && (rt.renderLineBuf || (rt.renderLineCount ?? 0) === 0)) return;
+  rt.renderLineSig = sig;
+  const W = Math.max(1, Math.round(2 * hx + 1)), H = Math.max(1, Math.round(2 * hy + 1)), D = Math.max(1, Math.round(2 * hz + 1));
+  const verts = (viz.axes || viz.grid || viz.bounds) ? buildSceneWireframeVerts(W, H, D, viz) : new Float32Array(0);
+  rt.renderLineCount = verts.length / 6;
+  if (rt.renderLineBuf) { try { rt.renderLineBuf.destroy(); } catch { /* non-fatal */ } rt.renderLineBuf = null; }
+  if (verts.length === 0) return;
+  const buf = rt.device.createBuffer({
+    label: 'agent-scene-lines', size: verts.byteLength,
+    usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+  });
+  rt.device.queue.writeBuffer(buf, 0, verts);
+  rt.renderLineBuf = buf;
+}
+
 /** Ensure the depth texture matches the canvas size (recreated on resize). */
 function ensureAgentDepthTex(rt: AgentRenderSurface, w: number, h: number): GPUTextureView {
   if (!rt.renderDepthTex || rt.renderDepthW !== w || rt.renderDepthH !== h) {
@@ -2243,6 +2348,10 @@ export function uploadAgentRenderView3D(rt: AgentRenderSurface, v: AgentRenderVi
   u[38] = v.outlineOn >>> 0;                               // outlineOn @152
   f[40] = v.bgR; f[41] = v.bgG; f[42] = v.bgB; f[43] = v.bgA; // bg @160
   rt.device.queue.writeBuffer(rt.renderView3DBuf, 0, ab);
+  // The wireframe geometry derives its world dims from THESE half-extents (one
+  // source shared with the spheres). A dims change invalidates the cached buffer
+  // via ensureAgentLineBuffer's signature.
+  rt.renderHalf3D = [v.halfX, v.halfY, v.halfZ];
   const a = v.bgA;
   rt.renderClear = [v.bgR * a, v.bgG * a, v.bgB * a, a];
 }
@@ -2291,6 +2400,43 @@ async function setupAgentSphereRender(rt: AgentRenderSurface, canvas: OffscreenC
       depthStencil: { format: 'depth24plus', depthWriteEnabled: true, depthCompare: 'less' },
     });
     const renderView3DBuf = rt.device.createBuffer({ label: 'agent-render-view-3d', size: RENDER_VIEW_3D_BYTES, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+    // Scene-wireframe (bounds/grid/axes) line pipeline — reuses the RenderView3D
+    // uniform (mvp) so it shares projection with the spheres, and depth-tests
+    // against the SAME buffer the sphere pass writes, so agents in front occlude
+    // it. A compile failure fails the WHOLE 3D setup (the voxel precedent): the
+    // main thread then keeps gl3d frame mode, which draws the wireframes with
+    // correct depth — never "free mode with no wireframes at all".
+    const lineModule = rt.device.createShaderModule({ label: 'agent-scene-line', code: AGENT_LINE_WGSL });
+    {
+      const linfo = await lineModule.getCompilationInfo();
+      const lerrs = linfo.messages.filter(m => m.type === 'error');
+      if (lerrs.length > 0) {
+        // eslint-disable-next-line no-console
+        console.error('[agents/webgpu] scene-line WGSL compile errors:\n' + lerrs.map(m => `  line ${m.lineNum}: ${m.message}`).join('\n'));
+        return false;
+      }
+    }
+    const lineBgl = rt.device.createBindGroupLayout({
+      label: 'agent-scene-line-bgl',
+      entries: [{ binding: 0, visibility: GPUShaderStage.VERTEX, buffer: { type: 'uniform' } }],
+    });
+    const linePipeline = rt.device.createRenderPipeline({
+      label: 'agent-scene-line', layout: rt.device.createPipelineLayout({ label: 'agent-scene-line-pl', bindGroupLayouts: [lineBgl] }),
+      vertex: {
+        module: lineModule, entryPoint: 'vsLine',
+        buffers: [{ arrayStride: 24, attributes: [
+          { shaderLocation: 0, offset: 0, format: 'float32x3' },
+          { shaderLocation: 1, offset: 12, format: 'float32x3' },
+        ] }],
+      },
+      fragment: { module: lineModule, entryPoint: 'fsLine', targets: [{ format }] },
+      primitive: { topology: 'line-list' },
+      depthStencil: { format: 'depth24plus', depthWriteEnabled: true, depthCompare: 'less' },
+    });
+    const lineBindGroup = rt.device.createBindGroup({
+      label: 'agent-scene-line-bg', layout: lineBgl,
+      entries: [{ binding: 0, resource: { buffer: renderView3DBuf } }],
+    });
     const renderBindGroup = rt.device.createBindGroup({
       label: 'agent-sphere-bg', layout: bgl,
       entries: [
@@ -2309,6 +2455,13 @@ async function setupAgentSphereRender(rt: AgentRenderSurface, canvas: OffscreenC
     rt.renderView3DBuf = renderView3DBuf;
     rt.renderSpherePipeline = pipeline;
     rt.renderSphereBindGroup = renderBindGroup;
+    rt.renderLinePipeline = linePipeline;
+    rt.renderLineBindGroup = lineBindGroup;
+    // A re-attach rebuilds on the SAME surface — the old vertex buffer belongs to
+    // the old view uniform's signature; force a rebuild against the current viz.
+    if (rt.renderLineBuf) { try { rt.renderLineBuf.destroy(); } catch { /* non-fatal */ } rt.renderLineBuf = null; }
+    rt.renderLineCount = 0;
+    rt.renderLineSig = '';
     rt.renderActive = true;
     rt.renderClear = [0, 0, 0, 0];
     return true;
@@ -2795,6 +2948,9 @@ function presentAgentSpheresEncode(rt: AgentRenderSurface, enc: GPUCommandEncode
   const tex = rt.renderCtx.getCurrentTexture();
   const view = tex.createView();
   const depthView = ensureAgentDepthTex(rt, tex.width, tex.height);
+  // Rebuild the scene-wireframe geometry (bounds/grid/axes) when the viz flags or
+  // world dims changed — buffer writes must happen OUTSIDE the render pass.
+  ensureAgentLineBuffer(rt);
   const [cr, cg, cb, ca] = rt.renderClear ?? [0, 0, 0, 0];
   const pass = enc.beginRenderPass({
     label: 'agent-sphere-present',
@@ -2804,6 +2960,15 @@ function presentAgentSpheresEncode(rt: AgentRenderSurface, enc: GPUCommandEncode
   pass.setPipeline(rt.renderSpherePipeline);
   pass.setBindGroup(0, rt.renderSphereBindGroup);
   pass.draw(4, Math.max(1, hw));   // 4 verts (triangle-strip quad) × hw agents
+  // Scene wireframes (bounds/grid/axes) in the SAME pass ⇒ shared depth ⇒ agents
+  // in front occlude them (the free-mode two-canvas depth bug). Depth-write ON so
+  // the axis arrowheads self-order; drawn after the spheres but depth decides.
+  if (rt.renderLinePipeline && rt.renderLineBindGroup && rt.renderLineBuf && (rt.renderLineCount ?? 0) > 0) {
+    pass.setPipeline(rt.renderLinePipeline);
+    pass.setBindGroup(0, rt.renderLineBindGroup);
+    pass.setVertexBuffer(0, rt.renderLineBuf);
+    pass.draw(rt.renderLineCount!);
+  }
   pass.end();
 }
 
@@ -2916,8 +3081,9 @@ export function destroyAgentRenderSurface(rt: AgentRenderSurface | null): void {
   rt.renderComposite = false;
   if (rt.renderDepthTex) { try { rt.renderDepthTex.destroy(); } catch { /* non-fatal */ } rt.renderDepthTex = null; }
   destroyGlowHdrTex(rt);
-  const bufs = [rt.agentF32Buf, rt.agentAliveBuf, rt.agentColorsBuf, rt.renderViewBuf ?? null, rt.renderView3DBuf ?? null, rt.gridPresentUniform ?? null];
+  const bufs = [rt.agentF32Buf, rt.agentAliveBuf, rt.agentColorsBuf, rt.renderViewBuf ?? null, rt.renderView3DBuf ?? null, rt.gridPresentUniform ?? null, rt.renderLineBuf ?? null];
   for (const b of bufs) { if (b) try { b.destroy(); } catch { /* non-fatal */ } }
+  rt.renderLineBuf = null; rt.renderLineCount = 0; rt.renderLineSig = '';
   // E1: release the shared-device reference (was: destroy a per-surface device).
   releaseSharedGpuDevice(rt.device);
 }
@@ -3801,6 +3967,7 @@ export function destroyAgentWebGPURuntime(rt: AgentWebGPURuntime | null): void {
     rt.resident?.sortedBuf ?? null, rt.resident?.sortedIdBuf ?? null,
     rt.renderViewBuf ?? null, rt.renderView3DBuf ?? null,   // + Phase C 3D uniform
     rt.gridPresentUniform ?? null,   // + E2 composite grid-dims uniform
+    rt.renderLineBuf ?? null,        // + the 3D scene-wireframe vertex buffer
   ];
   // A1 render canvas is a transferred OffscreenCanvas — its context is released
   // with the device; just drop the references (unconfigure is implicit on destroy).
@@ -3810,6 +3977,7 @@ export function destroyAgentWebGPURuntime(rt: AgentWebGPURuntime | null): void {
   if (rt.renderDepthTex) { try { rt.renderDepthTex.destroy(); } catch { /* non-fatal */ } rt.renderDepthTex = null; }
   destroyGlowHdrTex(rt);
   for (const b of bufs) { if (b) try { b.destroy(); } catch { /* non-fatal */ } }
+  rt.renderLineBuf = null; rt.renderLineCount = 0; rt.renderLineSig = '';
   for (const bucket of rt.stagingPool.values()) for (const e of bucket) { try { e.buffer.destroy(); } catch { /* non-fatal */ } }
   rt.stagingPool.clear();
   // E1: release the shared-device reference (mirrors destroyWebGPURuntime). The

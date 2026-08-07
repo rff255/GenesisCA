@@ -3327,6 +3327,18 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
   const lastAgentCameraKeyRef = useRef<string>('');
   // UI-sync debounce-OFF timer (so a brush stroke doesn't thrash the readback).
   const agentUiSyncTimerRef = useRef<number>(0);
+  /** Set when AGENT UI-sync is posted ON; cleared by the first `stepped` that
+   *  carries an agents payload. The 3D frame mode waits for it, so a flip can
+   *  never render `agentsRef`'s LAST free-mode snapshot — which in free mode is
+   *  not refreshed at all and can be minutes old.
+   *
+   *  THE BUG THIS CLOSES (the exact grid sibling of gridFrameAwaitingColorsRef):
+   *  pausing posts UI-sync ON and flips `agentUiSyncPostedRef` synchronously, so
+   *  the very next draw() entered gl3d frame mode with that ancient snapshot and
+   *  painted the agents at their OLD positions for the one frame until the fresh
+   *  snapshot landed — reported as "pausing and hitting play always blinks, as if
+   *  for a frame it draws an older frame". */
+  const agentFrameAwaitingSnapshotRef = useRef<boolean>(false);
   // Phase C — 3D free-mode direct render: unlike the 2D path (a DETACHED canvas
   // the main thread blits onto the 2D display canvas), the 3D worker canvas is a
   // VISIBLE DOM sibling UNDER the gl3d canvas, composited by the browser (no blit).
@@ -4212,7 +4224,13 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
     const w = workerRef.current;
     if (want) {
       if (agentUiSyncTimerRef.current) { clearTimeout(agentUiSyncTimerRef.current); agentUiSyncTimerRef.current = 0; }
-      if (!agentUiSyncPostedRef.current) { agentUiSyncPostedRef.current = true; w.postMessage({ type: 'setAgentUiSync', on: true }); }
+      if (!agentUiSyncPostedRef.current) {
+        agentUiSyncPostedRef.current = true;
+        // Frame mode must wait for a snapshot that arrived AFTER this post — the
+        // one held over from the last frame-mode stretch is arbitrarily old.
+        agentFrameAwaitingSnapshotRef.current = true;
+        w.postMessage({ type: 'setAgentUiSync', on: true });
+      }
     } else if (agentUiSyncPostedRef.current && !agentUiSyncTimerRef.current) {
       agentUiSyncTimerRef.current = window.setTimeout(() => {
         agentUiSyncTimerRef.current = 0;
@@ -4433,6 +4451,17 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
     workerRef.current.postMessage({ type: 'setGridViz', axes: v.axes, grid: v.grid, bounds: v.bounds });
   }, []);
 
+  // Thread the scene-wireframe toggles (bounds/grid/axes) to the worker's 3D AGENT
+  // render, which draws them depth-tested against the sphere impostors (so agents
+  // occlude them in free mode) — the agent sibling of postGridViz. gl3d stops
+  // drawing those three in its overlays-only path; the gizmo / brush plane / hover
+  // rings / axis labels stay in gl3d (deliberately always on top — they are UI).
+  const postAgentViz = useCallback(() => {
+    if (!agentDirectRenderActiveRef.current || !is3dRef.current || !workerRef.current) return;
+    const v = viz3dRef.current;
+    workerRef.current.postMessage({ type: 'setAgentViz', axes: v.axes, grid: v.grid, bounds: v.bounds });
+  }, []);
+
   // L1 UI-sync driver (the grid sibling of updateAgentUiSync). ON = the worker
   // reads colours back each frame and ships them, so gl3d renders the full frame
   // (and its colour-id pick FBO resolves). ON iff a feature is — or may be —
@@ -4505,7 +4534,11 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
     const w = workerRef.current;
     if (!w) return;
     if (agentUiSyncTimerRef.current) { clearTimeout(agentUiSyncTimerRef.current); agentUiSyncTimerRef.current = 0; }
-    if (!agentUiSyncPostedRef.current) { agentUiSyncPostedRef.current = true; w.postMessage({ type: 'setAgentUiSync', on: true }); }
+    if (!agentUiSyncPostedRef.current) {
+      agentUiSyncPostedRef.current = true;
+      agentFrameAwaitingSnapshotRef.current = true;
+      w.postMessage({ type: 'setAgentUiSync', on: true });
+    }
   }, []);
   const forceGridUiSyncOn = useCallback(() => {
     const w = workerRef.current;
@@ -4641,7 +4674,14 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       // (agentsRef goes stale / uiSync false → back to spheres). The worker keeps the
       // sphere canvas fresh even while hidden (the resident batch presents in both
       // modes), so flipping visibility back is instant.
-      const agent3dFrame = agent3dActive && agentUiSyncPostedRef.current && agentsRef.current != null;
+      // …AND that snapshot must have arrived AFTER the UI-sync ON post
+      // (agentFrameAwaitingSnapshotRef — the grid's gridFrameAwaitingColorsRef
+      // sibling): free mode ships NO snapshot, so the one still in agentsRef is
+      // from the last frame-mode stretch and can be arbitrarily old. Entering
+      // frame mode with it drew one frame of ancient agent positions — the
+      // reported pause/play blink.
+      const agent3dFrame = agent3dActive && agentUiSyncPostedRef.current
+        && !agentFrameAwaitingSnapshotRef.current && agentsRef.current != null;
       const agent3dFree = agent3dActive && !agent3dFrame;
       // L1 — the CA-grid analogue: when the worker's WGSL voxel pass owns the
       // display (free mode) gl3d renders overlays only and we skip uploadColors
@@ -4668,10 +4708,14 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       const voxelFrame = voxelActive
         && gridUiSyncPostedRef.current && !gridFrameAwaitingColorsRef.current && colors3d != null;
       const voxelFree = voxelActive && !voxelFrame;
-      // wireframesExternal = voxelFree ONLY: the worker's voxel renderer draws
-      // the bounds/grid/axes itself (depth-tested); the agent-sphere free mode
-      // has no worker line pass, so gl3d must keep drawing them on top.
-      r.setOverlaysOnly(agent3dFree || voxelFree, voxelFree);
+      // wireframesExternal — in EITHER free mode the worker now draws the
+      // bounds/grid/axes itself, depth-tested against its own scene (voxels: the
+      // L1 line pass; agents: its sphere-pass sibling), so gl3d must NOT draw
+      // them again on the transparent overlay canvas above. It used to be
+      // `voxelFree` only, which is why the agent free mode painted the floor grid
+      // IN FRONT of the agents (no depth relationship across two canvases).
+      const wireframesFree = agent3dFree || voxelFree;
+      r.setOverlaysOnly(wireframesFree, wireframesFree);
       { const sc = agentSphereCanvasRef.current; if (sc) sc.style.display = agent3dFree ? 'block' : 'none'; }
       { const vc = voxelCanvasRef.current; if (vc) vc.style.display = voxelFree ? 'block' : 'none'; }
       agentSphere3DActiveRef.current = agent3dFree;
@@ -5864,7 +5908,12 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       // Bond-Graph Agents: stash the latest agent render snapshot (positions /
       // radius / alive / colours) for drawAgents + nearest-agent picking. Sent
       // every frame for an agent model; absent for a lattice-only model.
-      if (msg.agents !== undefined) agentsRef.current = msg.agents as AgentRenderSnapshot | null;
+      if (msg.agents !== undefined) {
+        agentsRef.current = msg.agents as AgentRenderSnapshot | null;
+        // An agents snapshot that arrived AFTER the UI-sync ON post is what makes
+        // the 3D frame mode safe to enter (it reflects the current generation).
+        agentFrameAwaitingSnapshotRef.current = false;
+      }
       // A1: live-agent count for the stats chip — from the snapshot when present,
       // else the free-mode scalar (the worker renders the frame GPU-side).
       if (msg.agents !== undefined && (msg.agents as AgentRenderSnapshot | null)) agentLiveCountRef.current = (msg.agents as AgentRenderSnapshot).liveCount;
@@ -6517,6 +6566,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
         // Send the initial camera + draw so the canvas shows the current frame.
         const view = computeAgentRenderView();
         if (view && workerRef.current) { lastAgentCameraKeyRef.current = ''; workerRef.current.postMessage({ type: 'setAgentCamera', view }); }
+        postAgentViz();  // apply the current bounds/grid/axes toggles to the worker
         // MIRROR THE WORKER'S ACTUAL FLAG (the UI-sync mirror invariant). A
         // display resize / metaballs-off re-attaches on the SAME worker, whose
         // `agentUiSync` survives — assuming ON here would strand the mirror and
@@ -6893,6 +6943,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
     // Same tick as the fresh `createSimWorker()` above → module default ON.
     if (agentUiSyncTimerRef.current) { clearTimeout(agentUiSyncTimerRef.current); agentUiSyncTimerRef.current = 0; }
     agentUiSyncPostedRef.current = true;   // worker default is ON
+    agentFrameAwaitingSnapshotRef.current = false;   // a fresh worker ships from its first step
     // 3D Grid CA: effective layer count = d3 computed above (honours a resize-
     // panel dOverride; otherwise the model's depth, only when dimension==='3d' so
     // the worker's `depth` stays in lockstep with the compilers' `is3d`).
@@ -8509,6 +8560,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
           if (sc) sc.style.display = 'none';
           if (workerRef.current) workerRef.current.postMessage({ type: 'setAgentUiSync', on: true });
           agentUiSyncPostedRef.current = true;
+          agentFrameAwaitingSnapshotRef.current = true;
         }
       } else if (agentRenderEligibleRef.current) {
         maybeAttachAgentCanvas();
@@ -8536,8 +8588,10 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
     viz3dRef.current = viz3d;
     // Free-mode voxel render draws bounds/grid/axes itself — thread the toggles.
     if (voxelRenderActiveRef.current) postGridViz();
+    // Same for the free-mode 3D agent (sphere) render.
+    postAgentViz();
     draw();
-  }, [viz3d, draw, postGridViz]);
+  }, [viz3d, draw, postGridViz, postAgentViz]);
   useEffect(() => {
     plane3dRef.current = { axis: plane3d.axis, pos: plane3d.pos };
     plane3dEnabledRef.current = plane3d.enabled;

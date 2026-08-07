@@ -61,7 +61,7 @@ import {
   primeAgentFieldFromGrid, foldAgentFieldToGrid,
   uploadAgentAux, uploadAgentIndicators, readbackAgentIndicators, uploadAgentBondStore, readbackAgentBondStore,
   ensureAgentResident, computeResidentHashParams, uploadAgentHashParams, dispatchResidentBatch, readbackAgentFrame,
-  setupAgentDirectRender, uploadAgentRenderView, uploadAgentRenderView3D, presentAgentsOnce, presentAgentsFromStore,
+  setupAgentDirectRender, uploadAgentRenderView, uploadAgentRenderView3D, uploadAgentViz, presentAgentsOnce, presentAgentsFromStore,
   setupAgentCompositeRender, presentAgentCompositeFromStore, debugReadCompositePixels,
   createAgentRenderOnlyRuntime, presentAgentRenderFromStore, destroyAgentRenderSurface,
   type AgentWebGPURuntime, type AgentRenderSurface, type FieldArray, type AgentRenderView, type AgentRenderView3D, type AgentOMShaderInput,
@@ -677,11 +677,16 @@ interface SetAgentCameraMsg { type: 'setAgentCamera'; view: AgentRenderViewAny }
  *  and ships the render snapshot (features that need CPU agent state). While OFF
  *  the resident batch skips the readback (free-running). Default ON. */
 interface SetAgentUiSyncMsg { type: 'setAgentUiSync'; on: boolean }
+/** Which scene wireframes (bounds / floor grid / origin axes) the 3D agent free-mode
+ *  render draws — the agent sibling of `setGridViz`. gl3d stops drawing those three
+ *  in its overlays-only path, so the worker owns them (depth-tested against the
+ *  spheres). */
+interface SetAgentVizMsg { type: 'setAgentViz'; axes: boolean; grid: boolean; bounds: boolean }
 /** Re-present the agent frame (tab-refocus / soft-recompile analogue of
  *  refreshDisplay). */
 interface RefreshAgentDisplayMsg { type: 'refreshAgentDisplay' }
 
-type WorkerMsg = InitMsg | StepMsg | CancelStepMsg | PaintMsg | PaintManualMsg | ResetMsg | RecompileMsg | UpdateModelAttrsMsg | UpdateLookupTableMsg | ImportImageMsg | ImportGridValuesMsg | UpdateIndicatorsMsg | GetStateMsg | LoadStateMsg | ReadRegionMsg | WriteRegionMsg | ClearRegionMsg | SetUseWasmMsg | SetUseWebGPUMsg | ReadbackWebGPUMsg | ColorPassMsg | SetRecordingMsg | AttachCanvasMsg | RequestColorsSnapshotMsg | SetInspectCellsMsg | RefreshDisplayMsg | SeedAgentsMsg | CreateAgentMsg | KillAgentsMsg | PaintAgentsMsg | ClearAgentsMsg | ReadAgentsMsg | PasteAgentsMsg | FormBondMsg | BreakBondMsg | GetAgentStateMsg | MoveAgentsMsg | NudgeAgentsMsg | SetAgentWasmBackedMsg | SetRngSeedMsg | SetSimLayersMsg | SetAgentSnapshotVelocityMsg | AttachAgentCanvasMsg | SetAgentCameraMsg | SetAgentUiSyncMsg | RefreshAgentDisplayMsg | GetDiagnosticsMsg | E1bCountersMsg | GraphIndicatorStatsMsg | CompositeReadbackMsg | AttachVoxelCanvasMsg | SetGridCameraMsg | SetGridUiSyncMsg | SetGridVizMsg | RefreshGridDisplayMsg | VoxelReadbackMsg;
+type WorkerMsg = InitMsg | StepMsg | CancelStepMsg | PaintMsg | PaintManualMsg | ResetMsg | RecompileMsg | UpdateModelAttrsMsg | UpdateLookupTableMsg | ImportImageMsg | ImportGridValuesMsg | UpdateIndicatorsMsg | GetStateMsg | LoadStateMsg | ReadRegionMsg | WriteRegionMsg | ClearRegionMsg | SetUseWasmMsg | SetUseWebGPUMsg | ReadbackWebGPUMsg | ColorPassMsg | SetRecordingMsg | AttachCanvasMsg | RequestColorsSnapshotMsg | SetInspectCellsMsg | RefreshDisplayMsg | SeedAgentsMsg | CreateAgentMsg | KillAgentsMsg | PaintAgentsMsg | ClearAgentsMsg | ReadAgentsMsg | PasteAgentsMsg | FormBondMsg | BreakBondMsg | GetAgentStateMsg | MoveAgentsMsg | NudgeAgentsMsg | SetAgentWasmBackedMsg | SetRngSeedMsg | SetSimLayersMsg | SetAgentSnapshotVelocityMsg | AttachAgentCanvasMsg | SetAgentCameraMsg | SetAgentUiSyncMsg | SetAgentVizMsg | RefreshAgentDisplayMsg | GetDiagnosticsMsg | E1bCountersMsg | GraphIndicatorStatsMsg | CompositeReadbackMsg | AttachVoxelCanvasMsg | SetGridCameraMsg | SetGridUiSyncMsg | SetGridVizMsg | RefreshGridDisplayMsg | VoxelReadbackMsg;
 
 // ---------------------------------------------------------------------------
 // C3 (P4) — RUNTIME FALLBACK LOG
@@ -1199,6 +1204,10 @@ let agentCompositeActive = false;
 /** The last camera/tiling/graphics uniform (re-applied on attach / refocus).
  *  2D disc view OR the Phase C 3D sphere view (routed by applyAgentRenderView). */
 let agentRenderView: AgentRenderViewAny | null = null;
+/** The last scene-wireframe viz toggles for the 3D agent render (mirrors gl3d's
+ *  Viz3D axes/grid/bounds), re-applied on attach / refocus so a display re-attach
+ *  keeps the overlays. The agent sibling of `gridViz3d`. */
+let agentViz3d: { axes: boolean; grid: boolean; bounds: boolean } = { axes: false, grid: false, bounds: false };
 
 /** A2 — the render-ONLY surface for a CPU (JS/WASM) target. On a webgpu target the
  *  render reads the full `agentWebgpuRuntime`; on a CPU target there is no compute
@@ -7911,6 +7920,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
           // present uploads it — an identity upload, no revert.
           await ensureAgentStoreFresh();
           if (agentRenderView) applyAgentRenderView(rt, agentRenderView);
+          uploadAgentViz(rt, agentViz3d);   // re-apply the scene-wireframe toggles
           presentAgentsIfActive();
           // ACK the worker's ACTUAL `agentUiSync` — same rule as the voxel ack
           // above: the module flag survives a re-attach on the SAME worker, so the
@@ -7974,6 +7984,23 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       break;
     }
 
+    case 'setAgentViz': {
+      // Which scene wireframes (bounds/grid/axes) the free-mode 3D agent render
+      // draws (mirrors gl3d's Viz3D toggles). Present-only: re-present with the
+      // new set. The agent sibling of setGridViz.
+      agentViz3d = { axes: !!msg.axes, grid: !!msg.grid, bounds: !!msg.bounds };
+      {
+        const rt = activeRenderSurface();
+        if (agentRenderActive && rt) {
+          uploadAgentViz(rt, agentViz3d);
+          // NEVER upload a stale CPU store (the documented present rule) —
+          // presentAgentsIfActive present-onlys when stale.
+          presentAgentsIfActive();
+        }
+      }
+      break;
+    }
+
     case 'refreshAgentDisplay': {
       // Tab-refocus / soft-recompile analogue of refreshDisplay — re-present the
       // agent frame so a stale/unpresented canvas repaints.
@@ -7981,6 +8008,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
         const rt = activeRenderSurface();
         if (agentRenderActive && rt && agentStore) {
           if (agentRenderView) applyAgentRenderView(rt, agentRenderView);
+          uploadAgentViz(rt, agentViz3d);   // re-apply the scene-wireframe toggles
           presentAgentsIfActive();
         }
       }

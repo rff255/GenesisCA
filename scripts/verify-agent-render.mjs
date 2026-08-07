@@ -458,7 +458,11 @@ check('runtime: uploadAgentSoA seeds the agent colour buffer [invisible-agents b
   const forceAgent = blockAfter(sv, /const forceAgentUiSyncOn = useCallback\(/);
   check('SimulatorView: the force-on helpers TELL the worker in the same statement [mirror invariant]',
     /gridUiSyncPostedRef\.current = true;[\s\S]{0,200}?w\.postMessage\(\{ type: 'setGridUiSync', on: true \}\)/.test(forceGrid)
-    && /agentUiSyncPostedRef\.current = true; w\.postMessage\(\{ type: 'setAgentUiSync', on: true \}\)/.test(forceAgent));
+    // Same tolerance as the grid arm above: BOTH helpers now set their
+    // frame-awaiting flag (gridFrameAwaitingColorsRef / agentFrameAwaitingSnapshotRef)
+    // between the mirror and the post. What the invariant demands is that the post
+    // rides the SAME statement group, not that nothing sits between them.
+    && /agentUiSyncPostedRef\.current = true;[\s\S]{0,200}?w\.postMessage\(\{ type: 'setAgentUiSync', on: true \}\)/.test(forceAgent));
   check('SimulatorView: every gridUiSync "= true" is a post or a brand-new worker [mirror invariant]',
     countAll(sv, 'gridUiSyncPostedRef.current = true')
       === countAll(gridDriver, 'gridUiSyncPostedRef.current = true')
