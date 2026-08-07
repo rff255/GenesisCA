@@ -233,6 +233,7 @@ genesis-ca/
 │   │       └── compiler/
 │   │           ├── compile.ts        # Two-pass compiler (hoisted values + flow)
 │   │           ├── macroExpand.ts    # Shared expandMacros — flattens macro instances (all 3 targets)
+│   │           ├── danglingRefs.ts   # Pre-compile gate: a NON-EMPTY config id naming a model element the model lacks (a cross-model paste / macro import) returns a NAMED compile error instead of emitting `_undef` (cell + agent graphs)
 │   │           ├── volatileHoist.ts  # Shared analyzer: LCA emit-scope for getVariable-derived values
 │   │           ├── asyncWriteHazard.ts # Shared analyzer: async read-after-write hazard reads (seeded into volatile set)
 │   │           ├── rerouteCollapse.ts # Pre-compile pass: strips reroute relay nodes, rewires consumers to the real source
@@ -1926,6 +1927,49 @@ the target model lacks. That is the **macro-import experience**: `detectMissingC
 badges it (verified: a Game-of-Life `getCellAttribute` pasted into Wireworld shows the
 amber `!` with *"Select an attribute"* and the dropdown offers Wireworld's attributes).
 **No name-based auto-mapping** — deliberately out of scope; a possible follow-up.
+
+**A DANGLING REFERENCE COMPILES TO AN ERROR — IT MUST NEVER THROW.** The user-reported
+crash (paste Kelp War's whole generation step into a fresh model → switch to the Simulator
+→ **white screen**) had two independent layers, both fixed:
+- **[danglingRefs.ts](src/modeler/vpl/compiler/danglingRefs.ts) — the JS compilers now
+  report by name.** The WASM and WebGPU compilers already returned `"getCellAttribute:
+  unknown attr …"`; the JS reference compiler silently emitted `_undef` / `nSz_<missing>`
+  and only blew up at RUN time inside the worker (`nSz_… is not defined`, with **no banner
+  at all on the JS engine**). `detectDanglingRefs(nodes, model)` runs in BOTH `compileGraph`
+  and `compileAgentGraph`, right after `expandMacros` (so it sees the FLAT graph the
+  compiler actually emits — an uninstantiated `macroDef` can never fail a compile) and
+  BEFORE the lowering chain (which rewrites ids). **Only a NON-EMPTY id that resolves to
+  nothing is reported** — an unset id (`''`/absent) is the "still building" state and keeps
+  compiling exactly as before, which is what makes this byte-identical for all 29 shipped
+  models. Membership is a UNION over every id space a key may legally name (cell ∪ model ∪
+  agent ∪ bond attributes for `attributeId`; cell ∪ agent mappings + the
+  `CURRENT_VIEWER_SENTINEL` for `mappingId`; …) — deciding WHICH space a node type may use
+  is `nodeValidation`'s job, so the union keeps the compile gate conservative.
+- **`srcCanvasTransferredRef` — the actual crash** ([SimulatorView.tsx](src/simulator/SimulatorView.tsx)).
+  `draw()`'s CPU `putImageData` branch reused `srcCanvasRef.current` whenever its dimensions
+  matched, and called `getContext('2d')` on it. Under WebGPU **direct render** that canvas has
+  had its control TRANSFERRED to the worker, so `getContext` throws `InvalidStateError` — and
+  since `draw()` is invoked from a `useLayoutEffect`, the throw unmounted React (white screen).
+  **`directRenderActiveRef` is NOT a safe proxy for "was it transferred"**: it goes false while
+  `srcCanvasRef` still holds the transferred canvas whenever the worker reports
+  `useWebGPUStatus { ready: false }` — which is exactly what a failed recompile does, and a
+  pasted graph with dangling references fails the shader compile. The dedicated flag is set
+  where the transferred canvas is committed, cleared at every point a fresh canvas is
+  installed, and consulted by draw()'s recreate condition; the `ready:false` and
+  transfer-failure branches now also RELEASE the transferred canvas. **Any future path that
+  turns direct render off must release it too.**
+- **Defence in depth**: `safeCompileGraph` (module-scope, next to `withPipelineModel`) wraps
+  the JS reference compile at both call sites, and `compileAgentModel` wraps
+  `compileAgentGraph` — the WASM/WebGPU compiles were already try/caught at every call site,
+  so these were the only compiles whose exceptions could reach React. An unexpected throw now
+  becomes the red banner (`Compile failed: …`), never a white screen.
+
+Verified end-to-end through the real UI (Kelp War → copy → File→New → paste → Simulator):
+20 amber badges in the Modeler, a named red compile-error banner in the Simulator, **zero
+uncaught errors**, the app stays fully usable (tab round-trips, manual Step, loading another
+model clears the banner and runs), and re-pointing one node's attribute dropdown drops the
+badge count 20 → 19. The agents-graph twin (Boids' agent graph pasted into a Flocking
+archetype that lacks its agent variables) degrades the same way, with an `[agents] …` banner.
 
 ### Same-tab behaviour is preserved exactly
 The singleton-root strip (`step`/`initEvent`/`behaviourStep`/…) still MUTATES the

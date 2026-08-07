@@ -30,6 +30,7 @@ import { lowerFacingSource } from './facingSource';
 import { computeAsyncReadWriteHazards } from './asyncWriteHazard';
 import { sparseSteppingEnabled } from './sparseStepping';
 import { expandMacros } from './macroExpand';
+import { detectDanglingRefs } from './danglingRefs';
 export { sparseSteppingEnabled } from './sparseStepping';
 import { computeVolatileHoist } from './volatileHoist';
 import {
@@ -1608,6 +1609,18 @@ export function compileGraph(
     graphEdges = expanded.edges;
   }
 
+  // Dangling model references (a cross-model paste / macro import) — report by
+  // NAME instead of emitting code that reads an undeclared identifier and only
+  // blows up at run time inside the worker. Checked on the FLAT graph (so an
+  // uninstantiated macroDef can never fail a compile) and BEFORE the lowering
+  // chain (which rewrites ids). WASM/WebGPU already did this; see danglingRefs.ts.
+  {
+    const dangling = detectDanglingRefs(graphNodes, model);
+    if (dangling) {
+      return { stepCode: '', initCode: '', gridInitCode: '', inputColorCodes: [], outputMappingCodes: [], stopMessages: [], error: dangling };
+    }
+  }
+
   // Reroute collapse — strip editor-only reroute relay nodes, rewiring each
   // consumer directly to the real source it relays from (chains resolved
   // transitively). Runs AFTER expandMacros so in-macro reroutes (now flattened
@@ -2527,6 +2540,13 @@ export function compileAgentGraph(
     if (expanded.error) return { behaviourCode: '', initCode: '', divisionCode: '', stopMessages: [], outputMappingCodes: [], dividePartitions: [], error: expanded.error };
     agentNodes = expanded.nodes;
     agentEdges = expanded.edges;
+  }
+  // Same dangling-reference gate as the cell compiler — an agent graph pasted
+  // from a model with different agent attributes / views must name what is
+  // missing, not emit reads of undeclared identifiers.
+  {
+    const dangling = detectDanglingRefs(agentNodes, model);
+    if (dangling) return { behaviourCode: '', initCode: '', divisionCode: '', stopMessages: [], outputMappingCodes: [], dividePartitions: [], error: dangling };
   }
   ({ nodes: agentNodes, edges: agentEdges } = collapseReroutes(agentNodes, agentEdges));
   // Neighbour State Census → the gather + one Count Matching per CONSUMED state

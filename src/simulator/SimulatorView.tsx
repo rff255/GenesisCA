@@ -1104,6 +1104,31 @@ function withPipelineModel(model: CAModel): CAModel {
   return withResolvedEngine(withEffectiveNeighborhoods(model));
 }
 
+/** The JS reference compile, guarded.
+ *
+ *  A graph carrying DANGLING model references is a SUPPORTED state — the
+ *  cross-tab clipboard and macro import both produce one, and the user is meant
+ *  to see amber badges in the Modeler + the red compile-error banner here, then
+ *  re-point the nodes. The WASM/WebGPU compiles were already try/caught at every
+ *  call site; this one was not, so an unexpected throw propagated out of a React
+ *  effect and unmounted the whole app (white screen). Degrade to an error the
+ *  banner can show instead. */
+function safeCompileGraph(
+  graphNodes: CAModel['graphNodes'],
+  graphEdges: CAModel['graphEdges'],
+  model: CAModel,
+): CompileResult {
+  try {
+    return compileGraph(graphNodes, graphEdges, model);
+  } catch (e) {
+    return {
+      stepCode: '', initCode: '', gridInitCode: '',
+      inputColorCodes: [], outputMappingCodes: [], stopMessages: [],
+      error: `Compile failed: ${String((e as Error)?.message || e)}`,
+    };
+  }
+}
+
 /** C4 (P1) — Show Code always shows the **JS reference source**, whatever engine
  *  the model runs on, with a header naming that engine.
  *
@@ -3208,6 +3233,15 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
   // it, so draw() must skip the putImageData step and only do the
   // zoom/pan drawImage. Reset when the worker is reinitialised.
   const directRenderActiveRef = useRef<boolean>(false);
+  // Whether the canvas currently held by srcCanvasRef has had its control
+  // transferred to the worker. A transferred canvas can NEVER be handed back to
+  // `getContext('2d')` (InvalidStateError), so draw()'s CPU putImageData branch
+  // must recreate rather than reuse it. `directRenderActiveRef` is NOT a safe
+  // proxy: it can go false while srcCanvasRef still holds the transferred
+  // canvas (worker reports WebGPU off after a failed recompile — e.g. a pasted
+  // graph with dangling attribute/neighborhood references — or a transfer
+  // throws), which threw out of draw() and white-screened the app.
+  const srcCanvasTransferredRef = useRef<boolean>(false);
   // True between worker init and the first useWebGPUStatus { ready: true }
   // message: signals that we still owe the worker a canvas transfer once it
   // confirms WebGPU is up. We defer the transfer (rather than doing it
@@ -3424,7 +3458,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
   // keep surfacing — only the displayed text changed.
   const compileModel = useCallback(() => {
     const m = withPipelineModel(model);
-    const result = compileGraph(m.graphNodes, m.graphEdges, m);
+    const result = safeCompileGraph(m.graphNodes, m.graphEdges, m);
     // Agents-only model (Grid Cells disabled): there is no cell graph, so the cell
     // compiler's "No nodes / No Step node" error is EXPECTED — suppress it (the
     // worker skips the cell step via gridCells). Agent compile errors still surface
@@ -3466,7 +3500,19 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
     const colorViewer = firstAgentViewer?.id ?? '';
     // FIX 4: offset the agent stop indices by the cell graph's stop count so the
     // shared worker stopMessages array `[...cell, ...agent]` aligns 1-based.
-    const ag = compileAgentGraph(m.agentGraphNodes || [], m.agentGraphEdges || [], m, stopIdxBase);
+    // Guarded for the same reason as safeCompileGraph: an agent graph pasted
+    // from another model can reference agent attributes / mappings this model
+    // lacks, and that must degrade to the error banner, never a white screen.
+    const ag = (() => {
+      try { return compileAgentGraph(m.agentGraphNodes || [], m.agentGraphEdges || [], m, stopIdxBase); }
+      catch (e) {
+        return {
+          behaviourCode: '', initCode: '', divisionCode: '', stopMessages: [],
+          outputMappingCodes: [], dividePartitions: [],
+          error: `Compile failed: ${String((e as Error)?.message || e)}`,
+        };
+      }
+    })();
     if (ag.error) {
       // Surface alongside the cells compile error (Show Code / status). A bare
       // behaviourStep with no flow is fine (empty behaviourCode, no error).
@@ -4837,10 +4883,15 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
     if (directRenderActiveRef.current && srcCanvasRef.current) {
       // canvas dimensions are fixed at transfer time; nothing to do here.
     } else if (colors && colors.length >= w * h * 4) {
-      if (!srcCanvasRef.current || srcCanvasRef.current.width !== w || srcCanvasRef.current.height !== h) {
+      // A TRANSFERRED canvas must be recreated even when its dimensions still
+      // match — `getContext('2d')` on it throws InvalidStateError, which used
+      // to escape draw() and unmount React (white screen).
+      if (!srcCanvasRef.current || srcCanvasTransferredRef.current
+        || srcCanvasRef.current.width !== w || srcCanvasRef.current.height !== h) {
         srcCanvasRef.current = document.createElement('canvas');
         srcCanvasRef.current.width = w;
         srcCanvasRef.current.height = h;
+        srcCanvasTransferredRef.current = false;
       }
       const srcCtx = srcCanvasRef.current.getContext('2d')!;
       const imageData = new ImageData(
@@ -6289,6 +6340,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       if (msg.ready && msg.directRender && pendingDirectRenderCanvas.current) {
         // Phase 2 ack — commit the swap.
         srcCanvasRef.current = pendingDirectRenderCanvas.current;
+        srcCanvasTransferredRef.current = true;
         pendingDirectRenderCanvas.current = null;
         directRenderActiveRef.current = true;
       } else if (msg.ready && msg.directRender && recompilePendingCanvasRefresh.current) {
@@ -6339,12 +6391,25 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
           console.warn('[webgpu] deferred OffscreenCanvas transfer failed; staying on readback path:', e);
           directRenderActiveRef.current = false;
           pendingDirectRenderCanvas.current = null;
+          if (srcCanvasTransferredRef.current) {
+            srcCanvasRef.current = null;
+            srcCanvasTransferredRef.current = false;
+          }
         }
       } else if (msg.ready === false) {
-        // Worker reports WebGPU is off (init failure or explicit downgrade).
-        // Drop any pending direct-render canvas so we don't apply it later.
+        // Worker reports WebGPU is off (init failure or explicit downgrade —
+        // e.g. a soft recompile whose shader could not be produced because the
+        // graph references attributes/neighborhoods the model no longer has).
+        // Drop any pending direct-render canvas so we don't apply it later, AND
+        // release the already-committed one: draw() falls back to the CPU
+        // putImageData branch, which cannot take a `getContext` on a canvas
+        // whose control was transferred.
         directRenderActiveRef.current = false;
         pendingDirectRenderCanvas.current = null;
+        if (srcCanvasTransferredRef.current) {
+          srcCanvasRef.current = null;
+          srcCanvasTransferredRef.current = false;
+        }
       }
       // L1 — voxel attach. The worker reports its LIVE `voxelRender` state, so a
       // (re)built runtime (which loses its render pipelines) is detected without
@@ -6530,6 +6595,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
     inspectColorsRef.current.clear();
     inspectOrientationsRef.current.clear();
     srcCanvasRef.current = null;
+    srcCanvasTransferredRef.current = false;
     const result = compileModel();
     const firstViewer = model.mappings.find(m => m.isAttributeToColor);
     const viewer = firstViewer?.id ?? '';
@@ -6685,6 +6751,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       const fresh = document.createElement('canvas');
       fresh.width = w; fresh.height = h;
       srcCanvasRef.current = fresh;
+      srcCanvasTransferredRef.current = false;
     }
     const offscreenSupported = typeof HTMLCanvasElement !== 'undefined'
       && typeof (HTMLCanvasElement.prototype as { transferControlToOffscreen?: unknown }).transferControlToOffscreen === 'function';
@@ -7309,7 +7376,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       // through unmodified for agent models too. The old `useWebGPU = false`
       // force-disable hack is GONE — the worker's WebGPU step branch bridges the
       // field CPU↔GPU per generation. See the init-path comment for rationale.
-      const result = compileGraph(dimsModel.graphNodes, dimsModel.graphEdges, dimsModel);
+      const result = safeCompileGraph(dimsModel.graphNodes, dimsModel.graphEdges, dimsModel);
       // Bond-Graph Agents: recompile the agent graph too (graph-only edit path).
       // dimsModel carries the LIVE dims (a resize sets gridWidth/Height/Depth
       // refs without touching model state) — the agent WASM/WebGPU layouts bake
