@@ -2446,12 +2446,15 @@ async function setupAgentSphereRender(rt: AgentRenderSurface, canvas: OffscreenC
         { binding: 3, resource: { buffer: renderView3DBuf } },
       ],
     });
+    // ---- ATOMIC COMMIT — NO await below this line (see the ordering rule on
+    // buildAgentDiscPipelines): every field points at the new resources before
+    // anything old is destroyed, so a present landing mid-rebuild can never see a
+    // live field referencing a destroyed one. -------------------------------
+    const oldView3DBuf = rt.renderView3DBuf;
+    const oldLineBuf = rt.renderLineBuf;
     rt.renderCanvas = canvas;
     rt.renderCtx = ctx;
     rt.render3D = true;
-    // Audit L5 (3D sibling): a re-attach rebuilds on the SAME surface — release the
-    // previous view uniform rather than orphaning it.
-    if (rt.renderView3DBuf) { try { rt.renderView3DBuf.destroy(); } catch { /* non-fatal */ } }
     rt.renderView3DBuf = renderView3DBuf;
     rt.renderSpherePipeline = pipeline;
     rt.renderSphereBindGroup = renderBindGroup;
@@ -2459,11 +2462,15 @@ async function setupAgentSphereRender(rt: AgentRenderSurface, canvas: OffscreenC
     rt.renderLineBindGroup = lineBindGroup;
     // A re-attach rebuilds on the SAME surface — the old vertex buffer belongs to
     // the old view uniform's signature; force a rebuild against the current viz.
-    if (rt.renderLineBuf) { try { rt.renderLineBuf.destroy(); } catch { /* non-fatal */ } rt.renderLineBuf = null; }
+    rt.renderLineBuf = null;
     rt.renderLineCount = 0;
     rt.renderLineSig = '';
     rt.renderActive = true;
     rt.renderClear = [0, 0, 0, 0];
+    // Audit L5 (3D sibling): a re-attach rebuilds on the SAME surface — release the
+    // previous resources rather than orphaning them. LAST, once nothing points at them.
+    if (oldView3DBuf) { try { oldView3DBuf.destroy(); } catch { /* non-fatal */ } }
+    if (oldLineBuf) { try { oldLineBuf.destroy(); } catch { /* non-fatal */ } }
     return true;
   } catch {
     rt.renderActive = false;
@@ -2474,7 +2481,40 @@ async function setupAgentSphereRender(rt: AgentRenderSurface, canvas: OffscreenC
 /** Build the 2D disc render pipelines + bind group + view uniform on `rt` (the
  *  canvas must already be configured). Shared by the standalone disc render
  *  (setupAgentDiscRender) and the E2 composite (setupAgentCompositeRender), so
- *  the two paths can't drift on the disc pass. Returns false on a WGSL error. */
+ *  the two paths can't drift on the disc pass. Returns false on a WGSL error.
+ *
+ *  ⚠ THE SWAP IS ATOMIC — every `await` and every resource creation happens
+ *  BEFORE the first `rt.*` write, the commit block below has NO await in it, and
+ *  the OLD resources are destroyed LAST. That ordering is load-bearing, not
+ *  tidiness: this function is `async` and a re-attach fires on every real
+ *  display-size change, so the worker's event loop runs OTHER messages at each
+ *  await — and `rt.renderActive` is still true throughout, so a `setAgentCamera`
+ *  / `refreshAgentDisplay` / batch-tail `sendColors` present can land mid-rebuild
+ *  and encode+submit against whatever `rt` holds at that instant.
+ *
+ *  The shipped bug this fixes: the old code destroyed `rt.renderViewBuf` and THEN
+ *  awaited the compose module's compilation info before building the matching
+ *  bind group — so for that window `rt.renderBindGroup` still referenced the
+ *  DESTROYED buffer, and any present in it submitted it:
+ *      [Buffer "agent-render-view"] used in submit while destroyed.
+ *       - While calling [Queue].Submit([[CommandBuffer from CommandEncoder
+ *         "agent-present-once"]])
+ *  (reported on a canvas-fullscreen toggle, which collapses several panels and
+ *  can post more than one attach — two overlapping rebuilds widen that window to
+ *  span a whole other attach's awaits).
+ *
+ *  THE GENERAL RULE for every GPU resource swap in this file and its siblings:
+ *  either (a) build everything new, commit in ONE synchronous block, destroy the
+ *  old last — as here; or (b) NULL every field that references the destroyed
+ *  resource in the same synchronous block as the destroy, so every consumer's
+ *  guard turns a mid-rebuild present into a no-op (what `releaseVoxelResources`
+ *  does). Doing NEITHER — destroying a resource while a live field still points
+ *  at it — is the defect class.
+ *
+ *  Destroying immediately after the atomic commit is safe: encode and submit are
+ *  synchronous in every present path, so no command buffer can be recorded-but-
+ *  unsubmitted across the swap, and an ALREADY-submitted one completes normally
+ *  per spec. No `onSubmittedWorkDone` deferral is needed. */
 async function buildAgentDiscPipelines(rt: AgentRenderSurface): Promise<boolean> {
   const format: GPUTextureFormat = 'rgba8unorm';
   const module = rt.device.createShaderModule({ code: agentRenderWGSL(rt.layout) });
@@ -2525,20 +2565,9 @@ async function buildAgentDiscPipelines(rt: AgentRenderSurface): Promise<boolean>
     color: { srcFactor: 'one', dstFactor: 'one-minus-src', operation: 'add' },
     alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
   };
-  const renderViewBuf = rt.device.createBuffer({ label: 'agent-render-view', size: RENDER_VIEW_BYTES, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
-  // Audit L5: a re-attach (every real display-size change) rebuilds the pipelines
-  // on the SAME surface — release the previous view uniform instead of orphaning it.
-  if (rt.renderViewBuf) { try { rt.renderViewBuf.destroy(); } catch { /* non-fatal */ } }
-  rt.renderViewBuf = renderViewBuf;
-  rt.renderPlainPipeline = mkPipe('agent-render-plain', plainBlend, 'vsMain', 'fsMain');
-  // The halo pipeline targets the HDR format, so it CANNOT share mkPipe's canvas target.
-  rt.renderGlowPipeline = rt.device.createRenderPipeline({
-    label: 'agent-render-glow', layout: pl,
-    vertex: { module, entryPoint: 'vsGlow' },
-    fragment: { module, entryPoint: 'fsGlow', targets: [{ format: GLOW_HDR_FORMAT, blend: glowBlend }] },
-    primitive: { topology: 'triangle-strip' },
-  });
-  // The HDR→canvas compose (its own module + bind-group layout: one sampled texture).
+  // The HDR→canvas compose (its own module + bind-group layout: one sampled
+  // texture). Its await is done HERE — before any rt.* write — so the commit
+  // block below is uninterruptible.
   const composeModule = rt.device.createShaderModule({ code: GLOW_COMPOSE_WGSL });
   const composeInfo = await composeModule.getCompilationInfo();
   const composeErrs = composeInfo.messages.filter(m => m.type === 'error');
@@ -2551,18 +2580,23 @@ async function buildAgentDiscPipelines(rt: AgentRenderSurface): Promise<boolean>
     label: 'agent-glow-compose-bgl',
     entries: [{ binding: 0, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'unfilterable-float' } }],
   });
-  rt.glowComposeBGL = composeBGL;
-  rt.glowComposePipeline = rt.device.createRenderPipeline({
+  const composePipeline = rt.device.createRenderPipeline({
     label: 'agent-glow-compose',
     layout: rt.device.createPipelineLayout({ label: 'agent-glow-compose-pl', bindGroupLayouts: [composeBGL] }),
     vertex: { module: composeModule, entryPoint: 'vsGlowCompose' },
     fragment: { module: composeModule, entryPoint: 'fsGlowCompose', targets: [{ format, blend: glowComposeBlend }] },
     primitive: { topology: 'triangle-list' },
   });
-  // A re-attach rebuilds the pipelines on the SAME surface — drop the previous HDR
-  // target (its bind group belongs to the OLD layout) instead of orphaning it.
-  destroyGlowHdrTex(rt);
-  rt.renderBindGroup = rt.device.createBindGroup({
+  const renderViewBuf = rt.device.createBuffer({ label: 'agent-render-view', size: RENDER_VIEW_BYTES, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+  const plainPipeline = mkPipe('agent-render-plain', plainBlend, 'vsMain', 'fsMain');
+  // The halo pipeline targets the HDR format, so it CANNOT share mkPipe's canvas target.
+  const glowPipeline = rt.device.createRenderPipeline({
+    label: 'agent-render-glow', layout: pl,
+    vertex: { module, entryPoint: 'vsGlow' },
+    fragment: { module, entryPoint: 'fsGlow', targets: [{ format: GLOW_HDR_FORMAT, blend: glowBlend }] },
+    primitive: { topology: 'triangle-strip' },
+  });
+  const renderBindGroup = rt.device.createBindGroup({
     label: 'agent-render-bg', layout: bgl,
     entries: [
       { binding: 0, resource: { buffer: rt.agentF32Buf } },
@@ -2571,6 +2605,25 @@ async function buildAgentDiscPipelines(rt: AgentRenderSurface): Promise<boolean>
       { binding: 3, resource: { buffer: renderViewBuf } },
     ],
   });
+
+  // ---- ATOMIC COMMIT — NO await below this line, and nothing is destroyed
+  // until every field points at the new resources. -------------------------
+  const oldViewBuf = rt.renderViewBuf;
+  rt.renderViewBuf = renderViewBuf;
+  rt.renderPlainPipeline = plainPipeline;
+  rt.renderGlowPipeline = glowPipeline;
+  rt.glowComposeBGL = composeBGL;
+  rt.glowComposePipeline = composePipeline;
+  rt.renderBindGroup = renderBindGroup;
+  // A re-attach rebuilds the pipelines on the SAME surface — drop the previous HDR
+  // target (its bind group belongs to the OLD compose layout) instead of orphaning
+  // it. Must follow the glowComposeBGL commit: the next ensureGlowHdrTex rebuilds
+  // the target's bind group against whatever layout `rt` now holds.
+  destroyGlowHdrTex(rt);
+  // Audit L5: a re-attach (every real display-size change) rebuilds the pipelines
+  // on the SAME surface — release the previous view uniform instead of orphaning
+  // it. LAST, so no live field ever references a destroyed buffer.
+  if (oldViewBuf) { try { oldViewBuf.destroy(); } catch { /* non-fatal */ } }
   return true;
 }
 
@@ -2716,20 +2769,28 @@ export async function setupAgentCompositeRender(rt: AgentRenderSurface, canvas: 
       ],
     });
     const gpl = rt.device.createPipelineLayout({ label: 'grid-present-pl', bindGroupLayouts: [gbgl] });
-    rt.gridPresentPipeline = rt.device.createRenderPipeline({
+    const gridPipeline = rt.device.createRenderPipeline({
       label: 'grid-present', layout: gpl,
       vertex: { module: gmod, entryPoint: 'vsMain' },
       fragment: { module: gmod, entryPoint: 'fsMain', targets: [{ format }] },   // opaque write (loadOp clear)
       primitive: { topology: 'triangle-list' },
     });
+    const gridUniform = rt.device.createBuffer({ label: 'grid-plane-view', size: GRID_PLANE_VIEW_BYTES, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+    // ---- ATOMIC COMMIT — NO await below this line (the ordering rule on
+    // buildAgentDiscPipelines). The previous grid uniform was PREVIOUSLY replaced
+    // without being destroyed — a small leak on every re-attach; it is released
+    // last, once nothing references it. -------------------------------------
+    const oldGridUniform = rt.gridPresentUniform;
+    rt.gridPresentPipeline = gridPipeline;
     rt.gridPresentBGL = gbgl;
-    rt.gridPresentUniform = rt.device.createBuffer({ label: 'grid-plane-view', size: GRID_PLANE_VIEW_BYTES, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+    rt.gridPresentUniform = gridUniform;
     rt.renderCanvas = canvas;
     rt.renderCtx = ctx;
     rt.renderActive = true;
     rt.renderComposite = true;
     rt.renderClear = [0, 0, 0, 0];
     rt.renderGlow = false;
+    if (oldGridUniform) { try { oldGridUniform.destroy(); } catch { /* non-fatal */ } }
     return true;
   } catch {
     rt.renderActive = false;

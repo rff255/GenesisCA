@@ -1077,6 +1077,18 @@ export async function setupVoxelRender(rt: WebGPURuntime, canvas: OffscreenCanva
 
     // Release anything a previous attach built on this runtime (a re-attach
     // fires on every REAL display-size change) — never orphan GPU buffers.
+    //
+    // ⚠ This releases BEFORE the remaining awaits, which is the OTHER half of the
+    // resource-swap rule documented on `buildAgentDiscPipelines`: destroying here
+    // is safe ONLY because `releaseVoxelResources` NULLS every field that
+    // references what it destroys, and `presentVoxels` guards on exactly those
+    // fields (voxelCompactPipeline / voxelCompactBindGroup / voxelDrawBindGroup /
+    // voxelIndirectBuf) — so a present landing mid-rebuild is a no-op instead of a
+    // submit against a destroyed buffer (the agent-render-view defect class). The
+    // release stays FIRST here deliberately: `voxelInstanceBuf` is `total*4` bytes
+    // (~108 MB at 300³), so holding the old one alive while the new one is created
+    // would double the peak. If a field is ever added to this path, it must be
+    // nulled here too — or the whole swap must move to the atomic form.
     releaseVoxelResources(rt);
 
     const instanceBuf = rt.device.createBuffer({
