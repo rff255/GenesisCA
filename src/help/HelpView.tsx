@@ -1479,11 +1479,24 @@ export function HelpView() {
             (transparent cells are skipped). <strong>Middle-drag</strong> (or
             <strong>Alt+left-drag</strong>, or <strong>right-drag</strong>) to orbit/pan,
             <strong>scroll</strong> to zoom, and hold <strong>Shift</strong> while orbiting to
-            pan &mdash; Blender-style, with Z up. Click the <strong>corner gizmo</strong>'s
-            coloured axis tips to snap to a view; the gizmo is depth-sorted and labelled
+            pan &mdash; Blender-style, with Z up. The <strong>corner gizmo</strong> behaves like
+            Blender's: it lights up when you hover it (the ball under the cursor brightens and
+            grows), <strong>clicking a ball</strong> snaps to that view &mdash; and clicking the
+            ball of the axis you are <em>already</em> looking along flips to the opposite view
+            &mdash; while <strong>dragging the widget orbits</strong> the camera. Positive tips are
+            big and bright, negative ones small and dim; the gizmo is depth-sorted and labelled
             <strong>C / R / D</strong> (column / row / depth). Clicking <strong>D</strong> looks
             straight down the depth axis, so the volume reads <strong>exactly like the 2D CA</strong>
             &mdash; column increases to the right, row downward, depth into the screen.
+            The <strong>numpad view keys are Blender's</strong>: <strong>7</strong> top,
+            <strong>1</strong> front, <strong>3</strong> right, each with <strong>Ctrl</strong>
+            (or <strong>Shift</strong>) for the opposite face; <strong>8 / 2</strong> and
+            <strong>4 / 6</strong> orbit up / down / left / right by 15&deg;; <strong>9</strong>
+            flips to the opposite view. They read the <em>physical</em> key, so the top-row digits
+            work as well as the numpad (Blender's &ldquo;Emulate Numpad&rdquo;) &mdash; though on the
+            top row <strong>Ctrl+1&hellip;9</strong> is a browser tab shortcut a page cannot
+            intercept, which is why Shift is accepted as an equivalent. <strong>5</strong> is
+            unbound (there is no orthographic camera), and Ctrl + 8/2/4/6 does not pan.
             <strong>Shift + left-click</strong> a cell to inspect it (the cell is
             <strong>highlighted in the volume</strong> while you hover its popup &mdash; there's no
             2D connector line); <strong>Shift + left-drag</strong> sweeps a single transient

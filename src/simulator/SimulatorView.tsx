@@ -14,7 +14,7 @@ import { NeighborIndexValuePicker } from '../modeler/panels/NeighborIndexDefault
 import { LookupTableEditor } from '../modeler/panels/LookupTableEditor';
 import { compileGraphWebGPU } from '../modeler/vpl/compiler/webgpu/compile';
 import { createSimWorker } from './createSimWorker';
-import { Gl3DRenderer, panCamera, cameraBasis, sceneCameraMatrices, lightWorldDirFor, computeLightMVP, DEFAULT_LIGHT3D, DEFAULT_METABALLS3D, metaballAutoThreshold, DEFAULT_AUTOZOOM3D, defaultCamera3d, MIN_CAM_DIST, MAX_CAM_DIST } from './render/gl3d';
+import { Gl3DRenderer, panCamera, cameraBasis, sceneCameraMatrices, lightWorldDirFor, computeLightMVP, DEFAULT_LIGHT3D, DEFAULT_METABALLS3D, metaballAutoThreshold, DEFAULT_AUTOZOOM3D, defaultCamera3d, applyPov, povAlignedWith, MAX_ORBIT_PITCH, MIN_CAM_DIST, MAX_CAM_DIST } from './render/gl3d';
 import type { SpriteAtlasInput, Light3D, Metaballs3D, AutoZoom3D } from './render/gl3d';
 import type { VoxelRenderView } from './engine/webgpuRuntime';
 import { LightBallWidget } from './LightBallWidget';
@@ -7839,7 +7839,14 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
     if (!is3D) return;
     const glc = glCanvasRef.current;
     if (!glc) return;
-    let active: 'orbit' | 'pan' | 'brush' | 'inspect' | 'inspectAgent' | 'resize' | 'agentSeed' | 'agentKill' | 'agentMove' | 'agentGroupMove' | 'agentEdit' | 'agentNudge' | null = null;
+    let active: 'orbit' | 'pan' | 'brush' | 'inspect' | 'inspectAgent' | 'resize' | 'agentSeed' | 'agentKill' | 'agentMove' | 'agentGroupMove' | 'agentEdit' | 'agentNudge' | 'gizmo' | null = null;
+    // Blender's gizmo gesture: a press on the widget is PROVISIONAL — released
+    // without moving it snaps to the ball under the cursor (null = the empty
+    // middle, which snaps to nothing), dragged past GIZMO_DRAG_PX it becomes a
+    // plain orbit. Snapping on press (the old behaviour) teleported the view
+    // whenever the user grabbed the widget meaning to rotate it.
+    let gizmoPendingEnd: { axis: 'x' | 'y' | 'z'; sign: 1 | -1 } | null = null;
+    const GIZMO_DRAG_PX = 4;
     let lastX = 0, lastY = 0, downX = 0, downY = 0, moved = false;
     // AGENT sweep (active === 'inspectAgent'): the agent picked at press + whether
     // the drag ever re-targeted a DIFFERENT agent — the discard rule is
@@ -8019,9 +8026,9 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
     // (bottom). yaw is kept for the depth POVs (dir is ±Z regardless of yaw).
     const setPov = (axis: 'x' | 'y' | 'z', sign: 1 | -1) => {
       const cam = cam3dRef.current;
-      if (axis === 'x') { cam.yaw = sign > 0 ? Math.PI : 0; cam.pitch = 0; }
-      else if (axis === 'y') { cam.yaw = sign > 0 ? -Math.PI / 2 : Math.PI / 2; cam.pitch = 0; }
-      else { cam.pitch = sign > 0 ? -Math.PI / 2 : Math.PI / 2; }  // +Z tip→bottom, -Z(D)→top
+      // Blender's toggle: clicking the ball of the axis you are ALREADY looking
+      // along flips to the opposite view instead of doing nothing.
+      applyPov(cam, axis, povAlignedWith(cam, axis, sign) ? (sign > 0 ? -1 : 1) : sign);
       draw();
     };
     const onDown = (e: PointerEvent) => {
@@ -8053,17 +8060,24 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       // the last-edited input, where the shortcut handler bails.
       const ae = document.activeElement as HTMLElement | null;
       if (ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA' || ae.tagName === 'SELECT')) ae.blur();
-      // Clicking the corner gizmo snaps to that POV (highest priority — no drag).
+      // Pressing the corner gizmo claims the gesture (highest priority): a click
+      // on a ball snaps to that POV, a drag orbits (resolved in onMove/onUp).
       // Plain LMB only: a modifier means the user wants resize (Ctrl/Cmd), inspect
       // (Shift), or orbit (Alt), which must work even when the press lands on the
       // tiny gizmo region — so don't let the gizmo swallow a modified gesture.
-      if (e.button === 0 && !e.ctrlKey && !e.metaKey && !e.shiftKey && !e.altKey && gl3dRef.current) {
-        const rect = glc.getBoundingClientRect();
-        const g = gl3dRef.current.gizmoHitTest(e.clientX - rect.left, e.clientY - rect.top, rect.width, rect.height);
-        if (g) { setPov(g.axis, g.sign); active = null; e.preventDefault(); return; }
-      }
       moved = false;
       lastX = downX = e.clientX; lastY = downY = e.clientY;
+      if (e.button === 0 && !e.ctrlKey && !e.metaKey && !e.shiftKey && !e.altKey && gl3dRef.current) {
+        const rect = glc.getBoundingClientRect();
+        const gx = e.clientX - rect.left, gy = e.clientY - rect.top;
+        if (gl3dRef.current.gizmoRegionHit(gx, gy, rect.width, rect.height)) {
+          gizmoPendingEnd = gl3dRef.current.gizmoHitTest(gx, gy, rect.width, rect.height);
+          active = 'gizmo';
+          glc.setPointerCapture?.(e.pointerId);
+          e.preventDefault();
+          return;
+        }
+      }
       const orbitBtn = e.button === 1 || (e.button === 0 && e.altKey);
       if (orbitBtn) {
         active = e.shiftKey ? 'pan' : 'orbit';
@@ -8217,6 +8231,15 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       // discard a Shift+LMB that turned into a drag (mirrors the 2D sweep
       // inspector's `!moved` discard) instead of pinning a popover at release.
       if (Math.abs(e.clientX - downX) + Math.abs(e.clientY - downY) > 3) moved = true;
+      if (active === 'gizmo') {
+        // Past the threshold the provisional gizmo press becomes a plain orbit
+        // (Blender's drag-the-widget-to-rotate); below it, keep waiting for the
+        // release so a click still snaps. lastX/Y are re-based so the orbit does
+        // not jump by the few pixels already travelled.
+        if (Math.abs(e.clientX - downX) + Math.abs(e.clientY - downY) <= GIZMO_DRAG_PX) return;
+        active = 'orbit'; gizmoPendingEnd = null;
+        lastX = e.clientX; lastY = e.clientY;
+      }
       if (!active || active === 'inspect') {
         // The listener is on `window` (drags must keep tracking off-canvas) —
         // but IDLE moves over side panels / the transport bar must not drive
@@ -8230,8 +8253,28 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
             let cleared = false;
             if (hoverCells3dRef.current.length > 0) { hoverCells3dRef.current = []; cleared = true; }
             if (hoverAgents3dRef.current.length > 0) { hoverAgents3dRef.current = EMPTY_AGENT_RINGS; cleared = true; }
+            if (gl3dRef.current?.setGizmoHover(false, null)) cleared = true;
             if (cleared) draw();
             return;
+          }
+          // Gizmo hover (Blender's lit widget) — cheap (a few 4×4 projections),
+          // synchronous, and redrawn only on a CHANGE. While the pointer is over
+          // the widget it OWNS the hover: the scene's plane/agent picks are
+          // skipped (the gizmo already claims the press there, so a brush cursor
+          // under it would promise a paint that can't happen).
+          const r3 = gl3dRef.current;
+          if (r3) {
+            const gx = e.clientX - rect.left, gy = e.clientY - rect.top;
+            const inGizmo = r3.gizmoRegionHit(gx, gy, rect.width, rect.height);
+            const changed = r3.setGizmoHover(inGizmo, inGizmo ? r3.gizmoHitTest(gx, gy, rect.width, rect.height) : null);
+            if (inGizmo) {
+              let cleared = changed;
+              if (hoverCells3dRef.current.length > 0) { hoverCells3dRef.current = EMPTY_HOVER_CELLS; cleared = true; }
+              if (hoverAgents3dRef.current.length > 0) { hoverAgents3dRef.current = EMPTY_AGENT_RINGS; cleared = true; }
+              if (cleared) draw();
+              return;
+            }
+            if (changed) draw();
           }
         }
         // Inspect-armed drag → sweep the front voxel under the cursor (a
@@ -8372,12 +8415,19 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
     };
     const onLeave = () => {
       if (glPointerOverRef.current) { glPointerOverRef.current = false; if (agentDirectRenderActiveRef.current) updateAgentUiSync(); if (voxelRenderActiveRef.current) updateGridUiSync(); }
-      if (hover3dRef.current || hoverCells3dRef.current.length || hoverAgents3dRef.current.length) {
+      const gizCleared = gl3dRef.current?.setGizmoHover(false, null) ?? false;
+      if (gizCleared || hover3dRef.current || hoverCells3dRef.current.length || hoverAgents3dRef.current.length) {
         hover3dRef.current = null; hoverCells3dRef.current = EMPTY_HOVER_CELLS; hoverAgents3dRef.current = EMPTY_AGENT_RINGS; draw();
       }
     };
     const onUp = (e: PointerEvent) => {
       glc.releasePointerCapture?.(e.pointerId);
+      if (active === 'gizmo') {
+        // Released without passing GIZMO_DRAG_PX → it was a click: snap to the
+        // ball it started on (the empty middle staged nothing, so it no-ops).
+        if (gizmoPendingEnd) setPov(gizmoPendingEnd.axis, gizmoPendingEnd.sign);
+        gizmoPendingEnd = null;
+      }
       if (active === 'inspect') {
         // End of a sweep: discard the transient popover + its highlight. A no-drag
         // release PINS the cell (single persistent inspect popover); a drag just
@@ -11411,6 +11461,38 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
           });
         }
         return;
+      }
+      // 3D view angles — Blender's numpad shortcuts. Read off e.code (the PHYSICAL
+      // key), so they survive a Shift modifier and a non-QWERTY layout, and accept
+      // BOTH the numpad and the top-row digits (Blender's "Emulate Numpad", for
+      // laptops) since plain digits are otherwise unused in the simulator.
+      //   7 top · 1 front · 3 right   (Ctrl / Shift = the opposite face)
+      //   8/2 orbit up/down · 4/6 orbit left/right, 15° a step
+      //   9 flip 180°.  5 (ortho toggle) has no meaning here — there is no ortho
+      //   camera — so it is deliberately unbound.
+      // Ctrl+digit on the TOP ROW is a reserved browser shortcut (tab switching)
+      // that a page cannot preventDefault, which is why Shift is accepted as an
+      // equivalent inverse modifier.
+      if (is3dRef.current && !e.altKey) {
+        const c = e.code;
+        const n = /^Numpad[1-9]$/.test(c) ? +c.slice(6) : /^Digit[1-9]$/.test(c) ? +c.slice(5) : 0;
+        if (n) {
+          const cam = cam3dRef.current;
+          const inv = e.ctrlKey || e.metaKey || e.shiftKey;
+          const STEP = Math.PI / 12;   // 15°, Blender's numpad orbit increment
+          if (n === 7) applyPov(cam, 'z', inv ? 1 : -1);        // top / bottom
+          else if (n === 1) applyPov(cam, 'y', inv ? -1 : 1);   // front / back
+          else if (n === 3) applyPov(cam, 'x', inv ? 1 : -1);   // right / left
+          else if (n === 9) { cam.yaw += Math.PI; cam.pitch = -cam.pitch; }  // opposite view
+          else if (n === 8) cam.pitch = Math.min(MAX_ORBIT_PITCH, cam.pitch + STEP);
+          else if (n === 2) cam.pitch = Math.max(-MAX_ORBIT_PITCH, cam.pitch - STEP);
+          else if (n === 4) cam.yaw -= STEP;
+          else if (n === 6) cam.yaw += STEP;
+          else return;   // 5 — no ortho camera to toggle
+          e.preventDefault();
+          draw();
+          return;
+        }
       }
       if (e.key === ' ') { e.preventDefault(); handleStep(); }
       else if (e.key === 'Enter') { e.preventDefault(); setPlaying(p => !p); }

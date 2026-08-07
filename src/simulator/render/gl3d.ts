@@ -142,6 +142,36 @@ export const MAX_CAM_DIST = 40;
  *  let a reset alias the default. */
 export const defaultCamera3d = (): Camera3D => ({ yaw: -0.9, pitch: 0.6, dist: 1.9, target: [0, 0, 0] });
 
+/** A canonical view axis + which of its two tips the camera looks ALONG. Shared by
+ *  the corner gizmo's click-snap and the Blender numpad shortcuts so both speak
+ *  the same vocabulary (and can't drift on which sign means "top"). */
+export type ViewAxis = 'x' | 'y' | 'z';
+/** Pitch limit for a FREE orbit (drag / numpad step). The ±Depth POVs deliberately
+ *  sit just OUTSIDE it at ±π/2 exactly, where sceneCameraMatrices swaps in the Y-up
+ *  roll that keeps row pointing down (see the camera-roll note above). */
+export const MAX_ORBIT_PITCH = 1.5;
+
+/** Snap the camera so `sign·axis` points INTO the screen — i.e. look ALONG that
+ *  tip. dir (target→eye) becomes -tipV. Depth uses pitch = ±π/2 EXACTLY so the
+ *  renderer's pole-up override rolls the view to match the 2D CA (top: row down).
+ *  In Blender's vocabulary: ('z',-1) top · ('z',+1) bottom · ('y',+1) front ·
+ *  ('y',-1) back · ('x',-1) right · ('x',+1) left — each identical to Blender's
+ *  own pose (looking along -Z / +Y / -X with +Z up). */
+export function applyPov(cam: Camera3D, axis: ViewAxis, sign: 1 | -1): void {
+  if (axis === 'x') { cam.yaw = sign > 0 ? Math.PI : 0; cam.pitch = 0; }
+  else if (axis === 'y') { cam.yaw = sign > 0 ? -Math.PI / 2 : Math.PI / 2; cam.pitch = 0; }
+  else cam.pitch = sign > 0 ? -Math.PI / 2 : Math.PI / 2;   // +Z tip→bottom, -Z(D)→top
+}
+
+/** Is the camera ALREADY looking along `sign·axis` (i.e. is applyPov a no-op)?
+ *  Drives Blender's gizmo toggle: clicking the ball of the axis you are already
+ *  aligned with flips to the opposite view instead of doing nothing. */
+export function povAlignedWith(cam: Camera3D, axis: ViewAxis, sign: 1 | -1): boolean {
+  const { dir } = cameraBasis(cam);
+  const d = axis === 'x' ? dir[0] : axis === 'y' ? dir[1] : dir[2];
+  return d * sign < -0.999;   // dir == -tipV
+}
+
 /** Auto-zoom — the dolly sibling of auto-orbit, and it works exactly like it: it
  *  travels in ONE direction at the slider's speed (negative = zoom in, positive =
  *  zoom out, 0 = stopped) and STOPS at the distance limit, so it can't keep zooming
@@ -655,13 +685,14 @@ uniform int uClipAxis;
 uniform float uClipLo;
 uniform float uClipHi;
 uniform vec3 uClipForward;
+uniform float uAlpha;       // 1.0 for every pass except the gizmo hover backdrop
 out vec4 o;
 void main(){
   if (uClipEnabled == 1) {
     float w = uClipAxis == 0 ? vWorldL.x : uClipAxis == 1 ? vWorldL.y : uClipAxis == 2 ? vWorldL.z : dot(vWorldL, uClipForward);
     if (w < uClipLo || w > uClipHi) { discard; }
   }
-  o = vec4(vCol, 1.0);
+  o = vec4(vCol, uAlpha);
 }`;
 
 // ---------------------------------------------------------------------------
@@ -2623,7 +2654,7 @@ export class Gl3DRenderer {
    *  `clip` is non-null the world-space vertices are clipped by the same interval
    *  as the voxels/spheres (used for the bond pass; every other overlay passes
    *  null so it is never clipped). */
-  private drawLines(verts: Float32Array, mode: number, mvp: Mat4, pointSize = 1, clip: ClipPlane3D | null = null): void {
+  private drawLines(verts: Float32Array, mode: number, mvp: Mat4, pointSize = 1, clip: ClipPlane3D | null = null, alpha = 1): void {
     if (verts.length === 0) return;
     const gl = this.gl;
     gl.useProgram(this.lineProg);
@@ -2632,6 +2663,9 @@ export class Gl3DRenderer {
     gl.bufferData(gl.ARRAY_BUFFER, verts, gl.DYNAMIC_DRAW);
     gl.uniformMatrix4fv(gl.getUniformLocation(this.lineProg, 'uMVP'), false, mvp);
     gl.uniform1f(gl.getUniformLocation(this.lineProg, 'uPointSize'), pointSize);
+    // uAlpha is written on EVERY call (default 1) so a translucent pass can never
+    // leak into the next one — the gizmo hover backdrop is the only <1 user.
+    gl.uniform1f(gl.getUniformLocation(this.lineProg, 'uAlpha'), alpha);
     if (clip && clip.enabled) {
       gl.uniform1i(gl.getUniformLocation(this.lineProg, 'uClipEnabled'), 1);
       gl.uniform1i(gl.getUniformLocation(this.lineProg, 'uClipAxis'), clip.axis === 'x' ? 0 : clip.axis === 'y' ? 1 : clip.axis === 'z' ? 2 : 3);
@@ -2928,9 +2962,14 @@ export class Gl3DRenderer {
     { v: [0, 0, -1], c: [0.62, 0.74, 1.0], glyph: 'D' },    // +depth → -Z
   ];
 
-  /** Corner orientation gizmo: 6 colored ± axis stubs + endpoint dots + R/C/D
+  /** Corner orientation gizmo: 6 colored ± axis stubs + endpoint balls + R/C/D
    *  letters on the positive tips, depth-correct so a back axis can't draw over a
-   *  front one. Rotates with the camera; clickable (gizmoHitTest) for the 6 POVs. */
+   *  front one. Rotates with the camera; clickable (gizmoHitTest) for the 6 POVs,
+   *  draggable to orbit (SimulatorView), and Blender-style hover-lit: hovering the
+   *  widget draws a subtle translucent backdrop disc, and the ball under the cursor
+   *  brightens + grows. Positive tips are big + bright, negative ones smaller + dim
+   *  (Blender's filled-vs-hollow distinction, done with size/value so no pass has to
+   *  punch a background-coloured hole through whatever the scene draws behind). */
   private renderGizmo(): void {
     if (!this.viz.gizmo) return;
     const gl = this.gl;
@@ -2941,16 +2980,43 @@ export class Gl3DRenderer {
     gl.enable(gl.SCISSOR_TEST); gl.scissor(10, 10, S, S);
     gl.clear(gl.DEPTH_BUFFER_BIT);
     gl.disable(gl.SCISSOR_TEST);
+    // Hover backdrop (Blender's "the widget is live" cue): a translucent disc in
+    // gizmo NDC, depth OFF + depth-write OFF so it can't occlude the axes drawn
+    // on top of it. Blending is explicitly enabled/restored — the surrounding
+    // render() leaves it off, and the metaball/sprite passes leave it on.
+    if (this.gizmoHoverRegion) {
+      gl.disable(gl.DEPTH_TEST); gl.depthMask(false);
+      gl.enable(gl.BLEND); gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+      const R = 0.94, N = 40, disc: number[] = [];
+      const [br, bg, bb] = [0.10, 0.11, 0.14];
+      for (let i = 0; i < N; i++) {
+        const a0 = (i / N) * Math.PI * 2, a1 = ((i + 1) / N) * Math.PI * 2;
+        disc.push(0, 0, 0, br, bg, bb,
+          Math.cos(a0) * R, Math.sin(a0) * R, 0, br, bg, bb,
+          Math.cos(a1) * R, Math.sin(a1) * R, 0, br, bg, bb);
+      }
+      this.drawLines(new Float32Array(disc), gl.TRIANGLES, mat4Identity(), 1, null, 0.55);
+      gl.disable(gl.BLEND); gl.depthMask(true);
+    }
     gl.enable(gl.DEPTH_TEST);
     const giz = this.gizmoMatrix();
+    const hov = this.gizmoHoverEnd;
     const lines: number[] = [];
-    const pts: number[] = [];
+    // Balls are drawn in three size classes, each its own POINTS pass (gl.POINTS
+    // takes ONE size per draw): positive, negative (smaller/dim), hovered (grown).
+    const ptsPos: number[] = [], ptsNeg: number[] = [], ptsHov: number[] = [];
     for (const e of Gl3DRenderer.GIZMO_ENDS) {
       lines.push(0, 0, 0, e.c[0], e.c[1], e.c[2], e.v[0], e.v[1], e.v[2], e.c[0], e.c[1], e.c[2]);
-      pts.push(e.v[0], e.v[1], e.v[2], e.c[0], e.c[1], e.c[2]);
+      const hovered = hov !== null && hov.axis === e.axis && hov.sign === e.sign;
+      // Hovered ball: lift the colour toward white so it reads at any backdrop.
+      const c = hovered ? [Math.min(1, e.c[0] * 0.4 + 0.6), Math.min(1, e.c[1] * 0.4 + 0.6), Math.min(1, e.c[2] * 0.4 + 0.6)] : e.c;
+      (hovered ? ptsHov : e.sign > 0 ? ptsPos : ptsNeg).push(e.v[0], e.v[1], e.v[2], c[0]!, c[1]!, c[2]!);
     }
     this.drawLines(new Float32Array(lines), gl.LINES, giz);
-    this.drawLines(new Float32Array(pts), gl.POINTS, giz, Math.max(6, S * 0.14));
+    const ball = Math.max(8, S * 0.17);        // positive tip (device px)
+    this.drawLines(new Float32Array(ptsPos), gl.POINTS, giz, ball);
+    this.drawLines(new Float32Array(ptsNeg), gl.POINTS, giz, ball * 0.62);
+    this.drawLines(new Float32Array(ptsHov), gl.POINTS, giz, ball * 1.35);
     // Axis letters (C/R/D on +col/+row/+depth): project each tip → gizmo NDC, then
     // nudge the glyph a CONSTANT radial offset beyond the tip so it sits just
     // outside the endpoint dot at a stable size/position from every angle. Drawn
@@ -2981,19 +3047,55 @@ export class Gl3DRenderer {
     gl.viewport(0, 0, gl.canvas.width, gl.canvas.height);
   }
 
-  /** Hit-test a click (CSS px, top-left origin) against the corner gizmo. Returns
-   *  the clicked axis endpoint (for snapping to that POV) or null if the click is
-   *  outside the gizmo / not near an endpoint. Edge-on (overlapping) endpoints
-   *  tie-break to the one facing the camera. */
-  gizmoHitTest(cssX: number, cssY: number, cssW: number, cssH: number): { axis: 'x' | 'y' | 'z'; sign: 1 | -1 } | null {
-    if (!this.viz.gizmo) return null;
+  /** Map a pointer (CSS px, top-left origin) into the gizmo viewport's NDC, or
+   *  null when it falls outside the square. The ONE place the CSS→gizmo transform
+   *  lives, so the region test, the hit test and the drawing can't disagree. */
+  private gizmoNdc(cssX: number, cssY: number, cssW: number, cssH: number): [number, number] | null {
     const gl = this.gl;
     const dpr = gl.canvas.width / Math.max(1, cssW);
     const S = this.gizmoSizePx();
-    // Click in drawing-buffer pixels, bottom-left origin (matches the viewport).
+    // Pointer in drawing-buffer pixels, bottom-left origin (matches the viewport).
     const dx = cssX * dpr, dy = (cssH - cssY) * dpr;
     if (dx < 10 || dx > 10 + S || dy < 10 || dy > 10 + S) return null;
-    const gxN = ((dx - 10) / S) * 2 - 1, gyN = ((dy - 10) / S) * 2 - 1;
+    return [((dx - 10) / S) * 2 - 1, ((dy - 10) / S) * 2 - 1];
+  }
+
+  /** Is the pointer over the gizmo WIDGET (its inscribed disc, not the square)?
+   *  Drives the hover cue and, on press, Blender's drag-to-orbit — which is why it
+   *  is deliberately WIDER than gizmoHitTest: pressing the empty middle of the
+   *  widget must orbit, not snap. */
+  gizmoRegionHit(cssX: number, cssY: number, cssW: number, cssH: number): boolean {
+    if (!this.viz.gizmo) return false;
+    const n = this.gizmoNdc(cssX, cssY, cssW, cssH);
+    return n !== null && Math.hypot(n[0], n[1]) <= 1.0;
+  }
+
+  /** Hover state (Blender's lit widget). Returns whether anything CHANGED so the
+   *  caller redraws only on a transition — a full GL render per pointermove would
+   *  compete with the sim (the brush-cursor discipline). */
+  setGizmoHover(inRegion: boolean, end: { axis: ViewAxis; sign: 1 | -1 } | null): boolean {
+    const prev = this.gizmoHoverEnd;
+    const same = (prev === null && end === null) || (prev !== null && end !== null && prev.axis === end.axis && prev.sign === end.sign);
+    if (same && this.gizmoHoverRegion === inRegion) return false;
+    this.gizmoHoverRegion = inRegion;
+    this.gizmoHoverEnd = end;
+    return true;
+  }
+  private gizmoHoverRegion = false;
+  private gizmoHoverEnd: { axis: ViewAxis; sign: 1 | -1 } | null = null;
+
+  /** Hit-test a pointer (CSS px, top-left origin) against the corner gizmo's BALLS.
+   *  Returns the axis endpoint under it (to snap to that POV) or null when the
+   *  pointer is outside the gizmo / off every ball — the empty middle included, so
+   *  a press there falls through to drag-orbit. Nearest ball wins (a Voronoi cell
+   *  capped at BALL_R); an EDGE-ON pair projecting to the same point tie-breaks to
+   *  the one facing the camera, which is also what makes a repeated click on an
+   *  aligned axis read as Blender's flip. */
+  gizmoHitTest(cssX: number, cssY: number, cssW: number, cssH: number): { axis: ViewAxis; sign: 1 | -1 } | null {
+    if (!this.viz.gizmo) return null;
+    const n = this.gizmoNdc(cssX, cssY, cssW, cssH);
+    if (!n) return null;
+    const [gxN, gyN] = n;
     const giz = this.gizmoMatrix();
     const projXY = (vx: number, vy: number, vz: number): [number, number] => {
       const x = giz[0]! * vx + giz[4]! * vy + giz[8]! * vz + giz[12]!;
@@ -3001,16 +3103,20 @@ export class Gl3DRenderer {
       const w = giz[3]! * vx + giz[7]! * vy + giz[11]! * vz + giz[15]! || 1;
       return [x / w, y / w];
     };
-    let best: { axis: 'x' | 'y' | 'z'; sign: 1 | -1 } | null = null;
-    let bestDist = 0.55;  // NDC radius threshold within the gizmo viewport
-    let bestFacing = -2;
+    // A tip projects 0.625 from the centre, so 0.52 keeps the middle a no-hit
+    // (drag-orbit) zone while giving each ball a generous ~0.26·S px radius.
+    const BALL_R = 0.52, TIE = 0.06;
+    let best: { axis: ViewAxis; sign: 1 | -1 } | null = null;
+    let bestDist = Infinity, bestFacing = -2;
     for (const e of Gl3DRenderer.GIZMO_ENDS) {
       const [nx, ny] = projXY(e.v[0], e.v[1], e.v[2]);
       const dist = Math.hypot(nx - gxN, ny - gyN);
-      if (dist > 0.55) continue;
+      if (dist > BALL_R) continue;
       // camDir points target→eye; an endpoint facing the viewer has dir·camDir>0.
       const facing = e.v[0] * this.camDir[0] + e.v[1] * this.camDir[1] + e.v[2] * this.camDir[2];
-      if (dist < bestDist - 0.1 || (Math.abs(dist - bestDist) <= 0.1 && facing > bestFacing)) {
+      const nearer = dist < bestDist - TIE;
+      const tied = Math.abs(dist - bestDist) <= TIE && facing > bestFacing;
+      if (best === null || nearer || tied) {
         best = { axis: e.axis, sign: e.sign };
         bestDist = Math.min(bestDist, dist);
         bestFacing = facing;

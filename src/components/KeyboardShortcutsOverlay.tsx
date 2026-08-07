@@ -42,6 +42,21 @@ const GROUPS: { title: string; rows: Row[] }[] = [
       ['Right-click drag', 'Pan the grid'],
     ],
   },
+  {
+    // Blender's numpad view keys. Read off the PHYSICAL key, so the top-row
+    // digits work too (Blender's "Emulate Numpad") and Shift doesn't break them.
+    title: 'Simulator — 3D view (Blender numpad)',
+    rows: [
+      ['7 / 1 / 3', 'Top / front / right view'],
+      ['Ctrl (or Shift) + 7 / 1 / 3', 'Bottom / back / left view'],
+      ['8 / 2', 'Orbit up / down 15°'],
+      ['4 / 6', 'Orbit left / right 15°'],
+      ['9', 'Flip to the opposite view'],
+      ['Numpad or top-row digits', 'Both work (Ctrl + top-row may be taken by the browser)'],
+      ['Click a gizmo ball', 'Snap to that view (again → the opposite one)'],
+      ['Drag the gizmo', 'Orbit the camera'],
+    ],
+  },
 ];
 
 export function KeyboardShortcutsOverlay({ open, onClose }: { open: boolean; onClose: () => void }) {
