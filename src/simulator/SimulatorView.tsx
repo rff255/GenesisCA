@@ -666,9 +666,54 @@ const NUDGE_BRUSH_MODES: ReadonlySet<string> = new Set(['push', 'pull']);
  *  shared `maxW`; intensity gets its own ceiling, which is ONE number shared by
  *  the drag, the panel field's `max` AND the clamp applied to the persisted value
  *  at load — otherwise a legacy value above the cap would be snapped down by the
- *  first pixel of a drag. ~800 px of travel spans 0 → 160 at this scale. */
-const NUDGE_INTENSITY_DRAG_PX = 5;
-const NUDGE_INTENSITY_DRAG_MAX = 200;
+ *  first pixel of a drag.
+ *
+ *  THE VERTICAL AXIS IS MAGNITUDE-PROPORTIONAL, NOT LINEAR. The useful range
+ *  spans four decades (a gentle 1 up to a 10000 shove), and one-unit-per-5-px
+ *  would need 50 000 px of travel to cross it while making the low end
+ *  hypersensitive. So the drag moves in `u = ln(1 + v / FLOOR)` space:
+ *    • v ≫ FLOOR ⇒ `du = dv / v`, i.e. a FIXED pixel travel is a fixed RELATIVE
+ *      change — ×e per `NUDGE_INTENSITY_EFOLD_PX`, at 10 exactly as at 1000.
+ *    • v ≪ FLOOR ⇒ `du ≈ dv / FLOOR`, a fixed ABSOLUTE step. That linear floor is
+ *      what makes 0 both REACHABLE (u clamps at 0, so dragging down bottoms out
+ *      instead of asymptotically approaching it) and ESCAPABLE (one e-fold up
+ *      from 0 gives `e − 1` ≈ 1.7, not 0 × e = 0). A pure `v · exp(−dy/K)` law
+ *      can do neither. */
+const NUDGE_INTENSITY_DRAG_MAX = 10000;
+const NUDGE_INTENSITY_EFOLD_PX = 150;
+const NUDGE_INTENSITY_FLOOR = 1;
+/** The shared clamp — the panel field, the persisted value at load and the drag
+ *  all pass through it, so a value out of range cannot exist in any of them. */
+function clampNudgeIntensity(v: number): number {
+  if (!Number.isFinite(v) || v <= 0) return 0;
+  return Math.min(NUDGE_INTENSITY_DRAG_MAX, v);
+}
+/** Intensity after a vertical Ctrl-drag of `dy` px (screen-down positive, so up
+ *  strengthens) from `start`. Rounds to a whole unit above 10 and to one decimal
+ *  below it, so the low end still adjusts finely while the high end reads clean. */
+function nudgeIntensityFromDrag(start: number, dy: number): number {
+  const u0 = Math.log1p(clampNudgeIntensity(start) / NUDGE_INTENSITY_FLOOR);
+  const u = Math.max(0, u0 - dy / NUDGE_INTENSITY_EFOLD_PX);
+  const v = clampNudgeIntensity(NUDGE_INTENSITY_FLOOR * Math.expm1(u));
+  return v < 10 ? Math.round(v * 10) / 10 : Math.round(v);
+}
+/** The Push/Pull cursor's STRENGTH cue in [0, 1] — log10 over 1 … the ceiling, so
+ *  each DECADE is a quarter of the range and 10 / 100 / 1000 / 10000 are visibly
+ *  distinct. Shared by the 2D arrow ring and the 3D outline so they can't drift. */
+function nudgeStrengthCue(intensity: number): number {
+  if (!(intensity > 1)) return 0;
+  return Math.min(1, Math.log10(intensity) / Math.log10(NUDGE_INTENSITY_DRAG_MAX));
+}
+/** The Push/Pull arrows are centred on this fraction of the effect radius and grow
+ *  OUTWARD FROM IT with the strength cue — so both ends (and both chevrons) move,
+ *  and the arrow reads longer the harder the brush pushes. */
+const NUDGE_ARROW_MID = 0.56;
+const NUDGE_ARROW_HALF_MIN = 0.10;
+const NUDGE_ARROW_HALF_MAX = 0.34;
+/** Half-length of the Push/Pull arrow, as a fraction of the effect radius. */
+function nudgeArrowHalf(intensity: number): number {
+  return NUDGE_ARROW_HALF_MIN + (NUDGE_ARROW_HALF_MAX - NUDGE_ARROW_HALF_MIN) * nudgeStrengthCue(intensity);
+}
 function agentBrushModesFor(bondsAvailable: boolean): typeof AGENT_BRUSH_MODES {
   return bondsAvailable ? AGENT_BRUSH_MODES : AGENT_BRUSH_MODES.filter(m => !BOND_BRUSH_MODES.has(m));
 }
@@ -710,6 +755,11 @@ function buildBrushOutline3dSegs(o: {
   radius: number; ringW: number; lineW: number;    // circle / ring / line params
   fixedHalf: number;                               // volumetric half-depth along N (0 = flat)
   anchor: { col: number; row: number; layer: number } | null;  // line-tool staging
+  /** Optional extra circle on the PLANE only (no great circles), in cell units.
+   *  Push/Pull use it as the 3D twin of the 2D arrow-length strength cue: it
+   *  marks the inner end of the arrows' travel, so it SHRINKS as the intensity
+   *  grows. One 36-segment circle — the same cost class as the rest. */
+  innerRing?: number | null;
 }): Float32Array | null {
   const A: [number, number, number] = o.axis === 'x' ? [0, 1, 0] : [1, 0, 0];
   const B: [number, number, number] = o.axis === 'z' ? [0, 1, 0] : [0, 0, 1];
@@ -767,6 +817,7 @@ function buildBrushOutline3dSegs(o: {
       sphere(R);
     }
   }
+  if (o.innerRing != null && o.innerRing > 0.25) circleAB(o.innerRing, 0);
   return seg.length ? new Float32Array(seg) : null;
 }
 
@@ -1741,7 +1792,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
   // down by the first pixel of a retune drag.
   const [agentNudgeIntensity, setAgentNudgeIntensity] = useState<number>(() => {
     const v = saved.current.agentNudgeIntensity as number | undefined;
-    return typeof v === 'number' && Number.isFinite(v) ? Math.max(0, Math.min(NUDGE_INTENSITY_DRAG_MAX, v)) : 10;
+    return typeof v === 'number' && Number.isFinite(v) ? clampNudgeIntensity(v) : 10;
   });
   // Agent brush SHAPE + per-shape params (mirror the CA-grid brush): rect W/H,
   // circle radius (agentBrushRadius above), ring radius + width, line width. The
@@ -3742,13 +3793,21 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
     // (SOLID for push, DASHED for pull) plus 8 radial ticks with a chevron at the
     // leading end, so the DIRECTION is readable at a glance without reading the
     // mode buttons. Negative-silhouette layer, like every other brush cursor.
+    //
+    // The ARROWS ALSO CARRY THE STRENGTH: they are centred on NUDGE_ARROW_MID and
+    // grow outward from it (so BOTH chevrons move), the head grows with them, and
+    // the shaft thickens — all driven by the log10 cue, so 10 / 100 / 1000 / 10000
+    // are visibly different. Reading it from the ref (not a drag-local) is what
+    // makes the cue live at ALL times, not only mid-retune.
     if (showAgentCursor && NUDGE_BRUSH_MODES.has(mode) && cursorW && agentBrushRadiusRef.current > 0) {
       const rr = agentBrushRadiusRef.current * scale;
       const out = mode === 'push';
+      const cue = nudgeStrengthCue(agentNudgeIntensityRef.current);
+      const hl = nudgeArrowHalf(agentNudgeIntensityRef.current);
       // Ticks live inside the ring so they never read as part of a neighbouring
       // tile's cursor; the chevron marks where the motion is HEADED.
-      const t0 = rr * 0.52, t1 = rr * 0.9;
-      const head = Math.min(5, Math.max(2.5, rr * 0.12));
+      const t0 = rr * (NUDGE_ARROW_MID - hl), t1 = rr * (NUDGE_ARROW_MID + hl);
+      const head = Math.min(9, Math.max(2.5, rr * (0.09 + 0.09 * cue)));
       negCtx.save();
       negCtx.strokeStyle = '#ffffff';
       negCtx.lineWidth = 1.5;
@@ -3756,9 +3815,11 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
         const cx = tileOx + cursorW.x * scale, cy = tileOy + cursorW.y * scale;
         if (cx + rr < 0 || cx - rr > parentW || cy + rr < 0 || cy - rr > parentH) return;
         negCtx.setLineDash(out ? [] : [5, 4]);
+        negCtx.lineWidth = 1.5;                    // the RING always reads the radius
         negCtx.beginPath(); negCtx.arc(cx, cy, rr, 0, Math.PI * 2); negCtx.stroke();
         negCtx.setLineDash([]);
         if (rr < 10) return;                       // too small to read — ring only
+        negCtx.lineWidth = 1.5 + cue;              // …the ARROWS thicken with it
         negCtx.beginPath();
         for (let k = 0; k < 8; k++) {
           const a = (k / 8) * Math.PI * 2, ux = Math.cos(a), uy = Math.sin(a);
@@ -4502,6 +4563,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
           let shp: 'rect' | 'circle' | 'ring' | 'line';
           let bw: number, bh: number, rad: number, rw: number, lw: number, fixedHalf = 0;
           let anchor: { col: number; row: number; layer: number } | null;
+          let innerRing: number | null = null;
           if (isAgentBrush) {
             const m = agentBrushModeRef.current;
             shp = agentBrushShapeRef.current;
@@ -4510,7 +4572,12 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
             anchor = agentLine3dAnchorRef.current;
             // Push/Pull act over a BALL of the radius — the volumetric outline is
             // exactly the region the nudge will touch.
-            if (NUDGE_BRUSH_MODES.has(m)) { shp = 'circle'; anchor = null; fixedHalf = Math.max(0.5, rad); }
+            if (NUDGE_BRUSH_MODES.has(m)) {
+              shp = 'circle'; anchor = null; fixedHalf = Math.max(0.5, rad);
+              // Strength cue, the 3D twin of the 2D arrows: the inner circle marks
+              // where the travel starts, so it shrinks as the intensity grows.
+              innerRing = rad * (NUDGE_ARROW_MID - nudgeArrowHalf(agentNudgeIntensityRef.current));
+            }
             else if (m === 'glue' || m === 'cut') { shp = 'circle'; rad = 1; anchor = null; }  // small cursor dot
             // The 3D agent footprint is ALWAYS a volumetric solid (sphere/box through
             // the depth — see agentsInShape3dAt / agentSeedInShape3dAt), NOT gated on
@@ -4527,7 +4594,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
           }
           r.setBrushOutline(buildBrushOutline3dSegs({
             axis: plane3dRef.current.axis, cx: hc.col, cy: hc.row, cz: hc.layer,
-            shape: shp, halfW: bw / 2, halfH: bh / 2, radius: rad, ringW: rw, lineW: lw, fixedHalf, anchor,
+            shape: shp, halfW: bw / 2, halfH: bh / 2, radius: rad, ringW: rw, lineW: lw, fixedHalf, anchor, innerRing,
           }));
         } else r.setBrushOutline(null);
       }
@@ -5497,6 +5564,11 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
     if (cursorDrawRaf.current != null) return;
     cursorDrawRaf.current = requestAnimationFrame(() => { cursorDrawRaf.current = null; drawCursorLayer(); });
   }, [drawCursorLayer]);
+  // A brush size / strength typed into the PANEL has no pointer event behind it,
+  // so nothing else would repaint the cursor: a parked cursor would keep showing
+  // the previous footprint (and, for Push/Pull, the previous arrow length) until
+  // the pointer next moved. Cursor-layer only — never the scene.
+  useEffect(() => { scheduleCursorDraw(); }, [agentNudgeIntensity, agentBrushRadius, scheduleCursorDraw]);
   useEffect(() => { gensPerFrameRef.current = unlimitedGens ? 100 : gensPerFrame; }, [gensPerFrame, unlimitedGens]);
 
   // Lowering G/F must take effect NOW, not one batch from now. `gensPerFrame` is
@@ -7985,7 +8057,11 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
         // Intensity (dy, up = stronger) instead. Mirrors the 2D canvas exactly.
         if (rzA && NUDGE_BRUSH_MODES.has(agentBrushModeRef.current)) {
           setAgentBrushRadius(Math.max(0, Math.min(maxW, resizeStart.radius + Math.round(totDx / 5))));
-          setAgentNudgeIntensity(Math.max(0, Math.min(NUDGE_INTENSITY_DRAG_MAX, resizeStart.intensity - Math.round(totDy / NUDGE_INTENSITY_DRAG_PX))));
+          // The ref LEADS the state: the outline below is rebuilt in this same
+          // handler, before React re-renders, so it must see the new strength.
+          const nextIntensity = nudgeIntensityFromDrag(resizeStart.intensity, totDy);
+          agentNudgeIntensityRef.current = nextIntensity;
+          setAgentNudgeIntensity(nextIntensity);
         }
         else if (shape === 'circle') setRadius(Math.max(0, Math.min(maxW, resizeStart.radius + Math.round(totDx / 5))));
         else if (shape === 'ring') {
@@ -8179,6 +8255,19 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
     };
     W.__sim3dRenderer = () => gl3dRef.current;
     W.__buildBrushOutline3dSegs = buildBrushOutline3dSegs;  // DEV: unit-test the outline geometry
+    // DEV: the Push/Pull intensity drag law + its cursor cue, so a probe can assert
+    // the numbers a Ctrl-drag produces without synthesising a 1000 px gesture.
+    W.__nudgeIntensityFromDrag = nudgeIntensityFromDrag;
+    W.__nudgeStrengthCue = nudgeStrengthCue;
+    W.__nudgeArrowHalf = nudgeArrowHalf;
+    // …and the LIVE brush refs. A probe that reads the panel `<input>` instead is
+    // racing React's commit (these refs are what the pointer handlers and the
+    // cursor layer actually read), which makes a drag assertion flaky, not wrong.
+    W.__nudgeBrushState = () => ({
+      intensity: agentNudgeIntensityRef.current,
+      radius: agentBrushRadiusRef.current,
+      mode: agentBrushModeRef.current,
+    });
     // Drive the plane-brush stamp directly (synthetic pointer drags can't reach
     // pickOnPlane). Pass a plane cell (layer,row,col); set reset=true to start a
     // fresh stroke (clears the interpolation anchor).
@@ -10504,7 +10593,12 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
           // radius, dy (up) → the intensity. NB Ctrl+LMB opens a resize, never a
           // nudge, so this retunes the NEXT hold — not one already in flight.
           setAgentBrushRadius(Math.max(0, Math.min(maxW, rz.startRadius + Math.round(dx / 5))));
-          setAgentNudgeIntensity(Math.max(0, Math.min(NUDGE_INTENSITY_DRAG_MAX, rz.startIntensity - Math.round(dy / NUDGE_INTENSITY_DRAG_PX))));
+          // The ref LEADS the state: `draw()` below repaints the cursor layer in
+          // this same handler, before React re-renders, so the arrow cue must
+          // already carry the new strength (else it lags a mousemove behind).
+          const nextIntensity = nudgeIntensityFromDrag(rz.startIntensity, dy);
+          agentNudgeIntensityRef.current = nextIntensity;
+          setAgentNudgeIntensity(nextIntensity);
         } else if (shape === 'circle') {
           setRadius(Math.max(0, Math.min(maxW, rz.startRadius + Math.round(dx / 5))));
         } else if (shape === 'ring') {
@@ -13766,14 +13860,15 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
                         <span style={{ width: 54, color: 'var(--color-text-muted)' }}>Radius</span>
                         <NumberField value={agentBrushRadius} onNumber={v => setAgentBrushRadius(v)} min={0} step={1} />
                       </label>
-                      <label style={{ display: 'flex', alignItems: 'center', gap: 4 }} title="World units per second at the centre of the disc — the displacement falls off linearly to zero at the rim. Ctrl+LMB-drag on the canvas: drag up to strengthen.">
+                      <label style={{ display: 'flex', alignItems: 'center', gap: 4 }} title={`World units per second at the centre of the disc (0 – ${NUDGE_INTENSITY_DRAG_MAX}) — the displacement falls off linearly to zero at the rim. Ctrl+LMB-drag on the canvas: drag up to strengthen, by a fixed PROPORTION per pixel (×e per ${NUDGE_INTENSITY_EFOLD_PX} px), so the whole range is reachable at any magnitude.`}>
                         <span style={{ width: 54, color: 'var(--color-text-muted)' }}>Intensity</span>
-                        <NumberField value={agentNudgeIntensity} onNumber={v => setAgentNudgeIntensity(Math.max(0, Math.min(NUDGE_INTENSITY_DRAG_MAX, v)))} min={0} max={NUDGE_INTENSITY_DRAG_MAX} step={1} />
+                        <NumberField value={agentNudgeIntensity} onNumber={v => setAgentNudgeIntensity(clampNudgeIntensity(v))} min={0} max={NUDGE_INTENSITY_DRAG_MAX} step={1} />
                       </label>
                       <div style={{ fontSize: '0.62rem', color: 'var(--color-text-muted)' }}>
                         Hold to {agentBrushMode === 'push' ? 'shove agents away from' : 'gather agents toward'} the cursor —
                         strongest at the centre, zero at the rim.
-                        <br />Ctrl+drag: ↔ radius, ↕ intensity.
+                        <br />Ctrl+drag: ↔ radius, ↕ intensity (×{' '}e per {NUDGE_INTENSITY_EFOLD_PX} px).
+                        <br />The cursor arrows grow with the intensity.
                       </div>
                     </div>
                   )}

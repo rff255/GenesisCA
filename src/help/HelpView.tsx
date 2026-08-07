@@ -2884,12 +2884,19 @@ export function HelpView() {
             playing or paused. A radial force needs a centre and a radius, so these two ignore the
             brush shape: the panel shows a <em>Radius</em> (the disc) and an <em>Intensity</em> in
             world units per second at the centre &mdash; frame-rate independent, so the same setting
-            feels identical at 60 and 144&nbsp;Hz. Because the shape is fixed, both drag axes of
-            <span className={styles.kbd}>Ctrl</span>+left-drag carry a real parameter in these two
+            feels identical at 60 and 144&nbsp;Hz. Intensity runs from 0 to <strong>10000</strong>,
+            which is four decades, so the vertical drag is <em>proportional</em> rather than linear:
+            each 150&nbsp;px of travel multiplies (or divides) the strength by about
+            <strong>&times;&nbsp;e</strong>, giving the same feel at 10 as at 1000, and a linear floor
+            near zero so 0 is both reachable and escapable. Because the shape is fixed, both drag axes
+            of <span className={styles.kbd}>Ctrl</span>+left-drag carry a real parameter in these two
             modes: <strong>drag sideways to change the Radius, up/down to change the Intensity</strong>
             (up = stronger), and both panel fields track the drag live. The cursor is a
             ring (solid for Push, dashed for Pull) with arrows showing the direction, and every
-            agent the hold will move is ringed. Pull never overshoots past the centre, and Push
+            agent the hold will move is ringed. <strong>The arrows also show the strength</strong>
+            &mdash; they grow outward from the middle of the disc (and thicken, with bigger
+            chevrons) as the Intensity rises, so each decade looks distinctly different; in 3D an
+            inner circle shrinks the same way. Pull never overshoots past the centre, and Push
             piles agents up just inside the rim (where the falloff reaches zero).
           </p>
           <p className={styles.p}>
@@ -3240,7 +3247,9 @@ export function HelpView() {
               (vertical); Circle = radius; Ring = radius (horizontal) / band width (vertical);
               Line = thickness. With the agent brush in <strong>Push</strong> or <strong>Pull</strong>
               (which have no shape) the two axes carry that mode's two parameters instead:
-              radius (horizontal) / intensity (vertical, up = stronger).</li>
+              radius (horizontal) / intensity (vertical, up = stronger &mdash; by a fixed
+              proportion per pixel, about &times;&nbsp;e per 150&nbsp;px, so the whole
+              0&ndash;10000 range is controllable at any magnitude).</li>
             <li><strong>Zoom buttons</strong> (+/&minus;/fit/gridlines/axes/smooth scaling/infinity) &mdash; Bottom-left of the canvas.
               Each button is shown only where it can actually do something: the
               <strong>gridlines</strong> toggle needs a 2D model with a CA grid (in 3D its
