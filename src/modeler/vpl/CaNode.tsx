@@ -2764,6 +2764,25 @@ function CaNodeComponent({ id, data }: NodeProps) {
           // travels in the .gcaproj so it survives reload.
           const exprW = Number(nodeData.config._exprW) || 0;
           const exprH = Number(nodeData.config._exprH) || 0;
+          // Input-variable NAMES are set once and then read off the port labels,
+          // so their editors (one text row per input + the port-count stepper)
+          // are collapsed BY DEFAULT — they were the bulk of the node's height.
+          // Absent key ⇒ collapsed, so every existing node opens compact; the
+          // flag is `_`-prefixed and is neither `_port_*` nor `_varName_*`, so
+          // accessorCSE's purity key drops it and the compiled output is
+          // untouched (see accessorCSE.ts's config filter).
+          const namesExpanded = nodeData.config._namesExpanded === true;
+          const toggleNames = () => {
+            const newConfig: NodeConfig = { ...nodeData.config };
+            if (namesExpanded) delete newConfig._namesExpanded;
+            else newConfig._namesExpanded = true;
+            updateNodeData(id, { ...nodeData, config: newConfig });
+          };
+          const varSummary = Array.from({ length: visibleCount }, (_, i) => {
+            const pid = VISIBLE_PORT_IDS[i]!;
+            const raw = nodeData.config[`_varName_${pid}`];
+            return (typeof raw === 'string' && raw.trim()) ? raw.trim() : pid;
+          }).join(', ');
           return (
             <>
               <textarea
@@ -2804,7 +2823,30 @@ function CaNodeComponent({ id, data }: NodeProps) {
               {parseErr && (
                 <div style={{ color: '#f44336', fontSize: '0.65rem' }}>{parseErr}</div>
               )}
-              {Array.from({ length: visibleCount }, (_, i) => {
+              <button
+                className={styles.select}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 4,
+                  textAlign: 'left', cursor: 'pointer', overflow: 'hidden',
+                }}
+                onClick={toggleNames}
+                title={namesExpanded
+                  ? 'Hide the input variable names'
+                  : 'Edit the input variable names / number of inputs'}
+              >
+                <span style={{ opacity: 0.6 }}>{namesExpanded ? '▾' : '▸'}</span>
+                <span style={{ opacity: 0.6 }}>Inputs</span>
+                <span
+                  style={{
+                    flex: 1, minWidth: 0, overflow: 'hidden',
+                    textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                    fontStyle: 'italic', opacity: 0.85,
+                  }}
+                >
+                  {varSummary}
+                </span>
+              </button>
+              {namesExpanded && Array.from({ length: visibleCount }, (_, i) => {
                 const pid = VISIBLE_PORT_IDS[i]!;
                 return (
                   <div key={pid} style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
@@ -2823,34 +2865,36 @@ function CaNodeComponent({ id, data }: NodeProps) {
                   </div>
                 );
               })}
-              <div style={{ display: 'flex', gap: 4, alignItems: 'center', justifyContent: 'flex-end' }}>
-                <button
-                  className={styles.select}
-                  style={{
-                    cursor: visibleCount <= 1 ? 'not-allowed' : 'pointer',
-                    opacity: visibleCount <= 1 ? 0.4 : 1,
-                    textAlign: 'center', flex: 1,
-                  }}
-                  onClick={() => setVisible(visibleCount - 1)}
-                  disabled={visibleCount <= 1}
-                  title="Remove last input port"
-                >
-                  −
-                </button>
-                <button
-                  className={styles.select}
-                  style={{
-                    cursor: visibleCount >= MAX_VISIBLE ? 'not-allowed' : 'pointer',
-                    opacity: visibleCount >= MAX_VISIBLE ? 0.4 : 1,
-                    textAlign: 'center', flex: 1,
-                  }}
-                  onClick={() => setVisible(visibleCount + 1)}
-                  disabled={visibleCount >= MAX_VISIBLE}
-                  title="Add another input port"
-                >
-                  +
-                </button>
-              </div>
+              {namesExpanded && (
+                <div style={{ display: 'flex', gap: 4, alignItems: 'center', justifyContent: 'flex-end' }}>
+                  <button
+                    className={styles.select}
+                    style={{
+                      cursor: visibleCount <= 1 ? 'not-allowed' : 'pointer',
+                      opacity: visibleCount <= 1 ? 0.4 : 1,
+                      textAlign: 'center', flex: 1,
+                    }}
+                    onClick={() => setVisible(visibleCount - 1)}
+                    disabled={visibleCount <= 1}
+                    title="Remove last input port"
+                  >
+                    −
+                  </button>
+                  <button
+                    className={styles.select}
+                    style={{
+                      cursor: visibleCount >= MAX_VISIBLE ? 'not-allowed' : 'pointer',
+                      opacity: visibleCount >= MAX_VISIBLE ? 0.4 : 1,
+                      textAlign: 'center', flex: 1,
+                    }}
+                    onClick={() => setVisible(visibleCount + 1)}
+                    disabled={visibleCount >= MAX_VISIBLE}
+                    title="Add another input port"
+                  >
+                    +
+                  </button>
+                </div>
+              )}
             </>
           );
         })()}
