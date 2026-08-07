@@ -728,71 +728,173 @@ check('runtime: uploadAgentSoA seeds the agent colour buffer [invisible-agents b
     /await buildAgentDiscPipelines\(rt\)/.test(blockAfter(rt, /async function setupAgentCompositeRender\(/)));
 }
 
-// B16 (THE GLOW HALO BLEND, user-reported: "find a better way to blend the glow
-// halos to avoid this oversaturated look and contrast artifacts where there is a
-// high density", with a ~27k-agent Particle Life screenshot).
+// B16 (THE GLOW ARCHITECTURE, user-reported twice: first "find a better way to
+// blend the glow halos to avoid this oversaturated look and contrast artifacts
+// where there is a high density", then — after the screen-blend round — "it's
+// gotten better but still not good enough. Use as reference the way that our
+// Particle Life reference code solves it").
 //
-// The halo was PURE ADDITIVE on both paths (GPU src=ONE/dst=ONE, Canvas2D
-// 'lighter'). Additive CLIPS each channel independently at 1, so a dense field
-// got (a) a hard iso-line where the sum crossed 1, with a flat plateau inside it,
-// and (b) a hue collapse to white as the remaining channels finished saturating.
-// SCREEN — out = s + d*(1-s) — approaches full brightness asymptotically instead.
+// THE LESSON, ported from SandboxScience's Particle Life renderer: a per-pair
+// blend is MEMORYLESS, so N stacked halos of per-halo display value p always give
+// 1-(1-p)^N (screen) or min(1,Np) (additive) — every member of that family
+// exhausts the 8-bit range after ~4 overlaps for any p bright enough to see ONE
+// halo. The plateau is a property of the ARCHITECTURE, not of the operator. Their
+// renderer accumulates every particle ADDITIVELY into an rgba16float HDR target
+// and compresses ONCE in a fullscreen compose pass. So do we now.
 //
-// MEASURED, same frame, same agents. CPU overlay (Growing Graphs, 10 004 agents,
-// intensity 0.6, the additive arm replayed by remapping the composite op so ONLY
-// the blend differs): halo pixels with a channel clipped at 255 47.30% -> 6.11%,
-// near-white (all three >= 254) 20.29% -> 0.06%, distinct RGB 8875 -> 14509.
-// GPU (the SHIPPED fsGlow text rendered to a texture under both blends, 4000
-// agents, 6 hues): clipped 40.58% -> 0.61%, near-white 28.79% -> 0.30%, distinct
-// 43624 -> 68567, and the longest CLIPPED RUN across the blob's centre scanline
-// 178 px -> 4 px (that run IS the reported plateau). An isolated agent is
-// BIT-IDENTICAL (screen over an empty backdrop is s + 0 = additive): 0 differing
-// pixels for one agent and for two non-overlapping agents.
+// Both paths compute tonemap(SUM of colour*g) composited with SCREEN. GPU: an HDR
+// texture + GLOW_COMPOSE_WGSL. CPU: Canvas2D has no float target, so it
+// accumulates the LOG ENCODING of the same sum — screen is c <- s+c-s*c, so a
+// sprite baking 1-exp(-E*g) makes the buffer hold exactly 1-exp(-E*SUM g) — and
+// one typed-array pass decodes and tonemaps it. MEASURED parity: the largest
+// |GPU-CPU| difference over 1..50 overlapping halos is 0.0088 (2.2/255).
 {
   const rt = readSrc('simulator/engine/agentWebgpuRuntime.ts');
   const disc = blockAfter(rt, /async function buildAgentDiscPipelines\(/);
-  const glowBlend = disc.slice(disc.indexOf('const glowBlend'), disc.indexOf('const renderViewBuf'));
+  const glowBlend = disc.slice(disc.indexOf('const glowBlend'), disc.indexOf('const glowComposeBlend'));
 
-  check('the GPU halo blends SCREEN, not additive [glow-blend]',
-    /srcFactor: 'one', dstFactor: 'one-minus-src', operation: 'add'/.test(glowBlend)
-    && !/dstFactor: 'one',/.test(glowBlend));
-  // Screen's own alpha rule IS source-over — what keeps the transparent agent
-  // canvas compositing correctly over the page and over the E2 grid layer.
-  check('the halo alpha uses the source-over rule [glow-blend]',
-    /alpha: \{ srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' \}/.test(glowBlend));
+  // ADDITIVE — but into float, where it is the EXACT sum, not the clipping 8-bit
+  // additive this used to be nor the per-pair screen it was changed to.
+  check('the GPU halo accumulates ADDITIVELY [glow-arch]',
+    /color: \{ srcFactor: 'one', dstFactor: 'one', operation: 'add' \}/.test(glowBlend)
+    && /alpha: \{ srcFactor: 'one', dstFactor: 'one', operation: 'add' \}/.test(glowBlend));
+  // ...into an HDR target. Additive onto the canvas is exactly the original bug.
+  check('the halo pipeline targets the HDR format, not the canvas [glow-arch]',
+    /entryPoint: 'fsGlow', targets: \[\{ format: GLOW_HDR_FORMAT, blend: glowBlend \}\]/.test(disc));
+  check('the HDR target is rgba16float (renderable AND blendable) [glow-arch]',
+    /const GLOW_HDR_FORMAT: GPUTextureFormat = 'rgba16float';/.test(rt));
+  // The tonemapped layer composites with SCREEN — the same rule as before, applied
+  // ONCE — which preserves "a halo can only brighten the backdrop" and the
+  // source-over alpha that keeps the transparent agent canvas compositing right.
+  check('the tonemapped layer composites with SCREEN [glow-arch]',
+    /const glowComposeBlend: GPUBlendState = \{\s*color: \{ srcFactor: 'one', dstFactor: 'one-minus-src', operation: 'add' \},\s*alpha: \{ srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' \},/.test(disc));
 
-  // LOAD-BEARING, not tidiness: the dst factor is (1 - src), so an emitted value
-  // above 1 makes it NEGATIVE and the halo subtracts the backdrop. Intensity goes
-  // to 4, so without the clamp this is reachable from the shipped UI.
+  // NO CLAMP. The clamp was load-bearing under screen (dst factor is 1-src, so a
+  // value above 1 SUBTRACTS the backdrop) but it gave every agent a hard-edged
+  // fully-saturated PLATEAU DISC wherever intensity*t^steepness >= 1 — at the
+  // shipped Intensity 3 that is the outer 42% of the band radius, all pinned at
+  // exactly 1.0. Removing it is the single most visible half of this fix.
   const wgsl = blockAfter(rt, /function agentRenderWGSL\(/);
   const fsGlow = wgsl.slice(wgsl.indexOf('fn fsGlow'));
-  check('fsGlow clamps the emitted halo value to [0,1] [glow-blend]',
-    /let g: f32 = clamp\(rv\.glowIntensity \* pow\(t, max\(0\.01, rv\.glowSteepness\)\), 0\.0, 1\.0\);/.test(fsGlow));
+  check('fsGlow emits UNCLAMPED radiance (no plateau disc) [glow-arch]',
+    /let g: f32 = max\(0\.0, rv\.glowIntensity \* pow\(t, max\(0\.01, rv\.glowSteepness\)\)\);/.test(fsGlow)
+    && !/clamp\(rv\.glowIntensity/.test(fsGlow));
 
-  // The CPU overlay is the SAME math: Canvas2D 'screen' expands to s + d - s*d on
-  // premultiplied colours with source-over alpha, i.e. the GPU blend term for term.
+  // THE CURVE RUNS ON THE MAGNITUDE AND THE HUE IS EXACT. Both the full Jodie mix
+  // and per-channel Reinhard desaturate the highlights, which IS the reported
+  // "oversaturated look"; measured on the same dense frame at Intensity 3, halo
+  // pixels with a channel pinned at 255 were 37% (old screen), 68% (full Jodie),
+  // 2.5% (hue-exact), and near-WHITE 12.7% / 0.18% / 0.03%. It is also the only
+  // form the CPU sibling can reproduce term-for-term (its magnitude lives in the
+  // alpha channel), so this is what keeps the two 2D paths identical.
+  check('the compose tonemaps the MAGNITUDE and keeps the hue exact [glow-arch]',
+    /let mag: f32 = hdr\.a;/.test(rt)
+    && /let hue: vec3<f32> = hdr\.rgb \/ mag;/.test(rt)
+    && /let t: f32 = x \/ \(1\.0 \+ x\);/.test(rt)
+    && !/reinhardJodie/.test(rt));
+  check('the compose exposes the accumulated sum by the SHARED constant [glow-arch]',
+    /const GLOW_EXPOSURE : f32 = \$\{GLOW_TONE_EXPOSURE\.toFixed\(4\)\}/.test(rt)
+    && /import \{ GLOW_TONE_EXPOSURE \} from '\.\.\/glowTone';/.test(rt));
+  // Premultiplied by construction: hue's channels are <= 1, so rgb <= a, which is
+  // what the 'premultiplied' canvas requires — and it is the same pixel the CPU
+  // filter emits (colour x T, alpha T).
+  check('the compose output is valid premultiplied (hue*t, t) [glow-arch]',
+    /return vec4<f32>\(clamp\(hue, vec3<f32>\(0\.0\), vec3<f32>\(1\.0\)\) \* t, t\);/.test(rt));
+
+  // A render pass cannot nest, so the HDR pass must be encoded BEFORE the canvas
+  // pass begins — in BOTH present paths, or the E2 composite silently loses glow.
+  const present = blockAfter(rt, /export function presentAgentsEncode\(/);
+  const comp = blockAfter(rt, /export function presentCompositeEncode\(/);
+  // NB the composite's FIRST beginRenderPass is the grid layer (a separate,
+  // complete pass) — anchor on the pass that actually draws the compose.
+  for (const [name, body, label] of [['presentAgentsEncode', present, "'agent-present'"], ['presentCompositeEncode', comp, "'agent-composite-pass'"]]) {
+    const hdrAt = body.indexOf('encodeGlowHdrPass(');
+    const passAt = body.indexOf('label: ' + label);
+    check(name + ' encodes the HDR halo pass BEFORE the canvas pass [glow-arch]',
+      hdrAt > 0 && passAt > 0 && hdrAt < passAt);
+    // Pipeline BEFORE bind group at each draw: the compose has a DIFFERENT
+    // bind-group layout, and a pipeline switch invalidates incompatible groups.
+    check(name + ' draws the core AFTER the compose (solid-core invariant) [glow-arch]',
+      body.indexOf('glowComposePipeline') > 0
+      && body.indexOf('renderPlainPipeline') > body.indexOf('glowComposePipeline'));
+  }
+  // A failed HDR build must degrade to NO glow, never to a wrong one.
+  check('a failed HDR target skips the compose too [glow-arch]',
+    /const glow = !!rt\.renderGlow && encodeGlowHdrPass\(/.test(present)
+    && /const glow = showAgents && !!rt\.renderGlow && encodeGlowHdrPass\(/.test(comp));
+  // Re-attach rebuilds the pipelines on the SAME surface — the old HDR bind group
+  // belongs to the old layout, so it must be dropped; and both teardown paths must
+  // release the texture (it is canvas-sized: a leak per re-attach is real memory).
+  check('the pipeline rebuild drops the previous HDR target [glow-arch]',
+    /destroyGlowHdrTex\(rt\);/.test(disc));
+  check('both teardown paths destroy the HDR target [glow-arch]',
+    (rt.match(/destroyGlowHdrTex\(rt\);/g) || []).length >= 3);
+
+  // ---- the CPU sibling ----
   const sv = readSrc('simulator/SimulatorView.tsx');
-  // NB the anchor must clear the WHOLE signature: drawAgentGlow's `snap` param is
-  // an inline object TYPE, so a bare `function drawAgentGlow\(` anchor makes
+  // NB the anchor must clear the WHOLE signature: drawAgentGlow's snap param is
+  // an inline object TYPE, so a bare function drawAgentGlow\( anchor makes
   // blockAfter return that type literal instead of the function body.
   const glow = blockAfter(sv, /function drawAgentGlow\([\s\S]{0,800}?\): void /);
-  check('the CPU overlay halo blends screen, not lighter [glow-blend]',
-    /ctx\.globalCompositeOperation = 'screen';/.test(glow)
-    && !/globalCompositeOperation = 'lighter'/.test(glow));
+  // The scratch is accumulated with 'screen' and NEVER read back. Screen on
+  // premultiplied colours is c <- s+c-s*c for the colour AND the alpha, so the
+  // alpha ends up holding the exact log-encoded halo sum while the un-premultiplied
+  // colour holds the hue — which is what lets an SVG transfer function do the
+  // decode+tonemap on the BLIT.
+  check('the CPU overlay accumulates with screen into the scratch [glow-arch]',
+    /s2\.globalCompositeOperation = 'screen';/.test(glow));
+  // NO READBACK. A measured hard constraint, not a preference: Chromium DEFERS the
+  // thousands of blended drawImage calls, so the first read forces them
+  // synchronously — getImageData(0,0,1,1) on the scratch measured 17.5 ms, the SAME
+  // as reading the whole buffer, against 9-11 ms for the identical blits with no
+  // read. A pixel loop roughly triples the glow's cost at ~5k agents.
+  check('the CPU overlay never reads the accumulation back [glow-arch]',
+    !/getImageData/.test(glow) && !/putImageData/.test(glow)
+    && !/willReadFrequently/.test(blockAfter(sv, /function glowScratchFor\(/)));
+  check('the CPU overlay tonemaps via the transfer filter, then blits with screen [glow-arch]',
+    /ctx\.filter = filter;/.test(glow)
+    && /ctx\.globalCompositeOperation = 'screen';/.test(glow)
+    && /ctx\.drawImage\(scratch\.cv, bx, by\);/.test(glow));
+  // The filter MUST declare sRGB: SVG filters default to linearRGB, which would
+  // round-trip (and shift) every colour channel on the way through.
+  check('the transfer filter pins sRGB interpolation [glow-arch]',
+    /filter\.setAttribute\('color-interpolation-filters', 'sRGB'\);/.test(blockAfter(sv, /function ensureGlowFilter\(/)));
+  // It remaps ALPHA (where the magnitude is), passing the hue through untouched.
+  check('the transfer function remaps the ALPHA channel [glow-arch]',
+    /createElementNS\(NS, 'feFuncA'\)/.test(sv)
+    && /fa\.setAttribute\('type', 'table'\);/.test(sv)
+    && /setAttribute\('tableValues', glowTransferTable\(encScale\)\)/.test(sv));
   // The core sub-pass must stay source-over — that is the SOLID CORE invariant
-  // (fully-opaque body pixels bit-identical glow ON vs OFF; measured 6006 body
-  // pixels, 0 differing, max delta 0 on Ant Necrophoresis with the grid hidden).
-  check('the CPU core sub-pass stays source-over [glow-blend]',
+  // (fully-opaque body pixels bit-identical glow ON vs OFF).
+  check('the CPU core sub-pass stays source-over [glow-arch]',
     /ctx\.globalCompositeOperation = 'source-over';/.test(glow));
-  // ONE pass. The old ceil(intensity)-passes trick was exact only under a truly
-  // additive blend; under screen repeated passes COMPOUND (1-(1-u)^n) instead of
-  // summing, so it would silently mean something else.
-  check('the CPU overlay draws each halo sprite exactly ONCE [glow-blend]',
-    /ctx\.drawImage\(sp, cx - R, cy - R\);/.test(glow) && !/for \(let p = 0; p < passes/.test(glow));
-  // The sprite bake carries the shader's clamp, so the two paths share a profile.
+  // ONE sprite draw per agent per tile (the old ceil(intensity)-passes trick would
+  // now compound the encoding instead of summing it).
+  // ONE unscaled blit per agent per tile: the sprite is BAKED at the scratch's
+  // resolution (R/ds), never blitted scaled into it — a scaled drawImage resamples
+  // per pixel and measured 2.3x the whole pass at 4896 agents.
+  check('the CPU overlay draws each halo sprite exactly ONCE [glow-arch]',
+    /s2\.drawImage\(sp, cx - R - bx, cy - R - by\);/.test(glow)
+    && !/for \(let p = 0; p < passes/.test(glow));
+  // The scratch is sized to the agents' screen bbox, so a sparse or zoomed-in
+  // model pays only for the region its halos actually cover.
+  check('the accumulation is bbox-sized [glow-arch]',
+    /glowScratchFor\(boxW, boxH\)/.test(glow) && /const bx = Math\.max\(0, Math\.floor\(minX\)\)/.test(glow));
+  // The sprite bakes the ENCODING, unclamped — the CPU twin of fsGlow no-clamp.
   const paint = blockAfter(sv, /function paintGlowSprite\(/);
-  check('the sprite bake clamps the profile like fsGlow [glow-blend]',
-    /const a = Math\.min\(1, unit \* Math\.pow\(u, steepness\)\);/.test(paint));
+  check('the sprite bakes the log encoding, unclamped [glow-arch]',
+    /1 - Math\.exp\(-enc \* unit \* Math\.pow\(u, steepness\)\)/.test(paint)
+    && !/Math\.min\(1, unit \* Math\.pow/.test(paint));
+  // ONE definition of the curve + the exposure + the encoding scale, imported by
+  // BOTH paths — so they cannot drift.
+  check('both paths derive the tonemap from glowTone.ts [glow-arch]',
+    /import \{ glowEncodeScale, glowTransferTable \} from '\.\/glowTone';/.test(sv)
+    && /export const GLOW_TONE_EXPOSURE = 1\.6;/.test(readSrc('simulator/glowTone.ts')));
+  // E is chosen PER INTENSITY so the encodable range is a constant number of
+  // OVERLAPPING halos (~27) rather than a constant sum — otherwise Intensity 3
+  // would saturate the 8-bit buffer after two overlaps.
+  check('the CPU encoding scale adapts to the intensity [glow-arch]',
+    /return 0\.2 \/ Math\.max\(1e-3, Math\.max\(1, intensity\)\);/.test(readSrc('simulator/glowTone.ts')));
 }
 
 // ---------------------------------------------------------------------------

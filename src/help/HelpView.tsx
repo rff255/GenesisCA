@@ -3011,12 +3011,15 @@ export function HelpView() {
               a soft halo around it &mdash; <em>Size</em> is the extra halo radius in
               pixels, <em>Core</em> how far the solid colour reaches into that halo,
               <em>Intensity</em> the halo&apos;s brightness, <em>Falloff</em> how fast it
-              fades across the band outside the core. Overlapping halos blend by
-              <em>screen</em>, so they approach full brightness smoothly instead of clipping:
-              a dense cluster keeps a readable gradient and its colour instead of flattening
-              into a hard-edged white patch, while a lone agent&apos;s halo looks exactly as
-              it always did. Past <em>Intensity</em>&nbsp;1 the halo cannot get brighter than
-              the agent&apos;s colour &mdash; it widens the band that reaches it. The core is
+              fades across the band outside the core. Overlapping halos are
+              <em>added together at full precision first, and the total is compressed into
+              displayable colour once</em> &mdash; the same approach a dedicated glow renderer
+              uses, and the reason a dense cluster keeps a readable gradient and its hue
+              instead of flattening into a hard-edged white patch. Because the sum is never
+              clipped along the way, <em>Intensity</em> keeps meaning something well past 1:
+              raising it brightens the whole halo rather than growing a flat, fully-saturated
+              disc around each agent. A lone agent&apos;s halo is a smooth fade to nothing,
+              and the brightest halos in a pile stay distinguishable from one another. The core is
               drawn <em>opaque</em>, so
               it is never washed out by a neighbour&apos;s halo nor dimmed by a low
               intensity: a dense cluster can glow as bright as you like while an isolated
@@ -3027,9 +3030,10 @@ export function HelpView() {
               model and every agent target: on the direct-render path the shader draws the
               halo and the core as two passes, and everywhere else (bonded graphs and
               tissues, sprites, metaballs, field-coupled models) the regular agent overlay
-              draws the halo under the discs and bonds for the same result. It is a per-agent
-              drawing cost, so on very large populations expect a slower display (measured
-              ~30&nbsp;ms per frame at 10&nbsp;000 agents on the overlay path); the
+              draws the halo under the discs and bonds for the same result &mdash; both
+              accumulate and compress the same way, so the two paths look the same. It is a
+              per-agent drawing cost, so on very large populations expect a slower display
+              (measured ~30&nbsp;ms per frame at 10&nbsp;000 agents on the overlay path); the
               simulation itself is unaffected. Not available in 3D yet.</li>
             <li><strong>Direct agent render &mdash; 3D.</strong> The same fast path works
               for <em>3D</em> agents-only models: while you just watch, the worker draws the

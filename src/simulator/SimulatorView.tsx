@@ -36,6 +36,7 @@ import { emitAgentForcePassWGSL } from '../modeler/vpl/compiler/agentWebgpu/forc
 import type { AgentRenderSnapshot } from './engine/agentEngine';
 import type { AgentRenderView, AgentRenderView3D } from './engine/agentWebgpuRuntime';
 import { SpriteRegistry } from './spriteRegistry';
+import { glowEncodeScale, glowTransferTable } from './glowTone';
 import { ImageMappingDialog, type ImageMappingConfig } from './ImageMappingDialog';
 import { CsvImportDialog, type CsvImportResult } from './CsvImportDialog';
 import { GIFEncoder, quantize, applyPalette } from 'gifenc';
@@ -153,19 +154,21 @@ function sanitizeAgentGlow(raw: unknown): AgentGlow {
   };
 }
 
-// --- CPU-overlay glow: pre-rasterised radial sprites -----------------------
-// The WGSL glow FS is `min(1, intensity * pow(max(0, 1 - d), steepness))` over a
-// quad enlarged by `glowSize`, SCREEN-blended. Canvas2D has no shader, so the same
-// profile is baked ONCE into a radial-gradient sprite per (quantised colour,
-// integer glow radius) and blitted per agent under `globalCompositeOperation =
-// 'screen'`. Canvas2D's 'screen' expands to exactly `s + d - s*d` on PREMULTIPLIED
-// colours with source-over alpha, which is the GPU's one/one-minus-src blend term
-// for term — so the two paths are the same math, not merely similar. A fresh
-// createRadialGradient per agent per frame is unusable at the ~10k-node scale a
-// bonded GRA model reaches — the cache is the whole point (same reasoning as the
-// glyph tile cache). Colour is quantised to 5 bits/channel (≤3/255 error, invisible
-// in a glow) so a Color-Scale agent viewer with hundreds of distinct colours still
-// collapses to a handful of sprites.
+// --- CPU-overlay glow: log-encoded accumulation + ONE tonemap ---------------
+// The Canvas2D sibling of the WebGPU halo pipeline. Both paths compute the SAME
+// thing — `tonemap(Σ_i colour_i · g_i)` composited onto the backdrop with SCREEN —
+// but Canvas2D has no float render target, so where the GPU accumulates into
+// rgba16float and tonemaps in a fullscreen pass, the overlay accumulates into an
+// 8-bit scratch in the LOG DOMAIN (see glowEncodeScale) and decodes + tonemaps it
+// in one typed-array pass. See glowTone.ts for why accumulate-then-compress is the
+// architecture and per-pair blending can never substitute for it.
+//
+// The halo profile is baked ONCE into a radial-gradient sprite per (quantised
+// colour, integer glow radius): a fresh createRadialGradient per agent per frame
+// is unusable at the ~10k-node scale a bonded GRA model reaches — the cache is the
+// whole point (same reasoning as the glyph tile cache). Colour is quantised to
+// 5 bits/channel (≤3/255 error, invisible in a glow) so a Color-Scale agent viewer
+// with hundreds of distinct colours still collapses to a handful of sprites.
 const GLOW_SPRITES = new Map<number, HTMLCanvasElement>();
 let glowSpriteSig = '';
 /** Above this the sprite is drawn straight (no cache entry) — a 128px-radius
@@ -188,50 +191,41 @@ function glowCoreFrac(R: number, size: number, core: number): number {
   return Math.max(0, Math.min(0.98, 1 - (size * (1 - core)) / R));
 }
 
-/** Paint the HALO alpha profile into a 2R×2R sprite: a flat plateau inside the
- *  core, then `min(1, unit * t^steepness)` with t remapped over the band OUTSIDE
- *  it — the Canvas2D twin of fsGlow, CLAMP INCLUDED. (The plateau is hidden under
- *  the opaque body for an opaque agent; it keeps the profile continuous at the
- *  core edge and reads correctly under a translucent one.)
+/** Paint the ENCODED halo profile into a 2R×2R sprite. The profile itself is the
+ *  WGSL one — `g = unit * t^steepness` with t remapped over the band OUTSIDE the
+ *  core, plateauing at `unit` inside it — but what the sprite STORES is its log
+ *  encoding `1 - exp(-enc*g)`, because screen-compositing those is what makes the
+ *  scratch hold `1 - exp(-enc*Σg)`, i.e. the exact sum (see glowTone.ts).
  *
- *  The clamp is what lets ONE pass carry any intensity: a Canvas2D alpha caps at
- *  1 and the shader now clamps too, so the whole profile is expressible directly
- *  and the old ceil(intensity)-passes trick (exact only under a truly additive
- *  blend) is gone. Its kink gets its own stop so the 32 uniform samples cannot
- *  round the plateau's edge off. */
-function paintGlowSprite(c2: CanvasRenderingContext2D, R: number, r: number, g: number, b: number, unit: number, steepness: number, coreFrac: number): void {
+ *  THERE IS NO CLAMP ANY MORE. The profile used to be `min(1, unit*t^steepness)`,
+ *  which gave every agent a hard-edged fully-saturated PLATEAU DISC wherever the
+ *  product reached 1 — at the shipped Intensity 3 that disc covers most of the
+ *  band, and it is the single most visible part of the reported oversaturation.
+ *  The encoding maps [0,∞) → [0,1) so any intensity is expressible with no clip
+ *  and the profile stays strictly monotone across the whole band. */
+function paintGlowSprite(c2: CanvasRenderingContext2D, R: number, r: number, g: number, b: number, unit: number, steepness: number, coreFrac: number, enc: number): void {
   const grad = c2.createRadialGradient(R, R, 0, R, R, R);
   const band = Math.max(1e-4, 1 - coreFrac);
-  const peak = Math.min(1, unit);
+  const encode = (u: number) => 1 - Math.exp(-enc * unit * Math.pow(u, steepness));
   for (let s = 0; s <= GLOW_GRADIENT_STOPS; s++) {
     const t = s / GLOW_GRADIENT_STOPS;
     const u = Math.max(0, Math.min(1, (1 - t) / band));
-    const a = Math.min(1, unit * Math.pow(u, steepness));
-    grad.addColorStop(t, `rgba(${r},${g},${b},${a.toFixed(4)})`);
-  }
-  // Where the clamp bites (intensity > 1): u = (1/unit)^(1/steepness) ⇒ the radius
-  // at which the profile leaves 1. Without this stop the linear interpolation
-  // between two uniform samples cuts the corner off that plateau.
-  if (unit > 1) {
-    const uKink = Math.pow(1 / unit, 1 / Math.max(0.01, steepness));
-    const tKink = 1 - uKink * band;
-    if (tKink > 0 && tKink < 1) grad.addColorStop(tKink, `rgba(${r},${g},${b},1.0000)`);
+    grad.addColorStop(t, `rgba(${r},${g},${b},${encode(u).toFixed(5)})`);
   }
   // A gradient stop exactly AT the core edge, so the plateau's outer boundary is
   // sharp regardless of where the 32 uniform stops happen to land.
-  if (coreFrac > 0 && coreFrac < 1) grad.addColorStop(coreFrac, `rgba(${r},${g},${b},${peak.toFixed(4)})`);
+  if (coreFrac > 0 && coreFrac < 1) grad.addColorStop(coreFrac, `rgba(${r},${g},${b},${encode(1).toFixed(5)})`);
   c2.fillStyle = grad;
   c2.fillRect(0, 0, R * 2, R * 2);
 }
 
 /** A 2R×2R halo sprite for a quantised colour. Null only when the
- *  radius is degenerate. `unit` is the profile's UNCLAMPED peak (= the intensity;
- *  paintGlowSprite clamps it). `size`/`core` ride the cache SIGNATURE
- *  (they are per-frame globals) and together with R fix the core fraction, so
- *  the key stays (quantised colour, R). */
-function glowSpriteFor(r: number, g: number, b: number, R: number, unit: number, steepness: number, size: number, core: number): HTMLCanvasElement | null {
+ *  radius is degenerate. `unit` is the profile's peak (= the intensity).
+ *  `size`/`core`/`enc` ride the cache SIGNATURE (they are per-frame globals) and
+ *  together with R fix the core fraction, so the key stays (quantised colour, R). */
+function glowSpriteFor(r: number, g: number, b: number, R: number, unit: number, steepness: number, size: number, core: number, enc: number): HTMLCanvasElement | null {
   if (R < 1) return null;
-  const sig = `${unit}|${steepness}|${size}|${core}`;
+  const sig = `${unit}|${steepness}|${size}|${core}|${enc}`;
   if (sig !== glowSpriteSig) { GLOW_SPRITES.clear(); glowSpriteSig = sig; }
   const qr = r >> 3, qg = g >> 3, qb = b >> 3;
   const key = ((qr << 10) | (qg << 5) | qb) * 1024 + R;
@@ -242,7 +236,7 @@ function glowSpriteFor(r: number, g: number, b: number, R: number, unit: number,
   const c2 = cv.getContext('2d');
   if (!c2) return null;
   // Paint with the QUANTISED colour so the cached sprite matches its key.
-  paintGlowSprite(c2, R, (qr << 3) | 4, (qg << 3) | 4, (qb << 3) | 4, unit, steepness, glowCoreFrac(R, size, core));
+  paintGlowSprite(c2, R, (qr << 3) | 4, (qg << 3) | 4, (qb << 3) | 4, unit, steepness, glowCoreFrac(R, size, core), enc);
   if (R <= GLOW_MAX_CACHED_R) {
     while (GLOW_SPRITES.size >= GLOW_SPRITE_CACHE_MAX) {
       const oldest = GLOW_SPRITES.keys().next();
@@ -252,6 +246,63 @@ function glowSpriteFor(r: number, g: number, b: number, R: number, unit: number,
     GLOW_SPRITES.set(key, cv);
   }
   return cv;
+}
+
+/** The accumulation scratch. Two entries so the DISPLAY draw and a
+ *  simulation-scope capture (renderSimulationFrame, a different size) can
+ *  alternate every frame without reallocating. NOT `willReadFrequently` — it is
+ *  never read back (that is the whole design; see glowTransferTable). */
+const GLOW_SCRATCH: { cv: HTMLCanvasElement; ctx: CanvasRenderingContext2D }[] = [];
+function glowScratchFor(w: number, h: number): { cv: HTMLCanvasElement; ctx: CanvasRenderingContext2D } | null {
+  for (const e of GLOW_SCRATCH) if (e.cv.width === w && e.cv.height === h) return e;
+  const cv = document.createElement('canvas');
+  cv.width = w; cv.height = h;
+  const ctx = cv.getContext('2d') as CanvasRenderingContext2D | null;
+  if (!ctx) return null;
+  const e = { cv, ctx };
+  GLOW_SCRATCH.push(e);
+  while (GLOW_SCRATCH.length > 2) GLOW_SCRATCH.shift();
+  return e;
+}
+
+/** The decode+tonemap transfer function, as an SVG filter applied on the BLIT of
+ *  the accumulation scratch (see glowTransferTable for why it is a filter and not
+ *  a pixel loop). Module-singleton, rebuilt only when the Intensity slider moves
+ *  the encoding scale. ADOPTS an existing element by id first — a re-evaluated
+ *  module (Vite HMR) must not append a duplicate id, since `url(#…)` resolves the
+ *  FIRST match and the duplicate's table would never reach the canvas (the same
+ *  trap the goo filter records). */
+const GLOW_FILTER_ID = 'genesisca-glow-tonemap';
+let glowFilterFunc: SVGFEFuncAElement | null = null;
+let glowFilterScale = NaN;
+function ensureGlowFilter(encScale: number): string | null {
+  if (typeof document === 'undefined') return null;
+  if (!glowFilterFunc) {
+    const existing = document.getElementById(GLOW_FILTER_ID);
+    if (existing) glowFilterFunc = existing.querySelector('feFuncA');
+    if (!glowFilterFunc) {
+      const NS = 'http://www.w3.org/2000/svg';
+      const svg = document.createElementNS(NS, 'svg');
+      svg.setAttribute('width', '0'); svg.setAttribute('height', '0');
+      svg.style.cssText = 'position:absolute;width:0;height:0;pointer-events:none';
+      const filter = document.createElementNS(NS, 'filter');
+      filter.setAttribute('id', GLOW_FILTER_ID);
+      // MANDATORY: filters default to linearRGB, which would round-trip (and
+      // shift) every colour channel on the way through.
+      filter.setAttribute('color-interpolation-filters', 'sRGB');
+      const ct = document.createElementNS(NS, 'feComponentTransfer');
+      const fa = document.createElementNS(NS, 'feFuncA');
+      fa.setAttribute('type', 'table');
+      ct.appendChild(fa); filter.appendChild(ct); svg.appendChild(filter);
+      document.body.appendChild(svg);
+      glowFilterFunc = fa;
+    }
+  }
+  if (glowFilterScale !== encScale) {
+    glowFilterFunc.setAttribute('tableValues', glowTransferTable(encScale));
+    glowFilterScale = encScale;
+  }
+  return `url(#${GLOW_FILTER_ID})`;
 }
 
 /** The CPU-overlay glow pass — the sibling of the WGSL glow/plain pipeline pair.
@@ -280,40 +331,86 @@ function drawAgentGlow(
   if (!glow.on || glow.intensity <= 0 || glow.size < 0) return;
   const { x: ax, y: ay, radius: ar, alive: aal, colors: acol, highWater: hw } = snap;
   if (hw === 0) return;
-  // ONE pass at the full intensity: the profile is CLAMPED at 1 on both paths now
-  // (fsGlow clamps g; paintGlowSprite clamps the baked alpha), so a Canvas2D alpha
-  // expresses it directly. The old ceil(intensity)-passes trick reproduced the
-  // unclamped additive sum exactly, but under 'screen' repeated passes COMPOUND
-  // (1-(1-u)^n) rather than sum — so it would no longer mean what it meant, and it
-  // is unnecessary once the shader clamps.
   const unit = glow.intensity;
   const core = Math.max(0, Math.min(1, glow.core));
   const haloOn = glow.size > 0;
   ctx.save();
   if (haloOn) {
-    // SCREEN, not 'lighter' — see the GPU's glowBlend: additive CLIPS each channel
-    // at 255 independently, so a dense cluster showed a hard iso-line plateau and
-    // a hue collapse to white past it. Screen saturates asymptotically instead,
-    // and is second-order-identical to additive wherever accumulation is light.
-    ctx.globalCompositeOperation = 'screen';
-    let curAlpha = 1;
+    const enc = glowEncodeScale(unit);
+    // Pass 0 — the agents' screen bounding box. The accumulation scratch and the
+    // tonemap loop are both sized from it, so a sparse or zoomed-in model pays
+    // only for the region its halos actually cover.
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
     for (const [tileOx, tileOy] of tiles) {
       for (let i = 0; i < hw; i++) {
         if (!aal[i]) continue;
         const c = i * 4;
-        const a = acol[c + 3] ?? 255;
-        if (a <= 0) continue;
-        const radPx = Math.max(1.2, ar[i]! * scale);
-        const R = Math.round(radPx + glow.size);
+        if ((acol[c + 3] ?? 255) <= 0) continue;
+        const R = Math.round(Math.max(1.2, ar[i]! * scale) + glow.size);
         if (R < 1) continue;
-        const cx = tileOx + ax[i]! * scale;
-        const cy = tileOy + ay[i]! * scale;
+        const cx = tileOx + ax[i]! * scale, cy = tileOy + ay[i]! * scale;
         if (cx + R < 0 || cx - R > clipW || cy + R < 0 || cy - R > clipH) continue;
-        const sp = glowSpriteFor(acol[c]!, acol[c + 1]!, acol[c + 2]!, R, unit, glow.steepness, glow.size, core);
-        if (!sp) continue;
-        const want = a / 255;
-        if (want !== curAlpha) { ctx.globalAlpha = want; curAlpha = want; }
-        ctx.drawImage(sp, cx - R, cy - R);
+        if (cx - R < minX) minX = cx - R;
+        if (cy - R < minY) minY = cy - R;
+        if (cx + R > maxX) maxX = cx + R;
+        if (cy + R > maxY) maxY = cy + R;
+      }
+    }
+    const bx = Math.max(0, Math.floor(minX)), by = Math.max(0, Math.floor(minY));
+    const boxW = Math.min(clipW, Math.ceil(maxX)) - bx, boxH = Math.min(clipH, Math.ceil(maxY)) - by;
+    const filter = boxW > 0 && boxH > 0 ? ensureGlowFilter(enc) : null;
+    if (filter) {
+      const scratch = glowScratchFor(boxW, boxH);
+      if (scratch) {
+        const s2 = scratch.ctx;
+        // Pass 1 — accumulate, and NEVER read it back. 'screen' on premultiplied
+        // colours is `c ← s + c - s·c` for the colour AND the alpha, so a sprite
+        // baked as (colour·(1-exp(-E·g)), 1-exp(-E·g)) leaves the scratch holding
+        // the hue in its (un-premultiplied) colour and the EXACT log-encoded halo
+        // sum in its alpha. See glowTone.ts.
+        s2.save();
+        s2.globalCompositeOperation = 'copy';   // clear + first write in one op
+        s2.globalAlpha = 1;
+        s2.fillStyle = 'rgba(0,0,0,0)';
+        s2.fillRect(0, 0, boxW, boxH);
+        s2.globalCompositeOperation = 'screen';
+        let curAlpha = 1;
+        for (const [tileOx, tileOy] of tiles) {
+          for (let i = 0; i < hw; i++) {
+            if (!aal[i]) continue;
+            const c = i * 4;
+            const a = acol[c + 3] ?? 255;
+            if (a <= 0) continue;
+            const radPx = Math.max(1.2, ar[i]! * scale);
+            const R = Math.round(radPx + glow.size);
+            if (R < 1) continue;
+            const cx = tileOx + ax[i]! * scale;
+            const cy = tileOy + ay[i]! * scale;
+            if (cx + R < 0 || cx - R > clipW || cy + R < 0 || cy - R > clipH) continue;
+            const sp = glowSpriteFor(acol[c]!, acol[c + 1]!, acol[c + 2]!, R, unit, glow.steepness, glow.size, core, enc);
+            if (!sp) continue;
+            const want = a / 255;
+            if (want !== curAlpha) { s2.globalAlpha = want; curAlpha = want; }
+            s2.drawImage(sp, cx - R - bx, cy - R - by);
+          }
+        }
+        s2.restore();
+        // Pass 2 — decode + tonemap ONCE on the exact sum, as a transfer function
+        // applied BY the blit, and composite with SCREEN — the same rule the
+        // per-halo pass used, applied once. Every property that bought is
+        // unchanged (a halo can only brighten the backdrop, never darken or
+        // overshoot it); what changed is that the compression now happens once
+        // rather than once per overlapping pair.
+        //
+        // ⚠ globalAlpha is SILENTLY IGNORED on a drawImage routed through an SVG
+        // filter in Chromium (the documented goo-filter trap), so per-agent alpha
+        // must already be baked into the accumulation — it is, above.
+        ctx.globalCompositeOperation = 'screen';
+        ctx.globalAlpha = 1;
+        const prevFilter = ctx.filter;
+        ctx.filter = filter;
+        ctx.drawImage(scratch.cv, bx, by);
+        ctx.filter = prevFilter;
       }
     }
   }

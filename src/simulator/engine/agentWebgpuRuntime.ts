@@ -35,6 +35,7 @@ import type { AgentWebGPULayout } from '../../modeler/vpl/compiler/agentWebgpu/l
 import { AGENT_GPU_F32_FIELDS, AGENT_GPU_F32_FIELDS_3D, AGENT_GPU_I32_FIELDS, AGENT_GPU_QUEUE_FIELDS, AGENT_GPU_REQUEST_FIELDS, AGENT_GPU_SPRITE_FIELDS } from '../../modeler/vpl/compiler/agentWebgpu/layout';
 import { emitAgentForcePassWGSL, agentMirrorFields, emitForceControlStruct } from '../../modeler/vpl/compiler/agentWebgpu/forcePass';
 import { acquireSharedGpuDevice, releaseSharedGpuDevice } from './sharedGpuDevice';
+import { GLOW_TONE_EXPOSURE } from '../glowTone';
 
 const REQUEST_FIELD_SET: ReadonlySet<string> = new Set(AGENT_GPU_REQUEST_FIELDS);
 
@@ -1676,6 +1677,16 @@ export interface AgentRenderSurface {
   renderGlow?: boolean;
   renderCopiesX?: number;
   renderCopiesY?: number;
+  /** The glow HDR accumulation target (rgba16float, canvas-sized) + the compose
+   *  pipeline that tonemaps it onto the canvas. Allocated lazily on the first
+   *  glow present (ensureGlowHdrTex) so a glow-off model pays nothing. */
+  glowHdrTex?: GPUTexture | null;
+  glowHdrView?: GPUTextureView | null;
+  glowHdrW?: number;
+  glowHdrH?: number;
+  glowComposePipeline?: GPURenderPipeline | null;
+  glowComposeBGL?: GPUBindGroupLayout | null;
+  glowComposeBindGroup?: GPUBindGroup | null;
   /** Render-only path: reusable CPU scratch for the tight per-frame upload
    *  (x/y/radius runs + alive), so a present doesn't allocate. Absent on the full
    *  webgpu runtime (which uploads via uploadAgentSoA's own persistent scratch). */
@@ -1921,29 +1932,99 @@ fn fsMain(in: VSOut) -> @location(0) vec4<f32> {
   return vec4<f32>(rgb * a, a);
 }
 
-// The SCREEN-blended HALO — zero at the outer edge, full at the core edge. The
-// falloff is remapped over the BAND [coreFrac, 1] so the whole dynamic range
-// lands outside the solid core instead of being spent inside the body. It needs
-// no coverage ramp of its own: t (and therefore the emitted alpha) already
-// reaches zero CONTINUOUSLY at d == 1, so the halo edge was never aliased. The
-// discard just trims the AA pad ring the vertex builder now adds.
+// The HALO — accumulated ADDITIVELY and UNCLAMPED into an rgba16float HDR target
+// (see glowBlend + ensureGlowHdrTex), never straight onto the canvas. The falloff
+// is remapped over the BAND [coreFrac, 1] so the whole dynamic range lands outside
+// the solid core instead of being spent inside the body. It needs no coverage ramp
+// of its own: t (and therefore the emitted value) already reaches zero CONTINUOUSLY
+// at d == 1, so the halo edge was never aliased. The discard just trims the AA pad
+// ring the vertex builder adds.
 //
-// g IS CLAMPED TO [0,1], AND THAT IS LOAD-BEARING UNDER SCREEN, not tidiness:
-// the blend's dst factor is (1 - src), so an emitted value above 1 makes the
-// factor NEGATIVE and the halo SUBTRACTS the backdrop instead of brightening it.
-// Intensity > 1 therefore no longer means "brighter than the colour" (screen has
-// no such state) — it WIDENS the band that reaches full colour, which is the
-// monotone reading of "more intense" that survives a saturating blend.
+// THERE IS NO CLAMP ANY MORE, AND ITS ABSENCE IS THE POINT. The halo used to be
+// SCREEN-blended straight onto the canvas with g clamped to [0,1] (the clamp was
+// load-bearing there — screen's dst factor is (1-src), so an emitted value above 1
+// SUBTRACTS the backdrop). That clamp made every agent carry a hard-edged, fully
+// saturated PLATEAU DISC wherever intensity*t^steepness >= 1 — at the shipped
+// Intensity 3 that disc covers most of the band, which is exactly the "oversaturated,
+// contrast-artifact" look. Writing raw radiance into HDR and compressing ONCE, at
+// compose time, removes the plateau by construction: no channel can be pinned.
 @fragment
 fn fsGlow(in: VSOut) -> @location(0) vec4<f32> {
   let d: f32 = length(in.uv);
   if (d > 1.0) { discard; }
   let band: f32 = max(1.0e-4, 1.0 - in.coreFrac);
   let t: f32 = clamp((1.0 - d) / band, 0.0, 1.0);
-  let g: f32 = clamp(rv.glowIntensity * pow(t, max(0.01, rv.glowSteepness)), 0.0, 1.0);
+  let g: f32 = max(0.0, rv.glowIntensity * pow(t, max(0.01, rv.glowSteepness)));
   return vec4<f32>(in.col.rgb * g, g);
 }`;
 }
+
+/** The HDR→canvas glow compose pass. A fullscreen triangle that reads the
+ *  accumulated halo radiance, tonemaps it ONCE with Reinhard-Jodie, and
+ *  SCREEN-blends the single result onto the canvas.
+ *
+ *  WHY A TONEMAP AND NOT A CLEVERER BLEND (the reference's whole lesson —
+ *  studied from SandboxScience's particle-life-gpu shaders): a per-pair blend is
+ *  MEMORYLESS, so N stacked halos of per-halo display value p always give
+ *  1-(1-p)^N — screen, additive-with-clip, anything. That family exhausts the
+ *  display range after ~4 overlaps for any p bright enough to see one halo, which
+ *  is the plateau. Their renderer instead accumulates every particle additively
+ *  into an rgba16float HDR target and compresses ONCE at compose time (ACES in
+ *  particle-life-gpu/shaders/compose/compose_hdr.wgsl, Reinhard-Jodie / ACES /
+ *  Lottes / AGX selectable in the 3D one). A tonemap sees the EXACT sum, so it can
+ *  spend its shoulder where the density actually is.
+ *
+ *  THE CURVE IS APPLIED TO THE ACCUMULATED MAGNITUDE, AND THE HUE IS KEPT EXACT.
+ *  The halo pass writes `Σ colour·g` into rgb and `Σ g` into alpha, so the mean
+ *  contributing colour is `rgb/alpha` and the magnitude is `alpha`; the compose
+ *  tonemaps the magnitude and re-applies that hue. This is the `c/(1+l)` branch of
+ *  the reference's Reinhard-Jodie taken to its limit, chosen over the full Jodie
+ *  mix (and over per-channel Reinhard) for one measured reason: BOTH of those
+ *  desaturate the highlights, and desaturating highlights is exactly the
+ *  "oversaturated look" that was reported. Measured on the same dense frame at the
+ *  shipped Intensity 3, halo pixels with a channel pinned at 255: per-channel
+ *  additive 37%, full Jodie 68%, hue-exact 2.5%; halo pixels that are near-WHITE:
+ *  12.7% / 0.18% / 0.03%. It is also what makes the CPU sibling term-for-term
+ *  identical (its whole design rests on the magnitude living in the alpha
+ *  channel — see glowTone.ts), so the two 2D paths cannot look different.
+ *
+ *  Reinhard is chosen over ACES-Narkowicz because ACES maps 1.0 -> 0.80 and has
+ *  slope 0.21 at the origin — it expects scene-referred radiance where 1.0 is
+ *  mid-grey, and would darken a sparse field to a fifth. Reinhard has slope 1 at
+ *  the origin (a faint halo is untouched) and a POWER-LAW shoulder, which is what
+ *  keeps the densest cores discriminating: x/(1+x) still separates 5 overlaps
+ *  (0.90) from 30 (0.98) where an exponential shoulder is flat at 1.0 by 5.
+ *
+ *  The composite against the backdrop stays SCREEN, exactly as before, so every
+ *  property that rule bought is unchanged (a halo can only brighten the grid,
+ *  never darken or overshoot it; the transparent agent canvas still composites
+ *  over the page). What changed is that the compression now happens ONCE, on the
+ *  exact sum, instead of once per overlapping pair. */
+const GLOW_COMPOSE_WGSL = `
+const GLOW_EXPOSURE : f32 = ${GLOW_TONE_EXPOSURE.toFixed(4)};
+
+@group(0) @binding(0) var glowHdr : texture_2d<f32>;
+
+@vertex
+fn vsGlowCompose(@builtin(vertex_index) vi: u32) -> @builtin(position) vec4<f32> {
+  var p: vec2<f32> = vec2<f32>(-1.0, -1.0);
+  if (vi == 1u) { p = vec2<f32>(3.0, -1.0); }
+  else if (vi == 2u) { p = vec2<f32>(-1.0, 3.0); }
+  return vec4<f32>(p, 0.0, 1.0);
+}
+
+@fragment
+fn fsGlowCompose(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
+  let hdr: vec4<f32> = textureLoad(glowHdr, vec2<i32>(pos.xy), 0);
+  let mag: f32 = hdr.a;                                  // the exact sum of g
+  if (mag <= 0.0) { discard; }
+  let hue: vec3<f32> = hdr.rgb / mag;                     // weighted mean colour
+  let x: f32 = mag * GLOW_EXPOSURE;
+  let t: f32 = x / (1.0 + x);                            // Reinhard on the magnitude
+  // Premultiplied by construction: hue's channels are <= 1, so rgb <= a — VALID
+  // for the 'premultiplied' canvas, and the same pixel the CPU filter produces.
+  return vec4<f32>(clamp(hue, vec3<f32>(0.0), vec3<f32>(1.0)) * t, t);
+}`;
 
 // ---------------------------------------------------------------------------
 // Phase C — 3D sphere-impostor render (agents-only, is3D, no bonds, alpha-blend
@@ -2094,6 +2175,59 @@ function ensureAgentDepthTex(rt: AgentRenderSurface, w: number, h: number): GPUT
   return rt.renderDepthTex.createView();
 }
 
+/** The glow HDR accumulation format. rgba16float is renderable AND blendable in
+ *  core WebGPU (rgba32float is neither blendable nor guaranteed), which is what
+ *  lets the halo pass sum with a plain additive blend and no clipping. */
+const GLOW_HDR_FORMAT: GPUTextureFormat = 'rgba16float';
+
+/** Lazily (re)allocate the canvas-sized HDR halo target + its compose bind group.
+ *  Returns null when the compose pipeline isn't built (then the caller skips the
+ *  glow entirely rather than rendering a wrong one). */
+function ensureGlowHdrTex(rt: AgentRenderSurface, w: number, h: number): GPUTextureView | null {
+  if (!rt.glowComposeBGL || !rt.glowComposePipeline) return null;
+  const W = Math.max(1, w), H = Math.max(1, h);
+  if (!rt.glowHdrTex || rt.glowHdrW !== W || rt.glowHdrH !== H) {
+    if (rt.glowHdrTex) { try { rt.glowHdrTex.destroy(); } catch { /* non-fatal */ } }
+    rt.glowHdrTex = rt.device.createTexture({
+      label: 'agent-glow-hdr', size: { width: W, height: H },
+      format: GLOW_HDR_FORMAT,
+      usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
+    });
+    rt.glowHdrView = rt.glowHdrTex.createView();
+    rt.glowHdrW = W; rt.glowHdrH = H;
+    rt.glowComposeBindGroup = rt.device.createBindGroup({
+      label: 'agent-glow-compose-bg', layout: rt.glowComposeBGL,
+      entries: [{ binding: 0, resource: rt.glowHdrView }],
+    });
+  }
+  return rt.glowHdrView ?? null;
+}
+
+function destroyGlowHdrTex(rt: AgentRenderSurface): void {
+  if (rt.glowHdrTex) { try { rt.glowHdrTex.destroy(); } catch { /* non-fatal */ } }
+  rt.glowHdrTex = null; rt.glowHdrView = null;
+  rt.glowComposeBindGroup = null;
+  rt.glowHdrW = 0; rt.glowHdrH = 0;
+}
+
+/** Append the HDR halo accumulation pass (additive, cleared to zero). Returns
+ *  false when the HDR target could not be built — the caller then skips the
+ *  compose too, so a failure degrades to "no glow", never to a wrong one. */
+function encodeGlowHdrPass(rt: AgentRenderSurface, enc: GPUCommandEncoder, w: number, h: number, insts: number): boolean {
+  if (!rt.renderGlowPipeline || !rt.renderBindGroup) return false;
+  const hdrView = ensureGlowHdrTex(rt, w, h);
+  if (!hdrView) return false;
+  const gp = enc.beginRenderPass({
+    label: 'agent-glow-hdr-pass',
+    colorAttachments: [{ view: hdrView, loadOp: 'clear', storeOp: 'store', clearValue: { r: 0, g: 0, b: 0, a: 0 } }],
+  });
+  gp.setPipeline(rt.renderGlowPipeline);
+  gp.setBindGroup(0, rt.renderBindGroup);
+  gp.draw(4, insts);
+  gp.end();
+  return true;
+}
+
 /** Write the 3D camera/lighting uniform (176 bytes, mirrors RENDER_VIEW_3D_WGSL). */
 export function uploadAgentRenderView3D(rt: AgentRenderSurface, v: AgentRenderView3D): void {
   if (!rt.renderView3DBuf) return;
@@ -2218,17 +2352,23 @@ async function buildAgentDiscPipelines(rt: AgentRenderSurface): Promise<boolean>
     color: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
     alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
   };
-  // SCREEN, not additive: out = s + d*(1 - s). The halo used to be src=ONE/dst=ONE,
-  // which CLIPS each channel independently at 1 — so a dense cluster hit a hard
-  // iso-line where the sum crossed 1 (a visible contrast plateau) and, past it, the
-  // channels finished saturating one by one and the hue collapsed to white. Screen
-  // approaches full brightness ASYMPTOTICALLY (N stacked halos give 1-(1-x)^N per
-  // channel), so there is no plateau boundary and a saturated colour keeps its hue
-  // far longer. At low accumulation s*d is second-order, so a single halo — and a
-  // sparse field — is near-identical to the additive look. The alpha factor is the
-  // standard source-over rule, which is screen's own alpha and is what keeps the
-  // transparent agent canvas compositing correctly over the page / the grid layer.
+  // PURE ADDITIVE — but into the rgba16float HDR target, NOT the canvas. Additive
+  // is only ever wrong when the destination CLIPS; in float it is the exact sum,
+  // which is precisely what the compose pass needs to tonemap. (Historically this
+  // was additive straight onto the 8-bit canvas — which clipped, giving the hard
+  // iso-line + hue collapse — and was then changed to SCREEN onto the canvas, which
+  // removed the clip but replaced it with a per-PAIR compression that exhausts the
+  // display range after ~4 overlaps. Accumulate-exactly-then-compress-once is the
+  // architecture the reference uses and the one that fixes both.)
   const glowBlend: GPUBlendState = {
+    color: { srcFactor: 'one', dstFactor: 'one', operation: 'add' },
+    alpha: { srcFactor: 'one', dstFactor: 'one', operation: 'add' },
+  };
+  // The tonemapped halo layer composites onto the canvas with SCREEN — the same
+  // rule the per-halo pass used, applied ONCE. Screen's own alpha rule is
+  // source-over, which is what keeps the transparent agent canvas compositing
+  // correctly over the page / the E2 grid layer.
+  const glowComposeBlend: GPUBlendState = {
     color: { srcFactor: 'one', dstFactor: 'one-minus-src', operation: 'add' },
     alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
   };
@@ -2238,7 +2378,37 @@ async function buildAgentDiscPipelines(rt: AgentRenderSurface): Promise<boolean>
   if (rt.renderViewBuf) { try { rt.renderViewBuf.destroy(); } catch { /* non-fatal */ } }
   rt.renderViewBuf = renderViewBuf;
   rt.renderPlainPipeline = mkPipe('agent-render-plain', plainBlend, 'vsMain', 'fsMain');
-  rt.renderGlowPipeline = mkPipe('agent-render-glow', glowBlend, 'vsGlow', 'fsGlow');
+  // The halo pipeline targets the HDR format, so it CANNOT share mkPipe's canvas target.
+  rt.renderGlowPipeline = rt.device.createRenderPipeline({
+    label: 'agent-render-glow', layout: pl,
+    vertex: { module, entryPoint: 'vsGlow' },
+    fragment: { module, entryPoint: 'fsGlow', targets: [{ format: GLOW_HDR_FORMAT, blend: glowBlend }] },
+    primitive: { topology: 'triangle-strip' },
+  });
+  // The HDR→canvas compose (its own module + bind-group layout: one sampled texture).
+  const composeModule = rt.device.createShaderModule({ code: GLOW_COMPOSE_WGSL });
+  const composeInfo = await composeModule.getCompilationInfo();
+  const composeErrs = composeInfo.messages.filter(m => m.type === 'error');
+  if (composeErrs.length > 0) {
+    // eslint-disable-next-line no-console
+    console.error('[agents/webgpu] glow compose WGSL compile errors:\n' + composeErrs.map(m => `  line ${m.lineNum}: ${m.message}`).join('\n'));
+    return false;
+  }
+  const composeBGL = rt.device.createBindGroupLayout({
+    label: 'agent-glow-compose-bgl',
+    entries: [{ binding: 0, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'unfilterable-float' } }],
+  });
+  rt.glowComposeBGL = composeBGL;
+  rt.glowComposePipeline = rt.device.createRenderPipeline({
+    label: 'agent-glow-compose',
+    layout: rt.device.createPipelineLayout({ label: 'agent-glow-compose-pl', bindGroupLayouts: [composeBGL] }),
+    vertex: { module: composeModule, entryPoint: 'vsGlowCompose' },
+    fragment: { module: composeModule, entryPoint: 'fsGlowCompose', targets: [{ format, blend: glowComposeBlend }] },
+    primitive: { topology: 'triangle-list' },
+  });
+  // A re-attach rebuilds the pipelines on the SAME surface — drop the previous HDR
+  // target (its bind group belongs to the OLD layout) instead of orphaning it.
+  destroyGlowHdrTex(rt);
   rt.renderBindGroup = rt.device.createBindGroup({
     label: 'agent-render-bg', layout: bgl,
     entries: [
@@ -2452,17 +2622,24 @@ export function presentCompositeEncode(rt: AgentRenderSurface, enc: GPUCommandEn
   // renderClear) so agents sit on a solid backdrop.
   if (showAgents || !showGrid) {
     const [cr, cg, cb, ca] = rt.renderClear ?? [0, 0, 0, 0];
+    const copies = Math.max(1, rt.renderCopiesX ?? 1) * Math.max(1, rt.renderCopiesY ?? 1);
+    const insts = Math.max(1, hw) * copies;
+    // The HDR halo pass must be encoded BEFORE the canvas pass begins (a render
+    // pass cannot be nested), exactly as in presentAgentsEncode.
+    const glow = showAgents && !!rt.renderGlow && encodeGlowHdrPass(rt, enc, tex.width, tex.height, insts);
     const ap = enc.beginRenderPass({
       label: 'agent-composite-pass',
       colorAttachments: [{ view, loadOp: showGrid ? 'load' : 'clear', storeOp: 'store', clearValue: { r: cr, g: cg, b: cb, a: ca } }],
     });
     if (showAgents) {
-      ap.setBindGroup(0, rt.renderBindGroup);
-      const copies = Math.max(1, rt.renderCopiesX ?? 1) * Math.max(1, rt.renderCopiesY ?? 1);
-      const insts = Math.max(1, hw) * copies;
-      // Screen-blended halo UNDER the opaque core (see agentRenderWGSL).
-      if (rt.renderGlow) { ap.setPipeline(rt.renderGlowPipeline!); ap.draw(4, insts); }
+      // Tonemapped halo layer OVER the grid, opaque cores over that.
+      if (glow) {
+        ap.setPipeline(rt.glowComposePipeline!);
+        ap.setBindGroup(0, rt.glowComposeBindGroup!);
+        ap.draw(3);
+      }
       ap.setPipeline(rt.renderPlainPipeline!);
+      ap.setBindGroup(0, rt.renderBindGroup);
       ap.draw(4, insts);
     }
     ap.end();
@@ -2583,20 +2760,30 @@ export function presentAgentsEncode(rt: AgentRenderSurface, enc: GPUCommandEncod
   // so patch it here from the value the caller passes (cheap 4-byte write, queued
   // before this encoder's submit reads it).
   rt.device.queue.writeBuffer(rt.renderViewBuf, 0, new Uint32Array([Math.max(1, hw) >>> 0]).buffer);
-  const view = rt.renderCtx.getCurrentTexture().createView();
+  const tex = rt.renderCtx.getCurrentTexture();
+  const view = tex.createView();
   const [cr, cg, cb, ca] = rt.renderClear ?? [0, 0, 0, 0];
+  const copies = Math.max(1, rt.renderCopiesX ?? 1) * Math.max(1, rt.renderCopiesY ?? 1);
+  const insts = Math.max(1, hw) * copies;
+  // THREE passes when Glow is on: the halo accumulates additively into the HDR
+  // target, the compose tonemaps it ONCE onto the canvas, then the opaque core
+  // draws over it. HALO UNDER CORE is the solid-core invariant (glow ON must leave
+  // fully-opaque body pixels bit-identical); accumulate-then-compress is what
+  // removes the density plateau (see GLOW_COMPOSE_WGSL).
+  const glow = !!rt.renderGlow && encodeGlowHdrPass(rt, enc, tex.width, tex.height, insts);
   const pass = enc.beginRenderPass({
     label: 'agent-present',
     colorAttachments: [{ view, loadOp: 'clear', storeOp: 'store', clearValue: { r: cr, g: cg, b: cb, a: ca } }],
   });
-  pass.setBindGroup(0, rt.renderBindGroup);
-  const copies = Math.max(1, rt.renderCopiesX ?? 1) * Math.max(1, rt.renderCopiesY ?? 1);
-  const insts = Math.max(1, hw) * copies;
-  // TWO passes when Glow is on: the screen-blended halo FIRST, the opaque core over it
-  // (see agentRenderWGSL). Glow used to REPLACE the disc, which is exactly why an
-  // isolated agent had no crisp body.
-  if (rt.renderGlow) { pass.setPipeline(rt.renderGlowPipeline!); pass.draw(4, insts); }
+  if (glow) {
+    pass.setPipeline(rt.glowComposePipeline!);
+    pass.setBindGroup(0, rt.glowComposeBindGroup!);
+    pass.draw(3);
+  }
+  // Set the pipeline BEFORE its bind group: the compose uses a different bind-group
+  // layout, and a pipeline switch invalidates incompatible groups.
   pass.setPipeline(rt.renderPlainPipeline!);
+  pass.setBindGroup(0, rt.renderBindGroup);
   pass.draw(4, insts);
   pass.end();
 }
@@ -2728,6 +2915,7 @@ export function destroyAgentRenderSurface(rt: AgentRenderSurface | null): void {
   rt.renderCtx = null;
   rt.renderComposite = false;
   if (rt.renderDepthTex) { try { rt.renderDepthTex.destroy(); } catch { /* non-fatal */ } rt.renderDepthTex = null; }
+  destroyGlowHdrTex(rt);
   const bufs = [rt.agentF32Buf, rt.agentAliveBuf, rt.agentColorsBuf, rt.renderViewBuf ?? null, rt.renderView3DBuf ?? null, rt.gridPresentUniform ?? null];
   for (const b of bufs) { if (b) try { b.destroy(); } catch { /* non-fatal */ } }
   // E1: release the shared-device reference (was: destroy a per-surface device).
@@ -3620,6 +3808,7 @@ export function destroyAgentWebGPURuntime(rt: AgentWebGPURuntime | null): void {
   rt.renderCtx = null;
   rt.renderComposite = false;
   if (rt.renderDepthTex) { try { rt.renderDepthTex.destroy(); } catch { /* non-fatal */ } rt.renderDepthTex = null; }
+  destroyGlowHdrTex(rt);
   for (const b of bufs) { if (b) try { b.destroy(); } catch { /* non-fatal */ } }
   for (const bucket of rt.stagingPool.values()) for (const e of bucket) { try { e.buffer.destroy(); } catch { /* non-fatal */ } }
   rt.stagingPool.clear();

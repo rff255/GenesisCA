@@ -52,6 +52,77 @@ the 3D render seam after it lands.
 > - the CPU 2D path draws an opaque core disc of radius `coreR` **only when
 >   `core > 0`** (at 0 the agent's own body IS the core), so sprites/metaballs
 >   are untouched by default. gl3d should follow the same rule.
+>
+> **UPDATE 3 (branch `updates`, 2026-08-07) — THE 2D ARCHITECTURE CHANGED AGAIN,
+> AND THE REFERENCE SAYS 3D IS A DIFFERENT TECHNIQUE ENTIRELY. READ THIS BEFORE
+> ANYTHING BELOW; §"Design" is now WRONG for 3D.**
+>
+> 2D was reworked to **accumulate-exactly-then-compress-once** (HDR additive
+> accumulation + ONE tonemap), ported from the SandboxScience Particle Life
+> renderer at the user's request. See the "Agent glow" section of CLAUDE.md for
+> the full design. The relevant part for 3D:
+>
+> **THE REFERENCE HAS NO PER-PARTICLE GLOW IN 3D.** Its 2D
+> `assets/particle-life-gpu/shaders/render/particle_render_glow.wgsl` draws an
+> enlarged quad per particle with `pow(saturate(1 - dist²), steepness)`, additive
+> into `rgba16float`. Its **3D**
+> `assets/particle-life-gpu-3d/shaders/render/particle_render_glow.wgsl` contains
+> ONLY `vertexCircle`/`fragmentCircle` — **no glow quads at all**. The 3D glow is
+> a **dual-Kawase BLOOM post-process** (`assets/particle-life-gpu-3d/shaders/compose/bloom.wgsl`):
+> soft-knee bright pass → downsample chain → upsample chain → added to the HDR
+> colour (`hdr_color + bloom_color * bloom.intensity`) before the tonemap in
+> `compose/compose_hdr.wgsl`. That is a screen-space effect on the whole 3D
+> scene, not a per-agent halo — and it is *why* their 3D reads better than a
+> billboard would: a bloom blooms the SPHERE SHADING (specular highlight, rim,
+> the bright side of every sphere), which is exactly the 3D cue a flat additive
+> billboard cannot give.
+>
+> ⇒ **§"Design" below (a per-particle additive billboard pass mirrored in the two
+> renderers) is superseded.** Doing it that way would put a flat 2D halo on a lit
+> 3D sphere and would NOT look like the reference. The correct 3D port is the
+> bloom chain, and it must land in BOTH renderers (see §2 — the free/frame split
+> is unchanged and still binding).
+>
+> **WHY IT WAS NOT DONE IN THE 2D SESSION** (explicit scope call, user-sanctioned
+> — "2D quality is the primary ask… do not ship a half-verified 3D path"):
+> - it is **two HDR pipelines, not one shader**. The WGSL sphere pass can take an
+>   `rgba16float` target + a compose pass the way `presentAgentsEncode` now does
+>   for 2D — but **gl3d is WebGL2** and has no float target today: it needs
+>   `EXT_color_buffer_float` (or `_half_float`) probed at context creation with a
+>   fallback for adapters that lack it, a float FBO sized to the canvas and
+>   resized with it, ping-pong FBO chains for the Kawase levels (≈4–6 mip levels,
+>   each an FBO + texture), two new GLSL programs (bright pass, blur), and a
+>   compose blit — all inside a renderer that currently draws straight to the
+>   default framebuffer and whose `render()` also serves the PICK FBO and the
+>   shadow map.
+> - **the two must MATCH across the free↔frame flip**, and a bloom's look is
+>   dominated by mip count, kernel offsets and the knee — three chances for the
+>   two implementations to drift in a way only a human eye can catch.
+> - **the doc's own verification bar requires a VISIBLE-pane eyeball** (§Verification),
+>   which the automated session cannot supply. Shipping it unseen would be
+>   exactly the half-verified path the brief forbids.
+>
+> **WHAT THE NEXT SESSION INHERITS (all reusable):**
+> - `src/simulator/glowTone.ts` — the shared exposure + curve. A 3D compose must
+>   use the SAME `GLOW_TONE_EXPOSURE` and the same `x/(1+x)` on the magnitude, or
+>   3D and 2D will disagree about what Intensity means.
+> - `agentWebgpuRuntime.ts`: `GLOW_HDR_FORMAT`, `ensureGlowHdrTex` /
+>   `destroyGlowHdrTex` / `encodeGlowHdrPass`, and `GLOW_COMPOSE_WGSL` — the HDR
+>   target + compose scaffolding is already built and already teardown-safe; the
+>   sphere path needs the same three calls plus the bloom chain between them.
+> - the `[glow-arch]` block in `scripts/verify-agent-render.mjs` — extend it with
+>   the 3D pins rather than starting a new block (it is negative-controlled,
+>   10/10 mutations caught).
+> - **the UI gate is still `!is3D`** and the tooltip still says 3D is unsupported;
+>   both are in SimulatorView's agent common-controls.
+>
+> **A CHEAPER OPTION, if the full bloom is judged not worth it:** the reference's
+> bloom is a *scene* effect, so a defensible reduced scope is "bloom the agent
+> layer only" — the WGSL sphere pass already renders into its own canvas, and
+> gl3d could render agents to an offscreen FBO. That halves the integration risk
+> (no interaction with voxels / bonds / overlays / shadows) at the cost of not
+> blooming the CA grid behind the agents. Decide deliberately; do not drift into
+> it.
 
 ---
 
@@ -76,7 +147,14 @@ the 3D render seam after it lands.
    That breaks the project's feature-preservation rule and reads as a bug.
    ⇒ **The effect must exist in BOTH renderers.**
 
-## Design (follow the Phase C precedent)
+## Design — ⚠ SUPERSEDED BY UPDATE 3 (kept for the free/frame reasoning only)
+
+The per-particle billboard design below is **not** what the reference does in 3D
+and should not be implemented as written; UPDATE 3 explains why and what replaces
+it. What still holds verbatim from this section: the draw-ordering / depth rules
+(§2 and the gl3d bullet's `depthMask(false)`), the "implement it ONCE and mirror
+it, as Phase C did for projection + lighting" discipline, and the UI gate to drop.
+
 
 - Implement the falloff ONCE as a shared formula and mirror it in the two
   shading languages, exactly as Phase C handled projection + lighting by
@@ -110,6 +188,12 @@ the 3D render seam after it lands.
   noticeable. Flag it for the user rather than claiming it.
 - NB the 2D glow's visual result has never been eyeballed either (branch
   verification debt) — check it in the same pass and fix if it looks wrong.
+  **UPDATE 3**: 2D has now been eyeballed via downloaded PNGs (old/new/off) and
+  measured numerically (see the CLAUDE.md "Agent glow" section); the remaining
+  eyeball debt is 3D's free↔frame match.
 
 ## Completion Report
-(fill in when executed)
+NOT EXECUTED. Deliberately deferred by the 2D-rework session (2026-08-07) —
+see **UPDATE 3** at the top for the reference finding that invalidates the
+original design, the scope reasoning, and the scaffolding the next session
+inherits.
