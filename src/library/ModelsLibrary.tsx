@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { CAModel } from '../model/types';
 import { createdDateTimestamp, formatCreatedDate } from '../model/createdDate';
 import { ThumbMedia } from '../components/ThumbMedia';
@@ -190,6 +190,13 @@ interface HoverState {
   cardRect: CardRect;
 }
 
+/** Viewport-coordinate hit test — the geometric half of the popover keep-alive
+ *  rule (see `handleCardLeave`). A null rect never contains anything. */
+function pointInRect(rect: DOMRect | CardRect | null, x: number, y: number): boolean {
+  if (!rect) return false;
+  return x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom;
+}
+
 function computePopoverPosition(
   card: CardRect,
   popoverWidth: number,
@@ -339,6 +346,10 @@ export function ModelsLibrary({ onLoadModel }: Props) {
     return m;
   }, [entries]);
 
+  /** id → entry, so the document-level move handler can hand the preview to a
+   *  card it finds by hit test (it only has a DOM element, not the entry). */
+  const entryById = useMemo(() => new Map(entries.map(e => [e.id, e])), [entries]);
+
   // Category catalogue: case-insensitive canonical tags (incl. the synthetic
   // 3D / Agents) with usage counts, sorted by frequency then name.
   const tagCatalog = useMemo(() => {
@@ -412,11 +423,18 @@ export function ModelsLibrary({ onLoadModel }: Props) {
     }
   };
 
-  const handleCardEnter = (entry: LibraryEntry, el: HTMLElement) => {
-    // Already showing for this card — the pointer just came back from the
-    // popover (its tag chips take pointer events, so leaving one re-enters the
-    // card). Re-building the hover state here would needlessly re-measure.
-    if (hoveredId === entry.id) { hoverCardElRef.current = el; return; }
+  /**
+   * The open popover's viewport rect, or null when there is none / it is still
+   * being measured (rendered unpositioned + `visibility: hidden` for one frame).
+   * Read straight off the DOM so it can never lag a state mirror.
+   */
+  const popoverRect = useCallback((): DOMRect | null => {
+    const el = popoverRef.current;
+    if (!el || el.style.visibility === 'hidden') return null;
+    return el.getBoundingClientRect();
+  }, []);
+
+  const openPreview = useCallback((entry: LibraryEntry, el: HTMLElement) => {
     setHoveredId(entry.id);
     hoverCardElRef.current = el;
     // NOTE the show-condition deliberately does NOT include tags: the popover's
@@ -434,16 +452,46 @@ export function ModelsLibrary({ onLoadModel }: Props) {
       tags: effTagsById.get(entry.id) ?? [],
       cardRect: { top: r.top, bottom: r.bottom, left: r.left, right: r.right },
     });
+  }, [effTagsById]);
+
+  const clearPreview = useCallback(() => {
+    setHoveredId(null);
+    setHover(null);
+    hoverCardElRef.current = null;
+  }, []);
+
+  const handleCardEnter = (entry: LibraryEntry, el: HTMLElement, x: number, y: number) => {
+    // Already showing for this card — the pointer just came back from the
+    // popover (its tag chips take pointer events, so leaving one re-enters the
+    // card). Re-building the hover state here would needlessly re-measure.
+    if (hoveredId === entry.id) { hoverCardElRef.current = el; return; }
+    // The popover is BIGGER than its card and pointer-transparent, so a
+    // NEIGHBOURING card underneath its overhang receives this enter while the
+    // user is merely crossing the popover (typically aiming for a tag chip).
+    // Geometry decides: inside the open popover's rect ⇒ the preview stays put.
+    // (Moving onto a card that is NOT under the popover still switches, and a
+    // card the pointer keeps walking into past the popover's edge is picked up
+    // by the document-level move handler below.)
+    if (pointInRect(popoverRect(), x, y)) return;
+    openPreview(entry, el);
   };
 
   /**
-   * Leave handler shared by the card AND the popover. The popover's tag chips
-   * are the ONE part of it that takes pointer events, so moving the pointer
-   * onto a chip fires the CARD's mouseleave (the chip is not in the card's DOM
-   * subtree) and moving off it fires the POPOVER's — clearing on either would
-   * unmount the popover, put the pointer back over the card, re-mount it, and
-   * flicker forever. So the preview survives any move BETWEEN the two, and
-   * drops only when the pointer leaves both.
+   * Leave handler shared by the card AND the popover, with TWO keep-alive
+   * tests — a DOM one and a GEOMETRIC one.
+   *
+   * DOM: the popover's tag chips are the only part of it that takes pointer
+   * events, so moving the pointer onto a chip fires the CARD's mouseleave (the
+   * chip is not in the card's DOM subtree) and moving off it fires the
+   * POPOVER's — clearing on either would unmount the popover, put the pointer
+   * back over the card, re-mount it, and flicker forever.
+   *
+   * GEOMETRIC: the popover is pointer-transparent AND larger than the card, so
+   * moving into the part of it that OVERHANGS the card hit-tests straight
+   * through to whatever is underneath (a neighbouring card, the grid, a gap) —
+   * a relatedTarget that is in neither DOM subtree, which used to kill the
+   * preview halfway to a tag chip. Anything inside the popover's rect keeps it;
+   * the document `mousemove` listener below is what finally drops it.
    *
    * ⚠ Reads the NATIVE event's relatedTarget: React SYNTHESIZES enter/leave
    * from mouseover/mouseout, and the `relatedTarget` it puts on the synthetic
@@ -454,10 +502,46 @@ export function ModelsLibrary({ onLoadModel }: Props) {
     const related = e.nativeEvent.relatedTarget;
     const node = related instanceof globalThis.Node ? related : null;
     if (node && (popoverRef.current?.contains(node) || hoverCardElRef.current?.contains(node))) return;
-    setHoveredId(null);
-    setHover(null);
-    hoverCardElRef.current = null;
+    if (pointInRect(popoverRect(), e.clientX, e.clientY)) return;
+    clearPreview();
   };
+
+  /**
+   * The exit half of the geometric keep-alive. Leave events alone cannot see
+   * the pointer cross OUT of the popover's rect: most of the popover is
+   * pointer-transparent, so the pointer travels between elements that are
+   * neither the card nor the popover and no leave ever fires for them. So while
+   * a preview is open, one document-level move listener owns the decision.
+   */
+  const handleGlobalMove = useCallback((ev: MouseEvent) => {
+    const { clientX: x, clientY: y } = ev;
+    if (pointInRect(popoverRect(), x, y)) return;             // still over the popover
+    const card = hoverCardElRef.current;
+    if (card && pointInRect(card.getBoundingClientRect(), x, y)) return;  // still on its card
+    // Left both. Hand the preview to whatever card is under the pointer — its
+    // own mouseenter already fired (and early-returned) while it was under the
+    // popover, so nothing else would switch it — else drop the preview.
+    const el = document.elementFromPoint(x, y);
+    const next = el instanceof Element ? el.closest<HTMLElement>('[data-library-card]') : null;
+    if (next) {
+      if (next === card) return;
+      const entry = next.dataset.libraryCard ? entryById.get(next.dataset.libraryCard) : undefined;
+      if (entry) { openPreview(entry, next); return; }
+    }
+    clearPreview();
+  }, [popoverRect, entryById, openPreview, clearPreview]);
+
+  const previewOpen = hover !== null;
+  useEffect(() => {
+    if (!previewOpen) return;
+    const onDocLeave = () => clearPreview();
+    document.addEventListener('mousemove', handleGlobalMove);
+    document.documentElement.addEventListener('mouseleave', onDocLeave);
+    return () => {
+      document.removeEventListener('mousemove', handleGlobalMove);
+      document.documentElement.removeEventListener('mouseleave', onDocLeave);
+    };
+  }, [previewOpen, handleGlobalMove, clearPreview]);
 
   /** Toggle the category filter from a card's tag chip. */
   const toggleTagFilter = (tag: string) => {
@@ -469,8 +553,11 @@ export function ModelsLibrary({ onLoadModel }: Props) {
     <div
       key={entry.id}
       className={styles.card}
+      // Read back by the document move handler's hit test (it finds a card
+      // element and needs its entry).
+      data-library-card={entry.id}
       onClick={() => handleClick(entry)}
-      onMouseEnter={e => handleCardEnter(entry, e.currentTarget)}
+      onMouseEnter={e => handleCardEnter(entry, e.currentTarget, e.clientX, e.clientY)}
       onMouseLeave={handleCardLeave}
     >
       <div className={styles.cardName} title={entry.name}>{entry.name}</div>
