@@ -543,9 +543,14 @@ function forceFrameOpaque(data: Uint8ClampedArray): void {
  *  out of the capture-controls reorganisation (a full <select> for an either/or
  *  was the most wasteful control on the transport bar). Used by the capture
  *  popover; `disabled` greys the whole segment IN PLACE (never unmounted) so the
- *  popover's geometry is stable and the reason can be stated beneath it. */
+ *  popover's geometry is stable, and the reason lives in the ROW's `title` —
+ *  never in always-visible prose beneath it (the popover is a control surface,
+ *  not a manual). Each option carries its own `title` with what that choice
+ *  does; a browser does not fire mouse events on a DISABLED button, so a
+ *  disabled option's tooltip resolves to the row wrapper's title instead —
+ *  which is exactly where the "why is this greyed?" reason is written. */
 function captureSegment<T extends string>(
-  options: ReadonlyArray<{ label: string; value: T; disabled?: boolean }>,
+  options: ReadonlyArray<{ label: string; value: T; disabled?: boolean; title?: string }>,
   value: T,
   onPick: (v: T) => void,
   disabled: boolean,
@@ -558,6 +563,7 @@ function captureSegment<T extends string>(
           type="button"
           className={`${styles.captureSegBtn} ${value === o.value ? styles.captureSegBtnOn : ''}`}
           disabled={disabled || o.disabled}
+          title={o.title}
           onClick={() => onPick(o.value)}
         >{o.label}</button>
       ))}
@@ -12637,7 +12643,8 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
           // The cursor / highlight overlay layers can only be composited onto a
           // VIEW-area 2D capture (see compositeCaptureOverlays) \u2014 with the capture
           // area set to Simulation, or in 3D, the control has nothing to act on, so
-          // it is disabled IN PLACE with the reason stated beneath (never unmounted).
+          // it is disabled IN PLACE with the reason in its row tooltip (never
+          // unmounted, and never as always-visible prose).
           const overlaysSimArea = captureScope === 'simulation';
           const overlaysUnavailable = is3D || overlaysSimArea;
           const chipParts = [
@@ -12733,19 +12740,26 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
                     {/* ONE area for BOTH screenshots and recordings \u2014 "what am I
                         framing?" is the same question whichever button you press,
                         so it is asked once. It leads the popover for the same
-                        reason, with the recording-only settings below the rule. */}
-                    <div className={`${styles.captureRow} ${is3D ? styles.captureRowDisabled : ''}`}>
+                        reason, with the recording-only settings below the rule.
+                        Every explanation is a TOOLTIP (row = what the setting is
+                        / why it is greyed; option = what that choice does), never
+                        visible prose \u2014 see the captureSegment doc comment. */}
+                    <div
+                      className={`${styles.captureRow} ${is3D ? styles.captureRowDisabled : ''}`}
+                      title={is3D
+                        ? 'A 3D scene fills the frame \u2014 there is no separate simulation crop.'
+                        : 'What a capture frames \u2014 applies to screenshots and recordings alike.'}
+                    >
                       <span>Capture area</span>
                       {captureSegment(
-                        [{ label: 'View', value: 'view' as RecordScope }, { label: 'Simulation', value: 'simulation' as RecordScope }],
+                        [
+                          { label: 'View', value: 'view' as RecordScope, title: 'Current view: the display canvas exactly as shown, with your zoom & pan.' },
+                          { label: 'Simulation', value: 'simulation' as RecordScope, title: 'Simulation: the whole grid / world framed to fit, independent of your zoom & pan.' },
+                        ],
                         is3D ? 'view' : captureScope,
                         setCaptureScope,
                         is3D,
                       )}
-                    </div>
-                    <div className={styles.captureWhyStack}>
-                      <div className={`${styles.captureWhy} ${is3D ? '' : styles.captureWhyHidden}`}>A 3D scene fills the frame &mdash; there is no separate simulation crop.</div>
-                      <div className={`${styles.captureWhy} ${is3D ? styles.captureWhyHidden : ''}`}>Applies to screenshots and recordings alike. Simulation: the whole grid / world framed to fit, independent of your zoom &amp; pan. View: the display canvas exactly as shown.</div>
                     </div>
 
                     {/* The brush cursor and the highlight rings live on overlay
@@ -12754,64 +12768,81 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
                         overlay is positioned by the live pan/zoom, so it cannot be
                         pasted onto the fit-framed Simulation image) and 2D only
                         (3D draws its brush visuals into the scene itself). */}
-                    <div className={`${styles.captureRow} ${overlaysUnavailable ? styles.captureRowDisabled : ''}`}>
+                    <div
+                      className={`${styles.captureRow} ${overlaysUnavailable ? styles.captureRowDisabled : ''}`}
+                      title={is3D
+                        ? 'In 3D the brush outline, hovered cells and inspect rings are drawn into the scene itself \u2014 every 3D capture already includes them.'
+                        : overlaysSimArea
+                          ? 'The cursor is a view overlay \u2014 set the capture area above to View to include it.'
+                          : 'Composite the cursor / highlight overlay layers into View-area captures (they sit above the scene, so a capture never contains them otherwise).'}
+                    >
                       <span>Cursor &amp; highlights</span>
                       {captureSegment(
                         [
-                          { label: 'Off', value: 'off' as CaptureOverlayMode },
-                          { label: 'Highlights', value: 'highlights' as CaptureOverlayMode },
-                          { label: 'All', value: 'all' as CaptureOverlayMode },
+                          { label: 'Off', value: 'off' as CaptureOverlayMode, title: 'Capture the scene alone \u2014 no rings, no cursor.' },
+                          { label: 'Highlights', value: 'highlights' as CaptureOverlayMode, title: 'Add the coloured hover / selection / inspect rings.' },
+                          { label: 'All', value: 'all' as CaptureOverlayMode, title: 'Add the rings plus the negative brush-cursor silhouette.' },
                         ],
                         captureOverlays,
                         setCaptureOverlays,
                         overlaysUnavailable,
                       )}
                     </div>
-                    <div className={styles.captureWhyStack}>
-                      <div className={`${styles.captureWhy} ${is3D ? '' : styles.captureWhyHidden}`}>In 3D the brush outline, hovered cells and inspect rings are drawn into the scene itself &mdash; every 3D capture already includes them.</div>
-                      <div className={`${styles.captureWhy} ${!is3D && overlaysSimArea ? '' : styles.captureWhyHidden}`}>The cursor is a view overlay &mdash; set the capture area above to View to include it.</div>
-                      <div className={`${styles.captureWhy} ${overlaysUnavailable ? styles.captureWhyHidden : ''}`}>Highlights: the coloured hover / selection / inspect rings. All: those plus the negative brush-cursor silhouette. Added to View-area captures only.</div>
-                    </div>
 
                     <div className={styles.captureSep} />
 
-                    <div className={styles.captureRow}>
+                    <div
+                      className={styles.captureRow}
+                      title={webmAvailable
+                        ? 'File format for recordings.'
+                        : 'WebM needs WebCodecs \u2014 not available in this browser, so recordings are GIF.'}
+                    >
                       <span>Record format</span>
                       {captureSegment(
-                        [{ label: 'WebM', value: 'webm' as RecordFormat, disabled: !webmAvailable }, { label: 'GIF', value: 'gif' as RecordFormat }],
+                        [
+                          { label: 'WebM', value: 'webm' as RecordFormat, disabled: !webmAvailable, title: 'WebM (VP9): full colour, any size, encoded as the run goes so only the compressed bytes are held.' },
+                          { label: 'GIF', value: 'gif' as RecordFormat, title: 'GIF: 256 colours, max 512 px, and every frame is kept in memory \u2014 short clips only.' },
+                        ],
                         effWebm ? 'webm' : 'gif',
                         setRecordFormat,
                         false,
                       )}
                     </div>
-                    {!webmAvailable && <div className={styles.captureWhy}>WebM needs WebCodecs &mdash; not available in this browser. GIF is 256 colours, max 512 px, and keeps every frame in memory.</div>}
 
-                    <div className={`${styles.captureRow} ${effWebm ? '' : styles.captureRowDisabled}`}>
+                    <div
+                      className={`${styles.captureRow} ${effWebm ? '' : styles.captureRowDisabled}`}
+                      title={effWebm
+                        ? 'Keyframe cadence of the WebM stream.'
+                        : 'GIF has no keyframe structure \u2014 WebM only.'}
+                    >
                       <span>Quality</span>
                       {captureSegment(
-                        [{ label: 'Standard', value: 'standard' as RecordQuality }, { label: 'Archival', value: 'archival' as RecordQuality }],
+                        [
+                          { label: 'Standard', value: 'standard' as RecordQuality, title: 'A keyframe every 30 frames \u2014 ~6\u00d7 smaller and ~3\u00d7 faster, so the run stays closer to full speed (scrubbing lands on 30-frame boundaries).' },
+                          { label: 'Archival', value: 'archival' as RecordQuality, title: 'Every frame independently decodable, for frame-by-frame analysis.' },
+                        ],
                         recordQuality,
                         setRecordQuality,
                         !effWebm,
                       )}
                     </div>
-                    <div className={styles.captureWhyStack}>
-                      <div className={`${styles.captureWhy} ${effWebm ? '' : styles.captureWhyHidden}`}>Standard: a keyframe every 30 frames &mdash; ~6&times; smaller and ~3&times; faster, so the run stays closer to full speed (scrubbing lands on 30-frame boundaries). Archival: every frame independently decodable, for frame-by-frame analysis.</div>
-                      <div className={`${styles.captureWhy} ${effWebm ? styles.captureWhyHidden : ''}`}>GIF has no keyframe structure &mdash; WebM only.</div>
-                    </div>
 
-                    <div className={`${styles.captureRow} ${effWebm ? '' : styles.captureRowDisabled}`}>
+                    <div
+                      className={`${styles.captureRow} ${effWebm ? '' : styles.captureRowDisabled}`}
+                      title={effWebm
+                        ? 'What gives way when the encoder cannot keep up with the simulation.'
+                        : 'GIF buffers every frame; nothing can fall behind.'}
+                    >
                       <span>If the encoder lags</span>
                       {captureSegment(
-                        [{ label: 'Skip frames', value: 'drop' as RecordOverload }, { label: 'Never skip', value: 'lossless' as RecordOverload }],
+                        [
+                          { label: 'Skip frames', value: 'drop' as RecordOverload, title: 'The simulation keeps full speed and the frames the encoder could not take are left out (counted next to REC).' },
+                          { label: 'Never skip', value: 'lossless' as RecordOverload, title: 'Every captured frame is encoded and the simulation is held back until the encoder catches up.' },
+                        ],
                         recordOverload,
                         setRecordOverload,
                         !effWebm,
                       )}
-                    </div>
-                    <div className={styles.captureWhyStack}>
-                      <div className={`${styles.captureWhy} ${effWebm ? '' : styles.captureWhyHidden}`}>Skip frames: the simulation keeps full speed and the frames it could not encode are left out (counted next to REC). Never skip: every captured frame is encoded and the simulation is held back until the encoder catches up.</div>
-                      <div className={`${styles.captureWhy} ${effWebm ? styles.captureWhyHidden : ''}`}>GIF buffers every frame; nothing can fall behind.</div>
                     </div>
                   </div>
                 )}

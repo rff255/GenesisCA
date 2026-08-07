@@ -1051,35 +1051,15 @@
 }
 
 /* Inapplicable settings are DISABLED IN PLACE, never unmounted — stable
-   geometry, and the reason is stated instead of the control vanishing. */
+   geometry, and the reason is carried by the row's `title` (a tooltip) instead
+   of the control vanishing. Explanations are NEVER always-visible prose here:
+   this is a control surface, not a manual, and a row that grows/shrinks a
+   sentence when its state flips slides every row below it out from under the
+   cursor — the same class of defect as unmounting the control itself. A tooltip
+   changes no geometry at all, which is what retires the old .captureWhyStack
+   equal-height machinery. */
 .captureRowDisabled {
   opacity: 0.42;
-}
-
-.captureWhy {
-  font-size: var(--font-3xs);
-  color: var(--color-text-muted);
-  line-height: 1.4;
-  margin: 1px 0 var(--space-2);
-  white-space: normal;
-  max-width: 250px;
-}
-
-/* The applicable explanation and the disabled reason differ in length, so
-   swapping them would resize the popover and slide every row out from under the
-   cursor — the same class of defect as unmounting the control itself. Both
-   variants share ONE grid cell, so the box is always as tall as the TALLER of
-   the two and the geometry is EXACT regardless of which is showing. */
-.captureWhyStack {
-  display: grid;
-}
-
-.captureWhyStack > * {
-  grid-area: 1 / 1;
-}
-
-.captureWhyHidden {
-  visibility: hidden;
 }
 
 .captureSep {
