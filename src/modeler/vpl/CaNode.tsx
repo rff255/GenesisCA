@@ -9,6 +9,8 @@ import { resolveEngines } from '../../model/engineResolution';
 import { INTERPOLATION_METHODS, INTERPOLATION_SHORT_LABELS, DEFAULT_INTERPOLATION_METHOD } from './nodes/interpolationMethods';
 import type { InterpolationMethod } from './nodes/interpolationMethods';
 import { buildVarMap, parseExpression, clampVisibleCount, VISIBLE_PORT_IDS, MAX_VISIBLE } from './compiler/expression/parser';
+import type { ExprAst } from './compiler/expression/parser';
+import { ExpressionFormula, namesFromVarMap } from './widgets/ExpressionFormula';
 import { handleId } from './types';
 import type { NodeConfig, PortDef } from './types';
 import type { MacroPort } from '../../model/types';
@@ -2743,9 +2745,14 @@ function CaNodeComponent({ id, data }: NodeProps) {
           const formula = (nodeData.config.expression as string) ?? '';
           const { map, errors: varErrors } = buildVarMap(nodeData.config, visibleCount);
           let parseErr: string | null = varErrors[0] ?? null;
+          // The SAME AST the three compile targets emit from also feeds the
+          // rendered math view below, so the picture can never disagree with
+          // what actually runs.
+          let ast: ExprAst | null = null;
           if (!parseErr && formula.trim()) {
             const res = parseExpression(formula, map);
             if ('error' in res) parseErr = res.error;
+            else ast = res.ast;
           }
           const setVisible = (next: number) => {
             const clamped = Math.max(1, Math.min(MAX_VISIBLE, next));
@@ -2823,6 +2830,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
               {parseErr && (
                 <div style={{ color: '#f44336', fontSize: '0.65rem' }}>{parseErr}</div>
               )}
+              <ExpressionFormula ast={ast} names={namesFromVarMap(map)} />
               <button
                 className={styles.select}
                 style={{
