@@ -684,6 +684,19 @@ function brushShapeOffsets3d(
   return out;
 }
 
+/** 3D Grid CA: the plane-axis PERMUTATION, factored out so the paint stamp, the
+ *  hover cursor and the region clipboard all agree on which grid axis each brush
+ *  offset moves along. A 2D stamp offset `(dRow, dCol)` maps onto the plane's two
+ *  FREE grid axes; the optional 3rd value `dl` (volumetric brush) moves along the
+ *  plane's FIXED axis. Returns the ABSOLUTE-axis delta `[dLayer, dRow, dCol]`,
+ *  UNWRAPPED — `mapStampToPlane` applies the torus fold, the clipboard does not
+ *  (a copy box is measured in raw deltas, exactly like the 2D clipboard). */
+function planeAxisDelta(axis: 'x' | 'y' | 'z', dr: number, dc: number, dl: number): [number, number, number] {
+  if (axis === 'z') return [dl, dr, dc];   // layer fixed  → dRow→row,   dCol→col
+  if (axis === 'y') return [dr, dl, dc];   // row fixed    → dRow→layer, dCol→col
+  return [dr, dc, dl];                     // col fixed    → dRow→layer, dCol→row
+}
+
 /** Cells covered by a thick segment between two cell centres (capsule test:
  *  point-to-segment distance ≤ width/2, so width 1 ≈ a 1-cell line). Returned
  *  unwrapped — callers wrap modulo grid in infinity mode. */
@@ -2688,25 +2701,32 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
   }, [presetMenu]);
 
   // Clipboard for Ctrl+C / Ctrl+V / Ctrl+X (cell-attribute region copy). The
-  // region is always read as a rectangle (the brush footprint's bounding box),
-  // but `mask` (the brush SHAPE within that box) restricts which cells paste
-  // writes — so a circle/ring brush copies & pastes its shape, not a square.
-  // `hotR`/`hotC` = the cursor's position within the box, so paste re-centres
-  // on the cursor exactly the way copy did. Absent mask/hot = full rectangle.
+  // region is always read as a BOX (the brush footprint's bounding box), but
+  // `mask` (the brush SHAPE within that box) restricts which cells paste
+  // writes — so a circle/ring/sphere brush copies & pastes its shape, not a
+  // block. `hotL`/`hotR`/`hotC` = the cursor's position within the box, so paste
+  // re-centres on the cursor exactly the way copy did. Absent mask/hot = full box.
+  //
+  // 2D and 3D SHARE this shape: a 2D copy is simply the `d === 1` case (its
+  // `d`/`hotL` stay undefined and default to 1 / 0, reproducing the historical
+  // single-layer rectangle byte-for-byte). The mask is `(dl*h + dr)*w + dc`.
   const clipboardRef = useRef<{
     w: number;
     h: number;
+    /** 3D Grid CA: layer extent of the box (absent -> 1 = a single slice). */
+    d?: number;
     attributes: Record<string, { type: string; buffer: ArrayBuffer }>;
     mask?: Uint8Array;
+    hotL?: number;
     hotR?: number;
     hotC?: number;
   } | null>(null);
   // Mask + hotspot captured at copy/cut time, attached to the clipboard when
-  // the worker's regionData (rectangular read) comes back.
-  const pendingCopyMeta = useRef<{ mask: Uint8Array; hotR: number; hotC: number } | null>(null);
+  // the worker's regionData (box read) comes back.
+  const pendingCopyMeta = useRef<{ mask: Uint8Array; hotL?: number; hotR: number; hotC: number } | null>(null);
   // If set, the next regionData response should also fire a clearRegion for the
   // source (Ctrl+X). Carries the same shape mask so the cut removes only the shape.
-  const pendingCutRect = useRef<{ row: number; col: number; w: number; h: number; mask?: Uint8Array } | null>(null);
+  const pendingCutRect = useRef<{ row: number; col: number; w: number; h: number; layer?: number; d?: number; mask?: Uint8Array } | null>(null);
 
   // Colors buffer + grid dimensions
   const colorsRef = useRef<Uint8ClampedArray | null>(null);
@@ -6295,17 +6315,18 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       const meta = pendingCopyMeta.current;
       pendingCopyMeta.current = null;
       clipboardRef.current = {
-        w: msg.w as number, h: msg.h as number, attributes: attrs,
-        mask: meta?.mask, hotR: meta?.hotR, hotC: meta?.hotC,
+        w: msg.w as number, h: msg.h as number, d: msg.d as number | undefined, attributes: attrs,
+        mask: meta?.mask, hotL: meta?.hotL, hotR: meta?.hotR, hotC: meta?.hotC,
       };
-      // If this was a Ctrl+X, now clear the source — masked so a circle/ring
-      // cut removes only its shape, matching the masked copy.
+      // If this was a Ctrl+X, now clear the source — masked so a circle/ring/
+      // sphere cut removes only its shape, matching the masked copy.
       if (pendingCutRect.current) {
         const rect = pendingCutRect.current;
         pendingCutRect.current = null;
         workerRef.current?.postMessage({
           type: 'clearRegion',
           row: rect.row, col: rect.col, w: rect.w, h: rect.h,
+          layer: rect.layer, d: rect.d,
           mask: rect.mask ? rect.mask.buffer.slice(0) : undefined,
           activeViewer: activeViewerRef.current,
         });
@@ -8496,6 +8517,16 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       if (reset) last3dHitRef.current = null;
       paint3dRef.current?.(layer, row, col);
     };
+    // Set the hovered brush-plane cell (null = clear). Same rationale as
+    // __sim3dPaint: pickOnPlane is unreachable from a synthetic pointer event, and
+    // this cell is the ANCHOR for everything plane-relative — the cursor outline
+    // and the Ctrl+C/V/X region clipboard. Reads back the live value when called
+    // with no arguments.
+    W.__sim3dHover = (layer?: number, row?: number, col?: number) => {
+      if (layer === undefined) return hover3dRef.current;
+      hover3dRef.current = (row === undefined || col === undefined) ? null : { layer, row, col };
+      return hover3dRef.current;
+    };
     // Bond-Graph Agents (PR5): the renderer's visible agent instance count, and a
     // headless agent pick (CSS px → engine slot id via instanceToSlot).
     W.__sim3dAgentCount = () => gl3dRef.current?.agentInstanceCount ?? -1;
@@ -10009,9 +10040,8 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
         // `dl` (3rd offset, 0 in flat mode) offsets the plane's FIXED axis → a
         // VOLUMETRIC ("extrapolated") brush. dl=0 reproduces the flat footprint.
         const dr = off[0]!, dc = off[1]!, dl = off.length > 2 ? off[2]! : 0;
-        if (axis === 'z') out.push({ layer: wrap(center.layer + dl, Dd), row: wrap(center.row + dr, H), col: wrap(center.col + dc, W) });
-        else if (axis === 'y') out.push({ layer: wrap(center.layer + dr, Dd), row: wrap(center.row + dl, H), col: wrap(center.col + dc, W) });
-        else out.push({ layer: wrap(center.layer + dr, Dd), row: wrap(center.row + dc, H), col: wrap(center.col + dl, W) });
+        const [dLayer, dRow, dCol] = planeAxisDelta(axis, dr, dc, dl);
+        out.push({ layer: wrap(center.layer + dLayer, Dd), row: wrap(center.row + dRow, H), col: wrap(center.col + dCol, W) });
       }
       return out;
     }, []);
@@ -11235,12 +11265,78 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       const tag = (document.activeElement as HTMLElement)?.tagName;
       if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
       if ((e.ctrlKey || e.metaKey) && (e.key === 'c' || e.key === 'v' || e.key === 'x')) {
-        // 3D: cell copy/paste is 2D-only for now — cursorGrid comes from the
-        // inert 2D fit-mapping there and readRegion/writeRegion are layer-0-only,
-        // so proceeding would silently corrupt layer-0 cells far from the brush
-        // plane the user is looking at. (A layer-aware region copy anchored on
-        // the brush plane is the follow-up.)
-        if (is3dRef.current) return;
+        // 3D: the region clipboard is ANCHORED ON THE BRUSH PLANE cursor (the
+        // 2D `cursorGrid` is an inert fit-mapping in 3D and would corrupt cells
+        // far from the plane the user is looking at). The copied box is measured
+        // in ABSOLUTE grid axes (layer/row/col) and pasted in the same axes
+        // whatever the plane is set to afterwards — the plane only supplies the
+        // ANCHOR cell, it never reorients the contents.
+        if (is3dRef.current) {
+          // The AGENT clipboard stays 2D-only (its footprint math is the 2D
+          // world-plane one) — leave the agent brush target untouched here.
+          if (isAgentModelRef.current && brushTargetRef.current === 'agents') return;
+          const cur = hover3dRef.current;
+          if (!plane3dEnabledRef.current || !cur) {
+            e.preventDefault();
+            showAgentNotice('Copy/paste anchors on the brush plane — enable it and hover a cell');
+            return;
+          }
+          const axis = plane3dRef.current.axis;
+          if (e.key === 'c' || e.key === 'x') {
+            e.preventDefault();
+            // The footprint is EXACTLY what the 3D brush would paint here: the
+            // same stamp offsets, through the same plane-axis permutation (flat
+            // on the plane, or the volumetric solid when Volumetric Brush is on).
+            const deltas: Array<[number, number, number]> = [];
+            let minL = 0, maxL = 0, minR = 0, maxR = 0, minC = 0, maxC = 0;
+            for (const off of currentStampOffsets3d()) {
+              const d3 = planeAxisDelta(axis, off[0]!, off[1]!, off.length > 2 ? off[2]! : 0);
+              deltas.push(d3);
+              if (d3[0] < minL) minL = d3[0]; if (d3[0] > maxL) maxL = d3[0];
+              if (d3[1] < minR) minR = d3[1]; if (d3[1] > maxR) maxR = d3[1];
+              if (d3[2] < minC) minC = d3[2]; if (d3[2] > maxC) maxC = d3[2];
+            }
+            const w = maxC - minC + 1, h = maxR - minR + 1, boxD = maxL - minL + 1;
+            const mask = new Uint8Array(w * h * boxD);
+            let cells = 0;
+            for (const [dl, dr, dc] of deltas) {
+              const i = ((dl - minL) * h + (dr - minR)) * w + (dc - minC);
+              if (mask[i] === 0) { mask[i] = 1; cells++; }
+            }
+            const oLayer = cur.layer + minL, oRow = cur.row + minR, oCol = cur.col + minC;
+            pendingCopyMeta.current = { mask, hotL: -minL, hotR: -minR, hotC: -minC };
+            if (e.key === 'x') pendingCutRect.current = { row: oRow, col: oCol, layer: oLayer, w, h, d: boxD, mask };
+            workerRef.current?.postMessage({ type: 'readRegion', row: oRow, col: oCol, layer: oLayer, w, h, d: boxD });
+            // The copied volume is INVISIBLE in 3D (occluded, and the box may be
+            // deeper than the plane) — unlike 2D, where the silhouette cursor
+            // shows it — so say what was grabbed.
+            showAgentNotice(`${e.key === 'x' ? 'Cut' : 'Copied'} ${cells} cell${cells === 1 ? '' : 's'} (${w}×${h}×${boxD} box)`);
+          } else {
+            const clip = clipboardRef.current;
+            if (!clip) return;
+            e.preventDefault();
+            // Re-centre the clipboard's box on the plane cursor the same way the
+            // copy did. A 2D clipboard (d absent) pastes as a single slice at the
+            // hovered layer; a 3D one pasted into a 2D model is clipped by the worker.
+            const cd = clip.d ?? 1;
+            const hotL = clip.hotL ?? Math.floor((cd - 1) / 2);
+            const hotR = clip.hotR ?? Math.floor((clip.h - 1) / 2);
+            const hotC = clip.hotC ?? Math.floor((clip.w - 1) / 2);
+            const attrs: Record<string, { type: string; buffer: ArrayBuffer }> = {};
+            for (const [id, entry] of Object.entries(clip.attributes)) {
+              attrs[id] = { type: entry.type, buffer: entry.buffer.slice(0) };
+            }
+            workerRef.current?.postMessage({
+              type: 'writeRegion',
+              row: cur.row - hotR, col: cur.col - hotC, layer: cur.layer - hotL,
+              w: clip.w, h: clip.h, d: cd,
+              attributes: attrs,
+              mask: clip.mask ? clip.mask.buffer.slice(0) : undefined,
+              activeViewer: activeViewerRef.current,
+            });
+          }
+          return;
+        }
         // AGENT clipboard (2D, agent brush target): copy/cut the agents under
         // the brush footprint (fresh spec via readAgents), paste at the cursor
         // with the copied world offsets (per-agent attrs/velocity via the

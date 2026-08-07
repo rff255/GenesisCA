@@ -3483,6 +3483,20 @@ export function HelpView() {
             copies and then resets the source shape to each attribute&apos;s default
             value. Out-of-grid cells are silently skipped.
           </p>
+          <p className={styles.p}>
+            <strong>In 3D it works the same way, anchored on the brush plane.</strong> The
+            cell under the <em>brush-plane cursor</em> is the anchor (so the brush plane
+            has to be enabled and the cursor over a cell &mdash; otherwise the shortcut
+            does nothing and says so), and what gets copied is exactly what the brush
+            would paint there: a flat footprint on the plane, or the full solid when{' '}
+            <strong>Volumetric Brush</strong> is on &mdash; a sphere, a spherical shell or
+            a box. A copy tells you what it grabbed (<em>Copied 179 cells (7&times;7&times;7
+            box)</em>), because unlike 2D a copied volume is invisible on screen. The
+            region is remembered in <strong>absolute grid axes</strong> (layer / row /
+            column), so changing the plane axis before pasting moves <em>where</em> it
+            lands, never how it is oriented. Cells that fall outside the grid are read as
+            the attribute default and clipped on paste, on every axis.
+          </p>
 
           <h3 className={styles.h3}>Viewer</h3>
           <p className={styles.p}>
@@ -3655,8 +3669,8 @@ export function HelpView() {
               <tr><td><kbd className={styles.kbd}>Shift</kbd> + right-click</td><td>Open in-page brush color picker at the cursor</td></tr>
               <tr><td><kbd className={styles.kbd}>Shift</kbd> + left-click</td><td>Open Inspect Cell popup: shows the cell's coordinates, all cell-attribute values (sub-attributes flagged as <em>undefined</em> when their parent doesn't match), and the live RGB of the active viewer. Popups are draggable, can stay open while you paint / play / step, and you can open multiple at once to compare cells. Hovering a popup highlights its cell on the grid; <kbd className={styles.kbd}>Esc</kbd> on the focused popup closes it.</td></tr>
               <tr><td><kbd className={styles.kbd}>Shift</kbd> + left-click drag</td><td>Sweep inspect: a single transient Inspect Cell popup follows the cursor cell while you drag, recycling instead of pinning a new popup per cell. Release on a different cell discards the popup; release without moving pins it (same as a plain <kbd className={styles.kbd}>Shift</kbd>+click). Useful for quickly peeking at attribute values across a region without cluttering the canvas.</td></tr>
-              <tr><td><kbd className={styles.kbd}>Ctrl</kbd>+<kbd className={styles.kbd}>C</kbd></td><td>Copy the cell attributes in the brush footprint (follows the brush shape)</td></tr>
-              <tr><td><kbd className={styles.kbd}>Ctrl</kbd>+<kbd className={styles.kbd}>V</kbd></td><td>Paste the clipboard shape, centred on the cursor (only the shape's cells)</td></tr>
+              <tr><td><kbd className={styles.kbd}>Ctrl</kbd>+<kbd className={styles.kbd}>C</kbd></td><td>Copy the cell attributes in the brush footprint (follows the brush shape). In 3D the anchor is the <strong>brush-plane cursor</strong> and a volumetric brush copies its whole solid</td></tr>
+              <tr><td><kbd className={styles.kbd}>Ctrl</kbd>+<kbd className={styles.kbd}>V</kbd></td><td>Paste the clipboard shape, centred on the cursor (only the shape's cells; in 3D on the brush-plane cursor)</td></tr>
               <tr><td><kbd className={styles.kbd}>Ctrl</kbd>+<kbd className={styles.kbd}>X</kbd></td><td>Copy, then reset the source shape to default attribute values</td></tr>
               <tr><td><kbd className={styles.kbd}>Space</kbd></td><td>Step (one generation; pauses if running)</td></tr>
               <tr><td><kbd className={styles.kbd}>Enter</kbd></td><td>Play / Pause</td></tr>

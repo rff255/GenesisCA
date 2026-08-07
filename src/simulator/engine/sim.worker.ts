@@ -464,13 +464,24 @@ interface LoadStateMsg {
 }
 
 // --- Region clipboard messages (for Ctrl+C/V/X on the simulator) ---
+// THE REGION BOX IS 3D: a (layer, row, col) origin + a (d, h, w) extent, in
+// ABSOLUTE grid axes. `layer`/`d` are OPTIONAL and default to 0 / 1, which
+// reproduces the historical single-layer rectangle byte-for-byte (cellIndexOf
+// (0,r,c) IS r*width+c). A mask, when present, is Uint8 of length w*h*d indexed
+// `(dl*h + dr)*w + dc` - at d===1 that collapses to the historical `dr*w + dc`.
 interface ReadRegionMsg {
   type: 'readRegion';
   row: number; col: number; w: number; h: number;
+  /** 3D Grid CA: origin layer of the box (absent -> 0). */
+  layer?: number;
+  /** 3D Grid CA: layer extent of the box (absent -> 1 = a single slice). */
+  d?: number;
 }
 interface WriteRegionMsg {
   type: 'writeRegion';
   row: number; col: number; w: number; h: number;
+  /** 3D Grid CA: layer extent of the box (absent -> 1). */
+  d?: number;
   /** 3D Grid CA: target layer for the 2D stamp (absent ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ 0). */
   layer?: number;
   attributes: Record<string, { type: string; buffer: ArrayBuffer }>;
@@ -484,6 +495,8 @@ interface WriteRegionMsg {
 interface ClearRegionMsg {
   type: 'clearRegion';
   row: number; col: number; w: number; h: number;
+  /** 3D Grid CA: layer extent of the box (absent -> 1). */
+  d?: number;
   /** 3D Grid CA: target layer for the 2D stamp (absent ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ 0). */
   layer?: number;
   /** Optional shape mask ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â see WriteRegionMsg. A masked clear (Ctrl+X cut)
@@ -8925,25 +8938,33 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
         }
         const attrBuffers: Record<string, { type: string; buffer: ArrayBuffer }> = {};
         const transfers: ArrayBuffer[] = [];
-        const size = m.w * m.h;
+        // 3D Grid CA: the box spans `d` layers from `layer` (absent -> a single
+        // slice at layer 0 = the historical 2D read).
+        const rLayer = m.layer ?? 0;
+        const rD = m.d ?? 1;
+        const size = m.w * m.h * rD;
         for (const attr of cellAttrs) {
           const out = createTypedArray(attr.type, size);
           const dv = defaultValue(attr);
           if (dv !== 0) out.fill(dv);
           const src = readAttrs[attr.id]!;
-          for (let dr = 0; dr < m.h; dr++) {
-            const srcRow = m.row + dr;
-            if (srcRow < 0 || srcRow >= height) continue;
-            for (let dc = 0; dc < m.w; dc++) {
-              const srcCol = m.col + dc;
-              if (srcCol < 0 || srcCol >= width) continue;
-              out[dr * m.w + dc] = src[srcRow * width + srcCol]!;
+          for (let dl = 0; dl < rD; dl++) {
+            const srcLayer = rLayer + dl;
+            if (srcLayer < 0 || srcLayer >= depth) continue;
+            for (let dr = 0; dr < m.h; dr++) {
+              const srcRow = m.row + dr;
+              if (srcRow < 0 || srcRow >= height) continue;
+              for (let dc = 0; dc < m.w; dc++) {
+                const srcCol = m.col + dc;
+                if (srcCol < 0 || srcCol >= width) continue;
+                out[(dl * m.h + dr) * m.w + dc] = src[cellIndexOf(srcLayer, srcRow, srcCol)]!;
+              }
             }
           }
           attrBuffers[attr.id] = { type: attr.type, buffer: out.buffer };
           transfers.push(out.buffer);
         }
-        self.postMessage({ type: 'regionData', w: m.w, h: m.h, attributes: attrBuffers }, { transfer: transfers });
+        self.postMessage({ type: 'regionData', w: m.w, h: m.h, d: rD, attributes: attrBuffers }, { transfer: transfers });
       })();
       break;
     }
@@ -8953,9 +8974,10 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       const isAsync = updateMode === 'asynchronous';
       // 3D Grid CA: the 2D stamp lands on layer `msg.layer` (absent ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ 0).
       const wLayer = msg.layer ?? 0;
+      const wD = msg.d ?? 1;   // 3D Grid CA: layer extent (absent -> a single slice)
       // Optional shape mask: only cells with mask !== 0 are written.
       const wMask = msg.mask ? new Uint8Array(msg.mask) : null;
-      if (wLayer >= 0 && wLayer < depth) for (const attr of cellAttrs) {
+      for (const attr of cellAttrs) {
         const entry = msg.attributes[attr.id];
         if (!entry) continue;
         // Rebuild typed view over the transferred buffer
@@ -8963,18 +8985,22 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
         const src = new Ctor(entry.buffer);
         const dst = readAttrs[attr.id]!;
         const dstB = writeAttrs[attr.id]!;
-        for (let dr = 0; dr < msg.h; dr++) {
-          const dstRow = msg.row + dr;
-          if (dstRow < 0 || dstRow >= height) continue;
-          for (let dc = 0; dc < msg.w; dc++) {
-            const local = dr * msg.w + dc;
-            if (wMask && wMask[local] === 0) continue;
-            const dstCol = msg.col + dc;
-            if (dstCol < 0 || dstCol >= width) continue;
-            const i = cellIndexOf(wLayer, dstRow, dstCol);
-            const v = src[local]!;
-            dst[i] = v;
-            if (!isAsync) dstB[i] = v;
+        for (let dl = 0; dl < wD; dl++) {
+          const dstLayer = wLayer + dl;
+          if (dstLayer < 0 || dstLayer >= depth) continue;
+          for (let dr = 0; dr < msg.h; dr++) {
+            const dstRow = msg.row + dr;
+            if (dstRow < 0 || dstRow >= height) continue;
+            for (let dc = 0; dc < msg.w; dc++) {
+              const local = (dl * msg.h + dr) * msg.w + dc;
+              if (wMask && wMask[local] === 0) continue;
+              const dstCol = msg.col + dc;
+              if (dstCol < 0 || dstCol >= width) continue;
+              const i = cellIndexOf(dstLayer, dstRow, dstCol);
+              const v = src[local]!;
+              dst[i] = v;
+              if (!isAsync) dstB[i] = v;
+            }
           }
         }
       }
@@ -8984,14 +9010,18 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
         // Patch only the cells in the write region; leave the rest of the GPU
         // buffer alone so any in-flight evolved state isn't clobbered.
         const idxs: number[] = [];
-        if (wLayer >= 0 && wLayer < depth) for (let dr = 0; dr < msg.h; dr++) {
-          const dstRow = msg.row + dr;
-          if (dstRow < 0 || dstRow >= height) continue;
-          for (let dc = 0; dc < msg.w; dc++) {
-            if (wMask && wMask[dr * msg.w + dc] === 0) continue;
-            const dstCol = msg.col + dc;
-            if (dstCol < 0 || dstCol >= width) continue;
-            idxs.push(cellIndexOf(wLayer, dstRow, dstCol));
+        for (let dl = 0; dl < wD; dl++) {
+          const dstLayer = wLayer + dl;
+          if (dstLayer < 0 || dstLayer >= depth) continue;
+          for (let dr = 0; dr < msg.h; dr++) {
+            const dstRow = msg.row + dr;
+            if (dstRow < 0 || dstRow >= height) continue;
+            for (let dc = 0; dc < msg.w; dc++) {
+              if (wMask && wMask[(dl * msg.h + dr) * msg.w + dc] === 0) continue;
+              const dstCol = msg.col + dc;
+              if (dstCol < 0 || dstCol >= width) continue;
+              idxs.push(cellIndexOf(dstLayer, dstRow, dstCol));
+            }
           }
         }
         patchWebGPUCells(idxs);
@@ -9014,21 +9044,26 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       activeViewer = msg.activeViewer; syncActiveViewerToMemory();
       const isAsync = updateMode === 'asynchronous';
       const cLayer = msg.layer ?? 0;   // 3D Grid CA: target layer (absent ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ 0)
+      const cD = msg.d ?? 1;   // 3D Grid CA: layer extent (absent -> a single slice)
       const cMask = msg.mask ? new Uint8Array(msg.mask) : null;
-      if (cLayer >= 0 && cLayer < depth) for (const attr of cellAttrs) {
+      for (const attr of cellAttrs) {
         const dv = defaultValue(attr);
         const dst = readAttrs[attr.id]!;
         const dstB = writeAttrs[attr.id]!;
-        for (let dr = 0; dr < msg.h; dr++) {
-          const dstRow = msg.row + dr;
-          if (dstRow < 0 || dstRow >= height) continue;
-          for (let dc = 0; dc < msg.w; dc++) {
-            if (cMask && cMask[dr * msg.w + dc] === 0) continue;
-            const dstCol = msg.col + dc;
-            if (dstCol < 0 || dstCol >= width) continue;
-            const i = cellIndexOf(cLayer, dstRow, dstCol);
-            dst[i] = dv;
-            if (!isAsync) dstB[i] = dv;
+        for (let dl = 0; dl < cD; dl++) {
+          const dstLayer = cLayer + dl;
+          if (dstLayer < 0 || dstLayer >= depth) continue;
+          for (let dr = 0; dr < msg.h; dr++) {
+            const dstRow = msg.row + dr;
+            if (dstRow < 0 || dstRow >= height) continue;
+            for (let dc = 0; dc < msg.w; dc++) {
+              if (cMask && cMask[(dl * msg.h + dr) * msg.w + dc] === 0) continue;
+              const dstCol = msg.col + dc;
+              if (dstCol < 0 || dstCol >= width) continue;
+              const i = cellIndexOf(dstLayer, dstRow, dstCol);
+              dst[i] = dv;
+              if (!isAsync) dstB[i] = dv;
+            }
           }
         }
       }
@@ -9036,14 +9071,18 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       if (webgpuClear && webgpuRuntime) {
         // Patch only the cleared region; preserve the rest of the GPU state.
         const idxs: number[] = [];
-        if (cLayer >= 0 && cLayer < depth) for (let dr = 0; dr < msg.h; dr++) {
-          const dstRow = msg.row + dr;
-          if (dstRow < 0 || dstRow >= height) continue;
-          for (let dc = 0; dc < msg.w; dc++) {
-            if (cMask && cMask[dr * msg.w + dc] === 0) continue;
-            const dstCol = msg.col + dc;
-            if (dstCol < 0 || dstCol >= width) continue;
-            idxs.push(cellIndexOf(cLayer, dstRow, dstCol));
+        for (let dl = 0; dl < cD; dl++) {
+          const dstLayer = cLayer + dl;
+          if (dstLayer < 0 || dstLayer >= depth) continue;
+          for (let dr = 0; dr < msg.h; dr++) {
+            const dstRow = msg.row + dr;
+            if (dstRow < 0 || dstRow >= height) continue;
+            for (let dc = 0; dc < msg.w; dc++) {
+              if (cMask && cMask[(dl * msg.h + dr) * msg.w + dc] === 0) continue;
+              const dstCol = msg.col + dc;
+              if (dstCol < 0 || dstCol >= width) continue;
+              idxs.push(cellIndexOf(dstLayer, dstRow, dstCol));
+            }
           }
         }
         patchWebGPUCells(idxs);
