@@ -1067,7 +1067,9 @@ export function HelpView() {
           <p className={styles.p}>
             The graph <strong>minimap</strong> (bottom-right) is interactive: drag to pan,
             scroll to zoom, and click anywhere to jump the viewport to that spot (keeping the
-            current zoom).
+            current zoom). Each node is drawn in a faded version of its real colour, so you
+            can read the shape of the graph at a glance — the white event roots, the category
+            colours of the nodes, and your comments and groups as softer background blocks.
           </p>
         </section>
 

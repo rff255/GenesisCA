@@ -65,6 +65,47 @@ const nodeTypes: NodeTypes = {
 };
 
 // ---------------------------------------------------------------------------
+// MiniMap node colors — a FAINTER version of each node's real canvas color, so
+// the overview reads as a map of the graph (where the maths is, where the flow
+// control is, where the event roots are) instead of a flat grey mask.
+//
+// "Fainter" = ALPHA on the real hex, deliberately, not a hand-picked pale
+// palette: the minimap svg composites over `--color-minimap-bg` (near-black in
+// BOTH shipped themes), so one alpha adapts to the theme for free AND the
+// relative hue/brightness ordering survives the mask overlay that darkens the
+// off-screen region uniformly.
+// ---------------------------------------------------------------------------
+
+/** Node bodies — muted, but a white event root still reads clearly over the
+ *  near-black minimap background (0.55 → ~#909091, measured). */
+const MINIMAP_ALPHA_NODE = 0.55;
+/** Comments + groups are AREA markers — often large, so they'd dominate the
+ *  overview at node strength. Kept close to the group mask's historic 0.5-alpha
+ *  weight. */
+const MINIMAP_ALPHA_COMMENT = 0.32;
+const MINIMAP_ALPHA_GROUP = 0.26;
+/** Defaults mirrored from CommentNodeComponent / GroupNodeComponent — used when
+ *  the user hasn't picked a color. */
+const MINIMAP_COMMENT_DEFAULT = '#2d4059';
+const MINIMAP_GROUP_DEFAULT = '#2d4059';
+/** Reroute dots carry their relayed port's category color (RerouteNodeComponent). */
+const MINIMAP_REROUTE_FLOW = '#4caf50';
+const MINIMAP_REROUTE_NI = '#ffb300';
+const MINIMAP_REROUTE_VALUE = '#4cc9f0';
+
+/** `#rrggbb` (or `#rgb`) → `#rrggbbaa`. Anything we can't parse (an unknown node
+ *  type, a hand-edited non-hex color) falls back to the theme's flat minimap
+ *  token, so the minimap never renders an invalid `fill`. */
+function fadeColor(color: string | undefined, alpha: number, fallback: string): string {
+  const m = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec((color ?? '').trim());
+  const digits = m?.[1];
+  if (!digits) return fallback;
+  const body = digits.length === 3 ? digits.split('').map(c => c + c).join('') : digits;
+  const a = Math.round(Math.max(0, Math.min(1, alpha)) * 255).toString(16).padStart(2, '0');
+  return `#${body}${a}`;
+}
+
+// ---------------------------------------------------------------------------
 // Clipboard for copy/paste — see graphClipboard.ts. It spans BROWSER TABS
 // (localStorage) so a selection copied in one model pastes into another; the
 // payload carries the graph KIND it was copied from, because the lattice /
@@ -669,6 +710,27 @@ export function GraphEditorInner() {
     minimapNodeGroup = 'rgba(45, 64, 89, 0.5)',
     minimapMask = 'rgba(0, 0, 0, 0.70)',
   ] = useThemeTokens(CANVAS_TOKENS);
+  /** MiniMap fill per node — the node's REAL canvas color, faded (see the
+   *  MINIMAP_* block above). Memoised: React Flow calls this once per node per
+   *  minimap render, and the theme tokens are the only inputs. */
+  const minimapNodeColor = useCallback((n: Node) => {
+    const d = (n.data ?? {}) as Record<string, unknown>;
+    switch (n.type) {
+      case 'groupNode':
+        return fadeColor((d.groupColor as string) || MINIMAP_GROUP_DEFAULT, MINIMAP_ALPHA_GROUP, minimapNodeGroup);
+      case 'commentNode':
+        return fadeColor((d.color as string) || MINIMAP_COMMENT_DEFAULT, MINIMAP_ALPHA_COMMENT, minimapNode);
+      case 'rerouteNode':
+        return fadeColor(
+          d.portCategory === 'flow'
+            ? MINIMAP_REROUTE_FLOW
+            : d.dataType === 'neighborIndex' ? MINIMAP_REROUTE_NI : MINIMAP_REROUTE_VALUE,
+          MINIMAP_ALPHA_NODE, minimapNode,
+        );
+      default:
+        return fadeColor(getNodeDef(d.nodeType as string)?.color, MINIMAP_ALPHA_NODE, minimapNode);
+    }
+  }, [minimapNode, minimapNodeGroup]);
   const rfInstance = useRef<ReactFlowInstance | null>(null);
   // Wrapper around <ReactFlow/> — used by the RMB-pass-through-edges effect
   // below to delegate right-button pointerdowns from edges to the pane.
@@ -4088,7 +4150,7 @@ export function GraphEditorInner() {
           </button>
         </div>
         <MiniMap
-          nodeColor={n => n.type === 'groupNode' ? minimapNodeGroup : minimapNode}
+          nodeColor={minimapNodeColor}
           maskColor={minimapMask}
           style={{ background: minimapBg }}
           pannable
