@@ -902,6 +902,97 @@ check('runtime: uploadAgentSoA seeds the agent colour buffer [invisible-agents b
 }
 
 // ---------------------------------------------------------------------------
+// B16 (SCENE-ANCHORED GEOMETRY OWNERSHIP, user-reported: "3D CA Grid when using
+// brush Plane it is always being drawn in front of the 3D cells").
+//
+// Both free modes are a TWO-CANVAS split: the worker presents its scene (voxel
+// cubes / sphere impostors) into the canvas underneath while gl3d draws on a
+// TRANSPARENT canvas above. The two share no depth buffer, so anything gl3d draws
+// there composites in FRONT of every cell and agent, unconditionally. 46e0954 moved
+// the scene WIREFRAMES into the worker's depth-tested line passes for exactly this
+// reason but left the brush interaction plane behind, so the plane kept painting
+// over the volume — the same defect, one group later.
+//
+// THE RULE this block pins: geometry that sits at a definite place IN the volume
+// (wireframes + the brush plane) is worker-owned and depth-tested in free mode;
+// CURSOR/UI meant to be seen THROUGH the scene (the brush footprint outline, hover
+// and inspect cells, agent rings, axis labels, the gizmo) stays in gl3d, depth off.
+// Both worker passes and gl3d build the plane from ONE shared builder, so the
+// free<->frame flip cannot move a line.
+{
+  const sw = readSrc('simulator/engine/sceneWireframe.ts');
+  const gl = readSrc('simulator/render/gl3d.ts');
+  const vox = readSrc('simulator/engine/webgpuRuntime.ts');
+  const ag = readSrc('simulator/engine/agentWebgpuRuntime.ts');
+  const wk = readSrc('simulator/engine/sim.worker.ts');
+  const sv = readSrc('simulator/SimulatorView.tsx');
+
+  // ONE builder — the anti-drift guarantee for the flip.
+  check('sceneWireframe exports the shared brush-plane builder [plane-depth]',
+    /export function buildBrushPlaneVerts\(W: number, H: number, D: number, p: BrushPlaneSpec\): Float32Array/.test(sw));
+  // gl3d CALLS it rather than keeping a copy (renderOverlays is a documented
+  // lockstep pair; the plane is stronger — it cannot drift at all).
+  check('gl3d renderBrushPlane uses the SHARED builder [plane-depth]',
+    /import \{ buildBrushPlaneVerts \} from '\.\.\/engine\/sceneWireframe';/.test(gl)
+    && /this\.drawLines\(buildBrushPlaneVerts\(this\.W, this\.H, this\.D, p\), this\.gl\.LINES, this\.mvp\);/
+      .test(blockAfter(gl, /private renderBrushPlane\(\): void /)));
+
+  // gl3d must SKIP the plane (not just the wireframes) whenever the worker owns
+  // the scene geometry. Dropping the plane from this guard restores the bug.
+  const render = blockAfter(gl, /render\(\): void /);
+  check('gl3d skips BOTH the wireframes and the plane when the worker owns them [plane-depth]',
+    /const sceneExternal = overlaysOnly && this\.wireframesExternal;/.test(render)
+    && /if \(!sceneExternal\) \{[\s\S]{0,240}?this\.renderOverlays\(\);[\s\S]{0,240}?this\.renderBrushPlane\(\);[\s\S]{0,120}?\n    \}/.test(render));
+  // ...and it must still draw the always-on-top CURSOR set in free mode.
+  check('the free-mode cursor set stays in gl3d [plane-depth]',
+    /this\.renderHoverCells\(\);[\s\S]{0,200}?this\.renderBrushOutline\(\);[\s\S]{0,200}?this\.renderAxisLabels\(\);[\s\S]{0,200}?this\.renderGizmo\(\);[\s\S]{0,40}?return;/.test(render));
+
+  // BOTH worker line passes build the plane into their line buffer, and their
+  // rebuild signature carries it — otherwise moving the slider would not rebuild.
+  for (const [name, src, ensure, viz] of [
+    // NB the viz anchors must clear the WHOLE signature: uploadVoxelViz declares an
+    // inline object TYPE for `viz`, so a bare `uploadVoxelViz\(` anchor makes
+    // blockAfter return that type literal instead of the function body.
+    ['voxel', vox, /function ensureVoxelLineBuffer\(/, /export function uploadVoxelViz\([\s\S]{0,400}?\): void /],
+    ['agent', ag, /function ensureAgentLineBuffer\(/, /export function uploadAgentViz\([\s\S]{0,400}?\): void /],
+  ]) {
+    const e = blockAfter(src, ensure);
+    check(`${name} line pass builds the brush plane into its buffer [plane-depth]`,
+      /buildBrushPlaneVerts\(W, H, D, pl\)/.test(e) && /verts\.set\(plane, wire\.length\)/.test(e));
+    check(`${name} line-buffer signature includes the plane [plane-depth]`,
+      /\$\{pl \? `\$\{pl\.axis\}\$\{pl\.pos\}` : '-'\}/.test(e));
+    check(`${name} viz upload stores the plane + invalidates the cache [plane-depth]`,
+      /plane \? \{ axis: plane\.axis, pos: plane\.pos \} : null/.test(blockAfter(src, viz)));
+  }
+
+  // The worker records the plane on BOTH viz messages and RE-APPLIES it wherever
+  // it re-applies the wireframes (attach / refresh / status ack). A missed
+  // re-apply site silently drops the plane after a display re-attach.
+  check('the worker records the plane on setGridViz / setAgentViz [plane-depth]',
+    /gridPlane3d = msg\.plane \? \{ axis: msg\.plane\.axis, pos: msg\.plane\.pos \} : null;/.test(wk)
+    && /agentPlane3d = msg\.plane \? \{ axis: msg\.plane\.axis, pos: msg\.plane\.pos \} : null;/.test(wk));
+  const vozCalls = (wk.match(/uploadVoxelViz\(/g) || []).length;
+  const agzCalls = (wk.match(/uploadAgentViz\(/g) || []).length;
+  check('EVERY worker viz re-apply passes the plane [plane-depth]',
+    vozCalls > 0 && agzCalls > 0
+    && vozCalls === (wk.match(/uploadVoxelViz\([^)]*gridPlane3d\)/g) || []).length
+    && agzCalls === (wk.match(/uploadAgentViz\([^)]*agentPlane3d\)/g) || []).length,
+    `voxel ${vozCalls} agent ${agzCalls}`);
+
+  // The main thread posts the plane with the viz toggles AND re-posts when the
+  // plane itself changes (axis / position / the enable toggle) — otherwise the
+  // worker would keep drawing the plane at its old slice.
+  check('both viz posts carry the plane [plane-depth]',
+    /type: 'setGridViz'[^}]*plane: gridPlaneMsg\(\)/.test(sv)
+    && /type: 'setAgentViz'[^}]*plane: gridPlaneMsg\(\)/.test(sv));
+  const planeAt = sv.indexOf('plane3dRef.current = { axis: plane3d.axis, pos: plane3d.pos };');
+  const planeEffect = planeAt < 0 ? '' : sv.slice(planeAt, planeAt + 1200);
+  check('a plane change re-posts to both free renderers [plane-depth]',
+    /if \(voxelRenderActiveRef\.current\) postGridViz\(\);/.test(planeEffect)
+    && /postAgentViz\(\);/.test(planeEffect));
+}
+
+// ---------------------------------------------------------------------------
 // TIER C — browser probes (printed; only reachable with a live GPUDevice)
 // ---------------------------------------------------------------------------
 if (process.argv.includes('--probes')) {

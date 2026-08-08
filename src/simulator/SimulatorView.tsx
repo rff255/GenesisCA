@@ -4461,26 +4461,32 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
     });
   }, [computeVoxelRenderView]);
 
-  // L1 — thread the scene-wireframe toggles (bounds/grid/axes) to the worker's
-  // voxel renderer, which now draws them depth-tested against the cubes (so they
-  // occlude in free mode). gl3d stops drawing those three in its overlaysOnly
-  // path; the gizmo / brush plane / hover / axis labels stay in gl3d (on top).
+  // The SCENE-ANCHORED geometry the worker's free-mode renderers own: the
+  // wireframes (bounds/grid/axes) AND the brush interaction plane. Both are drawn
+  // depth-tested against the worker's own scene, so cells/agents in front occlude
+  // them; gl3d skips them in its overlaysOnly path (its transparent canvas above
+  // the scene shares no depth buffer, so anything it drew there composited in
+  // FRONT — the reported "the brush plane is always drawn in front of the cells").
+  // What STAYS in gl3d is the always-on-top CURSOR/UI set: the brush footprint
+  // outline, hovered/inspected cells, agent rings, axis labels and the gizmo.
+  const gridPlaneMsg = useCallback(
+    () => (plane3dEnabledRef.current ? { axis: plane3dRef.current.axis, pos: plane3dRef.current.pos } : null),
+    [],
+  );
+
+  // L1 — voxel free mode.
   const postGridViz = useCallback(() => {
     if (!voxelRenderActiveRef.current || !workerRef.current) return;
     const v = viz3dRef.current;
-    workerRef.current.postMessage({ type: 'setGridViz', axes: v.axes, grid: v.grid, bounds: v.bounds });
-  }, []);
+    workerRef.current.postMessage({ type: 'setGridViz', axes: v.axes, grid: v.grid, bounds: v.bounds, plane: gridPlaneMsg() });
+  }, [gridPlaneMsg]);
 
-  // Thread the scene-wireframe toggles (bounds/grid/axes) to the worker's 3D AGENT
-  // render, which draws them depth-tested against the sphere impostors (so agents
-  // occlude them in free mode) — the agent sibling of postGridViz. gl3d stops
-  // drawing those three in its overlays-only path; the gizmo / brush plane / hover
-  // rings / axis labels stay in gl3d (deliberately always on top — they are UI).
+  // Phase C — 3D agent (sphere) free mode; the agent sibling of postGridViz.
   const postAgentViz = useCallback(() => {
     if (!agentDirectRenderActiveRef.current || !is3dRef.current || !workerRef.current) return;
     const v = viz3dRef.current;
-    workerRef.current.postMessage({ type: 'setAgentViz', axes: v.axes, grid: v.grid, bounds: v.bounds });
-  }, []);
+    workerRef.current.postMessage({ type: 'setAgentViz', axes: v.axes, grid: v.grid, bounds: v.bounds, plane: gridPlaneMsg() });
+  }, [gridPlaneMsg]);
 
   // L1 UI-sync driver (the grid sibling of updateAgentUiSync). ON = the worker
   // reads colours back each frame and ships them, so gl3d renders the full frame
@@ -4728,12 +4734,15 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       const voxelFrame = voxelActive
         && gridUiSyncPostedRef.current && !gridFrameAwaitingColorsRef.current && colors3d != null;
       const voxelFree = voxelActive && !voxelFrame;
-      // wireframesExternal — in EITHER free mode the worker now draws the
-      // bounds/grid/axes itself, depth-tested against its own scene (voxels: the
-      // L1 line pass; agents: its sphere-pass sibling), so gl3d must NOT draw
-      // them again on the transparent overlay canvas above. It used to be
-      // `voxelFree` only, which is why the agent free mode painted the floor grid
-      // IN FRONT of the agents (no depth relationship across two canvases).
+      // wireframesExternal — in EITHER free mode the worker draws the SCENE-
+      // ANCHORED geometry itself, depth-tested against its own scene (voxels: the
+      // L1 line pass; agents: its sphere-pass sibling): the bounds/grid/axes AND
+      // the BRUSH INTERACTION PLANE. gl3d must NOT draw those again on the
+      // transparent overlay canvas above — with no shared depth buffer they
+      // composite IN FRONT of every cell/agent (the reported "the brush plane is
+      // always drawn in front of the 3D cells", and before that the floor grid in
+      // agent free mode). The always-on-top CURSOR set — brush footprint outline,
+      // hover/inspect cells, agent rings, axis labels, gizmo — stays in gl3d.
       const wireframesFree = agent3dFree || voxelFree;
       r.setOverlaysOnly(wireframesFree, wireframesFree);
       { const sc = agentSphereCanvasRef.current; if (sc) sc.style.display = agent3dFree ? 'block' : 'none'; }
@@ -8677,8 +8686,14 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
     plane3dRef.current = { axis: plane3d.axis, pos: plane3d.pos };
     plane3dEnabledRef.current = plane3d.enabled;
     line3dAnchorRef.current = null;  // a staged Line anchor is meaningless on a moved plane
+    // The plane is DEPTH-TESTED SCENE geometry, so in either free mode the WORKER
+    // draws it (gl3d's overlay canvas shares no depth buffer with the worker's
+    // scene). Post it the same way the wireframe toggles are posted — the refs are
+    // assigned above, so both helpers read the new value.
+    if (voxelRenderActiveRef.current) postGridViz();
+    postAgentViz();
     draw();
-  }, [plane3d, draw]);
+  }, [plane3d, draw, postGridViz, postAgentViz]);
   useEffect(() => { orbit3dRef.current = orbit3d; }, [orbit3d]);
   useEffect(() => { zoom3dRef.current = zoom3d; }, [zoom3d]);
   useEffect(() => {

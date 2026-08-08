@@ -1585,9 +1585,13 @@ export function HelpView() {
             <strong>Painting in 3D</strong> uses an <strong>interaction plane</strong>: enable
             <strong>Brush plane</strong> in the 3D View panel and pick its axis + position. The
             plane shows its <strong>bounds and a grid</strong> so you can see exactly where it
-            sits, and the hovered brush is shown by a bounded <strong>wireframe outline of the
-            brush shape</strong> (a circle / box / sphere, so even a large volumetric brush stays
-            light). A plain <strong>left-drag</strong> then ray-traces onto
+            sits. It is <strong>drawn where it really is in the volume</strong> &mdash; cells (and
+            agents) in front of the slice hide it, so you can tell at a glance whether the plane
+            is behind or in front of what you are looking at. The <em>cursor</em> is the
+            exception, and deliberately so: the hovered brush is a bounded
+            <strong> wireframe outline of the brush shape</strong> (a circle / box / sphere, so
+            even a large volumetric brush stays light) and stays visible <em>through</em> the
+            volume, like a mouse pointer. A plain <strong>left-drag</strong> then ray-traces onto
             that slice and stamps the current brush <strong>shape and size</strong> (Rectangle /
             Circle / Ring) flat in the plane &mdash; exactly like the 2D brush, including drag
             interpolation and torus wrap. The <strong>Line</strong> tool takes two clicks on the
@@ -3061,14 +3065,15 @@ export function HelpView() {
               simulation itself is unaffected. Not available in 3D yet.</li>
             <li><strong>Direct agent render &mdash; 3D.</strong> The same fast path works
               for <em>3D</em> agents-only models: while you just watch, the worker draws the
-              agents as GPU spheres and the 3D viewport draws only the overlays (axes,
-              grid, gizmo) on top. It engages when there are no bonds to draw and
+              agents as GPU spheres <em>and</em> the scene-anchored geometry (axes, floor grid,
+              bounds box, brush plane) in one depth pass, so agents in front correctly hide
+              them; the 3D viewport adds only the cursor-style overlays (brush outline, hovered
+              cells, axis labels, gizmo) on top. It engages when there are no bonds to draw and
               <strong> Alpha blend</strong> is OFF (translucent spheres need the sorted
               3D path). The moment you interact, pause, or record, it seamlessly returns to
-              the full 3D render &mdash; so cast shadows, ambient occlusion, translucent
-              (alpha-blend) agents, and the brush plane occluding the spheres all appear
-              then; in the free-running fast path those are off (the spheres are opaque and
-              always drawn under the overlays).</li>
+              the full 3D render &mdash; so cast shadows, ambient occlusion and translucent
+              (alpha-blend) agents appear then; in the free-running fast path those are off
+              (the spheres are opaque).</li>
           </ul>
 
           <h3 className={styles.h3}>Two GPU paths &mdash; and why a bonded model takes the slower one</h3>

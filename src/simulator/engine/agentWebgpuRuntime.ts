@@ -35,7 +35,7 @@ import type { AgentWebGPULayout } from '../../modeler/vpl/compiler/agentWebgpu/l
 import { AGENT_GPU_F32_FIELDS, AGENT_GPU_F32_FIELDS_3D, AGENT_GPU_I32_FIELDS, AGENT_GPU_QUEUE_FIELDS, AGENT_GPU_REQUEST_FIELDS, AGENT_GPU_SPRITE_FIELDS } from '../../modeler/vpl/compiler/agentWebgpu/layout';
 import { emitAgentForcePassWGSL, agentMirrorFields, emitForceControlStruct } from '../../modeler/vpl/compiler/agentWebgpu/forcePass';
 import { acquireSharedGpuDevice, releaseSharedGpuDevice } from './sharedGpuDevice';
-import { buildSceneWireframeVerts, type SceneViz } from './sceneWireframe';
+import { buildSceneWireframeVerts, buildBrushPlaneVerts, type SceneViz, type BrushPlaneSpec } from './sceneWireframe';
 import { GLOW_TONE_EXPOSURE } from '../glowTone';
 
 const REQUEST_FIELD_SET: ReadonlySet<string> = new Set(AGENT_GPU_REQUEST_FIELDS);
@@ -313,10 +313,11 @@ export interface AgentWebGPURuntime {
   renderDepthTex?: GPUTexture | null;
   renderDepthW?: number;
   renderDepthH?: number;
-  // Scene-anchored wireframes (bounds / floor grid / origin axes), drawn in the
-  // SAME render pass + depth buffer as the spheres so agents in front occlude
-  // them — the agent-sphere sibling of the L1 voxel line pass. Geometry comes
-  // from the SHARED buildSceneWireframeVerts (mirrors gl3d's renderOverlays).
+  // Scene-anchored geometry — the wireframes (bounds / floor grid / origin axes)
+  // AND the BRUSH INTERACTION PLANE — drawn in the SAME render pass + depth buffer
+  // as the spheres so agents in front occlude it; the agent-sphere sibling of the
+  // L1 voxel line pass. Geometry comes from the SHARED sceneWireframe.ts builders
+  // (the same ones gl3d's renderOverlays / renderBrushPlane use).
   renderLinePipeline?: GPURenderPipeline | null;
   renderLineBindGroup?: GPUBindGroup | null;
   renderLineBuf?: GPUBuffer | null;
@@ -324,6 +325,8 @@ export interface AgentWebGPURuntime {
   renderLineSig?: string;
   /** Which wireframe groups to draw (mirrors the panel's Viz3D toggles). */
   renderViz?: SceneViz;
+  /** The brush interaction plane to draw, or null when the toggle is off. */
+  renderPlane?: BrushPlaneSpec | null;
   /** (W-1)/2, (H-1)/2, (D-1)/2 from the last RenderView3D — the ONLY source the
    *  line geometry derives its dims from, so lines and spheres share one frame. */
   renderHalf3D?: [number, number, number];
@@ -1724,10 +1727,11 @@ export interface AgentRenderSurface {
   renderDepthTex?: GPUTexture | null;
   renderDepthW?: number;
   renderDepthH?: number;
-  // Scene-anchored wireframes (bounds / floor grid / origin axes), drawn in the
-  // SAME render pass + depth buffer as the spheres so agents in front occlude
-  // them — the agent-sphere sibling of the L1 voxel line pass. Geometry comes
-  // from the SHARED buildSceneWireframeVerts (mirrors gl3d's renderOverlays).
+  // Scene-anchored geometry — the wireframes (bounds / floor grid / origin axes)
+  // AND the BRUSH INTERACTION PLANE — drawn in the SAME render pass + depth buffer
+  // as the spheres so agents in front occlude it; the agent-sphere sibling of the
+  // L1 voxel line pass. Geometry comes from the SHARED sceneWireframe.ts builders
+  // (the same ones gl3d's renderOverlays / renderBrushPlane use).
   renderLinePipeline?: GPURenderPipeline | null;
   renderLineBindGroup?: GPUBindGroup | null;
   renderLineBuf?: GPUBuffer | null;
@@ -1735,6 +1739,8 @@ export interface AgentRenderSurface {
   renderLineSig?: string;
   /** Which wireframe groups to draw (mirrors the panel's Viz3D toggles). */
   renderViz?: SceneViz;
+  /** The brush interaction plane to draw, or null when the toggle is off. */
+  renderPlane?: BrushPlaneSpec | null;
   /** (W-1)/2, (H-1)/2, (D-1)/2 from the last RenderView3D — the ONLY source the
    *  line geometry derives its dims from, so lines and spheres share one frame. */
   renderHalf3D?: [number, number, number];
@@ -2191,9 +2197,10 @@ fn fsMain(in: VSOut) -> FSOut {
 }`;
 }
 
-/** Scene-anchored wireframe overlays (bounds box / floor grid / origin axes) for
- *  the 3D agent free mode, drawn in the SAME render pass + depth buffer as the
- *  sphere impostors so agents in front occlude them. Reuses the RenderView3D
+/** Scene-anchored geometry (bounds box / floor grid / origin axes + the BRUSH
+ *  INTERACTION PLANE) for the 3D agent free mode, drawn in the SAME render pass +
+ *  depth buffer as the sphere impostors so agents in front occlude it. One
+ *  pipeline serves both groups — identical state, one buffer. Reuses the RenderView3D
  *  uniform (mvp @0) — no new uniform, no RenderView3D widening (which would move
  *  every later member; see verify-render-uniform-layouts.mjs). Line-list; pos +
  *  colour vertex attributes; depth-test ON + depth-write ON.
@@ -2232,18 +2239,22 @@ fn fsLine(in : LOut) -> @location(0) vec4<f32> {
   return vec4<f32>(in.color, 1.0);
 }`;
 
-/** Set which scene wireframes the 3D agent render draws (mirrors the panel's
- *  Viz3D axes/grid/bounds). Clears the geometry cache so the next present
+/** Set the scene-anchored geometry the 3D agent render draws: which wireframes
+ *  (mirrors the panel's Viz3D axes/grid/bounds) and the brush interaction plane
+ *  (null when the toggle is off). Clears the geometry cache so the next present
  *  rebuilds. The agent sibling of uploadVoxelViz. */
-export function uploadAgentViz(rt: AgentRenderSurface, viz: SceneViz): void {
+export function uploadAgentViz(rt: AgentRenderSurface, viz: SceneViz, plane: BrushPlaneSpec | null = null): void {
   rt.renderViz = { axes: !!viz.axes, grid: !!viz.grid, bounds: !!viz.bounds };
+  rt.renderPlane = plane ? { axis: plane.axis, pos: plane.pos } : null;
   rt.renderLineSig = '';   // force a rebuild on the next present
 }
 
-/** (Re)build the wireframe vertex buffer when the viz flags or the world dims
- *  change. No-op when the signature is unchanged. The dims come from the LAST
- *  RenderView3D's half-extents (W = 2·halfX + 1, exact for integer dims), so the
- *  lines and the spheres can never disagree about the world frame. */
+/** (Re)build the line vertex buffer when the viz flags, the brush plane or the
+ *  world dims change. No-op when the signature is unchanged. The wireframes and
+ *  the plane share ONE buffer + ONE draw (identical pipeline state, same rebuild
+ *  triggers). The dims come from the LAST RenderView3D's half-extents
+ *  (W = 2·halfX + 1, exact for integer dims), so the lines and the spheres can
+ *  never disagree about the world frame. */
 function ensureAgentLineBuffer(rt: AgentRenderSurface): void {
   // No camera yet (the attach presents once before the first setAgentCamera) —
   // the world dims are unknown, so draw nothing rather than a degenerate 1×1×1
@@ -2251,11 +2262,17 @@ function ensureAgentLineBuffer(rt: AgentRenderSurface): void {
   if (!rt.renderHalf3D) { rt.renderLineCount = 0; return; }
   const [hx, hy, hz] = rt.renderHalf3D;
   const viz = rt.renderViz ?? { axes: false, grid: false, bounds: false };
-  const sig = `${viz.axes ? 1 : 0}${viz.grid ? 1 : 0}${viz.bounds ? 1 : 0}|${hx}|${hy}|${hz}`;
+  const pl = rt.renderPlane ?? null;
+  const sig = `${viz.axes ? 1 : 0}${viz.grid ? 1 : 0}${viz.bounds ? 1 : 0}|${pl ? `${pl.axis}${pl.pos}` : '-'}|${hx}|${hy}|${hz}`;
   if (sig === rt.renderLineSig && (rt.renderLineBuf || (rt.renderLineCount ?? 0) === 0)) return;
   rt.renderLineSig = sig;
   const W = Math.max(1, Math.round(2 * hx + 1)), H = Math.max(1, Math.round(2 * hy + 1)), D = Math.max(1, Math.round(2 * hz + 1));
-  const verts = (viz.axes || viz.grid || viz.bounds) ? buildSceneWireframeVerts(W, H, D, viz) : new Float32Array(0);
+  const wire = (viz.axes || viz.grid || viz.bounds) ? buildSceneWireframeVerts(W, H, D, viz) : new Float32Array(0);
+  const plane = pl ? buildBrushPlaneVerts(W, H, D, pl) : new Float32Array(0);
+  let verts: Float32Array;
+  if (plane.length === 0) verts = wire;
+  else if (wire.length === 0) verts = plane;
+  else { verts = new Float32Array(wire.length + plane.length); verts.set(wire, 0); verts.set(plane, wire.length); }
   rt.renderLineCount = verts.length / 6;
   if (rt.renderLineBuf) { try { rt.renderLineBuf.destroy(); } catch { /* non-fatal */ } rt.renderLineBuf = null; }
   if (verts.length === 0) return;
@@ -3021,9 +3038,10 @@ function presentAgentSpheresEncode(rt: AgentRenderSurface, enc: GPUCommandEncode
   pass.setPipeline(rt.renderSpherePipeline);
   pass.setBindGroup(0, rt.renderSphereBindGroup);
   pass.draw(4, Math.max(1, hw));   // 4 verts (triangle-strip quad) × hw agents
-  // Scene wireframes (bounds/grid/axes) in the SAME pass ⇒ shared depth ⇒ agents
-  // in front occlude them (the free-mode two-canvas depth bug). Depth-write ON so
-  // the axis arrowheads self-order; drawn after the spheres but depth decides.
+  // Scene-anchored geometry — the wireframes (bounds/grid/axes) AND the brush
+  // interaction plane — in the SAME pass ⇒ shared depth ⇒ agents in front occlude
+  // it (the free-mode two-canvas depth bug). Depth-write ON so the axis arrowheads
+  // self-order; drawn after the spheres but depth decides.
   if (rt.renderLinePipeline && rt.renderLineBindGroup && rt.renderLineBuf && (rt.renderLineCount ?? 0) > 0) {
     pass.setPipeline(rt.renderLinePipeline);
     pass.setBindGroup(0, rt.renderLineBindGroup);

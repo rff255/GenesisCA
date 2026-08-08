@@ -18,7 +18,7 @@ import {
   buildReductionPlan, emitReductionShader,
 } from './webgpuReduce';
 import { acquireSharedGpuDevice, releaseSharedGpuDevice } from './sharedGpuDevice';
-import { buildSceneWireframeVerts } from './sceneWireframe';
+import { buildSceneWireframeVerts, buildBrushPlaneVerts, type BrushPlaneSpec } from './sceneWireframe';
 
 export interface WebGPURuntimeInit {
   shaderCode: string;
@@ -146,20 +146,22 @@ export interface WebGPURuntime {
   voxelClear: [number, number, number, number];
   /** Whether the current view wants backface culling (no open clip interval). */
   voxelCullBack: boolean;
-  /** Scene-anchored wireframe overlays drawn in the SAME depth pass as the cubes
-   *  (so voxels in front occlude them — the free-mode two-canvas fix). Mirror
-   *  gl3d's renderOverlays; gated per-flag by the Viz3D axes/grid/bounds toggles
-   *  the main thread threads via setGridViz. The gizmo / brush plane / brush
-   *  outline / hover cells / axis labels stay in gl3d (always-on-top UI). */
+  /** Scene-anchored geometry drawn in the SAME depth pass as the cubes (so voxels
+   *  in front occlude it — the free-mode two-canvas fix): the wireframes (bounds /
+   *  grid / axes) AND the BRUSH INTERACTION PLANE, both from the shared builders
+   *  in sceneWireframe.ts, both threaded by setGridViz. The gizmo / brush footprint
+   *  outline / hover cells / axis labels stay in gl3d (always-on-top CURSOR UI). */
   voxelLinePipeline: GPURenderPipeline | null;
   voxelLineBindGroup: GPUBindGroup | null;
   voxelLineBuf: GPUBuffer | null;
   /** Line-vertex count in voxelLineBuf (6 floats/vertex). */
   voxelLineCount: number;
-  /** Cache key for the built line geometry (viz flags + dims) — rebuild only on change. */
+  /** Cache key for the built line geometry (viz flags + plane + dims) — rebuild only on change. */
   voxelLineSig: string;
   /** Which scene wireframes to draw (mirrors Viz3D axes/grid/bounds). */
   voxelViz: { axes: boolean; grid: boolean; bounds: boolean };
+  /** The brush interaction plane to draw, or null when the toggle is off. */
+  voxelPlane: BrushPlaneSpec | null;
 
   /** L1 free-mode cast shadows (Phase 2). A depth-only pass renders the compacted
    *  cubes from the light POV into voxelShadowTex; the draw FS PCF-samples it. The
@@ -286,6 +288,7 @@ export async function createWebGPURuntime(init: WebGPURuntimeInit): Promise<WebG
     voxelLineCount: 0,
     voxelLineSig: '',
     voxelViz: { axes: false, grid: false, bounds: false },
+    voxelPlane: null,
     voxelShadowOn: false,
     voxelShadowTex: null,
     voxelShadowSampler: null,
@@ -961,26 +964,41 @@ fn fsMain(in : VSOut) -> @location(0) vec4<f32> {
   return vec4<f32>(in.color, 1.0);
 }`;
 
-// The bounds / grid / axes line-list geometry lives in sceneWireframe.ts — SHARED
-// with the Phase C agent-sphere free-mode line pass (agentWebgpuRuntime.ts), so the
-// two worker renderers and gl3d's renderOverlays can never draw different lines.
+// The bounds / grid / axes AND brush-plane line-list geometry lives in
+// sceneWireframe.ts — SHARED with the Phase C agent-sphere free-mode line pass
+// (agentWebgpuRuntime.ts) and with gl3d itself, so the three renderers can never
+// draw different lines and the free↔frame flip is seamless.
 
-/** Set which scene wireframes the voxel render draws (mirrors Viz3D axes/grid/
- *  bounds). Clears the geometry cache so the next present rebuilds. */
-export function uploadVoxelViz(rt: WebGPURuntime, viz: { axes: boolean; grid: boolean; bounds: boolean }): void {
+/** Set the scene-anchored geometry the voxel render draws: which wireframes
+ *  (mirrors Viz3D axes/grid/bounds) and the brush interaction plane (null when
+ *  the toggle is off). Clears the geometry cache so the next present rebuilds. */
+export function uploadVoxelViz(
+  rt: WebGPURuntime,
+  viz: { axes: boolean; grid: boolean; bounds: boolean },
+  plane: BrushPlaneSpec | null = null,
+): void {
   rt.voxelViz = { axes: !!viz.axes, grid: !!viz.grid, bounds: !!viz.bounds };
+  rt.voxelPlane = plane ? { axis: plane.axis, pos: plane.pos } : null;
   rt.voxelLineSig = '';   // force rebuild on the next present
 }
 
-/** (Re)build the line-overlay vertex buffer when the viz flags or grid dims
- *  change. No-op when the signature is unchanged. */
+/** (Re)build the line vertex buffer when the viz flags, the brush plane or the
+ *  grid dims change. No-op when the signature is unchanged. The wireframes and
+ *  the plane share ONE buffer + ONE draw — they have identical pipeline state
+ *  (line-list, depth-test + depth-write) and are rebuilt by the same triggers. */
 function ensureVoxelLineBuffer(rt: WebGPURuntime): void {
   const W = rt.layout.gridWidth, H = rt.layout.gridHeight, D = rt.layout.gridDepth;
   const viz = rt.voxelViz;
-  const sig = `${viz.axes ? 1 : 0}${viz.grid ? 1 : 0}${viz.bounds ? 1 : 0}|${W}|${H}|${D}`;
+  const pl = rt.voxelPlane;
+  const sig = `${viz.axes ? 1 : 0}${viz.grid ? 1 : 0}${viz.bounds ? 1 : 0}|${pl ? `${pl.axis}${pl.pos}` : '-'}|${W}|${H}|${D}`;
   if (sig === rt.voxelLineSig && (rt.voxelLineBuf || rt.voxelLineCount === 0)) return;
   rt.voxelLineSig = sig;
-  const verts = (viz.axes || viz.grid || viz.bounds) ? buildSceneWireframeVerts(W, H, D, viz) : new Float32Array(0);
+  const wire = (viz.axes || viz.grid || viz.bounds) ? buildSceneWireframeVerts(W, H, D, viz) : new Float32Array(0);
+  const plane = pl ? buildBrushPlaneVerts(W, H, D, pl) : new Float32Array(0);
+  let verts: Float32Array;
+  if (plane.length === 0) verts = wire;
+  else if (wire.length === 0) verts = plane;
+  else { verts = new Float32Array(wire.length + plane.length); verts.set(wire, 0); verts.set(plane, wire.length); }
   rt.voxelLineCount = verts.length / 6;
   if (rt.voxelLineBuf) { try { rt.voxelLineBuf.destroy(); } catch { /* non-fatal */ } rt.voxelLineBuf = null; }
   if (verts.length === 0) return;
@@ -1198,9 +1216,10 @@ export async function setupVoxelRender(rt: WebGPURuntime, canvas: OffscreenCanva
       ],
     });
 
-    // Scene-wireframe (bounds/grid/axes) line pipeline — reuses the VoxelView
-    // uniform (mvp) so it shares projection with the cubes; depth-tested against
-    // the same buffer the cube pass writes, so voxels in front occlude it.
+    // Scene-anchored line pipeline (bounds/grid/axes + the brush plane) — reuses
+    // the VoxelView uniform (mvp) so it shares projection with the cubes;
+    // depth-tested against the same buffer the cube pass writes, so voxels in
+    // front occlude it.
     const lineModule = rt.device.createShaderModule({ label: 'voxel-line', code: VOXEL_LINE_WGSL });
     {
       const info = await lineModule.getCompilationInfo();
@@ -1311,9 +1330,10 @@ export function presentVoxels(rt: WebGPURuntime): void {
     rpass.setBindGroup(0, rt.voxelDrawBindGroup);
     rpass.drawIndirect(rt.voxelIndirectBuf, 0);
   }
-  // Scene wireframes (bounds/grid/axes) in the SAME pass ⇒ shared depth ⇒ voxels
-  // in front occlude them (the free-mode two-canvas bug fix). Depth-write ON so
-  // the axis arrowheads self-order; drawn after the cubes but depth handles order.
+  // Scene-anchored geometry — the wireframes (bounds/grid/axes) AND the brush
+  // interaction plane — in the SAME pass ⇒ shared depth ⇒ voxels in front occlude
+  // it (the free-mode two-canvas bug fix). Depth-write ON so the axis arrowheads
+  // self-order; drawn after the cubes but depth handles order.
   if (rt.voxelLinePipeline && rt.voxelLineBindGroup && rt.voxelLineBuf && rt.voxelLineCount > 0) {
     rpass.setPipeline(rt.voxelLinePipeline);
     rpass.setBindGroup(0, rt.voxelLineBindGroup);

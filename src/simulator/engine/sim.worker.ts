@@ -562,10 +562,15 @@ interface SetGridCameraMsg { type: 'setGridCamera'; view: VoxelRenderView }
  *  CPU colours mirror: gl3d frame rendering + picking, recording, inspect). While
  *  OFF the voxel render owns the display and nothing crosses the wire. Default ON. */
 interface SetGridUiSyncMsg { type: 'setGridUiSync'; on: boolean }
-/** Which scene-anchored wireframes the free-mode voxel render draws (mirrors gl3d's
- *  Viz3D axes/grid/bounds toggles). The worker's voxel renderer draws these into
- *  its canvas depth-tested against the cubes; gl3d stops drawing them in free mode. */
-interface SetGridVizMsg { type: 'setGridViz'; axes: boolean; grid: boolean; bounds: boolean }
+/** Which SCENE-ANCHORED geometry the free-mode voxel render draws: the wireframes
+ *  (mirrors gl3d's Viz3D axes/grid/bounds toggles) and the BRUSH INTERACTION PLANE
+ *  (`plane` null when the toggle is off). The worker's voxel renderer draws these
+ *  into its canvas depth-tested against the cubes; gl3d stops drawing them in free
+ *  mode, where its transparent overlay canvas would always composite them in front. */
+interface SetGridVizMsg {
+  type: 'setGridViz'; axes: boolean; grid: boolean; bounds: boolean;
+  plane?: { axis: 'x' | 'y' | 'z'; pos: number } | null;
+}
 /** Re-present the voxel frame (tab-refocus / soft-recompile analogue of
  *  refreshDisplay). */
 interface RefreshGridDisplayMsg { type: 'refreshGridDisplay' }
@@ -690,11 +695,14 @@ interface SetAgentCameraMsg { type: 'setAgentCamera'; view: AgentRenderViewAny }
  *  and ships the render snapshot (features that need CPU agent state). While OFF
  *  the resident batch skips the readback (free-running). Default ON. */
 interface SetAgentUiSyncMsg { type: 'setAgentUiSync'; on: boolean }
-/** Which scene wireframes (bounds / floor grid / origin axes) the 3D agent free-mode
- *  render draws — the agent sibling of `setGridViz`. gl3d stops drawing those three
- *  in its overlays-only path, so the worker owns them (depth-tested against the
- *  spheres). */
-interface SetAgentVizMsg { type: 'setAgentViz'; axes: boolean; grid: boolean; bounds: boolean }
+/** Which scene-anchored geometry (bounds / floor grid / origin axes + the BRUSH
+ *  INTERACTION PLANE) the 3D agent free-mode render draws — the agent sibling of
+ *  `setGridViz`. gl3d stops drawing them in its overlays-only path, so the worker
+ *  owns them (depth-tested against the spheres). */
+interface SetAgentVizMsg {
+  type: 'setAgentViz'; axes: boolean; grid: boolean; bounds: boolean;
+  plane?: { axis: 'x' | 'y' | 'z'; pos: number } | null;
+}
 /** Re-present the agent frame (tab-refocus / soft-recompile analogue of
  *  refreshDisplay). */
 interface RefreshAgentDisplayMsg { type: 'refreshAgentDisplay' }
@@ -1221,6 +1229,9 @@ let agentRenderView: AgentRenderViewAny | null = null;
  *  Viz3D axes/grid/bounds), re-applied on attach / refocus so a display re-attach
  *  keeps the overlays. The agent sibling of `gridViz3d`. */
 let agentViz3d: { axes: boolean; grid: boolean; bounds: boolean } = { axes: false, grid: false, bounds: false };
+/** The last brush interaction plane for the 3D agent render (null = toggle off),
+ *  re-applied alongside `agentViz3d`. The agent sibling of `gridPlane3d`. */
+let agentPlane3d: { axis: 'x' | 'y' | 'z'; pos: number } | null = null;
 
 /** A2 — the render-ONLY surface for a CPU (JS/WASM) target. On a webgpu target the
  *  render reads the full `agentWebgpuRuntime`; on a CPU target there is no compute
@@ -4524,6 +4535,9 @@ let gridRenderView: VoxelRenderView | null = null;
 /** The last scene-wireframe viz toggles (mirrors gl3d's Viz3D axes/grid/bounds),
  *  re-applied on attach / refocus so a display re-attach keeps the overlays. */
 let gridViz3d: { axes: boolean; grid: boolean; bounds: boolean } = { axes: false, grid: false, bounds: false };
+/** The last brush interaction plane (null = the toggle is off), re-applied
+ *  alongside `gridViz3d` — the worker draws it depth-tested against the cubes. */
+let gridPlane3d: { axis: 'x' | 'y' | 'z'; pos: number } | null = null;
 /** DEV probe (reported by `__voxelReadback`): how many frames the worker has
  *  presented into the transferred voxel canvas. The regression this guards is
  *  "the display froze because nothing presented" — see voxelDisplayLive(). */
@@ -7759,7 +7773,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
               return;
             }
             if (gridRenderView) uploadVoxelView(rt, gridRenderView);
-            uploadVoxelViz(rt, gridViz3d);   // re-apply the scene-wireframe toggles
+            uploadVoxelViz(rt, gridViz3d, gridPlane3d);   // re-apply the scene geometry (wireframes + brush plane)
             presentVoxelsIfActive();
             // ACK the worker's ACTUAL `gridUiSync`. `gridUiSync` is a MODULE flag
             // that SURVIVES a re-attach (a display resize re-attaches on the SAME
@@ -7789,11 +7803,13 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
     }
 
     case 'setGridViz': {
-      // Which scene wireframes (bounds/grid/axes) the free-mode voxel render draws
-      // (mirrors gl3d's Viz3D toggles). Present-only: re-present with the new set.
+      // Which SCENE-ANCHORED geometry the free-mode voxel render draws: the
+      // wireframes (bounds/grid/axes, mirroring gl3d's Viz3D toggles) and the brush
+      // interaction plane. Present-only: re-present with the new set.
       gridViz3d = { axes: !!msg.axes, grid: !!msg.grid, bounds: !!msg.bounds };
+      gridPlane3d = msg.plane ? { axis: msg.plane.axis, pos: msg.plane.pos } : null;
       if (webgpuRuntime?.voxelRender) {
-        uploadVoxelViz(webgpuRuntime, gridViz3d);
+        uploadVoxelViz(webgpuRuntime, gridViz3d, gridPlane3d);
         presentVoxelsIfActive();
       }
       break;
@@ -7852,7 +7868,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       // canvas — re-present so a stale/unpresented canvas repaints.
       if (webgpuRuntime?.voxelRender) {
         if (gridRenderView) uploadVoxelView(webgpuRuntime, gridRenderView);
-        uploadVoxelViz(webgpuRuntime, gridViz3d);
+        uploadVoxelViz(webgpuRuntime, gridViz3d, gridPlane3d);
         presentVoxelsIfActive();
       }
       break;
@@ -7933,7 +7949,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
           // present uploads it — an identity upload, no revert.
           await ensureAgentStoreFresh();
           if (agentRenderView) applyAgentRenderView(rt, agentRenderView);
-          uploadAgentViz(rt, agentViz3d);   // re-apply the scene-wireframe toggles
+          uploadAgentViz(rt, agentViz3d, agentPlane3d);   // re-apply the scene geometry (wireframes + brush plane)
           presentAgentsIfActive();
           // ACK the worker's ACTUAL `agentUiSync` — same rule as the voxel ack
           // above: the module flag survives a re-attach on the SAME worker, so the
@@ -7998,14 +8014,16 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
     }
 
     case 'setAgentViz': {
-      // Which scene wireframes (bounds/grid/axes) the free-mode 3D agent render
-      // draws (mirrors gl3d's Viz3D toggles). Present-only: re-present with the
-      // new set. The agent sibling of setGridViz.
+      // Which scene-anchored geometry the free-mode 3D agent render draws: the
+      // wireframes (bounds/grid/axes, mirroring gl3d's Viz3D toggles) and the brush
+      // interaction plane. Present-only: re-present with the new set. The agent
+      // sibling of setGridViz.
       agentViz3d = { axes: !!msg.axes, grid: !!msg.grid, bounds: !!msg.bounds };
+      agentPlane3d = msg.plane ? { axis: msg.plane.axis, pos: msg.plane.pos } : null;
       {
         const rt = activeRenderSurface();
         if (agentRenderActive && rt) {
-          uploadAgentViz(rt, agentViz3d);
+          uploadAgentViz(rt, agentViz3d, agentPlane3d);
           // NEVER upload a stale CPU store (the documented present rule) —
           // presentAgentsIfActive present-onlys when stale.
           presentAgentsIfActive();
@@ -8021,7 +8039,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
         const rt = activeRenderSurface();
         if (agentRenderActive && rt && agentStore) {
           if (agentRenderView) applyAgentRenderView(rt, agentRenderView);
-          uploadAgentViz(rt, agentViz3d);   // re-apply the scene-wireframe toggles
+          uploadAgentViz(rt, agentViz3d, agentPlane3d);   // re-apply the scene geometry (wireframes + brush plane)
           presentAgentsIfActive();
         }
       }

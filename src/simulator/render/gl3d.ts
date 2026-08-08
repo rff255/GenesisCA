@@ -10,7 +10,9 @@
 //
 // Pure WebGL2 + a tiny mat4 helper — no React, no app imports. SimulatorView
 // owns the lifecycle (create on entering 3D, dispose on leaving) and feeds it
-// the RGBA colors buffer + camera/clip state through refs each frame.
+// the RGBA colors buffer + camera/clip state through refs each frame. (The one
+// import is ../engine/sceneWireframe — a dependency-free geometry leaf shared
+// with the two worker WGSL renderers, so the free↔frame flip cannot move a line.)
 //
 // Culling is mandatory: a W×H×D volume can be millions of cells; we ONLY
 // instance cells with alpha > 0 (compacted into the instance buffer each upload).
@@ -28,6 +30,8 @@
 //    ALPHA BLEND culling is REQUIRED for correctness: with depth writes off,
 //    an uncculled cube blends its backfaces in buffer order (not depth order)
 //    → incoherent per-cube colour + doubled opacity. See the display pass.
+
+import { buildBrushPlaneVerts } from '../engine/sceneWireframe';
 
 // ---------------------------------------------------------------------------
 // mat4 (column-major, the order WebGL expects)
@@ -1613,12 +1617,18 @@ export class Gl3DRenderer {
   setClipPlane(clip: ClipPlane3D): void { this.clip = clip; this.refreshVoxelsIfCullingChanged(); }
   setViz(viz: Viz3D): void { this.viz = viz; }
   /** Phase C: overlays-only mode (agent/voxel 3D free-mode direct render).
-   *  `wireframesExternal` = the worker's renderer draws the scene wireframes
-   *  (bounds / grid / axes) itself, depth-tested — TRUE only for the L1 VOXEL
-   *  free mode. The agent-SPHERE free mode has no worker line pass, so gl3d
-   *  must keep drawing them (always-on-top on the transparent canvas — the
-   *  known free-mode occlusion tradeoff; before this flag they silently
-   *  vanished in agent free mode and "only appeared on interaction"). */
+   *  `wireframesExternal` = the worker's renderer draws the DEPTH-TESTED
+   *  scene-anchored geometry itself — the scene wireframes (bounds / grid /
+   *  axes) AND the brush interaction plane. TRUE in BOTH free modes now (the
+   *  L1 voxel pass and the Phase C agent-sphere pass each have a line pass).
+   *  gl3d must then skip that geometry: it renders onto a SEPARATE transparent
+   *  canvas above the worker's scene, with no shared depth buffer, so anything
+   *  it draws there composites IN FRONT of every cell/agent — the reported
+   *  "the brush plane is always drawn in front of the 3D cells".
+   *
+   *  What gl3d keeps drawing in overlays-only mode is exactly the always-on-top
+   *  CURSOR/UI set — the brush footprint outline, hovered/inspected cells, the
+   *  axis labels and the gizmo — which is meant to be visible through the scene. */
   setOverlaysOnly(on: boolean, wireframesExternal = false): void {
     this.overlaysOnly = on;
     this.wireframesExternal = wireframesExternal;
@@ -2547,15 +2557,19 @@ export class Gl3DRenderer {
     if (overlaysOnly) gl.clearColor(0, 0, 0, 0);
     else gl.clearColor(this.bgColor[0], this.bgColor[1], this.bgColor[2], this.bgColor[3]);
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
-    // In FREE mode (overlaysOnly) the worker's WGSL voxel renderer draws the
-    // scene-anchored wireframes (bounds / grid / axes) into ITS canvas, depth-
-    // tested against the cubes — so gl3d must NOT draw them here (it renders onto
-    // a SEPARATE transparent canvas above the voxels, which has no shared depth
-    // buffer and would always composite them in front). In FRAME mode (one canvas,
-    // shared depth) gl3d still draws them correctly. The brush interaction plane
-    // stays gl3d-drawn in both modes (always-on-top UI, like the gizmo/labels).
-    if (!overlaysOnly || !this.wireframesExternal) this.renderOverlays();   // axes / grid / bounds (worker owns them ONLY in voxel free mode)
-    this.renderBrushPlane(); // brush interaction-plane bounds + grid (depth-tested)
+    // In FREE mode (overlaysOnly) the worker's WGSL renderer draws the SCENE-
+    // ANCHORED geometry — the wireframes (bounds / grid / axes) AND the brush
+    // interaction plane — into ITS canvas, depth-tested against the cubes/spheres,
+    // so gl3d must NOT draw them here: it renders onto a SEPARATE transparent
+    // canvas above the scene, which has no shared depth buffer, so anything drawn
+    // here always composites in front. In FRAME mode (one canvas, shared depth)
+    // gl3d draws both correctly — the plane runs BEFORE the voxel/agent passes and
+    // the LESS test lets nearer geometry overwrite it.
+    const sceneExternal = overlaysOnly && this.wireframesExternal;
+    if (!sceneExternal) {
+      this.renderOverlays();   // axes / grid / bounds
+      this.renderBrushPlane(); // brush interaction-plane bounds + grid (depth-tested)
+    }
     if (overlaysOnly) {
       // Skip all scene content — just the interaction overlays over transparent.
       // NB renderAgentRings() is deliberately NOT called here (audit L6): free
@@ -2737,42 +2751,21 @@ export class Gl3DRenderer {
 
   /** Brush interaction-plane indicator: a bright bounded rectangle + a grid on
    *  the slice the brush paints into, so the user sees exactly where the plane
-   *  sits in the volume. Depth-tested (voxels in front occlude it). */
+   *  sits in the volume.
+   *
+   *  DEPTH-TESTED SCENE GEOMETRY, not cursor UI — cells/agents in FRONT of the
+   *  slice occlude it. In FRAME mode that works because this runs BEFORE the
+   *  voxel/agent passes into the SAME depth buffer (later, nearer geometry wins
+   *  the LESS test). In FREE mode gl3d has no shared depth buffer with the
+   *  worker's scene, so the WORKER draws the plane instead and `render()` skips
+   *  this — see setOverlaysOnly's `wireframesExternal`.
+   *
+   *  The geometry comes from the SHARED builder the two worker WGSL line passes
+   *  use, so the free↔frame flip cannot move a line. */
   private renderBrushPlane(): void {
     const p = this.brushPlane;
     if (!p) return;
-    const gl = this.gl;
-    const hx = (this.W - 1) / 2, hy = (this.H - 1) / 2, hz = (this.D - 1) / 2;
-    const x0 = -hx - 0.5, x1 = hx + 0.5, y0 = -hy - 0.5, y1 = hy + 0.5, z0 = -hz - 0.5, z1 = hz + 0.5;
-    const v: number[] = [];
-    // bright edge colour + dimmer interior grid (cyan, distinct from the bounds box)
-    const er = 0.30, eg = 0.78, eb = 0.92;   // rectangle edges
-    const gr = 0.18, gg = 0.42, gb = 0.52;   // interior grid
-    const seg = (ax: number, ay: number, az: number, bx: number, by: number, bz: number, r: number, g: number, b: number) =>
-      v.push(ax, ay, az, r, g, b, bx, by, bz, r, g, b);
-    if (p.axis === 'z') {
-      const z = hz - p.pos;  // world Z of the layer (layer increases downward)
-      const sx = Math.max(1, Math.ceil(this.W / 100)), sy = Math.max(1, Math.ceil(this.H / 100));
-      for (let i = 0; i <= this.W; i += sx) { const x = x0 + i; seg(x, y0, z, x, y1, z, gr, gg, gb); }
-      for (let j = 0; j <= this.H; j += sy) { const y = y0 + j; seg(x0, y, z, x1, y, z, gr, gg, gb); }
-      seg(x0, y0, z, x1, y0, z, er, eg, eb); seg(x1, y0, z, x1, y1, z, er, eg, eb);
-      seg(x1, y1, z, x0, y1, z, er, eg, eb); seg(x0, y1, z, x0, y0, z, er, eg, eb);
-    } else if (p.axis === 'y') {
-      const y = hy - p.pos;  // world Y of the row (row→-Y)
-      const sx = Math.max(1, Math.ceil(this.W / 100)), sz = Math.max(1, Math.ceil(this.D / 100));
-      for (let i = 0; i <= this.W; i += sx) { const x = x0 + i; seg(x, y, z0, x, y, z1, gr, gg, gb); }
-      for (let k = 0; k <= this.D; k += sz) { const z = z0 + k; seg(x0, y, z, x1, y, z, gr, gg, gb); }
-      seg(x0, y, z0, x1, y, z0, er, eg, eb); seg(x1, y, z0, x1, y, z1, er, eg, eb);
-      seg(x1, y, z1, x0, y, z1, er, eg, eb); seg(x0, y, z1, x0, y, z0, er, eg, eb);
-    } else {
-      const x = p.pos - hx;  // world X of the column
-      const sy = Math.max(1, Math.ceil(this.H / 100)), sz = Math.max(1, Math.ceil(this.D / 100));
-      for (let j = 0; j <= this.H; j += sy) { const y = y0 + j; seg(x, y, z0, x, y, z1, gr, gg, gb); }
-      for (let k = 0; k <= this.D; k += sz) { const z = z0 + k; seg(x, y0, z, x, y1, z, gr, gg, gb); }
-      seg(x, y0, z0, x, y1, z0, er, eg, eb); seg(x, y1, z0, x, y1, z1, er, eg, eb);
-      seg(x, y1, z1, x, y0, z1, er, eg, eb); seg(x, y0, z1, x, y0, z0, er, eg, eb);
-    }
-    this.drawLines(new Float32Array(v), gl.LINES, this.mvp);
+    this.drawLines(buildBrushPlaneVerts(this.W, this.H, this.D, p), this.gl.LINES, this.mvp);
   }
 
   /** Append the 12 wireframe edges of the cube framing a cell to `out`. */
