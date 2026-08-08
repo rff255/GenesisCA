@@ -723,6 +723,22 @@ function CaNodeComponent({ id, data }: NodeProps) {
   /** Size of the expression textarea at the start of a resize drag (mousedown),
    *  so mouseup can detect a deliberate resize and persist it to config. */
   const exprResizeStartRef = useRef<{ w: number; h: number } | null>(null);
+  /** Expression node: the rendered formula is the node's FACE and the text
+   *  editor collapses below it. This latch keeps the editor open while the
+   *  user is TYPING — without it, the moment a fresh node's text first parses
+   *  the derived "renders fine ⇒ collapsed" rule would shut the textarea under
+   *  the cursor. Session-scoped on purpose: only an explicit toggle persists
+   *  (`_exprExpanded`), so a saved model reopens showing the formula. */
+  const [exprEditLatch, setExprEditLatch] = useState(false);
+  const exprTextRef = useRef<HTMLTextAreaElement | null>(null);
+  /** One-shot focus for the render right after the user OPENS the editor —
+   *  never on mount, which would steal focus while a graph loads. */
+  const exprWantFocusRef = useRef(false);
+  useEffect(() => {
+    if (!exprWantFocusRef.current) return;
+    exprWantFocusRef.current = false;
+    exprTextRef.current?.focus();
+  });
 
   // Linked-copies badge (Blender-style): how many macro instances share this
   // node's MacroDef. Only shown at 2+ (single-user macros show nothing).
@@ -2799,6 +2815,27 @@ function CaNodeComponent({ id, data }: NodeProps) {
             else newConfig._namesExpanded = true;
             updateNodeData(id, { ...nodeData, config: newConfig });
           };
+          // The rendered formula is the node's FACE; the text editor sits
+          // below it, collapsed. With NO formula to show — empty text, or a
+          // parse/name error (both leave `ast` null) — the editor is FORCED
+          // open, so a virgin node never presents a blank face and an error is
+          // never stranded away from the text that caused it. `_exprExpanded`
+          // carries an explicit user choice (same compiler-invisible key
+          // convention as `_namesExpanded`); `exprEditLatch` keeps it open for
+          // the typing session that produced the formula.
+          const exprEditOpen = !ast || exprEditLatch || nodeData.config._exprExpanded === true;
+          const toggleExprEdit = () => {
+            const newConfig: NodeConfig = { ...nodeData.config };
+            if (exprEditOpen) {
+              delete newConfig._exprExpanded;
+              setExprEditLatch(false);
+            } else {
+              newConfig._exprExpanded = true;
+              setExprEditLatch(true);
+              exprWantFocusRef.current = true;
+            }
+            updateNodeData(id, { ...nodeData, config: newConfig });
+          };
           const varSummary = Array.from({ length: visibleCount }, (_, i) => {
             const pid = VISIBLE_PORT_IDS[i]!;
             const raw = nodeData.config[`_varName_${pid}`];
@@ -2806,7 +2843,29 @@ function CaNodeComponent({ id, data }: NodeProps) {
           }).join(', ');
           return (
             <>
+              <ExpressionFormula ast={ast} names={namesFromVarMap(map)} />
+              {/* Only offered when there IS a formula to collapse to — with
+                  none the editor is the only face, so a toggle would be a
+                  control that cannot do anything. */}
+              {ast && (
+                <button
+                  className={styles.select}
+                  style={{
+                    display: 'flex', alignItems: 'center', gap: 4,
+                    textAlign: 'left', cursor: 'pointer', overflow: 'hidden',
+                  }}
+                  onClick={toggleExprEdit}
+                  title={exprEditOpen
+                    ? 'Hide the expression text'
+                    : 'Edit the expression text'}
+                >
+                  <span style={{ opacity: 0.6 }}>{exprEditOpen ? '▾' : '▸'}</span>
+                  <span style={{ opacity: 0.6 }}>Edit expression</span>
+                </button>
+              )}
+              {exprEditOpen && (
               <textarea
+                ref={exprTextRef}
                 className={styles.input}
                 // Default: fill the node width, never collapse narrower than it
                 // (minWidth:100%) nor shorter than ~2 rows (minHeight). A user
@@ -2821,7 +2880,13 @@ function CaNodeComponent({ id, data }: NodeProps) {
                 value={formula}
                 placeholder="e.g. a + b*c - pow(d, 2)"
                 spellCheck={false}
-                onChange={e => updateConfig('expression', e.target.value)}
+                onChange={e => {
+                  // Latch the editor open for this typing session (see the
+                  // exprEditLatch declaration) — the first keystroke that
+                  // parses would otherwise collapse the box mid-edit.
+                  setExprEditLatch(true);
+                  updateConfig('expression', e.target.value);
+                }}
                 onMouseDown={e => {
                   stopDrag(e);
                   const t = e.currentTarget;
@@ -2841,10 +2906,12 @@ function CaNodeComponent({ id, data }: NodeProps) {
                 }}
                 onDoubleClick={stopAll}
               />
-              {parseErr && (
+              )}
+              {/* A parse error always shows WITH the text that caused it: an
+                  error leaves `ast` null, which forces the editor open. */}
+              {exprEditOpen && parseErr && (
                 <div style={{ color: '#f44336', fontSize: '0.65rem' }}>{parseErr}</div>
               )}
-              <ExpressionFormula ast={ast} names={namesFromVarMap(map)} />
               <button
                 className={styles.select}
                 style={{
