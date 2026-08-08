@@ -54,7 +54,7 @@ const CANVAS_TOKENS = [
   '--color-minimap-bg',
   '--color-minimap-node',
   '--color-minimap-node-group',
-  '--color-minimap-mask',
+  '--color-minimap-viewport',
 ] as const;
 
 const nodeTypes: NodeTypes = {
@@ -71,9 +71,11 @@ const nodeTypes: NodeTypes = {
 //
 // "Fainter" = ALPHA on the real hex, deliberately, not a hand-picked pale
 // palette: the minimap svg composites over `--color-minimap-bg` (near-black in
-// BOTH shipped themes), so one alpha adapts to the theme for free AND the
-// relative hue/brightness ordering survives the mask overlay that darkens the
-// off-screen region uniformly.
+// BOTH shipped themes), so one alpha adapts to the theme for free.
+//
+// The VIEWPORT indicator is a light stroked RECTANGLE, not a darkening mask
+// (`maskColor` is transparent): every node reads at the same strength wherever
+// it sits, on-screen or off, and the rectangle alone says where you are.
 // ---------------------------------------------------------------------------
 
 /** Node bodies — muted, but a white event root still reads clearly over the
@@ -708,7 +710,7 @@ export function GraphEditorInner() {
     minimapBg = '#0d1117',
     minimapNode = '#2d4059',
     minimapNodeGroup = 'rgba(45, 64, 89, 0.5)',
-    minimapMask = 'rgba(0, 0, 0, 0.70)',
+    minimapViewport = 'rgba(230, 230, 230, 0.90)',
   ] = useThemeTokens(CANVAS_TOKENS);
   /** MiniMap fill per node — the node's REAL canvas color, faded (see the
    *  MINIMAP_* block above). Memoised: React Flow calls this once per node per
@@ -4151,13 +4153,26 @@ export function GraphEditorInner() {
         </div>
         <MiniMap
           nodeColor={minimapNodeColor}
-          maskColor={minimapMask}
+          // The viewport is marked by a light STROKED rectangle, not by
+          // darkening everything else — so the whole overview stays equally
+          // readable. The mask path's two subpaths are the outer bounds (drawn
+          // `offsetScale` px OUTSIDE the viewBox, so its stroke is clipped
+          // away) and the viewport rect, so stroking the path draws only the
+          // rectangle. maskStrokeWidth is in SCREEN px (React Flow multiplies
+          // it by the view scale).
+          maskColor="transparent"
+          maskStrokeColor={minimapViewport}
+          maskStrokeWidth={2}
           style={{ background: minimapBg }}
           pannable
           zoomable
           onClick={(_e, position) => {
-            // Jump the viewport to the clicked spot; keep current zoom.
-            rfInstance.current?.setCenter(position.x, position.y, { duration: 200 });
+            // Jump the viewport to the clicked spot; keep current zoom. The
+            // zoom MUST be passed explicitly — React Flow's setCenter defaults
+            // to maxZoom when it's omitted, which snapped the canvas to 2x on
+            // every minimap click.
+            const inst = rfInstance.current;
+            if (inst) inst.setCenter(position.x, position.y, { zoom: inst.getZoom(), duration: 200 });
           }}
         />
       </ReactFlow>

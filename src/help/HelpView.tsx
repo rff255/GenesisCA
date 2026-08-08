@@ -1070,6 +1070,8 @@ export function HelpView() {
             current zoom). Each node is drawn in a faded version of its real colour, so you
             can read the shape of the graph at a glance — the white event roots, the category
             colours of the nodes, and your comments and groups as softer background blocks.
+            The part you are currently looking at is outlined by a light rectangle; nothing
+            is dimmed, so the whole map stays equally readable.
           </p>
         </section>
 

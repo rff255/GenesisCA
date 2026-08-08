@@ -196,7 +196,9 @@
   --color-minimap-bg:         #0d1117;
   --color-minimap-node:       #2d4059;
   --color-minimap-node-group: rgba(45, 64, 89, 0.5);
-  --color-minimap-mask:       rgba(0, 0, 0, 0.70);
+  /* Viewport indicator = a light STROKED rectangle (the minimap mask fill is
+     transparent, so the whole overview stays equally legible). */
+  --color-minimap-viewport:   rgba(230, 230, 230, 0.90);
 }
 
 /* ====================================================================== */
@@ -331,5 +333,6 @@
   --color-minimap-bg:         #08090b;
   --color-minimap-node:       #2f333b;
   --color-minimap-node-group: rgba(47, 51, 59, 0.5);
-  --color-minimap-mask:       rgba(0, 0, 0, 0.78);
+  /* Warm off-white to match Nocturne's neutrals (see the Blender note). */
+  --color-minimap-viewport:   rgba(236, 235, 230, 0.90);
 }
