@@ -2858,15 +2858,24 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
   // id (change-detected so we don't full-redraw on every raw mousemove).
   const agentCursorWorldRef = useRef<{ x: number; y: number } | null>(null);
   const agentHoverIdRef = useRef<number>(-1);
-  // Agent clipboard (Ctrl+C/V/X with the AGENT brush target, 2D): per-agent
+  // Agent clipboard (Ctrl+C/V/X with the AGENT brush target): per-agent
   // world-offset-from-the-copy-anchor + radius/velocity/attribute values. Copy
   // is a two-step round-trip — collect the footprint ids from the snapshot,
   // batch-read their FRESH spec via the `readAgents` worker message (which
   // joins the one-shot staleness readers, so free-mode copies are never
   // stale) — the reply lands in the `agentsRead` handler below. Cut kills the
   // copied ids once the read confirms.
-  const agentClipboardRef = useRef<Array<{ dx: number; dy: number; radius: number; vx: number; vy: number; attrs: Record<string, number> }> | null>(null);
-  const pendingAgentCopyRef = useRef<{ anchor: { x: number; y: number }; cut: boolean; ids: number[] } | null>(null);
+  //
+  // ONE store serves 2D AND 3D — 2D is simply the dz/vz === 0 case (the unified
+  // cell-clipboard rule). A 2D copy pasted in 3D lands flat on the anchor's
+  // plane cell; a 3D copy pasted into a 2D model FLATTENS (the worker applies
+  // z/vz only when `worldDepth > 1`), and every axis is torus-wrapped /
+  // bounded-clamped by `pasteAgents` exactly like a `moveAgents` write.
+  // NB neither BONDS nor SPRITE state travel: `readAgents` returns
+  // position/radius/velocity/attributes, and `pasteAgents` composes
+  // allocAgentSlot + initAgentSlot + applyAgentSets, which form no bonds.
+  const agentClipboardRef = useRef<Array<{ dx: number; dy: number; dz: number; radius: number; vx: number; vy: number; vz: number; attrs: Record<string, number> }> | null>(null);
+  const pendingAgentCopyRef = useRef<{ anchor: { x: number; y: number; z: number }; cut: boolean; ids: number[] } | null>(null);
   // PR4 — Move brush: the agent currently being dragged (-1 = none) + its
   // pre-drag position (for the RMB-cancel revert). Own rAF token (C-B4).
   const draggingAgentRef = useRef<number>(-1);
@@ -6276,11 +6285,13 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       // kills the source ids (only once the read has safely captured them).
       const pend = pendingAgentCopyRef.current;
       pendingAgentCopyRef.current = null;
-      const agents = (msg.agents ?? []) as Array<{ x: number; y: number; radius: number; vx: number; vy: number; attrs: Record<string, number> }>;
+      // z/vz are present only in a 3D model (the worker omits them at depth 1),
+      // so a 2D copy stores dz/vz = 0 — the unified-clipboard flat case.
+      const agents = (msg.agents ?? []) as Array<{ x: number; y: number; z?: number; radius: number; vx: number; vy: number; vz?: number; attrs: Record<string, number> }>;
       if (pend && agents.length > 0) {
         agentClipboardRef.current = agents.map(a => ({
-          dx: a.x - pend.anchor.x, dy: a.y - pend.anchor.y,
-          radius: a.radius, vx: a.vx, vy: a.vy, attrs: a.attrs,
+          dx: a.x - pend.anchor.x, dy: a.y - pend.anchor.y, dz: (a.z ?? 0) - pend.anchor.z,
+          radius: a.radius, vx: a.vx, vy: a.vy, vz: a.vz ?? 0, attrs: a.attrs,
         }));
         if (pend.cut) {
           workerRef.current?.postMessage({ type: 'killAgents', ids: pend.ids, activeViewer: activeViewerRef.current });
@@ -9909,6 +9920,26 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
     }
     return ids;
   }, [agentProj3d]);
+  /** Nearest live agent to a plane-pick cell, within its own radius (floored so a
+   *  tiny agent is still reachable) — the 3D sibling of `pickAgentAt`'s
+   *  "nearest within max radius" rule, but derived from the plane cell rather
+   *  than a colour-id FBO pick (the keyboard has no cursor coordinates). Used as
+   *  the Single-scope fallback of the agent clipboard, mirroring 2D's
+   *  `agentHoverIdRef` fallback. */
+  const nearestAgent3dAt = useCallback((hit: Cell3): number => {
+    const snap = agentsRef.current;
+    if (!snap || snap.highWater === 0) return -1;
+    const hasZ = snap.z.length > 0;
+    let best = -1, bestD2 = Infinity;
+    for (let i = 0; i < snap.highWater; i++) {
+      if (!snap.alive[i]) continue;
+      const [u, v, w] = agentProj3d(snap.x[i]!, snap.y[i]!, hasZ ? snap.z[i]! : 0, hit);
+      const d2 = u * u + v * v + w * w;
+      const pickR = Math.max(snap.radius[i]!, 1);
+      if (d2 <= pickR * pickR && d2 < bestD2) { bestD2 = d2; best = i; }
+    }
+    return best;
+  }, [agentProj3d]);
   /** Seed points scattered in the 3D shape around a plane-pick cell. Circle reuses
    *  agentSeedPoints3d (ball / flat disc). Others rejection-sample the plane frame;
    *  the "volumetric" toggle extrudes along the fixed axis (else w=0 → on the plane). */
@@ -11337,13 +11368,44 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
         // whatever the plane is set to afterwards — the plane only supplies the
         // ANCHOR cell, it never reorients the contents.
         if (is3dRef.current) {
-          // The AGENT clipboard stays 2D-only (its footprint math is the 2D
-          // world-plane one) — leave the agent brush target untouched here.
-          if (isAgentModelRef.current && brushTargetRef.current === 'agents') return;
           const cur = hover3dRef.current;
           if (!plane3dEnabledRef.current || !cur) {
             e.preventDefault();
             showAgentNotice('Copy/paste anchors on the brush plane — enable it and hover a cell');
+            return;
+          }
+          // AGENT clipboard, 3D: the SAME two-step round-trip as 2D, anchored on
+          // the brush-plane cell (the agent world IS the grid frame 1:1, so the
+          // cell's col/row/layer ARE world x/y/z). The footprint is the same
+          // VOLUMETRIC set the 3D Remove/Edit brushes act on, so what the hover
+          // rings show is what gets copied; a zero-size (Single) footprint falls
+          // back to the nearest agent, mirroring 2D's hovered-agent fallback.
+          if (isAgentModelRef.current && brushTargetRef.current === 'agents') {
+            e.preventDefault();
+            if (e.key === 'c' || e.key === 'x') {
+              let ids = agentsInShape3dAt(cur);
+              if (ids.length === 0) { const near = nearestAgent3dAt(cur); if (near >= 0) ids = [near]; }
+              if (ids.length === 0) return;
+              pendingAgentCopyRef.current = { anchor: { x: cur.col, y: cur.row, z: cur.layer }, cut: e.key === 'x', ids };
+              workerRef.current?.postMessage({ type: 'readAgents', ids });
+              // Say what was grabbed: a 3D footprint is occluded and may reach
+              // deeper than the plane, so — unlike 2D, where the cursor ring
+              // shows it — nothing on screen states the count.
+              showAgentNotice(`${e.key === 'x' ? 'Cut' : 'Copied'} ${ids.length} agent${ids.length === 1 ? '' : 's'}`);
+            } else {
+              const clip = agentClipboardRef.current;
+              if (!clip || clip.length === 0) return;
+              workerRef.current?.postMessage({
+                type: 'pasteAgents',
+                agents: clip.map(a => ({
+                  x: cur.col + a.dx, y: cur.row + a.dy, z: cur.layer + a.dz,
+                  radius: a.radius, vx: a.vx, vy: a.vy, vz: a.vz,
+                  sets: Object.entries(a.attrs).map(([attrId, value]) => ({ attrId, value })),
+                })),
+                torus: boundaryTreatmentRef.current === 'torus',
+                activeViewer: activeViewerRef.current,
+              });
+            }
             return;
           }
           const axis = plane3dRef.current.axis;
@@ -11415,16 +11477,19 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
             let ids = agentsInShapeAt(wpt.x, wpt.y);
             if (ids.length === 0 && agentHoverIdRef.current >= 0) ids = [agentHoverIdRef.current];
             if (ids.length === 0) return;
-            pendingAgentCopyRef.current = { anchor: { x: wpt.x, y: wpt.y }, cut: e.key === 'x', ids };
+            pendingAgentCopyRef.current = { anchor: { x: wpt.x, y: wpt.y, z: 0 }, cut: e.key === 'x', ids };
             workerRef.current?.postMessage({ type: 'readAgents', ids });
           } else {
             const clip = agentClipboardRef.current;
             if (!clip || clip.length === 0) return;
+            // z/vz ride along for the 3D-clipboard-into-a-2D-model case: the
+            // worker applies them only when `worldDepth > 1`, so they FLATTEN
+            // here rather than needing a second code path.
             workerRef.current?.postMessage({
               type: 'pasteAgents',
               agents: clip.map(a => ({
-                x: wpt.x + a.dx, y: wpt.y + a.dy,
-                radius: a.radius, vx: a.vx, vy: a.vy,
+                x: wpt.x + a.dx, y: wpt.y + a.dy, z: a.dz,
+                radius: a.radius, vx: a.vx, vy: a.vy, vz: a.vz,
                 sets: Object.entries(a.attrs).map(([attrId, value]) => ({ attrId, value })),
               })),
               torus: boundaryTreatmentRef.current === 'torus',

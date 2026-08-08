@@ -35,7 +35,7 @@ const GROUPS: { title: string; rows: Row[] }[] = [
       ['Enter', 'Play / pause'],
       ['Esc', 'Reset'],
       ['F', 'Fullscreen canvas (toggle panels)'],
-      ['Ctrl + C / V / X', 'Copy / paste / cut cells (3D: anchored on the brush plane)'],
+      ['Ctrl + C / V / X', 'Copy / paste / cut cells or agents (3D: anchored on the brush plane)'],
       ['Ctrl + wheel', 'Cycle input mappings'],
       ['Ctrl + drag', 'Resize brush (Push / Pull: ↔ radius, ↕ intensity)'],
       ['Shift + click', 'Inspect cell'],

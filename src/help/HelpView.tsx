@@ -2928,12 +2928,22 @@ export function HelpView() {
             piles agents up just inside the rim (where the falloff reaches zero).
           </p>
           <p className={styles.p}>
-            With the agent brush active (2D), <span className={styles.kbd}>Ctrl+C</span> /
+            With the agent brush active, <span className={styles.kbd}>Ctrl+C</span> /
             <span className={styles.kbd}>Ctrl+X</span> <strong>copy / cut the agents under the
             brush footprint</strong> (positions relative to the cursor, radius, velocity, and all
             agent-attribute values; an empty footprint falls back to the hovered agent) and
             <span className={styles.kbd}> Ctrl+V</span> <strong>pastes</strong> them at the cursor
             (torus-wrapped; pasting past the agent capacity drops the excess with a notice).
+            <strong> In 3D it works the same way, anchored on the brush plane</strong> &mdash; the
+            cell under the brush-plane cursor is the anchor (so the plane has to be enabled and the
+            cursor over a cell, otherwise the shortcut does nothing and says so), the footprint is
+            the same solid region the 3D Remove / Edit brushes act on, and offsets are kept in all
+            three axes so a paste on a different layer moves the whole cluster with it. A copy says
+            how many agents it grabbed, since a 3D footprint is occluded. One clipboard serves both
+            views: a 2D copy pasted in 3D lands flat on the anchor&apos;s plane, and a 3D copy
+            pasted into a 2D model flattens. <strong>Bonds and sprite state do not travel</strong>
+            &mdash; pasted agents arrive unbonded &mdash; and attributes the target model
+            doesn&apos;t have are skipped.
             <span className={styles.kbd}>Shift</span>+click an agent to <strong>inspect</strong> it
             (a popover of its position, velocity, bond degree and attribute values). Agent
             inspectors work like the cell ones: <strong>several can be open at once</strong>, each is
