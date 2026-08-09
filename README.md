@@ -111,7 +111,7 @@ A high-level tour. Every feature has a detailed reference in the **in-app Help t
 
 Build a model's update rule as a node graph — wire reads, math, conditions and writes together and it compiles as you edit, with no programming and no build step. Groups, comments, reusable macros, search, undo/redo and a keyboard-driven quick-add menu keep large graphs workable.
 
-![Modeler](docs/screenshots/features/node-graph-canvas.png)
+![Modeler](docs/screenshots/Features/node-graph-canvas.png)
 > *Node-graph editor with context menu open. Amphiphile micelle formation rule*
 
 ### Define the whole model, not just the rule
@@ -124,9 +124,9 @@ Models compile to **WebAssembly** or **WebGPU**; the default **Auto** setting pi
 
 <table>
   <tr>
-    <td align="center" width="25%"><img src="docs/screenshots/features/three-enignes.png" width="100%"/><br/><sub>WASM or WebGPU. JavaScript always generated</sub></td>
-    <td align="center" width="25%"><img src="docs/screenshots/features/compatibility.png" width="100%"/><br/><sub>Compatibility breakdown</sub></td>
-    <td align="center" width="25%"><img src="docs/screenshots/features/generation-pipeline.png" width="100%"/><br/><sub>How/when your rule/events runs</sub></td>
+    <td align="center" width="25%"><img src="docs/screenshots/Features/three-engines.png" width="100%"/><br/><sub>WASM or WebGPU. JavaScript always generated</sub></td>
+    <td align="center" width="25%"><img src="docs/screenshots/Features/compatibility.png" width="100%"/><br/><sub>Compatibility breakdown per model</sub></td>
+    <td align="center" width="25%"><img src="docs/screenshots/Features/generation-pipeline.png" width="100%"/><br/><sub>How/when your rule/events runs</sub></td>
   </tr>
 </table>
 
@@ -136,8 +136,8 @@ Models compile to **WebAssembly** or **WebGPU**; the default **Auto** setting pi
 
 Flip one switch and the lattice becomes a `W×H×D` volume, rendered as lit voxels you can orbit, slice open and paint through — same rules, same engines, same tooling.
 
-![3d-lattice](docs/screenshots/features/3d-lattice.png)
-![3d-agents](docs/screenshots/features/3d-agents.png)
+![3d-lattice](docs/screenshots/Features/3D-lattice.png)
+![3d-agents](docs/screenshots/Features/3D-agents.png)
 > 📸 *3D voxels and 3D agents view*
 
 ### Agents, tissue and graph automata
@@ -146,9 +146,9 @@ An optional second engine adds agents that float in continuous space instead of 
 
 <table>
   <tr>
-    <td align="center" width="25%"><img src="docs/screenshots/features/2d-agents.png" width="100%"/><br/><sub>2D agents with sprites</sub></td>
-    <td align="center" width="25%"><img src="docs/screenshots/features/3d-morphogenesis.png" width="100%"/><br/><sub>3D Morphogenesis (Metaballs)</sub></td>
-    <td align="center" width="25%"><img src="docs/screenshots/features/2d-growing-graph.png" width="100%"/><br/><sub>2D Growing Graph</sub></td>
+    <td align="center" width="25%"><img src="docs/screenshots/Features/2d-agents.png" width="100%"/><br/><sub>2D agents with sprites</sub></td>
+    <td align="center" width="25%"><img src="docs/screenshots/Features/3d-morphogenesis.png" width="100%"/><br/><sub>3D Morphogenesis (Metaballs)</sub></td>
+    <td align="center" width="25%"><img src="docs/screenshots/Features/2d-growing-graph.png" width="100%"/><br/><sub>2D Growing Graph</sub></td>
   </tr>
 </table>
 <!-- > 📸 *Screenshot placeholder — bonded agents / a graph automaton*-->
@@ -156,7 +156,7 @@ An optional second engine adds agents that float in continuous space instead of 
 ### Measure it, then experiment on it
 
 Indicators turn a running model into numbers — counts, totals, distributions, spatial profiles, graph metrics — charted live and exportable. The optional **Overseer** is a third graph that scripts experiments *around* the simulation: repeat seeded runs, sweep parameters, run until a stop condition, and aggregate the results into statistics and figures, so a set of runs becomes one reproducible experiment.
-![overseer-experiments](docs/screenshots/features/chromatography-overseer-experiments.png)
+![overseer-experiments](docs/screenshots/Features/chromatography-overseer-experiments.png)
 > *(on the right) Indicator aggregate charts from Overseer Experiments tab. Chromatography (Kier, Cheng & Karnes 2000) model*
 
 ### Interact while it runs
@@ -167,7 +167,7 @@ Paint with a shaped brush, inspect any cell or agent, copy and paste regions, dr
 
 Export PNG stills and WebM or GIF recordings, framed either to the whole world or to your current view. **Export standalone simulation** bundles the simulator and one model into a single self-contained `.html` file that runs offline in any browser — and loads back into GenesisCA as a complete, editable model.
 
-![standalone-simulation](docs/screenshots/features/standalone-simulation.png)
+![standalone-simulation](docs/screenshots/Features/standalone-simulation.png)
 > *An exported standalone simulation of a Particle Life setup*
 
 ### Learn from the library
