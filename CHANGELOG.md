@@ -7,6 +7,110 @@ https://github.com/rff255/GenesisCA/releases
 The version at the top of `package.json` is the single source of truth; each
 entry below is cut when that version is tagged (see `.github/workflows/release.yml`).
 
+## [1.30.0] - 2026-08-09
+
+A large release headlined by two milestones — a **Clarity & Simplification**
+sweep that makes the engine legible (one Engine selector, a declared
+reproducibility contract, a compatibility readout, a generation-pipeline panel,
+fast-path diagnostics) and **Graph-Rewriting Automata**, a full agent-tier
+rewriting layer (census → table → verb) with typed bond attributes, an atomic
+structural request queue, and three flagship samples — plus deterministic
+long-range charge, rule cadence, a reworked agent Glow, 3D copy/paste, and a
+broad simulator/modeler polish pass. Additive throughout: the lattice (2D+3D,
+all three compile targets) and every existing model stay byte-identical.
+
+### Clarity & Simplification (C1–C11)
+- **One Engine selector** — Auto / WebAssembly / WebGPU with Debug (JS) behind an
+  Advanced reveal; Auto resolves the fastest engine that satisfies the model's
+  declared reproducibility contract, and Show Code always displays the JS
+  reference source.
+- A **declared reproducibility contract** (Exact | Statistical) governs update
+  mode and engine; a **Compatibility readout** and a **Generation Pipeline panel**
+  in Properties explain, per layer and per engine, which engine runs and what each
+  generation does — both copyable as plain text.
+- **Fast-path diagnostics** in the simulator report which fast paths (GPU
+  residency, sparse stepping, field bridge, direct render) actually engaged, with
+  a generated engine-capability matrix in Help.
+- **Archetype-first New Model** (a card chooser that seeds a coherent model),
+  seeded engine draws so every simulation-semantic random is reproducible, a
+  **presentational-geometry taint check** that labels layout physics that don't
+  affect your rule, and profile-gated agent SoA fields with a Static integrator.
+- **Deterministic Barnes–Hut GLOBAL charge** (a second, cutoff-free charge law) on
+  all agent targets.
+
+### Graph-Rewriting Automata (GRA)
+- A **Neighbour State Census** node — the order-independent multiset of neighbour
+  states a graph rule reads — lowered to existing nodes, so it runs on all three
+  agent targets with zero per-target emit.
+- **Bond attributes**: per-edge user state on JS, WASM and WebGPU, with a
+  symmetric-by-construction store and Form-Bond initial-value ports.
+- An **atomic structural request queue** with the degree-preserving **Rewire
+  Bond**, third-party **Form Bond Between** and in-place **Transfer Bond** verbs,
+  plus a declarative **division bond partition** and daughter-bond policy.
+- **Graph indicators** (node/edge counts, degree stats, component count) as a live
+  measurement layer, wired into the Overseer for rule-space sweeps.
+- Flagship samples: **Cubic GRA**, **SDCA — Couplers and Decouplers**, and
+  **Growing Graphs** (Paul Cousin's binary cubic GRA, ported from znah's demo with
+  physics + slot-order fidelity).
+- Sync agent update mode is now honoured on the **WebGPU** agent target.
+
+### Agents
+- **Set Agent Sprite** runs on WASM and WebGPU — the last agent-target node gap
+  closes, so every agent node emits on all three targets.
+- **Sense Hemifield** now outputs the agents on each side, not just the counts.
+- The agent brush gains **Push / Pull** (a radial force with a magnitude-scaled
+  cursor and Ctrl+drag two-axis retune) and drops the little-used Bond mode.
+- **Rule cadence** — Get Generation + Periodic Step — and **layoutIterations** (run
+  the force integrator N times per generation) join **long-range charge** for
+  graph-layout control.
+
+### Agent Glow
+- Glow is reworked end to end: a **solid core** so agent colours never blow out,
+  **CPU-overlay** rendering so bonded models (tissues, GRA) glow too, **screen
+  blending** so dense cluster halos stop saturating, and **antialiased disc
+  edges**.
+
+### Simulator
+- **Interruptible step batches** — a high Gens/Frame no longer costs you the UI;
+  pause and speed changes land promptly.
+- **One capture area** for screenshots and recordings, a **Copy** action on the
+  screenshot, cursor + highlight rings optionally included in captures, WebM
+  recordings that **play back at the speed recorded**, and simulation-scope
+  capture that records the grid again on every GPU path.
+- The canvas **re-sizes during a panel drag** instead of after the next
+  interaction, an **enabled control always does something** (structurally inert
+  ones are hidden), and informational toasts read as info, not warnings.
+- 3D: bonds no longer draw in front of agents when zoomed out, the brush plane is
+  occluded by cells in front of it, a **Blender-like gizmo** with numpad view keys,
+  a view-anchored default key light, and opt-in **2D smooth scaling**.
+
+### Modeler
+- The **Expression node** draws its formula as typeset maths, leads with the
+  rendered formula, is resizable, and hides its input-name editors until needed.
+- **Get Random** gains intervals, distributions and a vector mode; the **Math** node
+  gains Negate.
+- **Copy and paste node graphs between browser tabs**, the minimap draws nodes in
+  faded versions of their real colours and marks the viewport with a rectangle,
+  the Modeler/Simulator mode tabs carry icons, **2D parametric neighbourhood
+  generation**, and the Agent Output Mappings panel matches the CA-grid one.
+
+### Library, Save & thumbnails
+- The **Save dialog edits the model's title and authors**, not just the filename.
+- Library cards gain a clickable tags row on the hover popover (which now survives
+  the whole popover), an **authored creation date** (not the file's mtime), and
+  **video/webm** model thumbnails.
+
+### 3D copy/paste
+- Cell and agent **copy / paste / cut work in 3D**, anchored on the brush plane.
+
+### Fixes
+- A pasted graph with dangling references now **errors instead of white-screening**.
+- A canvas re-attach swaps the agent render pipelines atomically (no stale blink);
+  3D agent wireframes depth-test against agents.
+- **Get Indicator** can read graph + linked-total indicators; a rounded f32 max
+  literal that killed every min/max shader is emitted representably; the reorder
+  drag handle is legible in both themes.
+
 ## [1.29.0] - 2026-07-30
 
 A big release headlined by **GPU-resident agent rendering** — agents-only and
