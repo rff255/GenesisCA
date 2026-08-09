@@ -883,6 +883,7 @@ function emitArithmetic(ctx: AgentWgpuCtx, node: GraphNode): ValueRef {
     case '/': { const yv = y(); expr = `select(0.0, (${x()} / ${yv}), (${yv} != 0.0))`; break; }
     case 'sqrt': expr = `sqrt(${x()})`; break;
     case 'abs': expr = `abs(${x()})`; break;
+    case 'negate': expr = `(-(${x()}))`; break;
     case 'floor': expr = `floor(${x()})`; break;
     case 'ceil': expr = `ceil(${x()})`; break;
     // floor(x + 0.5) — NOT WGSL round() (banker's), matching JS/WASM.

@@ -2711,6 +2711,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
             <option value="sqrt">Sqrt</option>
             <option value="pow">Power</option>
             <option value="abs">Abs</option>
+            <option value="negate">Negate (&minus;x)</option>
             <option value="floor">Floor</option>
             <option value="ceil">Ceil</option>
             <option value="round">Round</option>

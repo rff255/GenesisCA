@@ -3,13 +3,13 @@ import type { NodeTypeDef } from '../types';
 /** Math operations that read only X (the Y input is hidden for them). Shared
  *  with CaNode's collapsed-label formatter so the two never drift. */
 export const ARITHMETIC_UNARY_OPS = new Set([
-  'sqrt', 'abs', 'floor', 'ceil', 'round', 'exp', 'log', 'sin', 'cos', 'tan', 'tanh',
+  'sqrt', 'abs', 'negate', 'floor', 'ceil', 'round', 'exp', 'log', 'sin', 'cos', 'tan', 'tanh',
 ]);
 
 export const ArithmeticOperatorNode: NodeTypeDef = {
   type: 'arithmeticOperator',
   label: 'Math',
-  description: 'Performs arithmetic: +, -, *, /, %, sqrt, pow, abs, floor, ceil, round, max, min, mean, exp, log (natural), sin, cos, tan, tanh.',
+  description: 'Performs arithmetic: +, -, *, /, %, sqrt, pow, abs, negate, floor, ceil, round, max, min, mean, exp, log (natural), sin, cos, tan, tanh.',
   category: 'logic',
   color: '#b8860b',
   ports: [
@@ -34,6 +34,9 @@ export const ArithmeticOperatorNode: NodeTypeDef = {
       case 'sqrt': expr = `Math.sqrt(${x})`; break;
       case 'pow':  expr = `Math.pow(${x}, ${y})`; break;
       case 'abs':  expr = `Math.abs(${x})`; break;
+      // Unary minus — an IEEE sign flip, so JS `-x` / WASM f64.neg / WGSL `-x`
+      // agree bit-for-bit (incl. -0 and NaN); no host import on any target.
+      case 'negate': expr = `(-(${x}))`; break;
       // round = floor(x + 0.5) on EVERY target (JS/WASM/WGSL) — NOT Math.round /
       // f64.nearest / WGSL round(), whose banker's rounding would break parity.
       // Matches the Expression node's floor/ceil/round convention exactly.

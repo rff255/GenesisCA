@@ -1365,6 +1365,11 @@ const VALUE_NODE_EMITTERS: Record<string, NodeValueEmitter> = {
         pushValueAs(em, x, F64);
         em.op(OP_F64_ABS);
         break;
+      case 'negate':
+        // f64.neg — an IEEE sign flip, bit-identical to JS `-x` / WGSL `-x`.
+        pushValueAs(em, x, F64);
+        em.op(OP_F64_NEG);
+        break;
       case 'floor':
         pushValueAs(em, x, F64);
         em.op(OP_F64_FLOOR);
