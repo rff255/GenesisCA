@@ -265,6 +265,7 @@ type ModelAction =
   | { type: 'REORDER_AGENT_ATTRIBUTES'; newOrder: string[] }
   | { type: 'REORDER_NEIGHBORHOODS'; newOrder: string[] }
   | { type: 'REORDER_MAPPINGS'; newOrder: string[] }
+  | { type: 'REORDER_AGENT_MAPPINGS'; newOrder: string[] }
   | { type: 'REORDER_INDICATORS'; newOrder: string[] }
   | { type: 'REORDER_END_CONDITIONS'; newOrder: string[] }
   // Generic Agent Platform: variable actions carry a `target` (cell | agent).
@@ -1736,6 +1737,15 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
         model: { ...state.model, mappings: reorderById(state.model.mappings, action.newOrder) },
       };
 
+    // The agent A->C views are the simulator's Agents viewer-tab strip, so their
+    // order is user-visible exactly like the cell mappings' tabs.
+    case 'REORDER_AGENT_MAPPINGS':
+      return {
+        ...state,
+        isDirty: true,
+        model: { ...state.model, agentMappings: reorderById(state.model.agentMappings ?? [], action.newOrder) },
+      };
+
     case 'REORDER_INDICATORS':
       return {
         ...state,
@@ -2041,6 +2051,7 @@ export interface ModelContextValue {
   reorderAgentAttributes: (newOrder: string[]) => void;
   reorderNeighborhoods: (newOrder: string[]) => void;
   reorderMappings: (newOrder: string[]) => void;
+  reorderAgentMappings: (newOrder: string[]) => void;
   reorderIndicators: (newOrder: string[]) => void;
   reorderEndConditions: (newOrder: string[]) => void;
   /** Variegated Cells Ã¢â‚¬â€ partial update for top-level config (enabled,
@@ -2311,6 +2322,10 @@ export function ModelProvider({ children }: { children: ReactNode }) {
     (newOrder: string[]) => dispatch({ type: 'REORDER_NEIGHBORHOODS', newOrder }),
     [],
   );
+  const reorderAgentMappings = useCallback(
+    (newOrder: string[]) => dispatch({ type: 'REORDER_AGENT_MAPPINGS', newOrder }),
+    [],
+  );
   const reorderMappings = useCallback(
     (newOrder: string[]) => dispatch({ type: 'REORDER_MAPPINGS', newOrder }),
     [],
@@ -2423,6 +2438,7 @@ export function ModelProvider({ children }: { children: ReactNode }) {
       reorderAgentAttributes,
       reorderNeighborhoods,
       reorderMappings,
+      reorderAgentMappings,
       reorderIndicators,
       reorderEndConditions,
       updateVariegatedCells,
@@ -2498,6 +2514,7 @@ export function ModelProvider({ children }: { children: ReactNode }) {
       reorderAgentAttributes,
       reorderNeighborhoods,
       reorderMappings,
+      reorderAgentMappings,
       reorderIndicators,
       reorderEndConditions,
       updateVariegatedCells,

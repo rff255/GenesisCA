@@ -88,7 +88,17 @@ function selectedItemName(model: CAModel, panel: PanelId, id: string | null, age
     return model.attributes.find(a => a.id === attrId)?.name ?? null;
   }
   if (panel === 'neighborhoods') return model.neighborhoods.find(n => n.id === id)?.name ?? null;
-  if (panel === 'mappings') return model.mappings.find(m => m.id === id)?.name ?? null;
+  if (panel === 'mappings') {
+    // Discriminated `agentmap:<id>` (an AGENT Attribute→Color view, a separate
+    // id-space) vs a bare id (a CELL mapping). Same ⚠ as the attributes panel
+    // above: an unresolved prefix leaves the detail PanelShell unmounted, so
+    // clicking / adding a row would do NOTHING visible.
+    if (id.startsWith('agentmap:')) {
+      const agentMapId = id.slice(9);
+      return (model.agentMappings ?? []).find(m => m.id === agentMapId)?.name ?? null;
+    }
+    return model.mappings.find(m => m.id === id)?.name ?? null;
+  }
   return null;
 }
 

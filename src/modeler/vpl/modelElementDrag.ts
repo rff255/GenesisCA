@@ -16,7 +16,7 @@ import type { Node } from '@xyflow/react';
 import type { PortDef } from './types';
 import { getNodeDef } from './nodes/registry';
 import { getEffectivePorts } from './effectivePorts';
-import { handleKey } from './graphState';
+import { handleKey, getActiveGraphKind } from './graphState';
 
 export const MODEL_ELEMENT_DRAG_MIME = 'application/genesisca-model-element';
 
@@ -26,6 +26,10 @@ export type ModelElementDragPayload =
   | { kind: 'neighborhood'; neighborhoodId: string }
   | { kind: 'mapping-a2c'; mappingId: string }
   | { kind: 'mapping-c2a'; mappingId: string }
+  /** An AGENT Attribute→Color view (`model.agentMappings`) — a SEPARATE id-space
+   *  from the cell mappings, so it needs its own kind rather than reusing
+   *  `mapping-a2c` (whose related nodes are the LATTICE roots). */
+  | { kind: 'agent-mapping'; mappingId: string }
   | { kind: 'indicator'; indicatorId: string }
   | { kind: 'variable'; variableId: string; varKind: 'scalar' | 'array' };
 
@@ -47,6 +51,7 @@ export function payloadElementId(payload: ModelElementDragPayload): string {
     case 'neighborhood': return payload.neighborhoodId;
     case 'mapping-a2c': return payload.mappingId;
     case 'mapping-c2a': return payload.mappingId;
+    case 'agent-mapping': return payload.mappingId;
     case 'indicator': return payload.indicatorId;
     case 'variable': return payload.variableId;
   }
@@ -93,6 +98,13 @@ export const RELATED_NODES: Record<ModelElementDragPayload['kind'], RelatedNodeE
     { nodeType: 'outputMapping', configKey: 'mappingId' },
     { nodeType: 'setCellLooks', configKey: 'mappingId' },
   ],
+  // The agent-layer twin of `mapping-a2c`: the Agent Output Mapping event root
+  // (the agent analogue of `outputMapping`) plus Set Cell Looks, which is
+  // universal and colours the agent for that view.
+  'agent-mapping': [
+    { nodeType: 'agentOutputMapping', configKey: 'mappingId' },
+    { nodeType: 'setCellLooks', configKey: 'mappingId' },
+  ],
   'indicator': [
     { nodeType: 'getIndicator', configKey: 'indicatorId' },
     { nodeType: 'setIndicator', configKey: 'indicatorId' },
@@ -108,9 +120,21 @@ export const RELATED_NODES: Record<ModelElementDragPayload['kind'], RelatedNodeE
 /** RELATED_NODES entries filtered for payload specifics. Local variables are
  *  kind-gated: `setVariable` only writes scalars, `setArrayElement` only
  *  writes array elements — offering the wrong one would just spawn a node
- *  with an instant validation badge. */
+ *  with an instant validation badge.
+ *
+ *  An AGENT view is additionally gated on the ACTIVE GRAPH: its mapping id only
+ *  means anything to the agent colour pass, so dropping one on the Cells (or
+ *  Overseer) canvas offers NOTHING rather than a Set Cell Looks whose viewer
+ *  guard could never match. `isNodeAvailable` already hides the
+ *  `agentOutputMapping` root off the Agents graph, but Set Cell Looks is
+ *  universal and would otherwise leak through as silent dead code. Returning
+ *  an empty list also zeroes `relatedNodePotentialPorts`, so the drag shows no
+ *  port highlights there either — the "nothing to offer" state is visible. */
 export function relatedEntriesForPayload(payload: ModelElementDragPayload): RelatedNodeEntry[] {
   const entries = RELATED_NODES[payload.kind] ?? [];
+  if (payload.kind === 'agent-mapping') {
+    return getActiveGraphKind() === 'agents' ? entries : [];
+  }
   if (payload.kind !== 'variable') return entries;
   return entries.filter(e => {
     if (e.nodeType === 'setVariable') return payload.varKind === 'scalar';

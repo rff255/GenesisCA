@@ -2738,6 +2738,18 @@ export function HelpView() {
               live state. (A Linked view with a Standalone graph runs the auto colour first as a
               background, then your graph on top.)</li>
           </ul>
+          <p className={styles.p}>
+            The <strong>Agent Output Mappings</strong> list works exactly like the CA-grid mapping
+            lists above it: click a view to open its editor in the second panel, use
+            <strong> + Add Agent View</strong> / <strong>Duplicate</strong> / <strong>Delete</strong>,
+            and drag the <code>&#8942;&#8942;</code> handle to reorder &mdash; the order is the order of
+            the tabs in the Simulator&rsquo;s <em>Agents</em> viewer row. A view&rsquo;s
+            <strong> Description</strong> becomes that tab&rsquo;s tooltip. You can also
+            <strong> drag a view row onto the Agents canvas</strong> to add an <strong>Agent Output
+            Mapping (A&rarr;C)</strong> root or a <strong>Set Agent Looks</strong> node already pointed
+            at it (drop it near a matching port and it wires itself up). Agent views only mean
+            something on the Agents graph, so dropping one on the Cells canvas offers nothing.
+          </p>
           <h3 className={styles.h3}>Agent Sprites</h3>
           <p className={styles.p}>
             An agent can be drawn as a <strong>static image, an animated GIF, an image

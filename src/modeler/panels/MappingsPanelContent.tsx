@@ -256,23 +256,45 @@ function LinkedOutputEditor({ selected, attrs, update }: { selected: Mapping; at
 }
 
 function handleMappingDragStart(mappingId: string, isAttributeToColor: boolean) {
+  return dragStartFor(isAttributeToColor
+    ? { kind: 'mapping-a2c', mappingId }
+    : { kind: 'mapping-c2a', mappingId });
+}
+
+/** Agent views drag as their OWN payload kind — their id-space is
+ *  `model.agentMappings`, and the related nodes are the agent root (+ the
+ *  universal Set Cell Looks), not the lattice `outputMapping`. */
+function handleAgentMappingDragStart(mappingId: string) {
+  return dragStartFor({ kind: 'agent-mapping', mappingId });
+}
+
+function dragStartFor(payload: ModelElementDragPayload) {
   return (e: React.DragEvent) => {
-    const payload: ModelElementDragPayload = isAttributeToColor
-      ? { kind: 'mapping-a2c', mappingId }
-      : { kind: 'mapping-c2a', mappingId };
     e.dataTransfer.setData(MODEL_ELEMENT_DRAG_MIME, JSON.stringify(payload));
     e.dataTransfer.effectAllowed = 'copy';
     setCurrentModelElementDrag(payload);
   };
 }
 
+/** The agent half of the Mappings panel's SINGLE detail slot. A bare id is a
+ *  CELL mapping; this prefix marks an AGENT view, so selecting one clears the
+ *  other for free (one slot, one detail panel). Mirrors the Attributes panel's
+ *  `attr:` / `var:` / `bond:` discrimination — and `ModelerView.selectedItemName`
+ *  MUST resolve it or the detail panel never mounts. */
+const AGENT_MAP_PREFIX = 'agentmap:';
+
 function handleMappingDragEnd() {
   setCurrentModelElementDrag(null);
 }
 
 export function MappingsPanelContent({ mode = 'list' }: PanelContentProps = {}) {
-  const { model, addMapping, duplicateMapping, removeMapping, updateMapping, reorderMappings, addAgentMapping, duplicateAgentMapping, removeAgentMapping, updateAgentMapping, addSprite, removeSprite, updateSprite } = useModel();
+  const { model, addMapping, duplicateMapping, removeMapping, updateMapping, reorderMappings, addAgentMapping, duplicateAgentMapping, removeAgentMapping, updateAgentMapping, reorderAgentMappings, addSprite, removeSprite, updateSprite } = useModel();
   const [selectedId, setSelectedId] = useDetailSelection('mappings');
+  // ONE slot, two id-spaces: `agentmap:<id>` = an agent view, a bare id = a cell
+  // mapping. Exactly one of the two resolves, so the shared detail panel always
+  // shows the last-clicked row and picking one layer deselects the other.
+  const selectedAgentId = selectedId?.startsWith(AGENT_MAP_PREFIX) ? selectedId.slice(AGENT_MAP_PREFIX.length) : null;
+  const selectedCellId = selectedId && selectedAgentId === null ? selectedId : null;
   const agentsOn = !!model.topologyMode?.agents;
   // The Attribute↔Color mappings below are the LATTICE CA's colour views. Hide
   // them entirely for an agents-only model (no grid). When a model has BOTH
@@ -346,6 +368,10 @@ export function MappingsPanelContent({ mode = 'list' }: PanelContentProps = {}) 
     reorderMappings([...attrToColor, ...newOrder.map(id => map.get(id)!).filter(Boolean)].map(m => m.id));
   });
 
+  // Independent reorder for the agent views (their order IS the simulator's
+  // Agents viewer-tab order, same as the cell mappings' tabs).
+  const agentReorder = useListReorder(agentMappings, reorderAgentMappings);
+
   // Auto-select & scroll to newly added mappings
   const prevCount = useRef(model.mappings.length);
   useEffect(() => {
@@ -360,11 +386,40 @@ export function MappingsPanelContent({ mode = 'list' }: PanelContentProps = {}) 
     }
     prevCount.current = model.mappings.length;
   }, [model.mappings]);
-  const selected = model.mappings.find(m => m.id === selectedId);
+
+  // Same for a newly added agent view (ADD_AGENT_MAPPING appends), so "+ Add
+  // Agent View" opens its editor straight away — the cell mappings' behaviour.
+  const prevAgentCount = useRef(agentMappings.length);
+  useEffect(() => {
+    if (agentMappings.length > prevAgentCount.current) {
+      const newItem = agentMappings[agentMappings.length - 1];
+      if (newItem) {
+        setSelectedId(AGENT_MAP_PREFIX + newItem.id);
+        setTimeout(() => {
+          document.getElementById(`mapping-${newItem.id}`)?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        }, 50);
+      }
+    }
+    prevAgentCount.current = agentMappings.length;
+    // Keyed on the LENGTH, not the array: `model.agentMappings ?? []` mints a
+    // fresh [] whenever the key is absent, which would re-run this every render.
+  }, [agentMappings.length]);
+
+  const selected = selectedCellId ? model.mappings.find(m => m.id === selectedCellId) : undefined;
+  const selectedAgent = selectedAgentId ? agentMappings.find(m => m.id === selectedAgentId) : undefined;
 
   const handleDelete = () => {
-    if (selectedId) {
-      removeMapping(selectedId);
+    if (selectedCellId) {
+      removeMapping(selectedCellId);
+      setSelectedId(null);
+    }
+  };
+
+  // Deleting the selected agent view must clear the shared slot too, or the
+  // detail panel would keep an id that no longer resolves.
+  const handleDeleteAgent = () => {
+    if (selectedAgentId) {
+      removeAgentMapping(selectedAgentId);
       setSelectedId(null);
     }
   };
@@ -389,7 +444,7 @@ export function MappingsPanelContent({ mode = 'list' }: PanelContentProps = {}) 
                 key={m.id}
                 id={`mapping-${m.id}`}
                 data-reorder-row
-                className={`${styles.listItem} ${selectedId === m.id ? styles.listItemSelected : ''} ${isDragging ? styles.draggingRow : ''} ${showBefore ? styles.dropIndicatorBefore : ''} ${showAfter ? styles.dropIndicatorAfter : ''}`}
+                className={`${styles.listItem} ${selectedCellId === m.id ? styles.listItemSelected : ''} ${isDragging ? styles.draggingRow : ''} ${showBefore ? styles.dropIndicatorBefore : ''} ${showAfter ? styles.dropIndicatorAfter : ''}`}
                 onClick={() => setSelectedId(m.id)}
                 draggable
                 onDragStart={handleMappingDragStart(m.id, true)}
@@ -412,7 +467,7 @@ export function MappingsPanelContent({ mode = 'list' }: PanelContentProps = {}) 
           >
             + Add A&rarr;C Mapping
           </button>
-          <button className={styles.addButton} onClick={() => selectedId && duplicateMapping(selectedId)} disabled={!selectedId}>
+          <button className={styles.addButton} onClick={() => selectedCellId && duplicateMapping(selectedCellId)} disabled={!selectedCellId}>
             Duplicate
           </button>
           <button className={styles.deleteButton} onClick={handleDelete}>
@@ -436,7 +491,7 @@ export function MappingsPanelContent({ mode = 'list' }: PanelContentProps = {}) 
                 key={m.id}
                 id={`mapping-${m.id}`}
                 data-reorder-row
-                className={`${styles.listItem} ${selectedId === m.id ? styles.listItemSelected : ''} ${isDragging ? styles.draggingRow : ''} ${showBefore ? styles.dropIndicatorBefore : ''} ${showAfter ? styles.dropIndicatorAfter : ''}`}
+                className={`${styles.listItem} ${selectedCellId === m.id ? styles.listItemSelected : ''} ${isDragging ? styles.draggingRow : ''} ${showBefore ? styles.dropIndicatorBefore : ''} ${showAfter ? styles.dropIndicatorAfter : ''}`}
                 onClick={() => setSelectedId(m.id)}
                 draggable
                 onDragStart={handleMappingDragStart(m.id, false)}
@@ -459,7 +514,7 @@ export function MappingsPanelContent({ mode = 'list' }: PanelContentProps = {}) 
           >
             + Add C&rarr;A Mapping
           </button>
-          <button className={styles.addButton} onClick={() => selectedId && duplicateMapping(selectedId)} disabled={!selectedId}>
+          <button className={styles.addButton} onClick={() => selectedCellId && duplicateMapping(selectedCellId)} disabled={!selectedCellId}>
             Duplicate
           </button>
           <button className={styles.deleteButton} onClick={handleDelete}>
@@ -472,8 +527,10 @@ export function MappingsPanelContent({ mode = 'list' }: PanelContentProps = {}) 
       {showGroupHeaders && <div className={styles.groupTitle}>Agents</div>}
 
       {/* Agent Output Mappings — the agent-layer A→C views (the two-layer viewer).
-          Inline-edited (pick an agent attribute → colour) so the user defines an
-          agent VIEW instead of hand-wiring Set Cell Looks in the Behaviour Step. */}
+          MASTER-DETAIL, exactly like the CA-grid mappings above: the list lives
+          here and the selected view's editor opens in the shared second panel.
+          Rows are draggable to the canvas (Agents graph) to spawn the Agent
+          Output Mapping root / Set Cell Looks already pointed at the view. */}
       {agentsOn && (
         <div className={styles.section}>
           <div className={styles.sectionTitle}>Agent Output Mappings (A&rarr;C)</div>
@@ -484,61 +541,33 @@ export function MappingsPanelContent({ mode = 'list' }: PanelContentProps = {}) 
           {agentMappings.length === 0 && (
             <span style={{ color: '#888', fontSize: '0.68rem', fontStyle: 'italic' }}>No agent views yet.</span>
           )}
-          {agentMappings.map(m => (
-            <div key={m.id} id={`mapping-${m.id}`} className={styles.fieldGroup} style={{ borderTop: '1px solid #333', paddingTop: 8, marginTop: 6 }}>
-              <div className={styles.field}>
-                <label className={styles.fieldLabel}>Name</label>
-                <div style={{ display: 'flex', gap: 6 }}>
-                  <input
-                    className={styles.textInput}
-                    style={{ flex: 1 }}
-                    value={m.name}
-                    onChange={e => updateAgentMapping(m.id, { name: e.target.value })}
-                  />
-                  <button
-                    className={styles.addButton}
-                    style={{ padding: '2px 8px', flex: 'none' }}
-                    onClick={() => duplicateAgentMapping(m.id)}
-                    title="Duplicate agent view"
-                  >Duplicate</button>
-                  <button
-                    className={styles.deleteButton}
-                    style={{ padding: '2px 8px' }}
-                    onClick={() => removeAgentMapping(m.id)}
-                    title="Remove agent view"
-                  >&times;</button>
-                </div>
-              </div>
-              <div className={styles.field}>
-                <label className={styles.fieldLabel}>Description</label>
-                <textarea
-                  className={styles.textArea}
-                  rows={2}
-                  value={m.description}
-                  onChange={e => updateAgentMapping(m.id, { description: e.target.value })}
-                />
-              </div>
-              <div className={styles.field}>
-                <label className={styles.fieldLabel}>Color pass</label>
-                <select
-                  className={styles.textInput}
-                  value={m.linked === false ? 'standalone' : 'linked'}
-                  onChange={e => updateAgentMapping(m.id, { linked: e.target.value === 'linked' })}
+          <div className={styles.list} data-reorder-list>
+            {agentMappings.map((m, i) => {
+              const isDragging = agentReorder.dragState?.id === m.id;
+              const srcIdx = agentReorder.dragState ? agentMappings.findIndex(x => x.id === agentReorder.dragState!.id) : -1;
+              const showBefore = agentReorder.dragState?.overIdx === i && srcIdx !== i && srcIdx !== i - 1;
+              const showAfter = agentReorder.dragState?.overIdx === agentMappings.length && i === agentMappings.length - 1 && srcIdx !== i;
+              return (
+                <div
+                  key={m.id}
+                  id={`mapping-${m.id}`}
+                  data-reorder-row
+                  className={`${styles.listItem} ${selectedAgentId === m.id ? styles.listItemSelected : ''} ${isDragging ? styles.draggingRow : ''} ${showBefore ? styles.dropIndicatorBefore : ''} ${showAfter ? styles.dropIndicatorAfter : ''}`}
+                  onClick={() => setSelectedId(AGENT_MAP_PREFIX + m.id)}
+                  draggable
+                  onDragStart={handleAgentMappingDragStart(m.id)}
+                  onDragEnd={handleMappingDragEnd}
+                  title={`Drag to the Agents canvas to add a node that uses '${m.name}'`}
                 >
-                  <option value="standalone">Standalone</option>
-                  <option value="linked">Linked</option>
-                </select>
-                <span style={{ color: '#888', fontSize: '0.66rem', marginTop: 3, display: 'block' }}>
-                  {m.linked === false
-                    ? 'You build this view by hand on the Agents graph (Agent Output Mapping → … → Set Cell Looks / Set Agent Sprite).'
-                    : 'Auto-generates the colour from a chosen agent attribute. If you also add an Agent Output Mapping node for this view, the auto pass runs first as a background and your graph overrides it (special colours, sprites).'}
-                </span>
-              </div>
-              {m.linked !== false && (
-                <LinkedOutputEditor selected={{ ...m, linked: true }} attrs={agentAttrs} update={updateAgentMapping} />
-              )}
-            </div>
-          ))}
+                  <span className={styles.listItemName}>{m.name}</span>
+                  <span className={styles.listItemBadge}>A&rarr;C</span>
+                  <button className={styles.dragHandle} title="Drag to reorder"
+                    onPointerDown={agentReorder.startDrag(m.id)}
+                    onClick={e => e.stopPropagation()}>⋮⋮</button>
+                </div>
+              );
+            })}
+          </div>
           <div className={styles.buttonRow}>
             <button
               className={styles.addButton}
@@ -546,6 +575,12 @@ export function MappingsPanelContent({ mode = 'list' }: PanelContentProps = {}) 
               title={agentAttrs.length === 0 ? 'No agent attributes yet — the new view is seeded Standalone (build it on the Agents graph).' : undefined}
             >
               + Add Agent View
+            </button>
+            <button className={styles.addButton} onClick={() => selectedAgentId && duplicateAgentMapping(selectedAgentId)} disabled={!selectedAgentId}>
+              Duplicate
+            </button>
+            <button className={styles.deleteButton} onClick={handleDeleteAgent}>
+              Delete
             </button>
           </div>
         </div>
@@ -693,6 +728,58 @@ export function MappingsPanelContent({ mode = 'list' }: PanelContentProps = {}) 
       )}
 
       </>)}
+
+      {/* Agent-view editor — the agent half of the SHARED detail panel. Same
+          fields the cell A→C editor offers (name / description / colour pass /
+          linked palette), over the AGENT attribute set. The per-channel R/G/B
+          description boxes are deliberately absent: they document a hand-built
+          cell colour pass and nothing reads them for an agent view. */}
+      {mode === 'detail' && selectedAgent && (
+        <div className={styles.detailEditor}>
+          <div className={styles.detailTitle}>Edit: {selectedAgent.name}</div>
+          <div className={styles.fieldGroup}>
+            <div className={styles.field}>
+              <label className={styles.fieldLabel}>Name</label>
+              <input
+                className={styles.textInput}
+                value={selectedAgent.name}
+                onChange={e => updateAgentMapping(selectedAgent.id, { name: e.target.value })}
+              />
+            </div>
+            <div className={styles.field}>
+              <label className={styles.fieldLabel}>Description</label>
+              <textarea
+                className={styles.textArea}
+                rows={2}
+                value={selectedAgent.description}
+                onChange={e => updateAgentMapping(selectedAgent.id, { description: e.target.value })}
+              />
+              <span style={{ color: '#888', fontSize: '0.66rem', marginTop: 3, display: 'block' }}>
+                Shown as the tooltip on this view&apos;s tab in the simulator&apos;s Agents viewer row.
+              </span>
+            </div>
+            <div className={styles.field}>
+              <label className={styles.fieldLabel}>Color pass</label>
+              <select
+                className={styles.textInput}
+                value={selectedAgent.linked === false ? 'standalone' : 'linked'}
+                onChange={e => updateAgentMapping(selectedAgent.id, { linked: e.target.value === 'linked' })}
+              >
+                <option value="standalone">Standalone</option>
+                <option value="linked">Linked</option>
+              </select>
+              <span style={{ color: '#888', fontSize: '0.66rem', marginTop: 3, display: 'block' }}>
+                {selectedAgent.linked === false
+                  ? 'You build this view by hand on the Agents graph (Agent Output Mapping → … → Set Cell Looks / Set Agent Sprite).'
+                  : 'Auto-generates the colour from a chosen agent attribute. If you also add an Agent Output Mapping node for this view, the auto pass runs first as a background and your graph overrides it (special colours, sprites).'}
+              </span>
+            </div>
+            {selectedAgent.linked !== false && (
+              <LinkedOutputEditor selected={{ ...selectedAgent, linked: true }} attrs={agentAttrs} update={updateAgentMapping} />
+            )}
+          </div>
+        </div>
+      )}
 
       {mode === 'detail' && selected && (
         <div className={styles.detailEditor}>
