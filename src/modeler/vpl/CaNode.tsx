@@ -114,6 +114,17 @@ interface CaNodeData {
   [key: string]: unknown;
 }
 
+/** Expression node width bounds (px) for the corner resize grip.
+ *
+ *  MIN mirrors `.node { min-width: 150px }` in CaNode.module.css — CSS wins over
+ *  an inline `width` below it anyway, so clamping to the same number keeps the
+ *  stored value honest instead of recording a width the layout ignores. (The
+ *  drag's real floor is the node's NATURAL width when that is known — see
+ *  `exprNaturalWRef`.) MAX is a sanity bound: past it a node stops reading as a
+ *  node on the canvas, and a formula that wide is better split into two nodes. */
+const EXPR_MIN_W = 150;
+const EXPR_MAX_W = 720;
+
 /** Gradient-editor UI for the Color Scale node — a thin wrapper mapping the
  *  node's flat config (`stopCount` + `stop_<i>_(position|r|g|b|a)`) to/from the
  *  shared GradientStopsEditor (which also provides the palette presets).
@@ -720,9 +731,29 @@ function CaNodeComponent({ id, data }: NodeProps) {
   }, []);
   /** Stop all propagation (for double-click, click handlers) */
   const stopAll = useCallback((e: React.MouseEvent) => e.stopPropagation(), []);
-  /** Size of the expression textarea at the start of a resize drag (mousedown),
-   *  so mouseup can detect a deliberate resize and persist it to config. */
-  const exprResizeStartRef = useRef<{ w: number; h: number } | null>(null);
+  /** Height of the expression textarea at the start of a resize drag (mousedown),
+   *  so mouseup can detect a deliberate resize and persist it to config. Width is
+   *  the NODE's (see `_exprW` below), so the textarea only resizes vertically. */
+  const exprResizeStartRef = useRef<{ h: number } | null>(null);
+  /** Expression node WIDTH drag (the grip at the node's bottom-right corner).
+   *  Live width is held in local state so a drag re-renders only this node —
+   *  committing to config on every pointermove would spam `updateNodeData` and
+   *  the debounced graph sync. Committed to `_exprW` on pointerup. */
+  const [exprDragW, setExprDragW] = useState<number | null>(null);
+  //  `cur` LEADS the state: pointerup runs in the same gesture as the moves, and
+  //  React batches, so a fast (or synthetic) drag commits before any re-render —
+  //  reading the render-time `exprDragW` there would see the value from BEFORE
+  //  the drag and silently discard it (the `commitAgentSweep` fast-click trap).
+  const exprDragRef = useRef<{ x: number; w: number; min: number; cur: number } | null>(null);
+  /** The node's NATURAL (content-derived) width, sampled the first time a drag
+   *  starts while no explicit width is set — that measurement IS the natural
+   *  width, and it becomes the drag's lower bound so a resize can never make the
+   *  node narrower than it would be on its own. A node reloaded with a saved
+   *  width has no such sample, so it falls back to `EXPR_MIN_W` — which is the
+   *  CSS `.node { min-width }` floor anyway, and a double-click on the grip
+   *  restores auto-sizing. */
+  const exprNaturalWRef = useRef<number | null>(null);
+  const nodeRootRef = useRef<HTMLDivElement | null>(null);
   /** Expression node: the rendered formula is the node's FACE and the text
    *  editor collapses below it. This latch keeps the editor open while the
    *  user is TYPING — without it, the moment a fresh node's text first parses
@@ -820,6 +851,78 @@ function CaNodeComponent({ id, data }: NodeProps) {
   const maxPorts = Math.max(bodyInputPorts.length, bodyOutputPorts.length);
   const portSpacing = 22;
   const nodeMinHeight = showExpanded ? Math.max(50, PORT_TOP_BASE + maxPorts * portSpacing) : undefined;
+
+  // --- Expression node: user-resizable WIDTH -------------------------------
+  // A formula is a picture that gets WIDE (`contain: inline-size` deliberately
+  // keeps it from widening the node, so a long one scrolls inside the body).
+  // The fix is to let the user widen the NODE and have the formula fill it:
+  // `.body` is a flex column whose children stretch, and the formula's root is
+  // `align-self: stretch`, so one width on the root reaches every control —
+  // formula, textarea and the two collapsible summary rows alike.
+  //
+  // `_exprW` is that width. It USED to size only the textarea (which, with
+  // `min-width: 100%` on a content-sized node, already dragged the node wider
+  // whenever the editor happened to be open) — one width, now honest about what
+  // it sizes and available in EVERY state, including the default one where the
+  // editor is collapsed and the formula IS the node's face. Same key, same
+  // stored numbers, so a model saved before this keeps its width.
+  //
+  // Compiler-invisible by the documented convention: `_`-prefixed and neither
+  // `_port_*` nor `_varName_*`, which is exactly what accessorCSE's purity-key
+  // filter drops — so it cannot perturb CSE or any emit.
+  const isExpression = nodeData.nodeType === 'expression';
+  const exprCfgW = isExpression ? Number(nodeData.config._exprW) || 0 : 0;
+  /** The width actually applied this render: a live drag beats the stored value,
+   *  and 0/absent means auto (content-sized, the historical default). */
+  const exprWidth = isExpression ? (exprDragW ?? (exprCfgW > 0 ? exprCfgW : null)) : null;
+
+  const onExprGripDown = (e: React.PointerEvent) => {
+    if (e.button !== 0) return;
+    e.stopPropagation();
+    e.preventDefault();
+    const w = nodeRootRef.current?.offsetWidth ?? EXPR_MIN_W;
+    // No explicit width yet ⇒ what we just measured IS the natural width.
+    if (exprCfgW <= 0) exprNaturalWRef.current = w;
+    exprDragRef.current = { x: e.clientX, w, min: Math.max(EXPR_MIN_W, exprNaturalWRef.current ?? 0), cur: w };
+    setExprDragW(w);
+    e.currentTarget.setPointerCapture?.(e.pointerId);
+  };
+  const onExprGripMove = (e: React.PointerEvent) => {
+    const d = exprDragRef.current;
+    if (!d) return;
+    d.cur = Math.round(Math.min(EXPR_MAX_W, Math.max(d.min, d.w + (e.clientX - d.x))));
+    setExprDragW(d.cur);
+  };
+  const onExprGripUp = (e: React.PointerEvent) => {
+    const d = exprDragRef.current;
+    if (!d) return;
+    exprDragRef.current = null;
+    e.currentTarget.releasePointerCapture?.(e.pointerId);
+    setExprDragW(null);
+    if (d.cur === exprCfgW) return;
+    updateNodeData(id, { ...nodeData, config: { ...nodeData.config, _exprW: d.cur } });
+  };
+  /** Double-click the grip ⇒ back to auto-sizing (the splitter convention). */
+  const onExprGripDoubleClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    exprDragRef.current = null;
+    setExprDragW(null);
+    if (exprCfgW <= 0) return;
+    const newConfig: NodeConfig = { ...nodeData.config };
+    delete newConfig._exprW;
+    updateNodeData(id, { ...nodeData, config: newConfig });
+  };
+
+  // A width change moves the RIGHT-EDGE output handles without necessarily
+  // changing the node's HEIGHT, and the port-signature effect above keys on port
+  // IDS — so neither of the existing re-measure triggers is guaranteed to fire.
+  // React Flow's own ResizeObserver does catch a width change, but nudging it
+  // here is cheap and makes the guarantee explicit rather than incidental (the
+  // documented cost of a stale handle bound is a port that silently refuses
+  // connections). Runs during the drag too, so edges track the grip live.
+  useEffect(() => {
+    if (isExpression) updateNodeInternals(id);
+  }, [updateNodeInternals, id, isExpression, exprWidth]);
 
   // --- Collapsed rendering ---
   if (!showExpanded) {
@@ -1170,8 +1273,13 @@ function CaNodeComponent({ id, data }: NodeProps) {
 
   return (
     <div
+      ref={nodeRootRef}
       className={`${styles.node} ${isCompact ? styles.compactNode : ''}`}
-      style={{ borderColor: borderColorFor(def.color), minHeight: nodeMinHeight }}
+      style={{
+        borderColor: borderColorFor(def.color),
+        minHeight: nodeMinHeight,
+        ...(exprWidth != null ? { width: exprWidth } : null),
+      }}
       onMouseEnter={onMouseEnter}
       onMouseLeave={onMouseLeave}
     >
@@ -2796,11 +2904,9 @@ function CaNodeComponent({ id, data }: NodeProps) {
             }
             updateNodeData(id, { ...nodeData, config: newConfig });
           };
-          // Persisted user-resized size (px). Until the user drags the resize
-          // handle, width tracks the node (100%) and height is the default
-          // 3-row box; once resized, the explicit size is stored in config and
-          // travels in the .gcaproj so it survives reload.
-          const exprW = Number(nodeData.config._exprW) || 0;
+          // Persisted textarea HEIGHT (px); absent ⇒ the default 3-row box.
+          // The WIDTH is the node's (`_exprW`, the corner grip — see the
+          // "user-resizable WIDTH" block above), so the textarea just fills it.
           const exprH = Number(nodeData.config._exprH) || 0;
           // Input-variable NAMES are set once and then read off the port labels,
           // so their editors (one text row per input + the port-count stepper)
@@ -2868,13 +2974,16 @@ function CaNodeComponent({ id, data }: NodeProps) {
               <textarea
                 ref={exprTextRef}
                 className={styles.input}
-                // Default: fill the node width, never collapse narrower than it
-                // (minWidth:100%) nor shorter than ~2 rows (minHeight). A user
-                // resize overrides width/height with the persisted px values;
-                // resize:both lets them keep adjusting in either direction.
+                // WIDTH is the NODE's — set by the corner grip and stored in
+                // `_exprW` — so the textarea simply fills it and resizes
+                // VERTICALLY only (`_exprH`). Letting it resize horizontally too
+                // would be a second, competing width: with `min-width: 100%` on a
+                // content-sized node it used to drag the whole node wider, but
+                // only while the editor happened to be open, so the formula (the
+                // node's default face) had no way to be widened at all.
                 style={{
-                  fontFamily: 'monospace', resize: 'both', boxSizing: 'border-box',
-                  width: exprW > 0 ? exprW : '100%', minWidth: '100%',
+                  fontFamily: 'monospace', resize: 'vertical', boxSizing: 'border-box',
+                  width: '100%',
                   height: exprH > 0 ? exprH : undefined, minHeight: 44,
                 }}
                 rows={3}
@@ -2890,18 +2999,17 @@ function CaNodeComponent({ id, data }: NodeProps) {
                 }}
                 onMouseDown={e => {
                   stopDrag(e);
-                  const t = e.currentTarget;
-                  exprResizeStartRef.current = { w: t.offsetWidth, h: t.offsetHeight };
+                  exprResizeStartRef.current = { h: e.currentTarget.offsetHeight };
                 }}
                 onMouseUp={e => {
                   const start = exprResizeStartRef.current;
                   exprResizeStartRef.current = null;
                   if (!start) return;
                   const t = e.currentTarget;
-                  // Only a deliberate resize drag changes the box size — persist it.
-                  if (t.offsetWidth !== start.w || t.offsetHeight !== start.h) {
+                  // Only a deliberate resize drag changes the box height — persist it.
+                  if (t.offsetHeight !== start.h) {
                     updateNodeData(id, { ...nodeData, config: {
-                      ...nodeData.config, _exprW: t.offsetWidth, _exprH: t.offsetHeight,
+                      ...nodeData.config, _exprH: t.offsetHeight,
                     } });
                   }
                 }}
@@ -3911,6 +4019,40 @@ function CaNodeComponent({ id, data }: NodeProps) {
           </div>
         );
       })}
+
+      {/* Expression node: WIDTH grip, bottom-right corner of the node.
+          A direct child of the root (which is `position: relative`) rather than
+          of `.body`, so it sits on the node's own corner and shows in EVERY body
+          state — including the default one, where the editor is collapsed and
+          the formula is the only thing on show.
+          `nodrag` is MANDATORY: `.body` carries it but this is outside `.body`,
+          and without it React Flow's drag swallows the pointer and the gesture
+          moves the node instead of resizing it. */}
+      {isExpression && (
+        <div
+          className="nodrag"
+          style={{
+            position: 'absolute', right: 1, bottom: 1, width: 14, height: 14,
+            cursor: 'ew-resize', opacity: exprDragW != null ? 0.9 : 0.4,
+            touchAction: 'none',
+          }}
+          title={'Drag to widen the node so the whole formula fits\nDouble-click to fit the contents again'}
+          onPointerDown={onExprGripDown}
+          onPointerMove={onExprGripMove}
+          onPointerUp={onExprGripUp}
+          onPointerCancel={onExprGripUp}
+          onDoubleClick={onExprGripDoubleClick}
+        >
+          {/* Two diagonal ticks — the conventional corner-grip mark. */}
+          <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true">
+            <path
+              d="M13 5 L5 13 M13 9.5 L9.5 13"
+              stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" fill="none"
+              opacity="0.75"
+            />
+          </svg>
+        </div>
+      )}
     </div>
   );
 }
