@@ -758,6 +758,22 @@ const EMPTY_AGENT_RINGS: ReadonlyArray<{ x: number; y: number; z: number; radius
  *  Short enough that the crisp re-attach lands as soon as the user stops. */
 const LAYOUT_RESIZE_SETTLE_MS = 140;
 
+/** Severity of a transient simulator toast. `warning` is the historical amber
+ *  ⚠ (something went wrong, was skipped, or degraded); `info` is the calm blue
+ *  ⓘ already used by the end-condition notice (a confirmation or a hint —
+ *  "Copied 179 agents", "enable the brush plane…"). It changes the PALETTE and
+ *  the GLYPH only: placement, timing and dismissal are shared. */
+export type NoticeSeverity = 'info' | 'warning';
+/** The two toast palettes, in one place so the info toast and the blue
+ *  end-condition notice cannot drift apart. Both use dark text on a saturated
+ *  fill, so the glyph reads at a glance without an icon font. */
+const NOTICE_STYLE: Record<NoticeSeverity, { bg: string; glyph: string }> = {
+  // U+24D8 CIRCLED LATIN SMALL LETTER I — the same glyph the end-condition
+  // notice renders as `&#9432;`.
+  info: { bg: 'rgba(76, 201, 240, 0.95)', glyph: 'ⓘ' },
+  warning: { bg: 'rgba(232, 161, 58, 0.95)', glyph: '⚠' },
+};
+
 /** The agent-brush modes, in cycle order (Alt+scroll steps through them). Shared
  *  by the mode-button row and the wheel-cycle handlers so they can't drift. */
 const AGENT_BRUSH_MODES: ReadonlyArray<'add' | 'remove' | 'move' | 'edit' | 'push' | 'pull' | 'glue' | 'cut'> =
@@ -5834,10 +5850,15 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
   // Bond-Graph Agents — transient toast for engine notices the worker posts
   // (e.g. `agentOverflow` when a cluster/drag seed hits maxAgents). Distinct
   // from endConditionNotice: it does NOT pause the simulation; it auto-dismisses.
-  const [agentNotice, setAgentNotice] = useState<string | null>(null);
+  // SEVERITY decides the palette + glyph, nothing else (timing, placement and
+  // dismissal are identical): `warning` is the historical amber ⚠ and stays the
+  // DEFAULT so an unclassified call site keeps today's look; `info` is the blue
+  // ⓘ already used by the end-condition notice below, for pure confirmations
+  // and guidance. The test is simply "did something go wrong or get skipped?".
+  const [agentNotice, setAgentNotice] = useState<{ message: string; severity: NoticeSeverity } | null>(null);
   const agentNoticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const showAgentNotice = useCallback((message: string) => {
-    setAgentNotice(message);
+  const showAgentNotice = useCallback((message: string, severity: NoticeSeverity = 'warning') => {
+    setAgentNotice({ message, severity });
     if (agentNoticeTimer.current) clearTimeout(agentNoticeTimer.current);
     agentNoticeTimer.current = setTimeout(() => setAgentNotice(null), 3500);
   }, []);
@@ -11371,7 +11392,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
           const cur = hover3dRef.current;
           if (!plane3dEnabledRef.current || !cur) {
             e.preventDefault();
-            showAgentNotice('Copy/paste anchors on the brush plane — enable it and hover a cell');
+            showAgentNotice('Copy/paste anchors on the brush plane — enable it and hover a cell', 'info');
             return;
           }
           // AGENT clipboard, 3D: the SAME two-step round-trip as 2D, anchored on
@@ -11391,7 +11412,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
               // Say what was grabbed: a 3D footprint is occluded and may reach
               // deeper than the plane, so — unlike 2D, where the cursor ring
               // shows it — nothing on screen states the count.
-              showAgentNotice(`${e.key === 'x' ? 'Cut' : 'Copied'} ${ids.length} agent${ids.length === 1 ? '' : 's'}`);
+              showAgentNotice(`${e.key === 'x' ? 'Cut' : 'Copied'} ${ids.length} agent${ids.length === 1 ? '' : 's'}`, 'info');
             } else {
               const clip = agentClipboardRef.current;
               if (!clip || clip.length === 0) return;
@@ -11437,7 +11458,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
             // The copied volume is INVISIBLE in 3D (occluded, and the box may be
             // deeper than the plane) — unlike 2D, where the silhouette cursor
             // shows it — so say what was grabbed.
-            showAgentNotice(`${e.key === 'x' ? 'Cut' : 'Copied'} ${cells} cell${cells === 1 ? '' : 's'} (${w}×${h}×${boxD} box)`);
+            showAgentNotice(`${e.key === 'x' ? 'Cut' : 'Copied'} ${cells} cell${cells === 1 ? '' : 's'} (${w}×${h}×${boxD} box)`, 'info');
           } else {
             const clip = clipboardRef.current;
             if (!clip) return;
@@ -11698,7 +11719,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
         throw new Error('the clipboard image API is not available here');
       }
       await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
-      showAgentNotice('Screenshot copied to the clipboard');
+      showAgentNotice('Screenshot copied to the clipboard', 'info');
     } catch (err) {
       console.error('Screenshot copy failed', err);
       showAgentNotice(`Copy failed — ${err instanceof Error ? err.message : String(err)}`);
@@ -13301,9 +13322,10 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
         {agentNotice && (
           <div
             data-sim-overlay
+            data-notice-severity={agentNotice.severity}
             style={{
               position: 'absolute', left: '50%', top: 54, transform: 'translateX(-50%)',
-              background: 'rgba(232, 161, 58, 0.95)', color: '#0d1117',
+              background: NOTICE_STYLE[agentNotice.severity].bg, color: '#0d1117',
               padding: '6px 14px', borderRadius: 6,
               fontSize: '0.78rem', fontWeight: 500,
               boxShadow: '0 2px 8px rgba(0,0,0,0.4)',
@@ -13311,8 +13333,8 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
               display: 'flex', alignItems: 'center', gap: 8,
             }}
           >
-            <span style={{ fontSize: '0.95rem' }}>{'\u26a0'}</span>
-            <span>{agentNotice}</span>
+            <span style={{ fontSize: '0.95rem' }}>{NOTICE_STYLE[agentNotice.severity].glyph}</span>
+            <span>{agentNotice.message}</span>
           </div>
         )}
 
