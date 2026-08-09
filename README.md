@@ -32,14 +32,14 @@ Pre-made models to explore and learn from. Enabling users to build upon classica
 
 ### **In-app Help**
 Detailed in-app help tab with a comprehensive tutorial and reference material regarding features, usage, shortcuts and such. Press **?** anywhere (or the navbar keyboard-shortcuts button) for a quick on-screen shortcuts cheat sheet, and **F** (or the **⛶** button on the canvas) to maximize the canvas. A navbar **Theme** switcher offers two dark themes (**Blender** and **Nocturne**):
-![Library](docs/Gifs/help.gif)
+![Help](docs/screenshots/help.png)
 
 ### **Install & Offline**
 GenesisCA is an installable [Progressive Web App](https://web.dev/explore/progressive-web-apps). Open it in Chrome or Edge and use the navbar **⤓ Install** button (or the browser's own install affordance) to add it as a standalone desktop app — its own window and icon (no tabs or address bar) — that **runs fully offline**: the app, the Models Library, previews, and your work are served from a local cache. A standalone portable **`GenesisCA.exe`** — a [Tauri](https://tauri.app) shell wrapping the same build — is published to the [Releases](https://github.com/rff255/GenesisCA/releases/latest) page: download and run it directly, no install (it runs from anywhere, e.g. a USB stick).
 
 ### **Example**
 Gray-Scott Reaction-Diffusion model `[Peter Gray & Stephen K. Scott (1983)]`:
-![Library](docs/Gifs/gray-scott.gif)
+![gray-scott](docs/Gifs/gray-scott.gif)
 
 **Other**
 
@@ -111,8 +111,8 @@ A high-level tour. Every feature has a detailed reference in the **in-app Help t
 
 Build a model's update rule as a node graph — wire reads, math, conditions and writes together and it compiles as you edit, with no programming and no build step. Groups, comments, reusable macros, search, undo/redo and a keyboard-driven quick-add menu keep large graphs workable.
 
-<!-- SCREENSHOT: the node-graph editor with a non-trivial rule open, node palette visible on the right -->
-> 📸 *Screenshot placeholder — the node-graph editor with a rule open*
+![Modeler](docs/screenshots/features/node-graph-canvas.png)
+> *Node-graph editor with context menu open. Amphiphile micelle formation rule*
 
 ### Define the whole model, not just the rule
 
@@ -122,29 +122,42 @@ Cells carry as many attributes as you like (binary, integer, decimal, tag, colou
 
 Models compile to **WebAssembly** or **WebGPU**; the default **Auto** setting picks the fastest engine your model can actually run on, and says which and why. A readable JavaScript build is always available as the reference implementation. The app stays honest about what it is doing: a compatibility readout explains every restriction, a pipeline view lists each phase of a generation, and diagnostics report which fast paths actually engaged.
 
-<!-- SCREENSHOT: Properties panel showing the Engine radio + the Compatibility readout ("Auto → WebGPU" and the reasons) -->
-> 📸 *Screenshot placeholder — engine selection and the compatibility readout*
+<table>
+  <tr>
+    <td align="center" width="25%"><img src="docs/screenshots/features/three-enignes.png" width="100%"/><br/><sub>WASM or WebGPU. JavaScript always generated</sub></td>
+    <td align="center" width="25%"><img src="docs/screenshots/features/compatibility.png" width="100%"/><br/><sub>Compatibility breakdown</sub></td>
+    <td align="center" width="25%"><img src="docs/screenshots/features/generation-pipeline.png" width="100%"/><br/><sub>How/when your rule/events runs</sub></td>
+  </tr>
+</table>
+
+<!-- > *Engine selection and the compatibility readout* -->
 
 ### 2D grids, 3D volumes
 
 Flip one switch and the lattice becomes a `W×H×D` volume, rendered as lit voxels you can orbit, slice open and paint through — same rules, same engines, same tooling.
 
-<!-- SCREENSHOT: the 3D voxel view — orbiting camera, a growing structure, clip plane open -->
-> 📸 *Screenshot placeholder — the 3D voxel view*
+![3d-lattice](docs/screenshots/features/3d-lattice.png)
+![3d-agents](docs/screenshots/features/3d-agents.png)
+> 📸 *3D voxels and 3D agents view*
 
 ### Agents, tissue and graph automata
 
 An optional second engine adds agents that float in continuous space instead of sitting on a grid: they sense each other, are pushed by forces your graph authors, bond together, grow and divide — while the grid CA doubles as the chemical field they secrete into and sense, closing the loop between the two. Bonds carry their own state and can be rewired, so structurally-dynamic and graph-rewriting automata are first-class citizens; agents draw as circles, sprites or one fused metaball surface.
 
-<!-- SCREENSHOT: agents — a bonded tissue mid-growth, or a graph automaton with its bonds visible -->
-> 📸 *Screenshot placeholder — bonded agents / a graph automaton*
+<table>
+  <tr>
+    <td align="center" width="25%"><img src="docs/screenshots/features/2d-agents.png" width="100%"/><br/><sub>2D agents with sprites</sub></td>
+    <td align="center" width="25%"><img src="docs/screenshots/features/3d-morphogenesis.png" width="100%"/><br/><sub>3D Morphogenesis (Metaballs)</sub></td>
+    <td align="center" width="25%"><img src="docs/screenshots/features/2d-growing-graph.png" width="100%"/><br/><sub>2D Growing Graph</sub></td>
+  </tr>
+</table>
+<!-- > 📸 *Screenshot placeholder — bonded agents / a graph automaton*-->
 
 ### Measure it, then experiment on it
 
 Indicators turn a running model into numbers — counts, totals, distributions, spatial profiles, graph metrics — charted live and exportable. The optional **Overseer** is a third graph that scripts experiments *around* the simulation: repeat seeded runs, sweep parameters, run until a stop condition, and aggregate the results into statistics and figures, so a set of runs becomes one reproducible experiment.
-
-<!-- SCREENSHOT: the simulator's indicator charts alongside the Overseer Experiments tab (series table + histogram) -->
-> 📸 *Screenshot placeholder — indicator charts and the Overseer Experiments tab*
+![overseer-experiments](docs/screenshots/features/chromatography-overseer-experiments.png)
+> *(on the right) Indicator aggregate charts from Overseer Experiments tab. Chromatography (Kier, Cheng & Karnes 2000) model*
 
 ### Interact while it runs
 
@@ -154,8 +167,8 @@ Paint with a shaped brush, inspect any cell or agent, copy and paste regions, dr
 
 Export PNG stills and WebM or GIF recordings, framed either to the whole world or to your current view. **Export standalone simulation** bundles the simulator and one model into a single self-contained `.html` file that runs offline in any browser — and loads back into GenesisCA as a complete, editable model.
 
-<!-- SCREENSHOT: an exported standalone .html running in a plain browser tab, welcome panel visible -->
-> 📸 *Screenshot placeholder — an exported standalone simulation*
+![standalone-simulation](docs/screenshots/features/standalone-simulation.png)
+> *An exported standalone simulation of a Particle Life setup*
 
 ### Learn from the library
 
@@ -190,7 +203,7 @@ npm install
 npm run dev
 ```
 
-The app opens at **http://localhost:5173**.
+The app opens by default at **http://localhost:5173**. But if not available, it will find a different port.
 
 ### Available Scripts
 
