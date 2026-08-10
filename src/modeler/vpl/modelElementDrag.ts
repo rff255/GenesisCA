@@ -30,6 +30,9 @@ export type ModelElementDragPayload =
    *  from the cell mappings, so it needs its own kind rather than reusing
    *  `mapping-a2c` (whose related nodes are the LATTICE roots). */
   | { kind: 'agent-mapping'; mappingId: string }
+  /** A Sprite Library asset (`model.sprites`) — the agent exhibition layer's
+   *  image. Its only consumer is the agent-only Set Agent Sprite node. */
+  | { kind: 'sprite'; spriteId: string }
   | { kind: 'indicator'; indicatorId: string }
   | { kind: 'variable'; variableId: string; varKind: 'scalar' | 'array' };
 
@@ -52,6 +55,7 @@ export function payloadElementId(payload: ModelElementDragPayload): string {
     case 'mapping-a2c': return payload.mappingId;
     case 'mapping-c2a': return payload.mappingId;
     case 'agent-mapping': return payload.mappingId;
+    case 'sprite': return payload.spriteId;
     case 'indicator': return payload.indicatorId;
     case 'variable': return payload.variableId;
   }
@@ -105,6 +109,13 @@ export const RELATED_NODES: Record<ModelElementDragPayload['kind'], RelatedNodeE
     { nodeType: 'agentOutputMapping', configKey: 'mappingId' },
     { nodeType: 'setCellLooks', configKey: 'mappingId' },
   ],
+  // The ONLY node that consumes a sprite id. `setSprite` is already true in the
+  // node's defaultConfig, so the facet that reads `spriteId` is on out of the
+  // box — but state it here too, so the drop is correct whatever that default
+  // becomes.
+  'sprite': [
+    { nodeType: 'setAgentSprite', configKey: 'spriteId', extraConfig: { setSprite: true } },
+  ],
   'indicator': [
     { nodeType: 'getIndicator', configKey: 'indicatorId' },
     { nodeType: 'setIndicator', configKey: 'indicatorId' },
@@ -129,10 +140,16 @@ export const RELATED_NODES: Record<ModelElementDragPayload['kind'], RelatedNodeE
  *  `agentOutputMapping` root off the Agents graph, but Set Cell Looks is
  *  universal and would otherwise leak through as silent dead code. Returning
  *  an empty list also zeroes `relatedNodePotentialPorts`, so the drag shows no
- *  port highlights there either — the "nothing to offer" state is visible. */
+ *  port highlights there either — the "nothing to offer" state is visible.
+ *
+ *  A SPRITE is gated the same way, for the same reason at one remove: its only
+ *  consumer (Set Agent Sprite) is `requirements.bondGraph`, so `isNodeAvailable`
+ *  already keeps it off the Cells / Overseer drop MENU — but the drag HIGHLIGHT
+ *  (`relatedNodePotentialPorts`) never consults that gate, so without this the
+ *  canvas would light up ports for a node it would then refuse to create. */
 export function relatedEntriesForPayload(payload: ModelElementDragPayload): RelatedNodeEntry[] {
   const entries = RELATED_NODES[payload.kind] ?? [];
-  if (payload.kind === 'agent-mapping') {
+  if (payload.kind === 'agent-mapping' || payload.kind === 'sprite') {
     return getActiveGraphKind() === 'agents' ? entries : [];
   }
   if (payload.kind !== 'variable') return entries;

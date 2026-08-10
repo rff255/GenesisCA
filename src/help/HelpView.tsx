@@ -2764,14 +2764,27 @@ export function HelpView() {
             single image/GIF, <strong>+&nbsp;Frame sequence</strong> (several images become one
             animation, in filename order), or <strong>+&nbsp;Sprite sheet</strong> (one grid
             image sliced row-major into frames; set columns / rows / count and any
-            margin / spacing). Each sprite can also <strong>rotate</strong> &mdash; set the
-            art&rsquo;s default facing on the compass dial and tick <strong>Orient to
-            velocity</strong> so it auto-points along the agent&rsquo;s heading (plus a fixed
-            offset) &mdash; and <strong>remove a background colour</strong> (chroma-key a
-            magenta / green screen to transparency, with a tolerance &mdash; pick the colour by
-            clicking the sprite image directly). Then, in an
-            Agent Output Mapping graph (or the Behaviour graph), use the <strong>Set Agent Sprite</strong>
-            node. Playback is <strong>driven by your logic</strong>, not a transport &mdash; the node has
+            margin / spacing).
+          </p>
+          <p className={styles.p}>
+            The library works like the mapping lists above it: each sprite is a
+            <strong> row</strong> with its thumbnail, name and frame count, and
+            <strong> clicking a row opens its editor in the second panel</strong>. There you
+            set the size, whether the frames <strong>loop</strong>, the sheet-slicing grid, the
+            <strong> rotation</strong> &mdash; the art&rsquo;s default facing on the compass dial,
+            plus <strong>Orient to velocity</strong> so it auto-points along the agent&rsquo;s
+            heading, plus a fixed offset &mdash; and <strong>remove a background colour</strong>
+            (chroma-key a magenta / green screen to transparency, with a tolerance &mdash; pick
+            the colour by clicking the sprite image directly). Use <strong>Duplicate</strong> to
+            branch a variant off an existing sprite, <strong>Delete</strong> to remove one (any
+            node pointing at it is cleared, not left dangling), and the <strong>&#8942;&#8942;</strong>
+            handle to reorder the library. You can also <strong>drag a sprite row onto the Agents
+            canvas</strong> to drop a <strong>Set Agent Sprite</strong> node already pointed at
+            it.
+          </p>
+          <p className={styles.p}>
+            To actually show a sprite, use that <strong>Set Agent Sprite</strong> node in an
+            Agent Output Mapping graph (or the Behaviour graph). Playback is <strong>driven by your logic</strong>, not a transport &mdash; the node has
             independently-tickable options so you change only what you want:
           </p>
           <ul className={styles.list}>

@@ -268,6 +268,12 @@ function handleAgentMappingDragStart(mappingId: string) {
   return dragStartFor({ kind: 'agent-mapping', mappingId });
 }
 
+/** Sprites drag as their own kind too — `model.sprites` is a third id-space and
+ *  its single consumer is the agent-only Set Agent Sprite node. */
+function handleSpriteDragStart(spriteId: string) {
+  return dragStartFor({ kind: 'sprite', spriteId });
+}
+
 function dragStartFor(payload: ModelElementDragPayload) {
   return (e: React.DragEvent) => {
     e.dataTransfer.setData(MODEL_ELEMENT_DRAG_MIME, JSON.stringify(payload));
@@ -282,19 +288,24 @@ function dragStartFor(payload: ModelElementDragPayload) {
  *  `attr:` / `var:` / `bond:` discrimination — and `ModelerView.selectedItemName`
  *  MUST resolve it or the detail panel never mounts. */
 const AGENT_MAP_PREFIX = 'agentmap:';
+/** The third id-space in that same slot: a Sprite Library asset. Same ⚠ — the
+ *  prefix is resolved in `ModelerView.selectedItemName`. */
+const SPRITE_PREFIX = 'sprite:';
 
 function handleMappingDragEnd() {
   setCurrentModelElementDrag(null);
 }
 
 export function MappingsPanelContent({ mode = 'list' }: PanelContentProps = {}) {
-  const { model, addMapping, duplicateMapping, removeMapping, updateMapping, reorderMappings, addAgentMapping, duplicateAgentMapping, removeAgentMapping, updateAgentMapping, reorderAgentMappings, addSprite, removeSprite, updateSprite } = useModel();
+  const { model, addMapping, duplicateMapping, removeMapping, updateMapping, reorderMappings, addAgentMapping, duplicateAgentMapping, removeAgentMapping, updateAgentMapping, reorderAgentMappings, addSprite, duplicateSprite, removeSprite, updateSprite, reorderSprites } = useModel();
   const [selectedId, setSelectedId] = useDetailSelection('mappings');
-  // ONE slot, two id-spaces: `agentmap:<id>` = an agent view, a bare id = a cell
-  // mapping. Exactly one of the two resolves, so the shared detail panel always
-  // shows the last-clicked row and picking one layer deselects the other.
+  // ONE slot, THREE id-spaces: `agentmap:<id>` = an agent view, `sprite:<id>` = a
+  // Sprite Library asset, a bare id = a cell mapping. Exactly one resolves, so
+  // the shared detail panel always shows the last-clicked row and picking in one
+  // layer deselects the others.
   const selectedAgentId = selectedId?.startsWith(AGENT_MAP_PREFIX) ? selectedId.slice(AGENT_MAP_PREFIX.length) : null;
-  const selectedCellId = selectedId && selectedAgentId === null ? selectedId : null;
+  const selectedSpriteId = selectedId?.startsWith(SPRITE_PREFIX) ? selectedId.slice(SPRITE_PREFIX.length) : null;
+  const selectedCellId = selectedId && selectedAgentId === null && selectedSpriteId === null ? selectedId : null;
   const agentsOn = !!model.topologyMode?.agents;
   // The Attribute↔Color mappings below are the LATTICE CA's colour views. Hide
   // them entirely for an agents-only model (no grid). When a model has BOTH
@@ -371,6 +382,8 @@ export function MappingsPanelContent({ mode = 'list' }: PanelContentProps = {}) 
   // Independent reorder for the agent views (their order IS the simulator's
   // Agents viewer-tab order, same as the cell mappings' tabs).
   const agentReorder = useListReorder(agentMappings, reorderAgentMappings);
+  // …and for the Sprite Library, whose order is what every sprite picker lists.
+  const spriteReorder = useListReorder(sprites, reorderSprites);
 
   // Auto-select & scroll to newly added mappings
   const prevCount = useRef(model.mappings.length);
@@ -405,8 +418,26 @@ export function MappingsPanelContent({ mode = 'list' }: PanelContentProps = {}) 
     // fresh [] whenever the key is absent, which would re-run this every render.
   }, [agentMappings.length]);
 
+  // Same for a newly IMPORTED / duplicated sprite (every add path appends), so
+  // the new asset's editor opens straight away. Length-keyed for the same reason
+  // as above — `model.sprites ?? []` is a fresh array on every render.
+  const prevSpriteCount = useRef(sprites.length);
+  useEffect(() => {
+    if (sprites.length > prevSpriteCount.current) {
+      const newItem = sprites[sprites.length - 1];
+      if (newItem) {
+        setSelectedId(SPRITE_PREFIX + newItem.id);
+        setTimeout(() => {
+          document.getElementById(`sprite-${newItem.id}`)?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        }, 50);
+      }
+    }
+    prevSpriteCount.current = sprites.length;
+  }, [sprites.length]);
+
   const selected = selectedCellId ? model.mappings.find(m => m.id === selectedCellId) : undefined;
   const selectedAgent = selectedAgentId ? agentMappings.find(m => m.id === selectedAgentId) : undefined;
+  const selectedSprite = selectedSpriteId ? sprites.find(s => s.id === selectedSpriteId) : undefined;
 
   const handleDelete = () => {
     if (selectedCellId) {
@@ -420,6 +451,15 @@ export function MappingsPanelContent({ mode = 'list' }: PanelContentProps = {}) 
   const handleDeleteAgent = () => {
     if (selectedAgentId) {
       removeAgentMapping(selectedAgentId);
+      setSelectedId(null);
+    }
+  };
+
+  // Same for the sprite half of the slot. REMOVE_SPRITE also cascades
+  // `clearDeletedId('spriteId')` over the Set Agent Sprite nodes.
+  const handleDeleteSprite = () => {
+    if (selectedSpriteId) {
+      removeSprite(selectedSpriteId);
       setSelectedId(null);
     }
   };
@@ -588,7 +628,11 @@ export function MappingsPanelContent({ mode = 'list' }: PanelContentProps = {}) 
 
       {/* Sprite Library — imported images / animated GIFs used as the optional
           agent exhibition layer (Set Agent Sprite node in an Agent Output Mapping
-          graph). Agents-only. Each sprite travels inside the .gcaproj as a data URL. */}
+          graph). Agents-only. Each sprite travels inside the .gcaproj as a data URL.
+          MASTER-DETAIL like the mappings above: the list (thumbnail + name +
+          reorder handle) lives here, the selected asset's editor opens in the
+          shared second panel, and a row drags onto the Agents canvas to spawn a
+          Set Agent Sprite already pointed at it. */}
       {agentsOn && (
         <div className={styles.section}>
           <div className={styles.sectionTitle}>Sprites</div>
@@ -600,26 +644,140 @@ export function MappingsPanelContent({ mode = 'list' }: PanelContentProps = {}) 
           {sprites.length === 0 && (
             <span style={{ color: '#888', fontSize: '0.68rem', fontStyle: 'italic' }}>No sprites yet.</span>
           )}
-          {sprites.map(s => (
-            <div key={s.id} className={styles.fieldGroup} style={{ borderTop: '1px solid #333', paddingTop: 8, marginTop: 6 }}>
+          <div className={styles.list} data-reorder-list>
+            {sprites.map((s, i) => {
+              const isDragging = spriteReorder.dragState?.id === s.id;
+              const srcIdx = spriteReorder.dragState ? sprites.findIndex(x => x.id === spriteReorder.dragState!.id) : -1;
+              const showBefore = spriteReorder.dragState?.overIdx === i && srcIdx !== i && srcIdx !== i - 1;
+              const showAfter = spriteReorder.dragState?.overIdx === sprites.length && i === sprites.length - 1 && srcIdx !== i;
+              const frameCount = s.frames?.length ?? (s.sheet ? (s.sheet.count ?? s.sheet.cols * s.sheet.rows) : 0);
+              return (
+                <div
+                  key={s.id}
+                  id={`sprite-${s.id}`}
+                  data-reorder-row
+                  className={`${styles.listItem} ${selectedSpriteId === s.id ? styles.listItemSelected : ''} ${isDragging ? styles.draggingRow : ''} ${showBefore ? styles.dropIndicatorBefore : ''} ${showAfter ? styles.dropIndicatorAfter : ''}`}
+                  onClick={() => setSelectedId(SPRITE_PREFIX + s.id)}
+                  draggable
+                  onDragStart={handleSpriteDragStart(s.id)}
+                  onDragEnd={handleMappingDragEnd}
+                  title={`Drag to the Agents canvas to add a Set Agent Sprite using '${s.name}'`}
+                >
+                  {/* The thumbnail IS the row's identity — a sprite is a picture. */}
+                  <img
+                    src={s.dataUrl}
+                    alt=""
+                    style={{ width: 24, height: 24, objectFit: 'contain', background: '#0a0b0e', borderRadius: 3, imageRendering: 'pixelated', flex: '0 0 auto', pointerEvents: 'none' }}
+                  />
+                  <span className={styles.listItemName}>{s.name}</span>
+                  {frameCount > 1 && <span className={styles.listItemBadge}>{frameCount}f</span>}
+                  <button className={styles.dragHandle} title="Drag to reorder"
+                    onPointerDown={spriteReorder.startDrag(s.id)}
+                    onClick={e => e.stopPropagation()}>⋮⋮</button>
+                </div>
+              );
+            })}
+          </div>
+          <input ref={spriteInputRef} type="file" accept={SPRITE_ACCEPT} style={{ display: 'none' }} onChange={handleSpritePick} />
+          <input ref={sequenceInputRef} type="file" accept={SPRITE_ACCEPT} multiple style={{ display: 'none' }} onChange={handleSequencePick} />
+          <input ref={sheetInputRef} type="file" accept={SPRITE_ACCEPT} style={{ display: 'none' }} onChange={handleSheetPick} />
+          <div className={styles.buttonRow} style={{ flexWrap: 'wrap' }}>
+            <button className={styles.addButton} onClick={() => spriteInputRef.current?.click()} title="A single image or an animated GIF/WebP">
+              + Image / GIF
+            </button>
+            <button className={styles.addButton} onClick={() => sequenceInputRef.current?.click()} title="Several images → one animated sprite (frames in filename order)">
+              + Frame sequence
+            </button>
+            <button className={styles.addButton} onClick={() => sheetInputRef.current?.click()} title="One grid image sliced into frames (RPGMaker-style sprite sheet)">
+              + Sprite sheet
+            </button>
+            <button className={styles.addButton} onClick={() => selectedSpriteId && duplicateSprite(selectedSpriteId)} disabled={!selectedSpriteId}>
+              Duplicate
+            </button>
+            <button className={styles.deleteButton} onClick={handleDeleteSprite}>
+              Delete
+            </button>
+          </div>
+        </div>
+      )}
+
+      </>)}
+
+      {/* Agent-view editor — the agent half of the SHARED detail panel. Same
+          fields the cell A→C editor offers (name / description / colour pass /
+          linked palette), over the AGENT attribute set. The per-channel R/G/B
+          description boxes are deliberately absent: they document a hand-built
+          cell colour pass and nothing reads them for an agent view. */}
+      {mode === 'detail' && selectedAgent && (
+        <div className={styles.detailEditor}>
+          <div className={styles.detailTitle}>Edit: {selectedAgent.name}</div>
+          <div className={styles.fieldGroup}>
+            <div className={styles.field}>
+              <label className={styles.fieldLabel}>Name</label>
+              <input
+                className={styles.textInput}
+                value={selectedAgent.name}
+                onChange={e => updateAgentMapping(selectedAgent.id, { name: e.target.value })}
+              />
+            </div>
+            <div className={styles.field}>
+              <label className={styles.fieldLabel}>Description</label>
+              <textarea
+                className={styles.textArea}
+                rows={2}
+                value={selectedAgent.description}
+                onChange={e => updateAgentMapping(selectedAgent.id, { description: e.target.value })}
+              />
+              <span style={{ color: '#888', fontSize: '0.66rem', marginTop: 3, display: 'block' }}>
+                Shown as the tooltip on this view&apos;s tab in the simulator&apos;s Agents viewer row.
+              </span>
+            </div>
+            <div className={styles.field}>
+              <label className={styles.fieldLabel}>Color pass</label>
+              <select
+                className={styles.textInput}
+                value={selectedAgent.linked === false ? 'standalone' : 'linked'}
+                onChange={e => updateAgentMapping(selectedAgent.id, { linked: e.target.value === 'linked' })}
+              >
+                <option value="standalone">Standalone</option>
+                <option value="linked">Linked</option>
+              </select>
+              <span style={{ color: '#888', fontSize: '0.66rem', marginTop: 3, display: 'block' }}>
+                {selectedAgent.linked === false
+                  ? 'You build this view by hand on the Agents graph (Agent Output Mapping → … → Set Cell Looks / Set Agent Sprite).'
+                  : 'Auto-generates the colour from a chosen agent attribute. If you also add an Agent Output Mapping node for this view, the auto pass runs first as a background and your graph overrides it (special colours, sprites).'}
+              </span>
+            </div>
+            {selectedAgent.linked !== false && (
+              <LinkedOutputEditor selected={{ ...selectedAgent, linked: true }} attrs={agentAttrs} update={updateAgentMapping} />
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Sprite editor — the third occupant of the SHARED detail panel. Every
+          per-asset control the inline stack used to carry (name, size, loop, the
+          sheet-slicing grid, rotation, chroma key), with a bigger preview. */}
+      {mode === 'detail' && selectedSprite && (() => {
+        const s = selectedSprite;
+        return (
+          <div className={styles.detailEditor}>
+            <div className={styles.detailTitle}>Edit: {s.name}</div>
+            <div className={styles.fieldGroup}>
               <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
                 <img
                   src={s.dataUrl}
                   alt={s.name}
-                  style={{ width: 40, height: 40, objectFit: 'contain', background: '#0a0b0e', borderRadius: 4, imageRendering: 'pixelated', flex: '0 0 auto' }}
+                  style={{ width: 48, height: 48, objectFit: 'contain', background: '#0a0b0e', borderRadius: 4, imageRendering: 'pixelated', flex: '0 0 auto' }}
                 />
-                <input
-                  className={styles.textInput}
-                  style={{ flex: 1 }}
-                  value={s.name}
-                  onChange={e => updateSprite(s.id, { name: e.target.value })}
-                />
-                <button
-                  className={styles.deleteButton}
-                  style={{ padding: '2px 8px' }}
-                  onClick={() => removeSprite(s.id)}
-                  title="Remove sprite"
-                >&times;</button>
+                <div className={styles.field} style={{ flex: 1, marginBottom: 0 }}>
+                  <label className={styles.fieldLabel}>Name</label>
+                  <input
+                    className={styles.textInput}
+                    value={s.name}
+                    onChange={e => updateSprite(s.id, { name: e.target.value })}
+                  />
+                </div>
               </div>
               <div className={styles.field}>
                 <label className={styles.fieldLabel}>Size × (relative to agent diameter)</label>
@@ -709,77 +867,9 @@ export function MappingsPanelContent({ mode = 'list' }: PanelContentProps = {}) 
                 )}
               </div>
             </div>
-          ))}
-          <input ref={spriteInputRef} type="file" accept={SPRITE_ACCEPT} style={{ display: 'none' }} onChange={handleSpritePick} />
-          <input ref={sequenceInputRef} type="file" accept={SPRITE_ACCEPT} multiple style={{ display: 'none' }} onChange={handleSequencePick} />
-          <input ref={sheetInputRef} type="file" accept={SPRITE_ACCEPT} style={{ display: 'none' }} onChange={handleSheetPick} />
-          <div className={styles.buttonRow} style={{ flexWrap: 'wrap' }}>
-            <button className={styles.addButton} onClick={() => spriteInputRef.current?.click()} title="A single image or an animated GIF/WebP">
-              + Image / GIF
-            </button>
-            <button className={styles.addButton} onClick={() => sequenceInputRef.current?.click()} title="Several images → one animated sprite (frames in filename order)">
-              + Frame sequence
-            </button>
-            <button className={styles.addButton} onClick={() => sheetInputRef.current?.click()} title="One grid image sliced into frames (RPGMaker-style sprite sheet)">
-              + Sprite sheet
-            </button>
           </div>
-        </div>
-      )}
-
-      </>)}
-
-      {/* Agent-view editor — the agent half of the SHARED detail panel. Same
-          fields the cell A→C editor offers (name / description / colour pass /
-          linked palette), over the AGENT attribute set. The per-channel R/G/B
-          description boxes are deliberately absent: they document a hand-built
-          cell colour pass and nothing reads them for an agent view. */}
-      {mode === 'detail' && selectedAgent && (
-        <div className={styles.detailEditor}>
-          <div className={styles.detailTitle}>Edit: {selectedAgent.name}</div>
-          <div className={styles.fieldGroup}>
-            <div className={styles.field}>
-              <label className={styles.fieldLabel}>Name</label>
-              <input
-                className={styles.textInput}
-                value={selectedAgent.name}
-                onChange={e => updateAgentMapping(selectedAgent.id, { name: e.target.value })}
-              />
-            </div>
-            <div className={styles.field}>
-              <label className={styles.fieldLabel}>Description</label>
-              <textarea
-                className={styles.textArea}
-                rows={2}
-                value={selectedAgent.description}
-                onChange={e => updateAgentMapping(selectedAgent.id, { description: e.target.value })}
-              />
-              <span style={{ color: '#888', fontSize: '0.66rem', marginTop: 3, display: 'block' }}>
-                Shown as the tooltip on this view&apos;s tab in the simulator&apos;s Agents viewer row.
-              </span>
-            </div>
-            <div className={styles.field}>
-              <label className={styles.fieldLabel}>Color pass</label>
-              <select
-                className={styles.textInput}
-                value={selectedAgent.linked === false ? 'standalone' : 'linked'}
-                onChange={e => updateAgentMapping(selectedAgent.id, { linked: e.target.value === 'linked' })}
-              >
-                <option value="standalone">Standalone</option>
-                <option value="linked">Linked</option>
-              </select>
-              <span style={{ color: '#888', fontSize: '0.66rem', marginTop: 3, display: 'block' }}>
-                {selectedAgent.linked === false
-                  ? 'You build this view by hand on the Agents graph (Agent Output Mapping → … → Set Cell Looks / Set Agent Sprite).'
-                  : 'Auto-generates the colour from a chosen agent attribute. If you also add an Agent Output Mapping node for this view, the auto pass runs first as a background and your graph overrides it (special colours, sprites).'}
-              </span>
-            </div>
-            {selectedAgent.linked !== false && (
-              <LinkedOutputEditor selected={{ ...selectedAgent, linked: true }} attrs={agentAttrs} update={updateAgentMapping} />
-            )}
-          </div>
-        </div>
-      )}
+        );
+      })()}
 
       {mode === 'detail' && selected && (
         <div className={styles.detailEditor}>
