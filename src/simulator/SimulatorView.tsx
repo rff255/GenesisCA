@@ -18,7 +18,7 @@ import { Gl3DRenderer, panCamera, cameraBasis, sceneCameraMatrices, lightWorldDi
 import type { SpriteAtlasInput, Light3D, Metaballs3D, AutoZoom3D } from './render/gl3d';
 import type { VoxelRenderView } from './engine/webgpuRuntime';
 import { LightBallWidget } from './LightBallWidget';
-import { agentTargetOf, resolveMaxBonds } from '../model/centerBased';
+import { agentTargetOf, resolveMaxBonds, usesEngineSprings } from '../model/centerBased';
 import { resolveEngines, withResolvedEngine, ENGINE_CHOICE_LABEL } from '../model/engineResolution';
 import { describeSweepMethodology } from '../model/reproducibility';
 // C1 (P2/P4) — the compile-target chip's amber state + its reason come from the
@@ -57,6 +57,7 @@ import { NumberField } from '../modeler/vpl/widgets/InlineWidgets';
 import { designTimeSeriesKeys, mergeChartSettings, historyWindow, INDICATOR_HISTORY_DEFAULT_CAP, INDICATOR_HISTORY_HARD_CAP } from './indicatorChartSettings';
 import { InspectCellPopover, InspectHoverLink, type InspectPopoverState } from './InspectCellPopover';
 import { InspectAgentPopover, type AgentPopoverState } from './InspectAgentPopover';
+import { InspectBondPopover, type BondPopoverState, type BondStateValues } from './InspectBondPopover';
 import { PresetSaveDialog } from './PresetSaveDialog';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { serializeSimState, serializePreset, downloadStateFile, readStateFile, downloadPresetFile, readPresetFile, saveBinaryFile, base64ToArrayBuffer, deserializeTypedArray, migrateSimulationStateV1toV2, deserializeAgentState } from '../model/fileOperations';
@@ -846,6 +847,23 @@ const NUDGE_ARROW_HALF_MAX = 0.34;
 function nudgeArrowHalf(intensity: number): number {
   return NUDGE_ARROW_HALF_MIN + (NUDGE_ARROW_HALF_MAX - NUDGE_ARROW_HALF_MIN) * nudgeStrengthCue(intensity);
 }
+/** Canonical key for a BOND inspector: the unordered pair, normalised a < b, so
+ *  clicking the same edge from either side can never pin it twice. */
+function bondKey(a: number, b: number): string {
+  return a < b ? `${a}:${b}` : `${b}:${a}`;
+}
+/** Squared distance from point p to segment (v, w), all in world units. */
+function pointSegDist2(px: number, py: number, vx: number, vy: number, wx: number, wy: number): number {
+  const dx = wx - vx, dy = wy - vy;
+  const len2 = dx * dx + dy * dy;
+  let t = len2 > 0 ? ((px - vx) * dx + (py - vy) * dy) / len2 : 0;
+  t = t < 0 ? 0 : t > 1 ? 1 : t;
+  const qx = vx + t * dx, qy = vy + t * dy;
+  return (px - qx) * (px - qx) + (py - qy) * (py - qy);
+}
+/** Screen-pixel tolerance for the bond hit test (the line itself is ~2 px). */
+const BOND_PICK_PX = 6;
+
 function agentBrushModesFor(bondsAvailable: boolean): typeof AGENT_BRUSH_MODES {
   return bondsAvailable ? AGENT_BRUSH_MODES : AGENT_BRUSH_MODES.filter(m => !BOND_BRUSH_MODES.has(m));
 }
@@ -2055,6 +2073,17 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
   const agentStatesRef = useRef<Map<number, AgentStateResponse>>(new Map());
   const [, bumpAgentStateVersion] = useState(0);
 
+  // BOND inspectors — the EDGE-layer twin of the agent inspectors. An inspect
+  // click (Shift+LMB / the ⓘ toggle) that lands on no agent but NEAR a bond
+  // LINE pins one of these; it reads the edge's live state (endpoints, current
+  // length, rest length, stiffness, per-EDGE bond-attribute values) and edits it
+  // through one `setBondState`, which writes BOTH slots (invariant I2).
+  // Keyed by `a:b` with a < b, so the same edge can't be pinned twice.
+  const [bondPopovers, setBondPopovers] = useState<BondPopoverState[]>([]);
+  const [focusedBondKey, setFocusedBondKey] = useState<string | null>(null);
+  const bondStatesRef = useRef<Map<string, BondStateValues>>(new Map());
+  const [, bumpBondStateVersion] = useState(0);
+
   // FOLLOW MODE — the camera tracks ONE inspected agent (2D and 3D). Armed from
   // the ◎ toggle in a PINNED inspector's header, so follow can never be active
   // with zero popovers open; that means the existing agent UI-sync want-term
@@ -2467,6 +2496,31 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       if (!live.has(k)) agentStatesRef.current.delete(k);
     }
   }, [agentInspectIds]);
+  // BOND inspector — the same low-Hz live refresh (~3 Hz) as the agent one, and
+  // for the same reason: bonds BREAK and their slots COMPACT, so a pinned
+  // popover must learn that its edge is gone (`live: false` → "Bond no longer
+  // exists") rather than showing a stale row forever.
+  const bondInspectKeys = useMemo(
+    () => bondPopovers.map(p => ({ key: bondKey(p.a, p.b), a: p.a, b: p.b })),
+    [bondPopovers],
+  );
+  const bondInspectKeysRef = useRef(bondInspectKeys);
+  bondInspectKeysRef.current = bondInspectKeys;
+  useEffect(() => {
+    if (bondInspectKeys.length === 0) return;
+    const poll = setInterval(() => {
+      for (const k of bondInspectKeys) workerRef.current?.postMessage({ type: 'getBondState', a: k.a, b: k.b });
+    }, 333);
+    return () => clearInterval(poll);
+  }, [bondInspectKeys]);
+  // Drop cached state for bonds whose popover just closed.
+  useEffect(() => {
+    const live = new Set(bondInspectKeys.map(k => k.key));
+    for (const k of Array.from(bondStatesRef.current.keys())) {
+      if (!live.has(k)) bondStatesRef.current.delete(k);
+    }
+  }, [bondInspectKeys]);
+
   // FOLLOW MODE ends with its popover: closing it (× / Close all / Esc / the
   // model-load close-all) drops the id from the PINNED list, so follow stops.
   // Keyed on agentPopovers, not agentInspectIds — the transient sweep never owns
@@ -2839,6 +2893,13 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
   // store, so they vanish for a Bonds=Off model (Particle Life, Boids, …). The
   // ref keeps the two Alt+wheel cycle handlers on the same list as the buttons.
   const bondsAvailable = resolveMaxBonds(model.centerBased) > 0;
+  // Mirrored for the once-registered pointer handlers (the bond hit test is
+  // skipped entirely when the model can hold no bonds).
+  const bondsAvailableRef = useRef(bondsAvailable); bondsAvailableRef.current = bondsAvailable;
+  // Does the ENGINE run bond springs? Gates the bond inspector's stiffness row
+  // (with `bonds: 'data'` stiffness feeds nothing, so the row is hidden rather
+  // than shown-and-inert). The resolver is the single source of truth.
+  const bondSpringsActive = usesEngineSprings(model.centerBased);
   const agentBrushModes = useMemo(() => agentBrushModesFor(bondsAvailable), [bondsAvailable]);
   const agentBrushModesRef = useRef(agentBrushModes); agentBrushModesRef.current = agentBrushModes;
   // A model swap can strand the selection on a mode the new model cannot do
@@ -2915,6 +2976,22 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
   // click's mousedown+mouseup land in one frame, before any re-render), so the
   // ref leads the state rather than mirroring it here.
   const agentSweepPopoverRef = useRef<AgentPopoverState | null>(null);
+  // Reassigned each render; the message dispatch calls it when a `bondState`
+  // response arrives (the ref keeps the dispatch closure stable, like the agent
+  // one below).
+  const onBondStateRef = useRef<(r: BondStateValues) => void>(() => {});
+  onBondStateRef.current = (r: BondStateValues) => {
+    const key = bondKey(r.a, r.b);
+    if (!bondInspectKeysRef.current.some(k => k.key === key)) return;   // popover already closed
+    const wasLive = bondStatesRef.current.get(key)?.live;
+    bondStatesRef.current.set(key, r);
+    bumpBondStateVersion(v => v + 1);
+    // The selected-bond highlight is gated on liveness (a broken bond must stop
+    // being stroked, even though both endpoints are still alive and the popover
+    // stays open saying so), and nothing else repaints the cursor layer while
+    // paused — so a liveness flip forces one.
+    if (wasLive !== r.live) scheduleCursorDraw();
+  };
   // Reassigned each render; the message dispatch calls it when an `agentState`
   // response arrives. Declared as a ref so the dispatch closure stays stable.
   const onAgentStateRef = useRef<(r: AgentStateResponse) => void>(() => {});
@@ -3942,6 +4019,38 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
         }
       }
     }
+    // Selected-BOND highlight (2D) — one accent stroke per OPEN bond inspector,
+    // DERIVED per draw from the LIVE snapshot (never cached at selection time),
+    // so it tracks the moving endpoints exactly like the inspected-agent rings.
+    // The far endpoint is torus-folded with the SAME rule drawAgentsOverlay
+    // strokes the bond with, so the highlight lies on the drawn line. Primary
+    // tile only, like the other rings. Cleared automatically when the popover
+    // closes (the list empties) or an endpoint dies.
+    if (snap && bondInspectKeysRef.current.length > 0) {
+      const torusB = boundaryTreatmentRef.current === 'torus';
+      hlCtx.save();
+      hlCtx.strokeStyle = 'rgba(232, 161, 58, 0.95)';
+      hlCtx.lineWidth = Math.max(2, scale * 0.26);
+      hlCtx.lineCap = 'round';
+      for (const k of bondInspectKeysRef.current) {
+        const i = k.a, j = k.b;
+        if (i < 0 || j < 0 || i >= hw || j >= hw || !aal![i] || !aal![j]) continue;
+        // A bond that BROKE (or compacted away) must stop being stroked even
+        // though both endpoints are still alive — the popover then reads "Bond
+        // no longer exists". Unknown (no reply yet) still draws.
+        if (bondStatesRef.current.get(k.key)?.live === false) continue;
+        let jx = ax![j]!, jy = ay![j]!;
+        if (torusB && w > 0 && h > 0) {
+          if (jx - ax![i]! > w / 2) jx -= w; else if (jx - ax![i]! < -w / 2) jx += w;
+          if (jy - ay![i]! > h / 2) jy -= h; else if (jy - ay![i]! < -h / 2) jy += h;
+        }
+        hlCtx.beginPath();
+        hlCtx.moveTo(ox + ax![i]! * scale, oy + ay![i]! * scale);
+        hlCtx.lineTo(ox + jx * scale, oy + jy * scale);
+        hlCtx.stroke();
+      }
+      hlCtx.restore();
+    }
     // Area-affected agents — every agent the current footprint would touch
     // (Remove/Move/Edit, Area scope; Push/Pull's radial disc), colour-coded per mode.
     if (showAgentCursor && snap && ((aScope === 'area' && (mode === 'remove' || mode === 'move' || mode === 'edit')) || NUDGE_BRUSH_MODES.has(mode)) && agentAreaHoverIdsRef.current.length) {
@@ -4255,6 +4364,9 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       !playingRef.current
       || recordingRef.current
       || agentInspectIdsRef.current.length > 0
+      // A BOND inspector polls getBondState AND draws a highlight derived from
+      // the live snapshot — both need fresh CPU agent state.
+      || bondInspectKeysRef.current.length > 0
       || sweepActiveRef.current
       || editTargetIdRef.current >= 0
       || agentMetaballsRef.current.enabled
@@ -6301,6 +6413,10 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
     } else if (msg.type === 'agentState') {
       // Bond-Graph Agents: response to a `getAgentState {id}` inspector request.
       onAgentStateRef.current(msg as unknown as AgentStateResponse);
+    } else if (msg.type === 'bondState') {
+      // Response to a `getBondState {a,b}` BOND inspector request. Cached by the
+      // normalised pair key for whichever bond popovers are open.
+      onBondStateRef.current(msg as unknown as BondStateValues);
     } else if (msg.type === 'agentsRead') {
       // Agent clipboard COPY reply: stash relative-to-anchor specs; a cut then
       // kills the source ids (only once the read has safely captured them).
@@ -9116,7 +9232,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
   // `agentHoverNeedsState` reads their REFS, which only catch up on the next
   // render — without this an Alt+wheel mode cycle (or the Inspect toggle) into a
   // state-reading mode would not arm the snapshot until the next pointer move.
-  useEffect(() => { updateAgentUiSync(); }, [playing, recording, agentInspectIds, editTargetId, agentMetaballs.enabled, agentBrushMode, inspectMode, brushTarget, updateAgentUiSync]);
+  useEffect(() => { updateAgentUiSync(); }, [playing, recording, agentInspectIds, bondInspectKeys, editTargetId, agentMetaballs.enabled, agentBrushMode, inspectMode, brushTarget, updateAgentUiSync]);
   // L1: the GRID sibling — re-evaluate the voxel UI-sync on every state signal that
   // needs the CPU colours mirror. `alpha3d` is the ONLY remaining FRAME-MODE-ONLY
   // visual (the WGSL pass does not back-to-front sort): turning it on pins UI-sync
@@ -9257,9 +9373,11 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
   // and the 2D cursor-layer inspect block), so this effect only has to force a
   // repaint when the popover set (or the followed agent) changes — the ring
   // must appear / disappear / restyle immediately even while the sim is paused.
+  // (The selected-BOND highlight is derived the same way, so `bondPopovers`
+  // joins the same repaint trigger.)
   useEffect(() => {
     draw();
-  }, [agentPopovers, agentSweepPopover, followAgentId, is3D, draw]);
+  }, [agentPopovers, agentSweepPopover, bondPopovers, followAgentId, is3D, draw]);
   const [pulseInspectIdx, setPulseInspectIdx] = useState<number | null>(null);
   const [focusedInspectIdx, setFocusedInspectIdx] = useState<number | null>(null);
   const inspectDataRef = useRef<Map<number, Record<string, number>>>(new Map());
@@ -9380,6 +9498,11 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
     agentSweepPopoverRef.current = null;
     setFocusedAgentPopoverId(null);
     agentStatesRef.current.clear();
+    // BOND inspectors hold a PAIR of ids into the OLD population — equally
+    // meaningless after a load, so they join the same close-all.
+    setBondPopovers([]);
+    setFocusedBondKey(null);
+    bondStatesRef.current.clear();
     // FOLLOW MODE holds an id into the OLD population — clear it here too (the
     // popover-gone effect would also catch it, but the ref LEADS the state, so
     // the tracker must not see a stale id for even one frame).
@@ -9532,6 +9655,62 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
     }
     return best;
   }, [screenToWorld]);
+
+  // Nearest BOND (edge) under a screen point, or null. The 2D twin of
+  // `pickAgentAt`, run only after that returns -1 (an agent always wins the
+  // click). Both the click point AND the far endpoint are folded to the
+  // torus-SHORTEST offset from `i` — the SAME fold `drawAgentsOverlay` uses to
+  // stroke the segment — so the hit test matches the drawn line, seam included.
+  const pickBondAt = useCallback((clientX: number, clientY: number): { a: number; b: number } | null => {
+    const snap = agentsRef.current;
+    if (!snap || snap.highWater === 0) return null;
+    const bonds = snap.bonds;
+    if (!bonds || bonds.length === 0) return null;
+    const wpt = screenToWorld(clientX, clientY);
+    if (!wpt) return null;
+    const W = gridWidth.current, H = gridHeight.current;
+    const torus = boundaryTreatmentRef.current === 'torus';
+    const tol = BOND_PICK_PX / Math.max(0.0001, wpt.scale);
+    const tol2 = tol * tol;
+    const fold = (d: number, span: number) => {
+      if (!torus || span <= 0) return d;
+      if (d > span / 2) return d - span;
+      if (d < -span / 2) return d + span;
+      return d;
+    };
+    let best: { a: number; b: number } | null = null, bestD2 = tol2;
+    for (let k = 0; k < bonds.length; k += 2) {
+      const i = bonds[k]!, j = bonds[k + 1]!;
+      if (!snap.alive[i] || !snap.alive[j]) continue;
+      // Everything relative to i (the origin of the drawn segment).
+      const jx = fold(snap.x[j]! - snap.x[i]!, W), jy = fold(snap.y[j]! - snap.y[i]!, H);
+      const px = fold(wpt.x - snap.x[i]!, W), py = fold(wpt.y - snap.y[i]!, H);
+      const d2 = pointSegDist2(px, py, 0, 0, jx, jy);
+      if (d2 < bestD2) { bestD2 = d2; best = { a: i, b: j }; }
+    }
+    return best;
+  }, [screenToWorld]);
+
+  // Pin a BOND inspector (normalised a < b) and fire the first getBondState;
+  // the ~3 Hz poll above keeps it fresh. Re-clicking an already-pinned bond just
+  // focuses it rather than stacking a duplicate.
+  const openBondInspector = useCallback((a: number, b: number, clientX: number, clientY: number) => {
+    const lo = Math.min(a, b), hi = Math.max(a, b);
+    const key = bondKey(lo, hi);
+    setBondPopovers(prev => (prev.some(p => bondKey(p.a, p.b) === key)
+      ? prev
+      : [...prev, { a: lo, b: hi, x: clientX, y: clientY }]));
+    setFocusedBondKey(key);
+    workerRef.current?.postMessage({ type: 'getBondState', a: lo, b: hi });
+  }, []);
+  const closeBondPopover = useCallback((key: string) => {
+    setBondPopovers(prev => prev.filter(p => bondKey(p.a, p.b) !== key));
+    setFocusedBondKey(f => (f === key ? null : f));
+  }, []);
+  const closeAllBondPopovers = useCallback(() => {
+    setBondPopovers([]);
+    setFocusedBondKey(null);
+  }, []);
 
   // Post a seed-agents message for a list of world positions. Optional `sets`
   // carries the encoded per-attribute initial values from the seed-config panel
@@ -10507,6 +10686,18 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
             agentSweepAnchorRef.current = { x: e.clientX, y: e.clientY };
             return;
           }
+          // No agent under the cursor — try the BOND (edge) layer next, before
+          // falling through to the cell sweep. Gated on the model actually
+          // having bonds (`resolveMaxBonds > 0`), so a bond-free agent model
+          // behaves exactly as before. Pins directly (no sweep): an edge is a
+          // discrete thing you select, not a region you drag across.
+          if (bondsAvailableRef.current) {
+            const bp = pickBondAt(e.clientX, e.clientY);
+            if (bp) {
+              openBondInspector(bp.a, bp.b, e.clientX, e.clientY);
+              return;
+            }
+          }
         }
         const cell = screenToGrid(e.clientX, e.clientY);
         // Guard against the brief window where the canvas hasn't been laid out
@@ -11102,7 +11293,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       if (cursorDrawRaf.current != null) { cancelAnimationFrame(cursorDrawRaf.current); cursorDrawRaf.current = null; }
       if (hoverWorkRaf.current != null) { cancelAnimationFrame(hoverWorkRaf.current); hoverWorkRaf.current = null; }
     };
-  }, [draw, scheduleCursorDraw, paintAt, paintLine, screenToGrid, flushPaintBatch, commitInspectPopover, screenToWorld, pickAgentAt, seedAgentsAt, agentSeedPoints, flushSeedBatch, killAgentsInRadius, openAgentInspector, flushMoveBatch, startNudgeLoop, stopNudgeLoop, agentsInShapeAt, agentsInRadiusAt, agentSeedInShape, agentSeedInLine, agentLineMembers, applyAgentEditToIds, cancelFollow]);
+  }, [draw, scheduleCursorDraw, paintAt, paintLine, screenToGrid, flushPaintBatch, commitInspectPopover, screenToWorld, pickAgentAt, pickBondAt, openBondInspector, seedAgentsAt, agentSeedPoints, flushSeedBatch, killAgentsInRadius, openAgentInspector, flushMoveBatch, startNudgeLoop, stopNudgeLoop, agentsInShapeAt, agentsInRadiusAt, agentSeedInShape, agentSeedInLine, agentLineMembers, applyAgentEditToIds, cancelFollow]);
 
   // Play: kick-start the step pipeline (worker message handler chains subsequent steps)
   useEffect(() => {
@@ -13317,6 +13508,41 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
             onDragEnd={() => {}}
           />
         )}
+
+        {/* BOND inspectors \u2014 one per selected edge (an inspect click that landed
+            near a bond line rather than on an agent). Read-live + explicit
+            Apply; the write goes to BOTH slots of the symmetric bond. */}
+        {bondPopovers.map(p => {
+          const key = bondKey(p.a, p.b);
+          return (
+            <InspectBondPopover
+              key={key}
+              popover={p}
+              state={bondStatesRef.current.get(key) ?? null}
+              bondAttributes={model.bondAttributes ?? []}
+              springs={bondSpringsActive}
+              focused={focusedBondKey === key}
+              totalOpen={bondPopovers.length}
+              onClose={() => closeBondPopover(key)}
+              onCloseAll={closeAllBondPopovers}
+              onFocus={() => setFocusedBondKey(key)}
+              onDragEnd={(x, y) => setBondPopovers(prev => prev.map(pp => (bondKey(pp.a, pp.b) === key ? { ...pp, x, y } : pp)))}
+              onApply={patch => {
+                workerRef.current?.postMessage({
+                  type: 'setBondState', a: p.a, b: p.b, ...patch,
+                  activeViewer: activeViewerRef.current,
+                });
+                // Re-read straight away so the rows show what actually landed.
+                workerRef.current?.postMessage({ type: 'getBondState', a: p.a, b: p.b });
+              }}
+              // Endpoint chip → PIN an agent inspector for that id. `openAgentInspector`
+              // opens the transient sweep popover (its ref is assigned
+              // synchronously), so committing right after pins it — the same pair
+              // a no-drag inspect click runs.
+              onOpenAgent={id => { openAgentInspector(id, p.x + 24, p.y + 24); commitAgentSweep(); }}
+            />
+          );
+        })}
 
         {/* Bond-Graph Agents \u2014 transient engine-notice toast (e.g. agentOverflow). */}
         {agentNotice && (
