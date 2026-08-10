@@ -16,6 +16,22 @@ import { BOND_REQ_ID_BIAS, BOND_REQ_NONE } from './bondRequestQueue';
 
 export type BondRequestVerb = 'form' | 'break' | 'rewire' | 'between' | 'transfer';
 
+/** Form Bond's optional FIRST-agent port. Unwired ⇒ the historical self→target
+ *  form; wired ⇒ the op LOWERS to the Form Between encoding (see `pairWired`). */
+export const FORM_BOND_PAIR_PORT = 'agentA';
+
+/** Is Form Bond's optional `agentA` port WIRED?
+ *
+ *  ⚠️ THE PORT MUST NOT CARRY AN INLINE WIDGET. `inputs[portId]` is set by the JS
+ *  compiler from exactly two sources — the edge map (`inputToSource`) and
+ *  `getInlineValue`, which returns undefined for a port with no `inlineWidget`.
+ *  So for a widget-less port this test IS the edge-map test (which is what the
+ *  WASM/WebGPU mirrors read directly). Give `agentA` a widget and an UNWIRED node
+ *  would start reading as wired here — and diverge from the other two targets. */
+export function formBondPairWiredJS(verb: BondRequestVerb, inputs: Record<string, string>): boolean {
+  return verb === 'form' && inputs[FORM_BOND_PAIR_PORT] !== undefined;
+}
+
 /** Emit one queue append. `inputs` are the node's resolved value inputs. */
 export function emitBondRequestJS(
   verb: BondRequestVerb,
@@ -24,6 +40,11 @@ export function emitBondRequestJS(
 ): string {
   const slots = Math.max(1, Math.floor(ctx?.bondReqSlots ?? 1));
   const depth = slots - 1;
+  // Form Bond with a WIRED `agentA` IS a Form Between — the same two-id op, so it
+  // takes the identical encoding rather than a second one. Unwired keeps the
+  // historical `form` arm verbatim, which is what preserves byte identity.
+  const pairWired = formBondPairWiredJS(verb, inputs);
+  const bPort = verb === 'between' ? 'agentB' : 'targetAgent';
   const L: string[] = ['{'];
   // Append at the cursor, clamped to the overflow bucket; the cursor always bumps
   // so a later op cannot silently reuse a full queue's last real entry.
@@ -37,14 +58,22 @@ export function emitBondRequestJS(
     L.push(`  const _bqOk = _bqF >= 0 && _bqT >= 0;`);
     L.push(`  _bondBreakReq[_bq] = _bqOk ? _bqF + ${BOND_REQ_ID_BIAS} : ${BOND_REQ_NONE};`);
     L.push(`  _bondFormReq[_bq] = _bqOk ? _bqT + ${BOND_REQ_ID_BIAS} : ${BOND_REQ_NONE};`);
-  } else if (verb === 'between') {
+  } else if (verb === 'between' || pairWired) {
     // P4b — FORM BETWEEN two OTHER agents. The op kind rides the SIGN of the break
     // lane (see bondRequestQueue.ts): NEGATIVE ⇒ "bond A to B", where a Rewire's
     // POSITIVE break lane means "break self↔from". Zero new fields, so no baked
     // offset moves. Both ids must resolve or the entry is an explicit no-op —
     // still written as (−NONE, NONE) so it stays non-zero and cannot truncate.
+    //
+    // A Form Bond with a WIRED `agentA` lands here too: "bond A to my Target" is
+    // the same two-id op, so it reuses this encoding instead of inventing a
+    // second one. Wiring Get Self Handle → Agent A therefore produces the SAME
+    // bond as leaving it unwired — the drain's Form Between arm calls the very
+    // same `formBond(a, b, …)`, and its extra `alive[a] && a < hw` checks are
+    // trivially true when `a` IS the requester (the drain already skipped dead
+    // agents and `i < hw` by the loop bound).
     L.push(`  const _bqA = (${inputs['agentA'] || '-1'}) | 0;`);
-    L.push(`  const _bqB = (${inputs['agentB'] || '-1'}) | 0;`);
+    L.push(`  const _bqB = (${inputs[bPort] || '-1'}) | 0;`);
     L.push(`  const _bqOk = _bqA >= 0 && _bqB >= 0;`);
     L.push(`  _bondBreakReq[_bq] = _bqOk ? -(_bqA + ${BOND_REQ_ID_BIAS}) : ${-BOND_REQ_NONE};`);
     L.push(`  _bondFormReq[_bq] = _bqOk ? _bqB + ${BOND_REQ_ID_BIAS} : ${BOND_REQ_NONE};`);

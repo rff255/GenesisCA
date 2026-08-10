@@ -2635,9 +2635,21 @@ export function HelpView() {
             constant while the topology churns underneath it.
           </p>
           <p className={styles.p}>
-            <strong>Form Bond Between</strong> bonds <em>two other agents</em>, named by id. Form Bond
-            always joins <em>you</em> to a target, so on its own it cannot make an edge between two
-            agents that are both someone else &mdash; and the classic <strong>triangle split</strong>
+            <strong>Form Bond names both ends of the bond.</strong> Its second id is
+            <em> Agent A</em>, and it is optional: leave it unwired and it is <em>this</em> agent, so
+            the node reads exactly as it always has &mdash; &ldquo;bond me to my Target&rdquo;. Wire
+            it and you get &ldquo;bond A to my Target&rdquo; instead, which lets one node cover both
+            shapes. Wiring <em>Get Self Handle</em> into it is the same thing as leaving it empty, so
+            you can be explicit when a rule reads better that way. Everything else is unchanged: the
+            request still travels on <em>your</em> queue, the two ids are just values it carries, and
+            rest length 0 still means the contact distance of whichever pair ends up bonded.
+          </p>
+          <p className={styles.p}>
+            <strong>Form Bond Between</strong> bonds <em>two other agents</em>, named by id &mdash;
+            the same job as a Form Bond with its Agent A wired, kept as its own node because naming
+            both agents up front is often what the rule is actually about. Form Bond on its own (with
+            Agent A left at the default) joins <em>you</em> to a target, so it cannot make an edge
+            between two agents that are both someone else &mdash; and the classic <strong>triangle split</strong>
             needs exactly that: it creates two new nodes and one of the three new edges joins those
             two newborns, neither of which is you, and neither of which runs its own rule until the
             next generation. With this verb the whole split fits in a single step, so the graph is
