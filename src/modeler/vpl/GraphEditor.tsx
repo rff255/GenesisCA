@@ -2337,6 +2337,66 @@ export function GraphEditorInner() {
     [makeRerouteNode, pushCurrentSnapshot, scheduleSync, setNodes, setEdges],
   );
 
+  /** DISSOLVE a reroute — remove the dot but KEEP the wiring (Blender's term for
+   *  the same operation). The editor-level inverse of the press-and-hold insert
+   *  gesture: every consumer of the reroute's output is rewired straight to the
+   *  reroute's IMMEDIATE upstream source, then the reroute and its now-dead
+   *  edges go.
+   *
+   *  Only the CLICKED reroute dissolves — its consumers land on whatever fed it,
+   *  which may itself be another reroute, so a chain stays intact minus one link
+   *  (`A → R1 → R2 → B`, dissolve R1 ⇒ `A → R2 → B`). That is the least
+   *  surprising reading of "dissolve this dot" and mirrors what the compiler's
+   *  `collapseReroutes` would produce for the resulting graph.
+   *
+   *  Degenerate shapes fall out: a reroute with NO inbound edge just deletes
+   *  (its consumers were relaying nothing — dangling through it — so their edges
+   *  go too, exactly as `collapseReroutes` drops them), and one with no outbound
+   *  edges likewise just deletes.
+   *
+   *  Duplicate suppression: a flow input accepts several incoming edges, so a
+   *  consumer already wired BOTH directly from the source and through the
+   *  reroute would end up with two identical edges. The rewritten edge is
+   *  dropped when an identical (source, sourceHandle, target, targetHandle)
+   *  already exists — the compiled result is unchanged either way, and a value
+   *  input can't hit this at all (single-occupancy, enforced by
+   *  `isValidConnection`). */
+  const dissolveReroute = useCallback((nodeId: string) => {
+    const node = nodesRef.current.find(n => n.id === nodeId);
+    if (!node || (node.data as Record<string, unknown> | undefined)?.nodeType !== 'reroute') return;
+    pushCurrentSnapshot();
+    const ts = Date.now().toString(36);
+    let seq = 0;
+    setEdges(cur => {
+      // The reroute's single inbound edge names the upstream source (first wins
+      // — reroute inputs are single-occupancy; defensive against a hand-edited
+      // file with a stray extra wire, same rule as collapseReroutes).
+      const inbound = cur.find(e => e.target === nodeId);
+      const kept = cur.filter(e => e.source !== nodeId && e.target !== nodeId);
+      if (!inbound) return kept;
+      const seen = new Set(
+        kept.map(e => `${e.source} ${e.sourceHandle ?? ''} ${e.target} ${e.targetHandle ?? ''}`),
+      );
+      const rewired: Edge[] = [];
+      for (const e of cur) {
+        if (e.source !== nodeId) continue;
+        const key = `${inbound.source} ${inbound.sourceHandle ?? ''} ${e.target} ${e.targetHandle ?? ''}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        rewired.push({
+          ...e,
+          id: `e_${ts}_rd${seq++}_${Math.random().toString(36).slice(2, 5)}`,
+          source: inbound.source,
+          sourceHandle: inbound.sourceHandle,
+          selected: false,
+        });
+      }
+      return [...kept, ...rewired];
+    });
+    setNodes(nds => nds.filter(n => n.id !== nodeId));
+    scheduleSync();
+  }, [pushCurrentSnapshot, scheduleSync, setNodes, setEdges]);
+
   // Press-and-hold gesture to CREATE a reroute on a wire: LMB-press on a wire and
   // hold ~0.55s to drop a reroute that then follows the cursor until release
   // (splitting the wire). A quick click / drag below the hold threshold is left
@@ -3699,17 +3759,22 @@ export function GraphEditorInner() {
     suppressNextEditorClickRef.current = true;
   }, []);
 
-  // Double-click: enter macro or toggle collapse
+  // Double-click: enter macro, dissolve a reroute, or toggle collapse
   const onNodeDoubleClick = useCallback((_event: React.MouseEvent, node: Node) => {
     const nodeData = node.data as Record<string, unknown>;
     if (nodeData.nodeType === 'macro') {
       const macroDefId = (nodeData.config as Record<string, unknown>)?.macroDefId as string;
       if (macroDefId) setCurrentScope(prev => [...prev, macroDefId]);
+    } else if (node.type === 'rerouteNode') {
+      // Reroutes had no double-click behaviour, and "double-click a wire element
+      // to take it out" is already the editor's idiom (an edge double-click
+      // deletes it). Dissolve keeps the connection, and Ctrl+Z restores the dot.
+      dissolveReroute(node.id);
     } else if (node.type === 'caNode') {
       updateNodeData(node.id, { ...node.data, isCollapsed: !nodeData.isCollapsed });
       scheduleSync();
     }
-  }, [updateNodeData, scheduleSync]);
+  }, [updateNodeData, scheduleSync, dissolveReroute]);
 
   const navigateToScope = useCallback((index: number) => {
     setCurrentScope(prev => prev.slice(0, index + 1));
@@ -4331,8 +4396,22 @@ export function GraphEditorInner() {
           {/* SINGLE NODE */}
           {contextMenu.target.type === 'node' && !contextMenu.target.isGroup && (
             <>
-              <div className={styles.contextTitle}>Node</div>
+              <div className={styles.contextTitle}>{contextMenu.target.nodeType === 'reroute' ? 'Reroute' : 'Node'}</div>
               <button className={styles.contextItem} onClick={e => { e.stopPropagation(); renameNode(); }}>Rename</button>
+              {contextMenu.target.nodeType === 'reroute' && (
+                <button
+                  className={styles.contextItem}
+                  title="Remove this reroute but keep the connections — its consumers rewire straight to whatever feeds it (double-click the dot does the same)"
+                  onClick={e => {
+                    e.stopPropagation();
+                    const nid = (contextMenu.target as { nodeId: string }).nodeId;
+                    setContextMenu(null);
+                    dissolveReroute(nid);
+                  }}
+                >
+                  Dissolve Reroute
+                </button>
+              )}
               {contextMenu.target.isMacro ? (
                 <div className={styles.contextSubmenuTrigger}>
                   <button className={styles.contextItem}>

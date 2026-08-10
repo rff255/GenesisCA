@@ -1027,7 +1027,12 @@ export function HelpView() {
             (<em>wire &rarr; reroute &rarr; reroute &rarr; node</em>) to route around large
             areas. Reroutes are purely cosmetic: they have <strong>no effect</strong> on
             the simulation &mdash; a wire through a reroute behaves exactly like a direct
-            connection. Deleting a reroute removes it and all of its links.
+            connection. Deleting a reroute removes it and all of its links &mdash; to take
+            one out while <em>keeping</em> the connection, use
+            <strong> Dissolve</strong> instead: <strong>double-click the dot</strong> (or
+            right-click it &rarr; <strong>Dissolve Reroute</strong>) and everything it fed
+            is rewired straight to whatever was feeding it. In a chain, only the reroute
+            you clicked goes, so the rest of the chain stays put.
             A new reroute is <strong>named after the port it relays</strong> (or, when placed
             on another reroute&rsquo;s wire, after that reroute&rsquo;s &mdash; possibly renamed
             &mdash; label), shown above the dot.
