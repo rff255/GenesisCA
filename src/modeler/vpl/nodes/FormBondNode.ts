@@ -15,17 +15,29 @@ import { emitBondRequestJS } from '../compiler/bondRequestEmitJS';
  *  partner output or a future nearest-agent read; the engine's auto-bond option
  *  (Properties → Agents) forms bonds by proximity without any node. `restLength`
  *  0 = the two agents' contact distance (sum of radii); `stiffness` 0 = the
- *  model's bond stiffness λ. */
+ *  model's bond stiffness λ.
+ *
+ *  `agentA` names the bond's FIRST endpoint and is OPTIONAL: leave it unwired and
+ *  it is THIS agent (the overwhelmingly common case, and byte-identical to the
+ *  pre-port emit on all three agent targets). Wire it and the op LOWERS to the
+ *  Form Between encoding — one node covers both "bond me to X" and "bond X to Y",
+ *  which is what the user asked for; Form Bond Between remains as the explicit
+ *  two-id verb (and is what samples/harnesses reference).
+ *
+ *  ⚠️ The port carries NO inline widget, deliberately: `formBondPairWiredJS`
+ *  reads "is it wired?" off `inputs[...]`, which is the edge-map answer ONLY for
+ *  a widget-less port (see bondRequestEmitJS.ts). */
 export const FormBondNode: NodeTypeDef = {
   type: 'formBond',
   label: 'Form Bond',
-  description: 'Request a bond between this agent and a target agent (applied after the step). Requests are queued, so an agent can form several bonds in one step (use Auto-Bond for bulk bonding).',
+  description: 'Request a bond between two agents (applied after the step). Agent A defaults to THIS agent when left unwired; wire it to bond two other agents. Requests are queued, so an agent can form several bonds in one step (use Auto-Bond for bulk bonding).',
   category: 'output',
   color: '#00838f',
   requirements: { bondGraph: true },
   ports: [
     { id: 'do', label: 'DO', kind: 'input', category: 'flow' },
     { id: 'next', label: 'NEXT', kind: 'output', category: 'flow' },
+    { id: 'agentA', label: 'Agent A (self)', kind: 'input', category: 'value', dataType: 'integer' },
     { id: 'targetAgent', label: 'Target', kind: 'input', category: 'value', dataType: 'integer' },
     { id: 'restLength', label: 'Rest Length', kind: 'input', category: 'value', dataType: 'float', inlineWidget: 'number', defaultValue: '0' },
     { id: 'stiffness', label: 'Stiffness', kind: 'input', category: 'value', dataType: 'float', inlineWidget: 'number', defaultValue: '0' },

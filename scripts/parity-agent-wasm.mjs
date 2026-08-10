@@ -1653,6 +1653,149 @@ entries.push({
 });
 
 // ---------------------------------------------------------------------------
+// Form Bond's OPTIONAL PAIR PORT — `agentA`, which defaults to self when unwired.
+//
+// Wiring it LOWERS the op to the Form Between encoding, so the one node covers
+// both "bond me to X" and "bond X to Y". Three things have to hold at once, and
+// the entries are laid out side by side so a target that got any of them wrong
+// produces a visibly different queue:
+//
+//   0  UNWIRED               -> the HISTORICAL self-form lanes (NONE, t+2)
+//   1  wired to Get Self Handle -> the Between lanes naming the requester itself
+//   2  wired to a THIRD PARTY   -> the Between lanes naming that pair
+//   3  a real Form Bond BETWEEN with the SAME ids as 2 -> must be BYTE-IDENTICAL
+//      to entry 2 (this is what proves the lowering reuses the encoding rather
+//      than inventing a second, subtly different one)
+// ---------------------------------------------------------------------------
+function buildFormBondPairModel() {
+  const used = new Set();
+  const nid = (p) => { let id; do { id = p + Math.random().toString(36).slice(2, 8); } while (used.has(id)); used.add(id); return id; };
+  const aN = [], aEd = [];
+  const an = (t, c) => { const n = { id: nid('a'), type: 'caNode', position: { x: 0, y: 0 }, data: { nodeType: t, config: c } }; aN.push(n); return n; };
+  const aE = (s, sp, tt, tp, cat) => aEd.push({ id: nid('e'), source: s.id, target: tt.id, sourceHandle: `output_${cat}_${sp}`, targetHandle: `input_${cat}_${tp}` });
+  const gsh = an('getSelfHandle', {});
+  const off = (k) => { const n = an('arithmeticOperator', { operation: '+', _port_y: String(k) }); aE(gsh, 'value', n, 'x', 'value'); return n; };
+
+  const bs = an('behaviourStep', {});
+  // 0 - Form Bond, agentA UNWIRED  -> the historical self-form arm
+  const fbSelf = an('formBond', { _port_restLength: '3', _port_stiffness: '5', _port_bondAttr_bw: '31' });
+  // 1 - Form Bond, agentA = Get Self Handle -> a self-form expressed as a Between
+  const fbGsh = an('formBond', { _port_restLength: '7', _port_stiffness: '11', _port_bondAttr_bw: '32' });
+  // 2 - Form Bond, agentA = a THIRD PARTY
+  const fbThird = an('formBond', { _port_restLength: '13', _port_stiffness: '17', _port_bondAttr_bw: '33' });
+  // 3 - the explicit verb with the SAME ids + params -> byte-identical to entry 2
+  const fbb = an('formBondBetween', { _port_restLength: '13', _port_stiffness: '17', _port_bondAttr_bw: '33' });
+  // 4 - wired agentA that cannot resolve -> (-NONE, NONE), still non-zero
+  const fbBad = an('formBond', { _port_restLength: '19', _port_stiffness: '23', _port_bondAttr_bw: '34' });
+  // 5..7 - a loop of paired Form Bonds (per-entry values must not smear)
+  const lp = an('loop', { mode: 'count', _port_count: '3' });
+  const lpFb = an('formBond', { _port_restLength: '0', _port_stiffness: '0', _port_bondAttr_bw: '35' });
+
+  aE(bs, 'do', fbSelf, 'do', 'flow');
+  aE(off(1), 'result', fbSelf, 'targetAgent', 'value');           // NOTE: no agentA edge
+  aE(fbSelf, 'next', fbGsh, 'do', 'flow');
+  aE(gsh, 'value', fbGsh, 'agentA', 'value');                     // agentA = self
+  aE(off(1), 'result', fbGsh, 'targetAgent', 'value');            // same target as entry 0
+  aE(fbGsh, 'next', fbThird, 'do', 'flow');
+  aE(off(4), 'result', fbThird, 'agentA', 'value');
+  aE(off(5), 'result', fbThird, 'targetAgent', 'value');
+  aE(fbThird, 'next', fbb, 'do', 'flow');
+  aE(off(4), 'result', fbb, 'agentA', 'value');                   // the SAME two ids
+  aE(off(5), 'result', fbb, 'agentB', 'value');
+  aE(fbb, 'next', fbBad, 'do', 'flow');
+  aE(off(-1000), 'result', fbBad, 'agentA', 'value');
+  aE(off(6), 'result', fbBad, 'targetAgent', 'value');
+  aE(fbBad, 'next', lp, 'do', 'flow');
+  aE(lp, 'body', lpFb, 'do', 'flow');
+  const a200 = off(200), b300 = off(300);
+  const aIdx = an('arithmeticOperator', { operation: '+' });
+  aE(a200, 'result', aIdx, 'x', 'value'); aE(lp, 'index', aIdx, 'y', 'value');
+  const bIdx = an('arithmeticOperator', { operation: '+' });
+  aE(b300, 'result', bIdx, 'x', 'value'); aE(lp, 'index', bIdx, 'y', 'value');
+  aE(aIdx, 'result', lpFb, 'agentA', 'value');
+  aE(bIdx, 'result', lpFb, 'targetAgent', 'value');
+
+  return {
+    schemaVersion: 1,
+    properties: { name: 'Form Bond Pair Ports Parity Test', dimension: '2d', gridWidth: 24, gridHeight: 24, gridDepth: 1, topology: '2d-grid', boundaryTreatment: 'torus', useWasm: false, useWebGPU: false },
+    topologyMode: { gridCells: false, agents: true },
+    centerBased: { enabled: true, maxAgents: 100, maxBonds: 6, worldWidth: 24, worldHeight: 24, seedCount: 40, seedPattern: 'scatter', defaultRadius: 0.5, growthRate: 0, repulsionStiffness: 0, adhesionStiffness: 0, interactionRange: 1.5, drag: 1, timeStep: 0.1, momentum: 0, maxSpeed: 0, neighbourQueryRadius: 8, useBondingPhysics: false, autoBond: false, bondStiffness: 0, bondRestLength: 1.5, formDistance: 1.2, breakDistance: 2.0, agentTarget: 'wasm', agentUpdateMode: 'async',
+      agentCapabilities: { motion: 'force', body: true, collision: 'off', bonds: 'data', autoBond: false, growth: false, division: false, lifespan: false, populationBirth: false, populationDeath: false, sensing: false, sensingHeadingSource: 'velocity', orientation: false, fieldCoupling: false, appearance: true } },
+    attributes: [], modelAttributes: [], neighborhoods: [],
+    agentAttributes: [],
+    bondAttributes: [{ id: 'bw', name: 'BondW', type: 'float', defaultValue: '0' }],
+    variables: [], agentVariables: [], indicators: [], mappings: [],
+    graphNodes: [], graphEdges: [], agentGraphNodes: aN, agentGraphEdges: aEd, macroDefs: [],
+  };
+}
+
+/** THE VALUE INVARIANT — the expected queue is recomputed INDEPENDENTLY from the
+ *  agent index, so both targets writing the same WRONG lanes still fail.
+ *
+ *  It pins the three things the optional pair port has to get right:
+ *    • UNWIRED is still the HISTORICAL self-form arm — a positive `NONE` break
+ *      lane. If a target started lowering the unwired case too, entry 0's break
+ *      lane would go negative and this notices immediately (the byte-identity
+ *      gate would also fail, but only for models that ship a Form Bond).
+ *    • wired-to-self is the SAME BOND expressed through the Between encoding:
+ *      its break lane decodes to the REQUESTER and its form lane names the SAME
+ *      target as entry 0, so the drain forms exactly the bond entry 0 would.
+ *    • wired-to-third-party is byte-identical to the explicit Form Bond Between
+ *      carrying the same ids — the lowering reuses the encoding, it does not
+ *      approximate it. */
+function formBondPairInvariant(st) {
+  const NONE = 1, BIAS = 2;
+  const slots = st.bondReqSlots, depth = slots - 1;
+  if (slots !== 9) return `bondReqSlots ${slots} !== 9 (default depth 8 + the overflow bucket)`;
+  for (let i = 0; i < st.highWater; i++) {
+    if (!st.alive[i]) continue;
+    const b = i * slots;
+    // [breakLane, formLane, L, K, bondAttr bw]
+    const want = [
+      [NONE, i + 1 + BIAS, 3, 5, 31],                   // 0  UNWIRED  -> historical self-form
+      [-(i + BIAS), i + 1 + BIAS, 7, 11, 32],           // 1  agentA = self, SAME target as 0
+      [-(i + 4 + BIAS), i + 5 + BIAS, 13, 17, 33],      // 2  agentA = a third party
+      [-(i + 4 + BIAS), i + 5 + BIAS, 13, 17, 33],      // 3  Form Bond Between, the SAME ids
+      [-NONE, NONE, 19, 23, 34],                        // 4  wired agentA, unresolvable
+      [-(i + 200 + BIAS), i + 300 + BIAS, 0, 0, 35],    // 5  loop k=0
+      [-(i + 201 + BIAS), i + 301 + BIAS, 0, 0, 35],    // 6  loop k=1
+      [-(i + 202 + BIAS), i + 302 + BIAS, 0, 0, 35],    // 7  loop k=2
+      [0, 0, 0, 0, null],                               // 8  never written
+    ];
+    for (let c = 0; c < slots; c++) {
+      const [wb, wf, wl, wk, wa] = want[c];
+      if (st.bondBreakReq[b + c] !== wb) return `agent ${i} entry ${c}: breakLane ${st.bondBreakReq[b + c]} !== ${wb}`;
+      if (st.bondFormReq[b + c] !== wf) return `agent ${i} entry ${c}: formLane ${st.bondFormReq[b + c]} !== ${wf}`;
+      if (st.bondFormL[b + c] !== wl) return `agent ${i} entry ${c}: L ${st.bondFormL[b + c]} !== ${wl}`;
+      if (st.bondFormK[b + c] !== wk) return `agent ${i} entry ${c}: K ${st.bondFormK[b + c]} !== ${wk}`;
+      if (wa !== null && st.bondFormAttrs.bw[b + c] !== wa) return `agent ${i} entry ${c}: bondAttr bw ${st.bondFormAttrs.bw[b + c]} !== ${wa}`;
+    }
+    // THE DEFAULT-TO-SELF BIT: unwired keeps the POSITIVE `NONE` break lane (the
+    // self-form arm); wiring agentA switches it NEGATIVE (the Between arm).
+    if (!(st.bondBreakReq[b] > 0)) return `agent ${i}: the UNWIRED Form Bond must keep a POSITIVE break lane (it is not a Form Between)`;
+    if (!(st.bondBreakReq[b + 1] < 0)) return `agent ${i}: the wired Form Bond break lane is not NEGATIVE`;
+    // ...and wired-to-self names the REQUESTER, so the drain forms the same bond
+    // the unwired entry would: same target, first endpoint = me.
+    if (-st.bondBreakReq[b + 1] - BIAS !== i) return `agent ${i}: wired-to-self decodes to agent ${-st.bondBreakReq[b + 1] - BIAS}, not the requester`;
+    if (st.bondFormReq[b] !== st.bondFormReq[b + 1]) return `agent ${i}: entries 0 and 1 do not name the same target (${st.bondFormReq[b]} vs ${st.bondFormReq[b + 1]})`;
+    // THE LOWERING BIT: a paired Form Bond IS a Form Between, byte for byte.
+    for (const [nm, arr] of [['break', st.bondBreakReq], ['form', st.bondFormReq], ['L', st.bondFormL], ['K', st.bondFormK], ['bw', st.bondFormAttrs.bw]]) {
+      if (arr[b + 2] !== arr[b + 3]) return `agent ${i}: paired Form Bond and Form Bond Between differ in ${nm} (${arr[b + 2]} vs ${arr[b + 3]})`;
+    }
+    // The terminator rule: a written entry must never read as empty (0,0).
+    for (let c = 0; c < 8 && c < depth; c++) {
+      if (st.bondBreakReq[b + c] === 0 && st.bondFormReq[b + c] === 0) return `agent ${i} entry ${c} reads as EMPTY (queue truncation)`;
+    }
+  }
+  return null;
+}
+
+entries.push({
+  name: '[synthetic] Form Bond pair ports (agentA unwired / self / third party)',
+  raw: buildFormBondPairModel(), setup: setupBondAttrStores, invariant: formBondPairInvariant,
+});
+
+// ---------------------------------------------------------------------------
 // B9 — TRANSFER BOND: the op kind rides the sign of the FORM lane (the mirror
 // image of Form Between). The synthetic deliberately places a Transfer and a
 // Rewire carrying THE SAME TWO IDS side by side, so a target that dropped the

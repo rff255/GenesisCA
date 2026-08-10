@@ -4405,6 +4405,133 @@ function tierM() {
   }
 }
 
+// ===========================================================================
+// TIER O — Form Bond's OPTIONAL PAIR PORT (`agentA`, defaulting to self).
+//
+// Wiring `agentA` LOWERS the op to the Form Between encoding, so one node covers
+// both "bond me to X" and "bond X to Y". Two claims have to hold, and they are
+// checked at the two different levels they live at:
+//
+//   ENGINE  — a Between entry naming the REQUESTER produces exactly the bond the
+//             self-form entry produces (this is what makes "unwired ⇒ self" a
+//             real default rather than a near-enough one);
+//   COMPILE — the unwired case still emits the historical self-form arm on all
+//             three agent targets, and the wired case emits the Between arm.
+//
+// The link between the two is the parity harness's `[synthetic] Form Bond pair
+// ports` VALUE INVARIANT, which pins the exact lanes the emitters write.
+// ===========================================================================
+function tierO() {
+  section('TIER O — Form Bond\'s optional pair port (agentA defaults to self)');
+
+  // --- 1. THE ENGINE CLAIM: a Between naming the requester ≡ the self-form ---
+  {
+    const selfForm = queueStore(12, 4, 8);
+    queueOp(selfForm, 3, 0, { to: 7, L: 2.5, K: 4 });          // agentA UNWIRED
+    drainAgentBondRequests(selfForm, 1);
+
+    const viaPair = queueStore(12, 4, 8);
+    queueBetween(viaPair, 3, 0, { a: 3, b: 7, L: 2.5, K: 4 }); // agentA = Get Self Handle
+    drainAgentBondRequests(viaPair, 1);
+
+    const eA = [...edgeSet(decodeAgentGraph(selfForm))].sort().join(',');
+    const eB = [...edgeSet(decodeAgentGraph(viaPair))].sort().join(',');
+    ok(eA === '3:7' && eA === eB,
+      'wiring agentA to THIS agent forms exactly the bond the unwired node forms', `${eA} vs ${eB}`);
+    // ...and not merely the same edge SET — the same slots, rest length and λ, so
+    // nothing downstream (slot order, spring force) can tell the two apart.
+    let same = true;
+    for (let i = 0; i < selfForm.highWater; i++) {
+      if (selfForm.bondCount[i] !== viaPair.bondCount[i]) { same = false; break; }
+      for (let k = 0; k < selfForm.bondCount[i]; k++) {
+        const o = i * selfForm.maxBonds + k;
+        if (selfForm.bondPartner[o] !== viaPair.bondPartner[o]
+          || selfForm.bondRestLength[o] !== viaPair.bondRestLength[o]
+          || selfForm.bondStiffness[o] !== viaPair.bondStiffness[o]) { same = false; break; }
+      }
+    }
+    ok(same, 'the two are identical slot-for-slot (partner, rest length, stiffness)');
+    ok(allInvariants(viaPair) === null, 'I1–I4 hold after the paired form');
+
+    // NEGATIVE CONTROL: the same entry naming a DIFFERENT first agent bonds that
+    // pair instead — so the check above is really reading the first endpoint and
+    // not just "some bond appeared".
+    const third = queueStore(12, 4, 8);
+    queueBetween(third, 3, 0, { a: 5, b: 7 });
+    drainAgentBondRequests(third, 1);
+    ok(hasBond(third, 5, 7) && !hasBond(third, 3, 7),
+      'negative control: a wired agentA naming a THIRD PARTY bonds that pair, not the requester');
+  }
+
+  // --- 2. THE COMPILE CLAIM, on all three agent targets ---------------------
+  {
+    const mk = (wireA) => {
+      const n = [], e = [];
+      const an = (t, c) => { const x = { id: `n${n.length}`, type: 'caNode', position: { x: 0, y: 0 }, data: { nodeType: t, config: c || {} } }; n.push(x); return x; };
+      const ed = (s, sp, tt, tp, cat) => e.push({ id: `e${e.length}`, source: s.id, target: tt.id, sourceHandle: `output_${cat}_${sp}`, targetHandle: `input_${cat}_${tp}` });
+      const bs = an('behaviourStep');
+      const gsh = an('getSelfHandle');
+      const off = (k) => { const x = an('arithmeticOperator', { operation: '+', _port_y: String(k) }); ed(gsh, 'value', x, 'x', 'value'); return x; };
+      const fb = an('formBond', { _port_restLength: '0', _port_stiffness: '0' });
+      ed(bs, 'do', fb, 'do', 'flow');
+      ed(off(1), 'result', fb, 'targetAgent', 'value');
+      if (wireA) ed(off(4), 'result', fb, 'agentA', 'value');
+      return {
+        schemaVersion: 1,
+        properties: { name: 'pairport', dimension: '2d', gridWidth: 16, gridHeight: 16, gridDepth: 1, topology: '2d-grid', boundaryTreatment: 'torus', useWasm: false, useWebGPU: false },
+        topologyMode: { gridCells: false, agents: true },
+        centerBased: { ...queueCfg(64, 4, 8), worldWidth: 16, worldHeight: 16, agentTarget: 'wasm', agentUpdateMode: 'async' },
+        attributes: [], modelAttributes: [], neighborhoods: [], agentAttributes: [],
+        bondAttributes: [], variables: [], agentVariables: [], indicators: [], mappings: [],
+        graphNodes: [], graphEdges: [], agentGraphNodes: n, agentGraphEdges: e, macroDefs: [],
+      };
+    };
+    const plain = mk(false), paired = mk(true);
+
+    // JS — the historical self-form arm writes the POSITIVE `BOND_REQ_NONE` break
+    // lane; the paired one writes the NEGATED first id.
+    const jsPlain = compileAgentGraph(plain.agentGraphNodes, plain.agentGraphEdges, plain, 0);
+    const jsPaired = compileAgentGraph(paired.agentGraphNodes, paired.agentGraphEdges, paired, 0);
+    ok(!jsPlain.error && !jsPaired.error, 'both shapes compile on JS', String(jsPlain.error || jsPaired.error));
+    ok(/_bondBreakReq\[_bq\] = 1;/.test(jsPlain.behaviourCode),
+      'JS: an UNWIRED agentA keeps the historical self-form break lane');
+    ok(!/-\(_bqA \+ 2\)/.test(jsPlain.behaviourCode),
+      'JS: an UNWIRED agentA emits NO Form Between encoding');
+    ok(/_bondBreakReq\[_bq\] = _bqOk \? -\(_bqA \+ 2\)/.test(jsPaired.behaviourCode),
+      'JS: a WIRED agentA emits the Form Between encoding (negative break lane)');
+
+    // WASM — the module BYTES must differ (the paired one takes the other arm),
+    // and the unwired one must still compile + be accepted by the gate.
+    ok(isAgentGraphWasmSupported(plain) && isAgentGraphWasmSupported(paired),
+      'both shapes pass the WASM agent gate');
+    const wPlain = compileAgentGraphWasmForModel(plain);
+    const wPaired = compileAgentGraphWasmForModel(paired);
+    ok(!wPlain.error && !wPaired.error && wPlain.bytes.length && wPaired.bytes.length,
+      'both shapes compile to WASM', String(wPlain.error || wPaired.error));
+    ok(Buffer.compare(Buffer.from(wPlain.bytes), Buffer.from(wPaired.bytes)) !== 0,
+      'WASM: wiring agentA changes the emitted module (the two arms are really different code)');
+
+    // WebGPU — the negative-lane form appears only in the paired shader.
+    ok(isAgentGraphWebGPUSupported(plain) && isAgentGraphWebGPUSupported(paired),
+      'both shapes pass the WebGPU agent gate');
+    const gPlain = compileAgentGraphWebGPUForModel(plain);
+    const gPaired = compileAgentGraphWebGPUForModel(paired);
+    ok(!gPlain.error && !gPaired.error, 'both shapes compile to WGSL', String(gPlain.error || gPaired.error));
+    // `reqAt` resolves the field NAME to a numeric base, so the assertions key
+    // off the layout's own base rather than a string that never appears.
+    const breakAt = (r) => {
+      const b = r.layout.f32Base['bondBreakReq'];
+      return b === 0 ? 'agentF32\\[\\w+\\]' : `agentF32\\[${b}u \\+ \\w+\\]`;
+    };
+    ok(new RegExp(`${breakAt(gPaired)} = f32\\(-select\\(1, \\w+ \\+ 2, \\w+\\)\\);`).test(gPaired.shaderCode),
+      'WGSL: a WIRED agentA emits the negated break lane');
+    ok(!/= f32\(-select\(/.test(gPlain.shaderCode),
+      'WGSL: an UNWIRED agentA emits NO negated lane (the historical self-form arm)');
+    ok(new RegExp(`${breakAt(gPlain)} = 1\\.0;`).test(gPlain.shaderCode),
+      'WGSL: the unwired arm writes the positive NONE break lane');
+  }
+}
+
 tierA();
 tierB();
 await tierC();
@@ -4418,6 +4545,7 @@ tierI();
 await tierIMutants();
 tierL();
 tierN();
+tierO();
 tierM();
 
 console.log(`\n${fail === 0 ? 'GRAPH-REWRITE HARNESS ✓' : 'GRAPH-REWRITE HARNESS ✗'}  (${pass} passed, ${fail} failed)`);
