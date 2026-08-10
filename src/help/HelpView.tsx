@@ -3112,7 +3112,7 @@ export function HelpView() {
               &mdash; bond lines are drawn by the regular agent overlay, which this fast
               path replaces.</li>
             <li><strong>Glow.</strong> The <strong>Glow agents</strong> Graphics option
-              (in the 2D agent controls) gives every agent a <strong>solid core</strong> with
+              (in the agent controls) gives every agent a <strong>solid core</strong> with
               a soft halo around it &mdash; <em>Size</em> is the extra halo radius in
               pixels, <em>Core</em> how far the solid colour reaches into that halo,
               <em>Intensity</em> the halo&apos;s brightness, <em>Falloff</em> how fast it
@@ -3139,7 +3139,24 @@ export function HelpView() {
               accumulate and compress the same way, so the two paths look the same. It is a
               per-agent drawing cost, so on very large populations expect a slower display
               (measured ~30&nbsp;ms per frame at 10&nbsp;000 agents on the overlay path); the
-              simulation itself is unaffected. Not available in 3D yet.</li>
+              simulation itself is unaffected.</li>
+            <li><strong>Glow in 3D.</strong> The same option works in 3D, by a
+              <em>different technique</em>: instead of a halo drawn around each agent it is a
+              <strong>bloom</strong> &mdash; the agent layer is blurred and its light added back
+              over the scene. That is deliberate. A flat halo pasted onto a lit sphere reads as a
+              sticker, whereas a bloom picks up the <em>shading</em> &mdash; the highlight, the
+              rim, the bright side of every sphere &mdash; which is what makes a glowing object
+              look three-dimensional. The sliders carry over: <em>Size</em> is how far the light
+              spills, <em>Intensity</em> how much is added, <em>Falloff</em> whether the spill is
+              tight or wide, and <em>Core</em> how much of each agent&apos;s own body is held back
+              from the bloom (at&nbsp;1 the bodies are left exactly as they render and only the
+              surrounding spill is added). Brightness is compressed with the same curve the 2D
+              glow uses, so <em>Intensity</em> means the same thing in both views. Only the agents
+              bloom &mdash; a CA grid behind them is never blurred &mdash; and the effect can only
+              ever <em>add</em> light, so nothing in the scene gets darker. While 3D glow is on the
+              viewport renders through the main 3D renderer rather than the worker&apos;s fast
+              path, so a very large population may run slower; turning it off restores the fast
+              path. Screenshots and recordings include it.</li>
             <li><strong>Direct agent render &mdash; 3D.</strong> The same fast path works
               for <em>3D</em> agents-only models: while you just watch, the worker draws the
               agents as GPU spheres <em>and</em> the scene-anchored geometry (axes, floor grid,
