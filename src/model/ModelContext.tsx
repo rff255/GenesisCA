@@ -235,6 +235,7 @@ type ModelAction =
   | { type: 'REMOVE_AGENT_MAPPING'; id: string }
   | { type: 'UPDATE_AGENT_MAPPING'; id: string; changes: Partial<Mapping> }
   | { type: 'ADD_SPRITE'; sprite: SpriteAsset }
+  | { type: 'DUPLICATE_SPRITE'; sourceId: string }
   | { type: 'REMOVE_SPRITE'; id: string }
   | { type: 'UPDATE_SPRITE'; id: string; changes: Partial<SpriteAsset> }
   | { type: 'SET_GRAPH'; nodes: GraphNode[]; edges: GraphEdge[] }
@@ -266,6 +267,7 @@ type ModelAction =
   | { type: 'REORDER_NEIGHBORHOODS'; newOrder: string[] }
   | { type: 'REORDER_MAPPINGS'; newOrder: string[] }
   | { type: 'REORDER_AGENT_MAPPINGS'; newOrder: string[] }
+  | { type: 'REORDER_SPRITES'; newOrder: string[] }
   | { type: 'REORDER_INDICATORS'; newOrder: string[] }
   | { type: 'REORDER_END_CONDITIONS'; newOrder: string[] }
   // Generic Agent Platform: variable actions carry a `target` (cell | agent).
@@ -1321,6 +1323,25 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
         ...state, isDirty: true,
         model: { ...state.model, sprites: [...(state.model.sprites ?? []), action.sprite] },
       };
+    // Deep-clone + fresh id + " (copy)", APPENDED — same shape as
+    // DUPLICATE_AGENT_MAPPING, so the panel's length-keyed auto-select opens the
+    // copy's editor. The clone carries the whole asset (data URL, frames, sheet
+    // spec, rotation + chroma-key settings), so the copy is independently
+    // editable without touching the original.
+    case 'DUPLICATE_SPRITE': {
+      const list = state.model.sprites ?? [];
+      const source = list.find(s => s.id === action.sourceId);
+      if (!source) return state;
+      const dup: SpriteAsset = {
+        ...(JSON.parse(JSON.stringify(source)) as SpriteAsset),
+        id: generateId(source.name + '_copy'),
+        name: `${source.name} (copy)`,
+      };
+      return {
+        ...state, isDirty: true,
+        model: { ...state.model, sprites: [...list, dup] },
+      };
+    }
     case 'REMOVE_SPRITE': {
       // Cascade: clear `spriteId` on any Set Agent Sprite node referencing the
       // deleted asset (so it shows a "Select a sprite" badge instead of a dangling ref).
@@ -1746,6 +1767,16 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
         model: { ...state.model, agentMappings: reorderById(state.model.agentMappings ?? [], action.newOrder) },
       };
 
+    // Sprite order is the Sprite Library's list order — user-visible in the
+    // panel and in every sprite picker (Set Agent Sprite's dropdown), so it is
+    // worth reordering. Array order round-trips in the .gcaproj for free.
+    case 'REORDER_SPRITES':
+      return {
+        ...state,
+        isDirty: true,
+        model: { ...state.model, sprites: reorderById(state.model.sprites ?? [], action.newOrder) },
+      };
+
     case 'REORDER_INDICATORS':
       return {
         ...state,
@@ -2013,6 +2044,7 @@ export interface ModelContextValue {
   removeAgentMapping: (id: string) => void;
   updateAgentMapping: (id: string, changes: Partial<Mapping>) => void;
   addSprite: (sprite: SpriteAsset) => void;
+  duplicateSprite: (sourceId: string) => void;
   removeSprite: (id: string) => void;
   updateSprite: (id: string, changes: Partial<SpriteAsset>) => void;
   setGraph: (nodes: GraphNode[], edges: GraphEdge[]) => void;
@@ -2052,6 +2084,7 @@ export interface ModelContextValue {
   reorderNeighborhoods: (newOrder: string[]) => void;
   reorderMappings: (newOrder: string[]) => void;
   reorderAgentMappings: (newOrder: string[]) => void;
+  reorderSprites: (newOrder: string[]) => void;
   reorderIndicators: (newOrder: string[]) => void;
   reorderEndConditions: (newOrder: string[]) => void;
   /** Variegated Cells Ã¢â‚¬â€ partial update for top-level config (enabled,
@@ -2194,6 +2227,7 @@ export function ModelProvider({ children }: { children: ReactNode }) {
     [],
   );
   const addSprite = useCallback((sprite: SpriteAsset) => dispatch({ type: 'ADD_SPRITE', sprite }), []);
+  const duplicateSprite = useCallback((sourceId: string) => dispatch({ type: 'DUPLICATE_SPRITE', sourceId }), []);
   const removeSprite = useCallback((id: string) => dispatch({ type: 'REMOVE_SPRITE', id }), []);
   const updateSprite = useCallback(
     (id: string, changes: Partial<SpriteAsset>) => dispatch({ type: 'UPDATE_SPRITE', id, changes }),
@@ -2330,6 +2364,10 @@ export function ModelProvider({ children }: { children: ReactNode }) {
     (newOrder: string[]) => dispatch({ type: 'REORDER_MAPPINGS', newOrder }),
     [],
   );
+  const reorderSprites = useCallback(
+    (newOrder: string[]) => dispatch({ type: 'REORDER_SPRITES', newOrder }),
+    [],
+  );
   const reorderIndicators = useCallback(
     (newOrder: string[]) => dispatch({ type: 'REORDER_INDICATORS', newOrder }),
     [],
@@ -2410,6 +2448,7 @@ export function ModelProvider({ children }: { children: ReactNode }) {
       removeAgentMapping,
       updateAgentMapping,
       addSprite,
+      duplicateSprite,
       removeSprite,
       updateSprite,
       setGraph,
@@ -2439,6 +2478,7 @@ export function ModelProvider({ children }: { children: ReactNode }) {
       reorderNeighborhoods,
       reorderMappings,
       reorderAgentMappings,
+      reorderSprites,
       reorderIndicators,
       reorderEndConditions,
       updateVariegatedCells,
@@ -2486,6 +2526,7 @@ export function ModelProvider({ children }: { children: ReactNode }) {
       removeAgentMapping,
       updateAgentMapping,
       addSprite,
+      duplicateSprite,
       removeSprite,
       updateSprite,
       setGraph,
@@ -2515,6 +2556,7 @@ export function ModelProvider({ children }: { children: ReactNode }) {
       reorderNeighborhoods,
       reorderMappings,
       reorderAgentMappings,
+      reorderSprites,
       reorderIndicators,
       reorderEndConditions,
       updateVariegatedCells,

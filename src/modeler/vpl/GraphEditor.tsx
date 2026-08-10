@@ -4289,6 +4289,7 @@ export function GraphEditorInner() {
               'mapping-a2c': 'Output mapping (A→C)',
               'mapping-c2a': 'Input mapping (C→A)',
               'agent-mapping': 'Agent view (A→C)',
+              'sprite': 'Sprite',
               'indicator': 'Indicator',
               'variable': 'Local variable',
             };
