@@ -10,7 +10,7 @@
  * Pure view over the OverseerRuntime's Journal + Series stores (the parent
  * bumps `version` on every runtime update). Run/Abort + CSV/JSON export.
  */
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type RefObject } from 'react';
 import styles from './SimulatorView.module.css';
 import type { OverseerRuntime, OverseerSeries, OverseerSpatialSeries, SpatialAggregate, SpatialAxisMeta } from './engine/overseerRuntime';
 import { saveTextFile } from '../model/fileOperations';
@@ -71,6 +71,52 @@ const ACCENT = '#e8a13a';
 
 type ScalarChartMode = 'hist' | 'runs';
 
+/** Chart heights (CSS px). Width is MEASURED — see `useMeasuredWidth`. */
+const SCALAR_CHART_H = 120;
+const SPATIAL_CHART_H = 130;
+/** Below this the plot area is meaningless — skip the draw entirely. */
+const MIN_CHART_W = 60;
+
+/**
+ * The canvas-chart width discipline, shared by both Experiment charts so they
+ * cannot drift (it mirrors `IndicatorSparkline` / `IndicatorMultiLineChart` /
+ * `IndicatorSpatialChart`, which each inline the same pair):
+ *
+ *  1. a ResizeObserver on the ALWAYS-MOUNTED wrapper div, so a right-panel
+ *     splitter drag / window resize / panel collapse re-measures and redraws;
+ *  2. a `useLayoutEffect` fallback with NO dep array, for the renders where the
+ *     observer has not delivered yet — the classic case being a FRESH MOUNT
+ *     (the Experiments panel unmounts on a right-panel tab switch), where a
+ *     width-0 first paint would otherwise persist until something else nudged
+ *     a re-render.
+ *
+ * The measured width drives BOTH the canvas backing store (× dpr) and its CSS
+ * width, so the two can never disagree.
+ */
+function useMeasuredWidth<T extends HTMLElement>(ref: RefObject<T | null>): number {
+  const [width, setWidth] = useState(0);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const ro = new ResizeObserver(entries => {
+      for (const entry of entries) {
+        const w = Math.floor(entry.contentRect.width);
+        if (w > 0) setWidth(w);
+      }
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [ref]);
+  useLayoutEffect(() => {
+    if (width > 0) return;
+    const el = ref.current;
+    if (!el) return;
+    const w = Math.floor(el.clientWidth);
+    if (w > 0) setWidth(w);
+  });
+  return width;
+}
+
 /** A scalar sample series (one value per Collect Sample) as a figure: a
  *  HISTOGRAM of the value distribution across the collected samples (the
  *  classic replicate-distribution figure) OR a per-run SEQUENCE (value vs run
@@ -85,18 +131,16 @@ function ScalarSeriesChart({ name, series, mode, onToggleMode, version }: {
 }) {
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const width = useMeasuredWidth(wrapRef);
   const values = series.values;
 
   useEffect(() => {
-    const wrap = wrapRef.current, canvas = canvasRef.current;
-    if (!wrap || !canvas) return;
-    const cssW = Math.max(120, wrap.clientWidth);
-    const cssH = 120;
+    const canvas = canvasRef.current;
+    if (!canvas || width < MIN_CHART_W) return;
+    const cssW = width, cssH = SCALAR_CHART_H;
     const dpr = window.devicePixelRatio || 1;
     canvas.width = Math.round(cssW * dpr);
     canvas.height = Math.round(cssH * dpr);
-    canvas.style.width = cssW + 'px';
-    canvas.style.height = cssH + 'px';
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -178,7 +222,7 @@ function ScalarSeriesChart({ name, series, mode, onToggleMode, version }: {
       ctx.textAlign = 'right';
       ctx.fillText('run ' + values.length, padL + plotW, cssH - 4);
     }
-  }, [values, mode, version]);
+  }, [values, mode, version, width]);
 
   return (
     <div ref={wrapRef} style={{ width: '100%' }}>
@@ -193,7 +237,9 @@ function ScalarSeriesChart({ name, series, mode, onToggleMode, version }: {
           {mode === 'hist' ? '📊 Histogram' : '📈 Runs'}
         </button>
       </div>
-      <canvas ref={canvasRef} />
+      {width > 0 && (
+        <canvas ref={canvasRef} style={{ width, height: SCALAR_CHART_H, display: 'block' }} />
+      )}
     </div>
   );
 }
@@ -215,17 +261,15 @@ function SpatialAggregateChart({ chart, entries, meta, version }: {
 }) {
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const width = useMeasuredWidth(wrapRef);
 
   useEffect(() => {
-    const wrap = wrapRef.current, canvas = canvasRef.current;
-    if (!wrap || !canvas) return;
-    const cssW = Math.max(120, wrap.clientWidth);
-    const cssH = 130;
+    const canvas = canvasRef.current;
+    if (!canvas || width < MIN_CHART_W) return;
+    const cssW = width, cssH = SPATIAL_CHART_H;
     const dpr = window.devicePixelRatio || 1;
     canvas.width = Math.round(cssW * dpr);
     canvas.height = Math.round(cssH * dpr);
-    canvas.style.width = cssW + 'px';
-    canvas.style.height = cssH + 'px';
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -299,12 +343,14 @@ function SpatialAggregateChart({ chart, entries, meta, version }: {
       // bold mean
       drawCurve(e.agg.mean, e.color, 2, 1);
     }
-  }, [entries, meta, version]);
+  }, [entries, meta, version, width]);
 
   return (
     <div ref={wrapRef} style={{ width: '100%' }}>
       <div style={{ color: '#888', fontWeight: 600, marginTop: 2 }}>{chart}</div>
-      <canvas ref={canvasRef} />
+      {width > 0 && (
+        <canvas ref={canvasRef} style={{ width, height: SPATIAL_CHART_H, display: 'block' }} />
+      )}
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, fontSize: '0.62rem' }}>
         {entries.map(e => (
           <span key={e.name} style={{ color: e.color }}>
