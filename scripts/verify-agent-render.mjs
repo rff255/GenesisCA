@@ -468,14 +468,18 @@ check('runtime: uploadAgentSoA seeds the agent colour buffer [invisible-agents b
       === countAll(gridDriver, 'gridUiSyncPostedRef.current = true')
         + countAll(initBlock, 'gridUiSyncPostedRef.current = true')
         + countAll(forceGrid, 'gridUiSyncPostedRef.current = true'));
-  check('SimulatorView: the 3D alpha-blend detach TELLS the worker before mirroring [mirror invariant]',
-    /setAgentUiSync', on: true \}\);\s*\n\s*agentUiSyncPostedRef\.current = true;/.test(sv));
+  // The 3D FRAME-PIN detaches. Two of them now — alpha-blend and glow — both for
+  // the same reason (a visual gl3d can render and the worker's WGSL sphere pass
+  // cannot), and both must POST before they mirror. Counted, not just matched, so
+  // adding a third pin without posting is caught rather than absorbed.
+  check('SimulatorView: the 3D frame-pin detaches TELL the worker before mirroring [mirror invariant]',
+    (sv.match(/setAgentUiSync', on: true \}\);\s*\n\s*agentUiSyncPostedRef\.current = true;/g) || []).length === 2);
   check('SimulatorView: every agentUiSync "= true" is a post or a brand-new worker [mirror invariant]',
     countAll(sv, 'agentUiSyncPostedRef.current = true')
       === countAll(agentDriver, 'agentUiSyncPostedRef.current = true')
         + countAll(initBlock, 'agentUiSyncPostedRef.current = true')
         + countAll(forceAgent, 'agentUiSyncPostedRef.current = true')
-        + 1 /* the alpha-blend detach checked above */);
+        + 2 /* the alpha-blend + glow frame-pin detaches checked above */);
 }
 
 // B12 (SNAPSHOT-CONTENTS INVARIANT, user-reported: "the hemifield is being drawn

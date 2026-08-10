@@ -1,8 +1,14 @@
-# QUEUED PHASE — 3D Agent Glow (parity with the 2D direct-render Glow)
+# SHIPPED — 3D Agent Glow (dual-Kawase bloom over the agent layer)
 
-**Status**: QUEUED — runs AFTER the lattice optimization batch (L1 in particular
-restructures the 3D render seam this phase builds on). Requested by the user
-2026-07-24 after confirming the 3D spheres look correct.
+**Status**: ✅ **SHIPPED** (branch `polishing`, 2026-08-10). See the
+**Completion Report** at the bottom for what was built, the measured
+verification and the one follow-up. Everything above that report is the
+historical design record — **§"Design" remains superseded by UPDATE 3**, and
+UPDATE 3's own cost estimate was partly wrong in the shipped direction's favour
+(no float FBO turned out to be needed; see the report).
+
+Originally requested by the user 2026-07-24 after confirming the 3D spheres look
+correct; re-requested 2026-08-10 as "Missing 'glow' option for 3D".
 
 Read first: [HANDOFF_GPU_AGENT_RENDER.md](HANDOFF_GPU_AGENT_RENDER.md) §0
 (Invariants — the §0 #7 known-traps bind verbatim) + §3 (protocol); then the
@@ -192,8 +198,93 @@ it, as Phase C did for projection + lighting" discipline, and the UI gate to dro
   measured numerically (see the CLAUDE.md "Agent glow" section); the remaining
   eyeball debt is 3D's free↔frame match.
 
-## Completion Report
-NOT EXECUTED. Deliberately deferred by the 2D-rework session (2026-08-07) —
-see **UPDATE 3** at the top for the reference finding that invalidates the
-original design, the scope reasoning, and the scaffolding the next session
-inherits.
+## Completion Report — SHIPPED 2026-08-10 (branch `polishing`)
+
+**What shipped**: the bloom UPDATE 3 called for, scoped to the **agent layer**
+(that update's own "cheaper option"), implemented in **gl3d** (the frame path)
+and made unconditional by **pinning frame mode while 3D glow is on**.
+
+`git diff --stat` = [gl3d.ts](../src/simulator/render/gl3d.ts) +
+[SimulatorView.tsx](../src/simulator/SimulatorView.tsx) +
+[verify-agent-render.mjs](../scripts/verify-agent-render.mjs). **No compiler /
+worker / engine file**, so compile identity holds by construction.
+
+### The two places UPDATE 3's costing was wrong (both in our favour)
+1. **No float FBO, no extension probe, no fallback.** UPDATE 3 assumed
+   `EXT_color_buffer_float` because the 2D path needs `rgba16float`. It needs it
+   because it ACCUMULATES N unbounded per-agent halos additively. The bloom does
+   not: the source is the agent layer rendered ONCE with opaque depth-tested
+   bodies (bounded in [0,1] by construction) and every Kawase tap is a weighted
+   AVERAGE (also bounded). The only unbounded step is `× intensity`, which
+   happens in the composite shader in float right before the tonemap. **RGBA8
+   end to end is exact enough**, which deleted the single largest cost item.
+2. **"The two must MATCH across the free↔frame flip" is dissolved, not solved.**
+   3D glow **pins frame mode** (`agentGlow.on && is3D` detaches the worker's
+   sphere direct render, exactly like `alpha3d`), so there is only ever ONE
+   renderer while glow is on and the flip cannot pop. That also removes the
+   visible-pane eyeball this doc made a blocker: there is no second
+   implementation to compare against.
+
+### Design as built
+- **Source**: the agent layer re-rendered ALONE into a level-0 FBO (transparent
+  clear, own depth). Re-drawing rather than reading the finished frame back buys
+  BOTH invariants at once — the source is agents-only (**a grid+agents model
+  never blooms its lattice**) and the existing render is untouched, so the
+  composite can only ADD light (`blendFunc(ONE, ONE)`).
+- **Occlusion mirrors the main pass**: `agentsInFront` ON ⇒ unoccluded in both;
+  OFF ⇒ the voxels' depth is laid into the source FBO **colour-masked** (exact
+  occlusion, zero colour contribution).
+- **Chain**: canonical dual-Kawase down (5 taps) / up (8 taps), ≤ 6 levels,
+  separate upsample ping targets so the up chain never writes the down level it
+  is reading.
+- **Compression is SHARED with 2D**: the same Reinhard `x/(1+x)` on the
+  MAGNITUDE with the hue exact, at the same `GLOW_TONE_EXPOSURE` — so Intensity
+  means the same thing in both views, which is what UPDATE 3 required.
+- **All four sliders map to something real** (none disabled): `size` → level
+  count + a sub-level offset (continuous between the power-of-two steps);
+  `intensity` → gain; `steepness` → the upsample spread (wide vs tight);
+  `core` → the composite mask `1 − core·coverage`, the 3D form of the solid
+  core — **at core = 1 an agent body is left bit-exact**.
+- **Lazy + released**: nothing is allocated until the option is switched on, a
+  `size`/`intensity` of 0 is treated as OFF, a model with no agents never builds
+  the chain, and `setAgentGlow` frees the whole chain when glow goes off.
+
+### Verification (real GPU, occluded pane ⇒ `readPixels`)
+- **Glow OFF is byte-identical**: 0 of 1,000,000 bytes on the bonded 3D Tissue
+  (chosen because it is never direct-render eligible, so the frame path is
+  stable and the comparison is apples-to-apples). `size = 0` likewise.
+- **Particle Life 3D**: lit px 18,019 → 58,565; luminance 5.07M → 8.34M.
+- **Intensity monotone**: 5.07 / 6.28 / 8.34 / 11.63 / 15.11 M at 0 / 0.2 / 0.6
+  / 1.5 / 3.0. **Size monotone**: 35k / 58k / 70k / 91k lit px at 2 / 8 / 20 / 40.
+- **Core = 1 ⇒ bodies bit-exact**: 3,141 of 3,141 3×3-eroded body pixels
+  unchanged, maxDelta 0.
+- **Additive-only**: 0 channels darker on the Tissue and on a voxel+agent scene.
+  On Particle Life, **17 channels of 1,000,000 off by exactly 1**, all
+  edge-adjacent, every one on a pixel that got net brighter — MSAA-resolve
+  rounding (the context is `antialias: true`), not a darkening path.
+- **Voxels never bloom**: with **94,328 voxel instances** in the scene the bloom
+  source held **101 non-empty pixels (the 5 agents) and ZERO voxel-coloured
+  pixels**, in BOTH `agentsInFront` branches. A grid-ONLY model with glow maxed
+  (size 40, intensity 3) is **0 bytes different**.
+- **Frame pin**: flips bidirectionally and repeatably through the real checkbox;
+  a forced re-attach with glow on leaves `directActive` false.
+- **Picking unaffected** (identical results on vs off); **a real screenshot
+  download** goes 17,960 → 42,359 lit px (76 → 162 KB); `gl.getError()` 0 throughout.
+- Gates: `tsc`, `npm run build`, `verify-agent-render`,
+  `verify-render-uniform-layouts` all green.
+
+### Guard
+The `[mirror invariant]` block in `verify-agent-render.mjs` went from ONE
+sanctioned frame-pin detach to **two** (alpha-blend + glow), both required to
+POST before they mirror. Negative-controlled: deleting the glow detach's post
+fails exactly that check.
+
+### The one follow-up
+**Port the bloom chain to the worker's WGSL sphere pass** to lift the frame pin,
+so a 3D glow model keeps the free-mode GPU fast path. The 2D HDR scaffolding in
+`agentWebgpuRuntime.ts` (`GLOW_HDR_FORMAT`, `ensureGlowHdrTex` /
+`destroyGlowHdrTex` / `encodeGlowHdrPass`, `GLOW_COMPOSE_WGSL`) is still the
+right starting point, and the RGBA8 finding above means the WGSL side does not
+need the HDR target either. If that lands, the free↔frame match becomes a real
+concern again and **the visible-pane eyeball this doc demanded comes back with
+it**.

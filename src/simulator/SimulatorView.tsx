@@ -4533,6 +4533,12 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
     // Phase C: 3D alpha-blend needs back-to-front sorting (gl3d's job), so a 3D
     // alpha-blend-on model stays on the CPU/frame path — don't attach.
     if (is3dRef.current && alpha3dRef.current) return;
+    // Same rule for 3D GLOW: the bloom is a gl3d post-process, so a glowing 3D
+    // model stays on the frame path. This re-check is load-bearing, not belt-and-
+    // braces — the gate above is computed in the MODEL effect, so any OTHER caller
+    // of this function (a display resize / re-attach, the metaballs effect) would
+    // otherwise happily re-attach mid-glow and the halo would silently vanish.
+    if (is3dRef.current && agentGlowRef.current.on) return;
     if ((agentDirectRenderActiveRef.current && !reattach) || pendingAgentRenderCanvas.current) return;
     const worker = workerRef.current, canvas = canvasRef.current;
     if (!worker || !canvas) return;
@@ -5037,6 +5043,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       r.setLight(light3dRef.current);
       r.setCellGaps(cellGaps3dRef.current);
       r.setMetaballs(agentMetaballsRef.current);
+      r.setAgentGlow(agentGlowRef.current);
       r.setCamera(cam3dRef.current, r.canvasWidth / (r.canvasHeight || 1));
       // 3D perf: only re-scan + re-upload the (potentially millions of) cells when
       // the colours actually changed (a new buffer from a `stepped` message).
@@ -7164,7 +7171,15 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       && resolveMaxBonds(model.centerBased) === 0
       // Phase C: 3D adds — alpha-blend OFF (translucent spheres need back-to-front
       // sorting = gl3d's job; opaque impostors here). 2D is unaffected.
-      && (!is3D || !alpha3dRef.current);
+      && (!is3D || !alpha3dRef.current)
+      // 3D GLOW is frame-mode-only, by the same rule and the same precedent. The
+      // bloom is a gl3d (WebGL2) post-process; the worker's WGSL sphere pass has
+      // no bloom chain, so a free-mode frame would show no glow and the free↔frame
+      // flip would POP. Pinning the frame path makes the two trivially consistent
+      // — and recording/screenshots (which already force frame mode) get the glow
+      // for free. Porting the chain to the WGSL pass would lift this; see
+      // docs/HANDOFF_AGENT_GLOW_3D.md. 2D is unaffected (both 2D paths glow).
+      && (!is3D || !agentGlowRef.current.on);
     // E2 — DISPLAY-res single-canvas composite gate. A 2D grid+agents model with a
     // WebGPU GRID + a WebGPU AGENT target composites the grid layer + the agent discs
     // into ONE DISPLAY-sized canvas in one encoder: the grid layer is a fullscreen
@@ -9308,7 +9323,28 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
   // effect above; this one repaints so the change shows immediately even when paused).
   useEffect(() => { draw(); }, [bg2d, agentOutlines, showVision, draw]);
   // A1 Glow option — redraw so the agent RenderView camera picks up the change.
-  useEffect(() => { draw(); }, [agentGlow, draw]);
+  // In 3D it additionally drives the free↔frame flip: the bloom lives in gl3d
+  // (the frame path), so turning it ON detaches the worker's sphere direct render
+  // and OFF re-attaches when eligible — byte-for-byte the alpha3d effect above,
+  // which exists for the same reason (a visual gl3d can do and the WGSL pass
+  // cannot). 2D never reaches either branch: both its paths draw the glow.
+  useEffect(() => {
+    if (is3dRef.current) {
+      if (agentGlow.on) {
+        if (agentDirectRenderActiveRef.current) {
+          agentDirectRenderActiveRef.current = false;
+          const sc = agentSphereCanvasRef.current;
+          if (sc) sc.style.display = 'none';
+          if (workerRef.current) workerRef.current.postMessage({ type: 'setAgentUiSync', on: true });
+          agentUiSyncPostedRef.current = true;
+          agentFrameAwaitingSnapshotRef.current = true;
+        }
+      } else if (agentRenderEligibleRef.current) {
+        maybeAttachAgentCanvas();
+      }
+    }
+    draw();
+  }, [agentGlow, draw, maybeAttachAgentCanvas]);
   // A1: re-evaluate UI-sync on state-signal changes (pause / recording / inspector
   // / edit target / metaballs suppression). Hover-during-play is handled per-frame.
   // `agentBrushMode` / `inspectMode` / `brushTarget` are in the dep list because
@@ -14311,14 +14347,22 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
                 </label>
               </div>
               )}
-              {/* Glow — a SOLID CORE plus a screen-blended halo around it, on BOTH 2D
-                  paths: the WebGPU direct-render / composite disc pipeline AND the
-                  CPU overlay (drawAgentGlow), so bonded models glow too. 3D pending. */}
-              {!is3D && (
+              {/* Glow — on BOTH dimensions, by two DIFFERENT techniques, because a
+                  flat additive halo pasted on a lit sphere reads as a sticker:
+                   - 2D: a SOLID CORE plus a screen-blended halo per agent, on both
+                     paths (the WebGPU disc pipeline AND the CPU overlay, so bonded
+                     models glow too);
+                   - 3D: a dual-Kawase BLOOM over the agent layer in gl3d, which
+                     blooms the sphere SHADING (highlight / rim / lit side) — the
+                     depth cue a billboard cannot give. Same four sliders, same
+                     Reinhard tonemap + exposure (glowTone.ts), so Intensity means
+                     the same thing in both. See docs/HANDOFF_AGENT_GLOW_3D.md. */}
               <div>
                 <div style={{ fontSize: '0.6rem', color: 'var(--color-text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 4 }}>Glow</div>
                 <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.66rem' }}
-                  title="Give each agent a solid core with a soft halo around it. The core is opaque, so it is never washed out by neighbouring halos — clusters can glow bright while a lone agent still reads as a crisp dot. Works on every 2D agent model: the WebGPU direct-render path draws it in the shader, and bonded / sprite / metaball models get the same effect from the CPU overlay. Not available in 3D yet.">
+                  title={is3D
+                    ? "Bloom the agents — a soft light spill around and over the spheres, built from the agent layer only (the CA grid never blooms). It picks up the sphere shading, so highlights and lit edges bleed the way a bright object does. While it is on, the 3D view renders through the main renderer rather than the worker's fast path, so a very large population may run slower."
+                    : "Give each agent a solid core with a soft halo around it. The core is opaque, so it is never washed out by neighbouring halos — clusters can glow bright while a lone agent still reads as a crisp dot. Works on every 2D agent model: the WebGPU direct-render path draws it in the shader, and bonded / sprite / metaball models get the same effect from the CPU overlay."}>
                   <input type="checkbox" checked={agentGlow.on}
                     onChange={e => setAgentGlow(g => ({ ...g, on: e.target.checked }))} />
                   <span style={{ color: 'var(--color-text-muted)' }}>Glow agents</span>
@@ -14326,25 +14370,33 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
                 {agentGlow.on && (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 4 }}>
                     <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.66rem' }}
-                      title="Glow size — the extra halo radius in pixels around each agent.">
+                      title={is3D
+                        ? "Glow size — how far the light spills, in pixels. 0 turns the bloom off."
+                        : "Glow size — the extra halo radius in pixels around each agent."}>
                       <span style={{ fontSize: '0.6rem', color: 'var(--color-text-muted)', width: 48, flex: '0 0 auto' }}>Size</span>
                       <input type="range" min={0} max={40} step={1} value={agentGlow.size} style={{ flex: 1, minWidth: 0 }}
                         onChange={e => setAgentGlow(g => ({ ...g, size: Number(e.target.value) }))} />
                     </label>
                     <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.66rem' }}
-                      title="Core size — how far the SOLID, opaque agent colour reaches into the halo. 0 = the core is the agent's own disc (halo entirely outside it); 1 = the whole glow radius is solid. The core is never added out by an overlapping halo nor faded out by a low intensity, so raise it when isolated agents need to stay visible while clusters glow.">
+                      title={is3D
+                        ? "Core protection — how much of each agent's OWN body is held back from the bloom. 0 (the default) lets the bodies bloom too, which is what makes a sphere read as emissive; 1 leaves every body pixel exactly as it renders unlit by the glow, so only the surrounding spill is added. Raise it when bright clusters start losing their shape."
+                        : "Core size — how far the SOLID, opaque agent colour reaches into the halo. 0 = the core is the agent's own disc (halo entirely outside it); 1 = the whole glow radius is solid. The core is never added out by an overlapping halo nor faded out by a low intensity, so raise it when isolated agents need to stay visible while clusters glow."}>
                       <span style={{ fontSize: '0.6rem', color: 'var(--color-text-muted)', width: 48, flex: '0 0 auto' }}>Core</span>
                       <input type="range" min={0} max={1} step={0.05} value={agentGlow.core} style={{ flex: 1, minWidth: 0 }}
                         onChange={e => setAgentGlow(g => ({ ...g, core: Number(e.target.value) }))} />
                     </label>
                     <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.66rem' }}
-                      title="Glow intensity — brightness of the halo. Past 1 it widens the band that reaches full colour. The solid core is unaffected.">
+                      title={is3D
+                        ? "Glow intensity — how much light the bloom adds. The scene can only get brighter, never darker."
+                        : "Glow intensity — brightness of the halo. Past 1 it widens the band that reaches full colour. The solid core is unaffected."}>
                       <span style={{ fontSize: '0.6rem', color: 'var(--color-text-muted)', width: 48, flex: '0 0 auto' }}>Intensity</span>
                       <input type="range" min={0} max={3} step={0.05} value={agentGlow.intensity} style={{ flex: 1, minWidth: 0 }}
                         onChange={e => setAgentGlow(g => ({ ...g, intensity: Number(e.target.value) }))} />
                     </label>
                     <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.66rem' }}
-                      title="Glow falloff — how fast the halo fades across the band outside the core. Higher = tighter, lower = softer spread.">
+                      title={is3D
+                        ? "Glow falloff — how the spill is spread. Higher = tighter, concentrated near the agents; lower = a wider, softer bloom."
+                        : "Glow falloff — how fast the halo fades across the band outside the core. Higher = tighter, lower = softer spread."}>
                       <span style={{ fontSize: '0.6rem', color: 'var(--color-text-muted)', width: 48, flex: '0 0 auto' }}>Falloff</span>
                       <input type="range" min={0.3} max={6} step={0.1} value={agentGlow.steepness} style={{ flex: 1, minWidth: 0 }}
                         onChange={e => setAgentGlow(g => ({ ...g, steepness: Number(e.target.value) }))} />
@@ -14352,7 +14404,6 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
                   </div>
                 )}
               </div>
-              )}
               {/* Agent metaballs (2D) — the same shared preference as the 3D View
                   panel's Metaballs block; in 2D it's an approximate gooey filter
                   (blur + alpha threshold) fusing the agent discs. */}

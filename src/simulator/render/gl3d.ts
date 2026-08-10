@@ -32,6 +32,7 @@
 //    → incoherent per-cube colour + doubled opacity. See the display pass.
 
 import { buildBrushPlaneVerts } from '../engine/sceneWireframe';
+import { GLOW_TONE_EXPOSURE } from '../glowTone';
 
 // ---------------------------------------------------------------------------
 // mat4 (column-major, the order WebGL expects)
@@ -340,6 +341,23 @@ export function metaballAutoThreshold(influence: number): number {
 export const DEFAULT_METABALLS3D: Readonly<Metaballs3D> = Object.freeze({
   enabled: false, influence: 1.6, threshold: metaballAutoThreshold(1.6), resolution: 2,
 });
+
+/** The 3D agent-glow settings — the SAME four numbers the 2D glow uses
+ *  (SimulatorView's AgentGlow), re-interpreted for the bloom post-process:
+ *   - `size`     the halo reach in CSS px (scaled by dpr, then mapped to the
+ *                Kawase level count + the sub-level offset);
+ *   - `intensity` the bloom gain before the shared Reinhard tonemap;
+ *   - `steepness` (Falloff) the wide-vs-tight mix of the upsample chain;
+ *   - `core`     how much of the agent's OWN opaque pixels are held back from
+ *                the bloom (1 = body left bit-exact, halo only outside it). */
+export interface AgentGlow3D { on: boolean; size: number; intensity: number; steepness: number; core: number }
+export const DEFAULT_AGENT_GLOW3D: Readonly<AgentGlow3D> = Object.freeze({
+  on: false, size: 8, intensity: 0.6, steepness: 2, core: 0,
+});
+/** Kawase levels are halvings, so the chain's reach is ~offset·2^levels px. Six
+ *  levels at offset 1 already spans 64 px — past the Size slider's own 40 — and
+ *  each level costs an FBO + two fullscreen passes, so this is the sane cap. */
+const BLOOM_MAX_LEVELS = 6;
 
 const WORLD_UP: [number, number, number] = [0, 0, 1];
 
@@ -1136,6 +1154,110 @@ void main() {
   outColor = vec4(col, aOut);
 }`;
 
+// ---------------------------------------------------------------------------
+// AGENT GLOW — a dual-Kawase BLOOM post-process over the AGENT LAYER.
+//
+// THE 3D TECHNIQUE IS NOT THE 2D ONE, deliberately. 2D draws a per-agent halo
+// quad; the SandboxScience reference this project's glow architecture was ported
+// from has NO per-particle glow in 3D at all — its 3D glow is a dual-Kawase
+// bloom on the HDR image before the tonemap. That is the right call and the
+// reason is geometric: a flat additive billboard pasted on a LIT SPHERE reads as
+// a sticker, while a bloom blooms the SHADING — the specular highlight, the rim,
+// the lit side of every sphere — which is exactly the depth cue 3D wants.
+// See docs/HANDOFF_AGENT_GLOW_3D.md (UPDATE 3).
+//
+// WHAT IS SHARED WITH 2D: the compression. `intensity` scales the blurred agent
+// layer and the result is compressed ONCE with the SAME Reinhard `x/(1+x)` on
+// the MAGNITUDE with the hue kept exact, at the SAME GLOW_TONE_EXPOSURE
+// (glowTone.ts) — so the Intensity slider means the same thing in both views.
+//
+// WHY RGBA8 AND NO FLOAT EXTENSION. The 2D path needs `rgba16float` because it
+// ACCUMULATES N unbounded per-agent halos additively. Here the source is the
+// agent layer rendered ONCE with opaque depth-tested bodies, so it is bounded in
+// [0,1] by construction, and every Kawase tap is a weighted AVERAGE — also
+// bounded. The only unbounded step is `× intensity`, which happens in the
+// composite shader in float, immediately before the tonemap. So the whole chain
+// is exact in 8 bits and needs neither EXT_color_buffer_float nor a fallback.
+// (Consequence, and it is correct for a bloom: 3D density reads as AREA — more
+// covered pixels — not as additive brightness the way stacked 2D halos do.)
+// ---------------------------------------------------------------------------
+const BLOOM_VS = `#version 300 es
+precision highp float;
+layout(location=0) in vec2 aCorner;   // the shared static unit quad [-1,1]
+out vec2 vUv;
+void main() { vUv = aCorner * 0.5 + 0.5; gl_Position = vec4(aCorner, 0.0, 1.0); }`;
+
+/** Dual-Kawase DOWNSAMPLE — 5 taps, weights 4/1/1/1/1 over 8. */
+const BLOOM_DOWN_FS = `#version 300 es
+precision highp float;
+in vec2 vUv;
+uniform sampler2D uTex;
+uniform vec2 uHalfPixel;     // (0.5/srcW, 0.5/srcH) * offsetScale
+out vec4 outColor;
+void main() {
+  vec4 s = texture(uTex, vUv) * 4.0;
+  s += texture(uTex, vUv - uHalfPixel);
+  s += texture(uTex, vUv + uHalfPixel);
+  s += texture(uTex, vUv + vec2(uHalfPixel.x, -uHalfPixel.y));
+  s += texture(uTex, vUv - vec2(uHalfPixel.x, -uHalfPixel.y));
+  outColor = s / 8.0;
+}`;
+
+/** Dual-Kawase UPSAMPLE — 8 taps, weights 1/2/1/2/1/2/1/2 over 12 — blended with
+ *  the same-size downsample level. `uSpread` IS the Falloff slider: high spread
+ *  lets the WIDE (coarser, already-upsampled) content dominate → a soft, far
+ *  halo; low spread lets the TIGHT local level dominate → a compact one. */
+const BLOOM_UP_FS = `#version 300 es
+precision highp float;
+in vec2 vUv;
+uniform sampler2D uTex;      // the coarser level being upsampled
+uniform sampler2D uPrev;     // the downsample level of THIS size
+uniform vec2 uHalfPixel;
+uniform float uSpread;
+out vec4 outColor;
+void main() {
+  vec4 s = texture(uTex, vUv + vec2(-uHalfPixel.x * 2.0, 0.0));
+  s += texture(uTex, vUv + vec2(-uHalfPixel.x, uHalfPixel.y)) * 2.0;
+  s += texture(uTex, vUv + vec2(0.0, uHalfPixel.y * 2.0));
+  s += texture(uTex, vUv + vec2(uHalfPixel.x, uHalfPixel.y)) * 2.0;
+  s += texture(uTex, vUv + vec2(uHalfPixel.x * 2.0, 0.0));
+  s += texture(uTex, vUv + vec2(uHalfPixel.x, -uHalfPixel.y)) * 2.0;
+  s += texture(uTex, vUv + vec2(0.0, -uHalfPixel.y * 2.0));
+  s += texture(uTex, vUv + vec2(-uHalfPixel.x, -uHalfPixel.y)) * 2.0;
+  outColor = mix(texture(uPrev, vUv), s / 12.0, uSpread);
+}`;
+
+/** The composite — ADDITIVE onto the finished frame, so the pass can only ever
+ *  ADD LIGHT: no pixel of the scene can get darker and every body/overlay below
+ *  renders exactly as it does with glow off (that is the 3D form of 2D's
+ *  solid-core invariant, and it is what makes glow-off byte-identical).
+ *
+ *  `uCore` is the 3D analogue of the 2D solid core, and it keeps the same
+ *  promise: it masks the bloom OUT of the agent's own opaque pixels
+ *  (`1 - core*coverage`), so at core = 1 an agent BODY is left bit-exact and only
+ *  the surrounding halo is added — the core is never washed out. At core = 0
+ *  (the default) the bodies bloom too, which is what makes a lit sphere read as
+ *  emissive. */
+const BLOOM_COMPOSITE_FS = `#version 300 es
+precision highp float;
+in vec2 vUv;
+uniform sampler2D uBloom;    // the blurred agent layer
+uniform sampler2D uSrc;      // the full-res agent layer (its alpha = coverage)
+uniform float uIntensity;
+uniform float uCore;
+uniform float uExposure;
+out vec4 outColor;
+void main() {
+  vec3 s = texture(uBloom, vUv).rgb * uIntensity;
+  float m = max(s.r, max(s.g, s.b));
+  if (m <= 0.0) { outColor = vec4(0.0); return; }
+  // Reinhard on the MAGNITUDE, hue exact — glowTone.ts's curve verbatim.
+  float x = m * uExposure;
+  float t = x / (1.0 + x);
+  float k = t * (1.0 - uCore * clamp(texture(uSrc, vUv).a, 0.0, 1.0));
+  outColor = vec4(clamp(s / m, 0.0, 1.0) * k, k);
+}`;
+
 function compileProgram(gl: WebGL2RenderingContext, vsSrc: string, fsSrc: string): WebGLProgram {
   const vs = gl.createShader(gl.VERTEX_SHADER)!;
   gl.shaderSource(vs, vsSrc); gl.compileShader(vs);
@@ -1324,6 +1446,24 @@ export class Gl3DRenderer {
   private lightUp: [number, number, number] = [0, 1, 0];
   private shadowDepthRange = 1;   // ortho far-near span (world units) for a scale-relative bias
   private shadowUnsupported = false;  // set if the depth-only shadow FBO is incomplete (→ shadows quietly off)
+  // --- Agent glow (dual-Kawase bloom over the agent layer). All lazy: nothing
+  //     here is created until the option is first switched on, so a glow-off
+  //     model allocates nothing and executes not one extra GL call. ---
+  private glow: AgentGlow3D = { ...DEFAULT_AGENT_GLOW3D };
+  private bloomProgDown: WebGLProgram | null = null;
+  private bloomProgUp: WebGLProgram | null = null;
+  private bloomProgComposite: WebGLProgram | null = null;
+  private bloomVao: WebGLVertexArrayObject | null = null;
+  private bloomFbos: WebGLFramebuffer[] = [];   // one per level, 0 = full res
+  private bloomTexs: WebGLTexture[] = [];
+  private bloomUpFbos: WebGLFramebuffer[] = []; // upsample ping targets, levels 1..L-1
+  private bloomUpTexs: WebGLTexture[] = [];
+  private bloomDepth: WebGLRenderbuffer | null = null;   // level-0 depth (agent self-occlusion)
+  private bloomW = 0; private bloomH = 0; private bloomLevels = 0;
+  private bloomUnsupported = false;   // an incomplete FBO → glow quietly off
+  private dpr = 1;                    // stashed by resize(), so Size is in CSS px like 2D
+  private static readonly BLOOM_TEX_UNIT_A = 4;   // 0 atlas, 1 shadow, 2 field, 3 alpha field
+  private static readonly BLOOM_TEX_UNIT_B = 5;
 
   constructor(canvas: HTMLCanvasElement) {
     const gl = canvas.getContext('webgl2', { antialias: true, alpha: true, preserveDrawingBuffer: true });
@@ -1865,6 +2005,219 @@ export class Gl3DRenderer {
     const p = this.metaballs;
     if (p.enabled !== cfg.enabled || p.influence !== cfg.influence || p.resolution !== cfg.resolution) this.metaDirty = true;
     this.metaballs = { ...cfg };
+  }
+  /** Agent glow (bloom). Pure config — every resource is built on first use, and
+   *  the whole chain is released again the moment the option is switched off: at
+   *  4K that is ~40 MB of level textures nothing would ever read. */
+  setAgentGlow(cfg: AgentGlow3D): void {
+    const wasOn = this.glow.on;
+    this.glow = { ...cfg };
+    if (wasOn && !cfg.on) this.destroyBloomChain();
+  }
+
+  /** Is the bloom pass going to draw anything this frame? A zero Size means no
+   *  halo (matching 2D, where `haloOn = size > 0`) and a zero Intensity means no
+   *  light, so both are treated as off rather than run as an expensive no-op. */
+  private bloomActive(): boolean {
+    return this.glow.on && !this.bloomUnsupported
+      && this.glow.intensity > 0 && this.glow.size > 0
+      && this.viz.agents && (this.agentInstanceCount > 0 || this.spriteInstanceCount > 0);
+  }
+
+  /** Allocate (or resize) the Kawase level chain. RGBA8 + LINEAR + CLAMP; level 0
+   *  additionally carries a depth renderbuffer so the agent re-draw self-occludes.
+   *  Returns false if any FBO came back incomplete, which latches the whole
+   *  feature off rather than rendering a wrong frame. */
+  private ensureBloomChain(w: number, h: number, levels: number): boolean {
+    const gl = this.gl;
+    if (this.bloomW === w && this.bloomH === h && this.bloomLevels === levels && this.bloomFbos.length > 0) return true;
+    this.destroyBloomChain();
+    if (!this.bloomProgDown) {
+      try {
+        this.bloomProgDown = compileProgram(gl, BLOOM_VS, BLOOM_DOWN_FS);
+        this.bloomProgUp = compileProgram(gl, BLOOM_VS, BLOOM_UP_FS);
+        this.bloomProgComposite = compileProgram(gl, BLOOM_VS, BLOOM_COMPOSITE_FS);
+      } catch {
+        this.bloomUnsupported = true;
+        return false;
+      }
+      this.bloomVao = gl.createVertexArray()!;
+      gl.bindVertexArray(this.bloomVao);
+      gl.bindBuffer(gl.ARRAY_BUFFER, this.quadBuf);
+      gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 8, 0);
+      gl.bindVertexArray(null);
+    }
+    const mk = (lw: number, lh: number, withDepth: boolean): { fbo: WebGLFramebuffer; tex: WebGLTexture } | null => {
+      const tex = gl.createTexture()!;
+      gl.bindTexture(gl.TEXTURE_2D, tex);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, lw, lh, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      const fbo = gl.createFramebuffer()!;
+      gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+      gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
+      if (withDepth) {
+        this.bloomDepth = gl.createRenderbuffer();
+        gl.bindRenderbuffer(gl.RENDERBUFFER, this.bloomDepth);
+        gl.renderbufferStorage(gl.RENDERBUFFER, gl.DEPTH_COMPONENT24, lw, lh);
+        gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.RENDERBUFFER, this.bloomDepth);
+        gl.bindRenderbuffer(gl.RENDERBUFFER, null);
+      }
+      const ok = gl.checkFramebufferStatus(gl.FRAMEBUFFER) === gl.FRAMEBUFFER_COMPLETE;
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+      gl.bindTexture(gl.TEXTURE_2D, null);
+      if (!ok) { gl.deleteFramebuffer(fbo); gl.deleteTexture(tex); return null; }
+      return { fbo, tex };
+    };
+    for (let i = 0; i <= levels; i++) {
+      const lw = Math.max(1, w >> i), lh = Math.max(1, h >> i);
+      const r = mk(lw, lh, i === 0);
+      if (!r) { this.destroyBloomChain(); this.bloomUnsupported = true; return false; }
+      this.bloomFbos.push(r.fbo); this.bloomTexs.push(r.tex);
+      // Upsample ping targets for the intermediate levels (1..levels-1): the up
+      // chain must not write into the down level it is simultaneously reading.
+      if (i >= 1 && i < levels) {
+        const u = mk(lw, lh, false);
+        if (!u) { this.destroyBloomChain(); this.bloomUnsupported = true; return false; }
+        this.bloomUpFbos[i] = u.fbo; this.bloomUpTexs[i] = u.tex;
+      }
+    }
+    this.bloomW = w; this.bloomH = h; this.bloomLevels = levels;
+    return true;
+  }
+
+  private destroyBloomChain(): void {
+    const gl = this.gl;
+    for (const f of this.bloomFbos) gl.deleteFramebuffer(f);
+    for (const t of this.bloomTexs) gl.deleteTexture(t);
+    for (const f of this.bloomUpFbos) if (f) gl.deleteFramebuffer(f);
+    for (const t of this.bloomUpTexs) if (t) gl.deleteTexture(t);
+    if (this.bloomDepth) gl.deleteRenderbuffer(this.bloomDepth);
+    this.bloomFbos = []; this.bloomTexs = [];
+    this.bloomUpFbos = []; this.bloomUpTexs = [];
+    this.bloomDepth = null;
+    this.bloomW = 0; this.bloomH = 0; this.bloomLevels = 0;
+  }
+
+  /** The agent-glow bloom pass. Runs at the END of the agent block, so:
+   *   1. the agent layer is re-rendered ALONE into level 0 (transparent clear,
+   *      own depth) — the scene already on the default framebuffer is untouched;
+   *   2. a Kawase down/up chain blurs it;
+   *   3. the result is ADDED to the default framebuffer.
+   *
+   *  Re-drawing the agents (rather than reading the finished frame back) is what
+   *  buys the two invariants that matter: the bloom SOURCE is the agent layer
+   *  ONLY — so a grid+agents model never blooms its lattice — and the existing
+   *  render is left completely alone, so bodies, bonds, voxels and overlays are
+   *  pixel-identical to a glow-off frame with light merely added on top. */
+  private renderAgentBloom(): void {
+    const gl = this.gl;
+    const w = gl.canvas.width, h = gl.canvas.height;
+    if (w < 4 || h < 4) return;
+    // Size is a CSS-pixel reach (the 2D slider's unit) → drawing-buffer pixels.
+    const reach = Math.max(1, this.glow.size * this.dpr);
+    const levels = Math.max(1, Math.min(BLOOM_MAX_LEVELS, Math.ceil(Math.log2(Math.max(2, reach)))));
+    // The sub-level offset makes the slider continuous between the power-of-two
+    // level steps (the chain's reach is ~offset·2^levels px).
+    const offset = Math.max(0.5, Math.min(1.5, reach / (1 << levels)));
+    if (!this.ensureBloomChain(w, h, levels)) return;
+    // Falloff → the wide/tight mix of the upsample chain. Higher steepness =
+    // less of the coarse (wide) content = a tighter halo. Matches the slider's
+    // documented meaning ("higher = tighter, lower = softer spread").
+    const spread = Math.max(0.25, Math.min(0.85, 0.9 - 0.1 * this.glow.steepness));
+
+    // --- 1. the agent layer, alone, into level 0 -----------------------------
+    gl.bindFramebuffer(gl.FRAMEBUFFER, this.bloomFbos[0]!);
+    gl.viewport(0, 0, w, h);
+    gl.clearColor(0, 0, 0, 0);
+    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+    gl.enable(gl.DEPTH_TEST);
+    // Occlusion by the CA grid. With `agentsInFront` ON (the default) the main
+    // render CLEARS depth before the agents, so they are unoccluded there and
+    // must be unoccluded here too. With it OFF the voxels do occlude, so their
+    // depth is laid down COLOUR-MASKED — exact occlusion, zero colour contribution
+    // (the voxels themselves must never bloom).
+    if (!this.agentsInFront && this.viz.voxels && this.instanceCount > 0) {
+      gl.colorMask(false, false, false, false);
+      gl.useProgram(this.prog);
+      gl.bindVertexArray(this.vao);
+      this.setCommonUniforms(gl, this.prog);
+      gl.disable(gl.BLEND); gl.depthMask(true);
+      gl.drawArraysInstanced(gl.TRIANGLES, 0, 36, this.instanceCount);
+      gl.bindVertexArray(null);
+      gl.colorMask(true, true, true, true);
+    }
+    if (this.metaballs.enabled) {
+      if (this.metaDirty) this.bakeMetaballField();
+      this.renderMetaballs();
+    } else {
+      this.renderAgents();
+    }
+    this.renderSprites();
+
+    // --- 2. the Kawase chain -------------------------------------------------
+    gl.disable(gl.DEPTH_TEST);
+    gl.disable(gl.BLEND);
+    gl.depthMask(false);
+    gl.bindVertexArray(this.bloomVao);
+    const A = Gl3DRenderer.BLOOM_TEX_UNIT_A, B = Gl3DRenderer.BLOOM_TEX_UNIT_B;
+    // down: level i-1 → level i
+    gl.useProgram(this.bloomProgDown!);
+    gl.uniform1i(gl.getUniformLocation(this.bloomProgDown!, 'uTex'), A);
+    for (let i = 1; i <= levels; i++) {
+      const sw = Math.max(1, w >> (i - 1)), sh = Math.max(1, h >> (i - 1));
+      gl.bindFramebuffer(gl.FRAMEBUFFER, this.bloomFbos[i]!);
+      gl.viewport(0, 0, Math.max(1, w >> i), Math.max(1, h >> i));
+      gl.activeTexture(gl.TEXTURE0 + A);
+      gl.bindTexture(gl.TEXTURE_2D, this.bloomTexs[i - 1]!);
+      gl.uniform2f(gl.getUniformLocation(this.bloomProgDown!, 'uHalfPixel'), (0.5 / sw) * offset, (0.5 / sh) * offset);
+      gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+    }
+    // up: level i+1 → level i, blended with the down level of that size
+    let srcTex = this.bloomTexs[levels]!;
+    if (levels > 1) {
+      gl.useProgram(this.bloomProgUp!);
+      gl.uniform1i(gl.getUniformLocation(this.bloomProgUp!, 'uTex'), A);
+      gl.uniform1i(gl.getUniformLocation(this.bloomProgUp!, 'uPrev'), B);
+      gl.uniform1f(gl.getUniformLocation(this.bloomProgUp!, 'uSpread'), spread);
+      for (let i = levels - 1; i >= 1; i--) {
+        const dw = Math.max(1, w >> i), dh = Math.max(1, h >> i);
+        gl.bindFramebuffer(gl.FRAMEBUFFER, this.bloomUpFbos[i]!);
+        gl.viewport(0, 0, dw, dh);
+        gl.activeTexture(gl.TEXTURE0 + A); gl.bindTexture(gl.TEXTURE_2D, srcTex);
+        gl.activeTexture(gl.TEXTURE0 + B); gl.bindTexture(gl.TEXTURE_2D, this.bloomTexs[i]!);
+        gl.uniform2f(gl.getUniformLocation(this.bloomProgUp!, 'uHalfPixel'), (0.5 / dw) * offset, (0.5 / dh) * offset);
+        gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+        srcTex = this.bloomUpTexs[i]!;
+      }
+    }
+
+    // --- 3. composite: ADD onto the finished frame ---------------------------
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.viewport(0, 0, w, h);
+    gl.useProgram(this.bloomProgComposite!);
+    gl.activeTexture(gl.TEXTURE0 + A); gl.bindTexture(gl.TEXTURE_2D, srcTex);
+    gl.activeTexture(gl.TEXTURE0 + B); gl.bindTexture(gl.TEXTURE_2D, this.bloomTexs[0]!);
+    gl.uniform1i(gl.getUniformLocation(this.bloomProgComposite!, 'uBloom'), A);
+    gl.uniform1i(gl.getUniformLocation(this.bloomProgComposite!, 'uSrc'), B);
+    gl.uniform1f(gl.getUniformLocation(this.bloomProgComposite!, 'uIntensity'), this.glow.intensity);
+    gl.uniform1f(gl.getUniformLocation(this.bloomProgComposite!, 'uCore'), Math.max(0, Math.min(1, this.glow.core)));
+    gl.uniform1f(gl.getUniformLocation(this.bloomProgComposite!, 'uExposure'), GLOW_TONE_EXPOSURE);
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.ONE, gl.ONE);   // add light; nothing below can get darker
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+
+    // --- restore the state the rest of render() expects ----------------------
+    gl.disable(gl.BLEND);
+    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+    gl.depthMask(true);
+    gl.enable(gl.DEPTH_TEST);
+    gl.bindVertexArray(null);
+    gl.activeTexture(gl.TEXTURE0 + B); gl.bindTexture(gl.TEXTURE_2D, null);
+    gl.activeTexture(gl.TEXTURE0 + A); gl.bindTexture(gl.TEXTURE_2D, null);
+    gl.activeTexture(gl.TEXTURE0);
   }
   /** Drop ALL agent geometry (spheres AND bond lines). Used when a non-agent /
    *  freshly-loaded model must not keep the previous model's agents lingering —
@@ -2538,9 +2891,13 @@ export class Gl3DRenderer {
   /** Resize the drawing buffer to match the canvas display size × dpr. */
   resize(cssW: number, cssH: number, dpr: number): void {
     const gl = this.gl;
+    this.dpr = Math.max(0.1, dpr);   // Glow Size is in CSS px — see renderAgentBloom
     const w = Math.max(1, Math.round(cssW * dpr));
     const h = Math.max(1, Math.round(cssH * dpr));
     if (gl.canvas.width !== w || gl.canvas.height !== h) { gl.canvas.width = w; gl.canvas.height = h; }
+    // The bloom chain is canvas-sized; drop a stale one (ensureBloomChain also
+    // re-checks, but freeing here keeps a resized-away chain from lingering).
+    if (this.bloomFbos.length > 0 && (this.bloomW !== w || this.bloomH !== h)) this.destroyBloomChain();
   }
 
   render(): void {
@@ -2654,6 +3011,11 @@ export class Gl3DRenderer {
           this.renderAgents(); // sphere impostors (non-sprite agents)
         }
         this.renderSprites();  // sprite billboards (sprite-agents; on top, blended)
+        // Agent glow — a dual-Kawase bloom over the AGENT LAYER, composited
+        // ADDITIVELY onto the frame just drawn. Runs here, after the bodies and
+        // BEFORE the cursor/UI overlays below, so the rings / gizmo / labels stay
+        // crisp on top of the halo rather than being bloomed themselves.
+        if (this.bloomActive()) this.renderAgentBloom();
       }
       this.renderAgentRings(); // hovered/inspected agent rings (depth OFF, on top)
     }
@@ -3260,5 +3622,10 @@ export class Gl3DRenderer {
     if (this.pickFbo) { gl.deleteFramebuffer(this.pickFbo); gl.deleteTexture(this.pickTex!); gl.deleteRenderbuffer(this.pickDepth!); }
     if (this.shadowFbo) { gl.deleteFramebuffer(this.shadowFbo); gl.deleteTexture(this.shadowTex!); }
     if (this.dummyShadowTexObj) gl.deleteTexture(this.dummyShadowTexObj);
+    this.destroyBloomChain();
+    if (this.bloomProgDown) gl.deleteProgram(this.bloomProgDown);
+    if (this.bloomProgUp) gl.deleteProgram(this.bloomProgUp);
+    if (this.bloomProgComposite) gl.deleteProgram(this.bloomProgComposite);
+    if (this.bloomVao) gl.deleteVertexArray(this.bloomVao);
   }
 }
