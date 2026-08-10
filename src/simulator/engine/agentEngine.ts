@@ -1345,6 +1345,62 @@ export function hasBond(store: AgentStore, a: number, b: number): boolean {
   return false;
 }
 
+/** The ABSOLUTE ragged-store slot index (`a*maxBonds + k`) of a's bond to b, or
+ *  -1. Epoch-checked like `getAgentState`'s bond listing, so a slot pointing at
+ *  a RECYCLED id (the dangling-bond ABI) reads as absent rather than as a bond
+ *  to whoever now occupies that slot.
+ *
+ *  Exported for the simulator's bond inspector (read + edit one edge). Nothing
+ *  on a compile path uses it — the emitters address slots directly. */
+export function bondSlotIndex(store: AgentStore, a: number, b: number): number {
+  if (a < 0 || b < 0 || a >= store.highWater || b >= store.highWater) return -1;
+  if (!store.alive[a] || !store.alive[b]) return -1;
+  const base = a * store.maxBonds;
+  const n = store.bondCount[a]!;
+  for (let k = 0; k < n; k++) {
+    if (store.bondPartner[base + k] === b && store.epoch[b] === store.bondPartnerEpoch[base + k]) return base + k;
+  }
+  return -1;
+}
+
+/** Write bond fields onto the symmetric bond a↔b — **BOTH slots**.
+ *
+ *  D2 / invariant **I2**: a bond is ONE object stored TWICE, and every per-slot
+ *  field must agree in both rows (`verify-graph-rewrite.mjs` Tier D asserts it
+ *  across the whole store). So this mirrors `formBond`'s two-sided stamping and
+ *  the Set Bond Attribute node's two-sided write — never write one row.
+ *
+ *  `attrs` is keyed by bond-attribute id; unknown ids and absent fields are
+ *  ignored. Returns false (and writes NOTHING) when the bond does not exist. */
+export function setBondFields(
+  store: AgentStore, a: number, b: number,
+  patch: { restLength?: number; stiffness?: number; typeLabel?: number; attrs?: Record<string, number> },
+): boolean {
+  const sa = bondSlotIndex(store, a, b);
+  const sb = bondSlotIndex(store, b, a);
+  if (sa < 0 || sb < 0) return false;
+  if (patch.restLength !== undefined && Number.isFinite(patch.restLength)) {
+    store.bondRestLength[sa] = patch.restLength; store.bondRestLength[sb] = patch.restLength;
+  }
+  if (patch.stiffness !== undefined && Number.isFinite(patch.stiffness)) {
+    store.bondStiffness[sa] = patch.stiffness; store.bondStiffness[sb] = patch.stiffness;
+  }
+  if (patch.typeLabel !== undefined && Number.isFinite(patch.typeLabel)) {
+    store.bondTypeLabel[sa] = patch.typeLabel; store.bondTypeLabel[sb] = patch.typeLabel;
+  }
+  if (patch.attrs) {
+    for (const spec of store.bondAttrSpecs) {
+      const v = patch.attrs[spec.id];
+      if (v === undefined || !Number.isFinite(v)) continue;
+      // `as Uint8Array` is the store-wide index-compatible cast across the
+      // Int32Array | Float64Array union (see moveBondSlot).
+      const arr = store.bondAttrs[spec.id]! as Uint8Array;
+      arr[sa] = v; arr[sb] = v;
+    }
+  }
+  return true;
+}
+
 /** Move the CONTENTS of bond slot `src` into slot `dst`, across EVERY ragged bond
  *  field (the five built-ins + every user bond attribute).
  *

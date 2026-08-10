@@ -3006,8 +3006,24 @@ export function HelpView() {
             <span className={styles.kbd}>&#9678;</span> again, close the popover, the agent dies, or you
             move the camera yourself by <strong>panning</strong> (or Reset view) &mdash; <em>zooming and
             3D orbiting do not stop it</em>, so you can zoom in on a followed agent and swing the 3D
-            camera around it while it keeps being tracked. Loading
-            a different model closes every open inspector (cell and agent). The
+            camera around it while it keeps being tracked.{' '}
+            <strong>Bonds are selectable too</strong>: on a model that can hold bonds, an inspect
+            click (<span className={styles.kbd}>Shift</span>+click, or the toolbar
+            <span className={styles.kbd}>&#9432;</span> Inspect toggle) that lands on <em>no agent</em> but
+            near a <strong>bond line</strong> opens a <strong>bond inspector</strong> — its two endpoint
+            ids (click either to open that agent&rsquo;s inspector), the current length (torus-folded),
+            the rest length, the spring stiffness (shown only when the model actually runs bond
+            springs) and <strong>one row per bond attribute</strong>, with tag values shown by name.
+            Those rows are <em>editable</em>: change a field and press <strong>Apply</strong>. Rows read
+            the LIVE value until you touch them (a rule that rewrites a bond attribute every generation
+            would otherwise fight your typing), and the write lands on <strong>both sides</strong> of
+            the bond — a bond is one object stored twice, so the two copies always agree. The selected
+            bond is stroked in the accent colour and the stroke follows its endpoints as they move; if
+            the bond breaks, the popover says so and the stroke disappears. Agents win the click, so a
+            bond whose line is hidden underneath two touching cells cannot be picked — read its values
+            from either endpoint&rsquo;s agent inspector instead, which lists every bond with its
+            attribute values. Bond selection is <strong>2D only</strong> for now. Loading
+            a different model closes every open inspector (cell, agent and bond). The
             <strong> CA&nbsp;Grid</strong> brush target paints cells with the normal brush. In Area
             scope the agents the stroke will touch are <strong>highlighted</strong> (every mode
             except Add), a <strong>Show brush cursor</strong> checkbox toggles the brush overlay, and

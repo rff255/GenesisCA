@@ -38,7 +38,7 @@ import {
   snapshotAgentsForRender, advanceAgentSprites, serializeAgentStore, deserializeAgentStore, buildSpatialHash,
   buildAgentOctree,
   resolvePositionalCollisions,
-  formBond, breakBond, drainAgentBondRequests, sweepStaleBonds, divideAgent,
+  formBond, breakBond, bondSlotIndex, setBondFields, drainAgentBondRequests, sweepStaleBonds, divideAgent,
   primeAgentAttrWrite, swapAgentAttrs, computeAgentMaxHashBins, AGENT_HASH_BIN_CAP,
   type AgentStore, type AgentSeedSpec, type AgentStatePayload, type AgentAttrSpec, type SpatialHash,
   type AgentLayoutExtras,
@@ -670,6 +670,26 @@ interface SetAgentWasmBackedMsg { type: '__setAgentWasmBacked'; wasmBacked: bool
 interface FormBondMsg { type: 'formBond'; a: number; b: number; activeViewer: string }
 /** Manual cut: break the bond between two agents (the cut brush). */
 interface BreakBondMsg { type: 'breakBond'; a: number; b: number; activeViewer: string }
+/** On-demand single-BOND inspector read — the edge sibling of `getAgentState`.
+ *  Replies `bondState` with the slot's built-ins (rest length / stiffness /
+ *  type label), its per-EDGE user attribute values, and the CURRENT (torus-
+ *  folded) length. A bond that no longer exists replies `live: false`. Joins the
+ *  one-shot staleness READERS so a free-mode WebGPU model never reads stale
+ *  agent positions into the length. */
+interface GetBondStateMsg { type: 'getBondState'; a: number; b: number }
+/** Edit one bond from the simulator's bond inspector. Writes BOTH slots via
+ *  `setBondFields` (invariant I2 — a bond is one object stored twice). Absent
+ *  fields are left alone; `attrs` values are pre-encoded (encodeAttrValue), like
+ *  paintManual / paintAgents. In AGENT_GPU_DEFER_TYPES (a mutation: deferred
+ *  during an in-flight GPU readback + invalidates the resident GPU copy, so the
+ *  next bond-store upload carries the edit). */
+interface SetBondStateMsg {
+  type: 'setBondState';
+  a: number; b: number;
+  restLength?: number; stiffness?: number;
+  attrs?: Array<{ attrId: string; value: number }>;
+  activeViewer: string;
+}
 /** Runtime per-layer "simulate" toggles (the simulator Layers panel). Gates the
  *  cell step (`runStep`/`runStepWebGPU`) and/or the agent step (`runAgentStep`) in
  *  the generation loop WITHOUT a recompile, so the user can freeze either layer and
@@ -707,7 +727,7 @@ interface SetAgentVizMsg {
  *  refreshDisplay). */
 interface RefreshAgentDisplayMsg { type: 'refreshAgentDisplay' }
 
-type WorkerMsg = InitMsg | StepMsg | CancelStepMsg | PaintMsg | PaintManualMsg | ResetMsg | RecompileMsg | UpdateModelAttrsMsg | UpdateLookupTableMsg | ImportImageMsg | ImportGridValuesMsg | UpdateIndicatorsMsg | GetStateMsg | LoadStateMsg | ReadRegionMsg | WriteRegionMsg | ClearRegionMsg | SetUseWasmMsg | SetUseWebGPUMsg | ReadbackWebGPUMsg | ColorPassMsg | SetRecordingMsg | AttachCanvasMsg | RequestColorsSnapshotMsg | SetInspectCellsMsg | RefreshDisplayMsg | SeedAgentsMsg | CreateAgentMsg | KillAgentsMsg | PaintAgentsMsg | ClearAgentsMsg | ReadAgentsMsg | PasteAgentsMsg | FormBondMsg | BreakBondMsg | GetAgentStateMsg | MoveAgentsMsg | NudgeAgentsMsg | SetAgentWasmBackedMsg | SetRngSeedMsg | SetSimLayersMsg | SetAgentSnapshotVelocityMsg | AttachAgentCanvasMsg | SetAgentCameraMsg | SetAgentUiSyncMsg | SetAgentVizMsg | RefreshAgentDisplayMsg | GetDiagnosticsMsg | E1bCountersMsg | GraphIndicatorStatsMsg | CompositeReadbackMsg | AttachVoxelCanvasMsg | SetGridCameraMsg | SetGridUiSyncMsg | SetGridVizMsg | RefreshGridDisplayMsg | VoxelReadbackMsg;
+type WorkerMsg = InitMsg | StepMsg | CancelStepMsg | PaintMsg | PaintManualMsg | ResetMsg | RecompileMsg | UpdateModelAttrsMsg | UpdateLookupTableMsg | ImportImageMsg | ImportGridValuesMsg | UpdateIndicatorsMsg | GetStateMsg | LoadStateMsg | ReadRegionMsg | WriteRegionMsg | ClearRegionMsg | SetUseWasmMsg | SetUseWebGPUMsg | ReadbackWebGPUMsg | ColorPassMsg | SetRecordingMsg | AttachCanvasMsg | RequestColorsSnapshotMsg | SetInspectCellsMsg | RefreshDisplayMsg | SeedAgentsMsg | CreateAgentMsg | KillAgentsMsg | PaintAgentsMsg | ClearAgentsMsg | ReadAgentsMsg | PasteAgentsMsg | FormBondMsg | BreakBondMsg | GetBondStateMsg | SetBondStateMsg | GetAgentStateMsg | MoveAgentsMsg | NudgeAgentsMsg | SetAgentWasmBackedMsg | SetRngSeedMsg | SetSimLayersMsg | SetAgentSnapshotVelocityMsg | AttachAgentCanvasMsg | SetAgentCameraMsg | SetAgentUiSyncMsg | SetAgentVizMsg | RefreshAgentDisplayMsg | GetDiagnosticsMsg | E1bCountersMsg | GraphIndicatorStatsMsg | CompositeReadbackMsg | AttachVoxelCanvasMsg | SetGridCameraMsg | SetGridUiSyncMsg | SetGridVizMsg | RefreshGridDisplayMsg | VoxelReadbackMsg;
 
 // ---------------------------------------------------------------------------
 // C3 (P4) — RUNTIME FALLBACK LOG
@@ -2743,7 +2763,7 @@ function agentWebgpuIndicatorIsInt(): boolean[] {
  *  pre-mutation GPU values. Deferred + replayed right after the step settles. */
 const AGENT_GPU_DEFER_TYPES = new Set<string>([
   'seedAgents', 'createAgent', 'killAgents', 'paintAgents', 'moveAgents', 'nudgeAgents', 'pasteAgents',
-  'formBond', 'breakBond', 'clearAgents',
+  'formBond', 'breakBond', 'setBondState', 'clearAgents',
   'paint', 'paintManual', 'writeRegion', 'clearRegion', 'importGridValues',
 ]);
 let agentGpuStepInFlight = false;
@@ -6491,7 +6511,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
   // recompile lossless. Reuses the one-and-only one-shot mechanism — no new
   // await/teardown sequencing inside buildAgentWebGPUIfNeeded.
   if (agentStoreStale && agentWebgpuRuntime && agentStore
-      && (AGENT_GPU_DEFER_TYPES.has(msg.type) || msg.type === 'getAgentState' || msg.type === 'readAgents' || msg.type === 'getState' || msg.type === 'recompile')) {
+      && (AGENT_GPU_DEFER_TYPES.has(msg.type) || msg.type === 'getAgentState' || msg.type === 'getBondState' || msg.type === 'readAgents' || msg.type === 'getState' || msg.type === 'recompile')) {
     asyncStepBatchInFlight = true;   // no message may interleave the one-shot readback
     deferredDuringAsyncBatch.push(msg);
     // The flag MUST be cleared from a finally (audit H2): a throw here would leave
@@ -8449,6 +8469,58 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
     case 'breakBond': {
       activeViewer = msg.activeViewer; syncActiveViewerToMemory();
       if (agentStore) breakBond(agentStore, msg.a, msg.b);
+      sendColors();
+      break;
+    }
+    case 'getBondState': {
+      // On-demand single-BOND inspector read (the edge sibling of
+      // getAgentState). A broken/compacted/never-existing bond replies
+      // `live: false` so the popover can say "no longer exists" rather than
+      // showing a stale row.
+      const { a, b } = msg;
+      const slot = agentStore ? bondSlotIndex(agentStore, a, b) : -1;
+      if (!agentStore || slot < 0) {
+        self.postMessage({ type: 'bondState', a, b, live: false });
+        break;
+      }
+      const s = agentStore;
+      const attrs: Record<string, number> = {};
+      for (const spec of s.bondAttrSpecs) attrs[spec.id] = (s.bondAttrs[spec.id]! as Uint8Array)[slot]!;
+      // Current length, folded to the torus-SHORTEST separation exactly like the
+      // force pass and the bond RENDER — otherwise a seam-crossing bond reports
+      // ~a world width instead of its real (short) length.
+      const W = s.worldWidth, H = s.worldHeight, D = s.worldDepth, is3d = D > 1;
+      const torus = boundaryTreatment === 'torus';
+      let dx = s.x[b]! - s.x[a]!, dy = s.y[b]! - s.y[a]!;
+      let dz = is3d ? s.z[b]! - s.z[a]! : 0;
+      if (torus) {
+        if (dx > W / 2) dx -= W; else if (dx < -W / 2) dx += W;
+        if (dy > H / 2) dy -= H; else if (dy < -H / 2) dy += H;
+        if (is3d) { if (dz > D / 2) dz -= D; else if (dz < -D / 2) dz += D; }
+      }
+      self.postMessage({
+        type: 'bondState', a, b, live: true,
+        restLength: s.bondRestLength[slot]!,
+        stiffness: s.bondStiffness[slot]!,
+        typeLabel: s.bondTypeLabel[slot]!,
+        length: Math.sqrt(dx * dx + dy * dy + dz * dz),
+        attrs,
+      });
+      break;
+    }
+    case 'setBondState': {
+      // Bond inspector EDIT. `setBondFields` writes BOTH slots (invariant I2)
+      // and rejects the whole patch when the bond does not exist.
+      activeViewer = msg.activeViewer; syncActiveViewerToMemory();
+      if (agentStore) {
+        const attrs: Record<string, number> | undefined = msg.attrs && msg.attrs.length > 0
+          ? Object.fromEntries(msg.attrs.map(e => [e.attrId, e.value]))
+          : undefined;
+        setBondFields(agentStore, msg.a, msg.b, {
+          restLength: msg.restLength, stiffness: msg.stiffness, attrs,
+        });
+        runAgentColorPass();
+      }
       sendColors();
       break;
     }
