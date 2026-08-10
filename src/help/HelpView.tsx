@@ -231,11 +231,20 @@ export function HelpView() {
             &mdash; its own window and icon, no browser tabs or address bar.
           </p>
           <p className={styles.p}>
-            Once visited, the app works <strong>fully offline</strong>: the interface, the
-            Models Library list and previews, and the simulation engine are cached locally,
-            so you can keep modeling and simulating with no connection. Library models are
-            cached the first time you open them, and new versions are applied automatically
-            the next time you open the app.
+            Once visited, the app works <strong>fully offline</strong> &mdash; and that
+            includes <strong>every model in the Models Library</strong>. The interface, the
+            simulation engine, the library list, previews, macros and all bundled{' '}
+            <code>.gcaproj</code> files are downloaded up front on that first visit, so a
+            model opens on a plane even if you have never opened it before. (The bundle is
+            around 50&nbsp;MB, downloaded once.)
+          </p>
+          <p className={styles.p}>
+            When a new version is published, GenesisCA shows a small{' '}
+            <strong>&ldquo;A new version is available&rdquo;</strong> banner with{' '}
+            <strong>Update</strong> and <strong>Later</strong>. Nothing reloads until you
+            click Update, so an update can never interrupt a running simulation or discard
+            an unsaved model &mdash; if you have unsaved changes the banner says so. Choose
+            Later and the update simply applies the next time you open the app.
           </p>
           <p className={styles.p}>
             Your projects are never uploaded &mdash; saving still downloads a local

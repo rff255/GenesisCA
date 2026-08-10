@@ -19,6 +19,10 @@ import styles from './App.module.css';
 
 type AppMode = 'modeler' | 'simulator' | 'help' | 'library' | 'styleref';
 
+/** How often an installed (long-lived) session asks the SW to look for a new
+ *  build. Only fires while online; a page load / return-to-foreground checks too. */
+const SW_UPDATE_INTERVAL_MS = 60 * 60 * 1000;
+
 /* The two work-MODE tabs carry icons — they're the most important structural
  * switch in the app, so they read as a pair of glyphs rather than two words in a
  * row of words. Stroked `currentColor` at 14px, matching the ActivityBar /
@@ -70,14 +74,22 @@ function AppInner() {
   };
   useEffect(() => () => { if (toastTimer.current != null) clearTimeout(toastTimer.current); }, []);
 
+  // A newer service worker is installed and WAITING — drives the update banner.
+  const [updateReady, setUpdateReady] = useState(false);
+  // The registerSW() callback: updateSW(true) = skipWaiting + reload. Held in a
+  // ref because it only exists after the (once-only) registration effect runs.
+  const updateSWRef = useRef<((reload?: boolean) => Promise<void>) | null>(null);
+  const swUpdateTimerRef = useRef<number | null>(null);
+  const swVisibilityCleanupRef = useRef<(() => void) | null>(null);
+
   // Register the offline service worker + request durable storage. Update
-  // strategy is 'prompt' (vite.config) — the new SW installs but WAITS, so a
-  // fresh deploy NEVER force-reloads a live session (autoUpdate's mid-session
-  // page reload was wiping the user's open model); it applies on the next
-  // natural launch. We pass NO onNeedRefresh handler, so there's no prompt
-  // (there's no in-app update channel, and the app does no online processing)
-  // and no "offline ready" toast (it ALWAYS works offline, so announcing it is
-  // noise) — the update is silent + deferred.
+  // strategy is 'prompt' (vite.config): the new SW installs but WAITS, so a
+  // fresh deploy NEVER force-reloads a live session on its own (autoUpdate's
+  // mid-session page reload was wiping the user's open model). onNeedRefresh
+  // surfaces the waiting SW as a dismissible banner — the reload happens ONLY
+  // when the user clicks Update; dismissing leaves it to apply on the next
+  // natural launch. No "offline ready" toast (the app ALWAYS works offline, so
+  // announcing it is noise).
   useEffect(() => {
     // The service worker is for the WEB PWA ONLY. Inside the Tauri native shell
     // (WebView2) the app's assets are already embedded + offline, and a SW there
@@ -92,21 +104,52 @@ function AppInner() {
         caches.keys?.().then(ks => ks.forEach(k => caches.delete(k))).catch(() => {});
       }
     } else {
-      registerSW({ immediate: true });
+      updateSWRef.current = registerSW({
+        immediate: true,
+        onNeedRefresh: () => setUpdateReady(true),
+        // registerSW({immediate}) checks for a new SW on every page load, which
+        // is enough for a browser tab — but an INSTALLED PWA is often left open
+        // for days, so poll too. Guarded on navigator.onLine (a check while
+        // offline is a guaranteed-failing network request), and re-checked when
+        // the app comes back to the foreground, which is when a phone/laptop
+        // that slept through the interval regains connectivity.
+        onRegisteredSW: (_swUrl, registration) => {
+          if (!registration) return;
+          const check = () => {
+            if (navigator.onLine) registration.update().catch(() => {});
+          };
+          swUpdateTimerRef.current = window.setInterval(check, SW_UPDATE_INTERVAL_MS);
+          const onVisible = () => { if (document.visibilityState === 'visible') check(); };
+          document.addEventListener('visibilitychange', onVisible);
+          swVisibilityCleanupRef.current = () => document.removeEventListener('visibilitychange', onVisible);
+        },
+      });
       // Auto-granted once installed; keeps the offline cache from being evicted
       // under disk pressure. Storage durability only — does NOT raise the memory
       // ceiling for large grids; neither does the current Tauri shell (same
       // Chromium/WebView2 engine) — only a native-Rust simulation would.
       navigator.storage?.persist?.().catch(() => {});
+      // DEV hook: onNeedRefresh only fires when a genuinely newer SW installs,
+      // which can't be staged from a dev server — so expose the same state flip
+      // to drive/verify the banner (the project's `window.__*` DEV-hook rule).
+      if (import.meta.env.DEV) {
+        (window as unknown as { __pwaTestNeedRefresh?: () => void }).__pwaTestNeedRefresh =
+          () => setUpdateReady(true);
+      }
     }
     // Fade out + remove the static boot splash (index.html) now that React has
     // mounted and the app shell is on screen.
     const splash = document.getElementById('splash');
+    let splashTimer: number | null = null;
     if (splash) {
       splash.classList.add('splash-hide');
-      const t = window.setTimeout(() => splash.remove(), 400);
-      return () => clearTimeout(t);
+      splashTimer = window.setTimeout(() => splash.remove(), 400);
     }
+    return () => {
+      if (splashTimer != null) clearTimeout(splashTimer);
+      if (swUpdateTimerRef.current != null) clearInterval(swUpdateTimerRef.current);
+      swVisibilityCleanupRef.current?.();
+    };
   }, []);
 
   // Keyboard-shortcuts cheat-sheet overlay, surfaced as a navbar `?` button so
@@ -384,6 +427,23 @@ function AppInner() {
         </div>
       )}
       {toast && <div className={styles.toast}>{toast}</div>}
+      {updateReady && (
+        <div className={styles.updateBanner} role="status">
+          <span className={styles.updateText}>
+            A new version of GenesisCA is available.
+            {isDirty && ' Updating reloads the app — save your model first, unsaved changes will be lost.'}
+          </span>
+          <button
+            className={styles.updateBtn}
+            onClick={() => { setUpdateReady(false); void updateSWRef.current?.(true); }}
+          >
+            Update
+          </button>
+          <button className={styles.updateLater} onClick={() => setUpdateReady(false)}>
+            Later
+          </button>
+        </div>
+      )}
       <KeyboardShortcutsOverlay open={shortcutsOpen} onClose={() => setShortcutsOpen(false)} />
     </div>
   );

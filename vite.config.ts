@@ -251,39 +251,54 @@ export default defineConfig(({ command, mode }) => {
       // Keep VitePWA LAST: the library plugins generate models/macros index.json
       // + thumbnails in closeBundle(); the SW precache glob must run after them.
       VitePWA({
-        // Silent DEFERRED update — 'prompt', NOT 'autoUpdate'. 'autoUpdate'
+        // USER-CONFIRMED update — 'prompt', NOT 'autoUpdate'. 'autoUpdate'
         // (skipWaiting + clientsClaim + a `controlling` → window.location.reload)
         // force-reloads EVERY open tab the moment a new deploy's SW activates in
         // the background — a few seconds after load — which wipes whatever the
         // user was doing (open model, mid-simulation). Since Pages redeploys on
         // every push to master, users hit that constantly. 'prompt' installs the
-        // new SW but leaves it WAITING (no skipWaiting): the old version keeps
-        // serving this session with NO surprise reload, and the update applies on
-        // the next natural launch (all tabs closed → the waiting SW activates).
-        // App.tsx registers with `immediate:true` and NO onNeedRefresh handler,
-        // so there's no toast either — exactly the "applied on the next load, no
-        // prompt" behaviour this comment always claimed (autoUpdate never gave it).
+        // new SW but leaves it WAITING (no skipWaiting) until the USER asks for
+        // it: App.tsx's onNeedRefresh shows a dismissible "new version" banner
+        // whose Update button calls updateSW(true) (skipWaiting + reload). So a
+        // reload only ever happens on an explicit click; declining leaves the
+        // waiting SW to apply on the next natural launch.
         registerType: 'prompt',
         manifest: buildManifest(base),
         includeAssets: ['favicon.ico', 'apple-touch-icon-180x180.png', 'icon.svg'],
         workbox: {
           // Overriding globPatterns REPLACES Workbox's default (**/*.{js,css,html}),
-          // so re-list the shell + worker/wasm/icons, the library index, macros,
-          // and thumbnails — the lean set, fully offline on the FIRST launch.
-          // Model .gcaproj files are NOT precached (a couple embed large saved
-          // sim-states — 5–11 MB — that would bloat the first-visit download);
-          // they're runtime-cached on first open via the rule below.
+          // so re-list the shell + worker/wasm/icons AND the WHOLE library —
+          // index, model .gcaproj files, macros, thumbnails. The app must be
+          // FULLY usable with no network on its FIRST launch: the reported bug
+          // was an installed PWA on a plane that couldn't open a library model
+          // because the model had never been fetched, so nothing had runtime-
+          // cached it. The runtime rules below are kept as a revalidating
+          // fallback (and for anything added post-install), not as the offline
+          // mechanism. `.html` covers viewer-template.html (the presentation
+          // export's fetch target), so that stays offline-safe too.
           globPatterns: [
             '**/*.{js,css,html,ico,png,svg,woff2,wasm}',
             // Library files exist only in the BUILD output (dist/), not dev-dist,
             // so precache them only for the build — otherwise Workbox warns they
             // match nothing during `vite dev`.
             ...(command === 'build'
-              ? ['models/index.json', 'models/*.thumb.{gif,png,jpg,jpeg,webp,webm}', 'macros/index.json', 'macros/*.gcamacro']
+              ? [
+                  'models/index.json',
+                  'models/*.gcaproj',
+                  'models/*.thumb.{gif,png,jpg,jpeg,webp,webm}',
+                  'macros/index.json',
+                  'macros/*.gcamacro',
+                ]
               : []),
           ],
           navigateFallback: `${base}index.html`,
-          maximumFileSizeToCacheInBytes: 4 * 1024 * 1024,
+          // A build-time GUARD, not a filter: Workbox ERRORS on a glob-matched
+          // file above this, it does NOT silently drop it — which is exactly what
+          // we want if a future model outgrows the budget (fix the model or raise
+          // this deliberately; never let a model fall out of the offline set).
+          // Largest shipped asset today: a ~3.3 MB model + the ~2.2 MB
+          // viewer-template. 20 MB leaves real headroom for a big saved sim-state.
+          maximumFileSizeToCacheInBytes: 20 * 1024 * 1024,
           runtimeCaching: [
             {
               urlPattern: ({ url }: { url: URL }) =>
