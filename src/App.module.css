@@ -164,6 +164,63 @@
   to   { opacity: 1; transform: translateX(-50%) translateY(0); }
 }
 
+/* "A new version is available" prompt. Unlike .toast this is INTERACTIVE (it
+ * carries buttons), so it must NOT set `pointer-events: none`, and it does not
+ * auto-dismiss — a missed update prompt is a silently-stale app. Sits just under
+ * the navbar like the toast; the two can coexist without overlapping because the
+ * toast auto-clears in 3.5 s. */
+.updateBanner {
+  position: fixed;
+  top: calc(var(--navbar-height) + var(--space-4));
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  max-width: min(92vw, 640px);
+  background: var(--color-bg-panel);
+  color: var(--color-text-primary);
+  border: 1px solid var(--color-accent);
+  border-radius: var(--radius-md);
+  padding: var(--space-3) var(--space-5);
+  font-size: var(--font-sm);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+  z-index: 1001;
+  animation: toastIn 0.18s ease-out;
+}
+
+.updateText { flex: 1; }
+
+.updateBtn {
+  flex: 0 0 auto;
+  background: var(--color-accent);
+  color: var(--color-bg-canvas);
+  border: 1px solid var(--color-accent);
+  border-radius: var(--radius-sm);
+  padding: var(--space-2) var(--space-5);
+  font-size: var(--font-sm);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.updateBtn:hover {
+  background: var(--color-accent-hover);
+  border-color: var(--color-accent-hover);
+}
+
+.updateLater {
+  flex: 0 0 auto;
+  background: transparent;
+  color: var(--color-text-secondary);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  padding: var(--space-2) var(--space-4);
+  font-size: var(--font-sm);
+  cursor: pointer;
+}
+
+.updateLater:hover { color: var(--color-text-primary); }
+
 .content {
   flex: 1;
   overflow: hidden;
