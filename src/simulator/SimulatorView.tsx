@@ -39,11 +39,11 @@ import { SpriteRegistry } from './spriteRegistry';
 import { glowEncodeScale, glowTransferTable } from './glowTone';
 import { ImageMappingDialog, type ImageMappingConfig } from './ImageMappingDialog';
 import { CsvImportDialog, type CsvImportResult } from './CsvImportDialog';
-import { GIFEncoder, quantize, applyPalette } from 'gifenc';
 import {
   encodeFramesToWebM, isWebMSupported, snapRecordWidth, clampRecordFps,
   RECORD_MAX, RECORD_MAX_3D, DEFAULT_RECORD_QUALITY, type RecordQuality,
 } from './recording/webmEncoder';
+import { encodeFramesToGif, GIF_MAX_DEFAULT, GIF_MAX_HARD } from './recording/gifEncoder';
 import { WebMStreamEncoder } from './recording/webmStreamEncoder';
 import { getGlyphTile } from './recording/glyphAtlas';
 import { IndicatorDisplay } from './IndicatorDisplay';
@@ -570,6 +570,57 @@ function captureSegment<T extends string>(
       ))}
     </span>
   );
+}
+
+/**
+ * Capture resolution — the LONG-EDGE cap, in pixels, for RECORDED frames.
+ * (Screenshots are deliberately untouched: they keep full display resolution.)
+ *
+ *  - `auto`   the historical caps: `RECORD_MAX` (912) in 2D, `RECORD_MAX_3D`
+ *             (1280) in 3D, and a GIF additionally down to `GIF_MAX_DEFAULT`
+ *             (512) at encode time. Byte-for-byte today's behaviour.
+ *  - 480/720/1080 an explicit cap, used by BOTH capture scopes and by the GIF
+ *             encode (so a GIF is no longer pinned to 512).
+ *  - `native` no rescaling: the view at its own pixel size, the 3D drawing
+ *             buffer as it is, or — for the Simulation scope — the grid at one
+ *             pixel per cell. Capped at `CAPTURE_MAX_NATIVE` so a HiDPI display
+ *             or a 5000-cell grid cannot ask for a 100 MB/frame capture.
+ *
+ * ⚠ THE FREEZE GUARD IS NOT THIS SETTING'S JOB, and must not become it.
+ * `pickVp9Config` calls `isVp9Profile1Safe` on the ACTUAL frame width every
+ * time, so a width outside the measured-fast coded-width residue simply falls
+ * back to VP9 profile 0 — which is immune (and was the fastest configuration
+ * measured). No number a user picks here can reach the freezing configuration.
+ *
+ * What `snapRecordWidth` buys is QUALITY, not safety: it lowers the width a few
+ * pixels into the fast residue so the file keeps 4:4:4 chroma instead of 4:2:0.
+ * It is therefore applied wherever the capture is rescaling anyway — the 2D view
+ * crop, the 2D simulation render, and (for an explicit choice) the 3D downscale.
+ * It is deliberately NOT forced where nothing is being rescaled: `auto` in 3D
+ * keeps the documented RECORD_MAX_3D behaviour, and `native` means "don't touch
+ * my pixels", so both take whichever profile is safe at their natural width.
+ * VERIFIED on a 980x864 3D viewport: `720` records 720x635 (snapped, profile 1)
+ * while `auto` records 980x864 (unsnapped, profile 0).
+ */
+type CaptureResolution = 'auto' | '480' | '720' | '1080' | 'native';
+const CAPTURE_RESOLUTIONS: readonly CaptureResolution[] = ['auto', '480', '720', '1080', 'native'];
+/** Ceiling for `native`, so "no rescaling" can never mean "unbounded". */
+const CAPTURE_MAX_NATIVE = 2048;
+
+/** Long-edge cap the capture sites should apply for this setting. */
+function captureMaxFor(res: CaptureResolution, is3D: boolean): number {
+  if (res === 'auto') return is3D ? RECORD_MAX_3D : RECORD_MAX;
+  if (res === 'native') return CAPTURE_MAX_NATIVE;
+  return Number(res);
+}
+
+/** Long-edge cap the GIF encoder should apply. Separate from the capture cap
+ *  because GIF holds every frame's raw pixels until Stop, so its default stays
+ *  modest — but an explicit choice is honoured up to `GIF_MAX_HARD`. */
+function gifMaxSizeFor(res: CaptureResolution): number {
+  if (res === 'auto') return GIF_MAX_DEFAULT;
+  if (res === 'native') return GIF_MAX_HARD;
+  return Math.min(GIF_MAX_HARD, Number(res));
 }
 
 /** M1 (audit) — the direct-agent-render gate terms that a SOFT recompile can flip.
@@ -2197,6 +2248,14 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
   });
   const captureOverlaysRef = useRef<CaptureOverlayMode>(captureOverlays);
   useEffect(() => { captureOverlaysRef.current = captureOverlays; }, [captureOverlays]);
+  // Recording resolution (long-edge cap) — see `captureMaxFor` / `gifMaxSizeFor`
+  // for what each value resolves to and why a WebM width is still snapped.
+  const [captureResolution, setCaptureResolution] = useState<CaptureResolution>(() => {
+    const s = saved.current.captureResolution as CaptureResolution | undefined;
+    return s && CAPTURE_RESOLUTIONS.includes(s) ? s : 'auto';
+  });
+  const captureResolutionRef = useRef<CaptureResolution>(captureResolution);
+  useEffect(() => { captureResolutionRef.current = captureResolution; }, [captureResolution]);
   // "current view" scope: the OUTPUT dims are locked at the first captured frame (the
   // encoder needs a constant frame size) so a panel resize mid-record can't change them.
   // The "simulation" scope uses renderSimulationFrame (deterministic grid-aspect dims),
@@ -2348,7 +2407,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
           targetFps, unlimitedFps, gensPerFrame, unlimitedGens,
           activeViewer, brushColor, brushW, brushH, brushMapping, showBrushCursor, showGridlines, show2dAxes, smoothScaling,
           brushShape, brushRadius, brushRingWidth, brushLineWidth, brush3dVolume, brushBoxDepth,
-          infinityCanvas, indicatorVizModes, recordFormat, captureScope, recordQuality, recordOverload, captureOverlays, brushSectionH, agentsFront3d,
+          infinityCanvas, indicatorVizModes, recordFormat, captureScope, captureResolution, recordQuality, recordOverload, captureOverlays, brushSectionH, agentsFront3d,
           light3d, cellGaps3d, agentMetaballs, agentGlow,
           agentBrushRadius, agentSeedDensity, agentSeedSpacing, agentNudgeIntensity,
           agentBrushShape, agentBrushW, agentBrushH, agentBrushRingWidth, agentBrushLineWidth,
@@ -2364,7 +2423,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       } catch { /* localStorage full */ }
     }, 300);
     return () => clearTimeout(timer);
-  }, [targetFps, unlimitedFps, gensPerFrame, unlimitedGens, activeViewer, brushColor, brushW, brushH, brushMapping, showBrushCursor, showGridlines, show2dAxes, smoothScaling, brushShape, brushRadius, brushRingWidth, brushLineWidth, brush3dVolume, brushBoxDepth, infinityCanvas, indicatorVizModes, recordFormat, captureScope, recordQuality, recordOverload, captureOverlays, brushSectionH, agentsFront3d, light3d, cellGaps3d, agentMetaballs, agentGlow, agentBrushRadius, agentSeedDensity, agentSeedSpacing, agentNudgeIntensity, agentBrushShape, agentBrushW, agentBrushH, agentBrushRingWidth, agentBrushLineWidth, showCaGrid, showAgents, showBonds, simulateCells, simulateAgents, brushTarget, bg2d, agentOutlines, showVision, indicatorHiddenCategories, indicatorChartOverrides]);
+  }, [targetFps, unlimitedFps, gensPerFrame, unlimitedGens, activeViewer, brushColor, brushW, brushH, brushMapping, showBrushCursor, showGridlines, show2dAxes, smoothScaling, brushShape, brushRadius, brushRingWidth, brushLineWidth, brush3dVolume, brushBoxDepth, infinityCanvas, indicatorVizModes, recordFormat, captureScope, captureResolution, recordQuality, recordOverload, captureOverlays, brushSectionH, agentsFront3d, light3d, cellGaps3d, agentMetaballs, agentGlow, agentBrushRadius, agentSeedDensity, agentSeedSpacing, agentNudgeIntensity, agentBrushShape, agentBrushW, agentBrushH, agentBrushRingWidth, agentBrushLineWidth, showCaGrid, showAgents, showBonds, simulateCells, simulateAgents, brushTarget, bg2d, agentOutlines, showVision, indicatorHiddenCategories, indicatorChartOverrides]);
 
   // Manual Brush — signature-keyed merge effect. Re-derives `manualBrush`
   // whenever the cell attribute set (id+type) changes. Surviving attrs carry
@@ -3223,11 +3282,15 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
    *  NB agent SPRITES / METABALLS are drawn as plain circles here — use the "current
    *  view" scope for a WYSIWYG capture of those. Glow IS reproduced (it shares the
    *  display overlay's drawAgentGlow). Reuses `target` if given. */
-  const renderSimulationFrame = useCallback((maxSize: number, target?: HTMLCanvasElement, snapWidth = false): HTMLCanvasElement | null => {
+  const renderSimulationFrame = useCallback((maxSize: number, target?: HTMLCanvasElement, snapWidth = false, noUpscale = false): HTMLCanvasElement | null => {
     if (is3dRef.current) return null;
     const w = gridWidth.current, h = gridHeight.current;
     if (!w || !h) return null;
+    // `maxSize` normally UPSCALES a small grid (nearest-neighbour, for legibility).
+    // The `native` capture resolution means "no rescaling", which for this scope
+    // is one pixel per cell — so it caps the scale at 1 instead.
     let scale = maxSize / Math.max(w, h);
+    if (noUpscale) scale = Math.min(scale, 1);
     // Recording only (`snapWidth`): lower the width into the VP9 profile-1 fast
     // residue class so the file keeps 4:4:4 chroma — see snapRecordWidth. The
     // height comes from the SAME scale, so the aspect ratio is exact. Screenshots
@@ -3536,10 +3599,23 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
   const downscaleCapture = useCallback((
     px: { data: Uint8ClampedArray; width: number; height: number },
     maxSize: number,
+    /** Lower the output width into the VP9 profile-1 FAST residue class (see
+     *  `snapRecordWidth`) so the file keeps 4:4:4 chroma. A QUALITY choice, not
+     *  a safety one — `pickVp9Config` guards the freezing residue unconditionally
+     *  and falls back to the immune profile 0. Off for the `auto` 3D cap, whose
+     *  1280 is deliberately in the profile-0 class; on for an explicitly chosen
+     *  resolution. The height always comes from the SAME scale, so the aspect
+     *  ratio is preserved exactly. Only engages when actually downscaling. */
+    snapWidth = false,
   ): { data: Uint8ClampedArray; width: number; height: number } => {
     const long = Math.max(px.width, px.height);
     if (long <= maxSize || long === 0) return px;
-    const s = maxSize / long;
+    let s = maxSize / long;
+    if (snapWidth) {
+      const wantW = Math.max(1, Math.round(px.width * s));
+      const snapW = snapRecordWidth(wantW);
+      if (snapW !== wantW && px.width > 0) s = snapW / px.width;
+    }
     const outW = Math.max(1, Math.round(px.width * s));
     const outH = Math.max(1, Math.round(px.height * s));
     let src = downscaleSrcRef.current;
@@ -6258,6 +6334,13 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
           // NOT recordedFrames.current[0], which stays empty while streaming.
           const expected = recordDimsRef.current;
           let frame: ImageData | null = null;
+          // Long-edge cap for this run. `auto` resolves to the historical
+          // RECORD_MAX / RECORD_MAX_3D; an explicit choice replaces them and is
+          // additionally snapped into the VP9 fast residue class (see
+          // captureMaxFor). Locked for the run — the settings chip is disabled
+          // while recording — so reading the ref per frame is stable.
+          const capRes = captureResolutionRef.current;
+          const capMax = captureMaxFor(capRes, is3dRef.current);
 
           if (skipCapture) {
             // nothing to capture — the encoder would refuse it anyway
@@ -6269,7 +6352,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
             // the codebase (2D has been capped all along). Screenshots are NOT
             // capped — they keep full display resolution.
             const px = capture3dPixels() ?? gl3dRef.current.readPixels();
-            const scaled = downscaleCapture(px, RECORD_MAX_3D);
+            const scaled = downscaleCapture(px, capMax, capRes !== 'auto');
             if (!expected || (scaled.width === expected.w && scaled.height === expected.h)) {
               forceFrameOpaque(scaled.data);
               frame = new ImageData(scaled.data, scaled.width, scaled.height);
@@ -6281,7 +6364,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
             // (colours buffer for the grid + the agent snapshot), reusing a persistent
             // offscreen (RECORD_MAX-bounded). getImageData on a never-displayed canvas
             // is safe (no willReadFrequently de-opt).
-            const off = renderSimulationFrame(RECORD_MAX, simCaptureRef.current ?? undefined, true);
+            const off = renderSimulationFrame(capMax, simCaptureRef.current ?? undefined, true, capRes === 'native');
             if (off) {
               simCaptureRef.current = off;
               frame = off.getContext('2d')!.getImageData(0, 0, off.width, off.height);
@@ -6298,7 +6381,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
               // fast residue class so the recording keeps 4:4:4 chroma (see
               // snapRecordWidth). The height is derived from the SAME scale, so
               // the aspect ratio is preserved exactly.
-              let s = Math.min(1, RECORD_MAX / Math.max(dc.width, dc.height));
+              let s = Math.min(1, capMax / Math.max(dc.width, dc.height));
               const wantW = Math.max(1, Math.round(dc.width * s));
               const snapW = snapRecordWidth(wantW);
               if (snapW !== wantW && dc.width > 0) s = snapW / dc.width;
@@ -11477,47 +11560,17 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
         setEncodingWebM(false);
       }
     } else {
-      const fw = frames[0]!.width;
-      const fh = frames[0]!.height;
-      // Downscale large grids to max 512px (GIF only — WebM keeps native size).
-      const maxDim = 512;
-      let outW = fw, outH = fh;
-      if (fw > maxDim || fh > maxDim) {
-        const s = maxDim / Math.max(fw, fh);
-        outW = Math.round(fw * s);
-        outH = Math.round(fh * s);
+      // DEV-only: keep the captured frames reachable so the delta optimisation
+      // can be A/B'd on REAL content (re-encode the same frames with `delta` /
+      // `mergeIdentical` off and compare sizes + decoded pixels). Dropped in a
+      // production build, and overwritten by the next recording.
+      if (import.meta.env.DEV) {
+        (window as unknown as { __lastGifFrames?: ImageData[] }).__lastGifFrames = frames.slice();
       }
-      const gif = GIFEncoder();
-      const delay = Math.round(1000 / fps);
-      const needsScale = outW !== fw || outH !== fh;
-      let scaleCanvas: HTMLCanvasElement | null = null;
-      let scaleCtx: CanvasRenderingContext2D | null = null;
-      let srcCanvas: HTMLCanvasElement | null = null;
-      let srcCtx: CanvasRenderingContext2D | null = null;
-      if (needsScale) {
-        scaleCanvas = document.createElement('canvas');
-        scaleCanvas.width = outW; scaleCanvas.height = outH;
-        scaleCtx = scaleCanvas.getContext('2d')!;
-        scaleCtx.imageSmoothingEnabled = false;
-        srcCanvas = document.createElement('canvas');
-        srcCanvas.width = fw; srcCanvas.height = fh;
-        srcCtx = srcCanvas.getContext('2d')!;
-      }
-      for (const frame of frames) {
-        let rgba: Uint8ClampedArray;
-        if (needsScale && scaleCtx && scaleCanvas && srcCtx && srcCanvas) {
-          srcCtx.putImageData(frame, 0, 0);
-          scaleCtx.drawImage(srcCanvas, 0, 0, outW, outH);
-          rgba = scaleCtx.getImageData(0, 0, outW, outH).data;
-        } else {
-          rgba = frame.data;
-        }
-        const palette = quantize(rgba, 256);
-        const indexed = applyPalette(rgba, palette);
-        gif.writeFrame(indexed, outW, outH, { palette, delay });
-      }
-      gif.finish();
-      const blob = new Blob([gif.bytes()], { type: 'image/gif' });
+      const { blob, stats } = encodeFramesToGif(frames, fps, {
+        maxSize: gifMaxSizeFor(captureResolutionRef.current),
+      });
+      if (import.meta.env.DEV) console.info('[recording] GIF', stats);
       await saveRecording(blob, `${fname}_recording.gif`);
     }
     resetRecordingState();
@@ -13247,6 +13300,9 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
             // Locked from Start to Stop like everything else here, so the chip has
             // to say whether the run is capturing the cursor layers.
             ...(!overlaysUnavailable && captureOverlays !== 'off' ? [captureOverlays === 'all' ? '+cursor' : '+rings'] : []),
+            // Only when it is NOT the default — the chip stays short for the
+            // common case, and says so whenever a run is capped by hand.
+            ...(captureResolution !== 'auto' ? [captureResolution] : []),
           ];
           // Every setting is frozen from Start to Stop (the encoder requires it),
           // so while recording the chip is a read-only readout of what is running.
@@ -13396,6 +13452,32 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
                         ],
                         effWebm ? 'webm' : 'gif',
                         setRecordFormat,
+                        false,
+                      )}
+                    </div>
+
+                    {/* Recording resolution. Screenshots are deliberately NOT
+                        affected \u2014 they keep full display resolution. A WebM width
+                        is snapped into the VP9 profile-1 fast residue class
+                        whatever is chosen here (see captureMaxFor), so a hand-set
+                        size can never land the encoder on the freezing one. */}
+                    <div
+                      className={styles.captureRow}
+                      title={effWebm
+                        ? 'Long edge of a recorded frame. Widths are snapped a few pixels to keep full-resolution colour. Screenshots always keep full display resolution.'
+                        : 'Long edge of a recorded frame. A GIF holds every frame in memory until you stop, so large sizes cost a lot \u2014 capped at 1024 px. Screenshots always keep full display resolution.'}
+                    >
+                      <span>Resolution</span>
+                      {captureSegment(
+                        [
+                          { label: 'Auto', value: 'auto' as CaptureResolution, title: effWebm ? 'Auto: 912 px in 2D, 1280 px in 3D.' : 'Auto: 512 px \u2014 the historical GIF size.' },
+                          { label: '480', value: '480' as CaptureResolution, title: 'Cap the long edge at 480 px \u2014 small files, fastest to encode.' },
+                          { label: '720', value: '720' as CaptureResolution, title: 'Cap the long edge at 720 px.' },
+                          { label: '1080', value: '1080' as CaptureResolution, title: `Cap the long edge at 1080 px${effWebm ? '.' : ' \u2014 a large GIF; consider WebM.'}` },
+                          { label: 'Native', value: 'native' as CaptureResolution, title: 'No rescaling: the view at its own pixel size, or the whole grid at one pixel per cell. Capped at 2048 px.' },
+                        ],
+                        captureResolution,
+                        setCaptureResolution,
                         false,
                       )}
                     </div>
