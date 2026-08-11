@@ -24,6 +24,7 @@ import { MULTI_ATTR_TYPES, buildExtraSlotPorts } from './compiler/multiAttrExpan
 import { buildCensusPorts } from './compiler/censusExpand';
 import { buildBondAttrPorts } from './bondAttrPorts';
 import { applyLookupAxisPorts } from './nodes/LookupInteractionNode';
+import { buildInputParamPorts, isInputMappingRoot } from '../../model/inputMappingParams';
 
 export interface EffectivePorts {
   inputs: PortDef[];
@@ -108,6 +109,16 @@ export function getEffectivePorts(
   if (nodeType === 'formBond') {
     const extra = buildBondAttrPorts(nodeType, model);
     inputs = [...inputs, ...extra.inputs];
+  }
+
+  // Input Mapping roots (cell `inputColor` / `agentInputMapping`): one value
+  // output per resolved CHANNEL of the referenced mapping's declared
+  // `parameters`. No declared parameters ⇒ the legacy colour parameter ⇒ the
+  // historical R/G/B ports. Same shared builder as CaNode
+  // (buildInputParamPorts — the buildExtraSlotPorts dual-consumption pattern).
+  if (isInputMappingRoot(nodeType)) {
+    const extra = buildInputParamPorts(nodeType, cfg, model);
+    outputs = [...outputs, ...extra.outputs];
   }
 
   // Table Lookup: shape the index inputs per the referenced table — legacy

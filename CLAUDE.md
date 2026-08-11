@@ -2325,6 +2325,109 @@ the wrong direction would compile to a pass nothing ever runs).
   reverting any of the three widened `singleAgent` branches (the leading `idx`, the bond slice, the
   `w_` aliasing) fails 4-8 checks.
 
+### Parameterized Input Mappings — PHASE 1 (engine + brush; branch `polishing`)
+
+*"We must abolish the assumption that input mappings will have r,g,b."* A C→A mapping may now
+declare its own named **parameters** (name + type); each becomes value-output ports on its event
+root and one type-adaptive widget in the brush panel. Design authority:
+[docs/IMPACT_MAP_PARAM_INPUT_MAPPINGS.md](docs/IMPACT_MAP_PARAM_INPUT_MAPPINGS.md) +
+[PLAN_PARAM_INPUT_MAPPINGS.md](docs/PLAN_PARAM_INPUT_MAPPINGS.md) (+ `.html` mockup).
+**Phase 1 is deliberately USER-INVISIBLE** — the whole engine path works, but there is no editor to
+DECLARE parameters yet (Phase 2), so every model still resolves LEGACY. Phase 3 adds the image
+channel→parameter step + the docs sweep.
+
+- **`src/model/inputMappingParams.ts` is THE RESOLVER — the single source of truth.** NOTHING else
+  may read `mapping.parameters` (only the reducer and, from Phase 2, the editor). A grep for
+  `\.parameters` outside it should stay that short. **⚠ `undefined` ≠ `[]`**: absent means the
+  LEGACY colour parameter, an EMPTY array means deliberately no parameters (a stamp that ignores the
+  brush) — any `parameters?.length ? … : legacy` test silently mis-classifies `[]`, which is exactly
+  why the distinction is made in ONE place. The `resolveMaxBonds` / `resolveAxes` discipline.
+- **THE LOAD-BEARING ABSTRACTION: a parameter has N CHANNELS** — `color` → 3, every other type → 1.
+  The port list, the ABI argument list and the paint `values` payload are ALL the flat channel list,
+  in declared order. A `color` parameter is therefore THREE integer channel ports (`tint_r/_g/_b`),
+  **not** a composite `color` port: the legacy default must expose ports named exactly `r`/`g`/`b`
+  (or every existing wire's `output_value_r` handle dangles), an entry root that ORIGINATES a
+  composite is a new producer kind `expandComposites` has no vocabulary for, and the ABI is a flat
+  list of numbers either way. The brush still shows ONE `ColorField` for it — the split is an engine
+  detail, not a UI one.
+- **THE GOVERNING SAFETY PRINCIPLE — absent `parameters` ⇒ byte-identical emit on every surface.**
+  The legacy resolution mints one `color` parameter whose channel ports are `r`/`g`/`b`, whose JS
+  ABI names are `_r`/`_g`/`_b` and whose WASM params are indices 1/2/3 as **i32**. The JS header and
+  the single-line triple-`const` alias fall out of the generic channel loop with NO branch, so
+  `check-compile-identity` is **29 models, zero diffs** — verified at every step, and proven
+  load-bearing by a source mutation (joining the alias line with two spaces instead of one produces
+  9 diffs). **RESOLVER, NOT MIGRATION** (D1): the correct legacy value is a CONSTANT, not something
+  inferred from usage, so no `.gcaproj` is rewritten and load→save is unchanged.
+- **Dynamic ports.** Both roots' `def.ports` shrink to just `do`; `buildInputParamPorts` is the ONE
+  builder consumed by BOTH `effectivePorts.getEffectivePorts` AND `CaNode`'s derivation (the
+  `buildCensusPorts` / `buildExtraSlotPorts` dual-consumption discipline — if those drift,
+  drag-and-drop offers ports the canvas never renders). Handle remeasure is free: CaNode's
+  `portIdSignature` effect already fires `updateNodeInternals` on any port-set change.
+  `getEffectivePortsForType` forwards no model, so the builder returns the LEGACY shape with none —
+  also the right answer for a freshly-dropped root (`mappingId: ''`).
+- **STALE EDGES ARE REPORTED, NEVER REPOINTED** (the `STALE_SLOT_HANDLE` rule). An edge leaving a
+  root through a channel port the parameters no longer produce would resolve to `_v<rootId>_<goneKey>`
+  — an identifier no alias line declares. `detectDanglingRefs(nodes, model, edges?)` gained an
+  optional EDGES argument (both compile call sites pass it) and names it:
+  *"…is wired from a parameter its mapping no longer declares (energy)"*; `detectMissingConfig`
+  badges the same case in the Modeler (it reads the connected-handle set, which carries OUTPUT
+  handles too), and separately badges a WIRED root whose mapping declares `[]`.
+- **WASM — the highest-risk surface, and why it is not clamped to JS.** `EntryPointOpts.paramOutputs`
+  became `Record<string, LocalRef>` so each channel's VALTYPE travels with it, updated at **BOTH**
+  mirrored registration sites (the second runs after the per-cell cache clear). A parameterized entry
+  mints a function type PER ARITY — `(i32 idx, f64 c0 … f64 cN)`, appended AFTER the fixed type block
+  (`baseTypeCount` mirrors the `sparse` branch) so a legacy module's type section is untouched;
+  legacy keeps `TYPE_IDX_IDX_RGB` verbatim. **Uniform f64 for every declared channel** rather than
+  per-type i32/f64: one arity key, matches the JS + agent ABIs, and exact for every integer/bool/tag
+  value a brush can produce (≤ 2⁵³). Emitting on WASM at all is NOT optional: `importImage` runs the
+  input-mapping fn ONCE PER CELL over the whole grid (25 M invocations at 5000²) — paint is event
+  tempo, image import is not, so a JS clamp would be a silent performance cliff. **⚠ A wrong valtype
+  here does not crash** — it reinterprets an f64 param's bits as an i32 local and produces plausible,
+  deterministic garbage.
+- **⚠ THERE IS NO WebGPU INPUT-MAPPING SHADER** (a code-reality finding that shrank the scope): the
+  WGSL emit produces only `step`, `init` and `outputMapping_<id>`. On the WebGPU target a paint is
+  `readbackAttrs` → the **JS** fn on the CPU → `patchWebGPUCells`. **The compile surfaces are JS +
+  WASM for cells and JS only for agents.** (`webgpu/compile.ts`'s comment and CLAUDE.md's own WASM
+  section still list "inputColor" among the entry-point shaders — Phase 3 deletes both claims.)
+- **The worker payload is MESSAGE-LEVEL `values: number[]`** (D5), on `PaintMsg` AND
+  `PaintAgentsColorMsg` — so the cell and agent messages are structurally IDENTICAL, and the per-cell
+  `r,g,b` is gone (all five producers read one brush state per stroke, so it was dead generality plus
+  an allocation per painted cell). Legacy resolves to `[r, g, b]`, so both handlers' spreads are the
+  historical calls. **The colour read moved from the five producers to the FLUSH** — one read per
+  stroke, and a mid-drag change now lands on the rest of the stroke (the Manual Brush's rule).
+- **`importImage` (Phase 1 shape).** A LEGACY mapping is UNCHANGED (no `values` field ⇒ the per-cell
+  payload is exactly the pixel's `[r, g, b]`). A PARAMETERIZED mapping gets the brush panel's current
+  values as a BASELINE with the pixel's R/G/B written over the first three channels — the sensible
+  auto-assignment. The explicit per-channel source picker (pixel r/g/b/a/lum vs constant) is Phase 3.
+- **Brush panel.** `InputParamsPanel` ([src/simulator/InputParamsPanel.tsx](src/simulator/InputParamsPanel.tsx))
+  is the sibling of `ManualBrushPanel`, used by the cell brush AND the agent Paint brush. Two
+  deliberate differences from Manual, which their opposite semantics require: **no per-row checkbox**
+  (a parameter is an ARGUMENT — always passed) and a `color` parameter is ONE `ColorField`. The
+  modifier+RMB colour popover and the "Shift+RMB color" hint are **hidden** for a parameterized
+  mapping — there is no brush colour to edit, and an enabled-but-inert control is the one thing the
+  UI must not do (binding it to a chosen colour parameter is Phase 2).
+- **Persistence (D6)** mirrors the Manual Brush exactly: declared values live in a per-model
+  `genesisca_input_params_v1:<modelName>` key as `Record<mappingId, Record<paramKey, string>>`, with
+  a signature-keyed merge over every C→A mapping × its parameters' key AND type (so a retype
+  re-derives one row while a rename leaves brush state alone). **No `SimulationState` field, no
+  `fileOperations` change** — the LEGACY colour keeps living in `brushColor`, so every existing
+  `.gcastate` and "Save with simulator controls" round-trips unchanged. *(Deviation from the impact
+  map, which sketched the store keyed by CHANNEL: keying by PARAMETER is the same information and
+  lets a `color` parameter round-trip as the one hex its widget edits.)*
+- **Gate — [scripts/test-param-input-mappings.mjs](scripts/test-param-input-mappings.mjs) (62 checks).**
+  The library gives ZERO coverage for the new path (every shipped model has `parameters` absent), so
+  byte-identity proves we broke nothing and proves NOTHING about whether the feature works. This
+  builds models in memory and asserts **VALUES** through the real compiled fns on JS **and a real
+  instantiated WASM module in Node**: the resolver's legacy shape, channel order, `[]` ≠ `undefined`,
+  the two port builders agreeing, the legacy emit SHAPE + the `(i32,i32,i32,i32)` type, a
+  6-channel round-trip (JS exact, WASM bit-identical), the minted `(i32, f64×6)` type, the stale-edge
+  error + badge, a zero-channel entry that still paints, and the agent twin. **⚠ Check 5 — a `float`
+  parameter carrying `0.1` (and `1/3`) arriving intact — is the ONLY gate that catches a stale
+  `valtype: I32`; write it first.** **Negative-controlled by SOURCE MUTATION**: forcing `paramRefs`
+  back to I32 fails 2 checks (the module stops validating), and forcing the WHOLE parameterized ABI
+  to i32 — which VALIDATES and RUNS — fails 7, with `2.5` arriving as `2` and `0.1` as `0`, exactly
+  the predicted silent-garbage mode.
+
 **B — agent sprites (an optional exhibition layer; static image / animated GIF/WebP per agent).** `CAModel.sprites?: SpriteAsset[]` ([types.ts](src/model/types.ts): `{ id, name, dataUrl, mimeType, scale?, loop? }`) — additive, travels in the `.gcaproj` as a base64 data URL. `ADD/DUPLICATE/REMOVE/UPDATE/REORDER_SPRITE(S)` reducers ([ModelContext.tsx](src/model/ModelContext.tsx)); `REMOVE_SPRITE` cascades `clearDeletedId('spriteId')` over `setAgentSprite` nodes. **Decode is MAIN-THREAD only** ([spriteRegistry.ts](src/simulator/spriteRegistry.ts)) via WebCodecs **`ImageDecoder`** (animated GIF/WebP/PNG natively — NO new dependency; the project already uses WebCodecs for WebM recording) → `ImageBitmap[]`, with a `createImageBitmap` single-frame fallback; the worker never carries the pixels. The **`SpriteRegistry`** (keyed by sprite id, re-decodes only changed `dataUrl`s, `onReady` redraws) is owned by SimulatorView and reconciled on `model.sprites` change. **Sprite Library** UI = a "Sprites" section in the Mappings panel, **MASTER-DETAIL + DRAGGABLE, the same shape as the mappings above it** (the `767541b` agent-views conversion applied to sprites; import png/jpeg/gif/webp ≤4 MB / a frame SEQUENCE / a sprite SHEET, ≤4 MB each). The LIST is a `listItem` row per asset — a 24px thumbnail (the row's identity — a sprite is a picture), the name, a `Nf` frame-count badge for a multi-frame asset, and a `⋮⋮` reorder handle — with `+ Image / GIF` / `+ Frame sequence` / `+ Sprite sheet` / **Duplicate** / **Delete** in the button row (the last two disabled until a row is selected). The selected asset's editor (name, size×, loop, sheet-slicing grid, the rotation block + `CompassDial`, the chroma key + its click-the-image `SpriteBgPicker`) opens in the SHARED second detail panel.
   - **The Mappings panel's ONE detail slot is now THREE-way discriminated**: a bare id = a CELL mapping, `agentmap:<id>` = an agent view, **`sprite:<id>` = a Sprite Library asset** — so picking in any layer deselects the others for free. ⚠ **`ModelerView.selectedItemName` MUST resolve the `sprite:` prefix** (against `model.sprites`) or the detail `PanelShell` — gated on `detailItemName != null` — never mounts and clicking a row does NOTHING visible; the same trap the agent-attributes and agent-views conversions each hit.
   - **Auto-select is keyed on `sprites.length`, NOT the array** (`model.sprites ?? []` mints a fresh `[]` every render), so every append path — the three imports AND Duplicate — opens the new asset's editor straight away. `DUPLICATE_SPRITE` deep-clones the whole asset (data URL, frames, sheet spec, rotation + chroma settings) with a fresh id + " (copy)" and APPENDS.

@@ -64,7 +64,12 @@ import { InspectBondPopover, type BondPopoverState, type BondStateValues } from 
 import { PresetSaveDialog } from './PresetSaveDialog';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { serializeSimState, serializePreset, downloadStateFile, readStateFile, downloadPresetFile, readPresetFile, saveBinaryFile, base64ToArrayBuffer, deserializeTypedArray, migrateSimulationStateV1toV2, deserializeAgentState } from '../model/fileOperations';
-import type { Attribute, CAModel, IndicatorChartSettings, Preset, SimulationState } from '../model/types';
+import type { Attribute, CAModel, IndicatorChartSettings, Mapping, Preset, SimulationState } from '../model/types';
+import {
+  inputParamsOf, encodeChannelValues, paramFallbackValue,
+  type InputParamValues,
+} from '../model/inputMappingParams';
+import { InputParamsPanel } from './InputParamsPanel';
 import { decodeAttrValue } from '../model/attrValueEncoding';
 import { cbNum } from '../model/centerBased';
 import { resolveAgentProfile } from '../model/agentCapabilities';
@@ -1117,6 +1122,51 @@ function saveManualBrush(modelName: string, state: ManualBrushModelState): void 
   } catch { /* localStorage full */ }
 }
 
+// Parameterized Input Mappings — per-PARAMETER brush values, keyed by mapping id
+// then parameter key. Per-model (parameter keys are model-specific), so its own
+// localStorage entry, mirroring the Manual Brush exactly (D6): these are per-user
+// BRUSH state, not model state, so they are deliberately NOT in `SimulationState`
+// / `.gcastate` / presets. The LEGACY colour parameter keeps living in
+// `brushColor` (which IS in SimulationState), so every existing state file and
+// every "Save with simulator controls" keeps round-tripping unchanged.
+export type InputParamsModelState = Record<string /* mappingId */, InputParamValues>;
+const INPUT_PARAMS_KEY_PREFIX = 'genesisca_input_params_v1:';
+function inputParamsStorageKey(modelName: string): string {
+  return INPUT_PARAMS_KEY_PREFIX + (modelName.trim() || '__unnamed__');
+}
+function loadInputParams(modelName: string): InputParamsModelState | null {
+  try {
+    const raw = localStorage.getItem(inputParamsStorageKey(modelName));
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed as InputParamsModelState;
+  } catch { /* ignore */ }
+  return null;
+}
+function saveInputParams(modelName: string, state: InputParamsModelState): void {
+  try {
+    localStorage.setItem(inputParamsStorageKey(modelName), JSON.stringify(state));
+  } catch { /* localStorage full */ }
+}
+
+/** The flat CHANNEL payload a paint message carries for one mapping.
+ *  LEGACY (no declared `parameters`) → exactly `[r, g, b]` from the colour
+ *  picker, i.e. the historical payload. Otherwise → the declared parameters'
+ *  current brush values, encoded channel by channel. The ONE place the two
+ *  brushes (cell + agent) decide what to send. */
+function brushChannelValues(
+  mapping: Mapping | undefined,
+  legacyHex: string,
+  store: InputParamsModelState | undefined,
+): number[] {
+  const resolved = inputParamsOf(mapping);
+  if (resolved.legacy) {
+    const c = hexToRgba(legacyHex, { r: 0, g: 0, b: 0, a: 255 });
+    return [c.r, c.g, c.b];
+  }
+  return encodeChannelValues(resolved, mapping ? store?.[mapping.id] : undefined);
+}
+
 // Bond-Graph Agents — seed-config attribute values are per-model (attr ids are
 // model-specific), so they get their own localStorage key, separate from the
 // global genesisca_sim_settings (which holds the radius/density/spacing/type).
@@ -1720,6 +1770,33 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
   const [manualBrush, setManualBrush] = useState<ManualBrushModelState>({});
   const manualBrushRef = useRef<ManualBrushModelState>({});
   useEffect(() => { manualBrushRef.current = manualBrush; }, [manualBrush]);
+  // Parameterized Input Mappings — the brush values of every DECLARED parameter,
+  // keyed by mapping id then parameter key. Covers the cell AND the agent brush
+  // (mapping ids are globally unique), so both panels read one store.
+  const [inputParamValues, setInputParamValues] = useState<InputParamsModelState>({});
+  const inputParamValuesRef = useRef<InputParamsModelState>({});
+  useEffect(() => { inputParamValuesRef.current = inputParamValues; }, [inputParamValues]);
+  // Live C→A mapping lists, so the paint flushes (which have empty dep arrays)
+  // can resolve the mapping a queued stroke belongs to. Assigned during render
+  // (the `agentBrushModesRef` precedent) — a flush always sees the current model.
+  const inputMappingsRef = useRef<Mapping[]>([]);
+  const agentInputMappingsRef = useRef<Mapping[]>([]);
+  inputMappingsRef.current = model.mappings.filter(m => !m.isAttributeToColor);
+  agentInputMappingsRef.current = (model.agentMappings ?? []).filter(m => !m.isAttributeToColor);
+  /** Does the ACTIVE cell brush mapping still use the legacy colour parameter?
+   *  Gates the modifier+RMB colour popover: with declared parameters there is no
+   *  brush COLOUR for it to edit, so showing it would be an enabled-but-inert
+   *  control. (Binding it to a chosen `color` parameter is Phase 2 work.) */
+  const activeInputLegacyRef = useRef(true);
+  /** The `importImage` channel baseline for one mapping: `undefined` for a LEGACY
+   *  mapping (whose per-cell payload is exactly the pixel's `[r, g, b]`, i.e. the
+   *  historical import), else the brush panel's current parameter values. */
+  const imageImportBaseline = useCallback((mappingId: string): number[] | undefined => {
+    const mapping = inputMappingsRef.current.find(m => m.id === mappingId);
+    const resolved = inputParamsOf(mapping);
+    if (resolved.legacy) return undefined;
+    return encodeChannelValues(resolved, mapping ? inputParamValuesRef.current[mapping.id] : undefined);
+  }, []);
   // Bond-Graph Agents — seed-config per-attribute initial values (same shape +
   // merge discipline as Manual Brush; per-model persisted). Unchecked rows seed
   // the engine default; the enabled ones become the seedAgents `sets` payload.
@@ -2467,6 +2544,47 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
     setManualBrush(next);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [manualBrushModelKey, cellAttrSig]);
+
+  // Parameterized Input Mappings — signature-keyed merge, the Manual Brush's
+  // discipline applied to declared parameters. The signature spans every C→A
+  // mapping (cell + agent) × its parameters' key AND type, so a parameter added /
+  // removed / RETYPED re-derives just that row while a live rename (which changes
+  // only `name`) leaves brush state alone. A mapping with no declared parameters
+  // resolves LEGACY and contributes nothing — its value lives in `brushColor`.
+  const inputParamSig = useMemo(() => {
+    const parts: string[] = [];
+    for (const m of [...model.mappings, ...(model.agentMappings ?? [])]) {
+      if (m.isAttributeToColor) continue;
+      const resolved = inputParamsOf(m);
+      if (resolved.legacy) continue;
+      parts.push(m.id + '=' + resolved.params.map(p => `${p.param.key}:${p.param.type}`).join(','));
+    }
+    return parts.join('|');
+  }, [model.mappings, model.agentMappings]);
+  useEffect(() => {
+    const stored = loadInputParams(manualBrushModelKey) ?? {};
+    const next: InputParamsModelState = {};
+    for (const m of [...model.mappings, ...(model.agentMappings ?? [])]) {
+      if (m.isAttributeToColor) continue;
+      const resolved = inputParamsOf(m);
+      if (resolved.legacy) continue;
+      const prevMap = stored[m.id] ?? {};
+      const entry: InputParamValues = {};
+      for (const { param } of resolved.params) {
+        const prev = prevMap[param.key];
+        entry[param.key] = typeof prev === 'string' && prev !== '' ? prev : paramFallbackValue(param);
+      }
+      next[m.id] = entry;
+    }
+    setInputParamValues(next);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [manualBrushModelKey, inputParamSig]);
+
+  // …and its debounced persistence (per-model, its own localStorage entry).
+  useEffect(() => {
+    const t = setTimeout(() => saveInputParams(manualBrushModelKey, inputParamValues), 300);
+    return () => clearTimeout(t);
+  }, [manualBrushModelKey, inputParamValues]);
 
   // Manual Brush — debounced persistence (per-model, separate localStorage entry).
   useEffect(() => {
@@ -3409,7 +3527,9 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
   // partial batch isn't lost. Different mappingIds within one batch are
   // flushed eagerly (rare in practice — only when the user changes brush
   // mid-drag, which already breaks the Bresenham line at lastPaintGrid reset).
-  const pendingPaintCells = useRef<Array<{ row: number; col: number; layer?: number; r: number; g: number; b: number }>>([]);
+  // Cells only — the brush VALUES ride the message, not each cell (all producers
+  // read one brush state per stroke, so a per-cell copy was dead generality).
+  const pendingPaintCells = useRef<Array<{ row: number; col: number; layer?: number }>>([]);
   const pendingPaintMapping = useRef<string | null>(null);
   const pendingPaintViewer = useRef<string>('');
   const pendingPaintRaf = useRef<number | null>(null);
@@ -6614,6 +6734,10 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
           type: 'importImage',
           pixels,
           mappingId: pendingImageMapping.current,
+          // Parameterized mappings only (absent for legacy): the brush panel's
+          // current channel payload, over which the worker writes each pixel's
+          // R/G/B into the first three channels. See the worker's applyImageCell.
+          values: imageImportBaseline(pendingImageMapping.current),
           activeViewer: activeViewerRef.current,
         },
         { transfer: [pixels.buffer] },
@@ -8176,11 +8300,10 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       return mapStampToPlane(center, cells.map(c => [c.row, c.col] as [number, number]));
     };
     const paintLine3d = (anchor: Cell, end: Cell) => {
-      const { r, g, b } = hexToRgb(brushColorRef.current);
       pendingPaintMapping.current = brushMappingRef.current;
       pendingPaintViewer.current = activeViewerRef.current;
       for (const c of lineFootprint(anchor, end, brushLineWidthRef.current)) {
-        pendingPaintCells.current.push({ row: c.row, col: c.col, layer: c.layer, r, g, b });
+        pendingPaintCells.current.push({ row: c.row, col: c.col, layer: c.layer });
       }
       flushPaintBatch();
     };
@@ -9987,8 +10110,15 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
     const rgb = pendingAgentPaintColor.current;
     pendingAgentPaintMapping.current = null;
     if (!mappingId || !rgb) return;
+    // Same CHANNEL payload as the cell brush (the two messages are structurally
+    // identical by design). Legacy → [r, g, b] from the captured stroke colour.
+    const values = brushChannelValues(
+      agentInputMappingsRef.current.find(m => m.id === mappingId),
+      rgbaToHex(rgb),
+      inputParamValuesRef.current,
+    );
     workerRef.current?.postMessage({
-      type: 'paintAgentsColor', ids, r: rgb.r, g: rgb.g, b: rgb.b, mappingId,
+      type: 'paintAgentsColor', ids, values, mappingId,
       activeViewer: activeViewerRef.current,
     });
   }, []);
@@ -10491,8 +10621,8 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
    *  infinity mode, individual cell coords are wrapped modulo grid size so the
    *  worker's paint handler (which drops out-of-bounds row/col) doesn't
    *  silently lose the cells of a stamp that straddles a tile seam. */
-  const brushCellsAt = useCallback((row: number, col: number, r: number, g: number, b: number) => {
-    const cells: Array<{ row: number; col: number; r: number; g: number; b: number }> = [];
+  const brushCellsAt = useCallback((row: number, col: number) => {
+    const cells: Array<{ row: number; col: number }> = [];
     const infinity = infinityCanvasRef.current && boundaryTreatmentRef.current === 'torus';
     const gw = gridWidth.current;
     const gh = gridHeight.current;
@@ -10503,7 +10633,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
         cellRow = ((cellRow % gh) + gh) % gh;
         cellCol = ((cellCol % gw) + gw) % gw;
       }
-      cells.push({ row: cellRow, col: cellCol, r, g, b });
+      cells.push({ row: cellRow, col: cellCol });
     }
     return cells;
   }, [currentStampOffsets]);
@@ -10539,7 +10669,17 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       workerRef.current?.postMessage({ type: 'paintManual', cells: trimmedCells, sets, activeViewer: viewer });
       return;
     }
-    workerRef.current?.postMessage({ type: 'paint', cells, mappingId, activeViewer: viewer });
+    // Parameterized Input Mappings: the brush payload is the mapping's resolved
+    // CHANNEL list, read ONCE here (the Manual branch's flush-time snapshot rule,
+    // now applied to the colour path too — a mid-drag colour/widget change lands
+    // on the rest of the stroke). A LEGACY mapping resolves to [r, g, b] from the
+    // colour picker, i.e. exactly the historical payload.
+    const values = brushChannelValues(
+      inputMappingsRef.current.find(m => m.id === mappingId),
+      brushColorRef.current,
+      inputParamValuesRef.current,
+    );
+    workerRef.current?.postMessage({ type: 'paint', cells, mappingId, values, activeViewer: viewer });
   }, []);
 
   // 3D Grid CA: map 2D brush-stamp offsets (dRow,dCol) onto the current brush
@@ -10577,14 +10717,13 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
   // clip. Mirrors brushCellsAt + paintAt's Bresenham, lifted to 3 axes.
   paint3dRef.current = (hitLayer: number, hitRow: number, hitCol: number) => {
     const axis = plane3dRef.current.axis;
-    const { r, g, b } = hexToRgb(brushColorRef.current);
     const offsets = currentStampOffsets3d();
     // mapStampToPlane maps each offset onto the plane's free axes (+ torus wrap).
     // In volumetric ("Extrapolate plane") mode the offsets carry a 3rd `dl` that
     // mapStampToPlane applies to the FIXED axis, so the shape grows into depth.
     const stampAt = (L: number, R: number, C: number): void => {
       for (const c of mapStampToPlane({ layer: L, row: R, col: C }, offsets)) {
-        pendingPaintCells.current.push({ row: c.row, col: c.col, layer: c.layer, r, g, b });
+        pendingPaintCells.current.push({ row: c.row, col: c.col, layer: c.layer });
       }
     };
 
@@ -10644,8 +10783,10 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
   const paintAt = useCallback((clientX: number, clientY: number) => {
     const center = screenToGrid(clientX, clientY);
     if (!center) return;
-    const { r, g, b } = hexToRgb(brushColorRef.current);
-    let allCells: Array<{ row: number; col: number; r: number; g: number; b: number }> = [];
+    // The brush VALUES are read ONCE per flush (see flushPaintBatch), not per
+    // producer — so a mid-stroke widget/colour change lands on the rest of the
+    // stroke, and the payload is message-level rather than per cell.
+    let allCells: Array<{ row: number; col: number }> = [];
     const prev = lastPaintGrid.current;
     if (prev && (prev.row !== center.row || prev.col !== center.col)) {
       const gw = gridWidth.current;
@@ -10679,10 +10820,10 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
           cellR = ((cellR % gh) + gh) % gh;
           cellC = ((cellC % gw) + gw) % gw;
         }
-        allCells = allCells.concat(brushCellsAt(cellR, cellC, r, g, b));
+        allCells = allCells.concat(brushCellsAt(cellR, cellC));
       }
     } else {
-      allCells = brushCellsAt(center.row, center.col, r, g, b);
+      allCells = brushCellsAt(center.row, center.col);
     }
     lastPaintGrid.current = center;
     if (allCells.length === 0) return;
@@ -10710,7 +10851,6 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
    *  batch through the same pending-paint pipeline as drag strokes (so the
    *  Manual Brush branch and mapping/viewer bookkeeping apply unchanged). */
   const paintLine = useCallback((from: { row: number; col: number }, to: { row: number; col: number }) => {
-    const { r, g, b } = hexToRgb(brushColorRef.current);
     const infinity = infinityCanvasRef.current && boundaryTreatmentRef.current === 'torus';
     const gw = gridWidth.current;
     const gh = gridHeight.current;
@@ -10730,7 +10870,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
         row = ((row % gh) + gh) % gh;
         col = ((col % gw) + gw) % gw;
       }
-      return { row, col, r, g, b };
+      return { row, col };
     });
     if (cells.length === 0) return;
     const curMapping = brushMappingRef.current;
@@ -11109,14 +11249,17 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
         e.preventDefault();
         lineAnchorRef.current = null;
         draw();
-      } else if (e.button === 2 && (e.ctrlKey || e.altKey || e.shiftKey || e.metaKey) && brushMappingRef.current !== MANUAL_BRUSH_MAPPING_ID) {
+      } else if (e.button === 2 && (e.ctrlKey || e.altKey || e.shiftKey || e.metaKey)
+        && brushMappingRef.current !== MANUAL_BRUSH_MAPPING_ID && activeInputLegacyRef.current) {
         // Modifier+RMB = open the in-page brush color popover at the cursor.
         // Any modifier is accepted (Ctrl, Shift, Alt, Meta) because plain Ctrl+RMB
         // gets swallowed on some Windows/Chrome combos (observed on ABNT2/Brazilian
         // layouts where AltGr=Ctrl+Alt works but Ctrl alone does not). Shift+RMB,
         // Alt+RMB, Ctrl+Shift+RMB all work too. Suppressed when Manual Brush is
         // active — Manual has no color picker, so falling through to RMB pan is
-        // the natural behaviour.
+        // the natural behaviour — and likewise when the active mapping declares
+        // its own PARAMETERS (there is no brush colour to edit; its widgets live
+        // in the panel).
         e.preventDefault();
         setColorPopover({ x: e.clientX, y: e.clientY });
       } else if (e.button === 2) {
@@ -12659,7 +12802,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
         const sets = buildSets();
         if (sets.length > 0) workerRef.current?.postMessage({ type: 'paintManual', cells: maskCells(offRow, offCol), sets, activeViewer: activeViewerRef.current });
       } else {
-        workerRef.current?.postMessage({ type: 'importImage', pixels, mappingId, region: { row: offRow, col: offCol, w: cols, h: rows }, activeViewer: activeViewerRef.current }, { transfer: [pixels.buffer] });
+        workerRef.current?.postMessage({ type: 'importImage', pixels, mappingId, region: { row: offRow, col: offCol, w: cols, h: rows }, values: imageImportBaseline(mappingId), activeViewer: activeViewerRef.current }, { transfer: [pixels.buffer] });
       }
     }
   };
@@ -12945,6 +13088,13 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
   // Agent Output Mappings: the agent-layer A→C views (the two-layer viewer).
   const agentColorMappings = (model.agentMappings ?? []).filter(m => m.isAttributeToColor);
   const colorToAttrMappings = model.mappings.filter(m => !m.isAttributeToColor);
+  /** Resolved parameters of the ACTIVE cell brush mapping (legacy for the Manual
+   *  sentinel / an unknown id) — drives the panel fork AND the colour-popover
+   *  gating below. */
+  const activeInputParams = inputParamsOf(colorToAttrMappings.find(m => m.id === brushMapping));
+  activeInputLegacyRef.current = activeInputParams.legacy;
+  /** …and of the active AGENT Paint mapping. */
+  const activeAgentInputParams = inputParamsOf(agentInputMappings.find(m => m.id === agentPaintMapping));
 
   return (
     <div className={styles.simulatorLayout}>
@@ -14603,6 +14753,15 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
                 onChange={setManualBrush}
                 is3d={model.properties.dimension === '3d' && (model.properties.gridDepth ?? 1) > 1}
               />
+            ) : !activeInputParams.legacy ? (
+              /* The mapping DECLARES parameters — one type-adaptive widget each,
+                 instead of a colour the graph would have to decode. */
+              <InputParamsPanel
+                resolved={activeInputParams}
+                values={inputParamValues[brushMapping] ?? {}}
+                onChange={next => setInputParamValues(prev => ({ ...prev, [brushMapping]: next }))}
+                model={model}
+              />
             ) : (
               <div className={styles.fieldRow}>
                 <span className={styles.statLabel}>Color</span>
@@ -14716,7 +14875,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
               Show brush cursor
             </label>
             <div className={styles.hint}>
-              {brushMapping === MANUAL_BRUSH_MAPPING_ID
+              {brushMapping === MANUAL_BRUSH_MAPPING_ID || !activeInputParams.legacy
                 ? <>LMB paint {'\u00B7'} RMB pan {'\u00B7'} Ctrl+LMB drag resize {'\u00B7'} Ctrl+wheel cycle mapping {'\u00B7'} Shift+LMB inspect</>
                 : <>LMB paint {'\u00B7'} RMB pan {'\u00B7'} Ctrl+LMB drag resize {'\u00B7'} Ctrl+wheel cycle mapping {'\u00B7'} Shift+RMB color {'\u00B7'} Shift+LMB inspect</>}
             </div>
@@ -14874,17 +15033,29 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
                           >{m.name}</button>
                         ))}
                       </div>
-                      <label style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                        <span style={{ width: 54, color: 'var(--color-text-muted)' }}>Color</span>
-                        <input type="color" className={styles.colorPicker} value={agentPaintColor}
-                          onChange={e => setAgentPaintColor(e.target.value)} />
-                        <span style={{ color: 'var(--color-text-muted)', fontSize: '0.62rem' }}>
-                          {(() => { const c = hexToRgb(agentPaintColor); return `${c.r}, ${c.g}, ${c.b}`; })()}
-                        </span>
-                      </label>
+                      {activeAgentInputParams.legacy ? (
+                        <label style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                          <span style={{ width: 54, color: 'var(--color-text-muted)' }}>Color</span>
+                          <input type="color" className={styles.colorPicker} value={agentPaintColor}
+                            onChange={e => setAgentPaintColor(e.target.value)} />
+                          <span style={{ color: 'var(--color-text-muted)', fontSize: '0.62rem' }}>
+                            {(() => { const c = hexToRgb(agentPaintColor); return `${c.r}, ${c.g}, ${c.b}`; })()}
+                          </span>
+                        </label>
+                      ) : (
+                        /* Declared parameters — the SAME panel the cell brush uses
+                           (cells and agents must end up consistent). */
+                        <InputParamsPanel
+                          resolved={activeAgentInputParams}
+                          values={inputParamValues[agentPaintMapping] ?? {}}
+                          onChange={next => setInputParamValues(prev => ({ ...prev, [agentPaintMapping]: next }))}
+                          model={model}
+                        />
+                      )}
                       <div style={{ fontSize: '0.62rem', color: 'var(--color-text-muted)' }}>
-                        Runs this mapping&apos;s graph on every agent you touch — the colour
-                        arrives on its R / G / B outputs.
+                        {activeAgentInputParams.legacy
+                          ? <>Runs this mapping&apos;s graph on every agent you touch — the colour arrives on its R / G / B outputs.</>
+                          : <>Runs this mapping&apos;s graph on every agent you touch — these values arrive on its outputs.</>}
                       </div>
                     </div>
                   )}

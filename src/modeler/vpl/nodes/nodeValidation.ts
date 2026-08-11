@@ -14,6 +14,7 @@ import { isGraphFrequencyMetric, type GraphMetric } from '../../../simulator/eng
 import { indicatorScalarBlocker } from '../../../model/indicatorValue';
 import { isMultiAxisTable, resolveAxes, MAX_LOOKUP_TABLE_ENTRIES } from '../compiler/variegation';
 import { is3dModelLike } from '../compiler/niCodec';
+import { inputParamsForNode } from '../../../model/inputMappingParams';
 
 /** Return a list of human-readable issue strings for a node's configuration.
  *  Empty array = node is fully configured.
@@ -30,6 +31,39 @@ import { is3dModelLike } from '../compiler/niCodec';
  *  compile() emit falls back to `[]` for unconnected array inputs (Wave A.6
  *  dropped the implicit-all default). When omitted, edge-dependent checks
  *  are skipped (preserves callers without easy access to edges). */
+/** Input-mapping ROOTS (`inputColor` / `agentInputMapping`): their value outputs
+ *  are DYNAMIC — one per resolved CHANNEL of the referenced mapping's declared
+ *  `parameters`. Two things are worth badging, and BOTH need the connected-handle
+ *  set (which records output handles too), because neither is an error in the
+ *  abstract:
+ *    · a mapping that declares NO parameters (`parameters: []`) is a perfectly
+ *      valid "stamp" mapping — unless the root is actually WIRED from a value
+ *      port, in which case the graph reads something that does not exist;
+ *    · an edge from a port the parameters no longer produce (a deleted / retyped
+ *      parameter) — the same STALE CHANNEL the compiler reports by name. */
+function inputParamIssues(
+  nodeType: string,
+  config: NodeConfig,
+  model: CAModel,
+  connectedHandles?: ReadonlySet<string>,
+): string[] {
+  if (!connectedHandles) return [];
+  const wired: string[] = [];
+  for (const h of connectedHandles) {
+    if (h.startsWith('output_value_')) wired.push(h.slice('output_value_'.length));
+  }
+  if (wired.length === 0) return [];
+  const resolved = inputParamsForNode(nodeType, config, model);
+  if (resolved.channels.length === 0) {
+    return ['This mapping declares no parameters — the wired value outputs do not exist'];
+  }
+  const live = new Set(resolved.channels.map(c => c.portId));
+  const stale = wired.filter(p => !live.has(p));
+  return stale.length > 0
+    ? [`Wired from a parameter this mapping no longer declares (${stale.join(', ')})`]
+    : [];
+}
+
 export function detectMissingConfig(
   nodeType: string,
   config: NodeConfig,
@@ -425,6 +459,7 @@ export function detectMissingConfig(
     case 'inputColor':
     case 'outputMapping':
       if (!hasMapping(config.mappingId)) issues.push('Select a mapping');
+      if (nodeType === 'inputColor') issues.push(...inputParamIssues(nodeType, config, model, connectedHandles));
       break;
 
     // Generic Agent Platform — the agent analogue of outputMapping. Roots a
@@ -437,6 +472,7 @@ export function detectMissingConfig(
     // brush runs on each painted agent (its C->A mapping is the brush tab).
     case 'agentInputMapping':
       if (!hasAgentMappingDir(config.mappingId, false)) issues.push('Select an agent input mapping');
+      issues.push(...inputParamIssues(nodeType, config, model, connectedHandles));
       break;
 
     case 'setAgentSprite':

@@ -1,6 +1,7 @@
-import type { CAModel, GraphNode } from '../../../model/types';
+import type { CAModel, GraphEdge, GraphNode } from '../../../model/types';
 import { getNodeDef } from '../nodes/registry';
 import { CURRENT_VIEWER_SENTINEL } from '../nodes/SetCellLooksNode';
+import { inputParamsForNode, isInputMappingRoot } from '../../../model/inputMappingParams';
 
 /**
  * Dangling model references — the compile-time half of the amber badge.
@@ -80,10 +81,13 @@ const SPACE_LABEL: Record<IdSpace, string> = {
 };
 
 /**
+ * @param edges optional — when supplied, ALSO reports an edge wired to an
+ *        input-mapping root's channel port that the mapping's declared
+ *        `parameters` no longer produce (see the STALE CHANNEL block below).
  * @returns a human-readable error naming each offending node + reference, or
  *          `undefined` when every non-empty reference resolves.
  */
-export function detectDanglingRefs(nodes: GraphNode[], model: CAModel): string | undefined {
+export function detectDanglingRefs(nodes: GraphNode[], model: CAModel, edges?: GraphEdge[]): string | undefined {
   const sets = idSets(model);
   const issues: string[] = [];
   for (const n of nodes) {
@@ -101,6 +105,45 @@ export function detectDanglingRefs(nodes: GraphNode[], model: CAModel): string |
     }
     if (issues.length >= 8) break;
   }
+
+  // STALE CHANNEL — an edge leaving an input-mapping root (`inputColor` /
+  // `agentInputMapping`) through a value handle its mapping's declared
+  // `parameters` no longer produce. The root's value outputs are DYNAMIC, so a
+  // deleted / retyped / renamed-key parameter leaves such an edge behind; the
+  // compilers would then resolve it to `_v<rootId>_<goneKey>` — an identifier no
+  // alias line declares. That is a loud ReferenceError inside the worker at best;
+  // if a DIFFERENT channel ever claimed the id it would be silently WRONG. So it
+  // is reported here BY NAME, and never repointed (the `STALE_SLOT_HANDLE` rule:
+  // drop stale edges, never resolve them to a neighbouring channel).
+  if (edges && edges.length > 0 && issues.length < 8) {
+    const rootChannels = new Map<string, { label: string; ports: Set<string> }>();
+    for (const n of nodes) {
+      if (!isInputMappingRoot(n.data.nodeType)) continue;
+      const resolved = inputParamsForNode(n.data.nodeType, n.data.config, model);
+      rootChannels.set(n.id, {
+        label: (n.data as { label?: string }).label
+          ?? getNodeDef(n.data.nodeType)?.label ?? n.data.nodeType,
+        ports: new Set(resolved.channels.map(c => c.portId)),
+      });
+    }
+    if (rootChannels.size > 0) {
+      const seen = new Set<string>();
+      for (const e of edges) {
+        const root = rootChannels.get(e.source);
+        if (!root) continue;
+        const handle = e.sourceHandle ?? '';
+        if (!handle.startsWith('output_value_')) continue;   // the DO flow port is static
+        const portId = handle.slice('output_value_'.length);
+        if (root.ports.has(portId)) continue;
+        const key = `${e.source}:${portId}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        issues.push(`"${root.label}" is wired from a parameter its mapping no longer declares (${portId})`);
+        if (issues.length >= 8) break;
+      }
+    }
+  }
+
   if (issues.length === 0) return undefined;
   return `This graph references model elements this model does not have — re-point the flagged nodes in the Modeler (they carry an amber warning badge):\n${issues.map(s => `• ${s}`).join('\n')}`;
 }

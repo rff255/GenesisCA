@@ -27,6 +27,7 @@ import { isGraphFrequencyMetric, degreeHistogramKeys, type GraphMetric } from '.
 import { indicatorScalarBlocker } from '../../model/indicatorValue';
 import { resolveMaxBonds } from '../../model/centerBased';
 import { applyLookupAxisPorts } from './nodes/LookupInteractionNode';
+import { buildInputParamPorts, isInputMappingRoot } from '../../model/inputMappingParams';
 import {
   isConnectingGlobal,
   showPortLabelsGlobal,
@@ -548,6 +549,16 @@ function CaNodeComponent({ id, data }: NodeProps) {
   if (nodeData.nodeType === 'formBond') {
     const bondPorts = buildBondAttrPorts(nodeData.nodeType, model);
     inputPorts = [...inputPorts, ...bondPorts.inputs];
+  }
+
+  // Input Mapping roots (cell `inputColor` / `agentInputMapping`): one value
+  // output per resolved CHANNEL of the referenced mapping's declared
+  // `parameters`. No declared parameters ⇒ the legacy colour parameter ⇒ the
+  // historical R/G/B ports (so every existing model's wires are untouched).
+  // ONE shared builder with effectivePorts.ts (buildInputParamPorts).
+  if (isInputMappingRoot(nodeData.nodeType)) {
+    const paramPorts = buildInputParamPorts(nodeData.nodeType, nodeData.config, model);
+    outputPorts = [...outputPorts, ...paramPorts.outputs];
   }
 
   // Table Lookup: shape the index inputs per the referenced table — legacy

@@ -241,6 +241,39 @@ export interface LinkedColorSet {
   tag?: RGB[];
 }
 
+/** The value types an INPUT-mapping parameter may declare. Deliberately NARROWER
+ *  than `AttributeType`: a brush can supply a number, a flag, a category or a
+ *  colour — it cannot supply a neighbour index, a lookup table or (yet) a vector.
+ *  `color` is the only multi-CHANNEL type (3 channels); every other type is 1. */
+export type InputParamType = 'bool' | 'integer' | 'float' | 'tag' | 'color';
+
+/** One declared parameter of a Color→Attribute (input) mapping. Each parameter
+ *  becomes N value-output ports on the mapping's event root (`inputColor` /
+ *  `agentInputMapping`) and one type-adaptive widget in the brush panel.
+ *
+ *  `key` vs `name` is LOAD-BEARING: port ids + ABI names derive from `key`, so
+ *  the editor renames `name` freely without touching a single wire. */
+export interface InputMappingParam {
+  /** Stable identifier. Port ids + ABI names derive from it; NEVER changed by a
+   *  display rename. Sanitised to `[A-Za-z0-9_]`. */
+  key: string;
+  /** User-facing label (port labels, brush rows). */
+  name: string;
+  type: InputParamType;
+  description?: string;
+  /** Canonical string encoding, identical to `Attribute.defaultValue`
+   *  (bool `'true'`/`'false'`, tag = option index, colour = `#rrggbb`). */
+  defaultValue?: string;
+  /** tag only — the inline option list … */
+  tagOptions?: string[];
+  /** … or borrowed live from an existing tag attribute (cell or agent). Takes
+   *  precedence over `tagOptions` when it resolves. */
+  tagAttributeId?: string;
+  /** integer/float only — brush-widget bounds. NOT clamped by the engine. */
+  min?: number;
+  max?: number;
+}
+
 /** A color mapping (attribute-to-color for visualization, or color-to-attribute for interaction) */
 export interface Mapping {
   id: string;
@@ -250,6 +283,12 @@ export interface Mapping {
   redDescription: string;
   greenDescription: string;
   blueDescription: string;
+  /** Color→Attribute only. ABSENT ⇒ the LEGACY single `color` parameter whose
+   *  ports are exactly `r`/`g`/`b` — every shipped model, byte-identically.
+   *  EMPTY ⇒ deliberately NO parameters (a stamp that ignores the brush).
+   *  The two are DIFFERENT: always resolve through `inputParamsOf()`
+   *  (src/model/inputMappingParams.ts) — never read this field directly. */
+  parameters?: InputMappingParam[];
   // --- Linked Output Mappings (Attribute→Color only; ignored when isAttributeToColor=false) ---
   /** When true, the color pass is auto-generated from `linkedAttributeId`.
    *  Absent/false = Standalone (the classic hand-built color graph). */

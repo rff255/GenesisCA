@@ -357,8 +357,15 @@ interface CancelStepMsg { type: 'cancelStep' }
 interface PaintMsg {
   type: 'paint';
   /** `layer` (absent ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ 0) is the 3D Z coordinate; 2D paints omit it. */
-  cells: Array<{ row: number; col: number; layer?: number; r: number; g: number; b: number }>;
+  cells: Array<{ row: number; col: number; layer?: number }>;
   mappingId: string;
+  /** Parameterized Input Mappings: the flat CHANNEL payload, one number per
+   *  resolved channel of the mapping's declared `parameters`, in declared order.
+   *  A mapping with no declared parameters resolves LEGACY and this is exactly
+   *  `[r, g, b]` — so the compiled fns are called identically. MESSAGE-level, not
+   *  per-cell: all five paint producers read one brush state per stroke, so a
+   *  per-cell copy was dead generality (and an allocation per painted cell). */
+  values: number[];
   activeViewer: string;
 }
 /** Manual Brush ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â runtime-only special Input Mapping. Bypasses any compiled
@@ -394,7 +401,12 @@ interface ImportImageMsg { type: 'importImage'; pixels: Uint8ClampedArray; mappi
   /** "Mapping Cells" paste-centered: write only this sub-region (cells outside
    *  are preserved). `pixels` is then sized region.w*region.h (row-major). Absent
    *  ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ the classic full-grid import (pixels sized total). */
-  region?: { row: number; col: number; w: number; h: number } }
+  region?: { row: number; col: number; w: number; h: number };
+  /** Parameterized Input Mappings ONLY: the brush panel's current CHANNEL payload,
+   *  used as the baseline for every cell with the pixel's R/G/B written over the
+   *  first three channels. ABSENT for a LEGACY mapping, whose per-cell payload is
+   *  exactly `[r, g, b]` — so the legacy import is unchanged. */
+  values?: number[] }
 /** CSV import (grid flavour): write a row-major block of PER-CELL values into ONE
  *  cell attribute. Distinct from `paintManual` (which carries ONE shared value
  *  for every cell) and from `importImage` (which routes colours through a
@@ -658,7 +670,9 @@ interface PaintAgentsMsg {
 interface PaintAgentsColorMsg {
   type: 'paintAgentsColor';
   ids: number[];
-  r: number; g: number; b: number;
+  /** The flat CHANNEL payload — structurally IDENTICAL to `PaintMsg.values`
+   *  (cells and agents share one protocol shape). Legacy = `[r, g, b]`. */
+  values: number[];
   /** The agent INPUT mapping (`isAttributeToColor === false`) whose graph runs. */
   mappingId: string;
   activeViewer: string;
@@ -1885,7 +1899,7 @@ function buildAgentInputArgs(s: AgentStore, idx: number): unknown[] {
  *  brush). `r`/`g`/`b` are the brush colour (0-255) the graph's root exposes.
  *  Sequential + single-agent, like `runDivisionEvent`; dead / out-of-range ids are
  *  skipped. A throwing fn is DROPPED (one error post, not one per painted agent). */
-function runAgentInputMapping(mappingId: string, ids: number[], r: number, g: number, b: number): void {
+function runAgentInputMapping(mappingId: string, ids: number[], values: number[]): void {
   const s = agentStore;
   if (!s || agentInputMappingFns.length === 0) return;
   const im = agentInputMappingFns.find(f => f.mappingId === mappingId);
@@ -1893,7 +1907,7 @@ function runAgentInputMapping(mappingId: string, ids: number[], r: number, g: nu
   for (const id of ids) {
     if (id < 0 || id >= s.highWater || !s.alive[id]) continue;
     try {
-      im.fn(r, g, b, ...buildAgentInputArgs(s, id));
+      im.fn(...values, ...buildAgentInputArgs(s, id));
     } catch (e) {
       agentInputMappingFns = agentInputMappingFns.filter(f => f !== im);
       self.postMessage({ type: 'error', message: `[agents] input mapping "${mappingId}" failed (disabled until recompile): ` + ((e as Error)?.message || e) });
@@ -3854,7 +3868,12 @@ function syncVariegationToGPU(): void {
 let wasmStepFn: ((total: number) => void) | null = null;
 // Per-mapping WASM exports. Keys are SANITISED mapping ids (matching the
 // `inputColor_<id>` / `outputMapping_<id>` export names the compiler emits).
-let wasmInputColorFns: Record<string, (idx: number, r: number, g: number, b: number) => void> = {};
+// VARIADIC in the CHANNEL count: the compiled entry is `(i32 idx, …channels)`,
+// where a LEGACY mapping's channels are the three i32 r/g/b and a PARAMETERIZED
+// one's are N f64s (one per resolved channel). The caller always spreads the
+// message's `values` payload, whose length matches the mapping the export was
+// compiled for.
+let wasmInputColorFns: Record<string, (idx: number, ...channels: number[]) => void> = {};
 let wasmOutputMappingFns: Record<string, (total: number) => void> = {};
 /** Variegated Cells: WASM Init Event entry point. Same signature as `step`
  *  ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â single `total` param, walks every cell sequentially. Called by `runInit`
@@ -4562,7 +4581,7 @@ function tryInstantiateWasmModule(bytes: Uint8Array | undefined, exportNames: st
         if (name === 'step' || name === 'init') continue;
         if (name.startsWith('inputColor_')) {
           const sanitised = name.slice('inputColor_'.length);
-          wasmInputColorFns[sanitised] = fn as (idx: number, r: number, g: number, b: number) => void;
+          wasmInputColorFns[sanitised] = fn as (idx: number, ...channels: number[]) => void;
         } else if (name.startsWith('outputMapping_')) {
           const sanitised = name.slice('outputMapping_'.length);
           wasmOutputMappingFns[sanitised] = fn as (t: number) => void;
@@ -7286,8 +7305,9 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
           const idx = cellIndexOf(lyr, c.row, c.col);
 
           if (wasmIcFn) {
-            // WASM InputColor writes via baked-in attrWriteOffset.
-            wasmIcFn(idx, c.r, c.g, c.b);
+            // WASM InputColor writes via baked-in attrWriteOffset. `values` is the
+            // resolved CHANNEL payload (legacy = [r, g, b] → the historical call).
+            wasmIcFn(idx, ...msg.values);
             if (isSync) {
               // Sync mode: also copy the per-cell write back to read so the next
               // paint / step sees it. (Async shares one buffer so this is a no-op.)
@@ -7298,7 +7318,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
           } else if (icEntry?.fn) {
             // InputColor writes to writeAttrs (via w_<attr>[idx])
             // We need to also update readAttrs so the next step sees the change
-            icEntry.fn(c.r, c.g, c.b, ...buildCellArgs(idx));
+            icEntry.fn(...msg.values, ...buildCellArgs(idx));
             // Copy written values back to read buffer so step() sees them
             for (const attr of cellAttrs) {
               readAttrs[attr.id]![idx] = writeAttrs[attr.id]![idx]!;
@@ -8247,13 +8267,33 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       }
       const pixels = msg.pixels as Uint8ClampedArray;
       // Apply the input-colour mapping to a single cell from pixel slot `pi`.
+      //
+      // CHANNEL PAYLOAD. A LEGACY mapping (no declared `parameters`) has exactly
+      // three channels and takes the pixel's r/g/b — byte-for-byte today's
+      // behaviour, and the `msg.values` baseline is absent for it.
+      //
+      // A PARAMETERIZED mapping gets the brush panel's current parameter values as
+      // the baseline (`msg.values`), with the pixel's R/G/B written over its FIRST
+      // THREE channels — the "sensible auto-assignment" the design calls for. An
+      // explicit per-channel source picker (pixel r/g/b/a/lum vs. constant) is
+      // Phase 3's image-dialog work; this is its default, not a replacement.
+      const baseValues = msg.values;
       const applyImageCell = (idx: number, pi: number) => {
         const r = pixels[pi]!, g = pixels[pi + 1]!, b = pixels[pi + 2]!;
+        let values: number[];
+        if (baseValues) {
+          values = baseValues.slice();
+          if (values.length > 0) values[0] = r;
+          if (values.length > 1) values[1] = g;
+          if (values.length > 2) values[2] = b;
+        } else {
+          values = [r, g, b];
+        }
         if (wasmIcFn) {
-          wasmIcFn(idx, r, g, b);
+          wasmIcFn(idx, ...values);
           if (isSync) for (const attr of cellAttrs) readAttrs[attr.id]![idx] = writeAttrs[attr.id]![idx]!;
         } else if (icEntry?.fn) {
-          icEntry.fn(r, g, b, ...buildCellArgs(idx));
+          icEntry.fn(...values, ...buildCellArgs(idx));
           for (const attr of cellAttrs) readAttrs[attr.id]![idx] = writeAttrs[attr.id]![idx]!;
         }
       };
@@ -8477,7 +8517,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       // and survives the next step's `primeAgentAttrWrite` under sync agent mode.
       activeViewer = msg.activeViewer; syncActiveViewerToMemory();
       if (agentStore) {
-        runAgentInputMapping(msg.mappingId, msg.ids, msg.r, msg.g, msg.b);
+        runAgentInputMapping(msg.mappingId, msg.ids, msg.values);
         runAgentColorPass();
       }
       sendColors();
