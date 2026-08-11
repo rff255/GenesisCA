@@ -386,6 +386,114 @@ export function channelDefaults(resolved: ResolvedInputParams): number[] {
   return encodeChannelValues(resolved, undefined);
 }
 
+// ---------------------------------------------------------------------------
+// Image import — one PIXEL channel per parameter channel
+// ---------------------------------------------------------------------------
+
+/**
+ * THE ONE LUMINANCE FORMULA (ITU-R BT.601), shared by the image SAMPLER
+ * (`imageMapping.ts`'s binarize threshold) and the `lum` image-import channel
+ * source below. Two copies of these three constants is exactly the drift class
+ * this codebase keeps closing, and the two must agree: binarize collapses a
+ * pixel to black/white by THIS luminance, so a `lum` source over a binarized
+ * image must read back the 0/255 that decision produced.
+ */
+export function pixelLuminance(r: number, g: number, b: number): number {
+  return 0.299 * r + 0.587 * g + 0.114 * b;
+}
+
+/** The pixel quantities an image-import channel may sample. `lum` is
+ *  `pixelLuminance` (0–255), the natural "boolean-ish" source over a binarized
+ *  image; `a` is the source alpha, which the classic legacy import ignores. */
+export const PIXEL_CHANNELS = ['r', 'g', 'b', 'a', 'lum'] as const;
+export type PixelChannel = (typeof PIXEL_CHANNELS)[number];
+
+/**
+ * Where ONE resolved parameter channel gets its value during an image import:
+ * sampled per cell from the pixel, or the same constant for every cell.
+ *
+ * `ImportImageMsg.channels` is one of these per RESOLVED channel, in the SAME
+ * order as `ResolvedInputParams.channels` — the flat channel list is the ABI, so
+ * it is also the assignment list. ABSENT ⇒ the LEGACY import, whose per-cell
+ * payload is exactly the pixel's `[r, g, b]`, byte-for-byte the historical
+ * behaviour.
+ */
+export type ImageChannelSource =
+  | { kind: 'pixel'; ch: PixelChannel }
+  | { kind: 'const'; value: number };
+
+/** Human label for a source (the dialog's dropdown + the docs). */
+export function imageChannelSourceLabel(src: ImageChannelSource): string {
+  return src.kind === 'const' ? `constant ${src.value}` : `pixel ${src.ch}`;
+}
+
+/**
+ * Resolve one pixel into the flat `values[]` payload the input-mapping function
+ * takes. `out` may be a REUSED scratch array — the payload is spread into the
+ * call immediately and never retained, and this runs once per cell over the
+ * whole grid (25 M times at 5000²), so allocating per cell is not free.
+ */
+export function resolveImageChannelValues(
+  sources: readonly ImageChannelSource[],
+  r: number, g: number, b: number, a: number,
+  out?: number[],
+): number[] {
+  const dst = out ?? new Array<number>(sources.length);
+  for (let i = 0; i < sources.length; i++) {
+    const s = sources[i]!;
+    if (s.kind === 'const') { dst[i] = s.value; continue; }
+    switch (s.ch) {
+      case 'r': dst[i] = r; break;
+      case 'g': dst[i] = g; break;
+      case 'b': dst[i] = b; break;
+      case 'a': dst[i] = a; break;
+      default: dst[i] = pixelLuminance(r, g, b); break;
+    }
+  }
+  return dst;
+}
+
+/**
+ * The AUTO-ASSIGNMENT a freshly-opened image dialog shows — and the assignment
+ * every non-dialog import path (the 3D classic 1px=1cell import) uses.
+ *
+ * THE RULE: the FIRST `color` parameter takes R/G/B; if the mapping declares
+ * none, the first three channels do. Everything else is a CONSTANT seeded from
+ * the brush panel's current value for that parameter.
+ *
+ * Why colour-first rather than a flat "first three channels": for
+ * `[bool alive, color tint]` a flat rule would feed R into `alive` and split
+ * `tint` across G/B/const — visibly wrong. Preferring the colour parameter also
+ * makes a MATERIALISED legacy mapping (one `color` parameter) resolve to exactly
+ * the historical `[r, g, b]`, so materialising a mapping does not change what an
+ * image import does. The user sees the table and can change any row.
+ */
+export function defaultImageChannelSources(
+  resolved: ResolvedInputParams,
+  values: InputParamValues | undefined,
+): ImageChannelSource[] {
+  const consts = encodeChannelValues(resolved, values);
+  const sources: ImageChannelSource[] = consts.map(v => ({ kind: 'const', value: v }));
+  const colourParam = resolved.params.find(p => p.param.type === 'color');
+  if (colourParam) {
+    // Assign R/G/B to that parameter's three channels, by their position in the
+    // flat list (which is what `sources` is indexed by).
+    let flat = 0;
+    for (const rp of resolved.params) {
+      if (rp === colourParam) {
+        rp.channels.forEach((_, i) => { sources[flat + i] = { kind: 'pixel', ch: COLOR_CHANNEL_SUFFIXES[i]! }; });
+        break;
+      }
+      flat += rp.channels.length;
+    }
+  } else {
+    for (let i = 0; i < 3 && i < sources.length; i++) {
+      sources[i] = { kind: 'pixel', ch: COLOR_CHANNEL_SUFFIXES[i]! };
+    }
+  }
+  return sources;
+}
+
 /** Resolve a `tag` parameter's option list: a live tag ATTRIBUTE (cell/model
  *  first, then agent — the `findTagAttrById` precedent) takes precedence over
  *  the inline `tagOptions`. */

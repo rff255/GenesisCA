@@ -1,9 +1,13 @@
 import { useMemo, useRef, useState, useEffect, useCallback } from 'react';
-import type { Attribute, Mapping, Neighborhood } from '../model/types';
-import { NumberField } from '../modeler/vpl/widgets/InlineWidgets';
+import type { Attribute, CAModel, Mapping, Neighborhood } from '../model/types';
+import { InlineBoolSelect, InlineTagSelect, NumberField } from '../modeler/vpl/widgets/InlineWidgets';
 import { ManualBrushPanel } from './ManualBrushPanel';
 import type { ManualBrushModelState } from './SimulatorView';
 import { gridifyImage, gridLayout, type ImageSampleOptions } from './imageMapping';
+import {
+  inputParamsOf, defaultImageChannelSources, paramTagOptions, PIXEL_CHANNELS,
+  type ImageChannelSource, type InputParamValues, type PixelChannel, type ResolvedInputParams,
+} from '../model/inputMappingParams';
 
 export interface ImageMappingConfig {
   region: { x: number; y: number; w: number; h: number };
@@ -18,6 +22,10 @@ export interface ImageMappingConfig {
   mappingId: string;
   useManual: boolean;
   manualState: ManualBrushModelState;
+  /** PARAMETERIZED mappings only: where each resolved channel gets its per-cell
+   *  value, one entry per channel in ABI order. Absent ⇒ the LEGACY import
+   *  (the pixel's `[r, g, b]`, verbatim). */
+  channels?: ImageChannelSource[];
   /** The sampled grid (computed at Apply). */
   cols: number;
   rows: number;
@@ -31,6 +39,8 @@ const VIEWPORT = 460;
 /** Right preview box (fixed square, px). */
 const PREVIEW_BOX = 280;
 const HANDLE_HIT = 11; // px hit radius for the corner resize handles
+/** Why the pixel-space options are greyed (see the channel table). */
+const SAMPLING_INERT = 'Every parameter channel is a constant, so the image is not sampled — set at least one channel to a pixel source.';
 
 interface View { scale: number; ox: number; oy: number }
 
@@ -46,7 +56,8 @@ type Drag =
  *  (blue) + a cell-alignment reference square (orange); right pane = the
  *  resulting gridified preview. */
 export function ImageMappingDialog({
-  img, cellAttributes, neighborhoods, colorToAttrMappings, is3d, gridWidth, gridHeight, initialUseManual, onApply, onCancel,
+  img, cellAttributes, neighborhoods, colorToAttrMappings, is3d, gridWidth, gridHeight, initialUseManual,
+  model, inputParamValues, onApply, onCancel,
 }: {
   img: HTMLImageElement;
   cellAttributes: Attribute[];
@@ -57,6 +68,11 @@ export function ImageMappingDialog({
   gridHeight: number;
   /** Pre-select the manual input-mapping path (opened from the Manual brush tab). */
   initialUseManual?: boolean;
+  /** For resolving a `tag` parameter's `tagAttributeId` against live attributes. */
+  model: Pick<CAModel, 'attributes' | 'agentAttributes'>;
+  /** The brush panel's current parameter values, per mapping id — the seed for
+   *  every channel the auto-assignment leaves as a CONSTANT. */
+  inputParamValues: Record<string, InputParamValues>;
   onApply: (cfg: ImageMappingConfig) => void;
   onCancel: () => void;
 }) {
@@ -90,6 +106,30 @@ export function ImageMappingDialog({
     for (const a of cellAttributes) s[a.id] = { enabled: true, value: a.defaultValue ?? '' };
     return s;
   });
+
+  // ── Parameterized Input Mappings: the channel→source assignment ────────────
+  // Shown ONLY for a mapping that DECLARES parameters. A legacy mapping resolves
+  // to the three r/g/b channels the pixel supplies by definition, so its dialog
+  // is today's, verbatim.
+  const resolvedParams: ResolvedInputParams = useMemo(
+    () => inputParamsOf(colorToAttrMappings.find(m => m.id === mappingId)),
+    [colorToAttrMappings, mappingId],
+  );
+  const [channels, setChannels] = useState<ImageChannelSource[]>([]);
+  // Re-seed whenever the CHANNEL SHAPE changes (a different mapping, or its
+  // parameters edited under us) — keyed by the flat port-id list, so merely
+  // re-rendering never discards the user's assignment.
+  const channelSig = resolvedParams.channels.map(c => c.portId).join('|');
+  useEffect(() => {
+    setChannels(defaultImageChannelSources(resolvedParams, inputParamValues[mappingId]));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [channelSig, mappingId]);
+  const showChannelTable = !useManual && !resolvedParams.legacy && !!mappingId;
+  /** Does ANY channel read the image? All-constant means the pixels contribute
+   *  nothing, which is what greys the sampling options out. */
+  const samplesImage = !showChannelTable || channels.some(c => c.kind === 'pixel');
+  const setChannel = (i: number, next: ImageChannelSource) =>
+    setChannels(cs => cs.map((c, j) => (j === i ? next : c)));
 
   const opts: ImageSampleOptions = {
     region, cellSize, cellOriginX: cellOrigin.x, cellOriginY: cellOrigin.y,
@@ -275,12 +315,19 @@ export function ImageMappingDialog({
   const label: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, cursor: 'pointer' };
   const zoomBtn: React.CSSProperties = { padding: '2px 8px', fontSize: 12, cursor: 'pointer', background: 'var(--color-widget-bg, #1c2028)', color: 'inherit', border: '1px solid var(--color-border, #2a3a50)', borderRadius: 4 };
   const chipRow: React.CSSProperties = { display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center', marginTop: 10, fontSize: 12 };
+  const dimmed: React.CSSProperties = { opacity: 0.45, cursor: 'not-allowed' };
 
   const applyDisabled = cols < 1 || rows < 1 || (!useManual && !mappingId) || (mode === 'center' && (cols > gridWidth || rows > gridHeight));
 
   const handleApply = () => {
     const g = gridifyImage(srcData, opts);
-    onApply({ region, cellSize, cellOriginX: cellOrigin.x, cellOriginY: cellOrigin.y, average, invert, binarize, threshold, mode, mappingId, useManual, manualState, cols: g.cols, rows: g.rows, pixels: g.pixels, mask: g.mask });
+    onApply({
+      region, cellSize, cellOriginX: cellOrigin.x, cellOriginY: cellOrigin.y, average, invert, binarize, threshold,
+      mode, mappingId, useManual, manualState, cols: g.cols, rows: g.rows, pixels: g.pixels, mask: g.mask,
+      // Legacy ⇒ omit entirely: the worker's absent-channels branch IS the
+      // historical `[r, g, b]` payload.
+      channels: resolvedParams.legacy ? undefined : channels,
+    });
   };
 
   return (
@@ -348,16 +395,20 @@ export function ImageMappingDialog({
               <button style={zoomBtn} title="Align the cell reference to the area's top-left corner" onClick={() => setCellOrigin({ x: region.x, y: region.y })}>Align to area</button>
             </div>
 
-            {/* Options. */}
-            <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', marginTop: 10 }}>
-              <label style={label}><input type="checkbox" checked={average} onChange={e => setAverage(e.target.checked)} /> Average pixels inside cell</label>
-              <label style={label}><input type="checkbox" checked={invert} onChange={e => setInvert(e.target.checked)} /> Invert image</label>
-              <label style={label}><input type="checkbox" checked={binarize} onChange={e => setBinarize(e.target.checked)} /> Binarize image</label>
+            {/* Options. These are PIXEL-SPACE operations — they change what the
+                r/g/b/lum sources read, so they stay meaningful under declared
+                parameters. They are greyed IN PLACE (never hidden) when no
+                channel samples the image: that is one dropdown away, so the
+                reason belongs in a tooltip, not in a vanished control. */}
+            <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', marginTop: 10 }} title={samplesImage ? undefined : SAMPLING_INERT}>
+              <label style={{ ...label, ...(samplesImage ? null : dimmed) }}><input type="checkbox" disabled={!samplesImage} checked={average} onChange={e => setAverage(e.target.checked)} /> Average pixels inside cell</label>
+              <label style={{ ...label, ...(samplesImage ? null : dimmed) }}><input type="checkbox" disabled={!samplesImage} checked={invert} onChange={e => setInvert(e.target.checked)} /> Invert image</label>
+              <label style={{ ...label, ...(samplesImage ? null : dimmed) }}><input type="checkbox" disabled={!samplesImage} checked={binarize} onChange={e => setBinarize(e.target.checked)} /> Binarize image</label>
             </div>
             {(binarize || useManual) && (
-              <label style={{ ...label, gap: 8, marginTop: 8 }}>
+              <label style={{ ...label, gap: 8, marginTop: 8, ...(samplesImage ? null : dimmed) }} title={samplesImage ? undefined : SAMPLING_INERT}>
                 Threshold {threshold}
-                <input type="range" min={0} max={255} value={threshold} onChange={e => setThreshold(Number(e.target.value))} />
+                <input type="range" disabled={!samplesImage} min={0} max={255} value={threshold} onChange={e => setThreshold(Number(e.target.value))} />
               </label>
             )}
 
@@ -387,6 +438,40 @@ export function ImageMappingDialog({
           </div>
         </div>
 
+        {showChannelTable && (
+          <div style={{ marginTop: 8, borderTop: '1px solid #2a3a50', paddingTop: 8 }}>
+            <div style={{ fontSize: 11, color: '#8090a0', marginBottom: 6 }}>
+              This mapping declares its own parameters. Choose where each one gets its value —
+              sampled from the pixel (0–255; <b>lum</b> is its luminance, which binarize collapses to 0/255)
+              or the same constant for every cell.
+            </div>
+            {resolvedParams.channels.length === 0 ? (
+              <div style={{ fontSize: 11.5, color: '#e0a050' }}>
+                This mapping declares no parameters — every cell runs its graph with no input, so the image
+                only decides <i>which</i> cells are written, not what they become.
+              </div>
+            ) : (
+              <div style={{ display: 'grid', gridTemplateColumns: 'auto auto auto', gap: '6px 10px', alignItems: 'center', fontSize: 12, width: 'fit-content' }}>
+                {resolvedParams.params.flatMap(rp => rp.channels.map(ch => {
+                  const i = resolvedParams.channels.indexOf(ch);
+                  const src = channels[i] ?? { kind: 'const' as const, value: 0 };
+                  return (
+                    <ChannelRow
+                      key={ch.portId}
+                      label={ch.label}
+                      portId={ch.portId}
+                      type={rp.param.type}
+                      tagOptions={rp.param.type === 'tag' ? paramTagOptions(rp.param, model) : undefined}
+                      src={src}
+                      onChange={next => setChannel(i, next)}
+                    />
+                  );
+                }))}
+              </div>
+            )}
+          </div>
+        )}
+
         {useManual && (
           <div style={{ marginTop: 8, borderTop: '1px solid #2a3a50', paddingTop: 8 }}>
             <div style={{ fontSize: 11, color: '#8090a0', marginBottom: 4 }}>
@@ -405,5 +490,57 @@ export function ImageMappingDialog({
         </div>
       </div>
     </div>
+  );
+}
+
+/**
+ * One row of the channel→source table: `[label] [source ▾] [constant widget]`.
+ *
+ * The grain is the CHANNEL, not the parameter — a `color` parameter is three
+ * independently-assignable rows (Tint R / Tint G / Tint B), which is exactly what
+ * an image import wants. (The BRUSH panel is the opposite: one swatch, because
+ * there the split is an engine detail.)
+ *
+ * The constant widget is type-adaptive at channel grain: bool → a select, tag →
+ * its option names (an index typed as a raw number is unreadable), everything
+ * else — including a colour's individual 0–255 channels — a number field.
+ */
+function ChannelRow({ label, portId, type, tagOptions, src, onChange }: {
+  label: string;
+  portId: string;
+  type: string;
+  tagOptions?: string[];
+  src: ImageChannelSource;
+  onChange: (next: ImageChannelSource) => void;
+}) {
+  const constValue = src.kind === 'const' ? src.value : 0;
+  const setConst = (v: string) => onChange({ kind: 'const', value: Number(v) || 0 });
+  return (
+    <>
+      <span title={`port “${portId}” · ${type}`} style={{ color: '#cdd6e0' }}>{label}</span>
+      <select
+        value={src.kind === 'const' ? 'const' : src.ch}
+        onChange={e => onChange(e.target.value === 'const'
+          ? { kind: 'const', value: constValue }
+          : { kind: 'pixel', ch: e.target.value as PixelChannel })}
+        style={{ fontSize: 12 }}
+      >
+        {PIXEL_CHANNELS.map(ch => (
+          <option key={ch} value={ch}>{ch === 'lum' ? 'pixel luminance' : `pixel ${ch.toUpperCase()}`}</option>
+        ))}
+        <option value="const">constant…</option>
+      </select>
+      <span style={{ minWidth: 96 }}>
+        {src.kind === 'const' ? (
+          type === 'bool'
+            ? <InlineBoolSelect value={constValue ? 'true' : 'false'} onChange={v => onChange({ kind: 'const', value: v === 'true' ? 1 : 0 })} />
+            : type === 'tag'
+              ? <InlineTagSelect value={String(Math.round(constValue))} options={tagOptions ?? []} onChange={setConst} />
+              : <NumberField style={{ width: 76 }} value={constValue} onNumber={v => onChange({ kind: 'const', value: v })} />
+        ) : (
+          <span style={{ fontSize: 11, color: '#8090a0' }}>per cell</span>
+        )}
+      </span>
+    </>
   );
 }

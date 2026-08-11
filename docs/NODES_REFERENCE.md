@@ -6,10 +6,23 @@ to inform future consolidation — it does **not** describe any committed refact
 
 **Scope:** 155 registry node types across 7 categories (event, flow, data, logic, aggregation,
 output, color) — 3 hidden from the Add Node menu (`macro` / `macroInput` / `macroOutput`),
-leaving **152 selectable** (55 of them agent nodes). The newest is **Agent Input Mapping (C→A)**
+leaving **152 selectable** (55 of them agent nodes).
+
+**The newest CHANGE is not a node but a port shape: the two input-mapping roots (`inputColor`,
+`agentInputMapping`) now have DYNAMIC value outputs** — one port per PARAMETER its Colour→Attribute
+mapping declares (`Mapping.parameters`), three for a `color` parameter. A mapping that declares
+none resolves to the historical `R` / `G` / `B` integer outputs, byte-identically, which is why
+every shipped model's emitted code is unchanged. The single source of truth is
+[`src/model/inputMappingParams.ts`](../src/model/inputMappingParams.ts) (`inputParamsOf` →
+a flat CHANNEL list that IS the port list, the compiled ABI argument list and the paint payload,
+in declared order); the ports are built by `buildInputParamPorts`, consumed by BOTH
+`effectivePorts` and `CaNode`. An edge leaving a port the parameters no longer declare is DROPPED
+by the reducer's cascade and, in a hand-edited file, named by `detectDanglingRefs`.
+
+The newest NODE is **Agent Input Mapping (C→A)**
 [`agentInputMapping`] — the agent twin of the lattice `inputColor` root and the mirror image of
 `agentOutputMapping`. It roots a SINGLE-agent graph the simulator's agent brush (Paint mode) runs
-once per painted agent, with the brush colour on its R/G/B outputs; its mapping is the C→A half of
+once per painted agent, with its mapping's parameters on its value outputs; its mapping is the C→A half of
 `model.agentMappings` (the same `isAttributeToColor` discriminator the cell mappings use). Like the
 agent colour pass and the Division Event it is compiled to ONE JS function run on the CPU for every
 agent target — it is EVENT tempo (a user gesture), not step-hot, so there is nothing to gain from a
@@ -221,7 +234,7 @@ Grouped by category. `I` = input port, `O` = output port, `(arr)` = array port.
 |---|---|---|---|---|---|
 | 1 | `step` | Generation Step | Main per-cell update for each generation. | `O: DO` (flow) | Singleton — one per graph |
 | 2 | `initEvent` | Init Event | Runs once per cell on simulator **Reset** (after defaults are applied, before the first colour pass). | `O: DO` (flow), `O: x` `O: y` `O: maxX` `O: maxY` (int); 3D models also expose `O: z` `O: maxZ` (int) | Singleton. Useful for procedural initial state (gradients, deterministic noise, random orientations). Not triggered by Load State. `z`/`maxZ` are hidden in 2D models |
-| 3 | `inputColor` | Input Mapping (C→A) | Triggered by painting on the simulator canvas. | `O: DO` (flow), `O: R` `O: G` `O: B` (int) | Requires `mappingId` |
+| 3 | `inputColor` | Input Mapping (C→A) | Triggered by painting on the simulator canvas (and by image import, once per cell). | `O: DO` (flow) + **DYNAMIC**: one value output per parameter its mapping declares (a `color` parameter → three integer channels `<key>_r/_g/_b`). A mapping declaring none resolves to the legacy `O: R` `O: G` `O: B` (int). | Requires `mappingId` |
 | 4 | `outputMapping` | Output Mapping (A→C) | Computes cell colour for a viewer. | `O: DO` (flow) | Requires `mappingId`; runs once/frame after all steps |
 | 5 | `stopEvent` | Stop Event | Terminates the simulation run with a user-defined message when its flow input fires. | `I: DO` (flow) | Text widget on body holds the message; first triggered stop in a step wins; WASM emitter mirrors the JS emit via `i32.store` at `layout.stopFlagOffset` |
 
@@ -418,7 +431,7 @@ exists purely to keep graphs readable without Sequence nodes. See
 | 106 | `setAgentPosition` | Set Agent Position | `output` | Set an agent's position by id — a spawn helper for a staged Create Agent handle (also works on a live agent). | `I: DO` `I: Agent` (int) `I: X` `I: Y` (float, inline); 3D adds `I: Z` / `O: NEXT` (flow) | In the Init Event the guard is range-only (a staged agent is `alive=0`); elsewhere it requires a live agent. `Z` hidden in 2D |
 | 107 | `setAgentRadius` | Set Agent Radius | `output` | Set an agent's radius (and growth target) by id — a spawn helper for a staged Create Agent handle (also works on a live agent). | `I: DO` `I: Agent` (int) `I: Radius` (float, inline) / `O: NEXT` (flow) | Writes both `_agentRadius` and `_agentTargetRadius` so the growth ramp doesn't drag it away |
 | 108 | `getSelfHandle` | Get Self Handle | `data` | The CURRENT agent's own handle (its id = the loop `idx`) — pass it to the by-id nodes (Get/Set Agent Attribute, Get Agent Position/Offset/Radius, Form/Break Bond) so a neighbour can reference back to me, or to compare a Get Nearby Agents id against self. | `O: Handle` (int) | Emits `idx`. Runs on all three agent targets (JS / WASM / WebGPU) |
-| 114 | `agentInputMapping` | Agent Input Mapping (C→A) | `event` | The agent analogue of `inputColor` — roots a SINGLE-agent graph the simulator's agent brush (Paint mode) runs once per PAINTED agent, over an `isAttributeToColor === false` entry in `model.agentMappings`. The brush colour arrives on `R`/`G`/`B`; the DO chain writes the agent's state (Set Attribute, Set Agent Radius, Set Velocity, …). | `O: DO` (flow), `O: R/G/B` (integer) | Requires a C→A agent `mappingId` (the picker + the badge both direction-filter). NOT a singleton — one per mapping. Compiled to a JS fn run on the CPU on EVERY agent target (event tempo, the agent colour-pass / Division Event posture) |
+| 114 | `agentInputMapping` | Agent Input Mapping (C→A) | `event` | The agent analogue of `inputColor` — roots a SINGLE-agent graph the simulator's agent brush (Paint mode) runs once per PAINTED agent, over an `isAttributeToColor === false` entry in `model.agentMappings`. The brush hands it the mapping's declared PARAMETERS (or, when it declares none, the legacy `R`/`G`/`B` colour); the DO chain writes the agent's state (Set Attribute, Set Agent Radius, Set Velocity, …). | `O: DO` (flow) + **DYNAMIC** value outputs, one per declared parameter (`color` → three); legacy ⇒ `O: R/G/B` (integer) | Requires a C→A agent `mappingId` (the picker + the badge both direction-filter). NOT a singleton — one per mapping. Compiled to a JS fn run on the CPU on EVERY agent target (event tempo, the agent colour-pass / Division Event posture) |
 | 115 | `agentOutputMapping` | Agent Output Mapping (A→C) | `event` | The agent analogue of `outputMapping` — roots a per-agent colour / exhibition pass over an entry in `model.agentMappings` (Standalone graph). Runs after behaviour/division for the active agent viewer; ends in Set Cell Looks (colour) and/or Set Agent Sprite. | `O: DO` (flow) | Requires an agent `mappingId`. A Linked agent mapping synthesizes one automatically; a user root for a Linked id runs after the auto background (override-after-background). The colour pass is JS on every agent target |
 | 116 | `setAgentSprite` | Set Agent Sprite | `color` | Control the agent's sprite exhibition: independently-tickable facets — **Change sprite** (`spriteId`), **Set frame** (the `Frame` input — jump/reset), **Set speed** (the `Speed` input — frames per step, **negative = reverse**, 0 = hold), **Set rotation** (an angle in compass degrees OR a Dir X/Y vector the art aligns to), **Set scale** (per-agent size multiplier), **Set alpha** (the agent colour's alpha byte 0–255 — the sprite blit multiplies by it; a later colour pass overrides it). Tick only what you want to change. The per-agent state is persistent; the engine advances `frame += speed` each step; the render floors + wraps (loop) / clamps (once). | `I: DO` `I: Agent` (optional target id) `I: Frame` (int) `I: Speed` (float) `I: Rotation°`/`I: Dir X`/`I: Dir Y` `I: Scale` `I: Alpha` (each shown when its facet is ticked) / `O: NEXT` (flow) | Writes the per-agent display buffers `spriteIds`/`spriteFrames`/`spriteSpeeds`/`spriteRotations`/`spriteScales` (+ the agent colour's A byte). Those live in the SHARED agent memory on the CPU engines (the sprite block in `computeAgentMemoryLayout`) and in their own `agentF32` runs on the GPU (`AGENT_GPU_SPRITE_FIELDS`), so this node **emits on all three agent targets** and never clamps a model to a slower engine. It does forfeit **GPU residency** (the engine ticks `frame += speed` on the CPU once per generation); an Agent **Output Mapping** graph avoids even that, since OM passes are CPU-side on every target. Manage sprites in the Mappings panel → Sprites |
 | 117 | `gridInit` | Grid Init Event | `event` | Runs ONCE GLOBALLY on Reset (+ first load) — the free-form counterpart to the per-cell Init Event, mirroring the Agent Init Event. Wire a Loop inside DO and write arbitrary cells with Set Cell (at Position) to seed the grid procedurally (a middle box, N random seeds, drawn shapes). | `O: DO` (flow), `O: width` `O: height` (int); 3D adds `O: depth` | Singleton. NO current cell — per-cell reads (Get Cell Attribute / Position) don't apply. Runs as a JS function in the worker on EVERY compile target (JS/WASM/WebGPU) after the per-cell Init Event. `depth` hidden in 2D. Lattice-only (hidden on the Agents graph) |
@@ -543,7 +556,7 @@ graph LR
   A[getColorConstant<br/>picker]:::prod -- R,G,B --> C
   B[getModelAttribute<br/>color-typed]:::prod -- R,G,B --> C
   D[colorScale<br/>N stops + T]:::prod -- R,G,B --> C
-  E[inputColor event]:::prod -- R,G,B --> C
+  E["inputColor event<br/>(legacy colour mapping)"]:::prod -- R,G,B --> C
 
   C[setCellLooks<br/>cell color + opt. glyph]:::cons
   A -- Glyph R,G,B --> C

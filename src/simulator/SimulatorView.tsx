@@ -66,8 +66,8 @@ import { ConfirmDialog } from '../components/ConfirmDialog';
 import { serializeSimState, serializePreset, downloadStateFile, readStateFile, downloadPresetFile, readPresetFile, saveBinaryFile, base64ToArrayBuffer, deserializeTypedArray, migrateSimulationStateV1toV2, deserializeAgentState } from '../model/fileOperations';
 import type { Attribute, CAModel, IndicatorChartSettings, Mapping, Preset, SimulationState } from '../model/types';
 import {
-  inputParamsOf, encodeChannelValues, paramFallbackValue,
-  type InputParamValues,
+  inputParamsOf, encodeChannelValues, paramFallbackValue, defaultImageChannelSources,
+  type InputParamValues, type ImageChannelSource,
 } from '../model/inputMappingParams';
 import { InputParamsPanel } from './InputParamsPanel';
 import { decodeAttrValue } from '../model/attrValueEncoding';
@@ -1788,14 +1788,17 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
    *  brush COLOUR for it to edit, so showing it would be an enabled-but-inert
    *  control. (Binding it to a chosen `color` parameter is Phase 2 work.) */
   const activeInputLegacyRef = useRef(true);
-  /** The `importImage` channel baseline for one mapping: `undefined` for a LEGACY
-   *  mapping (whose per-cell payload is exactly the pixel's `[r, g, b]`, i.e. the
-   *  historical import), else the brush panel's current parameter values. */
-  const imageImportBaseline = useCallback((mappingId: string): number[] | undefined => {
+  /** The `importImage` channel ASSIGNMENT for one mapping: `undefined` for a
+   *  LEGACY mapping (whose per-cell payload is exactly the pixel's `[r, g, b]`,
+   *  i.e. the historical import), else the DEFAULT auto-assignment seeded from
+   *  the brush panel's current parameter values. The "Map Image to Cells" dialog
+   *  lets the user override it per channel and passes its own list; this is what
+   *  the non-dialog paths (the 3D classic 1px=1cell import) send. */
+  const imageImportChannels = useCallback((mappingId: string): ImageChannelSource[] | undefined => {
     const mapping = inputMappingsRef.current.find(m => m.id === mappingId);
     const resolved = inputParamsOf(mapping);
     if (resolved.legacy) return undefined;
-    return encodeChannelValues(resolved, mapping ? inputParamValuesRef.current[mapping.id] : undefined);
+    return defaultImageChannelSources(resolved, mapping ? inputParamValuesRef.current[mapping.id] : undefined);
   }, []);
   // Bond-Graph Agents — seed-config per-attribute initial values (same shape +
   // merge discipline as Manual Brush; per-model persisted). Unchecked rows seed
@@ -2896,6 +2899,10 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
   // F6: Image import pending state
   const pendingImageImport = useRef<Uint8ClampedArray | null>(null);
   const pendingImageMapping = useRef<string>('');
+  /** The channel assignment a RESIZE-mode image import carries across the worker
+   *  reinit (the dialog's table). null ⇒ derive the default at post time (the 3D
+   *  classic import, which never opens the dialog). */
+  const pendingImageChannels = useRef<ImageChannelSource[] | null>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
   // "Mapping Cells" dialog — the loaded source image being mapped (null = closed).
   const [imageMapImg, setImageMapImg] = useState<HTMLImageElement | null>(null);
@@ -6734,10 +6741,10 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
           type: 'importImage',
           pixels,
           mappingId: pendingImageMapping.current,
-          // Parameterized mappings only (absent for legacy): the brush panel's
-          // current channel payload, over which the worker writes each pixel's
-          // R/G/B into the first three channels. See the worker's applyImageCell.
-          values: imageImportBaseline(pendingImageMapping.current),
+          // Parameterized mappings only (absent for legacy): where each resolved
+          // channel gets its per-cell value. The dialog's own table when it set
+          // one, else the default auto-assignment.
+          channels: pendingImageChannels.current ?? imageImportChannels(pendingImageMapping.current),
           activeViewer: activeViewerRef.current,
         },
         { transfer: [pixels.buffer] },
@@ -12751,6 +12758,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       const pixels = new Uint8ClampedArray(ctx.getImageData(0, 0, img.width, img.height).data);
       pendingImageImport.current = pixels;
       pendingImageMapping.current = brushMappingRef.current;
+      pendingImageChannels.current = null;   // no dialog in 3D ⇒ the default assignment
       initWorkerWithDimensions(img.width, img.height);
       return;
     }
@@ -12769,7 +12777,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
   // (resize | center) × (colour mapping | manual input mapping).
   const applyImageMapping = (cfg: ImageMappingConfig) => {
     setImageMapImg(null);
-    const { cols, rows, pixels, mask, mode, useManual, mappingId, manualState } = cfg;
+    const { cols, rows, pixels, mask, mode, useManual, mappingId, manualState, channels } = cfg;
     if (cols < 1 || rows < 1) return;
     const buildSets = () => {
       const sets: Array<{ attrId: string; value: number }> = [];
@@ -12792,6 +12800,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       } else {
         pendingImageImport.current = pixels;
         pendingImageMapping.current = mappingId;
+        pendingImageChannels.current = channels ?? null;
       }
       initWorkerWithDimensions(cols, rows);
     } else {
@@ -12802,7 +12811,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
         const sets = buildSets();
         if (sets.length > 0) workerRef.current?.postMessage({ type: 'paintManual', cells: maskCells(offRow, offCol), sets, activeViewer: activeViewerRef.current });
       } else {
-        workerRef.current?.postMessage({ type: 'importImage', pixels, mappingId, region: { row: offRow, col: offCol, w: cols, h: rows }, values: imageImportBaseline(mappingId), activeViewer: activeViewerRef.current }, { transfer: [pixels.buffer] });
+        workerRef.current?.postMessage({ type: 'importImage', pixels, mappingId, region: { row: offRow, col: offCol, w: cols, h: rows }, channels: channels ?? imageImportChannels(mappingId), activeViewer: activeViewerRef.current }, { transfer: [pixels.buffer] });
       }
     }
   };
@@ -15358,6 +15367,8 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
           gridWidth={gridWidth.current || simWidth}
           gridHeight={gridHeight.current || simHeight}
           initialUseManual={brushMapping === MANUAL_BRUSH_MAPPING_ID}
+          model={model}
+          inputParamValues={inputParamValues}
           onApply={applyImageMapping}
           onCancel={() => setImageMapImg(null)}
         />

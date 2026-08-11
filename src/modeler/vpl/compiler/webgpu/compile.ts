@@ -3944,7 +3944,8 @@ function compileEntry(opts: EntryOpts, base: Omit<CompileCtx, 'lines' | 'valueLo
   // Local Variables — emit `var<function>` declarations + initial-value
   // assignments at the top of the function. Per-thread storage is per-cell
   // by construction (one shader invocation = one cell). Runs in every
-  // entry-point shader (step, inputColor, outputMapping, initEvent) so
+  // entry-point shader (step, initEvent, outputMapping — there is NO inputColor
+  // shader; painting runs the JS fn on the CPU, then patchWebGPUCells) so
   // user code can read/write variables from any of them.
   emitVariableDeclsWgsl(ctx);
 
