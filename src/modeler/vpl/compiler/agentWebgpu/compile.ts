@@ -2365,7 +2365,19 @@ function compileFlowNode(ctx: AgentWgpuCtx, nodeId: string): void {
     case 'setTargetRadius': {
       ctx.usesRadiusWrite = true;
       // C9 SAFETY CATCH: no target-radius run ⇒ no ramp to feed ⇒ drop the write.
-      if (hasF32(ctx, 'targetRadius')) ctx.lines.push(`  ${f32At(ctx, 'targetRadius', 'idx')} = ${inF32(ctx, node, 'value', 1)};`);
+      // Optional `agentId`: unwired = SELF (byte-for-byte the historical line —
+      // wiredness is read from the edge map BEFORE `fresh()` mints a name). A wired
+      // id is a cross-agent OVERWRITE, which this file's gate rejects unless it is a
+      // Create Agent handle, so this arm only ever runs for a spawn-handle target.
+      if (hasF32(ctx, 'targetRadius')) {
+        if (ctx.adj.inputToSource.get(`${node.id}:agentId`)) {
+          const id = castTo(resolveValueInput(ctx, node, 'agentId', -1), 'i32');
+          const st = fresh(ctx, 'str');
+          ctx.lines.push(`  { let ${st}: i32 = ${id}; if (${st} >= 0 && ${st} < i32(control.maxAgents)) { ${f32At(ctx, 'targetRadius', `u32(${st})`)} = ${inF32(ctx, node, 'value', 1)}; } }`);
+        } else {
+          ctx.lines.push(`  ${f32At(ctx, 'targetRadius', 'idx')} = ${inF32(ctx, node, 'value', 1)};`);
+        }
+      }
       compileFlowChain(ctx, node.id, 'next');
       break;
     }
@@ -2433,9 +2445,24 @@ function compileFlowNode(ctx: AgentWgpuCtx, nodeId: string): void {
       break;
     }
     case 'setVelocity': {
-      ctx.lines.push(`  ${f32At(ctx, 'vx', 'idx')} = ${inF32(ctx, node, 'vx', 0)};`);
-      ctx.lines.push(`  ${f32At(ctx, 'vy', 'idx')} = ${inF32(ctx, node, 'vy', 0)};`);
-      if (ctx.is3d) ctx.lines.push(`  ${f32At(ctx, 'vz', 'idx')} = ${inF32(ctx, node, 'vz', 0)};`);
+      // Optional `agentId`: unwired = SELF (the historical lines, byte-for-byte —
+      // wiredness is read from the edge map BEFORE `fresh()` mints a name). A wired
+      // id is a cross-agent OVERWRITE, which this file's own gate rejects unless the
+      // source is a Create Agent handle, so the emit below only ever runs for a
+      // spawn-handle target (guarded range-only, like setAgentAttribute).
+      if (ctx.adj.inputToSource.get(`${node.id}:agentId`)) {
+        const id = castTo(resolveValueInput(ctx, node, 'agentId', -1), 'i32');
+        const sv = fresh(ctx, 'sv');
+        const vx = inF32(ctx, node, 'vx', 0), vy = inF32(ctx, node, 'vy', 0);
+        const vz = ctx.is3d ? inF32(ctx, node, 'vz', 0) : '';
+        ctx.lines.push(`  { let ${sv}: i32 = ${id}; if (${sv} >= 0 && ${sv} < i32(control.maxAgents)) {`
+          + ` ${f32At(ctx, 'vx', `u32(${sv})`)} = ${vx}; ${f32At(ctx, 'vy', `u32(${sv})`)} = ${vy};`
+          + `${ctx.is3d ? ` ${f32At(ctx, 'vz', `u32(${sv})`)} = ${vz};` : ''} } }`);
+      } else {
+        ctx.lines.push(`  ${f32At(ctx, 'vx', 'idx')} = ${inF32(ctx, node, 'vx', 0)};`);
+        ctx.lines.push(`  ${f32At(ctx, 'vy', 'idx')} = ${inF32(ctx, node, 'vy', 0)};`);
+        if (ctx.is3d) ctx.lines.push(`  ${f32At(ctx, 'vz', 'idx')} = ${inF32(ctx, node, 'vz', 0)};`);
+      }
       compileFlowChain(ctx, node.id, 'next');
       break;
     }
@@ -2585,7 +2612,20 @@ function compileFlowNode(ctx: AgentWgpuCtx, nodeId: string): void {
     }
     case 'killAgent': {
       ctx.usesStructural = true;
-      ctx.lines.push(`  ${f32At(ctx, 'killRequest', 'idx')} = 1.0;`);
+      // Optional `agentId`: unwired = SELF (the historical single line, byte-for-byte
+      // — wiredness comes from the edge map, resolved BEFORE `fresh()` mints a name,
+      // which would shift every later name in the shader). Wired = kill that agent by
+      // id (predation), range-guarded like the other by-id writers. The store is a
+      // plain non-atomic write of the CONSTANT 1.0 into another slot: a benign race,
+      // since every racing writer writes the identical value — which is why a wired
+      // kill is NOT in this gate's cross-agent-overwrite reject set (see KillAgentNode).
+      if (ctx.adj.inputToSource.get(`${node.id}:agentId`)) {
+        const id = castTo(resolveValueInput(ctx, node, 'agentId', -1), 'i32');
+        const ka = fresh(ctx, 'ka');
+        ctx.lines.push(`  { let ${ka}: i32 = ${id}; if (${ka} >= 0 && ${ka} < i32(control.maxAgents)) { ${f32At(ctx, 'killRequest', `u32(${ka})`)} = 1.0; } }`);
+      } else {
+        ctx.lines.push(`  ${f32At(ctx, 'killRequest', 'idx')} = 1.0;`);
+      }
       compileFlowChain(ctx, node.id, 'next');
       break;
     }
@@ -3893,13 +3933,15 @@ function agentSubsetSupported(reachNodes: GraphNode[], edges: GraphEdge[], flatN
   // writers" class as the grid's toggle-indicator reject. JS/WASM run the agent
   // loop SEQUENTIALLY, so async mode gives them a well-defined order; the GPU
   // cannot honour it → such models clamp to JS/WASM. Mirrors the sync-mode
-  // compile gate in compileAgentGraph (same 4 node types, same one-hop
+  // compile gate in compileAgentGraph (same 6 node types, same one-hop
   // Create-Agent-handle exemption — a staged newborn slot is thread-owned, so
-  // spawn configuration never races). The commutative Apply Force To Agent is
-  // NOT gated (atomic-CAS scatter). Behaviour-reachable only: init/division
-  // roots are sequential CPU/JS on every target.
+  // spawn configuration never races). NOT gated, because their cross-agent write
+  // is ORDER-INDEPENDENT: Apply Force To Agent (a commutative `+=`, atomic-CAS
+  // scatter) and Kill Agent (a flag set to the CONSTANT 1 — idempotent, so every
+  // racing writer stores the identical value). Behaviour-reachable only:
+  // init/division roots are sequential CPU/JS on every target.
   {
-    const CROSS_AGENT_OVERWRITE = new Set(['setAgentAttribute', 'setAgentsAttribute', 'setAgentPosition', 'setAgentRadius']);
+    const CROSS_AGENT_OVERWRITE = new Set(['setAgentAttribute', 'setAgentsAttribute', 'setAgentPosition', 'setAgentRadius', 'setVelocity', 'setTargetRadius']);
     const flatMap = new Map(flatNodes.map(n => [n.id, n] as const));
     for (const n of reachNodes) {
       if (!CROSS_AGENT_OVERWRITE.has(n.data.nodeType)) continue;

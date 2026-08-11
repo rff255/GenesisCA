@@ -979,7 +979,9 @@ const AGENT_SELF_ONLY_TYPES = new Set<string>([
   // P2 bond attributes — both scan the SELF bond list (`idx * maxBonds`,
   // `_agentBondCount[idx]`), neither of which is in the init ABI.
   'getBondAttribute', 'setBondAttribute',
-  // self writers
+  // self writers. `setVelocity` is CONDITIONAL — see AGENT_SELF_ONLY_WHEN_UNWIRED.
+  // `killAgent` is unconditional even though it now takes an optional id: its
+  // `_killRequest` buffer is loop-only in the ABI, so neither wiring works in init.
   'setVelocity', 'applyForce', 'setTargetRadius', 'divideAgent', 'formBond', 'breakBond', 'rewireBond', 'formBondBetween', 'transferBond', 'killAgent',
   // field bridge (sampled/deposited at the SELF position)
   'sampleField', 'fieldGradient', 'readCellsUnder', 'affectCellsUnder', 'secreteToField',
@@ -987,6 +989,16 @@ const AGENT_SELF_ONLY_TYPES = new Set<string>([
   // Behaviour Step, invalid in the Init Event
   'getCellAttribute', 'setAttribute', 'updateAttribute',
 ]);
+
+/** Optional-id nodes whose init-validity depends on WIRING: unwired they write the
+ *  per-agent loop variable `idx` (init-invalid), wired they take the by-id setter's
+ *  `_agentMaxAgents` guard, which IS in the init ABI — so seeding a newborn's
+ *  velocity on its Create Agent handle is legitimate. Value = the id port to test.
+ *  (Kill Agent is NOT here: its `_killRequest` buffer is loop-only either way.) */
+const AGENT_SELF_ONLY_WHEN_UNWIRED: Record<string, string> = {
+  setVelocity: 'agentId',
+  setTargetRadius: 'agentId',
+};
 
 /** Memoised "which nodes reachable from the agentInit root are init-invalid agent
  *  readers" set, keyed on the agent graph arrays' identity (ModelContext hands
@@ -1006,12 +1018,16 @@ function agentInitSelfOnlyNodeIds(model: CAModel): Set<string> {
     // flow-output adjacency (src → targets) + value-input adjacency (node → sources).
     const flowOut = new Map<string, string[]>();
     const valIn = new Map<string, string[]>();
+    // `${nodeId}:${portId}` for every wired value INPUT — the wiredness test the
+    // conditional (optional-id) types below need.
+    const wiredValuePorts = new Set<string>();
     for (const e of edges) {
       const sh = e.sourceHandle || '', th = e.targetHandle || '';
       if (sh.startsWith('output_flow_') && th.startsWith('input_flow_')) {
         (flowOut.get(e.source) ?? (flowOut.set(e.source, []), flowOut.get(e.source)!)).push(e.target);
       } else if (sh.startsWith('output_value_') && th.startsWith('input_value_')) {
         (valIn.get(e.target) ?? (valIn.set(e.target, []), valIn.get(e.target)!)).push(e.source);
+        wiredValuePorts.add(`${e.target}:${th.slice('input_value_'.length)}`);
       }
     }
     // Flow-reachable from init (the nodes that RUN in the init function body).
@@ -1032,7 +1048,11 @@ function agentInitSelfOnlyNodeIds(model: CAModel): Set<string> {
     }
     for (const id of vseen) {
       const n = nodeMap.get(id);
-      if (n && AGENT_SELF_ONLY_TYPES.has(n.data?.nodeType)) result.add(id);
+      if (!n || !AGENT_SELF_ONLY_TYPES.has(n.data?.nodeType)) continue;
+      // Conditional types are init-valid once their id port is wired (by-id guard).
+      const idPort = AGENT_SELF_ONLY_WHEN_UNWIRED[n.data?.nodeType];
+      if (idPort && wiredValuePorts.has(`${id}:${idPort}`)) continue;
+      result.add(id);
     }
   }
   _agentInitSelfCache = { nodes, edges, set: result };

@@ -2744,14 +2744,16 @@ export function compileAgentGraph(
   // Init + Division roots are sequential (one-time setup / the structural phase),
   // never the parallel self-update loop, so they are NOT gated. Async mode is the
   // intended home for cross-agent writes (use commutative patterns for order).
-  // The overwrite/accumulate split matters: Apply Force To Agent is a commutative
-  // `+=` and is NOT gated (see applyForceToAgent). The WebGPU agent gate
+  // The OVERWRITE / ORDER-INDEPENDENT split is what decides membership: Apply
+  // Force To Agent (a commutative `+=`) and Kill Agent (a flag set to the CONSTANT
+  // 1 — idempotent, so any order gives the same result, and it cannot collide with
+  // the target's own update, which never clears it) are NOT gated. The WebGPU agent gate
   // (isAgentGraphWebGPUSupported) separately rejects behaviour-reachable
   // cross-agent overwrite writers with a WIRED non-spawn-handle id — the GPU's
   // parallel threads have no defined write order — so an async cross-agent-
   // overwrite model runs on JS/WASM (sequential ⇒ well-defined order).
   if (model.centerBased?.agentUpdateMode === 'sync') {
-    const CROSS_AGENT_OVERWRITE = new Set(['setAgentAttribute', 'setAgentsAttribute', 'setAgentPosition', 'setAgentRadius']);
+    const CROSS_AGENT_OVERWRITE = new Set(['setAgentAttribute', 'setAgentsAttribute', 'setAgentPosition', 'setAgentRadius', 'setVelocity', 'setTargetRadius']);
     // Behaviour-root flow reachability (BFS over flow-output edges). The gated
     // nodes are flow (`output`) nodes, each in exactly one flow chain, so this
     // isolates the behaviour loop from the init/division chains.

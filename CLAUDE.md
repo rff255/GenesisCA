@@ -3012,6 +3012,112 @@ The agent form of the CA grid's **Fundamental #4 (Writability)**, plus the commu
 - **Array broadcast — `applyForceToAgents`** ([ApplyForceToAgentsNode.ts](src/modeler/vpl/nodes/ApplyForceToAgentsNode.ts)): add the SAME force to EVERY agent in an id array (feed Get Nearby / Bonded / Filter Agents). **Pure editor sugar with ZERO new per-target emit** — a shared pre-compile transform **`expandForceToAgents`** ([forceToAgentsExpand.ts](src/modeler/vpl/compiler/forceToAgentsExpand.ts)) lowers it to **`For Each In Array → applyForceToAgent`** (the sanctioned "lower to primitives" pattern — `expandComposites`/`expandMultiAttrs`/`lowerVectorAttrs`), so it reuses the single node's JS/WASM/WebGPU emitters ENTIRELY. Wired into all three agent front-ends right after `collapseReroutes` (JS `compileAgentGraph` + both `flattenAgentGraph`s), so the agent-target GATE inspects the flattened graph (`forEachInArray` + `applyForceToAgent`, both supported) — `applyForceToAgents` needs NO supported-types entry. Bit-parity inherited from the two verified primitives; semantically identical to the hand-built For-Each pattern. Hot-path no-op when unused.
 - **Verified**: tsc + `npm run build` clean; Part A gate (real compiler — sync→error, async→compiles, `createAgent`-handle→exempt); Part B **JS↔WASM bit-parity** ([scripts/parity-agent-wasm.mjs](scripts/parity-agent-wasm.mjs) `buildApplyForceToAgentModel` pairwise scatter + `buildApplyForceToAgentsModel` array broadcast, 30 steps, 0 mismatches) + WGSL generation + the lowering ([scripts/test-cross-agent-writes.mjs](scripts/test-cross-agent-writes.mjs), Parts A/B/C, 2D+3D); **real-GPU** (in-browser) — both behaviour + force shaders `createShaderModule` with **0 errors** (2D+3D, single node AND the array node's scatter-CAS-inside-forEach), the runtime BUILDS (bind groups match pipeline layouts) and a real `dispatchAgentStep` runs with **0 validation errors**. Catalogue → **143 selectable / 47 agent**.
 
+### Agent action TARGETING — optional id, default self (branch `polishing`)
+
+User report: *"We have no way to 'kill' an agent from its id now? not even the 'self'?? … only
+the 'kill agent' that destroys the current evaluated agent? that is very limiting … it should
+all be consistent in providing either an id or assuming self, unless there is a strong
+technical reason not to."* Plus the same for Set Velocity, *"following the example of the node
+'Get Velocity' that the user can provide an agent or leave empty for the 'self'."*
+
+**THE CONVENTION, now uniform: an agent action either takes an OPTIONAL `Agent` id whose
+UNWIRED state means SELF, or has a by-ID sibling node.** The id port is always
+`{ id: 'agentId', label: 'Agent', dataType: 'integer' }` — literally Get Velocity's port, so
+the read and write halves of every pair look the same.
+
+**THE BYTE-IDENTITY DISCIPLINE (inherited from Form Bond's `agentA`, and non-negotiable):
+wiredness is read from the EDGE MAP and resolved BEFORE anything is minted** — `em.allocLocal`
+changes the WASM module bytes even for an *unused* local, and `fresh()` shifts every later WGSL
+name. Unwired therefore emits the historical statement byte-for-byte on all three targets
+(`check-compile-identity`: 29 models, every surface unchanged).
+
+#### The three nodes that gained the optional id
+| node | unwired | wired | gated? |
+|---|---|---|---|
+| **Kill Agent** | `_killRequest[idx] = 1` | `_killRequest[target] = 1` — PREDATION ("consume" a neighbour) | **NO** — see below |
+| **Set Velocity** | `_agentVX/VY[idx] = …` | writes that agent's velocity (knock-back) | **YES** — cross-agent OVERWRITE |
+| **Set Target Radius** | `_agentTargetRadius[idx] = …` | makes ANOTHER agent grow/shrink | **YES** — cross-agent OVERWRITE |
+
+**WHY A WIRED KILL NEEDS NO GATE — the commutativity argument, and it is the load-bearing
+reasoning here.** A kill is a **flag set to a CONSTANT** (`killRequest[t] = 1`) consumed once by
+the CPU structural phase at the end of the step. Setting the same value is **IDEMPOTENT and
+ORDER-INDEPENDENT**: N agents all electing to eat the same target produce the identical result
+in any order, and it cannot collide with that target's own self-update (nothing ever writes the
+flag back to 0). That is exactly the argument that exempts **Apply Force To Agent**'s
+commutative `+=`. So `killAgent` is deliberately **NOT** in `CROSS_AGENT_OVERWRITE`
+(compile.ts' synchronous-mode gate) and **NOT** in the WebGPU agent gate's wired-non-spawn
+reject set — verified, not assumed: a kill-only model's `isAgentGraphWebGPUSupported` returns
+**true** and it runs natively on the GPU. On WebGPU the store is a plain **non-atomic** write of
+`1.0` into another slot's `killRequest` run — a benign race, because every racing writer writes
+the identical value — and `readbackAgentStep` already rounds it (`>= 0.5 ? 1 : 0`).
+**Set Velocity / Set Target Radius are the opposite**: last-writer-wins overwrites, so they join
+the same machinery as Set Agent Attribute / Position / Radius (the set is now **six** types in
+both gates). For an order-independent way to influence another agent's motion, Apply Force To
+Agent works in both modes on every target.
+
+**Guards** mirror the by-id setters exactly: range-only (`< _agentMaxAgents`, WASM's shared
+`emitGuardedAgentWrite`, WGSL's `< i32(control.maxAgents)`) in the init/behaviour roots — the
+unified-spawning relaxation that lets a staged Create Agent handle be configured — and
+range+alive elsewhere. For the kill, range-only is *provably equivalent* to range+alive because
+the structural phase separately gates on `alive[i]`, and a recycled slot is cleared by
+`initAgentSlot`.
+
+**⚠ THE INIT-ABI ASYMMETRY THIS EXPOSED (a real trap):** `deriveAgentAbi`'s **init** kind carries
+`_agentZ` but **NOT `_agentVZ`**, and `_killRequest` is **loop-only**. So a wired Set Velocity in
+the Agent Init Event (a legitimate "seed a newborn's velocity on its handle" use) would have
+emitted an undefined `_agentVZ` in 3D — it now **drops the z half in the init root** (the C9
+"no param ⇒ no write" safety-catch shape) rather than widening the ABI. Kill Agent stays
+unconditionally init-invalid either way. `nodeValidation`'s `AGENT_SELF_ONLY_WHEN_UNWIRED`
+makes that badge WIRING-aware for the two conditional nodes.
+
+#### THE AUDIT — every agent action node's targeting (the sweep behind the convention)
+| node | targeting | why |
+|---|---|---|
+| Apply Force / **Apply Force To Agent** / Apply Force To Agents | self / **by id** / array | complete trio already |
+| Set Attribute (Self) / **Set Agent Attribute** / Set Agents Attribute | self / **by id** / array | complete trio; the by-id half is *named* "(by ID)" and its unwired `-1` no-op is load-bearing for the spawn idiom |
+| **Set Agent Position** / **Set Agent Radius** | by id (required) | by-ID half of a documented pair; `Get Self Handle` is one wire away, and their unwired no-op is the spawn-handle idiom. **Left required deliberately** — defaulting them to self would silently retarget existing graphs |
+| **Kill Agent** | **optional id ⇒ self** | ✅ this change — had NO by-id sibling |
+| **Set Velocity** | **optional id ⇒ self** | ✅ this change — had NO by-id sibling |
+| **Set Target Radius** | **optional id ⇒ self** | ✅ this change — Set Agent Radius sets the CURRENT radius, so the GROWTH TARGET was unreachable for any other agent |
+| Set Agent Sprite | optional id ⇒ self | already the convention |
+| Form Bond | optional `agentA` ⇒ self + `targetAgent` | already (lowers to the Form Between encoding when wired) |
+| Form Bond Between / Transfer Bond | two / three explicit ids | inherently multi-party |
+| **Break Bond** / Set Bond Attribute / Rewire Bond | self-anchored pair | **the one real remaining gap** — see the follow-up below |
+| Divide Agent | self only | dividing another agent by id would need the Division Event (which runs per-DAUGHTER of the divider) to answer "whose event is this?", plus a partition spec chosen by an agent that is not the mother. A semantic redesign, not a port |
+| Add Agent To World / Create Agent | by handle | a handle IS the target; "self" is meaningless |
+| affectCellsUnder / secreteToField / sampleField / fieldGradient / readCellsUnder | self position | the node's identity is "the cells **under this agent**"; a by-id variant is a plausible future node, not a port on these |
+| moveSelfToNeighbor etc. | — | lattice nodes, out of scope |
+
+#### FOLLOW-UP (recorded, deliberately NOT half-shipped): `Break Bond Between (a, b)`
+Break Bond is self-anchored (`self ↔ targetAgent`), so a third party cannot cut an edge it is
+not part of. The encoding is already reserved: per the [bondRequestQueue.ts](src/modeler/vpl/compiler/bondRequestQueue.ts)
+lane table, Form Between negates the BREAK lane and Transfer negates the FORM lane, leaving
+**both lanes negative** as the one free combination. Sketch: `bl = −(a+2)`, `fl = −(b+2)`;
+decode it in `drainAgentBondRequests` **before** the two existing sign branches; whole-op
+pre-check (`a↔b` must exist, both live/in range) so **I5** holds; emit on all three targets
+through the shared `emitBondRequest`. It is compiler + engine + drain work touching the
+invariant harness, so it wants its own pass rather than a rushed rider on this one.
+
+- **Verified.** Byte-identity **29/29, every surface**. Harnesses: `parity-agent-wasm`
+  (JS↔WASM bit-parity, all samples + a new permanent `[synthetic] By-id targeting` entry),
+  `verify-graph-rewrite` **533**, `test-agent-abi` **607**, `test-c9-gates` **413**,
+  `audit-agent-layout`, `test-cross-agent-writes`, `parity-agent-force` **43**,
+  `check-agent-wasm-gate`, `gen-capability-docs --check`. The new synthetic splits the
+  population into hunters + prey + BYSTANDERS and recomputes every expected number from the
+  agent's HANDLE, so a by-id write that spills onto an untargeted slot is caught;
+  **negative-controlled both ways** — WASM-only dropping the kill guard fails PARITY
+  (`killRequest[0] js=0 wasm=1`), while making BOTH targets write self (which parity cannot
+  see) fails the VALUE INVARIANT.
+- **Real UI** (a "Consume" model: each agent knocks back every neighbour within r=3 and eats the
+  one within 1.6, with a `self < other` tie-break): from ONE pinned seed **JS and WASM produce
+  the IDENTICAL series 400 → 248 → 245 → 244 → 244** with 240 agents carrying the by-id
+  knock-back velocity (read via `readAgents` — the render snapshot's `vx` is a length-0 array
+  unless velocity is REQUESTED, the documented trap); the same model on the WebGPU agent target
+  correctly **clamps to JS** (`isAgentGraphWebGPUSupported` false, chip `⚙ agents JS⚠`) with
+  identical results; a **kill-only** variant runs **natively on the real GPU** (chip
+  `⚙ agents WebGPU`, no fallback, 400 → 248) — the commutativity claim, demonstrated; and the
+  same model in SYNCHRONOUS agent mode produces the named compile-gate error. 0 console errors.
+
 ### Agent-engine performance review round (branch `optimize`, 2026-07-22)
 A measured, phase-profiled review of "Particle Life struggles before 50k" — full findings + prioritized fix list in **[docs/PERF_REVIEW_AGENT_ENGINE.md](docs/PERF_REVIEW_AGENT_ENGINE.md)**. **The FOLLOW-ON project (GPU-resident agent RENDER + residency widening, phases A1→F) is planned and session-orchestrated via [docs/HANDOFF_GPU_AGENT_RENDER.md](docs/HANDOFF_GPU_AGENT_RENDER.md)** (master runbook: invariants, phase sequence, per-phase handoffs, status board) — new sessions execute one phase each; read the master's §0/§3 before touching this area. What SHIPPED in the round:
 - **Resize → agent-compiler dims desync FIXED** (the `[agents] spatial hash (N bins) exceeds the WebGPU reserve (M)` error after a simulator Resize): `compileAgentModel` now takes the SAME dims-overridden **`dimsModel`** the grid compilers get (both call sites — init + soft recompile). Before, the agent WASM/WebGPU layouts baked the MODEL dims while the worker ran LIVE dims: WebGPU → permanent silent per-step JS demotion after any resize-to-larger; WASM → a store↔module offset desync of every region after the hash reserve (nearby-scratch/model-attrs/**lookup-tables**/fields — silent wrong-offset reads, the baked-offset corruption class). Defence-in-depth: the init/recompile messages ship **`agentWasmLayoutSig`** (`{maxHashBins, totalBytes}` of the compiled layout) and `instantiateAgentWasmIfNeeded` REFUSES to instantiate on a mismatch (loud error + safe JS-on-views fallback). Browser-verified: WASM + WebGPU targets at 600×600 run clean post-resize.

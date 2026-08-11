@@ -1903,6 +1903,150 @@ function transferBondInvariant(st) {
   return null;
 }
 
+/** PREDATION — the optional-id targeting convention on the three action nodes that
+ *  gained it (Kill Agent / Set Velocity / Set Target Radius), exercising BOTH arms
+ *  of each in ONE deterministic run.
+ *
+ *  The population splits by handle: agents 0..11 are HUNTERS, 12..23 their PREY
+ *  (hunter h preys on h+12). The behaviour loop runs 0..23 in order, so every
+ *  hunter has acted before any prey does, and the final state is a closed form of
+ *  the handle alone:
+ *    hunter h  : vx = h+1, vy = h+100                   ← Set Velocity, UNWIRED (self)
+ *    prey h+12 : vx = h+500, vy = h+700                 ← Set Velocity, WIRED (by id)
+ *                targetRadius = h+30                    ← Set Target Radius, WIRED
+ *                killRequest = 1 iff h%3==0             ← Kill Agent, WIRED (predation)
+ *                              OR (h+12)%7==0           ← Kill Agent, UNWIRED (self-kill)
+ *  Prey 21 is flagged by BOTH rules — the IDEMPOTENCE case that is the whole
+ *  argument for a wired kill needing no synchronous-mode gate.
+ *
+ *  The harness seeds MORE agents than the 12 hunters can prey on; the surplus are
+ *  BYSTANDERS (else branch, self-kill only) and nothing may reach them by id — so
+ *  they are the check that a by-id write never spills onto an untargeted slot. */
+function buildByIdTargetingModel() {
+  const used = new Set();
+  const nid = (p) => { let id; do { id = p + Math.random().toString(36).slice(2, 8); } while (used.has(id)); used.add(id); return id; };
+  const aN = [], aEd = [];
+  const an = (t, c) => { const n = { id: nid('a'), type: 'caNode', position: { x: 0, y: 0 }, data: { nodeType: t, config: c } }; aN.push(n); return n; };
+  const aE = (s, sp, tt, tp, cat) => aEd.push({ id: nid('e'), source: s.id, target: tt.id, sourceHandle: `output_${cat}_${sp}`, targetHandle: `input_${cat}_${tp}` });
+  /** self + k, as one arithmetic node fed by Get Self Handle. */
+  const plus = (src, k) => { const n = an('arithmeticOperator', { operation: '+', _port_y: String(k) }); aE(src, 'value', n, 'x', 'value'); return n; };
+
+  const bs = an('behaviourStep', {});
+  const gsh = an('getSelfHandle', {});
+  const isHunter = an('statement', { operation: '<', _port_y: '12' });
+  aE(gsh, 'value', isHunter, 'x', 'value');
+  const split = an('conditional', {});
+  aE(isHunter, 'result', split, 'condition', 'value');
+  aE(bs, 'do', split, 'check', 'flow');
+
+  // --- HUNTER branch -------------------------------------------------------
+  // 1. Set Velocity with the Agent port UNWIRED — the historical self-write.
+  const selfVx = plus(gsh, 1), selfVy = plus(gsh, 100);
+  const svSelf = an('setVelocity', {});
+  aE(selfVx, 'result', svSelf, 'vx', 'value');
+  aE(selfVy, 'result', svSelf, 'vy', 'value');
+  aE(split, 'then', svSelf, 'do', 'flow');
+
+  // 2. Set Velocity BY ID on the prey (a cross-agent overwrite — legal here
+  //    because the model is in ASYNC agent mode).
+  const prey = plus(gsh, 12);
+  const preyVx = plus(gsh, 500), preyVy = plus(gsh, 700);
+  const svById = an('setVelocity', {});
+  aE(prey, 'result', svById, 'agentId', 'value');
+  aE(preyVx, 'result', svById, 'vx', 'value');
+  aE(preyVy, 'result', svById, 'vy', 'value');
+  aE(svSelf, 'next', svById, 'do', 'flow');
+
+  // 3. Set Target Radius BY ID on the prey — make your prey grow.
+  const tgtR = plus(gsh, 30);
+  const strById = an('setTargetRadius', {});
+  aE(prey, 'result', strById, 'agentId', 'value');
+  aE(tgtR, 'result', strById, 'value', 'value');
+  aE(svById, 'next', strById, 'do', 'flow');
+
+  // 4. Every third hunter EATS its prey — Kill Agent BY ID.
+  const hMod3 = an('arithmeticOperator', { operation: '%', _port_y: '3' });
+  aE(gsh, 'value', hMod3, 'x', 'value');
+  const hEats = an('statement', { operation: '<', _port_y: '0.5' });
+  aE(hMod3, 'result', hEats, 'x', 'value');
+  const eatIf = an('conditional', {});
+  aE(hEats, 'result', eatIf, 'condition', 'value');
+  aE(strById, 'next', eatIf, 'do', 'flow');
+  const killById = an('killAgent', {});
+  aE(prey, 'result', killById, 'agentId', 'value');
+  aE(eatIf, 'then', killById, 'do', 'flow');
+
+  // --- PREY branch: every 7th prey dies of despair — Kill Agent UNWIRED (self).
+  const pMod7 = an('arithmeticOperator', { operation: '%', _port_y: '7' });
+  aE(gsh, 'value', pMod7, 'x', 'value');
+  const pDies = an('statement', { operation: '<', _port_y: '0.5' });
+  aE(pMod7, 'result', pDies, 'x', 'value');
+  const dieIf = an('conditional', {});
+  aE(pDies, 'result', dieIf, 'condition', 'value');
+  aE(split, 'else', dieIf, 'check', 'flow');
+  const killSelf = an('killAgent', {});
+  aE(dieIf, 'then', killSelf, 'do', 'flow');
+
+  return {
+    schemaVersion: 1,
+    properties: { name: 'By-Id Targeting Parity Test', dimension: '2d', gridWidth: 24, gridHeight: 24, gridDepth: 1, topology: '2d-grid', boundaryTreatment: 'torus', useWasm: false, useWebGPU: false },
+    topologyMode: { gridCells: false, agents: true },
+    centerBased: { enabled: true, maxAgents: 100, maxBonds: 0, worldWidth: 24, worldHeight: 24, seedCount: 24, seedPattern: 'scatter', defaultRadius: 0.5, growthRate: 0, repulsionStiffness: 0, adhesionStiffness: 0, interactionRange: 1.5, drag: 1, timeStep: 0.1, momentum: 0.9, maxSpeed: 0, neighbourQueryRadius: 8, useBondingPhysics: false, autoBond: false, agentTarget: 'wasm', agentUpdateMode: 'async',
+      agentCapabilities: { motion: 'force', body: true, collision: 'off', bonds: 'off', autoBond: false, growth: true, division: false, lifespan: false, populationBirth: false, populationDeath: true, sensing: false, sensingHeadingSource: 'velocity', orientation: false, fieldCoupling: false, appearance: true } },
+    attributes: [], modelAttributes: [], neighborhoods: [],
+    agentAttributes: [], bondAttributes: [],
+    variables: [], agentVariables: [], indicators: [], mappings: [],
+    graphNodes: [], graphEdges: [], agentGraphNodes: aN, agentGraphEdges: aEd, macroDefs: [],
+  };
+}
+
+/** THE VALUE INVARIANT for the by-id targeting synthetic. Recomputes every
+ *  expected number from the agent's HANDLE alone — so a mutation applied
+ *  IDENTICALLY to both targets (which parity cannot see) is still caught: e.g.
+ *  dropping the id guard, writing self instead of the target, or losing the
+ *  second flag on the doubly-killed prey. */
+function byIdTargetingInvariant(st) {
+  const H = 12;
+  let flagged = 0, unflagged = 0, doubly = 0, bystanders = 0;
+  for (let i = 0; i < st.highWater; i++) {
+    if (!st.alive[i]) continue;
+    if (i >= 2 * H) {
+      // BYSTANDER — the harness seeds more agents than the 12 hunters can prey on.
+      // It takes the else branch (self-kill only) and NOTHING may reach it by id:
+      // an unguarded / mis-targeted by-id write would land here and be caught.
+      const despair = i % 7 === 0;
+      if (st.killRequest[i] !== (despair ? 1 : 0)) return `bystander ${i}: killRequest ${st.killRequest[i]} !== ${despair ? 1 : 0} (unwired Kill Agent must write SELF)`;
+      if (st.vx[i] !== 0 || st.vy[i] !== 0) return `bystander ${i}: velocity (${st.vx[i]}, ${st.vy[i]}) — nothing targets it, so a by-id write spilled`;
+      bystanders++;
+      continue;
+    }
+    if (i < H) {
+      // HUNTER — the UNWIRED (self) Set Velocity arm.
+      if (st.vx[i] !== i + 1) return `hunter ${i}: vx ${st.vx[i]} !== ${i + 1} (unwired Set Velocity must write SELF)`;
+      if (st.vy[i] !== i + 100) return `hunter ${i}: vy ${st.vy[i]} !== ${i + 100}`;
+      if (st.killRequest[i] !== 0) return `hunter ${i}: killRequest ${st.killRequest[i]} — no rule kills a hunter (a by-id kill wrote the WRONG slot?)`;
+    } else {
+      const h = i - H;
+      // PREY — every write here came from its hunter, BY ID.
+      if (st.vx[i] !== h + 500) return `prey ${i}: vx ${st.vx[i]} !== ${h + 500} (wired Set Velocity by id)`;
+      if (st.vy[i] !== h + 700) return `prey ${i}: vy ${st.vy[i]} !== ${h + 700}`;
+      if (st.targetRadius[i] !== h + 30) return `prey ${i}: targetRadius ${st.targetRadius[i]} !== ${h + 30} (wired Set Target Radius by id)`;
+      const eaten = h % 3 === 0, despair = i % 7 === 0;
+      const expect = (eaten || despair) ? 1 : 0;
+      if (st.killRequest[i] !== expect) return `prey ${i}: killRequest ${st.killRequest[i]} !== ${expect} (eaten=${eaten} self-kill=${despair})`;
+      if (expect) flagged++; else unflagged++;
+      if (eaten && despair) doubly++;
+    }
+  }
+  // Non-vacuity: the run must actually exercise every arm, including the
+  // doubly-flagged prey that makes the idempotence argument concrete.
+  if (!flagged) return 'no prey was ever flagged for death — the by-id kill never fired';
+  if (!unflagged) return 'every prey was flagged — the kill is not being gated at all';
+  if (!doubly) return 'no prey was flagged by BOTH rules — the idempotent double-write case never ran';
+  if (!bystanders) return 'the run had no bystanders — the by-id-write-spill check never ran';
+  return null;
+}
+
 entries.push({
   name: '[synthetic] TRANSFER Bond (sign-encoded op kind vs Rewire, same ids)',
   raw: buildTransferBondModel(), setup: setupBondAttrStores, invariant: transferBondInvariant,
@@ -1910,6 +2054,10 @@ entries.push({
 entries.push({
   name: '[synthetic] Division partition (two Divide Agent nodes, distinct codes)',
   raw: buildDividePartitionModel(), setup: setupBondAttrStores, invariant: dividePartitionInvariant,
+});
+entries.push({
+  name: '[synthetic] By-id targeting (Kill / Set Velocity / Set Target Radius, self + by id)',
+  raw: buildByIdTargetingModel(), invariant: byIdTargetingInvariant,
 });
 entries.push({ name: '[synthetic] Flow diamond (conditional → shared getRandom chain)', raw: buildDiamondModel() });
 entries.push({ name: '[synthetic] RNG draw order (branch draw + post-branch draws)', raw: buildRngOrderModel() });
