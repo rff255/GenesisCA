@@ -36,9 +36,12 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // P4b — FORM BETWEEN, and why its op kind rides the SIGN of the break lane.
 //
-// `formBondBetween(a, b)` bonds two OTHER agents, so it needs TWO agent ids in one
-// entry — which is exactly what a REWIRE already uses both lanes for. The two op
-// kinds therefore collide and must be disambiguated.
+// A Form Bond with its `agentA` port WIRED bonds two agents named by id, so it
+// needs TWO agent ids in one entry — which is exactly what a REWIRE already uses
+// both lanes for. The two op kinds therefore collide and must be disambiguated.
+// (This encoding shipped with a dedicated `formBondBetween` NODE, since retired
+// into Form Bond — see `formBondBetweenMigration.ts`. Only the second spelling
+// went away; the encoding and the engine's drain arm are unchanged.)
 //
 // A new "op kind" lane was rejected: `bondFormReq`/`bondBreakReq` sit MID-LIST in
 // `AGENT_I32_FIELDS` (and `AGENT_GPU_F32_FIELDS`), so any additional field shifts
@@ -101,7 +104,7 @@ import { resolveBondRequestDepth } from '../../../model/centerBased';
 /** The flow nodes that append an entry to the queue. Adding a verb means adding
  *  it HERE (so the layout sizes the queue) and to each target's emitter. */
 export const BOND_REQUEST_NODE_TYPES: ReadonlySet<string> = new Set([
-  'formBond', 'breakBond', 'rewireBond', 'formBondBetween', 'transferBond',
+  'formBond', 'breakBond', 'rewireBond', 'transferBond',
 ]);
 
 /** Lane value meaning "this side of the entry is unused" (a plain Form has no

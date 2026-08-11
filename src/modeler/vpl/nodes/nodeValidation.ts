@@ -982,7 +982,7 @@ const AGENT_SELF_ONLY_TYPES = new Set<string>([
   // self writers. `setVelocity` is CONDITIONAL — see AGENT_SELF_ONLY_WHEN_UNWIRED.
   // `killAgent` is unconditional even though it now takes an optional id: its
   // `_killRequest` buffer is loop-only in the ABI, so neither wiring works in init.
-  'setVelocity', 'applyForce', 'setTargetRadius', 'divideAgent', 'formBond', 'breakBond', 'rewireBond', 'formBondBetween', 'transferBond', 'killAgent',
+  'setVelocity', 'applyForce', 'setTargetRadius', 'divideAgent', 'formBond', 'breakBond', 'rewireBond', 'transferBond', 'killAgent',
   // field bridge (sampled/deposited at the SELF position)
   'sampleField', 'fieldGradient', 'readCellsUnder', 'affectCellsUnder', 'secreteToField',
   // universal self-attribute nodes (on the agent SoA at idx) — valid in the

@@ -54,6 +54,7 @@ import { expandNeighbourCensus } from '../censusExpand';
 import { expandPeriodicSteps } from '../periodicExpand';
 import { expandComposites } from '../expandComposites';
 import { BOND_REQ_ID_BIAS, BOND_REQ_NONE, bondReqSlotsForModel } from '../bondRequestQueue';
+import type { BondRequestOp, BondRequestVerb } from '../bondRequestEmitJS';
 import { dividePartitionCode, assignDividePartitionCodes } from '../dividePartition';
 import { injectAgentLinkedOutputMappings } from '../agentLinkedOutputMappings';
 import { lowerVectorAttrs, expandVectorAttributes } from '../vectorAttr';
@@ -124,7 +125,7 @@ export const AGENT_WEBGPU_SUPPORTED_TYPES: ReadonlySet<string> = new Set<string>
   // indicators
   'getIndicator', 'setIndicator', 'updateIndicator',
   // structural writes (G4 — the post-step CPU structural phase reads the requests)
-  'divideAgent', 'formBond', 'breakBond', 'rewireBond', 'formBondBetween', 'transferBond', 'killAgent',
+  'divideAgent', 'formBond', 'breakBond', 'rewireBond', 'transferBond', 'killAgent',
   // mid-step graph-authored spawning (Create Agent → set-by-handle → Add To World,
   // exactly as in the Init Event — an atomic bump allocator gives the handle a real
   // slot id, so the by-id setters write the newborn directly; CPU-reconciled).
@@ -1626,7 +1627,7 @@ function emitGetBondAttribute(ctx: AgentWgpuCtx, node: GraphNode): ValueRef {
  *  and the emit is sequential within a thread, so nothing races. (Contrast Apply
  *  Force To Agent, which scatters into ANOTHER agent's slot and therefore does use
  *  an atomic CAS.) */
-function emitBondRequest(ctx: AgentWgpuCtx, node: GraphNode, verb: 'form' | 'break' | 'rewire' | 'between' | 'transfer'): void {
+function emitBondRequest(ctx: AgentWgpuCtx, node: GraphNode, verb: BondRequestVerb): void {
   ctx.usesStructural = true;
   ctx.usesBondReqQueue = true;
   const slots = Math.max(1, ctx.layout.bondReqSlots);
@@ -1637,8 +1638,7 @@ function emitBondRequest(ctx: AgentWgpuCtx, node: GraphNode, verb: 'form' | 'bre
   // path would shift every later name and diff the shader. Unwired ⇒ effVerb ===
   // verb ⇒ the historical arm verbatim ⇒ byte-identical WGSL.
   const pairWired = verb === 'form' && !!ctx.adj.inputToSource.get(`${node.id}:agentA`);
-  const effVerb = pairWired ? 'between' : verb;
-  const bPort = verb === 'between' ? 'agentB' : 'targetAgent';
+  const effVerb: BondRequestOp = pairWired ? 'between' : verb;
   const e = fresh(ctx, 'brqE');
   // entry = idx*slots + min(brqC, depth); brqC++ (the cursor bumps even when the
   // queue is full, so the op lands in the overflow bucket rather than overwriting
@@ -1659,12 +1659,12 @@ function emitBondRequest(ctx: AgentWgpuCtx, node: GraphNode, verb: 'form' | 'bre
     // costing no new run and therefore moving no baked base. Both ids must resolve
     // or the entry is an explicit no-op, still (−NONE, NONE) so it stays non-zero
     // and cannot truncate the queue. Still NO atomics: the thread writes only its
-    // OWN agent's rows — the two ids are PAYLOAD, not addresses (which is equally
-    // true of a Form Bond with a wired `agentA`, which lands here with its second
-    // id read from `targetAgent`).
+    // OWN agent's rows — the two ids are PAYLOAD, not addresses. Since the Form
+    // Bond Between NODE was retired, this arm is reached only through a Form Bond
+    // with a wired `agentA` (its second id is `targetAgent`).
     const a = fresh(ctx, 'brqA'), b = fresh(ctx, 'brqB'), ok = fresh(ctx, 'brqOk');
     ctx.lines.push(`  let ${a}: i32 = ${castTo(resolveValueInput(ctx, node, 'agentA', -1), 'i32')};`);
-    ctx.lines.push(`  let ${b}: i32 = ${castTo(resolveValueInput(ctx, node, bPort, -1), 'i32')};`);
+    ctx.lines.push(`  let ${b}: i32 = ${castTo(resolveValueInput(ctx, node, 'targetAgent', -1), 'i32')};`);
     ctx.lines.push(`  let ${ok}: bool = (${a} >= 0) && (${b} >= 0);`);
     ctx.lines.push(`  ${reqAt(ctx, 'bondBreakReq', e)} = f32(-select(${BOND_REQ_NONE}, ${a} + ${BOND_REQ_ID_BIAS}, ${ok}));`);
     ctx.lines.push(`  ${reqAt(ctx, 'bondFormReq', e)} = f32(select(${BOND_REQ_NONE}, ${b} + ${BOND_REQ_ID_BIAS}, ${ok}));`);
@@ -2596,11 +2596,9 @@ function compileFlowNode(ctx: AgentWgpuCtx, nodeId: string): void {
     case 'formBond':
     case 'breakBond':
     case 'rewireBond':
-    case 'formBondBetween':
     case 'transferBond': {
       emitBondRequest(ctx, node, node.data.nodeType === 'formBond' ? 'form'
         : node.data.nodeType === 'breakBond' ? 'break'
-        : node.data.nodeType === 'formBondBetween' ? 'between'
         : node.data.nodeType === 'transferBond' ? 'transfer' : 'rewire');
       compileFlowChain(ctx, node.id, 'next');
       break;

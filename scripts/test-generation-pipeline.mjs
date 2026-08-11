@@ -181,7 +181,7 @@ section('   structural sub-steps use the engine usage gates');
     M.agentGraphUsesBondRequests(noVerbs), 'drain off with no queue verb');
   eq(M.agentGraphUsesBondRequests(noVerbs), false, 'the no-verb fixture really has no queue verb');
 
-  for (const verb of ['formBond', 'breakBond', 'rewireBond', 'formBondBetween']) {
+  for (const verb of ['formBond', 'breakBond', 'rewireBond', 'transferBond']) {
     const m = agentModel({ bonds: 'physics' }, {}, [node('b1', 'behaviourStep'), node('v1', verb)]);
     eq(activeOf(M.describeGenerationPipeline(m), 'structural.drain'),
       M.agentGraphUsesBondRequests(m), `drain tracks the queue gate for ${verb}`);

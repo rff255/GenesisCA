@@ -2728,19 +2728,20 @@ export function HelpView() {
             rest length 0 still means the contact distance of whichever pair ends up bonded.
           </p>
           <p className={styles.p}>
-            <strong>Form Bond Between</strong> bonds <em>two other agents</em>, named by id &mdash;
-            the same job as a Form Bond with its Agent A wired, kept as its own node because naming
-            both agents up front is often what the rule is actually about. Form Bond on its own (with
-            Agent A left at the default) joins <em>you</em> to a target, so it cannot make an edge
-            between two agents that are both someone else &mdash; and the classic <strong>triangle split</strong>
+            <strong>Why naming both ends matters.</strong> A Form Bond with Agent A left at the
+            default joins <em>you</em> to a target, so on its own it cannot make an edge between two
+            agents that are both someone else &mdash; and the classic <strong>triangle split</strong>
             needs exactly that: it creates two new nodes and one of the three new edges joins those
             two newborns, neither of which is you, and neither of which runs its own rule until the
-            next generation. With this verb the whole split fits in a single step, so the graph is
-            never caught in a half-rewritten state. The request travels on <em>your</em> queue &mdash;
-            the two ids are just values it carries &mdash; and the same all-or-nothing rule applies:
-            if either agent is gone, they are already bonded, or <em>either</em> one has a full bond
-            list, nothing is formed. Rest length 0 means the contact distance of the two agents you
-            named.
+            next generation. Wire Agent A and the whole split fits in a single step, so the graph is
+            never caught in a half-rewritten state. The same all-or-nothing rule applies either way:
+            if an agent is gone, the pair is already bonded, or <em>either</em> one has a full bond
+            list, nothing is formed.
+          </p>
+          <p className={styles.p}>
+            <em>Older models:</em> this used to be a separate <strong>Form Bond Between</strong>
+            node. It was retired once Form Bond&rsquo;s Agent A port made it a duplicate &mdash; a
+            model that used it loads as a Form Bond with Agent A wired, and behaves identically.
           </p>
           <h3 className={styles.h3}>Dividing: which daughter gets which bond?</h3>
           <p className={styles.p}>

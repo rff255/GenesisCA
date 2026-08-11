@@ -16,7 +16,6 @@ import { SetTargetRadiusNode } from './SetTargetRadiusNode';
 import { FormBondNode } from './FormBondNode';
 import { BreakBondNode } from './BreakBondNode';
 import { RewireBondNode } from './RewireBondNode';
-import { FormBondBetweenNode } from './FormBondBetweenNode';
 import { TransferBondNode } from './TransferBondNode';
 import { ForEachBondNode } from './ForEachBondNode';
 import { DivideAgentNode } from './DivideAgentNode';
@@ -244,7 +243,6 @@ const ALL_NODES: NodeTypeDef[] = [
   FormBondNode,
   BreakBondNode,
   RewireBondNode,
-  FormBondBetweenNode,
   TransferBondNode,
   ForEachBondNode,
   DivideAgentNode,
