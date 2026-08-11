@@ -1,0 +1,537 @@
+<meta charset="utf-8">
+<title>Parameterized Input Mappings — illustrated plan</title>
+<style>
+  :root{--bg:#0c0d10;--panel:#15171c;--line:#282c34;--fg:#d8dae0;--dim:#8a8f99;--acc:#e8a13a;
+        --red:#e05252;--ok:#5fbf7f;--cy:#4cc9f0;--gr:#66bb6a;--vi:#a97fe0}
+  *{box-sizing:border-box}
+  body{margin:0;padding:28px;background:var(--bg);color:var(--fg);font:14px/1.55 -apple-system,Segoe UI,Roboto,sans-serif}
+  h1{font-size:21px;margin:0 0 4px}
+  h2{font-size:13.5px;text-transform:uppercase;letter-spacing:.08em;color:var(--acc);margin:36px 0 12px;border-bottom:1px solid var(--line);padding-bottom:6px}
+  h3{font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:var(--dim);margin:18px 0 8px}
+  p.lead{color:var(--dim);margin:0 0 6px;max-width:88ch}
+  .note{color:var(--dim);font-size:12px;margin-top:10px;max-width:88ch}
+  .cols{display:flex;gap:18px;flex-wrap:wrap;align-items:flex-start}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:14px 16px;flex:1 1 400px;min-width:360px}
+  .card.wide{flex:1 1 100%}
+  .tag{display:inline-block;font-size:10px;letter-spacing:.09em;text-transform:uppercase;padding:2px 7px;border-radius:10px;margin-bottom:10px}
+  .before{background:#3a2020;color:#e39898;border:1px solid #5c2f2f}
+  .after{background:#2a2416;color:var(--acc);border:1px solid #5c4520}
+  .neutral{background:#1c2028;color:#9fb0c4;border:1px solid #333b47}
+  code{background:#1b1e24;padding:1px 5px;border-radius:3px;font-size:12px;color:#c9d3e0}
+  pre{background:#101318;border:1px solid var(--line);border-radius:6px;padding:10px 12px;overflow:auto;
+      font:11.5px/1.5 ui-monospace,Menlo,Consolas,monospace;color:#c2cbd6;margin:8px 0 0}
+  table{border-collapse:collapse;width:100%;font-size:12.5px;margin-top:8px}
+  th,td{border:1px solid var(--line);padding:6px 9px;text-align:left;vertical-align:top}
+  th{background:#181b21;color:var(--acc);font-size:11px;text-transform:uppercase;letter-spacing:.06em}
+  /* --- panel chrome --- */
+  .pnl{background:#111318;border:1px solid var(--line);border-radius:6px;padding:0;overflow:hidden}
+  .pnlHead{background:#181b21;border-bottom:1px solid var(--line);padding:7px 11px;font-size:11px;
+           letter-spacing:.07em;text-transform:uppercase;color:var(--acc)}
+  .pnlBody{padding:11px}
+  .field{margin:0 0 9px}
+  .field label{display:block;font-size:11px;color:var(--dim);margin-bottom:3px}
+  .inp{background:#0d0f13;border:1px solid #2a3038;border-radius:4px;padding:5px 8px;font-size:12px;color:#cfd6e0}
+  .inp.full{display:block;width:100%}
+  .ta{min-height:34px}
+  .row{display:flex;gap:8px;align-items:center}
+  .row+.row{margin-top:7px}
+  .grow{flex:1}
+  .btn{background:#1d2129;border:1px solid #333b47;border-radius:4px;padding:4px 10px;font-size:11.5px;color:#cbd3dd;cursor:default}
+  .btn.acc{border-color:#5c4520;color:var(--acc);background:#211c12}
+  .btn.dngr{border-color:#5c2f2f;color:#e39898}
+  .sel{background:#0d0f13;border:1px solid #2a3038;border-radius:4px;padding:4px 24px 4px 8px;font-size:12px;color:#cfd6e0;
+       appearance:none;background-image:linear-gradient(45deg,transparent 50%,#7b838f 50%),linear-gradient(135deg,#7b838f 50%,transparent 50%);
+       background-position:calc(100% - 13px) 12px,calc(100% - 8px) 12px;background-size:5px 5px;background-repeat:no-repeat}
+  .drag{color:#5f6773;cursor:default;user-select:none;letter-spacing:-1px}
+  .prow{display:flex;gap:8px;align-items:center;background:#14171d;border:1px solid #262b33;border-radius:5px;padding:7px 9px;margin-bottom:6px}
+  .pname{font-size:12.5px;color:#dfe4ea;min-width:96px}
+  .ptype{font-size:10px;text-transform:uppercase;letter-spacing:.06em;padding:1px 6px;border-radius:9px;border:1px solid #333b47;color:#9aa3ae}
+  .ptype.f{color:#8fd0f0;border-color:#2c4a5c}.ptype.t{color:#d3b0f0;border-color:#443358}
+  .ptype.b{color:#8fe0a8;border-color:#2c5238}.ptype.c{color:#f0b070;border-color:#5c4520}
+  .ptype.i{color:#9fd0a0;border-color:#33502f}
+  .swatch{width:22px;height:16px;border-radius:3px;border:1px solid #3a4250;
+          background:repeating-conic-gradient(#3a3f4b 0% 25%,#20242c 0% 50%) 50%/8px 8px}
+  .swatch i{display:block;width:100%;height:100%;border-radius:2px}
+  .slider{position:relative;height:4px;background:#2a3038;border-radius:2px;flex:1;min-width:70px}
+  .slider b{position:absolute;top:-4px;width:12px;height:12px;border-radius:50%;background:var(--acc);border:1px solid #0c0d10}
+  .hint{color:#7b828d;font-size:11px;display:block;margin-top:2px}
+  .kbd{background:#1b1e24;border:1px solid #333b47;border-radius:3px;padding:0 5px;font-size:11px;color:#b8c0cb}
+  .arrow{color:var(--dim);font-size:16px;align-self:center}
+  .flow{display:flex;gap:8px;align-items:center;flex-wrap:wrap;font-size:12px;margin-top:8px}
+  .box{background:#181b21;border:1px solid var(--line);border-radius:5px;padding:5px 9px}
+  .box.hi{border-color:var(--acc);color:var(--acc)}
+  .box.gr{border-color:#2f5c3a;color:#8fe0a8}
+  .ok{color:var(--ok)}.bad{color:var(--red)}.dimc{color:var(--dim)}
+  ul.tight{margin:6px 0 0;padding-left:18px;color:#b8c0cb;font-size:12.5px}
+  ul.tight li{margin:3px 0}
+</style>
+
+<h1>Parameterized Input Mappings</h1>
+<p class="lead">An Input Mapping (C→A) declares its own <b>named parameters</b> instead of the hardcoded
+R/G/B. Each parameter becomes an output port on the mapping's event root and a type-adaptive widget in the
+brush panel. Cells and agents use the same machinery. <b>A mapping with no declared parameters is the
+legacy colour mapping, byte-for-byte.</b></p>
+
+<!-- ────────────────────────────────────────────────────────────── -->
+<h2>1 · The core model — a parameter has CHANNELS</h2>
+<p class="lead">One abstraction carries the whole design: the flat <b>channel list</b> is simultaneously the
+port list, the compiled argument list, and the paint payload. <code>color</code> → 3 channels; every other
+type → 1.</p>
+
+<div class="card wide">
+<svg viewBox="0 0 980 235" width="100%" height="235" font-family="ui-monospace,Menlo,monospace" font-size="11.5">
+  <defs>
+    <marker id="ar" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto">
+      <path d="M0,0 L7,3 L0,6 z" fill="#8a8f99"/>
+    </marker>
+  </defs>
+  <!-- declared parameters -->
+  <text x="10" y="16" fill="#e8a13a" font-size="10.5" letter-spacing="1">DECLARED PARAMETERS</text>
+  <rect x="10" y="26" width="188" height="30" rx="5" fill="#14171d" stroke="#2c4a5c"/>
+  <text x="22" y="45" fill="#8fd0f0">Energy · decimal</text>
+  <rect x="10" y="62" width="188" height="30" rx="5" fill="#14171d" stroke="#443358"/>
+  <text x="22" y="81" fill="#d3b0f0">Species · tag</text>
+  <rect x="10" y="98" width="188" height="30" rx="5" fill="#14171d" stroke="#2c5238"/>
+  <text x="22" y="117" fill="#8fe0a8">Hungry · binary</text>
+  <rect x="10" y="134" width="188" height="30" rx="5" fill="#14171d" stroke="#5c4520"/>
+  <text x="22" y="153" fill="#f0b070">Tint · colour</text>
+
+  <!-- channels -->
+  <text x="250" y="16" fill="#e8a13a" font-size="10.5" letter-spacing="1">CHANNELS (flat, ordered)</text>
+  <rect x="250" y="26" width="150" height="30" rx="5" fill="#101318" stroke="#333b47"/><text x="262" y="45" fill="#c2cbd6">energy</text>
+  <rect x="250" y="62" width="150" height="30" rx="5" fill="#101318" stroke="#333b47"/><text x="262" y="81" fill="#c2cbd6">species</text>
+  <rect x="250" y="98" width="150" height="30" rx="5" fill="#101318" stroke="#333b47"/><text x="262" y="117" fill="#c2cbd6">hungry</text>
+  <rect x="250" y="134" width="150" height="26" rx="5" fill="#101318" stroke="#333b47"/><text x="262" y="151" fill="#c2cbd6">tint_r</text>
+  <rect x="250" y="164" width="150" height="26" rx="5" fill="#101318" stroke="#333b47"/><text x="262" y="181" fill="#c2cbd6">tint_g</text>
+  <rect x="250" y="194" width="150" height="26" rx="5" fill="#101318" stroke="#333b47"/><text x="262" y="211" fill="#c2cbd6">tint_b</text>
+
+  <path d="M200,41 L246,41" stroke="#8a8f99" marker-end="url(#ar)"/>
+  <path d="M200,77 L246,77" stroke="#8a8f99" marker-end="url(#ar)"/>
+  <path d="M200,113 L246,113" stroke="#8a8f99" marker-end="url(#ar)"/>
+  <path d="M200,149 L230,149 L230,147 L246,147" stroke="#8a8f99" marker-end="url(#ar)"/>
+  <path d="M230,149 L230,177 L246,177" stroke="#8a8f99" marker-end="url(#ar)"/>
+  <path d="M230,149 L230,207 L246,207" stroke="#8a8f99" marker-end="url(#ar)"/>
+
+  <!-- three consumers -->
+  <path d="M404,60 L470,32" stroke="#8a8f99" marker-end="url(#ar)"/>
+  <path d="M404,110 L470,110" stroke="#8a8f99" marker-end="url(#ar)"/>
+  <path d="M404,160 L470,190" stroke="#8a8f99" marker-end="url(#ar)"/>
+
+  <rect x="474" y="12" width="496" height="46" rx="6" fill="#12161c" stroke="#2f5c3a"/>
+  <text x="486" y="30" fill="#8fe0a8" font-size="10.5" letter-spacing=".8">PORTS on the event root</text>
+  <text x="486" y="48" fill="#c2cbd6">output_value_energy · _species · _hungry · _tint_r · _tint_g · _tint_b</text>
+
+  <rect x="474" y="88" width="496" height="46" rx="6" fill="#12161c" stroke="#5c4520"/>
+  <text x="486" y="106" fill="#e8a13a" font-size="10.5" letter-spacing=".8">COMPILED ABI</text>
+  <text x="486" y="124" fill="#c2cbd6">JS (_p_energy, _p_species, …, idx, total, W, H, …) · WASM (i32 idx, f64 ×6)</text>
+
+  <rect x="474" y="166" width="496" height="46" rx="6" fill="#12161c" stroke="#2c4a5c"/>
+  <text x="486" y="184" fill="#8fd0f0" font-size="10.5" letter-spacing=".8">PAINT PAYLOAD</text>
+  <text x="486" y="202" fill="#c2cbd6">values: [40, 2, 1, 232, 161, 58]</text>
+</svg>
+</div>
+
+<div class="cols" style="margin-top:14px">
+  <div class="card"><span class="tag neutral">the legacy case, unchanged</span>
+    <p class="lead" style="margin-bottom:6px">A mapping with no declared parameters resolves to <b>one</b>
+    <code>color</code> parameter whose channels are literally <code>r</code>, <code>g</code>, <code>b</code>:</p>
+<pre>ports   →  output_value_r · output_value_g · output_value_b   <span class="ok">← existing wires intact</span>
+JS ABI  →  (_r, _g, _b, idx, total, W, H, …)                  <span class="ok">← byte-identical</span>
+WASM    →  (i32 idx, i32 r, i32 g, i32 b)   TYPE_IDX_IDX_RGB  <span class="ok">← byte-identical</span>
+payload →  values: [r, g, b]</pre>
+  </div>
+  <div class="card"><span class="tag neutral">the sharp edge</span>
+    <div class="flow">
+      <span class="box"><code>parameters: undefined</code></span><span class="arrow">→</span>
+      <span class="box hi">legacy colour</span>
+    </div>
+    <div class="flow">
+      <span class="box"><code>parameters: []</code></span><span class="arrow">→</span>
+      <span class="box gr">deliberately none (a stamp)</span>
+    </div>
+    <p class="note"><b>They are different.</b> Any <code>parameters?.length ? … : legacy</code> test
+    mis-classifies the empty list. The distinction lives in <b>one</b> resolver
+    (<code>inputParamsOf</code>) and nothing else may read the field.</p>
+  </div>
+</div>
+
+<!-- ────────────────────────────────────────────────────────────── -->
+<h2>2 · The event root on the canvas</h2>
+
+<div class="cols">
+  <div class="card"><span class="tag before">before</span>
+    <svg viewBox="0 0 320 150" width="100%" height="150" font-family="-apple-system,Segoe UI,sans-serif" font-size="11">
+      <rect x="40" y="18" width="200" height="112" rx="7" fill="#f4f4f6" stroke="#c9ccd4"/>
+      <rect x="40" y="18" width="200" height="26" rx="7" fill="#ffffff" stroke="#c9ccd4"/>
+      <text x="52" y="35" fill="#1e2a3a" font-weight="600">Input Mapping (C→A)</text>
+      <text x="52" y="62" fill="#4a5568" font-size="10">Mapping: Paint Wire ▾</text>
+      <polygon points="240,28 252,34 240,40" fill="#66bb6a"/><text x="200" y="38" fill="#39424f" text-anchor="end" font-size="10">DO</text>
+      <circle cx="243" cy="80" r="5" fill="#4cc9f0"/><text x="232" y="84" fill="#39424f" text-anchor="end" font-size="10">R</text>
+      <circle cx="243" cy="100" r="5" fill="#4cc9f0"/><text x="232" y="104" fill="#39424f" text-anchor="end" font-size="10">G</text>
+      <circle cx="243" cy="120" r="5" fill="#4cc9f0"/><text x="232" y="124" fill="#39424f" text-anchor="end" font-size="10">B</text>
+    </svg>
+    <p class="note">Three integer outputs, always. The graph decodes meaning out of a colour —
+    <code>if (R &gt; 128) cellType = Wire</code>.</p>
+  </div>
+
+  <div class="card"><span class="tag after">after</span>
+    <svg viewBox="0 0 320 190" width="100%" height="190" font-family="-apple-system,Segoe UI,sans-serif" font-size="11">
+      <rect x="30" y="18" width="220" height="156" rx="7" fill="#f4f4f6" stroke="#c9ccd4"/>
+      <rect x="30" y="18" width="220" height="26" rx="7" fill="#ffffff" stroke="#c9ccd4"/>
+      <text x="42" y="35" fill="#1e2a3a" font-weight="600">Input Mapping (C→A)</text>
+      <text x="42" y="62" fill="#4a5568" font-size="10">Mapping: Seed Creature ▾</text>
+      <polygon points="250,28 262,34 250,40" fill="#66bb6a"/><text x="212" y="38" fill="#39424f" text-anchor="end" font-size="10">DO</text>
+      <circle cx="253" cy="82"  r="5" fill="#4cc9f0"/><text x="242" y="86"  fill="#39424f" text-anchor="end" font-size="10">Energy</text>
+      <circle cx="253" cy="102" r="5" fill="#4cc9f0"/><text x="242" y="106" fill="#39424f" text-anchor="end" font-size="10">Species</text>
+      <circle cx="253" cy="122" r="5" fill="#4cc9f0"/><text x="242" y="126" fill="#39424f" text-anchor="end" font-size="10">Hungry</text>
+      <circle cx="253" cy="142" r="5" fill="#4cc9f0"/><text x="242" y="146" fill="#39424f" text-anchor="end" font-size="10">Tint R</text>
+      <circle cx="253" cy="162" r="5" fill="#4cc9f0"/><text x="242" y="166" fill="#39424f" text-anchor="end" font-size="10">Tint G</text>
+    </svg>
+    <p class="note">Ports are <b>derived from the mapping</b> the node names — the census /
+    multi-slot pattern (<code>buildInputParamPorts</code>, consumed by <b>both</b>
+    <code>effectivePorts</code> and <code>CaNode</code>). A parameter <i>rename</i> moves no wire;
+    a <i>delete</i> <b>drops</b> the edge, never repoints it.</p>
+  </div>
+</div>
+
+<!-- ────────────────────────────────────────────────────────────── -->
+<h2>3 · The mapping detail panel — parameter list editor</h2>
+
+<div class="cols">
+  <div class="card"><span class="tag before">before</span>
+    <div class="pnl">
+      <div class="pnlHead">Edit: Seed Creature</div>
+      <div class="pnlBody">
+        <div class="field"><label>Name</label><input class="inp full" value="Seed Creature" readonly></div>
+        <div class="field"><label>Description</label><textarea class="inp full ta" readonly>Brush that seeds a creature.</textarea></div>
+        <div class="field"><label style="color:#e05252">Red Channel</label>
+          <textarea class="inp full ta" readonly>energy 0-255</textarea></div>
+        <div class="field"><label style="color:#66bb6a">Green Channel</label>
+          <textarea class="inp full ta" readonly>species: 0=prey 128=pred</textarea></div>
+        <div class="field"><label style="color:#4cc9f0">Blue Channel</label>
+          <textarea class="inp full ta" readonly>&gt;128 = hungry</textarea></div>
+      </div>
+    </div>
+    <p class="note">Three fixed textareas — <b>documentation for a hardcoded encoding</b>. The user
+    writes down what the channels mean, then re-implements that decoding in the graph.</p>
+  </div>
+
+  <div class="card"><span class="tag after">after</span>
+    <div class="pnl">
+      <div class="pnlHead">Edit: Seed Creature</div>
+      <div class="pnlBody">
+        <div class="field"><label>Name</label><input class="inp full" value="Seed Creature" readonly></div>
+        <div class="field"><label>Description</label><textarea class="inp full ta" readonly>Brush that seeds a creature.</textarea></div>
+        <label style="font-size:11px;color:#8a8f99;display:block;margin:12px 0 5px">Parameters</label>
+
+        <div class="prow"><span class="drag">⋮⋮</span><span class="pname">Energy</span>
+          <span class="ptype f">decimal</span><span class="grow"></span>
+          <span class="dimc" style="font-size:11px">0 – 100</span><span class="btn dngr">×</span></div>
+        <div class="prow"><span class="drag">⋮⋮</span><span class="pname">Species</span>
+          <span class="ptype t">tag</span><span class="grow"></span>
+          <span class="dimc" style="font-size:11px">← cellType</span><span class="btn dngr">×</span></div>
+        <div class="prow"><span class="drag">⋮⋮</span><span class="pname">Hungry</span>
+          <span class="ptype b">binary</span><span class="grow"></span>
+          <span class="dimc" style="font-size:11px">false</span><span class="btn dngr">×</span></div>
+        <div class="prow"><span class="drag">⋮⋮</span><span class="pname">Tint</span>
+          <span class="ptype c">colour</span><span class="grow"></span>
+          <span class="swatch"><i style="background:#e8a13a"></i></span><span class="btn dngr">×</span></div>
+
+        <div class="row" style="margin-top:9px"><span class="btn acc">+ Parameter</span></div>
+        <span class="hint">A colour parameter contributes three ports (R/G/B) and one picker.</span>
+      </div>
+    </div>
+    <p class="note">The three legacy channel textareas <b>stay for A→C mappings</b> (documenting an
+    output colour is still meaningful) and are replaced here by a per-parameter description.</p>
+  </div>
+</div>
+
+<div class="card wide" style="margin-top:14px">
+  <h3>Editing a parameter — what happens to the wires</h3>
+  <table>
+    <tr><th>Operation</th><th>Ports</th><th>Existing edges</th><th>Why</th></tr>
+    <tr><td><b>Rename</b> (display name)</td><td>label changes</td><td class="ok">kept</td>
+        <td>Ids derive from the stable <code>key</code>, not the name — that is why they are separate fields.</td></tr>
+    <tr><td><b>Retype</b> scalar → scalar</td><td>same id, new dataType</td><td class="ok">kept</td>
+        <td>The channel count is unchanged.</td></tr>
+    <tr><td><b>Retype</b> scalar ⇄ colour</td><td>1 ⇄ 3 ports</td><td class="bad">removed channels' edges DROPPED</td>
+        <td>Channel count changes; a surviving edge would resolve to a different channel.</td></tr>
+    <tr><td><b>Delete</b></td><td>ports vanish</td><td class="bad">DROPPED</td>
+        <td>The <code>STALE_SLOT_HANDLE</code> rule — never repoint, or it silently reads the wrong variable.</td></tr>
+    <tr><td><b>Reorder</b></td><td>port order changes</td><td class="ok">kept</td>
+        <td>Ids are key-derived, so order is presentation only… <b>but the ABI order changes</b>, so the
+            emitted code changes (correctly) and a recompile is required.</td></tr>
+  </table>
+  <p class="note">Edge pruning needs a <b><code>patchAllEdges</code></b> sibling of the existing
+  <code>patchAllNodes</code> — nothing in the codebase prunes edges on a model edit today. It must fan across
+  all four node stores (cells, agents, overseer, every macro def) and preserve array identity when nothing
+  changed.</p>
+</div>
+
+<!-- ────────────────────────────────────────────────────────────── -->
+<h2>4 · The brush panel</h2>
+
+<div class="cols">
+  <div class="card"><span class="tag before">before</span>
+    <div class="pnl">
+      <div class="pnlHead">Input Mapping (C→A)</div>
+      <div class="pnlBody">
+        <div class="row" style="margin-bottom:9px">
+          <span class="btn acc">Seed Creature</span><span class="btn">Erase</span><span class="btn">Manual</span>
+        </div>
+        <div class="row"><span style="font-size:12px;color:#9aa3ae;min-width:44px">Color</span>
+          <span class="swatch" style="width:30px;height:20px"><i style="background:#4cc9f0"></i></span>
+          <input class="inp" style="width:52px" value="76" readonly>
+          <input class="inp" style="width:52px" value="201" readonly>
+          <input class="inp" style="width:52px" value="240" readonly>
+        </div>
+        <span class="hint">Shift+RMB for the colour popover</span>
+      </div>
+    </div>
+    <p class="note">One colour, whatever the mapping actually means.</p>
+  </div>
+
+  <div class="card"><span class="tag after">after — parameterized mapping</span>
+    <div class="pnl">
+      <div class="pnlHead">Input Mapping (C→A)</div>
+      <div class="pnlBody">
+        <div class="row" style="margin-bottom:9px">
+          <span class="btn acc">Seed Creature</span><span class="btn">Erase</span><span class="btn">Manual</span>
+        </div>
+        <div class="row"><span style="font-size:12px;color:#c3cad3;min-width:70px">Energy</span>
+          <div class="slider"><b style="left:38%"></b></div><input class="inp" style="width:56px" value="40" readonly></div>
+        <div class="row"><span style="font-size:12px;color:#c3cad3;min-width:70px">Species</span>
+          <select class="sel grow"><option>Predator</option></select></div>
+        <div class="row"><span style="font-size:12px;color:#c3cad3;min-width:70px">Hungry</span>
+          <select class="sel grow"><option>True</option></select></div>
+        <div class="row"><span style="font-size:12px;color:#c3cad3;min-width:70px">Tint</span>
+          <span class="swatch" style="width:30px;height:20px"><i style="background:#e8a13a"></i></span>
+          <span class="dimc" style="font-size:11px">#e8a13a</span></div>
+        <span class="hint">Shift+RMB edits <b>Tint</b> (the mapping's only colour parameter)</span>
+      </div>
+    </div>
+    <p class="note">Same row grammar as <code>ManualBrushPanel</code>, reusing
+    <code>InlineTagSelect</code> / <code>InlineBoolSelect</code> / <code>InlineNumberInput</code> /
+    <code>ColorField</code>. <b>No per-row checkbox</b> — a parameter is an argument, always passed
+    (contrast the manual brush, where each row is an optional write).</p>
+  </div>
+
+  <div class="card"><span class="tag after">after — legacy mapping (unchanged)</span>
+    <div class="pnl">
+      <div class="pnlHead">Input Mapping (C→A)</div>
+      <div class="pnlBody">
+        <div class="row" style="margin-bottom:9px">
+          <span class="btn acc">Paint Wire</span><span class="btn">Manual</span>
+        </div>
+        <div class="row"><span style="font-size:12px;color:#9aa3ae;min-width:44px">Color</span>
+          <span class="swatch" style="width:30px;height:20px"><i style="background:#4cc9f0"></i></span>
+          <input class="inp" style="width:52px" value="76" readonly>
+          <input class="inp" style="width:52px" value="201" readonly>
+          <input class="inp" style="width:52px" value="240" readonly>
+        </div>
+        <span class="hint">Shift+RMB for the colour popover</span>
+      </div>
+    </div>
+    <p class="note">Pixel-identical to today. The resolver returns one colour parameter, and the
+    panel takes the legacy branch verbatim.</p>
+  </div>
+
+  <div class="card"><span class="tag after">after — agents, the same component</span>
+    <div class="pnl">
+      <div class="pnlHead">Agent Brush · Paint</div>
+      <div class="pnlBody">
+        <div class="row" style="margin-bottom:9px"><span class="btn acc">Infect</span><span class="btn">Heal</span></div>
+        <div class="row"><span style="font-size:12px;color:#c3cad3;min-width:70px">State</span>
+          <select class="sel grow"><option>Infected</option></select></div>
+        <div class="row"><span style="font-size:12px;color:#c3cad3;min-width:70px">Load</span>
+          <div class="slider"><b style="left:66%"></b></div><input class="inp" style="width:56px" value="0.66" readonly></div>
+      </div>
+    </div>
+    <p class="note"><b>Constraint 4 made visible.</b> Today the agent Paint brush is a bare colour
+    input with a read-only "r, g, b" readout; it becomes the same <code>InputParamsPanel</code> the
+    cell brush uses.</p>
+  </div>
+</div>
+
+<!-- ────────────────────────────────────────────────────────────── -->
+<h2>5 · Image → cells: the channel→parameter step</h2>
+<p class="lead">Shown <b>only</b> when the chosen mapping declares parameters. A legacy mapping gets today's
+dialog, verbatim. <code>imageMapping.ts</code> is <b>not touched</b> — pixel sampling (average / invert /
+binarize) stays exactly where it is; the assignment is a consumer of its output.</p>
+
+<div class="card wide">
+  <div class="cols" style="gap:14px">
+    <div style="flex:0 0 200px">
+      <div class="pnlHead" style="border:1px solid var(--line);border-radius:6px 6px 0 0">Source</div>
+      <svg viewBox="0 0 200 150" width="200" height="150" style="border:1px solid var(--line);border-top:0;border-radius:0 0 6px 6px;background:#07080a">
+        <rect x="14" y="12" width="172" height="126" fill="#12161c"/>
+        <circle cx="70" cy="60" r="26" fill="#c04040"/><circle cx="122" cy="86" r="30" fill="#3a80c0"/>
+        <rect x="30" y="96" width="34" height="30" fill="#40a060"/>
+        <g stroke="#4cc9f0" stroke-width=".6" opacity=".45">
+          <path d="M14,33 H186 M14,54 H186 M14,75 H186 M14,96 H186 M14,117 H186"/>
+          <path d="M35,12 V138 M56,12 V138 M77,12 V138 M98,12 V138 M119,12 V138 M140,12 V138 M161,12 V138"/>
+        </g>
+        <rect x="14" y="12" width="172" height="126" fill="none" stroke="#4cc9f0" stroke-width="1.5"/>
+      </svg>
+    </div>
+
+    <div style="flex:1 1 380px">
+      <div class="pnlHead" style="border:1px solid var(--line);border-radius:6px 6px 0 0">Map pixel channels → parameters</div>
+      <div style="border:1px solid var(--line);border-top:0;border-radius:0 0 6px 6px;padding:11px">
+        <div class="row"><span class="pname" style="min-width:120px">Mapping</span>
+          <select class="sel grow"><option>Seed Creature ▾</option></select></div>
+        <table style="margin-top:10px">
+          <tr><th>Parameter channel</th><th>Source</th><th>Result</th></tr>
+          <tr><td>Energy <span class="ptype f">decimal</span></td>
+              <td><select class="sel"><option>Pixel R</option></select></td><td class="dimc">0 – 255 per cell</td></tr>
+          <tr><td>Species <span class="ptype t">tag</span></td>
+              <td><select class="sel"><option>Pixel luminance</option></select></td><td class="dimc">index by brightness</td></tr>
+          <tr><td>Hungry <span class="ptype b">binary</span></td>
+              <td><select class="sel"><option>Constant</option></select></td><td class="dimc">False</td></tr>
+          <tr><td>Tint R / G / B <span class="ptype c">colour</span></td>
+              <td><select class="sel"><option>Pixel R / G / B</option></select></td><td class="dimc">the pixel's own colour</td></tr>
+        </table>
+        <p class="note" style="margin-top:9px">Sources: <code>Pixel R</code> / <code>G</code> /
+        <code>B</code> / <code>A</code> / <code>luminance</code>, or a <code>Constant</code> seeded from the
+        brush panel's current value. Defaults: the first three channels take R/G/B, the rest take
+        constants — so an unedited dialog reproduces the classic behaviour for a 3-channel mapping.</p>
+      </div>
+    </div>
+  </div>
+  <p class="note"><b>What <i>binarize</i> means now:</b> it is still a pixel-space operation, so it is most
+  useful through the <code>luminance</code> source — which is why <code>lum</code> is offered as a
+  first-class source rather than making the user binarize and then read R. The binarize
+  <code>mask</code> continues to serve the Manual path only.</p>
+</div>
+
+<!-- ────────────────────────────────────────────────────────────── -->
+<h2>6 · The paint payload — cells and agents become the same shape</h2>
+
+<div class="cols">
+  <div class="card"><span class="tag before">before</span>
+<pre>// cells — colour repeated on EVERY cell
+{ type:'paint',
+  cells:[{row,col,layer?, <span class="bad">r,g,b</span>}, …],
+  mappingId, activeViewer }
+
+// agents — colour at the message level
+{ type:'paintAgentsColor',
+  ids:[…], <span class="bad">r,g,b</span>, mappingId, activeViewer }</pre>
+    <p class="note">Two shapes for one idea. The per-cell colour is dead generality: all five
+    producers read the same <code>brushColorRef</code> once per stroke, and there is exactly one
+    <code>type:'paint'</code> producer in the codebase.</p>
+  </div>
+  <div class="card"><span class="tag after">after</span>
+<pre>{ type:'paint',
+  cells:[{row,col,layer?}, …],
+  mappingId, <span class="ok">values:[40, 2, 1, 232, 161, 58]</span>, activeViewer }
+
+{ type:'paintAgentsColor',
+  ids:[…], mappingId, <span class="ok">values:[…]</span>, activeViewer }</pre>
+    <p class="note">Legacy resolves to <code>values:[r,g,b]</code>, so both handlers keep calling
+    <code>fn(...values, ...buildCellArgs(idx))</code> and <code>wasmFn(idx, ...values)</code> — the
+    emitted code is untouched. Per-cell allocation <i>shrinks</i>.</p>
+  </div>
+</div>
+
+<!-- ────────────────────────────────────────────────────────────── -->
+<h2>7 · Where the code runs — three targets, two compiled surfaces</h2>
+<p class="lead"><b>Code-reality finding:</b> there is <b>no WebGPU input-mapping shader</b>. The WGSL emit
+produces <code>step</code>, <code>init</code> and <code>outputMapping_&lt;id&gt;</code> — nothing else. On the
+WebGPU target a paint reads attrs back, runs the <b>JS</b> function on the CPU, and patches the touched cells.</p>
+
+<div class="card wide">
+<svg viewBox="0 0 980 158" width="100%" height="158" font-family="ui-monospace,Menlo,monospace" font-size="11">
+  <defs>
+    <marker id="ar2" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto">
+      <path d="M0,0 L7,3 L0,6 z" fill="#8a8f99"/>
+    </marker>
+  </defs>
+  <rect x="10" y="14" width="150" height="34" rx="6" fill="#12161c" stroke="#5c4520"/>
+  <text x="26" y="35" fill="#e8a13a">brush / image</text>
+  <path d="M164,31 L206,31" stroke="#8a8f99" marker-end="url(#ar2)"/>
+  <rect x="210" y="14" width="176" height="34" rx="6" fill="#12161c" stroke="#333b47"/>
+  <text x="226" y="35" fill="#c2cbd6">values: number[]</text>
+
+  <path d="M390,31 L432,20" stroke="#8a8f99" marker-end="url(#ar2)"/>
+  <path d="M390,31 L432,62" stroke="#8a8f99" marker-end="url(#ar2)"/>
+  <path d="M390,31 L432,110" stroke="#8a8f99" marker-end="url(#ar2)"/>
+
+  <rect x="436" y="6" width="250" height="30" rx="6" fill="#12161c" stroke="#2f5c3a"/>
+  <text x="450" y="25" fill="#8fe0a8">JS target — JS fn</text>
+  <rect x="436" y="50" width="250" height="30" rx="6" fill="#12161c" stroke="#2f5c3a"/>
+  <text x="450" y="69" fill="#8fe0a8">WASM target — inputColor_&lt;id&gt;</text>
+  <rect x="436" y="94" width="250" height="30" rx="6" fill="#12161c" stroke="#2c4a5c"/>
+  <text x="450" y="113" fill="#8fd0f0">WebGPU target — JS fn on CPU</text>
+
+  <path d="M690,109 L734,109" stroke="#8a8f99" marker-end="url(#ar2)"/>
+  <rect x="738" y="94" width="232" height="30" rx="6" fill="#12161c" stroke="#2c4a5c"/>
+  <text x="752" y="113" fill="#8fd0f0">patchWebGPUCells(idxs)</text>
+
+  <text x="436" y="146" fill="#8a8f99" font-size="10.5">two compiled surfaces for cells · one (JS) for agents · zero WGSL</text>
+</svg>
+</div>
+
+<div class="cols" style="margin-top:12px">
+  <div class="card"><span class="tag neutral">the highest-risk change</span>
+    <p class="lead" style="margin-bottom:4px">The WASM entry type is a module constant today:</p>
+<pre>TYPE_IDX_IDX_RGB = <span class="dimc">(i32, i32, i32, i32) → ()</span>
+paramOutputs = { r:1, g:2, b:3 }      <span class="dimc">// valtype hardcoded I32, at TWO sites</span></pre>
+    <p class="note">A parameterized entry mints <code>(i32 idx, f64 ×N)</code> per arity. <b>A stale
+    <code>valtype: I32</code> does not crash</b> — it reinterprets an f64 parameter's bits and writes
+    deterministic garbage that looks like a modelling mistake. Only a value-asserting harness that runs a
+    <b>real instantiated WASM module</b> and checks that <code>0.1</code> arrives as <code>0.1</code>
+    catches it. <b>Write that check first.</b></p>
+  </div>
+  <div class="card"><span class="tag neutral">the safety net</span>
+    <div class="flow">
+      <span class="box gr">29 shipped models</span><span class="arrow">→</span>
+      <span class="box"><code>parameters</code> absent</span><span class="arrow">→</span>
+      <span class="box hi">legacy branch</span><span class="arrow">→</span>
+      <span class="box gr">zero diffs</span>
+    </div>
+    <p class="note"><code>check-compile-identity.mjs</code> must be green <b>at the end of every
+    phase</b> — not explained, not re-baselined. It is achievable by construction, so any diff is a bug.
+    <br><br>Its converse also holds: <b>the library proves nothing about the new path</b> (no shipped model
+    declares parameters), so a synthetic value-asserting harness plus a hand-authored fixture model are
+    mandatory, not optional.</p>
+  </div>
+</div>
+
+<!-- ────────────────────────────────────────────────────────────── -->
+<h2>8 · Phases</h2>
+<div class="card wide">
+  <table>
+    <tr><th>Phase</th><th>Scope</th><th>User-visible?</th><th>Gate</th></tr>
+    <tr><td><b>1</b><br><span class="dimc">splittable 1a/1b</span></td>
+        <td>Schema · resolver · dynamic ports · JS emit · WASM emit · worker ABI · brush panel</td>
+        <td><b>No</b> — no editor yet, so a parameterized mapping cannot be authored; legacy renders exactly as today</td>
+        <td>identity 29/29 · <code>test-input-params</code> · fixture painted on all 3 grid targets + 3D</td></tr>
+    <tr><td><b>2</b></td>
+        <td>Parameter editor · <code>patchAllEdges</code> cascade · agent brush panel</td>
+        <td><b>Yes</b> — the feature becomes reachable, cells and agents consistent</td>
+        <td>rename keeps wires · delete drops them · retype re-measures handles · identity 29/29</td></tr>
+    <tr><td><b>3</b></td>
+        <td>Image channel→parameter · docs sweep (CLAUDE.md, HelpView, NODES_REFERENCE, showCode)</td>
+        <td>Yes</td>
+        <td>both import modes · presentation export · full gate sweep</td></tr>
+  </table>
+  <p class="note"><b>No phase leaves a half-exposed feature</b> — that is why the editor is Phase 2 rather
+  than Phase 1: without it, there is no window in which a user can reach an incomplete path.</p>
+</div>
+
+<h2>9 · Deferred to v2 (recorded, not planned)</h2>
+<div class="card wide">
+  <ul class="tight">
+    <li><b>Brush-geometry outputs</b> — <i>distance from brush centre</i>, <i>brush radius</i>,
+      <i>normalized falloff</i> as extra event-root outputs, enabling authored falloff. The centre and radius
+      ride the message; the <b>worker</b> computes per-cell distance, so the payload never grows. Compatible
+      with this design by construction: geometry outputs are a separate port group from declared parameters.</li>
+    <li><b>Image → agent-population initialization</b> — spawn an agent per above-threshold pixel, its
+      parameters fed by the same channel assignment built in Phase 3.</li>
+    <li><b>A <code>vector</code> parameter type</b> — 2–3 channels, exactly like <code>color</code>.</li>
+    <li><b>Retire the cell WASM entry</b>, making input mappings JS-on-CPU everywhere like the agent side.
+      Blocked on the full-grid <code>importImage</code> cost.</li>
+    <li><b>Parameter presets</b> — named value sets per mapping ("Predator brush", "Prey brush").</li>
+  </ul>
+</div>
