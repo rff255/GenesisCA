@@ -47,6 +47,7 @@ import { migrateMoveSelfToNeighborNodes } from './moveSelfToNeighborMigration';
 import { migrateSetCellLooksNodes } from './setCellLooksMigration';
 import { migrateAgentAttributeSplit } from './agentAttributeSplitMigration';
 import { migrateAgentTypeRemoval } from './agentTypeRemovalMigration';
+import { migrateFormBondBetween } from './formBondBetweenMigration';
 import { migrateVariableScopeSplit } from './variableScopeMigration';
 import { migrateEngineField } from './engineFieldMigration';
 import { migrateReproducibilityField } from './reproducibilityMigration';
@@ -1720,6 +1721,11 @@ export function modelReducer(state: ModelState, action: ModelAction): ModelState
       // `type` input, behaviourStep `myType`-out edges (agent graph + macroDefs).
       // Idempotent; no-op for non-agent + already-clean models.
       m = migrateAgentTypeRemoval(m);
+      // Retire Form Bond Between: rewrite it to a `formBond` with its FIRST
+      // endpoint wired (`agentB` -> `targetAgent`), which lowers to the very same
+      // queue encoding on all three agent targets. Idempotent; no-op for models
+      // that never used it.
+      m = migrateFormBondBetween(m);
       // Get Random's interval moved from `config.min`/`config.max` to real
       // `min`/`max` INPUT PORTS — re-key the legacy values onto `_port_min` /
       // `_port_max` (cells + agents + overseer + macroDefs). Value-for-value, so

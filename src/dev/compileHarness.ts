@@ -18,6 +18,7 @@ import type { CAModel } from '../model/types';
 import { migrateAgentAttributeSplit } from '../model/agentAttributeSplitMigration';
 import { migrateVariableScopeSplit } from '../model/variableScopeMigration';
 import { migrateAgentTypeRemoval } from '../model/agentTypeRemovalMigration';
+import { migrateFormBondBetween } from '../model/formBondBetweenMigration';
 import { migrateGetRandomRange } from '../model/getRandomRangeMigration';
 import { migrateAgentCapabilities } from '../model/agentCapabilities';
 import { migrateEngineField } from '../model/engineFieldMigration';
@@ -177,6 +178,8 @@ export function migrateForHarness(m: CAModel): CAModel {
   // agent-referenced cell variables into the agent variable set. No-op for
   // non-agent / already-split models.
   m = migrateAgentTypeRemoval(m);
+  // Retire Form Bond Between -> a `formBond` with `agentA` wired (mirrors LOAD_MODEL).
+  m = migrateFormBondBetween(m);
   // Get Random: legacy config.min/max -> the new min/max PORTS (mirrors LOAD_MODEL).
   m = migrateGetRandomRange(m);
   m = migrateAgentAttributeSplit(m);

@@ -778,7 +778,9 @@ const fbJ = bondOp(13, 18, 'formBond', n => { ag.vEdge(mkJ, 'handle', n, 'target
 const trB = ag.node('transferBond', {}, 13, 19);
 ag.vEdge(bAgent, 'value', trB, 'partnerAgent'); ag.vEdge(mkJ, 'handle', trB, 'toAgent');
 const fbK = bondOp(13, 20, 'formBond', n => { ag.vEdge(mkK, 'handle', n, 'targetAgent'); });
-const fbJK = bondOp(13, 21, 'formBondBetween', n => { ag.vEdge(mkJ, 'handle', n, 'agentA'); ag.vEdge(mkK, 'handle', n, 'agentB'); });
+// agentA WIRED ⇒ this bonds the two NAMED daughters (the between encoding), not
+// the requesting mother.
+const fbJK = bondOp(13, 21, 'formBond', n => { ag.vEdge(mkJ, 'handle', n, 'agentA'); ag.vEdge(mkK, 'handle', n, 'targetAgent'); });
 const trC = ag.node('transferBond', {}, 13, 22);
 ag.vEdge(cAgent, 'value', trC, 'partnerAgent'); ag.vEdge(mkK, 'handle', trC, 'toAgent');
 

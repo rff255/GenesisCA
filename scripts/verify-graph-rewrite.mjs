@@ -56,6 +56,7 @@ export { compileAgentGraph } from '../src/modeler/vpl/compiler/compile.ts';
 export { resolveAxes } from '../src/modeler/vpl/compiler/variegation.ts';
 export { buildAgentAbiArgs } from '../src/modeler/vpl/compiler/agentAbi.ts';
 export { migrateForHarness } from '../src/dev/compileHarness.ts';
+export { migrateFormBondBetween } from '../src/model/formBondBetweenMigration.ts';
 export { resolveAgentFieldGates } from '../src/model/agentFieldGating.ts';
 export { agentAttrsOf, cellFieldAttrsOf } from '../src/model/attributeScope.ts';
 export { expandNeighbourCensus, buildCensusPorts, censusOptions, censusAttribute } from '../src/modeler/vpl/compiler/censusExpand.ts';
@@ -86,7 +87,7 @@ const {
   compileAgentGraphWasmForModel, instantiateAgentWasm, buildAgentLayoutExtras, isAgentGraphWasmSupported,
   compileAgentGraphWebGPUForModel, isAgentGraphWebGPUSupported, compileAgentGraphWebGPU,
   agentWebGPUExtrasOf, computeAgentWebGPULayout,
-  compileAgentGraph, resolveAxes, buildAgentAbiArgs, migrateForHarness, agentAttrsOf, cellFieldAttrsOf,
+  compileAgentGraph, resolveAxes, buildAgentAbiArgs, migrateForHarness, migrateFormBondBetween, agentAttrsOf, cellFieldAttrsOf,
   resolveAgentFieldGates,
   expandNeighbourCensus, buildCensusPorts, censusOptions, censusAttribute, getEffectivePorts,
   computeGraphMetrics, isGraphFrequencyMetric, graphMetricDataType, degreeHistogramKeys,
@@ -2507,18 +2508,65 @@ const partnersOf = (s, v) =>
   Array.from({ length: s.bondCount[v] }, (_, k) => s.bondPartner[v * s.maxBonds + k]);
 
 function tierJ() {
-  section('TIER J — P4b: the Form Between verb + the ONE-generation triangle split');
+  section('TIER J — P4b: the Form Between encoding + the ONE-generation triangle split');
 
-  // --- 0. registration + the usage gate cover the new verb -----------------
+  // --- 0. registration + the usage gate cover the verb ---------------------
+  //
+  // The dedicated `formBondBetween` NODE was retired into Form Bond's optional
+  // `agentA` port (formBondBetweenMigration.ts). The ENCODING below is unchanged;
+  // only the second way of spelling it went away.
   {
-    ok(BOND_REQUEST_NODE_TYPES.has('formBondBetween'),
-      'formBondBetween is a queue verb (so the layout reserves the queue for it)');
-    const only = { agentGraphNodes: [{ id: 'a', data: { nodeType: 'formBondBetween' } }], centerBased: {}, topologyMode: { agents: true } };
+    ok(BOND_REQUEST_NODE_TYPES.has('formBond'),
+      'formBond is a queue verb (so the layout reserves the queue for it)');
+    ok(!BOND_REQUEST_NODE_TYPES.has('formBondBetween'),
+      'the retired formBondBetween node type is gone from the queue-verb set');
+    const only = { agentGraphNodes: [{ id: 'a', data: { nodeType: 'formBond' } }], centerBased: {}, topologyMode: { agents: true } };
     ok(bondReqSlotsForModel(only) === 9,
-      'a graph whose ONLY verb is Form Between still reserves depth + the overflow bucket');
-    const inMacro = { agentGraphNodes: [], macroDefs: [{ id: 'm', nodes: [{ id: 'a', data: { nodeType: 'formBondBetween' } }] }], centerBased: {}, topologyMode: { agents: true } };
-    ok(agentGraphUsesBondRequests(inMacro), 'a Form Between inside a MACRO definition reserves the queue too');
+      'a graph whose ONLY verb is Form Bond still reserves depth + the overflow bucket');
+    const inMacro = { agentGraphNodes: [], macroDefs: [{ id: 'm', nodes: [{ id: 'a', data: { nodeType: 'formBond' } }] }], centerBased: {}, topologyMode: { agents: true } };
+    ok(agentGraphUsesBondRequests(inMacro), 'a Form Bond inside a MACRO definition reserves the queue too');
     ok(BOND_REQ_BETWEEN_SIGN === -1, 'the op-kind marker is the break lane SIGN');
+  }
+
+  // --- 0b. THE RETIREMENT MIGRATION ---------------------------------------
+  //
+  // A legacy graph carrying the removed node type must load as the equivalent
+  // Form Bond AND compile to the very same code — that equivalence is the whole
+  // justification for retiring it.
+  {
+    const legacy = () => JSON.parse(JSON.stringify(betweenGraphNodesEdges('formBondBetween', 'agentB')));
+    const l0 = legacy();
+    const mig = migrateFormBondBetween({ agentGraphNodes: l0.nodes, agentGraphEdges: l0.edges, macroDefs: [] });
+    const fb = mig.agentGraphNodes.find(n => n.id === 'fb');
+    ok(fb.data.nodeType === 'formBond', 'migration: the node type becomes formBond');
+    ok(!mig.agentGraphNodes.some(n => n.data.nodeType === 'formBondBetween'),
+      'migration: no formBondBetween node survives');
+    const handles = mig.agentGraphEdges.filter(e => e.target === 'fb').map(e => e.targetHandle).sort();
+    ok(JSON.stringify(handles) === JSON.stringify(['input_flow_do', 'input_value_agentA', 'input_value_targetAgent']),
+      'migration: agentB is re-pointed at targetAgent, agentA is left alone', JSON.stringify(handles));
+    // Idempotent: a second pass returns the SAME model reference.
+    ok(migrateFormBondBetween(mig) === mig, 'migration: idempotent (same reference on a clean model)');
+    // A macroDef carrying one is migrated too.
+    const l1 = legacy();
+    const inMac = migrateFormBondBetween({ agentGraphNodes: [], agentGraphEdges: [], macroDefs: [{ id: 'm', nodes: l1.nodes, edges: l1.edges }] });
+    ok(inMac.macroDefs[0].nodes.some(n => n.data.nodeType === 'formBond')
+      && !inMac.macroDefs[0].nodes.some(n => n.data.nodeType === 'formBondBetween'),
+      'migration: a formBondBetween inside a MACRO definition is migrated too');
+    // THE EQUIVALENCE: the migrated graph emits exactly what the hand-authored
+    // Form Bond emits — same node ids, same edge order, so the same code.
+    const migrated = betweenEmitModel('formBondBetween', 'agentB');
+    const native = betweenEmitModel('formBond', 'targetAgent');
+    ok(!migrated.agentGraphNodes.some(n => n.data.nodeType === 'formBondBetween'),
+      'migration: migrateForHarness (the LOAD_MODEL mirror) applies it too');
+    const a = compileAgentGraph(migrated.agentGraphNodes, migrated.agentGraphEdges, migrated);
+    const b = compileAgentGraph(native.agentGraphNodes, native.agentGraphEdges, native);
+    ok(!a.error && !b.error, 'both the migrated and the hand-authored graph compile', String(a.error || b.error));
+    ok(a.behaviourCode === b.behaviourCode,
+      'migration: a migrated legacy graph emits BYTE-IDENTICAL JS to the hand-authored Form Bond');
+    const aw = compileAgentGraphWasmForModel(migrated), bw = compileAgentGraphWasmForModel(native);
+    ok(!aw.error && !bw.error && aw.bytes.length > 0
+      && Buffer.compare(Buffer.from(aw.bytes), Buffer.from(bw.bytes)) === 0,
+      'migration: ...and BYTE-IDENTICAL WASM module bytes', String(aw.error || bw.error));
   }
 
   // --- 1. the drain bonds the TWO NAMED AGENTS, not self ------------------
@@ -2776,13 +2824,13 @@ function tierJ() {
     const model = betweenEmitModel();
     const res = compileAgentGraph(model.agentGraphNodes, model.agentGraphEdges, model);
     const code = res.behaviourCode || '';
-    ok(!res.error, 'the Form Between graph compiles on the JS agent target', String(res.error));
+    ok(!res.error, 'the paired Form Bond graph compiles on the JS agent target', String(res.error));
     ok(/_bondBreakReq\[_bq\]\s*=\s*_bqOk\s*\?\s*-\(_bqA \+ 2\)\s*:\s*-1;/.test(code),
       'JS emit: the break lane is NEGATED (the op-kind marker)');
     ok(/_bondFormReq\[_bq\]\s*=\s*_bqOk\s*\?\s*_bqB \+ 2\s*:\s*1;/.test(code),
       'JS emit: the form lane carries B with the same +2 bias');
-    ok(isAgentGraphWasmSupported(model), 'the WASM agent gate ACCEPTS Form Between');
-    ok(isAgentGraphWebGPUSupported(model), 'the WebGPU agent gate ACCEPTS Form Between');
+    ok(isAgentGraphWasmSupported(model), 'the WASM agent gate ACCEPTS the paired Form Bond');
+    ok(isAgentGraphWebGPUSupported(model), 'the WebGPU agent gate ACCEPTS the paired Form Bond');
     const wg = compileAgentGraphWebGPUForModel(model);
     const wgsl = wg.shaderCode || '';
     ok(!wg.error && /= f32\(-select\(1, _brqA\d+ \+ 2, _brqOk\d+\)\);/.test(wgsl),
@@ -2827,9 +2875,9 @@ function spawnHandleModel() {
   const a1 = an('addAgentToWorld', {});
   const c2 = an('createAgent', { _port_x: '6', _port_y: '5', _port_radius: '0.5' });
   const a2 = an('addAgentToWorld', {});
-  const fb = an('formBondBetween', { _port_restLength: '1', _port_stiffness: '0' });
+  const fb = an('formBond', { _port_restLength: '1', _port_stiffness: '0' });
   ve(c1, 'handle', a1, 'handle'); ve(c2, 'handle', a2, 'handle');
-  ve(c1, 'handle', fb, 'agentA'); ve(c2, 'handle', fb, 'agentB');
+  ve(c1, 'handle', fb, 'agentA'); ve(c2, 'handle', fb, 'targetAgent');
   fe(bs, 'do', c1); fe(c1, 'next', a1); fe(a1, 'next', c2); fe(c2, 'next', a2); fe(a2, 'next', fb);
   return {
     ...migrateForHarness({
@@ -2843,15 +2891,31 @@ function spawnHandleModel() {
   };
 }
 
-/** A minimal agent model whose behaviour issues ONE Form Between. */
-function betweenEmitModel() {
+/** The nodes+edges of a minimal behaviour that issues ONE two-id bond op, spelled
+ *  with either the live `formBond`/`targetAgent` or the retired
+ *  `formBondBetween`/`agentB` (so the migration can be checked for equivalence).
+ *
+ *  WARNING: `agentA` MUST be WIRED, not merely configured — the port carries no
+ *  inline widget, so wiredness is the EDGE-map answer on all three targets, and a
+ *  config-only `_port_agentA` would leave a Form Bond on its self-form arm. */
+function betweenGraphNodesEdges(type = 'formBond', bPort = 'targetAgent') {
   const nodes = [
     { id: 'root', position: { x: 0, y: 0 }, data: { nodeType: 'behaviourStep', config: {} } },
-    { id: 'fb', position: { x: 200, y: 0 }, data: { nodeType: 'formBondBetween', config: { _port_agentA: '1', _port_agentB: '2', _port_restLength: '3', _port_stiffness: '4' } } },
+    { id: 'ga', position: { x: 100, y: 0 }, data: { nodeType: 'getConstant', config: { constType: 'number', constValue: '1' } } },
+    { id: 'gb', position: { x: 100, y: 80 }, data: { nodeType: 'getConstant', config: { constType: 'number', constValue: '2' } } },
+    { id: 'fb', position: { x: 200, y: 0 }, data: { nodeType: type, config: { _port_restLength: '3', _port_stiffness: '4' } } },
   ];
   const edges = [
     { id: 'e0', source: 'root', sourceHandle: 'output_flow_do', target: 'fb', targetHandle: 'input_flow_do' },
+    { id: 'e1', source: 'ga', sourceHandle: 'output_value_value', target: 'fb', targetHandle: 'input_value_agentA' },
+    { id: 'e2', source: 'gb', sourceHandle: 'output_value_value', target: 'fb', targetHandle: 'input_value_' + bPort },
   ];
+  return { nodes, edges };
+}
+
+/** A minimal agent model whose behaviour issues ONE two-id bond op. */
+function betweenEmitModel(type = 'formBond', bPort = 'targetAgent') {
+  const { nodes, edges } = betweenGraphNodesEdges(type, bPort);
   return {
     ...migrateForHarness({
       properties: { name: 'p4b-between', gridWidth: 32, gridHeight: 32, updateMode: 'synchronous' },
@@ -2860,7 +2924,8 @@ function betweenEmitModel() {
       agentGraphNodes: nodes, agentGraphEdges: edges,
       centerBased: { enabled: true, maxAgents: 64, maxBonds: 4, agentCapabilities: AGENT_CAPS({ bonds: 'data' }) },
     }),
-    agentGraphNodes: nodes, agentGraphEdges: edges,
+    // NOTE: no trailing agentGraph* override here — the harness migration is what
+    // rewrites a legacy `formBondBetween` fixture, so it must be allowed to stick.
   };
 }
 

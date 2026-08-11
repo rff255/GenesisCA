@@ -1543,7 +1543,9 @@ entries.push({
   raw: buildBondQueueModel(), setup: setupBondAttrStores, invariant: bondQueueInvariant,
 });
 // ---------------------------------------------------------------------------
-// P4b - the FORM BETWEEN synthetic.
+// P4b - the FORM BETWEEN encoding, authored through Form Bond's `agentA` port
+// (the dedicated Form Bond Between NODE was retired into it - see
+// formBondBetweenMigration.ts; the ENCODING is unchanged).
 //
 // The op kind rides the SIGN of the break lane, which is the ONLY thing telling a
 // Form Between apart from a Rewire (both fill both lanes). So entry 0 and entry 1
@@ -1560,25 +1562,25 @@ function buildFormBetweenModel() {
   const off = (k) => { const n = an('arithmeticOperator', { operation: '+', _port_y: String(k) }); aE(gsh, 'value', n, 'x', 'value'); return n; };
 
   const bs = an('behaviourStep', {});
-  // 0 - Form Between(self+1, self+2)   NEGATIVE break lane
-  const fbw = an('formBondBetween', { _port_restLength: '3', _port_stiffness: '5', _port_bondAttr_bw: '31' });
+  // 0 - Form Bond(agentA=self+1, target=self+2)   NEGATIVE break lane
+  const fbw = an('formBond', { _port_restLength: '3', _port_stiffness: '5', _port_bondAttr_bw: '31' });
   // 1 - Rewire(self+1 -> self+2)       POSITIVE break lane, THE SAME two ids
   const rw = an('rewireBond', { _port_restLength: '7', _port_stiffness: '11', _port_bondAttr_bw: '32' });
-  // 2 - Form Between with an unresolvable A  -> (-NONE, NONE), still non-zero
-  const fbBad = an('formBondBetween', { _port_restLength: '13', _port_stiffness: '17', _port_bondAttr_bw: '33' });
-  // 3..5 - a loop of Form Betweens (per-entry values must not smear)
+  // 2 - a paired Form Bond with an unresolvable A  -> (-NONE, NONE), still non-zero
+  const fbBad = an('formBond', { _port_restLength: '13', _port_stiffness: '17', _port_bondAttr_bw: '33' });
+  // 3..5 - a loop of paired Form Bonds (per-entry values must not smear)
   const lp = an('loop', { mode: 'count', _port_count: '3' });
-  const lpFb = an('formBondBetween', { _port_restLength: '0', _port_stiffness: '0', _port_bondAttr_bw: '34' });
+  const lpFb = an('formBond', { _port_restLength: '0', _port_stiffness: '0', _port_bondAttr_bw: '34' });
 
   aE(bs, 'do', fbw, 'do', 'flow');
   aE(off(1), 'result', fbw, 'agentA', 'value');
-  aE(off(2), 'result', fbw, 'agentB', 'value');
+  aE(off(2), 'result', fbw, 'targetAgent', 'value');
   aE(fbw, 'next', rw, 'do', 'flow');
   aE(off(1), 'result', rw, 'fromAgent', 'value');
   aE(off(2), 'result', rw, 'toAgent', 'value');
   aE(rw, 'next', fbBad, 'do', 'flow');
   aE(off(-1000), 'result', fbBad, 'agentA', 'value');
-  aE(off(5), 'result', fbBad, 'agentB', 'value');
+  aE(off(5), 'result', fbBad, 'targetAgent', 'value');
   aE(fbBad, 'next', lp, 'do', 'flow');
   aE(lp, 'body', lpFb, 'do', 'flow');
   const a200 = off(200), b300 = off(300);
@@ -1587,11 +1589,11 @@ function buildFormBetweenModel() {
   const bIdx = an('arithmeticOperator', { operation: '+' });
   aE(b300, 'result', bIdx, 'x', 'value'); aE(lp, 'index', bIdx, 'y', 'value');
   aE(aIdx, 'result', lpFb, 'agentA', 'value');
-  aE(bIdx, 'result', lpFb, 'agentB', 'value');
+  aE(bIdx, 'result', lpFb, 'targetAgent', 'value');
 
   return {
     schemaVersion: 1,
-    properties: { name: 'Form Bond Between Parity Test', dimension: '2d', gridWidth: 24, gridHeight: 24, gridDepth: 1, topology: '2d-grid', boundaryTreatment: 'torus', useWasm: false, useWebGPU: false },
+    properties: { name: 'Form Bond Pair Encoding Parity Test', dimension: '2d', gridWidth: 24, gridHeight: 24, gridDepth: 1, topology: '2d-grid', boundaryTreatment: 'torus', useWasm: false, useWebGPU: false },
     topologyMode: { gridCells: false, agents: true },
     centerBased: { enabled: true, maxAgents: 100, maxBonds: 6, worldWidth: 24, worldHeight: 24, seedCount: 40, seedPattern: 'scatter', defaultRadius: 0.5, growthRate: 0, repulsionStiffness: 0, adhesionStiffness: 0, interactionRange: 1.5, drag: 1, timeStep: 0.1, momentum: 0, maxSpeed: 0, neighbourQueryRadius: 8, useBondingPhysics: false, autoBond: false, bondStiffness: 0, bondRestLength: 1.5, formDistance: 1.2, breakDistance: 2.0, agentTarget: 'wasm', agentUpdateMode: 'async',
       agentCapabilities: { motion: 'force', body: true, collision: 'off', bonds: 'data', autoBond: false, growth: false, division: false, lifespan: false, populationBirth: false, populationDeath: false, sensing: false, sensingHeadingSource: 'velocity', orientation: false, fieldCoupling: false, appearance: true } },
@@ -1648,7 +1650,7 @@ function formBetweenInvariant(st) {
 }
 
 entries.push({
-  name: '[synthetic] Form Bond BETWEEN (sign-encoded op kind vs Rewire, same ids)',
+  name: '[synthetic] Form Bond pair encoding (sign-encoded op kind vs Rewire, same ids)',
   raw: buildFormBetweenModel(), setup: setupBondAttrStores, invariant: formBetweenInvariant,
 });
 
@@ -1663,9 +1665,10 @@ entries.push({
 //   0  UNWIRED               -> the HISTORICAL self-form lanes (NONE, t+2)
 //   1  wired to Get Self Handle -> the Between lanes naming the requester itself
 //   2  wired to a THIRD PARTY   -> the Between lanes naming that pair
-//   3  a real Form Bond BETWEEN with the SAME ids as 2 -> must be BYTE-IDENTICAL
-//      to entry 2 (this is what proves the lowering reuses the encoding rather
-//      than inventing a second, subtly different one)
+//   3  a SECOND paired Form Bond with the SAME ids as 2 -> must be BYTE-IDENTICAL
+//      to entry 2 (the lowering depends only on the ids + params, never on which
+//      node instance issued it; this slot used to hold the retired Form Bond
+//      Between node, and asserted the two spellings agreed)
 // ---------------------------------------------------------------------------
 function buildFormBondPairModel() {
   const used = new Set();
@@ -1683,8 +1686,8 @@ function buildFormBondPairModel() {
   const fbGsh = an('formBond', { _port_restLength: '7', _port_stiffness: '11', _port_bondAttr_bw: '32' });
   // 2 - Form Bond, agentA = a THIRD PARTY
   const fbThird = an('formBond', { _port_restLength: '13', _port_stiffness: '17', _port_bondAttr_bw: '33' });
-  // 3 - the explicit verb with the SAME ids + params -> byte-identical to entry 2
-  const fbb = an('formBondBetween', { _port_restLength: '13', _port_stiffness: '17', _port_bondAttr_bw: '33' });
+  // 3 - a SECOND paired Form Bond, same ids + params -> byte-identical to entry 2
+  const fbb = an('formBond', { _port_restLength: '13', _port_stiffness: '17', _port_bondAttr_bw: '33' });
   // 4 - wired agentA that cannot resolve -> (-NONE, NONE), still non-zero
   const fbBad = an('formBond', { _port_restLength: '19', _port_stiffness: '23', _port_bondAttr_bw: '34' });
   // 5..7 - a loop of paired Form Bonds (per-entry values must not smear)
@@ -1701,7 +1704,7 @@ function buildFormBondPairModel() {
   aE(off(5), 'result', fbThird, 'targetAgent', 'value');
   aE(fbThird, 'next', fbb, 'do', 'flow');
   aE(off(4), 'result', fbb, 'agentA', 'value');                   // the SAME two ids
-  aE(off(5), 'result', fbb, 'agentB', 'value');
+  aE(off(5), 'result', fbb, 'targetAgent', 'value');
   aE(fbb, 'next', fbBad, 'do', 'flow');
   aE(off(-1000), 'result', fbBad, 'agentA', 'value');
   aE(off(6), 'result', fbBad, 'targetAgent', 'value');
@@ -1755,7 +1758,7 @@ function formBondPairInvariant(st) {
       [NONE, i + 1 + BIAS, 3, 5, 31],                   // 0  UNWIRED  -> historical self-form
       [-(i + BIAS), i + 1 + BIAS, 7, 11, 32],           // 1  agentA = self, SAME target as 0
       [-(i + 4 + BIAS), i + 5 + BIAS, 13, 17, 33],      // 2  agentA = a third party
-      [-(i + 4 + BIAS), i + 5 + BIAS, 13, 17, 33],      // 3  Form Bond Between, the SAME ids
+      [-(i + 4 + BIAS), i + 5 + BIAS, 13, 17, 33],      // 3  a 2nd paired Form Bond, SAME ids
       [-NONE, NONE, 19, 23, 34],                        // 4  wired agentA, unresolvable
       [-(i + 200 + BIAS), i + 300 + BIAS, 0, 0, 35],    // 5  loop k=0
       [-(i + 201 + BIAS), i + 301 + BIAS, 0, 0, 35],    // 6  loop k=1
@@ -1778,9 +1781,10 @@ function formBondPairInvariant(st) {
     // the unwired entry would: same target, first endpoint = me.
     if (-st.bondBreakReq[b + 1] - BIAS !== i) return `agent ${i}: wired-to-self decodes to agent ${-st.bondBreakReq[b + 1] - BIAS}, not the requester`;
     if (st.bondFormReq[b] !== st.bondFormReq[b + 1]) return `agent ${i}: entries 0 and 1 do not name the same target (${st.bondFormReq[b]} vs ${st.bondFormReq[b + 1]})`;
-    // THE LOWERING BIT: a paired Form Bond IS a Form Between, byte for byte.
+    // THE LOWERING BIT: the entry depends only on the ids + params, never on which
+    // node instance issued it (this pair used to be Form Bond vs Form Bond Between).
     for (const [nm, arr] of [['break', st.bondBreakReq], ['form', st.bondFormReq], ['L', st.bondFormL], ['K', st.bondFormK], ['bw', st.bondFormAttrs.bw]]) {
-      if (arr[b + 2] !== arr[b + 3]) return `agent ${i}: paired Form Bond and Form Bond Between differ in ${nm} (${arr[b + 2]} vs ${arr[b + 3]})`;
+      if (arr[b + 2] !== arr[b + 3]) return `agent ${i}: two paired Form Bonds with the same ids differ in ${nm} (${arr[b + 2]} vs ${arr[b + 3]})`;
     }
     // The terminator rule: a written entry must never read as empty (0,0).
     for (let c = 0; c < 8 && c < depth; c++) {

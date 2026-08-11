@@ -133,6 +133,7 @@ import { viewCosHalf } from '../../nodes/GetAgentsInViewNode';
 import { hemifieldArraysUsed, HEMIFIELD_LEFT_ARRAY, HEMIFIELD_RIGHT_ARRAY, HEMIFIELD_ARRAY_PORTS } from '../../nodes/SenseHemifieldNode';
 import { cellFieldAttrsOf, bondAttrsOf } from '../../../../model/attributeScope';
 import { BOND_REQ_ID_BIAS, BOND_REQ_NONE, BOND_REQUEST_NODE_TYPES, bondReqSlotsForModel } from '../bondRequestQueue';
+import type { BondRequestOp, BondRequestVerb } from '../bondRequestEmitJS';
 import { dividePartitionCode, assignDividePartitionCodes } from '../dividePartition';
 import { encodeAttrValue } from '../../../../model/attrValueEncoding';
 import {
@@ -178,7 +179,7 @@ export const AGENT_WASM_SUPPORTED_TYPES: ReadonlySet<string> = new Set<string>([
   'getCellAttribute', 'setAttribute', 'updateAttribute', 'setAgentAttribute',
   'setVelocity', 'setAgentPosition', 'setAgentRadius',
   // structural writes (the post-step CPU structural phase reads the requests)
-  'divideAgent', 'formBond', 'breakBond', 'rewireBond', 'formBondBetween', 'transferBond', 'killAgent',
+  'divideAgent', 'formBond', 'breakBond', 'rewireBond', 'transferBond', 'killAgent',
   // Stop Event — writes the agent stop cell (worker merges it into the shared flag)
   'stopEvent',
   // unified spawning — Create Agent + Add Agent To World in the behaviour graph
@@ -685,7 +686,7 @@ function emitGetBondAttribute(ctx: AgentWasmCtx, node: GraphNode): void {
  *  Because the ENTRY index goes into an i32 local, the existing per-agent element
  *  address helpers (`pushI32ElemAddr` / `pushF64ElemAddr`, which compute
  *  `regionOffset + local*width`) address a queue entry unchanged. */
-function emitBondRequest(ctx: AgentWasmCtx, node: GraphNode, verb: 'form' | 'break' | 'rewire' | 'between' | 'transfer'): void {
+function emitBondRequest(ctx: AgentWasmCtx, node: GraphNode, verb: BondRequestVerb): void {
   const em = ctx.em;
   const slots = Math.max(1, ctx.layout.bondReqSlots);
   const depth = slots - 1;
@@ -697,8 +698,7 @@ function emitBondRequest(ctx: AgentWasmCtx, node: GraphNode, verb: 'form' | 'bre
   // so an unwired node must not so much as mint one extra. Unwired ⇒ effVerb ===
   // verb ⇒ the historical code path verbatim ⇒ byte-identical bytes.
   const pairWired = verb === 'form' && !!ctx.adj.inputToSource.get(`${node.id}:agentA`);
-  const effVerb = pairWired ? 'between' : verb;
-  const bPort = verb === 'between' ? 'agentB' : 'targetAgent';
+  const effVerb: BondRequestOp = pairWired ? 'between' : verb;
   const entry = em.allocLocal(I32);
   // entry = idx*slots + min(cursor, depth)
   em.localGet(ctx.idxLocal); em.i32Const(slots); em.op(OP_I32_MUL);
@@ -741,12 +741,12 @@ function emitBondRequest(ctx: AgentWasmCtx, node: GraphNode, verb: 'form' | 'bre
     // P4b — FORM BETWEEN: the op kind rides the SIGN of the break lane (negative),
     // so no new field and therefore no baked offset moves. Both ids must resolve
     // or the entry is an explicit no-op, still written as (−NONE, NONE) so it
-    // stays non-zero and cannot truncate the queue. A Form Bond with a wired
-    // `agentA` lands here too — its second id is `targetAgent` (see `bPort`).
+    // stays non-zero and cannot truncate the queue. Since the Form Bond Between
+    // NODE was retired, this arm is reached only through a wired `agentA`.
     const aL = em.allocLocal(I32);
     pushValueAs(em, resolveValueInput(ctx, node, 'agentA', -1), I32); em.localSet(aL);
     const bL = em.allocLocal(I32);
-    pushValueAs(em, resolveValueInput(ctx, node, bPort, -1), I32); em.localSet(bL);
+    pushValueAs(em, resolveValueInput(ctx, node, 'targetAgent', -1), I32); em.localSet(bL);
     const okL = em.allocLocal(I32);
     em.localGet(aL); em.i32Const(0); em.op(OP_I32_GE_S);
     em.localGet(bL); em.i32Const(0); em.op(OP_I32_GE_S);
@@ -3006,11 +3006,9 @@ function compileFlowNode(ctx: AgentWasmCtx, nodeId: string): void {
     case 'formBond':
     case 'breakBond':
     case 'rewireBond':
-    case 'formBondBetween':
     case 'transferBond': {
       emitBondRequest(ctx, node, node.data.nodeType === 'formBond' ? 'form'
         : node.data.nodeType === 'breakBond' ? 'break'
-        : node.data.nodeType === 'formBondBetween' ? 'between'
         : node.data.nodeType === 'transferBond' ? 'transfer' : 'rewire');
       compileFlowChain(ctx, node.id, 'next');
       break;

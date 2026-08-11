@@ -226,7 +226,7 @@ genesis-ca/
 │   │       ├── alignmentSnap.ts        # Pure Ctrl-drag alignment-guide geometry (computeAlignmentSnap + sameGuides)
 │   │       ├── bondAttrPorts.ts        # GRA P2: Form Bond's per-BOND-ATTRIBUTE initial-value ports — the ONE builder consumed by BOTH CaNode and effectivePorts
 │   │       ├── NodeExplorer.tsx        # Right-side searchable node list panel
-│   │       ├── nodes/                # 152 node types (one file each) + registry.ts
+│   │       ├── nodes/                # 151 node types (one file each) + registry.ts
 │   │       │   ├── nodeValidation.ts  # detectMissingConfig() — drives warning badges
 │   │       │   └── colorScalePresets.ts # Named palettes (Viridis/Magma/Rainbow/…) for Color Scale + Linked mappings
 │   │       ├── widgets/              # Shared inline editors (InlineWidgets.tsx, GradientStopsEditor.tsx, ExpressionFormula.tsx)
@@ -386,7 +386,7 @@ The app is functional with these major systems:
 ### Visual Programming Language (VPL)
 - `src/modeler/vpl/GraphEditor.tsx` — React Flow-based node graph editor
 - `src/modeler/vpl/CaNode.tsx` — Custom node component with per-type config UI
-- `src/modeler/vpl/nodes/` — 155 node types (152 selectable from the Add Node menu + 3 hidden macro boundary nodes), each in its own file with `compile()` method. Canonical list: `ALL_NODES` in [registry.ts](src/modeler/vpl/nodes/registry.ts). Async-only nodes (6): SetNeighborhoodAttribute, SetNeighborAttributeByIndex, MarkCellUpdated, SetFacingOrientation, SetNeighborOrientationByIndex, MoveSelfToNeighbor. Includes `StopEventNode` (flow input only, text widget for stop message — compiles to `if (_stopFlag[0] === 0) _stopFlag[0] = <1-based idx>;` first-match-wins; WASM emitter mirrors this via `i32.store` at `layout.stopFlagOffset`).
+- `src/modeler/vpl/nodes/` — 154 node types (151 selectable from the Add Node menu + 3 hidden macro boundary nodes), each in its own file with `compile()` method. Canonical list: `ALL_NODES` in [registry.ts](src/modeler/vpl/nodes/registry.ts). Async-only nodes (6): SetNeighborhoodAttribute, SetNeighborAttributeByIndex, MarkCellUpdated, SetFacingOrientation, SetNeighborOrientationByIndex, MoveSelfToNeighbor. Includes `StopEventNode` (flow input only, text widget for stop message — compiles to `if (_stopFlag[0] === 0) _stopFlag[0] = <1-based idx>;` first-match-wins; WASM emitter mirrors this via `i32.store` at `layout.stopFlagOffset`).
 - Five "event" entry-point nodes: GenerationStep (per-gen logic), InitEvent (runs once PER CELL on simulator Reset — see Variegated Cells section), **GridInit** (runs ONCE GLOBALLY on Reset — free-form procedural seeding; see the "Grid Init Event" section), InputMapping C→A (brush), OutputMapping A→C (color pass)
 - `src/modeler/vpl/compiler/compile.ts` — Two-pass compiler: hoists values, then emits flow
 - Multi-output nodes (InputColor, GetColorConstant, MacroNode, ColorScale, FilterNeighbors, JoinNeighbors, GetFacingLabels, BreakDownNeighborIndex, InitEvent, GetCellPosition, GroupOperator with position output) use `_v${nodeId}_${portId}` naming
@@ -3081,7 +3081,7 @@ makes that badge WIRING-aware for the two conditional nodes.
 | **Set Target Radius** | **optional id ⇒ self** | ✅ this change — Set Agent Radius sets the CURRENT radius, so the GROWTH TARGET was unreachable for any other agent |
 | Set Agent Sprite | optional id ⇒ self | already the convention |
 | Form Bond | optional `agentA` ⇒ self + `targetAgent` | already (lowers to the Form Between encoding when wired) |
-| Form Bond Between / Transfer Bond | two / three explicit ids | inherently multi-party |
+| Form Bond (paired) / Transfer Bond | two / three explicit ids | inherently multi-party |
 | **Break Bond** / Set Bond Attribute / Rewire Bond | self-anchored pair | **the one real remaining gap** — see the follow-up below |
 | Divide Agent | self only | dividing another agent by id would need the Division Event (which runs per-DAUGHTER of the divider) to answer "whose event is this?", plus a partition spec chosen by an agent that is not the mother. A semantic redesign, not a port |
 | Add Agent To World / Create Agent | by handle | a handle IS the target; "self" is meaningless |
@@ -3392,7 +3392,7 @@ live **force-directed embedding for free**, which most GRA tooling has to bolt o
 
 | # | Gap | Closed by |
 |---|---|---|
-| G1 | ONE structural request slot per agent per step ⇒ a degree-preserving rewrite could not be atomic | the bounded per-agent **request QUEUE** + the atomic **Rewire Bond** verb, completed by **Form Bond Between** |
+| G1 | ONE structural request slot per agent per step ⇒ a degree-preserving rewrite could not be atomic | the bounded per-agent **request QUEUE** + the atomic **Rewire Bond** verb, completed by the **paired Form Bond** (the third-party encoding) |
 | G2 | division partitioned bonds GEOMETRICALLY (`sign(dot(offset, axis))`) | the declarative **division bond partition** (tension / alternate / byBondAttribute) + the `daughterBond` policy |
 | G3 | no **bond attributes** — no edge state, no typed rules, no SDCA link variable | `CAModel.bondAttributes` end-to-end on all three agent targets |
 | G4 | no neighbour-state **census** as a first-class value | the `neighbourCensus` node, LOWERED to existing nodes ⇒ zero per-target emit |
@@ -3625,7 +3625,15 @@ The cursor (`_brqC` in JS, an i32 local on WASM, `var brqC` in WGSL) is a per-ag
 #### Verification
 `scripts/verify-graph-rewrite.mjs` **Tier G** (135 → **180** checks): the usage gate; **I5** — D+3 ops apply EXACTLY D with the rest rejected whole, the graph exactly the pre-step graph minus those D edges, the queue fully cleared; **I5 rewire** — a rewire that cannot complete leaves the graph EXACTLY unchanged, and one from a non-existent edge never becomes a bare form; the terminator rule; **multi-op** — 3 rewires (6 edge mutations) by one agent in ONE generation with I1–I4 green immediately after; **O5** — a double-edge-swap rule keeps N, E and the **full degree multiset** invariant over **500 generations**, exactly; plus the emit shape on all three targets. **Every one is negative-controlled.** `parity-agent-wasm` gained the permanent `[synthetic] Bond request QUEUE` entry (4 explicit ops + a 12-iteration loop ⇒ overflow) whose **value invariant recomputes the expected queue independently** — negative-controlled three ways, including a SHARED-constant mutation that both targets follow identically (which parity alone would pass).
 
-### G1 completed — `Form Bond Between` (third-party bond formation)
+### G1 completed — third-party bond formation (the *between* encoding)
+
+> **⚠️ THE `formBondBetween` NODE IS RETIRED (2026-08-11).** Everything below describes the
+> ENCODING, which is unchanged and very much alive — it is what a **Form Bond with its `agentA`
+> port WIRED** lowers to (see "Form Bond names BOTH ends" below). The dedicated node was a second
+> spelling of the same op and was folded into Form Bond; a legacy `.gcaproj` is rewritten on load
+> by [formBondBetweenMigration.ts](src/model/formBondBetweenMigration.ts) — see "Retiring the
+> Form Bond Between node" at the end of this section. Read `formBondBetween(a, b)` below as
+> "a Form Bond with `agentA` = a and `Target` = b".
 
 **The one edge a self-relative verb cannot make.** Form Bond is self-to-target, so an edge joining two agents that are BOTH someone else is inexpressible. That blocks the milestone's flagship oracle **O6**, the cubic **triangle split** (`v(a,b,c) → v₁,v₂,v₃` with the triangle closed): its `v₂–v₃` edge joins two agents the rule CREATED THIS GENERATION — neither is `self`, and neither runs its own behaviour until the next step. Spreading the split over two generations leaves an intermediate state with degree-2 nodes and `E ≠ 3N/2`, i.e. it violates precisely the invariant O6 tests. Runbook: [docs/HANDOFF_GRA_P4B_FORM_BOND_BETWEEN.md](docs/HANDOFF_GRA_P4B_FORM_BOND_BETWEEN.md).
 
@@ -3647,7 +3655,7 @@ A Form Between needs TWO agent ids in one queue entry, which is exactly what a *
 `formBondBetween(agentA, agentB)` + the same payload as Form Bond (rest length, stiffness, one initial-value port per bond attribute). **The request rides the REQUESTING agent's OWN queue, carrying both ids as PAYLOAD, not as addresses** — no thread ever writes another thread's rows, so exactly as in P4 the **WebGPU emit still needs no atomics** (asserted over the emitted shader). The drain calls the existing `formBond(store, a, b, …)`, which IS the whole-op gate: self / dead / out of range / already bonded / **either** list full ⇒ nothing on either side (**I5**), and it stamps both slots identically (**I2**). Rest length 0 ⇒ the **NAMED pair's** contact distance (`rad[a]+rad[b]`), not the requester's. All five registrations done (def, registry, both `AGENT_*_SUPPORTED_TYPES`, `nodeValidation`'s init-invalid set, `AGENT_NODE_REQUIREMENT` → `bonds`), plus `BOND_REQUEST_NODE_TYPES` (so the usage gate sizes the queue for it) and `BOND_ATTR_PORT_TYPES` (it forms a bond, so it seeds attributes).
 
 #### The triangle split costs FIVE queue ops, not seven
-From `v₁`'s behaviour, with `maxBonds` a TIGHT **3** (nothing transiently exceeds the cubic degree): `rewire(b → v₂)` · `rewire(c → v₃)` · `between(b, v₂)` · `between(c, v₃)` · **`between(v₂, v₃)`**. The two Create Agent + two Add To World calls are HOST calls and consume **no** queue slot. The handoff's literal `2 Form + 2 Break + 3 Between` formulation is 7 ops and also fits the default depth 8 (but transiently reaches degree 5, so it needs `maxBonds ≥ 5`). **Default depth 8 covers both** — P7 needs no raised depth.
+From `v₁`'s behaviour, with `maxBonds` a TIGHT **3** (nothing transiently exceeds the cubic degree): `rewire(b → v₂)` · `rewire(c → v₃)` · `pair(b, v₂)` · `pair(c, v₃)` · **`pair(v₂, v₃)`** (a Form Bond with `agentA` wired). The two Create Agent + two Add To World calls are HOST calls and consume **no** queue slot. The handoff's literal `2 Form + 2 Break + 3 Between` formulation is 7 ops and also fits the default depth 8 (but transiently reaches degree 5, so it needs `maxBonds ≥ 5`). **Default depth 8 covers both** — P7 needs no raised depth.
 
 #### Verification
 `verify-graph-rewrite.mjs` **Tier J** (297 → **355** checks): registration + the usage gate; the drain bonds the two NAMED agents and NOT the requester; self / dead / out-of-range / already-bonded / unresolvable are no-ops that still OCCUPY their entry; **I5** with EITHER endpoint full leaves the graph exactly unchanged and the degree multiset exactly unchanged; **I2** across rest length, stiffness and both bond-attribute kinds; **THE GATE — 60 triangle splits, each COMPLETE in ONE generation**, with `checkDegreeRegular(g,3)` and I1–I4 asserted after EVERY one, `ΔN=+2`/`ΔE=+3` per split and `N = 4+2t`, `E = 6+3t` exactly (K4 → N=124, E=186); the 7-op formulation; and the emitted shape on all three targets. **Negative controls**: the same ids with a POSITIVE break lane are a Rewire (the sign is the discriminator); a sign-blind read bonds the REQUESTER to B; and — the decisive one — running the SAME split **without** the `v₂–v₃` Form Between breaks O6 while leaving I1–I4 green, so the gate is provably testing O6 and not something weaker. `parity-agent-wasm` gained the permanent `[synthetic] Form Bond BETWEEN` entry, whose entries 0 and 1 carry the **same two ids** and must differ ONLY in the sign; its value invariant recomputes the whole queue independently. Negative-controlled three ways: WASM-only drops the negation (`js=-3 wasm=3`); **both targets drop it identically** (parity PASSES, the value invariant catches it: `breakLane 3 !== -3`); and the engine drain ignores the sign.
@@ -3656,11 +3664,11 @@ From `v₁`'s behaviour, with `maxBonds` a TIGHT **3** (nothing transiently exce
 
 #### `Form Bond` names BOTH ends — the optional `agentA` port (defaults to self)
 
-Form Bond gained an **optional first-endpoint port `agentA` ("Agent A (self)")**, placed before `Target`. **Unwired ⇒ THIS agent** (the historical node, verbatim); **wired ⇒ the op LOWERS to the Form Between encoding** — the negated break lane, the same queue entry `formBondBetween` writes, with the second id read from `targetAgent` instead of `agentB`. So one node covers both "bond me to X" and "bond X to Y". `formBondBetween` **stays** as the explicit two-id verb (samples + harnesses reference it, and naming both agents up front is often what the rule is about).
+Form Bond gained an **optional first-endpoint port `agentA` ("Agent A (self)")**, placed before `Target`. **Unwired ⇒ THIS agent** (the historical node, verbatim); **wired ⇒ the op LOWERS to the Form Between encoding** — the negated break lane, the same queue entry `formBondBetween` writes, with the second id read from `targetAgent` instead of `agentB`. So one node covers both "bond me to X" and "bond X to Y". **`formBondBetween` was subsequently RETIRED into this port** — see the next subsection.
 - **Wiring `Get Self Handle` into `agentA` is indistinguishable from leaving it unwired** — not by a compile-time fold, but because the drain's Form Between arm calls the very same `formBond(a, b, …)`, and its extra `a < hw && alive[a]` checks are trivially true when `a` IS the requester (the drain already skipped dead agents, and `i < hw` by the loop bound). Rest length 0 likewise resolves to `rad[a]+rad[b]`, which equals the self-form's `rad[i]+rad[to]`. **Verified end-to-end on all three agent targets: the two produce the identical edge set AND identical slots** (partner, rest length, stiffness).
 - **THE BYTE-IDENTITY RULE, and where it bites.** The wiredness comes from the **EDGE MAP** (`ctx.adj.inputToSource` on WASM/WebGPU; on JS `inputs['agentA'] !== undefined`, which IS the edge-map answer because the port carries **no inline widget** — `getInlineValue` returns undefined for one, so the only other way that key is set does not exist. **Give `agentA` a widget and the JS test silently starts reading an unwired node as wired.**) It is resolved **BEFORE any local or name is minted**: `em.allocLocal` changes the WASM module bytes and `fresh()` shifts every later WGSL name, even when the value is unused — so an unwired node must not mint so much as one extra. `effVerb === verb` on the unwired path ⇒ the historical arm verbatim. `check-compile-identity`: **29 models, all surfaces unchanged**.
 - **Nothing else needed a change**, and each was checked rather than assumed: `geometryTaint` already treats every `formBond` value input as tainting (it is in `STRUCTURAL_VERBS` with no `GEOMETRY_ONLY_INPUT_PORTS` exemption), so a proximity-derived `agentA` taints exactly like `formBondBetween.agentA`; the **synchronous cross-agent OVERWRITE gate does NOT apply** (it lists only the four by-id SETTERS — a bond request is a queue entry on the requester's OWN rows, drained on the CPU, which is also why WebGPU still needs no atomics here); `BOND_REQUEST_NODE_TYPES` / `BOND_ATTR_PORT_TYPES` / `AGENT_NODE_REQUIREMENT` / the capability matrix all key off the node TYPE, which is unchanged.
-- **Verification.** `verify-graph-rewrite.mjs` **Tier O** (517 → **533** checks): the ENGINE claim (a Between naming the requester ≡ the self-form, slot-for-slot) + a negative control (a third-party `agentA` bonds that pair, not the requester); the COMPILE claim on all three targets (JS emits the historical `= 1;` break lane unwired and `-(_bqA + 2)` wired; the WASM module BYTES differ between the two shapes; the WGSL emits the negated lane only when wired — asserted against `layout.f32Base['bondBreakReq']`, since `reqAt` resolves the field NAME to a numeric base and it never appears in the shader text). `parity-agent-wasm` gained the permanent `[synthetic] Form Bond pair ports` entry laying the three shapes side by side plus a real `formBondBetween` carrying the SAME ids, whose VALUE invariant asserts entry 2 and entry 3 are byte-identical (the lowering reuses the encoding rather than approximating it). **Negative-controlled both ways**: WASM-only drops the lowering ⇒ parity catches it (`bondFormReq[4] js=1 wasm=8`); **both targets drop it identically ⇒ parity PASSES and only the value invariant catches it** (`entry 1: breakLane 1 !== -2`).
+- **Verification.** `verify-graph-rewrite.mjs` **Tier O** (517 → **533** checks): the ENGINE claim (a Between naming the requester ≡ the self-form, slot-for-slot) + a negative control (a third-party `agentA` bonds that pair, not the requester); the COMPILE claim on all three targets (JS emits the historical `= 1;` break lane unwired and `-(_bqA + 2)` wired; the WASM module BYTES differ between the two shapes; the WGSL emits the negated lane only when wired — asserted against `layout.f32Base['bondBreakReq']`, since `reqAt` resolves the field NAME to a numeric base and it never appears in the shader text). `parity-agent-wasm` gained the permanent `[synthetic] Form Bond pair ports` entry laying the three shapes side by side plus a real `formBondBetween` carrying the SAME ids, whose VALUE invariant asserts entry 2 and entry 3 are byte-identical (the lowering reuses the encoding rather than approximating it). *(Superseded in part by the retirement below: slot 3 is now a SECOND paired Form Bond, so the check reads "the entry depends only on the ids + params, never on which node instance issued it"; the tier counts moved 533 → 543.)* **Negative-controlled both ways**: WASM-only drops the lowering ⇒ parity catches it (`bondFormReq[4] js=1 wasm=8`); **both targets drop it identically ⇒ parity PASSES and only the value invariant catches it** (`entry 1: breakLane 1 !== -2`).
 - **Real GPU + real worker**: both shapes device-compile with **0 shader errors and 0 validation errors**; a model where every agent asks for a bond between `i+1` and `i+2` produces the path `1-2…6-7` with the **requester at degree 0** and `Σdeg = 12 = 2|E|` — **identically on JS, WASM and WebGPU**, 0 console errors.
 
 ### G1 finished — `Transfer Bond` (third-party IN-PLACE partner replacement)
@@ -3745,6 +3753,48 @@ the usage gate sizes the queue), both `AGENT_*_SUPPORTED_TYPES`, `AGENT_NODE_REQ
   targets passes parity and is caught by the **value invariant** (`formLane 4 !== -4`), which
   recomputes the whole expected queue independently.
 
+#### Retiring the `Form Bond Between` node (branch `polishing`, 2026-08-11)
+
+Once Form Bond's optional `agentA` port lowered to the very same queue encoding, the two nodes were
+two spellings of one op — so the node was **removed** and Form Bond is the single bond-forming verb.
+User call: *"just one node 'Form Bond' that can be used either with self or between two other agents
+should be enough"*.
+
+- **[formBondBetweenMigration.ts](src/model/formBondBetweenMigration.ts)** rewrites a legacy graph on
+  load: `nodeType` → `formBond`, and the second endpoint's port `agentB` → `targetAgent` (the edge's
+  `targetHandle` `input_value_agentB` → `input_value_targetAgent`, plus a stale `_port_agentB` config
+  key). **`agentA` is untouched** — it is the port that makes the op a pair op. Everything else
+  already matched port-for-port (`do`/`next`, `restLength`, `stiffness`, and the same dynamic
+  `bondAttr_<id>` ports from the shared `buildBondAttrPorts`). Wired into the established trio:
+  `LOAD_MODEL`, `cloneMacroWithFreshIds` (macro import) and `migrateForHarness`. Idempotent
+  (same model reference when nothing matched); sweeps the agent graph, macroDefs **and** — purely
+  defensively, since the node is `bondGraph`-gated — the cell + overseer stores.
+- **BYTE-IDENTICAL, measured, no accepted diff.** `check-compile-identity`: **29 models, all surfaces
+  unchanged**, `Growing Graphs` (the one shipped model that used the node) included. That holds
+  because the migration preserves node ids, edge ids and BOTH array orders, and all three emitters
+  already routed a wired `agentA` through the identical `effVerb === 'between'` arm — so the emitted
+  JS text, the WASM module bytes and the WGSL are the same characters/bytes as before.
+- **What was removed**: the node file + registry entry, and its membership in
+  `AGENT_WASM_SUPPORTED_TYPES` / `AGENT_WEBGPU_SUPPORTED_TYPES` / `BOND_REQUEST_NODE_TYPES` /
+  `BOND_ATTR_PORT_TYPES` / `AGENT_NODE_REQUIREMENT` / `nodeValidation`'s init-invalid set /
+  `geometryTaint`'s `STRUCTURAL_VERBS` + label tables / `targetDiagnosis`'s residency `STRUCTURAL` set.
+  **`'between'` is no longer a NODE verb** — `BondRequestVerb` is now the four real verbs
+  (`form`/`break`/`rewire`/`transfer`) and the new `BondRequestOp = BondRequestVerb | 'between'`
+  types the `effVerb` the three emitters branch on. **The queue ENCODING and the engine's drain arm
+  are untouched.**
+- **Generators** re-emit the new form (`gen-growing-graphs`, `gen-cubic-gra` — `formBond` with
+  `agentA` wired and `agentB` → `targetAgent`); **`public/models/*.gcaproj` was deliberately NOT
+  regenerated** — the shipped files keep loading through the migration.
+- **Harnesses**: `verify-graph-rewrite` Tier J's fixtures moved to the wired Form Bond and gained a
+  **retirement-migration block** (533 → **543** checks) asserting the node/handle rewrite, macro
+  coverage, idempotence, and — the load-bearing one — that a MIGRATED legacy graph emits
+  **byte-identical JS AND byte-identical WASM bytes** to the hand-authored Form Bond. ⚠️ That fixture
+  WIRES `agentA` through a real edge rather than a `_port_agentA` config: the port carries no inline
+  widget, so wiredness is the EDGE-map answer on all three targets, and a config-only value would
+  leave the node on its self-form arm. `parity-agent-wasm` keeps both synthetics (renamed
+  `[synthetic] Form Bond pair encoding …`), so the sign-vs-Rewire discrimination stays pinned.
+- **Catalogue**: **151 selectable** node types (154 − 3 hidden macro), **54 agent**.
+
 ### G2 closed — the DIVISION BOND PARTITION
 
 `divideAgent` split a mother's bonds between its two daughters purely **geometrically** (`sign(dot(offset, m̂))`). A graph-rewriting rule is *defined* by which EDGES go to which daughter, so geometry is exactly the thing a user cannot say. P5 lets the user **name** the partition, plus decision **D4** (the daughter–daughter bond policy). Runbook: [docs/HANDOFF_GRA_P5_DIVISION_PARTITION.md](docs/HANDOFF_GRA_P5_DIVISION_PARTITION.md).
@@ -3826,14 +3876,14 @@ cubic graph. **Never claim faithfulness to a specific paper for this model.**
 | **idle** | — | 0 | 0 |
 
 - **The split is FIVE queue ops in ONE generation** at a TIGHT `maxBonds: 3` — 2 Rewire Bond
-  + 3 Form Bond Between (Create Agent / Add Agent To World are host calls consuming no queue
+  + 3 paired Form Bond (Create Agent / Add Agent To World are host calls consuming no queue
   slot). The peak degree during the drain is exactly 3, which is itself the proof that
   nothing transiently over-bonds. `E = 3N/2` survives because `3N/2 + 3 = 3(N+2)/2`.
 - **THE EDGE SWAP IS ABSENT, AND THAT IS A REAL FINDING, NOT AN OMISSION.** A degree-neutral
   double-edge swap requires an agent to BREAK an edge between two OTHER agents, and there is
-  no such verb: Break Bond and Rewire Bond are self-relative, Form Bond Between only ADDS,
+  no such verb: Break Bond and Rewire Bond are self-relative, a paired Form Bond only ADDS,
   and every zero-ΔE combination of the available verbs that also leaves every degree
-  unchanged is a no-op. **The missing dual of Form Bond Between (`Break Bond Between`, plus
+  unchanged is a no-op. **The missing dual of the paired Form Bond (`Break Bond Between`, plus
   2-hop bond visibility) would close it** — see the deferred list in the P7 report.
 - **THE RANDOM-PRIORITY GATE IS LOAD-BEARING, not decoration.** Two ADJACENT agents must
   never rewrite in the same generation: the mother's Rewire needs its edge to `b` to still
@@ -4104,7 +4154,7 @@ never claim more fidelity than the measured result below.**
   round; here node 0 gets `[next, chord, prev]`. Tier M asserts the 9/10 count, WHICH node is the
   exception, and negative-controls it (giving each chord to its LOWER endpoint drops it to 4/10 —
   which is what the pre-2026-08-04 bootstrap produced).
-- **The split is FIVE queue ops** (2 Form Bond + 2 Transfer Bond + 1 Form Bond Between — Create
+- **The split is FIVE queue ops** (2 Form Bond + 2 Transfer Bond + 1 paired Form Bond — Create
   Agent / Add Agent To World are host calls consuming no queue slot), with the mother keeping bond
   slot 0 — and unlike Cubic GRA that is **NOT** an arbitrary choice here: slot 0 is `a`, the
   neighbour znah's mother keeps, so the fixed orientation is what makes the mother's row match.
@@ -4237,7 +4287,7 @@ The paragraph below records what Tier K measured while the model shipped.
   Rate (847 splits, N 4 → 1698) and **500 generations** at a slower rate, with I1–I4 after
   every one and the growth law exact (`N = 4 + 2t`, `E = 6 + 3t` — the observable form of I5,
   since a half-applied split would put N and E off the closed form). **Two negative
-  controls**: dropping ONLY the `v₂–v₃` Form Bond Between breaks O6 while I1–I4 stay green
+  controls**: dropping ONLY the `v₂–v₃` paired Form Bond breaks O6 while I1–I4 stay green
   (so the tier really tests O6 and not something weaker), and disabling the priority gate
   makes adjacent rewriters collide. **In the real app** (WASM agent target, real worker) at
   generation 270: N = 5120, E = 7680 = 3N/2, min = max = 3, handshake exact, 0 dangling.

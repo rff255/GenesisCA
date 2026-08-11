@@ -351,9 +351,11 @@ const bond = (col, row, type, wire) => {
 };
 const rw1 = bond(12, 4, 'rewireBond', n => { ag.vEdge(bAgent, 'value', n, 'fromAgent'); ag.vEdge(mk2, 'handle', n, 'toAgent'); });
 const rw2 = bond(12, 5, 'rewireBond', n => { ag.vEdge(cAgent, 'value', n, 'fromAgent'); ag.vEdge(mk3, 'handle', n, 'toAgent'); });
-const fb1 = bond(12, 6, 'formBondBetween', n => { ag.vEdge(bAgent, 'value', n, 'agentA'); ag.vEdge(mk2, 'handle', n, 'agentB'); });
-const fb2 = bond(12, 7, 'formBondBetween', n => { ag.vEdge(cAgent, 'value', n, 'agentA'); ag.vEdge(mk3, 'handle', n, 'agentB'); });
-const fb3 = bond(12, 8, 'formBondBetween', n => { ag.vEdge(mk2, 'handle', n, 'agentA'); ag.vEdge(mk3, 'handle', n, 'agentB'); });
+// A Form Bond with `agentA` WIRED bonds the two NAMED agents (it lowers to the
+// between encoding); leaving agentA unwired would bond the requester instead.
+const fb1 = bond(12, 6, 'formBond', n => { ag.vEdge(bAgent, 'value', n, 'agentA'); ag.vEdge(mk2, 'handle', n, 'targetAgent'); });
+const fb2 = bond(12, 7, 'formBond', n => { ag.vEdge(cAgent, 'value', n, 'agentA'); ag.vEdge(mk3, 'handle', n, 'targetAgent'); });
+const fb3 = bond(12, 8, 'formBond', n => { ag.vEdge(mk2, 'handle', n, 'agentA'); ag.vEdge(mk3, 'handle', n, 'targetAgent'); });
 
 ag.fEdge(sw, 'default', mk2, 'do');
 ag.fEdge(mk2, 'next', add2, 'do');
