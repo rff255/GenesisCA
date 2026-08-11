@@ -1725,8 +1725,35 @@ export function HelpView() {
             those cross-agent OVERWRITE writes are <strong>allowed only in Asynchronous mode</strong>
             (the agent form of the CA grid&rsquo;s &ldquo;a cell writes only itself&rdquo; rule) &mdash;
             except when the target is a freshly-created handle you&rsquo;re configuring at spawn time.
-            <em>Apply Force To Agent</em> is exempt: adding a force is commutative, so it&rsquo;s safe in
-            both modes.
+            <em>Apply Force To Agent</em> and <em>Kill Agent</em> are exempt, for the same reason:
+            adding a force is commutative and setting a kill flag to 1 is idempotent, so neither
+            depends on the order agents run in.
+          </p>
+          <h3 className={styles.h3}>Targeting &mdash; &ldquo;empty means me&rdquo;</h3>
+          <p className={styles.p}>
+            Every agent action can reach <em>any</em> agent. Most take an optional{' '}
+            <strong>Agent</strong> input: leave it empty and the node acts on the agent being
+            evaluated, or wire an id (from Get Nearby Agents, For Each Bond, Pick Random Agent,
+            Get Self Handle&hellip;) and it acts on that one &mdash; exactly how <em>Get Velocity</em>
+            has always read. That covers <strong>Kill Agent</strong> (apoptosis vs. predation),{' '}
+            <strong>Set Velocity</strong>, <strong>Set Target Radius</strong>,{' '}
+            <strong>Set Agent Sprite</strong> and <strong>Form Bond</strong>. The rest come as a
+            pair instead &mdash; a self node plus an explicit &ldquo;(by ID)&rdquo; sibling:{' '}
+            <em>Apply Force</em> / <em>Apply Force To Agent</em>, and{' '}
+            <em>Set Attribute</em> / <em>Set Agent Attribute</em>. A handful are self-anchored by
+            nature and say so: the field nodes act on the cells <em>under this agent</em>, and{' '}
+            <em>Break Bond</em> / <em>Rewire Bond</em> / <em>Set Bond Attribute</em> act on a bond
+            you are an endpoint of (cutting an edge between two <em>other</em> agents is not
+            expressible yet).
+          </p>
+          <p className={styles.p}>
+            Wiring an id has a consequence worth knowing: writing another agent&rsquo;s{' '}
+            <em>velocity</em>, <em>target radius</em>, <em>position</em>, <em>radius</em> or{' '}
+            <em>attribute</em> is an overwrite, so the last writer wins and the result depends on
+            the order agents run in. Those are the writes restricted to Asynchronous mode and to
+            the CPU engines. <em>Kill Agent</em> and <em>Apply Force To Agent</em> have no such
+            restriction &mdash; prefer them when you want a rule that behaves identically on every
+            engine.
           </p>
           <h3 className={styles.h3}>Auto &mdash; and why JS is not a peer</h3>
           <p className={styles.p}>
@@ -2293,8 +2320,12 @@ export function HelpView() {
               bond?&rdquo; below. A
               <strong> Division Event</strong> root (optional) runs once per daughter so you can
               give them different attribute values (asymmetric inheritance).</li>
-            <li><strong>Kill Agent</strong> &mdash; remove the agent (apoptosis); all its bonds
-              are broken safely.</li>
+            <li><strong>Kill Agent</strong> &mdash; remove an agent; all its bonds are broken
+              safely. Leave <em>Agent</em> empty for apoptosis (kill yourself), or wire an id to
+              <em>consume</em> a neighbour &mdash; predation. Unlike the by-id setters a wired kill
+              works in <em>both</em> update modes and on <em>every</em> target, because setting a
+              flag to 1 is idempotent: any number of predators electing the same prey, in any
+              order, means the same thing.</li>
             <li><strong>Get Velocity / Get Curvature</strong> &mdash; the agent's current velocity
               (for flocking), and its local membrane curvature (0 = flat/interior, →1 = a convex
               edge or tip &mdash; for curvature-dependent behaviour).</li>
@@ -2407,8 +2438,8 @@ export function HelpView() {
               list into a value array (feed <strong>Aggregate</strong> / <strong>Group Counting</strong>
               to count or sum a neighbourhood &mdash; this is what makes a <em>totalistic</em> rule on
               agents possible). <strong>Set Agents Attribute</strong> writes one attribute across a
-              list. <strong>Set Velocity</strong> sets an agent&rsquo;s velocity directly (needs
-              Momentum &gt; 0).</li>
+              list. <strong>Set Velocity</strong> sets an agent&rsquo;s velocity directly &mdash; empty
+              <em>Agent</em> = yourself, or wire an id for a knock-back (needs Momentum &gt; 0).</li>
           </ul>
           <h3 className={styles.h3}>Graph-Rewriting Automata &mdash; census &rarr; table &rarr; verb</h3>
           <p className={styles.p}>

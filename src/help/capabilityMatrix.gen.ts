@@ -548,7 +548,7 @@ export const AGENT_NODE_MATRIX: CapabilityNodeRow[] = [
   },
   {
     "type": "killAgent",
-    "label": "Kill Self",
+    "label": "Kill Agent",
     "category": "output",
     "capability": "populationDeath",
     "capabilityLabel": "Population (death)",

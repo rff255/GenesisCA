@@ -2832,10 +2832,21 @@ function compileFlowNode(ctx: AgentWasmCtx, nodeId: string): void {
       break;
     }
     case 'setTargetRadius': {
+      // Optional `agentId`: unwired = SELF (byte-for-byte the historical emit —
+      // the wiredness test reads the EDGE MAP before any local is allocated).
+      const strWired = !!ctx.adj.inputToSource.get(`${node.id}:agentId`);
       // C9 SAFETY CATCH: no target-radius field ⇒ no ramp to feed ⇒ drop the write
-      // (the value input is still evaluated for its side effects / RNG order).
+      // (the value input is still evaluated for its side effects / RNG order — and
+      // so is a wired id, which may itself be RNG-derived).
       if (ctx.layout.f64['targetRadius'] === undefined) {
+        if (strWired) { pushValueAs(em, resolveValueInput(ctx, node, 'agentId', -1), I32); em.op(OP_DROP); }
         pushValueInputF64(ctx, node, 'value', 1); em.op(OP_DROP);
+      } else if (strWired) {
+        emitGuardedAgentWrite(ctx, node, 'agentId', (aLocal) => {
+          pushF64ElemAddr(em, ctx.layout.f64['targetRadius']!, aLocal);
+          pushValueInputF64(ctx, node, 'value', 1);
+          em.f64Store();
+        });
       } else {
       pushF64ElemAddr(em, ctx.layout.f64['targetRadius']!, ctx.idxLocal);
       pushValueInputF64(ctx, node, 'value', 1);
@@ -2901,9 +2912,22 @@ function compileFlowNode(ctx: AgentWasmCtx, nodeId: string): void {
       break;
     }
     case 'setVelocity': {
-      pushF64ElemAddr(em, ctx.layout.f64['vx']!, ctx.idxLocal); pushValueInputF64(ctx, node, 'vx', 0); em.f64Store();
-      pushF64ElemAddr(em, ctx.layout.f64['vy']!, ctx.idxLocal); pushValueInputF64(ctx, node, 'vy', 0); em.f64Store();
-      if (ctx.is3d) { pushF64ElemAddr(em, ctx.layout.f64['vz']!, ctx.idxLocal); pushValueInputF64(ctx, node, 'vz', 0); em.f64Store(); }
+      // Optional `agentId`: unwired = SELF (the historical stores at idxLocal,
+      // byte-for-byte — the wiredness test reads the EDGE MAP before any local is
+      // allocated). Wired = a cross-agent OVERWRITE, guarded exactly like the other
+      // by-id setters (and gated off synchronous agent mode / the WebGPU target by
+      // CROSS_AGENT_OVERWRITE — see SetVelocityNode).
+      if (ctx.adj.inputToSource.get(`${node.id}:agentId`)) {
+        emitGuardedAgentWrite(ctx, node, 'agentId', (aLocal) => {
+          pushF64ElemAddr(em, ctx.layout.f64['vx']!, aLocal); pushValueInputF64(ctx, node, 'vx', 0); em.f64Store();
+          pushF64ElemAddr(em, ctx.layout.f64['vy']!, aLocal); pushValueInputF64(ctx, node, 'vy', 0); em.f64Store();
+          if (ctx.is3d) { pushF64ElemAddr(em, ctx.layout.f64['vz']!, aLocal); pushValueInputF64(ctx, node, 'vz', 0); em.f64Store(); }
+        });
+      } else {
+        pushF64ElemAddr(em, ctx.layout.f64['vx']!, ctx.idxLocal); pushValueInputF64(ctx, node, 'vx', 0); em.f64Store();
+        pushF64ElemAddr(em, ctx.layout.f64['vy']!, ctx.idxLocal); pushValueInputF64(ctx, node, 'vy', 0); em.f64Store();
+        if (ctx.is3d) { pushF64ElemAddr(em, ctx.layout.f64['vz']!, ctx.idxLocal); pushValueInputF64(ctx, node, 'vz', 0); em.f64Store(); }
+      }
       compileFlowChain(ctx, node.id, 'next');
       break;
     }
@@ -2997,7 +3021,19 @@ function compileFlowNode(ctx: AgentWasmCtx, nodeId: string): void {
       break;
     }
     case 'killAgent': {
-      em.localGet(ctx.idxLocal); em.i32Const(ctx.layout.u8['killRequest']!); em.op(OP_I32_ADD); em.i32Const(1); em.i32Store8();
+      // Optional `agentId`: unwired = SELF (the historical single store, byte-for-byte
+      // — wiredness is read from the EDGE MAP before a single local is allocated,
+      // since `em.allocLocal` changes the module bytes even for an unused local).
+      // Wired = kill that agent by id (predation), range-guarded like every other
+      // by-id writer. Setting the flag to the constant 1 is idempotent + order-
+      // independent, so a wired kill needs no synchronous-mode gate (see KillAgentNode).
+      if (ctx.adj.inputToSource.get(`${node.id}:agentId`)) {
+        emitGuardedAgentWrite(ctx, node, 'agentId', (aLocal) => {
+          em.localGet(aLocal); em.i32Const(ctx.layout.u8['killRequest']!); em.op(OP_I32_ADD); em.i32Const(1); em.i32Store8();
+        });
+      } else {
+        em.localGet(ctx.idxLocal); em.i32Const(ctx.layout.u8['killRequest']!); em.op(OP_I32_ADD); em.i32Const(1); em.i32Store8();
+      }
       compileFlowChain(ctx, node.id, 'next');
       break;
     }
