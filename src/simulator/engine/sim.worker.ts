@@ -244,7 +244,7 @@ interface InitMsg {
   /** Agent INPUT Mappings (C->A): one SINGLE-agent fn source per agentInputMapping
    *  root. `paintAgentsColor` runs the one matching the brush's selected mapping,
    *  once per painted agent. JS-on-CPU on every agent target (event tempo). */
-  agentInputMappingCodes?: Array<{ mappingId: string; code: string }>;
+  agentInputMappingCodes?: Array<{ mappingId: string; code: string; channels: number }>;
   /** Agent sprites: true when the model has sprite assets. Gates the per-agent
    *  sprite display buffers (reset before each colour pass + sliced into the
    *  render snapshot) so non-sprite agent models pay no extra per-step transfer. */
@@ -385,7 +385,7 @@ interface PaintManualMsg {
   activeViewer: string;
 }
 interface ResetMsg { type: 'reset'; activeViewer: string; reqId?: number }
-interface RecompileMsg { type: 'recompile'; stepCode: string; initCode?: string; gridInitCode?: string; skipIsolatedEmpty?: SkipIsolatedEmptyConfig; inputColorCodes: Array<{ mappingId: string; code: string }>; outputMappingCodes: Array<{ mappingId: string; code: string }>; stopMessages?: string[]; updateMode: string; asyncScheme: string; wasmStepBytes?: Uint8Array; wasmStepError?: string; wasmExports?: string[]; viewerIds?: Record<string, number>; webgpuShaderCode?: string; webgpuShaderError?: string; webgpuEntryPoints?: WebGPUEntryPoints; webgpuLayout?: WebGPULayout; webgpuStopCheckInterval?: number; variegated?: VariegatedPayload; interactionTables?: InteractionTablePayload[]; agentBehaviourCode?: string; agentInitCode?: string; agentDivisionCode?: string; agentColorViewer?: string; agentOutputMappingCodes?: Array<{ mappingId: string; code: string }>; agentInputMappingCodes?: Array<{ mappingId: string; code: string }>; agentHasSprites?: boolean; agentBondReqSlots?: number; agentFieldGates?: AgentFieldGates; agentDividePartitions?: DividePartitionSpec[]; centerBased?: CenterBasedConfig; agentUsesField?: boolean; agentUsesDensity?: boolean; rulesReadComputedIndicator?: boolean; agentResidencyClean?: boolean; agentTarget?: 'js' | 'wasm' | 'webgpu'; agentWasmBytes?: Uint8Array; agentWasmViewerGuardIds?: string[]; agentLayoutExtras?: AgentLayoutExtras; agentWasmLayoutSig?: { maxHashBins: number; totalBytes: number }; agentWebgpuBehaviourShader?: string; agentWebgpuForceShader?: string; agentWebgpuMaxAgents?: number; agentWebgpuMaxHashBins?: number; agentWebgpuLayout?: AgentWebGPULayout; agentRenderLayout?: AgentWebGPULayout; agentWebgpuUsesI32Write?: boolean; agentWebgpuUsage?: { usesBondStore?: boolean; usesBondStoreWrite?: boolean; usesIndicators?: boolean; usesAux?: boolean; usesSpawn?: boolean; usesStop?: boolean; usesForceScatter?: boolean; usesGeneration?: boolean; usesSpriteWrite?: boolean }; agentWebgpuOmShaders?: AgentOMShaderInput[] }
+interface RecompileMsg { type: 'recompile'; stepCode: string; initCode?: string; gridInitCode?: string; skipIsolatedEmpty?: SkipIsolatedEmptyConfig; inputColorCodes: Array<{ mappingId: string; code: string }>; outputMappingCodes: Array<{ mappingId: string; code: string }>; stopMessages?: string[]; updateMode: string; asyncScheme: string; wasmStepBytes?: Uint8Array; wasmStepError?: string; wasmExports?: string[]; viewerIds?: Record<string, number>; webgpuShaderCode?: string; webgpuShaderError?: string; webgpuEntryPoints?: WebGPUEntryPoints; webgpuLayout?: WebGPULayout; webgpuStopCheckInterval?: number; variegated?: VariegatedPayload; interactionTables?: InteractionTablePayload[]; agentBehaviourCode?: string; agentInitCode?: string; agentDivisionCode?: string; agentColorViewer?: string; agentOutputMappingCodes?: Array<{ mappingId: string; code: string }>; agentInputMappingCodes?: Array<{ mappingId: string; code: string; channels: number }>; agentHasSprites?: boolean; agentBondReqSlots?: number; agentFieldGates?: AgentFieldGates; agentDividePartitions?: DividePartitionSpec[]; centerBased?: CenterBasedConfig; agentUsesField?: boolean; agentUsesDensity?: boolean; rulesReadComputedIndicator?: boolean; agentResidencyClean?: boolean; agentTarget?: 'js' | 'wasm' | 'webgpu'; agentWasmBytes?: Uint8Array; agentWasmViewerGuardIds?: string[]; agentLayoutExtras?: AgentLayoutExtras; agentWasmLayoutSig?: { maxHashBins: number; totalBytes: number }; agentWebgpuBehaviourShader?: string; agentWebgpuForceShader?: string; agentWebgpuMaxAgents?: number; agentWebgpuMaxHashBins?: number; agentWebgpuLayout?: AgentWebGPULayout; agentRenderLayout?: AgentWebGPULayout; agentWebgpuUsesI32Write?: boolean; agentWebgpuUsage?: { usesBondStore?: boolean; usesBondStoreWrite?: boolean; usesIndicators?: boolean; usesAux?: boolean; usesSpawn?: boolean; usesStop?: boolean; usesForceScatter?: boolean; usesGeneration?: boolean; usesSpriteWrite?: boolean }; agentWebgpuOmShaders?: AgentOMShaderInput[] }
 interface UpdateLookupTableMsg {
   type: 'updateLookupTable';
   attrId: string;
@@ -1166,8 +1166,15 @@ let agentOutputMappingFns: Array<{ mappingId: string; fn: Function }> = [];
 /** Agent INPUT Mappings (C->A): one SINGLE-agent fn per agentInputMapping root.
  *  `paintAgentsColor` runs the one whose mappingId matches the brush's selected
  *  input mapping, once per painted agent. JS-on-CPU on EVERY agent target (the
- *  agent colour pass / Division Event posture: event tempo, not step-hot). */
-let agentInputMappingFns: Array<{ mappingId: string; fn: Function }> = [];
+ *  agent colour pass / Division Event posture: event tempo, not step-hot).
+ *
+ *  `channels` is the SHIPPED resolved channel count — how many LEADING brush
+ *  arguments this fn declares ahead of the shared `input` ABI block. The worker
+ *  keeps no model, so it cannot resolve `Mapping.parameters` itself; shipping the
+ *  number keeps the DEV arity assert a genuine mirror of the compiler (it used to
+ *  hardcode the LEGACY 3 and fired a false positive on every parameterized
+ *  mapping) and lets the paint handler reject a payload of the wrong length. */
+let agentInputMappingFns: Array<{ mappingId: string; fn: Function; channels: number }> = [];
 /** The active AGENT viewer (an agent mapping id). Selects which agent colour pass
  *  paints. Independent of `activeViewer` (the active CELL viewer). */
 let agentColorViewer = '';
@@ -1905,6 +1912,18 @@ function runAgentInputMapping(mappingId: string, ids: number[], values: number[]
   if (!s || agentInputMappingFns.length === 0) return;
   const im = agentInputMappingFns.find(f => f.mappingId === mappingId);
   if (!im) return;   // no graph for this mapping -> the paint is a no-op
+  // The payload's length IS the leading-argument count, so a disagreement with the
+  // compiled fn shifts EVERY descriptor arg one or more slots — the silent
+  // plausible-garbage failure mode the arity assert exists to catch, but at
+  // RUNTIME. It is reachable without any bug: a paint flushed from the main
+  // thread's rAF using the NEW model's channel count can reach the worker before
+  // the `recompile` that installs the matching fn. Skip the paint (a no-op beats
+  // corrupting agent state) and report once — the very next recompile fixes it.
+  if (values.length !== im.channels) {
+    agentInputMappingFns = agentInputMappingFns.filter(f => f !== im);
+    self.postMessage({ type: 'error', message: `[agents] input mapping "${mappingId}" paint skipped: payload carries ${values.length} channel value(s) but the compiled graph declares ${im.channels} (stale compile - recompile to fix).` });
+    return;
+  }
   for (const id of ids) {
     if (id < 0 || id >= s.highWater || !s.alive[id]) continue;
     try {
@@ -5591,7 +5610,7 @@ function compileFns(
  *  behaviour function runs once per LIVE agent each generation over `idx <
  *  highWater`. Absent code ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ null (agents seed + render but don't behave, the
  *  PR-A2 state). */
-function compileAgentFns(behaviourCode?: string, initCode?: string, divisionCode?: string, outputMappingCodes?: Array<{ mappingId: string; code: string }>, inputMappingCodes?: Array<{ mappingId: string; code: string }>): void {
+function compileAgentFns(behaviourCode?: string, initCode?: string, divisionCode?: string, outputMappingCodes?: Array<{ mappingId: string; code: string }>, inputMappingCodes?: Array<{ mappingId: string; code: string; channels: number }>): void {
   try {
     // eslint-disable-next-line no-eval
     agentBehaviourFn = behaviourCode ? (eval(behaviourCode) as Function) : null;
@@ -5609,7 +5628,10 @@ function compileAgentFns(behaviourCode?: string, initCode?: string, divisionCode
   for (const im of (inputMappingCodes || [])) {
     try {
       // eslint-disable-next-line no-eval
-      agentInputMappingFns.push({ mappingId: im.mappingId, fn: eval(im.code) as Function });
+      // `channels ?? 3` keeps an OLD message shape (no `channels`) resolving to the
+      // legacy colour count rather than 0 — a missing field must not silently make
+      // the arity check compare against a shorter prefix.
+      agentInputMappingFns.push({ mappingId: im.mappingId, fn: eval(im.code) as Function, channels: im.channels ?? 3 });
     } catch (e) { self.postMessage({ type: 'error', message: `[agents] input mapping '${im.mappingId}' compile failed: ` + ((e as Error)?.message || e) }); }
   }
   try {
@@ -5660,11 +5682,16 @@ function compileAgentFns(behaviourCode?: string, initCode?: string, divisionCode
       }
     }
     // The Agent INPUT Mapping is the FOURTH ABI pair (buildAgentInputParams <->
-    // buildAgentInputArgs). The compiled fn declares THREE extra leading params
-    // (_r/_g/_b, prepended outside the shared descriptor), so the expected count
-    // is the descriptor's length + 3.
+    // buildAgentInputArgs). The compiled fn declares the mapping's RESOLVED
+    // CHANNEL list as extra LEADING params, prepended outside the shared
+    // descriptor — so the expected count is the descriptor's length plus THAT
+    // count. It is the SHIPPED `im.channels` (from the same `inputParamsOf`
+    // resolution the emit used), never a constant: hardcoding the legacy `3` here
+    // made this the one mirror in the chain that did not derive from the resolver,
+    // and it fired a false-positive DESYNC for every mapping declaring a different
+    // parameter list (`parameters: []` -> 0 channels -> a phantom gap of 4).
     for (const im of agentInputMappingFns) {
-      const want = buildAgentInputArgs(s, 0).length + 3;
+      const want = buildAgentInputArgs(s, 0).length + im.channels;
       if (!arityOk(im.fn.length, want)) {
         self.postMessage({ type: 'error', message: `[agents] ABI ARITY DESYNC: input mapping '${im.mappingId}' fn declares ${im.fn.length} params but the worker passes ${want} (buildAgentInputParams<->buildAgentInputArgs out of lockstep - the B1 hazard).` });
       }

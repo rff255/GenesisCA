@@ -2446,8 +2446,18 @@ export interface AgentCompileResult {
    *  painted agent (`paintAgentsColor`). JS-on-CPU on every agent target — this
    *  is an EVENT-tempo function (a user gesture), the same posture as the agent
    *  colour pass and the Division Event. Empty when the model has no agent input
-   *  mappings, so every existing model's compile output is untouched. */
-  inputMappingCodes: Array<{ mappingId: string; code: string }>;
+   *  mappings, so every existing model's compile output is untouched.
+   *
+   *  `channels` is the mapping's RESOLVED channel count (`inputParamsOf(...)
+   *  .channels.length`) — the number of LEADING brush arguments the emitted fn
+   *  declares ahead of the shared `input` ABI block. It is SHIPPED rather than
+   *  re-derived because the worker keeps no model, and it is what makes the
+   *  worker's DEV arity assert a real mirror of the compiler instead of a fourth,
+   *  independent guess: that assert used to hardcode `+ 3` (the LEGACY colour
+   *  count), so ANY mapping declaring a different parameter list fired a
+   *  false-positive `ABI ARITY DESYNC`. It also lets `runAgentInputMapping`
+   *  reject a paint payload whose length disagrees with the compiled fn. */
+  inputMappingCodes: Array<{ mappingId: string; code: string; channels: number }>;
   /** P5 — the DIVISION BOND PARTITION table: one entry per DISTINCT Divide Agent
    *  partition spec, in first-encounter order. Each node's `_divideIdx` (baked
    *  here, read by all three emitters) is `index + 1`, and that 1-based code is
@@ -2952,7 +2962,7 @@ export function compileAgentGraph(
   // (`_r, _g, _b`) then the per-agent ABI, `colorIdx` so Set Cell Looks works,
   // and the root's r/g/b value-outs aliased to the params. Unlike the OM passes
   // this is NOT loop-wrapped — the caller supplies the painted agent's `idx`. ---
-  const inputMappingCodes: Array<{ mappingId: string; code: string }> = [];
+  const inputMappingCodes: Array<{ mappingId: string; code: string; channels: number }> = [];
   {
     const imParams = buildAgentInputParams(model);
     for (const imNode of agentNodes.filter(n => n.data.nodeType === 'agentInputMapping')) {
@@ -2994,7 +3004,10 @@ export function compileAgentGraph(
           '  _rngState[0] = _rs;',
           '})',
         ].join('\n');
-        inputMappingCodes.push({ mappingId, code });
+        // `channels` MUST come from the SAME `imResolved` the leading params were
+        // emitted from — the whole point is that the worker's arity check mirrors
+        // this emit rather than assuming the legacy 3.
+        inputMappingCodes.push({ mappingId, code, channels: imResolved.channels.length });
       } catch (e) {
         omErrors.push(`agent input mapping "${mappingId || '(unset)'}": ${(e as Error)?.message || e}`);
       }

@@ -2324,6 +2324,46 @@ the wrong direction would compile to a pass nothing ever runs).
   passed a deliberate mutation for exactly that reason. **Negative-controlled by SOURCE MUTATION**:
   reverting any of the three widened `singleAgent` branches (the leading `idx`, the bond slice, the
   `w_` aliasing) fails 4-8 checks.
+- **⚠ THE LEADING CHANNEL COUNT IS A FOURTH MIRROR, AND IT WAS THE ONE THAT DRIFTED** (user-reported
+  2026-08-11: *"[agents] ABI ARITY DESYNC: input mapping '…' fn declares 31 params but the worker
+  passes 35"*). The compiled fn's params are `resolved channels + the shared 'input' descriptor`, and
+  since Parameterized Input Mappings the channel count is whatever `inputParamsOf(mapping)` resolves
+  — 3 only for a LEGACY (absent `parameters`) mapping. The worker's DEV arity assert computed
+  `want = buildAgentInputArgs(s, 0).length + 3`, a **hardcoded legacy constant**, so it was the ONE
+  site in the chain not derived from the resolver. Any other parameter list fired a **false-positive
+  red banner on every load/recompile**: `parameters: []` (0 channels — the reported case, a graph
+  that ignores the brush) gives a phantom gap of **4** = 3 channels + the sanctioned trailing
+  `_generation` slack of 1. **Nothing was actually shifted** — the compiler and the sender both
+  derive from `inputParamsOf`, and the paint was verified correct throughout (`(3,−5) → (6,−10) →
+  (12,−20)` on the WASM *and* WebGPU agent targets).
+  **THE FIX — ship the number, never guess it**: `inputMappingCodes` entries carry `channels`
+  (`imResolved.channels.length`, the SAME resolution the leading params were emitted from), threaded
+  through init/recompile onto `agentInputMappingFns`, and the assert adds THAT. The worker keeps no
+  model, so it cannot resolve `Mapping.parameters` itself — shipping is what makes it a mirror.
+  A missing field falls back to `?? 3` so an old message shape can't silently shorten the prefix.
+  **`runAgentInputMapping` now also rejects a payload whose `values.length` disagrees** with the
+  compiled fn (skip + one error, never apply): the mismatch is reachable with no bug at all — a paint
+  flushed from the main thread's rAF with the NEW channel count can reach the worker before the
+  `recompile` that installs the matching fn — and applying it would shift every descriptor arg, the
+  exact silent-plausible-garbage mode the assert exists to catch.
+  **WHY THE HARNESS MISSED IT, and the rule that now guards it**: `test-agent-abi.mjs` compared one
+  ARG list against another ARG list — it never built the compile-side PARAM string, never touched the
+  channel count, and never modelled the assert's formula. It grew 48 → **607** checks with two new
+  tiers. **T2 pairs `buildAgent*Params(model)` against `buildAgent*Args(store)` for ALL FOUR kinds,
+  building the worker side THE WAY THE WORKER DOES — from a real `createAgentStore` + its own
+  derivation, never from `agentAbiShapeOf(model)`** (which would compare the compile side with
+  itself — the C9 `gates`-missing-from-`agentAbiShapeOfStore` lesson), over a matrix of every
+  parameter shape the resolver can produce (0/1/2/3/4/6 channels) × 2D/3D × gates/attrs/fields, plus
+  every shipped agent model. Its invariant is stated so the channel count cannot hide in it:
+  **`want − declared == args − params ∈ {0,1}`, i.e. INDEPENDENT of how many channels are declared.**
+  **T3 pins the shipped source** (T2's arithmetic is necessarily a mirror of the fixed formula, so it
+  alone could not notice a revert): the assert must read `im.channels` and contain **no numeric
+  addend**, all three sibling asserts must derive `want` from their arg builder alone, the compiler
+  must ship the resolved count, and the paint handler must carry the payload guard. Negative-
+  controlled by SOURCE MUTATION — reverting the assert to `+ 3` fails 2 checks, shipping a constant
+  `3` fails 57, deleting the payload guard fails 1. **`input` was the only kind that COULD carry this
+  bug** (the only one with a term outside the shared descriptor); T3 now pins the other three so a
+  future kind with its own leading block cannot repeat it.
 
 ### Parameterized Input Mappings — declared parameters replace hardcoded R/G/B (branch `polishing`)
 
