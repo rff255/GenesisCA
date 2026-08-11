@@ -11,6 +11,8 @@
  * plus a boolean mask (binarize-true cells) for the manual input-mapping path.
  */
 
+import { pixelLuminance } from '../model/inputMappingParams';
+
 export interface ImageSampleOptions {
   /** Bounding region in SOURCE pixels (the area to map). */
   region: { x: number; y: number; w: number; h: number };
@@ -43,7 +45,11 @@ export interface GridifyResult {
   mask: Uint8Array;
 }
 
-const lum = (r: number, g: number, b: number) => 0.299 * r + 0.587 * g + 0.114 * b;
+/** THE ONE luminance formula, shared with the image-import `lum` channel source
+ *  (`inputMappingParams.pixelLuminance`) — binarize collapses a pixel by THIS
+ *  measure, so a `lum` source over a binarized image must read back the 0/255
+ *  that decision produced. Delegated rather than duplicated. */
+const lum = pixelLuminance;
 
 /** Clamp an integer into [lo, hi]. */
 function clampi(v: number, lo: number, hi: number): number {

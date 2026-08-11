@@ -868,7 +868,7 @@ WASM has full node-catalogue coverage including the multi-source `groupOperator.
 - One module exports all entry points: `step`, `inputColor_<sanitisedMappingId>`, `outputMapping_<sanitisedMappingId>`. Host math functions WASM lacks native opcodes for are imported from JS (`env.pow/exp/log/sin/cos/tan/tanh`) at contiguous funcIdx `POW_FUNC_IDX=0 … TANH_FUNC_IDX=6` (`NUM_IMPORTED_FUNCS=7`); module-defined funcs start at funcIdx `NUM_IMPORTED_FUNCS` (export funcIdx = `NUM_IMPORTED_FUNCS + i`). The import-entry order, the `*_FUNC_IDX` consts, and `instantiateWasmModule`'s `env` object MUST stay in sync. sqrt/abs/**neg**/floor/ceil/min/max use native f64 intrinsics — so a Math op that maps to one (e.g. `negate` → `f64.neg`, an IEEE sign flip that is bit-identical to JS `-x` and WGSL `-x` incl. -0/NaN) needs NO import entry and NO funcIdx change. The Math node (`arithmeticOperator`) and Expression node share this transcendental set: JS emits `Math.*`, WGSL uses native intrinsics, WASM calls the imports — adding one means editing `expression/parser.ts` (FN_ARITY), all three `expression/emit{JS,Wasm,Wgsl}.ts`, `ArithmeticOperatorNode.ts` (+ `ARITHMETIC_UNARY_OPS` if unary) and its WASM/WebGPU emitters in `wasm/compile.ts` + `webgpu/compile.ts`, plus (WASM only) a new import entry + `*_FUNC_IDX` const + `env` entry. `log` = natural log.
 - Multi-output value cache: `valueLocals: Map<nodeId, Map<portId, LocalRef>>`. Single-output nodes get the named port aliased to `'value'` automatically; multi-output emitters call `setCachedPort` for each named port
 - Array-producing nodes (`getNeighborIndexesByTags`, `filterNeighbors`, `joinNeighbors`, `getNeighborsAttrByIndexes`, `groupCounting` hybrid) live in a separate `ARRAY_NODE_EMITTERS` table. They allocate via per-cell scratch (bump-pointer reset at top of every cell iteration). Array consumers (aggregate/groupCounting/groupStatement) dispatch through `isArrayProducer` to the array path
-- Entry-point nodes (inputColor/step/outputMapping) have NO `VALUE_NODE_EMITTERS` entry. InputColor's r/g/b outputs resolve via `paramRefs` map (function param indices 1/2/3); skipping them in `preEmitValueNodes` is required
+- Entry-point nodes (inputColor/step/outputMapping) have NO `VALUE_NODE_EMITTERS` entry. InputColor's CHANNEL outputs resolve via the `paramRefs` map (a `LocalRef` per channel — legacy r/g/b are param indices 1/2/3 as i32; a declared parameter list mints one f64 param per channel, see Parameterized Input Mappings); skipping them in `preEmitValueNodes` is required
 - Skip `port.isArray` during scalar input resolution in `compileValueNode` / `compileArrayNode` / `compileFlowChain` — array consumers fetch sources via `inputToSources` + the array dispatch path; trying to value-emit an array source hits "no value emitter" errors
 - Sync mode WASM↔JS interop: WASM uses baked-in `attrReadOffset`/`attrWriteOffset` so worker `runStep()` does pre-step `readAttrs→attrsA` normalize + post-step bulk `attrsB→attrsA` copy. JS-mode swap path is untouched. Same normalization needed in `paint`/`importImage`/`runColorPass` when WASM is active
 - WASM compiler is self-sufficient — does its own `_resolvedTagIndexes` and `_indicatorIdx` pre-resolve (mirrors JS compiler). Don't assume the JS compiler ran first
@@ -1578,7 +1578,7 @@ Migration: `src/model/moveSelfToNeighborMigration.ts` (mirrors `colorScaleMigrat
 - The `_var_<id>` JS local name uses a sanitised version of the variable id (`[^a-zA-Z0-9_]` → `_`). Stable across the GetVariable / SetVariable / SetArrayElement emit + the `variable.ts::variableLocalName` helper.
 - Array length is fixed at compile time (the value of `length` config). Resizing the variable's length re-allocates the typed-array on the next recompile.
 - The reset cost is ONE `.fill()` call per array variable per cell — V8 optimises this to a memset. Scalar variables cost one `let` per cell. Both are negligible compared to the work the cell rule does.
-- On JS/WASM, variable decls are injected only into the `step` root (`buildVariableJS` is called inside the step compile; InputColor + OutputMapping don't get them). WebGPU's `emitVariableDeclsWgsl` runs at the top of every entry function (step/inputColor/outputMapping/initEvent) — a benign superset (dead decls if no variable node is reached there). If a future model needs variables in InputColor/OutputMapping on JS/WASM too, extend `buildVariableJS` / `emitVariableStorage` to those compile branches.
+- On JS/WASM, variable decls are injected only into the `step` root (`buildVariableJS` is called inside the step compile; InputColor + OutputMapping don't get them). WebGPU's `emitVariableDeclsWgsl` runs at the top of every entry function (step/initEvent/outputMapping — **there is NO WebGPU inputColor shader**; painting runs the JS fn on the CPU then `patchWebGPUCells`) — a benign superset (dead decls if no variable node is reached there). If a future model needs variables in InputColor/OutputMapping on JS/WASM too, extend `buildVariableJS` / `emitVariableStorage` to those compile branches.
 
 ---
 
@@ -2325,17 +2325,27 @@ the wrong direction would compile to a pass nothing ever runs).
   reverting any of the three widened `singleAgent` branches (the leading `idx`, the bond slice, the
   `w_` aliasing) fails 4-8 checks.
 
-### Parameterized Input Mappings — PHASES 1–2 (engine + brush + editor; branch `polishing`)
+### Parameterized Input Mappings — declared parameters replace hardcoded R/G/B (branch `polishing`)
 
-*"We must abolish the assumption that input mappings will have r,g,b."* A C→A mapping may now
-declare its own named **parameters** (name + type); each becomes value-output ports on its event
-root and one type-adaptive widget in the brush panel. Design authority:
+*"We must abolish the assumption that input mappings will have r,g,b."* A Colour→Attribute mapping
+declares its own named **parameters** (name + type); each becomes value-output ports on its event
+root, one type-adaptive widget in the brush panel, and one assignable row in the image-import
+dialog. A brush that stamps `species = Predator, energy = 40, hungry = true` now says exactly that
+instead of encoding it in a colour the graph has to decode. Design authority:
 [docs/IMPACT_MAP_PARAM_INPUT_MAPPINGS.md](docs/IMPACT_MAP_PARAM_INPUT_MAPPINGS.md) +
-[PLAN_PARAM_INPUT_MAPPINGS.md](docs/PLAN_PARAM_INPUT_MAPPINGS.md) (+ `.html` mockup).
-**Phase 1** built the whole engine path and was deliberately USER-INVISIBLE (no editor ⇒ every model
-still resolved LEGACY). **Phase 2 makes the feature REACHABLE** — the parameter editor, the edge
-cascade and cell/agent consistency (below). **Phase 3** adds the image channel→parameter step + the
-full docs sweep (HelpView / NODES_REFERENCE / showCode / the two false "inputColor shader" claims).
+[PLAN_PARAM_INPUT_MAPPINGS.md](docs/PLAN_PARAM_INPUT_MAPPINGS.md) (+ `.html` mockup); **the v2
+follow-ups F1–F6 — brush-geometry outputs, image→agent-population init, a `vector` parameter type,
+retiring the WASM entry, the empty-`mappingId` asymmetry, parameter presets — are recorded in the
+Impact Map's own Follow-ups register** and are the candidates to fold into
+[HANDOFF_CLARITY_SIMPLIFICATION.md](docs/HANDOFF_CLARITY_SIMPLIFICATION.md) §3.
+
+**The compile surfaces are JS + WASM for cells and JS only for agents** — there is no WebGPU
+input-mapping shader (finding below), so "all targets" here means those two plus an unchanged
+CPU-patch path on WebGPU. Shipped in three phases: **1** the resolver + ports + both cell compilers
++ the worker ABI + the brush panel (deliberately user-INVISIBLE — no editor, so every model still
+resolved LEGACY); **2** the parameter editor + the edge cascade + cell/agent consistency; **3** the
+image channel→parameter assignment + the docs sweep. `check-compile-identity` was **29 models, zero
+diffs at every phase**.
 
 - **`src/model/inputMappingParams.ts` is THE RESOLVER — the single source of truth.** NOTHING else
   may read `mapping.parameters` (only the reducer and, from Phase 2, the editor). A grep for
@@ -2388,25 +2398,26 @@ full docs sweep (HelpView / NODES_REFERENCE / showCode / the two false "inputCol
 - **⚠ THERE IS NO WebGPU INPUT-MAPPING SHADER** (a code-reality finding that shrank the scope): the
   WGSL emit produces only `step`, `init` and `outputMapping_<id>`. On the WebGPU target a paint is
   `readbackAttrs` → the **JS** fn on the CPU → `patchWebGPUCells`. **The compile surfaces are JS +
-  WASM for cells and JS only for agents.** (`webgpu/compile.ts`'s comment and CLAUDE.md's own WASM
-  section still list "inputColor" among the entry-point shaders — Phase 3 deletes both claims.)
+  WASM for cells and JS only for agents.** (Both stale "inputColor is an entry-point shader" claims
+  — `webgpu/compile.ts`'s `emitVariableDeclsWgsl` comment and this file's Local Variables bullet —
+  were corrected in Phase 3.)
 - **The worker payload is MESSAGE-LEVEL `values: number[]`** (D5), on `PaintMsg` AND
   `PaintAgentsColorMsg` — so the cell and agent messages are structurally IDENTICAL, and the per-cell
   `r,g,b` is gone (all five producers read one brush state per stroke, so it was dead generality plus
   an allocation per painted cell). Legacy resolves to `[r, g, b]`, so both handlers' spreads are the
   historical calls. **The colour read moved from the five producers to the FLUSH** — one read per
   stroke, and a mid-drag change now lands on the rest of the stroke (the Manual Brush's rule).
-- **`importImage` (Phase 1 shape).** A LEGACY mapping is UNCHANGED (no `values` field ⇒ the per-cell
-  payload is exactly the pixel's `[r, g, b]`). A PARAMETERIZED mapping gets the brush panel's current
-  values as a BASELINE with the pixel's R/G/B written over the first three channels — the sensible
-  auto-assignment. The explicit per-channel source picker (pixel r/g/b/a/lum vs constant) is Phase 3.
+- **`importImage` — see the Phase 3 subsection.** The message carries an explicit per-channel
+  ASSIGNMENT (`channels?: ImageChannelSource[]`); ABSENT ⇒ the legacy `[r, g, b]`, verbatim.
 - **Brush panel.** `InputParamsPanel` ([src/simulator/InputParamsPanel.tsx](src/simulator/InputParamsPanel.tsx))
   is the sibling of `ManualBrushPanel`, used by the cell brush AND the agent Paint brush. Two
   deliberate differences from Manual, which their opposite semantics require: **no per-row checkbox**
   (a parameter is an ARGUMENT — always passed) and a `color` parameter is ONE `ColorField`. The
   modifier+RMB colour popover and the "Shift+RMB color" hint are **hidden** for a parameterized
   mapping — there is no brush colour to edit, and an enabled-but-inert control is the one thing the
-  UI must not do (binding it to a chosen colour parameter is Phase 2).
+  UI must not do. (Binding the popover to a chosen COLOUR parameter was considered and NOT taken:
+  the parameter's own `ColorField` already opens a swatch popover with the same picker, so a second
+  modifier-gesture route to the same control would be a second way to do one thing.)
 - **Persistence (D6)** mirrors the Manual Brush exactly: declared values live in a per-model
   `genesisca_input_params_v1:<modelName>` key as `Record<mappingId, Record<paramKey, string>>`, with
   a signature-keyed merge over every C→A mapping × its parameters' key AND type (so a retype
@@ -2499,6 +2510,72 @@ full docs sweep (HelpView / NODES_REFERENCE / showCode / the two false "inputCol
   worker's `getState` attribute records carry the **ATTRIBUTE** type (`'float'`/`'integer'`/`'bool'`),
   not the buffer type — decoding a Float64 buffer as `Uint8Array` reads byte 0 of each double and
   reports a convincing all-zeros "the paint did nothing".
+
+#### PHASE 3 — the image channel→parameter assignment, and the docs sweep
+
+- **ONE message field, ONE rule: `ImportImageMsg.channels?: ImageChannelSource[]`** — one entry per
+  RESOLVED channel, in the flat channel (= ABI) order, each either
+  `{kind:'pixel', ch:'r'|'g'|'b'|'a'|'lum'}` or `{kind:'const', value}`. **ABSENT ⇒ LEGACY ⇒ the
+  per-cell payload is exactly the pixel's `[r, g, b]`**, byte-for-byte the historical import (alpha
+  ignored, as it always was). This REPLACED Phase 1's `values?: number[]` baseline, whose worker-side
+  "overwrite the first three channels with R/G/B" was a SECOND implicit assignment rule living in the
+  worker; now the main thread always sends the explicit list (the dialog's table, or
+  `defaultImageChannelSources` for the paths that never open it) and the worker resolves, never
+  decides. `resolveImageChannelValues(sources, r, g, b, a, out?)` is the shared resolution the worker
+  calls per cell with a **REUSED scratch array** — the payload is spread into the call immediately
+  and never retained, and this runs 25 M times at 5000².
+- **THE AUTO-ASSIGNMENT IS COLOUR-FIRST, not first-three-channels** (`defaultImageChannelSources`):
+  the first `color` parameter takes R/G/B; if the mapping declares none, the first three channels do;
+  everything else is a CONSTANT seeded from the brush panel's current value for that parameter. The
+  Impact Map proposed the flat rule; for `[bool alive, color tint]` that would feed R into `alive`
+  and split `tint` across G/B/const — visibly wrong. Colour-first also makes a MATERIALISED legacy
+  mapping resolve to exactly the historical `[r, g, b]`, so materialising a mapping does not silently
+  change what an image import does. The default is safe to be smart **because the dialog SHOWS it**.
+- **`pixelLuminance` (BT.601) is now ONE formula, shared** — `imageMapping.ts`'s private `lum`
+  DELEGATES to the resolver's export. Binarize collapses a pixel to black/white by that measure, so
+  a `lum` source over a binarized image must read back exactly the 0/255 that decision produced; two
+  copies of three constants is the drift class this repo keeps closing. (A deliberate deviation from
+  the Impact Map's *"keep `imageMapping.ts` completely unchanged"* — which meant its SAMPLING
+  SEMANTICS, unchanged here; the delegation is a pure export move in the correct dependency direction,
+  simulator → model.)
+- **The dialog's table is at CHANNEL grain** (`ChannelRow` in
+  [ImageMappingDialog.tsx](src/simulator/ImageMappingDialog.tsx)) — a `color` parameter is THREE
+  independently-assignable rows (Tint R / Tint G / Tint B), which is what an image import wants; the
+  BRUSH panel is deliberately the opposite (one swatch, because there the split is an engine detail).
+  The constant widget is type-adaptive per channel (bool → a select, tag → its option NAMES, else a
+  number), so a tag constant is never a bare index. Shown **only** for a non-legacy mapping; a
+  legacy one gets today's dialog verbatim, and `parameters: []` gets an honest note (the image then
+  decides only WHICH cells are written, not what they become). The assignment re-seeds on the
+  CHANNEL SIGNATURE (the flat port-id list), never on a mere re-render, so a user's edits survive.
+- **Average / invert / binarize are PIXEL-SPACE and stay meaningful** under parameters (they change
+  what r/g/b/lum read) — so they are NOT gated on parameters. They ARE **greyed in place with the
+  reason in a tooltip** when EVERY channel is a constant, because then the image is not sampled at
+  all: that is the doctrine's "temporarily unavailable, one control away ⇒ disable in place" arm.
+- **Show Code no longer asserts `(_r, _g, _b)`** (`inputChannelBlock` in
+  [showCode.ts](src/simulator/showCode.ts), used by BOTH the cell and agent input-mapping blocks):
+  the brush arguments are printed FROM THE RESOLVER, ahead of the ABI table, and a `tag` parameter
+  additionally prints its option→index table (the lookup-table convention). Show Code's whole job
+  after `250e645` is to be a PORT-READY document, so a parameterized mapping claiming the legacy
+  triple would have described code that is not the code beside it.
+- **The docs sweep**: HelpView gains *"Input Mapping Parameters"* under Mappings + rewritten brush,
+  image-import, node-catalogue and Agent-Input-Mapping paragraphs; `docs/NODES_REFERENCE.md`'s two
+  root rows become "DYNAMIC — one value output per declared parameter" with a header note naming the
+  resolver; README needs no change (its Features summary is one-to-three-sentence product copy and
+  the input mapping is not one of its groups).
+- **Gate — the harness grew 111 → 133 checks** (§11, the image path). It drives the SHIPPED
+  `resolveImageChannelValues` into the REAL compiled input-mapping fn once per pixel and asserts the
+  written attribute VALUES on JS **and a real instantiated WASM module**, over a deliberately
+  NON-default assignment (`strength ← lum`, `species ← const 2`, `flag ← alpha`, `tint ← R/G/B`) so a
+  hardcoded first-three rule anywhere in the chain fails; plus the auto-assignment rule (colour-first,
+  brush-value seeding, `[]`), the per-source resolution, the reused-scratch contract, `lum` agreeing
+  with `gridifyImage`'s own binarize mask, and the LEGACY import writing exactly the pixel r/g/b.
+  **Negative-controlled by SOURCE MUTATION — 3 mutations, 3 caught**: `lum → r` (3 failures incl.
+  both E2E arms), dropping the colour-first rule (3), and a scratch slot left stale (1 — and the
+  first version of that check MISSED it, because it reused the same constant on both calls; the
+  check now varies both a pixel source AND a constant).
+- ⚠ **`check-compile-identity` hashes EMITTED output, not compiler source** — verified empirically
+  here by editing a comment in `webgpu/compile.ts` and re-running (29/29 unchanged). A comment fix in
+  a compiler file is safe; a change to an emitted STRING (including an error message) is not.
 
 **B — agent sprites (an optional exhibition layer; static image / animated GIF/WebP per agent).** `CAModel.sprites?: SpriteAsset[]` ([types.ts](src/model/types.ts): `{ id, name, dataUrl, mimeType, scale?, loop? }`) — additive, travels in the `.gcaproj` as a base64 data URL. `ADD/DUPLICATE/REMOVE/UPDATE/REORDER_SPRITE(S)` reducers ([ModelContext.tsx](src/model/ModelContext.tsx)); `REMOVE_SPRITE` cascades `clearDeletedId('spriteId')` over `setAgentSprite` nodes. **Decode is MAIN-THREAD only** ([spriteRegistry.ts](src/simulator/spriteRegistry.ts)) via WebCodecs **`ImageDecoder`** (animated GIF/WebP/PNG natively — NO new dependency; the project already uses WebCodecs for WebM recording) → `ImageBitmap[]`, with a `createImageBitmap` single-frame fallback; the worker never carries the pixels. The **`SpriteRegistry`** (keyed by sprite id, re-decodes only changed `dataUrl`s, `onReady` redraws) is owned by SimulatorView and reconciled on `model.sprites` change. **Sprite Library** UI = a "Sprites" section in the Mappings panel, **MASTER-DETAIL + DRAGGABLE, the same shape as the mappings above it** (the `767541b` agent-views conversion applied to sprites; import png/jpeg/gif/webp ≤4 MB / a frame SEQUENCE / a sprite SHEET, ≤4 MB each). The LIST is a `listItem` row per asset — a 24px thumbnail (the row's identity — a sprite is a picture), the name, a `Nf` frame-count badge for a multi-frame asset, and a `⋮⋮` reorder handle — with `+ Image / GIF` / `+ Frame sequence` / `+ Sprite sheet` / **Duplicate** / **Delete** in the button row (the last two disabled until a row is selected). The selected asset's editor (name, size×, loop, sheet-slicing grid, the rotation block + `CompassDial`, the chroma key + its click-the-image `SpriteBgPicker`) opens in the SHARED second detail panel.
   - **The Mappings panel's ONE detail slot is now THREE-way discriminated**: a bare id = a CELL mapping, `agentmap:<id>` = an agent view, **`sprite:<id>` = a Sprite Library asset** — so picking in any layer deselects the others for free. ⚠ **`ModelerView.selectedItemName` MUST resolve the `sprite:` prefix** (against `model.sprites`) or the detail `PanelShell` — gated on `detailItemName != null` — never mounts and clicking a row does NOTHING visible; the same trap the agent-attributes and agent-views conversions each hit.

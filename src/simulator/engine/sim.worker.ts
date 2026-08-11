@@ -24,6 +24,7 @@ import {
 } from './webgpuRuntime';
 import { decodeReductions, gpuHandledIds, gpuHandledAttrIds } from './webgpuReduce';
 import { encodeAttrValue } from '../../model/attrValueEncoding';
+import { resolveImageChannelValues, type ImageChannelSource } from '../../model/inputMappingParams';
 import { subAttrInfo, parentValueToInt } from '../../modeler/vpl/compiler/subAttribute';
 import { buildActiveOffsets, createActiveSet, rebuildActiveSet, applyTransition, compactActiveSet, type ActiveSet } from './activeSet';
 import { packNI, packNI3 } from '../../modeler/vpl/compiler/niCodec';
@@ -402,11 +403,11 @@ interface ImportImageMsg { type: 'importImage'; pixels: Uint8ClampedArray; mappi
    *  are preserved). `pixels` is then sized region.w*region.h (row-major). Absent
    *  ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ the classic full-grid import (pixels sized total). */
   region?: { row: number; col: number; w: number; h: number };
-  /** Parameterized Input Mappings ONLY: the brush panel's current CHANNEL payload,
-   *  used as the baseline for every cell with the pixel's R/G/B written over the
-   *  first three channels. ABSENT for a LEGACY mapping, whose per-cell payload is
-   *  exactly `[r, g, b]` — so the legacy import is unchanged. */
-  values?: number[] }
+  /** Parameterized Input Mappings ONLY: WHERE each resolved channel gets its
+   *  per-cell value — one entry per channel, in the flat channel order (the ABI
+   *  order). ABSENT for a LEGACY mapping, whose per-cell payload is exactly
+   *  `[r, g, b]` — so the legacy import is byte-for-byte unchanged. */
+  channels?: ImageChannelSource[] }
 /** CSV import (grid flavour): write a row-major block of PER-CELL values into ONE
  *  cell attribute. Distinct from `paintManual` (which carries ONE shared value
  *  for every cell) and from `importImage` (which routes colours through a
@@ -8270,25 +8271,22 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       //
       // CHANNEL PAYLOAD. A LEGACY mapping (no declared `parameters`) has exactly
       // three channels and takes the pixel's r/g/b — byte-for-byte today's
-      // behaviour, and the `msg.values` baseline is absent for it.
+      // behaviour, and `msg.channels` is absent for it.
       //
-      // A PARAMETERIZED mapping gets the brush panel's current parameter values as
-      // the baseline (`msg.values`), with the pixel's R/G/B written over its FIRST
-      // THREE channels — the "sensible auto-assignment" the design calls for. An
-      // explicit per-channel source picker (pixel r/g/b/a/lum vs. constant) is
-      // Phase 3's image-dialog work; this is its default, not a replacement.
-      const baseValues = msg.values;
+      // A PARAMETERIZED mapping carries an explicit ASSIGNMENT, one entry per
+      // resolved channel in ABI order: sample a pixel quantity (r/g/b/a/lum) or
+      // use a constant. The main thread always sends one (the dialog's table, or
+      // `defaultImageChannelSources` for the non-dialog paths), so there is no
+      // second implicit rule down here.
+      const chans = msg.channels;
+      // Reused across cells: the payload is spread into the call immediately and
+      // never retained, and this loop runs once per cell over the WHOLE grid.
+      const chanScratch = chans ? new Array<number>(chans.length) : null;
       const applyImageCell = (idx: number, pi: number) => {
         const r = pixels[pi]!, g = pixels[pi + 1]!, b = pixels[pi + 2]!;
-        let values: number[];
-        if (baseValues) {
-          values = baseValues.slice();
-          if (values.length > 0) values[0] = r;
-          if (values.length > 1) values[1] = g;
-          if (values.length > 2) values[2] = b;
-        } else {
-          values = [r, g, b];
-        }
+        const values = chans
+          ? resolveImageChannelValues(chans, r, g, b, pixels[pi + 3]!, chanScratch!)
+          : [r, g, b];
         if (wasmIcFn) {
           wasmIcFn(idx, ...values);
           if (isSync) for (const attr of cellAttrs) readAttrs[attr.id]![idx] = writeAttrs[attr.id]![idx]!;

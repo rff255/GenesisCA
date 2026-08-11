@@ -41,6 +41,14 @@ export {
   paramChannelCount, sanitiseParamKey,
 } from '../src/model/inputMappingParams.ts';
 export { getEffectivePorts } from '../src/modeler/vpl/effectivePorts.ts';
+// PHASE 3 — the image-import channel assignment. \`resolveImageChannelValues\` is
+// the function the WORKER's per-cell applyImageCell calls, so driving it into the
+// real compiled fn exercises the shipped path, not a copy of it.
+export {
+  pixelLuminance, PIXEL_CHANNELS, resolveImageChannelValues,
+  defaultImageChannelSources, imageChannelSourceLabel,
+} from '../src/model/inputMappingParams.ts';
+export { gridifyImage } from '../src/simulator/imageMapping.ts';
 export { detectMissingConfig } from '../src/modeler/vpl/nodes/nodeValidation.ts';
 export {
   LEGACY_PARAM, LEGACY_COLOR_PARAM_KEY,
@@ -790,6 +798,181 @@ console.log('== 10. PHASE 2: the edge cascade (through the REAL reducer) ==');
     check('BACKSTOP: a hand-edited stale channel is a NAMED compile error',
       !!js.error && /energy/.test(js.error), js.error ?? '(no error)');
   }
+}
+
+// ===========================================================================
+console.log('== 11. PHASE 3: IMAGE IMPORT — the channel→pixel assignment ==');
+// ===========================================================================
+// The worker's per-cell `applyImageCell` is four lines, and the part that can be
+// WRONG is `resolveImageChannelValues` — the shared helper it calls. So this
+// section drives THAT function into the REAL compiled input-mapping fn, once per
+// pixel, and asserts the written attribute VALUES. What it cannot reach (the
+// worker's own loop bookkeeping) is exercised by the real-UI check.
+{
+  // --- the AUTO-ASSIGNMENT rule ------------------------------------------
+  {
+    const legacy = M.defaultImageChannelSources(M.inputParamsOf(undefined), undefined);
+    check('default (legacy): three PIXEL sources r/g/b',
+      legacy.length === 3 && legacy.every(s => s.kind === 'pixel') &&
+      legacy.map(s => s.ch).join(',') === 'r,g,b', JSON.stringify(legacy));
+
+    // COLOUR-FIRST: a flat "first three channels" rule would feed R into `alive`
+    // and split `tint` across G/B/const — visibly wrong.
+    const mixed = M.inputParamsOf({ id: 'x', parameters: [
+      { key: 'alive', name: 'Alive', type: 'bool', defaultValue: 'true' },
+      { key: 'tint', name: 'Tint', type: 'color', defaultValue: '#0a141e' },
+    ] });
+    const md = M.defaultImageChannelSources(mixed, undefined);
+    check('default: the COLOUR parameter takes R/G/B, not the first three channels',
+      md[0].kind === 'const' && md.slice(1).map(s => s.ch).join(',') === 'r,g,b',
+      JSON.stringify(md));
+    check('default: a non-pixel channel is seeded from the parameter DEFAULT (bool true ⇒ 1)',
+      md[0].kind === 'const' && md[0].value === 1, JSON.stringify(md[0]));
+
+    // …and the brush panel's CURRENT value wins over the declared default.
+    const md2 = M.defaultImageChannelSources(mixed, { alive: 'false' });
+    check('default: the BRUSH value seeds the constant when present',
+      md2[0].kind === 'const' && md2[0].value === 0, JSON.stringify(md2[0]));
+
+    const noColour = M.inputParamsOf({ id: 'x', parameters: [
+      { key: 'a', name: 'A', type: 'integer', defaultValue: '7' },
+      { key: 'b', name: 'B', type: 'integer', defaultValue: '8' },
+      { key: 'c', name: 'C', type: 'integer', defaultValue: '9' },
+      { key: 'd', name: 'D', type: 'integer', defaultValue: '10' },
+    ] });
+    const nd = M.defaultImageChannelSources(noColour, undefined);
+    check('default (no colour param): the first THREE channels take R/G/B, the rest are constants',
+      nd.slice(0, 3).map(s => s.ch).join(',') === 'r,g,b' && nd[3].kind === 'const' && nd[3].value === 10,
+      JSON.stringify(nd));
+
+    check('default: `parameters: []` ⇒ an EMPTY assignment',
+      M.defaultImageChannelSources(M.inputParamsOf({ id: 'x', parameters: [] }), undefined).length === 0);
+  }
+
+  // --- the per-pixel RESOLUTION ------------------------------------------
+  {
+    const srcs = [
+      { kind: 'pixel', ch: 'r' }, { kind: 'pixel', ch: 'g' }, { kind: 'pixel', ch: 'b' },
+      { kind: 'pixel', ch: 'a' }, { kind: 'pixel', ch: 'lum' }, { kind: 'const', value: 42.5 },
+    ];
+    const got = M.resolveImageChannelValues(srcs, 10, 20, 30, 40);
+    const expectLum = M.pixelLuminance(10, 20, 30);
+    check('resolve: r/g/b/a are the raw pixel channels',
+      got.slice(0, 4).join(',') === '10,20,30,40', got.join(','));
+    check('resolve: `lum` is pixelLuminance', got[4] === expectLum, `${got[4]} vs ${expectLum}`);
+    check('resolve: a constant is the same for every pixel', got[5] === 42.5);
+    check('NEG: a swapped assignment produces a DIFFERENT payload (the comparison bites)',
+      M.resolveImageChannelValues([{ kind: 'pixel', ch: 'g' }, { kind: 'pixel', ch: 'r' }], 10, 20, 30, 40).join(',') === '20,10');
+
+    // The worker reuses ONE scratch array across 25 M cells — prove reuse both
+    // returns that array and fully overwrites it (a stale slot would leak the
+    // previous cell's value into this one).
+    const scratch = new Array(2);
+    const a1 = M.resolveImageChannelValues([{ kind: 'pixel', ch: 'r' }, { kind: 'const', value: 5 }], 1, 2, 3, 4, scratch);
+    check('resolve: a reused scratch array is RETURNED', a1 === scratch);
+    // Every slot must be rewritten unconditionally — vary BOTH a pixel source
+    // and a constant so a "leave it if already set" bug cannot hide behind an
+    // unchanged value.
+    const a2 = M.resolveImageChannelValues([{ kind: 'pixel', ch: 'r' }, { kind: 'const', value: 6 }], 99, 2, 3, 4, scratch);
+    check('resolve: a reused scratch array is FULLY overwritten (pixel AND const slots)',
+      a2 === scratch && scratch.join(',') === '99,6', scratch.join(','));
+  }
+
+  // --- `lum` agrees with the SAMPLER's binarize decision -----------------
+  // The two used to hold separate copies of the BT.601 constants. Binarize
+  // collapses a pixel by luminance, so a `lum` source over a binarized image
+  // must read back exactly the 0/255 that decision produced.
+  {
+    const px = new Uint8ClampedArray([
+      200, 200, 200, 255,   // bright
+      20, 20, 20, 255,      // dark
+      255, 0, 0, 255,       // pure red  (lum 76.245 → below 128)
+      0, 255, 0, 255,       // pure green(lum 149.685 → above 128)
+    ]);
+    const g = M.gridifyImage({ width: 4, height: 1, data: px }, {
+      region: { x: 0, y: 0, w: 4, h: 1 }, cellSize: 1,
+      average: false, invert: false, binarize: true, threshold: 128,
+    });
+    let agree = 0;
+    for (let i = 0; i < 4; i++) {
+      const l = M.resolveImageChannelValues([{ kind: 'pixel', ch: 'lum' }],
+        g.pixels[i * 4], g.pixels[i * 4 + 1], g.pixels[i * 4 + 2], g.pixels[i * 4 + 3])[0];
+      if (l === (g.mask[i] ? 255 : 0)) agree++;
+    }
+    check('`lum` over a BINARIZED image reads back exactly the mask (0/255) — ONE shared formula',
+      agree === 4, `${agree}/4`);
+    check('the mask itself is the expected bright/dark/red/green split',
+      Array.from(g.mask).join(',') === '1,0,0,1', Array.from(g.mask).join(','));
+  }
+
+  // --- END TO END: a synthetic image through the REAL compiled fns -------
+  const IMG = [                      // four "cells", RGBA
+    { r: 10, g: 20, b: 30, a: 255 },
+    { r: 200, g: 0, b: 0, a: 128 },
+    { r: 0, g: 255, b: 0, a: 255 },
+    { r: 7, g: 8, b: 9, a: 64 },
+  ];
+  {
+    const model = buildCellModel({
+      parameters: FIXTURE_PARAMS,
+      channelPorts: ['strength', 'species', 'flag', 'tint_r', 'tint_g', 'tint_b'],
+    });
+    const js = M.compileGraph(model.graphNodes, model.graphEdges, model);
+    const code = (js.inputColorCodes ?? []).find(c => c.mappingId === 'P')?.code;
+    // strength ← luminance · species ← const 2 · flag ← pixel alpha ·
+    // tint ← R/G/B. A deliberately NON-default assignment, so a hardcoded
+    // "first three channels" rule anywhere in the chain would fail this.
+    const sources = [
+      { kind: 'pixel', ch: 'lum' },
+      { kind: 'const', value: 2 },
+      { kind: 'pixel', ch: 'a' },
+      { kind: 'pixel', ch: 'r' }, { kind: 'pixel', ch: 'g' }, { kind: 'pixel', ch: 'b' },
+    ];
+    let jsBad = 0, wasmBad = 0, drift = 0;
+    for (const p of IMG) {
+      const values = M.resolveImageChannelValues(sources, p.r, p.g, p.b, p.a);
+      const expect = {
+        o_strength: M.pixelLuminance(p.r, p.g, p.b), o_species: 2, o_flag: p.a,
+        o_tr: p.r, o_tg: p.g, o_tb: p.b,
+      };
+      const rj = runJsInputColor(model, code, values);
+      const rw = await runWasmInputColor(model, values);
+      for (const k of Object.keys(expect)) {
+        if (rj.out?.[k] !== expect[k]) jsBad++;
+        if (rw.out?.[k] !== expect[k]) wasmBad++;
+        if (rj.out?.[k] !== rw.out?.[k]) drift++;
+      }
+    }
+    check('E2E: every channel lands per the ASSIGNMENT on JS (4 pixels × 6 channels)', jsBad === 0, `${jsBad} wrong`);
+    check('E2E: identical on a REAL instantiated WASM module', wasmBad === 0, `${wasmBad} wrong`);
+    check('E2E: JS and WASM are bit-identical per pixel', drift === 0, `${drift} differ`);
+  }
+
+  // --- LEGACY import is byte-for-byte the historical `[r, g, b]` ---------
+  {
+    const model = buildCellModel({ parameters: undefined, channelPorts: ['r', 'g', 'b'] });
+    const js = M.compileGraph(model.graphNodes, model.graphEdges, model);
+    const code = (js.inputColorCodes ?? []).find(c => c.mappingId === 'P')?.code;
+    let bad = 0, wasmBad = 0;
+    for (const p of IMG) {
+      // The worker's `channels`-ABSENT branch, verbatim — alpha is IGNORED, as
+      // the classic import always ignored it.
+      const values = [p.r, p.g, p.b];
+      const rj = runJsInputColor(model, code, values);
+      const rw = await runWasmInputColor(model, values);
+      if (!(rj.out.o_strength === p.r && rj.out.o_species === p.g && rj.out.o_flag === p.b)) bad++;
+      if (!(rw.out.o_strength === p.r && rw.out.o_species === p.g && rw.out.o_flag === p.b)) wasmBad++;
+    }
+    check('LEGACY image import writes exactly the pixel r/g/b (JS)', bad === 0, `${bad} wrong`);
+    check('LEGACY image import writes exactly the pixel r/g/b (real WASM)', wasmBad === 0, `${wasmBad} wrong`);
+    check('LEGACY: the resolver still reports it as legacy, so the worker takes the absent-channels branch',
+      M.inputParamsOf(model.mappings[0]).legacy === true);
+  }
+
+  check('imageChannelSourceLabel is human-readable',
+    M.imageChannelSourceLabel({ kind: 'pixel', ch: 'lum' }) === 'pixel lum' &&
+    M.imageChannelSourceLabel({ kind: 'const', value: 3 }) === 'constant 3');
+  check('PIXEL_CHANNELS is exactly r/g/b/a/lum', M.PIXEL_CHANNELS.join(',') === 'r,g,b,a,lum');
 }
 
 // ---------------------------------------------------------------------------

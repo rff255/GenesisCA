@@ -27,7 +27,8 @@
  *  that the document cannot drift from the engine.
  */
 
-import type { CAModel, Attribute, Indicator } from '../model/types';
+import type { CAModel, Attribute, Indicator, Mapping } from '../model/types';
+import { inputParamsOf, paramTagOptions } from '../model/inputMappingParams';
 import { buildLoopParams, buildCellParams, buildOutputMappingParams, is3dModel, isAgentModel, agentAbiShapeOf } from '../modeler/vpl/compiler/compile';
 import type { CompileResult } from '../modeler/vpl/compiler/compile';
 import { buildAgentAbiParams } from '../modeler/vpl/compiler/agentAbi';
@@ -172,6 +173,41 @@ function signatureBlock(label: string, params: string, model: CAModel): string[]
   const names = params.split(', ').filter(Boolean);
   const rows = names.map((n, i) => [String(i), n, describeParam(n, model)]);
   return ['', label, ...table(['#', 'parameter', 'meaning'], rows)];
+}
+
+/**
+ * The BRUSH-SIDE arguments an input-mapping function takes, LEADING its cell /
+ * agent ABI — derived from the resolver, never assumed.
+ *
+ * This block used to assert in prose that *"the emitted function takes
+ * (_r, _g, _b) ahead of these"*. That is the very assumption declared parameters
+ * abolish, and Show Code's whole job is to be a document a reader can PORT from —
+ * so a parameterized mapping claiming `(_r, _g, _b)` would describe code that is
+ * not the code beside it. A `tag` parameter additionally prints its option→index
+ * table (the convention the lookup-table section already uses), because the
+ * channel carries the INDEX and a reader has no other way to decode it.
+ */
+function inputChannelBlock(mapping: Mapping | undefined, model: CAModel): string[] {
+  const resolved = inputParamsOf(mapping);
+  const rows = resolved.channels.map((c, i) => {
+    const owner = resolved.params.find(p => p.channels.includes(c))?.param;
+    const kind = owner ? owner.type : 'color';
+    return [String(i), c.argName, `${c.label} — ${kind}${resolved.legacy ? ' (the brush colour, 0-255)' : ''}`];
+  });
+  const out = ['', resolved.legacy
+    ? 'brush arguments, LEADING the list below (the legacy colour mapping):'
+    : 'brush arguments (this mapping\'s declared PARAMETERS), LEADING the list below:'];
+  if (rows.length === 0) {
+    out.push('  (none — this mapping declares no parameters; the function takes only the arguments below)');
+    return out;
+  }
+  out.push(...table(['#', 'argument', 'parameter'], rows));
+  for (const rp of resolved.params) {
+    if (rp.param.type !== 'tag') continue;
+    const opts = paramTagOptions(rp.param, model);
+    if (opts.length) out.push(`  ${rp.param.name || rp.param.key}: ` + opts.map((o, i) => `${i}=${o}`).join(', '));
+  }
+  return out;
 }
 
 // ---------------------------------------------------------------------------
@@ -1139,7 +1175,8 @@ function sectionAgentCompiled(model: CAModel, agent: AgentCodeBundle): string {
   for (const im of agent.inputMappingCodes ?? []) {
     const m = (model.agentMappings ?? []).find(x => x.id === im.mappingId);
     add(`Agent Input Mapping (brush): ${m?.name || im.mappingId} — once PER PAINTED AGENT`,
-      ['A single-agent function; the brush colour arrives ahead of these arguments.'],
+      ['A single-agent function. Its BRUSH arguments lead the list below:',
+        ...inputChannelBlock(m, model)],
       buildAgentAbiParams('input', shape), im.code);
   }
   if (parts.length === 0) return '';
@@ -1187,10 +1224,7 @@ function sectionCompiled(model: CAModel, result: CompileResult): string {
     parts.push([
       '',
       banner(`Input Mapping (brush): ${m?.name || ic.mappingId} — once PER PAINTED CELL`),
-      comment(signatureBlock('arguments, in order:', cell, model).concat([
-        '',
-        'plus the brush colour: the emitted function takes (_r, _g, _b) ahead of these.',
-      ])),
+      comment(inputChannelBlock(m, model).concat(signatureBlock('then, in order:', cell, model))),
       ic.code,
     ].join('\n'));
   }

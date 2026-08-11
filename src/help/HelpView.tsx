@@ -543,6 +543,48 @@ export function HelpView() {
             compilers. Show Code displays the synthesized color-pass function.
           </p>
 
+          <h4 className={styles.h3}>Input Mapping Parameters (what the brush hands your graph)</h4>
+          <p className={styles.p}>
+            A Color-to-Attribute mapping used to have one fixed interface: three numbers
+            called <code>R</code>, <code>G</code>, <code>B</code>, fed by a color picker.
+            If your brush really meant &ldquo;<em>species = Predator, energy = 40, hungry =
+            true</em>&rdquo;, you had to encode that in a color and decode it again in the
+            graph. Now each input mapping declares its own <strong>parameters</strong>.
+          </p>
+          <ul className={styles.ul}>
+            <li>
+              In the Mappings panel, select a Color-to-Attribute mapping and edit its
+              <strong> Parameters</strong> list. Each row is a <em>name</em> and a
+              <em> type</em> &mdash; binary, integer, decimal, tag or color &mdash; plus
+              optional details (min/max for numbers, the option list for a tag, a default).
+              A description per parameter documents what the graph does with it.
+            </li>
+            <li>
+              Every parameter becomes an <strong>output port</strong> on that mapping&rsquo;s
+              Input Mapping event node, and one <strong>widget in the brush panel</strong>.
+              A <em>color</em> parameter is three ports (<code>tint_r</code>,{' '}
+              <code>tint_g</code>, <code>tint_b</code>) but a single swatch in the brush
+              panel &mdash; the split is an engine detail.
+            </li>
+            <li>
+              <strong>Nothing changes until you ask it to.</strong> A mapping you never
+              touch keeps the classic R/G/B color brush, and its compiled rule is
+              byte-for-byte what it was before parameters existed. The editor opens showing
+              that default as one <em>Brush colour</em> row you can rename, retype or extend.
+            </li>
+            <li>
+              <strong>Renaming a parameter never moves a wire.</strong> Deleting one (or
+              retyping between color and a scalar, which changes how many ports it has)
+              <em> removes</em> the wires that came out of the ports that no longer exist &mdash;
+              they are dropped, never quietly re-aimed at a neighbouring value. A leftover
+              wire in a hand-edited file is reported by name at compile time.
+            </li>
+            <li>
+              <strong>Agents work the same way.</strong> Agent Input Mappings declare
+              parameters with the same editor and paint with the same brush panel.
+            </li>
+          </ul>
+
           <h4 className={styles.h3}>Transparency (alpha)</h4>
           <p className={styles.p}>
             Every color picker is <strong>RGBA</strong>. Click a color swatch and the popover
@@ -1112,7 +1154,7 @@ export function HelpView() {
               <tr><td>Generation Step</td><td>Entry point for per-generation cell update logic. Connect &quot;DO&quot; to start the flow chain. Singleton.</td></tr>
               <tr><td>Init Event</td><td>Runs once per cell on simulator <strong>Reset</strong> (after defaults, before the first color pass; not on Load State). Outputs <code>x</code>, <code>y</code>, <code>maxX</code>, <code>maxY</code> (plus <code>z</code>, <code>maxZ</code> in 3D models). Singleton. Useful for procedural initial state (gradients, noise, random orientations).</td></tr>
               <tr><td>Grid Init Event</td><td>Runs <strong>once globally</strong> on Reset (and first load) &mdash; the free-form counterpart to the per-cell Init Event. Loop inside <code>DO</code> and write arbitrary cells with <strong>Set Cell (at Position)</strong> to seed procedurally (random seeds, shapes, a middle box). Outputs <code>width</code>, <code>height</code> (plus <code>depth</code> in 3D). Singleton; no current cell.</td></tr>
-              <tr><td>Input Mapping (C&rarr;A)</td><td>Entry point for Color-to-Attribute mapping (brush/image import). Outputs R, G, B values.</td></tr>
+              <tr><td>Input Mapping (C&rarr;A)</td><td>Entry point for Color-to-Attribute mapping (brush/image import). Its value outputs are the <strong>parameters its mapping declares</strong> &mdash; one port per parameter (three for a <em>color</em> one). A mapping that declares none keeps the classic <code>R</code>, <code>G</code>, <code>B</code> outputs. See &ldquo;Input Mapping Parameters&rdquo; under Mappings.</td></tr>
               <tr><td>Output Mapping (A&rarr;C)</td><td>Entry point for Attribute-to-Color visualization. Runs as a separate sequential pass after the Generation Step, ensuring colors reflect the final cell state. A mapping can instead be marked <strong>Linked</strong> in the Mappings panel (pick an attribute and the color pass is auto-generated &mdash; see &ldquo;Linked Output Mappings&rdquo; below); if you also add this node for a linked mapping, the auto pass runs first as a background and your graph overrides the cells it paints.</td></tr>
               <tr><td>Stop Event</td><td>Terminates the simulation run with a user-defined message when its DO flow input fires. Use for end conditions that need graph-level logic (complex spatial patterns, multi-attribute combinations). The text widget on the node body holds the message. First triggered stop in a step wins.</td></tr>
             </tbody>
@@ -2784,15 +2826,20 @@ export function HelpView() {
             that runs <em>once per agent you paint</em> with the Simulator&rsquo;s agent brush in
             <strong> Paint</strong> mode. Add one with <strong>+ Add Agent Input</strong>, then build it on
             the Agents canvas: drop an <strong>Agent Input Mapping (C&rarr;A)</strong> event node, pick the
-            mapping, and hang your logic off <code>DO</code>. The node&rsquo;s <code>R</code> /
-            <code>G</code> / <code>B</code> outputs carry the brush colour (0&ndash;255), so you can
-            compare, threshold or map it onto anything the agent owns &mdash; Set Attribute, Set Agent
-            Radius, Set Velocity, Kill Agent, &hellip;
+            mapping, and hang your logic off <code>DO</code>. The node&rsquo;s value outputs are the
+            <strong> parameters the mapping declares</strong> (see &ldquo;Input Mapping Parameters&rdquo;
+            under Mappings) &mdash; one widget per parameter in the brush panel, one port per parameter
+            on the node &mdash; so a brush can hand an agent a species, an energy and a flag directly
+            instead of a colour it has to decode. Declare none and you get the classic
+            <code> R</code> / <code>G</code> / <code>B</code> brush colour (0&ndash;255). Either way you
+            can compare, threshold or map the values onto anything the agent owns &mdash; Set Attribute,
+            Set Agent Radius, Set Velocity, Kill Agent, &hellip;
           </p>
           <p className={styles.p}>
             An input mapping is always a <em>standalone</em> graph (there is no palette to
-            auto-generate &mdash; the graph <em>is</em> the mapping), so its editor shows only a name and
-            a description; the description becomes the tooltip on its tab in the brush. You can drag an
+            auto-generate &mdash; the graph <em>is</em> the mapping), so its editor shows a name, a
+            description and its parameter list; the description becomes the tooltip on its tab in the
+            brush. You can drag an
             input-mapping row onto the Agents canvas to add its root already pointed at it. It runs as a
             plain function on the CPU on every agent engine (JS, WebAssembly and WebGPU alike) &mdash;
             painting is a one-off gesture, not per-generation work, so there is nothing to gain from
@@ -2979,8 +3026,10 @@ export function HelpView() {
           <p className={styles.p}>
             <strong>Paint</strong> is the agent counterpart of the CA grid&rsquo;s colour brush: instead
             of writing one fixed set of values (that is <em>Edit</em>), it runs an <strong>Agent Input
-            Mapping</strong> graph on every agent you touch, handing it the brush colour. The panel
-            shows a tab per input mapping and a colour picker; the graph decides what the colour
+            Mapping</strong> graph on every agent you touch, handing it that mapping&rsquo;s
+            <strong> parameters</strong>. The panel shows a tab per input mapping and one widget per
+            parameter &mdash; or, for a mapping that declares none, the classic colour picker, where
+            the graph decides what the colour
             <em>means</em> &mdash; &ldquo;redder than half &rarr; species A, else species B&rdquo;,
             &ldquo;brightness &rarr; energy&rdquo;, &ldquo;this hue &rarr; kill it&rdquo;. It honours the
             same shape / Single-Area scope / Line tool as the other footprint modes, in 2D and 3D,
@@ -3471,10 +3520,14 @@ export function HelpView() {
           <h3 className={styles.h3}>Brush Tool</h3>
           <p className={styles.p}>
             Left-click on the canvas to paint cells. Open the right panel to configure
-            brush color, shape, size, and input mapping. The color picker is accompanied
-            by three <strong>R/G/B</strong> numeric inputs so you can set or read exact
-            channel values &mdash; useful when your Input Mapping logic depends on
-            specific channel numbers. Use <strong>Ctrl + left-click drag</strong> to
+            brush color, shape, size, and input mapping. For a mapping that still uses the
+            classic color brush, the color picker is accompanied by three{' '}
+            <strong>R/G/B</strong> numeric inputs so you can set or read exact channel
+            values. For a mapping that declares its own <strong>parameters</strong> (see
+            &ldquo;Input Mapping Parameters&rdquo; under Mappings) the panel instead shows
+            one widget per parameter &mdash; a number, a checkbox, a tag list or a color
+            swatch &mdash; and the color popover is hidden, because there is no brush color
+            for it to edit. Use <strong>Ctrl + left-click drag</strong> to
             resize the brush interactively; <strong>Ctrl + scroll wheel</strong> cycles
             through the available Input Mappings; <strong>Shift + right-click</strong>{' '}
             opens an in-page color picker at the cursor (with R/G/B inputs plus a
@@ -3496,6 +3549,27 @@ export function HelpView() {
             values (like clicking the manual brush on each) &mdash; this path works even when
             the model has no Colour&rarr;Attribute mapping. (A 3D model keeps the classic
             1&nbsp;pixel&nbsp;=&nbsp;1&nbsp;cell import.)
+          </p>
+          <p className={styles.p}>
+            If the chosen input mapping declares its own <strong>parameters</strong>, the
+            dialog adds a table saying <em>where each parameter gets its value</em>: sampled
+            from the pixel (<code>R</code>, <code>G</code>, <code>B</code>, <code>A</code>,
+            or its <strong>luminance</strong> &mdash; all 0&ndash;255) or the same
+            <strong> constant</strong> for every cell. It opens on a sensible default (a
+            color parameter takes R/G/B; otherwise the first three parameters do; everything
+            else is a constant seeded from your current brush value), and you can change any
+            row. <em>Luminance</em> is the natural choice for a yes/no parameter, because
+            <strong> binarize</strong> collapses each pixel to 0 or 255 by exactly that
+            measure. Average / invert / binarize are pixel operations, so they still change
+            what those sources read &mdash; they grey out only if you set <em>every</em>
+            parameter to a constant, since then the image is not sampled at all. A mapping
+            with no declared parameters keeps the classic behaviour: the pixel&rsquo;s R, G
+            and B are handed straight to the graph.
+          </p>
+          <p className={styles.p}>
+            <strong>Scope:</strong> image import writes <em>cells</em>. To populate an agent
+            layer from data, use <strong>Import CSV</strong> (one row per agent) &mdash;
+            spawning agents from an image is not supported yet.
           </p>
           <h3 className={styles.h3}>Import CSV</h3>
           <p className={styles.p}>
