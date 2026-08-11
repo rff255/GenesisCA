@@ -14,6 +14,7 @@ import { ExportPresentationDialog, type ExportPresentationOptions } from './Expo
 import { ConfirmDialog } from './ConfirmDialog';
 import { NewModelDialog } from './NewModelDialog';
 import { buildArchetypeModel, type ArchetypeId } from '../model/archetypes';
+import { beginBusy } from './busyState';
 import styles from './FileMenu.module.css';
 
 /** Confirm dialog payload — set when an action needs user confirmation
@@ -242,12 +243,17 @@ export function FileMenu({ onNew, onLoaded }: {
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    // Read + parse can be seconds for a project carrying a big embedded board or
+    // thumbnail; the worker reinit that follows reports itself from SimulatorView.
+    const busyHandle = beginBusy(`Loading "${file.name}"…`);
     try {
       const parsed = await readModelFile(file);
       loadModel(parsed, file.name);
       onLoaded?.(parsed.properties?.name ?? 'Model');
     } catch (err) {
       alert(err instanceof Error ? err.message : 'Failed to load file.');
+    } finally {
+      busyHandle.end();
     }
     e.target.value = '';
   };

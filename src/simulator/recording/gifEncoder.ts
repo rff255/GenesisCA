@@ -1,5 +1,6 @@
 import { GIFEncoder, quantize, applyPalette } from 'gifenc';
 import { clampRecordFps } from './webmEncoder';
+import { yieldToPaint } from '../../components/busyState';
 
 /**
  * GIF encoding for recordings — the DELTA path.
@@ -85,6 +86,23 @@ import { clampRecordFps } from './webmEncoder';
  * `GIF_DELTA_COLORS` (255) rather than 256. One colour out of 256 — invisible on
  * any content, and nil on the CA output that quantises to a handful of colours.
  * Set `delta: false` to get the historical 256-colour full-frame output.
+ *
+ * ── Why this is ASYNC (and why that changes no bytes) ───────────────────────
+ * The encode is the one genuinely long main-thread block in the app: ~6 ms per
+ * frame at 110x512 and it runs at Stop, so a 300-frame recording froze the UI
+ * for a couple of seconds with no explanation. It now yields to the event loop
+ * on a time budget and reports per-frame progress, which is what lets the busy
+ * overlay actually paint and advance (see `busyState.ts` — a progress UI over a
+ * synchronous block is a lie).
+ *
+ * The OUTPUT IS BYTE-IDENTICAL either way, and structurally so rather than by
+ * luck: every piece of encoder state lives in locals of this function (`gif`,
+ * `probe`, `prevRgb`, `pal`, `globalPalette`, `runBase`, `i`), the loop reads
+ * `frames` and never mutates it, and the caller clears `recordingRef`
+ * synchronously before awaiting, so no capture can append to the array we hold.
+ * Suspending between iterations therefore reorders nothing observable. Pass
+ * `yieldBudgetMs: Infinity` to suppress yielding entirely — that is exactly what
+ * the byte-identity A/B compares against.
  */
 
 /** Palette size when the delta path is on: one index is reserved as the
@@ -116,6 +134,13 @@ export interface GifEncodeOptions {
    *  Exposed so a test can hold the palette policy fixed while flipping `delta`,
    *  which is what isolates the delta logic in an A/B. */
   maxColors?: number;
+  /** Called after each SOURCE frame is consumed (merged frames included), so a
+   *  progress bar can advance frame-by-frame. */
+  onProgress?: (framesDone: number, framesTotal: number) => void;
+  /** Yield to the event loop once this much uninterrupted work has accumulated,
+   *  so the browser can paint. Default 16 ms (~60 Hz). `Infinity` never yields —
+   *  the byte-identity reference. `0` yields after every frame. */
+  yieldBudgetMs?: number;
 }
 
 export interface GifEncodeStats {
@@ -176,15 +201,17 @@ function samePalette(a: number[][], b: number[][]): boolean {
  * `frames` must all share the leader's dimensions (the recorder locks them at
  * the first captured frame); any that do not are skipped.
  */
-export function encodeFramesToGif(
+export async function encodeFramesToGif(
   frames: ImageData[],
   fps: number,
   opts: GifEncodeOptions = {},
-): { blob: Blob; stats: GifEncodeStats } {
+): Promise<{ blob: Blob; stats: GifEncodeStats }> {
   const delta = opts.delta !== false;
   const merge = opts.mergeIdentical !== false;
   const maxSize = opts.maxSize ?? GIF_MAX_DEFAULT;
   const maxColors = opts.maxColors ?? (delta ? GIF_DELTA_COLORS : 256);
+  const yieldBudgetMs = opts.yieldBudgetMs ?? 16;
+  const onProgress = opts.onProgress;
 
   const fw = frames[0]?.width ?? 0;
   const fh = frames[0]?.height ?? 0;
@@ -265,9 +292,17 @@ export function encodeFramesToGif(
   let runBase: Uint8ClampedArray | null = null;
 
   let i = 0;
+  let lastYield = performance.now();
   while (i < frames.length) {
+    // Hand the main thread back periodically so the busy overlay can paint and
+    // advance. Purely a suspension point: every local above survives it, and
+    // nothing outside can touch `frames` while we are away (see the header).
+    if (yieldBudgetMs !== Infinity && performance.now() - lastYield >= yieldBudgetMs) {
+      await yieldToPaint();
+      lastYield = performance.now();
+    }
     const rgba = pixelsOf(frames[i]!);
-    if (!rgba) { i++; continue; }
+    if (!rgba) { i++; onProgress?.(i, frames.length); continue; }
 
     // ── 1. Identical-frame merge: how many frames repeat this one verbatim? ──
     let reps = 1;
@@ -358,6 +393,7 @@ export function encodeFramesToGif(
     if (first) globalPalette = palette;
     stats.framesWritten++;
     i += reps;
+    onProgress?.(i, frames.length);
   }
 
   gif.finish();
