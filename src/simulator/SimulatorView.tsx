@@ -15350,6 +15350,8 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       })()}
       {presetDialogOpen && (
         <PresetSaveDialog
+          hasCells={gridCellsOn}
+          hasAgents={isAgentModel}
           onConfirm={(name, description, includeGrid) => {
             setPresetDialogOpen(false);
             handleCreatePreset(name, description, includeGrid);
@@ -15397,6 +15399,8 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
           confirmLabel="Overwrite"
           initialName={presetOverwriteTarget.name}
           initialDescription={presetOverwriteTarget.description ?? ''}
+          hasCells={gridCellsOn}
+          hasAgents={isAgentModel}
           onConfirm={(name, description, includeGrid) => {
             const target = presetOverwriteTarget;
             setPresetOverwriteTarget(null);

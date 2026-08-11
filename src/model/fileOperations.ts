@@ -671,7 +671,7 @@ export function serializeSimState(
 }
 
 /** Serialize a preset snapshot. Always includes model-attribute values; includes
- *  grid state only when opts.includeGrid is true. UI controls (brush, viewer,
+ *  board state only when opts.includeGrid is true. UI controls (brush, viewer,
  *  FPS) are never captured — those are user preferences, not model setup. */
 export function serializePreset(
   workerState: {
@@ -685,6 +685,8 @@ export function serializePreset(
     linkedAccumulators: Record<string, number | Record<string, number>>;
     colors: ArrayBuffer;
     orderArray?: ArrayBuffer;
+    /** Bond-Graph Agents: the worker's AgentStatePayload (present for agent models). */
+    agents?: Record<string, unknown>;
   },
   opts: { includeGrid: boolean },
   modelStructure?: {
@@ -728,6 +730,16 @@ export function serializePreset(
     }
     if (workerState.orderArray) {
       out.orderArray = arrayBufferToBase64(workerState.orderArray);
+    }
+    // Bond-Graph Agents: the agent population rides the grid block, EXACTLY as
+    // it does in serializeSimState — for an agent model the population IS "the
+    // board", and an agents-only model has no cell attributes at all (its
+    // `attributes` is {} and `colors` is zero-length), so without this a
+    // "with board state" preset captured literally nothing and the loader's
+    // no-agent-payload branch re-seeded the population: the user-reported
+    // "loading it just started from a reset state".
+    if (workerState.agents) {
+      out.agents = serializeAgentState(workerState.agents);
     }
   }
   return out;

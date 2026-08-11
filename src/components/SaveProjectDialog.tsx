@@ -131,7 +131,11 @@ function SaveProjectDialogInner({ initial, initialMeta, onConfirm, onCancel }: P
             <input id="save-opt-grid" type="checkbox" defaultChecked={initial.includeGrid} />
             <div>
               <div className={styles.rowLabel}>Include board state</div>
-              <div className={styles.rowHint}>Full cell grid snapshot: attributes, generation counter, indicator values, colors.</div>
+              {/* Truthful list: serializeSimState writes cell attributes, colors, the
+                  async order array and — for an agent model — the agent population,
+                  and DELIBERATELY skips generation + indicators (a saved board is a
+                  starting configuration, not a run snapshot). */}
+              <div className={styles.rowHint}>Full board snapshot: cell attributes, colors, and the agent population.</div>
             </div>
           </label>
           <label className={styles.row}>

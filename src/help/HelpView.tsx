@@ -3799,13 +3799,21 @@ export function HelpView() {
           </p>
           <ul className={styles.list}>
             <li><strong>Save current as preset</strong> &mdash; Captures the current
-              model-attribute values. Optionally embeds the cell grid too (check "Include
-              cell grid state" in the dialog). UI controls (brush, viewer, FPS) are
-              <em> never </em> part of a preset.</li>
+              model-attribute values. Optionally embeds the <strong>board</strong> too (check
+              "Include board state" in the dialog) &mdash; that means the cell grid
+              <em> and </em>, on an agent model, the whole agent population: positions
+              (including Z in 3D), velocities, agent attributes, bonds and bond attributes,
+              and sprite state. On an agents-only model the board <em>is</em> the population.
+              UI controls (brush, viewer, FPS) are <em> never </em> part of a preset.</li>
             <li><strong>Load</strong> &mdash; Restores the preset's model-attribute values
-              (and grid, if included). Preset rows marked with <code>&#x25C9;</code> include
-              grid data. If a grid-carrying preset's dimensions don't match the current
-              grid, you'll see a dimension-mismatch error &mdash; resize first.</li>
+              (and the board, if included). Preset rows marked with <code>&#x25C9;</code>
+              carry board data. If a board-carrying preset's dimensions don't match the
+              current grid, you'll see a dimension-mismatch error &mdash; resize first.
+              A <em>parameter-only</em> preset never touches the board: load one mid-run and
+              the simulation keeps going with the new parameters applied live. Note that a
+              board-carrying preset saved before GenesisCA captured agent populations holds
+              no agents, so loading it re-seeds the agent layer from the model&rsquo;s Init
+              Event &mdash; re-save it to capture the current population.</li>
             <li><strong>Export</strong> (&#x2913;) &mdash; Downloads the preset as a standalone
               <code> .gcapreset</code> file (its embedded state + metadata), so a parameter set
               can be shared or moved between projects.</li>
@@ -3922,8 +3930,8 @@ export function HelpView() {
             <li><strong>simulationState</strong> (optional) &mdash; Embedded simulation snapshot. Clicking <strong>Save</strong> opens a small dialog with a last chance to correct the model&rsquo;s presentation fields &mdash; <em>Name</em>, <em>Rule Author</em> and <em>GenesisCA Project Author</em>, prefilled from the model and identical to the ones in the Modeler&rsquo;s Info panel. Anything you change there is <strong>written back to the model</strong>, not just into the file being written, and the default filename follows the edited name. A model must have a name, so Save stays disabled while that field is empty. Below the fields are the include-what checkboxes:
               <ul>
                 <li><em>Include simulator controls</em> &mdash; playback speed, brush size/color, selected input/output mapping, runtime model-attribute values.</li>
-                <li><em>Include board state</em> &mdash; full cell grid snapshot: attributes, generation counter, indicator values, colors.</li>
-                <li><em>Include model presets</em> &mdash; the saved parameter (and optional grid) snapshots; checked by default whenever the model already has presets.</li>
+                <li><em>Include board state</em> &mdash; full board snapshot: cell attributes, colors, and the agent population. (A saved board is a <em>starting configuration</em>, so the generation counter and indicator values are deliberately <strong>not</strong> stored &mdash; a loaded board always begins at generation 0.)</li>
+                <li><em>Include model presets</em> &mdash; the saved parameter (and optional board) snapshots; checked by default whenever the model already has presets.</li>
               </ul>
               These two default to reflect the loaded model instead of following a program-wide last choice: when a model already carries an embedded snapshot they mirror it, and a fresh model (no embedded snapshot) defaults both on so evolving a board or tuning attributes and then saving still captures that work. Unchecking both still saves a valid <code>.gcaproj</code> &mdash; it just contains only the model definition.
             </li>
