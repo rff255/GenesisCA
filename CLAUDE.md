@@ -2325,16 +2325,17 @@ the wrong direction would compile to a pass nothing ever runs).
   reverting any of the three widened `singleAgent` branches (the leading `idx`, the bond slice, the
   `w_` aliasing) fails 4-8 checks.
 
-### Parameterized Input Mappings — PHASE 1 (engine + brush; branch `polishing`)
+### Parameterized Input Mappings — PHASES 1–2 (engine + brush + editor; branch `polishing`)
 
 *"We must abolish the assumption that input mappings will have r,g,b."* A C→A mapping may now
 declare its own named **parameters** (name + type); each becomes value-output ports on its event
 root and one type-adaptive widget in the brush panel. Design authority:
 [docs/IMPACT_MAP_PARAM_INPUT_MAPPINGS.md](docs/IMPACT_MAP_PARAM_INPUT_MAPPINGS.md) +
 [PLAN_PARAM_INPUT_MAPPINGS.md](docs/PLAN_PARAM_INPUT_MAPPINGS.md) (+ `.html` mockup).
-**Phase 1 is deliberately USER-INVISIBLE** — the whole engine path works, but there is no editor to
-DECLARE parameters yet (Phase 2), so every model still resolves LEGACY. Phase 3 adds the image
-channel→parameter step + the docs sweep.
+**Phase 1** built the whole engine path and was deliberately USER-INVISIBLE (no editor ⇒ every model
+still resolved LEGACY). **Phase 2 makes the feature REACHABLE** — the parameter editor, the edge
+cascade and cell/agent consistency (below). **Phase 3** adds the image channel→parameter step + the
+full docs sweep (HelpView / NODES_REFERENCE / showCode / the two false "inputColor shader" claims).
 
 - **`src/model/inputMappingParams.ts` is THE RESOLVER — the single source of truth.** NOTHING else
   may read `mapping.parameters` (only the reducer and, from Phase 2, the editor). A grep for
@@ -2414,7 +2415,7 @@ channel→parameter step + the docs sweep.
   `.gcastate` and "Save with simulator controls" round-trips unchanged. *(Deviation from the impact
   map, which sketched the store keyed by CHANNEL: keying by PARAMETER is the same information and
   lets a `color` parameter round-trip as the one hex its widget edits.)*
-- **Gate — [scripts/test-param-input-mappings.mjs](scripts/test-param-input-mappings.mjs) (62 checks).**
+- **Gate — [scripts/test-param-input-mappings.mjs](scripts/test-param-input-mappings.mjs) — Phase 1 half (of 111 total).**
   The library gives ZERO coverage for the new path (every shipped model has `parameters` absent), so
   byte-identity proves we broke nothing and proves NOTHING about whether the feature works. This
   builds models in memory and asserts **VALUES** through the real compiled fns on JS **and a real
@@ -2427,6 +2428,77 @@ channel→parameter step + the docs sweep.
   back to I32 fails 2 checks (the module stops validating), and forcing the WHOLE parameterized ABI
   to i32 — which VALIDATES and RUNS — fails 7, with `2.5` arriving as `2` and `0.1` as `0`, exactly
   the predicted silent-garbage mode.
+
+#### PHASE 2 — the parameter editor, the edge cascade, cell/agent consistency
+
+- **THE PREREQUISITE NOBODY PLANNED FOR: A RESOLVER'S DEFAULT MUST BE REPRESENTABLE.** The editor
+  shows the RESOLVED list, so the FIRST edit of a legacy mapping has to MATERIALISE it
+  (`materialiseInputParams`) — and under Phase 1's rules that materialised parameter (key `color`,
+  type `color`) minted `color_r`/`color_g`/`color_b`, so **"I added a second parameter" would have
+  silently dangled every wire out of the root**. Fixed in the resolver: **`color` is a RESERVED key**
+  — a colour parameter keyed exactly `LEGACY_COLOR_PARAM_KEY` mints the historical un-prefixed
+  `r`/`g`/`b` + `_r`/`_g`/`_b`, so writing the resolver's own output back is a no-op for ports, ABI
+  **and the emitted character stream**. `mintParamKey` never hands that key to a NEW parameter, so
+  only the materialised default can hold it. Every other resolver in this codebase already satisfied
+  this by construction (`resolveMaxBonds`, `resolveAxes`, `agentAbiShapeOf`); this one now does too.
+  `legacy` still means strictly *"the field was ABSENT"* — a materialised mapping is NOT legacy (it
+  gets the parameter panel and the f64 WASM signature); only its CHANNELS are identical, which is the
+  part wires and emits depend on.
+- **THE EDGE CASCADE — `patchAllEdges` ([ModelContext.tsx](src/model/ModelContext.tsx)), genuinely new
+  machinery.** `patchAllNodes` rewrites node CONFIGS; **nothing in the reducer removed EDGES on a
+  model edit** until now. `patchAllEdges` is its sibling — same four stores (Cells / Agents /
+  Overseer / every macroDef), same array-identity preservation when nothing matched (so an edit that
+  prunes nothing cannot re-render every graph), and its predicate receives the edge's SOURCE NODE
+  (edges carry only ids). ⚠ Its result carries `macroDefs` too, so a site spreading BOTH it and
+  `patchAllNodes` would have the second spread win — combine deliberately; no current site needs both.
+- **`removedChannelPortIds(before, after)` is THE CASCADE RULE, in the resolver** — shared by the
+  reducer (which prunes) and the harness (which asserts), so the two cannot disagree about what
+  "removed" means. **DROP, NEVER REPOINT** (the `STALE_SLOT_HANDLE` rule: a re-aimed edge silently
+  resolves to the WRONG value). Wired into `UPDATE_MAPPING` **and** `UPDATE_AGENT_MAPPING`, gated on
+  `'parameters' in changes` and returning `null` when nothing was destroyed — so a rename, a reorder
+  and every non-parameter edit never walk the graphs at all. What moves wires: **rename → nothing**
+  (ports are keyed by `key`, which is why they are separate fields) · **retype scalar↔scalar →
+  nothing** · **retype across the colour boundary → the removed channels' edges** · **delete / `[]` →
+  all of that parameter's edges**. `detectDanglingRefs` + `detectMissingConfig` stay as the BACKSTOP
+  for a hand-edited file.
+- **The editor** (`InputParamsEditor` in [MappingsPanelContent.tsx](src/modeler/panels/MappingsPanelContent.tsx))
+  is ONE component used by the CELL C→A mappings **and** the AGENT ones, so the two layers cannot
+  drift. Row = `[name] [type ▾] [×]` + the type-specific block (min/max · tag source [a live tag
+  ATTRIBUTE or an inline list] · colour default) + a per-parameter description + a live `ports: …`
+  readout + a `⋮⋮` reorder handle; `+ Parameter` appends. **`key` is deliberately NOT editable** — a
+  key change IS a delete + re-add, and offering it as a text field would make every keystroke a
+  wire-dropping event. Reordering keeps every wire but DOES change the ABI order (a recompile, and
+  correct). **The three R/G/B channel textareas are now A→C-ONLY** — for C→A they documented a
+  HARDCODED encoding the user then had to re-implement in the graph, and each parameter's own
+  description replaces them; for an OUTPUT colour, documenting three channels is still a real thing.
+- **The agent side needed no reshape** — Phase 1 had already unified it (one `buildInputParamPorts`
+  for both roots, the resolved channels in `compileAgentGraph`'s emit, a structurally identical
+  `paintAgentsColor { values }`, and `InputParamsPanel` in the agent Paint brush). Phase 2 adds the
+  editor + the cascade on `agentMappings`, and corrects the last "R/G/B outputs" prose. The `'input'`
+  ABI kind is untouched by construction: the brush channels are PREPENDED by the caller, outside the
+  shared descriptor.
+- **Gate — the harness grew 62 → 111 checks** (§9 materialisation, §10 the cascade). The cascade is
+  driven through the **REAL reducer** (`modelReducer` is exported and bundles cleanly in Node — it
+  calls no React API), so what the harness exercises is what the app dispatches, gate and all:
+  delete drops exactly one edge and keeps the unrelated ones, a colour delete drops all three, retype
+  colour→float drops two, rename/reorder keep every wire AND edge-array identity, `[]` drops all,
+  materialisation preserves the r/g/b wires (and a materialise-then-add still does), the cascade is
+  SCOPED to the edited mapping, and the same on the AGENT store. **Negative-controlled by SOURCE
+  MUTATION — 3 mutations, 3 caught**: an over-dropping cascade (7 failures), a REPOINTING one (8),
+  and removing the reserved-key rule so materialisation moves the ports (7).
+- **Real-UI verified end to end** (dev server, real clicks, real worker): the editor renders for a
+  shipped legacy mapping showing `Brush colour · Color · ports: r, g, b`; a real `+ Parameter` click
+  MATERIALISES it and the existing `output_value_r` wire SURVIVES; a rename keeps the key and the
+  wire; a real `×` on the colour parameter drops **exactly** that one value wire (total edges −1) and
+  keeps the flow wire, after which the model still compiles clean with ZERO badges on the root. A
+  4-parameter / 6-channel fixture paints through the real load→compile→ship→worker chain on the WASM
+  target with **all six values exact (`7.25`, `2`, `1`, `10/20/30`), untouched cells still 0**; the
+  AGENT twin paints agents 1 and 4 with all five channels exact while 0/2/3/5 stay 0, and deleting a
+  wired agent parameter drops exactly its edge with the cell graph untouched. All four shipped legacy
+  Wireworld brushes still write their real attributes. 0 console errors. ⚠ **Verification trap**: the
+  worker's `getState` attribute records carry the **ATTRIBUTE** type (`'float'`/`'integer'`/`'bool'`),
+  not the buffer type — decoding a Float64 buffer as `Uint8Array` reads byte 0 of each double and
+  reports a convincing all-zeros "the paint did nothing".
 
 **B — agent sprites (an optional exhibition layer; static image / animated GIF/WebP per agent).** `CAModel.sprites?: SpriteAsset[]` ([types.ts](src/model/types.ts): `{ id, name, dataUrl, mimeType, scale?, loop? }`) — additive, travels in the `.gcaproj` as a base64 data URL. `ADD/DUPLICATE/REMOVE/UPDATE/REORDER_SPRITE(S)` reducers ([ModelContext.tsx](src/model/ModelContext.tsx)); `REMOVE_SPRITE` cascades `clearDeletedId('spriteId')` over `setAgentSprite` nodes. **Decode is MAIN-THREAD only** ([spriteRegistry.ts](src/simulator/spriteRegistry.ts)) via WebCodecs **`ImageDecoder`** (animated GIF/WebP/PNG natively — NO new dependency; the project already uses WebCodecs for WebM recording) → `ImageBitmap[]`, with a `createImageBitmap` single-frame fallback; the worker never carries the pixels. The **`SpriteRegistry`** (keyed by sprite id, re-decodes only changed `dataUrl`s, `onReady` redraws) is owned by SimulatorView and reconciled on `model.sprites` change. **Sprite Library** UI = a "Sprites" section in the Mappings panel, **MASTER-DETAIL + DRAGGABLE, the same shape as the mappings above it** (the `767541b` agent-views conversion applied to sprites; import png/jpeg/gif/webp ≤4 MB / a frame SEQUENCE / a sprite SHEET, ≤4 MB each). The LIST is a `listItem` row per asset — a 24px thumbnail (the row's identity — a sprite is a picture), the name, a `Nf` frame-count badge for a multi-frame asset, and a `⋮⋮` reorder handle — with `+ Image / GIF` / `+ Frame sequence` / `+ Sprite sheet` / **Duplicate** / **Delete** in the button row (the last two disabled until a row is selected). The selected asset's editor (name, size×, loop, sheet-slicing grid, the rotation block + `CompassDial`, the chroma key + its click-the-image `SpriteBgPicker`) opens in the SHARED second detail panel.
   - **The Mappings panel's ONE detail slot is now THREE-way discriminated**: a bare id = a CELL mapping, `agentmap:<id>` = an agent view, **`sprite:<id>` = a Sprite Library asset** — so picking in any layer deselects the others for free. ⚠ **`ModelerView.selectedItemName` MUST resolve the `sprite:` prefix** (against `model.sprites`) or the detail `PanelShell` — gated on `detailItemName != null` — never mounts and clicking a row does NOTHING visible; the same trap the agent-attributes and agent-views conversions each hit.

@@ -4,8 +4,10 @@ import type { NodeTypeDef } from '../types';
  *  event root, and the mirror image of `agentOutputMapping`.
  *
  *  Roots a SINGLE-AGENT graph that runs when the user PAINTS an agent with the
- *  agent brush's Paint mode: the brush colour arrives on the `r`/`g`/`b` value
- *  outputs and the `DO` chain writes the agent's state (Set Attribute, Set Agent
+ *  agent brush's Paint mode: the brush's values arrive on the mapping's declared
+ *  PARAMETER outputs (a mapping that declares none resolves to the legacy colour
+ *  parameter, i.e. `r`/`g`/`b`), and the `DO` chain writes the agent's state
+ *  (Set Attribute, Set Agent
  *  Radius, Set Velocity, …). One root per entry in `model.agentMappings` whose
  *  `isAttributeToColor` is FALSE (the C→A direction — the same discriminator the
  *  cell mappings use).

@@ -36,7 +36,33 @@ import type { PortDef } from '../modeler/vpl/types';
 import { encodeAttrValue } from './attrValueEncoding';
 import { hexToRgba, rgbaToHex } from './colorHex';
 
-/** The key of the synthesised legacy parameter. Never written to a file. */
+/**
+ * The key of the legacy colour parameter — a RESERVED key.
+ *
+ * ┌─ THE DEFAULT MUST BE REPRESENTABLE (Phase 2's load-bearing rule) ─────────┐
+ * │ A `color` parameter whose key is exactly this mints the HISTORICAL        │
+ * │ un-prefixed channels `r`/`g`/`b` (ABI `_r`/`_g`/`_b`) — i.e. writing the  │
+ * │ resolver's own default back into `mapping.parameters` EXPLICITLY resolves │
+ * │ to the same ports, the same ABI and the same emitted code.               │
+ * │                                                                          │
+ * │ WHY: the parameter EDITOR shows the RESOLVED list, so the first edit of a │
+ * │ legacy mapping (rename it, add a second parameter) must MATERIALISE that  │
+ * │ default. Without this rule the materialised parameter would mint          │
+ * │ `color_r`/`color_g`/`color_b` and every existing wire out of the root     │
+ * │ would dangle — "I added a parameter" would silently break the graph.      │
+ * │ Every other resolver in this codebase satisfies this by construction      │
+ * │ (`resolveMaxBonds`, `resolveAxes`, `agentAbiShapeOf`): writing a resolved │
+ * │ value back is a no-op. This one now does too.                            │
+ * │                                                                          │
+ * │ The key is RESERVED: `mintParamKey` never hands it to a NEW parameter, so │
+ * │ the only way to hold it is to be the materialised legacy default.        │
+ * └──────────────────────────────────────────────────────────────────────────┘
+ *
+ * NB `legacy` still means strictly "the `parameters` field was ABSENT" — a
+ * materialised mapping is NOT legacy (it declares its parameters, so the brush
+ * shows the parameter panel and the WASM entry takes the f64 signature). Only
+ * the CHANNELS are identical, which is the part wires and emits depend on.
+ */
 export const LEGACY_COLOR_PARAM_KEY = 'color';
 
 /** Channel suffixes of a `color` parameter, in payload order. */
@@ -100,7 +126,7 @@ export function sanitiseParamKey(key: string): string {
 /** The legacy resolution: ONE `color` parameter, channels `r`/`g`/`b`, ABI
  *  names `_r`/`_g`/`_b` — i.e. exactly what every model emitted before
  *  parameters existed. */
-const LEGACY_PARAM: InputMappingParam = {
+export const LEGACY_PARAM: InputMappingParam = {
   key: LEGACY_COLOR_PARAM_KEY,
   name: 'Brush colour',
   type: 'color',
@@ -154,11 +180,18 @@ export function inputParamsOf(mapping: Mapping | undefined | null): ResolvedInpu
     const dataType = channelDataType(p.type);
     const own: ResolvedChannel[] = [];
     if (p.type === 'color') {
+      // THE RESERVED KEY (see LEGACY_COLOR_PARAM_KEY): a colour parameter keyed
+      // `color` mints the HISTORICAL un-prefixed `r`/`g`/`b` + `_r`/`_g`/`_b`,
+      // so materialising the resolver's own default in the editor moves no wire
+      // and changes no emitted character. Any OTHER key takes the prefixed form.
+      const reserved = key === LEGACY_COLOR_PARAM_KEY;
       COLOR_CHANNEL_SUFFIXES.forEach((suffix, i) => {
-        const portId = uniquePortId(`${key}_${suffix}`);
+        const portId = uniquePortId(reserved ? suffix : `${key}_${suffix}`);
         own.push({
-          paramKey: p.key, portId, argName: `_p_${portId}`,
-          label: `${p.name || key} ${suffix.toUpperCase()}`,
+          paramKey: p.key,
+          portId,
+          argName: reserved ? `_${portId}` : `_p_${portId}`,
+          label: reserved ? suffix.toUpperCase() : `${p.name || key} ${suffix.toUpperCase()}`,
           dataType, channelIdx: i,
         });
       });
@@ -173,6 +206,60 @@ export function inputParamsOf(mapping: Mapping | undefined | null): ResolvedInpu
     channels.push(...own);
   }
   return { legacy: false, params, channels };
+}
+
+/**
+ * The EXPLICIT parameter list for a mapping — its declared one, or a fresh copy
+ * of the legacy default. This is what the editor writes back on the FIRST edit
+ * of a legacy mapping ("materialisation").
+ *
+ * Because the legacy parameter's key is RESERVED (see `LEGACY_COLOR_PARAM_KEY`),
+ * materialising resolves to the same channels, so no wire moves and no emitted
+ * character changes — the mapping merely stops being `legacy` (its brush shows
+ * the parameter panel instead of the built-in colour row).
+ *
+ * Returns a DEEP-ENOUGH copy: the objects are fresh, so the editor may edit them
+ * without touching the shared `LEGACY_PARAM` singleton.
+ */
+export function materialiseInputParams(mapping: Mapping | undefined | null): InputMappingParam[] {
+  const declared = mapping?.parameters;
+  if (declared) return declared.map(p => ({ ...p }));
+  return [{ ...LEGACY_PARAM }];
+}
+
+/** Mint a fresh, unique parameter key from a display name. The RESERVED
+ *  `color` key is never handed to a new parameter — only the materialised
+ *  legacy default may hold it. */
+export function mintParamKey(name: string, existingKeys: readonly string[]): string {
+  const base = sanitiseParamKey((name || 'param').trim().toLowerCase().replace(/\s+/g, '_'));
+  const taken = new Set(existingKeys.map(sanitiseParamKey));
+  taken.add(LEGACY_COLOR_PARAM_KEY);
+  if (!taken.has(base)) return base;
+  let n = 2;
+  while (taken.has(`${base}_${n}`)) n++;
+  return `${base}_${n}`;
+}
+
+/**
+ * THE CASCADE RULE, in one place: which channel PORT IDs a parameter edit
+ * DESTROYS. An edge leaving an input-mapping root through one of these must be
+ * DROPPED — never repointed at a neighbouring channel (the `STALE_SLOT_HANDLE`
+ * rule: a repointed edge silently resolves to the WRONG value).
+ *
+ * A rename (`name` only) removes nothing, because ports are keyed by `key`.
+ * A retype `color` → scalar removes two of the three; `[]` removes everything.
+ *
+ * Shared by the reducer (which prunes) and the harness (which asserts), so the
+ * two cannot disagree about what "removed" means.
+ */
+export function removedChannelPortIds(
+  before: ResolvedInputParams,
+  after: ResolvedInputParams,
+): Set<string> {
+  const live = new Set(after.channels.map(c => c.portId));
+  const gone = new Set<string>();
+  for (const c of before.channels) if (!live.has(c.portId)) gone.add(c.portId);
+  return gone;
 }
 
 /** Resolve the C→A mapping an input-mapping ROOT node points at. `inputColor`
