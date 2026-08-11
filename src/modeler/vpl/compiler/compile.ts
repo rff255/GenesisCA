@@ -1433,7 +1433,11 @@ function decodeCoordLines(is3d: boolean, indent: string): string[] {
   ];
 }
 
-function buildLoopParams(model: CAModel): {
+/** EXPORTED for the Show Code "port-ready document" builder (showCode.ts), which
+ *  documents what each compiled parameter IS. It reads the SAME list the emit
+ *  uses, so the documentation can never drift from the real signature — never
+ *  hand-write a parallel param list. */
+export function buildLoopParams(model: CAModel): {
   params: string;
   cellAttrs: Array<{ id: string; type: string }>;
   neighborhoods: Array<{ id: string }>;
@@ -1479,8 +1483,9 @@ function buildLoopParams(model: CAModel): {
   return { params: parts.join(', '), cellAttrs, neighborhoods };
 }
 
-/** Per-cell params (for InputColor which is called per-cell) */
-function buildCellParams(model: CAModel): string {
+/** Per-cell params (for InputColor which is called per-cell).
+ *  EXPORTED for showCode.ts — see buildLoopParams. */
+export function buildCellParams(model: CAModel): string {
   const cellAttrs = model.attributes.filter(a => !a.isModelAttribute);
   const neighborhoods = model.neighborhoods;
   const variegated = !!model.variegatedCells?.enabled;
@@ -1493,6 +1498,32 @@ function buildCellParams(model: CAModel): string {
   for (const n of neighborhoods) { parts.push(`nIdx_${n.id}`); parts.push(`nSz_${n.id}`); }
   parts.push('modelAttrs', 'colors', 'activeViewer', '_indicators', '_linkedResults', '_rngState', '_stopFlag', 'glyphCodes', 'glyphColors');
   if (variegated || hasLookupTables) parts.push('r_orientation', 'w_orientation', '_facePatternLookup', '_lookupTables');
+  // L2 — Get Generation, appended LAST (see buildLoopParams).
+  if (cellUsesGeneration(model)) parts.push('_generation');
+  return parts.join(', ');
+}
+
+/** Output-Mapping (colour pass) params — sync-style loop params (no `order`)
+ *  regardless of updateMode. Extracted verbatim from the OM compile site so the
+ *  emitted signature has ONE definition; also EXPORTED for showCode.ts (see
+ *  buildLoopParams). */
+export function buildOutputMappingParams(model: CAModel): string {
+  const cellAttrs = model.attributes.filter(a => !a.isModelAttribute);
+  const parts: string[] = is3dModel(model) ? ['total', 'W', 'H', 'D', 'WH'] : ['total', 'W', 'H'];
+  for (const a of cellAttrs) parts.push(`r_${a.id}`);
+  for (const a of cellAttrs) parts.push(`w_${a.id}`);
+  for (const n of model.neighborhoods) { parts.push(`nIdx_${n.id}`); parts.push(`nSz_${n.id}`); }
+  parts.push('modelAttrs', 'colors', 'activeViewer', '_indicators', '_linkedResults', '_rngState', '_stopFlag', 'glyphCodes', 'glyphColors');
+  if (model.variegatedCells?.enabled || model.attributes.some(a => a.isModelAttribute && a.type === 'lookupTable')) {
+    parts.push('r_orientation', 'w_orientation', '_facePatternLookup', '_lookupTables');
+  }
+  // "Skip Isolated Empty Cells": the colour pass gets the same sparse loop
+  // variant as the step (recolour only ACTIVE cells — inactive cells never step,
+  // so their colour inputs are frozen and their last-painted colour stays
+  // correct). The worker passes a null list to force a FULL pass on the rare
+  // events where an inactive cell's colour COULD change (model-attr edit,
+  // viewer switch, paint, reset/load). Appended LAST — OFF byte-identical.
+  if (sparseSteppingEnabled(model)) parts.push('_activeList', '_activeCount');
   // L2 — Get Generation, appended LAST (see buildLoopParams).
   if (cellUsesGeneration(model)) parts.push('_generation');
   return parts.join(', ');
@@ -2222,26 +2253,8 @@ export function compileGraph(
   const outputMappingCodes: Array<{ mappingId: string; code: string }> = [];
 
   // Output mapping uses sync-style loop params (no order) regardless of updateMode
-  const omParamParts: string[] = is3d ? ['total', 'W', 'H', 'D', 'WH'] : ['total', 'W', 'H'];
-  for (const a of cellAttrs) omParamParts.push(`r_${a.id}`);
-  for (const a of cellAttrs) omParamParts.push(`w_${a.id}`);
-  const neighborhoods = model.neighborhoods.map(n => ({ id: n.id }));
-  for (const n of neighborhoods) { omParamParts.push(`nIdx_${n.id}`); omParamParts.push(`nSz_${n.id}`); }
-  omParamParts.push('modelAttrs', 'colors', 'activeViewer', '_indicators', '_linkedResults', '_rngState', '_stopFlag', 'glyphCodes', 'glyphColors');
-  if (model.variegatedCells?.enabled || model.attributes.some(a => a.isModelAttribute && a.type === 'lookupTable')) {
-    omParamParts.push('r_orientation', 'w_orientation', '_facePatternLookup', '_lookupTables');
-  }
-  // "Skip Isolated Empty Cells": the colour pass gets the same sparse loop
-  // variant as the step (recolour only ACTIVE cells — inactive cells never step,
-  // so their colour inputs are frozen and their last-painted colour stays
-  // correct). The worker passes a null list to force a FULL pass on the rare
-  // events where an inactive cell's colour COULD change (model-attr edit,
-  // viewer switch, paint, reset/load). Appended LAST — OFF byte-identical.
   const omSparse = sparseSteppingEnabled(model);
-  if (omSparse) omParamParts.push('_activeList', '_activeCount');
-  // L2 — Get Generation, appended LAST (see buildLoopParams).
-  if (cellUsesGeneration(model)) omParamParts.push('_generation');
-  const omParams = omParamParts.join(', ');
+  const omParams = buildOutputMappingParams(model);
 
   for (const omNode of outputMappingNodes) {
     const mappingId = omNode.data.config.mappingId as string || '';

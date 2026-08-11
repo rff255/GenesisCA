@@ -1298,7 +1298,11 @@
   line-height: 1.4;
   overflow-x: auto;
   white-space: pre;
-  max-height: 250px;
+  /* The panel shows a whole port-ready model document (definition header +
+     driver skeleton + the compiled functions), which runs to thousands of
+     lines — 250px made it a keyhole. Half the viewport, floored so it stays
+     usable on a short window. */
+  max-height: max(250px, 50vh);
   overflow-y: auto;
 }
 
