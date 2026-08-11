@@ -8,11 +8,14 @@
  * the in-app Help tab has the full prose; this is the at-a-glance cheat sheet.
  */
 
-import { useEffect } from 'react';
+import { Fragment, useEffect } from 'react';
+import styles from './KeyboardShortcutsOverlay.module.css';
 
 type Row = [keys: string, action: string];
 
-const GROUPS: { title: string; rows: Row[] }[] = [
+/** `wide` — this group's key chips are long, so it spans the whole grid
+ *  instead of sharing a column (see the module CSS's layout rule). */
+const GROUPS: { title: string; rows: Row[]; wide?: boolean }[] = [
   {
     title: 'Modeler — graph',
     rows: [
@@ -46,6 +49,7 @@ const GROUPS: { title: string; rows: Row[] }[] = [
     // Blender's numpad view keys. Read off the PHYSICAL key, so the top-row
     // digits work too (Blender's "Emulate Numpad") and Shift doesn't break them.
     title: 'Simulator — 3D view (Blender numpad)',
+    wide: true,
     rows: [
       ['7 / 1 / 3', 'Top / front / right view'],
       ['Ctrl (or Shift) + 7 / 1 / 3', 'Bottom / back / left view'],
@@ -75,63 +79,30 @@ export function KeyboardShortcutsOverlay({ open, onClose }: { open: boolean; onC
       aria-modal="true"
       aria-label="Keyboard shortcuts"
       onClick={onClose}
-      style={{
-        position: 'fixed', inset: 0, zIndex: 1000,
-        background: 'rgba(0, 0, 0, 0.55)',
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-        padding: 'var(--space-8)',
-      }}
+      className={styles.backdrop}
     >
-      <div
-        onClick={e => e.stopPropagation()}
-        style={{
-          background: 'var(--color-bg-panel)',
-          border: '1px solid var(--color-border)',
-          borderRadius: 'var(--panel-radius)',
-          boxShadow: 'var(--shadow-lg)',
-          maxWidth: 560, width: '100%', maxHeight: '85vh', overflowY: 'auto',
-          padding: 'var(--space-8)',
-        }}
-      >
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 'var(--space-6)' }}>
-          <h2 style={{ margin: 0, fontSize: 'var(--font-lg)', fontWeight: 500, color: 'var(--color-heading)' }}>Keyboard shortcuts</h2>
-          <button
-            onClick={onClose}
-            aria-label="Close"
-            title="Close (Esc)"
-            style={{
-              background: 'transparent', border: '1px solid var(--color-widget-border)',
-              borderRadius: 'var(--radius-md)', color: 'var(--color-text-secondary)',
-              width: 26, height: 26, cursor: 'pointer', fontSize: 'var(--font-md)', lineHeight: 1,
-            }}
-          >×</button>
+      <div onClick={e => e.stopPropagation()} className={styles.card}>
+        <div className={styles.header}>
+          <h2 className={styles.heading}>Keyboard shortcuts</h2>
+          <button onClick={onClose} aria-label="Close" title="Close (Esc)" className={styles.close}>×</button>
         </div>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 'var(--space-8)', alignItems: 'start' }}>
+        <div className={styles.groups}>
           {GROUPS.map(group => (
-            <div key={group.title}>
-              <div style={{ fontSize: 'var(--font-xs)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.04em', color: 'var(--color-text-tertiary)', marginBottom: 'var(--space-3)' }}>{group.title}</div>
-              <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-                <tbody>
-                  {group.rows.map(([keys, action]) => (
-                    <tr key={keys}>
-                      <td style={{ padding: '3px 8px 3px 0', verticalAlign: 'top', whiteSpace: 'nowrap' }}>
-                        <kbd style={{
-                          background: 'var(--color-bg-canvas)', border: '1px solid var(--color-widget-border)',
-                          borderRadius: 'var(--radius-sm)', padding: '1px 6px',
-                          fontFamily: 'var(--font-family-mono)', fontSize: 'var(--font-3xs)',
-                          color: 'var(--color-text-secondary)',
-                        }}>{keys}</kbd>
-                      </td>
-                      <td style={{ padding: '3px 0', fontSize: 'var(--font-xs)', color: 'var(--color-text-secondary)' }}>{action}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+            <div key={group.title} className={group.wide ? styles.groupWide : undefined}>
+              <div className={styles.groupTitle}>{group.title}</div>
+              <dl className={styles.rows}>
+                {group.rows.map(([keys, action]) => (
+                  <Fragment key={keys}>
+                    <dt className={styles.keyCell}><kbd className={styles.kbd}>{keys}</kbd></dt>
+                    <dd className={styles.action}>{action}</dd>
+                  </Fragment>
+                ))}
+              </dl>
             </div>
           ))}
         </div>
-        <div style={{ marginTop: 'var(--space-6)', fontSize: 'var(--font-3xs)', color: 'var(--color-text-tertiary)' }}>
-          Press <kbd style={{ background: 'var(--color-bg-canvas)', border: '1px solid var(--color-widget-border)', borderRadius: 'var(--radius-sm)', padding: '0 5px', fontFamily: 'var(--font-family-mono)' }}>Esc</kbd> to close.
+        <div className={styles.footer}>
+          Press <kbd className={styles.kbd}>Esc</kbd> to close.
         </div>
       </div>
     </div>
