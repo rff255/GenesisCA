@@ -14,6 +14,9 @@ import { NeighborIndexValuePicker } from '../modeler/panels/NeighborIndexDefault
 import { LookupTableEditor } from '../modeler/panels/LookupTableEditor';
 import { compileGraphWebGPU } from '../modeler/vpl/compiler/webgpu/compile';
 import { createSimWorker } from './createSimWorker';
+import { buildModelDocument } from './showCode';
+import { computeDefaultModelAttrs } from '../model/modelAttrDefaults';
+import type { AgentCodeBundle } from './showCode';
 import { Gl3DRenderer, panCamera, cameraBasis, sceneCameraMatrices, lightWorldDirFor, computeLightMVP, DEFAULT_LIGHT3D, DEFAULT_METABALLS3D, metaballAutoThreshold, DEFAULT_AUTOZOOM3D, defaultCamera3d, applyPov, povAlignedWith, MAX_ORBIT_PITCH, MIN_CAM_DIST, MAX_CAM_DIST } from './render/gl3d';
 import type { SpriteAtlasInput, Light3D, Metaballs3D, AutoZoom3D } from './render/gl3d';
 import type { VoxelRenderView } from './engine/webgpuRuntime';
@@ -1247,10 +1250,16 @@ function safeCompileGraph(
  *  statistically equivalent. Before this, reading your own rule meant SWITCHING
  *  THE ENGINE (and then debugging a different one than you were running), and two
  *  of the three engines showed no source at all. */
+/**  Since the port-ready-document change this is no longer just the compiled
+ *  functions: `buildModelDocument` prepends the MODEL DEFINITION (every fact the
+ *  functions depend on but do not contain — geometry, storage, neighbour tables,
+ *  model-attribute values, lookup TABLE DATA, indicator slots) and a DRIVER
+ *  SKELETON (the exact call order + buffer discipline the engine performs around
+ *  them), so the panel is enough to reimplement the model elsewhere. */
 function referenceSourceFor(
   model: CAModel,
   result: CompileResult,
-  buildFullCode: (r: CompileResult) => string,
+  opts: { modelAttrs?: Record<string, number>; activeViewer?: string; agent?: AgentCodeBundle } = {},
 ): string {
   const res = resolveEngines(model);
   const grid = ENGINE_CHOICE_LABEL[res.grid.resolved];
@@ -1259,7 +1268,15 @@ function referenceSourceFor(
     ? `the grid on ${grid}, agents on ${agents}`
     : `on ${grid}`;
   return (
-    `/* Reference semantics — the engine runs ${running}.\n` +
+    `/* GenesisCA — model reference document.\n` +
+    ` *\n` +
+    ` * PART 1  MODEL DEFINITION    — the state the rule runs on.\n` +
+    ` * PART 2  DRIVER SKELETON     — what the engine does around the rule.\n` +
+    ` * PART 3  COMPILED FUNCTIONS  — the rule itself.\n` +
+    ` *\n` +
+    ` * Together these are everything needed to reimplement this model in another\n` +
+    ` * language or engine: the compiled functions below are called BY a driver that\n` +
+    ` * supplies all of Part 1, and Part 2 is that driver.\n` +
     ` *\n` +
     ` * This is the JS reference source: the definition of what your graph means.\n` +
     ` * WebAssembly is verified bit-identical to it (the permanent parity harness);\n` +
@@ -1267,45 +1284,12 @@ function referenceSourceFor(
     ` * The engine you run does not change these semantics, so this panel does not\n` +
     ` * change with it.\n` +
     ` */\n\n`
-  ) + buildFullCode(result);
+  ) + buildModelDocument(model, result, {
+    ...opts,
+    engineNote: `The engine currently runs ${running}.`,
+  });
 }
 
-// Build the runtime model-attribute value map from each model attribute's
-// declared default. Shared by worker init and the "Reset to Default" button.
-function computeDefaultModelAttrs(attributes: Attribute[]): Record<string, number> {
-  const mAttrs: Record<string, number> = {};
-  for (const a of attributes) {
-    if (!a.isModelAttribute) continue;
-    switch (a.type) {
-      case 'bool': mAttrs[a.id] = a.defaultValue === 'true' ? 1 : 0; break;
-      case 'integer': mAttrs[a.id] = parseInt(a.defaultValue, 10) || 0; break;
-      case 'float': mAttrs[a.id] = parseFloat(a.defaultValue) || 0; break;
-      case 'neighborIndex': {
-        // Stored value is the packed (dr, dc) i32 (see NeighborIndexDefaultEditor).
-        // INVALID_NI on a model attribute is meaningless at runtime — normalize to 0.
-        const n = parseInt(a.defaultValue, 10);
-        mAttrs[a.id] = (Number.isFinite(n) && n !== INVALID_NI) ? (n | 0) : 0;
-        break;
-      }
-      case 'color': {
-        // #rrggbb (alpha absent → 255) or #rrggbbaa. Slot names must match
-        // `modelAttrSlotKeys` — the layout-lockstep invariant.
-        const c = hexToRgba(a.defaultValue || '#808080');
-        mAttrs[a.id + '_r'] = c.r;
-        mAttrs[a.id + '_g'] = c.g;
-        mAttrs[a.id + '_b'] = c.b;
-        mAttrs[a.id + '_a'] = c.a;
-        break;
-      }
-      case 'lookupTable':
-        // Lives in `interactionTables` worker payload (separate from the
-        // scalar `modelAttrs` record). Don't allocate a slot here.
-        break;
-      default: mAttrs[a.id] = 0;
-    }
-  }
-  return mAttrs;
-}
 
 /** Compare two attribute lists for STRUCTURAL changes only — the kind of changes
  *  that affect worker init (buffer layout, indicator ids, sub-attribute parent
@@ -3684,28 +3668,20 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
     return { data: out.data, width: outW, height: outH };
   }, []);
 
-  // Build full code display from all compiled functions
-  const buildFullCode = useCallback((result: ReturnType<typeof compileGraph>) => {
-    const parts: string[] = [];
-    if (result.stepCode) {
-      parts.push('// === Step Function ===\n' + result.stepCode);
-    }
-    if (result.initCode) {
-      parts.push('// === Init Event (per-cell, runs once on Reset) ===\n' + result.initCode);
-    }
-    if (result.gridInitCode) {
-      parts.push('// === Grid Init Event (global, runs once on Reset) ===\n' + result.gridInitCode);
-    }
-    for (const ic of result.inputColorCodes) {
-      const m = model.mappings.find(mp => mp.id === ic.mappingId);
-      parts.push(`// === Input Mapping: ${m?.name || ic.mappingId} ===\n${ic.code}`);
-    }
-    for (const om of result.outputMappingCodes) {
-      const m = model.mappings.find(mp => mp.id === om.mappingId);
-      parts.push(`// === Output Mapping: ${m?.name || om.mappingId} ===\n${om.code}`);
-    }
-    return parts.join('\n\n');
-  }, [model.mappings]);
+  // The last compiled AGENT bundle, so Show Code can document the agent
+  // functions + their ABI. A ref (not state): it is only read when a document is
+  // rebuilt, and the agent compile always happens right after the cell one.
+  const agentCodeRef = useRef<AgentCodeBundle | undefined>(undefined);
+
+  /** Rebuild the Show Code document. Kept as ONE call site so the live
+   *  model-attribute values / active viewer / agent bundle are always threaded. */
+  const refreshShowCode = useCallback((m: CAModel, result: CompileResult, agent?: AgentCodeBundle) => {
+    setCompiledCode(referenceSourceFor(m, result, {
+      modelAttrs: runtimeModelAttrsLatest.current,
+      activeViewer: activeViewerRef.current,
+      agent: agent ?? agentCodeRef.current,
+    }));
+  }, []);
 
   // Compile graph (deps include indicator watched state since it affects compiled code).
   // Always returns the JS CompileResult — it's the universal fallback for the worker
@@ -3722,7 +3698,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
     // worker skips the cell step via gridCells). Agent compile errors still surface
     // via the worker `error` message.
     const gridOn = model.topologyMode?.gridCells !== false;
-    setCompiledCode(referenceSourceFor(model, result, buildFullCode));
+    refreshShowCode(model, result);
     if (m.properties.useWebGPU) {
       try {
         const wgpu = compileGraphWebGPU(m.graphNodes, m.graphEdges, m);
@@ -3735,7 +3711,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
     }
     return result;
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [model, buildFullCode]);
+  }, [model, refreshShowCode]);
 
   // Bond-Graph Agents: compile the agent rule graph (the second graph). JS-only
   // (Decision D-TARGET). PR-A2 returns a placeholder (agents seed + render but
@@ -7060,6 +7036,11 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
     // store↔module offset mismatch. Offset the agent stop indices by the cell
     // graph's stop-message count (shared _stopFlag + messages).
     const agentResult = compileAgentModel(result.stopMessages.length, dimsModel);
+    // Show Code: the document also documents the AGENT functions + their ABI, so
+    // rebuild it now that the agent bundle exists (compileModel() above ran first
+    // and could only see the cell half).
+    agentCodeRef.current = agentResult;
+    if (dimsModel.topologyMode?.agents) refreshShowCode(dimsModel, result, agentResult);
     // Surface the AGENT graph's compile error too (it was console.warn-only —
     // "agents never move and nothing says why" was the observable symptom, e.g.
     // "No Behaviour Step node in the agent graph.").
@@ -7760,10 +7741,11 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       // dims-derived regions, so they must see the same override the grid
       // compilers get (the resize hash-reserve/offset-desync fix).
       const agentResult = compileAgentModel(result.stopMessages.length, dimsModel);
+      agentCodeRef.current = agentResult;
       // C4 — Show Code is ALWAYS the JS reference source (same as compileModel()).
       // Agents-only model → suppress the expected cell "No nodes / No Step" error.
       const gridOn = dimsModel.topologyMode?.gridCells !== false;
-      setCompiledCode(referenceSourceFor(model, result, buildFullCode));
+      refreshShowCode(dimsModel, result, agentResult);
       if (dimsModel.properties.useWebGPU) {
         try {
           const wgpu = compileGraphWebGPU(dimsModel.graphNodes, dimsModel.graphEdges, dimsModel);
