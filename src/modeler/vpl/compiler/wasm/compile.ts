@@ -36,6 +36,7 @@ import {
   importFuncDesc, importMemoryDesc, leb128u,
 } from './encoder';
 import { INVALID_NI, packNI, packNI3, NI_ARRAY_PRODUCERS } from '../niCodec';
+import { inputParamsForNode } from '../../../../model/inputMappingParams';
 import {
   WasmEmitter, ArrayRef, LocalRef, ValueRef, pushValueAs, isInline,
 } from './emitter';
@@ -6820,10 +6821,14 @@ function compileFlowChain(sourceNodeId: string, sourcePortId: string, ctx: WasmC
 interface EntryPointOpts {
   /** Entry node (Step / InputColor / OutputMapping) */
   entry: GraphNode;
-  /** Number of i32 params (1 for step/outputMapping = total; 4 for inputColor = idx,r,g,b) */
+  /** Total param count (1 for step/outputMapping = total; 1 + channelCount for
+   *  inputColor = idx + one brush channel each). Param VALTYPES are NOT uniform
+   *  any more: a legacy inputColor is `(i32 idx, i32 r, i32 g, i32 b)` while a
+   *  PARAMETERIZED one is `(i32 idx, f64 c0, … f64 cN)` — each channel's type
+   *  travels with it in `paramOutputs`. */
   numParams: number;
   /** What's in each param slot (param index 0..numParams-1).
-   *  For inputColor we need: 0 = idx, 1 = r, 2 = g, 3 = b. */
+   *  For inputColor we need: 0 = idx, 1..N = the resolved brush channels. */
   iLocalSource: 'param0' | 'param0WithLoop';
   /** True if this entry runs the per-cell loop over `total` (param 0). */
   hasLoop: boolean;
@@ -6833,8 +6838,13 @@ interface EntryPointOpts {
    *  OutputMapping does NOT (runs sequentially regardless of update mode,
    *  matching JS compiler behaviour). */
   useOrderArrayInAsync: boolean;
-  /** For InputColor: maps the entry node's r/g/b output ports to param indices 1, 2, 3. */
-  paramOutputs?: Record<string, number>;
+  /** For InputColor: maps the entry node's CHANNEL output ports to their function
+   *  params. The `LocalRef` carries the param index AND its VALTYPE — a legacy
+   *  r/g/b channel is `I32` (byte-identical to the historical hardcoding), a
+   *  declared parameter's channel is `F64`. ⚠ A wrong valtype here does NOT
+   *  crash: it reinterprets an f64 param's bits as an i32 local and produces
+   *  plausible garbage. Both registration sites below must stay in step. */
+  paramOutputs?: Record<string, LocalRef>;
   /** "Skip Isolated Empty Cells": emit the sparse loop variant. The entry gains
    *  a 2nd i32 param `activeCount` — `>= 0` iterates the active-list region
    *  (`layout.activeListOffset`), `< 0` (the worker's -1 sentinel) runs the
@@ -6883,13 +6893,14 @@ function compileEntry(
   const layerLocal = is3dEntry ? emitter.allocLocal(I32) : -1;
   const remLocal = is3dEntry ? emitter.allocLocal(I32) : -1;
 
-  // paramRefs: register InputColor's r/g/b outputs as param-backed locals.
-  // These are ALWAYS i32 in the param signature.
+  // paramRefs: register InputColor's CHANNEL outputs as param-backed locals.
+  // The valtype travels WITH each ref (I32 for the legacy r/g/b trio, F64 for a
+  // declared parameter's channel) — see EntryPointOpts.paramOutputs.
   const paramRefs = new Map<string, Map<string, LocalRef>>();
   if (opts.paramOutputs) {
     const m = new Map<string, LocalRef>();
-    for (const [portId, paramIdx] of Object.entries(opts.paramOutputs)) {
-      m.set(portId, { localIdx: paramIdx, valtype: I32 });
+    for (const [portId, ref] of Object.entries(opts.paramOutputs)) {
+      m.set(portId, { localIdx: ref.localIdx, valtype: ref.valtype });
     }
     paramRefs.set(opts.entry.id, m);
   }
@@ -7105,10 +7116,12 @@ function compileEntry(
     }
 
     // Re-register paramRefs after the cache clear (they're stable across cells).
+    // MIRRORS the registration above — including the per-channel VALTYPE. Missing
+    // this site would leave a stale I32 ref that reads an f64 param's bits.
     if (opts.paramOutputs) {
       const m = new Map<string, LocalRef>();
-      for (const [portId, paramIdx] of Object.entries(opts.paramOutputs)) {
-        m.set(portId, { localIdx: paramIdx, valtype: I32 });
+      for (const [portId, ref] of Object.entries(opts.paramOutputs)) {
+        m.set(portId, { localIdx: ref.localIdx, valtype: ref.valtype });
       }
       ctx.paramRefs.set(opts.entry.id, m);
     }
@@ -7681,26 +7694,67 @@ export function compileGraphWasm(
 
   // InputColor (one per mapping) — single cell, no loop. Per-cell preamble
   // still needs copy lines (so subsequent step sees the painted state).
+  //
+  // PARAMETERIZED mappings (Mapping.parameters declared) get a signature minted
+  // PER ARITY: `(i32 idx, f64 c0, … f64 cN) -> ()`, one f64 per resolved CHANNEL.
+  // A mapping with NO declared parameters resolves LEGACY and keeps
+  // TYPE_IDX_IDX_RGB `(i32,i32,i32,i32)` verbatim — so a legacy module's type
+  // section, function types and bodies are byte-identical.
+  //
+  // WHY f64 for every declared channel rather than per-type i32/f64: one uniform
+  // convention needs one arity key, matches the JS ABI (untyped numbers) and the
+  // agent ABI (f64 throughout), and is exact for every integer/bool/tag value a
+  // brush can produce (all ≤ 2^53). `pushValueAs` already converts f64→i32 where
+  // a consumer wants an integer.
+  //
+  // WHY WASM AT ALL (rather than letting parameterized mappings fall through to
+  // the JS fn, which the worker's per-mapping fallback already supports):
+  // `importImage` runs the input-mapping function ONCE PER CELL over the WHOLE
+  // grid — 25 M invocations at 5000². Paint is event tempo; image import is not.
+  const mintedParamTypes: Uint8Array[] = [];
+  const mintedTypeIdxByArity = new Map<number, number>();
+  const baseTypeCount = sparse ? 5 : 4;   // [pow, total, idxRgb, unary] (+ totalCount when sparse)
+  const paramTypeIdxFor = (channelCount: number): number => {
+    const hit = mintedTypeIdxByArity.get(channelCount);
+    if (hit !== undefined) return hit;
+    const idx = baseTypeCount + mintedParamTypes.length;
+    const params: ValType[] = [I32];
+    for (let i = 0; i < channelCount; i++) params.push(F64);
+    mintedParamTypes.push(funcType(params, []));
+    mintedTypeIdxByArity.set(channelCount, idx);
+    return idx;
+  };
+
   for (const ic of inputColorNodes) {
     const mappingId = (ic.data.config.mappingId as string) || '';
     const icSink = analyzeSinkScopes({
       nodes: graphNodes, edges: graphEdges, rootNodeId: ic.id, rootFlowPortId: 'do',
     });
+    const resolved = inputParamsForNode('inputColor', ic.data.config, model);
+    const paramOutputs: Record<string, LocalRef> = {};
+    resolved.channels.forEach((c, i) => {
+      // Param index i+1 (param 0 is `idx`). Legacy → I32 at 1/2/3, exactly the
+      // historical `{ r: 1, g: 2, b: 3 }` registration.
+      paramOutputs[c.portId] = { localIdx: i + 1, valtype: resolved.legacy ? I32 : F64 };
+    });
     const icRes = compileEntry(
       {
         entry: ic,
-        numParams: 4,
+        numParams: 1 + resolved.channels.length,
         iLocalSource: 'param0',
         hasLoop: false,
         emitCopyLines: true,
         useOrderArrayInAsync: false,
-        // Param indexes match the function signature: 0=idx, 1=r, 2=g, 3=b.
-        paramOutputs: { r: 1, g: 2, b: 3 },
+        paramOutputs,
       },
       layout, viewerIds, model, nodeMap, inputToSource, inputToSources, flowOutputToTargets, loopInvariant, icSink,
     );
     allErrors.push(...icRes.errors);
-    exportEntries.push({ name: `inputColor_${sanitiseExportName(mappingId)}`, typeIdx: TYPE_IDX_IDX_RGB, body: icRes.body });
+    exportEntries.push({
+      name: `inputColor_${sanitiseExportName(mappingId)}`,
+      typeIdx: resolved.legacy ? TYPE_IDX_IDX_RGB : paramTypeIdxFor(resolved.channels.length),
+      body: icRes.body,
+    });
   }
 
   if (allErrors.length > 0) {
@@ -7752,9 +7806,13 @@ export function compileGraphWasm(
   const codes = exportEntries.map(e => e.body);
 
   const bytes = buildModule({
+    // Minted parameterized-inputColor types are APPENDED after the fixed block
+    // (and after typeTotalCount when sparse — `baseTypeCount` above mirrors this
+    // exactly). A model with no parameterized mapping mints none, so its type
+    // section is byte-identical.
     types: sparse
-      ? [typePow, typeTotal, typeIdxRgb, typeUnary, typeTotalCount]
-      : [typePow, typeTotal, typeIdxRgb, typeUnary],
+      ? [typePow, typeTotal, typeIdxRgb, typeUnary, typeTotalCount, ...mintedParamTypes]
+      : [typePow, typeTotal, typeIdxRgb, typeUnary, ...mintedParamTypes],
     imports: [memImport, powImport, ...unaryImports],
     funcs,
     exports,

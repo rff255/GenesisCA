@@ -26,11 +26,12 @@ export const AgentInputMappingNode: NodeTypeDef = {
   category: 'event',
   color: '#ffffff',
   requirements: { bondGraph: true },
+  // Value outputs are DYNAMIC — one per resolved channel of the referenced agent
+  // mapping's declared `parameters` (the same `buildInputParamPorts` builder the
+  // cell `inputColor` root uses). No declared parameters ⇒ the LEGACY colour
+  // parameter ⇒ exactly the R/G/B ports this node shipped with.
   ports: [
     { id: 'do', label: 'DO', kind: 'output', category: 'flow' },
-    { id: 'r', label: 'R', kind: 'output', category: 'value', dataType: 'integer' },
-    { id: 'g', label: 'G', kind: 'output', category: 'value', dataType: 'integer' },
-    { id: 'b', label: 'B', kind: 'output', category: 'value', dataType: 'integer' },
   ],
   defaultConfig: { mappingId: '' },
   compile: () => '', // Root node — the agent compiler handles it specially.

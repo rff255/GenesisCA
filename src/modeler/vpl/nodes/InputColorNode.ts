@@ -6,11 +6,14 @@ export const InputColorNode: NodeTypeDef = {
   description: 'Entry point for a color-to-attribute mapping. Fires when the user paints a cell.',
   category: 'event',
   color: '#ffffff',
+  // Value outputs are DYNAMIC — one per resolved channel of the referenced
+  // mapping's declared `parameters` (`buildInputParamPorts` in
+  // src/model/inputMappingParams.ts, consumed by BOTH CaNode and
+  // effectivePorts). A mapping with no declared parameters resolves to the
+  // LEGACY colour parameter, whose channel ports are exactly R/G/B — so every
+  // existing model's wires and emitted code are unchanged.
   ports: [
     { id: 'do', label: 'DO', kind: 'output', category: 'flow' },
-    { id: 'r', label: 'R', kind: 'output', category: 'value', dataType: 'integer' },
-    { id: 'g', label: 'G', kind: 'output', category: 'value', dataType: 'integer' },
-    { id: 'b', label: 'B', kind: 'output', category: 'value', dataType: 'integer' },
   ],
   defaultConfig: { mappingId: '' },
   compile: () => '', // Root node — compiler handles it specially

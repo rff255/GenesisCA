@@ -32,6 +32,7 @@ import { computeAsyncReadWriteHazards } from './asyncWriteHazard';
 import { sparseSteppingEnabled } from './sparseStepping';
 import { expandMacros } from './macroExpand';
 import { detectDanglingRefs } from './danglingRefs';
+import { inputParamsForNode } from '../../../model/inputMappingParams';
 export { sparseSteppingEnabled } from './sparseStepping';
 import { computeVolatileHoist } from './volatileHoist';
 import {
@@ -1668,7 +1669,7 @@ export function compileGraph(
   // uninstantiated macroDef can never fail a compile) and BEFORE the lowering
   // chain (which rewrites ids). WASM/WebGPU already did this; see danglingRefs.ts.
   {
-    const dangling = detectDanglingRefs(graphNodes, model);
+    const dangling = detectDanglingRefs(graphNodes, model, graphEdges);
     if (dangling) {
       return { stepCode: '', initCode: '', gridInitCode: '', inputColorCodes: [], outputMappingCodes: [], stopMessages: [], error: dangling };
     }
@@ -2211,6 +2212,12 @@ export function compileGraph(
 
   for (const icNode of inputColorNodes) {
     const mappingId = icNode.data.config.mappingId as string || '';
+    // Parameterized Input Mappings: the leading brush arguments are the resolved
+    // CHANNEL list of the mapping's declared `parameters`. A mapping with no
+    // declared parameters resolves LEGACY — three channels whose arg names are
+    // `_r`/`_g`/`_b` — so the emitted header and alias line are character-for-
+    // character what they always were. See src/model/inputMappingParams.ts.
+    const icResolved = inputParamsForNode('inputColor', icNode.data.config, model);
     const { valueLines, preLoopValueLines, flowLines } = compileRoot(
       icNode, 'do', nodeMap, inputToSource, inputToSources, flowOutputToTargets, loopInvariant, fusion, graphNodes, graphEdges, model,
     );
@@ -2229,12 +2236,17 @@ export function compileGraph(
       return `  w_${a.id}[idx] = (${guard}) ? r_${a.id}[idx] : ${defaultLit};`;
     });
     const code = [
-      `(function(_r, _g, _b, ${cellParams}) {`,
+      `(function(${icResolved.channels.map(c => `${c.argName}, `).join('')}${cellParams}) {`,
       '  const colorIdx = idx * 4;',
       // Wave A.6: per-cell (row, col) decoded from idx for NI access helpers.
       ...decodeCoordLines(is3d, '  '),
       ...icCopyLines,
-      `  const _v${icNode.id}_r = _r; const _v${icNode.id}_g = _g; const _v${icNode.id}_b = _b;`,
+      // One alias per channel, joined on ONE line — for the legacy trio this is
+      // byte-for-byte the historical `const _vX_r = _r; const _vX_g = _g; …`.
+      // Zero channels (`parameters: []`) emits no line at all.
+      ...(icResolved.channels.length > 0
+        ? [`  ${icResolved.channels.map(c => `const _v${icNode.id}_${c.portId} = ${c.argName};`).join(' ')}`]
+        : []),
       '  let _rs = _rngState[0] || 0x12345678;',
       ...viewerHoistLines,
       ...preLoopValueLines,
@@ -2598,7 +2610,7 @@ export function compileAgentGraph(
   // from a model with different agent attributes / views must name what is
   // missing, not emit reads of undeclared identifiers.
   {
-    const dangling = detectDanglingRefs(agentNodes, model);
+    const dangling = detectDanglingRefs(agentNodes, model, agentEdges);
     if (dangling) return { behaviourCode: '', initCode: '', divisionCode: '', stopMessages: [], outputMappingCodes: [], inputMappingCodes: [], dividePartitions: [], error: dangling };
   }
   ({ nodes: agentNodes, edges: agentEdges } = collapseReroutes(agentNodes, agentEdges));
@@ -2946,6 +2958,9 @@ export function compileAgentGraph(
     for (const imNode of agentNodes.filter(n => n.data.nodeType === 'agentInputMapping')) {
       const mappingId = (imNode.data.config.mappingId as string) || '';
       try {
+        // Parameterized Input Mappings: the leading brush arguments are the
+        // resolved CHANNEL list (legacy ⇒ `_r, _g, _b`, byte-identically).
+        const imResolved = inputParamsForNode('agentInputMapping', imNode.data.config, model);
         const r = compileRoot(
           imNode, 'do', nodeMap, inputToSource, inputToSources, flowOutputToTargets,
           loopInvariant, fusion, agentNodes, agentEdges, model,
@@ -2953,7 +2968,7 @@ export function compileAgentGraph(
         const imScratch = r.scratchNodes.map(s => buildScratchDecl(s, model));
         const imVars = buildVariableJS(model.agentVariables || []);
         const code = [
-          `(function(_r, _g, _b, ${imParams}) {`,
+          `(function(${imResolved.channels.map(c => `${c.argName}, `).join('')}${imParams}) {`,
           ...imScratch,
           ...viewerHoistLines,
           ...imVars.preLoop,
@@ -2968,7 +2983,9 @@ export function compileAgentGraph(
           // `_isV_<agentMappingId>` is false (contrast runAgentColorPass, which
           // passes the pass's own mappingId). Colour belongs to the Output Mapping.
           '  const colorIdx = idx * 4;',
-          `  const _v${imNode.id}_r = _r; const _v${imNode.id}_g = _g; const _v${imNode.id}_b = _b;`,
+          ...(imResolved.channels.length > 0
+            ? [`  ${imResolved.channels.map(c => `const _v${imNode.id}_${c.portId} = ${c.argName};`).join(' ')}`]
+            : []),
           '  let _rs = _rngState[0] || 0x12345678;',
           ...r.preLoopValueLines,
           ...r.valueLines,
