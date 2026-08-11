@@ -1,0 +1,151 @@
+/* KeyboardShortcutsOverlay — layout for the cheat-sheet modal.
+
+   THE LAYOUT RULE this file exists to enforce: a shortcut row is a key chip
+   (never broken mid-shortcut) beside its description, and the DESCRIPTION gets
+   whatever width is left. The chip column is `max-content`, so it is exactly as
+   wide as that group's widest chip and every row in the group lines up.
+
+   That only reads well if the group is wide enough for the chip PLUS a sane
+   description. Two rules keep it so:
+     - `.groupWide` — a group whose chips are long (the 3D view section, whose
+       widest chip is ~200px) spans the whole grid instead of sharing a column.
+     - the narrow-viewport media query — below ~420px even a full-width group
+       cannot fit chip + description side by side, so the chip moves ABOVE its
+       description and the description takes the full width. */
+
+.backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-8);
+}
+
+.card {
+  background: var(--color-bg-panel);
+  border: 1px solid var(--color-border);
+  border-radius: var(--panel-radius);
+  box-shadow: var(--shadow-lg);
+  /* Wide enough for two comfortable columns of shortcuts: two 330px-minimum
+     tracks + the column gap + the card padding, with room to spare. */
+  max-width: 780px;
+  width: 100%;
+  max-height: 85vh;
+  overflow-y: auto;
+  padding: var(--space-8);
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: var(--space-6);
+}
+
+.heading {
+  margin: 0;
+  font-size: var(--font-lg);
+  font-weight: 500;
+  color: var(--color-heading);
+}
+
+.close {
+  background: transparent;
+  border: 1px solid var(--color-widget-border);
+  border-radius: var(--radius-md);
+  color: var(--color-text-secondary);
+  width: 26px;
+  height: 26px;
+  cursor: pointer;
+  font-size: var(--font-md);
+  line-height: 1;
+}
+
+.close:hover {
+  color: var(--color-text-primary);
+  border-color: var(--color-border);
+}
+
+.groups {
+  display: grid;
+  /* Drops to one column on its own once a track would fall under 330px — the
+     width at which the widest chip in a shared column still leaves its
+     description enough room to read in one or two lines. The `min(…, 100%)` is
+     load-bearing: a bare `minmax(330px, …)` floor cannot shrink, so on a card
+     narrower than 330px the single track would overflow it. */
+  grid-template-columns: repeat(auto-fit, minmax(min(330px, 100%), 1fr));
+  gap: var(--space-8);
+  align-items: start;
+}
+
+/* A group whose chips are too wide to share a column with a sibling. */
+.groupWide {
+  grid-column: 1 / -1;
+}
+
+.groupTitle {
+  font-size: var(--font-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--color-text-tertiary);
+  margin-bottom: var(--space-3);
+}
+
+.rows {
+  margin: 0;
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  column-gap: var(--space-4);
+  row-gap: 5px;
+  align-items: baseline;
+}
+
+.keyCell,
+.action {
+  margin: 0;
+}
+
+.kbd {
+  background: var(--color-bg-canvas);
+  border: 1px solid var(--color-widget-border);
+  border-radius: var(--radius-sm);
+  padding: 1px 6px;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-3xs);
+  color: var(--color-text-secondary);
+  /* A shortcut must never break mid-chip. */
+  white-space: nowrap;
+}
+
+.action {
+  font-size: var(--font-xs);
+  color: var(--color-text-secondary);
+}
+
+.footer {
+  margin-top: var(--space-6);
+  font-size: var(--font-3xs);
+  color: var(--color-text-tertiary);
+}
+
+/* Too narrow for chip + description side by side: stack them, so the
+   description always gets the full width instead of one word per line. */
+@media (max-width: 420px) {
+  .rows {
+    grid-template-columns: minmax(0, 1fr);
+    row-gap: 0;
+  }
+
+  .action {
+    margin-bottom: var(--space-4);
+  }
+
+  /* Last resort — a chip wider than the whole card may wrap. */
+  .kbd {
+    white-space: normal;
+  }
+}
