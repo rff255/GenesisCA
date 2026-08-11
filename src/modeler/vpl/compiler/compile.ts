@@ -94,13 +94,16 @@ const MULTI_OUTPUT_TYPES = new Set(['inputColor', 'initEvent', 'getColorConstant
   // the `_v<id>_<port>` convention.
   'agentInit', 'createAgent',
   // Composite-type Break nodes + Vector Op resolve via the `_v<id>_<port>` convention.
-  'breakVector', 'breakColor', 'vectorOp']);
+  'breakVector', 'breakColor', 'vectorOp',
+  // Agent Input Mapping (C→A) — the brush colour arrives on r/g/b, resolved via
+  // the `_v<id>_<port>` convention (the agent twin of `inputColor`).
+  'agentInputMapping']);
 
-/** The four AGENTS-graph event roots. A root in this set compiles into a
+/** The AGENTS-graph event roots. A root in this set compiles into a
  *  per-AGENT function (the agent ABI — `_agentX`, `_fieldW`, …); anything else is
  *  a per-CELL function (`W`/`H`/`D`, `r_<attr>`, …). Drives `CompileContext.agentGraph`
  *  so a UNIVERSAL node (one available on both graphs) can emit against the right ABI. */
-const AGENT_ROOT_TYPES = new Set(['behaviourStep', 'divisionEvent', 'agentInit', 'agentOutputMapping']);
+const AGENT_ROOT_TYPES = new Set(['behaviourStep', 'divisionEvent', 'agentInit', 'agentOutputMapping', 'agentInputMapping']);
 
 /** Check if a node's data uses multi-output variable naming */
 function isMultiOutput(data: { nodeType: string; config: Record<string, string | number | boolean> }): boolean {
@@ -540,7 +543,12 @@ function compileRoot(
   const hazardEligible = (!!isAsyncRoot
     && (rootNode.data.nodeType === 'step' || rootNode.data.nodeType === 'initEvent'))
     || (rootNode.data.nodeType === 'behaviourStep' && agentAttrsAsync)
-    || rootNode.data.nodeType === 'divisionEvent';
+    || rootNode.data.nodeType === 'divisionEvent'
+    // An Agent INPUT Mapping's `w_` block ALIASES `attrRead` too (the 'input' ABI
+    // kind), which is the exact reason divisionEvent is listed: a Set Attribute
+    // followed by a Get Self Attribute on the SAME attr would otherwise be
+    // sink-hoisted above the write and read the pre-write value.
+    || rootNode.data.nodeType === 'agentInputMapping';
   const hazardReads = computeAsyncReadWriteHazards({
     nodeMap, inputToSource, inputToSources, flowOutputToTargets,
     rootNodeId: rootNode.id, rootFlowPortId: rootFlowPort, isAsync: hazardEligible,
@@ -2407,6 +2415,14 @@ export interface AgentCompileResult {
    *  whose `mappingId` matches the active AGENT viewer after the agent step + on
    *  mutations. Empty when the model has no agent mappings. */
   outputMappingCodes: Array<{ mappingId: string; code: string }>;
+  /** Agent INPUT Mappings (C→A): one SINGLE-agent function source per
+   *  `agentInputMapping` root, keyed by its mapping id. The worker runs the one
+   *  whose `mappingId` matches the brush's selected input mapping, once per
+   *  painted agent (`paintAgentsColor`). JS-on-CPU on every agent target — this
+   *  is an EVENT-tempo function (a user gesture), the same posture as the agent
+   *  colour pass and the Division Event. Empty when the model has no agent input
+   *  mappings, so every existing model's compile output is untouched. */
+  inputMappingCodes: Array<{ mappingId: string; code: string }>;
   /** P5 — the DIVISION BOND PARTITION table: one entry per DISTINCT Divide Agent
    *  partition spec, in first-encounter order. Each node's `_divideIdx` (baked
    *  here, read by all three emitters) is `index + 1`, and that 1-based code is
@@ -2491,6 +2507,16 @@ export function buildAgentInitParams(model: CAModel): string {
   return buildAgentAbiParams('init', agentAbiShapeOf(model));
 }
 
+/** The Agent INPUT Mapping (C→A) function signature — a SINGLE-agent function
+ *  (NOT loop-wrapped) run once per PAINTED agent. Structurally the division
+ *  signature minus the daughter scalars (see `AgentAbiKind`). The worker's
+ *  `buildAgentInputArgs` MIRRORS it. NOTE the three brush-colour params
+ *  (`_r, _g, _b`) are prepended by the CALLER, exactly like the cell inputColor
+ *  signature — they are not part of the shared descriptor. */
+export function buildAgentInputParams(model: CAModel): string {
+  return buildAgentAbiParams('input', agentAbiShapeOf(model));
+}
+
 export function buildAgentLoopParams(model: CAModel): { params: string; agentAttrs: Array<{ id: string; type: string }> } {
   // Derived from the shared layout-agnostic descriptor (agentAbi.ts). The
   // behaviourStep signature — mirrored by the worker's `buildAgentLoopArgs` + the
@@ -2546,12 +2572,12 @@ export function compileAgentGraph(
    *  graph's stop-message count so `[...cellStops, ...agentStops]` aligns 1-based. */
   stopIdxBase = 0,
 ): AgentCompileResult {
-  if (!model) return { behaviourCode: '', initCode: '', divisionCode: '', stopMessages: [], outputMappingCodes: [], dividePartitions: [], error: 'Model required.' };
+  if (!model) return { behaviourCode: '', initCode: '', divisionCode: '', stopMessages: [], outputMappingCodes: [], inputMappingCodes: [], dividePartitions: [], error: 'Model required.' };
 
   // Flatten macros, strip reroutes — same front-end pipeline the cell compiler runs.
   {
     const expanded = expandMacros(agentNodes, agentEdges, model);
-    if (expanded.error) return { behaviourCode: '', initCode: '', divisionCode: '', stopMessages: [], outputMappingCodes: [], dividePartitions: [], error: expanded.error };
+    if (expanded.error) return { behaviourCode: '', initCode: '', divisionCode: '', stopMessages: [], outputMappingCodes: [], inputMappingCodes: [], dividePartitions: [], error: expanded.error };
     agentNodes = expanded.nodes;
     agentEdges = expanded.edges;
   }
@@ -2560,7 +2586,7 @@ export function compileAgentGraph(
   // missing, not emit reads of undeclared identifiers.
   {
     const dangling = detectDanglingRefs(agentNodes, model);
-    if (dangling) return { behaviourCode: '', initCode: '', divisionCode: '', stopMessages: [], outputMappingCodes: [], dividePartitions: [], error: dangling };
+    if (dangling) return { behaviourCode: '', initCode: '', divisionCode: '', stopMessages: [], outputMappingCodes: [], inputMappingCodes: [], dividePartitions: [], error: dangling };
   }
   ({ nodes: agentNodes, edges: agentEdges } = collapseReroutes(agentNodes, agentEdges));
   // Neighbour State Census → the gather + one Count Matching per CONSUMED state
@@ -2666,7 +2692,7 @@ export function compileAgentGraph(
 
   const behaviourNode = agentNodes.find(n => n.data.nodeType === 'behaviourStep');
   if (!behaviourNode) {
-    return { behaviourCode: '', initCode: '', divisionCode: '', stopMessages, outputMappingCodes: [], dividePartitions, error: 'No Behaviour Step node in the agent graph.' };
+    return { behaviourCode: '', initCode: '', divisionCode: '', stopMessages, outputMappingCodes: [], inputMappingCodes: [], dividePartitions, error: 'No Behaviour Step node in the agent graph.' };
   }
 
   const { nodeMap, inputToSource, inputToSources, flowOutputToTargets } = buildAdjacency(agentNodes, agentEdges);
@@ -2713,7 +2739,7 @@ export function compileAgentGraph(
       const src = inputToSource.get(`${id}:${targetPort}`);
       if (src && nodeMap.get(src.nodeId)?.data.nodeType === 'createAgent') continue;
       const label = getNodeDef(node.data.nodeType)?.label ?? node.data.nodeType;
-      return { behaviourCode: '', initCode: '', divisionCode: '', stopMessages, outputMappingCodes: [], dividePartitions,
+      return { behaviourCode: '', initCode: '', divisionCode: '', stopMessages, outputMappingCodes: [], inputMappingCodes: [], dividePartitions,
         error: `"${label}" writes another agent's state, which races that agent's own update in Synchronous agent mode. Switch to Asynchronous agent mode (Model Properties > Bond-Graph Agents), or target a Create Agent handle (spawn configuration).` };
     }
   }
@@ -2895,8 +2921,58 @@ export function compileAgentGraph(
     }
   }
 
+  // --- Agent INPUT Mappings (C→A) — compile EVERY `agentInputMapping` root into
+  // a SINGLE-agent function the worker runs once per PAINTED agent. The shape
+  // mirrors the cell `inputColor` fn exactly: three leading brush-colour params
+  // (`_r, _g, _b`) then the per-agent ABI, `colorIdx` so Set Cell Looks works,
+  // and the root's r/g/b value-outs aliased to the params. Unlike the OM passes
+  // this is NOT loop-wrapped — the caller supplies the painted agent's `idx`. ---
+  const inputMappingCodes: Array<{ mappingId: string; code: string }> = [];
+  {
+    const imParams = buildAgentInputParams(model);
+    for (const imNode of agentNodes.filter(n => n.data.nodeType === 'agentInputMapping')) {
+      const mappingId = (imNode.data.config.mappingId as string) || '';
+      try {
+        const r = compileRoot(
+          imNode, 'do', nodeMap, inputToSource, inputToSources, flowOutputToTargets,
+          loopInvariant, fusion, agentNodes, agentEdges, model,
+        );
+        const imScratch = r.scratchNodes.map(s => buildScratchDecl(s, model));
+        const imVars = buildVariableJS(model.agentVariables || []);
+        const code = [
+          `(function(_r, _g, _b, ${imParams}) {`,
+          ...imScratch,
+          ...viewerHoistLines,
+          ...imVars.preLoop,
+          // Scalar `let`s + array fills run ONCE (single-agent, no loop) — the
+          // Agent Init Event's shape, not the behaviour loop's.
+          ...imVars.inLoopReset.map(l => l.trimStart()).map(l => '  ' + l),
+          // `colorIdx` is declared so a Set Cell Looks placed here COMPILES, but note
+          // it can never be the last word on the agent's colour: the worker runs
+          // `runAgentColorPass()` immediately after this fn (the paintAgents tail),
+          // which overwrites `colors[idx*4..]`. A mapping-guarded write additionally
+          // never fires — `buildAgentInputArgs` passes the CELL `activeViewer`, so
+          // `_isV_<agentMappingId>` is false (contrast runAgentColorPass, which
+          // passes the pass's own mappingId). Colour belongs to the Output Mapping.
+          '  const colorIdx = idx * 4;',
+          `  const _v${imNode.id}_r = _r; const _v${imNode.id}_g = _g; const _v${imNode.id}_b = _b;`,
+          '  let _rs = _rngState[0] || 0x12345678;',
+          ...r.preLoopValueLines,
+          ...r.valueLines,
+          '',
+          ...r.flowLines,
+          '  _rngState[0] = _rs;',
+          '})',
+        ].join('\n');
+        inputMappingCodes.push({ mappingId, code });
+      } catch (e) {
+        omErrors.push(`agent input mapping "${mappingId || '(unset)'}": ${(e as Error)?.message || e}`);
+      }
+    }
+  }
+
   return {
-    behaviourCode, initCode, divisionCode, stopMessages, outputMappingCodes, dividePartitions,
+    behaviourCode, initCode, divisionCode, stopMessages, outputMappingCodes, inputMappingCodes, dividePartitions,
     error: omErrors.length > 0 ? omErrors.join('\n') : undefined,
   };
 }

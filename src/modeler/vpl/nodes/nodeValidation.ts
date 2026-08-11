@@ -126,9 +126,13 @@ export function detectMissingConfig(
   // Generic Agent Platform: the AGENT Attribute→Color views (separate id-space
   // from the cell mappings). Used by agentOutputMapping + by setCellLooks on the
   // Agents graph (which colours an agent for an agent viewer).
-  const hasAgentMapping = (id: unknown) =>
+  /** Direction-scoped agent-mapping checks. `agentMappings` holds BOTH directions
+   *  (discriminated by `isAttributeToColor`, like the cell list), so an A->C root
+   *  pointed at a C->A mapping (or vice versa) would compile to a pass nothing
+   *  ever runs -- badge it instead. */
+  const hasAgentMappingDir = (id: unknown, a2c: boolean) =>
     typeof id === 'string' && id.length > 0 &&
-    (model.agentMappings ?? []).some(m => m.id === id);
+    (model.agentMappings ?? []).some(m => m.id === id && m.isAttributeToColor === a2c);
   const hasIndicator = (id: unknown) =>
     typeof id === 'string' && id.length > 0 &&
     (model.indicators || []).some(i => i.id === id);
@@ -402,8 +406,12 @@ export function detectMissingConfig(
       // The "Current Simulator Selected" sentinel is always valid — it targets
       // whichever viewer is active at runtime, not a model mapping. Accept a CELL
       // mapping (Cells graph) OR an AGENT mapping (Agents graph — colours an agent).
+      // The AGENT arm is direction-scoped: Set Cell Looks writes a COLOUR, so a
+      // C->A input-mapping id there is dead code (its `_isV_` guard compares
+      // against a colour viewer, which a C->A id never is). The picker already
+      // filters; this badges a pasted / hand-edited config.
       if (config.mappingId !== CURRENT_VIEWER_SENTINEL
-        && !hasMapping(config.mappingId) && !hasAgentMapping(config.mappingId)) {
+        && !hasMapping(config.mappingId) && !hasAgentMappingDir(config.mappingId, true)) {
         issues.push('Select a mapping');
       }
       // The 3D voxel renderer consumes only the RGBA colors buffer — glyph
@@ -422,7 +430,13 @@ export function detectMissingConfig(
     // Generic Agent Platform — the agent analogue of outputMapping. Roots a
     // per-agent colour/exhibition pass over an AGENT mapping.
     case 'agentOutputMapping':
-      if (!hasAgentMapping(config.mappingId)) issues.push('Select an agent view (mapping)');
+      if (!hasAgentMappingDir(config.mappingId, true)) issues.push('Select an agent view (mapping)');
+      break;
+
+    // The agent analogue of inputColor -- roots a single-agent graph the Paint
+    // brush runs on each painted agent (its C->A mapping is the brush tab).
+    case 'agentInputMapping':
+      if (!hasAgentMappingDir(config.mappingId, false)) issues.push('Select an agent input mapping');
       break;
 
     case 'setAgentSprite':

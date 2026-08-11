@@ -89,7 +89,9 @@ function selectedItemName(model: CAModel, panel: PanelId, id: string | null, age
   }
   if (panel === 'neighborhoods') return model.neighborhoods.find(n => n.id === id)?.name ?? null;
   if (panel === 'mappings') {
-    // Discriminated `agentmap:<id>` (an AGENT Attribute→Color view) / `sprite:<id>`
+    // Discriminated `agentmap:<id>` (an AGENT mapping — EITHER direction, since
+    // `agentMappings` holds both the A→C views and the C→A input mappings) /
+    // `sprite:<id>`
     // (a Sprite Library asset) vs a bare id (a CELL mapping) — three separate
     // id-spaces sharing this panel's ONE detail slot. Same ⚠ as the attributes
     // panel above: an unresolved prefix leaves the detail PanelShell unmounted,

@@ -24,7 +24,23 @@ import type { AgentStore } from '../../../simulator/engine/agentEngine';
 import type { AgentCapabilities } from '../../../model/types';
 import { normalizeFieldGates, type AgentFieldGates } from '../../../model/agentFieldGating';
 
-export type AgentAbiKind = 'loop' | 'division' | 'init';
+/** The agent function kinds that share this ABI.
+ *  - `loop`     — the per-agent behaviour step (+ every agent Output Mapping pass).
+ *  - `division` — the Division Event: a SINGLE-agent fn run per daughter.
+ *  - `init`     — the Agent Init Event: a once-per-reset setup fn (no `idx`).
+ *  - `input`    — an Agent INPUT Mapping (C→A): a SINGLE-agent fn run once per
+ *                 PAINTED agent. Structurally the division kind minus the
+ *                 daughter-specific leading scalars: it leads with `idx`, its
+ *                 `w_` block ALIASES `attrRead` (a paint is a sequential mutation
+ *                 BETWEEN steps, so a write must land on the live buffer — under
+ *                 sync agent mode `primeAgentAttrWrite` copies attrRead→attrWrite
+ *                 at the top of the next step, so writing attrWrite would be
+ *                 silently discarded), and it gets no hash / request / spawn
+ *                 buffers (a paint gesture does not query neighbours or mutate
+ *                 topology). The brush colour rides three LEADING params the
+ *                 compiler adds outside this descriptor (`_r, _g, _b`), exactly
+ *                 like the cell `inputColor` signature. */
+export type AgentAbiKind = 'loop' | 'division' | 'init' | 'input';
 
 /** The primitives the descriptor needs — every site can produce these. Order of
  *  `agentAttrs` / `fieldAttrs` MUST match across sites (they all derive from
@@ -133,15 +149,23 @@ export function deriveAgentAbi(kind: AgentAbiKind, shape: AgentAbiShape, profile
   // already produces a shape, and none produces a profile.)
   const gates = normalizeFieldGates(shape.gates);
   const fields: AgentAbiField[] = [];
+  /** The SINGLE-agent kinds: they take a leading `idx` and their `w_` block
+   *  aliases `attrRead` (immediate writes in a sequential, between-steps pass).
+   *  `input` is `division` minus the daughter scalars — every branch below that
+   *  reads `division` for that reason reads this instead, so the two can never
+   *  drift apart. */
+  const singleAgent = kind === 'division' || kind === 'input';
 
-  // --- leading positional args (division / init) ---
-  if (kind === 'division') {
-    fields.push(
-      F('idx', 'scalar', (_s, rt) => rt.idx),
-      F('__daughterIndex', 'scalar', (_s, rt) => rt.daughterIndex),
-      F('__axisDefaultX', 'scalar', (_s, rt) => rt.axisX),
-      F('__axisDefaultY', 'scalar', (_s, rt) => rt.axisY),
-    );
+  // --- leading positional args (division / input / init) ---
+  if (singleAgent) {
+    fields.push(F('idx', 'scalar', (_s, rt) => rt.idx));
+    if (kind === 'division') {
+      fields.push(
+        F('__daughterIndex', 'scalar', (_s, rt) => rt.daughterIndex),
+        F('__axisDefaultX', 'scalar', (_s, rt) => rt.axisX),
+        F('__axisDefaultY', 'scalar', (_s, rt) => rt.axisY),
+      );
+    }
   } else if (kind === 'init') {
     fields.push(
       F('_agentCreate', 'fn', (_s, rt) => rt.agentCreate),
@@ -150,8 +174,8 @@ export function deriveAgentAbi(kind: AgentAbiKind, shape: AgentAbiShape, profile
     );
   }
 
-  // --- liveness + loop control (loop / division carry it; init doesn't loop) ---
-  if (kind === 'loop' || kind === 'division') {
+  // --- liveness + loop control (loop / single-agent carry it; init doesn't loop) ---
+  if (kind === 'loop' || singleAgent) {
     fields.push(
       F('_alive', 'u8[]', s => s.alive),
       F('highWater', 'scalar', s => s.highWater),
@@ -169,7 +193,7 @@ export function deriveAgentAbi(kind: AgentAbiKind, shape: AgentAbiShape, profile
   fields.push(F('_agentLineage', 'i32[]', s => s.lineage));
   // init omits bondCount/density (its writable geometry set is smaller).
   // `_agentBondCount` is a CORE reduction and stays even with Bonds off (B1a).
-  if (kind === 'loop' || kind === 'division') {
+  if (kind === 'loop' || singleAgent) {
     fields.push(F('_agentBondCount', 'i32[]', s => s.bondCount));
     if (gates.density) fields.push(F('_agentDensity', 'f64[]', s => s.density));
   }
@@ -237,8 +261,8 @@ export function deriveAgentAbi(kind: AgentAbiKind, shape: AgentAbiShape, profile
     // loop signature is byte-identical.
     for (const a of bondAttrs) fields.push(F(`_bondAttr_${a.id}`, 'obj', s => s.bondAttrs[a.id]));
     for (const a of bondAttrs) fields.push(F(`_bondFormAttr_${a.id}`, 'f64[]', s => s.bondFormAttrs[a.id]));
-  } else if (kind === 'division') {
-    // Division's smaller bond slice (For Each Bond over inherited bonds).
+  } else if (singleAgent) {
+    // The single-agent kinds' smaller bond slice (For Each Bond over this agent's bonds).
     fields.push(
       F('_bondPartner', 'i32[]', s => s.bondPartner),
       F('_bondRestLength', 'f64[]', s => s.bondRestLength),
@@ -261,7 +285,7 @@ export function deriveAgentAbi(kind: AgentAbiKind, shape: AgentAbiShape, profile
     const id = a.id;
     // Division's w_ block ALIASES attrRead (immediate writes in the sequential
     // structural phase); loop + init use attrWrite.
-    if (kind === 'division') fields.push(F(`w_${id}`, 'obj', s => s.attrRead[id]));
+    if (singleAgent) fields.push(F(`w_${id}`, 'obj', s => s.attrRead[id]));
     else fields.push(F(`w_${id}`, 'obj', s => s.attrWrite[id]));
   }
 
@@ -321,8 +345,8 @@ export function deriveAgentAbi(kind: AgentAbiKind, shape: AgentAbiShape, profile
         F('_hashBinSizeZ', 'scalar', (_s, rt) => (rt.hash ? rt.hash.binSizeZ : 1)),
         F('_hashOriginZ', 'scalar', (_s, rt) => (rt.hash ? rt.hash.originZ : 0)),
       );
-    } else if (kind === 'division') {
-      // NO forceZ (division reads forces, never writes them).
+    } else if (singleAgent) {
+      // NO forceZ (a single-agent pass reads forces, never writes them).
       fields.push(
         F('_agentZ', 'f64[]', s => s.z),
         F('_agentVZ', 'f64[]', s => s.vz),

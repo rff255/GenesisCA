@@ -218,6 +218,7 @@ const GEOMETRY_ONLY_SINKS = new Set([
 const CONTROL_FLOW = new Set([
   'conditional', 'sequence', 'switch', 'loop', 'forEachInArray', 'forEachBond',
   'behaviourStep', 'periodicStep', 'agentInit', 'divisionEvent', 'agentOutputMapping',
+  'agentInputMapping',
 ]);
 
 /** Local variables are per-agent, per-step SCRATCH, not state — so a write is a
@@ -280,6 +281,7 @@ const NODE_LABEL: Record<string, string> = {
   forEachInArray: 'For Each In Array', behaviourStep: 'Behaviour Step',
   periodicStep: 'Periodic Step', agentInit: 'Agent Init Event',
   divisionEvent: 'Division Event', agentOutputMapping: 'Agent Output Mapping',
+  agentInputMapping: 'Agent Input Mapping',
   getRadius: 'Get Radius', getAgentRadius: 'Get Agent Radius',
   getAgentsAttribute: 'Get Agents Attribute', getAgentAttribute: 'Get Agent Attribute',
   getCellAttribute: 'Get Self Attribute', setAttribute: 'Set Attribute',
@@ -696,7 +698,7 @@ export function analyzeGeometryTaint(model: CAModel): GeometryTaintResult {
     return grew;
   }
 
-  const ROOT_TYPES = new Set(['behaviourStep', 'periodicStep', 'agentInit', 'divisionEvent', 'agentOutputMapping']);
+  const ROOT_TYPES = new Set(['behaviourStep', 'periodicStep', 'agentInit', 'divisionEvent', 'agentOutputMapping', 'agentInputMapping']);
   const roots = nodes.filter(n => ROOT_TYPES.has(n.data?.nodeType ?? ''));
 
   // Iterate value taint ⇄ flow walk until neither grows (both are monotone, so

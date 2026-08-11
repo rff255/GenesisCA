@@ -99,6 +99,20 @@ export const AGENT_NODE_MATRIX: CapabilityNodeRow[] = [
     "webgpuStatus": "exempt"
   },
   {
+    "type": "agentInputMapping",
+    "label": "Agent Input Mapping (C→A)",
+    "category": "event",
+    "capability": null,
+    "capabilityLabel": null,
+    "wasm": false,
+    "webgpu": false,
+    "entryPoint": true,
+    "lowered": false,
+    "cpuRoot": false,
+    "wasmStatus": "exempt",
+    "webgpuStatus": "exempt"
+  },
+  {
     "type": "agentOutputMapping",
     "label": "Agent Output Mapping (A→C)",
     "category": "event",
@@ -912,10 +926,10 @@ export const CAPACITY_LIMITS: CapacityLimit[] = [
 
 /** Node counts, so prose never hard-codes a number that can rot. */
 export const NODE_COUNTS = {
-  "registry": 154,
+  "registry": 155,
   "hiddenMacro": 3,
-  "selectable": 151,
-  "agent": 54,
+  "selectable": 152,
+  "agent": 55,
   "overseer": 20,
   "agentOnWasm": 48,
   "agentOnWebgpu": 49,

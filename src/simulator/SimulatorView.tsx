@@ -635,12 +635,17 @@ function gifMaxSizeFor(res: CaptureResolution): number {
  *  soft-recompile refresh can't drift. */
 function agentRenderModelTermsOk(
   sprites: unknown[] | undefined,
-  agentMappings: unknown[] | undefined,
+  agentMappings: ReadonlyArray<{ isAttributeToColor: boolean }> | undefined,
   agentTarget: string,
   omGpuSupported: boolean | undefined,
 ): boolean {
+  // Only the A->C half is a colour pass. `agentMappings` also holds the C->A
+  // INPUT mappings (the agent Paint brush's graphs), which are never compiled to
+  // a GPU OM shader — counting them here would strand a paint-only model on the
+  // CPU overlay for a colour pass that does not exist.
+  const omCount = (agentMappings ?? []).filter(m => m.isAttributeToColor).length;
   return (sprites?.length ?? 0) === 0
-    && (agentTarget !== 'webgpu' || (agentMappings?.length ?? 0) === 0 || !!omGpuSupported);
+    && (agentTarget !== 'webgpu' || omCount === 0 || !!omGpuSupported);
 }
 
 // --- Brush shapes ---
@@ -828,8 +833,13 @@ const NOTICE_STYLE: Record<NoticeSeverity, { bg: string; glyph: string }> = {
 
 /** The agent-brush modes, in cycle order (Alt+scroll steps through them). Shared
  *  by the mode-button row and the wheel-cycle handlers so they can't drift. */
-const AGENT_BRUSH_MODES: ReadonlyArray<'add' | 'remove' | 'move' | 'edit' | 'push' | 'pull' | 'glue' | 'cut'> =
-  ['add', 'remove', 'move', 'edit', 'push', 'pull', 'glue', 'cut'];
+const AGENT_BRUSH_MODES: ReadonlyArray<'add' | 'remove' | 'move' | 'edit' | 'paint' | 'push' | 'pull' | 'glue' | 'cut'> =
+  ['add', 'remove', 'move', 'edit', 'paint', 'push', 'pull', 'glue', 'cut'];
+/** Paint runs an AGENT INPUT MAPPING graph (the C->A half of `model.agentMappings`)
+ *  on each agent in the footprint. A model with none has no graph to run, so the
+ *  mode is STRUCTURALLY inert there — dropped from the button row AND the
+ *  Alt+wheel cycle, exactly like Glue/Cut under Bonds=Off. */
+const PAINT_BRUSH_MODES: ReadonlySet<string> = new Set(['paint']);
 /** The two modes that act ONLY through the bond store. A model whose Bonds
  *  capability is Off has `resolveMaxBonds === 0` ⇒ a zero-length store ⇒ every
  *  formBond/breakBond is rejected, so these are STRUCTURALLY inert there — they
@@ -915,8 +925,10 @@ function pointSegDist2(px: number, py: number, vx: number, vy: number, wx: numbe
 /** Screen-pixel tolerance for the bond hit test (the line itself is ~2 px). */
 const BOND_PICK_PX = 6;
 
-function agentBrushModesFor(bondsAvailable: boolean): typeof AGENT_BRUSH_MODES {
-  return bondsAvailable ? AGENT_BRUSH_MODES : AGENT_BRUSH_MODES.filter(m => !BOND_BRUSH_MODES.has(m));
+function agentBrushModesFor(bondsAvailable: boolean, inputMappingsAvailable: boolean): typeof AGENT_BRUSH_MODES {
+  return AGENT_BRUSH_MODES.filter(m =>
+    (bondsAvailable || !BOND_BRUSH_MODES.has(m))
+    && (inputMappingsAvailable || !PAINT_BRUSH_MODES.has(m)));
 }
 /** The agent-brush modes that READ the CPU agent snapshot while merely hovering:
  *  the hovered-agent pick ring, the area-affected highlight, and the id scans the
@@ -932,7 +944,7 @@ function agentBrushModesFor(bondsAvailable: boolean): typeof AGENT_BRUSH_MODES {
  *  list), but the ring drawn over every agent the disc will move reads the
  *  snapshot. The 3 s idle backstop caps that cost, so paying it buys the
  *  see-what-you'll-move affordance the other area modes already have. */
-const AGENT_BRUSH_MODES_NEEDING_STATE: ReadonlySet<string> = new Set(['remove', 'move', 'edit', 'push', 'pull', 'glue', 'cut']);
+const AGENT_BRUSH_MODES_NEEDING_STATE: ReadonlySet<string> = new Set(['remove', 'move', 'edit', 'paint', 'push', 'pull', 'glue', 'cut']);
 /** IDLE BACKSTOP: a cursor that has not moved (or been pressed / scrolled / had a
  *  modifier pressed) over a simulation canvas for this long is not interacting, so
  *  the agent UI-sync hover pin is released and the stale-dependent hover visuals
@@ -1661,6 +1673,10 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
   const [actualFps, setActualFps] = useState(0);
   const [actualGps, setActualGps] = useState(0);
   const [brushColor, setBrushColor] = useState((saved.current.brushColor as string) ?? '#4cc9f0');
+  // The agent Paint brush's colour (the C->A input-mapping brush). Declared HERE,
+  // beside the cell brush colour and ABOVE the settings-persist effect — any state
+  // feeding that effect's dep array must be, or it TDZ-crashes (the documented trap).
+  const [agentPaintColor, setAgentPaintColor] = useState((saved.current.agentPaintColor as string) ?? '#e8a13a');
   const [brushW, setBrushW] = useState((saved.current.brushW as number) ?? 1);
   const [brushH, setBrushH] = useState((saved.current.brushH as number) ?? 1);
   // Brush shape + per-shape parameters. The size row in the panel adapts:
@@ -2405,7 +2421,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       try {
         localStorage.setItem(SIM_SETTINGS_KEY, JSON.stringify({
           targetFps, unlimitedFps, gensPerFrame, unlimitedGens,
-          activeViewer, brushColor, brushW, brushH, brushMapping, showBrushCursor, showGridlines, show2dAxes, smoothScaling,
+          activeViewer, brushColor, agentPaintColor, brushW, brushH, brushMapping, showBrushCursor, showGridlines, show2dAxes, smoothScaling,
           brushShape, brushRadius, brushRingWidth, brushLineWidth, brush3dVolume, brushBoxDepth,
           infinityCanvas, indicatorVizModes, recordFormat, captureScope, captureResolution, recordQuality, recordOverload, captureOverlays, brushSectionH, agentsFront3d,
           light3d, cellGaps3d, agentMetaballs, agentGlow,
@@ -2423,7 +2439,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       } catch { /* localStorage full */ }
     }, 300);
     return () => clearTimeout(timer);
-  }, [targetFps, unlimitedFps, gensPerFrame, unlimitedGens, activeViewer, brushColor, brushW, brushH, brushMapping, showBrushCursor, showGridlines, show2dAxes, smoothScaling, brushShape, brushRadius, brushRingWidth, brushLineWidth, brush3dVolume, brushBoxDepth, infinityCanvas, indicatorVizModes, recordFormat, captureScope, captureResolution, recordQuality, recordOverload, captureOverlays, brushSectionH, agentsFront3d, light3d, cellGaps3d, agentMetaballs, agentGlow, agentBrushRadius, agentSeedDensity, agentSeedSpacing, agentNudgeIntensity, agentBrushShape, agentBrushW, agentBrushH, agentBrushRingWidth, agentBrushLineWidth, showCaGrid, showAgents, showBonds, simulateCells, simulateAgents, brushTarget, bg2d, agentOutlines, showVision, indicatorHiddenCategories, indicatorChartOverrides]);
+  }, [targetFps, unlimitedFps, gensPerFrame, unlimitedGens, activeViewer, brushColor, agentPaintColor, brushW, brushH, brushMapping, showBrushCursor, showGridlines, show2dAxes, smoothScaling, brushShape, brushRadius, brushRingWidth, brushLineWidth, brush3dVolume, brushBoxDepth, infinityCanvas, indicatorVizModes, recordFormat, captureScope, captureResolution, recordQuality, recordOverload, captureOverlays, brushSectionH, agentsFront3d, light3d, cellGaps3d, agentMetaballs, agentGlow, agentBrushRadius, agentSeedDensity, agentSeedSpacing, agentNudgeIntensity, agentBrushShape, agentBrushW, agentBrushH, agentBrushRingWidth, agentBrushLineWidth, showCaGrid, showAgents, showBonds, simulateCells, simulateAgents, brushTarget, bg2d, agentOutlines, showVision, indicatorHiddenCategories, indicatorChartOverrides]);
 
   // Manual Brush — signature-keyed merge effect. Re-derives `manualBrush`
   // whenever the cell attribute set (id+type) changes. Surviving attrs carry
@@ -2944,7 +2960,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
   // when brushTarget === 'agents'). Add/Remove/Move/Edit honour the Single/Area
   // scope + the shape footprint; Push/Pull radially displace agents inside a disc
   // while held; Glue/Cut stage a first agent then bond/unbond to the second.
-  type AgentBrushMode = 'add' | 'remove' | 'move' | 'edit' | 'push' | 'pull' | 'glue' | 'cut';
+  type AgentBrushMode = 'add' | 'remove' | 'move' | 'edit' | 'paint' | 'push' | 'pull' | 'glue' | 'cut';
   const [agentBrushMode, setAgentBrushMode] = useState<AgentBrushMode>('add');
   const agentBrushModeRef = useRef<AgentBrushMode>('add');
   agentBrushModeRef.current = agentBrushMode;
@@ -2959,13 +2975,34 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
   // (with `bonds: 'data'` stiffness feeds nothing, so the row is hidden rather
   // than shown-and-inert). The resolver is the single source of truth.
   const bondSpringsActive = usesEngineSprings(model.centerBased);
-  const agentBrushModes = useMemo(() => agentBrushModesFor(bondsAvailable), [bondsAvailable]);
+  // The C->A half of `agentMappings` — the graphs the Paint mode runs. No input
+  // mapping ⇒ nothing to paint WITH ⇒ the mode is hidden (see agentBrushModesFor).
+  const agentInputMappings = useMemo(
+    () => (model.agentMappings ?? []).filter(m => !m.isAttributeToColor), [model.agentMappings]);
+  const agentBrushModes = useMemo(
+    () => agentBrushModesFor(bondsAvailable, agentInputMappings.length > 0),
+    [bondsAvailable, agentInputMappings.length]);
   const agentBrushModesRef = useRef(agentBrushModes); agentBrushModesRef.current = agentBrushModes;
   // A model swap can strand the selection on a mode the new model cannot do
   // (the brush mode is session state, not per-model) — fall back to Add.
   useEffect(() => {
     if (!agentBrushModes.includes(agentBrushModeRef.current)) setAgentBrushMode('add');
   }, [agentBrushModes]);
+  // Agent PAINT mode: which INPUT mapping's graph runs, and the brush colour its
+  // root exposes on r/g/b. The colour PERSISTS (like the cell brush colour); the
+  // mapping id is session state coerced to a live one below, because it names a
+  // per-model element that a model swap invalidates.
+  const [agentPaintMapping, setAgentPaintMapping] = useState<string>('');
+  const agentPaintMappingRef = useRef(agentPaintMapping); agentPaintMappingRef.current = agentPaintMapping;
+  const agentPaintColorRef = useRef(agentPaintColor); agentPaintColorRef.current = agentPaintColor;
+  // Coerce a stranded selection (a model swap / a deleted mapping) onto the first
+  // live input mapping — the same rule the brush MODE list follows.
+  useEffect(() => {
+    if (agentInputMappings.length === 0) return;
+    if (!agentInputMappings.some(m => m.id === agentPaintMappingRef.current)) {
+      setAgentPaintMapping(agentInputMappings[0]!.id);
+    }
+  }, [agentInputMappings]);
   const agentGlueAnchorRef = useRef<number>(-1);
   const agentBrushRadiusRef = useRef(agentBrushRadius); agentBrushRadiusRef.current = agentBrushRadius;
   const agentSeedDensityRef = useRef(agentSeedDensity); agentSeedDensityRef.current = agentSeedDensity;
@@ -3399,6 +3436,17 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
   const pendingSeedPoints = useRef<Array<{ x: number; y: number; type?: number }>>([]);
   const pendingSeedSets = useRef<Array<{ attrId: string; value: number }> | null>(null);
   const pendingSeedRaf = useRef<number | null>(null);
+  // Agent PAINT (C->A) drag coalescing — its OWN buffer + rAF token again (never
+  // share `pendingPaintRaf`, which the CELL brush owns: one cancelAnimationFrame
+  // would clobber the other). Ids are deduped so a slow drag over the same agents
+  // does not run the input-mapping graph on them a dozen times per frame.
+  const pendingAgentPaintIds = useRef<Set<number>>(new Set());
+  const pendingAgentPaintRaf = useRef<number | null>(null);
+  // The settings the OPEN batch was started with (the cell brush's
+  // `pendingPaintMapping` precedent) — a mid-drag switch flushes eagerly rather
+  // than re-attributing already-queued ids to the new mapping / colour.
+  const pendingAgentPaintMapping = useRef<string | null>(null);
+  const pendingAgentPaintColor = useRef<{ r: number; g: number; b: number } | null>(null);
   // True only while a seed/kill agent-brush drag started on the canvas (mirrors
   // canvasBrushActive for the cell brush). Cleared on overlay-bail AND pointer-up.
   const canvasAgentBrushActive = useRef(false);
@@ -3693,7 +3741,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
   // (Decision D-TARGET). PR-A2 returns a placeholder (agents seed + render but
   // don't behave); PR-A3 wires the real compileAgentGraph over
   // model.agentGraphNodes (the behaviourStep loop + value-outs + force hooks).
-  const compileAgentModel = useCallback((stopIdxBase = 0, dimsModel?: CAModel): { behaviourCode?: string; initCode?: string; divisionCode?: string; outputMappingCodes?: Array<{ mappingId: string; code: string }>; stopMessages: string[]; dividePartitions?: DividePartitionSpec[]; colorViewer: string; error?: string; agentTarget: 'js' | 'wasm' | 'webgpu'; agentWasmBytes?: Uint8Array; agentWasmViewerGuardIds?: string[]; agentLayoutExtras?: AgentLayoutExtras; agentWasmLayoutSig?: { maxHashBins: number; totalBytes: number }; agentResidencyClean?: boolean; agentWebgpuBehaviourShader?: string; agentWebgpuForceShader?: string; agentWebgpuMaxAgents?: number; agentWebgpuMaxHashBins?: number; agentWebgpuLayout?: AgentWebGPULayout; agentRenderLayout?: AgentWebGPULayout; agentWebgpuUsesI32Write?: boolean; agentWebgpuUsage?: { usesBondStore?: boolean; usesBondStoreWrite?: boolean; usesIndicators?: boolean; usesAux?: boolean; usesSpawn?: boolean; usesStop?: boolean; usesForceScatter?: boolean; usesGeneration?: boolean; usesSpriteWrite?: boolean }; agentWebgpuOmShaders?: Array<{ mappingId: string; code: string; usesBondStore: boolean; usesBondStoreWrite?: boolean; usesIndicators: boolean; usesAux: boolean; usesGeneration?: boolean }>; agentWebgpuOmSupported?: boolean } => {
+  const compileAgentModel = useCallback((stopIdxBase = 0, dimsModel?: CAModel): { behaviourCode?: string; initCode?: string; divisionCode?: string; outputMappingCodes?: Array<{ mappingId: string; code: string }>; inputMappingCodes?: Array<{ mappingId: string; code: string }>; stopMessages: string[]; dividePartitions?: DividePartitionSpec[]; colorViewer: string; error?: string; agentTarget: 'js' | 'wasm' | 'webgpu'; agentWasmBytes?: Uint8Array; agentWasmViewerGuardIds?: string[]; agentLayoutExtras?: AgentLayoutExtras; agentWasmLayoutSig?: { maxHashBins: number; totalBytes: number }; agentResidencyClean?: boolean; agentWebgpuBehaviourShader?: string; agentWebgpuForceShader?: string; agentWebgpuMaxAgents?: number; agentWebgpuMaxHashBins?: number; agentWebgpuLayout?: AgentWebGPULayout; agentRenderLayout?: AgentWebGPULayout; agentWebgpuUsesI32Write?: boolean; agentWebgpuUsage?: { usesBondStore?: boolean; usesBondStoreWrite?: boolean; usesIndicators?: boolean; usesAux?: boolean; usesSpawn?: boolean; usesStop?: boolean; usesForceScatter?: boolean; usesGeneration?: boolean; usesSpriteWrite?: boolean }; agentWebgpuOmShaders?: Array<{ mappingId: string; code: string; usesBondStore: boolean; usesBondStoreWrite?: boolean; usesIndicators: boolean; usesAux: boolean; usesGeneration?: boolean }>; agentWebgpuOmSupported?: boolean } => {
     // A simulator Resize / image-import overrides the live grid dims WITHOUT
     // touching model state, and the agent WASM/WebGPU compilers bake dims-derived
     // layout regions (the spatial-hash reserve, fieldTotal). Compiling from the
@@ -3718,7 +3766,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       catch (e) {
         return {
           behaviourCode: '', initCode: '', divisionCode: '', stopMessages: [],
-          outputMappingCodes: [], dividePartitions: [],
+          outputMappingCodes: [], inputMappingCodes: [], dividePartitions: [],
           error: `Compile failed: ${String((e as Error)?.message || e)}`,
         };
       }
@@ -3840,7 +3888,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
         Math.max(1, Math.floor((m.centerBased?.maxAgents as number) ?? 2000)), 0, undefined, [], { gridDepth: renderDepth },
       );
     }
-    return { behaviourCode: ag.behaviourCode || undefined, initCode: ag.initCode || undefined, divisionCode: ag.divisionCode || undefined, outputMappingCodes: ag.outputMappingCodes && ag.outputMappingCodes.length ? ag.outputMappingCodes : undefined, stopMessages: ag.stopMessages, dividePartitions: ag.dividePartitions, colorViewer, error: ag.error || undefined, agentTarget, agentWasmBytes, agentWasmViewerGuardIds, agentLayoutExtras, agentWasmLayoutSig, agentResidencyClean, agentWebgpuBehaviourShader, agentWebgpuForceShader, agentWebgpuMaxAgents, agentWebgpuMaxHashBins, agentWebgpuLayout, agentRenderLayout, agentWebgpuUsesI32Write, agentWebgpuUsage, agentWebgpuOmShaders, agentWebgpuOmSupported };
+    return { behaviourCode: ag.behaviourCode || undefined, initCode: ag.initCode || undefined, divisionCode: ag.divisionCode || undefined, outputMappingCodes: ag.outputMappingCodes && ag.outputMappingCodes.length ? ag.outputMappingCodes : undefined, inputMappingCodes: ag.inputMappingCodes && ag.inputMappingCodes.length ? ag.inputMappingCodes : undefined, stopMessages: ag.stopMessages, dividePartitions: ag.dividePartitions, colorViewer, error: ag.error || undefined, agentTarget, agentWasmBytes, agentWasmViewerGuardIds, agentLayoutExtras, agentWasmLayoutSig, agentResidencyClean, agentWebgpuBehaviourShader, agentWebgpuForceShader, agentWebgpuMaxAgents, agentWebgpuMaxHashBins, agentWebgpuLayout, agentRenderLayout, agentWebgpuUsesI32Write, agentWebgpuUsage, agentWebgpuOmShaders, agentWebgpuOmSupported };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [model.agentGraphNodes, model.agentGraphEdges, model.topologyMode?.agents, model.attributes, model.agentAttributes, model.mappings, model.centerBased]);
 
@@ -4129,8 +4177,9 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
     }
     // Area-affected agents — every agent the current footprint would touch
     // (Remove/Move/Edit, Area scope; Push/Pull's radial disc), colour-coded per mode.
-    if (showAgentCursor && snap && ((aScope === 'area' && (mode === 'remove' || mode === 'move' || mode === 'edit')) || NUDGE_BRUSH_MODES.has(mode)) && agentAreaHoverIdsRef.current.length) {
+    if (showAgentCursor && snap && ((aScope === 'area' && (mode === 'remove' || mode === 'move' || mode === 'edit' || mode === 'paint')) || NUDGE_BRUSH_MODES.has(mode)) && agentAreaHoverIdsRef.current.length) {
       const rgb = mode === 'remove' ? '240, 90, 90' : mode === 'edit' ? '171, 123, 255'
+        : mode === 'paint' ? '232, 161, 58'
         : mode === 'push' ? '250, 168, 78' : mode === 'pull' ? '56, 200, 220' : '76, 201, 240';
       hlCtx.save();
       hlCtx.strokeStyle = `rgba(${rgb}, 0.95)`;
@@ -4145,7 +4194,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       hlCtx.restore();
     }
     // Area footprint cursor — the shape outline at the cursor (negative layer).
-    const footprintMode = mode === 'add' || mode === 'remove' || mode === 'edit' || mode === 'move';
+    const footprintMode = mode === 'add' || mode === 'remove' || mode === 'edit' || mode === 'move' || mode === 'paint';
     if (showAgentCursor && cursorW && aScope === 'area' && footprintMode) {
       const R = agentBrushRadiusRef.current, ringW = Math.max(1, agentBrushRingWidthRef.current);
       const hWd = agentBrushWRef.current / 2, hHt = agentBrushHRef.current / 2;
@@ -7321,6 +7370,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       agentDivisionCode: agentResult.divisionCode,
       agentColorViewer: activeAgentViewerRef.current || agentResult.colorViewer,
       agentOutputMappingCodes: agentResult.outputMappingCodes,
+      agentInputMappingCodes: agentResult.inputMappingCodes,
       agentHasSprites: (model.sprites?.length ?? 0) > 0,
       // P4 - the structural-request QUEUE stride the compiled agent code bakes.
       // Shipped on every target so the store's array shapes and the emitters'
@@ -7800,6 +7850,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
         agentDivisionCode: agentResult.divisionCode,
         agentColorViewer: activeAgentViewerRef.current || agentResult.colorViewer,
         agentOutputMappingCodes: agentResult.outputMappingCodes,
+        agentInputMappingCodes: agentResult.inputMappingCodes,
         agentHasSprites: (model.sprites?.length ?? 0) > 0,
       // P4 - the structural-request QUEUE stride the compiled agent code bakes.
       // Shipped on every target so the store's array shapes and the emitters'
@@ -8094,7 +8145,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
     if (!is3D) return;
     const glc = glCanvasRef.current;
     if (!glc) return;
-    let active: 'orbit' | 'pan' | 'brush' | 'inspect' | 'inspectAgent' | 'resize' | 'agentSeed' | 'agentKill' | 'agentMove' | 'agentGroupMove' | 'agentEdit' | 'agentNudge' | 'gizmo' | null = null;
+    let active: 'orbit' | 'pan' | 'brush' | 'inspect' | 'inspectAgent' | 'resize' | 'agentSeed' | 'agentKill' | 'agentMove' | 'agentGroupMove' | 'agentEdit' | 'agentPaint' | 'agentNudge' | 'gizmo' | null = null;
     // Blender's gizmo gesture: a press on the widget is PROVISIONAL — released
     // without moving it snaps to the ball under the cursor (null = the empty
     // middle, which snaps to nothing), dragged past GIZMO_DRAG_PX it becomes a
@@ -8202,6 +8253,13 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       const hit = pickCell(clientX, clientY); if (!hit) return;
       applyAgentEditToIds(agentsInShape3dAt(hit));
     };
+    // Scope-aware Paint: run the selected Agent Input Mapping graph on the picked
+    // agent (Single) or the volumetric footprint (Area). Same rAF batcher as 2D.
+    const paintAgents3d = (clientX: number, clientY: number, scope: 'single' | 'area') => {
+      if (scope === 'single') { const id = pickAgent3d(clientX, clientY); if (id >= 0) paintAgentIds([id]); return; }
+      const hit = pickCell(clientX, clientY); if (!hit) return;
+      paintAgentIds(agentsInShape3dAt(hit));
+    };
     // Update the hovered-agent highlight ring (kill/glue/cut/move modes). Returns
     // true when the highlighted set changed (so the caller redraws on-change only,
     // never per raw move — the pick is an FBO round-trip + GPU sync, RR-G8).
@@ -8210,7 +8268,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       const mode = agentBrushModeRef.current;
       const aShape = agentBrushShapeRef.current;
       const aScope = (mode === 'move' && aShape === 'line') ? 'single' : agentBrushScopeRef.current;
-      const want = brushTargetRef.current === 'agents' && (mode === 'remove' || mode === 'glue' || mode === 'cut' || mode === 'move' || mode === 'edit' || NUDGE_BRUSH_MODES.has(mode));
+      const want = brushTargetRef.current === 'agents' && (mode === 'remove' || mode === 'glue' || mode === 'cut' || mode === 'move' || mode === 'edit' || mode === 'paint' || NUDGE_BRUSH_MODES.has(mode));
       if (!want || !snap) {
         if (hoverAgents3dRef.current.length === 0) return false;
         hoverAgents3dRef.current = EMPTY_AGENT_RINGS; return true;
@@ -8229,7 +8287,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       }
       // Area (Remove/Move/Edit): highlight ALL agents under the footprint (the ones
       // the stroke will touch), not just the single hovered one.
-      if (aScope === 'area' && (mode === 'remove' || mode === 'move' || mode === 'edit')) {
+      if (aScope === 'area' && (mode === 'remove' || mode === 'move' || mode === 'edit' || mode === 'paint')) {
         const hit = pickCell(clientX, clientY);
         const ids = hit ? agentsInShape3dAt(hit) : [];
         const rings = ids.map(id => ({ x: snap.x[id]!, y: snap.y[id]!, z: hasZ ? snap.z[id]! : 0, radius: snap.radius[id]! }));
@@ -8393,7 +8451,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
         const aShape = agentBrushShapeRef.current;
         const aScope: 'single' | 'area' = (mode === 'move' && aShape === 'line') ? 'single' : agentBrushScopeRef.current;
         const worker = workerRef.current;
-        if (aShape === 'line' && aScope === 'area' && (mode === 'add' || mode === 'remove' || mode === 'edit')) {
+        if (aShape === 'line' && aScope === 'area' && (mode === 'add' || mode === 'remove' || mode === 'edit' || mode === 'paint')) {
           // Two-click 3D capsule region on the plane.
           const hit = pickCell(e.clientX, e.clientY);
           if (hit) {
@@ -8402,6 +8460,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
               const a = agentLine3dAnchorRef.current; agentLine3dAnchorRef.current = null;
               if (mode === 'add') seedAgentsAt(agentSeedInLine3d(a, hit), agentSeedSetsRef.current());
               else if (mode === 'remove') { const ids = agentLineMembers3d(a, hit); if (ids.length && worker) worker.postMessage({ type: 'killAgents', ids, activeViewer: activeViewerRef.current }); }
+              else if (mode === 'paint') paintAgentIds(agentLineMembers3d(a, hit));
               else applyAgentEditToIds(agentLineMembers3d(a, hit));
               draw();
             }
@@ -8409,6 +8468,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
           active = null;
         } else if (mode === 'remove') { active = 'agentKill'; removeAgents3d(e.clientX, e.clientY, aScope); }
         else if (mode === 'add') { active = 'agentSeed'; addAgents3d(e.clientX, e.clientY, aScope); }
+        else if (mode === 'paint') { active = 'agentPaint'; paintAgents3d(e.clientX, e.clientY, aScope); }
         else if (mode === 'edit') {
           if (aScope === 'single') {
             const id = pickAgent3d(e.clientX, e.clientY);
@@ -8621,6 +8681,9 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       if (active === 'agentSeed') { if (agentBrushScopeRef.current === 'area' && agentBrushShapeRef.current !== 'line') addAgents3d(e.clientX, e.clientY, 'area'); updateHover(e.clientX, e.clientY); draw(); return; }
       if (active === 'agentKill') { removeAgents3d(e.clientX, e.clientY, agentBrushScopeRef.current); updateHover(e.clientX, e.clientY); updateAgentHover(e.clientX, e.clientY); draw(); return; }
       if (active === 'agentEdit') { editAgents3d(e.clientX, e.clientY); updateHover(e.clientX, e.clientY); draw(); return; }
+      // (No line-shape single-override here: that only applies to Move, and a LINE
+      // Paint goes through the two-click staging branch, never this drag state.)
+      if (active === 'agentPaint') { paintAgents3d(e.clientX, e.clientY, agentBrushScopeRef.current); updateHover(e.clientX, e.clientY); draw(); return; }
       if (active === 'agentNudge') {
         // Re-aim the running loop (it posts on its own rAF, not per move).
         const hit = pickCell(e.clientX, e.clientY);
@@ -8707,6 +8770,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       // Commit the final coalesced stamp synchronously (the rAF may not have
       // fired yet on a quick click-release), mirroring the 2D mouse-up path.
       if (active === 'brush') flushPaintBatch();
+      if (active === 'agentPaint') flushAgentPaintBatch();
       // Agent move: clear the drag state. The rings need no restore — draw()
       // derives them from the open popovers + the live snapshot every frame.
       if (active === 'agentMove') { agentDragId = -1; draw(); }
@@ -8879,6 +8943,18 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       camV: [...followCamVRef.current],
       agentV: [...followAgentVRef.current],
     });
+    // Agent PAINT brush (DEV/verification only, the __sim3dPaint precedent): the
+    // brush's own compose-and-post path, minus the canvas geometry. Every
+    // gesture path resolves ids from the canvas rect, which is 0x0 in an
+    // OCCLUDED Browser pane — so this is the only way to exercise the REAL
+    // composition (panel colour + selected input mapping -> paintAgentsColor)
+    // rather than hand-building the message. Ids only; the colour + mapping
+    // still come from the live panel state.
+    W.__agentPaint = (ids: number[]) => {
+      paintAgentIdsRef.current(ids);
+      flushAgentPaintBatchRef.current();
+      return { mappingId: agentPaintMappingRef.current, color: agentPaintColorRef.current, ids: ids.length };
+    };
   }, [is3D, draw, instanceToSlot]);
 
   // 3D Grid CA: mirror the control state into the renderer refs + redraw.
@@ -9910,6 +9986,54 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
     seedAgentsAt(pts, sets);
   }, [seedAgentsAt]);
 
+  // ---- Agent PAINT (C->A): run one Agent Input Mapping graph on the footprint ----
+  // Flush whatever agent ids have accumulated since the last frame as ONE
+  // paintAgentsColor message. Own buffer + rAF token (never the cell brush's).
+  const flushAgentPaintBatch = useCallback(() => {
+    if (pendingAgentPaintRaf.current != null) {
+      cancelAnimationFrame(pendingAgentPaintRaf.current);
+      pendingAgentPaintRaf.current = null;
+    }
+    const set = pendingAgentPaintIds.current;
+    if (set.size === 0) return;
+    const ids = Array.from(set);
+    set.clear();
+    // The mapping + colour were captured when the batch was OPENED, not read here
+    // — a mid-frame switch must not re-attribute ids already queued under the
+    // previous one (the cell brush's eager-flush rule, `pendingPaintMapping`).
+    const mappingId = pendingAgentPaintMapping.current;
+    const rgb = pendingAgentPaintColor.current;
+    pendingAgentPaintMapping.current = null;
+    if (!mappingId || !rgb) return;
+    workerRef.current?.postMessage({
+      type: 'paintAgentsColor', ids, r: rgb.r, g: rgb.g, b: rgb.b, mappingId,
+      activeViewer: activeViewerRef.current,
+    });
+  }, []);
+  /** Enqueue agent ids for the Paint brush + arm the rAF flush (drag-safe). A
+   *  mapping / colour change mid-drag flushes the pending batch EAGERLY so the
+   *  already-queued ids keep the settings they were painted with. */
+  const paintAgentIds = useCallback((ids: number[]) => {
+    const mappingId = agentPaintMappingRef.current;
+    if (ids.length === 0 || !mappingId) return;
+    const rgb = hexToRgb(agentPaintColorRef.current);
+    const prev = pendingAgentPaintMapping.current, prevC = pendingAgentPaintColor.current;
+    if (prev !== null && (prev !== mappingId || !prevC
+      || prevC.r !== rgb.r || prevC.g !== rgb.g || prevC.b !== rgb.b)) {
+      flushAgentPaintBatch();
+    }
+    pendingAgentPaintMapping.current = mappingId;
+    pendingAgentPaintColor.current = rgb;
+    for (const id of ids) pendingAgentPaintIds.current.add(id);
+    if (pendingAgentPaintRaf.current == null) {
+      pendingAgentPaintRaf.current = requestAnimationFrame(flushAgentPaintBatch);
+    }
+  }, [flushAgentPaintBatch]);
+  // Latest-ref mirrors for the DEV hook below (registered once, must not capture
+  // a stale callback).
+  const paintAgentIdsRef = useRef(paintAgentIds); paintAgentIdsRef.current = paintAgentIds;
+  const flushAgentPaintBatchRef = useRef(flushAgentPaintBatch); flushAgentPaintBatchRef.current = flushAgentPaintBatch;
+
   // Bond-Graph Agents — open the on-demand agent inspector for a picked id and
   // fire the first getAgentState request. The low-Hz poll (effect below) keeps
   // it fresh while pinned.
@@ -10847,9 +10971,9 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
         const shape = agentBrushShapeRef.current;
         // Line + Move can't express a rigid drag → single-agent move regardless.
         const scope = (mode === 'move' && shape === 'line') ? 'single' : agentBrushScopeRef.current;
-        // LINE shape (Area scope) is a two-click region tool for Add/Remove/Edit:
-        // first click stages the anchor (no action), second acts on the capsule.
-        if (shape === 'line' && scope === 'area' && (mode === 'add' || mode === 'remove' || mode === 'edit')) {
+        // LINE shape (Area scope) is a two-click region tool for Add/Remove/Edit/
+        // Paint: first click stages the anchor (no action), second acts on the capsule.
+        if (shape === 'line' && scope === 'area' && (mode === 'add' || mode === 'remove' || mode === 'edit' || mode === 'paint')) {
           const wpt = screenToWorld(e.clientX, e.clientY);
           if (!wpt) return;
           if (!agentLineAnchorRef.current) { agentLineAnchorRef.current = { x: wpt.x, y: wpt.y }; draw(); return; }
@@ -10858,6 +10982,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
           if (mode === 'add') seedAgentsAt(agentSeedInLine(a, b), agentSeedSetsRef.current());
           else if (mode === 'remove') { const ids = agentLineMembers(a, b); if (ids.length && worker) worker.postMessage({ type: 'killAgents', ids, activeViewer: activeViewerRef.current }); }
           else if (mode === 'edit') applyAgentEditToIds(agentLineMembers(a, b));
+          else if (mode === 'paint') paintAgentIds(agentLineMembers(a, b));
           draw();
           return;
         }
@@ -10888,6 +11013,13 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
             if (wpt) applyAgentEditToIds(agentsInShapeAt(wpt.x, wpt.y));
             canvasAgentBrushActive.current = true;
           }
+        } else if (mode === 'paint') {
+          // Run the selected Agent Input Mapping graph on the footprint (Area) or
+          // the picked agent (Single). Enqueued + rAF-flushed so a drag is ONE
+          // message per frame (its own batcher — never the cell brush's).
+          if (scope === 'single') { const id = pickAgentAt(e.clientX, e.clientY); if (id >= 0) paintAgentIds([id]); }
+          else { const wpt = screenToWorld(e.clientX, e.clientY); if (wpt) paintAgentIds(agentsInShapeAt(wpt.x, wpt.y)); }
+          canvasAgentBrushActive.current = true;
         } else if (mode === 'glue' || mode === 'cut') {
           const id = pickAgentAt(e.clientX, e.clientY);
           if (id < 0) { agentGlueAnchorRef.current = -1; draw(); return; }
@@ -11073,7 +11205,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
         // Area-affected highlight — the agents the stroke WILL touch (Remove/Move/
         // Edit; NOT Add, which only spawns new agents). During a group-move drag
         // it's the grabbed group; otherwise the agents under the footprint.
-        if (scope === 'area' && (mode === 'remove' || mode === 'move' || mode === 'edit')) {
+        if (scope === 'area' && (mode === 'remove' || mode === 'move' || mode === 'edit' || mode === 'paint')) {
           agentAreaHoverIdsRef.current = (mode === 'move' && agentGroupMoveRef.current)
             ? agentGroupMoveRef.current.members.map(m => m.id)
             : (wpt ? agentsInShapeAt(wpt.x, wpt.y) : []);
@@ -11085,7 +11217,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
           agentAreaHoverIdsRef.current = [];
         }
         const wantHover = mode === 'glue' || mode === 'cut'
-          || (scope === 'single' && (mode === 'remove' || mode === 'move' || mode === 'edit'));
+          || (scope === 'single' && (mode === 'remove' || mode === 'move' || mode === 'edit' || mode === 'paint'));
         if (!dragging) agentHoverIdRef.current = wantHover ? pickAgentAt(hx, hy) : -1;
       }
       // Cursor-layer-only redraw — never touches the scene canvas.
@@ -11144,6 +11276,9 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
           } else if (mode === 'edit' && scope === 'area') {
             const wpt = screenToWorld(e.clientX, e.clientY);
             if (wpt) applyAgentEditToIds(agentsInShapeAt(wpt.x, wpt.y));
+          } else if (mode === 'paint') {
+            if (scope === 'single') { const id = pickAgentAt(e.clientX, e.clientY); if (id >= 0) paintAgentIds([id]); }
+            else { const wpt = screenToWorld(e.clientX, e.clientY); if (wpt) paintAgentIds(agentsInShapeAt(wpt.x, wpt.y)); }
           } else if (mode === 'move' && scope === 'area' && agentGroupMoveRef.current) {
             const wpt = screenToWorld(e.clientX, e.clientY);
             const g = agentGroupMoveRef.current;
@@ -11346,6 +11481,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
         canvasAgentBrushActive.current = false;
         lastSeedWorldRef.current = null;
         flushSeedBatch();
+        flushAgentPaintBatch();
         flushMoveBatch();
         stopNudgeLoop();
         if (draggingAgentRef.current >= 0) { draggingAgentRef.current = -1; draggingAgentStartRef.current = null; }
@@ -11412,7 +11548,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       if (cursorDrawRaf.current != null) { cancelAnimationFrame(cursorDrawRaf.current); cursorDrawRaf.current = null; }
       if (hoverWorkRaf.current != null) { cancelAnimationFrame(hoverWorkRaf.current); hoverWorkRaf.current = null; }
     };
-  }, [draw, scheduleCursorDraw, paintAt, paintLine, screenToGrid, flushPaintBatch, commitInspectPopover, screenToWorld, pickAgentAt, pickBondAt, openBondInspector, seedAgentsAt, agentSeedPoints, flushSeedBatch, killAgentsInRadius, openAgentInspector, flushMoveBatch, startNudgeLoop, stopNudgeLoop, agentsInShapeAt, agentsInRadiusAt, agentSeedInShape, agentSeedInLine, agentLineMembers, applyAgentEditToIds, cancelFollow]);
+  }, [draw, scheduleCursorDraw, paintAt, paintLine, screenToGrid, flushPaintBatch, commitInspectPopover, screenToWorld, pickAgentAt, pickBondAt, openBondInspector, seedAgentsAt, agentSeedPoints, flushSeedBatch, killAgentsInRadius, openAgentInspector, flushMoveBatch, startNudgeLoop, stopNudgeLoop, agentsInShapeAt, agentsInRadiusAt, agentSeedInShape, agentSeedInLine, agentLineMembers, applyAgentEditToIds, paintAgentIds, flushAgentPaintBatch, cancelFollow]);
 
   // Play: kick-start the step pipeline (worker message handler chains subsequent steps)
   useEffect(() => {
@@ -14631,7 +14767,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
                       Area) is DERIVED from the size and shown as a badge on the size
                       row (no toggle): a zero-size footprint acts on ONE agent, a sized
                       one on ALL agents inside it. Footprint modes only. */}
-                  {(agentBrushMode === 'add' || agentBrushMode === 'remove' || agentBrushMode === 'move' || agentBrushMode === 'edit') && (<>
+                  {(agentBrushMode === 'add' || agentBrushMode === 'remove' || agentBrushMode === 'move' || agentBrushMode === 'edit' || agentBrushMode === 'paint') && (<>
                     <div className={styles.fieldRow}>
                       <span className={styles.statLabel}>Shape</span>
                       {([
@@ -14690,6 +14826,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
                           m === 'remove' ? 'Remove agents — size 0: the nearest; sized: all in the footprint' :
                           m === 'move' ? 'Move — size 0: drag one agent; sized: rigid-drag a footprint of agents (RMB cancels)' :
                           m === 'edit' ? 'Edit agent properties — size 0: click an agent, adjust, Apply; sized: stamp onto all in the footprint' :
+                          m === 'paint' ? 'Paint — run an Agent Input Mapping graph on the agents you touch, with the brush colour on its R/G/B outputs' :
                           m === 'push' ? 'Push — hold to shove agents AWAY from the cursor; strongest at the centre, zero at the rim' :
                           m === 'pull' ? 'Pull — hold to gather agents TOWARD the cursor; strongest at the centre, zero at the rim' :
                           m === 'glue' ? 'Click two agents to bond them' :
@@ -14736,6 +14873,37 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
                           />
                         </div>
                       )}
+                    </div>
+                  )}
+                  {/* Paint (C->A): pick which Agent Input Mapping graph runs and the
+                      colour its root exposes on R/G/B. The agent twin of the CA
+                      grid's Input Mapping tabs + colour picker. Only rendered when
+                      the model HAS input mappings (agentBrushModesFor hides the mode
+                      otherwise), so the tab strip is never empty. */}
+                  {agentBrushMode === 'paint' && (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                      <div className={styles.mappingTabs}>
+                        {agentInputMappings.map(m => (
+                          <button
+                            key={m.id}
+                            className={`${styles.mappingTab} ${agentPaintMapping === m.id ? styles.mappingTabActive : ''}`}
+                            onClick={() => setAgentPaintMapping(m.id)}
+                            title={m.description || undefined}
+                          >{m.name}</button>
+                        ))}
+                      </div>
+                      <label style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                        <span style={{ width: 54, color: 'var(--color-text-muted)' }}>Color</span>
+                        <input type="color" className={styles.colorPicker} value={agentPaintColor}
+                          onChange={e => setAgentPaintColor(e.target.value)} />
+                        <span style={{ color: 'var(--color-text-muted)', fontSize: '0.62rem' }}>
+                          {(() => { const c = hexToRgb(agentPaintColor); return `${c.r}, ${c.g}, ${c.b}`; })()}
+                        </span>
+                      </label>
+                      <div style={{ fontSize: '0.62rem', color: 'var(--color-text-muted)' }}>
+                        Runs this mapping&apos;s graph on every agent you touch — the colour
+                        arrives on its R / G / B outputs.
+                      </div>
                     </div>
                   )}
                   {/* Push / Pull: the effect disc radius + the strength. No shape row —

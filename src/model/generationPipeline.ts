@@ -497,7 +497,9 @@ export function describeGenerationPipeline(model: CAModel): PipelinePhase[] {
     });
   }
   if (agentsOn) {
-    const ams = model.agentMappings ?? [];
+    // Only the A->C half is a colour pass; `agentMappings` also holds the C->A
+    // INPUT mappings, which run on a user PAINT gesture, not per generation.
+    const ams = (model.agentMappings ?? []).filter(m => m.isAttributeToColor);
     push({
       id: 'color.agents', title: 'Colour pass — agents (A→C)', owner: 'engine', tempo: 'frame',
       active: ams.length > 0, capability: 'an Agent Output Mapping',

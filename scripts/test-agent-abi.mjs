@@ -3,7 +3,11 @@
 // IDENTICAL arg arrays to the ORIGINAL hand-written worker builders (replicated
 // below), across 2D + 3D × with/without lookup tables × with agent attrs +
 // fields. The parity harness already covers the 'loop' path end-to-end (JS↔WASM);
-// this covers 'division' + 'init' (which the harness never runs) by construction.
+// this covers 'division' + 'init' + 'input' (which the harness never runs) by
+// construction. 'input' (the Agent Input Mapping / Paint brush fn) is asserted
+// against a HAND-WRITTEN expectation derived from 'division' — division MINUS its
+// three daughter scalars — so widening a `kind === 'division'` branch to the
+// shared `singleAgent` predicate can never silently change one without the other.
 //
 // Run:  node scripts/test-agent-abi.mjs
 import { build } from 'esbuild';
@@ -81,6 +85,29 @@ function oldInitArgs(s, create, add, seedBase, rt) {
   return args;
 }
 
+/** The 'input' kind's EXPECTED arg list, written out independently: it is the
+ *  division list minus `__daughterIndex` / `__axisDefaultX` / `__axisDefaultY`
+ *  (a paint has no daughter), with the SAME attrRead-aliased `w_` block (a paint
+ *  is a sequential mutation BETWEEN steps, so a write must land on the live
+ *  buffer) and the SAME z-block (no forceZ). */
+function expectedInputArgs(s, idx, rt) {
+  const args = [
+    idx,
+    s.alive, s.highWater,
+    s.x, s.y, s.radius, s.targetRadius, s.age, s.lineage, s.bondCount, s.density,
+    s.vx, s.vy,
+    s.bondPartner, s.bondRestLength, s.bondPartnerEpoch, s.maxBonds,
+  ];
+  for (const spec of s.attrSpecs) args.push(s.attrRead[spec.id]);
+  for (const spec of s.attrSpecs) args.push(s.attrRead[spec.id]); // w_ aliases attrRead
+  args.push(rt.modelAttrs, s.colors, rt.viewer, rt.indicators, rt.rngState, rt.stopFlag, rt.glyphCodes, rt.glyphColors, s.spriteIds, s.spriteFrames, s.spriteSpeeds, s.spriteRotations, s.spriteScales);
+  if (rt.hasLookupTables) args.push(rt.lookupTables);
+  args.push(rt.width, rt.height, rt.total, rt.torus ? 1 : 0);
+  for (const spec of rt.fieldSpecs) args.push(rt.readAttrs[spec.id]);
+  if (s.worldDepth > 1) args.push(s.z, s.vz, s.divideAxisZ, s.worldDepth);
+  return args;
+}
+
 let pass = 0, fail = 0;
 const ok = (c, msg) => { if (c) pass++; else { fail++; console.log('  ✗ ' + msg); } };
 
@@ -140,9 +167,40 @@ for (const is3d of [false, true]) {
       const newI = buildAgentAbiArgs('init', shape, s, { ...newRtBase, hash: null, agentCreate: create, agentAddToWorld: add, seedBase: 5 });
       cmp(`${tag} init`, oldI, newI);
     }
+    // input (the Agent Input Mapping / Paint brush fn)
+    {
+      const expI = expectedInputArgs(s, 4, rtExternal);
+      const newI = buildAgentAbiArgs('input', shape, s, { ...newRtBase, hash: null, idx: 4 });
+      cmp(`${tag} input`, expI, newI);
+      // THE `w_` ALIASING CLAIM, on a store where it is OBSERVABLE. In async
+      // agent mode attrWrite ALIASES attrRead, so an attrWrite/attrRead mix-up is
+      // invisible — only a SYNC-attr store (distinct buffers) can catch it, and a
+      // paint that wrote attrWrite would be discarded by the next step's
+      // primeAgentAttrWrite. Assert identity against attrRead explicitly.
+      const sSync = createAgentStore(cfg, attrSpecs, { wasmBacked: false, syncAttrs: true });
+      sSync.worldDepth = s.worldDepth;
+      ok(sSync.attrWrite['energy'] !== sSync.attrRead['energy'],
+        `${tag} input: (precondition) the sync store really has distinct r/w buffers`);
+      const syncShape = { ...shape, agentAttrs: sSync.attrSpecs };
+      const syncArgs = buildAgentAbiArgs('input', syncShape, sSync, { ...newRtBase, hash: null, idx: 4 });
+      const syncNames = deriveAgentAbi('input', syncShape).map(f => f.name);
+      let aliasOk = true;
+      for (let i = 0; i < syncNames.length; i++) {
+        const n = syncNames[i];
+        if (n.startsWith('w_')) aliasOk = aliasOk && syncArgs[i] === sSync.attrRead[n.slice(2)];
+        if (n.startsWith('r_')) aliasOk = aliasOk && syncArgs[i] === sSync.attrRead[n.slice(2)];
+      }
+      ok(aliasOk, `${tag} input: every r_/w_ arg is the LIVE attrRead buffer (a paint write must survive sync mode)`);
+      // …and the structural claim that makes it safe to share branches with
+      // 'division': input === division with the three daughter scalars removed.
+      const dNames = deriveAgentAbi('division', shape).map(f => f.name);
+      const iNames = deriveAgentAbi('input', shape).map(f => f.name);
+      const dMinus = dNames.filter(n => n !== '__daughterIndex' && n !== '__axisDefaultX' && n !== '__axisDefaultY');
+      ok(dMinus.join(',') === iNames.join(','), `${tag} input === division minus the daughter scalars`);
+    }
     // Descriptor internal-consistency (audit-lite): 2D field list is a strict
     // PREFIX of the 3D list (append-only z-block), per kind.
-    for (const kind of ['loop', 'division', 'init']) {
+    for (const kind of ['loop', 'division', 'init', 'input']) {
       const names2d = deriveAgentAbi(kind, { ...shape, is3d: false }).map(f => f.name);
       const names3d = deriveAgentAbi(kind, { ...shape, is3d: true }).map(f => f.name);
       ok(names3d.slice(0, names2d.length).join(',') === names2d.join(','), `${tag} ${kind}: 2D is a prefix of 3D`);

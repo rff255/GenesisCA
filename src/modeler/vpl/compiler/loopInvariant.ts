@@ -167,6 +167,7 @@ const NEVER_INVARIANT = new Set<string>([
   // (their value-outs are function params / preamble-decoded, never hoistable).
   'agentInit',
   'agentOutputMapping',
+  'agentInputMapping',
 ]);
 
 export function classifyLoopInvariant(
