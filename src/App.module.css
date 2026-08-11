@@ -159,6 +159,19 @@
   animation: toastIn 0.18s ease-out;
 }
 
+/* The toast and the update banner share the busy card's top-centre slot, and
+   both genuinely coincide with it (the "loaded successfully" toast fires while
+   the worker is still reinitialising; the update banner can be up at any time).
+   Step them down while a busy card is showing so nothing is covered.
+
+   The doubled class is deliberate: `.toast` and `.updateBanner` are plain
+   single-class rules too, and `.updateBanner` is declared LATER in this file, so
+   at equal specificity it would win on ORDER and the offset would silently do
+   nothing (it did). Doubling makes this independent of where the rule sits. */
+.loweredForBusy.loweredForBusy {
+  top: calc(var(--navbar-height) + var(--space-4) + 62px);
+}
+
 @keyframes toastIn {
   from { opacity: 0; transform: translateX(-50%) translateY(-6px); }
   to   { opacity: 1; transform: translateX(-50%) translateY(0); }

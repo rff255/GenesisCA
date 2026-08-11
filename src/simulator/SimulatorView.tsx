@@ -46,7 +46,8 @@ import {
   encodeFramesToWebM, isWebMSupported, snapRecordWidth, clampRecordFps,
   RECORD_MAX, RECORD_MAX_3D, DEFAULT_RECORD_QUALITY, type RecordQuality,
 } from './recording/webmEncoder';
-import { encodeFramesToGif, GIF_MAX_DEFAULT, GIF_MAX_HARD } from './recording/gifEncoder';
+import { encodeFramesToGif, GIF_MAX_DEFAULT, GIF_MAX_HARD, type GifEncodeStats } from './recording/gifEncoder';
+import { beginBusy, type BusyHandle } from '../components/busyState';
 import { WebMStreamEncoder } from './recording/webmStreamEncoder';
 import { getGlyphTile } from './recording/glyphAtlas';
 import { IndicatorDisplay } from './IndicatorDisplay';
@@ -2370,6 +2371,32 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
   const LOSSLESS_STALL_MS = 8000;
   const [encodingWebM, setEncodingWebM] = useState(false);
   useEffect(() => { recordingRef.current = recording; }, [recording]);
+
+  /** The busy handle for an in-flight worker reinit. `initWorkerWithDimensions`
+   *  is the single funnel for EVERY structural reinit (resize, recompile, model
+   *  load, image/CSV resize-import), so one handle here covers all of them; the
+   *  first message back from the fresh worker ends it. Ended before a new one
+   *  begins, so back-to-back reinits can never strand a bar. */
+  const initBusyRef = useRef<BusyHandle | null>(null);
+  /** Safety net: a worker that dies without ever posting would otherwise leave
+   *  the bar up forever. Generous — a huge 3D grid legitimately takes many
+   *  seconds — because its only job is to bound a failure, not to time work. */
+  const INIT_BUSY_MAX_MS = 120000;
+  const initBusyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const endInitBusy = useCallback(() => {
+    if (initBusyTimerRef.current !== null) { clearTimeout(initBusyTimerRef.current); initBusyTimerRef.current = null; }
+    initBusyRef.current?.end();
+    initBusyRef.current = null;
+  }, []);
+  /** Announce work the WORKER is about to do, ended by its next reply. Any
+   *  previous one is ended first, so a reinit that follows (a structural preset
+   *  load dispatches new dims, which the model effect turns into a full reinit)
+   *  simply replaces this bar instead of stranding it. */
+  const beginWorkerBusy = useCallback((label: string) => {
+    endInitBusy();
+    initBusyRef.current = beginBusy(label);
+    initBusyTimerRef.current = setTimeout(() => { initBusyTimerRef.current = null; endInitBusy(); }, INIT_BUSY_MAX_MS);
+  }, [endInitBusy]);
 
   // ── Recording quality (keyframe cadence) ────────────────────────────────────
   // 'standard' = a keyframe every 30 frames: MEASURED 3.5x smaller and 1.8x
@@ -6329,6 +6356,12 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
   const onWorkerMessageRef = useRef<(e: MessageEvent) => void>(() => {});
   onWorkerMessageRef.current = (e: MessageEvent) => {
     const msg = e.data;
+    // The fresh worker has produced something — the reinit is over, whether it
+    // succeeded (`stepped`/`ready`) or not (`error`). Idempotent, so a later
+    // message costs nothing.
+    if (initBusyRef.current && (msg.type === 'stepped' || msg.type === 'ready' || msg.type === 'error')) {
+      endInitBusy();
+    }
     if (msg.type === 'inspectCellsData') {
       // Worker batched attribute readout + per-cell RGB for all subscribed
       // inspect cells. Per-cell colors are bundled here (instead of relying
@@ -7069,7 +7102,12 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
   };
 
   // Reusable worker initializer (used by structural effect and dimension/image apply)
-  const initWorkerWithDimensions = useCallback((w: number, h: number, dOverride?: number) => {
+  const initWorkerWithDimensions = useCallback((w: number, h: number, dOverride?: number, busyLabel?: string) => {
+    // Announce the reinit. The heavy work (grid allocation, neighbour tables,
+    // WASM/WebGPU bring-up — seconds on a large 3D grid) happens IN THE WORKER,
+    // so the main thread stays free and this bar paints and animates throughout.
+    // Ends on the first message back from the fresh worker.
+    beginWorkerBusy(busyLabel ?? 'Preparing simulation…');
     // Overseer: a worker reinit replaces the worker the runtime is attached to.
     if (overseerRunningRef.current) overseerRuntimeRef.current?.abort('worker reinit');
     // If a recording is in progress, abandon it before tearing down the
@@ -7667,10 +7705,13 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       webmStreamRef.current?.cancel();
       webmStreamRef.current = null;
       webmStreamPendingRef.current = [];
+      // A reinit bar waiting on a worker that is about to be terminated would
+      // never be ended by a reply — drop it with the worker.
+      endInitBusy();
       workerRef.current?.terminate();
       workerRef.current = null;
     };
-  }, []);
+  }, [endInitBusy]);
 
   // Listen for project-save events to auto-capture simulation state.
   // `detail.include` is { grid?: boolean; controls?: boolean } — FileMenu's dialog fills it in.
@@ -11865,7 +11906,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
     setPlaying(false);
     workerRef.current?.terminate();
     workerRef.current = null;
-    initWorkerWithDimensions(model.properties.gridWidth, model.properties.gridHeight);
+    initWorkerWithDimensions(model.properties.gridWidth, model.properties.gridHeight, undefined, 'Recompiling…');
   };
 
   /** Release the streaming encoder and clear every recording buffer/counter.
@@ -11937,6 +11978,10 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       if (enc) {
         for (const f of pending) { if (enc.addFrame(f.frame, force, f.t)) recordCountRef.current += 1; else recordDroppedRef.current += 1; }
         setEncodingWebM(true);
+        // INDETERMINATE: a streaming stop is a flush of already-encoded bytes —
+        // the codec reports no fraction, and it is normally fast (measured 87 ms
+        // / 3.1 MB), but a long dense recording can take over a second.
+        const busyHandle = beginBusy('Finishing WebM…');
         try {
           const blob = await enc.finish();
           await saveRecording(blob, `${fname}_recording.webm`);
@@ -11944,6 +11989,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
           console.error('WebM encode failed', err);
           alert(`WebM encode failed: ${err instanceof Error ? err.message : String(err)}`);
         } finally {
+          busyHandle.end();
           setEncodingWebM(false);
         }
       } else if (pending.length > 0) {
@@ -11951,6 +11997,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
         // held frames through the buffered path so a very short recording still
         // produces a file.
         setEncodingWebM(true);
+        const busyHandle = beginBusy('Encoding WebM…');
         try {
           const blob = await encodeFramesToWebM(
             pending.map(f => f.frame), targetFpsRef.current || 30, recordQualityRef.current,
@@ -11961,6 +12008,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
           console.error('WebM encode failed', err);
           alert(`WebM encode failed: ${err instanceof Error ? err.message : String(err)}`);
         } finally {
+          busyHandle.end();
           setEncodingWebM(false);
         }
       }
@@ -11982,6 +12030,9 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
 
     if (format === 'webm') {
       setEncodingWebM(true);
+      // The buffered path encodes every frame at Stop — the slow one WebM
+      // streaming exists to avoid, so it is always worth announcing.
+      const busyHandle = beginBusy('Encoding WebM…');
       try {
         const blob = await encodeFramesToWebM(
           frames, fps, recordQualityRef.current, recordedFrameTimes.current,
@@ -11991,6 +12042,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
         console.error('WebM encode failed', err);
         alert(`WebM encode failed: ${err instanceof Error ? err.message : String(err)}`);
       } finally {
+        busyHandle.end();
         setEncodingWebM(false);
       }
     } else {
@@ -12001,9 +12053,19 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       if (import.meta.env.DEV) {
         (window as unknown as { __lastGifFrames?: ImageData[] }).__lastGifFrames = frames.slice();
       }
-      const { blob, stats } = encodeFramesToGif(frames, fps, {
-        maxSize: gifMaxSizeFor(captureResolutionRef.current),
-      });
+      // DETERMINATE: the frame count is known up front and the encoder yields
+      // per frame, so the bar genuinely tracks the work (this is the longest
+      // main-thread operation in the app — seconds for a long recording).
+      const busyHandle = beginBusy('Encoding GIF…', { determinate: true });
+      let blob: Blob, stats: GifEncodeStats;
+      try {
+        ({ blob, stats } = await encodeFramesToGif(frames, fps, {
+          maxSize: gifMaxSizeFor(captureResolutionRef.current),
+          onProgress: (done, total) => busyHandle.progress(done / total, `${done} / ${total} frames`),
+        }));
+      } finally {
+        busyHandle.end();
+      }
       if (import.meta.env.DEV) console.info('[recording] GIF', stats);
       await saveRecording(blob, `${fname}_recording.gif`);
     }
@@ -12521,11 +12583,17 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
     const file = e.target.files?.[0];
     if (!file) return;
     e.target.value = '';
+    // A .gcastate carries every cell attribute base64-encoded, so both the read
+    // (main thread) and the worker's restore are real work on a large grid.
+    const readBusy = beginBusy(`Loading "${file.name}"…`);
     try {
       const state = await readStateFile(file);
+      beginWorkerBusy('Restoring simulation state…');
       applySimulationState(state, { adaptDims: true });  // explicit file load — its dims are authoritative
     } catch (err) {
       setCompileError(String(err));
+    } finally {
+      readBusy.end();
     }
   };
 
@@ -12597,6 +12665,11 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
     const dimsChanged = dimsFromState != null
       && (dimsFromState.w !== gridWidth.current || dimsFromState.h !== gridHeight.current || dimsFromState.d !== gridDepth.current);
     if ((boundaryChanged || dimsChanged) && playing) setPlaying(false);
+    // Only a STRUCTURAL preset is worth announcing: it restarts the engine (and
+    // the dims it dispatches make the model effect do a full reinit, whose own
+    // bar then replaces this one). A parameter-only / matching-dims preset
+    // applies live in a few ms — flashing a bar for it would be noise.
+    if (boundaryChanged || dimsChanged) beginWorkerBusy(`Loading preset "${p.name}"…`);
     applySimulationState(p.state, { adaptDims: true });  // explicit preset load — a WITH-GRID preset's dims are authoritative
   };
 
@@ -12873,7 +12946,8 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
     const w = Math.max(1, simWidth);
     const h = Math.max(1, simHeight);
     // 3D Grid CA: also resize depth (the panel shows a Depth field in 3D).
-    initWorkerWithDimensions(w, h, is3D ? Math.max(1, simDepth) : undefined);
+    const d = is3D ? Math.max(1, simDepth) : undefined;
+    initWorkerWithDimensions(w, h, d, `Resizing grid to ${w}×${h}${d !== undefined ? `×${d}` : ''}…`);
   };
 
   // F6: Import image as starting point
@@ -12889,7 +12963,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       pendingImageImport.current = pixels;
       pendingImageMapping.current = brushMappingRef.current;
       pendingImageChannels.current = null;   // no dialog in 3D ⇒ the default assignment
-      initWorkerWithDimensions(img.width, img.height);
+      initWorkerWithDimensions(img.width, img.height, undefined, 'Importing image…');
       return;
     }
     setImageMapImg(img); // 2D: open the Mapping Cells dialog
@@ -12932,9 +13006,13 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
         pendingImageMapping.current = mappingId;
         pendingImageChannels.current = channels ?? null;
       }
-      initWorkerWithDimensions(cols, rows);
+      initWorkerWithDimensions(cols, rows, undefined, 'Importing image…');
     } else {
-      // Paste centered — keep the grid, write the region in its centre.
+      // Paste centered — keep the grid, write the region in its centre. Still
+      // worker work proportional to the region (importImage runs the compiled
+      // input-mapping function once per cell), so it is announced too; the
+      // worker's display tail replies with `stepped`, which ends the bar.
+      beginWorkerBusy('Importing image…');
       const offRow = Math.floor((gridHeight.current - rows) / 2);
       const offCol = Math.floor((gridWidth.current - cols) / 2);
       if (useManual) {
@@ -12979,6 +13057,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
     if (!w) return;
     if (r.target === 'agents') {
       if (r.agents.length === 0) return;
+      beginWorkerBusy('Importing CSV…');
       if (r.replace) w.postMessage({ type: 'clearAgents', activeViewer: activeViewerRef.current });
       w.postMessage({
         type: 'pasteAgents',
@@ -12990,8 +13069,13 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
     }
     if (r.resize) {
       pendingGridValuesImport.current = { attrId: r.attrId, width: r.width, height: r.height, layer: r.layer, values: r.values };
-      initWorkerWithDimensions(r.width, r.height, is3dRef.current ? Math.max(1, gridDepth.current || simDepth) : undefined);
+      initWorkerWithDimensions(
+        r.width, r.height,
+        is3dRef.current ? Math.max(1, gridDepth.current || simDepth) : undefined,
+        'Importing CSV…',
+      );
     } else {
+      beginWorkerBusy('Importing CSV…');
       w.postMessage(
         { type: 'importGridValues', attrId: r.attrId, width: r.width, height: r.height, layer: r.layer, values: r.values, activeViewer: activeViewerRef.current },
         { transfer: [r.values.buffer] },

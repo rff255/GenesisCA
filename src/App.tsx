@@ -14,6 +14,8 @@ import { ModelsLibrary } from './library/ModelsLibrary';
 import { StyleReferenceView } from './styleguide/StyleReferenceView';
 import { ThemeSwitcher } from './components/ThemeSwitcher';
 import { KeyboardShortcutsOverlay } from './components/KeyboardShortcutsOverlay';
+import { BusyOverlay, useBusy } from './components/BusyOverlay';
+import { beginBusy } from './components/busyState';
 import type { CAModel } from './model/types';
 import styles from './App.module.css';
 
@@ -73,6 +75,10 @@ function AppInner() {
     toastTimer.current = window.setTimeout(() => setToast(null), 3500);
   };
   useEffect(() => () => { if (toastTimer.current != null) clearTimeout(toastTimer.current); }, []);
+  // The busy/progress card shares the toast's top-centre slot. When one is up,
+  // the toast steps down so both stay readable (they DO coincide: the "loaded
+  // successfully" toast fires while the worker is still reinitialising).
+  const busy = useBusy();
 
   // A newer service worker is installed and WAITING — drives the update banner.
   const [updateReady, setUpdateReady] = useState(false);
@@ -195,6 +201,10 @@ function AppInner() {
   // Window-level listeners preventDefault dragover+drop so the browser never
   // navigates to a dropped file.
   const loadDroppedProject = async (file: File) => {
+    // Reading + parsing a .gcaproj is the one main-thread half of a model load
+    // (a big embedded simulationState or thumbnail makes it seconds); the worker
+    // reinit that follows announces itself separately from SimulatorView.
+    const busyHandle = beginBusy(`Loading "${file.name}"…`);
     try {
       const parsed = await readModelFile(file);
       if (isDirtyRef.current) {
@@ -205,6 +215,8 @@ function AppInner() {
       }
     } catch (err) {
       showToast(`Could not open "${file.name}": ${err instanceof Error ? err.message : 'invalid project file'}`);
+    } finally {
+      busyHandle.end();
     }
   };
   const handleDroppedFile = (file: File) => {
@@ -279,6 +291,7 @@ function AppInner() {
     lq.setConsumer(async ({ files }) => {
       const handle = files && files[0];
       if (!handle) return;
+      const busyHandle = beginBusy('Loading model…');
       try {
         const file = await handle.getFile();
         const parsed = await readModelFile(file);
@@ -290,6 +303,8 @@ function AppInner() {
         }
       } catch (err) {
         showToast(`Could not open file: ${err instanceof Error ? err.message : 'invalid project file'}`);
+      } finally {
+        busyHandle.end();
       }
     });
   }, []);
@@ -426,9 +441,12 @@ function AppInner() {
           Drop to open — .gcaproj / .gcastate / .gcapreset / image
         </div>
       )}
-      {toast && <div className={styles.toast}>{toast}</div>}
+      <BusyOverlay />
+      {toast && (
+        <div className={`${styles.toast}${busy ? ` ${styles.loweredForBusy}` : ''}`}>{toast}</div>
+      )}
       {updateReady && (
-        <div className={styles.updateBanner} role="status">
+        <div className={`${styles.updateBanner}${busy ? ` ${styles.loweredForBusy}` : ''}`} role="status">
           <span className={styles.updateText}>
             A new version of GenesisCA is available.
             {isDirty && ' Updating reloads the app — save your model first, unsaved changes will be lost.'}

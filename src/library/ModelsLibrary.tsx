@@ -2,6 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import type { CAModel } from '../model/types';
 import { createdDateTimestamp, formatCreatedDate } from '../model/createdDate';
 import { ThumbMedia } from '../components/ThumbMedia';
+import { beginBusy } from '../components/busyState';
 import styles from './ModelsLibrary.module.css';
 
 interface LibraryEntry {
@@ -412,6 +413,10 @@ export function ModelsLibrary({ onLoadModel }: Props) {
   }, [visible, prefs.group, effTagsById]);
 
   const handleClick = async (entry: LibraryEntry) => {
+    // A library .gcaproj can be megabytes (an embedded board + thumbnail) and on
+    // a cold cache it comes off the network; the worker reinit that follows the
+    // load announces itself separately from SimulatorView.
+    const busyHandle = beginBusy(`Loading "${entry.name}"…`);
     try {
       const base = import.meta.env.BASE_URL ?? '/';
       const r = await fetch(`${base}models/${entry.file}`);
@@ -420,6 +425,8 @@ export function ModelsLibrary({ onLoadModel }: Props) {
       onLoadModel(model, entry.file);
     } catch (err) {
       alert(err instanceof Error ? err.message : 'Failed to load model.');
+    } finally {
+      busyHandle.end();
     }
   };
 

@@ -1,0 +1,91 @@
+/* Busy / progress overlay — one card, top-centre, under the navbar.
+   `pointer-events: none` throughout: it must never swallow a click meant for
+   the canvas or a panel underneath (it also carries `data-sim-overlay`, so even
+   if that ever changed the simulator's brush guard would still refuse to paint
+   through it). */
+.busy {
+  position: fixed;
+  top: calc(var(--navbar-height) + var(--space-4));
+  left: 50%;
+  transform: translateX(-50%);
+  min-width: 240px;
+  max-width: min(420px, 90vw);
+  background: var(--color-bg-panel);
+  color: var(--color-text-primary);
+  border: 1px solid var(--color-accent);
+  border-radius: var(--radius-md);
+  padding: var(--space-3) var(--space-5);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+  z-index: 1100; /* above the load toast (1000) */
+  pointer-events: none;
+  animation: busyIn 0.18s ease-out;
+}
+
+@keyframes busyIn {
+  from { opacity: 0; transform: translateX(-50%) translateY(-6px); }
+  to   { opacity: 1; transform: translateX(-50%) translateY(0); }
+}
+
+.row {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-3);
+  margin-bottom: var(--space-2);
+}
+
+.label {
+  font-size: var(--font-sm);
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.detail {
+  font-size: var(--font-xs);
+  color: var(--color-text-tertiary);
+  flex: 0 0 auto;
+  font-variant-numeric: tabular-nums;
+}
+
+/* The track. 4px is enough to read as a progress bar without turning the card
+   into a dialog. */
+.track {
+  height: 4px;
+  border-radius: 2px;
+  background: var(--color-widget-border);
+  overflow: hidden;
+}
+
+/* Determinate: width is the fraction. The transition keeps a per-frame update
+   from looking like a stutter, and is short enough not to lag the truth. */
+.fill {
+  height: 100%;
+  background: var(--color-accent);
+  border-radius: 2px;
+  transition: width 0.12s linear;
+}
+
+/* Indeterminate: a shuttle that never claims a position it does not know.
+   Deliberately a TRANSFORM animation — it runs on the compositor, so it keeps
+   moving even in the gaps where the main thread is briefly busy, which is the
+   one thing this overlay must never appear to stop doing. */
+.shuttle {
+  height: 100%;
+  width: 34%;
+  border-radius: 2px;
+  background: var(--color-accent);
+  animation: busyShuttle 1.05s ease-in-out infinite;
+}
+
+@keyframes busyShuttle {
+  0%   { transform: translateX(-105%); }
+  100% { transform: translateX(400%); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .busy { animation: none; }
+  .shuttle { animation-duration: 2.2s; }
+  .fill { transition: none; }
+}
