@@ -23,6 +23,7 @@ import { DivideAgentNode } from './DivideAgentNode';
 import { KillAgentNode } from './KillAgentNode';
 import { DivisionEventNode } from './DivisionEventNode';
 import { AgentOutputMappingNode } from './AgentOutputMappingNode';
+import { AgentInputMappingNode } from './AgentInputMappingNode';
 import { SampleFieldNode } from './SampleFieldNode';
 import { FieldGradientNode } from './FieldGradientNode';
 import { ReadCellsUnderNode } from './ReadCellsUnderNode';
@@ -195,6 +196,7 @@ const ALL_NODES: NodeTypeDef[] = [
   // Agent Output Mapping (A→C) — the agent analogue of OutputMapping; roots a
   // per-agent colour/exhibition pass (Standalone or the synthesized Linked one).
   AgentOutputMappingNode,
+  AgentInputMappingNode,
   // Generic Agent Platform — the once-per-reset Agent Init Event + the two-phase
   // graph-authored spawn (Create → set by id → Add).
   AgentInitNode,

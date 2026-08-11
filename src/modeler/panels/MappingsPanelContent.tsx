@@ -264,8 +264,10 @@ function handleMappingDragStart(mappingId: string, isAttributeToColor: boolean) 
 /** Agent views drag as their OWN payload kind — their id-space is
  *  `model.agentMappings`, and the related nodes are the agent root (+ the
  *  universal Set Cell Looks), not the lattice `outputMapping`. */
-function handleAgentMappingDragStart(mappingId: string) {
-  return dragStartFor({ kind: 'agent-mapping', mappingId });
+function handleAgentMappingDragStart(mappingId: string, isAttributeToColor: boolean) {
+  return dragStartFor(isAttributeToColor
+    ? { kind: 'agent-mapping', mappingId }
+    : { kind: 'agent-mapping-c2a', mappingId });
 }
 
 /** Sprites drag as their own kind too — `model.sprites` is a third id-space and
@@ -314,6 +316,11 @@ export function MappingsPanelContent({ mode = 'list' }: PanelContentProps = {}) 
   const gridCellsOn = model.topologyMode?.gridCells !== false;
   const showGroupHeaders = gridCellsOn && agentsOn;
   const agentMappings = model.agentMappings ?? [];
+  // BOTH agent directions live in `agentMappings`, discriminated by
+  // `isAttributeToColor` exactly like the cell list: A->C = a colour VIEW, C->A =
+  // an INPUT mapping the agent Paint brush runs on each painted agent.
+  const agentViews = agentMappings.filter(m => m.isAttributeToColor);
+  const agentInputs = agentMappings.filter(m => !m.isAttributeToColor);
   const agentAttrs = (model.agentAttributes ?? []).filter(a => a.type !== 'color' && a.type !== 'lookupTable');
   const sprites = model.sprites ?? [];
   const spriteInputRef = useRef<HTMLInputElement>(null);
@@ -381,7 +388,11 @@ export function MappingsPanelContent({ mode = 'list' }: PanelContentProps = {}) 
 
   // Independent reorder for the agent views (their order IS the simulator's
   // Agents viewer-tab order, same as the cell mappings' tabs).
-  const agentReorder = useListReorder(agentMappings, reorderAgentMappings);
+  // Reordering ONE direction's rows sends only that subset; `reorderById` appends
+  // the untouched entries after it, so relative order WITHIN each direction is
+  // preserved (which is all any consumer reads — every one filters by direction).
+  const agentReorder = useListReorder(agentViews, reorderAgentMappings);
+  const agentInputReorder = useListReorder(agentInputs, reorderAgentMappings);
   // …and for the Sprite Library, whose order is what every sprite picker lists.
   const spriteReorder = useListReorder(sprites, reorderSprites);
 
@@ -437,6 +448,12 @@ export function MappingsPanelContent({ mode = 'list' }: PanelContentProps = {}) 
 
   const selected = selectedCellId ? model.mappings.find(m => m.id === selectedCellId) : undefined;
   const selectedAgent = selectedAgentId ? agentMappings.find(m => m.id === selectedAgentId) : undefined;
+  // The two agent sections SHARE one selection slot, so each section's
+  // Duplicate / Delete must act only when the selection is one of ITS rows —
+  // otherwise Delete under "Agent Input Mappings" would remove a selected A→C
+  // VIEW (and vice versa). Grey the buttons out rather than let them misfire.
+  const selectedAgentViewId = selectedAgent?.isAttributeToColor ? selectedAgentId : null;
+  const selectedAgentInputId = selectedAgent && !selectedAgent.isAttributeToColor ? selectedAgentId : null;
   const selectedSprite = selectedSpriteId ? sprites.find(s => s.id === selectedSpriteId) : undefined;
 
   const handleDelete = () => {
@@ -578,15 +595,15 @@ export function MappingsPanelContent({ mode = 'list' }: PanelContentProps = {}) 
             Each is a colour view of the agents, picking an agent attribute → colour.
             Switch between them in the simulator&apos;s viewer bar (Agents row).
           </span>
-          {agentMappings.length === 0 && (
+          {agentViews.length === 0 && (
             <span style={{ color: '#888', fontSize: '0.68rem', fontStyle: 'italic' }}>No agent views yet.</span>
           )}
           <div className={styles.list} data-reorder-list>
-            {agentMappings.map((m, i) => {
+            {agentViews.map((m, i) => {
               const isDragging = agentReorder.dragState?.id === m.id;
-              const srcIdx = agentReorder.dragState ? agentMappings.findIndex(x => x.id === agentReorder.dragState!.id) : -1;
+              const srcIdx = agentReorder.dragState ? agentViews.findIndex(x => x.id === agentReorder.dragState!.id) : -1;
               const showBefore = agentReorder.dragState?.overIdx === i && srcIdx !== i && srcIdx !== i - 1;
-              const showAfter = agentReorder.dragState?.overIdx === agentMappings.length && i === agentMappings.length - 1 && srcIdx !== i;
+              const showAfter = agentReorder.dragState?.overIdx === agentViews.length && i === agentViews.length - 1 && srcIdx !== i;
               return (
                 <div
                   key={m.id}
@@ -595,7 +612,7 @@ export function MappingsPanelContent({ mode = 'list' }: PanelContentProps = {}) 
                   className={`${styles.listItem} ${selectedAgentId === m.id ? styles.listItemSelected : ''} ${isDragging ? styles.draggingRow : ''} ${showBefore ? styles.dropIndicatorBefore : ''} ${showAfter ? styles.dropIndicatorAfter : ''}`}
                   onClick={() => setSelectedId(AGENT_MAP_PREFIX + m.id)}
                   draggable
-                  onDragStart={handleAgentMappingDragStart(m.id)}
+                  onDragStart={handleAgentMappingDragStart(m.id, true)}
                   onDragEnd={handleMappingDragEnd}
                   title={`Drag to the Agents canvas to add a node that uses '${m.name}'`}
                 >
@@ -611,15 +628,72 @@ export function MappingsPanelContent({ mode = 'list' }: PanelContentProps = {}) 
           <div className={styles.buttonRow}>
             <button
               className={styles.addButton}
-              onClick={() => addAgentMapping()}
+              onClick={() => addAgentMapping(true)}
               title={agentAttrs.length === 0 ? 'No agent attributes yet — the new view is seeded Standalone (build it on the Agents graph).' : undefined}
             >
               + Add Agent View
             </button>
-            <button className={styles.addButton} onClick={() => selectedAgentId && duplicateAgentMapping(selectedAgentId)} disabled={!selectedAgentId}>
+            <button className={styles.addButton} onClick={() => selectedAgentViewId && duplicateAgentMapping(selectedAgentViewId)} disabled={!selectedAgentViewId}>
               Duplicate
             </button>
-            <button className={styles.deleteButton} onClick={handleDeleteAgent}>
+            <button className={styles.deleteButton} onClick={handleDeleteAgent} disabled={!selectedAgentViewId}>
+              Delete
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Agent INPUT Mappings — the agent-layer C→A half of `agentMappings`, the
+          mirror image of the section above and the agent twin of the CA grid's
+          Color→Attribute mappings. Each is a STANDALONE graph (there is no palette
+          to auto-generate — the graph IS the mapping) rooted at an Agent Input
+          Mapping node, run once per agent the simulator's agent Paint brush
+          touches. Same master-detail + drag-to-canvas as every other list. */}
+      {agentsOn && (
+        <div className={styles.section}>
+          <div className={styles.sectionTitle}>Agent Input Mappings (C&rarr;A)</div>
+          <span style={{ color: '#888', fontSize: '0.66rem', display: 'block', margin: '0 0 6px' }}>
+            Each is a graph that runs on every agent you paint with the simulator&apos;s
+            agent brush (Paint mode) — the brush colour arrives on the root&apos;s R/G/B outputs.
+          </span>
+          {agentInputs.length === 0 && (
+            <span style={{ color: '#888', fontSize: '0.68rem', fontStyle: 'italic' }}>No agent input mappings yet.</span>
+          )}
+          <div className={styles.list} data-reorder-list>
+            {agentInputs.map((m, i) => {
+              const isDragging = agentInputReorder.dragState?.id === m.id;
+              const srcIdx = agentInputReorder.dragState ? agentInputs.findIndex(x => x.id === agentInputReorder.dragState!.id) : -1;
+              const showBefore = agentInputReorder.dragState?.overIdx === i && srcIdx !== i && srcIdx !== i - 1;
+              const showAfter = agentInputReorder.dragState?.overIdx === agentInputs.length && i === agentInputs.length - 1 && srcIdx !== i;
+              return (
+                <div
+                  key={m.id}
+                  id={`mapping-${m.id}`}
+                  data-reorder-row
+                  className={`${styles.listItem} ${selectedAgentId === m.id ? styles.listItemSelected : ''} ${isDragging ? styles.draggingRow : ''} ${showBefore ? styles.dropIndicatorBefore : ''} ${showAfter ? styles.dropIndicatorAfter : ''}`}
+                  onClick={() => setSelectedId(AGENT_MAP_PREFIX + m.id)}
+                  draggable
+                  onDragStart={handleAgentMappingDragStart(m.id, false)}
+                  onDragEnd={handleMappingDragEnd}
+                  title={`Drag to the Agents canvas to add an Agent Input Mapping root for '${m.name}'`}
+                >
+                  <span className={styles.listItemName}>{m.name}</span>
+                  <span className={styles.listItemBadge}>C&rarr;A</span>
+                  <button className={styles.dragHandle} title="Drag to reorder"
+                    onPointerDown={agentInputReorder.startDrag(m.id)}
+                    onClick={e => e.stopPropagation()}>⋮⋮</button>
+                </div>
+              );
+            })}
+          </div>
+          <div className={styles.buttonRow}>
+            <button className={styles.addButton} onClick={() => addAgentMapping(false)}>
+              + Add Agent Input
+            </button>
+            <button className={styles.addButton} onClick={() => selectedAgentInputId && duplicateAgentMapping(selectedAgentInputId)} disabled={!selectedAgentInputId}>
+              Duplicate
+            </button>
+            <button className={styles.deleteButton} onClick={handleDeleteAgent} disabled={!selectedAgentInputId}>
               Delete
             </button>
           </div>
@@ -729,9 +803,23 @@ export function MappingsPanelContent({ mode = 'list' }: PanelContentProps = {}) 
                 onChange={e => updateAgentMapping(selectedAgent.id, { description: e.target.value })}
               />
               <span style={{ color: '#888', fontSize: '0.66rem', marginTop: 3, display: 'block' }}>
-                Shown as the tooltip on this view&apos;s tab in the simulator&apos;s Agents viewer row.
+                {selectedAgent.isAttributeToColor
+                  ? "Shown as the tooltip on this view's tab in the simulator's Agents viewer row."
+                  : "Shown as the tooltip on this mapping's tab in the simulator's agent Paint brush."}
               </span>
             </div>
+            {/* A C->A INPUT mapping is ALWAYS a standalone graph — there is no
+                palette to auto-generate from an attribute, so the Color-pass
+                selector + the linked palette editor are hidden rather than shown
+                inert (the "an enabled control must do something" rule). */}
+            {!selectedAgent.isAttributeToColor && (
+              <span style={{ color: '#888', fontSize: '0.66rem', display: 'block' }}>
+                Build this mapping on the Agents graph: an <strong>Agent Input Mapping (C&rarr;A)</strong> root
+                whose R/G/B outputs carry the brush colour, then Set Attribute / Set Agent Radius / … on the DO chain.
+                Select it in the simulator&apos;s agent brush (Paint mode) and paint agents with it.
+              </span>
+            )}
+            {selectedAgent.isAttributeToColor && (<>
             <div className={styles.field}>
               <label className={styles.fieldLabel}>Color pass</label>
               <select
@@ -751,6 +839,7 @@ export function MappingsPanelContent({ mode = 'list' }: PanelContentProps = {}) 
             {selectedAgent.linked !== false && (
               <LinkedOutputEditor selected={{ ...selectedAgent, linked: true }} attrs={agentAttrs} update={updateAgentMapping} />
             )}
+            </>)}
           </div>
         </div>
       )}

@@ -614,9 +614,11 @@ check('runtime: uploadAgentSoA seeds the agent colour buffer [invisible-agents b
 
   // Push/Pull are in the set for their HIGHLIGHT (the ring over every agent the
   // disc will displace); their EFFECT is worker-side (a centre + a radius, never
-  // an id list). `add` must stay OUT — it is the default mode and reads nothing.
+  // an id list). Paint is in for BOTH halves — its footprint highlight AND the id
+  // scan its press runs. `add` must stay OUT — it is the default mode and reads
+  // nothing. ADDING A MODE MUST BE A DELIBERATE EDIT HERE, not an accident.
   check('the state-reading brush modes are an explicit set EXCLUDING add [hover-pin]',
-    /const AGENT_BRUSH_MODES_NEEDING_STATE: ReadonlySet<string> = new Set\(\['remove', 'move', 'edit', 'push', 'pull', 'glue', 'cut'\]\)/.test(sv));
+    /const AGENT_BRUSH_MODES_NEEDING_STATE: ReadonlySet<string> = new Set\(\['remove', 'move', 'edit', 'paint', 'push', 'pull', 'glue', 'cut'\]\)/.test(sv));
 
   const needs = blockAfter(sv, /const agentHoverNeedsState = useCallback\(/);
   check('the predicate consults the brush MODE, not just the target [hover-pin]',

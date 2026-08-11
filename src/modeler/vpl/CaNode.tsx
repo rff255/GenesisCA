@@ -1019,6 +1019,9 @@ function CaNodeComponent({ id, data }: NodeProps) {
     } else if (nodeData.nodeType === 'agentOutputMapping') {
       const mapping = (model.agentMappings ?? []).find(m => m.id === nodeData.config.mappingId);
       collapsedLabel = mapping ? `Agent A\u2192C: ${mapping.name}` : displayNodeLabel(def);
+    } else if (nodeData.nodeType === 'agentInputMapping') {
+      const mapping = (model.agentMappings ?? []).find(m => m.id === nodeData.config.mappingId);
+      collapsedLabel = mapping ? `Agent C\u2192A: ${mapping.name}` : displayNodeLabel(def);
     } else if (nodeData.nodeType === 'setAgentSprite') {
       const sprite = (model.sprites ?? []).find(s => s.id === nodeData.config.spriteId);
       collapsedLabel = sprite ? `Sprite - ${sprite.name}` : displayNodeLabel(def);
@@ -2336,6 +2339,24 @@ function CaNodeComponent({ id, data }: NodeProps) {
             <option value="">Select Agent View...</option>
             {(model.agentMappings ?? [])
               .filter(m => m.isAttributeToColor)
+              .map(m => (
+                <option key={m.id} value={m.id}>{m.name}</option>
+              ))}
+          </select>
+        )}
+
+        {/* The C->A half of `agentMappings` (isAttributeToColor === false) — the
+            agent Paint brush's tabs. Direction-filtered so an input root can
+            never be pointed at a view (and vice versa). */}
+        {nodeData.nodeType === 'agentInputMapping' && (
+          <select
+            className={styles.select}
+            value={(nodeData.config.mappingId as string) || ''}
+            onChange={e => updateConfig('mappingId', e.target.value)}
+          >
+            <option value="">Select Agent Input Mapping...</option>
+            {(model.agentMappings ?? [])
+              .filter(m => !m.isAttributeToColor)
               .map(m => (
                 <option key={m.id} value={m.id}>{m.name}</option>
               ))}

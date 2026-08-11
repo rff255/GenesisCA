@@ -30,6 +30,10 @@ export type ModelElementDragPayload =
    *  from the cell mappings, so it needs its own kind rather than reusing
    *  `mapping-a2c` (whose related nodes are the LATTICE roots). */
   | { kind: 'agent-mapping'; mappingId: string }
+  /** An AGENT Color→Attribute INPUT mapping (the `isAttributeToColor === false`
+   *  half of `model.agentMappings`) — the agent Paint brush's graph. Its own kind
+   *  so the drop offers the `agentInputMapping` root and NOT the A→C pair. */
+  | { kind: 'agent-mapping-c2a'; mappingId: string }
   /** A Sprite Library asset (`model.sprites`) — the agent exhibition layer's
    *  image. Its only consumer is the agent-only Set Agent Sprite node. */
   | { kind: 'sprite'; spriteId: string }
@@ -55,6 +59,7 @@ export function payloadElementId(payload: ModelElementDragPayload): string {
     case 'mapping-a2c': return payload.mappingId;
     case 'mapping-c2a': return payload.mappingId;
     case 'agent-mapping': return payload.mappingId;
+    case 'agent-mapping-c2a': return payload.mappingId;
     case 'sprite': return payload.spriteId;
     case 'indicator': return payload.indicatorId;
     case 'variable': return payload.variableId;
@@ -109,6 +114,12 @@ export const RELATED_NODES: Record<ModelElementDragPayload['kind'], RelatedNodeE
     { nodeType: 'agentOutputMapping', configKey: 'mappingId' },
     { nodeType: 'setCellLooks', configKey: 'mappingId' },
   ],
+  // The agent-layer twin of `mapping-c2a`: the Agent Input Mapping event root
+  // (the agent analogue of `inputColor`). Set Cell Looks is NOT offered — its
+  // viewer guard compares against a COLOUR viewer, which a C→A id never is.
+  'agent-mapping-c2a': [
+    { nodeType: 'agentInputMapping', configKey: 'mappingId' },
+  ],
   // The ONLY node that consumes a sprite id. `setSprite` is already true in the
   // node's defaultConfig, so the facet that reads `spriteId` is on out of the
   // box — but state it here too, so the drop is correct whatever that default
@@ -149,7 +160,7 @@ export const RELATED_NODES: Record<ModelElementDragPayload['kind'], RelatedNodeE
  *  canvas would light up ports for a node it would then refuse to create. */
 export function relatedEntriesForPayload(payload: ModelElementDragPayload): RelatedNodeEntry[] {
   const entries = RELATED_NODES[payload.kind] ?? [];
-  if (payload.kind === 'agent-mapping' || payload.kind === 'sprite') {
+  if (payload.kind === 'agent-mapping' || payload.kind === 'agent-mapping-c2a' || payload.kind === 'sprite') {
     return getActiveGraphKind() === 'agents' ? entries : [];
   }
   if (payload.kind !== 'variable') return entries;

@@ -226,7 +226,7 @@ genesis-ca/
 │   │       ├── alignmentSnap.ts        # Pure Ctrl-drag alignment-guide geometry (computeAlignmentSnap + sameGuides)
 │   │       ├── bondAttrPorts.ts        # GRA P2: Form Bond's per-BOND-ATTRIBUTE initial-value ports — the ONE builder consumed by BOTH CaNode and effectivePorts
 │   │       ├── NodeExplorer.tsx        # Right-side searchable node list panel
-│   │       ├── nodes/                # 151 node types (one file each) + registry.ts
+│   │       ├── nodes/                # 152 node types (one file each) + registry.ts
 │   │       │   ├── nodeValidation.ts  # detectMissingConfig() — drives warning badges
 │   │       │   └── colorScalePresets.ts # Named palettes (Viridis/Magma/Rainbow/…) for Color Scale + Linked mappings
 │   │       ├── widgets/              # Shared inline editors (InlineWidgets.tsx, GradientStopsEditor.tsx, ExpressionFormula.tsx)
@@ -386,7 +386,7 @@ The app is functional with these major systems:
 ### Visual Programming Language (VPL)
 - `src/modeler/vpl/GraphEditor.tsx` — React Flow-based node graph editor
 - `src/modeler/vpl/CaNode.tsx` — Custom node component with per-type config UI
-- `src/modeler/vpl/nodes/` — 154 node types (151 selectable from the Add Node menu + 3 hidden macro boundary nodes), each in its own file with `compile()` method. Canonical list: `ALL_NODES` in [registry.ts](src/modeler/vpl/nodes/registry.ts). Async-only nodes (6): SetNeighborhoodAttribute, SetNeighborAttributeByIndex, MarkCellUpdated, SetFacingOrientation, SetNeighborOrientationByIndex, MoveSelfToNeighbor. Includes `StopEventNode` (flow input only, text widget for stop message — compiles to `if (_stopFlag[0] === 0) _stopFlag[0] = <1-based idx>;` first-match-wins; WASM emitter mirrors this via `i32.store` at `layout.stopFlagOffset`).
+- `src/modeler/vpl/nodes/` — 155 node types (152 selectable from the Add Node menu + 3 hidden macro boundary nodes), each in its own file with `compile()` method. Canonical list: `ALL_NODES` in [registry.ts](src/modeler/vpl/nodes/registry.ts). Async-only nodes (6): SetNeighborhoodAttribute, SetNeighborAttributeByIndex, MarkCellUpdated, SetFacingOrientation, SetNeighborOrientationByIndex, MoveSelfToNeighbor. Includes `StopEventNode` (flow input only, text widget for stop message — compiles to `if (_stopFlag[0] === 0) _stopFlag[0] = <1-based idx>;` first-match-wins; WASM emitter mirrors this via `i32.store` at `layout.stopFlagOffset`).
 - Five "event" entry-point nodes: GenerationStep (per-gen logic), InitEvent (runs once PER CELL on simulator Reset — see Variegated Cells section), **GridInit** (runs ONCE GLOBALLY on Reset — free-form procedural seeding; see the "Grid Init Event" section), InputMapping C→A (brush), OutputMapping A→C (color pass)
 - `src/modeler/vpl/compiler/compile.ts` — Two-pass compiler: hoists values, then emits flow
 - Multi-output nodes (InputColor, GetColorConstant, MacroNode, ColorScale, FilterNeighbors, JoinNeighbors, GetFacingLabels, BreakDownNeighborIndex, InitEvent, GetCellPosition, GroupOperator with position output) use `_v${nodeId}_${portId}` naming
@@ -2252,6 +2252,73 @@ Plan + illustrated mockup: [docs/PLAN_AGENT_OUTPUT_MAPPINGS_SPRITES.md](docs/PLA
 **A2 — the panel section reached PARITY with the CA-grid mappings** (branch `updates`): it was an INLINE stack of per-view forms while the grid mappings were master-detail + draggable. It is now the same shape — a `styles.list` of `listItem` rows (name + `A→C` badge + a `⋮⋮` reorder handle) with a `+ Add Agent View` / `Duplicate` / `Delete` button row, the editor in the SHARED detail panel (see "Detail editor in a SECOND left panel" for the `agentmap:<id>` slot), auto-select-and-scroll on Add/Duplicate (keyed on `agentMappings.length`, NOT the array — `model.agentMappings ?? []` mints a fresh `[]` each render), reorder via `useListReorder` + a new `REORDER_AGENT_MAPPINGS` reducer/`reorderAgentMappings` callback (the agent views ARE the simulator's Agents viewer-tab strip, so their order is user-visible exactly like the cell mappings' tabs), and **drag-to-canvas**. The detail editor carries name / description / Color pass / the linked palette (`LinkedOutputEditor` over `agentAttrs`) — deliberately NOT the per-channel R/G/B description boxes, which document a hand-built CELL colour pass and nothing reads for an agent view.
 - **Drag-to-canvas rides a NEW payload kind `{ kind: 'agent-mapping', mappingId }`** ([modelElementDrag.ts](src/modeler/vpl/modelElementDrag.ts)) rather than reusing `mapping-a2c` (whose related nodes are the LATTICE roots): `RELATED_NODES['agent-mapping'] = [agentOutputMapping, setCellLooks]`, both keyed `mappingId`, so a drop spawns the node already pointed at the view (and, on a port snap, auto-connected). `GraphEditor`'s `titleByKind` (a `Record` over every kind — it will not compile without the new entry) labels the drop menu **"Agent view (A→C)"**.
 - **It is GRAPH-KIND-GATED in `relatedEntriesForPayload`** (the `variable` kind's per-payload filtering precedent): outside the Agents graph it returns `[]`, so dropping an agent view on the Cells / Overseer canvas shows *"No related nodes"* and creates nothing. `isNodeAvailable` already hides the `agentOutputMapping` root off the Agents graph, but **`setCellLooks` is UNIVERSAL and would otherwise leak through** — a Set Cell Looks whose viewer guard can never match the cell `activeViewer`, i.e. silent dead code. Because `relatedNodePotentialPorts` calls the same helper, the empty list also zeroes `computeCompatibleHandlesForDrag`, so the drag shows no port highlights there either — "nothing to offer" is visible, not just silent.
+
+**A3 — agent INPUT mappings (C→A): paint agents through a graph.** The mirror image of A/A2 and
+the agent twin of the CA grid's Color→Attribute mappings. **BOTH directions live in
+`CAModel.agentMappings`, discriminated by the SAME `isAttributeToColor` flag the cell `mappings`
+list uses** — no new schema field, no migration (every existing entry is A→C). New event root
+**`agentInputMapping`** ([AgentInputMappingNode.ts](src/modeler/vpl/nodes/AgentInputMappingNode.ts),
+white like every event root, `requirements.bondGraph`, NOT a singleton) exposes the brush colour on
+`r`/`g`/`b` + a `DO` chain; its picker and its `detectMissingConfig` badge both **direction-filter**
+(an A→C id is rejected, and `agentOutputMapping` symmetrically rejects a C→A one — a root pointed at
+the wrong direction would compile to a pass nothing ever runs).
+- **THE POSTURE — JS on CPU on EVERY agent target**, the documented stance shared with
+  `runAgentColorPass` and the Division Event: this is an **EVENT-tempo** function (it runs once per
+  painted agent, on a user gesture), not step-hot, so there is nothing to gain from a WASM/WebGPU
+  emit and the all-target rule is satisfied by construction — the ONE compiled function serves
+  JS, WASM and WebGPU identically (verified on all three).
+- **ABI — a FOURTH kind, `'input'`, on the shared descriptor** ([agentAbi.ts](src/modeler/vpl/compiler/agentAbi.ts)):
+  structurally `division` minus the daughter scalars. A `singleAgent` predicate now drives every
+  branch that previously read `kind === 'division'`, so the two can never drift. It leads with `idx`
+  and its **`w_` block ALIASES `attrRead`** — load-bearing: a paint is a sequential mutation BETWEEN
+  steps, and under sync agent mode `primeAgentAttrWrite` copies attrRead→attrWrite at the top of the
+  next step, so a write to `attrWrite` would be silently discarded. No hash / request / spawn buffers
+  (a paint gesture queries no neighbours and mutates no topology). The three brush-colour params
+  (`_r, _g, _b`) are prepended by the CALLER, exactly as the cell `inputColor` signature does — so
+  the DEV arity assertion (the FOURTH ABI pair, `buildAgentInputParams` ↔ `buildAgentInputArgs`)
+  expects `descriptor.length + 3`.
+- **Worker**: `agentInputMappingCodes` ride init/recompile → `agentInputMappingFns`; the ONE new
+  message **`paintAgentsColor { ids, r, g, b, mappingId, activeViewer }`** runs that mapping's fn per
+  live id (sequential, dead/out-of-range skipped, a throwing fn dropped with ONE error post), then
+  `runAgentColorPass()` + `sendColors()` — the `paintAgents` tail. It is in `AGENT_GPU_DEFER_TYPES`,
+  so it defers during an in-flight GPU readback and invalidates the resident GPU copy like every
+  other mutation.
+- **Brush**: a new agent brush mode **`paint`**, gated by `agentBrushModesFor(bondsAvailable,
+  inputMappingsAvailable)` — a model with no input mapping has no graph to run, so the mode is
+  dropped from the button row AND the Alt+wheel cycle (the Glue/Cut precedent), and a stranded
+  selection coerces to `add`. Its config block is mapping TABS + a colour picker (the colour
+  persists in `genesisca_sim_settings`; the mapping id is session state coerced onto the first live
+  mapping). It honours the full footprint machinery (shape / Single-Area scope / the Line tool) in
+  **2D AND 3D**, with its own rAF batcher (`pendingAgentPaintIds` — never the cell brush's
+  `pendingPaintRaf`) and ids deduped so a slow drag can't run the graph a dozen times on one agent.
+- **Every `agentMappings` consumer that assumed A→C now filters**: the direct-render gate's OM count,
+  the generation-pipeline colour-pass row, the WebGPU agent-OM early-out, the Mappings panel (two
+  sections, two reorder hooks, a direction-branched detail editor — an input mapping is ALWAYS a
+  standalone graph, so the Color-pass selector + linked palette are hidden rather than shown inert).
+  A new drag payload kind `agent-mapping-c2a` offers only the input root (Set Cell Looks is NOT
+  offered — its viewer guard compares against a COLOUR viewer, which a C→A id never is).
+- **DEV hook `window.__agentPaint(ids)`** (the `__sim3dPaint` precedent) runs the brush's own
+  compose-and-post path minus the canvas geometry — the only way to exercise it in an OCCLUDED
+  Browser pane, where the canvas rect is 0×0.
+- **Every analyzer that enumerates the agent ROOTS had to learn the new one** (an adversarial
+  review found all five): `hazardEligible` ([compile.ts](src/modeler/vpl/compiler/compile.ts)) —
+  the `input` kind aliases `w_` to `attrRead`, which is EXACTLY why `divisionEvent` is listed, so
+  without it a Set Attribute followed by a Get Self Attribute on the same attr was sink-hoisted
+  above the write and read the PRE-write value (negative-controlled: 7 before the fix, 42 after);
+  `NEVER_INVARIANT` ([loopInvariant.ts](src/modeler/vpl/compiler/loopInvariant.ts)); `ROOT_TYPES` +
+  `CONTROL_FLOW` + `NODE_LABEL` ([geometryTaint.ts](src/modeler/vpl/compiler/geometryTaint.ts)) — a
+  paint graph's writes were invisible to the C8 taint verdict; and `LOWERED_AWAY`
+  ([targetDiagnosis.ts](src/model/targetDiagnosis.ts)) — a value-out wired into the behaviour cone
+  would otherwise report the root as an unsupported WASM/WebGPU node type. **When adding an agent
+  root, sweep those four files.**
+- **Gate**: [scripts/test-agent-abi.mjs](scripts/test-agent-abi.mjs) grew from 28 to **48** checks —
+  the `'input'` arg list against a hand-written expectation, the structural claim *input === division
+  MINUS the daughter scalars*, the 2D-is-a-prefix-of-3D rule for the new kind, and the `w_` ALIASING
+  claim asserted on a **`syncAttrs: true` store**. That last one matters: in async mode `attrWrite`
+  ALIASES `attrRead`, so an attrWrite/attrRead mix-up is INVISIBLE — the first version of the test
+  passed a deliberate mutation for exactly that reason. **Negative-controlled by SOURCE MUTATION**:
+  reverting any of the three widened `singleAgent` branches (the leading `idx`, the bond slice, the
+  `w_` aliasing) fails 4-8 checks.
 
 **B — agent sprites (an optional exhibition layer; static image / animated GIF/WebP per agent).** `CAModel.sprites?: SpriteAsset[]` ([types.ts](src/model/types.ts): `{ id, name, dataUrl, mimeType, scale?, loop? }`) — additive, travels in the `.gcaproj` as a base64 data URL. `ADD/DUPLICATE/REMOVE/UPDATE/REORDER_SPRITE(S)` reducers ([ModelContext.tsx](src/model/ModelContext.tsx)); `REMOVE_SPRITE` cascades `clearDeletedId('spriteId')` over `setAgentSprite` nodes. **Decode is MAIN-THREAD only** ([spriteRegistry.ts](src/simulator/spriteRegistry.ts)) via WebCodecs **`ImageDecoder`** (animated GIF/WebP/PNG natively — NO new dependency; the project already uses WebCodecs for WebM recording) → `ImageBitmap[]`, with a `createImageBitmap` single-frame fallback; the worker never carries the pixels. The **`SpriteRegistry`** (keyed by sprite id, re-decodes only changed `dataUrl`s, `onReady` redraws) is owned by SimulatorView and reconciled on `model.sprites` change. **Sprite Library** UI = a "Sprites" section in the Mappings panel, **MASTER-DETAIL + DRAGGABLE, the same shape as the mappings above it** (the `767541b` agent-views conversion applied to sprites; import png/jpeg/gif/webp ≤4 MB / a frame SEQUENCE / a sprite SHEET, ≤4 MB each). The LIST is a `listItem` row per asset — a 24px thumbnail (the row's identity — a sprite is a picture), the name, a `Nf` frame-count badge for a multi-frame asset, and a `⋮⋮` reorder handle — with `+ Image / GIF` / `+ Frame sequence` / `+ Sprite sheet` / **Duplicate** / **Delete** in the button row (the last two disabled until a row is selected). The selected asset's editor (name, size×, loop, sheet-slicing grid, the rotation block + `CompassDial`, the chroma key + its click-the-image `SpriteBgPicker`) opens in the SHARED second detail panel.
   - **The Mappings panel's ONE detail slot is now THREE-way discriminated**: a bare id = a CELL mapping, `agentmap:<id>` = an agent view, **`sprite:<id>` = a Sprite Library asset** — so picking in any layer deselects the others for free. ⚠ **`ModelerView.selectedItemName` MUST resolve the `sprite:` prefix** (against `model.sprites`) or the detail `PanelShell` — gated on `detailItemName != null` — never mounts and clicking a row does NOTHING visible; the same trap the agent-attributes and agent-views conversions each hit.

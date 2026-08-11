@@ -2776,6 +2776,27 @@ export function HelpView() {
             at it (drop it near a matching port and it wires itself up). Agent views only mean
             something on the Agents graph, so dropping one on the Cells canvas offers nothing.
           </p>
+          <h3 className={styles.h3}>Agent Input Mappings (Colour &rarr; Attribute)</h3>
+          <p className={styles.p}>
+            The mirror image of the views above, and the agent twin of the CA grid&rsquo;s
+            <em> Color &rarr; Attribute</em> mappings: an <strong>Agent Input Mapping</strong> is a graph
+            that runs <em>once per agent you paint</em> with the Simulator&rsquo;s agent brush in
+            <strong> Paint</strong> mode. Add one with <strong>+ Add Agent Input</strong>, then build it on
+            the Agents canvas: drop an <strong>Agent Input Mapping (C&rarr;A)</strong> event node, pick the
+            mapping, and hang your logic off <code>DO</code>. The node&rsquo;s <code>R</code> /
+            <code>G</code> / <code>B</code> outputs carry the brush colour (0&ndash;255), so you can
+            compare, threshold or map it onto anything the agent owns &mdash; Set Attribute, Set Agent
+            Radius, Set Velocity, Kill Agent, &hellip;
+          </p>
+          <p className={styles.p}>
+            An input mapping is always a <em>standalone</em> graph (there is no palette to
+            auto-generate &mdash; the graph <em>is</em> the mapping), so its editor shows only a name and
+            a description; the description becomes the tooltip on its tab in the brush. You can drag an
+            input-mapping row onto the Agents canvas to add its root already pointed at it. It runs as a
+            plain function on the CPU on every agent engine (JS, WebAssembly and WebGPU alike) &mdash;
+            painting is a one-off gesture, not per-generation work, so there is nothing to gain from
+            compiling it to a faster target.
+          </p>
           <h3 className={styles.h3}>Agent Sprites</h3>
           <p className={styles.p}>
             An agent can be drawn as a <strong>static image, an animated GIF, an image
@@ -2945,12 +2966,25 @@ export function HelpView() {
             footprint of agents; right-click cancels), <strong>Edit</strong> (overwrite chosen
             properties &mdash; agent attributes plus radius / velocity / position &mdash; on the
             clicked agent via <em>Apply</em>, or on every agent under the footprint),
-            <strong> Push</strong> / <strong>Pull</strong> (see below), and
+            <strong> Paint</strong> (run an <em>Agent Input Mapping</em> graph on the agents you
+            touch &mdash; see below), <strong>Push</strong> / <strong>Pull</strong> (see below), and
             <strong> Glue</strong> / <strong>Cut</strong> (bond/unbond two clicked agents).
-            The last two appear only on a model whose <strong>Bonds</strong> capability is on
-            (Properties &rsaquo; Bond-Graph Agents) &mdash; without a bond store there is nothing
+            Glue / Cut appear only on a model whose <strong>Bonds</strong> capability is on
+            (Properties &rsaquo; Bond-Graph Agents), and Paint only on a model that HAS an agent
+            input mapping &mdash; without a bond store, or without a graph to run, there is nothing
             for them to do, so they are left out rather than shown doing nothing.
             <span className={styles.kbd}>Alt</span>+scroll cycles through the modes shown.
+          </p>
+          <p className={styles.p}>
+            <strong>Paint</strong> is the agent counterpart of the CA grid&rsquo;s colour brush: instead
+            of writing one fixed set of values (that is <em>Edit</em>), it runs an <strong>Agent Input
+            Mapping</strong> graph on every agent you touch, handing it the brush colour. The panel
+            shows a tab per input mapping and a colour picker; the graph decides what the colour
+            <em>means</em> &mdash; &ldquo;redder than half &rarr; species A, else species B&rdquo;,
+            &ldquo;brightness &rarr; energy&rdquo;, &ldquo;this hue &rarr; kill it&rdquo;. It honours the
+            same shape / Single-Area scope / Line tool as the other footprint modes, in 2D and 3D,
+            and works on every agent engine, while playing or paused. Build the graph on the Agents
+            canvas (see <em>Agent Input Mappings</em> under Mappings).
           </p>
           <p className={styles.p}>
             <strong>Push</strong> and <strong>Pull</strong> are a <em>physical</em> way to shove a

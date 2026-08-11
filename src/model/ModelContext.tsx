@@ -230,7 +230,7 @@ type ModelAction =
   | { type: 'DUPLICATE_MAPPING'; sourceId: string }
   | { type: 'REMOVE_MAPPING'; id: string }
   | { type: 'UPDATE_MAPPING'; id: string; changes: Partial<Mapping> }
-  | { type: 'ADD_AGENT_MAPPING' }
+  | { type: 'ADD_AGENT_MAPPING'; isAttributeToColor: boolean }
   | { type: 'DUPLICATE_AGENT_MAPPING'; sourceId: string }
   | { type: 'REMOVE_AGENT_MAPPING'; id: string }
   | { type: 'UPDATE_AGENT_MAPPING'; id: string; changes: Partial<Mapping> }
@@ -1264,13 +1264,22 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
       };
 
     // Agent Output Mappings Ã¢â‚¬â€ the agent-layer AÃ¢â€ â€™C views (linked over agent attrs).
+    // BOTH agent-mapping directions live in `agentMappings`, discriminated by
+    // `isAttributeToColor` exactly like the cell `mappings` list: true = an A->C
+    // VIEW (linked over agent attrs, or a standalone agentOutputMapping graph),
+    // false = a C->A INPUT mapping (a standalone agentInputMapping graph the
+    // agent Paint brush runs once per painted agent). An input mapping is never
+    // linked -- there is no palette to auto-generate; the graph IS the mapping.
     case 'ADD_AGENT_MAPPING': {
-      const firstAgentAttr = (state.model.agentAttributes ?? []).find(a => a.type !== 'color' && a.type !== 'lookupTable');
+      const a2c = action.isAttributeToColor;
+      const firstAgentAttr = a2c
+        ? (state.model.agentAttributes ?? []).find(a => a.type !== 'color' && a.type !== 'lookupTable')
+        : undefined;
       const newMap: Mapping = {
-        id: generateId('agent_view'),
-        name: 'Agent View',
+        id: generateId(a2c ? 'agent_view' : 'agent_input'),
+        name: a2c ? 'Agent View' : 'Agent Input',
         description: '',
-        isAttributeToColor: true,
+        isAttributeToColor: a2c,
         // No eligible agent attribute Ã¢â€ â€™ seed as STANDALONE (a linked mapping with
         // linkedAttributeId undefined would render a broken default view).
         linked: !!firstAgentAttr,
@@ -2039,7 +2048,7 @@ export interface ModelContextValue {
   duplicateMapping: (sourceId: string) => void;
   removeMapping: (id: string) => void;
   updateMapping: (id: string, changes: Partial<Mapping>) => void;
-  addAgentMapping: () => void;
+  addAgentMapping: (isAttributeToColor: boolean) => void;
   duplicateAgentMapping: (sourceId: string) => void;
   removeAgentMapping: (id: string) => void;
   updateAgentMapping: (id: string, changes: Partial<Mapping>) => void;
@@ -2219,7 +2228,8 @@ export function ModelProvider({ children }: { children: ReactNode }) {
       dispatch({ type: 'UPDATE_MAPPING', id, changes }),
     [],
   );
-  const addAgentMapping = useCallback(() => dispatch({ type: 'ADD_AGENT_MAPPING' }), []);
+  const addAgentMapping = useCallback(
+    (isAttributeToColor: boolean) => dispatch({ type: 'ADD_AGENT_MAPPING', isAttributeToColor }), []);
   const duplicateAgentMapping = useCallback((sourceId: string) => dispatch({ type: 'DUPLICATE_AGENT_MAPPING', sourceId }), []);
   const removeAgentMapping = useCallback((id: string) => dispatch({ type: 'REMOVE_AGENT_MAPPING', id }), []);
   const updateAgentMapping = useCallback(

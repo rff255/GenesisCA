@@ -4476,7 +4476,9 @@ export function compileAgentOutputMappingsWebGPU(
   if (!model.topologyMode?.agents) return { omShaders: [], omSupported: true };
   // No agent mappings ⇒ no OM passes (the common Boids case) — byte-identical to
   // before A1.5 (omSupported true, no shaders).
-  if ((model.agentMappings ?? []).length === 0) return { omShaders: [], omSupported: true };
+  // (Only the A->C half counts — `agentMappings` also holds the C->A INPUT
+  // mappings, which are JS-on-CPU paint graphs with no GPU shader.)
+  if ((model.agentMappings ?? []).filter(m => m.isAttributeToColor).length === 0) return { omShaders: [], omSupported: true };
 
   const flat = flattenAgentGraph(agentNodes, agentEdges, model);
   if (flat.error) return { omShaders: [], omSupported: false };

@@ -240,6 +240,10 @@ interface InitMsg {
   /** Agent Output Mappings: one per-agent colour-pass fn source per linked agent
    *  mapping. `runAgentColorPass` runs the one matching `agentColorViewer`. */
   agentOutputMappingCodes?: Array<{ mappingId: string; code: string }>;
+  /** Agent INPUT Mappings (C->A): one SINGLE-agent fn source per agentInputMapping
+   *  root. `paintAgentsColor` runs the one matching the brush's selected mapping,
+   *  once per painted agent. JS-on-CPU on every agent target (event tempo). */
+  agentInputMappingCodes?: Array<{ mappingId: string; code: string }>;
   /** Agent sprites: true when the model has sprite assets. Gates the per-agent
    *  sprite display buffers (reset before each colour pass + sliced into the
    *  render snapshot) so non-sprite agent models pay no extra per-step transfer. */
@@ -373,7 +377,7 @@ interface PaintManualMsg {
   activeViewer: string;
 }
 interface ResetMsg { type: 'reset'; activeViewer: string; reqId?: number }
-interface RecompileMsg { type: 'recompile'; stepCode: string; initCode?: string; gridInitCode?: string; skipIsolatedEmpty?: SkipIsolatedEmptyConfig; inputColorCodes: Array<{ mappingId: string; code: string }>; outputMappingCodes: Array<{ mappingId: string; code: string }>; stopMessages?: string[]; updateMode: string; asyncScheme: string; wasmStepBytes?: Uint8Array; wasmStepError?: string; wasmExports?: string[]; viewerIds?: Record<string, number>; webgpuShaderCode?: string; webgpuShaderError?: string; webgpuEntryPoints?: WebGPUEntryPoints; webgpuLayout?: WebGPULayout; webgpuStopCheckInterval?: number; variegated?: VariegatedPayload; interactionTables?: InteractionTablePayload[]; agentBehaviourCode?: string; agentInitCode?: string; agentDivisionCode?: string; agentColorViewer?: string; agentOutputMappingCodes?: Array<{ mappingId: string; code: string }>; agentHasSprites?: boolean; agentBondReqSlots?: number; agentFieldGates?: AgentFieldGates; agentDividePartitions?: DividePartitionSpec[]; centerBased?: CenterBasedConfig; agentUsesField?: boolean; agentUsesDensity?: boolean; rulesReadComputedIndicator?: boolean; agentResidencyClean?: boolean; agentTarget?: 'js' | 'wasm' | 'webgpu'; agentWasmBytes?: Uint8Array; agentWasmViewerGuardIds?: string[]; agentLayoutExtras?: AgentLayoutExtras; agentWasmLayoutSig?: { maxHashBins: number; totalBytes: number }; agentWebgpuBehaviourShader?: string; agentWebgpuForceShader?: string; agentWebgpuMaxAgents?: number; agentWebgpuMaxHashBins?: number; agentWebgpuLayout?: AgentWebGPULayout; agentRenderLayout?: AgentWebGPULayout; agentWebgpuUsesI32Write?: boolean; agentWebgpuUsage?: { usesBondStore?: boolean; usesBondStoreWrite?: boolean; usesIndicators?: boolean; usesAux?: boolean; usesSpawn?: boolean; usesStop?: boolean; usesForceScatter?: boolean; usesGeneration?: boolean; usesSpriteWrite?: boolean }; agentWebgpuOmShaders?: AgentOMShaderInput[] }
+interface RecompileMsg { type: 'recompile'; stepCode: string; initCode?: string; gridInitCode?: string; skipIsolatedEmpty?: SkipIsolatedEmptyConfig; inputColorCodes: Array<{ mappingId: string; code: string }>; outputMappingCodes: Array<{ mappingId: string; code: string }>; stopMessages?: string[]; updateMode: string; asyncScheme: string; wasmStepBytes?: Uint8Array; wasmStepError?: string; wasmExports?: string[]; viewerIds?: Record<string, number>; webgpuShaderCode?: string; webgpuShaderError?: string; webgpuEntryPoints?: WebGPUEntryPoints; webgpuLayout?: WebGPULayout; webgpuStopCheckInterval?: number; variegated?: VariegatedPayload; interactionTables?: InteractionTablePayload[]; agentBehaviourCode?: string; agentInitCode?: string; agentDivisionCode?: string; agentColorViewer?: string; agentOutputMappingCodes?: Array<{ mappingId: string; code: string }>; agentInputMappingCodes?: Array<{ mappingId: string; code: string }>; agentHasSprites?: boolean; agentBondReqSlots?: number; agentFieldGates?: AgentFieldGates; agentDividePartitions?: DividePartitionSpec[]; centerBased?: CenterBasedConfig; agentUsesField?: boolean; agentUsesDensity?: boolean; rulesReadComputedIndicator?: boolean; agentResidencyClean?: boolean; agentTarget?: 'js' | 'wasm' | 'webgpu'; agentWasmBytes?: Uint8Array; agentWasmViewerGuardIds?: string[]; agentLayoutExtras?: AgentLayoutExtras; agentWasmLayoutSig?: { maxHashBins: number; totalBytes: number }; agentWebgpuBehaviourShader?: string; agentWebgpuForceShader?: string; agentWebgpuMaxAgents?: number; agentWebgpuMaxHashBins?: number; agentWebgpuLayout?: AgentWebGPULayout; agentRenderLayout?: AgentWebGPULayout; agentWebgpuUsesI32Write?: boolean; agentWebgpuUsage?: { usesBondStore?: boolean; usesBondStoreWrite?: boolean; usesIndicators?: boolean; usesAux?: boolean; usesSpawn?: boolean; usesStop?: boolean; usesForceScatter?: boolean; usesGeneration?: boolean; usesSpriteWrite?: boolean }; agentWebgpuOmShaders?: AgentOMShaderInput[] }
 interface UpdateLookupTableMsg {
   type: 'updateLookupTable';
   attrId: string;
@@ -644,6 +648,21 @@ interface PaintAgentsMsg {
   torus?: boolean;
   activeViewer: string;
 }
+/** Agent PAINT (C->A): run one Agent Input Mapping graph on each listed agent,
+ *  with the brush colour on its `r`/`g`/`b` value-outs. The agent analogue of the
+ *  cell `paint` message (which runs a compiled `inputColor` fn per painted cell)
+ *  — the graph, not the message, decides what the colour means. Sequential +
+ *  single-agent; a mapping with no graph is a no-op. In AGENT_GPU_DEFER_TYPES
+ *  (a mutation: deferred during an in-flight GPU readback + invalidates the
+ *  resident GPU copy, like paintAgents). */
+interface PaintAgentsColorMsg {
+  type: 'paintAgentsColor';
+  ids: number[];
+  r: number; g: number; b: number;
+  /** The agent INPUT mapping (`isAttributeToColor === false`) whose graph runs. */
+  mappingId: string;
+  activeViewer: string;
+}
 /** Remove ALL agents (Reset). */
 interface ClearAgentsMsg { type: 'clearAgents'; activeViewer: string }
 /** Agent clipboard COPY read: batch-read the given agents' full spec (position,
@@ -727,7 +746,7 @@ interface SetAgentVizMsg {
  *  refreshDisplay). */
 interface RefreshAgentDisplayMsg { type: 'refreshAgentDisplay' }
 
-type WorkerMsg = InitMsg | StepMsg | CancelStepMsg | PaintMsg | PaintManualMsg | ResetMsg | RecompileMsg | UpdateModelAttrsMsg | UpdateLookupTableMsg | ImportImageMsg | ImportGridValuesMsg | UpdateIndicatorsMsg | GetStateMsg | LoadStateMsg | ReadRegionMsg | WriteRegionMsg | ClearRegionMsg | SetUseWasmMsg | SetUseWebGPUMsg | ReadbackWebGPUMsg | ColorPassMsg | SetRecordingMsg | AttachCanvasMsg | RequestColorsSnapshotMsg | SetInspectCellsMsg | RefreshDisplayMsg | SeedAgentsMsg | CreateAgentMsg | KillAgentsMsg | PaintAgentsMsg | ClearAgentsMsg | ReadAgentsMsg | PasteAgentsMsg | FormBondMsg | BreakBondMsg | GetBondStateMsg | SetBondStateMsg | GetAgentStateMsg | MoveAgentsMsg | NudgeAgentsMsg | SetAgentWasmBackedMsg | SetRngSeedMsg | SetSimLayersMsg | SetAgentSnapshotVelocityMsg | AttachAgentCanvasMsg | SetAgentCameraMsg | SetAgentUiSyncMsg | SetAgentVizMsg | RefreshAgentDisplayMsg | GetDiagnosticsMsg | E1bCountersMsg | GraphIndicatorStatsMsg | CompositeReadbackMsg | AttachVoxelCanvasMsg | SetGridCameraMsg | SetGridUiSyncMsg | SetGridVizMsg | RefreshGridDisplayMsg | VoxelReadbackMsg;
+type WorkerMsg = InitMsg | StepMsg | CancelStepMsg | PaintMsg | PaintManualMsg | ResetMsg | RecompileMsg | UpdateModelAttrsMsg | UpdateLookupTableMsg | ImportImageMsg | ImportGridValuesMsg | UpdateIndicatorsMsg | GetStateMsg | LoadStateMsg | ReadRegionMsg | WriteRegionMsg | ClearRegionMsg | SetUseWasmMsg | SetUseWebGPUMsg | ReadbackWebGPUMsg | ColorPassMsg | SetRecordingMsg | AttachCanvasMsg | RequestColorsSnapshotMsg | SetInspectCellsMsg | RefreshDisplayMsg | SeedAgentsMsg | CreateAgentMsg | KillAgentsMsg | PaintAgentsMsg | PaintAgentsColorMsg | ClearAgentsMsg | ReadAgentsMsg | PasteAgentsMsg | FormBondMsg | BreakBondMsg | GetBondStateMsg | SetBondStateMsg | GetAgentStateMsg | MoveAgentsMsg | NudgeAgentsMsg | SetAgentWasmBackedMsg | SetRngSeedMsg | SetSimLayersMsg | SetAgentSnapshotVelocityMsg | AttachAgentCanvasMsg | SetAgentCameraMsg | SetAgentUiSyncMsg | SetAgentVizMsg | RefreshAgentDisplayMsg | GetDiagnosticsMsg | E1bCountersMsg | GraphIndicatorStatsMsg | CompositeReadbackMsg | AttachVoxelCanvasMsg | SetGridCameraMsg | SetGridUiSyncMsg | SetGridVizMsg | RefreshGridDisplayMsg | VoxelReadbackMsg;
 
 // ---------------------------------------------------------------------------
 // C3 (P4) — RUNTIME FALLBACK LOG
@@ -1129,6 +1148,11 @@ let agentDivisionFn: Function | null = null;
 /** Agent Output Mappings: one per-agent colour-pass fn per linked agent mapping.
  *  `runAgentColorPass` runs the one whose mappingId matches `agentColorViewer`. */
 let agentOutputMappingFns: Array<{ mappingId: string; fn: Function }> = [];
+/** Agent INPUT Mappings (C->A): one SINGLE-agent fn per agentInputMapping root.
+ *  `paintAgentsColor` runs the one whose mappingId matches the brush's selected
+ *  input mapping, once per painted agent. JS-on-CPU on EVERY agent target (the
+ *  agent colour pass / Division Event posture: event tempo, not step-hot). */
+let agentInputMappingFns: Array<{ mappingId: string; fn: Function }> = [];
 /** The active AGENT viewer (an agent mapping id). Selects which agent colour pass
  *  paints. Independent of `activeViewer` (the active CELL viewer). */
 let agentColorViewer = '';
@@ -1839,6 +1863,43 @@ function buildDivisionArgs(s: AgentStore, idx: number, daughterIndex: number, ax
   // (division reads forces, never writes them) ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â also in the descriptor.
   const rt: AgentAbiRuntime = { ...agentAbiBaseRt(), hash: null, viewer: activeViewer, idx, daughterIndex, axisX, axisY };
   return buildAgentAbiArgs('division', agentAbiShapeOfStore(s), s, rt);
+}
+
+/** Args for a compiled Agent INPUT Mapping fn — a SINGLE-agent function run once
+ *  per PAINTED agent. MIRRORS `buildAgentInputParams` in compile.ts (both iterate
+ *  the shared descriptor's `input` kind, so they cannot desync in order). The
+ *  three brush-colour params are prepended by the CALLER, exactly as the compiler
+ *  prepends them to the param string. `w_` aliases attrRead (the descriptor
+ *  handles that per-kind) so a paint write lands on the LIVE buffer.
+ *
+ *  `viewer` is the CELL `activeViewer`, matching `buildDivisionArgs` — a Set Cell
+ *  Looks guarded by an AGENT mapping id therefore never fires here, and the
+ *  `runAgentColorPass()` on the next line of the handler would overwrite it
+ *  anyway. Agent colour belongs to the Output Mapping, not to a paint graph. */
+function buildAgentInputArgs(s: AgentStore, idx: number): unknown[] {
+  const rt: AgentAbiRuntime = { ...agentAbiBaseRt(), hash: null, viewer: activeViewer, idx };
+  return buildAgentAbiArgs('input', agentAbiShapeOfStore(s), s, rt);
+}
+
+/** Run one Agent Input Mapping graph over the given agents (the agent Paint
+ *  brush). `r`/`g`/`b` are the brush colour (0-255) the graph's root exposes.
+ *  Sequential + single-agent, like `runDivisionEvent`; dead / out-of-range ids are
+ *  skipped. A throwing fn is DROPPED (one error post, not one per painted agent). */
+function runAgentInputMapping(mappingId: string, ids: number[], r: number, g: number, b: number): void {
+  const s = agentStore;
+  if (!s || agentInputMappingFns.length === 0) return;
+  const im = agentInputMappingFns.find(f => f.mappingId === mappingId);
+  if (!im) return;   // no graph for this mapping -> the paint is a no-op
+  for (const id of ids) {
+    if (id < 0 || id >= s.highWater || !s.alive[id]) continue;
+    try {
+      im.fn(r, g, b, ...buildAgentInputArgs(s, id));
+    } catch (e) {
+      agentInputMappingFns = agentInputMappingFns.filter(f => f !== im);
+      self.postMessage({ type: 'error', message: `[agents] input mapping "${mappingId}" failed (disabled until recompile): ` + ((e as Error)?.message || e) });
+      return;
+    }
+  }
 }
 
 /** Build the args for the compiled behaviourStep function. MIRRORS
@@ -2762,7 +2823,7 @@ function agentWebgpuIndicatorIsInt(): boolean[] {
  *  `readbackAgentField` (cell fields) overwrites the CPU arrays with
  *  pre-mutation GPU values. Deferred + replayed right after the step settles. */
 const AGENT_GPU_DEFER_TYPES = new Set<string>([
-  'seedAgents', 'createAgent', 'killAgents', 'paintAgents', 'moveAgents', 'nudgeAgents', 'pasteAgents',
+  'seedAgents', 'createAgent', 'killAgents', 'paintAgents', 'paintAgentsColor', 'moveAgents', 'nudgeAgents', 'pasteAgents',
   'formBond', 'breakBond', 'setBondState', 'clearAgents',
   'paint', 'paintManual', 'writeRegion', 'clearRegion', 'importGridValues',
 ]);
@@ -5510,7 +5571,7 @@ function compileFns(
  *  behaviour function runs once per LIVE agent each generation over `idx <
  *  highWater`. Absent code ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ null (agents seed + render but don't behave, the
  *  PR-A2 state). */
-function compileAgentFns(behaviourCode?: string, initCode?: string, divisionCode?: string, outputMappingCodes?: Array<{ mappingId: string; code: string }>): void {
+function compileAgentFns(behaviourCode?: string, initCode?: string, divisionCode?: string, outputMappingCodes?: Array<{ mappingId: string; code: string }>, inputMappingCodes?: Array<{ mappingId: string; code: string }>): void {
   try {
     // eslint-disable-next-line no-eval
     agentBehaviourFn = behaviourCode ? (eval(behaviourCode) as Function) : null;
@@ -5522,6 +5583,14 @@ function compileAgentFns(behaviourCode?: string, initCode?: string, divisionCode
       // eslint-disable-next-line no-eval
       agentOutputMappingFns.push({ mappingId: om.mappingId, fn: eval(om.code) as Function });
     } catch (e) { self.postMessage({ type: 'error', message: `[agents] output mapping '${om.mappingId}' compile failed: ` + ((e as Error)?.message || e) }); }
+  }
+  // Agent INPUT Mappings (C->A) — the Paint brush's per-agent graphs.
+  agentInputMappingFns = [];
+  for (const im of (inputMappingCodes || [])) {
+    try {
+      // eslint-disable-next-line no-eval
+      agentInputMappingFns.push({ mappingId: im.mappingId, fn: eval(im.code) as Function });
+    } catch (e) { self.postMessage({ type: 'error', message: `[agents] input mapping '${im.mappingId}' compile failed: ` + ((e as Error)?.message || e) }); }
   }
   try {
     // eslint-disable-next-line no-eval
@@ -5568,6 +5637,16 @@ function compileAgentFns(behaviourCode?: string, initCode?: string, divisionCode
       const want = buildAgentInitArgs(s, () => 0, () => {}, 0).length;
       if (!arityOk(agentInitFn.length, want)) {
         self.postMessage({ type: 'error', message: `[agents] ABI ARITY DESYNC: init fn declares ${agentInitFn.length} params but buildAgentInitArgs passes ${want} (buildAgentInitParamsÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬ÂbuildAgentInitArgs out of lockstep ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â the B1 hazard).` });
+      }
+    }
+    // The Agent INPUT Mapping is the FOURTH ABI pair (buildAgentInputParams <->
+    // buildAgentInputArgs). The compiled fn declares THREE extra leading params
+    // (_r/_g/_b, prepended outside the shared descriptor), so the expected count
+    // is the descriptor's length + 3.
+    for (const im of agentInputMappingFns) {
+      const want = buildAgentInputArgs(s, 0).length + 3;
+      if (!arityOk(im.fn.length, want)) {
+        self.postMessage({ type: 'error', message: `[agents] ABI ARITY DESYNC: input mapping '${im.mappingId}' fn declares ${im.fn.length} params but the worker passes ${want} (buildAgentInputParams<->buildAgentInputArgs out of lockstep - the B1 hazard).` });
       }
     }
   }
@@ -6690,7 +6769,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       pendingAgentWebgpuUsage = msg.agentWebgpuUsage ?? {};
       pendingAgentWebgpuOmShaders = msg.agentWebgpuOmShaders ?? [];
       initAgents();
-      compileAgentFns(msg.agentBehaviourCode, msg.agentInitCode, msg.agentDivisionCode, (msg as InitMsg).agentOutputMappingCodes);
+      compileAgentFns(msg.agentBehaviourCode, msg.agentInitCode, msg.agentDivisionCode, (msg as InitMsg).agentOutputMappingCodes, (msg as InitMsg).agentInputMappingCodes);
       instantiateAgentWasmIfNeeded();
       buildAgentWebGPUIfNeeded();
       // (The Agent Init Event runs BELOW, after the cell Init Event ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â a
@@ -7490,7 +7569,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
         // P5 — the partition table rides EVERY recompile (a partition-mode edit is
         // a graph-only change, so it must not need a full reinit to take effect).
         agentDividePartitions = rc.agentDividePartitions ?? [];
-        compileAgentFns(rc.agentBehaviourCode, rc.agentInitCode, rc.agentDivisionCode, rc.agentOutputMappingCodes);
+        compileAgentFns(rc.agentBehaviourCode, rc.agentInitCode, rc.agentDivisionCode, rc.agentOutputMappingCodes, rc.agentInputMappingCodes);
         // PR6b-1 / PR7: re-resolve the agent target + stash the per-target payload.
         // If the WASM backing requirement changes (JS/WebGPU ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬Â WASM, since wasm
         // needs the store on a WebAssembly.Memory), re-init the store so its arrays
@@ -8385,6 +8464,20 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
             if (g.z !== undefined && D > 1) { let z = g.z; z = torus ? ((z % D) + D) % D : Math.max(0, Math.min(D, z)); s.z[id] = z; s.zNext[id] = z; }
           }
         }
+        runAgentColorPass();
+      }
+      sendColors();
+      break;
+    }
+    case 'paintAgentsColor': {
+      // The agent twin of the cell `paint` handler: run the selected Agent Input
+      // Mapping graph on each painted agent with the brush colour on r/g/b, then
+      // recolour + ship. The graph writes through `w_<attr>` (which ALIASES
+      // attrRead for the `input` ABI kind), so the write lands on the LIVE buffer
+      // and survives the next step's `primeAgentAttrWrite` under sync agent mode.
+      activeViewer = msg.activeViewer; syncActiveViewerToMemory();
+      if (agentStore) {
+        runAgentInputMapping(msg.mappingId, msg.ids, msg.r, msg.g, msg.b);
         runAgentColorPass();
       }
       sendColors();
