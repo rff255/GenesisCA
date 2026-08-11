@@ -79,6 +79,12 @@ const MA = 64;
 const F64_GATED = { age: 'age', targetRadius: 'targetRadius', density: 'density' };
 const ABI_NAME = { age: '_agentAge', targetRadius: '_agentTargetRadius', density: '_agentDensity' };
 const SPRITE_PARAMS = ['spriteIds', 'spriteFrames', 'spriteSpeeds', 'spriteRotations', 'spriteScales'];
+/** The sprite block computeAgentMemoryLayout appends LAST when the `sprites`
+ *  gate is on: FOUR f64 runs (frames / speeds / rotations / scales) plus ONE
+ *  i32 run (ids), one entry per agent. It landed with the WASM `setAgentSprite`
+ *  emit — before that these five were plain JS arrays with no baked byte, which
+ *  is why the shrink expectation below has to account for them. */
+const SPRITE_BYTES_PER_AGENT = 4 * 8 + 1 * 4;
 
 const fullLayout = M.computeAgentMemoryLayout(MA, 0, [], 0, {});
 for (let mask = 0; mask < 16; mask++) {
@@ -94,10 +100,16 @@ for (let mask = 0; mask < 16; mask++) {
   for (const f of ['x', 'y', 'xNext', 'yNext', 'vx', 'vy', 'forceX', 'forceY', 'radius']) {
     ok(L.f64[f] !== undefined, `mask ${mask}: core field ${f} still allocated`);
   }
-  // 3. the byte saving is exactly 8 B/agent per dropped f64 (nothing else moved)
+  // 3. the byte saving is exactly the dropped runs and NOTHING else moved:
+  //    8 B/agent per dropped f64, plus the whole sprite block when that gate is
+  //    off. Hand-derived from computeAgentMemoryLayout's sprite region rather
+  //    than read back from the layout, so a region that silently stops being
+  //    gated (or starts being) fails here instead of agreeing with itself.
   const droppedF64 = Object.keys(F64_GATED).filter(f => !gates[f]).length;
-  near(fullLayout.totalBytes - L.totalBytes, droppedF64 * MA * 8, 0,
-    `mask ${mask}: layout shrinks by exactly ${droppedF64} × ${MA} × 8 B`);
+  const spriteBytes = gates.sprites ? 0 : MA * SPRITE_BYTES_PER_AGENT;
+  near(fullLayout.totalBytes - L.totalBytes, droppedF64 * MA * 8 + spriteBytes, 0,
+    `mask ${mask}: layout shrinks by exactly ${droppedF64} × ${MA} × 8 B`
+    + (gates.sprites ? '' : ` + the sprite block (${MA} × ${SPRITE_BYTES_PER_AGENT} B)`));
   // 4. the ABI param list drops exactly the expected names
   const shape = { is3d: false, agentAttrs: [], fieldAttrs: [], hasLookupTables: false, gates };
   const names = M.deriveAgentAbi('loop', shape).map(f => f.name);
