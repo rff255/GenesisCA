@@ -1,4 +1,5 @@
 import type { NodeTypeDef } from '../types';
+import { agentRootRelaxesGuard } from '../types';
 import { is3dModelLike } from '../compiler/niCodec';
 
 /** Set Agent Position — set an agent's position by id (Generic Agent Platform).
@@ -29,7 +30,7 @@ export const SetAgentPositionNode: NodeTypeDef = {
     // Unified spawning: a freshly Created agent is STAGED (alive=0) until Add To
     // World, in BOTH the Init Event and the Behaviour graph — so relax the guard to
     // range-only in either root (writing a dead slot is a harmless no-op effect).
-    const guard = (ctx?.agentRoot === 'init' || ctx?.agentRoot === 'behaviour')
+    const guard = agentRootRelaxesGuard(ctx?.agentRoot)
       ? `__sp >= 0 && __sp < _agentMaxAgents`
       : `__sp >= 0 && __sp < highWater && _alive[__sp]`;
     const zWrite = ctx?.is3d ? ` _agentZ[__sp] = ${inputs['z'] || '0'};` : '';

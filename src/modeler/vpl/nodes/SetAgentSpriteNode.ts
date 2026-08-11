@@ -1,4 +1,5 @@
 import type { NodeTypeDef } from '../types';
+import { agentRootHasSelf, agentRootRelaxesGuard } from '../types';
 
 /** Set Agent Sprite — the agent-logic controller for the optional sprite
  *  exhibition layer. The per-agent sprite state is PERSISTENT (a sprite slot, a
@@ -76,10 +77,12 @@ export const SetAgentSpriteNode: NodeTypeDef = {
     return hidden;
   },
   compile: (_nodeId, config, inputs, _boundary, ctx) => {
-    const isInit = ctx?.agentRoot === 'init';
+    // A root with NO self (`init` / `spawner`) has no `idx`, so an UNWIRED node
+    // there degrades to a no-op instead of emitting a reference that throws.
+    const isInit = !agentRootHasSelf(ctx?.agentRoot);
     // Unified spawning: a Created agent is staged (alive=0) until Add To World in
     // Init AND Behaviour, so a wired-handle write relaxes the guard in either root.
-    const staged = isInit || ctx?.agentRoot === 'behaviour';
+    const staged = agentRootRelaxesGuard(ctx?.agentRoot);
     const wired = !!inputs['agentId'];
     // Target the wired agent id, else the current-loop agent (idx). The Init Event
     // has no per-agent loop, so an unwired node there is a safe no-op (no crash).

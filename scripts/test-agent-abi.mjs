@@ -100,6 +100,9 @@ function oldInitArgs(s, create, add, seedBase, rt) {
 function expectedInputArgs(s, idx, rt) {
   const args = [
     idx,
+    // Brush KINDS: the editor fn may spawn agents around the one it painted and
+    // remove agents, so it carries the grow-only closures + the kill lane.
+    rt.agentCreate, rt.agentAddToWorld, s.maxAgents, s.killRequest,
     s.alive, s.highWater,
     s.x, s.y, s.radius, s.targetRadius, s.age, s.lineage, s.bondCount, s.density,
     s.vx, s.vy,
@@ -112,6 +115,29 @@ function expectedInputArgs(s, idx, rt) {
   args.push(rt.width, rt.height, rt.total, rt.torus ? 1 : 0);
   for (const spec of rt.fieldSpecs) args.push(rt.readAttrs[spec.id]);
   if (s.worldDepth > 1) args.push(s.z, s.vz, s.divideAxisZ, s.worldDepth);
+  return args;
+}
+
+/** The 'spawner' kind's EXPECTED arg list, written out independently: it is the
+ *  INIT list with the spawn trio followed by `_killRequest` + the brush block
+ *  (`_brushX`, `_brushY`, `_brushRadius`), and `_brushZ` appended to the trailing
+ *  3D block so 2D stays a strict prefix of 3D. */
+function expectedSpawnerArgs(s, create, add, seedBase, bx, by, bz, br, rt) {
+  const args = [
+    create, add, s.maxAgents,
+    s.killRequest,
+    bx, by, br,
+    s.x, s.y, s.radius, s.targetRadius, s.age, s.lineage,
+    s.vx, s.vy,
+  ];
+  for (const spec of s.attrSpecs) args.push(s.attrRead[spec.id]);
+  for (const spec of s.attrSpecs) args.push(s.attrWrite[spec.id]);
+  args.push(rt.modelAttrs, s.colors, rt.viewer, rt.indicators, rt.rngState, rt.stopFlag, rt.glyphCodes, rt.glyphColors, s.spriteIds, s.spriteFrames, s.spriteSpeeds, s.spriteRotations, s.spriteScales);
+  if (rt.hasLookupTables) args.push(rt.lookupTables);
+  args.push(rt.width, rt.height, rt.total, rt.torus ? 1 : 0);
+  for (const spec of rt.fieldSpecs) args.push(rt.readAttrs[spec.id]);
+  args.push(seedBase);
+  if (s.worldDepth > 1) args.push(s.z, bz);
   return args;
 }
 
@@ -203,11 +229,37 @@ for (const is3d of [false, true]) {
       const dNames = deriveAgentAbi('division', shape).map(f => f.name);
       const iNames = deriveAgentAbi('input', shape).map(f => f.name);
       const dMinus = dNames.filter(n => n !== '__daughterIndex' && n !== '__axisDefaultX' && n !== '__axisDefaultY');
-      ok(dMinus.join(',') === iNames.join(','), `${tag} input === division minus the daughter scalars`);
+      const LIFECYCLE = new Set(['_agentCreate', '_agentAddToWorld', '_agentMaxAgents', '_killRequest']);
+      const iMinus = iNames.filter(n => !LIFECYCLE.has(n));
+      ok(dMinus.join(',') === iMinus.join(','),
+        `${tag} input === division minus the daughter scalars, plus the spawn/kill lifecycle block`);
+      // …and the lifecycle block sits immediately after `idx`, in ABI order.
+      ok(iNames.slice(0, 5).join(',') === 'idx,_agentCreate,_agentAddToWorld,_agentMaxAgents,_killRequest',
+        `${tag} input: the lifecycle block leads, right after idx`);
+    }
+    // spawner (a SPAWNER-kind Agent Input Mapping): once per brush application.
+    {
+      const create = () => 0, add = () => {};
+      const expS = expectedSpawnerArgs(s, create, add, 7, 11, 22, 33, 44, rtExternal);
+      const newS = buildAgentAbiArgs('spawner', shape, s, {
+        ...newRtBase, hash: null, agentCreate: create, agentAddToWorld: add, seedBase: 7,
+        brushX: 11, brushY: 22, brushZ: 33, brushRadius: 44,
+      });
+      cmp(`${tag} spawner`, expS, newS);
+      // THE structural claim: spawner === init + the brush block + _killRequest.
+      const initNames = deriveAgentAbi('init', shape).map(f => f.name);
+      const spNames = deriveAgentAbi('spawner', shape).map(f => f.name);
+      const BRUSH = new Set(['_brushX', '_brushY', '_brushZ', '_brushRadius', '_killRequest']);
+      ok(spNames.filter(n => !BRUSH.has(n)).join(',') === initNames.join(','),
+        `${tag} spawner === init + the brush block + _killRequest`);
+      // A spawner has NO self: `idx` / `_alive` / `highWater` must be absent, or
+      // every by-id emitter's strict guard would reference a missing symbol.
+      ok(!spNames.includes('idx') && !spNames.includes('_alive') && !spNames.includes('highWater'),
+        `${tag} spawner: no self (idx / _alive / highWater absent)`);
     }
     // Descriptor internal-consistency (audit-lite): 2D field list is a strict
     // PREFIX of the 3D list (append-only z-block), per kind.
-    for (const kind of ['loop', 'division', 'init', 'input']) {
+    for (const kind of ['loop', 'division', 'init', 'input', 'spawner']) {
       const names2d = deriveAgentAbi(kind, { ...shape, is3d: false }).map(f => f.name);
       const names3d = deriveAgentAbi(kind, { ...shape, is3d: true }).map(f => f.name);
       ok(names3d.slice(0, names2d.length).join(',') === names2d.join(','), `${tag} ${kind}: 2D is a prefix of 3D`);
@@ -457,8 +509,15 @@ function checkInputMapping(label, model, mappingId) {
 
   const assertBlock = blockAfter(worker, /for \(const im of agentInputMappingFns\)/);
   ok(assertBlock.length > 0, '[T3] found the input-mapping arity-assert block');
-  ok(/buildAgentInputArgs\([^)]*\)\.length \+ im\.channels/.test(assertBlock),
-    '[T3] the assert adds the SHIPPED im.channels (never a hardcoded channel count)');
+  // Both KINDS must add the SHIPPED channel count, and each must derive its base
+  // from ITS OWN arg builder — a spawner sized by the editor builder is exactly
+  // the desync this pair exists to catch.
+  ok(/buildAgentInputArgs\([\s\S]*?\)\.length \+ im\.channels/.test(assertBlock),
+    '[T3] the EDITOR assert adds the SHIPPED im.channels (never a hardcoded channel count)');
+  ok(/buildAgentSpawnerArgs\([\s\S]*?\)\.length \+ im\.channels/.test(assertBlock),
+    '[T3] the SPAWNER assert adds the SHIPPED im.channels, off its OWN arg builder');
+  ok(/im\.spawner/.test(assertBlock),
+    '[T3] the assert branches on the SHIPPED brush kind (im.spawner)');
   ok(!/\.length \+ \d/.test(assertBlock),
     '[T3] the assert adds no NUMERIC literal to the arg count (the pre-fix `+ 3` bug)');
 

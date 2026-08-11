@@ -1,4 +1,5 @@
 import type { NodeTypeDef } from '../types';
+import { agentRootHasSelf } from '../types';
 
 /** Kill Agent — request that an agent die (Bond-Graph Agents). Applied in the
  *  post-step structural phase: the slot is recycled to the free-list, ALL its
@@ -40,11 +41,13 @@ export const KillAgentNode: NodeTypeDef = {
     { id: 'agentId', label: 'Agent', kind: 'input', category: 'value', dataType: 'integer' },
   ],
   defaultConfig: {},
-  compile: (_nodeId, _config, inputs) => {
+  compile: (_nodeId, _config, inputs, _boundary, ctx) => {
     // WIREDNESS decides the emit, and it is read from the resolved input map
     // BEFORE anything is minted — the Form Bond `agentA` discipline. Unwired ⇒
-    // the historical single statement, byte-for-byte.
-    if (!inputs['agentId']) return `_killRequest[idx] = 1;\n`;
+    // the historical single statement, byte-for-byte — EXCEPT in a root with no
+    // self (`init` / `spawner`), where `idx` does not exist: a no-op beats a
+    // reference that throws (`nodeValidation` badges the placement).
+    if (!inputs['agentId']) return agentRootHasSelf(ctx?.agentRoot) ? `_killRequest[idx] = 1;\n` : '';
     const id = `((${inputs['agentId']}) | 0)`;
     return `{ const __ka = ${id}; if (__ka >= 0 && __ka < _agentMaxAgents) _killRequest[__ka] = 1; }\n`;
   },

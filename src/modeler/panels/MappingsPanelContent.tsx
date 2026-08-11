@@ -9,7 +9,8 @@ import { defaultGradientStops, defaultTagColor } from '../vpl/compiler/linkedOut
 import { GradientStopsEditor, type GradStop } from '../vpl/widgets/GradientStopsEditor';
 import { INTERPOLATION_METHODS } from '../vpl/nodes/interpolationMethods';
 import type { Mapping, RGB, ColorStop, Attribute, CAModel, InputMappingParam, InputParamType } from '../../model/types';
-import { inputParamsOf, materialiseInputParams, mintParamKey } from '../../model/inputMappingParams';
+import { inputBrushKindOf, inputParamsOf, materialiseInputParams, mintParamKey } from '../../model/inputMappingParams';
+import { is3dModelLike } from '../vpl/compiler/niCodec';
 import { typeDisplayName } from '../../model/typeLabels';
 import { NumberField } from '../vpl/widgets/InlineWidgets';
 import styles from './PanelContent.module.css';
@@ -1004,10 +1005,43 @@ export function MappingsPanelContent({ mode = 'list' }: PanelContentProps = {}) 
                 selector + the linked palette editor are hidden rather than shown
                 inert (the "an enabled control must do something" rule). */}
             {!selectedAgent.isAttributeToColor && (<>
+              {/* BRUSH KIND — what painting with this mapping DOES. It reshapes
+                  the root (a spawner gains Brush X/Y/[Z]/Radius outs and loses
+                  its `self`), so it belongs above the parameter list. Absent ⇒
+                  Editor, the historical behaviour. */}
+              <div className={styles.field}>
+                <label className={styles.fieldLabel}>Brush kind</label>
+                <div style={{ display: 'flex', gap: 4 }}>
+                  {(['editor', 'spawner'] as const).map(k => (
+                    <button
+                      key={k}
+                      className={styles.textInput}
+                      style={{
+                        flex: 1, cursor: 'pointer', textTransform: 'capitalize',
+                        ...(inputBrushKindOf(selectedAgent) === k
+                          ? { borderColor: 'var(--color-accent)', color: 'var(--color-accent)' }
+                          : {}),
+                      }}
+                      onClick={() => updateAgentMapping(selectedAgent.id, { brushKind: k })}
+                      title={k === 'editor'
+                        ? 'Runs once per agent the brush covers, with that agent as self — edit the agents you touch (and, if you like, spawn around them or remove them).'
+                        : 'Runs ONCE per brush application with no self: the graph receives the brush position + radius and creates the agents itself.'}
+                    >{k}</button>
+                  ))}
+                </div>
+              </div>
               <span style={{ color: '#888', fontSize: '0.66rem', display: 'block' }}>
-                Build this mapping on the Agents graph: an <strong>Agent Input Mapping (C&rarr;A)</strong> root
-                whose value outputs carry the parameters below, then Set Attribute / Set Agent Radius / … on the DO chain.
-                Select it in the simulator&apos;s agent brush (Paint mode) and paint agents with it.
+                {inputBrushKindOf(selectedAgent) === 'spawner' ? (<>
+                  Build this mapping on the Agents graph: an <strong>Agent Input Mapping (C&rarr;A)</strong> root
+                  whose <strong>Brush X / Y{is3dModelLike(model) ? ' / Z' : ''} / Radius</strong> outs carry
+                  where the user clicked, then Create Agent &rarr; set-by-handle &rarr; Add Agent To World
+                  on the DO chain (loop to place several). It runs ONCE per click / drag step, so it has no
+                  <em> self</em> — per-agent reads like Get Self Position are invalid here.
+                </>) : (<>
+                  Build this mapping on the Agents graph: an <strong>Agent Input Mapping (C&rarr;A)</strong> root
+                  whose value outputs carry the parameters below, then Set Attribute / Set Agent Radius / … on the DO chain.
+                  Select it in the simulator&apos;s agent brush (Paint mode) and paint agents with it.
+                </>)}
               </span>
               {/* The SAME editor the cell C→A mappings use — one component, so the
                   two layers cannot drift (cells and agents must be consistent). */}

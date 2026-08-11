@@ -1,4 +1,5 @@
 import type { NodeTypeDef } from '../types';
+import { agentRootHasSelf } from '../types';
 import { is3dModelLike } from '../compiler/niCodec';
 
 /** Apply Force To Agent — add a force vector to ANOTHER agent by id (Bond-Graph
@@ -37,7 +38,7 @@ export const ApplyForceToAgentNode: NodeTypeDef = {
     // Live-agent guard (behaviour + division). In the Init Event `highWater`/`_alive`
     // aren't in scope (a force written in init is zeroed before the first step anyway),
     // so range-only there — mirrors the by-id setters.
-    const guard = ctx?.agentRoot === 'init'
+    const guard = !agentRootHasSelf(ctx?.agentRoot)
       ? `__af >= 0 && __af < _agentMaxAgents`
       : `__af >= 0 && __af < highWater && _alive[__af]`;
     const z = ctx?.is3d ? ` _agentForceZ[__af] += ${inputs['fz'] || '0'};` : '';

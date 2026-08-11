@@ -49,7 +49,8 @@ export {
   defaultImageChannelSources, imageChannelSourceLabel,
 } from '../src/model/inputMappingParams.ts';
 export { gridifyImage } from '../src/simulator/imageMapping.ts';
-export { detectMissingConfig } from '../src/modeler/vpl/nodes/nodeValidation.ts';
+export { detectMissingConfig, detectAgentInitContextIssue } from '../src/modeler/vpl/nodes/nodeValidation.ts';
+export { setActiveGraphKind } from '../src/modeler/vpl/graphState.ts';
 export {
   LEGACY_PARAM, LEGACY_COLOR_PARAM_KEY,
   materialiseInputParams, mintParamKey, removedChannelPortIds,
@@ -59,6 +60,14 @@ export {
 // harness exercises is exactly what the app dispatches, gate and all.
 // NB no backticks in this block: ENTRY is itself a template literal.
 export { modelReducer } from '../src/model/ModelContext.tsx';
+// BRUSH KINDS (Editor vs Spawner) — the resolver + the ABI + a real agent store,
+// so the spawner fixture below RUNS through the shipped closures rather than a
+// re-implementation of them.
+export { inputBrushKindOf, inputBrushKindForNode, spawnerBrushPorts, removedRootPortIds } from '../src/model/inputMappingParams.ts';
+export { buildAgentAbiArgs, deriveAgentAbi } from '../src/modeler/vpl/compiler/agentAbi.ts';
+export { agentAbiShapeOf } from '../src/modeler/vpl/compiler/compile.ts';
+export { createAgentStore, initAgentSlot, freeAgentSlot, freeStagedSlot } from '../src/simulator/engine/agentEngine.ts';
+export { resolveAgentFieldGates } from '../src/model/agentFieldGating.ts';
 `;
 const dir = mkdtempSync(join(tmpdir(), 'gca-inputparams-'));
 const entryPath = join(ROOT, 'scripts', '__inputparams_entry.ts');
@@ -1003,6 +1012,253 @@ function readTypeSection(bytes) {
     return { count, types };
   }
   return { count: 0, types: [] };
+}
+
+
+// ===========================================================================
+console.log('== 12. BRUSH KINDS — Editor vs Spawner (real closures, real store) ==');
+// ===========================================================================
+// The resolver + the reshaped root + the two ABIs, then the fns RUN against a
+// real AgentStore through the shipped spawn closures, asserting agent POSITIONS
+// and ATTRIBUTE VALUES. Byte-identity proves we broke nothing; only this proves
+// the feature works.
+{
+  const brushMapping = (extra) => ({
+    id: 'SP', name: 'Sow', description: '', isAttributeToColor: false,
+    redDescription: '', greenDescription: '', blueDescription: '',
+    parameters: [{ key: 'amount', name: 'Amount', type: 'float', defaultValue: '3' }],
+    ...extra,
+  });
+
+  // --- the resolver -------------------------------------------------------
+  check('kind: absent => editor (the historical behaviour, no migration)',
+    M.inputBrushKindOf(brushMapping({})) === 'editor');
+  check('kind: explicit spawner resolves', M.inputBrushKindOf(brushMapping({ brushKind: 'spawner' })) === 'spawner');
+  check('kind: a garbage value resolves to the SAFE arm (editor)',
+    M.inputBrushKindOf(brushMapping({ brushKind: 'nonsense' })) === 'editor');
+  check('kind: a CELL inputColor root is always editor (a lattice brush is per-cell)',
+    M.inputBrushKindForNode('inputColor', { mappingId: 'SP' },
+      { mappings: [brushMapping({ brushKind: 'spawner' })], agentMappings: [] }) === 'editor');
+
+  // --- the root PORTS reshape --------------------------------------------
+  const modelOf = (kind, is3d = false) => M.migrateForHarness({
+    schemaVersion: 2,
+    properties: {
+      name: 'Spawner', description: '', topology: '2d-grid', boundaryTreatment: 'torus',
+      updateMode: 'synchronous', gridWidth: 40, gridHeight: 40,
+      dimension: is3d ? '3d' : '2d', gridDepth: is3d ? 8 : 1, useWasm: false,
+    },
+    attributes: [], neighborhoods: [], mappings: [], indicators: [],
+    agentAttributes: [{ id: 'aa', name: 'aa', type: 'float', description: '', isModelAttribute: false, defaultValue: '0' }],
+    agentMappings: [brushMapping(kind ? { brushKind: kind } : {})],
+    graphNodes: [], graphEdges: [], agentGraphNodes: [], agentGraphEdges: [], macroDefs: [],
+    topologyMode: { gridCells: false, agents: true },
+    centerBased: { maxAgents: 64, maxBonds: 0, worldWidth: 40, worldHeight: 40, worldDepth: is3d ? 8 : 1, defaultRadius: 1 },
+  });
+  const portIds = (model) => M.buildInputParamPorts('agentInputMapping', { mappingId: 'SP' }, model).outputs.map(p => p.id);
+  check('editor root exposes only the declared channels', portIds(modelOf(null)).join(',') === 'amount');
+  check('spawner root PREPENDS the brush geometry (2D: no z)',
+    portIds(modelOf('spawner')).join(',') === 'brushX,brushY,brushRadius,amount', portIds(modelOf('spawner')).join(','));
+  check('spawner root adds brushZ ONLY in 3D',
+    portIds(modelOf('spawner', true)).join(',') === 'brushX,brushY,brushRadius,brushZ,amount',
+    portIds(modelOf('spawner', true)).join(','));
+  const eff = M.getEffectivePorts('agentInputMapping', { mappingId: 'SP' }, modelOf('spawner'))
+    .outputs.filter(p => p.category === 'value').map(p => p.id).join(',');
+  check('effectivePorts agrees with the shared builder (dual-consumption)',
+    eff === 'brushX,brushY,brushRadius,amount', eff);
+
+  // --- the KIND-SWITCH edge cascade (drop, never repoint) -----------------
+  const gone = [...M.removedRootPortIds(brushMapping({ brushKind: 'spawner' }), brushMapping({}), modelOf('spawner'))].sort().join(',');
+  check('spawner -> editor DESTROYS the brush ports (their wires must drop)',
+    gone === 'brushRadius,brushX,brushY', gone);
+  check('editor -> spawner destroys NOTHING (it only adds ports)',
+    M.removedRootPortIds(brushMapping({}), brushMapping({ brushKind: 'spawner' }), modelOf('spawner')).size === 0);
+
+  // --- ABI shape ----------------------------------------------------------
+  const spShape = M.agentAbiShapeOf(modelOf('spawner'));
+  const spNames = M.deriveAgentAbi('spawner', spShape).map(f => f.name);
+  check('spawner ABI has NO self (idx / _alive / highWater absent)',
+    !spNames.includes('idx') && !spNames.includes('_alive') && !spNames.includes('highWater'));
+  check('spawner ABI leads with the spawn closures + kill lane + brush geometry',
+    spNames.slice(0, 7).join(',') === '_agentCreate,_agentAddToWorld,_agentMaxAgents,_killRequest,_brushX,_brushY,_brushRadius',
+    spNames.slice(0, 7).join(','));
+  const inNames = M.deriveAgentAbi('input', spShape).map(f => f.name);
+  check('editor ABI carries the spawn closures + kill lane too (spawn around / remove)',
+    ['_agentCreate', '_agentAddToWorld', '_agentMaxAgents', '_killRequest'].every(n => inNames.includes(n)));
+
+  // --- helpers to RUN a compiled fn against a real store -------------------
+  const mkStore = (model) => {
+    const specs = (model.agentAttributes ?? []).map(a => ({ id: a.id, type: a.type }));
+    const st = M.createAgentStore(model.centerBased, specs, { wasmBacked: false });
+    st.worldDepth = model.centerBased.worldDepth ?? 1;
+    return st;
+  };
+  // The BRUSH-LOCAL grow-only closures, mirroring `makeBrushSpawnClosures` in the
+  // worker (this harness cannot import the worker module).
+  const closures = (st, cfg) => {
+    const created = [], set = new Set();
+    return {
+      create: (x, y, z, r) => {
+        if (st.highWater >= st.maxAgents) return -1;
+        const id = st.highWater++;
+        M.initAgentSlot(st, id, x, y, z || 0, r || cfg.defaultRadius, id);
+        st.alive[id] = 0; created.push(id); set.add(id);
+        return id;
+      },
+      add: (id) => { if (set.has(id) && !st.alive[id]) { st.alive[id] = 1; st.liveCount++; } },
+      sweep: () => { for (const id of created) if (!st.alive[id]) M.freeStagedSlot(st, id); created.length = 0; set.clear(); },
+    };
+  };
+  const drainKills = (st) => {
+    let n = 0;
+    for (let i = 0; i < st.highWater; i++) {
+      if (!st.killRequest[i]) continue;
+      st.killRequest[i] = 0;
+      if (st.alive[i]) { M.freeAgentSlot(st, i); n++; }
+    }
+    return n;
+  };
+  const baseRt = (model, st) => ({
+    hash: null, emptyI32: new Int32Array(0), modelAttrs: {}, viewer: '',
+    indicators: {}, rngState: new Uint32Array(1), stopFlag: new Uint32Array(1),
+    glyphCodes: new Uint32Array(0), glyphColors: new Uint32Array(0), lookupTables: {},
+    width: model.properties.gridWidth, height: model.properties.gridHeight,
+    total: model.properties.gridWidth * model.properties.gridHeight,
+    torus: true, fieldArray: () => new Float64Array(0), generation: 0,
+    seedBase: st.highWater,
+  });
+
+  // --- SPAWNER: 3 agents placed from the brush geometry -------------------
+  {
+    const g = mkGraph();
+    g.node('behaviourStep', {});
+    const root = g.node('agentInputMapping', { mappingId: 'SP' });
+    const loop = g.node('loop', { mode: 'count', _port_count: '3' });
+    const cre = g.node('createAgent', {});
+    const setA = g.node('setAgentAttribute', { attributeId: 'aa' });
+    const addW = g.node('addAgentToWorld', {});
+    // x = brushX + brushRadius * index  (the check below recomputes it).
+    const ex = g.node('expression', { expression: 'a + b * c', visibleCount: 3 });
+    g.fEdge(root, 'do', loop, 'do');
+    g.fEdge(loop, 'body', cre, 'do');
+    g.fEdge(cre, 'next', setA, 'do');
+    g.fEdge(setA, 'next', addW, 'do');
+    g.vEdge(root, 'brushX', ex, 'a');
+    g.vEdge(root, 'brushRadius', ex, 'b');
+    g.vEdge(loop, 'index', ex, 'c');
+    g.vEdge(ex, 'result', cre, 'x');
+    g.vEdge(root, 'brushY', cre, 'y');
+    g.vEdge(cre, 'handle', setA, 'agentId');
+    g.vEdge(root, 'amount', setA, 'value');
+    g.vEdge(cre, 'handle', addW, 'handle');
+    const model = modelOf('spawner');
+    model.agentGraphNodes = g.nodes; model.agentGraphEdges = g.edges;
+    const ag = M.compileAgentGraph(model.agentGraphNodes, model.agentGraphEdges, model);
+    check('spawner graph compiles', !ag.error, ag.error ?? '');
+    const entry = (ag.inputMappingCodes ?? [])[0];
+    check('spawner entry is FLAGGED as a spawner (shipped, never re-derived)', entry?.spawner === true);
+    check('spawner entry ships the resolved channel count', entry?.channels === 1);
+    check('spawner header carries the brush geometry and NO colorIdx (no painted agent)',
+      (entry?.code ?? '').includes('_brushX') && !(entry?.code ?? '').includes('const colorIdx'));
+
+    const st = mkStore(model);
+    const c = closures(st, model.centerBased);
+    const rt = { ...baseRt(model, st), agentCreate: c.create, agentAddToWorld: c.add, brushX: 12, brushY: 7, brushZ: 0, brushRadius: 5 };
+    const fn = eval(entry.code);
+    const args = M.buildAgentAbiArgs('spawner', M.agentAbiShapeOf(model), st, rt);
+    check('spawner fn arity == descriptor + channels', fn.length === args.length + entry.channels,
+      fn.length + ' vs ' + (args.length + entry.channels));
+    fn(9.5, ...args);                       // amount = 9.5
+    c.sweep(); drainKills(st);
+    check('spawner created exactly 3 agents', st.liveCount === 3, String(st.liveCount));
+    let posOk = true, attrOk = true;
+    for (let i = 0; i < 3; i++) {
+      if (Math.abs(st.x[i] - (12 + 5 * i)) > 1e-12) posOk = false;
+      if (Math.abs(st.y[i] - 7) > 1e-12) posOk = false;
+      if (Math.abs(st.attrRead['aa'][i] - 9.5) > 1e-12) attrOk = false;
+    }
+    check('spawner placed them at brushX + radius*index, y = brushY (exact)', posOk,
+      [st.x[0], st.x[1], st.x[2], st.y[0]].join(','));
+    check('spawner wrote the PARAMETER value onto each newborn (exact)', attrOk, String(st.attrRead['aa'][0]));
+
+    // NEGATIVE CONTROL: the same fn with a ZERO brush must place them all at the
+    // origin — proving the assertion above reads the brush block, not a constant.
+    const st2 = mkStore(model);
+    const c2 = closures(st2, model.centerBased);
+    const rt2 = { ...baseRt(model, st2), agentCreate: c2.create, agentAddToWorld: c2.add, brushX: 0, brushY: 0, brushZ: 0, brushRadius: 0 };
+    fn(9.5, ...M.buildAgentAbiArgs('spawner', M.agentAbiShapeOf(model), st2, rt2));
+    c2.sweep();
+    check('NEG: a zero brush places every agent at the origin (the geometry IS read)',
+      st2.x[0] === 0 && st2.x[1] === 0 && st2.x[2] === 0);
+  }
+
+  // --- EDITOR: spawn AROUND the painted agent, then kill it ---------------
+  {
+    const g = mkGraph();
+    g.node('behaviourStep', {});
+    const root = g.node('agentInputMapping', { mappingId: 'SP' });
+    const cre = g.node('createAgent', { _port_x: '30', _port_y: '31' });
+    const addW = g.node('addAgentToWorld', {});
+    const kill = g.node('killAgent', {});
+    g.fEdge(root, 'do', cre, 'do');
+    g.fEdge(cre, 'next', addW, 'do');
+    g.fEdge(addW, 'next', kill, 'do');
+    g.vEdge(cre, 'handle', addW, 'handle');
+    const model = modelOf(null);                 // EDITOR kind
+    model.agentGraphNodes = g.nodes; model.agentGraphEdges = g.edges;
+    const ag = M.compileAgentGraph(model.agentGraphNodes, model.agentGraphEdges, model);
+    check('editor graph with spawn + kill compiles', !ag.error, ag.error ?? '');
+    const entry = (ag.inputMappingCodes ?? [])[0];
+    check('editor entry is NOT flagged spawner', !entry?.spawner);
+    check('editor entry still declares colorIdx (it HAS a painted agent)',
+      (entry?.code ?? '').includes('const colorIdx = idx * 4;'));
+
+    const st = mkStore(model);
+    for (const id of [0, 1]) { M.initAgentSlot(st, id, id * 3, 0, 0, 1, id); st.alive[id] = 1; }
+    st.highWater = 2; st.liveCount = 2;
+    const c = closures(st, model.centerBased);
+    const fn = eval(entry.code);
+    const shape = M.agentAbiShapeOf(model);
+    for (const id of [0, 1]) {
+      const rt = { ...baseRt(model, st), agentCreate: c.create, agentAddToWorld: c.add, idx: id };
+      fn(0, ...M.buildAgentAbiArgs('input', shape, st, rt));
+    }
+    c.sweep();
+    check('editor spawned one agent per painted agent (grow-only, above highWater)',
+      st.highWater === 4 && st.alive[2] === 1 && st.alive[3] === 1, 'hw=' + st.highWater);
+    check('the newborns landed at the graph-authored position', st.x[2] === 30 && st.y[2] === 31);
+    check('the painted agents are STILL alive before the drain (kill is a request)',
+      st.alive[0] === 1 && st.alive[1] === 1);
+    const killed = drainKills(st);
+    check('the IMMEDIATE drain removes exactly the painted agents',
+      killed === 2 && st.alive[0] === 0 && st.alive[1] === 0 && st.alive[2] === 1 && st.alive[3] === 1,
+      String(killed));
+    check('the drain CLEARS the flags (a later structural phase must not see them)',
+      st.killRequest[0] === 0 && st.killRequest[1] === 0);
+    check('NEG: a second drain is a no-op (nothing left flagged)', drainKills(st) === 0);
+  }
+
+  // --- validation: a self-reader in a SPAWNER graph is badged --------------
+  {
+    const g = mkGraph();
+    g.node('behaviourStep', {});
+    const root = g.node('agentInputMapping', { mappingId: 'SP' });
+    const pos = g.node('getSelfPosition', {});
+    const cre = g.node('createAgent', {});
+    g.fEdge(root, 'do', cre, 'do');
+    g.vEdge(pos, 'x', cre, 'x');
+    const model = modelOf('spawner');
+    model.agentGraphNodes = g.nodes; model.agentGraphEdges = g.edges;
+    M.setActiveGraphKind('agents');
+    const issues = M.detectAgentInitContextIssue(pos.id, model);
+    check('a self-reader in a SPAWNER graph is badged', issues.length === 1, JSON.stringify(issues));
+    check('...and the badge names the SPAWNER root, not the Init Event',
+      (issues[0] ?? '').includes('SPAWNER'), issues[0] ?? '');
+    const editorModel = { ...model, agentMappings: [brushMapping({})] };
+    check('NEG: the same graph under the EDITOR kind is fine (it HAS a self)',
+      M.detectAgentInitContextIssue(pos.id, editorModel).length === 0);
+    M.setActiveGraphKind('cells');
+  }
 }
 
 rmSync(entryPath, { force: true });
