@@ -1,4 +1,5 @@
 import type { NodeTypeDef } from '../types';
+import { agentRootRelaxesGuard } from '../types';
 
 /** Set Target Radius — set the radius an agent grows toward (Bond-Graph
  *  Agents). The engine ramps the agent's actual radius toward this target each
@@ -36,7 +37,7 @@ export const SetTargetRadiusNode: NodeTypeDef = {
     if (ctx?.agentGates && !ctx.agentGates.targetRadius) return '';
     // Unwired ⇒ the historical self-write, byte-for-byte.
     if (!inputs['agentId']) return `_agentTargetRadius[idx] = ${inputs['value'] || '1'};\n`;
-    const guard = (ctx?.agentRoot === 'init' || ctx?.agentRoot === 'behaviour')
+    const guard = agentRootRelaxesGuard(ctx?.agentRoot)
       ? `__st >= 0 && __st < _agentMaxAgents`
       : `__st >= 0 && __st < highWater && _alive[__st]`;
     return `{ const __st = ((${inputs['agentId']}) | 0); if (${guard}) _agentTargetRadius[__st] = ${inputs['value'] || '1'}; }\n`;

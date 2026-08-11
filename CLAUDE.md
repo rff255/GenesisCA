@@ -2366,6 +2366,106 @@ the wrong direction would compile to a pass nothing ever runs).
   bug** (the only one with a term outside the shared descriptor); T3 now pins the other three so a
   future kind with its own leading block cannot repeat it.
 
+### Agent brush KINDS — Editor vs Spawner (branch `polishing`)
+
+*"The Input Mapping brush can only be used to edit existing agents?"* An AGENT Colour→Attribute
+mapping now declares **`brushKind: 'editor' | 'spawner'`** (`Mapping.brushKind`, **ABSENT ⇒
+`'editor'` ⇒ the historical behaviour, so there is NO migration** and `check-compile-identity` is
+29 models unchanged — nothing shipped uses agent input mappings).
+
+- **THE TWO SHAPES.** **Editor** runs the graph ONCE PER AGENT the footprint covers, with that
+  agent as `self`. **Spawner** runs it ONCE PER BRUSH APPLICATION with **no self**: its root
+  additionally exposes **`Brush X` / `Brush Y` / `Brush Radius`** (+ `Brush Z` in 3D) and the graph
+  CREATES the agents itself (Create Agent → set-by-handle → Add Agent To World), distributing them
+  however it likes. That is the shape an editor structurally cannot express: with nothing under the
+  cursor an editor runs ZERO times, so "click empty space to add agents *this particular way*" has
+  nowhere to hook.
+- **`inputBrushKindOf` ([inputMappingParams.ts](src/model/inputMappingParams.ts)) is the ONE
+  reader of `brushKind`** — the `inputParamsOf` / `resolveMaxBonds` discipline. A value outside the
+  union resolves to `'editor'` (the SAFE arm — the kind that has a self), and a CELL `inputColor`
+  root is ALWAYS editor (a lattice brush is per-cell; there is no spawner counterpart), enforced in
+  `inputBrushKindForNode` rather than left to callers.
+- **ONE root node, reshaped by the mapping** — deliberately NOT a second root type, so every
+  existing wire, badge, drag payload and picker keeps working. `buildInputParamPorts` PREPENDS the
+  brush ports for a spawner, and BOTH consumers (`CaNode` + `effectivePorts`) get them from that one
+  builder (the dual-consumption rule).
+- **ABI: a FIFTH kind, `spawner` = `init` + the brush block + `_killRequest`.** Mirroring `init`
+  (not `input`) is what gives it the grow-only spawn closures and no `idx`/`_alive`/`highWater`;
+  **`_brushZ` rides the TRAILING 3D block**, not with its x/y, so *2D stays a strict PREFIX of 3D* —
+  the invariant `audit-agent-layout` asserts. `buildAgentSpawnerParams` ↔ `buildAgentSpawnerArgs` is
+  the FIFTH ABI mirror; the worker's DEV arity assert branches on the SHIPPED `spawner` flag and
+  sizes each kind from ITS OWN arg builder (an editor-sized spawner is exactly the desync that pair
+  exists to catch).
+- **The EDITOR kind gained the lifecycle verbs too** — the `input` ABI now carries
+  `_agentCreate` / `_agentAddToWorld` / `_agentMaxAgents` + `_killRequest`, so an editor brush can
+  spawn agents AROUND the one it painted and remove agents. Both kinds' spawn closures are
+  **grow-only** (`makeBrushSpawnClosures`, the behaviour-graph precedent): a Create appends at
+  `highWater` and never reuses a free-list hole, so a slot freed by a Kill EARLIER IN THE SAME
+  APPLICATION can never be handed straight back out. A Created-but-never-Added handle is swept.
+- **⚠ THE KILL SEMANTICS, decided deliberately: DRAINED IMMEDIATELY, not next generation.** A paint
+  is a user gesture BETWEEN generations, so deferring the death to the next structural phase would
+  mean "I clicked erase and nothing happened until I pressed Play" — and on a PAUSED model, never.
+  `drainBrushKillRequests` runs at the tail of both handlers, `freeAgentSlot`-ing each flagged agent
+  (breaking every bond both ways + bumping the slot epoch, exactly as the structural phase does) and
+  CLEARING the flags so a later structural phase cannot see them again.
+- **The painted id set is RESOLVED UP FRONT** against the pre-paint population, so an agent the same
+  stroke just created is never also painted by it.
+- **Worker**: ONE new message **`spawnAgentsBrush { points[], radius, values, mappingId }`** —
+  a LIST of points so a drag ships one message per frame (the rAF-batched brush discipline), the fn
+  running once per point with `_agentSeedBase` = `highWater` at the start of THAT application. In
+  `AGENT_GPU_DEFER_TYPES` like every other agent mutation. Editor paints keep `paintAgentsColor`.
+  Each handler REFUSES the other kind's message with a named error rather than running the wrong ABI.
+- **Brush UI**: a spawner ignores the brush SHAPE entirely (it gets a centre + a radius, exactly like
+  Push/Pull), so the shape row is HIDDEN and a single **Radius** field replaces it — the
+  "an enabled control must do something" rule; the cursor becomes a dashed radius ring + a centre
+  `+`, the footprint/area-highlight scans are skipped (a spawner touches no existing agent), and the
+  two-click Line staging is bypassed. Its tab is marked `⊕`. 2D AND 3D (the 3D plane-pick cell IS the
+  world position, the identity Push/Pull already relies on).
+- **Validation**: a spawner root has no self, so the Agent-Init-Event footgun walk was generalised —
+  `agentInitSelfOnlyNodeIds` now walks EVERY selfless root (`agentInit` + every spawner
+  `agentInputMapping`) and the badge NAMES which one. Kill Agent is spawner-valid when its id is
+  WIRED (the lane exists there) and reported when unwired. `SetVelocity` / `KillAgent` /
+  `SetAgentSprite` degrade an UNWIRED self-write to a NO-OP in a selfless root rather than emitting a
+  reference to an `idx` that does not exist.
+- **`agentRootHasSelf` / `agentRootRelaxesGuard` ([types.ts](src/modeler/vpl/types.ts))** replaced
+  the eight hand-written `agentRoot === 'init' || 'behaviour'` comparisons across the by-id setters.
+  Both are byte-identical for the pre-existing roots; adding a kind is now one edit, not eight.
+- **The KIND-SWITCH edge cascade**: `removedRootPortIds` generalises `removedChannelPortIds` over the
+  WHOLE root port set, so a spawner→editor flip DESTROYS the brush ports and their wires are DROPPED
+  by the same drop-never-repoint rule a deleted parameter follows (editor→spawner only ADDS, so it
+  destroys nothing and the graphs are not walked). `UPDATE_AGENT_MAPPING` fires it for `brushKind`
+  as well as `parameters`; the CELL branch strips any stray `brushKind` so a hand-edited file cannot
+  invent ports a lattice root never rendered. `detectDanglingRefs` had to learn the brush ports too,
+  or a legitimate spawner wire reads as a stale channel and blocks the compile.
+  **⚠ Verified nuance**: the prune lands in the MODEL and STICKS (an editor-kind flip stays pruned
+  through a full graph reseed, with no compile banner), but flipping BACK to spawner within the same
+  editor session re-renders those wires from React Flow's LOCAL state, which then syncs them back —
+  harmless, because the ports exist again, and arguably friendlier (an accidental flip does not
+  destroy your wiring).
+- **Verified in the real UI** (2D + 3D, WASM + WebGPU agent targets, 0 console errors on a clean
+  load): a spawner click posts `{points:[{x:60,y:60}], radius:8, values:[5,2.5]}` and creates exactly
+  5 agents inside the radius with `energy = 2.5`; a drag lays a 35-agent trail across the canvas;
+  editing the parameter widgets changes the next click to exactly 3 agents at `energy = 77.25`;
+  **WebGPU** (chip `⚙ agents WebGPU`) spawns 3 per point around both brush points; **3D** spawns with
+  a real z spread around `brushZ`; an **EDITOR** mapping sets `energy = 9` on the 3 painted agents AND
+  spawns one each at `selfX + 5` (189 → 192), and with its `cull` parameter at 1 the 3 painted agents
+  are **gone immediately with NO step issued** (192 → 192: +3 spawned, −3 killed).
+- **Gates**: `check-compile-identity` 29/29 unchanged · `test-agent-abi` 607 → **629**
+  (the spawner arg list against an INDEPENDENT expectation, `spawner === init + brush + kill`,
+  no-self, the prefix rule for the new kind, and both kinds' arity asserts pinned in the shipped
+  source) · `test-param-input-mappings` gained **§12** (the resolver, both port shapes, the cascade,
+  the two ABIs, and the two fns RUN against a real `AgentStore` through the shipped closures
+  asserting exact positions / attribute values / the drain, with three in-harness NEG controls) ·
+  `audit-agent-layout` · `parity-agent-wasm` · `verify-agent-render` · `test-c9-gates` ·
+  `test-agent-capabilities` · `verify-graph-rewrite` · `test-geometry-taint` ·
+  `test-generation-pipeline` · `gen-capability-docs --check`. **Negative-controlled by SOURCE
+  MUTATION**: moving `_brushZ` out of the trailing 3D block fails 4 ABI checks; dropping the spawn
+  closures from the `input` kind fails the editor-lifecycle check.
+- **⚠ A PROCESS LESSON worth keeping: never `git checkout <file>` to undo a source mutation on an
+  UNSTAGED file** — it restores from the INDEX and silently destroys the session's work. (It ate the
+  whole `agentAbi.ts` change here; the harnesses had already passed, so nothing failed until the real
+  UI showed a spawner fn with no brush block. Copy the file aside and restore from the copy.)
+
 ### Parameterized Input Mappings — declared parameters replace hardcoded R/G/B (branch `polishing`)
 
 *"We must abolish the assumption that input mappings will have r,g,b."* A Colour→Attribute mapping

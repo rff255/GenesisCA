@@ -31,10 +31,11 @@
  *   `resolveMaxBonds` / `resolveAxes` / `agentAbiShapeOf` discipline.
  */
 
-import type { CAModel, InputMappingParam, InputParamType, Mapping } from './types';
+import type { CAModel, InputBrushKind, InputMappingParam, InputParamType, Mapping } from './types';
 import type { PortDef } from '../modeler/vpl/types';
 import { encodeAttrValue } from './attrValueEncoding';
 import { hexToRgba, rgbaToHex } from './colorHex';
+import { is3dModelLike } from '../modeler/vpl/compiler/niCodec';
 
 /**
  * The key of the legacy colour parameter — a RESERVED key.
@@ -262,6 +263,36 @@ export function removedChannelPortIds(
   return gone;
 }
 
+/** Every value-output port id a mapping's ROOT exposes: the resolved channels
+ *  plus (spawner kind) the brush geometry. */
+function rootOutputPortIds(
+  mapping: Mapping | undefined,
+  model?: { properties?: { dimension?: string; gridDepth?: number } } | null,
+): string[] {
+  const ids = inputParamsOf(mapping).channels.map(c => c.portId);
+  if (inputBrushKindOf(mapping) === 'spawner') ids.push(...spawnerBrushPorts(model).map(p => p.id));
+  return ids;
+}
+
+/**
+ * THE CASCADE RULE, generalised over the WHOLE root port set — the channels
+ * (`removedChannelPortIds`) AND the spawner brush ports. Flipping an agent
+ * mapping SPAWNER → EDITOR destroys `brushX`/`brushY`/`brushRadius`(/`brushZ`),
+ * so the wires that fed on them must be DROPPED by the same drop-never-repoint
+ * rule a deleted parameter follows. EDITOR → SPAWNER only ADDS ports, so it
+ * destroys nothing and the graphs are not walked.
+ */
+export function removedRootPortIds(
+  before: Mapping | undefined,
+  after: Mapping | undefined,
+  model?: { properties?: { dimension?: string; gridDepth?: number } } | null,
+): Set<string> {
+  const live = new Set(rootOutputPortIds(after, model));
+  const gone = new Set<string>();
+  for (const id of rootOutputPortIds(before, model)) if (!live.has(id)) gone.add(id);
+  return gone;
+}
+
 /** Resolve the C→A mapping an input-mapping ROOT node points at. `inputColor`
  *  reads `model.mappings`; `agentInputMapping` reads `model.agentMappings`.
  *  Returns undefined for an unset / unknown id ⇒ the caller resolves LEGACY,
@@ -293,6 +324,53 @@ export function isInputMappingRoot(nodeType: string): boolean {
   return nodeType === 'inputColor' || nodeType === 'agentInputMapping';
 }
 
+// ---------------------------------------------------------------------------
+// Brush KIND — Editor vs Spawner (AGENT input mappings only)
+// ---------------------------------------------------------------------------
+
+/**
+ * THE KIND RESOLVER — the single place `mapping.brushKind` is read.
+ *
+ * Absent ⇒ `'editor'`, which is the historical behaviour, so every existing file
+ * resolves to exactly what it did before and there is no migration. A value
+ * outside the union (a hand-edited file) also resolves to `'editor'` — the safe
+ * arm, since an editor graph is the one that carries a `self`.
+ *
+ * Same discipline as `inputParamsOf`: NOTHING else may test `brushKind` directly.
+ */
+export function inputBrushKindOf(mapping: Mapping | undefined | null): InputBrushKind {
+  return mapping?.brushKind === 'spawner' ? 'spawner' : 'editor';
+}
+
+/** The kind for an input-mapping ROOT node (by its `mappingId`). A cell
+ *  `inputColor` root is ALWAYS `'editor'` — a lattice brush is per-cell and has
+ *  no spawner counterpart, so the kind can never reshape it. */
+export function inputBrushKindForNode(
+  nodeType: string,
+  config: Record<string, unknown> | undefined,
+  model?: Pick<CAModel, 'mappings' | 'agentMappings'> | null,
+): InputBrushKind {
+  if (nodeType !== 'agentInputMapping') return 'editor';
+  return inputBrushKindOf(inputMappingForNode(nodeType, config, model));
+}
+
+/** The SPAWNER root's extra value outputs, in ABI order: the brush's world
+ *  position + its radius. `z` rides ONLY in a 3D model — the trailing-3D
+ *  discipline every agent ABI kind follows (2D is a strict prefix of 3D, which
+ *  `audit-agent-layout` asserts), so it is appended LAST here too. */
+export const SPAWNER_BRUSH_PORTS: ReadonlyArray<{ id: string; label: string; argName: string; is3dOnly?: boolean }> = [
+  { id: 'brushX', label: 'Brush X', argName: '_brushX' },
+  { id: 'brushY', label: 'Brush Y', argName: '_brushY' },
+  { id: 'brushRadius', label: 'Brush Radius', argName: '_brushRadius' },
+  { id: 'brushZ', label: 'Brush Z', argName: '_brushZ', is3dOnly: true },
+];
+
+/** The brush ports a spawner root exposes for THIS model (drops `brushZ` in 2D). */
+export function spawnerBrushPorts(model?: { properties?: { dimension?: string; gridDepth?: number } } | null) {
+  const is3d = is3dModelLike(model ?? undefined);
+  return SPAWNER_BRUSH_PORTS.filter(p => !p.is3dOnly || is3d);
+}
+
 /**
  * The DYNAMIC value-output ports of an input-mapping root — one per resolved
  * channel. Consumed by BOTH `CaNode`'s render path AND
@@ -307,17 +385,24 @@ export function isInputMappingRoot(nodeType: string): boolean {
 export function buildInputParamPorts(
   nodeType: string,
   config: Record<string, unknown> | undefined,
-  model?: Pick<CAModel, 'mappings' | 'agentMappings'> | null,
+  model?: (Pick<CAModel, 'mappings' | 'agentMappings'> & { properties?: { dimension?: string; gridDepth?: number } }) | null,
 ): { inputs: PortDef[]; outputs: PortDef[] } {
   if (!isInputMappingRoot(nodeType)) return { inputs: [], outputs: [] };
   const resolved = inputParamsForNode(nodeType, config, model);
-  return {
-    inputs: [],
-    outputs: resolved.channels.map(c => ({
-      id: c.portId, label: c.label,
-      kind: 'output' as const, category: 'value' as const, dataType: c.dataType,
-    })),
-  };
+  const outputs: PortDef[] = resolved.channels.map(c => ({
+    id: c.portId, label: c.label,
+    kind: 'output' as const, category: 'value' as const, dataType: c.dataType,
+  }));
+  // SPAWNER kind: the brush's own geometry, ahead of the declared parameters —
+  // it is what the rule distributes agents by, so it reads first. Editor kind
+  // (and every cell root) adds nothing, so its port list is byte-identical.
+  if (inputBrushKindForNode(nodeType, config, model) === 'spawner') {
+    outputs.unshift(...spawnerBrushPorts(model).map(p => ({
+      id: p.id, label: p.label,
+      kind: 'output' as const, category: 'value' as const, dataType: 'float' as const,
+    })));
+  }
+  return { inputs: [], outputs };
 }
 
 // ---------------------------------------------------------------------------

@@ -1,4 +1,5 @@
 import type { NodeTypeDef } from '../types';
+import { agentRootRelaxesGuard } from '../types';
 
 /** Set Agent Radius — set an agent's radius (and growth target) by id (Generic
  *  Agent Platform). A spawn helper for a staged agent (from Create Agent) before
@@ -23,7 +24,7 @@ export const SetAgentRadiusNode: NodeTypeDef = {
     const id = `((${inputs['agentId'] || '-1'}) | 0)`;
     // Unified spawning: a Created agent is staged (alive=0) until Add To World in
     // Init AND Behaviour, so relax the guard to range-only in either root.
-    const guard = (ctx?.agentRoot === 'init' || ctx?.agentRoot === 'behaviour')
+    const guard = agentRootRelaxesGuard(ctx?.agentRoot)
       ? `__sr >= 0 && __sr < _agentMaxAgents`
       : `__sr >= 0 && __sr < highWater && _alive[__sr]`;
     // C9 SAFETY CATCH: drop the target-radius half when that field is gated off

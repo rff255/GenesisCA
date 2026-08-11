@@ -244,7 +244,7 @@ interface InitMsg {
   /** Agent INPUT Mappings (C->A): one SINGLE-agent fn source per agentInputMapping
    *  root. `paintAgentsColor` runs the one matching the brush's selected mapping,
    *  once per painted agent. JS-on-CPU on every agent target (event tempo). */
-  agentInputMappingCodes?: Array<{ mappingId: string; code: string; channels: number }>;
+  agentInputMappingCodes?: Array<{ mappingId: string; code: string; channels: number; spawner?: boolean }>;
   /** Agent sprites: true when the model has sprite assets. Gates the per-agent
    *  sprite display buffers (reset before each colour pass + sliced into the
    *  render snapshot) so non-sprite agent models pay no extra per-step transfer. */
@@ -385,7 +385,7 @@ interface PaintManualMsg {
   activeViewer: string;
 }
 interface ResetMsg { type: 'reset'; activeViewer: string; reqId?: number }
-interface RecompileMsg { type: 'recompile'; stepCode: string; initCode?: string; gridInitCode?: string; skipIsolatedEmpty?: SkipIsolatedEmptyConfig; inputColorCodes: Array<{ mappingId: string; code: string }>; outputMappingCodes: Array<{ mappingId: string; code: string }>; stopMessages?: string[]; updateMode: string; asyncScheme: string; wasmStepBytes?: Uint8Array; wasmStepError?: string; wasmExports?: string[]; viewerIds?: Record<string, number>; webgpuShaderCode?: string; webgpuShaderError?: string; webgpuEntryPoints?: WebGPUEntryPoints; webgpuLayout?: WebGPULayout; webgpuStopCheckInterval?: number; variegated?: VariegatedPayload; interactionTables?: InteractionTablePayload[]; agentBehaviourCode?: string; agentInitCode?: string; agentDivisionCode?: string; agentColorViewer?: string; agentOutputMappingCodes?: Array<{ mappingId: string; code: string }>; agentInputMappingCodes?: Array<{ mappingId: string; code: string; channels: number }>; agentHasSprites?: boolean; agentBondReqSlots?: number; agentFieldGates?: AgentFieldGates; agentDividePartitions?: DividePartitionSpec[]; centerBased?: CenterBasedConfig; agentUsesField?: boolean; agentUsesDensity?: boolean; rulesReadComputedIndicator?: boolean; agentResidencyClean?: boolean; agentTarget?: 'js' | 'wasm' | 'webgpu'; agentWasmBytes?: Uint8Array; agentWasmViewerGuardIds?: string[]; agentLayoutExtras?: AgentLayoutExtras; agentWasmLayoutSig?: { maxHashBins: number; totalBytes: number }; agentWebgpuBehaviourShader?: string; agentWebgpuForceShader?: string; agentWebgpuMaxAgents?: number; agentWebgpuMaxHashBins?: number; agentWebgpuLayout?: AgentWebGPULayout; agentRenderLayout?: AgentWebGPULayout; agentWebgpuUsesI32Write?: boolean; agentWebgpuUsage?: { usesBondStore?: boolean; usesBondStoreWrite?: boolean; usesIndicators?: boolean; usesAux?: boolean; usesSpawn?: boolean; usesStop?: boolean; usesForceScatter?: boolean; usesGeneration?: boolean; usesSpriteWrite?: boolean }; agentWebgpuOmShaders?: AgentOMShaderInput[] }
+interface RecompileMsg { type: 'recompile'; stepCode: string; initCode?: string; gridInitCode?: string; skipIsolatedEmpty?: SkipIsolatedEmptyConfig; inputColorCodes: Array<{ mappingId: string; code: string }>; outputMappingCodes: Array<{ mappingId: string; code: string }>; stopMessages?: string[]; updateMode: string; asyncScheme: string; wasmStepBytes?: Uint8Array; wasmStepError?: string; wasmExports?: string[]; viewerIds?: Record<string, number>; webgpuShaderCode?: string; webgpuShaderError?: string; webgpuEntryPoints?: WebGPUEntryPoints; webgpuLayout?: WebGPULayout; webgpuStopCheckInterval?: number; variegated?: VariegatedPayload; interactionTables?: InteractionTablePayload[]; agentBehaviourCode?: string; agentInitCode?: string; agentDivisionCode?: string; agentColorViewer?: string; agentOutputMappingCodes?: Array<{ mappingId: string; code: string }>; agentInputMappingCodes?: Array<{ mappingId: string; code: string; channels: number; spawner?: boolean }>; agentHasSprites?: boolean; agentBondReqSlots?: number; agentFieldGates?: AgentFieldGates; agentDividePartitions?: DividePartitionSpec[]; centerBased?: CenterBasedConfig; agentUsesField?: boolean; agentUsesDensity?: boolean; rulesReadComputedIndicator?: boolean; agentResidencyClean?: boolean; agentTarget?: 'js' | 'wasm' | 'webgpu'; agentWasmBytes?: Uint8Array; agentWasmViewerGuardIds?: string[]; agentLayoutExtras?: AgentLayoutExtras; agentWasmLayoutSig?: { maxHashBins: number; totalBytes: number }; agentWebgpuBehaviourShader?: string; agentWebgpuForceShader?: string; agentWebgpuMaxAgents?: number; agentWebgpuMaxHashBins?: number; agentWebgpuLayout?: AgentWebGPULayout; agentRenderLayout?: AgentWebGPULayout; agentWebgpuUsesI32Write?: boolean; agentWebgpuUsage?: { usesBondStore?: boolean; usesBondStoreWrite?: boolean; usesIndicators?: boolean; usesAux?: boolean; usesSpawn?: boolean; usesStop?: boolean; usesForceScatter?: boolean; usesGeneration?: boolean; usesSpriteWrite?: boolean }; agentWebgpuOmShaders?: AgentOMShaderInput[] }
 interface UpdateLookupTableMsg {
   type: 'updateLookupTable';
   attrId: string;
@@ -678,6 +678,26 @@ interface PaintAgentsColorMsg {
   mappingId: string;
   activeViewer: string;
 }
+/** Agent SPAWNER brush (C->A, `brushKind: 'spawner'`): run one Agent Input
+ *  Mapping graph ONCE PER BRUSH APPLICATION with NO self — it receives the
+ *  brush's world position + radius and creates the agents itself (Create Agent →
+ *  set-by-handle → Add Agent To World), exactly as the Agent Init Event does.
+ *
+ *  `points` is a LIST so a drag ships one message per frame (the rAF-batched
+ *  brush discipline) rather than one per pointermove: the fn runs once per point,
+ *  in order. In AGENT_GPU_DEFER_TYPES like every other agent mutation. */
+interface SpawnAgentsBrushMsg {
+  type: 'spawnAgentsBrush';
+  /** One brush application per entry, in stroke order. `z` is read only in a 3D
+   *  world (the agent world IS the grid frame 1:1). */
+  points: Array<{ x: number; y: number; z?: number }>;
+  /** The brush's world-unit radius — what the graph distributes agents inside. */
+  radius: number;
+  /** The flat CHANNEL payload (the mapping's declared parameters). */
+  values: number[];
+  mappingId: string;
+  activeViewer: string;
+}
 /** Remove ALL agents (Reset). */
 interface ClearAgentsMsg { type: 'clearAgents'; activeViewer: string }
 /** Agent clipboard COPY read: batch-read the given agents' full spec (position,
@@ -761,7 +781,7 @@ interface SetAgentVizMsg {
  *  refreshDisplay). */
 interface RefreshAgentDisplayMsg { type: 'refreshAgentDisplay' }
 
-type WorkerMsg = InitMsg | StepMsg | CancelStepMsg | PaintMsg | PaintManualMsg | ResetMsg | RecompileMsg | UpdateModelAttrsMsg | UpdateLookupTableMsg | ImportImageMsg | ImportGridValuesMsg | UpdateIndicatorsMsg | GetStateMsg | LoadStateMsg | ReadRegionMsg | WriteRegionMsg | ClearRegionMsg | SetUseWasmMsg | SetUseWebGPUMsg | ReadbackWebGPUMsg | ColorPassMsg | SetRecordingMsg | AttachCanvasMsg | RequestColorsSnapshotMsg | SetInspectCellsMsg | RefreshDisplayMsg | SeedAgentsMsg | CreateAgentMsg | KillAgentsMsg | PaintAgentsMsg | PaintAgentsColorMsg | ClearAgentsMsg | ReadAgentsMsg | PasteAgentsMsg | FormBondMsg | BreakBondMsg | GetBondStateMsg | SetBondStateMsg | GetAgentStateMsg | MoveAgentsMsg | NudgeAgentsMsg | SetAgentWasmBackedMsg | SetRngSeedMsg | SetSimLayersMsg | SetAgentSnapshotVelocityMsg | AttachAgentCanvasMsg | SetAgentCameraMsg | SetAgentUiSyncMsg | SetAgentVizMsg | RefreshAgentDisplayMsg | GetDiagnosticsMsg | E1bCountersMsg | GraphIndicatorStatsMsg | CompositeReadbackMsg | AttachVoxelCanvasMsg | SetGridCameraMsg | SetGridUiSyncMsg | SetGridVizMsg | RefreshGridDisplayMsg | VoxelReadbackMsg;
+type WorkerMsg = InitMsg | StepMsg | CancelStepMsg | PaintMsg | PaintManualMsg | ResetMsg | RecompileMsg | UpdateModelAttrsMsg | UpdateLookupTableMsg | ImportImageMsg | ImportGridValuesMsg | UpdateIndicatorsMsg | GetStateMsg | LoadStateMsg | ReadRegionMsg | WriteRegionMsg | ClearRegionMsg | SetUseWasmMsg | SetUseWebGPUMsg | ReadbackWebGPUMsg | ColorPassMsg | SetRecordingMsg | AttachCanvasMsg | RequestColorsSnapshotMsg | SetInspectCellsMsg | RefreshDisplayMsg | SeedAgentsMsg | CreateAgentMsg | KillAgentsMsg | PaintAgentsMsg | PaintAgentsColorMsg | SpawnAgentsBrushMsg | ClearAgentsMsg | ReadAgentsMsg | PasteAgentsMsg | FormBondMsg | BreakBondMsg | GetBondStateMsg | SetBondStateMsg | GetAgentStateMsg | MoveAgentsMsg | NudgeAgentsMsg | SetAgentWasmBackedMsg | SetRngSeedMsg | SetSimLayersMsg | SetAgentSnapshotVelocityMsg | AttachAgentCanvasMsg | SetAgentCameraMsg | SetAgentUiSyncMsg | SetAgentVizMsg | RefreshAgentDisplayMsg | GetDiagnosticsMsg | E1bCountersMsg | GraphIndicatorStatsMsg | CompositeReadbackMsg | AttachVoxelCanvasMsg | SetGridCameraMsg | SetGridUiSyncMsg | SetGridVizMsg | RefreshGridDisplayMsg | VoxelReadbackMsg;
 
 // ---------------------------------------------------------------------------
 // C3 (P4) — RUNTIME FALLBACK LOG
@@ -1173,8 +1193,13 @@ let agentOutputMappingFns: Array<{ mappingId: string; fn: Function }> = [];
  *  keeps no model, so it cannot resolve `Mapping.parameters` itself; shipping the
  *  number keeps the DEV arity assert a genuine mirror of the compiler (it used to
  *  hardcode the LEGACY 3 and fired a false positive on every parameterized
- *  mapping) and lets the paint handler reject a payload of the wrong length. */
-let agentInputMappingFns: Array<{ mappingId: string; fn: Function; channels: number }> = [];
+ *  mapping) and lets the paint handler reject a payload of the wrong length. *
+ *  `spawner` is the SHIPPED brush KIND: TRUE ⇒ the fn takes the `spawner` ABI
+ *  (once per brush application, NO self, the brush geometry + the spawn
+ *  closures) and only `spawnAgentsBrush` may run it; absent/false ⇒ the
+ *  historical per-painted-agent editor fn, run by `paintAgentsColor`. Shipped
+ *  for the same reason `channels` is — the worker keeps no model. */
+let agentInputMappingFns: Array<{ mappingId: string; fn: Function; channels: number; spawner: boolean }> = [];
 /** The active AGENT viewer (an agent mapping id). Selects which agent colour pass
  *  paints. Independent of `activeViewer` (the active CELL viewer). */
 let agentColorViewer = '';
@@ -1898,9 +1923,106 @@ function buildDivisionArgs(s: AgentStore, idx: number, daughterIndex: number, ax
  *  Looks guarded by an AGENT mapping id therefore never fires here, and the
  *  `runAgentColorPass()` on the next line of the handler would overwrite it
  *  anyway. Agent colour belongs to the Output Mapping, not to a paint graph. */
-function buildAgentInputArgs(s: AgentStore, idx: number): unknown[] {
-  const rt: AgentAbiRuntime = { ...agentAbiBaseRt(), hash: null, viewer: activeViewer, idx };
+function buildAgentInputArgs(
+  s: AgentStore, idx: number,
+  agentCreate: (x: number, y: number, z: number, radius: number) => number,
+  agentAddToWorld: (id: number) => void,
+): unknown[] {
+  const rt: AgentAbiRuntime = { ...agentAbiBaseRt(), hash: null, viewer: activeViewer, idx, agentCreate, agentAddToWorld };
   return buildAgentAbiArgs('input', agentAbiShapeOfStore(s), s, rt);
+}
+
+/** Args for a compiled SPAWNER-kind Agent Input Mapping fn — a once-per-brush-
+ *  application function with NO self. MIRRORS `buildAgentSpawnerParams` (both
+ *  iterate the shared descriptor's `spawner` kind). Structurally the init args
+ *  plus the brush block. */
+function buildAgentSpawnerArgs(
+  s: AgentStore,
+  agentCreate: (x: number, y: number, z: number, radius: number) => number,
+  agentAddToWorld: (id: number) => void,
+  seedBase: number,
+  brushX: number, brushY: number, brushZ: number, brushRadius: number,
+): unknown[] {
+  const rt: AgentAbiRuntime = {
+    ...agentAbiBaseRt(), hash: null, viewer: activeViewer,
+    agentCreate, agentAddToWorld, seedBase, brushX, brushY, brushZ, brushRadius,
+  };
+  return buildAgentAbiArgs('spawner', agentAbiShapeOfStore(s), s, rt);
+}
+
+/**
+ * The BRUSH-LOCAL spawn closures — the grow-only Create Agent / Add Agent To
+ * World pair an input-mapping graph (either kind) gets, plus the leak sweep.
+ *
+ * GROW-ONLY, exactly like the behaviour graph's pair: a Create appends at
+ * `highWater` rather than reusing a free-list hole, so a slot freed by a Kill
+ * EARLIER IN THE SAME BRUSH APPLICATION can never be handed straight back out —
+ * which would let a graph configure a slot it just destroyed. `sweep()` frees any
+ * handle that was Created but never Added (the Init Event's rule).
+ */
+function makeBrushSpawnClosures(s: AgentStore) {
+  const created: number[] = [];
+  const createdSet = new Set<number>();
+  let overflowed = false;
+  const agentCreate = (x: number, y: number, z: number, radius: number): number => {
+    if (s.highWater >= s.maxAgents) { overflowed = true; return -1; }
+    const id = s.highWater++;
+    initAgentSlot(s, id, x, y, z || 0, radius || cbNum(centerBasedConfig!, 'defaultRadius'), id);
+    s.alive[id] = 0;                       // STAGE — un-committed until Add To World
+    created.push(id); createdSet.add(id);
+    return id;
+  };
+  const agentAddToWorld = (id: number): void => {
+    // Only commit ids THIS application staged (an arbitrary wired id must never
+    // ghost-commit a dead / uninitialised slot).
+    if (createdSet.has(id) && !s.alive[id]) { s.alive[id] = 1; s.liveCount++; }
+  };
+  const sweep = (): boolean => {
+    for (const id of created) if (!s.alive[id]) freeStagedSlot(s, id);
+    // xNext must track a Set Agent Position override or the first integration
+    // step undoes it (the Init Event's post-pass, same reason).
+    const is3d = s.worldDepth > 1;
+    for (const id of created) {
+      if (!s.alive[id]) continue;
+      s.xNext[id] = s.x[id]!; s.yNext[id] = s.y[id]!;
+      if (is3d) s.zNext[id] = s.z[id]!;
+    }
+    created.length = 0; createdSet.clear();
+    const o = overflowed; overflowed = false;
+    return o;
+  };
+  return { agentCreate, agentAddToWorld, sweep };
+}
+
+/**
+ * DRAIN the kill requests an input-mapping graph raised, IMMEDIATELY.
+ *
+ * THE SEMANTICS, chosen deliberately: a paint is a USER GESTURE between
+ * generations, so "I clicked erase" must remove the agent NOW. Leaving the flags
+ * for the next generation's structural phase would make an erase brush do nothing
+ * until the user pressed Play — and on a PAUSED model, nothing ever. So the
+ * handler drains them the way the structural phase does (`freeAgentSlot` breaks
+ * every bond both ways + bumps the slot epoch, so no dangling bond survives),
+ * then clears the flags so a later structural phase cannot see them again.
+ *
+ * Returns how many agents died (0 ⇒ the common case, and the scan is the only
+ * cost — O(highWater) once per brush application, not per agent).
+ */
+/** One-shot capacity notice for a brush-driven spawn (the Init Event's message,
+ *  reworded for the gesture that caused it). */
+function postAgentOverflow(): void {
+  const s = agentStore;
+  self.postMessage({ type: 'agentOverflow', message: `Agent capacity reached (maxAgents=${s?.maxAgents ?? 0}). Some Create Agent calls in the brush graph were skipped.` });
+}
+
+function drainBrushKillRequests(s: AgentStore): number {
+  let killed = 0;
+  for (let i = 0; i < s.highWater; i++) {
+    if (!s.killRequest[i]) continue;
+    s.killRequest[i] = 0;
+    if (s.alive[i]) { freeAgentSlot(s, i); killed++; }
+  }
+  return killed;
 }
 
 /** Run one Agent Input Mapping graph over the given agents (the agent Paint
@@ -1924,16 +2046,80 @@ function runAgentInputMapping(mappingId: string, ids: number[], values: number[]
     self.postMessage({ type: 'error', message: `[agents] input mapping "${mappingId}" paint skipped: payload carries ${values.length} channel value(s) but the compiled graph declares ${im.channels} (stale compile - recompile to fix).` });
     return;
   }
-  for (const id of ids) {
-    if (id < 0 || id >= s.highWater || !s.alive[id]) continue;
+  if (im.spawner) {
+    self.postMessage({ type: 'error', message: `[agents] input mapping "${mappingId}" is a SPAWNER brush — it cannot run per painted agent (send spawnAgentsBrush).` });
+    return;
+  }
+  // The painted ids are RESOLVED UP FRONT against the pre-paint population: an
+  // editor graph may Create agents (which grow `highWater`) and Kill agents, and
+  // neither must change the set the user's stroke selected — a newborn appended
+  // mid-loop would otherwise be painted by the same stroke that made it.
+  const targets = ids.filter(id => id >= 0 && id < s.highWater && s.alive[id]);
+  const { agentCreate, agentAddToWorld, sweep } = makeBrushSpawnClosures(s);
+  for (const id of targets) {
+    // A target killed by an EARLIER agent in this same stroke is skipped (the
+    // kill drain runs after the loop, but `freeAgentSlot` is not what clears
+    // `alive` here — the flag is; so re-check it cheaply).
+    if (!s.alive[id]) continue;
     try {
-      im.fn(...values, ...buildAgentInputArgs(s, id));
+      im.fn(...values, ...buildAgentInputArgs(s, id, agentCreate, agentAddToWorld));
     } catch (e) {
+      sweep();
       agentInputMappingFns = agentInputMappingFns.filter(f => f !== im);
       self.postMessage({ type: 'error', message: `[agents] input mapping "${mappingId}" failed (disabled until recompile): ` + ((e as Error)?.message || e) });
       return;
     }
   }
+  if (sweep()) postAgentOverflow();
+  drainBrushKillRequests(s);
+}
+
+/** Run a SPAWNER-kind Agent Input Mapping once per brush application. No self —
+ *  the graph gets the brush's world position + radius and creates the agents
+ *  itself. Same grow-only closures + leak sweep + immediate kill drain as the
+ *  editor kind. */
+function runAgentSpawnerBrush(
+  mappingId: string,
+  points: Array<{ x: number; y: number; z?: number }>,
+  radius: number,
+  values: number[],
+): void {
+  const s = agentStore;
+  if (!s || agentInputMappingFns.length === 0) return;
+  const im = agentInputMappingFns.find(f => f.mappingId === mappingId);
+  if (!im) return;
+  if (!im.spawner) {
+    self.postMessage({ type: 'error', message: `[agents] input mapping "${mappingId}" is an EDITOR brush — it needs the agents it paints (send paintAgentsColor).` });
+    return;
+  }
+  if (values.length !== im.channels) {
+    agentInputMappingFns = agentInputMappingFns.filter(f => f !== im);
+    self.postMessage({ type: 'error', message: `[agents] spawner mapping "${mappingId}" skipped: payload carries ${values.length} channel value(s) but the compiled graph declares ${im.channels} (stale compile - recompile to fix).` });
+    return;
+  }
+  const { agentCreate, agentAddToWorld, sweep } = makeBrushSpawnClosures(s);
+  let overflow = false;
+  for (const p of points) {
+    // `seedBase` is highWater at the START of THIS application, so the graph can
+    // number the agents it is about to create (the Init Event's semantics).
+    const seedBase = s.highWater;
+    try {
+      im.fn(...values, ...buildAgentSpawnerArgs(
+        s, agentCreate, agentAddToWorld, seedBase,
+        p.x, p.y, p.z ?? 0, radius,
+      ));
+    } catch (e) {
+      sweep();
+      agentInputMappingFns = agentInputMappingFns.filter(f => f !== im);
+      self.postMessage({ type: 'error', message: `[agents] spawner mapping "${mappingId}" failed (disabled until recompile): ` + ((e as Error)?.message || e) });
+      return;
+    }
+    // Sweep PER APPLICATION so a leaked handle cannot survive into the next
+    // point's `seedBase` and be double-counted.
+    if (sweep()) overflow = true;
+  }
+  if (overflow) postAgentOverflow();
+  drainBrushKillRequests(s);
 }
 
 /** Build the args for the compiled behaviourStep function. MIRRORS
@@ -2857,7 +3043,7 @@ function agentWebgpuIndicatorIsInt(): boolean[] {
  *  `readbackAgentField` (cell fields) overwrites the CPU arrays with
  *  pre-mutation GPU values. Deferred + replayed right after the step settles. */
 const AGENT_GPU_DEFER_TYPES = new Set<string>([
-  'seedAgents', 'createAgent', 'killAgents', 'paintAgents', 'paintAgentsColor', 'moveAgents', 'nudgeAgents', 'pasteAgents',
+  'seedAgents', 'createAgent', 'killAgents', 'paintAgents', 'paintAgentsColor', 'spawnAgentsBrush', 'moveAgents', 'nudgeAgents', 'pasteAgents',
   'formBond', 'breakBond', 'setBondState', 'clearAgents',
   'paint', 'paintManual', 'writeRegion', 'clearRegion', 'importGridValues',
 ]);
@@ -5610,7 +5796,7 @@ function compileFns(
  *  behaviour function runs once per LIVE agent each generation over `idx <
  *  highWater`. Absent code ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ null (agents seed + render but don't behave, the
  *  PR-A2 state). */
-function compileAgentFns(behaviourCode?: string, initCode?: string, divisionCode?: string, outputMappingCodes?: Array<{ mappingId: string; code: string }>, inputMappingCodes?: Array<{ mappingId: string; code: string; channels: number }>): void {
+function compileAgentFns(behaviourCode?: string, initCode?: string, divisionCode?: string, outputMappingCodes?: Array<{ mappingId: string; code: string }>, inputMappingCodes?: Array<{ mappingId: string; code: string; channels: number; spawner?: boolean }>): void {
   try {
     // eslint-disable-next-line no-eval
     agentBehaviourFn = behaviourCode ? (eval(behaviourCode) as Function) : null;
@@ -5631,7 +5817,7 @@ function compileAgentFns(behaviourCode?: string, initCode?: string, divisionCode
       // `channels ?? 3` keeps an OLD message shape (no `channels`) resolving to the
       // legacy colour count rather than 0 — a missing field must not silently make
       // the arity check compare against a shorter prefix.
-      agentInputMappingFns.push({ mappingId: im.mappingId, fn: eval(im.code) as Function, channels: im.channels ?? 3 });
+      agentInputMappingFns.push({ mappingId: im.mappingId, fn: eval(im.code) as Function, channels: im.channels ?? 3, spawner: !!im.spawner });
     } catch (e) { self.postMessage({ type: 'error', message: `[agents] input mapping '${im.mappingId}' compile failed: ` + ((e as Error)?.message || e) }); }
   }
   try {
@@ -5690,10 +5876,17 @@ function compileAgentFns(behaviourCode?: string, initCode?: string, divisionCode
     // made this the one mirror in the chain that did not derive from the resolver,
     // and it fired a false-positive DESYNC for every mapping declaring a different
     // parameter list (`parameters: []` -> 0 channels -> a phantom gap of 4).
+    // A SPAWNER-kind mapping is the FIFTH pair (buildAgentSpawnerParams <->
+    // buildAgentSpawnerArgs) — a different descriptor kind, so its expected count
+    // must come from ITS builder, not the editor one. The `spawner` flag is
+    // SHIPPED beside `channels` for exactly this reason.
     for (const im of agentInputMappingFns) {
-      const want = buildAgentInputArgs(s, 0).length + im.channels;
+      const want = im.spawner
+        ? buildAgentSpawnerArgs(s, () => 0, () => {}, 0, 0, 0, 0, 0).length + im.channels
+        : buildAgentInputArgs(s, 0, () => 0, () => {}).length + im.channels;
       if (!arityOk(im.fn.length, want)) {
-        self.postMessage({ type: 'error', message: `[agents] ABI ARITY DESYNC: input mapping '${im.mappingId}' fn declares ${im.fn.length} params but the worker passes ${want} (buildAgentInputParams<->buildAgentInputArgs out of lockstep - the B1 hazard).` });
+        const pair = im.spawner ? 'buildAgentSpawnerParams<->buildAgentSpawnerArgs' : 'buildAgentInputParams<->buildAgentInputArgs';
+        self.postMessage({ type: 'error', message: `[agents] ABI ARITY DESYNC: input mapping '${im.mappingId}' fn declares ${im.fn.length} params but the worker passes ${want} (${pair} out of lockstep - the B1 hazard).` });
       }
     }
   }
@@ -8543,6 +8736,19 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       activeViewer = msg.activeViewer; syncActiveViewerToMemory();
       if (agentStore) {
         runAgentInputMapping(msg.mappingId, msg.ids, msg.values);
+        runAgentColorPass();
+      }
+      sendColors();
+      break;
+    }
+    case 'spawnAgentsBrush': {
+      // The SPAWNER twin of `paintAgentsColor`: no agent list — the graph gets
+      // the brush's world position + radius once per application and creates the
+      // agents itself, through the same grow-only closures the Agent Init Event
+      // uses. Same tail (recolour + ship) as every other agent mutation.
+      activeViewer = msg.activeViewer; syncActiveViewerToMemory();
+      if (agentStore) {
+        runAgentSpawnerBrush(msg.mappingId, msg.points, msg.radius, msg.values);
         runAgentColorPass();
       }
       sendColors();

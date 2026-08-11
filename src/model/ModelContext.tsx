@@ -35,7 +35,7 @@ import { defaultCenterBasedConfig } from './centerBased';
 import { defaultAgentCapabilities, migrateAgentCapabilities } from './agentCapabilities';
 import { defaultTagColor } from '../modeler/vpl/compiler/linkedOutputMappings';
 import { MULTI_ATTR_TYPES } from '../modeler/vpl/compiler/multiAttrExpand';
-import { inputParamsOf, isInputMappingRoot, removedChannelPortIds } from './inputMappingParams';
+import { isInputMappingRoot, removedRootPortIds } from './inputMappingParams';
 import { DEFAULT_GRAPH_METRIC } from '../simulator/engine/graphMetrics';
 import { resolveAxes, remapTableDataAxis, remapTableDataForAxesChange } from '../modeler/vpl/compiler/variegation';
 import { cloneMacroWithFreshIds } from './macroImport';
@@ -170,6 +170,11 @@ function patchAllEdges(
  * no-op for it and every wire survives — which is the whole reason `key` and
  * `name` are separate fields.
  *
+ * The SAME rule covers the brush KIND switch: flipping an agent mapping
+ * SPAWNER → EDITOR destroys the `brushX`/`brushY`/`brushRadius`(/`brushZ`) ports,
+ * so `removedRootPortIds` reports them and their wires drop identically.
+ * EDITOR → SPAWNER only adds ports, so it destroys nothing.
+ *
  * Returns `null` when nothing is destroyed, so the common edit path does not
  * even walk the graphs.
  */
@@ -178,8 +183,15 @@ function pruneRemovedChannelEdges(
   mappingId: string,
   before: Mapping | undefined,
   after: Mapping | undefined,
+  /** AGENT mappings only: consider the spawner brush ports. A CELL `inputColor`
+   *  root has no kind (a lattice brush is always per-cell), so its port set is
+   *  the channels alone — strip any stray `brushKind` a hand-edited file carries
+   *  rather than inventing ports the root never rendered. */
+  agent = false,
 ) {
-  const removed = removedChannelPortIds(inputParamsOf(before), inputParamsOf(after));
+  const strip = (m: Mapping | undefined) =>
+    agent ? m : (m && m.brushKind !== undefined ? { ...m, brushKind: undefined } : m);
+  const removed = removedRootPortIds(strip(before), strip(after), model);
   if (removed.size === 0) return null;
   const handles = new Set([...removed].map(p => `output_value_${p}`));
   return patchAllEdges(model, (edge, source) =>
@@ -1414,8 +1426,10 @@ export function modelReducer(state: ModelState, action: ModelAction): ModelState
       const mAfterAgentUpd = { ...state.model, agentMappings };
       // The agent twin of UPDATE_MAPPING's cascade — cells and agents must end
       // up consistent, and `agentInputMapping` roots live on the Agents graph.
-      const agentEdgePrune = 'parameters' in action.changes
-        ? pruneRemovedChannelEdges(mAfterAgentUpd, action.id, beforeAgent, agentMappings.find(m => m.id === action.id))
+      // `brushKind` joins `parameters` as an edit that can DESTROY root ports
+      // (spawner → editor drops the brush geometry outs).
+      const agentEdgePrune = ('parameters' in action.changes || 'brushKind' in action.changes)
+        ? pruneRemovedChannelEdges(mAfterAgentUpd, action.id, beforeAgent, agentMappings.find(m => m.id === action.id), true)
         : null;
       return {
         ...state, isDirty: true,

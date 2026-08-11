@@ -32,7 +32,7 @@ import { computeAsyncReadWriteHazards } from './asyncWriteHazard';
 import { sparseSteppingEnabled } from './sparseStepping';
 import { expandMacros } from './macroExpand';
 import { detectDanglingRefs } from './danglingRefs';
-import { inputParamsForNode } from '../../../model/inputMappingParams';
+import { inputBrushKindForNode, inputParamsForNode, spawnerBrushPorts } from '../../../model/inputMappingParams';
 export { sparseSteppingEnabled } from './sparseStepping';
 import { computeVolatileHoist } from './volatileHoist';
 import {
@@ -468,6 +468,11 @@ function compileRoot(
     agentRoot: rootNode.data.nodeType === 'agentInit' ? 'init'
       : rootNode.data.nodeType === 'behaviourStep' ? 'behaviour'
       : rootNode.data.nodeType === 'divisionEvent' ? 'division'
+      // An Agent Input Mapping root's ABI depends on its mapping's BRUSH KIND:
+      // `editor` is the per-painted-agent single-agent shape (it HAS a self),
+      // `spawner` is the once-per-brush-application setup shape (it has NONE).
+      : rootNode.data.nodeType === 'agentInputMapping'
+        ? (inputBrushKindForNode('agentInputMapping', rootNode.data.config, model) === 'spawner' ? 'spawner' : 'input')
       : undefined,
     // Which GRAPH this root belongs to. Unlike `agentRoot` this also covers the
     // agent OUTPUT MAPPING root, so a universal node can tell "I'm compiling into
@@ -2457,7 +2462,14 @@ export interface AgentCompileResult {
    *  count), so ANY mapping declaring a different parameter list fired a
    *  false-positive `ABI ARITY DESYNC`. It also lets `runAgentInputMapping`
    *  reject a paint payload whose length disagrees with the compiled fn. */
-  inputMappingCodes: Array<{ mappingId: string; code: string; channels: number }>;
+  inputMappingCodes: Array<{
+    mappingId: string; code: string; channels: number;
+    /** TRUE for a SPAWNER-kind mapping: the fn is once-per-brush-application with
+     *  NO self and takes the `spawner` ABI (init + the brush block). ABSENT ⇒
+     *  the historical per-painted-agent editor fn. Shipped rather than re-derived
+     *  because the worker keeps no model — the same reason `channels` is. */
+    spawner?: boolean;
+  }>;
   /** P5 — the DIVISION BOND PARTITION table: one entry per DISTINCT Divide Agent
    *  partition spec, in first-encounter order. Each node's `_divideIdx` (baked
    *  here, read by all three emitters) is `index + 1`, and that 1-based code is
@@ -2550,6 +2562,15 @@ export function buildAgentInitParams(model: CAModel): string {
  *  signature — they are not part of the shared descriptor. */
 export function buildAgentInputParams(model: CAModel): string {
   return buildAgentAbiParams('input', agentAbiShapeOf(model));
+}
+
+/** The SPAWNER-kind Agent Input Mapping signature — a once-per-BRUSH-APPLICATION
+ *  function with NO self. Structurally the Agent Init Event's signature plus the
+ *  brush block (`_brushX`, `_brushY`, `_brushRadius`, `_brushZ` trailing in 3D)
+ *  and `_killRequest`. The worker's `buildAgentSpawnerArgs` MIRRORS it. As with
+ *  the editor kind the declared PARAMETER channels are prepended by the caller. */
+export function buildAgentSpawnerParams(model: CAModel): string {
+  return buildAgentAbiParams('spawner', agentAbiShapeOf(model));
 }
 
 export function buildAgentLoopParams(model: CAModel): { params: string; agentAttrs: Array<{ id: string; type: string }> } {
@@ -2964,15 +2985,22 @@ export function compileAgentGraph(
   // (`_r, _g, _b`) then the per-agent ABI, `colorIdx` so Set Cell Looks works,
   // and the root's r/g/b value-outs aliased to the params. Unlike the OM passes
   // this is NOT loop-wrapped — the caller supplies the painted agent's `idx`. ---
-  const inputMappingCodes: Array<{ mappingId: string; code: string; channels: number }> = [];
+  const inputMappingCodes: Array<{ mappingId: string; code: string; channels: number; spawner?: boolean }> = [];
   {
-    const imParams = buildAgentInputParams(model);
+    const editorParams = buildAgentInputParams(model);
+    const spawnerParams = buildAgentSpawnerParams(model);
+    const brushPorts = spawnerBrushPorts(model);
     for (const imNode of agentNodes.filter(n => n.data.nodeType === 'agentInputMapping')) {
       const mappingId = (imNode.data.config.mappingId as string) || '';
       try {
         // Parameterized Input Mappings: the leading brush arguments are the
         // resolved CHANNEL list (legacy ⇒ `_r, _g, _b`, byte-identically).
         const imResolved = inputParamsForNode('agentInputMapping', imNode.data.config, model);
+        // The mapping's BRUSH KIND picks the ABI: `editor` = per painted agent
+        // (a `self`), `spawner` = once per brush application (no self, but the
+        // brush geometry + the spawn closures).
+        const isSpawner = inputBrushKindForNode('agentInputMapping', imNode.data.config, model) === 'spawner';
+        const imParams = isSpawner ? spawnerParams : editorParams;
         const r = compileRoot(
           imNode, 'do', nodeMap, inputToSource, inputToSources, flowOutputToTargets,
           loopInvariant, fusion, agentNodes, agentEdges, model,
@@ -2994,9 +3022,16 @@ export function compileAgentGraph(
           // never fires — `buildAgentInputArgs` passes the CELL `activeViewer`, so
           // `_isV_<agentMappingId>` is false (contrast runAgentColorPass, which
           // passes the pass's own mappingId). Colour belongs to the Output Mapping.
-          '  const colorIdx = idx * 4;',
+          // A SPAWNER has no painted agent, so no `colorIdx` (and Set Cell Looks
+          // is meaningless there — nothing to colour but the agents it creates,
+          // which the Output Mapping owns).
+          ...(isSpawner ? [] : ['  const colorIdx = idx * 4;']),
           ...(imResolved.channels.length > 0
             ? [`  ${imResolved.channels.map(c => `const _v${imNode.id}_${c.portId} = ${c.argName};`).join(' ')}`]
+            : []),
+          // SPAWNER: alias the brush-geometry value-outs to their ABI params.
+          ...(isSpawner
+            ? [`  ${brushPorts.map(p => `const _v${imNode.id}_${p.id} = ${p.argName};`).join(' ')}`]
             : []),
           '  let _rs = _rngState[0] || 0x12345678;',
           ...r.preLoopValueLines,
@@ -3009,7 +3044,13 @@ export function compileAgentGraph(
         // `channels` MUST come from the SAME `imResolved` the leading params were
         // emitted from — the whole point is that the worker's arity check mirrors
         // this emit rather than assuming the legacy 3.
-        inputMappingCodes.push({ mappingId, code, channels: imResolved.channels.length });
+        inputMappingCodes.push({
+          mappingId, code, channels: imResolved.channels.length,
+          // SHIPPED (never re-derived): the worker keeps no model, so the kind
+          // must travel with the fn — it decides which ABI the worker builds AND
+          // which brush message may run it. Absent ⇒ editor (the historical fn).
+          ...(isSpawner ? { spawner: true } : {}),
+        });
       } catch (e) {
         omErrors.push(`agent input mapping "${mappingId || '(unset)'}": ${(e as Error)?.message || e}`);
       }

@@ -14,7 +14,7 @@ import { isGraphFrequencyMetric, type GraphMetric } from '../../../simulator/eng
 import { indicatorScalarBlocker } from '../../../model/indicatorValue';
 import { isMultiAxisTable, resolveAxes, MAX_LOOKUP_TABLE_ENTRIES } from '../compiler/variegation';
 import { is3dModelLike } from '../compiler/niCodec';
-import { inputParamsForNode } from '../../../model/inputMappingParams';
+import { inputBrushKindForNode, inputParamsForNode } from '../../../model/inputMappingParams';
 
 /** Return a list of human-readable issue strings for a node's configuration.
  *  Empty array = node is fully configured.
@@ -1003,17 +1003,39 @@ const AGENT_SELF_ONLY_WHEN_UNWIRED: Record<string, string> = {
 /** Memoised "which nodes reachable from the agentInit root are init-invalid agent
  *  readers" set, keyed on the agent graph arrays' identity (ModelContext hands
  *  fresh arrays on every edit, so this invalidates naturally). */
-let _agentInitSelfCache: { nodes: unknown; edges: unknown; set: Set<string> } | null = null;
+let _agentInitSelfCache: { nodes: unknown; edges: unknown; mappings: unknown; set: Map<string, string> } | null = null;
 
-function agentInitSelfOnlyNodeIds(model: CAModel): Set<string> {
+/** Kill Agent is init-invalid EITHER WAY (its `_killRequest` buffer is loop-only
+ *  in the init ABI) but SPAWNER-valid when wired — the spawner kind carries the
+ *  lane so a brush can remove agents by id. Unwired it targets `idx`, which a
+ *  spawner does not have, so it stays reported there. */
+const SPAWNER_SELF_ONLY_WHEN_UNWIRED: Record<string, string> = {
+  ...AGENT_SELF_ONLY_WHEN_UNWIRED,
+  killAgent: 'agentId',
+};
+
+function agentInitSelfOnlyNodeIds(model: CAModel): Map<string, string> {
   const nodes = model.agentGraphNodes ?? [];
   const edges = model.agentGraphEdges ?? [];
-  if (_agentInitSelfCache && _agentInitSelfCache.nodes === nodes && _agentInitSelfCache.edges === edges) {
+  // The SPAWNER roots are resolved from `agentMappings`, so a brush-kind flip
+  // must invalidate this cache too (it changes which roots have no `self`).
+  const mappings = model.agentMappings;
+  if (_agentInitSelfCache && _agentInitSelfCache.nodes === nodes
+    && _agentInitSelfCache.edges === edges && _agentInitSelfCache.mappings === mappings) {
     return _agentInitSelfCache.set;
   }
-  const result = new Set<string>();
-  const initNode = nodes.find(n => n.data?.nodeType === 'agentInit');
-  if (initNode) {
+  /** nodeId -> the reason string (which selfless root it was reached from). */
+  const result = new Map<string, string>();
+  // EVERY root whose ABI has no `self`: the Agent Init Event and every
+  // SPAWNER-kind Agent Input Mapping. They share the footgun exactly (no `idx`,
+  // no live-population buffers), so they share one walk.
+  const selflessRoots = nodes.filter(n =>
+    n.data?.nodeType === 'agentInit'
+    || (n.data?.nodeType === 'agentInputMapping'
+      && inputBrushKindForNode('agentInputMapping', n.data?.config, model) === 'spawner'));
+  for (const initNode of selflessRoots) {
+    const isSpawner = initNode.data?.nodeType === 'agentInputMapping';
+    const whenUnwired = isSpawner ? SPAWNER_SELF_ONLY_WHEN_UNWIRED : AGENT_SELF_ONLY_WHEN_UNWIRED;
     const nodeMap = new Map(nodes.map(n => [n.id, n] as const));
     // flow-output adjacency (src → targets) + value-input adjacency (node → sources).
     const flowOut = new Map<string, string[]>();
@@ -1050,24 +1072,28 @@ function agentInitSelfOnlyNodeIds(model: CAModel): Set<string> {
       const n = nodeMap.get(id);
       if (!n || !AGENT_SELF_ONLY_TYPES.has(n.data?.nodeType)) continue;
       // Conditional types are init-valid once their id port is wired (by-id guard).
-      const idPort = AGENT_SELF_ONLY_WHEN_UNWIRED[n.data?.nodeType];
+      const idPort = whenUnwired[n.data?.nodeType];
       if (idPort && wiredValuePorts.has(`${id}:${idPort}`)) continue;
-      result.add(id);
+      if (!result.has(id)) {
+        result.set(id, isSpawner
+          ? 'Reads agent state — unavailable in a SPAWNER-kind Agent Input Mapping, which runs ONCE per brush application (no current agent) to CREATE agents by handle: Create Agent → Set Agent Position/Radius/Attribute → Add Agent To World. Switch the mapping to the Editor brush kind to run per painted agent.'
+          : 'Reads agent state — unavailable in the Agent Init Event, which runs once (no current agent, no live population) to SPAWN + configure NEW agents by handle: Create Agent → Set Agent Position/Radius/Attribute → Add Agent To World.');
+      }
     }
   }
-  _agentInitSelfCache = { nodes, edges, set: result };
+  _agentInitSelfCache = { nodes, edges, mappings, set: result };
   return result;
 }
 
-/** Design-time badge for the Init-vs-Behaviour footgun: a per-agent (self) node
- *  wired into the Agent Init Event. Returns an issue string ONLY for a node in
- *  `AGENT_SELF_ONLY_TYPES` that is reachable (flow or value cone) from the
- *  agentInit root on the Agents graph. Empty otherwise. */
+/** Design-time badge for the SELFLESS-ROOT footgun: a per-agent (self) node
+ *  wired into a root whose ABI has no current agent — the Agent Init Event, or a
+ *  SPAWNER-kind Agent Input Mapping. Returns an issue string ONLY for a node in
+ *  `AGENT_SELF_ONLY_TYPES` that is reachable (flow or value cone) from such a
+ *  root on the Agents graph, and the string names WHICH root. Empty otherwise. */
 export function detectAgentInitContextIssue(nodeId: string, model: CAModel): string[] {
   if (getActiveGraphKind() !== 'agents' || !model.topologyMode?.agents) return [];
-  return agentInitSelfOnlyNodeIds(model).has(nodeId)
-    ? ['Reads agent state — unavailable in the Agent Init Event, which runs once (no current agent, no live population) to SPAWN + configure NEW agents by handle: Create Agent → Set Agent Position/Radius/Attribute → Add Agent To World.']
-    : [];
+  const reason = agentInitSelfOnlyNodeIds(model).get(nodeId);
+  return reason ? [reason] : [];
 }
 
 /** True when a node type can be added to / kept in the current model. Used to

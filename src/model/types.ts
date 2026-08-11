@@ -247,6 +247,25 @@ export interface LinkedColorSet {
  *  `color` is the only multi-CHANNEL type (3 channels); every other type is 1. */
 export type InputParamType = 'bool' | 'integer' | 'float' | 'tag' | 'color';
 
+/** What an AGENT Color→Attribute mapping's brush DOES when the user paints.
+ *
+ *  · `editor`  — the historical shape (and the resolved default when absent): the
+ *                graph runs ONCE PER AGENT the brush footprint covers, with that
+ *                agent as `self`. It edits the agents it touches — and, since the
+ *                `input` ABI carries the grow-only spawn closures + the kill
+ *                request lane, it may also spawn agents AROUND them or remove
+ *                them.
+ *  · `spawner` — the graph runs ONCE PER BRUSH APPLICATION with NO self: it
+ *                receives the brush's world POSITION + RADIUS and creates agents
+ *                itself (Create Agent → set-by-handle → Add Agent To World),
+ *                distributing them however the rule likes. This is the shape the
+ *                editor kind structurally cannot express: an editor with an empty
+ *                footprint runs zero times, so "click empty space to add agents"
+ *                has nowhere to hook.
+ *
+ *  Cell (lattice) C→A mappings have no kind — a cell brush is always per-cell. */
+export type InputBrushKind = 'editor' | 'spawner';
+
 /** One declared parameter of a Color→Attribute (input) mapping. Each parameter
  *  becomes N value-output ports on the mapping's event root (`inputColor` /
  *  `agentInputMapping`) and one type-adaptive widget in the brush panel.
@@ -289,6 +308,12 @@ export interface Mapping {
    *  The two are DIFFERENT: always resolve through `inputParamsOf()`
    *  (src/model/inputMappingParams.ts) — never read this field directly. */
   parameters?: InputMappingParam[];
+  /** AGENT Color→Attribute mappings only. ABSENT ⇒ `'editor'` — the historical
+   *  per-painted-agent brush, so every existing file is unchanged and there is no
+   *  migration. Ignored for cell mappings and for A→C views. Always resolve
+   *  through `inputBrushKindOf()` (src/model/inputMappingParams.ts) — never read
+   *  this field directly (the `parameters` discipline). */
+  brushKind?: InputBrushKind;
   // --- Linked Output Mappings (Attribute→Color only; ignored when isAttributeToColor=false) ---
   /** When true, the color pass is auto-generated from `linkedAttributeId`.
    *  Absent/false = Standalone (the classic hand-built color graph). */

@@ -1,4 +1,5 @@
 import type { NodeTypeDef } from '../types';
+import { agentRootHasSelf } from '../types';
 
 /** Set Agents Attribute — write one AGENT attribute on EVERY agent in an id-array
  *  (Generic Agent Platform). The write-many companion to Set Agent Attribute /
@@ -30,7 +31,7 @@ export const SetAgentsAttributeNode: NodeTypeDef = {
     // ABI only), so — like the scalar by-id setters — guard against `_agentMaxAgents`
     // there. Behaviour/loop keeps the `< highWater && _alive` guard byte-identical
     // (WASM/WebGPU parity preserved).
-    const guard = ctx?.agentRoot === 'init'
+    const guard = !agentRootHasSelf(ctx?.agentRoot)
       ? `${id} >= 0 && ${id} < _agentMaxAgents`
       : `${id} >= 0 && ${id} < highWater && _alive[${id}]`;
     return [

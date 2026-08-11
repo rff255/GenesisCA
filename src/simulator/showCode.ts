@@ -28,7 +28,7 @@
  */
 
 import type { CAModel, Attribute, Indicator, Mapping } from '../model/types';
-import { inputParamsOf, paramTagOptions } from '../model/inputMappingParams';
+import { inputBrushKindOf, inputParamsOf, paramTagOptions } from '../model/inputMappingParams';
 import { buildLoopParams, buildCellParams, buildOutputMappingParams, is3dModel, isAgentModel, agentAbiShapeOf } from '../modeler/vpl/compiler/compile';
 import type { CompileResult } from '../modeler/vpl/compiler/compile';
 import { buildAgentAbiParams } from '../modeler/vpl/compiler/agentAbi';
@@ -1174,10 +1174,26 @@ function sectionAgentCompiled(model: CAModel, agent: AgentCodeBundle): string {
   }
   for (const im of agent.inputMappingCodes ?? []) {
     const m = (model.agentMappings ?? []).find(x => x.id === im.mappingId);
-    add(`Agent Input Mapping (brush): ${m?.name || im.mappingId} — once PER PAINTED AGENT`,
-      ['A single-agent function. Its BRUSH arguments lead the list below:',
-        ...inputChannelBlock(m, model)],
-      buildAgentAbiParams('input', shape), im.code);
+    // The mapping's BRUSH KIND picks the ABI, so the document must too — an
+    // editor's signature would describe code that is not the code beside it.
+    const spawner = inputBrushKindOf(m) === 'spawner';
+    add(spawner
+      ? `Agent Input Mapping (SPAWNER brush): ${m?.name || im.mappingId} — once PER BRUSH APPLICATION`
+      : `Agent Input Mapping (EDITOR brush): ${m?.name || im.mappingId} — once PER PAINTED AGENT`,
+      spawner
+        ? ['A once-per-gesture function with NO current agent (no `idx`): it CREATES agents',
+          'through the host closures `_agentCreate(x, y, z, radius)` → `_agentAddToWorld(id)`,',
+          'exactly as the Agent Init Event does. `_brushX` / `_brushY` / `_brushRadius`',
+          '(+ `_brushZ` in 3D) are the brush geometry; `_agentSeedBase` is `highWater` before',
+          'this application. A Created-but-never-Added handle is swept back to the free list,',
+          'and `_killRequest` flags are drained IMMEDIATELY after the call (not next generation).',
+          'Its BRUSH PARAMETER arguments lead the list below:',
+          ...inputChannelBlock(m, model)]
+        : ['A single-agent function (the painted agent is `idx`). It may also spawn agents',
+          'via `_agentCreate` / `_agentAddToWorld` and remove them via `_killRequest`, which',
+          'is drained IMMEDIATELY after the paint. Its BRUSH arguments lead the list below:',
+          ...inputChannelBlock(m, model)],
+      buildAgentAbiParams(spawner ? 'spawner' : 'input', shape), im.code);
   }
   if (parts.length === 0) return '';
   return [banner('COMPILED AGENT FUNCTIONS'), ...parts].join('\n');

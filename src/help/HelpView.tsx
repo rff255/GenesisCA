@@ -580,8 +580,10 @@ export function HelpView() {
               wire in a hand-edited file is reported by name at compile time.
             </li>
             <li>
-              <strong>Agents work the same way.</strong> Agent Input Mappings declare
-              parameters with the same editor and paint with the same brush panel.
+              <strong>Agents work the same way</strong> &mdash; and additionally choose a
+              <strong> brush kind</strong>: an <em>Editor</em> brush runs the graph on every agent it
+              covers, a <em>Spawner</em> brush runs it once where you click and hands it the brush
+              position + radius so the graph can create agents itself.
             </li>
           </ul>
 
@@ -2868,10 +2870,30 @@ export function HelpView() {
             Set Agent Radius, Set Velocity, Kill Agent, &hellip;
           </p>
           <p className={styles.p}>
+            <strong>Two brush kinds &mdash; Editor and Spawner.</strong> The editor&rsquo;s
+            <strong> Brush kind</strong> row decides what painting with this mapping <em>does</em>.
+            An <strong>Editor</strong> brush (the default, and what every existing mapping is) runs the
+            graph <em>once per agent the footprint covers</em>, with that agent as <em>self</em> &mdash;
+            it edits the agents you touch, and it may also <em>spawn</em> agents around them
+            (Create Agent &rarr; set-by-handle &rarr; Add Agent To World) or <em>remove</em> them
+            (Kill Agent, applied immediately &mdash; you do not have to press Play to see it).
+            A <strong>Spawner</strong> brush runs the graph <em>once per click or drag step</em> with
+            <em> no self at all</em>: instead its root gains <strong>Brush X</strong>,
+            <strong> Brush Y</strong> (<strong>Brush Z</strong> in 3D) and <strong>Brush Radius</strong>
+            outputs, and the graph creates the agents itself &mdash; loop N times, scatter them inside
+            the radius however you like, set their attributes from the parameters. That is the shape an
+            editor brush structurally cannot express: with nothing under the cursor an editor runs zero
+            times, so &ldquo;click empty space to add agents this particular way&rdquo; has nowhere to
+            hook. A spawner has no current agent, so per-agent readers (Get Self Position, Get Nearby
+            Agents, &hellip;) are invalid there and carry a warning badge; the brush panel drops the
+            shape row and shows a single <strong>Radius</strong> instead, because the graph &mdash; not
+            the footprint &mdash; decides where the new agents land.
+          </p>
+          <p className={styles.p}>
             An input mapping is always a <em>standalone</em> graph (there is no palette to
             auto-generate &mdash; the graph <em>is</em> the mapping), so its editor shows a name, a
-            description and its parameter list; the description becomes the tooltip on its tab in the
-            brush. You can drag an
+            description, its brush kind and its parameter list; the description becomes the tooltip on
+            its tab in the brush. You can drag an
             input-mapping row onto the Agents canvas to add its root already pointed at it. It runs as a
             plain function on the CPU on every agent engine (JS, WebAssembly and WebGPU alike) &mdash;
             painting is a one-off gesture, not per-generation work, so there is nothing to gain from
@@ -3046,8 +3068,9 @@ export function HelpView() {
             footprint of agents; right-click cancels), <strong>Edit</strong> (overwrite chosen
             properties &mdash; agent attributes plus radius / velocity / position &mdash; on the
             clicked agent via <em>Apply</em>, or on every agent under the footprint),
-            <strong> Paint</strong> (run an <em>Agent Input Mapping</em> graph on the agents you
-            touch &mdash; see below), <strong>Push</strong> / <strong>Pull</strong> (see below), and
+            <strong> Paint</strong> (run an <em>Agent Input Mapping</em> graph &mdash; an
+            <em> Editor</em> mapping on every agent you touch, a <em>Spawner</em> mapping once where
+            you click, creating agents &mdash; see below), <strong>Push</strong> / <strong>Pull</strong> (see below), and
             <strong> Glue</strong> / <strong>Cut</strong> (bond/unbond two clicked agents).
             Glue / Cut appear only on a model whose <strong>Bonds</strong> capability is on
             (Properties &rsaquo; Bond-Graph Agents), and Paint only on a model that HAS an agent

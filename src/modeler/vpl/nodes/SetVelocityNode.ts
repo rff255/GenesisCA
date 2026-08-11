@@ -1,4 +1,5 @@
 import type { NodeTypeDef } from '../types';
+import { agentRootHasSelf, agentRootRelaxesGuard } from '../types';
 import { is3dModelLike } from '../compiler/niCodec';
 
 /** Set Velocity — set an agent's velocity directly (Generic Agent Platform).
@@ -43,8 +44,12 @@ export const SetVelocityNode: NodeTypeDef = {
   hiddenPorts: (_config, model) => (is3dModelLike(model) ? [] : ['vz']),
   defaultConfig: {},
   compile: (_nodeId, _config, inputs, _boundary, ctx) => {
-    // Unwired ⇒ the historical self-write, byte-for-byte.
+    // Unwired ⇒ the historical self-write, byte-for-byte — EXCEPT in a root with
+    // no self (`init` / `spawner`), where `idx` does not exist: degrade to a
+    // no-op rather than emit a reference that throws at run time (the Set Agent
+    // Sprite precedent; `nodeValidation` badges the placement).
     if (!inputs['agentId']) {
+      if (!agentRootHasSelf(ctx?.agentRoot)) return '';
       const z = ctx?.is3d ? ` _agentVZ[idx] = ${inputs['vz'] || '0'};` : '';
       return `_agentVX[idx] = ${inputs['vx'] || '0'}; _agentVY[idx] = ${inputs['vy'] || '0'};${z}\n`;
     }
@@ -52,15 +57,17 @@ export const SetVelocityNode: NodeTypeDef = {
     // Same guard arms as the other by-id setters: unified spawning stages a
     // Created agent at alive=0 until Add To World in BOTH Init and Behaviour, so
     // the guard relaxes to range-only there; elsewhere it requires a live agent.
-    const guard = (ctx?.agentRoot === 'init' || ctx?.agentRoot === 'behaviour')
+    const guard = agentRootRelaxesGuard(ctx?.agentRoot)
       ? `__sv >= 0 && __sv < _agentMaxAgents`
       : `__sv >= 0 && __sv < highWater && _alive[__sv]`;
     // A wired Set Velocity IS valid in the Agent Init Event (seed a newborn's
     // velocity on its Create Agent handle — `_agentVX/VY` + `_agentMaxAgents` are
     // all in the init ABI). `_agentVZ` is NOT: per deriveAgentAbi the init kind's
     // 3D block carries only `_agentZ`. So drop the z half there rather than emit an
-    // undefined symbol — the C9 "no param ⇒ no write" safety-catch shape.
-    const zWrite = (ctx?.is3d && ctx?.agentRoot !== 'init') ? ` _agentVZ[__sv] = ${inputs['vz'] || '0'};` : '';
+    // undefined symbol — the C9 "no param ⇒ no write" safety-catch shape. The
+    // SPAWNER kind shares the init 3D block (only `_agentZ`), so the same drop
+    // applies there — `agentRootHasSelf` is exactly that pair.
+    const zWrite = (ctx?.is3d && agentRootHasSelf(ctx?.agentRoot)) ? ` _agentVZ[__sv] = ${inputs['vz'] || '0'};` : '';
     return `{ const __sv = ${id}; if (${guard}) { _agentVX[__sv] = ${inputs['vx'] || '0'}; _agentVY[__sv] = ${inputs['vy'] || '0'};${zWrite} } }\n`;
   },
 };

@@ -39,8 +39,24 @@ import { normalizeFieldGates, type AgentFieldGates } from '../../../model/agentF
  *                 buffers (a paint gesture does not query neighbours or mutate
  *                 topology). The brush colour rides three LEADING params the
  *                 compiler adds outside this descriptor (`_r, _g, _b`), exactly
- *                 like the cell `inputColor` signature. */
-export type AgentAbiKind = 'loop' | 'division' | 'init' | 'input';
+ *                 like the cell `inputColor` signature.
+ *
+ *                 It DOES carry the grow-only spawn closures + the `_killRequest`
+ *                 lane, so an editor brush can add agents AROUND the one it
+ *                 painted and remove agents — the two lifecycle verbs the user
+ *                 expects a brush that "edits the agents it covers" to have. The
+ *                 kill flags are DRAINED IMMEDIATELY by the paint handler (a
+ *                 paint is a user gesture between generations; deferring the
+ *                 death to the next structural phase would mean "I clicked erase
+ *                 and nothing happened until I pressed Play").
+ *  - `spawner`  — an Agent INPUT Mapping whose brush KIND is `spawner`: a
+ *                 once-per-BRUSH-APPLICATION fn with NO self (no `idx`), which
+ *                 receives the brush's world position + radius and creates the
+ *                 agents itself. Structurally the `init` kind PLUS the brush
+ *                 block (`_brushX`, `_brushY`, `_brushRadius`, and `_brushZ` in
+ *                 the trailing 3D block) + `_killRequest` — i.e. removing those
+ *                 from `spawner` yields exactly `init`. */
+export type AgentAbiKind = 'loop' | 'division' | 'init' | 'input' | 'spawner';
 
 /** The primitives the descriptor needs — every site can produce these. Order of
  *  `agentAttrs` / `fieldAttrs` MUST match across sites (they all derive from
@@ -106,6 +122,8 @@ export interface AgentAbiRuntime {
   idx?: number; daughterIndex?: number; axisX?: number; axisY?: number;
   // --- init-event extras (leading host closures + trailing seed base) ---
   agentCreate?: unknown; agentAddToWorld?: unknown; seedBase?: number;
+  // --- spawner-brush extras (the brush's world geometry) ---
+  brushX?: number; brushY?: number; brushZ?: number; brushRadius?: number;
   /** L2 — the 0-based index of the generation being computed. See the pinned
    *  semantics on GetGenerationNode: init events read 0, a division event reads
    *  the generation it happened in, and cells + agents share one counter. */
@@ -155,8 +173,12 @@ export function deriveAgentAbi(kind: AgentAbiKind, shape: AgentAbiShape, profile
    *  reads `division` for that reason reads this instead, so the two can never
    *  drift apart. */
   const singleAgent = kind === 'division' || kind === 'input';
+  /** The two once-per-gesture / once-per-reset SETUP kinds: no `idx`, no loop
+   *  control, and they lead with the grow-only spawn closures. `spawner` is
+   *  `init` plus the brush block. */
+  const setupKind = kind === 'init' || kind === 'spawner';
 
-  // --- leading positional args (division / input / init) ---
+  // --- leading positional args (division / input / init / spawner) ---
   if (singleAgent) {
     fields.push(F('idx', 'scalar', (_s, rt) => rt.idx));
     if (kind === 'division') {
@@ -166,11 +188,32 @@ export function deriveAgentAbi(kind: AgentAbiKind, shape: AgentAbiShape, profile
         F('__axisDefaultY', 'scalar', (_s, rt) => rt.axisY),
       );
     }
-  } else if (kind === 'init') {
+  }
+  if (setupKind || kind === 'input') {
+    // The grow-only Create Agent / Add Agent To World host closures + the by-id
+    // setters' range guard. On `input` they let an EDITOR brush spawn agents
+    // around the one it painted (the unified-spawning idiom, the same closures
+    // the behaviour graph gets); on `init`/`spawner` they are the whole point.
     fields.push(
       F('_agentCreate', 'fn', (_s, rt) => rt.agentCreate),
       F('_agentAddToWorld', 'fn', (_s, rt) => rt.agentAddToWorld),
       F('_agentMaxAgents', 'scalar', s => s.maxAgents),
+    );
+  }
+  if (kind === 'input' || kind === 'spawner') {
+    // Kill Agent's request lane. DRAINED IMMEDIATELY by the paint handler (see
+    // the `input` note on AgentAbiKind) rather than at the next generation's
+    // structural phase.
+    fields.push(F('_killRequest', 'u8[]', s => s.killRequest));
+  }
+  if (kind === 'spawner') {
+    // The brush's world geometry — what the rule distributes agents by. `_brushZ`
+    // rides the TRAILING 3D block (the "2D is a strict prefix of 3D" invariant
+    // `audit-agent-layout` asserts), not here.
+    fields.push(
+      F('_brushX', 'scalar', (_s, rt) => rt.brushX ?? 0),
+      F('_brushY', 'scalar', (_s, rt) => rt.brushY ?? 0),
+      F('_brushRadius', 'scalar', (_s, rt) => rt.brushRadius ?? 0),
     );
   }
 
@@ -329,8 +372,10 @@ export function deriveAgentAbi(kind: AgentAbiKind, shape: AgentAbiShape, profile
     fields.push(F(`_field_${id}`, 'obj', (_s, rt) => rt.fieldArray(id)));
   }
 
-  // --- init trailing seed base (before the 3D block) ---
-  if (kind === 'init') fields.push(F('_agentSeedBase', 'scalar', (_s, rt) => rt.seedBase));
+  // --- setup-kind trailing seed base (before the 3D block). For `spawner` it is
+  // highWater at the start of THIS brush application — the same "index base" the
+  // Init Event exposes, so a spawner can number the agents it creates. ---
+  if (setupKind) fields.push(F('_agentSeedBase', 'scalar', (_s, rt) => rt.seedBase));
 
   // --- trailing 3D block (byte-identical omission in 2D) ---
   if (is3d) {
@@ -354,8 +399,11 @@ export function deriveAgentAbi(kind: AgentAbiKind, shape: AgentAbiShape, profile
         F('_fieldD', 'scalar', s => s.worldDepth),
       );
     } else {
-      // init: only `_agentZ` (Set Agent Position's z write).
+      // init / spawner: `_agentZ` (Set Agent Position's z write), then — spawner
+      // only — the brush's z. The brush block's z rides HERE, not with its x/y,
+      // so 2D stays a strict PREFIX of 3D (the `audit-agent-layout` invariant).
       fields.push(F('_agentZ', 'f64[]', s => s.z));
+      if (kind === 'spawner') fields.push(F('_brushZ', 'scalar', (_s, rt) => rt.brushZ ?? 0));
     }
   }
 

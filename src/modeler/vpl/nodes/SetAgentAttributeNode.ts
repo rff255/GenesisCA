@@ -1,4 +1,5 @@
 import type { NodeTypeDef } from '../types';
+import { agentRootRelaxesGuard } from '../types';
 
 /** Set Agent Attribute — write an attribute on ANOTHER agent by id (Bond-Graph
  *  Agents). The agent analogue of Set Neighbor Attribute By Index: signal a
@@ -31,7 +32,7 @@ export const SetAgentAttributeNode: NodeTypeDef = {
     // in BOTH the Init Event and the Behaviour graph, so the live-agent guard relaxes
     // to range-only in either root (so a fresh handle can be configured; writing a
     // dead slot is a harmless no-op). Division keeps the strict live-agent guard.
-    const guard = (ctx?.agentRoot === 'init' || ctx?.agentRoot === 'behaviour')
+    const guard = agentRootRelaxesGuard(ctx?.agentRoot)
       ? `__sa>=0&&__sa<_agentMaxAgents`
       : `__sa>=0&&__sa<highWater&&_alive[__sa]`;
     return `{ const __sa=${a}; if(${guard}) w_${attr}[__sa] = ${inputs['value'] || '0'}; }\n`;

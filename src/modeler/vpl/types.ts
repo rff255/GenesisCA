@@ -50,6 +50,45 @@ export interface NodeConfig {
   [key: string]: string | number | boolean;
 }
 
+/** Which AGENT root a compile is emitting into. Absent on cell roots AND on the
+ *  agent OUTPUT MAPPING root (whose ABI is the plain `loop` kind). */
+export type AgentCompileRoot = 'init' | 'behaviour' | 'division' | 'input' | 'spawner';
+
+/**
+ * Does this root carry a CURRENT agent — i.e. is `idx` in scope, along with the
+ * `highWater` / `_alive` loop-control block a strict live-agent guard needs?
+ *
+ * FALSE for the two once-per-gesture SETUP kinds (`init`, `spawner`), whose ABI
+ * has neither. A by-id emitter must take its RANGE-only arm there, and an
+ * UNWIRED (self-targeting) emitter must degrade to a no-op rather than emit a
+ * reference to an `idx` that does not exist — the documented init-event footgun,
+ * which the spawner kind inherits by construction.
+ *
+ * `undefined` (a cell root or the agent OM) answers TRUE: both loop over cells /
+ * agents, so `idx` is in scope.
+ */
+export function agentRootHasSelf(agentRoot?: AgentCompileRoot): boolean {
+  return agentRoot !== 'init' && agentRoot !== 'spawner';
+}
+
+/**
+ * Does a by-id write in this root need the RELAXED (range-only) guard?
+ *
+ * TRUE wherever Create Agent can STAGE a slot the graph then configures by
+ * handle — the agent is `alive = 0` until Add Agent To World, so a strict
+ * `_alive[id]` guard would silently drop every write that configures a newborn.
+ * That is `init` + `behaviour` (unified spawning) and now BOTH input-mapping
+ * kinds (an Editor brush may spawn around the agent it painted; a Spawner brush
+ * is nothing but spawning).
+ *
+ * FALSE for `division` and for the agent OM (`undefined`), which never spawn —
+ * so their emitted guard is byte-identical to before the input kinds existed.
+ */
+export function agentRootRelaxesGuard(agentRoot?: AgentCompileRoot): boolean {
+  return agentRoot === 'init' || agentRoot === 'behaviour'
+    || agentRoot === 'input' || agentRoot === 'spawner';
+}
+
 /** Compile-time helpers that wrap raw `r_<attrId>[idx]` / `w_<attrId>[idx]`
  *  access with sub-attribute parent-check guards when the attribute is a
  *  sub-attribute. Regular attributes pass through unchanged. Nodes that emit
@@ -82,10 +121,15 @@ export interface CompileContext {
   inlineNbr?: boolean;
   /** Generic Agent Platform: which agent root the current compile is emitting
    *  (`'init'` = the once-per-reset Agent Init Event, `'behaviour'` = behaviourStep,
-   *  `'division'` = divisionEvent). Used by Set Agent Attribute / the by-id setters
+   *  `'division'` = divisionEvent, `'input'` = an EDITOR-kind Agent Input Mapping
+   *  [per painted agent], `'spawner'` = a SPAWNER-kind one [once per brush
+   *  application, NO self]). Used by Set Agent Attribute / the by-id setters
    *  to relax the live-agent guard in the init context (a freshly Created agent is
-   *  STAGED — alive=0 — until Add Agent To World commits it). Absent on cell roots. */
-  agentRoot?: 'init' | 'behaviour' | 'division';
+   *  STAGED — alive=0 — until Add Agent To World commits it). Absent on cell roots
+   *  AND on the agent OUTPUT MAPPING root. Read it through the two predicates
+   *  below, never by comparing literals — that is what kept the eight by-id
+   *  setters in step when the two input kinds were added. */
+  agentRoot?: AgentCompileRoot;
   /** Generic Agent Platform: true when the current root belongs to the AGENTS
    *  graph (behaviourStep / divisionEvent / agentInit / agentOutputMapping), i.e.
    *  the emitted code runs in a per-agent function whose ABI carries the agent
