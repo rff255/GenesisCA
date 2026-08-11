@@ -35,6 +35,7 @@ import { defaultCenterBasedConfig } from './centerBased';
 import { defaultAgentCapabilities, migrateAgentCapabilities } from './agentCapabilities';
 import { defaultTagColor } from '../modeler/vpl/compiler/linkedOutputMappings';
 import { MULTI_ATTR_TYPES } from '../modeler/vpl/compiler/multiAttrExpand';
+import { inputParamsOf, isInputMappingRoot, removedChannelPortIds } from './inputMappingParams';
 import { DEFAULT_GRAPH_METRIC } from '../simulator/engine/graphMetrics';
 import { resolveAxes, remapTableDataAxis, remapTableDataForAxesChange } from '../modeler/vpl/compiler/variegation';
 import { cloneMacroWithFreshIds } from './macroImport';
@@ -105,6 +106,86 @@ function patchAllNodes(
     return m;
   });
   return { graphNodes, agentGraphNodes, overseerGraphNodes, macroDefs: macrosChanged ? macroDefs : (model.macroDefs || []) };
+}
+
+/** Drop EDGES matching a predicate, within one graph. The edge sibling of
+ *  `patchNodes` — array identity is preserved when nothing matched, so an edit
+ *  that prunes nothing cannot re-render every graph. The predicate receives the
+ *  edge's SOURCE node (edges carry only ids, and every caller so far needs the
+ *  source's nodeType + config to decide). */
+function pruneEdges(
+  nodes: GraphNode[],
+  edges: GraphEdge[],
+  drop: (edge: GraphEdge, source: GraphNode | undefined) => boolean,
+): GraphEdge[] {
+  const byId = new Map(nodes.map(n => [n.id, n]));
+  let changed = false;
+  const result = edges.filter(e => {
+    if (drop(e, byId.get(e.source))) { changed = true; return false; }
+    return true;
+  });
+  return changed ? result : edges;
+}
+
+/** Apply `pruneEdges` to the Cells graph, the Agents graph, the Overseer graph,
+ *  AND every macroDef subgraph — the four stores `patchAllNodes` fans across.
+ *
+ *  ⚠ NOTHING ELSE in this reducer removes edges on a model edit: `patchAllNodes`
+ *  rewrites node CONFIGS only, so a port that VANISHES (a deleted / retyped
+ *  input-mapping parameter) needs this. **Drop, never repoint** — an edge
+ *  re-aimed at a neighbouring channel silently resolves to the WRONG value
+ *  (the `STALE_SLOT_HANDLE` rule).
+ *
+ *  ⚠ Its result carries `macroDefs` too, so a call site that spreads BOTH this
+ *  and `patchAllNodes` would have the SECOND spread win. Combine them
+ *  deliberately (or call only one) — no current site needs both. */
+function patchAllEdges(
+  model: CAModel,
+  drop: (edge: GraphEdge, source: GraphNode | undefined) => boolean,
+): { graphEdges: GraphEdge[]; agentGraphEdges: GraphEdge[]; overseerGraphEdges: GraphEdge[]; macroDefs: MacroDef[] } {
+  const graphEdges = pruneEdges(model.graphNodes, model.graphEdges, drop);
+  const agentGraphEdges = pruneEdges(model.agentGraphNodes ?? [], model.agentGraphEdges ?? [], drop);
+  const overseerGraphEdges = pruneEdges(model.overseerGraphNodes ?? [], model.overseerGraphEdges ?? [], drop);
+  let macrosChanged = false;
+  const macroDefs = (model.macroDefs || []).map(m => {
+    const pruned = pruneEdges(m.nodes, m.edges, drop);
+    if (pruned !== m.edges) { macrosChanged = true; return { ...m, edges: pruned }; }
+    return m;
+  });
+  return { graphEdges, agentGraphEdges, overseerGraphEdges, macroDefs: macrosChanged ? macroDefs : (model.macroDefs || []) };
+}
+
+/**
+ * Parameterized Input Mappings — THE EDGE CASCADE.
+ *
+ * A parameter edit that DESTROYS channels (delete / retype `color`→scalar /
+ * `[]`) leaves every wire out of that mapping's root pointing at a port the
+ * root no longer has. Those wires are DROPPED here, proactively, so the editor
+ * matches what the compiler would otherwise only report after the fact
+ * (`detectDanglingRefs` names the stale channel; `detectMissingConfig` badges
+ * it — both remain as the backstop for a hand-edited file).
+ *
+ * A RENAME removes nothing (ports are keyed by `key`, not `name`), so this is a
+ * no-op for it and every wire survives — which is the whole reason `key` and
+ * `name` are separate fields.
+ *
+ * Returns `null` when nothing is destroyed, so the common edit path does not
+ * even walk the graphs.
+ */
+function pruneRemovedChannelEdges(
+  model: CAModel,
+  mappingId: string,
+  before: Mapping | undefined,
+  after: Mapping | undefined,
+) {
+  const removed = removedChannelPortIds(inputParamsOf(before), inputParamsOf(after));
+  if (removed.size === 0) return null;
+  const handles = new Set([...removed].map(p => `output_value_${p}`));
+  return patchAllEdges(model, (edge, source) =>
+    !!source
+    && isInputMappingRoot(source.data.nodeType)
+    && ((source.data.config?.mappingId as string) || '') === mappingId
+    && handles.has(edge.sourceHandle));
 }
 
 /** Clear a config field to '' if it matches a deleted ID */
@@ -421,7 +502,7 @@ function detachLookupTableFromRemovedTag(a: Attribute, removedId: string, preMod
 // Reducer
 // ---------------------------------------------------------------------------
 
-function modelReducer(state: ModelState, action: ModelAction): ModelState {
+export function modelReducer(state: ModelState, action: ModelAction): ModelState {
   switch (action.type) {
     case 'UPDATE_PROPERTIES': {
       let neighborhoods = state.model.neighborhoods;
@@ -1251,17 +1332,25 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
       };
     }
 
-    case 'UPDATE_MAPPING':
+    case 'UPDATE_MAPPING': {
+      const before = state.model.mappings.find(m => m.id === action.id);
+      const mappings = state.model.mappings.map(m =>
+        m.id === action.id ? { ...m, ...action.changes } : m,
+      );
+      const mAfterUpd = { ...state.model, mappings };
+      // Parameterized Input Mappings: an edit that DESTROYS channels drops the
+      // wires that fed on them (drop, never repoint). `null` when nothing was
+      // destroyed — which is every edit that is not a parameter delete/retype,
+      // so the graphs are not even walked.
+      const edgePrune = 'parameters' in action.changes
+        ? pruneRemovedChannelEdges(mAfterUpd, action.id, before, mappings.find(m => m.id === action.id))
+        : null;
       return {
         ...state,
         isDirty: true,
-        model: {
-          ...state.model,
-          mappings: state.model.mappings.map(m =>
-            m.id === action.id ? { ...m, ...action.changes } : m,
-          ),
-        },
+        model: edgePrune ? { ...mAfterUpd, ...edgePrune } : mAfterUpd,
       };
+    }
 
     // Agent Output Mappings Ã¢â‚¬â€ the agent-layer AÃ¢â€ â€™C views (linked over agent attrs).
     // BOTH agent-mapping directions live in `agentMappings`, discriminated by
@@ -1316,16 +1405,22 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
         model: { ...mAfterAgentMap, ...agentMapPatch },
       };
     }
-    case 'UPDATE_AGENT_MAPPING':
+    case 'UPDATE_AGENT_MAPPING': {
+      const beforeAgent = (state.model.agentMappings ?? []).find(m => m.id === action.id);
+      const agentMappings = (state.model.agentMappings ?? []).map(m =>
+        m.id === action.id ? { ...m, ...action.changes } : m,
+      );
+      const mAfterAgentUpd = { ...state.model, agentMappings };
+      // The agent twin of UPDATE_MAPPING's cascade — cells and agents must end
+      // up consistent, and `agentInputMapping` roots live on the Agents graph.
+      const agentEdgePrune = 'parameters' in action.changes
+        ? pruneRemovedChannelEdges(mAfterAgentUpd, action.id, beforeAgent, agentMappings.find(m => m.id === action.id))
+        : null;
       return {
         ...state, isDirty: true,
-        model: {
-          ...state.model,
-          agentMappings: (state.model.agentMappings ?? []).map(m =>
-            m.id === action.id ? { ...m, ...action.changes } : m,
-          ),
-        },
+        model: agentEdgePrune ? { ...mAfterAgentUpd, ...agentEdgePrune } : mAfterAgentUpd,
       };
+    }
 
     case 'ADD_SPRITE':
       return {

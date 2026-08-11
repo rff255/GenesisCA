@@ -8,7 +8,8 @@ import { setCurrentModelElementDrag } from '../vpl/graphState';
 import { defaultGradientStops, defaultTagColor } from '../vpl/compiler/linkedOutputMappings';
 import { GradientStopsEditor, type GradStop } from '../vpl/widgets/GradientStopsEditor';
 import { INTERPOLATION_METHODS } from '../vpl/nodes/interpolationMethods';
-import type { Mapping, RGB, ColorStop, Attribute } from '../../model/types';
+import type { Mapping, RGB, ColorStop, Attribute, CAModel, InputMappingParam, InputParamType } from '../../model/types';
+import { inputParamsOf, materialiseInputParams, mintParamKey } from '../../model/inputMappingParams';
 import { typeDisplayName } from '../../model/typeLabels';
 import { NumberField } from '../vpl/widgets/InlineWidgets';
 import styles from './PanelContent.module.css';
@@ -252,6 +253,196 @@ function LinkedOutputEditor({ selected, attrs, update }: { selected: Mapping; at
         );
       })()}
     </>
+  );
+}
+
+/**
+ * Parameterized Input Mappings — THE PARAMETER LIST EDITOR (Phase 2).
+ *
+ * A Color→Attribute mapping declares its own named parameters instead of the
+ * hardcoded R/G/B; this is where they are declared. Used for the CELL C→A
+ * mappings AND the AGENT ones — ONE component, so the two layers cannot drift
+ * (the milestone's cells-and-agents-must-be-consistent constraint).
+ *
+ * ⚠ MATERIALISATION. A LEGACY mapping (`parameters` absent) is shown as the one
+ * row the resolver mints — `Brush colour · Color`. The FIRST edit writes that
+ * list back explicitly. That is safe ONLY because the legacy parameter's key is
+ * RESERVED (`inputMappingParams.LEGACY_COLOR_PARAM_KEY`), so it re-resolves to
+ * the SAME `r`/`g`/`b` ports: adding a second parameter cannot break the wires
+ * already leaving the root. See that constant's note.
+ *
+ * ⚠ WHAT MOVES WIRES. `name` is free to change (ports are keyed by `key`).
+ * Deleting a parameter, or retyping it across the colour/scalar boundary,
+ * DESTROYS channels — `UPDATE_MAPPING`'s cascade then DROPS the edges that fed
+ * on them (never repoints). The `key` itself is deliberately NOT editable: a key
+ * change is exactly a delete + re-add, and offering it as a text field would
+ * make every keystroke a wire-dropping event.
+ */
+function InputParamsEditor({ mapping, update, model }: {
+  mapping: Mapping;
+  update: (id: string, changes: Partial<Mapping>) => void;
+  model: CAModel;
+}) {
+  const resolved = inputParamsOf(mapping);
+  // The rows are ALWAYS the materialised list, so a legacy mapping shows its
+  // implicit colour parameter and can be edited like any other.
+  const params = materialiseInputParams(mapping);
+  const commit = (next: InputMappingParam[]) => update(mapping.id, { parameters: next });
+  const patchAt = (i: number, changes: Partial<InputMappingParam>) =>
+    commit(params.map((p, j) => (j === i ? { ...p, ...changes } : p)));
+
+  const reorder = useListReorder(
+    params.map(p => ({ id: p.key })),
+    order => {
+      const byKey = new Map(params.map(p => [p.key, p]));
+      commit(order.map(k => byKey.get(k)!).filter(Boolean));
+    },
+  );
+
+  const tagAttrs = [
+    ...model.attributes.filter(a => a.type === 'tag'),
+    ...(model.agentAttributes ?? []).filter(a => a.type === 'tag'),
+  ];
+
+  const addParam = () => {
+    const name = `Parameter ${params.length + 1}`;
+    commit([...params, { key: mintParamKey(name, params.map(p => p.key)), name, type: 'float', defaultValue: '0' }]);
+  };
+
+  const hintStyle: React.CSSProperties = { color: '#888', fontSize: '0.66rem', display: 'block', marginTop: 3 };
+
+  return (
+    <div className={styles.field}>
+      <label className={styles.fieldLabel}>Parameters</label>
+      <span style={{ ...hintStyle, marginTop: 0, marginBottom: 5 }}>
+        What the brush hands this mapping&apos;s graph. Each becomes a value output on its
+        event root and one widget in the simulator&apos;s brush panel — a <b>Color</b> parameter
+        contributes three ports (R/G/B) and one picker.
+      </span>
+      {resolved.legacy && (
+        <span style={{ ...hintStyle, marginTop: 0, marginBottom: 5, fontStyle: 'italic' }}>
+          This mapping still uses the built-in brush colour. Editing here declares its
+          parameters explicitly — the R/G/B ports and every wire out of them are preserved.
+        </span>
+      )}
+      <div className={styles.list} data-reorder-list>
+        {params.map((p, i) => {
+          const isDragging = reorder.dragState?.id === p.key;
+          const srcIdx = reorder.dragState ? params.findIndex(x => x.key === reorder.dragState!.id) : -1;
+          const showBefore = reorder.dragState?.overIdx === i && srcIdx !== i && srcIdx !== i - 1;
+          const showAfter = reorder.dragState?.overIdx === params.length && i === params.length - 1 && srcIdx !== i;
+          const channels = resolved.params.find(rp => rp.param.key === p.key)?.channels ?? [];
+          return (
+            <div
+              key={p.key}
+              data-reorder-row
+              className={`${styles.listItem} ${isDragging ? styles.draggingRow : ''} ${showBefore ? styles.dropIndicatorBefore : ''} ${showAfter ? styles.dropIndicatorAfter : ''}`}
+              style={{ flexWrap: 'wrap', alignItems: 'flex-start', cursor: 'default' }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: 4, width: '100%' }}>
+                <input
+                  className={styles.textInput}
+                  style={{ flex: 1, minWidth: 60 }}
+                  value={p.name}
+                  onChange={e => patchAt(i, { name: e.target.value })}
+                  title="Display name — the port label and the brush row. Renaming moves no wire."
+                />
+                <select
+                  className={styles.textInput}
+                  style={{ width: 86, flex: '0 0 auto' }}
+                  value={p.type}
+                  onChange={e => {
+                    const type = e.target.value as InputParamType;
+                    // Reset the value + the type-specific config so a retype cannot
+                    // leave e.g. a `#rrggbb` default on a float or stale tag options.
+                    patchAt(i, {
+                      type,
+                      defaultValue: type === 'color' ? '#000000' : type === 'bool' ? 'false' : '0',
+                      tagOptions: undefined, tagAttributeId: undefined, min: undefined, max: undefined,
+                    });
+                  }}
+                  title="Retyping across the Color boundary changes the port COUNT — the removed ports' wires are dropped."
+                >
+                  {(['float', 'integer', 'bool', 'tag', 'color'] as InputParamType[]).map(t => (
+                    <option key={t} value={t}>{typeDisplayName(t)}</option>
+                  ))}
+                </select>
+                <button
+                  className={styles.deleteButton}
+                  style={{ padding: '2px 6px', flex: '0 0 auto' }}
+                  title={`Delete "${p.name}" — any wires from its port${channels.length > 1 ? 's' : ''} (${channels.map(c => c.portId).join(', ')}) are dropped`}
+                  onClick={() => commit(params.filter((_, j) => j !== i))}
+                >×</button>
+              </div>
+              {/* Type-specific configuration + the per-parameter description — the
+                  replacement for the three legacy channel textareas. */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 3, width: '100%', marginTop: 4 }}>
+                {(p.type === 'integer' || p.type === 'float') && (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                    <span style={{ fontSize: '0.66rem', color: '#888', width: 52 }}>range</span>
+                    <NumberField className={styles.textInput} style={{ width: 64 }} value={p.min ?? 0}
+                      onNumber={n => patchAt(i, { min: n })} onClear={() => patchAt(i, { min: undefined })} title="Brush-widget minimum (optional; not clamped by the engine)" />
+                    <NumberField className={styles.textInput} style={{ width: 64 }} value={p.max ?? 0}
+                      onNumber={n => patchAt(i, { max: n })} onClear={() => patchAt(i, { max: undefined })} title="Brush-widget maximum (optional; not clamped by the engine)" />
+                  </div>
+                )}
+                {p.type === 'tag' && (<>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                    <span style={{ fontSize: '0.66rem', color: '#888', width: 52 }}>options</span>
+                    <select
+                      className={styles.textInput}
+                      style={{ flex: 1 }}
+                      value={p.tagAttributeId ?? ''}
+                      onChange={e => patchAt(i, { tagAttributeId: e.target.value || undefined })}
+                      title="Borrow the option list from a tag attribute (live), or list them inline below."
+                    >
+                      <option value="">Inline list…</option>
+                      {tagAttrs.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
+                    </select>
+                  </div>
+                  {!p.tagAttributeId && (
+                    <input
+                      className={styles.textInput}
+                      value={(p.tagOptions ?? []).join(', ')}
+                      placeholder="option A, option B, …"
+                      onChange={e => patchAt(i, { tagOptions: e.target.value.split(',').map(s => s.trim()).filter(Boolean) })}
+                      title="Comma-separated option names. The payload carries the option INDEX."
+                    />
+                  )}
+                </>)}
+                {p.type === 'color' && (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                    <span style={{ fontSize: '0.66rem', color: '#888', width: 52 }}>default</span>
+                    <ColorField value={p.defaultValue || '#000000'} onChange={hex => patchAt(i, { defaultValue: hex })} noAlpha style={{ width: 34, height: 22 }} />
+                  </div>
+                )}
+                <textarea
+                  className={styles.textArea}
+                  rows={1}
+                  value={p.description ?? ''}
+                  placeholder="What this parameter means (shown on its brush row)"
+                  onChange={e => patchAt(i, { description: e.target.value || undefined })}
+                />
+                <span style={{ fontSize: '0.62rem', color: '#7a8a9a' }}>
+                  port{channels.length > 1 ? 's' : ''}: {channels.map(c => c.portId).join(', ') || '—'}
+                </span>
+              </div>
+              <button className={styles.dragHandle} title="Drag to reorder (the port ORDER is the argument order — recompiles)"
+                onPointerDown={reorder.startDrag(p.key)}
+                onClick={e => e.stopPropagation()}>⋮⋮</button>
+            </div>
+          );
+        })}
+      </div>
+      {params.length === 0 && (
+        <span style={{ ...hintStyle, fontStyle: 'italic' }}>
+          No parameters — painting runs this mapping&apos;s graph with no brush input.
+        </span>
+      )}
+      <div className={styles.buttonRow}>
+        <button className={styles.addButton} onClick={addParam}>+ Parameter</button>
+      </div>
+    </div>
   );
 }
 
@@ -654,7 +845,7 @@ export function MappingsPanelContent({ mode = 'list' }: PanelContentProps = {}) 
           <div className={styles.sectionTitle}>Agent Input Mappings (C&rarr;A)</div>
           <span style={{ color: '#888', fontSize: '0.66rem', display: 'block', margin: '0 0 6px' }}>
             Each is a graph that runs on every agent you paint with the simulator&apos;s
-            agent brush (Paint mode) — the brush colour arrives on the root&apos;s R/G/B outputs.
+            agent brush (Paint mode) — the brush values arrive on the root&apos;s parameter outputs.
           </span>
           {agentInputs.length === 0 && (
             <span style={{ color: '#888', fontSize: '0.68rem', fontStyle: 'italic' }}>No agent input mappings yet.</span>
@@ -812,13 +1003,16 @@ export function MappingsPanelContent({ mode = 'list' }: PanelContentProps = {}) 
                 palette to auto-generate from an attribute, so the Color-pass
                 selector + the linked palette editor are hidden rather than shown
                 inert (the "an enabled control must do something" rule). */}
-            {!selectedAgent.isAttributeToColor && (
+            {!selectedAgent.isAttributeToColor && (<>
               <span style={{ color: '#888', fontSize: '0.66rem', display: 'block' }}>
                 Build this mapping on the Agents graph: an <strong>Agent Input Mapping (C&rarr;A)</strong> root
-                whose R/G/B outputs carry the brush colour, then Set Attribute / Set Agent Radius / … on the DO chain.
+                whose value outputs carry the parameters below, then Set Attribute / Set Agent Radius / … on the DO chain.
                 Select it in the simulator&apos;s agent brush (Paint mode) and paint agents with it.
               </span>
-            )}
+              {/* The SAME editor the cell C→A mappings use — one component, so the
+                  two layers cannot drift (cells and agents must be consistent). */}
+              <InputParamsEditor mapping={selectedAgent} update={updateAgentMapping} model={model} />
+            </>)}
             {selectedAgent.isAttributeToColor && (<>
             <div className={styles.field}>
               <label className={styles.fieldLabel}>Color pass</label>
@@ -1006,6 +1200,16 @@ export function MappingsPanelContent({ mode = 'list' }: PanelContentProps = {}) 
             {selected.isAttributeToColor && selected.linked && (
               <LinkedOutputEditor selected={selected} />
             )}
+            {/* C→A: the mapping's declared PARAMETERS replace the three fixed
+                channel textareas below — those documented a HARDCODED encoding
+                the user then had to re-implement in the graph. Each parameter
+                carries its own description, which is strictly more expressive.
+                The textareas stay for A→C, where documenting the three channels
+                of an OUTPUT colour is still a real thing to do. */}
+            {!selected.isAttributeToColor && (
+              <InputParamsEditor mapping={selected} update={updateMapping} model={model} />
+            )}
+            {selected.isAttributeToColor && (<>
             <div className={styles.field}>
               <span
                 className={`${styles.colorLabel} ${styles.colorLabelRed}`}
@@ -1057,6 +1261,7 @@ export function MappingsPanelContent({ mode = 'list' }: PanelContentProps = {}) 
                 }
               />
             </div>
+            </>)}
           </div>
         </div>
       )}

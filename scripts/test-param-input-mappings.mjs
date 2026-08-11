@@ -42,6 +42,15 @@ export {
 } from '../src/model/inputMappingParams.ts';
 export { getEffectivePorts } from '../src/modeler/vpl/effectivePorts.ts';
 export { detectMissingConfig } from '../src/modeler/vpl/nodes/nodeValidation.ts';
+export {
+  LEGACY_PARAM, LEGACY_COLOR_PARAM_KEY,
+  materialiseInputParams, mintParamKey, removedChannelPortIds,
+} from '../src/model/inputMappingParams.ts';
+// PHASE 2 — the edge cascade is tested through the REAL reducer (it bundles and
+// imports cleanly in Node; modelReducer calls no React API), so what the
+// harness exercises is exactly what the app dispatches, gate and all.
+// NB no backticks in this block: ENTRY is itself a template literal.
+export { modelReducer } from '../src/model/ModelContext.tsx';
 `;
 const dir = mkdtempSync(join(tmpdir(), 'gca-inputparams-'));
 const entryPath = join(ROOT, 'scripts', '__inputparams_entry.ts');
@@ -493,6 +502,294 @@ console.log('== 8. AGENTS — the same resolution + emit shape ==');
   check('legacy agent header is `(function(_r, _g, _b, …`', code2.startsWith('(function(_r, _g, _b, '), code2.slice(0, 40));
   check('legacy agent alias line is the historical single-line triple const',
     code2.includes(`  const _v${im2.id}_r = _r; const _v${im2.id}_g = _g; const _v${im2.id}_b = _b;\n`));
+}
+
+// ===========================================================================
+console.log('== 9. PHASE 2: materialisation — writing the default back moves nothing ==');
+// ===========================================================================
+// The parameter EDITOR shows the RESOLVED list, so the first edit of a legacy
+// mapping materialises it. That is only safe because the legacy parameter's key
+// is RESERVED and re-resolves to the SAME r/g/b ports — otherwise "I added a
+// second parameter" would silently dangle every wire out of the root.
+{
+  const mat = M.materialiseInputParams(undefined);
+  check('materialise(legacy) ⇒ exactly one color parameter',
+    mat.length === 1 && mat[0].type === 'color' && mat[0].key === M.LEGACY_COLOR_PARAM_KEY);
+  check('materialise returns a COPY, not the shared LEGACY_PARAM singleton', mat[0] !== M.LEGACY_PARAM);
+
+  const before = M.inputParamsOf(undefined);
+  const after = M.inputParamsOf({ parameters: mat });
+  check('materialised ⇒ the SAME port ids (r,g,b)',
+    after.channels.map(c => c.portId).join(',') === before.channels.map(c => c.portId).join(','),
+    after.channels.map(c => c.portId).join(','));
+  check('materialised ⇒ the SAME ABI names (_r,_g,_b)',
+    after.channels.map(c => c.argName).join(',') === before.channels.map(c => c.argName).join(','),
+    after.channels.map(c => c.argName).join(','));
+  check('materialised ⇒ the SAME labels (R,G,B)',
+    after.channels.map(c => c.label).join(',') === 'R,G,B');
+  check('materialised is NOT legacy (it declares its parameters)', after.legacy === false);
+  check('materialising DESTROYS no channel', M.removedChannelPortIds(before, after).size === 0);
+
+  // …and the EMITTED CODE is unchanged too — the strongest form of "moves
+  // nothing". The SAME graph is compiled twice (node ids are random, so two
+  // separately-built fixtures would differ in their `_v<id>_r` names for
+  // reasons that have nothing to do with parameters).
+  const legacyModelM = buildCellModel({ parameters: undefined, channelPorts: ['r', 'g', 'b'] });
+  const matModel = { ...legacyModelM, mappings: [{ ...legacyModelM.mappings[0], parameters: mat }] };
+  const legacyCode = M.compileGraph(legacyModelM.graphNodes, legacyModelM.graphEdges, legacyModelM).inputColorCodes?.[0]?.code ?? '';
+  const matCode = M.compileGraph(matModel.graphNodes, matModel.graphEdges, matModel).inputColorCodes?.[0]?.code ?? '';
+  check('materialised emit is CHARACTER-IDENTICAL to the legacy emit',
+    matCode !== '' && matCode === legacyCode,
+    `${legacyCode.slice(0, 48)} :: ${matCode.slice(0, 48)}`);
+
+  // The reserved key is reserved: a NEW parameter can never claim it.
+  check('mintParamKey never hands out the reserved key', M.mintParamKey('Color', []) !== M.LEGACY_COLOR_PARAM_KEY);
+  check('mintParamKey de-duplicates against existing keys',
+    M.mintParamKey('Energy', ['energy']) === 'energy_2');
+  check('mintParamKey sanitises', M.mintParamKey('My Param!', []) === 'my_param_');
+  // A user colour parameter keyed anything else keeps the PREFIXED channels.
+  const tint = M.inputParamsOf({ parameters: [{ key: 'tint', name: 'Tint', type: 'color' }] });
+  check('a NON-reserved colour parameter keeps the prefixed channels',
+    tint.channels.map(c => c.portId).join(',') === 'tint_r,tint_g,tint_b');
+}
+
+// ===========================================================================
+console.log('== 10. PHASE 2: the edge cascade (through the REAL reducer) ==');
+// ===========================================================================
+// `removedChannelPortIds` is the RULE; the reducer is what applies it. Both are
+// exercised: the rule directly, and the reducer end-to-end (so the
+// `'parameters' in changes` gate and the before/after resolution are covered).
+{
+  const P_A = { key: 'energy', name: 'Energy', type: 'float', defaultValue: '0' };
+  const P_B = { key: 'tint', name: 'Tint', type: 'color', defaultValue: '#000000' };
+
+  /** A model whose inputColor root is wired from EVERY channel of [energy, tint],
+   *  on the CELL graph and (identically) on the AGENT graph. */
+  function wiredModel(parameters, agentParameters = parameters) {
+    const cell = mkGraph();
+    cell.node('step', {});
+    const ic = cell.node('inputColor', { mappingId: 'P' });
+    const cellSets = {};
+    for (const portId of ['energy', 'tint_r', 'tint_g', 'tint_b']) {
+      const s = cell.node('setAttribute', { attributeId: 'o0' });
+      cell.vEdge(ic, portId, s, 'value');
+      cellSets[portId] = s;
+    }
+    // A wire that must SURVIVE every cascade: a different node's own edge.
+    const konst = cell.node('getConstant', { constType: 'number', value: '1' });
+    const other = cell.node('setAttribute', { attributeId: 'o1' });
+    cell.vEdge(konst, 'value', other, 'value');
+
+    const agent = mkGraph();
+    agent.node('behaviourStep', {});
+    const aim = agent.node('agentInputMapping', { mappingId: 'AP' });
+    for (const portId of ['energy', 'tint_r', 'tint_g', 'tint_b']) {
+      const s = agent.node('setAttribute', { attributeId: 'ae' });
+      agent.vEdge(aim, portId, s, 'value');
+    }
+    const mk = (id, name, params) => {
+      const m = { id, name, description: '', isAttributeToColor: false, redDescription: '', greenDescription: '', blueDescription: '' };
+      if (params !== undefined) m.parameters = params;
+      return m;
+    };
+    return {
+      schemaVersion: 2,
+      properties: {
+        name: 'Cascade', description: '', topology: '2d-grid', boundaryTreatment: 'torus',
+        updateMode: 'synchronous', gridWidth: W, gridHeight: H, dimension: '2d', gridDepth: 1,
+      },
+      attributes: [
+        { id: 'o0', name: 'o0', type: 'float', description: '', isModelAttribute: false, defaultValue: '0' },
+        { id: 'o1', name: 'o1', type: 'float', description: '', isModelAttribute: false, defaultValue: '0' },
+      ],
+      agentAttributes: [{ id: 'ae', name: 'ae', type: 'float', description: '', isModelAttribute: false, defaultValue: '0' }],
+      neighborhoods: [], mappings: [mk('P', 'Cell', parameters)], indicators: [],
+      agentMappings: [mk('AP', 'Agent', agentParameters)],
+      graphNodes: cell.nodes, graphEdges: cell.edges,
+      agentGraphNodes: agent.nodes, agentGraphEdges: agent.edges,
+      macroDefs: [], topologyMode: { gridCells: true, agents: true },
+    };
+  }
+
+  /** Dispatch a real UPDATE_(AGENT_)MAPPING and return the resulting model. */
+  const dispatch = (model, type, id, changes) =>
+    M.modelReducer({ model, isDirty: false, modelVersion: 0, loadedFileName: null, lastSaveOptions: null },
+      { type, id, changes }).model;
+  /** The channel handles still leaving an input-mapping root, per graph. */
+  const rootHandles = (model, nodes, edges, rootType) => {
+    const ids = new Set(nodes.filter(n => n.data.nodeType === rootType).map(n => n.id));
+    return edges.filter(e => ids.has(e.source) && e.sourceHandle.startsWith('output_value_'))
+      .map(e => e.sourceHandle.slice('output_value_'.length)).sort().join(',');
+  };
+  const cellHandles = m => rootHandles(m, m.graphNodes, m.graphEdges, 'inputColor');
+  const agentHandles = m => rootHandles(m, m.agentGraphNodes, m.agentGraphEdges, 'agentInputMapping');
+
+  const base = wiredModel([P_A, P_B]);
+  check('fixture: 4 channel wires on the cell graph', cellHandles(base) === 'energy,tint_b,tint_g,tint_r');
+  check('fixture: 4 channel wires on the agent graph', agentHandles(base) === 'energy,tint_b,tint_g,tint_r');
+  const baseOther = base.graphEdges.length;
+
+  // --- DELETE ------------------------------------------------------------
+  {
+    const after = dispatch(base, 'UPDATE_MAPPING', 'P', { parameters: [P_B] });
+    check('DELETE: exactly the deleted parameter\'s edge is dropped (cell)',
+      cellHandles(after) === 'tint_b,tint_g,tint_r', cellHandles(after));
+    check('DELETE: exactly ONE edge disappeared', base.graphEdges.length - after.graphEdges.length === 1);
+    check('DELETE: the unrelated getConstant wire SURVIVES',
+      after.graphEdges.some(e => e.sourceHandle === 'output_value_value'));
+    check('DELETE: the OTHER graph is untouched (agent mapping unchanged)',
+      agentHandles(after) === 'energy,tint_b,tint_g,tint_r');
+    check('DELETE: node arrays keep IDENTITY (only edges pruned)', after.graphNodes === base.graphNodes);
+    // …and the colour parameter, deleted, takes all THREE of its edges.
+    const after3 = dispatch(base, 'UPDATE_MAPPING', 'P', { parameters: [P_A] });
+    check('DELETE colour: all THREE channel edges drop', cellHandles(after3) === 'energy', cellHandles(after3));
+  }
+
+  // --- AGENT DELETE (the same cascade, the other store) -------------------
+  {
+    const after = dispatch(base, 'UPDATE_AGENT_MAPPING', 'AP', { parameters: [P_B] });
+    check('AGENT DELETE: exactly the deleted parameter\'s edge is dropped',
+      agentHandles(after) === 'tint_b,tint_g,tint_r', agentHandles(after));
+    check('AGENT DELETE: the CELL graph is untouched', cellHandles(after) === 'energy,tint_b,tint_g,tint_r');
+  }
+
+  // --- RETYPE colour → float (3 channels → 1) -----------------------------
+  {
+    const after = dispatch(base, 'UPDATE_MAPPING', 'P', {
+      parameters: [P_A, { ...P_B, type: 'float', defaultValue: '0' }],
+    });
+    check('RETYPE colour→float: the two extra channel edges drop',
+      cellHandles(after) === 'energy', cellHandles(after));
+    check('RETYPE colour→float: the surviving port is the scalar `tint`',
+      M.inputParamsOf(after.mappings[0]).channels.map(c => c.portId).join(',') === 'energy,tint');
+  }
+
+  // --- RETYPE float → colour (1 channel → 3) ------------------------------
+  {
+    const after = dispatch(base, 'UPDATE_MAPPING', 'P', {
+      parameters: [{ ...P_A, type: 'color', defaultValue: '#000000' }, P_B],
+    });
+    check('RETYPE float→colour: NOTHING drops (the old id is gone but nothing else was wired)',
+      cellHandles(after) === 'tint_b,tint_g,tint_r', cellHandles(after));
+    check('RETYPE float→colour: three NEW ports replace the one',
+      M.inputParamsOf(after.mappings[0]).channels.map(c => c.portId).join(',')
+        === 'energy_r,energy_g,energy_b,tint_r,tint_g,tint_b',
+      M.inputParamsOf(after.mappings[0]).channels.map(c => c.portId).join(','));
+  }
+
+  // --- RENAME (the reason `key` and `name` are separate fields) -----------
+  {
+    const after = dispatch(base, 'UPDATE_MAPPING', 'P', {
+      parameters: [{ ...P_A, name: 'Vigour' }, { ...P_B, name: 'Hue' }],
+    });
+    check('RENAME: EVERY wire survives', cellHandles(after) === 'energy,tint_b,tint_g,tint_r');
+    check('RENAME: no edge was removed at all', after.graphEdges.length === baseOther);
+    check('RENAME: edge array keeps IDENTITY (no needless re-render)', after.graphEdges === base.graphEdges);
+    const chans = M.inputParamsOf(after.mappings[0]).channels;
+    check('RENAME: the port LABEL follows the new name',
+      chans[0].label === 'Vigour' && chans[1].label === 'Hue R');
+  }
+
+  // --- REORDER ------------------------------------------------------------
+  {
+    const after = dispatch(base, 'UPDATE_MAPPING', 'P', { parameters: [P_B, P_A] });
+    check('REORDER: every wire survives', cellHandles(after) === 'energy,tint_b,tint_g,tint_r');
+    check('REORDER: the ABI order follows the declaration',
+      M.inputParamsOf(after.mappings[0]).channels.map(c => c.portId).join(',') === 'tint_r,tint_g,tint_b,energy');
+  }
+
+  // --- [] (deliberately no parameters) ------------------------------------
+  {
+    const after = dispatch(base, 'UPDATE_MAPPING', 'P', { parameters: [] });
+    check('EMPTY: every channel edge drops', cellHandles(after) === '');
+    check('EMPTY: the unrelated wire survives',
+      after.graphEdges.some(e => e.sourceHandle === 'output_value_value'));
+  }
+
+  // --- MATERIALISATION of a LEGACY mapping keeps its wires ----------------
+  {
+    const legacyWired = (() => {
+      const g = mkGraph();
+      g.node('step', {});
+      const ic = g.node('inputColor', { mappingId: 'P' });
+      for (const portId of ['r', 'g', 'b']) {
+        const s = g.node('setAttribute', { attributeId: 'o0' });
+        g.vEdge(ic, portId, s, 'value');
+      }
+      const m = wiredModel(undefined);
+      return { ...m, graphNodes: g.nodes, graphEdges: g.edges };
+    })();
+    check('legacy fixture: wired from r/g/b', cellHandles(legacyWired) === 'b,g,r');
+    const mat = dispatch(legacyWired, 'UPDATE_MAPPING', 'P', { parameters: M.materialiseInputParams(undefined) });
+    check('MATERIALISE: every r/g/b wire SURVIVES', cellHandles(mat) === 'b,g,r', cellHandles(mat));
+    // …and then ADDING a parameter still keeps them (the real editing flow).
+    const grown = dispatch(mat, 'UPDATE_MAPPING', 'P', {
+      parameters: [...M.materialiseInputParams(mat.mappings[0]), P_A],
+    });
+    check('MATERIALISE → add a parameter: the r/g/b wires still survive', cellHandles(grown) === 'b,g,r');
+  }
+
+  // --- A NON-parameter edit must not walk the graphs at all ---------------
+  {
+    const after = dispatch(base, 'UPDATE_MAPPING', 'P', { name: 'Renamed' });
+    check('a non-parameter edit prunes nothing', cellHandles(after) === 'energy,tint_b,tint_g,tint_r');
+    check('a non-parameter edit keeps edge-array IDENTITY', after.graphEdges === base.graphEdges);
+    check('a non-parameter edit still applies the change', after.mappings[0].name === 'Renamed');
+  }
+
+  // --- The cascade is SCOPED to the edited mapping ------------------------
+  {
+    const two = (() => {
+      const m = wiredModel([P_A, P_B]);
+      const g = mkGraph();
+      // A SECOND inputColor root, on a DIFFERENT mapping, wired from `energy`.
+      const ic2 = g.node('inputColor', { mappingId: 'Q' });
+      const s2 = g.node('setAttribute', { attributeId: 'o1' });
+      g.vEdge(ic2, 'energy', s2, 'value');
+      return {
+        ...m,
+        mappings: [...m.mappings, { id: 'Q', name: 'Other', description: '', isAttributeToColor: false, redDescription: '', greenDescription: '', blueDescription: '', parameters: [P_A] }],
+        graphNodes: [...m.graphNodes, ...g.nodes], graphEdges: [...m.graphEdges, ...g.edges],
+      };
+    })();
+    const after = dispatch(two, 'UPDATE_MAPPING', 'P', { parameters: [P_B] });
+    const qEdges = after.graphEdges.filter(e =>
+      after.graphNodes.some(n => n.id === e.source && n.data.config?.mappingId === 'Q'));
+    check('SCOPE: the OTHER mapping\'s identically-named channel wire survives', qEdges.length === 1);
+  }
+
+  // --- NEGATIVE CONTROLS --------------------------------------------------
+  // The two ways this feature can be silently wrong: repoint instead of drop,
+  // and over-drop. Both are detected by the very comparisons used above.
+  {
+    const before = M.inputParamsOf({ parameters: [P_A, P_B] });
+    const afterDel = M.inputParamsOf({ parameters: [P_B] });
+    const removed = [...M.removedChannelPortIds(before, afterDel)];
+    check('NEG: the rule names EXACTLY the destroyed channel', removed.join(',') === 'energy', removed.join(','));
+
+    // A REPOINTING cascade would leave 4 handles (energy re-aimed at tint_r);
+    // an OVER-DROPPING one would leave fewer than 3. The delete check above
+    // asserts exactly 'tint_b,tint_g,tint_r', so both are caught — demonstrate:
+    const del = dispatch(base, 'UPDATE_MAPPING', 'P', { parameters: [P_B] });
+    check('NEG: a repointed edge would be visible (no stale `energy` handle remains)',
+      !del.graphEdges.some(e => e.sourceHandle === 'output_value_energy'));
+    check('NEG: over-dropping would be visible (all 3 tint handles remain)',
+      del.graphEdges.filter(e => e.sourceHandle.startsWith('output_value_tint_')).length === 3);
+    // A rename must NOT be treated as a destroy (the classic over-drop).
+    const renamed = M.inputParamsOf({ parameters: [{ ...P_A, name: 'X' }, P_B] });
+    check('NEG: a rename destroys NOTHING', M.removedChannelPortIds(before, renamed).size === 0);
+  }
+
+  // --- The compiler's backstop still fires for a HAND-EDITED stale edge ---
+  {
+    // Same wiring, but the mapping declares only `tint` and the reducer never
+    // ran — i.e. a file edited outside the app. The compile-time gate must
+    // still name the channel (drop-don't-repoint's second line of defence).
+    const stale = wiredModel([P_B]);
+    const js = M.compileGraph(stale.graphNodes, stale.graphEdges, stale);
+    check('BACKSTOP: a hand-edited stale channel is a NAMED compile error',
+      !!js.error && /energy/.test(js.error), js.error ?? '(no error)');
+  }
 }
 
 // ---------------------------------------------------------------------------
