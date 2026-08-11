@@ -8,13 +8,21 @@ interface Props {
   initialDescription?: string;
   title?: string;
   confirmLabel?: string;
-  /** RENAME mode: hide the "include cell grid state" checkbox. The dialog then
+  /** RENAME mode: hide the "include board state" checkbox. The dialog then
    *  edits metadata only (name + description) and never captures sim state —
    *  `includeGrid` is reported as false. */
   hideGridOption?: boolean;
+  /** Which layers the model actually HAS, so the checkbox can name what it
+   *  really captures. An agents-only model has no cell grid at all, so the old
+   *  "Include cell grid state / embed the current cells" wording described
+   *  something that does not exist there — and the option genuinely does embed
+   *  the agent population (it rides the grid block, exactly as in .gcastate).
+   *  Both default true = the historical wording for a plain cell-grid model. */
+  hasCells?: boolean;
+  hasAgents?: boolean;
 }
 
-export function PresetSaveDialog({ onConfirm, onCancel, initialName = '', initialDescription = '', title = 'Save Current as Preset', confirmLabel = 'Save Preset', hideGridOption = false }: Props) {
+export function PresetSaveDialog({ onConfirm, onCancel, initialName = '', initialDescription = '', title = 'Save Current as Preset', confirmLabel = 'Save Preset', hideGridOption = false, hasCells = true, hasAgents = false }: Props) {
   const [name, setName] = useState(initialName);
   const [description, setDescription] = useState(initialDescription);
   const [includeGrid, setIncludeGrid] = useState(false);
@@ -68,10 +76,12 @@ export function PresetSaveDialog({ onConfirm, onCancel, initialName = '', initia
             <input type="checkbox" checked={includeGrid}
               onChange={e => setIncludeGrid(e.target.checked)} />
             <div>
-              <div className={styles.rowLabel}>Include cell grid state</div>
+              <div className={styles.rowLabel}>Include board state</div>
               <div className={styles.rowHint}>
-                Embed the current cells, generation counter, and indicators. Larger file; leave off
-                for parameter-only presets that work with any starting grid.
+                Embed {hasAgents && hasCells ? 'the current cells and the agent population'
+                  : hasAgents ? 'the current agent population (positions, velocities, attributes, bonds)'
+                  : 'the current cells'} as this preset&rsquo;s starting configuration. Larger file;
+                leave off for parameter-only presets that work with any starting board.
               </div>
             </div>
           </label>}

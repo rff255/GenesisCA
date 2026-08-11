@@ -796,17 +796,18 @@ export interface SimulationState {
   lookupTableData?: Record<string, number[]>;
 }
 
-/** A named snapshot of model-attribute values (always) and optionally the cell
- *  grid. Presets let one model ship many parameter variants the user can switch
- *  between in the Simulator (e.g. MNCA threshold sets), without duplicating the
- *  model into separate library entries. */
+/** A named snapshot of model-attribute values (always) and optionally the BOARD
+ *  (the cell grid and/or the agent population). Presets let one model ship many
+ *  parameter variants the user can switch between in the Simulator (e.g. MNCA
+ *  threshold sets), without duplicating the model into separate library entries. */
 export interface Preset {
   id: string;
   name: string;
   description?: string;
-  /** Embedded SimulationState — always includes modelAttrs; includes grid fields
-   *  only when the user checked "Include cell grid state" at save time. Never
-   *  includes UI controls (brush, viewer, FPS). */
+  /** Embedded SimulationState — always includes modelAttrs; includes the board
+   *  fields (grid attrs/colors AND, for an agent model, `agents`) only when the
+   *  user checked "Include board state" at save time. Never includes UI
+   *  controls (brush, viewer, FPS). */
   state: SimulationState;
   createdAt: number;
 }
