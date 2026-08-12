@@ -691,14 +691,16 @@ function emitBondRequest(ctx: AgentWasmCtx, node: GraphNode, verb: BondRequestVe
   const slots = Math.max(1, ctx.layout.bondReqSlots);
   const depth = slots - 1;
   const cursor = ctx.bondReqCursorLocal;
-  // Form Bond with a WIRED `agentA` IS a Form Between (the same two-id op), so it
-  // takes that encoding. The wiredness comes from the EDGE MAP — never from the
-  // presence of an inline value — and is resolved HERE, before a single local is
-  // allocated: `em.allocLocal` changes the module bytes even for an unused local,
-  // so an unwired node must not so much as mint one extra. Unwired ⇒ effVerb ===
-  // verb ⇒ the historical code path verbatim ⇒ byte-identical bytes.
-  const pairWired = verb === 'form' && !!ctx.adj.inputToSource.get(`${node.id}:agentA`);
-  const effVerb: BondRequestOp = pairWired ? 'between' : verb;
+  // A Form or Break Bond with a WIRED `agentA` is the same verb over two NAMED
+  // ids, so it takes that verb's two-id encoding. The wiredness comes from the
+  // EDGE MAP — never from the presence of an inline value — and is resolved HERE,
+  // before a single local is allocated: `em.allocLocal` changes the module bytes
+  // even for an unused local, so an unwired node must not so much as mint one
+  // extra. Unwired ⇒ effVerb === verb ⇒ the historical code path verbatim ⇒
+  // byte-identical bytes.
+  const pairWired = (verb === 'form' || verb === 'break')
+    && !!ctx.adj.inputToSource.get(`${node.id}:agentA`);
+  const effVerb: BondRequestOp = pairWired ? (verb === 'break' ? 'breakBetween' : 'between') : verb;
   const entry = em.allocLocal(I32);
   // entry = idx*slots + min(cursor, depth)
   em.localGet(ctx.idxLocal); em.i32Const(slots); em.op(OP_I32_MUL);
@@ -768,6 +770,33 @@ function emitBondRequest(ctx: AgentWasmCtx, node: GraphNode, verb: BondRequestVe
     em.localGet(okL);
     em.op(OP_SELECT);
     em.i32Store();
+  } else if (effVerb === 'breakBetween') {
+    // BREAK BETWEEN: the op kind rides BOTH lane signs — the one combination Form
+    // Between and Transfer left free, so again no new field and no moved offset.
+    // Both ids must resolve or the entry is an explicit no-op, still written as
+    // (−NONE, −NONE) so it stays non-zero AND still decodes as this verb.
+    const aL = em.allocLocal(I32);
+    pushValueAs(em, resolveValueInput(ctx, node, 'agentA', -1), I32); em.localSet(aL);
+    const bL = em.allocLocal(I32);
+    pushValueAs(em, resolveValueInput(ctx, node, 'targetAgent', -1), I32); em.localSet(bL);
+    const okL = em.allocLocal(I32);
+    em.localGet(aL); em.i32Const(0); em.op(OP_I32_GE_S);
+    em.localGet(bL); em.i32Const(0); em.op(OP_I32_GE_S);
+    em.op(OP_I32_AND); em.localSet(okL);
+    // Both lanes = ok ? -(id + BIAS) : -NONE   (emitted as 0 - x, matching the JS
+    // `-(id + BIAS)` exactly for every id — the encoder has no negate op).
+    const negLane = (off: number, vLocal: number) => {
+      pushI32ElemAddr(em, off, entry);
+      em.i32Const(0);
+      em.localGet(vLocal); em.i32Const(BOND_REQ_ID_BIAS); em.op(OP_I32_ADD);
+      em.i32Const(BOND_REQ_NONE);
+      em.localGet(okL);
+      em.op(OP_SELECT);
+      em.op(OP_I32_SUB);
+      em.i32Store();
+    };
+    negLane(breakOff, aL);
+    negLane(formOff, bL);
   } else if (effVerb === 'transfer') {
     // B9 — TRANSFER: the mirror image, the op kind rides the sign of the FORM
     // lane. Same shape as `between` with the negation moved to the other lane.
@@ -810,10 +839,10 @@ function emitBondRequest(ctx: AgentWasmCtx, node: GraphNode, verb: BondRequestVe
       pushI32ElemAddr(em, formOff, entry); em.i32Const(BOND_REQ_NONE); em.i32Store();
     }
   }
-  // Break has no form half; TRANSFER re-points an EXISTING edge and keeps its
-  // values, so neither writes the form-half cells (the drain reads them for
-  // neither) — the JS emitter takes the identical exemption.
-  if (effVerb !== 'break' && effVerb !== 'transfer') {
+  // Neither Break kind has a form half; TRANSFER re-points an EXISTING edge and
+  // keeps its values, so none of the three writes the form-half cells (the drain
+  // reads them for none) — the JS emitter takes the identical exemption.
+  if (effVerb !== 'break' && effVerb !== 'breakBetween' && effVerb !== 'transfer') {
     pushF64ElemAddr(em, ctx.layout.f64['bondFormL']!, entry); pushValueInputF64(ctx, node, 'restLength', 0); em.f64Store();
     pushF64ElemAddr(em, ctx.layout.f64['bondFormK']!, entry); pushValueInputF64(ctx, node, 'stiffness', 0); em.f64Store();
     // P2 — the new bond's INITIAL attribute values, one f64 cell per QUEUE ENTRY.

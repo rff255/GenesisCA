@@ -1767,13 +1767,13 @@ export function HelpView() {
             has always read. That covers <strong>Set Attribute</strong> (write my own attribute, or
             a neighbour&rsquo;s), <strong>Kill Agent</strong> (apoptosis vs. predation),{' '}
             <strong>Set Velocity</strong>, <strong>Set Target Radius</strong>,{' '}
-            <strong>Set Agent Sprite</strong> and <strong>Form Bond</strong>. One comes as a
-            pair instead &mdash; a self node plus an explicit &ldquo;(by ID)&rdquo; sibling:{' '}
-            <em>Apply Force</em> / <em>Apply Force To Agent</em>. A handful are self-anchored by
-            nature and say so: the field nodes act on the cells <em>under this agent</em>, and{' '}
-            <em>Break Bond</em> / <em>Rewire Bond</em> / <em>Set Bond Attribute</em> act on a bond
-            you are an endpoint of (cutting an edge between two <em>other</em> agents is not
-            expressible yet).
+            <strong>Set Agent Sprite</strong>, <strong>Form Bond</strong> and{' '}
+            <strong>Break Bond</strong>. One comes as a pair instead &mdash; a self node plus an
+            explicit &ldquo;(by ID)&rdquo; sibling: <em>Apply Force</em> /{' '}
+            <em>Apply Force To Agent</em>. A handful are self-anchored by nature and say so: the
+            field nodes act on the cells <em>under this agent</em>, and <em>Rewire Bond</em> /{' '}
+            <em>Set Bond Attribute</em> act on a bond you are an endpoint of (the third-party form
+            of a rewire is <em>Transfer Bond</em>).
           </p>
           <p className={styles.p}>
             Wiring an id has a consequence worth knowing: writing another agent&rsquo;s{' '}
@@ -2342,7 +2342,10 @@ export function HelpView() {
             <li><strong>Form Bond / Break Bond / Rewire Bond / For Each Bond</strong> &mdash; create,
               remove or <em>move</em> a bond between two agents, or iterate this agent's bonds
               (exposing the partner, rest length, and current length) to act per-bond (e.g. break an
-              over-stretched bond). <strong>Rewire Bond</strong> moves one bond from one partner to
+              over-stretched bond). <strong>Form Bond and Break Bond both take an optional
+              &ldquo;Agent A&rdquo;</strong>: leave it unwired and it is this agent (the usual
+              case), or wire it to bond &mdash; or cut &mdash; two <em>other</em> agents.
+              <strong>Rewire Bond</strong> moves one bond from one partner to
               another <em>atomically</em> &mdash; see &ldquo;Rewiring the graph&rdquo; below. Bonds can
               also form <strong>automatically by distance</strong> (the Auto-bond option), the simplest
               path to a glued cluster.</li>
@@ -2777,6 +2780,18 @@ export function HelpView() {
             <em>Older models:</em> this used to be a separate <strong>Form Bond Between</strong>
             node. It was retired once Form Bond&rsquo;s Agent A port made it a duplicate &mdash; a
             model that used it loads as a Form Bond with Agent A wired, and behaves identically.
+          </p>
+          <p className={styles.p}>
+            <strong>Break Bond names both ends too.</strong> It has the same optional{' '}
+            <em>Agent A</em>, with the same default: unwired it is this agent, so the node reads as
+            it always has (&ldquo;unbond me from my Target&rdquo;); wire it and it{' '}
+            <strong>cuts the bond between two other agents</strong>. That is the one edge change
+            the other verbs cannot express &mdash; <em>Rewire</em> and <em>Transfer</em> both move
+            an edge <em>you</em> are an endpoint of &mdash; so it is what lets a rule act as an
+            editor of a graph it is merely observing (an arbiter severing a link between two
+            neighbours, a rule pruning a triangle it detected). The same all-or-nothing rule
+            applies: if there is no such bond, or either agent is gone, <strong>nothing at all</strong>{' '}
+            happens &mdash; no other bond shifts, no degree changes.
           </p>
           <h3 className={styles.h3}>Dividing: which daughter gets which bond?</h3>
           <p className={styles.p}>
