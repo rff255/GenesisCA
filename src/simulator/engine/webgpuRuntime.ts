@@ -18,7 +18,7 @@ import {
   buildReductionPlan, emitReductionShader,
 } from './webgpuReduce';
 import { acquireSharedGpuDevice, releaseSharedGpuDevice } from './sharedGpuDevice';
-import { buildSceneWireframeVerts, buildBrushPlaneVerts, type BrushPlaneSpec } from './sceneWireframe';
+import { buildSceneWireframeVerts, buildBrushPlaneVerts, SCENE_MSAA_SAMPLES, type BrushPlaneSpec } from './sceneWireframe';
 
 export interface WebGPURuntimeInit {
   shaderCode: string;
@@ -123,6 +123,13 @@ export interface WebGPURuntime {
   voxelDepthTex: GPUTexture | null;
   voxelDepthW: number;
   voxelDepthH: number;
+  /** MSAA colour attachment (SCENE_MSAA_SAMPLES) the draw pass renders into and
+   *  RESOLVES onto the swap-chain texture. Load-bearing for the free↔frame flip:
+   *  gl3d draws the SAME scene wireframes through an `antialias: true` context, so
+   *  single-sampling them here changed their brightness on every flip. */
+  voxelMsaaTex: GPUTexture | null;
+  voxelMsaaW: number;
+  voxelMsaaH: number;
   /** One u32 cell index per VISIBLE cell, written by the compaction pass. Sized
    *  `total` (the worst case: every cell visible) so no capacity readback is
    *  ever needed. */
@@ -269,6 +276,9 @@ export async function createWebGPURuntime(init: WebGPURuntimeInit): Promise<WebG
     voxelCanvas: null,
     voxelCtx: null,
     voxelDepthTex: null,
+    voxelMsaaTex: null,
+    voxelMsaaW: 0,
+    voxelMsaaH: 0,
     voxelDepthW: 0,
     voxelDepthH: 0,
     voxelInstanceBuf: null,
@@ -1010,17 +1020,37 @@ function ensureVoxelLineBuffer(rt: WebGPURuntime): void {
   rt.voxelLineBuf = buf;
 }
 
-/** Ensure the depth attachment matches the canvas size (recreated on resize). */
+/** Ensure the depth attachment matches the canvas size (recreated on resize).
+ *  MULTISAMPLED: a depth attachment must carry the same sampleCount as the colour
+ *  attachment it is paired with (see ensureVoxelMsaaTex). The SHADOW pass has its
+ *  own single-sampled depth texture and is deliberately untouched. */
 function ensureVoxelDepthTex(rt: WebGPURuntime, w: number, h: number): GPUTextureView {
   if (!rt.voxelDepthTex || rt.voxelDepthW !== w || rt.voxelDepthH !== h) {
     if (rt.voxelDepthTex) { try { rt.voxelDepthTex.destroy(); } catch { /* non-fatal */ } }
     rt.voxelDepthTex = rt.device.createTexture({
       label: 'voxel-render-depth', size: { width: Math.max(1, w), height: Math.max(1, h) },
       format: 'depth24plus', usage: GPUTextureUsage.RENDER_ATTACHMENT,
+      sampleCount: SCENE_MSAA_SAMPLES,
     });
     rt.voxelDepthW = w; rt.voxelDepthH = h;
   }
   return rt.voxelDepthTex.createView();
+}
+
+/** Ensure the MSAA colour attachment matches the canvas size + format. The draw
+ *  pass renders into THIS and resolves onto the swap-chain texture, so the scene
+ *  wireframes rasterize exactly as gl3d rasterizes them in frame mode
+ *  (SCENE_MSAA_SAMPLES). Never sampled → RENDER_ATTACHMENT only. */
+function ensureVoxelMsaaTex(rt: WebGPURuntime, w: number, h: number, format: GPUTextureFormat): GPUTextureView {
+  if (!rt.voxelMsaaTex || rt.voxelMsaaW !== w || rt.voxelMsaaH !== h) {
+    if (rt.voxelMsaaTex) { try { rt.voxelMsaaTex.destroy(); } catch { /* non-fatal */ } }
+    rt.voxelMsaaTex = rt.device.createTexture({
+      label: 'voxel-render-msaa', size: { width: Math.max(1, w), height: Math.max(1, h) },
+      format, usage: GPUTextureUsage.RENDER_ATTACHMENT, sampleCount: SCENE_MSAA_SAMPLES,
+    });
+    rt.voxelMsaaW = w; rt.voxelMsaaH = h;
+  }
+  return rt.voxelMsaaTex.createView();
 }
 
 /** Write the 192-byte camera/lighting/clip uniform (mirrors VOXEL_VIEW_WGSL). */
@@ -1178,6 +1208,10 @@ export async function setupVoxelRender(rt: WebGPURuntime, canvas: OffscreenCanva
       fragment: { module: drawModule, entryPoint: 'fsMain', targets: [{ format }] },  // opaque (no blend)
       primitive: { topology: 'triangle-list', cullMode },
       depthStencil: { format: 'depth24plus', depthWriteEnabled: true, depthCompare: 'less' },
+      // The pass is multisampled for the LINES' sake (see SCENE_MSAA_SAMPLES), so
+      // every pipeline drawing into it must declare the same count. Free bonus for
+      // the cubes: their silhouettes now antialias the way gl3d's already did.
+      multisample: { count: SCENE_MSAA_SAMPLES },
     });
     const drawBindGroup = rt.device.createBindGroup({
       label: 'voxel-draw-bg', layout: drawBgl,
@@ -1246,6 +1280,10 @@ export async function setupVoxelRender(rt: WebGPURuntime, canvas: OffscreenCanva
       fragment: { module: lineModule, entryPoint: 'fsMain', targets: [{ format }] },
       primitive: { topology: 'line-list' },
       depthStencil: { format: 'depth24plus', depthWriteEnabled: true, depthCompare: 'less' },
+      // THE reason this pass is multisampled — gl3d draws these same lines through
+      // an `antialias: true` context, so single-sampling them here made the floor
+      // grid visibly change brightness on every free↔frame flip.
+      multisample: { count: SCENE_MSAA_SAMPLES },
     });
     const lineBindGroup = rt.device.createBindGroup({
       label: 'voxel-line-bg', layout: lineBgl,
@@ -1288,6 +1326,9 @@ export function presentVoxels(rt: WebGPURuntime): void {
       || !rt.voxelDrawBindGroup || !rt.voxelIndirectBuf) return;
   const tex = rt.voxelCtx.getCurrentTexture();
   const view = tex.createView();
+  // Format from the swap-chain texture itself, so the MSAA attachment can never
+  // drift from the resolve target (or from the format the pipelines were built at).
+  const msView = ensureVoxelMsaaTex(rt, tex.width, tex.height, tex.format);
   const depthView = ensureVoxelDepthTex(rt, tex.width, tex.height);
   // Rebuild the scene-wireframe geometry (bounds/grid/axes) when the viz flags or
   // dims changed — buffer writes must happen outside the render pass.
@@ -1321,7 +1362,14 @@ export function presentVoxels(rt: WebGPURuntime): void {
   const [cr, cg, cb, ca] = rt.voxelClear;
   const rpass = enc.beginRenderPass({
     label: 'voxel-draw-pass',
-    colorAttachments: [{ view, loadOp: 'clear', storeOp: 'store', clearValue: { r: cr, g: cg, b: cb, a: ca } }],
+    // MULTISAMPLED + RESOLVE — draw into the MSAA texture, resolve onto the swap
+    // chain. `storeOp: 'discard'` because only the resolve is ever read. The
+    // resolve averages coverage into the premultiplied canvas exactly as gl3d's
+    // own MSAA resolve does, which is what makes the free↔frame flip seamless.
+    colorAttachments: [{
+      view: msView, resolveTarget: view,
+      loadOp: 'clear', storeOp: 'discard', clearValue: { r: cr, g: cg, b: cb, a: ca },
+    }],
     depthStencilAttachment: { view: depthView, depthClearValue: 1.0, depthLoadOp: 'clear', depthStoreOp: 'store' },
   });
   const pipe = rt.voxelCullBack ? rt.voxelDrawPipelineCull : rt.voxelDrawPipelineNoCull;
@@ -1393,6 +1441,8 @@ function releaseVoxelResources(rt: WebGPURuntime): void {
   rt.voxelLineBuf = null; rt.voxelLineCount = 0; rt.voxelLineSig = '';
   if (rt.voxelDepthTex) { try { rt.voxelDepthTex.destroy(); } catch { /* non-fatal */ } }
   rt.voxelDepthTex = null; rt.voxelDepthW = 0; rt.voxelDepthH = 0;
+  if (rt.voxelMsaaTex) { try { rt.voxelMsaaTex.destroy(); } catch { /* non-fatal */ } }
+  rt.voxelMsaaTex = null; rt.voxelMsaaW = 0; rt.voxelMsaaH = 0;
   if (rt.voxelShadowTex) { try { rt.voxelShadowTex.destroy(); } catch { /* non-fatal */ } }
   rt.voxelShadowTex = null; rt.voxelShadowSampler = null;
   rt.voxelShadowPipeline = null; rt.voxelShadowBindGroup = null; rt.voxelShadowOn = false;

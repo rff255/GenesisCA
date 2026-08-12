@@ -35,7 +35,7 @@ import type { AgentWebGPULayout } from '../../modeler/vpl/compiler/agentWebgpu/l
 import { AGENT_GPU_F32_FIELDS, AGENT_GPU_F32_FIELDS_3D, AGENT_GPU_I32_FIELDS, AGENT_GPU_QUEUE_FIELDS, AGENT_GPU_REQUEST_FIELDS, AGENT_GPU_SPRITE_FIELDS } from '../../modeler/vpl/compiler/agentWebgpu/layout';
 import { emitAgentForcePassWGSL, agentMirrorFields, emitForceControlStruct } from '../../modeler/vpl/compiler/agentWebgpu/forcePass';
 import { acquireSharedGpuDevice, releaseSharedGpuDevice } from './sharedGpuDevice';
-import { buildSceneWireframeVerts, buildBrushPlaneVerts, type SceneViz, type BrushPlaneSpec } from './sceneWireframe';
+import { buildSceneWireframeVerts, buildBrushPlaneVerts, SCENE_MSAA_SAMPLES, type SceneViz, type BrushPlaneSpec } from './sceneWireframe';
 import { GLOW_TONE_EXPOSURE } from '../glowTone';
 
 const REQUEST_FIELD_SET: ReadonlySet<string> = new Set(AGENT_GPU_REQUEST_FIELDS);
@@ -313,6 +313,13 @@ export interface AgentWebGPURuntime {
   renderDepthTex?: GPUTexture | null;
   renderDepthW?: number;
   renderDepthH?: number;
+  // MSAA colour attachment (SCENE_MSAA_SAMPLES) the pass renders into and RESOLVES
+  // onto the swap-chain texture. Load-bearing for the free↔frame flip: without it
+  // the scene wireframes rasterize single-sampled here while gl3d draws them
+  // multisampled — see SCENE_MSAA_SAMPLES in sceneWireframe.ts.
+  renderMsaaTex?: GPUTexture | null;
+  renderMsaaW?: number;
+  renderMsaaH?: number;
   // Scene-anchored geometry — the wireframes (bounds / floor grid / origin axes)
   // AND the BRUSH INTERACTION PLANE — drawn in the SAME render pass + depth buffer
   // as the spheres so agents in front occlude it; the agent-sphere sibling of the
@@ -1727,6 +1734,13 @@ export interface AgentRenderSurface {
   renderDepthTex?: GPUTexture | null;
   renderDepthW?: number;
   renderDepthH?: number;
+  // MSAA colour attachment (SCENE_MSAA_SAMPLES) the pass renders into and RESOLVES
+  // onto the swap-chain texture. Load-bearing for the free↔frame flip: without it
+  // the scene wireframes rasterize single-sampled here while gl3d draws them
+  // multisampled — see SCENE_MSAA_SAMPLES in sceneWireframe.ts.
+  renderMsaaTex?: GPUTexture | null;
+  renderMsaaW?: number;
+  renderMsaaH?: number;
   // Scene-anchored geometry — the wireframes (bounds / floor grid / origin axes)
   // AND the BRUSH INTERACTION PLANE — drawn in the SAME render pass + depth buffer
   // as the spheres so agents in front occlude it; the agent-sphere sibling of the
@@ -2284,17 +2298,36 @@ function ensureAgentLineBuffer(rt: AgentRenderSurface): void {
   rt.renderLineBuf = buf;
 }
 
-/** Ensure the depth texture matches the canvas size (recreated on resize). */
+/** Ensure the depth texture matches the canvas size (recreated on resize).
+ *  MULTISAMPLED: a depth attachment must carry the same sampleCount as the
+ *  colour attachment it is paired with (see ensureAgentMsaaTex). */
 function ensureAgentDepthTex(rt: AgentRenderSurface, w: number, h: number): GPUTextureView {
   if (!rt.renderDepthTex || rt.renderDepthW !== w || rt.renderDepthH !== h) {
     if (rt.renderDepthTex) { try { rt.renderDepthTex.destroy(); } catch { /* non-fatal */ } }
     rt.renderDepthTex = rt.device.createTexture({
       label: 'agent-render-depth', size: { width: Math.max(1, w), height: Math.max(1, h) },
       format: 'depth24plus', usage: GPUTextureUsage.RENDER_ATTACHMENT,
+      sampleCount: SCENE_MSAA_SAMPLES,
     });
     rt.renderDepthW = w; rt.renderDepthH = h;
   }
   return rt.renderDepthTex.createView();
+}
+
+/** Ensure the MSAA colour attachment matches the canvas size + format. The pass
+ *  renders into THIS and resolves onto the swap-chain texture, so the scene
+ *  wireframes are rasterized exactly as gl3d rasterizes them in frame mode
+ *  (SCENE_MSAA_SAMPLES). Never sampled → RENDER_ATTACHMENT only. */
+function ensureAgentMsaaTex(rt: AgentRenderSurface, w: number, h: number, format: GPUTextureFormat): GPUTextureView {
+  if (!rt.renderMsaaTex || rt.renderMsaaW !== w || rt.renderMsaaH !== h) {
+    if (rt.renderMsaaTex) { try { rt.renderMsaaTex.destroy(); } catch { /* non-fatal */ } }
+    rt.renderMsaaTex = rt.device.createTexture({
+      label: 'agent-render-msaa', size: { width: Math.max(1, w), height: Math.max(1, h) },
+      format, usage: GPUTextureUsage.RENDER_ATTACHMENT, sampleCount: SCENE_MSAA_SAMPLES,
+    });
+    rt.renderMsaaW = w; rt.renderMsaaH = h;
+  }
+  return rt.renderMsaaTex.createView();
 }
 
 /** The glow HDR accumulation format. rgba16float is renderable AND blendable in
@@ -2415,6 +2448,11 @@ async function setupAgentSphereRender(rt: AgentRenderSurface, canvas: OffscreenC
       fragment: { module, entryPoint: 'fsMain', targets: [{ format }] },   // opaque (no blend)
       primitive: { topology: 'triangle-strip' },
       depthStencil: { format: 'depth24plus', depthWriteEnabled: true, depthCompare: 'less' },
+      // The pass is multisampled for the LINES' sake (see SCENE_MSAA_SAMPLES), so
+      // every pipeline drawing into it must declare the same count. The impostors
+      // themselves are unchanged: their silhouette is a `discard`, and a discard
+      // kills the whole fragment (all its samples), which MSAA cannot smooth.
+      multisample: { count: SCENE_MSAA_SAMPLES },
     });
     const renderView3DBuf = rt.device.createBuffer({ label: 'agent-render-view-3d', size: RENDER_VIEW_3D_BYTES, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
     // Scene-wireframe (bounds/grid/axes) line pipeline — reuses the RenderView3D
@@ -2449,6 +2487,10 @@ async function setupAgentSphereRender(rt: AgentRenderSurface, canvas: OffscreenC
       fragment: { module: lineModule, entryPoint: 'fsLine', targets: [{ format }] },
       primitive: { topology: 'line-list' },
       depthStencil: { format: 'depth24plus', depthWriteEnabled: true, depthCompare: 'less' },
+      // THE reason this pass is multisampled — gl3d draws these same lines through
+      // a `antialias: true` context, so single-sampling them here made the floor
+      // grid visibly change brightness on every free↔frame flip.
+      multisample: { count: SCENE_MSAA_SAMPLES },
     });
     const lineBindGroup = rt.device.createBindGroup({
       label: 'agent-scene-line-bg', layout: lineBgl,
@@ -3025,6 +3067,9 @@ function presentAgentSpheresEncode(rt: AgentRenderSurface, enc: GPUCommandEncode
   if (!rt.renderCtx || !rt.renderSpherePipeline || !rt.renderSphereBindGroup) return;
   const tex = rt.renderCtx.getCurrentTexture();
   const view = tex.createView();
+  // Format from the swap-chain texture itself, so the MSAA attachment can never
+  // drift from the resolve target (or from the format the pipelines were built at).
+  const msView = ensureAgentMsaaTex(rt, tex.width, tex.height, tex.format);
   const depthView = ensureAgentDepthTex(rt, tex.width, tex.height);
   // Rebuild the scene-wireframe geometry (bounds/grid/axes) when the viz flags or
   // world dims changed — buffer writes must happen OUTSIDE the render pass.
@@ -3032,7 +3077,14 @@ function presentAgentSpheresEncode(rt: AgentRenderSurface, enc: GPUCommandEncode
   const [cr, cg, cb, ca] = rt.renderClear ?? [0, 0, 0, 0];
   const pass = enc.beginRenderPass({
     label: 'agent-sphere-present',
-    colorAttachments: [{ view, loadOp: 'clear', storeOp: 'store', clearValue: { r: cr, g: cg, b: cb, a: ca } }],
+    // MULTISAMPLED + RESOLVE — draw into the MSAA texture, resolve onto the swap
+    // chain. `storeOp: 'discard'` because only the resolve is ever read. The
+    // resolve averages coverage into the premultiplied canvas exactly as gl3d's
+    // own MSAA resolve does, which is what makes the free↔frame flip seamless.
+    colorAttachments: [{
+      view: msView, resolveTarget: view,
+      loadOp: 'clear', storeOp: 'discard', clearValue: { r: cr, g: cg, b: cb, a: ca },
+    }],
     depthStencilAttachment: { view: depthView, depthClearValue: 1.0, depthLoadOp: 'clear', depthStoreOp: 'store' },
   });
   pass.setPipeline(rt.renderSpherePipeline);
@@ -3159,6 +3211,7 @@ export function destroyAgentRenderSurface(rt: AgentRenderSurface | null): void {
   rt.renderCtx = null;
   rt.renderComposite = false;
   if (rt.renderDepthTex) { try { rt.renderDepthTex.destroy(); } catch { /* non-fatal */ } rt.renderDepthTex = null; }
+  if (rt.renderMsaaTex) { try { rt.renderMsaaTex.destroy(); } catch { /* non-fatal */ } rt.renderMsaaTex = null; }
   destroyGlowHdrTex(rt);
   const bufs = [rt.agentF32Buf, rt.agentAliveBuf, rt.agentColorsBuf, rt.renderViewBuf ?? null, rt.renderView3DBuf ?? null, rt.gridPresentUniform ?? null, rt.renderLineBuf ?? null];
   for (const b of bufs) { if (b) try { b.destroy(); } catch { /* non-fatal */ } }
@@ -4054,6 +4107,7 @@ export function destroyAgentWebGPURuntime(rt: AgentWebGPURuntime | null): void {
   rt.renderCtx = null;
   rt.renderComposite = false;
   if (rt.renderDepthTex) { try { rt.renderDepthTex.destroy(); } catch { /* non-fatal */ } rt.renderDepthTex = null; }
+  if (rt.renderMsaaTex) { try { rt.renderMsaaTex.destroy(); } catch { /* non-fatal */ } rt.renderMsaaTex = null; }
   destroyGlowHdrTex(rt);
   for (const b of bufs) { if (b) try { b.destroy(); } catch { /* non-fatal */ } }
   rt.renderLineBuf = null; rt.renderLineCount = 0; rt.renderLineSig = '';
