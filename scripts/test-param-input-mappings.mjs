@@ -63,7 +63,8 @@ export { modelReducer } from '../src/model/ModelContext.tsx';
 // BRUSH KINDS (Editor vs Spawner) — the resolver + the ABI + a real agent store,
 // so the spawner fixture below RUNS through the shipped closures rather than a
 // re-implementation of them.
-export { inputBrushKindOf, inputBrushKindForNode, spawnerBrushPorts, removedRootPortIds } from '../src/model/inputMappingParams.ts';
+export { inputBrushKindOf, inputBrushKindForNode, spawnerBrushPorts, removedRootPortIds, rootOutputPortIdsForNode } from '../src/model/inputMappingParams.ts';
+export { detectDanglingRefs } from '../src/modeler/vpl/compiler/danglingRefs.ts';
 export { buildAgentAbiArgs, deriveAgentAbi } from '../src/modeler/vpl/compiler/agentAbi.ts';
 export { agentAbiShapeOf } from '../src/modeler/vpl/compiler/compile.ts';
 export { createAgentStore, initAgentSlot, freeAgentSlot, freeStagedSlot } from '../src/simulator/engine/agentEngine.ts';
@@ -454,7 +455,10 @@ console.log('== 7. STALE EDGE ⇒ a NAMED compile error, never `_undef` ==');
   check('detectMissingConfig badges the stale wire',
     issues.some(s => s.includes('tint_r')), issues.join(' | '));
   const none = M.detectMissingConfig('inputColor', { mappingId: 'P' }, model, new Set(['output_value_energy']));
-  check('NEG: a LIVE wire is not badged', !none.some(s => s.includes('no longer declares')), none.join(' | '));
+  // Asserted as "NO issue at all" rather than "the message does not contain X":
+  // a wording-sensitive negative control goes VACUOUS the moment the message is
+  // reworded, which is exactly how a real regression would slip past it.
+  check('NEG: a LIVE wire is not badged', none.length === 0, none.join(' | '));
   const emptyDecl = M.detectMissingConfig('inputColor', { mappingId: 'P' },
     { ...model, mappings: [{ ...model.mappings[0], parameters: [] }] }, new Set(['output_value_r']));
   check('a wire into a NO-parameter mapping is badged',
@@ -1066,6 +1070,64 @@ console.log('== 12. BRUSH KINDS — Editor vs Spawner (real closures, real store
     .outputs.filter(p => p.category === 'value').map(p => p.id).join(',');
   check('effectivePorts agrees with the shared builder (dual-consumption)',
     eff === 'brushX,brushY,brushRadius,amount', eff);
+
+  // --- REGRESSION: the badge must test the WHOLE root port set --------------
+  // Reported: "a Spawner input mapping where I don't declare any inputs and just
+  // use the position of the brush keeps warning 'This mapping declares no
+  // parameters'." Root cause: `detectDanglingRefs` learned the brush ports but
+  // `inputParamIssues` kept testing the declared CHANNELS alone, so a spawner
+  // root with zero parameters looked like it exposed nothing at all. Both now
+  // resolve through `rootOutputPortIdsForNode`, so these assert the pair.
+  {
+    const noParams = (kind) => M.migrateForHarness({
+      ...modelOf(kind),
+      agentMappings: [brushMapping(kind ? { brushKind: kind, parameters: [] } : { parameters: [] })],
+    });
+    const badge = (model, wired) =>
+      M.detectMissingConfig('agentInputMapping', { mappingId: 'SP' }, model, new Set(wired));
+    // The shipped live set: a spawner ALWAYS exposes its geometry, so it is
+    // never empty however few parameters are declared.
+    const liveNoParams = [...M.rootOutputPortIdsForNode('agentInputMapping', { mappingId: 'SP' }, noParams('spawner'))].join(',');
+    check('spawner with ZERO parameters still exposes the brush geometry',
+      liveNoParams === 'brushX,brushY,brushRadius', liveNoParams);
+    check('THE BUG: spawner + no parameters + wired Brush X/Y is NOT badged',
+      badge(noParams('spawner'), ['output_value_brushX', 'output_value_brushY']).length === 0,
+      badge(noParams('spawner'), ['output_value_brushX', 'output_value_brushY']).join(' | '));
+    check('…and wiring the radius as well is not badged either',
+      badge(noParams('spawner'), ['output_value_brushRadius', 'output_value_brushX']).length === 0);
+    check('a spawner mixing brush geometry with a declared channel is not badged',
+      badge(modelOf('spawner'), ['output_value_brushX', 'output_value_amount']).length === 0,
+      badge(modelOf('spawner'), ['output_value_brushX', 'output_value_amount']).join(' | '));
+    // …while a genuinely stale wire is STILL caught, by name.
+    const stale = badge(modelOf('spawner'), ['output_value_brushX', 'output_value_tint_r']);
+    check('NEG: a genuinely stale wire on a spawner is still badged BY NAME',
+      stale.length === 1 && stale[0].includes('tint_r'), stale.join(' | '));
+    // EDITOR kind — symmetric: it exposes no brush ports, so a leftover wire from
+    // a spawner→editor flip is stale, and a zero-parameter editor that IS wired
+    // still reports the honest "declares no parameters".
+    check('NEG: an EDITOR root wired from a brush port IS badged (spawner→editor leftover)',
+      badge(modelOf(null), ['output_value_brushX']).some(s => s.includes('brushX')),
+      badge(modelOf(null), ['output_value_brushX']).join(' | '));
+    check('NEG: a wired EDITOR root with no parameters is still badged',
+      badge(noParams(null), ['output_value_r']).some(s => s.includes('declares no parameters')),
+      badge(noParams(null), ['output_value_r']).join(' | '));
+    check('NEG: an UNWIRED spawner with no parameters is quiet (a valid stamp)',
+      badge(noParams('spawner'), ['output_flow_do']).length === 0);
+
+    // THE COMPILE GATE must agree with the badge — same helper, so they cannot
+    // disagree about what a root exposes.
+    const rootNode = (model) => ({
+      id: 'root', type: 'caNode', position: { x: 0, y: 0 },
+      data: { nodeType: 'agentInputMapping', config: { mappingId: 'SP' }, label: 'Sow' },
+      __model: model,
+    });
+    const edgeFrom = (port) => ({ id: `e_${port}`, source: 'root', target: 'sink', sourceHandle: `output_value_${port}`, targetHandle: 'input_value_x' });
+    const okErr = M.detectDanglingRefs([rootNode()], noParams('spawner'), [edgeFrom('brushX'), edgeFrom('brushY')]);
+    check('compile gate ACCEPTS the brush wires on a zero-parameter spawner', okErr === undefined, okErr ?? '');
+    const badErr = M.detectDanglingRefs([rootNode()], noParams('spawner'), [edgeFrom('brushX'), edgeFrom('tint_r')]);
+    check('compile gate still REJECTS a stale wire, by name',
+      !!badErr && badErr.includes('tint_r') && !badErr.includes('brushX'), badErr ?? '(none)');
+  }
 
   // --- the KIND-SWITCH edge cascade (drop, never repoint) -----------------
   const gone = [...M.removedRootPortIds(brushMapping({ brushKind: 'spawner' }), brushMapping({}), modelOf('spawner'))].sort().join(',');

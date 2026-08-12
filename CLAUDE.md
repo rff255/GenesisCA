@@ -2469,6 +2469,19 @@ mapping now declares **`brushKind: 'editor' | 'spawner'`** (`Mapping.brushKind`,
   as well as `parameters`; the CELL branch strips any stray `brushKind` so a hand-edited file cannot
   invent ports a lattice root never rendered. `detectDanglingRefs` had to learn the brush ports too,
   or a legitimate spawner wire reads as a stale channel and blocks the compile.
+- **⚠ THE LIVE ROOT PORT SET HAS EXACTLY ONE DEFINITION —
+  `rootOutputPortIdsForNode` ([inputMappingParams.ts](src/model/inputMappingParams.ts)), DERIVED FROM
+  `buildInputParamPorts`** (the builder CaNode and `effectivePorts` render from), so "what the badge
+  and the compile gate consider live" cannot drift from "what the canvas draws". **The bug that made
+  it shared** (user-reported, fixed 2026-08-11): the brush-kinds work taught `detectDanglingRefs` the
+  spawner geometry but left `nodeValidation`'s `inputParamIssues` testing the declared CHANNELS
+  alone — so a spawner mapping that declares NO parameters and merely wires `Brush X` (the whole
+  point of the kind: the graph places the agents itself) hit the `channels.length === 0` arm and was
+  badged *"This mapping declares no parameters — the wired value outputs do not exist"* while
+  compiling and painting perfectly. **A spawner's live set is never empty**, so that message can now
+  only fire where it is true (an EDITOR root exposing nothing at all), and a stale wire — including a
+  brush port left behind by a hand-edited spawner→editor flip — is still named. Adding a port to a
+  root means editing the ONE builder; nothing else enumerates them.
   **⚠ Verified nuance**: the prune lands in the MODEL and STICKS (an editor-kind flip stays pruned
   through a full graph reseed, with no compile banner), but flipping BACK to spawner within the same
   editor session re-renders those wires from React Flow's LOCAL state, which then syncs them back —
