@@ -468,18 +468,85 @@ check('runtime: uploadAgentSoA seeds the agent colour buffer [invisible-agents b
       === countAll(gridDriver, 'gridUiSyncPostedRef.current = true')
         + countAll(initBlock, 'gridUiSyncPostedRef.current = true')
         + countAll(forceGrid, 'gridUiSyncPostedRef.current = true'));
-  // The 3D FRAME-PIN detaches. Two of them now — alpha-blend and glow — both for
-  // the same reason (a visual gl3d can render and the worker's WGSL sphere pass
-  // cannot), and both must POST before they mirror. Counted, not just matched, so
-  // adding a third pin without posting is caught rather than absorbed.
-  check('SimulatorView: the 3D frame-pin detaches TELL the worker before mirroring [mirror invariant]',
-    (sv.match(/setAgentUiSync', on: true \}\);\s*\n\s*agentUiSyncPostedRef\.current = true;/g) || []).length === 2);
+  // The 3D FRAME-PIN detaches. ONE of them — alpha-blend — and it must POST before
+  // it mirrors. There were TWO: 3D GLOW pinned the frame path as well, because the
+  // bloom was a gl3d-only post-process. The worker's sphere pass carries its own
+  // dual-Kawase bloom now (BLOOM3D_WGSL), so a glowing 3D model keeps free mode and
+  // that pin is GONE. Counted, not just matched, so adding another pin without
+  // posting is caught rather than absorbed.
+  check('SimulatorView: the 3D frame-pin detach TELLS the worker before mirroring [mirror invariant]',
+    (sv.match(/setAgentUiSync', on: true \}\);\s*\n\s*agentUiSyncPostedRef\.current = true;/g) || []).length === 1);
   check('SimulatorView: every agentUiSync "= true" is a post or a brand-new worker [mirror invariant]',
     countAll(sv, 'agentUiSyncPostedRef.current = true')
       === countAll(agentDriver, 'agentUiSyncPostedRef.current = true')
         + countAll(initBlock, 'agentUiSyncPostedRef.current = true')
         + countAll(forceAgent, 'agentUiSyncPostedRef.current = true')
-        + 2 /* the alpha-blend + glow frame-pin detaches checked above */);
+        + 1 /* the alpha-blend frame-pin detach checked above */);
+  // 3D GLOW MUST NOT RE-PIN. The gate term and the maybeAttachAgentCanvas re-check
+  // are both gone; if either comes back, a glowing 3D model silently loses the
+  // free-mode fast path again (and the worker's bloom would go unused).
+  check('SimulatorView: 3D glow does NOT gate the agent render eligibility [free-mode bloom]',
+    !/!is3D \|\| !agentGlowRef\.current\.on/.test(sv));
+  check('SimulatorView: maybeAttachAgentCanvas does NOT bail on 3D glow [free-mode bloom]',
+    !/if \(is3dRef\.current && agentGlowRef\.current\.on\) return;/.test(sv));
+}
+
+// [glow-3d] THE FREE-MODE BLOOM — the worker's WGSL sibling of gl3d's
+// renderAgentBloom. It is what lifted the 3D frame pin, so the properties that make
+// the two renderers agree are pinned here.
+//
+// The invariants, and why each one is load-bearing:
+//   - the SOURCE is the agents ALONE (gl3d re-renders the agent layer into its
+//     level-0 FBO rather than reading the finished frame back), so a wireframe /
+//     brush plane can never bloom and the existing render is untouched;
+//   - the composite can only ADD LIGHT (ONE/ONE) — the 3D form of 2D's solid-core
+//     invariant, and what keeps glow-off identical;
+//   - the tonemap is the SHARED constant, so Intensity means the same thing in
+//     every view and on every path;
+//   - the chain is freed on resize / rebuild / glow-off / teardown (canvas-sized
+//     textures — at 4K, tens of MB nothing would read).
+{
+  const rt = readSrc('simulator/engine/agentWebgpuRuntime.ts');
+  const wgsl = rt.slice(rt.indexOf('const BLOOM3D_WGSL'), rt.indexOf('const BLOOM3D_WGSL') + 6000);
+
+  check('the bloom SOURCE pass draws the spheres alone — no line pipeline [glow-3d]', (() => {
+    const b = blockAfter(rt, /function encodeBloom3DChain\(/);
+    return b.includes('bloom3dSpherePipeline') && !b.includes('renderLinePipeline');
+  })());
+  check('the bloom source clears TRANSPARENT (its alpha is the core-mask coverage) [glow-3d]',
+    /agent-bloom3d-source[\s\S]{0,400}?clearValue: \{ r: 0, g: 0, b: 0, a: 0 \}/.test(rt));
+  check('the composite ADDS light (one/one) and never darkens [glow-3d]',
+    /agent-bloom3d-composite'[\s\S]{0,400}?color: \{ srcFactor: 'one', dstFactor: 'one', operation: 'add' \}/.test(rt));
+  check('the composite runs over the RESOLVED frame with loadOp load [glow-3d]',
+    /agent-bloom3d-composite',\s*\n\s*colorAttachments: \[\{ view, loadOp: 'load', storeOp: 'store' \}\]/.test(rt));
+  check('the bloom tonemaps with the SHARED exposure constant [glow-3d]',
+    /const GLOW_EXPOSURE : f32 = \$\{GLOW_TONE_EXPOSURE\.toFixed\(4\)\};/.test(wgsl)
+    && /let t : f32 = x \/ \(1\.0 \+ x\);/.test(wgsl));
+  check('the composite keeps the hue exact (Reinhard on the MAGNITUDE) [glow-3d]',
+    /let m : f32 = max\(s\.r, max\(s\.g, s\.b\)\);/.test(wgsl)
+    && /clamp\(s \/ m, vec3<f32>\(0\.0\), vec3<f32>\(1\.0\)\) \* k/.test(wgsl));
+  check('core masks the bloom out of the agent\'s own opaque pixels [glow-3d]',
+    /let k : f32 = t \* \(1\.0 - bp\.core \* clamp\(textureSample\(prev, samp, in\.uv\)\.a, 0\.0, 1\.0\)\);/.test(wgsl));
+  check('the slider→chain mapping matches gl3d (levels / offset / spread) [glow-3d]', (() => {
+    const b = blockAfter(rt, /function encodeBloom3DChain\(/);
+    const g = readSrc('simulator/render/gl3d.ts');
+    // The same three formulas on both sides — a drift here is a visible free↔frame pop.
+    return /Math\.ceil\(Math\.log2\(Math\.max\(2, reach\)\)\)/.test(b) && /Math\.ceil\(Math\.log2\(Math\.max\(2, reach\)\)\)/.test(g)
+      && /reach \/ \(1 << levels\)/.test(b) && /reach \/ \(1 << levels\)/.test(g)
+      && /0\.9 - 0\.1 \* g\.steepness/.test(b) && /0\.9 - 0\.1 \* this\.glow\.steepness/.test(g);
+  })());
+  check('the level chain is freed on resize, rebuild, glow-off AND teardown [glow-3d]',
+    // Each site named individually — a loose call COUNT would absorb the loss of any
+    // one of them (the chain is canvas-sized: at 4K that is tens of MB per leak).
+    /function ensureBloom3DChain\([\s\S]{0,600}?destroyBloom3DChain\(rt\);/.test(rt)          // resize
+    && /function destroyBloom3DResources\(rt: AgentRenderSurface\): void \{\s*\n\s*destroyBloom3DChain\(rt\);/.test(rt)  // teardown
+    && /if \(wasOn && !on\) destroyBloom3DChain\(rt\);/.test(rt)                              // glow off
+    && blockAfter(rt, /async function setupAgentSphereRender\(/).includes('destroyBloom3DChain(rt);')   // rebuild
+    && rt.split('destroyBloom3DResources(rt);').length - 1 === 2);                            // both teardown paths
+  check('a bloom WGSL / pipeline failure degrades to NO glow, never a wrong frame [glow-3d]', (() => {
+    const b = blockAfter(rt, /function bloom3dActive\(/);
+    return b.includes('!!rt.bloom3dSpherePipeline') && b.includes('!!rt.bloom3dCompositePipeline');
+  })());
 }
 
 // B12 (SNAPSHOT-CONTENTS INVARIANT, user-reported: "the hemifield is being drawn

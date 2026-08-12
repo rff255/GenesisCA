@@ -4603,6 +4603,11 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
     let bgR = 0, bgG = 0, bgB = 0, bgA = 0;
     const bg = bg3dRef.current;   // [r,g,b,a] (0..1) | null (transparent → page shows)
     if (bg) { bgR = bg[0]!; bgG = bg[1]!; bgB = bg[2]!; bgA = bg[3]!; }
+    // GLOW — the worker's bloom (the WGSL sibling of gl3d's renderAgentBloom).
+    // `size` is a CSS-pixel reach; dpr is applied HERE (gl3d does `size * this.dpr`)
+    // so the worker needs no dpr of its own.
+    const glow = agentGlowRef.current;
+    const dpr = window.devicePixelRatio || 1;
     return {
       mode: '3d',
       mvp: Array.from(m.mvp),
@@ -4614,6 +4619,11 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       ambient: light.ambient, diffuse: light.diffuse, specular: light.specular,
       outlineOn: agentOutlinesRef.current ? 1 : 0,
       bgR, bgG, bgB, bgA,
+      glowOn: glow.on ? 1 : 0,
+      glowSizePx: glow.size * dpr,
+      glowIntensity: glow.intensity,
+      glowSteepness: glow.steepness,
+      glowCore: glow.core,
     };
   }, []);
 
@@ -4687,6 +4697,10 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       const v3 = view as AgentRenderView3D, v2 = view as AgentRenderView;
       const key = v3.mode === '3d'
         ? '3d|' + v3.mvp.join(',') + `|${v3.camForwardX}|${v3.lightX}|${v3.lightY}|${v3.lightZ}|${v3.ambient}|${v3.diffuse}|${v3.specular}|${v3.outlineOn}|${v3.bgR}|${v3.bgG}|${v3.bgB}|${v3.bgA}|${v3.halfX}|${v3.halfY}|${v3.halfZ}`
+          // The glow params ride this message too, so a slider move with a parked
+          // camera MUST re-post — without them in the key the bloom would keep the
+          // previous frame's settings until something else moved the camera.
+          + `|${v3.glowOn}|${v3.glowSizePx}|${v3.glowIntensity}|${v3.glowSteepness}|${v3.glowCore}`
         : `${v2.scalePx}|${v2.oxPx}|${v2.oyPx}|${v2.canvasW}|${v2.canvasH}|${v2.startX}|${v2.startY}|${v2.copiesX}|${v2.copiesY}|${v2.outlineOn}|${v2.glowOn}|${v2.glowSize}|${v2.glowIntensity}|${v2.glowSteepness}|${v2.glowCore}|${v2.bgR}|${v2.bgG}|${v2.bgB}|${v2.bgA}|${v2.showGrid ? 1 : 0}|${v2.showAgents ? 1 : 0}`;
       if (key === lastAgentCameraKeyRef.current) return;
       lastAgentCameraKeyRef.current = key;
@@ -4838,12 +4852,10 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
     // Phase C: 3D alpha-blend needs back-to-front sorting (gl3d's job), so a 3D
     // alpha-blend-on model stays on the CPU/frame path — don't attach.
     if (is3dRef.current && alpha3dRef.current) return;
-    // Same rule for 3D GLOW: the bloom is a gl3d post-process, so a glowing 3D
-    // model stays on the frame path. This re-check is load-bearing, not belt-and-
-    // braces — the gate above is computed in the MODEL effect, so any OTHER caller
-    // of this function (a display resize / re-attach, the metaballs effect) would
-    // otherwise happily re-attach mid-glow and the halo would silently vanish.
-    if (is3dRef.current && agentGlowRef.current.on) return;
+    // (3D GLOW used to pin frame mode here too. It no longer does: the worker's
+    // sphere pass carries its own dual-Kawase bloom — BLOOM3D_WGSL, ported from
+    // gl3d's renderAgentBloom — so a glowing 3D model keeps the free-mode
+    // no-readback fast path and the flip stays seamless.)
     if ((agentDirectRenderActiveRef.current && !reattach) || pendingAgentRenderCanvas.current) return;
     const worker = workerRef.current, canvas = canvasRef.current;
     if (!worker || !canvas) return;
@@ -7501,15 +7513,12 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       && resolveMaxBonds(model.centerBased) === 0
       // Phase C: 3D adds — alpha-blend OFF (translucent spheres need back-to-front
       // sorting = gl3d's job; opaque impostors here). 2D is unaffected.
-      && (!is3D || !alpha3dRef.current)
-      // 3D GLOW is frame-mode-only, by the same rule and the same precedent. The
-      // bloom is a gl3d (WebGL2) post-process; the worker's WGSL sphere pass has
-      // no bloom chain, so a free-mode frame would show no glow and the free↔frame
-      // flip would POP. Pinning the frame path makes the two trivially consistent
-      // — and recording/screenshots (which already force frame mode) get the glow
-      // for free. Porting the chain to the WGSL pass would lift this; see
-      // docs/HANDOFF_AGENT_GLOW_3D.md. 2D is unaffected (both 2D paths glow).
-      && (!is3D || !agentGlowRef.current.on);
+      // 3D GLOW is deliberately NOT a term. It used to be — the bloom was a gl3d-only
+      // post-process, so a glowing 3D model was pinned to the frame path. The worker's
+      // sphere pass now carries the SAME dual-Kawase bloom (BLOOM3D_WGSL, ported
+      // tap-for-tap from gl3d's renderAgentBloom, same tonemap constant), so both
+      // renderers bloom equivalently and a glowing model keeps free mode.
+      && (!is3D || !alpha3dRef.current);
     // E2 — DISPLAY-res single-canvas composite gate. A 2D grid+agents model with a
     // WebGPU GRID + a WebGPU AGENT target composites the grid layer + the agent discs
     // into ONE DISPLAY-sized canvas in one encoder: the grid layer is a fullscreen
@@ -9705,29 +9714,12 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
   // Redraw when the environment background changes (the ref is updated in its own
   // effect above; this one repaints so the change shows immediately even when paused).
   useEffect(() => { draw(); }, [bg2d, agentOutlines, showVision, draw]);
-  // A1 Glow option — redraw so the agent RenderView camera picks up the change.
-  // In 3D it additionally drives the free↔frame flip: the bloom lives in gl3d
-  // (the frame path), so turning it ON detaches the worker's sphere direct render
-  // and OFF re-attaches when eligible — byte-for-byte the alpha3d effect above,
-  // which exists for the same reason (a visual gl3d can do and the WGSL pass
-  // cannot). 2D never reaches either branch: both its paths draw the glow.
-  useEffect(() => {
-    if (is3dRef.current) {
-      if (agentGlow.on) {
-        if (agentDirectRenderActiveRef.current) {
-          agentDirectRenderActiveRef.current = false;
-          const sc = agentSphereCanvasRef.current;
-          if (sc) sc.style.display = 'none';
-          if (workerRef.current) workerRef.current.postMessage({ type: 'setAgentUiSync', on: true });
-          agentUiSyncPostedRef.current = true;
-          agentFrameAwaitingSnapshotRef.current = true;
-        }
-      } else if (agentRenderEligibleRef.current) {
-        maybeAttachAgentCanvas();
-      }
-    }
-    draw();
-  }, [agentGlow, draw, maybeAttachAgentCanvas]);
+  // Glow option — redraw so the agent RenderView camera picks up the change.
+  // NO free↔frame flip: 3D glow used to detach the worker's sphere render here (the
+  // bloom was gl3d-only), but the WGSL sphere pass carries its own bloom now, so
+  // every path renders it and the option is a pure re-present. `draw()` reaches the
+  // worker through postAgentCamera, whose 3D dedup key includes the glow params.
+  useEffect(() => { draw(); }, [agentGlow, draw]);
   // A1: re-evaluate UI-sync on state-signal changes (pause / recording / inspector
   // / edit target / metaballs suppression). Hover-during-play is handled per-frame.
   // `agentBrushMode` / `inspectMode` / `brushTarget` are in the dep list because

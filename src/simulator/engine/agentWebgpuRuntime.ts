@@ -1758,6 +1758,38 @@ export interface AgentRenderSurface {
   /** (W-1)/2, (H-1)/2, (D-1)/2 from the last RenderView3D — the ONLY source the
    *  line geometry derives its dims from, so lines and spheres share one frame. */
   renderHalf3D?: [number, number, number];
+  // --- 3D agent GLOW: the dual-Kawase bloom (BLOOM3D_WGSL), the WGSL sibling of
+  //     gl3d's renderAgentBloom. Pipelines are built with the sphere pass (they are
+  //     size-independent); the level CHAIN is canvas-sized and lazily built on the
+  //     first glowing present, so a glow-off model allocates nothing. ---
+  /** The last RenderView3D's glow selection (stashed, NOT written into the
+   *  RenderView3D uniform — the bloom passes read their own BloomParams). `sizePx`
+   *  is already in DEVICE pixels (the main thread applies dpr), so the worker needs
+   *  no dpr of its own. */
+  bloom3dGlow?: { on: boolean; sizePx: number; intensity: number; steepness: number; core: number } | null;
+  bloom3dDownPipeline?: GPURenderPipeline | null;
+  bloom3dUpPipeline?: GPURenderPipeline | null;
+  bloom3dCompositePipeline?: GPURenderPipeline | null;
+  /** A count-1 clone of the sphere pipeline for the bloom SOURCE re-render (gl3d's
+   *  level-0 FBO is single-sampled too — the source is blurred anyway). */
+  bloom3dSpherePipeline?: GPURenderPipeline | null;
+  bloom3dBGL?: GPUBindGroupLayout | null;
+  bloom3dParamBuf?: GPUBuffer | null;
+  bloom3dSampler?: GPUSampler | null;
+  /** Level 0 is the agent-layer SOURCE (rendered with its own depth); 1..levels are
+   *  the halvings. `bloom3dUp*` are the upsample ping targets for 1..levels-1 (the
+   *  up chain must not write the down level it is simultaneously reading). */
+  bloom3dTexs?: GPUTexture[];
+  bloom3dViews?: GPUTextureView[];
+  bloom3dUpTexs?: (GPUTexture | null)[];
+  bloom3dUpViews?: (GPUTextureView | null)[];
+  bloom3dSrcDepthTex?: GPUTexture | null;
+  bloom3dDownBGs?: (GPUBindGroup | null)[];
+  bloom3dUpBGs?: (GPUBindGroup | null)[];
+  bloom3dCompositeBG?: GPUBindGroup | null;
+  bloom3dW?: number;
+  bloom3dH?: number;
+  bloom3dLevels?: number;
   // E2 — single-canvas composite (2D grid+agents, WebGPU grid). The canvas is
   // DISPLAY-sized; one encoder presents the grid layer (a fullscreen triangle whose
   // FS INVERTS the camera — display pixel → world coord → cell → grid `colorsBuf`,
@@ -2098,6 +2130,17 @@ export interface AgentRenderView3D {
   ambient: number; diffuse: number; specular: number;
   outlineOn: number;
   bgR: number; bgG: number; bgB: number; bgA: number;  // clear colour
+  /** 3D GLOW (the dual-Kawase bloom). These ride the camera message but are NOT
+   *  written into the RenderView3D uniform — the bloom passes read their own
+   *  `BloomParams`, and leaving this struct alone keeps every existing member's
+   *  byte offset (and the verify-render-uniform-layouts entry) untouched.
+   *  `glowSizePx` is the CSS Size slider ALREADY multiplied by dpr, so the worker
+   *  needs no dpr of its own — gl3d computes exactly `size * this.dpr`. */
+  glowOn?: number;
+  glowSizePx?: number;
+  glowIntensity?: number;
+  glowSteepness?: number;
+  glowCore?: number;
 }
 const RENDER_VIEW_3D_BYTES = 176;
 
@@ -2253,6 +2296,123 @@ fn fsLine(in : LOut) -> @location(0) vec4<f32> {
   return vec4<f32>(in.color, 1.0);
 }`;
 
+// ---------------------------------------------------------------------------
+// 3D AGENT GLOW — the dual-Kawase BLOOM, in the WORKER's free-mode sphere pass.
+//
+// This is the WGSL sibling of gl3d's `renderAgentBloom` (BLOOM_DOWN_FS /
+// BLOOM_UP_FS / BLOOM_COMPOSITE_FS), ported tap-for-tap and constant-for-constant
+// so the free↔frame flip is seamless. Before it, 3D glow PINNED frame mode (the
+// alpha-blend precedent): the bloom was a gl3d post-process the worker had no
+// counterpart for, so a free-mode frame would have shown no halo and the flip
+// would POP. Porting the chain is what lifts that pin — a glowing 3D model now
+// keeps the no-readback fast path.
+//
+// WHY A BLOOM AND NOT THE 2D PER-AGENT HALO: see gl3d's block comment. A flat
+// additive billboard pasted on a LIT SPHERE reads as a sticker; a bloom blooms the
+// SHADING — highlight, rim, the lit side of every sphere — which is the depth cue
+// 3D wants. What IS shared with 2D is the COMPRESSION: `intensity` scales the
+// blurred layer and the result is compressed ONCE with the same Reinhard x/(1+x)
+// on the MAGNITUDE with the hue kept exact, at the same GLOW_TONE_EXPOSURE, so the
+// Intensity slider means the same thing in every view and on every path.
+//
+// RGBA8 END TO END, no float target — the same argument gl3d makes: the source is
+// the agent layer rendered ONCE with opaque depth-tested bodies (bounded in [0,1]
+// by construction) and every Kawase tap is a weighted AVERAGE (also bounded). The
+// only unbounded step is `× intensity`, which happens in the composite in float
+// immediately before the tonemap. Contrast the 2D halo (GLOW_HDR_FORMAT above),
+// which needs rgba16float precisely because it ACCUMULATES N unbounded halos.
+//
+// ONE bind-group layout serves all three passes (uniform + sampler + two textures);
+// `prev` is unused by fsDown and simply bound to the same texture as `tex` there.
+// `offset`/`spread` are frame-constant, so the half-pixel step is derived IN the
+// shader from textureDimensions — which is what lets the whole chain share ONE
+// 16-byte uniform written once per present instead of a per-level slot dance.
+// ---------------------------------------------------------------------------
+const BLOOM3D_MAX_LEVELS = 6;
+const BLOOM3D_PARAMS_BYTES = 16;
+const BLOOM3D_WGSL = `
+const GLOW_EXPOSURE : f32 = ${GLOW_TONE_EXPOSURE.toFixed(4)};
+
+struct BloomParams {
+  offset    : f32,
+  spread    : f32,
+  intensity : f32,
+  core      : f32,
+};
+
+@group(0) @binding(0) var<uniform> bp   : BloomParams;
+@group(0) @binding(1) var          samp : sampler;
+@group(0) @binding(2) var          tex  : texture_2d<f32>;
+@group(0) @binding(3) var          prev : texture_2d<f32>;
+
+struct FSIn { @builtin(position) pos : vec4<f32>, @location(0) uv : vec2<f32> };
+
+@vertex
+fn vsFull(@builtin(vertex_index) vi : u32) -> FSIn {
+  var p : vec2<f32> = vec2<f32>(-1.0, -1.0);
+  if (vi == 1u) { p = vec2<f32>(3.0, -1.0); }
+  else if (vi == 2u) { p = vec2<f32>(-1.0, 3.0); }
+  var out : FSIn;
+  out.pos = vec4<f32>(p, 0.0, 1.0);
+  // Clip → UV with the y flip (clip +y is up; texture v runs down).
+  out.uv = vec2<f32>(p.x * 0.5 + 0.5, 0.5 - p.y * 0.5);
+  return out;
+}
+
+// Dual-Kawase DOWNSAMPLE — 5 taps, weights 4/1/1/1/1 over 8. The half-pixel step
+// is taken against the SOURCE dims (gl3d: (0.5/sw, 0.5/sh) * offset).
+@fragment
+fn fsDown(in : FSIn) -> @location(0) vec4<f32> {
+  let hp : vec2<f32> = (vec2<f32>(0.5) / vec2<f32>(textureDimensions(tex, 0))) * bp.offset;
+  var s : vec4<f32> = textureSample(tex, samp, in.uv) * 4.0;
+  s = s + textureSample(tex, samp, in.uv - hp);
+  s = s + textureSample(tex, samp, in.uv + hp);
+  s = s + textureSample(tex, samp, in.uv + vec2<f32>(hp.x, -hp.y));
+  s = s + textureSample(tex, samp, in.uv - vec2<f32>(hp.x, -hp.y));
+  return s / 8.0;
+}
+
+// Dual-Kawase UPSAMPLE — 8 taps, weights 1/2/1/2/1/2/1/2 over 12 — mixed with the
+// same-size downsample level. spread IS the Falloff slider: high spread lets the
+// WIDE (coarser, already-upsampled) content dominate ⇒ a soft far halo; low spread
+// lets the TIGHT local level dominate ⇒ a compact one. The half-pixel step is taken
+// against the DESTINATION dims, which is exactly what prev (the same-size
+// downsample level) measures — gl3d uses (0.5/dw, 0.5/dh) * offset.
+@fragment
+fn fsUp(in : FSIn) -> @location(0) vec4<f32> {
+  let hp : vec2<f32> = (vec2<f32>(0.5) / vec2<f32>(textureDimensions(prev, 0))) * bp.offset;
+  var s : vec4<f32> = textureSample(tex, samp, in.uv + vec2<f32>(-hp.x * 2.0, 0.0));
+  s = s + textureSample(tex, samp, in.uv + vec2<f32>(-hp.x, hp.y)) * 2.0;
+  s = s + textureSample(tex, samp, in.uv + vec2<f32>(0.0, hp.y * 2.0));
+  s = s + textureSample(tex, samp, in.uv + vec2<f32>(hp.x, hp.y)) * 2.0;
+  s = s + textureSample(tex, samp, in.uv + vec2<f32>(hp.x * 2.0, 0.0));
+  s = s + textureSample(tex, samp, in.uv + vec2<f32>(hp.x, -hp.y)) * 2.0;
+  s = s + textureSample(tex, samp, in.uv + vec2<f32>(0.0, -hp.y * 2.0));
+  s = s + textureSample(tex, samp, in.uv + vec2<f32>(-hp.x, -hp.y)) * 2.0;
+  return mix(textureSample(prev, samp, in.uv), s / 12.0, bp.spread);
+}
+
+// The composite — ADDITIVE onto the finished frame, so the pass can only ever ADD
+// LIGHT: no pixel of the scene gets darker and every body / wireframe below renders
+// exactly as it does with glow off (that is the 3D form of 2D's solid-core
+// invariant, and what makes glow-off byte-identical).
+//
+// core is the 3D analogue of the 2D solid core and keeps the same promise: it
+// masks the bloom OUT of the agent's own opaque pixels (1 - core*coverage), so at
+// core = 1 an agent BODY is left bit-exact and only the surrounding halo is added.
+// prev is the full-res agent layer, whose ALPHA is that coverage (the sphere FS
+// writes alpha 1 on a body; the source pass clears to 0).
+@fragment
+fn fsComposite(in : FSIn) -> @location(0) vec4<f32> {
+  let s : vec3<f32> = textureSample(tex, samp, in.uv).rgb * bp.intensity;
+  let m : f32 = max(s.r, max(s.g, s.b));
+  if (m <= 0.0) { discard; }
+  let x : f32 = m * GLOW_EXPOSURE;
+  let t : f32 = x / (1.0 + x);              // Reinhard on the MAGNITUDE, hue exact
+  let k : f32 = t * (1.0 - bp.core * clamp(textureSample(prev, samp, in.uv).a, 0.0, 1.0));
+  return vec4<f32>(clamp(s / m, vec3<f32>(0.0), vec3<f32>(1.0)) * k, k);
+}`;
+
 /** Set the scene-anchored geometry the 3D agent render draws: which wireframes
  *  (mirrors the panel's Viz3D axes/grid/bounds) and the brush interaction plane
  *  (null when the toggle is off). Clears the geometry cache so the next present
@@ -2383,6 +2543,210 @@ function encodeGlowHdrPass(rt: AgentRenderSurface, enc: GPUCommandEncoder, w: nu
   return true;
 }
 
+/** Write the frame-constant bloom parameters (16 bytes, mirrors `BloomParams` in
+ *  BLOOM3D_WGSL). ONE buffer serves the whole chain — every level's half-pixel step
+ *  is derived in-shader from textureDimensions, so only the sub-level `offset`, the
+ *  Falloff `spread` and the composite's `intensity`/`core` cross the bus. */
+function writeBloom3DParams(rt: AgentRenderSurface, offset: number, spread: number, intensity: number, core: number): void {
+  if (!rt.bloom3dParamBuf) return;
+  const ab = new ArrayBuffer(BLOOM3D_PARAMS_BYTES);
+  const f = new Float32Array(ab);
+  f[0] = offset; f[1] = spread; f[2] = intensity; f[3] = core;
+  rt.device.queue.writeBuffer(rt.bloom3dParamBuf, 0, ab);
+}
+
+/** Free the canvas-sized bloom level chain (textures + their bind groups). The
+ *  size-independent pipelines / sampler / uniform survive — they are released with
+ *  the surface. Called on a resize, on a pipeline rebuild, when Glow is switched
+ *  OFF (at 4K the chain is tens of MB nothing would read), and on teardown. */
+function destroyBloom3DChain(rt: AgentRenderSurface): void {
+  for (const t of rt.bloom3dTexs ?? []) { try { t.destroy(); } catch { /* non-fatal */ } }
+  for (const t of rt.bloom3dUpTexs ?? []) { if (t) { try { t.destroy(); } catch { /* non-fatal */ } } }
+  if (rt.bloom3dSrcDepthTex) { try { rt.bloom3dSrcDepthTex.destroy(); } catch { /* non-fatal */ } }
+  rt.bloom3dTexs = []; rt.bloom3dViews = [];
+  rt.bloom3dUpTexs = []; rt.bloom3dUpViews = [];
+  rt.bloom3dSrcDepthTex = null;
+  rt.bloom3dDownBGs = []; rt.bloom3dUpBGs = []; rt.bloom3dCompositeBG = null;
+  rt.bloom3dW = 0; rt.bloom3dH = 0; rt.bloom3dLevels = 0;
+}
+
+/** Teardown: the level chain PLUS the size-independent resources (the shared
+ *  uniform; the pipelines / sampler / layout die with the device). Kept separate
+ *  from destroyBloom3DChain because the chain alone is freed on every resize,
+ *  rebuild and glow-off, where the uniform must survive. */
+function destroyBloom3DResources(rt: AgentRenderSurface): void {
+  destroyBloom3DChain(rt);
+  if (rt.bloom3dParamBuf) { try { rt.bloom3dParamBuf.destroy(); } catch { /* non-fatal */ } rt.bloom3dParamBuf = null; }
+  rt.bloom3dDownPipeline = null; rt.bloom3dUpPipeline = null;
+  rt.bloom3dCompositePipeline = null; rt.bloom3dSpherePipeline = null;
+  rt.bloom3dBGL = null; rt.bloom3dSampler = null; rt.bloom3dGlow = null;
+}
+
+/** Allocate (or resize) the Kawase level chain + every pass's bind group. RGBA8 +
+ *  LINEAR + CLAMP, mirroring gl3d; level 0 additionally carries a depth texture so
+ *  the agent source re-render self-occludes. Returns false if anything failed to
+ *  build, which makes the caller skip the whole bloom rather than render a wrong
+ *  frame. */
+function ensureBloom3DChain(rt: AgentRenderSurface, w: number, h: number, levels: number): boolean {
+  if (!rt.bloom3dBGL || !rt.bloom3dParamBuf || !rt.bloom3dSampler) return false;
+  if (rt.bloom3dW === w && rt.bloom3dH === h && rt.bloom3dLevels === levels && (rt.bloom3dTexs?.length ?? 0) > 0) return true;
+  destroyBloom3DChain(rt);
+  // Declared OUTSIDE the try so the catch can free what was already allocated: on a
+  // mid-build throw (an OOM at 4K) these are not yet on `rt`, so destroyBloom3DChain
+  // could not reach them and every texture built so far would leak.
+  const texs: GPUTexture[] = [], views: GPUTextureView[] = [];
+  const upTexs: (GPUTexture | null)[] = [], upViews: (GPUTextureView | null)[] = [];
+  let depth: GPUTexture | null = null;
+  try {
+    const mk = (lw: number, lh: number): { tex: GPUTexture; view: GPUTextureView } => {
+      const tex = rt.device.createTexture({
+        label: 'agent-bloom3d-level', size: { width: Math.max(1, lw), height: Math.max(1, lh) },
+        format: 'rgba8unorm',
+        usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
+      });
+      return { tex, view: tex.createView() };
+    };
+    for (let i = 0; i <= levels; i++) {
+      const r = mk(Math.max(1, w >> i), Math.max(1, h >> i));
+      texs.push(r.tex); views.push(r.view);
+      if (i >= 1 && i < levels) {
+        const u = mk(Math.max(1, w >> i), Math.max(1, h >> i));
+        upTexs[i] = u.tex; upViews[i] = u.view;
+      } else { upTexs[i] = null; upViews[i] = null; }
+    }
+    // Level-0 depth for the source re-render. Single-sampled: the bloom SOURCE is
+    // not multisampled (gl3d's level-0 FBO isn't either — it gets blurred anyway),
+    // and a depth attachment must match its colour attachment's sample count.
+    depth = rt.device.createTexture({
+      label: 'agent-bloom3d-src-depth', size: { width: Math.max(1, w), height: Math.max(1, h) },
+      format: 'depth24plus', usage: GPUTextureUsage.RENDER_ATTACHMENT,
+    });
+    const bg = (tex: GPUTextureView, prev: GPUTextureView): GPUBindGroup => rt.device.createBindGroup({
+      label: 'agent-bloom3d-bg', layout: rt.bloom3dBGL!,
+      entries: [
+        { binding: 0, resource: { buffer: rt.bloom3dParamBuf! } },
+        { binding: 1, resource: rt.bloom3dSampler! },
+        { binding: 2, resource: tex },
+        { binding: 3, resource: prev },
+      ],
+    });
+    const downBGs: (GPUBindGroup | null)[] = [null];
+    // fsDown never reads `prev`; bind the source texture there so the group still
+    // matches the shared layout.
+    for (let i = 1; i <= levels; i++) downBGs[i] = bg(views[i - 1]!, views[i - 1]!);
+    const upBGs: (GPUBindGroup | null)[] = [null];
+    // Up level i reads the coarser result (level i+1's up target, or the deepest
+    // down level) and mixes it with the same-size DOWN level.
+    for (let i = levels - 1; i >= 1; i--) {
+      const coarser = i + 1 <= levels - 1 ? upViews[i + 1]! : views[levels]!;
+      upBGs[i] = bg(coarser, views[i]!);
+    }
+    const finalView = levels > 1 ? upViews[1]! : views[levels]!;
+    const compositeBG = bg(finalView, views[0]!);
+    rt.bloom3dTexs = texs; rt.bloom3dViews = views;
+    rt.bloom3dUpTexs = upTexs; rt.bloom3dUpViews = upViews;
+    rt.bloom3dSrcDepthTex = depth;
+    rt.bloom3dDownBGs = downBGs; rt.bloom3dUpBGs = upBGs; rt.bloom3dCompositeBG = compositeBG;
+    rt.bloom3dW = w; rt.bloom3dH = h; rt.bloom3dLevels = levels;
+    return true;
+  } catch {
+    for (const t of texs) { try { t.destroy(); } catch { /* non-fatal */ } }
+    for (const t of upTexs) { if (t) { try { t.destroy(); } catch { /* non-fatal */ } } }
+    if (depth) { try { depth.destroy(); } catch { /* non-fatal */ } }
+    destroyBloom3DChain(rt);
+    return false;
+  }
+}
+
+/** Is the 3D bloom going to draw anything this frame? A zero Size means no halo
+ *  and a zero Intensity means no light, so both are treated as off rather than run
+ *  as an expensive no-op (matching gl3d's bloomActive). */
+function bloom3dActive(rt: AgentRenderSurface, hw: number): boolean {
+  const g = rt.bloom3dGlow;
+  return !!g && g.on && g.intensity > 0 && g.sizePx > 0 && hw > 0
+    && !!rt.bloom3dSpherePipeline && !!rt.bloom3dDownPipeline
+    && !!rt.bloom3dUpPipeline && !!rt.bloom3dCompositePipeline;
+}
+
+/** Append the bloom SOURCE re-render + the Kawase down/up chain. Everything here
+ *  writes offscreen level textures — the composite (which touches the canvas) is a
+ *  separate call so it can be appended AFTER the main sphere pass. Returns false if
+ *  the chain could not be built, and the caller then skips the composite too, so a
+ *  failure degrades to "no glow", never to a wrong frame. */
+function encodeBloom3DChain(rt: AgentRenderSurface, enc: GPUCommandEncoder, w: number, h: number, hw: number): boolean {
+  const g = rt.bloom3dGlow!;
+  // Slider → chain geometry, gl3d's mapping verbatim (renderAgentBloom). `sizePx`
+  // is already dpr-scaled by the main thread, which is gl3d's `size * this.dpr`.
+  const reach = Math.max(1, g.sizePx);
+  const levels = Math.max(1, Math.min(BLOOM3D_MAX_LEVELS, Math.ceil(Math.log2(Math.max(2, reach)))));
+  const offset = Math.max(0.5, Math.min(1.5, reach / (1 << levels)));
+  const spread = Math.max(0.25, Math.min(0.85, 0.9 - 0.1 * g.steepness));
+  if (!ensureBloom3DChain(rt, w, h, levels)) return false;
+  writeBloom3DParams(rt, offset, spread, g.intensity, Math.max(0, Math.min(1, g.core)));
+
+  // 1. the agent layer, ALONE, into level 0 (transparent clear, own depth). Only
+  //    the SPHERES: the scene wireframes / brush plane must never bloom (gl3d's
+  //    bloom source draws no lines either), and a free-mode 3D model is agents-only
+  //    by gate, so there are no voxels to occlude against.
+  {
+    const p = enc.beginRenderPass({
+      label: 'agent-bloom3d-source',
+      colorAttachments: [{ view: rt.bloom3dViews![0]!, loadOp: 'clear', storeOp: 'store', clearValue: { r: 0, g: 0, b: 0, a: 0 } }],
+      depthStencilAttachment: { view: rt.bloom3dSrcDepthTex!.createView(), depthClearValue: 1.0, depthLoadOp: 'clear', depthStoreOp: 'discard' },
+    });
+    p.setPipeline(rt.bloom3dSpherePipeline!);
+    p.setBindGroup(0, rt.renderSphereBindGroup!);
+    p.draw(4, Math.max(1, hw));
+    p.end();
+  }
+  // 2. down: level i-1 → level i
+  for (let i = 1; i <= levels; i++) {
+    const p = enc.beginRenderPass({
+      label: 'agent-bloom3d-down',
+      colorAttachments: [{ view: rt.bloom3dViews![i]!, loadOp: 'clear', storeOp: 'store', clearValue: { r: 0, g: 0, b: 0, a: 0 } }],
+    });
+    p.setPipeline(rt.bloom3dDownPipeline!);
+    p.setBindGroup(0, rt.bloom3dDownBGs![i]!);
+    p.draw(3);
+    p.end();
+  }
+  // 3. up: the coarser level → level i, mixed with the down level of that size
+  for (let i = levels - 1; i >= 1; i--) {
+    const p = enc.beginRenderPass({
+      label: 'agent-bloom3d-up',
+      colorAttachments: [{ view: rt.bloom3dUpViews![i]!, loadOp: 'clear', storeOp: 'store', clearValue: { r: 0, g: 0, b: 0, a: 0 } }],
+    });
+    p.setPipeline(rt.bloom3dUpPipeline!);
+    p.setBindGroup(0, rt.bloom3dUpBGs![i]!);
+    p.draw(3);
+    p.end();
+  }
+  return true;
+}
+
+/** Append the bloom COMPOSITE — a fullscreen triangle ADDED onto the finished
+ *  frame, in its own pass with `loadOp: 'load'` over the already-resolved swap-chain
+ *  texture.
+ *
+ *  WHY POST-RESOLVE RATHER THAN INSIDE THE MULTISAMPLED PASS: the composite quad has
+ *  FULL coverage on every pixel, so it adds the SAME value to every sample of a
+ *  pixel — and an MSAA resolve is a linear average, so avg(dst_i + C) == avg(dst_i)
+ *  + C. Compositing before or after the resolve is therefore mathematically the same
+ *  image (bar 8-bit saturation at already-bright pixels), and post-resolve needs no
+ *  multisampled clone of the composite pipeline. gl3d composites onto its own
+ *  (multisampled, `antialias: true`) default framebuffer — the same identity is why
+ *  the two agree. */
+function encodeBloom3DComposite(rt: AgentRenderSurface, enc: GPUCommandEncoder, view: GPUTextureView): void {
+  const p = enc.beginRenderPass({
+    label: 'agent-bloom3d-composite',
+    colorAttachments: [{ view, loadOp: 'load', storeOp: 'store' }],
+  });
+  p.setPipeline(rt.bloom3dCompositePipeline!);
+  p.setBindGroup(0, rt.bloom3dCompositeBG!);
+  p.draw(3);
+  p.end();
+}
+
 /** Write the 3D camera/lighting uniform (176 bytes, mirrors RENDER_VIEW_3D_WGSL). */
 export function uploadAgentRenderView3D(rt: AgentRenderSurface, v: AgentRenderView3D): void {
   if (!rt.renderView3DBuf) return;
@@ -2404,6 +2768,21 @@ export function uploadAgentRenderView3D(rt: AgentRenderSurface, v: AgentRenderVi
   rt.renderHalf3D = [v.halfX, v.halfY, v.halfZ];
   const a = v.bgA;
   rt.renderClear = [v.bgR * a, v.bgG * a, v.bgB * a, a];
+  // GLOW — stashed, not written into the uniform above (the bloom passes carry
+  // their own BloomParams). Switching it OFF frees the canvas-sized level chain
+  // immediately, exactly as gl3d's setAgentGlow does; safe here because every
+  // present path encodes AND submits synchronously, so no command buffer can be
+  // recorded-but-unsubmitted across this point.
+  const wasOn = !!rt.bloom3dGlow?.on;
+  const on = (v.glowOn ?? 0) !== 0;
+  rt.bloom3dGlow = {
+    on,
+    sizePx: v.glowSizePx ?? 0,
+    intensity: v.glowIntensity ?? 0,
+    steepness: v.glowSteepness ?? 1,
+    core: v.glowCore ?? 0,
+  };
+  if (wasOn && !on) destroyBloom3DChain(rt);
 }
 
 /** Set up direct render on the transferred OffscreenCanvas. Clones the grid's
@@ -2505,12 +2884,77 @@ async function setupAgentSphereRender(rt: AgentRenderSurface, canvas: OffscreenC
         { binding: 3, resource: { buffer: renderView3DBuf } },
       ],
     });
+    // 3D GLOW — the bloom pipelines. Size-independent, so they are built here with
+    // the sphere pass and live as long as the surface; only the canvas-sized level
+    // CHAIN is lazy (ensureBloom3DChain, on the first glowing present). A compile
+    // failure here leaves them null and `bloom3dActive` returns false, so the model
+    // renders exactly as it does with glow off — the pass degrades, never breaks.
+    const bloomModule = rt.device.createShaderModule({ label: 'agent-bloom3d', code: BLOOM3D_WGSL });
+    let bloomOk = true;
+    {
+      const binfo = await bloomModule.getCompilationInfo();
+      const berrs = binfo.messages.filter(m => m.type === 'error');
+      if (berrs.length > 0) {
+        bloomOk = false;
+        // eslint-disable-next-line no-console
+        console.error('[agents/webgpu] 3D bloom WGSL compile errors:\n' + berrs.map(m => `  line ${m.lineNum}: ${m.message}`).join('\n'));
+      }
+    }
+    let bloomDownPipeline: GPURenderPipeline | null = null;
+    let bloomUpPipeline: GPURenderPipeline | null = null;
+    let bloomCompositePipeline: GPURenderPipeline | null = null;
+    let bloomSpherePipeline: GPURenderPipeline | null = null;
+    let bloomBGL: GPUBindGroupLayout | null = null;
+    let bloomParamBuf: GPUBuffer | null = null;
+    let bloomSampler: GPUSampler | null = null;
+    if (bloomOk) {
+      bloomBGL = rt.device.createBindGroupLayout({
+        label: 'agent-bloom3d-bgl',
+        entries: [
+          { binding: 0, visibility: GPUShaderStage.FRAGMENT, buffer: { type: 'uniform' } },
+          { binding: 1, visibility: GPUShaderStage.FRAGMENT, sampler: { type: 'filtering' } },
+          { binding: 2, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'float' } },
+          { binding: 3, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'float' } },
+        ],
+      });
+      const bloomPL = rt.device.createPipelineLayout({ label: 'agent-bloom3d-pl', bindGroupLayouts: [bloomBGL] });
+      const mkBloom = (label: string, fs: string, target: GPUColorTargetState): GPURenderPipeline =>
+        rt.device.createRenderPipeline({
+          label, layout: bloomPL,
+          vertex: { module: bloomModule, entryPoint: 'vsFull' },
+          fragment: { module: bloomModule, entryPoint: fs, targets: [target] },
+          primitive: { topology: 'triangle-list' },
+        });
+      bloomDownPipeline = mkBloom('agent-bloom3d-down', 'fsDown', { format: 'rgba8unorm' });
+      bloomUpPipeline = mkBloom('agent-bloom3d-up', 'fsUp', { format: 'rgba8unorm' });
+      // ADD LIGHT ONLY — the composite can never darken a pixel below it, which is
+      // the 3D form of the solid-core invariant (and what keeps glow-off identical).
+      bloomCompositePipeline = mkBloom('agent-bloom3d-composite', 'fsComposite', {
+        format,
+        blend: {
+          color: { srcFactor: 'one', dstFactor: 'one', operation: 'add' },
+          alpha: { srcFactor: 'one', dstFactor: 'one', operation: 'add' },
+        },
+      });
+      // The SOURCE re-render: the same sphere shader, single-sampled, into the
+      // rgba8unorm level-0 texture (gl3d's level-0 FBO is single-sampled too).
+      bloomSpherePipeline = rt.device.createRenderPipeline({
+        label: 'agent-bloom3d-sphere-src', layout: pl,
+        vertex: { module, entryPoint: 'vsMain' },
+        fragment: { module, entryPoint: 'fsMain', targets: [{ format: 'rgba8unorm' }] },
+        primitive: { topology: 'triangle-strip' },
+        depthStencil: { format: 'depth24plus', depthWriteEnabled: true, depthCompare: 'less' },
+      });
+      bloomParamBuf = rt.device.createBuffer({ label: 'agent-bloom3d-params', size: BLOOM3D_PARAMS_BYTES, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+      bloomSampler = rt.device.createSampler({ label: 'agent-bloom3d-sampler', magFilter: 'linear', minFilter: 'linear', addressModeU: 'clamp-to-edge', addressModeV: 'clamp-to-edge' });
+    }
     // ---- ATOMIC COMMIT — NO await below this line (see the ordering rule on
     // buildAgentDiscPipelines): every field points at the new resources before
     // anything old is destroyed, so a present landing mid-rebuild can never see a
     // live field referencing a destroyed one. -------------------------------
     const oldView3DBuf = rt.renderView3DBuf;
     const oldLineBuf = rt.renderLineBuf;
+    const oldBloomParamBuf = rt.bloom3dParamBuf;
     rt.renderCanvas = canvas;
     rt.renderCtx = ctx;
     rt.render3D = true;
@@ -2519,6 +2963,18 @@ async function setupAgentSphereRender(rt: AgentRenderSurface, canvas: OffscreenC
     rt.renderSphereBindGroup = renderBindGroup;
     rt.renderLinePipeline = linePipeline;
     rt.renderLineBindGroup = lineBindGroup;
+    rt.bloom3dDownPipeline = bloomDownPipeline;
+    rt.bloom3dUpPipeline = bloomUpPipeline;
+    rt.bloom3dCompositePipeline = bloomCompositePipeline;
+    rt.bloom3dSpherePipeline = bloomSpherePipeline;
+    rt.bloom3dBGL = bloomBGL;
+    rt.bloom3dParamBuf = bloomParamBuf;
+    rt.bloom3dSampler = bloomSampler;
+    // A re-attach rebuilds on the SAME surface: the previous level chain's bind
+    // groups belong to the OLD layout / uniform buffer, so drop it rather than
+    // orphan it. Must follow the bloom3d* commits above — the next
+    // ensureBloom3DChain rebuilds against whatever `rt` now holds.
+    destroyBloom3DChain(rt);
     // A re-attach rebuilds on the SAME surface — the old vertex buffer belongs to
     // the old view uniform's signature; force a rebuild against the current viz.
     rt.renderLineBuf = null;
@@ -2530,6 +2986,7 @@ async function setupAgentSphereRender(rt: AgentRenderSurface, canvas: OffscreenC
     // previous resources rather than orphaning them. LAST, once nothing points at them.
     if (oldView3DBuf) { try { oldView3DBuf.destroy(); } catch { /* non-fatal */ } }
     if (oldLineBuf) { try { oldLineBuf.destroy(); } catch { /* non-fatal */ } }
+    if (oldBloomParamBuf) { try { oldBloomParamBuf.destroy(); } catch { /* non-fatal */ } }
     return true;
   } catch {
     rt.renderActive = false;
@@ -3074,6 +3531,11 @@ function presentAgentSpheresEncode(rt: AgentRenderSurface, enc: GPUCommandEncode
   // Rebuild the scene-wireframe geometry (bounds/grid/axes) when the viz flags or
   // world dims changed — buffer writes must happen OUTSIDE the render pass.
   ensureAgentLineBuffer(rt);
+  // 3D GLOW — the bloom SOURCE re-render + the Kawase chain, all offscreen. Encoded
+  // BEFORE the main pass (independent targets); its COMPOSITE is appended after,
+  // over the resolved frame. This is what lets a glowing 3D model stay in free mode
+  // instead of pinning gl3d's frame path.
+  const glow = bloom3dActive(rt, hw) && encodeBloom3DChain(rt, enc, tex.width, tex.height, hw);
   const [cr, cg, cb, ca] = rt.renderClear ?? [0, 0, 0, 0];
   const pass = enc.beginRenderPass({
     label: 'agent-sphere-present',
@@ -3101,6 +3563,11 @@ function presentAgentSpheresEncode(rt: AgentRenderSurface, enc: GPUCommandEncode
     pass.draw(rt.renderLineCount!);
   }
   pass.end();
+  // The halo goes on LAST, additively, over the resolved frame — so bodies,
+  // wireframes and the brush plane are pixel-identical to a glow-off frame with
+  // light merely added on top. (The wireframes are never in the bloom SOURCE, so
+  // they do not bloom — matching gl3d, whose source FBO draws no lines either.)
+  if (glow) encodeBloom3DComposite(rt, enc, view);
 }
 
 /** Present one frame (own encoder + submit) — for camera changes / mutation
@@ -3213,6 +3680,7 @@ export function destroyAgentRenderSurface(rt: AgentRenderSurface | null): void {
   if (rt.renderDepthTex) { try { rt.renderDepthTex.destroy(); } catch { /* non-fatal */ } rt.renderDepthTex = null; }
   if (rt.renderMsaaTex) { try { rt.renderMsaaTex.destroy(); } catch { /* non-fatal */ } rt.renderMsaaTex = null; }
   destroyGlowHdrTex(rt);
+  destroyBloom3DResources(rt);
   const bufs = [rt.agentF32Buf, rt.agentAliveBuf, rt.agentColorsBuf, rt.renderViewBuf ?? null, rt.renderView3DBuf ?? null, rt.gridPresentUniform ?? null, rt.renderLineBuf ?? null];
   for (const b of bufs) { if (b) try { b.destroy(); } catch { /* non-fatal */ } }
   rt.renderLineBuf = null; rt.renderLineCount = 0; rt.renderLineSig = '';
@@ -4109,6 +4577,7 @@ export function destroyAgentWebGPURuntime(rt: AgentWebGPURuntime | null): void {
   if (rt.renderDepthTex) { try { rt.renderDepthTex.destroy(); } catch { /* non-fatal */ } rt.renderDepthTex = null; }
   if (rt.renderMsaaTex) { try { rt.renderMsaaTex.destroy(); } catch { /* non-fatal */ } rt.renderMsaaTex = null; }
   destroyGlowHdrTex(rt);
+  destroyBloom3DResources(rt);
   for (const b of bufs) { if (b) try { b.destroy(); } catch { /* non-fatal */ } }
   rt.renderLineBuf = null; rt.renderLineCount = 0; rt.renderLineSig = '';
   for (const bucket of rt.stagingPool.values()) for (const e of bucket) { try { e.buffer.destroy(); } catch { /* non-fatal */ } }

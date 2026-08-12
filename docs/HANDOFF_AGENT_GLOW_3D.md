@@ -279,12 +279,34 @@ sanctioned frame-pin detach to **two** (alpha-blend + glow), both required to
 POST before they mirror. Negative-controlled: deleting the glow detach's post
 fails exactly that check.
 
-### The one follow-up
-**Port the bloom chain to the worker's WGSL sphere pass** to lift the frame pin,
-so a 3D glow model keeps the free-mode GPU fast path. The 2D HDR scaffolding in
-`agentWebgpuRuntime.ts` (`GLOW_HDR_FORMAT`, `ensureGlowHdrTex` /
-`destroyGlowHdrTex` / `encodeGlowHdrPass`, `GLOW_COMPOSE_WGSL`) is still the
-right starting point, and the RGBA8 finding above means the WGSL side does not
-need the HDR target either. If that lands, the free↔frame match becomes a real
-concern again and **the visible-pane eyeball this doc demanded comes back with
-it**.
+### The one follow-up — DONE
+**Port the bloom chain to the worker's WGSL sphere pass**, lifting the frame pin
+so a 3D glow model keeps the free-mode GPU fast path. **Shipped**: `BLOOM3D_WGSL`
+in `agentWebgpuRuntime.ts` is the tap-for-tap WGSL port of `renderAgentBloom`,
+and all three pin sites (the `agentRenderEligible` term, the
+`maybeAttachAgentCanvas` re-check, the `agentGlow` effect's detach branch) are
+gone. The RGBA8 finding above held: the WGSL side needs no HDR target either, so
+the 2D scaffolding (`GLOW_HDR_FORMAT` / `ensureGlowHdrTex` /
+`encodeGlowHdrPass` / `GLOW_COMPOSE_WGSL`) was left alone — it serves the 2D
+per-agent halo, which genuinely accumulates.
+
+Notes worth keeping from that work:
+- **The seamlessness question was settled by measurement, not by eyeball.** An
+  offscreen rig fed the SHIPPED WGSL chain and the SHIPPED GLSL chain the
+  identical source layer and compared pixels: **0 differing bytes of 262,144,
+  maxDelta 0**, across five parameter cases — the two are bit-identical, not
+  merely close. (Five deliberate shader/arithmetic mutations each produced
+  61k–107k differing bytes, so the comparison is non-vacuous.) That removes the
+  free↔frame concern this section anticipated: the remaining difference between
+  the two paths is rasterization, which the `SCENE_MSAA_SAMPLES` work already
+  matched.
+- **The composite sits AFTER the MSAA resolve** rather than inside the
+  multisampled pass. A fullscreen additive quad adds the same value to every
+  sample, and a resolve is a linear average, so the two orders are the same
+  image — and post-resolve avoids a multisampled clone of the composite
+  pipeline.
+- **`RenderView3D` was not widened.** The glow settings ride the camera message
+  and are stashed on `rt`, so no existing uniform member moved; the bloom passes
+  read their own 16-byte `BloomParams` (registered in
+  `verify-render-uniform-layouts.mjs`).
+- **Alpha blend is now the only 3D frame pin.**

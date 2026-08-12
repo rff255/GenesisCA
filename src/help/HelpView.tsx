@@ -3353,10 +3353,10 @@ export function HelpView() {
               surrounding spill is added). Brightness is compressed with the same curve the 2D
               glow uses, so <em>Intensity</em> means the same thing in both views. Only the agents
               bloom &mdash; a CA grid behind them is never blurred &mdash; and the effect can only
-              ever <em>add</em> light, so nothing in the scene gets darker. While 3D glow is on the
-              viewport renders through the main 3D renderer rather than the worker&apos;s fast
-              path, so a very large population may run slower; turning it off restores the fast
-              path. Screenshots and recordings include it.</li>
+              ever <em>add</em> light, so nothing in the scene gets darker. Both 3D renderers draw
+              the bloom &mdash; the main viewport one and the worker&apos;s fast path &mdash; so
+              turning glow on costs you nothing in speed and looks identical either way.
+              Screenshots and recordings include it.</li>
             <li><strong>Direct agent render &mdash; 3D.</strong> The same fast path works
               for <em>3D</em> agents-only models: while you just watch, the worker draws the
               agents as GPU spheres <em>and</em> the scene-anchored geometry (axes, floor grid,
