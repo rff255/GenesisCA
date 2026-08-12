@@ -94,7 +94,7 @@ const NEVER_PURE_TYPES = new Set<string>([
   // read MUST re-evaluate each iteration. Exactly the getIndicator rationale.
   'getVariable',
   // Bond-Graph Agents: a neighbour's attribute can be mutated mid-step by
-  // Set Agent Attribute (immediate single-buffer write), so two reads of the
+  // a by-id Set Attribute (immediate single-buffer write), so two reads of the
   // same neighbour attribute are not interchangeable.
   'getAgentAttribute',
   // Generic Agent Platform — impure agent-equivalent ops: the gathers read

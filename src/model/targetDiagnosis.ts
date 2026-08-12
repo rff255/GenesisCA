@@ -314,9 +314,9 @@ function webgpuAgentFundamentals(model: CAModel): Reason[] {
   const out: Reason[] = [];
   // Cross-agent OVERWRITE with a WIRED, non-spawn-handle id — sequential-order
   // dependent, so the parallel GPU cannot honour it. Detected exactly the way the
-  // gate does (same 4 node types, same port names, same Create-Agent exemption).
+  // gate does (same node types, same port names, same Create-Agent exemption).
   {
-    const CROSS_AGENT_OVERWRITE = new Set(['setAgentAttribute', 'setAgentsAttribute', 'setAgentPosition', 'setAgentRadius']);
+    const CROSS_AGENT_OVERWRITE = new Set(['setAttribute', 'setAgentsAttribute', 'setAgentPosition', 'setAgentRadius', 'setVelocity', 'setTargetRadius']);
     const nodes = model.agentGraphNodes ?? [];
     const edges = model.agentGraphEdges ?? [];
     const byId = new Map(nodes.map(n => [n.id, n] as const));
@@ -329,7 +329,7 @@ function webgpuAgentFundamentals(model: CAModel): Reason[] {
       return byId.get(idEdge.source)?.data?.nodeType !== 'createAgent';             // a staged newborn is exempt
     });
     if (hit) {
-      out.push(R('semantics', `A cross-agent write (Set Agent Attribute / Position / Radius) is aimed at a wired agent id. Which write lands then depends on the order agents run in — well-defined on the sequential CPU engines, undefined for parallel GPU threads. ${PRINCIPLE_SEQUENTIAL}`));
+      out.push(R('semantics', `A cross-agent write (Set Attribute / Velocity / Agent Position / Agent Radius / Target Radius) is aimed at a wired agent id. Which write lands then depends on the order agents run in — well-defined on the sequential CPU engines, undefined for parallel GPU threads. ${PRINCIPLE_SEQUENTIAL}`));
     }
   }
   walkAgentBehaviourNodes(model, (t, cfg) => {

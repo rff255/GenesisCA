@@ -3,6 +3,10 @@
 //           one-hop createAgent-handle exemption (spawn config).
 //   Part B: Apply Force To Agent (commutative) — JS emit + WASM gate/module +
 //           WebGPU WGSL generation (forceScatterAdd + binding 14 + force binding 4).
+//   Part D: the OPTIONAL agent id on Set Attribute — unwired = self (the historical
+//           emit, byte-for-byte), wired = the by-id write, on all three targets.
+//   Part E: the `setAgentAttribute` RETIREMENT migration — a pure nodeType rename
+//           whose output emits byte-identically to a hand-authored Set Attribute.
 // JS↔WASM runtime bit-parity for Apply Force To Agent lives in parity-agent-wasm.mjs.
 // Real-GPU shader compilation is verified in the browser (createShaderModule).
 //
@@ -20,6 +24,10 @@ export { compileAgentGraphWasmForModel, isAgentGraphWasmSupported } from '../src
 export { compileAgentGraphWebGPUForModel, isAgentGraphWebGPUSupported } from '../src/modeler/vpl/compiler/agentWebgpu/compile.ts';
 export { emitAgentForcePassWGSL } from '../src/modeler/vpl/compiler/agentWebgpu/forcePass.ts';
 export { migrateForHarness } from '../src/dev/compileHarness.ts';
+export { migrateSetAgentAttribute } from '../src/model/setAgentAttributeMigration.ts';
+export { compileGraph } from '../src/modeler/vpl/compiler/compile.ts';
+export { getEffectivePorts } from '../src/modeler/vpl/effectivePorts.ts';
+export { setActiveGraphKind } from '../src/modeler/vpl/graphState.ts';
 `;
 const dir = mkdtempSync(join(tmpdir(), 'gca-xagent-'));
 const entryPath = join(ROOT, 'scripts', '__xagent_entry.ts');
@@ -62,18 +70,18 @@ const shell = (g, updateMode, extra = {}) => M.migrateForHarness({
 // ---------------------------------------------------------------------------
 console.log('\nPart A — sync-mode cross-agent overwrite gate');
 
-// (1) sync + setAgentAttribute to an EXISTING agent (from Get Nearby Agents) → ERROR.
+// (1) sync + a WIRED Set Attribute to an EXISTING agent (from Get Nearby Agents) → ERROR.
 {
   const g = mkG();
   const bs = g.n('behaviourStep');
   const near = g.n('getNearbyAgents', { _port_radius: '6' });
   const fe = g.n('forEachInArray');
-  const set = g.n('setAgentAttribute', { attributeId: 'sig', _port_value: '1' });
+  const set = g.n('setAttribute', { attributeId: 'sig', _port_value: '1' });
   g.f(bs, 'do', fe, 'do'); g.v(near, 'agents', fe, 'array');
   g.f(fe, 'body', set, 'do'); g.v(fe, 'element', set, 'agentId');
   const m = shell(g, 'sync');
   const r = M.compileAgentGraph(m.agentGraphNodes, m.agentGraphEdges, m, 0);
-  check('sync + Set Agent Attribute to existing agent → compile error', !!r.error && /Synchronous/.test(r.error), r.error || 'no error');
+  check('sync + wired Set Attribute to existing agent → compile error', !!r.error && /Synchronous/.test(r.error), r.error || 'no error');
 }
 
 // (2) SAME graph but ASYNC → compiles (async is the intended home).
@@ -82,26 +90,26 @@ console.log('\nPart A — sync-mode cross-agent overwrite gate');
   const bs = g.n('behaviourStep');
   const near = g.n('getNearbyAgents', { _port_radius: '6' });
   const fe = g.n('forEachInArray');
-  const set = g.n('setAgentAttribute', { attributeId: 'sig', _port_value: '1' });
+  const set = g.n('setAttribute', { attributeId: 'sig', _port_value: '1' });
   g.f(bs, 'do', fe, 'do'); g.v(near, 'agents', fe, 'array');
   g.f(fe, 'body', set, 'do'); g.v(fe, 'element', set, 'agentId');
   const m = shell(g, 'async');
   const r = M.compileAgentGraph(m.agentGraphNodes, m.agentGraphEdges, m, 0);
-  check('async + Set Agent Attribute to existing agent → compiles', !r.error, r.error);
+  check('async + wired Set Attribute to existing agent → compiles', !r.error, r.error);
 }
 
-// (3) sync + setAgentAttribute to a freshly-Created handle (spawn config) → EXEMPT, compiles.
+// (3) sync + a WIRED Set Attribute to a freshly-Created handle (spawn config) → EXEMPT, compiles.
 {
   const g = mkG();
   const bs = g.n('behaviourStep');
   const create = g.n('createAgent', { _port_x: '1', _port_y: '1', _port_radius: '0.5' });
-  const set = g.n('setAgentAttribute', { attributeId: 'sig', _port_value: '9' });
+  const set = g.n('setAttribute', { attributeId: 'sig', _port_value: '9' });
   const add = g.n('addAgentToWorld');
   g.f(bs, 'do', create, 'do'); g.f(create, 'next', set, 'do'); g.f(set, 'next', add, 'do');
   g.v(create, 'handle', set, 'agentId'); g.v(create, 'handle', add, 'handle');
   const m = shell(g, 'sync');
   const r = M.compileAgentGraph(m.agentGraphNodes, m.agentGraphEdges, m, 0);
-  check('sync + Set Agent Attribute on a Create Agent handle → exempt, compiles', !r.error, r.error);
+  check('sync + wired Set Attribute on a Create Agent handle → exempt, compiles', !r.error, r.error);
 }
 
 // ---------------------------------------------------------------------------
@@ -213,6 +221,167 @@ const buildForceArrayModel = (is3d) => {
   const m = buildForceArrayModel(true);
   const r = M.compileAgentGraph(m.agentGraphNodes, m.agentGraphEdges, m, 0);
   check('JS 3D: array node emits z accumulate', /_agentForceZ\[__af\]\s*\+=/.test(r.behaviourCode || ''), r.error);
+}
+
+// ---------------------------------------------------------------------------
+// Part D — Set Attribute's OPTIONAL agent id (unwired = self, wired = by id)
+// ---------------------------------------------------------------------------
+console.log('\nPart D — Set Attribute: optional agent id');
+
+// The graph-conditional PORT: `agentId` exists only while the editor is on the
+// AGENTS sub-tab. Both port consumers (CaNode + effectivePorts) thread
+// `getActiveGraphKind()` into the declarative `hiddenPorts` hook, so this pins
+// the mechanism itself.
+{
+  const ids = () => M.getEffectivePorts('setAttribute', { attributeId: 'sig' }).inputs.map(p => p.id);
+  M.setActiveGraphKind('cells');
+  check('ports: CELLS graph hides `agentId`', !ids().includes('agentId') && ids().includes('value'));
+  M.setActiveGraphKind('agents');
+  check('ports: AGENTS graph shows `agentId`', ids().includes('agentId'));
+  M.setActiveGraphKind('overseer');
+  check('ports: OVERSEER graph hides `agentId`', !ids().includes('agentId'));
+  M.setActiveGraphKind('cells');   // restore the default for the rest of the run
+}
+
+/** A behaviour graph whose single Set Attribute is either self-targeted
+ *  (`wired` false) or aimed at a neighbour id (`wired` true). ASYNC so the
+ *  cross-agent gate lets the wired form through. */
+const buildSetAttrModel = (wired) => {
+  const g = mkG();
+  const bs = g.n('behaviourStep');
+  const set = g.n('setAttribute', { attributeId: 'sig', _port_value: '3' });
+  if (wired) {
+    const near = g.n('getNearbyAgents', { _port_radius: '6' });
+    const fe = g.n('forEachInArray');
+    g.f(bs, 'do', fe, 'do'); g.v(near, 'agents', fe, 'array');
+    g.f(fe, 'body', set, 'do'); g.v(fe, 'element', set, 'agentId');
+  } else {
+    g.f(bs, 'do', set, 'do');
+  }
+  return shell(g, 'async');
+};
+
+{
+  const m = buildSetAttrModel(false);
+  const js = M.compileAgentGraph(m.agentGraphNodes, m.agentGraphEdges, m, 0);
+  check('JS unwired: the historical self write `w_sig[idx] = 3;`',
+    /w_sig\[idx\] = 3;/.test(js.behaviourCode || '') && !/__sa/.test(js.behaviourCode || ''), js.error);
+}
+{
+  const m = buildSetAttrModel(true);
+  const js = M.compileAgentGraph(m.agentGraphNodes, m.agentGraphEdges, m, 0);
+  // Exactly the retired Set Agent Attribute emit: a `__sa` temp + the relaxed
+  // range-only guard + a by-id write.
+  check('JS wired: `{ const __sa=…; if(__sa>=0&&__sa<_agentMaxAgents) w_sig[__sa] = 3; }`',
+    /\{ const __sa=\(\(.+?\) \| 0\); if\(__sa>=0&&__sa<_agentMaxAgents\) w_sig\[__sa\] = 3; \}/.test(js.behaviourCode || ''), js.error);
+  check('JS wired: no self write remains', !/w_sig\[idx\]/.test(js.behaviourCode || ''));
+}
+// The two shapes must produce DIFFERENT WASM bytes (wiredness really reaches the
+// emitter) and both must pass the gate + compile on the agent targets.
+{
+  const a = buildSetAttrModel(false), b = buildSetAttrModel(true);
+  check('WASM: both shapes pass the gate',
+    M.isAgentGraphWasmSupported(a) === true && M.isAgentGraphWasmSupported(b) === true);
+  const ra = M.compileAgentGraphWasmForModel(a), rb = M.compileAgentGraphWasmForModel(b);
+  check('WASM: both modules compile', !ra.error && !rb.error && ra.bytes?.length > 0 && rb.bytes?.length > 0, ra.error || rb.error);
+  check('WASM: the wired module differs from the self one',
+    Buffer.from(ra.bytes).toString('base64') !== Buffer.from(rb.bytes).toString('base64'));
+  // WebGPU: the wired form is a cross-agent overwrite aimed at a NON-spawn id, so
+  // the gate must REJECT it (the documented parallel-write-order fundamental),
+  // while the self form is accepted and emits the plain unguarded line.
+  check('WebGPU: self form accepted', M.isAgentGraphWebGPUSupported(a) === true);
+  check('WebGPU: wired non-spawn form rejected (parallel write order)', M.isAgentGraphWebGPUSupported(b) === false);
+  const wa = M.compileAgentGraphWebGPUForModel(a);
+  check('WebGPU: self form emits no by-id guard', !wa.error && !/saa/.test(wa.shaderCode || ''), wa.error);
+}
+// A CELL graph never renders the port, and the compilers gate on
+// CompileContext.agentGraph — so the cell emit is the plain historical line.
+{
+  const m = M.migrateForHarness({
+    schemaVersion: 1,
+    properties: { name: 'C', dimension: '2d', gridWidth: 8, gridHeight: 8, topology: '2d-grid', boundaryTreatment: 'torus', useWasm: false, useWebGPU: false, updateMode: 'synchronous' },
+    topologyMode: { gridCells: true, agents: false },
+    attributes: [{ id: 'c', name: 'C', type: 'float', defaultValue: '0' }],
+    neighborhoods: [], variables: [], indicators: [], mappings: [], macroDefs: [],
+    graphNodes: [
+      { id: 'st', type: 'caNode', position: { x: 0, y: 0 }, data: { nodeType: 'step', config: {} } },
+      { id: 'sa', type: 'caNode', position: { x: 0, y: 0 }, data: { nodeType: 'setAttribute', config: { attributeId: 'c', _port_value: '5' } } },
+    ],
+    graphEdges: [{ id: 'e0', source: 'st', target: 'sa', sourceHandle: 'output_flow_do', targetHandle: 'input_flow_do' }],
+    agentGraphNodes: [], agentGraphEdges: [],
+  });
+  const r = M.compileGraph(m.graphNodes, m.graphEdges, m);
+  check('cell graph: Set Attribute still emits the plain `w_c[idx] = 5`',
+    /w_c\[idx\] = 5;/.test(r.stepCode || '') && !/__sa/.test(r.stepCode || ''), r.error);
+}
+
+// ---------------------------------------------------------------------------
+// Part E — the `setAgentAttribute` retirement migration
+// ---------------------------------------------------------------------------
+console.log('\nPart E — Set Agent Attribute retirement migration');
+
+/** The same graph twice: once with the LEGACY node type, once hand-authored on
+ *  the consolidated node. Ids are FIXED so the two are structurally identical —
+ *  which is what makes the emitted-code comparison meaningful. `extraCount`
+ *  exercises the multi-slot expansion (and its shared-agentId FAN-OUT). */
+const buildPair = (type) => ({
+  nodes: [
+    { id: 'bs', type: 'caNode', position: { x: 0, y: 0 }, data: { nodeType: 'behaviourStep', config: {} } },
+    { id: 'nb', type: 'caNode', position: { x: 0, y: 0 }, data: { nodeType: 'getNearbyAgents', config: { _port_radius: '6' } } },
+    { id: 'fe', type: 'caNode', position: { x: 0, y: 0 }, data: { nodeType: 'forEachInArray', config: {} } },
+    { id: 'sa', type: 'caNode', position: { x: 0, y: 0 }, data: { nodeType: type, config: { attributeId: 'sig', _port_value: '2', extraCount: 1, attr_2: 'sig2', _port_value_2: '4' } } },
+  ],
+  edges: [
+    { id: 'e0', source: 'bs', target: 'fe', sourceHandle: 'output_flow_do', targetHandle: 'input_flow_do' },
+    { id: 'e1', source: 'nb', target: 'fe', sourceHandle: 'output_value_agents', targetHandle: 'input_value_array' },
+    { id: 'e2', source: 'fe', target: 'sa', sourceHandle: 'output_flow_body', targetHandle: 'input_flow_do' },
+    { id: 'e3', source: 'fe', target: 'sa', sourceHandle: 'output_value_element', targetHandle: 'input_value_agentId' },
+  ],
+});
+const twoAttrShell = (g) => {
+  const m = shell({ nodes: g.nodes, edges: g.edges }, 'async');
+  m.agentAttributes = [
+    { id: 'sig', name: 'Sig', type: 'float', defaultValue: '0' },
+    { id: 'sig2', name: 'Sig2', type: 'float', defaultValue: '0' },
+  ];
+  return m;
+};
+
+{
+  const legacy = buildPair('setAgentAttribute');
+  const migrated = M.migrateSetAgentAttribute({ agentGraphNodes: legacy.nodes, agentGraphEdges: legacy.edges, macroDefs: [] });
+  const mn = migrated.agentGraphNodes.find(n => n.id === 'sa');
+  check('migration: nodeType flips to setAttribute', mn.data.nodeType === 'setAttribute');
+  check('migration: config carried over verbatim',
+    JSON.stringify(mn.data.config) === JSON.stringify(legacy.nodes.find(n => n.id === 'sa').data.config));
+  check('migration: EDGES untouched (same array reference — every handle id already matched)',
+    migrated.agentGraphEdges === legacy.edges);
+  check('migration: node ids + order preserved',
+    migrated.agentGraphNodes.map(n => n.id).join(',') === 'bs,nb,fe,sa');
+  check('migration: idempotent (same reference on a clean model)',
+    M.migrateSetAgentAttribute(migrated) === migrated);
+  const inMac = M.migrateSetAgentAttribute({
+    agentGraphNodes: [], agentGraphEdges: [],
+    macroDefs: [{ id: 'm', nodes: buildPair('setAgentAttribute').nodes, edges: [] }],
+  });
+  check('migration: macroDefs swept', inMac.macroDefs[0].nodes.find(n => n.id === 'sa').data.nodeType === 'setAttribute');
+
+  // THE LOAD-BEARING CHECK — a migrated legacy graph and a hand-authored one emit
+  // byte-identical code on JS *and* WASM (the guarantee the shipped models rely on).
+  const mMig = twoAttrShell({ nodes: migrated.agentGraphNodes, edges: migrated.agentGraphEdges });
+  const mNew = twoAttrShell(buildPair('setAttribute'));
+  const jsMig = M.compileAgentGraph(mMig.agentGraphNodes, mMig.agentGraphEdges, mMig, 0);
+  const jsNew = M.compileAgentGraph(mNew.agentGraphNodes, mNew.agentGraphEdges, mNew, 0);
+  check('migrated == hand-authored: JS behaviour code byte-identical',
+    !jsMig.error && !jsNew.error && jsMig.behaviourCode === jsNew.behaviourCode, jsMig.error || jsNew.error);
+  check('migrated: the by-id write survives multi-slot expansion (BOTH slots guarded)',
+    (jsMig.behaviourCode.match(/if\(__sa>=0&&__sa<_agentMaxAgents\)/g) || []).length === 2
+    && /w_sig\[__sa\] = 2;/.test(jsMig.behaviourCode) && /w_sig2\[__sa\] = 4;/.test(jsMig.behaviourCode));
+  const wMig = M.compileAgentGraphWasmForModel(mMig), wNew = M.compileAgentGraphWasmForModel(mNew);
+  check('migrated == hand-authored: WASM module bytes byte-identical',
+    !wMig.error && !wNew.error && wMig.bytes.length > 0
+    && Buffer.from(wMig.bytes).toString('base64') === Buffer.from(wNew.bytes).toString('base64'),
+    wMig.error || wNew.error);
 }
 
 console.log(failures === 0 ? '\nALL CROSS-AGENT-WRITE CHECKS ✓' : `\n${failures} CHECK(S) FAILED`);

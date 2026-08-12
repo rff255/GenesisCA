@@ -956,7 +956,7 @@ export function createAgentStore(
     if (spec.defaultValue !== 0) r.fill(spec.defaultValue);
     attrRead[spec.id] = r;
     // ASYNC (default): SINGLE buffer — write aliases read, so an own-agent
-    // read-modify-write AND a Set Agent Attribute to a neighbour are immediately
+    // read-modify-write AND a by-id Set Attribute to a neighbour are immediately
     // visible (sequential semantics).
     // SYNC: DOUBLE buffer — `attrWrite` is a separate array; the behaviour reads
     // the previous step (`attrRead`) and writes the next (`attrWrite`), swapped at

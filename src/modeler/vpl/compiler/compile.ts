@@ -2774,7 +2774,7 @@ export function compileAgentGraph(
   // parallel threads have no defined write order — so an async cross-agent-
   // overwrite model runs on JS/WASM (sequential ⇒ well-defined order).
   if (model.centerBased?.agentUpdateMode === 'sync') {
-    const CROSS_AGENT_OVERWRITE = new Set(['setAgentAttribute', 'setAgentsAttribute', 'setAgentPosition', 'setAgentRadius', 'setVelocity', 'setTargetRadius']);
+    const CROSS_AGENT_OVERWRITE = new Set(['setAttribute', 'setAgentsAttribute', 'setAgentPosition', 'setAgentRadius', 'setVelocity', 'setTargetRadius']);
     // Behaviour-root flow reachability (BFS over flow-output edges). The gated
     // nodes are flow (`output`) nodes, each in exactly one flow chain, so this
     // isolates the behaviour loop from the init/division chains.
@@ -2792,10 +2792,16 @@ export function compileAgentGraph(
     for (const id of behaviourReachable) {
       const node = nodeMap.get(id);
       if (!node || !CROSS_AGENT_OVERWRITE.has(node.data.nodeType)) continue;
-      // One-hop Create Agent handle exemption (newborn spawn config, not a race).
+      // UNWIRED id = the CURRENT agent (Set Attribute / Set Velocity / Set Target
+      // Radius all default to self), which is a thread-own write and can never
+      // race — so only a WIRED id is gated. Mirrors the WebGPU gate's own
+      // `if (!idEdge) continue`. (This skip is what lets the ubiquitous self
+      // `Set Attribute` join the set at all.)
       const targetPort = node.data.nodeType === 'setAgentsAttribute' ? 'agents' : 'agentId';
       const src = inputToSource.get(`${id}:${targetPort}`);
-      if (src && nodeMap.get(src.nodeId)?.data.nodeType === 'createAgent') continue;
+      if (!src) continue;
+      // One-hop Create Agent handle exemption (newborn spawn config, not a race).
+      if (nodeMap.get(src.nodeId)?.data.nodeType === 'createAgent') continue;
       const label = getNodeDef(node.data.nodeType)?.label ?? node.data.nodeType;
       return { behaviourCode: '', initCode: '', divisionCode: '', stopMessages, outputMappingCodes: [], inputMappingCodes: [], dividePartitions,
         error: `"${label}" writes another agent's state, which races that agent's own update in Synchronous agent mode. Switch to Asynchronous agent mode (Model Properties > Bond-Graph Agents), or target a Create Agent handle (spawn configuration).` };

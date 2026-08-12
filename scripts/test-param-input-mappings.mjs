@@ -1197,7 +1197,7 @@ console.log('== 12. BRUSH KINDS — Editor vs Spawner (real closures, real store
     const root = g.node('agentInputMapping', { mappingId: 'SP' });
     const loop = g.node('loop', { mode: 'count', _port_count: '3' });
     const cre = g.node('createAgent', {});
-    const setA = g.node('setAgentAttribute', { attributeId: 'aa' });
+    const setA = g.node('setAttribute', { attributeId: 'aa' });
     const addW = g.node('addAgentToWorld', {});
     // x = brushX + brushRadius * index  (the check below recomputes it).
     const ex = g.node('expression', { expression: 'a + b * c', visibleCount: 3 });

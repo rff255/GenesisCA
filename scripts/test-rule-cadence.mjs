@@ -471,7 +471,7 @@ console.log('\n== init / division semantics ==');
   const init = g.n('agentInit');
   const create = g.n('createAgent', { _port_x: '1', _port_y: '1', _port_radius: '0.5' });
   const gg = g.n('getGeneration');
-  const setA = g.n('setAgentAttribute', { attributeId: 'g0' });
+  const setA = g.n('setAttribute', { attributeId: 'g0' });
   const add = g.n('addAgentToWorld');
   g.f(init, 'do', create, 'do'); g.f(create, 'next', setA, 'do'); g.f(setA, 'next', add, 'do');
   g.v(create, 'handle', setA, 'agentId'); g.v(gg, 'value', setA, 'value');
@@ -592,8 +592,10 @@ console.log('\n== ABI arity contract ==');
   const wsrc = readFileSync(join(ROOT, 'src/simulator/engine/sim.worker.ts'), 'utf8');
   check('the worker arity assertion tolerates exactly one trailing slot',
     /const arityOk = \(declared: number, want: number\) => declared === want \|\| declared === want - 1;/.test(wsrc));
-  check('all three ABI pairs go through arityOk',
-    (wsrc.match(/!arityOk\(/g) ?? []).length === 3, `${(wsrc.match(/!arityOk\(/g) ?? []).length} sites`);
+  // One site per ABI kind the worker eval's a fn for: behaviour / division /
+  // init / input-mapping. (The `spawner` kind shares the input-mapping site.)
+  check('every ABI pair goes through arityOk',
+    (wsrc.match(/!arityOk\(/g) ?? []).length === 4, `${(wsrc.match(/!arityOk\(/g) ?? []).length} sites`);
   check('the DANGEROUS direction (params > args) is still an error',
     !/declared === want \+ 1/.test(wsrc));
 }

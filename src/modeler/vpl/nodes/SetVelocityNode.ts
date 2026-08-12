@@ -14,7 +14,7 @@ import { is3dModelLike } from '../compiler/niCodec';
  *
  *  A WIRED Set Velocity IS a cross-agent OVERWRITE (the last writer wins, so the
  *  outcome depends on the order agents run in), which puts it in exactly the same
- *  machinery as Set Agent Attribute / Position / Radius: rejected at compile time
+ *  machinery as a by-id Set Attribute / Set Agent Position / Radius: rejected at compile time
  *  in SYNCHRONOUS agent mode (it would race the target's own self-update), and
  *  rejected by the WebGPU agent gate when the id is wired to anything but a
  *  Create Agent handle (parallel threads have no defined write order) — so such a

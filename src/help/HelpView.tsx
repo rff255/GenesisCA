@@ -401,7 +401,7 @@ export function HelpView() {
           </p>
           <ul className={styles.list}>
             <li><strong>Tag</strong> &mdash; An integer with named values (picklist). Define tag options in the editor, and use the Tag Constant node to reference them by name.</li>
-            <li><strong>Vector</strong> (cell &amp; agent attributes) &mdash; a 2D or 3D direction stored as one named value (a flow field, a facing/orientation, an accumulated force) instead of hand-maintaining separate X/Y/Z scalars. A single <em>vector</em> port appears on Get/Set (Self) Attribute, <strong>Get/Set Neighbor Attr</strong> (read/write a neighbour&apos;s vector), <strong>Get/Set Agent Attribute</strong> (read/write another agent&apos;s vector), and <strong>Transfer Cell Attributes</strong>; wire it to Make Vector / Break Vector / Vector Op. Under the hood the vector is stored as its scalar float components, so it runs natively on all three compile targets. <strong>Local Variables</strong> can be vectors too (e.g. accumulate a force over neighbours with one variable). 3D vectors are offered only in a 3D model. (A few nodes have no single-vector shape &mdash; array-of-neighbours reads and Update Attribute&apos;s increment/max/&hellip; &mdash; read those via a scalar node + Break Vector; the modeler badges them.)</li>
+            <li><strong>Vector</strong> (cell &amp; agent attributes) &mdash; a 2D or 3D direction stored as one named value (a flow field, a facing/orientation, an accumulated force) instead of hand-maintaining separate X/Y/Z scalars. A single <em>vector</em> port appears on Get/Set (Self) Attribute, <strong>Get/Set Neighbor Attr</strong> (read/write a neighbour&apos;s vector), <strong>Get Agent Attribute</strong> / a by-id <strong>Set Attribute</strong> (read/write another agent&apos;s vector), and <strong>Transfer Cell Attributes</strong>; wire it to Make Vector / Break Vector / Vector Op. Under the hood the vector is stored as its scalar float components, so it runs natively on all three compile targets. <strong>Local Variables</strong> can be vectors too (e.g. accumulate a force over neighbours with one variable). 3D vectors are offered only in a 3D model. (A few nodes have no single-vector shape &mdash; array-of-neighbours reads and Update Attribute&apos;s increment/max/&hellip; &mdash; read those via a scalar node + Break Vector; the modeler badges them.)</li>
             <li><strong>Color</strong> (model attributes only) &mdash; An RGBA color value. Accessed via Get Model Attribute with separate R, G, B and A output ports. Stored as <code>#rrggbb</code> (fully opaque) or <code>#rrggbbaa</code>; alpha is always available, defaulting to opaque. Adjustable live in the simulator.</li>
             <li><strong>Boundary Value</strong> (cell attributes only, constant boundary) &mdash; the value held by out-of-grid cells. Shown next to Default Value only when the model&apos;s boundary treatment is <em>constant</em>. Leave blank to inherit the default.</li>
             <li>
@@ -1742,7 +1742,7 @@ export function HelpView() {
             bridge, growing/dividing tissue, even Game of Life on agents; only a few
             order-dependent or glyph operations fall back to JS, and statistical &mdash; not
             bit-exact &mdash; parity applies as on the grid). <strong>Update Mode:</strong>
-            <strong> Asynchronous</strong> (default &mdash; a <em>Set Agent Attribute</em> to a
+            <strong> Asynchronous</strong> (default &mdash; a <em>Set Attribute</em> aimed at a
             neighbour is immediately visible to a later agent this step) or <strong>Synchronous</strong>
             (every agent reads the previous step; attribute writes are swapped in at the step&rsquo;s
             end &mdash; simultaneous-update semantics, which is what a classic totalistic rule like
@@ -1764,12 +1764,12 @@ export function HelpView() {
             <strong>Agent</strong> input: leave it empty and the node acts on the agent being
             evaluated, or wire an id (from Get Nearby Agents, For Each Bond, Pick Random Agent,
             Get Self Handle&hellip;) and it acts on that one &mdash; exactly how <em>Get Velocity</em>
-            has always read. That covers <strong>Kill Agent</strong> (apoptosis vs. predation),{' '}
+            has always read. That covers <strong>Set Attribute</strong> (write my own attribute, or
+            a neighbour&rsquo;s), <strong>Kill Agent</strong> (apoptosis vs. predation),{' '}
             <strong>Set Velocity</strong>, <strong>Set Target Radius</strong>,{' '}
-            <strong>Set Agent Sprite</strong> and <strong>Form Bond</strong>. The rest come as a
+            <strong>Set Agent Sprite</strong> and <strong>Form Bond</strong>. One comes as a
             pair instead &mdash; a self node plus an explicit &ldquo;(by ID)&rdquo; sibling:{' '}
-            <em>Apply Force</em> / <em>Apply Force To Agent</em>, and{' '}
-            <em>Set Attribute</em> / <em>Set Agent Attribute</em>. A handful are self-anchored by
+            <em>Apply Force</em> / <em>Apply Force To Agent</em>. A handful are self-anchored by
             nature and say so: the field nodes act on the cells <em>under this agent</em>, and{' '}
             <em>Break Bond</em> / <em>Rewire Bond</em> / <em>Set Bond Attribute</em> act on a bond
             you are an endpoint of (cutting an edge between two <em>other</em> agents is not
@@ -2297,10 +2297,13 @@ export function HelpView() {
             <strong> Agents</strong> tab the <strong>Attributes</strong> panel lists
             <strong> Agent Attributes</strong> (per-agent fields with their own +Add), and the
             <strong> Local Variables</strong> there are agent-scoped. On the Agents tab the
-            universal <code>Get / Set / Update Attribute</code> nodes display as
-            <code> Get / Set / Update Self Attribute</code> &mdash; they read and write the
-            agent&rsquo;s own attributes; <code>Get / Set Agent Attribute</code> read and write
-            <em> another</em> agent&rsquo;s attribute by id.
+            universal <code>Get Attribute</code> / <code>Update Attribute</code> nodes display as
+            <code> Get / Update Self Attribute</code> &mdash; they read and modify the
+            agent&rsquo;s own attributes. <code>Set Attribute</code> grows an optional{' '}
+            <code>Agent</code> input there: leave it empty to write the current agent, or wire an
+            id to write <em>another</em> agent&rsquo;s attribute. <code>Get Agent Attribute</code>{' '}
+            is the read-side by-id sibling (reads stay a separate node &mdash; a by-id read is
+            impure, so it cannot share the own-read&rsquo;s caching/hoisting classification).
           </p>
           <p className={styles.p}>
             Agents sit <strong>above</strong> the CA: they can read and write grid cells (the field
@@ -2330,7 +2333,8 @@ export function HelpView() {
               &mdash; read the agent's geometry and its local crowding (how many other agents are
               within interaction range).</li>
             <li><strong>Get Self Handle</strong> &mdash; the current agent's own id. Pass it to the
-              by-id nodes (Get/Set Agent Attribute, Get Agent Position, Form/Break Bond) so a
+              by-id nodes (Get Agent Attribute, a wired Set Attribute, Get Agent Position,
+              Form/Break Bond) so a
               neighbour can reference back to you, or to compare a Get Nearby Agents id against
               self.</li>
             <li><strong>Set Target Radius</strong> &mdash; set the size the agent grows toward;
@@ -2442,11 +2446,13 @@ export function HelpView() {
               writing another agent&rsquo;s attribute. <strong>Apply Force To Agents</strong> is the
               broadcast sibling &mdash; push the same force onto <em>every</em> agent in an id array
               (a whole sensed group) at once.</li>
-            <li><strong>Set Agent Attribute</strong> &mdash; write an attribute on another agent by
-              id (signal a neighbour). And because Get Nearby Agents now supplies a target,
+            <li><strong>Set Attribute</strong> (with its <em>Agent</em> input wired) &mdash; write an
+              attribute on another agent by id (signal a neighbour). Leave that input empty and
+              the very same node writes the current agent, so there is one verb, not two. And
+              because Get Nearby Agents supplies a target,
               <strong> Form Bond</strong> is fully graph-driven &mdash; bond to compatible
-              neighbours by their attributes/state. Like the own-attribute Get/Set, the by-id
-              Get / Set Agent Attribute support multiple attribute <strong>slots</strong>
+              neighbours by their attributes/state. Both <em>Set Attribute</em> and the by-id
+              <em>Get Agent Attribute</em> support multiple attribute <strong>slots</strong>
               (&quot;+ Attribute&quot;) sharing the one Agent id input &mdash; read or write several
               of a neighbour&apos;s attributes with a single node.</li>
           </ul>
@@ -2812,7 +2818,8 @@ export function HelpView() {
             Init Event <em>and</em> the Behaviour Step &mdash; just like <em>Set Attribute</em> works in
             both events. Build an agent with <strong>Create Agent</strong> (position / radius &rarr; an
             agent <em>handle</em>; the position takes a <em>Z</em> in a 3D model), set its initial state
-            on the handle (<em>Set Agent Attribute</em> / <em>Set Agent Position / Radius</em>), then
+            on the handle (<em>Set Attribute</em> with its <em>Agent</em> input on the handle,{' '}
+            <em>Set Agent Position / Radius</em>), then
             commit it with <strong>Add Agent To World</strong>. Running past <em>Max Agents</em> returns
             a <code>-1</code> handle and the Set/Add no-op (it never wraps).
           </p>

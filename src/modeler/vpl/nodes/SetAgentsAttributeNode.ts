@@ -2,7 +2,7 @@ import type { NodeTypeDef } from '../types';
 import { agentRootHasSelf } from '../types';
 
 /** Set Agents Attribute — write one AGENT attribute on EVERY agent in an id-array
- *  (Generic Agent Platform). The write-many companion to Set Agent Attribute /
+ *  (Generic Agent Platform). The write-many companion to a by-id Set Attribute /
  *  the agent analogue of Set Neighbor Attribute By Index over a list. Feed it Get
  *  Nearby Agents / Get Bonded Agents / Filter Agents to signal a whole group
  *  (mark contacted, broadcast a value). Immediate (async-style) writes, each id

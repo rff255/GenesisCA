@@ -1,4 +1,5 @@
 import type { CAModel } from '../../model/types';
+import type { ActiveGraphKind } from './graphState';
 
 /** Data types that flow through value ports.
  *
@@ -123,7 +124,7 @@ export interface CompileContext {
    *  (`'init'` = the once-per-reset Agent Init Event, `'behaviour'` = behaviourStep,
    *  `'division'` = divisionEvent, `'input'` = an EDITOR-kind Agent Input Mapping
    *  [per painted agent], `'spawner'` = a SPAWNER-kind one [once per brush
-   *  application, NO self]). Used by Set Agent Attribute / the by-id setters
+   *  application, NO self]). Used by the by-id setters (a wired Set Attribute, …)
    *  to relax the live-agent guard in the init context (a freshly Created agent is
    *  STAGED — alive=0 — until Add Agent To World commits it). Absent on cell roots
    *  AND on the agent OUTPUT MAPPING root. Read it through the two predicates
@@ -237,8 +238,19 @@ export interface NodeTypeDef {
    *  UI-only — the compilers ignore the dead port anyway, and any pre-existing
    *  edge into it simply goes unread. Nodes that ADD or transform ports per
    *  config (switch/sequence/expression) keep that logic inline; this hook is
-   *  only for removing static ports. */
-  hiddenPorts?: (config: NodeConfig, model?: CAModel) => string[];
+   *  only for removing static ports.
+   *
+   *  `graph` is which rule graph the node is being rendered in (the editor's
+   *  active sub-tab). It exists for the UNIVERSAL nodes whose port set differs
+   *  between the Cells and Agents graphs — currently only `setAttribute`, whose
+   *  optional `agentId` ("write ANOTHER agent by id") is meaningless on a cell
+   *  grid, so the port is hidden there. Both consumers (CaNode's render path and
+   *  `effectivePorts.getEffectivePorts`) pass `getActiveGraphKind()`; a caller
+   *  that omits it gets `'cells'`, i.e. the conservative smaller port set. NB the
+   *  COMPILERS never call this hook — they gate on `CompileContext.agentGraph`,
+   *  so a hand-edited cell graph carrying an agent-only edge still emits the
+   *  cell form. */
+  hiddenPorts?: (config: NodeConfig, model?: CAModel, graph?: ActiveGraphKind) => string[];
   defaultConfig: NodeConfig;
   /** Emit JS code for this node. Returns code string.
    *  `boundary` is the model's boundary treatment ('torus' | 'constant'),

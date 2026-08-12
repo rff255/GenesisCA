@@ -590,7 +590,9 @@ function CaNodeComponent({ id, data }: NodeProps) {
   // (switch/sequence/expression, above) keep that logic inline — this hook
   // only removes static ports.
   if (def?.hiddenPorts) {
-    const hidden = def.hiddenPorts(nodeData.config, model);
+    // The active rule graph is threaded so a UNIVERSAL node can drop a port that
+    // only means something on one graph (setAttribute's optional `agentId`).
+    const hidden = def.hiddenPorts(nodeData.config, model, getActiveGraphKind());
     if (hidden.length > 0) {
       const drop = new Set(hidden);
       inputPorts = inputPorts.filter(p => !drop.has(p.id));
@@ -1350,8 +1352,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
         {(nodeData.nodeType === 'getAgentsAttribute'
           || nodeData.nodeType === 'setAgentsAttribute'
           || nodeData.nodeType === 'filterAgents'
-          || nodeData.nodeType === 'getAgentAttribute'
-          || nodeData.nodeType === 'setAgentAttribute') && (
+          || nodeData.nodeType === 'getAgentAttribute') && (
           <>
             <select
               className={styles.select}
@@ -3761,7 +3762,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
           // The slot dropdown mirrors the node's PRIMARY dropdown per type.
           const slotList = nodeData.nodeType === 'getModelAttribute'
             ? model.attributes.filter(a => a.isModelAttribute)
-            : (nodeData.nodeType === 'getAgentAttribute' || nodeData.nodeType === 'setAgentAttribute')
+            : nodeData.nodeType === 'getAgentAttribute'
               ? (model.agentAttributes ?? [])
               : ownAttrList;
           const addSlot = () => {
@@ -3874,12 +3875,13 @@ function CaNodeComponent({ id, data }: NodeProps) {
         let effectiveWidget = portDef.inlineWidget;
         const setAttrId = nodeData.config.attributeId as string;
         // ownAttrList = the active graph's OWN attributes (agent attrs on the Agents
-        // graph). setNeighborhood*/setNeighbor* are lattice-only; setAgentAttribute/
-        // setAgentsAttribute are bondGraph-only (only render on the Agents graph where
-        // ownAttrList == model.agentAttributes) — so ownAttrList resolves the right
-        // attribute for every node type here, on both graphs.
+        // graph). setNeighborhood*/setNeighbor* are lattice-only; setAgentsAttribute
+        // is bondGraph-only (it only renders on the Agents graph, where ownAttrList ==
+        // model.agentAttributes) — so ownAttrList resolves the right attribute for
+        // every node type here, on both graphs. `setAttribute` is UNIVERSAL and
+        // resolves in whichever graph it sits in, self-targeted or by-id alike.
         const setAttr = setAttrId ? ownAttrList.find(a => a.id === setAttrId) : undefined;
-        if (effectiveWidget && (nodeData.nodeType === 'setAttribute' || nodeData.nodeType === 'updateAttribute' || nodeData.nodeType === 'setNeighborhoodAttribute' || nodeData.nodeType === 'setNeighborAttributeByIndex' || nodeData.nodeType === 'setAgentAttribute' || nodeData.nodeType === 'setAgentsAttribute' || nodeData.nodeType === 'setCellAtPosition') && port.id === 'value') {
+        if (effectiveWidget && (nodeData.nodeType === 'setAttribute' || nodeData.nodeType === 'updateAttribute' || nodeData.nodeType === 'setNeighborhoodAttribute' || nodeData.nodeType === 'setNeighborAttributeByIndex' || nodeData.nodeType === 'setAgentsAttribute' || nodeData.nodeType === 'setCellAtPosition') && port.id === 'value') {
           const attr = setAttr;
           if (!attr) {
             effectiveWidget = undefined;
@@ -3896,8 +3898,8 @@ function CaNodeComponent({ id, data }: NodeProps) {
 
         // Any set node whose `value` port carries a VECTOR attr/var: no inline scalar
         // widget (the value is a composite `vector` wired from Make Vector). Covers
-        // setVariable / setAgentAttribute (+ setAttribute / setNeighbor* which the
-        // attr-type swap above already drops for a vector). vectorPortDims is null for
+        // setVariable (+ setAttribute / setNeighbor* which the attr-type swap above
+        // already drops for a vector). vectorPortDims is null for
         // every non-vector case, so this is precise.
         if (port.id === 'value' && vectorPortDims(nodeData.nodeType, nodeData.config, model)) {
           effectiveWidget = undefined;

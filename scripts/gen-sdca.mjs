@@ -148,7 +148,7 @@ ag.vEdge(py, 'result', mk, 'y');
 const addw = ag.node('addAgentToWorld', {}, 5, 0);
 ag.vEdge(mk, 'handle', addw, 'handle');
 const coin = ag.node('getRandom', { randomType: 'bool', _port_probability: '0.35' }, 5, 2);
-const setSeedState = ag.node('setAgentAttribute', { attributeId: 'state' }, 6, 0);
+const setSeedState = ag.node('setAttribute', { attributeId: 'state' }, 6, 0);
 ag.vEdge(mk, 'handle', setSeedState, 'agentId');
 ag.vEdge(coin, 'value', setSeedState, 'value');
 ag.fEdge(spawnLoop, 'body', mk, 'do');

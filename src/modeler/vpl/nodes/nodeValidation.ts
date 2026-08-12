@@ -234,7 +234,6 @@ export function detectMissingConfig(
     // agent-equivalent gather / filter / write-many nodes. All target the AGENT
     // attribute set.
     case 'getAgentAttribute':
-    case 'setAgentAttribute':
       // Single-agent (scalar agentId) — only the attribute is required.
       if (!hasAgentAttr(config.attributeId)) issues.push('Select an agent attribute');
       checkSlots(hasAgentAttr, 'an agent attribute');
@@ -967,10 +966,10 @@ export const OVERSEER_UNIVERSAL_TYPES = new Set<string>([
  *  preempts. So EVERY agent-SoA reader is unconditionally init-invalid (wiring makes
  *  no difference: a wired by-id read still emits `< highWater`).
  *
- *  NOT here (genuinely valid in init): the by-id SETTERS — `setAgentAttribute` /
- *  `setAgentPosition` / `setAgentRadius` / `setAgentSprite` / `setAgentsAttribute`
- *  relax their range guard to `_agentMaxAgents` (which IS in the init ABI) under the
- *  init/behaviour root; and the array ops that touch NO init-absent symbol
+ *  NOT here (genuinely valid in init): the by-id SETTERS — a WIRED `setAttribute`
+ *  (see AGENT_SELF_ONLY_WHEN_UNWIRED) / `setAgentPosition` / `setAgentRadius` /
+ *  `setAgentSprite` / `setAgentsAttribute` relax their range guard to
+ *  `_agentMaxAgents` (which IS in the init ABI) under the init/behaviour root; and the array ops that touch NO init-absent symbol
  *  (`joinAgents` / `pickRandomAgent` / `pickNRandomAgents` — they only index their
  *  input id array + `_rs`, so they run fine over a Local-Variable handle array). */
 const AGENT_SELF_ONLY_TYPES = new Set<string>([
@@ -994,8 +993,9 @@ const AGENT_SELF_ONLY_TYPES = new Set<string>([
   // field bridge (sampled/deposited at the SELF position)
   'sampleField', 'fieldGradient', 'readCellsUnder', 'affectCellsUnder', 'secreteToField',
   // universal self-attribute nodes (on the agent SoA at idx) — valid in the
-  // Behaviour Step, invalid in the Init Event
-  'getCellAttribute', 'setAttribute', 'updateAttribute',
+  // Behaviour Step, invalid in the Init Event. `setAttribute` is CONDITIONAL —
+  // see AGENT_SELF_ONLY_WHEN_UNWIRED (wired, it is a by-id setter).
+  'getCellAttribute', 'updateAttribute',
 ]);
 
 /** Optional-id nodes whose init-validity depends on WIRING: unwired they write the
@@ -1004,6 +1004,7 @@ const AGENT_SELF_ONLY_TYPES = new Set<string>([
  *  velocity on its Create Agent handle is legitimate. Value = the id port to test.
  *  (Kill Agent is NOT here: its `_killRequest` buffer is loop-only either way.) */
 const AGENT_SELF_ONLY_WHEN_UNWIRED: Record<string, string> = {
+  setAttribute: 'agentId',
   setVelocity: 'agentId',
   setTargetRadius: 'agentId',
 };

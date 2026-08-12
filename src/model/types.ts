@@ -1215,7 +1215,7 @@ export interface CenterBasedConfig {
    *  with asynchronous agents, and vice versa.
    *  - `'async'` (DEFAULT — byte-identical to pre-feature behaviour): the agent
    *    attribute buffers are single-buffered (`attrWrite` aliases `attrRead`), so
-   *    a `Set Agent Attribute` write to a neighbour is IMMEDIATELY visible to a
+   *    a `Set Attribute` write aimed at a neighbour is IMMEDIATELY visible to a
    *    later agent in the same step (sequential semantics).
    *  - `'sync'`: the attribute buffers are double-buffered — every agent reads the
    *    PREVIOUS step's attributes and writes go to a separate buffer swapped in at
@@ -1255,7 +1255,7 @@ export interface CAModel {
   /** Generic Agent Platform: the AGENT attribute set — agent-only per-agent
    *  state, a SEPARATE id-space from `attributes` (the cell/model attributes).
    *  Agents read/write these (own state via Get/Set Attribute on the Agents
-   *  graph, other agents via Get/Set Agent Attribute by id); CA cells can never
+   *  graph, other agents via Get Agent Attribute / a by-id Set Attribute); CA cells can never
    *  access them. Always `isModelAttribute: false` (globals are still the shared
    *  model attributes, read via Get Model Attribute). Absent/empty in every
    *  legacy file + non-agent model. Resolved everywhere via `agentAttrsOf` in

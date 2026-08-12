@@ -109,7 +109,7 @@ export const AGENT_WEBGPU_SUPPORTED_TYPES: ReadonlySet<string> = new Set<string>
   // array accessors
   'arrayElement', 'arrayLength',
   // agent attributes (Get/Set/Update Attribute on the agent SoA)
-  'getCellAttribute', 'setAttribute', 'updateAttribute', 'setAgentAttribute',
+  'getCellAttribute', 'setAttribute', 'updateAttribute',
   'setVelocity', 'setAgentPosition', 'setAgentRadius',
   // sprite display state — the five runs live in agentF32 (AGENT_GPU_SPRITE_FIELDS,
   // reserved on the C9 sprites gate), so a sprite-driving BEHAVIOUR graph runs on
@@ -2403,13 +2403,36 @@ function compileFlowNode(ctx: AgentWgpuCtx, nodeId: string): void {
     case 'setAttribute': {
       // Write the AGENT SoA (agentAttrsOf): `agentF32[attrBase + idx] = value`.
       // int/tag/bool attrs round to the nearest integer (the JS Int32/Uint8 store).
+      //
+      // Optional `agentId`: unwired = SELF (the historical single line, byte-for-
+      // byte — wiredness comes from the edge map, resolved BEFORE `fresh()` mints
+      // a name, since a name minted on the unwired path would shift every later
+      // name and diff the shader). Wired = ANOTHER agent by id, emitted exactly as
+      // the retired `setAgentAttribute` did. A wired id is a cross-agent OVERWRITE,
+      // which this file's own gate rejects unless the source is a Create Agent
+      // handle, so the guarded arm only ever runs for a spawn-handle target.
       const attr = (node.data.config?.['attributeId'] as string) || '_undef';
       const base = ctx.layout.agentAttrBase[attr];
       if (base !== undefined) {
-        const t = ctx.agentAttrType.get(attr) || 'float';
-        let v = inF32(ctx, node, 'value', 0);
-        if (t !== 'float') v = `round(${v})`;
-        ctx.lines.push(`  ${attrAt(ctx, attr, 'idx', 'write')} = ${v};`);
+        if (ctx.adj.inputToSource.get(`${node.id}:agentId`)) {
+          const id = castTo(resolveValueInput(ctx, node, 'agentId', -1), 'i32');
+          const t = ctx.agentAttrType.get(attr) || 'float';
+          let v = inF32(ctx, node, 'value', 0);
+          if (t !== 'float') v = `round(${v})`;
+          const sa = fresh(ctx, 'saa');
+          // Range-only guard (NO alive check): unified spawning stages a Created
+          // agent at alive=0 until Add To World, so a fresh handle in
+          // [0, maxAgents) must be writable in the behaviour graph — the JS
+          // `< _agentMaxAgents` relaxation. (Writing a dead slot is a harmless
+          // no-op; this compiler only ever emits the behaviour graph, so the
+          // strict-live division guard never applies.)
+          ctx.lines.push(`  { let ${sa}: i32 = ${id}; if (${sa} >= 0 && ${sa} < i32(control.maxAgents)) { ${attrAt(ctx, attr, `u32(${sa})`, 'write')} = ${v}; } }`);
+        } else {
+          const t = ctx.agentAttrType.get(attr) || 'float';
+          let v = inF32(ctx, node, 'value', 0);
+          if (t !== 'float') v = `round(${v})`;
+          ctx.lines.push(`  ${attrAt(ctx, attr, 'idx', 'write')} = ${v};`);
+        }
       }
       compileFlowChain(ctx, node.id, 'next');
       break;
@@ -2449,7 +2472,7 @@ function compileFlowNode(ctx: AgentWgpuCtx, nodeId: string): void {
       // wiredness is read from the edge map BEFORE `fresh()` mints a name). A wired
       // id is a cross-agent OVERWRITE, which this file's own gate rejects unless the
       // source is a Create Agent handle, so the emit below only ever runs for a
-      // spawn-handle target (guarded range-only, like setAgentAttribute).
+      // spawn-handle target (guarded range-only, like a by-id Set Attribute).
       if (ctx.adj.inputToSource.get(`${node.id}:agentId`)) {
         const id = castTo(resolveValueInput(ctx, node, 'agentId', -1), 'i32');
         const sv = fresh(ctx, 'sv');
@@ -2462,26 +2485,6 @@ function compileFlowNode(ctx: AgentWgpuCtx, nodeId: string): void {
         ctx.lines.push(`  ${f32At(ctx, 'vx', 'idx')} = ${inF32(ctx, node, 'vx', 0)};`);
         ctx.lines.push(`  ${f32At(ctx, 'vy', 'idx')} = ${inF32(ctx, node, 'vy', 0)};`);
         if (ctx.is3d) ctx.lines.push(`  ${f32At(ctx, 'vz', 'idx')} = ${inF32(ctx, node, 'vz', 0)};`);
-      }
-      compileFlowChain(ctx, node.id, 'next');
-      break;
-    }
-    case 'setAgentAttribute': {
-      // Write ANOTHER agent's attribute by id (signal a neighbour). Range-guarded.
-      const attr = (node.data.config?.['attributeId'] as string) || '_undef';
-      const base = ctx.layout.agentAttrBase[attr];
-      if (base !== undefined) {
-        const id = castTo(resolveValueInput(ctx, node, 'agentId', -1), 'i32');
-        const t = ctx.agentAttrType.get(attr) || 'float';
-        let v = inF32(ctx, node, 'value', 0);
-        if (t !== 'float') v = `round(${v})`;
-        const sa = fresh(ctx, 'saa');
-        // Range-only guard (NO alive check): unified spawning stages a Created agent
-        // at alive=0 until Add To World, so a fresh handle in [0, maxAgents) must be
-        // writable in the behaviour graph — the JS `< _agentMaxAgents` relaxation.
-        // (Writing a dead slot is a harmless no-op; the WebGPU compiler only ever
-        // emits the behaviour graph, so the strict-live division guard never applies.)
-        ctx.lines.push(`  { let ${sa}: i32 = ${id}; if (${sa} >= 0 && ${sa} < i32(control.maxAgents)) { ${attrAt(ctx, attr, `u32(${sa})`, 'write')} = ${v}; } }`);
       }
       compileFlowChain(ctx, node.id, 'next');
       break;
@@ -2509,7 +2512,7 @@ function compileFlowNode(ctx: AgentWgpuCtx, nodeId: string): void {
     case 'setAgentPosition': {
       const id = castTo(resolveValueInput(ctx, node, 'agentId', -1), 'i32');
       const sp = fresh(ctx, 'sp');
-      // Range-only guard — see setAgentAttribute (a staged spawn handle must be settable).
+      // Range-only guard — see setAttribute by id (a staged spawn handle must be settable).
       ctx.lines.push(`  { let ${sp}: i32 = ${id}; if (${sp} >= 0 && ${sp} < i32(control.maxAgents)) {`);
       ctx.lines.push(`    ${f32At(ctx, 'x', `u32(${sp})`)} = ${inF32(ctx, node, 'x', 0)}; ${f32At(ctx, 'y', `u32(${sp})`)} = ${inF32(ctx, node, 'y', 0)};`);
       if (ctx.is3d) ctx.lines.push(`    ${f32At(ctx, 'z', `u32(${sp})`)} = ${inF32(ctx, node, 'z', 0)};`);
@@ -2522,7 +2525,7 @@ function compileFlowNode(ctx: AgentWgpuCtx, nodeId: string): void {
       const id = castTo(resolveValueInput(ctx, node, 'agentId', -1), 'i32');
       const sr = fresh(ctx, 'sr'), rv = fresh(ctx, 'srV');
       ctx.lines.push(`  { let ${sr}: i32 = ${id}; let ${rv}: f32 = ${inF32(ctx, node, 'radius', 1)};`);
-      // Range-only guard — see setAgentAttribute (a staged spawn handle must be settable).
+      // Range-only guard — see setAttribute by id (a staged spawn handle must be settable).
       const srTgt = hasF32(ctx, 'targetRadius') ? ` ${f32At(ctx, 'targetRadius', `u32(${sr})`)} = ${rv};` : '';
       ctx.lines.push(`    if (${sr} >= 0 && ${sr} < i32(control.maxAgents)) { ${f32At(ctx, 'radius', `u32(${sr})`)} = ${rv};${srTgt} } }`);
       compileFlowChain(ctx, node.id, 'next');
@@ -2671,7 +2674,7 @@ function compileFlowNode(ctx: AgentWgpuCtx, nodeId: string): void {
       if (hasF32(ctx, 'age')) ctx.lines.push(`    ${f32At(ctx, 'age', raw)} = 0.0;`);
       // Reset the child's agent attributes to their compile-time defaults (the
       // GPU analogue of initAgentSlot's attr reset — the CPU never runs it here).
-      // A later Set Agent Attribute by handle overrides, exactly like the JS path.
+      // A later Set Attribute by handle overrides, exactly like the JS path.
       // These are WRITES, so under sync they land in the write run and the commit
       // pass folds them onto the read run BEFORE readbackAgentStep reconciles the
       // newborn from `agentAttrBase` — which is why that reconcile needs no change.
@@ -3939,7 +3942,7 @@ function agentSubsetSupported(reachNodes: GraphNode[], edges: GraphEdge[], flatN
   // racing writer stores the identical value). Behaviour-reachable only:
   // init/division roots are sequential CPU/JS on every target.
   {
-    const CROSS_AGENT_OVERWRITE = new Set(['setAgentAttribute', 'setAgentsAttribute', 'setAgentPosition', 'setAgentRadius', 'setVelocity', 'setTargetRadius']);
+    const CROSS_AGENT_OVERWRITE = new Set(['setAttribute', 'setAgentsAttribute', 'setAgentPosition', 'setAgentRadius', 'setVelocity', 'setTargetRadius']);
     const flatMap = new Map(flatNodes.map(n => [n.id, n] as const));
     for (const n of reachNodes) {
       if (!CROSS_AGENT_OVERWRITE.has(n.data.nodeType)) continue;
