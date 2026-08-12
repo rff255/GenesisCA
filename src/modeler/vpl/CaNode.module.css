@@ -145,7 +145,7 @@
   transform: translateY(-50%);
   margin-right: var(--space-3);
   font-size: 0.55rem;
-  color: var(--color-text-muted);
+  color: var(--color-text-tertiary);
   text-transform: uppercase;
   letter-spacing: 0.04em;
   white-space: nowrap;
@@ -159,11 +159,50 @@
   transform: translateY(-50%);
   margin-left: var(--space-3);
   font-size: 0.55rem;
-  color: var(--color-text-muted);
+  color: var(--color-text-tertiary);
   text-transform: uppercase;
   letter-spacing: 0.04em;
   white-space: nowrap;
   pointer-events: none;
+}
+
+/* PORT LABELS SIT IN CANVAS SPACE, DIRECTLY OVER THE WIRES (user-reported: "it's
+ * very hard to read the name of a port that has links connected").
+ *
+ * They are NOT painted under the edges — measured: .react-flow__viewport is the
+ * stacking context, its four children are all `z-index: auto` so they paint in
+ * TREE ORDER (edges at index 0, nodes at index 2), and a caNode carries
+ * `z-index: 0` + a transform, so its labels already paint in front of every
+ * edge. (Group nodes are the one thing pinned BELOW the edges, at z-index -1.)
+ *
+ * The problem is CONTRAST. These are 0.55rem uppercase glyphs with no backing,
+ * so a 2px link running immediately behind them destroys the letterforms —
+ * measured label-vs-edge contrast was 2.73:1 (Nocturne) / 1.82:1 (Blender)
+ * against a value edge #4cc9f0, below even the 3:1 large-text floor.
+ *
+ * THE HALO COLOUR IS THE CANVAS COLOUR, and that is what makes this work in both
+ * themes for free: --color-bg-canvas measures 10.36:1 / 8.42:1 (Nocturne) and
+ * 8.77:1 / 7.13:1 (Blender) against the value and flow edge colours, so drawing
+ * the halo in it MASKS the wire around every glyph. Over the bare canvas the
+ * halo is invisible by construction (same colour), so the resting look is
+ * unchanged; over a node or group tint it degrades to an ordinary soft dark
+ * outline, which still helps.
+ *
+ * NO padding and NO background box — deliberately. A pill would shift the label
+ * off its measured position and would show as a wrong-coloured rectangle
+ * wherever it overlapped a neighbouring node or a group's tint. The 8 one-pixel
+ * offsets form the stroke; the two blurred copies fill a glyph's counters and
+ * soften the edge. The colour above also rises from --color-text-muted to
+ * --color-text-tertiary (3.80 -> 6.00 Nocturne, 4.82 -> 5.84 Blender on canvas),
+ * which is what the halo then protects. */
+.portLabelLeft,
+.portLabelRight {
+  text-shadow:
+    1px 0 0 var(--color-bg-canvas), -1px 0 0 var(--color-bg-canvas),
+    0 1px 0 var(--color-bg-canvas), 0 -1px 0 var(--color-bg-canvas),
+    1px 1px 0 var(--color-bg-canvas), -1px 1px 0 var(--color-bg-canvas),
+    1px -1px 0 var(--color-bg-canvas), -1px -1px 0 var(--color-bg-canvas),
+    0 0 3px var(--color-bg-canvas), 0 0 3px var(--color-bg-canvas);
 }
 
 /* --- Port compatibility highlighting during connection drag --- */
