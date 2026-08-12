@@ -49,13 +49,19 @@
 // (the constraint P5 hit and documented). Instead the kind rides the SIGN of the
 // break lane, which costs ZERO new fields and therefore moves ZERO offsets:
 //
-//   verb              bondBreakReq            bondFormReq
-//   ───────────────── ─────────────────────── ────────────────────────
-//   Form(self→t)      NONE  (+1)              t+2   | NONE
-//   Break(self,t)     t+2   | NONE            NONE  (+1)
-//   Rewire(from→to)   from+2 | NONE  (>0)     to+2  | NONE   (>0)
-//   FormBetween(a,b)  −(a+2) | −NONE  (<0)    b+2   | NONE   (>0)
-//   Transfer(b,→to)   b+2   | NONE   (>0)     −(to+2) | −NONE (<0)
+//   verb               bondBreakReq            bondFormReq
+//   ────────────────── ─────────────────────── ────────────────────────
+//   Form(self→t)       NONE  (+1)              t+2   | NONE
+//   Break(self,t)      t+2   | NONE            NONE  (+1)
+//   Rewire(from→to)    from+2 | NONE  (>0)     to+2  | NONE   (>0)
+//   FormBetween(a,b)   −(a+2) | −NONE  (<0)    b+2   | NONE   (>0)
+//   Transfer(b,→to)    b+2   | NONE   (>0)     −(to+2) | −NONE (<0)
+//   BreakBetween(a,b)  −(a+2) | −NONE  (<0)    −(b+2) | −NONE  (<0)
+//
+// so the op kind is read off the SIGN PAIR alone: (+,+) is the three self-relative
+// verbs (disambiguated by which side is NONE, as before), and each of the three
+// remaining sign combinations names one two-id verb. The table is now COMPLETE —
+// a seventh op kind would need a real field, not another sign.
 //
 // A NEGATIVE break lane means "this entry is a Form Between"; its magnitude decodes
 // with the same `+2` bias. Every lane is signed on every target (`bondFormReq` /
@@ -92,6 +98,27 @@
 // both lanes (so it cannot truncate), still `fl < 0` (so it decodes as a
 // TRANSFER, not as a bare Break of `b`), and both ids decode to −1 ⇒ a no-op.
 //
+// ─────────────────────────────────────────────────────────────────────────────
+// BREAK BETWEEN — the third-party break, on the one free sign combination.
+//
+// A Break Bond with its `agentA` port WIRED severs the bond between two agents
+// the requester need not be part of (the mirror of Form Bond's optional `agentA`,
+// and the last verb the self-anchored set could not express). It needs the same
+// two ids, so it needs its own marker — and after Form Between took the break
+// lane's sign and Transfer took the form lane's, **BOTH lanes negative** is the
+// only combination left: `bl = −(a+2)`, `fl = −(b+2)`.
+//
+// ⚠️ DECODE ORDER IS LOAD-BEARING, and this arm must come FIRST — before both
+// single-sign tests. `bl < 0` alone is Form Between's marker, so a both-negative
+// entry falling into that branch decodes `b` from a NEGATIVE form lane, gets −1,
+// fails the `b >= 0` gate and is DROPPED: the bond silently survives, with no
+// error anywhere. (That is a strictly milder failure than Transfer's, which
+// destroys an edge — but it is the same class, and the tier proves it.)
+//
+// An unresolvable Break Between writes (−NONE, −NONE) = (−1, −1): non-zero on
+// both lanes (so it cannot truncate), still both-negative (so it decodes as this
+// verb rather than as a Form Between), and both ids decode to −1 ⇒ a no-op.
+//
 // BYTE IDENTITY. `bondReqSlotsForModel` returns **1** for a model whose agent
 // graph contains none of the three verbs, which reproduces the pre-P4 layout
 // exactly (arrays sized `maxAgents`, `base = idx`). That is a general USAGE
@@ -120,6 +147,11 @@ export const BOND_REQ_BETWEEN_SIGN = -1;
  *  Form Between's negated break lane — see the encoding table above). A negative
  *  form lane is the ONLY thing distinguishing a Transfer from a Rewire. */
 export const BOND_REQ_TRANSFER_SIGN = -1;
+/** The op-kind marker for BREAK BETWEEN: BOTH lanes negated — the one sign
+ *  combination Form Between and Transfer left free (see the table above). It is
+ *  decoded FIRST, ahead of both single-sign tests, or a both-negative entry is
+ *  read as a Form Between whose second id is −1 and silently dropped. */
+export const BOND_REQ_BREAK_BETWEEN_SIGN = -1;
 
 /** Does this model's AGENT graph use any queue verb? Scans the top-level agent
  *  graph AND every macro definition's nodes — a macro instance on the agent graph

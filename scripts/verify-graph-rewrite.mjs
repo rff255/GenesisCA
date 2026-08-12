@@ -34,9 +34,9 @@ export {
   createAgentStore, computeAgentMaxHashBins, buildSpatialHash, seedAgents, formBond, breakBond,
   freeAgentSlot, sweepStaleBonds, allocAgentSlot, initAgentSlot, divideAgent, bondAttrKind,
   serializeAgentStore, deserializeAgentStore,
-  rewireBond, transferBond, hasBond, drainAgentBondRequests, clearAgentBondRequests,
+  rewireBond, transferBond, breakBondBetween, hasBond, drainAgentBondRequests, clearAgentBondRequests,
 } from '../src/simulator/engine/agentEngine.ts';
-export { BOND_REQ_NONE, BOND_REQ_ID_BIAS, BOND_REQ_BETWEEN_SIGN, BOND_REQ_TRANSFER_SIGN, BOND_REQUEST_NODE_TYPES, bondReqSlotsForModel, agentGraphUsesBondRequests } from '../src/modeler/vpl/compiler/bondRequestQueue.ts';
+export { BOND_REQ_NONE, BOND_REQ_ID_BIAS, BOND_REQ_BETWEEN_SIGN, BOND_REQ_TRANSFER_SIGN, BOND_REQ_BREAK_BETWEEN_SIGN, BOND_REQUEST_NODE_TYPES, bondReqSlotsForModel, agentGraphUsesBondRequests } from '../src/modeler/vpl/compiler/bondRequestQueue.ts';
 export {
   DEFAULT_DIVIDE_PARTITION, dividePartitionFromConfig, dividePartitionKey, dividePartitionCode,
 } from '../src/modeler/vpl/compiler/dividePartition.ts';
@@ -80,8 +80,8 @@ const {
   createAgentStore, computeAgentMaxHashBins, buildSpatialHash, seedAgents, formBond, breakBond,
   freeAgentSlot, sweepStaleBonds, allocAgentSlot, initAgentSlot, divideAgent, bondAttrKind,
   serializeAgentStore, deserializeAgentStore, serializeAgentState, deserializeAgentState, bondAttrsOf,
-  rewireBond, transferBond, hasBond, drainAgentBondRequests, clearAgentBondRequests,
-  BOND_REQ_NONE, BOND_REQ_ID_BIAS, BOND_REQ_BETWEEN_SIGN, BOND_REQ_TRANSFER_SIGN, BOND_REQUEST_NODE_TYPES,
+  rewireBond, transferBond, breakBondBetween, hasBond, drainAgentBondRequests, clearAgentBondRequests,
+  BOND_REQ_NONE, BOND_REQ_ID_BIAS, BOND_REQ_BETWEEN_SIGN, BOND_REQ_TRANSFER_SIGN, BOND_REQ_BREAK_BETWEEN_SIGN, BOND_REQUEST_NODE_TYPES,
   bondReqSlotsForModel, agentGraphUsesBondRequests, resolveBondRequestDepth,
   DEFAULT_DIVIDE_PARTITION, dividePartitionFromConfig, dividePartitionKey, dividePartitionCode, detectMissingConfig,
   compileAgentGraphWasmForModel, instantiateAgentWasm, buildAgentLayoutExtras, isAgentGraphWasmSupported,
@@ -4597,6 +4597,307 @@ function tierO() {
   }
 }
 
+// ===========================================================================
+// TIER P — BREAK BOND's OPTIONAL PAIR PORT (`agentA`) and the BREAK BETWEEN
+// encoding: BOTH request lanes negated.
+//
+// The verb closes the last gap in the self-anchored set: Rewire and Transfer are
+// both ANCHORED AT THE REQUESTER, so no verb could sever an edge between two
+// agents the rule is not part of. Wiring Break Bond's `agentA` lowers it to the
+// one sign combination Form Between (−,+) and Transfer (+,−) left free.
+//
+// Three things have to hold, and they live at three different levels:
+//   ENCODING — the six op kinds decode DISTINCTLY from the sign pair alone
+//              (§1: the same two ids under all six encodings ⇒ six outcomes);
+//   DECODE ORDER — the both-negative arm must be tested FIRST (§2), or the entry
+//              falls into Form Between's `bl < 0` branch, decodes its second id
+//              from a NEGATIVE lane, gets −1, fails that arm's gate and is
+//              DROPPED: the bond silently survives;
+//   I5     — a cut that cannot apply touches NOTHING (§3), and does not truncate
+//              the queue behind it.
+// ===========================================================================
+
+/** Write ONE BREAK BETWEEN entry, mirroring all three emitters: BOTH lanes carry
+ *  the negated, `+2`-biased id (an unresolvable side writes −NONE). */
+function queueBreakBetween(st, i, c, { a = -1, b = -1 } = {}) {
+  const slots = st.bondReqSlots, depth = slots - 1;
+  const e = i * slots + Math.min(c, depth);
+  const good = a >= 0 && b >= 0;
+  st.bondBreakReq[e] = good ? -(a + BOND_REQ_ID_BIAS) : -BOND_REQ_NONE;
+  st.bondFormReq[e] = good ? -(b + BOND_REQ_ID_BIAS) : -BOND_REQ_NONE;
+}
+
+/** A minimal agent graph whose only verb is a Break Bond, with `agentA` wired or
+ *  not — the emit-shape + byte-identity fixture (mirrors Tier O's `mk`). */
+function buildBreakPairModel(wireA) {
+  const n = [], e = [];
+  const an = (t, c) => { const x = { id: `n${n.length}`, type: 'caNode', position: { x: 0, y: 0 }, data: { nodeType: t, config: c || {} } }; n.push(x); return x; };
+  const ed = (s, sp, tt, tp, cat) => e.push({ id: `e${e.length}`, source: s.id, target: tt.id, sourceHandle: `output_${cat}_${sp}`, targetHandle: `input_${cat}_${tp}` });
+  const bs = an('behaviourStep');
+  const gsh = an('getSelfHandle');
+  const off = (k) => { const x = an('arithmeticOperator', { operation: '+', _port_y: String(k) }); ed(gsh, 'value', x, 'x', 'value'); return x; };
+  const bb = an('breakBond', {});
+  ed(bs, 'do', bb, 'do', 'flow');
+  ed(off(1), 'result', bb, 'targetAgent', 'value');
+  // ⚠️ `agentA` must be WIRED, not merely configured: the port carries no inline
+  // widget, so wiredness is the EDGE-map answer on all three targets and a
+  // config-only `_port_agentA` would leave the node on its self-break arm.
+  if (wireA) ed(off(4), 'result', bb, 'agentA', 'value');
+  return {
+    schemaVersion: 1,
+    properties: { name: 'breakpair', dimension: '2d', gridWidth: 16, gridHeight: 16, gridDepth: 1, topology: '2d-grid', boundaryTreatment: 'torus', useWasm: false, useWebGPU: false },
+    topologyMode: { gridCells: false, agents: true },
+    centerBased: { ...queueCfg(64, 4, 8), worldWidth: 16, worldHeight: 16, agentTarget: 'wasm', agentUpdateMode: 'async' },
+    attributes: [], modelAttributes: [], neighborhoods: [], agentAttributes: [],
+    bondAttributes: [], variables: [], agentVariables: [], indicators: [], mappings: [],
+    graphNodes: [], graphEdges: [], agentGraphNodes: n, agentGraphEdges: e, macroDefs: [],
+  };
+}
+
+function tierP() {
+  section('TIER P — Break Bond\'s optional pair port (the BREAK BETWEEN encoding)');
+
+  // --- 0. registration + the marker ---------------------------------------
+  {
+    ok(BOND_REQUEST_NODE_TYPES.has('breakBond'),
+      'breakBond is a queue verb (so the layout reserves the queue for it)');
+    ok(BOND_REQ_BREAK_BETWEEN_SIGN === -1, 'the op-kind marker is BOTH lane SIGNS');
+    const only = { agentGraphNodes: [{ id: 'a', data: { nodeType: 'breakBond' } }], centerBased: {}, topologyMode: { agents: true } };
+    ok(bondReqSlotsForModel(only) === 9,
+      'a graph whose ONLY verb is Break Bond reserves depth + the overflow bucket');
+  }
+
+  // --- 1. THE SIGN TABLE IS COMPLETE AND UNAMBIGUOUS ------------------------
+  //
+  // Feed the SAME two ids (A=1, B=2) through every encoding and read the graph
+  // back. Six encodings, six distinct outcomes — which is what makes the sign
+  // pair a real discriminator rather than a convention nothing checks.
+  {
+    const REQ = 0, A = 1, B = 2;
+    const run = (write, seed) => {
+      const st = queueStore(12, 4, 8);
+      seed(st);
+      write(st);
+      drainAgentBondRequests(st, 1);
+      return [...edgeSet(decodeAgentGraph(st))].sort().join(',');
+    };
+    const withAB = (st) => { formBond(st, A, B, 1, 1); };
+    const withReqA = (st) => { formBond(st, REQ, A, 1, 1); };
+
+    const outcomes = {
+      // (+,+) — the three self-anchored verbs, disambiguated by which side is NONE
+      form: run(st => queueOp(st, REQ, 0, { to: B }), () => {}),
+      break_: run(st => queueOp(st, REQ, 0, { from: A }), withReqA),
+      rewire: run(st => queueOp(st, REQ, 0, { from: A, to: B }), withReqA),
+      // (−,+) FORM BETWEEN · (+,−) TRANSFER · (−,−) BREAK BETWEEN
+      between: run(st => queueBetween(st, REQ, 0, { a: A, b: B }), () => {}),
+      transfer: run(st => queueTransfer(st, REQ, 0, { partner: A, to: B }), withReqA),
+      breakBetween: run(st => queueBreakBetween(st, REQ, 0, { a: A, b: B }), withAB),
+    };
+    ok(outcomes.breakBetween === '',
+      'BREAK BETWEEN severs the bond between two agents the requester is NOT part of',
+      outcomes.breakBetween);
+    ok(outcomes.between === '1:2',
+      'the SAME ids with only the BREAK lane negated FORM that bond instead (Form Between)',
+      outcomes.between);
+    ok(outcomes.transfer === '1:2',
+      'the SAME ids with only the FORM lane negated hand the requester\'s edge to B (Transfer)',
+      outcomes.transfer);
+    ok(outcomes.rewire === '0:2',
+      'both lanes POSITIVE is a Rewire — it re-points the REQUESTER\'s edge',
+      outcomes.rewire);
+    ok(outcomes.form === '0:2' && outcomes.break_ === '',
+      'the two single-sided (+,+) encodings are still a plain Form / plain Break',
+      `${outcomes.form} | ${outcomes.break_}`);
+    // The decisive statement: the two-id verbs are pairwise distinguishable from
+    // the OTHER two-id verbs given identical ids and identical starting graphs.
+    const twoId = run(st => queueBreakBetween(st, REQ, 0, { a: A, b: B }), withAB);
+    const asBetween = run(st => queueBetween(st, REQ, 0, { a: A, b: B }), withAB);
+    const asTransfer = run(st => queueTransfer(st, REQ, 0, { partner: A, to: B }), withAB);
+    ok(twoId !== asBetween && twoId !== asTransfer,
+      'from ONE starting graph the three two-id encodings produce three DIFFERENT graphs',
+      `${twoId} / ${asBetween} / ${asTransfer}`);
+  }
+
+  // --- 2. THE DECODE-ORDER TRAP -------------------------------------------
+  //
+  // `bl < 0` alone is Form Between's marker. A both-negative entry reaching that
+  // branch decodes `b = fl >= 2 ? fl - 2 : -1` from a NEGATIVE lane, gets -1,
+  // fails the `b >= 0 && ...` gate and is skipped — the bond SURVIVES. So the
+  // wrong outcome here is a silent DROP, not a corruption; that is milder than
+  // Transfer's (which destroys an edge) but just as invisible, and the shipped
+  // drain must be shown to avoid it.
+  {
+    const st = queueStore(12, 4, 8);
+    formBond(st, 1, 2, 1, 1);
+    const before = [...edgeSet(decodeAgentGraph(st))].sort().join(',');
+    queueBreakBetween(st, 0, 0, { a: 1, b: 2 });
+    drainAgentBondRequests(st, 1);
+    const after = [...edgeSet(decodeAgentGraph(st))].sort().join(',');
+    ok(before === '1:2' && after === '',
+      'the shipped drain SEVERS the edge (it did not fall into the Form Between arm)',
+      `${before} -> ${after}`);
+
+    // The wrong outcome, constructed explicitly: an entry the Form Between arm
+    // REJECTS is dropped, leaving the graph untouched. Built by feeding that arm
+    // an unresolvable second id — exactly what a negative form lane decodes to.
+    const s2 = queueStore(12, 4, 8);
+    formBond(s2, 1, 2, 1, 1);
+    queueBetween(s2, 0, 0, { a: 1, b: -1 });
+    drainAgentBondRequests(s2, 1);
+    ok([...edgeSet(decodeAgentGraph(s2))].sort().join(',') === '1:2',
+      'negative control: an entry the Form Between arm rejects leaves the bond INTACT — the failure mode a sign-blind decode would produce');
+
+    // And the queue is still consumed either way: a probe queued behind the cut
+    // must apply, so a mis-decode cannot be mistaken for a truncation.
+    const s3 = queueStore(12, 4, 8);
+    formBond(s3, 1, 2, 1, 1); formBond(s3, 3, 4, 1, 1);
+    queueBreakBetween(s3, 0, 0, { a: 1, b: 2 });
+    queueBreakBetween(s3, 0, 1, { a: 3, b: 4 });
+    drainAgentBondRequests(s3, 1);
+    ok(edgeSet(decodeAgentGraph(s3)).size === 0,
+      'two third-party cuts in ONE generation both apply (the entry is a normal queue op)');
+    ok(allInvariants(s3) === null, 'I1–I4 hold after the cuts', String(allInvariants(s3)));
+  }
+
+  // --- 3. I5 — every rejection leaves the graph EXACTLY unchanged ----------
+  //
+  // The probe (queued AFTER the rejected op) cuts 7↔8, so agents 7 and 8 are the
+  // only rows expected to change; a rejection that truncated the queue, or that
+  // touched anything at all, is caught.
+  {
+    const cases = [
+      ['no such edge (a↔b does not exist)', (s) => { formBond(s, 1, 6, 1, 1); return { a: 1, b: 2 }; }],
+      ['`a` is dead', (s) => { formBond(s, 1, 2, 1, 1); freeAgentSlot(s, 1); return { a: 1, b: 2 }; }],
+      ['`b` is dead', (s) => { formBond(s, 1, 2, 1, 1); freeAgentSlot(s, 2); return { a: 1, b: 2 }; }],
+      ['`a` is out of range', (s) => { formBond(s, 1, 2, 1, 1); return { a: 999, b: 2 }; }],
+      ['`b` is out of range', (s) => { formBond(s, 1, 2, 1, 1); return { a: 1, b: 999 }; }],
+      ['`a` === `b` (self-aliased)', (s) => { formBond(s, 1, 2, 1, 1); return { a: 1, b: 1 }; }],
+      ['`a` === the requester, no such edge', (s) => { formBond(s, 1, 2, 1, 1); return { a: 0, b: 2 }; }],
+      ['unresolvable ids (both lanes −NONE)', (s) => { formBond(s, 1, 2, 1, 1); return { a: -1, b: -1 }; }],
+    ];
+    for (const [name, setup] of cases) {
+      const st = queueStore(12, 3, 8);
+      const req = setup(st);
+      formBond(st, 7, 8, 1, 1);                        // the probe's edge
+      const before = [...edgeSet(decodeAgentGraph(st))].sort().join('|');
+      const beforeSlots = Array.from({ length: st.highWater }, (_, i) => partnersOf(st, i).join(','));
+      queueBreakBetween(st, 0, 0, req);                // the REJECTED op
+      queueBreakBetween(st, 0, 1, { a: 7, b: 8 });     // the probe
+      drainAgentBondRequests(st, 1);
+      // Everything except the probe's own cut must be identical.
+      const after = [...edgeSet(decodeAgentGraph(st))].sort().concat('7:8').sort().join('|');
+      ok(after === before, `I5 (${name}): the graph is EXACTLY the pre-op graph`, `${before} -> ${after}`);
+      const afterSlots = Array.from({ length: st.highWater }, (_, i) => partnersOf(st, i).join(','));
+      const moved = beforeSlots.filter((v, i) => i !== 7 && i !== 8 && v !== afterSlots[i]).length;
+      ok(moved === 0, `I5 (${name}): not one uninvolved slot moved`, `${moved} rows differ`);
+      ok(!hasBond(st, 7, 8),
+        `I5 (${name}): the rejected entry still OCCUPIES its slot (no queue truncation)`);
+      ok(allInvariants(st) === null, `I5 (${name}): I1–I4 hold`, String(allInvariants(st)));
+    }
+  }
+
+  // --- 4. I2/I3 — the cut is symmetric and compacts BOTH rows --------------
+  //
+  // The bond is removed from the middle of both endpoints' lists, so both rows
+  // compact; neither may be left with a dangling slot or a stale count.
+  {
+    const st = queueStore(12, 4, 8);
+    const A = 1, B = 2;
+    formBond(st, A, 5, 1, 1); formBond(st, A, B, 1, 1); formBond(st, A, 6, 1, 1);
+    formBond(st, B, 7, 1, 1); formBond(st, B, 8, 1, 1);
+    const degA = st.bondCount[A], degB = st.bondCount[B];
+    queueBreakBetween(st, 0, 0, { a: A, b: B });
+    drainAgentBondRequests(st, 1);
+    ok(st.bondCount[A] === degA - 1 && st.bondCount[B] === degB - 1,
+      'BOTH endpoints lose exactly one degree', `${st.bondCount[A]}/${st.bondCount[B]}`);
+    ok(st.bondCount[0] === 0, 'the REQUESTER is untouched (it was never part of the edge)');
+    ok(!partnersOf(st, A).includes(B) && !partnersOf(st, B).includes(A),
+      'I2: neither row still points at the other');
+    ok(checkNoDangling(decodeAgentGraph(st)) === null,
+      'I3: no dangling slot survives the double compaction',
+      String(checkNoDangling(decodeAgentGraph(st))));
+    ok(allInvariants(st) === null, 'I1–I4 hold', String(allInvariants(st)));
+  }
+
+  // --- 5. multi-op: cuts and forms compose in ONE generation, in slot order --
+  {
+    const st = queueStore(16, 4, 8);
+    formBond(st, 1, 2, 1, 1); formBond(st, 3, 4, 1, 1);
+    queueBreakBetween(st, 0, 0, { a: 1, b: 2 });      // cut a pair I am not in
+    queueBreakBetween(st, 0, 1, { a: 3, b: 4 });      // and another
+    queueOp(st, 0, 2, { to: 5 });                     // and bond myself to a fifth
+    drainAgentBondRequests(st, 1);
+    const e = [...edgeSet(decodeAgentGraph(st))].sort().join(',');
+    ok(e === '0:5', 'two third-party cuts + one self-form all applied in ONE generation', e);
+    ok(allInvariants(st) === null, 'I1–I4 hold after the mixed batch', String(allInvariants(st)));
+
+    // Slot ORDER matters: a cut queued after a form must see the form's edge.
+    const s2 = queueStore(16, 4, 8);
+    queueBetween(s2, 0, 0, { a: 1, b: 2 });           // form 1↔2 …
+    queueBreakBetween(s2, 0, 1, { a: 1, b: 2 });      // … then cut it
+    drainAgentBondRequests(s2, 1);
+    ok(edgeSet(decodeAgentGraph(s2)).size === 0,
+      'a cut queued AFTER a form in the same generation severs the freshly-formed edge');
+  }
+
+  // --- 6. the emitted SHAPE on all three targets, and byte identity ---------
+  {
+    const plain = buildBreakPairModel(false), paired = buildBreakPairModel(true);
+
+    // JS — the unwired arm keeps the historical single-sided break lanes; the
+    // wired one negates BOTH.
+    const jsPlain = compileAgentGraph(plain.agentGraphNodes, plain.agentGraphEdges, plain, 0);
+    const jsPaired = compileAgentGraph(paired.agentGraphNodes, paired.agentGraphEdges, paired, 0);
+    ok(!jsPlain.error && !jsPaired.error, 'both shapes compile on JS', String(jsPlain.error || jsPaired.error));
+    ok(/_bondFormReq\[_bq\] = 1;/.test(jsPlain.behaviourCode)
+      && /_bondBreakReq\[_bq\] = _bqT >= 0 \? _bqT \+ 2 : 1;/.test(jsPlain.behaviourCode),
+      'JS: an UNWIRED agentA keeps the historical self-break lanes');
+    ok(!/-\(_bqA \+ 2\)/.test(jsPlain.behaviourCode),
+      'JS: an UNWIRED agentA emits NO two-id encoding');
+    ok(/_bondBreakReq\[_bq\] = _bqOk \? -\(_bqA \+ 2\) : -1;/.test(jsPaired.behaviourCode),
+      'JS: a WIRED agentA negates the BREAK lane');
+    ok(/_bondFormReq\[_bq\] = _bqOk \? -\(_bqB \+ 2\) : -1;/.test(jsPaired.behaviourCode),
+      'JS: a WIRED agentA negates the FORM lane too (the both-negative marker)');
+    ok(!/_bondFormL\[_bq\]/.test(jsPaired.behaviourCode),
+      'JS: a Break Between writes NO form-half parameters (it has no form half)');
+
+    // WASM — both compile, the gate accepts both, and the BYTES differ (the two
+    // arms are really different code, not one arm with a runtime flag).
+    ok(isAgentGraphWasmSupported(plain) && isAgentGraphWasmSupported(paired),
+      'both shapes pass the WASM agent gate');
+    const wPlain = compileAgentGraphWasmForModel(plain);
+    const wPaired = compileAgentGraphWasmForModel(paired);
+    ok(!wPlain.error && !wPaired.error && wPlain.bytes.length && wPaired.bytes.length,
+      'both shapes compile to WASM', String(wPlain.error || wPaired.error));
+    ok(Buffer.compare(Buffer.from(wPlain.bytes), Buffer.from(wPaired.bytes)) !== 0,
+      'WASM: wiring agentA changes the emitted module');
+
+    // WebGPU — the negated lanes appear only in the paired shader. `reqAt`
+    // resolves the field NAME to a numeric run base, so the assertions key off
+    // the layout's own base rather than a string that never appears.
+    ok(isAgentGraphWebGPUSupported(plain) && isAgentGraphWebGPUSupported(paired),
+      'both shapes pass the WebGPU agent gate');
+    const gPlain = compileAgentGraphWebGPUForModel(plain);
+    const gPaired = compileAgentGraphWebGPUForModel(paired);
+    ok(!gPlain.error && !gPaired.error, 'both shapes compile to WGSL', String(gPlain.error || gPaired.error));
+    const at = (r, field) => {
+      const b = r.layout.f32Base[field];
+      return b === 0 ? 'agentF32\\[\\w+\\]' : `agentF32\\[${b}u \\+ \\w+\\]`;
+    };
+    ok(new RegExp(`${at(gPaired, 'bondBreakReq')} = f32\\(-select\\(1, \\w+ \\+ 2, \\w+\\)\\);`).test(gPaired.shaderCode),
+      'WGSL: a WIRED agentA negates the break lane');
+    ok(new RegExp(`${at(gPaired, 'bondFormReq')} = f32\\(-select\\(1, \\w+ \\+ 2, \\w+\\)\\);`).test(gPaired.shaderCode),
+      'WGSL: a WIRED agentA negates the form lane too');
+    ok(!/= f32\(-select\(/.test(gPlain.shaderCode),
+      'WGSL: an UNWIRED agentA emits NO negated lane (the historical self-break arm)');
+    ok(new RegExp(`${at(gPlain, 'bondFormReq')} = 1\\.0;`).test(gPlain.shaderCode),
+      'WGSL: the unwired arm writes the positive NONE form lane');
+    ok(!/atomic/.test(gPaired.shaderCode.split('brqC')[0] ?? ''),
+      'WGSL: NO atomics (the two ids are PAYLOAD on the requester\'s own rows)');
+  }
+}
+
 tierA();
 tierB();
 await tierC();
@@ -4611,6 +4912,7 @@ await tierIMutants();
 tierL();
 tierN();
 tierO();
+tierP();
 tierM();
 
 console.log(`\n${fail === 0 ? 'GRAPH-REWRITE HARNESS ✓' : 'GRAPH-REWRITE HARNESS ✗'}  (${pass} passed, ${fail} failed)`);

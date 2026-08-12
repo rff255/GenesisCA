@@ -1632,13 +1632,14 @@ function emitBondRequest(ctx: AgentWgpuCtx, node: GraphNode, verb: BondRequestVe
   ctx.usesBondReqQueue = true;
   const slots = Math.max(1, ctx.layout.bondReqSlots);
   const depth = slots - 1;
-  // Form Bond with a WIRED `agentA` IS a Form Between (the same two-id op) and
-  // takes that encoding. Read off the EDGE MAP — never off an inline value — and
-  // resolved BEFORE any `fresh()` name is minted: a name minted on the unwired
-  // path would shift every later name and diff the shader. Unwired ⇒ effVerb ===
-  // verb ⇒ the historical arm verbatim ⇒ byte-identical WGSL.
-  const pairWired = verb === 'form' && !!ctx.adj.inputToSource.get(`${node.id}:agentA`);
-  const effVerb: BondRequestOp = pairWired ? 'between' : verb;
+  // A Form or Break Bond with a WIRED `agentA` is the same verb over two NAMED
+  // ids and takes that verb's two-id encoding. Read off the EDGE MAP — never off
+  // an inline value — and resolved BEFORE any `fresh()` name is minted: a name
+  // minted on the unwired path would shift every later name and diff the shader.
+  // Unwired ⇒ effVerb === verb ⇒ the historical arm verbatim ⇒ byte-identical WGSL.
+  const pairWired = (verb === 'form' || verb === 'break')
+    && !!ctx.adj.inputToSource.get(`${node.id}:agentA`);
+  const effVerb: BondRequestOp = pairWired ? (verb === 'break' ? 'breakBetween' : 'between') : verb;
   const e = fresh(ctx, 'brqE');
   // entry = idx*slots + min(brqC, depth); brqC++ (the cursor bumps even when the
   // queue is full, so the op lands in the overflow bucket rather than overwriting
@@ -1668,6 +1669,19 @@ function emitBondRequest(ctx: AgentWgpuCtx, node: GraphNode, verb: BondRequestVe
     ctx.lines.push(`  let ${ok}: bool = (${a} >= 0) && (${b} >= 0);`);
     ctx.lines.push(`  ${reqAt(ctx, 'bondBreakReq', e)} = f32(-select(${BOND_REQ_NONE}, ${a} + ${BOND_REQ_ID_BIAS}, ${ok}));`);
     ctx.lines.push(`  ${reqAt(ctx, 'bondFormReq', e)} = f32(select(${BOND_REQ_NONE}, ${b} + ${BOND_REQ_ID_BIAS}, ${ok}));`);
+  } else if (effVerb === 'breakBetween') {
+    // BREAK BETWEEN: the op kind rides BOTH lane signs — the one combination Form
+    // Between and Transfer left free, so it costs no new run and moves no baked
+    // base. Both ids must resolve or the entry is an explicit no-op, still
+    // (−NONE, −NONE) so it stays non-zero AND still decodes as this verb. Still NO
+    // atomics: the thread writes only its OWN agent's rows — the two ids are
+    // PAYLOAD, not addresses.
+    const a = fresh(ctx, 'brqA'), b = fresh(ctx, 'brqB'), ok = fresh(ctx, 'brqOk');
+    ctx.lines.push(`  let ${a}: i32 = ${castTo(resolveValueInput(ctx, node, 'agentA', -1), 'i32')};`);
+    ctx.lines.push(`  let ${b}: i32 = ${castTo(resolveValueInput(ctx, node, 'targetAgent', -1), 'i32')};`);
+    ctx.lines.push(`  let ${ok}: bool = (${a} >= 0) && (${b} >= 0);`);
+    ctx.lines.push(`  ${reqAt(ctx, 'bondBreakReq', e)} = f32(-select(${BOND_REQ_NONE}, ${a} + ${BOND_REQ_ID_BIAS}, ${ok}));`);
+    ctx.lines.push(`  ${reqAt(ctx, 'bondFormReq', e)} = f32(-select(${BOND_REQ_NONE}, ${b} + ${BOND_REQ_ID_BIAS}, ${ok}));`);
   } else if (effVerb === 'transfer') {
     // B9 — TRANSFER: the mirror image of Form Between's marker, the op kind rides
     // the sign of the FORM lane. Still NO atomics: the thread writes only its OWN
@@ -1693,10 +1707,10 @@ function emitBondRequest(ctx: AgentWgpuCtx, node: GraphNode, verb: BondRequestVe
       ctx.lines.push(`  ${reqAt(ctx, 'bondFormReq', e)} = ${BOND_REQ_NONE}.0;`);
     }
   }
-  // Break has no form half; TRANSFER re-points an EXISTING edge and keeps its
-  // values, so neither writes the form-half cells (the CPU drain reads them for
-  // neither) — the JS and WASM emitters take the identical exemption.
-  if (effVerb !== 'break' && effVerb !== 'transfer') {
+  // Neither Break kind has a form half; TRANSFER re-points an EXISTING edge and
+  // keeps its values, so none of the three writes the form-half cells (the CPU
+  // drain reads them for none) — JS and WASM take the identical exemption.
+  if (effVerb !== 'break' && effVerb !== 'breakBetween' && effVerb !== 'transfer') {
     ctx.lines.push(`  ${reqAt(ctx, 'bondFormL', e)} = ${inF32(ctx, node, 'restLength', 0)};`);
     ctx.lines.push(`  ${reqAt(ctx, 'bondFormK', e)} = ${inF32(ctx, node, 'stiffness', 0)};`);
     // P3 — the new bond's INITIAL attribute values, one f32 cell per QUEUE ENTRY.

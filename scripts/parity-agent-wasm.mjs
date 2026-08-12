@@ -2051,9 +2051,143 @@ function byIdTargetingInvariant(st) {
   return null;
 }
 
+// ---------------------------------------------------------------------------
+// BREAK BOND's OPTIONAL PAIR PORT — wiring `agentA` lowers the op to the BREAK
+// BETWEEN encoding: BOTH lanes negated, the one sign combination Form Between
+// (−,+) and Transfer (+,−) left free.
+//
+// The synthetic is a SIGN MATRIX: entries 1, 2 and 3 carry THE SAME TWO IDS under
+// the three two-id encodings, so they differ ONLY in which lanes are negated. A
+// target that dropped either negation would collapse two of them into one — which
+// in the engine means a cut silently applying as a bond, or vice versa.
+// ---------------------------------------------------------------------------
+function buildBreakBondPairModel() {
+  const used = new Set();
+  const nid = (p) => { let id; do { id = p + Math.random().toString(36).slice(2, 8); } while (used.has(id)); used.add(id); return id; };
+  const aN = [], aEd = [];
+  const an = (t, c) => { const n = { id: nid('a'), type: 'caNode', position: { x: 0, y: 0 }, data: { nodeType: t, config: c } }; aN.push(n); return n; };
+  const aE = (s, sp, tt, tp, cat) => aEd.push({ id: nid('e'), source: s.id, target: tt.id, sourceHandle: `output_${cat}_${sp}`, targetHandle: `input_${cat}_${tp}` });
+  const gsh = an('getSelfHandle', {});
+  const off = (k) => { const n = an('arithmeticOperator', { operation: '+', _port_y: String(k) }); aE(gsh, 'value', n, 'x', 'value'); return n; };
+
+  const bs = an('behaviourStep', {});
+  // 0 — Break Bond, agentA UNWIRED   → the historical self arm: (t+2, NONE), BOTH POSITIVE
+  const bbSelf = an('breakBond', {});
+  // 1 — Break Bond, agentA WIRED     → BREAK BETWEEN: (−(a+2), −(b+2)), BOTH NEGATIVE
+  const bbPair = an('breakBond', {});
+  // 2 — Form Bond, agentA WIRED, THE SAME TWO IDS → Form Between: (−(a+2), +(b+2))
+  const fbPair = an('formBond', { _port_restLength: '7', _port_stiffness: '11', _port_bondAttr_bw: '32' });
+  // 3 — Transfer, THE SAME TWO IDS   → Transfer: (+(a+2), −(b+2))
+  const trSame = an('transferBond', {});
+  // 4 — Break Bond, WIRED but unresolvable → (−NONE, −NONE), still non-zero
+  const bbBad = an('breakBond', {});
+  // 5..7 — a loop of wired Break Bonds (each entry addresses its own slot)
+  const lp = an('loop', { mode: 'count', _port_count: '3' });
+  const lpBb = an('breakBond', {});
+
+  const A = off(4), B = off(1);            // the two ids every paired entry reuses
+  aE(bs, 'do', bbSelf, 'do', 'flow');
+  aE(B, 'result', bbSelf, 'targetAgent', 'value');       // agentA left UNWIRED
+  aE(bbSelf, 'next', bbPair, 'do', 'flow');
+  aE(A, 'result', bbPair, 'agentA', 'value');
+  aE(B, 'result', bbPair, 'targetAgent', 'value');
+  aE(bbPair, 'next', fbPair, 'do', 'flow');
+  aE(A, 'result', fbPair, 'agentA', 'value');
+  aE(B, 'result', fbPair, 'targetAgent', 'value');
+  aE(fbPair, 'next', trSame, 'do', 'flow');
+  aE(A, 'result', trSame, 'partnerAgent', 'value');
+  aE(B, 'result', trSame, 'toAgent', 'value');
+  aE(trSame, 'next', bbBad, 'do', 'flow');
+  aE(off(-1000), 'result', bbBad, 'agentA', 'value');
+  aE(B, 'result', bbBad, 'targetAgent', 'value');
+  aE(bbBad, 'next', lp, 'do', 'flow');
+  aE(lp, 'body', lpBb, 'do', 'flow');
+  const a200 = off(200), b300 = off(300);
+  const aIdx = an('arithmeticOperator', { operation: '+' });
+  aE(a200, 'result', aIdx, 'x', 'value'); aE(lp, 'index', aIdx, 'y', 'value');
+  const bIdx = an('arithmeticOperator', { operation: '+' });
+  aE(b300, 'result', bIdx, 'x', 'value'); aE(lp, 'index', bIdx, 'y', 'value');
+  aE(aIdx, 'result', lpBb, 'agentA', 'value');
+  aE(bIdx, 'result', lpBb, 'targetAgent', 'value');
+
+  return {
+    schemaVersion: 1,
+    properties: { name: 'Break Bond Pair Parity Test', dimension: '2d', gridWidth: 24, gridHeight: 24, gridDepth: 1, topology: '2d-grid', boundaryTreatment: 'torus', useWasm: false, useWebGPU: false },
+    topologyMode: { gridCells: false, agents: true },
+    centerBased: { enabled: true, maxAgents: 100, maxBonds: 6, worldWidth: 24, worldHeight: 24, seedCount: 40, seedPattern: 'scatter', defaultRadius: 0.5, growthRate: 0, repulsionStiffness: 0, adhesionStiffness: 0, interactionRange: 1.5, drag: 1, timeStep: 0.1, momentum: 0, maxSpeed: 0, neighbourQueryRadius: 8, useBondingPhysics: false, autoBond: false, bondStiffness: 0, bondRestLength: 1.5, formDistance: 1.2, breakDistance: 2.0, agentTarget: 'wasm', agentUpdateMode: 'async',
+      agentCapabilities: { motion: 'force', body: true, collision: 'off', bonds: 'data', autoBond: false, growth: false, division: false, lifespan: false, populationBirth: false, populationDeath: false, sensing: false, sensingHeadingSource: 'velocity', orientation: false, fieldCoupling: false, appearance: true } },
+    attributes: [], modelAttributes: [], neighborhoods: [],
+    agentAttributes: [],
+    bondAttributes: [{ id: 'bw', name: 'BondW', type: 'float', defaultValue: '0' }],
+    variables: [], agentVariables: [], indicators: [], mappings: [],
+    graphNodes: [], graphEdges: [], agentGraphNodes: aN, agentGraphEdges: aEd, macroDefs: [],
+  };
+}
+
+/** THE VALUE INVARIANT — the expected queue is recomputed INDEPENDENTLY from the
+ *  agent index, so BOTH targets writing the same WRONG lanes still fail (parity
+ *  is a mirror test and cannot see a mutation applied to both sides).
+ *
+ *  What it pins that nothing else can:
+ *   • the SIGN MATRIX — entries 1/2/3 carry identical ids, so Break Between must
+ *     be sign-opposite to Form Between on the FORM lane and sign-opposite to
+ *     Transfer on the BREAK lane. Drop either negation and two entries collapse;
+ *   • the UNWIRED arm is untouched — entry 0 stays the historical (+,+) pair,
+ *     which is the byte-identity claim expressed as a runtime value;
+ *   • a Break Between writes NO form-half parameters (it has no form half), while
+ *     the Form Between beside it writes 7/11/32. */
+function breakBondPairInvariant(st) {
+  const NONE = 1, BIAS = 2;
+  const slots = st.bondReqSlots;
+  if (slots !== 9) return `bondReqSlots ${slots} !== 9 (default depth 8 + the overflow bucket)`;
+  for (let i = 0; i < st.highWater; i++) {
+    if (!st.alive[i]) continue;
+    const b = i * slots;
+    const A = i + 4 + BIAS, B = i + 1 + BIAS;
+    // [breakLane, formLane, L, K, bondAttr bw]  (null = not asserted)
+    const want = [
+      [B, NONE, 0, 0, 0],                              // 0  break(self, self+1)   BOTH POSITIVE
+      [-A, -B, 0, 0, 0],                               // 1  BREAK BETWEEN         BOTH NEGATIVE
+      [-A, B, 7, 11, 32],                              // 2  form between, SAME ids
+      [A, -B, 0, 0, 0],                                // 3  transfer,     SAME ids
+      [-NONE, -NONE, 0, 0, 0],                         // 4  unresolvable agentA
+      [-(i + 200 + BIAS), -(i + 300 + BIAS), 0, 0, 0], // 5  loop k=0
+      [-(i + 201 + BIAS), -(i + 301 + BIAS), 0, 0, 0], // 6  loop k=1
+      [-(i + 202 + BIAS), -(i + 302 + BIAS), 0, 0, 0], // 7  loop k=2
+      [0, 0, 0, 0, null],                              // 8  the overflow bucket, never written
+    ];
+    for (let c = 0; c < slots; c++) {
+      const [wb, wf, wl, wk, wa] = want[c];
+      if (st.bondBreakReq[b + c] !== wb) return `agent ${i} entry ${c}: breakLane ${st.bondBreakReq[b + c]} !== ${wb}`;
+      if (st.bondFormReq[b + c] !== wf) return `agent ${i} entry ${c}: formLane ${st.bondFormReq[b + c]} !== ${wf}`;
+      if (st.bondFormL[b + c] !== wl) return `agent ${i} entry ${c}: L ${st.bondFormL[b + c]} !== ${wl}`;
+      if (st.bondFormK[b + c] !== wk) return `agent ${i} entry ${c}: K ${st.bondFormK[b + c]} !== ${wk}`;
+      if (wa !== null && st.bondFormAttrs.bw[b + c] !== wa) return `agent ${i} entry ${c}: bondAttr bw ${st.bondFormAttrs.bw[b + c]} !== ${wa}`;
+    }
+    // THE SIGN MATRIX, stated as relations rather than as the constants above —
+    // so it still bites if the expected table itself were ever "fixed" to match a
+    // regression. Same ids, three encodings, three distinct sign pairs.
+    if (st.bondBreakReq[b + 1] !== st.bondBreakReq[b + 2]) return `agent ${i}: Break Between and Form Between must share the BREAK lane (${st.bondBreakReq[b + 1]} vs ${st.bondBreakReq[b + 2]})`;
+    if (st.bondFormReq[b + 1] !== -st.bondFormReq[b + 2]) return `agent ${i}: Break Between and Form Between FORM lanes are not sign-opposites (${st.bondFormReq[b + 1]} vs ${st.bondFormReq[b + 2]})`;
+    if (st.bondFormReq[b + 1] !== st.bondFormReq[b + 3]) return `agent ${i}: Break Between and Transfer must share the FORM lane (${st.bondFormReq[b + 1]} vs ${st.bondFormReq[b + 3]})`;
+    if (st.bondBreakReq[b + 1] !== -st.bondBreakReq[b + 3]) return `agent ${i}: Break Between and Transfer BREAK lanes are not sign-opposites (${st.bondBreakReq[b + 1]} vs ${st.bondBreakReq[b + 3]})`;
+    if (!(st.bondBreakReq[b + 1] < 0 && st.bondFormReq[b + 1] < 0)) return `agent ${i}: the Break Between entry is not BOTH-negative`;
+    if (!(st.bondBreakReq[b] > 0 && st.bondFormReq[b] > 0)) return `agent ${i}: the UNWIRED break entry is not both-POSITIVE (the historical arm moved)`;
+    // The terminator rule: a written entry must never read as empty (0,0).
+    for (let c = 0; c < 8; c++) {
+      if (st.bondBreakReq[b + c] === 0 && st.bondFormReq[b + c] === 0) return `agent ${i} entry ${c} reads as EMPTY (queue truncation)`;
+    }
+  }
+  return null;
+}
+
 entries.push({
   name: '[synthetic] TRANSFER Bond (sign-encoded op kind vs Rewire, same ids)',
   raw: buildTransferBondModel(), setup: setupBondAttrStores, invariant: transferBondInvariant,
+});
+entries.push({
+  name: '[synthetic] Break Bond pair port (the BREAK BETWEEN sign matrix)',
+  raw: buildBreakBondPairModel(), setup: setupBondAttrStores, invariant: breakBondPairInvariant,
 });
 entries.push({
   name: '[synthetic] Division partition (two Divide Agent nodes, distinct codes)',

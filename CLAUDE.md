@@ -3272,21 +3272,69 @@ makes that badge WIRING-aware for the two conditional nodes.
 | Set Agent Sprite | optional id ⇒ self | already the convention |
 | Form Bond | optional `agentA` ⇒ self + `targetAgent` | already (lowers to the Form Between encoding when wired) |
 | Form Bond (paired) / Transfer Bond | two / three explicit ids | inherently multi-party |
-| **Break Bond** / Set Bond Attribute / Rewire Bond | self-anchored pair | **the one real remaining gap** — see the follow-up below |
+| **Break Bond** | **optional id ⇒ self** | ✅ shipped — wired, it cuts the bond between two OTHER agents (see "Break Bond names BOTH ends" below) |
+| Set Bond Attribute / Rewire Bond | self-anchored pair | Rewire is anchored at the requester by definition (it moves *my* edge); the third-party form of that is **Transfer Bond**. Set Bond Attribute is the one remaining self-anchored pair |
 | Divide Agent | self only | dividing another agent by id would need the Division Event (which runs per-DAUGHTER of the divider) to answer "whose event is this?", plus a partition spec chosen by an agent that is not the mother. A semantic redesign, not a port |
 | Add Agent To World / Create Agent | by handle | a handle IS the target; "self" is meaningless |
 | affectCellsUnder / secreteToField / sampleField / fieldGradient / readCellsUnder | self position | the node's identity is "the cells **under this agent**"; a by-id variant is a plausible future node, not a port on these |
 | moveSelfToNeighbor etc. | — | lattice nodes, out of scope |
 
-#### FOLLOW-UP (recorded, deliberately NOT half-shipped): `Break Bond Between (a, b)`
-Break Bond is self-anchored (`self ↔ targetAgent`), so a third party cannot cut an edge it is
-not part of. The encoding is already reserved: per the [bondRequestQueue.ts](src/modeler/vpl/compiler/bondRequestQueue.ts)
-lane table, Form Between negates the BREAK lane and Transfer negates the FORM lane, leaving
-**both lanes negative** as the one free combination. Sketch: `bl = −(a+2)`, `fl = −(b+2)`;
-decode it in `drainAgentBondRequests` **before** the two existing sign branches; whole-op
-pre-check (`a↔b` must exist, both live/in range) so **I5** holds; emit on all three targets
-through the shared `emitBondRequest`. It is compiler + engine + drain work touching the
-invariant harness, so it wants its own pass rather than a rushed rider on this one.
+#### `Break Bond` names BOTH ends too — the third-party cut (the both-negative lane pair)
+
+**SHIPPED** (this closes the follow-up recorded here at `5ee1407`). Break Bond gained the SAME
+optional **`agentA`** port Form Bond has, with the same id, the same "Agent A (self)" label and
+the same default: **unwired ⇒ THIS agent** (the historical self-anchored break, byte-identical
+on all three agent targets); **wired ⇒ cut the bond between the two NAMED agents**, neither of
+which need be the requester. No "Between" spelling anywhere — it is just Break Bond.
+
+**This was the last edge mutation the verb set could not express.** Rewire and Transfer are both
+anchored AT THE REQUESTER by construction (they move *my* edge), so before this nothing could
+sever an edge a rule is not part of.
+
+- **THE ENCODING — BOTH lanes negative**, the one sign combination Form Between (−,+) and
+  Transfer (+,−) left free: `bondBreakReq = −(a+2)`, `bondFormReq = −(b+2)`. **Zero new fields,
+  zero moved offsets** (the P4b argument), so `check-compile-identity` stays 29/29. The sign
+  table is now COMPLETE — a seventh op kind would need a real field, not another sign. An
+  unresolvable side writes (−NONE, −NONE) = (−1, −1): still non-zero on both lanes (it cannot
+  truncate the queue) and still both-negative (it decodes as this verb, as an explicit no-op).
+- **⚠️ DECODE ORDER IS LOAD-BEARING and this arm goes FIRST**, ahead of BOTH single-sign tests.
+  `bl < 0` alone is Form Between's marker, so a both-negative entry falling into that branch
+  decodes its second id from a NEGATIVE lane, gets −1, fails that arm's `b >= 0` gate and is
+  **DROPPED — the bond silently survives, with no error anywhere**. Milder than Transfer's
+  failure (which destroys an edge) but equally invisible. Proven by SOURCE MUTATION: disabling
+  the branch fails **24** Tier P checks with exactly that symptom (`1:2 -> 1:2`).
+- **`breakBondBetween(store, a, b)`** ([agentEngine.ts](src/simulator/engine/agentEngine.ts)) is
+  the whole-op gate — `a`/`b` live, in range, distinct, and the edge must EXIST — then plain
+  `breakBond`, which removes both rows' slots (**I2**) and compacts each (**I3**). A cut that
+  cannot apply touches NOTHING (**I5**): not a slot, not a degree.
+- **All three agent targets**, through the shared emitters, with wiredness read off the EDGE MAP
+  and resolved **before any local or WGSL name is minted** (`em.allocLocal` moves the module
+  bytes and `fresh()` shifts every later name even when unused — the Form Bond discipline). The
+  port carries **no inline widget**, which is what makes the JS `inputs[...]` test the edge-map
+  test. **No atomics on WebGPU**: the two ids are PAYLOAD on the requester's own rows.
+- **Nothing else needed changing, and each was checked rather than assumed**: `geometryTaint`
+  already taints every `breakBond` value input (it is in `STRUCTURAL_VERBS` with no
+  `GEOMETRY_ONLY_INPUT_PORTS` entry), so a proximity-derived `agentA` taints exactly like Form
+  Bond's — **verified by running the analyzer**, witness `Get Nearby Agents · agents → For Each
+  In Array → Break Bond · agentA`, while a self-handle-only graph stays presentational.
+  `breakBond` was already in `BOND_REQUEST_NODE_TYPES`, `targetDiagnosis`' residency STRUCTURAL
+  set and `AGENT_NODE_REQUIREMENT` → `bonds`; it stays UNCONDITIONALLY init-invalid in
+  `nodeValidation` because the request queue is loop-only in the ABI (the `killAgent` reasoning),
+  so wiring makes no difference there.
+- **Verified.** Byte-identity **29/29, every surface**. `verify-graph-rewrite` **543 → 612**
+  (Tier P: the six-op sign matrix from one starting graph, the decode-order trap, an 8-case I5
+  rejection matrix each asserting the graph is EXACTLY unchanged + a probe queued behind it still
+  applying, I2/I3 double compaction, multi-op batches, and the emit shape + both gates on all
+  three targets). `parity-agent-wasm` gained the permanent `[synthetic] Break Bond pair port (the
+  BREAK BETWEEN sign matrix)`, whose VALUE invariant lays entries 1/2/3 side by side carrying the
+  SAME two ids so the three encodings must differ ONLY in signs — **negative-controlled both
+  ways**: WASM-only dropping the negation fails PARITY (`bondFormReq[1] js=-3 wasm=3`), while
+  BOTH targets dropping it identically passes parity and is caught only by the INVARIANT
+  (`entry 1: formLane 3 !== -3`). **Real worker, all three agent targets** (JS / WASM / real GPU,
+  `agentEngineActive: 'webgpu'` with 0 fallback events): from a ring `0-1…6-7`, agent 0 cuts the
+  2↔3 edge it is not part of — **identical result on all three** (exactly that edge gone, both
+  endpoints' degrees −1, the requester's own bond untouched), 0 console errors; and the shipped
+  `Growing Graphs` still holds `N=562, E=843=3N/2, min=max degree 3, 0 dangling, 0 asymmetric`.
 
 - **Verified.** Byte-identity **29/29, every surface**. Harnesses: `parity-agent-wasm`
   (JS↔WASM bit-parity, all samples + a new permanent `[synthetic] By-id targeting` entry),
@@ -3928,6 +3976,9 @@ A Form Between needs TWO agent ids in one queue entry, which is exactly what a *
 | Rewire(from→to) | `from+2` \| `NONE` — **> 0** | `to+2` \| `NONE` |
 | **FormBetween(a,b)** | **`−(a+2)` \| `−NONE` — < 0** | `b+2` \| `NONE` |
 
+*(Transfer and Break Between later took the two remaining sign combinations — the complete table
+is under "G1 finished — `Transfer Bond`" below.)*
+
 - **Every lane is signed on every target** — `bondFormReq`/`bondBreakReq` are `AGENT_I32_FIELDS` ⇒ `Int32Array` on the CPU, an i32 region in the WASM layout, an f32 run on the GPU — so nothing is truncated or wrapped. **Cost: zero new fields, zero moved offsets** ⇒ `check-compile-identity` 27/27 unchanged.
 - **The "never write 0" rule survives**: an unresolvable Form Between writes `(−NONE, NONE)` = `(−1, +1)`, still non-zero on both lanes, so it cannot truncate the queue, and it decodes to `a<0`/`b<0` = an explicit no-op. The drain's terminator test (`bl === 0 && fl === 0`) is untouched.
 - **The sign is decoded FIRST in the drain** — without that branch the entry falls through and is applied as a plain self→B form, i.e. it bonds the WRONG PAIR with no error anywhere. Negative-controlled by mutating the shipped `if (bl < 0)` to `if (false)`: the triangle split breaks at generation 1 with `degree 2 != 3`.
@@ -3981,6 +4032,11 @@ offsets, queue stride / ABI / layouts untouched** — the same argument P4b made
 | Rewire(from→to) | `from+2` \| `NONE` — **> 0** | `to+2` \| `NONE` — **> 0** |
 | FormBetween(a,b) | `−(a+2)` \| `−NONE` — **< 0** | `b+2` \| `NONE` |
 | **Transfer(b,→to)** | `b+2` \| `NONE` — **> 0** | **`−(to+2)` \| `−NONE` — < 0** |
+| BreakBetween(a,b) | `−(a+2)` \| `−NONE` — **< 0** | `−(b+2)` \| `−NONE` — **< 0** |
+
+The table is now **COMPLETE**: the op kind is read off the SIGN PAIR alone — `(+,+)` is the three
+self-relative verbs (disambiguated by which side is `NONE`, as before) and each of the three
+remaining combinations names one two-id verb. A seventh op kind would need a real field.
 
 ⚠️ **DECODE ORDER IS LOAD-BEARING.** The `fl < 0` branch must sit immediately after the existing
 `bl < 0` branch in `drainAgentBondRequests`. Fall through and `to` decodes to −1, the entry lands
@@ -3988,7 +4044,8 @@ in the plain-BREAK arm with `from = b`, and **the transfer silently degrades to 
 an edge vanishes with no error anywhere. Proven by source mutation: disabling the branch fails 41
 harness checks. An unresolvable transfer writes `NONE` / `−NONE`, still non-zero on both lanes
 (so it cannot truncate the queue) and still `fl < 0` (so it decodes as a no-op transfer, not a
-Break).
+Break). **The BREAK BETWEEN arm (both lanes negative) is decoded ahead of BOTH of these** — see
+"Break Bond names BOTH ends" under "Agent action TARGETING".
 
 #### THE BOND KEEPS ITS VALUES (a deliberate deviation from the B9 assessment)
 It is the SAME edge re-pointed, so the rewritten slot at `b` retains its rest length, stiffness,

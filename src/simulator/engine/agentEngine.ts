@@ -1484,6 +1484,30 @@ export function breakBond(store: AgentStore, a: number, b: number): boolean {
   return r1 || r2;
 }
 
+/** Break the bond between two agents NEITHER of which need be the requester — the
+ *  third-party break a Break Bond with its `agentA` port WIRED asks for.
+ *
+ *  It is `breakBond` behind a whole-op PRE-CHECK, and the pre-check is the point
+ *  (invariant **I5**): `a` and `b` must be live, in range and distinct, and the
+ *  edge must actually EXIST. A "break" that breaks nothing must touch NOTHING —
+ *  no slot may move, no degree may change — so a rejected entry leaves the graph
+ *  EXACTLY as it was. (`breakBond` already no-ops on a missing edge, since
+ *  `removeBondSlot` finds no slot; the range/liveness tests are not redundant
+ *  though — an out-of-range id would index past the typed arrays.)
+ *
+ *  Symmetric by construction: `breakBond` removes BOTH rows' slots (I2) and each
+ *  removal compacts its own row, so nothing is left dangling (I3).
+ *
+ *  Returns true when the bond was removed. */
+export function breakBondBetween(store: AgentStore, a: number, b: number): boolean {
+  const s = store, hw = s.highWater;
+  if (a < 0 || a >= hw || !s.alive[a]) return false;
+  if (b < 0 || b >= hw || !s.alive[b]) return false;
+  if (a === b) return false;
+  if (!hasBond(s, a, b)) return false;
+  return breakBond(s, a, b);
+}
+
 /** P4 — REWIRE, the atomic graph-rewriting verb: move agent `a`'s edge from `from`
  *  to `to` as ONE operation (`break(a,from)` + `form(a,to)`), so the intermediate
  *  half-rewired state never exists.
@@ -1602,7 +1626,7 @@ export function transferBond(store: AgentStore, me: number, b: number, to: numbe
  *
  *  Entry encoding + the overflow bucket:
  *  [bondRequestQueue.ts](../../modeler/vpl/compiler/bondRequestQueue.ts). Each entry
- *  carries BOTH a break side and a form side, so one entry expresses all four verbs
+ *  carries BOTH a break side and a form side, so one entry expresses every verb
  *  and a REWIRE is applied atomically by `rewireBond` (pre-check, then break + form,
  *  or nothing at all — invariant **I5**). `bondReqSlots === 1` (a model whose agent
  *  graph uses no queue verb) reduces this to the pre-P4 single-request drain.
@@ -1617,6 +1641,11 @@ export function transferBond(store: AgentStore, me: number, b: number, to: numbe
  *  named third party over to a new partner, rewriting the third party's slot IN
  *  PLACE (see `transferBond`). Decoded immediately after the Form Between branch;
  *  falling through would turn it into a bare Break.
+ *
+ *  BOTH lanes negative marks a **BREAK BETWEEN** — sever the bond between two
+ *  agents the requester need not be part of (see `breakBondBetween`). Decoded
+ *  FIRST, ahead of both single-sign tests: `bl < 0` alone is Form Between's
+ *  marker, so falling through drops the entry and the bond silently survives.
  *
  *  P2: a form half's INITIAL bond-attribute values ride the per-entry
  *  `bondFormAttrs[<id>][base + c]` cells; `formBond` / `rewireBond` stamp the SAME
@@ -1644,6 +1673,19 @@ export function drainAgentBondRequests(store: AgentStore, lambda: number): boole
       // was ever appended here — and therefore none is appended after it either.
       if (bl === 0 && fl === 0) break;
       s.bondBreakReq[base + c] = 0; s.bondFormReq[base + c] = 0;
+      // BREAK BETWEEN — BOTH lanes negative, the one sign combination the other
+      // two-id verbs left free. It MUST be decoded FIRST, ahead of both
+      // single-sign tests: `bl < 0` alone is Form Between's marker, so falling
+      // through would decode `b` from a NEGATIVE form lane, get −1, fail that
+      // arm's `b >= 0` gate and DROP the entry — the bond silently survives, with
+      // no error anywhere. `breakBondBetween` is the whole-op gate (dead / out of
+      // range / self-aliased / no such edge ⇒ nothing touched — invariant I5).
+      if (bl < 0 && fl < 0) {
+        const a = -bl >= BOND_REQ_ID_BIAS ? -bl - BOND_REQ_ID_BIAS : -1;
+        const b = -fl >= BOND_REQ_ID_BIAS ? -fl - BOND_REQ_ID_BIAS : -1;
+        if (a >= 0 && b >= 0) breakBondBetween(s, a, b);
+        continue;
+      }
       // P4b — a NEGATIVE break lane is the FORM BETWEEN op kind (the only marker
       // distinguishing it from a Rewire, which also fills both lanes). Decoded
       // FIRST: without this branch the entry would fall through and be applied as

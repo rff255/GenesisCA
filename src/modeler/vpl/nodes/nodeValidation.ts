@@ -989,6 +989,9 @@ const AGENT_SELF_ONLY_TYPES = new Set<string>([
   // self writers. `setVelocity` is CONDITIONAL — see AGENT_SELF_ONLY_WHEN_UNWIRED.
   // `killAgent` is unconditional even though it now takes an optional id: its
   // `_killRequest` buffer is loop-only in the ABI, so neither wiring works in init.
+  // The four bond verbs are unconditional for the same reason — the structural
+  // REQUEST QUEUE (`_bondBreakReq` / `_bondFormReq`) is loop-only, so a Form or
+  // Break Bond with its `agentA` WIRED is just as init-invalid as an unwired one.
   'setVelocity', 'applyForce', 'setTargetRadius', 'divideAgent', 'formBond', 'breakBond', 'rewireBond', 'transferBond', 'killAgent',
   // field bridge (sampled/deposited at the SELF position)
   'sampleField', 'fieldGradient', 'readCellsUnder', 'affectCellsUnder', 'secreteToField',
