@@ -19,8 +19,8 @@
 //                        groupCounting / groupStatement over id arrays
 //   structural writes  : divideAgent / formBond / breakBond / killAgent
 //                        (request-flag stores; the CPU structural phase mutates)
-//   setters            : setVelocity / setAgentAttribute / setAgentsAttribute /
-//                        setAgentPosition / setAgentRadius
+//   setters            : setVelocity / setAttribute (self OR by id) /
+//                        setAgentsAttribute / setAgentPosition / setAgentRadius
 //   universal nodes    : switch / loop / valueSwitch / indicators (ALL ops —
 //                        the agent loop is sequential) / lookup tables /
 //                        colour nodes / setCellLooks (plain) / …
@@ -176,7 +176,7 @@ export const AGENT_WASM_SUPPORTED_TYPES: ReadonlySet<string> = new Set<string>([
   // array accessors
   'arrayElement', 'arrayLength',
   // agent attributes (Get/Set/Update Attribute on the agent SoA)
-  'getCellAttribute', 'setAttribute', 'updateAttribute', 'setAgentAttribute',
+  'getCellAttribute', 'setAttribute', 'updateAttribute',
   'setVelocity', 'setAgentPosition', 'setAgentRadius',
   // structural writes (the post-step CPU structural phase reads the requests)
   'divideAgent', 'formBond', 'breakBond', 'rewireBond', 'transferBond', 'killAgent',
@@ -1191,7 +1191,7 @@ function compileValueNode(ctx: AgentWasmCtx, nodeId: string, portId: string): Va
       result = f64Result(() => emitReadCellsUnder(ctx, node));
       break;
     }
-    case 'setVelocity': case 'setAgentAttribute': case 'setAgentPosition':
+    case 'setVelocity': case 'setAgentPosition':
     case 'setAgentRadius': case 'setAgentsAttribute':
       // These are FLOW nodes — should never reach here as a value source.
       throw new Error(`agentWasm: '${type}' is a flow node, not a value source`);
@@ -2931,16 +2931,6 @@ function compileFlowNode(ctx: AgentWasmCtx, nodeId: string): void {
       compileFlowChain(ctx, node.id, 'next');
       break;
     }
-    case 'setAgentAttribute': {
-      const attrId = (node.data.config?.['attributeId'] as string) || '';
-      emitGuardedAgentWrite(ctx, node, 'agentId', (aLocal) => {
-        pushAgentAttrWriteAddr(ctx, attrId, aLocal);
-        pushValueInputF64(ctx, node, 'value', 0);
-        emitAgentAttrStore(ctx, attrId);
-      });
-      compileFlowChain(ctx, node.id, 'next');
-      break;
-    }
     case 'setAgentsAttribute': {
       emitSetAgentsAttribute(ctx, node);
       compileFlowChain(ctx, node.id, 'next');
@@ -2970,11 +2960,25 @@ function compileFlowNode(ctx: AgentWasmCtx, nodeId: string): void {
       break;
     }
     case 'setAttribute': {
-      // On the AGENT graph: write the agent SoA at idx (D-IDX). w_<attr>[idx].
+      // On the AGENT graph: write the agent SoA (D-IDX). Optional `agentId`:
+      // unwired = SELF (`w_<attr>[idx]`, the historical store at idxLocal,
+      // byte-for-byte — the wiredness test reads the EDGE MAP before any local is
+      // allocated, since `em.allocLocal` changes the module bytes even when the
+      // local goes unused). Wired = ANOTHER agent by id, range-guarded exactly as
+      // the retired `setAgentAttribute` did (this compiler only ever emits the
+      // behaviour graph, so the relaxed range-only guard always applies).
       const attrId = (node.data.config?.['attributeId'] as string) || '';
-      pushAgentAttrWriteAddr(ctx, attrId, ctx.idxLocal);
-      pushValueInputF64(ctx, node, 'value', 0);
-      emitAgentAttrStore(ctx, attrId);
+      if (ctx.adj.inputToSource.get(`${node.id}:agentId`)) {
+        emitGuardedAgentWrite(ctx, node, 'agentId', (aLocal) => {
+          pushAgentAttrWriteAddr(ctx, attrId, aLocal);
+          pushValueInputF64(ctx, node, 'value', 0);
+          emitAgentAttrStore(ctx, attrId);
+        });
+      } else {
+        pushAgentAttrWriteAddr(ctx, attrId, ctx.idxLocal);
+        pushValueInputF64(ctx, node, 'value', 0);
+        emitAgentAttrStore(ctx, attrId);
+      }
       compileFlowChain(ctx, node.id, 'next');
       break;
     }

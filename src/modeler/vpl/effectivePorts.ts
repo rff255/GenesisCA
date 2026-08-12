@@ -25,6 +25,7 @@ import { buildCensusPorts } from './compiler/censusExpand';
 import { buildBondAttrPorts } from './bondAttrPorts';
 import { applyLookupAxisPorts } from './nodes/LookupInteractionNode';
 import { buildInputParamPorts, isInputMappingRoot } from '../../model/inputMappingParams';
+import { getActiveGraphKind } from './graphState';
 
 export interface EffectivePorts {
   inputs: PortDef[];
@@ -161,7 +162,9 @@ export function getEffectivePorts(
   // Matching between-bounds, Group Reduce Position, Math unary Y, etc. Applied
   // AFTER the dynamic add/transform logic above (switch/sequence/expression),
   // which those nodes keep inline because they ADD ports rather than remove.
-  const hidden = def.hiddenPorts?.(cfg as NodeConfig, model);
+  // `getActiveGraphKind()` is threaded so a UNIVERSAL node can drop a port that
+  // only means something on one rule graph (setAttribute's optional `agentId`).
+  const hidden = def.hiddenPorts?.(cfg as NodeConfig, model, getActiveGraphKind());
   if (hidden && hidden.length > 0) {
     const drop = new Set(hidden);
     inputs = inputs.filter(p => !drop.has(p.id));

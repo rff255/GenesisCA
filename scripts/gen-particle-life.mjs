@@ -162,7 +162,7 @@ function buildModel(is3d) {
   vE(exX, 'result', ca, 'x'); vE(exY, 'result', ca, 'y');
   if (exZ) vE(exZ, 'result', ca, 'z');
   const rSp = node('getRandom', { randomType: 'integer', min: '0', max: String(K - 1) }, 3.8, 1.8);
-  const saSp = node('setAgentAttribute', { attributeId: 'species' }, 5, 0.8);
+  const saSp = node('setAttribute', { attributeId: 'species' }, 5, 0.8);
   vE(ca, 'handle', saSp, 'agentId'); vE(rSp, 'value', saSp, 'value');
   const aw = node('addAgentToWorld', {}, 6.2, 0);
   vE(ca, 'handle', aw, 'handle');

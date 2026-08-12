@@ -458,7 +458,7 @@ ag.vEdge(mkSeed, 'handle', addSeed, 'handle');
 // so the loop index and the handle agree.
 const lutInit = ag.node('lookupInteraction', { tableId: 'initState' }, 3, 2);
 ag.vEdge(spawn, 'index', lutInit, 'axis_0');
-const seedState = ag.node('setAgentAttribute', { attributeId: 'state' }, 5, 0);
+const seedState = ag.node('setAttribute', { attributeId: 'state' }, 5, 0);
 ag.vEdge(mkSeed, 'handle', seedState, 'agentId');
 ag.vEdge(lutInit, 'value', seedState, 'value');
 
@@ -751,7 +751,7 @@ ag.vEdge(mkJ, 'handle', addJ, 'handle');
 // `prio` is the attribute DEFAULT (2.5, a non-splitter), so a newborn can never
 // divide in a later round of the SAME tick — the reference freezes its flag
 // array at the tick boundary for exactly the same reason.
-const stJ = ag.node('setAgentAttribute', { attributeId: 'state' }, 12, 18);
+const stJ = ag.node('setAttribute', { attributeId: 'state' }, 12, 18);
 ag.vEdge(mkJ, 'handle', stJ, 'agentId');
 ag.vEdge(stateNow, 'value', stJ, 'value');
 
@@ -761,7 +761,7 @@ ag.vEdge(y3, 'result', mkK, 'y');
 ag.vEdge(radAttr, 'value', mkK, 'radius');
 const addK = ag.node('addAgentToWorld', {}, 11, 21);
 ag.vEdge(mkK, 'handle', addK, 'handle');
-const stK = ag.node('setAgentAttribute', { attributeId: 'state' }, 12, 21);
+const stK = ag.node('setAttribute', { attributeId: 'state' }, 12, 21);
 ag.vEdge(mkK, 'handle', stK, 'agentId');
 ag.vEdge(stateNow, 'value', stK, 'value');
 

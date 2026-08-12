@@ -48,6 +48,7 @@ import { migrateSetCellLooksNodes } from './setCellLooksMigration';
 import { migrateAgentAttributeSplit } from './agentAttributeSplitMigration';
 import { migrateAgentTypeRemoval } from './agentTypeRemovalMigration';
 import { migrateFormBondBetween } from './formBondBetweenMigration';
+import { migrateSetAgentAttribute } from './setAgentAttributeMigration';
 import { migrateVariableScopeSplit } from './variableScopeMigration';
 import { migrateEngineField } from './engineFieldMigration';
 import { migrateReproducibilityField } from './reproducibilityMigration';
@@ -1015,7 +1016,7 @@ export function modelReducer(state: ModelState, action: ModelAction): ModelState
         };
       }
       // Tag-options remap for agent-graph node configs (getConstant / switch /
-      // Compare / setAttribute|setAgentAttribute inline values) + agent tag
+      // Compare / setAttribute inline values) + agent tag
       // variables' initialValue. patchAllNodes scans both graphs; the cell graph
       // never references an agent-attribute id, so only the agent graph is affected.
       if (oldAttr && action.changes.tagOptions && oldAttr.tagOptions) {
@@ -1056,7 +1057,7 @@ export function modelReducer(state: ModelState, action: ModelAction): ModelState
             // Compare in tag mode stores its operands as tag indices in
             // _port_x/_port_y/_port_y2 Ã¢â‚¬â€ the cell path remaps them; so must we.
             (nt === 'statement' && cfg.compareType === 'tag' && cfg.tagAttributeId === attrId) ||
-            ((nt === 'setAttribute' || nt === 'setAgentAttribute' || nt === 'setAgentsAttribute' || nt === 'updateAttribute') && cfg.attributeId === attrId),
+            ((nt === 'setAttribute' || nt === 'setAgentsAttribute' || nt === 'updateAttribute') && cfg.attributeId === attrId),
           (cfg, nt) => {
             if (nt === 'getConstant') cfg.constValue = remap(cfg.constValue);
             if (nt === 'switch') {
@@ -1068,7 +1069,7 @@ export function modelReducer(state: ModelState, action: ModelAction): ModelState
               if (cfg._port_y !== undefined) cfg._port_y = remap(cfg._port_y);
               if (cfg._port_y2 !== undefined) cfg._port_y2 = remap(cfg._port_y2);
             }
-            if ((nt === 'setAttribute' || nt === 'setAgentAttribute' || nt === 'setAgentsAttribute') && cfg._port_value !== undefined) {
+            if ((nt === 'setAttribute' || nt === 'setAgentsAttribute') && cfg._port_value !== undefined) {
               cfg._port_value = remap(cfg._port_value);
             }
             return cfg;
@@ -1740,6 +1741,11 @@ export function modelReducer(state: ModelState, action: ModelAction): ModelState
       // queue encoding on all three agent targets. Idempotent; no-op for models
       // that never used it.
       m = migrateFormBondBetween(m);
+      // Retire Set Agent Attribute: rewrite it to a `setAttribute` whose optional
+      // `agentId` is wired — a PURE nodeType rename (every port / config key is
+      // identical), which emits byte-for-byte the same code on all three agent
+      // targets. Idempotent; no-op for models that never used it.
+      m = migrateSetAgentAttribute(m);
       // Get Random's interval moved from `config.min`/`config.max` to real
       // `min`/`max` INPUT PORTS — re-key the legacy values onto `_port_min` /
       // `_port_max` (cells + agents + overseer + macroDefs). Value-for-value, so

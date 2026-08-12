@@ -160,14 +160,14 @@ export function hasVectorAttrs(attrs: readonly Attribute[]): boolean {
 /** Node types whose `value` port carries a stored-attribute value keyed by
  *  `config.attributeId` — the own-cell Get/Set PLUS the neighbour reads
  *  (`getNeighborAttributeByIndex`/`getNeighborAttributeByTag`), the by-id agent
- *  reads/writes (`getAgentAttribute`/`setAgentAttribute`), and the neighbour
+ *  read (`getAgentAttribute`), and the neighbour
  *  writes (`setNeighborAttributeByIndex`/`setNeighborhoodAttribute`). When the
  *  picked attribute is a `vector`, that port flips to the composite `vector` type
  *  and the node lowers (see `lowerVectorAttrs`). */
 const VECTOR_ATTR_PORT_NODES: ReadonlySet<string> = new Set([
   'getCellAttribute', 'setAttribute',
   'getNeighborAttributeByIndex', 'getNeighborAttributeByTag', 'getAgentAttribute',
-  'setNeighborAttributeByIndex', 'setNeighborhoodAttribute', 'setAgentAttribute',
+  'setNeighborAttributeByIndex', 'setNeighborhoodAttribute',
 ]);
 
 /** Every node type whose reference to a `vector` attribute IS correctly lowered by
@@ -267,11 +267,14 @@ const GET_LOWER: Record<string, { key: string; fanout: string[]; copyConfig: boo
 /** Set nodes whose vector `value` INPUT lowers to a Break Vector + a linear
  *  component-write chain. Same `key`/`fanout`/`copyConfig` semantics. */
 const SET_LOWER: Record<string, { key: string; fanout: string[]; copyConfig: boolean }> = {
-  setAttribute: { key: 'attributeId', fanout: [], copyConfig: false },
+  // `setAttribute` fans its OPTIONAL `agentId` out to every component setter (an
+  // unwired one has no edge, so the fan is a no-op and a cell/self write is
+  // unchanged). `copyConfig` stays false: the component clones must NOT inherit
+  // the parent's `_port_value` inline, exactly as before the agent id existed.
+  setAttribute: { key: 'attributeId', fanout: ['agentId'], copyConfig: false },
   setVariable: { key: 'variableId', fanout: [], copyConfig: false },
   setNeighborAttributeByIndex: { key: 'attributeId', fanout: ['index'], copyConfig: true },
   setNeighborhoodAttribute: { key: 'attributeId', fanout: [], copyConfig: true },
-  setAgentAttribute: { key: 'attributeId', fanout: ['agentId'], copyConfig: true },
 };
 
 /** The ONE compiler-facing transform: lowers every node that reads/writes a stored
@@ -292,9 +295,9 @@ const SET_LOWER: Record<string, { key: string; fanout: string[]; copyConfig: boo
  *     reads `getNeighborAttributeByIndex`/`getNeighborAttributeByTag`, the by-id agent
  *     read `getAgentAttribute` — each → a `makeVector` fed by N same-type component
  *     reads, with the shared value input (NI index / agent id) fanned out to every reader.
- *   - FLOW writes (`SET_LOWER`): own `setAttribute`/`setVariable`, the neighbour writes
- *     `setNeighborAttributeByIndex`/`setNeighborhoodAttribute`, the by-id agent write
- *     `setAgentAttribute` — each → a `breakVector` + a linear `do → set_vx → set_vy[
+ *   - FLOW writes (`SET_LOWER`): `setAttribute` (self OR another agent by id) /
+ *     `setVariable`, the neighbour writes `setNeighborAttributeByIndex` /
+ *     `setNeighborhoodAttribute` — each → a `breakVector` + a linear `do → set_vx → set_vy[
  *     → set_vz] → next` chain, with the shared value input fanned out to every setter.
  *   - `moveSelfToNeighbor` — a config-slot expansion of each vector payload slot into
  *     its scalar-component slots (NOT a Make/Break rewrite).

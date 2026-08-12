@@ -323,7 +323,7 @@ console.log(`${fail === 0 ? 'VECTOR-ATTR JS CELL COMPILE ✓' : `${fail} CELL FA
   dc('_attr defaults baked (4, 9, 7)', mvOut.data.config._attr_0_default === '4' && mvOut.data.config._attr_1_default === '9' && mvOut.data.config._attr_2_default === '7');
 
   // The refined validation set: getCellAttribute lowered, getNeighborsAttribute NOT.
-  dc('VECTOR_LOWERED includes the newly-lowered nodes', ['getNeighborAttributeByIndex', 'getNeighborAttributeByTag', 'getAgentAttribute', 'setNeighborAttributeByIndex', 'setNeighborhoodAttribute', 'setAgentAttribute', 'moveSelfToNeighbor'].every(t => m.VECTOR_LOWERED.has(t)));
+  dc('VECTOR_LOWERED includes the newly-lowered nodes', ['getNeighborAttributeByIndex', 'getNeighborAttributeByTag', 'getAgentAttribute', 'setNeighborAttributeByIndex', 'setNeighborhoodAttribute', 'setAttribute', 'moveSelfToNeighbor'].every(t => m.VECTOR_LOWERED.has(t)));
   dc('VECTOR_LOWERED excludes array-of-vectors / updateAttribute', !m.VECTOR_LOWERED.has('getNeighborsAttribute') && !m.VECTOR_LOWERED.has('getAgentsAttribute') && !m.VECTOR_LOWERED.has('filterNeighbors') && !m.VECTOR_LOWERED.has('updateAttribute'));
   console.log(`VECTOR TRANSFORM UNIT (tag-index bake + move slots + VECTOR_LOWERED) ${fail === 0 ? '✓' : '✗'}`);
 }

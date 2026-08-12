@@ -5,7 +5,7 @@ import { is3dModelLike } from '../compiler/niCodec';
  *  Agent Platform). Unlike the cell Init Event (which runs per lattice cell),
  *  agents have no fixed lattice, so this runs EXACTLY ONCE: the user wires a Loop
  *  (or For Each In Array) inside the DO chain and spawns the initial population
- *  with Create Agent → (Set Agent Attribute / Position / Radius) → Add
+ *  with Create Agent → (Set Attribute [Agent = the handle] / Set Agent Position / Radius) → Add
  *  Agent To World. Composes additively with the config `seedCount` (that baseline
  *  is laid first; the Init Event may spawn more — set seedCount=0 for pure
  *  graph-authored seeding). Value-outs expose the world bounds + the seed index

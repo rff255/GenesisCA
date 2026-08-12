@@ -99,7 +99,7 @@ const ca = node('createAgent', { _port_radius: '0.45' }, 4, 0);
 vE(exX, 'result', ca, 'x');
 vE(exY, 'result', ca, 'y');
 const rnd = node('getRandom', { randomType: 'bool', _port_probability: '0.30' }, 4, 1.5);
-const saInit = node('setAgentAttribute', { attributeId: 'alive' }, 5, 0.5);
+const saInit = node('setAttribute', { attributeId: 'alive' }, 5, 0.5);
 vE(ca, 'handle', saInit, 'agentId');
 vE(rnd, 'value', saInit, 'value');
 const aw = node('addAgentToWorld', {}, 6, 0);

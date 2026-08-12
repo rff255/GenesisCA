@@ -4,7 +4,7 @@ import { is3dModelLike } from '../compiler/niCodec';
 
 /** Apply Force To Agent — add a force vector to ANOTHER agent by id (Bond-Graph
  *  Agents). The cross-agent counterpart to Apply Force (which adds to THIS agent).
- *  Unlike the by-id OVERWRITE writers (Set Agent Attribute / Position / Radius),
+ *  Unlike the by-id OVERWRITE writers (a wired Set Attribute / Set Agent Position / Radius),
  *  this is a COMMUTATIVE accumulate (`force[target] += f`) onto the per-step-zeroed
  *  force buffer that the integrator consumes AFTER the whole behaviour pass — so it
  *  is race-free in BOTH sync and async agent modes (order doesn't matter for a sum,

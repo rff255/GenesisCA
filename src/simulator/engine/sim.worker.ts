@@ -1854,7 +1854,7 @@ function runAgentInit(): void {
     if (s.alive[i]) { s.xNext[i] = s.x[i]!; s.yNext[i] = s.y[i]!; if (initIs3d) s.zNext[i] = s.z[i]!; }
   }
   // Sync agent mode double-buffers the attributes: the Init Event's Set Attribute
-  // / Set Agent Attribute wrote the WRITE buffer, but the first behaviour step (and
+  // / a by-id Set Attribute wrote the WRITE buffer, but the first behaviour step (and
   // getState / the first colour pass) read the READ buffer. Copy writeÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢read so the
   // init-built state is the readable initial state. (No-op in async: r aliases w.)
   if (s.syncAttrs) {

@@ -52,7 +52,7 @@
 //   · auto-bond ON — the engine forms and breaks bonds BY DISTANCE
 //
 // SINKS (non-geometric state):
-//   · attribute writes — setAttribute, updateAttribute, setAgentAttribute,
+//   · attribute writes — setAttribute (self or by id), updateAttribute,
 //     setAgentsAttribute, setBondAttribute
 //   · indicators — setIndicator, updateIndicator
 //   · halt — stopEvent
@@ -246,9 +246,8 @@ const FIELD_DEPOSITS = new Set(['affectCellsUnder', 'secreteToField']);
 
 /** Human sink descriptions for the witness. */
 const SINK_KIND: Record<string, string> = {
-  setAttribute: 'writes an agent attribute',
+  setAttribute: 'writes an agent attribute (its own, or another’s by id)',
   updateAttribute: 'modifies an agent attribute',
-  setAgentAttribute: 'writes another agent’s attribute',
   setAgentsAttribute: 'writes many agents’ attributes',
   setBondAttribute: 'writes a bond attribute',
   setIndicator: 'writes an indicator',
@@ -284,7 +283,7 @@ const NODE_LABEL: Record<string, string> = {
   getRadius: 'Get Radius', getAgentRadius: 'Get Agent Radius',
   getAgentsAttribute: 'Get Agents Attribute', getAgentAttribute: 'Get Agent Attribute',
   getCellAttribute: 'Get Self Attribute', setAttribute: 'Set Attribute',
-  updateAttribute: 'Update Attribute', setAgentAttribute: 'Set Agent Attribute',
+  updateAttribute: 'Update Attribute',
   setAgentsAttribute: 'Set Agents Attribute', setBondAttribute: 'Set Bond Attribute',
   getBondAttribute: 'Get Bond Attribute', setIndicator: 'Set Indicator',
   updateIndicator: 'Update Indicator', stopEvent: 'Stop Event',

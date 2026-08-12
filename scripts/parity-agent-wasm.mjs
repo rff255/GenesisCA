@@ -337,7 +337,7 @@ function buildMultiAttrModel() {
   const gsh = an('getSelfHandle', {});
   const gaa = an('getAgentAttribute', { attributeId: 'a', extraCount: 1, attr_2: 'b' });
   aE(gsh, 'handle', gaa, 'agentId', 'value');
-  const saa = an('setAgentAttribute', { attributeId: 'o4', extraCount: 1, attr_2: 'o5' });
+  const saa = an('setAttribute', { attributeId: 'o4', extraCount: 1, attr_2: 'o5' });
   aE(gsh, 'handle', saa, 'agentId', 'value');
   aE(gaa, 'value', saa, 'value', 'value');
   aE(gaa, 'value_2', saa, 'value_2', 'value');

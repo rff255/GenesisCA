@@ -38,8 +38,11 @@ import type { CAModel, Attribute, GraphNode, MacroDef } from './types';
 /** Agent-graph node types that reference an attribute as AGENT STATE (own or
  *  another agent's), via `config.attributeId`. */
 const AGENT_STATE_NODES = new Set<string>([
+  // NB `setAttribute` covers the retired `setAgentAttribute` too: this migration
+  // runs AFTER `migrateSetAgentAttribute` at both call sites (LOAD_MODEL and the
+  // dev harness), so a legacy by-id write has already become a `setAttribute`.
   'getCellAttribute', 'setAttribute', 'updateAttribute',
-  'getAgentAttribute', 'setAgentAttribute',
+  'getAgentAttribute',
   // PR3 array nodes (forward-compat — harmless if absent in a v1 file)
   'getAgentsAttribute', 'setAgentsAttribute', 'filterAgents',
 ]);

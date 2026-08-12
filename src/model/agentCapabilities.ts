@@ -71,7 +71,7 @@ export function capReqLabel(key: AgentCapKey): string { return CAP_REQS[key].lab
 // Node → capability requirement. The single source consumed by BOTH the palette
 // gate (`isNodeAvailable` / the amber badge) AND the migration usage-widening.
 // A node NOT listed here is a CORE agent node (always available when Agents is
-// on — e.g. Behaviour Step, Get Self Position, Get/Set Agent Attribute-by-id,
+// on — e.g. Behaviour Step, Get Self Position, Get Agent Attribute-by-id,
 // the array-tier plumbing) OR a universal node. Only nodes that should VANISH
 // when their capability is off are listed.
 //

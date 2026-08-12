@@ -1,8 +1,8 @@
 /**
  * Multi-attribute slot expansion — target-independent pre-compile graph transform.
  *
- * The five attribute-accessor nodes (`getCellAttribute` / `setAttribute` /
- * `getModelAttribute` / `getAgentAttribute` / `setAgentAttribute`) support a
+ * The four attribute-accessor nodes (`getCellAttribute` / `setAttribute` /
+ * `getModelAttribute` / `getAgentAttribute`) support a
  * DYNAMIC number of attribute slots (the `Transfer Cell Attributes To Neighbor`
  * payload-slot pattern applied to the accessors): one Get node reads N attributes
  * through N output ports, one Set node writes N attributes through N input ports.
@@ -24,8 +24,9 @@
  *    keys, so accessor-CSE sees a plain single get); each extra slot becomes a
  *    synthesized single-slot clone, and consumers of `value_${i}` (or
  *    `r/g/b_${i}` for a color model attribute) rewire to the clone's `value`
- *    (`r`/`g`/`b`). `getAgentAttribute`'s shared `agentId` input FANS OUT — the
- *    original keeps its edge and each clone gets a copy of the same source.
+ *    (`r`/`g`/`b`). The shared `agentId` input of `getAgentAttribute` / a WIRED
+ *    `setAttribute` FANS OUT — the original keeps its edge and each clone gets a
+ *    copy of the same source.
  *  - SET (flow): the original (slot 1) heads a synthesized linear flow splice
  *    `do → set(slot1) → set(slot2) → … → set(slotN) → next`; `value_${i}` edges
  *    retarget to clone i's `value`, `_port_value_${i}` inline values copy to the
@@ -57,7 +58,7 @@ export const MULTI_ATTR_GET_TYPES: ReadonlySet<string> = new Set([
 ]);
 /** Accessor nodes whose extra slots add value INPUTS (written in slot order). */
 export const MULTI_ATTR_SET_TYPES: ReadonlySet<string> = new Set([
-  'setAttribute', 'setAgentAttribute',
+  'setAttribute',
 ]);
 /** All multi-slot-capable accessor node types. */
 export const MULTI_ATTR_TYPES: ReadonlySet<string> = new Set([
@@ -96,7 +97,7 @@ export function resolveSlotAttr(
   if (nodeType === 'getModelAttribute') {
     return model.attributes.find(a => a.id === attrId && a.isModelAttribute);
   }
-  if (nodeType === 'getAgentAttribute' || nodeType === 'setAgentAttribute') {
+  if (nodeType === 'getAgentAttribute') {
     return (model.agentAttributes ?? []).find(a => a.id === attrId);
   }
   return model.attributes.find(a => a.id === attrId && !a.isModelAttribute)
@@ -226,7 +227,10 @@ export function expandMultiAttrs(
     outNodes.push({ ...nd, data: { ...nd.data, config: pruned } });
     expandedIds.add(nd.id);
 
-    const fanPorts = (t === 'getAgentAttribute' || t === 'setAgentAttribute') ? ['agentId'] : [];
+    // The SHARED by-id input fans out to every slot clone, so one node writes N
+    // attributes on ONE target. `setAttribute`'s `agentId` is OPTIONAL — unwired
+    // there is no edge to fan, so a self / cell write is byte-identical.
+    const fanPorts = (t === 'getAgentAttribute' || t === 'setAttribute') ? ['agentId'] : [];
 
     if (MULTI_ATTR_GET_TYPES.has(t)) {
       for (const i of slots) {
