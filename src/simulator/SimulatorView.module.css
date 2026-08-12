@@ -425,8 +425,13 @@
 
 .fieldRow {
   display: flex;
+  /* Wrap rather than overflow: the right panel is user-resizable down to a
+   * couple of hundred pixels, and a row of label+field pairs (brush W×H, RGB
+   * channels, grid W×H) exceeds that long before the fields hit their floors.
+   * Only engages on overflow, so wide panels are unchanged. */
+  flex-wrap: wrap;
   align-items: center;
-  gap: var(--space-3);
+  gap: var(--space-1) var(--space-3);
   font-size: var(--font-xs);
 }
 
@@ -1180,16 +1185,69 @@
 
 /* --- Input mapping tabs (in brush panel) --- */
 
-/* The AGENT BRUSH's class strip — Built-in vs User defined. The buttons reuse
-   the established `.rightPanelTab` / `.rightPanelTabActive` look; only the
-   strip's own box differs from `.rightPanelTabs`, whose padding + full-width
-   border are tuned for a panel HEADER rather than a row inside a body. */
-.agentBrushTabs {
+/* The AGENT BRUSH's class headers — "User defined" then "Built-in", rendered as
+   two VERTICAL sections of one panel (they replaced a tab strip: a tab hides one
+   class behind the other, and with a shared geometry block above them there was
+   nothing left that the tabs actually separated). A rule trailing the caption
+   keeps them light — the panel already has a real header of its own.
+
+   Rendered ONLY when the model HAS Agent Input Mappings: with none there is
+   exactly one class, so a header would be a label with nothing to distinguish
+   it from (the standing hide-when-structurally-impossible rule) and the panel
+   reads exactly as it did before the classes existed. */
+.brushSectionTitle {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: var(--space-1);
+  color: var(--color-text-tertiary);
+  font-size: var(--font-3xs);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.brushSectionTitle::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--color-border);
+}
+
+/* A labelled control row inside the agent brush body. The label is a FIXED
+   column so stacked rows align; the control takes the rest and the row WRAPS
+   rather than overflowing a narrow panel. */
+.brushFieldRow {
   display: flex;
   flex-wrap: wrap;
-  gap: var(--space-1);
-  padding-bottom: var(--space-2);
-  border-bottom: 1px solid var(--color-border);
+  align-items: center;
+  gap: var(--space-1) var(--space-2);
+  min-width: 0;
+}
+
+.brushFieldLabel {
+  flex: 0 0 auto;
+  width: 54px;
+  color: var(--color-text-muted);
+  font-size: var(--font-2xs);
+}
+
+/* Compact explanatory line. The DETAIL belongs in a `title` (the capture-popover
+   doctrine: a control surface is a label + a control, and prose that is always
+   visible is what bloats a narrow panel). */
+.brushHint {
+  font-size: var(--font-3xs);
+  color: var(--color-text-muted);
+  line-height: 1.35;
+}
+
+/* The entry rows of both classes — the built-in actions and the user-defined
+   mappings. Wraps, so a long mapping name never overflows the panel. */
+.brushEntries {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+  min-width: 0;
 }
 
 .mappingTabs {
@@ -1424,12 +1482,117 @@
   min-width: 0;
 }
 
+/* --- Input-mapping PARAMETER rows (InputParamsPanel: the CELL brush AND the
+       agent User-defined brush share it) ------------------------------------
+
+   GEOMETRY STABILITY IS THE WHOLE POINT of this block, and it is what the old
+   layout got wrong. It reused the DENSE Manual-Brush row, whose widget cell is a
+   fixed 88px holding BOTH a bounded parameter's slider and its number field —
+   and the reset button was rendered INSIDE that cell, only while the value
+   differed from the default. So dragging a slider off its default made the
+   button APPEAR, stealing ~16px from the slider MID-DRAG (and handing it back on
+   the way home): a layout feedback loop driven by the VALUE. On top of that the
+   slider's share of 88px was ~36px to begin with.
+
+   Three rules kill it, and any future widget added here must keep them:
+     · the reset SLOT is ALWAYS present at a fixed width; only the BUTTON inside
+       is conditional — so no enabled-but-inert control (the standing rule) AND
+       no reflow when it appears;
+     · the number field is a FIXED width, so a digit-count change (1 → 10000.5)
+       can never move anything;
+     · the slider is the ONLY elastic part, so its width is a function of the
+       PANEL width alone — never of the value.
+   Narrow panels degrade by WRAPPING the widget under the label (the widget's
+   flex-basis no longer fits the line) instead of crushing either. */
+.paramRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  column-gap: var(--space-2);
+  row-gap: 2px;
+  font-size: var(--font-xs);
+}
+
+.paramLabel {
+  flex: 1 1 auto;
+  /* Capped so a long parameter name can never eat the widget's space, and
+   * ellipsised so it degrades instead of wrapping the row. */
+  max-width: 150px;
+  min-width: 0;
+  color: var(--color-text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.paramWidget {
+  /* The basis is what decides the WRAP: once label + 150px no longer fit the
+   * panel, this cell drops to its own line and takes the full width. */
+  flex: 1 1 150px;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+/* Selects (bool / tag) and the unbounded number input fill the cell. */
+.paramWidget > select,
+.paramWidget > input[type="text"] {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 2px 4px;
+  background: var(--color-bg-canvas);
+  color: var(--color-text-primary);
+  border: 1px solid var(--color-widget-border);
+  border-radius: var(--radius-sm);
+  font-size: var(--font-2xs);
+  font-family: inherit;
+}
+
+/* A bounded parameter's slider — the ONE elastic element of the row. */
+.paramSlider {
+  flex: 1 1 auto;
+  min-width: 32px;
+  padding: 0;
+  margin: 0;
+  border: none;
+  background: transparent;
+  accent-color: var(--color-accent);
+}
+
+/* FIXED width: the digit count must never reflow the row. */
+.paramNumber {
+  flex: 0 0 72px;
+  background: var(--color-bg-canvas);
+  border: 1px solid var(--color-widget-border);
+  border-radius: var(--radius-md);
+  color: var(--color-text-primary);
+  font-size: var(--font-2xs);
+  font-family: inherit;
+  text-align: center;
+}
+
+/* Always rendered, so showing / hiding the button inside reflows NOTHING.
+   ⚠ `min-width: 0` is REQUIRED, not tidiness: a flex item's automatic minimum
+   size is its CONTENT, so the basis alone does not hold — the ⟳ glyph plus its
+   padding measured 19px and pushed the slot open by 5px the moment the button
+   appeared, which is the very reflow this slot exists to prevent. */
+.paramResetSlot {
+  flex: 0 0 16px;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
 /* Reset-a-parameter-to-its-declared-default. Rendered ONLY while the value
-   differs, so it is never an enabled control that does nothing. */
+   differs, so it is never an enabled control that does nothing — its SLOT
+   above is what keeps that conditional free of layout cost. */
 .paramResetBtn {
   flex: 0 0 auto;
-  width: auto;
-  padding: 0 4px;
+  width: 100%;
+  padding: 0;
   background: transparent;
   border: none;
   color: var(--color-text-tertiary);

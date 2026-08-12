@@ -3190,26 +3190,39 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
   // which is a brush of its own and belongs beside the built-ins rather than
   // buried under a "paint" action.
   //
+  // They are two VERTICAL SECTIONS of one panel — User defined first when the
+  // model has any, Built-in below — rather than two tabs. A tab hides one class
+  // behind the other, and once the SHARED geometry block (shape / size / radius,
+  // which both classes use) moved above them there was nothing left that the
+  // tabs actually separated.
+  //
   // ⚠ THERE IS STILL EXACTLY ONE SOURCE OF TRUTH: `agentBrushMode`, in which
   // `'paint'` MEANS "a user-defined mapping is armed" and `agentPaintMapping`
-  // names WHICH. So the TAB is DERIVED, never stored. Two consequences, both
-  // load-bearing: (1) the panel can never show a tab whose highlighted entry is
-  // not the brush that would actually fire — a stored tab would let the user sit
-  // on "Built-in" while a spawner mapping was armed, exactly the lie a derived
-  // one cannot tell; (2) every pointer / cursor / footprint / UI-sync path keeps
-  // keying off the same `'paint'` it always did, so the restructure is panel-deep
-  // and changes no brush SEMANTICS.
+  // names WHICH. Both sections read it, so exactly one entry across BOTH is ever
+  // highlighted and it is always the brush that would actually fire — arming in
+  // one section de-arms the other for free, with no second piece of state to
+  // keep in step. And every pointer / cursor / footprint / UI-sync path keeps
+  // keying off the same `'paint'` it always did, so this is panel-deep and
+  // changes no brush SEMANTICS.
   const agentBuiltinModes = useMemo(() => agentBrushModes.filter(m => m !== 'paint'), [agentBrushModes]);
-  const agentBrushTab: 'builtin' | 'user' = agentBrushMode === 'paint' ? 'user' : 'builtin';
-  // Which built-in to return to when the user clicks the Built-in tab while a
-  // mapping is armed — tracked rather than defaulting to Add, so a round-trip
-  // through User defined puts the brush back where it was.
-  const lastBuiltinModeRef = useRef<AgentBrushMode>('add');
-  if (agentBrushMode !== 'paint') lastBuiltinModeRef.current = agentBrushMode;
-  /** THE ONE selection setter — the built-in buttons, the mapping entries, the
-   *  tab strip and the Alt+wheel cycle all route through it, so the anchor reset
-   *  a brush switch owes (a staged Glue partner / Line point belongs to the brush
-   *  that staged it) cannot be forgotten at one of them.
+  // Do the two class HEADERS render? Only when there are two classes to name —
+  // with no input mapping the panel collapses to exactly its pre-classes look.
+  const showBrushClasses = agentInputMappings.length > 0;
+  // WHICH SHARED GEOMETRY FORM the armed brush takes — the two are exclusive and
+  // cut ACROSS the classes, which is why the block sits above both sections.
+  //   footprint  → a shape + its size (a stamp of cells / an area of agents)
+  //   radius only → a centre + a radius (a radial force, or a spawner's spread)
+  // Glue / Cut are in NEITHER: they are two-click picks with no extent, so the
+  // block renders nothing rather than an inert control (the standing rule).
+  const agentBrushUsesFootprint = agentBrushMode === 'add' || agentBrushMode === 'remove'
+    || agentBrushMode === 'move' || agentBrushMode === 'edit'
+    || (agentBrushMode === 'paint' && !agentPaintIsSpawner);
+  const agentBrushUsesRadiusOnly = NUDGE_BRUSH_MODES.has(agentBrushMode)
+    || (agentBrushMode === 'paint' && agentPaintIsSpawner);
+  /** THE ONE selection setter — the built-in buttons, the mapping entries and
+   *  the Alt+wheel cycle all route through it, so the anchor reset a brush
+   *  switch owes (a staged Glue partner / Line point belongs to the brush that
+   *  staged it) cannot be forgotten at one of them.
    *
    *  ⚠ THE REFS LEAD THE STATE (the `commitAgentSweep` / `agentNudgeIntensityRef`
    *  discipline): a wheel BURST fires several events before React re-renders, and
@@ -3224,15 +3237,17 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
     agentLineAnchorRef.current = null;
     agentLine3dAnchorRef.current = null;
   };
-  // THE Alt+wheel CYCLE = the FLAT list of everything the two tabs contain, in
-  // the order they render: every built-in, then every user-defined mapping. Each
-  // entry is a DISTINCT armed brush, so the wheel reaches exactly what the panel
-  // offers — and, because the list IS what is rendered, it can never land on a
-  // hidden mode (Glue/Cut under Bonds=Off) or a deleted mapping.
+  // THE Alt+wheel CYCLE = the FLAT list of everything the two sections contain,
+  // IN THE ORDER THEY RENDER — user-defined mappings first, then the built-ins.
+  // Each entry is a DISTINCT armed brush, so the wheel reaches exactly what the
+  // panel offers; and because the list IS what is rendered, it can never land on
+  // a hidden mode (Glue/Cut under Bonds=Off) or a deleted mapping. Keep this
+  // order in step with the JSX below — a cycle that walks the panel in a
+  // different order than the eye does is the whole reason it is derived here.
   const agentBrushCycle = useMemo(
     () => [
-      ...agentBuiltinModes.map(m => ({ mode: m as AgentBrushMode, mappingId: undefined as string | undefined })),
       ...agentInputMappings.map(m => ({ mode: 'paint' as AgentBrushMode, mappingId: m.id })),
+      ...agentBuiltinModes.map(m => ({ mode: m as AgentBrushMode, mappingId: undefined as string | undefined })),
     ],
     [agentBuiltinModes, agentInputMappings]);
   // Mirrored for the two once-registered wheel handlers (2D + the 3D GL canvas),
@@ -15197,16 +15212,36 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
                 <span className={styles.panelTitle}>Agent Brush</span>
               </div>
               <div className={styles.rightPanelSectionBody} style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: '0.66rem' }}>
-                  {/* Shape + size — placed BEFORE the mode buttons. Scope (Single vs
-                      Area) is DERIVED from the size and shown as a badge on the size
-                      row (no toggle): a zero-size footprint acts on ONE agent, a sized
-                      one on ALL agents inside it. Footprint modes only. */}
-                  {/* A SPAWNER paint is EXCLUDED: like Push/Pull it acts over a
-                      centre + a radius (the graph decides the distribution), so a
-                      shape row here would be an enabled control that does nothing.
-                      It gets its own Radius field in the Paint block below. */}
-                  {(agentBrushMode === 'add' || agentBrushMode === 'remove' || agentBrushMode === 'move' || agentBrushMode === 'edit'
-                    || (agentBrushMode === 'paint' && !agentPaintIsSpawner)) && (<>
+                  {/* ── SHARED GEOMETRY ──────────────────────────────────────
+                      The brush's shape and size, ABOVE both class sections
+                      because BOTH classes use them: a footprint brush is a
+                      built-in action OR an editor-kind mapping, and a
+                      radius-only brush is Push / Pull OR a spawner-kind mapping.
+                      They already wrote the SAME state (`agentBrushRadius`), so
+                      this is a de-duplication, not a relocation — a spawner and
+                      Push used to carry their own identical Radius fields.
+                      Scope (Single vs Area) is DERIVED from the size and shown
+                      as a badge on the size row (no toggle): a zero-size
+                      footprint acts on ONE agent, a sized one on ALL inside it.
+                      Glue / Cut appear in neither form — they are two-click
+                      picks with no extent at all. */}
+                  {showBrushClasses && (agentBrushUsesFootprint || agentBrushUsesRadiusOnly) && (
+                    <div className={styles.brushSectionTitle}>
+                      {agentBrushUsesFootprint ? 'Shape & size' : 'Size'}
+                    </div>
+                  )}
+                  {agentBrushUsesRadiusOnly && (
+                    <label
+                      className={styles.brushFieldRow}
+                      title={agentBrushMode === 'paint'
+                        ? 'The world-unit radius handed to the graph — what it distributes the agents it creates inside. Ctrl+LMB-drag on the canvas resizes it.'
+                        : 'The radius of the effect disc. Ctrl+LMB-drag on the canvas: drag sideways to resize.'}
+                    >
+                      <span className={styles.brushFieldLabel}>Radius</span>
+                      <NumberField className={styles.brushInput} value={agentBrushRadius} onNumber={v => setAgentBrushRadius(v)} min={0} step={1} />
+                    </label>
+                  )}
+                  {agentBrushUsesFootprint && (<>
                     <div className={styles.fieldRow}>
                       <span className={styles.statLabel}>Shape</span>
                       {([
@@ -15252,83 +15287,111 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
                       </div>
                     )}
                   </>)}
-                  {/* THE CLASS STRIP — Built-in vs User defined. Rendered ONLY when the
-                      model HAS Agent Input Mappings: with none there is exactly one
-                      class, so a strip would be a tab you can never leave (the standing
-                      hide-when-structurally-impossible rule) and the panel reads exactly
-                      as it did before the classes existed.
-                      The tab is DERIVED from the armed brush, so clicking one SELECTS —
-                      Built-in returns to the last built-in used, User defined re-arms the
-                      last mapping. Browsing a class without arming it would mean showing a
-                      highlighted entry that is not the brush that fires. */}
-                  {agentInputMappings.length > 0 && (
-                    <div className={styles.agentBrushTabs}>
+                  {/* ── USER DEFINED ────────────────────────────────────────
+                      One entry per Agent Input Mapping — a graph the user wrote,
+                      which is a brush of its own. FIRST, because a model that
+                      declares them is a model whose author means to use them.
+                      The whole section is absent when there are none, so the
+                      panel keeps its pre-classes shape. */}
+                  {showBrushClasses && (
+                    <>
+                      <div className={styles.brushSectionTitle} title="Your own Agent Input Mapping graphs — one brush each.">User defined</div>
+                      <div className={styles.brushEntries}>
+                        {agentInputMappings.map(m => (
+                          <button
+                            key={m.id}
+                            onClick={() => { selectAgentBrush('paint', m.id); draw(); }}
+                            title={[m.description, inputBrushKindOf(m) === 'spawner'
+                              ? 'Spawner brush: runs once where you click, creating the agents itself.'
+                              : 'Editor brush: runs on every agent you touch.'].filter(Boolean).join(' — ')}
+                            style={agentBrushEntryStyle(agentBrushMode === 'paint' && agentPaintMapping === m.id, false)}
+                          >{m.name}{inputBrushKindOf(m) === 'spawner' ? ' ⊕' : ''}</button>
+                        ))}
+                      </div>
+                    </>
+                  )}
+                  {/* The ARMED mapping's own controls: the values its root exposes
+                      (a colour for a legacy mapping, otherwise its declared
+                      parameters). WHICH mapping is armed is chosen by the entries
+                      above; this configures it — so it sits inside the section,
+                      not after both of them. Its SIZE lives in the shared geometry
+                      block at the top. */}
+                  {agentBrushMode === 'paint' && (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                      {activeAgentInputParams.legacy ? (
+                        <label className={styles.brushFieldRow}>
+                          <span className={styles.brushFieldLabel}>Color</span>
+                          <input type="color" className={styles.colorPicker} value={agentPaintColor}
+                            onChange={e => setAgentPaintColor(e.target.value)} />
+                          <span className={styles.brushHint}>
+                            {(() => { const c = hexToRgb(agentPaintColor); return `${c.r}, ${c.g}, ${c.b}`; })()}
+                          </span>
+                        </label>
+                      ) : (
+                        /* Declared parameters — the SAME panel the cell brush uses
+                           (cells and agents must end up consistent). */
+                        <InputParamsPanel
+                          resolved={activeAgentInputParams}
+                          values={inputParamValues[agentPaintMapping] ?? {}}
+                          onChange={next => setInputParamValues(prev => ({ ...prev, [agentPaintMapping]: next }))}
+                          model={model}
+                        />
+                      )}
+                      {/* ONE compact line; the rest is on its `title` (a control
+                          surface is a label + a control — always-visible prose is
+                          what bloats a narrow panel). */}
+                      <div
+                        className={styles.brushHint}
+                        title={agentPaintIsSpawner
+                          ? 'The graph receives the brush position + radius and creates the agents itself — the brush shape is not used.'
+                          : activeAgentInputParams.legacy
+                            ? 'The colour arrives on the graph’s R / G / B outputs, once per agent the footprint covers.'
+                            : 'These values arrive on the graph’s outputs, once per agent the footprint covers.'}
+                      >
+                        {agentPaintIsSpawner
+                          ? <>Spawner — runs once where you click.</>
+                          : <>Editor — runs on every agent you touch.</>}
+                      </div>
+                    </div>
+                  )}
+                  {/* ── BUILT-IN ────────────────────────────────────────────
+                      The brush actions (labels via textTransform: capitalize).
+                      Glue / Cut are absent for a Bonds=Off model (they could only
+                      ever no-op there); see agentBrushModesFor. `paint` is NOT
+                      here: it is not an action of its own, it is the User-defined
+                      class above. */}
+                  {showBrushClasses && (
+                    <div className={styles.brushSectionTitle} title="The built-in brush actions — what the engine can do to any agent model.">Built-in</div>
+                  )}
+                  <div className={styles.brushEntries}>
+                    {agentBuiltinModes.map(m => (
                       <button
-                        className={`${styles.rightPanelTab} ${agentBrushTab === 'builtin' ? styles.rightPanelTabActive : ''}`}
-                        onClick={() => { selectAgentBrush(lastBuiltinModeRef.current); draw(); }}
-                        title="The built-in brush actions — what the engine can do to any agent model."
-                      >Built-in</button>
-                      <button
-                        className={`${styles.rightPanelTab} ${agentBrushTab === 'user' ? styles.rightPanelTabActive : ''}`}
-                        onClick={() => { selectAgentBrush('paint', agentPaintMapping || agentInputMappings[0]!.id); draw(); }}
-                        title="Your own Agent Input Mapping graphs — one brush each."
-                      >User defined</button>
-                    </div>
-                  )}
-                  {/* BUILT-IN entries — the brush actions (labels via textTransform:
-                      capitalize). Glue / Cut are absent for a Bonds=Off model (they could
-                      only ever no-op there); see agentBrushModesFor. `paint` is NOT here:
-                      it is not an action of its own, it is the User-defined class, and the
-                      tab above is how you reach it. */}
-                  {agentBrushTab === 'builtin' && (
-                    <div style={{ display: 'flex', gap: 3, flexWrap: 'wrap' }}>
-                      {agentBuiltinModes.map(m => (
-                        <button
-                          key={m}
-                          onClick={() => { selectAgentBrush(m); draw(); }}
-                          title={
-                            m === 'add' ? 'Add agents — size 0: one at the cursor; sized: fill the shape footprint' :
-                            m === 'remove' ? 'Remove agents — size 0: the nearest; sized: all in the footprint' :
-                            m === 'move' ? 'Move — size 0: drag one agent; sized: rigid-drag a footprint of agents (RMB cancels)' :
-                            m === 'edit' ? 'Edit agent properties — size 0: click an agent, adjust, Apply; sized: stamp onto all in the footprint' :
-                            m === 'push' ? 'Push — hold to shove agents AWAY from the cursor; strongest at the centre, zero at the rim' :
-                            m === 'pull' ? 'Pull — hold to gather agents TOWARD the cursor; strongest at the centre, zero at the rim' :
-                            m === 'glue' ? 'Click two agents to bond them' :
-                            'Click two bonded agents to unbond them'
-                          }
-                          style={agentBrushEntryStyle(agentBrushMode === m, true)}
-                        >{m}</button>
-                      ))}
-                    </div>
-                  )}
-                  {/* USER-DEFINED entries — one per Agent Input Mapping. Each IS a brush,
-                      so they take the same button as the built-ins rather than a nested
-                      tab strip (this replaced the inner mapping tabs the old `paint` mode
-                      carried: two levels of selection for one choice). */}
-                  {agentBrushTab === 'user' && (
-                    <div style={{ display: 'flex', gap: 3, flexWrap: 'wrap' }}>
-                      {agentInputMappings.map(m => (
-                        <button
-                          key={m.id}
-                          onClick={() => { selectAgentBrush('paint', m.id); draw(); }}
-                          title={[m.description, inputBrushKindOf(m) === 'spawner'
-                            ? 'Spawner brush: runs once where you click, creating the agents itself.'
-                            : 'Editor brush: runs on every agent you touch.'].filter(Boolean).join(' — ')}
-                          style={agentBrushEntryStyle(agentPaintMapping === m.id, false)}
-                        >{m.name}{inputBrushKindOf(m) === 'spawner' ? ' ⊕' : ''}</button>
-                      ))}
-                    </div>
-                  )}
+                        key={m}
+                        onClick={() => { selectAgentBrush(m); draw(); }}
+                        title={
+                          m === 'add' ? 'Add agents — size 0: one at the cursor; sized: fill the shape footprint' :
+                          m === 'remove' ? 'Remove agents — size 0: the nearest; sized: all in the footprint' :
+                          m === 'move' ? 'Move — size 0: drag one agent; sized: rigid-drag a footprint of agents (RMB cancels)' :
+                          m === 'edit' ? 'Edit agent properties — size 0: click an agent, adjust, Apply; sized: stamp onto all in the footprint' :
+                          m === 'push' ? 'Push — hold to shove agents AWAY from the cursor; strongest at the centre, zero at the rim' :
+                          m === 'pull' ? 'Pull — hold to gather agents TOWARD the cursor; strongest at the centre, zero at the rim' :
+                          m === 'glue' ? 'Click two agents to bond them' :
+                          'Click two bonded agents to unbond them'
+                        }
+                        style={agentBrushEntryStyle(agentBrushMode === m, true)}
+                      >{m}</button>
+                    ))}
+                  </div>
                   {/* Add: density + spacing (area scatter) + the initial-value config. */}
                   {agentBrushMode === 'add' && agentBrushScope === 'area' && (
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-                      <label style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                        <span style={{ width: 54, color: 'var(--color-text-muted)' }}>Density</span>
-                        <NumberField value={agentSeedDensity} onNumber={v => setAgentSeedDensity(Math.max(0, v))} min={0} step={0.01} />
+                      <label className={styles.brushFieldRow}>
+                        <span className={styles.brushFieldLabel}>Density</span>
+                        <NumberField className={styles.brushInput} value={agentSeedDensity} onNumber={v => setAgentSeedDensity(Math.max(0, v))} min={0} step={0.01} />
                       </label>
-                      <label style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                        <span style={{ width: 54, color: 'var(--color-text-muted)' }}>Spacing</span>
-                        <NumberField value={agentSeedSpacing} onNumber={v => setAgentSeedSpacing(Math.max(0.5, v))} min={0.5} step={1} />
+                      <label className={styles.brushFieldRow}>
+                        <span className={styles.brushFieldLabel}>Spacing</span>
+                        <NumberField className={styles.brushInput} value={agentSeedSpacing} onNumber={v => setAgentSeedSpacing(Math.max(0.5, v))} min={0.5} step={1} />
                       </label>
                     </div>
                   )}
@@ -15352,76 +15415,30 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
                       )}
                     </div>
                   )}
-                  {/* The SELECTED user-defined mapping's own controls: the values its
-                      root exposes (a colour for a legacy mapping, otherwise its declared
-                      parameters) and — spawner only — the radius it distributes inside.
-                      WHICH mapping is armed is chosen by the User-defined entries above;
-                      this block configures it. */}
-                  {agentBrushMode === 'paint' && (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                      {activeAgentInputParams.legacy ? (
-                        <label style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                          <span style={{ width: 54, color: 'var(--color-text-muted)' }}>Color</span>
-                          <input type="color" className={styles.colorPicker} value={agentPaintColor}
-                            onChange={e => setAgentPaintColor(e.target.value)} />
-                          <span style={{ color: 'var(--color-text-muted)', fontSize: '0.62rem' }}>
-                            {(() => { const c = hexToRgb(agentPaintColor); return `${c.r}, ${c.g}, ${c.b}`; })()}
-                          </span>
-                        </label>
-                      ) : (
-                        /* Declared parameters — the SAME panel the cell brush uses
-                           (cells and agents must end up consistent). */
-                        <InputParamsPanel
-                          resolved={activeAgentInputParams}
-                          values={inputParamValues[agentPaintMapping] ?? {}}
-                          onChange={next => setInputParamValues(prev => ({ ...prev, [agentPaintMapping]: next }))}
-                          model={model}
-                        />
-                      )}
-                      {/* SPAWNER: the graph gets a centre + a radius, so the brush
-                          shape is meaningless and the radius lives here (the
-                          Push/Pull layout). */}
-                      {agentPaintIsSpawner && (
-                        <label style={{ display: 'flex', alignItems: 'center', gap: 4 }} title="The world-unit radius handed to the graph — what it distributes the agents it creates inside. Ctrl+LMB-drag on the canvas resizes it.">
-                          <span style={{ width: 54, color: 'var(--color-text-muted)' }}>Radius</span>
-                          <NumberField value={agentBrushRadius} onNumber={v => setAgentBrushRadius(v)} min={0} step={1} />
-                        </label>
-                      )}
-                      <div style={{ fontSize: '0.62rem', color: 'var(--color-text-muted)' }}>
-                        {agentPaintIsSpawner
-                          ? <>Runs this mapping&apos;s graph ONCE where you click — it receives the brush position + radius and creates the agents itself.</>
-                          : activeAgentInputParams.legacy
-                            ? <>Runs this mapping&apos;s graph on every agent you touch — the colour arrives on its R / G / B outputs.</>
-                            : <>Runs this mapping&apos;s graph on every agent you touch — these values arrive on its outputs.</>}
-                      </div>
-                    </div>
-                  )}
-                  {/* Push / Pull: the effect disc radius + the strength. No shape row —
-                      a radial force needs a centre and a radius, so these modes always
-                      act over a disc (2D) / ball (3D). Ctrl+LMB-drag retunes BOTH:
-                      horizontal → Radius, vertical → Intensity (up = stronger). */}
+                  {/* Push / Pull: the strength. The RADIUS is the shared geometry
+                      block's radius-only form at the top — ONE control, not a second
+                      field writing the same state. Ctrl+LMB-drag on the canvas still
+                      retunes BOTH: horizontal → Radius, vertical → Intensity. */}
                   {NUDGE_BRUSH_MODES.has(agentBrushMode) && (
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-                      <label style={{ display: 'flex', alignItems: 'center', gap: 4 }} title="Ctrl+LMB-drag on the canvas: drag sideways to resize.">
-                        <span style={{ width: 54, color: 'var(--color-text-muted)' }}>Radius</span>
-                        <NumberField value={agentBrushRadius} onNumber={v => setAgentBrushRadius(v)} min={0} step={1} />
+                      <label className={styles.brushFieldRow} title={`World units per second at the centre of the disc (0 – ${NUDGE_INTENSITY_DRAG_MAX}) — the displacement falls off linearly to zero at the rim. Ctrl+LMB-drag on the canvas: drag up to strengthen, by a fixed PROPORTION per pixel (×e per ${NUDGE_INTENSITY_EFOLD_PX} px), so the whole range is reachable at any magnitude.`}>
+                        <span className={styles.brushFieldLabel}>Intensity</span>
+                        <NumberField className={styles.brushInput} value={agentNudgeIntensity} onNumber={v => setAgentNudgeIntensity(clampNudgeIntensity(v))} min={0} max={NUDGE_INTENSITY_DRAG_MAX} step={1} />
                       </label>
-                      <label style={{ display: 'flex', alignItems: 'center', gap: 4 }} title={`World units per second at the centre of the disc (0 – ${NUDGE_INTENSITY_DRAG_MAX}) — the displacement falls off linearly to zero at the rim. Ctrl+LMB-drag on the canvas: drag up to strengthen, by a fixed PROPORTION per pixel (×e per ${NUDGE_INTENSITY_EFOLD_PX} px), so the whole range is reachable at any magnitude.`}>
-                        <span style={{ width: 54, color: 'var(--color-text-muted)' }}>Intensity</span>
-                        <NumberField value={agentNudgeIntensity} onNumber={v => setAgentNudgeIntensity(clampNudgeIntensity(v))} min={0} max={NUDGE_INTENSITY_DRAG_MAX} step={1} />
-                      </label>
-                      <div style={{ fontSize: '0.62rem', color: 'var(--color-text-muted)' }}>
-                        Hold to {agentBrushMode === 'push' ? 'shove agents away from' : 'gather agents toward'} the cursor —
-                        strongest at the centre, zero at the rim.
-                        <br />Ctrl+drag: ↔ radius, ↕ intensity (×{' '}e per {NUDGE_INTENSITY_EFOLD_PX} px).
-                        <br />The cursor arrows grow with the intensity.
+                      {/* ONE line; the Ctrl-drag detail rides its `title` — always-visible
+                          prose is what bloats a narrow panel (the capture-popover rule). */}
+                      <div
+                        className={styles.brushHint}
+                        title={`Ctrl+LMB-drag on the canvas: ↔ radius, ↕ intensity (×e per ${NUDGE_INTENSITY_EFOLD_PX} px). The cursor arrows grow with the intensity.`}
+                      >
+                        Hold to {agentBrushMode === 'push' ? 'shove agents away from' : 'gather agents toward'} the cursor — strongest at the centre, zero at the rim.
                       </div>
                     </div>
                   )}
                   {/* Edit: which properties to overwrite + Apply (single scope). */}
                   {agentBrushMode === 'edit' && (
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                      <div style={{ fontSize: '0.62rem', color: 'var(--color-text-muted)' }}>
+                      <div className={styles.brushHint}>
                         {agentBrushScope === 'single'
                           ? (editTargetId >= 0 ? `Editing agent #${editTargetId} — check the rows to overwrite, then Apply.` : 'Click an agent to load its values, then Apply.')
                           : 'Click / drag the footprint to stamp the checked rows onto agents.'}
@@ -15447,11 +15464,11 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
                       )}
                     </div>
                   )}
-                  <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.64rem', color: 'var(--color-text-muted)' }}>
+                  <label className={styles.checkRow}>
                     <input type="checkbox" checked={showBrushCursor} onChange={e => setShowBrushCursor(e.target.checked)} />
                     Show brush cursor
                   </label>
-                  <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                  <div className={styles.brushEntries}>
                     <button
                       onClick={() => csvInputRef.current?.click()}
                       title="Import agents from a CSV — one row per agent; columns map to position / velocity / radius / agent attributes"
