@@ -168,6 +168,8 @@ const REGISTRY = [
     struct: 'RenderView', writer: 'uploadAgentRenderView', bytesConst: 'RENDER_VIEW_BYTES' },
   { label: 'GridPlaneView (E2 display-res composite grid layer)', file: 'simulator/engine/agentWebgpuRuntime.ts',
     struct: 'GridPlaneView', writer: 'writeGridPlaneView', bytesConst: 'GRID_PLANE_VIEW_BYTES' },
+  { label: 'BloomParams (3D agent glow — the free-mode dual-Kawase bloom)', file: 'simulator/engine/agentWebgpuRuntime.ts',
+    struct: 'BloomParams', writer: 'writeBloom3DParams', bytesConst: 'BLOOM3D_PARAMS_BYTES' },
 ];
 
 section('WGSL uniform struct ⇄ TypedArray writer byte layout');
