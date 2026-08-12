@@ -9335,9 +9335,38 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       // Bond-Graph Agents: restore the agent SoA + bond store. Reject LOUDLY on
       // a structural mismatch (the holey/ragged store can't be silently
       // mis-strided) rather than aborting the whole load.
+      //
+      // A RESTORE MAKES THE CPU STORE AUTHORITATIVE, so it MUST clear
+      // `agentStoreStale` — the DUAL of the documented present rule ("no present may
+      // upload a stale store"). That flag is the free-mode residency contract ("the
+      // CPU store lags the GPU; pull it down before any consumer reads it"), so
+      // while it is set the dispatcher's one-shot rule runs `ensureAgentStoreFresh()`
+      // for the next message that reads or mutates agents — reading the PRE-LOAD GPU
+      // frame straight back over the population just restored.
+      //
+      // THIS IS WHY A BOARD-CARRYING PRESET ONLY LOADED WHILE PAUSED: paused ⇒
+      // agentUiSync ON ⇒ every batch reads back ⇒ never stale; a PLAYING
+      // direct-render model is stale by design, and `applySimulationState` posts a
+      // soft `recompile` right behind the loadState (restoring a preset's lookup
+      // tables is a model edit) — and `recompile` is in the one-shot list. Measured
+      // in the worker: `loadState … stale=1` → `LOADSTATE applied x0=0.39` →
+      // `ENSURE-FRESH readback!` → the replayed `recompile` sees `x0=0.11`, the
+      // pre-load GPU value. Every OTHER agent mutation is in AGENT_GPU_DEFER_TYPES,
+      // so the one-shot readback runs BEFORE it and the flag is already clear;
+      // `loadState` is deliberately NOT in that set (it overwrites the whole store,
+      // so reading the GPU down first is pure waste) — which is exactly why it has to
+      // clear the flag itself. `agentGpuUploadPending` (set for `loadState` in the
+      // dispatcher) then pushes the restored store to the GPU on the next batch.
+      //
+      // Cleared only on a SUCCESSFUL restore: `deserializeAgentStore` throws from its
+      // two up-front validation checks BEFORE touching the store, so on a rejected
+      // payload the CPU store is untouched — and possibly still lagging the GPU,
+      // which is exactly when the one-shot readback must keep firing. The re-seed
+      // branch below needs no clear: `initAgents()` already does it.
       if (msg.agents && agentStore) {
         try {
           deserializeAgentStore(agentStore, msg.agents);
+          agentStoreStale = false;
           runAgentColorPass();
         } catch (e) {
           self.postMessage({ type: 'error', message: '[agents] load failed: ' + ((e as Error)?.message || e) });
