@@ -2908,7 +2908,7 @@ export function HelpView() {
             <em> Color &rarr; Attribute</em> mappings: an <strong>Agent Input Mapping</strong> is a graph
             that runs <em>once per agent you paint</em> with the Simulator&rsquo;s agent brush &mdash;
             each one appears as its own brush under the agent brush&rsquo;s
-            <strong> User defined</strong> tab. Add one with <strong>+ Add Agent Input</strong>, then build it on
+            <strong> User defined</strong> section. Add one with <strong>+ Add Agent Input</strong>, then build it on
             the Agents canvas: drop an <strong>Agent Input Mapping (C&rarr;A)</strong> event node, pick the
             mapping, and hang your logic off <code>DO</code>. The node&rsquo;s value outputs are the
             <strong> parameters the mapping declares</strong> (see &ldquo;Input Mapping Parameters&rdquo;
@@ -3127,15 +3127,19 @@ export function HelpView() {
           <p className={styles.p}>
             <strong>Built-in vs User defined.</strong> Those actions are the <strong>Built-in</strong>
             class &mdash; what the engine can do to any agent model. As soon as your model declares an
-            <strong> Agent Input Mapping</strong>, a second class appears and the panel grows a
-            two-tab strip under the shape/size rows: <strong>User defined</strong> lists one entry per
-            input mapping, each a brush of its own (a <span className={styles.kbd}>&oplus;</span>
-            marks a <em>Spawner</em>). A model with no input mapping shows no strip at all, since
-            there would be only one class. Picking a tab <em>selects</em> a brush rather than merely
-            browsing: Built-in returns you to the last built-in you used, User defined re-arms the
-            last mapping &mdash; the highlighted entry is always the brush that will actually fire.
+            <strong> Agent Input Mapping</strong>, a second class appears and the panel splits into two
+            stacked sections: <strong>User defined</strong> first, listing one entry per input mapping,
+            each a brush of its own (a <span className={styles.kbd}>&oplus;</span> marks a
+            <em> Spawner</em>), then <strong>Built-in</strong> below it. Both are visible at once, and
+            exactly one entry across the two is ever highlighted &mdash; the brush that will actually
+            fire. A model with no input mapping shows no headers at all, since there would be only one
+            class. Above both sits the shared <strong>Shape &amp; size</strong> block, because the
+            geometry belongs to <em>the brush</em> whichever section armed it: a footprint brush (any
+            built-in stamp, or an Editor mapping) gets the shape row and its size fields, a radius-only
+            brush (Push / Pull, or a Spawner mapping) gets a single <em>Radius</em>, and Glue / Cut get
+            neither &mdash; they are two-click picks with no extent.
             <span className={styles.kbd}>Alt</span>+scroll cycles through <em>everything</em> the two
-            tabs contain, built-ins and mappings alike, flipping the tab as it crosses between them.
+            sections contain, built-ins and mappings alike, in the order you see them.
           </p>
           <p className={styles.p}>
             A <strong>user-defined</strong> brush is the agent counterpart of the CA grid&rsquo;s
@@ -3148,7 +3152,7 @@ export function HelpView() {
             <em>means</em> &mdash; &ldquo;redder than half &rarr; species A, else species B&rdquo;,
             &ldquo;brightness &rarr; energy&rdquo;, &ldquo;this hue &rarr; kill it&rdquo;. An Editor
             brush honours the same shape / Single-Area scope / Line tool as the other footprint modes
-            (a Spawner takes a centre and a radius instead, like Push/Pull), in 2D and 3D, on every
+            (a Spawner takes the shared block&rsquo;s <em>Radius</em> instead, like Push/Pull), in 2D and 3D, on every
             agent engine, while playing or paused. Build the graph on the Agents canvas (see
             <em> Agent Input Mappings</em> under Mappings).
           </p>
@@ -3161,7 +3165,8 @@ export function HelpView() {
             rim</em>. They keep acting while the button is held even if the cursor never moves, and
             they work on <em>every</em> agent model (no bonds needed) on every agent engine, while
             playing or paused. A radial force needs a centre and a radius, so these two ignore the
-            brush shape: the panel shows a <em>Radius</em> (the disc) and an <em>Intensity</em> in
+            brush shape: the shared block shows a <em>Radius</em> (the disc) and the section below an
+            <em> Intensity</em> in
             world units per second at the centre &mdash; frame-rate independent, so the same setting
             feels identical at 60 and 144&nbsp;Hz. Intensity runs from 0 to <strong>10000</strong>,
             which is four decades, so the vertical drag is <em>proportional</em> rather than linear:

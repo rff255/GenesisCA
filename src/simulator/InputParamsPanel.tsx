@@ -30,8 +30,13 @@ interface InputParamsPanelProps {
  *   · A `color` parameter is ONE `ColorField` even though it occupies THREE
  *     channels in the payload — the channel split is an engine detail.
  *
- * Used for the CELL brush and the AGENT Paint brush alike (constraint: cells and
- * agents must end up consistent).
+ * Used for the CELL brush and the AGENT User-defined brush alike (constraint:
+ * cells and agents must end up consistent).
+ *
+ * ⚠ THE ROW GEOMETRY MUST NOT DEPEND ON THE VALUE — see the `.paramRow` block in
+ * SimulatorView.module.css for the three rules and the feedback loop they fixed.
+ * The one this file owns: the reset SLOT is always rendered, only the BUTTON
+ * inside it is conditional.
  */
 export function InputParamsPanel({ resolved, values, onChange, model }: InputParamsPanelProps) {
   const setValue = (key: string, value: string): void => onChange({ ...values, [key]: value });
@@ -54,26 +59,30 @@ export function InputParamsPanel({ resolved, values, onChange, model }: InputPar
         const dflt = paramFallbackValue(param);
         const current = values[param.key] ?? dflt;
         return (
-          <div key={param.key} className={`${styles.manualBrushRow} ${styles.manualBrushRowDense}`}>
-            <div className={styles.manualBrushLabel}>
-              <div className={styles.manualBrushName} title={param.description || undefined}>{param.name || param.key}</div>
+          <div key={param.key} className={styles.paramRow}>
+            <div className={styles.paramLabel} title={param.description || param.name || param.key}>
+              {param.name || param.key}
             </div>
-            <div className={styles.manualBrushWidget}>
+            <div className={styles.paramWidget}>
               <ParamWidget
                 param={param}
                 value={current}
                 onChange={v => setValue(param.key, v)}
                 model={model}
               />
-              {/* Reset-to-default: shown ONLY while the value differs, so it is
-                  never an enabled control that does nothing (the standing rule). */}
-              {current !== dflt && (
-                <button
-                  className={styles.paramResetBtn}
-                  title={`Reset to the declared default (${dflt})`}
-                  onClick={() => setValue(param.key, dflt)}
-                >⟳</button>
-              )}
+              {/* The SLOT is unconditional (fixed width) so the button appearing
+                  cannot resize the slider beside it mid-drag; only the BUTTON is
+                  conditional, so it is never an enabled control that does
+                  nothing (the standing rule). */}
+              <div className={styles.paramResetSlot}>
+                {current !== dflt && (
+                  <button
+                    className={styles.paramResetBtn}
+                    title={`Reset to the declared default (${dflt})`}
+                    onClick={() => setValue(param.key, dflt)}
+                  >⟳</button>
+                )}
+              </div>
             </div>
           </div>
         );
@@ -96,7 +105,13 @@ function ParamWidget({ param, value, onChange, model }: {
     case 'color':
       // ONE swatch for the parameter's three channels. `noAlpha` — a brush
       // parameter carries R/G/B; there is no fourth channel in the payload.
-      return <ColorField value={value || '#000000'} onChange={onChange} noAlpha title={param.name || param.key} />;
+      return (
+        <ColorField
+          value={value || '#000000'} onChange={onChange} noAlpha
+          title={param.name || param.key}
+          style={{ flex: '1 1 auto' }}
+        />
+      );
     case 'integer':
     case 'float':
     default: {
@@ -108,6 +123,8 @@ function ParamWidget({ param, value, onChange, model }: {
       const bounded = param.min != null && param.max != null && param.max > param.min;
       const isInt = param.type === 'integer';
       if (!bounded) {
+        // No slider ⇒ the field is the whole cell. `.paramWidget > input[type=text]`
+        // sizes it (elastic, min 0), so it still cannot be pushed by its digits.
         return (
           <InlineNumberInput
             value={value ?? ''}
@@ -119,27 +136,32 @@ function ParamWidget({ param, value, onChange, model }: {
       const min = param.min!, max = param.max!;
       const n = Number(value);
       const cur = Number.isFinite(n) ? Math.min(max, Math.max(min, n)) : min;
+      // Slider + field as SIBLINGS of the reset slot, not nested in a wrapper:
+      // one flex context means the field's FIXED width and the slider's
+      // elasticity are decided against the row, not against a sub-box whose own
+      // width would then have to be pinned too.
       return (
-        <div style={{ display: 'flex', gap: 4, alignItems: 'center', flex: 1, minWidth: 0 }}>
+        <>
           <input
             type="range"
+            className={styles.paramSlider}
             min={min} max={max}
             step={isInt ? 1 : (max - min) / 100}
             value={cur}
+            title={`${min} – ${max}`}
             onChange={e => {
               const v = Number(e.target.value);
               onChange(String(isInt ? Math.round(v) : v));
             }}
-            style={{ flex: 1, minWidth: 0, width: '100%' }}
           />
           <NumberField
-            className={styles.brushInput}
+            className={styles.paramNumber}
             integer={isInt}
             min={min} max={max}
             value={cur}
             onNumber={v => onChange(String(v))}
           />
-        </div>
+        </>
       );
     }
   }
