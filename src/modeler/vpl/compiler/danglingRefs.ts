@@ -1,7 +1,7 @@
 import type { CAModel, GraphEdge, GraphNode } from '../../../model/types';
 import { getNodeDef } from '../nodes/registry';
 import { CURRENT_VIEWER_SENTINEL } from '../nodes/SetCellLooksNode';
-import { inputBrushKindForNode, inputParamsForNode, isInputMappingRoot, spawnerBrushPorts } from '../../../model/inputMappingParams';
+import { isInputMappingRoot, rootOutputPortIdsForNode } from '../../../model/inputMappingParams';
 
 /**
  * Dangling model references — the compile-time half of the amber badge.
@@ -119,14 +119,11 @@ export function detectDanglingRefs(nodes: GraphNode[], model: CAModel, edges?: G
     const rootChannels = new Map<string, { label: string; ports: Set<string> }>();
     for (const n of nodes) {
       if (!isInputMappingRoot(n.data.nodeType)) continue;
-      const resolved = inputParamsForNode(n.data.nodeType, n.data.config, model);
-      const ports = new Set(resolved.channels.map(c => c.portId));
-      // A SPAWNER-kind agent mapping ALSO exposes the brush geometry. The live
-      // port set is what `buildInputParamPorts` renders, so it must be resolved
-      // the same way here or a legitimate wire reads as a stale channel.
-      if (inputBrushKindForNode(n.data.nodeType, n.data.config, model) === 'spawner') {
-        for (const p of spawnerBrushPorts(model)) ports.add(p.id);
-      }
+      // A SPAWNER-kind agent mapping ALSO exposes the brush geometry, so the
+      // live set is the WHOLE root port list — resolved by the ONE helper the
+      // amber badge tests against and `buildInputParamPorts` renders, or a
+      // legitimate spawner wire reads as a stale channel here.
+      const ports = rootOutputPortIdsForNode(n.data.nodeType, n.data.config, model);
       rootChannels.set(n.id, {
         label: (n.data as { label?: string }).label
           ?? getNodeDef(n.data.nodeType)?.label ?? n.data.nodeType,

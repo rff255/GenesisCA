@@ -275,6 +275,28 @@ function rootOutputPortIds(
 }
 
 /**
+ * THE LIVE ROOT PORT SET for an input-mapping ROOT NODE — the ONE answer to
+ * "which value outputs does this root actually expose?", shared by every
+ * consumer that has to decide whether an outgoing wire is legitimate:
+ * `detectMissingConfig`'s amber badge and `detectDanglingRefs`' compile gate.
+ *
+ * ⚠ IT IS DERIVED FROM `buildInputParamPorts` — the same builder CaNode and
+ * `effectivePorts` RENDER from — so "what the badge/compiler consider live"
+ * cannot drift from "what the canvas draws". The bug that made this a shared
+ * helper: `danglingRefs` learned the SPAWNER brush ports while the badge kept
+ * testing the declared CHANNELS alone, so a spawner mapping that declares no
+ * parameters and merely wires `Brush X` — a perfectly ordinary graph — was
+ * badged "this mapping declares no parameters" while compiling fine.
+ */
+export function rootOutputPortIdsForNode(
+  nodeType: string,
+  config: Record<string, unknown> | undefined,
+  model?: (Pick<CAModel, 'mappings' | 'agentMappings'> & { properties?: { dimension?: string; gridDepth?: number } }) | null,
+): Set<string> {
+  return new Set(buildInputParamPorts(nodeType, config, model).outputs.map(p => p.id));
+}
+
+/**
  * THE CASCADE RULE, generalised over the WHOLE root port set — the channels
  * (`removedChannelPortIds`) AND the spawner brush ports. Flipping an agent
  * mapping SPAWNER → EDITOR destroys `brushX`/`brushY`/`brushRadius`(/`brushZ`),

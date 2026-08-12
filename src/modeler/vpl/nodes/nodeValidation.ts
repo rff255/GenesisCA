@@ -14,7 +14,7 @@ import { isGraphFrequencyMetric, type GraphMetric } from '../../../simulator/eng
 import { indicatorScalarBlocker } from '../../../model/indicatorValue';
 import { isMultiAxisTable, resolveAxes, MAX_LOOKUP_TABLE_ENTRIES } from '../compiler/variegation';
 import { is3dModelLike } from '../compiler/niCodec';
-import { inputBrushKindForNode, inputParamsForNode } from '../../../model/inputMappingParams';
+import { inputBrushKindForNode, rootOutputPortIdsForNode } from '../../../model/inputMappingParams';
 
 /** Return a list of human-readable issue strings for a node's configuration.
  *  Empty array = node is fully configured.
@@ -33,14 +33,23 @@ import { inputBrushKindForNode, inputParamsForNode } from '../../../model/inputM
  *  are skipped (preserves callers without easy access to edges). */
 /** Input-mapping ROOTS (`inputColor` / `agentInputMapping`): their value outputs
  *  are DYNAMIC — one per resolved CHANNEL of the referenced mapping's declared
- *  `parameters`. Two things are worth badging, and BOTH need the connected-handle
- *  set (which records output handles too), because neither is an error in the
- *  abstract:
- *    · a mapping that declares NO parameters (`parameters: []`) is a perfectly
- *      valid "stamp" mapping — unless the root is actually WIRED from a value
- *      port, in which case the graph reads something that does not exist;
- *    · an edge from a port the parameters no longer produce (a deleted / retyped
- *      parameter) — the same STALE CHANNEL the compiler reports by name. */
+ *  `parameters`, PLUS (a SPAWNER-kind agent mapping) the brush geometry. Two
+ *  things are worth badging, and BOTH need the connected-handle set (which
+ *  records output handles too), because neither is an error in the abstract:
+ *    · a root that exposes NO value outputs at all — a mapping declaring
+ *      `parameters: []` is a perfectly valid "stamp", unless the root is
+ *      actually WIRED, in which case the graph reads something that does not
+ *      exist;
+ *    · an edge from a port the root no longer produces (a deleted / retyped
+ *      parameter, or a brush port left behind by a spawner→editor flip) — the
+ *      same STALE port the compiler reports by name.
+ *
+ *  ⚠ BOTH tests run against `rootOutputPortIdsForNode`, the SAME set
+ *  `buildInputParamPorts` renders and `detectDanglingRefs` gates on — never
+ *  against the declared channels alone. A SPAWNER root always exposes
+ *  `brushX`/`brushY`/`brushRadius`(/`brushZ`), so with zero declared parameters
+ *  its live set is non-empty and wiring only those ports is not an issue at all.
+ *  (Testing the channels alone was exactly the false badge this fixed.) */
 function inputParamIssues(
   nodeType: string,
   config: NodeConfig,
@@ -53,14 +62,13 @@ function inputParamIssues(
     if (h.startsWith('output_value_')) wired.push(h.slice('output_value_'.length));
   }
   if (wired.length === 0) return [];
-  const resolved = inputParamsForNode(nodeType, config, model);
-  if (resolved.channels.length === 0) {
+  const live = rootOutputPortIdsForNode(nodeType, config, model);
+  if (live.size === 0) {
     return ['This mapping declares no parameters — the wired value outputs do not exist'];
   }
-  const live = new Set(resolved.channels.map(c => c.portId));
   const stale = wired.filter(p => !live.has(p));
   return stale.length > 0
-    ? [`Wired from a parameter this mapping no longer declares (${stale.join(', ')})`]
+    ? [`Wired from a port this mapping no longer exposes (${stale.join(', ')})`]
     : [];
 }
 
