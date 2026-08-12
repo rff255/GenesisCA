@@ -160,10 +160,6 @@ function attrKeysWritten(node: GraphNode): string[] {
     case 'setNeighborOrientationByIndex':
       return [ORIENTATION_KEY];
     // --- Bond-Graph Agents ---
-    case 'setAgentsAttribute': {
-      const a = cfg.attributeId as string | undefined;
-      return a ? [a] : [];
-    }
     case 'setVelocity':
       return [VELOCITY_KEY];
     case 'setAgentPosition':

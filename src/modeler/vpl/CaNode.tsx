@@ -1350,7 +1350,6 @@ function CaNodeComponent({ id, data }: NodeProps) {
         {/* Generic Agent Platform — the agent gather / filter / write-many nodes
             target the AGENT attribute set (by id). Filter Agents adds an op. */}
         {(nodeData.nodeType === 'getAgentsAttribute'
-          || nodeData.nodeType === 'setAgentsAttribute'
           || nodeData.nodeType === 'filterAgents'
           || nodeData.nodeType === 'getAgentAttribute') && (
           <>
@@ -3875,13 +3874,12 @@ function CaNodeComponent({ id, data }: NodeProps) {
         let effectiveWidget = portDef.inlineWidget;
         const setAttrId = nodeData.config.attributeId as string;
         // ownAttrList = the active graph's OWN attributes (agent attrs on the Agents
-        // graph). setNeighborhood*/setNeighbor* are lattice-only; setAgentsAttribute
-        // is bondGraph-only (it only renders on the Agents graph, where ownAttrList ==
-        // model.agentAttributes) — so ownAttrList resolves the right attribute for
-        // every node type here, on both graphs. `setAttribute` is UNIVERSAL and
-        // resolves in whichever graph it sits in, self-targeted or by-id alike.
+        // graph). setNeighborhood*/setNeighbor* are lattice-only, so ownAttrList
+        // resolves the right attribute for every node type here, on both graphs.
+        // `setAttribute` is UNIVERSAL and resolves in whichever graph it sits in —
+        // self-targeted, by-id, or over a whole id array alike.
         const setAttr = setAttrId ? ownAttrList.find(a => a.id === setAttrId) : undefined;
-        if (effectiveWidget && (nodeData.nodeType === 'setAttribute' || nodeData.nodeType === 'updateAttribute' || nodeData.nodeType === 'setNeighborhoodAttribute' || nodeData.nodeType === 'setNeighborAttributeByIndex' || nodeData.nodeType === 'setAgentsAttribute' || nodeData.nodeType === 'setCellAtPosition') && port.id === 'value') {
+        if (effectiveWidget && (nodeData.nodeType === 'setAttribute' || nodeData.nodeType === 'updateAttribute' || nodeData.nodeType === 'setNeighborhoodAttribute' || nodeData.nodeType === 'setNeighborAttributeByIndex' || nodeData.nodeType === 'setCellAtPosition') && port.id === 'value') {
           const attr = setAttr;
           if (!attr) {
             effectiveWidget = undefined;

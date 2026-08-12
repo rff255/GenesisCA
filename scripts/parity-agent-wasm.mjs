@@ -417,6 +417,110 @@ function buildGridDimsModel() {
   };
 }
 
+
+// Set Attribute's SCALAR-OR-ARRAY `Agent` port — the three targeting modes in one
+// graph, so a divergence in any of them shows up as a JS↔WASM mismatch:
+//   1. UNWIRED  -> `own`  = this agent's own myX (the historical self write);
+//   2. SCALAR   -> `byid` = myY written through a Get Self Handle id;
+//   3. ARRAY    -> a MULTI-SLOT write over the WHOLE Get Nearby Agents id array:
+//                  slot 1 `bc` = the WRITER's myX (so a self-write is
+//                  distinguishable from a broadcast), slot 2 `bc2` = the inline 6,
+//                  slot 3 `bc3` = the WRITER's myY (pins the shared-agentId FAN-OUT
+//                  — only slots 2+ depend on it).
+// Momentum 0 with no applied force keeps positions static, which is what makes
+// the invariant below exactly recomputable.
+function buildAgentIdTargetModel() {
+  const used = new Set();
+  const nid = (p) => { let id; do { id = p + Math.random().toString(36).slice(2, 8); } while (used.has(id)); used.add(id); return id; };
+  const aN = [], aEd = [];
+  const an = (t, c) => { const n = { id: nid('a'), type: 'caNode', position: { x: 0, y: 0 }, data: { nodeType: t, config: c } }; aN.push(n); return n; };
+  const aE = (s, sp, tt, tp, cat) => aEd.push({ id: nid('e'), source: s.id, target: tt.id, sourceHandle: `output_${cat}_${sp}`, targetHandle: `input_${cat}_${tp}` });
+  const bs = an('behaviourStep', {});
+  // 1 — unwired Agent = self.
+  const setOwn = an('setAttribute', { attributeId: 'own' });
+  aE(bs, 'myX', setOwn, 'value', 'value');
+  // 2 — a SCALAR id (this agent's own handle) = the by-id arm.
+  const gsh = an('getSelfHandle', {});
+  const setById = an('setAttribute', { attributeId: 'byid' });
+  aE(gsh, 'handle', setById, 'agentId', 'value');
+  aE(bs, 'myY', setById, 'value', 'value');
+  // 3 — an ID ARRAY + multi-slot: every nearby agent gets both attributes.
+  const near = an('getNearbyAgents', { _port_radius: '1.2' });
+  const setMany = an('setAttribute', { attributeId: 'bc', extraCount: 2, attr_2: 'bc2', _port_value_2: '6', attr_3: 'bc3' });
+  aE(near, 'agents', setMany, 'agentId', 'value');
+  aE(bs, 'myX', setMany, 'value', 'value');
+  // Slot 3 is WIRED to the writer's myY: only the SHARED-agentId FAN-OUT can make
+  // it land on the neighbours, so dropping the fan shows up here (slot 1 keeps the
+  // original node's own edge and would look fine on its own).
+  aE(bs, 'myY', setMany, 'value_3', 'value');
+  aE(bs, 'do', setOwn, 'do', 'flow');
+  aE(setOwn, 'next', setById, 'do', 'flow');
+  aE(setById, 'next', setMany, 'do', 'flow');
+  return {
+    schemaVersion: 1,
+    properties: { name: 'Agent Id Targeting Parity Test', dimension: '2d', gridWidth: 24, gridHeight: 24, gridDepth: 1, topology: '2d-grid', boundaryTreatment: 'torus', useWasm: false, useWebGPU: false },
+    topologyMode: { gridCells: false, agents: true },
+    centerBased: { enabled: true, maxAgents: 100, maxBonds: 0, worldWidth: 24, worldHeight: 24, seedCount: 24, seedPattern: 'scatter', defaultRadius: 0.5, growthRate: 0, repulsionStiffness: 2, adhesionStiffness: 0, interactionRange: 1.5, drag: 1, timeStep: 0.1, momentum: 0, maxSpeed: 0, neighbourQueryRadius: 8, useBondingPhysics: false, autoBond: false, agentTarget: 'wasm', agentUpdateMode: 'async',
+      agentCapabilities: { motion: 'force', body: true, collision: 'off', bonds: 'off', autoBond: false, growth: false, division: false, lifespan: false, populationBirth: false, populationDeath: false, sensing: true, sensingHeadingSource: 'velocity', orientation: false, fieldCoupling: false, appearance: true } },
+    attributes: [], modelAttributes: [], neighborhoods: [],
+    agentAttributes: [
+      { id: 'own', name: 'Own', type: 'float', defaultValue: '0' },
+      { id: 'byid', name: 'ById', type: 'float', defaultValue: '0' },
+      { id: 'bc', name: 'Bc', type: 'float', defaultValue: '0' },
+      { id: 'bc2', name: 'Bc2', type: 'float', defaultValue: '0' },
+      { id: 'bc3', name: 'Bc3', type: 'float', defaultValue: '0' },
+    ],
+    variables: [], agentVariables: [], indicators: [], mappings: [],
+    graphNodes: [], graphEdges: [], agentGraphNodes: aN, agentGraphEdges: aEd, macroDefs: [],
+  };
+}
+
+/** Recompute the three targeting modes from the STORE, independently of the
+ *  emitted code. Parity alone would pass if BOTH targets wrote nothing (or wrote
+ *  SELF instead of the array), so these are VALUES:
+ *    own[i]  === x[i]                       (unwired = self)
+ *    byid[i] === y[i]                       (a scalar id = that agent)
+ *    bc[j]   === x[last writer of j]        (an ARRAY = every id in it; the agent
+ *    bc2[j]  === 6                           loop is sequential, so the LAST
+ *    bc3[j]  === y[last writer of j]          covering writer wins), 0 if none.
+ *  The fixture is additionally asserted to be DISCRIMINATING: agents must be
+ *  covered at all, and for some of them the broadcast value must DIFFER from
+ *  their own x — otherwise "wrote self" / "wrote nothing" could pass. */
+function agentIdTargetInvariant(st) {
+  const R2 = 1.44, W = 24, H = 24, hW = W / 2, hH = H / 2;   // radius 1.2
+  const a = st.attrRead;
+  let covered = 0, distinctX = 0, distinctY = 0;
+  for (let j = 0; j < st.highWater; j++) {
+    if (!st.alive[j]) continue;
+    let last = -1;
+    for (let i = 0; i < st.highWater; i++) {
+      if (i === j || !st.alive[i]) continue;
+      let dx = st.x[j] - st.x[i], dy = st.y[j] - st.y[i];
+      if (dx > hW) dx -= W; else if (dx < -hW) dx += W;
+      if (dy > hH) dy -= H; else if (dy < -hH) dy += H;
+      if (dx * dx + dy * dy <= R2) last = i;       // ascending i ⇒ the LAST writer
+    }
+    if (a.own[j] !== st.x[j]) return `agent ${j}: own ${a.own[j]} !== x ${st.x[j]} (unwired arm)`;
+    if (a.byid[j] !== st.y[j]) return `agent ${j}: byid ${a.byid[j]} !== y ${st.y[j]} (scalar-id arm)`;
+    const wantBc = last < 0 ? 0 : st.x[last];
+    const wantBc2 = last < 0 ? 0 : 6;
+    const wantBc3 = last < 0 ? 0 : st.y[last];
+    if (a.bc[j] !== wantBc) return `agent ${j}: bc ${a.bc[j]} !== ${wantBc} (array arm, last writer ${last})`;
+    if (a.bc2[j] !== wantBc2) return `agent ${j}: bc2 ${a.bc2[j]} !== ${wantBc2} (array arm slot 2)`;
+    if (a.bc3[j] !== wantBc3) return `agent ${j}: bc3 ${a.bc3[j]} !== ${wantBc3} (array arm slot 3 — the agentId fan-out)`;
+    if (last >= 0) covered++;
+    // A SELF-write would have left x[j] / y[j] here — count, PER SLOT, the agents
+    // where the broadcast genuinely differs, so the checks below prove the fixture
+    // can tell "broadcast" from "wrote self" on slot 1 AND on the fanned-out slot 3.
+    if (last >= 0 && st.x[last] !== st.x[j]) distinctX++;   // slot 1 tells them apart
+    if (last >= 0 && st.y[last] !== st.y[j]) distinctY++;   // slot 3 (the fan-out) does
+  }
+  if (covered === 0) return `fixture not discriminating: NO agent is covered by the array broadcast`;
+  if (distinctX === 0) return `fixture not discriminating: every slot-1 broadcast equals the target's own x (a self-write would pass)`;
+  if (distinctY === 0) return `fixture not discriminating: every slot-3 broadcast equals the target's own y (a dropped agentId fan-out would pass)`;
+  return null;
+}
+
 // Synthetic: each agent scatters a small force onto EVERY nearby agent
 // (applyForceToAgent inside a forEach over getNearbyAgents) — the pairwise-force
 // pattern. Momentum > 0 so the scattered force accumulates into velocity → the
@@ -1412,6 +1516,10 @@ entries.push({ name: '[synthetic] Field3D (all 5 field nodes, 3D)', raw: build3D
 entries.push({ name: '[synthetic] FOV cone (Get Agents In View)', raw: buildFOVModel() });
 entries.push({ name: '[synthetic] Hemifield (L/R counts + both id ARRAYS)', raw: buildHemifieldModel(), invariant: hemifieldInvariant });
 entries.push({ name: '[synthetic] Multi-attribute slots (Get/Set + by-id)', raw: buildMultiAttrModel() });
+entries.push({
+  name: '[synthetic] Set Attribute agent id (self / scalar / ARRAY + multi-slot)',
+  raw: buildAgentIdTargetModel(), invariant: agentIdTargetInvariant,
+});
 entries.push({ name: '[synthetic] Get Grid Dimensions (3D world W/H/D + centres)', raw: buildGridDimsModel() });
 entries.push({ name: '[synthetic] Apply Force To Agent (pairwise scatter)', raw: buildApplyForceToAgentModel() });
 entries.push({ name: '[synthetic] Apply Force To Agents (array broadcast, lowered)', raw: buildApplyForceToAgentsModel() });

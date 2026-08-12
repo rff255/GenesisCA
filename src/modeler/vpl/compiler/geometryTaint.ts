@@ -53,7 +53,7 @@
 //
 // SINKS (non-geometric state):
 //   · attribute writes — setAttribute (self or by id), updateAttribute,
-//     setAgentsAttribute, setBondAttribute
+//     setBondAttribute
 //   · indicators — setIndicator, updateIndicator
 //   · halt — stopEvent
 //   · field deposits — affectCellsUnder, secreteToField (UNCONDITIONAL: the
@@ -248,7 +248,6 @@ const FIELD_DEPOSITS = new Set(['affectCellsUnder', 'secreteToField']);
 const SINK_KIND: Record<string, string> = {
   setAttribute: 'writes an agent attribute (its own, or another’s by id)',
   updateAttribute: 'modifies an agent attribute',
-  setAgentsAttribute: 'writes many agents’ attributes',
   setBondAttribute: 'writes a bond attribute',
   setIndicator: 'writes an indicator',
   updateIndicator: 'modifies an indicator',
@@ -284,7 +283,7 @@ const NODE_LABEL: Record<string, string> = {
   getAgentsAttribute: 'Get Agents Attribute', getAgentAttribute: 'Get Agent Attribute',
   getCellAttribute: 'Get Self Attribute', setAttribute: 'Set Attribute',
   updateAttribute: 'Update Attribute',
-  setAgentsAttribute: 'Set Agents Attribute', setBondAttribute: 'Set Bond Attribute',
+  setBondAttribute: 'Set Bond Attribute',
   getBondAttribute: 'Get Bond Attribute', setIndicator: 'Set Indicator',
   updateIndicator: 'Update Indicator', stopEvent: 'Stop Event',
   divideAgent: 'Divide Agent', killAgent: 'Kill Agent', formBond: 'Form Bond',

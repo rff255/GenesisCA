@@ -43,7 +43,6 @@ import { JoinAgentsNode } from './JoinAgentsNode';
 import { PickRandomAgentNode } from './PickRandomAgentNode';
 import { PickNRandomAgentsNode } from './PickNRandomAgentsNode';
 import { GetAgentsAttributeNode } from './GetAgentsAttributeNode';
-import { SetAgentsAttributeNode } from './SetAgentsAttributeNode';
 import { SetVelocityNode } from './SetVelocityNode';
 import { GetAgentPositionNode } from './GetAgentPositionNode';
 import { GetAgentOffsetNode } from './GetAgentOffsetNode';
@@ -237,7 +236,6 @@ const ALL_NODES: NodeTypeDef[] = [
   PickRandomAgentNode,
   PickNRandomAgentsNode,
   GetAgentsAttributeNode,
-  SetAgentsAttributeNode,
   FormBondNode,
   BreakBondNode,
   RewireBondNode,
