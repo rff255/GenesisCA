@@ -20,7 +20,7 @@
 //   structural writes  : divideAgent / formBond / breakBond / killAgent
 //                        (request-flag stores; the CPU structural phase mutates)
 //   setters            : setVelocity / setAttribute (self OR by id) /
-//                        setAgentsAttribute / setAgentPosition / setAgentRadius
+//                        setAgentPosition / setAgentRadius
 //   universal nodes    : switch / loop / valueSwitch / indicators (ALL ops —
 //                        the agent loop is sequential) / lookup tables /
 //                        colour nodes / setCellLooks (plain) / …
@@ -117,6 +117,7 @@ import { buildVarMap, parseExpression, clampVisibleCount } from '../expression/p
 import { is3dModel } from '../compile';
 import { expandMacros } from '../macroExpand';
 import { collapseReroutes } from '../rerouteCollapse';
+import { isAgentIdArraySource } from '../agentIdArray';
 import { expandMultiAttrs } from '../multiAttrExpand';
 import { expandForceToAgents } from '../forceToAgentsExpand';
 import { expandNeighbourCensus } from '../censusExpand';
@@ -164,7 +165,7 @@ export const AGENT_WASM_SUPPORTED_TYPES: ReadonlySet<string> = new Set<string>([
   'getNearbyAgents', 'getAgentsInView', 'senseHemifield', 'forEachInArray', 'getAgentOffset', 'getVelocity',
   'getAgentPosition', 'getAgentRadius', 'getAgentAttribute',
   // agent-array tier
-  'getAgentsAttribute', 'setAgentsAttribute', 'filterAgents', 'joinAgents',
+  'getAgentsAttribute', 'filterAgents', 'joinAgents',
   'pickRandomAgent', 'pickNRandomAgents', 'getBondedAgents',
   'aggregate', 'groupOperator', 'groupCounting', 'groupStatement',
   // bonds
@@ -1221,7 +1222,7 @@ function compileValueNode(ctx: AgentWasmCtx, nodeId: string, portId: string): Va
       break;
     }
     case 'setVelocity': case 'setAgentPosition':
-    case 'setAgentRadius': case 'setAgentsAttribute':
+    case 'setAgentRadius':
       // These are FLOW nodes — should never reach here as a value source.
       throw new Error(`agentWasm: '${type}' is a flow node, not a value source`);
     default:
@@ -2960,11 +2961,6 @@ function compileFlowNode(ctx: AgentWasmCtx, nodeId: string): void {
       compileFlowChain(ctx, node.id, 'next');
       break;
     }
-    case 'setAgentsAttribute': {
-      emitSetAgentsAttribute(ctx, node);
-      compileFlowChain(ctx, node.id, 'next');
-      break;
-    }
     case 'setAgentPosition': {
       emitGuardedAgentWrite(ctx, node, 'agentId', (aLocal) => {
         pushF64ElemAddr(em, ctx.layout.f64['x']!, aLocal); pushValueInputF64(ctx, node, 'x', 0); em.f64Store();
@@ -2993,11 +2989,19 @@ function compileFlowNode(ctx: AgentWasmCtx, nodeId: string): void {
       // unwired = SELF (`w_<attr>[idx]`, the historical store at idxLocal,
       // byte-for-byte — the wiredness test reads the EDGE MAP before any local is
       // allocated, since `em.allocLocal` changes the module bytes even when the
-      // local goes unused). Wired = ANOTHER agent by id, range-guarded exactly as
-      // the retired `setAgentAttribute` did (this compiler only ever emits the
-      // behaviour graph, so the relaxed range-only guard always applies).
+      // local goes unused). Wired to a SCALAR = ANOTHER agent by id, range-guarded
+      // exactly as the retired `setAgentAttribute` did (this compiler only ever
+      // emits the behaviour graph, so the relaxed range-only guard always
+      // applies). Wired to an ID ARRAY = every agent in it.
       const attrId = (node.data.config?.['attributeId'] as string) || '';
-      if (ctx.adj.inputToSource.get(`${node.id}:agentId`)) {
+      const saIdSrc = ctx.adj.inputToSource.get(`${node.id}:agentId`);
+      // ARRAY-wired ⇒ the write-many loop the retired `setAgentsAttribute`
+      // emitted, verbatim (same local-allocation ORDER, so a migrated model's
+      // module BYTES are unchanged). The shared `isAgentIdArraySource` is what
+      // keeps this dispatch identical on JS / WASM / WebGPU.
+      if (saIdSrc && isAgentIdArraySource(ctx.adj.nodeMap.get(saIdSrc.nodeId), saIdSrc.portId, (vid) => ctx.arrayVarLocals.has(vid))) {
+        emitSetAgentsAttribute(ctx, node, 'agentId');
+      } else if (saIdSrc) {
         emitGuardedAgentWrite(ctx, node, 'agentId', (aLocal) => {
           pushAgentAttrWriteAddr(ctx, attrId, aLocal);
           pushValueInputF64(ctx, node, 'value', 0);
@@ -3245,11 +3249,15 @@ function emitAxisWrite(ctx: AgentWasmCtx, node: GraphNode, portId: string, regio
   em.f64Store();
 }
 
-/** Set Agents Attribute — write-many over an id array (guarded). */
-function emitSetAgentsAttribute(ctx: AgentWasmCtx, node: GraphNode): void {
+/** Set Attribute with its `Agent` port wired to an ID ARRAY — write-many over
+ *  that array (each id range + alive guarded). This IS the emit the retired
+ *  `Set Agents Attribute` node produced, moved here verbatim (local-allocation
+ *  order included, so a migrated model's bytes are unchanged); `portId` names
+ *  the port the array arrives on. */
+function emitSetAgentsAttribute(ctx: AgentWasmCtx, node: GraphNode, portId: string): void {
   const em = ctx.em;
   const attrId = (node.data.config?.['attributeId'] as string) || '';
-  const arr = resolveInputArray(ctx, node, 'agents');
+  const arr = resolveInputArray(ctx, node, portId);
   if (!arr) return;
   const v = em.allocLocal(F64); pushValueInputF64(ctx, node, 'value', 0); em.localSet(v);
   const si = em.allocLocal(I32); em.i32Const(0); em.localSet(si);

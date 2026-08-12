@@ -316,15 +316,14 @@ function webgpuAgentFundamentals(model: CAModel): Reason[] {
   // dependent, so the parallel GPU cannot honour it. Detected exactly the way the
   // gate does (same node types, same port names, same Create-Agent exemption).
   {
-    const CROSS_AGENT_OVERWRITE = new Set(['setAttribute', 'setAgentsAttribute', 'setAgentPosition', 'setAgentRadius', 'setVelocity', 'setTargetRadius']);
+    const CROSS_AGENT_OVERWRITE = new Set(['setAttribute', 'setAgentPosition', 'setAgentRadius', 'setVelocity', 'setTargetRadius']);
     const nodes = model.agentGraphNodes ?? [];
     const edges = model.agentGraphEdges ?? [];
     const byId = new Map(nodes.map(n => [n.id, n] as const));
     const reached = behaviourReachedIds(model);   // behaviour-scoped, like the gate
     const hit = nodes.some(n => {
       if (!reached.has(n.id) || !CROSS_AGENT_OVERWRITE.has(n.data?.nodeType as string)) return false;
-      const port = n.data.nodeType === 'setAgentsAttribute' ? 'agents' : 'agentId';
-      const idEdge = edges.find(e => e.target === n.id && e.targetHandle === `input_value_${port}`);
+      const idEdge = edges.find(e => e.target === n.id && e.targetHandle === `input_value_agentId`);
       if (!idEdge) return false;                                                    // unwired = self (thread-own)
       return byId.get(idEdge.source)?.data?.nodeType !== 'createAgent';             // a staged newborn is exempt
     });

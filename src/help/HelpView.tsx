@@ -2475,9 +2475,18 @@ export function HelpView() {
             <li><strong>Get Agents Attribute</strong> &mdash; gather one attribute over a whole id
               list into a value array (feed <strong>Aggregate</strong> / <strong>Group Counting</strong>
               to count or sum a neighbourhood &mdash; this is what makes a <em>totalistic</em> rule on
-              agents possible). <strong>Set Agents Attribute</strong> writes one attribute across a
-              list. <strong>Set Velocity</strong> sets an agent&rsquo;s velocity directly &mdash; empty
-              <em>Agent</em> = yourself, or wire an id for a knock-back (needs Momentum &gt; 0).</li>
+              agents possible). To WRITE across a whole list, feed that same list to
+              <strong>Set Attribute</strong>&rsquo;s <em>Agent</em> input &mdash; it takes an id array
+              as readily as a single id (see below). <strong>Set Velocity</strong> sets an
+              agent&rsquo;s velocity directly &mdash; empty <em>Agent</em> = yourself, or wire an id
+              for a knock-back (needs Momentum &gt; 0).</li>
+            <li><strong>Set Attribute&rsquo;s <em>Agent</em> input has three modes</strong> &mdash;
+              leave it <em>empty</em> to write your own attribute, wire a single <em>id</em> to write
+              that agent&rsquo;s, or wire a whole <em>id array</em> (Get Nearby / Bonded / Filter
+              Agents&hellip;) to write EVERY agent in it. Extra attribute slots ride the same
+              <em>Agent</em> input, so one node can set several attributes on a whole group. A wired
+              id is a cross-agent overwrite: it needs Asynchronous agents, and runs on the JS /
+              WebAssembly agent engines.</li>
           </ul>
           <h3 className={styles.h3}>Graph-Rewriting Automata &mdash; census &rarr; table &rarr; verb</h3>
           <p className={styles.p}>

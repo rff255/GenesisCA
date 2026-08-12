@@ -49,6 +49,7 @@ import { migrateAgentAttributeSplit } from './agentAttributeSplitMigration';
 import { migrateAgentTypeRemoval } from './agentTypeRemovalMigration';
 import { migrateFormBondBetween } from './formBondBetweenMigration';
 import { migrateSetAgentAttribute } from './setAgentAttributeMigration';
+import { migrateSetAgentsAttribute } from './setAgentsAttributeMigration';
 import { migrateVariableScopeSplit } from './variableScopeMigration';
 import { migrateEngineField } from './engineFieldMigration';
 import { migrateReproducibilityField } from './reproducibilityMigration';
@@ -1057,7 +1058,7 @@ export function modelReducer(state: ModelState, action: ModelAction): ModelState
             // Compare in tag mode stores its operands as tag indices in
             // _port_x/_port_y/_port_y2 Ã¢â‚¬â€ the cell path remaps them; so must we.
             (nt === 'statement' && cfg.compareType === 'tag' && cfg.tagAttributeId === attrId) ||
-            ((nt === 'setAttribute' || nt === 'setAgentsAttribute' || nt === 'updateAttribute') && cfg.attributeId === attrId),
+            ((nt === 'setAttribute' || nt === 'updateAttribute') && cfg.attributeId === attrId),
           (cfg, nt) => {
             if (nt === 'getConstant') cfg.constValue = remap(cfg.constValue);
             if (nt === 'switch') {
@@ -1069,7 +1070,7 @@ export function modelReducer(state: ModelState, action: ModelAction): ModelState
               if (cfg._port_y !== undefined) cfg._port_y = remap(cfg._port_y);
               if (cfg._port_y2 !== undefined) cfg._port_y2 = remap(cfg._port_y2);
             }
-            if ((nt === 'setAttribute' || nt === 'setAgentsAttribute') && cfg._port_value !== undefined) {
+            if (nt === 'setAttribute' && cfg._port_value !== undefined) {
               cfg._port_value = remap(cfg._port_value);
             }
             return cfg;
@@ -1746,6 +1747,11 @@ export function modelReducer(state: ModelState, action: ModelAction): ModelState
       // identical), which emits byte-for-byte the same code on all three agent
       // targets. Idempotent; no-op for models that never used it.
       m = migrateSetAgentAttribute(m);
+      // Retire Set Agents Attribute: rewrite it to a `setAttribute` whose optional
+      // `agentId` is wired to the id ARRAY (a nodeType rename + the one
+      // `agents` -> `agentId` handle rewrite), which emits byte-for-byte the same
+      // write-many loop on all three agent targets. Idempotent.
+      m = migrateSetAgentsAttribute(m);
       // Get Random's interval moved from `config.min`/`config.max` to real
       // `min`/`max` INPUT PORTS — re-key the legacy values onto `_port_min` /
       // `_port_max` (cells + agents + overseer + macroDefs). Value-for-value, so

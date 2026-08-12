@@ -7,6 +7,9 @@
 //           emit, byte-for-byte), wired = the by-id write, on all three targets.
 //   Part E: the `setAgentAttribute` RETIREMENT migration — a pure nodeType rename
 //           whose output emits byte-identically to a hand-authored Set Attribute.
+//   Part F: the `Agent` port is SCALAR-OR-ARRAY — an id ARRAY writes EVERY agent
+//           in it (the retired `setAgentsAttribute`), incl. multi-slot x array,
+//           plus that node's RETIREMENT migration (rename + one handle rewrite).
 // JS↔WASM runtime bit-parity for Apply Force To Agent lives in parity-agent-wasm.mjs.
 // Real-GPU shader compilation is verified in the browser (createShaderModule).
 //
@@ -25,6 +28,8 @@ export { compileAgentGraphWebGPUForModel, isAgentGraphWebGPUSupported } from '..
 export { emitAgentForcePassWGSL } from '../src/modeler/vpl/compiler/agentWebgpu/forcePass.ts';
 export { migrateForHarness } from '../src/dev/compileHarness.ts';
 export { migrateSetAgentAttribute } from '../src/model/setAgentAttributeMigration.ts';
+export { migrateSetAgentsAttribute } from '../src/model/setAgentsAttributeMigration.ts';
+export { getNodeDef } from '../src/modeler/vpl/nodes/registry.ts';
 export { compileGraph } from '../src/modeler/vpl/compiler/compile.ts';
 export { getEffectivePorts } from '../src/modeler/vpl/effectivePorts.ts';
 export { setActiveGraphKind } from '../src/modeler/vpl/graphState.ts';
@@ -383,6 +388,136 @@ const twoAttrShell = (g) => {
     && Buffer.from(wMig.bytes).toString('base64') === Buffer.from(wNew.bytes).toString('base64'),
     wMig.error || wNew.error);
 }
+
+// ---------------------------------------------------------------------------
+// Part F — the `Agent` port is SCALAR-OR-ARRAY (+ the Set Agents Attribute retire)
+// ---------------------------------------------------------------------------
+console.log('\nPart F — Set Attribute: id ARRAY (write-many) + Set Agents Attribute retirement');
+
+// The retired node is gone from the registry — one Set Attribute, no second
+// spelling of the same write.
+check('registry: `setAgentsAttribute` is no longer a node type', M.getNodeDef('setAgentsAttribute') === undefined);
+check('registry: `setAttribute` is still there', M.getNodeDef('setAttribute') !== undefined);
+
+// The port stays scalar-TYPED (an id) but is ARRAY-CAPABLE, which is what makes
+// the connection-suggestion layer offer the agent-array producers on it.
+{
+  M.setActiveGraphKind('agents');
+  const p = M.getEffectivePorts('setAttribute', { attributeId: 'sig' }).inputs.find(x => x.id === 'agentId');
+  check('ports: `agentId` is arrayCapable (suggestion layer offers array sources)',
+    !!p && p.arrayCapable === true && p.isArray !== true);
+  M.setActiveGraphKind('cells');
+}
+
+/** A behaviour graph whose Set Attribute takes the WHOLE Get Nearby Agents id
+ *  array on its `Agent` port (no For Each — the node loops internally). */
+const buildArrayModel = (type, extra = {}) => ({
+  nodes: [
+    { id: 'bs', type: 'caNode', position: { x: 0, y: 0 }, data: { nodeType: 'behaviourStep', config: {} } },
+    { id: 'nb', type: 'caNode', position: { x: 0, y: 0 }, data: { nodeType: 'getNearbyAgents', config: { _port_radius: '6' } } },
+    { id: 'sa', type: 'caNode', position: { x: 0, y: 0 }, data: { nodeType: type, config: { attributeId: 'sig', _port_value: '7', ...extra } } },
+  ],
+  edges: [
+    { id: 'e0', source: 'bs', target: 'sa', sourceHandle: 'output_flow_do', targetHandle: 'input_flow_do' },
+    { id: 'e1', source: 'nb', target: 'sa', sourceHandle: 'output_value_agents',
+      targetHandle: type === 'setAgentsAttribute' ? 'input_value_agents' : 'input_value_agentId' },
+  ],
+});
+
+// --- the JS array arm: the write-many loop, with the STRICT live-agent guard ---
+{
+  const m = twoAttrShell(buildArrayModel('setAttribute'));
+  const js = M.compileAgentGraph(m.agentGraphNodes, m.agentGraphEdges, m, 0);
+  check('JS array: emits the `_si`/`_sa` write-many loop over the id array',
+    /const __arr=_v\w+; const __val=7;/.test(js.behaviourCode || '')
+    && /for \(let _sisa = 0; _sisa < __arr\.length; _sisa\+\+\)/.test(js.behaviourCode || '')
+    && /const _sasa = \(__arr\[_sisa\]\) \| 0;/.test(js.behaviourCode || ''), js.error);
+  check('JS array: each id keeps the STRICT live-agent guard (an array comes from a live query)',
+    /if \(_sasa >= 0 && _sasa < highWater && _alive\[_sasa\]\) w_sig\[_sasa\] = __val;/.test(js.behaviourCode || ''));
+  check('JS array: neither the self nor the scalar by-id arm is emitted',
+    !/w_sig\[idx\]/.test(js.behaviourCode || '') && !/__sa=/.test(js.behaviourCode || ''));
+}
+
+// --- the three modes are three DIFFERENT emits on JS *and* WASM ---
+{
+  const self = buildSetAttrModel(false);
+  const scalar = buildSetAttrModel(true);
+  const arr = twoAttrShell(buildArrayModel('setAttribute'));
+  const [a, b, c] = [self, scalar, arr].map(m => M.compileAgentGraphWasmForModel(m));
+  check('WASM: all three modes pass the gate',
+    [self, scalar, arr].every(m => M.isAgentGraphWasmSupported(m) === true));
+  check('WASM: all three modules compile', !a.error && !b.error && !c.error && c.bytes?.length > 0,
+    a.error || b.error || c.error);
+  const b64 = (r) => Buffer.from(r.bytes).toString('base64');
+  check('WASM: the array module differs from BOTH the self and the scalar-by-id ones',
+    b64(c) !== b64(a) && b64(c) !== b64(b));
+  // WebGPU: an ARRAY id is a cross-agent OVERWRITE aimed at a non-spawn target,
+  // so the same parallel-write-order gate that rejects the scalar form rejects it.
+  check('WebGPU: array-wired form rejected by the cross-agent gate', M.isAgentGraphWebGPUSupported(arr) === false);
+  // …but the EMIT exists (defence in depth — an OM module has its own gate).
+  const w = M.compileAgentGraphWebGPUForModel(arr);
+  check('WebGPU: the array arm emits the sasK/sasId/sasV write-many loop',
+    !w.error && /sasV/.test(w.shaderCode || '') && /sasK/.test(w.shaderCode || '') && /sasId/.test(w.shaderCode || ''), w.error);
+}
+
+// --- MULTI-SLOT x ARRAY: the shared `Agent` array fans out to every slot ---
+{
+  const m = twoAttrShell(buildArrayModel('setAttribute', { extraCount: 1, attr_2: 'sig2', _port_value_2: '8' }));
+  const js = M.compileAgentGraph(m.agentGraphNodes, m.agentGraphEdges, m, 0);
+  const loops = (js.behaviourCode || '').match(/for \(let _si\w+ = 0;/g) || [];
+  check('multi-slot x array: ONE write-many loop per slot (the agentId edge fans out)',
+    loops.length === 2, `got ${loops.length}`);
+  check('multi-slot x array: both attributes written inside their own guarded loop',
+    /w_sig\[_sa\w+\] = __val;/.test(js.behaviourCode || '') && /w_sig2\[_sa\w+\] = __val;/.test(js.behaviourCode || ''));
+  check('multi-slot x array: the two slot values are the two inline values',
+    /const __val=7;/.test(js.behaviourCode || '') && /const __val=8;/.test(js.behaviourCode || ''));
+  const w = M.compileAgentGraphWasmForModel(m);
+  check('multi-slot x array: WASM compiles', !w.error && w.bytes?.length > 0, w.error);
+}
+
+// --- the RETIREMENT migration ---
+{
+  const legacy = buildArrayModel('setAgentsAttribute');
+  const migrated = M.migrateSetAgentsAttribute({ agentGraphNodes: legacy.nodes, agentGraphEdges: legacy.edges, macroDefs: [] });
+  const mn = migrated.agentGraphNodes.find(n => n.id === 'sa');
+  check('migration: nodeType flips to setAttribute', mn.data.nodeType === 'setAttribute');
+  check('migration: config carried over verbatim',
+    JSON.stringify(mn.data.config) === JSON.stringify(legacy.nodes.find(n => n.id === 'sa').data.config));
+  check('migration: the id edge is retargeted `agents` -> `agentId`',
+    migrated.agentGraphEdges.find(e => e.id === 'e1').targetHandle === 'input_value_agentId');
+  check('migration: every other edge + every edge id is untouched',
+    migrated.agentGraphEdges.map(e => e.id).join(',') === 'e0,e1'
+    && migrated.agentGraphEdges.find(e => e.id === 'e0').targetHandle === 'input_flow_do');
+  check('migration: node ids + order preserved', migrated.agentGraphNodes.map(n => n.id).join(',') === 'bs,nb,sa');
+  check('migration: idempotent (same reference on a clean model)',
+    M.migrateSetAgentsAttribute(migrated) === migrated);
+  const macSrc = buildArrayModel('setAgentsAttribute');
+  const inMac = M.migrateSetAgentsAttribute({
+    agentGraphNodes: [], agentGraphEdges: [],
+    macroDefs: [{ id: 'm', nodes: macSrc.nodes, edges: macSrc.edges }],
+  });
+  check('migration: macroDefs swept (node + handle)',
+    inMac.macroDefs[0].nodes.find(n => n.id === 'sa').data.nodeType === 'setAttribute'
+    && inMac.macroDefs[0].edges.find(e => e.id === 'e1').targetHandle === 'input_value_agentId');
+
+  // THE LOAD-BEARING CHECK — a migrated legacy graph and a hand-authored one emit
+  // byte-identical code on JS *and* WASM (what makes the retire a no-op for files).
+  const mMig = twoAttrShell({ nodes: migrated.agentGraphNodes, edges: migrated.agentGraphEdges });
+  const mNew = twoAttrShell(buildArrayModel('setAttribute'));
+  const jsMig = M.compileAgentGraph(mMig.agentGraphNodes, mMig.agentGraphEdges, mMig, 0);
+  const jsNew = M.compileAgentGraph(mNew.agentGraphNodes, mNew.agentGraphEdges, mNew, 0);
+  check('migrated == hand-authored: JS behaviour code byte-identical',
+    !jsMig.error && !jsNew.error && jsMig.behaviourCode === jsNew.behaviourCode, jsMig.error || jsNew.error);
+  const wMig = M.compileAgentGraphWasmForModel(mMig), wNew = M.compileAgentGraphWasmForModel(mNew);
+  check('migrated == hand-authored: WASM module bytes byte-identical',
+    !wMig.error && !wNew.error && wMig.bytes.length > 0
+    && Buffer.from(wMig.bytes).toString('base64') === Buffer.from(wNew.bytes).toString('base64'),
+    wMig.error || wNew.error);
+  const gMig = M.compileAgentGraphWebGPUForModel(mMig), gNew = M.compileAgentGraphWebGPUForModel(mNew);
+  check('migrated == hand-authored: WGSL byte-identical',
+    !gMig.error && !gNew.error && gMig.shaderCode === gNew.shaderCode, gMig.error || gNew.error);
+}
+
 
 console.log(failures === 0 ? '\nALL CROSS-AGENT-WRITE CHECKS ✓' : `\n${failures} CHECK(S) FAILED`);
 process.exit(failures === 0 ? 0 : 1);

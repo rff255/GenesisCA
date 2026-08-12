@@ -18,6 +18,7 @@ import { canonicalizeAccessorEdges } from './accessorCSE';
 import { injectLinkedOutputMappings } from './linkedOutputMappings';
 import { injectAgentLinkedOutputMappings } from './agentLinkedOutputMappings';
 import { collapseReroutes } from './rerouteCollapse';
+import { isAgentIdArraySource } from './agentIdArray';
 import { expandMultiAttrs } from './multiAttrExpand';
 import { expandForceToAgents } from './forceToAgentsExpand';
 import { expandNeighbourCensus } from './censusExpand';
@@ -779,6 +780,14 @@ function compileRoot(
   // the WASM/WebGPU `ctx.producesArray` (compiler/arrayRelay.ts) — JS stays
   // port-based here because its array-ness is per-port, not per-nodeType.
   const arrayRelayMemo = new Map<string, boolean>();
+  /** Is this Local Variable an ARRAY? Ids are globally unique, so the cell
+   *  (`variables`) and agent (`agentVariables`) scopes are searched together.
+   *  Shared by `sourceYieldsArray` and the `agentId` scalar-or-array dispatch. */
+  function isArrayVariableId(variableId: string): boolean {
+    const v = (_model?.variables || []).find(x => x.id === variableId)
+      || (_model?.agentVariables || []).find(x => x.id === variableId);
+    return v?.kind === 'array';
+  }
   function sourceYieldsArray(srcNodeId: string, srcPortId: string): boolean {
     const srcNode = nodeMap.get(srcNodeId);
     if (!srcNode) return false;
@@ -793,9 +802,7 @@ function compileRoot(
       // a scalar and wrapped as `[_v]`, so Get Array Element / Array Length could
       // not index it (element 0 returned the whole array, element ≥1 returned 0).
       const vid = srcNode.data.config.variableId;
-      const v = (_model?.variables || []).find(x => x.id === vid)
-        || (_model?.agentVariables || []).find(x => x.id === vid);
-      return v?.kind === 'array';
+      return typeof vid === 'string' && isArrayVariableId(vid);
     }
     if (srcNode.data.nodeType === 'valueSwitch') {
       const cached = arrayRelayMemo.get(srcNodeId);
@@ -1377,7 +1384,21 @@ function compileRoot(
           const inlineVal = getInlineValue(port, node.data.config);
           if (inlineVal !== undefined) inputVars[port.id] = inlineVal;
         }
-        const code = def.compile(node.id, node.data.config, inputVars, model?.properties.boundaryTreatment, ctx);
+        // Set Attribute's `Agent` port is SCALAR-OR-ARRAY (unwired = self, a
+        // scalar id = one agent, an id array = each agent). The shape is a
+        // COMPILE-TIME decision — an array coerced with `(arr) | 0` would
+        // silently resolve to agent 0 — so it is answered once, by the shared
+        // `isAgentIdArraySource` the two agent backends also call, and handed to
+        // the node as config (the `_indexesConnected` / `_leftAgentsUsed`
+        // convention; a fresh object, never stored on the node).
+        let flowConfig = node.data.config;
+        if (node.data.nodeType === 'setAttribute') {
+          const idSrc = inputToSource.get(`${node.id}:agentId`);
+          if (idSrc && isAgentIdArraySource(nodeMap.get(idSrc.nodeId), idSrc.portId, isArrayVariableId)) {
+            flowConfig = { ...flowConfig, _agentIdIsArray: true };
+          }
+        }
+        const code = def.compile(node.id, flowConfig, inputVars, model?.properties.boundaryTreatment, ctx);
         if (code) flowLines.push(indent + code.trimEnd());
       }
 
@@ -2774,7 +2795,7 @@ export function compileAgentGraph(
   // parallel threads have no defined write order — so an async cross-agent-
   // overwrite model runs on JS/WASM (sequential ⇒ well-defined order).
   if (model.centerBased?.agentUpdateMode === 'sync') {
-    const CROSS_AGENT_OVERWRITE = new Set(['setAttribute', 'setAgentsAttribute', 'setAgentPosition', 'setAgentRadius', 'setVelocity', 'setTargetRadius']);
+    const CROSS_AGENT_OVERWRITE = new Set(['setAttribute', 'setAgentPosition', 'setAgentRadius', 'setVelocity', 'setTargetRadius']);
     // Behaviour-root flow reachability (BFS over flow-output edges). The gated
     // nodes are flow (`output`) nodes, each in exactly one flow chain, so this
     // isolates the behaviour loop from the init/division chains.
@@ -2797,8 +2818,7 @@ export function compileAgentGraph(
       // race — so only a WIRED id is gated. Mirrors the WebGPU gate's own
       // `if (!idEdge) continue`. (This skip is what lets the ubiquitous self
       // `Set Attribute` join the set at all.)
-      const targetPort = node.data.nodeType === 'setAgentsAttribute' ? 'agents' : 'agentId';
-      const src = inputToSource.get(`${id}:${targetPort}`);
+      const src = inputToSource.get(`${id}:agentId`);
       if (!src) continue;
       // One-hop Create Agent handle exemption (newborn spawn config, not a race).
       if (nodeMap.get(src.nodeId)?.data.nodeType === 'createAgent') continue;

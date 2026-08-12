@@ -48,6 +48,7 @@ import { buildVarMap, parseExpression, clampVisibleCount } from '../expression/p
 import { is3dModel } from '../compile';
 import { expandMacros } from '../macroExpand';
 import { collapseReroutes } from '../rerouteCollapse';
+import { isAgentIdArraySource } from '../agentIdArray';
 import { expandMultiAttrs } from '../multiAttrExpand';
 import { expandForceToAgents } from '../forceToAgentsExpand';
 import { expandNeighbourCensus } from '../censusExpand';
@@ -98,7 +99,7 @@ export const AGENT_WEBGPU_SUPPORTED_TYPES: ReadonlySet<string> = new Set<string>
   'getNearbyAgents', 'getAgentsInView', 'senseHemifield', 'forEachInArray', 'getAgentOffset', 'getVelocity',
   'getAgentPosition', 'getAgentRadius', 'getAgentAttribute',
   // agent-array tier (id/value arrays + aggregate/group-reduce over them)
-  'getAgentsAttribute', 'setAgentsAttribute', 'filterAgents', 'joinAgents',
+  'getAgentsAttribute', 'filterAgents', 'joinAgents',
   'pickRandomAgent', 'pickNRandomAgents', 'getBondedAgents',
   'aggregate', 'groupOperator', 'groupCounting', 'groupStatement',
   // bonds (P3: per-EDGE user state — Get/Set Bond Attribute + Form Bond's
@@ -2425,10 +2426,32 @@ function compileFlowNode(ctx: AgentWgpuCtx, nodeId: string): void {
       // the retired `setAgentAttribute` did. A wired id is a cross-agent OVERWRITE,
       // which this file's own gate rejects unless the source is a Create Agent
       // handle, so the guarded arm only ever runs for a spawn-handle target.
+      //
+      // Wired to an ID ARRAY = every agent in it — the write-many loop the
+      // retired `setAgentsAttribute` emitted, verbatim (same `fresh()` order, so
+      // a migrated model's SHADER is unchanged). The shared `isAgentIdArraySource`
+      // keeps this dispatch identical on JS / WASM / WebGPU.
       const attr = (node.data.config?.['attributeId'] as string) || '_undef';
       const base = ctx.layout.agentAttrBase[attr];
-      if (base !== undefined) {
-        if (ctx.adj.inputToSource.get(`${node.id}:agentId`)) {
+      const saIdSrc = ctx.adj.inputToSource.get(`${node.id}:agentId`);
+      const saIsArray = !!saIdSrc && isAgentIdArraySource(
+        ctx.adj.nodeMap.get(saIdSrc.nodeId), saIdSrc.portId, (vid) => ctx.arrayVarNames.has(vid));
+      if (saIsArray) {
+        const inArr = resolveInputArray(ctx, node, 'agentId');
+        if (base !== undefined && inArr) {
+          const t = ctx.agentAttrType.get(attr) || 'float';
+          let v = inF32(ctx, node, 'value', 0);
+          if (t !== 'float') v = `round(${v})`;
+          const k = fresh(ctx, 'sasK'), id = fresh(ctx, 'sasId'), vL = fresh(ctx, 'sasV');
+          ctx.lines.push(`  { let ${vL}: f32 = ${v};`);
+          ctx.lines.push(`    for (var ${k}: i32 = 0; ${k} < ${inArr.lenName}; ${k} = ${k} + 1) {`);
+          ctx.lines.push(`      let ${id}: i32 = ${arrLoad(inArr, k)};`);
+          ctx.lines.push(`      if (${id} >= 0 && ${id} < i32(control.highWater) && agentAlive[${id}] != 0u) { ${attrAt(ctx, attr, `u32(${id})`, 'write')} = ${vL}; }`);
+          ctx.lines.push(`    }`);
+          ctx.lines.push(`  }`);
+        }
+      } else if (base !== undefined) {
+        if (saIdSrc) {
           const id = castTo(resolveValueInput(ctx, node, 'agentId', -1), 'i32');
           const t = ctx.agentAttrType.get(attr) || 'float';
           let v = inF32(ctx, node, 'value', 0);
@@ -2499,26 +2522,6 @@ function compileFlowNode(ctx: AgentWgpuCtx, nodeId: string): void {
         ctx.lines.push(`  ${f32At(ctx, 'vx', 'idx')} = ${inF32(ctx, node, 'vx', 0)};`);
         ctx.lines.push(`  ${f32At(ctx, 'vy', 'idx')} = ${inF32(ctx, node, 'vy', 0)};`);
         if (ctx.is3d) ctx.lines.push(`  ${f32At(ctx, 'vz', 'idx')} = ${inF32(ctx, node, 'vz', 0)};`);
-      }
-      compileFlowChain(ctx, node.id, 'next');
-      break;
-    }
-    case 'setAgentsAttribute': {
-      // Write a whole id-array's attribute (write-many).
-      const attr = (node.data.config?.['attributeId'] as string) || '_undef';
-      const base = ctx.layout.agentAttrBase[attr];
-      const inArr = resolveInputArray(ctx, node, 'agents');
-      if (base !== undefined && inArr) {
-        const t = ctx.agentAttrType.get(attr) || 'float';
-        let v = inF32(ctx, node, 'value', 0);
-        if (t !== 'float') v = `round(${v})`;
-        const k = fresh(ctx, 'sasK'), id = fresh(ctx, 'sasId'), vL = fresh(ctx, 'sasV');
-        ctx.lines.push(`  { let ${vL}: f32 = ${v};`);
-        ctx.lines.push(`    for (var ${k}: i32 = 0; ${k} < ${inArr.lenName}; ${k} = ${k} + 1) {`);
-        ctx.lines.push(`      let ${id}: i32 = ${arrLoad(inArr, k)};`);
-        ctx.lines.push(`      if (${id} >= 0 && ${id} < i32(control.highWater) && agentAlive[${id}] != 0u) { ${attrAt(ctx, attr, `u32(${id})`, 'write')} = ${vL}; }`);
-        ctx.lines.push(`    }`);
-        ctx.lines.push(`  }`);
       }
       compileFlowChain(ctx, node.id, 'next');
       break;
@@ -3956,19 +3959,18 @@ function agentSubsetSupported(reachNodes: GraphNode[], edges: GraphEdge[], flatN
   // racing writer stores the identical value). Behaviour-reachable only:
   // init/division roots are sequential CPU/JS on every target.
   {
-    const CROSS_AGENT_OVERWRITE = new Set(['setAttribute', 'setAgentsAttribute', 'setAgentPosition', 'setAgentRadius', 'setVelocity', 'setTargetRadius']);
+    const CROSS_AGENT_OVERWRITE = new Set(['setAttribute', 'setAgentPosition', 'setAgentRadius', 'setVelocity', 'setTargetRadius']);
     const flatMap = new Map(flatNodes.map(n => [n.id, n] as const));
     for (const n of reachNodes) {
       if (!CROSS_AGENT_OVERWRITE.has(n.data.nodeType)) continue;
-      const targetPort = n.data.nodeType === 'setAgentsAttribute' ? 'agents' : 'agentId';
-      const idEdge = edges.find(e => e.target === n.id && e.targetHandle === `input_value_${targetPort}`);
+      const idEdge = edges.find(e => e.target === n.id && e.targetHandle === `input_value_agentId`);
       if (!idEdge) continue;                       // unwired id = the current agent (thread-own, race-free)
       if (flatMap.get(idEdge.source)?.data.nodeType === 'createAgent') continue;  // spawn handle
       return false;
     }
   }
   // Every array input (forEachInArray.array / aggregate|group*.values / pick*.agents
-  // / getAgentsAttribute|setAgentsAttribute.agents / filter/join inputs) must come
+  // / getAgentsAttribute.agents / filter/join inputs) must come
   // from an agent-array producer OR an array Local Variable (the array tier never
   // sees a non-producer non-variable array source).
   const map = new Map(reachNodes.map(n => [n.id, n] as const));
@@ -3986,7 +3988,6 @@ function agentSubsetSupported(reachNodes: GraphNode[], edges: GraphEdge[], flatN
       || (ct === 'pickRandomAgent' && tgt.portId === 'agents')
       || (ct === 'pickNRandomAgents' && tgt.portId === 'agents')
       || (ct === 'getAgentsAttribute' && tgt.portId === 'agents')
-      || (ct === 'setAgentsAttribute' && tgt.portId === 'agents')
       || (ct === 'filterAgents' && tgt.portId === 'agents')
       || (ct === 'joinAgents' && (tgt.portId === 'a' || tgt.portId === 'b'))
       || (ct === 'arrayElement' && tgt.portId === 'array')

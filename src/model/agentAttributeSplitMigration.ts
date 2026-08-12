@@ -44,7 +44,7 @@ const AGENT_STATE_NODES = new Set<string>([
   'getCellAttribute', 'setAttribute', 'updateAttribute',
   'getAgentAttribute',
   // PR3 array nodes (forward-compat — harmless if absent in a v1 file)
-  'getAgentsAttribute', 'setAgentsAttribute', 'filterAgents',
+  'getAgentsAttribute', 'filterAgents',
 ]);
 const FIELD_READ_NODES = new Set<string>(['sampleField', 'fieldGradient', 'readCellsUnder']);
 const FIELD_WRITE_NODES = new Set<string>(['affectCellsUnder', 'secreteToField']);

@@ -20,6 +20,7 @@ import { migrateVariableScopeSplit } from '../model/variableScopeMigration';
 import { migrateAgentTypeRemoval } from '../model/agentTypeRemovalMigration';
 import { migrateFormBondBetween } from '../model/formBondBetweenMigration';
 import { migrateSetAgentAttribute } from '../model/setAgentAttributeMigration';
+import { migrateSetAgentsAttribute } from '../model/setAgentsAttributeMigration';
 import { migrateGetRandomRange } from '../model/getRandomRangeMigration';
 import { migrateAgentCapabilities } from '../model/agentCapabilities';
 import { migrateEngineField } from '../model/engineFieldMigration';
@@ -183,6 +184,9 @@ export function migrateForHarness(m: CAModel): CAModel {
   m = migrateFormBondBetween(m);
   // Retire Set Agent Attribute -> a `setAttribute` with `agentId` wired (mirrors LOAD_MODEL).
   m = migrateSetAgentAttribute(m);
+  // Retire Set Agents Attribute -> a `setAttribute` with `agentId` wired to the
+  // id ARRAY (mirrors LOAD_MODEL).
+  m = migrateSetAgentsAttribute(m);
   // Get Random: legacy config.min/max -> the new min/max PORTS (mirrors LOAD_MODEL).
   m = migrateGetRandomRange(m);
   m = migrateAgentAttributeSplit(m);

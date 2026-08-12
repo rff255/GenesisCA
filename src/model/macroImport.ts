@@ -7,6 +7,7 @@ import { migrateSetCellLooksInMacroDef } from './setCellLooksMigration';
 import { migrateAgentTypeRemovalInMacroDef } from './agentTypeRemovalMigration';
 import { migrateFormBondBetweenInMacroDef } from './formBondBetweenMigration';
 import { migrateSetAgentAttributeInMacroDef } from './setAgentAttributeMigration';
+import { migrateSetAgentsAttributeInMacroDef } from './setAgentsAttributeMigration';
 
 function genId(prefix: string): string {
   return `${prefix}_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 7)}`;
@@ -36,11 +37,11 @@ export function cloneMacroWithFreshIds(rawIn: MacroDef): MacroDef {
   // Rewrite any legacy colorInterpolation / tagConstant / moveSelfToNeighbor
   // nodes inside the source MacroDef BEFORE the id remap. All migrations are
   // idempotent — they return the same reference when no matching nodes exist.
-  const raw = migrateSetAgentAttributeInMacroDef(migrateFormBondBetweenInMacroDef(migrateGetRandomRangeInMacroDef(
+  const raw = migrateSetAgentsAttributeInMacroDef(migrateSetAgentAttributeInMacroDef(migrateFormBondBetweenInMacroDef(migrateGetRandomRangeInMacroDef(
     migrateAgentTypeRemovalInMacroDef(migrateSetCellLooksInMacroDef(migrateMoveSelfToNeighborInMacroDef(
       migrateTagConstantInMacroDef(migrateColorInterpolationInMacroDef(rawIn)),
     ))),
-  )));
+  ))));
   const newMacroId = genId('mac');
   const idMap = new Map<string, string>();
   const mapId = (oldId: string): string => {

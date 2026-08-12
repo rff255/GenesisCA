@@ -240,7 +240,6 @@ export function detectMissingConfig(
       break;
 
     case 'getAgentsAttribute':
-    case 'setAgentsAttribute':
     case 'filterAgents':
       // Array-consuming: an unconnected Agents input falls back to `[]` and
       // silently produces an empty/no-op result (mirrors the lattice Filter /
@@ -968,7 +967,7 @@ export const OVERSEER_UNIVERSAL_TYPES = new Set<string>([
  *
  *  NOT here (genuinely valid in init): the by-id SETTERS — a WIRED `setAttribute`
  *  (see AGENT_SELF_ONLY_WHEN_UNWIRED) / `setAgentPosition` / `setAgentRadius` /
- *  `setAgentSprite` / `setAgentsAttribute` relax their range guard to
+ *  `setAgentSprite` relax their range guard to
  *  `_agentMaxAgents` (which IS in the init ABI) under the init/behaviour root; and the array ops that touch NO init-absent symbol
  *  (`joinAgents` / `pickRandomAgent` / `pickNRandomAgents` — they only index their
  *  input id array + `_rs`, so they run fine over a Local-Variable handle array). */
