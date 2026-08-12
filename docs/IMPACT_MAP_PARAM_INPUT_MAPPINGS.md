@@ -780,6 +780,40 @@ These are deliberately out of scope. Recorded here so the register exists in one
 - **F5 — Fix the empty-`mappingId` JS/WASM fallback asymmetry** (Subsystem 8).
 - **F6 — Parameter presets.** A named set of parameter values per mapping ("Predator brush",
   "Prey brush"), swappable from the tab strip. Natural once parameters exist.
+- **F7 — A tag parameter's INLINE option list as a graph-side tag SOURCE.** *(Investigated
+  2026-08-11 on a user question — "since it doesn't define an actual tag type … should we just use
+  the indexes?" — and deliberately NOT shipped. The honest answer, now stated in the editor and in
+  Help, is: yes, the channel carries the index; bind a **tag attribute** if you want the names in
+  the graph.)*
+
+  The wanted behaviour: let Get Constant / Compare / Switch pick an option **by name** from a
+  parameter's inline list, the way they already do from a tag ATTRIBUTE. Those nodes resolve their
+  option names from `config.tagAttributeId`, an ATTRIBUTE id; a parameter lives in a different id
+  space, so it needs a synthetic source (`param:<mappingId>:<key>` or similar).
+
+  **Blast radius, as measured** — this is *not* a UI-only change, which is why it was not folded
+  into the hint:
+  1. `CaNode.tsx` — `tagAttrScope` (one place) plus the three pickers, the option resolution and
+     the collapsed labels that read it. UI only.
+  2. `nodeValidation.ts` — `findTagAttr` / `hasTagAttr` must accept the synthetic id, or every such
+     node is badged "Select a tag attribute".
+  3. **`compiler/danglingRefs.ts` — `KEY_SPACE` maps `tagAttributeId` to the `'attribute'` id
+     space, so a synthetic id fails the pre-compile dangling-reference gate with a NAMED compile
+     error.** This is the decisive one: it makes the feature **compiler-gate-visible**, i.e. exactly
+     the "do not half-ship" boundary.
+  4. `ModelContext.tsx` — the three tag cascades. A tag ATTRIBUTE's rename/reorder/removal already
+     remaps the stored INDICES in `getConstant.constValue` / `statement._port_x` / `switch` cases; an
+     inline list edited in the Mappings panel would need the same remap on `UPDATE_MAPPING` /
+     `UPDATE_AGENT_MAPPING` (and on deleting the parameter or the whole mapping). Without it a
+     reorder silently re-points every constant at the wrong option — a silent-wrong-value bug of the
+     class this repo's cascade rules exist to prevent.
+  5. A scoping question with no obvious answer: a cell input mapping's parameters are only
+     meaningful inside that mapping's ROOT, but the cell graph is one graph shared with the Step and
+     Init roots, so the synthetic source would be offerable in places the parameter does not exist.
+
+  The compilers themselves are **unaffected** (they emit tag INDICES; nothing outside `danglingRefs`
+  reads `tagAttributeId` on a compile path), so the work is tractable — it is the cascade in (4)
+  plus the gate in (3) that make it its own verified pass rather than a rider.
 
 **Note on the Clarity initiative's register.** `docs/HANDOFF_CLARITY_SIMPLIFICATION.md` §3 is a
 "FOLLOW-UPS REGISTER (post-initiative)" and is the project-wide home for deferred work. It belongs

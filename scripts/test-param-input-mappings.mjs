@@ -24,7 +24,7 @@
 //
 // Run from the repo root:  node scripts/test-param-input-mappings.mjs
 import { build } from 'esbuild';
-import { writeFileSync, mkdtempSync, rmSync } from 'fs';
+import { writeFileSync, mkdtempSync, rmSync, readFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join, dirname, resolve } from 'path';
 import { fileURLToPath, pathToFileURL } from 'url';
@@ -38,7 +38,7 @@ export { migrateForHarness } from '../src/dev/compileHarness.ts';
 export {
   inputParamsOf, inputParamsForNode, buildInputParamPorts, encodeChannelValues,
   encodeParamValue, decodeParamValue, channelDefaults, paramTagOptions,
-  paramChannelCount, sanitiseParamKey,
+  paramChannelCount, sanitiseParamKey, paramFallbackValue,
 } from '../src/model/inputMappingParams.ts';
 export { getEffectivePorts } from '../src/modeler/vpl/effectivePorts.ts';
 // PHASE 3 — the image-import channel assignment. \`resolveImageChannelValues\` is
@@ -1321,6 +1321,125 @@ console.log('== 12. BRUSH KINDS — Editor vs Spawner (real closures, real store
       M.detectAgentInitContextIssue(pos.id, editorModel).length === 0);
     M.setActiveGraphKind('cells');
   }
+}
+
+// ===========================================================================
+console.log('\n== 12. parameter DEFAULTS + tag INDEX semantics + the comma-bug contract ==');
+// ===========================================================================
+// WHAT THIS PINS
+//   · A parameter's DEFAULT is what an untouched brush actually paints — asserted
+//     by running the REAL compiled fn on JS *and* a real WASM module with the
+//     payload `channelDefaults` produces, and reading the written attributes.
+//   · A tag channel carries the option INDEX, whether the options are inline or
+//     borrowed from a tag attribute. That is the whole answer to "how am I
+//     supposed to use an inline tag list?", so it is asserted rather than only
+//     documented.
+//   · The reported COMMA BUG: the naive controlled round-trip
+//     `options.join(', ')` ⇄ `text.split(',').filter(Boolean)` is LOSSY for the
+//     one character the user must type to add a second option. The parse itself
+//     is fine — the round trip is not — so the harness asserts BOTH the parse
+//     contract AND the source invariant that the editor no longer performs that
+//     round trip per keystroke.
+{
+  const DEFAULTS_PARAMS = [
+    { key: 'strength', name: 'Strength', type: 'float', defaultValue: '2.5', min: 0, max: 10 },
+    { key: 'species', name: 'Species', type: 'tag', tagOptions: ['red', 'green', 'blue'], defaultValue: '2' },
+    { key: 'flag', name: 'Flag', type: 'bool', defaultValue: 'true' },
+    { key: 'tint', name: 'Tint', type: 'color', defaultValue: '#0a141e' },
+  ];
+  const EXPECT = { o_strength: 2.5, o_species: 2, o_flag: 1, o_tr: 10, o_tg: 20, o_tb: 30 };
+  const resolved = M.inputParamsOf({ id: 'P', parameters: DEFAULTS_PARAMS });
+
+  // --- the resolution -------------------------------------------------------
+  check('paramFallbackValue returns the DECLARED default when set',
+    M.paramFallbackValue(DEFAULTS_PARAMS[0]) === '2.5');
+  check('…and the TYPE fallback when absent (float→0, bool→false, color→#000000)',
+    M.paramFallbackValue({ key: 'a', name: 'a', type: 'float' }) === '0'
+    && M.paramFallbackValue({ key: 'b', name: 'b', type: 'bool' }) === 'false'
+    && M.paramFallbackValue({ key: 'c', name: 'c', type: 'color' }) === '#000000');
+  check('…and an EMPTY default is treated as absent (never painted as 0-length)',
+    M.paramFallbackValue({ key: 'd', name: 'd', type: 'integer', defaultValue: '' }) === '0');
+
+  const dflt = M.channelDefaults(resolved);
+  check('channelDefaults encodes every DECLARED default, in channel order',
+    dflt.join(',') === '2.5,2,1,10,20,30', dflt.join(','));
+  check('NEG: the defaults are NOT the type fallbacks (a dropped default would read 0,0,0,0,0,0)',
+    dflt.some(v => v !== 0));
+
+  // --- E2E: an untouched brush paints the declared defaults -----------------
+  const model = buildCellModel({
+    parameters: DEFAULTS_PARAMS,
+    channelPorts: ['strength', 'species', 'flag', 'tint_r', 'tint_g', 'tint_b'],
+  });
+  const res = M.compileGraph(model.graphNodes, model.graphEdges, model);
+  const code = res.inputColorCodes?.[0]?.code ?? '';
+  const js = runJsInputColor(model, code, dflt);
+  check('JS: the untouched brush paints the DECLARED defaults',
+    !js.error && Object.entries(EXPECT).every(([k, v]) => Math.abs(js.out[k] - v) < 1e-12),
+    js.error || JSON.stringify(js.out));
+  const wasm = await runWasmInputColor(model, dflt);
+  check('WASM: bit-identical to JS on the same default payload',
+    !wasm.error && Object.keys(EXPECT).every(k => wasm.out[k] === js.out?.[k]),
+    wasm.error || JSON.stringify(wasm.out));
+  check('⚠ the float default survives as 2.5 on BOTH targets (not truncated to 2)',
+    js.out?.o_strength === 2.5 && wasm.out?.o_strength === 2.5,
+    `js=${js.out?.o_strength} wasm=${wasm.out?.o_strength}`);
+
+  // --- the image dialog seeds its CONSTANTS from the defaults ---------------
+  const srcs = M.defaultImageChannelSources(resolved, undefined);
+  check('image import: a non-colour channel is a CONSTANT seeded from the default',
+    srcs[0].kind === 'const' && srcs[0].value === 2.5
+    && srcs[1].kind === 'const' && srcs[1].value === 2
+    && srcs[2].kind === 'const' && srcs[2].value === 1,
+    JSON.stringify(srcs.slice(0, 3)));
+  check('…and the colour parameter still takes the pixel R/G/B',
+    srcs[3].kind === 'pixel' && srcs[3].ch === 'r' && srcs[5].ch === 'b');
+
+  // --- tag INDEX semantics (the "how do I use an inline list?" answer) ------
+  const inlineTag = DEFAULTS_PARAMS[1];
+  check('a tag channel carries the option INDEX, not the name',
+    M.encodeParamValue(inlineTag, 0, '1') === 1 && M.encodeParamValue(inlineTag, 0, '2') === 2);
+  check('NEG: an option NAME is not a value (it encodes to 0, not to its index)',
+    M.encodeParamValue(inlineTag, 0, 'blue') === 0);
+  check('decodeParamValue round-trips a tag index',
+    M.decodeParamValue(inlineTag, [2]) === '2');
+  const boundTag = { key: 't', name: 'T', type: 'tag', tagAttributeId: 'A_species', defaultValue: '2' };
+  const tagModel = {
+    attributes: [{ id: 'A_species', name: 'Species', type: 'tag', tagOptions: ['red', 'green', 'blue'] }],
+    agentAttributes: [],
+  };
+  check('a BOUND tag attribute resolves the same option list as the inline one',
+    M.paramTagOptions(boundTag, tagModel).join(',') === M.paramTagOptions(inlineTag, null).join(','));
+  check('…and encodes to the SAME index — binding changes the NAMES available to the graph, never the payload',
+    M.encodeParamValue(boundTag, 0, '2') === M.encodeParamValue(inlineTag, 0, '2'));
+
+  // --- the comma bug -------------------------------------------------------
+  const parse = (t) => t.split(',').map(s => s.trim()).filter(Boolean);
+  check('the commit PARSE is correct (trailing/duplicate commas + spacing)',
+    parse('a, b,').join('|') === 'a|b' && parse(' a ,, b ').join('|') === 'a|b');
+  check('⚠ the naive controlled ROUND TRIP is lossy for a trailing comma — the bug',
+    parse('a,').join(', ') !== 'a,');
+  check('NEG: it is lossless for text with no trailing comma (so only the comma is eaten)',
+    parse('a, b').join(', ') === 'a, b');
+
+  // --- SOURCE invariants: the editor + the panel ----------------------------
+  const editorSrc = readFileSync(join(ROOT, 'src/modeler/panels/MappingsPanelContent.tsx'), 'latin1');
+  check('the editor no longer parses tagOptions on every keystroke (the lossy round trip is gone)',
+    !/tagOptions:\s*e\.target\.value\.split\(/.test(editorSrc));
+  check('…it uses the draft/commit TagOptionsInput instead',
+    /<TagOptionsInput\b/.test(editorSrc) && /onBlur=\{commit\}/.test(editorSrc));
+  check('the editor offers a DEFAULT widget for every parameter type',
+    /<ParamDefaultWidget\b/.test(editorSrc));
+  check('…and states the inline-list INDEX semantics',
+    /carries the option <b>index<\/b>/.test(editorSrc));
+
+  const panelSrc = readFileSync(join(ROOT, 'src/simulator/InputParamsPanel.tsx'), 'latin1');
+  check('the brush panel renders a range slider for a BOUNDED numeric parameter',
+    /type="range"/.test(panelSrc));
+  check('…gated on BOTH min and max being declared',
+    /param\.min\s*!=\s*null\s*&&\s*param\.max\s*!=\s*null/.test(panelSrc));
+  check('…and seeds an untouched row from paramFallbackValue',
+    /paramFallbackValue\(param\)/.test(panelSrc));
 }
 
 rmSync(entryPath, { force: true });

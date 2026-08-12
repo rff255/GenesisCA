@@ -1413,6 +1413,35 @@
   pointer-events: none;
 }
 
+/* A bounded numeric input-mapping PARAMETER renders a range slider beside its
+   number field (the Model Attribute bounds pattern). The generic widget rule
+   above dresses every `input` as a text box, which a range track must not
+   inherit — it keeps the theme accent instead. */
+.manualBrushWidget input[type="range"] {
+  background: transparent;
+  border: none;
+  padding: 0;
+  min-width: 0;
+}
+
+/* Reset-a-parameter-to-its-declared-default. Rendered ONLY while the value
+   differs, so it is never an enabled control that does nothing. */
+.paramResetBtn {
+  flex: 0 0 auto;
+  width: auto;
+  padding: 0 4px;
+  background: transparent;
+  border: none;
+  color: var(--color-text-tertiary);
+  font-size: var(--font-2xs);
+  cursor: pointer;
+  line-height: 1;
+}
+
+.paramResetBtn:hover {
+  color: var(--color-accent);
+}
+
 /* Vector attribute: a row of small labelled X / Y [/ Z] number fields. */
 .manualBrushVector {
   display: flex;
