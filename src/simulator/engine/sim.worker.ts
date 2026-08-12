@@ -478,6 +478,19 @@ interface LoadStateMsg {
   /** Bond-Graph Agents: the agent SoA + bond store snapshot (PR-B1). */
   agents?: AgentStatePayload;
   activeViewer: string;
+  /**
+   * Optional correlation id echoed back on a dedicated `stateLoaded` post when
+   * the restore has LANDED. The main thread uses it to end the progress bar it
+   * raised for a board-carrying preset / `.gcastate` load.
+   *
+   * It needs its OWN message type rather than riding `stepped`: while playing,
+   * `stepped` messages flow constantly, so "the next stepped" is not the
+   * restore's ack — and this handler may itself be DEFERRED (a step batch in
+   * flight) and replayed later, so only the handler can say when it ran.
+   * Deliberately a separate id namespace from the Overseer's `reqId` (which
+   * rides `step`/`reset` and is echoed on `stepped`).
+   */
+  reqId?: number;
 }
 
 // --- Region clipboard messages (for Ctrl+C/V/X on the simulator) ---
@@ -9263,6 +9276,13 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       linkedAccumulators = {};
       linkedResults = {};
       activeViewer = msg.activeViewer; syncActiveViewerToMemory();
+      // The restore's OWN completion signal (see LoadStateMsg.reqId). Posted
+      // from every exit of this handler — including the WebGPU tail's failure
+      // branch — so a bar raised for this load can never be stranded.
+      const loadReqId = msg.reqId;
+      const ackStateLoaded = () => {
+        if (loadReqId !== undefined) self.postMessage({ type: 'stateLoaded', reqId: loadReqId });
+      };
 
       // Restore cell attribute arrays ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â COPY INTO the existing views over WASM
       // memory rather than replacing them (replacement would orphan them from
@@ -9399,11 +9419,13 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
         refreshColorsAfterInputWebGPU();
         finalizeStepWebGPU({ needColors: true })
           .then(() => sendColors())
-          .catch(e => self.postMessage({ type: 'error', message: '[webgpu] loadState colorPass failed: ' + ((e instanceof Error) ? e.message : String(e)) }));
+          .catch(e => self.postMessage({ type: 'error', message: '[webgpu] loadState colorPass failed: ' + ((e instanceof Error) ? e.message : String(e)) }))
+          .finally(() => ackStateLoaded());
         break;
       }
 
       sendColors();
+      ackStateLoaded();
       break;
     }
 
