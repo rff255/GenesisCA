@@ -2857,8 +2857,9 @@ export function HelpView() {
           <p className={styles.p}>
             The mirror image of the views above, and the agent twin of the CA grid&rsquo;s
             <em> Color &rarr; Attribute</em> mappings: an <strong>Agent Input Mapping</strong> is a graph
-            that runs <em>once per agent you paint</em> with the Simulator&rsquo;s agent brush in
-            <strong> Paint</strong> mode. Add one with <strong>+ Add Agent Input</strong>, then build it on
+            that runs <em>once per agent you paint</em> with the Simulator&rsquo;s agent brush &mdash;
+            each one appears as its own brush under the agent brush&rsquo;s
+            <strong> User defined</strong> tab. Add one with <strong>+ Add Agent Input</strong>, then build it on
             the Agents canvas: drop an <strong>Agent Input Mapping (C&rarr;A)</strong> event node, pick the
             mapping, and hang your logic off <code>DO</code>. The node&rsquo;s value outputs are the
             <strong> parameters the mapping declares</strong> (see &ldquo;Input Mapping Parameters&rdquo;
@@ -3068,28 +3069,39 @@ export function HelpView() {
             footprint of agents; right-click cancels), <strong>Edit</strong> (overwrite chosen
             properties &mdash; agent attributes plus radius / velocity / position &mdash; on the
             clicked agent via <em>Apply</em>, or on every agent under the footprint),
-            <strong> Paint</strong> (run an <em>Agent Input Mapping</em> graph &mdash; an
-            <em> Editor</em> mapping on every agent you touch, a <em>Spawner</em> mapping once where
-            you click, creating agents &mdash; see below), <strong>Push</strong> / <strong>Pull</strong> (see below), and
+            <strong> Push</strong> / <strong>Pull</strong> (see below), and
             <strong> Glue</strong> / <strong>Cut</strong> (bond/unbond two clicked agents).
             Glue / Cut appear only on a model whose <strong>Bonds</strong> capability is on
-            (Properties &rsaquo; Bond-Graph Agents), and Paint only on a model that HAS an agent
-            input mapping &mdash; without a bond store, or without a graph to run, there is nothing
-            for them to do, so they are left out rather than shown doing nothing.
-            <span className={styles.kbd}>Alt</span>+scroll cycles through the modes shown.
+            (Properties &rsaquo; Bond-Graph Agents) &mdash; without a bond store there is nothing for
+            them to do, so they are left out rather than shown doing nothing.
           </p>
           <p className={styles.p}>
-            <strong>Paint</strong> is the agent counterpart of the CA grid&rsquo;s colour brush: instead
-            of writing one fixed set of values (that is <em>Edit</em>), it runs an <strong>Agent Input
-            Mapping</strong> graph on every agent you touch, handing it that mapping&rsquo;s
-            <strong> parameters</strong>. The panel shows a tab per input mapping and one widget per
-            parameter &mdash; or, for a mapping that declares none, the classic colour picker, where
-            the graph decides what the colour
+            <strong>Built-in vs User defined.</strong> Those actions are the <strong>Built-in</strong>
+            class &mdash; what the engine can do to any agent model. As soon as your model declares an
+            <strong> Agent Input Mapping</strong>, a second class appears and the panel grows a
+            two-tab strip under the shape/size rows: <strong>User defined</strong> lists one entry per
+            input mapping, each a brush of its own (a <span className={styles.kbd}>&oplus;</span>
+            marks a <em>Spawner</em>). A model with no input mapping shows no strip at all, since
+            there would be only one class. Picking a tab <em>selects</em> a brush rather than merely
+            browsing: Built-in returns you to the last built-in you used, User defined re-arms the
+            last mapping &mdash; the highlighted entry is always the brush that will actually fire.
+            <span className={styles.kbd}>Alt</span>+scroll cycles through <em>everything</em> the two
+            tabs contain, built-ins and mappings alike, flipping the tab as it crosses between them.
+          </p>
+          <p className={styles.p}>
+            A <strong>user-defined</strong> brush is the agent counterpart of the CA grid&rsquo;s
+            colour brush: instead of writing one fixed set of values (that is <em>Edit</em>), it runs
+            your <strong>Agent Input Mapping</strong> graph, handing it that mapping&rsquo;s
+            <strong> parameters</strong>. An <em>Editor</em> mapping runs on every agent you touch; a
+            <em> Spawner</em> mapping runs once where you click and creates the agents itself. Select
+            the entry and the panel below it shows one widget per parameter &mdash; or, for a mapping
+            that declares none, the classic colour picker, where the graph decides what the colour
             <em>means</em> &mdash; &ldquo;redder than half &rarr; species A, else species B&rdquo;,
-            &ldquo;brightness &rarr; energy&rdquo;, &ldquo;this hue &rarr; kill it&rdquo;. It honours the
-            same shape / Single-Area scope / Line tool as the other footprint modes, in 2D and 3D,
-            and works on every agent engine, while playing or paused. Build the graph on the Agents
-            canvas (see <em>Agent Input Mappings</em> under Mappings).
+            &ldquo;brightness &rarr; energy&rdquo;, &ldquo;this hue &rarr; kill it&rdquo;. An Editor
+            brush honours the same shape / Single-Area scope / Line tool as the other footprint modes
+            (a Spawner takes a centre and a radius instead, like Push/Pull), in 2D and 3D, on every
+            agent engine, while playing or paused. Build the graph on the Agents canvas (see
+            <em> Agent Input Mappings</em> under Mappings).
           </p>
           <p className={styles.p}>
             <strong>Push</strong> and <strong>Pull</strong> are a <em>physical</em> way to shove a

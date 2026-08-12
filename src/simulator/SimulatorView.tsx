@@ -934,6 +934,21 @@ function pointSegDist2(px: number, py: number, vx: number, vy: number, wx: numbe
 /** Screen-pixel tolerance for the bond hit test (the line itself is ~2 px). */
 const BOND_PICK_PX = 6;
 
+/** ONE button look for every entry of the agent brush's two classes — the
+ *  built-in actions and the user-defined mappings — so the two tabs read as the
+ *  same kind of control (they are: each entry arms one brush). `capitalize` is
+ *  for the built-in ids only; a mapping name is the user's own text. */
+function agentBrushEntryStyle(active: boolean, capitalize: boolean): React.CSSProperties {
+  return {
+    padding: '3px 8px', borderRadius: 'var(--radius-sm)', cursor: 'pointer',
+    textTransform: capitalize ? 'capitalize' : 'none',
+    border: '1px solid ' + (active ? 'var(--color-accent)' : 'var(--color-widget-border)'),
+    background: active ? 'var(--color-accent-soft)' : 'transparent',
+    color: active ? 'var(--color-accent)' : 'var(--color-text-muted)',
+    fontWeight: 600, fontSize: '0.64rem',
+  };
+}
+
 function agentBrushModesFor(bondsAvailable: boolean, inputMappingsAvailable: boolean): typeof AGENT_BRUSH_MODES {
   return AGENT_BRUSH_MODES.filter(m =>
     (bondsAvailable || !BOND_BRUSH_MODES.has(m))
@@ -1779,7 +1794,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
   useEffect(() => { inputParamValuesRef.current = inputParamValues; }, [inputParamValues]);
   // Live C→A mapping lists, so the paint flushes (which have empty dep arrays)
   // can resolve the mapping a queued stroke belongs to. Assigned during render
-  // (the `agentBrushModesRef` precedent) — a flush always sees the current model.
+  // (the `agentBrushModeRef` precedent) — a flush always sees the current model.
   const inputMappingsRef = useRef<Mapping[]>([]);
   const agentInputMappingsRef = useRef<Mapping[]>([]);
   inputMappingsRef.current = model.mappings.filter(m => !m.isAttributeToColor);
@@ -3111,16 +3126,18 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
   // (with `bonds: 'data'` stiffness feeds nothing, so the row is hidden rather
   // than shown-and-inert). The resolver is the single source of truth.
   const bondSpringsActive = usesEngineSprings(model.centerBased);
-  // The C->A half of `agentMappings` — the graphs the Paint mode runs. No input
-  // mapping ⇒ nothing to paint WITH ⇒ the mode is hidden (see agentBrushModesFor).
+  // The C->A half of `agentMappings` — the graphs the USER DEFINED brush class
+  // runs. No input mapping ⇒ nothing to paint WITH ⇒ `'paint'` is dropped from
+  // the available set (agentBrushModesFor) and the class strip is not rendered.
   const agentInputMappings = useMemo(
     () => (model.agentMappings ?? []).filter(m => !m.isAttributeToColor), [model.agentMappings]);
   const agentBrushModes = useMemo(
     () => agentBrushModesFor(bondsAvailable, agentInputMappings.length > 0),
     [bondsAvailable, agentInputMappings.length]);
-  const agentBrushModesRef = useRef(agentBrushModes); agentBrushModesRef.current = agentBrushModes;
   // A model swap can strand the selection on a mode the new model cannot do
-  // (the brush mode is session state, not per-model) — fall back to Add.
+  // (the brush mode is session state, not per-model) — fall back to Add. This is
+  // ALSO what lands a User-defined selection back on a built-in when the last
+  // input mapping goes away: `'paint'` leaves the available set with it.
   useEffect(() => {
     if (!agentBrushModes.includes(agentBrushModeRef.current)) setAgentBrushMode('add');
   }, [agentBrushModes]);
@@ -3166,6 +3183,71 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
   const agentGroupMoveRef = useRef<{ members: Array<{ id: number; sx: number; sy: number; sz: number }>; downX: number; downY: number; downZ: number } | null>(null);
   // 3D Line tool for the agent brush (Add/Remove/Edit, Area): staged plane anchor.
   const agentLine3dAnchorRef = useRef<{ layer: number; row: number; col: number } | null>(null);
+  // ── THE AGENT BRUSH SELECTION — Built-in vs User defined ─────────────────
+  // The panel groups the brush into two CLASSES: the BUILT-IN actions (Add /
+  // Remove / … — what the engine can do to any agent model) and the USER
+  // DEFINED ones, one entry per Agent Input Mapping — a graph the user wrote,
+  // which is a brush of its own and belongs beside the built-ins rather than
+  // buried under a "paint" action.
+  //
+  // ⚠ THERE IS STILL EXACTLY ONE SOURCE OF TRUTH: `agentBrushMode`, in which
+  // `'paint'` MEANS "a user-defined mapping is armed" and `agentPaintMapping`
+  // names WHICH. So the TAB is DERIVED, never stored. Two consequences, both
+  // load-bearing: (1) the panel can never show a tab whose highlighted entry is
+  // not the brush that would actually fire — a stored tab would let the user sit
+  // on "Built-in" while a spawner mapping was armed, exactly the lie a derived
+  // one cannot tell; (2) every pointer / cursor / footprint / UI-sync path keeps
+  // keying off the same `'paint'` it always did, so the restructure is panel-deep
+  // and changes no brush SEMANTICS.
+  const agentBuiltinModes = useMemo(() => agentBrushModes.filter(m => m !== 'paint'), [agentBrushModes]);
+  const agentBrushTab: 'builtin' | 'user' = agentBrushMode === 'paint' ? 'user' : 'builtin';
+  // Which built-in to return to when the user clicks the Built-in tab while a
+  // mapping is armed — tracked rather than defaulting to Add, so a round-trip
+  // through User defined puts the brush back where it was.
+  const lastBuiltinModeRef = useRef<AgentBrushMode>('add');
+  if (agentBrushMode !== 'paint') lastBuiltinModeRef.current = agentBrushMode;
+  /** THE ONE selection setter — the built-in buttons, the mapping entries, the
+   *  tab strip and the Alt+wheel cycle all route through it, so the anchor reset
+   *  a brush switch owes (a staged Glue partner / Line point belongs to the brush
+   *  that staged it) cannot be forgotten at one of them.
+   *
+   *  ⚠ THE REFS LEAD THE STATE (the `commitAgentSweep` / `agentNudgeIntensityRef`
+   *  discipline): a wheel BURST fires several events before React re-renders, and
+   *  the mirrors are assigned during render — so a stepper reading them would
+   *  compute every step of the burst from the same stale start. Writing them here
+   *  makes the cycle advance once per event however fast the wheel spins. */
+  const selectAgentBrush = (mode: AgentBrushMode, mappingId?: string) => {
+    if (mappingId) { agentPaintMappingRef.current = mappingId; setAgentPaintMapping(mappingId); }
+    agentBrushModeRef.current = mode;
+    setAgentBrushMode(mode);
+    agentGlueAnchorRef.current = -1;
+    agentLineAnchorRef.current = null;
+    agentLine3dAnchorRef.current = null;
+  };
+  // THE Alt+wheel CYCLE = the FLAT list of everything the two tabs contain, in
+  // the order they render: every built-in, then every user-defined mapping. Each
+  // entry is a DISTINCT armed brush, so the wheel reaches exactly what the panel
+  // offers — and, because the list IS what is rendered, it can never land on a
+  // hidden mode (Glue/Cut under Bonds=Off) or a deleted mapping.
+  const agentBrushCycle = useMemo(
+    () => [
+      ...agentBuiltinModes.map(m => ({ mode: m as AgentBrushMode, mappingId: undefined as string | undefined })),
+      ...agentInputMappings.map(m => ({ mode: 'paint' as AgentBrushMode, mappingId: m.id })),
+    ],
+    [agentBuiltinModes, agentInputMappings]);
+  // Mirrored for the two once-registered wheel handlers (2D + the 3D GL canvas),
+  // which share ONE stepper so the cycle cannot drift between them.
+  const stepAgentBrushRef = useRef<(dir: number) => void>(() => {});
+  stepAgentBrushRef.current = (dir: number) => {
+    const cycle = agentBrushCycle;
+    if (cycle.length === 0) return;
+    // Read the REFS, not the render consts — see `selectAgentBrush`.
+    const cur = agentBrushModeRef.current === 'paint'
+      ? cycle.findIndex(c => c.mappingId === agentPaintMappingRef.current)
+      : cycle.findIndex(c => c.mode === agentBrushModeRef.current);
+    const next = cycle[(((cur < 0 ? 0 : cur) + dir) + cycle.length) % cycle.length]!;
+    selectAgentBrush(next.mode, next.mappingId);
+  };
   // The agent ids currently under an AREA footprint that WILL be affected (Remove/
   // Move/Edit — NOT Add, which only adds). Drawn as highlight rings so the user
   // sees exactly which agents the stroke touches. Empty when not applicable.
@@ -9006,9 +9088,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       // brush targets agents — a fast keyboard-free way to switch actions.
       if (e.altKey && isAgentModelRef.current && brushTargetRef.current === 'agents') {
         e.stopPropagation();
-        const modes = agentBrushModesRef.current, i = modes.indexOf(agentBrushModeRef.current);
-        setAgentBrushMode(modes[(((i < 0 ? 0 : i) + (e.deltaY > 0 ? 1 : -1)) + modes.length) % modes.length]!);
-        agentGlueAnchorRef.current = -1; agentLineAnchorRef.current = null; agentLine3dAnchorRef.current = null;
+        stepAgentBrushRef.current(e.deltaY > 0 ? 1 : -1);
         draw();
         return;
       }
@@ -11064,9 +11144,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       // Alt+wheel cycles the agent brush mode (add → remove → move → …) when the
       // brush targets agents — a fast keyboard-free way to switch actions.
       if (e.altKey && isAgentModelRef.current && brushTargetRef.current === 'agents') {
-        const modes = agentBrushModesRef.current, i = modes.indexOf(agentBrushModeRef.current);
-        setAgentBrushMode(modes[(((i < 0 ? 0 : i) + (e.deltaY > 0 ? 1 : -1)) + modes.length) % modes.length]!);
-        agentGlueAnchorRef.current = -1; agentLineAnchorRef.current = null; agentLine3dAnchorRef.current = null;
+        stepAgentBrushRef.current(e.deltaY > 0 ? 1 : -1);
         draw();
         return;
       }
@@ -15182,35 +15260,73 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
                       </div>
                     )}
                   </>)}
-                  {/* Mode row — the brush actions (labels via textTransform:capitalize).
-                      Glue / Cut are absent for a Bonds=Off model (they could
-                      only ever no-op there); see agentBrushModesFor. */}
-                  <div style={{ display: 'flex', gap: 3, flexWrap: 'wrap' }}>
-                    {agentBrushModes.map(m => (
+                  {/* THE CLASS STRIP — Built-in vs User defined. Rendered ONLY when the
+                      model HAS Agent Input Mappings: with none there is exactly one
+                      class, so a strip would be a tab you can never leave (the standing
+                      hide-when-structurally-impossible rule) and the panel reads exactly
+                      as it did before the classes existed.
+                      The tab is DERIVED from the armed brush, so clicking one SELECTS —
+                      Built-in returns to the last built-in used, User defined re-arms the
+                      last mapping. Browsing a class without arming it would mean showing a
+                      highlighted entry that is not the brush that fires. */}
+                  {agentInputMappings.length > 0 && (
+                    <div className={styles.agentBrushTabs}>
                       <button
-                        key={m}
-                        onClick={() => { setAgentBrushMode(m); agentGlueAnchorRef.current = -1; agentLineAnchorRef.current = null; agentLine3dAnchorRef.current = null; draw(); }}
-                        title={
-                          m === 'add' ? 'Add agents — size 0: one at the cursor; sized: fill the shape footprint' :
-                          m === 'remove' ? 'Remove agents — size 0: the nearest; sized: all in the footprint' :
-                          m === 'move' ? 'Move — size 0: drag one agent; sized: rigid-drag a footprint of agents (RMB cancels)' :
-                          m === 'edit' ? 'Edit agent properties — size 0: click an agent, adjust, Apply; sized: stamp onto all in the footprint' :
-                          m === 'paint' ? 'Paint — run an Agent Input Mapping graph: an Editor mapping runs on every agent you touch, a Spawner mapping runs once where you click and creates agents' :
-                          m === 'push' ? 'Push — hold to shove agents AWAY from the cursor; strongest at the centre, zero at the rim' :
-                          m === 'pull' ? 'Pull — hold to gather agents TOWARD the cursor; strongest at the centre, zero at the rim' :
-                          m === 'glue' ? 'Click two agents to bond them' :
-                          'Click two bonded agents to unbond them'
-                        }
-                        style={{
-                          padding: '3px 8px', borderRadius: 'var(--radius-sm)', cursor: 'pointer', textTransform: 'capitalize',
-                          border: '1px solid ' + (agentBrushMode === m ? 'var(--color-accent)' : 'var(--color-widget-border)'),
-                          background: agentBrushMode === m ? 'var(--color-accent-soft)' : 'transparent',
-                          color: agentBrushMode === m ? 'var(--color-accent)' : 'var(--color-text-muted)',
-                          fontWeight: 600, fontSize: '0.64rem',
-                        }}
-                      >{m}</button>
-                    ))}
-                  </div>
+                        className={`${styles.rightPanelTab} ${agentBrushTab === 'builtin' ? styles.rightPanelTabActive : ''}`}
+                        onClick={() => { selectAgentBrush(lastBuiltinModeRef.current); draw(); }}
+                        title="The built-in brush actions — what the engine can do to any agent model."
+                      >Built-in</button>
+                      <button
+                        className={`${styles.rightPanelTab} ${agentBrushTab === 'user' ? styles.rightPanelTabActive : ''}`}
+                        onClick={() => { selectAgentBrush('paint', agentPaintMapping || agentInputMappings[0]!.id); draw(); }}
+                        title="Your own Agent Input Mapping graphs — one brush each."
+                      >User defined</button>
+                    </div>
+                  )}
+                  {/* BUILT-IN entries — the brush actions (labels via textTransform:
+                      capitalize). Glue / Cut are absent for a Bonds=Off model (they could
+                      only ever no-op there); see agentBrushModesFor. `paint` is NOT here:
+                      it is not an action of its own, it is the User-defined class, and the
+                      tab above is how you reach it. */}
+                  {agentBrushTab === 'builtin' && (
+                    <div style={{ display: 'flex', gap: 3, flexWrap: 'wrap' }}>
+                      {agentBuiltinModes.map(m => (
+                        <button
+                          key={m}
+                          onClick={() => { selectAgentBrush(m); draw(); }}
+                          title={
+                            m === 'add' ? 'Add agents — size 0: one at the cursor; sized: fill the shape footprint' :
+                            m === 'remove' ? 'Remove agents — size 0: the nearest; sized: all in the footprint' :
+                            m === 'move' ? 'Move — size 0: drag one agent; sized: rigid-drag a footprint of agents (RMB cancels)' :
+                            m === 'edit' ? 'Edit agent properties — size 0: click an agent, adjust, Apply; sized: stamp onto all in the footprint' :
+                            m === 'push' ? 'Push — hold to shove agents AWAY from the cursor; strongest at the centre, zero at the rim' :
+                            m === 'pull' ? 'Pull — hold to gather agents TOWARD the cursor; strongest at the centre, zero at the rim' :
+                            m === 'glue' ? 'Click two agents to bond them' :
+                            'Click two bonded agents to unbond them'
+                          }
+                          style={agentBrushEntryStyle(agentBrushMode === m, true)}
+                        >{m}</button>
+                      ))}
+                    </div>
+                  )}
+                  {/* USER-DEFINED entries — one per Agent Input Mapping. Each IS a brush,
+                      so they take the same button as the built-ins rather than a nested
+                      tab strip (this replaced the inner mapping tabs the old `paint` mode
+                      carried: two levels of selection for one choice). */}
+                  {agentBrushTab === 'user' && (
+                    <div style={{ display: 'flex', gap: 3, flexWrap: 'wrap' }}>
+                      {agentInputMappings.map(m => (
+                        <button
+                          key={m.id}
+                          onClick={() => { selectAgentBrush('paint', m.id); draw(); }}
+                          title={[m.description, inputBrushKindOf(m) === 'spawner'
+                            ? 'Spawner brush: runs once where you click, creating the agents itself.'
+                            : 'Editor brush: runs on every agent you touch.'].filter(Boolean).join(' — ')}
+                          style={agentBrushEntryStyle(agentPaintMapping === m.id, false)}
+                        >{m.name}{inputBrushKindOf(m) === 'spawner' ? ' ⊕' : ''}</button>
+                      ))}
+                    </div>
+                  )}
                   {/* Add: density + spacing (area scatter) + the initial-value config. */}
                   {agentBrushMode === 'add' && agentBrushScope === 'area' && (
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
@@ -15244,25 +15360,13 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
                       )}
                     </div>
                   )}
-                  {/* Paint (C->A): pick which Agent Input Mapping graph runs and the
-                      colour its root exposes on R/G/B. The agent twin of the CA
-                      grid's Input Mapping tabs + colour picker. Only rendered when
-                      the model HAS input mappings (agentBrushModesFor hides the mode
-                      otherwise), so the tab strip is never empty. */}
+                  {/* The SELECTED user-defined mapping's own controls: the values its
+                      root exposes (a colour for a legacy mapping, otherwise its declared
+                      parameters) and — spawner only — the radius it distributes inside.
+                      WHICH mapping is armed is chosen by the User-defined entries above;
+                      this block configures it. */}
                   {agentBrushMode === 'paint' && (
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                      <div className={styles.mappingTabs}>
-                        {agentInputMappings.map(m => (
-                          <button
-                            key={m.id}
-                            className={`${styles.mappingTab} ${agentPaintMapping === m.id ? styles.mappingTabActive : ''}`}
-                            onClick={() => setAgentPaintMapping(m.id)}
-                            title={[m.description, inputBrushKindOf(m) === 'spawner'
-                              ? 'Spawner brush: runs once where you click, creating agents itself.'
-                              : 'Editor brush: runs on every agent you touch.'].filter(Boolean).join(' — ')}
-                          >{m.name}{inputBrushKindOf(m) === 'spawner' ? ' ⊕' : ''}</button>
-                        ))}
-                      </div>
                       {activeAgentInputParams.legacy ? (
                         <label style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
                           <span style={{ width: 54, color: 'var(--color-text-muted)' }}>Color</span>

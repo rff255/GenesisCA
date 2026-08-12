@@ -1180,6 +1180,18 @@
 
 /* --- Input mapping tabs (in brush panel) --- */
 
+/* The AGENT BRUSH's class strip — Built-in vs User defined. The buttons reuse
+   the established `.rightPanelTab` / `.rightPanelTabActive` look; only the
+   strip's own box differs from `.rightPanelTabs`, whose padding + full-width
+   border are tuned for a panel HEADER rather than a row inside a body. */
+.agentBrushTabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  padding-bottom: var(--space-2);
+  border-bottom: 1px solid var(--color-border);
+}
+
 .mappingTabs {
   display: flex;
   flex-wrap: wrap;
