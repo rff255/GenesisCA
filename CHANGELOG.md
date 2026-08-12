@@ -7,6 +7,84 @@ https://github.com/rff255/GenesisCA/releases
 The version at the top of `package.json` is the single source of truth; each
 entry below is cut when that version is tagged (see `.github/workflows/release.yml`).
 
+## [1.31.0] - 2026-08-12
+
+Headlined by **Parameterized Input Mappings** — a Colour→Attribute mapping now
+declares its own named, typed parameters instead of assuming R/G/B — plus a
+sweep that consolidates the agent action verbs onto one "optional id, default
+self" convention (retiring three redundant nodes with load migrations), agent
+input-mapping **brushes** (Editor and Spawner kinds), 3D agent Glow in the
+free-mode fast path, and a round of simulator/preset fixes. Additive
+throughout: every shipped model stays byte-identical on all compile surfaces.
+
+### Parameterized Input Mappings
+- A C→A mapping declares **named parameters** (decimal / integer / binary / tag /
+  colour), each becoming value ports on its event root, a type-adaptive widget in
+  the brush panel, and an assignable row in the image-import dialog (map any
+  parameter to an image channel, the luminance, or a constant). Legacy mappings
+  resolve to the historical R/G/B triple byte-for-byte — no file migration.
+- The parameter **editor** lives on the mapping (add / retype / reorder / bounded
+  ranges with sliders / per-parameter defaults with one-click reset / tag values
+  from an attribute or a typable inline list); deleting or retyping a parameter
+  drops exactly its wires (never repoints), with badges naming any stale edge.
+- **Agent input mappings** — paint agents through a C→A graph, with two brush
+  kinds: **Editor** runs per covered agent (and can now spawn/kill around it),
+  **Spawner** runs once per brush application with Brush X/Y/Radius ports so the
+  graph places new agents itself. Both work in 2D + 3D on every agent target.
+- Show Code documents the declared brush arguments instead of asserting `_r,_g,_b`.
+
+### Agents — one targeting convention, fewer nodes
+- **Kill Agent, Set Velocity and Set Target Radius** take an optional Agent id
+  (unwired = self), so predation / knock-back / remote growth are one wire away.
+- **Form Bond** and **Break Bond** name both ends via an optional Agent A port —
+  third-party bond formation and cuts without the dedicated "Between" node.
+- Retired **Form Bond Between**, **Set Agent Attribute (by ID)** and **Set Agents
+  Attribute**: Form Bond and Set Attribute cover all their shapes (Set
+  Attribute's Agent port takes an id or a whole id array). Legacy files are
+  rewritten on load; emitted code is byte-identical.
+
+### Simulator
+- **Busy/progress overlay** for every multi-second operation — worker reinits,
+  model/state/preset file loads, image + CSV imports, GIF encoding (now
+  determinate) — including board restores on the live path, acked by the worker.
+- **Preset fixes**: board-carrying presets restore correctly while the simulation
+  is playing, capture and restore the agent population, and a structural preset
+  loaded after a manual Resize now actually applies (it previously armed a
+  restore no reinit ever consumed and was silently dropped).
+- **Bond inspector** — click a bond line to view and edit its rest length,
+  stiffness and bond attributes live (2D).
+- **Recording**: GIF encoding writes delta frames (identical-frame merging +
+  transparent-index deltas, decode-identical, chosen per frame by measurement)
+  and a **capture resolution** selector (Auto / 480 / 720 / 1080 / Native) covers
+  both WebM and GIF.
+- **Show Code** now emits a port-ready model document — grid geometry, attribute
+  tables, lookup-table contents, neighbourhood construction, driver skeleton and
+  the compiled functions — complete enough to port a model by hand.
+- **Agent brush panel** reorganised into User-defined / Built-in sections with a
+  shared geometry block and stable, responsive parameter rows (sliders no longer
+  collapse as values change).
+
+### 3D
+- **Agent Glow** — a dual-Kawase bloom over the agent layer, matched
+  tap-for-tap in the worker's free-mode WGSL sphere pass so glowing models keep
+  the no-readback fast path (the frame pin is gone).
+- Scene wireframes are rasterized at one MSAA sample count on every render path,
+  so the floor grid no longer changes brightness across the free/frame flip.
+
+### Modeler & UI
+- **Sprite Library** converted to the mappings panel's master-detail + reorder +
+  drag-to-canvas shape.
+- **Dissolve Reroute** — remove a reroute dot while keeping the wiring (context
+  menu or double-click).
+- Port labels read a halo behind them, so a wire running underneath no longer
+  makes them illegible; the keyboard-shortcuts overlay no longer squeezes its
+  description column; Overseer experiment charts re-measure on panel resize.
+
+### PWA
+- The whole model library is precached, so an installed app can open any library
+  model fully offline; a new deploy shows an **update prompt** instead of never
+  offering (or force-reloading) an update.
+
 ## [1.30.0] - 2026-08-09
 
 A large release headlined by two milestones — a **Clarity & Simplification**
