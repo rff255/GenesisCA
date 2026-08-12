@@ -999,6 +999,84 @@ check('runtime: uploadAgentSoA seeds the agent colour buffer [invisible-agents b
 }
 
 // ---------------------------------------------------------------------------
+// B17 (SCENE-GEOMETRY DRAW STATE, user-reported: "Moving the cursor out and back
+// to the canvas on 3D Particles makes the Grid (if toggled on) change its
+// brightness").
+//
+// B16 made the free<->frame flip share the GEOMETRY. That is not enough: the same
+// 1-pixel line looks materially different depending on whether it is MULTISAMPLED.
+// gl3d's WebGL2 context is created with `antialias: true` (4x MSAA here) while the
+// two worker WGSL passes sat at WebGPU's default sampleCount 1, so every flip
+// changed the wireframes' brightness.
+//
+// MEASURED on Particle Life 3D's floor grid, SAME 274 vertices / SAME MVP /
+// 500x500, comparing each rasterization against gl3d's own render:
+//   sampleCount 1  -> total emitted light 0.683x, per-scanline error 32.09%
+//   sampleCount 4  -> total emitted light 1.0003x, per-scanline error  1.61%
+//
+// THE RULE this block pins: both worker passes rasterize the scene geometry at
+// SCENE_MSAA_SAMPLES and RESOLVE onto the swap-chain texture; the shared constant
+// is the single source, so the three renderers cannot drift apart again.
+{
+  const sw = readSrc('simulator/engine/sceneWireframe.ts');
+  const vox = readSrc('simulator/engine/webgpuRuntime.ts');
+  const ag = readSrc('simulator/engine/agentWebgpuRuntime.ts');
+  const gl = readSrc('simulator/render/gl3d.ts');
+
+  // ONE constant, next to the geometry the three renderers already share.
+  check('sceneWireframe exports the shared sample count [scene-msaa]',
+    /export const SCENE_MSAA_SAMPLES = 4;/.test(sw));
+  // The premise: gl3d asks for MSAA. If this ever changes, the worker passes must
+  // change WITH it — this check is what makes that impossible to miss.
+  check('gl3d still creates its context with antialias: true [scene-msaa]',
+    /getContext\('webgl2', \{ antialias: true,/.test(gl));
+
+  // NB the pipeline anchors must include `, layout:` — the shader MODULE carries
+  // the SAME label string and appears FIRST, so a bare label anchor scans the
+  // module-creation site and passes/fails for the wrong reason.
+  for (const [name, src, field, msTex, depthTex, present, pipes] of [
+    ['voxel', vox, 'voxelMsaaTex', /function ensureVoxelMsaaTex\(/, /function ensureVoxelDepthTex\(/,
+      /export function presentVoxels\(rt: WebGPURuntime\): void /,
+      ['const mkDraw = ', "label: 'voxel-line', layout:"]],
+    ['agent', ag, 'renderMsaaTex', /function ensureAgentMsaaTex\(/, /function ensureAgentDepthTex\(/,
+      /function presentAgentSpheresEncode\([\s\S]{0,200}?\): void /,
+      ["label: 'agent-sphere', layout:", "label: 'agent-scene-line', layout:"]],
+  ]) {
+    // Both attachments must carry the SAME sample count, from the shared constant
+    // (a depth attachment whose count differs from the colour one is invalid).
+    check(`${name} MSAA colour attachment uses the shared count [scene-msaa]`,
+      /sampleCount: SCENE_MSAA_SAMPLES/.test(blockAfter(src, msTex)));
+    check(`${name} depth attachment matches the colour sample count [scene-msaa]`,
+      /sampleCount: SCENE_MSAA_SAMPLES/.test(blockAfter(src, depthTex)));
+    // Render into the MSAA texture, resolve onto the swap chain. Dropping the
+    // resolveTarget would show nothing; dropping the MSAA view restores the bug.
+    const p = blockAfter(src, present);
+    check(`${name} pass renders into the MSAA view and RESOLVES onto the canvas [scene-msaa]`,
+      /view: msView, resolveTarget: view,/.test(p));
+    check(`${name} MSAA attachment takes its format from the swap-chain texture [scene-msaa]`,
+      new RegExp(`ensure${name === 'voxel' ? 'Voxel' : 'Agent'}MsaaTex\\(rt, tex\\.width, tex\\.height, tex\\.format\\)`).test(p));
+    // EVERY pipeline drawing into that pass must declare the same count, or the
+    // pass is invalid and the whole free-mode render silently falls back.
+    for (const anchor of pipes) {
+      const at = src.indexOf(anchor);
+      const seg = at < 0 ? '' : src.slice(at, at + 1400);
+      check(`${name} pipeline at "${anchor}" declares multisample [scene-msaa]`,
+        /multisample: \{ count: SCENE_MSAA_SAMPLES \}/.test(seg));
+    }
+    // Recreated on resize like the depth texture, and released on teardown —
+    // a canvas-sized 4x target is far too big to leak per re-attach.
+    check(`${name} MSAA texture is destroyed on teardown [scene-msaa]`,
+      new RegExp(`rt\\.${field}\\) \\{ try \\{ rt\\.${field}\\.destroy\\(\\)`).test(src));
+  }
+
+  // The voxel SHADOW pass has its own single-sampled depth target and must stay
+  // that way — giving it a multisample count would invalidate it.
+  const shadowAt = vox.indexOf("label: 'voxel-shadow',");
+  check('the voxel shadow pipeline stays single-sampled [scene-msaa]',
+    shadowAt >= 0 && !/multisample/.test(vox.slice(shadowAt, shadowAt + 900)));
+}
+
+// ---------------------------------------------------------------------------
 // TIER C — browser probes (printed; only reachable with a live GPUDevice)
 // ---------------------------------------------------------------------------
 if (process.argv.includes('--probes')) {

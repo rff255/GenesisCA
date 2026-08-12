@@ -16,7 +16,8 @@
  *
  * ⚠ Any edit to `buildSceneWireframeVerts` MUST land in gl3d's `renderOverlays`
  * (and its `renderAxisLabels` ext) in the same change — those two are a
- * documented lockstep pair.
+ * documented lockstep pair. The same goes for the DRAW STATE: see
+ * `SCENE_MSAA_SAMPLES` below, which the two worker passes must rasterize at.
  *
  * WHAT IS **NOT** HERE, deliberately: the always-on-top brush CURSOR visuals —
  * the amber footprint outline, the hovered/inspected cell cubes, the axis labels
@@ -24,6 +25,37 @@
  * gl3d keeps drawing them (depth test off) on the overlay canvas in both modes.
  * Only geometry that sits at a definite place IN the volume belongs in this file.
  */
+
+/**
+ * THE ONE DRAW-STATE CONSTANT THE THREE RENDERERS MUST SHARE — the multisample
+ * count the scene geometry is rasterized at.
+ *
+ * Sharing the GEOMETRY is not enough to make the free↔frame flip seamless: the
+ * same 1-pixel line looks materially different depending on whether it is
+ * multisampled. gl3d's WebGL2 context is created with `antialias: true`, which on
+ * this hardware resolves to 4× MSAA; the two worker WGSL passes were left at the
+ * WebGPU default of sampleCount 1, so flipping modes changed the wireframes'
+ * brightness (the reported "moving the cursor out and back to the canvas makes
+ * the Grid change its brightness").
+ *
+ * MEASURED on Particle Life 3D's floor grid — the SAME 274 vertices through the
+ * SAME MVP, 500×500, once with `antialias: true` and once with `antialias: false`:
+ *
+ *   antialias:true   38 493 lit px, 48 % fully covered, mean alpha 198.15/255,
+ *                    Σalpha 7 627 274, alphas {255, 191, 127, 64} (= 4/4…1/4)
+ *   antialias:false  20 420 lit px, 100 % fully covered, mean alpha 255,
+ *                    Σalpha 5 207 100
+ *
+ * i.e. 1.9× the lit pixels and +46 % total emitted light. Rendering both sides at
+ * this sample count removes it.
+ *
+ * WHY 4: WebGPU core guarantees sampleCount 1 and 4 only, and 4 is what WebGL's
+ * `antialias: true` picks on the overwhelmingly common configuration. A driver
+ * that chooses a different WebGL sample count leaves a small residual — vastly
+ * smaller than the 1-vs-4 gap this closes — and there is no portable way to ask
+ * WebGPU for it.
+ */
+export const SCENE_MSAA_SAMPLES = 4;
 
 export interface SceneViz { axes: boolean; grid: boolean; bounds: boolean }
 
