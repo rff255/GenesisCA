@@ -12929,21 +12929,56 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
         return;
       }
       pendingSimStateRestore.current = state;
-      // Structural: the dims dispatched below make the model effect do a full
-      // worker reinit, so hand the bar to the reinit funnel (which ends on the
-      // fresh worker's first reply).
-      if (busyLabel) beginWorkerBusy(busyLabel);
-      const changes: Partial<import('../model/types').ModelProperties> = {};
-      if (boundaryChanged) changes.boundaryTreatment = state.boundaryTreatment!;
-      if (dimsChanged) {
-        changes.gridWidth = dimsFromState!.w;
-        changes.gridHeight = dimsFromState!.h;
-        changes.gridDepth = dimsFromState!.d;
-        // A depth>1 state implies a 3D model; flip the current model to 3D so the
-        // engine actually allocates the volume (.gcastate carries no `dimension`).
-        if (dimsFromState!.d > 1) changes.dimension = '3d';
+      // Will the updateProperties below actually CHANGE the model? A manual
+      // Resize (handleApplyDimensions → initWorkerWithDimensions) moves the LIVE
+      // worker dims (gridWidth.current) WITHOUT dispatching updateProperties, so
+      // the model's dims and the worker's can differ. A state saved at the
+      // MODEL's dims then mismatches the worker (dimsChanged above compares
+      // against the LIVE dims — correct, it decides "can't apply live") while
+      // matching the model exactly — and dispatching those same values would be
+      // a value-level no-op: none of needsFullInit's compared fields change, NO
+      // structural reinit fires, and the armed pendingSimStateRestore is
+      // consumed by the soft recompile's `stepped` at the WRONG (live) dims and
+      // silently dropped. Predict the reinit with the SAME field comparisons
+      // needsFullInit makes (raw gridDepth ?? 1 + the dimension flip).
+      const dimsModelDiffer = dimsFromState != null && (
+        dimsFromState.w !== model.properties.gridWidth
+        || dimsFromState.h !== model.properties.gridHeight
+        || dimsFromState.d !== (model.properties.gridDepth ?? 1)
+        || (dimsFromState.d > 1 && (model.properties.dimension ?? '2d') !== '3d'));
+      if (boundaryChanged || dimsModelDiffer) {
+        // Structural: the changes dispatched below make the model effect do a
+        // full worker reinit, so hand the bar to the reinit funnel (which ends
+        // on the fresh worker's first reply).
+        if (busyLabel) beginWorkerBusy(busyLabel);
+        const changes: Partial<import('../model/types').ModelProperties> = {};
+        if (boundaryChanged) changes.boundaryTreatment = state.boundaryTreatment!;
+        // Adapt the model's dims whenever the STATE's differ from the MODEL's —
+        // not only from the live worker's. A boundary-only change loaded after a
+        // manual Resize (state dims == live dims != model dims) would otherwise
+        // reinit at the model's stale dims and the restore would arrive at a
+        // worker whose grid can't hold it (dim-mismatch → dropped).
+        if (dimsModelDiffer) {
+          changes.gridWidth = dimsFromState!.w;
+          changes.gridHeight = dimsFromState!.h;
+          changes.gridDepth = dimsFromState!.d;
+          // A depth>1 state implies a 3D model; flip the current model to 3D so the
+          // engine actually allocates the volume (.gcastate carries no `dimension`).
+          if (dimsFromState!.d > 1) changes.dimension = '3d';
+        }
+        updateProperties(changes);
+      } else {
+        // The state's dims equal the MODEL's but not the LIVE worker's (only a
+        // manual Resize separates the two), and the boundary matches. There is
+        // nothing to dispatch — drive the structural reinit DIRECTLY at the
+        // state's dims through the Resize button's own funnel. It begins its
+        // own busy bar, and the fresh worker's first `stepped` consumes the
+        // armed pendingSimStateRestore exactly like the .gcaproj-embedded
+        // restore (now at matching dims → the live loadState path).
+        // dimsFromState is non-null here: we entered on boundaryChanged ||
+        // dimsChanged, and !boundaryChanged forces dimsChanged (grid-carrying).
+        initWorkerWithDimensions(dimsFromState!.w, dimsFromState!.h, dimsFromState!.d, busyLabel);
       }
-      updateProperties(changes);
       return;
     }
 
@@ -13106,7 +13141,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
     if (loadReqId !== undefined) loadMsg.reqId = loadReqId;
 
     workerRef.current.postMessage(loadMsg);
-  }, [model.properties.boundaryTreatment, model.simulationState, updateProperties, setSimulationState, beginWorkerBusy, beginStateLoadBusy]);
+  }, [model.properties.boundaryTreatment, model.properties.gridWidth, model.properties.gridHeight, model.properties.gridDepth, model.properties.dimension, model.simulationState, updateProperties, setSimulationState, beginWorkerBusy, beginStateLoadBusy, initWorkerWithDimensions]);
 
   // F5: Apply dimension override
   const handleApplyDimensions = () => {
