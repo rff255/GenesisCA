@@ -2409,9 +2409,44 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
    *  simply replaces this bar instead of stranding it. */
   const beginWorkerBusy = useCallback((label: string) => {
     endInitBusy();
+    endStateLoadBusyRef.current();
     initBusyRef.current = beginBusy(label);
     initBusyTimerRef.current = setTimeout(() => { initBusyTimerRef.current = null; endInitBusy(); }, INIT_BUSY_MAX_MS);
   }, [endInitBusy]);
+
+  // ── Board restore (loadState) progress ──────────────────────────────────────
+  // The LIVE restore path — a board-carrying preset / `.gcastate` whose dims
+  // already match, so nothing reinitialises — is real work in the worker (every
+  // cell attribute copied in, the neighbour tables + active set rebuilt, the
+  // agent store deserialised, a GPU re-upload) and on a large grid / population
+  // it takes long enough to look frozen. It CANNOT ride `beginWorkerBusy`: that
+  // ends on the next `stepped`, and while playing those flow constantly, so the
+  // bar would vanish immediately. So the restore carries its own correlation id
+  // and the worker answers with a `stateLoaded` post from the handler itself.
+  const stateLoadBusyRef = useRef<{ id: number; handle: BusyHandle; timer: ReturnType<typeof setTimeout> } | null>(null);
+  const stateLoadSeqRef = useRef(0);
+  const endStateLoadBusy = useCallback(() => {
+    const cur = stateLoadBusyRef.current;
+    if (!cur) return;
+    clearTimeout(cur.timer);
+    cur.handle.end();
+    stateLoadBusyRef.current = null;
+  }, []);
+  /** Latest-ref so `beginWorkerBusy` (declared above) can end a pending restore
+   *  bar without a declaration-order dance. */
+  const endStateLoadBusyRef = useRef<() => void>(() => {});
+  endStateLoadBusyRef.current = endStateLoadBusy;
+  /** Raise the bar and return the id to stamp on the `loadState` message. */
+  const beginStateLoadBusy = useCallback((label: string): number => {
+    endStateLoadBusy();
+    const id = ++stateLoadSeqRef.current;
+    const handle = beginBusy(label);
+    // Same generous safety net as the reinit bar: bound a worker that dies
+    // without replying, don't time the work.
+    const timer = setTimeout(() => { endStateLoadBusyRef.current(); }, INIT_BUSY_MAX_MS);
+    stateLoadBusyRef.current = { id, handle, timer };
+    return id;
+  }, [endStateLoadBusy]);
 
   // ── Recording quality (keyframe cadence) ────────────────────────────────────
   // 'standard' = a keyframe every 30 frames: MEASURED 3.5x smaller and 1.8x
@@ -6471,6 +6506,12 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
     if (initBusyRef.current && (msg.type === 'stepped' || msg.type === 'ready' || msg.type === 'error')) {
       endInitBusy();
     }
+    // The restore's OWN ack (NOT any `stepped` — those keep flowing while
+    // playing). Id-matched so a superseded load can't end the current bar.
+    if (msg.type === 'stateLoaded') {
+      if (stateLoadBusyRef.current?.id === msg.reqId) endStateLoadBusy();
+      return;
+    }
     if (msg.type === 'inspectCellsData') {
       // Worker batched attribute readout + per-cell RGB for all subscribed
       // inspect cells. Per-cell colors are bundled here (instead of relying
@@ -6973,10 +7014,13 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
     }
 
     // Restore simulation state from loaded .gcaproj (after worker init completes)
+    // — and from the STRUCTURAL preset / .gcastate path, whose reinit bar has
+    // just ended on this very `stepped`. Restoring the board is a second stretch
+    // of real work, so it announces itself in turn (ended by its own ack).
     if (msg.type === 'stepped' && pendingSimStateRestore.current) {
       const state = pendingSimStateRestore.current;
       pendingSimStateRestore.current = null;
-      applySimulationState(state);
+      applySimulationState(state, { busyLabel: 'Restoring board…' });
     }
 
     // P7 deferred attach: a two-phase handshake with the worker so we never
@@ -7811,9 +7855,10 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       webmStreamRef.current?.cancel();
       webmStreamRef.current = null;
       webmStreamPendingRef.current = [];
-      // A reinit bar waiting on a worker that is about to be terminated would
-      // never be ended by a reply — drop it with the worker.
+      // A reinit / restore bar waiting on a worker that is about to be
+      // terminated would never be ended by a reply — drop it with the worker.
       endInitBusy();
+      endStateLoadBusyRef.current();
       workerRef.current?.terminate();
       workerRef.current = null;
     };
@@ -12673,8 +12718,11 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
     const readBusy = beginBusy(`Loading "${file.name}"…`);
     try {
       const state = await readStateFile(file);
-      beginWorkerBusy('Restoring simulation state…');
-      applySimulationState(state, { adaptDims: true });  // explicit file load — its dims are authoritative
+      // applySimulationState picks the right bar for the path it takes (a
+      // structural reinit vs the live board restore) — it used to be raised
+      // here unconditionally as a reinit bar, which on the LIVE path ended on
+      // the next unrelated `stepped` (i.e. immediately, while playing).
+      applySimulationState(state, { adaptDims: true, busyLabel: 'Restoring simulation state…' });  // explicit file load — its dims are authoritative
     } catch (err) {
       setCompileError(String(err));
     } finally {
@@ -12750,12 +12798,14 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
     const dimsChanged = dimsFromState != null
       && (dimsFromState.w !== gridWidth.current || dimsFromState.h !== gridHeight.current || dimsFromState.d !== gridDepth.current);
     if ((boundaryChanged || dimsChanged) && playing) setPlaying(false);
-    // Only a STRUCTURAL preset is worth announcing: it restarts the engine (and
-    // the dims it dispatches make the model effect do a full reinit, whose own
-    // bar then replaces this one). A parameter-only / matching-dims preset
-    // applies live in a few ms — flashing a bar for it would be noise.
-    if (boundaryChanged || dimsChanged) beginWorkerBusy(`Loading preset "${p.name}"…`);
-    applySimulationState(p.state, { adaptDims: true });  // explicit preset load — a WITH-GRID preset's dims are authoritative
+    // Announce the load and let applySimulationState decide which bar fits the
+    // path it takes: a STRUCTURAL preset gets the reinit bar, a BOARD-carrying
+    // one at matching dims gets the live-restore bar (ended by the worker's own
+    // `stateLoaded` ack — copying every cell attribute + the agent store back
+    // in is seconds of work on a big model), and a PARAMETER-ONLY preset gets
+    // nothing: it applies in a few ms, so a bar would be pure noise. The
+    // show-delay then swallows any of these that turns out to be quick.
+    applySimulationState(p.state, { adaptDims: true, busyLabel: `Loading preset "${p.name}"…` });  // explicit preset load — a WITH-GRID preset's dims are authoritative
   };
 
   const handleDeletePreset = (p: Preset) => {
@@ -12777,11 +12827,16 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
     const file = e.target.files?.[0];
     e.target.value = ''; // allow re-importing the same file
     if (!file) return;
+    // A board-carrying .gcapreset embeds the whole base64 grid + agent store, so
+    // the read+parse is real work — same coverage as the .gcastate read.
+    const readBusy = beginBusy(`Importing "${file.name}"…`);
     try {
       const preset = await readPresetFile(file);
       addPreset(preset);
     } catch (err) {
       setCompileError(`Preset import failed: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      readBusy.end();
     }
   };
 
@@ -12809,8 +12864,17 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
     workerRef.current.postMessage({ type: 'getState' });
   };
 
-  const applySimulationState = useCallback((state: SimulationState, opts?: { adaptDims?: boolean }) => {
+  const applySimulationState = useCallback((state: SimulationState, opts?: { adaptDims?: boolean; busyLabel?: string }) => {
     if (!workerRef.current) return;
+    // busyLabel: announce this restore, if it turns out to be real work. The
+    // decision lives HERE rather than at the call sites because only this
+    // function knows which of its several paths a given state takes — the
+    // structural one (reinit, ended by the fresh worker's first reply), the
+    // live board restore (ended by the worker's `stateLoaded` ack), or one of
+    // the early-outs (grid-less parameter preset, dropped stale snapshot,
+    // dimension-mismatch error), which must raise NOTHING or the bar would
+    // hang until its safety net. Absent ⇒ silent.
+    const busyLabel = opts?.busyLabel;
     // adaptDims: may this restore CHANGE the model's grid dims / boundary to match
     // the snapshot? True only for AUTHORITATIVE loads (a .gcastate file or a preset
     // the user explicitly opened — there the saved dims are what the user wants).
@@ -12865,6 +12929,10 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
         return;
       }
       pendingSimStateRestore.current = state;
+      // Structural: the dims dispatched below make the model effect do a full
+      // worker reinit, so hand the bar to the reinit funnel (which ends on the
+      // fresh worker's first reply).
+      if (busyLabel) beginWorkerBusy(busyLabel);
       const changes: Partial<import('../model/types').ModelProperties> = {};
       if (boundaryChanged) changes.boundaryTreatment = state.boundaryTreatment!;
       if (dimsChanged) {
@@ -12964,6 +13032,18 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       return;
     }
 
+    // The LIVE path: nothing reinitialises, so this bar is ended by the
+    // worker's own `stateLoaded` ack — see beginStateLoadBusy. Raised HERE,
+    // above the base64 decode, so it measures the whole operation: every
+    // early-out (grid-less state, stale-snapshot drop, dimension mismatch) is
+    // already behind us, and from here to the post there is no return.
+    //
+    // The decode below is synchronous and therefore cannot paint (the honesty
+    // rule) — but starting the clock before it means that when the main thread
+    // finally yields, the show-delay has already elapsed and the bar appears
+    // immediately for the worker's share, instead of restarting from zero.
+    const loadReqId = busyLabel !== undefined ? beginStateLoadBusy(busyLabel) : undefined;
+
     // Reset generation counter — saved states restore the grid configuration,
     // not the simulation history. Users building a starting configuration
     // shouldn't inherit the generation count they spent getting there.
@@ -13023,8 +13103,10 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       loadMsg.agents = deserializeAgentState(state.agents);
     }
 
+    if (loadReqId !== undefined) loadMsg.reqId = loadReqId;
+
     workerRef.current.postMessage(loadMsg);
-  }, [model.properties.boundaryTreatment, model.simulationState, updateProperties, setSimulationState]);
+  }, [model.properties.boundaryTreatment, model.simulationState, updateProperties, setSimulationState, beginWorkerBusy, beginStateLoadBusy]);
 
   // F5: Apply dimension override
   const handleApplyDimensions = () => {
@@ -13206,7 +13288,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
   //  - genesis-open-image-file  → the Map Image to Cells dialog (the Ctrl+V seam).
   //  - genesis-import-preset-file → readPresetFile + addPreset (feature parity
   //    with the Presets block's Import button).
-  const applySimulationStateRef2 = useRef<(s: SimulationState, o?: { adaptDims?: boolean }) => void>(() => {});
+  const applySimulationStateRef2 = useRef<(s: SimulationState, o?: { adaptDims?: boolean; busyLabel?: string }) => void>(() => {});
   applySimulationStateRef2.current = applySimulationState;
   const addPresetRef = useRef(addPreset);
   addPresetRef.current = addPreset;
@@ -13215,11 +13297,16 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       const file = (e as CustomEvent).detail?.file as File | undefined;
       if (!file) return;
       void (async () => {
+        // Same coverage as the transport-bar Load State button: the read (a
+        // base64 board can be megabytes) and then the restore itself.
+        const readBusy = beginBusy(`Loading "${file.name}"…`);
         try {
           const state = await readStateFile(file);
-          applySimulationStateRef2.current(state, { adaptDims: true });
+          applySimulationStateRef2.current(state, { adaptDims: true, busyLabel: 'Restoring simulation state…' });
         } catch (err) {
           setCompileError(String(err));
+        } finally {
+          readBusy.end();
         }
       })();
     };
@@ -13234,10 +13321,13 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       const file = (e as CustomEvent).detail?.file as File | undefined;
       if (!file) return;
       void (async () => {
+        const readBusy = beginBusy(`Importing "${file.name}"…`);
         try {
           addPresetRef.current(await readPresetFile(file));
         } catch (err) {
           setCompileError(`Preset import failed: ${err instanceof Error ? err.message : String(err)}`);
+        } finally {
+          readBusy.end();
         }
       })();
     };
