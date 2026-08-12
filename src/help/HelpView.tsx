@@ -580,6 +580,33 @@ export function HelpView() {
               wire in a hand-edited file is reported by name at compile time.
             </li>
             <li>
+              <strong>Every parameter has a default</strong>, edited right under its type.
+              That is what the brush row starts at before you touch it, what an untouched
+              brush actually paints, and what an image import seeds a constant channel with
+              &mdash; so a parameter that is usually &ldquo;1.0&rdquo; or &ldquo;alive&rdquo;
+              should say so instead of making everyone dial it in. In the brush panel a
+              row that differs from its default grows a small <code>⟳</code> to put it back.
+            </li>
+            <li>
+              <strong>Give a number a range and its brush row becomes a slider.</strong> Set
+              both <em>min</em> and <em>max</em> and the simulator shows a slider next to the
+              number field, exactly like a bounded model attribute. Leave either blank and you
+              get the plain number field. (The bounds shape the brush widget; they are not
+              clamped by the engine.)
+            </li>
+            <li>
+              <strong>A tag parameter carries the option INDEX.</strong> That is the whole
+              payload &mdash; 0, 1, 2 &hellip; &mdash; on every compile target. So an
+              <em> inline</em> option list is ad-hoc: it names the choices for <em>you</em>, in
+              the brush panel, but nothing else in the model knows those names, and a
+              Get&nbsp;Constant / Compare / Switch in the graph can only compare the number.
+              If you want the names in the graph too, point the parameter at an existing
+              <strong> tag attribute</strong> instead of listing options inline: the payload is
+              the identical index, but now every tag-aware node can pick the option by name.
+              The editor prints the live index map (<code>0=idle, 1=walk, …</code>) under an
+              inline list so the mapping between the two is never a guess.
+            </li>
+            <li>
               <strong>Agents work the same way</strong> &mdash; and additionally choose a
               <strong> brush kind</strong>: an <em>Editor</em> brush runs the graph on every agent it
               covers, a <em>Spawner</em> brush runs it once where you click and hands it the brush

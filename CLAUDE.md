@@ -2522,8 +2522,9 @@ dialog. A brush that stamps `species = Predator, energy = 40, hungry = true` now
 instead of encoding it in a colour the graph has to decode. Design authority:
 [docs/IMPACT_MAP_PARAM_INPUT_MAPPINGS.md](docs/IMPACT_MAP_PARAM_INPUT_MAPPINGS.md) +
 [PLAN_PARAM_INPUT_MAPPINGS.md](docs/PLAN_PARAM_INPUT_MAPPINGS.md) (+ `.html` mockup); **the v2
-follow-ups F1–F6 — brush-geometry outputs, image→agent-population init, a `vector` parameter type,
-retiring the WASM entry, the empty-`mappingId` asymmetry, parameter presets — are recorded in the
+follow-ups F1–F7 — brush-geometry outputs, image→agent-population init, a `vector` parameter type,
+retiring the WASM entry, the empty-`mappingId` asymmetry, parameter presets, and an inline tag list
+as a graph-side tag SOURCE — are recorded in the
 Impact Map's own Follow-ups register** and are the candidates to fold into
 [HANDOFF_CLARITY_SIMPLIFICATION.md](docs/HANDOFF_CLARITY_SIMPLIFICATION.md) §3.
 
@@ -2606,6 +2607,48 @@ diffs at every phase**.
   UI must not do. (Binding the popover to a chosen COLOUR parameter was considered and NOT taken:
   the parameter's own `ColorField` already opens a swatch popover with the same picker, so a second
   modifier-gesture route to the same control would be a second way to do one thing.)
+- **DEFAULTS + a BOUNDED slider + the tag-index answer (the 2026-08-11 polish round).**
+  - **Every parameter type gets a DEFAULT widget in the editor** (`ParamDefaultWidget` in
+    [MappingsPanelContent.tsx](src/modeler/panels/MappingsPanelContent.tsx)), not just `color` —
+    a number field, a bool select, the tag option select, the colour swatch. Its value is read
+    through **`paramFallbackValue`**, the SAME resolution `encodeChannelValues` falls back to, so
+    the widget cannot show one number while an untouched brush paints another. **The seeding
+    needed NO new plumbing**: `InputParamsPanel` already rendered `values[key] ?? paramFallbackValue`
+    and `defaultImageChannelSources` already seeded its CONSTANT channels through
+    `encodeChannelValues`, so declaring a default now reaches the brush row, the paint payload and
+    the image dialog at once. What was missing was only the UI to declare it.
+  - **A numeric parameter with BOTH `min` and `max` renders a range slider beside its number
+    field** — the Model Attribute bounds pattern (`hasBounds && min != null && max != null`),
+    reused verbatim: `step = 1` for integer, `(max − min) / 100` for float, with the same min/max
+    on the `NumberField` so a typed value clamps exactly as a drag constrains. Either bound blank
+    ⇒ the plain field (an unbounded slider has no meaningful extent). **Cells and agents share the
+    component**, so both got it.
+  - **A row that differs from its default grows a `⟳` reset** (hidden when it matches — the
+    standing "an enabled control must do something" rule).
+  - **⚠ THE TAG-OPTIONS COMMA BUG, and the rule it re-teaches.** The inline option list stores a
+    string ARRAY, so the old controlled `<input>` round-tripped `options.join(', ')` ⇄
+    `text.split(',').map(trim).filter(Boolean)` on EVERY keystroke — and that round trip is lossy
+    for exactly the character you must type to add an option: `"a,"` parses to `['a']` and renders
+    back as `"a"`, so the comma was eaten on the next render and a second option could not be
+    started (the user's report: *"it only works if I write both options together, then add a comma
+    in between"*). Fixed with the repo's standard **draft/commit** discipline (`TagOptionsInput`,
+    the `CustomLabelInput` / `NumberField` precedent): free text while editing, parse once on
+    blur/Enter, and a resync effect keyed on the COMMITTED text so a mid-edit draft is never
+    clobbered. **GENERAL RULE: never make a controlled input's `value` a lossy transform of the
+    stored shape** — if the stored shape is not a string, the field needs a draft.
+  - **THE TAG SEMANTICS, stated where the user asks the question.** A tag channel carries the
+    option **INDEX** on every target — that is the whole payload. So an INLINE list is ad-hoc: it
+    names the choices in the brush panel, but nothing else in the model knows those names and a
+    graph-side Get Constant / Compare / Switch can only compare the number. Binding a tag
+    **ATTRIBUTE** gives the identical index with the names available to every tag-aware node. The
+    editor now says so under an inline list AND prints the live index map (`0=idle, 1=walk, …`).
+    **Making the inline list a graph-side tag SOURCE was investigated and deliberately NOT shipped
+    — it is compiler-gate-visible** (`danglingRefs`' `KEY_SPACE` maps `tagAttributeId` to the
+    ATTRIBUTE id space, so a synthetic `param:<mid>:<key>` fails the pre-compile gate) and it needs
+    its own index-remap cascade in `UPDATE_MAPPING` (a reorder would otherwise silently re-point
+    every stored constant). Recorded as **F7** in
+    [IMPACT_MAP_PARAM_INPUT_MAPPINGS.md](docs/IMPACT_MAP_PARAM_INPUT_MAPPINGS.md) with the full
+    blast radius.
 - **Persistence (D6)** mirrors the Manual Brush exactly: declared values live in a per-model
   `genesisca_input_params_v1:<modelName>` key as `Record<mappingId, Record<paramKey, string>>`, with
   a signature-keyed merge over every C→A mapping × its parameters' key AND type (so a retype
@@ -2614,7 +2657,7 @@ diffs at every phase**.
   `.gcastate` and "Save with simulator controls" round-trips unchanged. *(Deviation from the impact
   map, which sketched the store keyed by CHANNEL: keying by PARAMETER is the same information and
   lets a `color` parameter round-trip as the one hex its widget edits.)*
-- **Gate — [scripts/test-param-input-mappings.mjs](scripts/test-param-input-mappings.mjs) — Phase 1 half (of 111 total).**
+- **Gate — [scripts/test-param-input-mappings.mjs](scripts/test-param-input-mappings.mjs) — Phase 1 half (of 202 total; §12 covers the defaults / tag-index / comma-bug round).**
   The library gives ZERO coverage for the new path (every shipped model has `parameters` absent), so
   byte-identity proves we broke nothing and proves NOTHING about whether the feature works. This
   builds models in memory and asserts **VALUES** through the real compiled fns on JS **and a real

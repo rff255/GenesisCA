@@ -3,7 +3,7 @@ import {
   paramFallbackValue, paramTagOptions,
   type InputParamValues, type ResolvedInputParams,
 } from '../model/inputMappingParams';
-import { InlineBoolSelect, InlineNumberInput, InlineTagSelect } from '../modeler/vpl/widgets/InlineWidgets';
+import { InlineBoolSelect, InlineNumberInput, InlineTagSelect, NumberField } from '../modeler/vpl/widgets/InlineWidgets';
 import { ColorField } from '../modeler/vpl/widgets/ColorField';
 import styles from './SimulatorView.module.css';
 
@@ -46,21 +46,38 @@ export function InputParamsPanel({ resolved, values, onChange, model }: InputPar
 
   return (
     <div className={styles.manualBrushPanel}>
-      {resolved.params.map(({ param }) => (
-        <div key={param.key} className={`${styles.manualBrushRow} ${styles.manualBrushRowDense}`}>
-          <div className={styles.manualBrushLabel}>
-            <div className={styles.manualBrushName} title={param.description || undefined}>{param.name || param.key}</div>
+      {resolved.params.map(({ param }) => {
+        // The DEFAULT is the seed: an untouched parameter shows (and paints) the
+        // value the mapping declares. `paramFallbackValue` is the SAME resolution
+        // `encodeChannelValues` falls back to, so the widget can never show one
+        // number while the payload carries another.
+        const dflt = paramFallbackValue(param);
+        const current = values[param.key] ?? dflt;
+        return (
+          <div key={param.key} className={`${styles.manualBrushRow} ${styles.manualBrushRowDense}`}>
+            <div className={styles.manualBrushLabel}>
+              <div className={styles.manualBrushName} title={param.description || undefined}>{param.name || param.key}</div>
+            </div>
+            <div className={styles.manualBrushWidget}>
+              <ParamWidget
+                param={param}
+                value={current}
+                onChange={v => setValue(param.key, v)}
+                model={model}
+              />
+              {/* Reset-to-default: shown ONLY while the value differs, so it is
+                  never an enabled control that does nothing (the standing rule). */}
+              {current !== dflt && (
+                <button
+                  className={styles.paramResetBtn}
+                  title={`Reset to the declared default (${dflt})`}
+                  onClick={() => setValue(param.key, dflt)}
+                >⟳</button>
+              )}
+            </div>
           </div>
-          <div className={styles.manualBrushWidget}>
-            <ParamWidget
-              param={param}
-              value={values[param.key] ?? paramFallbackValue(param)}
-              onChange={v => setValue(param.key, v)}
-              model={model}
-            />
-          </div>
-        </div>
-      ))}
+        );
+      })}
     </div>
   );
 }
@@ -82,13 +99,48 @@ function ParamWidget({ param, value, onChange, model }: {
       return <ColorField value={value || '#000000'} onChange={onChange} noAlpha title={param.name || param.key} />;
     case 'integer':
     case 'float':
-    default:
+    default: {
+      // BOUNDED ⇒ a range slider alongside the number field — the Model Attribute
+      // bounds pattern (`hasBounds && min != null && max != null`), reused here so
+      // a brush parameter with a declared range feels like every other bounded
+      // control in the simulator. The number field keeps the same min/max, so a
+      // typed value is clamped on commit exactly as the slider constrains a drag.
+      const bounded = param.min != null && param.max != null && param.max > param.min;
+      const isInt = param.type === 'integer';
+      if (!bounded) {
+        return (
+          <InlineNumberInput
+            value={value ?? ''}
+            onChange={onChange}
+            step={isInt ? 1 : 'any'}
+          />
+        );
+      }
+      const min = param.min!, max = param.max!;
+      const n = Number(value);
+      const cur = Number.isFinite(n) ? Math.min(max, Math.max(min, n)) : min;
       return (
-        <InlineNumberInput
-          value={value ?? ''}
-          onChange={onChange}
-          step={param.type === 'float' ? 'any' : 1}
-        />
+        <div style={{ display: 'flex', gap: 4, alignItems: 'center', flex: 1, minWidth: 0 }}>
+          <input
+            type="range"
+            min={min} max={max}
+            step={isInt ? 1 : (max - min) / 100}
+            value={cur}
+            onChange={e => {
+              const v = Number(e.target.value);
+              onChange(String(isInt ? Math.round(v) : v));
+            }}
+            style={{ flex: 1, minWidth: 0, width: '100%' }}
+          />
+          <NumberField
+            className={styles.brushInput}
+            integer={isInt}
+            min={min} max={max}
+            value={cur}
+            onNumber={v => onChange(String(v))}
+          />
+        </div>
       );
+    }
   }
 }

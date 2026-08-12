@@ -9,10 +9,10 @@ import { defaultGradientStops, defaultTagColor } from '../vpl/compiler/linkedOut
 import { GradientStopsEditor, type GradStop } from '../vpl/widgets/GradientStopsEditor';
 import { INTERPOLATION_METHODS } from '../vpl/nodes/interpolationMethods';
 import type { Mapping, RGB, ColorStop, Attribute, CAModel, InputMappingParam, InputParamType } from '../../model/types';
-import { inputBrushKindOf, inputParamsOf, materialiseInputParams, mintParamKey } from '../../model/inputMappingParams';
+import { inputBrushKindOf, inputParamsOf, materialiseInputParams, mintParamKey, paramFallbackValue, paramTagOptions } from '../../model/inputMappingParams';
 import { is3dModelLike } from '../vpl/compiler/niCodec';
 import { typeDisplayName } from '../../model/typeLabels';
-import { NumberField } from '../vpl/widgets/InlineWidgets';
+import { InlineBoolSelect, InlineNumberInput, InlineTagSelect, NumberField } from '../vpl/widgets/InlineWidgets';
 import styles from './PanelContent.module.css';
 import { ColorField } from '../vpl/widgets/ColorField';
 import { hexToRgba, rgbaToHex, isOpaque, OPAQUE } from '../../model/colorHex';
@@ -258,6 +258,84 @@ function LinkedOutputEditor({ selected, attrs, update }: { selected: Mapping; at
 }
 
 /**
+ * The inline option list of a `tag` parameter — a DRAFT/COMMIT text field.
+ *
+ * ⚠ WHY IT CANNOT BE A PLAIN CONTROLLED INPUT (the bug this exists to fix):
+ * the stored shape is a string ARRAY, so a controlled `value` has to round-trip
+ * `options.join(', ')` ⇄ `text.split(',').map(trim).filter(Boolean)`. That round
+ * trip is LOSSY for exactly the character the user must type to add an option:
+ * `"a,"` parses to `['a']` and renders back as `"a"`, so the comma is eaten on
+ * the very next render and a second option can never be started. (The reported
+ * symptom: "I can't write the comma after the first option — it only works if I
+ * write both options together, then add a comma in between.")
+ *
+ * The fix is the repo's standard discipline (`CustomLabelInput`, `NumberField`):
+ * the user edits a free-text DRAFT and the parse happens once, on blur/Enter.
+ * The effect resyncs the draft when the parameter changes underneath (a retype,
+ * an undo, selecting a different mapping).
+ */
+function TagOptionsInput({ options, onCommit }: {
+  options: readonly string[];
+  onCommit: (next: string[]) => void;
+}) {
+  const external = options.join(', ');
+  const [draft, setDraft] = useState(external);
+  // Resync ONLY when the committed text genuinely changed underneath, so a
+  // mid-edit draft ("a,") is never clobbered by the parsed round trip ("a").
+  const lastExternalRef = useRef(external);
+  useEffect(() => {
+    if (external !== lastExternalRef.current) { setDraft(external); lastExternalRef.current = external; }
+  }, [external]);
+  const commit = () => {
+    const parsed = draft.split(',').map(s => s.trim()).filter(Boolean);
+    lastExternalRef.current = parsed.join(', ');
+    if (parsed.join(' ') !== options.join(' ')) onCommit(parsed);
+    else setDraft(lastExternalRef.current);   // normalise spacing on commit
+  };
+  return (
+    <input
+      className={styles.textInput}
+      value={draft}
+      placeholder="option A, option B, …"
+      onChange={e => setDraft(e.target.value)}
+      onBlur={commit}
+      onKeyDown={e => { if (e.key === 'Enter') { commit(); (e.currentTarget as HTMLInputElement).blur(); } }}
+      title="Comma-separated option names — applied when you leave the field or press Enter. The payload carries the option INDEX."
+    />
+  );
+}
+
+/** The DEFAULT-value widget for one parameter — the value its brush row starts
+ *  at (and the constant an image import seeds for it). Type-adaptive, mirroring
+ *  the simulator's own `ParamWidget` so the editor and the brush agree on what a
+ *  value of this type looks like. */
+function ParamDefaultWidget({ param, options, onChange }: {
+  param: InputMappingParam;
+  options: string[];
+  onChange: (v: string) => void;
+}) {
+  const value = paramFallbackValue(param);
+  switch (param.type) {
+    case 'bool':
+      return <InlineBoolSelect className={styles.textInput} style={{ width: 76 }} value={value} onChange={onChange} />;
+    case 'tag':
+      return <InlineTagSelect className={styles.textInput} style={{ width: 110 }} value={value} options={options} onChange={onChange} />;
+    case 'color':
+      return <ColorField value={value} onChange={onChange} noAlpha style={{ width: 34, height: 22 }} />;
+    default:
+      return (
+        <InlineNumberInput
+          className={styles.textInput}
+          style={{ width: 64 }}
+          value={value}
+          onChange={onChange}
+          step={param.type === 'float' ? 'any' : 1}
+        />
+      );
+  }
+}
+
+/**
  * Parameterized Input Mappings — THE PARAMETER LIST EDITOR (Phase 2).
  *
  * A Color→Attribute mapping declares its own named parameters instead of the
@@ -394,29 +472,52 @@ function InputParamsEditor({ mapping, update, model }: {
                       className={styles.textInput}
                       style={{ flex: 1 }}
                       value={p.tagAttributeId ?? ''}
-                      onChange={e => patchAt(i, { tagAttributeId: e.target.value || undefined })}
+                      // Swapping the option SOURCE re-bases every index, so the
+                      // stored default is reset rather than left pointing at an
+                      // option that may no longer exist.
+                      onChange={e => patchAt(i, { tagAttributeId: e.target.value || undefined, defaultValue: '0' })}
                       title="Borrow the option list from a tag attribute (live), or list them inline below."
                     >
                       <option value="">Inline list…</option>
                       {tagAttrs.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
                     </select>
                   </div>
-                  {!p.tagAttributeId && (
-                    <input
-                      className={styles.textInput}
-                      value={(p.tagOptions ?? []).join(', ')}
-                      placeholder="option A, option B, …"
-                      onChange={e => patchAt(i, { tagOptions: e.target.value.split(',').map(s => s.trim()).filter(Boolean) })}
-                      title="Comma-separated option names. The payload carries the option INDEX."
+                  {!p.tagAttributeId && (<>
+                    <TagOptionsInput
+                      options={p.tagOptions ?? []}
+                      onCommit={next => patchAt(i, { tagOptions: next })}
                     />
-                  )}
+                    {/* THE SEMANTICS NOTE. A tag channel carries the option INDEX on
+                        every target — that is the whole payload. An INLINE list is
+                        ad-hoc: nothing else in the model knows those names, so a
+                        graph-side Get Constant / Compare / Switch can only compare
+                        the number. Binding a tag ATTRIBUTE instead gives the same
+                        index NAMED everywhere, which is what the user almost always
+                        wants; saying so here is what stops the inline list reading
+                        as a broken tag type. */}
+                    <span style={{ fontSize: '0.62rem', color: '#8a7a4a', lineHeight: 1.35 }}>
+                      An inline list is <b>ad-hoc</b>: the channel carries the option <b>index</b>
+                      {(p.tagOptions ?? []).length > 0 && <> ({(p.tagOptions ?? []).map((o, oi) => `${oi}=${o}`).join(', ')})</>},
+                      and graph nodes can only compare it as a number. To use these names in
+                      Get&nbsp;Constant / Compare / Switch, pick a <b>tag attribute</b> above instead.
+                    </span>
+                  </>)}
                 </>)}
-                {p.type === 'color' && (
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                    <span style={{ fontSize: '0.66rem', color: '#888', width: 52 }}>default</span>
-                    <ColorField value={p.defaultValue || '#000000'} onChange={hex => patchAt(i, { defaultValue: hex })} noAlpha style={{ width: 34, height: 22 }} />
-                  </div>
-                )}
+                {/* THE DEFAULT — every type, in one place. It is what the brush row
+                    starts at before the user touches it (and what an image import
+                    seeds a CONSTANT channel with), so a parameter that is usually
+                    "1.0" or "alive" should say so rather than making every user
+                    dial it in. Resolved through `paramFallbackValue`, the SAME
+                    function the payload encoder falls back to, so the widget can
+                    never disagree with what an untouched brush actually sends. */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                  <span style={{ fontSize: '0.66rem', color: '#888', width: 52 }}>default</span>
+                  <ParamDefaultWidget
+                    param={p}
+                    options={paramTagOptions(p, model)}
+                    onChange={v => patchAt(i, { defaultValue: v })}
+                  />
+                </div>
                 <textarea
                   className={styles.textArea}
                   rows={1}
