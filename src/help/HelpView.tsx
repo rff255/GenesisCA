@@ -3549,7 +3549,8 @@ export function HelpView() {
           <h3 className={styles.h3}>Layout</h3>
           <p className={styles.p}>
             The simulator has a <strong>bottom transport bar</strong> carrying only
-            simulation <em>time</em>: save / load state, the two adjacent speed readouts
+            simulation <em>time</em>: save / load state (each also carrying its CSV
+            sibling on hover or right-click), the two adjacent speed readouts
             (Target FPS, Gens/Frame), and playback (Play/Pause/Step/Reset). Hover or
             click a speed readout to open a vertical slider popover
             (Esc, an outside click, or moving away closes it; the &infin; checkbox keeps
@@ -3720,10 +3721,12 @@ export function HelpView() {
           </p>
           <h3 className={styles.h3}>Import CSV</h3>
           <p className={styles.p}>
-            <strong>Import CSV&hellip;</strong> (in the brush panel, or just <strong>drop a
-            .csv / .tsv file</strong> anywhere on the app) brings tabular data into a running
-            simulation. One dialog covers two flavours; a model with both layers gets a{' '}
-            <strong>Target</strong> switch.
+            <strong>Import CSV&hellip;</strong> brings tabular data into a running simulation.
+            It lives on the transport bar&apos;s <strong>Load State</strong> button &mdash;
+            hover it (or right-click it) and pick <em>Import CSV&hellip;</em>; a plain click
+            still loads a <code>.gcastate</code>. You can also just <strong>drop a .csv / .tsv
+            file</strong> anywhere on the app. One dialog covers two flavours; a model with
+            both layers gets a <strong>Target</strong> switch.
           </p>
           <ul className={styles.list}>
             <li>
@@ -3797,9 +3800,11 @@ export function HelpView() {
           </p>
           <h3 className={styles.h3}>Export CSV</h3>
           <p className={styles.p}>
-            <strong>Export CSV&hellip;</strong> sits beside <em>Import CSV</em> in the same
-            brush panel and is its exact mirror &mdash; take the running simulation out as a
-            table for a spreadsheet, a plotting script or another tool. The same{' '}
+            <strong>Export CSV&hellip;</strong> is the exact mirror of the import, and sits on
+            the transport bar&apos;s <strong>Save State</strong> button &mdash; hover it (or
+            right-click it) and pick <em>Export CSV&hellip;</em>; a plain click still saves a{' '}
+            <code>.gcastate</code>. It takes the running simulation out as a table for a
+            spreadsheet, a plotting script or another tool. The same{' '}
             <strong>Target</strong> switch appears when the model has both layers; a model
             with only one layer simply exports that one. The values are read fresh from the
             engine at the moment you press the button, so what you get is what is on screen
@@ -3934,7 +3939,11 @@ export function HelpView() {
           <h3 className={styles.h3}>Save &amp; Load State</h3>
           <p className={styles.p}>
             The transport bar includes <strong>Save State</strong> (floppy disk icon) and{' '}
-            <strong>Load State</strong> (folder icon) buttons at its left side.
+            <strong>Load State</strong> (folder icon) buttons at its left side. A plain
+            click does the <code>.gcastate</code> action below; <strong>hovering</strong> a
+            button (or right-clicking it) opens a small menu offering that same action plus
+            its tabular sibling &mdash; <em>Export CSV&hellip;</em> under Save,{' '}
+            <em>Import CSV&hellip;</em> under Load (see &ldquo;Import CSV&rdquo; above).
           </p>
           <ul className={styles.list}>
             <li><strong>Save State</strong> &mdash; Downloads a <code>.gcastate</code> file

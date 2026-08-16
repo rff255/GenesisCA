@@ -943,19 +943,23 @@
 }
 
 /* Same idea for the camera button: its Save / Copy menu anchors to the button,
-   and hovering it opens THAT menu rather than the settings popover. */
+   and hovering it opens THAT menu rather than the settings popover. SHARED with
+   the transport bar's Save / Load State buttons, which carry the same shape of
+   two-item menu (the .gcastate action + its CSV sibling). */
 .captureBtnWrap {
   position: relative;
   display: flex;
   align-items: center;
 }
 
-/* Screenshot disposition menu (Save / Copy). Opens UPWARD from the camera
-   button and FLUSH against it (bottom: 100%, NO gap) — it opens on hover, and
-   pointerenter/leave are DOM-tree based, so a visual gap would be a hit-test
-   hole that dismisses the menu while the cursor crosses into it. `left: 0`
-   grows rightward over the rest of the cluster, which is already at the canvas
-   edge, so it can never overflow. */
+/* Disposition menu for a button whose click has a default action and whose
+   hover offers the alternatives: the screenshot's Save / Copy, and the
+   transport bar's Save / Load State (.gcastate + its CSV sibling). Opens
+   UPWARD and FLUSH against the button (bottom: 100%, NO gap) — it opens on
+   hover, and pointerenter/leave are DOM-tree based, so a visual gap would be a
+   hit-test hole that dismisses the menu while the cursor crosses into it.
+   `left: 0` grows rightward from the button, so a menu anchored at either
+   bar's LEFT edge can never overflow the viewport. */
 .shotMenu {
   position: absolute;
   bottom: 100%;
