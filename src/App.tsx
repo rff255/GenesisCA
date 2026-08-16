@@ -197,7 +197,8 @@ function AppInner() {
   // (the exact transport-bar Load State path). .gcapreset → append to the
   // model's presets (genesis-import-preset-file). Images → the Map Image to
   // Cells dialog (genesis-open-image-file — the Ctrl+V clipboard seam).
-  // .csv / .tsv → the Import CSV dialog (genesis-open-csv-file).
+  // .csv / .tsv / .asc → the Import CSV dialog (genesis-open-csv-file); an Esri
+  // ASCII grid takes the same seam and reshapes the dialog from its own header.
   // Window-level listeners preventDefault dragover+drop so the browser never
   // navigates to a dropped file.
   const loadDroppedProject = async (file: File) => {
@@ -228,7 +229,9 @@ function AppInner() {
       showToast(`Importing preset from "${file.name}"…`);
       return;
     }
-    if (['csv', 'tsv'].includes(ext)) {
+    // .asc (Esri ASCII grid) rides the SAME dialog — it decides its own shape
+    // from the file's header.
+    if (['csv', 'tsv', 'asc'].includes(ext)) {
       setMode('simulator');
       window.dispatchEvent(new CustomEvent('genesis-open-csv-file', { detail: { file } }));
       return;
@@ -438,7 +441,7 @@ function AppInner() {
           background: 'rgba(0, 0, 0, 0.45)', border: '3px dashed var(--color-accent)',
           color: 'var(--color-text-primary)', fontSize: '1.05rem', fontWeight: 600,
         }}>
-          Drop to open — .gcaproj / .gcastate / .gcapreset / image
+          Drop to open — .gcaproj / .gcastate / .gcapreset / .csv / .asc / image
         </div>
       )}
       <BusyOverlay />

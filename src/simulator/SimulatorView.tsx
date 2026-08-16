@@ -3106,7 +3106,9 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
   const csvInputRef = useRef<HTMLInputElement>(null);
   // Grid CSV import with "Resize": apply the value block once the worker has
   // reinitialised to the new dims (mirrors pendingImageImport / pendingManualImport).
-  const pendingGridValuesImport = useRef<{ attrId: string; width: number; height: number; layer: number; values: Float64Array } | null>(null);
+  //  A `.asc` session can carry SEVERAL co-registered layers, so this holds a
+  //  list (a CSV / char board is the one-entry case).
+  const pendingGridValuesImport = useRef<{ width: number; height: number; layer: number; layers: Array<{ attrId: string; values: Float64Array }> } | null>(null);
   // "Export CSV" dialog — the decoded snapshot the dialog serialises from
   // (null = closed). Filled by ONE `getState` round-trip, so both flavours and
   // every attribute / layer choice are covered without re-asking the worker.
@@ -7162,10 +7164,12 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
     if (msg.type === 'stepped' && pendingGridValuesImport.current) {
       const gv = pendingGridValuesImport.current;
       pendingGridValuesImport.current = null;
-      workerRef.current?.postMessage(
-        { type: 'importGridValues', attrId: gv.attrId, width: gv.width, height: gv.height, layer: gv.layer, values: gv.values, activeViewer: activeViewerRef.current },
-        { transfer: [gv.values.buffer] },
-      );
+      for (const l of gv.layers) {
+        workerRef.current?.postMessage(
+          { type: 'importGridValues', attrId: l.attrId, width: gv.width, height: gv.height, layer: gv.layer, values: l.values, activeViewer: activeViewerRef.current },
+          { transfer: [l.values.buffer] },
+        );
+      }
     }
 
     // One-shot colors snapshot — used by handleScreenshot under direct render
@@ -13488,8 +13492,12 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       });
       return;
     }
+    // An `.asc` carries its own georeference — record it on the MODEL so the
+    // matching export writes the board back in the same place. Presentation +
+    // I/O only: no compiler and no worker reads it.
+    if (r.georef) updateProperties({ georef: r.georef });
     if (r.resize) {
-      pendingGridValuesImport.current = { attrId: r.attrId, width: r.width, height: r.height, layer: r.layer, values: r.values };
+      pendingGridValuesImport.current = { width: r.width, height: r.height, layer: r.layer, layers: r.layers };
       initWorkerWithDimensions(
         r.width, r.height,
         is3dRef.current ? Math.max(1, gridDepth.current || simDepth) : undefined,
@@ -13497,10 +13505,12 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       );
     } else {
       beginWorkerBusy('Importing CSV…');
-      w.postMessage(
-        { type: 'importGridValues', attrId: r.attrId, width: r.width, height: r.height, layer: r.layer, values: r.values, activeViewer: activeViewerRef.current },
-        { transfer: [r.values.buffer] },
-      );
+      for (const l of r.layers) {
+        w.postMessage(
+          { type: 'importGridValues', attrId: l.attrId, width: r.width, height: r.height, layer: r.layer, values: l.values, activeViewer: activeViewerRef.current },
+          { transfer: [l.values.buffer] },
+        );
+      }
     }
   };
 
@@ -13587,7 +13597,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
     setCsvExport(null);
     // Routed through saveTextFile (never a bare `<a download>`) so the desktop
     // build gets a real native Save As.
-    void saveTextFile(r.text, r.filename, 'text/csv').catch(err => {
+    void saveTextFile(r.text, r.filename, r.filename.endsWith('.asc') ? 'text/plain' : 'text/csv').catch(err => {
       showAgentNotice(`Export failed: ${err instanceof Error ? err.message : String(err)}`);
     });
   };
@@ -14801,8 +14811,8 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
                 <button
                   className={styles.shotMenuItem}
                   onClick={() => { setOverlayPopup(null); openCsvExport(); }}
-                  title="Export one attribute as a CSV table — the board (a line per grid row) or the agents (a row per agent)"
-                >Export CSV{'…'}</button>
+                  title="Export one attribute as a table — a CSV or an Esri ASCII grid (.asc) for the board, or the agents (a row per agent)"
+                >Export CSV / ASC{'…'}</button>
               </div>
             )}
           </div>
@@ -14832,8 +14842,8 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
                 <button
                   className={styles.shotMenuItem}
                   onClick={() => { setOverlayPopup(null); csvInputRef.current?.click(); }}
-                  title="Import a CSV table — agents (a row per agent) or the board (the table IS the grid)"
-                >Import CSV{'…'}</button>
+                  title="Import a CSV table — agents (a row per agent) or the board (the table IS the grid) — or an Esri ASCII grid (.asc) from any GIS"
+                >Import CSV / ASC{'…'}</button>
               </div>
             )}
           </div>
@@ -16203,7 +16213,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
           menu (and reused by the drag-and-drop path's dialog). Deliberately
           rendered here, outside every panel, so it stays mounted whichever
           panels are open — the brush panels no longer reference it. */}
-      <input ref={csvInputRef} type="file" accept=".csv,.tsv,.txt,text/csv" style={{ display: 'none' }} onChange={handleCsvInput} />
+      <input ref={csvInputRef} type="file" accept=".csv,.tsv,.asc,.txt,text/csv" style={{ display: 'none' }} onChange={handleCsvInput} />
       {csvImport && (
         <CsvImportDialog
           text={csvImport.text}
@@ -16231,6 +16241,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
           is3d={is3D}
           agents={csvExport.agents}
           grid={csvExport.grid}
+          georef={model.properties.georef}
           onExport={applyCsvExport}
           onCancel={() => setCsvExport(null)}
         />
