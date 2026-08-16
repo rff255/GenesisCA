@@ -189,7 +189,7 @@ tree-shakeable, no WASM — a defensible dependency for a 100%-client-side app.
   obligations. A static image the user exports once is the honest version.)
 - Optional polish: cursor/status readout shows world coordinates next to cell coords.
 
-### Tier 4 — GeoJSON vector import
+### Tier 4 — GeoJSON vector import  **[SHIPPED — see CLAUDE.md “GeoJSON vector import”]**
 Two consumers, mirroring NetLogo/GAMA:
 - **Rasterise onto attributes**: polygons (lakes, exclusion zones, districts) →
   point-in-polygon fill; lines (rivers, roads) → Bresenham with a width — writing a

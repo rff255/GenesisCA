@@ -44,6 +44,8 @@ import { ImageMappingDialog, type ImageMappingConfig } from './ImageMappingDialo
 import { CsvImportDialog, type CsvImportResult } from './CsvImportDialog';
 import { CsvExportDialog, type CsvExportResult } from './CsvExportDialog';
 import { GeoTiffImportDialog, type GeoTiffImportResult } from './GeoTiffImportDialog';
+import { GeoJsonImportDialog, type GeoJsonImportResult } from './GeoJsonImportDialog';
+import { GEOJSON_PAINT_CHUNK } from './geojsonImport';
 import { GEOTIFF_SUPPORTED } from './geotiffLoader';
 import type { CsvAgentRow } from './csvImport';
 import {
@@ -3174,6 +3176,12 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
   // `applyGridImport` and `pendingGridValuesImport` unchanged.
   const [geoTiffImport, setGeoTiffImport] = useState<{ buffer: ArrayBuffer; name: string } | null>(null);
   const geoTiffInputRef = useRef<HTMLInputElement>(null);
+  // "Import GeoJSON" dialog — the loaded file's raw text (null = closed). The
+  // VECTOR importer: it writes only the cells its geometry COVERS (so it rides
+  // `paintManual`, not `importGridValues`), or turns points into agents through
+  // the SAME `pasteAgents` seam the CSV agent import uses.
+  const [geoJsonImport, setGeoJsonImport] = useState<{ text: string; name: string } | null>(null);
+  const geoJsonInputRef = useRef<HTMLInputElement>(null);
   // "Export CSV" dialog — the decoded snapshot the dialog serialises from
   // (null = closed). Filled by ONE `getState` round-trip, so both flavours and
   // every attribute / layer choice are covered without re-asking the worker.
@@ -13707,6 +13715,73 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
     applyGridImport(r, 'Importing GeoTIFF…');
   };
 
+  // --- GeoJSON import ------------------------------------------------------
+  // Tier 4 of docs/INVESTIGATION_GEOSPATIAL_IO.md — the VECTOR half, and the one
+  // that does NOT ride `applyGridImport`: a raster replaces the whole board, but
+  // a polygon / line / point burn writes ONLY the cells it covers. `paintManual`
+  // ("write value V of attribute A into this cell list") is exactly that, and is
+  // already correct on every compile target (it patches the WebGPU buffer per
+  // cell and refreshes the display). Points → agents reuse the CSV import's
+  // `pasteAgents` seam unchanged.
+  const openGeoJsonFile = (file: File) => {
+    void (async () => {
+      const busy = beginBusy(`Reading "${file.name}"…`);
+      try {
+        const text = await file.text();
+        setGeoJsonImport({ text, name: file.name });
+      } catch (err) {
+        setCompileError(`GeoJSON import failed: ${err instanceof Error ? err.message : String(err)}`);
+      } finally {
+        busy.end();
+      }
+    })();
+  };
+  const openGeoJsonFileRef = useRef(openGeoJsonFile);
+  openGeoJsonFileRef.current = openGeoJsonFile;
+  const handleGeoJsonInput = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    e.target.value = '';
+    openGeoJsonFile(file);
+  };
+  const applyGeoJsonImport = (r: GeoJsonImportResult) => {
+    setGeoJsonImport(null);
+    const w = workerRef.current;
+    if (!w) return;
+    if (r.target === 'agents') {
+      if (r.agents.length === 0) return;
+      beginWorkerBusy('Importing GeoJSON…');
+      if (r.replace) w.postMessage({ type: 'clearAgents', activeViewer: activeViewerRef.current });
+      w.postMessage({
+        type: 'pasteAgents',
+        agents: r.agents,
+        torus: boundaryTreatmentRef.current === 'torus',
+        activeViewer: activeViewerRef.current,
+      });
+      return;
+    }
+    if (r.cellCount === 0) return;
+    beginWorkerBusy('Importing GeoJSON…');
+    // One message per (value, batch): the cell list is carried as INDICES until
+    // here so a large burn never builds millions of `{row, col}` objects at once.
+    for (const g of r.groups) {
+      const sets = [{ attrId: r.attrId, value: g.value }];
+      for (let i = 0; i < g.cells.length; i += GEOJSON_PAINT_CHUNK) {
+        const end = Math.min(g.cells.length, i + GEOJSON_PAINT_CHUNK);
+        const cells: Array<{ row: number; col: number; layer: number }> = new Array(end - i);
+        for (let k = i; k < end; k++) {
+          const idx = g.cells[k]!;
+          cells[k - i] = { row: Math.floor(idx / r.width), col: idx % r.width, layer: r.layer };
+        }
+        // `ensureFresh`: an import is not a brush stroke — it can cover the whole
+        // board, so the WebGPU CPU mirror must be pulled down first or every OTHER
+        // attribute of the covered cells reverts to its last-synced value. The
+        // first message clears `gpuOwnsAttrs`, so only it pays the readback.
+        w.postMessage({ type: 'paintManual', cells, sets, ensureFresh: true, activeViewer: activeViewerRef.current });
+      }
+    }
+  };
+
   // --- CSV export ----------------------------------------------------------
   // The mirror of the import above, and deliberately ONE worker round-trip: a
   // single `getState` carries the WHOLE fresh picture (every cell attribute, all
@@ -13884,17 +13959,23 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       const file = (e as CustomEvent).detail?.file as File | undefined;
       if (file) openGeoTiffFileRef.current(file);
     };
+    const onGeoJsonFile = (e: Event) => {
+      const file = (e as CustomEvent).detail?.file as File | undefined;
+      if (file) openGeoJsonFileRef.current(file);
+    };
     window.addEventListener('genesis-load-state-file', onStateFile);
     window.addEventListener('genesis-open-image-file', onImageFile);
     window.addEventListener('genesis-import-preset-file', onPresetFile);
     window.addEventListener('genesis-open-csv-file', onCsvFile);
     window.addEventListener('genesis-open-geotiff-file', onGeoTiffFile);
+    window.addEventListener('genesis-open-geojson-file', onGeoJsonFile);
     return () => {
       window.removeEventListener('genesis-load-state-file', onStateFile);
       window.removeEventListener('genesis-open-image-file', onImageFile);
       window.removeEventListener('genesis-import-preset-file', onPresetFile);
       window.removeEventListener('genesis-open-csv-file', onCsvFile);
       window.removeEventListener('genesis-open-geotiff-file', onGeoTiffFile);
+      window.removeEventListener('genesis-open-geojson-file', onGeoJsonFile);
     };
   }, []);
 
@@ -15083,6 +15164,11 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
                     title="Import a GeoTIFF raster (LANDFIRE / WorldPop / NLCD / Copernicus) — one band per cell attribute, resampled to the grid"
                   >Import GeoTIFF{'…'}</button>
                 )}
+                <button
+                  className={styles.shotMenuItem}
+                  onClick={() => { setOverlayPopup(null); geoJsonInputRef.current?.click(); }}
+                  title="Import GeoJSON vectors — burn polygons / lines / points into a cell attribute, or turn points into agents"
+                >Import GeoJSON{'…'}</button>
               </div>
             )}
           </div>
@@ -16484,6 +16570,28 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
           modelGeoref={model.properties.georef}
           onApply={applyGeoTiffImport}
           onCancel={() => setGeoTiffImport(null)}
+        />
+      )}
+      {/* The GeoJSON picker + dialog — same placement rule as the pair above.
+          `.json` is accepted HERE (the dialog sniffs the parsed object and says
+          so when it is not GeoJSON), while a `.json` DROPPED on the window stays
+          a GenesisCA project — the drop path has no dialog to disambiguate in. */}
+      <input ref={geoJsonInputRef} type="file" accept=".geojson,.json,application/geo+json" style={{ display: 'none' }} onChange={handleGeoJsonInput} />
+      {geoJsonImport && (
+        <GeoJsonImportDialog
+          text={geoJsonImport.text}
+          fileName={geoJsonImport.name}
+          cellAttributes={model.attributes.filter(a => !a.isModelAttribute)}
+          agentAttributes={model.agentAttributes ?? []}
+          hasGrid={gridCellsOn}
+          hasAgents={isAgentModel}
+          is3d={is3D}
+          world={{ w: gridWidth.current || simWidth, h: gridHeight.current || simHeight, d: gridDepth.current || simDepth }}
+          maxAgents={Math.max(1, Math.floor(cbNum(model.centerBased, 'maxAgents')))}
+          torus={model.properties.boundaryTreatment === 'torus'}
+          modelGeoref={model.properties.georef}
+          onApply={applyGeoJsonImport}
+          onCancel={() => setGeoJsonImport(null)}
         />
       )}
       {csvExport && (

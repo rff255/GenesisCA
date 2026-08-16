@@ -383,6 +383,18 @@ interface PaintManualMsg {
    *  encodeAttrValue() so the worker doesn't repeat the stringÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢number switch. */
   sets: Array<{ attrId: string; value: number }>;
   activeViewer: string;
+  /** Pull the GPU state down to the CPU mirror BEFORE writing (the rule
+   *  `importGridValues` already follows unconditionally).
+   *
+   *  Under WebGPU after a Play the live state is GPU-side and `readAttrs` is
+   *  stale; the display refresh then re-uploads every attribute OF THE TOUCHED
+   *  CELLS from that stale mirror, so writing attribute A reverts attributes B,
+   *  C… of those cells. A brush stroke touches a handful of cells and has always
+   *  behaved this way, so the flag is OPT-IN and the brush path is byte-for-byte
+   *  unchanged — but a DATA IMPORT (the GeoJSON vector burn) can cover the whole
+   *  board, where that silent revert is not acceptable. Only the FIRST message of
+   *  a batch pays the readback: it clears `gpuOwnsAttrs`, so the rest skip it. */
+  ensureFresh?: boolean;
 }
 interface ResetMsg { type: 'reset'; activeViewer: string; reqId?: number }
 interface RecompileMsg { type: 'recompile'; stepCode: string; initCode?: string; gridInitCode?: string; skipIsolatedEmpty?: SkipIsolatedEmptyConfig; inputColorCodes: Array<{ mappingId: string; code: string }>; outputMappingCodes: Array<{ mappingId: string; code: string }>; stopMessages?: string[]; updateMode: string; asyncScheme: string; wasmStepBytes?: Uint8Array; wasmStepError?: string; wasmExports?: string[]; viewerIds?: Record<string, number>; webgpuShaderCode?: string; webgpuShaderError?: string; webgpuEntryPoints?: WebGPUEntryPoints; webgpuLayout?: WebGPULayout; webgpuStopCheckInterval?: number; variegated?: VariegatedPayload; interactionTables?: InteractionTablePayload[]; agentBehaviourCode?: string; agentInitCode?: string; agentDivisionCode?: string; agentColorViewer?: string; agentOutputMappingCodes?: Array<{ mappingId: string; code: string }>; agentInputMappingCodes?: Array<{ mappingId: string; code: string; channels: number; spawner?: boolean }>; agentHasSprites?: boolean; agentBondReqSlots?: number; agentFieldGates?: AgentFieldGates; agentDividePartitions?: DividePartitionSpec[]; centerBased?: CenterBasedConfig; agentUsesField?: boolean; agentUsesDensity?: boolean; rulesReadComputedIndicator?: boolean; agentResidencyClean?: boolean; agentTarget?: 'js' | 'wasm' | 'webgpu'; agentWasmBytes?: Uint8Array; agentWasmViewerGuardIds?: string[]; agentLayoutExtras?: AgentLayoutExtras; agentWasmLayoutSig?: { maxHashBins: number; totalBytes: number }; agentWebgpuBehaviourShader?: string; agentWebgpuForceShader?: string; agentWebgpuMaxAgents?: number; agentWebgpuMaxHashBins?: number; agentWebgpuLayout?: AgentWebGPULayout; agentRenderLayout?: AgentWebGPULayout; agentWebgpuUsesI32Write?: boolean; agentWebgpuUsage?: { usesBondStore?: boolean; usesBondStoreWrite?: boolean; usesIndicators?: boolean; usesAux?: boolean; usesSpawn?: boolean; usesStop?: boolean; usesForceScatter?: boolean; usesGeneration?: boolean; usesSpriteWrite?: boolean }; agentWebgpuOmShaders?: AgentOMShaderInput[] }
@@ -7687,7 +7699,8 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       // iterating cells. Only needed when at least one sub-attr is being set
       // AND the parent isn't being overridden by the brush itself.
       const needsReadback = useWebGPU && webgpuRuntime?.stepReady && gpuOwnsAttrs
-        && setEntries.some(e => e.info && !brushParentOverride.has(e.info.parentId));
+        && (msg.ensureFresh
+          || setEntries.some(e => e.info && !brushParentOverride.has(e.info.parentId)));
       if (needsReadback && webgpuRuntime) {
         const rt = webgpuRuntime;
         readbackAttrs(rt, readAttrs).then(() => {
