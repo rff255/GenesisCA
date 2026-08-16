@@ -3889,6 +3889,67 @@ export function HelpView() {
               first time you open one, so it costs nothing until you use it.
             </li>
           </ul>
+          <h3 className={styles.h3}>Real map data &mdash; GeoJSON vectors (.geojson)</h3>
+          <p className={styles.p}>
+            Rasters cover the ground; <strong>vectors</strong> are the things ON it &mdash;
+            lakes and exclusion zones and districts (polygons), rivers and roads (lines),
+            towns and sensors and nests (points). <em>Import GeoJSON&hellip;</em> in the
+            transport bar&apos;s <em>Load State</em> menu reads them, and a dropped{' '}
+            <code>.geojson</code> opens the same dialog. GeoJSON is plain JSON, so this needs no
+            extra download at all. Export one from QGIS with{' '}
+            <em>Right-click a layer &rarr; Export &rarr; Save Features As&hellip; &rarr; GeoJSON</em>.
+          </p>
+          <ul className={styles.list}>
+            <li>
+              <strong>Two things it can do.</strong> <em>Rasterise onto an attribute</em> burns
+              the geometry into one cell attribute &mdash; a polygon fills every cell whose{' '}
+              <em>centre</em> is inside it (holes subtract), a line takes every cell it passes
+              through, a point marks its own cell. Or <em>create agents from points</em>: each
+              point becomes one agent at that position, with the feature&apos;s properties
+              auto-mapped to agent attributes by name, exactly like the CSV agent import. When
+              the model has both layers a <strong>Target</strong> switch picks.
+            </li>
+            <li>
+              <strong>Only the covered cells are written.</strong> This is the one place a map
+              import does <em>not</em> replace the board: everything the geometry misses keeps
+              its value, so you can lay a river over an existing landscape. Where features
+              overlap, the last one wins.
+            </li>
+            <li>
+              <strong>The value.</strong> <em>Fixed</em> burns one value you choose. <em>From
+              property</em> lets each feature paint its OWN value &mdash; a landcover file&apos;s{' '}
+              <code>class</code> straight onto a tag attribute, matched by NAME. A feature that
+              simply does not carry the property takes the attribute default (it is counted, but
+              not reported as an error &mdash; GeoJSON property sets are legitimately sparse); a
+              property that IS there but cannot be read is listed before you import.
+            </li>
+            <li>
+              <strong>Coordinates.</strong> With a <strong>georeference</strong> on the model
+              (see below) the file&apos;s coordinates are read as <em>world</em> coordinates and
+              placed through it, row flip included. Without one they are read as{' '}
+              <em>grid cells</em> &mdash; x is the column, y is the row, no flip &mdash; which is
+              what a hand-written test file wants. As everywhere else, GenesisCA never
+              reprojects: the file must already be in the model&apos;s CRS.
+            </li>
+            <li>
+              <strong>Line width</strong> is in cells. Width 1 is exactly the cells the line
+              passes through; wider is a capsule with round ends, so it also reaches half the
+              width past each endpoint. In 3D a flat vector layer writes ONE <strong>layer</strong>,
+              which you pick. The preview shows the coverage on your grid before you import, so a
+              file that misses the board is obvious rather than silent.
+            </li>
+            <li>
+              <strong>A GeoJSON saved as <code>.json</code></strong> works from the menu item
+              (the dialog checks what the file actually is and says so if it is not GeoJSON). A{' '}
+              <code>.json</code> <em>dropped</em> on the window is still read as a GenesisCA
+              project &mdash; a drop has no dialog in which to ask which you meant.
+            </li>
+            <li>
+              <strong>Shapefiles</strong> are not read directly: convert to GeoJSON in QGIS
+              first, which is the same &ldquo;prepare upstream&rdquo; rule the raster importers
+              follow.
+            </li>
+          </ul>
           <h3 className={styles.h3}>Georeference &amp; the backdrop map</h3>
           <p className={styles.p}>
             Two presentation pieces turn a board into something that reads as a{' '}

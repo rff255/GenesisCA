@@ -199,6 +199,7 @@ function AppInner() {
   // Cells dialog (genesis-open-image-file — the Ctrl+V clipboard seam).
   // .csv / .tsv / .asc → the Import CSV dialog (genesis-open-csv-file); an Esri
   // ASCII grid takes the same seam and reshapes the dialog from its own header.
+  // .geojson → the GeoJSON vector dialog (genesis-open-geojson-file).
   // Window-level listeners preventDefault dragover+drop so the browser never
   // navigates to a dropped file.
   const loadDroppedProject = async (file: File) => {
@@ -234,6 +235,15 @@ function AppInner() {
     if (['csv', 'tsv', 'asc'].includes(ext)) {
       setMode('simulator');
       window.dispatchEvent(new CustomEvent('genesis-open-csv-file', { detail: { file } }));
+      return;
+    }
+    // .geojson → the GeoJSON vector dialog. Deliberately NOT bare `.json`: that
+    // extension is already a GenesisCA project here, and a drop has no dialog in
+    // which to disambiguate. A GeoJSON saved as `.json` goes through the transport
+    // bar's "Import GeoJSON…" item instead, whose picker accepts it and sniffs.
+    if (ext === 'geojson') {
+      setMode('simulator');
+      window.dispatchEvent(new CustomEvent('genesis-open-geojson-file', { detail: { file } }));
       return;
     }
     // .tif / .tiff → the GeoTIFF dialog. Checked BEFORE the image branch below:
@@ -449,7 +459,7 @@ function AppInner() {
           background: 'rgba(0, 0, 0, 0.45)', border: '3px dashed var(--color-accent)',
           color: 'var(--color-text-primary)', fontSize: '1.05rem', fontWeight: 600,
         }}>
-          Drop to open — .gcaproj / .gcastate / .gcapreset / .csv / .asc / .tif / image
+          Drop to open — .gcaproj / .gcastate / .gcapreset / .csv / .asc / .tif / .geojson / image
         </div>
       )}
       <BusyOverlay />
