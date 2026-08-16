@@ -3798,6 +3798,37 @@ export function HelpView() {
             line in the middle of a board is kept as a row of default cells so the board&apos;s
             geometry can never silently shift.
           </p>
+          <h3 className={styles.h3}>Using real map data &mdash; the workflow</h3>
+          <p className={styles.p}>
+            A geographic model (forest fire, city growth, infection spread) is set up the same
+            way the established simulators do it: the world is a <strong>stack of co-registered
+            layers</strong> &mdash; one attribute per quantity &mdash; prepared <em>upstream</em>{' '}
+            in a GIS and imported here. The whole pipeline:
+          </p>
+          <ul className={styles.list}>
+            <li><strong>1. Get the data.</strong> Public sources ship ready-made layers:
+              LANDFIRE (US fuel/canopy), WorldPop &amp; GPW (population), NLCD / Copernicus
+              (land cover), any DEM for elevation, OpenStreetMap for rivers and roads.</li>
+            <li><strong>2. Align it in QGIS (free).</strong> Clip every layer to the same
+              extent, resolution and projection, and keep the cell count sensible (a 30 m
+              county crop is already thousands of cells across). GenesisCA <em>never
+              reprojects</em> &mdash; like FARSITE, Cell2Fire and NetLogo, it expects layers
+              already on its grid.</li>
+            <li><strong>3. Import the layers.</strong> Rasters come in as{' '}
+              <strong>.asc</strong> (several co-registered files in one session) or{' '}
+              <strong>GeoTIFF</strong> (several bands in one file); vectors &mdash; rivers,
+              roads, districts, ignition points &mdash; as <strong>GeoJSON</strong>, burned
+              into attributes or turned into agents. Categorical layers land in{' '}
+              <strong>tag attributes</strong> through the code&nbsp;&rarr;&nbsp;class maps in
+              each dialog. The first import records the <strong>georeference</strong> on the
+              model automatically.</li>
+            <li><strong>4. Make it look like a map.</strong> Export a rendered map of the same
+              extent from QGIS and set it as the <strong>backdrop</strong> (Info panel); use
+              semi-transparent Output-Mapping colours (the alpha port) so the map shows
+              through, and the hover chip reads back real-world coordinates.</li>
+            <li><strong>5. Simulate, then export the result</strong> as .asc or CSV &mdash;
+              it drops straight back into QGIS at the same origin and cell size.</li>
+          </ul>
           <h3 className={styles.h3}>Real map data &mdash; Esri ASCII grid (.asc)</h3>
           <p className={styles.p}>
             The same dialog reads the <strong>Esri ASCII grid</strong> &mdash; the plain-text
