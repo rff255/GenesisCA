@@ -2085,7 +2085,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
   // wrapper ref, assigned to whichever is currently open). Session-only UI
   // state (the VALUES keep their existing persistence). Dismissed by a
   // capture-phase outside pointerdown (the context-menu pattern) or Escape.
-  const [overlayPopup, setOverlayPopup] = useState<'fps' | 'gpf' | 'capture' | 'shot' | 'diagnostics' | null>(null);
+  const [overlayPopup, setOverlayPopup] = useState<'fps' | 'gpf' | 'capture' | 'shot' | 'diagnostics' | 'saveState' | 'loadState' | null>(null);
   const overlayPopupWrapRef = useRef<HTMLDivElement | null>(null);
   // C3 (P4) — the fast-path diagnostics reply (worker `getDiagnostics`). Held in
   // React state because the popover renders from it; requested ON DEMAND only
@@ -14766,19 +14766,77 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
           >{bottomBarOpen ? <ChevronDownIcon /> : <ChevronUpIcon />}</button>
           {bottomBarOpen && (<>
         <div className={styles.transportBar}>
-          {/* Save/Load state */}
-          <button className={styles.transportBtn} onClick={handleSaveState} title="Save State (.gcastate)">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/>
-              <polyline points="17 21 17 13 7 13 7 21"/>
-              <polyline points="7 3 7 8 15 8"/>
-            </svg>
-          </button>
-          <button className={styles.transportBtn} onClick={() => stateFileInputRef.current?.click()} title="Load State (.gcastate)">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
-            </svg>
-          </button>
+          {/* Save/Load state — the simulation's OUT / IN pair, so the tabular
+              siblings hang off them: a plain CLICK is the historical .gcastate
+              action, and hover / right-click opens the two formats (the 📷
+              Save/Copy pattern). Each button gets its OWN relative wrapper so
+              hovering one cannot open the other's menu, and the menu joins the
+              single `overlayPopup` state — one popover at a time, with the
+              existing outside-pointerdown + Escape dismissal for free. */}
+          <div
+            className={styles.captureBtnWrap}
+            ref={overlayPopup === 'saveState' ? overlayPopupWrapRef : undefined}
+            onPointerEnter={() => setOverlayPopup('saveState')}
+            onPointerLeave={() => setOverlayPopup(p => (p === 'saveState' ? null : p))}
+            onContextMenu={e => { e.preventDefault(); setOverlayPopup(p => (p === 'saveState' ? null : 'saveState')); }}
+          >
+            <button
+              className={styles.transportBtn}
+              onClick={() => { setOverlayPopup(null); handleSaveState(); }}
+              title="Save State (.gcastate) — click to save, hover or right-click for the CSV export"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/>
+                <polyline points="17 21 17 13 7 13 7 21"/>
+                <polyline points="7 3 7 8 15 8"/>
+              </svg>
+            </button>
+            {overlayPopup === 'saveState' && (
+              <div className={styles.shotMenu} data-sim-overlay>
+                <button
+                  className={styles.shotMenuItem}
+                  onClick={() => { setOverlayPopup(null); handleSaveState(); }}
+                  title="Save the whole simulation snapshot (same as clicking the button)"
+                >Save state (.gcastate)</button>
+                <button
+                  className={styles.shotMenuItem}
+                  onClick={() => { setOverlayPopup(null); openCsvExport(); }}
+                  title="Export one attribute as a CSV table — the board (a line per grid row) or the agents (a row per agent)"
+                >Export CSV{'…'}</button>
+              </div>
+            )}
+          </div>
+          <div
+            className={styles.captureBtnWrap}
+            ref={overlayPopup === 'loadState' ? overlayPopupWrapRef : undefined}
+            onPointerEnter={() => setOverlayPopup('loadState')}
+            onPointerLeave={() => setOverlayPopup(p => (p === 'loadState' ? null : p))}
+            onContextMenu={e => { e.preventDefault(); setOverlayPopup(p => (p === 'loadState' ? null : 'loadState')); }}
+          >
+            <button
+              className={styles.transportBtn}
+              onClick={() => { setOverlayPopup(null); stateFileInputRef.current?.click(); }}
+              title="Load State (.gcastate) — click to load, hover or right-click for the CSV import"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+              </svg>
+            </button>
+            {overlayPopup === 'loadState' && (
+              <div className={styles.shotMenu} data-sim-overlay>
+                <button
+                  className={styles.shotMenuItem}
+                  onClick={() => { setOverlayPopup(null); stateFileInputRef.current?.click(); }}
+                  title="Restore a whole simulation snapshot (same as clicking the button)"
+                >Load state (.gcastate)</button>
+                <button
+                  className={styles.shotMenuItem}
+                  onClick={() => { setOverlayPopup(null); csvInputRef.current?.click(); }}
+                  title="Import a CSV table — agents (a row per agent) or the board (the table IS the grid)"
+                >Import CSV{'…'}</button>
+              </div>
+            )}
+          </div>
           <input ref={stateFileInputRef} type="file" accept=".gcastate" style={{ display: 'none' }} onChange={handleLoadState} />
           <div className={styles.transportDivider} />
 
@@ -15599,20 +15657,9 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
               Open Image
             </button>
             <input ref={imageInputRef} type="file" accept=".png,.bmp,.jpg,.jpeg" style={{ display: 'none' }} onChange={handleImageImport} />
-            <button
-              className={styles.controlButton}
-              onClick={() => csvInputRef.current?.click()}
-              title="Import a CSV — the table IS the board (a line is a grid row, a field a grid column), written into one cell attribute"
-            >
-              Import CSV…
-            </button>
-            <button
-              className={styles.controlButton}
-              onClick={openCsvExport}
-              title="Export the current board as a CSV — one line per grid row, one field per grid column, for one cell attribute"
-            >
-              Export CSV…
-            </button>
+            {/* CSV import / export live on the transport bar's Load / Save State
+                buttons (hover or right-click them) — one place for every way of
+                getting a board in and out, reachable with no brush panel open. */}
             <label className={styles.checkRow}>
               <input type="checkbox" checked={showBrushCursor} onChange={e => setShowBrushCursor(e.target.checked)} />
               Show brush cursor
@@ -15903,17 +15950,9 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
                     <input type="checkbox" checked={showBrushCursor} onChange={e => setShowBrushCursor(e.target.checked)} />
                     Show brush cursor
                   </label>
+                  {/* CSV import / export live on the transport bar's Load / Save
+                      State buttons (hover or right-click them). */}
                   <div className={styles.brushEntries}>
-                    <button
-                      onClick={() => csvInputRef.current?.click()}
-                      title="Import agents from a CSV — one row per agent; columns map to position / velocity / radius / agent attributes"
-                      style={{ padding: '3px 8px', borderRadius: 'var(--radius-sm)', cursor: 'pointer', border: '1px solid var(--color-widget-border)', background: 'transparent', color: 'var(--color-text-muted)', fontSize: '0.62rem' }}
-                    >Import CSV…</button>
-                    <button
-                      onClick={openCsvExport}
-                      title="Export the live agents as a CSV — one row per agent; position / velocity / radius / agent attributes, headed so Import CSV reads them straight back"
-                      style={{ padding: '3px 8px', borderRadius: 'var(--radius-sm)', cursor: 'pointer', border: '1px solid var(--color-widget-border)', background: 'transparent', color: 'var(--color-text-muted)', fontSize: '0.62rem' }}
-                    >Export CSV…</button>
                     <button
                       onClick={() => workerRef.current?.postMessage({ type: 'clearAgents', activeViewer: activeViewerRef.current })}
                       style={{ padding: '3px 8px', borderRadius: 'var(--radius-sm)', cursor: 'pointer', border: '1px solid var(--color-widget-border)', background: 'transparent', color: 'var(--color-text-muted)', fontSize: '0.62rem' }}
@@ -16160,7 +16199,10 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
           onCancel={() => setImageMapImg(null)}
         />
       )}
-      {/* One hidden CSV picker for BOTH brush panels (grid + agents). */}
+      {/* The ONE hidden CSV picker, opened from the transport bar's Load State
+          menu (and reused by the drag-and-drop path's dialog). Deliberately
+          rendered here, outside every panel, so it stays mounted whichever
+          panels are open — the brush panels no longer reference it. */}
       <input ref={csvInputRef} type="file" accept=".csv,.tsv,.txt,text/csv" style={{ display: 'none' }} onChange={handleCsvInput} />
       {csvImport && (
         <CsvImportDialog
