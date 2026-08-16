@@ -975,6 +975,32 @@ const AGENT_BRUSH_MODES_NEEDING_STATE: ReadonlySet<string> = new Set(['remove', 
  *  are cleared. Any pointer activity re-arms it instantly. */
 const AGENT_HOVER_IDLE_MS = 3000;
 
+/** DOUBLE RIGHT-CLICK = Fit view (2D) / Reset view (3D), on BOTH canvases.
+ *  The browser fires NO `dblclick` for the right button, so the gesture is
+ *  tracked here: `noteRmbRelease` records each RMB release and reports whether
+ *  it completed a pair. A release that MOVED (an RMB pan, in either dimension)
+ *  disarms the mark, so panning can never fit the view. */
+const RMB_DOUBLE_MS = 380;
+/** Movement tolerance BETWEEN the two clicks (px, per axis). */
+const RMB_DOUBLE_PX = 5;
+/** Movement (px, manhattan) that turns a press-release into a DRAG, not a click. */
+const RMB_DRAG_PX = 4;
+type RmbClickMark = { t: number; x: number; y: number };
+function noteRmbRelease(
+  mark: { current: RmbClickMark | null }, x: number, y: number, moved: boolean,
+): boolean {
+  if (moved) { mark.current = null; return false; }
+  const prev = mark.current;
+  const now = performance.now();
+  if (prev && now - prev.t <= RMB_DOUBLE_MS
+    && Math.abs(x - prev.x) <= RMB_DOUBLE_PX && Math.abs(y - prev.y) <= RMB_DOUBLE_PX) {
+    mark.current = null;   // consume the pair — a third click starts a fresh one
+    return true;
+  }
+  mark.current = { t: now, x, y };
+  return false;
+}
+
 /** Build a bounded wireframe OUTLINE of a 3D brush footprint at a plane cell, as
  *  cell-space line segments (a flat Float32Array of [col,row,layer, col,row,layer …]
  *  endpoint pairs; the renderer maps each to world space + colours it amber). The
@@ -3076,6 +3102,12 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
   const is3D = (model.properties.dimension ?? '2d') === '3d';
   const is3dRef = useRef(is3D);
   is3dRef.current = is3D;
+  // Double RIGHT-click = fit/reset the view. The 2D and 3D canvases are mutually
+  // exclusive (only one is ever interactive), so ONE mark serves both. `fitViewRef`
+  // is the stable seam the two pointer effects call — it mirrors the same function
+  // the ⤢ Fit view / Reset view buttons run, so there is one fit per dimension.
+  const rmbClickMarkRef = useRef<RmbClickMark | null>(null);
+  const fitViewRef = useRef<() => void>(() => {});
   // Edit brush panel rows = the agent attributes (widget-capable) + the synthetic
   // geometry rows (Radius / Velocity / Position; Z rows only in 3D). Cast as
   // Attribute so ManualBrushPanel renders each as a type-appropriate widget.
@@ -8508,6 +8540,9 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
     let gizmoPendingEnd: { axis: 'x' | 'y' | 'z'; sign: 1 | -1 } | null = null;
     const GIZMO_DRAG_PX = 4;
     let lastX = 0, lastY = 0, downX = 0, downY = 0, moved = false;
+    // True while an RMB gesture that STARTED on this canvas is in flight — the
+    // double-right-click (= Reset view) detector's "the press was mine" gate.
+    let rmbDownHere = false;
     // AGENT sweep (active === 'inspectAgent'): the agent picked at press + whether
     // the drag ever re-targeted a DIFFERENT agent — the discard rule is
     // agent-change-based (like the 2D agent sweep), so wiggling within one
@@ -8741,6 +8776,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       // (Shift), or orbit (Alt), which must work even when the press lands on the
       // tiny gizmo region — so don't let the gizmo swallow a modified gesture.
       moved = false;
+      rmbDownHere = e.button === 2;
       lastX = downX = e.clientX; lastY = downY = e.clientY;
       if (e.button === 0 && !e.ctrlKey && !e.metaKey && !e.shiftKey && !e.altKey && gl3dRef.current) {
         const rect = glc.getBoundingClientRect();
@@ -9105,6 +9141,15 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
     };
     const onUp = (e: PointerEvent) => {
       glc.releasePointerCapture?.(e.pointerId);
+      // Double RIGHT-click on the GL canvas = Reset view. `moved` is the same
+      // 3-px drag flag the gizmo click uses, so an RMB PAN never resets; a press
+      // that did not start on this canvas leaves `active` null and `moved` false
+      // from the previous gesture, so it is additionally gated on rmbDownHere.
+      if (e.button === 2) {
+        if (!rmbDownHere) rmbClickMarkRef.current = null;
+        else if (noteRmbRelease(rmbClickMarkRef, e.clientX, e.clientY, moved)) fitViewRef.current();
+        rmbDownHere = false;
+      }
       if (active === 'gizmo') {
         // Released without passing GIZMO_DRAG_PX → it was a click: snap to the
         // ball it started on (the empty middle staged nothing, so it no-ops).
@@ -11233,6 +11278,9 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
 
     const isResizingBrush = { active: false, agent: false, startX: 0, startY: 0, startW: 0, startH: 0, startRadius: 0, startRingW: 0, startLineW: 0, startIntensity: 0 };
     let canvasBrushActive = false; // true only when LMB started on canvas, not overlay
+    // Press point of an RMB gesture that STARTED on the canvas (null = it started
+    // on an overlay / nowhere) — the double-right-click detector's drag measure.
+    let rmbDown: { x: number; y: number } | null = null;
 
     // Middle-click autoscroll: rAF loop pans by (cursor - origin) each frame.
     // Speed scales with distance; below the deadzone the pointer is treated as
@@ -11288,7 +11336,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
     const handleMouseDown = (e: MouseEvent) => {
       // Ignore events from overlay controls (transport bar, viewer bar, etc.)
       const target = e.target as HTMLElement;
-      if (target.closest('[data-sim-overlay]')) { canvasBrushActive = false; canvasAgentBrushActive.current = false; return; }
+      if (target.closest('[data-sim-overlay]')) { canvasBrushActive = false; canvasAgentBrushActive.current = false; rmbDown = null; return; }
 
       // Clicking the main canvas area returns keyboard focus to the document so the
       // transport shortcuts (Enter=play/pause, Space=step, Esc=reset, …) work after
@@ -11318,6 +11366,14 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
         stopAutoscroll();
         return;
       }
+
+      // Double RIGHT-click = Fit view. Record the press so the RELEASE can tell a
+      // click from an RMB PAN (which must never fit). Recorded AFTER the overlay
+      // guard, so a double right-click on overlay UI is never a fit. NOT in 3D —
+      // the GL canvas lives inside this container, so its compatibility mouse
+      // events reach here too; the 3D pointer effect owns the gesture there
+      // (mirrors handleMouseMove's is3dRef bail).
+      if (e.button === 2 && !is3dRef.current) rmbDown = { x: e.clientX, y: e.clientY };
 
       if (e.button === 0 && (e.shiftKey || inspectModeRef.current) && !e.ctrlKey && !e.altKey && !e.metaKey) {
         // Shift+LMB (or the toolbar Inspect toggle) = start a cell-inspector
@@ -11877,7 +11933,22 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       draw();
     };
 
-    const handleMouseUp = () => {
+    const handleMouseUp = (e: MouseEvent) => {
+      // Double RIGHT-click on the canvas = Fit view. Resolved FIRST (the branches
+      // below early-return), but only for a release that did NOT drag — an RMB
+      // pan is untouched. A press that started on an overlay (or in 3D) leaves
+      // `rmbDown` null, which also breaks any half-formed pair. Skipped entirely
+      // in 3D: the GL canvas's compatibility mouse events reach this window
+      // listener too, and clearing the mark here would wipe the one the 3D
+      // pointer effect just recorded.
+      if (e.button === 2 && !is3dRef.current) {
+        const down = rmbDown; rmbDown = null;
+        if (!down) rmbClickMarkRef.current = null;
+        else if (noteRmbRelease(rmbClickMarkRef, e.clientX, e.clientY,
+          Math.abs(e.clientX - down.x) + Math.abs(e.clientY - down.y) > RMB_DRAG_PX)) {
+          fitViewRef.current();
+        }
+      }
       // End of an AGENT sweep: no-drag release keeps the popover pinned (it
       // opened on press); a drag across other agents discards it.
       if (agentSweepActiveRef.current) {
@@ -12244,6 +12315,20 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
     panRef.current = { x: 0, y: 0 };
     draw();
   };
+
+  const handleResetView3d = () => {
+    // Restore the default view IN PLACE — replacing `cam3dRef.current`
+    // would strand every holder of the old object (the DEV
+    // `window.__sim3dCamera` hook among them).
+    cancelFollow();  // an explicit camera reset takes the wheel back — see FOLLOW MODE
+    const d = defaultCamera3d(), cam = cam3dRef.current;
+    cam.yaw = d.yaw; cam.pitch = d.pitch; cam.dist = d.dist; cam.target = d.target;
+    draw();
+  };
+
+  // The double-RIGHT-click seam (see noteRmbRelease): both pointer effects call
+  // this ref, so the gesture runs EXACTLY what the Fit view / Reset view buttons do.
+  fitViewRef.current = () => { if (is3dRef.current) handleResetView3d(); else handleResetView(); };
 
   // Simulator keyboard shortcuts (Space=step, Enter=play/pause, Esc=reset,
   // Ctrl+C/V/X=copy/paste/cut cell-attribute region under the brush)
@@ -14553,7 +14638,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
         <div className={styles.zoomControls} data-sim-overlay>
           <button className={styles.zoomBtn} onClick={() => { zoomRef.current = Math.min(50, zoomRef.current * 1.3); draw(); }} title="Zoom in">+</button>
           <button className={styles.zoomBtn} onClick={() => { zoomRef.current = Math.max(0.1, zoomRef.current / 1.3); draw(); }} title="Zoom out">&minus;</button>
-          <button className={styles.zoomBtn} onClick={handleResetView} title="Fit view">&#x2922;</button>
+          <button className={styles.zoomBtn} onClick={handleResetView} title="Fit view (or double right-click the canvas)">&#x2922;</button>
           <button
             className={`${styles.zoomBtn} ${inspectMode ? styles.zoomBtnActive : ''}`}
             onClick={() => setInspectMode(v => !v)}
@@ -14653,16 +14738,8 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
               </div>
               {controls3dOpen && (<>
                 <button className={styles.panelToggle} style={{ width: '100%' }}
-                  onClick={() => {
-                    // Restore the default view IN PLACE — replacing `cam3dRef.current`
-                    // would strand every holder of the old object (the DEV
-                    // `window.__sim3dCamera` hook among them).
-                    cancelFollow();  // an explicit camera reset takes the wheel back — see FOLLOW MODE
-                    const d = defaultCamera3d(), cam = cam3dRef.current;
-                    cam.yaw = d.yaw; cam.pitch = d.pitch; cam.dist = d.dist; cam.target = d.target;
-                    draw();
-                  }}
-                  title="Reset the orbit camera">Reset view</button>
+                  onClick={handleResetView3d}
+                  title="Reset the orbit camera (or double right-click the canvas)">Reset view</button>
 
                 {/* Overlays — 2×2 grid so the labels never squash. */}
                 <div style={grid2}>
