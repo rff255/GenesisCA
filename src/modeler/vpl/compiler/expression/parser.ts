@@ -57,10 +57,20 @@ const CONSTANTS: Record<string, number> = { pi: Math.PI, e: Math.E };
  *  named `e`, in which case it shadows the constant. */
 export const RESERVED: ReadonlySet<string> = new Set<string>(Object.keys(FN_ARITY));
 
-/** The fixed pool of input port ids for the Expression node. */
+/** The fixed pool of input port ids shared by BOTH free-text formula nodes
+ *  (Expression and Logical Expression). */
 export const VISIBLE_PORT_IDS = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'] as const;
 export const MAX_VISIBLE = VISIBLE_PORT_IDS.length;
 export const DEFAULT_VISIBLE_COUNT = 3;
+
+/** The free-text formula nodes: `expression` (math) and `logicalExpression`
+ *  (boolean). They share the whole editor UX — the same port pool, the same
+ *  `visibleCount` / `_varName_*` / `_namesExpanded` / `_exprExpanded` /
+ *  `_exprW` / `_exprH` config keys, a rendered formula as the node's face and
+ *  the width grip — so the CaNode block and effectivePorts' dynamic-port logic
+ *  are parameterised over this set rather than duplicated. Only the GRAMMAR
+ *  (and therefore the parser + the renderer) differs. */
+export const FORMULA_NODE_TYPES: ReadonlySet<string> = new Set(['expression', 'logicalExpression']);
 
 const IDENT_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
 

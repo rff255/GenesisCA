@@ -18,7 +18,7 @@
 import type { PortDef, NodeTypeDef, NodeConfig } from './types';
 import type { CAModel } from '../../model/types';
 import { getNodeDef } from './nodes/registry';
-import { clampVisibleCount } from './compiler/expression/parser';
+import { clampVisibleCount, FORMULA_NODE_TYPES } from './compiler/expression/parser';
 import { vectorPortDims } from './compiler/vectorAttr';
 import { MULTI_ATTR_TYPES, buildExtraSlotPorts } from './compiler/multiAttrExpand';
 import { buildCensusPorts } from './compiler/censusExpand';
@@ -130,10 +130,10 @@ export function getEffectivePorts(
     inputs = applyLookupAxisPorts(inputs, cfg, model);
   }
 
-  // Expression: show only `visibleCount` of the 8 input ports, with the
-  // user-chosen variable names as labels. UI-only — every port still lives in
-  // def.ports, so the compilers resolve them all.
-  if (nodeType === 'expression') {
+  // Expression / Logical Expression: show only `visibleCount` of the 8 input
+  // ports, with the user-chosen variable names as labels. UI-only — every port
+  // still lives in def.ports, so the compilers resolve them all.
+  if (FORMULA_NODE_TYPES.has(nodeType)) {
     const visibleCount = clampVisibleCount(cfg.visibleCount);
     inputs = inputs.slice(0, visibleCount).map(p => {
       const nm = cfg[`_varName_${p.id}`];

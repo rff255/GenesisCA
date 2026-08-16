@@ -966,6 +966,150 @@ function buildLoopIndexModel() {
   };
 }
 
+// Synthetic: the Logical Expression node — a free-text BOOLEAN formula over N
+// named bool inputs (what the Expression node is to Math, this is to Logic).
+//
+// The harness seeds every agent attribute with the SAME (i%5)-2, so the three
+// boolean inputs are derived per agent from its HANDLE instead (bit 0/1/2), which
+// walks all 8 truth-table rows across the population. The bits are ALSO stored to
+// `p`/`q`/`r` so the invariant can recompute the expected result from the store
+// without re-deriving them.
+//
+// Three formulas, each on the path:
+//   lx  = (p AND NOT q) OR (q XOR r)   — every operator + precedence + parens
+//   lx2 = NOT (p OR q) AND (r XOR true) — a literal and a NOT over a group
+//   lx3 = raw AND NOT q                 — TRUTHINESS: `raw` is the raw seeded
+//         attribute (-2..2), so a target comparing `== 1` instead of `!= 0`
+//         diverges on the negative and the 2 rows.
+function buildLogicalExpressionModel() {
+  const used = new Set();
+  const nid = (p) => { let id; do { id = p + Math.random().toString(36).slice(2, 8); } while (used.has(id)); used.add(id); return id; };
+  const aN = [], aEd = [];
+  const an = (t, c) => { const n = { id: nid('a'), type: 'caNode', position: { x: 0, y: 0 }, data: { nodeType: t, config: c } }; aN.push(n); return n; };
+  const aE = (s, sp, tt, tp, cat) => aEd.push({ id: nid('e'), source: s.id, target: tt.id, sourceHandle: `output_${cat}_${sp}`, targetHandle: `input_${cat}_${tp}` });
+
+  const bs = an('behaviourStep', {});
+  const gsh = an('getSelfHandle', {});
+  /** bit k of the agent handle, via the (already parity-verified) math node. */
+  const bit = (k) => {
+    const n = an('expression', { expression: k === 0 ? 'mod(a, 2)' : `mod(floor(a / ${1 << k}), 2)`, visibleCount: 1 });
+    aE(gsh, 'value', n, 'a', 'value');
+    return n;
+  };
+  const b0 = bit(0), b1 = bit(1), b2 = bit(2);
+  const raw = an('getCellAttribute', { attributeId: 'raw' });
+
+  // Store the bits so the invariant recomputes from the store, not from a
+  // re-derivation of the same arithmetic.
+  const sp = an('setAttribute', { attributeId: 'p' }); aE(b0, 'result', sp, 'value', 'value');
+  const sq = an('setAttribute', { attributeId: 'q' }); aE(b1, 'result', sq, 'value', 'value');
+  const sr = an('setAttribute', { attributeId: 'r' }); aE(b2, 'result', sr, 'value', 'value');
+  aE(bs, 'do', sp, 'do', 'flow'); aE(sp, 'next', sq, 'do', 'flow'); aE(sq, 'next', sr, 'do', 'flow');
+
+  const wire3 = (n) => { aE(b0, 'result', n, 'a', 'value'); aE(b1, 'result', n, 'b', 'value'); aE(b2, 'result', n, 'c', 'value'); };
+
+  const le1 = an('logicalExpression', {
+    expression: '(p AND NOT q) OR (q XOR r)', visibleCount: 3,
+    _varName_a: 'p', _varName_b: 'q', _varName_c: 'r',
+  });
+  wire3(le1);
+  const s1 = an('setAttribute', { attributeId: 'lx' });
+  aE(le1, 'result', s1, 'value', 'value');
+  aE(sr, 'next', s1, 'do', 'flow');
+
+  const le2 = an('logicalExpression', {
+    expression: 'NOT (p OR q) AND (r XOR true)', visibleCount: 3,
+    _varName_a: 'p', _varName_b: 'q', _varName_c: 'r',
+  });
+  wire3(le2);
+  const s2 = an('setAttribute', { attributeId: 'lx2' });
+  aE(le2, 'result', s2, 'value', 'value');
+  aE(s1, 'next', s2, 'do', 'flow');
+
+  const le3 = an('logicalExpression', {
+    expression: 'v AND NOT q', visibleCount: 2,
+    _varName_a: 'v', _varName_b: 'q',
+  });
+  aE(raw, 'value', le3, 'a', 'value');
+  aE(b1, 'result', le3, 'b', 'value');
+  const s3 = an('setAttribute', { attributeId: 'lx3' });
+  aE(le3, 'result', s3, 'value', 'value');
+  aE(s2, 'next', s3, 'do', 'flow');
+
+  // lx4 / lx5 — UNPARENTHESISED ladders, chosen so a swapped tier changes the
+  // RESULT on at least one row (the three formulas above are fully parenthesised,
+  // which makes them precedence-BLIND — the first version of this synthetic used
+  // `NOT p AND q XOR r OR p`, whose trailing `OR p` masked the very swap it was
+  // meant to catch):
+  //   lx4 covers NOT > AND and AND > XOR   (p=1,q=1,r=1 separates AND/XOR;
+  //                                         p=0,q=0,r=0 separates NOT/AND)
+  //   lx5 covers XOR > OR                  (p=1,q=0,r=1 separates them)
+  const le4 = an('logicalExpression', {
+    expression: 'NOT p AND q XOR r', visibleCount: 3,
+    _varName_a: 'p', _varName_b: 'q', _varName_c: 'r',
+  });
+  wire3(le4);
+  const s4 = an('setAttribute', { attributeId: 'lx4' });
+  aE(le4, 'result', s4, 'value', 'value');
+  aE(s3, 'next', s4, 'do', 'flow');
+
+  const le5 = an('logicalExpression', {
+    expression: 'p OR q XOR r', visibleCount: 3,
+    _varName_a: 'p', _varName_b: 'q', _varName_c: 'r',
+  });
+  wire3(le5);
+  const s5 = an('setAttribute', { attributeId: 'lx5' });
+  aE(le5, 'result', s5, 'value', 'value');
+  aE(s4, 'next', s5, 'do', 'flow');
+
+  return {
+    schemaVersion: 1,
+    properties: { name: 'Logical Expression Parity Test', dimension: '2d', gridWidth: 24, gridHeight: 24, gridDepth: 1, topology: '2d-grid', boundaryTreatment: 'torus', useWasm: false, useWebGPU: false },
+    topologyMode: { gridCells: false, agents: true },
+    centerBased: { enabled: true, maxAgents: 100, maxBonds: 0, worldWidth: 24, worldHeight: 24, seedCount: 40, seedPattern: 'scatter', defaultRadius: 0.5, growthRate: 0, repulsionStiffness: 2, adhesionStiffness: 0, interactionRange: 1.5, drag: 1, timeStep: 0.1, momentum: 0, maxSpeed: 0, neighbourQueryRadius: 8, useBondingPhysics: false, autoBond: false, agentTarget: 'wasm', agentUpdateMode: 'async',
+      agentCapabilities: { motion: 'force', body: true, collision: 'off', bonds: 'off', autoBond: false, growth: false, division: false, lifespan: false, populationBirth: false, populationDeath: false, sensing: false, sensingHeadingSource: 'velocity', orientation: false, fieldCoupling: false, appearance: true } },
+    attributes: [], modelAttributes: [], neighborhoods: [],
+    agentAttributes: [
+      { id: 'raw', name: 'Raw', type: 'float', defaultValue: '0' },
+      { id: 'p', name: 'P', type: 'float', defaultValue: '0' },
+      { id: 'q', name: 'Q', type: 'float', defaultValue: '0' },
+      { id: 'r', name: 'R', type: 'float', defaultValue: '0' },
+      { id: 'lx', name: 'Lx', type: 'float', defaultValue: '0' },
+      { id: 'lx2', name: 'Lx2', type: 'float', defaultValue: '0' },
+      { id: 'lx3', name: 'Lx3', type: 'float', defaultValue: '0' },
+      { id: 'lx4', name: 'Lx4', type: 'float', defaultValue: '0' },
+      { id: 'lx5', name: 'Lx5', type: 'float', defaultValue: '0' },
+    ],
+    variables: [], agentVariables: [], indicators: [], mappings: [],
+    graphNodes: [], graphEdges: [], agentGraphNodes: aN, agentGraphEdges: aEd, macroDefs: [],
+  };
+}
+
+// Recompute all three formulas from the store's OWN stored inputs. This is what
+// catches a lowering that is identically wrong on BOTH targets (parity alone is a
+// mirror test) — e.g. a precedence slip, a swapped XOR, or an operand normalised
+// as `== 1` instead of `!= 0`.
+function logicalExpressionInvariant(st) {
+  const T = (v) => v !== 0;
+  for (let i = 0; i < st.highWater; i++) {
+    if (!st.alive[i]) continue;
+    const p = T(st.attrRead.p[i]), q = T(st.attrRead.q[i]), r = T(st.attrRead.r[i]);
+    const v = T(st.attrRead.raw[i]);
+    const want1 = ((p && !q) || (q !== r)) ? 1 : 0;
+    const want2 = (!(p || q) && (r !== true)) ? 1 : 0;
+    const want3 = (v && !q) ? 1 : 0;
+    // Read with NOT > AND > XOR > OR.
+    const want4 = ((((!p) && q) !== r)) ? 1 : 0;
+    const want5 = (p || (q !== r)) ? 1 : 0;
+    if (st.attrRead.lx[i] !== want1) return `agent ${i}: lx ${st.attrRead.lx[i]} !== ${want1} (p=${+p} q=${+q} r=${+r})`;
+    if (st.attrRead.lx2[i] !== want2) return `agent ${i}: lx2 ${st.attrRead.lx2[i]} !== ${want2} (p=${+p} q=${+q} r=${+r})`;
+    if (st.attrRead.lx3[i] !== want3) return `agent ${i}: lx3 ${st.attrRead.lx3[i]} !== ${want3} (raw=${st.attrRead.raw[i]} q=${+q})`;
+    if (st.attrRead.lx4[i] !== want4) return `agent ${i}: lx4 ${st.attrRead.lx4[i]} !== ${want4} (p=${+p} q=${+q} r=${+r})`;
+    if (st.attrRead.lx5[i] !== want5) return `agent ${i}: lx5 ${st.attrRead.lx5[i]} !== ${want5} (p=${+p} q=${+q} r=${+r})`;
+  }
+  return null;
+}
+
 // Synthetic: the two Vector Op ROTATION ops (rotate2d + rotateAxis / Rodrigues).
 // Both are EDITOR SUGAR lowered by `expandComposites` into scalar
 // arithmeticOperator nodes (deg→rad multiply + sin/cos + the guarded ÷ that
@@ -1537,6 +1681,10 @@ entries.push({
 entries.push({
   name: '[synthetic] Neighbour Census (3-option tag over the bonded 1-ring)',
   raw: buildCensusModel(), setup: setupRingBondStores, invariant: censusInvariant,
+});
+entries.push({
+  name: '[synthetic] Logical Expression (truth table + literals + truthiness)',
+  raw: buildLogicalExpressionModel(), invariant: logicalExpressionInvariant,
 });
 
 // ---------------------------------------------------------------------------

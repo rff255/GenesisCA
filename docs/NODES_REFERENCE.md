@@ -6,7 +6,7 @@ to inform future consolidation — it does **not** describe any committed refact
 
 **Scope:** 153 registry node types across 7 categories (event, flow, data, logic, aggregation,
 output, color) — 3 hidden from the Add Node menu (`macro` / `macroInput` / `macroOutput`),
-leaving **149 selectable** (52 of them agent nodes).
+leaving **150 selectable** (52 of them agent nodes).
 
 **The newest CHANGE is not a node but a BRUSH KIND: an AGENT Colour→Attribute mapping declares
 `brushKind: 'editor' | 'spawner'`** (absent ⇒ `editor`, the historical behaviour, no migration).
@@ -320,6 +320,7 @@ exists purely to keep graphs readable without Sequence nodes. See
 | 39 | `interpolation` | Interpolate | `T ∈ [0,1] → [Min..Max]`. | `I: T`, `I: Min`, `I: Max` / `O: Result` | |
 | 40 | `statement` | Compare | `== != > < >= <=` on two scalars, or `Between` / `Not Between` (range check with configurable low/high sides). A `compareType` selector (Numerical / Bool / Tag / Neighbor Index) swaps the inline operand widgets; non-numerical types are equality-only (==/!=). Tag mode adds a tag-attribute picker (à la Get Constant). | `I: X` `I: Y` `I: Y₂` (between-family only) / `O: Result` (bool) | Name collision risk with `groupStatement` |
 | 41 | `logicOperator` | Logic | `AND OR XOR NOT` on binary values. | `I: A` `I: B` (hidden for NOT) / `O: Result` (bool) | |
+| 125 | `logicalExpression` | Logical Expression | Type a boolean formula instead of wiring a chain of Logic nodes — what Expression is to Math. Operators `NOT AND XOR OR` (or `! && ^ \|\|`), parentheses, literals `true`/`false` (or `1`/`0`). Precedence `NOT > AND > XOR > OR`; all binary operators left-associative; operator words and literals are case-insensitive. Variables come from the input ports. | dynamic `I: a…h` (bool, 1–8 ports, configurable count, each renamable — same collapsed-by-default `▸ Inputs` row as Expression) / `O: Result` (bool) | Parses to its OWN small AST (the grammar is deliberately disjoint from Expression's — no arithmetic, no comparisons); JS / WASM / WebGPU lockstep on both the cell and agent loops, plus the Overseer driver. The node body renders that AST with `¬ ∧ ⊕ ∨` and parentheses re-derived from precedence. Inputs are truthy-tested (`≠ 0`) and the result is the project's numeric bool 1/0 — identical to `logicOperator` on every target |
 | 42 | `valueSwitch` | Value Switch | `condition ? ifValue : elseValue`. Pure value, no flow port. **Dual-mode:** scalar selector OR array relay. | `I: Condition` (any) `I: If` (any) `I: Else` (any) / `O: Result` (any) | All inputs optional (inline defaults: condition=false, if=1, else=0). Both branches always evaluate — for short-circuit use flow `conditional` instead. **Array relay:** when BOTH `If` and `Else` are wired to array producers (e.g. two `filterNeighbors`), `Result` is the selected array (feed it to `pickRandomNeighbor` / `arrayElement` / `aggregate` / …). All three targets — JS relays the reference, WASM selects the scratch offset/len (zero-copy), WebGPU copies the chosen branch. |
 | 43 | `lookupInteraction` | Table Lookup | Index a Lookup Table model attribute by a row + column index — or by **one index per axis** for a multi-axis (N-D) table (from face labels, tag reads, or neighbour counts) → decimal. | `I: Row` `I: Col` (int, inline) OR `I: Axis 0..5` (multi-axis) / `O: Value` (float) | Works with or without Variegated Cells; axes-mode ports slice per the table; loop-invariant when all indices are |
 | 108 | `makeVector` | Make Vector | Bundle X / Y / Z scalars into a single `vector` value (the Unreal Make Vector / Blender Combine XYZ). | `I: X` `I: Y` `I: Z` (float, inline) / `O: Vector` (vector) | `Z` hidden in 2D (z = 0). Lowered to scalars by `expandComposites` → runs on all 3 targets |
@@ -886,7 +887,7 @@ their own table (numbered O1-O20) rather than renumbering the main catalogue. Th
 is NOT a compile target: the graph compiles to an async main-thread DRIVER
 (`compiler/overseer/compile.ts`) that commands the sim worker through the existing message
 protocol, so the CA keeps running on JS / WASM / WebGPU. Universal value/flow plumbing
-(Loop, If, For Each, Switch, Sequence, Math, Expression, Compare, Logic, Get Random,
+(Loop, If, For Each, Switch, Sequence, Math, Expression, Compare, Logic, Logical Expression, Get Random,
 Value Switch, Proportion Map, Interpolation, Get/Array Element/Length, Get Model
 Attribute) is shared with the other graphs via the `OVERSEER_UNIVERSAL_TYPES` allowlist;
 every per-cell / per-agent node is excluded.

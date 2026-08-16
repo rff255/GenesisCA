@@ -45,6 +45,8 @@ import type { ValueRef, WgslType } from '../webgpu/compile';
 import { castTo, WGSL_F32_MAX } from '../webgpu/compile';
 import { emitWgsl, wgslFloatLit } from '../expression/emitWgsl';
 import { buildVarMap, parseExpression, clampVisibleCount } from '../expression/parser';
+import { emitLogicWgsl } from '../expression/emitLogic';
+import { buildLogicVarMap, parseLogicExpression } from '../expression/logicParser';
 import { is3dModel } from '../compile';
 import { expandMacros } from '../macroExpand';
 import { collapseReroutes } from '../rerouteCollapse';
@@ -136,7 +138,8 @@ export const AGENT_WEBGPU_SUPPORTED_TYPES: ReadonlySet<string> = new Set<string>
   // writes
   'applyForce', 'applyForceToAgent', 'setTargetRadius',
   // value/flow utility
-  'getConstant', 'arithmeticOperator', 'expression', 'statement', 'logicOperator', 'getRandom',
+  'getConstant', 'arithmeticOperator', 'expression', 'statement', 'logicOperator',
+  'logicalExpression', 'getRandom',
   // flow
   'conditional', 'sequence', 'switch', 'loop',
 ]);
@@ -733,6 +736,10 @@ function compileValueNode(ctx: AgentWgpuCtx, nodeId: string, portId: string): Va
       result = emitLogic(ctx, node);
       break;
     }
+    case 'logicalExpression': {
+      result = compileLogicalExpression(ctx, node);
+      break;
+    }
     case 'getRandom': {
       result = emitGetRandom(ctx, node, portId);
       break;
@@ -976,6 +983,22 @@ function compileExpression(ctx: AgentWgpuCtx, node: GraphNode): ValueRef {
   }
   const expr = emitWgsl(res.ast, inputs);
   return emitLet(ctx, 'f32', expr, 'ex');
+}
+
+/** Logical Expression node — parse the boolean formula + emit the AST via the
+ *  shared WGSL emitter. The var accessor is `emitLogic`'s own operand form
+ *  (`<f32 expr> != 0.0`) and the result is bound through the same
+ *  `select(0.0, 1.0, …)`, so a formula and the equivalent chain of Logic nodes
+ *  agree exactly (agent value refs are uniformly f32). */
+function compileLogicalExpression(ctx: AgentWgpuCtx, node: GraphNode): ValueRef {
+  const cfg = node.data.config as Record<string, unknown>;
+  const visibleCount = clampVisibleCount(cfg['visibleCount']);
+  const { map, errors } = buildLogicVarMap(cfg as Parameters<typeof buildLogicVarMap>[0], visibleCount);
+  if (errors.length > 0) throw new Error(`logicalExpression: ${errors[0]}`);
+  const res = parseLogicExpression(String(cfg['expression'] ?? ''), map);
+  if ('error' in res) throw new Error(`logicalExpression: ${res.error}`);
+  const cond = emitLogicWgsl(res.ast, (portId) => `${inF32(ctx, node, portId, 0)} != 0.0`);
+  return emitLet(ctx, 'f32', `select(0.0, 1.0, ${cond})`, 'lgx');
 }
 
 /** Get Random — float / integer / orientation / bool / options. Per-agent
