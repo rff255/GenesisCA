@@ -3785,6 +3785,45 @@ export function HelpView() {
             line in the middle of a board is kept as a row of default cells so the board&apos;s
             geometry can never silently shift.
           </p>
+          <h3 className={styles.h3}>Export CSV</h3>
+          <p className={styles.p}>
+            <strong>Export CSV&hellip;</strong> sits beside <em>Import CSV</em> in the same
+            brush panel and is its exact mirror &mdash; take the running simulation out as a
+            table for a spreadsheet, a plotting script or another tool. The same{' '}
+            <strong>Target</strong> switch appears when the model has both layers; a model
+            with only one layer simply exports that one. The values are read fresh from the
+            engine at the moment you press the button, so what you get is what is on screen
+            &mdash; including on a GPU-resident model that is not otherwise reporting its
+            state back.
+          </p>
+          <ul className={styles.list}>
+            <li>
+              <strong>Agents</strong> &mdash; one row per live agent, with a header row:{' '}
+              <code>x, y</code> (plus <code>z</code> in 3D), <code>vx, vy</code> (plus{' '}
+              <code>vz</code>), <code>radius</code>, then every agent attribute by name (a{' '}
+              <em>vector</em> attribute writes one column per component, <code>Facing.x</code>{' '}
+              / <code>Facing.y</code>).
+            </li>
+            <li>
+              <strong>Grid</strong> &mdash; ONE chosen cell attribute as a plain table, using
+              the same convention the import reads: a <strong>line is a grid row</strong>, a{' '}
+              <strong>field is a grid column</strong>, and no header row. In a 3D model you
+              pick the <strong>Layer</strong> to write.
+            </li>
+          </ul>
+          <p className={styles.p}>
+            Values are written in the form the import reads straight back: a tag as its option{' '}
+            <em>name</em>, binary as <code>true</code>/<code>false</code>, numbers at full
+            precision (so a position never loses a digit on the way out and back). Names
+            containing a comma or a quote are quoted properly. Pick the{' '}
+            <strong>delimiter</strong> (comma / semicolon / tab &mdash; tab saves a{' '}
+            <code>.tsv</code>). The panel previews the first lines before you commit.
+          </p>
+          <p className={styles.p}>
+            <strong>The round trip is the point:</strong> an exported file re-imports through{' '}
+            <em>Import CSV</em> with its columns already mapped and every value intact &mdash;
+            so you can export a population, edit it in a spreadsheet, and load it back.
+          </p>
           <p className={styles.p}>
             <strong>Brush shapes.</strong> Pick a stamp shape in the brush panel:
           </p>

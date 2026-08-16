@@ -42,6 +42,8 @@ import { SpriteRegistry } from './spriteRegistry';
 import { glowEncodeScale, glowTransferTable } from './glowTone';
 import { ImageMappingDialog, type ImageMappingConfig } from './ImageMappingDialog';
 import { CsvImportDialog, type CsvImportResult } from './CsvImportDialog';
+import { CsvExportDialog, type CsvExportResult } from './CsvExportDialog';
+import type { CsvAgentRow } from './csvImport';
 import {
   encodeFramesToWebM, isWebMSupported, snapRecordWidth, clampRecordFps,
   RECORD_MAX, RECORD_MAX_3D, DEFAULT_RECORD_QUALITY, type RecordQuality,
@@ -64,7 +66,7 @@ import { InspectAgentPopover, type AgentPopoverState } from './InspectAgentPopov
 import { InspectBondPopover, type BondPopoverState, type BondStateValues } from './InspectBondPopover';
 import { PresetSaveDialog } from './PresetSaveDialog';
 import { ConfirmDialog } from '../components/ConfirmDialog';
-import { serializeSimState, serializePreset, downloadStateFile, readStateFile, downloadPresetFile, readPresetFile, saveBinaryFile, base64ToArrayBuffer, deserializeTypedArray, migrateSimulationStateV1toV2, deserializeAgentState } from '../model/fileOperations';
+import { serializeSimState, serializePreset, downloadStateFile, readStateFile, downloadPresetFile, readPresetFile, saveBinaryFile, saveTextFile, base64ToArrayBuffer, deserializeTypedArray, migrateSimulationStateV1toV2, deserializeAgentState } from '../model/fileOperations';
 import type { Attribute, CAModel, IndicatorChartSettings, Mapping, Preset, SimulationState } from '../model/types';
 import {
   inputParamsOf, inputBrushKindOf, encodeChannelValues, paramFallbackValue, defaultImageChannelSources,
@@ -78,6 +80,19 @@ import { useListReorder } from '../modeler/panels/useListReorder';
 import styles from './SimulatorView.module.css';
 
 const SIM_SETTINGS_KEY = 'genesisca_sim_settings';
+
+/** The decoded `getState` snapshot the Export CSV dialog serialises from. ONE
+ *  round-trip covers BOTH flavours and every attribute / layer choice, so the
+ *  dialog never has to re-ask the worker (and the values are fresh by the
+ *  one-shot staleness rule `getState` already honours). */
+interface CsvExportSnapshot {
+  generation: number;
+  /** Live agents (null when the model has no agent layer). */
+  agents: CsvAgentRow[] | null;
+  /** The cell grid (null when the model has no grid layer). `values` slices ONE
+   *  attribute on ONE layer into a row-major block. */
+  grid: { width: number; height: number; depth: number; values: (attrId: string, layer: number) => Float64Array | null } | null;
+}
 
 function loadSimSettings(): Record<string, unknown> {
   try {
@@ -3047,6 +3062,10 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
   // Grid CSV import with "Resize": apply the value block once the worker has
   // reinitialised to the new dims (mirrors pendingImageImport / pendingManualImport).
   const pendingGridValuesImport = useRef<{ attrId: string; width: number; height: number; layer: number; values: Float64Array } | null>(null);
+  // "Export CSV" dialog — the decoded snapshot the dialog serialises from
+  // (null = closed). Filled by ONE `getState` round-trip, so both flavours and
+  // every attribute / layer choice are covered without re-asking the worker.
+  const [csvExport, setCsvExport] = useState<CsvExportSnapshot | null>(null);
 
   // Save/Load state refs
   const pendingStateSave = useRef<((state: Record<string, unknown>) => void) | null>(null);
@@ -13422,6 +13441,94 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
     }
   };
 
+  // --- CSV export ----------------------------------------------------------
+  // The mirror of the import above, and deliberately ONE worker round-trip: a
+  // single `getState` carries the WHOLE fresh picture (every cell attribute, all
+  // layers, and the complete agent store), so the dialog can offer any target /
+  // attribute / layer without asking again. `getState` also joins the one-shot
+  // staleness readers, so a free-mode WebGPU model's GPU state is pulled down
+  // first — a paused free-running Particle Life exports what it actually holds,
+  // not the last snapshot the renderer happened to ship.
+  const openCsvExport = () => {
+    const w = workerRef.current;
+    if (!w) return;
+    const busy = beginBusy('Reading simulation state…');
+    // Reuse the single-slot capture callback every other getState consumer uses
+    // (Save State / preset capture) — one outstanding request at a time.
+    pendingStateSave.current = (workerState) => {
+      busy.end();
+      try {
+        const st = workerState as {
+          generation?: number; width?: number; height?: number; depth?: number;
+          attributes?: Record<string, { type: string; buffer: ArrayBuffer }>;
+          agents?: { highWater: number; alive: ArrayBuffer; x: ArrayBuffer; y: ArrayBuffer; z?: ArrayBuffer; vx?: ArrayBuffer; vy?: ArrayBuffer; vz?: ArrayBuffer; radius: ArrayBuffer; attrs: Record<string, { kind: string; buffer: ArrayBuffer }> };
+        };
+        // --- agents: one row per LIVE slot, values straight off the SoA ------
+        let agents: CsvAgentRow[] | null = null;
+        if (isAgentModelRef.current && st.agents) {
+          const a = st.agents;
+          const hw = a.highWater | 0;
+          const alive = new Uint8Array(a.alive);
+          const ax = new Float64Array(a.x), ay = new Float64Array(a.y), ar = new Float64Array(a.radius);
+          const avx = a.vx ? new Float64Array(a.vx) : null, avy = a.vy ? new Float64Array(a.vy) : null;
+          const az = a.z ? new Float64Array(a.z) : null, avz = a.vz ? new Float64Array(a.vz) : null;
+          const attrArrays: Array<[string, ArrayLike<number>]> = Object.entries(a.attrs).map(([id, e]) => {
+            const Ctor = e.kind === 'uint8' ? Uint8Array : e.kind === 'int32' ? Int32Array : Float64Array;
+            return [id, new Ctor(e.buffer) as ArrayLike<number>];
+          });
+          agents = [];
+          for (let i = 0; i < hw; i++) {
+            if (!alive[i]) continue;
+            const attrs: Record<string, number> = {};
+            for (const [id, arr] of attrArrays) attrs[id] = arr[i] ?? 0;
+            agents.push({
+              x: ax[i] ?? 0, y: ay[i] ?? 0, z: az ? az[i] : undefined,
+              vx: avx ? (avx[i] ?? 0) : 0, vy: avy ? (avy[i] ?? 0) : 0, vz: avz ? avz[i] : undefined,
+              radius: ar[i] ?? 0, attrs,
+            });
+          }
+        }
+        // --- grid: a lazy per-(attribute, layer) slice -----------------------
+        let grid: CsvExportSnapshot['grid'] = null;
+        if (gridCellsOnRef.current && st.attributes) {
+          const gw = st.width ?? 0, gh = st.height ?? 0, gd = Math.max(1, st.depth ?? 1);
+          const attrBufs = st.attributes;
+          grid = {
+            width: gw, height: gh, depth: gd,
+            values: (attrId, layer) => {
+              const entry = attrBufs[attrId];
+              if (!entry || gw < 1 || gh < 1) return null;
+              // The worker's own type→array mapping (a constant boundary makes
+              // the buffer total+1 long; the sentinel simply sits past the end
+              // of every layer's block, so plain indexing stays correct).
+              const Ctor = entry.type === 'bool' ? Uint8Array
+                : (entry.type === 'integer' || entry.type === 'tag' || entry.type === 'neighborIndex') ? Int32Array
+                  : Float64Array;
+              const src = new Ctor(entry.buffer) as ArrayLike<number>;
+              const l = Math.max(0, Math.min(gd - 1, Math.round(layer)));
+              const base = l * gw * gh;
+              const out = new Float64Array(gw * gh);
+              for (let i = 0; i < out.length; i++) out[i] = src[base + i] ?? 0;
+              return out;
+            },
+          };
+        }
+        setCsvExport({ generation: st.generation ?? generationRef.current, agents, grid });
+      } catch (err) {
+        setCompileError(`CSV export failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    };
+    w.postMessage({ type: 'getState' });
+  };
+  const applyCsvExport = (r: CsvExportResult) => {
+    setCsvExport(null);
+    // Routed through saveTextFile (never a bare `<a download>`) so the desktop
+    // build gets a real native Save As.
+    void saveTextFile(r.text, r.filename, 'text/csv').catch(err => {
+      showAgentNotice(`Export failed: ${err instanceof Error ? err.message : String(err)}`);
+    });
+  };
+
   // Ctrl+V a clipboard image onto the simulator → open the Mapping Cells dialog
   // (same as the Open Image button). Latest-ref so the listener stays cheap.
   const openImageForMappingRef = useRef(openImageForMapping);
@@ -15432,6 +15539,13 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
             >
               Import CSV…
             </button>
+            <button
+              className={styles.controlButton}
+              onClick={openCsvExport}
+              title="Export the current board as a CSV — one line per grid row, one field per grid column, for one cell attribute"
+            >
+              Export CSV…
+            </button>
             <label className={styles.checkRow}>
               <input type="checkbox" checked={showBrushCursor} onChange={e => setShowBrushCursor(e.target.checked)} />
               Show brush cursor
@@ -15729,6 +15843,11 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
                       style={{ padding: '3px 8px', borderRadius: 'var(--radius-sm)', cursor: 'pointer', border: '1px solid var(--color-widget-border)', background: 'transparent', color: 'var(--color-text-muted)', fontSize: '0.62rem' }}
                     >Import CSV…</button>
                     <button
+                      onClick={openCsvExport}
+                      title="Export the live agents as a CSV — one row per agent; position / velocity / radius / agent attributes, headed so Import CSV reads them straight back"
+                      style={{ padding: '3px 8px', borderRadius: 'var(--radius-sm)', cursor: 'pointer', border: '1px solid var(--color-widget-border)', background: 'transparent', color: 'var(--color-text-muted)', fontSize: '0.62rem' }}
+                    >Export CSV…</button>
+                    <button
                       onClick={() => workerRef.current?.postMessage({ type: 'clearAgents', activeViewer: activeViewerRef.current })}
                       style={{ padding: '3px 8px', borderRadius: 'var(--radius-sm)', cursor: 'pointer', border: '1px solid var(--color-widget-border)', background: 'transparent', color: 'var(--color-text-muted)', fontSize: '0.62rem' }}
                     >Clear all agents</button>
@@ -15990,6 +16109,21 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
           torus={model.properties.boundaryTreatment === 'torus'}
           onApply={applyCsvImport}
           onCancel={() => setCsvImport(null)}
+        />
+      )}
+      {csvExport && (
+        <CsvExportDialog
+          modelName={model.properties.name}
+          generation={csvExport.generation}
+          cellAttributes={model.attributes.filter(a => !a.isModelAttribute)}
+          agentAttributes={model.agentAttributes ?? []}
+          hasGrid={gridCellsOn}
+          hasAgents={isAgentModel}
+          is3d={is3D}
+          agents={csvExport.agents}
+          grid={csvExport.grid}
+          onExport={applyCsvExport}
+          onCancel={() => setCsvExport(null)}
         />
       )}
       {presetOverwriteTarget && (

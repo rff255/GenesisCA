@@ -238,6 +238,13 @@ export function decodeCsvValue(attr: CsvAttrShape, raw: string): CsvDecode {
       const l = s.toLowerCase();
       const byName = opts.findIndex(o => o.toLowerCase() === l);
       if (byName >= 0) return { value: byName, ok: true };
+      // A field is TRIMMED above (spreadsheets pad freely), so an option whose
+      // own name carries leading/trailing whitespace could never be matched by
+      // name — even from a file this app itself wrote. Fall back to comparing
+      // the TRIMMED option name; strictly additive (the exact match above still
+      // wins), and it closes the export→import round trip for such an option.
+      const byTrimmed = opts.findIndex(o => o.trim().toLowerCase() === l);
+      if (byTrimmed >= 0) return { value: byTrimmed, ok: true };
       const n = parseCsvNumber(s);
       if (n !== null && Number.isInteger(n) && n >= 0 && n < opts.length) return { value: n, ok: true };
       return { value: fallback, ok: false };
@@ -624,6 +631,178 @@ export function buildGridValues(table: CsvTable, attr: CsvAttrShape, charMap?: C
     }
   }
   return out;
+}
+
+// ---------------------------------------------------------------------------
+// EXPORT — the mirror of everything above.
+//
+// The acceptance criterion is the ROUND TRIP: whatever these emit must come
+// back through `parseCsvTable` + `autoMapAgentColumns` + `buildAgentSpecs` (or
+// `buildGridValues`) as the same values, with NO manual column fixing. That is
+// why the headers are spelled exactly as the auto-map's aliases / attribute
+// names, and why numbers go through `String(v)` — JS Number→String is the
+// shortest representation that round-trips an f64 EXACTLY, so a position never
+// loses a bit on the way out and back.
+// ---------------------------------------------------------------------------
+
+/** Quote a field per RFC 4180 when it would otherwise not survive the parser.
+ *
+ *  Needed when the field carries the delimiter, a quote, or a newline — and ALSO
+ *  when it has leading/trailing whitespace, because `parseCsvRows` TRIMS an
+ *  unquoted field (so `" a "` unquoted would come back as `a`). Attribute and
+ *  tag names are user text and can contain any of these. */
+export function csvEscape(field: string, delimiter = ','): string {
+  const s = field ?? '';
+  const needs =
+    s.includes(delimiter) || s.includes('"') || s.includes('\n') || s.includes('\r') ||
+    s !== s.trim();
+  return needs ? `"${s.replace(/"/g, '""')}"` : s;
+}
+
+/** Join one row of already-raw fields, escaping each. */
+export function csvRow(fields: string[], delimiter = ','): string {
+  return fields.map(f => csvEscape(f, delimiter)).join(delimiter);
+}
+
+/** Serialise ONE stored number back into the text form `decodeCsvValue` reads.
+ *
+ *   bool → `true` / `false`      (a TRUE_WORDS / FALSE_WORDS member)
+ *   tag  → the option NAME       (decoded case-insensitively on the way back);
+ *          an out-of-range index falls back to the raw number so nothing is lost
+ *   else → `String(v)`           (exact f64 round-trip)
+ *
+ *  A non-finite value (a NaN radius on a broken agent) emits an EMPTY field —
+ *  `"NaN"` would re-import as the attribute default anyway, and a blank says
+ *  "no value here" honestly. */
+export function formatCsvValue(attr: CsvAttrShape, v: number): string {
+  if (!Number.isFinite(v)) return '';
+  switch (attr.type) {
+    case 'bool': return v ? 'true' : 'false';
+    case 'tag': {
+      const opts = attr.tagOptions ?? [];
+      const i = Math.round(v);
+      return i >= 0 && i < opts.length ? opts[i]! : String(v);
+    }
+    default: return String(v);
+  }
+}
+
+/** Format a bare geometry number (position / velocity / radius / a vector
+ *  component) — always the exact-round-trip decimal, blank when non-finite. */
+export function formatCsvNumber(v: number): string {
+  return Number.isFinite(v) ? String(v) : '';
+}
+
+/** One exported agent column: its HEADER (spelled so the import auto-maps it
+ *  back with no user action) and where its value comes from. */
+export interface CsvAgentExportColumn {
+  header: string;
+  /** Set for the built-in geometry columns. */
+  geom?: CsvGeomField;
+  /** Set for an attribute column — the key into the agent's `attrs` record
+   *  (a VECTOR attribute's component id, exactly what `buildAgentSpecs` writes). */
+  storeId?: string;
+  /** How to format the value (a vector component formats as a plain float). */
+  attr?: CsvAttrShape;
+}
+
+/** The columns an agent export writes, in order: position, velocity, radius,
+ *  then every agent attribute (a `vector` attribute once PER COMPONENT).
+ *
+ *  The headers are the auto-map's own vocabulary — `x`/`y`/`z`/`vx`/`vy`/`vz`/
+ *  `radius` are `GEOM_ALIASES` keys, an attribute uses its NAME (matched by
+ *  `normaliseName`), and a vector component uses `<Name>.<x|y|z>` (which
+ *  normalises to `<name><comp>`, the exact form the auto-map looks for).
+ *
+ *  ⚠ An agent attribute NAMED like a geometry field (an attribute called
+ *  "radius") is claimed by the geometry alias on re-import — a pre-existing
+ *  ambiguity of the auto-map, not introduced here; the column is still written
+ *  and the user can re-target it in the dialog. */
+export function agentExportColumns(attrs: CsvAttrShape[], is3d: boolean): CsvAgentExportColumn[] {
+  const out: CsvAgentExportColumn[] = [];
+  const geom: CsvGeomField[] = is3d
+    ? ['x', 'y', 'z', 'vx', 'vy', 'vz', 'radius']
+    : ['x', 'y', 'vx', 'vy', 'radius'];
+  for (const f of geom) out.push({ header: f, geom: f });
+  for (const a of attrs) {
+    if (a.type === 'vector') {
+      const dims = vectorDimsOf(a);
+      const ids = vectorComponentIds(a.id, dims);
+      for (let c = 0; c < dims; c++) {
+        out.push({
+          header: `${a.name ?? a.id}.${COMP_LETTERS[c]}`,
+          storeId: ids[c]!,
+          attr: { id: ids[c]!, name: a.name, type: 'float' },
+        });
+      }
+    } else if (a.type !== 'color' && a.type !== 'lookupTable') {
+      out.push({ header: a.name ?? a.id, storeId: a.id, attr: a });
+    }
+  }
+  return out;
+}
+
+/** One live agent, in exactly the shape the worker's `readAgents` / `getState`
+ *  reply carries (so the caller maps nothing). `attrs` is keyed by STORE id. */
+export interface CsvAgentRow {
+  x: number; y: number; z?: number;
+  vx: number; vy: number; vz?: number;
+  radius: number;
+  attrs: Record<string, number>;
+}
+
+/** Build the agents CSV: a header row, then one row per live agent. */
+export function buildAgentCsv(
+  rows: CsvAgentRow[],
+  attrs: CsvAttrShape[],
+  is3d: boolean,
+  opts?: { delimiter?: string; maxRows?: number },
+): string {
+  const delimiter = opts?.delimiter ?? ',';
+  const cols = agentExportColumns(attrs, is3d);
+  const lines = [csvRow(cols.map(c => c.header), delimiter)];
+  const n = opts?.maxRows === undefined ? rows.length : Math.min(rows.length, opts.maxRows);
+  for (let r = 0; r < n; r++) {
+    const a = rows[r]!;
+    lines.push(csvRow(cols.map(c => {
+      if (c.geom) {
+        switch (c.geom) {
+          case 'x': return formatCsvNumber(a.x);
+          case 'y': return formatCsvNumber(a.y);
+          case 'z': return formatCsvNumber(a.z ?? 0);
+          case 'vx': return formatCsvNumber(a.vx);
+          case 'vy': return formatCsvNumber(a.vy);
+          case 'vz': return formatCsvNumber(a.vz ?? 0);
+          case 'radius': return formatCsvNumber(a.radius);
+        }
+      }
+      const v = a.attrs[c.storeId!];
+      return v === undefined ? '' : formatCsvValue(c.attr!, v);
+    }), delimiter));
+  }
+  return lines.join('\n');
+}
+
+/** Build the grid CSV from a row-major value block — the exact inverse of
+ *  `buildGridValues`: a LINE is a grid ROW, a FIELD is a grid COLUMN, and NO
+ *  header row (the Grid import defaults to no-header, so a header would be read
+ *  back as a row of cells). */
+export function buildGridCsv(
+  values: ArrayLike<number>,
+  width: number,
+  height: number,
+  attr: CsvAttrShape,
+  opts?: { delimiter?: string; maxRows?: number },
+): string {
+  const delimiter = opts?.delimiter ?? ',';
+  const n = opts?.maxRows === undefined ? height : Math.min(height, opts.maxRows);
+  const lines: string[] = [];
+  for (let r = 0; r < n; r++) {
+    const fields: string[] = new Array(width);
+    for (let c = 0; c < width; c++) fields[c] = formatCsvValue(attr, values[r * width + c] ?? 0);
+    lines.push(csvRow(fields, delimiter));
+  }
+  return lines.join('\n');
 }
 
 /** The cell attributes a Grid import can target (per-cell scalars only; a
