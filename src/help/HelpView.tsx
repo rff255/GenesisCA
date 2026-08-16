@@ -3841,6 +3841,54 @@ export function HelpView() {
               file metadata only.
             </li>
           </ul>
+          <h3 className={styles.h3}>Real map data &mdash; GeoTIFF (.tif)</h3>
+          <p className={styles.p}>
+            The sources you actually download ship <strong>GeoTIFF</strong>, not{' '}
+            <code>.asc</code> &mdash; LANDFIRE fuel and terrain, WorldPop population, NLCD and
+            Copernicus land cover. GenesisCA reads one directly, in the browser: drop a{' '}
+            <code>.tif</code> on the app, or pick{' '}
+            <em>Import GeoTIFF&hellip;</em> from the transport bar&apos;s <em>Load State</em>{' '}
+            menu. A GeoTIFF is always a board, so there is no Agents/Grid switch &mdash; you map{' '}
+            <strong>each band</strong> to a cell attribute and import.
+          </p>
+          <ul className={styles.list}>
+            <li>
+              <strong>Bands &rarr; attributes.</strong> Every band the file carries gets a row
+              with its sample type and a target attribute (or <em>ignore</em>), so a multi-band
+              stack lands in several attributes in one pass &mdash; the GeoTIFF equivalent of
+              the <code>.asc</code> layer stack, without needing separate files.
+            </li>
+            <li>
+              <strong>Categorical codes.</strong> Point a band at a <em>tag</em> or{' '}
+              <em>binary</em> attribute and the dialog lists its distinct values with counts and
+              a dropdown each &mdash; the Cell2Fire code&rarr;fuel table, as UI. Codes that are
+              already valid values are pre-filled; anything you leave unmapped takes the
+              attribute default and is counted. A band with more than 64 distinct values is not
+              categorical, so no table is offered.
+            </li>
+            <li>
+              <strong>Grid size.</strong> Either <em>resize the grid to the raster</em>, or{' '}
+              <em>resample the raster onto the grid</em> you already have. Resampling is{' '}
+              <strong>nearest neighbour</strong> &mdash; averaging class codes would invent
+              classes that do not exist, and it is what <code>gdalwarp -r near</code> does for
+              the same reason. It is the blunt-but-honest choice for a continuous band too.
+            </li>
+            <li>
+              <strong>Georeference &amp; CRS.</strong> The file&apos;s origin and pixel size are
+              read into the model&apos;s georeference, converted from GeoTIFF&apos;s{' '}
+              <em>top-left</em> origin to the lower-left corner convention the rest of GenesisCA
+              (and <code>.asc</code>) uses. Resampling scales the recorded cell size so the
+              ground extent is unchanged. The <code>EPSG:</code> code is recorded too, and if it
+              differs from what the model already carries you are told &mdash; GenesisCA{' '}
+              <em>never reprojects</em>. Align the layers in QGIS first.
+            </li>
+            <li>
+              <strong>Size.</strong> A browser tab is not a GIS workstation: rasters up to
+              8192 on a side and 16 megapixels in total are read, and anything larger asks you
+              to crop or resample it in QGIS. The GeoTIFF reader itself is downloaded only the
+              first time you open one, so it costs nothing until you use it.
+            </li>
+          </ul>
           <h3 className={styles.h3}>Georeference &amp; the backdrop map</h3>
           <p className={styles.p}>
             Two presentation pieces turn a board into something that reads as a{' '}
