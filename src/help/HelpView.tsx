@@ -3332,7 +3332,8 @@ export function HelpView() {
             <li><strong>Glow.</strong> The <strong>Glow agents</strong> Graphics option
               (in the agent controls) gives every agent a <strong>solid core</strong> with
               a soft halo around it &mdash; <em>Size</em> is the extra halo radius in
-              pixels, <em>Core</em> how far the solid colour reaches into that halo,
+              pixels, <em>Core</em> how far the solid colour reaches (it can also reach
+              back <em>inwards</em>, below&nbsp;0),
               <em>Intensity</em> the halo&apos;s brightness, <em>Falloff</em> how fast it
               fades across the band outside the core. Overlapping halos are
               <em>added together at full precision first, and the total is compressed into
@@ -3349,7 +3350,13 @@ export function HelpView() {
               agent still reads as a crisp, true-coloured dot &mdash; you no longer have to
               choose between the two. At <em>Core&nbsp;0</em> (the default) the core is the
               agent&apos;s own disc and the halo sits entirely outside it; raise Core to grow
-              a solid nucleus out into the halo band. It works on <em>every</em> 2D agent
+              a solid nucleus out into the halo band, or take it <em>below&nbsp;0</em> to
+              shrink the solid part <em>inside</em> the disc &mdash; at <em>Core&nbsp;-1</em>
+              there is no solid body left at all and each agent is pure glow, a soft light
+              source rather than a lit dot. (The shrink applies to plain agent <em>discs</em>:
+              a sprite&apos;s artwork and a fused metaball blob are their own layers and keep
+              their full size, with the halo simply glowing behind them.) It works on
+              <em>every</em> 2D agent
               model and every agent target: on the direct-render path the shader draws the
               halo and the core as two passes, and everywhere else (bonded graphs and
               tissues, sprites, metaballs, field-coupled models) the regular agent overlay
@@ -3368,7 +3375,9 @@ export function HelpView() {
               spills, <em>Intensity</em> how much is added, <em>Falloff</em> whether the spill is
               tight or wide, and <em>Core</em> how much of each agent&apos;s own body is held back
               from the bloom (at&nbsp;1 the bodies are left exactly as they render and only the
-              surrounding spill is added). Brightness is compressed with the same curve the 2D
+              surrounding spill is added). The 2D slider&apos;s sub-zero half has no meaning
+              here &mdash; dissolving a solid disc is a 2D idea &mdash; so in 3D the slider
+              simply starts at&nbsp;0. Brightness is compressed with the same curve the 2D
               glow uses, so <em>Intensity</em> means the same thing in both views. Only the agents
               bloom &mdash; a CA grid behind them is never blurred &mdash; and the effect can only
               ever <em>add</em> light, so nothing in the scene gets darker. Both 3D renderers draw

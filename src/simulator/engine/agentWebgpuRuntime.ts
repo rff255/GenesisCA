@@ -1827,11 +1827,12 @@ export interface AgentRenderView {
   bgG: number;
   bgB: number;
   bgA: number;
-  /** Solid-core fraction of the glow band (0..1) — the SOLID (opaque, never
-   *  added-out) body radius is `radPx + glowCore * glowSize`, and the additive
-   *  halo falls off from there to `radPx + glowSize`. 0 ⇒ the core is exactly the
-   *  agent disc. APPENDED LAST on purpose so every pre-existing member keeps its
-   *  byte offset (the ForceControl.motionMode / VoxelView precedent); the
+  /** Solid-core size (-1..1) — the SOLID (opaque, never added-out) body radius is
+   *  `radPx + glowCore * glowSize` for glowCore >= 0 (grown into the band) and
+   *  `radPx * (1 + glowCore)` below 0 (SHRUNK below the agent's own disc, gone at
+   *  -1 = pure halo); the additive halo falls off from there to `radPx + glowSize`.
+   *  0 ⇒ the core is exactly the agent disc. APPENDED LAST on purpose so every
+   *  pre-existing member keeps its byte offset (the ForceControl.motionMode / VoxelView precedent); the
    *  verify-render-uniform-layouts harness pairs struct ⇄ writer by offset. */
   glowCore: number;
   // E2 composite only (CPU-side flags — NOT part of the RENDER_VIEW byte layout,
@@ -1878,7 +1879,8 @@ const RENDER_VIEW_WGSL = `struct RenderView {
  *    vsGlow/fsGlow — the SCREEN-blended HALO, over a quad enlarged to
  *                    `radPx+glowSize` (see glowBlend in buildAgentDiscPipelines).
  *    vsMain/fsMain — the SOLID CORE disc (premultiplied source-over), radius
- *                    `radPx + glowCore*glowSize`, + the optional outline rim.
+ *                    `radPx + glowCore*glowSize` (or `radPx*(1+glowCore)` for a
+ *                    NEGATIVE core), + the optional outline rim.
  *
  *  HALO FIRST, CORE OVER IT. Glow used to REPLACE the disc (one additive draw
  *  from the centre out), so an isolated agent had no solid body at all — its
@@ -1945,11 +1947,28 @@ fn buildVert(vi: u32, inst: u32, halo: bool) -> VSOut {
   // near-empty quad on the fast path while the CPU path still showed a dot. The
   // FS rim band derives from in.radPx, so it stays consistent with the same rule.
   let radPx: f32 = max(ar * rv.scalePx, 1.2);
-  // The SOLID (opaque) body radius: the plain disc when glow is off, grown into
-  // the halo band by Core when it is on.
+  // The SOLID (opaque) body radius: the plain disc when glow is off; with glow on,
+  // Core grows it into the halo band (>= 0) or SHRINKS it below the agent's own
+  // disc (< 0, down to nothing at -1 — pure halo). The shrink is gated on the halo
+  // actually being drawn, mirroring renderGlow + the CPU glowBodyScale: with no
+  // glow area to reveal it would only make agents invisible.
   var coreR: f32 = radPx;
-  if (rv.glowOn != 0u) { coreR = radPx + clamp(rv.glowCore, 0.0, 1.0) * rv.glowSize; }
+  if (rv.glowOn != 0u) {
+    let cc: f32 = clamp(rv.glowCore, -1.0, 1.0);
+    if (cc >= 0.0) { coreR = radPx + cc * rv.glowSize; }
+    else if (rv.glowSize > 0.0 && rv.glowIntensity > 0.0) { coreR = radPx * (1.0 + cc); }
+  }
   let outerR: f32 = max(0.001, radPx + rv.glowSize);
+  // Core = -1 dissolves the body entirely: cull the core quad rather than let the
+  // 0.001 pad floor below rasterise a sub-pixel speck.
+  if (!halo && coreR <= 0.0) {
+    out.pos = vec4<f32>(2.0, 2.0, 2.0, 1.0);
+    out.uv = vec2<f32>(0.0, 0.0);
+    out.col = vec4<f32>(0.0, 0.0, 0.0, 0.0);
+    out.radPx = 0.0;
+    out.coreFrac = 0.0;
+    return out;
+  }
   var half: f32 = max(0.001, coreR);
   if (halo) { half = outerR; }
   // ANTI-ALIASING PAD. The FS coverage ramp straddles d == 1 (half a pixel in,
@@ -2546,7 +2565,11 @@ function encodeGlowHdrPass(rt: AgentRenderSurface, enc: GPUCommandEncoder, w: nu
 /** Write the frame-constant bloom parameters (16 bytes, mirrors `BloomParams` in
  *  BLOOM3D_WGSL). ONE buffer serves the whole chain — every level's half-pixel step
  *  is derived in-shader from textureDimensions, so only the sub-level `offset`, the
- *  Falloff `spread` and the composite's `intensity`/`core` cross the bus. */
+ *  Falloff `spread` and the composite's `intensity`/`core` cross the bus.
+ *  `core` is CLAMPED to [0,1] by the caller: the shared 2D slider reaches -1, where
+ *  it dissolves the solid DISC — per-agent geometry a screen-space bloom mask has no
+ *  analogue for, so a negative behaves as 0 (bodies bloom fully), exactly as gl3d's
+ *  uCore does. The panel's slider stops at 0 in 3D so no half of it is inert. */
 function writeBloom3DParams(rt: AgentRenderSurface, offset: number, spread: number, intensity: number, core: number): void {
   if (!rt.bloom3dParamBuf) return;
   const ab = new ArrayBuffer(BLOOM3D_PARAMS_BYTES);
