@@ -154,14 +154,30 @@ function sanitizeAgentMetaballs(raw: unknown): Metaballs3D {
  *  bond lines — glows too. 3D is not supported yet (the UI is `!is3D`-gated; see
  *  docs/HANDOFF_AGENT_GLOW_3D.md). Persisted as a simulator setting.
  *
- *  `core` ∈ [0,1] is the SOLID radius as a fraction of the glow BAND: the opaque
- *  body runs to `radPx + core*size` and the halo falloff spans from there to
- *  `radPx + size`. 0 (the default) ⇒ the core is exactly the agent disc — solid
- *  body, halo outside it. The core is drawn OPAQUE (source-over) on both paths,
- *  so it can never be added out by an overlapping neighbour's halo nor faded out
- *  by a low intensity: cluster halos accumulate while every agent, isolated or
- *  not, keeps a crisp true-colour centre. That trade — legible clusters OR
- *  visible lone agents, never both — is the whole reason this knob exists. */
+ *  `core` ∈ [-1,1] is the SOLID radius, in TWO halves that meet continuously at 0
+ *  (the default), where the core is exactly the agent disc — solid body, halo
+ *  outside it:
+ *    core ≥ 0 → `coreR = radPx + core*size`   — the solid body GROWS into the
+ *               halo band; at 1 the whole glow radius is solid.
+ *    core < 0 → `coreR = radPx * (1 + core)`  — the solid body SHRINKS below the
+ *               agent's own disc, revealing the halo underneath it; at -1 it
+ *               vanishes entirely and the agent is pure glow.
+ *  Extending the range DOWNWARD (rather than remapping it) is what keeps every
+ *  persisted value's meaning exactly as it was.
+ *
+ *  The core is drawn OPAQUE (source-over) on both paths, so it can never be added
+ *  out by an overlapping neighbour's halo nor faded out by a low intensity:
+ *  cluster halos accumulate while every agent, isolated or not, keeps a crisp
+ *  true-colour centre. That trade — legible clusters OR visible lone agents,
+ *  never both — is the whole reason this knob exists; the sub-zero half is the
+ *  opposite end of it (give up the crisp centre for a pure light source).
+ *
+ *  THE SHRINK IS GATED ON THE HALO ACTUALLY BEING DRAWN (`on && size > 0 &&
+ *  intensity > 0`, the same predicate the GPU's renderGlow uses): "reveal the glow
+ *  area" means nothing when there is no glow area, and without the gate a Size of 0
+ *  at Core -1 would simply make every agent invisible. It applies to plain DISCS
+ *  only — a sprite agent's body is its own layer and the metaball blob is a fused
+ *  field, so neither is shrunk (documented in HelpView). */
 interface AgentGlow { on: boolean; size: number; intensity: number; steepness: number; core: number }
 const DEFAULT_AGENT_GLOW: AgentGlow = { on: false, size: 8, intensity: 0.6, steepness: 2, core: 0 };
 function sanitizeAgentGlow(raw: unknown): AgentGlow {
@@ -175,8 +191,28 @@ function sanitizeAgentGlow(raw: unknown): AgentGlow {
     size: num(r.size, d.size, 0, 64),
     intensity: num(r.intensity, d.intensity, 0, 4),
     steepness: num(r.steepness, d.steepness, 0.1, 8),
-    core: num(r.core, d.core, 0, 1),
+    // -1 = no solid body at all (halo only); 0 = the agent disc; 1 = solid to the
+    // glow edge. Widened DOWNWARD, so a persisted 0..1 keeps its exact meaning.
+    core: num(r.core, d.core, -1, 1),
   };
+}
+
+/** The SOLID (opaque) body radius for an agent drawn at `radPx` with a `size`-px
+ *  halo band. THE ONE 2D mapping — mirrored by the WGSL VS (agentRenderWGSL's
+ *  `coreR`), so the direct-render / composite pipeline and the CPU overlay cannot
+ *  disagree about where the solid part ends. See AgentGlow above for the two
+ *  halves; `core >= 0` keeps the historical expression verbatim. */
+function glowCoreRadius(radPx: number, size: number, core: number): number {
+  const c = Math.max(-1, Math.min(1, core));
+  return c >= 0 ? radPx + c * size : radPx * (1 + c);
+}
+
+/** The factor the SOLID body radius is scaled by on the CPU overlay's own disc
+ *  pass — 1 unless Core is negative AND the halo is actually drawn (see the gate
+ *  in AgentGlow). Sprites and the metaball blob pass 1 (they are not discs). */
+function glowBodyScale(glow: AgentGlow): number {
+  if (!glow.on || glow.core >= 0 || glow.size <= 0 || glow.intensity <= 0) return 1;
+  return Math.max(0, 1 + Math.max(-1, glow.core));
 }
 
 // --- CPU-overlay glow: log-encoded accumulation + ONE tonemap ---------------
@@ -210,10 +246,17 @@ const GLOW_GRADIENT_STOPS = 32;
 /** The solid-core radius as a FRACTION of the full glow radius R, for an agent
  *  whose halo band is `size` px wide (so its disc radius is R − size). Mirrors
  *  the WGSL VS's `coreR / outerR`. Clamped below 1 so the falloff band never
- *  collapses to nothing. */
+ *  collapses to nothing; a NEGATIVE core simply pushes the fraction below the
+ *  body's own (down to 0 at -1, where the profile spans the whole radius from the
+ *  centre — continuous, no special case in the sprite painter).
+ *  ⚠ The `core >= 0` arm keeps the ORIGINAL expression rather than routing through
+ *  glowCoreRadius: the two are algebraically equal but not bit-equal, and the
+ *  gradient stops are baked from this number. */
 function glowCoreFrac(R: number, size: number, core: number): number {
   if (R <= 0 || size <= 0) return 0;
-  return Math.max(0, Math.min(0.98, 1 - (size * (1 - core)) / R));
+  const c = Math.max(-1, Math.min(1, core));
+  if (c >= 0) return Math.max(0, Math.min(0.98, 1 - (size * (1 - c)) / R));
+  return Math.max(0, Math.min(0.98, glowCoreRadius(R - size, size, c) / R));
 }
 
 /** Paint the ENCODED halo profile into a 2R×2R sprite. The profile itself is the
@@ -342,7 +385,9 @@ function ensureGlowFilter(encScale: number): string | null {
  *  opaque core disc of radius `radPx + core*size`, which extends the solid body
  *  out into the halo band. At Core = 0 the second pass is skipped entirely and
  *  the agent's own disc IS the core, so sprites and the metaball blob are
- *  untouched by default. `tiles` carries the infinity-mode tile origins.
+ *  untouched by default. A NEGATIVE Core needs no sub-pass here either — it
+ *  SHRINKS the body, which the caller's own disc pass does via glowBodyScale.
+ *  `tiles` carries the infinity-mode tile origins.
  *  Per-agent alpha 0 is skipped (the GPU VS culls those quads too). */
 function drawAgentGlow(
   ctx: CanvasRenderingContext2D,
@@ -357,7 +402,7 @@ function drawAgentGlow(
   const { x: ax, y: ay, radius: ar, alive: aal, colors: acol, highWater: hw } = snap;
   if (hw === 0) return;
   const unit = glow.intensity;
-  const core = Math.max(0, Math.min(1, glow.core));
+  const core = Math.max(-1, Math.min(1, glow.core));
   const haloOn = glow.size > 0;
   ctx.save();
   if (haloOn) {
@@ -3764,10 +3809,14 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
         // keeps its solid cores. One world tile.
         drawAgentGlow(ctx, snap, scale, [[0, 0] as const], outW, outH, agentGlowRef.current);
         const outlines = agentOutlinesRef.current;
+        // Same negative-Core body shrink the display overlay applies, so a
+        // simulation-scope capture matches what the user sees (1 for Core >= 0).
+        const bodyScale = glowBodyScale(agentGlowRef.current);
         for (let i = 0; i < hw; i++) {
           if (!aal[i]) continue;
           const c = i * 4;
-          const cx = ax[i]! * scale, cy = ay[i]! * scale, rad = Math.max(1.2, ar[i]! * scale);
+          const cx = ax[i]! * scale, cy = ay[i]! * scale, rad = Math.max(1.2, ar[i]! * scale) * bodyScale;
+          if (rad <= 0) continue;
           ctx.beginPath();
           ctx.arc(cx, cy, rad, 0, Math.PI * 2);
           ctx.fillStyle = `rgba(${acol[c]},${acol[c + 1]},${acol[c + 2]},${(acol[c + 3] ?? 255) / 255})`;
@@ -5799,6 +5848,12 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
         } else { gTiles.push([ox, oy] as const); }
         drawAgentGlow(ctx, snap, scale, gTiles, parentW, parentH, glowCfg);
       }
+      // A NEGATIVE Core shrinks the SOLID body below the agent's own disc so the
+      // halo shows through it (at -1 the body is gone and only the glow remains).
+      // Applied to the plain-disc draws below ONLY — a sprite's body is its own
+      // layer and the goo blob is a fused field, so neither is scaled. 1 for every
+      // Core >= 0, which is what keeps the historical paths byte-identical.
+      const bodyScale = glowBodyScale(glowCfg);
       // Sprites (optional exhibition layer): when the active agent OM pass wrote a
       // per-agent sprite slot, draw the sprite's current frame instead of a circle.
       // spriteIds is length-0 for non-sprite models (then everyone draws a circle).
@@ -5885,14 +5940,18 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
           }
           if (pass === 'sprites') continue;  // circles already drawn in the goo pass
           const tc = pass === 'goo' ? gooCtx! : ctx;
+          // The goo field keeps the true radius (the blob is not a disc); the
+          // visible disc carries the negative-Core shrink.
+          const bodyRad = pass === 'goo' ? rad : rad * bodyScale;
+          if (bodyRad <= 0) continue;   // Core = -1 → no solid body at all
           tc.beginPath();
-          tc.arc(cx, cy, rad, 0, Math.PI * 2);
+          tc.arc(cx, cy, bodyRad, 0, Math.PI * 2);
           tc.fillStyle = `rgba(${acol[c]},${acol[c + 1]},${acol[c + 2]},${acol[c + 3]! / 255})`;
           tc.fill();
-          if (pass !== 'goo' && rad >= 2 && agentOutlinesRef.current) {  // no outline inside the goo field
+          if (pass !== 'goo' && bodyRad >= 2 && agentOutlinesRef.current) {  // no outline inside the goo field
             // Constant contour width (was rad * 0.14, which grew with the agent):
             // capped by a fraction of the radius so tiny discs aren't all outline.
-            tc.lineWidth = Math.min(1.5, rad * 0.25);
+            tc.lineWidth = Math.min(1.5, bodyRad * 0.25);
             tc.strokeStyle = 'rgba(0,0,0,0.40)';
             tc.stroke();
           }
@@ -5939,9 +5998,13 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       // outline-stroke threshold so splat groups never stroke squares.
       const SPLAT_MAX_RAD = 2;
       const stampBatchedTile = (tileOx: number, tileOy: number, groups: Map<number, number[]>) => {
+        if (bodyScale <= 0) return;   // Core = -1 → no solid bodies to batch
         for (const [key, idxs] of groups) {
           const packed = Math.floor(key / 100000);
-          const groupRad = (key % 100000) / 10;
+          // The grouping key stays the TRUE radius (a uniform scale composes with
+          // it — every member of a group shrinks by the same factor), so only the
+          // drawn radii carry bodyScale.
+          const groupRad = (key % 100000) / 10 * bodyScale;
           const splat = groupRad < SPLAT_MAX_RAD;
           ctx.beginPath();
           let any = false;
@@ -5949,7 +6012,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
             const i = idxs[k]!;
             const cx = tileOx + ax[i]! * scale;
             const cy = tileOy + ay[i]! * scale;
-            const rad = Math.max(1.2, ar[i]! * scale);
+            const rad = Math.max(1.2, ar[i]! * scale) * bodyScale;
             if (cx + rad < 0 || cx - rad > parentW || cy + rad < 0 || cy - rad > parentH) continue;
             if (splat) {
               ctx.rect(cx - rad, cy - rad, rad * 2, rad * 2);
@@ -15317,9 +15380,13 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
                     <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.66rem' }}
                       title={is3D
                         ? "Core protection — how much of each agent's OWN body is held back from the bloom. 0 (the default) lets the bodies bloom too, which is what makes a sphere read as emissive; 1 leaves every body pixel exactly as it renders unlit by the glow, so only the surrounding spill is added. Raise it when bright clusters start losing their shape."
-                        : "Core size — how far the SOLID, opaque agent colour reaches into the halo. 0 = the core is the agent's own disc (halo entirely outside it); 1 = the whole glow radius is solid. The core is never added out by an overlapping halo nor faded out by a low intensity, so raise it when isolated agents need to stay visible while clusters glow."}>
+                        : "Core size — how far the SOLID, opaque agent colour reaches. 0 = the core is the agent's own disc (halo entirely outside it); 1 = the whole glow radius is solid; below 0 the solid body SHRINKS inside the disc, and at -1 it is gone entirely so the agent is pure glow. The core is never added out by an overlapping halo nor faded out by a low intensity, so raise it when isolated agents need to stay visible while clusters glow — and drop it below 0 for a light-source look. Sprite agents and fused metaball blobs keep their full body."}>
                       <span style={{ fontSize: '0.6rem', color: 'var(--color-text-muted)', width: 48, flex: '0 0 auto' }}>Core</span>
-                      <input type="range" min={0} max={1} step={0.05} value={agentGlow.core} style={{ flex: 1, minWidth: 0 }}
+                      {/* 2D spans -1..1 (below 0 dissolves the solid body); in 3D
+                          Core is the bloom's body MASK, which has no meaningful
+                          negative — so the slider stops at 0 there rather than
+                          offering a half that would do nothing. */}
+                      <input type="range" min={is3D ? 0 : -1} max={1} step={0.05} value={agentGlow.core} style={{ flex: 1, minWidth: 0 }}
                         onChange={e => setAgentGlow(g => ({ ...g, core: Number(e.target.value) }))} />
                     </label>
                     <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.66rem' }}

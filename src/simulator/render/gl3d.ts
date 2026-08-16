@@ -349,7 +349,12 @@ export const DEFAULT_METABALLS3D: Readonly<Metaballs3D> = Object.freeze({
  *   - `intensity` the bloom gain before the shared Reinhard tonemap;
  *   - `steepness` (Falloff) the wide-vs-tight mix of the upsample chain;
  *   - `core`     how much of the agent's OWN opaque pixels are held back from
- *                the bloom (1 = body left bit-exact, halo only outside it). */
+ *                the bloom (1 = body left bit-exact, halo only outside it).
+ *  ⚠ The 2D Core slider spans -1..1 (below 0 it DISSOLVES the solid disc, which is
+ *  a per-agent geometry idea a screen-space bloom mask cannot express), so the
+ *  shared setting is CLAMPED to [0,1] here and negatives behave exactly as 0 —
+ *  bodies bloom fully. The panel's slider stops at 0 in 3D so no half of it is
+ *  silently inert. */
 export interface AgentGlow3D { on: boolean; size: number; intensity: number; steepness: number; core: number }
 export const DEFAULT_AGENT_GLOW3D: Readonly<AgentGlow3D> = Object.freeze({
   on: false, size: 8, intensity: 0.6, steepness: 2, core: 0,
