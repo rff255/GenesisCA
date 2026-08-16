@@ -536,15 +536,44 @@ function ensureGooFilter(): NonNullable<typeof gooFilterEls> {
  *  Small on purpose — this is a hand-off buffer, not a recording buffer. */
 const WEBM_STREAM_PENDING_MAX = 8;
 
+/** The opaque backdrop every 2D capture target is filled with BEFORE the frame
+ *  content is drawn onto it (see CAPTURE_BACKDROP_WHY). Black, deliberately: it
+ *  is exactly the composite `forceFrameOpaque` always claimed to preserve, so a
+ *  fully-transparent region (the letterbox margins) still records as pure black
+ *  and an opaque region is untouched — only the PARTIAL-alpha pixels change, and
+ *  those are the ones that were wrong. Both shipped themes' canvas backdrop is
+ *  near-black (#08090b / #1d1d1d), so it also matches what the user sees. */
+const CAPTURE_BACKDROP = '#000';
+
+/** ⚠ WHY A 2D CAPTURE TARGET MUST BE FILLED OPAQUE BEFORE THE CONTENT IS DRAWN.
+ *
+ *  `getImageData` returns UN-PREMULTIPLIED RGB. A canvas cleared transparent and
+ *  then painted with partial-alpha content therefore reads back as the content's
+ *  FULL-STRENGTH hue paired with a small alpha — and `forceFrameOpaque` (which
+ *  must stay: it is what kills GIF frame-disposal trails) then displays that
+ *  full-strength hue at full opacity. For opaque discs over a transparent clear
+ *  that was harmless, which is why the original "the RGB already equals the
+ *  straight-alpha composite over black" premise held. The agent GLOW broke it:
+ *  the halo is a whole FIELD of partial-alpha pixels (the CPU overlay encodes
+ *  the tonemapped magnitude in ALPHA; the GPU direct-render canvas is
+ *  `alphaMode: 'premultiplied'`), so a faint halo recorded as a hard-edged,
+ *  fully-saturated blob — measured on Particle Life: mean max-channel 218 with
+ *  21 % of lit pixels clipped, against 69 / 0 % for the same frame composited
+ *  correctly. The fix is to do the composite in CANVAS space, where the browser
+ *  premultiplies for us, so every captured pixel is already opaque and correct.
+ *
+ *  NOT needed for the 3D path: `readPixels` on a `premultipliedAlpha: true`
+ *  drawing buffer returns bytes that are ALREADY premultiplied, i.e. already the
+ *  composite over black — re-applying alpha there would double-darken. */
 /** Force every pixel of a captured recording frame to full opacity (alpha=255),
- *  in place. Both the 2D display canvas (agents-only, cleared to transparent
- *  black) and the 3D WebGL buffer (transparent GL clear when no background is
- *  set) leave alpha=0 where there is no content; the RGB there already equals
- *  the straight-alpha composite over black (both use SRC_ALPHA blending / a
- *  0,0,0,0 clear), so opacifying keeps the visible look while removing the
- *  transparency that made GIF frame-disposal accumulate stale imagery (moving
- *  agents / orbiting the 3D camera left permanent trails). A set environment
- *  background is already baked opaque, so this is a no-op there. */
+ *  in place. The 3D WebGL buffer (transparent GL clear when no background is set)
+ *  leaves alpha=0 where there is no content and its RGB is premultiplied, so
+ *  opacifying keeps the visible look while removing the transparency that made
+ *  GIF frame-disposal accumulate stale imagery (moving agents / orbiting the 3D
+ *  camera left permanent trails). On the 2D paths it is now a belt-and-braces
+ *  no-op — CAPTURE_BACKDROP already made every pixel opaque — and it MUST stay
+ *  that way: it is the one guarantee the GIF encoder's delta/disposal logic
+ *  rests on. */
 function forceFrameOpaque(data: Uint8ClampedArray): void {
   for (let i = 3; i < data.length; i += 4) data[i] = 255;
 }
@@ -3627,7 +3656,20 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
    *  NB agent SPRITES / METABALLS are drawn as plain circles here — use the "current
    *  view" scope for a WYSIWYG capture of those. Glow IS reproduced (it shares the
    *  display overlay's drawAgentGlow). Reuses `target` if given. */
-  const renderSimulationFrame = useCallback((maxSize: number, target?: HTMLCanvasElement, snapWidth = false, noUpscale = false): HTMLCanvasElement | null => {
+  const renderSimulationFrame = useCallback((
+    maxSize: number,
+    target?: HTMLCanvasElement,
+    snapWidth = false,
+    noUpscale = false,
+    /** RECORDING only: start from an opaque CAPTURE_BACKDROP instead of a
+     *  transparent clear, so partial-alpha content (the glow halo, antialiased
+     *  disc edges) is composited by the browser rather than read back
+     *  un-premultiplied and then opacified — see CAPTURE_BACKDROP_WHY.
+     *  SCREENSHOTS pass false and keep their alpha: a PNG stores
+     *  un-premultiplied alpha and every viewer composites it correctly, so a
+     *  transparent-background screenshot is right as it is. */
+    opaqueBackdrop = false,
+  ): HTMLCanvasElement | null => {
     if (is3dRef.current) return null;
     const w = gridWidth.current, h = gridHeight.current;
     if (!w || !h) return null;
@@ -3652,7 +3694,8 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
     const ctx = off.getContext('2d');
     if (!ctx) return null;
     ctx.imageSmoothingEnabled = false;
-    ctx.clearRect(0, 0, outW, outH);
+    if (opaqueBackdrop) { ctx.fillStyle = CAPTURE_BACKDROP; ctx.fillRect(0, 0, outW, outH); }
+    else ctx.clearRect(0, 0, outW, outH);
     const showGrid = gridCellsOnRef.current && (!isAgentModelRef.current || showCaGridRef.current);
     const colors = colorsRef.current;
     if (showGrid && colors && colors.length >= w * h * 4) {
@@ -6787,7 +6830,10 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
             // (colours buffer for the grid + the agent snapshot), reusing a persistent
             // offscreen (RECORD_MAX-bounded). getImageData on a never-displayed canvas
             // is safe (no willReadFrequently de-opt).
-            const off = renderSimulationFrame(capMax, simCaptureRef.current ?? undefined, true, capRes === 'native');
+            // Opaque backdrop FIRST (CAPTURE_BACKDROP_WHY): the glow halo is
+            // partial-alpha, and getImageData would otherwise hand back its
+            // full-strength hue for forceFrameOpaque to display at full opacity.
+            const off = renderSimulationFrame(capMax, simCaptureRef.current ?? undefined, true, capRes === 'native', true);
             if (off) {
               simCaptureRef.current = off;
               frame = off.getContext('2d')!.getImageData(0, 0, off.width, off.height);
@@ -6817,7 +6863,13 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
             const rctx = rc.getContext('2d', { willReadFrequently: true });
             if (rctx) {
               rctx.imageSmoothingEnabled = crop.outW !== dc.width || crop.outH !== dc.height;
-              rctx.clearRect(0, 0, crop.outW, crop.outH);
+              // Opaque backdrop FIRST, then the display source-over on top — the
+              // browser does the premultiplied composite, so the readback below is
+              // already correct (CAPTURE_BACKDROP_WHY). This REPLACES a clearRect:
+              // a fully transparent pixel still reads back as pure black, exactly
+              // as forceFrameOpaque produced, so only partial-alpha pixels move.
+              rctx.fillStyle = CAPTURE_BACKDROP;
+              rctx.fillRect(0, 0, crop.outW, crop.outH);
               rctx.drawImage(dc, 0, 0, dc.width, dc.height, 0, 0, crop.outW, crop.outH);
               // Opt-in: replay the cursor / highlight overlay layers the compositor
               // draws on top of this canvas (see compositeCaptureOverlays). Off by
