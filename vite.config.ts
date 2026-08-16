@@ -222,6 +222,17 @@ export default defineConfig(({ command, mode }) => {
             find: /^\.\/createSimWorker$/,
             replacement: resolve(__dirname, 'src/simulator/createSimWorker.inline.ts'),
           },
+          // Keep geotiff.js OUT of the viewer entirely. viteSingleFile sets
+          // `inlineDynamicImports`, so the lazy `import('geotiff')` would NOT be
+          // a separate chunk here — it would be folded into the one HTML file and
+          // every exported presentation would carry the whole library (geotiff +
+          // pako + lerc + zstddec + float16 + …). The stub also flips
+          // GEOTIFF_SUPPORTED to false, so the viewer offers no control it cannot
+          // honour. Anchor BOTH ends of the regex (see the note above).
+          {
+            find: /^\.\/geotiffLoader$/,
+            replacement: resolve(__dirname, 'src/simulator/geotiffLoader.viewer.ts'),
+          },
         ],
       },
       build: {

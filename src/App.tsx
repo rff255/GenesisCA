@@ -236,6 +236,14 @@ function AppInner() {
       window.dispatchEvent(new CustomEvent('genesis-open-csv-file', { detail: { file } }));
       return;
     }
+    // .tif / .tiff → the GeoTIFF dialog. Checked BEFORE the image branch below:
+    // a TIFF is an image by MIME, but a georeferenced raster belongs in the band
+    // → attribute importer, not the colour-mapping one.
+    if (['tif', 'tiff'].includes(ext)) {
+      setMode('simulator');
+      window.dispatchEvent(new CustomEvent('genesis-open-geotiff-file', { detail: { file } }));
+      return;
+    }
     if (file.type.startsWith('image/') || ['png', 'jpg', 'jpeg', 'bmp', 'webp'].includes(ext)) {
       setMode('simulator');
       window.dispatchEvent(new CustomEvent('genesis-open-image-file', { detail: { file } }));
@@ -441,7 +449,7 @@ function AppInner() {
           background: 'rgba(0, 0, 0, 0.45)', border: '3px dashed var(--color-accent)',
           color: 'var(--color-text-primary)', fontSize: '1.05rem', fontWeight: 600,
         }}>
-          Drop to open — .gcaproj / .gcastate / .gcapreset / .csv / .asc / image
+          Drop to open — .gcaproj / .gcastate / .gcapreset / .csv / .asc / .tif / image
         </div>
       )}
       <BusyOverlay />

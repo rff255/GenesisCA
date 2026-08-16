@@ -43,6 +43,8 @@ import { glowEncodeScale, glowTransferTable } from './glowTone';
 import { ImageMappingDialog, type ImageMappingConfig } from './ImageMappingDialog';
 import { CsvImportDialog, type CsvImportResult } from './CsvImportDialog';
 import { CsvExportDialog, type CsvExportResult } from './CsvExportDialog';
+import { GeoTiffImportDialog, type GeoTiffImportResult } from './GeoTiffImportDialog';
+import { GEOTIFF_SUPPORTED } from './geotiffLoader';
 import type { CsvAgentRow } from './csvImport';
 import {
   encodeFramesToWebM, isWebMSupported, snapRecordWidth, clampRecordFps,
@@ -3167,6 +3169,11 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
   //  A `.asc` session can carry SEVERAL co-registered layers, so this holds a
   //  list (a CSV / char board is the one-entry case).
   const pendingGridValuesImport = useRef<{ width: number; height: number; layer: number; layers: Array<{ attrId: string; values: Float64Array }> } | null>(null);
+  // "Import GeoTIFF" dialog — the loaded file's raw bytes (null = closed). Its
+  // result is the SAME grid payload the CSV / `.asc` path produces, so it rides
+  // `applyGridImport` and `pendingGridValuesImport` unchanged.
+  const [geoTiffImport, setGeoTiffImport] = useState<{ buffer: ArrayBuffer; name: string } | null>(null);
+  const geoTiffInputRef = useRef<HTMLInputElement>(null);
   // "Export CSV" dialog — the decoded snapshot the dialog serialises from
   // (null = closed). Filled by ONE `getState` round-trip, so both flavours and
   // every attribute / layer choice are covered without re-asking the worker.
@@ -13615,6 +13622,41 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
     e.target.value = '';
     openCsvFile(file);
   };
+  /** Apply ONE grid-import payload — the shared tail of the CSV / `.asc` and the
+   *  GeoTIFF importers (they differ only in how the value block was produced, so
+   *  there is exactly one path to `importGridValues`). */
+  const applyGridImport = (
+    r: {
+      width: number; height: number; layer: number; resize: boolean;
+      layers: Array<{ attrId: string; values: Float64Array }>;
+      georef?: GeoReference;
+    },
+    busyLabel: string,
+  ) => {
+    const w = workerRef.current;
+    if (!w) return;
+    // A georeferenced raster carries its own origin + cell size — record it on
+    // the MODEL so the matching export writes the board back in the same place.
+    // Presentation + I/O only: no compiler and no worker reads it.
+    if (r.georef) updateProperties({ georef: r.georef });
+    if (r.resize) {
+      pendingGridValuesImport.current = { width: r.width, height: r.height, layer: r.layer, layers: r.layers };
+      initWorkerWithDimensions(
+        r.width, r.height,
+        is3dRef.current ? Math.max(1, gridDepth.current || simDepth) : undefined,
+        busyLabel,
+      );
+    } else {
+      beginWorkerBusy(busyLabel);
+      for (const l of r.layers) {
+        w.postMessage(
+          { type: 'importGridValues', attrId: l.attrId, width: r.width, height: r.height, layer: r.layer, values: l.values, activeViewer: activeViewerRef.current },
+          { transfer: [l.values.buffer] },
+        );
+      }
+    }
+  };
+
   const applyCsvImport = (r: CsvImportResult) => {
     setCsvImport(null);
     const w = workerRef.current;
@@ -13631,26 +13673,38 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       });
       return;
     }
-    // An `.asc` carries its own georeference — record it on the MODEL so the
-    // matching export writes the board back in the same place. Presentation +
-    // I/O only: no compiler and no worker reads it.
-    if (r.georef) updateProperties({ georef: r.georef });
-    if (r.resize) {
-      pendingGridValuesImport.current = { width: r.width, height: r.height, layer: r.layer, layers: r.layers };
-      initWorkerWithDimensions(
-        r.width, r.height,
-        is3dRef.current ? Math.max(1, gridDepth.current || simDepth) : undefined,
-        'Importing CSV…',
-      );
-    } else {
-      beginWorkerBusy('Importing CSV…');
-      for (const l of r.layers) {
-        w.postMessage(
-          { type: 'importGridValues', attrId: l.attrId, width: r.width, height: r.height, layer: r.layer, values: l.values, activeViewer: activeViewerRef.current },
-          { transfer: [l.values.buffer] },
-        );
+    applyGridImport(r, 'Importing CSV…');
+  };
+
+  // --- GeoTIFF import ------------------------------------------------------
+  // Tier 2 of docs/INVESTIGATION_GEOSPATIAL_IO.md: the format LANDFIRE / WorldPop
+  // / NLCD / Copernicus actually ship. Everything downstream of the dialog is the
+  // `.asc` path's — same layers payload, same `importGridValues`, same georef
+  // record — so this adds ZERO compiler / worker surface.
+  const openGeoTiffFile = (file: File) => {
+    void (async () => {
+      const busy = beginBusy(`Reading "${file.name}"…`);
+      try {
+        const buffer = await file.arrayBuffer();
+        setGeoTiffImport({ buffer, name: file.name });
+      } catch (err) {
+        setCompileError(`GeoTIFF import failed: ${err instanceof Error ? err.message : String(err)}`);
+      } finally {
+        busy.end();
       }
-    }
+    })();
+  };
+  const openGeoTiffFileRef = useRef(openGeoTiffFile);
+  openGeoTiffFileRef.current = openGeoTiffFile;
+  const handleGeoTiffInput = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    e.target.value = '';
+    openGeoTiffFile(file);
+  };
+  const applyGeoTiffImport = (r: GeoTiffImportResult) => {
+    setGeoTiffImport(null);
+    applyGridImport(r, 'Importing GeoTIFF…');
   };
 
   // --- CSV export ----------------------------------------------------------
@@ -13826,15 +13880,21 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       const file = (e as CustomEvent).detail?.file as File | undefined;
       if (file) openCsvFileRef.current(file);
     };
+    const onGeoTiffFile = (e: Event) => {
+      const file = (e as CustomEvent).detail?.file as File | undefined;
+      if (file) openGeoTiffFileRef.current(file);
+    };
     window.addEventListener('genesis-load-state-file', onStateFile);
     window.addEventListener('genesis-open-image-file', onImageFile);
     window.addEventListener('genesis-import-preset-file', onPresetFile);
     window.addEventListener('genesis-open-csv-file', onCsvFile);
+    window.addEventListener('genesis-open-geotiff-file', onGeoTiffFile);
     return () => {
       window.removeEventListener('genesis-load-state-file', onStateFile);
       window.removeEventListener('genesis-open-image-file', onImageFile);
       window.removeEventListener('genesis-import-preset-file', onPresetFile);
       window.removeEventListener('genesis-open-csv-file', onCsvFile);
+      window.removeEventListener('genesis-open-geotiff-file', onGeoTiffFile);
     };
   }, []);
 
@@ -15014,6 +15074,15 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
                   onClick={() => { setOverlayPopup(null); csvInputRef.current?.click(); }}
                   title="Import a CSV table — agents (a row per agent) or the board (the table IS the grid) — or an Esri ASCII grid (.asc) from any GIS"
                 >Import CSV / ASC{'…'}</button>
+                {/* Hidden in the standalone viewer, whose build drops geotiff.js
+                    (see geotiffLoader.ts) — an enabled control must do something. */}
+                {GEOTIFF_SUPPORTED && (
+                  <button
+                    className={styles.shotMenuItem}
+                    onClick={() => { setOverlayPopup(null); geoTiffInputRef.current?.click(); }}
+                    title="Import a GeoTIFF raster (LANDFIRE / WorldPop / NLCD / Copernicus) — one band per cell attribute, resampled to the grid"
+                  >Import GeoTIFF{'…'}</button>
+                )}
               </div>
             )}
           </div>
@@ -16398,6 +16467,23 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
           torus={model.properties.boundaryTreatment === 'torus'}
           onApply={applyCsvImport}
           onCancel={() => setCsvImport(null)}
+        />
+      )}
+      {/* The GeoTIFF picker + dialog — same placement rule as the CSV pair
+          (outside every panel, so it stays mounted whichever panels are open). */}
+      {GEOTIFF_SUPPORTED && (
+        <input ref={geoTiffInputRef} type="file" accept=".tif,.tiff,image/tiff" style={{ display: 'none' }} onChange={handleGeoTiffInput} />
+      )}
+      {geoTiffImport && (
+        <GeoTiffImportDialog
+          buffer={geoTiffImport.buffer}
+          fileName={geoTiffImport.name}
+          cellAttributes={model.attributes.filter(a => !a.isModelAttribute)}
+          is3d={is3D}
+          world={{ w: gridWidth.current || simWidth, h: gridHeight.current || simHeight, d: gridDepth.current || simDepth }}
+          modelGeoref={model.properties.georef}
+          onApply={applyGeoTiffImport}
+          onCancel={() => setGeoTiffImport(null)}
         />
       )}
       {csvExport && (
