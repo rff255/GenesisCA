@@ -43,6 +43,7 @@ const GROUPS: { title: string; rows: Row[]; wide?: boolean }[] = [
       ['Ctrl + drag', 'Resize brush (Push / Pull: ↔ radius, ↕ intensity)'],
       ['Shift + click', 'Inspect cell'],
       ['Right-click drag', 'Pan the grid'],
+      ['Double right-click', 'Fit view (3D: reset the camera)'],
     ],
   },
   {

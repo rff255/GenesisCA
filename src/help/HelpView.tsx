@@ -1566,7 +1566,10 @@ export function HelpView() {
             (transparent cells are skipped). <strong>Middle-drag</strong> (or
             <strong>Alt+left-drag</strong>, or <strong>right-drag</strong>) to orbit/pan,
             <strong>scroll</strong> to zoom, and hold <strong>Shift</strong> while orbiting to
-            pan &mdash; Blender-style, with Z up. The <strong>corner gizmo</strong> behaves like
+            pan &mdash; Blender-style, with Z up. <strong>Double right-click</strong> restores the
+            default camera (the same thing the 3D View panel&rsquo;s <strong>Reset view</strong> button
+            does); a right-<em>drag</em> still just pans.
+            The <strong>corner gizmo</strong> behaves like
             Blender's: it lights up when you hover it (the ball under the cursor brightens and
             grows), <strong>clicking a ball</strong> snaps to that view &mdash; and clicking the
             ball of the axis you are <em>already</em> looking along flips to the opposite view
@@ -3578,6 +3581,10 @@ export function HelpView() {
           <ul className={styles.list}>
             <li><strong>Left-click drag</strong> &mdash; Paint with the brush tool.</li>
             <li><strong>Right-click drag</strong> &mdash; Pan the grid view.</li>
+            <li><strong>Double right-click</strong> &mdash; Fit the view (the same thing the
+              &#x2922; zoom button does; in 3D it restores the default orbit camera, like the
+              3D View panel&rsquo;s <strong>Reset view</strong>). Two quick right-clicks in the
+              same spot &mdash; a right-click <em>drag</em> still just pans.</li>
             <li><strong>Middle-click</strong> &mdash; Toggle autoscroll: the cursor becomes an anchor and the
               view continuously pans toward wherever you move the cursor, with speed proportional to the
               distance from the anchor. Click again (any button) or press <kbd className={styles.kbd}>Esc</kbd>
