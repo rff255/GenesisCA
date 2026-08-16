@@ -114,6 +114,8 @@ const AGENT_ADD_FUNC_IDX = NUM_IMPORTED_FUNCS + 2;    // = 9
 const AGENT_ATAN2_FUNC_IDX = NUM_IMPORTED_FUNCS + 3;  // = 10 (only when imported)
 import { emitWasm } from '../expression/emitWasm';
 import { buildVarMap, parseExpression, clampVisibleCount } from '../expression/parser';
+import { emitLogicWasm } from '../expression/emitLogic';
+import { buildLogicVarMap, parseLogicExpression } from '../expression/logicParser';
 import { is3dModel } from '../compile';
 import { expandMacros } from '../macroExpand';
 import { collapseReroutes } from '../rerouteCollapse';
@@ -204,7 +206,8 @@ export const AGENT_WASM_SUPPORTED_TYPES: ReadonlySet<string> = new Set<string>([
   // graph runs on WASM instead of clamping the whole model to JS.
   'setAgentSprite',
   // layout-agnostic value/flow utility (operate on the f64 stack / locals)
-  'getConstant', 'arithmeticOperator', 'expression', 'statement', 'logicOperator', 'getRandom',
+  'getConstant', 'arithmeticOperator', 'expression', 'statement', 'logicOperator',
+  'logicalExpression', 'getRandom',
   // flow
   'conditional', 'sequence', 'switch', 'loop',
 ]);
@@ -1018,6 +1021,10 @@ function compileValueNode(ctx: AgentWasmCtx, nodeId: string, portId: string): Va
       result = f64Result(() => emitLogic(ctx, node));
       break;
     }
+    case 'logicalExpression': {
+      result = compileLogicalExpression(ctx, node);
+      break;
+    }
     case 'getRandom': {
       // Vector mode is MULTI-OUTPUT (x / y) and caches both ports itself.
       const rt = (node.data.config?.['randomType'] as string) || '';
@@ -1431,6 +1438,31 @@ function compileExpression(ctx: AgentWasmCtx, node: GraphNode): ValueRef {
     inputs[pid] = resolveValueInput(ctx, node, pid, 0);
   }
   return emitWasm(res.ast, ctx.em, inputs);
+}
+
+/** Logical Expression node — parse the boolean formula + emit the AST via the
+ *  shared emitter. The var pusher is `emitLogic`'s own `pushBool` (an f64 input
+ *  `!= 0`), so a formula and the equivalent chain of Logic nodes agree exactly;
+ *  the i32 0/1 result is converted to f64 1.0/0.0 because agent value refs are
+ *  uniformly f64 (again mirroring `emitLogic`'s tail). */
+function compileLogicalExpression(ctx: AgentWasmCtx, node: GraphNode): ValueRef {
+  const em = ctx.em;
+  const cfg = node.data.config as Record<string, unknown>;
+  const visibleCount = clampVisibleCount(cfg['visibleCount']);
+  const { map, errors } = buildLogicVarMap(cfg as Parameters<typeof buildLogicVarMap>[0], visibleCount);
+  if (errors.length > 0) throw new Error(`logicalExpression: ${errors[0]}`);
+  const res = parseLogicExpression(String(cfg['expression'] ?? ''), map);
+  if ('error' in res) throw new Error(`logicalExpression: ${res.error}`);
+  const bit = emitLogicWasm(res.ast, em, (portId) => {
+    pushValueInputF64(ctx, node, portId, 0);
+    em.f64Const(0);
+    em.op(OP_F64_NE);
+  });
+  em.localGet(bit.localIdx);
+  em.op(OP_F64_CONVERT_I32_S);
+  const out = em.allocLocal(F64);
+  em.localSet(out);
+  return { localIdx: out, valtype: F64 };
 }
 
 /** Get Random — float (uniform / normal / exponential) / integer / orientation /

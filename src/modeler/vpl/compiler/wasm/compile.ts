@@ -60,6 +60,8 @@ import { makeProducesArray } from '../arrayRelay';
 import { subAttrInfo } from '../subAttribute';
 import { emitWasm } from '../expression/emitWasm';
 import { buildVarMap, parseExpression, clampVisibleCount } from '../expression/parser';
+import { emitLogicWasm } from '../expression/emitLogic';
+import { buildLogicVarMap, parseLogicExpression } from '../expression/logicParser';
 
 export interface WasmCompileResult {
   bytes: Uint8Array;
@@ -1496,6 +1498,24 @@ const VALUE_NODE_EMITTERS: Record<string, NodeValueEmitter> = {
         return null;
     }
     return storeResult(ctx.emitter, I32);
+  },
+
+  // -- Logical Expression (LogicalExpressionNode: parse the boolean formula,
+  //    emit the AST). The var pusher reproduces `logicOperator`'s operand
+  //    normalisation above EXACTLY — `pushValueAs(…, I32)` then `!= 0` — so a
+  //    formula and the equivalent chain of Logic nodes agree for any input,
+  //    including a non-0/1 value an 'any' source may deliver. --
+  logicalExpression: ({ node, ctx, inputs }) => {
+    const visibleCount = clampVisibleCount(node.data.config.visibleCount);
+    const { map, errors } = buildLogicVarMap(node.data.config, visibleCount);
+    if (errors.length > 0) { ctx.errors.push(`logicalExpression: ${errors[0]}`); return null; }
+    const res = parseLogicExpression(String(node.data.config.expression ?? ''), map);
+    if ('error' in res) { ctx.errors.push(`logicalExpression: ${res.error}`); return null; }
+    return emitLogicWasm(res.ast, ctx.emitter, (portId) => {
+      pushValueAs(ctx.emitter, inputs[portId] ?? { inline: true, value: 0, valtype: I32 }, I32);
+      ctx.emitter.i32Const(0);
+      ctx.emitter.op(OP_I32_NE_OP);
+    });
   },
 
   // -- Aggregate over neighbors --

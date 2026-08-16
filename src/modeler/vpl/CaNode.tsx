@@ -8,9 +8,12 @@ import { detectMissingConfig, detectCapabilityRequirements, detectWebGPUIncompat
 import { resolveEngines } from '../../model/engineResolution';
 import { INTERPOLATION_METHODS, INTERPOLATION_SHORT_LABELS, DEFAULT_INTERPOLATION_METHOD } from './nodes/interpolationMethods';
 import type { InterpolationMethod } from './nodes/interpolationMethods';
-import { buildVarMap, parseExpression, clampVisibleCount, VISIBLE_PORT_IDS, MAX_VISIBLE } from './compiler/expression/parser';
+import { buildVarMap, parseExpression, clampVisibleCount, VISIBLE_PORT_IDS, MAX_VISIBLE, FORMULA_NODE_TYPES } from './compiler/expression/parser';
 import type { ExprAst } from './compiler/expression/parser';
+import { buildLogicVarMap, parseLogicExpression } from './compiler/expression/logicParser';
+import type { LogicAst } from './compiler/expression/logicParser';
 import { ExpressionFormula, namesFromVarMap } from './widgets/ExpressionFormula';
+import { LogicalFormula } from './widgets/LogicalFormula';
 import { handleId } from './types';
 import type { NodeConfig, PortDef } from './types';
 import type { MacroPort } from '../../model/types';
@@ -569,10 +572,10 @@ function CaNodeComponent({ id, data }: NodeProps) {
     inputPorts = applyLookupAxisPorts(inputPorts, nodeData.config, model);
   }
 
-  // Expression: show only `visibleCount` of the 8 input ports, relabelled with
-  // the user's variable names. Mirrors effectivePorts.ts (UI-only — all 8 ports
-  // stay in def.ports so the compilers resolve them).
-  if (nodeData.nodeType === 'expression') {
+  // Expression / Logical Expression: show only `visibleCount` of the 8 input
+  // ports, relabelled with the user's variable names. Mirrors effectivePorts.ts
+  // (UI-only — all 8 ports stay in def.ports so the compilers resolve them).
+  if (FORMULA_NODE_TYPES.has(nodeData.nodeType)) {
     const visibleCount = clampVisibleCount(nodeData.config.visibleCount);
     inputPorts = inputPorts.slice(0, visibleCount).map(p => {
       const nm = nodeData.config[`_varName_${p.id}`];
@@ -883,7 +886,9 @@ function CaNodeComponent({ id, data }: NodeProps) {
   // Compiler-invisible by the documented convention: `_`-prefixed and neither
   // `_port_*` nor `_varName_*`, which is exactly what accessorCSE's purity-key
   // filter drops — so it cannot perturb CSE or any emit.
-  const isExpression = nodeData.nodeType === 'expression';
+  // Both free-text formula nodes (math Expression + boolean Logical Expression)
+  // share this machinery — same key, same grip, same bounds.
+  const isExpression = FORMULA_NODE_TYPES.has(nodeData.nodeType);
   const exprCfgW = isExpression ? Number(nodeData.config._exprW) || 0 : 0;
   /** The width actually applied this render: a live drag beats the stored value,
    *  and 0/absent means auto (content-sized, the historical default). */
@@ -1081,9 +1086,10 @@ function CaNodeComponent({ id, data }: NodeProps) {
       const yVal = yConn ? '?' : ((nodeData.config._port_y as string) ?? '0');
       const unary = ARITHMETIC_UNARY_OPS.has(op);
       collapsedLabel = unary ? `${op}(${xVal})` : `${xVal} ${op} ${yVal}`;
-    } else if (nodeData.nodeType === 'expression') {
+    } else if (FORMULA_NODE_TYPES.has(nodeData.nodeType)) {
       const expr = ((nodeData.config.expression as string) ?? '').trim();
-      collapsedLabel = expr ? (expr.length > 18 ? `${expr.slice(0, 18)}…` : expr) : 'Expression';
+      const fallback = nodeData.nodeType === 'expression' ? 'Expression' : 'Logic formula';
+      collapsedLabel = expr ? (expr.length > 18 ? `${expr.slice(0, 18)}…` : expr) : fallback;
     } else if (nodeData.nodeType === 'logicOperator') {
       collapsedLabel = (nodeData.config.operation as string) || 'OR';
     } else if (nodeData.nodeType === 'groupStatement') {
@@ -2911,20 +2917,37 @@ function CaNodeComponent({ id, data }: NodeProps) {
           </label>
         )}
 
-        {nodeData.nodeType === 'expression' && (() => {
+        {/* The two free-text formula nodes share this whole editor — the same
+            config keys, the collapsible inputs / editor, the rendered face and
+            the width grip. Only the GRAMMAR differs, so the parser and the
+            renderer are the only things branched on `isLogic`. */}
+        {isExpression && (() => {
+          const isLogic = nodeData.nodeType === 'logicalExpression';
           const visibleCount = clampVisibleCount(nodeData.config.visibleCount);
           const formula = (nodeData.config.expression as string) ?? '';
-          const { map, errors: varErrors } = buildVarMap(nodeData.config, visibleCount);
+          const { map, errors: varErrors } = isLogic
+            ? buildLogicVarMap(nodeData.config, visibleCount)
+            : buildVarMap(nodeData.config, visibleCount);
           let parseErr: string | null = varErrors[0] ?? null;
-          // The SAME AST the three compile targets emit from also feeds the
-          // rendered math view below, so the picture can never disagree with
-          // what actually runs.
+          // The SAME AST the compile targets emit from also feeds the rendered
+          // view below, so the picture can never disagree with what actually
+          // runs.
           let ast: ExprAst | null = null;
+          let logicAst: LogicAst | null = null;
           if (!parseErr && formula.trim()) {
-            const res = parseExpression(formula, map);
-            if ('error' in res) parseErr = res.error;
-            else ast = res.ast;
+            if (isLogic) {
+              const res = parseLogicExpression(formula, map);
+              if ('error' in res) parseErr = res.error;
+              else logicAst = res.ast;
+            } else {
+              const res = parseExpression(formula, map);
+              if ('error' in res) parseErr = res.error;
+              else ast = res.ast;
+            }
           }
+          /** Is there a formula to SHOW? Drives the forced-open editor + the
+           *  collapse toggle below, for whichever grammar this node speaks. */
+          const hasAst = isLogic ? logicAst !== null : ast !== null;
           const setVisible = (next: number) => {
             const clamped = Math.max(1, Math.min(MAX_VISIBLE, next));
             const newConfig: NodeConfig = { ...nodeData.config, visibleCount: clamped };
@@ -2962,7 +2985,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
           // carries an explicit user choice (same compiler-invisible key
           // convention as `_namesExpanded`); `exprEditLatch` keeps it open for
           // the typing session that produced the formula.
-          const exprEditOpen = !ast || exprEditLatch || nodeData.config._exprExpanded === true;
+          const exprEditOpen = !hasAst || exprEditLatch || nodeData.config._exprExpanded === true;
           const toggleExprEdit = () => {
             const newConfig: NodeConfig = { ...nodeData.config };
             if (exprEditOpen) {
@@ -2982,11 +3005,13 @@ function CaNodeComponent({ id, data }: NodeProps) {
           }).join(', ');
           return (
             <>
-              <ExpressionFormula ast={ast} names={namesFromVarMap(map)} />
+              {isLogic
+                ? <LogicalFormula ast={logicAst} names={namesFromVarMap(map)} />
+                : <ExpressionFormula ast={ast} names={namesFromVarMap(map)} />}
               {/* Only offered when there IS a formula to collapse to — with
                   none the editor is the only face, so a toggle would be a
                   control that cannot do anything. */}
-              {ast && (
+              {hasAst && (
                 <button
                   className={styles.select}
                   style={{
@@ -3020,7 +3045,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
                 }}
                 rows={3}
                 value={formula}
-                placeholder="e.g. a + b*c - pow(d, 2)"
+                placeholder={isLogic ? 'e.g. a AND NOT b OR c' : 'e.g. a + b*c - pow(d, 2)'}
                 spellCheck={false}
                 onChange={e => {
                   // Latch the editor open for this typing session (see the

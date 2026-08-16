@@ -6,6 +6,7 @@ import { agentNodeRequirement, nodeSatisfiesCapabilities, resolveAgentProfile, c
 import { getNodeDef } from './registry';
 import { CURRENT_VIEWER_SENTINEL } from './SetCellLooksNode';
 import { buildVarMap, parseExpression, clampVisibleCount } from '../compiler/expression/parser';
+import { buildLogicVarMap, parseLogicExpression } from '../compiler/expression/logicParser';
 import { getActiveGraphKind } from '../graphState';
 import { VECTOR_LOWERED } from '../compiler/vectorAttr';
 import { multiAttrSlotIndices, slotAttrKey } from '../compiler/multiAttrExpand';
@@ -614,6 +615,20 @@ export function detectMissingConfig(
       break;
     }
 
+    case 'logicalExpression': {
+      const visibleCount = clampVisibleCount(config.visibleCount);
+      const { map, errors } = buildLogicVarMap(config, visibleCount);
+      for (const e of errors) issues.push(e);
+      const formula = String(config.expression ?? '');
+      if (!formula.trim()) {
+        issues.push('Enter a formula');
+      } else if (errors.length === 0) {
+        const res = parseLogicExpression(formula, map);
+        if ('error' in res) issues.push(`Formula error: ${res.error}`);
+      }
+      break;
+    }
+
     // Rotate Around Axis is Rodrigues about an arbitrary 3D axis — a 2D model
     // has no Z, so a stale config carrying it (authored in 3D, or hand-edited)
     // would silently degenerate. The op is filtered out of the 2D dropdown; this
@@ -945,7 +960,7 @@ export const OVERSEER_UNIVERSAL_TYPES = new Set<string>([
   'sequence', 'conditional', 'loop', 'forEachInArray', 'switch',
   // context-free value plumbing (their def.compile() is reused verbatim)
   'getConstant', 'arithmeticOperator', 'expression', 'statement',
-  'logicOperator', 'getRandom', 'valueSwitch', 'proportionMap',
+  'logicOperator', 'logicalExpression', 'getRandom', 'valueSwitch', 'proportionMap',
   'interpolation', 'arrayElement', 'arrayLength', 'getModelAttribute',
 ]);
 

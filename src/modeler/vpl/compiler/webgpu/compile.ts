@@ -52,6 +52,8 @@ import { makeProducesArray } from '../arrayRelay';
 import { subAttrInfo, subAttributesOf } from '../subAttribute';
 import { emitWgsl } from '../expression/emitWgsl';
 import { buildVarMap, parseExpression, clampVisibleCount } from '../expression/parser';
+import { emitLogicWgsl } from '../expression/emitLogic';
+import { buildLogicVarMap, parseLogicExpression } from '../expression/logicParser';
 
 export interface WebGPUEntryPoints {
   step: string;
@@ -1642,6 +1644,20 @@ const VALUE_NODE_EMITTERS: Record<string, NodeValueEmitter> = {
         ctx.errors.push(`logicOperator: unsupported op ${op}`); return null;
     }
     return emitLet(ctx, 'bool', expr, 'lop');
+  },
+
+  // Logical Expression node: parse the boolean formula, emit the AST as a WGSL
+  // bool expr. The var accessor is `logicOperator`'s own operand form above
+  // (castTo bool), so the two agree for any input.
+  logicalExpression: ({ node, ctx, inputs }) => {
+    const visibleCount = clampVisibleCount(node.data.config.visibleCount);
+    const { map, errors } = buildLogicVarMap(node.data.config, visibleCount);
+    if (errors.length > 0) { ctx.errors.push(`logicalExpression: ${errors[0]}`); return null; }
+    const res = parseLogicExpression(String(node.data.config.expression ?? ''), map);
+    if ('error' in res) { ctx.errors.push(`logicalExpression: ${res.error}`); return null; }
+    const expr = emitLogicWgsl(res.ast, (portId) =>
+      castTo(inputs[portId] ?? { expr: 'false', type: 'bool' }, 'bool'));
+    return emitLet(ctx, 'bool', expr, 'lexp');
   },
 
   aggregate: (c) => emitAggregateOrCount(c, 'aggregate'),

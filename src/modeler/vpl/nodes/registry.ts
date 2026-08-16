@@ -80,6 +80,7 @@ import { VectorOpNode } from './VectorOpNode';
 import { MakeColorNode } from './MakeColorNode';
 import { BreakColorNode } from './BreakColorNode';
 import { ExpressionNode } from './ExpressionNode';
+import { LogicalExpressionNode } from './LogicalExpressionNode';
 import { GroupCountingNode } from './GroupCountingNode';
 import { GroupStatementNode } from './GroupStatementNode';
 import { GroupOperatorNode } from './GroupOperatorNode';
@@ -293,6 +294,7 @@ const ALL_NODES: NodeTypeDef[] = [
   InterpolationNode,
   StatementNode,
   LogicOperatorNode,
+  LogicalExpressionNode,
   ValueSwitchNode,
   MakeVectorNode,
   BreakVectorNode,

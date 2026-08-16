@@ -81,28 +81,33 @@ function fmtNum(v: number): string {
 // Styles (inline — the widgets layer carries no CSS modules)
 // ---------------------------------------------------------------------------
 
+/** The formula box itself. Exported because the Logical Expression node's
+ *  renderer (LogicalFormula) is the same box with different contents — sharing
+ *  it is what keeps the `contain: inline-size` rule below true for both. */
+export const FORMULA_ROOT_STYLE: React.CSSProperties = {
+  fontSize: '0.72rem',
+  lineHeight: 1.15,
+  color: 'var(--color-text-secondary)',
+  // A CaNode is content-sized, so a `nowrap` row of stacked fractions would
+  // WIDEN the whole node (measured: 193 → 472 px on a long formula) — and
+  // `max-width: 100%` cannot stop it, because the parent's width is itself
+  // derived from its children's max-content. `contain: inline-size` makes
+  // this box's inline size independent of its contents: its max-content
+  // contribution drops to zero, the flex column's default stretch gives it
+  // the real body width, and the formula scrolls inside it instead.
+  contain: 'inline-size',
+  alignSelf: 'stretch',
+  overflowX: 'auto',
+  overflowY: 'hidden',
+  padding: '2px 0',
+  whiteSpace: 'nowrap',
+  // A formula is a picture, not text to select word-by-word; letting a drag
+  // start a selection inside the node body fights React Flow's node drag.
+  userSelect: 'none',
+};
+
 const S = {
-  root: {
-    fontSize: '0.72rem',
-    lineHeight: 1.15,
-    color: 'var(--color-text-secondary)',
-    // A CaNode is content-sized, so a `nowrap` row of stacked fractions would
-    // WIDEN the whole node (measured: 193 → 472 px on a long formula) — and
-    // `max-width: 100%` cannot stop it, because the parent's width is itself
-    // derived from its children's max-content. `contain: inline-size` makes
-    // this box's inline size independent of its contents: its max-content
-    // contribution drops to zero, the flex column's default stretch gives it
-    // the real body width, and the formula scrolls inside it instead.
-    contain: 'inline-size',
-    alignSelf: 'stretch',
-    overflowX: 'auto',
-    overflowY: 'hidden',
-    padding: '2px 0',
-    whiteSpace: 'nowrap',
-    // A formula is a picture, not text to select word-by-word; letting a drag
-    // start a selection inside the node body fights React Flow's node drag.
-    userSelect: 'none',
-  } as React.CSSProperties,
+  root: FORMULA_ROOT_STYLE,
   varName: { fontStyle: 'italic' } as React.CSSProperties,
   fn: { fontStyle: 'normal' } as React.CSSProperties,
   op: { padding: '0 0.18em' } as React.CSSProperties,
