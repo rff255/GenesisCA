@@ -13773,11 +13773,10 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
           const idx = g.cells[k]!;
           cells[k - i] = { row: Math.floor(idx / r.width), col: idx % r.width, layer: r.layer };
         }
-        // `ensureFresh`: an import is not a brush stroke — it can cover the whole
-        // board, so the WebGPU CPU mirror must be pulled down first or every OTHER
-        // attribute of the covered cells reverts to its last-synced value. The
-        // first message clears `gpuOwnsAttrs`, so only it pays the readback.
-        w.postMessage({ type: 'paintManual', cells, sets, ensureFresh: true, activeViewer: activeViewerRef.current });
+        // No freshness flag needed: `patchWebGPUCells` uploads ONLY the written
+        // attribute's words, so under WebGPU the covered cells' OTHER attributes
+        // keep their live GPU values (no readback, no stale-mirror revert).
+        w.postMessage({ type: 'paintManual', cells, sets, activeViewer: activeViewerRef.current });
       }
     }
   };

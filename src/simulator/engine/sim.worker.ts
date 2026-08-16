@@ -383,18 +383,6 @@ interface PaintManualMsg {
    *  encodeAttrValue() so the worker doesn't repeat the stringÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢number switch. */
   sets: Array<{ attrId: string; value: number }>;
   activeViewer: string;
-  /** Pull the GPU state down to the CPU mirror BEFORE writing (the rule
-   *  `importGridValues` already follows unconditionally).
-   *
-   *  Under WebGPU after a Play the live state is GPU-side and `readAttrs` is
-   *  stale; the display refresh then re-uploads every attribute OF THE TOUCHED
-   *  CELLS from that stale mirror, so writing attribute A reverts attributes B,
-   *  C… of those cells. A brush stroke touches a handful of cells and has always
-   *  behaved this way, so the flag is OPT-IN and the brush path is byte-for-byte
-   *  unchanged — but a DATA IMPORT (the GeoJSON vector burn) can cover the whole
-   *  board, where that silent revert is not acceptable. Only the FIRST message of
-   *  a batch pays the readback: it clears `gpuOwnsAttrs`, so the rest skip it. */
-  ensureFresh?: boolean;
 }
 interface ResetMsg { type: 'reset'; activeViewer: string; reqId?: number }
 interface RecompileMsg { type: 'recompile'; stepCode: string; initCode?: string; gridInitCode?: string; skipIsolatedEmpty?: SkipIsolatedEmptyConfig; inputColorCodes: Array<{ mappingId: string; code: string }>; outputMappingCodes: Array<{ mappingId: string; code: string }>; stopMessages?: string[]; updateMode: string; asyncScheme: string; wasmStepBytes?: Uint8Array; wasmStepError?: string; wasmExports?: string[]; viewerIds?: Record<string, number>; webgpuShaderCode?: string; webgpuShaderError?: string; webgpuEntryPoints?: WebGPUEntryPoints; webgpuLayout?: WebGPULayout; webgpuStopCheckInterval?: number; variegated?: VariegatedPayload; interactionTables?: InteractionTablePayload[]; agentBehaviourCode?: string; agentInitCode?: string; agentDivisionCode?: string; agentColorViewer?: string; agentOutputMappingCodes?: Array<{ mappingId: string; code: string }>; agentInputMappingCodes?: Array<{ mappingId: string; code: string; channels: number; spawner?: boolean }>; agentHasSprites?: boolean; agentBondReqSlots?: number; agentFieldGates?: AgentFieldGates; agentDividePartitions?: DividePartitionSpec[]; centerBased?: CenterBasedConfig; agentUsesField?: boolean; agentUsesDensity?: boolean; rulesReadComputedIndicator?: boolean; agentResidencyClean?: boolean; agentTarget?: 'js' | 'wasm' | 'webgpu'; agentWasmBytes?: Uint8Array; agentWasmViewerGuardIds?: string[]; agentLayoutExtras?: AgentLayoutExtras; agentWasmLayoutSig?: { maxHashBins: number; totalBytes: number }; agentWebgpuBehaviourShader?: string; agentWebgpuForceShader?: string; agentWebgpuMaxAgents?: number; agentWebgpuMaxHashBins?: number; agentWebgpuLayout?: AgentWebGPULayout; agentRenderLayout?: AgentWebGPULayout; agentWebgpuUsesI32Write?: boolean; agentWebgpuUsage?: { usesBondStore?: boolean; usesBondStoreWrite?: boolean; usesIndicators?: boolean; usesAux?: boolean; usesSpawn?: boolean; usesStop?: boolean; usesForceScatter?: boolean; usesGeneration?: boolean; usesSpriteWrite?: boolean }; agentWebgpuOmShaders?: AgentOMShaderInput[] }
@@ -5409,7 +5397,7 @@ function refreshColorsAfterInputJS(): void {
  *  We deliberately skip writing to `attrsWriteBuf` ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â the next step's per-cell
  *  copy preamble (`attrsWrite[idx] = attrsRead[idx]`) overwrites it before any
  *  read, so the second writeBuffer is dead bandwidth. */
-function patchWebGPUCells(idxs: ArrayLike<number>): void {
+function patchWebGPUCells(idxs: ArrayLike<number>, attrIds?: ReadonlySet<string> | null): void {
   const rt = webgpuRuntime;
   if (!rt || !rt.attrsReadBuf || idxs.length === 0) return;
   // Sort + dedupe is not required for correctness (writeBuffer with the latest
@@ -5435,6 +5423,15 @@ function patchWebGPUCells(idxs: ArrayLike<number>): void {
   // brush / paste sizes (a few queue.writeBuffer calls per attr).
   const useBatch = !gpuOwnsAttrs && rangeLen <= idxs.length * 4;
   for (const attr of cellAttrs) {
+    // THE WRITTEN-ATTRIBUTE SUBSET (the stale-mirror revert fix): a caller that
+    // wrote only SOME attributes of the touched cells MUST pass that set.
+    // Uploading an UNWRITTEN attribute's words re-uploads the CPU mirror, which
+    // after a Play under WebGPU (`gpuOwnsAttrs`) is STALE — so painting
+    // attribute A would silently revert attributes B, C… of those cells to
+    // their last-synced values (measured: MNCA's decaying trace read back its
+    // pre-play 200 instead of the true 180). Absent set = every attribute was
+    // written fresh (clearRegion) or the mirror is known fresh (post-readback).
+    if (attrIds && !attrIds.has(attr.id)) continue;
     const layoutAttr = rt.layout.attrs.find(a => a.id === attr.id);
     if (!layoutAttr) continue;
     const src = readAttrs[attr.id];
@@ -7649,6 +7646,12 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
 
       const isSync = updateMode !== 'asynchronous';
 
+      // The attributes ACTUALLY written (a sub-attribute whose writes were all
+      // suppressed by the parent filter never joins) — patchWebGPUCells uploads
+      // ONLY these, so the touched cells' OTHER attributes keep their live GPU
+      // values instead of being reverted from the stale CPU mirror.
+      const writtenAttrIds = new Set<string>();
+
       const applyManual = (): void => {
         for (const c of msg.cells) {
           const lyr = c.layer ?? 0;
@@ -7665,6 +7668,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
             const buf = readAttrs[s.attrId];
             if (!buf) continue;
             buf[idx] = s.value;
+            writtenAttrIds.add(s.attrId);
             // In sync mode the step copies rÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢w at the top of the next step,
             // but a paint that lands between steps must keep both buffers
             // consistent so InputColor / step compiled functions see the new
@@ -7682,7 +7686,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
             if (!inBounds3d(lyr, c.row, c.col)) continue;
             idxs.push(cellIndexOf(lyr, c.row, c.col));
           }
-          patchWebGPUCells(idxs);
+          patchWebGPUCells(idxs, writtenAttrIds);
           uploadActiveViewer(webgpuRuntime, viewerIdMap[activeViewer] ?? -1);
           refreshColorsAfterInputWebGPU();
           finalizeStepWebGPU({ needColors: true }).then(() => sendColors())
@@ -7699,8 +7703,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       // iterating cells. Only needed when at least one sub-attr is being set
       // AND the parent isn't being overridden by the brush itself.
       const needsReadback = useWebGPU && webgpuRuntime?.stepReady && gpuOwnsAttrs
-        && (msg.ensureFresh
-          || setEntries.some(e => e.info && !brushParentOverride.has(e.info.parentId)));
+        && setEntries.some(e => e.info && !brushParentOverride.has(e.info.parentId));
       if (needsReadback && webgpuRuntime) {
         const rt = webgpuRuntime;
         readbackAttrs(rt, readAttrs).then(() => {
@@ -9495,9 +9498,14 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       const wD = msg.d ?? 1;   // 3D Grid CA: layer extent (absent -> a single slice)
       // Optional shape mask: only cells with mask !== 0 are written.
       const wMask = msg.mask ? new Uint8Array(msg.mask) : null;
+      // The attributes the PAYLOAD actually carries — a cross-model clipboard can
+      // lack attributes this model has; those are skipped below, so the GPU patch
+      // must not upload their (possibly stale) CPU-mirror words either.
+      const writtenAttrIds = new Set<string>();
       for (const attr of cellAttrs) {
         const entry = msg.attributes[attr.id];
         if (!entry) continue;
+        writtenAttrIds.add(attr.id);
         // Rebuild typed view over the transferred buffer
         const Ctor = (createTypedArray(attr.type, 0).constructor as { new(b: ArrayBuffer): Float64Array | Int32Array | Uint8Array });
         const src = new Ctor(entry.buffer);
@@ -9542,7 +9550,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
             }
           }
         }
-        patchWebGPUCells(idxs);
+        patchWebGPUCells(idxs, writtenAttrIds);
         uploadActiveViewer(webgpuRuntime, viewerIdMap[activeViewer] ?? -1);
         refreshColorsAfterInputWebGPU();
         finalizeStepWebGPU({ needColors: true }).then(() => sendColors())
@@ -9603,6 +9611,9 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
             }
           }
         }
+        // No written-attr subset here ON PURPOSE: clearRegion writes EVERY cell
+        // attribute of the masked cells to its default, so all uploaded words
+        // are freshly written — the full patch cannot revert anything.
         patchWebGPUCells(idxs);
         uploadActiveViewer(webgpuRuntime, viewerIdMap[activeViewer] ?? -1);
         refreshColorsAfterInputWebGPU();
