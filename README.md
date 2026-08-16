@@ -160,7 +160,7 @@ Indicators turn a running model into numbers: counts, totals, distributions, spa
 
 ### Interact while it runs
 
-Paint with a shaped brush, inspect any cell or agent, copy and paste regions, drop an image or a CSV file onto the grid, and retune global parameters live without recompiling. Named presets snapshot parameter sets (and optionally the board itself), so one model can carry many behaviours.
+Paint with a shaped brush, inspect any cell or agent, copy and paste regions, drop an image or a CSV file onto the grid — or export the board or the agent population back out as CSV — and retune global parameters live without recompiling. Named presets snapshot parameter sets (and optionally the board itself), so one model can carry many behaviours.
 
 ### Capture and share
 
