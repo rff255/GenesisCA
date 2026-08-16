@@ -3723,9 +3723,9 @@ export function HelpView() {
           <p className={styles.p}>
             <strong>Import CSV&hellip;</strong> brings tabular data into a running simulation.
             It lives on the transport bar&apos;s <strong>Load State</strong> button &mdash;
-            hover it (or right-click it) and pick <em>Import CSV&hellip;</em>; a plain click
+            hover it (or right-click it) and pick <em>Import CSV / ASC&hellip;</em>; a plain click
             still loads a <code>.gcastate</code>. You can also just <strong>drop a .csv / .tsv
-            file</strong> anywhere on the app. One dialog covers two flavours; a model with
+            / .asc file</strong> anywhere on the app. One dialog covers two flavours; a model with
             both layers gets a <strong>Target</strong> switch.
           </p>
           <ul className={styles.list}>
@@ -3798,11 +3798,54 @@ export function HelpView() {
             line in the middle of a board is kept as a row of default cells so the board&apos;s
             geometry can never silently shift.
           </p>
+          <h3 className={styles.h3}>Real map data &mdash; Esri ASCII grid (.asc)</h3>
+          <p className={styles.p}>
+            The same dialog reads the <strong>Esri ASCII grid</strong> &mdash; the plain-text
+            raster every GIS exports (in QGIS: right-click a layer &rarr;{' '}
+            <em>Export &rarr; Save As&hellip;</em> &rarr; format <em>Arc/Info ASCII Grid</em>).
+            It is the raster format NetLogo&apos;s GIS extension and Cell2Fire consume, so a
+            terrain / land-cover / population layer clipped in a GIS drops straight into a
+            GenesisCA board. Drop a <code>.asc</code> on the app (or pick it from{' '}
+            <em>Import CSV / ASC&hellip;</em>) and the dialog <strong>reshapes itself</strong>:
+            it reads the file&apos;s six-line header, so the delimiter and header-row controls
+            disappear (the format defines both) and the <em>Grid</em> target is forced &mdash; a
+            raster is a board, not a list of agents.
+          </p>
+          <ul className={styles.list}>
+            <li>
+              <strong>Several layers at once.</strong> Real models are a <em>stack</em> of
+              co-registered rasters (fuel + elevation + slope&hellip;), so <strong>+ Add
+              layer&hellip;</strong> takes more <code>.asc</code> files in the same session,
+              each with its own target cell attribute. They must all be on the{' '}
+              <strong>same grid</strong> (identical <code>ncols</code>/<code>nrows</code>) &mdash;
+              a mismatched file is called out and blocks the import, exactly as every
+              established tool does. Align them in your GIS first; GenesisCA never reprojects.
+            </li>
+            <li>
+              <strong>NODATA.</strong> Cells carrying the file&apos;s <code>NODATA_value</code>
+              take the attribute&apos;s default and are counted <em>separately</em> in the
+              summary &mdash; &ldquo;outside the study area&rdquo; is a legitimate statement,
+              not a parse failure.
+            </li>
+            <li>
+              <strong>Categorical layers.</strong> A raster carries integer <em>codes</em>, not
+              names (fuel model 102, land-cover class 42). Point the layer at a <em>tag</em>{' '}
+              attribute and the code is read as the option <em>index</em>, which is exactly the
+              convention the field uses.
+            </li>
+            <li>
+              <strong>Georeference.</strong> The header&apos;s origin and cell size are stored on
+              the model, so the matching export writes the board back <em>in the same place</em>.
+              An <code>xllcenter</code>/<code>yllcenter</code> header is converted to the corner
+              form on the way in. Nothing in the engine reads it &mdash; it is presentation and
+              file metadata only.
+            </li>
+          </ul>
           <h3 className={styles.h3}>Export CSV</h3>
           <p className={styles.p}>
             <strong>Export CSV&hellip;</strong> is the exact mirror of the import, and sits on
             the transport bar&apos;s <strong>Save State</strong> button &mdash; hover it (or
-            right-click it) and pick <em>Export CSV&hellip;</em>; a plain click still saves a{' '}
+            right-click it) and pick <em>Export CSV / ASC&hellip;</em>; a plain click still saves a{' '}
             <code>.gcastate</code>. It takes the running simulation out as a table for a
             spreadsheet, a plotting script or another tool. The same{' '}
             <strong>Target</strong> switch appears when the model has both layers; a model
@@ -3825,6 +3868,17 @@ export function HelpView() {
               <strong>field is a grid column</strong>, and no header row. In a 3D model you
               pick the <strong>Layer</strong> to write.
             </li>
+            <li>
+              <strong>Grid &rarr; Esri ASCII grid (.asc).</strong> The <strong>Format</strong>{' '}
+              choice writes the board as the GIS raster instead: the six-line header (from the
+              model&apos;s stored georeference, or the neutral origin 0,0 / cell size 1 when it
+              has none) then whitespace-separated rows. Values are plain <em>numbers</em> &mdash;
+              a tag writes its option <em>index</em> and a binary <code>0</code>/<code>1</code>,
+              because <code>.asc</code> is a numeric raster and integer codes are how the field
+              encodes classes. A non-finite value is written as the <code>NODATA</code> sentinel{' '}
+              <code>-9999</code>. The delimiter choice is hidden here &mdash; the format defines
+              it. Drop the file straight into QGIS.
+            </li>
           </ul>
           <p className={styles.p}>
             Values are written in the form the import reads straight back: a tag as its option{' '}
@@ -3837,7 +3891,9 @@ export function HelpView() {
           <p className={styles.p}>
             <strong>The round trip is the point:</strong> an exported file re-imports through{' '}
             <em>Import CSV</em> with its columns already mapped and every value intact &mdash;
-            so you can export a population, edit it in a spreadsheet, and load it back.
+            so you can export a population, edit it in a spreadsheet, and load it back. The same
+            holds for <code>.asc</code>: import a raster, export it again, and the header and
+            every value come back unchanged.
           </p>
           <p className={styles.p}>
             <strong>Brush shapes.</strong> Pick a stamp shape in the brush panel:
@@ -3942,8 +3998,8 @@ export function HelpView() {
             <strong>Load State</strong> (folder icon) buttons at its left side. A plain
             click does the <code>.gcastate</code> action below; <strong>hovering</strong> a
             button (or right-clicking it) opens a small menu offering that same action plus
-            its tabular sibling &mdash; <em>Export CSV&hellip;</em> under Save,{' '}
-            <em>Import CSV&hellip;</em> under Load (see &ldquo;Import CSV&rdquo; above).
+            its tabular sibling &mdash; <em>Export CSV / ASC&hellip;</em> under Save,{' '}
+            <em>Import CSV / ASC&hellip;</em> under Load (see &ldquo;Import CSV&rdquo; above).
           </p>
           <ul className={styles.list}>
             <li><strong>Save State</strong> &mdash; Downloads a <code>.gcastate</code> file

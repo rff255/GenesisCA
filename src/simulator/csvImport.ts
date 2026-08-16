@@ -176,6 +176,151 @@ export function parseCsvTable(
 }
 
 // ---------------------------------------------------------------------------
+// Esri ASCII grid (`.asc`) — the GIS raster interchange format
+//
+// Every GIS on earth exports it, and it is the raster format NetLogo's GIS
+// extension and Cell2Fire consume, so supporting it makes GenesisCA directly
+// consumable from QGIS/ArcGIS with no new dependency and no projection
+// machinery (the universal contract: pre-align upstream — see
+// docs/INVESTIGATION_GEOSPATIAL_IO.md).
+//
+// Shape: up to 6 header lines of `KEY value` (case-insensitive), then the body —
+// `ncols * nrows` whitespace-separated values in ROW-MAJOR order.
+// ---------------------------------------------------------------------------
+
+/** The NODATA sentinel this app WRITES (and the de-facto industry default). */
+export const ASC_NODATA_DEFAULT = -9999;
+
+export interface AscGrid {
+  ncols: number;
+  nrows: number;
+  /** Lower-left CORNER of the lower-left cell (an `xllcenter` header is converted). */
+  xllcorner: number;
+  yllcorner: number;
+  cellSize: number;
+  /** Absent `NODATA_value` line ⇒ null (no cell is "no data"). */
+  nodataValue: number | null;
+  /** True when the header used `xllcenter`/`yllcenter` (already converted above). */
+  centerOrigin: boolean;
+  /** How many body VALUES were found (before chunking into rows). */
+  tokenCount: number;
+  /** The body as a `CsvTable`, chunked `ncols` wide — so every existing consumer
+   *  (`buildGridValues`, the preview) works unchanged. */
+  table: CsvTable;
+}
+
+const ASC_HEADER_KEYS = new Set([
+  'ncols', 'nrows', 'xllcorner', 'yllcorner', 'xllcenter', 'yllcenter', 'cellsize', 'nodata_value',
+]);
+
+/** Cheap detector for routing (the dialog decides its whole shape from this):
+ *  the first non-empty line's first token is `ncols`. */
+export function isAscGridText(text: string): boolean {
+  const src = text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
+  for (const raw of src.split('\n')) {
+    const line = raw.trim();
+    if (line === '') continue;
+    return (line.split(/\s+/)[0] ?? '').toLowerCase() === 'ncols';
+  }
+  return false;
+}
+
+/** Parse an Esri ASCII grid. Returns null when the text is not one.
+ *
+ *  The body is read as the spec defines it — a flat stream of `ncols * nrows`
+ *  whitespace-separated values in ROW-MAJOR order, chunked into rows of `ncols`
+ *  — NOT line-by-line. Every real writer emits exactly one line per row, so the
+ *  two readings coincide; the flat read additionally survives a wrapped body.
+ *  A short stream leaves the trailing cells missing (padded with the attribute
+ *  default and COUNTED by `buildGridValues`, like every other miss); a long one
+ *  keeps only the declared `nrows` rows.
+ *
+ *  Whitespace-tokenised on purpose: `.asc` bodies are commonly space-ALIGNED
+ *  (runs of spaces), which the RFC-4180 machinery would read as empty fields. */
+export function parseAscGrid(text: string): AscGrid | null {
+  const src = text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
+  const lines = src.split('\n');
+  const hdr: Record<string, number> = {};
+  let i = 0;
+  for (; i < lines.length; i++) {
+    const line = lines[i]!.trim();
+    if (line === '') { if (Object.keys(hdr).length === 0) continue; break; }
+    const parts = line.split(/\s+/);
+    const key = (parts[0] ?? '').toLowerCase();
+    if (!ASC_HEADER_KEYS.has(key)) break;
+    const n = Number(parts[1]);
+    if (!Number.isFinite(n)) break;
+    hdr[key] = n;
+  }
+  const ncols = Math.round(hdr.ncols ?? 0);
+  const nrows = Math.round(hdr.nrows ?? 0);
+  if (!(ncols > 0) || !(nrows > 0)) return null;
+  const cellSize = Number.isFinite(hdr.cellsize) && hdr.cellsize! > 0 ? hdr.cellsize! : 1;
+  const centerOrigin = hdr.xllcenter !== undefined || hdr.yllcenter !== undefined;
+  const xll = hdr.xllcorner !== undefined ? hdr.xllcorner
+    : hdr.xllcenter !== undefined ? hdr.xllcenter - cellSize / 2 : 0;
+  const yll = hdr.yllcorner !== undefined ? hdr.yllcorner
+    : hdr.yllcenter !== undefined ? hdr.yllcenter - cellSize / 2 : 0;
+
+  const body = lines.slice(i).join('\n').trim();
+  const tokens = body === '' ? [] : body.split(/\s+/);
+  const rows: string[][] = [];
+  for (let r = 0; r < nrows; r++) {
+    const start = r * ncols;
+    if (start >= tokens.length) break;                 // stream ran out — short rows
+    rows.push(tokens.slice(start, start + ncols));
+  }
+  const ragged = rows.filter(r => r.length < ncols).length;
+  return {
+    ncols, nrows, xllcorner: xll, yllcorner: yll, cellSize,
+    nodataValue: hdr.nodata_value !== undefined ? hdr.nodata_value : null,
+    centerOrigin, tokenCount: tokens.length,
+    table: { delimiter: ' ', header: null, rows, width: ncols, ragged },
+  };
+}
+
+/** Serialise a row-major value block as an Esri ASCII grid.
+ *
+ *  Values are written as plain NUMBERS (never a tag NAME): `.asc` is a numeric
+ *  raster, and "integer codes + a separate code→class table" is exactly how the
+ *  field encodes categorical layers (Cell2Fire fuel models, NLCD classes). A tag
+ *  therefore exports its INDEX and a binary its 0/1 — both of which
+ *  `decodeCsvValue` reads straight back, so the ROUND TRIP is exact.
+ *
+ *  A non-finite value is written as the NODATA sentinel (the honest "no value
+ *  here"), which the import turns back into the attribute default. */
+export function buildAscGrid(
+  values: ArrayLike<number>,
+  width: number,
+  height: number,
+  georef?: { xllcorner: number; yllcorner: number; cellSize: number } | null,
+  opts?: { nodataValue?: number; maxRows?: number },
+): string {
+  const nodata = opts?.nodataValue ?? ASC_NODATA_DEFAULT;
+  const x = georef?.xllcorner ?? 0;
+  const y = georef?.yllcorner ?? 0;
+  const cs = georef && georef.cellSize > 0 ? georef.cellSize : 1;
+  const lines = [
+    `ncols ${width}`,
+    `nrows ${height}`,
+    `xllcorner ${x}`,
+    `yllcorner ${y}`,
+    `cellsize ${cs}`,
+    `NODATA_value ${nodata}`,
+  ];
+  const n = opts?.maxRows === undefined ? height : Math.min(height, opts.maxRows);
+  for (let r = 0; r < n; r++) {
+    const fields: string[] = new Array(width);
+    for (let c = 0; c < width; c++) {
+      const v = values[r * width + c];
+      fields[c] = v === undefined || !Number.isFinite(v) ? String(nodata) : String(v);
+    }
+    lines.push(fields.join(' '));
+  }
+  return lines.join('\n');
+}
+
+// ---------------------------------------------------------------------------
 // Value decoding
 // ---------------------------------------------------------------------------
 
@@ -560,6 +705,10 @@ export interface CsvGridBuild {
   badValues: number;
   /** Cells that had no field at all (ragged rows padded with the default). */
   paddedCells: number;
+  /** `.asc` only: cells whose raw value equalled the file's `NODATA_value`. They
+   *  take the attribute default like any other miss, but are counted SEPARATELY
+   *  — "outside the study area" is a legitimate statement, not a parse failure. */
+  nodataCells?: number;
   issues: CsvIssue[];
   /** `none` mode only: the distinct characters that carried NO mapping (their
    *  cells took the attribute default). Reported per CHARACTER, not per cell — a
@@ -577,8 +726,18 @@ export interface CsvGridBuild {
  *  `charMap` (the `none` delimiter) replaces the per-type field decode with a
  *  char → value lookup: a mapped char yields its value, an UNMAPPED char (absent
  *  key or `''`, and SPACE by default) yields the attribute default and is counted.
- *  Without it the DELIMITED path below is untouched. */
-export function buildGridValues(table: CsvTable, attr: CsvAttrShape, charMap?: CsvCharMap): CsvGridBuild {
+ *  Without it the DELIMITED path below is untouched.
+ *
+ *  `nodataValue` (the `.asc` header's `NODATA_value`) is compared against the raw
+ *  field NUMERICALLY, BEFORE the per-type decode: a match takes the attribute
+ *  default and is counted in `nodataCells` rather than as an unparseable value.
+ *  `null`/`undefined` ⇒ the historical path, unchanged. */
+export function buildGridValues(
+  table: CsvTable,
+  attr: CsvAttrShape,
+  charMap?: CsvCharMap,
+  nodataValue?: number | null,
+): CsvGridBuild {
   const height = table.rows.length;
   const width = table.width;
   const values = new Float64Array(Math.max(0, width * height));
@@ -616,12 +775,18 @@ export function buildGridValues(table: CsvTable, attr: CsvAttrShape, charMap?: C
     }
     return out;
   }
+  const hasNodata = nodataValue !== undefined && nodataValue !== null && Number.isFinite(nodataValue);
   const out: CsvGridBuild = { values, width, height, badValues: 0, paddedCells: 0, issues: [] };
+  if (hasNodata) out.nodataCells = 0;
   for (let r = 0; r < height; r++) {
     const row = table.rows[r]!;
     for (let c = 0; c < width; c++) {
       const o = r * width + c;
       if (c >= row.length) { values[o] = fallback; out.paddedCells++; continue; }
+      if (hasNodata) {
+        const n = parseCsvNumber(row[c]!);
+        if (n !== null && n === nodataValue) { values[o] = fallback; out.nodataCells!++; continue; }
+      }
       const d = decodeCsvValue(attr, row[c]!);
       values[o] = d.value;
       if (!d.ok) {

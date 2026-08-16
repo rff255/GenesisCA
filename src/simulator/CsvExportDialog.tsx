@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
-import type { Attribute } from '../model/types';
+import type { Attribute, GeoReference } from '../model/types';
 import { NumberField } from '../modeler/vpl/widgets/InlineWidgets';
 import {
-  agentExportColumns, buildAgentCsv, buildGridCsv, gridTargetOptions,
+  agentExportColumns, buildAgentCsv, buildAscGrid, buildGridCsv, gridTargetOptions,
+  ASC_NODATA_DEFAULT,
   type CsvAgentRow, type CsvAttrShape,
 } from './csvImport';
 
@@ -28,7 +29,7 @@ const PREVIEW_LINES = 10;
  *  pure `csvImport.ts` builders the round-trip tests exercise. */
 export function CsvExportDialog({
   modelName, generation, cellAttributes, agentAttributes, hasGrid, hasAgents, is3d,
-  agents, grid, onExport, onCancel,
+  agents, grid, georef, onExport, onCancel,
 }: {
   modelName: string;
   generation: number;
@@ -42,6 +43,9 @@ export function CsvExportDialog({
   /** The cell grid, already decoded (null when the model has no grid layer).
    *  `values` returns the row-major block of ONE attribute on ONE layer. */
   grid: { width: number; height: number; depth: number; values: (attrId: string, layer: number) => Float64Array | null } | null;
+  /** The model's stored georeference (written by an `.asc` import). Absent ⇒ the
+   *  `.asc` export writes the neutral origin 0,0 / cell size 1. */
+  georef?: GeoReference;
   onExport: (r: CsvExportResult) => void;
   onCancel: () => void;
 }) {
@@ -53,6 +57,11 @@ export function CsvExportDialog({
   const effTarget: 'agents' | 'grid' = hasAgents ? (hasGrid ? target : 'agents') : 'grid';
 
   const [delimiter, setDelimiter] = useState<',' | ';' | '\t'>(',');
+  // Grid only: CSV (a delimited table) vs the Esri ASCII grid every GIS reads.
+  // `.asc` defines its own delimiter (whitespace), so the Delimiter row is
+  // HIDDEN there rather than shown inert.
+  const [format, setFormat] = useState<'csv' | 'asc'>('csv');
+  const isAsc = effTarget === 'grid' && format === 'asc';
 
   // --- grid options ---------------------------------------------------------
   const gridOpts = useMemo(() => gridTargetOptions(cellAttributes), [cellAttributes]);
@@ -80,20 +89,26 @@ export function CsvExportDialog({
       return buildAgentCsv(agents ?? [], agentAttrShapes, is3d, { delimiter, maxRows });
     }
     if (!grid || !gridAttr || !gridValues) return '';
+    if (isAsc) return buildAscGrid(gridValues, grid.width, grid.height, georef, { maxRows });
     return buildGridCsv(gridValues, grid.width, grid.height, gridAttr.attr, { delimiter, maxRows });
   };
 
   const preview = useMemo(
     () => buildText(PREVIEW_LINES),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [effTarget, delimiter, agents, gridValues, gridAttr, is3d, agentAttributes],
+    [effTarget, delimiter, agents, gridValues, gridAttr, is3d, agentAttributes, isAsc, georef],
   );
 
-  const totalLines = effTarget === 'agents' ? (agents?.length ?? 0) + 1 : (grid?.height ?? 0);
+  const totalLines = effTarget === 'agents'
+    ? (agents?.length ?? 0) + 1
+    : (grid?.height ?? 0) + (isAsc ? 6 : 0);
   const summary = effTarget === 'agents'
     ? `${agents?.length ?? 0} agent${(agents?.length ?? 0) === 1 ? '' : 's'} × ${agentCols.length} column${agentCols.length === 1 ? '' : 's'} (header row + one row per live agent)`
     : grid
-      ? `${grid.width} wide × ${grid.height} tall${is3d ? ` · layer ${Math.max(0, Math.min(depth - 1, layer))} of ${depth}` : ''} · no header row`
+      ? `${grid.width} wide × ${grid.height} tall${is3d ? ` · layer ${Math.max(0, Math.min(depth - 1, layer))} of ${depth}` : ''} · ${
+          isAsc
+            ? `Esri header · cell size ${georef?.cellSize ?? 1} · origin (${georef?.xllcorner ?? 0}, ${georef?.yllcorner ?? 0})${georef ? '' : ' — no georeference stored, writing the neutral default'}`
+            : 'no header row'}`
       : '';
 
   const exportDisabled = effTarget === 'agents'
@@ -101,7 +116,7 @@ export function CsvExportDialog({
     : !grid || !gridAttr || !gridValues || grid.width < 1 || grid.height < 1;
 
   const baseName = (modelName || 'genesis').toLowerCase().replace(/\s+/g, '_').replace(/[^a-z0-9_]/g, '') || 'genesis';
-  const ext = delimiter === '\t' ? 'tsv' : 'csv';
+  const ext = isAsc ? 'asc' : delimiter === '\t' ? 'tsv' : 'csv';
   const filename = effTarget === 'agents'
     ? `${baseName}_agents_gen${generation}.${ext}`
     : `${baseName}_${(gridAttr?.label ?? 'grid').toLowerCase().replace(/[^a-z0-9]+/g, '_')}${is3d ? `_layer${Math.max(0, Math.min(depth - 1, layer))}` : ''}_gen${generation}.${ext}`;
@@ -128,7 +143,7 @@ export function CsvExportDialog({
     <div style={overlay} onClick={onCancel}>
       <div style={card} onClick={e => e.stopPropagation()}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
-          <h3 style={{ margin: 0, fontSize: 15 }}>Export CSV <span style={{ color: '#8090a0', fontWeight: 400, fontSize: 12 }}>— {filename}</span></h3>
+          <h3 style={{ margin: 0, fontSize: 15 }}>{isAsc ? 'Export Esri ASCII grid' : 'Export CSV'} <span style={{ color: '#8090a0', fontWeight: 400, fontSize: 12 }}>— {filename}</span></h3>
           <button onClick={onCancel} style={{ background: 'none', border: 'none', color: 'inherit', fontSize: 18, cursor: 'pointer' }} title="Cancel">&times;</button>
         </div>
 
@@ -162,6 +177,13 @@ export function CsvExportDialog({
             {effTarget === 'grid' && (
               <>
                 <label style={{ ...label, gap: 6 }}>
+                  Format
+                  <select value={format} onChange={e => setFormat(e.target.value as typeof format)} style={{ fontSize: 12, flex: 1, minWidth: 0 }}>
+                    <option value="csv" style={opt}>CSV table</option>
+                    <option value="asc" style={opt}>Esri ASCII grid (.asc)</option>
+                  </select>
+                </label>
+                <label style={{ ...label, gap: 6 }}>
                   Cell attribute
                   <select value={gridAttrId} onChange={e => setGridAttrId(e.target.value)} style={{ fontSize: 12, flex: 1, minWidth: 0 }}>
                     {gridOpts.length === 0 && <option value="" style={opt}>(no cell attributes)</option>}
@@ -190,18 +212,28 @@ export function CsvExportDialog({
             )}
 
             <hr style={{ border: 'none', borderTop: '1px solid #2a3a50', margin: '2px 0' }} />
-            <label style={{ ...label, gap: 6 }}>
-              Delimiter
-              <select value={delimiter} onChange={e => setDelimiter(e.target.value as typeof delimiter)} style={{ fontSize: 12 }}>
-                <option value="," style={opt}>comma</option>
-                <option value=";" style={opt}>semicolon</option>
-                <option value={'\t'} style={opt}>tab</option>
-              </select>
-            </label>
+            {/* An Esri ASCII grid defines its own delimiter (whitespace), so the
+                row is hidden rather than shown inert. */}
+            {!isAsc && (
+              <label style={{ ...label, gap: 6 }}>
+                Delimiter
+                <select value={delimiter} onChange={e => setDelimiter(e.target.value as typeof delimiter)} style={{ fontSize: 12 }}>
+                  <option value="," style={opt}>comma</option>
+                  <option value=";" style={opt}>semicolon</option>
+                  <option value={'\t'} style={opt}>tab</option>
+                </select>
+              </label>
+            )}
             <div style={{ fontSize: 10.5, color: '#8090a0', lineHeight: 1.5 }}>
-              Values are written so <b>Import CSV</b> reads them straight back: tag
-              values as their option name, binary as true/false, numbers at full
-              precision.
+              {isAsc ? (
+                <>Six header lines then whitespace-separated rows — the raster every
+                  GIS reads. Values are plain NUMBERS (a tag writes its option
+                  INDEX, binary 0/1), non-finite ones the NODATA sentinel {ASC_NODATA_DEFAULT}.</>
+              ) : (
+                <>Values are written so <b>Import CSV</b> reads them straight back: tag
+                  values as their option name, binary as true/false, numbers at full
+                  precision.</>
+              )}
             </div>
           </div>
         </div>

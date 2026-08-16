@@ -1,19 +1,29 @@
-import { useEffect, useMemo, useState } from 'react';
-import type { Attribute } from '../model/types';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import type { Attribute, GeoReference } from '../model/types';
 import { InlineNumberInput } from '../modeler/vpl/widgets/InlineWidgets';
 import {
   parseCsvTable, detectDelimiter, detectHeader, parseCsvRows,
   autoMapAgentColumns, agentTargetOptions, buildAgentSpecs,
   buildGridValues, gridTargetOptions,
   distinctChars, autoSeedCharMap, charLabel, CSV_NO_DELIMITER,
-  type CsvAgentSpec, type CsvAttrShape, type CsvCharMap,
+  parseAscGrid, isAscGridText,
+  type AscGrid, type CsvAgentSpec, type CsvAttrShape, type CsvCharMap,
 } from './csvImport';
 
 /** What the dialog hands back on Import. Exactly one of `agents` / `grid` is set
- *  (the Target switch decides). */
+ *  (the Target switch decides).
+ *
+ *  The grid flavour carries a LIST of layers: a CSV / char board is always one,
+ *  and an Esri ASCII grid session can be several co-registered `.asc` files (the
+ *  FARSITE/Cell2Fire layer stack), each into its own cell attribute. `georef` is
+ *  set only by the `.asc` path, from the file's own header. */
 export type CsvImportResult =
   | { target: 'agents'; agents: CsvAgentSpec[]; replace: boolean }
-  | { target: 'grid'; attrId: string; width: number; height: number; layer: number; values: Float64Array; resize: boolean };
+  | {
+      target: 'grid'; width: number; height: number; layer: number; resize: boolean;
+      layers: Array<{ attrId: string; values: Float64Array }>;
+      georef?: GeoReference;
+    };
 
 const PREVIEW_ROWS = 8;
 /** Guard the preview table's width — a wide CSV would otherwise blow the card. */
@@ -46,9 +56,18 @@ export function CsvImportDialog({
   onApply: (r: CsvImportResult) => void;
   onCancel: () => void;
 }) {
+  // --- Esri ASCII grid (`.asc`) ---------------------------------------------
+  // A `.asc` is a georeferenced RASTER, so it decides the dialog's whole shape:
+  // the Grid flavour is forced (an agent row/column mapping is meaningless for a
+  // raster), and the delimiter + header controls are hidden (the format defines
+  // both). Several co-registered `.asc` files can be imported in one session,
+  // each into its own cell attribute — the FARSITE/Cell2Fire layer stack.
+  const primaryAsc = useMemo(() => (isAscGridText(text) ? parseAscGrid(text) : null), [text]);
+  const isAsc = primaryAsc !== null;
+
   // --- parse options (auto with an explicit override) -----------------------
-  const autoDelim = useMemo(() => detectDelimiter(text), [text]);
-  const autoHeader = useMemo(() => detectHeader(parseCsvRows(text, autoDelim)), [text, autoDelim]);
+  const autoDelim = useMemo(() => (isAsc ? ',' : detectDelimiter(text)), [text, isAsc]);
+  const autoHeader = useMemo(() => (isAsc ? false : detectHeader(parseCsvRows(text, autoDelim))), [text, autoDelim, isAsc]);
   const [delimChoice, setDelimChoice] = useState<'auto' | ',' | ';' | '\t' | 'none'>('auto');
   const [headerChoice, setHeaderChoice] = useState<'auto' | 'yes' | 'no'>('auto');
 
@@ -60,8 +79,8 @@ export function CsvImportDialog({
     if (!hasGrid) return 'agents';
     return autoHeader ? 'agents' : 'grid';
   });
-  const showTargetSwitch = hasGrid && hasAgents;
-  const effTarget: 'agents' | 'grid' = hasAgents ? (hasGrid ? target : 'agents') : 'grid';
+  const showTargetSwitch = hasGrid && hasAgents && !isAsc;
+  const effTarget: 'agents' | 'grid' = isAsc ? 'grid' : hasAgents ? (hasGrid ? target : 'agents') : 'grid';
 
   // "No delimiter" (1 char = 1 cell) is GRID-ONLY: one character per column is
   // meaningless for the agent x/y/attribute columns, which need multi-digit
@@ -70,7 +89,10 @@ export function CsvImportDialog({
   // can never silently apply a nonsensical parse.
   const noneAllowed = effTarget === 'grid';
   const effDelimChoice = delimChoice === 'none' && !noneAllowed ? 'auto' : delimChoice;
-  const isCharMode = effDelimChoice === 'none';
+  // `.asc` defines its own (whitespace) delimiter, so the char-per-cell mode can
+  // never apply there — including via a stale selection made before the file was
+  // swapped.
+  const isCharMode = !isAsc && effDelimChoice === 'none';
   const delimiter = effDelimChoice === 'auto' ? autoDelim : effDelimChoice === 'none' ? CSV_NO_DELIMITER : effDelimChoice;
 
   // The header default is TARGET-DEPENDENT. In Grid mode the CSV *is* the board,
@@ -86,7 +108,10 @@ export function CsvImportDialog({
   const autoHeaderForTarget = effTarget === 'grid' ? false : autoHeader;
   const hasHeader = isCharMode ? false : (headerChoice === 'auto' ? autoHeaderForTarget : headerChoice === 'yes');
 
-  const table = useMemo(() => parseCsvTable(text, { delimiter, hasHeader }), [text, delimiter, hasHeader]);
+  const table = useMemo(
+    () => (primaryAsc ? primaryAsc.table : parseCsvTable(text, { delimiter, hasHeader })),
+    [text, delimiter, hasHeader, primaryAsc],
+  );
 
   // --- agents mode ----------------------------------------------------------
   const agentAttrShapes = agentAttributes as unknown as CsvAttrShape[];
@@ -136,9 +161,54 @@ export function CsvImportDialog({
   }, [charSeedSig, isCharMode]);
   const setCharValue = (ch: string, v: string) => setCharMap(m => ({ ...m, [ch]: v }));
 
+  // --- `.asc` layer stack ----------------------------------------------------
+  // One entry per co-registered file. The PRIMARY (the file the dialog was
+  // opened with) is entry 0 and cannot be removed; "+ Add layer" appends more.
+  // All layers must agree on ncols/nrows — the co-registration contract every
+  // surveyed tool enforces — checked loudly below and blocking Apply.
+  interface AscLayer { key: number; name: string; asc: AscGrid; attrId: string }
+  const [ascExtra, setAscExtra] = useState<AscLayer[]>([]);
+  const ascKeySeq = useRef(1);
+  const ascInputRef = useRef<HTMLInputElement>(null);
+  const [ascError, setAscError] = useState<string | null>(null);
+  // A new file re-opens the dialog with fresh text (the component is not
+  // remounted), so the stack must reset with it.
+  useEffect(() => { setAscExtra([]); setAscError(null); }, [text]);
+  const addAscFiles = (files: FileList | null) => {
+    if (!files || files.length === 0) return;
+    void (async () => {
+      const added: AscLayer[] = [];
+      const bad: string[] = [];
+      for (const f of Array.from(files)) {
+        try {
+          const t = await f.text();
+          const g = parseAscGrid(t);
+          if (!g) { bad.push(`${f.name} (not an Esri ASCII grid)`); continue; }
+          added.push({ key: ascKeySeq.current++, name: f.name, asc: g, attrId: gridOpts[0]?.id ?? '' });
+        } catch (err) {
+          bad.push(`${f.name} (${err instanceof Error ? err.message : String(err)})`);
+        }
+      }
+      if (added.length > 0) setAscExtra(prev => [...prev, ...added]);
+      setAscError(bad.length > 0 ? `Could not read: ${bad.join(', ')}` : null);
+    })();
+  };
+  const setAscLayerAttr = (key: number, attrId: string) =>
+    setAscExtra(prev => prev.map(l => (l.key === key ? { ...l, attrId } : l)));
+
+  /** Every layer to import, primary first (the primary's attribute is the shared
+   *  "Cell attribute" select, so a single-file import reads exactly like a CSV). */
+  const ascLayers: AscLayer[] = useMemo(
+    () => (primaryAsc ? [{ key: 0, name: fileName, asc: primaryAsc, attrId: gridAttrId }, ...ascExtra] : []),
+    [primaryAsc, fileName, gridAttrId, ascExtra],
+  );
+  const ascMismatched = ascLayers.filter(l => l.asc.ncols !== (primaryAsc?.ncols ?? 0) || l.asc.nrows !== (primaryAsc?.nrows ?? 0));
+
   const gridBuild = useMemo(
-    () => (effTarget === 'grid' && gridAttr ? buildGridValues(table, gridAttr.attr, isCharMode ? charMap : undefined) : null),
-    [effTarget, table, gridAttr, isCharMode, charMap],
+    () => (effTarget === 'grid' && gridAttr
+      ? buildGridValues(table, gridAttr.attr, isCharMode ? charMap : undefined, primaryAsc?.nodataValue)
+      : null),
+    [effTarget, table, gridAttr, isCharMode, charMap, primaryAsc],
   );
   const dimsMatch = !!gridBuild && gridBuild.width === world.w && gridBuild.height === world.h;
 
@@ -156,6 +226,13 @@ export function CsvImportDialog({
     }
     const g = gridBuild; if (!g) return '';
     const parts = [`${g.width} wide × ${g.height} tall`];
+    if (primaryAsc) {
+      if (ascLayers.length > 1) parts.push(`${ascLayers.length} layers`);
+      parts.push(`cell size ${primaryAsc.cellSize} · origin (${primaryAsc.xllcorner}, ${primaryAsc.yllcorner})${primaryAsc.centerOrigin ? ' — converted from a centre origin' : ''}`);
+      if (g.nodataCells) parts.push(`${g.nodataCells} NODATA cell${g.nodataCells === 1 ? '' : 's'} (${primaryAsc.nodataValue}) → default`);
+      const declared = primaryAsc.ncols * primaryAsc.nrows;
+      if (primaryAsc.tokenCount !== declared) parts.push(`header declares ${declared} values, the body holds ${primaryAsc.tokenCount}`);
+    }
     if (isCharMode) {
       const un = g.unmappedChars ?? [];
       if (g.badValues) parts.push(`${g.badValues} cell${g.badValues === 1 ? '' : 's'} with an unmapped character (${un.map(charLabel).join(' ')}) → default`);
@@ -169,7 +246,10 @@ export function CsvImportDialog({
 
   const applyDisabled = effTarget === 'agents'
     ? !agentBuild || agentBuild.agents.length === 0
-    : !gridBuild || !gridAttr || gridBuild.width < 1 || gridBuild.height < 1 || (fit === 'keep' && !dimsMatch);
+    : !gridBuild || !gridAttr || gridBuild.width < 1 || gridBuild.height < 1
+      || (fit === 'keep' && !dimsMatch)
+      || ascMismatched.length > 0
+      || (!!primaryAsc && ascLayers.some(l => !l.attrId));
 
   const handleApply = () => {
     if (effTarget === 'agents') {
@@ -177,10 +257,23 @@ export function CsvImportDialog({
       onApply({ target: 'agents', agents: agentBuild.agents, replace });
     } else {
       if (!gridBuild || !gridAttr) return;
+      // One layer for a CSV / char board; one per co-registered `.asc` file
+      // otherwise (the primary reuses the build the preview already made).
+      const layers = primaryAsc
+        ? ascLayers.map(l => ({
+            attrId: l.attrId,
+            values: l.key === 0
+              ? gridBuild.values
+              : buildGridValues(l.asc.table, gridOpts.find(o => o.id === l.attrId)?.attr ?? gridAttr.attr, undefined, l.asc.nodataValue).values,
+          }))
+        : [{ attrId: gridAttr.id, values: gridBuild.values }];
       onApply({
-        target: 'grid', attrId: gridAttr.id, width: gridBuild.width, height: gridBuild.height,
+        target: 'grid', width: gridBuild.width, height: gridBuild.height,
         layer: is3d ? Math.max(0, Math.min(world.d - 1, Math.round(layer))) : 0,
-        values: gridBuild.values, resize: fit === 'resize',
+        layers, resize: fit === 'resize',
+        georef: primaryAsc
+          ? { xllcorner: primaryAsc.xllcorner, yllcorner: primaryAsc.yllcorner, cellSize: primaryAsc.cellSize }
+          : undefined,
       });
     }
   };
@@ -201,7 +294,7 @@ export function CsvImportDialog({
     <div style={overlay} onClick={onCancel}>
       <div style={card} onClick={e => e.stopPropagation()}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
-          <h3 style={{ margin: 0, fontSize: 15 }}>Import CSV <span style={{ color: '#8090a0', fontWeight: 400, fontSize: 12 }}>— {fileName}</span></h3>
+          <h3 style={{ margin: 0, fontSize: 15 }}>{isAsc ? 'Import Esri ASCII grid' : 'Import CSV'} <span style={{ color: '#8090a0', fontWeight: 400, fontSize: 12 }}>— {fileName}</span></h3>
           <button onClick={onCancel} style={{ background: 'none', border: 'none', color: 'inherit', fontSize: 18, cursor: 'pointer' }} title="Cancel">&times;</button>
         </div>
 
@@ -222,8 +315,13 @@ export function CsvImportDialog({
           <div style={{ flex: '1 1 520px', minWidth: 0 }}>
             <div style={{ fontSize: 11, color: '#8090a0', marginBottom: 4 }}>
               Preview — {previewRows.length} of {table.rows.length} row{table.rows.length === 1 ? '' : 's'}
-              {' · '}{isCharMode ? 'no delimiter (1 char = 1 cell)' : `delimiter ${delimiter === '\t' ? '"tab"' : `"${delimiter}"`}`}
-              {' · '}{table.header ? 'header row' : 'no header'}
+              {primaryAsc ? (
+                <>{' · '}ncols {primaryAsc.ncols} · nrows {primaryAsc.nrows} · cellsize {primaryAsc.cellSize}
+                  {primaryAsc.nodataValue !== null && ` · NODATA ${primaryAsc.nodataValue}`}</>
+              ) : (
+                <>{' · '}{isCharMode ? 'no delimiter (1 char = 1 cell)' : `delimiter ${delimiter === '\t' ? '"tab"' : `"${delimiter}"`}`}
+                  {' · '}{table.header ? 'header row' : 'no header'}</>
+              )}
               {table.width > PREVIEW_COLS && ` · first ${PREVIEW_COLS} of ${table.width} columns`}
             </div>
             <div style={{ border: '1px solid #2a3a50', background: '#0a0b0e', overflow: 'auto', maxHeight: 300 }}>
@@ -326,6 +424,51 @@ export function CsvImportDialog({
               </>
             )}
 
+            {/* An Esri ASCII grid defines its own delimiter (whitespace) and has
+                no header row, so those two controls are HIDDEN rather than shown
+                inert. What it gains instead is the layer stack. */}
+            {isAsc ? (
+              <>
+                <hr style={{ border: 'none', borderTop: '1px solid #2a3a50', margin: '2px 0' }} />
+                <div style={{ fontSize: 11, color: '#8090a0' }}>
+                  Layers ({ascLayers.length}) — co-registered <code>.asc</code> files, one per cell attribute
+                </div>
+                {ascExtra.map(l => {
+                  const bad = l.asc.ncols !== primaryAsc!.ncols || l.asc.nrows !== primaryAsc!.nrows;
+                  return (
+                    <div key={l.key} style={{
+                      display: 'flex', alignItems: 'center', gap: 5, padding: '3px 5px', borderRadius: 4,
+                      border: '1px solid ' + (bad ? '#7a3030' : '#2a3a50'), background: bad ? '#1e1212' : '#12161d',
+                    }}>
+                      <span title={l.name} style={{ fontSize: 10.5, color: '#8090a0', maxWidth: 90, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{l.name}</span>
+                      <span style={{ fontSize: 9.5, color: bad ? '#e07070' : '#667' }}>{l.asc.ncols}×{l.asc.nrows}</span>
+                      <select value={l.attrId} onChange={e => setAscLayerAttr(l.key, e.target.value)} style={{ fontSize: 11, flex: 1, minWidth: 0 }}>
+                        {gridOpts.length === 0 && <option value="">(no cell attributes)</option>}
+                        {gridOpts.map(o => <option key={o.id} value={o.id}>{o.label}</option>)}
+                      </select>
+                      <button onClick={() => setAscExtra(prev => prev.filter(x => x.key !== l.key))} title="Remove this layer"
+                        style={{ background: 'none', border: 'none', color: '#8090a0', cursor: 'pointer', fontSize: 12, padding: 0 }}>&times;</button>
+                    </div>
+                  );
+                })}
+                <div>
+                  <button style={btn} onClick={() => ascInputRef.current?.click()}>+ Add layer{'…'}</button>
+                  <input ref={ascInputRef} type="file" accept=".asc,.txt" multiple style={{ display: 'none' }}
+                    onChange={e => { addAscFiles(e.target.files); e.target.value = ''; }} />
+                </div>
+                {ascMismatched.length > 0 && (
+                  <div style={{ color: '#e05050', fontSize: 11 }}>
+                    Every layer must be on the SAME grid as {fileName} ({primaryAsc!.ncols}×{primaryAsc!.nrows}) — align them in your GIS first.
+                  </div>
+                )}
+                {ascError && <div style={{ color: '#e05050', fontSize: 11 }}>{ascError}</div>}
+                <div style={{ fontSize: 10.5, color: '#8090a0', lineHeight: 1.5 }}>
+                  The header&apos;s origin + cell size are stored on the model, so an
+                  <b> Export .asc</b> writes the board back georeferenced.
+                  {primaryAsc!.nodataValue !== null && ' NODATA cells take the attribute default.'}
+                </div>
+              </>
+            ) : (<>
             <hr style={{ border: 'none', borderTop: '1px solid #2a3a50', margin: '2px 0' }} />
             <label style={{ ...label, gap: 6 }}>
               Delimiter
@@ -353,6 +496,7 @@ export function CsvImportDialog({
                 A header cannot exist when every character is a cell.
               </div>
             )}
+            </>)}
           </div>
         </div>
 

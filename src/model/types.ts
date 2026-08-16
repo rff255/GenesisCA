@@ -460,6 +460,27 @@ export interface EndConditions {
   indicatorConditions?: IndicatorEndCondition[];
 }
 
+/** Where cell (0,0) sits in the real world, and how big a cell is there.
+ *
+ *  PRESENTATION + I/O METADATA ONLY — nothing in any compiler, the worker or the
+ *  engine reads it (the C8 "presentational geometry" doctrine). It is written by
+ *  the Esri ASCII grid (`.asc`) import from the file's own header and read back by
+ *  the `.asc` export so a board leaves GenesisCA georeferenced exactly as it
+ *  arrived. Additive + optional; old files load unchanged.
+ *
+ *  Origin convention is the Esri one: `xllcorner`/`yllcorner` are the coordinates
+ *  of the LOWER-LEFT CORNER of the lower-left cell (an `xllcenter` header is
+ *  converted on import). */
+export interface GeoReference {
+  xllcorner: number;
+  yllcorner: number;
+  /** World units per cell (square cells — the format has no separate x/y size). */
+  cellSize: number;
+  /** Coordinate reference system, when a format carries one. `.asc` does NOT, so
+   *  it stays absent there; a future GeoTIFF import would fill it. */
+  crs?: string;
+}
+
 /** Top-level model properties */
 export interface ModelProperties {
   name: string;
@@ -486,6 +507,10 @@ export interface ModelProperties {
    *  [createdDate.ts](./createdDate.ts). Additive + optional; old files load
    *  unchanged. */
   createdDate?: string;
+  /** Where the board sits in the real world (origin + cell size). Written by the
+   *  Esri ASCII grid (`.asc`) import from the file's header, read back by the
+   *  `.asc` export. Presentation + I/O only — see {@link GeoReference}. */
+  georef?: GeoReference;
   topology: Topology;
   boundaryTreatment: BoundaryTreatment;
   updateMode: UpdateMode;
