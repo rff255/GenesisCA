@@ -4,6 +4,9 @@ import { ThumbMedia } from '../../components/ThumbMedia';
 import {
   THUMBNAIL_ACCEPT, THUMBNAIL_FORMATS_LABEL, THUMBNAIL_MAX_BYTES,
 } from '../../model/thumbnail';
+import {
+  BACKDROP_ACCEPT, BACKDROP_FORMATS_LABEL, BACKDROP_MAX_BYTES,
+} from '../../model/backdrop';
 import { todayCreatedDate } from '../../model/createdDate';
 import type { PanelContentProps } from '../ModelerDetailContext';
 import styles from './PanelContent.module.css';
@@ -16,7 +19,9 @@ export function InfoPanelContent(_props: PanelContentProps = {}) {
   const { properties } = model;
   const [tagInput, setTagInput] = useState('');
   const [thumbError, setThumbError] = useState('');
+  const [backdropError, setBackdropError] = useState('');
   const thumbInputRef = useRef<HTMLInputElement | null>(null);
+  const backdropInputRef = useRef<HTMLInputElement | null>(null);
 
   const handleThumbnailPick = (e: ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -34,6 +39,31 @@ export function InfoPanelContent(_props: PanelContentProps = {}) {
       updateProperties({ thumbnail: result });
     };
     reader.onerror = () => setThumbError('Could not read the file.');
+    reader.readAsDataURL(file);
+  };
+
+  /** Backdrop map — same shape as the thumbnail pick (read → data URL →
+   *  properties), with the backdrop's own accept list + size cap. */
+  const handleBackdropPick = (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = ''; // allow re-picking the same file
+    if (!file) return;
+    if (file.size > BACKDROP_MAX_BYTES) {
+      setBackdropError(`File is ${(file.size / 1024 / 1024).toFixed(2)} MB — the limit is 4 MB.`);
+      return;
+    }
+    if (!/^image\//i.test(file.type)) {
+      setBackdropError(`${BACKDROP_FORMATS_LABEL} only — a backdrop is a still image.`);
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = reader.result;
+      if (typeof result !== 'string') return;
+      setBackdropError('');
+      updateProperties({ backdrop: { dataUrl: result } });
+    };
+    reader.onerror = () => setBackdropError('Could not read the file.');
     reader.readAsDataURL(file);
   };
 
@@ -197,6 +227,65 @@ export function InfoPanelContent(_props: PanelContentProps = {}) {
             </span>
             {thumbError && (
               <span style={{ color: '#e05050', fontSize: '0.65rem' }}>{thumbError}</span>
+            )}
+          </div>
+          {/* Backdrop map — a static image drawn UNDER the grid in the 2D
+              simulator (SLEUTH's hillshade layer / QGIS's basemap). Presentation
+              only: no rule reads it. Its opacity + Show toggle are per-USER view
+              settings and live in the Simulator, not here. */}
+          <div className={styles.field}>
+            <label className={styles.fieldLabel}>Backdrop map</label>
+            <input
+              ref={backdropInputRef}
+              type="file"
+              accept={BACKDROP_ACCEPT}
+              onChange={handleBackdropPick}
+              style={{ display: 'none' }}
+            />
+            {properties.backdrop ? (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6, alignItems: 'flex-start' }}>
+                <img
+                  src={properties.backdrop.dataUrl}
+                  alt="Backdrop map"
+                  style={{
+                    maxWidth: 200, maxHeight: 200, borderRadius: 4,
+                    border: '1px solid #2d4059', background: '#0d1117',
+                  }}
+                />
+                <div style={{ display: 'flex', gap: 6 }}>
+                  <button
+                    className={styles.addButton}
+                    style={{ flex: 'none', padding: '4px 10px', fontSize: '0.7rem' }}
+                    onClick={() => backdropInputRef.current?.click()}
+                  >
+                    Replace
+                  </button>
+                  <button
+                    className={styles.deleteButton}
+                    style={{ padding: '4px 10px', fontSize: '0.7rem' }}
+                    onClick={() => { setBackdropError(''); updateProperties({ backdrop: undefined }); }}
+                  >
+                    Remove
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <button
+                className={styles.addButton}
+                style={{ flex: 'none', alignSelf: 'flex-start', padding: '4px 10px', fontSize: '0.72rem' }}
+                onClick={() => backdropInputRef.current?.click()}
+              >
+                Choose Image…
+              </button>
+            )}
+            <span style={{ color: '#8090a0', fontSize: '0.62rem' }}>
+              {BACKDROP_FORMATS_LABEL} — up to 4 MB. Stretched to the whole world rect and
+              drawn UNDER the cells in the 2D simulator (opacity + Show live there). Cells
+              painted fully opaque hide it — give the Output Mapping colours some alpha, or
+              hide the CA Grid layer, to let the map show through.
+            </span>
+            {backdropError && (
+              <span style={{ color: '#e05050', fontSize: '0.65rem' }}>{backdropError}</span>
             )}
           </div>
           <div className={styles.field}>

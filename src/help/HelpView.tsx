@@ -3841,6 +3841,52 @@ export function HelpView() {
               file metadata only.
             </li>
           </ul>
+          <h3 className={styles.h3}>Georeference &amp; the backdrop map</h3>
+          <p className={styles.p}>
+            Two presentation pieces turn a board into something that reads as a{' '}
+            <em>map</em>. Neither is ever read by a rule &mdash; they are metadata and
+            decoration, in the same spirit as the C8 &ldquo;presentational geometry&rdquo;
+            doctrine.
+          </p>
+          <ul className={styles.list}>
+            <li>
+              <strong>Georeference</strong> (<em>Properties &rarr; Structure</em>) &mdash; where
+              cell (0,0) sits in the real world: an <strong>X / Y origin</strong> and a{' '}
+              <strong>cell size</strong>, plus an optional <strong>CRS</strong> string. An{' '}
+              <code>.asc</code> import fills it from the file&apos;s own header and the{' '}
+              <code>.asc</code> export writes it back, but you can also type it in for a board
+              that arrived some other way. The convention is Esri&apos;s: the origin is the{' '}
+              <em>lower-left corner</em> of the lower-left cell and Y grows <em>upward</em>,
+              while grid row 0 is the <em>top</em> row. With one set, the simulator&apos;s
+              hovered-cell readout gains a second line &mdash; the world coordinates of that
+              cell&apos;s centre. <strong>Clear</strong> drops it; exports then fall back to the
+              neutral origin 0,0 / cell size 1. GenesisCA never reprojects: align upstream in a
+              GIS, exactly as every established tool expects.
+            </li>
+            <li>
+              <strong>Backdrop map</strong> (<em>Info panel</em>) &mdash; a still image (PNG /
+              JPEG / GIF / WebP, up to 4&nbsp;MB) drawn <em>under</em> the cells in the 2D
+              simulator, stretched to the whole world rect so it lines up with the grid by
+              construction (and tiled with it in infinity mode). This is SLEUTH&apos;s hillshade
+              layer / QGIS&apos;s basemap: export a rendered map of the same extent from your
+              GIS and drop it in. It travels inside the <code>.gcaproj</code>.
+            </li>
+            <li>
+              <strong>Make the map visible.</strong> Where a cell is painted <em>fully opaque</em>
+              the backdrop is hidden &mdash; which is correct, and the reason a map model gives
+              its Output-Mapping colours some <em>alpha</em> (every colour node carries an{' '}
+              <code>a</code> channel) or hides the CA Grid layer. Cells with alpha below 255
+              blend over the map.
+            </li>
+            <li>
+              <strong>Show + opacity</strong> live in the simulator&apos;s <em>Settings</em> panel
+              (a <strong>Backdrop</strong> section, shown only when the model actually has one
+              and only in 2D &mdash; the 3D view has its own background). They are per-user view
+              settings, remembered across models, never written into the model. Both capture
+              areas &mdash; <em>current view</em> and <em>simulation</em> &mdash; include the
+              backdrop, so screenshots and recordings show the map too.
+            </li>
+          </ul>
           <h3 className={styles.h3}>Export CSV</h3>
           <p className={styles.p}>
             <strong>Export CSV&hellip;</strong> is the exact mirror of the import, and sits on

@@ -481,6 +481,20 @@ export interface GeoReference {
   crs?: string;
 }
 
+/** A static map image drawn UNDER the grid in the 2D simulator.
+ *
+ *  PRESENTATION ONLY — nothing reads it but the 2D draw path (SLEUTH's hillshade
+ *  layer / QGIS's basemap; see docs/INVESTIGATION_GEOSPATIAL_IO.md Tier 3). It is
+ *  stretched to the WORLD RECT (the same destination the grid blit uses), so it
+ *  lines up with the cells by construction and needs no separate anchor.
+ *  Stored like the thumbnail — a data URL travelling inside the `.gcaproj`.
+ *  Additive + optional; old files load unchanged. */
+export interface MapBackdrop {
+  /** A still-image data URL — see [backdrop.ts](./backdrop.ts) for the accepted
+   *  formats and the size cap. */
+  dataUrl: string;
+}
+
 /** Top-level model properties */
 export interface ModelProperties {
   name: string;
@@ -511,6 +525,10 @@ export interface ModelProperties {
    *  Esri ASCII grid (`.asc`) import from the file's header, read back by the
    *  `.asc` export. Presentation + I/O only — see {@link GeoReference}. */
   georef?: GeoReference;
+  /** Optional static map image drawn UNDER the grid in the 2D simulator (the
+   *  georeferenced sibling of `bg2d`'s flat colour). Presentation only — see
+   *  {@link MapBackdrop}. */
+  backdrop?: MapBackdrop;
   topology: Topology;
   boundaryTreatment: BoundaryTreatment;
   updateMode: UpdateMode;

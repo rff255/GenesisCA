@@ -67,7 +67,7 @@ import { InspectBondPopover, type BondPopoverState, type BondStateValues } from 
 import { PresetSaveDialog } from './PresetSaveDialog';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { serializeSimState, serializePreset, downloadStateFile, readStateFile, downloadPresetFile, readPresetFile, saveBinaryFile, saveTextFile, base64ToArrayBuffer, deserializeTypedArray, migrateSimulationStateV1toV2, deserializeAgentState } from '../model/fileOperations';
-import type { Attribute, CAModel, IndicatorChartSettings, Mapping, Preset, SimulationState } from '../model/types';
+import type { Attribute, CAModel, GeoReference, IndicatorChartSettings, Mapping, Preset, SimulationState } from '../model/types';
 import {
   inputParamsOf, inputBrushKindOf, encodeChannelValues, paramFallbackValue, defaultImageChannelSources,
   type InputParamValues, type ImageChannelSource,
@@ -1582,13 +1582,21 @@ const ChevronDownIcon = () => (
 // playing (part of the "moving the brush cursor slows the sim" bug). A
 // module-level external store + a tiny memoized subscriber keeps the chip live
 // while the parent never re-renders for it (the graphState pub/sub pattern).
-type HoverCellInfo = { col: number; row: number; x0: number; y0: number; x1: number; y1: number } | null;
+// `wx`/`wy` are the hovered cell CENTRE's WORLD coordinates, ALREADY FORMATTED
+// (present only when the model carries a georeference — see worldLabelOfCell).
+// Strings, so the store's cheap dedup compare covers them and the chip stays a
+// pure render.
+type HoverCellInfo = {
+  col: number; row: number; x0: number; y0: number; x1: number; y1: number;
+  wx?: string; wy?: string;
+} | null;
 let hoverCellInfoVal: HoverCellInfo = null;
 const hoverCellInfoListeners = new Set<() => void>();
 function publishHoverCellInfo(v: HoverCellInfo): void {
   const p = hoverCellInfoVal;
   if (p === v || (p !== null && v !== null && p.col === v.col && p.row === v.row
-    && p.x0 === v.x0 && p.y0 === v.y0 && p.x1 === v.x1 && p.y1 === v.y1)) return;
+    && p.x0 === v.x0 && p.y0 === v.y0 && p.x1 === v.x1 && p.y1 === v.y1
+    && p.wx === v.wx && p.wy === v.wy)) return;
   hoverCellInfoVal = v;
   for (const l of hoverCellInfoListeners) l();
 }
@@ -1604,12 +1612,41 @@ const PRESET_MENU_W = 232;
 /** Approximate height of the same menu (5 items + padding) — only used to
  *  decide whether to drop it below or above its trigger. */
 const PRESET_MENU_H = 152;
+/** The formatted WORLD coordinates of a cell's CENTRE under a georeference, or
+ *  null without one.
+ *
+ *  Esri convention throughout: `xllcorner`/`yllcorner` are the LOWER-LEFT CORNER of
+ *  the lower-left cell and Y grows UPWARD, while grid row 0 is the TOP row (the row
+ *  order an `.asc` body is written in) — hence the `nrows - 1 - row` flip.
+ *  Precision follows the cell size: a sub-unit one is degrees and needs decimals,
+ *  a metre-scale one does not. */
+function worldLabelOfCell(
+  georef: GeoReference | undefined,
+  col: number, row: number, nrows: number,
+): { wx: string; wy: string } | null {
+  if (!georef || !(georef.cellSize > 0)) return null;
+  const d = georef.cellSize < 1 ? 6 : 2;
+  return {
+    wx: (georef.xllcorner + (col + 0.5) * georef.cellSize).toFixed(d),
+    wy: (georef.yllcorner + (nrows - 1 - row + 0.5) * georef.cellSize).toFixed(d),
+  };
+}
+
 const HoverCoordsChip = memo(function HoverCoordsChip() {
   const info = useSyncExternalStore(subscribeHoverCellInfo, getHoverCellInfoSnap);
   if (!info) return null;
-  return (info.x0 === info.x1 && info.y0 === info.y1)
+  const cell = (info.x0 === info.x1 && info.y0 === info.y1)
     ? <span title="Hovered cell">Cell ({info.col}, {info.row})</span>
     : <span title="Brush footprint at the hovered cell">Cells ({info.x0},{info.y0}) {'→'} ({info.x1},{info.y1})</span>;
+  if (info.wx === undefined || info.wy === undefined) return cell;
+  return (
+    <>
+      {cell}
+      <span title="World coordinates of the hovered cell's centre, from the model's georeference (Properties → Structure)">
+        {'⌖'} {info.wx}, {info.wy}
+      </span>
+    </>
+  );
 });
 
 // --- C3 (P4): the fast-path diagnostics popover ------------------------------
@@ -2303,6 +2340,26 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
   );
   const bg2dRef = useRef<string | null>(null);
   useEffect(() => { bg2dRef.current = bg2d.enabled ? bg2d.color : null; }, [bg2d]);
+  // Backdrop map (2D) — the model carries the IMAGE (`properties.backdrop`, a data
+  // URL travelling in the .gcaproj); how strongly to SHOW it is a per-USER view
+  // setting, so `showBackdrop`/`backdropOpacity` live here and are persisted in
+  // genesisca_sim_settings — never in the model. Declared with the other persisted
+  // view options, ABOVE the settings-persist effect (the declaration-order trap).
+  const [showBackdrop, setShowBackdrop] = useState<boolean>(saved.current.showBackdrop !== false);
+  const [backdropOpacity, setBackdropOpacity] = useState<number>(
+    typeof saved.current.backdropOpacity === 'number'
+      ? Math.min(1, Math.max(0, saved.current.backdropOpacity as number))
+      : 1,
+  );
+  const showBackdropRef = useRef(showBackdrop); showBackdropRef.current = showBackdrop;
+  const backdropOpacityRef = useRef(backdropOpacity); backdropOpacityRef.current = backdropOpacity;
+  /** The DECODED backdrop image, or null. Decoded ONCE per data URL by an effect
+   *  below; the draw path only ever blits it. */
+  const backdropImageRef = useRef<HTMLImageElement | null>(null);
+  /** The model's georeference, for the hover chip's world-coordinate line (which
+   *  runs on the pointer hot path and must not close over a stale model). */
+  const georefRef = useRef(model.properties.georef);
+  georefRef.current = model.properties.georef;
   // Agent disc outlines (the dark contour stroke on circles with rad >= 2px;
   // in 3D a silhouette rim on the sphere impostors) — optional so dense
   // populations render as clean solid dots. Default OFF; an explicitly saved ON
@@ -2684,6 +2741,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
           agentBrushRadius, agentSeedDensity, agentSeedSpacing, agentNudgeIntensity,
           agentBrushShape, agentBrushW, agentBrushH, agentBrushRingWidth, agentBrushLineWidth,
           showCaGrid, showAgents, showBonds, simulateCells, simulateAgents, brushTarget, bg2d, agentOutlines, showVision,
+          showBackdrop, backdropOpacity,
           indicatorHiddenCategories: Object.fromEntries(
             Object.entries(indicatorHiddenCategories)
               .filter(([, s]) => s.size > 0)
@@ -2695,7 +2753,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       } catch { /* localStorage full */ }
     }, 300);
     return () => clearTimeout(timer);
-  }, [targetFps, unlimitedFps, gensPerFrame, unlimitedGens, activeViewer, brushColor, agentPaintColor, brushW, brushH, brushMapping, showBrushCursor, showGridlines, show2dAxes, smoothScaling, brushShape, brushRadius, brushRingWidth, brushLineWidth, brush3dVolume, brushBoxDepth, infinityCanvas, indicatorVizModes, recordFormat, captureScope, captureResolution, recordQuality, recordOverload, captureOverlays, brushSectionH, agentsFront3d, light3d, cellGaps3d, agentMetaballs, agentGlow, agentBrushRadius, agentSeedDensity, agentSeedSpacing, agentNudgeIntensity, agentBrushShape, agentBrushW, agentBrushH, agentBrushRingWidth, agentBrushLineWidth, showCaGrid, showAgents, showBonds, simulateCells, simulateAgents, brushTarget, bg2d, agentOutlines, showVision, indicatorHiddenCategories, indicatorChartOverrides]);
+  }, [targetFps, unlimitedFps, gensPerFrame, unlimitedGens, activeViewer, brushColor, agentPaintColor, brushW, brushH, brushMapping, showBrushCursor, showGridlines, show2dAxes, smoothScaling, brushShape, brushRadius, brushRingWidth, brushLineWidth, brush3dVolume, brushBoxDepth, infinityCanvas, indicatorVizModes, recordFormat, captureScope, captureResolution, recordQuality, recordOverload, captureOverlays, brushSectionH, agentsFront3d, light3d, cellGaps3d, agentMetaballs, agentGlow, agentBrushRadius, agentSeedDensity, agentSeedSpacing, agentNudgeIntensity, agentBrushShape, agentBrushW, agentBrushH, agentBrushRingWidth, agentBrushLineWidth, showCaGrid, showAgents, showBonds, simulateCells, simulateAgents, brushTarget, bg2d, agentOutlines, showVision, showBackdrop, backdropOpacity, indicatorHiddenCategories, indicatorChartOverrides]);
 
   // Manual Brush — signature-keyed merge effect. Re-derives `manualBrush`
   // whenever the cell attribute set (id+type) changes. Surviving attrs carry
@@ -3763,6 +3821,23 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
     if (opaqueBackdrop) { ctx.fillStyle = CAPTURE_BACKDROP; ctx.fillRect(0, 0, outW, outH); }
     else ctx.clearRect(0, 0, outW, outH);
     const showGrid = gridCellsOnRef.current && (!isAgentModelRef.current || showCaGridRef.current);
+    // Backdrop map underlay — same layer order as the display (void colour, then
+    // the map, then the grid), so a simulation-scope capture carries it too. The
+    // fit framing IS the world rect here, so one stretched blit covers it.
+    let bg2dDrawnEarly = false;
+    const backdropImg = backdropImageRef.current;
+    if (showBackdropRef.current && backdropImg && backdropImg.naturalWidth > 0) {
+      if (!showGrid && bg2dRef.current) {
+        ctx.fillStyle = bg2dRef.current;
+        ctx.fillRect(0, 0, outW, outH);
+        bg2dDrawnEarly = true;
+      }
+      ctx.save();
+      ctx.globalAlpha = Math.min(1, Math.max(0, backdropOpacityRef.current));
+      ctx.imageSmoothingEnabled = true;
+      ctx.drawImage(backdropImg, 0, 0, outW, outH);
+      ctx.restore();
+    }
     const colors = colorsRef.current;
     if (showGrid && colors && colors.length >= w * h * 4) {
       let tmp = simGridTmpRef.current;
@@ -3780,7 +3855,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
         ctx.drawImage(tmp, 0, 0, outW, outH);
         if (smooth) ctx.imageSmoothingEnabled = false;
       }
-    } else if (isAgentModelRef.current && !showGrid && bg2dRef.current) {
+    } else if (isAgentModelRef.current && !showGrid && bg2dRef.current && !bg2dDrawnEarly) {
       ctx.fillStyle = bg2dRef.current;
       ctx.fillRect(0, 0, outW, outH);
     }
@@ -5752,6 +5827,21 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
     // layer is always consistent with the last-drawn pan/zoom/tiling.
     viewXformRef.current = { parentW, parentH, w, h, scale, scaledW, scaledH, ox, oy, infinity, txMin, txMax, tyMin, tyMax };
 
+    /** Run `paint` once per visible world tile, with the grid blit's EXACT
+     *  integer-snapped tiling — so anything drawn through it (the backdrop map,
+     *  the bg2d fill) lines up with the cells to the pixel, seams included. */
+    const forEachWorldTile = (paint: (x: number, y: number, tw: number, th: number) => void) => {
+      if (infinity) {
+        for (let ty = tyMin; ty <= tyMax; ty++) {
+          const yTop = Math.round(oy + ty * scaledH), yBot = Math.round(oy + (ty + 1) * scaledH);
+          for (let tx = txMin; tx <= txMax; tx++) {
+            const xLeft = Math.round(ox + tx * scaledW), xRight = Math.round(ox + (tx + 1) * scaledW);
+            paint(xLeft, yTop, xRight - xLeft, yBot - yTop);
+          }
+        }
+      } else paint(ox, oy, scaledW, scaledH);
+    };
+
     // Per-cell glyph overlay. Drawn AFTER the colour blit (so glyphs sit on
     // top of cell colours) but BEFORE gridlines and brush cursor (so those
     // remain crisp on top of glyphs). Skipped entirely when no glyph data
@@ -6144,6 +6234,39 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
     // agents-only model (gridCells off) never draws the grid, so the environment
     // background applies without the user unchecking "Show".
     const showGrid2d = gridCellsOnRef.current && (!isAgentModelRef.current || showCaGridRef.current);
+
+    // ── Backdrop map underlay (2D) ────────────────────────────────────────────
+    // A static map image (`properties.backdrop`) stretched to the WORLD RECT,
+    // drawn UNDER everything the simulation renders — SLEUTH's hillshade layer /
+    // QGIS's basemap. Presentation only; no rule reads it.
+    //
+    // Where a cell is painted fully opaque the backdrop is invisible — CORRECT,
+    // and the reason a map model gives its Output-Mapping colours some alpha (or
+    // hides the CA Grid layer). Smoothing is ON for this blit only: a photographic
+    // map upscale should interpolate, unlike the crisp cell grid.
+    //
+    // The bg2d VOID COLOUR normally fills the world rect further down (it applies
+    // only when the grid layer is hidden). With a backdrop it must go UNDERNEATH
+    // the map, so it is drawn here instead and the later block is skipped —
+    // otherwise a flat colour would completely hide the map it is meant to back.
+    let bg2dDrawnEarly = false;
+    const backdropImg = backdropImageRef.current;
+    if (!is3dRef.current && showBackdropRef.current && backdropImg && backdropImg.naturalWidth > 0) {
+      const bdAgentDirect = !agentComposite && agentDirectRenderActiveRef.current && agentRenderCanvasRef.current;
+      if (!showGrid2d && bg2dRef.current && !agentComposite && !(bdAgentDirect && showAgentsRef.current)) {
+        ctx.save();
+        ctx.fillStyle = bg2dRef.current;
+        forEachWorldTile((x, y, tw, th) => ctx.fillRect(x, y, tw, th));
+        ctx.restore();
+        bg2dDrawnEarly = true;
+      }
+      ctx.save();
+      ctx.globalAlpha = Math.min(1, Math.max(0, backdropOpacityRef.current));
+      ctx.imageSmoothingEnabled = true;
+      forEachWorldTile((x, y, tw, th) => ctx.drawImage(backdropImg, x, y, tw, th));
+      ctx.restore();
+    }
+
     if (agentComposite) {
       // Blit the DISPLAY-sized composite 1:1 (it carries grid+agents through the
       // display-res camera + the bg backdrop when the grid layer is hidden). A
@@ -6280,18 +6403,12 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       // showAgents, so with agents hidden the shader's clear never reaches the
       // display and the backdrop would vanish entirely (audit L1). Requiring
       // showAgents here falls through to the CPU bg fill in that case.
-    } else if (!showGrid2d && bg2dRef.current) {
+    } else if (!showGrid2d && bg2dRef.current && !bg2dDrawnEarly) {
+      // (`bg2dDrawnEarly`: a backdrop map is being drawn, and the void colour
+      //  already went down UNDER it — see the backdrop block above.)
       ctx.save();
       ctx.fillStyle = bg2dRef.current;
-      if (infinity) {
-        for (let ty = tyMin; ty <= tyMax; ty++) {
-          const yTop = Math.round(oy + ty * scaledH), yBot = Math.round(oy + (ty + 1) * scaledH);
-          for (let tx = txMin; tx <= txMax; tx++) {
-            const xLeft = Math.round(ox + tx * scaledW), xRight = Math.round(ox + (tx + 1) * scaledW);
-            ctx.fillRect(xLeft, yTop, xRight - xLeft, yBot - yTop);
-          }
-        }
-      } else { ctx.fillRect(ox, oy, scaledW, scaledH); }
+      forEachWorldTile((x, y, tw, th) => ctx.fillRect(x, y, tw, th));
       ctx.restore();
     }
 
@@ -6486,6 +6603,22 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
   // onReady + the sprite playback rAF).
   const drawRef = useRef(draw);
   drawRef.current = draw;
+
+  // --- Backdrop map: decode the stored data URL ONCE ---
+  // Keyed on the data URL itself (not the whole model), so an unrelated model
+  // edit never re-decodes. The draw path only blits `backdropImageRef`, so the
+  // decode is async and simply redraws on load. `drawRef` (not `draw`) because
+  // `draw`'s identity churns and would re-decode with it.
+  useEffect(() => {
+    const url = model.properties.backdrop?.dataUrl;
+    if (!url) { backdropImageRef.current = null; drawRef.current(); return; }
+    let cancelled = false;
+    const img = new Image();
+    img.onload = () => { if (!cancelled) { backdropImageRef.current = img; drawRef.current(); } };
+    img.onerror = () => { if (!cancelled) { backdropImageRef.current = null; drawRef.current(); } };
+    img.src = url;
+    return () => { cancelled = true; };
+  }, [model.properties.backdrop?.dataUrl]);
 
   // --- Agent sprites: registry reconcile (main-thread render) ---
   // Decode new/changed sprites + drop removed ones whenever `model.sprites`
@@ -9956,7 +10089,9 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
   useEffect(() => { showBrushCursorRef.current = showBrushCursor; draw(); }, [showBrushCursor, draw]);
   // Redraw when the environment background changes (the ref is updated in its own
   // effect above; this one repaints so the change shows immediately even when paused).
-  useEffect(() => { draw(); }, [bg2d, agentOutlines, showVision, draw]);
+  // (`showBackdrop`/`backdropOpacity`: their refs are assigned at render, so this
+  //  repaint is what makes the toggle/slider land immediately even while paused.)
+  useEffect(() => { draw(); }, [bg2d, agentOutlines, showVision, showBackdrop, backdropOpacity, draw]);
   // Glow option — redraw so the agent RenderView camera picks up the change.
   // NO free↔frame flip: 3D glow used to detach the worker's sphere render here (the
   // bloom was gl3d-only), but the WGSL sphere pass carries its own bloom now, so
@@ -11806,10 +11941,14 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
           if (dc < minDc) minDc = dc;
           if (dc > maxDc) maxDc = dc;
         }
+        // World coordinates (georeferenced models only) — two multiplies + a
+        // toFixed, on a path already coalesced to <=1 run per frame.
+        const world = worldLabelOfCell(georefRef.current, gridPos.col, gridPos.row, gridHeight.current);
         publishHoverCellInfo({
           col: gridPos.col, row: gridPos.row,
           x0: gridPos.col + minDc, y0: gridPos.row + minDr,
           x1: gridPos.col + maxDc, y1: gridPos.row + maxDr,
+          ...(world ?? {}),
         });
       } else {
         publishHoverCellInfo(null);
@@ -13926,6 +14065,37 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
               <option value="constant">Constant</option>
             </select>
           </div>
+
+          {/* Backdrop map — the model's static map image drawn UNDER the grid.
+              Rendered only when the model HAS one and we are in 2D: with no image
+              there is nothing to show and in 3D the voxel scene has its own
+              background, so a control here could do nothing (hidden, not greyed).
+              The image is MODEL data (Info panel); Show + opacity are per-USER
+              view settings, persisted in genesisca_sim_settings. */}
+          {!is3D && !!model.properties.backdrop?.dataUrl && (
+            <>
+              <hr className={styles.divider} />
+              <div className={styles.sectionTitle}>Backdrop</div>
+              <label className={styles.fieldRow} style={{ gap: 6, cursor: 'pointer' }}
+                title="Draw the model's backdrop map under the cells. Fully opaque cells hide it — give the Output Mapping colours some alpha, or hide the CA Grid layer.">
+                <input type="checkbox" checked={showBackdrop} onChange={e => setShowBackdrop(e.target.checked)} />
+                <span className={styles.statLabel} style={{ flex: 1 }}>Show map</span>
+              </label>
+              <div className={styles.fieldRow} style={{ marginTop: 4 }}>
+                <span className={styles.statLabel} title="Backdrop opacity">Opacity</span>
+                <input
+                  type="range" min={0} max={1} step={0.01}
+                  value={backdropOpacity}
+                  disabled={!showBackdrop}
+                  onChange={e => setBackdropOpacity(Number(e.target.value))}
+                  style={{ flex: 1, minWidth: 0, opacity: showBackdrop ? 1 : 0.4 }}
+                />
+                <span className={styles.statLabel} style={{ width: 30, textAlign: 'right' }}>
+                  {Math.round(backdropOpacity * 100)}%
+                </span>
+              </div>
+            </>
+          )}
 
           <hr className={styles.divider} />
           <div className={styles.sectionTitle}>Presets</div>

@@ -38,6 +38,13 @@ function newCondId(): string {
   return `ec_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`;
 }
 
+/** The NEUTRAL georeference — cell (0,0)'s lower-left corner at the world origin,
+ *  one world unit per cell. It is the base every Georeference field edit spreads
+ *  over, so typing ONE number into an absent georef yields a COMPLETE record
+ *  instead of a partial one (`GeoReference`'s three numbers are all required).
+ *  Deliberately the same fallback `buildAscGrid` writes with no georef stored. */
+const defaultGeoref = { xllcorner: 0, yllcorner: 0, cellSize: 1 } as const;
+
 // --- Collapsible section wrapper -------------------------------------------
 // Each top-level Properties section collapses via its title row (chevron).
 // Collapsed bodies stay MOUNTED (display: none) — the Indicators list is a
@@ -795,6 +802,77 @@ export function PropertiesPanelContent({ mode = 'list' }: PanelContentProps = {}
                 </span>
               </label>
             </div>
+          </div>
+
+          {/* Georeference — where the board sits in the real world. Written by the
+              Esri ASCII grid (.asc) import from the file's own header, read back by
+              the .asc export, and used by the simulator's world-coordinate readout.
+              PRESENTATION + I/O ONLY: no compiler, worker or engine reads it (the C8
+              "presentational geometry" doctrine), so it is always editable. */}
+          <div style={{ marginTop: 14, borderTop: '1px solid #333', paddingTop: 10 }}>
+            <label className={styles.fieldLabel} style={{ marginBottom: 4 }}>Georeference</label>
+            <div className={styles.fieldRow}>
+              <div className={styles.field}>
+                <label className={styles.fieldLabel}>X origin</label>
+                <NumberField
+                  className={styles.numberInput}
+                  value={properties.georef?.xllcorner}
+                  placeholder="—"
+                  title="World X of the LOWER-LEFT CORNER of the lower-left cell (the Esri xllcorner convention)."
+                  onNumber={n => updateProperties({ georef: { ...defaultGeoref, ...properties.georef, xllcorner: n } })}
+                />
+              </div>
+              <div className={styles.field}>
+                <label className={styles.fieldLabel}>Y origin</label>
+                <NumberField
+                  className={styles.numberInput}
+                  value={properties.georef?.yllcorner}
+                  placeholder="—"
+                  title="World Y of the LOWER-LEFT CORNER of the lower-left cell (the Esri yllcorner convention). Y grows UPWARD, so it belongs to the BOTTOM row."
+                  onNumber={n => updateProperties({ georef: { ...defaultGeoref, ...properties.georef, yllcorner: n } })}
+                />
+              </div>
+              <div className={styles.field}>
+                <label className={styles.fieldLabel}>Cell size</label>
+                <NumberField
+                  className={styles.numberInput}
+                  value={properties.georef?.cellSize}
+                  min={0}
+                  placeholder="—"
+                  title="World units per cell (square cells — the .asc format has no separate X/Y size)."
+                  onNumber={n => updateProperties({ georef: { ...defaultGeoref, ...properties.georef, cellSize: n } })}
+                />
+              </div>
+            </div>
+            <div className={styles.fieldRow} style={{ marginTop: 6, alignItems: 'flex-end' }}>
+              <div className={styles.field} style={{ flex: 1 }}>
+                <label className={styles.fieldLabel}>CRS</label>
+                <input
+                  className={styles.textInput}
+                  value={properties.georef?.crs ?? ''}
+                  placeholder="e.g. EPSG:32633 (optional)"
+                  title="Coordinate reference system. Metadata only — GenesisCA never reprojects; align upstream in a GIS."
+                  onChange={e => updateProperties({
+                    georef: { ...defaultGeoref, ...properties.georef, crs: e.target.value || undefined },
+                  })}
+                />
+              </div>
+              {properties.georef && (
+                <button
+                  className={styles.deleteButton}
+                  style={{ flex: 'none', padding: '4px 10px', fontSize: '0.7rem' }}
+                  title="Drop the georeference — exports fall back to the neutral origin 0,0 / cell size 1."
+                  onClick={() => updateProperties({ georef: undefined })}
+                >
+                  Clear
+                </button>
+              )}
+            </div>
+            <span style={{ color: '#888', fontSize: '0.66rem' }}>
+              Where cell (0,0) sits in the real world. Set automatically by an Esri ASCII
+              grid (.asc) import, written back by the .asc export, and shown next to the
+              hovered cell in the Simulator. Nothing in the rule reads it.
+            </span>
           </div>
         </div>
       </CollapsibleSection>
