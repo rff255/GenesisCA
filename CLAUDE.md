@@ -5785,6 +5785,47 @@ Stock **Game of Life**: no Georeference block, no Backdrop block, the Load menu 
 
 ---
 
+## GIS sample models — real satellite data in the shipped library (branch `tasks_batch_2026_08`)
+
+Two library models built from **open geographic data**, and the demonstration + regression vehicles for the whole geospatial milestone. Both are grid-only, synchronous, 200 x 200 at **1 arc-second (1/3600 deg)** on the EPSG:4326 graticule, and ship on the **WebGPU** grid target per the library compile-target policy. Generators: [scripts/gen-wildfire-sierra.mjs](scripts/gen-wildfire-sierra.mjs) + [scripts/gen-urban-recife.mjs](scripts/gen-urban-recife.mjs) over the shared [scripts/geodataLib.mjs](scripts/geodataLib.mjs).
+
+| | **Wildfire - Sierra Nevada** | **Urban Growth - Recife** |
+|---|---|---|
+| window | west −119.935°, south 39.145° | west −34.98°, south −8.06° |
+| place | Lake Tahoe east shore + Marlette Lake + the Carson Range crest | the Camaragibe / Jaboatão growth frontier west of central Recife |
+| sources | Copernicus DEM GLO-30 (tile N39/W120) · ESA WorldCover 2021 v200 (N39W120) | Copernicus DEM GLO-30 (S09/W035) · ESA WorldCover (S09W036) · OpenStreetMap major roads (Overpass) |
+| layers | `fuel` (tag ×6), `elevation` (int, m) | `landUse` (tag ×5), `roadDist` (int, cells), `slope` (int, %) |
+| rule | `P = spreadRate · ignite[fuel] · drive · 0.45`, drive = Σ per burning neighbour of `(1/dist) · windWeight · slopeFactor` | `P = base · suit[landUse] · edge · (1 + rw·exp(−rd/rr)) / (1 + sr·slope/20)` |
+| size | 1.53 MB | 2.00 MB |
+
+### The rules, and the two things that are load-bearing about them
+- **WIND is eight compile-time constants, not eight runtime branches.** Fire arriving from a neighbour at `(dr, dc)` travels in the compass direction `(−dc east, +dr north)`, so its weight is `1 + windE·(−dc/dist) + windN·(dr/dist)`. Those coefficients are baked into **two Expression nodes** (four cardinals; four diagonals, whose `1/√2` distance factor and projected wind components are the SAME constant), which is what keeps the whole mechanism to 6 inputs per expression. The eight per-direction reads come from ONE Moore neighbourhood with compass **tags** (`getNeighborAttributeByTag`), not eight one-cell neighbourhoods.
+- **SLOPE rides each direction's own term** (`max(0, 1 + slopeBoost · clamp((myElev − nbrElev)/15 m, −1, 1))`), so it is per-neighbour rather than a single averaged number — which is why `slopeBoost` 0 vs 1.6 swings the burn's mean elevation by ~85 m (measured).
+- **URBAN counts Urban and Road neighbours SEPARATELY, and that separation is the feature.** Counting them together made every road-adjacent cell eligible whatever `Road attraction` said — **measured: turning the slider to 0 left the near-road growth rate at 1.07× the far-from-road rate before the split and 2.06× after**, i.e. the slider had been nearly inert. Counting them apart lets ONE slider own the whole road mechanism (`edge = (nUrban + rw·0.25·nRoad)/8`, plus the distance pull), so at 0 the network genuinely leaves the rule.
+
+### ⚠ THE RESET TRAP — the crux of any data-backed model
+The layers live in the model's embedded `simulationState`, so the model opens with the landscape and needs **no network at load time**. But **Reset re-seeds the grid from the model's Init Events, and imported data is not an Init Event** — so Reset CLEARS the landscape. Mitigated three ways, all three required:
+1. a **board-carrying `Restore landscape` preset** (the same grid block, via `serializePreset`'s shape) as the FIRST preset;
+2. `properties.instructions` says so in its opening sentence (the Simulator's ⓘ pill);
+3. verified end to end — Reset wipes it, the preset restores it **hash-identical**.
+Any future data-backed model MUST ship that preset. (A Grid Init Event cannot substitute: there is nothing to procedurally regenerate — the data came from a satellite.)
+
+### The generator conventions (follow these for a third one)
+- **`scripts/geodataLib.mjs`** owns everything shared: the **cache**, windowed COG reads, Overpass, the georef, Horn slope + hillshade, the BFS distance field, a dependency-free **PNG encoder** (`node:zlib` + chunk framing — no new npm dependency), and `gridStateBlock()` (the embedded-board shape, mirroring `serializeSimState`).
+- **FETCH ONCE.** Every network read is cached under **`scripts/geodata-cache/`** (gitignored) keyed by the exact window, so a re-run is offline-stable and **byte-identical** (verified). Delete the directory to re-fetch.
+- **WINDOWS, NOT TILES**: `geotiff`'s `fromUrl` range-reads only the tiles covering the window — a few hundred KB out of a 38 MB / 114 MB file. **Snap the pixel window with an EPSILON** (`floor(x + 1e-6)` / `ceil(x − 1e-6)`): a window whose edges land exactly on the source graticule otherwise gains a spurious row/column from float drift, and resampling a 201-wide block onto 200 cells misregisters the whole layer by half a cell.
+- **Resample CONTINUOUS data with `resampleAverage` and CATEGORICAL data with `resampleNearest`** (both imported straight from the shipped [rasterResample.ts](src/simulator/rasterResample.ts) — Node 22 strips types, so a dependency-free `.ts` module imports directly; `geojsonImport.ts` needs the esbuild helper because of its extension-less imports). Averaging class codes invents classes.
+- **Only the DATA layers go in the board.** The worker's `loadState` SKIPS an attribute the payload does not carry, so `state` / `burnTimer` are omitted and keep their defaults — which IS the starting configuration, at no file size.
+- **`colors` is shipped for real** (computed from the default viewer's palette): `applySimulationState` gates `hasGrid` on `state.colors != null`, and shipping the buffer the app itself would write makes the first frame right on every compile target before any colour pass runs.
+- The **backdrop** is rendered at the land cover's native 10 m resolution (3× the grid) with the hillshade bilinearly upsampled, and the **shade is quantised to 48 levels** — invisible on screen, and it cut the PNGs from 251/308 KB to **120/143 KB**.
+- Both models set `gisTools: true`, a real `georef`, and a default viewer whose palette is **alpha 0 for the untouched classes** so the backdrop reads through (measured: 50.6 % of the Recife board is fully transparent).
+
+### Two silent-failure traps these models hit (worth knowing before authoring a graph in a script)
+- **The Color→Attribute event root's node type is `inputColor`, NOT `inputMapping`.** An unknown `nodeType` is silently DROPPED from the flow walk — no compile error, no root found, and the brush simply does nothing. `compileAll` reported zero errors; only running the real `paint` message in the app caught it.
+- **`_port_<id>` only works on a port that declares an `inlineWidget`.** Group Counting's `Compare To` has none, so `_port_compare: '2'` was ignored and the count silently fell back to `> 0`. Wire a `getConstant` instead. (`statement.y`, `arithmeticOperator.y`, `setAttribute.value` and `getRandom.min/max` DO have widgets and are fine.)
+
+---
+
 ## Library compile-target policy: WebGPU where supported, else WASM (2026-07-27)
 
 Every shipped library model now sets its compile target(s) by ONE rule — **WebGPU wherever the compile gates accept it, else WASM** — applied to BOTH the grid target (`useWebGPU`/`useWasm`) and the agent target (`centerBased.agentTarget`). Surveyed + applied mechanically (a throwaway script compiled every model with each target forced and read the gates); the matching **gen-\* scripts were updated in lockstep** so a re-run doesn't revert (gen-ant-necrophoresis / -chemotaxis / -boids / -gol-agents / -particle-life / -tissue / -tissue3d gained `agentTarget: 'webgpu'` and/or `useWebGPU: true`; gen-life3d + gen-overseer-stats flipped to WebGPU). Resulting state:

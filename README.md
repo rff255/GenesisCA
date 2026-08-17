@@ -171,7 +171,7 @@ Export PNG stills and WebM or GIF recordings, framed either to the whole world o
 
 ### Learn from the library
 
-Dozens of ready-made models: classics, chemistry, reaction-diffusion, morphogenesis, flocking, graph automata, searchable, filterable, and forkable as the starting point for your own.
+Dozens of ready-made models: classics, chemistry, reaction-diffusion, morphogenesis, flocking, graph automata, and real-world geography (a wildfire on Copernicus/ESA satellite terrain, a city growing along OpenStreetMap roads), searchable, filterable, and forkable as the starting point for your own.
 
 ### Runs anywhere, works offline
 
