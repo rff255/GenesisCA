@@ -3800,6 +3800,15 @@ export function HelpView() {
           </p>
           <h3 className={styles.h3}>Using real map data &mdash; the workflow</h3>
           <p className={styles.p}>
+            The geographic tools live behind one switch: <em>Properties &rarr; Structure &rarr;{' '}
+            <strong>Geographic tools (GIS)</strong></em>. It is off for a normal model, so the
+            georeference, the map backdrop and the GIS import/export items stay out of the way
+            &mdash; and it turns itself <strong>on automatically</strong> the moment you import
+            geographic data (a dropped <code>.asc</code> / <code>.tif</code> / <code>.geojson</code>{' '}
+            always opens its dialog, gate or no gate). Turning it back off only hides those
+            controls; a stored georeference or backdrop is kept.
+          </p>
+          <p className={styles.p}>
             A geographic model (forest fire, city growth, infection spread) is set up the same
             way the established simulators do it: the world is a <strong>stack of co-registered
             layers</strong> &mdash; one attribute per quantity &mdash; prepared <em>upstream</em>{' '}

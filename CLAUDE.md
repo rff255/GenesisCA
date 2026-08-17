@@ -5590,7 +5590,7 @@ The Overseer pairing (`ovLoadAgentsCsv` over a session-scoped named CSV store) �
 
 ## Esri ASCII grid (`.asc`) — the GIS raster seam + `ModelProperties.georef` (branch `tasks_batch_2026_08`)
 
-**Tier 1 (+ the Tier-3 georef record it needs) of [docs/INVESTIGATION_GEOSPATIAL_IO.md](docs/INVESTIGATION_GEOSPATIAL_IO.md).** Makes GenesisCA directly consumable from every GIS on earth by the SAME contract FARSITE / Cell2Fire / NetLogo use, with **no new dependency and no projection machinery** (alignment happens upstream — every surveyed tool refuses or ignores misaligned data). It is an EXTENSION of the CSV import/export, not a parallel feature: one dialog, one pure module, the existing `importGridValues` worker seam.
+**Tier 1 (+ the Tier-3 georef record it needs) of [docs/INVESTIGATION_GEOSPATIAL_IO.md](docs/INVESTIGATION_GEOSPATIAL_IO.md); its UI rides the "Geographic tools (GIS)" gate below.** Makes GenesisCA directly consumable from every GIS on earth by the SAME contract FARSITE / Cell2Fire / NetLogo use, with **no new dependency and no projection machinery** (alignment happens upstream — every surveyed tool refuses or ignores misaligned data). It is an EXTENSION of the CSV import/export, not a parallel feature: one dialog, one pure module, the existing `importGridValues` worker seam.
 
 **ZERO compiler impact, structurally**: `git status` touches no file under `src/modeler/vpl/compiler/` and no worker/engine file. Proven, not asserted — `check-compile-identity` reports **29 models, all surfaces unchanged** against a stashed HEAD.
 
@@ -5630,7 +5630,7 @@ Everything in Tier 5 (in-browser reprojection, NetCDF, live XYZ basemaps). Also 
 
 ## Backdrop map + georef editing + the world-coordinate readout (Tier 3, branch `tasks_batch_2026_08`)
 
-The visible half of [docs/INVESTIGATION_GEOSPATIAL_IO.md](docs/INVESTIGATION_GEOSPATIAL_IO.md) **Tier 3**: the georef record the `.asc` import writes becomes EDITABLE and READABLE, and a model can carry a static map image drawn under the cells (SLEUTH's hillshade layer / QGIS's basemap). **PRESENTATION ONLY — ZERO compiler / worker impact**: `git diff --stat` is `types.ts` + the new `backdrop.ts` + `InfoPanelContent` + `PropertiesPanelContent` + `SimulatorView` + `HelpView`; nothing under `compiler/` and no `sim.worker.ts`.
+The visible half of [docs/INVESTIGATION_GEOSPATIAL_IO.md](docs/INVESTIGATION_GEOSPATIAL_IO.md) **Tier 3** (every surface below is behind the "Geographic tools (GIS)" gate — see that section): the georef record the `.asc` import writes becomes EDITABLE and READABLE, and a model can carry a static map image drawn under the cells (SLEUTH's hillshade layer / QGIS's basemap). **PRESENTATION ONLY — ZERO compiler / worker impact**: `git diff --stat` is `types.ts` + the new `backdrop.ts` + `InfoPanelContent` + `PropertiesPanelContent` + `SimulatorView` + `HelpView`; nothing under `compiler/` and no `sim.worker.ts`.
 
 ### Schema — the IMAGE is model data, the VIEW settings are not
 - **`ModelProperties.backdrop?: MapBackdrop`** = `{ dataUrl }` — a STILL image travelling inside the `.gcaproj` exactly like the thumbnail (verified: `stringifyCompact`'s whole-object walk serialises the nested object with no per-key handling). Rules in [backdrop.ts](src/model/backdrop.ts): `BACKDROP_ACCEPT` (png/jpeg/gif/webp — **deliberately NARROWER than the thumbnail's: NO video**, since the draw path blits it every frame and a `<video>` frame source would need its own play/seek lifecycle for no gain) + `BACKDROP_MAX_BYTES` = **4 MB** (a legible map export is photographic, unlike a 200 px card preview — but it still rides in the `.gcaproj`, so it stays bounded).
@@ -5657,7 +5657,7 @@ Backdrop confined to the world rect **exactly** (746 496 lit = 864², the 100 22
 
 ## GeoTIFF import (Tier 2 — the ONE runtime dependency, branch `tasks_batch_2026_08`)
 
-**Tier 2 of [docs/INVESTIGATION_GEOSPATIAL_IO.md](docs/INVESTIGATION_GEOSPATIAL_IO.md).** The sources users actually download — LANDFIRE, WorldPop, NLCD, Copernicus — ship GeoTIFF, and asking them to convert every band to `.asc` in QGIS first is pure friction. Pick a `.tif` → map each band to a cell attribute (with a categorical code table for tag/bool targets) → resize the grid to the raster or resample onto it → apply through the **EXISTING `importGridValues` seam**.
+**Tier 2 of [docs/INVESTIGATION_GEOSPATIAL_IO.md](docs/INVESTIGATION_GEOSPATIAL_IO.md); its menu item rides the "Geographic tools (GIS)" gate (a DROPPED `.tif` always opens the dialog).** The sources users actually download — LANDFIRE, WorldPop, NLCD, Copernicus — ship GeoTIFF, and asking them to convert every band to `.asc` in QGIS first is pure friction. Pick a `.tif` → map each band to a cell attribute (with a categorical code table for tag/bool targets) → resize the grid to the raster or resample onto it → apply through the **EXISTING `importGridValues` seam**.
 
 **ZERO compiler / worker impact, structurally**: `git status` touches no file under `src/modeler/vpl/compiler/`, no `sim.worker.ts` and no `engine/` file — the dialog produces the SAME `layers[]` payload the `.asc` path does.
 
@@ -5695,7 +5695,7 @@ No GeoTIFF **export** (the `.asc` export already writes a GIS raster, and a writ
 
 ## GeoJSON vector import (Tier 4 — the NetLogo/GAMA parity piece, branch `tasks_batch_2026_08`)
 
-**Tier 4 of [docs/INVESTIGATION_GEOSPATIAL_IO.md](docs/INVESTIGATION_GEOSPATIAL_IO.md).** Rasters cover the ground; VECTORS are the things on it — lakes / exclusion zones / districts (polygons), rivers / roads (lines), towns / nests / sensors (points). Two consumers, exactly as the investigation frames them: **rasterise onto a cell attribute**, or **points → agents**. **NO NEW DEPENDENCY** (GeoJSON is JSON and every geometry primitive is arithmetic) and therefore **no viewer alias** — the dialog ships in the viewer like the CSV / `.asc` ones.
+**Tier 4 of [docs/INVESTIGATION_GEOSPATIAL_IO.md](docs/INVESTIGATION_GEOSPATIAL_IO.md); its menu item rides the "Geographic tools (GIS)" gate (a DROPPED `.geojson` always opens the dialog, and applying one turns the gate on).** Rasters cover the ground; VECTORS are the things on it — lakes / exclusion zones / districts (polygons), rivers / roads (lines), towns / nests / sensors (points). Two consumers, exactly as the investigation frames them: **rasterise onto a cell attribute**, or **points → agents**. **NO NEW DEPENDENCY** (GeoJSON is JSON and every geometry primitive is arithmetic) and therefore **no viewer alias** — the dialog ships in the viewer like the CSV / `.asc` ones.
 
 **ZERO compiler impact, structurally**: `git status` touches no file under `src/modeler/vpl/compiler/` and no `engine/` file. The ONE worker edit is an additive optional flag on an existing message (below).
 
@@ -5724,6 +5724,48 @@ Modelled on `CsvImportDialog`. A **Target** switch when both consumers apply (gr
 
 ### Not built (deliberate)
 No GeoJSON **export** (the board is a raster — `.asc` / CSV already write it; vectorising cell regions is a different feature). No **Shapefile** reader (convert in QGIS — the Tier-0 doctrine). No reprojection. No per-feature STYLE (colour / stroke) — the value is what a rule reads, not how it looks. A vector cannot RESIZE the grid (it has no native resolution), and a flat layer writes ONE 3D layer rather than extruding.
+
+---
+
+## Geographic tools (GIS) gate — `ModelProperties.gisTools` (branch `tasks_batch_2026_08`)
+
+The four GIS features above muddy Properties / Info / the transport menus for the overwhelming majority of models that will never be maps, so they sit behind ONE opt-in model property. **UI ONLY — `git status` touches no file under `src/modeler/vpl/compiler/`, no `sim.worker.ts` and no `engine/` file**; nothing in a compiler, the worker or the engine reads the flag, and the five pure-core harnesses (`test-asc-import` / `test-geotiff-import` / `test-geojson-import` / `test-csv-import` / `test-csv-export`) are unaffected by construction.
+
+**`ModelProperties.gisTools?: boolean`** — additive + optional, **absent ⇒ OFF**, no migration for a normal file. `EMPTY_MODEL` is untouched, so every new model starts clean. Edited by a checkbox in **Properties → Structure** (placed under the Dimension radios: it is a structural statement about what the board *is*, and it must sit ABOVE the Georeference block it gates, so the block appearing reads as that checkbox's consequence).
+
+### GATED (hidden — never disabled: a non-map model can do nothing with any of it)
+| surface | file |
+|---|---|
+| Properties → Structure → **Georeference** block | `PropertiesPanelContent.tsx` |
+| Info panel → **Backdrop map** block | `InfoPanelContent.tsx` |
+| Simulator → **Backdrop** section (its `!is3D && has-an-image` terms stay; the gate is additive) | `SimulatorView.tsx` |
+| Transport **Load** menu → *Import GeoTIFF…* / *Import GeoJSON…*; the CSV item's LABEL (`Import CSV…` vs `Import CSV / ASC…`) | `SimulatorView.tsx` |
+| Transport **Save** menu → the export item's LABEL (`Export CSV…` vs `Export CSV / ASC…`) | `SimulatorView.tsx` |
+| CSV export dialog → the grid **Format** select (CSV vs `.asc`) — off ⇒ the `.asc` branch is unreachable and `isAsc` is forced false | `CsvExportDialog.tsx` |
+| The hover chip's **world-coordinate line** — `georefRef` resolves to `undefined` when the gate is off | `SimulatorView.tsx` |
+| The backdrop **UNDERLAY ITSELF** — see the decode note below | `SimulatorView.tsx` |
+
+- **The backdrop gate rides the DECODE, not the draw paths** (`backdropImageRef` stays null when the gate is off). A null image is already the "no backdrop" state every consumer handles, so ONE effect turns the underlay off for the display AND the simulation-scope capture — and it keeps the hidden Backdrop section honest: a map that kept drawing with no control to stop it is exactly the dead-end the enabled-control rule inverts.
+- **Hiding is never deleting.** Turning the gate off leaves `georef` and `backdrop` on the model, so re-enabling restores both (verified: 111/222/5 survives an off→on round trip). The Georeference block's own **Clear** button is still the way to drop the record.
+
+### UNGATED (deliberate — the reasoning matters more than the list)
+- **CSV / char-board / image import and CSV export** — pre-existing GENERAL tools that predate the GIS work and have nothing to do with maps.
+- **Drag-and-drop routing of `.asc` / `.tif` / `.geojson` ALWAYS works** (`App.tsx` unchanged): a dropped GIS file is an unambiguous statement of intent, and refusing it would dead-end the very workflow the Help recipe teaches. The dialog opens, the import applies, and the gate turns itself on.
+- **The hidden file inputs' `accept` lists** — the CSV picker still sniffs an `.asc` chosen through it with the gate off (it then auto-enables like any other GIS import).
+- **Everything in the engine / worker / compilers** — the flag is presentation, in the C8 sense.
+
+### AUTO-ENABLE — the discovery path (why the gate can be off by default without hiding the feature)
+A GEOGRAPHIC import that APPLIES turns the gate on, so a fresh model that swallows a `.tif` gains the Georeference + Backdrop blocks and the GIS menu items from then on:
+- **`applyGridImport(r, busyLabel, gis)`** writes **ONE** patch — `georef` when the file carried one, `gisTools: true` when `gis || r.georef` and it is not already on. One dispatch, and a repeat import of an already-geographic model re-dirties nothing.
+- **`.asc`** always carries a georef (`CsvImportDialog` builds one from `primaryAsc`, defaulting to 0/0/1), so it enables through the `r.georef` arm. **GeoTIFF passes `gis: true` explicitly** — a `.tif` is geographic by definition even when it has no geokeys and `georefFromGeoTiff` returned nothing.
+- **GeoJSON enables in BOTH coordinate modes** (`enableGisTools()` at the top of `applyGeoJsonImport`). A judgment call: a grid-cells burn is still a vector import, and enabling only in World mode would make the menu item vanish again right after a perfectly good import.
+- **Plain CSV / char-board / image imports do NOT enable it** — general tools, not geographic ones.
+
+### MIGRATION — inference, once, only when the field is absent
+`LOAD_MODEL` ([ModelContext.tsx](src/model/ModelContext.tsx), beside the other additive guards): a file with **no `gisTools` field** but **with `properties.georef` or `properties.backdrop`** infers `true`, so a GIS-touched file saved before the gate keeps its UI. An explicit `false` is the user's own choice and stands; everything else stays off. Idempotent.
+
+### Verified (real UI, dev server, **0 console errors**)
+Stock **Game of Life**: no Georeference block, no Backdrop block, the Load menu reads exactly `Load state (.gcastate)` + **`Import CSV…`** (no GeoTIFF, no GeoJSON), and the export dialog has **no Format row** (title `Export CSV — …`). Ticking the checkbox reveals X origin / Y origin / Cell size / CRS and the Backdrop block; unticking hides them again. **With the gate OFF**, feeding a 5×4 `.asc` (NODATA `-9999`) through the CSV picker opened *Import Esri ASCII grid*, and Apply landed **all 20 cells exactly** (`getState`: the body row-for-row with the NODATA cell defaulted to 0), resized the grid to 5×4, flipped the checkbox **on**, filled the Georeference block with the header's `500000 / 4600000 / 30`, and grew the Load menu to all four items with the `/ ASC` label. A hand-crafted `.gcaproj` carrying a georef and **no** `gisTools` field loads with the gate ON and its values (111/222/5) intact.
 
 ---
 

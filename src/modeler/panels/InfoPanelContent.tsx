@@ -232,7 +232,11 @@ export function InfoPanelContent(_props: PanelContentProps = {}) {
           {/* Backdrop map — a static image drawn UNDER the grid in the 2D
               simulator (SLEUTH's hillshade layer / QGIS's basemap). Presentation
               only: no rule reads it. Its opacity + Show toggle are per-USER view
-              settings and live in the Simulator, not here. */}
+              settings and live in the Simulator, not here.
+              Behind the Geographic tools (GIS) gate in Properties → Structure —
+              hidden rather than disabled, since a non-map model can do nothing
+              with it. A stored backdrop is KEPT when the gate is turned off. */}
+          {properties.gisTools === true && (
           <div className={styles.field}>
             <label className={styles.fieldLabel}>Backdrop map</label>
             <input
@@ -288,6 +292,7 @@ export function InfoPanelContent(_props: PanelContentProps = {}) {
               <span style={{ color: '#e05050', fontSize: '0.65rem' }}>{backdropError}</span>
             )}
           </div>
+          )}
           <div className={styles.field}>
             <label className={styles.fieldLabel}>Tags</label>
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginBottom: 4 }}>
