@@ -1658,6 +1658,14 @@ export function modelReducer(state: ModelState, action: ModelAction): ModelState
       // v1.8: rename/add Ã¢â‚¬â€ silently drop legacy `goal`, default new `modelAuthor` to ''.
       if ('goal' in m.properties) delete (m.properties as unknown as Record<string, unknown>).goal;
       if (m.properties.modelAuthor === undefined) m.properties.modelAuthor = '';
+      // Geographic tools (GIS) gate: a file written BEFORE the gate that already
+      // carries geographic data (a georeference or a backdrop map) keeps its GIS
+      // UI — the flag is INFERRED from that data, exactly once, and only when the
+      // field is absent (an explicit `false` is the user's own choice and stands).
+      // Everything else stays off, which is the point of the gate. Idempotent.
+      if (m.properties.gisTools === undefined && (m.properties.georef || m.properties.backdrop)) {
+        m.properties.gisTools = true;
+      }
       // 3D Grid CA / Bond-Graph Morphogenesis (M0a): default the new mode fields
       // so every legacy file loads as the top-left mode-matrix cell (2D grid).
       if (!m.properties.dimension) m.properties.dimension = '2d';

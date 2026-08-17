@@ -2361,9 +2361,16 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
    *  below; the draw path only ever blits it. */
   const backdropImageRef = useRef<HTMLImageElement | null>(null);
   /** The model's georeference, for the hover chip's world-coordinate line (which
-   *  runs on the pointer hot path and must not close over a stale model). */
+   *  runs on the pointer hot path and must not close over a stale model).
+   *  Behind the Geographic tools (GIS) gate: with the gate off the georeference
+   *  EDITOR is hidden, so a world readout the user cannot change or clear would
+   *  be a stranded surface. The stored record is kept, not cleared. */
   const georefRef = useRef(model.properties.georef);
-  georefRef.current = model.properties.georef;
+  georefRef.current = model.properties.gisTools === true ? model.properties.georef : undefined;
+  /** Geographic tools (GIS) gate — decides which map SURFACES render (the
+   *  Backdrop section, the GIS import menu items, the `.asc` export format).
+   *  UI only; no worker message and no compiled code reads it. */
+  const gisTools = model.properties.gisTools === true;
   // Agent disc outlines (the dark contour stroke on circles with rad >= 2px;
   // in 3D a silhouette rim on the sphere impostors) — optional so dense
   // populations render as clean solid dots. Default OFF; an explicitly saved ON
@@ -6624,8 +6631,13 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
   // edit never re-decodes. The draw path only blits `backdropImageRef`, so the
   // decode is async and simply redraws on load. `drawRef` (not `draw`) because
   // `draw`'s identity churns and would re-decode with it.
+  // The Geographic tools (GIS) gate rides HERE rather than in the draw paths: a
+  // null image is already the "no backdrop" state every consumer handles, so
+  // gating the decode turns the whole underlay off (display AND the
+  // simulation-scope capture) in one place, matching the hidden Backdrop section.
+  // The stored image itself is untouched — re-enabling the gate restores it.
   useEffect(() => {
-    const url = model.properties.backdrop?.dataUrl;
+    const url = model.properties.gisTools === true ? model.properties.backdrop?.dataUrl : undefined;
     if (!url) { backdropImageRef.current = null; drawRef.current(); return; }
     let cancelled = false;
     const img = new Image();
@@ -6633,7 +6645,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
     img.onerror = () => { if (!cancelled) { backdropImageRef.current = null; drawRef.current(); } };
     img.src = url;
     return () => { cancelled = true; };
-  }, [model.properties.backdrop?.dataUrl]);
+  }, [model.properties.backdrop?.dataUrl, model.properties.gisTools]);
 
   // --- Agent sprites: registry reconcile (main-thread render) ---
   // Decode new/changed sprites + drop removed ones whenever `model.sprites`
@@ -13630,9 +13642,21 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
     e.target.value = '';
     openCsvFile(file);
   };
+  /** Turn the Geographic tools (GIS) gate ON — the discovery path. Called when a
+   *  GEOGRAPHIC import actually applies (`.asc` / GeoTIFF / GeoJSON), so a fresh
+   *  model that swallows one gains the Georeference + Backdrop blocks and the GIS
+   *  menu items from then on. No-op when it is already on, so a repeated import
+   *  never re-dirties the model. Plain CSV / char-board / image imports do NOT
+   *  call it — those are general tools, not geographic ones. */
+  const enableGisTools = () => {
+    if (!gisTools) updateProperties({ gisTools: true });
+  };
+
   /** Apply ONE grid-import payload — the shared tail of the CSV / `.asc` and the
    *  GeoTIFF importers (they differ only in how the value block was produced, so
-   *  there is exactly one path to `importGridValues`). */
+   *  there is exactly one path to `importGridValues`).
+   *  `gis` marks a GEOGRAPHIC importer (`.asc` / GeoTIFF), which turns the
+   *  Geographic tools gate on even when the file carried no georeference. */
   const applyGridImport = (
     r: {
       width: number; height: number; layer: number; resize: boolean;
@@ -13640,13 +13664,22 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       georef?: GeoReference;
     },
     busyLabel: string,
+    gis = false,
   ) => {
     const w = workerRef.current;
     if (!w) return;
     // A georeferenced raster carries its own origin + cell size — record it on
     // the MODEL so the matching export writes the board back in the same place.
     // Presentation + I/O only: no compiler and no worker reads it.
-    if (r.georef) updateProperties({ georef: r.georef });
+    // The successful import is ALSO the discovery path for the Geographic tools
+    // (GIS) gate: it turns the map surfaces on, so a fresh model that has just
+    // swallowed an .asc / GeoTIFF gains its Georeference + Backdrop blocks and
+    // the GIS import menu items from here on. ONE patch, so a repeat import of a
+    // model that already has both never re-dirties it.
+    const patch: Partial<typeof model.properties> = {};
+    if (r.georef) patch.georef = r.georef;
+    if ((gis || r.georef) && !gisTools) patch.gisTools = true;
+    if (Object.keys(patch).length > 0) updateProperties(patch);
     if (r.resize) {
       pendingGridValuesImport.current = { width: r.width, height: r.height, layer: r.layer, layers: r.layers };
       initWorkerWithDimensions(
@@ -13712,7 +13745,9 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
   };
   const applyGeoTiffImport = (r: GeoTiffImportResult) => {
     setGeoTiffImport(null);
-    applyGridImport(r, 'Importing GeoTIFF…');
+    // `gis: true` — a GeoTIFF is geographic by definition, even when the file
+    // carries no geokeys/tiepoint and `georefFromGeoTiff` returned nothing.
+    applyGridImport(r, 'Importing GeoTIFF…', true);
   };
 
   // --- GeoJSON import ------------------------------------------------------
@@ -13748,6 +13783,11 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
     setGeoJsonImport(null);
     const w = workerRef.current;
     if (!w) return;
+    // Discovery path: opening a GeoJSON at all is a statement of geographic
+    // intent, so BOTH coordinate modes enable the gate — a grid-cells burn is
+    // still a vector import, and the alternative (enable only in World mode)
+    // would make the menu item vanish again after a perfectly good import.
+    enableGisTools();
     if (r.target === 'agents') {
       if (r.agents.length === 0) return;
       beginWorkerBusy('Importing GeoJSON…');
@@ -14211,8 +14251,11 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
               there is nothing to show and in 3D the voxel scene has its own
               background, so a control here could do nothing (hidden, not greyed).
               The image is MODEL data (Info panel); Show + opacity are per-USER
-              view settings, persisted in genesisca_sim_settings. */}
-          {!is3D && !!model.properties.backdrop?.dataUrl && (
+              view settings, persisted in genesisca_sim_settings.
+              The Geographic tools (GIS) term is additive: with the gate off the
+              underlay is not drawn at all (the decode is gated), so a control
+              here would likewise do nothing. */}
+          {gisTools && !is3D && !!model.properties.backdrop?.dataUrl && (
             <>
               <hr className={styles.divider} />
               <div className={styles.sectionTitle}>Backdrop</div>
@@ -15121,8 +15164,10 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
                 <button
                   className={styles.shotMenuItem}
                   onClick={() => { setOverlayPopup(null); openCsvExport(); }}
-                  title="Export one attribute as a table — a CSV or an Esri ASCII grid (.asc) for the board, or the agents (a row per agent)"
-                >Export CSV / ASC{'…'}</button>
+                  title={gisTools
+                    ? 'Export one attribute as a table — a CSV or an Esri ASCII grid (.asc) for the board, or the agents (a row per agent)'
+                    : 'Export one attribute as a CSV table — the board (the table IS the grid) or the agents (a row per agent)'}
+                >{gisTools ? 'Export CSV / ASC…' : 'Export CSV…'}</button>
               </div>
             )}
           </div>
@@ -15149,25 +15194,36 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
                   onClick={() => { setOverlayPopup(null); stateFileInputRef.current?.click(); }}
                   title="Restore a whole simulation snapshot (same as clicking the button)"
                 >Load state (.gcastate)</button>
+                {/* The CSV item is a GENERAL tool and always present; only its
+                    label mentions the GIS raster when the Geographic tools gate
+                    is on (the picker still SNIFFS an `.asc` either way, and
+                    applying one turns the gate on). */}
                 <button
                   className={styles.shotMenuItem}
                   onClick={() => { setOverlayPopup(null); csvInputRef.current?.click(); }}
-                  title="Import a CSV table — agents (a row per agent) or the board (the table IS the grid) — or an Esri ASCII grid (.asc) from any GIS"
-                >Import CSV / ASC{'…'}</button>
-                {/* Hidden in the standalone viewer, whose build drops geotiff.js
-                    (see geotiffLoader.ts) — an enabled control must do something. */}
-                {GEOTIFF_SUPPORTED && (
+                  title={gisTools
+                    ? 'Import a CSV table — agents (a row per agent) or the board (the table IS the grid) — or an Esri ASCII grid (.asc) from any GIS'
+                    : 'Import a CSV table — agents (a row per agent) or the board (the table IS the grid)'}
+                >{gisTools ? 'Import CSV / ASC…' : 'Import CSV…'}</button>
+                {/* Behind the Geographic tools (GIS) gate — and hidden in the
+                    standalone viewer, whose build drops geotiff.js (see
+                    geotiffLoader.ts). An enabled control must do something; a
+                    DROPPED .tif still opens this dialog regardless of the gate,
+                    so the workflow the Help recipe teaches never dead-ends. */}
+                {gisTools && GEOTIFF_SUPPORTED && (
                   <button
                     className={styles.shotMenuItem}
                     onClick={() => { setOverlayPopup(null); geoTiffInputRef.current?.click(); }}
                     title="Import a GeoTIFF raster (LANDFIRE / WorldPop / NLCD / Copernicus) — one band per cell attribute, resampled to the grid"
                   >Import GeoTIFF{'…'}</button>
                 )}
-                <button
-                  className={styles.shotMenuItem}
-                  onClick={() => { setOverlayPopup(null); geoJsonInputRef.current?.click(); }}
-                  title="Import GeoJSON vectors — burn polygons / lines / points into a cell attribute, or turn points into agents"
-                >Import GeoJSON{'…'}</button>
+                {gisTools && (
+                  <button
+                    className={styles.shotMenuItem}
+                    onClick={() => { setOverlayPopup(null); geoJsonInputRef.current?.click(); }}
+                    title="Import GeoJSON vectors — burn polygons / lines / points into a cell attribute, or turn points into agents"
+                  >Import GeoJSON{'…'}</button>
+                )}
               </div>
             )}
           </div>
@@ -16605,6 +16661,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
           agents={csvExport.agents}
           grid={csvExport.grid}
           georef={model.properties.georef}
+          gisTools={gisTools}
           onExport={applyCsvExport}
           onCancel={() => setCsvExport(null)}
         />

@@ -632,6 +632,9 @@ export function PropertiesPanelContent({ mode = 'list' }: PanelContentProps = {}
   // 3D Grid CA / Bond-Graph Morphogenesis (M0a) mode state.
   const topo = model.topologyMode ?? { gridCells: true, agents: false };
   const is3d = (properties.dimension ?? '2d') === '3d';
+  // Geographic tools (GIS) gate — absent ⇒ off, so a non-map model never sees the
+  // georeference / backdrop / GIS-import surfaces. UI only; no rule reads it.
+  const gisTools = properties.gisTools === true;
   // C4 (P1) — the resolved engine per layer, from the ONE resolver. Everything
   // that used to key off the raw `useWebGPU` / `useWasm` mirror flags reads this
   // instead, so `engine: 'auto'` lights up the same UI an explicit pick does.
@@ -804,11 +807,41 @@ export function PropertiesPanelContent({ mode = 'list' }: PanelContentProps = {}
             </div>
           </div>
 
+          {/* Geographic tools (GIS) — the opt-in gate for every map surface (this
+              Georeference block, the Info panel's Backdrop map, the simulator's
+              Backdrop section, and the .asc / GeoTIFF / GeoJSON import + .asc
+              export affordances). UI ONLY — nothing in the rule reads it. It is
+              set automatically by a geographic import, so the discovery path never
+              dead-ends; turning it back off only HIDES the surfaces (a stored
+              georeference / backdrop is kept). */}
+          <div style={{ marginTop: 14, borderTop: '1px solid #333', paddingTop: 10 }}>
+            <label style={{ display: 'flex', alignItems: 'flex-start', gap: 6, cursor: 'pointer', fontSize: '0.72rem' }}>
+              <input
+                type="checkbox"
+                checked={gisTools}
+                onChange={e => updateProperties({ gisTools: e.target.checked })}
+                style={{ marginTop: 2 }}
+              />
+              <span>
+                <strong>Geographic tools (GIS)</strong>
+                <br />
+                <span style={{ color: '#888', fontSize: '0.66rem' }}>
+                  Georeference, map backdrop, GIS imports (.asc / GeoTIFF / GeoJSON). Enabled
+                  automatically when you import geographic data. Turning it off only hides these
+                  controls — a stored georeference or backdrop is kept.
+                </span>
+              </span>
+            </label>
+          </div>
+
           {/* Georeference — where the board sits in the real world. Written by the
               Esri ASCII grid (.asc) import from the file's own header, read back by
               the .asc export, and used by the simulator's world-coordinate readout.
               PRESENTATION + I/O ONLY: no compiler, worker or engine reads it (the C8
-              "presentational geometry" doctrine), so it is always editable. */}
+              "presentational geometry" doctrine), so it is always editable. Behind
+              the Geographic tools gate — hidden, not disabled, because a non-map
+              model can do nothing with it. */}
+          {gisTools && (
           <div style={{ marginTop: 14, borderTop: '1px solid #333', paddingTop: 10 }}>
             <label className={styles.fieldLabel} style={{ marginBottom: 4 }}>Georeference</label>
             <div className={styles.fieldRow}>
@@ -874,6 +907,7 @@ export function PropertiesPanelContent({ mode = 'list' }: PanelContentProps = {}
               hovered cell in the Simulator. Nothing in the rule reads it.
             </span>
           </div>
+          )}
         </div>
       </CollapsibleSection>
 

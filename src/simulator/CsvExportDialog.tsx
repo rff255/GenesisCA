@@ -29,7 +29,7 @@ const PREVIEW_LINES = 10;
  *  pure `csvImport.ts` builders the round-trip tests exercise. */
 export function CsvExportDialog({
   modelName, generation, cellAttributes, agentAttributes, hasGrid, hasAgents, is3d,
-  agents, grid, georef, onExport, onCancel,
+  agents, grid, georef, gisTools = false, onExport, onCancel,
 }: {
   modelName: string;
   generation: number;
@@ -46,6 +46,10 @@ export function CsvExportDialog({
   /** The model's stored georeference (written by an `.asc` import). Absent ⇒ the
    *  `.asc` export writes the neutral origin 0,0 / cell size 1. */
   georef?: GeoReference;
+  /** The model's Geographic tools (GIS) gate. OFF ⇒ the Esri ASCII option is not
+   *  offered at all (the Format row is hidden, not shown inert) and the export is
+   *  a plain CSV — a non-map model has no use for a GIS raster. */
+  gisTools?: boolean;
   onExport: (r: CsvExportResult) => void;
   onCancel: () => void;
 }) {
@@ -60,8 +64,10 @@ export function CsvExportDialog({
   // Grid only: CSV (a delimited table) vs the Esri ASCII grid every GIS reads.
   // `.asc` defines its own delimiter (whitespace), so the Delimiter row is
   // HIDDEN there rather than shown inert.
+  // Behind the Geographic tools (GIS) gate: with it off the `.asc` branch is
+  // unreachable, so the Format row is HIDDEN and the export is a plain CSV.
   const [format, setFormat] = useState<'csv' | 'asc'>('csv');
-  const isAsc = effTarget === 'grid' && format === 'asc';
+  const isAsc = gisTools && effTarget === 'grid' && format === 'asc';
 
   // --- grid options ---------------------------------------------------------
   const gridOpts = useMemo(() => gridTargetOptions(cellAttributes), [cellAttributes]);
@@ -176,13 +182,15 @@ export function CsvExportDialog({
 
             {effTarget === 'grid' && (
               <>
-                <label style={{ ...label, gap: 6 }}>
-                  Format
-                  <select value={format} onChange={e => setFormat(e.target.value as typeof format)} style={{ fontSize: 12, flex: 1, minWidth: 0 }}>
-                    <option value="csv" style={opt}>CSV table</option>
-                    <option value="asc" style={opt}>Esri ASCII grid (.asc)</option>
-                  </select>
-                </label>
+                {gisTools && (
+                  <label style={{ ...label, gap: 6 }}>
+                    Format
+                    <select value={format} onChange={e => setFormat(e.target.value as typeof format)} style={{ fontSize: 12, flex: 1, minWidth: 0 }}>
+                      <option value="csv" style={opt}>CSV table</option>
+                      <option value="asc" style={opt}>Esri ASCII grid (.asc)</option>
+                    </select>
+                  </label>
+                )}
                 <label style={{ ...label, gap: 6 }}>
                   Cell attribute
                   <select value={gridAttrId} onChange={e => setGridAttrId(e.target.value)} style={{ fontSize: 12, flex: 1, minWidth: 0 }}>

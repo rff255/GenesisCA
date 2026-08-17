@@ -521,6 +521,20 @@ export interface ModelProperties {
    *  [createdDate.ts](./createdDate.ts). Additive + optional; old files load
    *  unchanged. */
   createdDate?: string;
+  /** Opt-in gate for the GEOGRAPHIC (GIS) tool surfaces — the Georeference block,
+   *  the Backdrop map, and the `.asc` / GeoTIFF / GeoJSON import + `.asc` export
+   *  affordances. Absent ⇒ OFF, so the overwhelming majority of models (which are
+   *  not maps) never see any of it.
+   *
+   *  UI ONLY: no compiler, worker or engine reads this — it decides which controls
+   *  RENDER, never what a rule computes. Turning it off HIDES the surfaces; it
+   *  never deletes a stored `georef` or `backdrop`.
+   *
+   *  Set automatically when a geographic import applies (the discovery path — a
+   *  dropped `.tif` always opens its dialog regardless of this flag), and inferred
+   *  as true on LOAD for a pre-gate file that already carries a georef/backdrop.
+   *  Additive + optional; old files load unchanged. */
+  gisTools?: boolean;
   /** Where the board sits in the real world (origin + cell size). Written by the
    *  Esri ASCII grid (`.asc`) import from the file's header, read back by the
    *  `.asc` export. Presentation + I/O only — see {@link GeoReference}. */
