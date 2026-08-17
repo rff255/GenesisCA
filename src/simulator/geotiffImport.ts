@@ -8,11 +8,17 @@
  * the `.asc` path produces — so there is ZERO compiler / worker impact.
  *
  * Split by testability, deliberately:
- *   - Everything below `openGeoTiff` is PURE and dependency-free (the resampler,
- *     the numeric decode, the georef conversion, the categorical value map), so
- *     `scripts/test-geotiff-import.mjs` asserts VALUES on it without a browser.
+ *   - Everything above `openGeoTiff` is PURE and dependency-free (the crop
+ *     window, the numeric decode, the georef conversion + window shift, the
+ *     categorical value map; the resampling kernels themselves live in the
+ *     shared `rasterResample.ts`), so `scripts/test-geotiff-import.mjs` asserts
+ *     VALUES on it without a browser.
  *   - `openGeoTiff` is the only impure part, and it reaches geotiff.js through
  *     `geotiffLoader.ts` — the one module the viewer build aliases away.
+ *
+ * THE SOURCE IS NEVER READ WHOLE. `openGeoTiff` reads metadata only; every band
+ * read is bounded by a crop WINDOW the user sets in the dialog. That is what
+ * makes a country-scale download openable here instead of in QGIS.
  *
  * NO REPROJECTION, by design (the doctrine every surveyed tool follows, and the
  * same one `.asc` import states): if the file's CRS differs from the model's we
@@ -23,20 +29,31 @@ import { encodeAttrValue } from '../model/attrValueEncoding';
 import type { GeoReference } from '../model/types';
 import type { CsvAttrShape, CsvIssue } from './csvImport';
 import { loadGeoTiffLib } from './geotiffLoader';
+import { resampleAverage, resampleNearest, type RasterResampleMethod } from './rasterResample';
 
 export { GEOTIFF_SUPPORTED } from './geotiffLoader';
 
 // ---------------------------------------------------------------------------
 // Caps — a browser tab, not a GIS workstation
+//
+// THE CAPS APPLY TO THE **WINDOW**, NOT TO THE SOURCE. geotiff.js's
+// `readRasters({ window })` bounds its tile/strip loop AND its allocation by the
+// window (verified against geotiff@3.0.5's `_readRaster`: `minXTile..maxXTile`
+// come from the window, and `numPixels = windowW*windowH`), so a country-scale
+// source is perfectly readable as long as you only ask for a piece of it. That
+// is what lets the dialog offer a CROP instead of an error message.
 // ---------------------------------------------------------------------------
 
-/** Refuse a raster wider/taller than this on EITHER axis. */
+/** Refuse a WINDOW wider/taller than this on either axis. */
 export const GEOTIFF_MAX_DIM = 8192;
-/** …and refuse one with more pixels than this in total (a band is read whole at
- *  source resolution so the pure resampler owns the sampling, so the memory is
- *  `pixels × bytesPerSample` per band read). 16 Mpx = a 4096² tile. Crop in QGIS
- *  above that — the error message says so. */
+/** …and refuse a WINDOW with more pixels than this (the read allocates
+ *  `windowPixels` samples per band, normalised to Float64 here). 16 Mpx = a
+ *  4096² tile; above that the dialog asks for a smaller crop. */
 export const GEOTIFF_MAX_PIXELS = 16_777_216;
+/** Sanity ceiling on the SOURCE dimensions. Not a memory bound (nothing reads
+ *  the whole source any more) — just a guard against a corrupt header claiming
+ *  an absurd raster size. */
+export const GEOTIFF_MAX_SOURCE_DIM = 200_000;
 /** Bands offered in the dialog. Hyperspectral stacks exist; mapping 200 of them
  *  by hand does not. */
 export const GEOTIFF_MAX_BANDS = 16;
@@ -45,43 +62,75 @@ export const GEOTIFF_MAX_BANDS = 16;
 export const GEOTIFF_MAX_DISTINCT = 64;
 
 // ---------------------------------------------------------------------------
-// Nearest-neighbour resampling (PURE)
+// The crop window (PURE)
 // ---------------------------------------------------------------------------
 
-/** Resample a row-major raster to `dstW × dstH` by NEAREST NEIGHBOUR.
+/** A sub-rectangle of the source raster, in SOURCE PIXELS, top-left origin.
+ *  Half-open: rows `y .. y+height-1`, columns `x .. x+width-1`. */
+export interface GeoTiffWindow { x: number; y: number; width: number; height: number }
+
+/** Clamp a window into the raster, keeping at least one pixel. */
+export function clampWindow(win: GeoTiffWindow, srcW: number, srcH: number): GeoTiffWindow {
+  const x = Math.max(0, Math.min(Math.round(win.x), Math.max(0, srcW - 1)));
+  const y = Math.max(0, Math.min(Math.round(win.y), Math.max(0, srcH - 1)));
+  const width = Math.max(1, Math.min(Math.round(win.width), srcW - x));
+  const height = Math.max(1, Math.min(Math.round(win.height), srcH - y));
+  return { x, y, width, height };
+}
+
+/** The window a freshly-opened file starts on: the WHOLE image when it fits the
+ *  caps, else the largest cap-shaped window CENTRED on it.
  *
- *  Nearest ONLY, on purpose: a landcover / fuel-model / district raster is
- *  CATEGORICAL, and averaging class codes invents classes that do not exist. It
- *  is the acceptable-if-blunt choice for a continuous band too (a v1 limitation
- *  stated in the dialog and in Help), and it is what `.asc`-era workflows do when
- *  they resample in GDAL with `-r near`.
+ *  Centring rather than rejecting is the point of the whole feature — a
+ *  country-scale source opens with a usable default the user then drags, instead
+ *  of an error telling them to go and install QGIS. */
+export function defaultWindow(srcW: number, srcH: number): GeoTiffWindow {
+  const w0 = Math.max(1, Math.min(srcW, GEOTIFF_MAX_DIM));
+  const h0 = Math.max(1, Math.min(srcH, GEOTIFF_MAX_DIM));
+  let w = w0, h = h0;
+  if (w * h > GEOTIFF_MAX_PIXELS) {
+    // Shrink both axes by the SAME factor, so when only the pixel cap binds the
+    // default keeps the source's aspect ratio (a lopsided box reads as a bug).
+    // The per-axis clamp above is axis-INDEPENDENT and cannot preserve it — but
+    // a uniform shrink there would be worse: a 90000×200 strip would lose 91 %
+    // of its rows to satisfy a cap its pixel count never came near.
+    const k = Math.sqrt(GEOTIFF_MAX_PIXELS / (w * h));
+    w = Math.max(1, Math.floor(w * k));
+    h = Math.max(1, Math.floor(h * k));
+  }
+  return clampWindow({ x: Math.floor((srcW - w) / 2), y: Math.floor((srcH - h) / 2), width: w, height: h }, srcW, srcH);
+}
+
+/** Why this window cannot be read, or null when it can. */
+export function windowCapError(win: GeoTiffWindow): string | null {
+  if (win.width > GEOTIFF_MAX_DIM || win.height > GEOTIFF_MAX_DIM) {
+    return `The crop is ${win.width}×${win.height}; GenesisCA reads up to ${GEOTIFF_MAX_DIM} on each axis. Drag the box smaller.`;
+  }
+  if (win.width * win.height > GEOTIFF_MAX_PIXELS) {
+    return `The crop holds ${(win.width * win.height).toLocaleString()} pixels; GenesisCA reads up to ${GEOTIFF_MAX_PIXELS.toLocaleString()} (a 4096² tile). Drag the box smaller.`;
+  }
+  return null;
+}
+
+// ---------------------------------------------------------------------------
+// Resampling (PURE) — implemented in `rasterResample.ts` so the `.asc` importer
+// runs the IDENTICAL kernels; re-exported here because this module has been the
+// public face of raster resampling since Tier 2.
+// ---------------------------------------------------------------------------
+
+export { resampleNearest, resampleAverage, resampleRaster } from './rasterResample';
+
+/** How a band is resampled when the crop's dimensions differ from the grid's. */
+export type GeoTiffResampleMethod = RasterResampleMethod;
+
+/** True when `average` is a legitimate choice for this target.
  *
- *  Centre sampling: destination cell `d` maps to source index
- *  `floor((d + 0.5) · src/dst)`, clamped — so identical dimensions are the
- *  IDENTITY (asserted by the test suite), a 2× downsample takes every other
- *  pixel starting at the first, and an upsample repeats. */
-export function resampleNearest(
-  src: ArrayLike<number>, srcW: number, srcH: number, dstW: number, dstH: number,
-): Float64Array {
-  const out = new Float64Array(Math.max(0, dstW * dstH));
-  if (dstW < 1 || dstH < 1 || srcW < 1 || srcH < 1) return out;
-  // Identity fast path — and it is EXACT, not merely fast: no index arithmetic
-  // runs at all, so a same-size import can never be off by a pixel.
-  if (srcW === dstW && srcH === dstH) {
-    const n = Math.min(out.length, src.length);
-    for (let i = 0; i < n; i++) out[i] = src[i] as number;
-    return out;
-  }
-  const sx = new Int32Array(dstW);
-  for (let c = 0; c < dstW; c++) {
-    sx[c] = Math.min(srcW - 1, Math.max(0, Math.floor(((c + 0.5) * srcW) / dstW)));
-  }
-  for (let r = 0; r < dstH; r++) {
-    const srcRow = Math.min(srcH - 1, Math.max(0, Math.floor(((r + 0.5) * srcH) / dstH))) * srcW;
-    const dstRow = r * dstW;
-    for (let c = 0; c < dstW; c++) out[dstRow + c] = src[srcRow + sx[c]!] as number;
-  }
-  return out;
+ *  Categorical targets are excluded BY DOCTRINE, not by capability: the mean of
+ *  fuel models 1 and 7 is 4, which may well be a different fuel model. The UI
+ *  hides the control for them (the standing "an enabled control must do
+ *  something" rule) and `buildBandValues` enforces it regardless. */
+export function supportsAverageResample(attr: CsvAttrShape): boolean {
+  return attr.type === 'integer' || attr.type === 'float' || attr.type === 'neighborIndex';
 }
 
 // ---------------------------------------------------------------------------
@@ -237,9 +286,17 @@ export function buildBandValues(
   band: ArrayLike<number>, srcW: number, srcH: number,
   dstW: number, dstH: number,
   attr: CsvAttrShape,
-  opts?: { noData?: number | null; valueMap?: GeoTiffValueMap },
+  opts?: { noData?: number | null; valueMap?: GeoTiffValueMap; resample?: GeoTiffResampleMethod },
 ): GeoTiffBandBuild {
-  const raw = resampleNearest(band, srcW, srcH, dstW, dstH);
+  // `average` is refused STRUCTURALLY for a categorical target or a code table —
+  // the pure function is the last line of defence, so a caller that ignores
+  // `supportsAverageResample` still cannot average class codes into ones the
+  // model does not have.
+  const method: GeoTiffResampleMethod =
+    opts?.resample === 'average' && supportsAverageResample(attr) && !opts?.valueMap ? 'average' : 'nearest';
+  const raw = method === 'average'
+    ? resampleAverage(band, srcW, srcH, dstW, dstH, opts?.noData)
+    : resampleNearest(band, srcW, srcH, dstW, dstH);
   const values = new Float64Array(raw.length);
   const fallback = encodeAttrValue(attr, undefined);
   const noData = opts?.noData;
@@ -362,6 +419,32 @@ export function scaleGeorefForResample(
   return out;
 }
 
+/** Re-express a georef for a CROPPED window of the raster it describes.
+ *
+ *  THE ROW FLIP IS THE TRAP, and it is the same one `georefFromGeoTiff` handles:
+ *  the georef states the raster's LOWER-LEFT corner while the window is given in
+ *  TOP-LEFT pixel coordinates, so the window's bottom edge sits `srcH − y − h`
+ *  rows ABOVE the raster's bottom edge:
+ *
+ *      xll' = xll + x · cellSize
+ *      yll' = yll + (srcH − y − height) · cellSize
+ *
+ *  The cell size is unchanged — a crop selects fewer cells of the SAME ground
+ *  resolution. (A resample changes the size; compose the two with
+ *  `scaleGeorefForResample`, in that order.)
+ *
+ *  Sanity: `y = 0` (the TOP rows) gives the largest yll, and
+ *  `y = srcH − height` (the BOTTOM rows) gives exactly the original yll. */
+export function shiftGeorefForWindow(
+  georef: GeoReference, win: GeoTiffWindow, srcH: number,
+): GeoReference {
+  return {
+    ...georef,
+    xllcorner: georef.xllcorner + win.x * georef.cellSize,
+    yllcorner: georef.yllcorner + (srcH - win.y - win.height) * georef.cellSize,
+  };
+}
+
 /** Map the GeoTIFF geo keys onto an `EPSG:xxxx` string, or null.
  *
  *  Projected wins over geographic (a file carrying both is projected); 32767 is
@@ -389,6 +472,9 @@ export interface GeoTiffBandInfo {
   typeLabel: string;
 }
 
+/** A decimated whole-image band, for the crop preview. */
+export interface GeoTiffPreview { data: Float64Array; width: number; height: number }
+
 export interface GeoTiffFile {
   width: number;
   height: number;
@@ -401,15 +487,37 @@ export interface GeoTiffFile {
   georef: GeoReference | null;
   /** Non-square pixels etc. — informational, never blocking. */
   warnings: string[];
-  /** Read ONE band at SOURCE resolution. Cached: the dialog reads a band to build
-   *  its value map and again on Apply, and a re-read would re-decompress. */
-  readBand(index: number): Promise<Float64Array>;
+  /** Read ONE band over a WINDOW (default: the whole image) at source
+   *  resolution. Cached by band + window: the dialog reads a band to build its
+   *  value map and again on Apply, and a re-read would re-decompress.
+   *
+   *  The window bounds geotiff.js's tile loop AND its allocation, so this is the
+   *  ONLY read the caps apply to — see the caps block at the top. */
+  readBand(index: number, win?: GeoTiffWindow): Promise<Float64Array>;
+  /** A whole-image thumbnail of one band, ≤ `maxEdge` on the long side, for the
+   *  crop box to sit on. Null when the source is too big to decode whole AND
+   *  carries no usable overview — the dialog then says so and the user crops
+   *  numerically. Cached per band. */
+  readPreview(index: number, maxEdge: number): Promise<GeoTiffPreview | null>;
+  /** Whether `readPreview` can show the whole image at all (known at open time,
+   *  so the dialog can lay itself out without waiting for a decode). */
+  previewAvailable: boolean;
 }
 
 const SAMPLE_FORMAT_LABEL: Record<number, string> = { 1: 'UInt', 2: 'Int', 3: 'Float' };
+/** Pixels we are willing to DECODE for a preview. Same budget as one import
+ *  window — a preview is a one-off read, not a per-frame cost. */
+const PREVIEW_DECODE_PIXELS = GEOTIFF_MAX_PIXELS;
+/** Band reads kept in hand. The dialog re-reads as the crop box moves, so an
+ *  unbounded cache would retain every window the user dragged through. */
+const BAND_CACHE_MAX = 6;
 
-/** Open a GeoTIFF from raw bytes. Throws a NAMED error when the file is not a
- *  GeoTIFF, or is bigger than a browser tab should attempt. */
+/** Open a GeoTIFF from raw bytes. Reads METADATA ONLY (plus, lazily, whatever
+ *  window the caller asks for), so a source far larger than the import caps
+ *  opens fine and is cropped in the dialog.
+ *
+ *  Throws a NAMED error when the file is not a GeoTIFF or declares an absurd
+ *  raster size. */
 export async function openGeoTiff(buffer: ArrayBuffer): Promise<GeoTiffFile> {
   const lib = await loadGeoTiffLib();
   const tiff = await lib.fromArrayBuffer(buffer);
@@ -417,11 +525,8 @@ export async function openGeoTiff(buffer: ArrayBuffer): Promise<GeoTiffFile> {
   const width = image.getWidth();
   const height = image.getHeight();
   if (!(width > 0) || !(height > 0)) throw new Error('The GeoTIFF declares no raster size.');
-  if (width > GEOTIFF_MAX_DIM || height > GEOTIFF_MAX_DIM) {
-    throw new Error(`The raster is ${width}×${height}; GenesisCA reads up to ${GEOTIFF_MAX_DIM} on each axis. Crop or resample it in QGIS first.`);
-  }
-  if (width * height > GEOTIFF_MAX_PIXELS) {
-    throw new Error(`The raster holds ${(width * height).toLocaleString()} pixels; GenesisCA reads up to ${GEOTIFF_MAX_PIXELS.toLocaleString()} (a 4096² tile). Crop or resample it in QGIS first.`);
+  if (width > GEOTIFF_MAX_SOURCE_DIM || height > GEOTIFF_MAX_SOURCE_DIM) {
+    throw new Error(`The file declares a ${width}×${height} raster, which is beyond anything GenesisCA can address — the header looks corrupt.`);
   }
 
   const bandCount = Math.max(1, image.getSamplesPerPixel());
@@ -460,23 +565,132 @@ export async function openGeoTiff(buffer: ArrayBuffer): Promise<GeoTiffFile> {
   if (bandCount > GEOTIFF_MAX_BANDS) {
     warnings.push(`The file has ${bandCount} bands; the first ${GEOTIFF_MAX_BANDS} are offered.`);
   }
+  if (width * height > GEOTIFF_MAX_PIXELS) {
+    warnings.push(`The raster is ${width.toLocaleString()}×${height.toLocaleString()} — larger than one import can read, so the crop box opens on a centred ${GEOTIFF_MAX_PIXELS.toLocaleString()}-pixel window. Move or resize it to pick the area you want.`);
+  }
 
-  const cache = new Map<number, Float64Array>();
-  const readBand = async (index: number): Promise<Float64Array> => {
-    const hit = cache.get(index);
-    if (hit) return hit;
-    const rasters = await image.readRasters({ samples: [index], interleave: false });
-    const arr = (Array.isArray(rasters) ? rasters[0] : rasters) as ArrayLike<number> | undefined;
-    if (!arr) throw new Error(`Band ${index + 1} could not be read.`);
-    // Normalise to Float64 ONCE: every consumer below (the resampler, the value
-    // map, the decode) then works on one representation, and an Int32/Uint16
-    // band's values survive exactly.
-    const out = new Float64Array(width * height);
-    const n = Math.min(out.length, arr.length);
+  // --- pick the image the crop preview decodes ------------------------------
+  // Prefer a reduced-resolution OVERVIEW (a COG carries a pyramid, and reading
+  // one is the difference between decoding 512² and decoding 40 000²); fall back
+  // to the main image when it fits the decode budget; else there is no
+  // whole-image preview and the dialog says so.
+  const previewImage = await pickPreviewImage(tiff, image, width, height);
+
+  type BandKey = string;
+  const cache = new Map<BandKey, Float64Array>();
+  const remember = (key: BandKey, data: Float64Array) => {
+    cache.set(key, data);
+    while (cache.size > BAND_CACHE_MAX) {
+      const oldest = cache.keys().next().value as BandKey | undefined;
+      if (oldest === undefined) break;
+      cache.delete(oldest);
+    }
+  };
+
+  /** Normalise whatever typed array geotiff.js returns to Float64 ONCE: every
+   *  consumer below (the resamplers, the value map, the decode) then works on
+   *  one representation, and an Int32 / UInt16 band's values survive exactly. */
+  const toF64 = (arr: ArrayLike<number>, len: number): Float64Array => {
+    const out = new Float64Array(len);
+    const n = Math.min(len, arr.length);
     for (let i = 0; i < n; i++) out[i] = arr[i] as number;
-    cache.set(index, out);
     return out;
   };
 
-  return { width, height, bandCount, bands, noData, georef, warnings, readBand };
+  const readBand = async (index: number, win?: GeoTiffWindow): Promise<Float64Array> => {
+    const w = clampWindow(win ?? { x: 0, y: 0, width, height }, width, height);
+    const capped = windowCapError(w);
+    if (capped) throw new Error(capped);
+    const key = `${index}|${w.x},${w.y},${w.width},${w.height}`;
+    const hit = cache.get(key);
+    if (hit) return hit;
+    const rasters = await image.readRasters({
+      samples: [index], interleave: false,
+      window: [w.x, w.y, w.x + w.width, w.y + w.height],
+    });
+    const arr = (Array.isArray(rasters) ? rasters[0] : rasters) as ArrayLike<number> | undefined;
+    if (!arr) throw new Error(`Band ${index + 1} could not be read.`);
+    const out = toF64(arr, w.width * w.height);
+    remember(key, out);
+    return out;
+  };
+
+  const previewCache = new Map<string, GeoTiffPreview>();
+  const readPreview = async (index: number, maxEdge: number): Promise<GeoTiffPreview | null> => {
+    if (!previewImage) return null;
+    const key = `${index}|${maxEdge}`;
+    const hit = previewCache.get(key);
+    if (hit) return hit;
+    const sw = previewImage.getWidth();
+    const sh = previewImage.getHeight();
+    const scale = Math.min(1, maxEdge / Math.max(sw, sh));
+    const pw = Math.max(1, Math.round(sw * scale));
+    const ph = Math.max(1, Math.round(sh * scale));
+    // `width`/`height` resampling happens AFTER the decode in geotiff.js, so it
+    // shrinks the RESULT, not the work — which is exactly why the decode budget
+    // is enforced on the chosen image above rather than here.
+    const rasters = await previewImage.readRasters({
+      samples: [index], interleave: false, width: pw, height: ph,
+    });
+    const arr = (Array.isArray(rasters) ? rasters[0] : rasters) as ArrayLike<number> | undefined;
+    if (!arr) return null;
+    const out: GeoTiffPreview = { data: toF64(arr, pw * ph), width: pw, height: ph };
+    previewCache.set(key, out);
+    return out;
+  };
+
+  return {
+    width, height, bandCount, bands, noData, georef, warnings,
+    readBand, readPreview, previewAvailable: previewImage !== null,
+  };
+}
+
+/** Choose which IFD the crop preview decodes: the smallest image that still
+ *  resolves the preview reasonably, under the decode budget.
+ *
+ *  Overviews are identified by the standard heuristic — a SMALLER image with
+ *  (roughly) the same aspect ratio — plus an explicit skip of transparency masks
+ *  (`NewSubfileType` bit 2), which are the one extra-IFD kind that would
+ *  otherwise pass it. Every probe is wrapped: a malformed sub-image must cost us
+ *  the preview, not the import. */
+async function pickPreviewImage(
+  tiff: { getImageCount(): Promise<number>; getImage(i?: number): Promise<GeoTiffImageLike> },
+  main: GeoTiffImageLike, width: number, height: number,
+): Promise<GeoTiffImageLike | null> {
+  const candidates: GeoTiffImageLike[] = [];
+  try {
+    const count = await tiff.getImageCount();
+    const aspect = width / height;
+    for (let i = 1; i < count; i++) {
+      try {
+        const im = await tiff.getImage(i);
+        const w = im.getWidth(), h = im.getHeight();
+        if (!(w > 0) || !(h > 0) || w > width || h > height) continue;
+        const sub = Number((im.fileDirectory as { NewSubfileType?: number } | undefined)?.NewSubfileType ?? 0);
+        if (Number.isFinite(sub) && (sub & 4) !== 0) continue; // a transparency mask, not an overview
+        if (Math.abs(w / h - aspect) > 0.05 * aspect) continue;
+        if (w * h <= PREVIEW_DECODE_PIXELS) candidates.push(im);
+      } catch { /* a sub-image we cannot read is simply not a preview source */ }
+    }
+  } catch { /* single-IFD file, or a reader that cannot enumerate */ }
+  if (width * height <= PREVIEW_DECODE_PIXELS) candidates.push(main);
+  if (candidates.length === 0) return null;
+  // The SMALLEST candidate that still has some detail — decoding a 40 000² main
+  // image when a 512² overview exists is pure waste.
+  candidates.sort((a, b) => a.getWidth() * a.getHeight() - b.getWidth() * b.getHeight());
+  const enough = candidates.find(im => Math.max(im.getWidth(), im.getHeight()) >= PREVIEW_MIN_EDGE);
+  return enough ?? candidates[candidates.length - 1]!;
+}
+
+/** Below this the preview is too coarse to aim a crop box with, so a bigger
+ *  overview (or the main image) is preferred when one is affordable. */
+const PREVIEW_MIN_EDGE = 256;
+
+/** The slice of geotiff.js's image we actually use. Structural, so the loader's
+ *  types never leak into the pure half of this module. */
+interface GeoTiffImageLike {
+  getWidth(): number;
+  getHeight(): number;
+  readRasters(opts: Record<string, unknown>): Promise<unknown>;
+  fileDirectory?: unknown;
 }

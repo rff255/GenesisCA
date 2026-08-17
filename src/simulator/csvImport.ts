@@ -799,6 +799,67 @@ export function buildGridValues(
 }
 
 // ---------------------------------------------------------------------------
+// Resampling a parsed grid onto the model's own grid (the `.asc` "resample"
+// fit). Same kernels the GeoTIFF importer uses, so a `.asc` and a GeoTIFF over
+// the same ground pick the same cells.
+// ---------------------------------------------------------------------------
+
+/** Nearest-resample a parsed TABLE, cell text and all.
+ *
+ *  Resampling the STRINGS rather than numbers is deliberate: nearest picks ONE
+ *  whole source cell, so every downstream behaviour `buildGridValues` already
+ *  has — a tag matched by NAME, the `none`-mode char map, the per-cell issue
+ *  reporting, ragged-row padding — keeps working unchanged. Turning the board
+ *  into numbers first would silently drop tag-by-name support.
+ *
+ *  Indexing is `resampleNearest`'s, so the two agree cell for cell. */
+export function resampleCsvTable(table: CsvTable, dstW: number, dstH: number): CsvTable {
+  const srcW = table.width, srcH = table.rows.length;
+  if (dstW < 1 || dstH < 1 || srcW < 1 || srcH < 1) {
+    return { ...table, rows: [], width: Math.max(0, dstW), ragged: 0 };
+  }
+  if (srcW === dstW && srcH === dstH) return table;
+  const sx = new Int32Array(dstW);
+  for (let c = 0; c < dstW; c++) sx[c] = Math.min(srcW - 1, Math.max(0, Math.floor(((c + 0.5) * srcW) / dstW)));
+  const rows: string[][] = [];
+  let ragged = 0;
+  for (let r = 0; r < dstH; r++) {
+    const src = table.rows[Math.min(srcH - 1, Math.max(0, Math.floor(((r + 0.5) * srcH) / dstH)))]!;
+    const row: string[] = new Array(dstW);
+    let short = false;
+    for (let c = 0; c < dstW; c++) {
+      const v = src[sx[c]!];
+      // A ragged SOURCE row keeps being ragged after the resample — the padding
+      // (and its count) stays `buildGridValues`' job, exactly as before.
+      if (v === undefined) { short = true; row.length = c; break; }
+      row[c] = v;
+    }
+    if (short) ragged++;
+    rows.push(row);
+  }
+  return { ...table, rows, width: dstW, ragged };
+}
+
+/** Read a parsed table as raw NUMBERS, row-major, padded/unparseable → NaN.
+ *
+ *  Only the AVERAGE path needs this — a mean is undefined over text — and it is
+ *  offered only for numeric targets, where an `.asc` body is numeric by
+ *  definition. NaN survives to the decode, which reports it as a miss. */
+export function csvTableToNumbers(table: CsvTable): { data: Float64Array; width: number; height: number } {
+  const width = table.width, height = table.rows.length;
+  const data = new Float64Array(Math.max(0, width * height));
+  for (let r = 0; r < height; r++) {
+    const row = table.rows[r]!;
+    for (let c = 0; c < width; c++) {
+      const raw = row[c];
+      const n = raw === undefined || raw.trim() === '' ? NaN : Number(raw);
+      data[r * width + c] = Number.isFinite(n) ? n : NaN;
+    }
+  }
+  return { data, width, height };
+}
+
+// ---------------------------------------------------------------------------
 // EXPORT — the mirror of everything above.
 //
 // The acceptance criterion is the ROUND TRIP: whatever these emit must come

@@ -321,6 +321,244 @@ console.log('\n[11] the full path: file → resample onto a smaller grid');
   eq('the CRS survives the resample', scaled.georef.crs, 'EPSG:32611');
 }
 
+// ---------------------------------------------------------------------------
+console.log('\n[12] the crop window (pure)');
+// ---------------------------------------------------------------------------
+{
+  eq('clampWindow keeps an in-range window', M.clampWindow({ x: 2, y: 3, width: 4, height: 5 }, 20, 20), { x: 2, y: 3, width: 4, height: 5 });
+  eq('clampWindow trims an overhang', M.clampWindow({ x: 18, y: 18, width: 10, height: 10 }, 20, 20), { x: 18, y: 18, width: 2, height: 2 });
+  eq('clampWindow floors a negative origin', M.clampWindow({ x: -5, y: -5, width: 4, height: 4 }, 20, 20), { x: 0, y: 0, width: 4, height: 4 });
+  eq('clampWindow keeps at least one pixel', M.clampWindow({ x: 5, y: 5, width: 0, height: -3 }, 20, 20), { x: 5, y: 5, width: 1, height: 1 });
+  eq('clampWindow rounds fractional drag coordinates', M.clampWindow({ x: 2.4, y: 3.6, width: 4.5, height: 4.2 }, 20, 20), { x: 2, y: 4, width: 5, height: 4 });
+
+  // A source that FITS opens on the whole image — the historical behaviour.
+  eq('defaultWindow on a small raster is the whole image', M.defaultWindow(300, 200), { x: 0, y: 0, width: 300, height: 200 });
+  // …and one that does NOT opens on a centred, cap-shaped box rather than an error.
+  const big = M.defaultWindow(40000, 30000);
+  check('defaultWindow caps a huge raster', big.width <= M.GEOTIFF_MAX_DIM && big.height <= M.GEOTIFF_MAX_DIM
+    && big.width * big.height <= M.GEOTIFF_MAX_PIXELS, JSON.stringify(big));
+  check('defaultWindow is centred', Math.abs(big.x - (40000 - big.width) / 2) <= 1 && Math.abs(big.y - (30000 - big.height) / 2) <= 1, JSON.stringify(big));
+  // The per-axis cap is an axis-INDEPENDENT clamp, so it cannot preserve the
+  // aspect; when only the PIXEL cap binds, the uniform shrink does.
+  const pixelOnly = M.defaultWindow(8000, 6000);
+  near('defaultWindow keeps the aspect when only the pixel cap binds', pixelOnly.width / pixelOnly.height, 8000 / 6000, 0.01);
+  check('…and lands under the pixel cap', pixelOnly.width * pixelOnly.height <= M.GEOTIFF_MAX_PIXELS, `${pixelOnly.width}x${pixelOnly.height}`);
+  // A very WIDE source: the per-axis cap bites, the pixel cap does not.
+  const wide = M.defaultWindow(90000, 200);
+  eq('defaultWindow clamps a very wide raster per axis, keeping every row', [wide.width, wide.height], [M.GEOTIFF_MAX_DIM, 200]);
+
+  check('windowCapError passes a legal window', M.windowCapError({ x: 0, y: 0, width: 4096, height: 4096 }) === null);
+  check('windowCapError refuses an over-wide window', typeof M.windowCapError({ x: 0, y: 0, width: 9000, height: 4 }) === 'string');
+  check('windowCapError refuses an over-large window', typeof M.windowCapError({ x: 0, y: 0, width: 8000, height: 8000 }) === 'string');
+}
+
+// ---------------------------------------------------------------------------
+console.log('\n[13] windowed reads — the enabler');
+// ---------------------------------------------------------------------------
+{
+  // v = row*1000 + col, so every sample names its own position.
+  const W = 40, H = 24;
+  const vals = Array.from({ length: W * H }, (_, i) => Math.floor(i / W) * 1000 + (i % W));
+  const buf = makeTiff(vals, W, H, { originX: 500000, originY: 4600000, scaleX: 30, scaleY: 30 });
+  const f = await M.openGeoTiff(buf);
+  eq('the source dims are reported', [f.width, f.height], [W, H]);
+
+  const whole = await f.readBand(0);
+  eq('an unwindowed read is still the whole band', whole.length, W * H);
+
+  const win = { x: 5, y: 3, width: 7, height: 6 };
+  const cropData = await f.readBand(0, win);
+  eq('the windowed read has the window\'s length', cropData.length, win.width * win.height);
+  let bad = 0;
+  for (let r = 0; r < win.height; r++) {
+    for (let c = 0; c < win.width; c++) {
+      if (cropData[r * win.width + c] !== whole[(win.y + r) * W + (win.x + c)]) bad++;
+    }
+  }
+  check('the windowed read IS the matching slice of the full read', bad === 0, `${bad} mismatches`);
+
+  // The same window twice must come from the cache, not a second decode.
+  check('a re-read of the same window is cached', (await f.readBand(0, win)) === cropData);
+  // A different window must NOT be served the previous one.
+  const other = await f.readBand(0, { x: 0, y: 0, width: 3, height: 2 });
+  eq('a different window reads different data', Array.from(other), [0, 1, 2, 1000, 1001, 1002]);
+
+  // NB an over-cap window is UNREACHABLE on a small raster — `clampWindow` trims
+  // it into the source first. The cap only bites on a genuinely huge source; see
+  // section [14].
+  const clampedHuge = await f.readBand(0, { x: 0, y: 0, width: 9000, height: 9000 });
+  eq('an oversized window is clamped into the raster, not refused', clampedHuge.length, W * H);
+
+  // The preview is a whole-image thumbnail, decimated.
+  const prev = await f.readPreview(0, 16);
+  check('previewAvailable on a small raster', f.previewAvailable === true);
+  check('readPreview honours maxEdge', !!prev && Math.max(prev.width, prev.height) <= 16, JSON.stringify(prev && [prev.width, prev.height]));
+  check('readPreview keeps the aspect', !!prev && Math.abs(prev.width / prev.height - W / H) < 0.15, JSON.stringify(prev && [prev.width, prev.height]));
+  check('readPreview returns one sample per preview pixel', !!prev && prev.data.length === prev.width * prev.height);
+}
+
+// ---------------------------------------------------------------------------
+console.log('\n[14] a source LARGER than one import can read still opens');
+// ---------------------------------------------------------------------------
+{
+  // 9000 wide — past GEOTIFF_MAX_DIM, which used to be an outright rejection.
+  // Small in bytes (Uint8, 200 rows) so the fixture stays cheap.
+  const W = 9000, H = 200;
+  const flat = new Uint8Array(W * H);
+  for (let r = 0; r < H; r++) for (let c = 0; c < W; c++) flat[r * W + c] = (r + c) % 251;
+  const buf = writeArrayBuffer(flat, {
+    width: W, height: H,
+    ModelPixelScale: [10, 10, 0], ModelTiepoint: [0, 0, 0, 0, 2000, 0],
+    ProjectedCSTypeGeoKey: 32611, GTModelTypeGeoKey: 1,
+    BitsPerSample: [8], SampleFormat: [1],
+  });
+  const f = await M.openGeoTiff(buf);
+  eq('a 9000-wide raster OPENS', [f.width, f.height], [W, H]);
+  const dw = M.defaultWindow(W, H);
+  check('the default crop is capped below the source width', dw.width === M.GEOTIFF_MAX_DIM && dw.width < W, JSON.stringify(dw));
+  // …and asking for the FULL width is refused by the read rather than silently
+  // truncated, because 9000 > GEOTIFF_MAX_DIM.
+  let capMsg = '';
+  try { await f.readBand(0, { x: 0, y: 0, width: W, height: H }); } catch (err) { capMsg = String(err); }
+  check('an over-cap window read throws a named error', /crop/i.test(capMsg), capMsg);
+  const win = { x: 8800, y: 50, width: 100, height: 20 };
+  const data = await f.readBand(0, win);
+  eq('a window near the far edge reads the right values',
+    [data[0], data[1], data[100], data[data.length - 1]],
+    [(50 + 8800) % 251, (50 + 8801) % 251, (51 + 8800) % 251, (69 + 8899) % 251]);
+}
+
+// ---------------------------------------------------------------------------
+console.log('\n[15] shiftGeorefForWindow — the crop\'s own georeference');
+// ---------------------------------------------------------------------------
+{
+  // A 40x24 raster at 30 m whose LOWER-LEFT corner is (500000, 4600000).
+  const g = { xllcorner: 500000, yllcorner: 4600000, cellSize: 30, crs: 'EPSG:32611' };
+  const srcH = 24;
+  // The whole image is the identity.
+  eq('the whole-image window is the identity',
+    M.shiftGeorefForWindow(g, { x: 0, y: 0, width: 40, height: srcH }, srcH),
+    g);
+  // THE TOP rows: y = 0 keeps the top edge, so yll rises by the rows left below.
+  //   yll' = 4600000 + (24 - 0 - 6)*30 = 4600000 + 540
+  eq('a window on the TOP rows',
+    M.shiftGeorefForWindow(g, { x: 0, y: 0, width: 40, height: 6 }, srcH),
+    { xllcorner: 500000, yllcorner: 4600540, cellSize: 30, crs: 'EPSG:32611' });
+  // THE BOTTOM rows: y = srcH - h leaves yll exactly where it was.
+  eq('a window on the BOTTOM rows',
+    M.shiftGeorefForWindow(g, { x: 0, y: srcH - 6, width: 40, height: 6 }, srcH),
+    { xllcorner: 500000, yllcorner: 4600000, cellSize: 30, crs: 'EPSG:32611' });
+  // An interior window, both axes:
+  //   xll' = 500000 + 5*30 = 500150
+  //   yll' = 4600000 + (24 - 3 - 6)*30 = 4600000 + 450
+  eq('an interior window shifts both axes',
+    M.shiftGeorefForWindow(g, { x: 5, y: 3, width: 7, height: 6 }, srcH),
+    { xllcorner: 500150, yllcorner: 4600450, cellSize: 30, crs: 'EPSG:32611' });
+  check('a crop never changes the cell size',
+    M.shiftGeorefForWindow(g, { x: 5, y: 3, width: 7, height: 6 }, srcH).cellSize === 30);
+}
+
+// ---------------------------------------------------------------------------
+console.log('\n[16] resampleAverage — hand-computed');
+// ---------------------------------------------------------------------------
+{
+  // 4x4 counting up; a 2x2 average is the mean of each 2x2 quadrant.
+  const src = Array.from({ length: 16 }, (_, i) => i);
+  eq('a 4x4 → 2x2 box average', Array.from(M.resampleAverage(src, 4, 4, 2, 2)), [2.5, 4.5, 10.5, 12.5]);
+  eq('identical dimensions are the identity', Array.from(M.resampleAverage(src, 4, 4, 4, 4)), src);
+  // 4x1 → 2x1 : means of [0,1] and [2,3].
+  eq('a 1-D average', Array.from(M.resampleAverage([0, 1, 2, 3], 4, 1, 2, 1)), [0.5, 2.5]);
+  // Upsampling has an empty box — it must degrade to a sample, never NaN.
+  eq('an upsample degrades to nearest, never NaN', Array.from(M.resampleAverage([1, 2], 2, 1, 4, 1)), [1, 1, 2, 2]);
+  // NODATA is EXCLUDED from the mean…
+  // Rows 0-1 are identical, so each top quadrant's mean is obvious by eye:
+  //   TL {1,3,1,3} = 2   TR {X,5,X,5} = 5 with the sentinel excluded
+  //   (folding -9999 in would give -4997.5, not 5).
+  eq('NODATA is excluded from the mean',
+    Array.from(M.resampleAverage([1, 3, -9999, 5, 1, 3, -9999, 5, 0, 0, 0, 0, 0, 0, 0, 0], 4, 4, 2, 2, -9999)),
+    [2, 5, 0, 0]);
+  // …and a box holding NOTHING but NODATA outputs the sentinel again, so the
+  // caller's own NODATA handling still sees it.
+  eq('an all-NODATA box stays NODATA',
+    Array.from(M.resampleAverage([-9999, -9999, 4, 4, -9999, -9999, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4], 4, 4, 2, 2, -9999)),
+    [-9999, 4, 4, 4]);
+  // With no sentinel, an all-non-finite box is NaN — which every decode reports.
+  check('an all-NaN box with no sentinel is NaN',
+    Number.isNaN(M.resampleAverage([NaN, NaN, NaN, NaN], 2, 2, 1, 1)[0]));
+  check('supportsAverageResample: numeric yes', M.supportsAverageResample(intAttr) && M.supportsAverageResample(floatAttr));
+  check('supportsAverageResample: categorical no', !M.supportsAverageResample(tagAttr) && !M.supportsAverageResample(boolAttr));
+}
+
+// ---------------------------------------------------------------------------
+console.log('\n[17] buildBandValues honours (and refuses) the method');
+// ---------------------------------------------------------------------------
+{
+  const src = Array.from({ length: 16 }, (_, i) => i);
+  // float target: the exact quadrant means survive.
+  eq('average reaches a float target', Array.from(M.buildBandValues(src, 4, 4, 2, 2, floatAttr, { resample: 'average' }).values), [2.5, 4.5, 10.5, 12.5]);
+  // integer target: averaged THEN rounded (resample → decode, as documented).
+  eq('average then round on an integer target', Array.from(M.buildBandValues(src, 4, 4, 2, 2, intAttr, { resample: 'average' }).values), [3, 5, 11, 13]);
+  eq('nearest stays the default', Array.from(M.buildBandValues(src, 4, 4, 2, 2, intAttr).values), [5, 7, 13, 15]);
+  // A CATEGORICAL target is refused STRUCTURALLY — asking for average yields the
+  // nearest result, so a class code can never be averaged into one that does not
+  // exist. (Codes 0..2 are valid tag indices; 3.. are not, hence the defaults.)
+  // EVERY fixture below is a DISCRIMINATOR: nearest and average give DIFFERENT
+  // answers, so "ignores average" cannot pass by coincidence. Nearest samples
+  // (row 1, col 1) of each 2x2 quadrant — see the centre-sampling rule.
+  //   TL = {2,2,2,0}: nearest → 0, average → 1.5 → rounds to tag 2.
+  const tagSrc = [2, 2, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+  eq('a tag target ignores average', Array.from(M.buildBandValues(tagSrc, 4, 4, 2, 2, tagAttr, { resample: 'average' }).values), [0, 0, 0, 0]);
+  check('…and the fixture really does discriminate',
+    M.resampleAverage(tagSrc, 4, 4, 2, 2)[0] === 1.5 && M.resampleNearest(tagSrc, 4, 4, 2, 2)[0] === 0);
+  //   TL = {1,0,0,0}: nearest → 0 (false), average → 0.25 → nonzero → true.
+  const boolSrc = [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+  eq('a bool target ignores average', Array.from(M.buildBandValues(boolSrc, 4, 4, 2, 2, boolAttr, { resample: 'average' }).values), [0, 0, 0, 0]);
+  check('…and the fixture really does discriminate', M.resampleAverage(boolSrc, 4, 4, 2, 2)[0] === 0.25);
+  // A value MAP is a code table, so it is refused too.
+  //   TR = {4,4,0,4}: nearest → 4 → mapped to tag 2; average → 3 → UNMAPPED.
+  const mapSrc = [0, 0, 4, 4, 0, 0, 0, 4, 0, 0, 0, 0, 0, 0, 0, 0];
+  const mapped = M.buildBandValues(mapSrc, 4, 4, 2, 2, tagAttr, { resample: 'average', valueMap: { 0: '0', 4: '2' } });
+  eq('a value map forces nearest', Array.from(mapped.values), [0, 2, 0, 0]);
+  eq('…so nothing is reported unmapped', mapped.unmappedValues, []);
+  // NODATA still excluded under average (the [16] fixture, through the decode).
+  const nd = M.buildBandValues([1, 3, -9999, 5, 1, 3, -9999, 5, 0, 0, 0, 0, 0, 0, 0, 0], 4, 4, 2, 2, floatAttr,
+    { resample: 'average', noData: -9999 });
+  eq('average + NODATA', Array.from(nd.values), [2, 5, 0, 0]);
+  eq('the NODATA count is still reported', nd.nodataCells, 0);
+}
+
+// ---------------------------------------------------------------------------
+console.log('\n[18] crop THEN resample — the composed georeference');
+// ---------------------------------------------------------------------------
+{
+  // 8x8 at 10 m, lower-left (1000, 5000). Crop the interior 4x4 at (2,2), then
+  // resample that onto a 2x2 grid.
+  const values = Array.from({ length: 64 }, (_, i) => i);
+  const buf = makeTiff(values, 8, 8, { originX: 1000, originY: 5080, scaleX: 10, scaleY: 10 });
+  const f = await M.openGeoTiff(buf);
+  eq('the source georef', [f.georef.xllcorner, f.georef.yllcorner, f.georef.cellSize], [1000, 5000, 10]);
+
+  const win = { x: 2, y: 2, width: 4, height: 4 };
+  const data = await f.readBand(0, win);
+  // Rows 2..5, cols 2..5 of an 8-wide counter.
+  eq('the crop holds the right samples', Array.from(data.slice(0, 4)), [18, 19, 20, 21]);
+
+  // Crop georef: xll = 1000 + 2*10 = 1020; yll = 5000 + (8-2-4)*10 = 5020.
+  const cropG = M.shiftGeorefForWindow(f.georef, win, f.height);
+  eq('the crop georef', [cropG.xllcorner, cropG.yllcorner, cropG.cellSize], [1020, 5020, 10]);
+  // Then the resample: same extent, half the cells → double the cell size.
+  const outG = M.scaleGeorefForResample(cropG, win.width, win.height, 2, 2).georef;
+  eq('the composed georef', [outG.xllcorner, outG.yllcorner, outG.cellSize], [1020, 5020, 20]);
+  near('the composed extent still covers the crop', outG.cellSize * 2, cropG.cellSize * win.width);
+
+  // And the values: nearest over the cropped block.
+  const built = M.buildBandValues(data, win.width, win.height, 2, 2, intAttr);
+  eq('crop + resample values', Array.from(built.values), [27, 29, 43, 45]);
+  // The same crop at native resolution is the identity.
+  const native = M.buildBandValues(data, win.width, win.height, win.width, win.height, intAttr);
+  eq('crop at native resolution is exact', Array.from(native.values), Array.from(data));
+}
+
 rmSync(entryPath, { force: true });
 rmSync(dir, { recursive: true, force: true });
 console.log(failures === 0 ? '\nAll GeoTIFF checks passed.' : `\n${failures} CHECK(S) FAILED.`);

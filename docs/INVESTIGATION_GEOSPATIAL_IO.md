@@ -166,11 +166,16 @@ users to convert each band to `.asc` is friction. `geotiff.js` is pure JS, brows
 tree-shakeable, no WASM — a defensible dependency for a 100%-client-side app.
 - One dialog: pick file → list bands (name/type/size/nodata) → map each band to a cell
   attribute (nearest-neighbour resample to the model grid, or "resize grid to raster").
+  **SHIPPED, then extended**: the dialog also carries a **crop box** and an **Average**
+  resample — see "in-app crop + resample" below.
 - Categorical bands get the CSV char-map treatment: distinct values listed with counts,
   each mappable to a tag option / value (the Cell2Fire code→fuel table, as UI).
 - Reads the embedded georeference (origin, pixel size, CRS string) into Tier 3's block.
 - COG range-request streaming is a free future upgrade of the same library (import a
-  window of a country-scale raster without downloading it) — not v1.
+  window of a country-scale raster without downloading it) — not v1. **Half of that
+  arrived without it**: `readRasters({ window })` bounds geotiff.js's tile loop AND its
+  allocation, so a country-scale raster already in memory is croppable; what streaming
+  would add is not having to DOWNLOAD it whole.
 - Deliberately **no reprojection**: if the CRS differs from the model's, say so and
   point at QGIS (state of the art does the same).
 
@@ -199,6 +204,22 @@ Two consumers, mirroring NetLogo/GAMA:
   exact column logic, reused).
 - Shapefile support = "convert to GeoJSON in QGIS" (Tier 0 doctrine), unless demand
   justifies a parser later.
+
+### In-app crop + resample — MOVED IN (was assumed to be QGIS's job)
+Tier 0's workflow said "crop/align in a GIS". **Cropping and resampling are not
+inherently GIS work**, and both now happen in the import dialogs:
+- **Crop** (GeoTIFF): a draggable box on a decoded preview + exact x/y/w/h fields. The
+  size caps moved from the SOURCE to the WINDOW, so a source far larger than one import
+  can hold now opens on a centred cap-sized box instead of an error. The preview comes
+  from a reduced-resolution **overview** IFD when the file carries one (a COG), else the
+  main image when it fits the decode budget; with neither, the crop is set numerically.
+- **Resample**: `average` (a NODATA-aware box filter) joins `nearest` for **numeric**
+  targets on both the GeoTIFF and `.asc` paths — categorical targets stay nearest-only,
+  enforced in the pure builder, not just hidden in the UI.
+- The georeference follows: a crop shifts the recorded corner (with the top-left →
+  lower-left row flip), a resample scales the recorded cell size.
+- **What is left for a GIS: REPROJECTION and format conversion.** That boundary is now
+  the honest one, and it is what the docs say.
 
 ### Tier 5 — explicitly NOT proposed (and why)
 - **In-browser reprojection / gdal3.js**: multi-MB WASM, and the surveyed field
