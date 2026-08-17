@@ -3842,6 +3842,34 @@ export function HelpView() {
             <li><strong>5. Simulate, then export the result</strong> as .asc or CSV &mdash;
               it drops straight back into QGIS at the same origin and cell size.</li>
           </ul>
+          <p className={styles.p}>
+            <strong>Two worked examples ship in the Models Library</strong> (tagged{' '}
+            <em>geographic</em>), both built from open satellite data by the generator scripts in{' '}
+            <code>scripts/</code>:
+          </p>
+          <ul className={styles.list}>
+            <li><strong>Wildfire &mdash; Sierra Nevada.</strong> A 6.2 km square of the Lake Tahoe
+              east shore: terrain from the <em>Copernicus DEM GLO-30</em>, fuel from{' '}
+              <em>ESA WorldCover 2021</em>. A burning neighbour is weighted by the wind direction
+              and by whether it lies downhill, so the fire runs up the Carson Range and stops dead
+              at the lake. Per-fuel ignitability is a one-axis lookup table you can edit while it
+              burns.</li>
+            <li><strong>Urban Growth &mdash; Recife.</strong> The western growth frontier of
+              Recife, Brazil: land use from ESA WorldCover, slope from the Copernicus DEM, and the
+              major-road network from <em>OpenStreetMap</em>, rasterised with the same supercover
+              walk the GeoJSON importer uses. Development spreads from the city edge, is pulled
+              toward the roads and pushed off steep ground &mdash; the three classic SLEUTH
+              pressures, each a live slider.</li>
+          </ul>
+          <p className={styles.p}>
+            Both carry their layers <em>inside</em> the <code>.gcaproj</code>, so they open ready
+            to run with no network. That is worth knowing for one reason:{' '}
+            <strong>Reset re-seeds the grid from the model&apos;s Init Events, and imported data is
+            not an Init Event</strong> &mdash; so Reset clears the landscape. Each model ships a{' '}
+            <strong>&ldquo;Restore landscape&rdquo; preset</strong> that carries the same board;
+            one click brings it back (re-opening the model works too). If you build your own
+            data-backed model, save that preset before you hand it to anyone.
+          </p>
           <h3 className={styles.h3}>Real map data &mdash; Esri ASCII grid (.asc)</h3>
           <p className={styles.p}>
             The same dialog reads the <strong>Esri ASCII grid</strong> &mdash; the plain-text

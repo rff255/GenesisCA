@@ -56,3 +56,8 @@ public/viewer-template.html
 
 # GRA milestone orchestration baselines (local only)
 .gra-baseline/
+
+# Cached raw geographic source data for the real-data library models
+# (scripts/gen-wildfire-sierra.mjs, scripts/gen-urban-recife.mjs). Regenerated
+# on demand from the public sources; the checked-in .gcaproj carries everything.
+scripts/geodata-cache/
