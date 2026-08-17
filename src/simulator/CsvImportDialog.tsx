@@ -6,9 +6,11 @@ import {
   autoMapAgentColumns, agentTargetOptions, buildAgentSpecs,
   buildGridValues, gridTargetOptions,
   distinctChars, autoSeedCharMap, charLabel, CSV_NO_DELIMITER,
-  parseAscGrid, isAscGridText,
-  type AscGrid, type CsvAgentSpec, type CsvAttrShape, type CsvCharMap,
+  parseAscGrid, isAscGridText, resampleCsvTable, csvTableToNumbers,
+  type AscGrid, type CsvAgentSpec, type CsvAttrShape, type CsvCharMap, type CsvGridBuild,
 } from './csvImport';
+import { buildBandValues, supportsAverageResample, scaleGeorefForResample } from './geotiffImport';
+import type { RasterResampleMethod } from './rasterResample';
 
 /** What the dialog hands back on Import. Exactly one of `agents` / `grid` is set
  *  (the Target switch decides).
@@ -140,7 +142,11 @@ export function CsvImportDialog({
     if (!gridOpts.some(o => o.id === gridAttrId)) setGridAttrId(gridOpts[0]?.id ?? '');
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [gridOpts]);
-  const [fit, setFit] = useState<'resize' | 'keep'>('resize');
+  // `resample` is `.asc`-only: a georeferenced raster has a cell SIZE, so
+  // resampling it onto the model's grid is a meaningful (and georef-correct)
+  // operation. A plain CSV board has no such scale, so it keeps resize / keep.
+  const [fit, setFit] = useState<'resize' | 'keep' | 'resample'>('resize');
+  const [ascMethod, setAscMethod] = useState<RasterResampleMethod>('nearest');
   const [layer, setLayer] = useState(0);
   const gridAttr = gridOpts.find(o => o.id === gridAttrId);
 
@@ -204,13 +210,43 @@ export function CsvImportDialog({
   );
   const ascMismatched = ascLayers.filter(l => l.asc.ncols !== (primaryAsc?.ncols ?? 0) || l.asc.nrows !== (primaryAsc?.nrows ?? 0));
 
+  /** Build ONE `.asc` layer, honouring the resample fit.
+   *
+   *  NEAREST resamples the parsed TABLE — cell text and all — so every existing
+   *  behaviour of `buildGridValues` survives (a tag matched by NAME, the per-cell
+   *  issue reporting, ragged padding). AVERAGE has to go through numbers (a mean
+   *  over text is undefined), so it reads the body as raw values and hands them
+   *  to the SAME `buildBandValues` the GeoTIFF importer uses — one box filter,
+   *  one NODATA rule, for both formats. It is refused for a categorical target
+   *  there regardless of what is asked for. */
+  const buildAscLayer = (asc: AscGrid, attr: CsvAttrShape): CsvGridBuild => {
+    if (fit !== 'resample') return buildGridValues(asc.table, attr, undefined, asc.nodataValue);
+    if (ascMethod === 'average' && supportsAverageResample(attr)) {
+      const num = csvTableToNumbers(asc.table);
+      const b = buildBandValues(num.data, num.width, num.height, world.w, world.h, attr, {
+        noData: asc.nodataValue, resample: 'average',
+      });
+      return { values: b.values, width: b.width, height: b.height, badValues: b.badValues, paddedCells: 0, nodataCells: b.nodataCells, issues: b.issues };
+    }
+    return buildGridValues(resampleCsvTable(asc.table, world.w, world.h), attr, undefined, asc.nodataValue);
+  };
+
   const gridBuild = useMemo(
-    () => (effTarget === 'grid' && gridAttr
-      ? buildGridValues(table, gridAttr.attr, isCharMode ? charMap : undefined, primaryAsc?.nodataValue)
-      : null),
-    [effTarget, table, gridAttr, isCharMode, charMap, primaryAsc],
+    () => {
+      if (effTarget !== 'grid' || !gridAttr) return null;
+      if (primaryAsc) return buildAscLayer(primaryAsc, gridAttr.attr);
+      return buildGridValues(table, gridAttr.attr, isCharMode ? charMap : undefined, undefined);
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [effTarget, table, gridAttr, isCharMode, charMap, primaryAsc, fit, ascMethod, world.w, world.h],
   );
   const dimsMatch = !!gridBuild && gridBuild.width === world.w && gridBuild.height === world.h;
+  /** Any `.asc` layer whose target could legitimately be averaged — the method
+   *  control is hidden entirely when none can (categorical layers only). */
+  const ascAvgPossible = ascLayers.some(l => {
+    const a = gridOpts.find(o => o.id === l.attrId)?.attr;
+    return !!a && supportsAverageResample(a);
+  });
 
   // --- reporting ------------------------------------------------------------
   const summary = (() => {
@@ -228,7 +264,13 @@ export function CsvImportDialog({
     const parts = [`${g.width} wide × ${g.height} tall`];
     if (primaryAsc) {
       if (ascLayers.length > 1) parts.push(`${ascLayers.length} layers`);
-      parts.push(`cell size ${primaryAsc.cellSize} · origin (${primaryAsc.xllcorner}, ${primaryAsc.yllcorner})${primaryAsc.centerOrigin ? ' — converted from a centre origin' : ''}`);
+      if (fit === 'resample' && (primaryAsc.ncols !== world.w || primaryAsc.nrows !== world.h)) {
+        parts.push(`resampled from ${primaryAsc.ncols}×${primaryAsc.nrows} (${ascMethod})`);
+      }
+      const outCell = fit === 'resample' && world.w > 0
+        ? (primaryAsc.cellSize * primaryAsc.ncols) / world.w
+        : primaryAsc.cellSize;
+      parts.push(`cell size ${outCell} · origin (${primaryAsc.xllcorner}, ${primaryAsc.yllcorner})${primaryAsc.centerOrigin ? ' — converted from a centre origin' : ''}`);
       if (g.nodataCells) parts.push(`${g.nodataCells} NODATA cell${g.nodataCells === 1 ? '' : 's'} (${primaryAsc.nodataValue}) → default`);
       const declared = primaryAsc.ncols * primaryAsc.nrows;
       if (primaryAsc.tokenCount !== declared) parts.push(`header declares ${declared} values, the body holds ${primaryAsc.tokenCount}`);
@@ -264,16 +306,21 @@ export function CsvImportDialog({
             attrId: l.attrId,
             values: l.key === 0
               ? gridBuild.values
-              : buildGridValues(l.asc.table, gridOpts.find(o => o.id === l.attrId)?.attr ?? gridAttr.attr, undefined, l.asc.nodataValue).values,
+              : buildAscLayer(l.asc, gridOpts.find(o => o.id === l.attrId)?.attr ?? gridAttr.attr).values,
           }))
         : [{ attrId: gridAttr.id, values: gridBuild.values }];
+      // A resample covers the SAME ground with a different number of cells, so
+      // the corner stays put and only the cell size scales.
+      const ascGeoref = primaryAsc
+        ? { xllcorner: primaryAsc.xllcorner, yllcorner: primaryAsc.yllcorner, cellSize: primaryAsc.cellSize }
+        : undefined;
       onApply({
         target: 'grid', width: gridBuild.width, height: gridBuild.height,
         layer: is3d ? Math.max(0, Math.min(world.d - 1, Math.round(layer))) : 0,
         layers, resize: fit === 'resize',
-        georef: primaryAsc
-          ? { xllcorner: primaryAsc.xllcorner, yllcorner: primaryAsc.yllcorner, cellSize: primaryAsc.cellSize }
-          : undefined,
+        georef: ascGeoref && fit === 'resample'
+          ? scaleGeorefForResample(ascGeoref, primaryAsc!.ncols, primaryAsc!.nrows, world.w, world.h).georef
+          : ascGeoref,
       });
     }
   };
@@ -399,14 +446,31 @@ export function CsvImportDialog({
                     {gridOpts.map(o => <option key={o.id} value={o.id}>{o.label}</option>)}
                   </select>
                 </label>
-                <label style={label}><input type="radio" checked={fit === 'resize'} onChange={() => setFit('resize')} /> Resize the grid to the CSV</label>
+                <label style={label}><input type="radio" checked={fit === 'resize'} onChange={() => setFit('resize')} /> Resize the grid to the {isAsc ? 'raster' : 'CSV'}</label>
                 <label style={label}>
                   <input type="radio" checked={fit === 'keep'} onChange={() => setFit('keep')} /> Keep the grid ({world.w}×{world.h})
                 </label>
                 {fit === 'keep' && !dimsMatch && (
                   <div style={{ color: '#e05050', fontSize: 11 }}>
-                    The CSV is {gridBuild?.width}×{gridBuild?.height} — it must match the grid exactly to keep it.
+                    The {isAsc ? 'raster' : 'CSV'} is {gridBuild?.width}×{gridBuild?.height} — it must match the grid exactly to keep it.
                   </div>
+                )}
+                {isAsc && (
+                  <label style={label}>
+                    <input type="radio" checked={fit === 'resample'} onChange={() => setFit('resample')} /> Resample onto the grid ({world.w}×{world.h})
+                  </label>
+                )}
+                {isAsc && fit === 'resample' && ascAvgPossible && (
+                  <label style={{ ...label, gap: 6 }}>
+                    Method
+                    <select value={ascMethod} onChange={e => setAscMethod(e.target.value as RasterResampleMethod)} style={{ fontSize: 11 }}>
+                      <option value="nearest">Nearest</option>
+                      <option value="average">Average</option>
+                    </select>
+                    <span style={{ fontSize: 10, color: '#8090a0' }}>
+                      Average box-filters a continuous layer; a Binary / Tag layer always uses nearest.
+                    </span>
+                  </label>
                 )}
                 {is3d && (
                   <label style={{ ...label, gap: 6 }}>

@@ -19,7 +19,9 @@ import { join, dirname, resolve } from 'path';
 import { fileURLToPath, pathToFileURL } from 'url';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const ENTRY = `export * from '../src/simulator/csvImport.ts';\n`;
+// The resampling kernels live in the leaf module BOTH importers share, so the
+// `.asc` resample is asserted against the very same code the GeoTIFF path runs.
+const ENTRY = `export * from '../src/simulator/csvImport.ts';\nexport * from '../src/simulator/rasterResample.ts';\n`;
 const dir = mkdtempSync(join(tmpdir(), 'gca-asc-'));
 const entryPath = join(ROOT, 'scripts', '__asc_entry.ts');
 writeFileSync(entryPath, ENTRY);
@@ -264,6 +266,65 @@ console.log('\n[7] the multi-layer co-registration contract');
   eq('layer A values', Array.from(ba.values), [1, 2, 3, 4]);
   eq('layer B values', Array.from(bb.values), [5, 6, 7, 8]);
   check('both blocks are the same shape', ba.width === bb.width && ba.height === bb.height);
+}
+
+// ---------------------------------------------------------------------------
+console.log('\n[8] resample onto the model grid');
+// ---------------------------------------------------------------------------
+{
+  // A 4x4 raster counting up, 30 m cells, lower-left (1000, 2000).
+  const asc = M.parseAscGrid(
+    'ncols 4\nnrows 4\ncellsize 30\nxllcorner 1000\nyllcorner 2000\nNODATA_value -9999\n'
+    + '0 1 2 3\n4 5 6 7\n8 9 10 11\n12 13 14 15');
+  eq('the fixture parses', [asc.ncols, asc.nrows, asc.cellSize], [4, 4, 30]);
+
+  // --- NEAREST resamples the TABLE, so every decode behaviour survives -------
+  const t2 = M.resampleCsvTable(asc.table, 2, 2);
+  eq('the resampled table has the target shape', [t2.width, t2.rows.length], [2, 2]);
+  // Centre sampling picks rows/cols 1 and 3 — identical to `resampleNearest`.
+  eq('nearest resample values', Array.from(M.buildGridValues(t2, intAttr, undefined, asc.nodataValue).values), [5, 7, 13, 15]);
+  check('the same dims are the identity', M.resampleCsvTable(asc.table, 4, 4) === asc.table);
+  // A tag matched by NAME still works after the resample — the reason the table
+  // (not a number block) is what gets resampled.
+  // 4x2 → 2x1 picks row 1, columns 1 and 3 → 'head' (2) and 'wire' (1). Both are
+  // NON-default, so a resample that dropped the names would show up as zeros.
+  const named = M.parseAscGrid('ncols 4\nnrows 2\ncellsize 1\nempty wire head wire\nhead head empty wire');
+  eq('a tag by NAME survives the table resample',
+    Array.from(M.buildGridValues(M.resampleCsvTable(named.table, 2, 1), tagAttr).values), [2, 1]);
+
+  // --- AVERAGE goes through numbers -----------------------------------------
+  const num = M.csvTableToNumbers(asc.table);
+  eq('the body reads as raw numbers', [num.width, num.height, num.data[0], num.data[15]], [4, 4, 0, 15]);
+  eq('average resample values', Array.from(M.resampleAverage(num.data, 4, 4, 2, 2)), [2.5, 4.5, 10.5, 12.5]);
+  // …and NEAREST vs AVERAGE genuinely differ here, so the choice is real.
+  check('the two methods differ on this fixture',
+    JSON.stringify(Array.from(M.resampleNearest(num.data, 4, 4, 2, 2))) !== JSON.stringify(Array.from(M.resampleAverage(num.data, 4, 4, 2, 2))));
+
+  // NODATA is excluded from the mean, exactly as on the GeoTIFF path.
+  const holed = M.parseAscGrid(
+    'ncols 4\nnrows 4\ncellsize 30\nNODATA_value -9999\n'
+    + '1 3 -9999 5\n1 3 -9999 5\n0 0 0 0\n0 0 0 0');
+  const hn = M.csvTableToNumbers(holed.table);
+  eq('NODATA excluded under average', Array.from(M.resampleAverage(hn.data, 4, 4, 2, 2, -9999)), [2, 5, 0, 0]);
+
+  // Unparseable text becomes NaN, which the decode reports as a miss (never 0).
+  const junk = M.csvTableToNumbers(M.parseAscGrid('ncols 2\nnrows 1\ncellsize 1\n7 oops').table);
+  check('a non-numeric field reads as NaN', junk.data[0] === 7 && Number.isNaN(junk.data[1]));
+
+  // --- the georeference: same corner, scaled cell size -----------------------
+  const g = { xllcorner: asc.xllcorner, yllcorner: asc.yllcorner, cellSize: asc.cellSize };
+  // `scaleGeorefForResample` itself lives in (and is asserted by) the GeoTIFF
+  // suite; this restates the rule the `.asc` dialog applies with it, so a change
+  // to either side is caught:
+  //   cellSize' = cellSize · srcW / dstW, corner unchanged (same ground).
+  eq('the resampled cell size', (g.cellSize * asc.ncols) / 2, 60);
+  eq('the corner is unchanged by a resample', [g.xllcorner, g.yllcorner], [1000, 2000]);
+
+  // --- ragged rows stay ragged (padding remains buildGridValues' job) --------
+  const rag = M.parseAscGrid('ncols 3\nnrows 2\ncellsize 1\n1 2 3\n4 5');
+  const rr = M.resampleCsvTable(rag.table, 3, 2);
+  const rb = M.buildGridValues(rr, intAttr, undefined, rag.nodataValue);
+  eq('a short row is still padded + counted after a resample', [Array.from(rb.values), rb.paddedCells], [[1, 2, 3, 4, 5, 0], 1]);
 }
 
 rmSync(entryPath, { force: true });

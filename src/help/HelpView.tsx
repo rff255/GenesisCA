@@ -3818,11 +3818,14 @@ export function HelpView() {
             <li><strong>1. Get the data.</strong> Public sources ship ready-made layers:
               LANDFIRE (US fuel/canopy), WorldPop &amp; GPW (population), NLCD / Copernicus
               (land cover), any DEM for elevation, OpenStreetMap for rivers and roads.</li>
-            <li><strong>2. Align it in QGIS (free).</strong> Clip every layer to the same
-              extent, resolution and projection, and keep the cell count sensible (a 30 m
-              county crop is already thousands of cells across). GenesisCA <em>never
-              reprojects</em> &mdash; like FARSITE, Cell2Fire and NetLogo, it expects layers
-              already on its grid.</li>
+            <li><strong>2. QGIS (free) only if you must reproject.</strong> Cropping and
+              resampling now happen <em>here</em> &mdash; a GeoTIFF import opens on a crop box
+              you drag, and either format can be resampled onto the current grid &mdash; so the
+              only jobs left for a GIS are <strong>reprojection</strong> (getting every layer of
+              one model into the same CRS) and <strong>format conversion</strong> (a Shapefile
+              into GeoJSON). GenesisCA <em>never reprojects</em>: like FARSITE, Cell2Fire and
+              NetLogo it expects the layers of one model to share a projection and a grid, and
+              it tells you when two of them disagree.</li>
             <li><strong>3. Import the layers.</strong> Rasters come in as{' '}
               <strong>.asc</strong> (several co-registered files in one session) or{' '}
               <strong>GeoTIFF</strong> (several bands in one file); vectors &mdash; rivers,
@@ -3830,7 +3833,8 @@ export function HelpView() {
               into attributes or turned into agents. Categorical layers land in{' '}
               <strong>tag attributes</strong> through the code&nbsp;&rarr;&nbsp;class maps in
               each dialog. The first import records the <strong>georeference</strong> on the
-              model automatically.</li>
+              model automatically &mdash; and a crop or a resample records the georeference of
+              the piece you actually took, so the model still lines up with the source.</li>
             <li><strong>4. Make it look like a map.</strong> Export a rendered map of the same
               extent from QGIS and set it as the <strong>backdrop</strong> (Info panel); use
               semi-transparent Output-Mapping colours (the alpha port) so the map shows
@@ -3874,11 +3878,22 @@ export function HelpView() {
               convention the field uses.
             </li>
             <li>
+              <strong>Grid size.</strong> <em>Resize the grid to the raster</em>, <em>keep the
+              grid</em> (which needs an exact dimension match), or <em>resample onto the
+              grid</em>. Resampling uses the same kernels the GeoTIFF importer does, so a{' '}
+              <code>.asc</code> and a <code>.tif</code> over the same ground pick the same
+              cells: <strong>nearest</strong> always, plus an <strong>Average</strong> box
+              filter when a layer targets an <em>integer</em> or <em>decimal</em> attribute. A
+              multi-layer session resamples every layer identically. There is no crop box here
+              &mdash; an <code>.asc</code> is text, and in practice already the extent you cut.
+            </li>
+            <li>
               <strong>Georeference.</strong> The header&apos;s origin and cell size are stored on
               the model, so the matching export writes the board back <em>in the same place</em>.
               An <code>xllcenter</code>/<code>yllcenter</code> header is converted to the corner
-              form on the way in. Nothing in the engine reads it &mdash; it is presentation and
-              file metadata only.
+              form on the way in; a resample scales the recorded cell size and leaves the corner
+              put, since the same ground is covered by a different number of cells. Nothing in
+              the engine reads it &mdash; it is presentation and file metadata only.
             </li>
           </ul>
           <h3 className={styles.h3}>Real map data &mdash; GeoTIFF (.tif)</h3>
@@ -3907,26 +3922,41 @@ export function HelpView() {
               categorical, so no table is offered.
             </li>
             <li>
-              <strong>Grid size.</strong> Either <em>resize the grid to the raster</em>, or{' '}
-              <em>resample the raster onto the grid</em> you already have. Resampling is{' '}
-              <strong>nearest neighbour</strong> &mdash; averaging class codes would invent
-              classes that do not exist, and it is what <code>gdalwarp -r near</code> does for
-              the same reason. It is the blunt-but-honest choice for a continuous band too.
+              <strong>Crop.</strong> The dialog opens on a preview with a{' '}
+              <strong>crop box</strong>: drag it to move, its corner to resize, or drag outside
+              it to draw a new one &mdash; and the x / y / w / h fields take exact numbers. Only
+              the box is read, so a source far bigger than one import can hold still opens: it
+              simply starts on a centred, cap-sized window you then move to the area you want.
+              A file with no overview that is too large to decode whole shows no thumbnail; set
+              the crop numerically there.
+            </li>
+            <li>
+              <strong>Grid size &amp; resampling.</strong> Either <em>resize the grid to the
+              crop</em>, or <em>resample onto the grid</em> you already have.{' '}
+              <strong>Nearest</strong> is the default and the ONLY method for a <em>tag</em> or{' '}
+              <em>binary</em> target &mdash; averaging class codes would invent classes that do
+              not exist, which is why <code>gdalwarp -r near</code> exists. For an{' '}
+              <em>integer</em> or <em>decimal</em> band a per-band <strong>Average</strong>{' '}
+              appears: a box filter over each destination cell, the honest choice for
+              continuous data (elevation, population), with NODATA excluded from the mean.
             </li>
             <li>
               <strong>Georeference &amp; CRS.</strong> The file&apos;s origin and pixel size are
               read into the model&apos;s georeference, converted from GeoTIFF&apos;s{' '}
               <em>top-left</em> origin to the lower-left corner convention the rest of GenesisCA
-              (and <code>.asc</code>) uses. Resampling scales the recorded cell size so the
-              ground extent is unchanged. The <code>EPSG:</code> code is recorded too, and if it
+              (and <code>.asc</code>) uses. A crop shifts the recorded corner to the piece you
+              took, and a resample scales the recorded cell size &mdash; either way the model
+              still sits exactly where the source said it does. The <code>EPSG:</code> code is recorded too, and if it
               differs from what the model already carries you are told &mdash; GenesisCA{' '}
               <em>never reprojects</em>. Align the layers in QGIS first.
             </li>
             <li>
-              <strong>Size.</strong> A browser tab is not a GIS workstation: rasters up to
-              8192 on a side and 16 megapixels in total are read, and anything larger asks you
-              to crop or resample it in QGIS. The GeoTIFF reader itself is downloaded only the
-              first time you open one, so it costs nothing until you use it.
+              <strong>Size.</strong> A browser tab is not a GIS workstation, so the limits
+              &mdash; 8192 on a side, 16 megapixels in total &mdash; apply to the{' '}
+              <strong>crop</strong>, not to the file. Any raster opens; you choose which
+              8192&nbsp;&times;&nbsp;2048-shaped piece of it to bring in. The GeoTIFF reader
+              itself is downloaded only the first time you open one, so it costs nothing until
+              you use it.
             </li>
           </ul>
           <h3 className={styles.h3}>Real map data &mdash; GeoJSON vectors (.geojson)</h3>
