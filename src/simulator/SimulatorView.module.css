@@ -975,6 +975,14 @@
   z-index: 40;
 }
 
+/* Same menu, opening LEFTWARD — for a trigger near the right end of the
+   (centred, model-width) transport bar, where growing rightward could overflow
+   the viewport. */
+.shotMenuRight {
+  left: auto;
+  right: 0;
+}
+
 .shotMenuItem {
   background: transparent;
   border: none;

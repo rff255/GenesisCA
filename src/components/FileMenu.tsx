@@ -148,6 +148,12 @@ export function FileMenu({ onNew, onLoaded }: {
       if (meta.name && meta.name !== p.name) metaEdits.name = meta.name;
       if (meta.author !== (p.author ?? '')) metaEdits.author = meta.author;
       if (meta.modelAuthor !== (p.modelAuthor ?? '')) metaEdits.modelAuthor = meta.modelAuthor;
+      // "Use as initial state" — a MODEL property, so it rides the same two-write
+      // discipline. `undefined` = the board is not being saved, so the flag would
+      // have nothing to point at: leave the model's value alone.
+      if (meta.resetRestoresBoard !== undefined && meta.resetRestoresBoard !== (p.resetRestoresBoard === true)) {
+        metaEdits.resetRestoresBoard = meta.resetRestoresBoard;
+      }
     }
     const hasMetaEdits = Object.keys(metaEdits).length > 0;
     if (hasMetaEdits) updateProperties(metaEdits);
@@ -292,6 +298,7 @@ export function FileMenu({ onNew, onLoaded }: {
             name: model.properties.name ?? '',
             author: model.properties.author ?? '',
             modelAuthor: model.properties.modelAuthor ?? '',
+            resetRestoresBoard: model.properties.resetRestoresBoard === true,
           }}
           onConfirm={doSave}
           onCancel={() => setSaveDialogOpen(false)}

@@ -3661,7 +3661,15 @@ export function HelpView() {
           <ul className={styles.list}>
             <li><strong>Play / Pause</strong> &mdash; Start or stop continuous simulation.</li>
             <li><strong>Step</strong> &mdash; Advance one generation (also pauses if running).</li>
-            <li><strong>Reset</strong> &mdash; Clear the grid back to initial state.</li>
+            <li><strong>Reset</strong> &mdash; Back to the initial state. Normally that means{' '}
+              <em>reseed from the rules</em>: defaults, then the model&apos;s Init Events. A model
+              whose board is <em>data</em> (imported map layers, a hand-painted starting
+              configuration) can declare that saved board as its initial state instead &mdash;{' '}
+              <em>Properties &rarr; Execution &rarr; &ldquo;Reset restores saved board&rdquo;</em>,
+              or the <em>Use as initial state</em> box in the Save dialog &mdash; and then Reset
+              reseeds <em>and</em> applies that board on top. Whichever is the default,{' '}
+              <strong>hover or right-click the Reset button</strong> to pick either action
+              explicitly (the menu appears only when the model actually carries a board).</li>
             <li><strong>Recompile</strong> &mdash; Recompile the graph after editing in the modeler.</li>
           </ul>
 
@@ -3863,12 +3871,15 @@ export function HelpView() {
           </ul>
           <p className={styles.p}>
             Both carry their layers <em>inside</em> the <code>.gcaproj</code>, so they open ready
-            to run with no network. That is worth knowing for one reason:{' '}
-            <strong>Reset re-seeds the grid from the model&apos;s Init Events, and imported data is
-            not an Init Event</strong> &mdash; so Reset clears the landscape. Each model ships a{' '}
-            <strong>&ldquo;Restore landscape&rdquo; preset</strong> that carries the same board;
-            one click brings it back (re-opening the model works too). If you build your own
-            data-backed model, save that preset before you hand it to anyone.
+            to run with no network &mdash; and <strong>Reset puts the landscape back</strong>.
+            Imported data is not an Init Event, so a plain reseed would wipe it; both models
+            therefore declare their saved board as their <em>initial state</em>
+            (<em>Properties &rarr; Execution</em>), which makes Reset reseed and then apply that
+            board on top. To reseed from the rules alone, hover or right-click the Reset button
+            and pick <em>Reseed from rules</em>. <strong>Your own imports get this
+            automatically</strong>: applying a <code>.asc</code> / GeoTIFF / GeoJSON import
+            captures the resulting board as the model&apos;s initial state, so a fresh import
+            survives Reset before you have saved anything.
           </p>
           <h3 className={styles.h3}>Real map data &mdash; Esri ASCII grid (.asc)</h3>
           <p className={styles.p}>
