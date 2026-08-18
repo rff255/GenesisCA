@@ -545,7 +545,24 @@ const model = {
       + 'contribution disappear.\n\n'
       + 'A Burning cell counts Burn duration steps down and becomes Burned, which is terminal. Water and Barren have '
       + 'ignitability 0, so Lake Tahoe, Marlette Lake and the ridge scree are firebreaks that emerge from the data '
-      + 'rather than from the rule.',
+      + 'rather than from the rule.\n\n'
+      + 'DATA SOURCES — REPLICATE OR RETARGET. Both layers are free, open data, downloadable with no account:\n'
+      + '- ELEVATION: Copernicus DEM GLO-30 (ESA/Airbus, free with attribution), served as 1 x 1 deg cloud-optimised '
+      + 'GeoTIFF tiles from the AWS Open Data bucket, named by the tile\'s SW corner. This model reads N39/W120:\n'
+      + '  https://copernicus-dem-30m.s3.amazonaws.com/Copernicus_DSM_COG_10_N39_00_W120_00_DEM/Copernicus_DSM_COG_10_N39_00_W120_00_DEM.tif\n'
+      + '  Swap N39/W120 for any other corner (e.g. S09/W035) to fetch a different tile.\n'
+      + '- LAND COVER: ESA WorldCover 2021 v200 (CC BY 4.0), 3 x 3 deg GeoTIFF tiles named by their SW corner in '
+      + '3-degree steps (browse the map at esa-worldcover.org):\n'
+      + '  https://esa-worldcover.s3.eu-central-1.amazonaws.com/v200/2021/map/ESA_WorldCover_10m_2021_v200_N39W120_Map.tif\n'
+      + 'TO MOVE THE FIRE SOMEWHERE ELSE, two paths. (1) The generator: edit the window (WEST/SOUTH) and the two tile '
+      + 'URLs at the top of scripts/gen-wildfire-sierra.mjs in the GenesisCA repository and re-run it with Node — it '
+      + 'range-reads only the window (a few hundred KB, cached under scripts/geodata-cache/), rebuilds the layers, the '
+      + 'hillshaded backdrop and the thumbnail, and writes the whole model. (2) Entirely in the app: download the two '
+      + 'GeoTIFFs above for your area, then use the transport bar\'s Import -> "Import GeoTIFF..." — crop your square, '
+      + 'land the DEM band into `elevation` (Average) and the WorldCover band into `fuel` (Nearest, mapping the '
+      + 'WorldCover class codes onto the six fuel classes in the import\'s value table). The import captures the new '
+      + 'board as the model\'s initial state automatically, so Reset keeps your landscape; only the backdrop image '
+      + 'stays the old one (replace or clear it in the Modeler\'s Info panel, under Backdrop map).',
     instructions:
       'THE LANDSCAPE IS IMPORTED DATA, NOT A SEEDED PATTERN. It ships inside the file, so the model opens ready to '
       + 'run — and RESET PUTS IT BACK: this model declares its saved board as its initial state, so Reset clears the '
@@ -557,8 +574,9 @@ const model = {
       + 'THINGS TO TRY: drive "Wind -> East" from -1 to +1 while it burns and watch the plume swing round; set '
       + '"Slope boost" to 0 to switch the terrain off; edit a row of the "Fuel ignitability" table (Attributes) to '
       + 'make forest fire-resistant; switch the viewer to Fuel map or Elevation to see the source layers.\n\n'
-      + 'The hillshaded basemap under the cells is the same DEM, tinted by land cover. It is drawn by the Backdrop '
-      + 'map (Properties -> Structure) and can be turned off there.',
+      + 'The hillshaded basemap under the cells is the same DEM, tinted by land cover. It ships as the model\'s '
+      + 'Backdrop map (edited in the Modeler\'s Info panel) and can be hidden or faded from the simulator\'s '
+      + 'Backdrop section.',
     // The board IS this model's initial state (imported data no Init Event can
     // regenerate), so Reset restores it instead of wiping it.
     resetRestoresBoard: true,
