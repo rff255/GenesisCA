@@ -521,6 +521,26 @@ export interface ModelProperties {
    *  [createdDate.ts](./createdDate.ts). Additive + optional; old files load
    *  unchanged. */
   createdDate?: string;
+  /** Does Reset RESTORE the model's embedded board (`simulationState`) instead of
+   *  reseeding the grid from the Init Events? Absent ⇒ false ⇒ the historical
+   *  behaviour.
+   *
+   *  It decides only the DEFAULT action of the ■ Reset button (and the Esc /
+   *  Backspace shortcut). BOTH actions are always reachable from the Reset
+   *  button's own menu (hover or right-click it), so neither becomes unreachable
+   *  whichever way the flag is set.
+   *
+   *  It exists for a board that is DATA rather than a seeded pattern: an imported
+   *  GIS landscape (or any board the user painted and saved) cannot be regenerated
+   *  from Init Events, so a plain Reset wipes it. The restore runs AFTER the reset,
+   *  and `loadState` skips attributes the snapshot does not carry — so a partial
+   *  board (e.g. terrain saved, fire state not) restores its own layers while every
+   *  other attribute keeps its freshly-reset defaults.
+   *
+   *  UI + orchestration ONLY: no compiler, worker or engine reads it. Inert — and
+   *  hidden — unless the model actually carries an embedded board. Additive +
+   *  optional; old files load unchanged. */
+  resetRestoresBoard?: boolean;
   /** Opt-in gate for the GEOGRAPHIC (GIS) tool surfaces — the Georeference block,
    *  the Backdrop map, and the `.asc` / GeoTIFF / GeoJSON import + `.asc` export
    *  affordances. Absent ⇒ OFF, so the overwhelming majority of models (which are

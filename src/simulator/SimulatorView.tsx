@@ -1257,6 +1257,22 @@ function saveManualBrush(modelName: string, state: ManualBrushModelState): void 
   } catch { /* localStorage full */ }
 }
 
+/** The two things the ■ Reset button can do. `reseed` is the historical action
+ *  (defaults + the model's Init Events); `restore` reseeds AND then applies the
+ *  model's embedded board on top. Which one a plain click / Esc performs is the
+ *  model's `properties.resetRestoresBoard`; both are always on the button's menu. */
+export type ResetMode = 'reseed' | 'restore';
+
+/** The model's embedded BOARD, or null. "Has a board" is exactly the four fields
+ *  `applySimulationState`'s own `hasGrid` requires — a controls-only snapshot (a
+ *  "Save with simulator controls" and nothing else) is not a board, and offering
+ *  to restore one would be an enabled control that does nothing. */
+function embeddedBoardOf(model: CAModel): SimulationState | null {
+  const s = model.simulationState;
+  if (!s) return null;
+  return (s.width != null && s.height != null && s.attributes != null && s.colors != null) ? s : null;
+}
+
 // Parameterized Input Mappings — per-PARAMETER brush values, keyed by mapping id
 // then parameter key. Per-model (parameter keys are model-specific), so its own
 // localStorage entry, mirroring the Manual Brush exactly (D6): these are per-user
@@ -2126,7 +2142,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
   // wrapper ref, assigned to whichever is currently open). Session-only UI
   // state (the VALUES keep their existing persistence). Dismissed by a
   // capture-phase outside pointerdown (the context-menu pattern) or Escape.
-  const [overlayPopup, setOverlayPopup] = useState<'fps' | 'gpf' | 'capture' | 'shot' | 'diagnostics' | 'saveState' | 'loadState' | null>(null);
+  const [overlayPopup, setOverlayPopup] = useState<'fps' | 'gpf' | 'capture' | 'shot' | 'diagnostics' | 'saveState' | 'loadState' | 'reset' | null>(null);
   const overlayPopupWrapRef = useRef<HTMLDivElement | null>(null);
   // C3 (P4) — the fast-path diagnostics reply (worker `getDiagnostics`). Held in
   // React state because the popover renders from it; requested ON DEMAND only
@@ -2630,6 +2646,24 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
     stateLoadBusyRef.current = { id, handle, timer };
     return id;
   }, [endStateLoadBusy]);
+  /** Callers awaiting a specific `loadState`, keyed by its correlation id. The
+   *  Overseer's Reset Board is the one that needs it: the experiment's next
+   *  action must see the RESTORED board, not the freshly-reset one. Resolved by
+   *  the `stateLoaded` branch of the worker-message handler. */
+  const stateLoadWaitersRef = useRef(new Map<number, () => void>());
+  /** Await the ack of a restore `applySimulationState` reported (its returned id).
+   *  `undefined` ⇒ no restore was posted ⇒ resolve now. Bounded by the same
+   *  generous safety net the bars use, so a worker that dies without replying
+   *  cannot wedge an experiment. */
+  const awaitStateLoad = useCallback((id: number | undefined): Promise<void> => {
+    if (id === undefined) return Promise.resolve();
+    return new Promise<void>(resolve => {
+      stateLoadWaitersRef.current.set(id, resolve);
+      setTimeout(() => {
+        if (stateLoadWaitersRef.current.delete(id)) resolve();
+      }, INIT_BUSY_MAX_MS);
+    });
+  }, []);
 
   // ── Recording quality (keyframe cadence) ────────────────────────────────────
   // 'standard' = a keyframe every 30 frames: MEASURED 3.5x smaller and 1.8x
@@ -3122,6 +3156,21 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
         applySimulationState(p.state, { adaptDims: true });
         return 'ok' as const;
       },
+      restoreBoardAfterReset: async () => {
+        // A data-backed board (an imported GIS landscape) cannot be regenerated
+        // from Init Events, so a sweep on such a model must restore it per
+        // replicate or it silently measures an empty world. Follows the MODEL's
+        // default — the same `resetRestoresBoard` flag the ■ button follows.
+        //
+        // No busyLabel: an automated sweep must not flash a bar per replicate
+        // (the rule its live preset loads already follow). `trackLoad` allocates
+        // the correlation id anyway, so we can AWAIT the worker's own
+        // `stateLoaded` ack — the experiment's NEXT action must see the restored
+        // board, not the freshly-reset one.
+        if (!resetRestoresBoard || !savedBoard) return false;
+        await awaitStateLoad(applySimulationState(savedBoard, { adaptDims: true, trackLoad: true }));
+        return true;
+      },
       screenshot: () => handleScreenshot('save'),
       startRecording: () => startRecording(),
       stopRecording: () => stopRecording(),
@@ -3177,7 +3226,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
   // reinitialised to the new dims (mirrors pendingImageImport / pendingManualImport).
   //  A `.asc` session can carry SEVERAL co-registered layers, so this holds a
   //  list (a CSV / char board is the one-entry case).
-  const pendingGridValuesImport = useRef<{ width: number; height: number; layer: number; layers: Array<{ attrId: string; values: Float64Array }> } | null>(null);
+  const pendingGridValuesImport = useRef<{ width: number; height: number; layer: number; layers: Array<{ attrId: string; values: Float64Array }>; capture?: boolean } | null>(null);
   // "Import GeoTIFF" dialog — the loaded file's raw bytes (null = closed). Its
   // result is the SAME grid payload the CSV / `.asc` path produces, so it rides
   // `applyGridImport` and `pendingGridValuesImport` unchanged.
@@ -6829,6 +6878,10 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
     // playing). Id-matched so a superseded load can't end the current bar.
     if (msg.type === 'stateLoaded') {
       if (stateLoadBusyRef.current?.id === msg.reqId) endStateLoadBusy();
+      // …and release anyone AWAITING this exact restore (the Overseer between
+      // replicates). Id-matched for the same reason the bar is.
+      const waiter = stateLoadWaitersRef.current.get(msg.reqId as number);
+      if (waiter) { stateLoadWaitersRef.current.delete(msg.reqId as number); waiter(); }
       return;
     }
     if (msg.type === 'inspectCellsData') {
@@ -7330,6 +7383,10 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
           { transfer: [l.values.buffer] },
         );
       }
+      // A GEOGRAPHIC import: record the board just written as the model's initial
+      // state (Reset restores it). Queued AFTER the layers, so the `getState`
+      // reply already carries them — the worker processes messages in order.
+      if (gv.capture) captureImportedBoardRef.current();
     }
 
     // One-shot colors snapshot — used by handleScreenshot under direct render
@@ -12392,7 +12449,15 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
     workerRef.current?.postMessage({ type: 'step', count: 1, activeViewer });
   };
 
-  const handleReset = () => {
+  /** The model's embedded BOARD (null when it carries none / only controls) and
+   *  whether Reset restores it by DEFAULT. Both actions stay reachable from the ■
+   *  button's menu whichever way the flag is set; the menu itself only renders
+   *  when there IS a board (with none there is exactly one meaningful action). */
+  const savedBoard = embeddedBoardOf(model);
+  const resetRestoresBoard = model.properties.resetRestoresBoard === true;
+  const resetDefaultMode: ResetMode = savedBoard && resetRestoresBoard ? 'restore' : 'reseed';
+
+  const handleReset = (mode: ResetMode = resetDefaultMode) => {
     if (overseerRunningRef.current) return;  // the experiment owns the transport
     // An explicit Reset is AUTHORITATIVE: reseed from the model's Init Events. Drop
     // any deferred embedded-snapshot restore that a prior Save-with-grid armed and
@@ -12400,10 +12465,25 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
     // next Play's first `stepped` fires applySimulationState and clobbers the fresh
     // state with the saved snapshot (cells AND agents), so "Reset" silently
     // restores a stale/edited board instead of the model's initial configuration.
+    // That guard still holds: what follows is a DELIBERATE, explicitly-requested
+    // restore, applied here and now rather than left armed to fire on some later
+    // `stepped`.
     pendingSimStateRestore.current = null;
     setPlaying(false);
     pendingStep.current = true;
     workerRef.current?.postMessage({ type: 'reset', activeViewer });
+    if (mode === 'restore' && savedBoard) {
+      // The board lands ON TOP of the reset the worker is about to perform
+      // (messages are processed in order), and `loadState` SKIPS attributes the
+      // snapshot does not carry — so a partial board restores its own layers
+      // (an imported terrain) while every other attribute keeps the values the
+      // Init Events just gave it (the fire state, the agents' seeding).
+      // `adaptDims: true`: this is an explicit, authoritative user action of the
+      // same class as opening a .gcastate or a preset, so a board saved at other
+      // dimensions resizes the grid back to itself rather than being DROPPED
+      // (which would also delete it from the model).
+      applySimulationState(savedBoard, { adaptDims: true, busyLabel: 'Restoring saved board…' });
+    }
   };
 
   const handleRecompile = () => {
@@ -13253,7 +13333,15 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
     workerRef.current.postMessage({ type: 'getState' });
   };
 
-  const applySimulationState = useCallback((state: SimulationState, opts?: { adaptDims?: boolean; busyLabel?: string }) => {
+  /** Apply a saved snapshot. RETURNS the `loadState` correlation id when this
+   *  call actually posted a LIVE board restore — the id the worker echoes on its
+   *  `stateLoaded` ack — and `undefined` on every path that posts no restore at
+   *  all (no worker, a dropped stale snapshot, a structural hand-off, a grid-less
+   *  state, a dimension mismatch). A caller that must not continue until the board
+   *  is really in (the Overseer's Reset Board) awaits that ack via
+   *  `awaitStateLoad`, and an `undefined` tells it there is nothing to wait for —
+   *  so it can never hang on a restore that never happened. */
+  const applySimulationState = useCallback((state: SimulationState, opts?: { adaptDims?: boolean; busyLabel?: string; trackLoad?: boolean }): number | undefined => {
     if (!workerRef.current) return;
     // busyLabel: announce this restore, if it turns out to be real work. The
     // decision lives HERE rather than at the call sites because only this
@@ -13466,7 +13554,15 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
     // rule) — but starting the clock before it means that when the main thread
     // finally yields, the show-delay has already elapsed and the bar appears
     // immediately for the worker's share, instead of restarting from zero.
-    const loadReqId = busyLabel !== undefined ? beginStateLoadBusy(busyLabel) : undefined;
+    //
+    // The id is allocated when the caller wants the BAR (busyLabel) or merely
+    // wants to AWAIT the ack (`trackLoad`). The two are deliberately separate:
+    // the Overseer awaits every replicate's restore but must NOT flash a bar per
+    // run (the same rule its live preset loads follow). Both draw from the one
+    // `stateLoadSeqRef` counter, so the ids stay unique across both uses.
+    const loadReqId = busyLabel !== undefined ? beginStateLoadBusy(busyLabel)
+      : opts?.trackLoad ? ++stateLoadSeqRef.current
+      : undefined;
 
     // Reset generation counter — saved states restore the grid configuration,
     // not the simulation history. Users building a starting configuration
@@ -13530,6 +13626,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
     if (loadReqId !== undefined) loadMsg.reqId = loadReqId;
 
     workerRef.current.postMessage(loadMsg);
+    return loadReqId;
   }, [model.properties.boundaryTreatment, model.properties.gridWidth, model.properties.gridHeight, model.properties.gridDepth, model.properties.dimension, model.simulationState, updateProperties, setSimulationState, beginWorkerBusy, beginStateLoadBusy, initWorkerWithDimensions]);
 
   // F5: Apply dimension override
@@ -13652,6 +13749,41 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
     if (!gisTools) updateProperties({ gisTools: true });
   };
 
+  /** Capture the just-imported board into the model as its INITIAL state, and
+   *  make Reset restore it.
+   *
+   *  Imported GIS layers are DATA — no Init Event can regenerate a satellite
+   *  raster — so without this the very first Reset wipes a fresh import (the trap
+   *  the shipped GIS samples used to work around with a "Restore landscape"
+   *  preset the user had to know about). Same capture "Save with board state"
+   *  performs, minus the simulator CONTROLS: this records the BOARD, not a UI
+   *  session, so restoring it later leaves the live sliders / brush alone.
+   *
+   *  Called only AFTER the import messages are queued: the worker processes
+   *  messages in order, so the `getState` reply already reflects them. */
+  const captureImportedBoardAsInitial = () => {
+    const w = workerRef.current;
+    if (!w) return;
+    pendingStateSave.current = (workerState) => {
+      const state = serializeSimState(
+        workerState as Parameters<typeof serializeSimState>[0],
+        {
+          activeViewer, brushColor, brushW, brushH, brushMapping,
+          targetFps, unlimitedFps, gensPerFrame, unlimitedGens,
+        },
+        { grid: true, controls: false },
+        { boundaryTreatment: model.properties.boundaryTreatment },
+      );
+      setSimulationState(state);
+      if (model.properties.resetRestoresBoard !== true) updateProperties({ resetRestoresBoard: true });
+    };
+    w.postMessage({ type: 'getState' });
+  };
+  /** Latest-ref: the RESIZE import path finishes on a later `stepped` (see
+   *  `pendingGridValuesImport`), whose handler lives above this declaration. */
+  const captureImportedBoardRef = useRef(captureImportedBoardAsInitial);
+  captureImportedBoardRef.current = captureImportedBoardAsInitial;
+
   /** Apply ONE grid-import payload — the shared tail of the CSV / `.asc` and the
    *  GeoTIFF importers (they differ only in how the value block was produced, so
    *  there is exactly one path to `importGridValues`).
@@ -13680,8 +13812,16 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
     if (r.georef) patch.georef = r.georef;
     if ((gis || r.georef) && !gisTools) patch.gisTools = true;
     if (Object.keys(patch).length > 0) updateProperties(patch);
+    // A GEOGRAPHIC board is data the rules cannot regenerate, so record it as the
+    // model's initial state (and make Reset restore it) — see
+    // captureImportedBoardAsInitial. Same predicate the gate uses: an `.asc`
+    // always carries a georef, a GeoTIFF passes `gis`, a plain CSV board does
+    // neither and keeps today's behaviour.
+    const geographic = gis || !!r.georef;
     if (r.resize) {
-      pendingGridValuesImport.current = { width: r.width, height: r.height, layer: r.layer, layers: r.layers };
+      // The layers land on a later `stepped` (the worker must reinitialise to the
+      // new dims first), so the capture has to wait for them — arm it there.
+      pendingGridValuesImport.current = { width: r.width, height: r.height, layer: r.layer, layers: r.layers, capture: geographic };
       initWorkerWithDimensions(
         r.width, r.height,
         is3dRef.current ? Math.max(1, gridDepth.current || simDepth) : undefined,
@@ -13695,6 +13835,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
           { transfer: [l.values.buffer] },
         );
       }
+      if (geographic) captureImportedBoardAsInitial();
     }
   };
 
@@ -13819,6 +13960,9 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
         w.postMessage({ type: 'paintManual', cells, sets, activeViewer: activeViewerRef.current });
       }
     }
+    // Burned vectors are data too — record the resulting board as the model's
+    // initial state so the first Reset does not wipe them.
+    captureImportedBoardAsInitial();
   };
 
   // --- CSV export ----------------------------------------------------------
@@ -15293,7 +15437,48 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
           <button className={styles.transportBtn} onClick={() => setPlaying(true)} disabled={playing} title="Play (Enter)">&#9654;</button>
           <button className={styles.transportBtn} onClick={() => setPlaying(false)} disabled={!playing} title="Pause (Enter)">&#9646;&#9646;</button>
           <button className={styles.transportBtn} onClick={handleStep} title="Step (Space)">&#9654;|</button>
-          <button className={styles.transportBtn} onClick={handleReset} title="Reset (Esc)">&#9632;</button>
+          {/* Reset — a plain click performs the MODEL's default (Properties →
+              Execution → "Reset restores saved board"); hover / right-click
+              offers both actions explicitly. The menu renders ONLY when the
+              model carries an embedded board: with none there is exactly one
+              meaningful action, so a menu would be pure clutter. Same
+              `.captureBtnWrap` + `.shotMenu` + `overlayPopup` machinery as the
+              Save/Load-State pair (one popover at a time, outside-pointerdown +
+              Escape dismissal, opening flush upward) — but LEFTWARD, since this
+              button sits at the right end of the bar. */}
+          {savedBoard ? (
+            <div
+              className={styles.captureBtnWrap}
+              ref={overlayPopup === 'reset' ? overlayPopupWrapRef : undefined}
+              onPointerEnter={() => setOverlayPopup('reset')}
+              onPointerLeave={() => setOverlayPopup(p => (p === 'reset' ? null : p))}
+              onContextMenu={e => { e.preventDefault(); setOverlayPopup(p => (p === 'reset' ? null : 'reset')); }}
+            >
+              <button
+                className={styles.transportBtn}
+                onClick={() => { setOverlayPopup(null); handleReset(); }}
+                title={resetDefaultMode === 'restore'
+                  ? 'Reset (Esc) — restores the saved board. Hover or right-click for both actions.'
+                  : 'Reset (Esc) — reseeds from the rules. Hover or right-click for both actions.'}
+              >&#9632;</button>
+              {overlayPopup === 'reset' && (
+                <div className={`${styles.shotMenu} ${styles.shotMenuRight}`} data-sim-overlay>
+                  <button
+                    className={styles.shotMenuItem}
+                    onClick={() => { setOverlayPopup(null); handleReset('restore'); }}
+                    title="Reseed from the rules, then apply the board saved inside this model on top — imported layers come back, everything else starts fresh."
+                  >Restore saved board{resetDefaultMode === 'restore' ? ' (default)' : ''}</button>
+                  <button
+                    className={styles.shotMenuItem}
+                    onClick={() => { setOverlayPopup(null); handleReset('reseed'); }}
+                    title="Reseed the grid from the model's Init Events only — the saved board is not applied."
+                  >Reseed from rules{resetDefaultMode === 'reseed' ? ' (default)' : ''}</button>
+                </div>
+              )}
+            </div>
+          ) : (
+            <button className={styles.transportBtn} onClick={() => handleReset()} title="Reset (Esc)">&#9632;</button>
+          )}
         </div>
 
         {playing && unlimitedGens && (

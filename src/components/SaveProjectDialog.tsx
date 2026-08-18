@@ -7,13 +7,19 @@ export interface SaveOptions {
   includePresets: boolean;
 }
 
-/** The presentation fields the Save dialog lets the user correct on the way out.
- *  They are MODEL properties (the Info panel edits the same three), so a change
- *  here is written back to the model — see FileMenu's doSave. */
+/** The MODEL properties the Save dialog lets the user set on the way out — the
+ *  three presentation fields (the Info panel edits the same three) plus, when a
+ *  board is being included, whether that board is this model's INITIAL state. A
+ *  change here is written back to the model, not only to the file — see
+ *  FileMenu's doSave. */
 export interface SaveMetadata {
   name: string;
   author: string;
   modelAuthor: string;
+  /** `properties.resetRestoresBoard`. Meaningful only alongside
+   *  `includeGrid` — `undefined` means "leave the model's value alone" (the
+   *  board is not being saved, so there would be nothing to restore). */
+  resetRestoresBoard?: boolean;
 }
 
 interface Props {
@@ -43,19 +49,27 @@ function SaveProjectDialogInner({ initial, initialMeta, onConfirm, onCancel }: P
   const [name, setName] = useState(initialMeta.name);
   const [author, setAuthor] = useState(initialMeta.author);
   const [modelAuthor, setModelAuthor] = useState(initialMeta.modelAuthor);
+  // "Include board state" is CONTROLLED (the other two rows stay uncontrolled):
+  // the sub-row below only exists while a board is actually being saved, so it
+  // has to re-render when this box is ticked.
+  const [grid, setGrid] = useState(initial.includeGrid);
+  const [initialState, setInitialState] = useState(initialMeta.resetRestoresBoard === true);
   // An empty name would strip the navbar title AND collapse the derived filename
   // to `model.gcaproj`, so Save is barred until the field carries something.
   const canSave = name.trim().length > 0;
 
   const readOpts = (): SaveOptions => ({
     includeControls: (document.getElementById('save-opt-controls') as HTMLInputElement | null)?.checked ?? initial.includeControls,
-    includeGrid: (document.getElementById('save-opt-grid') as HTMLInputElement | null)?.checked ?? initial.includeGrid,
+    includeGrid: grid,
     includePresets: (document.getElementById('save-opt-presets') as HTMLInputElement | null)?.checked ?? initial.includePresets,
   });
   const readMeta = (): SaveMetadata => ({
     name: name.trim(),
     author: author.trim(),
     modelAuthor: modelAuthor.trim(),
+    // Only meaningful when a board is actually saved: with the grid left out,
+    // the file carries no board to restore, so the model's flag is left alone.
+    resetRestoresBoard: grid ? initialState : undefined,
   });
 
   // Close on Escape / confirm on Enter. Deliberately re-registered every render:
@@ -128,7 +142,7 @@ function SaveProjectDialogInner({ initial, initialMeta, onConfirm, onCancel }: P
             </div>
           </label>
           <label className={styles.row}>
-            <input id="save-opt-grid" type="checkbox" defaultChecked={initial.includeGrid} />
+            <input id="save-opt-grid" type="checkbox" checked={grid} onChange={e => setGrid(e.target.checked)} />
             <div>
               <div className={styles.rowLabel}>Include board state</div>
               {/* Truthful list: serializeSimState writes cell attributes, colors, the
@@ -138,6 +152,21 @@ function SaveProjectDialogInner({ initial, initialMeta, onConfirm, onCancel }: P
               <div className={styles.rowHint}>Full board snapshot: cell attributes, colors, and the agent population.</div>
             </div>
           </label>
+          {/* Only while a board is actually being saved — otherwise the file would
+              carry no board and the flag nothing to restore. It edits a MODEL
+              property (Properties → Execution shows the same checkbox). */}
+          {grid && (
+            <label className={`${styles.row} ${styles.subRow}`}>
+              <input type="checkbox" checked={initialState} onChange={e => setInitialState(e.target.checked)} />
+              <div>
+                <div className={styles.rowLabel}>Use as initial state (Reset restores this board)</div>
+                <div className={styles.rowHint}>
+                  For a board that is DATA — imported map layers, a hand-painted starting configuration — which no
+                  Init Event can regenerate. The simulator&apos;s ■ Reset button still offers both actions on hover.
+                </div>
+              </div>
+            </label>
+          )}
           <label className={styles.row}>
             <input id="save-opt-presets" type="checkbox" defaultChecked={initial.includePresets} />
             <div>

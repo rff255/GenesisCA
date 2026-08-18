@@ -30,9 +30,10 @@
  * `roadDist` is a multi-source BFS from the rasterised OSM network, computed
  * once in this script; `slope` is Horn's 3×3 gradient over the DEM in percent.
  *
- * THE LANDSCAPE LIVES IN THE FILE, and Reset CLEARS it (this model has no Init
- * Events to re-seed from) — hence the shipped "Restore landscape" preset. See
- * `properties.instructions`.
+ * THE LANDSCAPE LIVES IN THE FILE. This model has no Init Events to re-seed from,
+ * so it sets `properties.resetRestoresBoard: true`: Reset reseeds and then applies
+ * the embedded board on top, putting the landscape back. The ■ button's own menu
+ * still offers a from-rules reset. (This REPLACED a "Restore landscape" preset.)
  *
  *   node scripts/gen-urban-recife.mjs
  *
@@ -451,14 +452,9 @@ const paramPreset = (name, description, attrs) => ({
   createdAt: Date.UTC(2026, 7, 17),
 });
 
+// No "Restore landscape" preset: `resetRestoresBoard` makes Reset itself put the
+// landscape back, so the board only needs to ship ONCE (in `simulationState`).
 const presets = [
-  {
-    id: 'urpreset_restore_landscape',
-    name: 'Restore landscape',
-    description: 'The imported Recife landscape (land use + road distance + slope) as it stands today. Load this after a Reset — Reset re-seeds the grid from the model’s Init Events, which clears imported data.',
-    state: { ...board, modelAttrs: { ...DEFAULT_ATTRS } },
-    createdAt: Date.UTC(2026, 7, 17),
-  },
   paramPreset('Road-led sprawl', 'Strong road attraction with a long reach and little regard for terrain — ribbon development races out along the highways.', { roadWeight: 4, roadReach: 14, slopeResist: 0.3, baseRate: 0.09 }),
   paramPreset('Compact infill', 'The road network barely matters; growth thickens the existing urban edge instead of leaping ahead of it.', { roadWeight: 0, roadReach: 6, slopeResist: 1.5, baseRate: 0.09 }),
   paramPreset('Terrain-constrained', 'Steep ground is nearly unbuildable, so the city is pushed along the valleys.', { roadWeight: 1.5, roadReach: 8, slopeResist: 4, baseRate: 0.12 }),
@@ -500,9 +496,9 @@ const model = {
       + 'OSM network from the rule entirely — run both and compare the shapes.',
     instructions:
       'THE LANDSCAPE IS IMPORTED DATA, NOT A SEEDED PATTERN. It ships inside the file, so the model opens ready to '
-      + 'run — but Reset re-seeds the grid from the model\'s own Init Events, and this model has none, so RESET '
-      + 'CLEARS THE LANDSCAPE. To get it back, load the "Restore landscape" preset (Presets, in the left panel) or '
-      + 'simply re-open the model.\n\n'
+      + 'run — and RESET PUTS IT BACK: this model declares its saved board as its initial state, so Reset returns the '
+      + 'city to the state the satellite data describes. To reseed from the rules alone instead (an empty landscape), '
+      + 'hover or right-click the Reset button and pick "Reseed from rules".\n\n'
       + 'WHAT YOU SEE: the default viewer draws ONLY the built environment (roads pale, city red) over the '
       + 'satellite-derived basemap, so new development is obvious against the forest. Switch to Land use, Distance '
       + 'to road or Slope to inspect the three source layers.\n\n'
@@ -511,6 +507,9 @@ const model = {
       + 'suitability" table (Attributes) to 0 to protect the forest; use the Planning brush to draw a new road '
       + 'corridor into open country and watch a satellite town form along it.\n\n'
       + 'Road geometry (c) OpenStreetMap contributors, ODbL.',
+    // The board IS this model's initial state (imported data no Init Event can
+    // regenerate), so Reset restores it instead of wiping it.
+    resetRestoresBoard: true,
     gisTools: true,
     georef: WIN.georef,
     backdrop: { dataUrl: backdropUrl },

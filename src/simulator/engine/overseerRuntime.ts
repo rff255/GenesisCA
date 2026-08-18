@@ -79,6 +79,14 @@ export interface OverseerDeps {
   /** Live-apply a preset. 'needs-reinit' = the preset would force a structural
    *  worker reinit (grid dims / boundary) — v1 journals + skips those. */
   loadPresetLive: (presetId: string) => 'ok' | 'needs-reinit' | 'not-found';
+  /** Called by `ovResetBoard` right after the worker acked the reset. Restores the
+   *  model's embedded board when the model's `resetRestoresBoard` flag is on (a
+   *  data-backed landscape is not reproducible from Init Events, so without this a
+   *  sweep would silently measure an empty world). RESOLVES only once the worker
+   *  has acked the restore, so the experiment's next action sees the restored
+   *  board. Returns whether anything was restored (for the journal); a model with
+   *  the flag off / no board resolves immediately with false. */
+  restoreBoardAfterReset: () => Promise<boolean>;
   screenshot: (label: string) => void;
   startRecording: () => void;
   stopRecording: () => Promise<void> | void;
@@ -422,6 +430,11 @@ export class OverseerRuntime {
         await rt.awaitAck(reqId);
         await rt.nextTick();
         rt.consumeStopEvent();
+        // The model may declare its embedded board as the INITIAL state (a data
+        // -backed landscape the Init Events cannot regenerate). Restore it on top
+        // of the reset, and WAIT for the worker's ack — the driver's next action
+        // must not run against the freshly-reset board.
+        if (await rt.deps.restoreBoardAfterReset()) rt.pushJournal('text', 'Saved board restored.');
         rt.seededSinceReset = false;
         rt.resets++;
         // Run-scoped series clear at each Reset Board.

@@ -41,9 +41,11 @@
  *
  * THE LANDSCAPE LIVES IN THE FILE. The fuel + elevation layers ride the model's
  * embedded `simulationState`, so the model opens with the real landscape and
- * needs no network at load time. A Reset re-seeds from the (empty) Init Events
- * and therefore CLEARS them — the shipped "Restore landscape" PRESET carries the
- * same board so one click brings it back. `properties.instructions` says so.
+ * needs no network at load time. A Reset would normally re-seed from the (empty)
+ * Init Events and therefore CLEAR them, so the model sets
+ * `properties.resetRestoresBoard: true`: Reset reseeds and then applies that
+ * board on top, and the ■ button's own menu still offers a from-rules reset.
+ * (This REPLACED a "Restore landscape" preset the user had to know to load.)
  *
  *   node scripts/gen-wildfire-sierra.mjs
  *
@@ -500,14 +502,9 @@ const paramPreset = (name, description, attrs) => ({
   createdAt: Date.UTC(2026, 7, 17),
 });
 
+// No "Restore landscape" preset: `resetRestoresBoard` makes Reset itself put the
+// landscape back, so the board only needs to ship ONCE (in `simulationState`).
 const presets = [
-  {
-    id: 'wfpreset_restore_landscape',
-    name: 'Restore landscape',
-    description: 'The imported Sierra Nevada landscape (fuel + elevation) with no fire. Load this after a Reset — Reset re-seeds the grid from the model\'s Init Events, which clears imported data.',
-    state: { ...board, modelAttrs: { ...DEFAULT_ATTRS } },
-    createdAt: Date.UTC(2026, 7, 17),
-  },
   paramPreset('Calm air', 'No wind — the fire spreads as a slope-driven ellipse.', { windE: 0, windN: 0 }),
   paramPreset('Strong west wind', 'A hard westerly: the fire runs east, up the Carson Range.', { windE: 0.95, windN: 0.1, spreadRate: 0.9 }),
   paramPreset('South wind, no slope', 'Wind from the south with the terrain switched off — compare the shape against Calm air to see exactly what the DEM contributes.', { windE: 0, windN: 0.9, slopeBoost: 0 }),
@@ -551,9 +548,9 @@ const model = {
       + 'rather than from the rule.',
     instructions:
       'THE LANDSCAPE IS IMPORTED DATA, NOT A SEEDED PATTERN. It ships inside the file, so the model opens ready to '
-      + 'run — but Reset re-seeds the grid from the model\'s own Init Events, and this model has none, so RESET '
-      + 'CLEARS THE LANDSCAPE. To get it back, load the "Restore landscape" preset (Presets, in the left panel) or '
-      + 'simply re-open the model.\n\n'
+      + 'run — and RESET PUTS IT BACK: this model declares its saved board as its initial state, so Reset clears the '
+      + 'fire and restores the fuel + elevation layers. To reseed from the rules alone instead (an empty landscape), '
+      + 'hover or right-click the Reset button and pick "Reseed from rules".\n\n'
       + 'TO START A FIRE: pick the "Fire brush" tab in the brush panel and click on forest or grass. The brush only '
       + 'writes where the fuel can burn, so clicking the lake does nothing. Set its "Paint state" to Unburned to '
       + 'erase a fire, or to Burned to draw a firebreak the fire cannot cross.\n\n'
@@ -562,6 +559,9 @@ const model = {
       + 'make forest fire-resistant; switch the viewer to Fuel map or Elevation to see the source layers.\n\n'
       + 'The hillshaded basemap under the cells is the same DEM, tinted by land cover. It is drawn by the Backdrop '
       + 'map (Properties -> Structure) and can be turned off there.',
+    // The board IS this model's initial state (imported data no Init Event can
+    // regenerate), so Reset restores it instead of wiping it.
+    resetRestoresBoard: true,
     gisTools: true,
     georef: WIN.georef,
     backdrop: { dataUrl: backdropUrl },
