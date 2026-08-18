@@ -409,6 +409,44 @@
   border-color: var(--color-border);
 }
 
+/* A section title with right-aligned action icons (e.g. Presets: add / import /
+ * export). The title keeps its own uppercase style; the actions sit flush right. */
+.sectionTitleRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.sectionTitleActions {
+  display: flex;
+  gap: var(--space-1);
+  flex: none;
+}
+
+.titleIconBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 20px;
+  padding: 0;
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-widget-border);
+  border-radius: var(--radius-sm);
+  color: var(--color-text-secondary);
+  line-height: 1;
+  cursor: pointer;
+  box-shadow: var(--shadow-button-inset);
+  transition: background var(--duration-base), border-color var(--duration-base), color var(--duration-base);
+}
+
+.titleIconBtn:hover {
+  background: var(--color-overlay-hover-medium);
+  border-color: var(--color-border-muted);
+  color: var(--color-accent);
+}
+
 .divider {
   border: none;
   border-top: 1px solid var(--color-border);

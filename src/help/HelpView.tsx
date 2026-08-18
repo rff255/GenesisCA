@@ -912,7 +912,7 @@ export function HelpView() {
           <h3 className={styles.h3}>Init Event Node</h3>
           <p className={styles.p}>
             New event entry-point that runs <em>once per cell on simulator Reset only</em>
-            (not on Load State). Useful for procedural initial state:
+            (not on a state restore). Useful for procedural initial state:
             gradients, deterministic noise, ID-encoded debug values. With Variegated Cells
             enabled, the typical pattern is to wire <code>GetRandom(int, 0, 3)</code> into
             <code>SetOrientation</code> so each cell starts with a random rotation.
@@ -1181,7 +1181,7 @@ export function HelpView() {
             <thead><tr><th>Node</th><th>Description</th></tr></thead>
             <tbody>
               <tr><td>Generation Step</td><td>Entry point for per-generation cell update logic. Connect &quot;DO&quot; to start the flow chain. Singleton.</td></tr>
-              <tr><td>Init Event</td><td>Runs once per cell on simulator <strong>Reset</strong> (after defaults, before the first color pass; not on Load State). Outputs <code>x</code>, <code>y</code>, <code>maxX</code>, <code>maxY</code> (plus <code>z</code>, <code>maxZ</code> in 3D models). Singleton. Useful for procedural initial state (gradients, noise, random orientations).</td></tr>
+              <tr><td>Init Event</td><td>Runs once per cell on simulator <strong>Reset</strong> (after defaults, before the first color pass; not on a state restore). Outputs <code>x</code>, <code>y</code>, <code>maxX</code>, <code>maxY</code> (plus <code>z</code>, <code>maxZ</code> in 3D models). Singleton. Useful for procedural initial state (gradients, noise, random orientations).</td></tr>
               <tr><td>Grid Init Event</td><td>Runs <strong>once globally</strong> on Reset (and first load) &mdash; the free-form counterpart to the per-cell Init Event. Loop inside <code>DO</code> and write arbitrary cells with <strong>Set Cell (at Position)</strong> to seed procedurally (random seeds, shapes, a middle box). Outputs <code>width</code>, <code>height</code> (plus <code>depth</code> in 3D). Singleton; no current cell.</td></tr>
               <tr><td>Input Mapping (C&rarr;A)</td><td>Entry point for Color-to-Attribute mapping (brush/image import). Its value outputs are the <strong>parameters its mapping declares</strong> &mdash; one port per parameter (three for a <em>color</em> one). A mapping that declares none keeps the classic <code>R</code>, <code>G</code>, <code>B</code> outputs. See &ldquo;Input Mapping Parameters&rdquo; under Mappings.</td></tr>
               <tr><td>Output Mapping (A&rarr;C)</td><td>Entry point for Attribute-to-Color visualization. Runs as a separate sequential pass after the Generation Step, ensuring colors reflect the final cell state. A mapping can instead be marked <strong>Linked</strong> in the Mappings panel (pick an attribute and the color pass is auto-generated &mdash; see &ldquo;Linked Output Mappings&rdquo; below); if you also add this node for a linked mapping, the auto pass runs first as a background and your graph overrides the cells it paints.</td></tr>
@@ -3274,7 +3274,7 @@ export function HelpView() {
           </p>
           <p className={styles.p}>
             <strong>Saving agent state:</strong> agent positions, velocities, attributes,
-            bonds and sprites are included in <strong>Save State</strong> (.gcastate) and in
+            bonds and sprites are included in <strong>Export State</strong> (.gcastate) and in
             <strong> Save Project</strong> with the grid option enabled, and are restored on
             load &mdash; so a grown tissue or an aggregated flock resumes exactly where you
             left it.
@@ -3730,9 +3730,9 @@ export function HelpView() {
           <h3 className={styles.h3}>Import CSV</h3>
           <p className={styles.p}>
             <strong>Import CSV&hellip;</strong> brings tabular data into a running simulation.
-            It lives on the transport bar&apos;s <strong>Load State</strong> button &mdash;
+            It lives on the transport bar&apos;s <strong>Import</strong> button &mdash;
             hover it (or right-click it) and pick <em>Import CSV / ASC&hellip;</em>; a plain click
-            still loads a <code>.gcastate</code>. You can also just <strong>drop a .csv / .tsv
+            still imports a <code>.gcastate</code>. You can also just <strong>drop a .csv / .tsv
             / .asc file</strong> anywhere on the app. One dialog covers two flavours; a model with
             both layers gets a <strong>Target</strong> switch.
           </p>
@@ -3941,7 +3941,7 @@ export function HelpView() {
             <code>.asc</code> &mdash; LANDFIRE fuel and terrain, WorldPop population, NLCD and
             Copernicus land cover. GenesisCA reads one directly, in the browser: drop a{' '}
             <code>.tif</code> on the app, or pick{' '}
-            <em>Import GeoTIFF&hellip;</em> from the transport bar&apos;s <em>Load State</em>{' '}
+            <em>Import GeoTIFF&hellip;</em> from the transport bar&apos;s <em>Import</em>{' '}
             menu. A GeoTIFF is always a board, so there is no Agents/Grid switch &mdash; you map{' '}
             <strong>each band</strong> to a cell attribute and import.
           </p>
@@ -4003,7 +4003,7 @@ export function HelpView() {
             Rasters cover the ground; <strong>vectors</strong> are the things ON it &mdash;
             lakes and exclusion zones and districts (polygons), rivers and roads (lines),
             towns and sensors and nests (points). <em>Import GeoJSON&hellip;</em> in the
-            transport bar&apos;s <em>Load State</em> menu reads them, and a dropped{' '}
+            transport bar&apos;s <em>Import</em> menu reads them, and a dropped{' '}
             <code>.geojson</code> opens the same dialog. GeoJSON is plain JSON, so this needs no
             extra download at all. Export one from QGIS with{' '}
             <em>Right-click a layer &rarr; Export &rarr; Save Features As&hellip; &rarr; GeoJSON</em>.
@@ -4108,8 +4108,8 @@ export function HelpView() {
           <h3 className={styles.h3}>Export CSV</h3>
           <p className={styles.p}>
             <strong>Export CSV&hellip;</strong> is the exact mirror of the import, and sits on
-            the transport bar&apos;s <strong>Save State</strong> button &mdash; hover it (or
-            right-click it) and pick <em>Export CSV / ASC&hellip;</em>; a plain click still saves a{' '}
+            the transport bar&apos;s <strong>Export</strong> button &mdash; hover it (or
+            right-click it) and pick <em>Export CSV / ASC&hellip;</em>; a plain click still exports a{' '}
             <code>.gcastate</code>. It takes the running simulation out as a table for a
             spreadsheet, a plotting script or another tool. The same{' '}
             <strong>Target</strong> switch appears when the model has both layers; a model
@@ -4256,21 +4256,25 @@ export function HelpView() {
             <li><strong>Show Code</strong> &mdash; a complete, self-describing <strong>reference document for your model</strong>, in three parts. <strong>1. Model definition</strong>: everything the rule runs <em>on</em> but does not contain &mdash; grid geometry and the flat index convention, one typed array per attribute with its default and boundary value, the neighbourhood offset lists, your model-attribute values, <em>the full contents of every lookup table</em>, the indicator slot order, stop events and end conditions, and (for agent models) the resolved physics: max bonds, the clamped time step, which forces are on and with what constants. <strong>2. Driver skeleton</strong>: the exact call order and buffer discipline the engine performs around your rule &mdash; how the neighbour tables are built, the synchronous double-buffer swap or the asynchronous visit-order shuffle, when the colour pass and indicators run, and for agents the whole per-generation phase order with the force formulas written out. Only the branches <em>your</em> model takes are shown. <strong>3. The compiled functions</strong> themselves, each with a table naming every argument. Together these are enough to <strong>reimplement the model in another language or engine</strong> &mdash; copy the whole thing as a starting point. It is always the <strong>JS reference source</strong>, whatever engine you run (see Compile Targets), and the header names the engine actually running. <strong>Copy</strong> puts the whole document on the clipboard.</li>
           </ul>
 
-          <h3 className={styles.h3}>Save &amp; Load State</h3>
+          <h3 className={styles.h3}>Export &amp; Import State</h3>
           <p className={styles.p}>
-            The transport bar includes <strong>Save State</strong> (floppy disk icon) and{' '}
-            <strong>Load State</strong> (folder icon) buttons at its left side. A plain
-            click does the <code>.gcastate</code> action below; <strong>hovering</strong> a
-            button (or right-clicking it) opens a small menu offering that same action plus
-            its tabular sibling &mdash; <em>Export CSV / ASC&hellip;</em> under Save,{' '}
-            <em>Import CSV / ASC&hellip;</em> under Load (see &ldquo;Import CSV&rdquo; above).
+            The transport bar includes <strong>Export</strong> (floppy disk icon) and{' '}
+            <strong>Import</strong> (folder icon) buttons at its left side &mdash; the
+            simulation&rsquo;s OUT / IN pair. (&ldquo;Save/Load&rdquo; is reserved for the
+            <em> project</em> under the <strong>File</strong> menu.) A plain click does the
+            <code> .gcastate</code> action below; <strong>hovering</strong> a button (or
+            right-clicking it) opens a small menu offering that same action plus its
+            siblings &mdash; under <strong>Export</strong>: <em>Export CSV / ASC&hellip;</em>{' '}
+            and <em>Export preset (.gcapreset)&hellip;</em>; under <strong>Import</strong>:{' '}
+            <em>Import CSV / ASC&hellip;</em> and <em>Import preset (.gcapreset)&hellip;</em>{' '}
+            (see &ldquo;Import CSV&rdquo; above and &ldquo;Model Presets&rdquo; below).
           </p>
           <ul className={styles.list}>
-            <li><strong>Save State</strong> &mdash; Downloads a <code>.gcastate</code> file
+            <li><strong>Export state</strong> &mdash; Downloads a <code>.gcastate</code> file
               capturing the full simulation snapshot: current generation, all cell
               attribute values, model attribute values, colors, indicator state, and
               simulator settings (viewer, brush, FPS, gens/frame).</li>
-            <li><strong>Load State</strong> &mdash; Opens a <code>.gcastate</code> file and
+            <li><strong>Import state</strong> &mdash; Opens a <code>.gcastate</code> file and
               restores the simulation to that exact point. The grid dimensions in the
               state file must match the current grid &mdash; resize first if needed.</li>
           </ul>
@@ -4313,14 +4317,21 @@ export function HelpView() {
             heavily on parameter choices &mdash; e.g. an MNCA-style model can ship several
             "interesting" threshold sets as one-click configurations.
           </p>
+          <p className={styles.p}>
+            Three icon buttons sit to the right of the <strong>Presets</strong> title:{' '}
+            <strong>add</strong> (<code>+</code>), <strong>import</strong>, and{' '}
+            <strong>export</strong>. The same import/export are also on the transport
+            bar&rsquo;s <strong>Import</strong> / <strong>Export</strong> menus.
+          </p>
           <ul className={styles.list}>
-            <li><strong>Save current as preset</strong> &mdash; Captures the current
-              model-attribute values. Optionally embeds the <strong>board</strong> too (check
-              "Include board state" in the dialog) &mdash; that means the cell grid
-              <em> and </em>, on an agent model, the whole agent population: positions
-              (including Z in 3D), velocities, agent attributes, bonds and bond attributes,
-              and sprite state. On an agents-only model the board <em>is</em> the population.
-              UI controls (brush, viewer, FPS) are <em> never </em> part of a preset.</li>
+            <li><strong>Add</strong> (<code>+</code>) &mdash; Captures the current
+              model-attribute values as a new preset. Optionally embeds the
+              <strong> board</strong> too (check "Include board state" in the dialog)
+              &mdash; that means the cell grid <em> and </em>, on an agent model, the whole
+              agent population: positions (including Z in 3D), velocities, agent attributes,
+              bonds and bond attributes, and sprite state. On an agents-only model the board
+              <em> is</em> the population. UI controls (brush, viewer, FPS) are <em> never </em>
+              part of a preset.</li>
             <li><strong>Load</strong> &mdash; Restores the preset's model-attribute values
               (and the board, if included). Preset rows marked with <code>&#x25C9;</code>
               carry board data. If a board-carrying preset's dimensions don't match the
@@ -4330,16 +4341,23 @@ export function HelpView() {
               board-carrying preset saved before GenesisCA captured agent populations holds
               no agents, so loading it re-seeds the agent layer from the model&rsquo;s Init
               Event &mdash; re-save it to capture the current population.</li>
-            <li><strong>Export</strong> (&#x2913;) &mdash; Downloads the preset as a standalone
-              <code> .gcapreset</code> file (its embedded state + metadata), so a parameter set
-              can be shared or moved between projects.</li>
-            <li><strong>Import Preset&hellip;</strong> &mdash; Loads a <code>.gcapreset</code> and
-              appends it to this model&apos;s presets (with a fresh id). The embedded state
-              travels verbatim &mdash; a grid-carrying preset behaves exactly as it did in the
-              exporting project. NB a preset only makes sense on a model with matching
-              attributes; loading one from an unrelated model applies whatever attribute ids
-              happen to match.</li>
-            <li><strong>Delete</strong> (&times;) &mdash; Removes the preset from the model.</li>
+            <li><strong>Export current as preset</strong> (title-bar export icon, or the
+              transport bar&rsquo;s <em>Export &rarr; Export preset&hellip;</em>) &mdash;
+              Downloads the <em>current</em> state straight to a <code>.gcapreset</code> file{' '}
+              <em>without</em> adding it to the model&rsquo;s presets &mdash; the &ldquo;just
+              save a file locally&rdquo; shortcut. (Each existing preset row&rsquo;s{' '}
+              <strong>&hellip;</strong> menu also has an <strong>Export</strong> that downloads
+              that saved preset.)</li>
+            <li><strong>Import preset</strong> (title-bar import icon, or the transport
+              bar&rsquo;s <em>Import &rarr; Import preset&hellip;</em>) &mdash; Loads a{' '}
+              <code>.gcapreset</code> and appends it to this model&apos;s presets (with a fresh
+              id). The embedded state travels verbatim &mdash; a grid-carrying preset behaves
+              exactly as it did in the exporting project. NB a preset only makes sense on a
+              model with matching attributes; loading one from an unrelated model applies
+              whatever attribute ids happen to match. (You can also drag a <code>.gcapreset</code>{' '}
+              file onto the app.)</li>
+            <li><strong>Delete</strong> (&times;) &mdash; Removes the preset from the model
+              (from the preset row&rsquo;s <strong>&hellip;</strong> menu).</li>
             <li><strong>Reorder</strong> &mdash; Drag the <code>&#x22EE;&#x22EE;</code> handle
               to reorder presets; the order is saved with the project.</li>
           </ul>

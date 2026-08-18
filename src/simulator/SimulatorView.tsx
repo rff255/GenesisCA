@@ -3250,6 +3250,9 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
 
   // Preset-save dialog
   const [presetDialogOpen, setPresetDialogOpen] = useState(false);
+  // Export-current-as-preset dialog (same form as save, but downloads a
+  // .gcapreset file directly instead of adding the preset to the model).
+  const [presetExportDialogOpen, setPresetExportDialogOpen] = useState(false);
   const [presetOverwriteTarget, setPresetOverwriteTarget] = useState<Preset | null>(null);
   // Per-action confirmation modals — delete / overwrite. Carry the target preset
   // so the deferred onConfirm doesn't need to recapture it through a closure.
@@ -13292,6 +13295,28 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
     const safe = (p.name || 'preset').replace(/[^\w\-. ]+/g, '_').trim() || 'preset';
     void downloadPresetFile(p, `${safe}.gcapreset`);
   };
+  // Export the CURRENT state straight to a .gcapreset file, WITHOUT adding it to
+  // the model's presets — the "just save a file locally" shortcut (same capture
+  // pipeline as handleCreatePreset, but downloadPresetFile instead of addPreset).
+  const handleExportCurrentAsPreset = (name: string, description: string, includeGrid: boolean) => {
+    if (!workerRef.current) return;
+    pendingStateSave.current = (workerState) => {
+      const state = serializePreset(
+        workerState as Parameters<typeof serializePreset>[0],
+        { includeGrid },
+        {
+          boundaryTreatment: model.properties.boundaryTreatment,
+          interactionTables: snapshotInteractionTables(),
+          lookupTableData: snapshotLookupTableData(),
+        },
+      );
+      const id = 'preset_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5);
+      const preset: Preset = { id, name, state, createdAt: Date.now() };
+      if (description.trim()) preset.description = description.trim();
+      handleExportPreset(preset);
+    };
+    workerRef.current.postMessage({ type: 'getState' });
+  };
   const handleImportPresetFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     e.target.value = ''; // allow re-importing the same file
@@ -14087,10 +14112,10 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
   // Drag-and-drop plumbing (App.tsx owns the window drop targets and routes by
   // extension): consume the dropped-file CustomEvents. Latest-refs so the
   // once-registered listeners never act on stale closures.
-  //  - genesis-load-state-file  → the transport-bar Load State path (adaptDims).
+  //  - genesis-load-state-file  → the transport-bar Import State path (adaptDims).
   //  - genesis-open-image-file  → the Map Image to Cells dialog (the Ctrl+V seam).
   //  - genesis-import-preset-file → readPresetFile + addPreset (feature parity
-  //    with the Presets block's Import button).
+  //    with the Presets section's Import icon).
   const applySimulationStateRef2 = useRef<(s: SimulationState, o?: { adaptDims?: boolean; busyLabel?: string }) => void>(() => {});
   applySimulationStateRef2.current = applySimulationState;
   const addPresetRef = useRef(addPreset);
@@ -14100,7 +14125,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       const file = (e as CustomEvent).detail?.file as File | undefined;
       if (!file) return;
       void (async () => {
-        // Same coverage as the transport-bar Load State button: the read (a
+        // Same coverage as the transport-bar Import State button: the read (a
         // base64 board can be megabytes) and then the restore itself.
         const readBusy = beginBusy(`Loading "${file.name}"…`);
         try {
@@ -14425,7 +14450,41 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
           )}
 
           <hr className={styles.divider} />
-          <div className={styles.sectionTitle}>Presets</div>
+          {/* Presets title + right-aligned actions: add (save current as a
+              preset) / import (from .gcapreset) / export (current straight to a
+              .gcapreset file, without adding it to the model). */}
+          <div className={styles.sectionTitleRow}>
+            <span className={styles.sectionTitle}>Presets</span>
+            <div className={styles.sectionTitleActions}>
+              <button
+                className={styles.titleIconBtn}
+                title="Save the current state as a new preset"
+                onClick={() => setPresetDialogOpen(true)}
+              >
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+                  <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
+                </svg>
+              </button>
+              <button
+                className={styles.titleIconBtn}
+                title="Import a preset from a .gcapreset file (added to this model's presets)"
+                onClick={() => presetFileInputRef.current?.click()}
+              >
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>
+                </svg>
+              </button>
+              <button
+                className={styles.titleIconBtn}
+                title="Export the current state directly as a .gcapreset file (without adding it to this model's presets)"
+                onClick={() => setPresetExportDialogOpen(true)}
+              >
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>
+                </svg>
+              </button>
+            </div>
+          </div>
           {(model.presets || []).length === 0 && (
             <div style={{ fontSize: 11, color: '#888', padding: '4px 0 6px' }}>
               No presets yet. Tune the model attributes below and save a snapshot.
@@ -14499,13 +14558,8 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
               </div>
             );
           })()}
-          <button className={styles.controlButton} onClick={() => setPresetDialogOpen(true)}>
-            + Save Current as Preset&hellip;
-          </button>
-          <button className={styles.controlButton} title="Import a preset from a .gcapreset file (added to this model's presets)"
-            onClick={() => presetFileInputRef.current?.click()}>
-            Import Preset&hellip;
-          </button>
+          {/* Add / Import / Export live on the Presets section-title icons above.
+              The hidden picker they + the drag-drop path share stays here. */}
           <input ref={presetFileInputRef} type="file" accept=".gcapreset,.json" style={{ display: 'none' }} onChange={handleImportPresetFile} />
 
           {modelAttrs.length > 0 && (
@@ -15273,13 +15327,16 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
           >{bottomBarOpen ? <ChevronDownIcon /> : <ChevronUpIcon />}</button>
           {bottomBarOpen && (<>
         <div className={styles.transportBar}>
-          {/* Save/Load state — the simulation's OUT / IN pair, so the tabular
-              siblings hang off them: a plain CLICK is the historical .gcastate
-              action, and hover / right-click opens the two formats (the 📷
-              Save/Copy pattern). Each button gets its OWN relative wrapper so
-              hovering one cannot open the other's menu, and the menu joins the
-              single `overlayPopup` state — one popover at a time, with the
-              existing outside-pointerdown + Escape dismissal for free. */}
+          {/* Export/Import — the simulation's OUT / IN pair, so the tabular +
+              preset siblings hang off them: a plain CLICK is the historical
+              .gcastate action, and hover / right-click opens the other formats
+              (the 📷 Save/Copy pattern). "Export/Import" (not "Save/Load")
+              keeps the .gcastate / CSV / .gcapreset vocabulary consistent —
+              "Save/Load" stays for the PROJECT (the File menu). Each button gets
+              its OWN relative wrapper so hovering one cannot open the other's
+              menu, and the menu joins the single `overlayPopup` state — one
+              popover at a time, with the existing outside-pointerdown + Escape
+              dismissal for free. */}
           <div
             className={styles.captureBtnWrap}
             ref={overlayPopup === 'saveState' ? overlayPopupWrapRef : undefined}
@@ -15290,7 +15347,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
             <button
               className={styles.transportBtn}
               onClick={() => { setOverlayPopup(null); handleSaveState(); }}
-              title="Save State (.gcastate) — click to save, hover or right-click for the CSV export"
+              title="Export State (.gcastate) — click to export, hover or right-click for more export options (CSV, preset)"
             >
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                 <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/>
@@ -15303,8 +15360,8 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
                 <button
                   className={styles.shotMenuItem}
                   onClick={() => { setOverlayPopup(null); handleSaveState(); }}
-                  title="Save the whole simulation snapshot (same as clicking the button)"
-                >Save state (.gcastate)</button>
+                  title="Export the whole simulation snapshot (same as clicking the button)"
+                >Export state (.gcastate)</button>
                 <button
                   className={styles.shotMenuItem}
                   onClick={() => { setOverlayPopup(null); openCsvExport(); }}
@@ -15312,6 +15369,13 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
                     ? 'Export one attribute as a table — a CSV or an Esri ASCII grid (.asc) for the board, or the agents (a row per agent)'
                     : 'Export one attribute as a CSV table — the board (the table IS the grid) or the agents (a row per agent)'}
                 >{gisTools ? 'Export CSV / ASC…' : 'Export CSV…'}</button>
+                {/* Export the current state straight to a .gcapreset file
+                    (without adding it to the model's presets). */}
+                <button
+                  className={styles.shotMenuItem}
+                  onClick={() => { setOverlayPopup(null); setPresetExportDialogOpen(true); }}
+                  title="Export the current state directly as a .gcapreset file (without adding it to this model's presets)"
+                >Export preset (.gcapreset)…</button>
               </div>
             )}
           </div>
@@ -15325,7 +15389,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
             <button
               className={styles.transportBtn}
               onClick={() => { setOverlayPopup(null); stateFileInputRef.current?.click(); }}
-              title="Load State (.gcastate) — click to load, hover or right-click for the CSV import"
+              title="Import State (.gcastate) — click to import, hover or right-click for more import options (CSV, preset)"
             >
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                 <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
@@ -15337,7 +15401,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
                   className={styles.shotMenuItem}
                   onClick={() => { setOverlayPopup(null); stateFileInputRef.current?.click(); }}
                   title="Restore a whole simulation snapshot (same as clicking the button)"
-                >Load state (.gcastate)</button>
+                >Import state (.gcastate)</button>
                 {/* The CSV item is a GENERAL tool and always present; only its
                     label mentions the GIS raster when the Geographic tools gate
                     is on (the picker still SNIFFS an `.asc` either way, and
@@ -15349,6 +15413,13 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
                     ? 'Import a CSV table — agents (a row per agent) or the board (the table IS the grid) — or an Esri ASCII grid (.asc) from any GIS'
                     : 'Import a CSV table — agents (a row per agent) or the board (the table IS the grid)'}
                 >{gisTools ? 'Import CSV / ASC…' : 'Import CSV…'}</button>
+                {/* Import a preset from a .gcapreset file (added to this
+                    model's presets). */}
+                <button
+                  className={styles.shotMenuItem}
+                  onClick={() => { setOverlayPopup(null); presetFileInputRef.current?.click(); }}
+                  title="Import a preset from a .gcapreset file (added to this model's presets)"
+                >Import preset (.gcapreset)…</button>
                 {/* Behind the Geographic tools (GIS) gate — and hidden in the
                     standalone viewer, whose build drops geotiff.js (see
                     geotiffLoader.ts). An enabled control must do something; a
@@ -16232,7 +16303,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
               Open Image
             </button>
             <input ref={imageInputRef} type="file" accept=".png,.bmp,.jpg,.jpeg" style={{ display: 'none' }} onChange={handleImageImport} />
-            {/* CSV import / export live on the transport bar's Load / Save State
+            {/* CSV import / export live on the transport bar's Export / Import
                 buttons (hover or right-click them) — one place for every way of
                 getting a board in and out, reachable with no brush panel open. */}
             <label className={styles.checkRow}>
@@ -16758,6 +16829,19 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
           onCancel={() => setPresetDialogOpen(false)}
         />
       )}
+      {presetExportDialogOpen && (
+        <PresetSaveDialog
+          title="Export Current as Preset"
+          confirmLabel="Export Preset"
+          hasCells={gridCellsOn}
+          hasAgents={isAgentModel}
+          onConfirm={(name, description, includeGrid) => {
+            setPresetExportDialogOpen(false);
+            handleExportCurrentAsPreset(name, description, includeGrid);
+          }}
+          onCancel={() => setPresetExportDialogOpen(false)}
+        />
+      )}
       {imageMapImg && (
         <ImageMappingDialog
           img={imageMapImg}
@@ -16774,7 +16858,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
           onCancel={() => setImageMapImg(null)}
         />
       )}
-      {/* The ONE hidden CSV picker, opened from the transport bar's Load State
+      {/* The ONE hidden CSV picker, opened from the transport bar's Import
           menu (and reused by the drag-and-drop path's dialog). Deliberately
           rendered here, outside every panel, so it stays mounted whichever
           panels are open — the brush panels no longer reference it. */}
