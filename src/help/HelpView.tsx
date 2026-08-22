@@ -3196,8 +3196,11 @@ export function HelpView() {
             agent the hold will move is ringed. <strong>The arrows also show the strength</strong>
             &mdash; they grow outward from the middle of the disc (and thicken, with bigger
             chevrons) as the Intensity rises, so each decade looks distinctly different; in 3D an
-            inner circle shrinks the same way. Pull never overshoots past the centre, and Push
-            piles agents up just inside the rim (where the falloff reaches zero).
+            inner circle shrinks the same way. Pull gathers agents down to a tiny ring around the
+            centre (1% of the brush radius) rather than onto the exact centre point &mdash; each
+            agent stops on its own angle of that ring, so a sustained pull can never stack agents
+            onto one identical position (coincident agents feel identical forces and would lock
+            in place). Push piles agents up just inside the rim (where the falloff reaches zero).
           </p>
           <p className={styles.p}>
             With the agent brush active, <span className={styles.kbd}>Ctrl+C</span> /

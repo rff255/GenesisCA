@@ -8993,12 +8993,19 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       // the rim. `strength` is signed and already dt-scaled (see NudgeAgentsMsg):
       //   falloff = 1 - d/radius        step = |strength| * falloff
       //   push:  x += step * outward
-      //   pull:  x -= min(step, d) * outward   (never overshoots the centre)
+      //   pull:  x -= min(step, max(0, d - deadR)) * outward
+      // Pull stops at a small DEAD-ZONE ring (deadR = 1% of the brush radius)
+      // rather than the exact centre: converging every agent onto ONE absolute
+      // position LOCKS them there — zero-distance pairs have no separation
+      // direction, and identical positions feel identical forces forever.
+      // Stopping at deadR leaves each agent on its OWN angle of the ring, so
+      // positions stay distinct by construction.
       activeViewer = msg.activeViewer; syncActiveViewerToMemory();
       if (agentStore && msg.radius > 0 && msg.strength !== 0 && Number.isFinite(msg.strength)) {
         const s = agentStore, W = s.worldWidth, H = s.worldHeight, D = s.worldDepth;
         const is3d = D > 1;
         const R = msg.radius, R2 = R * R;
+        const deadR = R * 0.01;               // the pull dead-zone (see above)
         const cx = msg.x, cy = msg.y, cz = msg.z ?? 0;
         const outward = msg.strength > 0;      // + = push, - = pull
         const mag = Math.abs(msg.strength);
@@ -9021,9 +9028,15 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
           let ux: number, uy: number, uz: number, move: number;
           if (d > 1e-9) {
             ux = dx / d; uy = dy / d; uz = dz / d;
-            // Pull clamps to the distance, so an agent lands ON the centre at
-            // worst instead of shooting through it and oscillating.
-            move = outward ? step : -Math.min(step, d);
+            // Pull clamps to the remaining distance ABOVE the dead-zone ring, so
+            // an agent lands ON that ring at worst instead of shooting through
+            // the centre and oscillating — and never onto the exact centre point.
+            if (outward) {
+              move = step;
+            } else {
+              move = -Math.min(step, Math.max(0, d - deadR));
+              if (move === 0) continue;       // already inside the dead-zone
+            }
           } else {
             // Exactly at the centre there is no outward direction. Push gives it a
             // DETERMINISTIC golden-angle direction derived from the id, so a pile
