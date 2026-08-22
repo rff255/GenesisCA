@@ -61,6 +61,7 @@ import { ExperimentsPanel } from './ExperimentsPanel';
 import { compileOverseerGraph } from '../modeler/vpl/compiler/overseer/compile';
 import { OverseerRuntime } from './engine/overseerRuntime';
 import { BrushColorPopover } from './BrushColorPopover';
+import { BrushIcon, drawBrushIcon, BRUSH_ICON_CHIP_PAD, type BrushIconName } from './brushIcons';
 import { ManualBrushPanel } from './ManualBrushPanel';
 import { ClipIntervalSlider } from './ClipIntervalSlider';
 import { NumberField } from '../modeler/vpl/widgets/InlineWidgets';
@@ -1030,16 +1031,63 @@ const BOND_PICK_PX = 6;
 /** ONE button look for every entry of the agent brush's two classes — the
  *  built-in actions and the user-defined mappings — so the two tabs read as the
  *  same kind of control (they are: each entry arms one brush). `capitalize` is
- *  for the built-in ids only; a mapping name is the user's own text. */
-function agentBrushEntryStyle(active: boolean, capitalize: boolean): React.CSSProperties {
+ *  for the built-in ids only; a mapping name is the user's own text.
+ *
+ *  `icon` switches the box to the ICON form: a centred flex line with square-ish
+ *  padding, used both for the icon-ONLY built-in buttons and for a user-defined
+ *  entry that prefixes its name with the shared paint glyph. The border /
+ *  background / colour are IDENTICAL either way, so the active-mode highlight
+ *  reads the same across both classes. */
+function agentBrushEntryStyle(active: boolean, capitalize: boolean, icon = false): React.CSSProperties {
   return {
-    padding: '3px 8px', borderRadius: 'var(--radius-sm)', cursor: 'pointer',
+    padding: icon ? '3px 6px' : '3px 8px', borderRadius: 'var(--radius-sm)', cursor: 'pointer',
     textTransform: capitalize ? 'capitalize' : 'none',
     border: '1px solid ' + (active ? 'var(--color-accent)' : 'var(--color-widget-border)'),
     background: active ? 'var(--color-accent-soft)' : 'transparent',
     color: active ? 'var(--color-accent)' : 'var(--color-text-muted)',
     fontWeight: 600, fontSize: '0.64rem',
+    ...(icon ? { display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 4 } : null),
   };
+}
+
+/** The built-in agent-brush buttons are ICONS, so their `title` IS the control's
+ *  readable name and must LEAD with it (the bare name additionally rides
+ *  `aria-label`). One table, so the tooltip can't drift from the glyph. */
+const AGENT_BRUSH_MODE_TITLE: Record<typeof AGENT_BRUSH_MODES[number], string> = {
+  add: 'Add — add agents; size 0: one at the cursor, sized: fill the shape footprint',
+  remove: 'Remove — delete agents; size 0: the nearest, sized: all in the footprint',
+  move: 'Move — size 0: drag one agent; sized: rigid-drag a footprint of agents (RMB cancels)',
+  edit: 'Edit — overwrite agent properties; size 0: click an agent, adjust, Apply; sized: stamp onto all in the footprint',
+  paint: 'Paint — run one of your Agent Input Mapping graphs on the agents you touch',
+  push: 'Push — hold to shove agents AWAY from the cursor; strongest at the centre, zero at the rim',
+  pull: 'Pull — hold to gather agents TOWARD the cursor; strongest at the centre, zero at the rim',
+  glue: 'Glue — click two agents to bond them',
+  cut: 'Cut — click two bonded agents to unbond them',
+};
+
+/** Brush-cursor ICON geometry. The glyph is drawn on the COLOURED cursor layer
+ *  just outside the TOP-LEFT of the brush footprint's bounding box, so the
+ *  active brush is readable without looking away from the board. */
+const BRUSH_CURSOR_ICON_SIZE = 16;
+/** Gap between the icon's backing chip and the footprint it annotates. */
+const BRUSH_CURSOR_ICON_GAP = 4;
+/** Top-left of the glyph box for a footprint whose bounding box starts at
+ *  (`bboxL`, `bboxT`) — clamped into the viewport, so a footprint at (or beyond)
+ *  the canvas edge still shows its icon instead of drawing it off-screen. */
+function brushCursorIconPos(bboxL: number, bboxT: number, parentW: number, parentH: number): { x: number; y: number } {
+  const s = BRUSH_CURSOR_ICON_SIZE;
+  const off = s + BRUSH_ICON_CHIP_PAD + BRUSH_CURSOR_ICON_GAP;
+  const m = BRUSH_ICON_CHIP_PAD + 1;
+  return {
+    x: Math.max(m, Math.min(parentW - s - m, bboxL - off)),
+    y: Math.max(m, Math.min(parentH - s - m, bboxT - off)),
+  };
+}
+/** The footprint-shape glyph for a brush shape — the cell brush has no "mode",
+ *  so its SHAPE is what its cursor icon shows. */
+function shapeIconName(shape: BrushShape): BrushIconName {
+  return shape === 'rect' ? 'shape-rect' : shape === 'ring' ? 'shape-ring'
+    : shape === 'line' ? 'shape-line' : 'shape-circle';
 }
 
 function agentBrushModesFor(bondsAvailable: boolean, inputMappingsAvailable: boolean): typeof AGENT_BRUSH_MODES {
@@ -3987,6 +4035,14 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
    *  React updates per raw event (the cursor-slows-the-sim bug). */
   const hoverWorkRaf = useRef<number | null>(null);
   const lastHoverClient = useRef({ x: 0, y: 0, buttons: 0 });
+  /** The pointer in CANVAS-LOCAL px (the same frame `drawCursorLayer` draws in),
+   *  or null while it is off the canvas. Only the cursor ICON needs it: in
+   *  INFINITY mode `screenToGrid` / `screenToWorld` WRAP, so the cursor cell
+   *  alone cannot say WHICH drawn tile the pointer is over — the footprint
+   *  silhouette sidesteps that by drawing in every tile, but the icon is drawn
+   *  ONCE and must land on the tile under the pointer. Written by the same
+   *  rAF-coalesced hover pass that owns the rest of the cursor state. */
+  const cursorLocalRef = useRef<{ x: number; y: number } | null>(null);
   const lastPaintGrid = useRef<{ row: number; col: number } | null>(null);
   // Paint coalescing: instead of posting a paint message per mouse-move event
   // (~50-200/sec on a fast brush drag), collect cells in a buffer and flush
@@ -4586,6 +4642,20 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
     if (!xf || is3dRef.current) return; // 3D draws its cursor in the GL scene
     const { parentW, parentH, w, h, scale, scaledW, scaledH, ox, oy, infinity, txMin, txMax, tyMin, tyMax } = xf;
 
+    // The world TILE under the pointer. Zero unless the infinity canvas is
+    // tiling, where the cursor cell is WRAPPED into the primary tile: the
+    // silhouettes sidestep that by drawing in every tile, but the cursor ICON is
+    // drawn ONCE and has to land on the copy the pointer is actually over.
+    let iconTx = 0, iconTy = 0;
+    if (infinity && scaledW > 0 && scaledH > 0) {
+      const loc = cursorLocalRef.current;
+      if (loc) {
+        iconTx = Math.floor((loc.x - ox) / scaledW);
+        iconTy = Math.floor((loc.y - oy) / scaledH);
+      }
+    }
+    const iconDx = iconTx * scaledW, iconDy = iconTy * scaledH;
+
     // ── Cell brush cursor — the exact cell-silhouette of the current stamp
     // (rect / circle / ring / line preview), white on the difference layer so
     // it shows as the NEGATIVE of whatever is behind it. One copy per visible
@@ -4596,6 +4666,11 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       let edges: Array<[number, number, number, number]>;
       let baseRow: number, baseCol: number;
       let extentMinDc = 0, extentMaxDc = 0, extentMinDr = 0, extentMaxDr = 0;
+      // TRUE top-left of the stamp, for the cursor ICON. Deliberately separate
+      // from the extents above, which start at 0 (they size the infinity tiling
+      // span, where a 0 floor is harmless) — for the ABSOLUTE cells of a line
+      // preview that floor would pin the box to row/col 0.
+      let bbMinDr = Infinity, bbMinDc = Infinity;
       if (lineAnchor) {
         // Two-click line preview: anchor → cursor, torus-folded in infinity so
         // the preview matches what paintLine will commit across a seam.
@@ -4616,6 +4691,8 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
           if (c[0] > extentMaxDr) extentMaxDr = c[0];
           if (c[1] < extentMinDc) extentMinDc = c[1];
           if (c[1] > extentMaxDc) extentMaxDc = c[1];
+          if (c[0] < bbMinDr) bbMinDr = c[0];
+          if (c[1] < bbMinDc) bbMinDc = c[1];
         }
       } else {
         const offsets = currentStampOffsets();
@@ -4626,6 +4703,8 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
           if (o[0] > extentMaxDr) extentMaxDr = o[0];
           if (o[1] < extentMinDc) extentMinDc = o[1];
           if (o[1] > extentMaxDc) extentMaxDc = o[1];
+          if (o[0] < bbMinDr) bbMinDr = o[0];
+          if (o[1] < bbMinDc) bbMinDc = o[1];
         }
       }
       const path = new Path2D();
@@ -4656,6 +4735,15 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       } else {
         negCtx.stroke(path);
       }
+      // ── Cursor ICON — the active brush, just outside the footprint's top-left.
+      // The CELL brush has no "mode", so its SHAPE is what identifies it. Drawn
+      // on the COLOURED layer (a glyph needs stable contrast, which the
+      // difference-composited silhouette layer cannot give) and only once, on
+      // the tile under the pointer.
+      const bbL = ox + iconDx + (baseCol + (Number.isFinite(bbMinDc) ? bbMinDc : 0)) * scale;
+      const bbT = oy + iconDy + (baseRow + (Number.isFinite(bbMinDr) ? bbMinDr : 0)) * scale;
+      const p = brushCursorIconPos(bbL, bbT, parentW, parentH);
+      drawBrushIcon(hlCtx, shapeIconName(brushShapeRef.current), p.x, p.y, BRUSH_CURSOR_ICON_SIZE);
     }
 
     // ── Agent brush cursor + highlights ──
@@ -4890,6 +4978,28 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       }
       hlCtx.beginPath(); hlCtx.arc(cx, cy, rad, 0, Math.PI * 2);
       hlCtx.strokeStyle = 'rgba(232, 161, 58, 0.95)'; hlCtx.lineWidth = 2; hlCtx.setLineDash([4, 3]); hlCtx.stroke(); hlCtx.setLineDash([]);
+    }
+    // ── Cursor ICON — the ACTIVE agent brush, just outside the top-left of
+    // whatever this mode's cursor occupies: the shape footprint for the area
+    // modes, the effect disc for Push / Pull and a spawner paint, and the bare
+    // cursor point for the single-agent and two-click (Glue / Cut) modes, which
+    // draw no extent at all. LAST, so it sits above every ring on the coloured
+    // layer; gated exactly like the rest of the agent cursor, so it disappears
+    // with the Show-brush-cursor toggle and when the pointer leaves the canvas.
+    if (showAgentCursor && cursorW) {
+      const R = Math.max(0, agentBrushRadiusRef.current);
+      let halfWx = 0, halfWy = 0;   // half-extents, in WORLD units
+      if (spawnerPaintCursor || NUDGE_BRUSH_MODES.has(mode)) {
+        halfWx = halfWy = R;
+      } else if (footprintMode && aScope === 'area') {
+        if (aShape === 'rect') { halfWx = agentBrushWRef.current / 2; halfWy = agentBrushHRef.current / 2; }
+        else if (aShape === 'ring') { halfWx = halfWy = R + Math.max(1, agentBrushRingWidthRef.current) / 2; }
+        else if (aShape === 'line') { halfWx = halfWy = Math.max(1, agentBrushLineWidthRef.current) / 2; }
+        else { halfWx = halfWy = R; }
+      }
+      const icx = ox + iconDx + cursorW.x * scale, icy = oy + iconDy + cursorW.y * scale;
+      const p = brushCursorIconPos(icx - halfWx * scale, icy - halfWy * scale, parentW, parentH);
+      drawBrushIcon(hlCtx, mode, p.x, p.y, BRUSH_CURSOR_ICON_SIZE);
     }
   }, []);
 
@@ -11999,15 +12109,22 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
     const processHoverWork = () => {
       hoverWorkRaf.current = null;
       const { x: hx, y: hy, buttons } = lastHoverClient.current;
+      // ONE rect read per hover frame (this pass is rAF-coalesced), shared by the
+      // off-canvas test and the canvas-local pointer the cursor ICON is placed
+      // from. It used to be read only on the non-dragging path; hoisting it costs
+      // one layout read per frame during a drag, where the drag handlers already
+      // read the rect anyway.
+      const rect = container.getBoundingClientRect();
+      cursorLocalRef.current = { x: hx - rect.left, y: hy - rect.top };
       // The brush cursor + chip stop tracking once the pointer leaves the canvas
       // area (in infinity mode screenToGrid WRAPS off-canvas coords instead of
       // returning null). Active drags legitimately continue off-canvas.
       if (!isPanning.current && !(buttons & 1) && !isResizingBrush.active) {
-        const rect = container.getBoundingClientRect();
         const overCanvas = hx >= rect.left && hx < rect.right
           && hy >= rect.top && hy < rect.bottom;
         if (!overCanvas) {
           let changed = cursorGrid.current !== null;
+          cursorLocalRef.current = null;
           if (cursorGrid.current !== null) { cursorGrid.current = null; publishHoverCellInfo(null); }
           if (agentCursorWorldRef.current !== null) { agentCursorWorldRef.current = null; changed = true; }
           if (agentHoverIdRef.current !== -1) { agentHoverIdRef.current = -1; changed = true; }
@@ -12374,6 +12491,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
 
     const handleMouseLeave = () => {
       cursorGrid.current = null;
+      cursorLocalRef.current = null;
       publishHoverCellInfo(null);
       // Clear the agent-brush cursor/highlight state so nothing lingers off-canvas.
       agentCursorWorldRef.current = null;
@@ -16230,18 +16348,19 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
             <div className={styles.fieldRow}>
               <span className={styles.statLabel}>Shape</span>
               {([
-                ['rect', '▢', 'Rectangle brush'],
-                ['circle', '●', 'Circle brush (filled disc)'],
-                ['ring', '◌', 'Ring brush (annulus)'],
-                ['line', '╱', 'Line — click two points on the board to draw a segment'],
-              ] as Array<[BrushShape, string, string]>).map(([s, glyph, tip]) => (
+                ['rect', 'Rectangle brush'],
+                ['circle', 'Circle brush (filled disc)'],
+                ['ring', 'Ring brush (annulus)'],
+                ['line', 'Line — click two points on the board to draw a segment'],
+              ] as Array<[BrushShape, string]>).map(([s, tip]) => (
                 <button
                   key={s}
                   className={`${styles.brushShapeBtn} ${brushShape === s ? styles.brushShapeBtnActive : ''}`}
                   onClick={() => setBrushShape(s)}
                   title={tip}
+                  aria-label={tip}
                 >
-                  {glyph}
+                  <BrushIcon name={shapeIconName(s)} size={13} />
                 </button>
               ))}
             </div>
@@ -16373,13 +16492,14 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
                     <div className={styles.fieldRow}>
                       <span className={styles.statLabel}>Shape</span>
                       {([
-                        ['rect', '▢', 'Square / rectangle footprint'],
-                        ['circle', '●', 'Circle footprint (filled disc)'],
-                        ['ring', '◌', 'Ring footprint (annulus)'],
-                        ['line', '╱', 'Line — two clicks define a capsule (Add / Remove / Edit, Area)'],
-                      ] as Array<[BrushShape, string, string]>).map(([s, glyph, tip]) => (
+                        ['rect', 'Square / rectangle footprint'],
+                        ['circle', 'Circle footprint (filled disc)'],
+                        ['ring', 'Ring footprint (annulus)'],
+                        ['line', 'Line — two clicks define a capsule (Add / Remove / Edit, Area)'],
+                      ] as Array<[BrushShape, string]>).map(([s, tip]) => (
                         <button key={s} className={`${styles.brushShapeBtn} ${agentBrushShape === s ? styles.brushShapeBtnActive : ''}`}
-                          onClick={() => { setAgentBrushShape(s); agentLineAnchorRef.current = null; agentLine3dAnchorRef.current = null; draw(); }} title={tip}>{glyph}</button>
+                          onClick={() => { setAgentBrushShape(s); agentLineAnchorRef.current = null; agentLine3dAnchorRef.current = null; draw(); }}
+                          title={tip} aria-label={tip}><BrushIcon name={shapeIconName(s)} size={13} /></button>
                       ))}
                     </div>
                     {agentBrushShape === 'rect' && (
@@ -16432,8 +16552,14 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
                             title={[m.description, inputBrushKindOf(m) === 'spawner'
                               ? 'Spawner brush: runs once where you click, creating the agents itself.'
                               : 'Editor brush: runs on every agent you touch.'].filter(Boolean).join(' — ')}
-                            style={agentBrushEntryStyle(agentBrushMode === 'paint' && agentPaintMapping === m.id, false)}
-                          >{m.name}{inputBrushKindOf(m) === 'spawner' ? ' ⊕' : ''}</button>
+                            style={agentBrushEntryStyle(agentBrushMode === 'paint' && agentPaintMapping === m.id, false, true)}
+                          >
+                            {/* The shared paint glyph, then the user's OWN name —
+                                never icon-only: the name is what identifies which
+                                of their graphs this entry runs. */}
+                            <BrushIcon name="paint" size={12} />
+                            {m.name}{inputBrushKindOf(m) === 'spawner' ? ' ⊕' : ''}
+                          </button>
                         ))}
                       </div>
                     </>
@@ -16483,7 +16609,9 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
                     </div>
                   )}
                   {/* ── BUILT-IN ────────────────────────────────────────────
-                      The brush actions (labels via textTransform: capitalize).
+                      The brush actions, as ICON buttons (brushIcons.tsx) whose
+                      `title` LEADS with the mode name and whose `aria-label` IS
+                      it — the same glyph the cursor overlay draws for the mode.
                       Glue / Cut are absent for a Bonds=Off model (they could only
                       ever no-op there); see agentBrushModesFor. `paint` is NOT
                       here: it is not an action of its own, it is the User-defined
@@ -16496,18 +16624,10 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
                       <button
                         key={m}
                         onClick={() => { selectAgentBrush(m); draw(); }}
-                        title={
-                          m === 'add' ? 'Add agents — size 0: one at the cursor; sized: fill the shape footprint' :
-                          m === 'remove' ? 'Remove agents — size 0: the nearest; sized: all in the footprint' :
-                          m === 'move' ? 'Move — size 0: drag one agent; sized: rigid-drag a footprint of agents (RMB cancels)' :
-                          m === 'edit' ? 'Edit agent properties — size 0: click an agent, adjust, Apply; sized: stamp onto all in the footprint' :
-                          m === 'push' ? 'Push — hold to shove agents AWAY from the cursor; strongest at the centre, zero at the rim' :
-                          m === 'pull' ? 'Pull — hold to gather agents TOWARD the cursor; strongest at the centre, zero at the rim' :
-                          m === 'glue' ? 'Click two agents to bond them' :
-                          'Click two bonded agents to unbond them'
-                        }
-                        style={agentBrushEntryStyle(agentBrushMode === m, true)}
-                      >{m}</button>
+                        title={AGENT_BRUSH_MODE_TITLE[m]}
+                        aria-label={m}
+                        style={agentBrushEntryStyle(agentBrushMode === m, false, true)}
+                      ><BrushIcon name={m} size={14} /></button>
                     ))}
                   </div>
                   {/* Add: density + spacing (area scatter) + the initial-value config. */}

@@ -1333,6 +1333,11 @@
  * same visual language as the mapping tabs. */
 .brushShapeBtn {
   width: 24px;
+  /* The label is an inline SVG glyph (see brushIcons.tsx) — centre it the way
+     the text it replaced was centred. */
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   padding: var(--space-1) 0;
   background: transparent;
   border: 1px solid var(--color-border);

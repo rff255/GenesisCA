@@ -3135,7 +3135,10 @@ export function HelpView() {
             <strong> Glue</strong> / <strong>Cut</strong> (bond/unbond two clicked agents).
             Glue / Cut appear only on a model whose <strong>Bonds</strong> capability is on
             (Properties &rsaquo; Bond-Graph Agents) &mdash; without a bond store there is nothing for
-            them to do, so they are left out rather than shown doing nothing.
+            them to do, so they are left out rather than shown doing nothing. Each built-in action is
+            an <strong>icon button</strong> (as are the shape buttons); hover one for its name and
+            what it does &mdash; and the same glyph follows your cursor on the board, so the armed
+            brush is readable without looking away.
           </p>
           <p className={styles.p}>
             <strong>Built-in vs User defined.</strong> Those actions are the <strong>Built-in</strong>
@@ -4174,8 +4177,11 @@ export function HelpView() {
           <p className={styles.p}>
             A brush cursor traces the exact cells the stamp will affect. It is drawn as a
             photographic <em>negative</em> of whatever colors are behind it (like the Windows
-            mouse cursor), so the outline stays visible over any cell palette. Toggle it with
-            <strong> Show brush cursor</strong> in the brush panel.
+            mouse cursor), so the outline stays visible over any cell palette. Just outside its
+            <strong> top-left corner</strong> sits a small <strong>icon of the active brush</strong>
+            &mdash; the footprint shape for the CA-grid brush, the armed action for the agent brush
+            &mdash; the same glyph as the button that armed it, on a dark chip so it reads over any
+            palette. Toggle both with <strong>Show brush cursor</strong> in the brush panel.
           </p>
 
           <h3 className={styles.h3}>Manual Brush</h3>
