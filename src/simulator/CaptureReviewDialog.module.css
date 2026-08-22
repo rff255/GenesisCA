@@ -1,0 +1,154 @@
+/* Capture review dialog — the modal that shows a finished screenshot /
+   recording BEFORE it is written anywhere. Its own module (rather than reusing
+   SaveProjectDialog.module.css) because it needs a much wider card and a media
+   pane; everything else follows the same tokens so the two read as one family. */
+
+.backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10000;
+}
+
+.dialog {
+  width: 640px;
+  max-width: calc(100vw - 32px);
+  max-height: calc(100vh - 32px);
+  display: flex;
+  flex-direction: column;
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+  color: var(--color-text-secondary);
+  font-size: var(--font-sm);
+}
+
+.title {
+  padding: var(--space-5) var(--space-6);
+  border-bottom: 1px solid var(--color-border);
+  font-weight: 600;
+  font-size: var(--font-base);
+  color: var(--color-text-primary);
+}
+
+.body {
+  padding: var(--space-6);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  min-height: 0;
+  overflow: auto;
+}
+
+/* The preview pane. A checkerboard ground so a TRANSPARENT PNG (an agents-only
+   model with no background colour saves see-through) reads as transparent
+   rather than as an ambiguous dark rectangle. */
+.preview {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 160px;
+  max-height: 46vh;
+  padding: var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background-color: #1a1a1e;
+  background-image:
+    linear-gradient(45deg, #26262c 25%, transparent 25%, transparent 75%, #26262c 75%),
+    linear-gradient(45deg, #26262c 25%, transparent 25%, transparent 75%, #26262c 75%);
+  background-size: 16px 16px;
+  background-position: 0 0, 8px 8px;
+}
+
+.media {
+  max-width: 100%;
+  max-height: 42vh;
+  object-fit: contain;
+  display: block;
+}
+
+.meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-5);
+  color: var(--color-text-tertiary);
+  font-size: var(--font-xs);
+}
+
+.metaItem {
+  white-space: nowrap;
+}
+
+.metaKey {
+  color: var(--color-text-secondary);
+  font-weight: 500;
+  margin-right: var(--space-2);
+}
+
+.hint {
+  color: var(--color-text-tertiary);
+  font-size: var(--font-xs);
+  line-height: 1.35;
+}
+
+/* Inline status after a save attempt (a cancelled OS Save As keeps the capture
+   here, so it is said IN the dialog rather than as a toast that flies past). */
+.note {
+  color: var(--color-accent);
+  font-size: var(--font-xs);
+  line-height: 1.35;
+}
+
+.actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  padding: var(--space-5) var(--space-6);
+  border-top: 1px solid var(--color-border);
+}
+
+.spacer {
+  flex: 1;
+}
+
+.btnPrimary,
+.btnSecondary {
+  padding: var(--space-3) var(--space-6);
+  border-radius: var(--radius-md);
+  font-size: var(--font-sm);
+  font-weight: 500;
+  cursor: pointer;
+  transition: background var(--duration-base), border-color var(--duration-base), color var(--duration-base);
+}
+
+.btnPrimary {
+  background: var(--color-accent);
+  border: 1px solid var(--color-accent);
+  color: var(--color-bg-canvas);
+}
+
+.btnPrimary:hover:not(:disabled) {
+  background: var(--color-accent-hover);
+  border-color: var(--color-accent-hover);
+}
+
+.btnPrimary:disabled,
+.btnSecondary:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.btnSecondary {
+  background: transparent;
+  border: 1px solid var(--color-border);
+  color: var(--color-text-tertiary);
+}
+
+.btnSecondary:hover:not(:disabled) {
+  color: var(--color-text-secondary);
+  border-color: var(--color-border-muted);
+}
