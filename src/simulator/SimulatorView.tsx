@@ -45,6 +45,7 @@ import { CsvImportDialog, type CsvImportResult } from './CsvImportDialog';
 import { CsvExportDialog, type CsvExportResult } from './CsvExportDialog';
 import { GeoTiffImportDialog, type GeoTiffImportResult } from './GeoTiffImportDialog';
 import { GeoJsonImportDialog, type GeoJsonImportResult } from './GeoJsonImportDialog';
+import { CaptureReviewDialog, type CaptureKind, type CaptureReviewData } from './CaptureReviewDialog';
 import { GEOJSON_PAINT_CHUNK } from './geojsonImport';
 import { GEOTIFF_SUPPORTED } from './geotiffLoader';
 import type { CsvAgentRow } from './csvImport';
@@ -3219,9 +3220,12 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
         await awaitStateLoad(applySimulationState(savedBoard, { adaptDims: true, trackLoad: true }));
         return true;
       },
-      screenshot: () => handleScreenshot('save'),
+      // `review: false` on both — an experiment runs unattended, so a capture
+      // review modal would stall the whole sweep waiting for a click that is
+      // never coming. These write straight out, exactly as they always did.
+      screenshot: () => handleScreenshot('save', false),
       startRecording: () => startRecording(),
-      stopRecording: () => stopRecording(),
+      stopRecording: () => stopRecording(false),
       modelAttrsSnapshot: () => ({ ...runtimeModelAttrsLatest.current }),
       seedPolicy: model.overseerConfig?.seedPolicy ?? 'none',
       baseSeed: model.overseerConfig?.baseSeed ?? 12345,
@@ -10590,6 +10594,10 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
     editTargetIdRef.current = -1;
     setEditTargetId(-1);
     editPrefillIdRef.current = -1;
+    // A pending capture review belongs to the PREVIOUS model (its filename is
+    // derived from that model's name, and the picture is of its board), so it
+    // closes here too — which is also what releases its object URL.
+    closeCaptureReview();
     draw();
   }, [modelVersion, draw]);
 
@@ -12615,6 +12623,17 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
     initWorkerWithDimensions(model.properties.gridWidth, model.properties.gridHeight, undefined, 'Recompiling…');
   };
 
+  // ── Capture review ────────────────────────────────────────────────────────
+  // A finished screenshot / recording is REVIEWED before anything is written:
+  // the blob is parked here and the modal below shows it. The ref is the
+  // synchronous mirror the keyboard handlers read (a keypress in the same tick
+  // as the opening click must already be guarded), and every mutation goes
+  // through the two setters so it cannot drift from the state.
+  const [captureReview, setCaptureReview] = useState<CaptureReviewData | null>(null);
+  const captureReviewRef = useRef(false);
+  const openCaptureReview = (d: CaptureReviewData) => { captureReviewRef.current = true; setCaptureReview(d); };
+  const closeCaptureReview = () => { captureReviewRef.current = false; setCaptureReview(null); };
+
   /** Release the streaming encoder and clear every recording buffer/counter.
    *  Called from start (fresh slate), stop, and every abort site. */
   const resetRecordingState = () => {
@@ -12664,7 +12683,11 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
     });
   };
 
-  const stopRecording = async () => {
+  /** @param review  Open the capture review dialog with the finished blob
+   *  instead of writing it straight out. TRUE for every UI path; FALSE for the
+   *  Overseer's `ovStopRecording`, which runs unattended — a modal there would
+   *  stall the whole sweep on a click that is never coming. */
+  const stopRecording = async (review = true) => {
     // Clear the ref synchronously — setRecording is async, and a `stepped`
     // landing in between must not feed a stream encoder we are about to finish.
     recordingRef.current = false;
@@ -12690,7 +12713,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
         const busyHandle = beginBusy('Finishing WebM…');
         try {
           const blob = await enc.finish();
-          await saveRecording(blob, `${fname}_recording.webm`);
+          await deliverCapture(blob, `${fname}_recording.webm`, 'webm', review, recordCountRef.current);
         } catch (err) {
           console.error('WebM encode failed', err);
           alert(`WebM encode failed: ${err instanceof Error ? err.message : String(err)}`);
@@ -12709,7 +12732,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
             pending.map(f => f.frame), targetFpsRef.current || 30, recordQualityRef.current,
             pending.map(f => f.t),
           );
-          await saveRecording(blob, `${fname}_recording.webm`);
+          await deliverCapture(blob, `${fname}_recording.webm`, 'webm', review, pending.length);
         } catch (err) {
           console.error('WebM encode failed', err);
           alert(`WebM encode failed: ${err instanceof Error ? err.message : String(err)}`);
@@ -12743,7 +12766,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
         const blob = await encodeFramesToWebM(
           frames, fps, recordQualityRef.current, recordedFrameTimes.current,
         );
-        await saveRecording(blob, `${fname}_recording.webm`);
+        await deliverCapture(blob, `${fname}_recording.webm`, 'webm', review, frames.length);
       } catch (err) {
         console.error('WebM encode failed', err);
         alert(`WebM encode failed: ${err instanceof Error ? err.message : String(err)}`);
@@ -12773,7 +12796,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
         busyHandle.end();
       }
       if (import.meta.env.DEV) console.info('[recording] GIF', stats);
-      await saveRecording(blob, `${fname}_recording.gif`);
+      await deliverCapture(blob, `${fname}_recording.gif`, 'gif', review, frames.length);
     }
     resetRecordingState();
   };
@@ -12809,6 +12832,24 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
     }
   };
 
+  /** THE ONE disposition point for a finished capture blob — every screenshot
+   *  path (2D view / 2D simulation / 3D) and every recording path (streaming
+   *  WebM, buffered WebM, GIF) funnels through here once its bytes exist.
+   *
+   *  `review` (the UI default) parks the blob in the review modal, so nothing
+   *  is written until the user has SEEN what was captured and said so; the
+   *  direct write is kept for the unattended Overseer paths. Fire-and-forget by
+   *  design once the dialog is open: the caller's `resetRecordingState()` must
+   *  run immediately either way (the review holds only the Blob, never the
+   *  frame buffers), and the Overseer must not be blocked on a human. */
+  const deliverCapture = async (
+    blob: Blob, filename: string, kind: CaptureKind, review: boolean, frames?: number,
+  ): Promise<void> => {
+    if (review) { openCaptureReview({ blob, filename, kind, frames }); return; }
+    if (kind === 'png') { triggerDownload(blob, filename); return; }
+    await saveRecording(blob, filename);
+  };
+
 
   const handleCopyCode = () => {
     navigator.clipboard.writeText(compiledCode).catch(() => {});
@@ -12841,6 +12882,12 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
     const handler = (e: KeyboardEvent) => {
       const tag = (document.activeElement as HTMLElement)?.tagName;
       if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+      // The capture review modal owns the keyboard while it is up: Space/Enter
+      // must not step or play behind it, and its own capture-phase Escape must
+      // not also reach the Esc = Reset arm below. (The dialog's handler already
+      // stops that propagation; this is the belt to its braces, and it also
+      // covers Space/Enter/Ctrl+C, which it does not intercept.)
+      if (captureReviewRef.current) return;
       if ((e.ctrlKey || e.metaKey) && (e.key === 'c' || e.key === 'v' || e.key === 'x')) {
         // 3D: the region clipboard is ANCHORED ON THE BRUSH PLANE cursor (the
         // 2D `cursorGrid` is an inert fit-mapping in 3D and would corrupt cells
@@ -13173,27 +13220,35 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
    *  shell) may refuse `clipboard.write` outright — every refusal is TOASTED,
    *  never silent, because "nothing happened" is indistinguishable from a
    *  successful copy until the user tries to paste. */
-  const copyBlobToClipboard = async (blob: Blob): Promise<void> => {
+  const copyBlobToClipboard = async (blob: Blob): Promise<boolean> => {
     try {
       if (typeof ClipboardItem === 'undefined' || !navigator.clipboard?.write) {
         throw new Error('the clipboard image API is not available here');
       }
       await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
       showAgentNotice('Screenshot copied to the clipboard', 'info');
+      return true;
     } catch (err) {
       console.error('Screenshot copy failed', err);
       showAgentNotice(`Copy failed — ${err instanceof Error ? err.message : String(err)}`);
+      return false;
     }
   };
-  const handleScreenshot = (action: ScreenshotAction = 'save') => {
-    // Save: via saveBinaryFile (native Save As in the Tauri shell, blob download
-    // on the web). Cancelling is silent — nothing was lost and a screenshot is
-    // trivially retaken; a real write FAILURE is surfaced.
-    // Copy: the same blob, to the clipboard.
+  /** @param review  Show the capture review dialog with the finished PNG rather
+   *  than writing it straight out. TRUE for every UI path; FALSE for the
+   *  Overseer's `ovScreenshot`, which runs unattended (a modal per replicate
+   *  would stall the sweep). Ignored for `action === 'copy'`, which IS the
+   *  explicit no-dialog shortcut. */
+  const handleScreenshot = (action: ScreenshotAction = 'save', review = true) => {
+    // Copy: a deliberate ONE-STEP shortcut — the blob goes straight to the
+    // clipboard, no review (the user already said what they want done with it).
+    // Save: park it in the review dialog, which then routes the confirmed save
+    // through saveBinaryFile (native Save As in the Tauri shell, blob download
+    // on the web) exactly as before.
     const downloadBlob = (blob: Blob) => {
       if (action === 'copy') { void copyBlobToClipboard(blob); return; }
       const name = model.properties.name.toLowerCase().replace(/\s+/g, '_').replace(/[^a-z0-9_]/g, '') || 'genesis';
-      void triggerDownload(blob, `${name}_gen${generationRef.current}.png`);
+      void deliverCapture(blob, `${name}_gen${generationRef.current}.png`, 'png', review);
     };
     // Mirrors the recording capture: one path for the DISPLAY the user sees, with the
     // chosen scope — "simulation" crops to the drawn world rectangle (no letterbox
@@ -14424,6 +14479,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       if (!visibleRef.current) return;
       if (e.key !== 'f' && e.key !== 'F') return;
       if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
+      if (captureReviewRef.current) return;   // the review modal owns the keyboard
       const ae = document.activeElement as HTMLElement | null;
       const tag = ae?.tagName;
       if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || (ae?.isContentEditable ?? false)) return;
@@ -15032,9 +15088,12 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
           const settingsLocked = recording || encodingWebM;
           return (
             <div className={styles.captureCluster}>
-              {/* Screenshot: a plain CLICK saves, unchanged. Hover or right-click
-                  opens the two dispositions \u2014 Save (identical to the click) and
-                  Copy (the same PNG, to the clipboard). Its OWN relative wrapper
+              {/* Screenshot: a plain CLICK takes the shot and opens the REVIEW
+                  dialog (see it, then Save / Copy / discard). Hover or
+                  right-click opens the two dispositions \u2014 Save\u2026 (identical to
+                  the click, i.e. review-then-save) and Copy, the deliberate
+                  one-step shortcut that puts the same PNG straight on the
+                  clipboard with no dialog in between. Its OWN relative wrapper
                   so the menu anchors to the camera button and hovering it cannot
                   pop the settings chip's popover open instead. */}
               <div
@@ -15047,19 +15106,19 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
                 <button
                   className={styles.transportBtn}
                   onClick={() => { setOverlayPopup(null); handleScreenshot('save'); }}
-                  title={`Screenshot PNG${is3D ? '' : ` (${captureScope === 'simulation' ? 'simulation' : 'current view'})`} \u2014 click to save, hover or right-click for Save / Copy; area in the chip to the right`}
+                  title={`Screenshot PNG${is3D ? '' : ` (${captureScope === 'simulation' ? 'simulation' : 'current view'})`} \u2014 click to capture and review it before saving; hover or right-click for Save / Copy; area in the chip to the right`}
                 >{'\uD83D\uDCF7'}</button>
                 {overlayPopup === 'shot' && (
                   <div className={styles.shotMenu} data-sim-overlay>
                     <button
                       className={styles.shotMenuItem}
                       onClick={() => { setOverlayPopup(null); handleScreenshot('save'); }}
-                      title="Save the PNG to a file (same as clicking the camera)"
+                      title="Take the shot and review it before saving (same as clicking the camera)"
                     >Save{'\u2026'}</button>
                     <button
                       className={styles.shotMenuItem}
                       onClick={() => { setOverlayPopup(null); handleScreenshot('copy'); }}
-                      title="Copy the PNG to the clipboard instead of saving a file"
+                      title="Copy the PNG straight to the clipboard — no review dialog"
                     >Copy</button>
                   </div>
                 )}
@@ -15075,8 +15134,8 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
               ) : (
                 <button
                   className={styles.transportBtn}
-                  onClick={stopRecording}
-                  title={`Stop & Save ${effWebm ? 'WebM' : 'GIF'} (${!is3D && captureScope === 'simulation' ? 'simulation' : 'current view'})${recordDroppedCount > 0 ? ` \u2014 ${recordDroppedCount} frame(s) skipped so far` : ''}${recordThrottled ? ' \u2014 the simulation is being held back while the encoder catches up' : ''}`}
+                  onClick={() => { void stopRecording(); }}
+                  title={`Stop ${effWebm ? 'WebM' : 'GIF'} recording (${!is3D && captureScope === 'simulation' ? 'simulation' : 'current view'}) — encodes it, then shows it for review before saving${recordDroppedCount > 0 ? ` \u2014 ${recordDroppedCount} frame(s) skipped so far` : ''}${recordThrottled ? ' \u2014 the simulation is being held back while the encoder catches up' : ''}`}
                   style={{ color: '#e05050' }}
                 >
                   {'\u23F9'} {recordFrameCount}
@@ -17099,6 +17158,28 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
             deletePreset(id);
           }}
           onCancel={() => setPresetToDelete(null)}
+        />
+      )}
+      {/* Capture review — the finished screenshot / recording, before anything
+          is written. Its backdrop covers the whole app, which is what keeps a
+          second capture from being started on top of a pending one. */}
+      {captureReview && (
+        <CaptureReviewDialog
+          capture={captureReview}
+          onSave={saveBlobFile}
+          onCopy={captureReview.kind === 'png' ? copyBlobToClipboard : undefined}
+          onFinished={closeCaptureReview}
+          onCancel={() => {
+            const isShot = captureReview.kind === 'png';
+            closeCaptureReview();
+            // A discarded screenshot is trivially retaken (info); a discarded
+            // recording's bytes are GONE (warning) — the same severity split
+            // the old save-cancelled toasts made.
+            showAgentNotice(
+              isShot ? 'Screenshot discarded — nothing was saved' : 'Recording discarded — nothing was saved',
+              isShot ? 'info' : 'warning',
+            );
+          }}
         />
       )}
       {presetToOverwrite && (
