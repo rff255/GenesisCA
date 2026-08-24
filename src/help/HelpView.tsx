@@ -1383,6 +1383,51 @@ export function HelpView() {
             it always did. The file format is unchanged otherwise, so a macro exported from a newer
             build still imports into an older one &mdash; it simply ignores the extra definitions.
           </p>
+
+          <h3 className={styles.h3}>Importing a Macro &mdash; Import as new / Remap / Discard</h3>
+          <p className={styles.p}>
+            Right-click the canvas and choose <strong>Import Macro&hellip;</strong>. If the file
+            carries definitions this model does not already have, a dialog asks what to do with
+            each one:
+          </p>
+          <ul className={styles.list}>
+            <li><strong>Import as new</strong> &mdash; create it here, with a fresh id (and a
+              &quot;(imported)&quot; suffix if the name is already taken). Definitions that
+              reference each other are kept consistent: a sub-attribute imported alongside its
+              parent points at the <em>new</em> parent.</li>
+            <li><strong>Remap to existing</strong> &mdash; point the macro at an element this model
+              already has. Only <em>type-compatible</em> elements of the same kind are offered
+              (a Binary attribute is never offered for a Tag one), and an exact
+              <strong> name + type</strong> match is pre-selected as a suggestion &mdash; shown,
+              never applied silently.</li>
+            <li><strong>Discard</strong> &mdash; leave the reference pointing at nothing. That is
+              exactly what happened before this feature existed: the node arrives with an amber
+              <strong> !</strong> badge and you re-point it by hand. It is never a default, but it
+              is always one click away.</li>
+          </ul>
+          <p className={styles.p}>
+            <strong>References this model already has are never asked about</strong> &mdash; they
+            are summarised as &quot;already present&quot;. So re-importing a macro into the model
+            it came from opens no dialog at all and adds nothing, and an older <code>.gcamacro</code>
+            that carries no definitions imports exactly as it always did.
+          </p>
+          <p className={styles.p}>
+            Two things a remap cannot simply re-point, and what happens instead. A macro also
+            stores values that only mean something <em>relative</em> to an element &mdash; a tag
+            option index, a neighborhood tag name, an indicator category, a face label. Those are
+            re-derived <strong>by name</strong>, so remapping onto an element whose tag options are
+            in a different order still selects the right options. Where a name has{' '}
+            <strong>no counterpart</strong> in the target it is <strong>left as it was and
+            reported</strong>, never silently changed to something plausible &mdash; an
+            out-of-range option shows as an unselected dropdown, and an unknown tag name is already
+            badged. The dialog warns about each case before you import.
+          </p>
+          <p className={styles.p}>
+            Definitions for a layer that is switched off &mdash; bond attributes with Bonds
+            disabled, agent elements with Bond-Graph Agents off, face palettes with Variegated
+            Cells off &mdash; are <strong>imported anyway and marked inert</strong>, with the
+            setting to enable named on the row. Importing never turns a capability on for you.
+          </p>
         </section>
 
         {/* ============================================================ */}

@@ -26,7 +26,10 @@ import {
   buildReferenceBundle, collectMacroExportDefs, collectMacroReferences, macroOriginOf,
 } from '../../model/macroReferences';
 import type { CollectedReferences } from '../../model/macroReferences';
+import { applyImportPlan, planImport, planNeedsDialog } from '../../model/macroImportPlan';
+import type { ImportPlan, ImportRow } from '../../model/macroImportPlan';
 import { MacroExportDialog } from '../../components/MacroExportDialog';
+import { MacroImportDialog } from '../../components/MacroImportDialog';
 import { getNodeDef, getAllNodeDefs } from './nodes/registry';
 import { parseHandleId, handleId } from './types';
 import type { PortDef, NodeTypeDef } from './types';
@@ -622,7 +625,7 @@ interface ContextMenuState {
 // ---------------------------------------------------------------------------
 
 export function GraphEditorInner() {
-  const { model, modelVersion, setGraph, setAgentGraph, setOverseerGraph, addMacro, importMacro, updateMacro, removeMacro } = useModel();
+  const { model, modelVersion, setGraph, setAgentGraph, setOverseerGraph, addMacro, importMacro, importMacroBundle, updateMacro, removeMacro } = useModel();
   // Bond-Graph Agents: which rule graph is shown (Cells vs Agents). Seeded from
   // the persisted snapshot (GraphEditor unmounts on a Simulator round-trip), and
   // clamped to 'cells' if the Agents topology is off. The graph-swap effect +
@@ -2707,6 +2710,26 @@ export function GraphEditorInner() {
     setTimeout(() => importMacroInputRef.current?.click(), 0);
   }, [contextMenu]);
 
+  /** Pending macro import — the resolution plan awaiting the dialog. */
+  const [macroImportState, setMacroImportState] = useState<
+    { plan: ImportPlan; pos: { x: number; y: number } } | null
+  >(null);
+
+  /** Apply a resolved plan: ONE atomic dispatch carrying the rewritten defs AND
+   *  the elements they now name, then instance the macro. The new top-level def
+   *  id is `defs[0].id`, so nothing is read back out of state. */
+  const commitMacroImport = useCallback((
+    plan: ImportPlan, rows: ImportRow[], pos: { x: number; y: number },
+  ) => {
+    const applied = applyImportPlan({ ...plan, rows }, model);
+    importMacroBundle(applied.defs, applied.elements);
+    const top = applied.defs[0];
+    if (top) addNodeAtPosition('macro', pos, { macroDefId: top.id }, top.name);
+    // D8 — whatever a remap could not carry over by NAME is REPORTED, never
+    // guessed at. The compile gate + the amber badges are the other half.
+    if (applied.notices.length > 0) console.warn(`Macro import — ${applied.notices.join('; ')}`);
+  }, [model, importMacroBundle, addNodeAtPosition]);
+
   const handleMacroFileSelected = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     e.target.value = '';
@@ -2715,20 +2738,22 @@ export function GraphEditorInner() {
     pendingImportPos.current = null;
     file.text().then(text => {
       // ONE reader for the format (`parseMacroFile`), which never gates on
-      // `schemaVersion` and drops any malformed optional field. M1 writes the
-      // richer file; consuming its `references` / `macroDefs` is M2, so import
-      // still takes exactly the historical path.
-      let macroDef: Parameters<typeof importMacro>[0];
+      // `schemaVersion` and drops any malformed optional field.
+      let parsed: ReturnType<typeof parseMacroFile>;
       try {
-        macroDef = parseMacroFile(text).macroDef as Parameters<typeof importMacro>[0];
+        parsed = parseMacroFile(text);
       } catch (err) {
         alert(err instanceof Error ? err.message : 'Invalid .gcamacro file');
         return;
       }
-      const newId = importMacro(macroDef);
-      addNodeAtPosition('macro', finalPos, { macroDefId: newId }, macroDef.name);
+      const plan = planImport(parsed, model);
+      // NO unresolved reference ⇒ NO dialog. The import is exactly today's — and
+      // this is what keeps every existing `.gcamacro` (and a re-import into the
+      // model the macro came from) on the historical path.
+      if (!planNeedsDialog(plan)) { commitMacroImport(plan, plan.rows, finalPos); return; }
+      setMacroImportState({ plan, pos: finalPos });
     });
-  }, [importMacro, addNodeAtPosition]);
+  }, [model, commitMacroImport]);
 
   const duplicateNode = useCallback((linked = false) => {
     if (!contextMenu || contextMenu.target.type !== 'node') return;
@@ -4564,6 +4589,19 @@ export function GraphEditorInner() {
             setMacroExport(null);
           }}
           onCancel={() => setMacroExport(null)}
+        />
+      )}
+      {/* Import Macro — the per-element resolution (Import as new / Remap /
+          Discard). Same placement rationale as the export dialog above. */}
+      {macroImportState && (
+        <MacroImportDialog
+          plan={macroImportState.plan}
+          model={model}
+          onImport={rows => {
+            commitMacroImport(macroImportState.plan, rows, macroImportState.pos);
+            setMacroImportState(null);
+          }}
+          onCancel={() => setMacroImportState(null)}
         />
       )}
       {namePrompt && (() => {

@@ -1,0 +1,77 @@
+/* The import dialog reuses the EXPORT dialog's chrome verbatim (backdrop,
+   card, header, sections, rows, buttons) so the two read as one feature and the
+   shared styling cannot drift. Only the controls this dialog adds live here. */
+
+.controls {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex: none;
+  padding-top: 1px;
+}
+
+/* The three-way action picker. A segmented control, not a dropdown: three fixed
+   choices, all of which must be readable at a glance (the capture-popover rule). */
+.seg {
+  display: inline-flex;
+  border: 1px solid var(--color-widget-border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
+.segBtn {
+  background: transparent;
+  border: none;
+  border-right: 1px solid var(--color-widget-border);
+  padding: 3px var(--space-3);
+  font-size: var(--font-xs);
+  color: var(--color-text-tertiary);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.segBtn:last-child { border-right: none; }
+
+.segBtn:hover:not(:disabled) { color: var(--color-text-secondary); }
+
+.segOn {
+  background: var(--color-accent-soft);
+  color: var(--color-accent);
+  font-weight: 600;
+}
+
+/* A choice that cannot do anything here is DISABLED IN PLACE with its reason on
+   the tooltip, never hidden — the row must keep its three-slot shape. */
+.segBtn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.segDiscard.segOn {
+  background: var(--color-overlay-row);
+  color: var(--color-text-secondary);
+}
+
+.select {
+  max-width: 160px;
+  background: var(--color-bg-input, var(--color-bg-panel));
+  border: 1px solid var(--color-widget-border);
+  border-radius: var(--radius-md);
+  color: var(--color-text-secondary);
+  font-size: var(--font-xs);
+  padding: 2px var(--space-2);
+}
+
+.suggest { color: var(--color-accent); }
+
+.resolvedList {
+  color: var(--color-text-tertiary);
+  font-size: var(--font-xs);
+  line-height: 1.5;
+  padding: var(--space-2) 0;
+}
+
+.summary {
+  color: var(--color-text-tertiary);
+  font-size: var(--font-xs);
+}

@@ -26,6 +26,7 @@ import type {
   SpriteAsset,
   Variable,
   VariegatedCellsConfig,
+  MacroReferenceBundle,
   TopologyMode,
   CenterBasedConfig,
   OverseerConfig,
@@ -340,6 +341,11 @@ type ModelAction =
   | { type: 'UPDATE_OVERSEER_CONFIG'; changes: Partial<OverseerConfig> }
   | { type: 'UPDATE_CENTER_BASED'; changes: Partial<CenterBasedConfig> }
   | { type: 'ADD_MACRO'; macro: MacroDef }
+  /** M2 — a `.gcamacro` import, resolved. ONE dispatch carrying BOTH halves (the
+   *  rewritten defs and the elements they now name, already at their final ids),
+   *  so the import is atomic by construction: no state to read back between the
+   *  element adds and the macro add, and no half-imported model on a throw. */
+  | { type: 'IMPORT_MACRO_BUNDLE'; macros: MacroDef[]; elements: MacroReferenceBundle }
   | { type: 'UPDATE_MACRO'; id: string; changes: Partial<MacroDef> }
   | { type: 'REMOVE_MACRO'; id: string }
   | { type: 'ADD_INDICATOR'; kind: IndicatorKind }
@@ -1556,6 +1562,39 @@ export function modelReducer(state: ModelState, action: ModelAction): ModelState
         },
       };
 
+    case 'IMPORT_MACRO_BUNDLE': {
+      const el = action.elements;
+      const model = { ...state.model };
+      const append = <T,>(cur: T[] | undefined, add: T[] | undefined): T[] | undefined =>
+        (add && add.length > 0 ? [...(cur ?? []), ...add] : cur);
+      model.attributes = append(model.attributes, el.attributes) ?? model.attributes;
+      if (el.agentAttributes?.length) model.agentAttributes = append(model.agentAttributes, el.agentAttributes);
+      if (el.bondAttributes?.length) model.bondAttributes = append(model.bondAttributes, el.bondAttributes);
+      model.neighborhoods = append(model.neighborhoods, el.neighborhoods) ?? model.neighborhoods;
+      model.mappings = append(model.mappings, el.mappings) ?? model.mappings;
+      if (el.agentMappings?.length) model.agentMappings = append(model.agentMappings, el.agentMappings);
+      if (el.variables?.length) model.variables = append(model.variables, el.variables);
+      if (el.agentVariables?.length) model.agentVariables = append(model.agentVariables, el.agentVariables);
+      model.indicators = append(model.indicators, el.indicators) ?? model.indicators;
+      if (el.sprites?.length) model.sprites = append(model.sprites, el.sprites);
+      // Face palettes / patterns live INSIDE `variegatedCells`, which is why the
+      // import merges that object rather than fanning out to per-space adds
+      // (there is no ADD_FACE_PALETTE action at all). The `enabled` flag is
+      // deliberately untouched: D12 warns about an inert element, never enables
+      // a capability behind the user's back.
+      if (el.facePalettes?.length || el.facePatterns?.length) {
+        const cur: VariegatedCellsConfig = model.variegatedCells
+          ?? { enabled: false, sourceAttributeId: '', facePalettes: [], facePatterns: [] };
+        model.variegatedCells = {
+          ...cur,
+          facePalettes: [...(cur.facePalettes ?? []), ...(el.facePalettes ?? [])],
+          facePatterns: [...(cur.facePatterns ?? []), ...(el.facePatterns ?? [])],
+        };
+      }
+      model.macroDefs = [...(model.macroDefs ?? []), ...action.macros];
+      return { ...state, isDirty: true, model };
+    }
+
     case 'UPDATE_MACRO':
       return {
         ...state,
@@ -2206,6 +2245,11 @@ export interface ModelContextValue {
   /** Deep-clones a MacroDef with fresh IDs and adds it to the project.
    *  Returns the new macroDef id (for referencing from a MacroNode). */
   importMacro: (raw: MacroDef) => string;
+  /** M2 — a resolved `.gcamacro` import: the rewritten defs plus the elements
+   *  they now name, both already at their FINAL ids, in ONE atomic dispatch.
+   *  The caller already knows the new top-level def id (`macros[0].id`), so
+   *  nothing has to be read back out of state. */
+  importMacroBundle: (macros: MacroDef[], elements: MacroReferenceBundle) => void;
   updateMacro: (id: string, changes: Partial<MacroDef>) => void;
   removeMacro: (id: string) => void;
   addIndicator: (kind: IndicatorKind) => void;
@@ -2415,6 +2459,11 @@ export function ModelProvider({ children }: { children: ReactNode }) {
     },
     [],
   );
+  const importMacroBundle = useCallback(
+    (macros: MacroDef[], elements: MacroReferenceBundle) =>
+      dispatch({ type: 'IMPORT_MACRO_BUNDLE', macros, elements }),
+    [],
+  );
   const updateMacro = useCallback(
     (id: string, changes: Partial<MacroDef>) =>
       dispatch({ type: 'UPDATE_MACRO', id, changes }),
@@ -2603,6 +2652,7 @@ export function ModelProvider({ children }: { children: ReactNode }) {
       updateOverseerConfig,
       addMacro,
       importMacro,
+      importMacroBundle,
       updateMacro,
       removeMacro,
       addIndicator,
@@ -2681,6 +2731,7 @@ export function ModelProvider({ children }: { children: ReactNode }) {
       updateOverseerConfig,
       addMacro,
       importMacro,
+      importMacroBundle,
       updateMacro,
       removeMacro,
       addIndicator,
