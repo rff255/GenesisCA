@@ -16,6 +16,8 @@ import { InlineBoolSelect, InlineNumberInput, InlineTagSelect, NumberField } fro
 import styles from './PanelContent.module.css';
 import { ColorField } from '../vpl/widgets/ColorField';
 import { hexToRgba, rgbaToHex, isOpaque, OPAQUE } from '../../model/colorHex';
+import { SpriteSheetDialog } from '../../components/SpriteSheetDialog';
+import { sheetCellCount, sheetFrameIndices } from '../../model/spriteSheet';
 
 // (The local 6-digit-only rgbToHex/hexToRgb pair that used to live here is gone —
 //  ColorSwatch now routes through the shared alpha-aware helpers in colorHex.ts.
@@ -652,8 +654,12 @@ export function MappingsPanelContent({ mode = 'list' }: PanelContentProps = {}) 
     } catch { window.alert('Could not read one of the frame images.'); }
   };
 
-  // Import a single SPRITE SHEET image (sliced into frames by cols/rows).
+  // Import a single SPRITE SHEET image. The GRIDDING dialog is the import step —
+  // a sheet is only meaningful once its grid AND the cells that are the animation
+  // are chosen, so nothing is added to the model until Apply (Cancel discards).
   const sheetInputRef = useRef<HTMLInputElement>(null);
+  const [pendingSheet, setPendingSheet] = useState<{ name: string; dataUrl: string; mimeType: string } | null>(null);
+  const [sheetEditId, setSheetEditId] = useState<string | null>(null);
   const handleSheetPick = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     e.target.value = '';
@@ -662,7 +668,7 @@ export function MappingsPanelContent({ mode = 'list' }: PanelContentProps = {}) 
     try {
       const dataUrl = await readFileAsDataUrl(file);
       const baseName = file.name.replace(/\.[^.]+$/, '') || 'sheet';
-      addSprite({ id: genSpriteId(), name: baseName, dataUrl, mimeType: file.type || 'image/png', scale: 1, loop: true, sheet: { cols: 4, rows: 4 } });
+      setPendingSheet({ name: baseName, dataUrl, mimeType: file.type || 'image/png' });
     } catch { window.alert('Could not read the sheet image.'); }
   };
 
@@ -748,6 +754,9 @@ export function MappingsPanelContent({ mode = 'list' }: PanelContentProps = {}) 
   const selectedAgentViewId = selectedAgent?.isAttributeToColor ? selectedAgentId : null;
   const selectedAgentInputId = selectedAgent && !selectedAgent.isAttributeToColor ? selectedAgentId : null;
   const selectedSprite = selectedSpriteId ? sprites.find(s => s.id === selectedSpriteId) : undefined;
+  /** The sprite whose sheet grid is being edited (null when the dialog is shut).
+   *  Resolved live, so deleting the sprite mid-dialog simply closes it. */
+  const sheetEditSprite = sheetEditId ? sprites.find(s => s.id === sheetEditId) ?? null : null;
 
   const handleDelete = () => {
     if (selectedCellId) {
@@ -1017,7 +1026,9 @@ export function MappingsPanelContent({ mode = 'list' }: PanelContentProps = {}) 
               const srcIdx = spriteReorder.dragState ? sprites.findIndex(x => x.id === spriteReorder.dragState!.id) : -1;
               const showBefore = spriteReorder.dragState?.overIdx === i && srcIdx !== i && srcIdx !== i - 1;
               const showAfter = spriteReorder.dragState?.overIdx === sprites.length && i === sprites.length - 1 && srcIdx !== i;
-              const frameCount = s.frames?.length ?? (s.sheet ? (s.sheet.count ?? s.sheet.cols * s.sheet.rows) : 0);
+              // The badge counts the frames that will actually play, so a sheet
+              // with a hand-picked selection reads its own length (not the grid's).
+              const frameCount = s.frames?.length ?? (s.sheet ? sheetFrameIndices(s.sheet).length : 0);
               return (
                 <div
                   key={s.id}
@@ -1210,33 +1221,29 @@ export function MappingsPanelContent({ mode = 'list' }: PanelContentProps = {}) 
                   onChange={e => updateSprite(s.id, { loop: e.target.checked })} />
                 Loop frames
               </label>
-              {/* Sprite sheet slicing params (only for a sheet-sourced sprite). */}
-              {s.sheet && (
-                <div className={styles.field}>
-                  <label className={styles.fieldLabel}>Sheet grid (cols × rows, frames)</label>
-                  <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', alignItems: 'center' }}>
-                    <NumberField className={styles.textInput} style={{ width: 52 }} integer min={1} value={s.sheet.cols}
-                      onNumber={n => updateSprite(s.id, { sheet: { ...s.sheet!, cols: Math.max(1, Math.round(n)) } })} title="Columns" />
-                    <span style={{ color: '#7a8a9a' }}>×</span>
-                    <NumberField className={styles.textInput} style={{ width: 52 }} integer min={1} value={s.sheet.rows}
-                      onNumber={n => updateSprite(s.id, { sheet: { ...s.sheet!, rows: Math.max(1, Math.round(n)) } })} title="Rows" />
-                    <NumberField className={styles.textInput} style={{ width: 60 }} integer min={1} value={s.sheet.count ?? s.sheet.cols * s.sheet.rows}
-                      onNumber={n => updateSprite(s.id, { sheet: { ...s.sheet!, count: Math.max(1, Math.round(n)) } })} title="Frame count (row-major)" />
+              {/* Sprite sheet (only for a sheet-sourced sprite). The GRIDDING —
+                  cols/rows/margins/gaps AND which cells, in which order, are the
+                  animation — lives in its own dialog: a sheet needs the image on
+                  screen to be gridded, which a panel column cannot give. */}
+              {s.sheet && (() => {
+                const cells = sheetCellCount(s.sheet);
+                const frames = sheetFrameIndices(s.sheet).length;
+                return (
+                  <div className={styles.field}>
+                    <label className={styles.fieldLabel}>Sprite sheet</label>
+                    <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                      <span style={{ color: '#7a8a9a', fontSize: '0.66rem' }}>
+                        {s.sheet.cols} × {s.sheet.rows} grid · {frames} of {cells} cell{cells === 1 ? '' : 's'} used
+                        {s.sheet.frames?.length ? ' (custom order)' : ''}
+                      </span>
+                      <button className={styles.addButton} onClick={() => setSheetEditId(s.id)}
+                        title="Set the grid and pick which cells — in which order — are the animation">
+                        Edit sheet grid…
+                      </button>
+                    </div>
                   </div>
-                  <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', alignItems: 'center', marginTop: 3 }} title="Pixel margin to the first cell and spacing between cells">
-                    <span style={{ color: '#7a8a9a', fontSize: '0.62rem' }}>margin</span>
-                    <NumberField className={styles.textInput} style={{ width: 44 }} integer min={0} value={s.sheet.marginX ?? 0}
-                      onNumber={n => updateSprite(s.id, { sheet: { ...s.sheet!, marginX: Math.max(0, Math.round(n)) } })} title="Margin X" />
-                    <NumberField className={styles.textInput} style={{ width: 44 }} integer min={0} value={s.sheet.marginY ?? 0}
-                      onNumber={n => updateSprite(s.id, { sheet: { ...s.sheet!, marginY: Math.max(0, Math.round(n)) } })} title="Margin Y" />
-                    <span style={{ color: '#7a8a9a', fontSize: '0.62rem' }}>gap</span>
-                    <NumberField className={styles.textInput} style={{ width: 44 }} integer min={0} value={s.sheet.spacingX ?? 0}
-                      onNumber={n => updateSprite(s.id, { sheet: { ...s.sheet!, spacingX: Math.max(0, Math.round(n)) } })} title="Spacing X" />
-                    <NumberField className={styles.textInput} style={{ width: 44 }} integer min={0} value={s.sheet.spacingY ?? 0}
-                      onNumber={n => updateSprite(s.id, { sheet: { ...s.sheet!, spacingY: Math.max(0, Math.round(n)) } })} title="Spacing Y" />
-                  </div>
-                </div>
-              )}
+                );
+              })()}
               {/* Rotation — default facing (clock), orient-to-velocity, fixed offset. */}
               <div className={styles.field}>
                 <label className={styles.fieldLabel}>Rotation</label>
@@ -1399,6 +1406,35 @@ export function MappingsPanelContent({ mode = 'list' }: PanelContentProps = {}) 
             </>)}
           </div>
         </div>
+      )}
+
+      {/* SPRITE SHEET gridding. Both mounts of this panel (list + detail) render
+          their own dialog — the list one opens on IMPORT, the detail one on
+          "Edit sheet grid…" — and each is driven by its own state, so they can
+          never fight over one instance. */}
+      {pendingSheet && (
+        <SpriteSheetDialog
+          dataUrl={pendingSheet.dataUrl}
+          initial={{ cols: 4, rows: 4 }}
+          title={`Import sprite sheet — ${pendingSheet.name}`}
+          confirmLabel="Add sprite"
+          onCancel={() => setPendingSheet(null)}
+          onApply={sheet => {
+            const id = genSpriteId();
+            addSprite({ id, name: pendingSheet.name, dataUrl: pendingSheet.dataUrl, mimeType: pendingSheet.mimeType, scale: 1, loop: true, sheet });
+            setPendingSheet(null);
+            setSelectedId(SPRITE_PREFIX + id);
+          }}
+        />
+      )}
+      {sheetEditSprite?.sheet && (
+        <SpriteSheetDialog
+          dataUrl={sheetEditSprite.dataUrl}
+          initial={sheetEditSprite.sheet}
+          title={`Sprite sheet — ${sheetEditSprite.name}`}
+          onCancel={() => setSheetEditId(null)}
+          onApply={sheet => { updateSprite(sheetEditSprite.id, { sheet }); setSheetEditId(null); }}
+        />
       )}
     </>
   );

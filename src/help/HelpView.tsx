@@ -3128,14 +3128,33 @@ export function HelpView() {
             (PNG / JPEG / GIF / WebP; they travel inside the <code>.gcaproj</code>) &mdash; a
             single image/GIF, <strong>+&nbsp;Frame sequence</strong> (several images become one
             animation, in filename order), or <strong>+&nbsp;Sprite sheet</strong> (one grid
-            image sliced row-major into frames; set columns / rows / count and any
-            margin / spacing).
+            image sliced into frames).
+          </p>
+          <p className={styles.p}>
+            Importing a sheet opens the <strong>sprite-sheet dialog</strong>, where you set the
+            grid (columns / rows and any margin / gap) <em>and</em> <strong>pick which cells are
+            the animation, in which order</strong> &mdash; click a cell to add it as the next
+            frame, click it again to remove it. Real sheets almost never hold just one animation
+            (a walk cycle sits next to an idle pose, a door, a UI icon), so the frames are a
+            <strong> selection</strong> over the grid rather than its first N cells. Because the
+            sprite then holds exactly the frames you want, in your order, setting a
+            <strong> speed</strong> on the <strong>Set Agent Sprite</strong> node is as simple as
+            it is for an imported frame sequence &mdash; no skipping cells you did not ask for.
+            The strip under the sheet is the sequence: <strong>&times;</strong> drops a frame,
+            <strong> &#10697;</strong> repeats one (hold a pose longer), <strong>&#9666;&nbsp;&#9656;</strong>
+            nudge it earlier or later, and <strong>Reverse</strong> / <strong>Ping-pong</strong>
+            (0,1,2&nbsp;&rarr;&nbsp;0,1,2,1) build a cycle in one click. A live preview plays the
+            selection as you build it. Shrinking the grid <em>drops</em> any frame that no longer
+            exists (it is never silently re-pointed at another cell), and the dialog says how many
+            went. Reopen it any time from <strong>Edit sheet grid&hellip;</strong> in the sprite&rsquo;s
+            editor.
           </p>
           <p className={styles.p}>
             The library works like the mapping lists above it: each sprite is a
             <strong> row</strong> with its thumbnail, name and frame count, and
             <strong> clicking a row opens its editor in the second panel</strong>. There you
-            set the size, whether the frames <strong>loop</strong>, the sheet-slicing grid, the
+            set the size, whether the frames <strong>loop</strong>, the sheet grid + frame
+            selection (via <strong>Edit sheet grid&hellip;</strong>), the
             <strong> rotation</strong> &mdash; the art&rsquo;s default facing on the compass dial,
             plus <strong>Orient to velocity</strong> so it auto-points along the agent&rsquo;s
             heading, plus a fixed offset &mdash; and <strong>remove a background colour</strong>
