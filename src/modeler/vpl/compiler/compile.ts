@@ -2852,6 +2852,25 @@ export function compileAgentGraph(
   // bondReqSlotsForModel keeps its request arrays at the pre-P4 single-slot shape.
   const usesBondReqQueue = agentNodes.some(n => BOND_REQUEST_NODE_TYPES.has(n.data.nodeType));
   const bondReqCursorDecl = usesBondReqQueue ? ['    let _brqC = 0;'] : [];
+  // D2 — `myVolume` is the ONE root value-out that is USAGE-GATED rather than
+  // emitted unconditionally like its siblings. Every other port predates the
+  // byte-identity gate; an unconditional new preamble line would diff EVERY 3D
+  // agent model's `agent.divisionCode` / `agent.behaviourCode` for a value
+  // nobody reads. (The WASM + WGSL emitters are usage-gated by construction —
+  // they emit per-port on demand — so this only concerns the JS preamble.)
+  // Reads the flattened edge list directly: reroutes are already collapsed and
+  // macros expanded, so a wire is a direct source→target edge here.
+  const rootPortConsumed = (nodeId: string, portId: string) =>
+    agentEdges.some(e => e.source === nodeId && parseHandleId(e.sourceHandle)?.portId === portId);
+  /** (4/3)πr³ — the sphere volume of an agent's radius. `myVolume` is a 3D
+   *  quantity and the port is hidden in 2D, but a STALE edge (a model authored
+   *  in 3D and switched to 2D) must still resolve: it emits the typed default
+   *  `0` there rather than a reference to an undeclared variable, and the WASM +
+   *  WGSL emitters do the same, so the three targets agree. (This is the C9
+   *  `myAge` safety-catch shape, one step stronger than the `myZ` precedent.) */
+  const volumeExpr = is3d
+    ? 'Math.PI * 4 / 3 * _agentRadius[idx] * _agentRadius[idx] * _agentRadius[idx]'
+    : '0';
 
   const behaviourCode = [
     `(function(${params}) {`,
@@ -2873,6 +2892,9 @@ export function compileAgentGraph(
     ...(is3d ? [`    const _v${bsId}_myZ = _agentZ[idx];`] : []),
     `    const _v${bsId}_myRadius = _agentRadius[idx];`,
     `    const _v${bsId}_myArea = Math.PI * _agentRadius[idx] * _agentRadius[idx];`,
+    // D2 — emitted only when something reads it (see rootPortConsumed); the
+    // expression is the typed default 0 in 2D (volumeExpr).
+    ...(rootPortConsumed(bsId, 'myVolume') ? [`    const _v${bsId}_myVolume = ${volumeExpr};`] : []),
     `    const _v${bsId}_myBondDegree = _agentBondCount[idx];`,
     // C9 SAFETY CATCH: `_agentAge` is dropped when the Lifespan field is gated
     // off (the gate is widened by a WIRED myAge, so this only fires unwired).
@@ -2912,6 +2934,8 @@ export function compileAgentGraph(
       // (worker buildDivisionArgs ABI note ~:547). Read it from the buffer here.
       ...(is3d ? [`  const _v${dId}_axisDefaultZ = _divideAxisZ[idx];`] : []),
       `  const _v${dId}_myArea = Math.PI * _agentRadius[idx] * _agentRadius[idx];`,
+      // D2 — emitted only when something reads it; 0 in 2D (see volumeExpr).
+      ...(rootPortConsumed(dId, 'myVolume') ? [`  const _v${dId}_myVolume = ${volumeExpr};`] : []),
       '  let _rs = _rngState[0] || 0x12345678;',
       ...dv.preLoopValueLines,
       ...dv.valueLines,

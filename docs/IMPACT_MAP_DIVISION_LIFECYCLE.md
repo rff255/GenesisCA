@@ -335,6 +335,16 @@ sort order is unchanged, so every assigned 1-based code is unchanged, so `_divid
 so the emitted text/bytes/WGSL are unchanged. (This is exactly the kind of change that could
 silently renumber codes if the new field were inserted *inside* the key; it must be appended.)
 
+> **SHIPPED REFINEMENT (D2, 2026-08-23).** The implementation appends the suffix **only for the
+> non-default `'volume'`**, so an area spec produces the *byte-identical* pre-D2 key rather than a
+> uniformly-extended one. Both forms preserve the sort order — no key can be a proper prefix of
+> another, since all five fields are `|`-delimited and the last is one of three non-prefixing words
+> (`auto` / `always` / `never`) — but leaving existing keys untouched is strictly stronger and makes
+> the claim decidable by inspection instead of by that argument. A collision is impossible either
+> way: a volume key ends `|volume`, an area key ends in its `daughterBond` word. The resolver also
+> coerces `'volume' → 'area'` for a 2D model (in addition to the engine's `D <= 1` coercion), so a
+> 2D file's key and code are unchanged whatever its config says.
+
 Total production change: `DividePartitionSpec` + `dividePartitionFromConfig` + `dividePartitionKey`
 + `DEFAULT_DIVIDE_PARTITION`, the two `Math.sqrt` lines in `divideAgent` (behind a resolved mode),
 and one CaNode config row.
@@ -487,6 +497,12 @@ lands squarely in that blind spot: a division-ABI regression would pass the proj
 byte-identity gate silently.
 
 **This must be fixed before, not after, Feature 1** — it is phase D1 below.
+
+> **SHIPPED (D1, 2026-08-23).** `compileAll` now returns `agent.divisionCode` + `agent.initCode` and
+> the script hashes both. Non-vacuous on the shipped library: 2 models carry a Division Event
+> (Morphogenesis — 3D Tissue / Differential Tissue) and 7 carry an Agent Init Event. An OLD baseline
+> stays usable — `--compare` iterates the baseline's own keys, so the new surfaces are simply absent
+> there rather than reported as diffs.
 
 ### 5.6 Harnesses to extend
 

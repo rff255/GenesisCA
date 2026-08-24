@@ -2129,8 +2129,16 @@ export function divideAgent(
   // 4. geometry — split the area by asymmetry, place daughters along ±m̂
   const r = store.radius[i]!;
   const aFrac = Math.min(1, Math.max(0, asym));
-  const rA = r * Math.sqrt(Math.max(1e-4, aFrac));
-  const rB = r * Math.sqrt(Math.max(1e-4, 1 - aFrac));
+  // D2 — what the split CONSERVES. `area` (the default) is the pre-D2 expression
+  // VERBATIM — the same `Math.sqrt` calls in the same order, so every existing
+  // model is bit-identical. `volume` uses ∛ so `rA³ + rB³ = r³`, and is coerced
+  // away in a 2D world: "conserve r³" is meaningless on a disc, and the CaNode
+  // row is hidden there, so a hand-edited 2D file must not behave differently
+  // (the hidden-control STATE rule). `dividePartitionFromConfig` coerces too —
+  // this is the last word, for a spec that reached us without a model.
+  const volume = is3d && partition.conserve === 'volume';
+  const rA = volume ? r * Math.cbrt(Math.max(1e-4, aFrac)) : r * Math.sqrt(Math.max(1e-4, aFrac));
+  const rB = volume ? r * Math.cbrt(Math.max(1e-4, 1 - aFrac)) : r * Math.sqrt(Math.max(1e-4, 1 - aFrac));
   const off = r; // daughter centre separation
   let ax = cx + 0.5 * off * mx, ay = cy + 0.5 * off * my;
   let bx = cx - 0.5 * off * mx, by = cy - 0.5 * off * my;

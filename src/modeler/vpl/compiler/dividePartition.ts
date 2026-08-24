@@ -57,9 +57,30 @@
 
 import type { CAModel, Attribute } from '../../../model/types';
 import { bondAttrsOf } from '../../../model/attributeScope';
+import { is3dModelLike } from './niCodec';
 
 /** How a dividing agent's bonds are split between its two daughters. */
 export type DividePartitionMode = 'tension' | 'alternate' | 'byBondAttribute';
+
+/** What a division CONSERVES when it sizes the two daughters.
+ *
+ *  `area`   `rA = r·√f`, `rB = r·√(1−f)` ⇒ `rA² + rB² = r²`. THE DEFAULT, and
+ *           the historical (pre-D2) behaviour in BOTH dimensions — so every
+ *           existing model is untouched.
+ *  `volume` `rA = r·∛f`, `rB = r·∛(1−f)` ⇒ `rA³ + rB³ = r³`. 3D ONLY.
+ *
+ *  Why the option exists: the area split was applied in 3D too, where it is not
+ *  volume-conserving — at the default symmetric split each daughter is `r/√2`,
+ *  so `VA + VB = 2·(1/√2)³·V ≈ 0.707·V` and **~29 % of the volume disappears at
+ *  every symmetric 3D division**. The volume-conserving radius is `r·∛0.5 =
+ *  0.7937·r`, ~12 % larger.
+ *
+ *  Why `volume` is 3D-only: "conserve r³" is physically meaningless on a disc.
+ *  The CaNode row is hidden in a 2D model AND both the resolver below and the
+ *  engine (`divideAgent`, on `D <= 1`) coerce to `'area'` — the standing rule
+ *  that a hidden control needs its STATE handled, not just its markup, so a
+ *  hand-edited 2D file cannot silently change behaviour. */
+export type DivideConserveMode = 'area' | 'volume';
 
 /** Decision D4 — when the daughter–daughter bond is added.
  *   `auto`   only when the mother WAS bonded (the pre-P5 behaviour, the default,
@@ -88,12 +109,17 @@ export interface DividePartitionSpec {
   tagB: number[];
   /** Decision D4 — the daughter–daughter bond policy. */
   daughterBond: DaughterBondPolicy;
+  /** D2 — what the daughter RADII conserve. Always `'area'` for a 2D model (the
+   *  resolver coerces), so it rides the same table with no new lane, no ABI
+   *  field and no emitter change on any of the three targets. */
+  conserve: DivideConserveMode;
 }
 
 /** The pre-P5 behaviour, and what the engine uses when a code resolves to no
  *  table entry (a stale request, or a model compiled before the table existed). */
 export const DEFAULT_DIVIDE_PARTITION: DividePartitionSpec = {
   mode: 'tension', attributeId: '', threshold: 0.5, tagB: [], daughterBond: 'auto',
+  conserve: 'area',
 };
 
 /** The config keys a Divide Agent node uses for its partition. Listed once so the
@@ -103,6 +129,8 @@ export const DIVIDE_PARTITION_CONFIG_KEYS = {
   attributeId: 'partitionAttributeId',
   threshold: 'partitionThreshold',
   daughterBond: 'daughterBond',
+  /** D2 — `'area'` (default / absent) or `'volume'` (3D only). */
+  conserve: 'conserve',
   /** Per-tag-option daughter: `partTag_<optionIndex>` (truthy ⇒ daughter B). */
   tagPrefix: 'partTag_',
 } as const;
@@ -133,17 +161,23 @@ export function dividePartitionFromConfig(
   const daughterBondRaw = String(config[K.daughterBond] ?? 'auto');
   const daughterBond: DaughterBondPolicy =
     daughterBondRaw === 'always' || daughterBondRaw === 'never' ? daughterBondRaw : 'auto';
+  // D2 — `volume` is 3D-only: coerce it here (the model IS available) so a 2D
+  // model's spec, key and assigned code are IDENTICAL whatever the config says.
+  // The engine coerces again on `D <= 1` (defence in depth — a spec can also
+  // arrive from a restored/hand-edited message, where no model is at hand).
+  const conserve: DivideConserveMode =
+    String(config[K.conserve] ?? 'area') === 'volume' && is3dModelLike(model) ? 'volume' : 'area';
 
   if (rawMode === 'alternate') {
-    return { mode: 'alternate', attributeId: '', threshold: 0.5, tagB: [], daughterBond };
+    return { mode: 'alternate', attributeId: '', threshold: 0.5, tagB: [], daughterBond, conserve };
   }
   if (rawMode === 'byBondAttribute') {
     const attr = dividePartitionAttribute(config, model);
-    if (!attr) return { ...DEFAULT_DIVIDE_PARTITION, daughterBond };
+    if (!attr) return { ...DEFAULT_DIVIDE_PARTITION, daughterBond, conserve };
     if (attr.type === 'tag') {
       const opts = attr.tagOptions ?? [];
       const tagB = opts.map((_, i) => (config[`${K.tagPrefix}${i}`] ? 1 : 0));
-      return { mode: 'byBondAttribute', attributeId: attr.id, threshold: 0.5, tagB, daughterBond };
+      return { mode: 'byBondAttribute', attributeId: attr.id, threshold: 0.5, tagB, daughterBond, conserve };
     }
     // bool pins the threshold (false → A, true → B); integer / float take the
     // configured one (0.5 by default, so 0 → A and 1+ → B reads naturally).
@@ -151,18 +185,34 @@ export function dividePartitionFromConfig(
     return {
       mode: 'byBondAttribute', attributeId: attr.id,
       threshold: Number.isFinite(threshold) ? threshold : 0.5,
-      tagB: [], daughterBond,
+      tagB: [], daughterBond, conserve,
     };
   }
-  return { ...DEFAULT_DIVIDE_PARTITION, daughterBond };
+  return { ...DEFAULT_DIVIDE_PARTITION, daughterBond, conserve };
 }
 
 /** Canonical identity of a spec — the dedupe key for the per-model table. Two
  *  Divide Agent nodes requesting the same partition share one entry (which is
  *  also what makes two instances of one macro consistent, since expansion shares
- *  the config object). */
+ *  the config object).
+ *
+ *  ⚠ THE BYTE-IDENTITY MECHANISM (D2). `conserve` is appended as a SUFFIX, and
+ *  ONLY for the non-default `'volume'` — so a spec that conserves area produces
+ *  the EXACT key it produced before D2. The table is key-SORTED, so an unchanged
+ *  key set ⇒ an unchanged sort order ⇒ an unchanged 1-based code ⇒ an unchanged
+ *  `_divideIdx` ⇒ byte-identical emitted text / WASM bytes / WGSL on all three
+ *  targets, for every existing model. (Appending `|area` to every key would ALSO
+ *  preserve the order — no key can be a proper prefix of another, since all five
+ *  fields are `|`-delimited and the last is one of three non-prefixing words —
+ *  but leaving existing keys untouched is strictly stronger, and it makes the
+ *  claim decidable by inspection rather than by that argument.)
+ *
+ *  No collision is possible either: a volume key ends in `|volume`, and an area
+ *  key ends in its `daughterBond` word (auto / always / never), so an area key
+ *  can never equal a volume one. */
 export function dividePartitionKey(spec: DividePartitionSpec): string {
-  return `${spec.mode}|${spec.attributeId}|${spec.threshold}|${spec.tagB.join(',')}|${spec.daughterBond}`;
+  const base = `${spec.mode}|${spec.attributeId}|${spec.threshold}|${spec.tagB.join(',')}|${spec.daughterBond}`;
+  return spec.conserve === 'volume' ? `${base}|volume` : base;
 }
 
 /** THE TABLE — one entry per DISTINCT partition a model's agent graph requests,

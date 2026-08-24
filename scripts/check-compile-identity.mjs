@@ -52,6 +52,13 @@ for (const f of files) {
     'webgpu.shader': sha(r.webgpu.shaderCode),
     'webgpu.error': r.webgpu.error,
     'agent.behaviourCode': sha(r.agent.behaviourCode),
+    // The DIVISION EVENT + AGENT INIT functions. They are JS-on-CPU on every
+    // agent target (AGENT_WASM_CPU_ROOT_TYPES), so they show up on NO other
+    // surface here — without these two lines a regression in the `division` /
+    // `init` ABI (their param lists, their value-out preambles) passes this gate
+    // silently. See docs/IMPACT_MAP_DIVISION_LIFECYCLE.md §5.5.
+    'agent.divisionCode': sha(r.agent.divisionCode),
+    'agent.initCode': sha(r.agent.initCode),
     'agent.error': r.agent.error,
     'agent.wasm.bytes': sha(r.agent.wasm.bytesJoined),
     'agent.wasm.error': r.agent.wasm.error,

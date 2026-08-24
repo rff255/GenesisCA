@@ -2357,7 +2357,8 @@ export function HelpView() {
               <strong> tension axis</strong> (the net-stretch direction of its bonds), so a glued
               cluster cleaves along its mechanical axis. <strong>Partition</strong> says which bonds
               each daughter inherits &mdash; see &ldquo;Dividing: which daughter gets which
-              bond?&rdquo; below. A
+              bond?&rdquo; below &mdash; and, in a 3D model, <strong>Conserve</strong> says whether
+              the daughter radii preserve area or volume. A
               <strong> Division Event</strong> root (optional) runs once per daughter so you can
               give them different attribute values (asymmetric inheritance).</li>
             <li><strong>Kill Agent</strong> &mdash; remove an agent; all its bonds are broken
@@ -2838,6 +2839,36 @@ export function HelpView() {
             whole division is skipped and the agent is left untouched. If the attribute you named is
             deleted, the node falls back to the tension axis <em>and</em> shows a warning badge, so a
             partition is never silently wrong.
+          </p>
+          <h3 className={styles.h3}>Dividing: how big are the daughters? (3D)</h3>
+          <p className={styles.p}>
+            A division shrinks the two daughters, and <em>Divide Agent</em>&apos;s{' '}
+            <strong>Conserve</strong> setting says what that shrink preserves:
+          </p>
+          <ul className={styles.list}>
+            <li><strong>Area</strong> (the default) &mdash; <code>rA&sup2; + rB&sup2; = r&sup2;</code>.
+              At a symmetric split each daughter is <code>r/&radic;2 = 0.707&middot;r</code>. This is
+              what GenesisCA has always done, in <em>both</em> dimensions.</li>
+            <li><strong>Volume</strong> &mdash; <code>rA&sup3; + rB&sup3; = r&sup3;</code>, i.e.
+              <code> r&middot;&#8731;f</code>. At a symmetric split each daughter is
+              <code> 0.794&middot;r</code>, about 12 % larger.</li>
+          </ul>
+          <p className={styles.p}>
+            It matters because the area split was applied in 3D too, where it is <em>not</em>
+            volume-conserving: <strong>~29 % of the volume disappears at every symmetric 3D
+            division</strong> (2&middot;(1/&radic;2)&sup3; = 0.707). The setting only appears in a
+            <strong> 3D</strong> model &mdash; &ldquo;conserve r&sup3;&rdquo; is meaningless on a
+            disc, and a 2D model always divides by area whatever the file says. <strong>Area stays
+            the default</strong>, so no existing model changes.
+          </p>
+          <p className={styles.p}>
+            To read the sizes back: <em>Behaviour Step</em> and <em>Division Event</em> expose{' '}
+            <strong>Area</strong> and, in a 3D model, <strong>Volume</strong>. Note that{' '}
+            <strong>Area is &pi;r&sup2; in 2D <em>and</em> 3D</strong> &mdash; a disc area, not a
+            sphere&apos;s surface &mdash; so in 3D use <strong>Volume</strong> ((4/3)&pi;r&sup3;).
+            There are no separate Get/Set Area nodes: an area is <em>Get Radius</em> plus one Math
+            node, and setting one is an <em>Expression</em> (<code>sqrt(A/pi)</code>) into{' '}
+            <em>Set Agent Radius</em>.
           </p>
           <h3 className={styles.h3}>Spawning Agents (Create &rarr; Add, in either event)</h3>
           <p className={styles.p}>

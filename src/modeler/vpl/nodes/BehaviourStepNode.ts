@@ -10,8 +10,12 @@ import { resolveAgentProfile } from '../../../model/agentCapabilities';
  *  …) lands on the agent SoA with no node change.
  *
  *  Singleton (one per Agents graph, like Step). Value outputs expose the agent's
- *  own geometry — `myX`/`myY`(/`myZ`)/`myRadius`/`myArea`/`myBondDegree`/`myAge`.
- *  (`myZ` is hidden in 2D models via `hiddenPorts`, like the Init Event's `z`.)
+ *  own geometry — `myX`/`myY`(/`myZ`)/`myRadius`/`myArea`(/`myVolume`)/
+ *  `myBondDegree`/`myAge`. (`myZ` + `myVolume` are hidden in 2D models via
+ *  `hiddenPorts`, like the Init Event's `z`.)
+ *
+ *  ⚠ `Area` is πr² — a DISC area, in 2D and 3D alike (that is what every
+ *  existing model reads, on all three targets). In 3D use `Volume` = (4/3)πr³.
  *
  *  Requirements: `bondGraph` — available only in an Agents-topology model, on
  *  the Agents sub-tab.
@@ -34,6 +38,7 @@ export const BehaviourStepNode: NodeTypeDef = {
     { id: 'myZ', label: 'Z', kind: 'output', category: 'value', dataType: 'float' },
     { id: 'myRadius', label: 'Radius', kind: 'output', category: 'value', dataType: 'float' },
     { id: 'myArea', label: 'Area', kind: 'output', category: 'value', dataType: 'float' },
+    { id: 'myVolume', label: 'Volume', kind: 'output', category: 'value', dataType: 'float' },
     { id: 'myBondDegree', label: 'Bond Degree', kind: 'output', category: 'value', dataType: 'integer' },
     { id: 'myAge', label: 'Age', kind: 'output', category: 'value', dataType: 'integer' },
   ],
@@ -45,10 +50,13 @@ export const BehaviourStepNode: NodeTypeDef = {
   //     preamble, so an existing wire keeps working; the badge is informational).
   hiddenPorts: (_config, model) => {
     const hidden: string[] = [];
-    if (!is3dModelLike(model)) hidden.push('myZ');
+    // `myVolume` is (4/3)πr³ — a 3D quantity, so it exists only in a 3D world
+    // (`myArea` stays πr² in BOTH dimensions: a disc area, which is what a 2D
+    // agent has and what every existing model reads).
+    if (!is3dModelLike(model)) hidden.push('myZ', 'myVolume');
     if (model?.topologyMode?.agents) {
       const p = resolveAgentProfile(model);
-      if (!p.body) hidden.push('myRadius', 'myArea');
+      if (!p.body) hidden.push('myRadius', 'myArea', 'myVolume');
       if (p.bonds === 'off') hidden.push('myBondDegree');
       if (!p.lifespan) hidden.push('myAge');
     }

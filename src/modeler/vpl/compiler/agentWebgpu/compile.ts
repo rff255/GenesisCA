@@ -848,6 +848,14 @@ function emitBehaviourStep(ctx: AgentWgpuCtx, portId: string): ValueRef {
       const r = f32At(ctx, 'radius', 'idx');
       return emitLet(ctx, 'f32', `(3.14159265358979 * ${r} * ${r})`, 'myA');
     }
+    // D2 — `myVolume` = (4/3)πr³, 3D only (the port is hidden in 2D, and a 2D
+    // WGSL module has no meaningful sphere volume). Statistical parity with the
+    // f64 targets, like every other agent value on this target.
+    case 'myVolume': {
+      if (!ctx.is3d) return { expr: '0.0', type: 'f32' };
+      const r = f32At(ctx, 'radius', 'idx');
+      return emitLet(ctx, 'f32', `(3.14159265358979 * 4.0 / 3.0 * ${r} * ${r} * ${r})`, 'myV');
+    }
     case 'myAge': return emitLet(ctx, 'f32', gatedF32(ctx, 'age', 'idx'), 'myG');
     case 'myBondDegree': return emitLet(ctx, 'f32', `f32(${i32At(ctx, 'bondCount', 'idx')})`, 'myBd');
     default: return { expr: '0.0', type: 'f32' };

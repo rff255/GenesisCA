@@ -1496,6 +1496,21 @@ function CaNodeComponent({ id, data }: NodeProps) {
                 <option value="always">A-B bond: always</option>
                 <option value="never">A-B bond: never</option>
               </select>
+              {/* D2 — what the daughter RADII conserve. HIDDEN in 2D: "conserve
+                  r³" is meaningless on a disc, and both the spec resolver and the
+                  engine coerce a stale `volume` back to `area` there, so the row
+                  could not do anything (the enabled-control rule). */}
+              {is3dModelLike(model) && (
+                <select
+                  className={styles.select}
+                  value={(nodeData.config.conserve as string) || 'area'}
+                  onChange={e => updateConfig('conserve', e.target.value)}
+                  title="Daughter radii: conserve AREA (r_A² + r_B² = r², the default and the historical split) or VOLUME (r_A³ + r_B³ = r³). The area split loses ~29% of the volume at every symmetric 3D division."
+                >
+                  <option value="area">Conserve: area (πr²)</option>
+                  <option value="volume">Conserve: volume (4/3·πr³)</option>
+                </select>
+              )}
             </>
           );
         })()}

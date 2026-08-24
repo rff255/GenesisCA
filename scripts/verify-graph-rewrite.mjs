@@ -2295,11 +2295,196 @@ function tierH() {
         'WASM bytes are identical too');
     }
   }
+
+  // --- 8. D2 — what the split CONSERVES (area, the default, vs volume in 3D)
+  {
+    const M3D = { properties: { dimension: '3d', gridDepth: 16 } };
+    const M2D = { properties: { dimension: '2d', gridDepth: 1 } };
+
+    // (a) THE BYTE-IDENTITY MECHANISM, asserted against the LITERAL pre-D2 key.
+    //     `area` appends nothing, so every existing spec's key — and therefore
+    //     the key-sorted table order, and therefore every `_divideIdx` — is
+    //     unchanged. (A hard-coded string, not a re-derivation: a re-derivation
+    //     would move with the code it is meant to pin.)
+    ok(dividePartitionKey(DEFAULT_DIVIDE_PARTITION) === 'tension||0.5||auto',
+      'D2: an AREA spec keys EXACTLY as it did pre-D2 (no suffix ⇒ unchanged sort order ⇒ unchanged codes)',
+      dividePartitionKey(DEFAULT_DIVIDE_PARTITION));
+    ok(dividePartitionKey({ ...DEFAULT_DIVIDE_PARTITION, conserve: 'volume' }) === 'tension||0.5||auto|volume',
+      'D2: a VOLUME spec appends the suffix (a distinct table entry)',
+      dividePartitionKey({ ...DEFAULT_DIVIDE_PARTITION, conserve: 'volume' }));
+    // NEG — the two keys must actually DIFFER, else the table would dedupe them.
+    ok(dividePartitionKey(DEFAULT_DIVIDE_PARTITION) !== dividePartitionKey({ ...DEFAULT_DIVIDE_PARTITION, conserve: 'volume' }),
+      'D2: NEG — area and volume are NOT the same key');
+
+    // (b) THE RESOLVER: absent ⇒ area; volume honoured in 3D; COERCED in 2D (a
+    //     hidden control must have its STATE handled — a hand-edited 2D file
+    //     cannot silently change behaviour).
+    ok(dividePartitionFromConfig({}, M3D).conserve === 'area', 'D2: an absent conserve resolves to AREA');
+    ok(dividePartitionFromConfig({ conserve: 'volume' }, M3D).conserve === 'volume',
+      'D2: conserve=volume is honoured in a 3D model');
+    ok(dividePartitionFromConfig({ conserve: 'volume' }, M2D).conserve === 'area',
+      'D2: conserve=volume is COERCED to area in a 2D model');
+    ok(dividePartitionKey(dividePartitionFromConfig({ conserve: 'volume' }, M2D)) === 'tension||0.5||auto',
+      'D2: …so a 2D model\'s key (and code) is byte-identical whatever the config says');
+    ok(dividePartitionFromConfig({ conserve: 'nonsense' }, M3D).conserve === 'area',
+      'D2: an unknown conserve value falls back to area (closed enum, no badge needed)');
+
+    // (c) THE ENGINE — run the SHIPPED `divideAgent` and read the radii back.
+    const REL = (a, b) => Math.abs(a - b) <= 1e-12 * Math.max(1, Math.abs(b));
+    const spec = (conserve) => ({ ...DEFAULT_DIVIDE_PARTITION, conserve });
+    const oneAgent = (r) => {
+      const s = createAgentStore(bondCfg(16, 8), [], { bondAttrSpecs: P5_SPECS });
+      seedAgents(s, [{ x: 16, y: 16, z: 8 }], r);
+      s.radius[0] = r;
+      return s;
+    };
+    const R = 2.5, D3 = 16;
+    {   // symmetric VOLUME split in 3D: rA = rB = r·∛0.5, and rA³ + rB³ = r³.
+      const s = oneAgent(R);
+      const nid = divideAgent(s, 0, 1, 0, 0, 0.5, 0, false, 64, 64, D3, undefined, spec('volume'));
+      const rA = s.radius[0], rB = s.radius[nid];
+      ok(REL(rA, R * Math.cbrt(0.5)) && REL(rB, R * Math.cbrt(0.5)),
+        'D2 volume (3D): each daughter is r·∛0.5 = 0.7937·r', `${rA} / ${rB} vs ${R * Math.cbrt(0.5)}`);
+      ok(REL(rA ** 3 + rB ** 3, R ** 3),
+        'D2 volume (3D): rA³ + rB³ = r³ — the VOLUME is conserved', `${rA ** 3 + rB ** 3} vs ${R ** 3}`);
+    }
+    {   // the DEFAULT (area) split in 3D is UNCHANGED — and demonstrably loses
+      //  ~29 % of the volume, which is the whole reason the option exists.
+      const s = oneAgent(R);
+      const nid = divideAgent(s, 0, 1, 0, 0, 0.5, 0, false, 64, 64, D3, undefined, spec('area'));
+      const rA = s.radius[0], rB = s.radius[nid];
+      ok(REL(rA, R * Math.sqrt(0.5)) && REL(rA ** 2 + rB ** 2, R ** 2),
+        'D2 area (3D, the default): rA² + rB² = r² — the historical split', `${rA} / ${rA ** 2 + rB ** 2} vs ${R ** 2}`);
+      ok(REL((rA ** 3 + rB ** 3) / R ** 3, Math.SQRT1_2),
+        'D2 area (3D): …and it keeps only 1/√2 ≈ 70.7 % of the volume (the ~29 % loss)',
+        String((rA ** 3 + rB ** 3) / R ** 3));
+      // NEG — the two modes must give DIFFERENT radii, else nothing above is
+      // discriminating.
+      const s2 = oneAgent(R);
+      const n2 = divideAgent(s2, 0, 1, 0, 0, 0.5, 0, false, 64, 64, D3, undefined, spec('volume'));
+      ok(!REL(s2.radius[0], rA) && s2.radius[0] > rA,
+        'D2: NEG — volume radii DIFFER from (and exceed) the area radii', `${s2.radius[0]} vs ${rA}`);
+      void n2;
+    }
+    {   // ASYMMETRIC volume split — each daughter's own cube root, still exact.
+      const f = 0.3, s = oneAgent(R);
+      const nid = divideAgent(s, 0, 1, 0, 0, f, 0, false, 64, 64, D3, undefined, spec('volume'));
+      ok(REL(s.radius[0], R * Math.cbrt(f)) && REL(s.radius[nid], R * Math.cbrt(1 - f))
+        && REL(s.radius[0] ** 3 + s.radius[nid] ** 3, R ** 3),
+        'D2 volume (3D, asymmetric f=0.3): rA = r·∛f, rB = r·∛(1−f), rA³ + rB³ = r³',
+        `${s.radius[0]} / ${s.radius[nid]}`);
+    }
+    {   // THE 2D COERCION, in the ENGINE (D <= 1) — bit-identical to the area run,
+      //  so a spec that reached the worker without a model cannot change a 2D
+      //  model's behaviour.
+      const sa = oneAgent(R), sv = oneAgent(R);
+      const na = divideAgent(sa, 0, 1, 0, 0, 0.5, 0, false, 64, 64, 1, undefined, spec('area'));
+      const nv = divideAgent(sv, 0, 1, 0, 0, 0.5, 0, false, 64, 64, 1, undefined, spec('volume'));
+      ok(Object.is(sa.radius[0], sv.radius[0]) && Object.is(sa.radius[na], sv.radius[nv]),
+        'D2: in 2D (D = 1) the ENGINE coerces volume ⇒ BIT-IDENTICAL radii to the area split',
+        `${sa.radius[0]}/${sa.radius[na]} vs ${sv.radius[0]}/${sv.radius[nv]}`);
+    }
+
+    // (d) THE TRANSPORT — the mode rides the TABLE, so it moves no emitted byte.
+    {
+      const m = buildDivideModel({ conserve: 'both', is3d: true });
+      const r = compileAgentGraph(m.agentGraphNodes, m.agentGraphEdges, migrateForHarness(m));
+      ok(!r.error && r.dividePartitions.length === 2,
+        'D2: two nodes differing ONLY in conserve produce TWO table entries', r.error ?? String(r.dividePartitions.length));
+      const dNodes = m.agentGraphNodes.filter(n => n.data.nodeType === 'divideAgent');
+      const codes = dNodes.map(n => dividePartitionCode(n.data.config));
+      ok(codes[0] !== codes[1], 'D2: …and the two nodes carry DIFFERENT codes', String(codes));
+      ok(r.dividePartitions.some(p => p.conserve === 'area') && r.dividePartitions.some(p => p.conserve === 'volume'),
+        'D2: the shipped table carries both conserve modes', JSON.stringify(r.dividePartitions.map(p => p.conserve)));
+      // A SINGLE-node model emits IDENTICAL code + WASM bytes either way.
+      const m1 = buildDivideModel({ single: 'tension', conserve: 'area', is3d: true });
+      const m2 = buildDivideModel({ single: 'tension', conserve: 'volume', is3d: true });
+      const r1 = compileAgentGraph(m1.agentGraphNodes, m1.agentGraphEdges, migrateForHarness(m1));
+      const r2 = compileAgentGraph(m2.agentGraphNodes, m2.agentGraphEdges, migrateForHarness(m2));
+      ok(r1.behaviourCode === r2.behaviourCode,
+        'D2: a single-node model emits IDENTICAL JS for area and volume (the mode rides the table)');
+      ok(r1.dividePartitions[0].conserve === 'area' && r2.dividePartitions[0].conserve === 'volume',
+        'D2: and the two shipped TABLES differ — which is where the mode actually lives');
+      const w1 = compileAgentGraphWasmForModel(migrateForHarness(m1));
+      const w2 = compileAgentGraphWasmForModel(migrateForHarness(m2));
+      ok(w1.bytes && w2.bytes && w1.bytes.length === w2.bytes.length && w1.bytes.every((b, i) => b === w2.bytes[i]),
+        'D2: WASM bytes are identical too');
+    }
+
+    // (e) `myVolume` — the 3D-only value-out, USAGE-GATED on JS so an unwired
+    //     port costs nothing (that gate is what keeps every 3D agent model's
+    //     `agent.behaviourCode` byte-identical).
+    {
+      const mk = (wire) => {
+        let seq = 0;
+        const nid = (p) => `${p}${seq++}`;
+        const aN = [], aEd = [];
+        const an = (t, c) => { const n = { id: nid('a'), type: 'caNode', position: { x: 0, y: 0 }, data: { nodeType: t, config: c } }; aN.push(n); return n; };
+        const bs = an('behaviourStep', {});
+        const set = an('setAttribute', { attributeId: 'v' });
+        aEd.push({ id: nid('e'), source: bs.id, target: set.id, sourceHandle: 'output_flow_do', targetHandle: 'input_flow_do' });
+        if (wire) aEd.push({ id: nid('e'), source: bs.id, target: set.id, sourceHandle: `output_value_${wire}`, targetHandle: 'input_value_value' });
+        const m = buildDivideModel({ single: 'tension', is3d: true });
+        return { ...m, agentGraphNodes: aN, agentGraphEdges: aEd,
+          agentAttributes: [{ id: 'v', name: 'V', type: 'float', defaultValue: '0' }] };
+      };
+      const none = compileAgentGraph(...(() => { const m = mk(null); return [m.agentGraphNodes, m.agentGraphEdges, migrateForHarness(m)]; })());
+      const vol = compileAgentGraph(...(() => { const m = mk('myVolume'); return [m.agentGraphNodes, m.agentGraphEdges, migrateForHarness(m)]; })());
+      ok(!none.behaviourCode.includes('_myVolume'),
+        'D2: an UNWIRED myVolume emits NOTHING (the usage gate — byte-identity for every existing 3D model)');
+      ok(/_myVolume = Math\.PI \* 4 \/ 3 \* _agentRadius\[idx\] \* _agentRadius\[idx\] \* _agentRadius\[idx\];/.test(vol.behaviourCode),
+        'D2: a WIRED myVolume emits (4/3)πr³ on JS');
+      // 2D hides the port, so it can only be reached by a STALE edge (a model
+      // authored in 3D, then switched). All three targets then resolve it to the
+      // typed default 0 — the C9 `myAge` safety-catch shape, one step stronger
+      // than the `myZ` precedent (which emits nothing and leaves the reference
+      // dangling). What must NEVER appear in 2D is the sphere formula.
+      const m2d = (() => { const m = mk('myVolume'); return { ...m, properties: { ...m.properties, dimension: '2d', gridDepth: 1 } }; })();
+      const two = compileAgentGraph(m2d.agentGraphNodes, m2d.agentGraphEdges, migrateForHarness(m2d));
+      ok(/_myVolume = 0;/.test(two.behaviourCode) && !two.behaviourCode.includes('4 / 3'),
+        'D2: in 2D a stale myVolume edge resolves to the typed default 0 (never a dangling reference)');
+      // WASM + WebGPU emit it on demand (no usage gate needed — they are
+      // per-port emitters), and only in 3D on the GPU.
+      const mw = mk('myVolume');
+      const w = compileAgentGraphWasmForModel(migrateForHarness(mw));
+      ok(!w.error && w.bytes.length > 0, 'D2: a myVolume model compiles on WASM', w.error ?? '');
+      const wNone = compileAgentGraphWasmForModel(migrateForHarness(mk(null)));
+      ok(w.bytes.length !== wNone.bytes.length || !w.bytes.every((b, i) => b === wNone.bytes[i]),
+        'D2: …and its WASM bytes DIFFER from the unwired model (the port really emits)');
+      const g = compileAgentGraphWebGPUForModel(migrateForHarness(mw));
+      ok(!g.error && /3\.14159265358979 \* 4\.0 \/ 3\.0/.test(g.shaderCode ?? ''),
+        'D2: WebGPU emits (4/3)πr³ for myVolume', g.error ?? 'no (4/3)π in the shader');
+      // THE EDITOR SURFACE — `hiddenPorts` through the SAME resolver the canvas and
+      // drag-and-drop read, so what the user can wire matches what compiles.
+      const outs = (t, model) => getEffectivePorts(t, {}, model).outputs.map(p => p.id);
+      const m3 = migrateForHarness(buildDivideModel({ single: 'tension', is3d: true }));
+      const m2 = migrateForHarness(buildDivideModel({ single: 'tension' }));
+      ok(outs('behaviourStep', m3).includes('myVolume') && outs('divisionEvent', m3).includes('myVolume'),
+        'D2: Volume is offered on BOTH roots in a 3D model');
+      ok(!outs('behaviourStep', m2).includes('myVolume') && !outs('divisionEvent', m2).includes('myVolume'),
+        'D2: …and on NEITHER in a 2D model (hiddenPorts)');
+      ok(outs('behaviourStep', m3).includes('myArea') && outs('behaviourStep', m2).includes('myArea'),
+        'D2: NEG — Area is offered in BOTH dimensions (πr², unchanged), so the check above is about Volume alone');
+      // Volume follows Area into the Body capability's bucket. NB the profile is
+      // USAGE-WIDENED (`resolveAgentProfile` -> `inferAgentProfile`), so the model
+      // must carry no body-implying node — a Divide Agent alone widens body back
+      // on via the closure — hence the bare behaviourStep graph here.
+      const noBody = {
+        ...m3,
+        agentGraphNodes: [{ id: 'bs', type: 'caNode', position: { x: 0, y: 0 }, data: { nodeType: 'behaviourStep', config: {} } }],
+        agentGraphEdges: [],
+        centerBased: { ...m3.centerBased, agentCapabilities: { ...m3.centerBased.agentCapabilities, body: false, division: false, growth: false, collision: 'off' } },
+      };
+      const nb = outs('behaviourStep', noBody);
+      ok(!nb.includes('myVolume') && !nb.includes('myArea'),
+        'D2: Volume follows Area — both hidden when the Body capability is off', nb.join(','));
+    }
+  }
 }
 
 /** An agent graph with three Divide Agent nodes: two default (tension) and one
  *  `byBondAttribute`, so the compiler's table must DEDUPE to two entries. */
-function buildDivideModel({ single = null } = {}) {
+function buildDivideModel({ single = null, conserve = null, is3d = false } = {}) {
   // DETERMINISTIC ids: the byte-identity assertion below compares two models'
   // emitted code, and a random id would make them differ for a reason that has
   // nothing to do with the partition.
@@ -2309,8 +2494,15 @@ function buildDivideModel({ single = null } = {}) {
   const an = (t, c) => { const n = { id: nid('a'), type: 'caNode', position: { x: 0, y: 0 }, data: { nodeType: t, config: c } }; aN.push(n); return n; };
   const aE = (s2, sp, tt, tp, cat) => aEd.push({ id: nid('e'), source: s2.id, target: tt.id, sourceHandle: `output_${cat}_${sp}`, targetHandle: `input_${cat}_${tp}` });
   const bs = an('behaviourStep', {});
-  const chain = single
-    ? [an('divideAgent', { partition: single, partitionAttributeId: single === 'byBondAttribute' ? 'kind' : '', daughterBond: 'auto' })]
+  const chain = conserve === 'both'
+    // D2 — TWO nodes identical in every way EXCEPT `conserve`, so the table must
+    // hold two entries and the two nodes must carry different codes.
+    ? [
+      an('divideAgent', { partition: 'tension', daughterBond: 'auto', conserve: 'area' }),
+      an('divideAgent', { partition: 'tension', daughterBond: 'auto', conserve: 'volume' }),
+    ]
+    : single
+    ? [an('divideAgent', { partition: single, partitionAttributeId: single === 'byBondAttribute' ? 'kind' : '', daughterBond: 'auto', ...(conserve ? { conserve } : {}) })]
     : [
       an('divideAgent', { partition: 'tension', daughterBond: 'auto' }),
       an('divideAgent', { partition: 'byBondAttribute', partitionAttributeId: 'kind', partTag_1: true, daughterBond: 'auto' }),
@@ -2320,10 +2512,10 @@ function buildDivideModel({ single = null } = {}) {
   for (let i = 1; i < chain.length; i++) aE(chain[i - 1], 'next', chain[i], 'do', 'flow');
   return {
     schemaVersion: 1,
-    properties: { name: 'Divide Partition Test', dimension: '2d', gridWidth: 32, gridHeight: 32, gridDepth: 1, topology: '2d-grid', boundaryTreatment: 'torus', useWasm: false, useWebGPU: false },
+    properties: { name: 'Divide Partition Test', dimension: is3d ? '3d' : '2d', gridWidth: 32, gridHeight: 32, gridDepth: is3d ? 16 : 1, topology: '2d-grid', boundaryTreatment: 'torus', useWasm: false, useWebGPU: false },
     topologyMode: { gridCells: false, agents: true },
     centerBased: {
-      enabled: true, maxAgents: 64, maxBonds: 6, worldWidth: 32, worldHeight: 32, seedCount: 8,
+      enabled: true, maxAgents: 64, maxBonds: 6, worldWidth: 32, worldHeight: 32, worldDepth: is3d ? 16 : 1, seedCount: 8,
       seedPattern: 'scatter', defaultRadius: 0.5, growthRate: 0, repulsionStiffness: 0, adhesionStiffness: 0,
       interactionRange: 1.5, drag: 1, timeStep: 0.1, momentum: 0, maxSpeed: 0, neighbourQueryRadius: 8,
       useBondingPhysics: false, autoBond: false, bondStiffness: 1, bondRestLength: 1, formDistance: 1.2,

@@ -43,6 +43,13 @@ export interface CompileAllResult {
    *  string for the JS↔WASM byte-shape + parity checks. */
   agent: {
     behaviourCode: string;
+    /** The single-agent DIVISION EVENT function + the once-per-reset AGENT INIT
+     *  function. Both are JS-on-CPU on EVERY agent target (`AGENT_WASM_CPU_ROOT_TYPES`),
+     *  so they appear on no other surface — which is exactly why they must be
+     *  hashed here: without them the project's primary byte-identity gate has a
+     *  blind spot over the whole `division` / `init` ABI (Impact Map §5.5). */
+    divisionCode: string;
+    initCode: string;
     error: string | null;
     wasm: { supported: boolean; bytesLen: number; bytesJoined: string; supportedTypes: string[]; error: string | null };
     /** PR7/G1+G2 — the WebGPU agent behaviour SHADER (WGSL source). `supported`
@@ -65,7 +72,7 @@ export function compileAll(model: CAModel): CompileAllResult {
     wasm: { total: 0, bytesLen: 0, bytesJoined: '', error: null },
     webgpu: { shaderCode: '', error: null },
     agent: {
-      behaviourCode: '', error: null,
+      behaviourCode: '', divisionCode: '', initCode: '', error: null,
       wasm: { supported: false, bytesLen: 0, bytesJoined: '', supportedTypes: [], error: null },
       webgpu: { supported: false, shaderCode: '', supportedTypes: [], error: null, omShaders: [], omSupported: true },
     },
@@ -112,6 +119,8 @@ export function compileAll(model: CAModel): CompileAllResult {
   try {
     const ag = compileAgentGraph(model.agentGraphNodes || [], model.agentGraphEdges || [], model);
     out.agent.behaviourCode = ag.behaviourCode || '';
+    out.agent.divisionCode = ag.divisionCode || '';
+    out.agent.initCode = ag.initCode || '';
     out.agent.error = ag.error || null;
   } catch (e) {
     out.agent.error = String((e as Error)?.message || e);
