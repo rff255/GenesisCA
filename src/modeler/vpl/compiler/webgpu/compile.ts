@@ -1788,6 +1788,20 @@ const VALUE_NODE_EMITTERS: Record<string, NodeValueEmitter> = {
       setCachedPort(ctx, node.id, 'y', { expr: `${p}y`, type: 'f32' });
       return xRef;
     }
+    if (t === 'color') {
+      // THREE draws in the order R, G, B (each `rand_f32` advances the per-cell
+      // PCG once). `& 255` narrows the edge case where the f32 uniform rounds to
+      // exactly 1.0 — the same guard the orientation path uses.
+      const p = fresh(ctx, 'rcol');
+      for (const ch of ['r', 'g', 'b']) {
+        ctx.lines.push(`  let ${p}${ch}: i32 = i32(${rExpr} * 256.0) & 255;`);
+      }
+      const rRef: ValueRef = { expr: `${p}r`, type: 'i32' };
+      setCachedPort(ctx, node.id, 'r', rRef);
+      setCachedPort(ctx, node.id, 'g', { expr: `${p}g`, type: 'i32' });
+      setCachedPort(ctx, node.id, 'b', { expr: `${p}b`, type: 'i32' });
+      return rRef;
+    }
     if (t === 'float' && dist === 'normal') {
       // Box-Muller — EXACTLY two draws (`rand_f32` advances the per-cell PCG
       // once per occurrence). `1 - u` keeps log's argument in (0, 1].
@@ -3535,6 +3549,8 @@ function preEmitValueNodes(ctx: CompileCtx, sourceNodeId: string, sourcePortId: 
 
     switch (node.data.nodeType) {
       case 'conditional':
+      // `assertActiveViewer` — conditional minus the ELSE (no `else` targets).
+      case 'assertActiveViewer':
         preEmitValueNodes(ctx, target.nodeId, 'then', visited);
         preEmitValueNodes(ctx, target.nodeId, 'else', visited);
         break;
@@ -3624,6 +3640,25 @@ function compileFlowChain(ctx: CompileCtx, sourceNodeId: string, sourcePortId: s
         if (!compileFlowChain(ctx, node.id, 'else')) return false;
       }
       ctx.lines.push(`  }`);
+    } else if (node.data.nodeType === 'assertActiveViewer') {
+      // Guard the IF ACTIVE branch on `control.activeViewer` — the SAME runtime
+      // compare Set Cell Looks emits in the Step shader. A mapping that is not a
+      // compile-time viewer can never be active, so the branch is DROPPED
+      // (mirroring setCellLooks' "unknown viewer — skip"). DONE (`next`) is
+      // emitted by the shared tail, unconditionally.
+      //
+      // NB inside an OUTPUT-MAPPING shader this stays a RUNTIME compare rather
+      // than setCellLooks' compile-time `ctx.currentMappingId` resolution: the
+      // control binding is present in every entry point, and the runtime form is
+      // what keeps the three cell targets structurally identical here.
+      const mid = (node.data.config.mappingId as string) || '';
+      const viewerInt = mid ? ctx.viewerIds[mid] : undefined;
+      if (viewerInt !== undefined && ctx.flowOutputToTargets.has(`${node.id}:then`)) {
+        ctx.lines.push(`  if (control.activeViewer == ${viewerInt}) {`);
+        flushBranchValues(ctx, `${node.id}:then`);
+        if (!compileFlowChain(ctx, node.id, 'then')) return false;
+        ctx.lines.push(`  }`);
+      }
     } else if (node.data.nodeType === 'sequence') {
       if (!compileFlowChain(ctx, node.id, 'first')) return false;
       if (!compileFlowChain(ctx, node.id, 'then')) return false;

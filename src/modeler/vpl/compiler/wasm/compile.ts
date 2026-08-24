@@ -1706,6 +1706,31 @@ const VALUE_NODE_EMITTERS: Record<string, NodeValueEmitter> = {
       return xRef; // default port → x (parity with the other multi-output emitters)
     }
 
+    if (t === 'color') {
+      // THREE draws in the order R, G, B (the cross-target stream contract).
+      // Each channel is `trunc(u * 256) & 255` — trunc == floor for u ≥ 0, so
+      // this is bit-identical to the JS `Math.floor(u * 256) & 255`.
+      const em = ctx.emitter;
+      const channel = (): number => {          // consumes the uniform on the stack
+        em.f64Const(256);
+        em.op(OP_F64_MUL);
+        em.f64ToI32();
+        em.i32Const(255);
+        em.op(OP_I32_AND);
+        const l = em.allocLocal(I32);
+        em.localSet(l);
+        return l;
+      };
+      const rL = channel();                    // the draw already on the stack
+      drawUniform(); const gL = channel();
+      drawUniform(); const bL = channel();
+      const rRef: LocalRef = { localIdx: rL, valtype: I32 };
+      setCachedPort(ctx, node.id, 'r', rRef);
+      setCachedPort(ctx, node.id, 'g', { localIdx: gL, valtype: I32 });
+      setCachedPort(ctx, node.id, 'b', { localIdx: bL, valtype: I32 });
+      return rRef; // default port → r
+    }
+
     if (t === 'float' && dist === 'normal') {
       // Box-Muller — EXACTLY two draws. `1 - u` keeps log's argument in (0, 1].
       const em = ctx.emitter;
@@ -6554,6 +6579,29 @@ function compileFlowChain(sourceNodeId: string, sourcePortId: string, ctx: WasmC
           compileFlowChain(node.id, 'then', ctx);
         });
       }
+    } else if (node.data.nodeType === 'assertActiveViewer') {
+      // Guard the IF ACTIVE branch on the per-step `viewerLocals` i32 (the SAME
+      // hoisted `activeViewer == viewerInt` Set Cell Looks reads). A mapping that
+      // is not a compile-time viewer can never be active, so the branch is
+      // DROPPED — mirroring setCellLooks' "unknown viewer — skip". DONE (`next`)
+      // is emitted by the shared tail, unconditionally.
+      const mid = (node.data.config.mappingId as string) || '';
+      const viewerInt = mid ? ctx.viewerIds[mid] : undefined;
+      if (viewerInt !== undefined && ctx.flowOutputToTargets.has(`${node.id}:then`)) {
+        const cachedLocal = ctx.viewerLocals.get(mid);
+        if (cachedLocal !== undefined) {
+          ctx.emitter.localGet(cachedLocal);
+        } else {
+          ctx.emitter.i32Const(0);
+          ctx.emitter.i32Load(ctx.layout.activeViewerOffset, 2);
+          ctx.emitter.i32Const(viewerInt);
+          ctx.emitter.op(OP_I32_EQ);
+        }
+        ctx.emitter.ifThen(() => {
+          emitValuesForScope(ctx, `${node.id}:then`);
+          compileFlowChain(node.id, 'then', ctx);
+        });
+      }
     } else if (node.data.nodeType === 'sequence') {
       compileFlowChain(node.id, 'first', ctx);
       compileFlowChain(node.id, 'then', ctx);
@@ -7323,6 +7371,8 @@ function compileEntry(
         seen.add(flowKey);
         switch (node.data.nodeType) {
           case 'conditional':
+          // `assertActiveViewer` — conditional minus the ELSE (no `else` targets).
+          case 'assertActiveViewer':
             visitFlow(t.nodeId, 'then', seen);
             visitFlow(t.nodeId, 'else', seen);
             break;

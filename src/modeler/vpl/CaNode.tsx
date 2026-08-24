@@ -1034,6 +1034,9 @@ function CaNodeComponent({ id, data }: NodeProps) {
     } else if (nodeData.nodeType === 'outputMapping') {
       const mapping = model.mappings.find(m => m.id === nodeData.config.mappingId);
       collapsedLabel = mapping ? `A\u2192C: ${mapping.name}` : displayNodeLabel(def);
+    } else if (nodeData.nodeType === 'assertActiveViewer') {
+      const mapping = model.mappings.find(m => m.id === nodeData.config.mappingId);
+      collapsedLabel = mapping ? `If viewing: ${mapping.name}` : displayNodeLabel(def);
     } else if (nodeData.nodeType === 'agentOutputMapping') {
       const mapping = (model.agentMappings ?? []).find(m => m.id === nodeData.config.mappingId);
       collapsedLabel = mapping ? `Agent A\u2192C: ${mapping.name}` : displayNodeLabel(def);
@@ -2362,6 +2365,22 @@ function CaNodeComponent({ id, data }: NodeProps) {
           </select>
         )}
 
+        {nodeData.nodeType === 'assertActiveViewer' && (
+          <select
+            className={styles.select}
+            title="The IF ACTIVE branch runs only while this Attribute→Color mapping is the viewer selected in the simulator. DONE always runs."
+            value={(nodeData.config.mappingId as string) || ''}
+            onChange={e => updateConfig('mappingId', e.target.value)}
+          >
+            <option value="">Select Mapping...</option>
+            {model.mappings
+              .filter(m => m.isAttributeToColor)
+              .map(m => (
+                <option key={m.id} value={m.id}>{m.name}</option>
+              ))}
+          </select>
+        )}
+
         {nodeData.nodeType === 'agentOutputMapping' && (
           <select
             className={styles.select}
@@ -2786,6 +2805,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
                 <option value="orientation">Orientation</option>
                 <option value="options">Options</option>
                 <option value="vector">Vector</option>
+                <option value="color">Color</option>
               </select>
               {rType === 'float' && (
                 <select

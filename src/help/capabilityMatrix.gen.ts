@@ -884,9 +884,9 @@ export const CAPACITY_LIMITS: CapacityLimit[] = [
 
 /** Node counts, so prose never hard-codes a number that can rot. */
 export const NODE_COUNTS = {
-  "registry": 153,
+  "registry": 154,
   "hiddenMacro": 3,
-  "selectable": 150,
+  "selectable": 151,
   "agent": 52,
   "overseer": 20,
   "agentOnWasm": 45,

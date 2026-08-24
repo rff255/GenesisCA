@@ -463,6 +463,16 @@ export function detectMissingConfig(
       }
       break;
 
+    // Assert Active Output Mapping guards on the SIMULATOR'S ACTIVE VIEWER, and
+    // only an Attribute→Color mapping can ever be that — a C→A (brush) id would
+    // make the branch permanently dead. The picker already filters; this badges
+    // a pasted / hand-edited config.
+    case 'assertActiveViewer':
+      if (!model.mappings.some(m => m.id === config.mappingId && m.isAttributeToColor)) {
+        issues.push('Select an output mapping (A→C)');
+      }
+      break;
+
     case 'inputColor':
     case 'outputMapping':
       if (!hasMapping(config.mappingId)) issues.push('Select a mapping');
@@ -916,6 +926,11 @@ export function detectCapabilityRequirements(
 export const LATTICE_ONLY_TYPES = new Set<string>([
   // cell event roots (the agent graph is rooted at behaviourStep)
   'step', 'initEvent', 'inputColor', 'outputMapping',
+  // Assert Active Output Mapping — the cell targets all carry a viewer compare
+  // (JS `_isV_`, WASM `viewerLocals`, WGSL `control.activeViewer`), but the
+  // WebGPU AGENT shader carries no activeViewer at all, so shipping it on the
+  // Agents graph would be a partial target set.
+  'assertActiveViewer',
   // Grid Init Event + its write primitive — seed the LATTICE grid (agents use the
   // Agent Init Event + Create Agent).
   'gridInit', 'setCellAtPosition',

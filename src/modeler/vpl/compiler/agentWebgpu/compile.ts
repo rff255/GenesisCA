@@ -1030,6 +1030,7 @@ function emitGetRandom(ctx: AgentWgpuCtx, node: GraphNode, portId: string = 'val
   const maxN = getInlineNum(node, 'max', 1);
   const r = 'rand_f32(idx)';
   if (t === 'vector') return emitGetRandomVector(ctx, node, portId);
+  if (t === 'color') return emitGetRandomColor(ctx, node, portId);
   if (t === 'float' && dist === 'normal') {
     // Box-Muller — EXACTLY two draws (each `rand_f32` advances the per-agent
     // PCG once). `1 - u` keeps log's argument in (0, 1].
@@ -1134,6 +1135,27 @@ function emitGetRandomVector(ctx: AgentWgpuCtx, node: GraphNode, portId: string)
   };
   for (const k of Object.keys(refs)) ctx.valueCache.set(`${node.id}:${k}`, refs[k]!);
   return refs[portId] ?? refs['x']!;
+}
+
+/** Get Random, COLOR mode (multi-output r / g / b). THREE draws in the order
+ *  R, G, B (each `rand_f32` advances the per-agent PCG once), each channel
+ *  `i32(u * 256) & 255` — the mask narrows the edge case where the f32 uniform
+ *  rounds to exactly 1.0. Agent refs are uniformly f32, so each channel is
+ *  converted back. */
+function emitGetRandomColor(ctx: AgentWgpuCtx, node: GraphNode, portId: string): ValueRef {
+  const cachedSibling = ctx.valueCache.get(`${node.id}:r`);
+  if (cachedSibling !== undefined) return ctx.valueCache.get(`${node.id}:${portId}`) ?? cachedSibling;
+  const p = fresh(ctx, 'rcol');
+  for (const ch of ['r', 'g', 'b']) {
+    ctx.lines.push(`  let ${p}${ch}: f32 = f32(i32(rand_f32(idx) * 256.0) & 255);`);
+  }
+  const refs: Record<string, ValueRef> = {
+    r: { expr: `${p}r`, type: 'f32' },
+    g: { expr: `${p}g`, type: 'f32' },
+    b: { expr: `${p}b`, type: 'f32' },
+  };
+  for (const k of Object.keys(refs)) ctx.valueCache.set(`${node.id}:${k}`, refs[k]!);
+  return refs[portId] ?? refs['r']!;
 }
 
 /** Categorical Color — integer index → flat RGB from an N-entry palette (no

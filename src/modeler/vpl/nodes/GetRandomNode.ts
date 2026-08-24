@@ -10,9 +10,19 @@ import type { NodeTypeDef } from '../types';
  *   float · uniform                                      1 draw
  *   float · normal (Box-Muller)                          2 draws
  *   float · exponential                                  1 draw
+ *   color (R, G, B — in that order)                      3 draws
  * Every distribution is FIXED-COUNT — no rejection loops — so the shared
  * xorshift32 stream (JS/WASM) and the per-cell/per-agent PCG (WebGPU) advance
  * the same number of times on every target.
+ *
+ * ── COLOUR CHANNEL MAPPING (color mode) ──────────────────────────────────────
+ * Each channel is `floor(u * 256) & 255` — a uniform integer in 0..255, ONE
+ * draw per channel, drawn R then G then B. The `& 255` mirrors orientation's
+ * `& 3`: on JS/WASM `u = _rs / 2^32 < 1` so the mask can never bite, but the
+ * f32 GPU uniform can round to exactly 1.0, and keeping the mask on every
+ * target makes the six emits textually parallel. NO alpha is drawn — a random
+ * opacity is almost never what a rule wants — so the composite `Color` output
+ * lowers (in expandComposites) to r/g/b plus a literal 255.
  *
  * ── COMPASS CONVENTION (vector mode) ─────────────────────────────────────────
  * Degrees clockwise from NORTH, matching the sprite heading convention
@@ -28,6 +38,7 @@ export const RANDOM_LEN_EPS = 1e-30;
 
 /** How many times a given (mode, distribution) advances the RNG stream. */
 export function randomDrawCount(randomType: string, distribution: string): number {
+  if (randomType === 'color') return 3;               // one draw per channel
   return randomType === 'float' && distribution === 'normal' ? 2 : 1;
 }
 
@@ -50,7 +61,7 @@ export function randomRefSource(config: Record<string, unknown> | undefined): 'a
 export const GetRandomNode: NodeTypeDef = {
   type: 'getRandom',
   label: 'Get Random',
-  description: 'Random value: binary (1 with probability P, else 0), integer in [Min, Max], decimal (uniform in [Min, Max), normal with Mean/Std Dev, or exponential with Mean), orientation (uniform 0..3 = N/E/S/W), one option uniformly picked from the wired Options array (Fallback if empty), or a random VECTOR of length Norm whose direction is uniform within Span° of a reference (a compass angle — 0° = north/up, 90° = east — or a wired direction).',
+  description: 'Random value: binary (1 with probability P, else 0), integer in [Min, Max], decimal (uniform in [Min, Max), normal with Mean/Std Dev, or exponential with Mean), orientation (uniform 0..3 = N/E/S/W), one option uniformly picked from the wired Options array (Fallback if empty), a random VECTOR of length Norm whose direction is uniform within Span° of a reference (a compass angle — 0° = north/up, 90° = east — or a wired direction), or a random COLOR (R/G/B each uniform in 0..255; fully opaque — no random alpha).',
   category: 'data',
   color: '#b71c1c',
   ports: [
@@ -79,6 +90,13 @@ export const GetRandomNode: NodeTypeDef = {
     { id: 'x', label: 'X', kind: 'output', category: 'value', dataType: 'float' },
     { id: 'y', label: 'Y', kind: 'output', category: 'value', dataType: 'float' },
     { id: 'vector', label: 'Vector', kind: 'output', category: 'value', dataType: 'vector' },
+    // Colour mode is MULTI-OUTPUT the same way: three integer channels plus the
+    // composite `color` port, which expandComposites lowers to these very
+    // channels (+ a literal 255 alpha), so a composite wire costs no extra draw.
+    { id: 'r', label: 'R', kind: 'output', category: 'value', dataType: 'integer' },
+    { id: 'g', label: 'G', kind: 'output', category: 'value', dataType: 'integer' },
+    { id: 'b', label: 'B', kind: 'output', category: 'value', dataType: 'integer' },
+    { id: 'color', label: 'Color', kind: 'output', category: 'value', dataType: 'color' },
   ],
   // No `min`/`max` here any more — they are PORTS, so their values live in
   // `_port_min` / `_port_max` (seeded from the port defaultValue when absent).
@@ -105,6 +123,10 @@ export const GetRandomNode: NodeTypeDef = {
       hidden.push('value');
       if (ref === 'vector') hidden.push('angle'); else hidden.push('dirX', 'dirY');
     }
+    // Colour mode has no numeric parameters at all (the channels are uniform
+    // 0..255 by definition), so it only ADDS outputs and hides the scalar one.
+    if (t !== 'color') hidden.push('r', 'g', 'b', 'color');
+    else hidden.push('value');
     return hidden;
   },
   compile: (nodeId, config, inputVars) => {
@@ -169,6 +191,15 @@ export const GetRandomNode: NodeTypeDef = {
       return `${head} const _v${nodeId}_x = (${norm}) * (${P}fx * ${P}c - ${P}fy * ${P}s);`
         + ` const _v${nodeId}_y = (${norm}) * (${P}fx * ${P}s + ${P}fy * ${P}c);`
         + ` const _v${nodeId}_value = _v${nodeId}_x;\n`;
+    } else if (type === 'color') {
+      // THREE draws, in the order R, G, B — the cross-target stream contract.
+      // Each channel is `floor(u * 256) & 255` (see the header note on the mask).
+      // `_value` aliases R so a STALE edge from a previous mode still resolves.
+      let s = '';
+      for (const ch of ['r', 'g', 'b']) {
+        s += `${advance} const _v${nodeId}_${ch} = Math.floor((_rs / 4294967296) * 256) & 255;`;
+      }
+      return `${s} const _v${nodeId}_value = _v${nodeId}_r;\n`;
     } else if (dist === 'normal') {
       // Box-Muller — EXACTLY two draws, never a rejection loop, so the stream
       // advance count is static on every target. `1 - u` keeps the log argument

@@ -113,9 +113,10 @@ const AGENT_ROOT_TYPES = new Set(['behaviourStep', 'divisionEvent', 'agentInit',
 function isMultiOutput(data: { nodeType: string; config: Record<string, string | number | boolean> }): boolean {
   if (MULTI_OUTPUT_TYPES.has(data.nodeType)) return true;
   if (data.nodeType === 'getModelAttribute' && data.config.isColorAttr) return true;
-  // Get Random is single-output (`value`) in every mode EXCEPT `vector`, whose
-  // X / Y components resolve via the `_v<id>_<port>` convention.
-  if (data.nodeType === 'getRandom' && data.config.randomType === 'vector') return true;
+  // Get Random is single-output (`value`) in every mode EXCEPT `vector` (X / Y)
+  // and `color` (R / G / B), whose components resolve via `_v<id>_<port>`.
+  if (data.nodeType === 'getRandom'
+    && (data.config.randomType === 'vector' || data.config.randomType === 'color')) return true;
   if (data.nodeType === 'groupStatement' || data.nodeType === 'groupCounting'
     || data.nodeType === 'groupOperator') return true;
   // filterNeighbors and joinNeighbors expose `result` (kept NI array) and
@@ -1111,6 +1112,21 @@ function compileRoot(
           compileFlowChain(node.id, 'else', indent + '  ');
         }
         flowLines.push(`${indent}}`);
+      } else if (node.data.nodeType === 'assertActiveViewer') {
+        // Guard the IF ACTIVE branch on the per-step `_isV_<safeId>` hoist — the
+        // SAME constant Set Cell Looks reads, so the two can never disagree about
+        // what "active" means. DONE (`next`) is emitted afterwards by the shared
+        // tail, unconditionally.
+        const mid = (node.data.config.mappingId as string) || '';
+        const isViewer = !!model?.mappings?.some(m => m.id === mid && m.isAttributeToColor);
+        if (isViewer && flowOutputToTargets.has(`${node.id}:then`)) {
+          flowLines.push(`${indent}if (_isV_${safeId(mid)}) {`);
+          flushBranchValues(`${node.id}:then`, flowLines, indent + '  ');
+          compileFlowChain(node.id, 'then', indent + '  ');
+          flowLines.push(`${indent}}`);
+        }
+        // An unset / non-viewer mapping can never be the active viewer, so the
+        // branch is DROPPED (mirrors setCellLooks' "unknown viewer - skip").
       } else if (node.data.nodeType === 'sequence') {
         compileFlowChain(node.id, 'first', indent);
         compileFlowChain(node.id, 'then', indent);
@@ -2117,6 +2133,14 @@ export function compileGraph(
         const mid = (n.data.config.mappingId as string) || 'default';
         // "Current Simulator Selected" emits no _isV_ guard — nothing to hoist.
         if (mid !== CURRENT_VIEWER_SENTINEL) viewerIdsToHoist.add(mid);
+      }
+      // Assert Active Output Mapping reads the same `_isV_` hoist. Its emit only
+      // fires for a real A->C model mapping (already in the set above), so this is
+      // belt-and-braces - it keeps the node self-sufficient if the blanket
+      // "every model mapping" rule above is ever narrowed.
+      if (n.data.nodeType === 'assertActiveViewer') {
+        const mid = (n.data.config.mappingId as string) || '';
+        if (mid) viewerIdsToHoist.add(mid);
       }
     }
   };

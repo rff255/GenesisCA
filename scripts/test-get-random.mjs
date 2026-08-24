@@ -1,20 +1,24 @@
 // Get Random overhaul — functional verification of the parameterised intervals,
-// the distributions and the vector mode, on the CELL surfaces + the Overseer.
-// (The three AGENT surfaces are covered permanently by the
-// `[synthetic] Get Random …` entry in scripts/parity-agent-wasm.mjs, which
-// carries the same stream-INDEPENDENT value laws plus JS↔WASM bit-parity.)
+// the distributions, the vector mode and the COLOR mode, on the CELL surfaces +
+// the Overseer, plus a compile check on the two agent backends.
+// (Agent JS↔WASM bit-parity and the agent VALUE laws are covered permanently by
+// the `[synthetic] Get Random …` entry in scripts/parity-agent-wasm.mjs.)
 //
 // What this checks — VALUES, not just "it compiled":
 //   0. The node def: the mode/distribution vocabulary, the hiddenPorts matrix,
-//      and the DRAW-COUNT contract (normal = 2, everything else = 1).
+//      and the DRAW-COUNT contract (normal = 2, color = 3, everything else = 1).
 //   1. The legacy-config migration (`min`/`max` → `_port_min`/`_port_max`) over
 //      every graph + macroDefs, idempotent, value-for-value.
 //   2. CELLS — the compiled JS step AND a REAL instantiated WASM module produce
 //      the same numbers, bit for bit, from the same seed, for: an inline
 //      interval, a WIRED interval, normal (mean/σ recovered from 200k samples,
 //      and exactly the mean at σ=0), exponential, and both vector reference
-//      modes (compass convention asserted against hand-computed values).
+//      modes (compass convention asserted against hand-computed values), and
+//      color (whole bytes, a full-range uniform spread, three INDEPENDENT
+//      channels, and the R→G→B draw ORDER against an independently-advanced
+//      reference stream).
 //   3. WGSL emit carries each new path (and NOT the ones it should not).
+//   3b. Both agent gates ACCEPT color mode and both agent backends emit it.
 //   4. The Overseer driver runs an interval draw.
 //
 // Run from the repo root:  node scripts/test-get-random.mjs
@@ -34,6 +38,8 @@ export { compileOverseerGraph } from '../src/modeler/vpl/compiler/overseer/compi
 export { migrateForHarness } from '../src/dev/compileHarness.ts';
 export { migrateGetRandomRange } from '../src/model/getRandomRangeMigration.ts';
 export { getNodeDef } from '../src/modeler/vpl/nodes/registry.ts';
+export { compileAgentGraphWebGPUForModel, isAgentGraphWebGPUSupported } from '../src/modeler/vpl/compiler/agentWebgpu/compile.ts';
+export { compileAgentGraphWasmForModel, isAgentGraphWasmSupported } from '../src/modeler/vpl/compiler/agentWasm/compile.ts';
 export { randomDrawCount, randomDistribution, randomRefSource } from '../src/modeler/vpl/nodes/GetRandomNode.ts';
 `;
 const dir = mkdtempSync(join(tmpdir(), 'gca-getrandom-'));
@@ -69,8 +75,14 @@ console.log('== node definition ==');
   const ids = def.ports.map(p => p.id);
   for (const p of ['min', 'max', 'mean', 'stddev', 'norm', 'angle', 'dirX', 'dirY', 'span'])
     check(`port "${p}" exists`, ids.includes(p));
-  for (const p of ['x', 'y', 'vector'])
+  for (const p of ['x', 'y', 'vector', 'r', 'g', 'b', 'color'])
     check(`output port "${p}" exists`, ids.includes(p));
+  check('the composite colour output is color-typed',
+    def.ports.find(p => p.id === 'color')?.dataType === 'color');
+  check('the colour channels are integer-typed',
+    ['r', 'g', 'b'].every(id => def.ports.find(p => p.id === id)?.dataType === 'integer'));
+  check('no colour port carries an inline widget (nothing to parameterise)',
+    ['r', 'g', 'b', 'color'].every(id => !def.ports.find(p => p.id === id)?.inlineWidget));
   check('min/max carry an inline number widget',
     def.ports.filter(p => p.id === 'min' || p.id === 'max').every(p => p.inlineWidget === 'number'));
   check('the composite output is vector-typed',
@@ -105,6 +117,16 @@ console.log('== node definition ==');
   h = H({ randomType: 'vector', refSource: 'vector' });
   check('vector (direction ref) shows Dir X/Y and hides Angle', !h.has('dirX') && !h.has('dirY') && h.has('angle'));
   // Bool / options unchanged.
+  // Colour.
+  h = H({ randomType: 'color' });
+  check('color shows R/G/B + the composite Color', ['r', 'g', 'b', 'color'].every(p => !h.has(p)));
+  check('color hides the scalar `value` output', h.has('value'));
+  check('color hides every OTHER mode\'s ports',
+    ['probability', 'min', 'max', 'mean', 'stddev', 'options', 'fallback',
+      'norm', 'angle', 'dirX', 'dirY', 'span', 'x', 'y', 'vector'].every(p => h.has(p)));
+  check('every non-color mode hides R/G/B + Color',
+    ['float', 'integer', 'bool', 'orientation', 'options', 'vector']
+      .every(t => ['r', 'g', 'b', 'color'].every(p => H({ randomType: t }).has(p))));
   check('bool still shows P only', !H({ randomType: 'bool' }).has('probability') && H({ randomType: 'float' }).has('probability'));
   check('options still shows Options + Fallback',
     !H({ randomType: 'options' }).has('options') && !H({ randomType: 'options' }).has('fallback'));
@@ -116,6 +138,9 @@ console.log('== node definition ==');
   check('draw count: vector = 1', M.randomDrawCount('vector', 'uniform') === 1);
   check('draw count: integer/bool/orientation/options = 1',
     ['integer', 'bool', 'orientation', 'options'].every(t => M.randomDrawCount(t, 'uniform') === 1));
+  check('draw count: color = 3 (one per channel)', M.randomDrawCount('color', 'uniform') === 3);
+  check('color\'s draw count ignores the distribution key',
+    M.randomDrawCount('color', 'normal') === 3);
 }
 
 // ===========================================================================
@@ -307,6 +332,122 @@ console.log('\n== cells: draw-count contract (the shared stream advances N times
     after([{ attrId: 'a', cfg: { randomType: 'float', distribution: 'exponential' } }]) === expect(1));
   check('vector advances the stream ONCE per cell',
     after([{ attrId: 'a', cfg: { randomType: 'vector' }, port: 'x' }]) === expect(1));
+  check('color advances the stream THREE times per cell (R, G, B)',
+    after([{ attrId: 'a', cfg: { randomType: 'color' }, port: 'r' }]) === expect(3));
+}
+
+console.log('\n== cells: color mode (JS vs a real WASM module) ==');
+{
+  // One Get Random in colour mode, all three channels written to attributes, so
+  // the ONE multi-output emit is exercised (three consumers, three draws total).
+  const g = mkGraph();
+  const step = g.n('step');
+  const rnd = g.n('getRandom', { randomType: 'color' });
+  let prev = step, prevPort = 'do';
+  const attrIds = [];
+  for (const ch of ['r', 'g', 'b']) {
+    const set = g.n('setAttribute', { attributeId: `c${ch}` });
+    g.v(rnd, ch, set, 'value');
+    g.f(prev, prevPort, set, 'do');
+    prev = set; prevPort = 'next';
+    attrIds.push(`c${ch}`);
+  }
+  const model = M.migrateForHarness({
+    schemaVersion: 2,
+    properties: {
+      name: 'GetRandom color', description: '', topology: '2d-grid',
+      boundaryTreatment: 'torus', updateMode: 'synchronous',
+      gridWidth: TOTAL_W, gridHeight: TOTAL_H, dimension: '2d', gridDepth: 1, useWasm: false,
+    },
+    attributes: attrIds.map(cellAttr),
+    neighborhoods: [], mappings: [], indicators: [],
+    graphNodes: g.nodes, graphEdges: g.edges, macroDefs: [],
+    topologyMode: { gridCells: true, agents: false },
+  });
+  const js = runJs(model, attrIds);
+  check('JS compiles + runs', !js.error, js.error ?? '');
+  const wa = await runWasm(model, attrIds);
+  check('WASM compiles + runs', !wa.error, wa.error ?? '');
+  if (!js.error && !wa.error) {
+    const all = attrIds.flatMap(id => Array.from(js.out[id]));
+    check('every channel is a WHOLE number in 0..255',
+      all.every(v => v >= 0 && v <= 255 && v === Math.floor(v)),
+      `min ${Math.min(...all)} max ${Math.max(...all)}`);
+    check('the channels span the full byte range',
+      Math.min(...all) < 8 && Math.max(...all) > 247,
+      `min ${Math.min(...all)} max ${Math.max(...all)}`);
+    check('each channel is uniform (mean ≈ 127.5)',
+      attrIds.every(id => Math.abs(mean(js.out[id]) - 127.5) < 6),
+      attrIds.map(id => `${id}=${mean(js.out[id]).toFixed(1)}`).join(' '));
+    // R, G, B come from DIFFERENT draws — they must not track each other.
+    check('R, G and B are three INDEPENDENT draws (not one value copied)',
+      Array.from(js.out.cr).some((v, i) => v !== js.out.cg[i])
+      && Array.from(js.out.cg).some((v, i) => v !== js.out.cb[i])
+      && Array.from(js.out.cr).some((v, i) => v !== js.out.cb[i]));
+    let diffs = 0;
+    for (const id of attrIds) diffs += bitDiff(js.out[id], wa.out[id]);
+    check('JS ↔ WASM BIT-IDENTICAL for all three channels', diffs === 0, `${diffs} mismatches`);
+    check('the RNG stream ends in the same state', js.rngAfter === wa.rngAfter,
+      `${js.rngAfter} vs ${wa.rngAfter}`);
+    // The draw ORDER is part of the contract: channel k is the k-th advance.
+    const advance = (rs) => { rs = (rs ^ (rs << 13)) >>> 0; rs = (rs ^ (rs >>> 17)) >>> 0; rs = (rs ^ (rs << 5)) >>> 0; return rs; };
+    let rs = SEED >>> 0;
+    const expected = ['cr', 'cg', 'cb'].map(() => { rs = advance(rs); return Math.floor((rs / 4294967296) * 256) & 255; });
+    check('cell 0 draws R, then G, then B — in that order',
+      js.out.cr[0] === expected[0] && js.out.cg[0] === expected[1] && js.out.cb[0] === expected[2],
+      `got (${js.out.cr[0]}, ${js.out.cg[0]}, ${js.out.cb[0]}) want (${expected.join(', ')})`);
+  }
+}
+
+console.log('\n== cells: the composite `color` output lowers to the same 3 draws ==');
+{
+  // Wire the composite port through Break Color — expandComposites must resolve
+  // R/G/B back to THIS node's channels (and alpha to a literal 255), so the
+  // stream advances three times per cell, not six.
+  const g = mkGraph();
+  const step = g.n('step');
+  const rnd = g.n('getRandom', { randomType: 'color' });
+  const brk = g.n('breakColor', {});
+  g.v(rnd, 'color', brk, 'color');
+  let prev = step, prevPort = 'do';
+  const attrIds = [];
+  for (const ch of ['r', 'g', 'b', 'a']) {
+    const set = g.n('setAttribute', { attributeId: `k${ch}` });
+    g.v(brk, ch, set, 'value');
+    g.f(prev, prevPort, set, 'do');
+    prev = set; prevPort = 'next';
+    attrIds.push(`k${ch}`);
+  }
+  const model = M.migrateForHarness({
+    schemaVersion: 2,
+    properties: {
+      name: 'GetRandom color composite', description: '', topology: '2d-grid',
+      boundaryTreatment: 'torus', updateMode: 'synchronous',
+      gridWidth: TOTAL_W, gridHeight: TOTAL_H, dimension: '2d', gridDepth: 1, useWasm: false,
+    },
+    attributes: attrIds.map(cellAttr),
+    neighborhoods: [], mappings: [], indicators: [],
+    graphNodes: g.nodes, graphEdges: g.edges, macroDefs: [],
+    topologyMode: { gridCells: true, agents: false },
+  });
+  const js = runJs(model, attrIds);
+  check('JS compiles + runs', !js.error, js.error ?? '');
+  if (!js.error) {
+    const advance = (rs) => { rs = (rs ^ (rs << 13)) >>> 0; rs = (rs ^ (rs >>> 17)) >>> 0; rs = (rs ^ (rs << 5)) >>> 0; return rs; };
+    let rs = SEED >>> 0; for (let i = 0; i < TOTAL * 3; i++) rs = advance(rs);
+    check('the composite wire costs exactly THREE draws per cell', js.rngAfter === (rs >>> 0));
+    check('alpha is the LITERAL 255 (no draw spent on it)',
+      Array.from(js.out.ka).every(v => v === 255), `first ${js.out.ka[0]}`);
+    check('the composite channels are whole bytes',
+      ['kr', 'kg', 'kb'].every(id => Array.from(js.out[id]).every(v => v >= 0 && v <= 255 && v === Math.floor(v))));
+  }
+  const wa = await runWasm(model, attrIds);
+  check('WASM compiles + runs the composite path', !wa.error, wa.error ?? '');
+  if (!js.error && !wa.error) {
+    let diffs = 0;
+    for (const id of attrIds) diffs += bitDiff(js.out[id], wa.out[id]);
+    check('JS ↔ WASM BIT-IDENTICAL (color composite)', diffs === 0, `${diffs} mismatches`);
+  }
 }
 
 console.log('\n== cells: vector mode + the compass convention ==');
@@ -451,8 +592,71 @@ console.log('\n== WebGPU (cell) emit ==');
   check('vector (direction) normalises with the eps guard + north select',
     !!vecD && /1\.0 \/ max\(/.test(vecD) && /select\(-1\.0, /.test(vecD));
   check('vector (direction) uses NO atan2', !!vecD && !/atan2/.test(vecD));
+  const col = emit([{ attrId: 'a', cfg: { randomType: 'color' }, port: 'r' }]);
+  check('color compiles', !!col);
+  check('color draws rand_f32 exactly THREE times', !!col && (col.match(/rand_f32\(idx\)/g) || []).length === 3);
+  check('color quantises each channel with the & 255 mask',
+    !!col && (col.match(/i32\(rand_f32\(idx\) \* 256\.0\) & 255/g) || []).length === 3);
   const wired = emit([{ attrId: 'a', cfg: { randomType: 'float' }, wires: [[3, 'min'], [9, 'max']] }]);
   check('a WIRED interval compiles to the runtime-span form', !!wired && /rand_f32\(idx\) \* \(\(/.test(wired));
+}
+
+// ===========================================================================
+// 3b. AGENT targets — colour mode must run on all three, not just the cells.
+//     (Agent JS<->WASM bit-parity + the value laws are covered permanently by
+//     the `[synthetic] Get Random ...` entry in scripts/parity-agent-wasm.mjs;
+//     what THIS checks is that the agent gates ACCEPT the mode and that both
+//     agent backends actually emit it.)
+// ===========================================================================
+console.log('\n== agents: colour mode compiles on WASM + WebGPU ==');
+{
+  const g = mkGraph();
+  const bs = g.n('behaviourStep', {});
+  const rnd = g.n('getRandom', { randomType: 'color' });
+  let prev = bs, prevPort = 'do';
+  for (const ch of ['r', 'g', 'b']) {
+    const set = g.n('setAttribute', { attributeId: `ac${ch}` });
+    g.v(rnd, ch, set, 'value');
+    g.f(prev, prevPort, set, 'do');
+    prev = set; prevPort = 'next';
+  }
+  const agentAttr = (id) => ({ id, name: id, type: 'float', description: '', isModelAttribute: false, defaultValue: '0' });
+  const model = M.migrateForHarness({
+    schemaVersion: 2,
+    properties: {
+      name: 'GetRandom color agents', description: '', topology: '2d-grid',
+      boundaryTreatment: 'torus', updateMode: 'synchronous',
+      gridWidth: 32, gridHeight: 32, dimension: '2d', gridDepth: 1,
+    },
+    attributes: [], neighborhoods: [], mappings: [], indicators: [],
+    graphNodes: [], graphEdges: [], macroDefs: [],
+    agentAttributes: ['acr', 'acg', 'acb'].map(agentAttr),
+    agentGraphNodes: g.nodes, agentGraphEdges: g.edges,
+    topologyMode: { gridCells: false, agents: true },
+    centerBased: {
+      enabled: true, maxAgents: 64, maxBonds: 0, worldWidth: 32, worldHeight: 32,
+      seedCount: 16, seedPattern: 'scatter', defaultRadius: 0.5, growthRate: 0,
+      repulsionStiffness: 0, adhesionStiffness: 0, interactionRange: 1.5, drag: 1,
+      timeStep: 0.1, momentum: 0, maxSpeed: 0, neighbourQueryRadius: 4,
+      useBondingPhysics: false, autoBond: false, agentUpdateMode: 'async',
+      agentCapabilities: {
+        motion: 'static', body: true, collision: 'off', bonds: 'off', autoBond: false,
+        growth: false, division: false, lifespan: false, populationBirth: false,
+        populationDeath: false, sensing: false, sensingHeadingSource: 'velocity',
+        orientation: false, fieldCoupling: false, appearance: true,
+      },
+    },
+  });
+  check('the agent WASM gate ACCEPTS colour mode', M.isAgentGraphWasmSupported(model));
+  check('the agent WebGPU gate ACCEPTS colour mode', M.isAgentGraphWebGPUSupported(model));
+  const aw = M.compileAgentGraphWasmForModel(model);
+  check('agent WASM compiles', !aw.error && aw.bytes.length > 0, aw.error ?? '');
+  const ag = M.compileAgentGraphWebGPUForModel(model);
+  check('agent WebGPU compiles', !ag.error && !!ag.shaderCode, ag.error ?? '');
+  check('agent WGSL draws rand_f32 exactly THREE times',
+    !ag.error && (ag.shaderCode.match(/rand_f32\(idx\)/g) || []).length === 3);
+  check('agent WGSL quantises each channel with the & 255 mask',
+    !ag.error && (ag.shaderCode.match(/i32\(rand_f32\(idx\) \* 256\.0\) & 255/g) || []).length === 3);
 }
 
 // ===========================================================================

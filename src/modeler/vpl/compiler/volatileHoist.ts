@@ -200,7 +200,9 @@ export function computeVolatileHoist(input: VolatileHoistInput): VolatileHoistRe
     // Non-transparent node: a member of its enclosing scope.
     pushMember(scope, nodeId);
 
-    if (type === 'conditional') {
+    // `assertActiveViewer` — conditional minus the ELSE (its `else` port has no
+    // targets, so the shared walk covers it).
+    if (type === 'conditional' || type === 'assertActiveViewer') {
       const t = `${nodeId}:then`; reg(t, scope); walkOutput(nodeId, 'then', t);
       const e = `${nodeId}:else`; reg(e, scope); walkOutput(nodeId, 'else', e);
     } else if (type === 'loop') {

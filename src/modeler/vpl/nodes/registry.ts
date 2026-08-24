@@ -87,6 +87,7 @@ import { GroupOperatorNode } from './GroupOperatorNode';
 import { StatementNode } from './StatementNode';
 import { LogicOperatorNode } from './LogicOperatorNode';
 import { ConditionalNode } from './ConditionalNode';
+import { AssertActiveViewerNode } from './AssertActiveViewerNode';
 import { SequenceNode } from './SequenceNode';
 import { LoopNode } from './LoopNode';
 import { SetAttributeNode } from './SetAttributeNode';
@@ -252,6 +253,7 @@ const ALL_NODES: NodeTypeDef[] = [
   SecreteToFieldNode,
   // Flow
   ConditionalNode,
+  AssertActiveViewerNode,
   SequenceNode,
   LoopNode,
   ForEachInArrayNode,
