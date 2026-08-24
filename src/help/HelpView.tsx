@@ -3188,7 +3188,10 @@ export function HelpView() {
             buffers live in the same shared agent memory as every other agent field on the CPU
             engines, and get their own runs in the GPU agent buffer, so a sprite-driving
             <strong> Behaviour</strong> graph compiles like any other setter and never clamps the
-            model to a slower engine.
+            model to a slower engine. In <strong>2D</strong> the sprites are also <em>drawn</em> on
+            the GPU (a billboard pass alongside the disc pass), so a sprite model gets the same
+            fast display path as any other; in <strong>3D</strong> they are drawn by the regular
+            overlay.
             <br /><br />
             One fast path is unavailable: a sprite-writing Behaviour graph is not
             <strong> GPU-residency</strong> eligible, because the engine advances
@@ -3200,10 +3203,12 @@ export function HelpView() {
             anyway: choosing how an agent <em>looks</em> is a presentation concern.
           </p>
           <p className={styles.p}>
-            <strong>A note on speed.</strong> Sprites are drawn by the CPU overlay (the GPU
-            direct-render path draws discs only), so a sprite model&rsquo;s frame cost is dominated
-            by the <em>drawing</em>, not the agent step. Switching engines helps a heavy per-agent
-            rule or a large population; it will not move a small sprite flock much.
+            <strong>A note on speed.</strong> In <strong>2D</strong>, sprites are drawn on the GPU
+            like everything else &mdash; a sprite model takes the same fast display path a plain
+            disc model does, so a large sprite flock is no longer limited by the drawing. In
+            <strong> 3D</strong> a sprite model still draws through the regular overlay, so there
+            its frame cost is dominated by the <em>drawing</em> rather than the agent step, and
+            switching engines will not move a small 3D sprite flock much.
           </p>
           <h3 className={styles.h3}>The Config Panel</h3>
           <p className={styles.p}>
@@ -3542,7 +3547,7 @@ export function HelpView() {
               <em>every</em> 2D agent
               model and every agent target: on the direct-render path the shader draws the
               halo and the core as two passes, and everywhere else (bonded graphs and
-              tissues, sprites, metaballs, field-coupled models) the regular agent overlay
+              tissues, metaballs, field-coupled models) the regular agent overlay
               draws the halo under the discs and bonds for the same result &mdash; both
               accumulate and compress the same way, so the two paths look the same. It is a
               per-agent drawing cost, so on very large populations expect a slower display

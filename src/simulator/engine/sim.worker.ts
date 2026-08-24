@@ -65,6 +65,8 @@ import {
   setupAgentDirectRender, uploadAgentRenderView, uploadAgentRenderView3D, uploadAgentViz, presentAgentsOnce, presentAgentsFromStore,
   setupAgentCompositeRender, presentAgentCompositeFromStore, debugReadCompositePixels,
   createAgentRenderOnlyRuntime, presentAgentRenderFromStore, destroyAgentRenderSurface,
+  setAgentSpriteAtlas, spriteRenderActive, type AgentSpriteAtlasPayload,
+  debugReadAgentPixels, uploadAgentRenderFields, uploadAgentColors,
   type AgentWebGPURuntime, type AgentRenderSurface, type FieldArray, type AgentRenderView, type AgentRenderView3D, type AgentOMShaderInput,
 } from './agentWebgpuRuntime';
 // E1 device-leak metric (DEV/verification only — surfaced through the __e1bCounters
@@ -462,6 +464,10 @@ interface GetStateMsg { type: 'getState' }
 interface SetRngSeedMsg { type: 'setRngSeed'; seed: number }
 /** E1b DEV probe (verification only; the app never sends it). */
 interface E1bCountersMsg { type: '__e1bCounters' }
+/** DEV/verification only: present the agent frame and summarise the presented
+ *  pixels (the pane is routinely occluded, so a main-thread read of the
+ *  transferred canvas returns transparent). */
+interface AgentPixelsMsg { type: '__agentPixels'; box?: { x: number; y: number; w: number; h: number } }
 /** C3 (P4) — the SUPPORTED fast-path diagnostics request. Unlike the `__`-prefixed
  *  probes above this is a first-class message the app sends when the user opens
  *  the diagnostics popover (and while it stays open). ON DEMAND ONLY — never per
@@ -798,11 +804,18 @@ interface SetAgentVizMsg {
   type: 'setAgentViz'; axes: boolean; grid: boolean; bounds: boolean;
   plane?: { axis: 'x' | 'y' | 'z'; pos: number } | null;
 }
+/** The 2D agent SPRITE atlas, built on the main thread (sprite decode is
+ *  main-thread-only by design) and shipped as ONE transferred ImageBitmap tile
+ *  grid + plain-JSON per-slot meta. The worker copies each tile into one layer of
+ *  a texture_2d_array and CLOSES the bitmap. Re-shipped by the main thread on
+ *  every `agentRenderStatus` ack, because a rebuilt surface has no atlas — the
+ *  worker cannot re-apply one it has already consumed. */
+interface SetAgentSpriteAtlasMsg { type: 'setAgentSpriteAtlas'; atlas: AgentSpriteAtlasPayload }
 /** Re-present the agent frame (tab-refocus / soft-recompile analogue of
  *  refreshDisplay). */
 interface RefreshAgentDisplayMsg { type: 'refreshAgentDisplay' }
 
-type WorkerMsg = InitMsg | StepMsg | CancelStepMsg | PaintMsg | PaintManualMsg | ResetMsg | RecompileMsg | UpdateModelAttrsMsg | UpdateLookupTableMsg | ImportImageMsg | ImportGridValuesMsg | UpdateIndicatorsMsg | GetStateMsg | LoadStateMsg | ReadRegionMsg | WriteRegionMsg | ClearRegionMsg | SetUseWasmMsg | SetUseWebGPUMsg | ReadbackWebGPUMsg | ColorPassMsg | SetRecordingMsg | AttachCanvasMsg | RequestColorsSnapshotMsg | SetInspectCellsMsg | RefreshDisplayMsg | SeedAgentsMsg | CreateAgentMsg | KillAgentsMsg | PaintAgentsMsg | PaintAgentsColorMsg | SpawnAgentsBrushMsg | ClearAgentsMsg | ReadAgentsMsg | PasteAgentsMsg | FormBondMsg | BreakBondMsg | GetBondStateMsg | SetBondStateMsg | GetAgentStateMsg | MoveAgentsMsg | NudgeAgentsMsg | SetAgentWasmBackedMsg | SetRngSeedMsg | SetSimLayersMsg | SetAgentSnapshotVelocityMsg | AttachAgentCanvasMsg | SetAgentCameraMsg | SetAgentUiSyncMsg | SetAgentVizMsg | RefreshAgentDisplayMsg | GetDiagnosticsMsg | E1bCountersMsg | GraphIndicatorStatsMsg | CompositeReadbackMsg | AttachVoxelCanvasMsg | SetGridCameraMsg | SetGridUiSyncMsg | SetGridVizMsg | RefreshGridDisplayMsg | VoxelReadbackMsg;
+type WorkerMsg = InitMsg | StepMsg | CancelStepMsg | PaintMsg | PaintManualMsg | ResetMsg | RecompileMsg | UpdateModelAttrsMsg | UpdateLookupTableMsg | ImportImageMsg | ImportGridValuesMsg | UpdateIndicatorsMsg | GetStateMsg | LoadStateMsg | ReadRegionMsg | WriteRegionMsg | ClearRegionMsg | SetUseWasmMsg | SetUseWebGPUMsg | ReadbackWebGPUMsg | ColorPassMsg | SetRecordingMsg | AttachCanvasMsg | RequestColorsSnapshotMsg | SetInspectCellsMsg | RefreshDisplayMsg | SeedAgentsMsg | CreateAgentMsg | KillAgentsMsg | PaintAgentsMsg | PaintAgentsColorMsg | SpawnAgentsBrushMsg | ClearAgentsMsg | ReadAgentsMsg | PasteAgentsMsg | FormBondMsg | BreakBondMsg | GetBondStateMsg | SetBondStateMsg | GetAgentStateMsg | MoveAgentsMsg | NudgeAgentsMsg | SetAgentWasmBackedMsg | SetRngSeedMsg | SetSimLayersMsg | SetAgentSnapshotVelocityMsg | AttachAgentCanvasMsg | SetAgentCameraMsg | SetAgentUiSyncMsg | SetAgentVizMsg | SetAgentSpriteAtlasMsg | RefreshAgentDisplayMsg | GetDiagnosticsMsg | E1bCountersMsg | AgentPixelsMsg | GraphIndicatorStatsMsg | CompositeReadbackMsg | AttachVoxelCanvasMsg | SetGridCameraMsg | SetGridUiSyncMsg | SetGridVizMsg | RefreshGridDisplayMsg | VoxelReadbackMsg;
 
 // ---------------------------------------------------------------------------
 // C3 (P4) — RUNTIME FALLBACK LOG
@@ -3436,7 +3449,17 @@ async function runAgentBatchResident(count: number, bumpGeneration: boolean = tr
       agentBatchPresented = agentRenderActive;
     }
     // Sprite frames advance CPU-side (independent of the GPU SoA) — one tick/gen.
-    if (hasAgentSprites) for (let k = 0; k < count; k++) advanceAgentSprites(s);
+    if (hasAgentSprites) {
+      for (let k = 0; k < count; k++) advanceAgentSprites(s);
+      // The GPU's copy of the sprite runs is now stale by `count` frames. A resident
+      // batch presents from GPU state inside its own submit, so without this the
+      // billboards would freeze on whatever frame the last upload carried. Flagging
+      // the re-upload makes the NEXT batch seed the ticked values before it presents:
+      // the animation runs at exactly the right RATE, offset by one batch. (A model
+      // whose behaviour WRITES sprites blocks residency outright, so this only bites
+      // the OM-driven case.)
+      if (spriteRenderActive(rt)) agentGpuUploadPending = true;
+    }
     // D: a decoupled grid+agents batch counts the generation via the grid's cell
     // steps (bumpGeneration=false); an agents-only batch owns the count here.
     if (bumpGeneration) setGeneration(generation + count);
@@ -8464,6 +8487,27 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       break;
     }
 
+    case 'setAgentSpriteAtlas': {
+      // Install the main-thread-built sprite atlas on whichever render surface is
+      // live, then re-present so the frame picks it up immediately (a paused sim
+      // ships no step). The bitmap is CONSUMED (closed) by setAgentSpriteAtlas —
+      // including on the no-surface path, so a transferred bitmap is never leaked.
+      {
+        const rt = activeRenderSurface();
+        if (rt) {
+          setAgentSpriteAtlas(rt, msg.atlas);
+          // A2 (CPU target) seeds the sprite runs from the store on the next
+          // present; A1 re-uploads its SoA because the widened upload predicate
+          // (spriteRunsUploaded) only just became true.
+          if (agentWebgpuRuntime && rt === agentWebgpuRuntime) agentGpuUploadPending = true;
+          if (agentRenderActive) presentAgentsIfActive();
+        } else {
+          msg.atlas.bitmap?.close();
+        }
+      }
+      break;
+    }
+
     case 'refreshAgentDisplay': {
       // Tab-refocus / soft-recompile analogue of refreshDisplay — re-present the
       // agent frame so a stale/unpresented canvas repaints.
@@ -9250,6 +9294,44 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
           fallbackEvents: runtimeEvents.map(e => ({ gen: e.gen, text: e.text })),
         },
       });
+      break;
+    }
+
+    case '__agentPixels': {
+      // DEV probe — see debugReadAgentPixels.
+      void (async () => {
+        const rt = activeRenderSurface();
+        const s2 = agentStore;
+        if (!rt || !s2) { self.postMessage({ type: '__agentPixelsResult', ok: false }); return; }
+        try {
+          if (agentWebgpuRuntime && rt === agentWebgpuRuntime) uploadAgentSoA(rt as never, s2);
+          else uploadAgentRenderFields(rt, s2);
+          uploadAgentColors(rt, s2);
+          const r = await debugReadAgentPixels(rt, s2.highWater, msg.box);
+          // Sprite STORE stats alongside the pixels: how many agents actually carry
+          // a slot, and the frame/rotation spread (an animation that is advancing
+          // and a facing that is not all-zero are separate claims from "pixels
+          // appeared").
+          let withSlot = 0, fMin = Infinity, fMax = -Infinity, rotMin = Infinity, rotMax = -Infinity;
+          for (let i = 0; i < s2.highWater; i++) {
+            if (!s2.alive[i]) continue;
+            if ((s2.spriteIds[i] ?? 0) > 0) {
+              withSlot++;
+              const f = s2.spriteFrames[i] ?? 0, ro = s2.spriteRotations[i] ?? 0;
+              if (f < fMin) fMin = f; if (f > fMax) fMax = f;
+              if (ro < rotMin) rotMin = ro; if (ro > rotMax) rotMax = ro;
+            }
+          }
+          self.postMessage({
+            type: '__agentPixelsResult', ok: !!r, ...(r ?? {}),
+            highWater: s2.highWater, liveCount: s2.liveCount, generation,
+            withSlot, frameMin: Number.isFinite(fMin) ? fMin : null, frameMax: Number.isFinite(fMax) ? fMax : null,
+            rotMin: Number.isFinite(rotMin) ? rotMin : null, rotMax: Number.isFinite(rotMax) ? rotMax : null,
+          });
+        } catch (e) {
+          self.postMessage({ type: '__agentPixelsResult', ok: false, message: (e as Error)?.message || String(e) });
+        }
+      })();
       break;
     }
 

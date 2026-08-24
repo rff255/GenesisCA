@@ -1144,6 +1144,174 @@ check('runtime: uploadAgentSoA seeds the agent colour buffer [invisible-agents b
 }
 
 // ---------------------------------------------------------------------------
+// B18 (2D AGENT SPRITES — the billboard pass, which is what stops a sprite model
+// being excluded from direct render).
+//
+// A sprite model used to fail `agentRenderModelTermsOk` outright, so it always paid
+// the CPU overlay. The worker now carries a sprite pass; the invariants that make
+// that safe are all structural, and each one below has a shipped-bug shape behind
+// it:
+//
+//   * the DISC pass must CULL a sprite-carrying agent, or the sprite draws ON TOP
+//     OF its own disc (visible as a coloured halo behind every sprite);
+//   * the two culls must be exact COMPLEMENTS (`frameCount > 0` on both sides), or
+//     an agent draws twice, or — worse — not at all;
+//   * an UNDECODED slot keeps a zeroed meta record, which is the fallback-to-disc
+//     marker the CPU overlay also uses; a cleared/failed atlas must therefore make
+//     `spriteLiveSlots` 0 so the pass is skipped AND the cull goes inert;
+//   * the pass, its bindings and its buffers exist ONLY when the layout reserves
+//     the sprite runs, so a non-sprite model keeps today's 4-binding disc module;
+//   * the runs must be UPLOADED for the render even when the shader never writes
+//     them (sprite state set from a CPU-side Agent Output Mapping) — but the READ
+//     plan and both readbacks must NOT widen, or a run the shader never wrote is
+//     read back over the CPU's own `advanceAgentSprites` tick;
+//   * the atlas must be re-shipped on every attach ack: the worker CONSUMES (and
+//     closes) the bitmap, so a rebuilt surface has none and cannot ask for one;
+//   * the relaxation is 2D-ONLY — the 3D free-mode sphere pass draws no billboards.
+// ---------------------------------------------------------------------------
+section('B18 — 2D agent sprite billboard pass');
+{
+  const rt = readSrc('simulator/engine/agentWebgpuRuntime.ts');
+  const sv = readSrc('simulator/SimulatorView.tsx');
+  const wk = readSrc('simulator/engine/sim.worker.ts');
+
+  // --- the two culls are complements, and both are gated on the layout ---
+  const discWgsl = blockAfter(rt, /function agentRenderWGSL\(/);
+  // NB both halves are needed: the cull text lives in a template VARIABLE, so
+  // testing only for its content passes even when the variable is never
+  // interpolated into buildVert (a mutation that did exactly that slipped through
+  // the first version of this check).
+  check('the disc module culls a decoded-sprite agent [sprite]',
+    /spriteMeta\[slot - 1\]\.frameCount > 0u/.test(discWgsl)
+    && /return out;\s*\}\$\{spriteCull\}/.test(discWgsl),
+    'without it a sprite draws over its own disc');
+  check('the disc cull + its binding exist ONLY when the layout reserves the sprite runs [sprite]',
+    /const sp = layout\.spritesReserved;/.test(discWgsl)
+    && /const spriteCull = sp \?/.test(discWgsl)
+    && /const spriteDecl = sp \?/.test(discWgsl),
+    'a non-sprite model must keep the historical 4-binding module, byte for byte');
+  const spriteWgsl = blockAfter(rt, /function agentSpriteWGSL\(/);
+  check('the sprite pass requires the SAME decoded-slot condition [sprite]',
+    /if \(m\.frameCount == 0u\) \{ return cullSprite\(\); \}/.test(spriteWgsl)
+    && /if \(slot <= 0 \|\| u32\(slot\) > arrayLength\(&spriteMeta\)\) \{ return cullSprite\(\); \}/.test(spriteWgsl));
+
+  // --- the CPU overlay's semantics, term for term ---
+  check('frame = floor, then wrap (loop) or clamp (once) [sprite]',
+    /let raw: i32 = i32\(floor\(agentF32\[/.test(spriteWgsl)
+    && /frame = \(\(raw % fc\) \+ fc\) % fc;/.test(spriteWgsl)
+    && /frame = clamp\(raw, 0, fc - 1\);/.test(spriteWgsl));
+  check('the 1.2 px radius floor is applied BEFORE the sprite scale [sprite]',
+    /let radPx: f32 = max\(agentF32\[[^\]]+\] \* rv\.scalePx, 1\.2\);/.test(spriteWgsl)
+    && /let span: f32 = radPx \* 2\.0 \* perScale;/.test(spriteWgsl),
+    'the overlay floors the radius first, so sprites stop shrinking when zoomed out');
+  check('a per-agent scale > 0 overrides the asset scale [sprite]',
+    /select\(m\.scale, ps, ps > 0\.0\)/.test(spriteWgsl));
+  check('aspect shaping keeps the LONGEST side at the scaled diameter [sprite]',
+    /if \(m\.aspect >= 1\.0\) \{ dh = span \/ m\.aspect; \} else \{ dw = span \* m\.aspect; \}/.test(spriteWgsl));
+  // A reserved WGSL identifier fails the WHOLE module parse — `target` did exactly
+  // that on the first real-device run (the `ref` trap, again). Pin the ones this
+  // shader is closest to using.
+  check('the sprite WGSL uses no reserved identifier [sprite]',
+    !/\b(let|var)\s+(target|ref|filter|layout|type|sample)\s*:/.test(spriteWgsl),
+    'a reserved keyword fails the parse and silently drops the model to the CPU overlay');
+  check('orientToVelocity overrides the facing with atan2(vx, -vy) degrees [sprite]',
+    /atan2\(vX, -vY\) \* 180\.0 \/ 3\.14159265358979/.test(spriteWgsl)
+    && /vX \* vX \+ vY \* vY > 1\.0e-9/.test(spriteWgsl));
+  check('facing is aligned by (- defaultDirection + rotationOffset) [sprite]',
+    /\(\(facingDeg - m\.defaultDirection\) \+ m\.rotationOffset\)/.test(spriteWgsl));
+  // Screen px are Y-DOWN — the space ctx.rotate turns in — so this is the PLAIN
+  // rotation matrix. gl3d needs the transposed form only because its billboard
+  // basis is screen-UP; copying that sign here would mirror every sprite's turn.
+  check('the quad rotates with the PLAIN matrix (y-down screen space) [sprite]',
+    /let sx: f32 = px \+ lx \* cs - ly \* sn;/.test(spriteWgsl)
+    && /let sy: f32 = py \+ lx \* sn \+ ly \* cs;/.test(spriteWgsl));
+  check('UVs come from the UNROTATED corner, v = (y+1)/2 in y-down space [sprite]',
+    /out\.uv = vec2<f32>\(\(corner\.x \+ 1\.0\) \* 0\.5, \(corner\.y \+ 1\.0\) \* 0\.5\);/.test(spriteWgsl));
+  check('the sprite is untinted — only the agent ALPHA scales it [sprite]',
+    /return t \* in\.alpha;/.test(spriteWgsl) && /if \(a < 0\.02\) \{ discard; \}/.test(spriteWgsl));
+
+  // --- lifecycle: pipeline/bindings/buffers gated, atlas torn down ---
+  const build = blockAfter(rt, /async function buildAgentDiscPipelines\(/);
+  check('the sprite pipeline + its bind-group layout are built only with sprites [sprite]',
+    /const withSprites = !!rt\.layout\.spritesReserved;/.test(build)
+    && /if \(withSprites\) \{[\s\S]*agentSpriteWGSL\(rt\.layout\)/.test(build));
+  check('a sprite WGSL compile failure fails the WHOLE build [sprite]',
+    /sprite WGSL compile errors/.test(build) && /serrs\.length > 0[\s\S]{0,400}?return false;/.test(build),
+    'else the disc cull stays active with no pass to draw what it culled');
+  check('the disc bind group gains binding 4 only with sprites [sprite]',
+    /\.\.\.\(withSprites \? \[\{ binding: 4/.test(build));
+  check('sprite resources are released on BOTH teardown paths [sprite]',
+    bodyHas('simulator/engine/agentWebgpuRuntime.ts', /export function destroyAgentRenderSurface\(/, 'destroySpriteResources(rt)')
+    && bodyHas('simulator/engine/agentWebgpuRuntime.ts', /export function destroyAgentWebGPURuntime\(/, 'destroySpriteResources(rt)'));
+  const atlas = blockAfter(rt, /export function setAgentSpriteAtlas\(/);
+  check('the atlas is uploaded PREMULTIPLIED (the disc blend expects it) [sprite]',
+    /premultipliedAlpha: true/.test(atlas));
+  check('the shipped bitmap is ALWAYS closed (every path) [sprite]',
+    /finally \{\s*p\.bitmap\?\.close\(\);\s*\}/.test(atlas)
+    && /if \(!rt\.layout\.spritesReserved\) \{ p\.bitmap\?\.close\(\); return; \}/.test(atlas),
+    'a transferred ImageBitmap the worker drops on the floor is a real leak');
+  check('a failed atlas zeroes spriteLiveSlots so the pass + cull go inert [sprite]',
+    /catch \(e\) \{[\s\S]{0,400}?rt\.spriteLiveSlots = 0;/.test(atlas));
+  check('the layer count is clamped to the guaranteed maxTextureArrayLayers [sprite]',
+    /Math\.min\(p\.layers \| 0, AGENT_SPRITE_MAX_LAYERS\)/.test(atlas));
+
+  // --- the presents draw sprites AFTER the discs, on both 2D paths ---
+  const presentA = blockAfter(rt, /export function presentAgentsEncode\(/);
+  const presentC = blockAfter(rt, /export function presentCompositeEncode\(/);
+  const spriteDraw = /if \(spriteRenderActive\(rt\)\) \{[\s\S]{0,220}?spritePipeline![\s\S]{0,220}?draw\(4, insts\);/;
+  check('presentAgentsEncode draws the sprite pass after the disc cores [sprite]',
+    spriteDraw.test(presentA) && presentA.indexOf('renderPlainPipeline') < presentA.indexOf('spritePipeline'));
+  check('presentCompositeEncode draws it too (E2 grid+agents) [sprite]',
+    spriteDraw.test(presentC) && presentC.indexOf('renderPlainPipeline') < presentC.indexOf('spritePipeline'));
+
+  // --- the upload widens; the READ plan and the readbacks do NOT ---
+  check('the sprite runs are uploaded for the RENDER, not only for a writing shader [sprite]',
+    /function spriteRunsUploaded\(rt: AgentWebGPURuntime\): boolean \{[\s\S]{0,300}?spriteRunsActive\(rt\) \|\| \(rt\.layout\.spritesReserved && spriteRenderActive\(rt\)\)/.test(rt));
+  check('the READ plan stays on spriteRunsActive (the CPU owns sprite state) [sprite]',
+    bodyHas('simulator/engine/agentWebgpuRuntime.ts', /function buildF32ReadPlan\(/, 'if (spriteRunsActive(rt)) for (const field of AGENT_GPU_SPRITE_FIELDS)')
+    && !bodyHas('simulator/engine/agentWebgpuRuntime.ts', /function buildF32ReadPlan\(/, 'spriteRunsUploaded'),
+    'widening the readback would clobber advanceAgentSprites with runs the shader never wrote');
+  check('A2 uploads the sprite runs + vx/vy only while the pass is live [sprite]',
+    bodyHas('simulator/engine/agentWebgpuRuntime.ts', /export function uploadAgentRenderFields\(/, 'if (spriteRenderActive(rt))')
+    && bodyHas('simulator/engine/agentWebgpuRuntime.ts', /export function uploadAgentRenderFields\(/, "put('vx', s.vx)"));
+
+  // --- the resident batch keeps animating ---
+  check('a resident batch flags a re-upload after ticking sprite frames [sprite]',
+    /for \(let k = 0; k < count; k\+\+\) advanceAgentSprites\(s\);[\s\S]{0,700}?if \(spriteRenderActive\(rt\)\) agentGpuUploadPending = true;/.test(wk),
+    'else the billboards freeze on whatever frame the last upload carried');
+
+  // --- main thread: the gate, the layout, the re-ship ---
+  check('the sprites gate term survives in 3D only [sprite]',
+    /const spritesOk = \(sprites\?\.length \?\? 0\) === 0 \|\| !is3D;/.test(sv),
+    'the 3D free-mode sphere pass draws no billboards');
+  check('the A2 render layout reserves the sprite runs when the model has sprites [sprite]',
+    /\{ gridDepth: renderDepth, sprites: \(m\.sprites\?\.length \?\? 0\) > 0 \}/.test(sv));
+  check('model.sprites is a dependency of the agent compile (it decides the layout) [sprite]',
+    /model\.centerBased, model\.sprites\]\);/.test(sv));
+  check('the atlas is re-shipped on the agentRenderStatus ack [sprite]',
+    /postAgentViz\(\);[\s\S]{0,400}?shipSpriteAtlasRef\.current\(\);/.test(sv),
+    'a rebuilt surface has no atlas and the worker cannot re-apply a closed bitmap');
+  check('a decode completing re-ships the atlas [sprite]',
+    /new SpriteRegistry\(\(\) => \{[\s\S]{0,300}?shipSpriteAtlasRef\.current\(\);/.test(sv));
+  const ship = blockAfter(sv, /const shipSpriteAtlas = useCallback\(/);
+  check('a superseded atlas build closes its bitmap instead of leaking it [sprite]',
+    /if \(token !== spriteAtlasShipTokenRef\.current \|\| !w2\) \{ p\.bitmap\?\.close\(\); return; \}/.test(ship));
+  check('the builder never ships from the 3D path [sprite]',
+    /if \(!w \|\| is3dRef\.current\) return;/.test(ship));
+  const builder = blockAfter(sv, /async function buildAgentSpriteAtlasPayload\(/);
+  check('the builder truncates on a WHOLE-sprite boundary [sprite]',
+    /if \(total \+ dec\.frames\.length > AGENT_SPRITE_MAX_LAYERS\) continue;/.test(builder),
+    'a half-uploaded frame set would animate wrongly');
+  check('the builder skips undecoded slots but still sizes the meta by slotCount [sprite]',
+    /if \(!dec \|\| dec\.frames\.length === 0\) continue;/.test(builder)
+    && /slotCount = Math\.max\(1, metas\.length\)/.test(builder));
+  check('the atlas contract (cell size + layer cap) lives in ONE shared leaf [sprite]',
+    /from '\.\/engine\/agentSpriteAtlas'/.test(sv)
+    && /from '\.\/agentSpriteAtlas'/.test(rt),
+    'the builder and the consumer must agree on the tile size or the copy reads garbage');
+}
+
+// ---------------------------------------------------------------------------
 // TIER C — browser probes (printed; only reachable with a live GPUDevice)
 // ---------------------------------------------------------------------------
 if (process.argv.includes('--probes')) {

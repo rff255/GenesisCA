@@ -40,6 +40,7 @@ import { computeAgentWebGPULayout, type AgentWebGPULayout } from '../modeler/vpl
 import { emitAgentForcePassWGSL } from '../modeler/vpl/compiler/agentWebgpu/forcePass';
 import type { AgentRenderSnapshot } from './engine/agentEngine';
 import type { AgentRenderView, AgentRenderView3D } from './engine/agentWebgpuRuntime';
+import { AGENT_SPRITE_ATLAS_CELL, AGENT_SPRITE_MAX_LAYERS, type AgentSpriteAtlasPayload, type AgentSpriteSlot } from './engine/agentSpriteAtlas';
 import { SpriteRegistry } from './spriteRegistry';
 import { glowEncodeScale, glowTransferTable } from './glowTone';
 import { ImageMappingDialog, type ImageMappingConfig } from './ImageMappingDialog';
@@ -744,14 +745,98 @@ function agentRenderModelTermsOk(
   agentMappings: ReadonlyArray<{ isAttributeToColor: boolean }> | undefined,
   agentTarget: string,
   omGpuSupported: boolean | undefined,
+  is3D: boolean,
 ): boolean {
   // Only the A->C half is a colour pass. `agentMappings` also holds the C->A
   // INPUT mappings (the agent Paint brush's graphs), which are never compiled to
   // a GPU OM shader — counting them here would strand a paint-only model on the
   // CPU overlay for a colour pass that does not exist.
   const omCount = (agentMappings ?? []).filter(m => m.isAttributeToColor).length;
-  return (sprites?.length ?? 0) === 0
+  // SPRITES are a 2D-only relaxation. The 2D worker render now carries a billboard
+  // pass (agentSpriteWGSL — the WebGPU sibling of gl3d's renderSprites), so a
+  // sprite model takes the A1/A2/E2 fast paths. The 3D free-mode SPHERE pass draws
+  // no billboards, so a 3D sprite model must keep the CPU/gl3d frame path or its
+  // sprites would silently vanish — hence the term survives there.
+  const spritesOk = (sprites?.length ?? 0) === 0 || !is3D;
+  return spritesOk
     && (agentTarget !== 'webgpu' || omCount === 0 || !!omGpuSupported);
+}
+
+/** One entry of `spriteMetaRef` — the per-sprite render meta the 2D overlay, the
+ *  gl3d atlas and (now) the worker atlas all read. */
+interface SpriteRenderMeta {
+  id: string; scale: number; loop: boolean;
+  defaultDirection: number; orientToVelocity: boolean; rotationOffset: number;
+}
+
+/** Build the worker's 2D sprite atlas: every decoded (sprite, frame) drawn
+ *  STRETCHED into one CELL x CELL tile of a single grid image, plus the per-slot
+ *  meta. The image is returned as ONE ImageBitmap, transferred to the worker,
+ *  which copies each tile into a texture_2d_array layer.
+ *
+ *  WHY THE MAIN THREAD BUILDS IT: sprite decode is main-thread-only by design (the
+ *  worker never carries the pixels — SpriteRegistry uses ImageDecoder /
+ *  createImageBitmap). Transferring the registry's OWN bitmaps would DETACH them
+ *  from the CPU overlay and gl3d, which still need them; and
+ *  `copyExternalImageToTexture` cannot rescale, so the frames have to be resized to
+ *  the square cell somewhere regardless. One canvas + one transferable does both.
+ *
+ *  The stretch policy and the frame-0 aspect are gl3d's `setSpriteAtlas`, so the
+ *  two renderers cannot disagree about what a frame looks like. Slots whose frames
+ *  are not decoded are SKIPPED (no layers, no meta) — their agents fall back to a
+ *  disc, exactly as the CPU overlay's "slot set but not yet decoded" path does. */
+async function buildAgentSpriteAtlasPayload(
+  reg: SpriteRegistry | null,
+  metas: ReadonlyArray<SpriteRenderMeta>,
+): Promise<AgentSpriteAtlasPayload> {
+  const CELL = AGENT_SPRITE_ATLAS_CELL;
+  const slotCount = Math.max(1, metas.length);
+  const empty: AgentSpriteAtlasPayload = { bitmap: null, cell: CELL, cols: 1, layers: 0, slots: [], slotCount };
+  if (!reg || metas.length === 0) return empty;
+  // Collect decoded slots, stopping at the layer ceiling on a WHOLE-sprite boundary
+  // (truncating one sprite's frame set mid-way would animate it wrongly).
+  const picked: Array<{ slot: number; frames: ImageBitmap[]; m: SpriteRenderMeta }> = [];
+  let total = 0;
+  for (let i = 0; i < metas.length; i++) {
+    const m = metas[i]!;
+    const dec = reg.get(m.id);
+    if (!dec || dec.frames.length === 0) continue;
+    if (total + dec.frames.length > AGENT_SPRITE_MAX_LAYERS) continue;
+    picked.push({ slot: i + 1, frames: dec.frames, m });
+    total += dec.frames.length;
+  }
+  if (total === 0) return empty;
+  const cols = Math.max(1, Math.ceil(Math.sqrt(total)));
+  const rows = Math.ceil(total / cols);
+  const canvas: OffscreenCanvas | HTMLCanvasElement = typeof OffscreenCanvas !== 'undefined'
+    ? new OffscreenCanvas(cols * CELL, rows * CELL)
+    : (() => { const c = document.createElement('canvas'); c.width = cols * CELL; c.height = rows * CELL; return c; })();
+  const cx = canvas.getContext('2d') as CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D | null;
+  if (!cx) return empty;
+  cx.clearRect(0, 0, cols * CELL, rows * CELL);
+  const slots: AgentSpriteSlot[] = [];
+  let layer = 0;
+  for (const p of picked) {
+    const f0 = p.frames[0]!;
+    slots.push({
+      slot: p.slot, baseLayer: layer, frameCount: p.frames.length,
+      aspect: f0.width / Math.max(1, f0.height),
+      loop: p.m.loop, orientToVelocity: p.m.orientToVelocity,
+      scale: p.m.scale > 0 ? p.m.scale : 1,
+      defaultDirection: p.m.defaultDirection, rotationOffset: p.m.rotationOffset,
+    });
+    for (const f of p.frames) {
+      const tx = (layer % cols) * CELL, ty = Math.floor(layer / cols) * CELL;
+      cx.drawImage(f, tx, ty, CELL, CELL);
+      layer++;
+    }
+  }
+  try {
+    const bitmap = await createImageBitmap(canvas as CanvasImageSource);
+    return { bitmap, cell: CELL, cols, layers: total, slots, slotCount };
+  } catch {
+    return empty;
+  }
 }
 
 // --- Brush shapes ---
@@ -3455,6 +3540,13 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
   // change, a decode completing (registry onReady), or a fresh renderer. The 2D
   // path draws sprites straight from the registry (no atlas) — this is 3D-only.
   const spriteAtlasDirtyRef = useRef(true);
+  // The WORKER's 2D sprite atlas is a SEPARATE artefact from gl3d's (different
+  // consumer, different lifecycle: the worker's is transferred and consumed, so it
+  // must be REBUILT and re-shipped whenever a render surface is (re)built — the
+  // worker cannot re-apply a bitmap it has already closed). A monotonic token drops
+  // a build whose payload landed after a newer one was requested.
+  const spriteAtlasShipTokenRef = useRef(0);
+  const shipSpriteAtlasRef = useRef<() => void>(() => { /* set below */ });
   // Agent brush: the LMB action on the canvas for an agent model (only active
   // when brushTarget === 'agents'). Add/Remove/Move/Edit honour the Single/Area
   // scope + the shape footprint; Push/Pull radially displace agents inside a disc
@@ -4517,13 +4609,23 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       // Phase C: a 3D model's render-only surface needs the real depth so the
       // layout carries a `z` field base (the sphere pass reads it). 2D → depth 1.
       const renderDepth = (m.properties.dimension === '3d') ? Math.max(1, Math.floor((m.properties.gridDepth as number) ?? 1)) : 1;
+      // `sprites: true` reserves the five sprite runs the 2D billboard pass reads
+      // (spriteIds/Frames/Rotations/Scales); `spritesReserved` is ALSO what selects
+      // the sprite-aware disc module, so without it a CPU-target sprite model would
+      // build the plain disc pipeline and draw circles. The runs are appended after
+      // every other one, so a sprite-free model's layout is unchanged.
       agentRenderLayout = computeAgentWebGPULayout(
-        Math.max(1, Math.floor((m.centerBased?.maxAgents as number) ?? 2000)), 0, undefined, [], { gridDepth: renderDepth },
+        Math.max(1, Math.floor((m.centerBased?.maxAgents as number) ?? 2000)), 0, undefined, [],
+        { gridDepth: renderDepth, sprites: (m.sprites?.length ?? 0) > 0 },
       );
     }
     return { behaviourCode: ag.behaviourCode || undefined, initCode: ag.initCode || undefined, divisionCode: ag.divisionCode || undefined, outputMappingCodes: ag.outputMappingCodes && ag.outputMappingCodes.length ? ag.outputMappingCodes : undefined, inputMappingCodes: ag.inputMappingCodes && ag.inputMappingCodes.length ? ag.inputMappingCodes : undefined, stopMessages: ag.stopMessages, dividePartitions: ag.dividePartitions, colorViewer, error: ag.error || undefined, agentTarget, agentWasmBytes, agentWasmViewerGuardIds, agentLayoutExtras, agentWasmLayoutSig, agentResidencyClean, agentWebgpuBehaviourShader, agentWebgpuForceShader, agentWebgpuMaxAgents, agentWebgpuMaxHashBins, agentWebgpuLayout, agentRenderLayout, agentWebgpuUsesI32Write, agentWebgpuUsage, agentWebgpuOmShaders, agentWebgpuOmSupported };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [model.agentGraphNodes, model.agentGraphEdges, model.topologyMode?.agents, model.attributes, model.agentAttributes, model.mappings, model.centerBased]);
+  // `model.sprites` is a real dependency since the A2 render-only layout reserves
+  // the sprite runs from it (and `spritesReserved` selects the sprite-aware disc
+  // module) — without it, adding the first sprite to a CPU-target model would keep
+  // compiling a layout with no sprite runs and the billboards would never draw.
+  }, [model.agentGraphNodes, model.agentGraphEdges, model.topologyMode?.agents, model.attributes, model.agentAttributes, model.mappings, model.centerBased, model.sprites]);
 
   // PR5 (C-D1) — does the agent graph touch the cell field? Scan the agent
   // graph for any of the five field nodes (sampleField / fieldGradient /
@@ -5278,6 +5380,27 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
     hoverIdleTimerRef.current = window.setTimeout(expire, AGENT_HOVER_IDLE_MS);
     if (agentDirectRenderActiveRef.current) updateAgentUiSync();
   }, [updateAgentUiSync, drawCursorLayer]);
+
+  // Build the worker's 2D sprite atlas from the decoded registry and ship it (the
+  // bitmap is TRANSFERRED). Called on: a sprite-set change, a decode completing
+  // (registry onReady), and every agentRenderStatus ack — that last one is not
+  // optional, because a (re)built surface has no atlas and the worker cannot
+  // re-apply one it already consumed. Cheap to over-call: a no-sprite model returns
+  // before building anything, and the worker closes any bitmap it does not install.
+  const shipSpriteAtlas = useCallback(() => {
+    const w = workerRef.current;
+    if (!w || is3dRef.current) return;              // 3D uses gl3d's own atlas
+    if (spriteMetaRef.current.length === 0) return; // nothing to ship, ever
+    const token = ++spriteAtlasShipTokenRef.current;
+    void buildAgentSpriteAtlasPayload(spriteRegistryRef.current, spriteMetaRef.current).then(p => {
+      const w2 = workerRef.current;
+      // A newer build (or a dead worker) supersedes this one — close the bitmap
+      // rather than leaking it; nothing else owns it once the build resolved.
+      if (token !== spriteAtlasShipTokenRef.current || !w2) { p.bitmap?.close(); return; }
+      w2.postMessage({ type: 'setAgentSpriteAtlas', atlas: p }, p.bitmap ? [p.bitmap] : []);
+    }).catch(() => { /* a failed build leaves the previous atlas in place */ });
+  }, []);
+  shipSpriteAtlasRef.current = shipSpriteAtlas;
 
   // (Re)attach the agent render canvas: transfer a display-sized OffscreenCanvas
   // and ask the worker to set up direct render. Safe to call whenever the agent
@@ -6816,10 +6939,19 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       return;
     }
     if (!spriteRegistryRef.current) {
-      // A decode completing marks the 3D atlas dirty (a new frame set) + redraws.
-      spriteRegistryRef.current = new SpriteRegistry(() => { spriteAtlasDirtyRef.current = true; drawRef.current(); });
+      // A decode completing marks the 3D atlas dirty (a new frame set) + redraws,
+      // and re-ships the worker's 2D atlas (which needs the decoded bitmaps).
+      spriteRegistryRef.current = new SpriteRegistry(() => {
+        spriteAtlasDirtyRef.current = true;
+        shipSpriteAtlasRef.current();
+        drawRef.current();
+      });
     }
     spriteRegistryRef.current.sync(sprites);
+    // An UNCHANGED decode key is not re-decoded, so onReady would never fire for a
+    // set that is already decoded (a sprite meta edit — scale / rotation / loop —
+    // is exactly that case). Ship here too; the token drops whichever build loses.
+    shipSpriteAtlasRef.current();
   }, [model.sprites]);
 
   // Dispose the registry (free decoded ImageBitmaps) on unmount.
@@ -7716,6 +7848,10 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
         const view = computeAgentRenderView();
         if (view && workerRef.current) { lastAgentCameraKeyRef.current = ''; workerRef.current.postMessage({ type: 'setAgentCamera', view }); }
         postAgentViz();  // apply the current bounds/grid/axes toggles to the worker
+        // A (re)built render surface carries no sprite atlas — the worker consumed
+        // (and closed) the last one. Re-ship, or a sprite model draws plain discs
+        // after every resize re-attach / recompile.
+        shipSpriteAtlasRef.current();
         // MIRROR THE WORKER'S ACTUAL FLAG (the UI-sync mirror invariant). A
         // display resize / metaballs-off re-attaches on the SAME worker, whose
         // `agentUiSync` survives — assuming ON here would strand the mirror and
@@ -8050,7 +8186,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       // the resident batch presents the correct OM colours; an unsupported OM keeps
       // the CPU overlay). Both terms are re-evaluated on a soft recompile — see
       // agentRenderModelTermsOk / agentRenderModelTermsOkRef (audit M1).
-      && agentRenderModelTermsOk(model.sprites, model.agentMappings, agentResult.agentTarget, agentResult.agentWebgpuOmSupported)
+      && agentRenderModelTermsOk(model.sprites, model.agentMappings, agentResult.agentTarget, agentResult.agentWebgpuOmSupported, is3D)
       // NO BOND LINES (audit H1 — BOTH dimensions, not just 3D). The GPU pass draws
       // discs (2D) / sphere impostors (3D) only, and under direct render draw()
       // skips drawAgentsOverlay() entirely — which is the SOLE bond renderer. A
@@ -8089,7 +8225,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       && !!dimsModel.properties.useWebGPU && !webgpuResult.error
       && agentResult.agentTarget === 'webgpu'
       && offscreenSupported
-      && agentRenderModelTermsOk(model.sprites, model.agentMappings, agentResult.agentTarget, agentResult.agentWebgpuOmSupported)
+      && agentRenderModelTermsOk(model.sprites, model.agentMappings, agentResult.agentTarget, agentResult.agentWebgpuOmSupported, is3D)
       && !agentMetaballsRef.current.enabled;
     // The union drives the attach machinery (a field-coupled composite model is
     // NOT agentRenderEligible — agentDecoupled is false — but IS composite-eligible).
@@ -8097,7 +8233,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
     // M1: seed the live-term ref from the SAME helper the gate above used, so a
     // later re-attach (display resize / metaballs off) re-checks the same terms.
     agentRenderModelTermsOkRef.current =
-      agentRenderModelTermsOk(model.sprites, model.agentMappings, agentResult.agentTarget, agentResult.agentWebgpuOmSupported);
+      agentRenderModelTermsOk(model.sprites, model.agentMappings, agentResult.agentTarget, agentResult.agentWebgpuOmSupported, is3D);
     agentCompositeEligibleRef.current = agentComposite;
     agentCompositeActiveRef.current = false;
     setCompositeGridActive(false);
@@ -8758,7 +8894,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       // Detach / re-attach exactly like the metaballs suppression effect: no worker
       // teardown, the live population survives.
       {
-        const ok = agentRenderModelTermsOk(model.sprites, model.agentMappings, agentResult.agentTarget, agentResult.agentWebgpuOmSupported);
+        const ok = agentRenderModelTermsOk(model.sprites, model.agentMappings, agentResult.agentTarget, agentResult.agentWebgpuOmSupported, is3dRef.current);
         if (ok !== agentRenderModelTermsOkRef.current) {
           agentRenderModelTermsOkRef.current = ok;
           if (!ok) {
