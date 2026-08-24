@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import styles from './MacroExportDialog.module.css';
 import type {
-  CollectedReference, CollectedReferences, ElementSpace,
+  CollectedReference, CollectedReferences, ElementSpace, ReferenceElement,
 } from '../model/macroReferences';
 import { SPACE_LABEL, SPACE_ORDER, defaultSelection, pruneOrphanSelection } from '../model/macroReferences';
 import type { Attribute, FaceLabelPalette, FacePattern, Indicator, Mapping, Neighborhood, SpriteAsset, Variable } from '../model/types';
@@ -17,8 +17,10 @@ interface Props {
 }
 
 /** One-line description of an element, read off the object itself — the bundle
- *  carries elements VERBATIM, so there is no parallel metadata record to drift. */
-export function describeElement(ref: CollectedReference): string {
+ *  carries elements VERBATIM, so there is no parallel metadata record to drift.
+ *  Shared with the IMPORT dialog, hence the structural parameter (both a
+ *  `CollectedReference` and an `ImportRow` satisfy it). */
+export function describeElement(ref: { element?: ReferenceElement; space?: ElementSpace }): string {
   const el = ref.element;
   if (!el) return 'not found in this model';
   switch (ref.space) {
